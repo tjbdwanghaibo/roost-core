@@ -1,16 +1,29 @@
 package player
 
-// bagItemValid 回答“这个道具号能不能进背包”。BagComponent.Add 在写入前调用它；
-// Remove 不调用：已经在背包里的道具即使后来下架，也要能扣、能丢。
+import generated "{{MODULE}}/configs/generated"
+
+// 这个文件归工程所有，是背包的规则入口：哪些道具能进背包、每种道具单种最多放多少。
+// BagComponent.Add 在写入前调用 bagItemRule；Remove 不调用：已经在背包里的道具即使后来从表里删掉，
+// 也要能扣、能丢。
 //
-// 缺省规则只有“道具号为正”，因为模块不带配置表。项目接上自己的道具表之后改这里，例如：
+// 缺省实现读道具表：列在 configs/schema/item.go，数据在 configs/table/item.csv，roost generate 把它
+// 转成 configs/data/item.json 并生成访问器 generated.ItemByID。所以加一种道具、改一种道具的上限
+// 只改 CSV 再 roost generate（线上是配置热更），不改代码：
 //
-//	_, ok := generated.ItemByID(itemID)   // configs/generated，由 roost add table item 与 roost generate 产出
-//	return ok
+//   - 表里有这一行，道具号就合法；没有就拒绝（bag_item_invalid）。
+//   - max_stack 是这种道具的单种上限；0 表示不单独限制。
 //
-// 生成的访问器读的是钉在本次请求上的配置快照，同一个 handler 里两次读不会因为热更而不一致。
-// 每种道具的堆叠上限不同时也从道具表读：把 BagComponent.Add 里的 BagMaxStack 换成按道具号取的上限
-// （不能超过 BagMaxStack，溢出保护靠它）。
-func bagItemValid(itemID int64) bool {
-	return itemID > 0
+// 访问器读的是钉在本次请求上的配置快照，同一个 handler 里两次读不会因为热更而不一致。进程里没有
+// 装载配置时（没装道具表的测试）表是空的，任何道具都不合法：测试要先装一张道具表，写法见
+// game/handler/bag_test.go 的 bagTestLoadItems。
+//
+// 要换规则（某些道具不进背包、某一类道具统一一个上限、道具表换了名字）就改这个函数：返回 ok=false 的道具
+// 不能放入；maxStack 不为正表示不单独限制。不管这里返回多少，组件都会把上限钳到不超过 BagMaxStack，
+// 数量相加不溢出靠它；种类数上限 BagMaxKinds 也照常生效。
+func bagItemRule(itemID int64) (maxStack int64, ok bool) {
+	item, ok := generated.ItemByID(itemID)
+	if !ok {
+		return 0, false
+	}
+	return int64(item.MaxStack), true
 }

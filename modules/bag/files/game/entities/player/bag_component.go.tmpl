@@ -6,6 +6,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 //roost:component type={{ID:component:Bag}}
@@ -46,33 +47,45 @@ const (
 	// BagMaxKinds 是背包里不同道具种类数的上限。背包整份随同步下发、整份落库，种类数必须有界。
 	// 到上限后只拒绝新种类；已有的种类照常加减，扣到 0 腾出的位置可以再放新种类。
 	BagMaxKinds = 200
-	// BagMaxStack 是单种道具的数量上限。它远小于 int64 的范围，所以数量相加不会溢出。
+	// BagMaxStack 是单种道具数量的硬上限：每种道具自己的上限（道具表的 max_stack，规则在 bag_items.go）
+	// 不会超过它，没有单独上限的道具就按它算。它远小于 int64 的范围，所以数量相加不会溢出。
 	BagMaxStack = 999999
 )
 
 // Add 往背包里放 count 个 itemID，返回放入后的数量。
 //
 // 拒绝时不写任何字段：数量不为正（bag_count_invalid）、道具号不合法（bag_item_invalid，规则在
-// bag_items.go）、放入后超过单种上限（bag_stack_full，不做“能放多少放多少”）、背包里没有这种道具
-// 且种类数已到上限（bag_kinds_full）。
+// bag_items.go，缺省是“道具表里有这一行”）、放入后超过这种道具的单种上限（bag_stack_full，
+// 不做“能放多少放多少”）、背包里没有这种道具且种类数已到上限（bag_kinds_full）。
+//
+// 单种上限是道具自己的（bagItemRule 返回的 maxStack），不为正或超过 BagMaxStack 时按 BagMaxStack 算。
+// 上限后来调小、持有量已经超过新上限时，放入一律被拒，持有的不动。
+//
+// 错误带着道具号、数量、持有量这些上下文（errcode.Wrap）：只进服务端日志，不进给客户端的回包；
+// 调用方照常用 errors.Is 判断是哪一种拒绝。
 //
 // 它不判重：同一次发放调用两次就发两次。“这一次发过没有”由调用方记在自己的状态里，
 // 并在同一笔事务里调它（事实与道具一起提交或回滚）。
 func (component *BagComponent) Add(itemID, count int64) (int64, error) {
 	if count <= 0 {
-		return 0, apperrors.ErrBagCountInvalid
+		return 0, errcode.Wrap(apperrors.ErrBagCountInvalid, nil, "item_id", itemID, "count", count)
 	}
-	if !bagItemValid(itemID) {
-		return 0, apperrors.ErrBagItemInvalid
+	maxStack, ok := bagItemRule(itemID)
+	if !ok {
+		return 0, errcode.Wrap(apperrors.ErrBagItemInvalid, nil, "item_id", itemID)
+	}
+	if maxStack <= 0 || maxStack > BagMaxStack {
+		maxStack = BagMaxStack
 	}
 	bag := component.owner.Dao().GetBag()
 	current, held := bag.GetItems(itemID)
 	// 用减法比较：current + count 在 count 接近 int64 上限时会溢出成负数，绕过上限。
-	if count > BagMaxStack-current {
-		return 0, apperrors.ErrBagStackFull
+	// current 已经超过 maxStack（上限后来调小了）时右边为负，任何正的 count 都被拒。
+	if count > maxStack-current {
+		return 0, errcode.Wrap(apperrors.ErrBagStackFull, nil, "item_id", itemID, "have", current, "add", count, "max_stack", maxStack)
 	}
 	if !held && bag.ItemsLen() >= BagMaxKinds {
-		return 0, apperrors.ErrBagKindsFull
+		return 0, errcode.Wrap(apperrors.ErrBagKindsFull, nil, "item_id", itemID, "kinds", bag.ItemsLen())
 	}
 	bag.SetItemsKey(itemID, current+count)
 	return current + count, nil
@@ -82,15 +95,15 @@ func (component *BagComponent) Add(itemID, count int64) (int64, error) {
 // 持有不足（bag_short）时拒绝，不写任何字段；不做“有多少扣多少”。
 //
 // 剩 0 时删掉这个键，不留数量为 0 的条目：种类数按键的个数算，留着会白占一个种类的位置。
-// 这里不查道具号是否合法：没有这种道具自然是不足；有而道具后来下架了，也要能扣掉。
+// 这里不查道具号是否合法：没有这种道具自然是不足；有而道具后来从表里删掉了，也要能扣掉。
 func (component *BagComponent) Remove(itemID, count int64) (int64, error) {
 	if count <= 0 {
-		return 0, apperrors.ErrBagCountInvalid
+		return 0, errcode.Wrap(apperrors.ErrBagCountInvalid, nil, "item_id", itemID, "count", count)
 	}
 	bag := component.owner.Dao().GetBag()
 	current, _ := bag.GetItems(itemID)
 	if current < count {
-		return 0, apperrors.ErrBagShort
+		return 0, errcode.Wrap(apperrors.ErrBagShort, nil, "item_id", itemID, "have", current, "want", count)
 	}
 	left := current - count
 	if left == 0 {

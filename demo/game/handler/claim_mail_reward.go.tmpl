@@ -39,11 +39,11 @@ func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int6
 	if !bag.ClaimMailReward(mailID, expiresAtUnix, nowUnix) {
 		// Already paid. Not an error: report what the player holds so the
 		// client's answer is the same either way.
-		return rewards.ClaimResult{BagCount: bag.ItemCount(itemID)}, nil
+		return rewards.ClaimResult{BagCount: int32(bag.Count(itemID))}, nil
 	}
-	held, err := bag.AddItem(itemID, count)
+	held, err := bag.Add(itemID, int64(count))
 	if err != nil {
 		return rewards.ClaimResult{}, err
 	}
-	return rewards.ClaimResult{Claimed: true, BagCount: held}, nil
+	return rewards.ClaimResult{Claimed: true, BagCount: int32(held)}, nil
 }

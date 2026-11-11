@@ -2,14 +2,17 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // 正数请求必须在加法前校验容量；溢出拒绝后不得改动道具或生成提交记录。
+// 背包是 bag 模块的组件：上限来自道具表（1002 的 max_stack 是 99），拒绝是模块的错误码。
 func TestAddItemRejectsOverflowWithoutChangingTheBag(t *testing.T) {
 	subject, client, committer := newClaimHarness(t)
 	RegisterAddItemNestHandlers()
@@ -21,12 +24,12 @@ func TestAddItemRejectsOverflowWithoutChangingTheBag(t *testing.T) {
 	before := len(committer.records)
 	_, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, math.MaxInt32)
 	if err == nil {
-		t.Fatalf("overflowing request accepted: bag=%d", subject.BagComp().ItemCount(1002))
+		t.Fatalf("overflowing request accepted: bag=%d", subject.BagComp().Count(1002))
 	}
-	if code, _ := errcode.ClientError(err); code != 100003 {
-		t.Fatalf("overflow error code=%d, want bag_full (100003): %v", code, err)
+	if !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("overflow error = %v, want bag_stack_full", err)
 	}
-	if got := subject.BagComp().ItemCount(1002); got != 1 {
+	if got := subject.BagComp().Count(1002); got != 1 {
 		t.Fatalf("rejected request changed bag to %d, want 1", got)
 	}
 	if got := len(committer.records); got != before {
@@ -36,7 +39,41 @@ func TestAddItemRejectsOverflowWithoutChangingTheBag(t *testing.T) {
 	if got, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, 98); err != nil || got != 99 {
 		t.Fatalf("exact stack limit: count=%d err=%v", got, err)
 	}
-	if _, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, 1); err == nil {
-		t.Fatal("accepted a stack above MaxStack")
+	if _, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, 1); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("a stack above the item's max_stack: err = %v, want bag_stack_full", err)
+	}
+}
+
+// 道具号必须在道具表里、数量必须为正：拒绝是模块的错误码，端点把它变成回包里的 Code；
+// 被拒的请求不写背包、不产生提交记录。
+func TestAddItemRefusesUnknownItemsAndNonPositiveCounts(t *testing.T) {
+	subject, client, committer := newClaimHarness(t)
+	RegisterAddItemNestHandlers()
+	sender := syncsender.NewAddItemSender(client)
+	ctx := context.Background()
+	for name, c := range map[string]struct {
+		itemID int64
+		count  int32
+		want   *errcode.IntError
+	}{
+		"an item that is not in the item table": {4040, 1, apperrors.ErrBagItemInvalid},
+		"item id zero":                          {0, 1, apperrors.ErrBagItemInvalid},
+		"a zero count":                          {1002, 0, apperrors.ErrBagCountInvalid},
+		"a negative count":                      {1002, -1, apperrors.ErrBagCountInvalid},
+	} {
+		_, err := sender.Sync_AddItem(ctx, subject.ID(), c.itemID, c.count)
+		if !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", name, err, c.want)
+		}
+		wantCode, _ := errcode.ClientError(c.want)
+		if code, reason := errcode.ClientError(err); code != wantCode || code == errcode.CodeInternal || reason == "" {
+			t.Errorf("%s: the endpoint would answer code %d %q, want the module's code %d", name, code, reason, wantCode)
+		}
+	}
+	if got := subject.BagComp().Count(1002) + subject.BagComp().Count(4040); got != 0 {
+		t.Errorf("refused requests left %d items in the bag", got)
+	}
+	if got := len(committer.records); got != 0 {
+		t.Errorf("refused requests produced %d commit records", got)
 	}
 }

@@ -2,11 +2,14 @@ package dbdef
 
 //roost:dao coll=player db=main schema=2
 type PlayerDao struct {
-	Name  string          `dao:"persist,sync" store:"name"`
-	Level int32           `dao:"persist,sync" store:"level"`
-	Exp   int64           `dao:"persist,sync" store:"exp"`
-	Gold  int64           `dao:"persist,sync" store:"gold"`
-	Items map[int64]int32 `dao:"persist,sync,map=fast" store:"items"`
+	Name  string `dao:"persist,sync" store:"name"`
+	Level int32  `dao:"persist,sync" store:"level"`
+	Exp   int64  `dao:"persist,sync" store:"exp"`
+	Gold  int64  `dao:"persist,sync" store:"gold"`
+	// The bag is not declared here: it is the bag module's state, the nested
+	// struct PlayerDao.Bag (db/def/bag.go, store key "bag") that
+	// `roost module add bag` appends to the end of this DAO.
+
 	// DungeonClaims is the exactly-once ledger for dungeon clear rewards:
 	// run id -> the run's resolution time. The claim transaction records the
 	// run here and pays only when it is the one that recorded it. Entries

@@ -145,7 +145,7 @@ func (steps guildSteps) register(runtime *kitsaga.Steps) {
 // --- the Player steps (native, on the player's bound sid) ---
 
 // debitCoins takes the founding fee or the donation. Not enough coins is the
-// refusal item_short: the saga fails with nothing to compensate.
+// refusal bag_short: the saga fails with nothing to compensate.
 func (steps guildSteps) debitCoins(ctx context.Context, step saga.NativeStep) error {
 	state, playerID, err := guildTarget(step.Command())
 	if err != nil {
@@ -168,7 +168,7 @@ func (steps guildSteps) refundCoins(ctx context.Context, step saga.NativeStep) e
 }
 
 // grant hands the alliance reward over (the reward the claim step answered).
-// A full stack is bag_full: the coordinator then releases the claim.
+// A full stack is bag_stack_full: the coordinator then releases the claim.
 func (steps guildSteps) grant(ctx context.Context, step saga.NativeStep) error {
 	state, playerID, err := guildTarget(step.Command())
 	if err != nil {

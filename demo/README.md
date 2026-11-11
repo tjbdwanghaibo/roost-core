@@ -38,6 +38,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `game/chat/`、`game/controllers/chat/`、`protocol/def/chat_*.go`、`internal/service/chat/collaborators.go` | 聊天。不在本目录里：生成时由 [chat 业务模块](../modules/README.md)装进工程（`roost module add chat`），demo 与别的工程共用同一份实现 |
 | `protocol/def/enter_game.go`、`game/controllers/enter/`、`db/def/enter.go`、`game/entities/player/enter_*.go`、`game/handler/enter_init.go` | 进入游戏。协议、controller 域与“首次初始化做过没有”的标记来自 [enter 业务模块](../modules/README.md)（`roost module add enter`）；本目录只带覆盖模块文件的三个：`protocol/def/enter_game.go`（demo 的请求与响应字段更多）与 `game/controllers/enter/` 的两个文件（把请求交给 `game/controllers/player/enter_game.go` 里 demo 自己的进入流程） |
 | `game/leaderboard/`、`game/controllers/leaderboard/`、`protocol/def/leaderboard_*.go` | 排行榜。读榜的两条协议（`LeaderboardTop` 带自己的名次、`LeaderboardMe`）与提交入口 `SubmitSeason` 来自 [leaderboard 业务模块](../modules/README.md)（`roost module add leaderboard`）；本目录只带覆盖模块业务文件的两个：`game/leaderboard/leaderboard_board.go`（demo 的榜：副本通关次数、全服、按赛季、一屏十行）与钉住它的 `leaderboard_board_test.go`。通关计数（`PlayerDao.DungeonClears`）与领奖账本是副本玩法，仍在 `game/dungeon`、`game/handler/claim_dungeon.go` |
+| `game/entities/player/bag_component.go`、`bag_items.go`、`db/def/bag.go`、`internal/errors/bag.go`、`game/handler/bag_*.go`、`game/controllers/bag/`、`protocol/def/bag_discard.go`、`configs/schema/item.go`、`configs/table/item.csv` | 背包。组件（`Add` / `Remove` / `Count` / `Has`）、状态 `PlayerDao.Bag`、道具表、错误码、丢弃协议 `BagDiscard` 与服务端发放 handler `BagGrant` 来自 [bag 业务模块](../modules/README.md)（`roost module add bag`）；本目录只带覆盖模块文件的两个——`configs/schema/item.go` 与 `configs/table/item.csv`（demo 的道具表多 `attack` / `hp` 两列，行是 demo 的四种道具），背包规则文件 `bag_items.go` 用模块的缺省实现（读这张表）。demo 自己写的是建在背包组件上的事务（`game/handler/add_item.go`、赠礼、公会、装备、邮件领取、充值发货）与两本领取账本 `game/entities/player/claim_ledgers.go` |
 | `saga/gift_item/` | 送礼 saga 定义 |
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
@@ -145,7 +146,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 | `pos_x`、`pos_y`、`facing` | ✓ | ✓ | ✓ | | 分区场景的位置随 SceneActor 的 mirror 走 |
 | `scene_id` | ✓ | ✓ | ✓ | | 只在全量里（2～5 字节）；多场景共用一个 Manager 的玩法（MMORPG 夹具）靠它 |
 | `cell_hp`、`cell_max_hp` | ✓ | ✓ | ✓ | | 血条 |
-| `exp`、`gold`、`items` | ✓ | | | ✓ | 私有 |
+| `exp`、`gold`、`bag` | ✓ | | | ✓ | 私有；`bag` 是 bag 模块的嵌套状态（道具号 → 数量），整个结构体是一个同步字段 |
 | `attr_base`、`attr_final`、`cell_attack`、`cell_power` | ✓ | | | | 私有（属性、战斗面板） |
 
 `team` 与 `near` 字段相同、身份不同：队友面板要多给（例如 `attr_final`）时只改 `team` 一行；`team` 的优先级比 `near` 小，

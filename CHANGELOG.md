@@ -14,6 +14,14 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **变更 / 协议变化**（game-demo + modules）：**game-demo 的背包改用 bag 模块；bag 模块自带道具表**（同下一条的方向：demo 比模块多的能力搬进模块，简单用法保持开箱可用）。
+  - 模块（场景数 12 → 17）：自带配置表 `configs/schema/item.go`、`configs/table/item.csv`（三行样例）——道具必须在表里、每种道具各自的单种上限（0 表示不单独限制，再钳到硬上限 999999）；规则入口由 `bagItemValid(itemID) bool` 改为 `bagItemRule(itemID) (maxStack, ok)`，缺省读道具表；拒绝带日志上下文。新增场景：上限来自表、上限调小不扣已有、道具下架后能数能丢不能放、没装载配置时一律拒绝、工程自己的表可用。模块带配置表不需要安装器新能力（`roost generate` 从 schema 与 CSV 产出登记与访问器），`needs.features` 加 `config`。
+  - shop 与 mailbox + bag 联动的测试夹具改为先装道具表（背包缺省读表之后，不装表一律 `bag_item_invalid`）。
+  - demo：生成时安装 bag，只覆盖两个数据文件（道具表多 `attack` / `hp` 两列与 demo 的四行）；demo 自己的背包组件、`PlayerDao.Items`、四个错误码删除；领取邮件附件与充值订单的两本账本挪到 demo 自己的 `claim_ledgers.go`（仍是 `BagComponent` 上的方法）；建在背包组件上的 handler 步骤排到模块之后。
+  - 协议与数据：`AddItem`（10000）字段不变；新增 `BagDiscard` 与服务端 handler `BagGrant`。错误码换成模块的（`bag_count_invalid` / `bag_item_invalid` / `bag_kinds_full` / `bag_short` / `bag_stack_full`，号在安装时分配，旧号有的换了含义）。DAO：`PlayerDao.Items map[int64]int32`（键 `items`）改为 `PlayerDao.Bag`（键 `bag`），在 DAO 末尾；客户端同步的字段号随之变化，客户端生成物要重新生成。规则差异：扣到 0 删键（原来留 0）、种类上限 200、每次变化同步整份背包（原来按键增量）。
+  - **升级要求**：已生成的工程不迁移（未上线）；重新生成。
+  - 验证：见本轮收口。背包变化经提交观察者同步给本人、旁人看不到，有生成工程用例（`bag_sync_test.go`，去掉观察者变红）。
+
 - **变更 / 协议变化**（game-demo + modules）：**game-demo 的排行榜改用 leaderboard 模块，demo 不再带 `game/ranking` 与 `RankTop`**（维护者 2026-11-11：“做 demo 换用”；“demo 的功能多的话，可以拆到模版中去”“模版可以复杂，能兼容简单就可以”——demo 比模块多的能力搬进模块，缺省用法保持开箱可用）。
   - 模块（场景数 15 → 20）：榜的身份与规则拆成归工程所有的 `game/leaderboard/leaderboard_board.go`（榜名、范围、`CurrentSeason()`、分数范围、一屏多长；`CurrentSeason` 由常量改为函数，可按时钟算）；`LeaderboardTop` 回包带上自己的名次（`MyOnBoard / MyRank / MyScore`，原来 demo 的 `RankTop` 的做法）；`Submit` 不再收幂等键（快照加 UpdateMax 本身幂等；带请求号时分数没变也要抢一次去重环，见 `service/rank` 的 Redis 存储），新增分周期的 `SubmitSeason`；`TotalBoard()` 改为 `CurrentBoard()` / `Board(season)`。
   - demo：生成时安装 leaderboard，只覆盖 `leaderboard_board.go`（通关次数榜 `clears`、赛季 1、一屏 10 行）；副本结算在领奖事务之外调 `SubmitSeason`，通关数为 0 不提交；压测机器人改用 `LeaderboardTop`。副本通关计数（`DungeonClears`、领奖账本）是副本玩法，留在 demo。

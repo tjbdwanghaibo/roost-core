@@ -41,8 +41,8 @@ func TestAPaidOrderIsGrantedOnce(t *testing.T) {
 	if second.Granted {
 		t.Error("the replayed grant reported a fresh delivery")
 	}
-	if second.BagCount != 10 || subject.BagComp().ItemCount(potion) != 10 {
-		t.Errorf("the bag holds %d after a replay, want 10", subject.BagComp().ItemCount(potion))
+	if second.BagCount != 10 || subject.BagComp().Count(potion) != 10 {
+		t.Errorf("the bag holds %d after a replay, want 10", subject.BagComp().Count(potion))
 	}
 
 	// A second purchase is a second order: the ledger must not mistake it for
@@ -81,7 +81,7 @@ func TestAnOldPaidGrantIsStillHonoured(t *testing.T) {
 	if err != nil || !result.Granted {
 		t.Fatalf("a year-old paid grant was refused: %+v %v", result, err)
 	}
-	if held := subject.BagComp().ItemCount(potion); held != 10 {
+	if held := subject.BagComp().Count(potion); held != 10 {
 		t.Fatalf("the bag holds %d, want the goods that were paid for", held)
 	}
 
@@ -91,7 +91,7 @@ func TestAnOldPaidGrantIsStillHonoured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replaying an ancient grant: %v", err)
 	}
-	if replay.Granted || subject.BagComp().ItemCount(potion) != 10 {
+	if replay.Granted || subject.BagComp().Count(potion) != 10 {
 		t.Errorf("an old ledger entry was forgotten; the replay paid again: %+v", replay)
 	}
 }
@@ -118,7 +118,7 @@ func TestAnUnidentifiableGrantIsRefused(t *testing.T) {
 			t.Errorf("%s: returned %v, want the coded refusal", name, err)
 		}
 	}
-	if held := subject.BagComp().ItemCount(1001); held != 0 {
+	if held := subject.BagComp().Count(1001); held != 0 {
 		t.Errorf("a refused grant moved the bag to %d", held)
 	}
 }

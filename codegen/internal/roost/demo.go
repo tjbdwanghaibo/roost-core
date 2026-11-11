@@ -427,8 +427,7 @@ func demoActivityKeys(root, gameService string) error {
 func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 	steps := []demoScaffoldStep{
 		{add: &AddOptions{Kind: "component", Name: "Profile", Entity: "Player"}, why: "Player's identity state"},
-		{add: &AddOptions{Kind: "component", Name: "Bag", Entity: "Player"}, why: "Player's item state"},
-		{add: &AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}, why: "persistence for both components"},
+		{add: &AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}, why: "persistence for the Player's components"},
 		{write: "db/restore_test.go", why: "current schema restores; mismatched schemas leave DAO unchanged"},
 		{write: "db/def/player.go", why: "the persistent fields the generated mutators are built from"},
 		{write: "db/migrations/player.go", why: "the offline schema 1 -> 2 step (flat weapon_id becomes an equipment slot) and its check through the generated RestorePersisted"},
@@ -436,7 +435,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "db/migrations/player_test.go", why: "plan writes nothing, apply backs up and rewrites, any failed check writes nothing, a live writer stops the run, rollback refuses documents written afterwards; the same flow on real Mongo"},
 		{write: "cmd/schemamigrate/main.go", why: "the operator tool for the migration: plan | apply | verify | rollback against the game's Mongo"},
 		{write: "game/entities/player/profile_component.go", why: "rename and level-up through generated mutators; level-up emits an effect"},
-		{write: "game/entities/player/bag_component.go", why: "add-item: table lookup, coded errors, generated map mutators"},
 		{write: "game/entities/player/entity.go", why: "EntityCategoryPlayer: the kind's lock rank, decided before the first document is persisted"},
 		{write: "game/effects/level_up.go", why: "the level-up effect: topic, payload, and the Emit onto the current transaction"},
 		{add: &AddOptions{Kind: "component", Name: "Stats", Entity: "World"}, why: "World's one job: server-wide counters"},
@@ -445,30 +443,19 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/world/stats_component.go", why: "count logins and matches through generated mutators; snapshot for reads"},
 		{write: "game/entities/world/entity.go", why: "EntityCategoryWorld: locked before Player in the two-entity AddExp"},
 		{write: "game/matchmaking/queue.go", why: "the duel and ranked queues, their grouping policies, and how a player is named in them"},
-		{add: &AddOptions{Kind: "table", Name: "Item"}, why: "the item config table"},
 		{add: &AddOptions{Kind: "table", Name: "FeatureFlag"}, why: "the kill switches: config data, because \"should this be on right now\" is an operational question with a live answer"},
 		{write: "configs/schema/feature_flag.go", why: "name, enabled and a note for the operator who finds it off at 3am"},
 		{write: "configs/table/feature_flag.csv", why: "three switches the demo actually reads: the store, respawns, opening activity windows"},
 		{write: "game/flags/flags.go", why: "the flag names as constants, and the rule: a switch belongs at an entry point, never inside a transaction"},
-		{write: "configs/schema/item.go", why: "the table's columns and rules"},
-		{write: "configs/table/item.csv", why: "the rows; converted to configs/data/item.json by generate"},
-		{add: &AddOptions{Kind: "errcode", Name: "ItemUnknown", ID: 100001}, why: "a coded failure in the manifest's errcode space"},
-		{add: &AddOptions{Kind: "errcode", Name: "ItemCount", ID: 100002}, why: "a coded failure in the manifest's errcode space"},
-		{add: &AddOptions{Kind: "errcode", Name: "BagFull", ID: 100003}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "ExpAmount", ID: 100004}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "NameEmpty", ID: 100005}, why: "a coded failure in the manifest's errcode space"},
-		{add: &AddOptions{Kind: "errcode", Name: "ItemShort", ID: 100006}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "BattleNotFound", ID: 100007}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "BattleNotSeated", ID: 100008}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "BattleBusy", ID: 100009}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "DungeonRun", ID: 100010}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "MailClaim", ID: 100011}, why: "a coded failure in the manifest's errcode space"},
-		{write: "internal/errors/item_unknown.go", why: "client-facing message instead of the TODO placeholder"},
-		{write: "internal/errors/item_count.go", why: "client-facing message instead of the TODO placeholder"},
-		{write: "internal/errors/bag_full.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/exp_amount.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/name_empty.go", why: "client-facing message instead of the TODO placeholder"},
-		{write: "internal/errors/item_short.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_not_found.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_not_seated.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_busy.go", why: "client-facing message instead of the TODO placeholder"},
@@ -529,8 +516,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{run: demoGiftRefundBudget, why: "debit's retry budget (saga.steps.gift_item.debit in the game configs) covers a crash restart of the sender's sid, so a refund waits it out instead of going to manual_required"},
 		{write: "game/gift/gift.go", why: "the game's side of the gift: state, id, mail text"},
 		{write: "game/gift/gift_test.go", why: "complete session identity keeps gifts on distinct logins apart while preserving retries"},
-		{add: &AddOptions{Kind: "handler", Name: "AddItem", Entity: "Player", Component: "Bag"}, why: "the write transaction"},
-		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},
 		{add: &AddOptions{Kind: "handler", Name: "AddExp", Entity: "Player", Component: "Profile"}, why: "the transaction that starts the event chain"},
 		{write: "game/handler/add_exp.go", why: "two entity parameters (Player, World) in one transaction; the Sender becomes MultiSync_AddExp"},
 		{add: &AddOptions{Kind: "handler", Name: "RecordEnter", Entity: "World", Component: "Stats"}, why: "World counts a login"},
@@ -541,18 +526,10 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/world_stats.go", why: "returns a value, not the Entity"},
 		{add: &AddOptions{Kind: "handler", Name: "PlayerLevel", Entity: "Player", Component: "Profile"}, why: "the ranked queue's score, read under the Player's lock"},
 		{write: "game/handler/player_level.go", why: "a read handler on the Player"},
-		{add: &AddOptions{Kind: "handler", Name: "StartGift", Entity: "Player", Component: "Bag"}, why: "the saga start: check under the lock, emit the start intent in the same WAL record"},
-		{write: "game/handler/start_gift.go", why: "no mutation, one effect: saga.EmitStart"},
-		{add: &AddOptions{Kind: "handler", Name: "GiftDebit", Entity: "Player", Component: "Bag"}, why: "the saga's debit step as a Nest transaction"},
-		{write: "game/handler/gift_debit.go", why: "RemoveItem plus the command's receipt and completion, all in one WAL record"},
-		{add: &AddOptions{Kind: "handler", Name: "GiftRefund", Entity: "Player", Component: "Bag"}, why: "debit's compensation, with the same saga identity"},
-		{write: "game/handler/gift_refund.go", why: "AddItem plus the receipt and completion; a compensation that runs twice is as wrong as a step that does"},
 		{add: &AddOptions{Kind: "handler", Name: "ClaimDungeon", Entity: "Player", Component: "Profile"}, why: "the clear reward, paid at most once per run"},
 		{write: "game/handler/claim_dungeon.go", why: "the claim ledger and the reward commit together, so a replay pays nothing"},
-		{add: &AddOptions{Kind: "handler", Name: "ClaimMailReward", Entity: "Player", Component: "Bag"}, why: "the mail attachment, granted at most once per mail"},
 		{add: &AddOptions{Kind: "handler", Name: "EquipItem", Entity: "Player", Component: "Equipment"}, why: "taking an item out of the bag and putting it on must commit together, or the item is lost or duplicated"},
 		{write: "game/handler/equip_item.go", why: "one transaction over three components: bag, equipment and the attribute layer that follows them"},
-		{write: "game/handler/claim_mail_reward.go", why: "the same ledger shape for the claim the mail service cannot make atomic"},
 		{write: "game/handler/add_item_test.go", why: "a grant that would overflow the stored count is refused before the bag is written, through the real handler and Sender"},
 		{write: "game/handler/add_exp_test.go", why: "experience and level overflow is refused atomically across Player, World and reward ledger"},
 		{write: "game/handler/claim_mail_reward_test.go", why: "the mail ledger asserted through the real handler in a real Nest transaction: the crash window a client cannot open"},
@@ -567,8 +544,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{run: enableDemoPlayerTCP, why: "a listener that is actually on; doctor's player-tcp workflow passes on the generated project"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddItem", Group: "game", Handler: "player"}, why: "the wire message"},
 		{write: "protocol/def/add_item.go", why: "request fields matching the handler parameters; response with code and count"},
-		{add: &AddOptions{Kind: "endpoint", Name: "AddItem", Handler: "player"}, why: "protocol boundary to Nest sender"},
-		{write: "game/controllers/player/add_item.go", why: "the error boundary: coded errors become the response, not a dropped connection"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddExp", Group: "game", Handler: "player"}, why: "the wire message"},
 		{write: "protocol/def/add_exp.go", why: "request field matching the handler parameter; response with code and levels gained"},
 		{write: "game/controllers/player/add_exp.go", why: "hand-written: add endpoint wires single-entity handlers, AddExp addresses two"},
@@ -635,8 +610,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "protocol/def/activity_standing.go", why: "the coordinator's aggregation and this server's own settlement flag, kept apart"},
 		{write: "game/controllers/player/activity_standing.go", why: "two sources, deliberately not merged: complete is not paid"},
 		{write: "game/purchase/purchase.go", why: "what the game process and the platform process both have to agree on about a paid order: catalogue, key layout, grant record, claim window"},
-		{add: &AddOptions{Kind: "handler", Name: "GrantPurchase", Entity: "Player", Component: "Bag"}, why: "a paid order becomes items: the order id lands in the same WAL record as the grant"},
-		{write: "game/handler/grant_purchase.go", why: "the third instance of one shape: authoritative moment in, identity recorded in the same transaction, admission and pruning the same predicate"},
 		{write: "game/handler/grant_purchase_test.go", why: "the replay a client cannot produce: the same order drained twice grants once, and a grant past its window is refused rather than repeated"},
 		{write: "internal/errors/guild_missing.go", why: "\"you are in no guild\" and \"that guild was never founded\" are different things to a player"},
 		{write: "internal/errors/guild_busy.go", why: "the alliance service did not execute the request (no instance ready, a guild being moved): retryable, not an internal error"},
@@ -833,7 +806,31 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/account/collaborators_test.go", why: "the id counter is the deployment's (under account.key_prefix) and an upgraded demo keeps counting from the old fixed key"},
 		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
-	return append(append(steps, demoAllianceSteps(gameService)...), demoModuleSteps()...)
+	// 公会那一组步骤里有三个 handler 建在背包组件上（StartGuildOp / GuildDebit / GuildCredit）。背包组件由 bag
+	// 模块带来，模块又排在全部 demo 步骤之后，所以这几步挪到模块装好之后执行，其余顺序不变。
+	alliance, allianceOnBag := splitDemoHandlerSteps(demoAllianceSteps(gameService), "Bag")
+	return append(append(append(steps, alliance...), demoModuleSteps()...), allianceOnBag...)
+}
+
+// splitDemoHandlerSteps 把 steps 里建在 component 上的 Nest handler 挑出来（later），其余留在 rest，两边都保持原有顺序。
+// 一个 handler 是两步：roost add handler（要求组件文件已经在盘上）与紧随其后覆盖它的 write（add handler 拒绝
+// 已经存在的文件，所以 write 不能留在前面）。组件由业务模块带来时，这两步都要等模块装好。
+func splitDemoHandlerSteps(steps []demoScaffoldStep, component string) (rest, later []demoScaffoldStep) {
+	files := map[string]bool{}
+	for _, step := range steps {
+		if step.add != nil && step.add.Kind == "handler" && step.add.Component == component {
+			files["game/handler/"+toSnake(step.add.Name)+".go"] = true
+		}
+	}
+	for _, step := range steps {
+		onComponent := step.add != nil && step.add.Kind == "handler" && step.add.Component == component
+		if onComponent || (step.write != "" && files[step.write]) {
+			later = append(later, step)
+			continue
+		}
+		rest = append(rest, step)
+	}
+	return rest, later
 }
 
 // demoModuleSteps 是 demo 经业务模块装进来的功能。排在全部 demo 步骤之后：模块的协议号从
@@ -853,15 +850,43 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 所以 leaderboard 必须与 enter、chat 在同一步里装：模块步骤结束时要跑生成器与 go mod tidy。
 		{write: "game/leaderboard/leaderboard_board.go", why: "the module's project-owned board rules with the demo's board: dungeon clears, global, per season, pages of ten; and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
 		{write: "game/leaderboard/leaderboard_board_test.go", why: "the demo's board rules pinned with literal numbers, in place of the module's test of its default board"},
+
+		// 背包是 bag 模块：组件（Add / Remove / Count / Has）、PlayerDao.Bag、道具表、丢弃协议、服务端发放 handler、
+		// 错误码都来自模块，demo 不带自己的背包。单独一步、排在 enter 与 chat 之后装：号按“最小的空号”分配，
+		// 这样前两个模块拿到的号不随背包装没装而变。
+		{modules: []string{"bag"}, why: "bag is the bag module: the Bag component, PlayerDao.Bag, the item table (which items exist and each one's stack cap), the discard protocol, the server-side grant handler and the bag's error codes"},
+		// demo 只换数据：道具表多两列（attack / hp，属性系统按它给穿着的装备算加成），行是 demo 的四种道具。
+		// 背包的规则文件 bag_items.go 用模块的缺省实现（读这张表），不覆盖。
+		{write: "configs/schema/item.go", why: "the bag module's item table with the demo's two extra columns: what a worn item adds to attack and hp"},
+		{write: "configs/table/item.csv", why: "the demo's rows: two potions, a sword, the gold coin; converted to configs/data/item.json by generate"},
+		// demo 自己的两个文件：两本领取账本（给模块的 BagComponent 加方法），以及背包变化经提交观察者同步给本人的断言。
+		{write: "game/entities/player/claim_ledgers.go", why: "the mail-attachment and paid-order claim ledgers: the demo's own methods on the module's Bag component, so a claim and its items stay one transaction"},
+		{write: "internal/service/game/bag_sync_test.go", why: "the module's Bag component never calls PublishSyncDirty: on a Nest built with the scene's commit observer a grant and a discard still reach the owner's client, a refused grant sends nothing, and a bystander never sees the bag"},
+		// 下面是 demo 建在背包组件上的 Nest handler。roost add handler 要求组件文件已经在盘上，所以排在模块之后；
+		// AddItem 的端点要解析 handler 的参数，跟着排在它后面。它们的协议定义、测试与调用方是普通的 write，留在原处。
+		{add: &AddOptions{Kind: "handler", Name: "AddItem", Entity: "Player", Component: "Bag"}, why: "the write transaction"},
+		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},
+		{add: &AddOptions{Kind: "endpoint", Name: "AddItem", Handler: "player"}, why: "protocol boundary to Nest sender"},
+		{write: "game/controllers/player/add_item.go", why: "the error boundary: coded errors become the response, not a dropped connection"},
+		{add: &AddOptions{Kind: "handler", Name: "StartGift", Entity: "Player", Component: "Bag"}, why: "the saga start: check under the lock, emit the start intent in the same WAL record"},
+		{write: "game/handler/start_gift.go", why: "no mutation, one effect: saga.EmitStart"},
+		{add: &AddOptions{Kind: "handler", Name: "GiftDebit", Entity: "Player", Component: "Bag"}, why: "the saga's debit step as a Nest transaction"},
+		{write: "game/handler/gift_debit.go", why: "Remove plus the command's receipt and completion, all in one WAL record"},
+		{add: &AddOptions{Kind: "handler", Name: "GiftRefund", Entity: "Player", Component: "Bag"}, why: "debit's compensation, with the same saga identity"},
+		{write: "game/handler/gift_refund.go", why: "Add plus the receipt and completion; a compensation that runs twice is as wrong as a step that does"},
+		{add: &AddOptions{Kind: "handler", Name: "ClaimMailReward", Entity: "Player", Component: "Bag"}, why: "the mail attachment, granted at most once per mail"},
+		{write: "game/handler/claim_mail_reward.go", why: "the same ledger shape for the claim the mail service cannot make atomic"},
+		{add: &AddOptions{Kind: "handler", Name: "GrantPurchase", Entity: "Player", Component: "Bag"}, why: "a paid order becomes items: the order id lands in the same WAL record as the grant"},
+		{write: "game/handler/grant_purchase.go", why: "the third instance of one shape: authoritative moment in, identity recorded in the same transaction, admission and pruning the same predicate"},
 	}
 }
 
 // scaffoldDemoTemplate builds the demo on top of the game template: Player
-// gains Profile and Bag components backed by a DAO, an item table and three
-// coded errors, one Nest write transaction adds an item, a TCP endpoint
-// carries it and turns failures into coded responses, and the account service
-// gets collaborators that work. Everything it writes is application-owned and
-// written once.
+// gains a Profile component backed by a DAO and, through the bag module, a
+// Bag component with its item table and coded errors, one Nest write
+// transaction adds an item, a TCP endpoint carries it and turns failures into
+// coded responses, and the account service gets collaborators that work.
+// Everything it writes is application-owned and written once.
 func scaffoldDemoTemplate(root string, m Manifest, gameService string) ([]string, error) {
 	created, err := scaffoldGameTemplate(root, m, gameService)
 	if err != nil {

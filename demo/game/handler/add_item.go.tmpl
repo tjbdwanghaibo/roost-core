@@ -11,7 +11,18 @@ import player "{{MODULE}}/game/entities/player"
 // parameters after the entity become the Sender's and the endpoint's, and
 // must match the protocol request's fields by name.
 //
+// The Bag component is the bag module's (`roost module add bag`): Add checks
+// the item against the item table and its stack cap and refuses with the
+// module's coded errors (bag_item_invalid, bag_count_invalid, bag_stack_full,
+// bag_kinds_full). The module counts in int64; the AddItem protocol keeps its
+// int32 fields, so the handler converts at this edge. Narrowing the result is
+// safe: a stack never exceeds player.BagMaxStack (999999).
+//
 //roost:nest rollback=undo durability=strict
 func handlerAddItem(target player.IBagEntity, itemID int64, count int32) (int32, error) {
-	return target.BagComp().AddItem(itemID, count)
+	held, err := target.BagComp().Add(itemID, int64(count))
+	if err != nil {
+		return 0, err
+	}
+	return int32(held), nil
 }

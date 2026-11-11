@@ -19,7 +19,7 @@ import (
 // v1Player 是旧程序（schema 1）写下的文档形状：元数据与 DataEngine 投影写的一致。
 func v1Player(id int64, version int64, extra bson.M) bson.M {
 	doc := bson.M{"_id": id, "_version": version, "_schema": int64(1), "_last_tx": fmt.Sprintf("tx-%d", id),
-		"name": fmt.Sprintf("p%d", id), "level": int32(7), "items": bson.M{"1001": int32(3)}}
+		"name": fmt.Sprintf("p%d", id), "level": int32(7), "bag": bson.M{"1": bson.M{"1001": int64(3)}}}
 	for key, value := range extra {
 		doc[key] = value
 	}

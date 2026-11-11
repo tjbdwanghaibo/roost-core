@@ -18,7 +18,9 @@ type IPlayerEntity interface{ entity.IThreadSafeEntity }
 
 // IPlayerFullEntity is for a handler that needs several components at once —
 // equipping touches the bag, the equipment and the attribute container, and
-// they have to move in one transaction.
+// they have to move in one transaction. The Bag component is the bag
+// module's (bag_component.go, installed by `roost module add bag`, which also
+// appends its field to the Player struct below).
 type IPlayerFullEntity interface {
 	entity.IThreadSafeEntity
 	BagComp() *BagComponent
@@ -55,7 +57,6 @@ type Player struct {
 	entity.ComponentManager
 	entity.DaoManager
 	profile *ProfileComponent `comp:"CompTypeProfile"`
-	bag     *BagComponent     `comp:"CompTypeBag"`
 	attr    *AttributeComponent `comp:"CompTypeAttribute"`
 	mapComp *MapComponent       `comp:"CompTypeMap"`
 	gear    *EquipmentComponent `comp:"CompTypeEquipment"`

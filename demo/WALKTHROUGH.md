@@ -14,19 +14,44 @@ TCP (player access)
   → game/controllers/player/add_item.go      端点（本目录）：错误边界，coded error → 响应里的 Code/Reason
   → game/handler/syncsender/…Sync_AddItem     Sender（从 handler 参数与返回值生成）
   → Nest 锁住 Player
-  → game/handler/add_item.go                  handlerAddItem（本目录）
-  → BagComponent.AddItem                      本目录：查 item 表 → 校验 → 只走生成的 mutator
+  → game/handler/add_item.go                  handlerAddItem（本目录）：int32 的协议数量在这里转成模块的 int64
+  → BagComponent.Add                          bag 模块：数量为正 → 道具规则 → 单种上限 → 种类数上限 → 只走生成的 mutator
+      ↳ bag_items.go 的 bagItemRule            bag 模块留给工程的规则文件；缺省读道具表，demo 没有改它
       ↳ configs/generated.ItemByID             生成的表访问器，读的是钉在本次请求上的配置快照
-      ↳ internal/errors.Err*                   errcode.Define，code 在清单的 errcode 号段里
-  → PlayerDao.SetItems                        生成的 map mutator，带 dirty / undo / patch
+      ↳ internal/errors.ErrBag*                bag 模块的错误码（internal/errors/bag.go），号在安装时从清单的 errcode 号段分配
+  → PlayerDao.Bag 的 SetItemsKey / DelItemsKey 生成的嵌套 map mutator，带 dirty / undo / patch
   → dataengine 落库
 ```
 
+**背包是 [bag 业务模块](../modules/README.md)，不是 demo 自己的代码**：`-template game-demo` 生成时由 `roost module add bag`
+装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。模块带来组件
+`BagComponent`（`Add` / `Remove` / `Count` / `Has`）、状态 `PlayerDao.Bag`（嵌套结构体，存储键 `bag`）、道具表
+（`configs/schema/item.go` 与 `configs/table/item.csv`）、五个错误码、丢弃协议 `BagDiscard` 与服务端发放 handler `BagGrant`，
+以及它自己的 17 条场景（`roost module verify`）。demo 在它之上做的：
+
+- **只换道具表的数据**：模块装好之后覆盖 `configs/schema/item.go` 与 `configs/table/item.csv`——多 `attack` / `hp` 两列
+  （属性系统给穿着的装备算加成），行是 demo 的四种道具。背包规则文件 `game/entities/player/bag_items.go` 是模块的缺省实现：
+  表里有这一行道具号就合法，`max_stack` 是单种上限（0 表示不单独限制，按硬上限 999999）。加道具、改上限只改 CSV。
+- **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放、装备、邮件领取、充值发货，
+  都在自己的 Nest handler 里调 `target.BagComp().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`
+  要求组件文件已经在盘上，所以这些 handler 的步骤排在安装模块之后。
+- **两本领取账本不是背包的职责**：邮件附件（`ClaimMailReward` / `MailRewardClaimed`）与已付订单（`ClaimPurchase`）的
+  “这一次发过没有”记在 demo 自己的 `PlayerDao.MailClaims` / `PurchaseClaims` 里，方法写在 demo 的
+  `game/entities/player/claim_ledgers.go`（给模块的 `BagComponent` 加方法：账本与道具在同一笔事务里提交或回滚）。
+- **同步不用组件自己标脏**：模块的组件不调 `Player.PublishSyncDirty()`（模块不认识工程的同步）。demo 的 Nest 装着场景的
+  提交观察者，事务准入时按实体收集生成的 setter 留下的同步标记，所以背包的变化照样作为增量到本人的客户端；被拒绝而回滚的
+  发放什么都不发；别的玩家的视图里没有 `bag`。`internal/service/game/bag_sync_test.go` 在与服务相同的接线上断言这三件事。
+  有一处冗余：`PublishSyncDirty()` 与提交观察者各读一份掩码，模块的写入只被观察者那一份消费，所以背包变化之后，
+  这名玩家下一次 `PublishSyncDirty()`（走一步、加经验）会把整份背包再给本人发一次，内容与上一次相同；背包至多 200 种，量有界。
+
 几个刻意保留的教学点：
 
-- **业务代码只碰生成的 mutator**（`dao.SetItems(...)`），不直接写私有字段——dirty 追踪、Nest undo 和持久化
+- **业务代码只碰生成的 mutator**（`bag.SetItemsKey(...)`），不直接写私有字段——dirty 追踪、Nest undo 和持久化
   patch 全靠它。
-- **道具数量先校验再窄化**：`AddItem` 用 int64 计算新数量，同时检查 int32 存储范围和物品的 `MaxStack`，通过后才调用 mutator；即使配置不限制堆叠，也不能超过存储范围。拒绝请求返回 `bag_full`，不修改背包。
+- **道具数量先校验再写**：`BagComponent.Add` 先判数量为正、道具在道具表里，再用减法比较单种上限（`count > 上限 - 持有量`，
+  加法在数量接近 int64 上限时会溢出成负数、绕过上限），全部通过后才调用 mutator。拒绝时不写任何字段：超过单种上限是
+  `bag_stack_full`（不做“能放多少放多少”），不在道具表里是 `bag_item_invalid`，数量不为正是 `bag_count_invalid`，
+  种类数到 200 之后的新种类是 `bag_kinds_full`。扣到 0 时删掉这个键，不留数量为 0 的条目。
 - **handler 参数与协议字段必须对上**：`add endpoint` 会解析两边并拒绝对不上的组合，所以
   `game/handler/add_item.go` 的 `(itemID int64, count int32)` 与 `protocol/def/add_item.go` 的
   `ItemID` / `Count` 是同一份契约。handler 的第一个返回值（新数量）经 Sender 原样带回端点。
@@ -187,7 +212,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
 - **步骤**（`internal/service/game/gift_saga.go`，四个步骤，**两种形状**，登记在框架的步骤运行时 `kitsaga.Steps` 上：
   收件箱、durable、等待投影、停止与指标都是框架的，demo 只写步骤体与属主核对）：
-  - debit（`GiftDebit`，`Bag.RemoveItem`，不够是 `item_short`）与它的补偿（`GiftRefund`，`AddItem`）走**原生路径**
+  - debit（`GiftDebit`，`BagComponent.Remove`，不够是 `bag_short`）与它的补偿（`GiftRefund`，`BagComponent.Add`）走**原生路径**
     `Steps.Native`：步骤体把框架的 `saga.NativeStep` 交给 Nest handler，handler 在自己的事务里 `step.Complete(...)`，
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
     提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
@@ -381,6 +406,9 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 - **写入侧不是自动的**。把 DAO 标脏和把**主体**标脏是两件事：`PublishSyncDirty()` 在一次变更的末尾调一次，
   于是一次事务产出**一条** delta 而不是每个 setter 一条。复制是"一次已提交的变更"的副作用，不是"有人调了 setter"的副作用。
+  Nest 事务里还有第二条路：场景的提交观察者在事务准入时按实体收集 setter 留下的同步标记（`TakeEntitySyncChanges`），
+  与 `PublishSyncDirty()` 的标记并入同一事务条目、不会双发。业务模块的组件（背包）不认识工程的同步、不调 `PublishSyncDirty()`，
+  靠的就是这条路；不在 Nest 事务里的写入（心跳里的移动）没有准入这一步，仍然要自己调。
 - **payload 是 DAO 自己的同步文档**（`MarshalSync(mask)`，与 `ApplySync` 成对）。掩码从生成的 setter 来、原样回到生成的
   marshaller，两端都不需要知道哪个 bit 是哪个字段——生成的字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
   （尚未解决）。要自己的客户端协议的项目在这里换成自己的消息。
@@ -597,7 +625,7 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
   不会从它接着数，也不会从 0 重新数而重发旧 id。这个键是保留键：`account.key_prefix=roost:demo` 会让计数键恰好等于它，启动绑定时直接按配置错误拒绝、不碰 Redis，要求换前缀
   （已经用这个前缀跑着的部署先停写，把该前缀下的全部键连同计数器迁到新前缀）。处置分配时的拒绝前先确认这个键不是同一 Redis 上另一份仍用 `roost:demo` 前缀的部署的当前计数器；
   确认是旧计数器后停止分配，若 `<account.key_prefix>:player_id` 还不存在就把旧键的值迁过去，再移除旧键；否则给这份部署换一个没有该键的 Redis。
-- 加道具受 Player 的背包规则约束（每种道具的叠加上限），超出时命令按业务错误码拒绝（`bag_full`），不是 GM 越过规则。
+- 加道具受 Player 的背包规则约束（道具必须在道具表里、每种道具的叠加上限），超出时命令按业务错误码拒绝（`bag_stack_full`，道具表里没有的是 `bag_item_invalid`），不是 GM 越过规则。
 - 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走同一个 mail 客户端、附件用同一份 `rewards` 编码，玩家经 `ClaimMail` 领。
 - `trace_id` 是邮件的幂等键：同一 trace 重试不会发两封。
 - 为什么不是 webroute：这套 admin 命令表就是框架给运维面的位置（Wiring 的 nats / bus 也把 DLQ 命令注册在这里），共用鉴权、开关和 `/admin/commands` 的自描述；`webroute` 留给面向玩家 / 第三方的 HTTP 接口。

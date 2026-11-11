@@ -105,6 +105,68 @@ func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 	}
 }
 
+// 背包组件由 bag 模块带来。建在它上面的 Nest handler（roost add handler --component Bag 要求组件文件已经在盘上）
+// 与覆盖这些 handler 文件的 write 步骤，都必须排在安装 bag 的那一步之后；demo 自己不再建、也不再写背包组件。
+// 覆盖模块文件的 write（道具表）同样要在模块之后，否则安装器会因为落点被占用而拒绝。
+func TestDemoBagStepsFollowTheBagModule(t *testing.T) {
+	steps := demoScaffoldSteps("game")
+	installed := -1
+	for index, step := range steps {
+		if contains(step.modules, "bag") {
+			if installed >= 0 {
+				t.Fatal("the bag module is installed twice")
+			}
+			installed = index
+		}
+	}
+	if installed < 0 {
+		t.Fatal("no step installs the bag module")
+	}
+	catalog, err := loadModuleCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moduleFiles := map[string]bool{}
+	for _, rel := range catalog["bag"].Files {
+		moduleFiles[rel] = true
+	}
+	handlerFiles := map[string]bool{}
+	handlers := 0
+	for index, step := range steps {
+		if step.add == nil {
+			continue
+		}
+		if step.add.Kind == "component" && step.add.Name == "Bag" {
+			t.Error("the demo still adds its own Bag component")
+		}
+		if step.add.Kind == "table" && step.add.Name == "Item" {
+			t.Error("the demo still adds its own item table: it comes with the bag module")
+		}
+		if step.add.Kind == "handler" && step.add.Component == "Bag" {
+			handlers++
+			handlerFiles["game/handler/"+toSnake(step.add.Name)+".go"] = true
+			if index < installed {
+				t.Errorf("add handler %s --component Bag runs before the bag module is installed", step.add.Name)
+			}
+		}
+		if step.add.Kind == "endpoint" && step.add.Name == "AddItem" && index < installed {
+			t.Error("add endpoint AddItem runs before its handler can exist")
+		}
+	}
+	// AddItem、赠礼三步、邮件领取、充值发货、公会三步。
+	if handlers != 9 {
+		t.Errorf("%d handlers are built on the Bag component, want 9", handlers)
+	}
+	for index, step := range steps {
+		if step.write == "" {
+			continue
+		}
+		if (handlerFiles[step.write] || moduleFiles[step.write]) && index < installed {
+			t.Errorf("%s is written before the bag module is installed", step.write)
+		}
+	}
+}
+
 // The demo builds on the game template and adds what its own code needs from
 // the manifest, so a caller who narrowed -features still gets a project that
 // compiles.
@@ -188,10 +250,45 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, sessionTokenPrefixName) || strings.Contains(auth, `"player:"`) {
 		t.Errorf("auth.go is not the session-ticket authenticator, or still carries the debug shortcut:\n%s", auth)
 	}
-	// Persistent state must go through generated mutators, not raw fields,
-	// and validation reads the item table through the generated accessor.
-	if bag := read("game/entities/player/bag_component.go"); !strings.Contains(bag, "dao.SetItems(") || !strings.Contains(bag, "generated.ItemByID(") {
-		t.Errorf("bag component does not use the generated mutator and table accessor:\n%s", bag)
+	// 背包是 bag 模块装进来的（demoModuleSteps），demo 自己不带一份：组件、PlayerDao.Bag、错误码与道具表的
+	// 落点都记在 roost.yaml 的 modules.bag 下。组件只经生成的 mutator 改状态；道具号与单种上限的规则在
+	// 模块的 bag_items.go 里，读生成的道具表访问器——demo 只换了道具表的列与行，没有覆盖这个规则文件。
+	if bag := read("game/entities/player/bag_component.go"); !strings.Contains(bag, "bag.SetItemsKey(") || !strings.Contains(bag, "bagItemRule(itemID)") || strings.Contains(bag, "PublishSyncDirty") {
+		t.Errorf("the bag component is not the bag module's:\n%s", bag)
+	}
+	if rule := read("game/entities/player/bag_items.go"); !strings.Contains(rule, "generated.ItemByID(itemID)") {
+		t.Errorf("the bag's item rule does not read the item table:\n%s", rule)
+	}
+	manifestText := read("roost.yaml")
+	for _, owned := range []string{"    bag:\n", "- PlayerDao.Bag", "- game/entities/player/bag_component.go", "- game/entities/player/bag_items.go",
+		"- configs/schema/item.go", "- configs/table/item.csv", "- internal/errors/bag.go", "bag_stack_full:", "BagDiscard:"} {
+		if !strings.Contains(manifestText, owned) {
+			t.Errorf("roost.yaml does not record %q under the bag module", owned)
+		}
+	}
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "Bag BagState `store:\"bag\" dao:\"persist,sync\"`") || strings.Contains(dao, "store:\"items\"") {
+		t.Errorf("PlayerDao does not carry the bag as the module's nested state (or still has the demo's flat Items):\n%s", dao)
+	}
+	if aggregate := read("game/entities/player/entity.go"); !strings.Contains(aggregate, "`comp:\"CompTypeBag\"`") {
+		t.Errorf("the Player aggregate does not hold the module's Bag component:\n%s", aggregate)
+	}
+	// demo 建在背包组件上的写入都换用模块的入口；两本领取账本是 demo 自己的文件，仍是 BagComponent 上的方法。
+	for rel, call := range map[string]string{
+		"game/handler/add_item.go":          "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/gift_debit.go":        "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/gift_refund.go":       "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/guild_debit.go":       "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/guild_credit.go":      "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/equip_item.go":        "target.BagComp().Remove(itemID, 1)",
+		"game/handler/claim_mail_reward.go": "bag.Add(itemID, int64(count))",
+		"game/handler/grant_purchase.go":    "bag.Add(itemID, int64(count))",
+	} {
+		if body := read(rel); !strings.Contains(body, call) {
+			t.Errorf("%s does not go through the bag module's component (%s):\n%s", rel, call, body)
+		}
+	}
+	if ledgers := read("game/entities/player/claim_ledgers.go"); !strings.Contains(ledgers, "func (component *BagComponent) ClaimMailReward(") || !strings.Contains(ledgers, "func (component *BagComponent) ClaimPurchase(") {
+		t.Errorf("the claim ledgers are not the demo's own methods on the Bag component:\n%s", ledgers)
 	}
 	// The demo endpoint replaces the generated scaffold with the error
 	// boundary; a handler error that reached the access layer would close the
@@ -205,14 +302,23 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if schema := read("configs/schema/item.go"); !strings.Contains(schema, "//roost:table name=item key=ID") {
 		t.Errorf("item schema lost its marker:\n%s", schema)
 	}
-	if data := read("configs/data/item.json"); !strings.Contains(data, "\"id\": 1001") {
+	// The rows are the demo's (the Gold Coin and the two attribute columns),
+	// written over the bag module's sample table after the module is installed.
+	if data := read("configs/data/item.json"); !strings.Contains(data, "\"id\": 1001") || !strings.Contains(data, "\"id\": 9001") || !strings.Contains(data, "\"attack\": 15") {
 		t.Errorf("item.json was not converted from the demo rows:\n%s", data)
 	}
 	// Coded errors sit in the manifest's errcode space, so `roost id check`
 	// owns their uniqueness; an id outside it would fail at add time.
-	for _, file := range []string{"internal/errors/item_unknown.go", "internal/errors/item_count.go", "internal/errors/bag_full.go"} {
+	// The bag's codes are the module's (internal/errors/bag.go), allocated
+	// from the same space when the module is installed.
+	for _, file := range []string{"internal/errors/exp_amount.go", "internal/errors/name_empty.go", "internal/errors/bag.go"} {
 		if body := read(file); !strings.Contains(body, "errcode.Define(1000") || strings.Contains(body, "TODO") {
 			t.Errorf("%s is not a finished coded error:\n%s", file, body)
+		}
+	}
+	for _, gone := range []string{"internal/errors/item_unknown.go", "internal/errors/item_count.go", "internal/errors/bag_full.go", "internal/errors/item_short.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(gone))); err == nil {
+			t.Errorf("%s is still written: the bag's coded errors are the bag module's", gone)
 		}
 	}
 	// The account collaborators must be the working ones, bound to Redis
@@ -240,7 +346,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"internal/service/game/gm.go",
 		"saga/gift_item/definition.go", "game/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
 		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player/send_gift.go", "game/controllers/player/gift_status.go",
-		"internal/service/game/gift_saga.go", "internal/errors/item_short.go",
+		"internal/service/game/gift_saga.go", "internal/errors/bag.go", "internal/service/game/bag_sync_test.go",
 		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
 		"game/controllers/player/battle_input.go", "internal/service/game/battle.go",
 		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go",
