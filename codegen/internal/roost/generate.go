@@ -51,7 +51,7 @@ type GenerateOptions struct {
 	// builds stay warm.
 	Force  bool
 	Stdout io.Writer
-	// syncProject 只供模块安装使用：新增自带实体时，先在同一暂存树里刷新 owner / shutdown 接线。
+	// syncProject 只供模块安装使用：新增自带实体或定时器时，在同一暂存树里刷新 owner / shutdown / 定时器接线。
 	// 普通 generate 仍要求调用方显式 project sync，不隐式接受手工改过的工程结构。
 	syncProject bool
 }

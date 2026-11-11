@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -59,9 +60,10 @@ type ModulePlanItem struct {
 	Component string   `json:"component,omitempty"`
 	Files     []string `json:"files"`
 	// Replaces 是 Files 里会替换掉的生成桩（仍是没改过的生成内容）。
-	Replaces []string       `json:"replaces,omitempty"`
-	Verify   ModuleVerify   `json:"verify"`
-	Runtime  *ModuleRuntime `json:"runtime,omitempty"`
+	Replaces []string         `json:"replaces,omitempty"`
+	Verify   ModuleVerify     `json:"verify"`
+	Runtime  *ModuleRuntime   `json:"runtime,omitempty"`
+	Timer    *ModuleTimerPlan `json:"timer,omitempty"`
 
 	spec ModuleSpec
 }
@@ -126,6 +128,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	if err != nil {
 		return ModulePlan{}, err
 	}
+	timerPlans := map[string]*ModuleTimerPlan{}
 	pending := map[string]bool{}
 	newEntities := map[string]bool{}
 	for _, spec := range order {
@@ -182,15 +185,28 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		if item.IDs, err = allocator.allocate(spec); err != nil {
 			return ModulePlan{}, fmt.Errorf("module %s: %w", spec.Name, err)
 		}
+		if len(spec.TimerTypes) > 0 {
+			if item.Timer, err = planModuleTimer(root, manifest, service, spec, newEntities[spec.Entity], allocator, timerPlans, item.IDs); err != nil {
+				return ModulePlan{}, fmt.Errorf("module %s: %w", spec.Name, err)
+			}
+		}
 		for _, field := range spec.State {
 			item.State = append(item.State, fmt.Sprintf("%sDao.%s (%s)", spec.Entity, field.Field, field.Dao))
 		}
 		if spec.Component != "" {
 			item.Component = spec.Entity + "." + spec.Component
 		}
+		renderManifest := manifest
+		if item.Timer != nil {
+			renderManifest.Timers = maps.Clone(manifest.Timers)
+			if renderManifest.Timers == nil {
+				renderManifest.Timers = map[string]TimerSpec{}
+			}
+			renderManifest.Timers[item.Timer.Entity] = item.Timer.Spec
+		}
 		for _, rel := range spec.Files {
 			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
-				body, renderErr := renderModuleFile(manifest, service, spec, "files", rel, item.IDs)
+				body, renderErr := renderModuleFile(renderManifest, service, spec, "files", rel, item.IDs)
 				if renderErr != nil {
 					return ModulePlan{}, renderErr
 				}
@@ -387,6 +403,20 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 			return ModulePlan{}, fmt.Errorf("module %s: %w", item.Name, err)
 		}
 		touched = append(touched, paths...)
+		if item.Timer != nil {
+			touched = append(touched, newTimerNames(manifest.Project.Module, item.Timer.Entity, item.Timer.Spec).handlersFile())
+			// 模块可能只带回调、没有自己的 State；新增定时器仍会改主 DAO，必须独立备份。
+			if !newEntities[item.spec.Entity] {
+				source, err := locateDaoStruct(root, item.Timer.Spec.Dao)
+				if err != nil {
+					return ModulePlan{}, err
+				}
+				if source == nil {
+					return ModulePlan{}, fmt.Errorf("module %s timer DAO %s is missing", item.Name, item.Timer.Spec.Dao)
+				}
+				touched = append(touched, relativeSlash(root, source.path))
+			}
+		}
 	}
 	for _, glue := range plan.Glue {
 		touched = append(touched, glue.Files...)
@@ -405,9 +435,22 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		if item.Status != moduleStatusInstall {
 			continue
 		}
+		// 类型号先放进 manifest 供模板渲染；DAO 与组件接线在模板写完后执行。
+		if item.Timer != nil {
+			if manifest.Timers == nil {
+				manifest.Timers = map[string]TimerSpec{}
+			}
+			manifest.Timers[item.Timer.Entity] = item.Timer.Spec
+		}
 		record, err := writeModule(root, manifest, plan.Service, item)
 		if err != nil {
 			return fail(fmt.Errorf("module %s: %w", item.Name, err))
+		}
+		if item.Timer != nil {
+			if err := wireModuleTimer(root, manifest, item); err != nil {
+				return fail(fmt.Errorf("module %s timer: %w", item.Name, err))
+			}
+			record.TimerEntity = item.Timer.Entity
 		}
 		manifest.Modules[item.Name] = record
 	}
@@ -433,7 +476,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, syncProject: len(newEntities) > 0}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, syncProject: len(newEntities) > 0 || modulePlanHasTimers(plan)}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true
@@ -596,6 +639,9 @@ func renderModuleFile(manifest Manifest, service string, spec ModuleSpec, dir, r
 		return nil, fmt.Errorf("module %s: read template %s: %w", spec.Name, rel, err)
 	}
 	body := demoVars{module: manifest.Project.Module, gameService: service, project: manifest.Project.Name}.apply(string(raw))
+	if timer, ok := manifest.Timers[toSnake(spec.Entity)]; ok {
+		body = strings.ReplaceAll(body, "{{TIMER_COMPONENT}}", newTimerNames(manifest.Project.Module, toSnake(spec.Entity), timer).CompType)
+	}
 	var missing []string
 	body = moduleIDPlaceholder.ReplaceAllStringFunc(body, func(placeholder string) string {
 		match := moduleIDPlaceholder.FindStringSubmatch(placeholder)
@@ -635,9 +681,15 @@ func newModuleIDAllocator(root string, manifest Manifest) (*moduleIDAllocator, e
 	for _, use := range uses {
 		allocator.reserve(use.Kind, use.ID)
 	}
+	for _, timer := range manifest.Timers {
+		allocator.reserve("component", timer.ID)
+	}
 	// 已装模块记录里的号即使对应文件被业务删掉了也不再发出去：分配过的号不回收。
 	for _, installed := range manifest.Modules {
 		for kind, names := range installed.IDs {
+			if kind == "timer" {
+				continue
+			}
 			for _, id := range names {
 				allocator.reserve(kind, id)
 			}
@@ -686,6 +738,9 @@ func (a *moduleIDAllocator) allocate(spec ModuleSpec) (map[string]map[string]int
 	ids := map[string]map[string]int64{}
 	declared := spec.declaredIDs()
 	for _, kind := range moduleIDKinds {
+		if kind == "timer" {
+			continue
+		}
 		names := make([]string, 0, len(declared[kind]))
 		for name := range declared[kind] {
 			names = append(names, name)

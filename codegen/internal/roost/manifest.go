@@ -214,6 +214,8 @@ type TimerSpec struct {
 	Service string `yaml:"service"`
 	// Dao 是存放节点的 DAO 类型（如 PlayerDao）：roost add timer 在它的定义里加节点 map 与种子两个字段。
 	Dao string `yaml:"dao"`
+	// Types 是实体内已分配的业务类型号；持久节点依赖它，不回收已分配的号。
+	Types map[string]int32 `yaml:"types,omitempty"`
 }
 
 type IDSpace struct {
@@ -465,6 +467,7 @@ func (m Manifest) Validate() error {
 			joined = errors.Join(joined, fmt.Errorf("unsupported cicd deploy target %q", deploy))
 		}
 	}
+	joined = errors.Join(joined, m.validateModuleTimerRecords())
 	for _, entityName := range sortedTimerEntities(m) {
 		joined = errors.Join(joined, m.validateTimer(entityName))
 	}

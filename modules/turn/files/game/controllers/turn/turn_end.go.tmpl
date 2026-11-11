@@ -1,0 +1,39 @@
+package turn
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"log/slog"
+	room "{{MODULE}}/game/entities/room"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	roomlogic "{{MODULE}}/game/room"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleTurnEnd 只信任认证上下文中的玩家号与连接身份，PB 不携带操作者或服务器时间。
+func (controller *Controller) HandleTurnEnd(ctx *playeraccess.Context, req *pb.TurnEndRequest) (*pb.TurnEndResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || req == nil {
+		return nil, fmt.Errorf("turn: authenticated context and request are required")
+	}
+	response := &pb.TurnEndResponse{}
+	connection, err := roomlogic.ConnectionKey(ctx.Session)
+	var id int64
+	if err == nil {
+		id, err = roomlogic.EntityID(req.RoomID)
+	}
+	if err == nil {
+		var result room.TurnSnapshot
+		result, err = syncsender.NewTurnEndSender(controller.nestClient).Sync_TurnEnd(ctx.Context(), id, ctx.PlayerID, req.Epoch, connection, req.Round, req.Sequence)
+		if err == nil {
+			response.Info = turnInfo(result)
+		}
+	}
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		if response.Code == errcode.CodeInternal {
+			slog.Error("turn end failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
+		}
+	}
+	return response, nil
+}

@@ -414,6 +414,8 @@ timedomain 字段、拒绝的输入逐字节不变、清单校验、`roost add m
 
 `roost add` 生成的是空骨架。业务模块是另一回事：一个提前写好并验收过的业务单元（状态结构体、组件、Nest handler、协议、错误码、场景测试），源码在仓库 [modules](../../modules/README.md)，由 `roost module add` 写进工程。写进去之后归工程所有，`project sync` / `upgrade` 不改写——它不是生成器输出，只是不用自己从头写。
 
+需要回合与超时的工程可用 `roost module add turn`（自动装 room）。模块清单 `timer_types` 按 Entity 分配持久类型号，复用已有定时器；类型号、回调登记与生成接线在安装失败时一起回滚。`module plan --json` 的 `timer` 列出实际组件和分配结果，边界见 [turn](../../modules/turn/README.md)。
+
 ```bash
 roost module list                 # 内置模块；在工程里执行时标出已安装的（*）
 roost module plan checkin         # 只预览，不改动工程

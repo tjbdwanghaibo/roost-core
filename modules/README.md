@@ -22,6 +22,7 @@
 
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 8 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
+| [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
 
 两个模块都装着时还会多出**联动文件**（不论先装哪个，在第二个装上的那一次写）：
 
@@ -120,6 +121,7 @@ state:                       # 追加到主 DAO 末尾的顶层字段
     dao: persist,sync
     comment: 写进 DAO 定义的注释
 component: Wallet            # 挂在实体上的组件
+timer_types: []              # 实体内的持久定时器类型名，例如 turn 的 [TurnDeadline]
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字
 access:                      # 要求的玩家接入形态，由安装器代办（见下）
@@ -159,7 +161,9 @@ verify:
 | `{{MODULE}}` | 工程的 Go module 路径 |
 | `{{PROJECT}}` | 工程名 |
 | `{{GAME_SERVICE}}`、`{{GAME_SERVICE_PKG}}` | 模块装进的业务服务名与它的 Go 包名 |
-| `{{ID:protocol:<name>}}`、`{{ID:errcode:<name>}}`、`{{ID:component:<name>}}` | 安装时从 `roost.yaml` 的 `ids` 段分配的号 |
+| `{{ID:entity:<name>}}`、`{{ID:protocol:<name>}}`、`{{ID:errcode:<name>}}`、`{{ID:component:<name>}}` | 安装时从 `roost.yaml` 的 `ids` 段分配的号 |
+| `{{ID:timer:<name>}}` | 实体内持久定时器类型号，写入 `timers.<entity>.types` |
+| `{{TIMER_COMPONENT}}` | 实际定时器组件的 PascalCase 名 |
 
 ### 必须遵守的约定
 
@@ -197,3 +201,13 @@ bash scripts/test-modules-generated.sh
 ```
 
 第一条包含在生成工程上真实安装并验收的用例（约一分钟）。第二条是发版门禁里的那一条：全新工程、自定义 module 名、逐个模块安装、组合安装、重复安装无变化。
+
+## 模块的持久定时器
+
+清单写 `timer_types: [TurnDeadline]`，同时声明 `entity` / `component`；模板以 `{{ID:timer:TurnDeadline}}` 定义显式 int32 常量。安装器复用已有的实体定时器，缺失时补同一套组件、DAO 节点与 bootstrap 驱动。模板中的 `{{TIMER_COMPONENT}}` 是实际定时器组件的 PascalCase 名，支持项目自定义组件名。
+
+模块在实际定时器组件上实现 `register<模块组件>Timers(*entitytimer.Handlers)`；安装器按语法树把调用追加到业务登记函数（只允许直接顺序登记，不在未知控制流后插代码）。构造阶段只绑定定时器组件的方法，真正触发时再找其他组件；不能依赖组件构造顺序。
+
+类型号按实体分配，从 1 起避开已有 int32 常量、静态 Register 实参、`timers.<entity>.types` 和已安装记录；新组件的示例占 1。无法静态确定时拒绝。不要把登记表交给外部函数或缓存起来后再登记；本包显式接收 `*entitytimer.Handlers` 的登记方法可互相调用。已分配的号不回收，作用域写入 `modules.<module>.timer_entity`；归属与 types 不一致时清单校验失败。普通工程级 `roost id next` 不分配 timer 类型。
+
+该步骤属于模块安装事务：类型号、DAO / Entity 改写、业务回调登记与生成接线一起回滚。`plan --json` 的 `timer` 列出作用域、复用/新建和最终定时器定义。首个真实使用者与完整边界见 [turn](turn/README.md)。

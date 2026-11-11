@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **新增（业务模块 A3）**：模块可用 `timer_types` 申请实体内持久定时器类型；复用已有组件或在安装事务内补齐，类型与归属有清单校验，回调登记与生成失败一起回滚。新增 `turn`（依赖 room）：固定名单的顺序回合、成功命令序号与最后一次重放、持久超时、不追帧、PB 接入；25 个离线场景。无默认胜负规则、自动广播或真实存储/网络容量结论。使用方式见 [turn](modules/turn/README.md)。
+
 - **新增**（modules / codegen）：模块清单 `entities` 支持自带 Entity、DAO、lifecycle 与实体号分配；安装事务包含服务 owner / handler / shutdown 接线，失败整体回退，重复安装保留业务修改。新增 `room` 基础模块：1～64 席、房主交接、进出、CAS 重连、服务端开房与断线入口，22 条离线场景。房间操作同时检查可信连接 nonce 与持久代际，Gate 代理 Session 补齐只读 `ConnectionID()`；旧连接迟到的 Join/View/Leave 或断线不能影响新连接。自动断线订阅、房间广播、匹配移交与回合超时不在本批。详见 [room](modules/room/README.md) 与[交接](docs/maintenance/HANDOFF-2026-11-11-module-backlog.md)。 验证：全仓 164 测试包通过；13 模块 + 4 联动 228 PASS / 0 SKIP；重新生成 game-demo 670 PASS / 14 预期 SKIP；Room/Gate 定向 race、三项变异自检、build/vet、ID 与生成物漂移检查通过。
 
 

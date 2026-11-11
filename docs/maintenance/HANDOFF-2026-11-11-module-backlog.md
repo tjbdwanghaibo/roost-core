@@ -34,7 +34,19 @@
 - A2 + 基础 room 已实施：清单 `entities` 为模块分配实体号，模板带 Entity / DAO，复用 lifecycle 脚手架；源码、lifecycle、owner bootstrap 与 shutdown 配置一起纳入安装回滚，重复安装不覆盖业务修改。实际 `room` 模块有 22 条离线场景，包含正式 ManagerAccess → lifecycle → Nest Sender → DAO 与 PB 编解码。
 - room 用持久 Epoch + 可信连接 nonce 隔离旧 Join / View / Leave / Disconnect；Gate 代理 Session 补只读 ConnectionID。已通过安装器冲突/回滚/号避让/重复安装定向验证、真实 TCP→Gate→Game 连接身份验证；容量、连接隔离、持久代际三项变异都被业务断言抓住，恢复后场景通过。首次连接变异只造成编译失败，未计为成功，改为可编译错误后才通过变异验收。
 - A2 最终统一回归已通过：全仓 `go test -count=1 -timeout 30m ./...` 为 164 个有测试包通过（含全部 Demo/Module 用例；显式跳过用例 99）；全部模块脚本为 13 模块 + 4 联动、228 PASS / 0 SKIP，含增量/换顺序/重复安装与 build、vet、ID、生成物漂移检查；重新生成 game-demo 为 47 测试包、670 PASS / 14 预期 SKIP / 0 FAIL，module verify 为 135/0，四项工程检查全部通过。Room 22 场景与新增 Gate 真实转发用例的 race 检查通过。文档 284 文件 / 0 断链，shell 语法与 diff 空白检查通过；生产存储联合验收仍未计入。本机原始记录在 `/tmp/roost-a2-*`、`/tmp/roost-module-a2-*`，永久验收结论留在本段。CBM 已重建（2026-11-11T10:22:41Z）；本批新增 5 个模板局部解析缺口，均为 ID 占位或测试复合字面量，已读相应源码并用实际生成工程补证。
-- 下一批从 A3 + turn、或此前待办中的 B / C 按依赖继续；equipment/attribute/purchase、matchroom、C–I 与 J 的真实依赖路径仍未完成。room 不包含自动断线订阅、断线保留策略、重启在线状态重建、匹配移交、广播或回合超时，见 [room](../../modules/room/README.md)。`compose.md` 只更新 3 处事实，结构未改；rehome 范围未动，没有合并 main 或发版。
+- A3 + turn 已在下节接续；下一批从此前待办中的 B / C 按依赖继续；equipment/attribute/purchase、matchroom、C–I 与 J 的真实依赖路径仍未完成。room 不包含自动断线订阅、断线保留策略、重启在线状态重建、匹配移交、广播或回合超时，见 [room](../../modules/room/README.md)。`compose.md` 只更新 3 处事实，结构未改；rehome 范围未动，没有合并 main 或发版。
+
+### A3 + turn 接续（2026-11-11）
+
+- 已实现模块 `timer_types` 与 `TimerSpec.Types`：类型号在 Entity 内唯一，避开本包 int32 / iota 常量、静态 Register 实参与已分配记录，不回收。不能静态确定的类型或外部登记拒绝；模板支持自定义 `{{TIMER_COMPONENT}}`。已有业务登记函数按 AST 追加一次模块方法调用，只接受直接顺序登记；类型归属写入 `timer_entity` / `ids.timer` 并做清单一致性校验。
+- 安装缺失的定时器复用现有 DAO / 组件改写原语，生成物仍由同一暂存树的 project sync 产生。主 DAO（包括模块没有 State 时）、Entity、回调登记、manifest 与生成接线都在安装回滚边界；新增与已有自定义组件的回滚、增量/重复安装、分号避让均有实际工程验证。未改 Nest / DataEngine / Sync 底层。
+- 新增 [turn](../../modules/turn/README.md)，依赖 room：固定开局名单、按座位轮转、每玩家连续成功序号、最后命令重放、持久超时、离线不追帧、有限回合结束、可信连接隔离。玩法可在同一 Nest 事务内 `CheckEnd → 修改游戏 DAO → End`；额外动作载荷必须自行绑定回执。没有自动广播、跨机接管、默认胜负/伤害或 Robot；关闭房间/成员不足在下次推进结束。
+- 定向验证：25 个模块场景（22 Nest + 3 Controller）及 race 通过；包含真实 ManagerAccess → lifecycle → Sender、PB 编解码、BSON 水合，但提交器是替身，不当作 Mongo/WAL/TCP 联合验收。三项可编译变异（不保存序号、放过到期命令、不保存续期期限）均被行为断言抓住，恢复后通过。
+- 组合验收首次发现生成的 `TestRoomTimer…` 被 room 的 `^TestRoom` 多算，已把框架绑定检查改成独立 `TestEntityTimerBindingFor…` 前缀；room 仍是 22，turn 为 25，没有改大期望数绕过验收。安装器回归改为同时 verify room + turn。
+- 全仓统一回归首轮：9701 PASS、99 条显式条件 SKIP、5 FAIL，162 个有测试包通过、2 包失败。两个 entity owner 用例因断网时 `goproxy.cn` DNS 失败，恢复后与 A3 / add timer / 原持久定时器端到端检查一起补跑通过。另三条 `cellworld`（`TestPanelChangeDuringHandoff`、`TestSecondCellProcessForSameSIDIsRefused`、`TestWorldJitterAtBoundarySlowHandoffConclusion`）单独复测 3/3 通过；本轮未修改该包，首轮异常原因尚未确认，不能称为已修复或删除失败样本。首轮记录 `/tmp/roost-a3-full-repo.jsonl`，定向补跑 `/tmp/roost-a3-final-targeted.log`、`/tmp/roost-a3-cellworld-recheck.jsonl`。
+- 重新生成 game-demo：47 测试包、670 PASS / 14 预期 SKIP / 0 FAIL；module verify 135 PASS / 0 SKIP，build / vet / ID / 生成物漂移四项通过。原始证据 `/tmp/roost-a3-demo-*`。完整模块组合复验通过：14 模块 + 4 联动、253 PASS / 0 SKIP，增量/反序/重复安装与四项工程检查全部通过，日志 `/tmp/roost-a3-all-modules-final.log`。暂存路径仅供本机复核，复跑入口为 `scripts/test-modules-generated.sh` 与上面的测试名。
+- CBM 已刷新（代际 2026-11-11T12:14:57Z，36337 节点、零 skipped）。新增 5 个模板局部解析缺口是 ID 占位和测试复合字面量，均已逐段读源码并用真实生成工程补证；文档 285 文件 / 0 断链，shell 语法与 diff 检查通过。
+- 使用文档、能力清单、CLI 清单说明和 CHANGELOG 已同步；`compose.md` 只改模块列表、例外列表与定时器能力三处事实，结构未重写。rehome 范围未动；仅提交当前功能分支，不合 main、不发版。
 
 ## 3. 待办（按建议的先后）
 
@@ -44,7 +56,7 @@
 | --- | --- | --- |
 | A1 服务级接线点（已实现） | 模块能声明“服务 `Init` 时启动、`Shutdown` 时停”的东西（步骤消费者、effect 订阅、后台循环、心跳、同步接线），安装器把它接进业务服务的启动与停机顺序；归属记进 `roost.yaml` | gift、升级奖励邮件消费者、活动、GM、匹配组队、副本、scene、rehome 的后台驱动 |
 | A2 模块自带实体（已实现） | `entities` + Entity / DAO 模板，自动分配实体号与补 lifecycle；连同归属接线一起回滚。基础 room 已使用 | 公会、队伍、战斗房间、room / matchroom / turn、scene |
-| A3 定时器类型分配 | 模块能申请实体定时器类型号 | turn、活动 |
+| A3 定时器类型分配（已实现） | `timer_types` 按实体分号、记录持久类型与模块归属；复用或原子补齐定时器，登记失败/生成失败完整回滚 | turn 已使用；活动可接入 |
 | A4（可选）保留号 | demo 删掉写死的号之后，模块的号按最小空号重排；要稳定需要“保留号” | game-demo |
 
 每项都要有一个真实用到它的模块一起做，不先造空机制。
@@ -65,7 +77,7 @@ gift（送礼 saga，路由步骤，v1.44.0）、升级奖励邮件消费者（�
 
 ### D. A2 之后能迁的
 
-guild（联盟服务：独立进程、建盟 / 捐献 / 领奖三个 saga、成员名单、game 读镜像）、team（队伍实体，与 matchmaking 一起）、lockstep 战斗房间；基础 room 已实施；夹具迁移、matchroom、turn（另要 A3）仍待做。
+guild（联盟服务：独立进程、建盟 / 捐献 / 领奖三个 saga、成员名单、game 读镜像）、team（队伍实体，与 matchmaking 一起）、lockstep 战斗房间；基础 room、turn 与 A3 已实施；夹具迁移、matchroom 仍待做。
 
 ### E. 场景（维护者 2026-11-11 同意的顺序）
 

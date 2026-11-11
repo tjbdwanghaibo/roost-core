@@ -1,0 +1,494 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	db "{{MODULE}}/db"
+	room "{{MODULE}}/game/entities/room"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// 本模块独立的替身与场景，不依赖 room 的测试辅助函数。只验证事务与 BSON 恢复，不宣称 Mongo 落盘。
+type turnGetter struct{ value entity.IThreadSafeEntity }
+
+func (g *turnGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if g.value != nil && g.value.ID() == id {
+		return g.value, nil
+	}
+	return nil, fmt.Errorf("missing turn room %d", id)
+}
+func (g *turnGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	values := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		values[i] = v
+	}
+	return values, nil
+}
+
+type turnCommitter struct{ reject atomic.Bool }
+
+func (c *turnCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected turn commit failure")
+	}
+	return nil
+}
+
+type turnFixture struct {
+	engine *nest.NestMgr
+	value  *room.Room
+	getter *turnGetter
+	commit *turnCommitter
+	now    atomic.Int64
+	id     int64
+	starts *sender.TurnStartSender
+	ends   *sender.TurnEndSender
+	views  *sender.TurnViewSender
+}
+
+func newTurnFixture(t *testing.T, players int) *turnFixture {
+	t.Helper()
+	room.RegisterEntity()
+	f := &turnFixture{commit: &turnCommitter{}}
+	f.now.Store(1900000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	var err error
+	f.id, err = entity.BuildEntityID(75001, room.EntityKindRoom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: f.id, Kind: room.EntityKindRoom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.value = value.(*room.Room)
+	f.getter = &turnGetter{value: value}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.getter), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomOpenNestHandlersOn, RegisterRoomJoinNestHandlersOn, RegisterRoomLeaveNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomCloseNestHandlersOn, RegisterTurnStartNestHandlersOn, RegisterTurnEndNestHandlersOn, RegisterTurnViewNestHandlersOn, RegisterTickRoom{{TIMER_COMPONENT}}GenNestHandlersOn} {
+		if err := register(f.engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+		f.value.{{TIMER_COMPONENT}}Comp().OnDestroy(entity.EntityDestroyReason(0))
+	})
+	f.starts = sender.NewTurnStartSender(f.engine)
+	f.ends = sender.NewTurnEndSender(f.engine)
+	f.views = sender.NewTurnViewSender(f.engine)
+	if err := sender.NewRoomOpenSender(f.engine).Sync_RoomOpen(context.Background(), f.id, 4); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < players; i++ {
+		f.join(t, int64(101+i))
+	}
+	return f
+}
+func (f *turnFixture) join(t *testing.T, playerID int64) {
+	t.Helper()
+	if _, err := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.id, playerID, fmt.Sprintf("c%d", playerID)); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *turnFixture) start(t *testing.T, maxTurns int64) room.TurnSnapshot {
+	t.Helper()
+	v, err := f.starts.Sync_TurnStart(context.Background(), f.id, 101, 1, "c101", 1000, maxTurns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+func (f *turnFixture) end(t *testing.T, playerID, round, sequence int64) room.TurnSnapshot {
+	t.Helper()
+	v, err := f.ends.Sync_TurnEnd(context.Background(), f.id, playerID, uint64(playerID-100), fmt.Sprintf("c%d", playerID), round, sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+func (f *turnFixture) view(t *testing.T) room.TurnSnapshot {
+	t.Helper()
+	v, err := f.views.Sync_TurnView(context.Background(), f.id, 101, 1, "c101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+func (f *turnFixture) tick(t *testing.T) {
+	t.Helper()
+	if _, err := sender.NewTickRoom{{TIMER_COMPONENT}}GenSender(f.engine).Sync_TickRoom{{TIMER_COMPONENT}}(context.Background(), f.id); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *turnFixture) locked(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() { f.value.GetMutex().Lock(); defer f.value.GetMutex().Unlock(); fn() }); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *turnFixture) document(t *testing.T) []byte {
+	t.Helper()
+	var raw []byte
+	f.locked(t, func() { raw = f.value.Dao().Marshal() })
+	return raw
+}
+func (f *turnFixture) timers(t *testing.T) int {
+	t.Helper()
+	n := 0
+	f.locked(t, func() { n = len(f.value.{{TIMER_COMPONENT}}Comp().{{TIMER_COMPONENT}}s()) })
+	return n
+}
+func (f *turnFixture) unchanged(t *testing.T, before []byte) {
+	t.Helper()
+	decode := func(raw []byte) bson.M {
+		d := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(raw)))
+		d.DefaultDocumentM()
+		var value bson.M
+		if err := d.Decode(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if !reflect.DeepEqual(decode(before), decode(f.document(t))) {
+		t.Fatal("rejected/replayed command changed persisted state")
+	}
+}
+
+func TestTurnStartAndReplayKeepOneDeadline(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	v := f.start(t, 8)
+	if v.Status != 1 || v.Round != 1 || v.ActorID != 101 || v.Deadline != 1900000001000 || v.MaxTurns != 8 || v.TurnMillis != 1000 || !reflect.DeepEqual(v.Players, []int64{101, 102}) || f.timers(t) != 1 {
+		t.Fatalf("start: %+v", v)
+	}
+	before := f.document(t)
+	f.now.Add(400)
+	f.start(t, 8)
+	f.unchanged(t, before)
+}
+func TestTurnOnlyHostStarts(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	before := f.document(t)
+	_, err := f.starts.Sync_TurnStart(context.Background(), f.id, 102, 2, "c102", 1000, 8)
+	if !errors.Is(err, apperrors.ErrRoomNotHost) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestTurnRejectsInvalidRulesAndRuleChanges(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	before := f.document(t)
+	for _, rules := range [][2]int64{{999, 8}, {3600001, 8}, {1000, 0}, {1000, 10001}} {
+		_, err := f.starts.Sync_TurnStart(context.Background(), f.id, 101, 1, "c101", rules[0], rules[1])
+		if !errors.Is(err, apperrors.ErrTurnInvalid) {
+			t.Fatal(err)
+		}
+	}
+	f.unchanged(t, before)
+	f.start(t, 8)
+	before = f.document(t)
+	_, err := f.starts.Sync_TurnStart(context.Background(), f.id, 101, 1, "c101", 2000, 8)
+	if !errors.Is(err, apperrors.ErrTurnInvalid) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestTurnNeedsTwoPlayers(t *testing.T) {
+	f := newTurnFixture(t, 1)
+	before := f.document(t)
+	_, err := f.starts.Sync_TurnStart(context.Background(), f.id, 101, 1, "c101", 1000, 8)
+	if !errors.Is(err, apperrors.ErrTurnInvalid) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestTurnEndMovesOnceAndRenewsFromNow(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.now.Add(300)
+	v := f.end(t, 101, 1, 1)
+	if v.Round != 2 || v.ActorID != 102 || v.Sequence != 1 || v.Deadline != 1900000001300 || f.timers(t) != 1 {
+		t.Fatalf("end: %+v", v)
+	}
+	v = f.end(t, 102, 2, 1)
+	if v.Round != 3 || v.ActorID != 101 || v.Sequence != 1 {
+		t.Fatalf("second: %+v", v)
+	}
+}
+func TestTurnDuplicateEndDoesNotConsumeAnotherTurn(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.end(t, 101, 1, 1)
+	f.end(t, 102, 2, 1)
+	before := f.document(t)
+	v := f.end(t, 101, 1, 1)
+	if v.Round != 3 || v.ActorID != 101 || v.Sequence != 1 {
+		t.Fatalf("replay: %+v", v)
+	}
+	f.unchanged(t, before)
+}
+func TestTurnRejectsSequenceGapsAndConflictingReplay(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	before := f.document(t)
+	_, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 1, "c101", 1, 2)
+	if !errors.Is(err, apperrors.ErrTurnSequence) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+	f.end(t, 101, 1, 1)
+	before = f.document(t)
+	_, err = f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 1, "c101", 2, 1)
+	if !errors.Is(err, apperrors.ErrTurnSequence) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestTurnRejectsWrongActorAndRound(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	before := f.document(t)
+	_, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 102, 2, "c102", 1, 1)
+	if !errors.Is(err, apperrors.ErrTurnNotActor) {
+		t.Fatal(err)
+	}
+	_, err = f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 1, "c101", 2, 1)
+	if !errors.Is(err, apperrors.ErrTurnNotActor) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestTurnExactDeadlineRejectsCommandUntilTick(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.now.Add(1000)
+	before := f.document(t)
+	_, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 1, "c101", 1, 1)
+	if !errors.Is(err, apperrors.ErrTurnExpired) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+	f.tick(t)
+	if v := f.view(t); v.Round != 2 || v.Timeouts != 1 || v.Sequence != 0 {
+		t.Fatalf("timeout: %+v", v)
+	}
+}
+func TestTurnDeadlineTickIsNotEarlyOrRepeated(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.now.Add(999)
+	before := f.document(t)
+	f.tick(t)
+	f.unchanged(t, before)
+	f.now.Add(1)
+	f.tick(t)
+	v := f.view(t)
+	if v.Round != 2 || v.ActorID != 102 || v.Deadline != 1900000002000 || v.Timeouts != 1 {
+		t.Fatalf("tick: %+v", v)
+	}
+	before = f.document(t)
+	f.tick(t)
+	f.unchanged(t, before)
+}
+func TestTurnLateTickDoesNotCatchUpMissedTurns(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.now.Add(100000)
+	f.tick(t)
+	v := f.view(t)
+	if v.Round != 2 || v.Timeouts != 1 || v.Deadline != 1900000101000 || f.timers(t) != 1 {
+		t.Fatalf("late: %+v", v)
+	}
+}
+func TestTurnOldDeadlineCannotConsumeNewRound(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.now.Add(900)
+	f.end(t, 101, 1, 1)
+	f.now.Add(100)
+	before := f.document(t)
+	f.tick(t)
+	f.unchanged(t, before)
+	if v := f.view(t); v.Round != 2 || v.Deadline != 1900000001900 || v.Timeouts != 0 {
+		t.Fatalf("old: %+v", v)
+	}
+}
+func TestTurnFinishesAtLimitAndReplaysLastCommand(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 1)
+	v := f.end(t, 101, 1, 1)
+	if v.Status != 2 || v.Round != 1 || v.ActorID != 0 || v.Deadline != 0 || f.timers(t) != 0 {
+		t.Fatalf("finish: %+v", v)
+	}
+	before := f.document(t)
+	f.end(t, 101, 1, 1)
+	f.start(t, 1)
+	f.unchanged(t, before)
+}
+func TestTurnLateJoinCanViewButCannotAct(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.join(t, 103)
+	v, err := f.views.Sync_TurnView(context.Background(), f.id, 103, 3, "c103")
+	if err != nil || !reflect.DeepEqual(v.Players, []int64{101, 102}) {
+		t.Fatalf("spectator: %+v %v", v, err)
+	}
+	before := f.document(t)
+	_, err = f.ends.Sync_TurnEnd(context.Background(), f.id, 103, 3, "c103", 1, 1)
+	if !errors.Is(err, apperrors.ErrTurnNotActor) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestTurnSkipsLeftParticipant(t *testing.T) {
+	f := newTurnFixture(t, 3)
+	f.start(t, 8)
+	if err := sender.NewRoomLeaveSender(f.engine).Sync_RoomLeave(context.Background(), f.id, 102, 2, "c102"); err != nil {
+		t.Fatal(err)
+	}
+	v := f.end(t, 101, 1, 1)
+	if v.ActorID != 103 || v.Round != 2 {
+		t.Fatalf("skip: %+v", v)
+	}
+}
+func TestTurnClosedRoomStopsAtNextDeadline(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	if err := sender.NewRoomCloseSender(f.engine).Sync_RoomClose(context.Background(), f.id, 101, 1, "c101"); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add(1000)
+	f.tick(t)
+	if f.timers(t) != 0 {
+		t.Fatal("closed room kept its timer")
+	}
+	f.locked(t, func() {
+		if f.value.Dao().GetTurn().GetStatus() != 2 {
+			t.Error("turn did not finish")
+		}
+	})
+}
+func TestTurnOldConnectionCannotActOrReplay(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.end(t, 101, 1, 1)
+	if _, err := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new101"); err != nil {
+		t.Fatal(err)
+	}
+	before := f.document(t)
+	_, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 1, "c101", 1, 1)
+	if !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+	v, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 3, "new101", 1, 1)
+	if err != nil || v.Round != 2 {
+		t.Fatalf("new connection replay: %+v %v", v, err)
+	}
+}
+func TestTurnRejectedStartRollsBackTimerAndRoster(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	_, err := f.starts.Sync_TurnStart(context.Background(), f.id, 101, 1, "c101", 1000, 8)
+	if err == nil {
+		t.Fatal("accepted failed commit")
+	}
+	f.commit.reject.Store(false)
+	f.unchanged(t, before)
+	if f.timers(t) != 0 {
+		t.Fatal("rejected start left timer")
+	}
+	f.start(t, 8)
+}
+func TestTurnRejectedEndPreservesSequenceAndDeadline(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	_, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 1, "c101", 1, 1)
+	if err == nil {
+		t.Fatal("accepted failed commit")
+	}
+	f.commit.reject.Store(false)
+	f.unchanged(t, before)
+	v := f.end(t, 101, 1, 1)
+	if v.Round != 2 || v.Sequence != 1 {
+		t.Fatalf("retry: %+v", v)
+	}
+}
+func TestTurnRejectedTimeoutRetriesSameRound(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.now.Add(1000)
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	_, err := sender.NewTickRoom{{TIMER_COMPONENT}}GenSender(f.engine).Sync_TickRoom{{TIMER_COMPONENT}}(context.Background(), f.id)
+	if err == nil {
+		t.Fatal("accepted failed timeout commit")
+	}
+	f.commit.reject.Store(false)
+	f.unchanged(t, before)
+	f.tick(t)
+	if v := f.view(t); v.Round != 2 || v.Timeouts != 1 {
+		t.Fatalf("retry: %+v", v)
+	}
+}
+func TestTurnReloadKeepsSequenceAndFiresOverdueOnce(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	f.start(t, 8)
+	f.end(t, 101, 1, 1)
+	raw := f.document(t)
+	f.now.Add(100000)
+	restored := db.NewRoomDao()
+	if err := restored.Unmarshal(raw); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟持久字节水合：新实例初始化前载入 DAO，旧实例退出期限索引。
+	f.value.{{TIMER_COMPONENT}}Comp().OnDestroy(entity.EntityDestroyReason(0))
+	value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: false, Id: f.id, Kind: room.EntityKindRoom, Dao: map[string]entity.DaoInterface{db.RoomDaoCollection: restored}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.value = value.(*room.Room)
+	f.getter.value = value
+	f.tick(t)
+	v := f.view(t)
+	if v.Round != 3 || v.ActorID != 101 || v.Sequence != 1 || v.Timeouts != 1 || v.Deadline != 1900000101000 {
+		t.Fatalf("restore: %+v", v)
+	}
+	before := f.document(t)
+	f.end(t, 101, 1, 1)
+	f.tick(t)
+	f.unchanged(t, before)
+}
+func TestTurnSnapshotDoesNotExposeDAOArrays(t *testing.T) {
+	f := newTurnFixture(t, 2)
+	v := f.start(t, 8)
+	v.Players[0] = 999
+	if current := f.view(t); current.Players[0] != 101 || current.ActorID != 101 {
+		t.Fatalf("alias: %+v", current)
+	}
+}

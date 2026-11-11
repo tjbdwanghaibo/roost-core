@@ -1,0 +1,41 @@
+package room
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+	"math"
+	"time"
+)
+
+// TurnDeadline 由安装器分配并记录在 roost.yaml timers.room.types；类型号是持久数据契约。
+const TurnDeadline int32 = {{ID:timer:TurnDeadline}}
+
+// registerTurnTimers 只登记，不在组件构造阶段访问别的组件；实际触发时 Room 的所有组件都已就绪。
+func (component *{{TIMER_COMPONENT}}Component) registerTurnTimers(handlers *entitytimer.Handlers) {
+	handlers.Register(TurnDeadline, component.onTurnDeadline)
+}
+func (component *{{TIMER_COMPONENT}}Component) onTurnDeadline(fire entitytimer.Fire) time.Duration {
+	return component.Owner().TurnComp().onDeadline(fire)
+}
+
+func (component *TurnComponent) onDeadline(fire entitytimer.Fire) time.Duration {
+	state := component.owner.Dao().GetTurn()
+	// 节点 ID 与期限共同校验。主动结束已经换过节点，旧投递不会消费下一回合。
+	if state.GetStatus() != TurnRunning || fire.ID != state.GetTimerID() || fire.Deadline.UnixMilli() != state.GetDeadline() {
+		return 0
+	}
+	state.SetTimeouts(state.GetTimeouts() + 1)
+	component.advance()
+	if state.GetStatus() != TurnRunning {
+		return 0
+	}
+	now := fire.Now.UnixMilli()
+	if now > math.MaxInt64-state.GetTurnMillis() {
+		state.SetStatus(TurnFinished)
+		state.SetDeadline(0)
+		state.SetTimerID(0)
+		return 0
+	}
+	state.SetDeadline(now + state.GetTurnMillis())
+	// 回调续期从实际触发时刻起算，错过的若干回合不会集中执行。
+	return time.Duration(state.GetTurnMillis()) * time.Millisecond
+}

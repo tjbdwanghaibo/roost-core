@@ -114,6 +114,16 @@ func sortedTimerEntities(m Manifest) []string {
 func (m Manifest) validateTimer(entityName string) error {
 	spec := m.Timers[entityName]
 	var joined error
+	seen := map[int32]string{}
+	for name, id := range spec.Types {
+		if !modulePascalPattern.MatchString(name) || id <= 0 {
+			joined = errors.Join(joined, fmt.Errorf("timers.%s.types: invalid %s = %d", entityName, name, id))
+		}
+		if previous, exists := seen[id]; exists {
+			joined = errors.Join(joined, fmt.Errorf("timers.%s.types: %s and %s share %d", entityName, previous, name, id))
+		}
+		seen[id] = name
+	}
 	if !validName(entityName) || toSnake(entityName) != entityName {
 		joined = errors.Join(joined, fmt.Errorf("timers: invalid entity name %q (snake_case)", entityName))
 	}
@@ -713,7 +723,7 @@ import (
 )
 
 // 驱动投递的 handler 名必须就是 Nest 生成器从 %[4]s 得出的名字，否则到期消息投给一个不存在的 handler。
-func Test%[5]s%[6]sTickHandlerMatchesTheDriver(t *testing.T) {
+func TestEntityTimerBindingFor%[5]s%[6]s(t *testing.T) {
 	if got, want := handlerName%[7]s.String(), %[2]s.%[6]sTickHandler; got != want {
 		t.Fatalf("nest handler %%q, driver delivers to %%q", got, want)
 	}

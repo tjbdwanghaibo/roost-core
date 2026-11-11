@@ -50,7 +50,7 @@ PY
 project="$(new_project atelier example.com/studio/atelier)"
 cd "$project"
 "$roost" module list > "$review_root/list.log"
-for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room; do
+for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn; do
   grep -q "^  $name " "$review_root/list.log" || { cat "$review_root/list.log"; echo "roost module list does not show $name" >&2; exit 1; }
 done
 "$roost" module plan checkin --json > "$review_root/plan.json"
@@ -128,10 +128,15 @@ commit_all batch2
 [[ -f game/entities/room/entity.go && -f db/def/room.go && -f game/lifecycle/room.go ]]
 expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22
 
+# A3: reuse the room installed above, and wire its persistent deadline atomically.
+commit_all room
+"$roost" module add turn > "$review_root/add-turn.log"
+expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22 turn=25
+
 # 8. 全新工程、一条命令、与上面相反的顺序装全部模块：结果与安装顺序无关，重复安装无变化。
 project="$(new_project harbor example.com/studio/harbor)"
 cd "$project"
-"$roost" module add room mailbox leaderboard bag profile chat checkin enter > "$review_root/add-all.log"
+"$roost" module add turn room mailbox leaderboard bag profile chat checkin enter > "$review_root/add-all.log"
 grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-all.log"
 grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_root/add-all.log"
 grep -q 'self_sync: true' roost.yaml
@@ -143,9 +148,9 @@ grep -q 'glue task with checkin: written' "$review_root/add-task.log"
 grep -q 'module bag: already installed' "$review_root/add-task.log"
 ! grep -rn '{{' db/def game/entities game/handler game/controllers internal/errors protocol/def >/dev/null
 commit_all all
-"$roost" module add enter bag mailbox task shop skillbook room > "$review_root/add-all-again.log"
+"$roost" module add enter bag mailbox task shop skillbook room turn > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22
+expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1

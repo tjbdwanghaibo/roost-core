@@ -226,6 +226,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | --- | --- | --- | --- | --- |
 | 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/skills/*.json` 与 `game/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
 | 基础房间 room | 服务端开房；1～64 席、进出、房主交接、重连代际、关闭 | `roost module add room`；`game/room.Open` / `Disconnect` 与生成的 Nest Sender | 现成模块。自带持久实体；客户端读 PB 快照；不含自动断线订阅、广播、匹配移交或回合超时 | [room](../../modules/room/README.md) |
+| 顺序回合 turn | 固定名单、当前行动者、命令序号与重放、持久回合超时 | `roost module add turn`（自动装 room）；`TurnStart / TurnEnd / TurnView` | 现成模块。超时不追帧；无默认胜负/伤害、自动广播或跨机房间接管；25 条离线场景 | [turn](../../modules/turn/README.md) |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功的登记点 `OnCheckinClaimed`（别的功能在同一笔事务里顺带做事） | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；钩子返回错误会让这一次签到整笔回滚；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 | 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；不经过 Nest，不改任何实体 | 同上 |

@@ -1,0 +1,58 @@
+//go:build protocoldef
+
+package protocoldef
+
+// TurnInfo 的 Deadline 为服务器业务时间的 Unix 毫秒；客户端倒计时不决定到期。
+// Sequence 只返回请求者最后成功的命令号，Players 是开局固定名单。
+type TurnInfo struct {
+	Status     int32   `pb:"1"`
+	Round      int64   `pb:"2"`
+	ActorID    int64   `pb:"3"`
+	Deadline   int64   `pb:"4"`
+	MaxTurns   int64   `pb:"5"`
+	TurnMillis int64   `pb:"6"`
+	Timeouts   int64   `pb:"7"`
+	Sequence   int64   `pb:"8"`
+	Players    []int64 `pb:"9"`
+}
+type TurnStartRequest struct {
+	RoomID     int64  `pb:"1"`
+	Epoch      uint64 `pb:"2"`
+	TurnMillis int64  `pb:"3"`
+	MaxTurns   int64  `pb:"4"`
+}
+type TurnEndRequest struct {
+	RoomID   int64  `pb:"1"`
+	Epoch    uint64 `pb:"2"`
+	Round    int64  `pb:"3"`
+	Sequence int64  `pb:"4"`
+}
+type TurnViewRequest struct {
+	RoomID int64  `pb:"1"`
+	Epoch  uint64 `pb:"2"`
+}
+type TurnStartResponse struct {
+	Code   int32     `pb:"1"`
+	Reason string    `pb:"2"`
+	Info   *TurnInfo `pb:"3"`
+}
+type TurnEndResponse struct {
+	Code   int32     `pb:"1"`
+	Reason string    `pb:"2"`
+	Info   *TurnInfo `pb:"3"`
+}
+type TurnViewResponse struct {
+	Code   int32     `pb:"1"`
+	Reason string    `pb:"2"`
+	Info   *TurnInfo `pb:"3"`
+}
+
+//roost:protocol group=game handler=turn
+type TurnProtocol interface {
+	//roost:msg id={{ID:protocol:TurnStart}}
+	TurnStart(TurnStartRequest) TurnStartResponse
+	//roost:msg id={{ID:protocol:TurnEnd}}
+	TurnEnd(TurnEndRequest) TurnEndResponse
+	//roost:msg id={{ID:protocol:TurnView}}
+	TurnView(TurnViewRequest) TurnViewResponse
+}

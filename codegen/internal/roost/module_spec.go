@@ -40,6 +40,8 @@ type ModuleSpec struct {
 	State []ModuleStateField `yaml:"state" json:"state,omitempty"`
 	// Component 是挂在 Entity 上的组件名（PascalCase）；组件号在安装时分配。
 	Component string `yaml:"component" json:"component,omitempty"`
+	// TimerTypes 在 Entity 的持久定时器中分配类型号；定时器组件提供 register<模块组件>Timers(*entitytimer.Handlers)。
+	TimerTypes []string `yaml:"timer_types" json:"timer_types,omitempty"`
 	// Protocols / Errcodes 是模板里 {{ID:protocol:<name>}} / {{ID:errcode:<name>}} 用到的名字，号在安装时分配。
 	Protocols []string `yaml:"protocols" json:"protocols,omitempty"`
 	Errcodes  []string `yaml:"errcodes" json:"errcodes,omitempty"`
@@ -118,7 +120,9 @@ type InstalledModule struct {
 	Service  string         `yaml:"service,omitempty"`
 	Runtime  *ModuleRuntime `yaml:"runtime,omitempty"`
 	Requires []string       `yaml:"requires,omitempty"`
-	// IDs 是 kind -> 名字 -> 号（entity / protocol / errcode / component）。
+	// TimerEntity 是 timer 类型号的作用域（实体 snake 名）；其他 ID 仍为工程级。
+	TimerEntity string `yaml:"timer_entity,omitempty"`
+	// IDs 是 kind -> 名字 -> 号（entity / protocol / errcode / component / timer）。
 	IDs map[string]map[string]int64 `yaml:"ids,omitempty"`
 	// State 是它追加的主 DAO 字段，写成 <Dao>.<Field>。
 	State []string `yaml:"state,omitempty"`
@@ -135,8 +139,8 @@ var (
 	moduleIDPlaceholder = regexp.MustCompile(`\{\{ID:([a-z]+):([A-Za-z0-9_]+)\}\}`)
 )
 
-// moduleIDKinds 是模块能申请的 ID 种类，与 roost.yaml 的 ids 段同名。
-var moduleIDKinds = []string{"entity", "component", "errcode", "protocol"}
+// moduleIDKinds 是模块能申请的 ID 种类；timer 在实体内分配，其他种类对应 roost.yaml 的 ids 段。
+var moduleIDKinds = []string{"entity", "component", "errcode", "protocol", "timer"}
 
 // loadModuleCatalog 读出全部内置模块，按名字排序。
 func loadModuleCatalog() (map[string]ModuleSpec, error) {
@@ -302,6 +306,18 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	if spec.Component != "" && !modulePascalPattern.MatchString(spec.Component) {
 		return fmt.Errorf("component %q must be PascalCase", spec.Component)
 	}
+	if len(spec.TimerTypes) > 0 {
+		if spec.Component == "" || !modulePascalPattern.MatchString(spec.Entity) {
+			return fmt.Errorf("timer_types requires entity and component")
+		}
+		seen := map[string]bool{}
+		for _, name := range spec.TimerTypes {
+			if !modulePascalPattern.MatchString(name) || seen[name] {
+				return fmt.Errorf("timer_types: %q must be a unique PascalCase name", name)
+			}
+			seen[name] = true
+		}
+	}
 	if err := validateModuleRuntime(spec.Runtime); err != nil {
 		return err
 	}
@@ -431,7 +447,10 @@ func (spec ModuleSpec) withNames() []string {
 
 // declaredIDs 是清单声明要分配的号：kind -> 名字集合。
 func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
-	declared := map[string]map[string]bool{"entity": {}, "component": {}, "errcode": {}, "protocol": {}}
+	declared := map[string]map[string]bool{"entity": {}, "component": {}, "errcode": {}, "protocol": {}, "timer": {}}
+	for _, name := range spec.TimerTypes {
+		declared["timer"][name] = true
+	}
 	for _, name := range spec.Entities {
 		declared["entity"][name] = true
 	}
