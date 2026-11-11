@@ -231,8 +231,18 @@ func (p *replicaProc) startReplicatorStore(t *testing.T, net *replicaNet, want [
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel, p.done = cancel, make(chan struct{})
 	go func() { defer close(p.done); _ = r.Run(ctx) }()
-	r.Want(replicaTestCh, want)
+	if err := r.Want(replicaTestCh, want); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(p.stop)
+}
+
+// want 换掉这一路想要的块；用例里的订阅都远小于上限，被拒就是失败。
+func (p *replicaProc) want(t *testing.T, keys []ChunkKey) {
+	t.Helper()
+	if err := p.r.Want(replicaTestCh, keys); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // stop 停下 Replicator（视图留着：重启时可以拿它当“上次的库”）。可重复调用。
@@ -529,7 +539,7 @@ func TestReplicaTrustsOnlyTheOwnerAndLetsGo(t *testing.T) {
 	forged := encodeChunks(replicaTestCh, testMeta.BaseRevision, time.Now().UnixNano(), []chunkEntry{{key: column0[0], version: 9, data: data}})
 	b.r.Deliver(3, forged) // 不是拥有者
 	unwanted := encodeChunks(replicaTestCh, testMeta.BaseRevision, time.Now().UnixNano(), []chunkEntry{{key: ChunkKey{X: 0, Y: 1}, version: 9, data: data}})
-	b.r.Want(replicaTestCh, column0[:1])
+	b.want(t, column0[:1])
 	time.Sleep(20 * time.Millisecond)
 	b.r.Deliver(sidA, unwanted) // 拥有者发的，但 B 已经不要 (0,1) 了
 	deadline := time.Now().Add(2 * time.Second)
@@ -549,10 +559,10 @@ func TestReplicaTrustsOnlyTheOwnerAndLetsGo(t *testing.T) {
 		t.Fatalf("forgotten %v, want (0,1)", forgot)
 	}
 
-	b.r.Want(replicaTestCh, nil)
+	b.want(t, nil)
 	waitSubscribers(t, a, 0)
 
-	b.r.Want(replicaTestCh, column0)
+	b.want(t, column0)
 	waitSubscribers(t, a, 1)
 	b.stop()
 	start := time.Now()
@@ -628,6 +638,175 @@ func TestReplicaWireFormat(t *testing.T) {
 			t.Fatalf("%s: decoded (%v)", name, err)
 		}
 	}
+}
+
+// heldNothing 是没有任何数据的副本存放处：订阅上限的用例只看发出去的订阅。
+type heldNothing struct{}
+
+func (heldNothing) Held(ChunkKey) int64           { return 0 }
+func (heldNothing) Apply(ChunkKey, Overlay) error { return nil }
+func (heldNothing) Forget(ChunkKey)               {}
+
+// subscriberRig 是只有副本一侧的 Replicator：发出的消息录在 sent 里（按目标 sid），时钟手动拨，不起 Run——用例在自己的
+// goroutine 上直接调 takeInput / tick（与 Run 的循环是同两步）。
+type subscriberRig struct {
+	r    *Replicator
+	now  time.Time
+	sent map[int32][][]byte
+}
+
+func newSubscriberRig(t *testing.T, meta Meta, ownerOf func(ChunkKey) (int32, bool)) *subscriberRig {
+	t.Helper()
+	rig := &subscriberRig{now: time.Unix(1_700_000_000, 0), sent: map[int32][][]byte{}}
+	r, err := NewReplicator(ReplicatorConfig{
+		Self: sidB, Meta: meta, OwnerOf: ownerOf, Renew: testRenew, Lease: testLease,
+		Now:  func() time.Time { return rig.now },
+		Send: func(to int32, body []byte) bool { rig.sent[to] = append(rig.sent[to], body); return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddChannel(replicaTestCh, heldNothing{}); err != nil {
+		t.Fatal(err)
+	}
+	rig.r = r
+	return rig
+}
+
+// renewed 处理 Want 交来的输入，再把时钟拨过一个续期周期并 tick：返回这段时间发给 owner 的订阅（真实解码器解出来的块，
+// 每条一份）。发出去的任何一条消息解不出来都算失败——接收端按坏消息丢弃，这份订阅永远建不起来。
+func (rig *subscriberRig) renewed(t *testing.T, owner int32) [][]ChunkKey {
+	t.Helper()
+	clear(rig.sent)
+	rig.r.takeInput()
+	rig.now = rig.now.Add(testRenew)
+	rig.r.tick()
+	var subs [][]ChunkKey
+	for to, bodies := range rig.sent {
+		for _, body := range bodies {
+			m, err := decodeReplicaMsg(body)
+			if err != nil {
+				t.Errorf("a subscription sent to sid %d cannot be decoded by the receiver: %v", to, err)
+				continue
+			}
+			if sub, ok := m.(subscribeMsg); ok && to == owner {
+				subs = append(subs, sub.keys)
+			}
+		}
+	}
+	return subs
+}
+
+// 一路副本对同一个拥有者的一份订阅至多 MaxSubscriptionChunks 块（RV-20261110-01）：订阅是一条消息，接收端的解码上限
+// 就是这个数。超过时 Want 整份拒绝并返回 ErrSubscriptionTooLarge——不发出接收端必然解不了的消息；之前接受的那份订阅
+// 照常续期。上限按拥有者分别算，只算真正要订阅的块（重复的、地图外的、本进程自己写的、没有拥有者的不算）。
+func TestReplicaSubscriptionLimitPerOwner(t *testing.T) {
+	meta := Meta{BaseRevision: 1, ChunksX: 256, ChunksY: 256}
+	oneOwner := func(ChunkKey) (int32, bool) { return sidA, true }
+	// first 返回地图里按 ID 升序的前 n 块（订阅里的次序）。
+	first := func(n int) []ChunkKey {
+		keys := make([]ChunkKey, n)
+		for i := range keys {
+			keys[i] = ChunkKey{X: int32(i / 256), Y: int32(i % 256)}
+		}
+		return keys
+	}
+	same := func(t *testing.T, what string, subs [][]ChunkKey, want ...[]ChunkKey) {
+		t.Helper()
+		if !slices.EqualFunc(subs, want, func(a, b []ChunkKey) bool { return slices.Equal(a, b) }) {
+			sizes := make([]int, len(subs))
+			for i, sub := range subs {
+				sizes[i] = len(sub)
+			}
+			t.Errorf("%s: %d subscriptions of %v chunks, want %d", what, len(subs), sizes, len(want))
+		}
+	}
+
+	t.Run("at the limit", func(t *testing.T) {
+		rig, keys := newSubscriberRig(t, meta, oneOwner), first(MaxSubscriptionChunks)
+		if err := rig.r.Want(replicaTestCh, keys); err != nil {
+			t.Fatalf("Want of %d chunks: %v", len(keys), err)
+		}
+		// 一次是 Want 之后立即发的，一次是续期：两条都解得出来、都是整份。
+		same(t, "subscribed and renewed", rig.renewed(t, sidA), keys, keys)
+	})
+
+	t.Run("one over the limit", func(t *testing.T) {
+		rig := newSubscriberRig(t, meta, oneOwner)
+		err := rig.r.Want(replicaTestCh, first(MaxSubscriptionChunks+1))
+		same(t, "after a rejected Want", rig.renewed(t, sidA)) // 什么都不发：不留一份永远解不了的订阅在重试
+		if !errors.Is(err, ErrSubscriptionTooLarge) {
+			t.Fatalf("Want of %d chunks from one owner: %v, want ErrSubscriptionTooLarge", MaxSubscriptionChunks+1, err)
+		}
+		if got := rig.r.Stats(); got.WantsRejected != 1 || got.SubscribesOut != 0 {
+			t.Fatalf("stats %+v: want one rejected Want and no subscription sent", got)
+		}
+	})
+
+	t.Run("a rejected Want keeps the accepted subscription", func(t *testing.T) {
+		rig, small := newSubscriberRig(t, meta, oneOwner), first(3)
+		if err := rig.r.Want(replicaTestCh, small); err != nil {
+			t.Fatal(err)
+		}
+		same(t, "the small subscription", rig.renewed(t, sidA), small, small)
+		err := rig.r.Want(replicaTestCh, first(MaxSubscriptionChunks+1))
+		same(t, "renewal after a rejected Want", rig.renewed(t, sidA), small) // 只有续期，还是原来那 3 块
+		if !errors.Is(err, ErrSubscriptionTooLarge) {
+			t.Fatalf("growing past the limit: %v, want ErrSubscriptionTooLarge", err)
+		}
+		// 之后合法的 Want 照常生效：换成另一份、撤销。
+		if err := rig.r.Want(replicaTestCh, first(5)); err != nil {
+			t.Fatal(err)
+		}
+		same(t, "the next accepted Want", rig.renewed(t, sidA), first(5), first(5))
+		if err := rig.r.Want(replicaTestCh, nil); err != nil {
+			t.Fatal(err)
+		}
+		same(t, "revoked", rig.renewed(t, sidA), nil)
+	})
+
+	t.Run("the limit is per owner", func(t *testing.T) {
+		// 左半张图归 sid 1、右半张归 sid 3：各 128 × 256 = 32768 块，整张图 65536 块一次订阅，每个拥有者恰好到上限。
+		split := int32(128)
+		rig := newSubscriberRig(t, meta, func(key ChunkKey) (int32, bool) {
+			if key.X < split {
+				return sidA, true
+			}
+			return 3, true
+		})
+		all := first(256 * 256)
+		if err := rig.r.Want(replicaTestCh, all); err != nil {
+			t.Fatalf("65536 chunks, 32768 from each of two owners: %v", err)
+		}
+		left := all[:MaxSubscriptionChunks]
+		same(t, "the left owner", rig.renewed(t, sidA), left, left)
+		// 分界右移一列：左边的拥有者 129 × 256 块，超了；整份 Want 拒绝，两个拥有者的订阅都保持原样。
+		split = 129
+		err := rig.r.Want(replicaTestCh, all)
+		same(t, "the left owner after a rejected Want", rig.renewed(t, sidA), left)
+		if !errors.Is(err, ErrSubscriptionTooLarge) {
+			t.Fatalf("33024 chunks from one owner: %v, want ErrSubscriptionTooLarge", err)
+		}
+	})
+
+	t.Run("only chunks that are subscribed count", func(t *testing.T) {
+		// 第 255 列归本进程自己写、第 254 列没有拥有者：都不订阅。
+		rig := newSubscriberRig(t, meta, func(key ChunkKey) (int32, bool) {
+			switch key.X {
+			case 255:
+				return sidB, true
+			case 254:
+				return 0, false
+			}
+			return sidA, true
+		})
+		keys := first(MaxSubscriptionChunks)
+		extra := slices.Concat(keys, keys[:100], []ChunkKey{{X: 256, Y: 0}, {X: -1, Y: 3}, {X: 255, Y: 7}, {X: 254, Y: 7}})
+		if err := rig.r.Want(replicaTestCh, extra); err != nil {
+			t.Fatalf("%d subscribable chunks plus duplicates and chunks that are never subscribed: %v", len(keys), err)
+		}
+		same(t, "subscribed", rig.renewed(t, sidA), keys, keys)
+	})
 }
 
 // lotStore 是想要占位记录的存放处（ReplicaLotStore）：块数据照 viewStore，占位记录按修订号只进不退（与 game-demo 的

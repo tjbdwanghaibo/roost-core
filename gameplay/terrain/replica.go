@@ -21,7 +21,8 @@ import (
 //   - 订阅（副本 → 拥有者）：副本按拥有者分组，把想要的块列成一份订阅，附上本地持有的版本，每 Renew 重发一次（租约
 //     续期）。拥有者记下订阅（租约 Lease，过期即删），并答复“版本与副本持有的不同”的块：覆盖块（Version ≥ 1）发整块
 //     数据，原始块（Version 0）发“原始块”。所以重发的订阅同时是补齐：推送丢了、副本重启了、拥有者重启了（订阅表丢了），
-//     至多一个 Renew 之后都对齐。
+//     至多一个 Renew 之后都对齐。一份订阅是一条消息、整份替换拥有者记下的那一份，至多 MaxSubscriptionChunks 块（接收端
+//     的解码上限）：一路对同一个拥有者想要更多时 Want 整份拒绝（ErrSubscriptionTooLarge），不发出接收端解不了的消息。
 //   - 推送（拥有者 → 副本）：块提交之后（Changed，可在 Nest 的提交后回调里调），把这块的当前状态发给订阅了它的副本。
 //     同一块在发出之前又提交了几次只发最新的一份。
 //   - 顺序：副本只认“比本地新”的版本（ReplicaStore.Apply 对旧版本答 ErrStaleOverlay），重复、迟到的消息不回退；
@@ -46,7 +47,8 @@ import (
 // 的数据；换版要整组进程换包重启。
 //
 // 并发：Replicator 的状态（订阅表、想要的块、每个拥有者上次订阅的时间）只在 Run 的 goroutine 上读写；Want / Changed /
-// Deliver 只把输入交给它（短锁 + 非阻塞信号），任何 goroutine 都能调。ReplicaStore 与 Source 的读取都在 Run 的 goroutine
+// Deliver 只把输入交给它（短锁 + 非阻塞信号），任何 goroutine 都能调。Want 在调用方的 goroutine 上把块按拥有者分好组
+// （调 OwnerOf）并检查订阅上限，所以 OwnerOf 要能并发调用。ReplicaStore 与 Source 的读取都在 Run 的 goroutine
 // 上：解压、读包（LoadBase）这类活在这里做，不在传输回调或 Nest worker 上。
 
 // ReplicaChannel 区分同一进程里的几份副本：各自订阅、各自存放（例如分区场景里格进程的 Ghost 带与给本进程客户端看的
@@ -83,7 +85,8 @@ type ReplicatorConfig struct {
 	// Send 非阻塞地把 body 发给 sid（cellworld 的 Node.SendExt）；返回 false 表示丢了（计 SendDrops）。body 交出后
 	// Replicator 不再修改。
 	Send func(sid int32, body []byte) bool
-	// OwnerOf 给出写这块的进程 sid（分区网格：块所在的格的 sid）；false 表示没有拥有者（不订阅）。
+	// OwnerOf 给出写这块的进程 sid（分区网格：块所在的格的 sid）；false 表示没有拥有者（不订阅）。在 Want 的调用方
+	// goroutine 与 Run 的 goroutine 上都会调用，必须能并发调用、不阻塞（只读的分区表）。
 	OwnerOf func(ChunkKey) (int32, bool)
 	// Source 与 Owns 是拥有者一侧：Source 是本进程的视图（提交后的数据），Owns 报告块是否归本进程写。本进程不写任何块
 	// 时 Source 为 nil。
@@ -123,6 +126,8 @@ type ReplicaStats struct {
 	// DecodeErrors：坏消息、坏块数据。ApplyErrors：store 拒绝（ErrStaleOverlay 之外）。InboxDrops / SendDrops：收件队列满、
 	// 发送被拒。
 	DecodeErrors, ApplyErrors, InboxDrops, SendDrops uint64
+	// WantsRejected：Want 因为对某个拥有者的订阅超过 MaxSubscriptionChunks 而整份拒绝的次数（ErrSubscriptionTooLarge）。
+	WantsRejected uint64
 }
 
 type replicaCounters struct {
@@ -131,10 +136,19 @@ type replicaCounters struct {
 	chunksIn, applied, stale, lotsApplied, lotsStale       atomic.Uint64
 	revDrops, wrongOwner, unwanted, notOwned, unloaded     atomic.Uint64
 	ahead, decodeErrors, applyErrors, inboxDrops, sendDrop atomic.Uint64
+	wantsRejected                                          atomic.Uint64
 }
 
 // ErrReplicatorConfig 表示 ReplicatorConfig 不合法。
 var ErrReplicatorConfig = errors.New("terrain: invalid replicator config")
+
+// MaxSubscriptionChunks 是一路副本对同一个拥有者的一份订阅的块数上限。订阅是一条消息（整份替换拥有者记下的那一份，所以
+// 不能简单拆成几条），接收端解码时按这个数拒绝更长的；一个格 48 × 48 块时有 10 倍余量。它按拥有者分别算：一路可以同时
+// 向多个拥有者各订阅这么多块。
+const MaxSubscriptionChunks = 1 << 15
+
+// ErrSubscriptionTooLarge 表示 Want 里归同一个拥有者的块超过 MaxSubscriptionChunks：这份 Want 整份没有生效。
+var ErrSubscriptionTooLarge = errors.New("terrain: subscription too large")
 
 // Replicator 是一个进程的块副本端点：拥有者一侧（Source 非空）答订阅、推送提交；副本一侧（AddChannel 登记的每一路）
 // 订阅、应用。一个进程一个，Run 一次。
@@ -146,7 +160,7 @@ type Replicator struct {
 	signal   chan struct{}
 	inputMu  sync.Mutex
 	changed  map[ChunkKey]struct{}
-	wants    map[ReplicaChannel][]ChunkKey
+	wants    map[ReplicaChannel]replicaWant
 	running  atomic.Bool
 	channels map[ReplicaChannel]*replicaChannel // AddChannel 在 Run 之前写，之后只读
 
@@ -172,6 +186,13 @@ type replicaSub struct {
 	keys  map[ChunkKey]struct{}
 	lots  bool
 	until time.Time
+}
+
+// replicaWant 是 Want 交来的一路想要的块：已去重、去掉不订阅的块（地图外、没有拥有者、本进程自己写的），按拥有者
+// 分好组（每组按 ID 升序、不超过 MaxSubscriptionChunks）。
+type replicaWant struct {
+	wanted  map[ChunkKey]struct{}
+	byOwner map[int32][]ChunkKey
 }
 
 // replicaChannel 是副本一侧的一路。
@@ -224,7 +245,7 @@ func NewReplicator(cfg ReplicatorConfig) (*Replicator, error) {
 	}
 	return &Replicator{
 		cfg: cfg, inbox: make(chan replicaDelivery, cfg.Inbox), signal: make(chan struct{}, 1),
-		changed: map[ChunkKey]struct{}{}, wants: map[ReplicaChannel][]ChunkKey{}, channels: map[ReplicaChannel]*replicaChannel{},
+		changed: map[ChunkKey]struct{}{}, wants: map[ReplicaChannel]replicaWant{}, channels: map[ReplicaChannel]*replicaChannel{},
 		subs: map[replicaSubKey]*replicaSub{}, cache: map[ChunkKey]encodedChunk{},
 	}, nil
 }
@@ -241,13 +262,47 @@ func (r *Replicator) AddChannel(ch ReplicaChannel, store ReplicaStore) error {
 	return nil
 }
 
-// Want 换掉一路想要的块（整份替换）。新加的块尽快订阅，去掉的块交给 store.Forget；任何 goroutine 可调，不阻塞。
-func (r *Replicator) Want(ch ReplicaChannel, keys []ChunkKey) {
-	keys = slices.Clone(keys)
+// Want 换掉一路想要的块（整份替换）。新加的块尽快订阅，去掉的块交给 store.Forget；任何 goroutine 可调，不等 Run（在
+// 调用方的 goroutine 上按拥有者分组、排序，耗时随块数增长）。keys 里重复的、地图外的、没有拥有者的、本进程自己写的块
+// 不订阅，也不计入上限。
+//
+// 归同一个拥有者的块超过 MaxSubscriptionChunks 时返回 ErrSubscriptionTooLarge，这份 Want 整份不生效：之前接受的那份
+// 照常续期，不会发出接收端解不了的订阅（计 WantsRejected）。调用方应缩小范围（例如缩小视野半径或 Ghost 带）再调。
+func (r *Replicator) Want(ch ReplicaChannel, keys []ChunkKey) error {
+	want := r.group(keys)
+	for owner, list := range want.byOwner {
+		if len(list) > MaxSubscriptionChunks {
+			r.stats.wantsRejected.Add(1)
+			return fmt.Errorf("%w: channel %d wants %d chunks from sid %d, at most %d from one owner",
+				ErrSubscriptionTooLarge, ch, len(list), owner, MaxSubscriptionChunks)
+		}
+	}
 	r.inputMu.Lock()
-	r.wants[ch] = keys
+	r.wants[ch] = want
 	r.inputMu.Unlock()
 	r.wake()
+	return nil
+}
+
+// group 把一份想要的块去重、去掉不订阅的块，按拥有者分组并按 ID 升序排好（订阅的线上次序）。只读配置，任何 goroutine
+// 可调。
+func (r *Replicator) group(keys []ChunkKey) replicaWant {
+	want := replicaWant{wanted: make(map[ChunkKey]struct{}, len(keys)), byOwner: map[int32][]ChunkKey{}}
+	for _, key := range keys {
+		if _, dup := want.wanted[key]; dup || !r.cfg.Meta.Contains(key) {
+			continue
+		}
+		owner, ok := r.cfg.OwnerOf(key)
+		if !ok || owner == 0 || owner == r.cfg.Self {
+			continue // 没有拥有者，或者是本进程自己写的块（视图里就是权威数据）
+		}
+		want.wanted[key] = struct{}{}
+		want.byOwner[owner] = append(want.byOwner[owner], key)
+	}
+	for _, list := range want.byOwner {
+		slices.SortFunc(list, func(a, b ChunkKey) int { return cmp.Compare(a.ID(), b.ID()) })
+	}
+	return want
 }
 
 // Changed 报告本进程写的一块刚提交（新版本已在 Source 里）：尽快推给订阅了它的副本。只登记、不阻塞，可以在 Nest 的
@@ -288,6 +343,7 @@ func (r *Replicator) Stats() ReplicaStats {
 		BaseRevisionDrops: s.revDrops.Load(), WrongOwner: s.wrongOwner.Load(), Unwanted: s.unwanted.Load(),
 		NotOwned: s.notOwned.Load(), Unloaded: s.unloaded.Load(), Ahead: s.ahead.Load(),
 		DecodeErrors: s.decodeErrors.Load(), ApplyErrors: s.applyErrors.Load(), InboxDrops: s.inboxDrops.Load(), SendDrops: s.sendDrop.Load(),
+		WantsRejected: s.wantsRejected.Load(),
 	}
 }
 
@@ -316,11 +372,11 @@ func (r *Replicator) Run(ctx context.Context) error {
 func (r *Replicator) takeInput() {
 	r.inputMu.Lock()
 	wants, changed := r.wants, r.changed
-	r.wants, r.changed = map[ReplicaChannel][]ChunkKey{}, map[ChunkKey]struct{}{}
+	r.wants, r.changed = map[ReplicaChannel]replicaWant{}, map[ChunkKey]struct{}{}
 	r.inputMu.Unlock()
-	for ch, keys := range wants {
+	for ch, want := range wants {
 		if c := r.channels[ch]; c != nil {
-			r.setWanted(c, keys)
+			r.setWanted(c, want)
 		}
 	}
 	if len(wants) > 0 {
@@ -345,24 +401,11 @@ func (r *Replicator) tick() {
 
 // ---- 副本一侧 ----
 
-// setWanted 换掉一路想要的块：按拥有者重新分组；分组变了的拥有者尽快重订（sent 清零），不再想要任何块的拥有者发一份
-// 空订阅（撤销），去掉的块交给 store.Forget。
-func (r *Replicator) setWanted(c *replicaChannel, keys []ChunkKey) {
-	next := make(map[ChunkKey]struct{}, len(keys))
-	byOwner := map[int32][]ChunkKey{}
-	for _, key := range keys {
-		if _, dup := next[key]; dup || !r.cfg.Meta.Contains(key) {
-			continue
-		}
-		owner, ok := r.cfg.OwnerOf(key)
-		if !ok || owner == 0 || owner == r.cfg.Self {
-			continue // 没有拥有者，或者是本进程自己写的块（视图里就是权威数据）
-		}
-		next[key] = struct{}{}
-		byOwner[owner] = append(byOwner[owner], key)
-	}
+// setWanted 换掉一路想要的块（Want 已按拥有者分好组）：分组变了的拥有者尽快重订（sent 清零），不再想要任何块的拥有者
+// 发一份空订阅（撤销），去掉的块交给 store.Forget。
+func (r *Replicator) setWanted(c *replicaChannel, want replicaWant) {
+	next, byOwner := want.wanted, want.byOwner
 	for owner, list := range byOwner {
-		slices.SortFunc(list, func(a, b ChunkKey) int { return cmp.Compare(a.ID(), b.ID()) })
 		if !slices.Equal(list, c.byOwner[owner]) {
 			c.sent[owner] = time.Time{}
 		}
@@ -703,9 +746,10 @@ const (
 	replicaWireVersion = 2
 	replicaSubscribe   = 1
 	replicaChunks      = 2
-	// replicaMaxKeys / replicaMaxData 是解码的上限：一份订阅至多这么多块（一个格 48 × 48 块的 10 倍余量），一块数据至多
-	// 这么多字节（明文上限 16KB，DEFLATE 不会把它放大到 64KB）。
-	replicaMaxKeys = 1 << 15
+	// replicaMaxKeys / replicaMaxData 是解码的上限：一份订阅至多这么多块（发送侧 Want 按同一个数拒绝，见
+	// MaxSubscriptionChunks；块状态消息的条数不会超过它——答复与推送都只涉及一份订阅里的块），一块数据至多这么多字节
+	// （明文上限 16KB，DEFLATE 不会把它放大到 64KB）。
+	replicaMaxKeys = MaxSubscriptionChunks
 	replicaMaxData = 64 << 10
 	// replicaMaxLots 是一块占位记录的个数上限（game-demo 每块至多 64 份占地）。
 	replicaMaxLots = 1024
