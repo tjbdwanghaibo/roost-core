@@ -21,6 +21,7 @@
 | [shop](shop/module.yaml) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录写在 `game/entities/player/shop_goods.go` | wallet、bag | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 17 |
 
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 8 |
+| [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 
 两个模块都装着时还会多出**联动文件**（不论先装哪个，在第二个装上的那一次写）：
 
@@ -53,11 +54,11 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 ## 安装做了什么
 
 1. **前置骨架**：实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
-2. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
-3. **组件**：把模块的组件接到实体上。
-4. **文件**：把 `files/` 下的模板渲染后写进工程。落点已被业务文件占用时拒绝，不覆盖。
+2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
+3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
+4. **组件**：把模块的组件接到实体上。
 5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires` 与可选 `runtime`。
-6. **生成**：运行全部生成器。有 `runtime` 的模块同时生成服务适配层与 bootstrap 接线；两者和其他生成物一起暂存、提交，失败不会留下半套接线。
+6. **生成**：运行全部生成器。自带实体时同时刷新 owner / handler / shutdown 接线；有 `runtime` 时生成服务适配层。全部生成物与需刷新配置一起暂存、提交，失败不会留下半套接线。
 
 两个模块之间的**联动文件**在第 4 步之后写：这次装的模块与工程里已有的（或同一次装的）模块凑成一对、而这一对有联动时，把联动文件写进工程，归属记在拥有它的模块的 `with` 下。`plan` 与 `add` 的输出里是 `glue <模块> with <另一个模块>`。两个都早已装好的不补。
 
@@ -72,6 +73,14 @@ modules/<name>/
   module.yaml          清单
   files/<工程内路径>.tmpl   模板，按安装后的真实路径存放
 ```
+
+### 自带实体
+
+`entities: [Room]` 声明模块拥有的实体，`entity: Room` 仍表示组件/追加状态的挂靠目标，两者含义不同。每个自带实体必须有 `files/game/entities/<snake>/entity.go.tmpl` 与 `files/db/def/<snake>.go.tmpl`；实体号用 `{{ID:entity:Room}}`，所属服务用 `{{GAME_SERVICE}}`。安装器复用 `roost add lifecycle` 的实现生成 `game/lifecycle/<snake>.go`，模板不要再带第二份 lifecycle。
+
+实体、DAO、lifecycle 都记入归属清单，并在模块安装的回滚边界内。它们不作为先执行、失败后保留的前置命令。实体号与其他号一样按最小空号分配，扫描已有代码与安装记录，已分配号不回收。依赖模块可以通过 `requires` 使用先安装的实体；需要追加状态时仍声明自己的 `entity` / `state` / `component`。
+
+安装器在生成暂存区先同步服务归属，再生成全部接口；bootstrap、相关 shutdown 配置、模块源码和清单失败时一并回退。普通 `roost generate` 的行为不变，手工修改实体归属仍需 `project sync`。第一个使用者是 [room](room/README.md)；scene / team / guild 等尚未迁移。
 
 ### 服务级启动与停机
 
@@ -103,6 +112,7 @@ needs:
   features: [protocol, entity, dao, errcode]
   uses: []                   # 业务服务必须 uses 的托管框架服务（rank、mail……）
 entity: Player               # 状态与组件挂在哪个实体上
+entities: []                 # 自带实体名字；与挂靠既有实体分开，见上文
 state:                       # 追加到主 DAO 末尾的顶层字段
   - field: Wallet            # 以模块名开头
     type: WalletState        # 模块在 db/def 里定义的嵌套结构体

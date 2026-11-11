@@ -21,10 +21,10 @@ import (
 )
 
 // 模块安装器。plan 与 add 走同一条计算路径：planModules 只读工程、算出要做什么；
-// applyModulePlan 按计划执行。执行顺序：
+// AddModules 按计划执行。执行顺序：
 //
 //  1. 前置骨架（实体的主 DAO、玩家接入）经已有的 roost add 补齐——它们本身就是完整的工程状态；
-//  2. 逐个模块：分配到的号替换进模板 → 往主 DAO 末尾追加状态字段 → 把组件接到实体 → 写入模板文件；
+//  2. 逐个模块：写入模板 → 往主 DAO 末尾追加状态字段 → 接组件 → 为自带实体补 lifecycle；
 //  3. 把归属记录写进 roost.yaml 的 modules；
 //  4. 运行全部生成器（GenerateTransactional：暂存区里生成，成功才提交）。
 //
@@ -127,10 +127,18 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		return ModulePlan{}, err
 	}
 	pending := map[string]bool{}
+	newEntities := map[string]bool{}
+	for _, spec := range order {
+		if _, installed := manifest.Modules[spec.Name]; !installed {
+			for _, name := range spec.Entities {
+				newEntities[name] = true
+			}
+		}
+	}
 	for _, spec := range order {
 		item := ModulePlanItem{
 			Name: spec.Name, Summary: spec.Summary, Requires: append([]string{}, spec.Requires...), Runtime: spec.Runtime,
-			IDs: map[string]map[string]int64{}, State: []string{}, Files: append([]string{}, spec.Files...), Verify: spec.Verify, spec: spec,
+			IDs: map[string]map[string]int64{}, State: []string{}, Files: spec.ownedFiles(), Verify: spec.Verify, spec: spec,
 		}
 		if installed, ok := manifest.Modules[spec.Name]; ok {
 			if installed.Service != service {
@@ -155,7 +163,17 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 			return ModulePlan{}, err
 		}
 		item.Status = moduleStatusInstall
-		for _, command := range modulePrerequisites(root, manifest, service, spec, options) {
+		// 自带实体的定义和 lifecycle 必须全新，不能把工程已有的实体据为己有。
+		for _, name := range spec.Entities {
+			for _, rel := range append(moduleEntityDefinitions(name), moduleEntityLifecycle(name)) {
+				if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+					return ModulePlan{}, fmt.Errorf("module %s: owned entity %s conflicts with existing %s", spec.Name, name, rel)
+				} else if !os.IsNotExist(err) {
+					return ModulePlan{}, err
+				}
+			}
+		}
+		for _, command := range modulePrerequisites(root, manifest, service, spec, options, newEntities[spec.Entity]) {
 			if !pending[command] {
 				pending[command] = true
 				plan.Prerequisites = append(plan.Prerequisites, command)
@@ -289,9 +307,9 @@ func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error 
 }
 
 // modulePrerequisites 是模块要求、工程里还没有的框架骨架，写成会执行的 roost add 命令。
-func modulePrerequisites(root string, manifest Manifest, service string, spec ModuleSpec, options ModuleOptions) []string {
+func modulePrerequisites(root string, manifest Manifest, service string, spec ModuleSpec, options ModuleOptions, newEntity bool) []string {
 	var commands []string
-	if len(spec.State) > 0 {
+	if len(spec.State) > 0 && !newEntity {
 		if source, err := locateDaoStruct(root, spec.Entity+"Dao"); err == nil && source == nil {
 			commands = append(commands, fmt.Sprintf("roost add dao %s --entity %s", spec.Entity, spec.Entity))
 		}
@@ -307,7 +325,7 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 	if spec.Access.SelfSync && !access.SelfSync && !options.SkipSelfSync {
 		commands = append(commands, "set access.player.self_sync: true in roost.yaml; roost project sync")
 	}
-	if spec.Access.Lifecycle && !moduleLifecycleExists(root, spec.Entity) {
+	if spec.Access.Lifecycle && !newEntity && !moduleLifecycleExists(root, spec.Entity) {
 		commands = append(commands, fmt.Sprintf("roost add lifecycle %s --service %s", spec.Entity, service))
 	}
 	return commands
@@ -332,8 +350,14 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return ModulePlan{}, err
 	}
 	installing := false
+	newEntities := map[string]bool{}
 	for _, item := range plan.Modules {
 		installing = installing || item.Status == moduleStatusInstall
+		if item.Status == moduleStatusInstall {
+			for _, name := range item.spec.Entities {
+				newEntities[name] = true
+			}
+		}
 	}
 	if !installing {
 		plan.Applied = true
@@ -344,7 +368,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		if item.Status != moduleStatusInstall {
 			continue
 		}
-		if err := ensureModulePrerequisites(root, plan.Service, item.spec, options); err != nil {
+		if err := ensureModulePrerequisites(root, plan.Service, item.spec, options, newEntities[item.spec.Entity]); err != nil {
 			return ModulePlan{}, fmt.Errorf("module %s: %w", item.Name, err)
 		}
 	}
@@ -358,7 +382,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		if item.Status != moduleStatusInstall {
 			continue
 		}
-		paths, err := moduleTouchedFiles(root, item.spec)
+		paths, err := moduleTouchedFiles(root, item.spec, newEntities[item.spec.Entity])
 		if err != nil {
 			return ModulePlan{}, fmt.Errorf("module %s: %w", item.Name, err)
 		}
@@ -409,7 +433,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, syncProject: len(newEntities) > 0}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true
@@ -417,9 +441,9 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 }
 
 // ensureModulePrerequisites 经已有的 roost add 补齐模块要求的框架骨架；已经有的不动。
-func ensureModulePrerequisites(root, service string, spec ModuleSpec, options ModuleOptions) error {
+func ensureModulePrerequisites(root, service string, spec ModuleSpec, options ModuleOptions, newEntity bool) error {
 	warnings := options.Stderr
-	if len(spec.State) > 0 {
+	if len(spec.State) > 0 && !newEntity {
 		source, err := locateDaoStruct(root, spec.Entity+"Dao")
 		if err != nil {
 			return err
@@ -430,7 +454,7 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 			}
 		}
 	}
-	if spec.Access.Lifecycle && !moduleLifecycleExists(root, spec.Entity) {
+	if spec.Access.Lifecycle && !newEntity && !moduleLifecycleExists(root, spec.Entity) {
 		if _, err := Add(root, AddOptions{Kind: "lifecycle", Name: spec.Entity, Service: service, Warnings: warnings}); err != nil {
 			return fmt.Errorf("roost add lifecycle %s --service %s: %w", spec.Entity, service, err)
 		}
@@ -479,8 +503,12 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 }
 
 // moduleTouchedFiles 是安装一个模块会写的业务文件：模板的落点、实体的主 DAO 定义、实体聚合文件。
-func moduleTouchedFiles(root string, spec ModuleSpec) ([]string, error) {
-	paths := append([]string(nil), spec.Files...)
+func moduleTouchedFiles(root string, spec ModuleSpec, newEntity bool) ([]string, error) {
+	paths := spec.ownedFiles()
+	if newEntity {
+		// 依赖模块的实体也可能尚未写入；其固定落点已经由自带实体声明校验。
+		return append(paths, moduleEntityDefinitions(spec.Entity)...), nil
+	}
 	if len(spec.State) > 0 {
 		source, err := locateDaoStruct(root, spec.Entity+"Dao")
 		if err != nil {
@@ -501,10 +529,19 @@ func moduleTouchedFiles(root string, spec ModuleSpec) ([]string, error) {
 	return paths, nil
 }
 
-// writeModule 把一个模块写进工程：追加状态字段、接组件、写模板文件。返回它的归属记录。
+// writeModule 先写模板，再追加字段、接组件，最后补自带实体的 lifecycle。所有写入都在外层回滚边界内。
 func writeModule(root string, manifest Manifest, service string, item ModulePlanItem) (InstalledModule, error) {
 	spec := item.spec
-	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: append([]string(nil), spec.Files...), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...)}
+	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: spec.ownedFiles(), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...)}
+	for _, rel := range spec.Files {
+		body, err := renderModuleFile(manifest, service, spec, "files", rel, item.IDs)
+		if err != nil {
+			return InstalledModule{}, err
+		}
+		if err := writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644); err != nil {
+			return InstalledModule{}, err
+		}
+	}
 	if len(spec.State) > 0 {
 		source, err := locateDaoStruct(root, spec.Entity+"Dao")
 		if err != nil {
@@ -543,12 +580,8 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 			return InstalledModule{}, err
 		}
 	}
-	for _, rel := range spec.Files {
-		body, err := renderModuleFile(manifest, service, spec, "files", rel, item.IDs)
-		if err != nil {
-			return InstalledModule{}, err
-		}
-		if err := writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644); err != nil {
+	for _, name := range spec.Entities {
+		if _, err := addEntityLifecycle(root, manifest, AddOptions{Name: name, Service: service}); err != nil {
 			return InstalledModule{}, err
 		}
 	}

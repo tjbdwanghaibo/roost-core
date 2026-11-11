@@ -31,16 +31,19 @@
 - 独立 skill 验收：自定义 module 工程安装 10 模块 + 3 联动，177 PASS / 0 SKIP；全工程 217 PASS / 1 预期 Compose SKIP。初次 doctor 暴露的两项问题，用新 CLI、新工程重验已通过（skillbook 8/0、目录编译 1、skills:catalog 与 project-templates OK）。离线替身，不等于真实 TCP/存储验收。
 - 最终完整验证：`GOWORK=off go test -timeout 30m ./...` 164 个有测试的包全部通过（含全部 Demo/Module 用例）；`scripts/test-modules-generated.sh` 通过，12 模块 + 4 联动共 206 PASS / 0 SKIP，增量安装、换顺序安装、重复安装及工程检查通过。重新生成 game-demo：47 个有测试的包、670 PASS / 14 预期 SKIP / 0 FAIL；跳过项为显式开启的真实存储、部署或性能检查；build / vet、模块验收 135/0、ID 与生成物漂移全部通过。根包检查通过，文档锚点 284 文件 / 0 断链。测试原始证据位于本机 `/tmp/roost-a1-*`，独立验收为 `/tmp/roost-skill-acceptance.SzbE5W/acceptance-summary.json`；临时路径仅用于本机复核，持久结论见本段与 CHANGELOG。
 - CBM 已重建当前 worktree 索引（2026-11-11）；改动文件逐一核对覆盖。新增两处模板局部解析缺口是测试复合字面量与协议 ID 占位，已读取源码并通过生成工程验证，未把图谱当成完整解析证明。
-- 下一批从 A2 + 真实实体模块继续；A3、equipment/attribute/purchase、C–I 以及 J 的真实依赖路径均未完成。rehome 分工范围未改，没有合并 main 或发版。
+- A2 + 基础 room 已实施：清单 `entities` 为模块分配实体号，模板带 Entity / DAO，复用 lifecycle 脚手架；源码、lifecycle、owner bootstrap 与 shutdown 配置一起纳入安装回滚，重复安装不覆盖业务修改。实际 `room` 模块有 22 条离线场景，包含正式 ManagerAccess → lifecycle → Nest Sender → DAO 与 PB 编解码。
+- room 用持久 Epoch + 可信连接 nonce 隔离旧 Join / View / Leave / Disconnect；Gate 代理 Session 补只读 ConnectionID。已通过安装器冲突/回滚/号避让/重复安装定向验证、真实 TCP→Gate→Game 连接身份验证；容量、连接隔离、持久代际三项变异都被业务断言抓住，恢复后场景通过。首次连接变异只造成编译失败，未计为成功，改为可编译错误后才通过变异验收。
+- A2 最终统一回归已通过：全仓 `go test -count=1 -timeout 30m ./...` 为 164 个有测试包通过（含全部 Demo/Module 用例；显式跳过用例 99）；全部模块脚本为 13 模块 + 4 联动、228 PASS / 0 SKIP，含增量/换顺序/重复安装与 build、vet、ID、生成物漂移检查；重新生成 game-demo 为 47 测试包、670 PASS / 14 预期 SKIP / 0 FAIL，module verify 为 135/0，四项工程检查全部通过。Room 22 场景与新增 Gate 真实转发用例的 race 检查通过。文档 284 文件 / 0 断链，shell 语法与 diff 空白检查通过；生产存储联合验收仍未计入。本机原始记录在 `/tmp/roost-a2-*`、`/tmp/roost-module-a2-*`，永久验收结论留在本段。CBM 已重建（2026-11-11T10:22:41Z）；本批新增 5 个模板局部解析缺口，均为 ID 占位或测试复合字面量，已读相应源码并用实际生成工程补证。
+- 下一批从 A3 + turn、或此前待办中的 B / C 按依赖继续；equipment/attribute/purchase、matchroom、C–I 与 J 的真实依赖路径仍未完成。room 不包含自动断线订阅、断线保留策略、重启在线状态重建、匹配移交、广播或回合超时，见 [room](../../modules/room/README.md)。`compose.md` 只更新 3 处事实，结构未改；rehome 范围未动，没有合并 main 或发版。
 
 ## 3. 待办（按建议的先后）
 
-### A. 安装器的两个缺口（先做，解开一多半剩余业务）
+### A. 安装器的能力缺口（先做，解开一多半剩余业务）
 
 | 项 | 要什么 | 谁在等它 |
 | --- | --- | --- |
 | A1 服务级接线点（已实现） | 模块能声明“服务 `Init` 时启动、`Shutdown` 时停”的东西（步骤消费者、effect 订阅、后台循环、心跳、同步接线），安装器把它接进业务服务的启动与停机顺序；归属记进 `roost.yaml` | gift、升级奖励邮件消费者、活动、GM、匹配组队、副本、scene、rehome 的后台驱动 |
-| A2 模块自带实体 | 模块能带自己的 Entity（`roost add entity` 作为安装前置或由模块文件带来）、它的 DAO、lifecycle 与实体号分配 | 公会、队伍、战斗房间、room / matchroom / turn、scene |
+| A2 模块自带实体（已实现） | `entities` + Entity / DAO 模板，自动分配实体号与补 lifecycle；连同归属接线一起回滚。基础 room 已使用 | 公会、队伍、战斗房间、room / matchroom / turn、scene |
 | A3 定时器类型分配 | 模块能申请实体定时器类型号 | turn、活动 |
 | A4（可选）保留号 | demo 删掉写死的号之后，模块的号按最小空号重排；要稳定需要“保留号” | game-demo |
 
@@ -62,7 +65,7 @@ gift（送礼 saga，路由步骤，v1.44.0）、升级奖励邮件消费者（�
 
 ### D. A2 之后能迁的
 
-guild（联盟服务：独立进程、建盟 / 捐献 / 领奖三个 saga、成员名单、game 读镜像）、team（队伍实体，与 matchmaking 一起）、lockstep 战斗房间；夹具里的 room（带座位的房间）、matchroom、turn（另要 A3）。
+guild（联盟服务：独立进程、建盟 / 捐献 / 领奖三个 saga、成员名单、game 读镜像）、team（队伍实体，与 matchmaking 一起）、lockstep 战斗房间；基础 room 已实施；夹具迁移、matchroom、turn（另要 A3）仍待做。
 
 ### E. 场景（维护者 2026-11-11 同意的顺序）
 

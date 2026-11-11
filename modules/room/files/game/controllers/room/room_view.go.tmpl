@@ -1,0 +1,40 @@
+package room
+
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	roomentity "{{MODULE}}/game/entities/room"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	roomlogic "{{MODULE}}/game/room"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleRoomView 只把认证会话的玩家号交给 Nest；PB 没有可伪造的操作者字段。
+func (controller *Controller) HandleRoomView(ctx *playeraccess.Context, req *pb.RoomViewRequest) (*pb.RoomViewResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || req == nil {
+		return nil, fmt.Errorf("room: authenticated context and request are required")
+	}
+	response := &pb.RoomViewResponse{}
+	connection, err := roomlogic.ConnectionKey(ctx.Session)
+	var id int64
+	if err == nil {
+		id, err = roomlogic.EntityID(req.RoomID)
+	}
+	if err == nil {
+		var result roomentity.RoomSnapshot
+		result, err = syncsender.NewRoomViewSender(controller.nestClient).Sync_RoomView(ctx.Context(), id, ctx.PlayerID, connection)
+		if err == nil {
+			response.Info = roomInfo(req.RoomID, result)
+		}
+	}
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		if response.Code == errcode.CodeInternal {
+			slog.Error("room view failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
+		}
+	}
+	return response, nil
+}

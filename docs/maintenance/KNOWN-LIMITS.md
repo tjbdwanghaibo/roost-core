@@ -525,10 +525,11 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **十二个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）、profile（档案）、bag（背包）、leaderboard（排行榜）、mailbox（邮件）、task（每日任务）、stamina（体力）、shop（商店）、skillbook（技能目录）。game-demo 换用了 enter、chat、leaderboard、bag、profile、mailbox 与 skillbook（连带 wallet）；它的充值发货、装备与属性、副本、匹配组队、公会、场景与地形仍是 demo 的模板，13 类玩法也仍是各自的夹具（拆解是方案的后续工作）。带座位的房间、匹配到房间的移交、回合推进还不是模块（要安装器先支持模块自带实体与定时器类型）。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **十三个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）、profile（档案）、bag（背包）、leaderboard（排行榜）、mailbox（邮件）、task（每日任务）、stamina（体力）、shop（商店）、skillbook（技能目录）、room（基础房间）。game-demo 换用了 enter、chat、leaderboard、bag、profile、mailbox 与 skillbook（连带 wallet）；它的充值发货、装备与属性、副本、匹配组队、公会、场景与地形仍是 demo 的模板，13 类玩法也仍是各自的夹具（拆解是方案的后续工作）。基础 room 已成模块，自带实体与服务级接线点已支持；匹配移交、回合推进和定时器类型分配仍待做。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
 - **chat 模块的边界**：在线名单是每进程的内存集合，多个 game 进程不互相扇出世界频道的推送（要么各推各的在线玩家，要么改为订阅 chat 的流）；连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订；系统消息入口无条件授予（前提是 chat 只经内部总线可达，见 collaborators 的注释）；没有群组频道。端点不经过 Nest，没有离线用例——8 条场景覆盖频道规则、消息体校验、在线名单、连接关闭后移出名单与 collaborators 的政策。game-demo 用的就是这个模块（2026-11-11 统一，demo 自己不再带一份聊天实现）。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
 - **模块绑定具体的实体名与工程形状**：wallet 与 checkin 挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
+- **room 的边界**：1～64 席，单个 owner，公开房间的成员准入；没有私房邀请码、跨房唯一成员约束、自动广播或匹配移交。客户端保存 RoomID / Epoch，重连显式 CAS，连接 nonce 只从服务端 Session 取得。业务接入层仍需将该连接成功取得的代际交给 `room.Disconnect`；断线保留/踢出/重启后的状态重建不自动代办。持久 `Connected` 是最后处理的连接事件事实，不是跨重启在线权威。真实 TCP/Gate 验证本轮仅覆盖代理连接身份；模块端点/存储仍是离线替身验收。见 [room 接入](../../modules/room/README.md)。
 - **运行期接线的边界**：`runtime` 声明的入口在框架 Mod 启动后、业务 Service.Init 前按依赖运行，业务先停、模块逆序停；不能依赖业务 Init 才发布的能力。自动接线只在生成的 bootstrap 生效，手动构造服务要使用 `NewWithModules()`。启动失败清理、停机失败保留依赖已验证；生命周期只支持一次 Init、串行 Shutdown，不支持重启。skillbook 已接入，其余后台消费者尚未迁移；模块自己的 ingress 登记、超时与排空契约仍要实现。
 - **没有定时器类型分配、Robot 步骤**：模块不能带实体定时器类型，也不带压测步骤；两者留给方案第 3 期。
 - **enter 模块的边界**：它建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`；但不做鉴权（`auth.go` 仍缺省拒绝，`roost config enable player-tcp` 也没有执行），所以真实客户端仍连不上。端点里“`GetOrCreate` 之后发首次初始化”的串接没有离线用例，3 条场景只到 Nest handler（首次执行、再进入不做、提交被拒后下次补上）。

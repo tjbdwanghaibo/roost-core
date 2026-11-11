@@ -32,6 +32,9 @@ type ModuleSpec struct {
 	Runtime   *ModuleRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	// Entity 是模块状态与组件挂靠的实体（PascalCase，如 Player）。没有状态也没有组件的模块可以不写。
 	Entity string `yaml:"entity" json:"entity,omitempty"`
+	// Entities 是模块自带的实体：模板提供 Entity 与 DAO 定义，安装器分配实体号、补 lifecycle。
+	// 与 Entity（挂靠目标）分开：例如 turn 可以挂到 room 模块拥有的 Room 上。
+	Entities []string `yaml:"entities" json:"entities,omitempty"`
 	// State 是追加到 Entity 主 DAO 末尾的顶层字段，类型是模块自带的嵌套结构体。
 	// 同步与否按顶层字段决定：既有客户端可见状态又有服务端账本的模块写两个字段。
 	State []ModuleStateField `yaml:"state" json:"state,omitempty"`
@@ -115,7 +118,7 @@ type InstalledModule struct {
 	Service  string         `yaml:"service,omitempty"`
 	Runtime  *ModuleRuntime `yaml:"runtime,omitempty"`
 	Requires []string       `yaml:"requires,omitempty"`
-	// IDs 是 kind -> 名字 -> 号（protocol / errcode / component）。
+	// IDs 是 kind -> 名字 -> 号（entity / protocol / errcode / component）。
 	IDs map[string]map[string]int64 `yaml:"ids,omitempty"`
 	// State 是它追加的主 DAO 字段，写成 <Dao>.<Field>。
 	State []string `yaml:"state,omitempty"`
@@ -133,7 +136,7 @@ var (
 )
 
 // moduleIDKinds 是模块能申请的 ID 种类，与 roost.yaml 的 ids 段同名。
-var moduleIDKinds = []string{"component", "errcode", "protocol"}
+var moduleIDKinds = []string{"entity", "component", "errcode", "protocol"}
 
 // loadModuleCatalog 读出全部内置模块，按名字排序。
 func loadModuleCatalog() (map[string]ModuleSpec, error) {
@@ -173,7 +176,7 @@ func loadModuleCatalogFS(source fs.FS) (map[string]ModuleSpec, error) {
 				return nil, fmt.Errorf("module %s names unknown module %q", spec.Name, other)
 			}
 		}
-		for _, rel := range spec.Files {
+		for _, rel := range spec.ownedFiles() {
 			if err := claim(rel, "module "+name); err != nil {
 				return nil, err
 			}
@@ -302,6 +305,21 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	if err := validateModuleRuntime(spec.Runtime); err != nil {
 		return err
 	}
+	seenEntities := map[string]bool{}
+	for _, name := range spec.Entities {
+		if !modulePascalPattern.MatchString(name) || seenEntities[name] {
+			return fmt.Errorf("entities: %q must be a unique PascalCase name", name)
+		}
+		seenEntities[name] = true
+		for _, rel := range moduleEntityDefinitions(name) {
+			if !contains(spec.Files, rel) {
+				return fmt.Errorf("entity %s requires template %s", name, rel)
+			}
+		}
+		if contains(spec.Files, moduleEntityLifecycle(name)) {
+			return fmt.Errorf("entity %s lifecycle is supplied by the installer, not files/", name)
+		}
+	}
 	prefix := toPascal(spec.Name)
 	seenFields := map[string]bool{}
 	for _, field := range spec.State {
@@ -413,7 +431,10 @@ func (spec ModuleSpec) withNames() []string {
 
 // declaredIDs 是清单声明要分配的号：kind -> 名字集合。
 func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
-	declared := map[string]map[string]bool{"component": {}, "errcode": {}, "protocol": {}}
+	declared := map[string]map[string]bool{"entity": {}, "component": {}, "errcode": {}, "protocol": {}}
+	for _, name := range spec.Entities {
+		declared["entity"][name] = true
+	}
 	if spec.Component != "" {
 		declared["component"][spec.Component] = true
 	}
@@ -424,6 +445,24 @@ func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
 		declared["protocol"][name] = true
 	}
 	return declared
+}
+
+func moduleEntityDefinitions(name string) []string {
+	return []string{"game/entities/" + toSnake(name) + "/entity.go", "db/def/" + toSnake(name) + ".go"}
+}
+
+func moduleEntityLifecycle(name string) string {
+	return "game/lifecycle/" + toSnake(name) + ".go"
+}
+
+// ownedFiles 包括模板和安装时补出的 lifecycle；计划、冲突检查、回滚与归属使用同一份清单。
+func (spec ModuleSpec) ownedFiles() []string {
+	files := append([]string(nil), spec.Files...)
+	for _, name := range spec.Entities {
+		files = append(files, moduleEntityLifecycle(name))
+	}
+	sort.Strings(files)
+	return files
 }
 
 // moduleInstallOrder 把 requested 连同它们的依赖排成安装顺序（依赖在前），并拒绝环与互斥。

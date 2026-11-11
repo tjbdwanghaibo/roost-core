@@ -1,0 +1,201 @@
+package room
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	roomentity "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/playeraccess"
+	roomlogic "{{MODULE}}/game/room"
+	"{{MODULE}}/protocol/pb"
+)
+
+type roomEndpointCommitter struct{}
+
+func (roomEndpointCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type roomEndpointFixture struct {
+	registry   *app.Registry
+	controller *Controller
+	access     *entity.ManagerAccess
+}
+
+func newRoomEndpointFixture(t *testing.T) *roomEndpointFixture {
+	t.Helper()
+	roomentity.RegisterEntity()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(roomEndpointCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{handler.RegisterRoomOpenNestHandlersOn, handler.RegisterRoomJoinNestHandlersOn, handler.RegisterRoomViewNestHandlersOn, handler.RegisterRoomLeaveNestHandlersOn, handler.RegisterRoomReconnectNestHandlersOn, handler.RegisterRoomDisconnectNestHandlersOn, handler.RegisterRoomCloseNestHandlersOn} {
+		if err := register(engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(app.ModName("nest"), engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEntityRuntime, access); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &roomEndpointFixture{registry: registry, controller: controller, access: access}
+}
+
+// 真正走生成的 lifecycle、Nest Sender 与 Controller。操作人只来自认证 context，不来自 PB。
+func TestRoomEndpointsOnlyOperateTheirAuthenticatedSeat(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	if err := roomlogic.Open(context.Background(), f.registry, 81001, 2); err != nil {
+		t.Fatal(err)
+	}
+	a := roomContext(101, "a")
+	b := roomContext(102, "b")
+	outsider := roomContext(103, "c")
+	first, err := f.controller.HandleRoomJoin(a, &pb.RoomJoinRequest{RoomID: 81001})
+	if err != nil || first.Code != 0 || first.Info.HostID != 101 || first.Info.Epoch != 1 {
+		t.Fatalf("%+v %v", first, err)
+	}
+	second, err := f.controller.HandleRoomJoin(b, &pb.RoomJoinRequest{RoomID: 81001})
+	if err != nil || second.Code != 0 || len(second.Info.Seats) != 2 {
+		t.Fatalf("%+v %v", second, err)
+	}
+	hidden, err := f.controller.HandleRoomView(outsider, &pb.RoomViewRequest{RoomID: 81001})
+	if err != nil || hidden.Code == 0 || hidden.Info != nil {
+		t.Fatalf("outsider: %+v %v", hidden, err)
+	}
+	denied, err := f.controller.HandleRoomClose(b, &pb.RoomCloseRequest{RoomID: 81001, Epoch: 2})
+	if err != nil || denied.Code == 0 {
+		t.Fatalf("non-host: %+v %v", denied, err)
+	}
+	left, err := f.controller.HandleRoomLeave(a, &pb.RoomLeaveRequest{RoomID: 81001, Epoch: 1})
+	if err != nil || left.Code != 0 {
+		t.Fatalf("leave: %+v %v", left, err)
+	}
+	view, err := f.controller.HandleRoomView(b, &pb.RoomViewRequest{RoomID: 81001})
+	if err != nil || view.Code != 0 || view.Info.HostID != 102 || len(view.Info.Seats) != 1 {
+		t.Fatalf("view: %+v %v", view, err)
+	}
+	reconnected, err := f.controller.HandleRoomReconnect(roomContext(102, "new-b"), &pb.RoomReconnectRequest{RoomID: 81001, Epoch: 2})
+	if err != nil || reconnected.Code != 0 || reconnected.Info.Epoch != 3 {
+		t.Fatalf("reconnect: %+v %v", reconnected, err)
+	}
+	changed, err := roomlogic.Disconnect(context.Background(), f.controller.NestClient(), 81001, 102, 2)
+	if err != nil || changed {
+		t.Fatalf("old close: %v %v", changed, err)
+	}
+	closed, err := f.controller.HandleRoomClose(roomContext(102, "new-b"), &pb.RoomCloseRequest{RoomID: 81001, Epoch: 3})
+	if err != nil || closed.Code != 0 {
+		t.Fatalf("close: %+v %v", closed, err)
+	}
+}
+
+func TestRoomPBPreservesSnapshotAndInvalidRequestsFailClosed(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	if err := roomlogic.Open(context.Background(), f.registry, 81002, 4); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := pb.MarshalRoomJoinRequest(&pb.RoomJoinRequest{RoomID: 81002})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pb.UnmarshalRoomJoinRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := f.controller.HandleRoomJoin(roomContext(201, "d"), request)
+	if err != nil || response.Code != 0 {
+		t.Fatalf("%+v %v", response, err)
+	}
+	raw, err = pb.MarshalRoomJoinResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := pb.UnmarshalRoomJoinResponse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Info == nil || decoded.Info.RoomID != 81002 || decoded.Info.Capacity != 4 || decoded.Info.Epoch != 1 || len(decoded.Info.Seats) != 1 || decoded.Info.Seats[0].PlayerID != 201 || !decoded.Info.Seats[0].Connected {
+		t.Fatalf("PB roundtrip: %+v", decoded.Info)
+	}
+	bad, err := f.controller.HandleRoomJoin(roomContext(201, "d"), &pb.RoomJoinRequest{RoomID: -1})
+	if err != nil || bad.Code == 0 || bad.Info != nil {
+		t.Fatalf("invalid room: %+v %v", bad, err)
+	}
+	if _, err := f.controller.HandleRoomJoin(&playeraccess.Context{}, request); err == nil {
+		t.Fatal("anonymous context accepted")
+	}
+	if _, err := f.controller.HandleRoomJoin(roomContext(201, "d"), nil); err == nil {
+		t.Fatal("nil request accepted")
+	}
+}
+
+type roomUnavailableLoader struct{ err error }
+
+func (loader roomUnavailableLoader) LoadEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	return nil, loader.err
+}
+
+func TestRoomOpenUsesLifecycleAndNeverCreatesAfterLoadFailure(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	if err := roomlogic.Open(context.Background(), f.registry, 81003, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := roomlogic.Open(context.Background(), f.registry, 81003, 2); err != nil {
+		t.Fatal(err)
+	}
+	if f.access.Manager().Len() != 1 {
+		t.Fatal("repeated open created another entity")
+	}
+	if err := roomlogic.Open(context.Background(), f.registry, 81003, 3); err == nil {
+		t.Fatal("open reset the capacity")
+	}
+	if err := roomlogic.Open(context.Background(), f.registry, 81004, 65); err == nil || f.access.Manager().Len() != 1 {
+		t.Fatal("invalid rules created an entity")
+	}
+	unavailable := errors.New("room store unavailable")
+	release, err := f.access.ConfigureLoader(roomUnavailableLoader{err: unavailable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := roomlogic.Open(context.Background(), f.registry, 81004, 2); !errors.Is(err, unavailable) {
+		t.Fatalf("storage failure became creation: %v", err)
+	}
+	if f.access.Manager().Len() != 1 {
+		t.Fatal("load failure created an empty room")
+	}
+}
+
+type roomSession struct {
+	playerID int64
+	key      string
+}
+
+func (s roomSession) Principal() gateway.Principal {
+	return gateway.Principal{PlayerID: s.playerID, SessionID: "account-session"}
+}
+func (s roomSession) Reply(context.Context, any) error { return nil }
+func (s roomSession) Close(error) error                { return nil }
+func (s roomSession) ConnectionID() string             { return s.key }
+func roomContext(playerID int64, key string) *playeraccess.Context {
+	return &playeraccess.Context{PlayerID: playerID, Session: roomSession{playerID: playerID, key: key}}
+}

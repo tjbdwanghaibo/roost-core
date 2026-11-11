@@ -1,0 +1,77 @@
+//go:build protocoldef
+
+package protocoldef
+
+// RoomInfo 是成员才能读取的快照；Epoch 仅属于请求者，其他成员不暴露代际。
+type RoomInfo struct {
+	RoomID   int64      `pb:"1"`
+	Capacity int32      `pb:"2"`
+	HostID   int64      `pb:"3"`
+	Epoch    uint64     `pb:"4"`
+	Seats    []RoomSeat `pb:"5"`
+}
+type RoomSeat struct {
+	PlayerID  int64 `pb:"1"`
+	Slot      int32 `pb:"2"`
+	Connected bool  `pb:"3"`
+}
+
+type RoomJoinRequest struct {
+	RoomID int64 `pb:"1"`
+}
+type RoomJoinResponse struct {
+	Code   int32     `pb:"1"`
+	Reason string    `pb:"2"`
+	Info   *RoomInfo `pb:"3"`
+}
+
+type RoomReconnectRequest struct {
+	RoomID int64  `pb:"1"`
+	Epoch  uint64 `pb:"2"`
+}
+type RoomReconnectResponse struct {
+	Code   int32     `pb:"1"`
+	Reason string    `pb:"2"`
+	Info   *RoomInfo `pb:"3"`
+}
+
+type RoomLeaveRequest struct {
+	RoomID int64  `pb:"1"`
+	Epoch  uint64 `pb:"2"`
+}
+type RoomLeaveResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+}
+
+type RoomViewRequest struct {
+	RoomID int64 `pb:"1"`
+}
+type RoomViewResponse struct {
+	Code   int32     `pb:"1"`
+	Reason string    `pb:"2"`
+	Info   *RoomInfo `pb:"3"`
+}
+
+type RoomCloseRequest struct {
+	RoomID int64  `pb:"1"`
+	Epoch  uint64 `pb:"2"`
+}
+type RoomCloseResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+}
+
+//roost:protocol group=game handler=room
+type RoomProtocol interface {
+	//roost:msg id={{ID:protocol:RoomJoin}}
+	RoomJoin(RoomJoinRequest) RoomJoinResponse
+	//roost:msg id={{ID:protocol:RoomReconnect}}
+	RoomReconnect(RoomReconnectRequest) RoomReconnectResponse
+	//roost:msg id={{ID:protocol:RoomLeave}}
+	RoomLeave(RoomLeaveRequest) RoomLeaveResponse
+	//roost:msg id={{ID:protocol:RoomView}}
+	RoomView(RoomViewRequest) RoomViewResponse
+	//roost:msg id={{ID:protocol:RoomClose}}
+	RoomClose(RoomCloseRequest) RoomCloseResponse
+}

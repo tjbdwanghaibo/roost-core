@@ -255,7 +255,7 @@ const standaloneTestNamespace = "roost.gatebind.test"
 
 // startStandaloneGame 在 broker 上起一个 Game 接入：Bind 用 auth 鉴权，业务请求原样回显（stuckResponseID），
 // onActive 收到每次激活的完整绑定。
-func startStandaloneGame(t *testing.T, broker *loopbackBroker, identity ProcessIdentity, auth Authenticator, onActive func(Binding)) *GameIngress {
+func startStandaloneGame(t *testing.T, broker *loopbackBroker, identity ProcessIdentity, auth Authenticator, onActive func(Binding), inspect ...func(Session)) *GameIngress {
 	t.Helper()
 	config := DefaultConfig()
 	config.Namespace = standaloneTestNamespace
@@ -266,7 +266,10 @@ func startStandaloneGame(t *testing.T, broker *loopbackBroker, identity ProcessI
 	game, err := NewGameIngress(config, identity, GameDependencies{
 		Client: broker.client(inbox), Authenticator: auth, QueueFactory: serialTestQueueFactory, Ready: func() bool { return true },
 		Matches: func(context.Context, string, ProcessIdentity) (bool, error) { return true, nil },
-		Dispatch: func(_ context.Context, _ Session, _, seq uint32, _ wire.PayloadKind, payload []byte) (any, error) {
+		Dispatch: func(_ context.Context, session Session, _, seq uint32, _ wire.PayloadKind, payload []byte) (any, error) {
+			for _, check := range inspect {
+				check(session)
+			}
 			return &TCPResponse{MessageID: stuckResponseID, Sequence: seq, Payload: payload}, nil
 		},
 		OnActive: func(binding Binding, _ uint64) error {
@@ -290,6 +293,43 @@ func startStandaloneGame(t *testing.T, broker *loopbackBroker, identity ProcessI
 		}
 	})
 	return game
+}
+
+// 同一账号跨物理连接重连时，Game 端看到各自的可信 nonce；它不能退化成可复用的 SessionID。
+func TestGateForwardExposesTheBoundConnectionIdentity(t *testing.T) {
+	broker := newLoopbackBroker()
+	gateID := ProcessIdentity{ServerID: 11, Incarnation: "gate000000000001"}
+	gameID := ProcessIdentity{ServerID: 22, Incarnation: "game000000000001"}
+	auth := AuthenticatorFunc(func(context.Context, string, net.Addr) (Principal, error) {
+		return Principal{PlayerID: 7, ServerID: gameID.ServerID, SessionID: "same-account-session"}, nil
+	})
+	activated := make(chan Binding, 2)
+	observed := make(chan string, 2)
+	startStandaloneGame(t, broker, gameID, auth, func(binding Binding) { activated <- binding }, func(session Session) {
+		identified, ok := session.(interface{ ConnectionID() string })
+		if !ok {
+			observed <- ""
+			return
+		}
+		observed <- identified.ConnectionID()
+	})
+	server := startStandaloneGate(t, broker, gateID, gameID, auth)
+	var previous string
+	for _, generation := range []uint64{100, 200} {
+		connection := dialPendingGeneration(t, server, "ticket", generation)
+		if !handshakeOutcome(t, server, connection) {
+			t.Fatal("handshake failed")
+		}
+		if err := echoRequest(server, connection, 2); err != nil {
+			t.Fatal(err)
+		}
+		// Echo 返回前 Dispatch 与 OnActive 都已经执行；通道各有一条消息。
+		binding, key := <-activated, <-observed
+		if key == "" || key != binding.ConnectionNonce || key == previous || key == binding.SessionID {
+			t.Fatalf("connection key %q, previous %q, binding %+v", key, previous, binding)
+		}
+		previous = key
+	}
 }
 
 // startStandaloneGate 在 broker 上起一个独立 Gate 及它的 TCP 监听，所有连接都路由到 game。

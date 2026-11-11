@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **新增**（modules / codegen）：模块清单 `entities` 支持自带 Entity、DAO、lifecycle 与实体号分配；安装事务包含服务 owner / handler / shutdown 接线，失败整体回退，重复安装保留业务修改。新增 `room` 基础模块：1～64 席、房主交接、进出、CAS 重连、服务端开房与断线入口，22 条离线场景。房间操作同时检查可信连接 nonce 与持久代际，Gate 代理 Session 补齐只读 `ConnectionID()`；旧连接迟到的 Join/View/Leave 或断线不能影响新连接。自动断线订阅、房间广播、匹配移交与回合超时不在本批。详见 [room](modules/room/README.md) 与[交接](docs/maintenance/HANDOFF-2026-11-11-module-backlog.md)。 验证：全仓 164 测试包通过；13 模块 + 4 联动 228 PASS / 0 SKIP；重新生成 game-demo 670 PASS / 14 预期 SKIP；Room/Gate 定向 race、三项变异自检、build/vet、ID 与生成物漂移检查通过。
+
+
 - **新增**（业务模块 A1）：清单 `runtime` 声明服务级启动入口，安装记录保存 service、requires 与 runtime；生成 `modules_gen.go` 服务适配层，bootstrap 使用 `NewWithModules()`。保留业务 Service 文件及其可选接口；模块按依赖在业务 Init 前启动，业务先停、模块反向停，部分启动失败可清理、停机失败保留依赖供重试。生成过程与其他产物一起暂存提交，重复安装不变。接线契约见 [modules](modules/README.md#服务级启动与停机)。
 - **新增 / 统一实现**（skillbook + game-demo）：技能目录模块提供启动编译与 `SkillCatalog` 查询，同一份目录经 Registry 发布；JSON 和编译环境归工程。demo 只覆盖技能 JSON，删除 controller 的第二份目录缓存，消息号改由模块分配；场景使用本服务自己的 Nest 同步观察器，兼容服务适配层。模块自带 8 条场景和供 doctor 使用的目录编译检查。升级不兼容旧生成工程，请重新生成；不含技能执行 Host 或热更新。
 - **本批验证**：全仓 `go test -timeout 30m ./...` 164 个包通过；模块生成脚本 12 模块 + 4 联动共 206 PASS / 0 SKIP；新 game-demo 670 PASS / 14 显式开启项 SKIP、47 个有测试的包通过，build / vet、模块验收 135/0、ID / 生成漂移通过；独立 skill 自定义工程 177 个模块场景通过，新工程复验两项 doctor 问题已修。三项变异自检有效；根包和文档锚点通过。边界与复跑入口见 [业务模块交接 §2.1](docs/maintenance/HANDOFF-2026-11-11-module-backlog.md#21-本批接续结果)；真实依赖验收未做。

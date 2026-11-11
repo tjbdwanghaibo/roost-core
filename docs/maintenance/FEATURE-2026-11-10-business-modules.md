@@ -601,7 +601,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 2 | leaderboard | 排行：提交分数（可分周期）、一次请求查前 N 名与自己的名次；榜的规则是业务文件 | 托管 rank 服务 | 已有（20 条）；game-demo 的通关榜在用 |
 | 2 | mailbox | 邮件：列表、领附件、发件入口 `SendTo`；附件种类是登记点，金币内置，道具经 mailbox + bag 联动 | 托管 mail 服务；wallet | 已有（32 条；联动 mailbox+bag 9 条、mailbox+enter 5 条）；game-demo 的邮件在用 |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 已有（17 条）（目录是业务文件，没有用配置表） |
-| 3 | room | 带座位的房间实体：进出、连接代际、房主 | 独立实体（安装器要支持模块自带实体） | 未做 |
+| 3 | room | 带座位的房间实体：进出、连接代际、房主 | 自带 Room Entity、DAO、lifecycle，安装时分配实体号 | 已有基础模块（22 条）；匹配移交、回合与自动断线订阅不包含 |
 | 3 | matchroom | 匹配成局到房间的移交 | 托管 match 服务；room | 未做 |
 | 3 | turn | 回合推进：命令序号、超时（持久定时器） | room；定时器类型分配 | 未做 |
 | 3 | gift | 玩家间送礼：扣 → 送的 saga，失败补偿；扣款步骤按 sid 确切路由（v1.44.0） | bag；saga Mod 与 `roost add saga` 作为安装前置（安装器现在只检查、不代办）；服务级接线点（步骤消费者要在服务 `Init` 里启动、带属主核对） | 未做（2026-11-11 合入 v1.44.0 后评估：game-demo 的赠礼 saga 删掉交接代码后只剩约 700 行，适合拆；卡在安装器没有服务级接线点） |
@@ -609,7 +609,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 3 | scene | 场景：Scene 实体、进出场景、移动与视野、刷怪、心跳驱动与同步接线（现在只在 game-demo 里，约 2900 行参考实现；core 里只有视野 / AOI、同步视图、移动、时间域、地形这些零件） | 安装器要先支持模块自带实体与服务级接线点 | 未做。**维护者 2026-11-11 同意的顺序**：换服做完 → 补安装器这两个缺口（同时解开 room / matchroom / turn / gift）→ 把 demo 的场景拆成模块 → 再加功能，先后是：多场景管理（按需创建销毁、切换）、区域触发（可接 task 的事件）、附近聊天（chat + scene 联动）、分线、可交互对象 |
 | 4 | 配方 | `roost project new -recipe <name>`：一组模块加参数（休闲、回合对战……） | 模块够用之后 | 未做 |
 
-安装器还缺、按需要补的能力：模块自带实体（现在只能挂在已有实体上）、定时器类型分配、Init / Shutdown 接线点（推送、后台循环）、配置表与模块配置、更多的登记点（通用机制已有：清单的 `with` 联动文件，见 [modules/README](../../modules/README.md)；已有的登记点是 enter 的进入钩子，chat 与 mailbox 接在上面。还缺：mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
+安装器已支持自带实体与 Init / Shutdown 接线点（2026-11-11）；还缺、按需要补的能力：定时器类型分配、配置表与模块配置、更多的登记点（通用机制已有：清单的 `with` 联动文件，见 [modules/README](../../modules/README.md)；已有的登记点是 enter 的进入钩子，chat 与 mailbox 接在上面。还缺：mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
 
 task 要扩成核心系统的方向（未实施，按先后）：
 
@@ -643,7 +643,7 @@ task 要扩成核心系统的方向（未实施，按先后）：
 
 1. ~~game-demo 换用 profile / bag / leaderboard / mailbox~~（已完成，见 §20）。
 2. 还缺的登记点：wallet 的“消费成功”（要区分 `Apply` 命中去重回执与首次生效）、profile 的升级（现在是业务文件钩子，别的模块挂不上去）、enter 的首次发放（事务内）、leaderboard 的提交时机。每个都要有一个真实用它的模块一起做。
-3. room / matchroom / turn / scene / gift：要安装器先支持**模块自带实体**与**服务级接线点**（模块在服务 `Init` / `Shutdown` 里挂自己的消费者、心跳、同步接线），turn 另要定时器类型分配。
+3. room 基础模块、自带实体与服务级接线点已完成；matchroom / turn / scene / gift 继续推进，turn 另要定时器类型分配。
 4. shop 的商品目录、task 的任务表改成配置表（照 bag）；规则导出给客户端（stamina 的上限与周期、当前业务日）。
 5. 配方（`-recipe`）与 13 类玩法夹具的迁移。
 6. 用一个只凭 skill 的 agent 按一段不重合的需求再实测一遍：第二、三批模块、联动机制与 demo 换用之后的模块还没有被这样测过。

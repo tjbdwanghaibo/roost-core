@@ -1,0 +1,124 @@
+package roost
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// 自带实体不是前置命令：失败时实体、DAO、lifecycle、owner bootstrap 与配置必须一起消失。
+func TestModuleOwnedEntityInstallIsTransactional(t *testing.T) {
+	t.Parallel()
+	root, roost, try := moduleProject(t, "roommodule")
+	roost("add", "access", "player", "--service", "game")
+	roost("add", "transport", "tcp")
+	broken := filepath.Join(root, "game/handler/zz_broken.go")
+	if err := os.WriteFile(broken, []byte("package handler\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken()error{return nil}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before := moduleProjectDigest(t, root)
+	if out, err := try("module", "add", "room"); err == nil || !strings.Contains(err.Error(), "generate after installing modules") {
+		t.Fatalf("failed install: %v\n%s", err, out)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("failed install left entity / lifecycle / manifest / owner wiring / configs behind")
+	}
+	if err := os.Remove(broken); err != nil {
+		t.Fatal(err)
+	}
+	// 新号跳过业务已有的实体号；计划不写文件，真正安装沿用同一个号。
+	roost("add", "entity", "Arena", "--id", "3")
+	var plan ModulePlan
+	before = moduleProjectDigest(t, root)
+	if err := json.Unmarshal([]byte(roost("module", "plan", "room", "--json")), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("plan changed the project")
+	}
+	if len(plan.Modules) != 1 || plan.Modules[0].IDs["entity"]["Room"] != 4 || !contains(plan.Modules[0].Files, "game/lifecycle/room.go") {
+		t.Fatalf("plan=%+v", plan)
+	}
+	if len(plan.Prerequisites) != 0 {
+		t.Fatalf("owned entity leaked into prerequisites: %v", plan.Prerequisites)
+	}
+	roost("module", "add", "room")
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := manifest.Modules["room"]
+	if owned.IDs["entity"]["Room"] != 4 || owned.Service != "game" || !contains(owned.Files, "game/lifecycle/room.go") {
+		t.Fatalf("ownership=%+v", owned)
+	}
+	if err := checkEntityOwnersBeforeGenerate(root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := diffManifest(root, manifest, false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := VerifyModules(context.Background(), root, []string{"room"}, nil); err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 22 {
+		t.Fatalf("verify: %v %+v", err, report)
+	}
+	// 模块源码已经归业务所有，重复安装不能覆盖。
+	component := filepath.Join(root, "game/entities/room/room_component.go")
+	raw, err := os.ReadFile(component)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(component, append(raw, []byte("\n// project-owned rule extension\n")...), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before = moduleProjectDigest(t, root)
+	roost("module", "add", "room")
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("repeated install changed business source")
+	}
+}
+
+func TestModuleOwnedEntityRefusesExistingLifecycle(t *testing.T) {
+	t.Parallel()
+	root, _, try := moduleProject(t, "roomconflict")
+	file := filepath.Join(root, "game/lifecycle/room.go")
+	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("package lifecycle\n// business-owned\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before := moduleProjectDigest(t, root)
+	if _, err := try("module", "plan", "room"); err == nil || !strings.Contains(err.Error(), "owned entity Room conflicts") {
+		t.Fatal(err)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("conflict changed the project")
+	}
+}
+
+func TestModuleOwnedEntityValidationRequiresDefinitionsAndUniqueNames(t *testing.T) {
+	yaml := moduleFixtureYAML + "entities: [Demo]\n"
+	files := map[string]string{
+		"game/x.go":                    "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}} {{ID:entity:Demo}}\n",
+		"game/entities/demo/entity.go": "package demo\n",
+		"db/def/demo.go":               "package dbdef\n",
+	}
+	if _, err := loadModuleCatalogFS(moduleFixtureFS(yaml, files)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadModuleCatalogFS(moduleFixtureFS(strings.Replace(yaml, "[Demo]", "[Demo, Demo]", 1), files)); err == nil {
+		t.Fatal("duplicate entity accepted")
+	}
+	delete(files, "db/def/demo.go")
+	if _, err := loadModuleCatalogFS(moduleFixtureFS(yaml, files)); err == nil || !strings.Contains(err.Error(), "requires template db/def/demo.go") {
+		t.Fatal(err)
+	}
+	files["db/def/demo.go"] = "package dbdef\n"
+	files["game/lifecycle/demo.go"] = "package lifecycle\n"
+	if _, err := loadModuleCatalogFS(moduleFixtureFS(yaml, files)); err == nil || !strings.Contains(err.Error(), "lifecycle is supplied by the installer") {
+		t.Fatal(err)
+	}
+}

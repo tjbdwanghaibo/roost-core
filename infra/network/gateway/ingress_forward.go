@@ -287,6 +287,13 @@ type gameSession struct {
 }
 
 func (session gameSession) Principal() Principal { return clonePrincipal(session.resource.principal) }
+
+// ConnectionID 与直连 TCP 的 Session 一致，标识物理连接而不是可跨重连复用的账号会话。
+// 业务席位可用它隔离旧连接的迟到请求；身份只来自已验证的 Gate binding。
+func (session gameSession) ConnectionID() string {
+	return session.resource.record.identity.ConnectionNonce
+}
+
 func (session gameSession) Reply(ctx context.Context, value any) error {
 	reply, ok := value.(TCPReply)
 	if !ok {
