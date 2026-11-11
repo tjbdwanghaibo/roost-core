@@ -99,8 +99,11 @@ commit_all chat
 "$roost" module add enter > "$review_root/add-enter.log"
 grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_root/add-enter.log"
 ! grep -q 'roost add transport tcp' "$review_root/add-enter.log"
+# chat 与 enter 都装着了：chat 的联动文件（进入游戏时加进在线名单）在这一步写进工程，场景单独计数。
+grep -q 'glue chat with enter: written' "$review_root/add-enter.log"
+[[ -f game/chat/chat_enter.go ]]
 grep -q 'self_sync: true' roost.yaml
-expect_verify wallet=8 checkin=6 chat=8 enter=3
+expect_verify wallet=8 checkin=6 chat=8 enter=6 chat+enter=2
 go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review_root/test-all.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    self-sync' "$review_root/doctor.log"
@@ -110,7 +113,8 @@ grep -q '^OK    self-sync' "$review_root/doctor.log"
 commit_all enter
 "$roost" module add profile bag leaderboard mailbox > "$review_root/add-batch2.log"
 grep -q 'module wallet: already installed' "$review_root/add-batch2.log"
-expect_verify wallet=8 checkin=6 chat=8 enter=3 profile=16 bag=12 leaderboard=15 mailbox=21
+grep -q 'glue mailbox with enter: written' "$review_root/add-batch2.log"
+expect_verify wallet=8 checkin=6 chat=8 enter=6 chat+enter=2 profile=16 bag=12 leaderboard=15 mailbox=21 mailbox+enter=3
 go test -mod=mod ./... > "$review_root/test-all-batch2.log" 2>&1 || { tail -30 "$review_root/test-all-batch2.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK    collaborators:rank' "$review_root/doctor.log"
@@ -123,11 +127,12 @@ cd "$project"
 grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-all.log"
 grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_root/add-all.log"
 grep -q 'self_sync: true' roost.yaml
+grep -q 'glue chat with enter: written' "$review_root/add-all.log" && grep -q 'glue mailbox with enter: written' "$review_root/add-all.log"
 ! grep -rn '{{' db/def game/entities game/handler game/controllers internal/errors protocol/def >/dev/null
 commit_all all
 "$roost" module add enter bag mailbox > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=8 checkin=6 chat=8 enter=3 profile=16 bag=12 leaderboard=15 mailbox=21
+expect_verify wallet=8 checkin=6 chat=8 enter=6 chat+enter=2 profile=16 bag=12 leaderboard=15 mailbox=21 mailbox+enter=3
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1

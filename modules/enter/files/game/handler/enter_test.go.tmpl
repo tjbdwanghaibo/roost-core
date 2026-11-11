@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	gameenter "{{MODULE}}/game/enter"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 
@@ -89,7 +90,7 @@ func newEnterFixture(t *testing.T) *enterFixture {
 	return f
 }
 
-func (f *enterFixture) init() (bool, error) {
+func (f *enterFixture) init() (gameenter.InitResult, error) {
 	return f.inits.Sync_EnterInit(context.Background(), f.player.ID())
 }
 
@@ -110,9 +111,9 @@ func (f *enterFixture) snapshot(t *testing.T) (initialized bool, firstAt int64) 
 func TestEnterFirstTimeRunsTheInitialization(t *testing.T) {
 	f := newEnterFixture(t)
 	start := f.now.Load()
-	first, err := f.init()
-	if err != nil || !first {
-		t.Fatalf("first enter: first=%v err=%v", first, err)
+	result, err := f.init()
+	if err != nil || !result.First || result.FirstAtUnixMilli != start {
+		t.Fatalf("first enter: result=%+v err=%v, want first at %d", result, err, start)
 	}
 	if initialized, firstAt := f.snapshot(t); !initialized || firstAt != start {
 		t.Fatalf("initialized=%v firstAt=%d, want true and %d", initialized, firstAt, start)
@@ -127,8 +128,9 @@ func TestEnterAgainDoesNothing(t *testing.T) {
 	}
 	f.now.Add(int64(48 * time.Hour / time.Millisecond))
 	for i := 0; i < 3; i++ {
-		if first, err := f.init(); err != nil || first {
-			t.Fatalf("enter %d after the first: first=%v err=%v", i+2, first, err)
+		// 再进入不算首次，但仍带着首次初始化的时间：钩子拿它当注册时间用。
+		if result, err := f.init(); err != nil || result.First || result.FirstAtUnixMilli != start {
+			t.Fatalf("enter %d after the first: result=%+v err=%v, want not first, first at %d", i+2, result, err, start)
 		}
 	}
 	if _, firstAt := f.snapshot(t); firstAt != start {
@@ -147,7 +149,8 @@ func TestEnterRejectedInitializationIsDoneOnTheNextEnter(t *testing.T) {
 		t.Fatalf("rollback left initialized=%v firstAt=%d", initialized, firstAt)
 	}
 	f.committer.reject.Store(false)
-	if first, err := f.init(); err != nil || !first {
-		t.Fatalf("enter after the rollback: first=%v err=%v", first, err)
+	retryAt := f.now.Add(int64(time.Minute / time.Millisecond))
+	if result, err := f.init(); err != nil || !result.First || result.FirstAtUnixMilli != retryAt {
+		t.Fatalf("enter after the rollback: result=%+v err=%v, want first at %d", result, err, retryAt)
 	}
 }

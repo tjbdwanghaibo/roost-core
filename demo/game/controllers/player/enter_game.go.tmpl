@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	apperrors "{{MODULE}}/internal/errors"
+	gameenter "{{MODULE}}/game/enter"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "{{MODULE}}/game/playeraccess"
@@ -98,7 +99,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	// Player created by a login that crashed before this point is initialized
 	// by the next one, and a repeated login does nothing. The new player's
 	// grants are written in game/entities/player/enter_first.go.
-	first, err := syncsender.NewEnterInitSender(controller.NestClient()).Sync_EnterInit(context.Context(), subject.ID())
+	entered, err := syncsender.NewEnterInitSender(controller.NestClient()).Sync_EnterInit(context.Context(), subject.ID())
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
@@ -170,18 +171,21 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 			slog.Warn("enter_game: server-wide mail not pulled", "player_id", context.PlayerID, "err", pullErr)
 		}
 	}
-	// From here on the player receives world-channel pushes.
-	// Chat presence and the login announcement go through the chat module
-	// (game/controllers/chat): the player joins this process's online set,
-	// and the game says so on the world channel through the privileged system
-	// path — a client cannot publish there. The request id is the session and
-	// frame, so a retried login frame is announced once.
-	controller.Chat().Presence().Add(context.PlayerID)
+	// The enter module's hooks (game/enter): what other modules do when a
+	// player enters. The chat module's glue (game/chat/chat_enter.go, written
+	// because both modules are installed) puts the player in this process's
+	// online set here, so from now on they receive world-channel pushes. A
+	// failed hook is logged and does not fail the login.
+	gameenter.RunEntered(context.Context(), controller.registry, gameenter.Entered{PlayerID: context.PlayerID, InitResult: entered})
+	// The login announcement stays the demo's own decision: the game says so on
+	// the world channel through the chat module's privileged system path — a
+	// client cannot publish there. The request id is the session and frame, so
+	// a retried login frame is announced once.
 	requestID := fmt.Sprintf("enter:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
 	if err := controller.Chat().AnnounceWorld(context.Context(), fmt.Sprintf("player %d entered the world", context.PlayerID), requestID); err != nil {
 		slog.Warn("enter_game: login not announced on the world channel", "player_id", context.PlayerID, "err", err)
 	}
-	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created, First: first}, nil
+	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created, First: entered.First}, nil
 }
 
 // loginContext is the login step's share of the request: the configured

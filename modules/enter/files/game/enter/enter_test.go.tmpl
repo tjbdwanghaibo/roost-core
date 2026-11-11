@@ -1,0 +1,95 @@
+package enter
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// withHooks 把登记表换成这条用例自己的，结束时换回去：工程里别的功能在 init 里登记的钩子不参与。
+func withHooks(t *testing.T) {
+	t.Helper()
+	hooksMu.Lock()
+	saved := hooks
+	hooks = map[string]Hook{}
+	hooksMu.Unlock()
+	t.Cleanup(func() {
+		hooksMu.Lock()
+		hooks = saved
+		hooksMu.Unlock()
+	})
+}
+
+func TestEnterHooksRunInNameOrderWithTheEnteredFacts(t *testing.T) {
+	withHooks(t)
+	var order []string
+	var seen []Entered
+	record := func(name string) Hook {
+		return func(_ context.Context, _ *app.Registry, entered Entered) error {
+			order = append(order, name)
+			seen = append(seen, entered)
+			return nil
+		}
+	}
+	OnEntered("mailbox", record("mailbox"))
+	OnEntered("chat", record("chat"))
+	OnEntered("zeta", record("zeta"))
+	entered := Entered{PlayerID: 94001, InitResult: InitResult{First: true, FirstAtUnixMilli: 1_700_000_000_000}}
+	if failed := RunEntered(context.Background(), nil, entered); len(failed) != 0 {
+		t.Fatalf("failed hooks = %v, want none", failed)
+	}
+	if want := []string{"chat", "mailbox", "zeta"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	for i, got := range seen {
+		if got != entered {
+			t.Fatalf("hook %d saw %+v, want %+v", i, got, entered)
+		}
+	}
+}
+
+// 一个钩子失败不让登录失败，也不挡住后面的钩子；失败的名字报给调用方。
+func TestEnterHookFailureDoesNotStopTheOthers(t *testing.T) {
+	withHooks(t)
+	ran := map[string]int{}
+	OnEntered("a", func(context.Context, *app.Registry, Entered) error { ran["a"]++; return nil })
+	OnEntered("b", func(context.Context, *app.Registry, Entered) error { ran["b"]++; return errors.New("mail service is away") })
+	OnEntered("c", func(context.Context, *app.Registry, Entered) error { ran["c"]++; return nil })
+	failed := RunEntered(context.Background(), nil, Entered{PlayerID: 94002})
+	if want := []string{"b"}; !reflect.DeepEqual(failed, want) {
+		t.Fatalf("failed hooks = %v, want %v", failed, want)
+	}
+	if ran["a"] != 1 || ran["b"] != 1 || ran["c"] != 1 {
+		t.Fatalf("hooks ran %v, want each once", ran)
+	}
+	// 下一次进入全部再跑一遍：钩子是“每次进入都做”，不是“失败了才补”。
+	RunEntered(context.Background(), nil, Entered{PlayerID: 94002})
+	if ran["a"] != 2 || ran["b"] != 2 || ran["c"] != 2 {
+		t.Fatalf("after the second enter hooks ran %v, want each twice", ran)
+	}
+}
+
+// 登记写错在启动时就暴露：重名、空名、nil 都 panic。
+func TestEnterHookRegistrationMistakesPanic(t *testing.T) {
+	withHooks(t)
+	noop := func(context.Context, *app.Registry, Entered) error { return nil }
+	OnEntered("chat", noop)
+	mustPanic := func(what string, register func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", what)
+			}
+		}()
+		register()
+	}
+	mustPanic("a duplicate name", func() { OnEntered("chat", noop) })
+	mustPanic("an empty name", func() { OnEntered("", noop) })
+	mustPanic("a nil hook", func() { OnEntered("mailbox", nil) })
+	if failed := RunEntered(context.Background(), nil, Entered{}); len(failed) != 0 {
+		t.Fatalf("failed hooks = %v after rejected registrations", failed)
+	}
+}

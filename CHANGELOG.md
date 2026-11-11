@@ -12,6 +12,14 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **新增**（codegen + modules）：**模块之间的联动文件（`with`）与 enter 的进入钩子**（第二批模块暴露的最大缺口：一个模块没法在另一个模块的入口里加一步；维护者 2026-11-11 同意先补这一项）。
+  - 安装器：模块可以带 `with/<另一个模块>/` 下的联动文件，清单里用 `with.<另一个模块>` 声明（一句话说明、可选的场景数）。两个模块都装着时才写进工程，不论先装哪个，在第二个装上的那一次写；归属记在 `roost.yaml` 的 `modules.<name>.with`。`plan` / `add` 输出 `glue <模块> with <另一个模块>`（`--json` 的 `glue` 数组），`verify` 把联动的场景单独列为 `<模块>+<另一个模块>`。落点被业务文件占着时拒绝、工程不变；两个都早已装好的不补。模块库加载时另外检查：没有两处写同一个落点。
+  - enter 模块：新增包 `game/enter`——进入钩子的登记点（`OnEntered` 在 `init` 里登记，`RunEntered` 由进入端点在首次初始化成功之后调用，按名字顺序执行，失败只记日志、不让登录失败）。首次初始化的结果由 `bool` 改为 `gameenter.InitResult{First, FirstAtUnixMilli}`：每次进入都带上首次进入的时间，可以当注册时间用。场景数 3 → 6。
+  - 两组联动：chat + enter（进入游戏时加进世界频道的在线名单，2 条场景）；mailbox + enter（进入游戏时 `PullBroadcasts`，注册时间取首次进入的时间，画像规则在联动文件里改，3 条场景）。
+  - game-demo：进入流程在首次初始化之后调 `gameenter.RunEntered`，不再自己往聊天的在线名单里加人（生成时 enter 与 chat 都装着，联动文件一起写进工程）；登录公告仍是 demo 自己发。
+  - **升级要求**：无兼容处理（未上线）。已装着 enter 的工程不会自动得到新的登记点；重新生成或照模块文件手工改。
+  - 验证：`go test ./codegen/internal/roost -run 'TestModuleWith|TestModuleGlue'`（清单规则 8 种拒绝；先装 chat 后装 enter 的全流程：占用落点拒绝、plan 列出、写入与归属、重复安装无变化、验收分项）；全新工程两种安装顺序 `module verify` 分项全对、`go test ./...` 通过；重新生成的 demo build / vet / id check / generate --check / `go test ./...`（离线 40 个包）通过。真实依赖下的 dev-run 没有跑。
+
 - **新增**（modules）：**第二批业务模块 profile、bag、leaderboard、mailbox**（维护者 2026-11-11：“继续拆下一批”），照 game-demo 的做法拆成独立模块，只要求新生成的工程能直接用。
   - `profile`（16 条场景）：名字、等级、经验；改名协议、服务端发经验、升级钩子（业务文件）。
   - `bag`（12 条）：按道具号堆叠的背包；丢弃协议、服务端发放；道具合法性是业务文件。

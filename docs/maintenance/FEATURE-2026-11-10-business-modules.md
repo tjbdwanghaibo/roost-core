@@ -609,7 +609,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 1 | wallet | 货币：余额、`Add`、带去重窗口的 `Apply`、消费协议 | — | 已有（8 条） |
 | 1 | checkin | 每日签到，奖励经 wallet | wallet | 已有（6 条） |
 | 1 | chat | 世界与私聊的发送、翻历史 | 托管 chat 服务；`replaces`（已做） | 已有（8 条）；game-demo 在用 |
-| 2 | enter | 进入游戏端点（建档）与首次初始化：做过没有记在档里，每次进入都问；新玩家的初始发放写在业务文件 `enter_first.go` 里（没有做模块间的自动登记）。安装时打开玩家 TCP 接入与自身视图 | 清单的 `access`（已做） | 已有（3 条）；game-demo 用它的协议、域与首次初始化 |
+| 2 | enter | 进入游戏端点（建档）与首次初始化：做过没有记在档里，每次进入都问；新玩家的初始发放写在业务文件 `enter_first.go` 里（没有做模块间的自动登记）。安装时打开玩家 TCP 接入与自身视图 | 清单的 `access`（已做） | 已有（6 条，含进入钩子的登记点）；game-demo 用它的协议、域、首次初始化与进入钩子 |
 | 2 | profile | 名字、等级、经验与升级 | — | 已有（16 条） |
 | 2 | bag | 道具背包：增减、上限、按道具号堆叠 | — | 已有（12 条） |
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 未做 |
@@ -622,6 +622,6 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 3 | turn | 回合推进：命令序号、超时（持久定时器） | room；定时器类型分配 | 未做 |
 | 4 | 配方 | `roost project new -recipe <name>`：一组模块加参数（休闲、回合对战……） | 模块够用之后 | 未做 |
 
-安装器还缺、按需要补的能力：模块自带实体（现在只能挂在已有实体上）、定时器类型分配、Init / Shutdown 接线点（推送、后台循环）、配置表与模块配置、模块之间的登记点（第二批做下来最缺的一项：enter 的进入钩子让 mailbox 拉广播邮件、mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
+安装器还缺、按需要补的能力：模块自带实体（现在只能挂在已有实体上）、定时器类型分配、Init / Shutdown 接线点（推送、后台循环）、配置表与模块配置、更多的登记点（通用机制已有：清单的 `with` 联动文件，见 [modules/README](../../modules/README.md)；已有的登记点是 enter 的进入钩子，chat 与 mailbox 接在上面。还缺：mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
 
 每个新模块的验收不变：全新工程上单独安装、与已有模块一起安装、重复安装无变化、`roost module verify` 的场景数；写进 `scripts/test-modules-generated.sh`。每批做完用一个只凭 skill 的 agent 按一段不重合的需求实测一遍。

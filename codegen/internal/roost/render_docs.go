@@ -549,6 +549,9 @@ modules 是 roost module add 写下的归属清单，键为模块名：
           - PlayerDao.WalletLedger
         files:                  # 写入的业务文件：归工程所有，可以直接改
           - game/handler/wallet_spend.go
+        with:                   # 与别的已装模块的联动文件（两个都装着时才写），键是另一个模块
+          enter:
+            - game/chat/chat_enter.go
 
 由安装器写入，不要手工增删：删掉一条记录不会删掉工程里的文件，安装器却会把这个模块当成没装过。模块没有
 卸载命令，分配过的号与存储键不回收；要去掉一个模块时按这份清单手工删文件和 DAO 字段。roost module list 看

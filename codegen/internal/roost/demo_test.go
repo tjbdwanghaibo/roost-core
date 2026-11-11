@@ -504,8 +504,16 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if enter := read("game/controllers/enter/enter_game.go"); !strings.Contains(enter, "controller.player.EnterGame(") {
 		t.Errorf("the enter endpoint does not hand over to the demo's own enter flow:\n%s", enter)
 	}
-	if flow := read("game/controllers/player/enter_game.go"); !strings.Contains(flow, "Sync_EnterInit(") {
+	flow := read("game/controllers/player/enter_game.go")
+	if !strings.Contains(flow, "Sync_EnterInit(") {
 		t.Errorf("the demo's enter flow does not run the enter module's first-time init:\n%s", flow)
+	}
+	// enter 与 chat 都装着：chat 的联动文件登记了进入钩子，demo 的进入流程执行钩子而不是自己加在线名单。
+	if !strings.Contains(flow, "gameenter.RunEntered(") || strings.Contains(flow, "Presence().Add(") {
+		t.Errorf("the demo's enter flow does not go through the enter hooks:\n%s", flow)
+	}
+	if glue := read("game/chat/chat_enter.go"); !strings.Contains(glue, `gameenter.OnEntered("chat"`) {
+		t.Errorf("the chat+enter glue was not written into the demo:\n%s", glue)
 	}
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "transport.RegisterDialer(") {
 		t.Errorf("playertcp does not register a robot dialer:\n%s", conn)

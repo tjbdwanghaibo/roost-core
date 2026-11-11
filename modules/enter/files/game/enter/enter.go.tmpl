@@ -1,0 +1,84 @@
+// Package enter 是“玩家进入游戏”这件事留给别的功能的登记点，以及进入端点与首次初始化之间传的结果。
+//
+// 为什么要有登记点：进入游戏之后要顺带做的事属于各个功能自己（聊天把玩家加进在线名单、
+// 邮件把离线期间的全服邮件合并进邮箱……），进入端点不该认识它们。功能在自己的包里用 init 登记一个钩子，
+// 进入端点在首次初始化成功之后调 RunEntered，按名字顺序逐个执行。
+//
+// 这个包不 import 任何 controller 或实体包，所以谁都可以 import 它而不成环。
+package enter
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sort"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// InitResult 是首次初始化（Nest handler EnterInit）的结果。
+type InitResult struct {
+	// First 为 true 表示这一次进入执行了首次初始化（新玩家）。
+	First bool
+	// FirstAtUnixMilli 是这名玩家首次初始化提交时的业务时间。首次与之后的每次进入都填同一个值，
+	// 所以它可以当作“注册时间”用（例如全服邮件的“注册早于发送才收得到”）。
+	FirstAtUnixMilli int64
+}
+
+// Entered 是一次成功的进入：Player 已经加载或创建，首次初始化已经提交。
+type Entered struct {
+	PlayerID int64
+	InitResult
+}
+
+// Hook 是进入之后顺带做的一件事。它在事务之外、端点的请求上下文里执行，约定是：
+//
+//   - 可以重复：同一名玩家每次进入都会调，重连、重试登录帧也会调；
+//   - 不是正确性的唯一保证：返回错误只记一条 Warn，不让登录失败，也不影响别的钩子，
+//     下一次进入会再调。必须成功的事（初始发放）写进首次初始化的事务，不写在这里；
+//   - 要快：它占用的是登录请求的时间预算，跨进程调用要用传进来的 ctx。
+type Hook func(ctx context.Context, registry *app.Registry, entered Entered) error
+
+var (
+	hooksMu sync.RWMutex
+	hooks   = map[string]Hook{}
+)
+
+// OnEntered 登记一个钩子，name 用功能自己的名字（模块名）。只在 init 里调用：登记是程序结构的一部分，
+// 重名、空名或 nil 是写错了，直接 panic，不留到运行时才发现少了一个。
+func OnEntered(name string, hook Hook) {
+	if name == "" || hook == nil {
+		panic("enter: OnEntered needs a name and a hook")
+	}
+	hooksMu.Lock()
+	defer hooksMu.Unlock()
+	if _, taken := hooks[name]; taken {
+		panic(fmt.Sprintf("enter: hook %q is registered twice", name))
+	}
+	hooks[name] = hook
+}
+
+// RunEntered 按名字顺序执行全部钩子，返回失败的钩子名（给测试与排查用；调用方不必处理）。
+// 进入端点在首次初始化成功之后调用它；工程自己改写进入流程时也在同一个位置调。
+func RunEntered(ctx context.Context, registry *app.Registry, entered Entered) []string {
+	hooksMu.RLock()
+	names := make([]string, 0, len(hooks))
+	for name := range hooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	run := make([]Hook, len(names))
+	for i, name := range names {
+		run[i] = hooks[name]
+	}
+	hooksMu.RUnlock()
+	var failed []string
+	for i, hook := range run {
+		if err := hook(ctx, registry, entered); err != nil {
+			failed = append(failed, names[i])
+			slog.Warn("enter: hook failed; it runs again on the next enter", "hook", names[i], "player_id", entered.PlayerID, "err", err)
+		}
+	}
+	return failed
+}

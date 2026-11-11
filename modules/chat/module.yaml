@@ -13,3 +13,10 @@ verify:
   packages: [./game/chat, ./game/controllers/chat, ./internal/service/chat]
   run: ^TestChat
   pass: 8
+with:
+  enter:
+    summary: 玩家进入游戏时加进世界频道的在线名单
+    verify:
+      packages: [./game/chat]
+      run: ^TestWithChatEnter
+      pass: 2

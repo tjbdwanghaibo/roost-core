@@ -38,6 +38,8 @@ type ModulePlan struct {
 	// Prerequisites 是安装前要先执行的 roost add 命令（plan 只列出，add 会执行）。
 	Prerequisites []string         `json:"prerequisites"`
 	Modules       []ModulePlanItem `json:"modules"`
+	// Glue 是这次要写的联动文件：两个模块都装着（其中至少一个是这次装的）时，把一方接到另一方的登记点上。
+	Glue []ModuleGlueItem `json:"glue"`
 	// Applied 为 true 表示这份计划已经执行（roost module add 的输出）。
 	Applied bool `json:"applied"`
 }
@@ -61,6 +63,18 @@ type ModulePlanItem struct {
 	Verify   ModuleVerify `json:"verify"`
 
 	spec ModuleSpec
+}
+
+// ModuleGlueItem 是一组联动文件：Module 的 with/<With>/ 下的文件，归 Module 所有。
+type ModuleGlueItem struct {
+	Module  string        `json:"module"`
+	With    string        `json:"with"`
+	Summary string        `json:"summary"`
+	Files   []string      `json:"files"`
+	Verify  *ModuleVerify `json:"verify,omitempty"`
+
+	spec ModuleSpec
+	ids  map[string]map[string]int64
 }
 
 const (
@@ -106,7 +120,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	if err != nil {
 		return ModulePlan{}, err
 	}
-	plan := ModulePlan{Service: service, Prerequisites: []string{}, Modules: []ModulePlanItem{}}
+	plan := ModulePlan{Service: service, Prerequisites: []string{}, Modules: []ModulePlanItem{}, Glue: []ModuleGlueItem{}}
 	allocator, err := newModuleIDAllocator(root, manifest)
 	if err != nil {
 		return ModulePlan{}, err
@@ -152,7 +166,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		}
 		for _, rel := range spec.Files {
 			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
-				body, renderErr := renderModuleFile(manifest, service, spec, rel, item.IDs)
+				body, renderErr := renderModuleFile(manifest, service, spec, "files", rel, item.IDs)
 				if renderErr != nil {
 					return ModulePlan{}, renderErr
 				}
@@ -181,7 +195,63 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		}
 		plan.Modules = append(plan.Modules, item)
 	}
+	if plan.Glue, err = planModuleGlue(root, manifest, catalog, service, plan.Modules); err != nil {
+		return ModulePlan{}, err
+	}
 	return plan, nil
+}
+
+// planModuleGlue 算出这次要写的联动文件。一对模块的联动在第二个装上的那一次写：两个都在场
+// （已装或这次装）、其中至少一个是这次装的、并且这一对还没有接过。两个都早已装好的不补——
+// 已装的源码归工程所有，可能已经改过，安装器不回头往里加东西。
+func planModuleGlue(root string, manifest Manifest, catalog map[string]ModuleSpec, service string, items []ModulePlanItem) ([]ModuleGlueItem, error) {
+	present := map[string]bool{}
+	installing := map[string]bool{}
+	ids := map[string]map[string]map[string]int64{}
+	for name, installed := range manifest.Modules {
+		present[name] = true
+		ids[name] = installed.IDs
+	}
+	for _, item := range items {
+		present[item.Name] = true
+		ids[item.Name] = item.IDs
+		installing[item.Name] = item.Status == moduleStatusInstall
+	}
+	glue := []ModuleGlueItem{}
+	for _, owner := range sortedModuleNames(catalog) {
+		spec := catalog[owner]
+		if !present[owner] {
+			continue
+		}
+		for _, other := range spec.withNames() {
+			if !present[other] || !(installing[owner] || installing[other]) {
+				continue
+			}
+			if _, done := manifest.Modules[owner].With[other]; done {
+				continue
+			}
+			with := spec.With[other]
+			item := ModuleGlueItem{Module: owner, With: other, Summary: with.Summary, Files: append([]string{}, with.Files...), Verify: with.Verify, spec: spec, ids: ids[owner]}
+			for _, rel := range with.Files {
+				current, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+				if os.IsNotExist(err) {
+					continue
+				}
+				if err != nil {
+					return nil, err
+				}
+				body, err := renderModuleFile(manifest, service, spec, path.Join("with", other), rel, item.ids)
+				if err != nil {
+					return nil, err
+				}
+				if !bytes.Equal(current, body) {
+					return nil, fmt.Errorf("module %s with %s: %s already exists and is not this glue file; the installer does not overwrite business files (rename or remove it)", owner, other, rel)
+				}
+			}
+			glue = append(glue, item)
+		}
+	}
+	return glue, nil
 }
 
 // checkModuleNeeds 检查模块对工程的前提。只检查不代办：改 roost.yaml 的装配是工程的决定。
@@ -288,6 +358,9 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		}
 		touched = append(touched, paths...)
 	}
+	for _, glue := range plan.Glue {
+		touched = append(touched, glue.Files...)
+	}
 	backups, err := captureFiles(root, touched)
 	if err != nil {
 		return ModulePlan{}, err
@@ -307,6 +380,24 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 			return fail(fmt.Errorf("module %s: %w", item.Name, err))
 		}
 		manifest.Modules[item.Name] = record
+	}
+	// 联动文件在全部模块写完之后写：它们同时引用两边的包。归属记在拥有它的那个模块名下。
+	for _, glue := range plan.Glue {
+		for _, rel := range glue.Files {
+			body, err := renderModuleFile(manifest, plan.Service, glue.spec, path.Join("with", glue.With), rel, glue.ids)
+			if err != nil {
+				return fail(err)
+			}
+			if err := writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644); err != nil {
+				return fail(fmt.Errorf("module %s with %s: %w", glue.Module, glue.With, err))
+			}
+		}
+		record := manifest.Modules[glue.Module]
+		if record.With == nil {
+			record.With = map[string][]string{}
+		}
+		record.With[glue.With] = append([]string(nil), glue.Files...)
+		manifest.Modules[glue.Module] = record
 	}
 	if err := saveManifest(root, manifest); err != nil {
 		return fail(err)
@@ -447,7 +538,7 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 		}
 	}
 	for _, rel := range spec.Files {
-		body, err := renderModuleFile(manifest, service, spec, rel, item.IDs)
+		body, err := renderModuleFile(manifest, service, spec, "files", rel, item.IDs)
 		if err != nil {
 			return InstalledModule{}, err
 		}
@@ -459,8 +550,9 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 }
 
 // renderModuleFile 渲染一个模板：工程名字占位、分配到的号，Go 文件再格式化一遍。
-func renderModuleFile(manifest Manifest, service string, spec ModuleSpec, rel string, ids map[string]map[string]int64) ([]byte, error) {
-	raw, err := fs.ReadFile(modules.Files, path.Join(spec.Name, "files", rel+".tmpl"))
+// dir 是模板在模块目录里的位置：模块自己的文件是 "files"，联动文件是 "with/<另一个模块>"。
+func renderModuleFile(manifest Manifest, service string, spec ModuleSpec, dir, rel string, ids map[string]map[string]int64) ([]byte, error) {
+	raw, err := fs.ReadFile(modules.Files, path.Join(spec.Name, dir, rel+".tmpl"))
 	if err != nil {
 		return nil, fmt.Errorf("module %s: read template %s: %w", spec.Name, rel, err)
 	}

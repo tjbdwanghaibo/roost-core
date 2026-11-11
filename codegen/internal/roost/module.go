@@ -142,6 +142,9 @@ func listModules(rootFlag string, asJSON bool, stdout io.Writer) error {
 			}
 			fmt.Fprintf(stdout, "    state: %s\n", strings.Join(fields, ", "))
 		}
+		if names := listing.withNames(); len(names) > 0 {
+			fmt.Fprintf(stdout, "    with: %s (extra files when that module is installed too)\n", strings.Join(names, ", "))
+		}
 	}
 	fmt.Fprintln(stdout, "\n* = installed in this project.  Preview: roost module plan <name>   Install: roost module add <name>")
 	return nil
@@ -191,6 +194,16 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 				fmt.Fprintf(stdout, "  file:      %s (replaces the untouched generated stub)\n", file)
 				continue
 			}
+			fmt.Fprintf(stdout, "  file:      %s\n", file)
+		}
+	}
+	for _, glue := range plan.Glue {
+		if plan.Applied {
+			fmt.Fprintf(stdout, "glue %s with %s: written (%s)\n", glue.Module, glue.With, glue.Summary)
+		} else {
+			fmt.Fprintf(stdout, "glue %s with %s: will write (%s)\n", glue.Module, glue.With, glue.Summary)
+		}
+		for _, file := range glue.Files {
 			fmt.Fprintf(stdout, "  file:      %s\n", file)
 		}
 	}
@@ -257,19 +270,39 @@ func VerifyModules(ctx context.Context, root string, names []string, stderr io.W
 		if _, installed := manifest.Modules[name]; !installed || !known {
 			return ModuleVerifyReport{}, fmt.Errorf("module %q is not installed in this project", name)
 		}
-		args := append([]string{"test", "-mod=mod", "-race", "-count=1", "-v", "-run", spec.Verify.Run}, spec.Verify.Packages...)
-		output, runErr := runModuleTool(ctx, root, "go", args...)
-		result := ModuleVerifyResult{
-			Name: name, Want: spec.Verify.Pass,
-			Passed:  len(modulePassLine.FindAllIndex(output, -1)),
-			Skipped: len(moduleSkipLine.FindAllIndex(output, -1)),
+		scenarios := []struct {
+			name   string
+			verify ModuleVerify
+		}{{name, spec.Verify}}
+		// 已经写进工程的联动各自带场景时，跟在所属模块后面，名字是 <模块>+<另一个模块>。
+		others := make([]string, 0, len(manifest.Modules[name].With))
+		for other := range manifest.Modules[name].With {
+			others = append(others, other)
 		}
-		result.OK = runErr == nil && result.Passed == result.Want && result.Skipped == 0
-		if !result.OK {
-			report.OK = false
-			result.Detail = tailLines(output, 30)
+		sort.Strings(others)
+		for _, other := range others {
+			if with, ok := spec.With[other]; ok && with.Verify != nil {
+				scenarios = append(scenarios, struct {
+					name   string
+					verify ModuleVerify
+				}{name + "+" + other, *with.Verify})
+			}
 		}
-		report.Modules = append(report.Modules, result)
+		for _, scenario := range scenarios {
+			args := append([]string{"test", "-mod=mod", "-race", "-count=1", "-v", "-run", scenario.verify.Run}, scenario.verify.Packages...)
+			output, runErr := runModuleTool(ctx, root, "go", args...)
+			result := ModuleVerifyResult{
+				Name: scenario.name, Want: scenario.verify.Pass,
+				Passed:  len(modulePassLine.FindAllIndex(output, -1)),
+				Skipped: len(moduleSkipLine.FindAllIndex(output, -1)),
+			}
+			result.OK = runErr == nil && result.Passed == result.Want && result.Skipped == 0
+			if !result.OK {
+				report.OK = false
+				result.Detail = tailLines(output, 30)
+			}
+			report.Modules = append(report.Modules, result)
+		}
 	}
 	checks := []struct {
 		name string

@@ -1,0 +1,26 @@
+package chat
+
+import (
+	"context"
+
+	gameenter "{{MODULE}}/game/enter"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是 chat 与 enter 两个模块的联动：两个都装着时才有。
+//
+// 玩家一进入游戏就加进本进程的世界频道在线名单，从这一刻起收得到世界与系统频道的推送。
+// 没有这一步时，玩家要自己先发一句话或翻一次历史才算在线。离开名单不在这里：最后一条连接关闭、
+// 或推送时发现没有会话，由 chat 的 controller 移除。
+//
+// 登录公告（“某某进入了世界”）不在这里发：发不发、说什么是工程的决定。要发就在进入端点里
+// 调 chat controller 的 AnnounceWorld，幂等键用会话号加帧序号，重试的登录帧只公告一次。
+func init() {
+	gameenter.OnEntered("chat", joinWorldOnEnter)
+}
+
+func joinWorldOnEnter(_ context.Context, _ *app.Registry, entered gameenter.Entered) error {
+	DefaultPresence().Add(entered.PlayerID)
+	return nil
+}

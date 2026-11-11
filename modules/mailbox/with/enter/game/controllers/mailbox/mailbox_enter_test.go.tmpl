@@ -1,0 +1,67 @@
+package mailbox
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	gameenter "{{MODULE}}/game/enter"
+
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// withEnterPuller 记下钩子向 mail 服务发出的拉取。
+type withEnterPuller struct {
+	calls    int
+	playerID int64
+	profile  svcmail.BroadcastProfile
+	err      error
+}
+
+func (p *withEnterPuller) PullBroadcasts(_ context.Context, playerID int64, profile svcmail.BroadcastProfile) (svcmail.Summary, error) {
+	p.calls++
+	p.playerID, p.profile = playerID, profile
+	return svcmail.Summary{}, p.err
+}
+
+// 进入游戏时按“首次进入的时间 = 注册时间”拉一次全服邮件；老玩家再进入用的是同一个注册时间。
+func TestWithMailboxEnterPullsBroadcastsWithTheFirstEnterTime(t *testing.T) {
+	puller := &withEnterPuller{}
+	entered := gameenter.Entered{PlayerID: 94201, InitResult: gameenter.InitResult{First: false, FirstAtUnixMilli: 1_700_000_123_999}}
+	if err := pullBroadcastsOnEnter(context.Background(), puller, entered); err != nil {
+		t.Fatal(err)
+	}
+	if puller.calls != 1 || puller.playerID != 94201 {
+		t.Fatalf("pulled %d times for player %d, want once for 94201", puller.calls, puller.playerID)
+	}
+	if puller.profile.RegisteredAtUnix != 1_700_000_123 {
+		t.Fatalf("registered at %d, want 1700000123 (the first-enter time in seconds)", puller.profile.RegisteredAtUnix)
+	}
+	if len(puller.profile.Scopes) != 0 || len(puller.profile.Attributes) != 0 {
+		t.Fatalf("profile %+v carries scopes or attributes the default rule does not set", puller.profile)
+	}
+	if err := puller.profile.Validate(); err != nil {
+		t.Fatalf("the mail service would refuse this profile: %v", err)
+	}
+}
+
+// 注册时间未知时不拉取：不能把玩家当成老玩家，把建号之前的补偿发给他。
+func TestWithMailboxEnterDoesNotPullWithoutAFirstEnterTime(t *testing.T) {
+	puller := &withEnterPuller{}
+	if err := pullBroadcastsOnEnter(context.Background(), puller, gameenter.Entered{PlayerID: 94202}); err == nil {
+		t.Fatal("a pull without a registration time reported success")
+	}
+	if puller.calls != 0 {
+		t.Fatalf("pulled %d times without a registration time", puller.calls)
+	}
+}
+
+// mail 服务不可用时把错误交给进入钩子的调用方（它只记日志，登录照常）。
+func TestWithMailboxEnterReportsAFailedPull(t *testing.T) {
+	away := errors.New("mail service is away")
+	puller := &withEnterPuller{err: away}
+	entered := gameenter.Entered{PlayerID: 94203, InitResult: gameenter.InitResult{FirstAtUnixMilli: 1_700_000_000_000}}
+	if err := pullBroadcastsOnEnter(context.Background(), puller, entered); !errors.Is(err, away) {
+		t.Fatalf("err = %v, want the mail service's error", err)
+	}
+}

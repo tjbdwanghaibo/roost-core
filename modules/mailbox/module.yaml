@@ -20,3 +20,10 @@ verify:
   packages: [./game/handler, ./game/mailbox, ./game/controllers/mailbox]
   run: ^TestMailbox
   pass: 21
+with:
+  enter:
+    summary: 玩家进入游戏时把属于他的全服邮件合并进邮箱（PullBroadcasts）
+    verify:
+      packages: [./game/controllers/mailbox]
+      run: ^TestWithMailboxEnter
+      pass: 3

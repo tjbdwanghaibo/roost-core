@@ -19,6 +19,6 @@ state:
 component: Enter
 protocols: [EnterGame]
 verify:
-  packages: [./game/handler]
+  packages: [./game/handler, ./game/enter]
   run: ^TestEnter
-  pass: 3
+  pass: 6

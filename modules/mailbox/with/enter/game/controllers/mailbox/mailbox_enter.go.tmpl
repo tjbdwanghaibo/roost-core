@@ -1,0 +1,59 @@
+package mailbox
+
+import (
+	"context"
+	"fmt"
+
+	gameenter "{{MODULE}}/game/enter"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// 这个文件是 mailbox 与 enter 两个模块的联动：两个都装着时才有。
+//
+// 玩家进入游戏时把属于他的全服邮件（AudienceBroadcast）合并进邮箱：mail 服务记下这名玩家的画像，
+// 把离线期间发出、他该收到的全服邮件恰好合并一次；之后 List 与 Summary 按同一份画像补齐。
+// 没有配置 LazyBroadcast 的工程（internal/service/mail/collaborators.go 的 Broadcast() 返回 nil）
+// 这一步只是问一次汇总，什么都不合并。
+//
+// 这是进入钩子（见 game/enter）：失败只记日志、不让登录失败，下一次进入或下一次 List 会补上。
+func init() {
+	gameenter.OnEntered("mailbox", func(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+		mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+		if !ok || mailer == nil {
+			return fmt.Errorf("mailbox: capability %q not found; list mail under services.<service>.uses in roost.yaml", svcmail.CapabilityName)
+		}
+		return pullBroadcastsOnEnter(ctx, mailer, entered)
+	})
+}
+
+// broadcastPuller 是钩子用到的 mail 客户端的那一个方法。
+type broadcastPuller interface {
+	PullBroadcasts(ctx context.Context, playerID int64, profile svcmail.BroadcastProfile) (svcmail.Summary, error)
+}
+
+func pullBroadcastsOnEnter(ctx context.Context, mailer broadcastPuller, entered gameenter.Entered) error {
+	profile, ok := broadcastProfileOnEnter(entered)
+	if !ok {
+		return fmt.Errorf("mailbox: player %d has no first-enter time; server-wide mail not pulled", entered.PlayerID)
+	}
+	_, err := mailer.PullBroadcasts(ctx, entered.PlayerID, profile)
+	return err
+}
+
+// broadcastProfileOnEnter 是这名玩家收全服邮件用的画像。这个函数归工程所有，规则在这里改：
+//
+//   - 注册时间用首次进入游戏的时间（enter 模块记在档里的那一刻）。mail 服务内置的条件是
+//     “注册早于邮件发送才收得到”，所以新玩家收不到建号之前的补偿；注册时间未知就不拉取，
+//     而不是把玩家当成老玩家。工程有 account 服务时改成角色的创建时间。
+//   - 范围只有“所有玩家”。分服的游戏加 svcmail.ServerScope(区号)，有公会广播的加
+//     svcmail.GuildScope(公会)，并在玩家换了范围（转服、进出公会）之后再拉一次。
+//   - 业务条件（等级、渠道……）放进 Attributes，由 LazyBroadcastConfig.Eligible 判断。
+func broadcastProfileOnEnter(entered gameenter.Entered) (svcmail.BroadcastProfile, bool) {
+	registeredAt := entered.FirstAtUnixMilli / 1000
+	if registeredAt <= 0 {
+		return svcmail.BroadcastProfile{}, false
+	}
+	return svcmail.BroadcastProfile{RegisteredAtUnix: registeredAt}, true
+}

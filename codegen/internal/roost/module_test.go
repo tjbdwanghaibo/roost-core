@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -756,5 +757,140 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 	roost("module", "add", "chat")
 	if moduleProjectDigest(t, root) != installed {
 		t.Fatal("installing chat again changed the project")
+	}
+}
+
+// 联动文件（with/<另一个模块>/）的清单规则：目录与 with 段一一对应；场景名与模块自己的分开；
+// 只能用模块已声明的号；整个目录里没有两处写同一个落点。
+func TestModuleWithValidationNamesWhatIsWrong(t *testing.T) {
+	files := map[string]string{"game/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"}
+	const otherYAML = "name: other\nsummary: fixture\nverify: {packages: [./game/other], run: ^TestOther, pass: 1}\n"
+	const withYAML = "with:\n  other:\n    summary: glue\n    verify: {packages: [./game/handler], run: ^TestWithDemoOther, pass: 1}\n"
+	build := func(yaml string, glue map[string]string, otherFiles map[string]string) fstest.MapFS {
+		out := moduleFixtureFS(yaml, files)
+		out["other/module.yaml"] = &fstest.MapFile{Data: []byte(otherYAML)}
+		for rel, body := range otherFiles {
+			out["other/files/"+rel+".tmpl"] = &fstest.MapFile{Data: []byte(body)}
+		}
+		for rel, body := range glue {
+			out["demo/with/other/"+rel+".tmpl"] = &fstest.MapFile{Data: []byte(body)}
+		}
+		return out
+	}
+	otherFiles := map[string]string{"game/other/other.go": "package other\n"}
+	glue := map[string]string{"game/x_other.go": "package x\n// {{ID:errcode:demo_bad}}\n"}
+	catalog, err := loadModuleCatalogFS(build(moduleFixtureYAML+withYAML, glue, otherFiles))
+	if err != nil {
+		t.Fatalf("a consistent module with glue: %v", err)
+	}
+	if got := catalog["demo"].With["other"].Files; len(got) != 1 || got[0] != "game/x_other.go" {
+		t.Fatalf("glue files = %v", got)
+	}
+	// 联动文件的内容算进摘要：它变了，已装的模块显示为另一版。
+	changed, err := loadModuleCatalogFS(build(moduleFixtureYAML+withYAML, map[string]string{"game/x_other.go": "package x\n// changed {{ID:errcode:demo_bad}}\n"}, otherFiles))
+	if err != nil || changed["demo"].Digest == catalog["demo"].Digest {
+		t.Fatalf("a changed glue file left the digest alone (err=%v)", err)
+	}
+	for name, test := range map[string]struct {
+		yaml       string
+		glue       map[string]string
+		otherFiles map[string]string
+		want       string
+	}{
+		"directory without entry": {moduleFixtureYAML, glue, otherFiles, "with/other exists but module.yaml has no with.other entry"},
+		"entry without files":     {moduleFixtureYAML + withYAML, nil, otherFiles, "with.other: with/other/ has no .tmpl file"},
+		"unknown module":          {moduleFixtureYAML + strings.Replace(withYAML, "  other:", "  ghost:", 1), nil, otherFiles, "with.ghost"},
+		"scenario name overlaps":  {moduleFixtureYAML + strings.Replace(withYAML, "^TestWithDemoOther", "^TestDemoOther", 1), glue, otherFiles, `must start with ^TestWithDemo`},
+		"no summary":              {moduleFixtureYAML + strings.Replace(withYAML, "summary: glue", "summary: ''", 1), glue, otherFiles, "with.other: summary is required"},
+		"undeclared id":           {moduleFixtureYAML + withYAML, map[string]string{"game/x_other.go": "{{ID:protocol:DemoPing}}"}, otherFiles, "with/other/game/x_other.go uses {{ID:protocol:DemoPing}} but module.yaml does not declare it"},
+		"same path as own file":   {moduleFixtureYAML + withYAML, map[string]string{"game/x.go": "package x\n"}, otherFiles, "both ship game/x.go"},
+		"same path as other's":    {moduleFixtureYAML + withYAML, map[string]string{"game/other/other.go": "package other\n"}, otherFiles, "both ship game/other/other.go"},
+	} {
+		_, err := loadModuleCatalogFS(build(test.yaml, test.glue, test.otherFiles))
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: err = %v, want it to contain %q", name, err, test.want)
+		}
+	}
+}
+
+// 一对模块的联动文件在第二个装上的那一次写进工程，不论先装哪个；只装一个时没有；
+// 落点被业务文件占着就拒绝、工程不变；写过之后重复安装没有变化；联动自带的场景单独计数。
+func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project and runs go build / vet / test in it")
+	}
+	t.Parallel()
+	root, roost, try := moduleProject(t, "lobby")
+	glue := filepath.Join(root, "game", "chat", "chat_enter.go")
+
+	// 只装 chat：没有联动文件，计划里也没有。
+	out := roost("module", "add", "chat")
+	if strings.Contains(out, "glue ") {
+		t.Fatalf("chat alone wrote glue:\n%s", out)
+	}
+	if _, err := os.Stat(glue); !os.IsNotExist(err) {
+		t.Fatalf("chat alone has the enter glue (err=%v)", err)
+	}
+
+	// 落点被业务文件占着：拒绝安装 enter，工程不变。
+	if err := os.WriteFile(glue, []byte("package chat\n\n// 业务自己的文件。\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := moduleProjectDigest(t, root)
+	if out, err := try("module", "add", "enter"); err == nil || !strings.Contains(err.Error(), "module chat with enter: game/chat/chat_enter.go already exists and is not this glue file") {
+		t.Fatalf("an occupied glue path: err = %v\n%s", err, out)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("a refused install changed the project")
+	}
+	if err := os.Remove(glue); err != nil {
+		t.Fatal(err)
+	}
+
+	// 装上 enter：plan 写明会写哪一组联动，add 之后文件在、归属记在 chat 名下。
+	var plan ModulePlan
+	if err := json.Unmarshal([]byte(roost("module", "plan", "enter", "--json")), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Glue) != 1 || plan.Glue[0].Module != "chat" || plan.Glue[0].With != "enter" || !contains(plan.Glue[0].Files, "game/chat/chat_enter.go") {
+		t.Fatalf("plan does not list the chat+enter glue: %+v", plan.Glue)
+	}
+	if _, err := os.Stat(glue); !os.IsNotExist(err) {
+		t.Fatalf("roost module plan wrote the glue (err=%v)", err)
+	}
+	out = roost("module", "add", "enter")
+	if !strings.Contains(out, "glue chat with enter: written") {
+		t.Fatalf("add did not report the glue:\n%s", out)
+	}
+	body, err := os.ReadFile(glue)
+	if err != nil || !bytes.Contains(body, []byte(`"example.com/studio/lobby/game/enter"`)) || bytes.Contains(body, []byte("{{")) {
+		t.Fatalf("the glue file is missing or not rendered (err=%v):\n%s", err, body)
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Modules["chat"].With["enter"]; !contains(got, "game/chat/chat_enter.go") || len(manifest.Modules["enter"].With) != 0 {
+		t.Fatalf("ownership: chat.with = %v, enter.with = %v", manifest.Modules["chat"].With, manifest.Modules["enter"].With)
+	}
+
+	// 重复安装没有变化。
+	installed := moduleProjectDigest(t, root)
+	out = roost("module", "add", "chat", "enter")
+	if strings.Contains(out, "glue ") || moduleProjectDigest(t, root) != installed {
+		t.Fatalf("installing again changed the project or wrote glue again:\n%s", out)
+	}
+
+	// 验收：两个模块各自的场景数不变，联动的场景单独一项。
+	report, err := VerifyModules(context.Background(), root, nil, nil)
+	if err != nil {
+		t.Fatalf("verify: %v\n%+v", err, report)
+	}
+	got := map[string]int{}
+	for _, result := range report.Modules {
+		got[result.Name] = result.Passed
+	}
+	if want := map[string]int{"chat": 8, "chat+enter": 2, "enter": 6}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("verify results = %v, want %v", got, want)
 	}
 }

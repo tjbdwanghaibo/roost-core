@@ -3,6 +3,8 @@ package player
 import (
 	"fmt"
 
+	gameenter "{{MODULE}}/game/enter"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -37,21 +39,21 @@ func (component *EnterComponent) Name() string { return "enter" }
 // Owner 只在实体存活且被 Nest 锁住期间可用。
 func (component *EnterComponent) Owner() *Player { return component.owner }
 
-// Init 在每次进入游戏时调用。首次初始化还没做过就执行 firstEnter 并记下来，返回 true；
-// 做过了什么都不写，返回 false。
+// Init 在每次进入游戏时调用。首次初始化还没做过就执行 firstEnter 并记下来，结果的 First 为 true；
+// 做过了什么都不写，First 为 false。两种情况都带上首次初始化的时间（这名玩家的“注册时间”）。
 //
 // 不按“这次是不是新建的档”判断：建档与初始化是两步，中间进程崩了，这名玩家的档已经在、
 // 初始化却没做。所以事实记在档里（PlayerDao.Enter.Initialized），每次进入都问一遍，
 // 初始发放与这个标记在同一笔事务里：要么都提交，要么都回滚、下次进入再做。
-func (component *EnterComponent) Init(nowUnixMilli int64) (bool, error) {
+func (component *EnterComponent) Init(nowUnixMilli int64) (gameenter.InitResult, error) {
 	state := component.owner.Dao().GetEnter()
 	if state.GetInitialized() {
-		return false, nil
+		return gameenter.InitResult{FirstAtUnixMilli: state.GetFirstAt()}, nil
 	}
 	if err := component.firstEnter(nowUnixMilli); err != nil {
-		return false, err
+		return gameenter.InitResult{}, err
 	}
 	state.SetInitialized(true)
 	state.SetFirstAt(nowUnixMilli)
-	return true, nil
+	return gameenter.InitResult{First: true, FirstAtUnixMilli: nowUnixMilli}, nil
 }

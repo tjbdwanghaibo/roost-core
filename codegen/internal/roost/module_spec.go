@@ -44,6 +44,9 @@ type ModuleSpec struct {
 	// 生成桩时才替换；业务改过就拒绝安装。
 	Replaces []string     `yaml:"replaces" json:"replaces,omitempty"`
 	Verify   ModuleVerify `yaml:"verify" json:"verify"`
+	// With 是与别的模块的联动：键是另一个模块的名字，文件在 with/<另一个模块>/ 下。两个模块都装着时
+	// 才写进工程（不论先装哪个），用来把本模块接到对方留的登记点上；只装了其中一个时什么都不写。
+	With map[string]ModuleWith `yaml:"with" json:"with,omitempty"`
 
 	// Files 是模板在工程里的落点（不带 .tmpl），由 files/ 目录读出，不写在清单里。
 	Files []string `yaml:"-" json:"files"`
@@ -80,6 +83,16 @@ type ModuleStateField struct {
 	Comment string `yaml:"comment" json:"comment,omitempty"`
 }
 
+// ModuleWith 是模块与另一个模块的一组联动文件。
+type ModuleWith struct {
+	Summary string `yaml:"summary" json:"summary"`
+	// Verify 是联动自带场景的验收口径，可以不写。测试名以 TestWith<本模块> 开头，
+	// 与两个模块各自的 -run 都不重叠，所以两边各自的场景数不随对方装没装而变。
+	Verify *ModuleVerify `yaml:"verify" json:"verify,omitempty"`
+	// Files 是联动文件在工程里的落点（不带 .tmpl），由 with/<另一个模块>/ 目录读出。
+	Files []string `yaml:"-" json:"files"`
+}
+
 // ModuleVerify 是模块自带场景的验收口径：在 Packages 里跑 -run Run，恰好 Pass 条通过、零跳过。
 type ModuleVerify struct {
 	Packages []string `yaml:"packages" json:"packages"`
@@ -97,6 +110,8 @@ type InstalledModule struct {
 	State []string `yaml:"state,omitempty"`
 	// Files 是它写入的业务文件（工程内相对路径）。
 	Files []string `yaml:"files,omitempty"`
+	// With 是它已经写进工程的联动文件：另一个模块的名字 -> 文件。有键就表示这一对已经接过，不再处理。
+	With map[string][]string `yaml:"with,omitempty"`
 }
 
 var (
@@ -130,10 +145,36 @@ func loadModuleCatalogFS(source fs.FS) (map[string]ModuleSpec, error) {
 		}
 		catalog[spec.Name] = spec
 	}
-	for _, spec := range catalog {
+	// owners 是每个落点归谁：两个模块（或一个模块与一组联动）不能写同一个文件——安装时后写的会被
+	// “落点已被占用”拒绝，同一次安装里则会互相覆盖。
+	owners := map[string]string{}
+	claim := func(rel, owner string) error {
+		if previous, taken := owners[rel]; taken {
+			return fmt.Errorf("%s and %s both ship %s", previous, owner, rel)
+		}
+		owners[rel] = owner
+		return nil
+	}
+	for _, name := range sortedModuleNames(catalog) {
+		spec := catalog[name]
 		for _, other := range append(append([]string(nil), spec.Requires...), spec.Conflicts...) {
 			if _, ok := catalog[other]; !ok {
 				return nil, fmt.Errorf("module %s names unknown module %q", spec.Name, other)
+			}
+		}
+		for _, rel := range spec.Files {
+			if err := claim(rel, "module "+name); err != nil {
+				return nil, err
+			}
+		}
+		for _, other := range spec.withNames() {
+			if _, ok := catalog[other]; !ok {
+				return nil, fmt.Errorf("module %s has with/%s, but there is no module %q", spec.Name, other, other)
+			}
+			for _, rel := range spec.With[other].Files {
+				if err := claim(rel, fmt.Sprintf("module %s with %s", name, other)); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -179,6 +220,44 @@ func loadModuleSpec(source fs.FS, dir string) (ModuleSpec, error) {
 		return ModuleSpec{}, fmt.Errorf("module %s: read files: %w", dir, err)
 	}
 	sort.Strings(spec.Files)
+	// with/<另一个模块>/ 下是联动文件；目录与清单的 with 段必须一一对应（validate 检查）。
+	withRoot := path.Join(dir, "with")
+	others, err := fs.ReadDir(source, withRoot)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return ModuleSpec{}, fmt.Errorf("module %s: read with: %w", dir, err)
+	}
+	for _, other := range others {
+		if !other.IsDir() {
+			return ModuleSpec{}, fmt.Errorf("module %s: with/%s is not a directory; glue files live in with/<other module>/", dir, other.Name())
+		}
+		declared, ok := spec.With[other.Name()]
+		if !ok {
+			return ModuleSpec{}, fmt.Errorf("module %s: with/%s exists but module.yaml has no with.%s entry", dir, other.Name(), other.Name())
+		}
+		otherRoot := path.Join(withRoot, other.Name())
+		err = fs.WalkDir(source, otherRoot, func(file string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() {
+				return walkErr
+			}
+			if !strings.HasSuffix(file, ".tmpl") {
+				return fmt.Errorf("%s is not a .tmpl file", file)
+			}
+			body, readErr := fs.ReadFile(source, file)
+			if readErr != nil {
+				return readErr
+			}
+			rel := strings.TrimSuffix(strings.TrimPrefix(file, otherRoot+"/"), ".tmpl")
+			declared.Files = append(declared.Files, rel)
+			digest.Write([]byte("with/" + other.Name() + "/" + rel))
+			digest.Write(body)
+			return nil
+		})
+		if err != nil {
+			return ModuleSpec{}, fmt.Errorf("module %s: read with/%s: %w", dir, other.Name(), err)
+		}
+		sort.Strings(declared.Files)
+		spec.With[other.Name()] = declared
+	}
 	spec.Digest = hex.EncodeToString(digest.Sum(nil))[:16]
 	if err := spec.validate(source); err != nil {
 		return ModuleSpec{}, fmt.Errorf("module %s: %w", dir, err)
@@ -245,6 +324,42 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 		return fmt.Errorf("verify.run: %w", err)
 	}
 	declared := spec.declaredIDs()
+	for _, other := range spec.withNames() {
+		with := spec.With[other]
+		if other == spec.Name || contains(spec.Conflicts, other) {
+			return fmt.Errorf("with.%s: a module cannot have glue with itself or with a module it conflicts with", other)
+		}
+		if strings.TrimSpace(with.Summary) == "" {
+			return fmt.Errorf("with.%s: summary is required", other)
+		}
+		if len(with.Files) == 0 {
+			return fmt.Errorf("with.%s: with/%s/ has no .tmpl file", other, other)
+		}
+		if with.Verify != nil {
+			if len(with.Verify.Packages) == 0 || with.Verify.Pass <= 0 {
+				return fmt.Errorf("with.%s: verify needs packages, run and a positive pass count", other)
+			}
+			// 联动的场景与两个模块各自的场景分开数：名字不落进任何模块自己的 -run（^Test<Module>）。
+			if want := "^TestWith" + prefix; !strings.HasPrefix(with.Verify.Run, want) {
+				return fmt.Errorf("with.%s: verify.run %q must start with %s", other, with.Verify.Run, want)
+			}
+			if _, err := regexp.Compile(with.Verify.Run); err != nil {
+				return fmt.Errorf("with.%s: verify.run: %w", other, err)
+			}
+		}
+		for _, rel := range with.Files {
+			body, err := fs.ReadFile(source, path.Join(spec.Name, "with", other, rel+".tmpl"))
+			if err != nil {
+				return err
+			}
+			// 联动文件只能用模块已经分配到的号：它可能在模块装好很久之后才写进工程。
+			for _, match := range moduleIDPlaceholder.FindAllSubmatch(body, -1) {
+				if kind, name := string(match[1]), string(match[2]); !declared[kind][name] {
+					return fmt.Errorf("with/%s/%s uses {{ID:%s:%s}} but module.yaml does not declare it", other, rel, kind, name)
+				}
+			}
+		}
+	}
 	used := map[string]map[string]bool{}
 	for _, rel := range spec.Files {
 		body, err := fs.ReadFile(source, path.Join(spec.Name, "files", rel+".tmpl"))
@@ -270,6 +385,16 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 		}
 	}
 	return nil
+}
+
+// withNames 是有联动文件的另一方模块名，按字典序。
+func (spec ModuleSpec) withNames() []string {
+	names := make([]string, 0, len(spec.With))
+	for name := range spec.With {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // declaredIDs 是清单声明要分配的号：kind -> 名字集合。
