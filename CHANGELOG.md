@@ -13,7 +13,7 @@
   - 回归 `TestARoutedStepIsDeliveredOnlyToTheOwnerSidsConsumer`（修前红：`non-owner sids [1000 1001] received the step; the result came after 750ms of nak backoff over 3 deliveries`），另有退回改投、多次退回不耗尝试且到截止才补偿、属主停机、没有 Route 拒绝的用例；五处框架变异与两处生成工程变异各自变红。
   - **JetStream 资源**：每个路由步骤（每个方向）的 durable 数从 1 变成部署的 sid 数（demo 每个 sid 每条 saga 流 8 个）。
   - **升级要求**（未部署，不兼容）：saga **WireVersion 3 → 4**（记录 / 命令 / 启动意图 / 退回结果多了 `Route`，记录多了 `Bounces`、结果多了 `Bounced`，摘要含二者）：先让全部 saga 到终态，**先停旧进程（协调器与步骤进程）再起新进程**，删 saga 流与快照 / 准入桶；改成路由的步骤留下的旧共享 durable（demo：`game-gift-debit`、`game-gift-debit-undo`、`game-alliance-*-debit` 等）要删掉。业务工程重新生成（定义多了 `Routed`、有路由步骤的 `EmitStart` / `Start` 签名变了）。没有路由 sid 的旧载荷直接拒绝，不迁移。
-  - 剩下的边界：一笔 saga 只有一个路由地址；补偿方向与没有截止的 saga 上退回会一直重派（待确认，见方案 §7）；game-demo 的“换服中”只是钩子 `playerMoving`（缺省不在换服中，`TODO（维护者 2026-11-11）`）。
+  - 剩下的边界：一笔 saga 只有一个路由地址；补偿方向的退回一直重派到属主收下（正向的截止由上一条“必须带截止”保证）；game-demo 的“换服中”只是钩子 `playerMoving`（缺省不在换服中，`TODO（维护者 2026-11-11）`）。
 - **测试变化**（scripts）：**普通无缝演练最后一步的机器人阈值恢复 loadtest 缺省 p95 16s**（撤掉 v1.43.0 的 `-max-p95 40`）。saga 步骤按 sid 路由后不再有非属主进程拒绝、nak 退避重投的约 22s；本机私有真实依赖复跑 14 步 ok，最后一步 p95 5.00s（11-10 为 27.85s），阈值改回 16s 后再跑 5.45s，[证据](docs/maintenance/evidence/saga-step-sid-route-20261111/README.md#真实依赖演练)。
 
 - **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.43.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.43.0 的生成物用帧协议 2 / 信封 v3、`entitysync.Decoder` 与 `entity.MergeSyncViewPriorities`，旧 core 线格式不兼容、缺这些 API；生成器缺省本来就取最新版。没有在发版时用 `--min-core`：project sync 类测试会联网解析最低版本，tag 未推时 pretag 必然失败。
