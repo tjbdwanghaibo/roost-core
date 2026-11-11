@@ -359,6 +359,10 @@ func TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a replay whose record was pruned was paid again: %+v", result)
 	}
+	// 与 mail 服务拒绝过期预留是同一个事实，客户端拿到同一个码（service/mail 的 CodeExpired）。
+	if code, _ := errcode.ClientError(err); code != 590106 {
+		t.Fatalf("the late replay was refused with code %d, want the mail service's expired code 590106: %v", code, err)
+	}
 	if got := f.snapshot(t); got != before || f.recorded(t, "old") {
 		t.Fatalf("the refused replay wrote: %+v, was %+v", got, before)
 	}
