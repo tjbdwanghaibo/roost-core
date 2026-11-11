@@ -1,0 +1,250 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/gift"
+	"{{MODULE}}/game/guild"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+	giftitem "{{MODULE}}/saga/gift_item"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+)
+
+// A step that runs on a process which does not serve its player writes a
+// second copy of the Player document and takes a process down. The gift's
+// debit and refund (and the guild sagas' Player steps) are routed steps: the
+// coordinator delivers them only to the durable of the sid the saga was
+// started with, so the wrong process never sees them (roost-core SAGA.md,
+// 按 sid 确切路由; the delivery itself is pinned in roost-core
+// framework/saga step_consumer_test.go). These tests pin the two halves this
+// project owns, neither of which needs a Mongo or a bus (§9.11, §9.12):
+//
+//   - the definitions route exactly the Player steps;
+//   - admitBound, on the process the command reached, still checks the
+//     binding against the real ownership table (PlayerOwners.AdmitBound) and
+//     answers with the framework's verdicts: run, bounce back to the
+//     coordinator with the sender's sid, reject a payload with no sid, or
+//     retry here while the copy is being unloaded.
+
+const (
+	routeLocalSID = int32(1000)
+	routeOtherSID = int32(1001)
+)
+
+// giftPayload builds the saga state as the coordinator ships it. It does not
+// go through gift.Encode, so a test can build the payload Encode refuses.
+func giftPayload(t *testing.T, state gift.State) []byte {
+	t.Helper()
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+// giftCommand is a debit command routed to route for a sender bound to fromSID.
+func giftCommand(t *testing.T, from int64, fromSID int32, route int32) saga.Command {
+	t.Helper()
+	now := time.Now()
+	return saga.Command{
+		ID: "cmd-1", IdempotencyKey: "op-1", SagaID: "saga-1", SagaType: giftitem.Type, DefinitionVersion: giftitem.Version,
+		BusinessKey: "gift-1", Step: 0, StepName: "debit", Phase: saga.PhaseForward, Attempt: 1,
+		Topic:   giftitem.TopicDebit,
+		Payload: giftPayload(t, gift.State{From: from, FromSID: fromSID, To: from + 1, ItemID: 1001, Count: 1}),
+		Route:   saga.SidRoute(route), CreatedAt: now, DeadlineAt: now.Add(time.Minute),
+	}
+}
+
+// routeSteps is one game process with sid local and its real ownership table
+// (empty — nobody has logged in).
+func routeSteps(local int32) (giftSteps, *PlayerOwners) {
+	owners := newPlayerOwners(local, nil, nil)
+	return giftSteps{owners: owners}, owners
+}
+
+// Exactly the steps that write a Player are routed — the debit (whose
+// compensation is the refund) of the gift, founding and donation, and the
+// reward's grant — and the mail and guild steps are not: they may run on
+// any process. A step routed in the definition but not in the consumers (or
+// the other way round) would never be delivered; kitsaga.Steps refuses to
+// start such a process.
+func TestThePlayerStepsAreRoutedBySid(t *testing.T) {
+	for _, definition := range []saga.Definition{giftitem.Definition(), alliancefound.Definition(), alliancedonate.Definition(), alliancereward.Definition()} {
+		for _, step := range definition.Steps {
+			want := step.Name == "debit" || step.Name == "grant"
+			if step.Routed != want {
+				t.Errorf("%s step %s: routed=%t, want %t", definition.Type, step.Name, step.Routed, want)
+			}
+		}
+	}
+	if _, err := guild.Encode(guild.State{PlayerID: 42, Coins: 10}); err == nil {
+		t.Fatal("guild.Encode wrote a Player step state with no sid; its saga could not be routed")
+	}
+}
+
+// A step for a sender this process serves is admitted.
+func TestAdmitRunsTheOwnersOwnStep(t *testing.T) {
+	steps, owners := routeSteps(routeLocalSID)
+	if err := owners.Serve(context.Background(), 42, routeLocalSID); err != nil {
+		t.Fatal(err)
+	}
+	if err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
+		t.Fatalf("the owner was refused its own step: %v", err)
+	}
+}
+
+// The process the sender is bound to runs the step even when the sender is
+// offline and has no copy anywhere — the debit and, above all, the refund
+// must not wait for them to log in. Admission takes them into service here
+// (a resident record, so the idle unload covers the copy Nest loads cold for
+// the step), on this sid and nowhere else.
+func TestAnOfflineSendersStepRunsOnTheSidTheyAreBoundTo(t *testing.T) {
+	steps, owners := routeSteps(routeLocalSID)
+	if owners.Resident(42) {
+		t.Fatal("precondition: the sender is offline and not resident")
+	}
+	if err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
+		t.Fatalf("the step of an offline sender bound to this sid was refused: %v", err)
+	}
+	if !owners.Resident(42) {
+		t.Fatal("the admitted step left no resident record: the copy Nest loads for it would never be unloaded")
+	}
+}
+
+// A command that reached a sid its sender is not bound to (the saga's route
+// and the payload disagree) is bounced back to the coordinator — not nacked,
+// which on a routed durable would only come back here — naming the sender's
+// sid as the next attempt's route. Nothing is recorded: a resident record
+// would let this process load the Player while its own sid writes it too.
+func TestAStepForASenderBoundElsewhereIsBouncedToHisSid(t *testing.T) {
+	steps, owners := routeSteps(routeOtherSID)
+	err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeOtherSID))
+	var bounce *saga.StepBounce
+	if !errors.As(err, &bounce) || bounce.Route != saga.SidRoute(routeLocalSID) {
+		t.Fatalf("a step for a sender bound to sid %d = %v, want a bounce to route %s", routeLocalSID, err, saga.SidRoute(routeLocalSID))
+	}
+	if owners.Resident(42) {
+		t.Fatal("bouncing the step took a player bound to another sid into service here")
+	}
+}
+
+// A step for a sender who is moving between sids is bounced back to the
+// coordinator with no new route (the next attempt goes to the same sid and
+// does not spend an attempt — roost-core framework/saga
+// TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid pins the coordinator side):
+// not run, and nothing is recorded — even on the sid he is still bound to.
+// Once the move is over the same command is admitted. The demo has no player
+// move yet (playerMoving, TODO 维护者 2026-11-11), so the hook is injected
+// here; its default never reports a move.
+func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
+	steps, owners := routeSteps(routeLocalSID)
+	if steps.moving.isMoving(42) {
+		t.Fatal("the default hook reported a move; the demo has no player move state yet")
+	}
+	moving := map[int64]bool{42: true}
+	steps.moving = func(playerID int64) bool { return moving[playerID] }
+	err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID))
+	var bounce *saga.StepBounce
+	if !errors.As(err, &bounce) || bounce.Route != "" {
+		t.Fatalf("a step for a moving sender = %v, want a bounce back to the coordinator with no new route", err)
+	}
+	if owners.Resident(42) {
+		t.Fatal("bouncing the step of a moving sender took him into service here")
+	}
+	moving[42] = false
+	if err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
+		t.Fatalf("after the move the step = %v, want it admitted", err)
+	}
+	guildSteps := guildSteps{owners: owners, moving: func(int64) bool { return true }}
+	payload, err := json.Marshal(guild.State{PlayerID: 42, SID: routeLocalSID, Coins: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := giftCommand(t, 42, routeLocalSID, routeLocalSID)
+	command.SagaType, command.Topic, command.Payload = alliancedonate.Type, alliancedonate.TopicDebit, payload
+	if err := guildSteps.admitBound(context.Background(), command); !errors.As(err, &bounce) || bounce.Route != "" {
+		t.Fatalf("a guild step for a moving player = %v, want a bounce with no new route", err)
+	}
+}
+
+// A payload with no sender sid cannot be routed: it is rejected (a
+// non-retryable failure goes back to the coordinator, logged as an error)
+// and nobody is taken into service — even a sender who happens to be resident
+// here. Payloads from before from_sid existed are not migrated (maintainer
+// decisions 2026-10-05 / 2026-11-11). Encode refuses to write such a gift.
+func TestAStepThatNamesNoSenderSidIsRejected(t *testing.T) {
+	if _, err := gift.Encode(gift.State{From: 42, To: 43, ItemID: 1001, Count: 1}); err == nil {
+		t.Fatal("gift.Encode wrote a gift with no sender sid")
+	}
+	steps, owners := routeSteps(routeLocalSID)
+	if err := owners.Serve(context.Background(), 42, routeLocalSID); err != nil {
+		t.Fatal(err)
+	}
+	var rejection *saga.StepRejection
+	if err := steps.admitBound(context.Background(), giftCommand(t, 42, 0, routeLocalSID)); !errors.As(err, &rejection) {
+		t.Fatalf("a step whose payload names no sender sid = %v, want a rejection", err)
+	}
+	quiet, quietOwners := routeSteps(routeLocalSID)
+	if err := quiet.admitBound(context.Background(), giftCommand(t, 77, 0, routeLocalSID)); !errors.As(err, &rejection) {
+		t.Fatalf("a step whose payload names no sender sid = %v, want a rejection", err)
+	}
+	if quietOwners.Resident(77) {
+		t.Fatal("rejecting a payload with no sender sid took the sender into service")
+	}
+}
+
+// A sender bound here whose copy is being unloaded is retried here (a plain
+// error: the delivery is redelivered to this sid's durable after a backoff
+// and finds the unload finished) — neither bounced nor rejected: there is no
+// better process for it.
+func TestAStepForASenderBeingUnloadedIsRetriedHere(t *testing.T) {
+	steps, owners := routeSteps(routeLocalSID)
+	if err := owners.Serve(context.Background(), 42, routeLocalSID); err != nil {
+		t.Fatal(err)
+	}
+	owners.mu.Lock()
+	owners.evictions[42] = &eviction{done: make(chan struct{})}
+	owners.mu.Unlock()
+	err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID))
+	var bounce *saga.StepBounce
+	var rejection *saga.StepRejection
+	if !errors.Is(err, ErrNotServedHere) || errors.As(err, &bounce) || errors.As(err, &rejection) {
+		t.Fatalf("a step for a sender being unloaded = %v, want a plain refusal wrapping ErrNotServedHere", err)
+	}
+}
+
+// The guild sagas' Player steps answer the same way (alliance_saga.go
+// admitBound): bound elsewhere → bounce to his sid; no sid → reject.
+func TestAGuildPlayerStepFollowsTheSameRules(t *testing.T) {
+	owners := newPlayerOwners(routeOtherSID, nil, nil)
+	steps := guildSteps{owners: owners}
+	command := func(sid int32) saga.Command {
+		payload, err := json.Marshal(guild.State{PlayerID: 42, SID: sid, Coins: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := giftCommand(t, 42, routeLocalSID, routeOtherSID)
+		c.SagaType, c.Topic, c.Payload = alliancedonate.Type, alliancedonate.TopicDebit, payload
+		return c
+	}
+	var bounce *saga.StepBounce
+	if err := steps.admitBound(context.Background(), command(routeLocalSID)); !errors.As(err, &bounce) || bounce.Route != saga.SidRoute(routeLocalSID) {
+		t.Fatalf("a guild step for a player bound to sid %d = %v, want a bounce there", routeLocalSID, err)
+	}
+	var rejection *saga.StepRejection
+	if err := steps.admitBound(context.Background(), command(0)); !errors.As(err, &rejection) {
+		t.Fatalf("a guild step with no sid = %v, want a rejection", err)
+	}
+	if err := steps.admitBound(context.Background(), command(routeOtherSID)); err != nil {
+		t.Fatalf("a guild step for this sid's own player = %v, want it admitted", err)
+	}
+	if owners.Resident(42) != true {
+		t.Fatal("the admitted guild step left no resident record")
+	}
+}

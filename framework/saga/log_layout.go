@@ -120,9 +120,11 @@ func (l Layout) partitionPrefix(k int) string { return l.Prefix + "." + strconv.
 // PartitionFilter 是分区 k 的全部消息（事件与输入）：重放与清理用。
 func (l Layout) PartitionFilter(k int) string { return l.partitionPrefix(k) + ".>" }
 
-// 事件 subject 的去向：带命令的事件按步骤主题路由（参与方按主题过滤），终态单独一个（WaitTerminal、冷副本），其余变化一个。
+// 事件 subject 的去向：带命令的事件按步骤主题路由（参与方按主题过滤），路由步骤（Step.Routed）的命令再按路由键分开，
+// 终态单独一个（WaitTerminal、冷副本），其余变化一个。
 const (
 	eventDestCommand = "cmd"
+	eventDestRouted  = "to"
 	eventDestDone    = "done"
 	eventDestNone    = "none"
 )
@@ -130,6 +132,21 @@ const (
 // CommandEventSubject 是分区 k 派发主题 topic 的命令事件。
 func (l Layout) CommandEventSubject(k int, topic string) string {
 	return l.partitionPrefix(k) + ".ev." + eventDestCommand + "." + topic
+}
+
+// RoutedCommandEventSubject 是分区 k 派发给路由键 route 的路由步骤命令事件：<prefix>.<k>.ev.to.<route>.<topic>。路由键在
+// 主题之前、去向是单独的 "to"：主题可以带点，放在前面才能让 “某个 sid 的全部路由命令”（<prefix>.*.ev.to.<route>.>）
+// 与按主题过滤都不含歧义。它仍在分区的 <prefix>.<k>.> 里，流的 subjects 不变。
+func (l Layout) RoutedCommandEventSubject(k int, route, topic string) string {
+	return l.partitionPrefix(k) + ".ev." + eventDestRouted + "." + route + "." + topic
+}
+
+// commandEventSubject 是一条命令的事件 subject：带路由键的投给那个键，否则按主题。
+func (l Layout) commandEventSubject(k int, command *Command) string {
+	if command.Route != "" {
+		return l.RoutedCommandEventSubject(k, command.Route, command.Topic)
+	}
+	return l.CommandEventSubject(k, command.Topic)
 }
 
 // DoneEventSubject / NoneEventSubject 是分区 k 的终态事件与无命令变化事件。
@@ -150,6 +167,11 @@ func (l Layout) OpSubject(k int) string     { return l.partitionPrefix(k) + ".in
 // CommandFilter 是全部分区派发主题 topic 的命令事件（参与方的 durable 用）。
 func (l Layout) CommandFilter(topic string) string {
 	return l.Prefix + ".*.ev." + eventDestCommand + "." + topic
+}
+
+// RoutedCommandFilter 是全部分区派发给路由键 route、主题 topic 的路由步骤命令（route 那个 sid 的 durable 用）。
+func (l Layout) RoutedCommandFilter(route, topic string) string {
+	return l.Prefix + ".*.ev." + eventDestRouted + "." + route + "." + topic
 }
 
 // DoneFilter 是全部分区的终态事件。

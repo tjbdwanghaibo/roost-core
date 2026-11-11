@@ -24,6 +24,12 @@ type AddOptions struct {
 	// roost add saga Gift -steps debit,deliver -native debit. A subset of
 	// Steps; Entity / Component choose what their handlers lock.
 	Native []string
+	// Routed names which of Steps are delivered to their owner's sid only
+	// (saga.Step.Routed): roost add saga Gift -steps debit,deliver -routed debit.
+	// A subset of Steps; the generated EmitStart / Start then take the route
+	// (saga.SidRoute(owner sid)) and the generated consumers use
+	// kitsaga.WithSidRoute.
+	Routed []string
 	// Consumer is the service that consumes an effect: roost add effect
 	// player.level_up -consumer game.
 	Consumer string

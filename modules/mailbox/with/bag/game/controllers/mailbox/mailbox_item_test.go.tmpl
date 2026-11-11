@@ -2,15 +2,21 @@ package mailbox
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"{{MODULE}}/configs/schema"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamemailbox "{{MODULE}}/game/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
@@ -19,6 +25,42 @@ import (
 
 // 告诉邮件模块自己的用例：这个工程里有 mailbox 与 bag 的联动，道具邮件领得了（见 mailbox_test.go）。
 func init() { mailboxTestBagGlue = true }
+
+// withMailboxBagLoadItems 把用例要用到的道具装成进程当前的道具表，测试结束时原样换回。背包按道具表判断
+// 道具号存不存在、单种上限是多少（game/entities/player/bag_items.go），没有装载过配置的进程里
+// 任何道具都放不进背包。用例自己带表，不用工程的 configs/table/item.csv：那张表归工程所有。
+// 表里的道具都不单独限制（max_stack 为 0），按背包的硬上限 999999 算。
+//
+// 表按生成代码的名字与键类型登记（item、int64），只登记这一张。装载会发布两处进程级的东西
+// （缺省 Store 与新请求钉住的配置快照），两处都换回，这张表才不会漏给本包后面的用例。
+func withMailboxBagLoadItems(t *testing.T) {
+	t.Helper()
+	// 用例里只用到道具 1001。
+	rows := []schema.Item{{ID: 1001, Name: "item-1001"}}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.Item]{
+		Name: configdata.Name("item"), File: "item.json",
+		Key: func(row schema.Item) int64 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatalf("load the item table: %v", err)
+	}
+}
 
 // withMailboxBagItem 是 amount 个 itemID 号道具的附件字节。
 func withMailboxBagItem(t *testing.T, itemID, amount int64) []byte {
@@ -49,6 +91,7 @@ func withMailboxBagCount(t *testing.T, f *mailboxEndpointFixture, itemID int64) 
 // 两种邮件的回包是同样的四个字段。
 func TestWithMailboxBagEndpointClaimsAnItemMail(t *testing.T) {
 	f := newMailboxEndpointFixture(t)
+	withMailboxBagLoadItems(t)
 	itemMail := f.send(t, mailboxPlayerA, "a sword", withMailboxBagItem(t, 1001, 3))
 	coinMail := f.send(t, mailboxPlayerA, "pocket money", mailboxCoins(t, 100))
 
@@ -99,6 +142,7 @@ func TestWithMailboxBagEndpointClaimsAnItemMail(t *testing.T) {
 // 账本认出这封邮件，不发第二份，补上确认；回包里的持有量是道具现在的数量。
 func TestWithMailboxBagEndpointRetryAfterLostCommitGrantsOnce(t *testing.T) {
 	f := newMailboxEndpointFixture(t)
+	withMailboxBagLoadItems(t)
 	mailID := f.send(t, mailboxPlayerA, "a sword", withMailboxBagItem(t, 1001, 3))
 	otherID := f.send(t, mailboxPlayerA, "another sword", withMailboxBagItem(t, 1001, 4))
 
@@ -138,6 +182,7 @@ func TestWithMailboxBagEndpointRetryAfterLostCommitGrantsOnce(t *testing.T) {
 // 邮件没有被标成已领、列表里仍然可领；玩家丢掉一些之后不用等租约就能再领，这时才到账。
 func TestWithMailboxBagEndpointBagRefusalReleasesTheReservation(t *testing.T) {
 	f := newMailboxEndpointFixture(t)
+	withMailboxBagLoadItems(t)
 	handler.RegisterBagGrantNestHandlers()
 	handler.RegisterBagDiscardNestHandlers()
 	if _, err := sender.NewBagGrantSender(f.engine).Sync_BagGrant(context.Background(), f.player.ID(), 1001, 999998); err != nil {

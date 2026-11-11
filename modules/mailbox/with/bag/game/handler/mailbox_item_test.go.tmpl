@@ -2,13 +2,21 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"{{MODULE}}/configs/schema"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamemailbox "{{MODULE}}/game/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 // mailbox 与 bag 的联动在发放入口上的规则：道具附件进背包，与“这封到过账”同一笔事务，每封至多一次。
@@ -17,6 +25,45 @@ import (
 
 // 告诉邮件模块自己的用例：这个工程里有 mailbox 与 bag 的联动，道具附件发得了（见 mailbox_test.go）。
 func init() { mailboxTestBagGlue = true }
+
+// withMailboxBagLoadItems 把用例要用到的道具装成进程当前的道具表，测试结束时原样换回。背包按道具表判断
+// 道具号存不存在、单种上限是多少（game/entities/player/bag_items.go），没有装载过配置的进程里
+// 任何道具都放不进背包。用例自己带表，不用工程的 configs/table/item.csv：那张表归工程所有。
+// 表里的道具都不单独限制（max_stack 为 0），按背包的硬上限 999999 算。
+//
+// 表按生成代码的名字与键类型登记（item、int64），只登记这一张。装载会发布两处进程级的东西
+// （缺省 Store 与新请求钉住的配置快照），两处都换回，这张表才不会漏给本包后面的用例。
+func withMailboxBagLoadItems(t *testing.T) {
+	t.Helper()
+	// 用例里的道具：1001、1002、把背包摆满用的 2001～2199，以及第 201 种 5000。
+	rows := []schema.Item{{ID: 1001, Name: "item-1001"}, {ID: 1002, Name: "item-1002"}, {ID: 5000, Name: "item-5000"}}
+	for itemID := int64(2001); itemID <= 2199; itemID++ {
+		rows = append(rows, schema.Item{ID: itemID, Name: fmt.Sprintf("item-%d", itemID)})
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.Item]{
+		Name: configdata.Name("item"), File: "item.json",
+		Key: func(row schema.Item) int64 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatalf("load the item table: %v", err)
+	}
+}
 
 // withMailboxBagItems 在业务 worker 上持实体锁把背包整份读出来：道具号 -> 数量。
 func withMailboxBagItems(t *testing.T, f *mailboxFixture) map[int64]int64 {
@@ -71,6 +118,7 @@ func withMailboxBagDiscard(t *testing.T, f *mailboxFixture, itemID, count int64)
 // 同一封再到达（发放成功、确认丢失之后的重试）不再发，回的是此刻的数量；不同的邮件各发各的。
 func TestWithMailboxBagItemMailLandsInTheBagOnce(t *testing.T) {
 	f := newMailboxFixture(t)
+	withMailboxBagLoadItems(t)
 	const expires = mailboxStart + 3600
 	result, err := f.claimAs("mail-1", gamemailbox.Item(1001, 3), expires)
 	if err != nil {
@@ -120,6 +168,7 @@ func TestWithMailboxBagItemMailLandsInTheBagOnce(t *testing.T) {
 // 玩家腾出位置之后同一封还能领，这时才到账、才记账本。不是道具的号在进背包之前就被拒绝。
 func TestWithMailboxBagRefusalByTheBagWritesNothingAndTheMailStaysClaimable(t *testing.T) {
 	f := newMailboxFixture(t)
+	withMailboxBagLoadItems(t)
 	const expires = mailboxStart + 3600
 	// 道具 1001 离单种上限 999999 只差 1；再放 199 种，背包里正好 200 种。
 	withMailboxBagStock(t, f, 1001, 999998)
@@ -171,6 +220,7 @@ func TestWithMailboxBagRefusalByTheBagWritesNothingAndTheMailStaysClaimable(t *t
 // 道具与账本记录在同一笔事务里：提交被拒绝时两者一起回滚，之后同一封还能领。
 func TestWithMailboxBagRejectedCommitRollsBackItemsAndLedger(t *testing.T) {
 	f := newMailboxFixture(t)
+	withMailboxBagLoadItems(t)
 	const expires = mailboxStart + 3600
 	withMailboxBagStock(t, f, 1001, 10)
 	before := f.snapshot(t)
@@ -199,6 +249,7 @@ func TestWithMailboxBagRejectedCommitRollsBackItemsAndLedger(t *testing.T) {
 // 道具邮件不碰余额。两种邮件共用一本账本，各自至多一次。
 func TestWithMailboxBagCoinMailsStillGoToTheWallet(t *testing.T) {
 	f := newMailboxFixture(t)
+	withMailboxBagLoadItems(t)
 	const expires = mailboxStart + 3600
 	f.mustPay(t, "coin-mail", 100, expires, 100)
 	withMailboxBagWant(t, f, "after a coin mail", map[int64]int64{})

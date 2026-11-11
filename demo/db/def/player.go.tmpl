@@ -4,7 +4,11 @@ package dbdef
 type PlayerDao struct {
 	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
 	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
-	Items map[int64]int32 `dao:"persist,sync,map=fast" store:"items"`
+	//
+	// The bag is not declared here either: it is the bag module's state, the nested
+	// struct PlayerDao.Bag (db/def/bag.go, store key "bag") that
+	// `roost module add bag` appends to the end of this DAO.
+
 	// DungeonClaims is the exactly-once ledger for dungeon clear rewards:
 	// run id -> the run's resolution time. The claim transaction records the
 	// run here and pays only when it is the one that recorded it. Entries

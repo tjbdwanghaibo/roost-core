@@ -38,6 +38,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `game/chat/`、`game/controllers/chat/`、`protocol/def/chat_*.go`、`internal/service/chat/collaborators.go` | 聊天。不在本目录里：生成时由 [chat 业务模块](../modules/README.md)装进工程（`roost module add chat`），demo 与别的工程共用同一份实现 |
 | `protocol/def/enter_game.go`、`game/controllers/enter/`、`db/def/enter.go`、`game/entities/player/enter_*.go`、`game/handler/enter_init.go` | 进入游戏。协议、controller 域与“首次初始化做过没有”的标记来自 [enter 业务模块](../modules/README.md)（`roost module add enter`）；本目录只带覆盖模块文件的三个：`protocol/def/enter_game.go`（demo 的请求与响应字段更多）与 `game/controllers/enter/` 的两个文件（把请求交给 `game/controllers/player/enter_game.go` 里 demo 自己的进入流程） |
 | `game/leaderboard/`、`game/controllers/leaderboard/`、`protocol/def/leaderboard_*.go` | 排行榜。读榜的两条协议（`LeaderboardTop` 带自己的名次、`LeaderboardMe`）与提交入口 `SubmitSeason` 来自 [leaderboard 业务模块](../modules/README.md)（`roost module add leaderboard`）；本目录只带覆盖模块业务文件的两个：`game/leaderboard/leaderboard_board.go`（demo 的榜：副本通关次数、全服、按赛季、一屏十行）与钉住它的 `leaderboard_board_test.go`。通关计数（`PlayerDao.DungeonClears`）与领奖账本是副本玩法，仍在 `game/dungeon`、`game/handler/claim_dungeon.go` |
+| `game/entities/player/bag_component.go`、`bag_items.go`、`db/def/bag.go`、`internal/errors/bag.go`、`game/handler/bag_*.go`、`game/controllers/bag/`、`protocol/def/bag_discard.go`、`configs/schema/item.go`、`configs/table/item.csv` | 背包。组件（`Add` / `Remove` / `Count` / `Has`）、状态 `PlayerDao.Bag`、道具表、错误码、丢弃协议 `BagDiscard` 与服务端发放 handler `BagGrant` 来自 [bag 业务模块](../modules/README.md)（`roost module add bag`）；本目录只带覆盖模块文件的两个——`configs/schema/item.go` 与 `configs/table/item.csv`（demo 的道具表多 `attack` / `hp` 两列，行是 demo 的四种道具），背包规则文件 `bag_items.go` 用模块的缺省实现（读这张表）。demo 自己写的是建在背包组件上的事务（`game/handler/add_item.go`、赠礼、公会、装备、邮件领取、充值发货）与两本领取账本 `game/entities/player/claim_ledgers.go` |
 | `db/def/profile.go`、`game/entities/player/profile_*.go`、`game/handler/profile_*.go`、`game/controllers/profile/`、`protocol/def/profile_rename.go`、`internal/errors/profile.go` | 档案（名字、等级、经验）。组件、状态（`PlayerDao.Profile` 别人可见、`PlayerDao.ProfilePrivate` 只给本人）、改名协议 `ProfileRename`、`CheckAddExp`、名片 handler `ProfileCard` 来自 [profile 业务模块](../modules/README.md)（`roost module add profile`）；本目录只带覆盖模块业务文件的一个：升级钩子 `game/entities/player/profile_levelup.go`（属性跟着涨、发 `player.level_up`）。公会副本（`guild_membership.go`）、副本领奖账本（`dungeon_ledger.go`）与两实体的 `AddExp` 是 demo 自己的 |
 | `saga/gift_item/` | 送礼 saga 定义 |
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
@@ -146,7 +147,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 | `pos_x`、`pos_y`、`facing` | ✓ | ✓ | ✓ | | 分区场景的位置随 SceneActor 的 mirror 走 |
 | `scene_id` | ✓ | ✓ | ✓ | | 只在全量里（2～5 字节）；多场景共用一个 Manager 的玩法（MMORPG 夹具）靠它 |
 | `cell_hp`、`cell_max_hp` | ✓ | ✓ | ✓ | | 血条 |
-| `profile_private`（经验）、`items` | ✓ | | | ✓ | 私有。`profile_private` 是 profile 模块的 `PlayerDao.ProfilePrivate` |
+| `profile_private`（经验）、`bag` | ✓ | | | ✓ | 私有。`profile_private` 是 profile 模块的 `PlayerDao.ProfilePrivate`；`bag` 是 bag 模块的嵌套状态（道具号 → 数量），整个结构体是一个同步字段 |
 | `attr_base`、`attr_final`、`cell_attack`、`cell_power` | ✓ | | | | 私有（属性、战斗面板） |
 
 `team` 与 `near` 字段相同、身份不同：队友面板要多给（例如 `attr_final`）时只改 `team` 一行；`team` 的优先级比 `near` 小，

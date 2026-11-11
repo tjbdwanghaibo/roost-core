@@ -233,6 +233,46 @@ func TestAddSagaWithoutNativeRegistersMongoSteps(t *testing.T) {
 	}
 }
 
+// -routed：定义里只有点名的步骤带 Routed: true（正向与补偿共用），EmitStart / Start 多一个 route 参数并写进
+// StartRequest.Route，生成的登记给这些步骤（两个方向）加 kitsaga.WithSidRoute；其余步骤不变。
+func TestAddSagaRoutedRoutesTheNamedStepsBySid(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "saga")
+	if _, err := Add(root, AddOptions{Kind: "saga", Name: "Trade", Steps: []string{"reserve", "deliver"}, Routed: []string{"reserve"}}); err != nil {
+		t.Fatal(err)
+	}
+	definition := readProjectFile(t, root, "saga/trade/definition.go")
+	for _, want := range []string{
+		`{Name: "reserve", ForwardTopic: TopicReserve, CompensateTopic: TopicReserveCompensation, Routed: true},`,
+		`{Name: "deliver", ForwardTopic: TopicDeliver, CompensateTopic: TopicDeliverCompensation},`,
+		"func EmitStart(businessKey, route string, state []byte, deadline time.Time) error {",
+		"DeadlineAt: deadline, Route: route})",
+		"func Start(ctx context.Context, engine *saga.Engine, businessKey, route string, state []byte, deadline time.Time) (saga.Record, error) {",
+	} {
+		if !strings.Contains(definition, want) {
+			t.Errorf("definition.go lacks %q:\n%s", want, definition)
+		}
+	}
+	steps := readProjectFile(t, root, "saga/trade/steps.go")
+	for _, want := range []string{
+		`steps.Mongo("reserve", TopicReserve, bodies.runReserve, kitsaga.WithSidRoute())`,
+		`steps.Mongo("reserve_compensation", TopicReserveCompensation, bodies.compensateReserve, kitsaga.WithSidRoute())`,
+		`steps.Mongo("deliver", TopicDeliver, bodies.runDeliver)`,
+	} {
+		if !strings.Contains(steps, want) {
+			t.Errorf("steps.go lacks %q:\n%s", want, steps)
+		}
+	}
+
+	plain := copyOfNewProject(t, "saga")
+	if _, err := Add(plain, AddOptions{Kind: "saga", Name: "Trade", Steps: []string{"reserve"}}); err != nil {
+		t.Fatal(err)
+	}
+	if definition := readProjectFile(t, plain, "saga/trade/definition.go"); strings.Contains(definition, "Routed") || strings.Contains(definition, "route string") {
+		t.Errorf("a saga without -routed has routed steps or a route parameter:\n%s", definition)
+	}
+}
+
 // 错误输入在写盘之前被拒绝：-native 不是 -steps 的子集、重复、没有组件、只给 -entity 不给 -native、服务没有 Nest、
 // 已存在的 saga 与同名 handler。每种情形之后工程逐字节不变。
 func TestAddSagaNativeRejectsBadInputWithoutTouchingTheProject(t *testing.T) {
@@ -255,6 +295,8 @@ func TestAddSagaNativeRejectsBadInputWithoutTouchingTheProject(t *testing.T) {
 		{"unknown component", []string{"Gift", "-steps", "debit", "-native", "debit", "-component", "Bag"}, `component "bag" is not attached to Entity "player"`},
 		{"entity without native", []string{"Gift", "-steps", "debit", "-component", "Wallet"}, "give them together with -native"},
 		{"handler name taken", []string{"Old", "-steps", "debit", "-native", "debit", "-component", "Wallet"}, "handlerOldDebit already exists in game/handler/old_debit.go"},
+		{"routed not in steps", []string{"Gift", "-steps", "debit,credit", "-routed", "refund"}, `-routed step "refund" is not in -steps (debit, credit)`},
+		{"routed duplicate", []string{"Gift", "-steps", "debit,credit", "-routed", "debit,Debit"}, `duplicate saga step "debit" in -routed`},
 	} {
 		var out bytes.Buffer
 		err := Run(append([]string{"add", "saga"}, append(tc.args, "--root", root)...), &out, &out)

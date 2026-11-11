@@ -427,7 +427,7 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 		t.Errorf("the delta carries the mover's private exp to another player: %v", document)
 	}
 	// And not the ones it did not: a delta is not a snapshot.
-	if _, ok := document["items"]; ok {
+	if _, ok := document["bag"]; ok {
 		t.Errorf("the delta carries a field the mutation never touched: %v", document)
 	}
 }
@@ -552,7 +552,7 @@ func TestProfileModuleWritesReplicateThroughTheCommitObserver(t *testing.T) {
 
 // playerPrivateFields 是 Player 只给本人看的同步字段：别的玩家（主视野里的、队友）都不该收到（同步视图的字段表见
 // demo/README“同步视图”）。
-var playerPrivateFields = []string{"profile_private", "items", "attr_base", "attr_final", "cell_attack", "cell_power"}
+var playerPrivateFields = []string{"profile_private", "bag", "attr_base", "attr_final", "cell_attack", "cell_power"}
 
 // 场景里谁看见一名玩家的哪些字段：视图由 Player 的 packer 声明（game/entities/player/sync_packer.go），场景的主视野与
 // 队伍关系视野各自给出层级（internal/service/game/scene.go 的 sceneLayers）。

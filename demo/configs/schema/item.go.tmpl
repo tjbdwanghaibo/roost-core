@@ -1,9 +1,16 @@
 package schema
 
-// Item is the demo's one config table. `roost generate` turns this type into
-// a typed loader (configs/generated/gen_table_config.go), converts
-// configs/table/item.csv into configs/data/item.json, and registers the table
-// with roost-core/configdata; gameplay code then reads it as
+// Item is the item table. The table itself comes with the bag module
+// (`roost module add bag` ships configs/schema/item.go and
+// configs/table/item.csv, and the Bag reads it through
+// game/entities/player/bag_items.go: a row makes the item id valid, max_stack
+// is its stack cap). The demo replaces the module's sample with this file:
+// the same three columns plus the two its attribute system reads.
+//
+// `roost generate` turns this type into a typed loader
+// (configs/generated/gen_table_config.go), converts configs/table/item.csv
+// into configs/data/item.json, and registers the table with
+// roost-core/configdata; gameplay code then reads it as
 // generated.ItemByID(id) off the snapshot pinned to the current request.
 //
 // The csv tag is the column, title is the human header row, and the rules
@@ -15,12 +22,15 @@ package schema
 //
 //roost:table name=item key=ID
 type Item struct {
-	ID       int64  `csv:"id" json:"id" title:"ID" required:"true" unique:"true"`
-	Name     string `csv:"name" json:"name" title:"Name" required:"true"`
-	MaxStack int32  `csv:"max_stack" json:"max_stack" title:"MaxStack" required:"true"`
-	// Attack is what holding this item is worth in the attribute system: the
-	// player's gear layer is the sum of it over the bag. Config data is
-	// where a number like this belongs — changing the sword's attack is a
+	ID   int64  `csv:"id" json:"id" title:"ID" required:"true" unique:"true" min:"1"`
+	Name string `csv:"name" json:"name" title:"Name" required:"true"`
+	// MaxStack is how many of this item one bag may hold. 0 means no cap of
+	// its own: the bag's hard cap applies (player.BagMaxStack, which also
+	// bounds a larger value here).
+	MaxStack int64 `csv:"max_stack" json:"max_stack" title:"MaxStack" min:"0"`
+	// Attack is what WEARING this item is worth in the attribute system: the
+	// player's gear layer is the sum of it over the worn pieces. Config data
+	// is where a number like this belongs — changing the sword's attack is a
 	// table edit and a hot reload, not a build.
 	Attack int64 `csv:"attack" json:"attack" title:"Attack"`
 	HP     int64 `csv:"hp" json:"hp" title:"HP"`

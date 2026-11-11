@@ -96,6 +96,7 @@
 | 路由 RPC 与实体归属 | 对已有实体的 RPC 自动发往它的 owner 进程，owner 变了按改投重试 | 方法标 `//roost:rpc route`；归属服务 `wiring/remoteentity.WithRouteKinds(...)`，别的服务 `WithForeignKinds(...)`；骨架 `roost add rpc <name> -service <svc> -entity-service` | 正式。路由登记带过期，只增不减等边界见 KNOWN-LIMITS；同一实体的请求逐个处理 | [Service §2A](guide/09-services.md#2a-路由-rpc-与改投)、[路由登记](REMOTE_ENTITY.md#路由登记) |
 | 普通 Bus RPC | 工程自己的跨进程服务：手写接口，生成传输与装配两半 | `roost add rpc <name> -service <svc>`；调用方在 `roost.yaml` 写 `services.<caller>.uses_rpcs: [<name>]` 后 `roost project sync` | 正式。调用方不传期限时接收端自己限时；回复按 `servicerpc.Classify` 分类 | [项目生成器 §6.x](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#6x-本工程自己的跨进程服务roost-add-rpc)、[命令参考 §13](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#13-servicerpc接口先行的跨进程服务) |
 | Saga 长事务 | 跨实体、跨服务的多步流程，失败按倒序补偿；按业务键查结果 | `roost add saga <name> -service <svc> -steps a,b -native a,b -entity <E> -component <C>`；服务 `Init` 里 `StartSteps`；handler 里 `EmitStart` | 正式。不是跨服务 ACID，也不是瞬时原子交易；依赖 NATS JetStream；补偿可能需要人工介入；业务键只在保留期内唯一 | [Saga](guide/06-saga.md)、[Saga 契约](SAGA.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#saga) |
+| Saga 步骤按 sid 确切路由 | 只能在某个 sid 上执行的步骤（改玩家实体的原生步骤）直接投给那个 sid 的进程，不再多个进程争抢后交接；属主发现玩家不绑定本服或正在换服时把步骤退回协调器，退回不算重试 | `roost add saga <name> ... -routed <step>`；启动时 `StartRequest.Route = saga.SidRoute(sid)` 且必须带截止 `DeadlineAt`；步骤登记 `WithSidRoute()`，属主核对用 `WithAdmit` 返回 `BounceStep` / `RejectStep` | 正式（v1.44.0）。一笔 saga 只有一个路由地址（两名不同服玩家互改的 saga 表达不了）；补偿方向没有截止，等到属主收下；每个 sid 每条流多一组 durable；没有路由键的旧消息直接拒绝 | [Saga 契约“按 sid 确切路由”](SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③) |
 | effect 跨服务通知 | 一个服务事务里发事件，另一个服务可靠消费（升级 → 发邮件） | 见“持久化”的 effect 行；`-consumer` 选消费服务 | 正式 | [DataEngine §3](guide/03-dataengine.md#3-投影与幂等) |
 | 服务发现 | 进程登记与查找，给 Gate / Game 与托管服务用 | Mod `etcd`（`wiring/etcd`） | 正式。发现只是候选，身份由单实例锁核对 | [Gate §2](GATEWAY.md#2-正式接入方式) |
 
@@ -193,7 +194,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | `roost add dao` | DAO 定义骨架并接入 Entity | `roost add dao <name> --entity <owner>` | 正式。已存在时报错，不复用 | 同上 |
 | `roost add webroute` | HTTP 路由骨架并装 web Mod | `roost add webroute <name>` | 正式 | 同上 |
 | `roost add errcode` | 错误码定义并分配编号 | `roost add errcode <name>` | 正式 | 同上 |
-| `roost add saga` | Saga 定义、步骤运行时与原生步骤的 handler 骨架 | `roost add saga <name> -service <svc> -steps a,b` | 正式。骨架默认拒绝 | 同上 |
+| `roost add saga` | Saga 定义、步骤运行时与原生步骤的 handler 骨架；`-routed <step>` 把步骤声明为按 sid 确切路由 | `roost add saga <name> -service <svc> -steps a,b [-routed a]` | 正式。骨架默认拒绝 | 同上 |
 | `roost add effect` | effect 载荷、发射辅助与消费者骨架 | `roost add effect <topic> -consumer <service>` | 正式。骨架默认返回错误（重投、不丢） | 同上 |
 | `roost add rpc` | 工程自己的跨进程服务 | `roost add rpc <name> -service <svc>`，实体服务加 `-entity-service` | 正式 | [项目生成器 §6.x](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#6x-本工程自己的跨进程服务roost-add-rpc) |
 | `roost add timer` | 实体持久定时器 | `roost add timer --entity <Entity>` | 正式。一个实体只有一个定时器组件 | [命令参考](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器) |
@@ -231,7 +232,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 体力 stamina | 随业务时间惰性恢复到上限（不用定时器）；消耗、发放、查询的组件入口；花金币补满的协议（每业务日限次、逐次涨价）；服务端发放 handler；规则是一个业务文件 | `roost module add stamina`（依赖 wallet）；别的功能在自己的事务里调 `StaminaComp().Spend(n, nowUnixMilli)` | 现成模块。同步只在写入时发生，客户端要按上限、周期与服务器业务时间自己推算当前值；发放超过硬顶静默截断（看返回的 `Granted`）；调高上限等于给已满的玩家立即补到新上限；补满协议不带请求键 | 同上 |
 | 商店 shop | 用金币买道具：扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键防重发；商品目录是一个业务文件 | `roost module add shop`（依赖 wallet 与 bag） | 现成模块。样例目录装上就在卖，要换成自己的；请求键只在最近 64 次成功购买内去重，更早的键重发会再买一次；没有“期望价格”校验、多货币、打折、全服库存；目录是 Go 表不是配置表 | 同上 |
 | 玩家档案 profile | 名字、等级、经验；改名协议；服务端发经验的 handler（每级固定经验、可连升多级）；升级钩子是一个业务文件 | `roost module add profile`；别的业务调 `ProfileComp().AddExp(n)`，升级奖励写在 `profile_levelup.go` | 现成模块。名字不查重（全服唯一用 directory 服务）、不查敏感词；每级 100 经验是样例；没有等级上限 | 同上 |
-| 玩家背包 bag | 道具号到数量的堆叠背包：增、减、查；丢弃协议；服务端发放 handler | `roost module add bag`；别的业务在自己的组件里调 `BagComp().Add / Remove / Has` | 现成模块。没有格子、装备、过期与道具表：道具号合法性在 `bag_items.go`，缺省只要求为正；至多 200 种、单种至多 999999 | 同上 |
+| 玩家背包 bag | 道具号到数量的堆叠背包：增、减、查；自带道具表（哪些道具存在、每种的单种上限，热更可改）；丢弃协议；服务端发放 handler | `roost module add bag`；别的业务在自己的组件里调 `BagComp().Add / Remove / Has`；加道具改 `configs/table/item.csv` 再 `roost generate` | 现成模块，game-demo 的背包用的就是它。没有格子、装备、过期；至多 200 种、单种硬上限 999999；进程里没装载配置时一律拒绝放入；每次变化同步整份背包（不是按键增量） | 同上 |
 | 排行榜 leaderboard | 缺省一张全服总分榜：`LeaderboardTop` 一条请求带前 N 名与自己的名次，另有只查自己的 `LeaderboardMe`；提交分数的函数给服务端别的功能调（`Submit`，分周期的用 `SubmitSeason`）；榜名、范围、周期、分数范围在一个业务文件里 | `roost module add leaderboard`（业务服务要 `uses: [rank]`，`-template game` 已有）；持有总分的功能在事务之外调 `leaderboard.Submit` | 现成模块，game-demo 的通关榜用的就是它。只升不降；读榜的两条协议固定读当前这一张榜，多张榜、读历史周期要手写；与改总分的事务不是原子的，失败靠重试或下一次提交补上 | 同上 |
 | 邮件 mailbox | 分页列出自己的邮件、领取附件；每封至多到账一次；附件种类是登记点（金币内置；装了 bag 时道具附件可发可领；装了 enter 时进入游戏自动拉全服邮件） | `roost module add mailbox`（连同 wallet；业务服务要 `uses: [mail]`，`-template game` 已有）；发件方用 `mailbox.Encode(mailbox.Coins(n))` / `mailbox.Item(道具号, n)` 编码附件；自己的奖励种类在 `init` 里登记校验与发放方式 | 现成模块。一封邮件只有一份附件；没有登记发放方式的种类不可领、保持未领；满背包的道具邮件一直显示可领、领取时答背包的码；没有发件方、已读与删除协议 | 同上 |
 
@@ -297,7 +298,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 需求或类型 | 结论 | 是哪条限制 | 出处 |
 | --- | --- | --- | --- |
-| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有十一个模块和四组模块间联动，game-demo 用上了其中的 enter、chat 与 leaderboard；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
+| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有十一个模块和四组模块间联动，game-demo 用上了其中的 enter、chat、leaderboard 与 bag；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
 | 业务模块的卸载 | 不做 | 分配过的号与存储键不回收；要去掉一个模块时按 `roost.yaml` 的 `modules.<name>` 归属清单手工删 | [业务模块方案“决定一览”](../maintenance/FEATURE-2026-11-10-business-modules.md#决定一览) |
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
 | 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |
@@ -326,7 +327,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 需求说法 | 用到的能力 | 最接近的现成参考 |
 | --- | --- | --- |
 | 玩家货币 | 现成模块 wallet（`roost module add wallet`）：余额、幂等加减、消费协议 | 模块 wallet；多种货币或充值到账照着它扩 |
-| 玩家背包 | 现成模块 bag（`roost module add bag`）：堆叠背包、丢弃协议、服务端发放 | 模块 bag；格子、装备栏照 game-demo“背包、经验与升级”“装备栏”扩 |
+| 玩家背包 | 现成模块 bag（`roost module add bag`）：堆叠背包、道具表、丢弃协议、服务端发放 | 模块 bag；装备栏照 game-demo“装备栏”扩 |
 | 名字、等级、经验 | 现成模块 profile（`roost module add profile`）：改名、发经验、升级钩子 | 模块 profile；game-demo“背包、经验与升级” |
 | 幂等扣发（重试不重复扣费、不重复发奖） | 实体上的持久业务事实（序号账本、领奖事实）+ 回复错误判别 | 卡牌 RPG、SLG 夹具；三类离散玩法的命令序号 |
 | 抽卡保底 | 配置表（按值捕获）+ 幂等序号账本，同一事务里改保底计数与发卡；规则需手写业务 | 卡牌 RPG 夹具 |

@@ -76,7 +76,9 @@ func (component *EquipmentComponent) RangeWorn(visit func(slot int32, itemID int
 func (component *EquipmentComponent) Equip(itemID int64, level int32) (int32, int64, error) {
 	slot, wearable := equipment.SlotFor(itemID)
 	if !wearable {
-		return 0, 0, errcode.Wrap(apperrors.ErrItemUnknown, nil, "item_id", itemID)
+		// The bag module's "unknown item" code: the demo has no code of its own
+		// for "this item cannot be worn".
+		return 0, 0, errcode.Wrap(apperrors.ErrBagItemInvalid, nil, "item_id", itemID)
 	}
 	worn := component.snapshot()
 	previous := int64(0)

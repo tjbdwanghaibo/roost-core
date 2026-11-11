@@ -2,25 +2,31 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"{{MODULE}}/configs/schema"
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 // 场景用自己的商品目录，数字都写死在这里：工程改了 shop_goods.go 里的样例，这些用例不该变红；
@@ -92,6 +98,48 @@ func (c *shopCommitter) Commit(context.Context, dataengine.CommitRecord) error {
 	return nil
 }
 
+// shopTestLoadItems 把用例要用到的道具装成进程当前的道具表，测试结束时原样换回。背包按道具表判断
+// 道具号存不存在、单种上限是多少（game/entities/player/bag_items.go），没有装载过配置的进程里
+// 任何道具都放不进背包。用例自己带表，不用工程的 configs/table/item.csv：那张表归工程所有。
+// 表里的道具都不单独限制（max_stack 为 0），按背包的硬上限 999999 算。
+//
+// 表按生成代码的名字与键类型登记（item、int64），只登记这一张。装载会发布两处进程级的东西
+// （缺省 Store 与新请求钉住的配置快照），两处都换回，这张表才不会漏给本包后面的用例。
+func shopTestLoadItems(t *testing.T) {
+	t.Helper()
+	// 目录里的道具 1001～1010，加上把背包摆满用的 5001～5198。
+	var rows []schema.Item
+	for itemID := int64(1001); itemID <= 1010; itemID++ {
+		rows = append(rows, schema.Item{ID: itemID, Name: fmt.Sprintf("item-%d", itemID)})
+	}
+	for itemID := int64(5001); itemID <= 5198; itemID++ {
+		rows = append(rows, schema.Item{ID: itemID, Name: fmt.Sprintf("item-%d", itemID)})
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.Item]{
+		Name: configdata.Name("item"), File: "item.json",
+		Key: func(row schema.Item) int64 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatalf("load the item table: %v", err)
+	}
+}
+
 type shopFixture struct {
 	engine    *nest.NestMgr
 	player    *playerentity.Player
@@ -110,6 +158,7 @@ func newShopFixture(t *testing.T, coins int64) *shopFixture {
 	RegisterWalletGrantNestHandlers()
 	RegisterBagGrantNestHandlers()
 	t.Cleanup(playerentity.SetShopGoodsForTest(shopTestGoods()))
+	shopTestLoadItems(t)
 	f := &shopFixture{committer: &shopCommitter{}}
 	f.now.Store(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli())
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })

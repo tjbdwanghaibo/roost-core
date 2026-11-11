@@ -3,7 +3,8 @@ package player
 // 这个文件是商品目录：商店卖什么、一份里有几个道具、多少钱、怎么限购。ShopComponent.Buy 只通过
 // shopGoodsByID 读它，规则数据都在这里，组件里没有。
 //
-// 模块不带配置表，缺省目录是下面这张 Go 表，自带三条样例，上线前换成自己的商品。
+// 这个模块的目录还没有做成配置表（bag 模块的道具表是做成表的样子，见它的 configs/schema/item.go）：
+// 缺省目录是下面这张 Go 表，自带三条样例，上线前换成自己的商品。
 // 项目接上自己的配置表之后（roost add table shop_goods，再 roost generate），只改 shopGoodsByID 一处：
 //
 //	row, ok := generated.ShopGoodsByID(goodsID)   // configs/generated 里生成的访问器
