@@ -1,5 +1,5 @@
 name: profile
-summary: 玩家档案：名字、等级、经验；改名协议、服务端发经验（每级固定经验、可连升多级）与升级钩子
+summary: 玩家档案：名字、等级、经验；改名协议、服务端发经验（每级固定经验、可连升多级，可以先只检查不执行）、升级钩子、给服务端读的名片（名字与等级）；别的玩家可见的一半与只给本人的一半分开存
 requires: []
 conflicts: []
 needs:
@@ -11,11 +11,16 @@ state:
     type: ProfileState
     store: profile
     dao: persist,sync
-    comment: Profile 是档案模块给玩家本人看的状态（名字、等级、等级内经验），随同步下发。
+    comment: Profile 是档案里别的玩家也可以看的那一半（名字、等级），随同步下发；给别的玩家做视图时白名单里列它。
+  - field: ProfilePrivate
+    type: ProfilePrivateState
+    store: profile_private
+    dao: persist,sync
+    comment: ProfilePrivate 是档案里只给玩家本人看的那一半（等级内经验），随同步下发；给别的玩家的视图不要列它。
 component: Profile
 protocols: [ProfileRename]
 errcodes: [profile_name_empty, profile_name_long, profile_name_invalid, profile_exp_invalid, profile_exp_overflow]
 verify:
   packages: [./game/handler]
   run: ^TestProfile
-  pass: 16
+  pass: 19

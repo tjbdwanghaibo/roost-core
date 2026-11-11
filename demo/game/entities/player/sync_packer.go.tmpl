@@ -25,14 +25,15 @@ func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacke
 // Player 的同步视图（同步视图由业务按 DAO 字段声明：维护者 2026-11-10“同步视图的问题，业务层处理 DAO 的视图”）。
 // 字段名是生成 DAO 的字段词汇表（字段位变化不要求手工改掩码）；谁拿到哪个视图由订阅方给出（场景主视野、队伍关系视野、
 // 分区场景的自身绑定，见 internal/service/game/scene.go 的 sceneLayers），packer 只认这里声明过的视图，未知视图报错、
-// 不扩大字段权限。字段 × 视图：
+// 不扩大字段权限。白名单的粒度是 DAO 的顶层字段：档案是 profile 模块的两个字段——Profile（名字、等级）别的玩家也看得到，
+// ProfilePrivate（等级内经验）只给本人——所以“别人看不到经验”靠的是不把 ProfilePrivate 列进他们的视图。字段 × 视图：
 //
 //	字段                                   default（本人）  near（他人）  team（队友）  far  self（分区场景本人）
-//	name、level、equipment、guild_id         ✓               ✓             ✓             name、level  ✓
+//	profile（名字、等级）、equipment、guild_id  ✓            ✓             ✓             profile      ✓
 //	pos_x、pos_y、scene_id                   ✓               ✓             ✓             ✓    —
 //	facing                                   ✓               ✓             ✓             —    —
 //	cell_hp、cell_max_hp（血条）             ✓               ✓             ✓             —    —
-//	exp、gold、bag、wallet                   ✓               —             —             —    ✓
+//	profile_private（经验）、bag、wallet     ✓               —             —             —    ✓
 //	attr_base、attr_final、cell_attack、cell_power  ✓        —             —             —    —
 //
 // default 是普通场景里玩家经 self 看自己（policy.InterestConfig.SelfLayer 零值）：全部同步字段。near 是场景主视野里
@@ -42,18 +43,18 @@ func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacke
 type playerSyncPacker struct{ player *Player }
 
 // playerPublicFields 是别的玩家看得见的字段（near / team）。
-var playerPublicFields = []string{"Name", "Level", "PosX", "PosY", "SceneID", "Facing", "Equipment", "GuildID", "CellHP", "CellMaxHP"}
+var playerPublicFields = []string{"Profile", "PosX", "PosY", "SceneID", "Facing", "Equipment", "GuildID", "CellHP", "CellMaxHP"}
 
 var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: playerPublicFields, Priority: 0},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "team"}, Fields: playerPublicFields, Priority: -1},
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID"}, Priority: 10},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Profile", "PosX", "PosY", "SceneID"}, Priority: 10},
 	// self is what a member of a partitioned scene gets of its own Player (maintainer decision E4 = A): its own
 	// state. Not the position and not the HP — the scene actor's mirror carries those, and the partitioned scene's
 	// position and HP live on the cell; not the attribute maps either (which combat field lives where in a
 	// partitioned scene waits on the maintainer, FEATURE §11).
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Name", "Level", "Exp", "Gold", "Bag", "Wallet", "Equipment", "GuildID"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Profile", "ProfilePrivate", "Bag", "Wallet", "Equipment", "GuildID"}, Priority: 0},
 )
 
 // SyncViews 是 Player 的视图集（不可变，可共享）：场景把它交给 Interest（policy.InterestConfig.ViewSets）在构造时核对

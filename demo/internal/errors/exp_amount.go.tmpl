@@ -2,5 +2,8 @@ package errors
 
 import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
-// ErrExpAmount: the grant is non-positive or exceeds experience/level storage bounds.
+// ErrExpAmount: an experience grant the World's server-wide total cannot take —
+// non-positive, or past the int64 the total is stored in. The Player's half of
+// the same grant (experience and level range) is refused by the profile
+// module's own codes, profile_exp_invalid and profile_exp_overflow.
 var ErrExpAmount = errcode.Define(100004, "exp_amount", "invalid exp amount")

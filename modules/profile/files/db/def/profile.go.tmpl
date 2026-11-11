@@ -1,11 +1,20 @@
 package dbdef
 
-// ProfileState 是玩家本人可见的档案：名字、等级、经验。
+// 档案分成两个顶层字段，因为同步按 DAO 的顶层字段决定给谁：Profile 是别的玩家也可以看的那一半，
+// ProfilePrivate 是只给本人看的那一半。只开了玩家自身视图的工程两个都下发给本人，不用管这个区别；
+// 给别的玩家做视图（场景里的旁人、队友、好友列表）时，字段白名单里只列 Profile。
+// 以后加字段先想清楚它属于哪一半：别人能看的放 ProfileState，只给本人的放 ProfilePrivateState。
+
+// ProfileState 是档案里别的玩家也可以看的那一半：名字、等级。
 type ProfileState struct {
 	// Name 是显示名，存的是去掉首尾空白之后的名字；没改过名时为空。
 	Name string `store:"1"`
 	// Level 是等级，新档从 0 起，只由 ProfileComponent.AddExp 往上加。
 	Level int32 `store:"2"`
+}
+
+// ProfilePrivateState 是档案里只给玩家本人看的那一半：经验。
+type ProfilePrivateState struct {
 	// Exp 是当前等级内的经验（升级时扣掉升级所需的部分），不是累计经验。
-	Exp int64 `store:"3"`
+	Exp int64 `store:"1"`
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 	"{{MODULE}}/db"
+	"{{MODULE}}/game/clientsync"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/protocol/msgid"
 )
@@ -22,7 +23,7 @@ import (
 // EntitySyncPush PB；robot session 对 Sync 包不做 PB 解码（Message.Value 为 nil）。scene_watch 必须按
 // 这个形状读帧——只认 PB 值时它把每一帧都静默跳过，scene_expect 在 10 秒后以 "0 frames" 失败。
 func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
-	document, err := db.MarshalSyncPlayerDao(&db.SyncPlayerDao{EntityID: 42, SyncFormat: 3, Level: &db.SyncPlayerDaoLevelField{Value: 3}})
+	document, err := db.MarshalSyncPlayerDao(&db.SyncPlayerDao{EntityID: 42, SyncFormat: 3, Profile: &db.SyncPlayerDaoProfileField{Value: db.SyncProfileState{Level: 3}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 	if watcher.frames != 1 {
 		t.Fatalf("Sync 标志的场景帧没有被读到：frames = %d，want 1", watcher.frames)
 	}
-	if level, ok := watcher.subjects[subjectID]["level"]; !ok || level != int32(3) {
+	if level, ok := clientsync.PlayerLevel(watcher.subjects[subjectID]); !ok || level != 3 {
 		t.Fatalf("subject %d 的字段没有合并进客户端视图：%v", subjectID, watcher.subjects)
 	}
 
@@ -124,7 +125,10 @@ func TestSceneAliveFailsWhenTheServerStopsReplicating(t *testing.T) {
 	}
 	for _, live := range []bool{true, false} {
 		watcher := &sceneWatcher{subjects: make(map[int64]map[string]any)}
-		watcher.consume(syncFrame(t, subjectID, &db.SyncPlayerDao{Exp: &db.SyncPlayerDaoExpField{Value: 10}, Level: &db.SyncPlayerDaoLevelField{Value: 2}}))
+		watcher.consume(syncFrame(t, subjectID, &db.SyncPlayerDao{
+			ProfilePrivate: &db.SyncPlayerDaoProfilePrivateField{Value: db.SyncProfilePrivateState{Exp: 10}},
+			Profile:        &db.SyncPlayerDaoProfileField{Value: db.SyncProfileState{Level: 2}},
+		}))
 		rb := robot.NewContext(robot.Config{PlayerID: playerID})
 		rb.Blackboard.Set("scene_watcher", watcher)
 		rb.Blackboard.Set("player_id", playerID)
@@ -135,7 +139,7 @@ func TestSceneAliveFailsWhenTheServerStopsReplicating(t *testing.T) {
 			}
 			asked++
 			if live {
-				go watcher.consume(syncFrame(t, subjectID, &db.SyncPlayerDao{Exp: &db.SyncPlayerDaoExpField{Value: 11}}))
+				go watcher.consume(syncFrame(t, subjectID, &db.SyncPlayerDao{ProfilePrivate: &db.SyncPlayerDaoProfilePrivateField{Value: db.SyncProfilePrivateState{Exp: 11}}}))
 			}
 			return nil
 		}

@@ -105,91 +105,100 @@ func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 	}
 }
 
-// 背包组件由 bag 模块带来。建在它上面的 Nest handler（roost add handler --component Bag 要求组件文件已经在盘上）
-// 与覆盖这些 handler 文件的 write 步骤，都必须排在安装 bag 的那一步之后；demo 自己不再建、也不再写背包组件。
-// 覆盖模块文件的 write（道具表）同样要在模块之后，否则安装器会因为落点被占用而拒绝。
-func TestDemoBagStepsFollowTheBagModule(t *testing.T) {
+// 模块带来的组件（bag 的 Bag、profile 的 Profile、enter 的 Enter、mailbox 的 Mailbox）在安装模块的那一步才落盘。demo 的步骤因此守四条：
+//   - 全部模块在同一步里装，顺序固定：号按这个顺序、每次取最小的空号分配，新换用的模块只能加在末尾；
+//   - 不再自己建这些组件，道具表也不再自己加（它随 bag 模块来）；
+//   - 建在这些组件上的 Nest handler 不跑 roost add handler（它要求组件文件已经在盘上，而且只写一个随即被覆盖的骨架）：
+//     handler 文件直接由 write 步骤写出、留在原处，模块那一步跑生成器时全部 handler 都在盘上；
+//   - 覆盖模块文件的 write 排在安装之后，否则安装器会因为落点被占用而拒绝。
+func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	steps := demoScaffoldSteps("game")
 	installed := -1
+	var modules []string
 	for index, step := range steps {
-		if contains(step.modules, "bag") {
-			if installed >= 0 {
-				t.Fatal("the bag module is installed twice")
-			}
-			installed = index
+		if len(step.modules) == 0 {
+			continue
 		}
+		if installed >= 0 {
+			t.Fatalf("modules are installed in more than one step (%v, then %v): the first step's generators and go mod tidy would run on a project that refers to modules not installed yet", modules, step.modules)
+		}
+		installed, modules = index, step.modules
 	}
 	if installed < 0 {
-		t.Fatal("no step installs the bag module")
+		t.Fatal("no step installs the modules")
+	}
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox"; got != want {
+		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	moduleFiles := map[string]bool{}
-	for _, rel := range catalog["bag"].Files {
-		moduleFiles[rel] = true
+	components := map[string]string{}  // 组件名 -> 带来它的模块
+	moduleFiles := map[string]string{} // 模块文件 -> 模块
+	for _, name := range modules {
+		spec := catalog[name]
+		if spec.Component != "" {
+			components[spec.Component] = name
+		}
+		for _, rel := range spec.Files {
+			moduleFiles[rel] = name
+		}
 	}
-	handlerFiles := map[string]bool{}
-	handlers := 0
+	for _, component := range []string{"Bag", "Profile", "Mailbox"} {
+		if components[component] == "" {
+			t.Errorf("no installed module brings the %s component", component)
+		}
+	}
+	written := map[string]bool{}
 	for index, step := range steps {
-		if step.add == nil {
-			continue
-		}
-		if step.add.Kind == "component" && step.add.Name == "Bag" {
-			t.Error("the demo still adds its own Bag component")
-		}
-		if step.add.Kind == "table" && step.add.Name == "Item" {
-			t.Error("the demo still adds its own item table: it comes with the bag module")
-		}
-		if step.add.Kind == "handler" && step.add.Component == "Bag" {
-			handlers++
-			handlerFiles["game/handler/"+toSnake(step.add.Name)+".go"] = true
-			if index < installed {
-				t.Errorf("add handler %s --component Bag runs before the bag module is installed", step.add.Name)
+		if step.add != nil {
+			if module := components[toPascal(step.add.Name)]; step.add.Kind == "component" && module != "" {
+				t.Errorf("the demo still adds its own %s component: it comes with the %s module", step.add.Name, module)
+			}
+			if module := components[toPascal(step.add.Component)]; step.add.Kind == "handler" && module != "" {
+				t.Errorf("add handler %s --component %s cannot run: the component arrives with the %s module in the last step; write the handler file instead", step.add.Name, step.add.Component, module)
+			}
+			if step.add.Kind == "table" && step.add.Name == "Item" {
+				t.Error("the demo still adds its own item table: it comes with the bag module")
 			}
 		}
-		if step.add.Kind == "endpoint" && step.add.Name == "AddItem" && index < installed {
-			t.Error("add endpoint AddItem runs before its handler can exist")
-		}
-	}
-	// AddItem、赠礼三步、充值发货、公会三步。邮件附件的发放不在其中：那是 mailbox 模块自己组件上的 handler。
-	if handlers != 8 {
-		t.Errorf("%d handlers are built on the Bag component, want 8", handlers)
-	}
-	for index, step := range steps {
 		if step.write == "" {
 			continue
 		}
-		if (handlerFiles[step.write] || moduleFiles[step.write]) && index < installed {
-			t.Errorf("%s is written before the bag module is installed", step.write)
+		written[step.write] = true
+		if module := moduleFiles[step.write]; module != "" && index < installed {
+			t.Errorf("%s is the %s module's file and is written before the module is installed", step.write, module)
+		}
+	}
+	// 建在模块组件上的 handler 仍然由 demo 写出：背包上的八个、档案上的五个。邮件附件的发放不在其中：
+	// 那是 mailbox 模块自己的 MailboxClaimReward，建在模块的 Mailbox 组件上。
+	for _, rel := range []string{
+		"game/handler/add_item.go", "game/handler/start_gift.go", "game/handler/gift_debit.go", "game/handler/gift_refund.go",
+		"game/handler/grant_purchase.go",
+		"game/handler/start_guild_op.go", "game/handler/guild_debit.go", "game/handler/guild_credit.go",
+		"game/handler/add_exp.go", "game/handler/claim_dungeon.go", "game/handler/player_team.go",
+		"game/handler/show_guild.go", "game/handler/player_guild.go",
+	} {
+		if !written[rel] {
+			t.Errorf("no step writes %s", rel)
 		}
 	}
 }
 
-// 邮件由 mailbox 模块带来（连同它依赖的 wallet）。demo 的发件方（升级奖励、GM、活动结算、送礼）import game/mailbox，
-// 而每个模块步骤结束时都要跑生成器与 go mod tidy：第一个模块步骤跑完时这个包必须已经在盘上，所以 mailbox 与 enter
-// 在同一步里装。demo 不再有自己的邮件协议、handler 与错误码步骤，也不覆盖 mailbox / wallet 的任何文件。
-func TestDemoMailboxComesWithTheFirstModuleStep(t *testing.T) {
+// 邮件由 mailbox 模块带来（连同它依赖的 wallet；模块在同一步里装、顺序由上一条用例钉住）。demo 不再有自己的邮件协议、
+// handler、组件与错误码步骤，也不覆盖 mailbox / wallet 的任何文件：发件方只调模块的 SendTo。
+func TestDemoLeavesMailToTheMailboxModule(t *testing.T) {
 	steps := demoScaffoldSteps("game")
-	first := -1
-	for index, step := range steps {
-		if len(step.modules) == 0 {
-			continue
-		}
-		if first < 0 {
-			first = index
-			if !contains(step.modules, "mailbox") || !contains(step.modules, "enter") {
-				t.Errorf("the first module step installs %v; mailbox must be installed there with enter: files written before it import game/mailbox", step.modules)
-			}
-			continue
-		}
-		if contains(step.modules, "mailbox") || contains(step.modules, "wallet") {
-			t.Errorf("a later module step installs %v again", step.modules)
+	installs := false
+	for _, step := range steps {
+		installs = installs || contains(step.modules, "mailbox")
+		if contains(step.modules, "wallet") {
+			t.Errorf("wallet is listed in %v: it comes with mailbox as its dependency, and listing it would move every later id", step.modules)
 		}
 	}
-	if first < 0 {
-		t.Fatal("no step installs modules")
+	if !installs {
+		t.Fatal("no step installs the mailbox module")
 	}
 	catalog, err := loadModuleCatalog()
 	if err != nil {
@@ -361,7 +370,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// owns their uniqueness; an id outside it would fail at add time.
 	// The bag's codes are the module's (internal/errors/bag.go), allocated
 	// from the same space when the module is installed.
-	for _, file := range []string{"internal/errors/exp_amount.go", "internal/errors/name_empty.go", "internal/errors/bag.go"} {
+	for _, file := range []string{"internal/errors/exp_amount.go", "internal/errors/profile.go", "internal/errors/bag.go"} {
 		if body := read(file); !strings.Contains(body, "errcode.Define(1000") || strings.Contains(body, "TODO") {
 			t.Errorf("%s is not a finished coded error:\n%s", file, body)
 		}
@@ -389,7 +398,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	for _, rel := range []string{"game/chat/chat.go", "protocol/def/chat_send.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
 		"game/controllers/chat/chat_send.go", "game/controllers/chat/chat_history.go", "game/controllers/chat/chat_push.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "game/rewards/rewards_test.go",
-		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/player_level.go",
+		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
 		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skill_catalog.go", "game/controllers/player/skill_catalog.go",
 		"internal/service/game/gm.go",
@@ -671,10 +680,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if server := read("internal/access/player/tcp/server_gen.go"); !strings.Contains(server, "type RegistryBound interface") {
 		t.Errorf("the generated transport lost the RegistryBound hook the demo authenticator relies on")
 	}
-	// The event chain: the component emits on the transaction, the service
+	// The event chain: the profile module's level-up hook (the demo's own
+	// version of the project-owned file) emits on the transaction, the service
 	// consumes with an inbox and sends mail keyed by the effect id.
-	if profile := read("game/entities/player/profile_component.go"); !strings.Contains(profile, "effects.EmitPlayerLevelUp(") {
-		t.Errorf("profile component does not emit the level-up effect:\n%s", profile)
+	if hook := read("game/entities/player/profile_levelup.go"); !strings.Contains(hook, "effects.EmitPlayerLevelUp(") || !strings.Contains(hook, "AttributeComp().LevelUp(") {
+		t.Errorf("the level-up hook does not raise the attributes and emit the level-up effect:\n%s", hook)
 	}
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "startLevelUpMailer(") {
 		t.Errorf("game service does not start the effect consumer:\n%s", service)
@@ -752,6 +762,35 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if finish := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(finish, "gameleaderboard.SubmitSeason(") || strings.Contains(finish, "svcrank") {
 		t.Errorf("the dungeon settlement does not submit through the leaderboard module:\n%s", finish)
+	}
+	// 档案是 profile 模块装进来的：demo 不带自己的档案组件、PlayerLevel 读 handler 与 name_empty 错误码；模块的组件文件原样
+	// （不发 effect、不碰属性），demo 只覆盖升级钩子；名字、等级、经验不再是 PlayerDao 的平铺字段，而是模块追加的两个
+	// 顶层字段（Profile 别人可见、ProfilePrivate 只给本人）；公会副本与副本领奖账本在 demo 自己的文件里。
+	for _, gone := range []string{"game/handler/player_level.go", "internal/errors/name_empty.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(gone))); !os.IsNotExist(err) {
+			t.Errorf("the demo still ships its own profile file %s (err=%v)", gone, err)
+		}
+	}
+	if component := read("game/entities/player/profile_component.go"); !strings.Contains(component, "func (component *ProfileComponent) CheckAddExp(") ||
+		strings.Contains(component, "effects.") || strings.Contains(component, "AttributeComp()") || strings.Contains(component, "GuildID") || strings.Contains(component, "Dungeon") {
+		t.Errorf("game/entities/player/profile_component.go is not the module's own component file:\n%s", component)
+	}
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "Profile ProfileState `store:\"profile\" dao:\"persist,sync\"`") ||
+		!strings.Contains(dao, "ProfilePrivate ProfilePrivateState `store:\"profile_private\" dao:\"persist,sync\"`") ||
+		strings.Contains(dao, `store:"name"`) || strings.Contains(dao, `store:"exp"`) || strings.Contains(dao, `store:"gold"`) {
+		t.Errorf("PlayerDao does not take its name, level and exp from the profile module's two fields:\n%s", dao)
+	}
+	if packer := read("game/entities/player/sync_packer.go"); !strings.Contains(packer, `playerPublicFields = []string{"Profile", `) || strings.Contains(packer, `playerPublicFields = []string{"Profile", "ProfilePrivate"`) {
+		t.Errorf("the view other players get does not list Profile without ProfilePrivate:\n%s", packer)
+	}
+	if guild := read("game/entities/player/guild_membership.go"); !strings.Contains(guild, "func (component *ProfileComponent) SetGuild(") {
+		t.Errorf("the guild copy is not in the demo's own file:\n%s", guild)
+	}
+	if ledger := read("game/entities/player/dungeon_ledger.go"); !strings.Contains(ledger, "func (component *ProfileComponent) ClaimDungeonRun(") {
+		t.Errorf("the dungeon claim ledger is not in the demo's own file:\n%s", ledger)
+	}
+	if queue := read("game/controllers/player/join_queue.go"); !strings.Contains(queue, "Sync_ProfileCard(") {
+		t.Errorf("the ranked queue does not read the level through the profile module's ProfileCard:\n%s", queue)
 	}
 	if robot := read("cmd/loadtest/main.go"); !strings.Contains(robot, "msgid.MsgLeaderboardTop") || strings.Contains(robot, "RankTop") {
 		t.Errorf("the load-test robot does not read the board through the module's LeaderboardTop")

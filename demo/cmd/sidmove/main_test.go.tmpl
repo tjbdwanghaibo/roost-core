@@ -104,8 +104,8 @@ func TestPlayerSnapshotsDetectAWriteInBetween(t *testing.T) {
 	ctx := context.Background()
 	players := mongotest.NewClient().Collection("game", "player")
 	for _, doc := range []bson.M{
-		{"_id": int64(1), "_version": int64(3), "_schema": int64(2), "_last_tx": "a", "level": int32(1)},
-		{"_id": int64(2), "_version": int64(5), "_schema": int64(2), "_last_tx": "b", "level": int32(1)},
+		{"_id": int64(1), "_version": int64(3), "_schema": int64(2), "_last_tx": "a", "profile": bson.M{"2": int32(1)}},
+		{"_id": int64(2), "_version": int64(5), "_schema": int64(2), "_last_tx": "b", "profile": bson.M{"2": int32(1)}},
 	} {
 		if err := players.Seed(doc); err != nil {
 			t.Fatal(err)

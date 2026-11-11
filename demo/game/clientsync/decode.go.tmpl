@@ -35,3 +35,24 @@ func DecodeFields(update entity.SubjectSyncUpdate) (map[string]any, error) {
 		return nil, fmt.Errorf("unknown sync namespace %q", update.Namespace)
 	}
 }
+
+// 档案是 profile 模块的两个顶层同步字段，DecodeFields 给出的是它们的整值：键 profile 下是别的玩家也看得到的
+// 那一半（名字、等级），键 profile_private 下是只给本人的那一半（等级内经验）。下面三个函数按这个形状读。
+
+// PlayerName 读一名玩家的名字；这份视图里没有 profile 时 ok 为假。
+func PlayerName(fields map[string]any) (name string, ok bool) {
+	profile, ok := fields["profile"].(db.SyncProfileState)
+	return profile.Name, ok
+}
+
+// PlayerLevel 读一名玩家的等级；这份视图里没有 profile 时 ok 为假。
+func PlayerLevel(fields map[string]any) (level int32, ok bool) {
+	profile, ok := fields["profile"].(db.SyncProfileState)
+	return profile.Level, ok
+}
+
+// PlayerExp 读玩家本人的等级内经验；这份视图里没有 profile_private 时（别的玩家的视图都没有）ok 为假。
+func PlayerExp(fields map[string]any) (exp int64, ok bool) {
+	private, ok := fields["profile_private"].(db.SyncProfilePrivateState)
+	return private.Exp, ok
+}

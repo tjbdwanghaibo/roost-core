@@ -56,7 +56,6 @@ type Player struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	profile *ProfileComponent `comp:"CompTypeProfile"`
 	attr    *AttributeComponent `comp:"CompTypeAttribute"`
 	mapComp *MapComponent       `comp:"CompTypeMap"`
 	gear    *EquipmentComponent `comp:"CompTypeEquipment"`

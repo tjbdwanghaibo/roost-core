@@ -2,11 +2,10 @@ package dbdef
 
 //roost:dao coll=player db=main schema=2
 type PlayerDao struct {
-	Name  string `dao:"persist,sync" store:"name"`
-	Level int32  `dao:"persist,sync" store:"level"`
-	Exp   int64  `dao:"persist,sync" store:"exp"`
-	Gold  int64  `dao:"persist,sync" store:"gold"`
-	// The bag is not declared here: it is the bag module's state, the nested
+	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
+	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
+	//
+	// The bag is not declared here either: it is the bag module's state, the nested
 	// struct PlayerDao.Bag (db/def/bag.go, store key "bag") that
 	// `roost module add bag` appends to the end of this DAO.
 

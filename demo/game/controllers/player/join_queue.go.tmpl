@@ -30,14 +30,15 @@ func (controller *Controller) HandleJoinQueue(context *playeraccess.Context, req
 		return &pb.JoinQueueResponse{Code: code, Reason: reason}, nil
 	}
 	// The ranked queue scores a ticket by the player's level, read under the
-	// Player's lock through a Nest read handler; the duel queue needs no score.
+	// Player's lock through the profile module's read handler ProfileCard
+	// (name and level); the duel queue needs no score.
 	var score int64
 	if queue == matchmaking.RankedQueue {
 		entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
 		if err != nil {
 			return nil, fmt.Errorf("join_queue endpoint: %w", err)
 		}
-		level, err := syncsender.NewPlayerLevelSender(controller.NestClient()).Sync_PlayerLevel(context.Context(), entityID)
+		card, err := syncsender.NewProfileCardSender(controller.NestClient()).Sync_ProfileCard(context.Context(), entityID)
 		if err != nil {
 			code, reason := errcode.ClientError(err)
 			if code == errcode.CodeInternal {
@@ -45,7 +46,7 @@ func (controller *Controller) HandleJoinQueue(context *playeraccess.Context, req
 			}
 			return &pb.JoinQueueResponse{Code: code, Reason: reason}, nil
 		}
-		score = int64(level)
+		score = int64(card.Level)
 	}
 	requestID := fmt.Sprintf("join:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
 	ticket, err := controller.Matcher().Enqueue(context.Context(), queue, matchmaking.PlayerSubject(context.PlayerID, score), requestID)

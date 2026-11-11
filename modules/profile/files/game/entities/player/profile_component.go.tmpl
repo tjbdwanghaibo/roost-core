@@ -9,13 +9,15 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 //roost:component type={{ID:component:Profile}}
 const CompTypeProfile entity.ComponentType = {{ID:component:Profile}}
 
 // ProfileComponent 是玩家档案（名字、等级、经验）的业务逻辑。它不保存事务会改的状态：
-// 三个值都在 PlayerDao.Profile 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+// 名字与等级在 PlayerDao.Profile 里（别的玩家也可以看的那一半），经验在 PlayerDao.ProfilePrivate 里
+// （只给本人的那一半），都经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
 type ProfileComponent struct {
 	entity.ComponentBase
 	owner *Player
@@ -75,6 +77,16 @@ func (component *ProfileComponent) Rename(name string) (string, error) {
 	return name, nil
 }
 
+// CheckAddExp 只检查不执行：AddExp(amount) 会不会被接受，不写任何字段。被拒绝时返回的业务码与 AddExp 相同。
+//
+// 给在同一笔事务里还要写别的字段或别的实体的 handler 用：先把每一方都问一遍，都通过了再开始写。
+// 这样超出范围的发放在任何写入之前被拒绝，不用写完再靠回滚撤回——调用方吞掉错误继续提交时也不会留下半截状态。
+// 它只回答经验与等级放不放得下；升级钩子（onLevelUp）会不会失败不在这里预演。
+func (component *ProfileComponent) CheckAddExp(amount int64) error {
+	_, _, err := component.planExp(amount)
+	return err
+}
+
 // planExp 只读地算出发放 amount 之后的等级内经验与升级数，不写任何字段。
 //
 // 经验是 int64、等级是 int32：先确认加法不溢出、升级后的等级仍在 int32 内，再按平的曲线除余。
@@ -82,17 +94,18 @@ func (component *ProfileComponent) Rename(name string) (string, error) {
 // 已存的经验或等级为负说明存档已坏，一并拒绝，不在坏值上继续累加。
 func (component *ProfileComponent) planExp(amount int64) (exp int64, gained int32, err error) {
 	if amount <= 0 {
-		return 0, 0, apperrors.ErrProfileExpInvalid
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpInvalid, nil, "amount", amount)
 	}
-	profile := component.owner.Dao().GetProfile()
-	currentExp, currentLevel := profile.GetExp(), profile.GetLevel()
+	dao := component.owner.Dao()
+	currentExp, currentLevel := dao.GetProfilePrivate().GetExp(), dao.GetProfile().GetLevel()
+	// 拒绝时带上数额与当时的经验、等级：业务码回给调用方，这三个数留给日志，排查“为什么这次发放被拒”不用再去读档。
 	if currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
-		return 0, 0, apperrors.ErrProfileExpOverflow
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
 	}
 	total := currentExp + amount
 	levels := total / ProfileExpPerLevel
 	if levels > int64(math.MaxInt32)-int64(currentLevel) {
-		return 0, 0, apperrors.ErrProfileExpOverflow
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
 	}
 	return total % ProfileExpPerLevel, int32(levels), nil
 }
@@ -111,17 +124,32 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
-	profile := component.owner.Dao().GetProfile()
-	profile.SetExp(exp)
+	dao := component.owner.Dao()
+	dao.GetProfilePrivate().SetExp(exp)
 	if gained == 0 {
+		// 没升级的发放只动 ProfilePrivate：别的玩家的视图里没有它，不会为这次发放收到一条增量。
 		return 0, nil
 	}
+	profile := dao.GetProfile()
 	from := profile.GetLevel()
 	profile.SetLevel(from + gained)
 	if err := component.onLevelUp(from, from+gained); err != nil {
 		return 0, err
 	}
 	return gained, nil
+}
+
+// ProfileCard 是档案里别的玩家也可以看的那一半的一份拷贝：名字与等级。它是值，离开实体锁之后可以继续用。
+type ProfileCard struct {
+	Name  string
+	Level int32
+}
+
+// Card 读出名片。服务端别的功能要按玩家号读别人的名字或等级（匹配按等级计分、榜单与好友列表显示名字）时，
+// 经 handler ProfileCard（game/handler/profile_card.go）在那名玩家的锁内调它。
+func (component *ProfileComponent) Card() ProfileCard {
+	profile := component.owner.Dao().GetProfile()
+	return ProfileCard{Name: profile.GetName(), Level: profile.GetLevel()}
 }
 
 // DisplayName、Level、Exp 给已经持有实体锁的调用方读当前值。
@@ -131,4 +159,6 @@ func (component *ProfileComponent) DisplayName() string {
 func (component *ProfileComponent) Level() int32 {
 	return component.owner.Dao().GetProfile().GetLevel()
 }
-func (component *ProfileComponent) Exp() int64 { return component.owner.Dao().GetProfile().GetExp() }
+func (component *ProfileComponent) Exp() int64 {
+	return component.owner.Dao().GetProfilePrivate().GetExp()
+}

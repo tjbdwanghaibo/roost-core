@@ -17,13 +17,29 @@ import (
 )
 
 // v1Player 是旧程序（schema 1）写下的文档形状：元数据与 DataEngine 投影写的一致。
+// 名字与等级在档案模块的子文档 profile 里（1 = 名字，2 = 等级）；这一步迁移不碰它。
 func v1Player(id int64, version int64, extra bson.M) bson.M {
 	doc := bson.M{"_id": id, "_version": version, "_schema": int64(1), "_last_tx": fmt.Sprintf("tx-%d", id),
-		"name": fmt.Sprintf("p%d", id), "level": int32(7), "bag": bson.M{"1": bson.M{"1001": int64(3)}}}
+		"profile": bson.M{"1": fmt.Sprintf("p%d", id), "2": int32(7)}, "bag": bson.M{"1": bson.M{"1001": int64(3)}}}
 	for key, value := range extra {
 		doc[key] = value
 	}
 	return doc
+}
+
+// profileField 读文档里档案子文档 profile 的一个键（1 = 名字，2 = 等级）；没有时为 nil。
+func profileField(document bson.M, key string) any {
+	switch profile := document["profile"].(type) {
+	case bson.M:
+		return profile[key]
+	case bson.D:
+		for _, element := range profile {
+			if element.Key == key {
+				return element.Value
+			}
+		}
+	}
+	return nil
 }
 
 func newJob(t *testing.T, collection, backup fmongo.ICollection) Job {
@@ -52,8 +68,8 @@ func TestPlayerStepMovesTheWeaponIntoItsSlot(t *testing.T) {
 			t.Fatalf("weapon %T: weapon_id left or version %d", weapon, document.DataVersion())
 		}
 		slot := document.Fields["equipment"].(bson.M)["slots"].(bson.M)["1"].(bson.M)
-		if slot["item_id"] != int64(2001) || document.Fields["name"] != "p42" {
-			t.Fatalf("weapon %T: slot=%v name=%v", weapon, slot, document.Fields["name"])
+		if slot["item_id"] != int64(2001) || profileField(document.Fields, "1") != "p42" {
+			t.Fatalf("weapon %T: slot=%v profile=%v", weapon, slot, document.Fields["profile"])
 		}
 	}
 	bare := &Document{Fields: v1Player(43, 5, nil), version: 1}
@@ -210,7 +226,7 @@ func TestPlayerMigrationRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 新程序已经写了玩家 2。
-	if _, err := players.UpdateOne(ctx, bson.M{"_id": int64(2)}, bson.M{"$set": bson.M{"_version": int64(11), "_last_tx": "new-build", "level": int32(8)}}); err != nil {
+	if _, err := players.UpdateOne(ctx, bson.M{"_id": int64(2)}, bson.M{"$set": bson.M{"_version": int64(11), "_last_tx": "new-build", "profile": bson.M{"1": "p2", "2": int32(8)}}}); err != nil {
 		t.Fatal(err)
 	}
 	report, err := job.Rollback(ctx)
@@ -221,7 +237,7 @@ func TestPlayerMigrationRollback(t *testing.T) {
 	if restored["_schema"] != int64(1) || restored["weapon_id"] != int64(2001) || restored["_version"] != int64(4) {
 		t.Fatalf("player 1 was not restored as it was: %v", restored)
 	}
-	if kept, _ := players.Lookup(int64(2)); kept["level"] != int32(8) {
+	if kept, _ := players.Lookup(int64(2)); profileField(kept, "2") != int32(8) {
 		t.Fatalf("rollback overwrote a write made after the migration: %v", kept)
 	}
 	// 再跑一次：已恢复的按幂等计数，被拒绝的仍拒绝。
