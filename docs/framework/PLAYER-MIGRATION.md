@@ -142,7 +142,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 把一个角色从它绑定的服改绑到另一个服（方案 [FEATURE-2026-11-11-player-rehome](../maintenance/FEATURE-2026-11-11-player-rehome.md)，其中第 6 节的决定按推荐项先实施、待维护者确认）。本节是 **account 一侧**的现行契约：绑定、换服状态、四个接口、运维工具（[service/account/transfer.go](../../service/account/transfer.go)、`transfer_test.go`）。
 
-游戏侧由业务模块 [rehome](../../modules/README.md) 接上（2026-11-11）：源服记意图 → account 发起 → 离开钩子、断开会话、DataEngine“交出实体”（之后拒写）→ account 提交 → 目标服首次进入时到达；每一步失败的去向与崩溃恢复见[换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)。game-demo 已装上它：`PlayerOwners` 实现驻留与迁出表，saga 步骤按当前绑定准入，登录先过进入前检查，GM 命令 `gm.player.rehome`。**只有离线验证**（替身提交器、替身的交出实体）：真实的交出实体、两个 game 进程加 account 的演练、每个阶段后 kill -9 都没有做。
+游戏侧由业务模块 [rehome](../../modules/README.md) 接上（2026-11-11）：源服打“离开中”标记（从此在写闸门拒绝这名玩家新的请求）→ 记意图 → account 发起 → 断开会话并等在途的请求执行完 → 复核检查、离开钩子 → DataEngine“交出实体”（之后拒写）→ account 提交 → 目标服首次进入时到达；提交 / 中止的结论按 account 带回的**当前绑定**判定（承载服、绑定代数、在途的换服），不按单个错误码——应答丢失之后重发得到的 stale 或“中止成功”不说明那个 ID 当年提交了没有；每一步失败的去向与崩溃恢复见[换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)。game-demo 已装上它：`PlayerOwners` 实现驻留与迁出表，saga 步骤按当前绑定准入，登录先过进入前检查，GM 命令 `gm.player.rehome`。**只有离线验证**（替身提交器、替身的交出实体）：真实的交出实体、两个 game 进程加 account 的演练、每个阶段后 kill -9 都没有做。
 
 ### 7.1 模型
 

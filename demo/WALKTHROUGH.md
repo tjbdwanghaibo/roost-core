@@ -540,14 +540,14 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 ## 把一名玩家换到另一个服（rehome 模块）
 
-单个玩家换服是 `rehome` 模块（`roost module add rehome`，demo 的模块列表里最后一个）：协议 `RehomeApply`（玩家自己申请，受规则文件 `game/rehome/rehome_rules.go` 的可去列表与 7 天冷却约束）与服务端入口（GM 命令 `gm.player.rehome {player_id, to, note}`，不受规则约束）走同一个驱动器。顺序是：源服打“离开中”标记 → 换服前检查 → Player 上记意图 → account `BeginRoleTransfer` →（答复客户端“已受理”）→ 离开钩子 → 断开会话、离开场景、DataEngine 交出实体（屏障保持）→ account `CommitRoleTransfer` → 目标服首次进入时到达（清意图、冷却起算）。换服不搬数据：Player 的档在共享库 `main`，只交接写权。每一步失败的去向见 `game/rehome/rehome_driver.go` 的注释；account 一侧的契约见[参考流程 §7](../docs/framework/PLAYER-MIGRATION.md)。客户端在被受理之后只认一个信号：连接断开，然后重新选角，角色所在的服变了就是换成了。
+单个玩家换服是 `rehome` 模块（`roost module add rehome`，demo 的模块列表里最后一个）：协议 `RehomeApply`（玩家自己申请，受规则文件 `game/rehome/rehome_rules.go` 的可去列表与 7 天冷却约束）与服务端入口（GM 命令 `gm.player.rehome {player_id, to, note}`，不受规则约束）走同一个驱动器。顺序是：源服打“离开中”标记（从此他新的请求在写闸门被拒）→ 换服前检查 → Player 上记意图 → account `BeginRoleTransfer` →（答复客户端“已受理”）→ 断开会话并等标记之前准入的请求执行完 → 事务里把检查再跑一遍 → 离开钩子 → 离开场景、DataEngine 交出实体（屏障保持）→ account `CommitRoleTransfer` → 目标服首次进入时到达（清意图、冷却起算）。提交 / 中止的结论按 account 带回的当前绑定判定，不按错误码（应答丢失之后重发得到的 stale 不等于“没提交”）。换服不搬数据：Player 的档在共享库 `main`，只交接写权。每一步失败的去向见 `game/rehome/rehome_driver.go` 的注释；account 一侧的契约见[参考流程 §7](../docs/framework/PLAYER-MIGRATION.md)。客户端在被受理之后只认一个信号：连接断开，然后重新选角，角色所在的服变了就是换成了。
 
 demo 在模块之上接的线：
 
 - **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
 - **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gameenter.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gameenter.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
 - **saga 步骤按当前绑定准入**（`gift_saga.go`、`alliance_saga.go` 的 `admitBound`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
-- **demo 自己的换服前检查**（`internal/service/game/rehome_checks.go`）：在公会里、在队伍里的玩家被拒绝（先退出），开着分区场景的服一律拒绝——这些东西记着“玩家在哪个服”，换服时还没有人替它们改。匹配队列里的票据、进行中的副本与对战、名下的建筑这里看不到，没有拦；运营给这样的玩家换服前要先确认。
+- **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：在公会里、在队伍里的玩家被拒绝（先退出），开着分区场景的服一律拒绝——这些东西记着“玩家在哪个服”，换服时还没有人替它们改。申请时查一次不够（客户端还连着、成员通知还在路上），所以分三处：申请时看档里的 `GuildID` / `TeamID`（尽早拒绝）；驻留表从标记起在写闸门拒绝他新的请求（`PlayerOwners.Admit`），受理之后 `Quiesce` 断开会话、等在途的请求执行完，模块随即在事务里复核——队伍在这里是可靠的（入队与写档同一笔事务）；离开钩子再向联盟服务问权威的成员卡（`Membership`：成员、入会预留在途、问不到都中止），因为档里的 `GuildID` 只是展示副本。用例 `rehome_checks_test.go` 用 channel 固定了“检查之后才入会”“标记之前准入的入会请求还在执行”“通知迟到、联盟已记着成员关系”三种交错。匹配队列里的票据、进行中的副本与对战、名下的建筑这里看不到，没有拦；运营给这样的玩家换服前要先确认。
 
 用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
 
