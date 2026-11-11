@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+- **新增**（dataengine）：**交出实体 `Runtime.HandOffEntity` / `EntityHandOff.Release`**（单个玩家换服的源服一侧，[方案 §3.2](docs/maintenance/FEATURE-2026-11-11-player-rehome.md#32-dataengine交出实体)；业务经 `wiring/dataengine` 的 `Mod.HandOffEntity`）。把一个实体的写权交给另一个进程之前，本进程先保证“写过的都在库里、不会再被重放”，并从此不再写它，直到显式 `Release` 或进程退出。只加入口：`UnloadEntity` 与投影、checkpoint 路径的行为不变（`reserve` 多一次空表判断）。
+  - 与 `entity.unload` 的差别：实体不在内存里也立屏障；排空投影之后还要等 WAL checkpoint 盖过该实体的记录，再卸载；屏障返回后保持。保持期间写到该实体的事务（含冷加载之后的写入、新建与删除它的记录）在 WAL 准入处以新错误 `ErrEntityHandedOff` 拒绝并回滚（同时满足 `nest.ErrCommitRejected`）；它不是“稍后重试”，与 `ErrEntityUnloading` 互不满足 `errors.Is`。交出进行中、结论未定时拿到的仍是可重试的 `ErrEntityUnloading`。
+  - 为什么等 checkpoint（先写用例证实）：单 mutation 快路记录不写事务标记，重放只靠文档上的 `_version` 与 `_last_tx`；“已投影、checkpoint 未确认”时另一个写者推进了文档，重放就是 fatal 的 `ErrProjectionConflict`——同一进程的下一轮回放 fail-stop，重启后启动恢复失败。刻画用例 `TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument`（替身）与 `TestRealMongoUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument`（真实副本集）在改动前的代码上通过；带事务标记的记录重放安全。
+  - `Release(ctx) error`：交出不拦加载，期间被读回内存的实例只读且可能落后于库，所以 `Release` 先卸载此刻常驻的实例再撤屏障（卸载不掉返回 `ErrEntityUnloadBusy`、屏障保持）。调用方先断开会话、离场景、退订再交出；只在本进程（重新）拥有写权后 `Release`。重复交出幂等；旧返回值不会解除之后的另一次交出；`HandOffEntity` 与 `Release` 在业务 worker 上直接返回 `fctx.ErrBlockingInBusinessWorker`；失败是确定的“没有交出”（沿用 `ErrEntityUnloadBusy` / `ErrEntityUnloadTimeout` / `ErrEntityUnloadNotPersistent`），屏障撤销。不是完整 Entity ID、Remote 托管实体（`ErrEntityHandOffUnsupported`）拒绝。屏障只在内存里，不新增持久状态。
+  - 指标与统计：`dataengine.entity_handoff.total{result}`、`dataengine.entity_handoff.admission_rejected.total`、`dataengine.entity_handoff.held`；`ProjectorStats.HandedOffEntities` / `HandOffAdmissionRejected`。
+  - 文档：[guide/03 “交出实体”](docs/framework/guide/03-dataengine.md#交出实体handoffentity)（契约、调用约束、与卸载的区别、用法）、[impl/03 §2 第 13 条](docs/framework/impl/03-dataengine.md#2-必须保持的契约)（顺序、等 checkpoint 的做法、变异记录）、[维护手册 §4](docs/maintenance/README.md#4-故障处理)一行、[KNOWN-LIMITS“交出实体的边界”](docs/maintenance/KNOWN-LIMITS.md#交出实体handoffentity的边界)、换服方案 §3.2 改记结论。
+  - 验证（先红后绿，红在只有 `UnloadEntity` 行为的骨架上取得）：`go test -race ./framework/dataengine/... ./wiring/dataengine/...` 通过，`entity_unload_test.go` 未改；十条 `TestEntityHandOff*`（返回后写入仍被拒、未加载的实体、等 checkpoint 与超时 / fence、重复交出与两次 Release、各种拒绝、与运维卸载互斥、并发写入、停机、订阅者重载）；`wiring/dataengine` 的 `TestModHandsOffAnEntityUntilReleased`；真实副本集（本机隔离环境，`-tags integration`）两条。没有跑两个真实进程的换服演练。
+  - **升级要求**：无。没有调用 `HandOffEntity` 的进程行为不变。
+
 - **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.44.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.44.0 的生成物用 saga 路由步骤（`Step.Routed`、`StartRequest.Route`、`saga.SidRoute`、`kitsaga.WithSidRoute`），saga WireVersion 4；按惯例在 tag 推上去之后单独一笔。
 
 - **新增**（codegen + modules）：**业务模块安装器 `roost module` 与首批两个模块**（维护者 2026-11-10：roost-core“既有底层框架也有业务模版”，要能按需求描述组合出服务逻辑；[方案](docs/maintenance/FEATURE-2026-11-10-business-modules.md)第 2 期，[实施记录](docs/maintenance/FEATURE-2026-11-10-business-modules.md#17-第-2-期实施记录2026-11-10)）。业务模块是提前写好并验收过的业务单元（状态结构体、组件、Nest handler、协议、错误码、场景测试），源码在 [modules](modules/README.md)，安装后归工程所有，不是生成器输出。
