@@ -71,6 +71,12 @@ func TestWithRehomeEnterChecksBeforeThePlayerIsLoaded(t *testing.T) {
 	if loads != 2 {
 		t.Fatalf("load ran %d times for two admitted enters", loads)
 	}
+	// 检查拿到的是会话的 claims：认证器写了承载服的，以它为准、不再问 account（这里故意写成 1001，
+	// 与 account 的记录不同，放行说明用的是 claims）；什么都没写的同一次进入由检查去问 account，被拒绝。
+	if err := w.enter(target, map[string]string{"server_id": "1001", "bind_epoch": "0"}, &loads); err != nil || loads != 3 {
+		t.Fatalf("claims naming this server: err = %v, loads = %d; want admitted on the claims alone", err, loads)
+	}
+	loads = 2
 	// 连错了服：他绑定在 1000，却来进 1001。
 	err := w.enter(target, withRehomeClaims(w.binding()), &loads)
 	if sid, ok := gamerehome.OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !ok || sid != 1000 {

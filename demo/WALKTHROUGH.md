@@ -534,9 +534,22 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 ## 把一个 sid 搬到另一台机器
 
-玩家静态绑定在 sid 上，搬机搬的是 sid：旧进程正常停机（断开玩家、WAL 全部投影、释放单实例锁），新机器上同一 sid 的进程用空 WAL 目录接管。`cmd/sidmove` 只做步骤之间的检查：`wal-drained`（旧 WAL 已全部确认，进程还在跑就拒绝）、`singleton`（锁现在被谁持有）、`players`（停旧进程后与新进程写入前的玩家文档是否一致）。步骤、所用能力与本机演练见[参考流程](../docs/framework/PLAYER-MIGRATION.md)。
+搬机搬的是 sid，玩家与 sid 的绑定不变（单个玩家换到另一个 sid 是下一节）：旧进程正常停机（断开玩家、WAL 全部投影、释放单实例锁），新机器上同一 sid 的进程用空 WAL 目录接管。`cmd/sidmove` 只做步骤之间的检查：`wal-drained`（旧 WAL 已全部确认，进程还在跑就拒绝）、`singleton`（锁现在被谁持有）、`players`（停旧进程后与新进程写入前的玩家文档是否一致）。步骤、所用能力与本机演练见[参考流程](../docs/framework/PLAYER-MIGRATION.md)。
 
 把一个服并入另一个服（别名合服）用 `cmd/sidmerge` 与 `cmd/accountctl merge-server`：角色身份不变，account 记录“A 并入 B”后会话的承载服是 B，认证器按承载服写 `server_id`、原服写 `origin_server_id`；`sidmerge` 做合服前的检查（两侧 WAL、共享库同处、outbox、saga 终态、持久总线清单）并搬按 sid 分库的数据（game-demo 的 DAO 都在共享库，不用搬）；装配了 account 的 game 进程启动时自检，本服已被并入就拒绝启动。步骤与回退见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)。
+
+## 把一名玩家换到另一个服（rehome 模块）
+
+单个玩家换服是 `rehome` 模块（`roost module add rehome`，demo 的模块列表里最后一个）：协议 `RehomeApply`（玩家自己申请，受规则文件 `game/rehome/rehome_rules.go` 的可去列表与 7 天冷却约束）与服务端入口（GM 命令 `gm.player.rehome {player_id, to, note}`，不受规则约束）走同一个驱动器。顺序是：源服打“离开中”标记 → 换服前检查 → Player 上记意图 → account `BeginRoleTransfer` →（答复客户端“已受理”）→ 离开钩子 → 断开会话、离开场景、DataEngine 交出实体（屏障保持）→ account `CommitRoleTransfer` → 目标服首次进入时到达（清意图、冷却起算）。换服不搬数据：Player 的档在共享库 `main`，只交接写权。每一步失败的去向见 `game/rehome/rehome_driver.go` 的注释；account 一侧的契约见[参考流程 §7](../docs/framework/PLAYER-MIGRATION.md)。客户端在被受理之后只认一个信号：连接断开，然后重新选角，角色所在的服变了就是换成了。
+
+demo 在模块之上接的线：
+
+- **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
+- **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gameenter.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gameenter.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
+- **saga 步骤按当前绑定准入**（`gift_saga.go`、`alliance_saga.go` 的 `admitBound`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
+- **demo 自己的换服前检查**（`internal/service/game/rehome_checks.go`）：在公会里、在队伍里的玩家被拒绝（先退出），开着分区场景的服一律拒绝——这些东西记着“玩家在哪个服”，换服时还没有人替它们改。匹配队列里的票据、进行中的副本与对战、名下的建筑这里看不到，没有拦；运营给这样的玩家换服前要先确认。
+
+用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
 
 ## 兴趣：距离是一种视野，关系是另一种
 
@@ -670,6 +683,7 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
 - 配置表重载不是 GM 命令：configdata Mod 自带 `configdata.reload` / `configdata.rollback` / `configdata.status`（框架注册，与 `hotcode.*` 同一套 token 与审计）。
   `curl ... -d '{"name":"configdata.reload","payload":{"reason":"改价"}}'` 回答新版本号与哪些表变了；重载只读 `configs/data` 下的 JSON，
   只改了 `configs/table` 的 CSV 却没 `roost generate` 时回答 `changed=false`、message 写 `no table changed`。开关表（`feature_flag.json`）也经这条生效，并覆盖 `gm.flag.set` 的进程内改动。
+- `gm.player.rehome {player_id, to, note}` 把一名玩家换到另一个服（rehome 模块的服务端入口，见“把一名玩家换到另一个服”）：要在他当前绑定的服的进程上执行，别的服答 `rehome_elsewhere`；不受玩家的冷却与可去列表约束，登记的换服前检查（公会 / 队伍成员、分区场景）与 account 的条件照常生效。回答 `accepted=true` 与换服 ID 表示已受理、后台在继续，结论用 `cmd/accountctl show-role` 看。
 - `gm.saga.list` / `gm.saga.get` 读 saga 协调器的记录（状态、当前步、最后一次错误、状态数据）；`manual_required` 是需要人的那一类。
 
 - `player_id` 两种形式都收：客户端看到的唯一 id（`EnterGameResponse.PlayerID`，也是邮件的收件人 id），或 Mongo 里 Player 文档的 `_id`（完整实体 id，多了 kind / category 位）。
