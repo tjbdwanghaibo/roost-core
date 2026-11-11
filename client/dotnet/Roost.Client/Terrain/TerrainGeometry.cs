@@ -103,8 +103,10 @@ namespace Roost.Client.Terrain
         public int HeightBase { get; }
         // 全局水位线（世界高度，厘米）：不在任何区域里的块，地面高度低于它的位置是水。
         public int WaterLevel { get; }
-        // 区域水位（包格式版本 2，可编辑地形 P4 / D3）：区域里的块用区域的 Level 代替 WaterLevel。
+        // 区域水位（包格式版本 2，可编辑地形 P4 / D3）：区域里的块用区域的 Level 代替 WaterLevel。只读视图：区域配置只随
+        // 原始地形包换版，不能把它转回数组或 IList 改写（内部数组不外露；TerrainView 的水位表在构造时按它算好）。
         public IReadOnlyList<TerrainWaterRegion> WaterRegions { get; }
+        private readonly TerrainWaterRegion[] regions;
 
         public TerrainMeta(long baseRevision, int chunksX, int chunksY, int heightBase, int waterLevel)
             : this(baseRevision, chunksX, chunksY, heightBase, waterLevel, Array.Empty<TerrainWaterRegion>()) { }
@@ -130,14 +132,15 @@ namespace Roost.Client.Terrain
                 regions[i] = r;
             }
             BaseRevision = baseRevision; ChunksX = chunksX; ChunksY = chunksY; HeightBase = heightBase; WaterLevel = waterLevel;
-            WaterRegions = regions;
+            this.regions = regions;
+            WaterRegions = Array.AsReadOnly(regions);
         }
 
         // 块的水位线：所在区域的 Level，不在任何区域里时是全局 WaterLevel（与 Go Meta.WaterLevelOf 相同）。逐个比较区域；
         // 查询热路径用 TerrainView 里按块预先算好的表（TerrainView.WaterLevelOf）。
         public int WaterLevelOf(ChunkKey key)
         {
-            foreach (var r in WaterRegions)
+            foreach (var r in regions)
                 if (r.Contains(key)) return r.Level;
             return WaterLevel;
         }

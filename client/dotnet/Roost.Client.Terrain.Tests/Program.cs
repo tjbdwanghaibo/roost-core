@@ -39,6 +39,8 @@ internal static partial class Program
         TestCorruptChunks(pack);
         TestOverlayRules(pack);
         TestConcurrentQueries(pack);
+        TestMetaRegionsAreReadOnly();
+        TestWaterDepthRange();
         TestMesh(pack);
         TestDaoSync(pack, Path.Combine(AppContext.BaseDirectory, "Fixtures", "terrain-chunk-sync.json"));
         TestBuildingSync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "building-sync.json"));

@@ -294,9 +294,10 @@ internal static partial class Program
     }
 
     // 测试侧写包：按 pack.go 头注释的布局写包头、索引表、块数据与两级 SHA-256。
-    private static byte[] BuildPack(long revision, int chunksX, int chunksY, int heightBase, int waterLevel, byte[][] stored)
+    // regions 是区域水位表（紧跟索引表，每项 20 字节）。
+    private static byte[] BuildPack(long revision, int chunksX, int chunksY, int heightBase, int waterLevel, byte[][] stored, params TerrainWaterRegion[] regions)
     {
-        int dataStart = HeaderSize + stored.Length * EntrySize, size = dataStart;
+        int regionsStart = HeaderSize + stored.Length * EntrySize, dataStart = regionsStart + regions.Length * 20, size = dataStart;
         foreach (var s in stored) size += s.Length;
         var d = new byte[size];
         Encoding("RTERRAIN").CopyTo(d, 0);
@@ -313,6 +314,16 @@ internal static partial class Program
         BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(52), 1);
         BinaryPrimitives.WriteUInt64LittleEndian(d.AsSpan(56), HeaderSize);
         BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(64), EntrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(68), (uint)regions.Length);
+        for (int i = 0; i < regions.Length; i++)
+        {
+            var e = d.AsSpan(regionsStart + i * 20);
+            BinaryPrimitives.WriteInt32LittleEndian(e, regions[i].MinX);
+            BinaryPrimitives.WriteInt32LittleEndian(e.Slice(4), regions[i].MinY);
+            BinaryPrimitives.WriteInt32LittleEndian(e.Slice(8), regions[i].MaxX);
+            BinaryPrimitives.WriteInt32LittleEndian(e.Slice(12), regions[i].MaxY);
+            BinaryPrimitives.WriteInt32LittleEndian(e.Slice(16), regions[i].Level);
+        }
         int offset = dataStart;
         for (int i = 0; i < stored.Length; i++)
         {

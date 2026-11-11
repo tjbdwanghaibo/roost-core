@@ -202,6 +202,13 @@ func (m Meta) WaterLevelOf(k ChunkKey) int32 {
 	return m.WaterLevel
 }
 
+// Clone 返回一份不与 m 共享 WaterRegions 的地图参数。Meta 按值传递时只复制切片头，区域表的底层数组仍是同一个；持有
+// 地图参数的类型（Pack、View）向外返回时都用它，调用方改返回值不会改到内部——区域配置只随原始地形包换版，不在运行期改。
+func (m Meta) Clone() Meta {
+	m.WaterRegions = slices.Clone(m.WaterRegions)
+	return m
+}
+
 // Equal 报告两份地图参数是否完全相同（含区域水位，按顺序比较）。
 func (m Meta) Equal(o Meta) bool {
 	return m.BaseRevision == o.BaseRevision && m.ChunksX == o.ChunksX && m.ChunksY == o.ChunksY &&
