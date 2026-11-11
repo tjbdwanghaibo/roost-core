@@ -41,4 +41,6 @@
 
 业务模块与配方的[方案](FEATURE-2026-11-10-business-modules.md)（2026-11-10）：第 2 期（安装器与两个模块）已实施，现行说明以 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module) 为准；配方与现有玩法、game-demo 的迁移未实施，那部分仍以 [AGENTS](../../AGENTS.md#游戏接入-skill) 与 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 为准，不能把方案后几期当作当前能力。
 
+单个玩家换服的[方案](FEATURE-2026-11-11-player-rehome.md)（2026-11-11）：设计定稿、一期实施中；account 的换服接口、DataEngine 的“交出实体”与模块 `rehome`。
+
 App 生命周期“停机先关外部输入”的[方案](FEATURE-2026-11-04-app-lifecycle.md)（2026-11-04）：现行契约以 [App 生命周期设计篇](../framework/guide/01-app-lifecycle.md) 为准，方案保留盘点、决定与实施记录。
