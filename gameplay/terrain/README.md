@@ -67,7 +67,8 @@
 | `SetOverlay(key, Overlay{BaseRevision, Version, Heights, Materials})` | 装入 / 更新覆盖块，替换原始块或更旧的覆盖块；复制入参。拒绝：地图外、形状不对、`Version < 1`、`BaseRevision` 与包头不同（`ErrBaseRevision`）、比已装覆盖块旧（`ErrStaleOverlay`），版本相同则替换 |
 | `Unload(key)` | 卸下（原始或覆盖） |
 | `Version(key)` / `Chunk(key)` / `Len()` | 查装载状态与版本（0 = 原始块）；`Chunk` 返回副本 |
-| `Height` / `Material` / `IsWater` / `Probe` | 查询，见下 |
+| `Height` / `Material` / `IsWater` / `WaterDepth` / `Probe` | 查询，见下 |
+| `Meta()` | 地图参数的副本（`Pack.Meta()` 同）：`WaterRegions` 不与视图 / 包共享，调用方改返回值不影响查询——区域水位只随原始地形包换版。有区域水位时每次调用分配一份区域表，循环里先取一次；自己持有 `Meta` 又要向外给时用 `Meta.Clone()` |
 
 不做 LRU 之类的自动淘汰：装哪些、卸哪些由上层按格 / 视野决定。
 
@@ -93,7 +94,7 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - gx+1 越出地图右边界时用 gx 列（边缘复制），上边界同理：地图边上的查询不需要地图外数据。
 - 其余情况下邻点可能在右 / 上 / 右上邻块，**邻块没装入返回 `ErrNotLoaded`**（错误里带块坐标），不猜测。地图外返回 `ErrOutOfMap`。
 - `Material(x, y)` = 采样点 (gx, gy) 的材质（所在 1m 格左下角，总在本块）。
-- **水**（方案 §5、D3“全局 / 区域水位线”，P4）：一块恰好一条水位线 `Meta.WaterLevelOf(块)`——块在某片区域水位（`Meta.WaterRegions`，按块对齐、互不重叠、至多 1024 片）里取区域的 `Level`，否则取全局 `WaterLevel`；`View` 在 `NewView` 时按块算好表（`View.WaterLevelOf`，O(1)）。`IsWater(x, y)` = `Height(x, y) < ` 包含 (x, y) 的块的水位线（等于不算水）；`WaterDepth(x, y)` = 水位线 − 地面（不是水为 0）；`Probe` 的 `Ground.WaterLevel` / `Depth()`。挖到水位线以下自动是水、填到水位线及以上自动是陆地，不存“是不是水”、不需要跨块计算，客户端同算。区域边界两侧水位不同时水面在块边上有台阶，美术把区域边界放在高于两侧水位的岸上。
+- **水**（方案 §5、D3“全局 / 区域水位线”，P4）：一块恰好一条水位线 `Meta.WaterLevelOf(块)`——块在某片区域水位（`Meta.WaterRegions`，按块对齐、互不重叠、至多 1024 片）里取区域的 `Level`，否则取全局 `WaterLevel`；`View` 在 `NewView` 时按块算好表（`View.WaterLevelOf`，O(1)）。`IsWater(x, y)` = `Height(x, y) < ` 包含 (x, y) 的块的水位线（等于不算水）；`WaterDepth(x, y)` = 水位线 − 地面（不是水为 0，是水为正）；`Probe` 的 `Ground.WaterLevel` / `Depth()`。水深按 **int64** 给出（客户端 `long`）：水位线与地面高度都是 int32，但高度基准可以为负、水位线独立配置，`Meta.Validate` 不约束两者之差，合法参数下差值可以超出 int32（最大 2³² − 1）；`Walker` 判游泳用同一个 64 位差值。挖到水位线以下自动是水、填到水位线及以上自动是陆地，不存“是不是水”、不需要跨块计算，客户端同算。区域边界两侧水位不同时水面在块边上有台阶，美术把区域边界放在高于两侧水位的岸上。
 
 **金样**：[client/spec/terrain-golden.pack](../../client/spec/terrain-golden.pack)（3 × 2 块：程序化地形加一块 0 / 65535 棋盘格与斜坡的边界情形块）与 [terrain-queries.json](../../client/spec/terrain-queries.json)（包与每块解码后的 SHA-256，246 个位置的期望高度 / 材质 / 水 / 所在块的水位线，含块边界、四块交点、地图边缘、地图外；包里有两片区域水位：块 (1,1) 高出全局 3m、块 (0,1) 没有水）。客户端实现读这个包、逐块核对、全部装入后逐点核对。`TestClientTerrainGolden` 检查提交的包能解出金样数据、从它重新算出的 JSON 与提交的逐字节相同（不要求包与重新压缩的逐字节相同，Go 版本升级不会让它变红）；改格式或算法时 `go test ./gameplay/terrain -run TestClientTerrainGolden -update`。P1 证据目录里的 `check_golden.py` 是只按本文与 pack.go 写的独立实现（当时是格式版本 1、没有区域水位，246 个位置全部一致；格式版本 2 之后未重跑）。C# 已在 `client/dotnet/Roost.Client/Terrain/`，C++ 未做。
 
@@ -138,20 +139,22 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 块只归包含它的格的进程（拥有者）写；别的进程要看它（邻格的 Ghost 带、把玩家附近的块同步给本进程的客户端）时放一份只读副本，由 `Replicator` 维护（[方案 §21](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#21-p3-ghost-副本t05d192026-11-09)）。与传输无关：`ReplicatorConfig.Send` 是“非阻塞地把一段字节发给某个 sid”，至多一次、可能丢失 / 重复 / 乱序（game-demo 用 cellworld 的扩展消息，线上格式 v7）。
 
 - **订阅兼补齐**：副本按拥有者（`OwnerOf`）分组，把想要的块（`Want`）连同本地持有的版本（`ReplicaStore.Held`：0 原始块、≥ 1 覆盖块版本、−1 显示不了）发给拥有者，每 `Renew`（缺省 1s）重发一次；拥有者记下订阅（租约 `Lease`，缺省 3 × Renew），只答版本不同的块（覆盖块发整块，原始块发“原始块”）。推送丢了、任一边重启（拥有者的订阅表丢了），至多一个 Renew 后对齐。本进程自己写的块不订阅。
+- **订阅上限**：一份订阅是一条消息（整份替换拥有者记下的那一份），一路对同一个拥有者至多 `MaxSubscriptionChunks` = 32768 块（接收端的解码上限；一个格 48 × 48 块时 10 倍余量），按拥有者分别算，重复的、地图外的、没有拥有者的、本进程自己写的块不计。超过时 `Want` 返回 `ErrSubscriptionTooLarge`、这一次 `Want` 整份不生效（计 `WantsRejected`）：之前接受的订阅照常续期，不会发出接收端解不了的消息；调用方缩小范围后再调。没有分片订阅。
 - **推送**：拥有者在块提交之后调 `Changed(key)`（可在 Nest 的提交后回调里调：只登记、叫醒），Run 的 goroutine 把这块的当前状态发给订阅了它的副本；发出之前又提交了几次只发最新一份。整块 raw DEFLATE，r=5m 一次编辑约 2.9～3.7KB / 块 / 订阅进程。
 - **顺序**：副本只认比本地新的版本（`Apply` 对旧版本答 `ErrStaleOverlay`，计 `Stale`）；每条状态都是整块，丢中间版本也没关系。
 - **代际**：每条消息带发件进程原始地形包的 `BaseRevision`，与本进程不同的整条丢弃（计 `BaseRevisionDrops`；拥有者不答，副本不收）。版本只在同一 `BaseRevision` 内比较：换版时拥有者把旧记录重置为 Version 0（D13），换版前的推送带旧 `BaseRevision`、到换版后的进程一律丢弃，不会把丢弃的覆盖块装回来。同一 `BaseRevision` 内“同一个版本只对应一份内容”的前提是拥有者只推送持久的版本（改块事务 strict，提交后回调在 WAL 落盘之后）。
 - **只认拥有者**：一块的状态只接受 `OwnerOf(块)` 发来的（计 `WrongOwner`），拥有者只答自己 `Owns` 的块。
-- **并发**：订阅表、想要的块只在 `Run` 的 goroutine 上读写；`Want` / `Changed` / `Deliver` 只是短锁 + 非阻塞信号，任何 goroutine 可调；`ReplicaStore` 的三个方法都在 Run 的 goroutine 上调用（解压、读包在这里做）。
+- **并发**：订阅表、想要的块只在 `Run` 的 goroutine 上读写；`Want` / `Changed` / `Deliver` 不等 `Run`、任何 goroutine 可调（`Changed` / `Deliver` 只是短锁 + 非阻塞信号；`Want` 先在调用方的 goroutine 上按拥有者分组、排序、查上限，所以 `OwnerOf` 要能并发调用——只读的分区表）；`ReplicaStore` 的三个方法都在 Run 的 goroutine 上调用（解压、读包在这里做）。
 - **占位记录（P5，可选）**：拥有者可以给每块附一份不透明的占位记录（`ReplicatorConfig.Lots`：修订号 + 至多 1024 个 int64；game-demo 是块上的建筑占地，服务端索引、不同步给客户端）。存放处同时实现 `ReplicaLotStore`（`HeldLots` / `ApplyLots`）的那一路订阅时附上持有的占位修订号，拥有者的答复与推送带上当前记录；占位与块数据各有版本，只差占位时答复不带块数据。占位修订号同样只进不退（`ApplyLots` 对旧的答 `ErrStaleOverlay`，计 `LotsStale`）。不实现它的那一路与 v1 行为相同（不带占位记录）。邻格的 Ghost 带用它让行走判定看见邻格的建筑。
 - **线上格式 v2**（P5）：订阅加“要占位记录”与持有的占位修订号，块状态每条加标志字节（带占位记录 / 不带块数据）与占位记录。v1 的消息按坏消息丢弃（未上线不兼容，升级须先停旧进程）。
 - **限制**：拥有者数据倒退（从备份恢复数据库）不在保证内，副本持有的更新版本不会被拉回（计 `Ahead`），要重启副本进程；各进程原始地形包版本不同（只换了一部分进程）时两边之间不复制，换版要整组进程换包重启。
-- **测试**：`replica_test.go`（进程内网络：推送、丢失 / 重复 / 乱序、任一边重启补齐、D13 换版后撤回且旧包的拥有者不答新包的订阅、只认拥有者、占位记录的推送 / 续期补齐 / 倒序不回退 / 不要的一路不带、线上格式；`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节），经真实 cellworld Node（回环与 nats-server）的用例在 `gameplay/cellworld/ext_test.go`。
+- **测试**：`replica_test.go`（进程内网络：推送、丢失 / 重复 / 乱序、任一边重启补齐、D13 换版后撤回且旧包的拥有者不答新包的订阅、只认拥有者、订阅上限（32768 / 32769 两侧、被拒后原订阅续期、按拥有者分别算）、占位记录的推送 / 续期补齐 / 倒序不回退 / 不要的一路不带、线上格式；`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节），经真实 cellworld Node（回环与 nats-server）的用例在 `gameplay/cellworld/ext_test.go`。
 
 ## 限制
 
 - 只有 2.5D 高度场；洞穴、隧道、悬空不在范围（方案 D1）。
-- 盆地水位、区域水位线没做，只有包头里的一条全局水位线。
+- 水位线是每块一条（全局水位或块所在的区域水位，P4）；按连通区域算的盆地水位、灌水与流体没做。
+- 一路副本对同一个拥有者至多订 32768 块，没有分片订阅（见“块副本”）。
 - 行走按 1m 节点判定：一个采样间距内的陡崖与 1m 宽的坡判定相同；没有角色体积（只看节点本身）、没有跳跃与攀爬；路线不缓存、不平滑（拐点在节点上）。
 - 包要整份放在本地文件里（`os.File.ReadAt`），没有从对象存储按范围读的实现。
 - 规模测量里的读块耗时是页缓存热的；冷盘读、Linux 与其他 CPU 没有测。

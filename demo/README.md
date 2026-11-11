@@ -322,6 +322,10 @@ scene:
 - **邻格玩家看到别的格改过的块**：玩家连在自己的 Base 进程上。Base 进程按本进程玩家的地形视点（进场位置，之后是 cellworld
   witness 里玩家自己的位置）订阅周围 292m 内别的进程写的块，改过的块作为只读副本（`terrain_chunk.Replica`）进场景的同一个
   同步 Manager 与地形 Interest：对象 ID、命名空间、编码、按下标的增量、1 秒周期与 64 块上限都与本格的块相同，客户端不用区分。
+- **订阅上限**：本进程对同一个格至多订 32768 块（`terrain.MaxSubscriptionChunks`，Ghost 带与玩家附近的块合在一路里算）。Ghost 带
+  本身就超了的配置启动时报错；运行中玩家视野的订阅被拒（`terrain.ErrSubscriptionTooLarge`）时保留上一份订阅、记一条 Error
+  （恢复时一条 Info，计数是 `gm.scene.partition` 里 `terrain.replicator.WantsRejected`），新进视野的别的格的块等不到拥有者的状态，
+  视点再变时重试。缺省的格（48 × 48 = 2304 块）到不了这个数。
 - **编辑**：玩家的编辑由他连着的 Base 拆给写这些块的格（P5，见下面“跨格编辑”）；内部写入口 `Map.Edit` / 单格的 `Map.Brush` 仍只改本进程
   写的块，别的块答 `terrain_not_owned`（100054，`terrainmap.ErrNotOwned`）。
 - **观测**：`gm.scene.partition` 多一栏 `terrain`（副本计数：订阅、推送、应用、旧版本、包版本不同丢弃、错拥有者等；Ghost 带块数、
