@@ -1,0 +1,71 @@
+=== RUN   TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument
+=== RUN   TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/no_other_writer_replays_idempotently
+=== RUN   TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/fast_path_record_in_the_same_process_is_fatal
+=== RUN   TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/fast_path_record_after_a_restart_is_fatal
+=== RUN   TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/record_with_a_transaction_marker_replays_safely
+--- PASS: TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument (0.03s)
+    --- PASS: TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/no_other_writer_replays_idempotently (0.01s)
+    --- PASS: TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/fast_path_record_in_the_same_process_is_fatal (0.01s)
+    --- PASS: TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/fast_path_record_after_a_restart_is_fatal (0.00s)
+    --- PASS: TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument/record_with_a_transaction_marker_replays_safely (0.01s)
+=== RUN   TestEntityHandOffKeepsRefusingWritesUntilReleased
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9422745 resident=true drained=1 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9422745
+--- PASS: TestEntityHandOffKeepsRefusingWritesUntilReleased (0.07s)
+=== RUN   TestEntityHandOffBarsAnEntityThatIsNotLoaded
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9423769 resident=false drained=0 already=false
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9523097 resident=false drained=0 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9423769
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9523097
+--- PASS: TestEntityHandOffBarsAnEntityThatIsNotLoaded (0.02s)
+=== RUN   TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords
+=== RUN   TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords/returns_only_after_the_checkpoint
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9424793 resident=true drained=0 already=false
+=== RUN   TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords/fails_at_once_when_the_projector_is_fenced
+=== RUN   TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords/times_out_without_touching_the_entity
+--- PASS: TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords (0.24s)
+    --- PASS: TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords/returns_only_after_the_checkpoint (0.11s)
+    --- PASS: TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords/fails_at_once_when_the_projector_is_fenced (0.01s)
+    --- PASS: TestEntityHandOffWaitsForTheCheckpointToCoverItsRecords/times_out_without_touching_the_entity (0.12s)
+=== RUN   TestEntityHandOffRepeatedAndReleasedTwice
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9426841 resident=true drained=0 already=false
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9426841 resident=true drained=0 already=true
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9426841
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9426841 resident=true drained=0 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9426841
+--- PASS: TestEntityHandOffRepeatedAndReleasedTwice (0.02s)
+=== RUN   TestEntityHandOffRefusals
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9427865 resident=true drained=0 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9427865
+--- PASS: TestEntityHandOffRefusals (0.02s)
+=== RUN   TestEntityHandOffAndOrdinaryUnload
+=== RUN   TestEntityHandOffAndOrdinaryUnload/hand_off_during_an_unload_is_busy
+=== RUN   TestEntityHandOffAndOrdinaryUnload/unload_during_a_hand_off_is_busy
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9429913 resident=true drained=1 already=false
+=== RUN   TestEntityHandOffAndOrdinaryUnload/unload_after_a_hand_off_keeps_the_barrier
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9430937 resident=true drained=0 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9430937
+--- PASS: TestEntityHandOffAndOrdinaryUnload (0.04s)
+    --- PASS: TestEntityHandOffAndOrdinaryUnload/hand_off_during_an_unload_is_busy (0.00s)
+    --- PASS: TestEntityHandOffAndOrdinaryUnload/unload_during_a_hand_off_is_busy (0.02s)
+    --- PASS: TestEntityHandOffAndOrdinaryUnload/unload_after_a_hand_off_keeps_the_barrier (0.01s)
+=== RUN   TestEntityHandOffUnderConcurrentWrites
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9431961 resident=true drained=1 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9431961
+--- PASS: TestEntityHandOffUnderConcurrentWrites (0.12s)
+=== RUN   TestEntityHandOffAcrossShutdown
+=== RUN   TestEntityHandOffAcrossShutdown/barrier_held_at_shutdown
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=9432985 resident=true drained=1 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=9432985
+=== RUN   TestEntityHandOffAcrossShutdown/stopped_while_waiting_for_the_projection
+=== RUN   TestEntityHandOffAcrossShutdown/stopped_while_waiting_for_the_checkpoint
+--- PASS: TestEntityHandOffAcrossShutdown (0.08s)
+    --- PASS: TestEntityHandOffAcrossShutdown/barrier_held_at_shutdown (0.01s)
+    --- PASS: TestEntityHandOffAcrossShutdown/stopped_while_waiting_for_the_projection (0.01s)
+    --- PASS: TestEntityHandOffAcrossShutdown/stopped_while_waiting_for_the_checkpoint (0.06s)
+=== RUN   TestEntityHandOffWithSubscribersReloadsButKeepsRefusingWrites
+2026/11/11 10:15:48 INFO dataengine: entity handed off; this process refuses writes to it until the hand-off is released entity=2492385 resident=true drained=0 already=false
+2026/11/11 10:15:48 INFO dataengine: entity hand-off released; this process accepts writes to it again entity=2492385
+--- PASS: TestEntityHandOffWithSubscribersReloadsButKeepsRefusingWrites (0.02s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.719s

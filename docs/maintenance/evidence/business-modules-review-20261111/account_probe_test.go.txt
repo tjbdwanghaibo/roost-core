@@ -1,0 +1,104 @@
+package account
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+)
+
+// Block only the first transfer hold Create, after Begin has published Role.Transfer.
+type reviewDelayedHold struct {
+	versionstore.Store[string, Slot]
+	entered chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func (s *reviewDelayedHold) Create(ctx context.Context, key string, value Slot) (versionstore.Versioned[Slot], bool, error) {
+	if value.TransferID != "" {
+		s.once.Do(func() { close(s.entered); <-s.resume })
+	}
+	return s.Store.Create(ctx, key, value)
+}
+func (s *reviewDelayedHold) DeleteIf(ctx context.Context, key string, expected versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expected, match)
+}
+func TestReviewBeginHoldAfterAbort(t *testing.T) {
+	for _, delayed := range []bool{false, true} {
+		name := "control"
+		if delayed {
+			name = "delayed"
+		}
+		t.Run(name, func(t *testing.T) {
+			slots := &reviewDelayedHold{entered: make(chan struct{}), resume: make(chan struct{})}
+			s, cfg, role, _ := transferFixture(t, func(c *Config) { slots.Store = c.Slots; c.Slots = slots })
+			ctx := context.Background()
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.BeginRoleTransfer(ctx, role.PlayerID, transferTo("first", homeSID, awaySID, 0))
+				done <- err
+			}()
+			<-slots.entered
+			if !delayed {
+				close(slots.resume)
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "first", "cancel"); err != nil {
+				t.Fatal(err)
+			}
+			if delayed {
+				close(slots.resume)
+				t.Logf("late Begin result=%v", <-done)
+			}
+			// Exercise every advertised repair path before checking persistence.
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "first", "retry"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SelectRole(ctx, role.AccountID, role.PlayerID); err != nil {
+				t.Fatal(err)
+			}
+			hold, found := slotAt(t, cfg, role.AccountID, awaySID)
+			_, err := s.BeginRoleTransfer(ctx, role.PlayerID, transferTo("second", homeSID, awaySID, 0))
+			last := storedRole(t, cfg, role.PlayerID).Value.LastTransfer
+			t.Logf("before second Begin: hold=%+v found=%v; second Begin=%v; last=%+v", hold, found, err, last)
+			if found || err != nil {
+				t.Fatalf("aborted Begin left target occupied; fresh Begin rejected=%v", err)
+			}
+		})
+	}
+}
+func TestReviewAbortTombstoneSurvivesOtherAbort(t *testing.T) {
+	for _, other := range []bool{false, true} {
+		name := "control"
+		if other {
+			name = "second_abort"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, cfg, role, _ := transferFixture(t)
+			ctx := context.Background()
+			old := transferTo("old", homeSID, awaySID, 0)
+			mustBegin(t, s, role.PlayerID, old)
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "old", "cancel first"); err != nil {
+				t.Fatal(err)
+			}
+			if other {
+				mustBegin(t, s, role.PlayerID, transferTo("new", homeSID, awaySID, 0))
+				if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "new", "cancel second"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Replay the original request unchanged, not a caller allocating a used ID for new work.
+			_, err := s.BeginRoleTransfer(ctx, role.PlayerID, old)
+			stored := storedRole(t, cfg, role.PlayerID).Value
+			t.Logf("late Begin=%v; transfer=%+v last=%+v epoch=%d", err, stored.Transfer, stored.LastTransfer, stored.BindEpoch)
+			if !errors.Is(err, ErrTransferStale) {
+				t.Fatal("old canceled Begin resurrected")
+			}
+		})
+	}
+}
