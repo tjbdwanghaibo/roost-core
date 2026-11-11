@@ -153,6 +153,11 @@ func checkStartRoute(definition Definition, request StartRequest) error {
 	if request.Route == "" && definition.routed() {
 		return fmt.Errorf("%w: saga %s/%d has routed steps and the start names no route (StartRequest.Route)", ErrInvalidRecord, definition.Type, definition.Version)
 	}
+	// 退回不消耗尝试次数（维护者 2026-11-11），路由步骤正向唯一的时间上限就是 saga 截止：没有截止的路由 saga 会按
+	// BackoffMax 一直退回重派，所以启动时就拒绝（维护者 2026-11-11 方案 A）。补偿方向仍等属主收下（退款只能落在属主上）。
+	if request.DeadlineAt.IsZero() && definition.routed() {
+		return fmt.Errorf("%w: saga %s/%d has routed steps and the start sets no deadline (StartRequest.DeadlineAt): a bounce does not use up attempts, so the deadline is the only bound", ErrInvalidRecord, definition.Type, definition.Version)
+	}
 	return nil
 }
 
@@ -245,15 +250,19 @@ func prepareResume(request ResumeRequest, clock time.Time) (ResumeRequest, time.
 	return request, deadline, nil
 }
 
-// planResume 是 Resume 的目标记录：只有 Failed / ManualRequired 能 Resume；定义必须已注册；补偿方向停下、或有已完成
+// planResume 是 Resume 的目标记录：只有 Failed / ManualRequired 能 Resume；定义必须已注册；有路由步骤的不许清截止；补偿方向停下、或有已完成
 // 前缀 / 迟到步骤的记录继续补偿（先补迟到那一步，saga 方向 ④），否则回到正向重试当前步骤。新一生由 planTransition 开
 // （causeResume），之后的 CommandID 与 Resume 之前的所有回执不相交。request 已经过 prepareResume。
-func planResume(record Record, defined bool, request ResumeRequest, deadline time.Time) (Record, error) {
+func planResume(record Record, definition Definition, defined bool, request ResumeRequest, deadline time.Time) (Record, error) {
 	if record.Status != StatusFailed && record.Status != StatusManualRequired {
 		return Record{}, fmt.Errorf("saga: status %d cannot resume", record.Status)
 	}
 	if !defined {
 		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, record.Type, record.DefinitionVersion)
+	}
+	if request.ClearDeadline && definition.routed() {
+		// 同 checkStartRoute：有路由步骤的 saga 不能没有截止（维护者 2026-11-11 方案 A）。
+		return Record{}, fmt.Errorf("%w: saga %s/%d has routed steps; Resume may move its deadline but not clear it", ErrInvalidRecord, record.Type, record.DefinitionVersion)
 	}
 	now := request.Now
 	after := record.Clone()

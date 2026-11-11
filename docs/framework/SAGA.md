@@ -238,7 +238,7 @@ return left, step.Complete(true, "")
 
 - **声明**：定义里 `Step.Routed = true`（`roost add saga ... -routed <step>` 生成；正向与补偿同一个声明）。有路由步骤的定义，启动时必须带
   `StartRequest.Route`（按 sid 路由用 `saga.SidRoute(属主 sid)`；生成的 `EmitStart` / `Start` 因此多一个 `route` 参数）。**没有 Route 的启动被拒绝**
-  （`ErrInvalidRecord`，分区记 `rejected_input_total{kind="start",reason="route"}`）；Route 必须是至多 64 字节的 subject token。Route 进启动摘要。
+  （`ErrInvalidRecord`，分区记 `rejected_input_total{kind="start",reason="route"}`）；Route 必须是至多 64 字节的 subject token。Route 进启动摘要。**有路由步骤的 saga 还必须带截止**（`StartRequest.DeadlineAt`，缺了 `ErrInvalidRecord`；Resume 可以改截止、不许清掉）：退回不消耗尝试次数，截止是正向唯一的时间上限（维护者 2026-11-11）。
 - **投递**：协调器派发路由步骤时把这笔 saga 当前的 `Record.Route` 写进 `Command.Route`，命令事件发在 `<prefix>.<k>.ev.to.<route>.<topic>`。它仍在
   分区的 `<prefix>.<k>.>` 里，**流的 subjects 不变**；不路由的步骤照旧发 `ev.cmd.<topic>`。
 - **消费**：参与方用 `kitsaga.WithSidRoute()` 登记（框架层是 `StepConsumerConfig.Route`）：durable 名是 `<group>-<step>-<sid>`，过滤

@@ -88,7 +88,7 @@
 ## 6. 限制
 
 - 一笔 saga 一个路由地址：改两个不同 sid 上实体的 saga（两名玩家之间的交易）需要“按步骤的地址”，未实现。需要时的方向：`StartRequest.Routes map[步骤名]route` 或让步骤结果带下一步的地址；改记录与线格式。
-- 退回不消耗尝试（维护者 2026-11-11），时间上只受 saga 截止约束：正向到截止补偿；**补偿方向没有截止**，退回的补偿（例如退款）按 `BackoffMax` 间隔一直重派到属主收下；**没有截止的 saga** 正向也一样一直等。见 §7 第 2 条。
+- 退回不消耗尝试（维护者 2026-11-11），时间上只受 saga 截止约束：正向到截止补偿；**补偿方向没有截止**，退回的补偿（例如退款）按 `BackoffMax` 间隔一直重派到属主收下；~~**没有截止的 saga** 正向也一样一直等。~~ 维护者 2026-11-11 定方案 A：有路由步骤的 saga 启动必须带截止、Resume 不许清截止（见 §7 第 2 条），正向因此总有时间上限；补偿方向仍等属主收下。
 - 同一条命令先后被退回两次、两次的地址不同（换服完成前后）：第二份结果按身份冲突被分区跳过（`rejected_input_total{reason="identity"}`，WARN），协调器已按第一份推进，无害但有日志噪声。
 - 定义与消费者的路由一致性只在协调器与步骤消费者同进程时由 `Steps.Start` 核对；拆分部署靠两边用同一份生成的定义。
 - JetStream durable 数随 sid 数线性增长（§3.2）；没有测 1000 个 sid 量级的服务端开销。
@@ -98,6 +98,7 @@
 
 1. **玩家换服的状态来源（维护者 2026-11-11 定：先标 TODO）**：仓库里没有单个玩家改绑 sid 的能力（[PLAYER-MIGRATION §1](../framework/PLAYER-MIGRATION.md#1-先说清迁移的对象)：account 没有修改 `ServerID` 的接口），现有的“迁移”是整服搬机器（sid 不变，不需要退回）与离线别名合服（要求 saga 全部终态）。demo 保留入口：`gift_saga.go` 的钩子 `playerMoving`，缺省 `notMoving` 返回“不在换服中”，标 `TODO（维护者 2026-11-11）`，测试注入；单个玩家换服的功能存在后把它的状态接到这里。退回路径（换服中 / 不绑定本服）与用例保留。KNOWN-LIMITS 同记。
 2. **退回不算重试（维护者 2026-11-11 定，已实施）**：退回不消耗尝试次数（`Completion.Bounced` + `Record.Bounces`），按退回次数退避重派，时间上受 saga 截止约束、到期照常补偿；用例 `TestABouncedStepKeepsItsAttemptsAndCompensatesAtTheDeadline`（退回 9 次、MaxAttempts 3，saga 仍在正向；截止时补偿）。由此带出的**待确认**：补偿方向没有截止、没有截止的 saga 正向也没有时间上限，退回会一直重派（按 `BackoffMax` 间隔）。可选：A（推荐）有路由步骤的 saga 启动时必须带截止，补偿方向维持“等到属主收下”（退款只能落在属主上），代价是 `StartRequest` 多一条校验；B 维持现状，靠 `saga.step.bounced_total` 与 `LastError` 监控。
+   - **截止（维护者 2026-11-11 定方案 A，已实施）**：有路由步骤的 saga 启动必须带 `StartRequest.DeadlineAt`，缺了 `ErrInvalidRecord`（`checkStartRoute`）；Resume 可以改截止但不许 `ClearDeadline`（`planResume`）。补偿方向保持“等到属主收下”（退款只能落在属主上）。未采用 B（不限制、只靠 `saga.step.bounced_total` 监控）。用例 `TestARoutedSagaMustCarryADeadline`（修前红：`StartSaga with a route and no deadline = saga: engine is closed, want ErrInvalidRecord`；去掉 Resume 检查的变异红：`Resume clearing the deadline of a routed saga = <nil>, want ErrInvalidRecord`）。
 
 ## 8. 验证与演练阈值
 
@@ -111,4 +112,4 @@
 
 - 11-11 额度用完暂停，WIP 提交 `e90d1dbe` 推到 `feat/saga-step-direct-route`；当时重新生成的 game-demo 上 `internal/service/game -race` 红过一次。
 - 11-11 恢复：按维护者对 §7 的两条决定实施——退回不算重试（`Completion.Bounced` / `Record.Bounces`，用例 `TestABouncedStepKeepsItsAttemptsAndCompensatesAtTheDeadline`）；“换服中”留钩子 `playerMoving` 与 `TODO（维护者 2026-11-11）`（用例 `TestAStepForAMovingSenderIsBouncedBackToTheSender`）。那次 `-race` 失败 5 次复跑没有复现，记为尚未确认（证据 §6）。全量验证与阈值 16s 下的无缝演练（p95 5.45s）通过，结果见证据 §5、§6。
-- 没有合入 main、没有发版；合入由维护者决定。待确认见 §7 第 2 条（补偿方向与没有截止的 saga 上退回一直重派）。
+- 没有合入 main、没有发版；合入由维护者决定。§7 第 2 条的截止问题维护者已定 A 并实施。

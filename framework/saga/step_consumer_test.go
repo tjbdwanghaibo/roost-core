@@ -492,7 +492,8 @@ func routedPartition(t *testing.T) *unitPartition {
 // routedStart 是一条 gift 启动意图，地址是 route。
 func routedStart(t *testing.T, u *unitPartition, businessKey string, payload sidPayload, route string) fnats.LogMsg {
 	t.Helper()
-	return routedStartUntil(t, u, businessKey, payload, route, time.Time{})
+	// 路由 saga 必须带截止（TestARoutedSagaMustCarryADeadline）；不关心截止的用例取一小时后。
+	return routedStartUntil(t, u, businessKey, payload, route, u.clock.Now().Add(time.Hour))
 }
 
 // routedStartUntil 同 routedStart，带 saga 截止（零值表示没有）。
@@ -845,6 +846,28 @@ func TestARoutedSagaWithoutARouteIsRefused(t *testing.T) {
 	u.round(u.clock.Now(), u.resultInput(published[0].input.Completion))
 	if record := u.record(command.SagaID); record.Status != StatusFailed {
 		t.Fatalf("saga = %s, want failed", record.Status)
+	}
+}
+
+// 维护者 2026-11-11（方案 A）：退回不消耗尝试次数，路由步骤的正向唯一的时间上限就是 saga 截止，所以有路由步骤的
+// saga 启动必须带截止，Resume 也不许把它清掉；没有截止的路由 saga 会按 BackoffMax 一直退回重派。不路由的定义不受影响。
+func TestARoutedSagaMustCarryADeadline(t *testing.T) {
+	u := routedPartition(t)
+	if _, err := u.e.StartSaga(context.Background(), StartRequest{Type: "gift", DefinitionVersion: 1, BusinessKey: "k-nodeadline", Data: []byte(`{}`), Route: SidRoute(1000)}); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("StartSaga with a route and no deadline = %v, want ErrInvalidRecord: a bounce does not use up attempts, so the deadline is the only bound", err)
+	}
+	r := u.round(u.clock.Now(), routedStartUntil(t, u, "gift-nodeadline", sidPayload{Player: 7, SID: 1000}, SidRoute(1000), time.Time{}))
+	if len(r.events) != 0 {
+		t.Fatalf("a routed saga without a deadline started (%d events), want the start refused", len(r.events))
+	}
+
+	definition := routedDefinition()
+	failed := Record{Status: StatusFailed, Phase: PhaseForward, Route: SidRoute(1000), DeadlineAt: u.clock.Now().Add(time.Minute)}
+	if _, err := planResume(failed, definition, true, ResumeRequest{ID: "s", Now: u.clock.Now(), ClearDeadline: true}, time.Time{}); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Resume clearing the deadline of a routed saga = %v, want ErrInvalidRecord", err)
+	}
+	if _, err := planResume(failed, definition, true, ResumeRequest{ID: "s", Now: u.clock.Now()}, u.clock.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Resume with a new deadline = %v, want accepted", err)
 	}
 }
 

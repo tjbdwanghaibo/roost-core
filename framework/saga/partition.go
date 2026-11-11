@@ -497,7 +497,7 @@ func (r *round) operation(msg fnats.LogMsg) {
 			refuse(err)
 			return
 		}
-		after, err := planResume(record, defined, request, deadline)
+		after, err := planResume(record, definition, defined, request, deadline)
 		if err != nil {
 			refuse(err)
 			return

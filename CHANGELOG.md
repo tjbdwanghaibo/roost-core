@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **行为变化**（framework/saga）：**有路由步骤（`Step.Routed`）的 saga 启动必须带截止，Resume 不许清截止**（维护者 2026-11-11 方案 A；[方案 §7](docs/maintenance/FEATURE-2026-11-11-saga-step-sid-route.md#7-待确认)）。退回不消耗尝试次数之后，截止是路由 saga 正向唯一的时间上限；缺截止的启动答 `ErrInvalidRecord`，带 `ClearDeadline` 的 Resume 答 `ErrInvalidRecord`。补偿方向仍等属主收下。**升级要求**：调用生成的 `EmitStart` / `Start` 时给路由 saga 传非零截止（demo 已如此）。
+
 - **新增 / 行为变化 / 协议 / 格式**（framework/saga + wiring/saga + codegen + game-demo）：**saga 步骤按 sid 确切路由**（维护者 2026-11-11 定方案 ③：“理想情况是有确切的路由，而不是多个争抢”“改做3吧”；[方案](docs/maintenance/FEATURE-2026-11-11-saga-step-sid-route.md)、[契约](docs/framework/SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③)、[证据](docs/maintenance/evidence/saga-step-sid-route-20261111/README.md)）。此前同一服务的全部 game 进程共用一个 durable 消费原生步骤，非属主拒绝（nak）后结果要等原消息按 250ms 倍增的退避轮到属主，5 进程时每步约多 3.75s。
   - 框架：定义里 `Step.Routed`，启动时 `StartRequest.Route`（`saga.SidRoute(属主 sid)`；有路由步骤而没有 Route 的启动被拒绝，`ErrInvalidRecord`）。协调器把路由步骤的命令发到 `<prefix>.<k>.ev.to.<route>.<topic>`（仍在分区的 `<prefix>.<k>.>` 里，流的 subjects 不变），`Command.Route` 带地址；参与方 `kitsaga.WithSidRoute()`（框架层 `StepConsumerConfig.Route`）的 durable 是 `<group>-<step>-<sid>`、只过滤投给本 sid 的命令，非属主进程收不到。`Steps.Start` 核对本进程有 sid、同进程有协调器时与定义的路由一致（`Engine.RoutedTopic`），不一致拒绝启动。准入新增两种结论：`saga.BounceStep(route, reason)` 退回协调器（不执行、零写入、发回退回结果 `Completion.Bounced` 并可带新地址；**退回不算重试**，协调器按退回次数退避重派、不消耗尝试次数（`Record.Bounces`），正向受 saga 截止约束；指标 `saga.step.bounced_total`），`saga.RejectStep(reason)` 拒收（发回不可重试失败；`saga.step.rejected_total`）。删除 `Steps.RunHandedOver` 与 `ErrStepsNotStarted`。
   - codegen：`roost add saga ... -routed <step>`（定义 `Routed: true`，`EmitStart` / `Start` 多一个 `route` 参数，生成的登记加 `WithSidRoute`）。
