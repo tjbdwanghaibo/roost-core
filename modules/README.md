@@ -8,7 +8,7 @@
 
 | 模块 | 做什么 | 依赖 | 状态字段 | 场景数 |
 | --- | --- | --- | --- | --- |
-| [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 9 |
+| [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 14 |
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后执行别的功能登记的钩子（`OnCheckinClaimed`，同一笔事务） | wallet | `PlayerDao.Checkin`（同步） | 8 |
 | [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）、向在线玩家的推送（`ChatMessage`）、按序号翻历史（`ChatHistory`）、给服务端用的系统公告（`AnnounceWorld`）；经托管的 chat 服务存储，替换它默认拒绝一切的 collaborators。game-demo 用的就是它 | 无（要求业务服务 `uses: [chat]` 与玩家 TCP 接入，后者安装时代办） | 无 | 8 |
 | [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放写在 `game/entities/player/enter_first.go`；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`；钩子拿到 `Entered{PlayerID, First, FirstAtUnixMilli, Claims}`，`Claims` 是会话的 claims，可为 nil）；安装时打开玩家 TCP 接入与自身视图；别的功能登记的进入前检查（`OnEntering`，能否决登录）在加载 Player 之前执行；进入的骨架是 `gameenter.Enter`（检查 → 加载与首次初始化 → 钩子） | 无 | `PlayerDao.Enter`（只落库） | 11 |

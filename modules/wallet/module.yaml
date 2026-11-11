@@ -23,4 +23,4 @@ errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_overflow]
 verify:
   packages: [./game/handler]
   run: ^TestWallet
-  pass: 9
+  pass: 14

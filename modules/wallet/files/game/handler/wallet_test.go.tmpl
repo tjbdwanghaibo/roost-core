@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -117,6 +119,67 @@ func (f *walletFixture) grant(t *testing.T, key string, amount int64) int64 {
 		t.Fatal(err)
 	}
 	return balance
+}
+
+// walletCallHandler 是只在测试里登记的 Nest handler：在一笔真实的事务里直接调组件的 Add / Apply。
+// 这两个入口是给服务端别的功能在自己的 handler 里调的（商店扣钱、体力补满、奖励发放），delta 的正负与
+// 大小由调用方给；模块自带的两个 handler 只放行正的金额，走不到这里的边界。登记用的是生成代码登记
+// handler 的同一个公开接口。swallow 为 true 时它吞掉组件的拒绝、以成功结束——事务照常提交，Nest 不会
+// 替组件撤回任何写入，用来确认“拒绝时零写入”是组件自己做到的，不是靠 handler 返回错误之后的回滚。
+var walletCallHandler = nest.NewHandlerName("walletTestCall")
+
+var registerWalletCallHandler sync.Once
+
+type walletCallResult struct {
+	balance int64
+	err     error
+}
+
+func (f *walletFixture) call(op, key string, delta int64, swallow bool) (int64, error) {
+	registerWalletCallHandler.Do(func() {
+		nest.MustRegisterHandlerWithMeta(walletCallHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+			component := es[0].(playerentity.IWalletEntity).WalletComp()
+			var balance int64
+			var err error
+			switch params[0].(string) {
+			case "add":
+				balance, err = component.Add(params[2].(int64))
+			case "apply":
+				balance, err = component.Apply(params[1].(string), params[2].(int64))
+			case "store":
+				// 直接改存着的余额，不经组件：只用来摆出组件自己写不出来的状态。
+				component.Owner().Dao().GetWallet().SetCoins(params[2].(int64))
+				balance = params[2].(int64)
+			default:
+				return nil, fmt.Errorf("unknown op %v", params[0])
+			}
+			if err != nil && params[3].(bool) {
+				return walletCallResult{err: err}, nil
+			}
+			return walletCallResult{balance: balance}, err
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	ret, err := f.engine.Request(context.Background(), walletCallHandler, f.player.ID(), nest.NewParams(op, key, delta, swallow))
+	if err != nil {
+		return 0, err
+	}
+	result := ret.(walletCallResult)
+	return result.balance, result.err
+}
+
+// add / apply 直接调组件入口；拒绝被吞掉、事务照常提交（见 walletCallHandler）。
+func (f *walletFixture) add(delta int64) (int64, error) { return f.call("add", "", delta, true) }
+
+func (f *walletFixture) apply(key string, delta int64) (int64, error) {
+	return f.call("apply", key, delta, true)
+}
+
+// expectWallet 断言余额与回执数。
+func (f *walletFixture) expectWallet(t *testing.T, what string, wantCoins int64, wantReceipts int) {
+	t.Helper()
+	if coins, receipts := f.snapshot(t); coins != wantCoins || receipts != wantReceipts {
+		t.Fatalf("%s: coins=%d receipts=%d, want %d and %d", what, coins, receipts, wantCoins, wantReceipts)
+	}
 }
 
 func TestWalletGrantAddsCoins(t *testing.T) {
@@ -261,4 +324,142 @@ func TestWalletApplyRefusesKeysThatCannotBeStored(t *testing.T) {
 			t.Fatalf("key %q: coins=%d receipts=%d", key, gotCoins, gotReceipts)
 		}
 	}
+}
+
+// 扣 math.MinInt64 是余额不足，不是成功：这个数取负还是它自己，用“余额 < -delta”判断不足会被它绕过，
+// 余额随后被写成负数（修前：余额 100 时 Add / Apply 返回成功，余额变成 -9223372036854775708）。
+// Add 与 Apply 都拒绝，余额与回执都不变；余额为 0、为 int64 上限时同样。
+func TestWalletDebitOfTheMinimumIntegerIsRefused(t *testing.T) {
+	f := newWalletFixture(t)
+	f.expectWallet(t, "a new wallet", 0, 0)
+	for _, coins := range []int64{0, 100, math.MaxInt64} {
+		if coins > 0 {
+			have, _ := f.snapshot(t)
+			if _, err := f.add(coins - have); err != nil {
+				t.Fatalf("raise the balance to %d: %v", coins, err)
+			}
+		}
+		if balance, err := f.add(math.MinInt64); !errors.Is(err, apperrors.ErrWalletShort) {
+			t.Fatalf("balance %d: Add(MinInt64) = %d, %v; want wallet_short", coins, balance, err)
+		}
+		f.expectWallet(t, fmt.Sprintf("balance %d after the refused Add", coins), coins, 0)
+		if balance, err := f.apply("min-debit", math.MinInt64); !errors.Is(err, apperrors.ErrWalletShort) {
+			t.Fatalf("balance %d: Apply(MinInt64) = %d, %v; want wallet_short", coins, balance, err)
+		}
+		f.expectWallet(t, fmt.Sprintf("balance %d after the refused Apply", coins), coins, 0)
+	}
+	// 被拒绝的键没有留下回执：之后用它做一次合法的扣款照常执行。
+	if balance, err := f.apply("min-debit", -math.MaxInt64); err != nil || balance != 0 {
+		t.Fatalf("a legal debit under the refused key: balance=%d err=%v, want 0", balance, err)
+	}
+	f.expectWallet(t, "after the legal debit", 0, 1)
+}
+
+// 普通的余额不足经 Add 与 Apply 都拒绝并且什么都不写；刚好扣完是合法的。
+func TestWalletShortDebitThroughAddAndApplyWritesNothing(t *testing.T) {
+	f := newWalletFixture(t)
+	f.grant(t, "seed", 100)
+	for _, delta := range []int64{-101, -1000, -math.MaxInt64} {
+		if balance, err := f.add(delta); !errors.Is(err, apperrors.ErrWalletShort) {
+			t.Fatalf("Add(%d) = %d, %v; want wallet_short", delta, balance, err)
+		}
+		if balance, err := f.apply(fmt.Sprintf("short%d", delta), delta); !errors.Is(err, apperrors.ErrWalletShort) {
+			t.Fatalf("Apply(%d) = %d, %v; want wallet_short", delta, balance, err)
+		}
+		f.expectWallet(t, fmt.Sprintf("after the refused debits of %d", delta), 100, 1)
+	}
+	// Add 不留回执，Apply 留一条。
+	if balance, err := f.add(-40); err != nil || balance != 60 {
+		t.Fatalf("Add(-40): balance=%d err=%v, want 60", balance, err)
+	}
+	f.expectWallet(t, "after Add(-40)", 60, 1)
+	if balance, err := f.apply("exact", -60); err != nil || balance != 0 {
+		t.Fatalf("Apply(-60): balance=%d err=%v, want 0", balance, err)
+	}
+	f.expectWallet(t, "after the exact debit", 0, 2)
+	if balance, err := f.add(-1); !errors.Is(err, apperrors.ErrWalletShort) {
+		t.Fatalf("Add(-1) on an empty wallet = %d, %v; want wallet_short", balance, err)
+	}
+	f.expectWallet(t, "after the refused debit on an empty wallet", 0, 2)
+}
+
+// 加款的上界：余额加到 int64 上限是合法的，再多 1 是 wallet_overflow 并且什么都不写；从上限整笔扣回 0 合法。
+func TestWalletLargestCreditFitsAndOneMoreOverflows(t *testing.T) {
+	f := newWalletFixture(t)
+	if balance, err := f.apply("fill", math.MaxInt64); err != nil || balance != math.MaxInt64 {
+		t.Fatalf("Apply(MaxInt64) on an empty wallet: balance=%d err=%v", balance, err)
+	}
+	f.expectWallet(t, "after the largest credit", math.MaxInt64, 1)
+	if balance, err := f.add(1); !errors.Is(err, apperrors.ErrWalletOverflow) {
+		t.Fatalf("Add(1) on a full wallet = %d, %v; want wallet_overflow", balance, err)
+	}
+	if balance, err := f.apply("one-more", math.MaxInt64); !errors.Is(err, apperrors.ErrWalletOverflow) {
+		t.Fatalf("Apply(MaxInt64) on a full wallet = %d, %v; want wallet_overflow", balance, err)
+	}
+	f.expectWallet(t, "after the refused credits", math.MaxInt64, 1)
+	if balance, err := f.add(-math.MaxInt64); err != nil || balance != 0 {
+		t.Fatalf("Add(-MaxInt64) on a full wallet: balance=%d err=%v, want 0", balance, err)
+	}
+	// 分两笔加到上限：第二笔恰好填满。
+	if balance, err := f.add(math.MaxInt64 - 7); err != nil || balance != math.MaxInt64-7 {
+		t.Fatalf("Add(MaxInt64-7): balance=%d err=%v", balance, err)
+	}
+	if balance, err := f.add(8); !errors.Is(err, apperrors.ErrWalletOverflow) {
+		t.Fatalf("Add(8) with 7 of room = %d, %v; want wallet_overflow", balance, err)
+	}
+	if balance, err := f.add(7); err != nil || balance != math.MaxInt64 {
+		t.Fatalf("Add(7) with 7 of room: balance=%d err=%v", balance, err)
+	}
+	f.expectWallet(t, "after filling in two credits", math.MaxInt64, 1)
+}
+
+// 提交被拒：直接经 Add / Apply 做的加减与回执一起回滚；回滚之后边界照旧——扣 math.MinInt64 仍被拒绝，
+// 同一个业务键可以再用。
+func TestWalletRejectedCommitRollsBackAddAndApply(t *testing.T) {
+	f := newWalletFixture(t)
+	f.grant(t, "seed", 100)
+	f.committer.reject.Store(true)
+	if _, err := f.add(50); err == nil {
+		t.Fatal("Add under a rejected commit reported success")
+	}
+	if _, err := f.apply("k1", -30); err == nil {
+		t.Fatal("Apply under a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	f.expectWallet(t, "after the rejected commits", 100, 1)
+	if balance, err := f.add(math.MinInt64); !errors.Is(err, apperrors.ErrWalletShort) {
+		t.Fatalf("Add(MinInt64) after the rollback = %d, %v; want wallet_short", balance, err)
+	}
+	f.expectWallet(t, "after the refused debit", 100, 1)
+	if balance, err := f.apply("k1", -30); err != nil || balance != 70 {
+		t.Fatalf("Apply under the same key after the rollback: balance=%d err=%v, want 70", balance, err)
+	}
+	f.expectWallet(t, "after the retried debit", 70, 2)
+}
+
+// 存着的余额已经是负数时（组件自己写不出来；修掉“扣 math.MinInt64”之前可能留下这样的档），任何扣款
+// 都是余额不足并且什么都不写——含 math.MinInt64：负余额加上它会回绕成一个很大的正数。加款照常，
+// 加回非负之后扣款恢复正常。
+func TestWalletNegativeBalanceRefusesEveryDebit(t *testing.T) {
+	f := newWalletFixture(t)
+	if _, err := f.call("store", "", -50, false); err != nil {
+		t.Fatal(err)
+	}
+	f.expectWallet(t, "the arranged negative balance", -50, 0)
+	for _, delta := range []int64{-1, -50, -math.MaxInt64, math.MinInt64} {
+		if balance, err := f.add(delta); !errors.Is(err, apperrors.ErrWalletShort) {
+			t.Fatalf("Add(%d) on a negative balance = %d, %v; want wallet_short", delta, balance, err)
+		}
+		if balance, err := f.apply("debit", delta); !errors.Is(err, apperrors.ErrWalletShort) {
+			t.Fatalf("Apply(%d) on a negative balance = %d, %v; want wallet_short", delta, balance, err)
+		}
+		f.expectWallet(t, fmt.Sprintf("after the refused debits of %d", delta), -50, 0)
+	}
+	if balance, err := f.add(80); err != nil || balance != 30 {
+		t.Fatalf("Add(80) on a negative balance: balance=%d err=%v, want 30", balance, err)
+	}
+	if balance, err := f.add(-30); err != nil || balance != 0 {
+		t.Fatalf("Add(-30) once the balance is back above zero: balance=%d err=%v, want 0", balance, err)
+	}
+	f.expectWallet(t, "after the balance recovered", 0, 0)
 }

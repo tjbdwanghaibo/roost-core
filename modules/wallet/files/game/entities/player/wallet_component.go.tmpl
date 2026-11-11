@@ -106,13 +106,18 @@ func walletKeyValid(key string) bool {
 
 // Add 给余额加 delta（负数为扣），不留回执。给自己记着“这一次做过没有”的调用方用：
 // 先在自己的状态里判重，再在同一笔事务里调它。余额不足、溢出时不写任何字段。
+// delta 可以是任何 int64：扣到负数的一律是余额不足（含 math.MinInt64），加过上限的一律是溢出，
+// 调用方不需要自己先收窄范围。
 func (component *WalletComponent) Add(delta int64) (int64, error) {
 	if delta == 0 {
 		return 0, apperrors.ErrWalletInvalid
 	}
 	wallet := component.owner.Dao().GetWallet()
 	coins := wallet.GetCoins()
-	if delta < 0 && coins < -delta {
+	// 不足用加法判断，不用“coins < -delta”：delta 为 math.MinInt64 时取负还是它自己，那个比较恒为假，
+	// 余额会被写成负数。coins 非负、delta 为负时 coins+delta 不会溢出；coins 已经是负数（不是本组件
+	// 写得出来的）时任何扣款都按不足拒绝。
+	if delta < 0 && (coins < 0 || coins+delta < 0) {
 		return 0, apperrors.ErrWalletShort
 	}
 	if delta > 0 && coins > math.MaxInt64-delta {
