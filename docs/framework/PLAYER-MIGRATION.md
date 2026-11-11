@@ -4,9 +4,9 @@
 
 ## 1. 先说清“迁移”的对象
 
-静态绑定下，玩家建角时由 account 绑定到一个 game sid（`Role.ServerID`，[service/account/types.go](../../service/account/types.go)），之后不变；同一 sid 同一时刻只有一个进程（App 单实例锁），game 进程只为绑定在自己 sid 上的玩家服务（demo 的 [playerowner.go](../../demo/internal/service/game/playerowner.go.tmpl)）。因此“同一玩家至多一个写者”就等于“同一 sid 至多一个进程”。
+静态绑定下，玩家建角时由 account 绑定到一个 game sid（`Role.ServerID`，[service/account/types.go](../../service/account/types.go)），之后只有单个玩家换服（[§7](#7-单个玩家换服account-一侧)）会改它；同一 sid 同一时刻只有一个进程（App 单实例锁），game 进程只为绑定在自己 sid 上的玩家服务（demo 的 [playerowner.go](../../demo/internal/service/game/playerowner.go.tmpl)）。因此“同一玩家至多一个写者”就等于“同一 sid 至多一个进程”。
 
-所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。框架**没有**把单个玩家改绑到另一个 sid 的能力（account 没有修改 `ServerID` 的接口，`PlayerOwners` 拒绝不属于本 sid 的玩家）；把整个服并入另一个服用别名合服（[§6](#6-合服把服-a-并入服-b)），角色仍绑定原服，由承载服的进程服务。
+所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。把单个玩家改绑到另一个 sid 是另一件事，见 [§7 单个玩家换服（account 一侧）](#7-单个玩家换服account-一侧)：account 已有改绑的接口与换服状态，游戏侧的流程（源服停写、交出实体、到达，以及把这些串起来的业务模块）**还在实施中**，在它完成之前 `PlayerOwners` 仍拒绝不属于本 sid 的玩家，不要只凭 account 的接口在线上改绑；把整个服并入另一个服用别名合服（[§6](#6-合服把服-a-并入服-b)），角色仍绑定原服，由承载服的进程服务。
 
 数据只以已落库（Mongo）为准：WAL 只保证本机落库，新机器用空的 WAL 目录启动，不搬运旧机器的 WAL 热状态（[guide/03-dataengine §6](guide/03-dataengine.md#6-维护与升级)）。整个流程的正确性取决于一点：**旧进程的 WAL 在新进程启动前已全部投影并确认**。
 
@@ -137,3 +137,91 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 - “同一 Mongo” 按 URI 的主机列表 + 副本集名比较：同一集群换主机名写会被判为不同而拒绝（偏保守）。
 - saga 记录不带“属于哪个 sid”，检查的是整个 saga 存储：同一存储里还在运行的其他服的 saga 也会让检查不通过。
 - 剩余边界与尚未确认项见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#合服d15)。
+
+## 7. 单个玩家换服（account 一侧）
+
+把一个角色从它绑定的服改绑到另一个服（方案 [FEATURE-2026-11-11-player-rehome](../maintenance/FEATURE-2026-11-11-player-rehome.md)，其中第 6 节的决定按推荐项先实施、待维护者确认）。本节是 **account 一侧**的现行契约：绑定、换服状态、四个接口、运维工具（[service/account/transfer.go](../../service/account/transfer.go)、`transfer_test.go`）。
+
+游戏侧还没有接上：源服停写与断开会话、DataEngine 的“交出实体”、目标服的到达处理、业务模块 `rehome`、game-demo 的 `PlayerOwners` 与 saga 准入都在实施中。account **不知道也不检查**源服是否已经停写——`CommitRoleTransfer` 的调用方必须自己保证这一点，否则两个进程会同时写一个玩家（兜底只有投影的版本比较，冲突时进程 fail-stop）。
+
+### 7.1 模型
+
+- `Role.ServerID` 是**当前绑定服**：建角时写定，只有换服的提交会改它；account 不另存建角服。它与别名合服无关（合服不改 `ServerID`，承载服仍由 `ServingServerID` 给出）。
+- `Role.BindEpoch` 是绑定的代数：建角时 0，每次提交加 1，发起与中止不改。调用方凭它说明“我看到的是哪一版绑定”。
+- `Role.Transfer` 非空表示换服在途，是“这个角色正在换服”的**唯一持久事实**；`Role.LastTransfer` 是最近一次了结（提交或中止）的换服，重发时据此回放，`Settled` 说明它在 slot 上的收尾是否做完。
+- slot 仍按 `账号@服`：目标服的 slot 在发起时就建好，带 `TransferID`（占位标记）、角色的 PlayerID 与建角计划、以及它所属的那一代绑定（`Slot.BindEpoch`，提交之后的代数）。提交之后清掉标记就是角色在新服的正式 slot。一个 slot 只有在 PlayerID、建角计划、绑定代数都与角色相符时才算可用，所以同一时刻一个角色至多有一个可用的 slot。
+- 名字目录不分服，换服不改名。换过服的角色，名字在目录里的 owner 仍是建角时的“旧 slot 键 / 计划 ID”，与新服 slot 键算出来的不一致——没有影响：建角判定表对已发布的 slot 与换服占位都不读名字，名字仍全局唯一（别的账号、本账号在旧服重新建同名角色都得到 `ErrNameTaken`）；account 没有改名接口。
+- 会话令牌不含服：换服之后旧令牌仍然有效，`ValidateSession` 读到的是新的绑定服。
+
+不变量：
+
+1. **角色记录定结果**。提交还是中止由角色记录上的一次版本比较决定，先落的生效：已提交的不能被中止，已中止的不能被提交，也不能用同一个 ID 重新发起。
+2. **slot 先加后删**。目标服的占位在改绑之前就在；旧服的 slot、被中止的占位只在角色记录定了结果之后才删。角色任何时刻都能登录，不会出现“绑定在某个服、那里却没有它的 slot”。
+3. **任何一步之后停下都可重跑**。跨记录的写不是原子的；每一步按内容认记录（换服 ID、PlayerID、绑定代数），重发同一个请求补完剩下的步骤，同一个 ID 幂等。
+
+### 7.2 接口
+
+四个接口都在 `Accounts` 上（经总线可调）：发起与提交的是源服的 game 进程，冷准入时任何 game 进程都要读绑定。返回值都是 `RoleBinding{PlayerID, ServerID, ServingServerID, BindEpoch, Transfer, LastTransfer}`；`ErrTransferStale`（560118）与 `ErrTransferInProgress`（560119）两种拒绝同时带回当前的绑定。
+
+| 接口 | 做什么 | 拒绝 | 写入顺序与中途停下 |
+| --- | --- | --- | --- |
+| `RoleBinding(playerID)` | 只读：当前绑定服、承载服、绑定代数、在途与最近了结的换服 | 角色不存在 `ErrRoleMissing`；建角没发布 `ErrConflict` | 不写 |
+| `BeginRoleTransfer(playerID, TransferRequest{ID, FromSID, To, ExpectEpoch, TTLSeconds, Note})` | 登记换服、占住目标服的名额；角色仍绑定源服、照常可登录 | 另一次换服在途 `ErrTransferInProgress`；ID 已了结、`ExpectEpoch` 不是当前代数、`FromSID` 不是当前承载服 `ErrTransferStale`；目标服不存在或就是当前服 `ErrServerInvalid`；目标服已并入别服或不是 open、角色的绑定服已并入别服 `ErrServerClosed`；账号在目标服已有角色、待定的建角计划或别的占位 `ErrRoleLimit`；ID 为空或超长、TTL 为负或超过 24 小时、备注超长 `ErrRangeInvalid` | ① 角色写 `Transfer` ② 建占位。停在 ① 之后：重发同一个 Begin 补上 ②，或直接 Commit（它先补占位）。② 发现名额被抢先占了（与目标服上的建角竞争）：撤掉 ①，答 `ErrRoleLimit` |
+| `CommitRoleTransfer(playerID, transferID)` | 改绑到目标服，`BindEpoch` 加 1 | ID 已中止、不是在途的那一次、没有发起过 `ErrTransferStale`；目标服期间被删除 / 并入别服 `ErrServerInvalid` / `ErrServerClosed`；目标名额已不是这次换服的占位 `ErrRoleLimit`（后两类带回绑定，由调用方中止） | 确认占位在（缺了补上）→ 角色改 `ServerID`、代数、清 `Transfer`、写 `LastTransfer` → 清新服 slot 的标记 → 删旧服 slot → 记 `Settled`。角色写之前停下：什么也没变。之后停下：角色已在新服可用，重发补完收尾 |
+| `AbortRoleTransfer(playerID, transferID, reason)` | 角色留在源服，撤掉占位，这个 ID 记为已中止 | ID 已提交 `ErrTransferStale`（带回已提交的绑定，按已提交处理）；在途的是另一个 ID `ErrTransferInProgress` | 角色清 `Transfer`、`LastTransfer` 记未提交 → 删占位 → 记 `Settled`。先写角色再删占位：反过来的话并发的 Commit 可能在占位被删之后把角色改绑过去。之后停下：重发补完 |
+
+补充：
+
+- **期限**（`TTLSeconds`，0 取 10 分钟）只写进 `Transfer.DeadlineUnix`：一期 account 不自动中止（它不知道源服卸载到了哪一步），也不拒绝迟到的提交（中途停下一律向前恢复）。过期的换服由运维或游戏侧模块中止。
+- **中止一个没发起成功的 ID**（当前没有换服在途时）也被接受并记为已中止，于是一个迟到的 Begin 不能再把它做起来。调用方在 Begin 结果未知时用它得到确定的结论。
+- **收尾谁来补**：结果已定而 slot 没收尾（`LastTransfer.Settled` 为 false）时，重发的 Commit / Abort、这个角色的下一次 `SelectRole`、下一次 `BeginRoleTransfer` 读到就补完。补完之前，另一头的名额仍按已占用回答（提交后的旧服、中止后的目标服：`CreateRole` 得到 `ErrRoleLimit`）。迟到的收尾只删绑定代数更旧的 slot，不会删掉角色后来换回来的那一个。
+- **人工提交**走 `Admin.CommitRoleTransferWithNote`（不上总线，`accountctl` 用它）：同一个提交，另要求备注并写进 `LastTransfer.Note`。
+
+### 7.3 换服期间其他接口
+
+- `ValidateSession` / `SelectRole` 照常返回源服，并带上 `Transfer`（`Role.Transfer` / `Session.Transfer`）。握手被拒时客户端拿不到原因，所以 account 与认证器都不拒绝，放不放行由登录端点决定。
+- 认证器（Gate 的 `AccountAuthenticator`、game-demo 嵌入 TCP 的 `auth.go`）在原有 claim 之外写两项：`BindEpochClaim`（绑定代数，十进制，没换过服是 `0`）总是写；`TransferClaim` 只在换服在途时写，值由 `account.TransferClaimValue` 给出（`<目标 sid>:<换服 ID>`）、`account.ParseTransferClaim` 读回。claim 是认证那一刻的快照。
+- `CreateRole`：目标服的占位一律 `ErrRoleLimit`（同名也是——那个角色此刻未必绑定在目标服）；提交之后在新服同名返回这个角色、别的名字 `ErrRoleLimit`，与普通角色相同；旧服的名额在收尾之后让出，可以再建一个新角色。
+- `Admin.ResolvePendingCreation` 拒绝占位（`ErrNotResolvable`）：它不是悬挂的建角计划，只由提交 / 中止了结。
+- `UpdateProfile`、`MarkLogout` 不受影响。
+
+### 7.4 运维：查看与人工了结
+
+工具是 game-demo 的 [cmd/accountctl](../../demo/cmd/accountctl/main.go.tmpl)，直接连 account 的存储。三个 `transfer-role` 步骤都要求 `-note`，备注写进角色记录。
+
+```bash
+# 这个角色绑定在哪、有没有在途的换服（Transfer）、最近一次是怎么了结的（LastTransfer）
+go run ./cmd/accountctl show-role -player 1000001
+# 人工发起（按读到的承载服与绑定代数发起；不给 -id 时自动生成，结果里给出）
+go run ./cmd/accountctl transfer-role begin -player 1000001 -to 1001 -note "工单 4711"
+# 人工提交 / 中止一次在途的换服
+go run ./cmd/accountctl transfer-role commit -player 1000001 -id <ID> -note "1000 已退出，wal-drained 通过"
+go run ./cmd/accountctl transfer-role abort  -player 1000001 -id <ID> -note "源服排空超时"
+```
+
+**人工提交的前提**（二者之一，缺一不可省）：
+
+1. 源服进程还在：它已经把这个玩家排空并卸载，且保持着不再加载的屏障（游戏侧流程的第 2 步做完）；或
+2. 源服进程已经退出，并且 `go run ./cmd/sidmove wal-drained -dir <源服的 WAL 目录>` 通过（[§3](#3-检查工具)）——WAL 里没有未投影的记录，这个玩家最后的写入都已落库。
+
+不满足就提交，目标服加载到的可能是旧数据，源服随后的投影会撞上版本比较而 fail-stop。拿不准时中止：角色留在源服，什么也不丢。
+
+常见情形：
+
+| 现象 | 处理 |
+| --- | --- |
+| `show-role` 显示 `Transfer` 在途、早已过了 `DeadlineUnix` | 源服还活着：让它自己向前恢复或中止。源服已经没了：确认上面的前提 2 之后 `commit`，否则 `abort` |
+| `commit` 答 `ErrServerClosed` / `ErrServerInvalid` | 目标服在换服期间被并入别服或删除：`abort`，换一个目标重新发起 |
+| `commit` / `abort` 中途报错 | 原样重跑同一条命令（同一个 `-id`），已经做过的步骤不会重做 |
+| `abort` 答已提交（`ErrTransferStale`，同时打印绑定） | 这次换服已经提交，角色在目标服；要回去就再换一次 |
+| 账号在某个服建角得到 `ErrRoleLimit`，而 `show-role` 显示 `LastTransfer.Settled` 为 false | 上一次换服的收尾没做完：重跑那一次的 `commit` / `abort`（或让玩家重新登录一次） |
+
+### 7.5 边界
+
+- 只有 account 一侧；游戏侧流程实施中（见本节开头）。
+- 一期不涉及**已并入另一服的服**：角色的绑定服已并入别服、或目标服已并入别服，发起都被拒绝；提交时目标服已并入别服也被拒绝。承载着别的服（别人并入它）的服是普通的源与目标。`MergeServer` 不检查有没有在途的换服指向被合并的服（没有在途换服的索引）。
+- 没有在途换服的列举与过期清扫；期限只记录。
+- 换服 ID 由调用方保证不复用：account 只挡得住“最近一次了结的那个 ID”。
+- account 不知道两个服是否共用玩家数据的物理库：物理库不同的服之间换服，目标服会读到“从未创建”。可去的服由游戏侧的规则决定。
+- 独立 Gate 转交给 game 的绑定不带 Claims：`BindEpochClaim` / `TransferClaim` 只在认证器那一侧（嵌入 TCP 的 Principal）可见。
+- 其余见 [KNOWN-LIMITS“单个角色换服”](../maintenance/KNOWN-LIMITS.md#单个角色换服account-一侧)。

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+- **新增**（service/account + wiring/gate + game-demo）：**单个角色换服的底层（account 一侧）**（[方案](docs/maintenance/FEATURE-2026-11-11-player-rehome.md) §3.1，一期；游戏侧的停写、交出实体与业务模块还在实施，端到端尚不能用）。
+  - 接口（`Accounts`，经总线）：`RoleBinding`（只读）、`BeginRoleTransfer`（登记换服并在目标服占位）、`CommitRoleTransfer`（改绑，`BindEpoch` 加 1）、`AbortRoleTransfer`（撤销，ID 记为已中止）。角色记录定结果（已提交的不能被中止、已中止的不能被提交），slot 先加后删，任何一步之后停下重发同一个请求补完，同一个 ID 幂等。新错误码 `ErrTransferStale`（560118）、`ErrTransferInProgress`（560119），两种拒绝都带回当前绑定。不上总线的 `Admin.CommitRoleTransferWithNote` 给人工提交用。
+  - 数据：`Role` 加 `BindEpoch`、`Transfer`、`LastTransfer`；`Slot` 加 `TransferID`（占位标记）、`BindEpoch`；`Session` 加 `Transfer`。**`Role.ServerID` 的含义改为“当前绑定服”**（没换过服的角色不变）。目标服的占位对 `CreateRole` 一律 `ErrRoleLimit`、对 `ResolvePendingCreation` 是 `ErrNotResolvable`（建角判定表新增一类 slot）。
+  - 认证器：Gate 的 `AccountAuthenticator` 与 game-demo 嵌入 TCP 的 `auth.go` 多写两个 claim——`BindEpochClaim`（总是写）、`TransferClaim`（换服在途时写，`account.TransferClaimValue` / `ParseTransferClaim`）；原有 claim 不变，在途的角色仍按源服路由。
+  - 工具：game-demo 的 `cmd/accountctl` 加 `show-role -player`、`transfer-role begin|commit|abort`（`-note` 必填，写进角色记录）。人工提交的前提是源服已把玩家排空卸载，或源服进程已退出且 `sidmove wal-drained` 通过。
+  - 文档：[PLAYER-MIGRATION §7](docs/framework/PLAYER-MIGRATION.md#7-单个玩家换服account-一侧)（契约、每个接口中途停下后的重跑、runbook）、[Service 篇 §4](docs/framework/guide/09-services.md#4-关键业务边界)；边界、与方案的出入、待维护者确认的四项见 [KNOWN-LIMITS“单个角色换服”](docs/maintenance/KNOWN-LIMITS.md#单个角色换服account-一侧)。
+  - **升级要求**：无。旧的角色与 slot 记录没有新字段，按代数 0、没有换服处理；account 与调用它换服接口的 game 一起升级（旧 account 没有这四个方法）。
+  - 验证：`go test -race ./service/account/... ./wiring/gate/...` 通过（account 的用例在 Memory 与本机隔离 Redis 上各跑一遍）；`wiring/integration` 的 `TestAccountRoleTransferRunsOnRedis` 在真实 Redis 上通过；重新生成的 game-demo build / vet 与 `./cmd/accountctl`、`./internal/access/...` 测试通过。Redis Cluster 与真实进程演练没有跑。
+
 - **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.44.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.44.0 的生成物用 saga 路由步骤（`Step.Routed`、`StartRequest.Route`、`saga.SidRoute`、`kitsaga.WithSidRoute`），saga WireVersion 4；按惯例在 tag 推上去之后单独一笔。
 
 - **新增**（codegen + modules）：**业务模块安装器 `roost module` 与首批两个模块**（维护者 2026-11-10：roost-core“既有底层框架也有业务模版”，要能按需求描述组合出服务逻辑；[方案](docs/maintenance/FEATURE-2026-11-10-business-modules.md)第 2 期，[实施记录](docs/maintenance/FEATURE-2026-11-10-business-modules.md#17-第-2-期实施记录2026-11-10)）。业务模块是提前写好并验收过的业务单元（状态结构体、组件、Nest handler、协议、错误码、场景测试），源码在 [modules](modules/README.md)，安装后归工程所有，不是生成器输出。
