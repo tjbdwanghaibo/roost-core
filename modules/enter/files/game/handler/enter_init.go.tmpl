@@ -1,0 +1,11 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerEnterInit 由进入游戏的端点在加载或创建 Player 之后调用，不直接对客户端开放。
+// 返回这一次是否执行了首次初始化；已经做过返回 false。nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerEnterInit(target player.IEnterEntity, nowUnixMilli int64) (bool, error) {
+	return target.EnterComp().Init(nowUnixMilli)
+}

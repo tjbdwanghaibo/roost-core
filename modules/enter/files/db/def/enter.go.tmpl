@@ -1,0 +1,10 @@
+package dbdef
+
+// EnterState 记着这名玩家的首次初始化做过没有。它是“只做一次”的事实：
+// 与初始发放在同一笔事务里提交，所以建档之后、发放之前进程崩了，下一次进入会补上。
+type EnterState struct {
+	// Initialized 为 true 表示首次初始化已经提交。
+	Initialized bool `store:"1"`
+	// FirstAt 是首次初始化提交时的业务时间（Unix 毫秒）。
+	FirstAt int64 `store:"2"`
+}

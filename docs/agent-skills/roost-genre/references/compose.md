@@ -6,7 +6,7 @@
 
 ## 0. 先说清楚能做到什么
 
-- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前只有三个模块：`wallet`（货币）、`checkin`（每日签到）、`chat`（聊天：世界与私聊的发送和翻历史）。以 `roost module list` 为准。
+- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前只有四个模块：`enter`（进入游戏：建档、首次初始化、打开自身视图）、`wallet`（货币）、`checkin`（每日签到）、`chat`（聊天：世界与私聊的发送和翻历史）。新工程一般都先装 `enter`。以 `roost module list` 为准。
 - **这一档交付到哪**：业务逻辑写完、离线场景通过、有“进入游戏”端点（建档，第 4B 步）、客户端可见的状态接上自身视图（第 4A 步）。**不含**登录鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）、真实依赖、Robot 与网络验收——[SKILL §3.6](../SKILL.md) 的“网络验收”在这里没有做，报告里要写明。
 - **没有现成模块的需求**：用 `roost add …` 建骨架、手写业务。框架给的是事务、持久化、同步、定时、跨进程这些底座，规则要写。写法照已装模块的文件。
 - **框架不支持的需求**：如实说明并给出处，不拼假 demo。见 [SKILL §6](../SKILL.md) 与[能力清单“明确没有 / 不适合的”](../../../framework/CAPABILITIES.md#明确没有--不适合的)。
@@ -152,7 +152,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 ## 4A. 让客户端看到状态
 
-标了 `sync` 的字段要打开玩家自身视图才会推给客户端。模块安装不会替你打开：
+**装了 `enter` 模块就不用做这一步**：安装器已经代办，`roost project doctor` 里有一行 `OK self-sync`。没装时：标了 `sync` 的字段要打开玩家自身视图才会推给客户端，别的模块不会替你打开：
 
 ```bash
 "$ROOST" add transport tcp                 # 生成玩家 TCP 接入与 auth.go；roost.yaml 的 access.player.transports 多出 tcp
@@ -168,6 +168,8 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 之后 Player 主 DAO 里所有标了 `sync` 的顶层字段（模块的与手写的）都推给玩家本人，不用写 packer；说明见 [PLAYER-ACCESS §7](../../../framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)。真实客户端要连上还差两件，属于登录鉴权，不在这一档：实现 `internal/access/player/tcp/auth.go`（缺省拒绝一切），再 `"$ROOST" config enable player-tcp`；`"$ROOST" project doctor --workflow player-tcp` 列出剩下的项。
 
 ## 4B. 进入游戏：建档与首次初始化
+
+**装 `enter` 模块即可**（`"$ROOST" module add enter`）：它带 `EnterGame` 端点和首次初始化，新玩家的初始发放写进它的 `game/entities/player/enter_first.go`（例如 `component.owner.WalletComp().Add(100)`）。下面是不装它时的手写做法，也是它内部的做法。
 
 Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所以客户端登录后的第一条请求必须是一个“进入游戏”端点，由它加载或创建 Player；没有它，场景测试照样全绿（测试里直接造了实体），真实进程里每条玩法请求都会答 `entity_not_found`。`-template game` 已带 `game/lifecycle/player.go`，只差端点：
 
@@ -211,7 +213,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 ## 7. 边界
 
-- 模块只有三个；wallet 与 checkin 要求 `-template game` 的 `Player`，chat 要求业务服务 `uses: [chat]`（`-template game` 已有）。13 类玩法与 game-demo 的业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
+- 模块只有四个；enter、wallet、checkin 要求 `-template game` 的 `Player`，chat 要求业务服务 `uses: [chat]`（`-template game` 已有）。13 类玩法与 game-demo 的业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
 - 没有卸载；分配过的号与存储键不回收。已装模块不会随 roost-core 升级自动更新。
 - 模块没有 Init / Shutdown、后台循环、定时器类型、压测步骤。
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。

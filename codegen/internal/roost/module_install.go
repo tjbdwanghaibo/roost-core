@@ -216,12 +216,27 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 			commands = append(commands, fmt.Sprintf("roost add dao %s --entity %s", spec.Entity, spec.Entity))
 		}
 	}
-	if len(spec.Protocols) > 0 {
-		if _, enabled := manifest.Access["player"]; !enabled {
-			commands = append(commands, "roost add access player --service "+service)
-		}
+	access, hasAccess := manifest.Access["player"]
+	needsAccess := len(spec.Protocols) > 0 || spec.Access.Transport != "" || spec.Access.SelfSync
+	if needsAccess && !hasAccess {
+		commands = append(commands, "roost add access player --service "+service)
+	}
+	if spec.Access.Transport != "" && !contains(access.Transports, spec.Access.Transport) {
+		commands = append(commands, "roost add transport "+spec.Access.Transport)
+	}
+	if spec.Access.SelfSync && !access.SelfSync {
+		commands = append(commands, "set access.player.self_sync: true in roost.yaml; roost project sync")
+	}
+	if spec.Access.Lifecycle && !moduleLifecycleExists(root, spec.Entity) {
+		commands = append(commands, fmt.Sprintf("roost add lifecycle %s --service %s", spec.Entity, service))
 	}
 	return commands
+}
+
+// moduleLifecycleExists 报告实体的 lifecycle 文件是否已在（roost add lifecycle 的产物）。
+func moduleLifecycleExists(root, entityName string) bool {
+	_, err := os.Stat(filepath.Join(root, "game", "lifecycle", toSnake(entityName)+".go"))
+	return err == nil
 }
 
 // AddModules 安装 names（连同依赖）。返回执行后的计划；Applied 为 true。
@@ -313,14 +328,48 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, warnings i
 			}
 		}
 	}
-	if len(spec.Protocols) > 0 {
-		manifest, err := LoadManifest(root)
+	if spec.Access.Lifecycle && !moduleLifecycleExists(root, spec.Entity) {
+		if _, err := Add(root, AddOptions{Kind: "lifecycle", Name: spec.Entity, Service: service, Warnings: warnings}); err != nil {
+			return fmt.Errorf("roost add lifecycle %s --service %s: %w", spec.Entity, service, err)
+		}
+	}
+	needsAccess := len(spec.Protocols) > 0 || spec.Access.Transport != "" || spec.Access.SelfSync
+	if !needsAccess {
+		return nil
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		return err
+	}
+	if _, enabled := manifest.Access["player"]; !enabled {
+		if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: service, Warnings: warnings}); err != nil {
+			return fmt.Errorf("roost add access player --service %s: %w", service, err)
+		}
+	}
+	if spec.Access.Transport != "" {
+		if manifest, err = LoadManifest(root); err != nil {
+			return err
+		}
+		if !contains(manifest.Access["player"].Transports, spec.Access.Transport) {
+			if _, err := Add(root, AddOptions{Kind: "transport", Name: spec.Access.Transport, Warnings: warnings}); err != nil {
+				return fmt.Errorf("roost add transport %s: %w", spec.Access.Transport, err)
+			}
+		}
+	}
+	if spec.Access.SelfSync {
+		// 与手工改 roost.yaml 再 project sync 相同：写清单并同步，同步失败时清单恢复。
+		manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
 		if err != nil {
 			return err
 		}
-		if _, enabled := manifest.Access["player"]; !enabled {
-			if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: service, Warnings: warnings}); err != nil {
-				return fmt.Errorf("roost add access player --service %s: %w", service, err)
+		if manifest, err = LoadManifest(root); err != nil {
+			return err
+		}
+		if access := manifest.Access["player"]; !access.SelfSync {
+			access.SelfSync = true
+			manifest.Access["player"] = access
+			if err := commitManifestSync(root, manifestBefore, manifest); err != nil {
+				return fmt.Errorf("turn on access.player.self_sync: %w", err)
 			}
 		}
 	}

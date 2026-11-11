@@ -1,0 +1,19 @@
+//go:build protocoldef
+
+package protocoldef
+
+// EnterGameRequest 是客户端登录后的第一条请求。玩家是谁取自已认证的连接，不取请求字段。
+type EnterGameRequest struct{}
+
+// EnterGameResponse：First 为 true 表示这一次进入执行了首次初始化（新玩家）。
+type EnterGameResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	First  bool   `pb:"3"`
+}
+
+//roost:protocol group=game handler=enter
+type EnterGameProtocol interface {
+	//roost:msg id={{ID:protocol:EnterGame}}
+	EnterGame(EnterGameRequest) EnterGameResponse
+}

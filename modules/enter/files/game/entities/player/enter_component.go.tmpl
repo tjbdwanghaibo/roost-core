@@ -1,0 +1,57 @@
+package player
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Enter}}
+const CompTypeEnter entity.ComponentType = {{ID:component:Enter}}
+
+// EnterComponent 是进入游戏时的初始化逻辑。它不保存事务会改的状态：做过没有记在 PlayerDao.Enter 里，
+// 经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+type EnterComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IEnterEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
+type IEnterEntity interface {
+	entity.IThreadSafeEntity
+	EnterComp() *EnterComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeEnter, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("enter component: owner %T is not *Player", owner)
+		}
+		return &EnterComponent{owner: typed}, nil
+	})
+}
+
+func (component *EnterComponent) Name() string { return "enter" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *EnterComponent) Owner() *Player { return component.owner }
+
+// Init 在每次进入游戏时调用。首次初始化还没做过就执行 firstEnter 并记下来，返回 true；
+// 做过了什么都不写，返回 false。
+//
+// 不按“这次是不是新建的档”判断：建档与初始化是两步，中间进程崩了，这名玩家的档已经在、
+// 初始化却没做。所以事实记在档里（PlayerDao.Enter.Initialized），每次进入都问一遍，
+// 初始发放与这个标记在同一笔事务里：要么都提交，要么都回滚、下次进入再做。
+func (component *EnterComponent) Init(nowUnixMilli int64) (bool, error) {
+	state := component.owner.Dao().GetEnter()
+	if state.GetInitialized() {
+		return false, nil
+	}
+	if err := component.firstEnter(nowUnixMilli); err != nil {
+		return false, err
+	}
+	state.SetInitialized(true)
+	state.SetFirstAt(nowUnixMilli)
+	return true, nil
+}

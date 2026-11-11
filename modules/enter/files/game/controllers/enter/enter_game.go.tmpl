@@ -1,0 +1,50 @@
+package enter
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleEnterGame 是登录边界：保证已认证的玩家在任何玩法请求到达 Nest 之前有一个 Player。
+// Nest handler 的目标必须是已存在的实体，新玩家没有，所以在它之前发来的玩法请求答 entity_not_found。
+//
+// 两步：
+//  1. GetOrCreate：只在持久层确认这个实体不存在时才创建；数据库、解码、超时错误原样返回，不当成“不存在”。
+//     删过档的实体（只剩墓碑）不再创建，客户端得到 entity_deleted，重试或重新登录都不会变。
+//  2. 首次初始化（EnterInit）：每次进入都发，不只在第 1 步新建时发——“做过没有”是档里的事实，
+//     所以新建之后、初始化之前崩溃或丢回包，下一次进入会补上；重复进入什么都不做。
+//
+// 两步都可以并发、可以重试：同一名新玩家的两次登录最后拿到同一个实体，初始化只生效一次。
+func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
+	}
+	first := false
+	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	if err == nil {
+		_, _, err = entities.GetOrCreate(context.Context(), context.PlayerID)
+	}
+	if err == nil {
+		var entityID int64
+		if entityID, err = entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer); err == nil {
+			first, err = syncsender.NewEnterInitSender(controller.nestClient).Sync_EnterInit(context.Context(), entityID)
+		}
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.EnterGameResponse{First: first}, nil
+}

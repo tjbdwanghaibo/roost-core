@@ -1,0 +1,24 @@
+name: enter
+summary: 进入游戏：建档（加载或创建 Player）、首次进入的初始化入口；打开玩家 TCP 接入与自身视图
+requires: []
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao]
+access:
+  transport: tcp
+  self_sync: true
+  lifecycle: true
+entity: Player
+state:
+  - field: Enter
+    type: EnterState
+    store: enter
+    dao: persist
+    comment: Enter 是进入游戏模块的服务端记录（首次初始化做过没有、第一次进入的时间），只落库、不下发。
+component: Enter
+protocols: [EnterGame]
+verify:
+  packages: [./game/handler]
+  run: ^TestEnter
+  pass: 3

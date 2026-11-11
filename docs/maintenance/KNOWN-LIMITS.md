@@ -512,13 +512,14 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **只有三个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）。模块是新写的，不从 game-demo 或玩法夹具迁移（维护者 2026-11-11：“不用考虑旧代码，能直接生成新的就行”）；13 类玩法与 game-demo 仍是各自的夹具与模板，不受模块影响。按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **只有四个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）。模块是新写的，不从 game-demo 或玩法夹具迁移（维护者 2026-11-11：“不用考虑旧代码，能直接生成新的就行”）；13 类玩法与 game-demo 仍是各自的夹具与模板，不受模块影响。按玩法一条命令出工程的配方（`-recipe`）没有做。
 - **chat 模块只有发送与翻历史**：没有向在线玩家的推送（需要在线名单与连接关闭的钩子，即运行期接线点），客户端靠 `ChatHistory` 的游标拉新消息；系统消息入口保持拒绝；没有群组频道。端点不经过 Nest，没有离线用例——6 条场景只覆盖频道规则、消息体校验与 collaborators 的政策。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
 - **模块绑定具体的实体名与工程形状**：wallet 与 checkin 挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
 - **没有运行期接线点**：模块不能声明 Init / Shutdown、后台循环或向 Registry 发布能力；现有两个模块不需要（组件挂在实体上，controller 用自己的 `FromRegistry`）。需要这些的模块（匹配清扫、effect 消费者）出现时再加。
 - **没有定时器类型分配、Robot 步骤**：模块不能带实体定时器类型，也不带压测步骤；两者留给方案第 3 期。
-- **安装不打开客户端同步**：模块把状态字段标成 `sync`，但不改 `access.player`。要让客户端收到，需另外 `roost add transport tcp`、在 `roost.yaml` 加 `access.player.self_sync: true`、`roost project sync`（skill 的[按需求组合 §4A](../agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)）；`roost module verify` 不检查这一项。真实客户端连上还要实现 `auth.go` 并 `roost config enable player-tcp`。
+- **enter 模块的边界**：它建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`；但不做鉴权（`auth.go` 仍缺省拒绝，`roost config enable player-tcp` 也没有执行），所以真实客户端仍连不上。端点里“`GetOrCreate` 之后发首次初始化”的串接没有离线用例，3 条场景只到 Nest handler（首次执行、再进入不做、提交被拒后下次补上）。
+- **不装 enter 时安装不打开客户端同步**：模块把状态字段标成 `sync`，但不改 `access.player`。要让客户端收到，需另外 `roost add transport tcp`、在 `roost.yaml` 加 `access.player.self_sync: true`、`roost project sync`（skill 的[按需求组合 §4A](../agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)）；`roost module verify` 不检查这一项。真实客户端连上还要实现 `auth.go` 并 `roost config enable player-tcp`。
 - **wallet 的去重窗口不是永久账本**：`Apply(key, delta)` 只在最近 128 次带业务键的加减内去重，更早的键被淘汰后再用会重新执行。长期“只发一次”由调用方在自己的状态里记事实并调 `Add`（checkin 这样做）。首版曾是“回执满了拒绝、不淘汰”，连续签到到第 129 天起签到与消费全部被拒，由只凭 skill 的实测发现并修掉（回归 `TestCheckinKeepsPayingPastTheWalletReceiptWindow`、`TestWalletOldReceiptsLeaveTheWindow`）。
 - **惰性清零对客户端可见**：签到进度（以及照它写的每日功能）在当天第一次写入时才更新；跨天后没有新写入时，客户端经自身视图看到的仍是上一次的记录，要自己按业务日字段比对。协议里没有带服务器当前的业务日。
 - **验收只到 Nest 场景**：`roost module verify` 的场景用替身提交器，不连 Mongo / NATS / Redis，不经过真实 TCP 与客户端。协议端点由生成器的既有用例覆盖，模块自己的端点没有网络用例。

@@ -12,8 +12,9 @@
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | wallet | `PlayerDao.Checkin`（同步） | 6 |
 
 | [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）和按序号翻历史（`ChatHistory`），经托管的 chat 服务存储；替换 chat 服务默认拒绝一切的 collaborators | 无（要求业务服务 `uses: [chat]`，`-template game` 已有） | 无 | 6 |
+| [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放写在 `game/entities/player/enter_first.go`；安装时打开玩家 TCP 接入与自身视图 | 无 | `PlayerDao.Enter`（只落库） | 3 |
 
-以 `roost module list` 的输出为准。
+以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。
 
 ## 使用
 
@@ -28,7 +29,7 @@ roost module verify                # 模块自带场景 + build / vet / id check
 
 agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `add` 输出同一个结构，`applied` 区分是否已执行。
 
-装完之后标了同步的状态还要打开玩家自身视图客户端才收得到（`roost add transport tcp`，`roost.yaml` 加 `access.player.self_sync: true`，`roost project sync`），步骤见 skill 的[按需求组合 §4A](../docs/agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)。
+标了同步的状态要打开玩家自身视图客户端才收得到。装 `enter` 模块时安装器会代办（`roost add transport tcp`、`access.player.self_sync: true`、`roost project sync`）；不装它就自己做，步骤见 skill 的[按需求组合 §4A](../docs/agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)。
 
 安装之后直接改工程里的文件（例如在 `game/entities/player/checkin_component.go` 里改奖励规则），改完再跑 `roost module verify`。模块库里没有的需求用 `roost add entity / component / dao / handler / protocol / endpoint` 手写，可以照着已装模块的文件写。
 
@@ -74,6 +75,10 @@ state:                       # 追加到主 DAO 末尾的顶层字段
 component: Wallet            # 挂在实体上的组件
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字
+access:                      # 要求的玩家接入形态，由安装器代办（见下）
+  transport: tcp             # 没有玩家 TCP 接入就先 roost add transport tcp
+  self_sync: true            # 打开 access.player.self_sync：标了 sync 的字段推给玩家本人
+  lifecycle: true            # Entity 没有 lifecycle 就先 roost add lifecycle <Entity>
 replaces: []                 # 要接管的生成桩（见下），必须也在 files/ 里
 verify:
   packages: [./game/handler]

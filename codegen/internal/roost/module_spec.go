@@ -25,9 +25,10 @@ type ModuleSpec struct {
 	Name    string `yaml:"name" json:"name"`
 	Summary string `yaml:"summary" json:"summary"`
 	// Requires 是必须先装的模块；Conflicts 是不能同装的模块。
-	Requires  []string    `yaml:"requires" json:"requires,omitempty"`
-	Conflicts []string    `yaml:"conflicts" json:"conflicts,omitempty"`
-	Needs     ModuleNeeds `yaml:"needs" json:"needs"`
+	Requires  []string     `yaml:"requires" json:"requires,omitempty"`
+	Conflicts []string     `yaml:"conflicts" json:"conflicts,omitempty"`
+	Needs     ModuleNeeds  `yaml:"needs" json:"needs"`
+	Access    ModuleAccess `yaml:"access" json:"access"`
 	// Entity 是模块状态与组件挂靠的实体（PascalCase，如 Player）。没有状态也没有组件的模块可以不写。
 	Entity string `yaml:"entity" json:"entity,omitempty"`
 	// State 是追加到 Entity 主 DAO 末尾的顶层字段，类型是模块自带的嵌套结构体。
@@ -56,6 +57,18 @@ type ModuleNeeds struct {
 	Features []string `yaml:"features" json:"features,omitempty"`
 	// Uses 是业务服务必须 uses 的托管框架服务（如 rank、mail）。
 	Uses []string `yaml:"uses" json:"uses,omitempty"`
+}
+
+// ModuleAccess 是模块要求的玩家接入形态。与 Needs 不同，这些由安装器代办：它们是确定的框架骨架
+// （roost add transport tcp）与一个开关（access.player.self_sync），没有项目要做的取舍。
+type ModuleAccess struct {
+	// Transport 为 tcp 时，工程还没有玩家 TCP 接入就先执行 roost add transport tcp。
+	Transport string `yaml:"transport" json:"transport,omitempty"`
+	// SelfSync 为 true 时打开 access.player.self_sync：主 DAO 里标了 sync 的字段推给玩家本人。
+	SelfSync bool `yaml:"self_sync" json:"self_sync,omitempty"`
+	// Lifecycle 为 true 时，Entity 还没有 lifecycle（game/lifecycle/<entity>.go，加载或创建实体的入口）
+	// 就先执行 roost add lifecycle <Entity>。进入游戏的端点靠它建档。
+	Lifecycle bool `yaml:"lifecycle" json:"lifecycle,omitempty"`
 }
 
 // ModuleStateField 是往主 DAO 追加的一个顶层字段。
@@ -216,6 +229,9 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 			return fmt.Errorf("state field %s is listed twice", field.Field)
 		}
 		seenFields[field.Field] = true
+	}
+	if spec.Access.Transport != "" && spec.Access.Transport != "tcp" {
+		return fmt.Errorf("access.transport %q is not supported; supported: tcp", spec.Access.Transport)
 	}
 	for _, rel := range spec.Replaces {
 		if !contains(spec.Files, rel) {

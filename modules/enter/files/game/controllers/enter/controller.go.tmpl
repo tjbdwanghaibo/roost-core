@@ -1,0 +1,25 @@
+package enter
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// Controller 持有进入游戏端点的依赖：Registry（取 Player 的 lifecycle）与 Nest 客户端（发首次初始化）。
+type Controller struct {
+	registry   *app.Registry
+	nestClient corenest.Client
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("enter controller: app registry is required")
+	}
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("enter controller: nest client is unavailable")
+	}
+	return &Controller{registry: registry, nestClient: client}, nil
+}
