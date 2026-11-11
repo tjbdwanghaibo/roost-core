@@ -61,21 +61,22 @@ scenarios:
             amount: 150
         # The level-up sent a reward mail through the effect chain
         # (asynchronous, usually well under a second). Poll the mailbox until
-        # it is there, then claim the attachment into the Bag: the mail
-        # service's exactly-once claim around one Nest transaction.
+        # it is there, then claim the attachment into the Bag through the
+        # mailbox module's endpoints: the mail service's exactly-once claim
+        # around one Nest transaction.
         - retry:
             times: 20
             node:
               sequence:
                 - wait: 250ms
-                - action: list_mail
+                - action: mailbox_list
                   param:
                     limit: 20
-        - action: claim_mail
+        - action: mailbox_claim
         # Claim the same mail again. The mail service refuses a committed
         # mail, and the Player's ledger makes the grant a no-op if one ever
         # gets through — the bag must not grow either way.
-        - action: claim_mail_replay
+        - action: mailbox_claim_replay
         # A gift to oneself: the saga debits the Bag (step 1), then mails
         # the item (step 2) — two transaction domains, one durable
         # operation. The saga starts asynchronously (start effect → outbox →
@@ -100,10 +101,10 @@ scenarios:
             node:
               sequence:
                 - wait: 250ms
-                - action: list_mail
+                - action: mailbox_list
                   param:
                     limit: 20
-        - action: claim_mail
+        - action: mailbox_claim
         # The compensation path: player 1 has never entered the game, so the
         # deliver step refuses, and the coordinator runs debit's
         # compensation — the item is back in the Bag, the saga ends

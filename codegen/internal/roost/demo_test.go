@@ -105,7 +105,7 @@ func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 	}
 }
 
-// 模块带来的组件（bag 的 Bag、profile 的 Profile、enter 的 Enter）在安装模块的那一步才落盘。demo 的步骤因此守四条：
+// 模块带来的组件（bag 的 Bag、profile 的 Profile、enter 的 Enter、mailbox 的 Mailbox）在安装模块的那一步才落盘。demo 的步骤因此守四条：
 //   - 全部模块在同一步里装，顺序固定：号按这个顺序、每次取最小的空号分配，新换用的模块只能加在末尾；
 //   - 不再自己建这些组件，道具表也不再自己加（它随 bag 模块来）；
 //   - 建在这些组件上的 Nest handler 不跑 roost add handler（它要求组件文件已经在盘上，而且只写一个随即被覆盖的骨架）：
@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -145,7 +145,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 			moduleFiles[rel] = name
 		}
 	}
-	for _, component := range []string{"Bag", "Profile"} {
+	for _, component := range []string{"Bag", "Profile", "Mailbox"} {
 		if components[component] == "" {
 			t.Errorf("no installed module brings the %s component", component)
 		}
@@ -171,16 +171,57 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 			t.Errorf("%s is the %s module's file and is written before the module is installed", step.write, module)
 		}
 	}
-	// 建在模块组件上的 handler 仍然由 demo 写出：背包上的九个、档案上的五个。
+	// 建在模块组件上的 handler 仍然由 demo 写出：背包上的八个、档案上的五个。邮件附件的发放不在其中：
+	// 那是 mailbox 模块自己的 MailboxClaimReward，建在模块的 Mailbox 组件上。
 	for _, rel := range []string{
 		"game/handler/add_item.go", "game/handler/start_gift.go", "game/handler/gift_debit.go", "game/handler/gift_refund.go",
-		"game/handler/claim_mail_reward.go", "game/handler/grant_purchase.go",
+		"game/handler/grant_purchase.go",
 		"game/handler/start_guild_op.go", "game/handler/guild_debit.go", "game/handler/guild_credit.go",
 		"game/handler/add_exp.go", "game/handler/claim_dungeon.go", "game/handler/player_team.go",
 		"game/handler/show_guild.go", "game/handler/player_guild.go",
 	} {
 		if !written[rel] {
 			t.Errorf("no step writes %s", rel)
+		}
+	}
+}
+
+// 邮件由 mailbox 模块带来（连同它依赖的 wallet；模块在同一步里装、顺序由上一条用例钉住）。demo 不再有自己的邮件协议、
+// handler、组件与错误码步骤，也不覆盖 mailbox / wallet 的任何文件：发件方只调模块的 SendTo。
+func TestDemoLeavesMailToTheMailboxModule(t *testing.T) {
+	steps := demoScaffoldSteps("game")
+	installs := false
+	for _, step := range steps {
+		installs = installs || contains(step.modules, "mailbox")
+		if contains(step.modules, "wallet") {
+			t.Errorf("wallet is listed in %v: it comes with mailbox as its dependency, and listing it would move every later id", step.modules)
+		}
+	}
+	if !installs {
+		t.Fatal("no step installs the mailbox module")
+	}
+	catalog, err := loadModuleCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moduleFiles := map[string]string{}
+	for _, name := range []string{"mailbox", "wallet"} {
+		for _, rel := range catalog[name].Files {
+			moduleFiles[rel] = name
+		}
+	}
+	for _, step := range steps {
+		if step.add != nil {
+			switch {
+			case step.add.Kind == "protocol" && (step.add.Name == "ListMail" || step.add.Name == "ClaimMail"),
+				step.add.Kind == "handler" && step.add.Name == "ClaimMailReward",
+				step.add.Kind == "errcode" && step.add.Name == "MailClaim",
+				step.add.Kind == "component" && (step.add.Name == "Mailbox" || step.add.Name == "Wallet"):
+				t.Errorf("the demo still adds its own %s %s: mail comes with the mailbox module", step.add.Kind, step.add.Name)
+			}
+		}
+		if owner, owned := moduleFiles[step.write]; owned {
+			t.Errorf("the demo overwrites %s, a file of the %s module it is meant to use as shipped", step.write, owner)
 		}
 	}
 }
@@ -290,23 +331,23 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if aggregate := read("game/entities/player/entity.go"); !strings.Contains(aggregate, "`comp:\"CompTypeBag\"`") {
 		t.Errorf("the Player aggregate does not hold the module's Bag component:\n%s", aggregate)
 	}
-	// demo 建在背包组件上的写入都换用模块的入口；两本领取账本是 demo 自己的文件，仍是 BagComponent 上的方法。
+	// demo 建在背包组件上的写入都换用模块的入口；充值订单的领取账本是 demo 自己的文件，仍是 BagComponent 上的方法
+	// （邮件的领取账本是 mailbox 模块的，见下面 mailbox 那一段）。
 	for rel, call := range map[string]string{
-		"game/handler/add_item.go":          "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/gift_debit.go":        "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/gift_refund.go":       "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/guild_debit.go":       "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/guild_credit.go":      "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/equip_item.go":        "target.BagComp().Remove(itemID, 1)",
-		"game/handler/claim_mail_reward.go": "bag.Add(itemID, int64(count))",
-		"game/handler/grant_purchase.go":    "bag.Add(itemID, int64(count))",
+		"game/handler/add_item.go":       "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/gift_debit.go":     "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/gift_refund.go":    "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/guild_debit.go":    "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/guild_credit.go":   "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/equip_item.go":     "target.BagComp().Remove(itemID, 1)",
+		"game/handler/grant_purchase.go": "bag.Add(itemID, int64(count))",
 	} {
 		if body := read(rel); !strings.Contains(body, call) {
 			t.Errorf("%s does not go through the bag module's component (%s):\n%s", rel, call, body)
 		}
 	}
-	if ledgers := read("game/entities/player/claim_ledgers.go"); !strings.Contains(ledgers, "func (component *BagComponent) ClaimMailReward(") || !strings.Contains(ledgers, "func (component *BagComponent) ClaimPurchase(") {
-		t.Errorf("the claim ledgers are not the demo's own methods on the Bag component:\n%s", ledgers)
+	if ledgers := read("game/entities/player/claim_ledgers.go"); !strings.Contains(ledgers, "func (component *BagComponent) ClaimPurchase(") || strings.Contains(ledgers, "MailClaims") {
+		t.Errorf("the paid-order claim ledger is not the demo's own method on the Bag component (or the mail ledger is still beside it):\n%s", ledgers)
 	}
 	// The demo endpoint replaces the generated scaffold with the error
 	// boundary; a handler error that reached the access layer would close the
@@ -356,8 +397,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// 聊天是 chat 模块装进来的（demoModuleSteps），demo 自己不带一份。
 	for _, rel := range []string{"game/chat/chat.go", "protocol/def/chat_send.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
 		"game/controllers/chat/chat_send.go", "game/controllers/chat/chat_history.go", "game/controllers/chat/chat_push.go", "deploy/dev/run.sh",
-		"game/rewards/rewards.go", "protocol/def/list_mail.go", "protocol/def/claim_mail.go",
-		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go",
+		"game/rewards/rewards.go", "game/rewards/rewards_test.go",
 		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
 		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skill_catalog.go", "game/controllers/player/skill_catalog.go",
@@ -368,29 +408,88 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
 		"game/controllers/player/battle_input.go", "internal/service/game/battle.go",
 		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go",
-		"internal/service/game/battle_test.go", "game/handler/claim_mail_reward.go",
-		"game/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/player/guild_test.go", "game/handler/claim_mail_reward_test.go", "game/handler/claim_mail_expiry_test.go", "internal/errors/mail_claim.go"} {
+		"internal/service/game/battle_test.go", "game/handler/claim_harness_test.go",
+		"game/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/player/guild_test.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
 	}
-	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "rewards.Encode(rewards.LevelUpReward(") {
-		t.Errorf("the level-up mail carries no reward attachment, so ClaimMail has nothing to claim")
+	// 邮件是 mailbox 模块装进来的（demoModuleSteps，连同它依赖的 wallet）：demo 不带自己的 ListMail / ClaimMail、
+	// ClaimMailReward handler、领取账本与附件编码，也不覆盖模块的任何文件。
+	for _, gone := range []string{"protocol/def/list_mail.go", "protocol/def/claim_mail.go",
+		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go",
+		"game/handler/claim_mail_reward.go", "game/handler/claim_mail_reward_test.go", "game/handler/claim_mail_expiry_test.go",
+		"internal/errors/mail_claim.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(gone))); !os.IsNotExist(err) {
+			t.Errorf("the demo still ships its own mail file %s (err=%v)", gone, err)
+		}
+	}
+	for _, owned := range []string{"    mailbox:\n", "    wallet:\n", "- PlayerDao.MailboxLedger", "- PlayerDao.Wallet", "MailboxList:", "MailboxClaim:", "WalletSpend:",
+		"mailbox_attachment:", "- game/mailbox/mailbox_send.go", "- game/controllers/mailbox/mailbox_enter.go", "- game/mailbox/mailbox_item.go", "- game/entities/player/mailbox_item.go"} {
+		if !strings.Contains(manifestText, owned) {
+			t.Errorf("roost.yaml does not record %q under the mailbox / wallet modules", owned)
+		}
+	}
+	if bind := read("game/protocol_handlers/mailbox/protocol_gen.go"); !strings.Contains(bind, "HandleMailboxList") || !strings.Contains(bind, "HandleMailboxClaim") {
+		t.Errorf("the mailbox protocols are not bound to the mailbox controller:\n%s", bind)
 	}
 	// The grant in the middle carries its own identity: the mail id is
-	// recorded on the Player in the same transaction as the items, so a
-	// retry after a lost CommitClaim cannot grant a second stack.
-	if claim := read("game/controllers/player/claim_mail.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_ClaimMailReward(") || !strings.Contains(claim, ".CommitClaim(") {
-		t.Errorf("claim_mail does not run the reserve → ledgered grant → commit sequence")
-	}
-	if claim := read("game/handler/claim_mail_reward.go"); !strings.Contains(claim, "ClaimMailReward(mailID, expiresAtUnix, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
-		t.Errorf("the mail claim handler does not record the mail id in the granting transaction")
-	}
-	// The ledger's memory is bounded by the MAIL's own expiry, which the mail
+	// recorded on the Player in the same transaction as the reward, so a
+	// retry after a lost CommitClaim cannot grant a second stack. The
+	// ledger's memory is bounded by the MAIL's own expiry, which the mail
 	// service hands over with the reservation — not by a retention this game
 	// invented against another service's configuration (RR-20260918-05).
-	if claim := read("game/controllers/player/claim_mail.go"); !strings.Contains(claim, "claim.ExpiresAtUnix") {
-		t.Errorf("claim_mail does not pass the mail's authoritative expiry into the granting transaction")
+	// All three are the module's files, as the module ships them.
+	if claim := read("game/controllers/mailbox/mailbox_claim.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_MailboxClaimReward(") || !strings.Contains(claim, ".CommitClaim(") || !strings.Contains(claim, "claim.ExpiresAtUnix") {
+		t.Errorf("mailbox_claim does not run the reserve → ledgered grant → commit sequence with the mail's own expiry:\n%s", claim)
+	}
+	if claim := read("game/handler/mailbox_claim_reward.go"); !strings.Contains(claim, "MailboxComp().Claim(mailID, attachment, expiresAtUnix,") || !strings.Contains(claim, "rollback=undo durability=strict") {
+		t.Errorf("the mail claim handler does not record the mail id in the granting transaction:\n%s", claim)
+	}
+	if component := read("game/entities/player/mailbox_component.go"); !strings.Contains(component, "ledger.SetClaimsKey(mailID, expiresAtUnix)") || !strings.Contains(component, "gamemailbox.LedgerMayForget(recordedExpiry, nowUnix)") {
+		t.Errorf("the Mailbox component does not keep the claim ledger by the mail's own expiry:\n%s", component)
+	}
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "MailboxLedger MailboxLedger `store:\"mailbox_ledger\" dao:\"persist\"`") || strings.Contains(dao, "MailClaims") ||
+		!strings.Contains(dao, "Wallet WalletState `store:\"wallet\" dao:\"persist,sync\"`") {
+		t.Errorf("PlayerDao does not carry the mailbox module's ledger and the wallet module's state (or still has the demo's MailClaims):\n%s", dao)
+	}
+	// 道具附件靠 mailbox 与 bag 的联动进背包：demo 的奖励邮件带的都是道具。
+	if glue := read("game/entities/player/mailbox_item.go"); !strings.Contains(glue, "RegisterMailboxGrant(gamemailbox.TypeItem") || !strings.Contains(glue, "owner.BagComp().Add(attachment.ID, attachment.Amount)") {
+		t.Errorf("the mailbox+bag glue was not written into the demo:\n%s", glue)
+	}
+	// 发件方都走模块的 SendTo，附件是模块的编码；升级奖励的幂等键是 EffectID（见下面事件链那一段）。
+	for rel, call := range map[string]string{
+		"internal/service/game/level_up_mail.go": "reward := rewards.LevelUpReward(event.Level)",
+		"internal/service/game/gm.go":            "gamemailbox.Item(payload.ItemID, int64(payload.Count))",
+		"internal/service/game/activity.go":      "gamemailbox.Item(reward.ItemID, int64(reward.Count))",
+		"internal/service/game/gift_saga.go":     "gamemailbox.Item(state.ItemID, int64(state.Count))",
+	} {
+		if body := read(rel); !strings.Contains(body, "gamemailbox.SendTo(") || !strings.Contains(body, call) || strings.Contains(body, "svcmail.SendRequest{") {
+			t.Errorf("%s does not send through the mailbox module's SendTo with the module's attachment (%s)", rel, call)
+		}
+	}
+	if reward := read("game/rewards/rewards.go"); !strings.Contains(reward, "func LevelUpReward(level int32) gamemailbox.Attachment") || strings.Contains(reward, "func Decode(") || strings.Contains(reward, "LedgerMayForget") {
+		t.Errorf("game/rewards still carries its own attachment encoding or ledger rules:\n%s", reward)
+	}
+	// 进入游戏时拉全服邮件是 mailbox 与 enter 的联动（进入钩子），画像读登录端点带过去的会话 claims；
+	// demo 的进入流程里不再手写 PullBroadcasts，player controller 也不再持有 mail 客户端。
+	if glue := read("game/controllers/mailbox/mailbox_enter.go"); !strings.Contains(glue, `gameenter.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
+		t.Errorf("the mailbox+enter glue was not written into the demo:\n%s", glue)
+	}
+	if login := read("game/controllers/player/enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "Claims: context.Session.Principal().Claims") {
+		t.Errorf("the demo's enter flow still pulls server-wide mail by hand, or does not hand the session claims to the enter hooks:\n%s", login)
+	}
+	if controller := read("game/controllers/player/controller.go"); strings.Contains(controller, "svcmail") {
+		t.Errorf("the player controller still holds the mail client:\n%s", controller)
+	}
+	if auth := read("internal/access/player/tcp/auth_test.go"); !strings.Contains(auth, "controllermailbox.BroadcastProfileOnEnter(") {
+		t.Errorf("the authenticator's test does not read its claims back through the mailbox enter hook's profile:\n%s", auth)
+	}
+	if robot := read("cmd/loadtest/main.go"); !strings.Contains(robot, "msgid.MsgMailboxList") || !strings.Contains(robot, "msgid.MsgMailboxClaim") || strings.Contains(robot, "ClaimMail") || strings.Contains(robot, "ListMail") {
+		t.Errorf("the load-test robot does not read and claim mail through the module's MailboxList / MailboxClaim")
+	}
+	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: mailbox_list") || !strings.Contains(spec, "action: mailbox_claim_replay") || strings.Contains(spec, "action: claim_mail") {
+		t.Errorf("the demo scenario does not walk level-up → reward mail → list → claim through the mailbox module:\n%s", spec)
 	}
 	// Runtime entity ids carry the process's sid, so two game processes
 	// cannot mint the same one (RR-20260918-09).
@@ -401,9 +500,6 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// that fails (RR-20260918-06).
 	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, "OnSessionClosed(") {
 		t.Errorf("the scene does not subscribe to session closes, so an idle world keeps offline members")
-	}
-	if dao := read("db/def/player.go"); !strings.Contains(dao, "MailClaims map[string]int64") {
-		t.Errorf("the Player DAO has no ledger for mail attachment claims")
 	}
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "transport.DialPlayerTCP(ctx, cfg)") {
 		t.Errorf("the robot transport does not classify frames by the server-push flag; a push carrying a pending wire sequence would be taken for the response")
@@ -593,8 +689,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "startLevelUpMailer(") {
 		t.Errorf("game service does not start the effect consumer:\n%s", service)
 	}
-	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID:        envelope.EffectID") {
-		t.Errorf("level-up mailer is not the inbox-backed, idempotent consumer:\n%s", mailer)
+	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID:        envelope.EffectID") ||
+		!strings.Contains(mailer, "errors.Is(err, gamemailbox.ErrLetterInvalid)") {
+		t.Errorf("level-up mailer is not the inbox-backed, idempotent consumer that drops an unsendable reward as poison:\n%s", mailer)
 	}
 	if endpoint := read("game/controllers/player/add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
 		t.Errorf("add_exp endpoint does not translate errors at the boundary:\n%s", endpoint)

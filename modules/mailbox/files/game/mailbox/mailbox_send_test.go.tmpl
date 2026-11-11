@@ -1,0 +1,130 @@
+package mailbox
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// mailboxTestSender 记下 SendTo 交给 mail 服务的请求，按设定回答。
+type mailboxTestSender struct {
+	requests []svcmail.SendRequest
+	err      error
+}
+
+func (s *mailboxTestSender) Send(_ context.Context, request svcmail.SendRequest) (svcmail.Envelope, error) {
+	s.requests = append(s.requests, request)
+	if s.err != nil {
+		return svcmail.Envelope{}, s.err
+	}
+	return svcmail.Envelope{ID: "mail-from-the-service", Subject: request.Subject}, nil
+}
+
+// 一封信变成一次对 mail 服务的直发请求：一名收件人、附件是 Encode 的字节、幂等键原样带过去。
+// 没写保留期用 7 天；不带附件的信不带附件字节。
+func TestMailboxSendToTurnsALetterIntoOneDirectSend(t *testing.T) {
+	sender := &mailboxTestSender{}
+	envelope, err := SendTo(context.Background(), sender, Letter{
+		To: 95001, Subject: "Level 5 reached", Body: "Here is your reward.",
+		Attachment: Coins(100), ExpiresInSeconds: 3600, RequestID: "effect-7",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ID != "mail-from-the-service" {
+		t.Fatalf("envelope = %+v, want the one the mail service produced", envelope)
+	}
+	if len(sender.requests) != 1 {
+		t.Fatalf("the mail service was called %d times, want once", len(sender.requests))
+	}
+	got := sender.requests[0]
+	if got.Audience != svcmail.AudienceDirect || len(got.Recipients) != 1 || got.Recipients[0] != 95001 || got.Scope != "" {
+		t.Fatalf("addressed to %q %v scope %q, want a direct mail to 95001 alone", got.Audience, got.Recipients, got.Scope)
+	}
+	if got.Subject != "Level 5 reached" || got.Body != "Here is your reward." || got.ExpiresInSeconds != 3600 || got.RequestID != "effect-7" {
+		t.Fatalf("request = %+v", got)
+	}
+	// 附件的字节就是 Encode 的结果：领取端点用 Decode 解得出来。
+	if string(got.Attachment) != `{"type":"coins","amount":100}` {
+		t.Fatalf("attachment = %s", got.Attachment)
+	}
+	if attachment, err := Decode(got.Attachment); err != nil || attachment != Coins(100) {
+		t.Fatalf("the claim side decodes it as %+v (%v), want 100 coins", attachment, err)
+	}
+	// 不带附件、没写保留期的通知信。
+	if _, err := SendTo(context.Background(), sender, Letter{To: 95002, Subject: "Maintenance tonight", RequestID: "notice-1"}); err != nil {
+		t.Fatal(err)
+	}
+	notice := sender.requests[1]
+	if notice.Attachment != nil || notice.ExpiresInSeconds != 7*24*60*60 || notice.Recipients[0] != 95002 || notice.Body != "" {
+		t.Fatalf("notice = %+v, want no attachment and the default seven days", notice)
+	}
+}
+
+// 发不出去的信在调 mail 服务之前就拒绝，错误都是 ErrLetterInvalid：重试没有用。
+// 最要紧的是没有幂等键的那一条——没有键的奖励邮件，每重发一次就多一份奖励。
+func TestMailboxSendToRefusesALetterThatCanNeverBeSent(t *testing.T) {
+	sender := &mailboxTestSender{}
+	good := Letter{To: 95001, Subject: "reward", Attachment: Coins(1), RequestID: "order-1"}
+	change := func(edit func(*Letter)) Letter {
+		letter := good
+		edit(&letter)
+		return letter
+	}
+	refused := map[string]Letter{
+		"no recipient":                     change(func(l *Letter) { l.To = 0 }),
+		"a negative recipient":             change(func(l *Letter) { l.To = -95001 }),
+		"no subject":                       change(func(l *Letter) { l.Subject = "" }),
+		"a blank subject":                  change(func(l *Letter) { l.Subject = " \t" }),
+		"no request id":                    change(func(l *Letter) { l.RequestID = "" }),
+		"a blank request id":               change(func(l *Letter) { l.RequestID = "  " }),
+		"a negative lifetime":              change(func(l *Letter) { l.ExpiresInSeconds = -1 }),
+		"zero coins":                       change(func(l *Letter) { l.Attachment = Coins(0) }),
+		"an amount without a type":         change(func(l *Letter) { l.Attachment = Attachment{Amount: 5} }),
+		"a type nobody registered":         change(func(l *Letter) { l.Attachment = Attachment{Type: "gem", ID: 1, Amount: 5} }),
+		"coins with an id":                 change(func(l *Letter) { l.Attachment = Attachment{Type: TypeCoins, ID: 1001, Amount: 5} }),
+		"refused by the type's validator":  change(func(l *Letter) { l.Attachment = Attachment{Type: mailboxTestTicket, ID: 10, Amount: 1} }),
+		"a registered type with no amount": change(func(l *Letter) { l.Attachment = Attachment{Type: mailboxTestTicket, ID: 5} }),
+	}
+	if item, _, withoutBag := mailboxItemWithoutBag(); withoutBag {
+		refused["an item without the bag glue"] = change(func(l *Letter) { l.Attachment = item })
+	}
+	for name, letter := range refused {
+		envelope, err := SendTo(context.Background(), sender, letter)
+		if !errors.Is(err, ErrLetterInvalid) {
+			t.Errorf("%s: envelope %+v, err = %v, want ErrLetterInvalid", name, envelope, err)
+		}
+	}
+	if len(sender.requests) != 0 {
+		t.Fatalf("a refused letter reached the mail service: %+v", sender.requests)
+	}
+	// 没有 mail 客户端是接线写错了，不是信的问题：报错，但不是 ErrLetterInvalid。
+	if _, err := SendTo(context.Background(), nil, good); err == nil || errors.Is(err, ErrLetterInvalid) {
+		t.Fatalf("without a mail client err = %v, want an error that is not ErrLetterInvalid", err)
+	}
+	// 同一封信本身没问题：照发。
+	if _, err := SendTo(context.Background(), sender, good); err != nil || len(sender.requests) != 1 {
+		t.Fatalf("the good letter: err = %v after %d sends", err, len(sender.requests))
+	}
+}
+
+// mail 服务的回答原样交给调用方，不包成 ErrLetterInvalid：带码的拒绝（邮箱已满）用 errors.Is 认得出来，
+// 传输失败也是它本来的样子——调用方据此决定补偿还是用同一个幂等键重试。
+func TestMailboxSendToPassesTheMailServicesAnswerThrough(t *testing.T) {
+	letter := Letter{To: 95001, Subject: "reward", Attachment: Coins(1), RequestID: "order-2"}
+	full := &mailboxTestSender{err: svcmail.ErrMailboxFull}
+	if _, err := SendTo(context.Background(), full, letter); !errors.Is(err, svcmail.ErrMailboxFull) || errors.Is(err, ErrLetterInvalid) {
+		t.Fatalf("err = %v, want the mail service's mailbox-full refusal as it is", err)
+	}
+	away := errors.New("mail service is away")
+	down := &mailboxTestSender{err: away}
+	if _, err := SendTo(context.Background(), down, letter); !errors.Is(err, away) || errors.Is(err, ErrLetterInvalid) {
+		t.Fatalf("err = %v, want the transport failure as it is", err)
+	}
+	// 失败的那一次照样带着幂等键到了 mail 服务：重试用的是同一个键。
+	if len(down.requests) != 1 || down.requests[0].RequestID != "order-2" {
+		t.Fatalf("requests = %+v", down.requests)
+	}
+}

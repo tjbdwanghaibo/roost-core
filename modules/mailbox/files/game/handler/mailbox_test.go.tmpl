@@ -359,6 +359,10 @@ func TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a replay whose record was pruned was paid again: %+v", result)
 	}
+	// 与 mail 服务拒绝过期预留是同一个事实，客户端拿到同一个码（service/mail 的 CodeExpired）。
+	if code, _ := errcode.ClientError(err); code != 590106 {
+		t.Fatalf("the late replay was refused with code %d, want the mail service's expired code 590106: %v", code, err)
+	}
 	if got := f.snapshot(t); got != before || f.recorded(t, "old") {
 		t.Fatalf("the refused replay wrote: %+v, was %+v", got, before)
 	}
@@ -393,6 +397,19 @@ func TestMailboxRecordOutlivesTheExpiryByTheGrace(t *testing.T) {
 	}
 	if !f.recorded(t, "other") || !f.recorded(t, "another") {
 		t.Fatal("a record whose mail is still claimable was pruned: a replay would be paid again")
+	}
+	// 账本的记忆以邮件自己的过期时刻为界，不是游戏这边定的固定保留期：一封 40 天后才过期的邮件，
+	// 第 39 天的重放照样不发——这期间别的发放已经把过期的记录清过了。
+	const day = int64(24 * 3600)
+	f.mustPay(t, "long-lived", 5, mailboxStart+40*day, 115)
+	f.setNow(mailboxStart + 39*day)
+	f.mustPay(t, "a-month-later", 5, mailboxStart+46*day, 120)
+	if f.recorded(t, "other") || f.recorded(t, "another") {
+		t.Fatal("premise: the seven-day mails' records were not pruned a month later")
+	}
+	replay, err := f.claim("long-lived", 5, mailboxStart+40*day)
+	if err != nil || replay.Claimed || replay.Held != 120 {
+		t.Fatalf("a replay on day 39 of a mail that lives 40 days = %+v, err = %v, want Claimed=false with the balance 120", replay, err)
 	}
 }
 

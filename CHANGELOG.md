@@ -32,6 +32,15 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **变更 / 协议变化**（game-demo + modules）：**game-demo 的邮件改用 mailbox 模块（连带 wallet）**。至此 demo 的进入游戏、聊天、排行榜、背包、档案、邮件六块都来自模块。
+  - 模块 mailbox（场景数 28 → 32）：新增发件入口 `mailbox.SendTo(ctx, mailer, Letter)`（一名玩家一封、附件先按 `Encode` 的判断校验、幂等键必填、缺省保留 7 天）；补两条 demo 钉住而模块没钉的规则（40 天后才过期的邮件第 39 天重放仍不发；账本清理后晚到的旧预留被拒时的错误码）。
+  - 联动 mailbox + enter（3 → 5 条）：画像规则认会话 claims 里 account 的角色创建时间、本服与合服前的原服范围，没有 claims 的工程与原来一样。enter 的进入钩子为此带上会话的 claims（`Entered.Claims`，可为 nil；enter 自己不解释，场景数不变）。
+  - demo：生成时安装 mailbox，不覆盖 mailbox / wallet 的任何文件；自己的 `ListMail` / `ClaimMail` 协议与端点、handler `ClaimMailReward`、领取账本 `PlayerDao.MailClaims`、错误码 `mail_claim`、`game/rewards` 里的附件编码删除；升级奖励、GM 补偿、活动结算、送礼送达四个发件方改走 `SendTo`；登录拉全服邮件改由进入钩子执行。GM 的 `gm.mail.send` 多一个 `coins`（金币附件）。
+  - 协议与数据：`MailboxList` / `MailboxClaim` 取代 `ListMail` / `ClaimMail`，多出 `WalletSpend`；附件线上格式由 `{"item_id","count"}` 改为 `{"type","id","amount"}`，旧格式的邮件领不了；`PlayerDao` 新增 `MailboxLedger`、`Wallet`、`WalletLedger`；消息号与错误码按最小空号重排（`ChatSend` 10016 → 10008 等）。领取规则的差异：解不出的附件答 `mailbox_attachment`（原来是 mail 服务的 `mail invalid`）；没有过期时刻的发放请求被拒（原来接受并永不清理）。
+  - 跨服演练脚本的客户端（`scripts/testdata/mmorpg/crosssid`）与几份玩法手册里指向 demo 邮件文件的链接跟着改。
+  - **升级要求**：已生成的工程不迁移（未上线）；重新生成。
+  - 验证：见本轮收口。demo 原有邮件用例钉住的规则逐条对到了模块的场景上（每封至多到账一次、过期准入用执行时刻、清理后晚到的旧预留不再发、确认丢失后的重试、失败归还预留）。
+
 - **变更**（modules）：**模块 quest 改名 task**（维护者 2026-11-11：“task 是一个比较核心的系统，很多业务需求可以加到 task 中去”）。目录 `modules/task/`；标识符、协议（`TaskClaim`）、handler（`TaskAdvance`）、错误码（`task_*`）、状态 `PlayerDao.Task`（存储键 `task`）、业务文件 `task_catalog.go`、联动 task + checkin 全部跟着改名，行为与场景数（18、联动 3）不变。本文件 `[Unreleased]` 里此前写作 quest 的条目已一并改为 task。扩成核心系统（按事件推进、每周与成就、奖励种类、任务表做成配置表）是下一步，见[方案 §18](docs/maintenance/FEATURE-2026-11-10-business-modules.md)。已装旧名模块的工程不迁移（未上线）。
 
 - **变更 / 协议变化**（game-demo + modules）：**game-demo 的档案（名字、等级、经验）改用 profile 模块**。

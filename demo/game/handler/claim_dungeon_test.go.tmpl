@@ -21,7 +21,7 @@ import (
 // run succeeds, hours later another run's claim prunes its record, and
 // replaying the first pays a second 100 exp).
 //
-// Same harness idea as claim_mail_reward_test.go, with two entities: the
+// Same harness idea as claim_harness_test.go, with two entities: the
 // reward transaction touches the Player and the World's counter.
 
 // clearsSeason is the leaderboard season the claims in these tests count for.
@@ -218,7 +218,7 @@ func TestAPrunedRunIsRefusedInsteadOfPaidAgain(t *testing.T) {
 }
 
 // 清理发生在时钟靠前的进程，延迟的旧请求落到时钟稍慢的进程：那里窗口还开着，只能靠账本还记得这一局。
-// 账本比窗口晚一个宽限才清理，就是为了这一步（同 claim_mail_expiry_test.go 的邮件账本）。
+// 账本比窗口晚一个宽限才清理，就是为了这一步（邮件账本同理：mailbox 模块的 TestMailboxRecordOutlivesTheExpiryByTheGrace）。
 func TestAPrunedRunOnAClockAheadIsNotPaidOnAClockBehind(t *testing.T) {
 	subject, counters, client := newDungeonClaimHarness(t)
 	const first int64 = 1_800_000_000

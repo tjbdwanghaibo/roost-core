@@ -443,15 +443,15 @@ func claim(ctx context.Context) error {
 	if *replay != "" {
 		return replayClaims(c, p)
 	}
-	claimed, bag := 0, int32(-1)
+	claimed, bag := 0, int64(-1)
 	var mailIDs []string
 	subjects := map[string]int{}
 	for round := 0; round < 100; round++ {
-		resp, err := c.call(msgid.MsgListMail, mustMarshal(pb.MarshalListMailRequest(&pb.ListMailRequest{Limit: 50})))
+		resp, err := c.call(msgid.MsgMailboxList, mustMarshal(pb.MarshalMailboxListRequest(&pb.MailboxListRequest{Limit: 50})))
 		if err != nil {
 			return err
 		}
-		listed, err := pb.UnmarshalListMailResponse(resp)
+		listed, err := pb.UnmarshalMailboxListResponse(resp)
 		if err != nil || listed.Code != 0 {
 			return fmt.Errorf("list mail: %v %+v", err, listed)
 		}
@@ -460,11 +460,11 @@ func claim(ctx context.Context) error {
 			if !mail.Claimable {
 				continue
 			}
-			resp, err := c.call(msgid.MsgClaimMail, mustMarshal(pb.MarshalClaimMailRequest(&pb.ClaimMailRequest{MailID: mail.MailID})))
+			resp, err := c.call(msgid.MsgMailboxClaim, mustMarshal(pb.MarshalMailboxClaimRequest(&pb.MailboxClaimRequest{MailID: mail.MailID})))
 			if err != nil {
 				return err
 			}
-			result, err := pb.UnmarshalClaimMailResponse(resp)
+			result, err := pb.UnmarshalMailboxClaimResponse(resp)
 			if err != nil {
 				return err
 			}
@@ -474,8 +474,9 @@ func claim(ctx context.Context) error {
 			claimed++
 			mailIDs = append(mailIDs, mail.MailID)
 			subjects[mail.Subject]++
-			if result.ItemID == itemID {
-				bag = result.BagCount
+			// 赠礼邮件的附件是道具（mailbox 与 bag 的联动）：AttachmentID 是道具号，Held 是领取后背包里这个道具的数量。
+			if result.AttachmentType == "item" && result.AttachmentID == itemID {
+				bag = result.Held
 			}
 			progress = true
 		}
@@ -492,10 +493,10 @@ func claim(ctx context.Context) error {
 
 type claimRecord struct {
 	MailIDs  []string `json:"mail_ids"`
-	BagCount int32    `json:"bag_count"`
+	BagCount int64    `json:"bag_count"`
 }
 
-// replayClaims 对已领过的邮件逐封再发一次 ClaimMail（模拟回复丢失后的客户端重试）：
+// replayClaims 对已领过的邮件逐封再发一次 MailboxClaim（模拟回复丢失后的客户端重试）：
 // 每封要么被邮件服务拒绝（已领），要么经玩家侧领奖账本答复原数量；任何一封让背包变多都失败。
 func replayClaims(c *conn, p *drillPlayer) error {
 	raw, err := os.ReadFile(*replay)
@@ -511,11 +512,11 @@ func replayClaims(c *conn, p *drillPlayer) error {
 	}
 	refused := 0
 	for _, mailID := range record.MailIDs {
-		resp, err := c.call(msgid.MsgClaimMail, mustMarshal(pb.MarshalClaimMailRequest(&pb.ClaimMailRequest{MailID: mailID})))
+		resp, err := c.call(msgid.MsgMailboxClaim, mustMarshal(pb.MarshalMailboxClaimRequest(&pb.MailboxClaimRequest{MailID: mailID})))
 		if err != nil {
 			return err
 		}
-		result, err := pb.UnmarshalClaimMailResponse(resp)
+		result, err := pb.UnmarshalMailboxClaimResponse(resp)
 		if err != nil {
 			return err
 		}
@@ -523,8 +524,8 @@ func replayClaims(c *conn, p *drillPlayer) error {
 			refused++
 			continue
 		}
-		if result.BagCount != record.BagCount {
-			return fmt.Errorf("replayed claim of %s changed bag %d -> %d", mailID, record.BagCount, result.BagCount)
+		if result.Held != record.BagCount {
+			return fmt.Errorf("replayed claim of %s changed bag %d -> %d", mailID, record.BagCount, result.Held)
 		}
 	}
 	fmt.Printf("%s replayed=%d refused=%d bag[%d]=%d unchanged\n", p.Name, len(record.MailIDs), refused, itemID, record.BagCount)

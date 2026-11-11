@@ -213,7 +213,7 @@ sequenceDiagram
 | 方向 | 从哪个源码 / 文档学 | 框架接法 | 业务仍需定义 |
 | --- | --- | --- | --- |
 | 充值与钻石到账 | [GrantPurchase](../../demo/game/handler/grant_purchase.go.tmpl)、[platform](../../demo/internal/service/platform/) | 渠道订单身份与到账账本同事务 | 产品、支付签名、退款与审计 |
-| 邮件与补偿 | [ClaimMail](../../demo/game/controllers/player/claim_mail.go.tmpl)、[ClaimMailReward](../../demo/game/handler/claim_mail_reward.go.tmpl) | 服务预留、玩家侧幂等奖励、服务提交多阶段 | 邮件有效期与补发规则 |
+| 邮件与补偿 | [MailboxClaim](../../modules/mailbox/files/game/controllers/mailbox/mailbox_claim.go.tmpl)、[MailboxClaimReward](../../modules/mailbox/files/game/handler/mailbox_claim_reward.go.tmpl)（mailbox 业务模块） | 服务预留、玩家侧幂等奖励、服务提交多阶段 | 邮件有效期与补发规则 |
 | 活动与排行 | [活动接线](../../demo/internal/service/game/activity.go.tmpl)、[服务篇](guide/09-services.md) | 活动贡献只在首次真实付款时提交；排行写累计快照、只增不减 | 活动窗口、奖励档位；尽力贡献失败不自动补报是已接受取舍 |
 | 跨服协作 | [Saga](guide/06-saga.md)、[gift_item saga](../../demo/saga/gift_item/) | 原生步骤 / effect，失败补偿，结果未知按身份查询 | 原生步骤单进程容量有限（见 Saga 指南 §5），量大按 sid 分片 |
 | 技能与 Buff | [技能 / 战斗](guide/08-skill.md) | 完整 Skill Host 按其独立事务 / 持久化契约接入 | 技能、Buff、英雄内容与平衡 |

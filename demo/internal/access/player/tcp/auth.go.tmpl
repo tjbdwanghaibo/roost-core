@@ -85,7 +85,8 @@ func (authenticator *applicationAuthenticator) authenticateSession(ctx context.C
 		return gateway.Principal{}, gateway.ErrUnauthenticated
 	}
 	principal := newPrincipal(role.PlayerID, role.ServingServerID, role.ServerID)
-	// 角色建立时间给登录端点拉全服邮件用（mail.BroadcastProfile.RegisteredAtUnix）。
+	// 角色建立时间给进入游戏时拉全服邮件用（mail.BroadcastProfile.RegisteredAtUnix）：登录端点把会话的 claims
+	// 带给进入钩子，mailbox 模块的联动（game/controllers/mailbox/mailbox_enter.go）按这个键读。
 	principal.Claims[svcaccount.RoleCreatedAtClaim] = strconv.FormatInt(role.CreatedAtUnix, 10)
 	// 单个角色换服（account 的 BeginRoleTransfer / CommitRoleTransfer）：绑定代数总是记下，没换过服是 "0"；
 	// 换服在途时另记目标 sid 与换服 ID（svcaccount.ParseTransferClaim 读回）。在途的角色仍由源服承载，这里

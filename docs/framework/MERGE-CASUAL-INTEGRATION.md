@@ -220,7 +220,7 @@ sequenceDiagram
 | 方向 | 从哪个源码 / 文档学 | 框架接法 | 业务仍需定义 |
 | --- | --- | --- | --- |
 | 内购与钻石到账 | [GrantPurchase](../../demo/game/handler/grant_purchase.go.tmpl)、[platform](../../demo/internal/service/platform/) | 渠道订单身份与到账账本同事务 | 产品、支付签名、退款与审计 |
-| 邮件与补偿 | [ClaimMail](../../demo/game/controllers/player/claim_mail.go.tmpl)、[ClaimMailReward](../../demo/game/handler/claim_mail_reward.go.tmpl) | 服务预留、玩家侧幂等奖励、服务提交多阶段 | 邮件有效期与补发规则 |
+| 邮件与补偿 | [MailboxClaim](../../modules/mailbox/files/game/controllers/mailbox/mailbox_claim.go.tmpl)、[MailboxClaimReward](../../modules/mailbox/files/game/handler/mailbox_claim_reward.go.tmpl)（mailbox 业务模块） | 服务预留、玩家侧幂等奖励、服务提交多阶段 | 邮件有效期与补发规则 |
 | 活动与排行 | [活动接线](../../demo/internal/service/game/activity.go.tmpl)、[服务篇](guide/09-services.md) | 活动贡献只在首次真实付款时提交；排行写累计快照、只增不减 | 活动窗口、奖励档位 |
 | 推送与客户端 | [Sync](guide/04-sync.md)、[玩家接入](PLAYER-ACCESS.md) | 业务视图经 self_sync 推送 | 客户端预测、冲突提示与表现 |
 

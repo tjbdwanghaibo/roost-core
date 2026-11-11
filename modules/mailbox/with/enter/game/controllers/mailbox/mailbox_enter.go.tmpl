@@ -3,10 +3,12 @@ package mailbox
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	gameenter "{{MODULE}}/game/enter"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
@@ -34,26 +36,59 @@ type broadcastPuller interface {
 }
 
 func pullBroadcastsOnEnter(ctx context.Context, mailer broadcastPuller, entered gameenter.Entered) error {
-	profile, ok := broadcastProfileOnEnter(entered)
+	profile, ok := BroadcastProfileOnEnter(entered)
 	if !ok {
-		return fmt.Errorf("mailbox: player %d has no first-enter time; server-wide mail not pulled", entered.PlayerID)
+		return fmt.Errorf("mailbox: player %d has neither a role creation time nor a first-enter time; server-wide mail not pulled", entered.PlayerID)
 	}
 	_, err := mailer.PullBroadcasts(ctx, entered.PlayerID, profile)
 	return err
 }
 
-// broadcastProfileOnEnter 是这名玩家收全服邮件用的画像。这个函数归工程所有，规则在这里改：
+// BroadcastProfileOnEnter 是这名玩家收全服邮件用的画像。这个函数归工程所有，规则在这里改。
 //
-//   - 注册时间用首次进入游戏的时间（enter 模块记在档里的那一刻）。mail 服务内置的条件是
-//     “注册早于邮件发送才收得到”，所以新玩家收不到建号之前的补偿；注册时间未知就不拉取，
-//     而不是把玩家当成老玩家。工程有 account 服务时改成角色的创建时间。
-//   - 范围只有“所有玩家”。分服的游戏加 svcmail.ServerScope(区号)，有公会广播的加
-//     svcmail.GuildScope(公会)，并在玩家换了范围（转服、进出公会）之后再拉一次。
+// 缺省规则只读两样东西：enter 模块记在档里的首次进入时间，以及这次进入的会话带的 claims
+// （gameenter.Entered.Claims，认证器写的）。claims 里认的是 account 服务的三个键；工程不用 account 服务、
+// 或者认证器没写它们时，三个键都不在，规则退回最简单的那一种——注册时间取首次进入、范围只有“所有玩家”。
+//
+//   - 注册时间：会话带着角色创建时间（svcaccount.RoleCreatedAtClaim，Unix 秒）就用它，否则用首次进入游戏的时间。
+//     mail 服务内置的条件是“注册早于邮件发送才收得到”，所以新玩家收不到建号之前的补偿；两个时间都没有就不拉取
+//     （第二个返回值为 false），而不是把玩家当成老玩家。首次进入不早于建角，所以退回它只会少收、不会多收；
+//     写了但不是正整数的 claim 按没写处理，理由相同。
+//   - 范围：会话带着角色的承载服（svcaccount.ServerIDClaim）时加上这个服的范围（svcmail.ServerScope），
+//     发给本服的全服邮件才收得到。别名合服之后，原服（svcaccount.OriginServerIDClaim）与承载服不同的角色
+//     另带原服的范围：合服前发给原服、这个角色还没合并进邮箱的邮件照样属于他。
+//     有公会广播的游戏在这里加 svcmail.GuildScope(公会)，并在玩家换了范围（进出公会）之后再拉一次。
 //   - 业务条件（等级、渠道……）放进 Attributes，由 LazyBroadcastConfig.Eligible 判断。
-func broadcastProfileOnEnter(entered gameenter.Entered) (svcmail.BroadcastProfile, bool) {
+//
+// 导出是为了让认证器那一侧的测试能用钩子真正使用的这个函数核对自己写的 claims：认证器归工程所有、可以被改写，
+// 键或格式对不上时全服邮件会悄悄按缺省规则拉取，而两边各自的测试都还是绿的。
+func BroadcastProfileOnEnter(entered gameenter.Entered) (svcmail.BroadcastProfile, bool) {
 	registeredAt := entered.FirstAtUnixMilli / 1000
+	if createdAt, ok := positiveClaim(entered.Claims, svcaccount.RoleCreatedAtClaim, 64); ok {
+		registeredAt = createdAt
+	}
 	if registeredAt <= 0 {
 		return svcmail.BroadcastProfile{}, false
 	}
-	return svcmail.BroadcastProfile{RegisteredAtUnix: registeredAt}, true
+	profile := svcmail.BroadcastProfile{RegisteredAtUnix: registeredAt}
+	if serving, ok := positiveClaim(entered.Claims, svcaccount.ServerIDClaim, 32); ok {
+		profile.Scopes = append(profile.Scopes, svcmail.ServerScope(int32(serving)))
+		if origin, ok := positiveClaim(entered.Claims, svcaccount.OriginServerIDClaim, 32); ok && origin != serving {
+			profile.Scopes = append(profile.Scopes, svcmail.ServerScope(int32(origin)))
+		}
+	}
+	return profile, true
+}
+
+// positiveClaim 读一个十进制正整数的 claim。没有这个键、解析不了、超出 bits 位、或者不是正数都回答 false。
+func positiveClaim(claims map[string]string, key string, bits int) (int64, bool) {
+	raw, ok := claims[key]
+	if !ok {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(raw, 10, bits)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
 }

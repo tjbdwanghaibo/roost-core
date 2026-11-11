@@ -116,7 +116,7 @@ grep -q 'module wallet: already installed' "$review_root/add-batch2.log"
 grep -q 'glue mailbox with enter: written' "$review_root/add-batch2.log"
 # bag 与 mailbox 同一次装：道具附件的联动（mailbox 的附件种类登记点）也在这一步写。
 grep -q 'glue mailbox with bag: written' "$review_root/add-batch2.log"
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=28 mailbox+enter=3 mailbox+bag=9
+expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9
 go test -mod=mod ./... > "$review_root/test-all-batch2.log" 2>&1 || { tail -30 "$review_root/test-all-batch2.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK    collaborators:rank' "$review_root/doctor.log"
@@ -139,7 +139,7 @@ grep -q 'module bag: already installed' "$review_root/add-task.log"
 commit_all all
 "$roost" module add enter bag mailbox task shop > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=28 mailbox+enter=3 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17
+expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1

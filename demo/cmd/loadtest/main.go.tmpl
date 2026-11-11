@@ -444,12 +444,16 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
-	// list_mail fails until the level-up reward has arrived (the effect chain
-	// is asynchronous: WAL → outbox → JetStream → consumer → mail.Send), so a
-	// Retry node around it is the wait; the first claimable mail's id goes on
-	// the blackboard under claim_mail's request field (mail_id).
-	action.MustRegisterCall[pb.ListMailRequest, pb.ListMailResponse](actions, protocols, "list_mail", msgid.MsgListMail,
-		action.OnResp(func(rb *robot.Context, resp *pb.ListMailResponse) error {
+	// The mailbox is the mailbox module's (MailboxList / MailboxClaim).
+	// mailbox_list fails until the level-up reward has arrived (the effect
+	// chain is asynchronous: WAL → outbox → JetStream → consumer → mail.Send),
+	// so a Retry node around it is the wait; the first claimable mail's id goes
+	// on the blackboard under mailbox_claim's request field (mail_id).
+	// Claimable is the module's answer: the mail service would reserve it AND
+	// the attachment is a kind this build can grant (an item, through the
+	// mailbox + bag glue).
+	action.MustRegisterCall[pb.MailboxListRequest, pb.MailboxListResponse](actions, protocols, "mailbox_list", msgid.MsgMailboxList,
+		action.OnResp(func(rb *robot.Context, resp *pb.MailboxListResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
@@ -461,34 +465,37 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return fmt.Errorf("no claimable mail yet (%d in the box)", len(resp.Mails))
 		}))
-	action.MustRegisterCall[pb.ClaimMailRequest, pb.ClaimMailResponse](actions, protocols, "claim_mail", msgid.MsgClaimMail,
-		action.OnResp(func(rb *robot.Context, resp *pb.ClaimMailResponse) error {
+	// Every mail this scenario claims carries an item (the level-up reward,
+	// the gift): the answer names the kind, the item id, how many this mail
+	// granted and how many of that item the bag holds afterwards.
+	action.MustRegisterCall[pb.MailboxClaimRequest, pb.MailboxClaimResponse](actions, protocols, "mailbox_claim", msgid.MsgMailboxClaim,
+		action.OnResp(func(rb *robot.Context, resp *pb.MailboxClaimResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
-			if resp.ItemID <= 0 || resp.Count <= 0 || resp.BagCount < resp.Count {
-				return fmt.Errorf("claim granted nothing: item=%d count=%d bag=%d", resp.ItemID, resp.Count, resp.BagCount)
+			if resp.AttachmentType != "item" || resp.AttachmentID <= 0 || resp.Amount <= 0 || resp.Held < resp.Amount {
+				return fmt.Errorf("claim granted nothing: type=%q id=%d amount=%d held=%d", resp.AttachmentType, resp.AttachmentID, resp.Amount, resp.Held)
 			}
 			// Remember what the bag holds so a replay can be judged.
-			rb.Blackboard.Set("claimed_bag_count", int64(resp.BagCount))
+			rb.Blackboard.Set("claimed_held", resp.Held)
 			return nil
 		}))
 	// The same claim again. The mail service refuses a mail it has already
 	// committed (a coded answer), and if it ever lets one through, the
-	// Player's ledger makes the grant a no-op — either way the bag must not
-	// grow. Without the ledger the second grant is a second stack, which is
-	// the window a lost CommitClaim opens.
-	action.MustRegisterCall[pb.ClaimMailRequest, pb.ClaimMailResponse](actions, protocols, "claim_mail_replay", msgid.MsgClaimMail,
-		action.OnResp(func(rb *robot.Context, resp *pb.ClaimMailResponse) error {
-			raw, _ := rb.Blackboard.Get("claimed_bag_count")
+	// Player's ledger (PlayerDao.MailboxLedger) makes the grant a no-op —
+	// either way the bag must not grow. Without the ledger the second grant
+	// is a second stack, which is the window a lost CommitClaim opens.
+	action.MustRegisterCall[pb.MailboxClaimRequest, pb.MailboxClaimResponse](actions, protocols, "mailbox_claim_replay", msgid.MsgMailboxClaim,
+		action.OnResp(func(rb *robot.Context, resp *pb.MailboxClaimResponse) error {
+			raw, _ := rb.Blackboard.Get("claimed_held")
 			before, _ := raw.(int64)
 			if resp.Code != 0 {
 				// A coded refusal is the expected answer for a mail the
 				// service has already committed.
 				return nil
 			}
-			if int64(resp.BagCount) > before {
-				return fmt.Errorf("replayed claim granted again: bag %d → %d", before, resp.BagCount)
+			if resp.Held > before {
+				return fmt.Errorf("replayed claim granted again: bag %d → %d", before, resp.Held)
 			}
 			return nil
 		}))
@@ -998,10 +1005,10 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalChatSendRequest(message)
 	case *pb.ChatHistoryRequest:
 		return pb.MarshalChatHistoryRequest(message)
-	case *pb.ListMailRequest:
-		return pb.MarshalListMailRequest(message)
-	case *pb.ClaimMailRequest:
-		return pb.MarshalClaimMailRequest(message)
+	case *pb.MailboxListRequest:
+		return pb.MarshalMailboxListRequest(message)
+	case *pb.MailboxClaimRequest:
+		return pb.MarshalMailboxClaimRequest(message)
 	case *pb.EnterDungeonRequest:
 		return pb.MarshalEnterDungeonRequest(message)
 	case *pb.FinishDungeonRequest:
@@ -1097,14 +1104,14 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 			return err
 		}
 		*message = *decoded
-	case *pb.ListMailResponse:
-		decoded, err := pb.UnmarshalListMailResponse(data)
+	case *pb.MailboxListResponse:
+		decoded, err := pb.UnmarshalMailboxListResponse(data)
 		if err != nil {
 			return err
 		}
 		*message = *decoded
-	case *pb.ClaimMailResponse:
-		decoded, err := pb.UnmarshalClaimMailResponse(data)
+	case *pb.MailboxClaimResponse:
+		decoded, err := pb.UnmarshalMailboxClaimResponse(data)
 		if err != nil {
 			return err
 		}

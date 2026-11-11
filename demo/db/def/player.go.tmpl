@@ -84,12 +84,8 @@ type PlayerDao struct {
 	// see game/leaderboard for why the rank service's request ring cannot be the
 	// ledger for this.
 	DungeonClears map[int64]int64 `dao:"persist,map=fast" store:"dungeon_clears"`
-	// MailClaims is the same ledger for mail attachments: mail id → the
-	// MAIL's expiry, as the mail service reported it with the reservation. It closes the window the three-step claim leaves open —
-	// reserve and grant succeed, the commit is lost, and the retry would
-	// grant a second stack (see game/controllers/player/claim_mail.go).
-	MailClaims map[string]int64 `dao:"persist,map=fast" store:"mail_claims"`
-	// PurchaseClaims is the same ledger for paid orders: order id -> the
+	// PurchaseClaims is the same ledger for paid orders (the ledger for mail
+	// attachments is the mailbox module's PlayerDao.MailboxLedger): order id -> the
 	// moment after which that grant can no longer be claimed (payment time
 	// plus game/purchase.ClaimRetentionSeconds). The platform service runs in
 	// another process and records a grant there; this is what makes the game

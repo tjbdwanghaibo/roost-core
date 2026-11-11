@@ -455,13 +455,11 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "errcode", Name: "BattleNotSeated", ID: 100008}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "BattleBusy", ID: 100009}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "DungeonRun", ID: 100010}, why: "a coded failure in the manifest's errcode space"},
-		{add: &AddOptions{Kind: "errcode", Name: "MailClaim", ID: 100011}, why: "a coded failure in the manifest's errcode space"},
 		{write: "internal/errors/exp_amount.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_not_found.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_not_seated.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_busy.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/dungeon_run.go", why: "client-facing message instead of the TODO placeholder"},
-		{write: "internal/errors/mail_claim.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/scene_position.go", why: "one code for out of bounds / taken / not on a map: a client that learns which points are occupied has everyone's positions"},
 		{write: "internal/errors/dungeon_claim_window.go", why: "a reward refused for being too old has to be a named refusal, not a quiet zero"},
 		{write: "internal/errors/purchase_grant.go", why: "a grant with no order id or no payment moment cannot be made exactly-once"},
@@ -534,13 +532,11 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/gift_debit.go", why: "the saga's debit step as a Nest transaction: Remove plus the command's receipt and completion, all in one WAL record"},
 		{write: "game/handler/gift_refund.go", why: "debit's compensation, with the same saga identity: Add plus the receipt and completion; a compensation that runs twice is as wrong as a step that does"},
 		{write: "game/handler/claim_dungeon.go", why: "the clear reward, paid at most once per run: the claim ledger and the reward commit together, so a replay pays nothing"},
-		{write: "game/handler/claim_mail_reward.go", why: "the mail attachment, granted at most once per mail: the same ledger shape for the claim the mail service cannot make atomic"},
 		{add: &AddOptions{Kind: "handler", Name: "EquipItem", Entity: "Player", Component: "Equipment"}, why: "taking an item out of the bag and putting it on must commit together, or the item is lost or duplicated"},
 		{write: "game/handler/equip_item.go", why: "one transaction over three components: bag, equipment and the attribute layer that follows them"},
 		{write: "game/handler/add_item_test.go", why: "a grant that would overflow the stored count is refused before the bag is written, through the real handler and Sender"},
 		{write: "game/handler/add_exp_test.go", why: "experience and level overflow is refused atomically across Player, World and reward ledger"},
-		{write: "game/handler/claim_mail_reward_test.go", why: "the mail ledger asserted through the real handler in a real Nest transaction: the crash window a client cannot open"},
-		{write: "game/handler/claim_mail_expiry_test.go", why: "delayed reservations cannot regrant expired mail after ledger cleanup, including stale caller time"},
+		{write: "game/handler/claim_harness_test.go", why: "the harness the handler tests share: one entity behind a Getter, a committer that keeps the record, the project's own config data, and a business clock a test can pin"},
 		{write: "game/handler/claim_dungeon_test.go", why: "the clear reward's ledger and its window asserted together: a pruned run is refused, not paid again"},
 		{write: "game/handler/config_snapshot_test.go", why: "the config generation a handler reads is the one pinned at admission: a reload or rollback between two reads of one handler is not seen"},
 		{add: &AddOptions{Kind: "access", Name: "player", Service: gameService}, why: "the player request boundary"},
@@ -569,14 +565,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/controllers/player/world_stats.go", why: "a Nest read handler on the World"},
 		{add: &AddOptions{Kind: "protocol", Name: "MatchFound", Group: "game", Handler: "player"}, why: "the server push announcing a match"},
 		{write: "protocol/def/match_found.go", why: "a notify: no request, the bind registers its encoder"},
-		{write: "game/rewards/rewards_test.go", why: "补丁点的三条：没注册时用原函数、替换立刻生效、revert 回到原样"},
-		{write: "game/rewards/rewards.go", why: "what a mail attachment means to this game; shared by the mailer and the claim endpoint"},
-		{add: &AddOptions{Kind: "protocol", Name: "ListMail", Group: "game", Handler: "player"}, why: "the mailbox, paged"},
-		{write: "protocol/def/list_mail.go", why: "cursor in, envelopes with this player's state out"},
-		{write: "game/controllers/player/list_mail.go", why: "List through the typed mail client"},
-		{add: &AddOptions{Kind: "protocol", Name: "ClaimMail", Group: "game", Handler: "player"}, why: "the attachment into the Bag"},
-		{write: "protocol/def/claim_mail.go", why: "mail id in, what was granted out"},
-		{write: "game/controllers/player/claim_mail.go", why: "ReserveClaim → Sync_AddItem → CommitClaim: exactly-once delivery around one Nest transaction"},
+		{write: "game/rewards/rewards_test.go", why: "补丁点的三条：没注册时用原函数、替换立刻生效、revert 回到原样；升级奖励是 mailbox 模块发得出去、领取端解得出来的附件"},
+		{write: "game/rewards/rewards.go", why: "what reaching a level is worth, as a mailbox attachment behind a hot-patch point; the attachment encoding, the mailbox endpoints and the claim ledger are the mailbox module's"},
 		{add: &AddOptions{Kind: "protocol", Name: "EnterDungeon", Group: "game", Handler: "player"}, why: "the cross-service call: game → session"},
 		{write: "protocol/def/enter_dungeon.go", why: "a bounded run: id, state, deadline"},
 		{write: "game/controllers/player/enter_dungeon.go", why: "Enter through the typed session client, frame sequence as idempotency key"},
@@ -772,7 +762,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
 		{write: "internal/service/game/service_shutdown_test.go", why: "Shutdown closes the scene under the App's stop context, so stopping the reload is bounded by shutdown.total_timeout; a fail-stop or graceful Shutdown disconnects every served player first"},
 		{write: "internal/service/game/syncbus_config_test.go", why: "the generated syncbus section is the transport the wiring Mod actually starts on, with no unread-config warnings"},
-		{write: "internal/service/game/level_up_mail.go", why: "the consumer: kitdataengine.SubscribeEffects (durable + Mongo inbox from the dataengine Mod's declaration) → mail.Send keyed by EffectID"},
+		{write: "internal/service/game/level_up_mail.go", why: "the consumer: kitdataengine.SubscribeEffects (durable + Mongo inbox from the dataengine Mod's declaration) → the mailbox module's SendTo keyed by EffectID"},
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
 		{write: "internal/service/game/battle_test.go", why: "the room's start grace and lifetime, asserted against the real lockstep room with a recording push lane"},
 		{write: "internal/service/game/battle.go", why: "the lockstep rooms: one goroutine owns each room, the player TCP push is its broadcast lane, the matchmaker opens one per match"},
@@ -830,9 +820,10 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // （落点已被占用时安装器拒绝安装）。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook)"},
+		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend)"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件。协议多几个字段，
-		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、邮件、公告）。
+		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
+		// 拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter 的联动登记）。
 		{write: "protocol/def/enter_game.go", why: "the enter module's protocol with the demo's fields: client version in, player id / created / owner sid out; the message id is the one the module was allocated"},
 		{write: "game/controllers/enter/controller.go", why: "the enter domain's controller holds the player controller: the demo's login needs everything that controller has"},
 		{write: "game/controllers/enter/enter_game.go", why: "the endpoint hands the login to the player controller's EnterGame"},
@@ -846,13 +837,19 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 行是 demo 的四种道具。背包的规则文件 bag_items.go 用模块的缺省实现（读这张表），不覆盖。
 		{write: "configs/schema/item.go", why: "the bag module's item table with the demo's two extra columns: what a worn item adds to attack and hp"},
 		{write: "configs/table/item.csv", why: "the demo's rows: two potions, a sword, the gold coin; converted to configs/data/item.json by generate"},
-		// demo 自己的两个文件：两本领取账本（给模块的 BagComponent 加方法），以及背包变化经提交观察者同步给本人的断言。
-		{write: "game/entities/player/claim_ledgers.go", why: "the mail-attachment and paid-order claim ledgers: the demo's own methods on the module's Bag component, so a claim and its items stay one transaction"},
+		// demo 自己的两个文件：充值订单的领取账本（给模块的 BagComponent 加方法；邮件的领取账本是 mailbox 模块的），
+		// 以及背包变化经提交观察者同步给本人的断言。
+		{write: "game/entities/player/claim_ledgers.go", why: "the paid-order claim ledger: the demo's own method on the module's Bag component, so a claim and its items stay one transaction"},
 		{write: "internal/service/game/bag_sync_test.go", why: "the module's Bag component never calls PublishSyncDirty: on a Nest built with the scene's commit observer a grant and a discard still reach the owner's client, a refused grant sends nothing, and a bystander never sees the bag"},
 		// 档案是 profile 模块：组件、状态（PlayerDao.Profile 别人可见、ProfilePrivate 只给本人）、改名协议、CheckAddExp、
 		// 名片 handler ProfileCard 都是模块的。demo 只覆盖模块留给工程的升级钩子：升一级之后属性跟着涨、
 		// 发 player.level_up 这个 effect（奖励邮件由它的消费者发），都与经验、等级在同一笔事务里。
 		{write: "game/entities/player/profile_levelup.go", why: "the module's project-owned level-up hook with the demo's two consequences of a level: the attribute base layer follows it, and the player.level_up effect rides on the same transaction (the reward mail is its consumer's)"},
+		// 邮件是 mailbox 模块：列表与领取两条协议、领取账本（PlayerDao.MailboxLedger）、附件的种类与编码、
+		// 发件入口 SendTo 都是模块的，demo 不带自己的 ListMail / ClaimMail / 领取账本，也不覆盖模块的任何文件。
+		// demo 的发件方（升级奖励、GM 补偿、活动结算、送礼的送达）import game/mailbox。它依赖的 wallet 跟着装进来
+		// （金币附件经它到账）。enter 与 bag 也在这一步里，所以两组联动一起写：进入游戏时拉全服邮件
+		// （画像读会话的 claims）、道具附件进背包（demo 的奖励邮件带的都是道具）。
 	}
 }
 

@@ -32,13 +32,14 @@ TCP (player access)
 - **只换道具表的数据**：模块装好之后覆盖 `configs/schema/item.go` 与 `configs/table/item.csv`——多 `attack` / `hp` 两列
   （属性系统给穿着的装备算加成），行是 demo 的四种道具。背包规则文件 `game/entities/player/bag_items.go` 是模块的缺省实现：
   表里有这一行道具号就合法，`max_stack` 是单种上限（0 表示不单独限制，按硬上限 999999）。加道具、改上限只改 CSV。
-- **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放、装备、邮件领取、充值发货，
+- **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放、装备、充值发货，
   都在自己的 Nest handler 里调 `target.BagComp().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`
   要求组件文件已经在盘上，而组件在最后的模块步骤才落盘，所以生成步骤里这些 handler 没有骨架步骤，文件直接写出、留在原处
-  （骨架本来也会被立刻覆盖）；模块那一步跑生成器时全部 handler 都已经在盘上。
-- **两本领取账本不是背包的职责**：邮件附件（`ClaimMailReward` / `MailRewardClaimed`）与已付订单（`ClaimPurchase`）的
-  “这一次发过没有”记在 demo 自己的 `PlayerDao.MailClaims` / `PurchaseClaims` 里，方法写在 demo 的
-  `game/entities/player/claim_ledgers.go`（给模块的 `BagComponent` 加方法：账本与道具在同一笔事务里提交或回滚）。
+  （骨架本来也会被立刻覆盖）；模块那一步跑生成器时全部 handler 都已经在盘上。邮件附件进背包不在其中：那是 mailbox 模块与
+  bag 模块的联动（`game/entities/player/mailbox_item.go`，见下文[邮件](#邮件列表与领附件客户端这一半)）。
+- **领取账本不是背包的职责**：已付订单（`ClaimPurchase`）的“这一次发过没有”记在 demo 自己的 `PlayerDao.PurchaseClaims` 里，
+  方法写在 demo 的 `game/entities/player/claim_ledgers.go`（给模块的 `BagComponent` 加方法：账本与道具在同一笔事务里提交或回滚）。
+  邮件附件的领取账本是 mailbox 模块的（`PlayerDao.MailboxLedger`），demo 不再带一份。
 - **同步不用组件自己标脏**：模块的组件不调 `Player.PublishSyncDirty()`（模块不认识工程的同步）。demo 的 Nest 装着场景的
   提交观察者，事务准入时按实体收集生成的 setter 留下的同步标记，所以背包的变化照样作为增量到本人的客户端；被拒绝而回滚的
   发放什么都不发；别的玩家的视图里没有 `bag`。`internal/service/game/bag_sync_test.go` 在与服务相同的接线上断言这三件事。
@@ -100,7 +101,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
   `CheckAddExp` 与 `AddExp`。模块的 `ProfileAddExp` 只动 Player，不记 World 的累计，demo 的入口（端点、GM、副本结算）都不走它。
 - 生成步骤里锁 Profile 组件的 handler（`AddExp`、`ClaimDungeon`、`PlayerTeam`、公会的 `ShowGuild` / `PlayerGuild`）与背包的那些一样，
   没有 `roost add handler` 骨架步骤（组件在最后的模块步骤才落盘），直接写文件。全部模块在同一步里装，号按列表顺序分配
-  （`enter`、`chat`、`leaderboard`、`bag`、`profile`），新换用的模块加在末尾。
+  （`enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox`），新换用的模块加在末尾。
 
 ## 事件链：升级 → 奖励邮件（事务性 outbox）
 
@@ -116,7 +117,7 @@ AddExp 端点 → Nest 锁 World、Player → handlerAddExp → ProfileComponent
         └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
         ↓ commit 后由 dataengine 发到 JetStream（<subject_prefix>.player.level_up）
 internal/service/game/level_up_mail.go     kitdataengine.SubscribeEffects：durable + Mongo inbox（每个 EffectID 只处理一次）
-  └─ mail.Send(RequestID = EffectID)       mail 服务按 RequestID 去重：第二层幂等
+  └─ gamemailbox.SendTo(RequestID = EffectID)  mailbox 模块的发件入口 → mail.Send；mail 服务按 RequestID 去重：第二层幂等
 ```
 
 - **升级"这件事"在升级钩子里发出**，与让它成立的状态变更同一笔事务；谁对它做出反应住在别处。“升级了要通知别的功能”是档案模块的
@@ -129,29 +130,55 @@ internal/service/game/level_up_mail.go     kitdataengine.SubscribeEffects：dura
   产生分歧。
 - 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
 - 订阅只写处理函数：流、主题前缀、回执库与重投退避由框架的 `kitdataengine.SubscribeEffects` 按 DataEngine Mod 的声明组装。
-  载荷解不开的 effect 标记为毒消息（`kitdataengine.PoisonEffect`）直接丢弃并记 ERROR，不会一直重投；`mail.Send` 失败按退避重投。
+  载荷解不开、或奖励不是 mailbox 发得出去的附件（`gamemailbox.ErrLetterInvalid`，例如热补丁换上了一个没登记的附件种类）
+  的 effect 标记为毒消息（`kitdataengine.PoisonEffect`）直接丢弃并记 ERROR，不会一直重投；mail 服务调用失败按退避重投。
 
 ## 邮件：列表与领附件（客户端这一半）
 
-升级奖励邮件现在带附件——`game/rewards/` 是附件的编码（一个道具一叠，JSON），发件方（`level_up_mail.go`）与领取方共用它：
+邮件用的是 [mailbox 业务模块](../modules/README.md)（生成时由 `roost module add mailbox` 装进工程，连同它依赖的 wallet 模块；
+`codegen/internal/roost/demo.go` 的 `demoModuleSteps`）。列表与领取两条协议、领取账本、附件的编码与种类、发件入口和它们的场景测试
+都是模块的，demo 不带自己的 `ListMail` / `ClaimMail` / `ClaimMailReward`，也不覆盖模块的任何文件。demo 自己写的只有“发什么”：
+`game/rewards/`（升级值一瓶法力药水，挂在热补丁点后面）与四个发件方。
 
 ```
-ListMail 端点  ─ List(playerID, cursor, limit) ─▶ mail 服务（按认证玩家作用域，服务端不需要端点再查归属）
-ClaimMail 端点 ─ ReserveClaim(mailID, "")      ─▶ mail 服务：交出附件 + 对 (玩家, 邮件) 恒定的 token
-               ─ Sync_ClaimMailReward(...)    ─▶ Nest 锁 Player 的一笔事务：道具 + **邮件 id 记进账本**，同一条 WAL 记录
-               ─ CommitClaim(token)           ─▶ mail 服务：标记已领；重试同 token 幂等
+MailboxList 端点  ─ List(playerID, cursor, limit)   ─▶ mail 服务（按认证玩家作用域，服务端不需要端点再查归属）
+MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交出附件 + 对 (玩家, 邮件) 恒定的 token
+                  ─ Sync_MailboxClaimReward(...)    ─▶ Nest 锁 Player 的一笔事务：奖励 + **邮件 id 记进账本**，同一条 WAL 记录
+                  ─ CommitClaim(token)              ─▶ mail 服务：标记已领；重试同 token 幂等
 ```
 
-- **领取是恰好一次的**：中间那一步把邮件 id 和道具放进同一条 WAL 记录（`game/handler/claim_mail_reward.go`）。
+- **附件是（种类，号，数量）**：线上格式 `{"type":"item","id":1002,"amount":1}`，金币是 `{"type":"coins","amount":100}`
+  （`game/mailbox/mailbox.go`）。种类是登记点：金币内置，经 wallet 模块到账；道具（`item`）由 mailbox 与 bag 的联动登记
+  （`game/mailbox/mailbox_item.go` 登记校验，`game/entities/player/mailbox_item.go` 登记发放：`BagComp().Add`，与领取账本同一笔事务）。
+  demo 发的奖励邮件带的都是道具。回包与列表用同样的字段说附件：`AttachmentType` / `AttachmentID` / `Amount`，领取回包另有
+  `Held`（到账后这个道具在背包里的数量；金币是余额）。
+- **发件方都走 `gamemailbox.SendTo`**（`game/mailbox/mailbox_send.go`）：给一名玩家发一封信，附件先按领取端的同一个判断校验
+  （发不出去的不进邮箱，返回 `ErrLetterInvalid`，重试无用），幂等键必填。demo 的四个发件方只差标题、附件与幂等键：
+  升级奖励（`level_up_mail.go`，键是 EffectID）、GM 补偿（`gm.go`，键是命令的 trace id）、活动结算（`activity.go`，
+  键是“活动 id + 玩家 id”）、送礼的送达（`gift_saga.go`，键是 saga 步骤的幂等键）。
+- **领取是恰好一次的**：中间那一步把邮件 id 和奖励放进同一条 WAL 记录（`MailboxComponent.Claim`，账本是 `PlayerDao.MailboxLedger`）。
   三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢了、预留到期、重试用同一个 token 再预留一次。
   邮件服务只能把它算作重复**尝试**（它无从知道游戏发没发），游戏这边知道：第二次发放在账本上撞到自己，什么也不做，回的还是同一组数字。
-  没有账本时这里就是第二叠道具——`game/handler/claim_mail_reward_test.go` 把这条钉住了（去掉账本判断即红）。
-- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到（Nest 排队、Player 冷加载、重试）。`ClaimMailReward` handler 的 `nowUnix` 是执行时这条消息冻结的业务时间（生成的 Nest 分发包装从 `fctx.Now` 填，调用方不传时间；DESIGN-TODO D22-1），按它判 `rewards.ClaimWindowClosed`（与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发奖；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`mail: mail has expired`），判断在任何 DAO 写入之前。账本在过期后再等 `rewards.LedgerPruneGraceSeconds`（10 分钟）才清理（`rewards.LedgerMayForget`）：宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着，只能靠账本还记得。没有到期时间的记录保留。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/rewards`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。回归在 `game/handler/claim_mail_expiry_test.go`。
+  没有账本时这里就是第二叠道具——模块的 `TestMailboxSameMailArrivingAgainPaysNothing`、`TestWithMailboxBagItemMailLandsInTheBagOnce`
+  与端点一级的 `TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce` 把这条钉住了（去掉账本判断即红）。
+- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到（Nest 排队、Player 冷加载、重试）。`MailboxClaimReward` handler 的 `nowUnixMilli` 是执行时这条消息冻结的业务时间（生成的 Nest 分发包装从 `fctx.Now` 填，调用方不传时间；DESIGN-TODO D22-1），按它判 `gamemailbox.ClaimWindowClosed`（与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发奖；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`mail: mail has expired`），判断在任何 DAO 写入之前。账本在过期后再等 `gamemailbox.LedgerPruneGraceSeconds`（10 分钟）才清理（`gamemailbox.LedgerMayForget`）：宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着，只能靠账本还记得。没有到期时间的发放请求直接拒绝（`mailbox_invalid`；mail 服务要求每封邮件都有过期时刻，真实的预留不会走到这里），所以账本里不会有清不掉的记录。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/mailbox`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。回归是模块的 `TestMailboxExpiredFirstGrantIsRefusedAtExecutionTime`、`TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused`、`TestMailboxRecordOutlivesTheExpiryByTheGrace`（`game/handler/mailbox_test.go`）。
 - **仍然开着的**：预留成功但发放前崩溃（邮件被占到租约到期，玩家等，什么都没丢）；`CommitClaim` 丢失（账本挡的是重复**发放**，不是重复尝试）。
-- `Claimable` 是 mail 服务对"现在领会成功吗"的回答，客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
-- 附件解不出奖励、或 AddItem 被拒（背包满）时 `CancelClaim` 归还预留，邮件不会卡在"held"直到租约到期。
-- 机器人脚本：add_exp 之后 `retry × 20 { wait 250ms; list_mail }`（效果链是异步的：WAL → outbox → JetStream → consumer → mail.Send），
-  拿到第一封可领邮件的 id 再 `claim_mail`，断言背包计数 ≥ 领到的数量。
+- `Claimable` 是“现在领会成功吗”：mail 服务说可以预留，并且附件是这一版发得了的奖励（解得出来、种类登记了发放方式）。
+  客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
+- 附件这一版发不了（解不出、种类没登记）时答 `mailbox_attachment`，发放被拒（背包放不下是 bag 模块的 `bag_stack_full` / `bag_kinds_full`）
+  时原样答那个码；两种情况都 `CancelClaim` 归还预留，邮件保持未领、不会卡在"held"直到租约到期。
+- **登录时拉全服邮件是进入钩子**：mailbox 与 enter 两个模块的联动（`game/controllers/mailbox/mailbox_enter.go`）在进入游戏时调
+  `PullBroadcasts`，demo 的进入流程里不再手写。画像规则是模块的 `BroadcastProfileOnEnter`：demo 的登录端点把会话的 claims
+  带给进入钩子（`gameenter.Entered.Claims`），规则从里面读认证器写下的三个键——注册时间取 account 的角色创建时间
+  （`RoleCreatedAtClaim`），范围是承载服（`ServerIDClaim`），别名合服后原服不同的角色另带原服（`OriginServerIDClaim`）。
+  `internal/access/player/tcp/auth_test.go` 用真实的认证器产出 Principal、交给这个函数读，钉住两边的键对得上。
+- **金币**：装 mailbox 连带装进了 wallet 模块（`PlayerDao.Wallet` 是同步字段、`WalletLedger` 与 `MailboxLedger` 只落库、协议 `WalletSpend`）。
+  同步视图里 `Wallet` 只给本人：普通场景的 default 视图（全部同步字段）与分区场景的 `self` 视图带它，
+  别的玩家（near / team / far）的字段白名单里没有（`game/entities/player/sync_packer.go`）。
+  demo 的玩法不产出金币；GM 可以发金币附件（`gm.mail.send` 的 `coins`），领取后进 wallet 的余额，`WalletSpend` 能把它花掉。
+- 机器人脚本：add_exp 之后 `retry × 20 { wait 250ms; mailbox_list }`（效果链是异步的：WAL → outbox → JetStream → consumer → mail.Send），
+  拿到第一封可领邮件的 id 再 `mailbox_claim`，断言领到的是道具、背包里这个道具的数量 ≥ 领到的数量；`mailbox_claim_replay`
+  再领同一封，断言数量不再增加。
 
 ## 跨服务：game → match 组队
 
@@ -633,6 +660,8 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
   -d '{"name":"gm.player.add_item","trace_id":"t1","payload":{"player_id":100866,"item_id":2001,"count":1}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
   -d '{"name":"gm.mail.send","trace_id":"t2","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","item_id":1002,"count":5}}'
+curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
+  -d '{"name":"gm.mail.send","trace_id":"t3","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","coins":100}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.world.stats"}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.list","payload":{"status":"manual_required","limit":20}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.get","payload":{"id":"gift-100866-demo-100866-1789-15"}}'
@@ -653,7 +682,7 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
   （已经用这个前缀跑着的部署先停写，把该前缀下的全部键连同计数器迁到新前缀）。处置分配时的拒绝前先确认这个键不是同一 Redis 上另一份仍用 `roost:demo` 前缀的部署的当前计数器；
   确认是旧计数器后停止分配，若 `<account.key_prefix>:player_id` 还不存在就把旧键的值迁过去，再移除旧键；否则给这份部署换一个没有该键的 Redis。
 - 加道具受 Player 的背包规则约束（道具必须在道具表里、每种道具的叠加上限），超出时命令按业务错误码拒绝（`bag_stack_full`，道具表里没有的是 `bag_item_invalid`），不是 GM 越过规则。
-- 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走同一个 mail 客户端、附件用同一份 `rewards` 编码，玩家经 `ClaimMail` 领。
+- 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走 mailbox 模块的 `gamemailbox.SendTo`（同一个 mail 客户端、同一份附件编码：`item_id` / `count` 是道具附件，`coins` 是金币附件，一封只带一种），玩家经 `MailboxClaim` 领；发不出去的附件（数量不为正……）在命令这里就按参数错误拒绝。
 - `trace_id` 是邮件的幂等键：同一 trace 重试不会发两封。
 - 为什么不是 webroute：这套 admin 命令表就是框架给运维面的位置（Wiring 的 nats / bus 也把 DLQ 命令注册在这里），共用鉴权、开关和 `/admin/commands` 的自描述；`webroute` 留给面向玩家 / 第三方的 HTTP 接口。
 
@@ -729,9 +758,11 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   端点直接走 `PlayerLifecycle.GetOrCreate`，所以这条协议只有 `roost add protocol`，控制器方法手写。
 - **`EnterGame` 的协议与 controller 域来自 enter 业务模块**：`-template game-demo` 生成时装 [enter 模块](../modules/README.md)
   （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
-  场景、已付订单、公会、全服邮件、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
+  场景、已付订单、公会、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
   后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
   `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/entities/player/enter_first.go`。
+  之后照样执行进入钩子（`gameenter.RunEntered`，带着会话的 claims）：聊天上线与拉全服邮件是 chat、mailbox 各自与 enter 的联动登记的，
+  不写在 demo 的进入流程里。
 - **登录有预算**：传输层给每个请求 `player_access.tcp.dispatch_timeout`（与 `nest.request_timeout` 对齐）；
   EnterGame 的归属 Claim + GetOrCreate 另用 `player_access.tcp.login_timeout`（默认 2s，不大于 dispatch）。冷加载要等该玩家已准入
   事务投影到库，库不可用时这个等待不会自己结束；超出预算回 `login_timeout`（100021），连接不被挂住，客户端重试即可——超时只停止等待，

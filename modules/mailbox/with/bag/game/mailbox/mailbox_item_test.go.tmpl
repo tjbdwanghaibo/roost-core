@@ -66,7 +66,7 @@ func TestWithMailboxBagItemAttachmentRefusesWhatIsNotAnItem(t *testing.T) {
 		"fractional amount":     `{"type":"item","id":1001,"amount":0.5}`,
 		"type in another case":  `{"type":"Item","id":1001,"amount":3}`,
 		"unknown field":         `{"type":"item","id":1001,"amount":3,"bound":true}`,
-		"the demo item reward":  `{"type":"item","item_id":1002,"count":1}`,
+		"other field names":     `{"type":"item","item_id":1002,"count":1}`,
 		"two items in an array": `[{"type":"item","id":1001,"amount":3},{"type":"item","id":1002,"amount":1}]`,
 		"trailing object":       `{"type":"item","id":1001,"amount":3}{"type":"coins","amount":5}`,
 	} {

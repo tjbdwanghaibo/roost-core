@@ -28,7 +28,7 @@ grep -q 'statuses=map\[completed:4\]' "$review_root/wait.log"
 for who in p2 p4; do
   "$review_root/giftdrill" claim "${common[@]}" -who "$who" -out "$review_root/claimed-$who.json" > "$review_root/claim-$who.log" 2>&1
   grep -q "^$who claimed=2 " "$review_root/claim-$who.log"
-  # 对已领的两封邮件逐封再发 ClaimMail（回复丢失后的重试），不能再增加背包；最后的 Mongo 背包核对兜底。
+  # 对已领的两封邮件逐封再发 MailboxClaim（回复丢失后的重试），不能再增加背包；最后的 Mongo 背包核对兜底。
   "$review_root/giftdrill" claim "${common[@]}" -who "$who" -replay "$review_root/claimed-$who.json" > "$review_root/replay-$who.log" 2>&1
   grep -q "^$who replayed=2 " "$review_root/replay-$who.log"
 done

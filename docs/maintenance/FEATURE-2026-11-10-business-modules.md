@@ -615,7 +615,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 已有（25 条） |
 | 2 | task | 任务系统（原名 quest，维护者 2026-11-11 改名：“task 是一个比较核心的系统，很多业务需求可以加到 task 中去”）。这一版：每日任务的进度、领奖、按业务日清零 | wallet | 已有（18 条）；签到推进经 task+checkin 联动。**扩成核心系统是下一步**，见本节末尾 |
 | 2 | leaderboard | 排行：提交分数（可分周期）、一次请求查前 N 名与自己的名次；榜的规则是业务文件 | 托管 rank 服务 | 已有（20 条）；game-demo 的通关榜在用 |
-| 2 | mailbox | 邮件：列表、领附件；附件种类是登记点，金币内置，道具经 mailbox + bag 联动 | 托管 mail 服务；wallet | 已有（28 条；联动 mailbox+bag 9 条、mailbox+enter 3 条） |
+| 2 | mailbox | 邮件：列表、领附件、发件入口 `SendTo`；附件种类是登记点，金币内置，道具经 mailbox + bag 联动 | 托管 mail 服务；wallet | 已有（32 条；联动 mailbox+bag 9 条、mailbox+enter 5 条）；game-demo 的邮件在用 |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 已有（17 条）（目录是业务文件，没有用配置表） |
 | 3 | room | 带座位的房间实体：进出、连接代际、房主 | 独立实体（安装器要支持模块自带实体） | 未做 |
 | 3 | matchroom | 匹配成局到房间的移交 | 托管 match 服务；room | 未做 |

@@ -1,0 +1,109 @@
+package handler
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// The harness the handler tests in this package share (the bag grants, the
+// paid-order ledger, the dungeon claim, the guild steps): the answer to "how
+// do I test a handler without Mongo". A Getter that hands back one entity, a
+// committer that keeps the record instead of writing it, and the project's
+// own config data. Everything else is the real thing — the generated handler
+// in a real Nest transaction.
+//
+// The mail attachment ledger used to be asserted from here; it is the
+// mailbox module's now, and so are its scenarios (game/handler/mailbox_test.go
+// and mailbox_item_test.go, game/controllers/mailbox/*_test.go).
+
+type singleEntityGetter struct{ value entity.IThreadSafeEntity }
+
+func (g singleEntityGetter) Get(context.Context, int64, entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	return g.value, nil
+}
+
+func (g singleEntityGetter) GetMany(_ context.Context, ids []int64, _ []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i := range out {
+		out[i] = g.value
+	}
+	return out, nil
+}
+
+// recordingCommitter keeps what a transaction would have written, so a test
+// can look at the mutations instead of a database.
+type recordingCommitter struct{ records []dataengine.CommitRecord }
+
+func (c *recordingCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+
+// pinBusinessClock 把进程级业务时钟停在 unix 秒，测试结束时恢复。
+//
+// 领奖 handler 的 nowUnix 是生成的分发包装在执行时填的、这条消息冻结的业务时间（fctx.Now），调用方
+// 不传时间；所以用例要哪个“现在”，就把时钟停在哪里。时钟停住不走，秒边界不会因为测试跑得慢而跳过。时钟是
+// 进程全局的，本包用例不能 t.Parallel。
+func pinBusinessClock(t *testing.T, unix int64) {
+	t.Helper()
+	at := time.Unix(unix, 0)
+	previous := clock.Offset()
+	clock.SetOffset(0)
+	clock.SetSource(func() time.Time { return at })
+	t.Cleanup(func() {
+		clock.SetSource(nil)
+		clock.SetOffset(previous)
+	})
+}
+
+func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommitter) {
+	t.Helper()
+	player.RegisterEntity()
+	RegisterGrantPurchaseNestHandlers()
+	// The item table the Bag validates against, loaded from the project's own
+	// data files: the generated accessors read the active snapshot, so a test
+	// that grants an item needs one.
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+	configdata.SetDefaultStore(store)
+
+	id, err := entity.BuildEntityID(4242, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	value, ok := built.(*player.Player)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", built)
+	}
+	committer := &recordingCommitter{}
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(singleEntityGetter{value: value}),
+		nest.NestOptionWithTransactionCommitter(committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return value, engine, committer
+}
