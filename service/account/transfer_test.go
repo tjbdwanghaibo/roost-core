@@ -180,6 +180,7 @@ func TestBeginRoleTransferRefusesWithoutWriting(t *testing.T) {
 		carriesBinding bool
 	}{
 		{name: "stale epoch", request: transferTo("t", homeSID, awaySID, 7), want: ErrTransferStale, carriesBinding: true},
+		{name: "stale transfer seq", request: TransferRequest{ID: "t", FromSID: homeSID, To: awaySID, ExpectSeq: 3}, want: ErrTransferStale, carriesBinding: true},
 		{name: "wrong source", request: transferTo("t", thirdSID, awaySID, 0), want: ErrTransferStale, carriesBinding: true},
 		{name: "unknown target", request: transferTo("t", homeSID, 99, 0), want: ErrServerInvalid},
 		{name: "non-positive target", request: transferTo("t", homeSID, 0, 0), want: ErrServerInvalid},
@@ -375,8 +376,8 @@ func TestAbortRoleTransferKeepsTheRoleOnTheSource(t *testing.T) {
 	}
 	mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
 
-	// 让出的目标名额可以再占：换一个 ID 重新发起并提交。
-	mustBegin(t, s, role.PlayerID, transferTo("t-2", homeSID, awaySID, 0))
+	// 让出的目标名额可以再占：换一个 ID、按当前绑定重新发起并提交。
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
 	mustCommit(t, s, role.PlayerID, "t-2")
 	mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
 }
@@ -414,7 +415,7 @@ func TestAbortOfAnUnknownTransferFencesALateBegin(t *testing.T) {
 		t.Fatal("the late Begin left a hold")
 	}
 
-	mustBegin(t, s, role.PlayerID, transferTo("t-2", homeSID, awaySID, 0))
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
 	if other, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-9", "not mine"); !errors.Is(err, ErrTransferInProgress) || other.Transfer == nil || other.Transfer.ID != "t-2" {
 		t.Fatalf("Abort of another id during t-2 = %+v, %v; want ErrTransferInProgress carrying t-2", other, err)
 	}
@@ -621,7 +622,7 @@ func TestAnOpenCommitTailIsFinishedByTheNextSelectRoleOrBegin(t *testing.T) {
 	})
 	t.Run("Begin back to the source", func(t *testing.T) {
 		s, cfg, role, session := stopAfterRoleWrite(t)
-		mustBegin(t, s, role.PlayerID, transferTo("t-2", awaySID, homeSID, 1))
+		mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", homeSID))
 		hold, found := slotAt(t, cfg, role.AccountID, homeSID)
 		if !found || hold.TransferID != "t-2" || hold.BindEpoch != 2 {
 			t.Fatalf("the slot on the old source = %+v (found %v), want the hold of t-2", hold, found)
@@ -681,7 +682,7 @@ func TestAnOpenAbortTailIsFinishedByTheNextBegin(t *testing.T) {
 		t.Fatalf("the fixture must leave the hold of t-1 behind: %+v (found %v)", hold, found)
 	}
 
-	mustBegin(t, s, role.PlayerID, transferTo("t-2", homeSID, awaySID, 0))
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
 	if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-2" {
 		t.Fatalf("the target slot = %+v (found %v), want the hold of t-2", hold, found)
 	}
@@ -702,7 +703,7 @@ func TestALateCommitTailNeverDeletesTheSlotTheRoleCameBackTo(t *testing.T) {
 		t.Fatalf("the fixture must have committed t-1: %+v", afterFirst.LastTransfer)
 	}
 	afterFirst.LastTransfer.Settled = false // 那一次重发读到的是收尾之前的记录
-	mustBegin(t, s, role.PlayerID, transferTo("t-2", awaySID, homeSID, 1))
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", homeSID))
 	mustCommit(t, s, role.PlayerID, "t-2")
 	mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 2)
 
@@ -872,7 +873,7 @@ func TestTransfersInvolvingAMergedAwayServerAreRefused(t *testing.T) {
 		mustCommit(t, s, role.PlayerID, "t-1")
 		mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
 		upsertOpen(t, s, 4)
-		mustBegin(t, s, role.PlayerID, transferTo("t-2", awaySID, 4, 1))
+		mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", 4))
 		mustCommit(t, s, role.PlayerID, "t-2")
 		mustBeBoundTo(t, s, cfg, role, session.Token, 4, 2)
 	})
@@ -1030,4 +1031,618 @@ func TestConcurrentTransferRequestsHaveOneWinner(t *testing.T) {
 			}
 		}
 	})
+}
+
+// nextTransfer 按角色此刻的绑定组一个发起请求：发起方是承载服，带上读到的绑定代数与换服尝试的序号。
+func nextTransfer(t *testing.T, s *Service, playerID int64, id string, to int32) TransferRequest {
+	t.Helper()
+	binding, err := s.RoleBinding(context.Background(), playerID)
+	if err != nil {
+		t.Fatalf("binding of %d: %v", playerID, err)
+	}
+	return TransferRequest{ID: id, FromSID: binding.ServingServerID, To: to, ExpectEpoch: binding.BindEpoch, ExpectSeq: binding.TransferSeq}
+}
+
+// gatedSlots 把第一次占位写入（带 TransferID 的 Create）停在选定的位置，由测试放行：交错用 channel
+// 固定，不靠 sleep。其余的写照常，faultySlots 的失败开关也照常可用（failCreate 打开时的占位写入直接
+// 失败，不算“第一次”）。
+type gatedSlots struct {
+	*faultySlots
+	// afterWrite 为 false 时停在写入之前，为 true 时停在写入之后、返回之前。
+	afterWrite bool
+	// loseReply 让放行之后的这次 Create 答 errInjected：写入已经生效而调用方不知道，等同于进程在占位
+	// 刚写完时退出。
+	loseReply bool
+	reached   chan struct{}
+	resume    chan struct{}
+	once      sync.Once
+}
+
+func (store *gatedSlots) Create(ctx context.Context, key string, value Slot) (versionstore.Versioned[Slot], bool, error) {
+	gated := false
+	if value.TransferID != "" && !store.failCreate.Load() {
+		store.once.Do(func() { gated = true })
+	}
+	if !gated {
+		return store.faultySlots.Create(ctx, key, value)
+	}
+	if !store.afterWrite {
+		close(store.reached)
+		<-store.resume
+	}
+	stored, created, err := store.faultySlots.Create(ctx, key, value)
+	if store.afterWrite {
+		close(store.reached)
+		<-store.resume
+	}
+	if store.loseReply && err == nil {
+		return versionstore.Versioned[Slot]{}, false, errInjected
+	}
+	return stored, created, err
+}
+
+func gatedTransferFixture(t *testing.T, afterWrite, loseReply bool) (*Service, Config, Role, Session, *gatedSlots) {
+	t.Helper()
+	slots := &gatedSlots{
+		faultySlots: &faultySlots{}, afterWrite: afterWrite, loseReply: loseReply,
+		reached: make(chan struct{}), resume: make(chan struct{}),
+	}
+	s, cfg, role, session := transferFixture(t, func(cfg *Config) {
+		slots.Store = cfg.Slots
+		cfg.Slots = slots
+	})
+	return s, cfg, role, session, slots
+}
+
+// stalledAtHold 在另一个 goroutine 里执行 call 并等它停在占位写入的停点上；返回的函数放行它并给出结果。
+func stalledAtHold(t *testing.T, slots *gatedSlots, what string, call func() (RoleBinding, error)) func() (RoleBinding, error) {
+	t.Helper()
+	type outcome struct {
+		binding RoleBinding
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		binding, err := call()
+		done <- outcome{binding, err}
+	}()
+	select {
+	case <-slots.reached:
+	case early := <-done:
+		t.Fatalf("%s returned before it reached the hold write: %+v, %v", what, early.binding, early.err)
+	}
+	return func() (RoleBinding, error) {
+		close(slots.resume)
+		result := <-done
+		return result.binding, result.err
+	}
+}
+
+// stalledBegin 发起一次换服并等它停在占位写入的停点上。
+func stalledBegin(t *testing.T, s *Service, slots *gatedSlots, playerID int64, request TransferRequest) func() (RoleBinding, error) {
+	t.Helper()
+	return stalledAtHold(t, slots, "Begin "+request.ID, func() (RoleBinding, error) {
+		return s.BeginRoleTransfer(context.Background(), playerID, request)
+	})
+}
+
+// 占位这一步与角色记录不是一次原子写：Begin 写了角色、还没占位（或刚占完位）时，这次换服被中止了。
+// 迟到的 Begin 不能留下占位，也不能答“换服在途”：它答 ErrTransferStale 并带回角色现在的绑定。之后重发的
+// Abort、SelectRole、下一次 Begin 都照常，目标服的名额是空的。
+func TestABeginOvertakenByAnAbortLeavesNoHold(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		afterWrite bool
+	}{{"stalled before the hold write", false}, {"stalled after the hold write", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, cfg, role, session, slots := gatedTransferFixture(t, tc.afterWrite, false)
+			finish := stalledBegin(t, s, slots, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-1", awaySID))
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "drain timed out"); err != nil {
+				t.Fatalf("Abort while Begin is stalled: %v", err)
+			}
+			late, err := finish()
+			if !errors.Is(err, ErrTransferStale) || late.ServerID != homeSID || late.Transfer != nil || late.LastTransfer == nil || late.LastTransfer.ID != "t-1" || late.LastTransfer.Committed {
+				t.Fatalf("the overtaken Begin = %+v (last %+v), %v; want ErrTransferStale carrying t-1 as aborted", late, late.LastTransfer, err)
+			}
+			if hold, found := slotAt(t, cfg, role.AccountID, awaySID); found {
+				t.Fatalf("the overtaken Begin left a hold on the target: %+v", hold)
+			}
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "resent"); err != nil {
+				t.Fatalf("resent Abort: %v", err)
+			}
+			mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
+			mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
+			mustCommit(t, s, role.PlayerID, "t-2")
+			mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+		})
+	}
+}
+
+// 占位刚写完进程就退出（Create 已经生效、应答丢了），而这次换服在占位写入之前已经被中止并收了尾：
+// 留下的占位没有任何在途的换服认它。它不会永久占住目标服的名额——重发的 Abort、这个角色的 SelectRole、
+// 下一次往这个服的 Begin、账号在这个服的建角，谁先到谁把它撤掉；中止的记录已经被后来的了结覆盖时，
+// 后两个入口仍然能撤。撤的时候存储失败，下一个入口再撤。
+func TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry(t *testing.T) {
+	ctx := context.Background()
+	// forgotten：占位写下之前，中止的记录已经被另一次了结换掉（这里是中止一个没发起过的 ID），
+	// 角色记录不再指向那个目标服。
+	strand := func(t *testing.T, forgotten bool) (*Service, Config, Role, Session, *gatedSlots) {
+		t.Helper()
+		s, cfg, role, session, slots := gatedTransferFixture(t, false, true)
+		finish := stalledBegin(t, s, slots, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-1", awaySID))
+		if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "begin timed out"); err != nil {
+			t.Fatalf("Abort while Begin is stalled: %v", err)
+		}
+		lastID := "t-1"
+		if forgotten {
+			lastID = "never-began"
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, lastID, "another caller"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := finish(); !errors.Is(err, errInjected) {
+			t.Fatalf("the Begin whose hold reply was lost = %v, want the injected failure", err)
+		}
+		hold, found := slotAt(t, cfg, role.AccountID, awaySID)
+		last := storedRole(t, cfg, role.PlayerID).Value.LastTransfer
+		if !found || hold.TransferID != "t-1" || last == nil || last.ID != lastID || last.Committed || !last.Settled {
+			t.Fatalf("the fixture must strand the hold of the aborted t-1 with %s settled: slot %+v (found %v), last %+v", lastID, hold, found, last)
+		}
+		return s, cfg, role, session, slots
+	}
+	stranded := func(t *testing.T) (*Service, Config, Role, Session, *gatedSlots) {
+		t.Helper()
+		return strand(t, false)
+	}
+	released := func(t *testing.T, s *Service, cfg Config, role Role, session Session) {
+		t.Helper()
+		if hold, found := slotAt(t, cfg, role.AccountID, awaySID); found {
+			t.Fatalf("the stranded hold is still on the target: %+v", hold)
+		}
+		mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
+	}
+
+	t.Run("resent Abort", func(t *testing.T) {
+		s, cfg, role, session, _ := stranded(t)
+		if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "resent"); err != nil {
+			t.Fatal(err)
+		}
+		released(t, s, cfg, role, session)
+	})
+	t.Run("SelectRole", func(t *testing.T) {
+		s, cfg, role, session, _ := stranded(t)
+		if _, err := s.SelectRole(ctx, role.AccountID, role.PlayerID); err != nil {
+			t.Fatal(err)
+		}
+		released(t, s, cfg, role, session)
+	})
+	t.Run("next Begin to the same target", func(t *testing.T) {
+		s, cfg, role, session, _ := stranded(t)
+		mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
+		if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-2" {
+			t.Fatalf("the target slot = %+v (found %v), want the hold of t-2", hold, found)
+		}
+		mustCommit(t, s, role.PlayerID, "t-2")
+		mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+	})
+	t.Run("CreateRole on the target", func(t *testing.T) {
+		s, cfg, role, session, _ := stranded(t)
+		created, err := s.CreateRole(ctx, role.AccountID, awaySID, "Second")
+		if err != nil || created.ServerID != awaySID || created.PlayerID == role.PlayerID {
+			t.Fatalf("CreateRole on the target = %+v, %v; want a new role there", created, err)
+		}
+		mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
+	})
+	t.Run("after the record of the abort was overwritten", func(t *testing.T) {
+		for _, entry := range []string{"Begin", "CreateRole"} {
+			s, cfg, role, session, _ := strand(t, true)
+			if entry == "Begin" {
+				mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
+				mustCommit(t, s, role.PlayerID, "t-2")
+				mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+				continue
+			}
+			if created, err := s.CreateRole(ctx, role.AccountID, awaySID, "Second"); err != nil || created.ServerID != awaySID {
+				t.Fatalf("CreateRole on the target = %+v, %v; want a new role there", created, err)
+			}
+			mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
+		}
+	})
+	t.Run("the release fails and the next entry retries", func(t *testing.T) {
+		s, cfg, role, session, slots := stranded(t)
+		slots.failDelete.Store(true)
+		if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "resent"); !errors.Is(err, errInjected) {
+			t.Fatalf("resent Abort with the slot delete failing = %v, want the injected failure", err)
+		}
+		// 登录不被挡住：撤不掉只是目标服的名额还占着。
+		if _, err := s.SelectRole(ctx, role.AccountID, role.PlayerID); err != nil {
+			t.Fatalf("SelectRole with the slot delete failing: %v", err)
+		}
+		if _, found := slotAt(t, cfg, role.AccountID, awaySID); !found {
+			t.Fatal("the fixture must keep the stranded hold while deletes fail")
+		}
+		slots.failDelete.Store(false)
+		if _, err := s.SelectRole(ctx, role.AccountID, role.PlayerID); err != nil {
+			t.Fatal(err)
+		}
+		released(t, s, cfg, role, session)
+	})
+}
+
+// Begin 停在占位这一步时这次换服被提交了：迟到的 Begin 答 ErrTransferStale 并带回已提交的绑定，
+// 不碰角色在新服的 slot——哪怕提交的收尾还没做完、那个 slot 还带着这次换服的标记。
+func TestABeginOvertakenByACommitKeepsTheCommittedSlot(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		afterWrite bool
+		// openTail：提交的收尾（清标记、删旧 slot）失败，新服的 slot 仍带着 TransferID。
+		openTail bool
+	}{
+		{name: "stalled before the hold write", afterWrite: false},
+		{name: "stalled after the hold write", afterWrite: true},
+		{name: "stalled after the hold write, commit tail open", afterWrite: true, openTail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, cfg, role, session, slots := gatedTransferFixture(t, tc.afterWrite, false)
+			finish := stalledBegin(t, s, slots, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-1", awaySID))
+			if tc.openTail {
+				slots.failUpdate.Store(true)
+				slots.failDelete.Store(true)
+				if _, err := s.CommitRoleTransfer(ctx, role.PlayerID, "t-1"); !errors.Is(err, errInjected) {
+					t.Fatalf("Commit with the slot writes failing = %v, want the injected failure", err)
+				}
+				slots.failUpdate.Store(false)
+				slots.failDelete.Store(false)
+				if marked, found := slotAt(t, cfg, role.AccountID, awaySID); !found || marked.TransferID != "t-1" {
+					t.Fatalf("the fixture must leave the committed slot marked: %+v (found %v)", marked, found)
+				}
+			} else {
+				mustCommit(t, s, role.PlayerID, "t-1")
+			}
+			late, err := finish()
+			if !errors.Is(err, ErrTransferStale) || late.ServerID != awaySID || late.BindEpoch != 1 || late.Transfer != nil ||
+				late.LastTransfer == nil || late.LastTransfer.ID != "t-1" || !late.LastTransfer.Committed {
+				t.Fatalf("the overtaken Begin = %+v (last %+v), %v; want ErrTransferStale carrying the committed binding", late, late.LastTransfer, err)
+			}
+			if slot, found := slotAt(t, cfg, role.AccountID, awaySID); !found || slot.PlayerID != role.PlayerID || slot.BindEpoch != 1 {
+				t.Fatalf("the overtaken Begin disturbed the committed slot: %+v (found %v)", slot, found)
+			}
+			if validated, err := s.ValidateSession(ctx, role.PlayerID, session.Token); err != nil || validated.ServerID != awaySID {
+				t.Fatalf("ValidateSession after the overtaken Begin = %+v, %v; want server %d", validated, err, awaySID)
+			}
+			mustCommit(t, s, role.PlayerID, "t-1") // 重发补完收尾（没有未完的收尾时是回放）
+			mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+			if stored := storedRole(t, cfg, role.PlayerID).Value; stored.Transfer != nil || !stored.LastTransfer.Settled {
+				t.Fatalf("role after the resent Commit = %+v (last %+v)", stored, stored.LastTransfer)
+			}
+		})
+	}
+}
+
+// Commit 也会写占位（Begin 停在占位之前时由它补上）。它停在这一步时这次换服被中止了：迟到的 Commit 答
+// ErrTransferStale，把自己刚补的占位撤掉；占位写完进程就退出的，下一个入口撤。
+func TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name                  string
+		afterWrite, loseReply bool
+	}{
+		{name: "stalled before the hold write"},
+		{name: "stalled after the hold write", afterWrite: true},
+		{name: "the hold reply is lost", loseReply: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, cfg, role, session, slots := gatedTransferFixture(t, tc.afterWrite, tc.loseReply)
+			slots.failCreate.Store(true)
+			if _, err := s.BeginRoleTransfer(ctx, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-1", awaySID)); !errors.Is(err, errInjected) {
+				t.Fatalf("Begin with the hold write failing = %v, want the injected failure", err)
+			}
+			slots.failCreate.Store(false)
+			finish := stalledAtHold(t, slots, "Commit t-1", func() (RoleBinding, error) {
+				return s.CommitRoleTransfer(ctx, role.PlayerID, "t-1")
+			})
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "drain timed out"); err != nil {
+				t.Fatalf("Abort while Commit is stalled: %v", err)
+			}
+			late, err := finish()
+			if tc.loseReply {
+				if !errors.Is(err, errInjected) {
+					t.Fatalf("the Commit whose hold reply was lost = %v, want the injected failure", err)
+				}
+				if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-1" {
+					t.Fatalf("the fixture must strand the hold of t-1: %+v (found %v)", hold, found)
+				}
+				if _, err := s.SelectRole(ctx, role.AccountID, role.PlayerID); err != nil {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, ErrTransferStale) || late.ServerID != homeSID || late.Transfer != nil {
+				t.Fatalf("the overtaken Commit = %+v, %v; want ErrTransferStale with the role on %d", late, err, homeSID)
+			}
+			if hold, found := slotAt(t, cfg, role.AccountID, awaySID); found {
+				t.Fatalf("the overtaken Commit left a hold on the target: %+v", hold)
+			}
+			mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
+			mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
+			mustCommit(t, s, role.PlayerID, "t-2")
+			mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+		})
+	}
+}
+
+// Begin 停在占位之前，这次换服被中止，另一次换服随后占了同一个目标服：迟到的 Begin 被拒绝并带回在途的
+// 那一次，新一次的占位原样留着、照常提交。
+func TestABeginOvertakenByAnotherTransferKeepsItsHold(t *testing.T) {
+	s, cfg, role, session, slots := gatedTransferFixture(t, false, false)
+	ctx := context.Background()
+	finish := stalledBegin(t, s, slots, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-1", awaySID))
+	if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "drain timed out"); err != nil {
+		t.Fatal(err)
+	}
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", awaySID))
+	late, err := finish()
+	if !errors.Is(err, ErrTransferInProgress) || late.Transfer == nil || late.Transfer.ID != "t-2" {
+		t.Fatalf("the overtaken Begin = %+v, %v; want ErrTransferInProgress carrying t-2", late, err)
+	}
+	if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-2" {
+		t.Fatalf("the overtaken Begin disturbed the hold of t-2: %+v (found %v)", hold, found)
+	}
+	if stored := storedRole(t, cfg, role.PlayerID).Value; stored.Transfer == nil || stored.Transfer.ID != "t-2" {
+		t.Fatalf("the overtaken Begin disturbed the transfer in flight: %+v", stored.Transfer)
+	}
+	mustCommit(t, s, role.PlayerID, "t-2")
+	mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+}
+
+// 中止过的换服不会因为后来又有别的中止而被忘掉：原样重放最早那个 Begin（它带的绑定代数一直没变），
+// 无论中间隔了几次发起与中止、中止的是不是发起成功的 ID，都答 ErrTransferStale，角色上没有换服、
+// 目标服没有占位；重放它的 Commit 同样被拒。按当前绑定组出来的新请求照常受理，提交与提交的重发照常。
+func TestAnAbortedTransferCannotBeRevivedAfterLaterAborts(t *testing.T) {
+	s, cfg, role, session := transferFixture(t)
+	ctx := context.Background()
+	replayed := []TransferRequest{nextTransfer(t, s, role.PlayerID, "old", awaySID)}
+	mustBegin(t, s, role.PlayerID, replayed[0])
+	if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "old", "cancel"); err != nil {
+		t.Fatal(err)
+	}
+	for round := range 3 {
+		if round == 1 {
+			// 中止一个没发起过的 ID 同样会换掉 LastTransfer。
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "never-began", "begin timed out"); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			request := nextTransfer(t, s, role.PlayerID, fmt.Sprintf("new-%d", round), awaySID)
+			mustBegin(t, s, role.PlayerID, request)
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, request.ID, "cancel"); err != nil {
+				t.Fatal(err)
+			}
+			replayed = append(replayed, request)
+		}
+		for _, request := range replayed {
+			late, err := s.BeginRoleTransfer(ctx, role.PlayerID, request)
+			if !errors.Is(err, ErrTransferStale) || late.ServerID != homeSID || late.Transfer != nil {
+				t.Fatalf("round %d: replayed Begin %s = %+v, %v; want ErrTransferStale with nothing in flight", round, request.ID, late, err)
+			}
+			if stored := storedRole(t, cfg, role.PlayerID).Value; stored.Transfer != nil {
+				t.Fatalf("round %d: replayed Begin %s revived a transfer: %+v", round, request.ID, stored.Transfer)
+			}
+			if hold, found := slotAt(t, cfg, role.AccountID, awaySID); found {
+				t.Fatalf("round %d: replayed Begin %s left a hold: %+v", round, request.ID, hold)
+			}
+			if refused, err := s.CommitRoleTransfer(ctx, role.PlayerID, request.ID); !errors.Is(err, ErrTransferStale) || refused.ServerID != homeSID {
+				t.Fatalf("round %d: replayed Commit %s = %+v, %v; want ErrTransferStale on %d", round, request.ID, refused, err, homeSID)
+			}
+		}
+		mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
+	}
+
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "current", awaySID))
+	mustCommit(t, s, role.PlayerID, "current")
+	if again := mustCommit(t, s, role.PlayerID, "current"); again.ServerID != awaySID || again.BindEpoch != 1 {
+		t.Fatalf("resent Commit of the current transfer = %+v", again)
+	}
+	for _, request := range replayed {
+		if late, err := s.BeginRoleTransfer(ctx, role.PlayerID, request); !errors.Is(err, ErrTransferStale) || late.ServerID != awaySID {
+			t.Fatalf("replayed Begin %s after the commit = %+v, %v; want ErrTransferStale on %d", request.ID, late, err, awaySID)
+		}
+	}
+	mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+}
+
+// “Begin 结果未知时中止这个 ID 拿确定结论”跨后来的中止仍然成立：中止一个没发起过的 ID 之后，哪怕又有
+// 别的 ID 被中止（同样没发起过的，或发起之后中止的），那个迟到的 Begin 也做不起来。两个没发起过的 ID
+// 接连被中止时中间没有任何一次受理的发起：挡住迟到 Begin 的只有“中止也推进 TransferSeq”。
+func TestAbortOfAnUnknownTransferFencesALateBeginAcrossLaterAborts(t *testing.T) {
+	s, cfg, role, session := transferFixture(t)
+	ctx := context.Background()
+	// 两个发起方各自读了绑定、发出了 Begin，结果都未知，于是各自中止。
+	lost := []TransferRequest{nextTransfer(t, s, role.PlayerID, "lost-1", awaySID), nextTransfer(t, s, role.PlayerID, "lost-2", thirdSID)}
+	refuseLate := func(step string) {
+		t.Helper()
+		for _, request := range lost {
+			if late, err := s.BeginRoleTransfer(ctx, role.PlayerID, request); !errors.Is(err, ErrTransferStale) || late.Transfer != nil {
+				t.Fatalf("after %s: the late Begin %s = %+v, %v; want ErrTransferStale", step, request.ID, late, err)
+			}
+			if hold, found := slotAt(t, cfg, role.AccountID, request.To); found {
+				t.Fatalf("after %s: the late Begin %s left a hold: %+v", step, request.ID, hold)
+			}
+		}
+		mustBeBoundTo(t, s, cfg, role, session.Token, homeSID, 0)
+	}
+	for _, request := range lost {
+		if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, request.ID, "the outcome of begin is unknown"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refuseLate("two aborts of ids that never began")
+
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "retry", thirdSID))
+	if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "retry", "leave hook refused"); err != nil {
+		t.Fatal(err)
+	}
+	refuseLate("a later transfer was begun and aborted")
+}
+
+// TransferSeq 是换服尝试的序号：受理一次发起加 1，记下一次中止（含中止没发起过的 ID）加 1；提交、
+// 被拒绝的请求、在途 ID 的重发、已中止 ID 的重发都不改它。发起必须带当前值，带旧值的被拒绝并带回当前值；
+// 在途 ID 的重发不看它。它与 BindEpoch 互不影响：中止不动 BindEpoch，提交不动 TransferSeq。
+func TestTransferSeqAdvancesOnEveryAcceptedBeginAndRecordedAbort(t *testing.T) {
+	s, cfg, role, session := transferFixture(t)
+	ctx := context.Background()
+	expect := func(step string, seq, epoch uint64) {
+		t.Helper()
+		binding, err := s.RoleBinding(ctx, role.PlayerID)
+		if err != nil || binding.TransferSeq != seq || binding.BindEpoch != epoch {
+			t.Fatalf("after %s: transfer seq %d, bind epoch %d (err %v); want %d and %d", step, binding.TransferSeq, binding.BindEpoch, err, seq, epoch)
+		}
+		if stored := storedRole(t, cfg, role.PlayerID).Value; stored.TransferSeq != seq {
+			t.Fatalf("after %s: stored transfer seq %d, want %d", step, stored.TransferSeq, seq)
+		}
+	}
+	expect("creation", 0, 0)
+
+	first := nextTransfer(t, s, role.PlayerID, "t-1", awaySID)
+	if begun := mustBegin(t, s, role.PlayerID, first); begun.TransferSeq != 1 {
+		t.Fatalf("Begin answered transfer seq %d, want 1", begun.TransferSeq)
+	}
+	expect("an accepted Begin", 1, 0)
+	// 在途 ID 的重发：原请求（带的是受理之前的序号）与按新绑定组的请求都是回放，不再加。
+	mustBegin(t, s, role.PlayerID, first)
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-1", awaySID))
+	expect("resent Begins", 1, 0)
+	// 被拒绝的请求不加：另一个 ID（在途）、中止别的 ID（在途的不是它）。
+	if _, err := s.BeginRoleTransfer(ctx, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-other", thirdSID)); !errors.Is(err, ErrTransferInProgress) {
+		t.Fatalf("Begin of another id = %v, want ErrTransferInProgress", err)
+	}
+	if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-other", "not mine"); !errors.Is(err, ErrTransferInProgress) {
+		t.Fatalf("Abort of another id = %v, want ErrTransferInProgress", err)
+	}
+	expect("refused requests", 1, 0)
+
+	if aborted, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "cancel"); err != nil || aborted.TransferSeq != 2 {
+		t.Fatalf("Abort = %+v, %v; want transfer seq 2", aborted, err)
+	}
+	if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "resent"); err != nil {
+		t.Fatal(err)
+	}
+	expect("an abort and its resend", 2, 0)
+	if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "never-began", "begin timed out"); err != nil {
+		t.Fatal(err)
+	}
+	expect("an abort of an id that never began", 3, 0)
+
+	// 带旧序号的请求被拒绝，带回的绑定给出当前值；按它重发就受理。
+	stale := TransferRequest{ID: "t-2", FromSID: homeSID, To: awaySID, ExpectSeq: 2}
+	refused, err := s.BeginRoleTransfer(ctx, role.PlayerID, stale)
+	if !errors.Is(err, ErrTransferStale) || refused.TransferSeq != 3 || refused.Transfer != nil {
+		t.Fatalf("Begin with an old transfer seq = %+v, %v; want ErrTransferStale carrying seq 3", refused, err)
+	}
+	expect("a stale Begin", 3, 0)
+	stale.ExpectSeq = refused.TransferSeq
+	mustBegin(t, s, role.PlayerID, stale)
+	expect("the Begin with the current seq", 4, 0)
+	if committed := mustCommit(t, s, role.PlayerID, "t-2"); committed.TransferSeq != 4 || committed.BindEpoch != 1 {
+		t.Fatalf("Commit = %+v, want transfer seq 4 at bind epoch 1", committed)
+	}
+	mustCommit(t, s, role.PlayerID, "t-2")
+	expect("a commit and its resend", 4, 1)
+	mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+}
+
+// 占不到名额而撤回的发起（ErrRoleLimit）不把 TransferSeq 退回去：那个请求已经用掉了它带的序号，
+// 名额让出来之后原样重放它也不会被受理，要重读绑定。
+func TestAWithdrawnBeginKeepsItsTransferSeq(t *testing.T) {
+	s, cfg, role, session, slots := gatedTransferFixture(t, false, false)
+	ctx := context.Background()
+	request := nextTransfer(t, s, role.PlayerID, "t-1", awaySID)
+	finish := stalledBegin(t, s, slots, role.PlayerID, request)
+	// Begin 停在占位之前：账号在目标服建了一个角色，名额没了。
+	second, err := s.CreateRole(ctx, role.AccountID, awaySID, "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := finish(); !errors.Is(err, ErrRoleLimit) {
+		t.Fatalf("Begin against a taken target = %v, want ErrRoleLimit", err)
+	}
+	stored := storedRole(t, cfg, role.PlayerID).Value
+	if stored.Transfer != nil || stored.LastTransfer != nil || stored.TransferSeq != 1 {
+		t.Fatalf("role after the withdrawn Begin = %+v (transfer %+v, last %+v); want nothing in flight, no record, transfer seq 1", stored, stored.Transfer, stored.LastTransfer)
+	}
+	if slot, found := slotAt(t, cfg, role.AccountID, awaySID); !found || slot.PlayerID != second.PlayerID || slot.TransferID != "" {
+		t.Fatalf("the withdrawn Begin disturbed the slot of the new role: %+v (found %v)", slot, found)
+	}
+	if _, err := s.BeginRoleTransfer(ctx, role.PlayerID, request); !errors.Is(err, ErrTransferStale) {
+		t.Fatalf("the withdrawn Begin replayed = %v, want ErrTransferStale", err)
+	}
+	mustBegin(t, s, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-2", thirdSID))
+	mustCommit(t, s, role.PlayerID, "t-2")
+	mustBeBoundTo(t, s, cfg, role, session.Token, thirdSID, 1)
+}
+
+// 一次已经中止的换服迟到写下的占位，不会把后来在途的那一次挤掉：后一次换服的 Begin 停在占位之前
+// （占位写入失败），前一次的占位这时才落地、写它的进程随即退出。重发后一次的 Begin、或直接 Commit，
+// 都先撤掉那个没有人认的占位再占自己的，而不是答“名额被占”并把在途的换服撤回。
+func TestAStrayHoldDoesNotDisplaceTheTransferInFlight(t *testing.T) {
+	ctx := context.Background()
+	for _, entry := range []string{"resent Begin", "Commit"} {
+		t.Run(entry, func(t *testing.T) {
+			s, cfg, role, session, slots := gatedTransferFixture(t, false, true)
+			finish := stalledBegin(t, s, slots, role.PlayerID, nextTransfer(t, s, role.PlayerID, "t-1", awaySID))
+			if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "begin timed out"); err != nil {
+				t.Fatal(err)
+			}
+			second := nextTransfer(t, s, role.PlayerID, "t-2", awaySID)
+			slots.failCreate.Store(true)
+			if _, err := s.BeginRoleTransfer(ctx, role.PlayerID, second); !errors.Is(err, errInjected) {
+				t.Fatalf("Begin t-2 with the hold write failing = %v, want the injected failure", err)
+			}
+			slots.failCreate.Store(false)
+			if _, err := finish(); !errors.Is(err, errInjected) {
+				t.Fatalf("the Begin whose hold reply was lost = %v, want the injected failure", err)
+			}
+			hold, found := slotAt(t, cfg, role.AccountID, awaySID)
+			stored := storedRole(t, cfg, role.PlayerID).Value
+			if !found || hold.TransferID != "t-1" || stored.Transfer == nil || stored.Transfer.ID != "t-2" {
+				t.Fatalf("the fixture must leave the stray hold of t-1 under t-2 in flight: slot %+v (found %v), transfer %+v", hold, found, stored.Transfer)
+			}
+
+			if entry == "Commit" {
+				mustCommit(t, s, role.PlayerID, "t-2")
+			} else {
+				mustBegin(t, s, role.PlayerID, second)
+				if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-2" {
+					t.Fatalf("the target slot after the resent Begin = %+v (found %v), want the hold of t-2", hold, found)
+				}
+				mustCommit(t, s, role.PlayerID, "t-2")
+			}
+			mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+		})
+	}
+}
+
+// 占位按“这次换服提交之后的那一代绑定”认：ID 与角色都对、代数不对的占位不是这次换服的，不能拿来用——
+// 提交之后它与角色的绑定代数对不上，角色就没有可用的 slot 了。这个状态正常流程写不出来（代数不变时
+// 同一个 ID 的占位内容相同），这里直接往存储里放一个，确认 Begin 把它换成对的。
+func TestAHoldOfAnotherBindGenerationIsReplaced(t *testing.T) {
+	s, cfg, role, session, slots, _ := faultyTransferFixture(t)
+	ctx := context.Background()
+	request := nextTransfer(t, s, role.PlayerID, "t-1", awaySID)
+	slots.failCreate.Store(true)
+	if _, err := s.BeginRoleTransfer(ctx, role.PlayerID, request); !errors.Is(err, errInjected) {
+		t.Fatalf("Begin with the hold write failing = %v, want the injected failure", err)
+	}
+	slots.failCreate.Store(false)
+	source, _ := slotAt(t, cfg, role.AccountID, homeSID)
+	wrong := Slot{AccountID: role.AccountID, ServerID: awaySID, PlayerID: role.PlayerID, Creation: source.Creation, TransferID: "t-1", BindEpoch: 7}
+	if _, created, err := cfg.Slots.Create(ctx, slotKeyFor(role.AccountID, awaySID), wrong); err != nil || !created {
+		t.Fatalf("arrange a hold of another generation: created=%v err=%v", created, err)
+	}
+	mustBegin(t, s, role.PlayerID, request)
+	if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-1" || hold.BindEpoch != 1 {
+		t.Fatalf("the target slot = %+v (found %v), want the hold of t-1 for bind epoch 1", hold, found)
+	}
+	mustCommit(t, s, role.PlayerID, "t-1")
+	mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
 }

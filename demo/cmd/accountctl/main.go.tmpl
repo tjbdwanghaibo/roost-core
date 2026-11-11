@@ -140,9 +140,10 @@ func showRole(ctx context.Context, service roleTransfers, args []string) (svcacc
 // transferRole runs one step of a manual role transfer.
 //
 // begin reads the current binding and presents it back (the serving server
-// as the source, the bind epoch as the expected one): the operator is not a
-// game process and has no view of its own to assert, so the compare-and-set
-// protects against the role moving between the read and the write. Without
+// as the source, the bind epoch and the transfer seq as the expected ones):
+// the operator is not a game process and has no view of its own to assert, so
+// the compare-and-set protects against the role moving, or another transfer
+// being begun or aborted, between the read and the write. Without
 // -id a random one is minted; it is in the printed binding and is what
 // commit / abort take.
 //
@@ -182,7 +183,8 @@ func transferRole(ctx context.Context, service roleTransfers, args []string) (sv
 			*id = "ctl-" + rand.Text()
 		}
 		return service.BeginRoleTransfer(ctx, *player, svcaccount.TransferRequest{
-			ID: *id, FromSID: current.ServingServerID, To: int32(*to), ExpectEpoch: current.BindEpoch, TTLSeconds: *ttl, Note: *note,
+			ID: *id, FromSID: current.ServingServerID, To: int32(*to), ExpectEpoch: current.BindEpoch, ExpectSeq: current.TransferSeq,
+			TTLSeconds: *ttl, Note: *note,
 		})
 	case "commit", "abort":
 		if strings.TrimSpace(*id) == "" {

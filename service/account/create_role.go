@@ -25,12 +25,23 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 	// At most one release per call: a second pass that still meets another
 	// name met a plan some other request just made, which is a live one.
 	released := false
+	// 换服占位同样至多看一次：没有角色记录认的撤掉重来，有人认的按名额已占回答。
+	holdChecked := false
 	for {
 		slot, found, err := s.cfg.Slots.Get(ctx, key)
 		if err != nil {
 			return Role{}, err
 		}
 		state := classifySlot(slot, found, accountID, serverID)
+		if state == slotTransferHold && !holdChecked {
+			// 一次已经了结的换服迟到写下的占位（transfer.go 的 releaseStrayHold）不该挡住建角：挡住的话
+			// 只有那个角色自己的入口能撤它，而账号在这个服建角恰恰是被它卡住的那一方。
+			holdChecked = true
+			if err := s.releaseStrayHold(ctx, key); err != nil {
+				return Role{}, err
+			}
+			continue
+		}
 		action := decideCreation(state, creationEntryFor(slot.Value, name), nameNotRead)
 		if action == actMakePlan {
 			// The stored plan — this request's, or a concurrent one's that won

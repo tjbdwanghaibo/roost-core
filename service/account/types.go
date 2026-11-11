@@ -325,11 +325,18 @@ type Role struct {
 	LastLoginAtUnix  int64  `json:"last_login_at_unix"`
 	LastLogoutAtUnix int64  `json:"last_logout_at_unix"`
 
-	// 单个角色换服（transfer.go）。下面三个字段只由 Begin / Commit / AbortRoleTransfer 写。
+	// 单个角色换服（transfer.go）。下面四个字段只由 Begin / Commit / AbortRoleTransfer 写。
 	//
 	// BindEpoch 是绑定的代数：建角时 0，每次换服提交加 1（Begin 与 Abort 不改）。调用方凭它说明
 	// “我看到的是哪一版绑定”（TransferRequest.ExpectEpoch），slot 也记着自己属于哪一代（Slot.BindEpoch）。
 	BindEpoch uint64 `json:"bind_epoch,omitempty"`
+	// TransferSeq 是换服尝试的序号：建角时 0，每受理一次发起加 1，每记下一次中止（含中止一个没发起过的
+	// ID）再加 1，只增不减；提交、被拒绝的请求、同一个在途 ID 的重发不改它。发起必须带上读到的值
+	// （TransferRequest.ExpectSeq）：一个请求发出之后只要有任何一次发起或中止落了地，它就不再能发起。
+	// 这一条不靠 LastTransfer——那里只留最近一次了结的换服，更早中止的 ID 在记录上已经看不到。
+	// 它与 BindEpoch 分开：BindEpoch 说的是绑定换没换（会话 claim、slot、游戏侧“换回来了”都按它判断），
+	// 中止不改绑定，所以不能动它。
+	TransferSeq uint64 `json:"transfer_seq,omitempty"`
 	// Transfer 非空表示换服在途：它是“这个角色正在换服”的唯一持久事实。在途期间 ServerID 仍是源服，
 	// 角色照常可登录（是否放行由 game 侧按 TransferClaim 决定）。
 	Transfer *RoleTransfer `json:"transfer,omitempty"`
@@ -356,7 +363,8 @@ func cloneOf[T any](value *T) *T {
 
 // RoleTransfer 是一次在途的换服（Role.Transfer）。
 type RoleTransfer struct {
-	// ID 由发起方给出，一次换服一个，了结之后不能复用（BeginRoleTransfer 对刚了结的 ID 答 ErrTransferStale）。
+	// ID 由发起方给出，一次换服一个，了结之后不要复用。account 拒绝重新发起刚了结的那个 ID；更早的
+	// 请求由 Role.TransferSeq 挡住（它们带的序号已经过期），不靠记住每一个用过的 ID。
 	ID string `json:"id"`
 	// From 是发起时的绑定服，To 是目标服。
 	From int32 `json:"from"`
@@ -382,9 +390,13 @@ type RoleTransferRecord struct {
 	AtUnix int64  `json:"at_unix"`
 	// Note 是了结时的说明：中止的原因；提交时是发起时的备注，或人工提交时操作者的备注。
 	Note string `json:"note,omitempty"`
-	// Settled 为 true 表示这次换服在 slot 上的收尾已经做完（提交：清掉新服 slot 的占位标记、删掉旧服的
+	// Settled 为 true 表示这次换服在 slot 上的收尾已经做过（提交：清掉新服 slot 的占位标记、删掉旧服的
 	// slot；中止：删掉目标服的占位）。角色记录先定结果、slot 后收尾，两步之间停下时它是 false：重发的
 	// Commit / Abort、下一次 SelectRole 或 Begin 读到就补完。
+	//
+	// 对已中止的换服，它只说明“中止当时撤过一次”，不说明以后不会再冒出占位：一个停在占位写入之前的
+	// Begin 可能在收尾之后才把占位写下去。所以上面那几个入口对已中止的记录每次都再看一眼目标服
+	// （settleTransfer），不因为 Settled 跳过。
 	Settled bool `json:"settled,omitempty"`
 }
 
@@ -396,6 +408,8 @@ type RoleBinding struct {
 	ServerID        int32  `json:"server_id"`
 	ServingServerID int32  `json:"serving_server_id"`
 	BindEpoch       uint64 `json:"bind_epoch"`
+	// TransferSeq 是换服尝试的序号（Role.TransferSeq）。发起时原样带回去（TransferRequest.ExpectSeq）。
+	TransferSeq uint64 `json:"transfer_seq"`
 	// Transfer 非空表示换服在途（此时 ServerID 仍是源服）。
 	Transfer     *RoleTransfer       `json:"transfer,omitempty"`
 	LastTransfer *RoleTransferRecord `json:"last_transfer,omitempty"`
@@ -410,6 +424,10 @@ type TransferRequest struct {
 	To      int32 `json:"to"`
 	// ExpectEpoch 是发起方看到的 BindEpoch。
 	ExpectEpoch uint64 `json:"expect_epoch"`
+	// ExpectSeq 是发起方看到的 TransferSeq（RoleBinding.TransferSeq）。与 ExpectEpoch 一样必须是当前值，
+	// 否则答 ErrTransferStale 并带回当前绑定：读到绑定之后有别的发起或中止落了地，这个请求已经过期，
+	// 重读绑定再发起。0 不是“不检查”。同一个在途 ID 的重发不看这两个字段。
+	ExpectSeq uint64 `json:"expect_seq"`
 	// TTLSeconds 决定 RoleTransfer.DeadlineUnix；0 取 DefaultTransferTTL，负数或超过 MaxTransferTTL 拒绝。
 	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
 	// Note 可空，长度上限同 MaxAdminNoteBytes。

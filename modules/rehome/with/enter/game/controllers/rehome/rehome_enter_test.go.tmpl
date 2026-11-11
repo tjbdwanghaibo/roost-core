@@ -184,9 +184,26 @@ func TestWithRehomeEnterClearsAnIntentWhoseTransferNeverHappened(t *testing.T) {
 	if binding.ServerID != 1000 || binding.Transfer != nil || binding.LastTransfer == nil || binding.LastTransfer.ID != "lost-1" || binding.LastTransfer.Committed {
 		t.Fatalf("account binding = %+v (last %+v), want lost-1 recorded as aborted", binding, binding.LastTransfer)
 	}
-	// 一个迟到的发起不能再把它做起来。
-	if _, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, svcaccount.TransferRequest{ID: "lost-1", FromSID: 1000, To: 1001}); !errors.Is(err, svcaccount.ErrTransferStale) {
+	// 一个迟到的发起不能再把它做起来。它带的是崩溃之前读到的绑定（那时还没有任何换服，代数与序号都是 0）。
+	lost := svcaccount.TransferRequest{ID: "lost-1", FromSID: 1000, To: 1001}
+	if _, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, lost); !errors.Is(err, svcaccount.ErrTransferStale) {
 		t.Fatalf("a late begin of lost-1: err = %v, want refused as stale", err)
+	}
+	// 这个结论不会因为后来又有别的中止而失效：运维在 account 上发起又中止了一次，account 记着的“最近一次了结”
+	// 换成了别的 ID；那个迟到的发起照样做不起来，account 上没有换服在途、目标服的名额没有被占住。
+	if _, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, svcaccount.TransferRequest{
+		ID: "ops-2", FromSID: 1000, To: 1001, ExpectEpoch: binding.BindEpoch, ExpectSeq: binding.TransferSeq,
+	}); err != nil {
+		t.Fatalf("begin ops-2: %v", err)
+	}
+	if _, err := w.accounts.AbortRoleTransfer(context.Background(), w.playerID, "ops-2", "changed their mind"); err != nil {
+		t.Fatalf("abort ops-2: %v", err)
+	}
+	if late, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, lost); !errors.Is(err, svcaccount.ErrTransferStale) || late.Transfer != nil {
+		t.Fatalf("a late begin of lost-1 after another transfer was aborted: binding = %+v, err = %v; want refused as stale", late, err)
+	}
+	if after := w.binding(); after.ServerID != 1000 || after.Transfer != nil || after.LastTransfer == nil || after.LastTransfer.ID != "ops-2" {
+		t.Fatalf("account binding = %+v (last %+v), want nothing in flight and ops-2 as the last settled transfer", after, after.LastTransfer)
 	}
 	if response := w.apply(restarted, rehomeTargetSID); response.Code != 0 {
 		t.Fatalf("applying after the reconciliation: %+v", response)

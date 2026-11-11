@@ -91,7 +91,8 @@ func TestTransferRoleBeginThenCommitMovesTheRole(t *testing.T) {
 	}
 }
 
-// abort 把角色留在源服，备注作为原因留在记录上；用过的 ID 不能再提交。
+// abort 把角色留在源服，备注作为原因留在记录上；用过的 ID 不能再提交。中止之后再 begin 照常：
+// begin 带的是读到的换服尝试序号（中止之后它变了），不是零值。
 func TestTransferRoleAbortKeepsTheRoleAndRecordsWhy(t *testing.T) {
 	ctx := context.Background()
 	service, role := accountWithRole(t)
@@ -106,6 +107,10 @@ func TestTransferRoleAbortKeepsTheRoleAndRecordsWhy(t *testing.T) {
 	}
 	if _, err := transferRole(ctx, service, []string{"commit", "-player", player, "-id", "move-1", "-note", "too late"}); !errors.Is(err, svcaccount.ErrTransferStale) {
 		t.Fatalf("transfer-role commit of an aborted id = %v, want ErrTransferStale", err)
+	}
+	again, err := transferRole(ctx, service, []string{"begin", "-player", player, "-to", strconv.Itoa(targetSID), "-id", "move-2", "-note", "ticket 4713"})
+	if err != nil || again.Transfer == nil || again.Transfer.ID != "move-2" || again.TransferSeq != aborted.TransferSeq+1 {
+		t.Fatalf("transfer-role begin after the abort = %+v, %v; want move-2 in flight one transfer seq after the abort (%d)", again, err, aborted.TransferSeq)
 	}
 }
 

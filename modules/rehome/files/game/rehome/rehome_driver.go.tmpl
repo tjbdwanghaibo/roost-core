@@ -195,8 +195,10 @@ func (d *Driver) Apply(ctx context.Context, request Request) (Ticket, error) {
 		d.withdraw(ctx, move, true)
 		return Ticket{}, err
 	}
+	// 发起带上开头读到的绑定代数与换服尝试序号：读到之后 account 上有别的发起或中止落了地，这个请求就过期了
+	// （answerStale）。序号也是“中止拿确定结论”的依据——见 beginUnknown。
 	_, err = d.directory.Begin(ctx, playerID, svcaccount.TransferRequest{
-		ID: move.ID, FromSID: d.self, To: move.To, ExpectEpoch: move.Epoch, Note: request.Note,
+		ID: move.ID, FromSID: d.self, To: move.To, ExpectEpoch: move.Epoch, ExpectSeq: binding.TransferSeq, Note: request.Note,
 	})
 	switch classify(err) {
 	case answerDone:
@@ -233,8 +235,9 @@ func (d *Driver) Resume(move Move) error {
 }
 
 // beginUnknown 处理发起的结果未知：直接中止这个 ID 拿确定结论。account 对一个没发起成的 ID 也接受中止，
-// 并从此不让它再发起，所以中止成了就能肯定地说“没有换服在途”。连中止的结果也不知道时，标记留着，
-// 后台接着问。
+// 并从此不让它再发起，所以中止成了就能肯定地说“没有换服在途”。这个结论不会过期：account 每记下一次中止
+// 就把换服尝试序号加 1，那个迟到的发起带的是旧序号，之后这名玩家再换几次服、再中止几次，它都发起不了。
+// 连中止的结果也不知道时，标记留着，后台接着问。
 func (d *Driver) beginUnknown(ctx context.Context, move Move, beginErr error) error {
 	aborting, cancel := context.WithTimeout(context.WithoutCancel(ctx), callBudget)
 	_, abortErr := d.directory.Abort(aborting, move.PlayerID, move.ID, "the outcome of begin is unknown")

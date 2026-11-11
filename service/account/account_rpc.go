@@ -76,15 +76,19 @@ type Accounts interface {
 	// 方法相同。运维的人工兜底走 accountctl（Admin.CommitRoleTransferWithNote）。
 
 	// RoleBinding returns where a role is bound right now: its server, the
-	// server that serves it, the bind epoch, and the transfer in flight or
-	// last settled. Read-only.
+	// server that serves it, the bind epoch, the transfer seq, and the
+	// transfer in flight or last settled. Read-only.
 	RoleBinding(ctx context.Context, playerID int64) (binding RoleBinding, err error)
 
 	// BeginRoleTransfer records a transfer of the role to request.To and
 	// holds the account's slot there. The role stays bound to, and playable
 	// on, its current server until CommitRoleTransfer. Idempotent per
-	// request.ID. A refusal with ErrTransferStale or ErrTransferInProgress
-	// carries the current binding.
+	// request.ID. The request presents the bind epoch and the transfer seq
+	// the caller read (RoleBinding); once any transfer was begun or aborted
+	// after that read it is stale, so a replayed Begin cannot revive a
+	// transfer that was aborted. A refusal with ErrTransferStale or
+	// ErrTransferInProgress carries the current binding — also when this
+	// transfer was aborted or committed while Begin was placing the hold.
 	BeginRoleTransfer(ctx context.Context, playerID int64, request TransferRequest) (binding RoleBinding, err error)
 
 	// CommitRoleTransfer rebinds the role to the transfer's target and bumps
@@ -95,8 +99,10 @@ type Accounts interface {
 
 	// AbortRoleTransfer abandons a transfer: the role stays on its server,
 	// the hold is released, and the id can neither commit nor begin again.
-	// Idempotent per transferID; ErrTransferStale (with the committed
-	// binding) when that transfer already committed.
+	// Every recorded abort advances the transfer seq, so no Begin sent
+	// before it can be accepted afterwards. Idempotent per transferID;
+	// ErrTransferStale (with the committed binding) when that transfer
+	// already committed.
 	AbortRoleTransfer(ctx context.Context, playerID int64, transferID string, reason string) (binding RoleBinding, err error)
 }
 

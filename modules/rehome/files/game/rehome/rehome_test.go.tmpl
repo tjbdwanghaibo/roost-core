@@ -153,7 +153,7 @@ func newRehomeFixture(t *testing.T) *rehomeFixture {
 	})
 	f := &rehomeFixture{events: &rehomeEvents{}, now: time.Unix(1_800_000_000, 0)}
 	f.directory = &rehomeDirectory{events: f.events, binding: svcaccount.RoleBinding{
-		PlayerID: rehomePlayer, ServerID: rehomeSelf, ServingServerID: rehomeSelf, BindEpoch: 3,
+		PlayerID: rehomePlayer, ServerID: rehomeSelf, ServingServerID: rehomeSelf, BindEpoch: 3, TransferSeq: 5,
 	}}
 	f.profile = &rehomeProfile{events: f.events}
 	f.residency = NewLocalResidency(nil)
@@ -250,7 +250,8 @@ func TestRehomeApplyWalksEveryStepInOrder(t *testing.T) {
 	if len(checked) != 1 || checked[0] != wantMove || len(f.profile.prepared) != 1 || f.profile.prepared[0] != wantMove {
 		t.Fatalf("the check saw %+v and prepare %+v, want both %+v", checked, f.profile.prepared, wantMove)
 	}
-	if want := (svcaccount.TransferRequest{ID: "t-1", FromSID: 1000, To: 1001, ExpectEpoch: 3, Note: "ticket 4711"}); f.directory.begun != want {
+	// 发起带的是开头读到的绑定代数与换服尝试序号。
+	if want := (svcaccount.TransferRequest{ID: "t-1", FromSID: 1000, To: 1001, ExpectEpoch: 3, ExpectSeq: 5, Note: "ticket 4711"}); f.directory.begun != want {
 		t.Fatalf("begin request = %+v, want %+v", f.directory.begun, want)
 	}
 	if where, tracked := f.residency.Where(rehomePlayer); !tracked || !where.Moving || where.Move != wantMove {

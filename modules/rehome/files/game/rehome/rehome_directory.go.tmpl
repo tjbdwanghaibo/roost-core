@@ -14,10 +14,13 @@ import (
 // 因为四个方法就是它的四个接口，含义、幂等与拒绝都以它为准（service/account/transfer.go）：
 //
 //   - Binding：只读。角色不存在是 svcaccount.ErrRoleMissing。
-//   - Begin：登记换服并占住目标服的名额，同一个换服 ID 重发幂等。拒绝时什么都没写。
+//   - Begin：登记换服并占住目标服的名额，同一个换服 ID 重发幂等。拒绝时什么都没写。请求带着读到的绑定代数与
+//     换服尝试序号（RoleBinding 的 BindEpoch / TransferSeq）；读到之后有别的发起或中止落了地就答
+//     svcaccount.ErrTransferStale，重读绑定再来。发起之后这一次已被中止或提交的，同样答它并带回当前绑定。
 //   - Commit：改绑到目标服。调用方保证源服已经不再写这名玩家。同一个 ID 重发幂等；
 //     答 svcaccount.ErrTransferStale 表示这个 ID 已被中止或不认识——没有改绑。
-//   - Abort：玩家留在源服，这个 ID 从此不能再提交、也不能再发起。同一个 ID 重发幂等，没发起成的 ID 也可以中止；
+//   - Abort：玩家留在源服，这个 ID 从此不能再提交、也不能再发起——中止之前发出的发起从此都过期，
+//     不论之后又有多少次换服。同一个 ID 重发幂等，没发起成的 ID 也可以中止；
 //     答 svcaccount.ErrTransferStale 表示这个 ID 已经提交——按已提交处理。
 //
 // 不带业务码的错误（超时、总线错误）一律是“结果未知”：请求可能已经生效。
