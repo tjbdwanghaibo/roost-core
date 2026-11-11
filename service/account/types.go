@@ -39,6 +39,7 @@ package account
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -86,6 +87,12 @@ const (
 	// does in stored data. Distinct from CodeServerInvalid because the
 	// servers exist and the refusal is about their arrangement.
 	CodeServerMergeCycle int32 = 560117
+	// CodeTransferStale 与 CodeTransferInProgress 属于单个角色换服（transfer.go）。前者是“调用方手里的
+	// 绑定或换服 ID 已经不是当前的”（epoch 对不上、发起的服不是承载服、这个 ID 已经了结），后者是
+	// “这个角色正有另一次换服在途”。与 CodeConflict 分开：CodeConflict 是可以原样重试的存储竞争，这两个
+	// 要调用方先重读绑定（RoleBinding）再决定。
+	CodeTransferStale      int32 = 560118
+	CodeTransferInProgress int32 = 560119
 )
 
 var (
@@ -123,6 +130,12 @@ var (
 	// second one means the records were edited by hand or two merges raced,
 	// and the role is refused rather than routed to a guess.
 	ErrServerMergeCycle = errcode.Define(CodeServerMergeCycle, "account: server merge alias would form a chain or cycle", "")
+	// ErrTransferStale：调用方对这个角色绑定的认识已经过期——BeginRoleTransfer 的 ExpectEpoch 不是当前
+	// BindEpoch、FromSID 不是当前承载服、换服 ID 已经了结；CommitRoleTransfer 遇到已中止或不认识的 ID；
+	// AbortRoleTransfer 遇到已提交的 ID。返回它的接口同时带回当前的 RoleBinding，调用方按它处理。
+	ErrTransferStale = errcode.Define(CodeTransferStale, "account: role binding or transfer id is stale", "")
+	// ErrTransferInProgress：这个角色正有另一次换服在途（另一个 ID，或同一个 ID 但目标不同）。
+	ErrTransferInProgress = errcode.Define(CodeTransferInProgress, "account: another role transfer is in progress", "")
 )
 
 // Error maps an error to the code and reason a client sees.
@@ -291,8 +304,11 @@ type Role struct {
 	// service. It is the role's identity everywhere else in the system.
 	PlayerID  int64  `json:"player_id"`
 	AccountID string `json:"account_id"`
-	// ServerID 是原服：建角时写定、之后不变，slot 与名字都按它。显示原服标识、日志、按服的业务数据
-	// 归属用它；决定由哪个 game 进程承载、往哪里路由用 ServingServerID。
+	// ServerID 是当前绑定服：建角时写定，只有 CommitRoleTransfer（transfer.go，单个角色换服）会改它，
+	// slot 按它（accountID@ServerID）。没有换过服的角色它就是建角服；account 不另存建角服（名字目录
+	// 不分服，换服不改名）。它与别名合服无关：合服不改 ServerID，绑定服并入另一服时由 ServingServerID
+	// 给出承载服。显示原服标识、日志、按服的业务数据归属用它；决定由哪个 game 进程承载、往哪里路由用
+	// ServingServerID。
 	ServerID int32 `json:"server_id"`
 	// ServingServerID 是承载服：原服没有合服时等于 ServerID，原服已并入另一服（GameServer.MergedInto）
 	// 时是那个服。它不是存储字段：存储里的角色记录总是 0，ValidateSession、SelectRole、CreateRole、
@@ -308,23 +324,110 @@ type Role struct {
 	CreatedAtUnix    int64  `json:"created_at_unix"`
 	LastLoginAtUnix  int64  `json:"last_login_at_unix"`
 	LastLogoutAtUnix int64  `json:"last_logout_at_unix"`
+
+	// 单个角色换服（transfer.go）。下面三个字段只由 Begin / Commit / AbortRoleTransfer 写。
+	//
+	// BindEpoch 是绑定的代数：建角时 0，每次换服提交加 1（Begin 与 Abort 不改）。调用方凭它说明
+	// “我看到的是哪一版绑定”（TransferRequest.ExpectEpoch），slot 也记着自己属于哪一代（Slot.BindEpoch）。
+	BindEpoch uint64 `json:"bind_epoch,omitempty"`
+	// Transfer 非空表示换服在途：它是“这个角色正在换服”的唯一持久事实。在途期间 ServerID 仍是源服，
+	// 角色照常可登录（是否放行由 game 侧按 TransferClaim 决定）。
+	Transfer *RoleTransfer `json:"transfer,omitempty"`
+	// LastTransfer 是最近一次了结（提交或中止）的换服，Commit / Abort 重发时据此回放。
+	LastTransfer *RoleTransferRecord `json:"last_transfer,omitempty"`
 }
 
 // clone transfers the mutable profile to the caller without exposing storage.
+// 换服的两条记录也复制一份：存储里的值从不原地改，调用方拿到的也不与存储共享。
 func (r Role) clone() Role {
 	r.Profile = append([]byte(nil), r.Profile...)
+	r.Transfer = cloneOf(r.Transfer)
+	r.LastTransfer = cloneOf(r.LastTransfer)
 	return r
+}
+
+func cloneOf[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+// RoleTransfer 是一次在途的换服（Role.Transfer）。
+type RoleTransfer struct {
+	// ID 由发起方给出，一次换服一个，了结之后不能复用（BeginRoleTransfer 对刚了结的 ID 答 ErrTransferStale）。
+	ID string `json:"id"`
+	// From 是发起时的绑定服，To 是目标服。
+	From int32 `json:"from"`
+	To   int32 `json:"to"`
+	// Epoch 是发起时的 BindEpoch；提交之后角色的 BindEpoch 是 Epoch+1。
+	Epoch         uint64 `json:"epoch"`
+	StartedAtUnix int64  `json:"started_at_unix"`
+	// DeadlineUnix 是发起方给的期限（系统时间）。一期 account 只记录它：不自动中止（account 不知道源服
+	// 卸载到了哪一步），也不拒绝迟到的提交（中途停下一律向前恢复）；过期的换服由运维或游戏侧模块中止。
+	DeadlineUnix int64  `json:"deadline_unix"`
+	Note         string `json:"note,omitempty"`
+}
+
+// RoleTransferRecord 是最近一次了结的换服（Role.LastTransfer）。
+type RoleTransferRecord struct {
+	ID   string `json:"id"`
+	From int32  `json:"from"`
+	To   int32  `json:"to"`
+	// Committed 为 true 是已提交（角色绑定到 To），false 是已中止（仍绑定 From）。
+	Committed bool `json:"committed"`
+	// Epoch 是了结之后角色的 BindEpoch：提交时是新的一代，中止时不变。提交的收尾按它认旧 slot。
+	Epoch  uint64 `json:"epoch"`
+	AtUnix int64  `json:"at_unix"`
+	// Note 是了结时的说明：中止的原因；提交时是发起时的备注，或人工提交时操作者的备注。
+	Note string `json:"note,omitempty"`
+	// Settled 为 true 表示这次换服在 slot 上的收尾已经做完（提交：清掉新服 slot 的占位标记、删掉旧服的
+	// slot；中止：删掉目标服的占位）。角色记录先定结果、slot 后收尾，两步之间停下时它是 false：重发的
+	// Commit / Abort、下一次 SelectRole 或 Begin 读到就补完。
+	Settled bool `json:"settled,omitempty"`
+}
+
+// RoleBinding 是给 game 的窄读模型：这个角色现在绑定在哪个服、由哪个服承载、是第几代绑定、是否正在换服。
+// 换服的四个接口都返回它；返回 ErrTransferStale / ErrTransferInProgress 时也带回当前值。
+type RoleBinding struct {
+	PlayerID int64 `json:"player_id"`
+	// ServerID 是当前绑定服，ServingServerID 是承载服，含义同 Role 的同名字段。
+	ServerID        int32  `json:"server_id"`
+	ServingServerID int32  `json:"serving_server_id"`
+	BindEpoch       uint64 `json:"bind_epoch"`
+	// Transfer 非空表示换服在途（此时 ServerID 仍是源服）。
+	Transfer     *RoleTransfer       `json:"transfer,omitempty"`
+	LastTransfer *RoleTransferRecord `json:"last_transfer,omitempty"`
+}
+
+// TransferRequest 是 BeginRoleTransfer 的参数。
+type TransferRequest struct {
+	// ID 是这次换服的标识，必填，同一个 ID 重发幂等。
+	ID string `json:"id"`
+	// FromSID 是发起方认为的承载服（源服进程自己的 sid），To 是目标服。
+	FromSID int32 `json:"from_sid"`
+	To      int32 `json:"to"`
+	// ExpectEpoch 是发起方看到的 BindEpoch。
+	ExpectEpoch uint64 `json:"expect_epoch"`
+	// TTLSeconds 决定 RoleTransfer.DeadlineUnix；0 取 DefaultTransferTTL，负数或超过 MaxTransferTTL 拒绝。
+	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+	// Note 可空，长度上限同 MaxAdminNoteBytes。
+	Note string `json:"note,omitempty"`
 }
 
 // Session is what a verified role selection produces.
 type Session struct {
 	PlayerID  int64  `json:"player_id"`
 	AccountID string `json:"account_id"`
-	// ServerID 是角色的原服，ServingServerID 是承载服，含义同 Role 的同名字段。
+	// ServerID 是角色的绑定服，ServingServerID 是承载服，含义同 Role 的同名字段。
 	ServerID        int32  `json:"server_id"`
 	ServingServerID int32  `json:"serving_server_id"`
 	Token           string `json:"token"`
 	ExpiresAtUnix   int64  `json:"expires_at_unix"`
+	// Transfer 非空表示这个角色换服在途（Role.Transfer）。会话照常签发：握手被拒时客户端拿不到原因，
+	// 是否放行、怎么提示由登录入口与 game 的登录端点决定。
+	Transfer *RoleTransfer `json:"transfer,omitempty"`
 }
 
 // ServerIDClaim 是游戏网关的认证器把 ValidateSession 返回的承载服（Role.ServingServerID）记进
@@ -336,9 +439,9 @@ type Session struct {
 // 所以键放在两边本来就依赖的 account 包里：它说的正是 account 返回的那个承载服。
 const ServerIDClaim = "server_id"
 
-// OriginServerIDClaim 是认证器把角色原服（Role.ServerID）记进 Principal.Claims 用的键（十进制 sid），
-// 供业务显示原服标识（例如名字后缀“[A]”，显示规则由业务决定）与按原服归属的数据使用。路由与驻留
-// 不读它，读 ServerIDClaim。没有合服时两个值相同。
+// OriginServerIDClaim 是认证器把角色的绑定服（Role.ServerID；别名合服里说的“原服”）记进 Principal.Claims
+// 用的键（十进制 sid），供业务显示原服标识（例如名字后缀“[A]”，显示规则由业务决定）与按原服归属的
+// 数据使用。路由与驻留不读它，读 ServerIDClaim。没有合服时两个值相同。
 const OriginServerIDClaim = "origin_server_id"
 
 // RoleCreatedAtClaim 是认证器把 ValidateSession 返回的 Role.CreatedAtUnix（十进制 Unix 秒）记进
@@ -346,6 +449,31 @@ const OriginServerIDClaim = "origin_server_id"
 // Mail.PullBroadcasts：全服邮件的内置条件是“注册时间早于发送时间”，建角之后才发出的补偿才属于这个
 // 角色。与 ServerIDClaim 一样放在两边都依赖的 account 包里。
 const RoleCreatedAtClaim = "role_created_at"
+
+// BindEpochClaim 是认证器把 ValidateSession 返回的 Role.BindEpoch（十进制）记进 Principal.Claims 用的键。
+// 没换过服的角色是 "0"。game 侧拿它与自己记下的绑定代数比较：claim 是认证那一刻的快照，代数落后说明
+// 这个会话是换服之前签发的。
+const BindEpochClaim = "bind_epoch"
+
+// TransferClaim 是认证器在角色换服在途（Role.Transfer 非空）时记进 Principal.Claims 的键，值由
+// TransferClaimValue 给出、ParseTransferClaim 读回；没有换服时不写这个键。认证器只负责记下，拒绝由登录
+// 端点给出（握手失败客户端得不到原因）。
+const TransferClaim = "transfer"
+
+// TransferClaimValue 是 TransferClaim 的值："<目标 sid>:<换服 ID>"。sid 在前：ID 由发起方给出，可以含冒号。
+func TransferClaimValue(transfer RoleTransfer) string {
+	return strconv.FormatInt(int64(transfer.To), 10) + ":" + transfer.ID
+}
+
+// ParseTransferClaim 读回 TransferClaimValue 写的值；格式不对时 ok 为 false。
+func ParseTransferClaim(value string) (to int32, id string, ok bool) {
+	head, id, found := strings.Cut(value, ":")
+	sid, err := strconv.ParseInt(head, 10, 32)
+	if !found || err != nil || sid <= 0 || id == "" {
+		return 0, "", false
+	}
+	return int32(sid), id, true
+}
 
 // Slot records that an account occupies its role allowance on one server.
 //
@@ -370,6 +498,18 @@ type Slot struct {
 	// Admin.ResolvePendingCreation. Which door applies is the creation table
 	// (decideCreation).
 	Creation RoleCreation `json:"creation,omitempty"`
+
+	// 单个角色换服（transfer.go）。
+	//
+	// TransferID 非空表示这个 slot 是某次换服在目标服的占位（BeginRoleTransfer 建），或者那次换服已经
+	// 提交、收尾还没做完。占位带着角色的 PlayerID 与建角计划（照抄源服 slot），提交之后清掉 TransferID
+	// 就是角色在新服的正式 slot。带着 TransferID 的 slot 对建角一律按“名额已占”回答（建角判定表的
+	// slotTransferHold）。
+	TransferID string `json:"transfer_id,omitempty"`
+	// BindEpoch 是这个 slot 属于角色的哪一代绑定：建角的 slot 是 0，换服占位是提交之后的那一代。
+	// roleReady 要求它与 Role.BindEpoch 相等，所以同一时刻只有一个 slot 可用；提交的收尾只删代数更旧的
+	// slot，一个迟到的收尾不会删掉角色后来换回来的 slot。
+	BindEpoch uint64 `json:"bind_epoch,omitempty"`
 }
 
 // RoleCreation is an immutable role plan plus the reservation admitted to

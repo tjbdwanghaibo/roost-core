@@ -303,7 +303,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
 | 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |
 | 状态同步的 MOBA / RTS | 暂缓 | 阵营或单位视野挂接几十个，必须用异步应用并自行压测；没有纵切与容量数据 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[Sync 视野](guide/04-sync.md#谁看见谁视野viewd19) |
-| 动态 Player 跨 sid 迁移、单个玩家改绑 sid | 没有 | Player 静态绑定 game sid；跨服协作走 Remote、Saga、邮件 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#平台与外部验证)、[skill §5](../agent-skills/roost-genre/SKILL.md#5-公共限制所有玩法都适用) |
+| 单个玩家换服（改绑 sid） | 进行中 | account 一侧已有（`RoleBinding` / `BeginRoleTransfer` / `CommitRoleTransfer` / `AbortRoleTransfer` 与换服状态、`accountctl transfer-role`）；游戏侧的停写、交出实体与换服流程（模块 `rehome`）还没有，现在只凭这四个接口改绑在线玩家会出现两个进程写同一玩家 | [换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)、[PLAYER-MIGRATION §7](PLAYER-MIGRATION.md) |
 | 玩家接入的 UDP / KCP / QUIC 监听 | 没有 | 只生成装配函数；监听、握手鉴权、Session 绑定宿主自写 | [项目生成器 §16](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#16-帧同步-transport-预设)、[Gate §4](GATEWAY.md#4-synclockstep-与广播) |
 | 高于 20Hz 的实体心跳、固定步长逻辑帧 | 没有 | 心跳只有 50ms～60s 十档，不追帧 | [时间 §4A](guide/10-time.md#4a-实体心跳周期推进)、[派对房间 §8](PARTY-ROOM-INTEGRATION.md#8-框架没有什么) |
 | 离线实体定时器准点 | 没有 | 未加载的实体到期不唤醒，加载后补触发一次；必须准点的由业务发消息 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#按实体的持久定时器d11) |

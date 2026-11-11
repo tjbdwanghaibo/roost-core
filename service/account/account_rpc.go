@@ -69,6 +69,35 @@ type Accounts interface {
 	// process asks it at start-up whether its own server was merged away
 	// (wiring/account ServingGuardMod).
 	GetServer(ctx context.Context, serverID int32) (server GameServer, err error)
+
+	// 单个角色换服（transfer.go）。四个接口都在总线上：发起与提交的是源服的 game 进程（它知道自己什么
+	// 时候停写、卸载完），冷准入时任何 game 进程都要读绑定。它们改的是一个角色自己的绑定，不是
+	// UpsertServer / MergeServer 那样改变所有玩家能登录到哪里的控制面写；调用方可信的前提与本接口其余
+	// 方法相同。运维的人工兜底走 accountctl（Admin.CommitRoleTransferWithNote）。
+
+	// RoleBinding returns where a role is bound right now: its server, the
+	// server that serves it, the bind epoch, and the transfer in flight or
+	// last settled. Read-only.
+	RoleBinding(ctx context.Context, playerID int64) (binding RoleBinding, err error)
+
+	// BeginRoleTransfer records a transfer of the role to request.To and
+	// holds the account's slot there. The role stays bound to, and playable
+	// on, its current server until CommitRoleTransfer. Idempotent per
+	// request.ID. A refusal with ErrTransferStale or ErrTransferInProgress
+	// carries the current binding.
+	BeginRoleTransfer(ctx context.Context, playerID int64, request TransferRequest) (binding RoleBinding, err error)
+
+	// CommitRoleTransfer rebinds the role to the transfer's target and bumps
+	// its bind epoch. The caller guarantees the source no longer writes the
+	// player. Idempotent per transferID; ErrTransferStale (with the current
+	// binding) when that transfer was aborted or is not the one in flight.
+	CommitRoleTransfer(ctx context.Context, playerID int64, transferID string) (binding RoleBinding, err error)
+
+	// AbortRoleTransfer abandons a transfer: the role stays on its server,
+	// the hold is released, and the id can neither commit nor begin again.
+	// Idempotent per transferID; ErrTransferStale (with the committed
+	// binding) when that transfer already committed.
+	AbortRoleTransfer(ctx context.Context, playerID int64, transferID string, reason string) (binding RoleBinding, err error)
 }
 
 var _ Accounts = (*Service)(nil)

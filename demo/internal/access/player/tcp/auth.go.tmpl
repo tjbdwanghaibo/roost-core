@@ -87,6 +87,13 @@ func (authenticator *applicationAuthenticator) authenticateSession(ctx context.C
 	principal := newPrincipal(role.PlayerID, role.ServingServerID, role.ServerID)
 	// 角色建立时间给登录端点拉全服邮件用（mail.BroadcastProfile.RegisteredAtUnix）。
 	principal.Claims[svcaccount.RoleCreatedAtClaim] = strconv.FormatInt(role.CreatedAtUnix, 10)
+	// 单个角色换服（account 的 BeginRoleTransfer / CommitRoleTransfer）：绑定代数总是记下，没换过服是 "0"；
+	// 换服在途时另记目标 sid 与换服 ID（svcaccount.ParseTransferClaim 读回）。在途的角色仍由源服承载，这里
+	// 只记不拒——握手失败客户端拿不到原因，放不放行由登录端点决定。claim 是认证那一刻的快照。
+	principal.Claims[svcaccount.BindEpochClaim] = strconv.FormatUint(role.BindEpoch, 10)
+	if role.Transfer != nil {
+		principal.Claims[svcaccount.TransferClaim] = svcaccount.TransferClaimValue(*role.Transfer)
+	}
 	return principal, nil
 }
 

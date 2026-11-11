@@ -1,0 +1,146 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+)
+
+const sourceSID, targetSID = 1000, 1001
+
+// accountWithRole 是内存存储上的正式 account 服务：两个开放的服，源服上一个建好的角色。子命令只经
+// roleTransfers 用它，与连着 Redis 的那一个是同一份实现。
+func accountWithRole(t *testing.T) (*svcaccount.Service, svcaccount.Role) {
+	t.Helper()
+	ctx := context.Background()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Roles: versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](), Slots: versionstore.NewMemoryStore[string, svcaccount.Slot](), Names: names,
+		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) { return 424242, nil }),
+		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "accountctl-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []int32{sourceSID, targetSID} {
+		if _, err := service.UpsertServer(ctx, svcaccount.GameServer{ID: sid, Status: svcaccount.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := service.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "mover"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := service.CreateRole(ctx, account.ID, sourceSID, "mover")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, role
+}
+
+func playerFlag(role svcaccount.Role) string { return strconv.FormatInt(role.PlayerID, 10) }
+
+// show-role 给出角色的绑定；transfer-role begin 用读到的承载服与绑定代数发起，没给 -id 时自己起一个并在
+// 结果里给出；commit 之后角色绑定到目标服，操作者的备注留在记录上。
+func TestTransferRoleBeginThenCommitMovesTheRole(t *testing.T) {
+	ctx := context.Background()
+	service, role := accountWithRole(t)
+	player := playerFlag(role)
+
+	shown, err := showRole(ctx, service, []string{"-player", player})
+	if err != nil || shown.PlayerID != role.PlayerID || shown.ServerID != sourceSID || shown.BindEpoch != 0 || shown.Transfer != nil {
+		t.Fatalf("show-role = %+v, %v", shown, err)
+	}
+	begun, err := transferRole(ctx, service, []string{"begin", "-player", player, "-to", strconv.Itoa(targetSID), "-note", "ticket 4711", "-ttl", "120"})
+	if err != nil || begun.ServerID != sourceSID || begun.Transfer == nil {
+		t.Fatalf("transfer-role begin = %+v, %v", begun, err)
+	}
+	transfer := begun.Transfer
+	if !strings.HasPrefix(transfer.ID, "ctl-") || transfer.From != sourceSID || transfer.To != targetSID || transfer.Note != "ticket 4711" ||
+		transfer.DeadlineUnix != transfer.StartedAtUnix+120 {
+		t.Fatalf("the transfer begun by the tool = %+v", transfer)
+	}
+	if shown, err := showRole(ctx, service, []string{"-player", player}); err != nil || shown.Transfer == nil || shown.Transfer.ID != transfer.ID {
+		t.Fatalf("show-role during the transfer = %+v, %v", shown, err)
+	}
+
+	committed, err := transferRole(ctx, service, []string{"commit", "-player", player, "-id", transfer.ID, "-note", "1000 exited; wal-drained ok"})
+	if err != nil || committed.ServerID != targetSID || committed.BindEpoch != 1 || committed.Transfer != nil ||
+		committed.LastTransfer == nil || !committed.LastTransfer.Committed || committed.LastTransfer.Note != "1000 exited; wal-drained ok" {
+		t.Fatalf("transfer-role commit = %+v (last %+v), %v", committed, committed.LastTransfer, err)
+	}
+	// 已提交的不能再中止：报错，并把已提交的绑定交回去给操作者看。
+	late, err := transferRole(ctx, service, []string{"abort", "-player", player, "-id", transfer.ID, "-note", "changed my mind"})
+	if !errors.Is(err, svcaccount.ErrTransferStale) || late.ServerID != targetSID {
+		t.Fatalf("transfer-role abort after the commit = %+v, %v; want ErrTransferStale with the committed binding", late, err)
+	}
+}
+
+// abort 把角色留在源服，备注作为原因留在记录上；用过的 ID 不能再提交。
+func TestTransferRoleAbortKeepsTheRoleAndRecordsWhy(t *testing.T) {
+	ctx := context.Background()
+	service, role := accountWithRole(t)
+	player := playerFlag(role)
+	if _, err := transferRole(ctx, service, []string{"begin", "-player", player, "-to", strconv.Itoa(targetSID), "-id", "move-1", "-note", "ticket 4712"}); err != nil {
+		t.Fatal(err)
+	}
+	aborted, err := transferRole(ctx, service, []string{"abort", "-player", player, "-id", "move-1", "-note", "source never drained"})
+	if err != nil || aborted.ServerID != sourceSID || aborted.Transfer != nil || aborted.LastTransfer == nil ||
+		aborted.LastTransfer.Committed || aborted.LastTransfer.Note != "source never drained" {
+		t.Fatalf("transfer-role abort = %+v (last %+v), %v", aborted, aborted.LastTransfer, err)
+	}
+	if _, err := transferRole(ctx, service, []string{"commit", "-player", player, "-id", "move-1", "-note", "too late"}); !errors.Is(err, svcaccount.ErrTransferStale) {
+		t.Fatalf("transfer-role commit of an aborted id = %v, want ErrTransferStale", err)
+	}
+}
+
+// 每一步都要 -player 与 -note，commit / abort 要 -id，begin 要 -to；缺了就拒绝，什么也不写。
+func TestTransferRoleRefusesAnIncompleteCommand(t *testing.T) {
+	ctx := context.Background()
+	service, role := accountWithRole(t)
+	player := playerFlag(role)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"no step", nil, "begin, commit or abort"},
+		{"unknown step", []string{"move", "-player", player, "-note", "x"}, "unknown step"},
+		{"begin without a note", []string{"begin", "-player", player, "-to", strconv.Itoa(targetSID)}, "-note is required"},
+		{"begin with a blank note", []string{"begin", "-player", player, "-to", strconv.Itoa(targetSID), "-note", "  "}, "-note is required"},
+		{"begin without a target", []string{"begin", "-player", player, "-note", "x"}, "-to is required"},
+		{"begin without a player", []string{"begin", "-to", strconv.Itoa(targetSID), "-note", "x"}, "-player is required"},
+		{"commit without a note", []string{"commit", "-player", player, "-id", "move-1"}, "-note is required"},
+		{"commit without an id", []string{"commit", "-player", player, "-note", "x"}, "-id is required"},
+		{"abort without a note", []string{"abort", "-player", player, "-id", "move-1"}, "-note is required"},
+		{"abort without an id", []string{"abort", "-player", player, "-note", "x"}, "-id is required"},
+	} {
+		if _, err := transferRole(ctx, service, tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: transfer-role %v = %v, want an error naming %q", tc.name, tc.args, err, tc.want)
+		}
+	}
+	if _, err := showRole(ctx, service, nil); err == nil || !strings.Contains(err.Error(), "-player is required") {
+		t.Errorf("show-role without a player = %v", err)
+	}
+	if _, err := showRole(ctx, service, []string{"-player", "99"}); !errors.Is(err, svcaccount.ErrRoleMissing) {
+		t.Errorf("show-role for an unknown player = %v, want ErrRoleMissing", err)
+	}
+	if after, err := showRole(ctx, service, []string{"-player", player}); err != nil || after.Transfer != nil || after.LastTransfer != nil || after.ServerID != sourceSID {
+		t.Fatalf("a refused command changed the role: %+v, %v", after, err)
+	}
+}

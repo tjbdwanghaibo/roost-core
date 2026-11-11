@@ -1,6 +1,6 @@
 # 单个玩家换服（改绑 game sid）（2026-11-11）
 
-状态：**设计已定稿、一期实施中**。维护者 2026-11-11：“main 中有一个未完成‘换服’逻辑，最后帮我完成，但是是以模块方式，如果底层的话就还是放在框架内”。本文是实施依据；第 6 节的六项是按推荐项先实施、**待维护者确认**的决定。
+状态：**设计已定稿、一期实施中**（account 一侧已实现并合入，见 §3.1 末尾的“实施结果”；DataEngine 的交出实体、模块 `rehome` 与 demo 接线未完）。维护者 2026-11-11：“main 中有一个未完成‘换服’逻辑，最后帮我完成，但是是以模块方式，如果底层的话就还是放在框架内”。本文是实施依据；第 6 节的六项是按推荐项先实施、**待维护者确认**的决定。
 
 起因：v1.44.0 让 saga 的路由步骤按 sid 确切投递（[saga 步骤按 sid 确切路由](FEATURE-2026-11-11-saga-step-sid-route.md) §3.5、§7 第 1 条），game-demo 给“玩家正在换服”留了钩子 `playerMoving`，缺省恒返回“不在换服中”，因为仓库里没有单个玩家换服的能力。
 
@@ -73,6 +73,17 @@ Begin 的拒绝：角色不存在或未就绪；`FromSID` 不是当前承载服�
 - Begin：① 角色写 `Transfer`；② 建目标 slot（带 `TransferID`）。目标键被别的占用 → 撤 ① 答 `ErrRoleLimit`；同 ID 重发补完 ②。
 - Commit：确认目标 slot 在（缺了补上）→ 角色改 `ServerID`、`BindEpoch++`、清 `Transfer`、写 `LastTransfer` → 清目标 slot 的 `TransferID` → 条件删旧 slot。`LastTransfer.ID` 相同且已提交时幂等成功并补做后两步。
 - Abort：条件删目标 slot → 清 `Transfer`、`LastTransfer` 记未提交。该 ID 已提交时答 `ErrTransferStale` 并带回 binding。
+
+**实施结果（2026-11-11，已合入）**——与上面设计的出入，以实现为准（现行说明在 [PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md) 与 KNOWN-LIMITS“单个角色换服（account 一侧）”）：
+
+- **Abort 改为“先写角色、再删占位”**。按设计的顺序（先删占位），并发的 Commit 会在占位被删后把角色改绑过去，角色绑定在新服却没有 slot；有并发用例证明。Commit 的 CAS 发现已被中止时撤掉自己可能刚补建的占位。
+- `Slot` 多一个 `BindEpoch`，`RoleTransferRecord` 多 `Epoch / Note / Settled`：提交的收尾按绑定代数认旧 slot，迟到的收尾不会删掉角色后来换回来的 slot；`Settled` 记“结果已定、slot 没收尾”，重发、下一次 `SelectRole` 或下一次 Begin 读到就补完。
+- 中止一个没发起成功的 ID 也记为已中止，迟到的 Begin 不能再用它；已了结的 ID 再 Begin 答 `ErrTransferStale`。**给模块的提示：Begin 结果未知时直接 `AbortRoleTransfer(id)` 拿确定结论；到达时不必重发 Commit，收尾会在玩家下次 `SelectRole` 时补完。**
+- 人工提交另有 `Admin.CommitRoleTransferWithNote`（不上总线），备注必填。
+- “错的 from”答 `ErrTransferStale`；两种拒绝（`ErrTransferStale` 560118、`ErrTransferInProgress` 560119）都带回当前 `RoleBinding`，经总线调用时 `errors.Is` 成立。
+- “涉及已合服的服”按“绑定服或目标服的 `MergedInto` 非 0 才拒绝”实现，承载着别的服的服照常可用。
+- 换服 claim 的值是 `"<目标 sid>:<换服 ID>"`（`TransferClaimValue` / `ParseTransferClaim`）。期限只记录、不执行。
+- §8 第一条已查清：换过服的 slot 在名字目录里的 owner 仍是旧键，没有影响（`decideCreation` 对已发布的 slot 与换服占位都不读名字，有用例钉住）。
 
 换服中 `SelectRole` / `ValidateSession` 照常返回并带 `Transfer`（握手失败客户端拿不到原因，拒绝留给登录端点）。两个认证器写新 claim。`accountctl` 加 `show-role`、`transfer-role begin|commit|abort`。
 

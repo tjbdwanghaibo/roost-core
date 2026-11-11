@@ -36,13 +36,17 @@ const ServiceType = "account"
 // The RPC method names, prefixed with the service type so a bus subject is
 // unambiguous when several services register handlers on one connection.
 const (
-	MethodLogin           = "account.Login"
-	MethodCreateRole      = "account.CreateRole"
-	MethodSelectRole      = "account.SelectRole"
-	MethodValidateSession = "account.ValidateSession"
-	MethodUpdateProfile   = "account.UpdateProfile"
-	MethodMarkLogout      = "account.MarkLogout"
-	MethodGetServer       = "account.GetServer"
+	MethodLogin              = "account.Login"
+	MethodCreateRole         = "account.CreateRole"
+	MethodSelectRole         = "account.SelectRole"
+	MethodValidateSession    = "account.ValidateSession"
+	MethodUpdateProfile      = "account.UpdateProfile"
+	MethodMarkLogout         = "account.MarkLogout"
+	MethodGetServer          = "account.GetServer"
+	MethodRoleBinding        = "account.RoleBinding"
+	MethodBeginRoleTransfer  = "account.BeginRoleTransfer"
+	MethodCommitRoleTransfer = "account.CommitRoleTransfer"
+	MethodAbortRoleTransfer  = "account.AbortRoleTransfer"
 )
 
 // Methods is every method on Accounts, in interface order.
@@ -57,6 +61,10 @@ var Methods = []string{
 	MethodUpdateProfile,
 	MethodMarkLogout,
 	MethodGetServer,
+	MethodRoleBinding,
+	MethodBeginRoleTransfer,
+	MethodCommitRoleTransfer,
+	MethodAbortRoleTransfer,
 }
 
 // rpcStatus is the envelope every response embeds.
@@ -205,6 +213,74 @@ type rpcGetServerResponse struct {
 	Server GameServer `json:"server"`
 }
 
+// rpcRoleBindingRequest is the RoleBinding request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcRoleBindingRequest struct {
+	PlayerID int64 `json:"player_id"`
+}
+
+// rpcRoleBindingResponse is the RoleBinding response on the wire.
+type rpcRoleBindingResponse struct {
+	rpcStatus
+	Binding RoleBinding `json:"binding"`
+}
+
+// rpcBeginRoleTransferRequest is the BeginRoleTransfer request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcBeginRoleTransferRequest struct {
+	PlayerID int64           `json:"player_id"`
+	Request  TransferRequest `json:"request"`
+}
+
+// rpcBeginRoleTransferResponse is the BeginRoleTransfer response on the wire.
+type rpcBeginRoleTransferResponse struct {
+	rpcStatus
+	Binding RoleBinding `json:"binding"`
+}
+
+// rpcCommitRoleTransferRequest is the CommitRoleTransfer request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcCommitRoleTransferRequest struct {
+	PlayerID   int64  `json:"player_id"`
+	TransferID string `json:"transfer_id"`
+}
+
+// rpcCommitRoleTransferResponse is the CommitRoleTransfer response on the wire.
+type rpcCommitRoleTransferResponse struct {
+	rpcStatus
+	Binding RoleBinding `json:"binding"`
+}
+
+// rpcAbortRoleTransferRequest is the AbortRoleTransfer request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcAbortRoleTransferRequest struct {
+	PlayerID   int64  `json:"player_id"`
+	TransferID string `json:"transfer_id"`
+	Reason     string `json:"reason"`
+}
+
+// rpcAbortRoleTransferResponse is the AbortRoleTransfer response on the wire.
+type rpcAbortRoleTransferResponse struct {
+	rpcStatus
+	Binding RoleBinding `json:"binding"`
+}
+
 // --- server ---
 
 // RegisterHandlers publishes Accounts on a bus.
@@ -276,6 +352,38 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			server, err := service.GetServer(ctx.Context(), wire.ServerID)
 			return rpcGetServerResponse{rpcStatus: statusOf(err), Server: server}, nil
+		},
+		MethodRoleBinding: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcRoleBindingRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcRoleBindingResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			binding, err := service.RoleBinding(ctx.Context(), wire.PlayerID)
+			return rpcRoleBindingResponse{rpcStatus: statusOf(err), Binding: binding}, nil
+		},
+		MethodBeginRoleTransfer: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcBeginRoleTransferRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcBeginRoleTransferResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			binding, err := service.BeginRoleTransfer(ctx.Context(), wire.PlayerID, wire.Request)
+			return rpcBeginRoleTransferResponse{rpcStatus: statusOf(err), Binding: binding}, nil
+		},
+		MethodCommitRoleTransfer: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcCommitRoleTransferRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcCommitRoleTransferResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			binding, err := service.CommitRoleTransfer(ctx.Context(), wire.PlayerID, wire.TransferID)
+			return rpcCommitRoleTransferResponse{rpcStatus: statusOf(err), Binding: binding}, nil
+		},
+		MethodAbortRoleTransfer: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcAbortRoleTransferRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcAbortRoleTransferResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			binding, err := service.AbortRoleTransfer(ctx.Context(), wire.PlayerID, wire.TransferID, wire.Reason)
+			return rpcAbortRoleTransferResponse{rpcStatus: statusOf(err), Binding: binding}, nil
 		},
 	}
 	// Registered against Methods rather than by ranging the map, so a method
@@ -424,6 +532,62 @@ func (c *BusClient) GetServer(ctx context.Context, serverID int32) (GameServer, 
 	return resp.Server, err
 }
 
+// RoleBinding returns where a role is bound right now: its server, the
+// server that serves it, the bind epoch, and the transfer in flight or
+// last settled. Read-only.
+// RoleBinding implements Accounts.
+func (c *BusClient) RoleBinding(ctx context.Context, playerID int64) (RoleBinding, error) {
+	var resp rpcRoleBindingResponse
+	err := c.call(ctx, MethodRoleBinding, rpcRoleBindingRequest{
+		PlayerID: playerID,
+	}, &resp)
+	return resp.Binding, err
+}
+
+// BeginRoleTransfer records a transfer of the role to request.To and
+// holds the account's slot there. The role stays bound to, and playable
+// on, its current server until CommitRoleTransfer. Idempotent per
+// request.ID. A refusal with ErrTransferStale or ErrTransferInProgress
+// carries the current binding.
+// BeginRoleTransfer implements Accounts.
+func (c *BusClient) BeginRoleTransfer(ctx context.Context, playerID int64, request TransferRequest) (RoleBinding, error) {
+	var resp rpcBeginRoleTransferResponse
+	err := c.call(ctx, MethodBeginRoleTransfer, rpcBeginRoleTransferRequest{
+		PlayerID: playerID,
+		Request:  request,
+	}, &resp)
+	return resp.Binding, err
+}
+
+// CommitRoleTransfer rebinds the role to the transfer's target and bumps
+// its bind epoch. The caller guarantees the source no longer writes the
+// player. Idempotent per transferID; ErrTransferStale (with the current
+// binding) when that transfer was aborted or is not the one in flight.
+// CommitRoleTransfer implements Accounts.
+func (c *BusClient) CommitRoleTransfer(ctx context.Context, playerID int64, transferID string) (RoleBinding, error) {
+	var resp rpcCommitRoleTransferResponse
+	err := c.call(ctx, MethodCommitRoleTransfer, rpcCommitRoleTransferRequest{
+		PlayerID:   playerID,
+		TransferID: transferID,
+	}, &resp)
+	return resp.Binding, err
+}
+
+// AbortRoleTransfer abandons a transfer: the role stays on its server,
+// the hold is released, and the id can neither commit nor begin again.
+// Idempotent per transferID; ErrTransferStale (with the committed
+// binding) when that transfer already committed.
+// AbortRoleTransfer implements Accounts.
+func (c *BusClient) AbortRoleTransfer(ctx context.Context, playerID int64, transferID string, reason string) (RoleBinding, error) {
+	var resp rpcAbortRoleTransferResponse
+	err := c.call(ctx, MethodAbortRoleTransfer, rpcAbortRoleTransferRequest{
+		PlayerID:   playerID,
+		TransferID: transferID,
+		Reason:     reason,
+	}, &resp)
+	return resp.Binding, err
+}
+
 // --- capability ---
 
 // capability is what a Mod puts in the registry.
@@ -472,6 +636,22 @@ func (c capability) MarkLogout(ctx context.Context, accountID string, playerID i
 
 func (c capability) GetServer(ctx context.Context, serverID int32) (GameServer, error) {
 	return c.inner.GetServer(ctx, serverID)
+}
+
+func (c capability) RoleBinding(ctx context.Context, playerID int64) (RoleBinding, error) {
+	return c.inner.RoleBinding(ctx, playerID)
+}
+
+func (c capability) BeginRoleTransfer(ctx context.Context, playerID int64, request TransferRequest) (RoleBinding, error) {
+	return c.inner.BeginRoleTransfer(ctx, playerID, request)
+}
+
+func (c capability) CommitRoleTransfer(ctx context.Context, playerID int64, transferID string) (RoleBinding, error) {
+	return c.inner.CommitRoleTransfer(ctx, playerID, transferID)
+}
+
+func (c capability) AbortRoleTransfer(ctx context.Context, playerID int64, transferID string, reason string) (RoleBinding, error) {
+	return c.inner.AbortRoleTransfer(ctx, playerID, transferID, reason)
 }
 
 // Capability wraps a Accounts for registration. Both Mods use it, so the

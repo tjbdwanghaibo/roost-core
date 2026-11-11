@@ -39,8 +39,13 @@ import (
 // server, or the one it was merged into — under svcaccount.ServerIDClaim, and
 // role.ServerID (the origin, for display) under svcaccount.OriginServerIDClaim.
 // A login endpoint compares ServerIDClaim with this process's sid; routing on
-// role.ServerID would refuse every role of a merged server. The game-demo
-// template's internal/access/player/tcp/auth.go is a complete example.
+// role.ServerID would refuse every role of a merged server. When single roles
+// can change servers (account's BeginRoleTransfer / CommitRoleTransfer), also
+// record role.BindEpoch under svcaccount.BindEpochClaim and, while
+// role.Transfer is set, svcaccount.TransferClaimValue(*role.Transfer) under
+// svcaccount.TransferClaim, so the login endpoint can tell a session issued
+// before the move and a role that is moving. The game-demo template's
+// internal/access/player/tcp/auth.go is a complete example.
 type applicationAuthenticator struct{}
 
 func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {

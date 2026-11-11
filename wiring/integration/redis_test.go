@@ -346,6 +346,154 @@ func TestAccountSlotExcludesAnAccountRacingItselfOnRedis(t *testing.T) {
 	}
 }
 
+// 单个角色换服（service/account 的 transfer.go）在真实 Redis 上：角色、slot 的新字段经 JSON 编码落库再读回，
+// 版本比较由 Redis 上的脚本完成。两个服务实例共用一套存储——发起与提交不必是同一个 account 进程；
+// 同一次换服并发的提交与中止只有一个生效。
+func TestAccountRoleTransferRunsOnRedis(t *testing.T) {
+	stores, err := account.NewRedisStores(client(t), prefix(t, "accounttransfer"), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var next int64 = 8000
+	var idMu sync.Mutex
+	newService := func() *account.Service {
+		t.Helper()
+		service, err := account.New(account.Config{
+			Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
+			Slots: stores.Slots, Names: stores.Names,
+			Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
+				return account.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil
+			}),
+			Allocator: account.AllocatorFunc(func(context.Context, int32) (int64, error) {
+				idMu.Lock()
+				defer idMu.Unlock()
+				next++
+				return next, nil
+			}),
+			NameRules:     account.NameValidatorFunc(func(string) error { return nil }),
+			SessionSecret: "itest-secret",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service
+	}
+	first, second := newService(), newService()
+	ctx := context.Background()
+	for _, sid := range []int32{1, 2} {
+		if _, err := first.UpsertServer(ctx, account.GameServer{ID: sid, Status: account.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roleOf := func(openID string) (account.Role, string) {
+		t.Helper()
+		acct, err := first.Login(ctx, account.Identity{Channel: "store", OpenID: openID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		role, err := first.CreateRole(ctx, acct.ID, 1, openID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		session, err := first.SelectRole(ctx, acct.ID, role.PlayerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return role, session.Token
+	}
+	boundTo := func(label string, role account.Role, token string, sid int32, epoch uint64) {
+		t.Helper()
+		validated, err := second.ValidateSession(ctx, role.PlayerID, token)
+		if err != nil || validated.ServerID != sid || validated.ServingServerID != sid || validated.BindEpoch != epoch {
+			t.Fatalf("%s: ValidateSession = %+v, %v; want server %d at epoch %d", label, validated, err, sid, epoch)
+		}
+		if session, err := second.SelectRole(ctx, role.AccountID, role.PlayerID); err != nil || session.ServerID != sid {
+			t.Fatalf("%s: SelectRole = %+v, %v; want server %d", label, session, err, sid)
+		}
+	}
+
+	role, token := roleOf("mover")
+	// 旧的 epoch 被拒绝，什么也不写。
+	if _, err := first.BeginRoleTransfer(ctx, role.PlayerID, account.TransferRequest{ID: "t-1", FromSID: 1, To: 2, ExpectEpoch: 5}); !errors.Is(err, account.ErrTransferStale) {
+		t.Fatalf("a stale epoch against real Redis = %v, want ErrTransferStale", err)
+	}
+	begun, err := first.BeginRoleTransfer(ctx, role.PlayerID, account.TransferRequest{ID: "t-1", FromSID: 1, To: 2, Note: "itest"})
+	if err != nil || begun.Transfer == nil || begun.ServerID != 1 {
+		t.Fatalf("Begin against real Redis = %+v, %v", begun, err)
+	}
+	// 另一个实例读到同一条在途记录（指针字段经 JSON 落库再读回），重发幂等，第二次换服被拒，目标名额已占。
+	if again, err := second.BeginRoleTransfer(ctx, role.PlayerID, account.TransferRequest{ID: "t-1", FromSID: 1, To: 2}); err != nil || again.Transfer == nil || *again.Transfer != *begun.Transfer {
+		t.Fatalf("resent Begin on another instance = %+v, %v; want %+v", again, err, begun.Transfer)
+	}
+	if _, err := second.BeginRoleTransfer(ctx, role.PlayerID, account.TransferRequest{ID: "t-2", FromSID: 1, To: 2}); !errors.Is(err, account.ErrTransferInProgress) {
+		t.Fatalf("a second transfer against real Redis = %v, want ErrTransferInProgress", err)
+	}
+	if _, err := second.CreateRole(ctx, role.AccountID, 2, "squatter"); !errors.Is(err, account.ErrRoleLimit) {
+		t.Fatalf("CreateRole on the held target against real Redis = %v, want ErrRoleLimit", err)
+	}
+	boundTo("in flight", role, token, 1, 0)
+
+	// 提交在另一个实例上做：角色改绑，旧服名额让出，重发幂等，迟到的中止被拒并带回已提交的绑定。
+	committed, err := second.CommitRoleTransfer(ctx, role.PlayerID, "t-1")
+	if err != nil || committed.ServerID != 2 || committed.BindEpoch != 1 || committed.LastTransfer == nil || !committed.LastTransfer.Settled || committed.LastTransfer.Note != "itest" {
+		t.Fatalf("Commit against real Redis = %+v (last %+v), %v", committed, committed.LastTransfer, err)
+	}
+	if again, err := first.CommitRoleTransfer(ctx, role.PlayerID, "t-1"); err != nil || again.ServerID != 2 || again.BindEpoch != 1 {
+		t.Fatalf("resent Commit against real Redis = %+v, %v", again, err)
+	}
+	if late, err := first.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "late"); !errors.Is(err, account.ErrTransferStale) || late.ServerID != 2 {
+		t.Fatalf("Abort after the commit against real Redis = %+v, %v; want ErrTransferStale with the committed binding", late, err)
+	}
+	boundTo("committed", role, token, 2, 1)
+	if fresh, err := first.CreateRole(ctx, role.AccountID, 1, "fresh"); err != nil || fresh.PlayerID == role.PlayerID {
+		t.Fatalf("CreateRole on the vacated server against real Redis = %+v, %v", fresh, err)
+	}
+
+	// 中止：角色留在原服，占位撤掉，用过的 ID 不能再提交。
+	stay, stayToken := roleOf("stayer")
+	if _, err := first.BeginRoleTransfer(ctx, stay.PlayerID, account.TransferRequest{ID: "s-1", FromSID: 1, To: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if aborted, err := second.AbortRoleTransfer(ctx, stay.PlayerID, "s-1", "drain timed out"); err != nil || aborted.ServerID != 1 || aborted.Transfer != nil || aborted.LastTransfer == nil || aborted.LastTransfer.Committed {
+		t.Fatalf("Abort against real Redis = %+v, %v", aborted, err)
+	}
+	if _, err := first.CommitRoleTransfer(ctx, stay.PlayerID, "s-1"); !errors.Is(err, account.ErrTransferStale) {
+		t.Fatalf("Commit of an aborted transfer against real Redis = %v, want ErrTransferStale", err)
+	}
+	boundTo("aborted", stay, stayToken, 1, 0)
+	if alt, err := first.CreateRole(ctx, stay.AccountID, 2, "stayer-alt"); err != nil || alt.ServerID != 2 {
+		t.Fatalf("CreateRole on the released target against real Redis = %+v, %v", alt, err)
+	}
+
+	// 并发的提交与中止（两个实例各发一个）：角色记录上的版本比较只让一个生效，角色始终可登录。
+	for round := 0; round < 8; round++ {
+		racer, racerToken := roleOf(fmt.Sprintf("racer-%d", round))
+		if _, err := first.BeginRoleTransfer(ctx, racer.PlayerID, account.TransferRequest{ID: "r", FromSID: 1, To: 2}); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		var commitErr, abortErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, commitErr = first.CommitRoleTransfer(ctx, racer.PlayerID, "r")
+		}()
+		go func() {
+			defer wg.Done()
+			_, abortErr = second.AbortRoleTransfer(ctx, racer.PlayerID, "r", "race")
+		}()
+		wg.Wait()
+		switch {
+		case commitErr == nil && errors.Is(abortErr, account.ErrTransferStale):
+			boundTo(fmt.Sprintf("round %d, commit won", round), racer, racerToken, 2, 1)
+		case abortErr == nil && errors.Is(commitErr, account.ErrTransferStale):
+			boundTo(fmt.Sprintf("round %d, abort won", round), racer, racerToken, 1, 0)
+		default:
+			t.Fatalf("round %d against real Redis: commit=%v abort=%v; want exactly one to take effect", round, commitErr, abortErr)
+		}
+	}
+}
+
 // --- match ---
 
 func TestMatchRunsOnRedis(t *testing.T) {

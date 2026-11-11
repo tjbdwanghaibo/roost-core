@@ -40,6 +40,10 @@ const (
 	slotPendingAdmitted
 	// slotPublished: the role exists and the slot names it.
 	slotPublished
+	// slotTransferHold：slot 带着 TransferID（transfer.go）——某次换服在目标服的占位，或那次换服已经提交、
+	// 收尾还没做完。它不是建角计划：名额已经被一个现成的角色占住，建角一律按名额已占回答（同名也是，
+	// 这个角色此刻未必绑定在本服），运维不能当作悬挂的计划释放；它只由换服的提交 / 中止了结。
+	slotTransferHold
 )
 
 // nameState is where the plan's name stands in the directory, relative to
@@ -138,6 +142,12 @@ func decideCreation(slot slotState, entry creationEntry, name nameState) creatio
 		default:
 			return actRefuseRoleLimit
 		}
+	case slotTransferHold:
+		// 换服占位（或提交后尚未收尾的 slot）：与已发布的 slot 一样不读名字，但同名也不交回角色。
+		if entry == entryResolve {
+			return actRefuseUnresolvable
+		}
+		return actRefuseRoleLimit
 	}
 	// A pending plan, admitted or not.
 	if name == nameNotRead && entry != entrySameName {
@@ -194,6 +204,9 @@ func classifySlot(slot versionstore.Versioned[Slot], found bool, accountID strin
 		// Checked before publication: a published slot keeps its plan, so a
 		// published role without one is not something this version wrote.
 		return slotMalformed
+	case slot.Value.TransferID != "":
+		// 先于已发布：占位带着角色的 PlayerID，但名额是被一次换服占着的。
+		return slotTransferHold
 	case slot.Value.PlayerID != 0:
 		return slotPublished
 	case slot.Value.Creation.Admitted:

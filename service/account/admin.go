@@ -68,6 +68,16 @@ type Admin interface {
 	// logs in to — so, like ResolvePendingCreation, they are not on the bus.
 	MergeServer(ctx context.Context, request MergeRequest) (MergeResult, error)
 	UnmergeServer(ctx context.Context, from int32, note string) (MergeResult, error)
+
+	// CommitRoleTransferWithNote is the operator's manual commit of a role
+	// transfer (transfer.go): Accounts.CommitRoleTransfer plus a required
+	// note, recorded on the role's LastTransfer. Committing by hand asserts
+	// that the source server no longer writes the player — it has unloaded
+	// the player, or its process has exited and its WAL is drained — and
+	// that assertion has to be on record. Begin and abort need no operator
+	// variant: Accounts.BeginRoleTransfer and AbortRoleTransfer already take
+	// a note.
+	CommitRoleTransferWithNote(ctx context.Context, playerID int64, transferID, note string) (RoleBinding, error)
 }
 
 // MaxAdminNoteBytes bounds an operator note. It is stored on the account and
@@ -137,6 +147,10 @@ func (s *Service) ResolvePendingCreation(ctx context.Context, accountID string, 
 		case state == slotPublished:
 			return RoleCreation{}, fmt.Errorf("%w: %s already published role %d on server %d; nothing is pending",
 				ErrNotResolvable, accountID, slot.Value.PlayerID, serverID)
+		case state == slotTransferHold:
+			return RoleCreation{}, fmt.Errorf("%w: the slot of %s on server %d is held by role transfer %s of role %d, not by a "+
+				"creation plan; settle it with CommitRoleTransfer or AbortRoleTransfer (accountctl transfer-role)",
+				ErrNotResolvable, accountID, serverID, slot.Value.TransferID, slot.Value.PlayerID)
 		case state == slotMalformed:
 			return RoleCreation{}, fmt.Errorf("%w: the slot of %s on server %d has no creation plan; reconcile it offline",
 				ErrNotResolvable, accountID, serverID)

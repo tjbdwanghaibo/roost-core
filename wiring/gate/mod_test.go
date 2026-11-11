@@ -180,6 +180,81 @@ func TestAccountAuthenticatorRoutesAMergedServersRoleToItsServingServer(t *testi
 	}
 }
 
+// 换服（service/account 的 transfer.go）：认证器把绑定代数与换服标记记进 Claims，原有的两项不变。在途时
+// 路由服仍是源服、带 TransferClaim；提交之后同一张票据路由到新服，代数加 1，没有 TransferClaim。
+func TestAccountAuthenticatorRecordsTheBindEpochAndATransferInFlight(t *testing.T) {
+	const source, target = int32(1000), int32(1001)
+	ctx := context.Background()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := account.New(account.Config{
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: versionstore.NewMemoryStore[int64, account.Role](),
+		Servers: versionstore.NewMemoryStore[int32, account.GameServer](), Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
+		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
+			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     account.AllocatorFunc(func(context.Context, int32) (int64, error) { return 7001, nil }),
+		NameRules:     account.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "gate-transfer-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []int32{source, target} {
+		if _, err := service.UpsertServer(ctx, account.GameServer{ID: sid, Status: account.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acct, err := service.Login(ctx, account.Identity{Channel: "dev", OpenID: "mover"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := service.CreateRole(ctx, acct.ID, source, "mover")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.SelectRole(ctx, acct.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket := fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)
+	auth := AccountAuthenticator{Accounts: service}
+	claimsOf := func(label string, wantServer int32, wantEpoch string) map[string]string {
+		t.Helper()
+		principal, err := auth.Authenticate(ctx, ticket, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if principal.ServerID != wantServer || principal.Claims[account.ServerIDClaim] != strconv.Itoa(int(wantServer)) ||
+			principal.Claims[account.OriginServerIDClaim] != strconv.Itoa(int(wantServer)) {
+			t.Fatalf("%s: Principal.ServerID = %d, claims %v; want server %d in both existing claims", label, principal.ServerID, principal.Claims, wantServer)
+		}
+		if got := principal.Claims[account.BindEpochClaim]; got != wantEpoch {
+			t.Fatalf("%s: BindEpochClaim = %q, want %q (claims %v)", label, got, wantEpoch, principal.Claims)
+		}
+		return principal.Claims
+	}
+
+	if _, moving := claimsOf("before any transfer", source, "0")[account.TransferClaim]; moving {
+		t.Fatal("a role that is not moving carries TransferClaim")
+	}
+	if _, err := service.BeginRoleTransfer(ctx, role.PlayerID, account.TransferRequest{ID: "rehome:1", FromSID: source, To: target}); err != nil {
+		t.Fatal(err)
+	}
+	to, id, ok := account.ParseTransferClaim(claimsOf("transfer in flight", source, "0")[account.TransferClaim])
+	if !ok || to != target || id != "rehome:1" {
+		t.Fatalf("TransferClaim during the transfer parses to (%d, %q, %v), want (%d, rehome:1, true)", to, id, ok, target)
+	}
+	if _, err := service.CommitRoleTransfer(ctx, role.PlayerID, "rehome:1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, moving := claimsOf("after the commit", target, "1")[account.TransferClaim]; moving {
+		t.Fatal("a committed transfer still shows as TransferClaim")
+	}
+}
+
 type flushRecorder struct {
 	fnats.RawClient
 	flushed bool

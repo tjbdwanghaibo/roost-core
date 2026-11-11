@@ -592,6 +592,21 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **消费者**：Gate 转交给 game 的绑定不带 Claims，game 侧需要原服标识时从自己的角色数据取；`OriginServerIDClaim` 只在认证器那一侧可见（嵌入 TCP 的 Principal 里两者都有）。CreateRole 被拒经总线时客户端看到的是 `ErrServerClosed` 的通用原因，“已并入 B”的详情只在 account 进程的错误里。 game-demo 拉全服邮件（D17）时，原服并入本服的角色另带原服范围 `ServerScope(A)`，合服前发给 A、还没拉到的全服邮件照样属于他——这是 demo 的业务选择，框架不规定。
 - **验证边界**：真实进程两服演练（私有环境，sid 1000 / 1001，[证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/d15-server-merge-20261020/README.md)）覆盖嵌入 TCP；独立 Gate 只有单元级（正式 account 服务 + `FixedGameResolver`）。演练里的 `dbscope=sid` 文档是直接写 Mongo 的（game-demo 没有用它的实体），B 的进程没有冷加载它们；玩家数据（共享库 main）经真实进程读写。
 
+### 单个角色换服（account 一侧）
+
+单个玩家换服（[方案](FEATURE-2026-11-11-player-rehome.md)，一期实施中）里 account 的部分已实现（未发版）：`RoleBinding` / `BeginRoleTransfer` / `CommitRoleTransfer` / `AbortRoleTransfer`、认证器的两个新 claim、`accountctl show-role / transfer-role`，契约与 runbook 见 [PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md#7-单个玩家换服account-一侧)。当前边界：
+
+- **只有 account 一侧，端到端还不能用**：源服停写与断开、DataEngine 的“交出实体”、到达处理、业务模块 `rehome`、game-demo 的 `PlayerOwners` 与 saga 准入（`playerMoving` 钩子）都在实施中。account 不检查源服是否已经停写：现在只凭这四个接口（或 `accountctl transfer-role commit`）改绑一个在线玩家，会出现两个进程写同一个玩家。
+- **待维护者确认的决定**（方案 §6 第 1～4 项，按推荐项先实施）：接口上总线；`Role.ServerID` 改为“当前绑定服”、不另存建角服；目标服必须 open、未并入、账号在目标服没有角色；发起之后中途停下一律向前恢复。
+- **与方案的出入**（实施时按不变量调整）：① 中止的写入顺序是“先写角色、再删占位”（方案是反过来）：按方案的顺序，并发的提交会在占位被删之后把角色改绑过去，留下没有 slot 的角色（用例 `TestConcurrentTransferRequestsHaveOneWinner` 在那个顺序下变红：`ValidateSession: account: conflict: role creation is pending reconciliation`）。② slot 另记所属的绑定代数（`Slot.BindEpoch`）、`LastTransfer` 另记 `Epoch` / `Note` / `Settled`：提交的收尾按代数认旧 slot，迟到的收尾不会删掉角色换回来的 slot；`Settled` 让没做完的收尾能被下一次 `SelectRole` / `Begin` 发现并补完。③ 中止一个没发起成功的 ID 也记为已中止（挡住迟到的 Begin）。④ 人工提交带备注的入口 `Admin.CommitRoleTransferWithNote`（方案的 `CommitRoleTransfer` 没有备注参数）。
+- **“涉及已合服的服”按“已并入另一服”解释**：角色的绑定服或目标服的 `MergedInto` 非 0 才拒绝；承载着别的服的服照常可作源或目标。`MergeServer` 不检查在途的换服（没有索引）：换服期间目标服被并走，提交被拒绝，由调用方中止。
+- **期限只记录**：account 不自动中止过期的换服，也不拒绝迟到的提交；没有在途换服的列举与清扫（方案三期）。
+- **换服 ID 的复用**只挡得住最近一次了结的那个 ID；调用方要用不重复的 ID。
+- **收尾是尽力而为的后半段**：结果已定、slot 没收尾时，另一头的名额仍按已占用回答（`ErrRoleLimit`），直到重发的 Commit / Abort、这个角色的下一次 `SelectRole` 或 `Begin` 补完；`SelectRole` 里补不完只记 Warn 与 `role_transfer.settle_failed`，不挡登录。
+- **建角服不再可得**：`OriginServerIDClaim` 在换服之后是当前绑定服；业务要按“最初的服”做显示或归属，得自己在玩家数据里记。
+- **物理库不同的服**：account 不知道两个服是否共用玩家数据的物理库；独立 Gate 转交给 game 的绑定不带 claims（两个新 claim 只在认证器那一侧可见）。
+- **验证边界**：单元用例在 Memory 与本机隔离的单机 Redis 上都跑（含注入失败的存储、并发的提交 / 中止），`wiring/integration` 有一条真实 Redis 用例；Redis Cluster 没有跑；没有真实进程（两个 game sid + account）的演练，那是游戏侧接上之后的事。
+
 ## 平台与外部验证
 
 - **跨机HA与Linux物理故障**：本机集群 / loopback 不证明跨机器分区、掉电、真实网卡；具名清单见 [EXTERNAL-VERIFICATION](EXTERNAL-VERIFICATION.md) E01～E28。
@@ -599,7 +614,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **原生C++接入**：无完整 C++ / Unreal / GDExtension SDK 承诺，需独立设计和协议一致性验收。
 - **独立 Gate**：已实施 Gate / Game、广播与 Sync / Lockstep（[GATEWAY](../framework/GATEWAY.md)）；不用本机多实例代替多进程 / 跨机矩阵。容量结论见能力表。
 - **schema升级**：DAO 自动迁移已撤销，运行时只接受当前 schema；离线迁移按 [schema 变更操作手册](../framework/SCHEMA-MIGRATION.md)（停写→备份→转换→校验→切换→回退），game-demo 有执行器与 `cmd/schemamigrate`。在线双读与 `roost add migration` 骨架未实施，上线后重新决定；业务需明确离线转换和保留数据范围。2026-10-20 夜间在 v1.30 候选生成的 game-demo 上重做真实进程演练（[夜间补测](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md) §12），与 10-15 逐步一致。
-- **Player跨机**：以已落库数据为准，不要求本地 WAL 热迁移；搬的是 sid，按 [参考流程](../framework/PLAYER-MIGRATION.md) 停写→排空 WAL→释放单实例锁→切路由→新进程空 WAL 接管，game-demo 有检查工具 `cmd/sidmove`。单个玩家改绑 sid 无框架能力；合服用别名合服（D15 已实施，边界见下文[合服（D15）](#合服d15)）；真实跨机网络、卷迁移、客户端重连路径未演练；框架级迁移命令上线后评估。2026-10-20 夜间在 v1.30 候选上重做同机两进程演练（[夜间补测](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md) §13：正常迁移、kill -9 后原 WAL 重启、Mongo 停顿时 kill -9 的未排空，302 次确认逐键 +1、最终 Mongo 等于最后确认），与 10-15 一致。
+- **Player跨机**：以已落库数据为准，不要求本地 WAL 热迁移；搬的是 sid，按 [参考流程](../framework/PLAYER-MIGRATION.md) 停写→排空 WAL→释放单实例锁→切路由→新进程空 WAL 接管，game-demo 有检查工具 `cmd/sidmove`。单个玩家改绑 sid：account 一侧的接口与换服状态已有，游戏侧流程实施中，端到端还不能用（见[单个角色换服（account 一侧）](#单个角色换服account-一侧)）；合服用别名合服（D15 已实施，边界见下文[合服（D15）](#合服d15)）；真实跨机网络、卷迁移、客户端重连路径未演练；框架级迁移命令上线后评估。2026-10-20 夜间在 v1.30 候选上重做同机两进程演练（[夜间补测](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md) §13：正常迁移、kill -9 后原 WAL 重启、Mongo 停顿时 kill -9 的未排空，302 次确认逐键 +1、最终 Mongo 等于最后确认），与 10-15 一致。
 - **Windows**：非框架保证平台，只保证编译与 CLI 兼容（维护者 2026-10-14）。CI `windows-compatibility` 只跑 build、vet、`go test -run '^$'` 和 roost CLI 生成工程冒烟；完整 `go test` 的既有失败来自平台差异（打开中的文件不能改名 / 删除：nestwal 损坏记录检查、日志轮转、statslog；checkout 的 CRLF 使 gofmt 门禁与 kitconfig schema 比对失真；run 38500440362 的 6 个失败）。本机结果不改变 macOS / Linux 支持范围，跨平台也成立的缺陷不归入此条。
 
 ## 能力与验证边界
