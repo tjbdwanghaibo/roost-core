@@ -1,5 +1,5 @@
 name: leaderboard
-summary: 排行榜：总分榜的前 N 名（LeaderboardTop）与自己的名次（LeaderboardMe），经托管的 rank 服务；提交分数只给服务端别的功能调用
+summary: 排行榜：前 N 名连同自己的名次（LeaderboardTop）、只查自己的名次（LeaderboardMe），经托管的 rank 服务；提交分数只给服务端别的功能调用；榜名、周期与分数范围写在 game/leaderboard/leaderboard_board.go，缺省一张全服总分榜
 requires: []
 conflicts: []
 needs:
@@ -9,4 +9,4 @@ protocols: [LeaderboardTop, LeaderboardMe]
 verify:
   packages: [./game/leaderboard, ./game/controllers/leaderboard]
   run: ^TestLeaderboard
-  pass: 15
+  pass: 20

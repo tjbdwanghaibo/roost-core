@@ -1,0 +1,63 @@
+package leaderboard
+
+import (
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// 这个文件是榜的身份与规则，归工程所有：是哪张榜、多大范围、现在是哪个周期、多少分算合法、
+// 一屏榜单多长，都写在这里。leaderboard.go 里提交与读取的逻辑只按名字取这些规则，自己不带数字；
+// 两条协议的端点与 Submit 因此读写的是同一张榜的同一份定义。
+//
+// 缺省是一张全服总分榜、只有一个周期，装上就能用。工程按自己的玩法改这里：
+//
+//   - 换一张榜（例如“副本通关次数榜”）：改 BoardID 与分数范围。榜上的数代表什么由提交它的功能决定，
+//     这里只定榜名与合法范围。BoardID 是 rank 服务里存储键的一部分，上线后改它等于换一张空榜。
+//   - 分区：把 Board 里的 Scope 改成 svcrank.ScopeServer、ScopeID 填区号（例如本进程的区服号）。
+//   - 按周期（赛季、每周一张）：改 CurrentSeason 的函数体。它是函数而不是常量，就是为了能在运行期算，
+//     例如按业务日每 7 天一个周期：
+//
+//     return int64(clock.BusinessDay(clock.Now()))/7 + 1   // infra/base/clock
+//
+//     按周期分榜时，持有总分的功能也要按周期分开存总分，并且用 SubmitSeason 提交到它记账用的那个周期：
+//     先取一次 CurrentSeason，事务里按它记总分、事务外按它提交。两处各取一次，跨周期边界时会把
+//     上一周期的总分报进新榜。
+//   - 改了这里的规则，同时改 leaderboard_board_test.go：它把这里的数钉住。leaderboard_test.go 与端点的
+//     测试只按名字引用规则，不用动。
+
+// BoardID 是榜在 rank 服务里的名字。缺省是总分榜。
+const BoardID = "total"
+
+// CurrentSeason 是现在的周期号，必须为正。缺省只有一个周期。
+//
+// rank 服务不会自己换周期，也不在总线上开放清榜：周期号一变，读与写就都落到一张新的空榜上，
+// 旧榜原样留在 rank 里（要发周期奖励就在换周期之前读它）。缺省的换法是运维动作——改这里的数后发版。
+// 总分若是终身累计，玩家在新周期的第一次提交就是他的终身总分；要让新周期从 0 起算，
+// 由持有总分的功能按周期分开存（见文件头）。
+func CurrentSeason() int64 {
+	return 1
+}
+
+// Board 是 season 这个周期的榜在 rank 服务里的身份。缺省全服一张（ScopeGlobal）。
+// 读与写都经它取榜，榜名不从客户端收。
+func Board(season int64) svcrank.Board {
+	return svcrank.Board{ID: BoardID, Scope: svcrank.ScopeGlobal, Season: season}
+}
+
+// 分数的合法范围，两端都含。
+//
+//   - 下限 1：0 分等于“还没有成绩”，不上榜——否则榜尾是一长串什么都没做过的玩家。
+//   - 上限一万亿：远高于正常玩法能到的数，只用来挡住算错的值（溢出、单位弄错）。
+//     榜只升不降（见 Submit），一个错的大数提交上去之后，后面正确的提交压不下来。
+//     工程知道自己的分数到不了那么高时把它调低，挡得更早。
+const (
+	MinScore int64 = 1
+	MaxScore int64 = 1_000_000_000_000
+)
+
+// 查前 N 名的条数：不填按 DefaultTop，上限 MaxTop。上限低于 rank 服务自己的页上限
+// （svcrank.MaxPageSize，200），是这个游戏一屏榜单的长度，不是服务的能力边界。
+// 要求 1 <= DefaultTop <= MaxTop <= svcrank.MaxPageSize。
+const (
+	DefaultTop = 10
+	MaxTop     = 50
+)

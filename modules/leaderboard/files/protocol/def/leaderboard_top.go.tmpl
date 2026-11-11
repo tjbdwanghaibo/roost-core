@@ -2,14 +2,14 @@
 
 package protocoldef
 
-// LeaderboardTopRequest 查总分榜的前 Limit 名。Limit 不填（0）或为负按 10 处理，超过 50 按 50 处理：
-// 一次读整张榜不是这条协议提供的选项。查哪张榜由服务端定，请求里没有榜名——
-// 从线上收榜名等于让任何人读到任何榜。
+// LeaderboardTopRequest 查榜的前 Limit 名，连同调用者自己的名次。Limit 不填（0）或为负按缺省条数处理，
+// 超过上限按上限处理（缺省 10 / 50，见 game/leaderboard/leaderboard_board.go）：一次读整张榜不是这条协议
+// 提供的选项。查哪张榜、哪个周期由服务端定，请求里没有榜名——从线上收榜名等于让任何人读到任何榜。
 type LeaderboardTopRequest struct {
 	Limit int32 `pb:"1"`
 }
 
-// LeaderboardRow 是榜上的一行。Rank 从 1 起；Score 是该玩家的总分。
+// LeaderboardRow 是榜上的一行。Rank 从 1 起；Score 是该玩家在榜上的分数。
 // 只带玩家号，不带名字：榜不保存显示资料，客户端按玩家号另取。
 type LeaderboardRow struct {
 	Rank     int64 `pb:"1"`
@@ -18,12 +18,20 @@ type LeaderboardRow struct {
 }
 
 // LeaderboardTopResponse 按名次从高到低返回至多 Limit 行；Total 是读这一页时榜上的总人数。
-// 名次与分数来自同一次读取，不会出现“新分数配旧名次”。
+// 每一行的名次与分数来自同一次读取，不会出现“新分数配旧名次”。
+//
+// MyOnBoard / MyRank / MyScore 是调用者自己在榜上的位置（查的是谁取自已认证的连接），一条请求画完
+// “榜头 + 我在哪”。没上榜不是错误：MyOnBoard 为 false、MyRank 与 MyScore 都是 0；客户端先看 MyOnBoard，
+// 不要拿 MyRank == 0 自己猜。自己就在这一页上时，这三个字段取自那一行；不在时是紧接着的另一次读取，
+// 与榜头可以相差一瞬。只要自己的位置、不要榜头时用 LeaderboardMe。
 type LeaderboardTopResponse struct {
-	Code   int32            `pb:"1"`
-	Reason string           `pb:"2"`
-	Rows   []LeaderboardRow `pb:"3"`
-	Total  int64            `pb:"4"`
+	Code      int32            `pb:"1"`
+	Reason    string           `pb:"2"`
+	Rows      []LeaderboardRow `pb:"3"`
+	Total     int64            `pb:"4"`
+	MyOnBoard bool             `pb:"5"`
+	MyRank    int64            `pb:"6"`
+	MyScore   int64            `pb:"7"`
 }
 
 //roost:protocol group=game handler=leaderboard

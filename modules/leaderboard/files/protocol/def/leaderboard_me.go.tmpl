@@ -2,7 +2,7 @@
 
 package protocoldef
 
-// LeaderboardMeRequest 查自己在总分榜上的名次与分数。查的是谁取自已认证的连接，不取请求字段。
+// LeaderboardMeRequest 只查自己在榜上的名次与分数（不带榜头；要榜头连同自己的位置用 LeaderboardTop）。查的是谁取自已认证的连接，不取请求字段。
 type LeaderboardMeRequest struct{}
 
 // LeaderboardMeResponse：没上榜不是错误——Code 为 0、OnBoard 为 false、Rank 与 Score 都是 0。

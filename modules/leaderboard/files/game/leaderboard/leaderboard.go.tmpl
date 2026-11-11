@@ -1,11 +1,19 @@
 // Package leaderboard 是排行榜在本工程这一侧的约定：有哪些榜、一分是什么、多少分算合法、
-// 怎么把玩家报给 rank 托管服务，以及服务端别的功能提交分数的唯一入口 Submit。
+// 怎么把玩家报给 rank 托管服务，以及服务端别的功能提交分数的入口 Submit / SubmitSeason。
 //
 // rank 服务只给数字排名，不关心数字代表什么（它是通用的：榜名、周期、合并方式都由调用方每次带上）。
-// 与游戏有关的决定都在这个文件里；端点（game/controllers/leaderboard）与提交分数的功能都 import 它，
-// 因此读榜和写榜用的是同一张榜的同一份定义。
+// 与游戏有关的决定分在两个文件里：
+//
+//   - leaderboard_board.go：榜的身份与规则（榜名、范围、周期、分数范围、一屏多长），归工程所有，工程改它；
+//   - 本文件：提交与读取的逻辑，只按名字取上面的规则，自己不带数字。
+//
+// 端点（game/controllers/leaderboard）与提交分数的功能都 import 这个包，因此读榜和写榜用的是
+// 同一张榜的同一份定义。
 //
 // 本模块没有自己的状态：玩家的总分由产生分数的功能保存在它自己的状态里，榜只是那个数的投影。
+//
+// 排序：分高的在前；同分时先达到这个分数的在前（rank 服务把首次达到的时间记作 Tie，
+// UpdateMax 对相同分数保留较早的 Tie），不是玩家号小的在前。
 package leaderboard
 
 import (
@@ -16,49 +24,18 @@ import (
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
 )
 
-// 总分榜：本模块唯一的榜。
-//
-//   - 范围：全服一张（ScopeGlobal）。分区的游戏改成 ScopeServer 并把区号放进 ScopeID。
-//   - 周期：只有一个周期 CurrentSeason。rank 服务不会自己换周期，也不在总线上开放清榜：
-//     换周期是运维动作——改 CurrentSeason 后发版，新榜从空开始，旧榜原样留在 rank 里。
-//     总分若是终身累计，玩家在新周期的第一次提交就是他的终身总分；要让新周期从 0 起算，
-//     由持有总分的功能按周期分开存，这里不替它决定。
-//   - 排序：分高的在前；同分时先达到这个分数的在前（rank 服务把首次达到的时间记作 Tie，
-//     UpdateMax 对相同分数保留较早的 Tie），不是玩家号小的在前。
-const (
-	TotalBoardID        = "total"
-	CurrentSeason int64 = 1
-)
-
-// TotalBoard 是总分榜在 rank 服务里的身份。读与写都用它，榜名不从客户端收。
-func TotalBoard() svcrank.Board {
-	return svcrank.Board{ID: TotalBoardID, Scope: svcrank.ScopeGlobal, Season: CurrentSeason}
+// CurrentBoard 是当前周期的榜：读榜的端点与 Submit 用它。
+func CurrentBoard() svcrank.Board {
+	return Board(CurrentSeason())
 }
 
-// 总分的合法范围，两端都含。
-//
-//   - 下限 1：0 分等于“还没有成绩”，不上榜——否则榜尾是一长串什么都没做过的玩家。
-//   - 上限一万亿：远高于正常玩法能到的数，只用来挡住算错的值（溢出、单位弄错）。
-//     榜只升不降（见 Submit），一个错的大数提交上去之后，后面正确的提交压不下来。
-const (
-	MinScore int64 = 1
-	MaxScore int64 = 1_000_000_000_000
-)
-
-// ValidateScore 检查一个总分能不能上榜。
+// ValidateScore 检查一个总分能不能上榜：在 [MinScore, MaxScore] 之内。
 func ValidateScore(total int64) error {
 	if total < MinScore || total > MaxScore {
 		return fmt.Errorf("%w: total score %d is outside [%d, %d]", svcrank.ErrScoreInvalid, total, MinScore, MaxScore)
 	}
 	return nil
 }
-
-// 查前 N 名的条数：不填按 DefaultTop，上限 MaxTop。上限低于 rank 服务自己的页上限
-// （svcrank.MaxPageSize），是这个游戏一屏榜单的长度，不是服务的能力边界。
-const (
-	DefaultTop = 10
-	MaxTop     = 50
-)
 
 // TopLimit 把客户端要的条数收进 [1, MaxTop]：0 或负数按 DefaultTop，超过 MaxTop 按 MaxTop。
 // 收而不拒：客户端多要只是少拿几行，没有哪种取值值得让这条只读请求失败；
@@ -81,11 +58,7 @@ func PlayerScore(playerID, total int64) svcrank.Score {
 	return svcrank.Score{OwnerID: playerID, Value: total}
 }
 
-// MaxRequestKeyBytes 是幂等键的长度上限。rank 服务把每个玩家最近几个键存在榜的记录里，
-// 键不设上限就是让调用方决定那条记录有多大。
-const MaxRequestKeyBytes = 128
-
-// Standing 是一名玩家在总分榜上的位置。OnBoard 为 false 时 Rank 与 Score 都是 0。
+// Standing 是一名玩家在榜上的位置。OnBoard 为 false 时 Rank 与 Score 都是 0。
 type Standing struct {
 	OnBoard bool
 	Rank    int64
@@ -103,7 +76,7 @@ func StandingOf(entry svcrank.Entry, found bool) Standing {
 }
 
 // Client 取 rank 服务的客户端（业务服务在 roost.yaml 里 uses: [rank] 时由 ClientMod 发布）。
-// 端点在启动时取一次；Submit 每次调用取一次（一次带读锁的查表）。
+// 端点在启动时取一次；Submit / SubmitSeason 每次调用取一次（一次带读锁的查表）。
 func Client(registry *app.Registry) (svcrank.Rank, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("leaderboard: app registry is required")
@@ -115,32 +88,29 @@ func Client(registry *app.Registry) (svcrank.Rank, error) {
 	return client, nil
 }
 
-// Submit 把玩家当前的总分提交到总分榜，返回提交之后他在榜上的位置。
+// Submit 把玩家当前的总分提交到当前周期的榜（CurrentBoard），返回提交之后他在榜上的位置。
 // 它不对客户端开放（没有协议）：只给服务端别的功能在自己的分数变动之后调用。
+// 总分按周期分开存的功能不用它，用 SubmitSeason（见那里的说明）。
 //
 // # total 是什么
 //
 // total 是玩家**当前总分的快照**，不是“这次加了多少”。总分由调用方保存在自己的状态里
 // （例如 Player 上的一个字段），并在调用方自己的事务里变动；这里用 UpdateMax 把榜抬到这个数。
 // 因此重复提交、乱序到达的旧快照都不会多加分，也不会把榜拉低。
-// 不提供“加 delta”的入口：rank 服务只记每个玩家最近 8 个请求键（防重发的环，不是账本），
+// 不提供“加 delta”的入口：rank 服务只记每个玩家最近 8 个请求号（防重发的环，不是账本），
 // 拿它给增量去重，同一件事在 8 次别的提交之后重放就会再加一次。
 // 这也意味着总分必须只增不减；会下降的分数（天梯分）不能用这张榜的这个入口。
 //
-// # 幂等键怎么取
+// # 为什么没有幂等键
 //
-// requestKey 是“产生这个总分的那件事”的业务键：局号、订单号、任务号，例如 "dungeon:<局号>"。
-// 同一件事的每次重试都用同一个键，不同的事用不同的键；不要用时间戳、随机数（重试就对不上了）。
-// 它必填，长度不超过 MaxRequestKeyBytes 字节。
-// 交给 rank 服务的请求号是“键@总分”：同一个键带同一个总分的重发在 rank 那边直接返回已存的结果；
-// 同一个键带更高的总分（那件事重放时玩家的总分已经因为别的事涨了）照常把榜抬上去——
-// 所以即使键取得不好（比如每次都一样），榜也不会停在第一次提交的数上。
+// 快照加 UpdateMax 本身就是幂等的：同一个总分提交多少次、先后顺序怎样，榜上都是同一个数。
+// 所以这里不收业务键，交给 rank 服务的请求号是空的。带请求号反而多事：rank 对带请求号的提交
+// 即使分数没变也要写一次（把请求号记进那个玩家的环），重放风暴下同一个玩家的这些写互相抢
+// compare-and-swap，抢输 8 次就是 ErrConflict；不带请求号时，分数没变的提交在 rank 那边只是一次读。
 //
 // # 重复提交会怎样
 //
-// 什么都不会多：键相同、总分相同，rank 服务认出重发，不写；键已经被挤出最近 8 个，
-// 或者键不同但总分没变、变小，UpdateMax 发现不比已存的高，不写。两种情况都返回榜上现有的位置。
-// 正确性靠的是“快照 + 只升不降”，不是那个只记 8 个的环。
+// 什么都不会多：总分没变或变小，UpdateMax 发现不比已存的高，不写，返回榜上现有的位置。
 //
 // # 提交失败调用方该怎么办
 //
@@ -152,29 +122,42 @@ func Client(registry *app.Registry) (svcrank.Rank, error) {
 //     “上次可能没报上榜”的那种情况，照样提交当前总分。
 //   - Submit 返回错误时不要回滚、不要让玩家的这次操作失败，也不要想办法“补一个差值”：
 //     记一条 Warn 日志，继续。这时的状态是“分已经加了、榜上还没到”，是可恢复的方向——
-//     用同一个键重试这次调用，或者等这名玩家下一次分数变动，下一个快照会把它带上。
-//   - 参数被拒（总分越界、玩家号或键不合法）返回的是带码错误（svcrank.ErrScoreInvalid /
-//     ErrOwnerInvalid / ErrRequestInvalid），此时没有向 rank 发出任何调用；这是调用方的缺陷，重试没有用。
-func Submit(ctx context.Context, registry *app.Registry, playerID, total int64, requestKey string) (Standing, error) {
+//     重试这次调用，或者等这名玩家下一次分数变动，下一个快照会把它带上。
+//   - 参数被拒（总分越界、玩家号或周期不合法）返回的是带码错误（svcrank.ErrScoreInvalid /
+//     ErrOwnerInvalid / ErrBoardInvalid），此时没有向 rank 发出任何调用；这是调用方的缺陷，重试没有用。
+//     总分为 0（还没有成绩）也在被拒之列：调用方在总分为正时才提交。
+func Submit(ctx context.Context, registry *app.Registry, playerID, total int64) (Standing, error) {
+	return SubmitSeason(ctx, registry, CurrentSeason(), playerID, total)
+}
+
+// SubmitSeason 把玩家在 season 这个周期的总分提交到这个周期的榜（Board(season)）。
+// 除了榜由调用方指定周期之外，约定与 Submit 完全相同。
+//
+// 给总分按周期分开存的功能用：先取一次周期号（通常是 CurrentSeason()），自己的事务按它记总分，
+// 事务之外按同一个周期号提交。这样跨周期边界时，第 N 期的总分只会进第 N 期的榜；
+// 换成事务里取一次、Submit 里再取一次，边界上那一次提交会把上一期的总分报进新榜，而榜只升不降。
+// season 必须为正：周期号为 0 多半是调用方忘了取。
+func SubmitSeason(ctx context.Context, registry *app.Registry, season, playerID, total int64) (Standing, error) {
 	if playerID <= 0 {
 		return Standing{}, fmt.Errorf("%w: leaderboard submit needs a positive player id, got %d", svcrank.ErrOwnerInvalid, playerID)
 	}
 	if err := ValidateScore(total); err != nil {
 		return Standing{}, err
 	}
-	if requestKey == "" {
-		return Standing{}, fmt.Errorf("%w: leaderboard submit needs the business key of what produced the score", svcrank.ErrRequestInvalid)
+	if season <= 0 {
+		return Standing{}, fmt.Errorf("%w: leaderboard submit needs a positive season, got %d", svcrank.ErrBoardInvalid, season)
 	}
-	if len(requestKey) > MaxRequestKeyBytes {
-		return Standing{}, fmt.Errorf("%w: request key is %d bytes, limit %d", svcrank.ErrRequestInvalid, len(requestKey), MaxRequestKeyBytes)
+	board := Board(season)
+	if err := board.Validate(); err != nil {
+		return Standing{}, fmt.Errorf("leaderboard submit: board %s: %w", board, err)
 	}
 	client, err := Client(registry)
 	if err != nil {
 		return Standing{}, err
 	}
-	entry, err := client.Submit(ctx, TotalBoard(), PlayerScore(playerID, total), svcrank.UpdateMax, fmt.Sprintf("%s@%d", requestKey, total))
+	entry, err := client.Submit(ctx, board, PlayerScore(playerID, total), svcrank.UpdateMax, "")
 	if err != nil {
-		return Standing{}, fmt.Errorf("leaderboard submit: player %d total %d: %w", playerID, total, err)
+		return Standing{}, fmt.Errorf("leaderboard submit: player %d total %d season %d: %w", playerID, total, season, err)
 	}
 	return StandingOf(entry, true), nil
 }

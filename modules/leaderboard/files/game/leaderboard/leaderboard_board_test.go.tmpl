@@ -1,0 +1,52 @@
+package leaderboard
+
+import (
+	"testing"
+
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// 这个文件把 leaderboard_board.go 里的规则钉住，和它一起归工程所有：工程改了榜名、范围、周期、
+// 分数范围或一屏的长度，就把下面写死的数改成自己的。数是故意写死的——照抄常量名的断言拦不住改错的规则。
+
+func TestLeaderboardBoardIsOneGlobalTotalBoardInSeasonOne(t *testing.T) {
+	if season := CurrentSeason(); season != 1 {
+		t.Fatalf("CurrentSeason() = %d, want 1", season)
+	}
+	board := CurrentBoard()
+	want := svcrank.Board{ID: "total", Scope: svcrank.ScopeGlobal, ScopeID: 0, Season: 1}
+	if board != want {
+		t.Fatalf("board = %+v, want %+v", board, want)
+	}
+	if err := board.Validate(); err != nil {
+		t.Fatalf("the rank service would refuse this board: %v", err)
+	}
+}
+
+func TestLeaderboardScoreRangeIsOneToATrillion(t *testing.T) {
+	for _, total := range []int64{1, 2, 999_999_999_999, 1_000_000_000_000} {
+		if err := ValidateScore(total); err != nil {
+			t.Errorf("total %d refused: %v", total, err)
+		}
+	}
+	for _, total := range []int64{0, -1, -1_000_000_000_000, 1_000_000_000_001, 1 << 62} {
+		if err := ValidateScore(total); err == nil {
+			t.Errorf("total %d accepted", total)
+		}
+	}
+}
+
+func TestLeaderboardTopLimitDefaultsToTenAndStopsAtFifty(t *testing.T) {
+	for requested, want := range map[int32]int{
+		0: 10, -1: 10, -2147483648: 10,
+		1: 1, 10: 10, 11: 11, 49: 49, 50: 50,
+		51: 50, 200: 50, 201: 50, 2147483647: 50,
+	} {
+		if got := TopLimit(requested); got != want {
+			t.Errorf("TopLimit(%d) = %d, want %d", requested, got, want)
+		}
+	}
+	if MaxTop > svcrank.MaxPageSize {
+		t.Fatalf("MaxTop %d exceeds what the rank service serves in one page (%d)", MaxTop, svcrank.MaxPageSize)
+	}
+}

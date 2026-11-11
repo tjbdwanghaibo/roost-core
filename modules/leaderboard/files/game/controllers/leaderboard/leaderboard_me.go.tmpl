@@ -11,14 +11,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// HandleLeaderboardMe 读调用者自己在总分榜上的名次与分数。查的是谁取认证会话的玩家，从不取请求字段。
+// HandleLeaderboardMe 只读调用者自己在榜上的名次与分数。查的是谁取认证会话的玩家，从不取请求字段。
 // 没上榜（从没提交过分数）不是错误：Code 为 0、OnBoard 为 false、Rank 与 Score 为 0。
-// 名次与分数来自 rank 服务的同一次读取，互相不会矛盾；它与 LeaderboardTop 是两次读，可以相差一瞬。
+// 名次与分数来自 rank 服务的同一次读取，互相不会矛盾。LeaderboardTop 的回包里也带这三个数；
+// 这条协议给不要榜头、只刷新“我在哪”的界面用，少读一页。
 func (controller *Controller) HandleLeaderboardMe(context *playeraccess.Context, request *pb.LeaderboardMeRequest) (*pb.LeaderboardMeResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("leaderboard_me endpoint: context and request are required")
 	}
-	entry, found, err := controller.ranking.Rank(context.Context(), gameleaderboard.TotalBoard(), context.PlayerID)
+	entry, found, err := controller.ranking.Rank(context.Context(), gameleaderboard.CurrentBoard(), context.PlayerID)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
