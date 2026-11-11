@@ -144,7 +144,7 @@ func TestDigALakeFillItBackByTheChunksWaterLevel(t *testing.T) {
 	steps := []struct {
 		raw   uint16
 		water bool
-		depth int32
+		depth int64
 	}{{3990, true, 100}, {4000, false, 0}, {3950, true, 500}, {4001, false, 0}, {4200, false, 0}}
 	var seen []bool
 	for _, s := range steps {
@@ -197,7 +197,7 @@ func TestWalkerSwimsByTheSameWaterLevelAsTheQueries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := g.Water && g.Depth() > DefaultWalkRules.WadeDepth; swims != want {
+			if want := g.Water && g.Depth() > int64(DefaultWalkRules.WadeDepth); swims != want {
 				t.Fatalf("node (%d, %d): Swimming %v, query water %v depth %d (level %d)", gx, gy, swims, g.Water, g.Depth(), g.WaterLevel)
 			}
 			z, err := w.StandZ(pt)
@@ -243,5 +243,83 @@ func TestWalkerSwimsByTheSameWaterLevelAsTheQueries(t *testing.T) {
 	}
 	if speed, ok := fw.Step(shore, lake); !ok || speed != DefaultWalkRules.SwimSpeed {
 		t.Fatalf("from a 449.5m shore into the 450m lake: speed %d, %v", speed, ok)
+	}
+}
+
+// 取出的地图参数是副本（RV-20261110-03）：区域水位只随原始地形包换版，调用方改 Pack.Meta() / View.Meta() 返回值里的区域
+// 不改到包与视图里。改过之后包头、视图的参数、视图按块算好的水位表与查询答的仍是同一条水位线。
+func TestMetaIsACopyAtEveryPublicBoundary(t *testing.T) {
+	p, _ := writeTestPack(t, waterMeta, flatSource(4200))
+	v := NewView(p)
+	loadAll(t, v)
+	lake := ChunkKey{X: 1, Y: 0} // waterMeta 的第 0 片区域：水位 450m
+	for name, get := range map[string]func() Meta{"Pack.Meta": p.Meta, "View.Meta": v.Meta} {
+		got := get()
+		got.WaterRegions[0].Level = 99999
+		if level := get().WaterLevelOf(lake); level != 45000 {
+			t.Errorf("%s: writing to the returned water regions changed the next %s to level %d, want 45000", name, name, level)
+		}
+	}
+	x, y := lake.Origin().X+10*SampleSpacing, lake.Origin().Y+10*SampleSpacing
+	g, err := v.Probe(x, y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b, c := p.Meta().WaterLevelOf(lake), v.Meta().WaterLevelOf(lake), v.WaterLevelOf(lake); a != 45000 || b != 45000 || c != 45000 || g.WaterLevel != 45000 {
+		t.Errorf("water level of %v: pack meta %d, view meta %d, view table %d, probe %d; all must stay 45000", lake, a, b, c, g.WaterLevel)
+	}
+	if !p.Meta().Equal(waterMeta) || !v.Meta().Equal(waterMeta) {
+		t.Errorf("metadata after the writes: pack %+v, view %+v, want %+v", p.Meta(), v.Meta(), waterMeta)
+	}
+}
+
+// 水深是水位线与地面高度两个 int32 之差，按 int64 给出（RV-20261110-04）：高度基准可以为负、水位线是独立配置的 int32，
+// 合法的地图参数下差值可以超出 int32（最大 2³² − 1）。全局水位与区域水位同一规则；“无水”（math.MinInt32）的块永远
+// 不是水、水深 0。客户端 TerrainGround.Depth 用同一组数（client/dotnet/Roost.Client.Terrain.Tests/ViewTests.cs 的
+// TestWaterDepthRange）。
+func TestWaterDepthCoversTheWholeLevelRange(t *testing.T) {
+	const none = math.MinInt32
+	cases := []struct {
+		name                   string
+		base                   int32 // HeightBase；地面原始值都是 0，所以地面高度就是它
+		global, lake           int32 // 全局水位与块 (1,0) 的区域水位
+		globalWet, lakeWet     bool  // 块 (0,0)（全局水位）、块 (1,0)（区域水位）是不是水
+		globalDepth, lakeDepth int64 // 两处的水深
+	}{
+		{"ordinary levels", -10000, 0, 500, true, true, 10000, 10500},
+		{"审查的复现：负基准、全局水位取 int32 最大值", -10000, math.MaxInt32, none, true, false, math.MaxInt32 + 10000, 0},
+		{"区域水位取 int32 最大值、全局无水", -10000, none, math.MaxInt32, false, true, 0, math.MaxInt32 + 10000},
+		{"基准取 int32 最小值：差值到 2³² − 1", math.MinInt32, math.MaxInt32, math.MinInt32 + 1, true, true, math.MaxUint32, 1},
+		{"基准取 int32 最小值、两处都无水", math.MinInt32, none, none, false, false, 0, 0},
+		{"水位线等于地面不算水", -10000, -10000, -9999, false, true, 0, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			meta := Meta{BaseRevision: 1, ChunksX: 2, ChunksY: 1, HeightBase: c.base, WaterLevel: c.global,
+				WaterRegions: []WaterRegion{{MinX: 1, MinY: 0, MaxX: 2, MaxY: 1, Level: c.lake}}}
+			if err := meta.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			v := newWalkView(t, meta, 0)
+			for _, at := range []struct {
+				key   ChunkKey
+				water bool
+				depth int64
+			}{{ChunkKey{X: 0, Y: 0}, c.globalWet, c.globalDepth}, {ChunkKey{X: 1, Y: 0}, c.lakeWet, c.lakeDepth}} {
+				x, y := at.key.Origin().X+SampleSpacing, at.key.Origin().Y+SampleSpacing
+				g, err := v.Probe(x, y)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d, err := v.WaterDepth(x, y)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if g.Water != at.water || g.Depth() != at.depth || d != at.depth {
+					t.Errorf("chunk %v (ground %d, level %d): water %v, Ground.Depth %d, WaterDepth %d; want %v, %d",
+						at.key, g.Height, g.WaterLevel, g.Water, g.Depth(), d, at.water, at.depth)
+				}
+			}
+		})
 	}
 }

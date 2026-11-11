@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"slices"
 )
 
 // 原始地形包（base pack）格式，版本 2。单文件，全部整数小端：
@@ -208,11 +207,7 @@ func metaSum(head, table []byte) [sha256.Size]byte {
 }
 
 // Meta 返回包头记录的地图参数（WaterRegions 是副本，调用方改它不影响包）。
-func (p *Pack) Meta() Meta {
-	m := p.meta
-	m.WaterRegions = slices.Clone(m.WaterRegions)
-	return m
-}
+func (p *Pack) Meta() Meta { return p.meta.Clone() }
 
 // ChunkSum 返回块存储字节的 SHA-256（索引表里的值，不读块数据），客户端可以用它核对自己的资源。
 func (p *Pack) ChunkSum(key ChunkKey) ([sha256.Size]byte, error) {

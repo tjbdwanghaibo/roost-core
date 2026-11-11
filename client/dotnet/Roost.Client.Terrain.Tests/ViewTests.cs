@@ -116,4 +116,67 @@ internal static partial class Program
         Check(bad == 0 && reads > 0, $"torn reads: {bad} of {reads}");
         Console.WriteLine($"PASS terrain concurrent queries: {reads} reads during {version - 2} overlay swaps, none mixed versions");
     }
+
+    // 地图参数里的区域水位只读（RV-20261110-03，与 Go TestMetaIsACopyAtEveryPublicBoundary 对应）：区域配置只随原始地形包
+    // 换版。构造时传入的列表事后再改不影响 TerrainMeta；把 WaterRegions 转回 IList（数组也是 IList）去写也改不到它。之后
+    // 包头、视图的参数、视图按块算好的水位表与查询答的仍是同一条水位线。
+    private static void TestMetaRegionsAreReadOnly()
+    {
+        var lake = new ChunkKey(1, 0);
+        var changed = new TerrainWaterRegion(1, 0, 2, 1, 99999);
+        var given = new[] { new TerrainWaterRegion(1, 0, 2, 1, 45000) };
+        var meta = new TerrainMeta(1, 3, 2, 0, 40000, given);
+        given[0] = changed;
+        Check(meta.WaterLevelOf(lake) == 45000, "TerrainMeta keeps its own copy of the regions it was given");
+
+        var flat = Deflate(Plain(new ushort[TerrainGeometry.ChunkPoints], Materials(1)));
+        using var pack = TerrainPack.Open(BuildPack(1, 2, 1, 0, 40000, new[] { flat, flat }, new TerrainWaterRegion(1, 0, 2, 1, 45000)));
+        var view = LoadAll(pack);
+        foreach (var regions in new[] { meta.WaterRegions, pack.Meta.WaterRegions, view.Meta.WaterRegions })
+        {
+            // 只读集合拒绝写入（NotSupportedException）；拒绝不了的（直接交出内部数组）写进去，由下面的水位核对发现。
+            if (!(regions is IList<TerrainWaterRegion> list)) continue;
+            try { list[0] = changed; }
+            catch (NotSupportedException) { }
+        }
+        var g = view.Probe(6400 + 1000, 1000);
+        Check(meta.WaterLevelOf(lake) == 45000 && pack.Meta.WaterLevelOf(lake) == 45000 && view.Meta.WaterLevelOf(lake) == 45000 &&
+              view.WaterLevelOf(lake) == 45000 && g.WaterLevel == 45000 && g.Water && g.Depth == 45000,
+            $"water level of {lake}: meta {meta.WaterLevelOf(lake)}, pack {pack.Meta.WaterLevelOf(lake)}, view meta {view.Meta.WaterLevelOf(lake)}, view table {view.WaterLevelOf(lake)}, probe {g.WaterLevel}; all must stay 45000");
+        Console.WriteLine("PASS terrain meta: water regions are read-only at TerrainMeta, TerrainPack.Meta and TerrainView.Meta");
+    }
+
+    // 水深是水位线与地面高度两个 int 之差，按 long 给出（RV-20261110-04）：高度基准可以为负、水位线是独立配置的 int，合法的
+    // 地图参数下差值可以超出 int（最大 2³² − 1）。与 Go TestWaterDepthCoversTheWholeLevelRange 同一组数：2 × 1 块、地面原始值
+    // 都是 0（地面高度就是高度基准），块 (0,0) 用全局水位、块 (1,0) 用区域水位；“无水”是 int.MinValue。
+    private static void TestWaterDepthRange()
+    {
+        const int none = int.MinValue;
+        var cases = new (string Name, int Base, int Global, int Lake, bool GlobalWet, bool LakeWet, long GlobalDepth, long LakeDepth)[]
+        {
+            ("ordinary levels", -10000, 0, 500, true, true, 10000, 10500),
+            ("negative base, global level int.MaxValue (the review's reproduction)", -10000, int.MaxValue, none, true, false, int.MaxValue + 10000L, 0),
+            ("regional level int.MaxValue, no global water", -10000, none, int.MaxValue, false, true, 0, int.MaxValue + 10000L),
+            ("base int.MinValue: a difference of 2^32 - 1", int.MinValue, int.MaxValue, int.MinValue + 1, true, true, uint.MaxValue, 1),
+            ("base int.MinValue, no water anywhere", int.MinValue, none, none, false, false, 0, 0),
+            ("a level equal to the ground is not water", -10000, -10000, -9999, false, true, 0, 1),
+        };
+        var flat = Deflate(Plain(new ushort[TerrainGeometry.ChunkPoints], Materials(1)));
+        foreach (var c in cases)
+        {
+            using var pack = TerrainPack.Open(BuildPack(1, 2, 1, c.Base, c.Global, new[] { flat, flat }, new TerrainWaterRegion(1, 0, 2, 1, c.Lake)));
+            var view = LoadAll(pack);
+            foreach (var (x, wet, depth) in new[] { (100L, c.GlobalWet, c.GlobalDepth), (6400L + 100, c.LakeWet, c.LakeDepth) })
+            {
+                var g = view.Probe(x, 100);
+                long ground = g.Depth, query = view.WaterDepth(x, 100);
+                Check(g.Height == c.Base && g.Water == wet && ground == depth && query == depth,
+                    $"{c.Name}, x {x} (ground {g.Height}, level {g.WaterLevel}): water {g.Water}, TerrainGround.Depth {ground}, WaterDepth {query}; want {wet}, {depth}");
+            }
+        }
+        // 不经视图直接构造的查询结果同一规则。
+        long built = new TerrainGround(-10000, 0, true, int.MaxValue).Depth, dry = new TerrainGround(5, 0, false, 100).Depth;
+        Check(built == int.MaxValue + 10000L && dry == 0, $"TerrainGround.Depth on constructed values: {built} and {dry}");
+        Console.WriteLine($"PASS terrain water depth: {cases.Length} level / base combinations up to 2^32 - 1, global and regional, equal to Go");
+    }
 }
