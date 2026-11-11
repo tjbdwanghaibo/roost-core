@@ -9,7 +9,7 @@
   - 约定：模块状态是嵌套结构体，追加在所挂实体主 DAO 的末尾，同步与否按顶层字段决定；协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配，归属记在新的 `roost.yaml` `modules` 段。没有卸载。
   - 模块：`wallet`（余额；`Add` 给自己判重的调用方、`Apply` 带业务键并在最近 128 次的去重窗口内只生效一次；消费协议；8 条场景）、`checkin`（每日签到，按业务日切分，依赖 wallet，奖励在同一笔事务里发放，6 条场景）、`chat`（世界频道与私聊的发送和翻历史，经托管的 chat 服务，替换它默认拒绝一切的 collaborators，6 条场景）。`enter`（进入游戏：建档、首次初始化入口，安装时打开玩家 TCP 接入与自身视图，3 条场景）。模块清单的 `replaces` 让模块接管一个没改过的生成桩（业务改过就拒绝安装），`access` 让安装器代办玩家接入的前置。
   - 文档：新增[能力清单](docs/framework/CAPABILITIES.md)（按需求条目查 core 的能力、接入方式与现成参考）；roost-genre skill 新增“按需求组合”流程（[compose.md](docs/agent-skills/roost-genre/references/compose.md)），由一个只凭文档的 agent 按一段需求实测过一轮，暴露的模块缺陷与文档缺口已修（[实施记录 §17.5](docs/maintenance/FEATURE-2026-11-10-business-modules.md#175-只凭-skill-的实测2026-11-10)）。
-  - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：只有四个模块（新写的，不从 game-demo 或玩法夹具迁移），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
+  - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：只有四个模块（13 类玩法与 game-demo 的业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
 - **修复**（codegen/dao）：**嵌套类型的识别不再取决于定义文件的文件名顺序；DAO 超过 64 个顶层字段在生成期拒绝**。嵌套类型定义在排在 DAO 文件之前的文件里时识别不到，生成时报 `unsupported sync type`；现在全部定义文件解析完再认一遍，同时认得出跨文件互相引用的嵌套类型，已有工程的生成物不变。脏位与同步掩码是 `uint64`、每个顶层字段一位：第 65 个字段原先生成成功、生成物编译失败（`constant overflows uint64`），现在解析阶段拒绝并给出改法（收进嵌套结构体）。回归 `TestNestedTypesAreFoundWhateverFileDefinesThem`、`TestDaoWithMoreThan64FieldsIsRefused`（修前都失败）。

@@ -512,7 +512,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **只有四个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）。模块是新写的，不从 game-demo 或玩法夹具迁移（维护者 2026-11-11：“不用考虑旧代码，能直接生成新的就行”）；13 类玩法与 game-demo 仍是各自的夹具与模板，不受模块影响。按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **只有四个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）。13 类玩法与 game-demo 的业务还没有拆成模块，仍是各自的夹具与模板（拆解是方案的后续工作）。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
 - **chat 模块只有发送与翻历史**：没有向在线玩家的推送（需要在线名单与连接关闭的钩子，即运行期接线点），客户端靠 `ChatHistory` 的游标拉新消息；系统消息入口保持拒绝；没有群组频道。端点不经过 Nest，没有离线用例——6 条场景只覆盖频道规则、消息体校验与 collaborators 的政策。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
 - **模块绑定具体的实体名与工程形状**：wallet 与 checkin 挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
