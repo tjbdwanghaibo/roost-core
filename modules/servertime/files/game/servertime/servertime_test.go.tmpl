@@ -51,6 +51,7 @@ func TestServertimeOrdinaryMoment(t *testing.T) {
 		DayStartUnixMilli:  1794268800000,
 		NextResetUnixMilli: 1794355200000,
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		UTCOffsetSeconds:   0,
 		Zone:               "UTC",
 	})
@@ -66,6 +67,7 @@ func TestServertimeResetInstantAndOneMillisecondEitherSide(t *testing.T) {
 		DayStartUnixMilli:  1794268800000,
 		NextResetUnixMilli: 1794355200000,
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		Zone:               "UTC",
 	})
 	servertimeWant(t, "at the reset", At(reset), Snapshot{
@@ -74,6 +76,7 @@ func TestServertimeResetInstantAndOneMillisecondEitherSide(t *testing.T) {
 		DayStartUnixMilli:  1794355200000,
 		NextResetUnixMilli: 1794441600000,
 		NextDay:            20261112,
+		PrevDay:            20261110,
 		Zone:               "UTC",
 	})
 	servertimeWant(t, "1ms after the reset", At(reset+1), Snapshot{
@@ -82,6 +85,7 @@ func TestServertimeResetInstantAndOneMillisecondEitherSide(t *testing.T) {
 		DayStartUnixMilli:  1794355200000,
 		NextResetUnixMilli: 1794441600000,
 		NextDay:            20261112,
+		PrevDay:            20261110,
 		Zone:               "UTC",
 	})
 }
@@ -95,6 +99,7 @@ func TestServertimeResetAtFiveInTheMorning(t *testing.T) {
 		DayStartUnixMilli:  1794200400000, // 11-09 05:00
 		NextResetUnixMilli: 1794286800000, // 11-10 05:00
 		NextDay:            20261110,
+		PrevDay:            20261108,
 		Zone:               "UTC",
 	})
 	servertimeWant(t, "2026-11-10 05:00:00.000 UTC", At(1794286800000), Snapshot{
@@ -103,6 +108,7 @@ func TestServertimeResetAtFiveInTheMorning(t *testing.T) {
 		DayStartUnixMilli:  1794286800000,
 		NextResetUnixMilli: 1794373200000, // 11-11 05:00
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		Zone:               "UTC",
 	})
 }
@@ -117,6 +123,7 @@ func TestServertimeBusinessZoneIsNotUTC(t *testing.T) {
 		DayStartUnixMilli:  1794326400000, // 11-11 00:00 +08:00
 		NextResetUnixMilli: 1794412800000, // 11-12 00:00 +08:00
 		NextDay:            20261112,
+		PrevDay:            20261110,
 		UTCOffsetSeconds:   28800,
 		Zone:               "Asia/Shanghai",
 	})
@@ -127,6 +134,7 @@ func TestServertimeBusinessZoneIsNotUTC(t *testing.T) {
 		DayStartUnixMilli:  1794258000000, // 11-10 05:00 +08:00
 		NextResetUnixMilli: 1794344400000, // 11-11 05:00 +08:00
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		UTCOffsetSeconds:   28800,
 		Zone:               "Asia/Shanghai",
 	})
@@ -143,6 +151,7 @@ func TestServertimeDaylightSavingDayIsNot24Hours(t *testing.T) {
 		DayStartUnixMilli:  1772946000000, // 03-08 00:00 -05:00
 		NextResetUnixMilli: 1773028800000, // 03-09 00:00 -04:00，起点之后 23 小时
 		NextDay:            20260309,
+		PrevDay:            20260307,
 		UTCOffsetSeconds:   -18000,
 		Zone:               "America/New_York",
 	})
@@ -152,6 +161,7 @@ func TestServertimeDaylightSavingDayIsNot24Hours(t *testing.T) {
 		DayStartUnixMilli:  1772946000000,
 		NextResetUnixMilli: 1773028800000,
 		NextDay:            20260309,
+		PrevDay:            20260307,
 		UTCOffsetSeconds:   -14400,
 		Zone:               "America/New_York",
 	})
@@ -161,6 +171,7 @@ func TestServertimeDaylightSavingDayIsNot24Hours(t *testing.T) {
 		DayStartUnixMilli:  1793505600000, // 11-01 00:00 -04:00
 		NextResetUnixMilli: 1793595600000, // 11-02 00:00 -05:00，起点之后 25 小时
 		NextDay:            20261102,
+		PrevDay:            20261031,
 		UTCOffsetSeconds:   -18000,
 		Zone:               "America/New_York",
 	})
@@ -171,6 +182,7 @@ func TestServertimeDaylightSavingDayIsNot24Hours(t *testing.T) {
 		DayStartUnixMilli:  1772877600000, // 03-07 05:00 -05:00
 		NextResetUnixMilli: 1772960400000, // 03-08 05:00 -04:00，起点之后 23 小时
 		NextDay:            20260308,
+		PrevDay:            20260306,
 		UTCOffsetSeconds:   -14400,
 		Zone:               "America/New_York",
 	})
@@ -189,6 +201,7 @@ func TestServertimeNowFollowsTheBusinessClockOffset(t *testing.T) {
 		DayStartUnixMilli:  1794268800000,
 		NextResetUnixMilli: 1794355200000,
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		Zone:               "UTC",
 	})
 	clock.SetOffset(2 * time.Hour)
@@ -198,6 +211,7 @@ func TestServertimeNowFollowsTheBusinessClockOffset(t *testing.T) {
 		DayStartUnixMilli:  1794355200000,
 		NextResetUnixMilli: 1794441600000,
 		NextDay:            20261112,
+		PrevDay:            20261110,
 		Zone:               "UTC",
 	})
 	realMilli -= 3_600_000 // 真实时间退到 22:00，业务时间是 11-11 00:00 整：恰好在重置时刻
@@ -207,6 +221,7 @@ func TestServertimeNowFollowsTheBusinessClockOffset(t *testing.T) {
 		DayStartUnixMilli:  1794355200000,
 		NextResetUnixMilli: 1794441600000,
 		NextDay:            20261112,
+		PrevDay:            20261110,
 		Zone:               "UTC",
 	})
 	realMilli--
@@ -218,7 +233,8 @@ func TestServertimeNowFollowsTheBusinessClockOffset(t *testing.T) {
 // 这个模块存在的意义：同一时刻，这里给客户端的业务日与签到、任务、体力、商店判定用的业务日是同一个数。
 // 那些功能的写法是 int64(clock.BusinessDay(time.UnixMilli(nowUnixMilli)))，这里逐个时刻与它对上，
 // 同时核对快照自己说得通：起点 ≤ 现在 < 下一次重置；起点与“下一次重置前 1 毫秒”都还是这一天；
-// 下一次重置那一刻正好是 NextDay，并且 NextDay 晚于 Day。
+// 下一次重置那一刻正好是 NextDay，并且 NextDay 晚于 Day；起点前 1 毫秒正好是 PrevDay，并且 PrevDay 早于 Day——
+// PrevDay 还与签到判断“昨天签过没有”的写法逐字对上。
 // 覆盖 UTC / 上海 / 纽约三种时区、零点 / 05:00 / 落在夏令时被跳过那一小时里的 02:30 三种重置时刻，
 // 时间段跨过纽约 2026 年两次夏令时切换，每 7 分 1 毫秒取一个时刻。
 func TestServertimeDayAgreesWithClockBusinessDay(t *testing.T) {
@@ -246,6 +262,13 @@ func TestServertimeDayAgreesWithClockBusinessDay(t *testing.T) {
 					}
 					if day := int64(clock.BusinessDay(time.UnixMilli(got.NextResetUnixMilli - 1))); day != got.Day {
 						t.Fatalf("%s %s at %d: 1ms before the next reset %d is in day %d, want %d", zone, start, now, got.NextResetUnixMilli, day, got.Day)
+					}
+					// “昨天”与签到算连续天数的写法逐字相同：这个业务日起点之前那一刻所在的业务日。
+					if want := int64(clock.BusinessDay(clock.DayStart(time.UnixMilli(now)).Add(-time.Nanosecond))); got.PrevDay != want || got.PrevDay >= got.Day {
+						t.Fatalf("%s %s at %d: previous day %d, the day before day %d is %d", zone, start, now, got.PrevDay, got.Day, want)
+					}
+					if day := int64(clock.BusinessDay(time.UnixMilli(got.DayStartUnixMilli - 1))); day != got.PrevDay {
+						t.Fatalf("%s %s at %d: 1ms before the day start %d is in day %d, snapshot says previous day %d", zone, start, now, got.DayStartUnixMilli, day, got.PrevDay)
 					}
 					if day := int64(clock.BusinessDay(time.UnixMilli(got.NextResetUnixMilli))); day != got.NextDay || got.NextDay <= got.Day {
 						t.Fatalf("%s %s at %d: the next reset %d is in day %d, snapshot says next day %d after day %d", zone, start, now, got.NextResetUnixMilli, day, got.NextDay, got.Day)

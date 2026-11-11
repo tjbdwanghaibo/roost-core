@@ -60,6 +60,7 @@ func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
 		DayStartUnixMilli:  1794200400000,
 		NextResetUnixMilli: 1794286800000,
 		NextDay:            20261110,
+		PrevDay:            20261108,
 		Zone:               "UTC",
 	})
 
@@ -77,6 +78,7 @@ func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
 		DayStartUnixMilli:  1794286800000,
 		NextResetUnixMilli: 1794373200000,
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		Zone:               "UTC",
 	})
 }

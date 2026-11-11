@@ -14,7 +14,8 @@ package protocoldef
 //  1. 收到时记下自己的单调时钟读数 m0（开机以来的毫秒数这一类；不要用设备的墙上时间，玩家可以改它）。
 //     之后任何时刻的业务时间 = NowUnixMilli +（单调时钟现在的读数 - m0）。每秒的倒计时由客户端自己走，
 //     不要每秒问一次。每次收到新的一份都整份换掉旧的，不与旧的求平均。
-//  2. 算出来的业务时间到达 NextResetUnixMilli 时，当前业务日就是 NextDay，手里各功能的 Day 都按“不是今天”处理；
+//  2. 算出来的业务时间到达 NextResetUnixMilli 时，当前业务日就是 NextDay（原来的 Day 成了“昨天”），
+//     手里各功能的 Day 都按“不是今天”处理；
 //     然后再问一次 ServertimeSync 拿新一天的起点与下一次重置（在线的客户端会在同一刻到点，各自随机晚几秒再问）。
 //  3. 其余要问一次的时机：进入游戏之后手里还没有时间（没装 enter 模块时服务器不会主动推；装了也只是尽力推，
 //     等一两秒没收到就自己问）；应用从后台回来或设备休眠醒来（有的平台单调时钟在休眠时不走）；
@@ -38,12 +39,15 @@ type ServertimeNowPush struct {
 	NextResetUnixMilli int64 `pb:"4"`
 	// NextDay 是从 NextResetUnixMilli 起的那个业务日（YYYYMMDD）。
 	NextDay int64 `pb:"5"`
+	// PrevDay 是 Day 的前一个业务日（YYYYMMDD），也就是“昨天”。连续签到这类状态要用它：
+	// 最近签到日是 Day 或 PrevDay 时连续天数还作数，更早就已经断了（显示成 0，下一次签到从 1 重新计）。
+	PrevDay int64 `pb:"6"`
 	// UTCOffsetSeconds 是 NowUnixMilli 这一刻业务时区比 UTC 快多少秒（东八区是 28800），用来显示服务器的墙上时间。
 	// 有夏令时的时区它会变：不要用它推算重置时刻，重置时刻只看 NextResetUnixMilli。
-	UTCOffsetSeconds int32 `pb:"6"`
+	UTCOffsetSeconds int32 `pb:"7"`
 	// Zone 是给人看的业务时区名，缺省是 IANA 名（UTC、Asia/Shanghai）；工程可以在
 	// game/servertime/servertime_zone.go 里改成别的文案。
-	Zone string `pb:"7"`
+	Zone string `pb:"8"`
 }
 
 //roost:protocol group=game handler=servertime

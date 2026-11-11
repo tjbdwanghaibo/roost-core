@@ -91,6 +91,7 @@ func TestServertimeSyncAnswersTheSnapshotAndEchoesTheClientTick(t *testing.T) {
 		DayStartUnixMilli:  1794258000000, // 11-10 05:00 +08:00
 		NextResetUnixMilli: 1794344400000, // 11-11 05:00 +08:00
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		UTCOffsetSeconds:   28800,
 		Zone:               "Asia/Shanghai",
 	})
@@ -125,6 +126,7 @@ func TestServertimeSyncIsTakenWhenItIsAnswered(t *testing.T) {
 		DayStartUnixMilli:  1794268800000,
 		NextResetUnixMilli: 1794355200000,
 		NextDay:            20261111,
+		PrevDay:            20261109,
 		Zone:               "UTC",
 	})
 	now++ // 2026-11-11 00:00:00.000 UTC：恰好在重置时刻
@@ -134,6 +136,7 @@ func TestServertimeSyncIsTakenWhenItIsAnswered(t *testing.T) {
 		DayStartUnixMilli:  1794355200000,
 		NextResetUnixMilli: 1794441600000,
 		NextDay:            20261112,
+		PrevDay:            20261110,
 		Zone:               "UTC",
 	})
 }
@@ -194,6 +197,7 @@ func TestServertimePushNowSendsTheSnapshotToThePlayer(t *testing.T) {
 		DayStartUnixMilli:  1794326400000,
 		NextResetUnixMilli: 1794412800000,
 		NextDay:            20261112,
+		PrevDay:            20261110,
 		UTCOffsetSeconds:   28800,
 		Zone:               "Asia/Shanghai",
 	})

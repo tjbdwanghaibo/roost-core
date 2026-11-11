@@ -19,6 +19,7 @@ func toPush(snapshot gameservertime.Snapshot) *pb.ServertimeNowPush {
 		DayStartUnixMilli:  snapshot.DayStartUnixMilli,
 		NextResetUnixMilli: snapshot.NextResetUnixMilli,
 		NextDay:            snapshot.NextDay,
+		PrevDay:            snapshot.PrevDay,
 		UTCOffsetSeconds:   snapshot.UTCOffsetSeconds,
 		Zone:               snapshot.Zone,
 	}

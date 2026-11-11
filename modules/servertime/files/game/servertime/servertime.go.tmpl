@@ -36,6 +36,9 @@ type Snapshot struct {
 	NextResetUnixMilli int64
 	// NextDay 是从 NextResetUnixMilli 起的那个业务日。
 	NextDay int64
+	// PrevDay 是 Day 的前一个业务日（“昨天”）。连续签到这类“昨天做过没有”的判断用它，
+	// 算法与签到相同：这个业务日起点之前那一刻所在的业务日，不拿日期数字减一。
+	PrevDay int64
 	// UTCOffsetSeconds 是 NowUnixMilli 这一刻业务时区比 UTC 快多少秒（东八区是 28800）。
 	// 只用来显示业务时区的墙上时间；有夏令时的时区它会变，不要拿它推算重置时刻。
 	UTCOffsetSeconds int32
@@ -48,14 +51,16 @@ type Snapshot struct {
 func At(nowUnixMilli int64) Snapshot {
 	calendar := clock.ProcessCalendar()
 	now := time.UnixMilli(nowUnixMilli)
+	start := calendar.DayStart(now)
 	next := calendar.NextDayStart(now)
 	_, offsetSeconds := now.In(calendar.Location()).Zone()
 	return Snapshot{
 		NowUnixMilli:       nowUnixMilli,
 		Day:                int64(calendar.BusinessDay(now)),
-		DayStartUnixMilli:  calendar.DayStart(now).UnixMilli(),
+		DayStartUnixMilli:  start.UnixMilli(),
 		NextResetUnixMilli: next.UnixMilli(),
 		NextDay:            int64(calendar.BusinessDay(next)),
+		PrevDay:            int64(calendar.BusinessDay(start.Add(-time.Nanosecond))),
 		UTCOffsetSeconds:   int32(offsetSeconds),
 		Zone:               ZoneName(calendar.Location()),
 	}
