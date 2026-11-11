@@ -22,7 +22,7 @@ import (
 // coordinator, which commands the steps (internal/service/<game>/alliance_saga.go).
 //
 // The coin check is advisory — the coins can still be spent before the debit
-// step runs; then the debit refuses with the same item_short and the saga
+// step runs; then the debit refuses with the same bag_short and the saga
 // fails with nothing to compensate. The business key comes from the endpoint
 // (op, player, session, frame sequence), so a retried frame folds into the
 // same saga.
@@ -30,8 +30,8 @@ import (
 //roost:nest rollback=undo durability=strict
 func handlerStartGuildOp(target player.IBagEntity, op string, state []byte, coins int32, businessKey string) (string, error) {
 	if coins > 0 {
-		if have := target.BagComp().ItemCount(guild.CoinItemID); have < coins {
-			return "", errcode.Wrap(apperrors.ErrItemShort, nil, "item_id", guild.CoinItemID, "have", have, "want", coins)
+		if have := target.BagComp().Count(guild.CoinItemID); have < int64(coins) {
+			return "", errcode.Wrap(apperrors.ErrBagShort, nil, "item_id", guild.CoinItemID, "have", have, "want", coins)
 		}
 	}
 	var start saga.StartRequest

@@ -409,7 +409,7 @@ func (steps giftSteps) handOver(ctx context.Context, phase string, state gift.St
 }
 
 // debit takes the items out of the sender's Bag. The sender may have spent
-// them since SendGift checked: that is the coded refusal item_short, and a
+// them since SendGift checked: that is the coded refusal bag_short, and a
 // failed first step has nothing to compensate.
 //
 // A payload that is not a gift has no transaction to carry a refusal: the

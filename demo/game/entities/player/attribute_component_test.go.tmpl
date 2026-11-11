@@ -93,7 +93,7 @@ func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
 	// there. Through the real methods in a real transaction, because the
 	// generated persist setters refuse to run outside one.
 	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "carry", func() (any, error) {
-		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+		if _, err := subject.BagComp().Add(ironSword, 1); err != nil {
 			return nil, err
 		}
 		// Inside the transaction: RefreshGear writes the attribute maps, and
@@ -107,7 +107,7 @@ func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
 		t.Fatalf("carrying the sword raised the gear layer to attack %d; only wearing it should", carried.Attack)
 	}
 	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
-		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+		if _, err := subject.BagComp().Remove(ironSword, 1); err != nil {
 			return nil, err
 		}
 		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
@@ -164,7 +164,7 @@ func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
 	}
 	doc, err := patch.Values()
  if err != nil { t.Fatal(err) }
-	for _, name := range []string{"gold", "exp", "items", "attr_base", "attr_final"} {
+	for _, name := range []string{"gold", "exp", "bag", "attr_base", "attr_final"} {
 		if _, exists := doc[name]; exists {
 			t.Fatalf("near view leaked %s", name)
 		}
@@ -288,10 +288,10 @@ func TestFinalIsRecomputedFromWornGearWhenThePlayerLoads(t *testing.T) {
 		t.Fatalf("the item table gives %d no attack; this test asserts the gear layer", ironSword)
 	}
 	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
-		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+		if _, err := subject.BagComp().Add(ironSword, 1); err != nil {
 			return nil, err
 		}
-		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+		if _, err := subject.BagComp().Remove(ironSword, 1); err != nil {
 			return nil, err
 		}
 		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
@@ -367,7 +367,7 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 			t.Run(policy.name+"/"+failure.name, func(t *testing.T) {
 				subject := newAttributePlayer(t, id)
 				if err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, attributeCommitter{}, func(p *Player) error {
-					_, err := p.BagComp().AddItem(ironSword, 1)
+					_, err := p.BagComp().Add(ironSword, 1)
 					return err
 				}); err != nil {
 					t.Fatalf("grant the sword: %v", err)
@@ -380,7 +380,7 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 					if _, err := p.ProfileComp().AddExp(ExpPerLevel); err != nil {
 						return err
 					}
-					if _, err := p.BagComp().RemoveItem(ironSword, 1); err != nil {
+					if _, err := p.BagComp().Remove(ironSword, 1); err != nil {
 						return err
 					}
 					if _, _, err := p.EquipmentComp().Equip(ironSword, 1); err != nil {
@@ -444,10 +444,10 @@ func TestNonPersistentAttributeLayersStayOutOfTheWAL(t *testing.T) {
 	}
 	committer := walAppendCommitter{wal: wal}
 	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
-		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+		if _, err := subject.BagComp().Add(ironSword, 1); err != nil {
 			return nil, err
 		}
-		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+		if _, err := subject.BagComp().Remove(ironSword, 1); err != nil {
 			return nil, err
 		}
 		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {

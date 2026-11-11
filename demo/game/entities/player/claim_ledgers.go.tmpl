@@ -1,0 +1,86 @@
+package player
+
+import "{{MODULE}}/game/rewards"
+
+// The two claim ledgers below are the demo's own. They are methods on the bag
+// module's BagComponent (bag_component.go) because every claim they record is
+// paid in items: the handler that records a claim calls BagComponent.Add in
+// the same Nest transaction, so "this mail / this order was granted" and the
+// items are one WAL record, committed or rolled back together.
+//
+// They are not the bag's business, which is why they are not in the module:
+// the module's own rule is that whoever has a "was this granted already" fact
+// keeps it in its own state and calls Add once it knows (see the comment on
+// BagComponent.Add). The state lives in the demo's PlayerDao fields
+// MailClaims and PurchaseClaims, not in the module's PlayerDao.Bag.
+
+// ClaimMailReward records that this mail's attachment has been granted and
+// reports whether this call is the one that recorded it. A second call for
+// the same mail returns false and changes nothing — that is what makes the
+// grant exactly-once even when the mail service's commit is lost, because the
+// record lands in the same Nest transaction as the items.
+//
+// The value stored is the MAIL's expiry, handed over by the mail service with
+// the reservation. After it the mail service refuses new reservations, but
+// an earlier reservation can still arrive late, so handlerClaimMailReward
+// refuses an expired first grant itself (rewards.ClaimWindowClosed, with the
+// time it executes). Pruning below waits a grace past that moment
+// (rewards.LedgerMayForget), so a record is gone only when every grant of its
+// mail is refused, even on a process whose clock is slightly behind.
+//
+// Pruning is on the write path, so the ledger is bounded without a sweeper.
+func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, nowUnix int64) bool {
+	dao := component.Owner().Dao()
+	if _, claimed := dao.GetMailClaims(mailID); claimed {
+		return false
+	}
+	var stale []string
+	dao.RangeMailClaims(func(key string, recordedExpiry int64) bool {
+		if rewards.LedgerMayForget(recordedExpiry, nowUnix) {
+			stale = append(stale, key)
+		}
+		return true
+	})
+	for _, key := range stale {
+		dao.DelMailClaims(key)
+	}
+	dao.SetMailClaims(mailID, expiresAtUnix)
+	return true
+}
+
+// ClaimPurchase records that a paid order's grant has been taken and reports
+// whether this call is the one that recorded it. A second call for the same
+// order returns false and changes nothing.
+//
+// It is the mail ledger's shape, and it is the one ledger here that is NEVER
+// pruned. The mail ledger may forget an entry a grace after the envelope
+// expires, because from the expiry on the grant handler refuses every
+// first grant of that mail (rewards.ClaimWindowClosed). A
+// paid order has no such moment: the platform service marked it delivered when
+// the grant became durable, so forgetting the order id does not close the
+// path — it reopens it, and the next drain of a grant that outlived the ledger
+// pays a second time. Dropping the entry instead of the grant is the same
+// mistake from the other side: a player who has not logged in for a month
+// would find a paid order settled on one side and refused on the other.
+//
+// The value stored is the payment moment, kept for audit rather than for
+// pruning. What would bound this map is an idempotent "fulfilled" reported
+// back to the platform service, after which an entry could be compacted
+// because nothing can produce that grant again; game/purchase says so at
+// length.
+func (component *BagComponent) ClaimPurchase(orderID string, paidAtUnix int64) bool {
+	dao := component.Owner().Dao()
+	if _, claimed := dao.GetPurchaseClaims(orderID); claimed {
+		return false
+	}
+	dao.SetPurchaseClaims(orderID, paidAtUnix)
+	return true
+}
+
+// MailRewardClaimed reports whether a mail's attachment has already been
+// granted. It is a read for callers holding the lock; the claim itself must
+// go through ClaimMailReward, inside the transaction that grants.
+func (component *BagComponent) MailRewardClaimed(mailID string) bool {
+	_, claimed := component.Owner().Dao().GetMailClaims(mailID)
+	return claimed
+}

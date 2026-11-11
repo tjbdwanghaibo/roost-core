@@ -36,7 +36,7 @@ import (
 //
 //roost:nest rollback=undo durability=pipelined
 func handlerGiftDebit(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
-	left, err := target.BagComp().RemoveItem(itemID, count)
+	left, err := target.BagComp().Remove(itemID, int64(count))
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
@@ -44,5 +44,5 @@ func handlerGiftDebit(target player.IBagEntity, itemID int64, count int32, step 
 		}
 		return 0, step.Complete(false, reason)
 	}
-	return left, step.Complete(true, "")
+	return int32(left), step.Complete(true, "")
 }

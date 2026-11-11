@@ -143,7 +143,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 	if second.BagCount != 1 {
 		t.Errorf("the bag holds %d after a replay, want 1", second.BagCount)
 	}
-	if held := subject.BagComp().ItemCount(manaPotion); held != 1 {
+	if held := subject.BagComp().Count(manaPotion); held != 1 {
 		t.Errorf("the Player holds %d of the item, want 1", held)
 	}
 

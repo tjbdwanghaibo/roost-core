@@ -22,7 +22,7 @@ import (
 //
 //roost:nest rollback=undo durability=pipelined
 func handlerGiftRefund(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
-	held, err := target.BagComp().AddItem(itemID, count)
+	held, err := target.BagComp().Add(itemID, int64(count))
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
@@ -30,5 +30,5 @@ func handlerGiftRefund(target player.IBagEntity, itemID int64, count int32, step
 		}
 		return 0, step.Complete(false, reason)
 	}
-	return held, step.Complete(true, "")
+	return int32(held), step.Complete(true, "")
 }

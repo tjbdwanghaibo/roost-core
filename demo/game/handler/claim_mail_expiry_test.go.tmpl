@@ -43,13 +43,13 @@ func TestAnInFlightMailClaimCannotReplayAfterItsLedgerWasPruned(t *testing.T) {
 	// 调用方读过的旧时间带不进来。
 	result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires)
 	if err == nil {
-		t.Fatalf("expired in-flight replay granted: %+v; bag=%d", result, subject.BagComp().ItemCount(1002))
+		t.Fatalf("expired in-flight replay granted: %+v; bag=%d", result, subject.BagComp().Count(1002))
 	}
 	// 与邮件服务拒绝过期预留是同一个事实，客户端拿到同一个码。
 	if code, _ := errcode.ClientError(err); code != svcmail.CodeExpired {
 		t.Fatalf("expired grant code=%d, want mail expired (%d): %v", code, svcmail.CodeExpired, err)
 	}
-	if got := subject.BagComp().ItemCount(1002); got != 2 {
+	if got := subject.BagComp().Count(1002); got != 2 {
 		t.Fatalf("replay changed the bag: %d, want 2", got)
 	}
 	if len(committer.records) != before || subject.BagComp().MailRewardClaimed("old") {
@@ -78,12 +78,12 @@ func TestMailGrantChecksExpiryAtExecutionTime(t *testing.T) {
 			pinBusinessClock(t, test.now)
 			result, err := sender.Sync_ClaimMailReward(context.Background(), subject.ID(), "edge", 1002, 1, expires)
 			if test.allowed {
-				if err != nil || !result.Claimed || subject.BagComp().ItemCount(1002) != 1 {
+				if err != nil || !result.Claimed || subject.BagComp().Count(1002) != 1 {
 					t.Fatalf("valid grant: %+v %v", result, err)
 				}
 				return
 			}
-			if err == nil || subject.BagComp().ItemCount(1002) != 0 || subject.BagComp().MailRewardClaimed("edge") || len(committer.records) != 0 {
+			if err == nil || subject.BagComp().Count(1002) != 0 || subject.BagComp().MailRewardClaimed("edge") || len(committer.records) != 0 {
 				t.Fatalf("expired first grant changed state: %+v err=%v records=%d", result, err, len(committer.records))
 			}
 		})
@@ -114,7 +114,7 @@ func TestALedgerPrunedAheadStillStopsAReplayOnAClockBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay on the slower clock: %v", err)
 	}
-	if result.Claimed || subject.BagComp().ItemCount(1002) != 2 {
-		t.Fatalf("a replay on a clock 31s behind was paid again: %+v bag=%d", result, subject.BagComp().ItemCount(1002))
+	if result.Claimed || subject.BagComp().Count(1002) != 2 {
+		t.Fatalf("a replay on a clock 31s behind was paid again: %+v bag=%d", result, subject.BagComp().Count(1002))
 	}
 }

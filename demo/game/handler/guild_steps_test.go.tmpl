@@ -131,20 +131,20 @@ func TestGuildNativeStepsTakeEffectOncePerOperation(t *testing.T) {
 		return outcome
 	}
 	first := debit(guildCommand(t, "fee-1", 1, saga.PhaseForward, alliancefound.TopicDebit))
-	if first.Kind != saga.StepExecuted || !first.Completion.Success || subject.BagComp().ItemCount(guild.CoinItemID) != 50 {
-		t.Fatalf("first debit = %+v, coins %d; want executed, 50 left", first, subject.BagComp().ItemCount(guild.CoinItemID))
+	if first.Kind != saga.StepExecuted || !first.Completion.Success || subject.BagComp().Count(guild.CoinItemID) != 50 {
+		t.Fatalf("first debit = %+v, coins %d; want executed, 50 left", first, subject.BagComp().Count(guild.CoinItemID))
 	}
 	again := debit(guildCommand(t, "fee-1", 2, saga.PhaseForward, alliancefound.TopicDebit))
-	if again.Kind != saga.StepReplayed || subject.BagComp().ItemCount(guild.CoinItemID) != 50 {
-		t.Fatalf("redelivered debit = %+v, coins %d; want the receipt replayed and 50 left", again, subject.BagComp().ItemCount(guild.CoinItemID))
+	if again.Kind != saga.StepReplayed || subject.BagComp().Count(guild.CoinItemID) != 50 {
+		t.Fatalf("redelivered debit = %+v, coins %d; want the receipt replayed and 50 left", again, subject.BagComp().Count(guild.CoinItemID))
 	}
 	refund, err := saga.RunNativeStep(ctx, guildCommand(t, "fee-1-refund", 1, saga.PhaseCompensate, alliancefound.TopicDebitCompensation), 0,
 		func(ctx context.Context, step saga.NativeStep) error {
 			_, err := syncsender.NewGuildCreditSender(client).Sync_GuildCredit(ctx, subject.ID(), guild.CoinItemID, 100, step)
 			return err
 		})
-	if err != nil || refund.Kind != saga.StepExecuted || !refund.Completion.Success || subject.BagComp().ItemCount(guild.CoinItemID) != 150 {
-		t.Fatalf("refund = %+v, %v, coins %d; want the fee back (150)", refund, err, subject.BagComp().ItemCount(guild.CoinItemID))
+	if err != nil || refund.Kind != saga.StepExecuted || !refund.Completion.Success || subject.BagComp().Count(guild.CoinItemID) != 150 {
+		t.Fatalf("refund = %+v, %v, coins %d; want the fee back (150)", refund, err, subject.BagComp().Count(guild.CoinItemID))
 	}
 
 	const manaPotion = int64(1002)
@@ -156,7 +156,7 @@ func TestGuildNativeStepsTakeEffectOncePerOperation(t *testing.T) {
 			_, err := syncsender.NewGuildCreditSender(client).Sync_GuildCredit(ctx, subject.ID(), manaPotion, 5, step)
 			return err
 		})
-	if err != nil || grant.Kind != saga.StepExecuted || grant.Completion.Success || grant.Completion.Retryable || subject.BagComp().ItemCount(manaPotion) != 99 {
-		t.Fatalf("grant into a full stack = %+v, %v, potions %d; want a non-retryable refusal and the stack unchanged", grant, err, subject.BagComp().ItemCount(manaPotion))
+	if err != nil || grant.Kind != saga.StepExecuted || grant.Completion.Success || grant.Completion.Retryable || subject.BagComp().Count(manaPotion) != 99 {
+		t.Fatalf("grant into a full stack = %+v, %v, potions %d; want a non-retryable refusal and the stack unchanged", grant, err, subject.BagComp().Count(manaPotion))
 	}
 }
