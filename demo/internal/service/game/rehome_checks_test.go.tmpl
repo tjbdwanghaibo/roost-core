@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -270,13 +271,19 @@ func TestRehomeAsksTheAllianceServiceBeforeHandingThePlayerOff(t *testing.T) {
 
 // 标记之前已经准入、还在执行的入会请求：它的会话还没收尾，后台部分就等着——不复核、不问联盟服务、不交出实体。
 // 那个请求执行完的时候联盟服务已经记下他入会了（应答到没到客户端无所谓）；后台这才往下走，问到的是入会之后的事实，
-// 于是中止。时序由 channel 固定：waiting 是“后台已经在等那条会话”，之后才让请求执行完。
+// 于是中止。时序由 channel 固定：waiting 是“后台已经在等那条会话（而且还在等）”，之后才让请求执行完。
 func TestRehomeWaitsForARequestAdmittedBeforeTheMarkAndThenAsks(t *testing.T) {
 	w := newRehomeCheckWorld(t)
 	w.fencer.connect(w.world.player)
 	waiting, finish := make(chan struct{}), make(chan struct{})
+	// waiting 在后台第三次来问“他还有没有会话”时才关：问一次就往下走的实现到不了这里，用例因此不靠时机。
 	var once sync.Once
-	w.home.owners.Fence(inFlightSessions{fakeFencer: w.fencer, finish: finish, onWait: func() { once.Do(func() { close(waiting) }) }})
+	var polls atomic.Int64
+	w.home.owners.Fence(inFlightSessions{fakeFencer: w.fencer, finish: finish, onWait: func() {
+		if polls.Add(1) >= 3 {
+			once.Do(func() { close(waiting) })
+		}
+	}})
 	if _, err := w.apply(); err != nil {
 		t.Fatal(err)
 	}

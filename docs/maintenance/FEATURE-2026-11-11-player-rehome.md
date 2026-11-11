@@ -144,7 +144,7 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 
 ### 一期后半的实施结果（2026-11-11）
 
-模块 `rehome`（30 条场景，审查修正之后 37 条）、联动 rehome + enter（5 条）、enter 的进入前检查（enter 6 → 11 条）与 game-demo 接线已完成。现行说明：[modules/README](../../modules/README.md)、[PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md)、KNOWN-LIMITS“单个玩家换服”。与 §2～§5 设计的出入：
+模块 `rehome`（30 条场景，审查修正之后 40 条）、联动 rehome + enter（5 条）、enter 的进入前检查（enter 6 → 11 条）与 game-demo 接线已完成。现行说明：[modules/README](../../modules/README.md)、[PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md)、KNOWN-LIMITS“单个玩家换服”。与 §2～§5 设计的出入：
 
 - ~~离开钩子在断开会话之前~~：**已改回 §2 的顺序**（见下面“审查之后的修正”）——标记 → 断开会话并排空 → 复核 → 离开钩子 → 交出实体。
 - **受理之后中止也断开会话**；受理与断开之间留 500 毫秒让“已受理”的应答先到。

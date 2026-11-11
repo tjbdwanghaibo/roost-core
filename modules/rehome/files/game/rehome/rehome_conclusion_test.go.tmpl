@@ -311,3 +311,119 @@ func TestRehomeReconcileOnEnterIsSettledByTheCurrentBinding(t *testing.T) {
 	}
 	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old")
 }
+
+// judge 只看三样：在途的是不是这个 ID、承载服是不是本服、绑定代数相对发起时走了几步。
+// 对不上的组合——在本服而代数恰好大 1（一次提交只会把他带离本服）、代数比发起时还小、没有承载服——不下结论。
+func TestRehomeJudgeReadsOnlyTheCurrentBinding(t *testing.T) {
+	move := Move{PlayerID: rehomePlayer, ID: "t-1", From: 1000, To: 1001, Epoch: 3}
+	inFlight := &svcaccount.RoleTransfer{ID: "t-1", From: 1000, To: 1001, Epoch: 3}
+	other := &svcaccount.RoleTransfer{ID: "t-2", From: 1001, To: 1002, Epoch: 4}
+	cases := []struct {
+		what    string
+		binding svcaccount.RoleBinding
+		want    standing
+	}{
+		{"this transfer is in flight", svcaccount.RoleBinding{ServingServerID: 1000, BindEpoch: 3, Transfer: inFlight}, standingInFlight},
+		{"same server, same epoch", svcaccount.RoleBinding{ServingServerID: 1000, BindEpoch: 3}, standingStays},
+		{"same server, same epoch, another transfer in flight", svcaccount.RoleBinding{ServingServerID: 1000, BindEpoch: 3, Transfer: other}, standingStays},
+		{"on the target", svcaccount.RoleBinding{ServingServerID: 1001, BindEpoch: 4}, standingGone},
+		{"on the target, moving on", svcaccount.RoleBinding{ServingServerID: 1001, BindEpoch: 4, Transfer: other}, standingGone},
+		{"on a third server", svcaccount.RoleBinding{ServingServerID: 1002, BindEpoch: 5}, standingGone},
+		{"elsewhere with the epoch unchanged (a merge)", svcaccount.RoleBinding{ServingServerID: 1003, BindEpoch: 3}, standingGone},
+		{"back here two epochs later", svcaccount.RoleBinding{ServingServerID: 1000, BindEpoch: 5}, standingReturned},
+		{"back here many epochs later", svcaccount.RoleBinding{ServingServerID: 1000, BindEpoch: 9}, standingReturned},
+		{"here one epoch later", svcaccount.RoleBinding{ServingServerID: 1000, BindEpoch: 4}, standingUnknown},
+		{"here at an older epoch", svcaccount.RoleBinding{ServingServerID: 1000, BindEpoch: 2}, standingUnknown},
+		{"no serving server", svcaccount.RoleBinding{BindEpoch: 3}, standingUnknown},
+	}
+	for _, c := range cases {
+		if got := judge(move, 1000, c.binding); got != c.want {
+			t.Errorf("%s: judge = %d, want %d", c.what, got, c.want)
+		}
+	}
+}
+
+// rehomeOddDirectory 在第一次 Commit 的回答里带回一份对不上的绑定（在本服、绑定代数恰好大 1），之后照常。
+type rehomeOddDirectory struct {
+	*rehomeDirectory
+	odd bool
+}
+
+func (d *rehomeOddDirectory) Commit(ctx context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error) {
+	if !d.odd {
+		d.odd = true
+		d.events.add("commit %d %s", playerID, transferID)
+		return svcaccount.RoleBinding{PlayerID: playerID, ServerID: 1000, ServingServerID: 1000, BindEpoch: 4}, svcaccount.ErrTransferStale
+	}
+	return d.rehomeDirectory.Commit(ctx, playerID, transferID)
+}
+
+// 对不上的绑定不是结论：屏障与标记保持，稍后再问；问到说得通的回答才落定。
+func TestRehomeBindingThatDoesNotAddUpIsAskedAgain(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.driver.directory = &rehomeOddDirectory{rehomeDirectory: f.directory}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.driver.wait = func(int) {
+		f.waits++
+		if where, tracked := f.residency.Where(rehomePlayer); !tracked || !where.Moving {
+			t.Errorf("while the binding did not add up the table says %+v (%v), want moving", where, tracked)
+		}
+	}
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-1", "commit 94301 t-1")
+	if f.waits != 1 {
+		t.Fatalf("waited %d times, want once before asking again", f.waits)
+	}
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1001 {
+		t.Fatalf("the table says %+v (%v), want departed to 1001", where, tracked)
+	}
+}
+
+// rehomeMovedAwayDirectory：开头读到绑定之后，运维在别处把他换去了 1001（绑定代数 4）。
+// 发起因此被拒（stale）或结果未知；随后的回答带回的都是这份新的绑定。
+type rehomeMovedAwayDirectory struct {
+	*rehomeDirectory
+	beginErr error
+}
+
+func (d *rehomeMovedAwayDirectory) Begin(_ context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
+	d.events.add("begin %d %s", playerID, request.ID)
+	d.binding.ServerID, d.binding.ServingServerID, d.binding.BindEpoch = 1001, 1001, 4
+	if errors.Is(d.beginErr, svcaccount.ErrTransferStale) {
+		return d.binding, d.beginErr
+	}
+	return svcaccount.RoleBinding{}, d.beginErr
+}
+
+// 发起时才发现他已经被换去了别的服：不能只撤标记、答“被拒绝”了事——本服不该再为他服务。
+// 发起明确被拒（带回了绑定）与发起结果未知（中止带回了绑定）两条路都按“已迁走”落定：迁出表记着 1001，
+// 实体交出去，申请答 rehome_elsewhere。档里的意图由下一次进入对账，这里不清。
+func TestRehomeBeginThatFindsThePlayerMovedAwaySettlesAsDeparted(t *testing.T) {
+	for _, beginErr := range []error{svcaccount.ErrTransferStale, errRehomeLost} {
+		f := newRehomeFixture(t)
+		f.driver.directory = &rehomeMovedAwayDirectory{rehomeDirectory: f.directory, beginErr: beginErr}
+		_, err := f.apply()
+		if sid, known := OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !known || sid != 1001 {
+			t.Fatalf("begin answered %v: apply = %v (owner %d %v), want rehome_elsewhere naming 1001", beginErr, err, sid, known)
+		}
+		f.runBackground()
+		where, tracked := f.residency.Where(rehomePlayer)
+		if !tracked || where.Moving || where.Move.To != 1001 {
+			t.Fatalf("begin answered %v: the table says %+v (%v), want departed to 1001", beginErr, where, tracked)
+		}
+		handed := false
+		for _, event := range f.events.take() {
+			if strings.HasPrefix(event, "cancel ") {
+				t.Fatalf("begin answered %v: the intent was cleared on a server that no longer owns the player", beginErr)
+			}
+			handed = handed || event == "handoff 7094301"
+		}
+		if !handed {
+			t.Fatalf("begin answered %v: the entity was not handed off", beginErr)
+		}
+	}
+}

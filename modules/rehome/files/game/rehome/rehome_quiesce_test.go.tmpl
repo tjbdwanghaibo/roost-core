@@ -113,15 +113,15 @@ func (rehomeOpenGate) AdmitMessage(int64, uint32) error { return nil }
 func TestRehomeQuiesceWaitsForTheRequestsAdmittedBeforeTheMark(t *testing.T) {
 	f := newRehomeFixture(t)
 	reached, finished := make(chan struct{}), make(chan struct{})
-	signalled := false
+	// reached 在后台第三次来问“他还有没有会话”时才关：问一次就往下走的实现到不了这里，用例因此不靠时机。
+	polls := 0
 	f.residency.activeSessions = func(int64) int {
 		select {
 		case <-finished:
 			return 0
 		default:
 		}
-		if !signalled {
-			signalled = true
+		if polls++; polls == 3 {
 			close(reached)
 		}
 		return 1
@@ -139,7 +139,11 @@ func TestRehomeQuiesceWaitsForTheRequestsAdmittedBeforeTheMark(t *testing.T) {
 		defer close(done)
 		f.runBackground()
 	}()
-	<-reached
+	select {
+	case <-reached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the move never waited for the request admitted before the mark")
+	}
 	// 那个请求还在执行：会话已经被断开，别的什么都没有开始。
 	for _, event := range f.events.peek() {
 		if !strings.HasPrefix(event, "close ") {

@@ -153,7 +153,7 @@ grep -q 'module bag: already installed' "$review_root/add-task.log"
 commit_all all
 "$roost" module add enter bag mailbox task shop skillbook room turn rehome > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=14 checkin=8 chat=8 enter=11 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25 rehome=37 rehome+enter=5
+expect_verify wallet=14 checkin=8 chat=8 enter=11 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25 rehome=40 rehome+enter=5
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1
