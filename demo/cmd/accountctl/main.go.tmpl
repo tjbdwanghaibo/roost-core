@@ -7,6 +7,10 @@
 //	go run ./cmd/accountctl merge-server -from 1001 -into 1000 -note "merge window 10-20" [-dry-run]
 //	go run ./cmd/accountctl unmerge-server -from 1001 -note "revert: ..."
 //	go run ./cmd/accountctl show-server -sid 1001
+//	go run ./cmd/accountctl show-role -player 1000001
+//	go run ./cmd/accountctl transfer-role begin -player 1000001 -to 1001 -note "ticket 4711" [-id ID] [-ttl 600]
+//	go run ./cmd/accountctl transfer-role commit -player 1000001 -id ID -note "1000 exited, wal-drained ok"
+//	go run ./cmd/accountctl transfer-role abort -player 1000001 -id ID -note "source never drained"
 //
 // merge-server records that server -from is merged into -into (alias merge,
 // roost-core docs/framework/PLAYER-MIGRATION.md §6): the roles of -from keep
@@ -14,6 +18,17 @@
 // is closed. Servers previously merged into -from are re-pointed at -into in
 // the same run, so an alias is always one hop. It is one step of the offline
 // runbook — the data that belongs to the sid is moved by cmd/sidmerge first.
+//
+// show-role and transfer-role are the manual fallback for moving one role to
+// another server (roost-core docs/framework/PLAYER-MIGRATION.md, "单个玩家换服").
+// Normally the source game process begins and commits a transfer over the
+// bus; an operator steps in when that process is gone or stuck. show-role
+// prints where the role is bound and the transfer in flight or last settled.
+// transfer-role commit is only safe once the source no longer writes the
+// player: it has unloaded the player, or its process has exited AND
+// `sidmove wal-drained` passes on its WAL directory — committing earlier lets
+// two processes write one player. Every transfer-role step requires -note,
+// which is recorded on the role.
 //
 // The account RPC interface has Login, CreateRole, SelectRole and friends —
 // player-facing operations any process may call — but not UpsertServer: that
@@ -27,9 +42,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -52,7 +69,9 @@ func main() {
 	if flag.NArg() < 1 {
 		fail("usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-prefix key_prefix] " +
 			"upsert-server -sid N -name NAME [-status open|maintenance|full|closed] [-region R] | " +
-			"merge-server -from A -into B -note TEXT [-dry-run] | unmerge-server -from A -note TEXT | show-server -sid N")
+			"merge-server -from A -into B -note TEXT [-dry-run] | unmerge-server -from A -note TEXT | show-server -sid N | " +
+			"show-role -player P | transfer-role begin -player P -to B -note TEXT [-id ID] [-ttl SECONDS] | " +
+			"transfer-role commit|abort -player P -id ID -note TEXT")
 	}
 	cfg := fredis.DefaultConfig(*redisAddr)
 	cfg.Password = *redisPassword
@@ -71,8 +90,110 @@ func main() {
 		unmergeServer(cfg, *prefix, flag.Args()[1:])
 	case "show-server":
 		showServer(cfg, *prefix, flag.Args()[1:])
+	case "show-role", "transfer-role":
+		service, closeStore := openService(cfg, *prefix)
+		defer closeStore()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		run := showRole
+		if flag.Arg(0) == "transfer-role" {
+			run = transferRole
+		}
+		binding, err := run(ctx, service, flag.Args()[1:])
+		if binding.PlayerID != 0 {
+			// A refusal that carries the current binding (the transfer already
+			// committed, another one is in flight) prints it before failing.
+			printJSON(binding)
+		}
+		if err != nil {
+			fail("%s: %v", flag.Arg(0), err)
+		}
 	default:
-		fail("unknown command %q (commands: upsert-server, merge-server, unmerge-server, show-server)", flag.Arg(0))
+		fail("unknown command %q (commands: upsert-server, merge-server, unmerge-server, show-server, show-role, transfer-role)", flag.Arg(0))
+	}
+}
+
+// roleTransfers is what show-role and transfer-role need from the account
+// service; *svcaccount.Service satisfies it.
+type roleTransfers interface {
+	RoleBinding(ctx context.Context, playerID int64) (svcaccount.RoleBinding, error)
+	BeginRoleTransfer(ctx context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error)
+	CommitRoleTransferWithNote(ctx context.Context, playerID int64, transferID, note string) (svcaccount.RoleBinding, error)
+	AbortRoleTransfer(ctx context.Context, playerID int64, transferID, reason string) (svcaccount.RoleBinding, error)
+}
+
+// showRole prints where a role is bound: its server, the server that serves
+// it, the bind epoch, and the transfer in flight or last settled.
+func showRole(ctx context.Context, service roleTransfers, args []string) (svcaccount.RoleBinding, error) {
+	fs := flag.NewFlagSet("show-role", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	player := fs.Int64("player", 0, "player id of the role")
+	if err := fs.Parse(args); err != nil {
+		return svcaccount.RoleBinding{}, err
+	}
+	if *player <= 0 {
+		return svcaccount.RoleBinding{}, fmt.Errorf("-player is required")
+	}
+	return service.RoleBinding(ctx, *player)
+}
+
+// transferRole runs one step of a manual role transfer.
+//
+// begin reads the current binding and presents it back (the serving server
+// as the source, the bind epoch as the expected one): the operator is not a
+// game process and has no view of its own to assert, so the compare-and-set
+// protects against the role moving between the read and the write. Without
+// -id a random one is minted; it is in the printed binding and is what
+// commit / abort take.
+//
+// commit asserts that the source no longer writes the player — see the
+// command doc. abort leaves the role where it is and retires the id.
+func transferRole(ctx context.Context, service roleTransfers, args []string) (svcaccount.RoleBinding, error) {
+	if len(args) == 0 {
+		return svcaccount.RoleBinding{}, fmt.Errorf("want begin, commit or abort")
+	}
+	step := args[0]
+	fs := flag.NewFlagSet("transfer-role "+step, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	player := fs.Int64("player", 0, "player id of the role")
+	id := fs.String("id", "", "transfer id (begin: optional, minted when empty; commit / abort: required)")
+	to := fs.Int("to", 0, "begin: the server the role moves to")
+	ttl := fs.Int64("ttl", 0, "begin: seconds until the transfer counts as overdue (0: the service default)")
+	note := fs.String("note", "", "why, recorded on the role (required)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return svcaccount.RoleBinding{}, err
+	}
+	if *player <= 0 {
+		return svcaccount.RoleBinding{}, fmt.Errorf("-player is required")
+	}
+	if strings.TrimSpace(*note) == "" {
+		return svcaccount.RoleBinding{}, fmt.Errorf("-note is required: a manual transfer step with no recorded reason cannot be reviewed")
+	}
+	switch step {
+	case "begin":
+		if *to <= 0 {
+			return svcaccount.RoleBinding{}, fmt.Errorf("-to is required")
+		}
+		current, err := service.RoleBinding(ctx, *player)
+		if err != nil {
+			return svcaccount.RoleBinding{}, err
+		}
+		if strings.TrimSpace(*id) == "" {
+			*id = "ctl-" + rand.Text()
+		}
+		return service.BeginRoleTransfer(ctx, *player, svcaccount.TransferRequest{
+			ID: *id, FromSID: current.ServingServerID, To: int32(*to), ExpectEpoch: current.BindEpoch, TTLSeconds: *ttl, Note: *note,
+		})
+	case "commit", "abort":
+		if strings.TrimSpace(*id) == "" {
+			return svcaccount.RoleBinding{}, fmt.Errorf("-id is required (show-role prints the transfer in flight)")
+		}
+		if step == "commit" {
+			return service.CommitRoleTransferWithNote(ctx, *player, *id, *note)
+		}
+		return service.AbortRoleTransfer(ctx, *player, *id, *note)
+	default:
+		return svcaccount.RoleBinding{}, fmt.Errorf("unknown step %q (want begin, commit or abort)", step)
 	}
 }
 
@@ -167,8 +288,8 @@ func printJSON(value any) {
 // openService builds the account Service on the same Redis stores the running
 // account process uses. The collaborators are the project's own — the same
 // ones bootstrap passes to the Mod — so name rules and identity policy are
-// identical; the allocator is never exercised by UpsertServer, so its
-// registry binding is not needed here.
+// identical; the allocator is never exercised by these commands (none of
+// them creates a role), so its registry binding is not needed here.
 func openService(cfg *fredis.Config, prefix string) (*svcaccount.Service, func()) {
 	assembly, err := redisdriver.Assemble(cfg)
 	if err != nil {

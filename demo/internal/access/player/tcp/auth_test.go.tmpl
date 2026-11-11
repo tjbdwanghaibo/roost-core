@@ -12,13 +12,16 @@ import (
 )
 
 // sessionAccounts 是只认一张会话票据的 account 客户端：票据对得上就返回原服 originID、由 serverID 承载的
-// 角色（originID 为 0 表示没有合服，原服就是 serverID）。其余方法不会被认证器调用，留给嵌入的 nil 接口。
+// 角色（originID 为 0 表示没有合服，原服就是 serverID）；bindEpoch 与 transfer 是角色的绑定代数与在途的
+// 换服。其余方法不会被认证器调用，留给嵌入的 nil 接口。
 type sessionAccounts struct {
 	svcaccount.Accounts
-	playerID int64
-	token    string
-	serverID int32
-	originID int32
+	playerID  int64
+	token     string
+	serverID  int32
+	originID  int32
+	bindEpoch uint64
+	transfer  *svcaccount.RoleTransfer
 }
 
 func (accounts sessionAccounts) ValidateSession(_ context.Context, playerID int64, token string) (svcaccount.Role, error) {
@@ -29,7 +32,10 @@ func (accounts sessionAccounts) ValidateSession(_ context.Context, playerID int6
 	if origin == 0 {
 		origin = accounts.serverID
 	}
-	return svcaccount.Role{PlayerID: playerID, ServerID: origin, ServingServerID: accounts.serverID, CreatedAtUnix: 1_700_000_000}, nil
+	return svcaccount.Role{
+		PlayerID: playerID, ServerID: origin, ServingServerID: accounts.serverID, CreatedAtUnix: 1_700_000_000,
+		BindEpoch: accounts.bindEpoch, Transfer: accounts.transfer,
+	}, nil
 }
 
 // principalSession 把认证器产出的 Principal 装成登录端点拿到的会话。
@@ -82,5 +88,48 @@ func TestAMergedRolesPrincipalCarriesTheServingServer(t *testing.T) {
 	profile, ok := controllerplayer.BroadcastProfile(principalSession{principal: principal}, sid)
 	if !ok || len(profile.Scopes) != 2 || profile.Scopes[0] != svcmail.ServerScope(1300) || profile.Scopes[1] != svcmail.ServerScope(1301) {
 		t.Fatalf("broadcast profile of a merged role = %+v (%v), want the scopes of 1300 and 1301", profile, ok)
+	}
+}
+
+// 单个角色换服（account 的 RoleBinding / BeginRoleTransfer）：认证器把绑定代数记在 BindEpochClaim（没换过服是
+// "0"），换服在途时把目标 sid 与换服 ID 记在 TransferClaim；原有的三项不变，在途的角色仍按源服承载。认证器
+// 只记不拒：握手失败客户端拿不到原因，放不放行由登录端点决定。
+func TestTheAuthenticatorsPrincipalCarriesTheBindEpochAndATransferInFlight(t *testing.T) {
+	authenticate := func(accounts sessionAccounts) gateway.Principal {
+		t.Helper()
+		authenticator := &applicationAuthenticator{}
+		authenticator.accounts.Store(&accountsHandle{accounts: accounts})
+		principal, err := authenticator.Authenticate(context.Background(), sessionTokenPrefix+"42:ticket", nil)
+		if err != nil {
+			t.Fatalf("a valid session ticket was refused: %v", err)
+		}
+		return principal
+	}
+
+	settled := authenticate(sessionAccounts{playerID: 42, token: "ticket", serverID: 1300})
+	if got := settled.Claims[svcaccount.BindEpochClaim]; got != "0" {
+		t.Fatalf("BindEpochClaim of a role that never moved = %q, want 0 (claims %v)", got, settled.Claims)
+	}
+	if value, moving := settled.Claims[svcaccount.TransferClaim]; moving {
+		t.Fatalf("a role that is not moving carries TransferClaim %q", value)
+	}
+
+	moving := authenticate(sessionAccounts{
+		playerID: 42, token: "ticket", serverID: 1300, bindEpoch: 3,
+		transfer: &svcaccount.RoleTransfer{ID: "rehome:42:7", From: 1300, To: 1301, Epoch: 3},
+	})
+	if got := moving.Claims[svcaccount.BindEpochClaim]; got != "3" {
+		t.Fatalf("BindEpochClaim = %q, want 3 (claims %v)", got, moving.Claims)
+	}
+	to, id, ok := svcaccount.ParseTransferClaim(moving.Claims[svcaccount.TransferClaim])
+	if !ok || to != 1301 || id != "rehome:42:7" {
+		t.Fatalf("TransferClaim %q parses to (%d, %q, %v), want (1301, rehome:42:7, true)", moving.Claims[svcaccount.TransferClaim], to, id, ok)
+	}
+	// 在途时角色仍由源服承载：登录端点读到的还是 1300，建角时间也还在。
+	if sid, bound := controllerplayer.BoundServerID(principalSession{principal: moving}); !bound || sid != 1300 {
+		t.Fatalf("the login endpoint read (%d, %v) for a role in transfer, want the source server 1300", sid, bound)
+	}
+	if moving.Claims[svcaccount.OriginServerIDClaim] != "1300" || moving.Claims[svcaccount.RoleCreatedAtClaim] != "1700000000" {
+		t.Fatalf("the existing claims changed: %v", moving.Claims)
 	}
 }
