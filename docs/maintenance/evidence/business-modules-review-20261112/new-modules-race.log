@@ -1,0 +1,10 @@
+ok  	example.com/businessaudit/game/handler	4.496s
+ok  	example.com/businessaudit/game/controllers/terrain	11.112s
+ok  	example.com/businessaudit/game/controllers/scene	1.360s
+ok  	example.com/businessaudit/game/monster/service	3.052s
+ok  	example.com/businessaudit/game/controllers/naming	1.269s
+ok  	example.com/businessaudit/game/controllers/cdkey	3.425s
+ok  	example.com/businessaudit/game/controllers/dungeon	6.697s
+ok  	example.com/businessaudit/game/notice	2.997s
+ok  	example.com/businessaudit/game/controllers/friends	1.046s
+ok  	example.com/businessaudit/game/entities/player	1.012s

@@ -1,0 +1,42 @@
+=== RUN   TestReviewTerrainRecoveryGenerationABA
+=== RUN   TestReviewTerrainRecoveryGenerationABA/control
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+    review_projection_test.go:53: old=1 new=1 after=1 duplicate=true pending=true
+=== RUN   TestReviewTerrainRecoveryGenerationABA/late_completion
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+    review_projection_test.go:53: old=1 new=1 after=0 duplicate=true pending=false
+    review_projection_test.go:56: stale recovery completion erased an unrepaired committed removal
+--- FAIL: TestReviewTerrainRecoveryGenerationABA (0.19s)
+    --- PASS: TestReviewTerrainRecoveryGenerationABA/control (0.11s)
+    --- FAIL: TestReviewTerrainRecoveryGenerationABA/late_completion (0.09s)
+=== RUN   TestReviewTerrainRecoveryGenerationABA
+=== RUN   TestReviewTerrainRecoveryGenerationABA/control
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+    review_projection_test.go:53: old=1 new=1 after=1 duplicate=true pending=true
+=== RUN   TestReviewTerrainRecoveryGenerationABA/late_completion
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+    review_projection_test.go:53: old=1 new=1 after=0 duplicate=true pending=false
+    review_projection_test.go:56: stale recovery completion erased an unrepaired committed removal
+--- FAIL: TestReviewTerrainRecoveryGenerationABA (0.21s)
+    --- PASS: TestReviewTerrainRecoveryGenerationABA/control (0.09s)
+    --- FAIL: TestReviewTerrainRecoveryGenerationABA/late_completion (0.13s)
+=== RUN   TestReviewTerrainRecoveryGenerationABA
+=== RUN   TestReviewTerrainRecoveryGenerationABA/control
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+    review_projection_test.go:53: old=1 new=1 after=1 duplicate=true pending=true
+=== RUN   TestReviewTerrainRecoveryGenerationABA/late_completion
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+2026/11/11 23:50:17 ERROR terrain: building sync needs reload scene=2 id=8800320946206 err="review: publication unavailable"
+    review_projection_test.go:53: old=1 new=1 after=0 duplicate=true pending=false
+    review_projection_test.go:56: stale recovery completion erased an unrepaired committed removal
+--- FAIL: TestReviewTerrainRecoveryGenerationABA (0.18s)
+    --- PASS: TestReviewTerrainRecoveryGenerationABA/control (0.09s)
+    --- FAIL: TestReviewTerrainRecoveryGenerationABA/late_completion (0.08s)
+FAIL
+FAIL	example.com/businessaudit/game/controllers/terrain	0.603s
+FAIL
