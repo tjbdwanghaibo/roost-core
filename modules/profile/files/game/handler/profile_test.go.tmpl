@@ -68,10 +68,11 @@ type profileFixture struct {
 	player    *playerentity.Player
 	renames   *sender.ProfileRenameSender
 	exps      *sender.ProfileAddExpSender
+	cards     *sender.ProfileCardSender
 	committer *profileCommitter
 }
 
-// profileFacts 是档案的三个值加上到此为止成功提交的次数。
+// profileFacts 是档案的三个值（名字与等级在 Profile 里，经验在 ProfilePrivate 里）加上到此为止成功提交的次数。
 type profileFacts struct {
 	name    string
 	level   int32
@@ -84,6 +85,7 @@ func newProfileFixture(t *testing.T) *profileFixture {
 	playerentity.RegisterEntity()
 	RegisterProfileRenameNestHandlers()
 	RegisterProfileAddExpNestHandlers()
+	RegisterProfileCardNestHandlers()
 	f := &profileFixture{committer: &profileCommitter{}}
 	id, err := entity.BuildEntityID(95001, playerentity.EntityKindPlayer)
 	if err != nil {
@@ -106,6 +108,7 @@ func newProfileFixture(t *testing.T) *profileFixture {
 	})
 	f.renames = sender.NewProfileRenameSender(f.engine)
 	f.exps = sender.NewProfileAddExpSender(f.engine)
+	f.cards = sender.NewProfileCardSender(f.engine)
 	return f
 }
 
@@ -138,8 +141,8 @@ func (f *profileFixture) facts(t *testing.T) profileFacts {
 	if err := f.engine.RunLocal(context.Background(), func() {
 		f.player.GetMutex().Lock()
 		defer f.player.GetMutex().Unlock()
-		profile := f.player.Dao().GetProfile()
-		got.name, got.level, got.exp = profile.GetName(), profile.GetLevel(), profile.GetExp()
+		dao := f.player.Dao()
+		got.name, got.level, got.exp = dao.GetProfile().GetName(), dao.GetProfile().GetLevel(), dao.GetProfilePrivate().GetExp()
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -318,9 +321,9 @@ func (f *profileFixture) damage(t *testing.T, level int32, exp int64) {
 	t.Helper()
 	registerProfileDamageHandler.Do(func() {
 		nest.MustRegisterHandlerWithMeta(profileDamageHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-			profile := es[0].(*playerentity.Player).Dao().GetProfile()
-			profile.SetLevel(params[0].(int32))
-			profile.SetExp(params[1].(int64))
+			dao := es[0].(*playerentity.Player).Dao()
+			dao.GetProfile().SetLevel(params[0].(int32))
+			dao.GetProfilePrivate().SetExp(params[1].(int64))
 			return nil, nil
 		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	})
@@ -525,12 +528,179 @@ func profileFailingHookScenario(t *testing.T) {
 	}
 }
 
-// Profile 下发给玩家本人。只断言档案模块自己的字段：同一个 DAO 上还有别的模块的字段。
-func TestProfileStateIsSynced(t *testing.T) {
-	for _, field := range db.PlayerDaoSyncFields() {
-		if field.Name == "Profile" {
-			return
+// profileCheckAnswer 把 CheckAddExp 的回答装在结果里带出来（直接把 error 当结果返回会被当成 handler 失败）。
+type profileCheckAnswer struct{ refusal error }
+
+// profileCheckHandler 是只在测试里登记的 Nest handler：只调 CheckAddExp，把它的回答当作结果带出来，
+// 自己以成功结束——事务照常走完。CheckAddExp 要是写了什么，这里就会多出一次提交。
+var profileCheckHandler = nest.NewHandlerName("profileTestCheckAddExp")
+
+var registerProfileCheckHandler sync.Once
+
+// check 返回 CheckAddExp(amount) 的回答（nil 表示 AddExp 会接受）。
+func (f *profileFixture) check(t *testing.T, amount int64) error {
+	t.Helper()
+	registerProfileCheckHandler.Do(func() {
+		nest.MustRegisterHandlerWithMeta(profileCheckHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+			return profileCheckAnswer{refusal: es[0].(playerentity.IProfileEntity).ProfileComp().CheckAddExp(params[0].(int64))}, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	answer, err := f.engine.Request(context.Background(), profileCheckHandler, f.player.ID(), nest.NewParams(amount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return answer.(profileCheckAnswer).refusal
+}
+
+// CheckAddExp 只检查不执行：回答与 AddExp 相同（同样的数额、同样的业务码），但不写任何字段、不产生提交。
+// 别的功能在自己的事务里先问它、都通过了再开始写，所以它必须对“会升级”“刚好到上限”这些数额也零写入。
+func TestProfileCheckAddExpAnswersLikeAddExpAndWritesNothing(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 150, 1) // 1 级，等级内经验 50
+	before := f.facts(t)
+	for _, accepted := range []int64{
+		1,                // 不升级
+		49,               // 差 1 点升级
+		50,               // 刚好升一级
+		375,              // 连升多级
+		2147483646 * 100, // 升到 int32 的最大等级
+		2147483646*100 + 49,
+	} {
+		if err := f.check(t, accepted); err != nil {
+			t.Fatalf("check %d exp: refused with %v, AddExp would accept it", accepted, err)
 		}
 	}
-	t.Fatal("PlayerDao.Profile is not in the sync field table: the player would not see the name, level and exp")
+	for _, refused := range []struct {
+		amount int64
+		want   error
+	}{
+		{0, apperrors.ErrProfileExpInvalid},
+		{-1, apperrors.ErrProfileExpInvalid},
+		{math.MinInt64, apperrors.ErrProfileExpInvalid},
+		{math.MaxInt64, apperrors.ErrProfileExpOverflow},
+		{math.MaxInt64 - 49, apperrors.ErrProfileExpOverflow},
+		{2147483646*100 + 50, apperrors.ErrProfileExpOverflow},
+		{2147483647 * 100, apperrors.ErrProfileExpOverflow},
+	} {
+		if err := f.check(t, refused.amount); !errors.Is(err, refused.want) {
+			t.Fatalf("check %d exp: %v, want %v", refused.amount, err, refused.want)
+		}
+		// 同一个数额交给 AddExp，得到同一个业务码。
+		_, err := f.addExp(refused.amount)
+		f.expectRefused(t, fmt.Sprintf("add %d exp after the check refused it", refused.amount), err, refused.want, before)
+	}
+	// 问了这么多次，档案的三个值与提交次数都没动。
+	if after := f.facts(t); after != before {
+		t.Fatalf("CheckAddExp wrote: %+v, was %+v", after, before)
+	}
+	// 被问过“刚好升一级”的那 50 点还没有发：现在发，照常升级。
+	f.mustAddExp(t, 50, 1)
+	if got := f.facts(t); got.level != 2 || got.exp != 0 {
+		t.Fatalf("after the real grant: %+v", got)
+	}
+}
+
+// 名片是给服务端别的功能按玩家号读的：名字与等级，在那名玩家的锁内读出来；只读，不产生提交；不带经验。
+func TestProfileCardCarriesNameAndLevel(t *testing.T) {
+	f := newProfileFixture(t)
+	card, err := f.cards.Sync_ProfileCard(context.Background(), f.player.ID())
+	if err != nil || card != (playerentity.ProfileCard{}) {
+		t.Fatalf("a new player's card = %+v err=%v, want no name and level 0", card, err)
+	}
+	if _, err := f.rename(" Alice "); err != nil {
+		t.Fatal(err)
+	}
+	f.mustAddExp(t, 275, 2)
+	before := f.facts(t)
+	card, err = f.cards.Sync_ProfileCard(context.Background(), f.player.ID())
+	if err != nil || card != (playerentity.ProfileCard{Name: "Alice", Level: 2}) {
+		t.Fatalf("card = %+v err=%v, want Alice at level 2", card, err)
+	}
+	if after := f.facts(t); after != before {
+		t.Fatalf("reading the card wrote or committed: %+v, was %+v", after, before)
+	}
+}
+
+// profileSyncBit 取 PlayerDao 某个顶层同步字段的位；字段不在同步表里时失败。
+func profileSyncBit(t *testing.T, name string) uint64 {
+	t.Helper()
+	field, ok := dataengine.SyncFieldByName(db.PlayerDaoSyncFields(), name)
+	if !ok {
+		t.Fatalf("PlayerDao.%s is not in the sync field table", name)
+	}
+	return field.Bit
+}
+
+// 两个字段都下发：只开了玩家自身视图的工程里本人看得到名字、等级与经验。只断言档案模块自己的字段：
+// 同一个 DAO 上还有别的模块的字段。
+func TestProfileStateIsSynced(t *testing.T) {
+	if public, private := profileSyncBit(t, "Profile"), profileSyncBit(t, "ProfilePrivate"); public == 0 || private == 0 || public == private {
+		t.Fatalf("Profile and ProfilePrivate must be two sync fields: bits %#x and %#x", public, private)
+	}
+}
+
+// 档案分成两个顶层同步字段，是为了给别的玩家做视图时可以只列 Profile：那样的视图带名字与等级、不带经验，
+// 而且只涨经验、没升级的发放根本不动 Profile——别的玩家不会为它收到增量。
+func TestProfileExpStaysOutOfTheHalfOthersMaySee(t *testing.T) {
+	f := newProfileFixture(t)
+	if _, err := f.rename("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.mustAddExp(t, 275, 2) // 2 级，等级内经验 75
+	public, private := profileSyncBit(t, "Profile"), profileSyncBit(t, "ProfilePrivate")
+
+	// packed 按给定的字段位打一份全量，返回里面的档案两半（没带的那一半是 nil）。
+	packed := func(mask uint64) (*db.SyncPlayerDaoProfileField, *db.SyncPlayerDaoProfilePrivateField) {
+		t.Helper()
+		var raw []byte
+		if err := f.engine.RunLocal(context.Background(), func() {
+			f.player.GetMutex().Lock()
+			defer f.player.GetMutex().Unlock()
+			raw = f.player.Dao().MarshalSync(mask)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		patch, err := db.UnmarshalSyncPlayerDao(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return patch.Profile, patch.ProfilePrivate
+	}
+	if card, own := packed(public); card == nil || card.Value.Name != "Alice" || card.Value.Level != 2 || own != nil {
+		t.Fatalf("a view listing only Profile: card=%+v private=%+v, want Alice at level 2 and no exp", card, own)
+	}
+	if card, own := packed(private); card != nil || own == nil || own.Value.Exp != 75 {
+		t.Fatalf("a view listing only ProfilePrivate: card=%+v private=%+v, want exp 75 alone", card, own)
+	}
+
+	// dirtied 清掉到此为止的同步脏位，执行 change，返回 change 标脏的档案字段位。
+	dirtied := func(change func()) uint64 {
+		t.Helper()
+		take := func() (mask uint64) {
+			if err := f.engine.RunLocal(context.Background(), func() {
+				f.player.GetMutex().Lock()
+				defer f.player.GetMutex().Unlock()
+				mask = f.player.Dao().DirtyTracker().TakeSyncDirty()
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return mask
+		}
+		take()
+		change()
+		return take() & (public | private)
+	}
+	if got := dirtied(func() { f.mustAddExp(t, 10, 0) }); got != private {
+		t.Fatalf("an exp grant without a level-up dirtied %#x, want only ProfilePrivate (%#x)", got, private)
+	}
+	if got := dirtied(func() { f.mustAddExp(t, 30, 1) }); got != public|private {
+		t.Fatalf("a level-up dirtied %#x, want Profile and ProfilePrivate (%#x)", got, public|private)
+	}
+	if got := dirtied(func() {
+		if _, err := f.rename("Bob"); err != nil {
+			t.Fatal(err)
+		}
+	}); got != public {
+		t.Fatalf("a rename dirtied %#x, want only Profile (%#x)", got, public)
+	}
 }
