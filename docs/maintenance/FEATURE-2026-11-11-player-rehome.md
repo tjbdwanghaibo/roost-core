@@ -131,9 +131,17 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 
 | 期 | 内容 | 状态 |
 | --- | --- | --- |
-| 一 | account 接口与 accountctl；`HandOffEntity`；模块 `rehome` 最小形态、enter 的进入前检查、`with/enter`；demo 的 `admitBound` 与 `PlayerOwners` 接上并改写用例；文档 | 实施中 |
+| 一 | account 接口与 accountctl；`HandOffEntity`；模块 `rehome` 最小形态、enter 的进入前检查、`with/enter`；demo 的 `admitBound` 与 `PlayerOwners` 接上并改写用例；文档 | **前半已合入**（account 接口与 accountctl、`HandOffEntity`）；**后半未开始**（模块 `rehome`、enter 的进入前检查、demo 接线）。2026-11-11 因额度在这里停下 |
 | 二 | demo 全量联动：队伍与匹配（换服前必须不在队里 / 自动取消排队）、副本与战斗中拒绝、场景（离开时离场景、到达回出生点）、联盟 `HomeSID` 惰性修正、全服邮件范围、名下建筑的规则；其余联动（mailbox、chat、leaderboard）；真实依赖演练（两个 game sid + account + saga，每个阶段后 kill -9） | 未开始 |
 | 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 未开始 |
+
+### 接手后半的提示
+
+- 模块的 `Residency` 缺省实现调 `wiring/dataengine` 的 `Mod.HandOffEntity`，返回值的 `Release(ctx) error` 会等待、会失败（它先卸载交出期间被读回内存的实例），要处理 `ErrEntityUnloadBusy` 并重试；交出成立后的写入拿到 `ErrEntityHandedOff`（不要重试），进行中拿到可重试的 `ErrEntityUnloading`。调用顺序：先断开会话、离场景、退订，再交出。
+- account：Begin 结果未知时直接 `AbortRoleTransfer(id)` 拿确定结论；到达时不必重发 Commit，slot 的收尾会在玩家下次 `SelectRole` 时补完；两种拒绝都带回当前 `RoleBinding`。
+- enter 的进入钩子现在带会话 claims（`Entered.Claims`，邮件换用时加的）；换服要加的“进入前检查”是另一个登记点（能否决登录），两者互不相干。认证器已把 `BindEpochClaim` 与 `TransferClaim` 写进 claims。
+- game-demo 的现状：进入游戏、聊天、排行榜、背包、档案、邮件都来自模块，全部模块在同一步里安装；`rehome` 加在模块列表末尾。`admitBound`、`playerMoving` 在 `demo/internal/service/game/gift_saga.go.tmpl` 与 `alliance_saga.go.tmpl`，v1.44.0 之后没有再动。
+- DataEngine 一侧留给维护者定的三点（见 [DataEngine 指南“交出实体”](../framework/guide/03-dataengine.md) 与 KNOWN-LIMITS）：`Release` 是现在的“先卸载再撤屏障”还是改成交出期间直接拒绝冷加载；等 checkpoint 用现在的轮询还是按实体记账；`ErrEntityHandedOff` 放在 `engine` 还是挪到 `ErrEntityUnloading` 旁边。
 
 ## 8. 已知风险与没查清的
 

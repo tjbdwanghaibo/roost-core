@@ -654,12 +654,32 @@ task 要扩成核心系统的方向（未实施，按先后）：
 - shop 原写依赖配置表：安装器还不支持模块带配置表，商品目录是 Go 写的业务文件。
 - 登记点没有做成“安装器往别的模块的文件里追加一行”（三个模块的作者都提过这个想法）：那要改写归工程所有的业务文件。做成了“提供方留登记函数、接入方带一个自己的文件在 init 里登记”，安装器只负责在两个模块都在时把这个文件写进去。
 
-**没做的（按建议的先后）**
+**没做的（按建议的先后）**——其中第 1 项已在下一节完成，其余仍然成立：
 
-1. game-demo 换用 profile / bag / leaderboard / mailbox。前提已具备（道具附件可登记），但 demo 的背包、经验、邮件比模块多：装备栏、升级经 outbox 发奖励邮件、领奖账本与排行榜同一个准入。要逐块对照后决定是模块补功能还是 demo 覆盖模块文件，没有开始。
-2. 还缺的登记点：wallet 的“消费成功”（要区分 `Apply` 命中去重回执与首次生效）、profile 的升级、enter 的首次发放（事务内）、leaderboard 的提交时机。每个都要有一个真实用它的模块一起做。
-3. room / matchroom / turn：要安装器先支持模块自带实体与定时器类型分配。
-4. 配置表与模块配置（shop 的商品、task 的任务表、stamina 的规则、bag 的道具表现在都是 Go 写的业务文件）；规则导出给客户端（stamina 的上限与周期、当前业务日）。
+1. ~~game-demo 换用 profile / bag / leaderboard / mailbox~~（已完成，见 §20）。
+2. 还缺的登记点：wallet 的“消费成功”（要区分 `Apply` 命中去重回执与首次生效）、profile 的升级（现在是业务文件钩子，别的模块挂不上去）、enter 的首次发放（事务内）、leaderboard 的提交时机。每个都要有一个真实用它的模块一起做。
+3. room / matchroom / turn / scene / gift：要安装器先支持**模块自带实体**与**服务级接线点**（模块在服务 `Init` / `Shutdown` 里挂自己的消费者、心跳、同步接线），turn 另要定时器类型分配。
+4. shop 的商品目录、task 的任务表改成配置表（照 bag）；规则导出给客户端（stamina 的上限与周期、当前业务日）。
 5. 配方（`-recipe`）与 13 类玩法夹具的迁移。
-6. 用一个只凭 skill 的 agent 按一段不重合的需求再实测一遍：第二、三批模块与联动机制还没有被这样测过。
-7. 真实依赖下的验证：模块端点经 TCP 的整条链路、mailbox 经 NATS / Redis 的路径、game-demo 的 `make dev-run`。全部模块验收都是离线场景（替身提交器、进程内 mail 服务）。
+6. 用一个只凭 skill 的 agent 按一段不重合的需求再实测一遍：第二、三批模块、联动机制与 demo 换用之后的模块还没有被这样测过。
+7. 真实依赖下的验证：模块端点经 TCP 的整条链路、mailbox 经 NATS / Redis 的路径、game-demo 的 `make dev-run` 与压测机器人。全部模块验收都是离线场景。
+
+## 20. game-demo 换用四个模块、合入 v1.44.0、task 改名（2026-11-11）
+
+维护者 2026-11-11：“做 demo 换用”；过程中补了两条方向——“demo 的功能多的话，可以拆到模版中去”“模版可以复杂，能兼容简单就可以”（模块可以做全做复杂，但全新工程不做任何配置直接安装必须能用；已写进 [modules/README](../../modules/README.md) 的约定）。
+
+**做了的**
+
+| 块 | 模块怎么变的 | demo 还留着什么 |
+| --- | --- | --- |
+| 排行榜 → leaderboard（15 → 20 条） | 榜的身份与规则拆成业务文件 `leaderboard_board.go`（周期是函数）；`LeaderboardTop` 带自己的名次；`Submit` 不收幂等键，新增 `SubmitSeason` | 只覆盖 `leaderboard_board.go`（通关榜）；副本通关计数是副本玩法 |
+| 背包 → bag（12 → 17 条） | 自带道具表（道具是否存在、每种的单种上限）；规则入口 `bagItemRule` 缺省读表 | 只覆盖道具表两个数据文件（多 `attack` / `hp` 两列）；充值订单账本；`AddItem` 演示入口 |
+| 档案 → profile（16 → 19 条） | 状态拆成“别人可见”与“只给本人”两个同步字段；`CheckAddExp`；名片 `ProfileCard` | 只覆盖升级钩子 `profile_levelup.go`；公会归属与副本账本；两实体的 AddExp（记 World 累计） |
+| 邮件 → mailbox（28 → 32 条，连带 wallet） | 发件入口 `SendTo`；mailbox+enter 的画像认 account 的 claims（3 → 5 条）；enter 的进入钩子带会话 claims | 不覆盖任何模块文件；升级奖励的消费者（要服务级接线）、GM / 活动 / 送礼三个发件方 |
+
+- demo 现在从模块得到六块：进入游戏、聊天、排行榜、背包、档案、邮件（加上依赖带进来的 wallet）。demo 的步骤约定：全部模块在同一步里安装（`enter, chat, leaderboard, bag, profile, mailbox`），覆盖模块文件的 `write` 排在它之后，建在模块组件上的 handler 没有 `roost add handler` 骨架步骤（`TestDemoStepsLeaveModuleComponentsToTheModules` 钉住）。
+- 合入 main 的 v1.44.0（saga 步骤按 sid 确切路由）；能力清单记入路由步骤；可拆的 gift 与 transfer 记入 §18。
+- quest 改名 task，扩成核心系统的方向记在 §18 末尾。
+- 单个玩家换服开工：方案见 [FEATURE-2026-11-11-player-rehome](FEATURE-2026-11-11-player-rehome.md)；框架侧两块（account 的换服接口、DataEngine 的交出实体）已合入，模块 `rehome` 与 demo 接线未做。
+
+**没做的**：见 §19 的清单（第 1 项已完成），加上换服方案里的一期后半与二、三期。
