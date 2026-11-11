@@ -660,6 +660,11 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   用一张表把响应映射回机器人等待的序号；这是唯一同时知道两边格式的地方，常量要与 `server_gen.go` 同步。
 - **`enter_game` 为什么不是 Nest handler**：Nest 处理的是已存在的实体，第一次登录还没有；创建 Player 是生命周期操作，
   端点直接走 `PlayerLifecycle.GetOrCreate`，所以这条协议只有 `roost add protocol`，控制器方法手写。
+- **`EnterGame` 的协议与 controller 域来自 enter 业务模块**：`-template game-demo` 生成时装 [enter 模块](../modules/README.md)
+  （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
+  场景、已付订单、公会、全服邮件、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
+  后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
+  `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/entities/player/enter_first.go`。
 - **登录有预算**：传输层给每个请求 `player_access.tcp.dispatch_timeout`（与 `nest.request_timeout` 对齐）；
   EnterGame 的归属 Claim + GetOrCreate 另用 `player_access.tcp.login_timeout`（默认 2s，不大于 dispatch）。冷加载要等该玩家已准入
   事务投影到库，库不可用时这个等待不会自己结束；超出预算回 `login_timeout`（100021），连接不被挂住，客户端重试即可——超时只停止等待，

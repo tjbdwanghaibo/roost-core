@@ -497,8 +497,15 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("%s still generated (err=%v): the game-local guild is gone", gone, err)
 		}
 	}
-	if bind := read("game/protocol_handlers/player/protocol_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
-		t.Errorf("EnterGame is not bound to the controller:\n%s", bind)
+	// EnterGame 的协议与初始化标记来自 enter 模块：端点绑在 enter 域上，demo 用自己的进入流程覆盖模块的 controller。
+	if bind := read("game/protocol_handlers/enter/protocol_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
+		t.Errorf("EnterGame is not bound to the enter controller:\n%s", bind)
+	}
+	if enter := read("game/controllers/enter/enter_game.go"); !strings.Contains(enter, "controller.player.EnterGame(") {
+		t.Errorf("the enter endpoint does not hand over to the demo's own enter flow:\n%s", enter)
+	}
+	if flow := read("game/controllers/player/enter_game.go"); !strings.Contains(flow, "Sync_EnterInit(") {
+		t.Errorf("the demo's enter flow does not run the enter module's first-time init:\n%s", flow)
 	}
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "transport.RegisterDialer(") {
 		t.Errorf("playertcp does not register a robot dialer:\n%s", conn)

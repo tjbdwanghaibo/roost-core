@@ -2,16 +2,20 @@
 
 package protocoldef
 
-// EnterGameRequest is the first message after the handshake. It is not a Nest
-// handler's request — creating a Player is a lifecycle operation, done by the
-// endpoint through PlayerLifecycle, not inside an entity lock — so this
-// message has no `roost add endpoint` behind it; the controller method is
-// hand-written.
+// EnterGameRequest is the first message after the handshake. The protocol, its
+// controller domain (enter) and its message id are the enter module's
+// (roost module add enter); this file is the demo's version of the module's
+// protocol definition, with the fields the demo's login answers. It is not a
+// Nest handler's request — creating a Player is a lifecycle operation, done by
+// the endpoint through PlayerLifecycle, not inside an entity lock.
 type EnterGameRequest struct {
 	ClientVersion string `pb:"1"`
 }
 
-// EnterGameResponse: Created says whether this login made the Player.
+// EnterGameResponse: Created says whether this login made the Player; First
+// says whether it ran the Player's first-time initialization (the enter
+// module's EnterInit — normally the same login, but a crash between the two
+// leaves a Player that exists and is initialized by its next login).
 type EnterGameResponse struct {
 	Code     int32  `pb:"1"`
 	Reason   string `pb:"2"`
@@ -19,10 +23,11 @@ type EnterGameResponse struct {
 	Created  bool   `pb:"4"`
 	// OwnerSID 在 player_elsewhere 时指示应重连的区服；0 表示须重新 SelectRole。
 	OwnerSID int32 `pb:"5"`
+	First    bool  `pb:"6"`
 }
 
-//roost:protocol group=game handler=player
+//roost:protocol group=game handler=enter
 type EnterGameProtocol interface {
-	//roost:msg id=10002
+	//roost:msg id={{ID:protocol:EnterGame}}
 	EnterGame(EnterGameRequest) EnterGameResponse
 }

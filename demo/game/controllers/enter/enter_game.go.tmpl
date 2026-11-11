@@ -1,0 +1,20 @@
+package enter
+
+import (
+	"fmt"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleEnterGame is the login boundary. The steps are the player
+// controller's EnterGame (game/controllers/player/enter_game.go): take the
+// player into service on the server the role is bound to, load or create the
+// Player within the login budget, run the enter module's first-time
+// initialization, then everything a login does in this game.
+func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+	if controller == nil || controller.player == nil {
+		return nil, fmt.Errorf("enter_game endpoint: controller is not assembled")
+	}
+	return controller.player.EnterGame(context, request)
+}

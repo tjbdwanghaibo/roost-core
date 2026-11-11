@@ -1,0 +1,31 @@
+package enter
+
+import (
+	"fmt"
+
+	playerctl "{{MODULE}}/game/controllers/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// Controller is the enter domain's controller. The domain and its protocol
+// are the enter module's; the demo replaces this file because its login is
+// more than "load or create the Player": which server the role is bound to,
+// the login budget, the scene, paid orders, the guild, server-wide mail and
+// the announcement all live on the player controller, so this one holds it
+// and the endpoint hands the login over (enter_game.go).
+type Controller struct {
+	player *playerctl.Controller
+}
+
+// FromRegistry is what the generated protocol binding calls once per process.
+// It builds its own player controller: the binding builds one per domain, and
+// what they share (presence, ownership, the scene) is published through the
+// Registry or process-wide, not held in a controller.
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	player, err := playerctl.FromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("enter controller: %w", err)
+	}
+	return &Controller{player: player}, nil
+}

@@ -573,8 +573,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "AddExp", Group: "game", Handler: "player"}, why: "the wire message"},
 		{write: "protocol/def/add_exp.go", why: "request field matching the handler parameter; response with code and levels gained"},
 		{write: "game/controllers/player/add_exp.go", why: "hand-written: add endpoint wires single-entity handlers, AddExp addresses two"},
-		{add: &AddOptions{Kind: "protocol", Name: "EnterGame", Group: "game", Handler: "player"}, why: "the first message after the handshake"},
-		{write: "protocol/def/enter_game.go", why: "no Nest handler behind it: creating a Player is a lifecycle operation"},
 		{write: "game/controllers/player/controller.go", why: "the controller also holds the Player lifecycle"},
 		{write: "game/controllers/player/enter_game.go", why: "hand-written endpoint: GetOrCreate the Player, then answer"},
 		{add: &AddOptions{Kind: "protocol", Name: "JoinQueue", Group: "game", Handler: "player"}, why: "the cross-service call: game → match"},
@@ -847,7 +845,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // 不打开 access.player.self_sync：demo 的场景自己装着 entitysync Manager，一个 Nest 只有一个观察者。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"chat"}, why: "chat is the chat module: channels, send, push to online players, history, system announcements, the chat service's collaborators"},
+		{modules: []string{"enter", "chat"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators)"},
+		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件。协议多几个字段，
+		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、邮件、公告）。
+		{write: "protocol/def/enter_game.go", why: "the enter module's protocol with the demo's fields: client version in, player id / created / owner sid out; the message id is the one the module was allocated"},
+		{write: "game/controllers/enter/controller.go", why: "the enter domain's controller holds the player controller: the demo's login needs everything that controller has"},
+		{write: "game/controllers/enter/enter_game.go", why: "the endpoint hands the login to the player controller's EnterGame"},
 	}
 }
 

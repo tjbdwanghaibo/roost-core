@@ -19,6 +19,12 @@
   - **升级要求**：已生成的 game-demo 工程不迁移（未上线）；重新生成，客户端按新的协议名与消息号重新生成。
   - 验证：重新生成的 demo `go build` / `go vet` / `roost id check` / `roost generate --check` / `go test ./...`（离线）通过，`roost module verify` chat 8 条；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过。没有跑真实依赖下的 `make dev-run` / `dev-smoke`。
 
+- **变更 / 协议变化**（game-demo + modules）：**game-demo 的进入游戏改用 enter 业务模块的协议、controller 域与首次初始化**（同上一条的要求）。`demoModuleSteps` 改为安装 `enter` 与 `chat`；`EnterGame` 的协议绑到 `enter` 域，消息号改为安装时分配（重新生成后仍是 10002）；demo 用自己的三个文件覆盖模块的同名文件——`protocol/def/enter_game.go`（字段更多）与 `game/controllers/enter/` 下的两个（把请求交给 player controller 上 demo 自己的进入流程）。
+  - demo 的进入流程在 `GetOrCreate` 之后发一次模块的 `EnterInit`；`EnterGameResponse` 多一个字段 `First`（这一次进入是否做了首次初始化）。`PlayerDao` 末尾多一个只落库的 `Enter` 字段。
+  - player controller 上的端点方法由 `HandleEnterGame` 改名 `EnterGame`（不再是协议绑定的入口）。
+  - **升级要求**：已生成的 game-demo 工程不迁移（未上线）；重新生成。
+  - 验证：重新生成的 demo `go build` / `go vet` / `roost id check` / `roost generate --check` / `go test ./...`（离线，39 个包）通过，`roost module verify` chat 8 条、enter 3 条；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过（`TestDemoTemplateGeneratesABuildableWritePath` 新增三条断言：协议绑在 enter 域、端点交给 demo 的进入流程、进入流程发 `EnterInit`）。没有跑真实依赖下的 `make dev-run` / `dev-smoke`。
+
 - **修复**（codegen/dao）：**嵌套类型的识别不再取决于定义文件的文件名顺序；DAO 超过 64 个顶层字段在生成期拒绝**。嵌套类型定义在排在 DAO 文件之前的文件里时识别不到，生成时报 `unsupported sync type`；现在全部定义文件解析完再认一遍，同时认得出跨文件互相引用的嵌套类型，已有工程的生成物不变。脏位与同步掩码是 `uint64`、每个顶层字段一位：第 65 个字段原先生成成功、生成物编译失败（`constant overflows uint64`），现在解析阶段拒绝并给出改法（收进嵌套结构体）。回归 `TestNestedTypesAreFoundWhateverFileDefinesThem`、`TestDaoWithMoreThan64FieldsIsRefused`（修前都失败）。
 
 - **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.43.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.43.0 的生成物用帧协议 2 / 信封 v3、`entitysync.Decoder` 与 `entity.MergeSyncViewPriorities`，旧 core 线格式不兼容、缺这些 API；生成器缺省本来就取最新版。没有在发版时用 `--min-core`：project sync 类测试会联网解析最低版本，tag 未推时 pretag 必然失败。

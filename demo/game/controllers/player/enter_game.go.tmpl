@@ -19,12 +19,14 @@ import (
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
-// HandleEnterGame makes sure the authenticated player has a Player Entity.
+// EnterGame is the demo's login, called by the enter domain's endpoint
+// (game/controllers/enter/enter_game.go; the protocol and its domain are the
+// enter module's). It makes sure the authenticated player has a Player Entity.
 // A Nest handler addresses an Entity that exists; a first login has none, so
 // this endpoint goes through the lifecycle instead of a Sender. GetOrCreate is
 // safe to race: two logins of the same new player both end holding the one
 // Entity, and only one of them sees Created.
-func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+func (controller *Controller) EnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
 	}
@@ -91,6 +93,19 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	}
 	// The World counts the login in its own transaction: a different Entity,
 	// a different lock, a separate Nest call after the Player one completed.
+	// The enter module's first-time initialization (EnterInit), sent on every
+	// login: "done or not" is a fact on the Player (PlayerDao.Enter), so a
+	// Player created by a login that crashed before this point is initialized
+	// by the next one, and a repeated login does nothing. The new player's
+	// grants are written in game/entities/player/enter_first.go.
+	first, err := syncsender.NewEnterInitSender(controller.NestClient()).Sync_EnterInit(context.Context(), subject.ID())
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game: first-time initialization failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
 	if err := syncsender.NewRecordEnterSender(controller.NestClient()).Sync_RecordEnter(context.Context(), controller.WorldID()); err != nil {
 		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
 	}
@@ -166,7 +181,7 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	if err := controller.Chat().AnnounceWorld(context.Context(), fmt.Sprintf("player %d entered the world", context.PlayerID), requestID); err != nil {
 		slog.Warn("enter_game: login not announced on the world channel", "player_id", context.PlayerID, "err", err)
 	}
-	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created}, nil
+	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created, First: first}, nil
 }
 
 // loginContext is the login step's share of the request: the configured
