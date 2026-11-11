@@ -1,0 +1,104 @@
+package tcp
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	gamelogin "{{MODULE}}/game/login"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 接入层这一侧只有接线：认证器从 Registry 取 account 的客户端，把票据交给 game/login。
+// 票据怎么判的场景在 game/login；这里钉住“接上了”与“没接上时不放人”。
+
+// loginTCPAccounts 只认一张票据（玩家 100001、令牌 good-token），别的令牌答 session_invalid；
+// down 非 nil 时什么都答它。其余方法认证器不会调，留给嵌入的 nil 接口。
+type loginTCPAccounts struct {
+	svcaccount.Accounts
+	down error
+}
+
+func (accounts loginTCPAccounts) ValidateSession(_ context.Context, playerID int64, token string) (svcaccount.Role, error) {
+	if accounts.down != nil {
+		return svcaccount.Role{}, accounts.down
+	}
+	if playerID != 100_001 || token != "good-token" {
+		return svcaccount.Role{}, svcaccount.ErrSessionInvalid
+	}
+	return svcaccount.Role{PlayerID: 100_001, ServerID: 1000, ServingServerID: 1000, CreatedAtUnix: 1_800_000_000}, nil
+}
+
+// loginTCPAuthenticator 照传输 Mod 的做法建认证器并绑定 Registry；accounts 为 nil 时不发布 account 的客户端。
+func loginTCPAuthenticator(t *testing.T, accounts svcaccount.Accounts) (Authenticator, error) {
+	t.Helper()
+	authenticator, err := newApplicationAuthenticator(viper.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := authenticator.(RegistryBound)
+	if !ok {
+		t.Fatalf("%T does not bind to the registry, so it can never reach account", authenticator)
+	}
+	registry := app.NewRegistry(viper.New())
+	if accounts != nil {
+		if err := registry.Register(svcaccount.CapabilityName, accounts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return authenticator, bound.BindRegistry(registry)
+}
+
+// 绑定了 account 客户端的认证器：好票据握手成功、会话带着承载服；坏票据是拒绝；account 给不出结论不是拒绝。
+func TestLoginAuthenticatorValidatesTicketsThroughAccount(t *testing.T) {
+	authenticator, err := loginTCPAuthenticator(t, loginTCPAccounts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := authenticator.Authenticate(context.Background(), "session:100001:good-token", nil)
+	if err != nil {
+		t.Fatalf("a valid ticket: %v", err)
+	}
+	if principal.PlayerID != 100_001 || principal.ServerID != 1000 || !principal.Authenticated() ||
+		principal.Claims["server_id"] != "1000" || principal.Claims["role_created_at"] != "1800000000" {
+		t.Fatalf("principal = %+v, want player 100001 served by 1000", principal)
+	}
+	for _, ticket := range []string{"session:100001:bad-token", "session:100002:good-token", "100001", ""} {
+		refused, err := authenticator.Authenticate(context.Background(), ticket, nil)
+		if !errors.Is(err, gateway.ErrUnauthenticated) || refused.Authenticated() {
+			t.Fatalf("ticket %q: principal %+v, err %v; want a refusal", ticket, refused, err)
+		}
+	}
+	down, err := loginTCPAuthenticator(t, loginTCPAccounts{down: errors.New("nats: no responders available for request")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := down.Authenticate(context.Background(), "session:100001:good-token", nil)
+	if !errors.Is(err, gamelogin.ErrAccountUnavailable) || errors.Is(err, gateway.ErrUnauthenticated) || failed.Authenticated() {
+		t.Fatalf("account down: principal %+v, err %v; want ErrAccountUnavailable and no principal", failed, err)
+	}
+}
+
+// 进程里没有 account 的客户端（业务服务没有 uses: account）：绑定失败，进程不启动；
+// 绑定之前、绑定失败之后到达的握手一律拒绝，好票据也不例外。
+func TestLoginAuthenticatorRefusesEverythingWithoutAccount(t *testing.T) {
+	authenticator, err := loginTCPAuthenticator(t, nil)
+	if err == nil {
+		t.Fatal("the authenticator bound to a registry that has no account client")
+	}
+	principal, authErr := authenticator.Authenticate(context.Background(), "session:100001:good-token", nil)
+	if !errors.Is(authErr, gateway.ErrUnauthenticated) || principal.Authenticated() {
+		t.Fatalf("an unbound authenticator: principal %+v, err %v; want a refusal", principal, authErr)
+	}
+	fresh, err := newApplicationAuthenticator(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal, err := fresh.Authenticate(context.Background(), "session:100001:good-token", nil); !errors.Is(err, gateway.ErrUnauthenticated) || principal.Authenticated() {
+		t.Fatalf("before BindRegistry: principal %+v, err %v; want a refusal", principal, err)
+	}
+}

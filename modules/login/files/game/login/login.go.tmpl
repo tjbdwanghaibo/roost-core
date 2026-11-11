@@ -1,0 +1,162 @@
+// Package login 是玩家登录鉴权的规则：握手时出示的票据长什么样、怎么向 account 服务校验、
+// 校验通过之后往会话里记什么。
+//
+// 接入层（internal/access/player/tcp/auth.go）只做接线：拿到 account 的客户端，把票据交给这里的
+// Authenticator。规则放在 game 下面而不是接入包里，是因为读这些记录的一方（进入游戏的检查与钩子、
+// 邮件、换服）在 game 这一侧，它们不能 import 接入包。
+//
+// 凭据只有一种：account 服务签发的会话令牌。没有“开发口令”“直接报玩家号”这类旁路——
+// 服务器不校验的凭据不是凭据。开发环境怎么拿到会话令牌见 internal/service/account 的开发登录。
+package login
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 握手帧里的票据：
+//
+//	session:<player_id>:<token>
+//
+// token 是 account 的 SelectRole 返回的会话令牌（Session.Token），player_id 是那个角色的玩家号，十进制、
+// 正数、不带符号与前导零。玩家号只是“问 account 哪一个角色”的提示，没有任何权限：会话里的身份一律取自
+// account 校验之后返回的角色，不取自票据。
+const ticketPrefix = "session:"
+
+// MaxTicketBytes 是票据的长度上限。会话令牌只有一百多字节；超过这个长度的不问 account，直接拒绝。
+const MaxTicketBytes = 8192
+
+// ErrAccountUnavailable：account 没有给出结论——不可达、超时、存储出错、角色正在对账。它不是拒绝：
+// 票据也许是好的，只是现在判断不了。握手照样失败（没有校验过的身份不能进），但客户端可以拿同一张票据重试，
+// 运维看到的是“account 出了问题”而不是“有人在试坏票据”。
+// 拒绝是另一个错误：errors.Is(err, gateway.ErrUnauthenticated)。两者不会同时成立。
+var ErrAccountUnavailable = errors.New("login: account gave no verdict on the session ticket")
+
+// Ticket 拼出握手票据。给客户端工具、机器人与测试用，保证与 ParseTicket 是同一种写法。
+func Ticket(playerID int64, token string) string {
+	return ticketPrefix + strconv.FormatInt(playerID, 10) + ":" + token
+}
+
+// ParseTicket 拆出票据里的玩家号与会话令牌。格式不对时 ok 为 false：前缀不是 session:、没有令牌、
+// 玩家号不是正整数的规范十进制写法（"+7"、"007"、带空白都不算）、超过 MaxTicketBytes。
+// 它只看形状，不判断令牌真假。
+func ParseTicket(ticket string) (playerID int64, token string, ok bool) {
+	if len(ticket) > MaxTicketBytes {
+		return 0, "", false
+	}
+	rest, found := strings.CutPrefix(ticket, ticketPrefix)
+	if !found {
+		return 0, "", false
+	}
+	claimed, token, found := strings.Cut(rest, ":")
+	if !found || token == "" {
+		return 0, "", false
+	}
+	playerID, err := strconv.ParseInt(claimed, 10, 64)
+	if err != nil || playerID <= 0 || strconv.FormatInt(playerID, 10) != claimed {
+		return 0, "", false
+	}
+	return playerID, token, true
+}
+
+// Authenticator 用 account 服务校验握手票据。Accounts 是 account 的客户端（game 进程里由 account 的
+// ClientMod 发布，services.<game>.uses 里要有 account）。零值不可用：Accounts 为 nil 时一律答
+// ErrAccountUnavailable。
+type Authenticator struct {
+	Accounts svcaccount.Accounts
+}
+
+// Authenticate 校验一张票据，返回这条连接的身份。三种结果：
+//
+//   - 通过：Principal 的 PlayerID 与区服取自 account 返回的角色，Claims 见 Claims。每次握手一个新的
+//     SessionID，同一名玩家的两条连接靠它区分。
+//   - 拒绝（errors.Is(err, gateway.ErrUnauthenticated)）：票据格式不对；令牌验不过——签名不对、过期、
+//     不是这名玩家的、签发它的密钥已经换掉（account 轮换 session_secret 就是吊销全部在外的令牌）；
+//     account 没有这个角色；account 返回的角色与票据对不上。重试同一张票据没有用，客户端要重新登录选角。
+//   - 判断不了（errors.Is(err, ErrAccountUnavailable)）：见 ErrAccountUnavailable。
+//
+// 它不拒绝“不该由本服服务”的角色（承载服是别的服、正在换服）：握手失败客户端拿不到原因，这两种情况
+// 要给客户端一个明确的码，所以只记进 Claims，由进入游戏的那一步答（Admit，以及换服模块的进入前检查）。
+//
+// 并发安全：没有可变状态，握手可以并发调用。ctx 是握手的期限，问 account 用的就是它。
+func (authenticator Authenticator) Authenticate(ctx context.Context, ticket string) (gateway.Principal, error) {
+	playerID, token, ok := ParseTicket(ticket)
+	if !ok {
+		return gateway.Principal{}, fmt.Errorf("%w: the ticket is not session:<player_id>:<token>", gateway.ErrUnauthenticated)
+	}
+	if authenticator.Accounts == nil {
+		return gateway.Principal{}, fmt.Errorf("%w: no account client", ErrAccountUnavailable)
+	}
+	role, err := authenticator.Accounts.ValidateSession(ctx, playerID, token)
+	if err != nil {
+		if refusedByAccount(err) {
+			return gateway.Principal{}, fmt.Errorf("%w: %w", gateway.ErrUnauthenticated, err)
+		}
+		return gateway.Principal{}, fmt.Errorf("%w: %w", ErrAccountUnavailable, err)
+	}
+	if role.PlayerID != playerID || role.ServerID <= 0 || role.ServingServerID <= 0 {
+		// account 答了“通过”，但给的角色不是票据问的那个、或者没有区服：不猜，按拒绝处理。
+		return gateway.Principal{}, fmt.Errorf("%w: account returned role %d on server %d (serving %d) for player %d",
+			gateway.ErrUnauthenticated, role.PlayerID, role.ServerID, role.ServingServerID, playerID)
+	}
+	return gateway.Principal{
+		PlayerID:  role.PlayerID,
+		ServerID:  role.ServingServerID,
+		SessionID: gateway.NewBroadcastID(),
+		Claims:    Claims(role),
+	}, nil
+}
+
+// refusedByAccount 报告 account 的回答是不是对这张票据的明确拒绝：令牌无效（CodeSessionInvalid）或
+// 没有这个角色（CodeRoleMissing）。按码判断而不是按哨兵：game 进程里 account 是总线另一头的服务，
+// 业务拒绝回来时只剩码。其余一切（总线错误、超时、存储错误、对账中的冲突、没见过的码）都不算拒绝——
+// 把“问不到”当成“票据是坏的”会让 account 抖一下就把所有人踢回登录界面。
+func refusedByAccount(err error) bool {
+	switch svcaccount.Code(err) {
+	case svcaccount.CodeSessionInvalid, svcaccount.CodeRoleMissing:
+		return true
+	}
+	return false
+}
+
+// Claims 是握手通过之后记进会话（gateway.Principal.Claims）的事实，全部取自 account 返回的角色，
+// 是认证那一刻的快照。键是 account 包里的常量，读的一方用同一个常量：
+//
+//	svcaccount.ServerIDClaim        承载服：现在由哪个 game sid 服务这个角色（原服并入别的服之后是那个服）。
+//	                                Admit、换服模块的进入前检查、邮件的全服邮件范围读它。
+//	svcaccount.OriginServerIDClaim  原服：角色绑定的服。没有合服时与承载服相同；显示原服标识、
+//	                                合服前发给原服的全服邮件用它，路由不读它。
+//	svcaccount.RoleCreatedAtClaim   角色创建时间（Unix 秒）。全服邮件“注册早于发送才收得到”用它。
+//	svcaccount.BindEpochClaim       绑定代数：没换过服是 "0"，每换一次服加一。换服模块拿它认“换回来的”。
+//	svcaccount.TransferClaim        只在换服在途时有：目标 sid 与换服 ID（svcaccount.ParseTransferClaim 读回）。
+//
+// 工程要多记别的事实（渠道、设备、白名单标记）就在这里加键；已有的键不要改名、不要改写法，
+// 别的模块按它们读。
+func Claims(role svcaccount.Role) map[string]string {
+	claims := map[string]string{
+		svcaccount.ServerIDClaim:       strconv.FormatInt(int64(role.ServingServerID), 10),
+		svcaccount.OriginServerIDClaim: strconv.FormatInt(int64(role.ServerID), 10),
+		svcaccount.RoleCreatedAtClaim:  strconv.FormatInt(role.CreatedAtUnix, 10),
+		svcaccount.BindEpochClaim:      strconv.FormatUint(role.BindEpoch, 10),
+	}
+	if role.Transfer != nil {
+		claims[svcaccount.TransferClaim] = svcaccount.TransferClaimValue(*role.Transfer)
+	}
+	return claims
+}
+
+// ServingServer 读回会话里记的承载服。没有这个键、或者值不是正的 sid 时 ok 为 false——
+// 调用方不能把它当成“在本服”。
+func ServingServer(claims map[string]string) (sid int32, ok bool) {
+	parsed, err := strconv.ParseInt(claims[svcaccount.ServerIDClaim], 10, 32)
+	if err != nil || parsed <= 0 {
+		return 0, false
+	}
+	return int32(parsed), true
+}

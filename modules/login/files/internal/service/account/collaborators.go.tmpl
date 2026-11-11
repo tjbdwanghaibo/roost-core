@@ -1,0 +1,46 @@
+// Package account supplies the collaborators the account service needs from this
+// project. 登录模块（roost module add login）写下这个文件，取代生成的拒绝桩；之后归工程所有。
+package account
+
+import (
+	"errors"
+	"strings"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// Verifier 向渠道确认一个登录身份。两条路，都在这个包里：
+//
+//   - 开发登录（login_dev.go）：渠道 dev、凭据是配置里的开发令牌。只在写了 login.dev_token 的配置下可用，
+//     生产配置写了它进程不启动。
+//   - 工程自己的渠道（login_channels.go）：应用商店、平台 SDK、自建账号。缺省一个都没接，全部拒绝——
+//     上线前在那个文件里接。
+//
+// 所以装上模块、什么都不配的 account 服务仍然拒绝每一次登录；它与生成桩的区别是这两个入口已经在了。
+func Verifier() svcaccount.IdentityVerifier { return &identityVerifier{} }
+
+// Allocator 给新角色分配玩家号：account 自己的 Redis 里的一个计数器（login_player_id.go）。
+func Allocator() svcaccount.PlayerIDAllocator { return &playerIDCounter{} }
+
+// NameRules validates role names. The default bounds length and refuses
+// whitespace; replace it with the project's own rules.
+func NameRules() svcaccount.NameValidator {
+	return svcaccount.NameValidatorFunc(func(raw string) error {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || len(trimmed) > 32 {
+			return errors.New("name must be 1–32 characters")
+		}
+		if strings.ContainsAny(trimmed, " \t\n") {
+			return errors.New("name must not contain whitespace")
+		}
+		return nil
+	})
+}
+
+// Metrics receives the service's counters. The default writes them into the
+// process's metrics registry, served as service_* series on the ops /metrics
+// endpoint (labels service, op, reason, name, key). Turn them off with
+// service_metrics.enabled: false in config, or by returning nil here; nil
+// never fails an operation.
+func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("account") }

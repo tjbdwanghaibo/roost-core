@@ -1,0 +1,96 @@
+package login
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	gameenter "{{MODULE}}/game/enter"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 联动的场景经 game/enter 的登记表执行（gameenter.Enter），所以证明的是“接上了”：
+// 认证器写的 claims 原样交给进入流程，被拒绝的进入没有加载任何东西。
+
+// withLoginRegistry 是一个 game 进程的 Registry：只有配置里的 sid（0 表示不写）。
+func withLoginRegistry(sid int) *app.Registry {
+	cfg := viper.New()
+	if sid != 0 {
+		cfg.Set("sid", sid)
+	}
+	return app.NewRegistry(cfg)
+}
+
+// withLoginEnter 照进入端点那样走一遍 gameenter.Enter，load 只计数。
+func withLoginEnter(registry *app.Registry, claims map[string]string, loads *int) (gameenter.Entered, error) {
+	return gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: 100_001, Claims: claims},
+		func(context.Context) (gameenter.InitResult, error) {
+			*loads++
+			return gameenter.InitResult{First: true}, nil
+		})
+}
+
+// 认证器给本服的角色写的 claims 放行，进入钩子拿到同一份；别的服的角色、没有 claims 的会话在加载之前被拒，
+// 客户端拿到 login_elsewhere。
+func TestWithLoginEnterRefusesARoleOfAnotherServerBeforeLoading(t *testing.T) {
+	registry := withLoginRegistry(1000)
+	loads := 0
+	here := Claims(svcaccount.Role{PlayerID: 100_001, ServerID: 1000, ServingServerID: 1000, CreatedAtUnix: 1_800_000_000})
+	entered, err := withLoginEnter(registry, here, &loads)
+	if err != nil || loads != 1 {
+		t.Fatalf("a role this server serves: err %v, %d loads; want admitted and loaded once", err, loads)
+	}
+	if !entered.First || entered.Claims["server_id"] != "1000" || entered.Claims["role_created_at"] != "1800000000" {
+		t.Fatalf("the enter hooks would see %+v, want the authenticator's claims", entered)
+	}
+	// 合服之后原服是 1001、承载服是本服的角色照样放行：比较的是承载服。
+	merged := Claims(svcaccount.Role{PlayerID: 100_001, ServerID: 1001, ServingServerID: 1000})
+	if _, err := withLoginEnter(registry, merged, &loads); err != nil || loads != 2 {
+		t.Fatalf("a merged role served here: err %v, %d loads", err, loads)
+	}
+
+	elsewhere := Claims(svcaccount.Role{PlayerID: 100_001, ServerID: 1001, ServingServerID: 1001})
+	for _, claims := range []map[string]string{elsewhere, {}, nil} {
+		_, err := withLoginEnter(registry, claims, &loads)
+		if !errors.Is(err, apperrors.ErrLoginElsewhere) {
+			t.Fatalf("claims %v: err = %v, want login_elsewhere", claims, err)
+		}
+	}
+	if loads != 2 {
+		t.Fatalf("a refused enter loaded the player: %d loads, want 2", loads)
+	}
+}
+
+// 比较用的是本进程配置里的 sid：换一个进程（sid 1001）问，同一份 claims 的答案相反；
+// 读不出 sid 的进程一个都不放。
+func TestWithLoginEnterComparesWithThisProcessSid(t *testing.T) {
+	loads := 0
+	onOtherServer := Claims(svcaccount.Role{PlayerID: 100_001, ServerID: 1001, ServingServerID: 1001})
+	if _, err := withLoginEnter(withLoginRegistry(1001), onOtherServer, &loads); err != nil || loads != 1 {
+		t.Fatalf("server 1001 and its own role: err %v, %d loads", err, loads)
+	}
+	if _, err := withLoginEnter(withLoginRegistry(1000), onOtherServer, &loads); !errors.Is(err, apperrors.ErrLoginElsewhere) {
+		t.Fatalf("server 1000 and a role of 1001: err = %v, want login_elsewhere", err)
+	}
+	for _, registry := range []*app.Registry{withLoginRegistry(0), withLoginRegistry(-7), nil} {
+		// 用本来会放行的 claims 问：读不出 sid 时既不能放行，也不能答 login_elsewhere——
+		// 那是在告诉客户端“去别的服”，而问题出在本进程的配置上。
+		_, err := withLoginEnter(registry, Claims(svcaccount.Role{PlayerID: 100_001, ServerID: 1000, ServingServerID: 1000}), &loads)
+		if err == nil {
+			t.Fatal("a process that cannot read its sid admitted a player")
+		}
+		if errors.Is(err, apperrors.ErrLoginElsewhere) {
+			t.Fatalf("a process that cannot read its sid answered login_elsewhere: %v", err)
+		}
+		if _, err := withLoginEnter(registry, onOtherServer, &loads); err == nil || errors.Is(err, apperrors.ErrLoginElsewhere) {
+			t.Fatalf("a process that cannot read its sid judged a role of server 1001: %v", err)
+		}
+	}
+	if loads != 1 {
+		t.Fatalf("%d loads, want 1", loads)
+	}
+}

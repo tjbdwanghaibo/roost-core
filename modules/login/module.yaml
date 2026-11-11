@@ -1,0 +1,24 @@
+name: login
+summary: 登录鉴权：玩家 TCP 握手用 account 服务签发的会话令牌校验（session:<player_id>:<token>），把承载服、原服、角色创建时间、绑定代数与换服标记写进会话；接管生成的鉴权桩与 account 的 collaborators（开发令牌登录、Redis 玩家号计数器；渠道验签留给工程）
+requires: []
+conflicts: []
+needs:
+  features: [errcode]
+  uses: [account]
+access:
+  transport: tcp
+errcodes: [login_elsewhere]
+replaces:
+  - internal/access/player/tcp/auth.go
+  - internal/service/account/collaborators.go
+verify:
+  packages: [./game/login, ./internal/access/player/tcp, ./internal/service/account]
+  run: ^TestLogin
+  pass: 19
+with:
+  enter:
+    summary: 进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player
+    verify:
+      packages: [./game/login]
+      run: ^TestWithLoginEnter
+      pass: 2

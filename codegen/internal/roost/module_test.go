@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"go/format"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -757,6 +758,213 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 	roost("module", "add", "chat")
 	if moduleProjectDigest(t, root) != installed {
 		t.Fatal("installing chat again changed the project")
+	}
+}
+
+// login 模块接管两种生成桩：玩家 TCP 的鉴权桩与 account 的 collaborators。两个都只在没改过时替换，
+// 任何一个被业务改过就拒绝安装、工程不变；鉴权桩还没生成（工程没有玩家 TCP 接入）时由前置命令先生成再替换，
+// plan 照样写明。替换之后 doctor 不再把它们当拒绝桩，config enable player-tcp 放行。
+func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project and runs go build / vet / test in it")
+	}
+	t.Parallel()
+	root, roost, try := moduleProject(t, "gatehouse")
+	const authRel, collaboratorsRel = "internal/access/player/tcp/auth.go", "internal/service/account/collaborators.go"
+	authPath := filepath.Join(root, filepath.FromSlash(authRel))
+	collaboratorsPath := filepath.Join(root, filepath.FromSlash(collaboratorsRel))
+	planned := func() ModulePlan {
+		t.Helper()
+		var plan ModulePlan
+		if err := json.Unmarshal([]byte(roost("module", "plan", "login", "--json")), &plan); err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Modules) != 1 {
+			t.Fatalf("plan: %+v", plan.Modules)
+		}
+		return plan
+	}
+
+	// 全新工程还没有玩家 TCP 接入：鉴权桩不存在，前置命令会生成它。plan 列出两个要替换的桩。
+	if _, err := os.Stat(authPath); !os.IsNotExist(err) {
+		t.Fatalf("a new game project already has %s: %v", authRel, err)
+	}
+	plan := planned()
+	if !contains(plan.Prerequisites, "roost add transport tcp") {
+		t.Fatalf("plan does not add the TCP transport first: %v", plan.Prerequisites)
+	}
+	if got := strings.Join(plan.Modules[0].Replaces, ","); got != authRel+","+collaboratorsRel {
+		t.Fatalf("plan replaces %q, want the authenticator stub (to be generated) and account's collaborators", got)
+	}
+
+	// 接入已经在、桩已经落地的工程：plan 仍然列出两个。
+	roost("add", "access", "player", "--service", "game")
+	roost("add", "transport", "tcp")
+	authStub, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if playerTCPAuthenticatorImplemented(authStub) {
+		t.Fatalf("the generated authenticator is not the refusing stub:\n%s", authStub)
+	}
+	collaboratorsStub, err := os.ReadFile(collaboratorsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(collaboratorsStub, []byte(collaboratorUnconfiguredMarker)) {
+		t.Fatalf("the generated account collaborators are not the refusing stub:\n%s", collaboratorsStub)
+	}
+	if got := strings.Join(planned().Modules[0].Replaces, ","); got != authRel+","+collaboratorsRel {
+		t.Fatalf("plan replaces %q on a project that has both stubs", got)
+	}
+
+	// 接入已经声明、鉴权文件却不在（被删掉）的工程：没有桩可替换，也没有前置命令会再生成它，
+	// plan 只把它当普通的新文件，不说“替换”。
+	if err := os.Remove(authPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(planned().Modules[0].Replaces, ","); got != collaboratorsRel {
+		t.Fatalf("plan replaces %q although %s does not exist and no prerequisite creates it", got, authRel)
+	}
+	if err := os.WriteFile(authPath, authStub, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 业务改过其中任何一个：拒绝，点名是哪个文件，工程不变。
+	edits := []struct {
+		rel, path string
+		original  []byte
+	}{
+		{authRel, authPath, authStub},
+		{collaboratorsRel, collaboratorsPath, collaboratorsStub},
+	}
+	for _, edit := range edits {
+		if err := os.WriteFile(edit.path, append(append([]byte(nil), edit.original...), []byte("\n// 业务加的一行。\n")...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := moduleProjectDigest(t, root)
+		if out, err := try("module", "add", "login"); err == nil || !strings.Contains(err.Error(), edit.rel+" has been edited since it was generated") {
+			t.Fatalf("an edited %s: err = %v\n%s", edit.rel, err, out)
+		}
+		if moduleProjectDigest(t, root) != before {
+			t.Fatalf("a refused install (edited %s) changed the project", edit.rel)
+		}
+		if err := os.WriteFile(edit.path, edit.original, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 都没改过：替换成模块的实现。
+	roost("module", "add", "login")
+	auth, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !playerTCPAuthenticatorImplemented(auth) || !bytes.Contains(auth, []byte("gamelogin.Authenticator")) {
+		t.Fatalf("the authenticator stub was not replaced by the module's authenticator:\n%s", auth)
+	}
+	collaborators, err := os.ReadFile(collaboratorsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(collaborators, []byte(collaboratorUnconfiguredMarker)) || !bytes.Contains(collaborators, []byte("identityVerifier")) {
+		t.Fatalf("account's collaborators stub was not replaced by the module's:\n%s", collaborators)
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range checkFrameworkCollaborators(root, manifest) {
+		if item.Name == "collaborators:account" && item.Status != StatusOK {
+			t.Fatalf("doctor still reports account's collaborators: %+v", item)
+		}
+	}
+	// 鉴权不再是拒绝骨架，所以开监听的命令放行，player-tcp 流程全部 OK。
+	roost("config", "enable", "player-tcp")
+	workflow, err := checkPlayerTCPWorkflow(root, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range workflow {
+		if item.Status != StatusOK {
+			t.Fatalf("player-tcp workflow after installing login and enabling the listener: %+v", item)
+		}
+	}
+	report, err := VerifyModules(context.Background(), root, nil, nil)
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 19 {
+		t.Fatalf("verify: %v\n%+v", err, report)
+	}
+	// 再装一次没有变化：这两个文件现在是模块自己的。
+	installed := moduleProjectDigest(t, root)
+	roost("module", "add", "login")
+	if moduleProjectDigest(t, root) != installed {
+		t.Fatal("installing login again changed the project")
+	}
+}
+
+// 安装器认识的生成桩是一张表（generatedStubKinds）：托管服务的 collaborators.go 与玩家 TCP 的鉴权桩。
+// 每一种都只在逐字节等于生成器现在写出的内容（格式化前后都算）时才是“没改过的桩”；
+// 表里没有的路径不算桩，表里的路径改过一个字符也不算。
+func TestModuleStubKindsRecogniseOnlyUntouchedGeneratedStubs(t *testing.T) {
+	manifest := gameTemplateManifest(t)
+	formatted := func(source string) []byte {
+		t.Helper()
+		out, err := format.Source([]byte(source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	stubs := map[string]string{
+		"internal/service/chat/collaborators.go":    renderFrameworkCollaborators(manifest, "chat"),
+		"internal/service/account/collaborators.go": renderFrameworkCollaborators(manifest, "account"),
+		"internal/access/player/tcp/auth.go":        renderPlayerTCPAuthenticator(),
+	}
+	for rel, stub := range stubs {
+		for name, body := range map[string][]byte{"as rendered": []byte(stub), "as formatted": formatted(stub)} {
+			pristine, err := isUntouchedGeneratedStub(manifest, rel, body)
+			if err != nil || !pristine {
+				t.Errorf("%s %s: pristine = %v, err = %v; want an untouched stub", rel, name, pristine, err)
+			}
+		}
+		edited := append(formatted(stub), []byte("\n// 业务加的一行。\n")...)
+		if pristine, err := isUntouchedGeneratedStub(manifest, rel, edited); err != nil || pristine {
+			t.Errorf("%s with one added line: pristine = %v, err = %v; want business code", rel, pristine, err)
+		}
+	}
+	// 鉴权桩的内容放在别的路径上不算桩；业务服务（不是托管服务）的 collaborators.go 也不算。
+	authStub := formatted(renderPlayerTCPAuthenticator())
+	for _, rel := range []string{
+		"internal/access/player/ws/auth.go",
+		"internal/access/player/tcp/auth_extra.go",
+		"internal/service/game/collaborators.go",
+		"game/handler/auth.go",
+	} {
+		if pristine, err := isUntouchedGeneratedStub(manifest, rel, authStub); err != nil || pristine {
+			t.Errorf("%s: pristine = %v, err = %v; want not a stub", rel, pristine, err)
+		}
+	}
+	// 一种桩的内容不能冒充另一种。
+	if pristine, _ := isUntouchedGeneratedStub(manifest, "internal/service/chat/collaborators.go", authStub); pristine {
+		t.Error("the authenticator stub passed as chat's collaborators stub")
+	}
+	if pristine, _ := isUntouchedGeneratedStub(manifest, "internal/access/player/tcp/auth.go", formatted(stubs["internal/service/chat/collaborators.go"])); pristine {
+		t.Error("chat's collaborators stub passed as the authenticator stub")
+	}
+	// “现在还没有、但待执行的前置命令会生成”的桩只有鉴权桩一种，并且只在那条命令确实待执行时才算。
+	pending := map[string]bool{"roost add transport tcp": true}
+	if !stubComesFromPrerequisite(manifest, "internal/access/player/tcp/auth.go", pending) {
+		t.Error("the authenticator stub is not expected from the pending roost add transport tcp")
+	}
+	if stubComesFromPrerequisite(manifest, "internal/access/player/tcp/auth.go", map[string]bool{"roost add access player --service game": true}) {
+		t.Error("the authenticator stub is expected although roost add transport tcp is not pending")
+	}
+	if stubComesFromPrerequisite(manifest, "internal/service/chat/collaborators.go", pending) || stubComesFromPrerequisite(manifest, "game/handler/auth.go", pending) {
+		t.Error("a file no prerequisite creates is expected from one")
+	}
+	// 生成的鉴权桩确实是 doctor 说的“还是拒绝骨架”，否则接管它就没有意义。
+	if playerTCPAuthenticatorImplemented(authStub) {
+		t.Error("doctor takes the generated authenticator stub for an implemented authenticator")
 	}
 }
 

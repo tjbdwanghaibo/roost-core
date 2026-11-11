@@ -1,0 +1,65 @@
+package tcp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"sync/atomic"
+
+	gamelogin "{{MODULE}}/game/login"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// applicationAuthenticator 是玩家 TCP 握手的认证器。登录模块（roost module add login）写下这个文件，
+// 取代生成的“一律拒绝”的桩；之后归工程所有，project sync / upgrade 不改写。
+//
+// 它只做接线：握手票据（session:<player_id>:<token>）怎么拆、怎么向 account 校验、通过之后往会话里
+// 记什么，都在 game/login（Authenticator 与 Claims），要改规则改那里。
+//
+// account 的客户端在 Init 时还拿不到（Init 只看得到配置），所以实现 RegistryBound：传输 Mod 在 Provide 里、
+// 监听开始之前调 BindRegistry。绑定之前到达的握手一律拒绝。
+type applicationAuthenticator struct {
+	bound atomic.Pointer[gamelogin.Authenticator]
+}
+
+func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
+	return &applicationAuthenticator{}, nil
+}
+
+// BindRegistry 取 account 的客户端。取不到就返回错误、进程不启动：认证器问不到 account 的监听不该开。
+func (authenticator *applicationAuthenticator) BindRegistry(registry *app.Registry) error {
+	accounts, ok := app.Lookup[svcaccount.Accounts](registry, svcaccount.CapabilityName)
+	if !ok || accounts == nil {
+		return fmt.Errorf("login authenticator: capability %q not found; the service that owns player access must list account under services.<service>.uses in roost.yaml", svcaccount.CapabilityName)
+	}
+	authenticator.bound.Store(&gamelogin.Authenticator{Accounts: accounts})
+	return nil
+}
+
+var _ RegistryBound = (*applicationAuthenticator)(nil)
+
+// Authenticate 把票据交给 game/login 校验。不论哪种失败，连接都只是被关掉，原因留在日志里：
+// 被拒绝的票据记 Debug（坏票据是常态，不该刷屏），account 给不出结论记 Warn（这是服务故障，要有人看见）。
+// 日志里只有票据的长度，不记票据本身。
+func (authenticator *applicationAuthenticator) Authenticate(ctx context.Context, ticket string, remote net.Addr) (gateway.Principal, error) {
+	bound := authenticator.bound.Load()
+	if bound == nil {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	principal, err := bound.Authenticate(ctx, ticket)
+	if err == nil {
+		return principal, nil
+	}
+	if errors.Is(err, gamelogin.ErrAccountUnavailable) {
+		slog.Warn("login: the handshake failed because account gave no verdict; the client may retry the same ticket", "remote", remote, "ticket_bytes", len(ticket), "err", err)
+	} else {
+		slog.Debug("login: session ticket refused", "remote", remote, "ticket_bytes", len(ticket), "err", err)
+	}
+	return gateway.Principal{}, err
+}
