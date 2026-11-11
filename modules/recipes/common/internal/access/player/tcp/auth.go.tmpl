@@ -1,0 +1,66 @@
+package tcp
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"sync/atomic"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/service/account"
+	kitgate "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+)
+
+// applicationAuthenticator 只接受 Account 校验过的 session:<player_id>:<token>。
+// 没有测试口令或客户端自报 PlayerID 的旁路；接入 SDK 的身份验证留在 account 的 collaborators.go。
+type applicationAuthenticator struct {
+	bound atomic.Pointer[recipeAuthBinding]
+}
+type recipeAuthBinding struct {
+	auth kitgate.AccountAuthenticator
+	sid  int32
+}
+
+func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
+	return &applicationAuthenticator{}, nil
+}
+
+// BindRegistry 在 listener 开放之前绑定正式 Accounts 客户端和本服身份。
+func (auth *applicationAuthenticator) BindRegistry(registry *app.Registry) error {
+	if registry == nil || registry.Config() == nil {
+		return fmt.Errorf("recipe auth: registry with config is required")
+	}
+	accounts, ok := app.Lookup[account.Accounts](registry, account.CapabilityName)
+	if !ok || accounts == nil {
+		return fmt.Errorf("recipe auth: account capability is required")
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return err
+	}
+	if identity.Sid <= 0 {
+		return fmt.Errorf("recipe auth: positive sid is required")
+	}
+	auth.bound.Store(&recipeAuthBinding{auth: kitgate.AccountAuthenticator{Accounts: accounts}, sid: identity.Sid})
+	return nil
+}
+
+func (auth *applicationAuthenticator) Authenticate(ctx context.Context, ticket string, addr net.Addr) (gateway.Principal, error) {
+	bound := auth.bound.Load()
+	if bound == nil {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	principal, err := bound.auth.Authenticate(ctx, ticket, addr)
+	if err != nil {
+		return gateway.Principal{}, err
+	}
+	// 这是单服直连配方。承载服不匹配或正在迁移时，在创建本地 Player 之前拒绝。
+	if principal.PlayerID <= 0 || principal.ServerID != bound.sid || principal.Claims[account.TransferClaim] != "" {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	return principal, nil
+}
+
+var _ RegistryBound = (*applicationAuthenticator)(nil)

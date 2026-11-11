@@ -124,6 +124,11 @@ func newPartitionTerrain(m *terrainmap.Map, sync *terrainSync, grid *cellworld.G
 		return nil, fmt.Errorf("partition terrain: %w", err)
 	}
 	p.rep = rep
+	// 先订上 Ghost 带（启动后不变；Run 起来之后发出）。一路对同一个格至多订 terrain.MaxSubscriptionChunks 块：Ghost 带
+	// 本身就超了的配置在这里拒绝启动，不带着一份永远订不上的 Ghost 带跑。
+	if err := rep.Want(terrainReplicaChannel, p.wanted()); err != nil {
+		return nil, fmt.Errorf("partition terrain: the ghost band: %w", err)
+	}
 	return p, nil
 }
 
@@ -150,7 +155,6 @@ func (p *partitionTerrain) start() {
 	})
 	workers.Go(func() { p.loop(ctx) })
 	go func() { workers.Wait(); close(p.done) }()
-	p.rep.Want(terrainReplicaChannel, p.wanted())
 }
 
 // stop 停下推送与订阅（其他进程的订阅随租约过期），撤下全部副本 subject。可重复调用。
@@ -208,14 +212,26 @@ func (p *partitionTerrain) follow(playerID int64, at spatial.Point, watching boo
 }
 
 // loop 在视点变化之后重算订阅，两次之间至少 terrainWantEvery。
+//
+// 订阅被拒（terrain.ErrSubscriptionTooLarge：本进程的玩家在同一个格里想要的块超过一份订阅的上限）时 Replicator 保留上一份
+// 订阅：已订的块照常续期，新进视野的别的格的块等不到拥有者的状态（客户端那几块停在未确认）。只在被拒与恢复的那一次
+// 记日志（计数在 gm.scene.partition 的 replicator.WantsRejected）；视点再变时照常重算、重试。
 func (p *partitionTerrain) loop(ctx context.Context) {
+	rejected := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-p.wake:
 		}
-		p.rep.Want(terrainReplicaChannel, p.recompute())
+		switch err := p.rep.Want(terrainReplicaChannel, p.recompute()); {
+		case err != nil && !rejected:
+			rejected = true
+			slog.Error("partition terrain: the subscription was not replaced, chunks new to the players' views get no replica", "err", err)
+		case err == nil && rejected:
+			rejected = false
+			slog.Info("partition terrain: the subscription is accepted again")
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -233,7 +249,8 @@ func (p *partitionTerrain) recompute() []terrain.ChunkKey {
 		points = append(points, at)
 	}
 	p.viewsMu.Unlock()
-	bounds := p.m.Meta().Bounds()
+	meta := p.m.Meta() // 取一次：Meta 每次返回一份副本（区域水位表）
+	bounds := meta.Bounds()
 	next := map[terrain.ChunkKey]struct{}{}
 	for _, at := range points {
 		around := spatial.Rect{
@@ -244,7 +261,7 @@ func (p *partitionTerrain) recompute() []terrain.ChunkKey {
 			continue
 		}
 		for key := range terrain.ChunksIn(around) {
-			if p.m.Meta().Contains(key) && !p.m.Owns(key) {
+			if meta.Contains(key) && !p.m.Owns(key) {
 				next[key] = struct{}{}
 			}
 		}
@@ -270,12 +287,12 @@ func (p *partitionTerrain) recompute() []terrain.ChunkKey {
 		}
 		if version < 1 {
 			// Ghost 带里视图说是原始块：与覆盖块一样按视图（本来就是最新的）立即登记就绪标记。
-			if err := p.sync.showBase(key, p.m.Meta().BaseRevision); err != nil {
+			if err := p.sync.showBase(key, meta.BaseRevision); err != nil {
 				slog.Warn("partition terrain: a ghost chunk's base marker was not shown", "chunk", key.String(), "err", err)
 			}
 			continue
 		}
-		o := terrain.Overlay{BaseRevision: p.m.Meta().BaseRevision, Version: version, Heights: chunk.Heights, Materials: chunk.Materials}
+		o := terrain.Overlay{BaseRevision: meta.BaseRevision, Version: version, Heights: chunk.Heights, Materials: chunk.Materials}
 		if err := p.showLocked(key, o); err != nil {
 			slog.Warn("partition terrain: a ghost chunk's replica was not shown", "chunk", key.String(), "err", err)
 		}

@@ -6,8 +6,8 @@
 
 ## 0. 先说清楚能做到什么
 
-- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前有十四个模块：`enter`（进入游戏：建档、首次初始化、进入钩子、打开自身视图）、`wallet`（货币）、`checkin`（每日签到）、`task`（每日任务）、`stamina`（体力）、`shop`（金币买道具、限购）、`bag`（堆叠背包，自带道具表：加道具改 `configs/table/item.csv`）、`profile`（名字、等级、经验）、`chat`（聊天：世界与私聊）、`leaderboard`（总分榜）、`mailbox`（邮件列表与领附件：金币内置，装了 `bag` 就能发道具）、`skillbook`（启动编译的技能目录与查询协议）、`room`（自带房间实体：座位、房主、连接代际；[接入边界](../../../../modules/room/README.md)）、`turn`（顺序回合、命令序号与持久超时，依赖 room；[接入边界](../../../../modules/turn/README.md)）。新工程一般都先装 `enter`。以 `roost module list` 为准。
-- **这一档交付到哪**：业务逻辑写完、离线场景通过、有“进入游戏”端点（建档，第 4B 步）、客户端可见的状态接上自身视图（第 4A 步）。**不含**登录鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）、真实依赖、Robot 与网络验收——[SKILL §3.6](../SKILL.md) 的“网络验收”在这里没有做，报告里要写明。
+- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前有十五个模块：`enter`（进入游戏：建档、首次初始化、进入钩子、打开自身视图）、`wallet`（货币）、`checkin`（每日签到）、`task`（每日任务）、`stamina`（体力）、`shop`（金币买道具、限购）、`bag`（堆叠背包，自带道具表：加道具改 `configs/table/item.csv`）、`profile`（名字、等级、经验）、`chat`（聊天：世界与私聊）、`leaderboard`（总分榜）、`mailbox`（邮件列表与领附件：金币内置，装了 `bag` 就能发道具）、`skillbook`（启动编译的技能目录与查询协议）、`room`（自带房间实体：座位、房主、连接代际；[接入边界](../../../../modules/room/README.md)）、`turn`（顺序回合、命令序号与持久超时，依赖 room；[接入边界](../../../../modules/turn/README.md)）。另有 `rehome`（单玩家换服，一期）。新工程一般都先装 `enter`。以 `roost module list` 为准。
+- **这一档交付到哪**：业务逻辑写完、离线场景通过、有“进入游戏”端点（建档，第 4B 步）、客户端可见的状态接上自身视图（第 4A 步）。单独 `module add` **不含**登录鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）、真实依赖、Robot 与网络验收——[SKILL §3.6](../SKILL.md) 的“网络验收”在单模块安装中没有做，报告里要写明。两个 `-recipe` 另有正式 session 认证器和 TCP/Robot 接线场景，Account/跨服务客户端与持久提交仍用替身。
 - **没有现成模块的需求**：用 `roost add …` 建骨架、手写业务。框架给的是事务、持久化、同步、定时、跨进程这些底座，规则要写。写法照已装模块的文件。
 - **框架不支持的需求**：如实说明并给出处，不拼假 demo。见 [SKILL §6](../SKILL.md) 与[能力清单“明确没有 / 不适合的”](../../../framework/CAPABILITIES.md#明确没有--不适合的)。
 
@@ -46,6 +46,8 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
   cd "$DIR"
   go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$CORE"
   ```
+
+  `-recipe casual` 或 `-recipe turn-pvp` 可直接创建已组合工程（自动采用 game 底座）；模块、Account 接入边界与验收见[配方](../../../../modules/README.md#从配方创建工程)。
 
   `-template game` 带 Player 与 World 两个实体、九个托管框架服务。玩家模块挂在 `Player` 上，要求这个形状；room 自带 Room Entity、DAO 与 lifecycle；skillbook 是服务级只读目录。
 - **已有工程**：`cd` 进去，先读 `roost.yaml`：`modules` 段是已装的模块（每个模块拥有的文件、DAO 字段、号），`services`、`features`、`ids` 是装配现状。再 `"$ROOST" module list`，带 `*` 的是已装的。不要重装、不要覆盖业务改过的文件。
@@ -181,7 +183,7 @@ func init() {
 }
 ```
 
-（`gameenter` 是 `<module>/game/enter`。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放仍写在 `enter_first.go` 里。
+（`gameenter` 是 `<module>/game/enter`。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `player.OnFirstEnter` 登记事务内钩子（配方已使用）。
 
 下面是不装它时的手写做法，也是它内部的做法。
 
@@ -227,7 +229,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 ## 7. 边界
 
-- 模块目前十四个；除 chat、leaderboard、skillbook、room、turn 外都要求 `-template game` 的 `Player`，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`（`-template game` 都已有）。模块之间自动接上的只有联动文件做的那几件（进入时聊天上线与拉全服邮件、签到推进每日任务）；其余要自己写：升级奖励（`profile_levelup.go`）、新玩家初始发放（`enter_first.go`）、别的每日任务何时推进（调 `TaskComp().Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `StaminaComp().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
+- 模块目前十五个；除 chat、leaderboard、skillbook、room、turn 外都要求 `-template game` 的 `Player`，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`（`-template game` 都已有）。模块之间自动接上的只有联动文件做的那几件（进入时聊天上线与拉全服邮件、签到推进每日任务）；其余要自己写：升级奖励（`profile_levelup.go`）、新玩家初始发放（`enter_first.go`）、别的每日任务何时推进（调 `TaskComp().Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `StaminaComp().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
 - 没有卸载；分配过的号与存储键不回收。已装模块不会随 roost-core 升级自动更新。
 - 模块已支持 `runtime` 服务 Init / Shutdown 接线；按实体分配持久定时器类型已由 turn 使用；模块自带压测步骤仍未提供。
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。

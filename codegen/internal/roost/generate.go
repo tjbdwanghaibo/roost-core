@@ -54,6 +54,8 @@ type GenerateOptions struct {
 	// syncProject 只供模块安装使用：新增自带实体或定时器时，在同一暂存树里刷新 owner / shutdown / 定时器接线。
 	// 普通 generate 仍要求调用方显式 project sync，不隐式接受手工改过的工程结构。
 	syncProject bool
+	// deferDependencies 只用于新工程的内层配方安装；依赖解析由 project new 的外层 CLI 决定。
+	deferDependencies bool
 }
 
 type generator struct {
@@ -287,10 +289,12 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 		replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
 		return inProjectPaths(err, stage, absRoot)
 	}
-	if err := TidyProjectDependencies(ctx, stage, &stagedStdout, &stagedStderr); err != nil {
-		replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
-		replayStagedOutput(stderr, stagedStderr.String(), stage, absRoot)
-		return inProjectPaths(err, stage, absRoot)
+	if !options.deferDependencies {
+		if err := TidyProjectDependencies(ctx, stage, &stagedStdout, &stagedStderr); err != nil {
+			replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
+			replayStagedOutput(stderr, stagedStderr.String(), stage, absRoot)
+			return inProjectPaths(err, stage, absRoot)
+		}
 	}
 	changes, err := planStagedProjectCommit(absRoot, stage, manifest)
 	if err != nil {

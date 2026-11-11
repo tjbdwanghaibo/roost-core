@@ -262,7 +262,7 @@ func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunk
 		return nil, err
 	}
 	meta := pack.Meta()
-	region, err := regionOf(meta)
+	region, err := regionOf(meta.Clone()) // regionOf 拿到自己的一份，改它不影响 Map 留下的 meta
 	if err == nil {
 		region, err = clipRegion(region, meta)
 	}
@@ -298,8 +298,9 @@ func intersect(a, b spatial.Rect) spatial.Rect {
 	return r
 }
 
-// Meta 是地图参数（包头）。
-func (m *Map) Meta() terrain.Meta { return m.meta }
+// Meta 是地图参数（包头）。WaterRegions 是副本：调用方改它不影响本进程的地形（区域水位只随原始地形包换版）；有区域
+// 水位时每次调用分配一份区域表，循环里用到的先取出来。
+func (m *Map) Meta() terrain.Meta { return m.meta.Clone() }
 
 // Region 是本进程写与装入的范围（已裁到地图里）。
 func (m *Map) Region() Region { return m.region }

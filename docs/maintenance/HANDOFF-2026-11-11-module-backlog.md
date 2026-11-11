@@ -28,7 +28,8 @@
 | --- | --- |
 | 模块 | 15 个：wallet、checkin、task、stamina、shop、bag、profile、chat、enter、leaderboard、mailbox、skillbook、room、turn、rehome；场景数以各自的 `module.yaml` 与 `scripts/test-modules-generated.sh` 为准 |
 | 模块间联动 | 5 组：chat + enter、mailbox + enter、mailbox + bag、task + checkin、rehome + enter |
-| 登记点 | enter 的进入前检查（能否决登录）与进入钩子；checkin 的签到钩子；mailbox 的附件种类；rehome 的换服前检查 / 离开时 / 到达后 |
+| 配方 | casual、turn-pvp：`roost project new -recipe`，细节见 modules/README；平台身份验证、可信匹配和胜负仍是业务接入点 |
+| 登记点 | enter 的事务内首次初始化（OnFirstEnter）、进入前检查（能否决登录）与进入钩子；checkin 的签到钩子；mailbox 的附件种类；rehome 的换服前检查 / 离开时 / 到达后 |
 | 安装器 | 服务级接线点（`runtime`）、模块自带实体（`entities`）、定时器类型分配（`timer_types`）都已实现；模块可以带配置表（bag 的道具表） |
 | game-demo 用的模块 | enter、chat、leaderboard、bag、profile、mailbox（连带 wallet）、skillbook、rehome，全部在同一步里安装 |
 | 单个玩家换服 | 一期已实现并合入（account 接口、DataEngine 交出实体、模块 rehome、demo 接线），**只有离线验证**；二、三期见 §4 的 K |
@@ -64,12 +65,14 @@ equipment（穿戴、卸下、槽位由道具决定；依赖 bag）、attribute�
 
 ### C. 配方（直接服务最终目标，模块已经够拼第一个）
 
-`roost project new -recipe <name>`：一组模块加参数，一条命令出半成品。先做一两个最小的（例如“休闲”：enter + wallet + checkin + task + stamina + shop + bag + mailbox；“回合对战”：enter + profile + room + turn + leaderboard），用它们反过来检验哪些接线还要手写。13 类玩法夹具（`scripts/testdata/<genre>/`）迁成模块组合排在其后。
+已完成最小配方 `casual`（enter + wallet + checkin + task + stamina + shop + bag + mailbox）与 `turn-pvp`（enter + profile + room + turn + leaderboard）；支持自定义 module/service，安装、ID、联动、自身同步和原子新建均复用现有逻辑。生成正式 Account session 认证器、开发 TCP 配置、业务规则和 `RECIPE.md`，休闲首次 100 金币由 OnFirstEnter 接入。
+
+仍需继续：13 类玩法夹具（`scripts/testdata/<genre>/`）迁成模块组合；更丰富的配方参数。回合配方没有客户端开房/匹配入口或默认胜负，可信匹配方提供唯一号并调用 `room.Open`；排行榜何时提交由结算规则决定。平台 IdentityVerifier / PlayerIDAllocator 仍由业务实现，不能把替身测试描述为可直接公网登录。
 
 ### D. 还缺的登记点与联动（每个都要有真实使用者）
 
 - wallet 的“消费成功”（区分 `Apply` 命中去重回执与首次生效；task 的“消费三次”在等它）。
-- profile 的升级（现在是业务文件钩子，别的模块挂不上）；enter 的首次发放（事务内）。
+- profile 的升级（现在是业务文件钩子，别的模块挂不上）。enter 的事务内首次发放登记点已经完成，由 casual 配方实际使用。
 - leaderboard 的提交时机；stamina 的消耗；shop 的购买成功。
 - rehome 的其余联动：mailbox（离开前按旧范围拉一次全服邮件）、chat（离开时移出在线名单）、leaderboard（按服的榜离开时移除）、room / turn（在房间里时拒绝换服）。
 
@@ -111,7 +114,7 @@ shop 的商品目录、task 的任务表改成配置表（照 bag 的道具表�
 
 - **换服**：方案 §6 的六项决定（按推荐项实施的）；实现时的取舍——离开钩子排在断开会话之前、受理后中止也断开会话、`PlayerOwners.Serve` 不直接收 claims、enter 的应答不带“目标服”；saga 准入可能发一次 account 调用（account 慢时拖住步骤消费者）是否接受；DataEngine 交出实体的三点（`Release` 的形态、等 checkpoint 用轮询还是按实体记账、`ErrEntityHandedOff` 放哪）。
 - **account 换服按 ID 的两处既有边界**（审查修复后仍在，KNOWN-LIMITS 有记）：早已了结的 ID 带当前代数与序号重新发起会被受理；无在途换服时重发一个已被覆盖的 ID 的中止会再记一次并返回成功。是否收紧。
-- task 的扩展（E）排在配方（C）之前还是之后。
+- 已按维护者同意的顺序先完成 C 的两个最小配方与首次发放登记点；接下来做 D 的真实联动，再推进 E。
 - worldstats 是否单独成模块；gm 是一个模块还是各模块各带命令。
 - 保留号：demo 每删掉一个写死的号，模块的号按最小空号重排；要稳定需要安装器支持保留号，做不做。
 
@@ -140,3 +143,15 @@ shop 的商品目录、task 的任务表改成配置表（照 bag 的道具表�
 - 重新生成 game-demo：47 测试包、670 PASS / 14 预期 SKIP / 0 FAIL；module verify 135 PASS / 0 SKIP，build / vet / ID / 生成物漂移四项通过。原始证据 `/tmp/roost-a3-demo-*`。完整模块组合复验通过：14 模块 + 4 联动、253 PASS / 0 SKIP，增量/反序/重复安装与四项工程检查全部通过，日志 `/tmp/roost-a3-all-modules-final.log`。暂存路径仅供本机复核，复跑入口为 `scripts/test-modules-generated.sh` 与上面的测试名。
 - CBM 已刷新（代际 2026-11-11T12:14:57Z，36337 节点、零 skipped）。新增 5 个模板局部解析缺口是 ID 占位和测试复合字面量，均已逐段读源码并用真实生成工程补证；文档 285 文件 / 0 断链，shell 语法与 diff 检查通过。
 - 使用文档、能力清单、CLI 清单说明和 CHANGELOG 已同步；`compose.md` 只改模块列表、例外列表与定时器能力三处事实，结构未重写。rehome 范围未动；仅提交当前功能分支，不合 main、不发版。
+
+### C 最小配方 + D 首次初始化接续
+
+- 新增 `casual` / `turn-pvp`，只在新建工程时使用，配方本身不是模块；整个生成过程仍在 `NewProjectContext` 的同级暂存树中完成。自定义 module/service 已验证，现成模块、ID、with、自身同步与房间定时器全部复用。
+- `OnFirstEnter` 在实体锁内、同一 Nest 事务执行，失败回滚初始化标记与发放；已有 `firstEnter` 扩展文件仍先执行。casual 是登记点的实际使用者。模块库共 15 模块 / 5 联动，enter 从 11 增为 14 场景（新增三个登记契约场景）。
+- 配方提供 Account session 认证器及开发 TCP 配置，拒绝错服或迁移中的角色。Account 平台身份验证/角色号分配由业务提供，turn-pvp 的房间号由可信匹配方提供；未实现默认胜负、排行榜结算或客户端开房。
+- 两个配方分别有 9 / 7 条接线与鉴权场景，零跳过，普通和 race 均通过；真实 TCP + Robot transport + 生成 PB + Controller + lifecycle + Nest 经过实跑。Account / 邮件 / 排行客户端、持久提交使用替身；没有启动自身 Sync 推送驱动，不把这些结果算作 Mongo/WAL/NATS/Gate 联合验收。
+- 三项可编译变异（不跑首次发放、忽略已初始化标记、放过错服票据）均被预定行为断言抓住。收尾发现配方的内层安装提前执行 tidy，会违背 `--skip-deps`；先用禁止 Go 依赖命令的用例复现 exit 91，再把新配方的依赖解析留给外层 CLI，定向复验通过。普通 module add 仍执行 tidy。
+- 全仓一次回归：9,736 PASS / 99 条条件 SKIP / 0 FAIL，164 个有测试包通过，包含全部 TestDemo / TestModule / TestRecipe。之后的依赖解析调整已跑完整配方定向复验（含 race / 三项变异 / skip-deps）；完整模块组合脚本通过：15 模块 / 5 联动，共 301 PASS / 0 SKIP，增量、反序、重复安装及四项工程检查通过。新生成 game-demo：724 PASS / 14 条预期 SKIP / 0 FAIL；module verify 183 PASS / 0 SKIP，build / vet / ID / 漂移全部通过。
+- 本机原始日志 `/tmp/roost-recipes-full-repo.jsonl`、`/tmp/roost-recipes-final-targeted.log`、`/tmp/roost-recipes-modules-final.log`、`/tmp/roost-recipes-demo-*.log`；复跑入口为本批命令、`scripts/test-modules-generated.sh` 与新生成工程的 `go test ./...`。文档锚点检查 286 文件 / 0 断链。
+- CBM 已核对本批候选路径；3 处新模板的局部解析缺口来自协议 ID 占位与 Go 复合字面量，均已逐段读源码并以生成工程补证，未把图谱当作完整解析证明。
+- `compose.md` 只更新配方入口、模块数和首次发放登记点等事实；skill 结构仍留给原会话。下一批仍是 D 的消费/升级等真实联动与 E 的任务事件，13 类夹具迁配方、独立 skill-only 验收及真实存储联合验收未完成。

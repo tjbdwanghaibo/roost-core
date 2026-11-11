@@ -40,12 +40,16 @@ type Ground struct {
 	WaterLevel int32
 }
 
-// Depth 是水深（厘米）：水位线减地面高度；不是水时为 0。
-func (g Ground) Depth() int32 {
+// Depth 是水深（厘米）：水位线减地面高度；不是水时为 0，是水时为正。
+//
+// 返回 int64：水位线与地面高度都是 int32，但高度基准可以为负、水位线是独立配置的，Meta.Validate 不约束两者之差——
+// 合法的地图参数下差值可以超出 int32（最大 2³² − 1）。与 Walker 判游泳用的是同一个 int64 差值；客户端
+// TerrainGround.Depth 同为 64 位。
+func (g Ground) Depth() int64 {
 	if !g.Water {
 		return 0
 	}
-	return g.WaterLevel - g.Height
+	return int64(g.WaterLevel) - int64(g.Height)
 }
 
 // View 是一张地图在本进程内已装入的块：原始块（从 Pack 读出）与覆盖块（上层给的改过的块）。
@@ -100,8 +104,9 @@ func (v *View) WaterLevelOf(key ChunkKey) int32 {
 	return v.water[v.meta.index(key)]
 }
 
-// Meta 返回地图参数。
-func (v *View) Meta() Meta { return v.meta }
+// Meta 返回地图参数（WaterRegions 是副本，调用方改它不影响视图：视图按块算好的水位表 water 在 NewView 时定下，区域
+// 配置只随原始地形包换版）。有区域水位时每次调用分配一份区域表，循环里用到的先取出来。
+func (v *View) Meta() Meta { return v.meta.Clone() }
 
 // slot 返回块的槽位，块不在地图内时返回 nil。
 func (v *View) slot(key ChunkKey) *atomic.Pointer[viewChunk] {
@@ -302,8 +307,8 @@ func (v *View) IsWater(x, y int64) (bool, error) {
 	return g.Water, err
 }
 
-// WaterDepth 返回世界坐标 (x, y) 的水深（厘米，Ground.Depth：水位线 − 地面高度，不是水时为 0），错误同 Height。
-func (v *View) WaterDepth(x, y int64) (int32, error) {
+// WaterDepth 返回世界坐标 (x, y) 的水深（厘米，Ground.Depth：水位线 − 地面高度，按 int64 算，不是水时为 0），错误同 Height。
+func (v *View) WaterDepth(x, y int64) (int64, error) {
 	g, err := v.probe(x, y)
 	return g.Depth(), err
 }

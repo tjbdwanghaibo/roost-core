@@ -1,0 +1,39 @@
+package tcp
+
+import (
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"path/filepath"
+	"testing"
+	generated "{{MODULE}}/configs/generated"
+
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/protocol/pb"
+)
+
+func TestRecipeTCPFirstGrantPaysForAShopPurchase(t *testing.T) {
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	configdata.SetDefaultStore(store)
+	handler.RegisterShopBuyNestHandlers()
+	f := newRecipeNetwork(t)
+	conn := f.login(t, 42)
+	recipeEnter(t, conn)
+	response := recipeRPC(t, conn, {{ID:protocol:ShopBuy}}, &pb.ShopBuyRequest{GoodsID: 1, Count: 1, Key: "purchase-1"}, pb.MarshalShopBuyRequest, pb.UnmarshalShopBuyResponse)
+	if response.Code != 0 || response.Balance != 90 || response.Cost != 10 || response.ItemID != 1001 || response.Held != 1 {
+		t.Fatalf("initial grant did not fund purchase: %+v", response)
+	}
+	again := recipeRPC(t, conn, {{ID:protocol:ShopBuy}}, &pb.ShopBuyRequest{GoodsID: 1, Count: 1, Key: "purchase-1"}, pb.MarshalShopBuyRequest, pb.UnmarshalShopBuyResponse)
+	if again.Code != 0 || again.Balance != 90 || again.Held != 1 {
+		t.Fatalf("purchase replay: %+v", again)
+	}
+}

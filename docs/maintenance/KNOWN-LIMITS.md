@@ -1,10 +1,19 @@
 # 当前已知限制与验证边界
 
+## 2026-11-11：地形审查 RV-20261110-01～04（已修复，未发版）留下的边界
+
+[审查报告](https://github.com/tjbdwanghaibo/roost-core/blob/fix/core-game-server-review/docs/maintenance/TERRAIN-REVIEW-20261110.md)（固定审查分支）登记的四项已在 main 修复，现象、根因与修前的红见 CHANGELOG `[Unreleased]`，状态见 [地形进度总表 §2](TERRAIN-STATUS.md#2-缺陷修复均已关闭)。留下的限制：
+
+- **一路地形副本对同一个拥有者至多订 32768 块（`terrain.MaxSubscriptionChunks`）**（RV-20261110-01）：订阅是一条消息、整份替换拥有者记下的那一份，没有做带批次身份的分片订阅。超过时 `Replicator.Want` 整份拒绝（`ErrSubscriptionTooLarge`，计 `WantsRejected`），之前接受的订阅照常续期。上限按拥有者分别算；缺省一个格 48 × 48 = 2304 块，格边长超过 181 块（约 11.6km）时一个格才可能超。game-demo：Ghost 带本身超限时拒绝启动；运行中玩家视野的订阅被拒时保留上一份、只在被拒与恢复时各记一条日志，新进视野的别的格的块等不到拥有者的状态，客户端那几块停在未确认，视点再变时重试。被拒的路径在 demo 里没有端到端用例（要一张对一个格超过 32768 块的图），由 `gameplay/terrain` 的 `TestReplicaSubscriptionLimitPerOwner` 覆盖。
+- **`Want` 在调用方的 goroutine 上分组，`OwnerOf` 必须能并发调用**（RV-20261110-01 的修法带来的契约变化）：原来只在 `Run` 的 goroutine 上调用。game-demo 的 `OwnerOf` 读只读的 `cellworld.Grid`，满足；业务自己的实现要是只读的分区表。
+- **地图参数向外是副本，有区域水位时每次 `Meta()` 分配一份区域表**（RV-20261110-03）：`Pack.Meta` / `View.Meta` / demo `Map.Meta`，至多 1024 片 × 20 字节；循环里先取一次。C# `TerrainMeta.WaterRegions` 是只读视图（`ReadOnlyCollection`），不能再转回数组。
+- **水深的类型变了**（RV-20261110-04）：Go `Ground.Depth` / `View.WaterDepth` 返回 int64，C# `TerrainGround.Depth` / `TerrainView.WaterDepth` 返回 long；把它存进 int32 / int 的调用方要显式转换（编译期报错，不会静默截断）。没有新增地图参数的约束，已有的地形包不受影响。C# 只在 .NET 10 的测试工程上跑过，Unity / IL2CPP 未跑。
+
 ## 2026-11-10：P5 转发编辑与分区场景建筑的剩余项（代码已在 main；跨格笔刷 11-10 改为拒绝，验收后置）
 
 [地形方案 §30](FEATURE-2026-11-08-editable-terrain.md#30-p5-跨格编辑分区场景的建筑与游戏尺度的分区视野t082026-11-10)、[证据](evidence/terrain-p5-20261110/README.md)。
 
-- **跨格笔刷与跨格占地直接拒绝（维护者 2026-11-10，[方案 §30.10](FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)）**：覆盖块归两个及以上地图进程的笔刷答 `terrain_cross_cell`（100070）、占地答 `building_cross_cell`（100069），都在预扣配额与发号之前，不做拆分、跨进程事务或部分成功。代价：格边上半径以内（笔刷至多 16m）不能一次刷过分界线，玩法层靠地形设计避开；客户端要能处理这个码（挪进一个格里再发，可用同一个 `Seq`）。真实多进程演练的 (a) 步已按此改写，未运行。`gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn` 因此没有调用方，是否删除待确认。
+- **跨格笔刷与跨格占地直接拒绝（维护者 2026-11-10，[方案 §30.10](FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)）**：覆盖块归两个及以上地图进程的笔刷答 `terrain_cross_cell`（100070）、占地答 `building_cross_cell`（100069），都在预扣配额与发号之前，不做拆分、跨进程事务或部分成功。代价：格边上半径以内（笔刷至多 16m）不能一次刷过分界线，玩法层靠地形设计避开；客户端要能处理这个码（挪进一个格里再发，可用同一个 `Seq`）。真实多进程演练的 (a) 步已按此改写，改写时只编译、未运行；[v1.43.0 发版说明](../release/v1.43.0-NOTES.md)记录发版前在 main 上跑过开地形的分区多进程演练 6 步（该步在其中）。`gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn` 因此没有调用方，是否删除待确认。
 - **转发编辑用例在重负载下的一次 `-race` 失败（尚未确认）**：`TestTerrainRelayForwardsABrushToTheCellThatWritesIt` 在与仓库其余测试并发运行时失败一次，原文没有保存，之后单独、并发与 `-count=40` 的压力运行都没有复现；疑似进程内网转发超过用例配的 300ms 期限（结论 Unknown）。见[证据](evidence/terrain-brush-single-cell-20261110/README.md#尚未确认一次--race-失败没有复现)。
 - **玩家换 Base 进程之后旧进程里的 `TerrainEditor`（尚未确认）**：分区场景的“发号”账本是全局库里的普通实体，只由玩家当前的 Base 写；demo 没有在玩家离开时卸载它的机制（`EntityCategoryPlayerScoped` 只决定取锁次序）。玩家从 Base 1 换到 Base 2 编辑、再回到 Base 1 时，Base 1 内存里若还是旧副本，会按旧的 `LastSeq` 判号并在下一次提交时把库里较新的账本写回旧值（`LastSeq` 回退）。各格的账本是持久的、不受影响，所以块不会被写两次；受影响的是答给客户端的 `LastSeq` 与“过期 / 超前”判断。普通场景单进程时没有这个问题。没有构造用例；需要确认 demo 的玩家实体在换进程时的统一处理（App 级的单写者保证）后再定。
 - **分区场景里建筑进本进程场景主视野的接线只有编译与单元覆盖**：`EnableBuildings` 现在也在分区场景调用，`attachBuildings` / `loadStanding` 随之在分区的 Base 场景上执行；连在别的 Base 上的玩家看不见建筑（需要建筑副本，§27.6）。真实多进程演练没有放建筑的步骤。
@@ -13,7 +22,7 @@
 
 ## 2026-11-10：地形确认来源（就绪标记）的边界
 
-可编辑地形 §31.7 ③ 按维护者定的 A 实施（[方案 §31.9](FEATURE-2026-11-08-editable-terrain.md#319-确认来源就绪标记317-③-a2026-11-10)，分支 `feat/terrain-confirm-source`，未合入、未发版）：地形视野里每一块都下发 TerrainChunk 对象，没改过的块是 Version 0 的就绪标记，C# `TerrainChunkSync` 据此 `Confirm` / `Unconfirm`。留下的边界：① 可确认的显示半径约 100m（一块就绪要 8 个邻块都已确认，地形视野 200m、视点每 8m 上报）；要更远需放大地形视野，300m 约 69 块，超过地形 64 的上限，要连同 `terrainMaxVisible` 与会话上限一起改——**待维护者确认**是否需要；② 进场时视野里 29～37 块按地形快照预算每 Flush 4 个，约 8～10 次 Flush（约 0.4～0.5s）后才全部可确认，期间显示原有网格或空洞；③ 原始地形包里坏了的块（服务端装不进视图）、分区场景里拥有者装不进的块没有标记，客户端永远不确认（后者每次订阅续期都会再问一次）；④ C# 接入层只用构造的说法核对时序，没有用真实 entitysync 帧驱动 `EntityViews` → `TerrainChunkSync`，Unity 未跑；⑤ 没有在真实依赖（mirror-local）与无缝演练上跑过（合入时跑）。证据见 [evidence/terrain-confirm-source-20261110](evidence/terrain-confirm-source-20261110/README.md)。
+可编辑地形 §31.7 ③ 按维护者定的 A 实施（[方案 §31.9](FEATURE-2026-11-08-editable-terrain.md#319-确认来源就绪标记317-③-a2026-11-10)；已合入 main，随 v1.43.0 发布）：地形视野里每一块都下发 TerrainChunk 对象，没改过的块是 Version 0 的就绪标记，C# `TerrainChunkSync` 据此 `Confirm` / `Unconfirm`。留下的边界：① 可确认的显示半径约 100m（一块就绪要 8 个邻块都已确认，地形视野 200m、视点每 8m 上报）；要更远需放大地形视野，300m 约 69 块，超过地形 64 的上限，要连同 `terrainMaxVisible` 与会话上限一起改——**待维护者确认**是否需要；② 进场时视野里 29～37 块按地形快照预算每 Flush 4 个，约 8～10 次 Flush（约 0.4～0.5s）后才全部可确认，期间显示原有网格或空洞；③ 原始地形包里坏了的块（服务端装不进视图）、分区场景里拥有者装不进的块没有标记，客户端永远不确认（后者每次订阅续期都会再问一次）；④ C# 接入层只用构造的说法核对时序，没有用真实 entitysync 帧驱动 `EntityViews` → `TerrainChunkSync`，Unity 未跑；⑤ 没有在真实依赖（mirror-local）与无缝演练上跑过（合入时跑）。证据见 [evidence/terrain-confirm-source-20261110](evidence/terrain-confirm-source-20261110/README.md)。
 
 ## 2026-11-10：开地形场景同步 128 个对象时每观察者的下行（已重算：增量字节压缩后约 18.6KB/s，在 50KB/s 以内）
 
@@ -39,15 +48,15 @@
 
 建筑的订阅改为与怪相同的场景主视野之后（[方案 §27.10](FEATURE-2026-11-08-editable-terrain.md#2710-订阅改为场景主视野维护者-2026-11-10)），demo 主视野的尺度（进入 1.2m、离开 1.5m、客户端最大 2.7m，按占地中心）对 3～12m 的建筑明显太小：站在建筑旁边紧挨着的节点上，缺省视野四种建筑都看不见，最大视野只看得见 hut 与 tower，keep 要走进占地里才看得见。另外 `policy.AOI` 的 `MaxVisible` 是近似语义，被上限忽略的目标在它下一次移动时才重新参选——建筑从不移动，视野满时后放的建筑要等看的人移动才进来（会话级超额降级 D17 的放回不受影响）。主视野尺度、按类型名额、按占地范围、静止目标重新参选四项待维护者确认，本轮未改主视野参数；测量见[证据](evidence/building-main-interest-20261110/README.md)。
 
-**主视野尺度（2026-11-10 已实施，分支 `feat/terrain-main-view-scale`，[方案 §28](FEATURE-2026-11-08-editable-terrain.md#28-开地形场景的主视野尺度2026-11-10)、[证据](evidence/terrain-main-view-scale-20261110/README.md)）**：开地形的普通场景主视野改为进入 30m / 离开 33m / 客户端最大 60m（离开 63m），AOI 块边长 32m；站在建筑旁边看得见四种建筑。不开地形的场景与分区场景仍是 demo 尺度。留下的边界：① 客户端开到 60m 时，密集处（建筑每 100m² 一座）最近 64 个约在 33m 以内、约 41 座是建筑，33m 外的玩家 / 怪被挤掉（B 按推荐不分类型）；② 下行上限由 64 个名额与 200ms 一步决定，约 35～46KB/s，接近 50KB/s 预算；③ 1000 人时每次复制缺省视野约 3.2ms、人人最大视野约 12ms（重负载机器、交替 6 轮）；④ 分区场景未放大（要连同 witness / Ghost 带一起改，P5）；⑤ demo 的移动速度、巡逻范围没有随视野放大；静止目标被上限忽略后要等看的人移动才重新参选（D）不变。七项取舍列在方案 §28.8 待维护者确认。
+**主视野尺度（2026-11-10 已实施，已合入 main、随 v1.43.0 发布；取值随后按游戏尺度口径由 §29 重定为 32m / 35.2m / 最大 64m、最近 128 个，下面的数字是 §28 当时的，[方案 §28](FEATURE-2026-11-08-editable-terrain.md#28-开地形场景的主视野尺度2026-11-10)、[证据](evidence/terrain-main-view-scale-20261110/README.md)）**：开地形的普通场景主视野改为进入 30m / 离开 33m / 客户端最大 60m（离开 63m），AOI 块边长 32m；站在建筑旁边看得见四种建筑。不开地形的场景与分区场景仍是 demo 尺度。留下的边界：① 客户端开到 60m 时，密集处（建筑每 100m² 一座）最近 64 个约在 33m 以内、约 41 座是建筑，33m 外的玩家 / 怪被挤掉（B 按推荐不分类型）；② 下行上限由 64 个名额与 200ms 一步决定，约 35～46KB/s，接近 50KB/s 预算；③ 1000 人时每次复制缺省视野约 3.2ms、人人最大视野约 12ms（重负载机器、交替 6 轮）；④ 分区场景未放大（要连同 witness / Ghost 带一起改，P5）；⑤ demo 的移动速度、巡逻范围没有随视野放大；静止目标被上限忽略后要等看的人移动才重新参选（D）不变。七项取舍列在方案 §28.8，维护者 2026-11-10 给出游戏尺度口径后由 §29 取代（§29.8 确认按推荐）。
 
 **尚未确认**：`TestBuildingsReachAnotherClientOverRealTCP` 在重负载下偶发“第二次改参数以全量（132 字节）发出、不是增量”——同一次里第一次改参数是增量（94 字节），即“放置时的脏位让登记后第一次改动走重同步全量”（§27.3 末条）挪到了第二次改动上；客户端内容与服务端一致，只是编码。观察：新代码 3 次（整包 `-race` 与生成器测试并跑时 1 次、`-race -count=25 -cpu 1,2` 1/50、与整包 `-race` 并跑的 400 次里 1 次），改动前的代码在同样负载下 0/400、单独跑 0/200；新代码单独跑 0/380。可能是主视野那个 Interest 的结算时机让快照与脏位的先后不同（entitysync 的 `preserveDirty`），没有定位到哪一次快照；用例的断言没有放宽。
 
-**结论（2026-11-10 追加，已证实；已修复，未发版）**：不是主视野的结算时机，也不是 `preserveDirty`（它只用于周期类型）。根因在 on_change 冻结：`SubjectSyncState.FreezeSyncViews` 在冻结槽已有内容或同一 subject 的捕获在途时一律升成全量（Resync），在途捕获提交后这份冻结也不释放。用例里判重、什么都不写的第二次 `SetParams` 落在后台复制循环推送第一次改动、尚未提交版本的窗口里时，留下一份过时冻结，第二次改动因“已有冻结”升成全量；落在第一次改动的冻结尚未被取走时，第一次改动升成全量（§27.3 末条记的现象）。在 Flush 推送与提交之间加 30ms 诊断延时可稳定复现原文，诊断日志点名了“在途”与“已有冻结”两步。修法：冻结不再因忙升全量，过时的增量由已有的基线校验拒绝复用、在锁内按新基线重新捕获；同代际的过时冻结随提交释放。entitysync 层有确定性的红绿回归（Push 钩子，不靠计时），game-demo 用例收紧为两次改参数都必须是增量。复现、前后对照与变异见[证据](evidence/entitysync-resync-flake-20261110/README.md)、CHANGELOG `[Unreleased]`。剩下的代价：交付在途时提交的变化，Flush 要多取一次 Entity 锁、多打包一次增量。建筑进主视野之后频率变高的具体原因尚未确认（只影响时序窗口的宽窄，不影响根因结论）。
+**结论（2026-11-10 追加，已证实；已修复，随 v1.43.0 发布）**：不是主视野的结算时机，也不是 `preserveDirty`（它只用于周期类型）。根因在 on_change 冻结：`SubjectSyncState.FreezeSyncViews` 在冻结槽已有内容或同一 subject 的捕获在途时一律升成全量（Resync），在途捕获提交后这份冻结也不释放。用例里判重、什么都不写的第二次 `SetParams` 落在后台复制循环推送第一次改动、尚未提交版本的窗口里时，留下一份过时冻结，第二次改动因“已有冻结”升成全量；落在第一次改动的冻结尚未被取走时，第一次改动升成全量（§27.3 末条记的现象）。在 Flush 推送与提交之间加 30ms 诊断延时可稳定复现原文，诊断日志点名了“在途”与“已有冻结”两步。修法：冻结不再因忙升全量，过时的增量由已有的基线校验拒绝复用、在锁内按新基线重新捕获；同代际的过时冻结随提交释放。entitysync 层有确定性的红绿回归（Push 钩子，不靠计时），game-demo 用例收紧为两次改参数都必须是增量。复现、前后对照与变异见[证据](evidence/entitysync-resync-flake-20261110/README.md)、CHANGELOG `[Unreleased]`。剩下的代价：交付在途时提交的变化，Flush 要多取一次 Entity 锁、多打包一次增量。建筑进主视野之后频率变高的具体原因尚未确认（只影响时序窗口的宽窄，不影响根因结论）。
 
 ## 2026-11-09：类型调度框架与 demo 生产接线已实现
 
-TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即时快照独立交付并保留待发变化。代价：脏周期内的即时快照使下一次周期更新回退 Full；仍按 tick 检查 pending 脏集合，提交观察者可能合并唤醒，不宣称消除全部调度成本。game-demo 生产 Scene 已改成 on_change/地形 1 秒；历史功能/测量夹具仍保留原周期构造器，本批未跑新性能验收；原两项去重问题和岸线仍待实施。见 [类型调度契约](../framework/ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。
+TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即时快照独立交付并保留待发变化。代价：脏周期内的即时快照使下一次周期更新回退 Full；仍按 tick 检查 pending 脏集合，提交观察者可能合并唤醒，不宣称消除全部调度成本。game-demo 生产 Scene 已改成 on_change/地形 1 秒；历史功能/测量夹具仍保留原周期构造器，本批未跑新性能验收；当时待实施的原两项去重问题（T01 / T02）已修复，客户端岸线的 C# 算法层已实现（Unity 表现未做），均随 v1.43.0 发布，见[地形进度总表](TERRAIN-STATUS.md)。见 [类型调度契约](../framework/ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。
 
 ## 2026-11-10：cellworld 按经过时间积分的子步截断（已证实；维护者 2026-11-10 选定按千分位整数累计零头；已修复，未发版）
 
@@ -73,7 +82,7 @@ TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即�
 
 ## 2026-11-09：地形首批参数实施边界
 
-默认编辑配额与桶容量已降至 270，terrainpack 默认 HeightBase 已设为 −100 米（−10000 厘米）；不重写既有资源。按类型同步现已完成框架与 demo 接线；圆滑岸线仍只完成决策，原地形去重两项问题及 P3～P6 仍未完成。当前清单见 [地形进度总表](TERRAIN-STATUS.md)。功能测试、修正记录与预期跳过见 [实施状态](TERRAIN-DECISIONS-20261109.md)；未新增压测，历史 270 档临时数据不代替容量验收。
+默认编辑配额与桶容量已降至 270，terrainpack 默认 HeightBase 已设为 −100 米（−10000 厘米）；不重写既有资源。按类型同步现已完成框架与 demo 接线。本条写下时“圆滑岸线只完成决策，原地形去重两项问题及 P3～P6 未完成”，此后的状态（2026-11-11 按 CHANGELOG v1.43.0 段核对）：去重两项 T01 / T02 已修复；P3（Ghost 副本、移动与寻路、跨格移动）、P4（区域水位、建筑）、P5（转发编辑、分区场景的建筑）的代码与岸线 / 重建调度的 C# 算法层都已合入 main 并随 v1.43.0 发布；仍未完成的是 P5 的规模与降级验收（T09）、P6 可选物理（T10）、Unity 表现，以及真实 Mongo / WAL 崩溃演练、跨机与长稳验收。当前清单见 [地形进度总表](TERRAIN-STATUS.md)。功能测试、修正记录与预期跳过见 [实施状态](TERRAIN-DECISIONS-20261109.md)；未新增压测，历史 270 档临时数据不代替容量验收。
 
 适用版本：最新发布版本（见 [CHANGELOG](../../CHANGELOG.md) 最上面的已归档段）与 main 上未发版的改动（CHANGELOG `[Unreleased]`）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（2026-10-22、10-28、10-30、10-31 四轮及 RV-20261101-01/02/03 已修复，对应发布状态以 CHANGELOG 为准；修复后剩下的边界写在对应专题条目里，进度见 [COMMIT-REVIEW](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；历史压测留下、要等更合适环境的补测项汇总在文末[待补测](#待补测历史压测遗留)。
 
@@ -525,14 +534,14 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **十四个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）、profile（档案）、bag（背包）、leaderboard（排行榜）、mailbox（邮件）、task（每日任务）、stamina（体力）、shop（商店）、skillbook（技能目录）、room（基础房间）、turn（顺序回合与持久超时）。game-demo 换用了 enter、chat、leaderboard、bag、profile、mailbox 与 skillbook（连带 wallet）；它的充值发货、装备与属性、副本、匹配组队、公会、场景与地形仍是 demo 的模板，13 类玩法也仍是各自的夹具（拆解是方案的后续工作）。基础 room 已成模块，自带实体与服务级接线点已支持；回合推进和定时器类型分配已由 turn 接入；匹配移交仍待做。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **十五个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）、profile（档案）、bag（背包）、leaderboard（排行榜）、mailbox（邮件）、task（每日任务）、stamina（体力）、shop（商店）、skillbook（技能目录）、room（基础房间）、turn（顺序回合与持久超时）、rehome（单玩家换服一期）。game-demo 换用了 enter、chat、leaderboard、bag、profile、mailbox 与 skillbook（连带 wallet）；它的充值发货、装备与属性、副本、匹配组队、公会、场景与地形仍是 demo 的模板，13 类玩法也仍是各自的夹具（拆解是方案的后续工作）。基础 room 已成模块，自带实体与服务级接线点已支持；回合推进和定时器类型分配已由 turn 接入；匹配移交仍待做。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。已提供 `-recipe casual` / `turn-pvp` 两种最小组合；13 类玩法尚未迁为配方。配方仍要求业务提供 Account 的平台验证/角色号分配，以及回合房间的可信匹配/胜负规则。
 - **chat 模块的边界**：在线名单是每进程的内存集合，多个 game 进程不互相扇出世界频道的推送（要么各推各的在线玩家，要么改为订阅 chat 的流）；连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订；系统消息入口无条件授予（前提是 chat 只经内部总线可达，见 collaborators 的注释）；没有群组频道。端点不经过 Nest，没有离线用例——8 条场景覆盖频道规则、消息体校验、在线名单、连接关闭后移出名单与 collaborators 的政策。game-demo 用的就是这个模块（2026-11-11 统一，demo 自己不再带一份聊天实现）。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
 - **模块绑定具体的实体名与工程形状**：wallet 与 checkin 挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
-- **room 的边界**：1～64 席，单个 owner，公开房间的成员准入；没有私房邀请码、跨房唯一成员约束、自动广播或匹配移交。客户端保存 RoomID / Epoch，重连显式 CAS，连接 nonce 只从服务端 Session 取得。业务接入层仍需将该连接成功取得的代际交给 `room.Disconnect`；断线保留/踢出/重启后的状态重建不自动代办。持久 `Connected` 是最后处理的连接事件事实，不是跨重启在线权威。真实 TCP/Gate 验证本轮仅覆盖代理连接身份；模块端点/存储仍是离线替身验收。见 [room 接入](../../modules/room/README.md)。
+- **room 的边界**：1～64 席，单个 owner，公开房间的成员准入；没有私房邀请码、跨房唯一成员约束、自动广播或匹配移交。客户端保存 RoomID / Epoch，重连显式 CAS，连接 nonce 只从服务端 Session 取得。业务接入层仍需将该连接成功取得的代际交给 `room.Disconnect`；断线保留/踢出/重启后的状态重建不自动代办。持久 `Connected` 是最后处理的连接事件事实，不是跨重启在线权威。代理连接身份与配方的双人 Room/Turn 端点已覆盖真实 TCP；Account、跨服务客户端和持久提交仍为替身，Mongo/WAL 联合验收未完成。见 [room 接入](../../modules/room/README.md)。
 - **运行期接线的边界**：`runtime` 声明的入口在框架 Mod 启动后、业务 Service.Init 前按依赖运行，业务先停、模块逆序停；不能依赖业务 Init 才发布的能力。自动接线只在生成的 bootstrap 生效，手动构造服务要使用 `NewWithModules()`。启动失败清理、停机失败保留依赖已验证；生命周期只支持一次 Init、串行 Shutdown，不支持重启。skillbook 已接入，其余后台消费者尚未迁移；模块自己的 ingress 登记、超时与排空契约仍要实现。
-- **turn 与定时器边界**：固定开局名单、每位玩家成功命令连续编号、最后一条可重放；期限迟到只推进一次，离线实体下次加载补触发。成员减少/房间关闭在下一次推进结束，无自动广播、胜负/伤害规则或跨机接管；25 场景使用替身提交器，未作真实 TCP/Gate/存储联合验收。见 [turn](../../modules/turn/README.md)。模块仍不带 Robot 压测步骤。
-- **enter 模块的边界**：它建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`；但不做鉴权（`auth.go` 仍缺省拒绝，`roost config enable player-tcp` 也没有执行），所以真实客户端仍连不上。端点里“`GetOrCreate` 之后发首次初始化”的串接没有离线用例，3 条场景只到 Nest handler（首次执行、再进入不做、提交被拒后下次补上）。
+- **turn 与定时器边界**：固定开局名单、每位玩家成功命令连续编号、最后一条可重放；期限迟到只推进一次，离线实体下次加载补触发。成员减少/房间关闭在下一次推进结束，无自动广播、胜负/伤害规则或跨机接管；25 个模块场景使用替身提交器；另有配方双人 TCP → PB → Controller → Nest 链路验证，仍未作 Gate/NATS/真实存储联合验收。见 [turn](../../modules/turn/README.md)。模块仍不带 Robot 压测步骤。
+- **enter 模块的边界**：它建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`；但不做鉴权（`auth.go` 仍缺省拒绝，`roost config enable player-tcp` 也没有执行），所以真实客户端仍连不上。独立安装仍需业务接入鉴权与开启监听；配方已提供正式 session 验证并开启开发监听。配方 TCP 场景覆盖 `GetOrCreate` → EnterInit 串接与重复进入，休闲配方另测发放和标记一同回滚。enter 自带 14 条场景（含进入前检查与 3 条事务内钩子登记检查）。
 - **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player/enter_game.go`），demo 覆盖了模块的 `protocol/def/enter_game.go` 与 `game/controllers/enter/` 两个文件。enter 域的 controller 自己建一个 player controller，一个进程里因此有两个 player controller 实例；它们共享的东西（在线名单、归属、场景）都经 Registry 或进程级对象，不存在各自一份的状态，但往 player controller 上加每实例状态时要记得这一点。demo 的 `enter_first.go` 是模块的缺省版本（不发任何东西）：demo 没有把自己的新玩家初始化搬进这个钩子。
 - **登记点只有四处**：联动文件（清单的 `with`）是通用机制，但登记点要提供方自己留。现有的：enter 的进入钩子（`game/enter`，事务之外；接上它的是 chat 与 mailbox）、checkin 的签到钩子（事务之内；接上它的是 task）、mailbox 的附件种类（校验与发放两处；接上它的是 bag）。还没有的：wallet 的“消费成功”、profile 的升级钩子与 enter 的首次发放（仍是业务文件，别的模块挂不上去）、往 leaderboard 提交分数的时机、stamina / 经验这类附件种类（要工程自己登记）。登记名是全局字符串，两处登记同一个名字只在进程启动时 panic，模块库的目录校验发现不了。
 - **联动文件的边界**：只在一对模块里第二个装上的那一次写；两个都早已装好（用旧版本的 roost 装的）不补。联动文件引用双方已装的源码：已装的模块被业务改过、或装的是另一版时，联动文件可能编译不过，`roost module add` 不编译工程，要靠随后的 `roost module verify` 发现。联动文件不能申请新号、不能加状态字段。

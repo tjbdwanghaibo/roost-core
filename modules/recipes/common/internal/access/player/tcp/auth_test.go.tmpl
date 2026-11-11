@@ -1,0 +1,75 @@
+package tcp
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 只替换远端 Account；执行配方实际的绑定与认证代码。未实现的接口不能被误调用。
+type recipeAccounts struct {
+	account.Accounts
+	role account.Role
+}
+
+func (accounts recipeAccounts) ValidateSession(_ context.Context, id int64, token string) (account.Role, error) {
+	if id != accounts.role.PlayerID || token != "verified-ticket" {
+		return account.Role{}, gateway.ErrUnauthenticated
+	}
+	return accounts.role, nil
+}
+func recipeAuth(t *testing.T, role account.Role) *applicationAuthenticator {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(account.CapabilityName, recipeAccounts{role: role}); err != nil {
+		t.Fatal(err)
+	}
+	auth := &applicationAuthenticator{}
+	if err := auth.BindRegistry(registry); err != nil {
+		t.Fatal(err)
+	}
+	return auth
+}
+func TestRecipeAuthenticationUsesVerifiedServingServer(t *testing.T) {
+	auth := recipeAuth(t, account.Role{PlayerID: 42, ServerID: 999, ServingServerID: 1000, BindEpoch: 3})
+	principal, err := auth.Authenticate(context.Background(), "session:42:verified-ticket", nil)
+	if err != nil || principal.PlayerID != 42 || principal.ServerID != 1000 || principal.SessionID == "" || principal.Claims[account.OriginServerIDClaim] != "999" || principal.Claims[account.BindEpochClaim] != "3" {
+		t.Fatalf("principal=%+v, err=%v", principal, err)
+	}
+}
+func TestRecipeAuthenticationRejectsWrongServer(t *testing.T) {
+	auth := recipeAuth(t, account.Role{PlayerID: 42, ServerID: 1001, ServingServerID: 1001})
+	if _, err := auth.Authenticate(context.Background(), "session:42:verified-ticket", nil); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("wrong server: %v", err)
+	}
+}
+func TestRecipeAuthenticationRejectsUnverifiedTickets(t *testing.T) {
+	auth := recipeAuth(t, account.Role{PlayerID: 42, ServerID: 1000, ServingServerID: 1000})
+	for _, ticket := range []string{"42", "demo:42", "session:42:forged", "session:43:verified-ticket"} {
+		if _, err := auth.Authenticate(context.Background(), ticket, nil); err == nil {
+			t.Fatalf("accepted %q", ticket)
+		}
+	}
+}
+func TestRecipeAuthenticationRefusesAnUnboundRegistry(t *testing.T) {
+	auth := &applicationAuthenticator{}
+	if err := auth.BindRegistry(app.NewRegistry(viper.New())); err == nil {
+		t.Fatal("missing account capability accepted")
+	}
+	if _, err := auth.Authenticate(context.Background(), "session:42:verified-ticket", nil); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("unbound auth: %v", err)
+	}
+}
+func TestRecipeAuthenticationRejectsTransferInProgress(t *testing.T) {
+	auth := recipeAuth(t, account.Role{PlayerID: 42, ServerID: 1000, ServingServerID: 1000, Transfer: &account.RoleTransfer{ID: "move-1", To: 1001}})
+	if _, err := auth.Authenticate(context.Background(), "session:42:verified-ticket", nil); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("moving role: %v", err)
+	}
+}

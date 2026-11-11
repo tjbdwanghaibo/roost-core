@@ -1,0 +1,44 @@
+package tcp
+
+import (
+	"context"
+	"testing"
+
+	roomentity "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/handler"
+	roomlogic "{{MODULE}}/game/room"
+	"{{MODULE}}/protocol/pb"
+)
+
+func TestRecipeTCPTwoPlayersFinishATurn(t *testing.T) {
+	roomentity.RegisterEntity()
+	f := newRecipeNetwork(t, handler.RegisterRoomOpenNestHandlersOn, handler.RegisterRoomJoinNestHandlersOn, handler.RegisterTurnStartNestHandlersOn, handler.RegisterTurnEndNestHandlersOn, handler.RegisterTurnViewNestHandlersOn)
+	a, b := f.login(t, 42), f.login(t, 43)
+	recipeEnter(t, a)
+	recipeEnter(t, b)
+	// 模拟可信匹配方已经分配唯一房间号；客户端没有任意创建房间的权限。
+	if err := roomlogic.Open(context.Background(), f.registry, 88001, 2); err != nil {
+		t.Fatal(err)
+	}
+	first := recipeRPC(t, a, {{ID:protocol:RoomJoin}}, &pb.RoomJoinRequest{RoomID: 88001}, pb.MarshalRoomJoinRequest, pb.UnmarshalRoomJoinResponse)
+	second := recipeRPC(t, b, {{ID:protocol:RoomJoin}}, &pb.RoomJoinRequest{RoomID: 88001}, pb.MarshalRoomJoinRequest, pb.UnmarshalRoomJoinResponse)
+	if first.Code != 0 || second.Code != 0 || first.Info.HostID != 42 || len(second.Info.Seats) != 2 {
+		t.Fatalf("join: %+v %+v", first, second)
+	}
+	start := recipeRPC(t, a, {{ID:protocol:TurnStart}}, &pb.TurnStartRequest{RoomID: 88001, Epoch: first.Info.Epoch, TurnMillis: 30000, MaxTurns: 2}, pb.MarshalTurnStartRequest, pb.UnmarshalTurnStartResponse)
+	if start.Code != 0 || start.Info.ActorID != 42 || start.Info.Round != 1 {
+		t.Fatalf("start: %+v", start)
+	}
+	end := recipeRPC(t, a, {{ID:protocol:TurnEnd}}, &pb.TurnEndRequest{RoomID: 88001, Epoch: first.Info.Epoch, Round: 1, Sequence: 1}, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+	if end.Code != 0 || end.Info.ActorID != 43 || end.Info.Round != 2 {
+		t.Fatalf("advance: %+v", end)
+	}
+	repeated := recipeRPC(t, a, {{ID:protocol:TurnEnd}}, &pb.TurnEndRequest{RoomID: 88001, Epoch: first.Info.Epoch, Round: 1, Sequence: 1}, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+	if repeated.Code != 0 || repeated.Info.Round != 2 {
+		t.Fatalf("replay consumed next turn: %+v", repeated)
+	}
+	finished := recipeRPC(t, b, {{ID:protocol:TurnEnd}}, &pb.TurnEndRequest{RoomID: 88001, Epoch: second.Info.Epoch, Round: 2, Sequence: 1}, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+	if finished.Code != 0 || finished.Info.Status != 2 {
+		t.Fatalf("finish: %+v", finished)
+	}
+}

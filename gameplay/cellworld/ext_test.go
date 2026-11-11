@@ -281,7 +281,9 @@ func startTerrainCell(t testing.TB, grid *Grid, transport Transport, pack *terra
 			ghost = append(ghost, key)
 		}
 	}
-	rep.Want(1, ghost)
+	if err := rep.Want(1, ghost); err != nil {
+		t.Fatal(err)
+	}
 	return tc
 }
 
@@ -566,7 +568,9 @@ func TestCrossCellWalkFollowsTheNeighboursTerrain(t *testing.T) {
 		if err := rep.AddChannel(1, &replicaViewStore{view: sc.view}); err != nil {
 			t.Fatal(err)
 		}
-		rep.Want(1, ghost)
+		if err := rep.Want(1, ghost); err != nil {
+			t.Fatal(err)
+		}
 		sc.rep = rep
 		cells[id] = sc
 	}

@@ -96,6 +96,8 @@ type ModuleOptions struct {
 	SkipSelfSync bool
 	Stdout       io.Writer
 	Stderr       io.Writer
+	// 新建配方已有外层依赖解析边界；普通 module add 仍随生成执行 tidy。
+	deferDependencies bool
 }
 
 // PlanModules 算出安装 names（连同依赖）要做的事，不改动工程。
@@ -476,7 +478,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, syncProject: len(newEntities) > 0 || modulePlanHasTimers(plan)}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: len(newEntities) > 0 || modulePlanHasTimers(plan)}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true

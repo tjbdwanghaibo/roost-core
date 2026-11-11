@@ -30,6 +30,8 @@ type NewOptions struct {
 	// Template is an opt-in starting shape. "game" hosts the nine framework
 	// services and wires the first business service to them.
 	Template string
+	// Recipe installs a named business composition on the game template.
+	Recipe string
 }
 
 type SyncResult struct {
@@ -65,6 +67,10 @@ func NewProject(options NewOptions) (SyncResult, string, error) {
 func NewProjectContext(ctx context.Context, options NewOptions) (SyncResult, string, error) {
 	if !validName(options.Name) {
 		return SyncResult{}, "", fmt.Errorf("invalid project name %q", options.Name)
+	}
+	recipe, err := resolveRecipe(&options)
+	if err != nil {
+		return SyncResult{}, "", err
 	}
 	manifest := DefaultManifest(options.Name, options.Module, options.Services, options.Mods, options.Features)
 	mergeVersions(&manifest.Versions, options.Versions)
@@ -133,6 +139,13 @@ func NewProjectContext(ctx context.Context, options NewOptions) (SyncResult, str
 		if err != nil {
 			return SyncResult{}, "", err
 		}
+	}
+	if recipe != nil {
+		created, err := scaffoldRecipe(ctx, stage, manifest, templateGameService(options), *recipe)
+		if err != nil {
+			return SyncResult{}, "", err
+		}
+		result.Created = append(result.Created, created...)
 	}
 	if err := ctx.Err(); err != nil {
 		return SyncResult{}, "", fmt.Errorf("project not created: %w", err)

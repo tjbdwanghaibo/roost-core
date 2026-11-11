@@ -20,3 +20,8 @@ import "embed"
 //
 //go:embed */module.yaml */files */with
 var Files embed.FS
+
+// Recipes 与模块清单分开嵌入，配方不是可叠装的模块。
+//
+//go:embed recipes
+var Recipes embed.FS

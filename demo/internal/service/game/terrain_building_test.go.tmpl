@@ -252,6 +252,33 @@ func (s buildingSnapshot) equal(o buildingSnapshot) bool {
 	return sameBuildings(standing(s.buildings), standing(o.buildings))
 }
 
+// 进程的地图参数向外都是副本（core RV-20261110-03）：区域水位只随原始地形包换版。改 Map.Meta() 返回值里的区域，或者在
+// Open 的 regionOf 回调里改它拿到的那份，都改不到 Map 与视图里：参数、视图按块算好的水位表仍是同一条水位线，水下的块
+// 照旧不能放建筑。
+func TestTerrainMapMetaIsACopy(t *testing.T) {
+	lake := terrain.ChunkKey{X: 2, Y: 1} // 水位区域 600m、地面 500m：整块在水下
+	region := func(meta terrain.Meta) (terrainmap.Region, error) {
+		meta.WaterRegions[0].Level = 1
+		return wholeMap(meta)
+	}
+	p := startTerrainProcessWith(t, buildingPack(t, t.TempDir(), 1), region, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	})
+	got := p.m.Meta()
+	got.WaterRegions[0].Level = 1
+	if a, b, c := p.m.Meta().WaterLevelOf(lake), p.m.View().Meta().WaterLevelOf(lake), p.m.View().WaterLevelOf(lake); a != 60000 || b != 60000 || c != 60000 {
+		t.Fatalf("water level of %v after writing to the returned metadata: map %d, view metadata %d, view table %d; all must stay 60000", lake, a, b, c)
+	}
+	if !p.m.Meta().Equal(buildingMeta(1)) {
+		t.Fatalf("the map's metadata changed: %+v, want %+v", p.m.Meta(), buildingMeta(1))
+	}
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, hut(140, 80)); !errors.Is(err, terrainmap.ErrUnderwater) {
+		t.Fatalf("a hut in the lake region: %v, want ErrUnderwater", err)
+	}
+}
+
 // 放置的校验：每一种拒绝都在写任何东西之前（块、视图、建筑、账本、提交数都不变）；合规的放置写下建筑、每块的占地、
 // 账本的序号与建筑数，行走判定随即看到占位。
 func TestBuildingPlacementChecks(t *testing.T) {
