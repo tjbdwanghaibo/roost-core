@@ -56,21 +56,45 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 
 本机 demo 跑通说明这些示例路径能组合运行，不证明所有部署模式、远端故障和整套 SLG 玩法都已验收。
 
+## 档案：名字、等级、经验来自 profile 模块
+
+名字、等级、经验用的是 [profile 业务模块](../modules/README.md)（生成时由 `roost module add profile` 装进工程）：`ProfileComponent`、
+状态、改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符）、发经验的规则（每级 100、可连升多级、int64 经验与 int32 等级的范围）、
+只检查不执行的 `CheckAddExp`、服务端发经验的 handler `ProfileAddExp`、给服务端读的名片 handler `ProfileCard` 与它们的场景测试
+（`game/handler/profile_test.go`）都是模块的，demo 不再带自己的档案组件。
+
+- **状态是模块追加在 `PlayerDao` 末尾的两个顶层字段**：`Profile`（名字、等级——别的玩家也看得到）与 `ProfilePrivate`（等级内经验——只给本人）。
+  同步的白名单按顶层字段列，所以“别人看不到经验”就是别人的视图里不列 `ProfilePrivate`（[同步视图](README.md#同步视图谁看见哪些字段)）。存储键是
+  `profile` / `profile_private`，里面是数字短键（`profile.1` 名字、`profile.2` 等级、`profile_private.1` 经验）。
+- **demo 只覆盖模块留给工程的一个文件**：升级钩子 `game/entities/player/profile_levelup.go`（见下一节）。
+- **demo 自己挂在这个组件上的两样东西不是档案**，各在自己的文件里、状态也在 demo 自己的 `PlayerDao` 字段里：公会副本
+  `guild_membership.go`（`GuildID` / `SetGuild`）与副本领奖账本 `dungeon_ledger.go`（`ClaimDungeonRun`、通关计数）。它们仍是
+  `ProfileComponent` 的方法：相关 handler 一直经 `IProfileEntity` 这个窄接口拿玩家，另立组件只多一个组件号。
+- **两实体的 `AddExp` 是 demo 的**（Player 加经验、World 记全服累计，见[实体锁档与跨实体事务](#实体锁档与跨实体事务)），它调模块的
+  `CheckAddExp` 与 `AddExp`。模块的 `ProfileAddExp` 只动 Player，不记 World 的累计，demo 的入口（端点、GM、副本结算）都不走它。
+- 生成步骤里锁 Profile 组件的 handler 没有 `roost add handler` 骨架步骤（组件在最后的模块步骤才落盘），直接写文件。
+
 ## 事件链：升级 → 奖励邮件（事务性 outbox）
 
-经验发放在任何 DAO 写入之前先做只读校验（`handler.checkExpGrant`：`ProfileComponent.CheckAddExp` 查 int64 经验加法与 int32 等级范围，`StatsComponent.CheckRecordExp` 查 World 的 int64 累计），超出范围沿用 `exp_amount`（100004）拒绝，Player、属性、副本领奖账本、World 与升级效果都不写，也没有新的提交记录；`AddExp` / `RecordExp` 自己再查一次只是兜底，不靠写完再由 `rollback=undo` 撤回。`ClaimDungeon` 先判“已领取”（重放照旧返回 Claimed=false），再校验，最后才写账本。等级按平坦曲线用除余计算，不按奖励数量逐级循环（修前 `amount=MaxInt64` 会一直占住业务 worker）。GM `gm.player.add_exp`、`AddExp` 端点、副本结算 `FinishDungeon` 都经这两个 handler，同一道校验。生成工程回归在 `game/handler/add_exp_test.go`。
+经验发放在任何 DAO 写入之前先做只读校验（`handler.checkExpGrant`）：Player 这一半问 profile 模块的 `ProfileComponent.CheckAddExp`（数额不是正数是
+`profile_exp_invalid`，int64 经验加法或 int32 等级放不下是 `profile_exp_overflow`），World 这一半问 `StatsComponent.CheckRecordExp`（int64 累计放不下是 demo 的
+`exp_amount`，100004）。任何一方拒绝时 Player、属性、副本领奖账本、World 与升级效果都不写，也没有新的提交记录；`AddExp` / `RecordExp` 自己再查一次只是兜底，不靠写完再由 `rollback=undo` 撤回。`ClaimDungeon` 先判“已领取”（重放照旧返回 Claimed=false），再校验，最后才写账本。等级按平坦曲线用除余计算，不按奖励数量逐级循环（修前 `amount=MaxInt64` 会一直占住业务 worker）。GM `gm.player.add_exp`、`AddExp` 端点、副本结算 `FinishDungeon` 都经这两个 handler，同一道校验。生成工程回归在 `game/handler/add_exp_test.go`。
 
 ```
-AddExp 端点 → Nest 锁 Player → ProfileComponent.AddExp
-  ├─ dao.SetExp / SetLevel                 状态变更
-  └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
+AddExp 端点 → Nest 锁 World、Player → handlerAddExp → ProfileComponent.AddExp（profile 模块）
+  ├─ ProfilePrivate.SetExp / Profile.SetLevel   状态变更
+  └─ onLevelUp(from, to)                         模块的升级钩子，demo 的版本在 profile_levelup.go：
+        ├─ AttributeComponent.LevelUp            属性 Base 层跟着等级涨
+        └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
         ↓ commit 后由 dataengine 发到 JetStream（<subject_prefix>.player.level_up）
 internal/service/game/level_up_mail.go     kitdataengine.SubscribeEffects：durable + Mongo inbox（每个 EffectID 只处理一次）
   └─ mail.Send(RequestID = EffectID)       mail 服务按 RequestID 去重：第二层幂等
 ```
 
-- **升级"这件事"在组件里发出**，紧挨着让它成立的状态变更；谁对它做出反应住在别处。handler 回滚时 effect 一起消失，
-  所以永远不会给一个没落库的升级发奖励。
+- **升级"这件事"在升级钩子里发出**，与让它成立的状态变更同一笔事务；谁对它做出反应住在别处。“升级了要通知别的功能”是档案模块的
+  职责（它在升级之后调一次钩子，连升多级也只调一次），“通知谁、怎么通知”是工程的：demo 的钩子发 `player.level_up`，payload 里是升级之后的
+  等级。handler 回滚时 effect 一起消失，所以永远不会给一个没落库的升级发奖励；钩子返回错误时经验和等级也一起撤回。从哪条路进
+  `AddExp`（demo 的两实体 AddExp、副本领奖、模块的 `ProfileAddExp`）都走同一个钩子，`TestLevelUpCarriesTheRewardEffectInTheSameCommit` 钉住这一条。
 - **两层幂等**：inbox 收据与业务写入在一个 Mongo 事务里提交，进程重启后重投的 effect 会被认出来；邮件是总线调用
   不是 Mongo 写入，所以还要靠 `RequestID = EffectID` 让 mail 服务自己去重。
 - **生产者与消费者读同一组配置键**（`dataengine.database` / `dataengine.effects.*`）、用同一组默认值，两边不会对"effect 在哪"
@@ -114,7 +138,7 @@ PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务�
 ```
 
 - `game/matchmaking/queue.go` 是游戏对 match 说的话：duel 队列两人一组按到达顺序（`FirstComeGrouping`），ranked 队列按等级配（`ScoreWindowGrouping`：
-  等级差 5 以内立刻配，窗口随最老候选的等待每秒放宽 5，上限 50）；ticket 的 Score 在 JoinQueue 时经 `PlayerLevel` 读 handler 取（Player 锁内），
+  等级差 5 以内立刻配，窗口随最老候选的等待每秒放宽 5，上限 50）；ticket 的 Score 在 JoinQueue 时经 profile 模块的 `ProfileCard` 读 handler 取（Player 锁内，名字与等级），
   PollMatch 带 `mode` 选队列。subject kind 是 `player`。matchmaker 每 500ms 扫两个 pool，各用自己的策略。
 - 所有对 match 的调用都从端点或普通 goroutine 发出，**从不在实体锁里**——World 只在 Commit 成功之后经自己的 Nest handler 记一笔。
 - `configs/service/config.match.yaml` 的 `sweep_queues` 列出 duel 队列：match 进程只负责扫过期票、移除超过 `match.retention` 的已结束记录，不负责成组。
