@@ -30,6 +30,15 @@ type InitResult struct {
 type Entered struct {
 	PlayerID int64
 	InitResult
+	// Claims 是这次进入所用的已认证会话带的 claims：认证器在握手时写进 gateway.Principal.Claims 的键值。
+	// 它们是接入层给出的、与具体业务无关的事实——用 account 服务的工程里是角色的承载服
+	// （svcaccount.ServerIDClaim）、原服（OriginServerIDClaim）与角色创建时间（RoleCreatedAtClaim），
+	// 别的认证器写什么由工程自己定。钩子按键取自己认识的那几个（邮件的联动用它们决定全服邮件的画像）。
+	//
+	// 可选：认证器什么都没写、或者这次进入不是从会话来的（工程自己改写的进入流程没有填、测试）时为 nil。
+	// 钩子必须把“没有这个键”当成正常情况，回到自己的缺省做法，不能因此失败。
+	// 只读：它与会话共用同一个 map，钩子不要改。
+	Claims map[string]string
 }
 
 // Hook 是进入之后顺带做的一件事。它在事务之外、端点的请求上下文里执行，约定是：

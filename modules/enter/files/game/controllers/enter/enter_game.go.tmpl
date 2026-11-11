@@ -27,7 +27,8 @@ import (
 // 两步都可以并发、可以重试：同一名新玩家的两次登录最后拿到同一个实体，初始化只生效一次。
 //
 // 两步都成功之后执行别的功能登记的进入钩子（game/enter 的 OnEntered：聊天上线、拉全服邮件……）。
-// 钩子失败只记日志，不让登录失败；工程改写这个端点时在同一个位置调 gameenter.RunEntered。
+// 钩子失败只记日志，不让登录失败；工程改写这个端点时在同一个位置调 gameenter.RunEntered，
+// 并照样把会话的 claims 带给钩子（Entered.Claims）。
 func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
@@ -50,6 +51,11 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 		}
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
-	gameenter.RunEntered(context.Context(), controller.registry, gameenter.Entered{PlayerID: context.PlayerID, InitResult: result})
+	entered := gameenter.Entered{PlayerID: context.PlayerID, InitResult: result}
+	if context.Session != nil {
+		// 认证器写进会话的 claims 原样带给钩子：这里不解释它们，哪个键是什么意思由写它的认证器与读它的钩子约定。
+		entered.Claims = context.Session.Principal().Claims
+	}
+	gameenter.RunEntered(context.Context(), controller.registry, entered)
 	return &pb.EnterGameResponse{First: result.First}, nil
 }
