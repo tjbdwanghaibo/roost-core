@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.44.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.44.0 的生成物用 saga 路由步骤（`Step.Routed`、`StartRequest.Route`、`saga.SidRoute`、`kitsaga.WithSidRoute`），saga WireVersion 4；按惯例在 tag 推上去之后单独一笔。
+
 ## [v1.44.0] - 2026-11-11
 
 - **行为变化**（framework/saga）：**有路由步骤（`Step.Routed`）的 saga 启动必须带截止，Resume 不许清截止**（维护者 2026-11-11 方案 A；[方案 §7](docs/maintenance/FEATURE-2026-11-11-saga-step-sid-route.md#7-待确认)）。退回不消耗尝试次数之后，截止是路由 saga 正向唯一的时间上限；缺截止的启动答 `ErrInvalidRecord`，带 `ClearDeadline` 的 Resume 答 `ErrInvalidRecord`。补偿方向仍等属主收下。**升级要求**：调用生成的 `EmitStart` / `Start` 时给路由 saga 传非零截止（demo 已如此）。
