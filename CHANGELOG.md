@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.44.0] - 2026-11-11
+
 - **行为变化**（framework/saga）：**有路由步骤（`Step.Routed`）的 saga 启动必须带截止，Resume 不许清截止**（维护者 2026-11-11 方案 A；[方案 §7](docs/maintenance/FEATURE-2026-11-11-saga-step-sid-route.md#7-待确认)）。退回不消耗尝试次数之后，截止是路由 saga 正向唯一的时间上限；缺截止的启动答 `ErrInvalidRecord`，带 `ClearDeadline` 的 Resume 答 `ErrInvalidRecord`。补偿方向仍等属主收下。**升级要求**：调用生成的 `EmitStart` / `Start` 时给路由 saga 传非零截止（demo 已如此）。
 
 - **新增 / 行为变化 / 协议 / 格式**（framework/saga + wiring/saga + codegen + game-demo）：**saga 步骤按 sid 确切路由**（维护者 2026-11-11 定方案 ③：“理想情况是有确切的路由，而不是多个争抢”“改做3吧”；[方案](docs/maintenance/FEATURE-2026-11-11-saga-step-sid-route.md)、[契约](docs/framework/SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③)、[证据](docs/maintenance/evidence/saga-step-sid-route-20261111/README.md)）。此前同一服务的全部 game 进程共用一个 durable 消费原生步骤，非属主拒绝（nak）后结果要等原消息按 250ms 倍增的退避轮到属主，5 进程时每步约多 3.75s。
