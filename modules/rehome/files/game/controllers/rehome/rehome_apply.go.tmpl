@@ -1,0 +1,38 @@
+package rehome
+
+import (
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/playeraccess"
+	gamerehome "{{MODULE}}/game/rehome"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleRehomeApply 是玩家自己申请换服的入口；玩家是谁取自已认证的连接。
+//
+// 应答 Code 为 0 表示已受理：换服已经在 account 登记，TransferID 是这一次的换服 ID。其后在后台继续——
+// 执行离开钩子、断开这名玩家的连接、交出他的档、让 account 改绑。受理之后不论换成没换成，这条连接都会被断开；
+// 客户端重新选角，角色所在的服变了就是换成了。
+//
+// 拒绝时什么都没有改，Code 是原因：rehome_refused（目标不行、被检查否决、account 不接受）、rehome_cooldown、
+// rehome_moving（已经有一次在途）、rehome_elsewhere（他不归本服）、retryable（没有执行，原样再发）。
+func (controller *Controller) HandleRehomeApply(context *playeraccess.Context, request *pb.RehomeApplyRequest) (*pb.RehomeApplyResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("rehome_apply endpoint: context and request are required")
+	}
+	if controller == nil || controller.driver == nil {
+		return nil, fmt.Errorf("rehome_apply endpoint: controller is not assembled")
+	}
+	ticket, err := controller.driver.Apply(context.Context(), gamerehome.Request{PlayerID: context.PlayerID, To: request.To})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("rehome_apply failed", "player_id", context.PlayerID, "to", request.To, "err", err)
+		}
+		return &pb.RehomeApplyResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.RehomeApplyResponse{TransferID: ticket.ID, To: ticket.To}, nil
+}

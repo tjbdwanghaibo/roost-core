@@ -1,0 +1,144 @@
+package rehome
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sort"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 换服留给别的功能的三个登记点。每个都分成两半：事务之外的一半在这个包里（可以问别的服务、动进程内的东西），
+// 事务之内的一半在实体包里（game/entities/player 的 OnRehomeApplying / OnRehomeArrived，拿到 Player 本身）。
+// 一个功能两半都需要时两处都登记。
+//
+//	换服前检查   OnApplying（这里）    + player.OnRehomeApplying   返回错误即拒绝，什么都没有改
+//	离开时       OnLeaving（这里）                                   返回错误即中止这一次换服
+//	到达后       OnArrived（这里）     + player.OnRehomeArrived    事务内的一半恰好一次；这里的一半失败只记日志
+//
+// 登记只在 init 里做（装了对应模块时由它的联动文件登记），之后只读；重名、空名、nil 是写错了，直接 panic。
+// 同一个登记点里的多个函数按名字顺序执行。
+
+// Check 是换服前检查在事务之外的一半：这名玩家现在能不能申请这一次换服。它在记意图、向 account 发起之前执行。
+//
+//   - 返回 nil 放行；返回错误就拒绝这次申请——什么都还没有写。返回带业务码的错误时客户端拿到那个码，
+//     否则拿到 rehome_refused；
+//   - 只读：它回答“能不能”，不改任何状态（检查之后别的检查、规则、account 仍可能拒绝）；
+//   - 给要问别的服务或进程内状态的检查用（在队伍里、在排队、在副本里）。只看这名玩家自己的档的检查
+//     登记在实体包（player.OnRehomeApplying），它与记意图在同一笔事务里。
+type Check func(ctx context.Context, registry *app.Registry, move Move) error
+
+// LeaveHook 是离开时要做的事：换服已经在 account 登记（被受理），玩家的会话还没有断开、实体还没有交出。
+//
+//   - 用它把这名玩家从进程内的东西里拿出来（离开场景、退出队伍、取消排队、退订）；
+//   - 返回错误就中止这一次换服：account 上撤销，玩家留在本服。前面的钩子已经做了的事不会被撤回，
+//     所以钩子要么做的是“留在本服也无妨”的事，要么自己能重做；
+//   - 可以重复：源服重启之后把停在半路的换服接着做完时会再调一次。
+type LeaveHook func(ctx context.Context, registry *app.Registry, move Move) error
+
+// ArrivedHook 是到达之后顺带做的事，在事务之外、进入游戏的请求上下文里执行。
+//
+//   - 不是恰好一次：它在到达的事务提交之后调用，失败只记一条 Warn、不重试，进程在两者之间崩溃就不会再调。
+//     必须做到的事登记在实体包（player.OnRehomeArrived），与到达同一笔事务、恰好一次；
+//   - 要快：它占用登录请求的时间预算。
+type ArrivedHook func(ctx context.Context, registry *app.Registry, arrival Arrival) error
+
+var (
+	hooksMu  sync.RWMutex
+	applying = map[string]Check{}
+	leaving  = map[string]LeaveHook{}
+	arrived  = map[string]ArrivedHook{}
+)
+
+// OnApplying 登记一条事务之外的换服前检查，name 用功能自己的名字（模块名）。
+func OnApplying(name string, check Check) {
+	if name == "" || check == nil {
+		panic("rehome: OnApplying needs a name and a check")
+	}
+	hooksMu.Lock()
+	defer hooksMu.Unlock()
+	if _, taken := applying[name]; taken {
+		panic(fmt.Sprintf("rehome: check %q is registered twice", name))
+	}
+	applying[name] = check
+}
+
+// OnLeaving 登记一个离开时的钩子。
+func OnLeaving(name string, hook LeaveHook) {
+	if name == "" || hook == nil {
+		panic("rehome: OnLeaving needs a name and a hook")
+	}
+	hooksMu.Lock()
+	defer hooksMu.Unlock()
+	if _, taken := leaving[name]; taken {
+		panic(fmt.Sprintf("rehome: leave hook %q is registered twice", name))
+	}
+	leaving[name] = hook
+}
+
+// OnArrived 登记一个到达之后的钩子（事务之外的一半）。
+func OnArrived(name string, hook ArrivedHook) {
+	if name == "" || hook == nil {
+		panic("rehome: OnArrived needs a name and a hook")
+	}
+	hooksMu.Lock()
+	defer hooksMu.Unlock()
+	if _, taken := arrived[name]; taken {
+		panic(fmt.Sprintf("rehome: arrived hook %q is registered twice", name))
+	}
+	arrived[name] = hook
+}
+
+// inOrder 取一张登记表按名字排好的快照。
+func inOrder[T any](table map[string]T) ([]string, []T) {
+	hooksMu.RLock()
+	defer hooksMu.RUnlock()
+	names := make([]string, 0, len(table))
+	for name := range table {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	run := make([]T, len(names))
+	for i, name := range names {
+		run[i] = table[name]
+	}
+	return names, run
+}
+
+// runApplying 按名字顺序执行换服前检查，第一个拒绝原样返回，后面的不再执行。
+func runApplying(ctx context.Context, registry *app.Registry, move Move) error {
+	names, checks := inOrder(applying)
+	for i, check := range checks {
+		if err := check(ctx, registry, move); err != nil {
+			slog.Info("rehome: refused by a check", "check", names[i], "player_id", move.PlayerID, "to", move.To, "err", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// runLeaving 按名字顺序执行离开时的钩子，第一个错误返回（带上钩子的名字），后面的不再执行。
+func runLeaving(ctx context.Context, registry *app.Registry, move Move) error {
+	names, hooks := inOrder(leaving)
+	for i, hook := range hooks {
+		if err := hook(ctx, registry, move); err != nil {
+			return fmt.Errorf("leave hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}
+
+// runArrived 按名字顺序执行到达之后的钩子，返回失败的钩子名；失败只记日志。
+func runArrived(ctx context.Context, registry *app.Registry, arrival Arrival) []string {
+	names, hooks := inOrder(arrived)
+	var failed []string
+	for i, hook := range hooks {
+		if err := hook(ctx, registry, arrival); err != nil {
+			failed = append(failed, names[i])
+			slog.Warn("rehome: arrived hook failed; it is not retried", "hook", names[i], "player_id", arrival.PlayerID, "transfer_id", arrival.ID, "err", err)
+		}
+	}
+	return failed
+}

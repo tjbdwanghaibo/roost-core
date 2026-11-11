@@ -1,0 +1,26 @@
+//go:build protocoldef
+
+package protocoldef
+
+// RehomeApplyRequest 申请把自己换到另一个服。玩家是谁取自已认证的连接，不取请求字段。
+type RehomeApplyRequest struct {
+	// To 是目标服的 sid。
+	To int32 `pb:"1"`
+}
+
+// RehomeApplyResponse：Code 为 0 表示已受理——换服已经在 account 登记，TransferID 是这一次的换服 ID。
+// 受理不是完成：服务端随后断开这名玩家的连接、把他的档交出去、再改绑。客户端的做法只有一种：
+// 等连接断开（受理之后不论换成没换成都会断开），重新选角——角色所在的服变了就是换成了，没变就是没换成。
+// 应答丢了也一样：断线、重新选角、看服。
+type RehomeApplyResponse struct {
+	Code       int32  `pb:"1"`
+	Reason     string `pb:"2"`
+	TransferID string `pb:"3"`
+	To         int32  `pb:"4"`
+}
+
+//roost:protocol group=game handler=rehome
+type RehomeApplyProtocol interface {
+	//roost:msg id={{ID:protocol:RehomeApply}}
+	RehomeApply(RehomeApplyRequest) RehomeApplyResponse
+}

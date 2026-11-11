@@ -1,0 +1,151 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 这个文件是换服在“进入游戏”这一侧的两件事：进入之前本服该不该放这名玩家进来（Admit），
+// 进入之后目标服做到达、源服清掉没成的意图（Arrive）。装了 enter 模块时由联动文件把它们接到进入端点上；
+// 自己写进入流程的工程在加载 Player 之前调 Admit、进入成功之后调 Arrive。
+
+// Admit 回答这名玩家现在能不能进入本进程。claims 是这次进入所用会话的 claims（可为 nil）。
+//
+//   - nil：放行。他绑定在本服，没有在换服。
+//   - rehome_moving：他正在换服，结论未定。客户端稍后重新选角再进。
+//   - rehome_elsewhere：他绑定在别的服（OwnerSID 取得出是哪个）。客户端重新选角，连到那个服。
+//   - retryable 或不带业务码的错误：现在判断不了（account 问不到、旧屏障一时撤不掉），不放行，客户端重试。
+//
+// 判断的依据按这个顺序：
+//
+//  1. 本进程的迁出表。换服在途的直接拒绝，不问任何人——这是关竞态的那道闸。
+//  2. 会话的 claims：认证器在握手时从 account 取来的承载服（svcaccount.ServerIDClaim）、绑定代数
+//     （BindEpochClaim）与在途的换服（TransferClaim）。握手就在进入之前，它们够新，用它们可以不再问一次 account。
+//  3. claims 里没有承载服（认证器没写、这次进入不是从会话来的）：问 Directory。account 不认识这名玩家时放行——
+//     他不归 account 管，也就谈不上换服。
+//
+// 迁出表记着他已经迁走、而 account（claims 或 Directory）说他现在归本服且绑定代数更新时，他是换回来的：
+// 撤掉旧记录与屏障再放行。
+//
+// 另有一件顺带的事：account 上换服在途、源服是本服、迁出表里却没有他——本进程在受理之后重启过。
+// 这时把那一次换服接着做完（Resume），这一次进入照样答 rehome_moving。
+//
+// 它会等待（问 account、撤屏障），在登录请求的上下文里调用，不能在 Nest 业务 worker 上调用。
+func (d *Driver) Admit(ctx context.Context, playerID int64, claims map[string]string) error {
+	where, tracked := d.residency.Where(playerID)
+	if tracked && where.Moving {
+		return Moving(playerID, where.Move.To)
+	}
+	binding, known, epochKnown := bindingFromClaims(playerID, claims)
+	if tracked && !epochKnown {
+		// 要判断他是不是换回来的，得知道现在的绑定代数；claims 里没有就问 account。
+		known = false
+	}
+	if !known {
+		asked, err := d.directory.Binding(ctx, playerID)
+		switch {
+		case errors.Is(err, svcaccount.ErrRoleMissing):
+			if tracked {
+				return Elsewhere(playerID, where.Move.To)
+			}
+			return nil
+		case err != nil:
+			return errcode.Wrap(errcode.ErrRetryable, fmt.Errorf("rehome: binding of player %d: %w", playerID, err))
+		}
+		binding = asked
+	}
+	if tracked {
+		returned, err := readmit(ctx, d.residency, d.self, where, binding)
+		if err != nil {
+			return errcode.Wrap(errcode.ErrRetryable, err)
+		}
+		if !returned {
+			return Elsewhere(playerID, where.Move.To)
+		}
+	}
+	if transfer := binding.Transfer; transfer != nil {
+		if binding.ServingServerID == d.self {
+			move := Move{PlayerID: playerID, ID: transfer.ID, From: d.self, To: transfer.To, Epoch: transfer.Epoch}
+			if err := d.Resume(move); err != nil {
+				slog.Warn("rehome: an unfinished transfer was not resumed", "player_id", playerID, "transfer_id", transfer.ID, "err", err)
+			}
+		}
+		return Moving(playerID, transfer.To)
+	}
+	if binding.ServingServerID != d.self {
+		return Elsewhere(playerID, binding.ServingServerID)
+	}
+	return nil
+}
+
+// bindingFromClaims 从会话的 claims 里读出 account 在握手时给出的绑定。读得出承载服才算数（known）：
+// 认证器没写、写了但格式不对，都不能当成“在本服”，由调用方去问 Directory。绑定代数单独报（epochKnown）：
+// 只写了承载服的认证器照样可用，代数只在判断“换回来”时需要。在途的换服写了但读不懂时同样不算数。
+func bindingFromClaims(playerID int64, claims map[string]string) (binding svcaccount.RoleBinding, known, epochKnown bool) {
+	serving, err := strconv.ParseInt(claims[svcaccount.ServerIDClaim], 10, 32)
+	if err != nil || serving <= 0 {
+		return svcaccount.RoleBinding{}, false, false
+	}
+	binding = svcaccount.RoleBinding{PlayerID: playerID, ServerID: int32(serving), ServingServerID: int32(serving)}
+	if epoch, err := strconv.ParseUint(claims[svcaccount.BindEpochClaim], 10, 64); err == nil {
+		binding.BindEpoch, epochKnown = epoch, true
+	}
+	if raw, moving := claims[svcaccount.TransferClaim]; moving {
+		to, id, ok := svcaccount.ParseTransferClaim(raw)
+		if !ok {
+			return svcaccount.RoleBinding{}, false, false
+		}
+		binding.Transfer = &svcaccount.RoleTransfer{ID: id, From: int32(serving), To: to, Epoch: binding.BindEpoch}
+	}
+	return binding, true, epochKnown
+}
+
+// Arrive 在这名玩家进入本服之后调用（他已经被 Admit 放行，Player 已经加载）。两件事，都靠档里的意图：
+//
+//   - 到达：意图指向本服，说明他是换过来的、这是换服之后第一次进入。在一笔事务里清意图、记冷却的起点、
+//     跑事务内的到达钩子（恰好一次，重复进入不再执行）；提交之后跑事务外的到达钩子（失败只记日志）。
+//   - 对账：意图指向别的服，而他此刻被放行进了本服，说明那一次换服没有成（记了意图之后进程崩溃、
+//     中止之后意图没清掉）。向 account 中止那个 ID 拿到确定的结论，再清掉意图。
+//
+// 返回错误时什么都可以下次再做：到达没提交的下一次进入重做，意图没清掉的下一次进入再对账。
+// 所以调用方（进入钩子）只需要记日志，不让登录失败。
+func (d *Driver) Arrive(ctx context.Context, playerID int64) error {
+	result, err := d.profile.Arrive(ctx, playerID, d.self)
+	if err != nil {
+		return fmt.Errorf("rehome: arrive: %w", err)
+	}
+	if result.Arrived {
+		arrival := result.Arrival
+		arrival.PlayerID = playerID
+		slog.Info("rehome: arrived", "player_id", playerID, "transfer_id", arrival.ID, "from", arrival.From, "to", arrival.To, "count", arrival.Count)
+		runArrived(ctx, d.registry, arrival)
+	}
+	if result.StaleID == "" {
+		return nil
+	}
+	if where, tracked := d.residency.Where(playerID); tracked && where.Move.ID == result.StaleID {
+		// 这一次正在本进程里进行：意图是它刚记下的，不是留下来的。
+		return nil
+	}
+	// 中止而不是只读一眼：只读看到“没有在途”之后，一个迟到的发起仍可能把这个 ID 做起来；
+	// 中止过的 ID account 不再接受发起，结论才是确定的。
+	_, err = d.directory.Abort(ctx, playerID, result.StaleID, "the intent was left behind; reconciled on enter")
+	switch classify(err) {
+	case answerDone, answerInProgress, answerRefused:
+		if err := d.profile.Cancel(ctx, playerID, result.StaleID); err != nil {
+			return fmt.Errorf("rehome: clear the stale intent %s: %w", result.StaleID, err)
+		}
+		slog.Info("rehome: cleared an intent whose transfer never happened", "player_id", playerID, "transfer_id", result.StaleID, "to", result.StaleTo)
+		return nil
+	case answerStale:
+		// account 说这个 ID 已经提交，可他被放行进了本服：两边对不上，不动意图，报出来。
+		return fmt.Errorf("rehome: the intent %s of player %d points at server %d and is committed, yet the player entered server %d", result.StaleID, playerID, result.StaleTo, d.self)
+	}
+	return fmt.Errorf("rehome: reconcile the intent %s: %w", result.StaleID, err)
+}

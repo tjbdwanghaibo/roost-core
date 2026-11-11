@@ -1,0 +1,15 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	gamerehome "{{MODULE}}/game/rehome"
+)
+
+// handlerRehomeArrive 在这名玩家进入 sid 这个服之后调用（每次进入都调），不直接对客户端开放。
+// 档里的换服意图指向 sid 时做到达——清意图、记冷却的起点、跑事务内的到达钩子，同一笔事务、按换服 ID 只做一次；
+// 指向别的服时原样报回，由调用方向 account 确认之后用 RehomeCancel 清。nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerRehomeArrive(target player.IRehomeEntity, sid int32, nowUnixMilli int64) (gamerehome.ArriveResult, error) {
+	return target.RehomeComp().Arrive(sid, nowUnixMilli)
+}

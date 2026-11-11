@@ -1,0 +1,17 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 换服模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+var (
+	// ErrRehomeRefused：这次换服申请没有被接受，什么都没有改。目标服不存在、没开、就是本服、不在可去的列表里，
+	// 账号在目标服已经有角色，别的功能登记的检查否决——都是它。换一个目标或排除原因之后可以再申请。
+	ErrRehomeRefused = errcode.Define({{ID:errcode:rehome_refused}}, "rehome_refused", "the server change was refused")
+	// ErrRehomeCooldown：距离上一次换服还不够久。
+	ErrRehomeCooldown = errcode.Define({{ID:errcode:rehome_cooldown}}, "rehome_cooldown", "changed servers too recently")
+	// ErrRehomeMoving：这名玩家正在换服，结论还没有定。申请换服时表示已经有一次在途；进入游戏时表示现在不能进，
+	// 稍后重新选角再进（换成了会进到新服）。
+	ErrRehomeMoving = errcode.Define({{ID:errcode:rehome_moving}}, "rehome_moving", "the player is changing servers; select the role again shortly")
+	// ErrRehomeElsewhere：这名玩家绑定在别的服，本服不为他服务。客户端重新选角，连到他现在的服。
+	ErrRehomeElsewhere = errcode.Define({{ID:errcode:rehome_elsewhere}}, "rehome_elsewhere", "the player is bound to another server; select the role again")
+)

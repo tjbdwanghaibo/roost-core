@@ -1,0 +1,31 @@
+name: rehome
+summary: 单个玩家换服：把一名玩家从本服改绑到另一个 game sid——申请协议与服务端入口、account 的发起 / 提交 / 中止、断开会话并交出实体、目标服首次进入时到达；可去的服与冷却写在规则文件里
+requires: []
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+  uses: [account]
+access:
+  transport: tcp
+entity: Player
+state:
+  - field: Rehome
+    type: RehomeState
+    store: rehome
+    dao: persist
+    comment: Rehome 是换服模块的服务端记录（进行中的换服意图、最近一次到达的换服、上次换服的时间与次数），只落库、不下发。
+component: Rehome
+protocols: [RehomeApply]
+errcodes: [rehome_refused, rehome_cooldown, rehome_moving, rehome_elsewhere]
+verify:
+  packages: [./game/rehome, ./game/handler, ./game/controllers/rehome]
+  run: ^TestRehome
+  pass: 30
+with:
+  enter:
+    summary: 进入前检查（正在换服答 rehome_moving，绑定在别的服答 rehome_elsewhere；源服重启后在这里把停在半路的换服接着做完）；进入之后做到达（首次进入目标服时生效一次）与意图对账
+    verify:
+      packages: [./game/controllers/rehome]
+      run: ^TestWithRehomeEnter
+      pass: 5

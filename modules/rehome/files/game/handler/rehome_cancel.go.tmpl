@@ -1,0 +1,11 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerRehomeCancel 清掉换服 ID 为 id 的意图，返回是否清了：换服没发起成、被中止，或者进入时对账发现它没有成。
+// 档里的意图是另一个 ID 时什么都不做。不直接对客户端开放。
+//
+//roost:nest rollback=undo durability=strict
+func handlerRehomeCancel(target player.IRehomeEntity, id string) (bool, error) {
+	return target.RehomeComp().Cancel(id), nil
+}

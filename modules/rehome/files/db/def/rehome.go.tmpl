@@ -1,0 +1,24 @@
+package dbdef
+
+// RehomeState 是换服模块记在玩家档里的业务事实。它跟着玩家的档走：源服记下意图，目标服读到同一份。
+//
+// 它不是“正在换服”的权威，也不当栅栏用：权威是 account 的角色记录，本进程的闸是迁出表（game/rehome）。
+// 这里只管两件事——冷却从哪一刻算起，以及到达只做一次。
+//
+// 有界：意图至多一份，到达标记只记最近一次（换服 ID 一次一个、到达时意图同时清掉，不需要记更早的）。
+type RehomeState struct {
+	// PendingID 非空表示有一次换服的意图：源服在向 account 发起之前记下，目标服到达时清掉；
+	// 没发起成或被中止的由源服清掉，清不掉的留到下一次进入时对账。
+	PendingID string `store:"1"`
+	// PendingFrom / PendingTo 是这次意图的源服与目标服。
+	PendingFrom int32 `store:"2"`
+	PendingTo   int32 `store:"3"`
+	// PendingAt 是记下意图时的业务时间（Unix 毫秒），只用于排查。
+	PendingAt int64 `store:"4"`
+	// ArrivedID 是最近一次做过到达的换服 ID：同一个 ID 不会到达第二次，也不能再拿来记意图。
+	ArrivedID string `store:"5"`
+	// LastAt 是最近一次到达时的业务时间（Unix 毫秒），冷却从它算起；没换过服是 0。
+	LastAt int64 `store:"6"`
+	// Count 是这名玩家换过几次服（到达的次数）。
+	Count int32 `store:"7"`
+}

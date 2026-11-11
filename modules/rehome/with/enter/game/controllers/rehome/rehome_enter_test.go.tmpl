@@ -1,0 +1,230 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"strconv"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	gameenter "{{MODULE}}/game/enter"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 联动的场景经 game/enter 的登记表执行（RunEntering / Enter / RunEntered），所以证明的是“接上了”，
+// 不只是 Driver 自己的行为。环境与 rehome_test.go 相同：真实的 account 与 Nest，两个服各一个 Registry。
+
+// withRehomeArrived 数事务外的到达钩子执行了几次：登记只能在 init 里做。
+var withRehomeArrived atomic.Int64
+
+func init() {
+	gamerehome.OnArrived("with_rehome_enter_test", func(context.Context, *app.Registry, gamerehome.Arrival) error {
+		withRehomeArrived.Add(1)
+		return nil
+	})
+}
+
+// withRehomeClaims 是认证器在握手时写进会话的三个键，照 account 此刻的回答写。
+func withRehomeClaims(binding svcaccount.RoleBinding) map[string]string {
+	claims := map[string]string{
+		"server_id":  strconv.FormatInt(int64(binding.ServingServerID), 10),
+		"bind_epoch": strconv.FormatUint(binding.BindEpoch, 10),
+	}
+	if binding.Transfer != nil {
+		claims["transfer"] = svcaccount.TransferClaimValue(*binding.Transfer)
+	}
+	return claims
+}
+
+// enter 照进入端点那样走一遍 gameenter.Enter，load 只计数。
+func (w *rehomeWorld) enter(server *rehomeServer, claims map[string]string, loads *int) error {
+	_, err := gameenter.Enter(context.Background(), server.registry, gameenter.Entering{PlayerID: w.playerID, Claims: claims},
+		func(context.Context) (gameenter.InitResult, error) {
+			*loads++
+			return gameenter.InitResult{}, nil
+		})
+	return err
+}
+
+// 进入前检查的三种结果，都发生在加载 Player 之前：绑定在本服的放行；正在换服的 rehome_moving；
+// 已经换走的在原来的服上 rehome_elsewhere（带他现在的服），在新服上放行。被拒绝的进入没有加载任何东西。
+func TestWithRehomeEnterChecksBeforeThePlayerIsLoaded(t *testing.T) {
+	if svcaccount.ServerIDClaim != "server_id" || svcaccount.BindEpochClaim != "bind_epoch" || svcaccount.TransferClaim != "transfer" {
+		t.Fatal("the account claim keys changed: authenticators already write the old ones")
+	}
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	source, target := w.server(rehomeSourceSID), w.server(rehomeTargetSID)
+	loads := 0
+	// 放行：claims 说在本服；认证器什么都没写的会话由检查自己去问 account。
+	if err := w.enter(source, withRehomeClaims(w.binding()), &loads); err != nil {
+		t.Fatalf("bound here: %v", err)
+	}
+	if err := w.enter(source, nil, &loads); err != nil {
+		t.Fatalf("bound here, no claims: %v", err)
+	}
+	if loads != 2 {
+		t.Fatalf("load ran %d times for two admitted enters", loads)
+	}
+	// 连错了服：他绑定在 1000，却来进 1001。
+	err := w.enter(target, withRehomeClaims(w.binding()), &loads)
+	if sid, ok := gamerehome.OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !ok || sid != 1000 {
+		t.Fatalf("entering the wrong server: err = %v (owner %d %v), want rehome_elsewhere with 1000", err, sid, ok)
+	}
+	// 换服受理之后、结论之前：源服的迁出表答“换服中”，哪怕这条会话的 claims 还是换服之前的。
+	before := withRehomeClaims(w.binding())
+	if response := w.apply(source, rehomeTargetSID); response.Code != 0 {
+		t.Fatalf("apply: %+v", response)
+	}
+	if err := w.enter(source, before, &loads); !errors.Is(err, apperrors.ErrRehomeMoving) && !errors.Is(err, apperrors.ErrRehomeElsewhere) {
+		t.Fatalf("entering the source right after the transfer was accepted: err = %v, want rehome_moving (or rehome_elsewhere once it settled)", err)
+	}
+	w.settled(source)
+	// 换走之后：原来的服拒绝（旧会话与没有 claims 的都一样），新服放行。
+	for _, claims := range []map[string]string{before, nil, withRehomeClaims(w.binding())} {
+		err = w.enter(source, claims, &loads)
+		if sid, ok := gamerehome.OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !ok || sid != 1001 {
+			t.Fatalf("claims %v on the old server: err = %v (owner %d %v), want rehome_elsewhere with 1001", claims, err, sid, ok)
+		}
+	}
+	if loads != 2 {
+		t.Fatalf("load ran %d times, want still 2: a refused enter loaded the player", loads)
+	}
+	if err := w.enter(target, withRehomeClaims(w.binding()), &loads); err != nil || loads != 3 {
+		t.Fatalf("entering the new server: err = %v, loads = %d", err, loads)
+	}
+}
+
+// 换服在 account 上在途时（这里由运维在 account 上人工发起，没有人在做）：目标服答 rehome_moving，不接手——
+// 它不是源服。claims 与问 account 两条路结论相同。
+func TestWithRehomeEnterRefusesAMovingPlayerOnTheTargetServer(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	target := w.server(rehomeTargetSID)
+	if _, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, svcaccount.TransferRequest{ID: "ops-1", FromSID: 1000, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	loads := 0
+	for _, claims := range []map[string]string{withRehomeClaims(w.binding()), nil} {
+		if err := w.enter(target, claims, &loads); !errors.Is(err, apperrors.ErrRehomeMoving) {
+			t.Fatalf("claims %v: err = %v, want rehome_moving", claims, err)
+		}
+	}
+	if loads != 0 {
+		t.Fatalf("load ran %d times for a moving player", loads)
+	}
+	if _, tracked := gamerehome.ResidencyOf(target.registry).Where(w.playerID); tracked {
+		t.Fatal("the target server took over a transfer it is not the source of")
+	}
+	if binding := w.binding(); binding.Transfer == nil || binding.ServerID != 1000 {
+		t.Fatalf("account binding = %+v, want the transfer still in flight on 1000", binding)
+	}
+}
+
+// 到达恰好一次：换服之后第一次进入目标服时清意图、冷却从这一刻起算、次数加一，事务外的到达钩子执行一次；
+// 再进入多少次都不再执行。
+func TestWithRehomeEnterArrivesOnceOnTheTargetServer(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	source, target := w.server(rehomeSourceSID), w.server(rehomeTargetSID)
+	withRehomeArrived.Store(0)
+	// 没换过服的进入：没有到达。
+	loads := 0
+	if err := w.enter(source, withRehomeClaims(w.binding()), &loads); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, lastAt, count := w.intent(); lastAt != 0 || count != 0 || withRehomeArrived.Load() != 0 {
+		t.Fatalf("an ordinary enter arrived: lastAt %d, count %d, hook %d", lastAt, count, withRehomeArrived.Load())
+	}
+	response := w.apply(source, rehomeTargetSID)
+	if response.Code != 0 {
+		t.Fatalf("apply: %+v", response)
+	}
+	w.settled(source)
+	arrivedAt := w.now.Add(int64(90 * time.Minute / time.Millisecond))
+	for i := 0; i < 3; i++ {
+		if err := w.enter(target, withRehomeClaims(w.binding()), &loads); err != nil {
+			t.Fatalf("enter %d on the target: %v", i+1, err)
+		}
+		w.now.Add(int64(time.Minute / time.Millisecond))
+	}
+	if pendingID, _, lastAt, count := w.intent(); pendingID != "" || lastAt != arrivedAt || count != 1 {
+		t.Fatalf("after three enters: intent %q, lastAt %d, count %d; want none, %d (the first enter), 1", pendingID, lastAt, count, arrivedAt)
+	}
+	if withRehomeArrived.Load() != 1 {
+		t.Fatalf("the arrived hook ran %d times, want 1", withRehomeArrived.Load())
+	}
+}
+
+// 意图对账：记下意图之后进程崩溃、没来得及向 account 发起。重启后这名玩家再进入源服时，
+// 向 account 确认那个 ID 没有成（并让它从此不能再发起），清掉意图；之后可以正常申请。
+func TestWithRehomeEnterClearsAnIntentWhoseTransferNeverHappened(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	if err := syncsender.NewRehomePrepareSender(w.engine).Sync_RehomePrepare(context.Background(), w.player.ID(), "lost-1", 1000, 1001, false); err != nil {
+		t.Fatal(err)
+	}
+	restarted := w.server(rehomeSourceSID)
+	loads := 0
+	if err := w.enter(restarted, withRehomeClaims(w.binding()), &loads); err != nil || loads != 1 {
+		t.Fatalf("enter: err = %v, loads = %d", err, loads)
+	}
+	if pendingID, _, lastAt, count := w.intent(); pendingID != "" || lastAt != 0 || count != 0 {
+		t.Fatalf("after the enter: intent %q, lastAt %d, count %d; want the stale intent gone and nothing counted", pendingID, lastAt, count)
+	}
+	binding := w.binding()
+	if binding.ServerID != 1000 || binding.Transfer != nil || binding.LastTransfer == nil || binding.LastTransfer.ID != "lost-1" || binding.LastTransfer.Committed {
+		t.Fatalf("account binding = %+v (last %+v), want lost-1 recorded as aborted", binding, binding.LastTransfer)
+	}
+	// 一个迟到的发起不能再把它做起来。
+	if _, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, svcaccount.TransferRequest{ID: "lost-1", FromSID: 1000, To: 1001}); !errors.Is(err, svcaccount.ErrTransferStale) {
+		t.Fatalf("a late begin of lost-1: err = %v, want refused as stale", err)
+	}
+	if response := w.apply(restarted, rehomeTargetSID); response.Code != 0 {
+		t.Fatalf("applying after the reconciliation: %+v", response)
+	}
+	w.settled(restarted)
+}
+
+// 源服在受理之后重启：迁出表没了，account 上换服仍在途。这名玩家再来进入时被拒绝（rehome_moving），
+// 同时源服把这一次换服接着做完——断开会话、交出实体、提交。之后他在源服是 rehome_elsewhere，在目标服到达。
+func TestWithRehomeEnterResumesATransferAfterTheSourceRestarted(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	withRehomeArrived.Store(0)
+	// 重启之前的进程做到了这里：记意图、向 account 发起。
+	if err := syncsender.NewRehomePrepareSender(w.engine).Sync_RehomePrepare(context.Background(), w.player.ID(), "crashed-1", 1000, 1001, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, svcaccount.TransferRequest{ID: "crashed-1", FromSID: 1000, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	restarted, target := w.server(rehomeSourceSID), w.server(rehomeTargetSID)
+	loads := 0
+	if err := w.enter(restarted, withRehomeClaims(w.binding()), &loads); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("entering the restarted source: err = %v, want rehome_moving", err)
+	}
+	where, tracked := w.settled(restarted)
+	if !tracked || where.Move.ID != "crashed-1" || where.Move.To != 1001 {
+		t.Fatalf("the restarted source's table says %+v (%v), want departed to 1001 by crashed-1", where, tracked)
+	}
+	if binding := w.binding(); binding.ServerID != 1001 || binding.BindEpoch != 1 || binding.Transfer != nil {
+		t.Fatalf("account binding = %+v, want server 1001 at epoch 1", binding)
+	}
+	if events := restarted.events.snapshot(); len(events) != 2 {
+		t.Fatalf("on the restarted source: %v, want the sessions closed and the entity handed off", events)
+	}
+	if err := w.enter(restarted, withRehomeClaims(w.binding()), &loads); !errors.Is(err, apperrors.ErrRehomeElsewhere) {
+		t.Fatalf("entering the old server afterwards: err = %v, want rehome_elsewhere", err)
+	}
+	if loads != 0 {
+		t.Fatalf("load ran %d times on the source", loads)
+	}
+	if err := w.enter(target, withRehomeClaims(w.binding()), &loads); err != nil || loads != 1 {
+		t.Fatalf("entering the target: err = %v, loads = %d", err, loads)
+	}
+	if pendingID, _, _, count := w.intent(); pendingID != "" || count != 1 || withRehomeArrived.Load() != 1 {
+		t.Fatalf("after arriving: intent %q, count %d, hook %d; want none, 1, 1", pendingID, count, withRehomeArrived.Load())
+	}
+}

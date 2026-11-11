@@ -1,0 +1,463 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 玩家档上的三笔事务（记意图、到达、清意图）在真实的 Nest 上跑，提交器是替身，不落盘。
+
+const rehomeTestPlayer int64 = 94311
+
+// 事务内的两个登记点只能在 init 里登记，所以这个测试文件自己登记一条检查与一个到达钩子，
+// 只认这条用例的玩家号，平时什么都不做，由下面的开关打开。
+var (
+	rehomeTestVeto       atomic.Pointer[error]
+	rehomeTestChecked    atomic.Int64
+	rehomeTestArrived    atomic.Int64
+	rehomeTestArriveFail atomic.Bool
+	rehomeTestLastMove   atomic.Pointer[gamerehome.Move]
+	rehomeTestLastArrive atomic.Pointer[gamerehome.Arrival]
+)
+
+func init() {
+	playerentity.OnRehomeApplying("rehome_test", func(owner *playerentity.Player, move gamerehome.Move, _ int64) error {
+		if owner.UniqueID() != rehomeTestPlayer {
+			return nil
+		}
+		rehomeTestChecked.Add(1)
+		rehomeTestLastMove.Store(&move)
+		if veto := rehomeTestVeto.Load(); veto != nil {
+			return *veto
+		}
+		return nil
+	})
+	playerentity.OnRehomeArrived("rehome_test", func(owner *playerentity.Player, arrival gamerehome.Arrival, _ int64) error {
+		if owner.UniqueID() != rehomeTestPlayer {
+			return nil
+		}
+		rehomeTestArrived.Add(1)
+		rehomeTestLastArrive.Store(&arrival)
+		if rehomeTestArriveFail.Load() {
+			return errors.New("injected: the arrived hook failed")
+		}
+		return nil
+	})
+}
+
+type rehomeGetter map[int64]entity.IThreadSafeEntity
+
+func (g rehomeGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g rehomeGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// rehomeCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚。
+type rehomeCommitter struct{ reject atomic.Bool }
+
+func (c *rehomeCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+// rehomeRecord 是档里换服记录的一份拷贝。
+type rehomeRecord struct {
+	pendingID            string
+	pendingFrom, pending int32
+	pendingAt            int64
+	arrivedID            string
+	lastAt               int64
+	count                int32
+}
+
+type rehomeFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	prepares  *sender.RehomePrepareSender
+	arrives   *sender.RehomeArriveSender
+	cancels   *sender.RehomeCancelSender
+	committer *rehomeCommitter
+	now       atomic.Int64
+}
+
+// newRehomeFixture 用替身提交器起一个 Nest，玩家是一份全新的档。
+// clock.SetSource 是进程级的：一个用例里只建一个 fixture。
+func newRehomeFixture(t *testing.T) *rehomeFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterRehomePrepareNestHandlers()
+	RegisterRehomeArriveNestHandlers()
+	RegisterRehomeCancelNestHandlers()
+	rehomeTestVeto.Store(nil)
+	rehomeTestChecked.Store(0)
+	rehomeTestArrived.Store(0)
+	rehomeTestArriveFail.Store(false)
+	f := &rehomeFixture{committer: &rehomeCommitter{}}
+	f.now.Store(time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(rehomeTestPlayer, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(rehomeGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.prepares = sender.NewRehomePrepareSender(f.engine)
+	f.arrives = sender.NewRehomeArriveSender(f.engine)
+	f.cancels = sender.NewRehomeCancelSender(f.engine)
+	return f
+}
+
+func (f *rehomeFixture) prepare(id string, from, to int32) error {
+	return f.prepares.Sync_RehomePrepare(context.Background(), f.player.ID(), id, from, to, false)
+}
+
+func (f *rehomeFixture) prepareAsOperator(id string, from, to int32) error {
+	return f.prepares.Sync_RehomePrepare(context.Background(), f.player.ID(), id, from, to, true)
+}
+
+func (f *rehomeFixture) arrive(sid int32) (gamerehome.ArriveResult, error) {
+	return f.arrives.Sync_RehomeArrive(context.Background(), f.player.ID(), sid)
+}
+
+func (f *rehomeFixture) cancel(id string) (bool, error) {
+	return f.cancels.Sync_RehomeCancel(context.Background(), f.player.ID(), id)
+}
+
+func (f *rehomeFixture) advance(d time.Duration) int64 {
+	return f.now.Add(int64(d / time.Millisecond))
+}
+
+// record 在业务 worker 上持实体锁读记录。
+func (f *rehomeFixture) record(t *testing.T) (record rehomeRecord) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		state := f.player.Dao().GetRehome()
+		record = rehomeRecord{
+			pendingID: state.GetPendingID(), pendingFrom: state.GetPendingFrom(), pending: state.GetPendingTo(), pendingAt: state.GetPendingAt(),
+			arrivedID: state.GetArrivedID(), lastAt: state.GetLastAt(), count: state.GetCount(),
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func (f *rehomeFixture) expectRecord(t *testing.T, what string, want rehomeRecord) {
+	t.Helper()
+	if got := f.record(t); got != want {
+		t.Fatalf("%s: record = %+v, want %+v", what, got, want)
+	}
+}
+
+// 记意图：源服、目标服、换服 ID、记下的时刻都在档里；事务内的检查拿到的就是这一次换服。
+// 同一个换服 ID 重发什么都不变（检查也不再跑）。
+func TestRehomePrepareRecordsTheIntentOncePerID(t *testing.T) {
+	f := newRehomeFixture(t)
+	start := f.now.Load()
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	want := rehomeRecord{pendingID: "t-1", pendingFrom: 1000, pending: 1001, pendingAt: start}
+	f.expectRecord(t, "after prepare", want)
+	wantMove := gamerehome.Move{PlayerID: rehomeTestPlayer, EntityID: f.player.ID(), ID: "t-1", From: 1000, To: 1001}
+	if seen := rehomeTestLastMove.Load(); rehomeTestChecked.Load() != 1 || seen == nil || *seen != wantMove {
+		t.Fatalf("the in-transaction check ran %d times and saw %+v, want once with %+v", rehomeTestChecked.Load(), seen, wantMove)
+	}
+	f.advance(time.Hour)
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatalf("the same id again: %v", err)
+	}
+	f.expectRecord(t, "after the same id again", want)
+	if rehomeTestChecked.Load() != 1 {
+		t.Fatalf("the check ran %d times, want still 1", rehomeTestChecked.Load())
+	}
+}
+
+// 规则与检查的拒绝，每一种都什么也没写：目标不是另一个服、没有换服 ID、事务内的检查否决
+// （没有码的是 rehome_refused，带业务码的保持自己的码）、冷却中。
+func TestRehomePrepareRefusalsWriteNothing(t *testing.T) {
+	f := newRehomeFixture(t)
+	for _, to := range []int32{1000, 0, -1} {
+		if err := f.prepare("t-1", 1000, to); !errors.Is(err, apperrors.ErrRehomeRefused) {
+			t.Fatalf("target %d: err = %v, want rehome_refused", to, err)
+		}
+	}
+	// 服务端发起的同样不能“换到本服”。
+	if err := f.prepareAsOperator("t-1", 1000, 1000); !errors.Is(err, apperrors.ErrRehomeRefused) {
+		t.Fatalf("operator moving to the same server: err = %v, want rehome_refused", err)
+	}
+	if err := f.prepare("", 1000, 1001); err == nil {
+		t.Fatal("an intent without a transfer id was recorded")
+	}
+	veto := errors.New("level too low")
+	rehomeTestVeto.Store(&veto)
+	if err := f.prepare("t-1", 1000, 1001); !errors.Is(err, apperrors.ErrRehomeRefused) || !errors.Is(err, veto) {
+		t.Fatalf("vetoed by a check: err = %v, want rehome_refused wrapping the veto", err)
+	}
+	coded := errcode.Wrap(apperrors.ErrRehomeMoving, nil)
+	rehomeTestVeto.Store(&coded)
+	if err := f.prepare("t-1", 1000, 1001); !errors.Is(err, apperrors.ErrRehomeMoving) || errors.Is(err, apperrors.ErrRehomeRefused) {
+		t.Fatalf("vetoed with a coded error: err = %v, want the check's own code", err)
+	}
+	rehomeTestVeto.Store(nil)
+	f.expectRecord(t, "after the refusals", rehomeRecord{})
+
+	// 冷却：从到达那一刻起 7 天。差 1 毫秒不行，到点可以。
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(3 * time.Hour)
+	arrivedAt := f.now.Load()
+	if result, err := f.arrive(1001); err != nil || !result.Arrived {
+		t.Fatalf("arrive: %+v %v", result, err)
+	}
+	settled := rehomeRecord{arrivedID: "t-1", lastAt: arrivedAt, count: 1}
+	f.now.Store(arrivedAt + 604_800_000 - 1)
+	if err := f.prepare("t-2", 1001, 1000); !errors.Is(err, apperrors.ErrRehomeCooldown) {
+		t.Fatalf("1ms before the cooldown ends: err = %v, want rehome_cooldown", err)
+	}
+	f.expectRecord(t, "after the cooldown refusal", settled)
+	f.now.Store(arrivedAt + 604_800_000)
+	if err := f.prepare("t-2", 1001, 1000); err != nil {
+		t.Fatalf("when the cooldown ends: %v", err)
+	}
+}
+
+// 服务端发起的换服不受冷却约束；别的功能登记的检查照常执行、照常能否决。
+func TestRehomePrepareByAnOperatorSkipsTheRulesButNotTheChecks(t *testing.T) {
+	f := newRehomeFixture(t)
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.arrive(1001); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(time.Minute)
+	if err := f.prepare("t-2", 1001, 1000); !errors.Is(err, apperrors.ErrRehomeCooldown) {
+		t.Fatalf("the player's own application one minute later: err = %v, want rehome_cooldown", err)
+	}
+	veto := errors.New("the account is under review")
+	rehomeTestVeto.Store(&veto)
+	if err := f.prepareAsOperator("t-2", 1001, 1000); !errors.Is(err, apperrors.ErrRehomeRefused) {
+		t.Fatalf("an operator vetoed by a check: err = %v, want rehome_refused", err)
+	}
+	rehomeTestVeto.Store(nil)
+	if err := f.prepareAsOperator("t-2", 1001, 1000); err != nil {
+		t.Fatalf("an operator during the cooldown: %v", err)
+	}
+	if seen := rehomeTestLastMove.Load(); seen == nil || !seen.Operator || seen.ID != "t-2" {
+		t.Fatalf("the check saw %+v, want the operator's move t-2", seen)
+	}
+	if record := f.record(t); record.pendingID != "t-2" || record.pending != 1000 {
+		t.Fatalf("record = %+v, want the intent t-2 to 1000", record)
+	}
+}
+
+// 到达恰好一次：第一次进入目标服时清意图、记下换服 ID、冷却从这一刻起算、次数加一、到达钩子执行一次；
+// 再进入多少次都什么也不做。冷却的起点是到达的时刻，不是申请的时刻。
+func TestRehomeArriveHappensExactlyOnce(t *testing.T) {
+	f := newRehomeFixture(t)
+	if result, err := f.arrive(1001); err != nil || result != (gamerehome.ArriveResult{}) {
+		t.Fatalf("arrive with no intent: %+v %v, want nothing", result, err)
+	}
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	arrivedAt := f.advance(2 * time.Hour)
+	result, err := f.arrive(1001)
+	want := gamerehome.Arrival{PlayerID: rehomeTestPlayer, ID: "t-1", From: 1000, To: 1001, Count: 1}
+	if err != nil || !result.Arrived || result.Arrival != want || result.StaleID != "" {
+		t.Fatalf("first enter on the target: %+v %v, want an arrival %+v", result, err, want)
+	}
+	if seen := rehomeTestLastArrive.Load(); rehomeTestArrived.Load() != 1 || seen == nil || *seen != want {
+		t.Fatalf("the arrived hook ran %d times and saw %+v, want once with %+v", rehomeTestArrived.Load(), seen, want)
+	}
+	settled := rehomeRecord{arrivedID: "t-1", lastAt: arrivedAt, count: 1}
+	f.expectRecord(t, "after the arrival", settled)
+	for i := 0; i < 3; i++ {
+		f.advance(time.Hour)
+		if result, err := f.arrive(1001); err != nil || result != (gamerehome.ArriveResult{}) {
+			t.Fatalf("enter %d after the arrival: %+v %v, want nothing", i+2, result, err)
+		}
+	}
+	f.expectRecord(t, "after entering again", settled)
+	if rehomeTestArrived.Load() != 1 {
+		t.Fatalf("the arrived hook ran %d times, want 1", rehomeTestArrived.Load())
+	}
+	// 到达过的换服 ID 不能再拿来记意图（服务端发起的也不行）。
+	if err := f.prepareAsOperator("t-1", 1001, 1000); !errors.Is(err, apperrors.ErrRehomeRefused) {
+		t.Fatalf("reusing an arrived id: err = %v, want rehome_refused", err)
+	}
+	f.expectRecord(t, "after the reused id", settled)
+}
+
+// 意图指向别的服时进入本服：不算到达，原样报回，什么都不改；清意图只认同一个换服 ID，
+// 清掉之后冷却、次数、到达标记都没有动——没换成不算换过，可以立刻再申请。
+func TestRehomeArriveElsewhereReportsTheIntentAndCancelClearsOnlyItsOwnID(t *testing.T) {
+	f := newRehomeFixture(t)
+	start := f.now.Load()
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	intent := rehomeRecord{pendingID: "t-1", pendingFrom: 1000, pending: 1001, pendingAt: start}
+	result, err := f.arrive(1000)
+	if err != nil || result.Arrived || result.StaleID != "t-1" || result.StaleTo != 1001 {
+		t.Fatalf("enter on the source: %+v %v, want the stale intent t-1 to 1001", result, err)
+	}
+	if rehomeTestArrived.Load() != 0 {
+		t.Fatal("the arrived hook ran on the source server")
+	}
+	if cleared, err := f.cancel("t-other"); err != nil || cleared {
+		t.Fatalf("cancel of another id: cleared=%v err=%v, want nothing", cleared, err)
+	}
+	if cleared, err := f.cancel(""); err != nil || cleared {
+		t.Fatalf("cancel without an id: cleared=%v err=%v, want nothing", cleared, err)
+	}
+	f.expectRecord(t, "after cancelling other ids", intent)
+	if cleared, err := f.cancel("t-1"); err != nil || !cleared {
+		t.Fatalf("cancel: cleared=%v err=%v, want cleared", cleared, err)
+	}
+	f.expectRecord(t, "after the cancel", rehomeRecord{})
+	if cleared, err := f.cancel("t-1"); err != nil || cleared {
+		t.Fatalf("cancel again: cleared=%v err=%v, want nothing", cleared, err)
+	}
+	// 没换成不起冷却。档里留着另一个 ID 的意图时，新的一次直接覆盖它。
+	if err := f.prepare("t-2", 1000, 1001); err != nil {
+		t.Fatalf("applying right after a cancelled move: %v", err)
+	}
+	if err := f.prepare("t-3", 1000, 1002); err != nil {
+		t.Fatalf("a new intent over a left-behind one: %v", err)
+	}
+	if record := f.record(t); record.pendingID != "t-3" || record.pending != 1002 || record.count != 0 || record.lastAt != 0 {
+		t.Fatalf("record = %+v, want only the intent t-3 to 1002", record)
+	}
+	// 迟到的清理（t-2）清不掉后一次的意图。
+	if cleared, err := f.cancel("t-2"); err != nil || cleared {
+		t.Fatalf("a late cancel of t-2: cleared=%v err=%v, want nothing", cleared, err)
+	}
+}
+
+// 提交被拒绝：记意图、到达、清意图各自整笔回滚。到达的回滚之后下一次进入重新到达，钩子再执行一次。
+func TestRehomeRejectedCommitRollsBack(t *testing.T) {
+	f := newRehomeFixture(t)
+	start := f.now.Load()
+	f.committer.reject.Store(true)
+	if err := f.prepare("t-1", 1000, 1001); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.expectRecord(t, "after the rejected prepare", rehomeRecord{})
+	f.committer.reject.Store(false)
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	intent := rehomeRecord{pendingID: "t-1", pendingFrom: 1000, pending: 1001, pendingAt: start}
+	f.committer.reject.Store(true)
+	if _, err := f.arrive(1001); err == nil {
+		t.Fatal("a rejected arrival reported success")
+	}
+	f.expectRecord(t, "after the rejected arrival", intent)
+	if _, err := f.cancel("t-1"); err == nil {
+		t.Fatal("a rejected cancel reported success")
+	}
+	f.expectRecord(t, "after the rejected cancel", intent)
+	f.committer.reject.Store(false)
+	arrivedAt := f.advance(time.Minute)
+	if result, err := f.arrive(1001); err != nil || !result.Arrived || result.Arrival.Count != 1 {
+		t.Fatalf("arrive after the rollback: %+v %v, want an arrival counted once", result, err)
+	}
+	f.expectRecord(t, "after the arrival", rehomeRecord{arrivedID: "t-1", lastAt: arrivedAt, count: 1})
+}
+
+// 事务内的到达钩子返回错误：这一次到达整笔回滚（意图还在、冷却没有起算），下一次进入重做。
+func TestRehomeArrivedHookFailureRollsTheArrivalBack(t *testing.T) {
+	f := newRehomeFixture(t)
+	start := f.now.Load()
+	if err := f.prepare("t-1", 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	rehomeTestArriveFail.Store(true)
+	if _, err := f.arrive(1001); err == nil {
+		t.Fatal("an arrival whose in-transaction hook failed reported success")
+	}
+	f.expectRecord(t, "after the failed hook", rehomeRecord{pendingID: "t-1", pendingFrom: 1000, pending: 1001, pendingAt: start})
+	rehomeTestArriveFail.Store(false)
+	arrivedAt := f.advance(time.Minute)
+	if result, err := f.arrive(1001); err != nil || !result.Arrived {
+		t.Fatalf("arrive once the hook passes: %+v %v", result, err)
+	}
+	f.expectRecord(t, "after the arrival", rehomeRecord{arrivedID: "t-1", lastAt: arrivedAt, count: 1})
+	if rehomeTestArrived.Load() != 2 {
+		t.Fatalf("the arrived hook ran %d times, want 2 (the rolled-back attempt and the one that stuck)", rehomeTestArrived.Load())
+	}
+}
+
+// 换很多次之后记录还是那几项：到达标记只记最近一次，次数照常累加，第 300 次与第 1 次一样工作。
+func TestRehomeManyMovesKeepOneRecord(t *testing.T) {
+	f := newRehomeFixture(t)
+	here, there := int32(1000), int32(1001)
+	var arrivedAt int64
+	for i := 1; i <= 300; i++ {
+		id := fmt.Sprintf("t-%d", i)
+		if err := f.prepareAsOperator(id, here, there); err != nil {
+			t.Fatalf("move %d: prepare: %v", i, err)
+		}
+		arrivedAt = f.advance(time.Minute)
+		result, err := f.arrive(there)
+		if err != nil || !result.Arrived || result.Arrival.Count != int32(i) {
+			t.Fatalf("move %d: arrive: %+v %v", i, result, err)
+		}
+		here, there = there, here
+	}
+	f.expectRecord(t, "after 300 moves", rehomeRecord{arrivedID: "t-300", lastAt: arrivedAt, count: 300})
+	// 最近一次的 ID 不能复用；更早的 ID 账本已经不记得——换服 ID 由驱动器随机生成、account 也只认最近了结的那一个。
+	if err := f.prepareAsOperator("t-300", here, there); !errors.Is(err, apperrors.ErrRehomeRefused) {
+		t.Fatalf("reusing the latest id: err = %v, want rehome_refused", err)
+	}
+}

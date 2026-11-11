@@ -1,0 +1,137 @@
+package rehome
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamerehome "{{MODULE}}/game/rehome"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// Controller 是换服的入口：协议端点 RehomeApply（玩家自己申请）与服务端入口 Move（GM、运维），
+// 两者走同一个驱动器（game/rehome 的 Driver）。换服的顺序、每一步失败的去向都在 Driver 的注释里。
+//
+// 它自己不保存状态：在途的换服记在 Residency 的迁出表里。
+type Controller struct {
+	registry *app.Registry
+	driver   *gamerehome.Driver
+}
+
+// drivers 让一个进程（一个 Registry）只有一个 Driver：协议绑定、进入游戏的联动、GM 入口拿到的是同一个。
+var (
+	driversMu sync.Mutex
+	drivers   = map[*app.Registry]*gamerehome.Driver{}
+)
+
+// FromRegistry 由生成的协议绑定在每个进程里调用一次；GM、运维的代码要调 Move 时也用它拿 Controller。
+// account 服务的客户端在业务服务 uses: [account] 时由 ClientMod 发布，这里就取，缺了在启动时暴露；
+// 玩家传输与 DataEngine 到真正要断开会话、交出实体时才取。
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	driver, err := DriverFromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	return &Controller{registry: registry, driver: driver}, nil
+}
+
+// DriverFromRegistry 取这个进程的换服驱动器，第一次用到时建。自己写进入流程的工程用它调 Admit 与 Arrive。
+func DriverFromRegistry(registry *app.Registry) (*gamerehome.Driver, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("rehome controller: app registry is required")
+	}
+	driversMu.Lock()
+	defer driversMu.Unlock()
+	if driver := drivers[registry]; driver != nil {
+		return driver, nil
+	}
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("rehome controller: nest client is unavailable")
+	}
+	self, err := gamerehome.SelfSID(registry)
+	if err != nil {
+		return nil, err
+	}
+	directory, err := gamerehome.DirectoryOf(registry)
+	if err != nil {
+		return nil, err
+	}
+	driver, err := gamerehome.NewDriver(gamerehome.DriverConfig{
+		Registry: registry, Self: self, Directory: directory,
+		Residency: gamerehome.ResidencyOf(registry), Profile: newProfile(client), EntityID: playerEntityID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	drivers[registry] = driver
+	return driver, nil
+}
+
+// Registry 供需要别的能力的端点使用。
+func (controller *Controller) Registry() *app.Registry {
+	if controller == nil {
+		return nil
+	}
+	return controller.registry
+}
+
+// Move 是不经协议的服务端入口：把一名玩家换到 to 服，给 GM 命令与运维工具调用。它与 RehomeApply 走同一个驱动器，
+// 区别是不受规则文件约束（可去的服、冷却）；别的功能登记的检查、account 的条件照常生效。note 写进 account 的
+// 换服记录（谁、为什么）。
+//
+// 必须在这名玩家当前绑定的服的进程里调用（别的服答 rehome_elsewhere）。返回 Ticket 表示已受理、后台在继续，
+// 不表示已经换成；结论看 account 的角色记录（accountctl show-role），或者本进程的日志。
+// 会等待（account、Nest 事务），不能在 Nest 业务 worker 上调用。
+func (controller *Controller) Move(ctx context.Context, playerID int64, to int32, note string) (gamerehome.Ticket, error) {
+	if controller == nil || controller.driver == nil {
+		return gamerehome.Ticket{}, fmt.Errorf("rehome controller: not assembled")
+	}
+	return controller.driver.Apply(ctx, gamerehome.Request{PlayerID: playerID, To: to, Operator: true, Note: note})
+}
+
+// playerEntityID 把玩家号换成他的 Player 的完整 Entity ID。
+func playerEntityID(playerID int64) (int64, error) {
+	return entity.BuildEntityID(playerID, player.EntityKindPlayer)
+}
+
+// profile 把驱动器对玩家档的三个写入接到 Nest 上：每个都是 Player 上的一笔事务。
+type profile struct {
+	prepares *syncsender.RehomePrepareSender
+	cancels  *syncsender.RehomeCancelSender
+	arrives  *syncsender.RehomeArriveSender
+}
+
+func newProfile(client corenest.Client) *profile {
+	return &profile{
+		prepares: syncsender.NewRehomePrepareSender(client),
+		cancels:  syncsender.NewRehomeCancelSender(client),
+		arrives:  syncsender.NewRehomeArriveSender(client),
+	}
+}
+
+func (p *profile) Prepare(ctx context.Context, move gamerehome.Move) error {
+	return p.prepares.Sync_RehomePrepare(ctx, move.EntityID, move.ID, move.From, move.To, move.Operator)
+}
+
+func (p *profile) Cancel(ctx context.Context, playerID int64, transferID string) error {
+	entityID, err := playerEntityID(playerID)
+	if err != nil {
+		return err
+	}
+	_, err = p.cancels.Sync_RehomeCancel(ctx, entityID, transferID)
+	return err
+}
+
+func (p *profile) Arrive(ctx context.Context, playerID int64, sid int32) (gamerehome.ArriveResult, error) {
+	entityID, err := playerEntityID(playerID)
+	if err != nil {
+		return gamerehome.ArriveResult{}, err
+	}
+	return p.arrives.Sync_RehomeArrive(ctx, entityID, sid)
+}

@@ -1,0 +1,392 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"testing"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+func (f *rehomeFixture) admit(claims map[string]string) error {
+	return f.driver.Admit(context.Background(), rehomePlayer, claims)
+}
+
+// 进入前的三种回答：放行、rehome_moving、rehome_elsewhere（带他现在的服）。
+// 依据依次是本进程的迁出表、会话的 claims、Directory；判断不了时不放行（可重试）。
+func TestRehomeAdmitGivesThreeAnswers(t *testing.T) {
+	f := newRehomeFixture(t)
+	// 放行：claims 说承载服是本服、没有换服在途。不问 account。只写了承载服的认证器同样可用。
+	if err := f.admit(map[string]string{"server_id": "1000", "bind_epoch": "3"}); err != nil {
+		t.Fatalf("bound here per the claims: %v", err)
+	}
+	if err := f.admit(map[string]string{"server_id": "1000"}); err != nil {
+		t.Fatalf("bound here per a claim without an epoch: %v", err)
+	}
+	// 绑定在别的服（claims）。
+	err := f.admit(map[string]string{"server_id": "1002", "bind_epoch": "4"})
+	if sid, ok := OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !ok || sid != 1002 {
+		t.Fatalf("bound elsewhere per the claims: err = %v (owner %d %v), want rehome_elsewhere with 1002", err, sid, ok)
+	}
+	// 正在换到本服（claims；本服是目标，不是源服，不接手）。
+	if err := f.admit(map[string]string{"server_id": "1002", "bind_epoch": "4", "transfer": "1000:t-9"}); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("moving here per the claims: err = %v, want rehome_moving", err)
+	}
+	f.expectEvents(t)
+	if len(f.background) != 0 {
+		t.Fatal("the target server took over a transfer it is not the source of")
+	}
+
+	// claims 里没有承载服、或者读不懂：问 Directory。
+	for _, claims := range []map[string]string{nil, {"channel": "ios"}, {"server_id": "s1000"}, {"server_id": "1000", "transfer": "garbled"}} {
+		if err := f.admit(claims); err != nil {
+			t.Fatalf("claims %v, bound here per the directory: %v", claims, err)
+		}
+	}
+	f.expectEvents(t, "binding 94301", "binding 94301", "binding 94301", "binding 94301")
+	f.directory.binding.ServingServerID = 1002
+	err = f.admit(nil)
+	if sid, ok := OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !ok || sid != 1002 {
+		t.Fatalf("bound elsewhere per the directory: err = %v (owner %d %v)", err, sid, ok)
+	}
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-9", From: 1002, To: 1000, Epoch: 3}
+	if err := f.admit(nil); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("moving per the directory: err = %v, want rehome_moving", err)
+	}
+	f.directory.binding.Transfer, f.directory.binding.ServingServerID = nil, 1000
+	// account 不认识这名玩家：他不归换服管，放行。account 问不到：不放行，可重试。
+	f.directory.bindingErr = fmt.Errorf("%w: player 94301", svcaccount.ErrRoleMissing)
+	if err := f.admit(nil); err != nil {
+		t.Fatalf("a player the account service does not know: %v", err)
+	}
+	f.directory.bindingErr = errRehomeLost
+	if err := f.admit(nil); rehomeCode(err) != 4 {
+		t.Fatalf("directory away: code = %d (%v), want 4 (retryable) and no admission", rehomeCode(err), err)
+	}
+	f.directory.bindingErr = nil
+	f.events.take()
+
+	// 本进程的迁出表：换服中的直接拒绝，不看 claims、不问 account。
+	move := Move{PlayerID: rehomePlayer, EntityID: rehomeEntity, ID: "t-1", From: 1000, To: 1001, Epoch: 3}
+	if err := f.residency.Reserve(move); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.admit(map[string]string{"server_id": "1000", "bind_epoch": "3"}); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("moving per the table: err = %v, want rehome_moving", err)
+	}
+	// 已迁走：握手在提交之前的旧会话（claims 仍说本服、代数没变）进不来，答他去了哪。
+	if err := f.residency.Depart(context.Background(), move); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.residency.Settle(context.Background(), move, Committed); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	stale := []map[string]string{
+		{"server_id": "1000", "bind_epoch": "3"},
+		{"server_id": "1000", "bind_epoch": "4"},
+		{"server_id": "1001", "bind_epoch": "4"},
+	}
+	for _, claims := range stale {
+		err = f.admit(claims)
+		if sid, ok := OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !ok || sid != 1001 {
+			t.Fatalf("claims %v, departed per the table: err = %v (owner %d %v), want rehome_elsewhere with 1001", claims, err, sid, ok)
+		}
+	}
+	f.expectEvents(t)
+}
+
+// 换走之后又换回来的玩家：迁出表记着他已迁走，account 说他归本服、绑定代数比当初发起时至少大 2。
+// 撤掉旧屏障与记录再放行；代数取自 claims，claims 里没有就问 Directory。屏障一时撤不掉：不放行，可重试。
+func TestRehomeAdmitLetsAReturnedPlayerBackIn(t *testing.T) {
+	f := newRehomeFixture(t)
+	move := Move{PlayerID: rehomePlayer, EntityID: rehomeEntity, ID: "t-1", From: 1000, To: 1001, Epoch: 3}
+	depart := func() {
+		t.Helper()
+		if err := f.residency.Reserve(move); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.residency.Depart(context.Background(), move); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.residency.Settle(context.Background(), move, Committed); err != nil {
+			t.Fatal(err)
+		}
+		f.events.take()
+	}
+	depart()
+	// 屏障撤不掉（实体正被占用）：不放行，记录还在。
+	f.releaseErrs = []error{errors.New("entity unload busy")}
+	if err := f.admit(map[string]string{"server_id": "1000", "bind_epoch": "5"}); rehomeCode(err) != 4 {
+		t.Fatalf("release busy: code = %d (%v), want 4 (retryable)", rehomeCode(err), err)
+	}
+	if _, tracked := f.residency.Where(rehomePlayer); !tracked {
+		t.Fatal("the record was dropped although the hand-off was not released")
+	}
+	if err := f.admit(map[string]string{"server_id": "1000", "bind_epoch": "5"}); err != nil {
+		t.Fatalf("returned per the claims: %v", err)
+	}
+	// 撤的是屏障，不动这次进入所用的连接。
+	f.expectEvents(t, "release 7094301", "release 7094301")
+	f.expectFree(t)
+
+	// claims 没有绑定代数：问 Directory。
+	depart()
+	f.directory.binding.BindEpoch = 7
+	if err := f.admit(map[string]string{"server_id": "1000"}); err != nil {
+		t.Fatalf("returned per the directory: %v", err)
+	}
+	f.expectEvents(t, "binding 94301", "release 7094301")
+	f.expectFree(t)
+}
+
+// 本进程在受理之后重启过：迁出表是空的，account 上换服仍在途、源服是本服。这名玩家来进入时答 rehome_moving，
+// 同时把那一次换服接着做完——离开钩子、断开会话、交出实体、提交，用的是 account 记着的换服 ID。
+// 已经在做的不会再起一遍。
+func TestRehomeAdmitResumesATransferThisProcessDidNotFinish(t *testing.T) {
+	f := newRehomeFixture(t)
+	var left []Move
+	OnLeaving("scene", func(_ context.Context, _ *app.Registry, move Move) error {
+		left = append(left, move)
+		return nil
+	})
+	claims := map[string]string{"server_id": "1000", "bind_epoch": "3", "transfer": "1001:t-7"}
+	if err := f.admit(claims); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("err = %v, want rehome_moving", err)
+	}
+	if len(f.background) != 1 {
+		t.Fatalf("%d background parts were started, want 1", len(f.background))
+	}
+	// 第二次进入（重试的登录帧）：表里已经有他，不再起一遍。
+	if err := f.admit(claims); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("second enter: err = %v, want rehome_moving", err)
+	}
+	if len(f.background) != 1 {
+		t.Fatalf("%d background parts after the second enter, want still 1", len(f.background))
+	}
+	f.expectEvents(t)
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-7")
+	want := Move{PlayerID: 94301, EntityID: 7_094_301, ID: "t-7", From: 1000, To: 1001, Epoch: 3}
+	if len(left) != 1 || left[0] != want {
+		t.Fatalf("the leave hook saw %+v, want %+v", left, want)
+	}
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1001 {
+		t.Fatalf("the table says %+v (%v), want departed to 1001", where, tracked)
+	}
+	// 没有 claims 的进入同样接手：Directory 说换服在途、源服是本服。
+	g := newRehomeFixture(t)
+	g.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-8", From: 1000, To: 1001, Epoch: 3}
+	if err := g.admit(nil); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("err = %v, want rehome_moving", err)
+	}
+	g.runBackground()
+	g.expectEvents(t, "binding 94301", "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-8")
+}
+
+// 进入之后：档里的意图指向本服就是到达，事务外的到达钩子各跑一次、失败只记日志；
+// 意图指向别的服就对账——向 account 中止那个 ID，确认它没有成，再清掉。
+func TestRehomeArriveRunsTheArrivedHooksAndReconcilesAStaleIntent(t *testing.T) {
+	f := newRehomeFixture(t)
+	var seen []Arrival
+	OnArrived("mail", func(_ context.Context, _ *app.Registry, arrival Arrival) error {
+		seen = append(seen, arrival)
+		return errors.New("mail service is away")
+	})
+	OnArrived("scene", func(_ context.Context, _ *app.Registry, arrival Arrival) error {
+		seen = append(seen, arrival)
+		return nil
+	})
+	arrive := func() error { return f.driver.Arrive(context.Background(), rehomePlayer) }
+	// 没有意图：只问了一次档。
+	if err := arrive(); err != nil {
+		t.Fatal(err)
+	}
+	f.expectEvents(t, "arrive 94301 at 1000")
+	if len(seen) != 0 {
+		t.Fatalf("arrived hooks ran without an arrival: %+v", seen)
+	}
+	// 到达：两个钩子都执行，第一个失败不影响第二个，也不让进入失败。
+	f.profile.arrive = ArriveResult{Arrived: true, Arrival: Arrival{ID: "t-0", From: 999, To: 1000, Count: 2}}
+	if err := arrive(); err != nil {
+		t.Fatalf("an arrival whose hook failed reported %v", err)
+	}
+	want := Arrival{PlayerID: 94301, ID: "t-0", From: 999, To: 1000, Count: 2}
+	if !reflect.DeepEqual(seen, []Arrival{want, want}) {
+		t.Fatalf("arrived hooks saw %+v, want twice %+v", seen, want)
+	}
+	f.expectEvents(t, "arrive 94301 at 1000")
+
+	// 留下来的意图：中止那个 ID，再清。
+	f.profile.arrive = ArriveResult{StaleID: "t-old", StaleTo: 1001}
+	if err := arrive(); err != nil {
+		t.Fatal(err)
+	}
+	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old", "cancel 94301 t-old")
+	// account 一时问不到：不清，报错（下一次进入再对账）。
+	f.directory.aborts = []error{errRehomeLost}
+	if err := arrive(); !errors.Is(err, errRehomeLost) {
+		t.Fatalf("err = %v, want the directory's error", err)
+	}
+	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old")
+	// account 说那个 ID 已经提交：不清，报错。
+	f.directory.aborts = []error{svcaccount.ErrTransferStale}
+	if err := arrive(); err == nil {
+		t.Fatal("a committed transfer's intent was reconciled away")
+	}
+	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old")
+	// 这个意图正是本进程此刻在做的那一次：不对账——否则会把自己刚发起的换服中止掉。
+	if err := f.residency.Reserve(Move{PlayerID: rehomePlayer, ID: "t-old", From: 1000, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	if err := arrive(); err != nil {
+		t.Fatal(err)
+	}
+	f.expectEvents(t, "arrive 94301 at 1000")
+}
+
+// 登记写错在启动时就暴露：三个登记点的重名、空名、nil 都 panic。
+func TestRehomeHookRegistrationMistakesPanic(t *testing.T) {
+	newRehomeFixture(t)
+	check := func(context.Context, *app.Registry, Move) error { return nil }
+	leave := func(context.Context, *app.Registry, Move) error { return nil }
+	arrive := func(context.Context, *app.Registry, Arrival) error { return nil }
+	OnApplying("team", check)
+	OnLeaving("team", leave)
+	OnArrived("team", arrive)
+	mustPanic := func(what string, register func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", what)
+			}
+		}()
+		register()
+	}
+	mustPanic("a duplicate check", func() { OnApplying("team", check) })
+	mustPanic("an unnamed check", func() { OnApplying("", check) })
+	mustPanic("a nil check", func() { OnApplying("scene", nil) })
+	mustPanic("a duplicate leave hook", func() { OnLeaving("team", leave) })
+	mustPanic("an unnamed leave hook", func() { OnLeaving("", leave) })
+	mustPanic("a nil leave hook", func() { OnLeaving("scene", nil) })
+	mustPanic("a duplicate arrived hook", func() { OnArrived("team", arrive) })
+	mustPanic("an unnamed arrived hook", func() { OnArrived("", arrive) })
+	mustPanic("a nil arrived hook", func() { OnArrived("scene", nil) })
+}
+
+// rehomeAccounts 是 account 客户端的替身：只实现换服用到的四个接口，别的方法没有。
+type rehomeAccounts struct {
+	svcaccount.Accounts
+	calls   []string
+	binding svcaccount.RoleBinding
+}
+
+func (a *rehomeAccounts) RoleBinding(_ context.Context, playerID int64) (svcaccount.RoleBinding, error) {
+	a.calls = append(a.calls, fmt.Sprintf("binding %d", playerID))
+	return a.binding, nil
+}
+
+func (a *rehomeAccounts) BeginRoleTransfer(_ context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
+	a.calls = append(a.calls, fmt.Sprintf("begin %d %s %d->%d epoch %d", playerID, request.ID, request.FromSID, request.To, request.ExpectEpoch))
+	return a.binding, nil
+}
+
+func (a *rehomeAccounts) CommitRoleTransfer(_ context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error) {
+	a.calls = append(a.calls, fmt.Sprintf("commit %d %s", playerID, transferID))
+	return a.binding, nil
+}
+
+func (a *rehomeAccounts) AbortRoleTransfer(_ context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error) {
+	a.calls = append(a.calls, fmt.Sprintf("abort %d %s %s", playerID, transferID, reason))
+	return a.binding, svcaccount.ErrTransferStale
+}
+
+// 经 Registry 的那一层：sid 取自服务配置；Directory 缺省是 account 服务的客户端（四个方法各自转到 account 的
+// 对应接口，错误原样带回），工程发布了自己的就用它；Residency 缺省是这个 Registry 的迁出表，同一个 Registry 始终是同一张。
+func TestRehomeBindingThroughTheRegistry(t *testing.T) {
+	config := viper.New()
+	registry := app.NewRegistry(config)
+	if _, err := SelfSID(registry); err == nil {
+		t.Fatal("a process without a sid reported one")
+	}
+	if _, _, err := Binding(context.Background(), registry, rehomePlayer); err == nil {
+		t.Fatal("Binding answered without knowing this process's sid")
+	}
+	config.Set("sid", 1000)
+	if sid, err := SelfSID(registry); err != nil || sid != 1000 {
+		t.Fatalf("sid = %d (%v), want 1000", sid, err)
+	}
+	// 没有 uses: [account]：说清楚缺什么。
+	if _, err := DirectoryOf(registry); err == nil {
+		t.Fatal("a directory was found although no account client is published")
+	}
+	accounts := &rehomeAccounts{binding: svcaccount.RoleBinding{PlayerID: rehomePlayer, ServerID: 1002, ServingServerID: 1002, BindEpoch: 1}}
+	if err := registry.Register(svcaccount.CapabilityName, svcaccount.Accounts(accounts)); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := DirectoryOf(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directory.Begin(context.Background(), 94301, svcaccount.TransferRequest{ID: "t-1", FromSID: 1000, To: 1001, ExpectEpoch: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directory.Commit(context.Background(), 94301, "t-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directory.Abort(context.Background(), 94301, "t-1", "why"); !errors.Is(err, svcaccount.ErrTransferStale) {
+		t.Fatalf("abort err = %v, want the account service's own error", err)
+	}
+	// 不在迁出表里：Binding 问 account。
+	if sid, moving, err := Binding(context.Background(), registry, rehomePlayer); err != nil || sid != 1002 || moving {
+		t.Fatalf("Binding = %d %v %v, want 1002 from the account service", sid, moving, err)
+	}
+	want := []string{"begin 94301 t-1 1000->1001 epoch 3", "commit 94301 t-1", "abort 94301 t-1 why", "binding 94301"}
+	if !reflect.DeepEqual(accounts.calls, want) {
+		t.Fatalf("account calls = %v, want %v", accounts.calls, want)
+	}
+	// 缺省的 Residency 是这个 Registry 的迁出表：打上标记之后 Binding 直接答“换服中”。
+	residency := ResidencyOf(registry)
+	if residency != ResidencyOf(registry) {
+		t.Fatal("the same registry gave two emigrant tables")
+	}
+	if err := residency.Reserve(Move{PlayerID: rehomePlayer, ID: "t-1", From: 1000, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	if sid, moving, err := Binding(context.Background(), registry, rehomePlayer); err != nil || sid != 1000 || !moving {
+		t.Fatalf("Binding = %d %v %v, want 1000 moving from the table", sid, moving, err)
+	}
+	if len(accounts.calls) != 4 {
+		t.Fatalf("the account service was asked about a player the table already answers for: %v", accounts.calls)
+	}
+	// 缺省实现在这个进程里没有玩家传输时没有会话可断，没有 DataEngine 时交不出实体：离开失败，是确定的“没有离开”。
+	if err := residency.Depart(context.Background(), Move{PlayerID: rehomePlayer, ID: "t-1"}); err == nil {
+		t.Fatal("the player departed although there is no dataengine to hand the entity off")
+	}
+
+	// 工程发布了自己的 Directory 与 Residency：用它们。
+	own := app.NewRegistry(config)
+	events := &rehomeEvents{}
+	ownDirectory := &rehomeDirectory{events: events, binding: svcaccount.RoleBinding{ServingServerID: 1003}}
+	ownResidency := NewLocalResidency(nil)
+	ownResidency.now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	if err := own.Register(DirectoryCapability, Directory(ownDirectory)); err != nil {
+		t.Fatal(err)
+	}
+	if err := own.Register(ResidencyCapability, Residency(ownResidency)); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResidencyOf(own); got != Residency(ownResidency) {
+		t.Fatalf("ResidencyOf = %v, want the published one", got)
+	}
+	if sid, moving, err := Binding(context.Background(), own, rehomePlayer); err != nil || sid != 1003 || moving {
+		t.Fatalf("Binding = %d %v %v, want 1003 from the published directory", sid, moving, err)
+	}
+}

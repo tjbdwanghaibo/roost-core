@@ -1,0 +1,98 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// Directory 是绑定的权威：一名玩家现在绑定在哪个服、是否正在换服，以及换服的三步写入。
+// 缺省实现是 account 服务（业务服务 uses: [account] 时发布的客户端）；类型直接用 account 的，
+// 因为四个方法就是它的四个接口，含义、幂等与拒绝都以它为准（service/account/transfer.go）：
+//
+//   - Binding：只读。角色不存在是 svcaccount.ErrRoleMissing。
+//   - Begin：登记换服并占住目标服的名额，同一个换服 ID 重发幂等。拒绝时什么都没写。
+//   - Commit：改绑到目标服。调用方保证源服已经不再写这名玩家。同一个 ID 重发幂等；
+//     答 svcaccount.ErrTransferStale 表示这个 ID 已被中止或不认识——没有改绑。
+//   - Abort：玩家留在源服，这个 ID 从此不能再提交、也不能再发起。同一个 ID 重发幂等，没发起成的 ID 也可以中止；
+//     答 svcaccount.ErrTransferStale 表示这个 ID 已经提交——按已提交处理。
+//
+// 不带业务码的错误（超时、总线错误）一律是“结果未知”：请求可能已经生效。
+type Directory interface {
+	Binding(ctx context.Context, playerID int64) (svcaccount.RoleBinding, error)
+	Begin(ctx context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error)
+	Commit(ctx context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error)
+	Abort(ctx context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error)
+}
+
+// DirectoryCapability 是工程发布自己的 Directory 用的能力名。没有发布时用 account 服务的客户端。
+// 需要它的是不经 account 管理角色绑定的工程，以及测试。
+const DirectoryCapability app.ModName = "game.rehome.directory"
+
+// DirectoryOf 取这个进程的 Directory：工程发布了自己的就用它，否则用 account 服务的客户端。
+func DirectoryOf(registry *app.Registry) (Directory, error) {
+	if own, ok := app.Lookup[Directory](registry, DirectoryCapability); ok && own != nil {
+		return own, nil
+	}
+	accounts, ok := app.Lookup[svcaccount.Accounts](registry, svcaccount.CapabilityName)
+	if !ok || accounts == nil {
+		return nil, fmt.Errorf("rehome: capability %q not found; list account under services.<service>.uses in roost.yaml", svcaccount.CapabilityName)
+	}
+	return accountDirectory{accounts: accounts}, nil
+}
+
+// accountDirectory 把 Directory 接到 account 服务的客户端上。
+type accountDirectory struct{ accounts svcaccount.Accounts }
+
+func (d accountDirectory) Binding(ctx context.Context, playerID int64) (svcaccount.RoleBinding, error) {
+	return d.accounts.RoleBinding(ctx, playerID)
+}
+
+func (d accountDirectory) Begin(ctx context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
+	return d.accounts.BeginRoleTransfer(ctx, playerID, request)
+}
+
+func (d accountDirectory) Commit(ctx context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error) {
+	return d.accounts.CommitRoleTransfer(ctx, playerID, transferID)
+}
+
+func (d accountDirectory) Abort(ctx context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error) {
+	return d.accounts.AbortRoleTransfer(ctx, playerID, transferID, reason)
+}
+
+// answer 是 Directory 对一次写入的回答归成的类。
+type answer uint8
+
+const (
+	// answerUnknown：不知道请求生效了没有（超时、总线错误、可以原样重试的存储竞争）。只能重发或另想办法拿结论。
+	answerUnknown answer = iota
+	// answerDone：照做了（含同一个 ID 的幂等重发）。
+	answerDone
+	// answerStale：调用方手里的绑定或换服 ID 已经不是当前的。Commit 得到它 = 没有改绑；Abort 得到它 = 已经提交。
+	answerStale
+	// answerInProgress：在途的是另一次换服。
+	answerInProgress
+	// answerRefused：明确拒绝，什么都没写（目标服不存在、没开、名额被占、角色不存在、参数不对）。
+	answerRefused
+)
+
+// classify 把 Directory 的错误归类。只有它认识的、明确说了“没有照做”的码才算拒绝；其余一律按结果未知处理——
+// 把未知当成拒绝会让源服在 account 可能已经改绑之后继续写这名玩家。
+func classify(err error) answer {
+	switch {
+	case err == nil:
+		return answerDone
+	case errors.Is(err, svcaccount.ErrTransferStale):
+		return answerStale
+	case errors.Is(err, svcaccount.ErrTransferInProgress):
+		return answerInProgress
+	case errors.Is(err, svcaccount.ErrServerInvalid), errors.Is(err, svcaccount.ErrServerClosed),
+		errors.Is(err, svcaccount.ErrRoleLimit), errors.Is(err, svcaccount.ErrRoleMissing),
+		errors.Is(err, svcaccount.ErrRangeInvalid):
+		return answerRefused
+	}
+	return answerUnknown
+}

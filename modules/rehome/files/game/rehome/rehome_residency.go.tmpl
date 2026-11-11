@@ -1,0 +1,275 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// Outcome 是一次换服对本进程（源服）来说的结论。
+type Outcome uint8
+
+const (
+	// Kept：这名玩家归本服，而且他的连接不必动——换服没有发起成，或者他后来又换回了本服。
+	// 撤掉迁出表的记录与实体的屏障，别的不碰。
+	Kept Outcome = iota + 1
+	// Aborted：换服被受理之后中止了，玩家归本服。撤掉记录与屏障，并断开他此刻仍连着的会话：
+	// 客户端在被受理之后只认一个信号——连接断开，然后重新选角看角色在哪个服。
+	Aborted
+	// Committed：account 已经把他改绑到目标服。屏障保持到进程退出，迁出表记下他去了哪。
+	Committed
+)
+
+// Whereabouts 是迁出表对一名玩家的回答。
+type Whereabouts struct {
+	// Move 是让他离开本进程的那一次换服（ID、目标服、发起时的绑定代数）。
+	Move Move
+	// Moving 为 true 表示换服还没有结论：本进程不为他服务，他最后归哪个服也还不知道。
+	// 为 false 表示已经改绑：他归 Move.To。
+	Moving bool
+	// Since 是这条记录落定的时刻（系统时间）：Moving 时是打上标记的时刻，否则是得知已经改绑的时刻。
+	Since time.Time
+}
+
+// Residency 回答“本进程还替不替这名玩家写”，并执行让他离开本进程的那几步。它带着迁出表。
+//
+// 缺省实现是 LocalResidency。工程有自己的驻留表（按玩家记着谁在本进程、做闲置卸载）时，让那张表实现这个接口
+// 并以 ResidencyCapability 发布到 Registry：迁出表与驻留表要在同一把锁下看，才不会一边说“在本服”一边说“已迁走”。
+//
+// 一次换服按这个顺序调用，同一名玩家同一时刻只有一次：
+//
+//	Reserve → （发起成了）Depart → Settle(Committed 或 Aborted)
+//	Reserve → （没发起成）Settle(Kept)
+//
+// 之后这名玩家若又换回本服，调用方在发现时再 Settle(Kept) 一次，把旧记录与屏障撤掉。
+type Residency interface {
+	// Reserve 给这名玩家打上“离开中”的标记：从这一刻起 Where 回答“换服中”。它在向 account 发起之前调用，
+	// 所以 account 那边一有换服在途，本进程就已经在拒绝新的进入与后台步骤。
+	// 表里已经有这名玩家时拒绝：换服在途答 Moving，已经迁走答 Elsewhere。只做一次加锁读写，不等待。
+	Reserve(move Move) error
+	// Depart 让这名玩家离开本进程：断开他的会话，把实体的写权交出去（已准入的写入落库、从内存卸载、
+	// 之后写到它的事务被拒绝）。成功返回之后本进程不再写他，调用方才可以让 account 改绑。
+	// 失败是确定的“没有离开”：实体照常可写，调用方中止换服。会等待，不能在 Nest 业务 worker 上调用。
+	// 对已经离开的玩家再调一次是安全的。
+	Depart(ctx context.Context, move Move) error
+	// Settle 落定结论（见 Outcome）。撤屏障会等待、可能因为实体正被占用而失败——此时记录与屏障都保持，
+	// 返回错误，调用方重试。表里没有这一次换服时什么都不做。
+	Settle(ctx context.Context, move Move, outcome Outcome) error
+	// Where 回答迁出表里有没有这名玩家。只读、不等待，可以在任何地方调用。
+	Where(playerID int64) (Whereabouts, bool)
+}
+
+// ResidencyCapability 是工程发布自己的 Residency 用的能力名。没有发布时用 LocalResidency。
+const ResidencyCapability app.ModName = "game.rehome.residency"
+
+var (
+	localsMu sync.Mutex
+	locals   = map[*app.Registry]*LocalResidency{}
+)
+
+// ResidencyOf 取这个进程的 Residency：工程发布了自己的就用它，否则用这个 Registry 的 LocalResidency
+// （一个进程一张迁出表，第一次用到时建）。
+func ResidencyOf(registry *app.Registry) Residency {
+	if own, ok := app.Lookup[Residency](registry, ResidencyCapability); ok && own != nil {
+		return own
+	}
+	localsMu.Lock()
+	defer localsMu.Unlock()
+	local := locals[registry]
+	if local == nil {
+		local = NewLocalResidency(registry)
+		locals[registry] = local
+	}
+	return local
+}
+
+// 断开会话时给连接的原因。
+var (
+	// ErrSessionRehoming：这名玩家正在换服，本进程不再为他服务。
+	ErrSessionRehoming = errors.New("rehome: the player is changing servers")
+	// ErrSessionRehomeAborted：换服被中止了，请重新选角。
+	ErrSessionRehomeAborted = errors.New("rehome: the server change was aborted; select the role again")
+)
+
+// playerTCPCapability 是 internal/access/player/tcp 的 Name：玩家 TCP 传输发布 Runtime 用的能力名。
+// 按名字取、写成接口，因为传输包 import 协议绑定、协议绑定 import controller——这个包不能反过来 import 它。
+const playerTCPCapability app.ModName = "access.player.tcp"
+
+// sessionCloser 是玩家传输上按玩家断开会话的入口（gateway.PlayerRuntime 的 CloseSessions）。
+type sessionCloser interface {
+	CloseSessions(playerID int64, reason error) int
+}
+
+// entityHandOff 是 DataEngine Mod 上交出实体的入口（wiring/dataengine 的 Mod.HandOffEntity）。
+type entityHandOff interface {
+	HandOffEntity(ctx context.Context, entityID int64) (*wiringde.EntityHandOff, error)
+}
+
+// LocalResidency 是 Residency 的缺省实现，给没有自己的驻留表的工程用：
+//
+//   - 断开会话：按能力名取玩家 TCP 传输，调它的 CloseSessions。进程里没有玩家传输（不接玩家的进程）就没有会话可断。
+//   - 交出实体：DataEngine Mod 的 HandOffEntity，屏障保持到 Release 或进程退出。
+//   - 迁出表：进程内的一张表，玩家 → 这一次换服、是否仍在换服、交出的句柄。它不持久：进程重启之后
+//     表是空的，这名玩家归谁由 account 回答（Driver.Admit、Binding 都会去问）。
+//
+// 表里的记录只在玩家换回本服时删除，所以它随“从本进程换走的玩家数”增长，进程重启清空。
+//
+// 锁：mu 只保护表，从不跨等待持有。
+type LocalResidency struct {
+	now func() time.Time
+	// closeSessions 与 handOff 是两个外部动作，测试替换它们；缺省实现按能力名从 Registry 取。
+	closeSessions func(playerID int64, reason error) int
+	handOff       func(ctx context.Context, entityID int64) (release func(context.Context) error, err error)
+
+	mu        sync.Mutex
+	emigrants map[int64]*emigrant
+}
+
+// emigrant 是迁出表的一行。
+type emigrant struct {
+	move   Move
+	moving bool
+	since  time.Time
+	// release 非空表示实体已经交出、屏障由它撤销。
+	release func(context.Context) error
+}
+
+// NewLocalResidency 建一张空的迁出表。传输与 DataEngine 在第一次用到时才从 registry 取：
+// 它们都在这张表之后才发布。
+func NewLocalResidency(registry *app.Registry) *LocalResidency {
+	return &LocalResidency{
+		now: time.Now, //glsvet:system-clock the emigrant table is a process-local cache, not business state
+		closeSessions: func(playerID int64, reason error) int {
+			transport, ok := app.Lookup[sessionCloser](registry, playerTCPCapability)
+			if !ok || transport == nil {
+				return 0
+			}
+			return transport.CloseSessions(playerID, reason)
+		},
+		handOff: func(ctx context.Context, entityID int64) (func(context.Context) error, error) {
+			engine, ok := app.Lookup[entityHandOff](registry, mods.ModDataEngine)
+			if !ok || engine == nil {
+				return nil, fmt.Errorf("rehome: capability %q not found; the entity cannot be handed off without the dataengine mod", mods.ModDataEngine)
+			}
+			handed, err := engine.HandOffEntity(ctx, entityID)
+			if err != nil {
+				return nil, err
+			}
+			return handed.Release, nil
+		},
+		emigrants: map[int64]*emigrant{},
+	}
+}
+
+func (r *LocalResidency) Reserve(move Move) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing := r.emigrants[move.PlayerID]; existing != nil {
+		if existing.moving {
+			return Moving(move.PlayerID, existing.move.To)
+		}
+		return Elsewhere(move.PlayerID, existing.move.To)
+	}
+	r.emigrants[move.PlayerID] = &emigrant{move: move, moving: true, since: r.now()}
+	return nil
+}
+
+func (r *LocalResidency) Depart(ctx context.Context, move Move) error {
+	if !r.holds(move) {
+		return fmt.Errorf("rehome: transfer %s of player %d was not reserved", move.ID, move.PlayerID)
+	}
+	// 先断开，再交出：连接上还有自身视图的订阅时，卸载之后框架会为订阅者把实体重新读回内存。
+	r.closeSessions(move.PlayerID, ErrSessionRehoming)
+	release, err := r.handOff(ctx, move.EntityID)
+	if err != nil {
+		return fmt.Errorf("rehome: hand off player %d: %w", move.PlayerID, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry := r.emigrants[move.PlayerID]; entry != nil && entry.move.ID == move.ID {
+		entry.release = release
+	}
+	return nil
+}
+
+func (r *LocalResidency) Settle(ctx context.Context, move Move, outcome Outcome) error {
+	if outcome == Committed {
+		return r.settleCommitted(ctx, move)
+	}
+	r.mu.Lock()
+	entry := r.emigrants[move.PlayerID]
+	if entry == nil || entry.move.ID != move.ID {
+		r.mu.Unlock()
+		return nil
+	}
+	release := entry.release
+	r.mu.Unlock()
+	if release != nil {
+		// 撤屏障之前它先把交出期间被读回内存的实例卸载掉（那个实例可能落后于库）；卸载不掉就失败，屏障保持。
+		if err := release(ctx); err != nil {
+			return fmt.Errorf("rehome: release player %d: %w", move.PlayerID, err)
+		}
+	}
+	r.mu.Lock()
+	if current := r.emigrants[move.PlayerID]; current == entry {
+		delete(r.emigrants, move.PlayerID)
+	}
+	r.mu.Unlock()
+	if outcome == Aborted {
+		r.closeSessions(move.PlayerID, ErrSessionRehomeAborted)
+	}
+	return nil
+}
+
+// settleCommitted 把这名玩家记成“已迁走”。正常情况下实体在 Depart 时已经交出；没有交出就被改绑的
+// （运维在源服中止到一半时人工提交）在这里补交——补不上时返回错误、记录照样落定：
+// 他已经不归本服，进入与后台步骤都要按“在别的服”回答，调用方重试直到屏障立起来。
+func (r *LocalResidency) settleCommitted(ctx context.Context, move Move) error {
+	r.mu.Lock()
+	entry := r.emigrants[move.PlayerID]
+	if entry == nil || entry.move.ID != move.ID {
+		entry = &emigrant{move: move}
+		r.emigrants[move.PlayerID] = entry
+	}
+	if entry.moving || entry.since.IsZero() {
+		entry.moving, entry.since = false, r.now()
+	}
+	handed := entry.release != nil
+	r.mu.Unlock()
+	if handed {
+		return nil
+	}
+	r.closeSessions(move.PlayerID, ErrSessionRehoming)
+	release, err := r.handOff(ctx, move.EntityID)
+	if err != nil {
+		return fmt.Errorf("rehome: player %d is bound to server %d but was not handed off: %w", move.PlayerID, move.To, err)
+	}
+	r.mu.Lock()
+	entry.release = release
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *LocalResidency) Where(playerID int64) (Whereabouts, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.emigrants[playerID]
+	if entry == nil {
+		return Whereabouts{}, false
+	}
+	return Whereabouts{Move: entry.move, Moving: entry.moving, Since: entry.since}, true
+}
+
+// holds 报告表里是不是正记着这一次换服。
+func (r *LocalResidency) holds(move Move) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.emigrants[move.PlayerID]
+	return entry != nil && entry.move.ID == move.ID
+}

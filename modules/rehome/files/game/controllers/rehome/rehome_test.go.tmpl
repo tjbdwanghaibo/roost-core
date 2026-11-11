@@ -1,0 +1,399 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/playeraccess"
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+)
+
+// 端点与驱动器在这里离线跑通整条链：account 是真实的 service/account.Service（存储换成进程内的），
+// Nest 是真实的引擎加替身提交器，Residency 是缺省的 LocalResidency——它按能力名从 Registry 取玩家传输与
+// DataEngine，这里发布的是两个只记事件的替身。没有 NATS / Redis / Mongo：跨进程的那一跳、真实的交出实体
+// 都不在这一档里。
+//
+// 两个服（1000、1001）各有一个 Registry，共用同一个 account 与同一个 Nest（同一份玩家档）：
+// 这正是换服的前提——各服把玩家的档放在同一个库里。
+
+const (
+	rehomeSourceSID int32 = 1000
+	rehomeTargetSID int32 = 1001
+)
+
+type rehomeGetter map[int64]entity.IThreadSafeEntity
+
+func (g rehomeGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g rehomeGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type rehomeCommitter struct{}
+
+func (rehomeCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+// rehomeServerEvents 记下一个服的进程里发生的两种外部动作，带先后。
+type rehomeServerEvents struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func (e *rehomeServerEvents) add(event string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.list = append(e.list, event)
+}
+
+func (e *rehomeServerEvents) snapshot() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.list...)
+}
+
+// rehomeTransport 站在玩家 TCP 传输的位置上：LocalResidency 只用它的 CloseSessions。
+type rehomeTransport struct{ events *rehomeServerEvents }
+
+func (t rehomeTransport) CloseSessions(playerID int64, reason error) int {
+	t.events.add(fmt.Sprintf("close %d: %v", playerID, reason))
+	return 1
+}
+
+// rehomeEngine 站在 DataEngine Mod 的位置上：LocalResidency 只用它的 HandOffEntity。
+// 返回的句柄没有接到任何 Runtime 上，Release 什么都不做——真实的屏障不在这一档里。
+type rehomeEngine struct{ events *rehomeServerEvents }
+
+func (e rehomeEngine) HandOffEntity(_ context.Context, entityID int64) (*wiringde.EntityHandOff, error) {
+	e.events.add(fmt.Sprintf("handoff %d", entityID))
+	return &wiringde.EntityHandOff{EntityID: entityID}, nil
+}
+
+// rehomeServer 是一个服的进程：它的 Registry、协议的 Controller、记下的外部动作。
+type rehomeServer struct {
+	sid        int32
+	registry   *app.Registry
+	controller *Controller
+	events     *rehomeServerEvents
+}
+
+type rehomeWorld struct {
+	t        *testing.T
+	accounts *svcaccount.Service
+	engine   *nest.NestMgr
+	player   *playerentity.Player
+	playerID int64
+	now      atomic.Int64
+	nextID   atomic.Int64
+}
+
+func (w *rehomeWorld) Allocate(context.Context, int32) (int64, error) {
+	return w.nextID.Add(1) + 94_400, nil
+}
+
+// newRehomeWorld 建 account（只登记 servers 里的服，都对外开放）、一个绑定在 1000 的角色、他的档与 Nest。
+// clock.SetSource 是进程级的：一个用例里只建一个。
+func newRehomeWorld(t *testing.T, servers ...int32) *rehomeWorld {
+	t.Helper()
+	playerentity.RegisterEntity()
+	handler.RegisterRehomePrepareNestHandlers()
+	handler.RegisterRehomeArriveNestHandlers()
+	handler.RegisterRehomeCancelNestHandlers()
+	w := &rehomeWorld{t: t}
+	w.now.Store(time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC).UnixMilli())
+	now := func() time.Time { return time.UnixMilli(w.now.Load()) }
+	clock.SetSource(now)
+	t.Cleanup(func() { clock.SetSource(nil) })
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{
+		Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.accounts, err = svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Names:    names,
+		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     w,
+		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "rehome-test-secret",
+		Now:           now,
+		SystemNow:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, sid := range servers {
+		if _, err := w.accounts.UpsertServer(ctx, svcaccount.GameServer{ID: sid, Name: fmt.Sprintf("s%d", sid), Status: svcaccount.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := w.accounts.Login(ctx, svcaccount.Identity{Channel: "store", OpenID: "u1", Credential: "good"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := w.accounts.CreateRole(ctx, account.ID, rehomeSourceSID, "hero")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.playerID = role.PlayerID
+	id, err := entity.BuildEntityID(w.playerID, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.player = built.(*playerentity.Player)
+	w.engine = nest.NewEngine(nest.NestOptionWithGetter(rehomeGetter{id: built}), nest.NestOptionWithTransactionCommitter(rehomeCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := w.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := w.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return w
+}
+
+// server 起一个服的进程：新的 Registry（新的迁出表），发布 Nest、account 的客户端、玩家传输与 DataEngine 的替身，
+// 然后照生成的协议绑定那样用 FromRegistry 建 Controller。同一个 sid 再起一次就是“这个服的进程重启了”。
+func (w *rehomeWorld) server(sid int32) *rehomeServer {
+	w.t.Helper()
+	config := viper.New()
+	config.Set("sid", sid)
+	server := &rehomeServer{sid: sid, registry: app.NewRegistry(config), events: &rehomeServerEvents{}}
+	for name, value := range map[app.ModName]any{
+		app.ModName("nest"):              nest.Client(w.engine),
+		svcaccount.CapabilityName:        svcaccount.Accounts(w.accounts),
+		app.ModName("access.player.tcp"): rehomeTransport{events: server.events},
+		app.ModName("dataengine"):        rehomeEngine{events: server.events},
+	} {
+		if err := server.registry.Register(name, value); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+	controller, err := FromRegistry(server.registry)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	server.controller = controller
+	return server
+}
+
+func (w *rehomeWorld) apply(server *rehomeServer, to int32) *pb.RehomeApplyResponse {
+	w.t.Helper()
+	response, err := server.controller.HandleRehomeApply(&playeraccess.Context{PlayerID: w.playerID}, &pb.RehomeApplyRequest{To: to})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return response
+}
+
+func (w *rehomeWorld) binding() svcaccount.RoleBinding {
+	w.t.Helper()
+	binding, err := w.accounts.RoleBinding(context.Background(), w.playerID)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return binding
+}
+
+// settled 等到这个服的迁出表对这名玩家有了结论（不在“换服中”），返回结论。后台部分在自己的 goroutine 上跑。
+func (w *rehomeWorld) settled(server *rehomeServer) (gamerehome.Whereabouts, bool) {
+	w.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		where, tracked := gamerehome.ResidencyOf(server.registry).Where(w.playerID)
+		if !tracked || !where.Moving {
+			return where, tracked
+		}
+		if time.Now().After(deadline) {
+			w.t.Fatalf("server %d: the transfer %s did not settle", server.sid, where.Move.ID)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// intent 读档里的换服记录（意图的 ID 与目标、上次到达的时间、次数）。
+func (w *rehomeWorld) intent() (pendingID string, pendingTo int32, lastAt int64, count int32) {
+	w.t.Helper()
+	if err := w.engine.RunLocal(context.Background(), func() {
+		w.player.GetMutex().Lock()
+		defer w.player.GetMutex().Unlock()
+		state := w.player.Dao().GetRehome()
+		pendingID, pendingTo, lastAt, count = state.GetPendingID(), state.GetPendingTo(), state.GetLastAt(), state.GetCount()
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return pendingID, pendingTo, lastAt, count
+}
+
+// 协议端点走完一次换服：应答“已受理”并带换服 ID；后台断开会话、交出实体（先断开后交出）、让 account 改绑。
+// account 上角色绑定到了 1001、绑定代数加一；源服的迁出表答“已迁走，去了 1001”；意图留在档里等目标服到达。
+// 之后在源服再申请：他不归本服了。
+func TestRehomeApplyEndpointMovesThePlayerToTheOtherServer(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	source := w.server(rehomeSourceSID)
+	response := w.apply(source, rehomeTargetSID)
+	if response.Code != 0 || response.TransferID == "" || response.To != 1001 {
+		t.Fatalf("response = %+v, want accepted with a transfer id and target 1001", response)
+	}
+	where, tracked := w.settled(source)
+	if !tracked || where.Move.To != 1001 || where.Move.ID != response.TransferID {
+		t.Fatalf("the source's table says %+v (%v), want departed to 1001 by %s", where, tracked, response.TransferID)
+	}
+	binding := w.binding()
+	if binding.ServerID != 1001 || binding.BindEpoch != 1 || binding.Transfer != nil {
+		t.Fatalf("account binding = %+v, want server 1001 at epoch 1 with no transfer in flight", binding)
+	}
+	if last := binding.LastTransfer; last == nil || last.ID != response.TransferID || !last.Committed || last.From != 1000 || last.To != 1001 {
+		t.Fatalf("account's last transfer = %+v, want %s committed 1000 -> 1001", binding.LastTransfer, response.TransferID)
+	}
+	entityID, err := entity.BuildEntityID(w.playerID, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{fmt.Sprintf("close %d: rehome: the player is changing servers", w.playerID), fmt.Sprintf("handoff %d", entityID)}
+	if got := source.events.snapshot(); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("on the source: %v, want %v", got, want)
+	}
+	if pendingID, pendingTo, lastAt, count := w.intent(); pendingID != response.TransferID || pendingTo != 1001 || lastAt != 0 || count != 0 {
+		t.Fatalf("intent = %s -> %d, lastAt %d, count %d; want the accepted transfer waiting for its arrival", pendingID, pendingTo, lastAt, count)
+	}
+	again := w.apply(source, rehomeTargetSID)
+	if again.Code != apperrors.ErrRehomeElsewhere.Code() || again.TransferID != "" {
+		t.Fatalf("applying again on the old server: %+v, want rehome_elsewhere", again)
+	}
+}
+
+// 只有一个服的工程：模块装上照常工作，申请换到不存在的服由 account 拒绝，端点答 rehome_refused。
+// 什么都没有改：档里没有意图，迁出表里没有他，没有断开任何会话，account 上的绑定原样。
+func TestRehomeApplyEndpointInASingleServerProjectIsRefusedByTheAccount(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID)
+	only := w.server(rehomeSourceSID)
+	for _, to := range []int32{1001, 1000, 0} {
+		response := w.apply(only, to)
+		if response.Code != apperrors.ErrRehomeRefused.Code() || response.Reason == "" || response.TransferID != "" {
+			t.Fatalf("to %d: response = %+v, want rehome_refused", to, response)
+		}
+	}
+	if _, tracked := gamerehome.ResidencyOf(only.registry).Where(w.playerID); tracked {
+		t.Fatal("a refused application left the player in the emigrant table")
+	}
+	if pendingID, _, _, _ := w.intent(); pendingID != "" {
+		t.Fatalf("a refused application left the intent %s", pendingID)
+	}
+	if events := only.events.snapshot(); len(events) != 0 {
+		t.Fatalf("a refused application did %v", events)
+	}
+	if binding := w.binding(); binding.ServerID != 1000 || binding.BindEpoch != 0 || binding.Transfer != nil {
+		t.Fatalf("account binding = %+v, want untouched", binding)
+	}
+	// 目标服存在但没有对外开放：同样由 account 拒绝。
+	if _, err := w.accounts.UpsertServer(context.Background(), svcaccount.GameServer{ID: 1002, Name: "s1002", Status: svcaccount.ServerMaintenance}); err != nil {
+		t.Fatal(err)
+	}
+	if response := w.apply(only, 1002); response.Code != apperrors.ErrRehomeRefused.Code() {
+		t.Fatalf("to a server that is not open: response = %+v, want rehome_refused", response)
+	}
+	if pendingID, _, _, _ := w.intent(); pendingID != "" {
+		t.Fatalf("the refused application left the intent %s", pendingID)
+	}
+}
+
+// 换过去、到达之后：玩家自己马上申请换回来是冷却中；服务端入口 Move 不受冷却约束，备注记进 account 的换服记录。
+// 换回来之后，原来的源服（它的迁出表还记着“已迁走”）凭更新的绑定代数认出他回来了，撤掉旧屏障放他进来。
+func TestRehomeMoveIsTheServerSideEntryAndBringsThePlayerBack(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	source, target := w.server(rehomeSourceSID), w.server(rehomeTargetSID)
+	if response := w.apply(source, rehomeTargetSID); response.Code != 0 {
+		t.Fatalf("response = %+v", response)
+	}
+	w.settled(source)
+	// 目标服：进入之后做到达。
+	arrivedAt := w.now.Add(int64(time.Hour / time.Millisecond))
+	if err := target.controller.driver.Arrive(context.Background(), w.playerID); err != nil {
+		t.Fatal(err)
+	}
+	if pendingID, _, lastAt, count := w.intent(); pendingID != "" || lastAt != arrivedAt || count != 1 {
+		t.Fatalf("after the arrival: intent %q, lastAt %d, count %d; want none, %d, 1", pendingID, lastAt, count, arrivedAt)
+	}
+	w.now.Add(int64(time.Hour / time.Millisecond))
+	if response := w.apply(target, rehomeSourceSID); response.Code != apperrors.ErrRehomeCooldown.Code() {
+		t.Fatalf("the player's own application an hour after arriving: %+v, want rehome_cooldown", response)
+	}
+	// 不在他绑定的服上调 Move：答 rehome_elsewhere。
+	if _, err := source.controller.Move(context.Background(), w.playerID, rehomeSourceSID+2, "wrong server"); !errors.Is(err, apperrors.ErrRehomeElsewhere) {
+		t.Fatalf("Move on a server the player is not bound to: err = %v, want rehome_elsewhere", err)
+	}
+	ticket, err := target.controller.Move(context.Background(), w.playerID, rehomeSourceSID, "ticket 4711")
+	if err != nil || ticket.ID == "" || ticket.From != 1001 || ticket.To != 1000 {
+		t.Fatalf("Move: ticket = %+v err = %v", ticket, err)
+	}
+	if where, tracked := w.settled(target); !tracked || where.Move.To != 1000 || !where.Move.Operator {
+		t.Fatalf("the target's table says %+v (%v), want departed to 1000 by an operator's move", where, tracked)
+	}
+	binding := w.binding()
+	if binding.ServerID != 1000 || binding.BindEpoch != 2 || binding.LastTransfer == nil || binding.LastTransfer.Note != "ticket 4711" {
+		t.Fatalf("account binding = %+v (last %+v), want server 1000 at epoch 2 with the operator's note", binding, binding.LastTransfer)
+	}
+	// 原来的源服：旧会话（握手在换回来之前）仍被拒绝，新会话带着代数 2 进得来。
+	stale := map[string]string{"server_id": "1000", "bind_epoch": "0"}
+	if err := source.controller.driver.Admit(context.Background(), w.playerID, stale); !errors.Is(err, apperrors.ErrRehomeElsewhere) {
+		t.Fatalf("a session from before the first move: err = %v, want rehome_elsewhere", err)
+	}
+	if err := source.controller.driver.Admit(context.Background(), w.playerID, map[string]string{"server_id": "1000", "bind_epoch": "2"}); err != nil {
+		t.Fatalf("the player is back on 1000: %v", err)
+	}
+	if _, tracked := gamerehome.ResidencyOf(source.registry).Where(w.playerID); tracked {
+		t.Fatal("the old departure is still in the source's table after the player came back")
+	}
+	if err := source.controller.driver.Arrive(context.Background(), w.playerID); err != nil {
+		t.Fatal(err)
+	}
+	if pendingID, _, _, count := w.intent(); pendingID != "" || count != 2 {
+		t.Fatalf("after arriving back: intent %q, count %d; want none and 2", pendingID, count)
+	}
+}

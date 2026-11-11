@@ -1,0 +1,97 @@
+package rehome
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// departedTrust 是迁出表里“已迁走”的记录不经核对就可以直接回答的时长。
+//
+// 玩家刚换走的那一会儿，在途的后台步骤会成批地落到源服，用表回答可以不为每一步问一次 account。
+// 但表只知道“他从这里去了那个服”，不知道之后的事：他可能又换走，也可能换了回来——那时两个服的表各说
+// “在对方那里”，一个被退回的步骤会在两服之间来回跳。所以记录旧了之后要向 account 核对。
+const departedTrust = 30 * time.Second
+
+// SelfSID 是本进程的 sid（服务配置里的 sid）：本进程只为绑定在这个 sid 上的玩家服务。
+func SelfSID(registry *app.Registry) (int32, error) {
+	if registry == nil || registry.Config() == nil {
+		return 0, fmt.Errorf("rehome: app registry with a config is required to read this process's sid")
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return 0, fmt.Errorf("rehome: %w", err)
+	}
+	if identity.Sid <= 0 {
+		return 0, fmt.Errorf("rehome: sid is %d; a game process serves the players bound to its sid and needs one", identity.Sid)
+	}
+	return identity.Sid, nil
+}
+
+// Binding 回答一名玩家现在归哪个服，给不经登录的冷路径用（saga 步骤的准入、后台发放）：
+//
+//   - moving 为 true：他正在换服，结论未定。sid 是他此刻仍绑定的服。调用方不要在任何服上为他执行，稍后再试。
+//   - moving 为 false：他归 sid。sid 不是本进程的 sid 时把这一步退回、改投到那个服。
+//
+// 先看本进程的迁出表：换服中的、刚迁走的（departedTrust 之内）直接回答，不问 account。
+// 表里没有、或者“已迁走”的记录旧了，再问 Directory——问到他已经换回本服时，顺手把旧记录与屏障撤掉。
+// account 不可用时：表里有记录就按记录回答，没有就返回错误，调用方只能稍后重试。
+//
+// 它会等待（问 account、撤屏障），不能在 Nest 业务 worker 上调用。
+func Binding(ctx context.Context, registry *app.Registry, playerID int64) (sid int32, moving bool, err error) {
+	self, err := SelfSID(registry)
+	if err != nil {
+		return 0, false, err
+	}
+	directory := func() (Directory, error) { return DirectoryOf(registry) }
+	return locate(ctx, ResidencyOf(registry), directory, self, playerID, time.Now()) //glsvet:system-clock age of a process-local cache entry
+}
+
+// locate 是 Binding 的实现；directory 用到时才取。
+func locate(ctx context.Context, residency Residency, directory func() (Directory, error), self int32, playerID int64, now time.Time) (int32, bool, error) {
+	where, tracked := residency.Where(playerID)
+	if tracked && where.Moving {
+		return self, true, nil
+	}
+	if tracked && now.Sub(where.Since) < departedTrust {
+		return where.Move.To, false, nil
+	}
+	var binding svcaccount.RoleBinding
+	authority, err := directory()
+	if err == nil {
+		binding, err = authority.Binding(ctx, playerID)
+	}
+	if err != nil {
+		if tracked {
+			return where.Move.To, false, nil
+		}
+		return 0, false, fmt.Errorf("rehome: binding of player %d: %w", playerID, err)
+	}
+	if tracked {
+		returned, err := readmit(ctx, residency, self, where, binding)
+		if err != nil {
+			return 0, false, err
+		}
+		if !returned && binding.Transfer == nil && binding.ServingServerID == self {
+			// account 说他归本服，绑定代数却证明不了他换回来过：屏障还在，本进程写不了他。按表回答。
+			return where.Move.To, false, nil
+		}
+	}
+	return binding.ServingServerID, binding.Transfer != nil, nil
+}
+
+// readmit 处理“迁出表说他已经迁走，account 说他现在归本服”：这名玩家后来又换回来了。
+// 认定的条件是 account 上没有换服在途、承载服是本服、绑定代数至少比当初发起时大 2（换走一次、换回一次）；
+// 满足时撤掉旧记录与屏障（Settle(Kept)），本进程重新为他服务。撤不掉（实体正被占用）时返回错误，调用方稍后重试。
+func readmit(ctx context.Context, residency Residency, self int32, where Whereabouts, binding svcaccount.RoleBinding) (returned bool, err error) {
+	if where.Moving || binding.Transfer != nil || binding.ServingServerID != self || binding.BindEpoch < where.Move.Epoch+2 {
+		return false, nil
+	}
+	if err := residency.Settle(ctx, where.Move, Kept); err != nil {
+		return false, fmt.Errorf("rehome: player %d is back on server %d but this process still holds the old hand-off: %w", where.Move.PlayerID, self, err)
+	}
+	return true, nil
+}

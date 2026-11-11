@@ -1,0 +1,17 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	gamerehome "{{MODULE}}/game/rehome"
+)
+
+// handlerRehomePrepare 是换服的第 0 步：在 Player 上的一笔事务里核对规则与事务内检查、记下换服意图。
+// 由换服驱动器（game/rehome 的 Driver，经 game/controllers/rehome）在向 account 发起之前调用，不直接对客户端开放。
+// id 是换服 ID（幂等键），from 是本服，to 是目标服，operator 为 true 表示服务端发起（不受规则文件约束）。
+// nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerRehomePrepare(target player.IRehomeEntity, id string, from int32, to int32, operator bool, nowUnixMilli int64) error {
+	move := gamerehome.Move{PlayerID: target.RehomeComp().Owner().UniqueID(), EntityID: target.ID(), ID: id, From: from, To: to, Operator: operator}
+	return target.RehomeComp().Prepare(move, nowUnixMilli)
+}

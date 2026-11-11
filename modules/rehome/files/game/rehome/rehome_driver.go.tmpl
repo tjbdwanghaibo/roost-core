@@ -1,0 +1,369 @@
+package rehome
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// Profile 是驱动器对玩家档的三个写入，每个都是 Player 上的一笔 Nest 事务（game/handler 的
+// RehomePrepare / RehomeCancel / RehomeArrive）。写成接口是因为这个包不能 import Nest 的 Sender
+// （Sender 的包 import 各个功能的结果类型）；实现在 game/controllers/rehome。
+type Profile interface {
+	// Prepare 在一笔事务里核对规则与事务内的检查并记下换服意图。拒绝时什么都没写。按换服 ID 幂等。
+	Prepare(ctx context.Context, move Move) error
+	// Cancel 清掉这个换服 ID 的意图；档里的意图不是这个 ID 时什么都不做。
+	Cancel(ctx context.Context, playerID int64, transferID string) error
+	// Arrive 看一眼档里的意图：指向 sid（本服）的做到达，指向别的服的原样报回来。
+	Arrive(ctx context.Context, playerID int64, sid int32) (ArriveResult, error)
+}
+
+// DriverConfig 是 Driver 的依赖。
+type DriverConfig struct {
+	Registry *app.Registry
+	// Self 是本进程的 sid。
+	Self      int32
+	Directory Directory
+	Residency Residency
+	Profile   Profile
+	// EntityID 把玩家号换成他的 Player 的完整 Entity ID。
+	EntityID func(playerID int64) (int64, error)
+}
+
+// 一步的时间预算。受理之后的步骤在后台执行，用的是自己的预算，不是申请那条请求的。
+const (
+	// callBudget 是一次 Directory 调用或一笔 Nest 事务的上限。
+	callBudget = 5 * time.Second
+	// leaveBudget 是全部离开钩子合起来的上限。
+	leaveBudget = 10 * time.Second
+	// departBudget 是断开会话加交出实体的上限：交出要等这名玩家已准入的写入落库、WAL checkpoint 盖过它们。
+	departBudget = 30 * time.Second
+	// replyGrace 是受理之后、断开会话之前留给“已受理”这条应答写到客户端的时间。应答丢了也不影响结果
+	// （客户端断线后重新选角就知道），所以它只是让客户端多数时候能先看到应答。
+	replyGrace = 500 * time.Millisecond
+	// retryCeiling 是结果未知时两次重发之间等待的上限。
+	retryCeiling = 30 * time.Second
+)
+
+// Driver 把一次换服从申请走到结论。它没有自己的状态：在途的换服记在 Residency 的迁出表里，
+// 所以一个进程里有几个 Driver 都指向同一张表也无妨。
+//
+// 顺序（源服一侧；到达在目标服，见 Arrive）：
+//
+//	申请的请求里：
+//	  读绑定      Directory.Binding：拿到绑定代数；已经在换服答 rehome_moving，不归本服答 rehome_elsewhere
+//	  打标记      Residency.Reserve：“离开中”。从这里起本进程对这名玩家的进入与后台步骤都答“换服中”
+//	  换服前检查  登记的事务外检查（OnApplying）
+//	  记意图      Profile.Prepare：规则、事务内检查、PlayerDao.Rehome 的意图，同一笔事务
+//	  发起        Directory.Begin：account 登记换服、占住目标服的名额
+//	  —— 到这里答复“已受理”（Ticket）。前面任何一步不成：撤标记、清意图，答复拒绝的原因 ——
+//	后台：
+//	  离开钩子    登记的 OnLeaving
+//	  离开        Residency.Depart：断开会话、交出实体，屏障保持
+//	  提交        Directory.Commit：account 改绑到目标服
+//	  落定        Residency.Settle(Committed)：迁出表记“已迁走”
+//
+// 受理之后每一步失败的去向：
+//
+//   - 离开钩子失败、离开失败（实体被占用、超时）：Directory.Abort，然后 Settle(Aborted)（撤屏障与标记、
+//     断开仍连着的会话）、清意图。玩家留在本服，可以再申请。
+//   - Commit 明确说没有改绑（这个 ID 已被运维中止）：同上。
+//   - Commit 明确拒绝（目标服在此期间被删除或并入别的服、名额没了）：先 Abort，再同上。
+//   - Commit 或 Abort 结果未知（超时、account 不可用）：标记与屏障都保持，原样重发，直到 account 给出结论；
+//     以它的回答为准——Abort 得到“已经提交”就按已提交落定。期间这名玩家在哪个服都进不去，
+//     因为没有人知道他归谁。
+//   - 进程在受理之后崩溃：迁出表没了，account 上换服仍在途。重启后这名玩家再来进入本服时，
+//     Admit 发现“在途、源服是本服、表里没有”，从离开钩子起把后台部分重做一遍（Resume）。
+//
+// 提交之前实体已经交出：从交出成立到提交之间没有任何进程能写这名玩家；提交之后只有目标服能写。
+type Driver struct {
+	registry  *app.Registry
+	self      int32
+	directory Directory
+	residency Residency
+	profile   Profile
+	entityID  func(playerID int64) (int64, error)
+
+	// 下面几项给测试替换：换服 ID 的来源、后台部分怎么起、结果未知时两次重发之间怎么等、应答的宽限。
+	newID func() string
+	spawn func(func())
+	wait  func(attempt int)
+	grace time.Duration
+}
+
+// NewDriver 检查依赖齐全并返回 Driver。
+func NewDriver(config DriverConfig) (*Driver, error) {
+	switch {
+	case config.Self <= 0:
+		return nil, fmt.Errorf("rehome driver: sid is %d", config.Self)
+	case config.Directory == nil || config.Residency == nil || config.Profile == nil || config.EntityID == nil:
+		return nil, errors.New("rehome driver: directory, residency, profile and entity id are required")
+	}
+	driver := &Driver{
+		registry: config.Registry, self: config.Self, directory: config.Directory,
+		residency: config.Residency, profile: config.Profile, entityID: config.EntityID,
+		spawn: func(run func()) { go run() },
+		wait: func(attempt int) {
+			pause := time.Second << min(attempt, 5)
+			time.Sleep(min(pause, retryCeiling))
+		},
+		grace: replyGrace,
+	}
+	driver.newID = func() string {
+		var random [12]byte
+		_, _ = rand.Read(random[:])
+		return "rh" + strconv.FormatInt(int64(config.Self), 10) + "-" + hex.EncodeToString(random[:])
+	}
+	return driver, nil
+}
+
+// Self 是这个 Driver 所在进程的 sid。
+func (d *Driver) Self() int32 { return d.self }
+
+// Apply 申请一次换服，走到“已受理”为止并返回 Ticket；其后的步骤在后台继续，结论不经它返回。
+// 协议端点与服务端入口（GM、运维）都调它，区别只在 Request.Operator。
+//
+// 返回的错误：
+//
+//   - rehome_refused：目标不是另一个服、规则或登记的检查否决、account 拒绝发起（目标服不存在、没开、
+//     账号在那里已有角色……）。rehome_cooldown：冷却中。检查给了自己的业务码时是那个码。
+//   - rehome_moving：这名玩家已经有一次换服在途。rehome_elsewhere：他不归本服。
+//   - retryable：没有执行，可以原样再申请（account 一时问不到）。
+//   - 其余：发起的结果未知。标记留着，后台在向 account 要结论，期间再申请会得到 rehome_moving。
+//
+// 任何一种错误返回时玩家都留在本服、档里没有留下这一次的意图（清不掉的留给下一次进入对账）。
+func (d *Driver) Apply(ctx context.Context, request Request) (Ticket, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	playerID := request.PlayerID
+	if playerID <= 0 {
+		return Ticket{}, fmt.Errorf("rehome: player id %d is not valid", playerID)
+	}
+	if request.To <= 0 || request.To == d.self {
+		return Ticket{}, refused(nil, fmt.Sprintf("target server %d is not another server (this is %d)", request.To, d.self))
+	}
+	entityID, err := d.entityID(playerID)
+	if err != nil {
+		return Ticket{}, fmt.Errorf("rehome: %w", err)
+	}
+	binding, err := d.directory.Binding(ctx, playerID)
+	switch {
+	case classify(err) == answerRefused:
+		return Ticket{}, errcode.Wrap(apperrors.ErrRehomeRefused, err, "player_id", playerID)
+	case err != nil:
+		return Ticket{}, errcode.Wrap(errcode.ErrRetryable, err, "player_id", playerID)
+	case binding.Transfer != nil:
+		return Ticket{}, Moving(playerID, binding.Transfer.To)
+	case binding.ServingServerID != d.self:
+		return Ticket{}, Elsewhere(playerID, binding.ServingServerID)
+	}
+	if where, tracked := d.residency.Where(playerID); tracked && !where.Moving {
+		// 迁出表记着他从本进程换走过，account 说他现在归本服：他换回来了，先把旧记录与屏障撤掉。
+		returned, err := readmit(ctx, d.residency, d.self, where, binding)
+		if err != nil {
+			return Ticket{}, errcode.Wrap(errcode.ErrRetryable, err, "player_id", playerID)
+		}
+		if !returned {
+			return Ticket{}, Elsewhere(playerID, where.Move.To)
+		}
+	}
+	move := Move{
+		PlayerID: playerID, EntityID: entityID, ID: d.newID(),
+		From: d.self, To: request.To, Epoch: binding.BindEpoch, Operator: request.Operator,
+	}
+	if err := d.residency.Reserve(move); err != nil {
+		return Ticket{}, err
+	}
+	if err := runApplying(ctx, d.registry, move); err != nil {
+		d.withdraw(ctx, move, false)
+		return Ticket{}, refused(err, "refused by a check")
+	}
+	if err := d.profile.Prepare(ctx, move); err != nil {
+		// 事务的结果也可能是未知的（等结果超时、稍后仍然提交）：意图按 ID 清一次，清不到也无妨。
+		d.withdraw(ctx, move, true)
+		return Ticket{}, err
+	}
+	_, err = d.directory.Begin(ctx, playerID, svcaccount.TransferRequest{
+		ID: move.ID, FromSID: d.self, To: move.To, ExpectEpoch: move.Epoch, Note: request.Note,
+	})
+	switch classify(err) {
+	case answerDone:
+	case answerInProgress:
+		d.withdraw(ctx, move, true)
+		return Ticket{}, Moving(playerID, 0)
+	case answerStale, answerRefused:
+		d.withdraw(ctx, move, true)
+		return Ticket{}, errcode.Wrap(apperrors.ErrRehomeRefused, err, "player_id", playerID, "to", move.To)
+	default:
+		return Ticket{}, d.beginUnknown(ctx, move, err)
+	}
+	slog.Info("rehome: accepted", "player_id", playerID, "transfer_id", move.ID, "from", move.From, "to", move.To, "operator", move.Operator)
+	d.spawn(func() { d.carry(move) })
+	return Ticket{ID: move.ID, From: move.From, To: move.To}, nil
+}
+
+// Resume 把一次已经在 account 登记、却没有在本进程里走完的换服接着做完：从离开钩子起重做后台部分。
+// 用在源服重启之后（迁出表没了，account 上换服仍在途）。表里已经有这名玩家时什么都不做——有人正在做。
+func (d *Driver) Resume(move Move) error {
+	if move.EntityID == 0 {
+		entityID, err := d.entityID(move.PlayerID)
+		if err != nil {
+			return fmt.Errorf("rehome: %w", err)
+		}
+		move.EntityID = entityID
+	}
+	if err := d.residency.Reserve(move); err != nil {
+		return err
+	}
+	slog.Info("rehome: resuming a transfer this process did not finish", "player_id", move.PlayerID, "transfer_id", move.ID, "to", move.To)
+	d.spawn(func() { d.carry(move) })
+	return nil
+}
+
+// beginUnknown 处理发起的结果未知：直接中止这个 ID 拿确定结论。account 对一个没发起成的 ID 也接受中止，
+// 并从此不让它再发起，所以中止成了就能肯定地说“没有换服在途”。连中止的结果也不知道时，标记留着，
+// 后台接着问。
+func (d *Driver) beginUnknown(ctx context.Context, move Move, beginErr error) error {
+	aborting, cancel := context.WithTimeout(context.WithoutCancel(ctx), callBudget)
+	_, abortErr := d.directory.Abort(aborting, move.PlayerID, move.ID, "the outcome of begin is unknown")
+	cancel()
+	if kind := classify(abortErr); kind == answerDone || kind == answerInProgress || kind == answerRefused {
+		d.withdraw(ctx, move, true)
+		return errcode.Wrap(errcode.ErrRetryable, beginErr, "player_id", move.PlayerID)
+	}
+	slog.Error("rehome: the outcome of begin is unknown and so is the abort; asking until the account service answers",
+		"player_id", move.PlayerID, "transfer_id", move.ID, "begin_err", beginErr, "abort_err", abortErr)
+	d.spawn(func() { d.abandon(move, Kept, "the outcome of begin is unknown") })
+	// 不带业务码地答回去（%v，不是 %w）：这不是 account 的某一种拒绝，客户端不该看到它的码。
+	return fmt.Errorf("rehome: begin transfer %s of player %d: outcome unknown: %v", move.ID, move.PlayerID, beginErr)
+}
+
+// carry 是受理之后的后台部分：离开钩子 → 离开 → 提交 → 落定。
+func (d *Driver) carry(move Move) {
+	leaving, cancel := context.WithTimeout(context.Background(), leaveBudget)
+	err := runLeaving(leaving, d.registry, move)
+	cancel()
+	if err != nil {
+		slog.Warn("rehome: a leave hook refused; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+		d.abandon(move, Aborted, err.Error())
+		return
+	}
+	if d.grace > 0 {
+		time.Sleep(d.grace)
+	}
+	departing, cancel := context.WithTimeout(context.Background(), departBudget)
+	err = d.residency.Depart(departing, move)
+	cancel()
+	if err != nil {
+		slog.Warn("rehome: the player did not leave this process; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+		d.abandon(move, Aborted, "the source server could not hand the player off")
+		return
+	}
+	if d.conclude(move, true, "") {
+		d.settle(move, Committed)
+		slog.Info("rehome: committed", "player_id", move.PlayerID, "transfer_id", move.ID, "from", move.From, "to", move.To)
+		return
+	}
+	d.settle(move, Aborted)
+	d.cancelIntent(move)
+	slog.Warn("rehome: the account service did not rebind the player; the transfer is aborted", "player_id", move.PlayerID, "transfer_id", move.ID)
+}
+
+// abandon 把一次换服中止到底：向 account 要到结论为止，再按结论落定。stays 是玩家留在本服时用哪种结论
+// （受理之前是 Kept，受理之后是 Aborted）。account 说已经提交时按已提交落定。
+func (d *Driver) abandon(move Move, stays Outcome, reason string) {
+	if d.conclude(move, false, reason) {
+		d.settle(move, Committed)
+		slog.Warn("rehome: aborting found the transfer already committed; the player is bound to the target", "player_id", move.PlayerID, "transfer_id", move.ID, "to", move.To)
+		return
+	}
+	d.settle(move, stays)
+	d.cancelIntent(move)
+}
+
+// conclude 向 account 要这一次换服的结论，返回它是否已经提交。commit 为 true 时去提交，否则去中止；
+// 结果未知就原样重发，直到 account 明确回答。只在后台调用。
+func (d *Driver) conclude(move Move, commit bool, reason string) (committed bool) {
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), callBudget)
+		var err error
+		if commit {
+			_, err = d.directory.Commit(ctx, move.PlayerID, move.ID)
+		} else {
+			_, err = d.directory.Abort(ctx, move.PlayerID, move.ID, reason)
+		}
+		cancel()
+		switch kind := classify(err); {
+		case kind == answerDone:
+			return commit
+		case kind == answerStale:
+			// 提交得到它：这个 ID 已被中止或不认识，没有改绑。中止得到它：这个 ID 已经提交。
+			return !commit
+		case kind == answerInProgress:
+			// 在途的是另一次换服：这个 ID 没有、也不会改绑。
+			return false
+		case kind == answerRefused && commit:
+			// 目标服在此期间没了、名额没了：account 上换服仍在途，由我们中止。
+			slog.Warn("rehome: commit refused; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+			commit, reason = false, "commit refused: "+err.Error()
+			attempt = -1
+			continue
+		case kind == answerRefused:
+			// 中止被明确拒绝（角色不存在了）：没有什么可改绑的。
+			return false
+		}
+		slog.Warn("rehome: outcome unknown; sending the same request again", "player_id", move.PlayerID, "transfer_id", move.ID,
+			"commit", commit, "attempt", attempt+1, "err", err)
+		d.wait(attempt)
+	}
+}
+
+// settle 落定结论，直到成功：撤屏障会因为实体正被占用而失败，失败时标记与屏障都还在，重试就是了。只在后台调用。
+func (d *Driver) settle(move Move, outcome Outcome) {
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), departBudget)
+		err := d.residency.Settle(ctx, move, outcome)
+		cancel()
+		if err == nil {
+			return
+		}
+		slog.Warn("rehome: settling failed; retrying", "player_id", move.PlayerID, "transfer_id", move.ID, "outcome", outcome, "attempt", attempt+1, "err", err)
+		d.wait(attempt)
+	}
+}
+
+// withdraw 是受理之前的退路：撤标记，需要时清意图。在申请的请求里调用，所以只试一次；
+// 标记撤不掉时转到后台去撤，不让请求等。
+func (d *Driver) withdraw(ctx context.Context, move Move, intent bool) {
+	settling, cancel := context.WithTimeout(context.WithoutCancel(ctx), callBudget)
+	err := d.residency.Settle(settling, move, Kept)
+	cancel()
+	if err != nil {
+		slog.Warn("rehome: the leaving mark was not withdrawn; retrying in the background", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+		d.spawn(func() { d.settle(move, Kept) })
+	}
+	if intent {
+		d.cancelIntent(move)
+	}
+}
+
+// cancelIntent 清掉档里这一次的意图。清不掉只记日志：它不是栅栏，下一次进入时会对账清掉。
+func (d *Driver) cancelIntent(move Move) {
+	ctx, cancel := context.WithTimeout(context.Background(), callBudget)
+	defer cancel()
+	if err := d.profile.Cancel(ctx, move.PlayerID, move.ID); err != nil {
+		slog.Warn("rehome: the intent was not cleared; the next enter reconciles it", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+	}
+}

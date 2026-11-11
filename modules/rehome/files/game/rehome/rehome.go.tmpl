@@ -1,0 +1,130 @@
+// Package rehome 是“单个玩家换服”在游戏侧的那一半：把一名玩家从本服（一个 game sid）改绑到另一个服。
+//
+// 谁管什么：
+//
+//   - 绑定的权威是 account 的角色记录。“这名玩家正在换服”“他现在绑定在哪个服”只有它说了算，
+//     这个包经 Directory 问它、改它。
+//   - 本进程还替不替这名玩家写，由 Residency 回答：它断开玩家的会话、把实体的写权交出去，并记着
+//     从本进程换走的玩家（迁出表）。迁出表是 account 那份事实在本进程的缓存，也是关竞态的闸：
+//     玩家一开始换服，本进程对他的进入、对他的后台步骤就都答“换服中”，不等 account。
+//   - 玩家档里的 PlayerDao.Rehome 只是业务事实（冷却、到达只做一次），不当栅栏用。
+//
+// 一次换服的顺序见 Driver；别的功能要在换服的某一步顺带做事，用 rehome_hooks.go 里的三个登记点；
+// 可去的服与冷却写在 rehome_rules.go（归工程所有）；后台步骤（saga 准入……）问“这名玩家现在归哪个服”
+// 用 Binding。
+//
+// 前提：各服把玩家的档放在同一个物理库（Player 的 DAO 没有按 sid 分库）。换服不搬数据，只交接写权；
+// 物理库不同的服之间换服，目标服会读到“从未创建”并新建一个空档——可去的服由规则文件把关。
+//
+// 这个包不 import 任何 controller 或实体包，所以谁都可以 import 它而不成环。
+package rehome
+
+import (
+	"errors"
+	"fmt"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// Request 是一次换服申请。
+type Request struct {
+	PlayerID int64
+	// To 是目标服的 sid。
+	To int32
+	// Operator 为 true 表示由服务端发起（GM、运维）：不受规则文件约束（可去的服、冷却），
+	// 别的功能登记的检查照常执行，account 的拒绝照常生效。
+	Operator bool
+	// Note 写进 account 的换服记录，可空（谁、为什么）。
+	Note string
+}
+
+// Ticket 是被受理的换服：account 已经登记，后面的步骤在后台继续。
+type Ticket struct {
+	// ID 是这一次的换服 ID，account 的记录、玩家档里的意图、迁出表都按它认。
+	ID   string
+	From int32
+	To   int32
+}
+
+// Move 是一次换服在各个步骤之间传的事实。
+type Move struct {
+	PlayerID int64
+	// EntityID 是这名玩家的 Player 的完整 Entity ID：交出实体按它认。
+	EntityID int64
+	// ID 是换服 ID；From 是源服（本进程的 sid），To 是目标服。
+	ID   string
+	From int32
+	To   int32
+	// Epoch 是发起时 account 上的绑定代数：提交之后是 Epoch+1，这名玩家以后再换回本服时至少是 Epoch+2。
+	Epoch uint64
+	// Operator 同 Request.Operator。
+	Operator bool
+}
+
+// Arrival 是一次到达：这名玩家换服之后第一次在目标服进入游戏。
+type Arrival struct {
+	PlayerID int64
+	// ID 是这次换服的 ID；From 是源服，To 是目标服（做到达的这个进程的 sid）。
+	ID   string
+	From int32
+	To   int32
+	// Count 是算上这一次，这名玩家换过几次服。
+	Count int32
+}
+
+// ArriveResult 是 Nest handler RehomeArrive 的结果：进入之后看一眼档里的换服意图，该到达的到达。
+type ArriveResult struct {
+	// Arrived 为 true 表示这一次调用做了到达（档里的意图指向本服，而且这个换服 ID 还没到达过）。
+	Arrived bool
+	Arrival Arrival
+	// StaleID 非空表示档里留着一份指向别的服（StaleTo）的意图：这名玩家此刻在本服，那一次换服没有成。
+	// 调用方向 account 确认之后用 RehomeCancel 清掉。
+	StaleID string
+	StaleTo int32
+}
+
+// Moving 是“这名玩家正在换服”的拒绝（rehome_moving）。to 是目标服，不知道时为 0。
+func Moving(playerID int64, to int32) error {
+	return errcode.Wrap(apperrors.ErrRehomeMoving, nil, "player_id", playerID, "to", to)
+}
+
+// Elsewhere 是“这名玩家绑定在别的服”的拒绝（rehome_elsewhere），带着他现在的服；不知道时 sid 为 0。
+// 应答里有地方放这个 sid 的端点用 OwnerSID 把它取出来；没有的，客户端重新选角就拿得到。
+func Elsewhere(playerID int64, sid int32) error {
+	return &elsewhereError{sid: sid, coded: errcode.Wrap(apperrors.ErrRehomeElsewhere, nil, "player_id", playerID, "owner_sid", sid)}
+}
+
+// elsewhereError 在带码错误之外带着目标 sid。
+type elsewhereError struct {
+	sid   int32
+	coded error
+}
+
+func (e *elsewhereError) Error() string { return e.coded.Error() }
+func (e *elsewhereError) Unwrap() error { return e.coded }
+
+// OwnerSID 从 Elsewhere 的拒绝里取出这名玩家现在的服。不是这种拒绝、或者当时不知道是哪个服时 ok 为 false。
+func OwnerSID(err error) (sid int32, ok bool) {
+	var elsewhere *elsewhereError
+	if errors.As(err, &elsewhere) && elsewhere.sid > 0 {
+		return elsewhere.sid, true
+	}
+	return 0, false
+}
+
+// refused 把一个拒绝换成带码的 rehome_refused。已经带着业务码的错误原样返回（检查给了自己的码就用它的）；
+// 没有码的包一层，客户端看到的是“被拒绝”而不是“服务器错误”。
+func refused(err error, why string) error {
+	if err == nil {
+		return errcode.Wrap(apperrors.ErrRehomeRefused, errors.New(why))
+	}
+	if errcode.CodeOf(err) > errcode.FrameworkCodeLast {
+		return err
+	}
+	return errcode.Wrap(apperrors.ErrRehomeRefused, fmt.Errorf("%s: %w", why, err))
+}
+
+// Refused 给事务内的那一半（实体包）用：规则与登记的检查的拒绝都经它变成带码错误。
+func Refused(err error, why string) error { return refused(err, why) }
