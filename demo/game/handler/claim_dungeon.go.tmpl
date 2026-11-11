@@ -37,7 +37,7 @@ import (
 // run too old to pay is refused before anything is counted, and a replay
 // inside the window resubmits a snapshot rather than adding a point. There is
 // no second ledger, with its own forgetting rule, to keep in line with this
-// one (game/ranking says why the rank service's request ring cannot be it).
+// one (game/leaderboard/leaderboard_board.go says why the rank service's request ring cannot be it).
 //
 //roost:nest rollback=undo durability=strict
 func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity, runID string, amount int64, resolvedAtUnix int64, nowUnix int64, season int64) (dungeon.ClaimResult, error) {

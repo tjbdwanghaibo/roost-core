@@ -493,25 +493,35 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 ## 排行榜：rank 服务，与领奖账本同一个准入
 
-`game/ranking/ranking.go` 是游戏这侧的决定：哪个榜、一分是什么、什么让提交可重试。
+排行榜用的是 [leaderboard 业务模块](../modules/README.md)（生成时由 `roost module add leaderboard` 装进工程）：读榜的两条协议、
+提交入口 `gameleaderboard.SubmitSeason` 与它们的场景测试都是模块的，demo 不再带自己的 `game/ranking` 与 `RankTop`。demo 只覆盖
+模块留给工程的业务文件 `game/leaderboard/leaderboard_board.go`（连同钉住它的 `leaderboard_board_test.go`）——哪张榜（`clears`，
+副本通关次数，全服）、哪个赛季（`CurrentSeason()`）、分数范围、一屏十行；一分是什么、什么让提交可重试也写在这个文件头上。
+通关计数本身（`PlayerDao.DungeonClears`、领奖账本）是副本玩法，留在 demo。
 
 - 一分不是“+1”，是**通关数快照**：领奖事务（`handlerClaimDungeon`）在记账本、发经验的同一笔事务里给
-  `PlayerDao.DungeonClears[赛季]` 加一，首次领取与重放都返回当前通关数（`ClaimResult.Clears`）；端点用 `UpdateMax`、
-  不带 requestID 把榜抬到这个数。重放、重复、乱序的快照都不多加也不降分。
+  `PlayerDao.DungeonClears[赛季]` 加一，首次领取与重放都返回当前通关数（`ClaimResult.Clears`）；端点调模块的
+  `SubmitSeason`（`UpdateMax`、不带 requestID）把榜抬到这个数。重放、重复、乱序的快照都不多加也不降分。
 - 为什么不再用 `UpdateAdd` + `clear:<run id>`：rank 只记每个玩家最近 8 个请求 ID（去重环，不是账本），而端点在重放时
   也要提交；一局在领奖窗口内、被后来 8 局挤出去重环后重放，会再加一分（9 局记 10 分）。通关数随奖励一起准入
   （执行时间判窗口，窗口外的一局在计数前就被拒绝），不需要第三本有期限的账本。
 - 提交**不**以"这次是否真的发了奖"为条件：重放发现奖励已发，恰恰是"分可能还没记上"的那种情况；下一局的快照也会把它带上。
 - 提交在事务**外**（榜在另一个服务），两者不原子。崩在中间会留下"已发奖但没记分"——可恢复的方向，重试这个端点只会把榜抬到同一个数。
-- 通关数按赛季分开存：改 `ranking.CurrentSeason` 后新榜从 0 开始，不把上一季的数带过去（维护者 2026-10-18 决定按赛季，不做终身累计）。
+  提交失败只打 Warn，不让结算失败。通关数为 0 时不提交（在别的赛季领过奖的一局重放到本赛季）：没有通关的玩家不上榜。
+- 通关数按赛季分开存：改 `leaderboard_board.go` 的 `CurrentSeason()` 后新榜从 0 开始，不把上一季的数带过去（维护者 2026-10-18 决定按
+  赛季，不做终身累计）。端点只取一次赛季号，领奖事务按它计数、`SubmitSeason` 按它提交，所以第 N 季的通关数只会进第 N 季的榜。
+- 回归（`game/controllers/player/finish_dungeon_test.go`）：`TestDungeonClearSubmitsTheSeasonCountAsASnapshot`（无外部依赖，看端点交给
+  rank 的每一次提交：快照、`UpdateMax`、不带 requestID、重放照交、失败不影响结算、0 不交）与
+  `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（真实 Redis 上看榜上的数，要 `ROOST_REVIEW_REDIS`）。
 - **活动贡献与排行相反：只在首次付款时贡献**（`result.Claimed`）。排行提交的是事务里通关数的快照，重放重交无害；活动贡献是往
   “调用时刻的时钟所在的窗口”（300 秒一个）里加分，协调器只按（窗口, 玩家, `clear:<run id>`）去重。同一局在 4 小时领奖窗口内
   跨过窗口边界后重放，落进新窗口、键不同，会再记一分（一局最多可进 48 个窗口，影响按名次发的活动邮件）。所以驱动贡献的是
   “这次真的付了款”这一事实，与通关数同源；重放不贡献，响应里也不带 `ActivityID`。**代价**（维护者 2026-10-18 按推荐决定）：
   付款之后、贡献之前崩溃或协调器调用失败，这一分永久丢失，重放不补——活动是尽力而为，补报若落到后来的窗口本来也记错了窗口；
   端点对这种失败打 Warn 日志。回归 `TestAReplayContributesNothingToTheActivity`（`game/controllers/player/finish_dungeon_test.go`，无外部依赖）。
-- `RankTop`（10016）读榜头 + 自己的名次，两次读：一页是榜头，说不了不在榜上的人的事。榜 id 由服务端定，
-  从线上收一个 board id 等于让任何人读到任何榜。
+- 读榜是模块的 `LeaderboardTop`（消息号安装时分配，见 `roost.yaml` 的 `modules.leaderboard`）：榜头 + 自己的名次
+  （`MyOnBoard` / `MyRank` / `MyScore`）。一页是榜头，说不了不在这一页上的人的事——自己在这一页上时取那一行，不在时再读一次。
+  只要自己的名次用 `LeaderboardMe`。榜 id 由服务端定，从线上收一个 board id 等于让任何人读到任何榜。
 
 ## 技能目录：启动时编译，客户端可查
 

@@ -272,10 +272,12 @@ scenarios:
             # actually wired into replication rather than just into Mongo.
             fields: level,exp,attr_base,attr_final,pos_x,equipment
             timeout: 10s
-        # The leaderboard. The board holds the player's clear count as kept by
-        # the reward transaction (UpdateMax of a snapshot), so the replay above
-        # did not count a second time — the board is where that shows.
-        - action: rank_top
+        # The leaderboard (the leaderboard module's LeaderboardTop: the top
+        # page plus this player's own standing). The board holds the player's
+        # clear count as kept by the reward transaction (UpdateMax of a
+        # snapshot), so the replay above did not count a second time — the
+        # board is where that shows.
+        - action: leaderboard_top
           param:
             limit: 10
         # Matchmaking: join the duel queue, then poll until the game's

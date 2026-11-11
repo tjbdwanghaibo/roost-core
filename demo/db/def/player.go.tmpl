@@ -79,7 +79,7 @@ type PlayerDao struct {
 	// and "counted" are one durable fact; unlike that ledger it is never
 	// pruned. The clears board takes it as a snapshot (rank UpdateMax), so a
 	// replay of any run resubmits the current count instead of adding one —
-	// see game/ranking for why the rank service's request ring cannot be the
+	// see game/leaderboard for why the rank service's request ring cannot be the
 	// ledger for this.
 	DungeonClears map[int64]int64 `dao:"persist,map=fast" store:"dungeon_clears"`
 	// MailClaims is the same ledger for mail attachments: mail id → the

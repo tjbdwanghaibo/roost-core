@@ -190,7 +190,7 @@ func (component *ProfileComponent) ClaimDungeonRun(runID string, resolvedAtUnix,
 // ClaimDungeonRun recorded the run, so the count moves exactly when a run is
 // paid and rolls back with the payment.
 //
-// The count is the clears board's source (game/ranking): the board is brought
+// The count is the clears board's source (game/leaderboard): the board is brought
 // up to it with rank UpdateMax rather than incremented, which is what makes a
 // replay of any run — however many clears later — harmless there. Unlike the
 // claim ledger it is never pruned: one entry per season the player cleared in.

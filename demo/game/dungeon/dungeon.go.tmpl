@@ -105,7 +105,7 @@ func LedgerMayForget(resolvedAtUnix, nowUnix int64) bool {
 //
 // Clears is the player's count of paid clears in the season the claim named,
 // AFTER this call, and it is reported on a replay too: it is the snapshot the
-// clears board is brought up to (game/ranking), so a replay that finds the
+// clears board is brought up to (game/leaderboard), so a replay that finds the
 // reward already paid can still fill a board point an earlier attempt failed
 // to submit, without adding one.
 type ClaimResult struct {

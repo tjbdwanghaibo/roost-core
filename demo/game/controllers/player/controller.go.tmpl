@@ -29,7 +29,6 @@ import (
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
-	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
 	svcsession "github.com/tjbdwanghaibo/roost-core/service/session"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -61,7 +60,6 @@ type Controller struct {
 	chat *chatctl.Controller
 	mailer     svcmail.Mail
 	sessions   svcsession.Session
-	ranking    svcrank.Rank
 	payments   svcplatform.Platform
 	purchases  atomic.Pointer[purchaseDrainer]
 	activities atomic.Pointer[activityRunner]
@@ -233,10 +231,6 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || sessions == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list session under services.<game>.uses", svcsession.CapabilityName)
 	}
-	ranking, ok := app.Lookup[svcrank.Rank](registry, svcrank.CapabilityName)
-	if !ok || ranking == nil {
-		return nil, fmt.Errorf("player controller: capability %q not found; list rank under services.<game>.uses", svcrank.CapabilityName)
-	}
 	// The demo plays the payment provider, so this process needs the secret
 	// the platform service checks callbacks with. Refused here rather than at
 	// the first purchase: an empty secret turns every callback into an
@@ -286,7 +280,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	return &Controller{
 		registry: registry, nestClient: client, players: players, teams: teams,
 		alliances: alliances, allianceMirrors: allianceMirrors, guildSettings: guildSettings,
-		matcher: matcher, chat: chat, mailer: mailer, sessions: sessions, ranking: ranking,
+		matcher: matcher, chat: chat, mailer: mailer, sessions: sessions,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
 		teamIDs: mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
@@ -390,14 +384,6 @@ func (controller *Controller) Battles() (battleRouter, error) {
 	}
 	controller.battles.Store(&router)
 	return router, nil
-}
-
-// Ranking is the leaderboard service.
-func (controller *Controller) Ranking() svcrank.Rank {
-	if controller == nil {
-		return nil
-	}
-	return controller.ranking
 }
 
 // Scene is the replicated world, looked up lazily like the battle manager.

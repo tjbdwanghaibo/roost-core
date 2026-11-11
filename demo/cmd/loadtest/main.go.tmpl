@@ -778,23 +778,30 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
-	// rank_top: the leaderboard. Every robot cleared a dungeon, so every
-	// robot must be ON the board — and its own value must be exactly 1 no
-	// matter how many times it replayed the finish, which is what the
-	// idempotent submit promises.
-	action.MustRegisterCall[pb.RankTopRequest, pb.RankTopResponse](actions, protocols, "rank_top", msgid.MsgRankTop,
-		action.OnResp(func(rb *robot.Context, resp *pb.RankTopResponse) error {
+	// leaderboard_top: the leaderboard module's read — the top page with the
+	// caller's own standing in the same answer. Every robot cleared a
+	// dungeon, so every robot must be ON the board — and its own value must
+	// be exactly 1 no matter how many times it replayed the finish, which is
+	// what submitting the clear count as a snapshot promises. The standing
+	// is checked rather than the page: with more robots than a page holds,
+	// most of them are not on it.
+	action.MustRegisterCall[pb.LeaderboardTopRequest, pb.LeaderboardTopResponse](actions, protocols, "leaderboard_top", msgid.MsgLeaderboardTop,
+		action.OnResp(func(rb *robot.Context, resp *pb.LeaderboardTopResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
 			rawPlayer, _ := rb.Blackboard.Get("player_id")
 			playerID, _ := rawPlayer.(int64)
-			if resp.MyRank <= 0 {
+			if !resp.MyOnBoard || resp.MyRank <= 0 {
 				return fmt.Errorf("player %d cleared a dungeon but is not on the board (total %d)", playerID, resp.Total)
 			}
-			for _, entry := range resp.Entries {
-				if entry.PlayerID == playerID && entry.Value != 1 {
-					return fmt.Errorf("player %d counted %d clears for one run", playerID, entry.Value)
+			if resp.MyScore != 1 {
+				return fmt.Errorf("player %d counted %d clears for one run", playerID, resp.MyScore)
+			}
+			for _, row := range resp.Rows {
+				if row.PlayerID == playerID && (row.Score != resp.MyScore || row.Rank != resp.MyRank) {
+					return fmt.Errorf("player %d is rank %d with %d on the page but rank %d with %d in its own standing",
+						playerID, row.Rank, row.Score, resp.MyRank, resp.MyScore)
 				}
 			}
 			return nil
@@ -1009,8 +1016,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalGiftStatusRequest(message)
 	case *pb.BattleInputRequest:
 		return pb.MarshalBattleInputRequest(message)
-	case *pb.RankTopRequest:
-		return pb.MarshalRankTopRequest(message)
+	case *pb.LeaderboardTopRequest:
+		return pb.MarshalLeaderboardTopRequest(message)
 	case *pb.MoveRequest:
 		return pb.MarshalMoveRequest(message)
 	case *pb.MoveTargetRequest:
@@ -1144,8 +1151,8 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 			return err
 		}
 		*message = *decoded
-	case *pb.RankTopResponse:
-		decoded, err := pb.UnmarshalRankTopResponse(data)
+	case *pb.LeaderboardTopResponse:
+		decoded, err := pb.UnmarshalLeaderboardTopResponse(data)
 		if err != nil {
 			return err
 		}

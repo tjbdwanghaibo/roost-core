@@ -16,8 +16,9 @@ import (
 	playerentity "{{MODULE}}/game/entities/player"
 	worldentity "{{MODULE}}/game/entities/world"
 	gamehandler "{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gameleaderboard "{{MODULE}}/game/leaderboard"
 	playeraccess "{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/game/ranking"
 	"{{MODULE}}/protocol/pb"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -38,8 +39,10 @@ import (
 //
 // rank 的 UpdateAdd 只记每个玩家最近 8 个请求 ID，是去重环而不是账本；端点在奖励重放（Claimed=false）
 // 时也要提交，才能补上“奖励已提交、排行没提交就崩溃”的那一分。两者叠加时，一局在领奖窗口内、却被
-// 后来 8 局挤出去重环之后重放，会再加一分。这里经正式 Controller、生成 Sender、Nest、Player / World
-// handler 与真实 Redis 上的 rank RedisStore 走一遍，session 返回固定的成功终态。
+// 后来 8 局挤出去重环之后重放，会再加一分。所以榜取的是领奖事务里通关数的快照（UpdateMax、不带请求号），
+// 经 leaderboard 模块的 SubmitSeason 提交（game/leaderboard；哪张榜、哪个赛季是 demo 的 leaderboard_board.go）。
+// 这里经正式 Controller、生成 Sender、Nest、Player / World handler 走一遍，session 返回固定的成功终态：
+// 一条用真实 Redis 上的 rank RedisStore 看榜上的数，一条用记录式替身看端点交给 rank 的每一次提交（无外部依赖）。
 
 type finishDungeonGetter map[int64]entity.IThreadSafeEntity
 
@@ -136,9 +139,14 @@ func newFinishDungeonHarness(t *testing.T, board svcrank.Rank) *finishDungeonHar
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	// 排行榜的提交经 leaderboard 模块，它每次从 Registry 取 rank 客户端：与真实进程里 ClientMod 发布的名字相同。
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(svcrank.CapabilityName, board); err != nil {
+		t.Fatal(err)
+	}
 	controller := &Controller{
-		registry: app.NewRegistry(viper.New()), nestClient: engine, worldID: worldID,
-		sessions: finishDungeonSessions{resolvedAt: clock.Now().Unix()}, ranking: board,
+		registry: registry, nestClient: engine, worldID: worldID,
+		sessions: finishDungeonSessions{resolvedAt: clock.Now().Unix()},
 	}
 	return &finishDungeonHarness{
 		controller: controller, subject: subject, world: world,
@@ -175,7 +183,7 @@ func TestDungeonClearsBoardCountsEachRunOnceRealRedis(t *testing.T) {
 	}
 	boardValue := func() int64 {
 		t.Helper()
-		entry, found, err := store.Rank(context.Background(), ranking.ClearsBoard(), playerID)
+		entry, found, err := store.Rank(context.Background(), gameleaderboard.CurrentBoard(), playerID)
 		if err != nil || !found {
 			t.Fatalf("rank: found=%v err=%v", found, err)
 		}
@@ -233,6 +241,133 @@ func TestDungeonClearsBoardCountsEachRunOnceRealRedis(t *testing.T) {
 	}
 	if world.Dao().GetExpGranted() != 11*dungeon.ClearExp {
 		t.Fatalf("World recorded %d exp, want %d", world.Dao().GetExpGranted(), 11*dungeon.ClearExp)
+	}
+}
+
+// recordingRanking 记下端点交给 rank 的每一次提交，并可让下一次失败；它不模拟榜。
+// 榜对这些提交做什么（UpdateMax 不加不降）由 leaderboard 模块自己的场景与上面的真实 Redis 用例覆盖。
+type recordingRanking struct {
+	rankService
+	mu       sync.Mutex
+	submits  []recordedSubmit
+	failNext bool
+}
+
+type recordedSubmit struct {
+	board     svcrank.Board
+	score     svcrank.Score
+	mode      svcrank.UpdateMode
+	requestID string
+}
+
+func (r *recordingRanking) Submit(_ context.Context, board svcrank.Board, score svcrank.Score, mode svcrank.UpdateMode, requestID string) (svcrank.Entry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.submits = append(r.submits, recordedSubmit{board: board, score: score, mode: mode, requestID: requestID})
+	if r.failNext {
+		r.failNext = false
+		return svcrank.Entry{}, errors.New("rank unavailable (injected)")
+	}
+	return svcrank.Entry{Rank: 1, Score: score}, nil
+}
+
+// take 取走到目前为止记下的提交。
+func (r *recordingRanking) take() []recordedSubmit {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	taken := r.submits
+	r.submits = nil
+	return taken
+}
+
+// 通关榜的规则，不需要外部依赖：端点交给 rank 的是“本赛季通关数的快照”，通关数与领奖在同一笔事务里加一。
+//
+//   - 每次成功结算提交一次：榜是 demo 的通关榜（clears、全服、当前赛季），UpdateMax、不带请求号，值是事务报回的通关数；
+//   - 重放（奖励不再发）照样提交当前通关数，不是 +1，也不因为没发奖而不提交；
+//   - 提交失败不让结算失败：奖励照发、回包成功，下一次重放把同一个数再交一次；
+//   - 通关数是 0 时不提交（在别的赛季领过奖的一局重放到本赛季）：没有通关的玩家不上榜。
+func TestDungeonClearSubmitsTheSeasonCountAsASnapshot(t *testing.T) {
+	board := &recordingRanking{}
+	harness := newFinishDungeonHarness(t, board)
+	playerID := harness.ctx.PlayerID
+	season := gameleaderboard.CurrentSeason()
+	finish := func(runID string) *pb.FinishDungeonResponse {
+		t.Helper()
+		response, err := harness.controller.HandleFinishDungeon(harness.ctx, &pb.FinishDungeonRequest{RunID: runID, Success: true})
+		if err != nil || response == nil || response.Code != 0 {
+			t.Fatalf("finish %s: response=%+v err=%v", runID, response, err)
+		}
+		return response
+	}
+	// expectOne 断言上一步恰好提交了一次，内容是 clears 这个通关数的快照。
+	expectOne := func(step string, clears int64) {
+		t.Helper()
+		submits := board.take()
+		if len(submits) != 1 {
+			t.Fatalf("%s: %d submits reached rank, want 1: %+v", step, len(submits), submits)
+		}
+		got := submits[0]
+		if want := (svcrank.Board{ID: "clears", Scope: svcrank.ScopeGlobal, Season: season}); got.board != want {
+			t.Fatalf("%s: submitted to board %+v, want %+v", step, got.board, want)
+		}
+		if got.mode != svcrank.UpdateMax || got.requestID != "" {
+			t.Fatalf("%s: mode=%q request id=%q, want a snapshot: max and no request id", step, got.mode, got.requestID)
+		}
+		if got.score.OwnerID != playerID || got.score.Value != clears || got.score.Tie != 0 {
+			t.Fatalf("%s: score=%+v, want owner %d value %d and no tie", step, got.score, playerID, clears)
+		}
+	}
+
+	if first := finish("run-1"); first.ExpGranted != dungeon.ClearExp {
+		t.Fatalf("first clear granted %d exp, want %d", first.ExpGranted, dungeon.ClearExp)
+	}
+	expectOne("first clear", 1)
+	finish("run-2")
+	expectOne("second clear", 2)
+	if got := harness.subject.ProfileComp().DungeonClears(season); got != 2 {
+		t.Fatalf("the Player counts %d clears this season, want 2", got)
+	}
+
+	// 重放第一局：奖励不再发，通关数不动；提交的仍是当前通关数 2。
+	if replay := finish("run-1"); replay.ExpGranted != 0 {
+		t.Fatalf("replay of run-1 granted %d exp again", replay.ExpGranted)
+	}
+	expectOne("replay of the first clear", 2)
+
+	// 排行这次没写进去：结算照样成功、奖励照发；通关数已经在事务里加了，重放把同一个数再交一次。
+	board.mu.Lock()
+	board.failNext = true
+	board.mu.Unlock()
+	if third := finish("run-3"); third.ExpGranted != dungeon.ClearExp || third.Reason != "" {
+		t.Fatalf("a clear whose board submit failed: %+v, want the reward and a clean answer", third)
+	}
+	expectOne("clear whose submit failed", 3)
+	if replay := finish("run-3"); replay.ExpGranted != 0 {
+		t.Fatalf("replay of run-3 granted %d exp again", replay.ExpGranted)
+	}
+	expectOne("replay after the failed submit", 3)
+	if got := harness.subject.ProfileComp().DungeonClears(season); got != 3 {
+		t.Fatalf("the Player counts %d clears this season, want 3", got)
+	}
+
+	// 通关数是 0 的情况：一名本赛季没有通关的玩家（新的一套链路），他的一局是在别的赛季领的奖。
+	// 这一局重放到本赛季时领奖账本认出它、不再发奖，事务报回的本赛季通关数是 0——不提交。
+	fresh := newFinishDungeonHarness(t, board)
+	freshID, err := entity.BuildEntityID(fresh.ctx.PlayerID, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paid, err := syncsender.NewClaimDungeonSender(fresh.controller.NestClient()).MultiSync_ClaimDungeon(context.Background(), freshID, fresh.controller.WorldID(), "old-season-run", dungeon.ClearExp, clock.Now().Unix(), season+1)
+	if err != nil || !paid.Claimed || paid.Clears != 1 {
+		t.Fatalf("claim in season %d: %+v err=%v", season+1, paid, err)
+	}
+	board.take()
+	response, err := fresh.controller.HandleFinishDungeon(fresh.ctx, &pb.FinishDungeonRequest{RunID: "old-season-run", Success: true})
+	if err != nil || response == nil || response.Code != 0 || response.ExpGranted != 0 {
+		t.Fatalf("replay of a run paid in another season: response=%+v err=%v", response, err)
+	}
+	if submits := board.take(); len(submits) != 0 {
+		t.Fatalf("a player with no clear this season was submitted to the board: %+v", submits)
 	}
 }
 

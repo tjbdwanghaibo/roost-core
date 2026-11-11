@@ -1,0 +1,57 @@
+package leaderboard
+
+import (
+	"testing"
+
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// The demo's board rules, pinned with literal numbers: the clears board, one
+// global board, season 1, counts from 1 to a billion, pages of ten. This file
+// replaces the module's leaderboard_board_test.go together with
+// leaderboard_board.go; the module's other tests refer to the rules by name
+// and run unchanged (roost module verify counts all of them).
+
+func TestLeaderboardBoardIsTheGlobalClearsBoardInSeasonOne(t *testing.T) {
+	if season := CurrentSeason(); season != 1 {
+		t.Fatalf("CurrentSeason() = %d, want 1", season)
+	}
+	board := CurrentBoard()
+	want := svcrank.Board{ID: "clears", Scope: svcrank.ScopeGlobal, ScopeID: 0, Season: 1}
+	if board != want {
+		t.Fatalf("board = %+v, want %+v", board, want)
+	}
+	if err := board.Validate(); err != nil {
+		t.Fatalf("the rank service would refuse this board: %v", err)
+	}
+	// The next season is the same board under another season, and nothing
+	// else: the count behind it is kept per season on the Player.
+	if next := Board(2); next != (svcrank.Board{ID: "clears", Scope: svcrank.ScopeGlobal, Season: 2}) {
+		t.Fatalf("Board(2) = %+v", next)
+	}
+}
+
+func TestLeaderboardClearCountRangeIsOneToABillion(t *testing.T) {
+	for _, clears := range []int64{1, 2, 999_999_999, 1_000_000_000} {
+		if err := ValidateScore(clears); err != nil {
+			t.Errorf("clear count %d refused: %v", clears, err)
+		}
+	}
+	for _, clears := range []int64{0, -1, 1_000_000_001, 1 << 62} {
+		if err := ValidateScore(clears); err == nil {
+			t.Errorf("clear count %d accepted", clears)
+		}
+	}
+}
+
+func TestLeaderboardTopIsAtMostTenRows(t *testing.T) {
+	for requested, want := range map[int32]int{
+		0: 10, -1: 10, -2147483648: 10,
+		1: 1, 9: 9, 10: 10,
+		11: 10, 200: 10, 2147483647: 10,
+	} {
+		if got := TopLimit(requested); got != want {
+			t.Errorf("TopLimit(%d) = %d, want %d", requested, got, want)
+		}
+	}
+}

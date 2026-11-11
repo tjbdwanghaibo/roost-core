@@ -520,7 +520,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/scene/sync_packer.go", why: "the scene's own subject, seen by every member through the scene view"},
 		{write: "game/lifecycle/scene_singleton.go", why: "the one map this process runs, built from configuration before anyone can stand on it"},
 		{write: "game/settings/settings.go", why: "the config keys the game service's own code reads (activity.*, platform.*, sid), declared like a Mod's and read with app.LoadConfig: the App checks them at start and doctor knows them (maintainer decision)"},
-		{write: "game/ranking/ranking.go", why: "the game's side of the rank service: which board, and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
 		{write: "game/dungeon/dungeon.go", why: "what a clear is worth and why paying for one exactly once needs a claim ledger, not the request's own flag"},
 		{write: "game/dungeon/dungeon_test.go", why: "the claim window as a table test, shipped with the project"},
 		{write: "game/battle/battle.go", why: "the lockstep contract: tick rate, frame budget, input encoding, seats and the deterministic simulation both clients run"},
@@ -752,10 +751,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
 		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},
-		{add: &AddOptions{Kind: "protocol", Name: "RankTop", Group: "game", Handler: "player"}, why: "reading a leaderboard: a bounded page, and the board is the server's choice"},
-		{write: "protocol/def/rank_top.go", why: "the board page on the wire, with this player's own rank alongside it"},
-		{write: "game/controllers/player/rank_top.go", why: "Page + Rank through the typed rank client"},
-		{write: "game/controllers/player/finish_dungeon_test.go", why: "a clear counts once on the board, through the real endpoint and rank store on real Redis: a replay after more than the rank ring's 8 later clears, concurrent replays and a refilled failed submit; and a clear contributes to the activity only from the call that paid it: a replay after the 300-second window rolls scores nothing in the new window, and a contribution that failed at payment is not refilled (no external dependency)"},
+		{write: "game/controllers/player/finish_dungeon_test.go", why: "a clear counts once on the board, through the real endpoint, the leaderboard module's submit and the rank store on real Redis: a replay after more than the rank ring's 8 later clears, concurrent replays and a refilled failed submit; what the endpoint hands the rank service on every settlement (the season's clear count as a snapshot: max, no request id, on a replay too, never a zero, and a failed submit does not fail the settlement; no external dependency); and a clear contributes to the activity only from the call that paid it: a replay after the 300-second window rolls scores nothing in the new window, and a contribution that failed at payment is not refilled (no external dependency)"},
 		{add: &AddOptions{Kind: "skill", Name: "Fireball"}, why: "one skill definition and the embedded catalog"},
 		{write: "game/skills/fireball.json", why: "the definition with its contract written down; compiled at startup"},
 		{add: &AddOptions{Kind: "protocol", Name: "SkillCatalog", Group: "game", Handler: "player"}, why: "what the server compiled"},
@@ -845,12 +841,18 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // 不打开 access.player.self_sync：demo 的场景自己装着 entitysync Manager，一个 Nest 只有一个观察者。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"enter", "chat"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators)"},
+		{modules: []string{"enter", "chat", "leaderboard"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls)"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件。协议多几个字段，
 		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、邮件、公告）。
 		{write: "protocol/def/enter_game.go", why: "the enter module's protocol with the demo's fields: client version in, player id / created / owner sid out; the message id is the one the module was allocated"},
 		{write: "game/controllers/enter/controller.go", why: "the enter domain's controller holds the player controller: the demo's login needs everything that controller has"},
 		{write: "game/controllers/enter/enter_game.go", why: "the endpoint hands the login to the player controller's EnterGame"},
+		// 排行榜是 leaderboard 模块：读榜的两条协议（LeaderboardTop 带自己的名次、LeaderboardMe）与提交入口
+		// SubmitSeason 都是模块的；demo 只覆盖模块留给工程的业务文件——哪张榜、哪个赛季、分数范围、一屏多长——
+		// 与钉住这些数的测试。副本结算（finish_dungeon）在事务之外调模块的提交，它 import game/leaderboard，
+		// 所以 leaderboard 必须与 enter、chat 在同一步里装：模块步骤结束时要跑生成器与 go mod tidy。
+		{write: "game/leaderboard/leaderboard_board.go", why: "the module's project-owned board rules with the demo's board: dungeon clears, global, per season, pages of ten; and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
+		{write: "game/leaderboard/leaderboard_board_test.go", why: "the demo's board rules pinned with literal numbers, in place of the module's test of its default board"},
 	}
 }
 

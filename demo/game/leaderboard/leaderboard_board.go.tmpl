@@ -1,0 +1,80 @@
+package leaderboard
+
+import (
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// This file is the leaderboard module's project-owned half: which board,
+// which season, what a legal score is and how long a page is. The module
+// (roost module add leaderboard) ships a server-wide total-score board here;
+// the demo replaces this one file with its own board and leaves the module's
+// logic (leaderboard.go: Submit / SubmitSeason, the two read protocols) as
+// installed. leaderboard_board_test.go pins the numbers below.
+//
+// The demo's board counts cleared dungeon runs, per season. The rank service
+// ranks numbers and has no opinion about what they count; the decision worth
+// reading is what a point is.
+//
+// A point is a player's count of paid clears this season, as the claim
+// transaction reported it (dungeon.ClaimResult.Clears). The FinishDungeon
+// endpoint submits it with leaderboard.SubmitSeason: a SNAPSHOT of a count
+// the Player owns (PlayerDao.DungeonClears), brought up with rank UpdateMax
+// and no request id — not a "+1". The store fills the tiebreak with the
+// submit time and UpdateMax keeps the earlier one for an equal value, so
+// players on the same number of clears are ordered by who got there first.
+//
+// Why not "+1 deduplicated on the run id", which this board used first: the
+// rank service remembers only the last few request ids per owner
+// (service/rank maxAppliedRequests = 8). That is a redelivery guard, not a
+// ledger, and the FinishDungeon endpoint has to submit on every replay so a
+// point lost to a crash can be filled. A run replayed inside its claim window
+// after eight later clears had fallen out of the ring and counted again (nine
+// clears scored ten). Making the ring longer only moves the cliff; tying it to
+// the claim window would be a third bounded ledger whose forgetting has to be
+// argued separately from the reward's. A count that moves inside the reward
+// transaction needs neither: the reward ledger and its window are the only
+// admission, the count is never pruned, and UpdateMax makes duplicates and
+// out-of-order snapshots harmless.
+
+// BoardID is the clears board's name in the rank service.
+const BoardID = "clears"
+
+// CurrentSeason is the season clears are counted for and the board is read
+// in. One season for now: a season boundary is an operator action (the
+// service deliberately keeps Reset off the bus) and the demo has no calendar,
+// so moving it means changing this number and releasing. The count behind
+// the board is kept per season on the Player (PlayerDao.DungeonClears), so a
+// new season starts every player at zero on a new, empty board instead of
+// carrying the old season's count over (maintainer decision 2026-10-18).
+//
+// It is a function because the endpoint must use ONE value for both halves
+// of a clear: it reads the season once, the claim transaction counts the
+// clear for it, and SubmitSeason puts that count on that season's board.
+func CurrentSeason() int64 {
+	return 1
+}
+
+// Board is the clears board of one season: global scope, one board for every
+// server. The read protocols and the submit both go through it; a client
+// never names a board.
+func Board(season int64) svcrank.Board {
+	return svcrank.Board{ID: BoardID, Scope: svcrank.ScopeGlobal, Season: season}
+}
+
+// The legal range of a clear count, both ends included. A player with no
+// paid clear this season is not on the board (the endpoint submits only a
+// positive count). The upper end is far above what a season of dungeon runs
+// can reach; it only stops a wrong number, because the board never goes down
+// and a wrong large value could not be corrected by later submits.
+const (
+	MinScore int64 = 1
+	MaxScore int64 = 1_000_000_000
+)
+
+// The page the read protocol serves: at most ten rows — a request for fewer
+// is honoured, anything else gets ten. The rank service caps a page; "the whole board" is not an option the API offers,
+// which is the right default for something that grows with the player base.
+const (
+	DefaultTop = 10
+	MaxTop     = 10
+)

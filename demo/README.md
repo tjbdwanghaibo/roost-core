@@ -34,9 +34,10 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `game/controllers/player/` | 端点：协议 → Controller → 生成的 Sender，错误在这里换成 `(code, reason)` |
 | `game/handler/` | Nest handler（背包、经验、领奖、送礼开始等） |
 | `game/entities/`、`db/def/` | Player / World / Scene / Monster 实体与 DAO 定义 |
-| `game/`（其余子目录） | 玩法与策略：`matchmaking`、`dungeon`、`ranking`、`rewards`、`battle`、`scene`、`skills`、`gift` 等；`actor` 是玩家与怪物共用的心跳驱动、动作词表、状态目录与移动接线 |
+| `game/`（其余子目录） | 玩法与策略：`matchmaking`、`dungeon`、`rewards`、`battle`、`scene`、`skills`、`gift` 等；`actor` 是玩家与怪物共用的心跳驱动、动作词表、状态目录与移动接线 |
 | `game/chat/`、`game/controllers/chat/`、`protocol/def/chat_*.go`、`internal/service/chat/collaborators.go` | 聊天。不在本目录里：生成时由 [chat 业务模块](../modules/README.md)装进工程（`roost module add chat`），demo 与别的工程共用同一份实现 |
 | `protocol/def/enter_game.go`、`game/controllers/enter/`、`db/def/enter.go`、`game/entities/player/enter_*.go`、`game/handler/enter_init.go` | 进入游戏。协议、controller 域与“首次初始化做过没有”的标记来自 [enter 业务模块](../modules/README.md)（`roost module add enter`）；本目录只带覆盖模块文件的三个：`protocol/def/enter_game.go`（demo 的请求与响应字段更多）与 `game/controllers/enter/` 的两个文件（把请求交给 `game/controllers/player/enter_game.go` 里 demo 自己的进入流程） |
+| `game/leaderboard/`、`game/controllers/leaderboard/`、`protocol/def/leaderboard_*.go` | 排行榜。读榜的两条协议（`LeaderboardTop` 带自己的名次、`LeaderboardMe`）与提交入口 `SubmitSeason` 来自 [leaderboard 业务模块](../modules/README.md)（`roost module add leaderboard`）；本目录只带覆盖模块业务文件的两个：`game/leaderboard/leaderboard_board.go`（demo 的榜：副本通关次数、全服、按赛季、一屏十行）与钉住它的 `leaderboard_board_test.go`。通关计数（`PlayerDao.DungeonClears`）与领奖账本是副本玩法，仍在 `game/dungeon`、`game/handler/claim_dungeon.go` |
 | `saga/gift_item/` | 送礼 saga 定义 |
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |

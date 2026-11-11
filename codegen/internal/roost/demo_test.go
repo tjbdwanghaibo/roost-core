@@ -515,6 +515,28 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if glue := read("game/chat/chat_enter.go"); !strings.Contains(glue, `gameenter.OnEntered("chat"`) {
 		t.Errorf("the chat+enter glue was not written into the demo:\n%s", glue)
 	}
+	// 排行榜是 leaderboard 模块装进来的：demo 不带自己的 game/ranking 与 RankTop；模块的逻辑文件原样，
+	// demo 只覆盖业务文件（通关榜）；副本结算在事务之外调模块的提交，压测机器人读模块的协议。
+	for _, gone := range []string{"game/ranking/ranking.go", "protocol/def/rank_top.go", "game/controllers/player/rank_top.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(gone))); !os.IsNotExist(err) {
+			t.Errorf("the demo still ships its own leaderboard file %s (err=%v)", gone, err)
+		}
+	}
+	if board := read("game/leaderboard/leaderboard_board.go"); !strings.Contains(board, `BoardID = "clears"`) || !strings.Contains(board, "func CurrentSeason() int64") {
+		t.Errorf("the leaderboard module's board file is not the demo's clears board:\n%s", board)
+	}
+	if logic := read("game/leaderboard/leaderboard.go"); !strings.Contains(logic, "func SubmitSeason(") || strings.Contains(logic, `"clears"`) {
+		t.Errorf("game/leaderboard/leaderboard.go is not the module's own logic file:\n%s", logic)
+	}
+	if bind := read("game/protocol_handlers/leaderboard/protocol_gen.go"); !strings.Contains(bind, "HandleLeaderboardTop") || !strings.Contains(bind, "HandleLeaderboardMe") {
+		t.Errorf("the leaderboard protocols are not bound to the leaderboard controller:\n%s", bind)
+	}
+	if finish := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(finish, "gameleaderboard.SubmitSeason(") || strings.Contains(finish, "svcrank") {
+		t.Errorf("the dungeon settlement does not submit through the leaderboard module:\n%s", finish)
+	}
+	if robot := read("cmd/loadtest/main.go"); !strings.Contains(robot, "msgid.MsgLeaderboardTop") || strings.Contains(robot, "RankTop") {
+		t.Errorf("the load-test robot does not read the board through the module's LeaderboardTop")
+	}
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "transport.RegisterDialer(") {
 		t.Errorf("playertcp does not register a robot dialer:\n%s", conn)
 	}
