@@ -12,6 +12,12 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **新增**（modules）：**第三批业务模块 quest，以及 checkin 的签到钩子**（进行中的一批：stamina、shop 与 mailbox 的附件种类登记点还没有合入，见[方案 §19](docs/maintenance/FEATURE-2026-11-10-business-modules.md#19-暂停点2026-11-11)）。
+  - `quest`（18 条场景，依赖 wallet）：每日任务，按业务日惰性清零；服务端推进（`Advance` 与不对客户端开放的 `QuestAdvance`）；领奖协议 `QuestClaim`，金币在同一笔事务里到账；任务表是业务文件。
+  - checkin：新增事务内登记点 `OnCheckinClaimed`（`checkin_hooks.go`）——签到成功后在同一笔事务里执行，钩子返回错误时这一次签到整笔回滚。场景数 6 → 8。
+  - 联动 quest + checkin：签到成功把每日任务“签到一次”推进一次（3 条场景）；任务表里没有这条任务时不影响签到。
+  - 验证：全新工程先装 quest 再装 checkin，`roost module verify`：checkin 8、quest 18、quest+checkin 3、wallet 8 加四项工程检查；去掉 Claim 里的钩子调用后 4 条用例变红。**门禁脚本 `scripts/test-modules-generated.sh` 已按新的场景数改写但没有重跑**（上一次通过是在联动机制那个提交上）。
+
 - **新增**（codegen + modules）：**模块之间的联动文件（`with`）与 enter 的进入钩子**（第二批模块暴露的最大缺口：一个模块没法在另一个模块的入口里加一步；维护者 2026-11-11 同意先补这一项）。
   - 安装器：模块可以带 `with/<另一个模块>/` 下的联动文件，清单里用 `with.<另一个模块>` 声明（一句话说明、可选的场景数）。两个模块都装着时才写进工程，不论先装哪个，在第二个装上的那一次写；归属记在 `roost.yaml` 的 `modules.<name>.with`。`plan` / `add` 输出 `glue <模块> with <另一个模块>`（`--json` 的 `glue` 数组），`verify` 把联动的场景单独列为 `<模块>+<另一个模块>`。落点被业务文件占着时拒绝、工程不变；两个都早已装好的不补。模块库加载时另外检查：没有两处写同一个落点。
   - enter 模块：新增包 `game/enter`——进入钩子的登记点（`OnEntered` 在 `init` 里登记，`RunEntered` 由进入端点在首次初始化成功之后调用，按名字顺序执行，失败只记日志、不让登录失败）。首次初始化的结果由 `bool` 改为 `gameenter.InitResult{First, FirstAtUnixMilli}`：每次进入都带上首次进入的时间，可以当注册时间用。场景数 3 → 6。

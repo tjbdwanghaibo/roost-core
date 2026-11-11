@@ -9,13 +9,14 @@
 | 模块 | 做什么 | 依赖 | 状态字段 | 场景数 |
 | --- | --- | --- | --- | --- |
 | [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 8 |
-| [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | wallet | `PlayerDao.Checkin`（同步） | 6 |
+| [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后执行别的功能登记的钩子（`OnCheckinClaimed`，同一笔事务） | wallet | `PlayerDao.Checkin`（同步） | 8 |
 | [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）、向在线玩家的推送（`ChatMessage`）、按序号翻历史（`ChatHistory`）、给服务端用的系统公告（`AnnounceWorld`）；经托管的 chat 服务存储，替换它默认拒绝一切的 collaborators。game-demo 用的就是它 | 无（要求业务服务 `uses: [chat]` 与玩家 TCP 接入，后者安装时代办） | 无 | 8 |
 | [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放写在 `game/entities/player/enter_first.go`；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`）；安装时打开玩家 TCP 接入与自身视图 | 无 | `PlayerDao.Enter`（只落库） | 6 |
 | [profile](profile/module.yaml) | 玩家档案：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）；升级钩子写在 `game/entities/player/profile_levelup.go` | 无 | `PlayerDao.Profile`（同步） | 16 |
 | [bag](bag/module.yaml) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种至多 999999）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；哪些道具号合法写在 `game/entities/player/bag_items.go`（缺省只要求为正） | 无 | `PlayerDao.Bag`（同步） | 12 |
 | [leaderboard](leaderboard/module.yaml) | 排行榜：一张全服总分榜，前 N 名（`LeaderboardTop`，缺省 10、至多 50）与自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit`（提交当前总分的快照，只升不降），不对客户端开放 | 无（要求业务服务 `uses: [rank]`） | 无 | 15 |
 | [mailbox](mailbox/module.yaml) | 邮件：分页列出自己的邮件（`MailboxList`）、领取金币附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；这一版附件只认金币 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 21 |
+| [quest](quest/module.yaml) | 每日任务：按业务日惰性清零的进度；服务端推进（组件入口 `Advance`、不对客户端开放的 handler `QuestAdvance`）；领奖协议 `QuestClaim`，金币经货币模块在同一笔事务里到账；任务表写在 `game/entities/player/quest_catalog.go` | wallet | `PlayerDao.Quest`（同步） | 18 |
 
 两个模块都装着时还会多出**联动文件**（不论先装哪个，在第二个装上的那一次写）：
 
@@ -23,6 +24,7 @@
 | --- | --- | --- |
 | chat + enter | 玩家进入游戏时加进世界频道的在线名单（`game/chat/chat_enter.go`） | 2 |
 | mailbox + enter | 玩家进入游戏时把属于他的全服邮件合并进邮箱（`game/controllers/mailbox/mailbox_enter.go`，画像规则在这个文件里改） | 3 |
+| quest + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/quest_checkin.go`） | 3 |
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter` 与 `chat`；其余模块是照 demo 与夹具的做法拆出来的独立版本，demo 自己的背包、经验、排行榜与邮件还没有换成它们。
 
@@ -107,7 +109,7 @@ verify:
 
 `replaces` 用于生成器建一次、默认拒绝一切、留给项目实现的文件——目前认识托管服务的 `internal/service/<name>/collaborators.go`。安装时只有它仍是没改过的生成桩才替换；业务改过就拒绝安装。chat 模块用它接管 chat 服务的协作者。替换后的文件里不要再出现 `is not configured` 这句话：`project doctor` 靠它判断“还是拒绝桩”。
 
-`with` 是模块之间的联动：`modules/<name>/with/<另一个模块>/<工程内路径>.tmpl`，两个模块都装着时才写进工程。用它把本模块接到对方留的**登记点**上——对方在一个不依赖任何 controller 与实体的小包里提供登记函数（例如 enter 的 `game/enter.OnEntered`），联动文件在本模块自己的包里用 `init` 登记。规则：
+`with` 是模块之间的联动：`modules/<name>/with/<另一个模块>/<工程内路径>.tmpl`，两个模块都装着时才写进工程。用它把本模块接到对方留的**登记点**上——对方提供登记函数，联动文件在本模块自己的包里用 `init` 登记。登记点有两种：事务之外的，放在一个不依赖任何 controller 与实体的小包里（enter 的 `game/enter.OnEntered`：失败只记日志）；事务之内的，放在实体包里、拿到实体本身（checkin 的 `OnCheckinClaimed`：与对方的写入同一笔事务，返回错误会让对方那一次操作整笔回滚）。规则：
 
 - 联动文件归写它的模块所有，放在这个模块自己的包里，只 import 对方的登记点包；对方不认识它。
 - 登记点只在 `init` 里登记、之后只读；这是“不用进程级全局变量”的唯一例外，与组件工厂的登记同理。登记点的包不 import controller 与实体包，谁都能 import 它而不成环。

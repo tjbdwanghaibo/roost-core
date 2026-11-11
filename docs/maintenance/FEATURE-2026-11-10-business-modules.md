@@ -607,13 +607,13 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 批次 | 模块 | 做什么 | 依赖 / 需要安装器先有的能力 | 状态 |
 | --- | --- | --- | --- | --- |
 | 1 | wallet | 货币：余额、`Add`、带去重窗口的 `Apply`、消费协议 | — | 已有（8 条） |
-| 1 | checkin | 每日签到，奖励经 wallet | wallet | 已有（6 条） |
+| 1 | checkin | 每日签到，奖励经 wallet | wallet | 已有（8 条，含签到钩子 `OnCheckinClaimed`） |
 | 1 | chat | 世界与私聊的发送、翻历史 | 托管 chat 服务；`replaces`（已做） | 已有（8 条）；game-demo 在用 |
 | 2 | enter | 进入游戏端点（建档）与首次初始化：做过没有记在档里，每次进入都问；新玩家的初始发放写在业务文件 `enter_first.go` 里（没有做模块间的自动登记）。安装时打开玩家 TCP 接入与自身视图 | 清单的 `access`（已做） | 已有（6 条，含进入钩子的登记点）；game-demo 用它的协议、域、首次初始化与进入钩子 |
 | 2 | profile | 名字、等级、经验与升级 | — | 已有（16 条） |
 | 2 | bag | 道具背包：增减、上限、按道具号堆叠 | — | 已有（12 条） |
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 未做 |
-| 2 | quest | 每日任务：进度、领奖、按业务日清零 | wallet | 未做 |
+| 2 | quest | 每日任务：进度、领奖、按业务日清零 | wallet | 已有（18 条）；签到推进经 quest+checkin 联动 |
 | 2 | leaderboard | 排行：提交分数、查前 N 名与自己的名次 | 托管 rank 服务 | 已有（15 条） |
 | 2 | mailbox | 邮件：列表、领附件进货币 / 背包 | 托管 mail 服务；wallet（这一版附件只有金币，没有接 bag） | 已有（21 条） |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 未做 |
@@ -625,3 +625,31 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 安装器还缺、按需要补的能力：模块自带实体（现在只能挂在已有实体上）、定时器类型分配、Init / Shutdown 接线点（推送、后台循环）、配置表与模块配置、更多的登记点（通用机制已有：清单的 `with` 联动文件，见 [modules/README](../../modules/README.md)；已有的登记点是 enter 的进入钩子，chat 与 mailbox 接在上面。还缺：mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
 
 每个新模块的验收不变：全新工程上单独安装、与已有模块一起安装、重复安装无变化、`roost module verify` 的场景数；写进 `scripts/test-modules-generated.sh`。每批做完用一个只凭 skill 的 agent 按一段不重合的需求实测一遍。
+
+## 19. 暂停点（2026-11-11）
+
+维护者 2026-11-11：“如果已经使用额度了可以先暂停，等限量解除再继续实施”。当时 5 小时额度已用满，在这里停下。分支 `feat/business-modules` 已推送，下面是停下时的状态，接手时从这里继续。
+
+**已合入并推送**
+
+- 联动文件机制（清单 `with`）与 enter 的进入钩子、chat + enter、mailbox + enter 两组联动、game-demo 进入流程改走钩子（门禁脚本在这个提交上通过）。
+- quest 模块、checkin 的签到钩子 `OnCheckinClaimed`、quest + checkin 联动（在全新工程上 `module verify` 通过；门禁脚本已按新场景数改写，**没有重跑**）。
+
+**做到一半、没有合入**（都在各自的临时 worktree 里，未提交；agent 被中途停掉，文件留在磁盘上）
+
+| 内容 | worktree（分支） | 停下时的状态 |
+| --- | --- | --- |
+| stamina 模块（体力：惰性恢复、消耗、金币补满） | `worktrees/bm-stamina`（`tmp/bm-stamina`） | 开发工程里已写完并跑通，正在搬成模板；`modules/stamina/` 不完整，验收与变异自检没有做 |
+| shop 模块（金币买道具、每日 / 终身限购、同键重发不重复扣费） | `worktrees/bm-shop`（`tmp/bm-shop`） | `modules/shop/` 有清单与部分模板；验收没有做 |
+| mailbox 附件种类登记点 + mailbox + bag 联动（道具附件） | `worktrees/bm-mailkind`（`tmp/bm-mailkind`） | `modules/mailbox/files/` 下 12 个文件改到一半（附件改成“种类、号、数量”，协议与 handler 跟着改）；`with/bag/` 还没有；不能直接合 |
+
+三份任务的说明在会话 scratch 的 `module-brief.md` 加各自的任务提示里；接手时可以让原 agent 续做，或按上表从 worktree 里的半成品重做。它们各自要过的验收见第 18 节末尾，mailbox 那一项另外要求“只装 mailbox 时道具附件仍被拒绝”。
+
+**之后还要做的**
+
+1. 三项合入后：把场景数写进 `scripts/test-modules-generated.sh` 并重跑；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'`；根包门禁与文档锚点。
+2. 文档补齐：[能力清单](../framework/CAPABILITIES.md)（quest / stamina / shop 的行、enter 与 mailbox 的行、“需求条目 → 能力”）、skill 的[按需求组合](../agent-skills/roost-genre/references/compose.md)（模块清单、联动文件、怎样在自己的功能里登记进入钩子）、KNOWN-LIMITS（新模块的边界）。目前只有 modules/README、命令参考与 CHANGELOG 跟上了。
+3. 仍然没有登记点的地方：wallet 的“消费成功”（每日任务“消费三次”现在没有东西推进它；要区分 `Apply` 命中去重回执与首次生效）、profile 的升级、enter 的首次发放（事务内）、往 leaderboard 提交分数的时机。
+4. 第 18 节清单里剩下的 room / matchroom / turn（要安装器先支持模块自带实体与定时器类型）与配方。
+5. game-demo 换用 profile / bag / leaderboard / mailbox：排在 mailbox 的道具附件之后。
+6. 用一个只凭 skill 的 agent 按一段不重合的需求再实测一遍（第二、三批模块与联动机制还没有被这样测过）。

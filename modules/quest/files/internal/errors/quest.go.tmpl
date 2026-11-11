@@ -1,0 +1,11 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 每日任务模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+var (
+	ErrQuestUnknown      = errcode.Define({{ID:errcode:quest_unknown}}, "quest_unknown", "unknown quest")
+	ErrQuestIncomplete   = errcode.Define({{ID:errcode:quest_incomplete}}, "quest_incomplete", "quest is not finished today")
+	ErrQuestClaimed      = errcode.Define({{ID:errcode:quest_claimed}}, "quest_claimed", "quest reward already claimed today")
+	ErrQuestCountInvalid = errcode.Define({{ID:errcode:quest_count_invalid}}, "quest_count_invalid", "quest progress count must be positive")
+)

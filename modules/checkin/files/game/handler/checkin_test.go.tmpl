@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,5 +215,84 @@ func TestCheckinKeepsPayingPastTheWalletReceiptWindow(t *testing.T) {
 	}
 	if _, total, _ := f.snapshot(t); total != days || receipts != 0 {
 		t.Fatalf("total = %d (want %d), wallet receipts = %d (want 0: check-in keeps its own fact)", total, days, receipts)
+	}
+}
+
+// checkinProbe 是测试登记的签到钩子。登记表是进程级的、只能登记一次，所以用开关控制它在哪条用例里生效。
+var checkinProbe struct {
+	once    sync.Once
+	enabled atomic.Bool
+	fail    atomic.Bool
+	calls   atomic.Int64
+	streak  atomic.Int32
+	reward  atomic.Int64
+	at      atomic.Int64
+}
+
+func useCheckinProbe(t *testing.T) {
+	t.Helper()
+	checkinProbe.once.Do(func() {
+		playerentity.OnCheckinClaimed("zz-checkin-test-probe", func(owner *playerentity.Player, result playerentity.CheckinResult, nowUnixMilli int64) error {
+			if !checkinProbe.enabled.Load() {
+				return nil
+			}
+			checkinProbe.calls.Add(1)
+			checkinProbe.streak.Store(result.Streak)
+			checkinProbe.reward.Store(result.Reward)
+			checkinProbe.at.Store(nowUnixMilli)
+			if owner == nil || owner.Dao().GetCheckin().GetStreak() != result.Streak {
+				return errors.New("the hook ran before the check-in was recorded")
+			}
+			if checkinProbe.fail.Load() {
+				return errors.New("injected hook failure")
+			}
+			return nil
+		})
+	})
+	checkinProbe.calls.Store(0)
+	checkinProbe.fail.Store(false)
+	checkinProbe.enabled.Store(true)
+	t.Cleanup(func() { checkinProbe.enabled.Store(false) })
+}
+
+// 签到成功执行一次登记的钩子，带着这一次的结果与业务时间；被拒绝的签到不执行。
+func TestCheckinClaimedHookRunsOncePerSuccessfulClaim(t *testing.T) {
+	f := newCheckinFixture(t)
+	useCheckinProbe(t)
+	f.mustClaim(t)
+	if calls := checkinProbe.calls.Load(); calls != 1 {
+		t.Fatalf("the hook ran %d times for one claim", calls)
+	}
+	if checkinProbe.streak.Load() != 1 || checkinProbe.reward.Load() != 10 || checkinProbe.at.Load() != f.now.Load() {
+		t.Fatalf("the hook saw streak=%d reward=%d at=%d", checkinProbe.streak.Load(), checkinProbe.reward.Load(), checkinProbe.at.Load())
+	}
+	if _, err := f.claim(); !errors.Is(err, apperrors.ErrCheckinDone) {
+		t.Fatalf("err = %v, want checkin_done", err)
+	}
+	if calls := checkinProbe.calls.Load(); calls != 1 {
+		t.Fatalf("a refused claim ran the hook: %d calls", calls)
+	}
+	f.now.Add(int64(checkinDay / time.Millisecond))
+	f.mustClaim(t)
+	if checkinProbe.calls.Load() != 2 || checkinProbe.streak.Load() != 2 || checkinProbe.reward.Load() != 20 {
+		t.Fatalf("day 2: calls=%d streak=%d reward=%d", checkinProbe.calls.Load(), checkinProbe.streak.Load(), checkinProbe.reward.Load())
+	}
+}
+
+// 钩子返回错误：这一次签到整笔回滚（奖励与进度都没有），之后钩子好了还能签。
+func TestCheckinClaimedHookFailureRollsBackTheClaim(t *testing.T) {
+	f := newCheckinFixture(t)
+	useCheckinProbe(t)
+	checkinProbe.fail.Store(true)
+	if _, err := f.claim(); err == nil {
+		t.Fatal("a failing hook let the claim succeed")
+	}
+	if streak, total, coins := f.snapshot(t); streak != 0 || total != 0 || coins != 0 {
+		t.Fatalf("the failed claim left streak=%d total=%d coins=%d", streak, total, coins)
+	}
+	checkinProbe.fail.Store(false)
+	response := f.mustClaim(t)
+	if response.Streak != 1 || response.Reward != 10 || response.Balance != 10 {
+		t.Fatalf("claim after the hook recovered = %+v", response)
 	}
 }

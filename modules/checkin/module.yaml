@@ -18,4 +18,4 @@ errcodes: [checkin_done]
 verify:
   packages: [./game/handler]
   run: ^TestCheckin
-  pass: 6
+  pass: 8

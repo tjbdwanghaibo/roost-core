@@ -61,6 +61,9 @@ type CheckinResult struct {
 // “今天”是业务日（clock.BusinessDay：业务时区与每日重置时刻由部署配置决定，缺省 UTC 零点）。
 // 同一个业务日第二次领返回 checkin_done，不写任何字段。“领过没有”记在签到自己的进度里（LastDay），
 // 所以发奖用货币组件的 Add、不占货币的去重窗口；进度与余额在同一笔事务里，任何一步被拒绝都一起回滚。
+//
+// 签到成功之后执行别的功能登记的钩子（checkin_hooks.go 的 OnCheckinClaimed），同一笔事务：
+// 钩子返回错误时这一次签到整笔回滚。
 func (component *CheckinComponent) Claim(nowUnixMilli int64) (CheckinResult, error) {
 	now := time.UnixMilli(nowUnixMilli)
 	today := int64(clock.BusinessDay(now))
@@ -86,5 +89,9 @@ func (component *CheckinComponent) Claim(nowUnixMilli int64) (CheckinResult, err
 	state.SetLastDay(today)
 	state.SetStreak(streak)
 	state.SetTotal(state.GetTotal() + 1)
-	return CheckinResult{Streak: streak, Reward: reward, Balance: balance}, nil
+	result := CheckinResult{Streak: streak, Reward: reward, Balance: balance}
+	if err := runCheckinClaimed(component.owner, result, nowUnixMilli); err != nil {
+		return CheckinResult{}, err
+	}
+	return result, nil
 }

@@ -1,0 +1,14 @@
+package quest
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleQuestClaim 是领取任务奖励协议的入口；目标取认证会话的玩家，不取请求字段。
+// 任务号是否存在、做完没有、领过没有都在 Nest handler 的锁内判断，这里不预先检查。
+//
+//roost:endpoint nest=QuestClaim
+func (controller *Controller) HandleQuestClaim(ctx *playeraccess.Context, req *pb.QuestClaimRequest) (*pb.QuestClaimResponse, error) {
+	return controller.dispatchQuestClaim(ctx, req)
+}
