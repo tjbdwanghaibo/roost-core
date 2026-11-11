@@ -437,8 +437,8 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 3. **组件与文件**：组件接到实体上，模板渲染后写进工程。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `internal/service/<name>/collaborators.go`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
    - **联动文件**：模块可以带与另一个模块的联动（`modules/<name>/with/<另一个模块>/`）。这次装的模块与已装的或同一次装的模块凑成一对、而这一对有联动时，全部模块写完之后把联动文件写进工程，归属记在拥有它的模块的 `modules.<name>.with.<另一个模块>` 下；`plan` / `add` 输出 `glue <模块> with <另一个模块>`，`--json` 里是 `glue` 数组。落点已有内容不同的文件时拒绝（`already exists and is not this glue file`）。两个都早已装好的不补。`verify` 把联动自带的场景单独列一项 `<模块>+<另一个模块>`。
 4. **号**：协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
-5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段与文件。
-6. **生成**：运行全部生成器（暂存区里生成，成功才提交）。
+5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段、文件、目标 service、requires 与可选 runtime。
+6. **生成**：运行全部生成器（暂存区里生成，成功才提交）。有 runtime 的模块生成 `internal/service/<service>/modules_gen.go`，bootstrap 用 `NewWithModules()`；不覆盖业务 Service.Init/Shutdown。模块按依赖先启动、业务先停止再反向停模块，启动失败同样清理、停机失败保留依赖。声明和边界见 [服务级启动与停机](../../modules/README.md#服务级启动与停机)。
 
 第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复到第 2 步之前。重复执行 `add` 没有变化。没有卸载命令。
 

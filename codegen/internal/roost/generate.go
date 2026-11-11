@@ -83,6 +83,7 @@ func forceArg(args []string, force bool) []string {
 
 func generatorsFor(m Manifest, force bool) []generator {
 	return []generator{
+		{Name: "module-service", Always: true, Run: func(root string, w io.Writer) error { return generateModuleServices(root, m) }},
 		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(root string, w io.Writer) error {
 			return dao.Run(forceArg([]string{"-def", under(root, dao.DefaultDefDir), "-out", under(root, dao.DefaultOutDir)}, force), w)
 		}},

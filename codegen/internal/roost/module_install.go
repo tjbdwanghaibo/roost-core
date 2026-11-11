@@ -59,8 +59,9 @@ type ModulePlanItem struct {
 	Component string   `json:"component,omitempty"`
 	Files     []string `json:"files"`
 	// Replaces 是 Files 里会替换掉的生成桩（仍是没改过的生成内容）。
-	Replaces []string     `json:"replaces,omitempty"`
-	Verify   ModuleVerify `json:"verify"`
+	Replaces []string       `json:"replaces,omitempty"`
+	Verify   ModuleVerify   `json:"verify"`
+	Runtime  *ModuleRuntime `json:"runtime,omitempty"`
 
 	spec ModuleSpec
 }
@@ -128,10 +129,15 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	pending := map[string]bool{}
 	for _, spec := range order {
 		item := ModulePlanItem{
-			Name: spec.Name, Summary: spec.Summary, Requires: append([]string{}, spec.Requires...),
+			Name: spec.Name, Summary: spec.Summary, Requires: append([]string{}, spec.Requires...), Runtime: spec.Runtime,
 			IDs: map[string]map[string]int64{}, State: []string{}, Files: append([]string{}, spec.Files...), Verify: spec.Verify, spec: spec,
 		}
 		if installed, ok := manifest.Modules[spec.Name]; ok {
+			if installed.Service != service {
+				return ModulePlan{}, fmt.Errorf("module %s belongs to service %s, not %s", spec.Name, installed.Service, service)
+			}
+			item.Runtime = installed.Runtime
+			item.Requires = append([]string{}, installed.Requires...)
 			item.Status = moduleStatusInstalled
 			if installed.Digest != spec.Digest {
 				item.Status = moduleStatusInstalledOther
@@ -498,7 +504,7 @@ func moduleTouchedFiles(root string, spec ModuleSpec) ([]string, error) {
 // writeModule 把一个模块写进工程：追加状态字段、接组件、写模板文件。返回它的归属记录。
 func writeModule(root string, manifest Manifest, service string, item ModulePlanItem) (InstalledModule, error) {
 	spec := item.spec
-	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: append([]string(nil), spec.Files...)}
+	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: append([]string(nil), spec.Files...), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...)}
 	if len(spec.State) > 0 {
 		source, err := locateDaoStruct(root, spec.Entity+"Dao")
 		if err != nil {

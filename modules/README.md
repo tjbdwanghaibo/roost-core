@@ -20,6 +20,8 @@
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go` | wallet | `PlayerDao.Stamina`（同步） | 25 |
 | [shop](shop/module.yaml) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录写在 `game/entities/player/shop_goods.go` | wallet、bag | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 17 |
 
+| [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 8 |
+
 两个模块都装着时还会多出**联动文件**（不论先装哪个，在第二个装上的那一次写）：
 
 | 联动 | 做什么 | 场景数 |
@@ -29,7 +31,7 @@
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
 | task + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/task_checkin.go`） | 3 |
 
-以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag`、`profile` 与 `mailbox`（连带 `wallet`）。
+以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox` 与 `skillbook`（连带 `wallet`）。
 
 ## 使用
 
@@ -54,12 +56,12 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 2. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
 3. **组件**：把模块的组件接到实体上。
 4. **文件**：把 `files/` 下的模板渲染后写进工程。落点已被业务文件占用时拒绝，不覆盖。
-5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段和分配到的号。
-6. **生成**：运行全部生成器。
+5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires` 与可选 `runtime`。
+6. **生成**：运行全部生成器。有 `runtime` 的模块同时生成服务适配层与 bootstrap 接线；两者和其他生成物一起暂存、提交，失败不会留下半套接线。
 
 两个模块之间的**联动文件**在第 4 步之后写：这次装的模块与工程里已有的（或同一次装的）模块凑成一对、而这一对有联动时，把联动文件写进工程，归属记在拥有它的模块的 `with` 下。`plan` 与 `add` 的输出里是 `glue <模块> with <另一个模块>`。两个都早已装好的不补。
 
-第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复原样。已安装的模块不再处理，重复执行没有变化。没有卸载命令：分配过的号与存储键不回收，要去掉一个模块时按 `roost.yaml` 里的归属清单手工删。
+第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复原样。已安装的模块不再处理，重复执行没有变化。没有卸载命令：分配过的号与存储键不回收，要去掉一个模块时按 `roost.yaml` 里的归属清单手工删；先检查是否仍被其他模块依赖。服务不再包含任何 runtime 模块时，还需删除该服务的 `modules_gen.go` 并执行 `project sync`，让 bootstrap 恢复业务 `New()`；仍有 runtime 模块时由生成器重写适配层。
 
 ## 写一个模块
 
@@ -70,6 +72,24 @@ modules/<name>/
   module.yaml          清单
   files/<工程内路径>.tmpl   模板，按安装后的真实路径存放
 ```
+
+### 服务级启动与停机
+
+需要服务级资源的模块在 `module.yaml` 声明：
+
+```yaml
+runtime:
+  package: game/skillbook
+  start: Start
+```
+
+工程内入口为 `func Start(*app.Registry) (func(context.Context) error, error)`。返回的停止函数可为 nil；启动失败但已有部分资源时，也要返回对应停止函数。启动入口在全部框架 Mod 启动后、业务 `Service.Init` 前运行，可以发布 Registry 能力。按名称稳定遍历模块，并先启动 `requires` 列出的依赖；业务先停，再按反向顺序停模块。模块不能在启动时依赖业务 `Service.Init` 才发布的能力。
+
+安装器根据 `roost.yaml` 生成 `internal/service/<service>/modules_gen.go`，bootstrap 用 `NewWithModules()` 构造适配层。它嵌入实际 `*Service`，保留配置声明、Nest 接线等可选接口，**不改业务 `service.go`**。手动绕过 bootstrap 使用 `New()` 不会启动模块；嵌入工程应使用 `NewWithModules()`。`project sync` 与 `generate` 重写适配层，模块业务文件仍归工程。
+
+App 在 Init 失败后调用 Shutdown，适配层只清理已经启动（包括部分启动失败）且提供停止函数的模块；业务 Init 被调用后即纳入清理。停机函数必须等待真实退出并遵守 ctx，返回错误时停止继续关闭依赖，保留回调；再次 Shutdown 从未完成处继续，不重复关闭已成功退出的模块。模块停止共享业务服务的停机时间预算，不自动增加超时时间。失败不会自动重启；当前一个服务实例只允许一轮 Init → Shutdown，调用方不能并发调用生命周期。
+
+模块只安装到一个业务服务。依赖必须属于同一服务；跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
 ### 清单
 

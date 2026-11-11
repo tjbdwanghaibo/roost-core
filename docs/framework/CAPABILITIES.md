@@ -224,6 +224,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
+| 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/skills/*.json` 与 `game/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功的登记点 `OnCheckinClaimed`（别的功能在同一笔事务里顺带做事） | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；钩子返回错误会让这一次签到整笔回滚；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 | 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；不经过 Nest，不改任何实体 | 同上 |
@@ -282,7 +283,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 装备栏 | demo 唯一的嵌套字段 | `PlayerDao` 的嵌套结构体 | 参考实现（demo） | [装备栏](../../demo/WALKTHROUGH.md#装备栏demo-唯一的嵌套字段以及为什么它在这里) |
 | 属性 | 分层、合成与两种存储意图 | `game/gameplay/attribute` | 参考实现（demo） | [属性](../../demo/WALKTHROUGH.md#属性层合成以及两种存储意图) |
 | 排行榜 | rank 服务，与领奖账本同一个准入 | `game/ranking` | 参考实现（demo） | [排行榜](../../demo/WALKTHROUGH.md#排行榜rank-服务与领奖账本同一个准入) |
-| 技能目录 | 启动时编译，客户端可查 | `game/skills` | 参考实现（demo） | [技能目录](../../demo/WALKTHROUGH.md#技能目录启动时编译客户端可查) |
+| 技能目录 | 启动时编译，客户端可查 | `roost module add skillbook`（demo 已装） | 现成模块；demo 只覆盖技能数据 | [技能目录](../../demo/WALKTHROUGH.md#技能目录启动时编译客户端可查) |
 | lockstep 战斗 | 匹配之后的帧同步对战 | `game/battle` | 参考实现（demo） | [实时战斗](../../demo/WALKTHROUGH.md#实时战斗lockstep-帧同步匹配之后的那一段) |
 | GM 运维面 | 加道具、发补偿邮件、查 saga 等 admin 命令 | `internal/service/game/gm.go` | 参考实现（demo）。开发 token 生产被拒 | [GM](../../demo/WALKTHROUGH.md#gm-运维面admin-命令不是另一个-http-服务) |
 | World | 进程内单例实体的职责 | `EnsureWorld` | 参考实现（demo） | [World](../../demo/WALKTHROUGH.md#world-的职责) |
@@ -298,7 +299,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 需求或类型 | 结论 | 是哪条限制 | 出处 |
 | --- | --- | --- | --- |
-| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有十一个模块和四组模块间联动，game-demo 用上了其中的 enter、chat、leaderboard、bag、profile 与 mailbox（连带 wallet）；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
+| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有十二个模块和四组模块间联动，支持服务级启动与停机接线；game-demo 用上了其中的 enter、chat、leaderboard、bag、profile、mailbox 与 skillbook（连带 wallet）；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
 | 业务模块的卸载 | 不做 | 分配过的号与存储键不回收；要去掉一个模块时按 `roost.yaml` 的 `modules.<name>` 归属清单手工删 | [业务模块方案“决定一览”](../maintenance/FEATURE-2026-11-10-business-modules.md#决定一览) |
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
 | 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |

@@ -1,0 +1,6 @@
+package skillbook
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+
+// CompileEnvironment 是工程自己的技能编译环境；自定义 Host 能力与函数在这里登记。
+func CompileEnvironment() skill.CompileEnvironment { return skill.DefaultCompileEnvironment() }

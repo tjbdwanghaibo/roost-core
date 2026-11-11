@@ -1,0 +1,19 @@
+package skillbook
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+type Controller struct{ registry *app.Registry }
+
+// 控制器可能早于 Service.Init 装配；目录在请求时读取，启动失败不会进入服务阶段。
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("skillbook: registry is required")
+	}
+	return &Controller{registry: registry}, nil
+}
+
+func (c *Controller) Registry() *app.Registry { return c.registry }

@@ -25,10 +25,11 @@ type ModuleSpec struct {
 	Name    string `yaml:"name" json:"name"`
 	Summary string `yaml:"summary" json:"summary"`
 	// Requires 是必须先装的模块；Conflicts 是不能同装的模块。
-	Requires  []string     `yaml:"requires" json:"requires,omitempty"`
-	Conflicts []string     `yaml:"conflicts" json:"conflicts,omitempty"`
-	Needs     ModuleNeeds  `yaml:"needs" json:"needs"`
-	Access    ModuleAccess `yaml:"access" json:"access"`
+	Requires  []string       `yaml:"requires" json:"requires,omitempty"`
+	Conflicts []string       `yaml:"conflicts" json:"conflicts,omitempty"`
+	Needs     ModuleNeeds    `yaml:"needs" json:"needs"`
+	Access    ModuleAccess   `yaml:"access" json:"access"`
+	Runtime   *ModuleRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	// Entity 是模块状态与组件挂靠的实体（PascalCase，如 Player）。没有状态也没有组件的模块可以不写。
 	Entity string `yaml:"entity" json:"entity,omitempty"`
 	// State 是追加到 Entity 主 DAO 末尾的顶层字段，类型是模块自带的嵌套结构体。
@@ -52,6 +53,13 @@ type ModuleSpec struct {
 	Files []string `yaml:"-" json:"files"`
 	// Digest 是清单与全部模板内容的摘要，记进 roost.yaml：之后能看出已装的是不是这一版。
 	Digest string `yaml:"-" json:"digest"`
+}
+
+// ModuleRuntime 声明模块在业务服务中的启动入口。函数返回 stop（可为 nil）与 error；
+// 返回 error 时仍可同时返回 stop，App 的失败停机路径会调用它。
+type ModuleRuntime struct {
+	Package string `yaml:"package" json:"package"` // 工程内 import 路径，如 game/skillbook
+	Start   string `yaml:"start" json:"start"`     // func(*app.Registry) (func(context.Context) error, error)
 }
 
 // ModuleNeeds 是模块对工程的前提。安装器只检查、不替工程打开：缺什么给出要执行的命令。
@@ -103,7 +111,10 @@ type ModuleVerify struct {
 // InstalledModule 是 roost.yaml 里 modules.<name> 的记录：这个模块在本工程里拥有什么。
 // 它是归属清单的数据来源，也是重复安装判等的依据；分配过的号与存储键不回收。
 type InstalledModule struct {
-	Digest string `yaml:"digest"`
+	Digest   string         `yaml:"digest"`
+	Service  string         `yaml:"service,omitempty"`
+	Runtime  *ModuleRuntime `yaml:"runtime,omitempty"`
+	Requires []string       `yaml:"requires,omitempty"`
 	// IDs 是 kind -> 名字 -> 号（protocol / errcode / component）。
 	IDs map[string]map[string]int64 `yaml:"ids,omitempty"`
 	// State 是它追加的主 DAO 字段，写成 <Dao>.<Field>。
@@ -288,6 +299,9 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	if spec.Component != "" && !modulePascalPattern.MatchString(spec.Component) {
 		return fmt.Errorf("component %q must be PascalCase", spec.Component)
 	}
+	if err := validateModuleRuntime(spec.Runtime); err != nil {
+		return err
+	}
 	prefix := toPascal(spec.Name)
 	seenFields := map[string]bool{}
 	for _, field := range spec.State {
@@ -470,4 +484,19 @@ func sortedModuleNames(catalog map[string]ModuleSpec) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+var moduleRuntimePackagePattern = regexp.MustCompile(`^game/[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$`)
+
+func validateModuleRuntime(runtime *ModuleRuntime) error {
+	if runtime == nil {
+		return nil
+	}
+	if !moduleRuntimePackagePattern.MatchString(runtime.Package) {
+		return fmt.Errorf("runtime.package %q must be a project-local game package", runtime.Package)
+	}
+	if !modulePascalPattern.MatchString(runtime.Start) {
+		return fmt.Errorf("runtime.start %q must name an exported Go function", runtime.Start)
+	}
+	return nil
 }

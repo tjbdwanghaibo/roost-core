@@ -1,6 +1,6 @@
 # 功能设计：业务模块与配方（2026-11-10）
 
-**状态：第 2 期（最小闭环）已实施，第 3～6 期未开始（维护者 2026-11-10 确认下表四项决定，同日“你直接做之前的文档的逻辑”）。** 已有的：`roost module list / plan / add / verify` 与十一个模块、模块间联动（清单与状态见第 18 节，实施记录见第 19 节），game-demo 的聊天与进入游戏已改用模块，现行说明在 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与[能力清单](../framework/CAPABILITIES.md)，限制在 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module)。还没有的：配方、现有 13 类玩法与 game-demo 的迁移——它们仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`。实施结果与方案的出入见[第 17 节](#17-第-2-期实施记录2026-11-10)。
+**状态：第 2 期闭环已实施，业务模块持续拆分中；服务级接线 A1 与 skillbook 已落地，配方和玩法迁移未完成。** 已有的：`roost module list / plan / add / verify` 与十二个模块、服务级生命周期接线、模块间联动（清单与状态见第 18 节，实施记录见第 19 节），game-demo 的进入、聊天、排行榜、背包、档案、邮件、技能目录已改用模块，现行说明在 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与[能力清单](../framework/CAPABILITIES.md)，限制在 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module)。还没有的：配方、现有 13 类玩法与 game-demo 的迁移——它们仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`。实施结果与方案的出入见[第 17 节](#17-第-2-期实施记录2026-11-10)。
 
 **文档分两部分**：第 0～9 节是设计（做什么、为什么）；第 10 节起是实施方案（改哪些文件、怎么改、怎么验收），供实施者按期执行。实施者先读[第 10 节](#10-实施者须知)。
 
@@ -305,25 +305,9 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 
 ### 11.6 运行期接线点
 
-- **建议**：不新增框架包。生成器为每个装了模块的业务服务写 `internal/service/<svc>/modules_gen.go`（生成器所有，`project sync` 重写），内容是：
+已实现（A1）：模块清单可声明 `runtime: {package: game/skillbook, start: Start}`，入口是 `func(*app.Registry) (func(context.Context) error, error)`。安装记录保存目标 service、requires 与 runtime；生成的 `modules_gen.go` 嵌入实际 Service，bootstrap 调用 `NewWithModules()`，不修改业务 Service 文件。启动顺序为框架 Mod → 模块依赖顺序 → 业务 Init；停机为业务 → 模块反向顺序 → 框架 Mod。部分启动失败也返回清理函数；停机错误保留依赖与回调，不把取消当成退出。
 
-  ```go
-  // 由 roost.yaml 的 modules 生成，不要修改。
-  type businessModule interface {
-      Name() string
-      Init(*app.Registry) error
-      Shutdown(context.Context) error
-  }
-  func installedModules() []businessModule { return []businessModule{wallet.New(), chat.New()} }
-  func initModules(r *app.Registry) error            // 按依赖顺序 Init，失败时逆序 Shutdown 已成功的
-  func shutdownModules(ctx context.Context) error     // 逆序
-  ```
-
-  模块在自己的包里实现 `New()`；要发布能力就在 `Init` 里 `registry.Register(...)`，要用别的模块的能力就 `app.Lookup`。可选能力（例如 GM 命令）用可选接口，由生成的代码做类型断言后汇总。
-- 业务的 `service.go` 归业务、生成器不改写。做法与 saga 步骤相同：
-  - `-template game` 新建工程时，`renderGameTemplateService`（`framework_services.go`）直接写入 `initModules` / `shutdownModules` 两处调用；没装模块时 `modules_gen.go` 里是空列表。
-  - 已有工程：`module add` 的输出里给出要加的两行；`project doctor` 新增 `modules:wiring` 项，服务包里没有调用时 WARN（参照 `saga_effect_doctor.go` 的 `saga-steps` 检查）。
-- 顺序：`requires` 决定 Init 顺序；Shutdown 逆序。App 对 `Service.Shutdown` 的要求不变（容忍部分初始化）。
+首个使用者为 skillbook，demo 已迁移，详见 [modules 的服务级启动与停机](../../modules/README.md#服务级启动与停机)。不引入框架运行时包、不要求业务补两行调用，也不通过 doctor 提示代替自动接线。生命周期只支持单次启动，不支持在业务 Init 之后再启动一组模块。
 
 ### 11.7 安装器与四个命令
 
@@ -535,7 +519,7 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 | 11.3 清单与 `roost.yaml` 记录 | 按计划。`files` 不写在清单里，由 `files/` 目录读出；`roost.yaml` 的 `modules.<name>` 记摘要、号、状态字段、文件 | 少一处要对齐的清单 |
 | 11.4 三个结构化改写原语 | 做了“往主 DAO 末尾追加字段”（`daoStructSource.appendFields`，`roost add timer` 改用同一个定位函数）。`roost.yaml` 的合并只有写 `modules` 记录一处，没有做通用合并 | 两个模块不需要改 `uses` / `sagas` 等列表；等有模块需要时再做 |
 | 11.5 ID 分配 | 协议号、错误码、组件号按计划（一次计划内不相撞，已装记录里的号不再发）。**定时器类型没有做** | 两个模块都不用定时器；第 3 期第一次需要时做 |
-| 11.6 运行期接线点（`modules_gen.go`、`initModules`） | **没有做** | 两个模块都不需要 Init / Shutdown：组件挂在实体上，controller 用自己的 `FromRegistry` 取依赖。等出现需要后台循环或发布能力的模块时再加，避免先造一层没人用的接口 |
+| 11.6 运行期接线点 | **已实现 A1** | `runtime` + `modules_gen.go` 服务适配层，首个使用者 skillbook；按依赖启动、逆序停机，见 §11.6 |
 | 11.7 安装器 | 事务性用“先记下会动到的文件、失败时原样恢复”，不是整工程的临时副本；生成这一步仍是 `GenerateTransactional`（暂存区里生成）。组件不经 `roost add component`，直接接到实体上（组件文件由模板提供、组件号是分配的占位）。没有给 `AddOptions` 加复用选项：前置骨架只在缺失时才调用现有的 `roost add` | 模块写的文件集合是确定的，记录并恢复比复制整个工程简单；回滚有变异验证（去掉恢复后用例失败） |
 | 11.8 Robot 的多模块共存 | **没有做** | 两个模块的验收只到 Nest 场景；Robot 步骤与真实 TCP 留给第 3 期（会话型玩法本来就带 Robot） |
 | 11.9 两个验证模块 wallet、chat | wallet 按计划；**chat 换成 checkin**（每日签到，依赖 wallet） | chat 托管服务的 collaborators 在新工程里是拒绝桩，模块要覆盖一个已存在的业务文件才能用；checkin 更能验证依赖顺序、两个模块共用一个 DAO、同一笔事务里跨模块调用、业务时间 |
@@ -678,7 +662,7 @@ task 要扩成核心系统的方向（未实施，按先后）：
 | 档案 → profile（16 → 19 条） | 状态拆成“别人可见”与“只给本人”两个同步字段；`CheckAddExp`；名片 `ProfileCard` | 只覆盖升级钩子 `profile_levelup.go`；公会归属与副本账本；两实体的 AddExp（记 World 累计） |
 | 邮件 → mailbox（28 → 32 条，连带 wallet） | 发件入口 `SendTo`；mailbox+enter 的画像认 account 的 claims（3 → 5 条）；enter 的进入钩子带会话 claims | 不覆盖任何模块文件；升级奖励的消费者（要服务级接线）、GM / 活动 / 送礼三个发件方 |
 
-- demo 现在从模块得到六块：进入游戏、聊天、排行榜、背包、档案、邮件（加上依赖带进来的 wallet）。demo 的步骤约定：全部模块在同一步里安装（`enter, chat, leaderboard, bag, profile, mailbox`），覆盖模块文件的 `write` 排在它之后，建在模块组件上的 handler 没有 `roost add handler` 骨架步骤（`TestDemoStepsLeaveModuleComponentsToTheModules` 钉住）。
+- demo 现在从模块得到七块：进入游戏、聊天、排行榜、背包、档案、邮件、技能目录（加上依赖带进来的 wallet）。demo 的步骤约定：全部模块在同一步里安装（`enter, chat, leaderboard, bag, profile, mailbox, skillbook`），覆盖模块文件的 `write` 排在它之后，建在模块组件上的 handler 没有 `roost add handler` 骨架步骤（`TestDemoStepsLeaveModuleComponentsToTheModules` 钉住）。
 - 合入 main 的 v1.44.0（saga 步骤按 sid 确切路由）；能力清单记入路由步骤；可拆的 gift 与 transfer 记入 §18。
 - quest 改名 task，扩成核心系统的方向记在 §18 末尾。
 - 单个玩家换服开工：方案见 [FEATURE-2026-11-11-player-rehome](FEATURE-2026-11-11-player-rehome.md)；框架侧两块（account 的换服接口、DataEngine 的交出实体）已合入，模块 `rehome` 与 demo 接线未做。

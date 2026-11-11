@@ -156,6 +156,15 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		if err := addGo("internal/service/"+name+"/service.go", renderService(m.servicePackage(name), name), false); err != nil {
 			return nil, err
 		}
+		if hasModuleRuntime(m, name) {
+			body, err := renderModuleService(m, name)
+			if err != nil {
+				return nil, err
+			}
+			if err := addGo("internal/service/"+name+"/modules_gen.go", body, true); err != nil {
+				return nil, err
+			}
+		}
 		if len(m.Services[name].Uses) > 0 {
 			if err := addGo("internal/service/"+name+"/framework_clients_gen.go", renderFrameworkClients(m, name), true); err != nil {
 				return nil, err
@@ -500,7 +509,11 @@ func renderBootstrap(m Manifest) string {
 			// is built from the project's collaborators file.
 			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(domain%s.ServiceType), svc%s.NewServer()", spec.Package, spec.Package)
 		} else {
-			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
+			constructor := "New"
+			if hasModuleRuntime(m, name) {
+				constructor = "NewWithModules"
+			}
+			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.%s()", name, safeIdent(name), constructor)
 		}
 		for _, constructor := range serviceModConstructors(m, name, allMods) {
 			if playerTCP && strings.HasPrefix(constructor, "accessplayertcp.NewMod()") {
