@@ -96,6 +96,7 @@
 | 路由 RPC 与实体归属 | 对已有实体的 RPC 自动发往它的 owner 进程，owner 变了按改投重试 | 方法标 `//roost:rpc route`；归属服务 `wiring/remoteentity.WithRouteKinds(...)`，别的服务 `WithForeignKinds(...)`；骨架 `roost add rpc <name> -service <svc> -entity-service` | 正式。路由登记带过期，只增不减等边界见 KNOWN-LIMITS；同一实体的请求逐个处理 | [Service §2A](guide/09-services.md#2a-路由-rpc-与改投)、[路由登记](REMOTE_ENTITY.md#路由登记) |
 | 普通 Bus RPC | 工程自己的跨进程服务：手写接口，生成传输与装配两半 | `roost add rpc <name> -service <svc>`；调用方在 `roost.yaml` 写 `services.<caller>.uses_rpcs: [<name>]` 后 `roost project sync` | 正式。调用方不传期限时接收端自己限时；回复按 `servicerpc.Classify` 分类 | [项目生成器 §6.x](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#6x-本工程自己的跨进程服务roost-add-rpc)、[命令参考 §13](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#13-servicerpc接口先行的跨进程服务) |
 | Saga 长事务 | 跨实体、跨服务的多步流程，失败按倒序补偿；按业务键查结果 | `roost add saga <name> -service <svc> -steps a,b -native a,b -entity <E> -component <C>`；服务 `Init` 里 `StartSteps`；handler 里 `EmitStart` | 正式。不是跨服务 ACID，也不是瞬时原子交易；依赖 NATS JetStream；补偿可能需要人工介入；业务键只在保留期内唯一 | [Saga](guide/06-saga.md)、[Saga 契约](SAGA.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#saga) |
+| Saga 步骤按 sid 确切路由 | 只能在某个 sid 上执行的步骤（改玩家实体的原生步骤）直接投给那个 sid 的进程，不再多个进程争抢后交接；属主发现玩家不绑定本服或正在换服时把步骤退回协调器，退回不算重试 | `roost add saga <name> ... -routed <step>`；启动时 `StartRequest.Route = saga.SidRoute(sid)` 且必须带截止 `DeadlineAt`；步骤登记 `WithSidRoute()`，属主核对用 `WithAdmit` 返回 `BounceStep` / `RejectStep` | 正式（v1.44.0）。一笔 saga 只有一个路由地址（两名不同服玩家互改的 saga 表达不了）；补偿方向没有截止，等到属主收下；每个 sid 每条流多一组 durable；没有路由键的旧消息直接拒绝 | [Saga 契约“按 sid 确切路由”](SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③) |
 | effect 跨服务通知 | 一个服务事务里发事件，另一个服务可靠消费（升级 → 发邮件） | 见“持久化”的 effect 行；`-consumer` 选消费服务 | 正式 | [DataEngine §3](guide/03-dataengine.md#3-投影与幂等) |
 | 服务发现 | 进程登记与查找，给 Gate / Game 与托管服务用 | Mod `etcd`（`wiring/etcd`） | 正式。发现只是候选，身份由单实例锁核对 | [Gate §2](GATEWAY.md#2-正式接入方式) |
 
@@ -193,7 +194,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | `roost add dao` | DAO 定义骨架并接入 Entity | `roost add dao <name> --entity <owner>` | 正式。已存在时报错，不复用 | 同上 |
 | `roost add webroute` | HTTP 路由骨架并装 web Mod | `roost add webroute <name>` | 正式 | 同上 |
 | `roost add errcode` | 错误码定义并分配编号 | `roost add errcode <name>` | 正式 | 同上 |
-| `roost add saga` | Saga 定义、步骤运行时与原生步骤的 handler 骨架 | `roost add saga <name> -service <svc> -steps a,b` | 正式。骨架默认拒绝 | 同上 |
+| `roost add saga` | Saga 定义、步骤运行时与原生步骤的 handler 骨架；`-routed <step>` 把步骤声明为按 sid 确切路由 | `roost add saga <name> -service <svc> -steps a,b [-routed a]` | 正式。骨架默认拒绝 | 同上 |
 | `roost add effect` | effect 载荷、发射辅助与消费者骨架 | `roost add effect <topic> -consumer <service>` | 正式。骨架默认返回错误（重投、不丢） | 同上 |
 | `roost add rpc` | 工程自己的跨进程服务 | `roost add rpc <name> -service <svc>`，实体服务加 `-entity-service` | 正式 | [项目生成器 §6.x](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#6x-本工程自己的跨进程服务roost-add-rpc) |
 | `roost add timer` | 实体持久定时器 | `roost add timer --entity <Entity>` | 正式。一个实体只有一个定时器组件 | [命令参考](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器) |
