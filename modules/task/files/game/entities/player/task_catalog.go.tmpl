@@ -1,0 +1,61 @@
+package player
+
+// 这个文件是每日任务的任务表，归工程所有：有哪些任务、各自要做几次、领奖给多少金币都写在这里。
+// TaskComponent 的 Advance 与 Claim 只经 taskDefinition 查表，表里没有的任务号一律拒绝（task_unknown）。
+//
+// 模块不带配置表，所以缺省是下面这张写死的 Go 表，带三条样例。项目接上自己的任务表之后改两处：
+//
+//  1. 删掉 taskCatalog 与样例任务号，把 taskDefinition 改成读生成的访问器，例如：
+//
+//     row, ok := generated.TaskByID(taskID)   // configs/generated，由 roost add table task 与 roost generate 产出
+//     if !ok {
+//     	return TaskDefinition{}, false
+//     }
+//     definition := TaskDefinition{Target: row.Target, Reward: row.Reward}
+//     return definition, definition.usable()
+//
+//     生成的访问器读的是钉在本次请求上的配置快照，同一个 handler 里两次读不会因为热更而不一致。
+//  2. task_catalog_test.go 里逐条检查样例表的那一条用例换成检查自己的表（或删掉，改由配置校验保证）。
+//
+// 任务表的大小就是 PlayerDao.Task 的大小上限：进度只存表里有的任务，整份随同步下发、整份落库，
+// 所以每日任务保持在几十条以内。
+//
+// 当天改表的后果（热更也一样）：下调目标次数，已有进度达到新目标的任务立即可领；上调目标次数，
+// 已完成未领的变回未完成、已领的不会再领一次；删掉一条任务，它当天的进度留到下一次清零，期间不能推进也不能领。
+
+// 样例任务号。服务端别的功能在自己的 Nest handler 里推进任务时用这些名字，不要写数字。
+const (
+	// TaskDailyCheckin：当日签到一次。
+	TaskDailyCheckin int64 = 1
+	// TaskDailySpend：当日消费三次。
+	TaskDailySpend int64 = 2
+	// TaskDailyBattle：当日完成十场战斗。
+	TaskDailyBattle int64 = 3
+)
+
+// TaskDefinition 是一条每日任务的定义。
+type TaskDefinition struct {
+	// Target 是当日要做满的次数，必须为正。
+	Target int64
+	// Reward 是完成后领取的金币数，必须为正。
+	Reward int64
+}
+
+// usable 报告这条定义能不能用。目标次数不为正的任务不用做就能领、奖励不为正的任务领不到东西，
+// 两种都是填表错误，按“没有这条任务”处理，不让它们变成每天白送或每天报错。
+func (definition TaskDefinition) usable() bool {
+	return definition.Target > 0 && definition.Reward > 0
+}
+
+// taskCatalog 是缺省的任务表：任务号 -> 定义。只读，运行期不要改它。
+var taskCatalog = map[int64]TaskDefinition{
+	TaskDailyCheckin: {Target: 1, Reward: 20},
+	TaskDailySpend:   {Target: 3, Reward: 30},
+	TaskDailyBattle:  {Target: 10, Reward: 100},
+}
+
+// taskDefinition 查一条任务的定义；任务号不在表里、或那一行填错了（见 usable）时返回 false。
+func taskDefinition(taskID int64) (TaskDefinition, bool) {
+	definition, ok := taskCatalog[taskID]
+	return definition, ok && definition.usable()
+}

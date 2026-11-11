@@ -14,6 +14,8 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **变更**（modules）：**模块 quest 改名 task**（维护者 2026-11-11：“task 是一个比较核心的系统，很多业务需求可以加到 task 中去”）。目录 `modules/task/`；标识符、协议（`TaskClaim`）、handler（`TaskAdvance`）、错误码（`task_*`）、状态 `PlayerDao.Task`（存储键 `task`）、业务文件 `task_catalog.go`、联动 task + checkin 全部跟着改名，行为与场景数（18、联动 3）不变。本文件 `[Unreleased]` 里此前写作 quest 的条目已一并改为 task。扩成核心系统（按事件推进、每周与成就、奖励种类、任务表做成配置表）是下一步，见[方案 §18](docs/maintenance/FEATURE-2026-11-10-business-modules.md)。已装旧名模块的工程不迁移（未上线）。
+
 - **变更 / 协议变化**（game-demo + modules）：**game-demo 的档案（名字、等级、经验）改用 profile 模块**。
   - 模块（场景数 16 → 19）：状态拆成两个同步的顶层字段——`PlayerDao.Profile`（名字、等级，别的玩家也可以看）与 `PlayerDao.ProfilePrivate`（经验，只给本人），工程的同步视图按顶层字段挑，所以“别人看不到经验”不用改框架；新增只检查不执行的 `CheckAddExp`、给服务端按玩家号读的名片 handler `ProfileCard`；经验被拒时带上数额与当时的经验、等级。模块自身的存储键随之变化（经验挪到 `profile_private`）。
   - demo：生成时安装 profile，只覆盖升级钩子 `profile_levelup.go`（属性随等级成长、发 `player.level_up`，与经验等级同一笔事务）；demo 自己的档案组件、`PlayerDao` 的 `Name / Level / Exp / Gold`、读等级的 handler `PlayerLevel`、错误码 `name_empty` 删除；公会归属与副本领奖账本挪到 demo 自己的两个文件（仍是 `ProfileComponent` 上的方法）。排位计分改读模块的 `ProfileCard`。
@@ -45,17 +47,17 @@
   - 验证：70 条变异全部被杀；只装 mailbox、先 mailbox 后 bag、先 bag 后 mailbox、全部一起四种安装下 `roost module verify` 分项全对。
   - 整批的收口验证（十一个模块、四组联动）：全新工程一次装完，`roost module verify` 十五项场景数全对加四项工程检查，重复安装无变化，`go test ./...` 通过；`scripts/test-modules-generated.sh` 通过（逐个叠加与全新工程换顺序两条路径）；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过。全部是离线场景（替身提交器、进程内 mail 服务），没有跑真实依赖。
 
-- **新增**（modules）：**第三批业务模块 quest、stamina、shop，以及 checkin 的签到钩子**（维护者 2026-11-11：按建议“先补模块间登记点并继续拆下一批”）。
-  - `quest`（18 条场景，依赖 wallet）：每日任务，按业务日惰性清零；服务端推进（`Advance` 与不对客户端开放的 `QuestAdvance`）；领奖协议 `QuestClaim`，金币在同一笔事务里到账；任务表是业务文件。
+- **新增**（modules）：**第三批业务模块 task、stamina、shop，以及 checkin 的签到钩子**（维护者 2026-11-11：按建议“先补模块间登记点并继续拆下一批”）。
+  - `task`（18 条场景，依赖 wallet）：每日任务，按业务日惰性清零；服务端推进（`Advance` 与不对客户端开放的 `TaskAdvance`）；领奖协议 `TaskClaim`，金币在同一笔事务里到账；任务表是业务文件。
   - `stamina`（25 条，依赖 wallet）：体力随业务时间惰性恢复到上限（不用定时器）；组件入口 `Spend` / `Grant`（超硬顶截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler；规则是业务文件。
   - `shop`（17 条，依赖 wallet 与 bag）：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购一笔事务；每业务日 / 终身限购；请求键在最近 64 次成功购买内防重发；商品目录是业务文件。
   - checkin：新增事务内登记点 `OnCheckinClaimed`（`checkin_hooks.go`）——签到成功后在同一笔事务里执行，钩子返回错误时这一次签到整笔回滚。场景数 6 → 8。
-  - 联动 quest + checkin：签到成功把每日任务“签到一次”推进一次（3 条场景）；任务表里没有这条任务时不影响签到。
-  - 验证：全新工程一条命令装十一个模块（`shop stamina quest mailbox leaderboard profile chat checkin enter`，连带 bag、wallet），三组联动写入，`roost module verify` 十四项场景数全对加四项工程检查，`go test ./...` 通过；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过。三个模块各自的变异自检：quest 35 条杀 34（1 条等价）、stamina 58 条杀 57（免费补满那一条没有场景）、shop 65 条全杀。
+  - 联动 task + checkin：签到成功把每日任务“签到一次”推进一次（3 条场景）；任务表里没有这条任务时不影响签到。
+  - 验证：全新工程一条命令装十一个模块（`shop stamina task mailbox leaderboard profile chat checkin enter`，连带 bag、wallet），三组联动写入，`roost module verify` 十四项场景数全对加四项工程检查，`go test ./...` 通过；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过。三个模块各自的变异自检：task 35 条杀 34（1 条等价）、stamina 58 条杀 57（免费补满那一条没有场景）、shop 65 条全杀。
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)。
 
 - **修复**（modules）：**wallet 的业务键不限长度与字符**（shop 模块的作者在对照时发现，先红后绿）。`WalletComponent.Apply` 的键会成为落库文档的字段名，之前只拒绝空键：带空字节的键到提交时才被拒（客户端拿到的不是业务码），带 `.` / `$` 的键在存储里有特殊含义，超长键能把只留 128 条的账本撑大。现在只收 1～64 字节的 ASCII 字母、数字与 `- _ :`，别的在写入之前答 `wallet_invalid`。新增场景 `TestWalletApplyRefusesKeysThatCannotBeStored`（修之前：65 字节的键被接受），场景数 8 → 9。
-- **修复**（codegen 测试）：`TestModulesInstallOntoAGeneratedProjectAndVerify` 里写死的 checkin 场景数没有跟着签到钩子从 6 改成 8，“quest 模块、checkin 的签到钩子”那个提交上这条用例是红的（当时只跑了模块目录用例）。已改，整套 `TestDemo|TestModule` 重跑通过。
+- **修复**（codegen 测试）：`TestModulesInstallOntoAGeneratedProjectAndVerify` 里写死的 checkin 场景数没有跟着签到钩子从 6 改成 8，“task 模块、checkin 的签到钩子”那个提交上这条用例是红的（当时只跑了模块目录用例）。已改，整套 `TestDemo|TestModule` 重跑通过。
 
 - **新增**（codegen + modules）：**模块之间的联动文件（`with`）与 enter 的进入钩子**（第二批模块暴露的最大缺口：一个模块没法在另一个模块的入口里加一步；维护者 2026-11-11 同意先补这一项）。
   - 安装器：模块可以带 `with/<另一个模块>/` 下的联动文件，清单里用 `with.<另一个模块>` 声明（一句话说明、可选的场景数）。两个模块都装着时才写进工程，不论先装哪个，在第二个装上的那一次写；归属记在 `roost.yaml` 的 `modules.<name>.with`。`plan` / `add` 输出 `glue <模块> with <另一个模块>`（`--json` 的 `glue` 数组），`verify` 把联动的场景单独列为 `<模块>+<另一个模块>`。落点被业务文件占着时拒绝、工程不变；两个都早已装好的不补。模块库加载时另外检查：没有两处写同一个落点。

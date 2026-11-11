@@ -1,0 +1,45 @@
+package player
+
+import "testing"
+
+// 任务表里的每一条都要能用：目标次数与奖励为正。工程改了任务表之后这条用例替它把关；
+// 任务表换成配置表之后，把这里换成检查自己的表（或删掉，改由配置校验保证）。
+func TestTaskCatalogEntriesAreUsable(t *testing.T) {
+	if len(taskCatalog) == 0 {
+		t.Fatal("the task catalog is empty")
+	}
+	for taskID := range taskCatalog {
+		if taskID <= 0 {
+			t.Errorf("task %d: the task id must be positive", taskID)
+		}
+		if _, ok := taskDefinition(taskID); !ok {
+			t.Errorf("task %d: target and reward must be positive, got %+v", taskID, taskCatalog[taskID])
+		}
+	}
+}
+
+// 填错的行按“没有这条任务”处理：目标次数不为正的任务不用做就能领，奖励不为正的任务领不到东西。
+func TestTaskCatalogRefusesUnusableEntries(t *testing.T) {
+	const zeroTarget, negativeTarget, zeroReward, negativeReward, fine = 9001, 9002, 9003, 9004, 9005
+	taskCatalog[zeroTarget] = TaskDefinition{Target: 0, Reward: 5}
+	taskCatalog[negativeTarget] = TaskDefinition{Target: -1, Reward: 5}
+	taskCatalog[zeroReward] = TaskDefinition{Target: 2, Reward: 0}
+	taskCatalog[negativeReward] = TaskDefinition{Target: 2, Reward: -5}
+	taskCatalog[fine] = TaskDefinition{Target: 2, Reward: 5}
+	t.Cleanup(func() {
+		for _, taskID := range []int64{zeroTarget, negativeTarget, zeroReward, negativeReward, fine} {
+			delete(taskCatalog, taskID)
+		}
+	})
+	for _, taskID := range []int64{zeroTarget, negativeTarget, zeroReward, negativeReward} {
+		if definition, ok := taskDefinition(taskID); ok {
+			t.Errorf("task %d: an unusable entry %+v was accepted", taskID, definition)
+		}
+	}
+	if definition, ok := taskDefinition(fine); !ok || definition.Target != 2 || definition.Reward != 5 {
+		t.Errorf("a usable entry was refused or changed: %+v, %v", definition, ok)
+	}
+	if _, ok := taskDefinition(9999); ok {
+		t.Error("a task id that is not in the catalog was accepted")
+	}
+}

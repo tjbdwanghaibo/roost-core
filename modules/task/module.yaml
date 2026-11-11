@@ -1,0 +1,28 @@
+name: task
+summary: 任务：任务表、进度、领奖；这一版是每日任务（按业务日惰性清零），服务端推进，奖励经货币模块在同一笔事务里发放
+requires: [wallet]
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - field: Task
+    type: TaskState
+    store: task
+    dao: persist,sync
+    comment: Task 是每日任务模块给玩家本人看的当日记录（所属业务日、各任务进度、已领奖的任务）；Day 不是当前业务日时整份记录已过期。
+component: Task
+protocols: [TaskClaim]
+errcodes: [task_unknown, task_incomplete, task_claimed, task_count_invalid]
+verify:
+  packages: [./game/handler, ./game/entities/player]
+  run: ^TestTask
+  pass: 18
+with:
+  checkin:
+    summary: 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithTaskCheckin
+      pass: 3

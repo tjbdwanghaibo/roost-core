@@ -16,7 +16,7 @@
 | [bag](bag/module.yaml) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种硬上限 999999）；自带道具表 `configs/schema/item.go` 与 `configs/table/item.csv`（哪些道具存在、每种的单种上限；加道具只改 CSV 再 `roost generate`）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；规则入口 `game/entities/player/bag_items.go`（缺省读道具表）。game-demo 用的就是它 | 无（要求 `config` 特性，`-template game` 缺省已开） | `PlayerDao.Bag`（同步） | 17 |
 | [leaderboard](leaderboard/module.yaml) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 20 |
 | [mailbox](mailbox/module.yaml) | 邮件：分页列出自己的邮件（`MailboxList`）、领取附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；附件是（种类、号、数量），种类是登记点：金币内置，别的种类由登记了校验（`game/mailbox` 的 `RegisterType`）与发放方式（`RegisterMailboxGrant`）的功能提供 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 28 |
-| [quest](quest/module.yaml) | 每日任务：按业务日惰性清零的进度；服务端推进（组件入口 `Advance`、不对客户端开放的 handler `QuestAdvance`）；领奖协议 `QuestClaim`，金币经货币模块在同一笔事务里到账；任务表写在 `game/entities/player/quest_catalog.go` | wallet | `PlayerDao.Quest`（同步） | 18 |
+| [task](task/module.yaml) | 每日任务：按业务日惰性清零的进度；服务端推进（组件入口 `Advance`、不对客户端开放的 handler `TaskAdvance`）；领奖协议 `TaskClaim`，金币经货币模块在同一笔事务里到账；任务表写在 `game/entities/player/task_catalog.go` | wallet | `PlayerDao.Task`（同步） | 18 |
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go` | wallet | `PlayerDao.Stamina`（同步） | 25 |
 | [shop](shop/module.yaml) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录写在 `game/entities/player/shop_goods.go` | wallet、bag | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 17 |
 
@@ -27,7 +27,7 @@
 | chat + enter | 玩家进入游戏时加进世界频道的在线名单（`game/chat/chat_enter.go`） | 2 |
 | mailbox + enter | 玩家进入游戏时把属于他的全服邮件合并进邮箱（`game/controllers/mailbox/mailbox_enter.go`，画像规则在这个文件里改） | 3 |
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
-| quest + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/quest_checkin.go`） | 3 |
+| task + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/task_checkin.go`） | 3 |
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag` 与 `profile`；demo 自己的邮件正在换成 mailbox。
 

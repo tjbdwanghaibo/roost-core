@@ -6,7 +6,7 @@
 
 ## 0. 先说清楚能做到什么
 
-- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前有十一个模块：`enter`（进入游戏：建档、首次初始化、进入钩子、打开自身视图）、`wallet`（货币）、`checkin`（每日签到）、`quest`（每日任务）、`stamina`（体力）、`shop`（金币买道具、限购）、`bag`（堆叠背包，自带道具表：加道具改 `configs/table/item.csv`）、`profile`（名字、等级、经验）、`chat`（聊天：世界与私聊）、`leaderboard`（总分榜）、`mailbox`（邮件列表与领附件：金币内置，装了 `bag` 就能发道具）。新工程一般都先装 `enter`。以 `roost module list` 为准。
+- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前有十一个模块：`enter`（进入游戏：建档、首次初始化、进入钩子、打开自身视图）、`wallet`（货币）、`checkin`（每日签到）、`task`（每日任务）、`stamina`（体力）、`shop`（金币买道具、限购）、`bag`（堆叠背包，自带道具表：加道具改 `configs/table/item.csv`）、`profile`（名字、等级、经验）、`chat`（聊天：世界与私聊）、`leaderboard`（总分榜）、`mailbox`（邮件列表与领附件：金币内置，装了 `bag` 就能发道具）。新工程一般都先装 `enter`。以 `roost module list` 为准。
 - **这一档交付到哪**：业务逻辑写完、离线场景通过、有“进入游戏”端点（建档，第 4B 步）、客户端可见的状态接上自身视图（第 4A 步）。**不含**登录鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）、真实依赖、Robot 与网络验收——[SKILL §3.6](../SKILL.md) 的“网络验收”在这里没有做，报告里要写明。
 - **没有现成模块的需求**：用 `roost add …` 建骨架、手写业务。框架给的是事务、持久化、同步、定时、跨进程这些底座，规则要写。写法照已装模块的文件。
 - **框架不支持的需求**：如实说明并给出处，不拼假 demo。见 [SKILL §6](../SKILL.md) 与[能力清单“明确没有 / 不适合的”](../../../framework/CAPABILITIES.md#明确没有--不适合的)。
@@ -85,8 +85,8 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
    ```go
    package dbdef
 
-   // QuestState 是每日任务的进度。
-   type QuestState struct {
+   // TaskState 是每日任务的进度。
+   type TaskState struct {
    	Day      int64 `store:"1"`
    	Progress int32 `store:"2"`
    	Claimed  bool  `store:"3"`
@@ -96,13 +96,13 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
    在 `db/def/player.go` 的 `PlayerDao` **末尾**加一个顶层字段，字段名与存储键带功能名：
 
    ```go
-   	// Quest 是每日任务给玩家本人看的进度。
-   	Quest QuestState `store:"quest" dao:"persist,sync"`
+   	// Task 是每日任务给玩家本人看的进度。
+   	Task TaskState `store:"task" dao:"persist,sync"`
    ```
 
    - 同步与否按这个顶层字段决定：标了 `sync` 的字段才会下发，`persist` 只落库。既有可见状态又有服务端账本就写两个字段、两个结构体。不要在嵌套结构体的字段上写 `dao` 标签。标了 `sync` 还要打开自身视图客户端才收得到，见第 4A 步。
    - 只能加在末尾（同步的字段号按定义顺序排）；不要改已有字段的 `store` 键。
-2. **组件**：`"$ROOST" add component <Feature> --entity Player`，在生成的 `game/entities/player/<feature>_component.go` 里写业务方法。状态只经生成的 setter 改（`component.owner.Dao().GetQuest().SetProgress(…)`）；组件不保存事务会改的状态、不加锁。同一个实体上的别的组件（模块的或自己写的）都用 `component.owner.<Other>Comp()` 直接调，在同一把锁、同一笔事务里。要动货币就调同一个实体上的货币组件，同一笔事务。两个入口按“谁来保证只做一次”选：
+2. **组件**：`"$ROOST" add component <Feature> --entity Player`，在生成的 `game/entities/player/<feature>_component.go` 里写业务方法。状态只经生成的 setter 改（`component.owner.Dao().GetTask().SetProgress(…)`）；组件不保存事务会改的状态、不加锁。同一个实体上的别的组件（模块的或自己写的）都用 `component.owner.<Other>Comp()` 直接调，在同一把锁、同一笔事务里。要动货币就调同一个实体上的货币组件，同一笔事务。两个入口按“谁来保证只做一次”选：
    - **你的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `component.owner.WalletComp().Add(delta)`，不留回执。周期性发放（每日、每局、每个订单）都用这个。
    - **没有别的事实可判**（客户端带请求号的消费）：`WalletComp().Apply(key, delta)`，同一个 key 在去重窗口内重复调用只生效一次。窗口只留最近 128 次带业务键的加减，是短期防重发，不是永久账本：不要拿按天、按局递增的键去用它。
 3. **错误码**：`"$ROOST" add errcode <feature>_<reason>`（每个一条，一码一个文件），生成在 `internal/errors/`，把说明文字（生成时是 `TODO`）改掉。模块是一个功能一个文件，两种布局都可以。业务拒绝就从组件 / handler 里返回这些带码的错误，生成的端点会把它转成回包的 `Code` / `Reason`；不用在 controller 里自己拼响应。
@@ -111,12 +111,12 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
    ```go
    //roost:nest rollback=undo durability=strict
-   func handlerQuestClaim(target player.IQuestEntity, request *pb.QuestClaimRequest, nowUnixMilli int64) (*pb.QuestClaimResponse, error) {
-   	result, err := target.QuestComp().Claim(nowUnixMilli)
+   func handlerTaskClaim(target player.ITaskEntity, request *pb.TaskClaimRequest, nowUnixMilli int64) (*pb.TaskClaimResponse, error) {
+   	result, err := target.TaskComp().Claim(nowUnixMilli)
    	if err != nil {
    		return nil, err
    	}
-   	return &pb.QuestClaimResponse{Reward: result.Reward}, nil
+   	return &pb.TaskClaimResponse{Reward: result.Reward}, nil
    }
    ```
 
@@ -227,7 +227,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 ## 7. 边界
 
-- 模块只有十一个；除 chat、leaderboard 外都要求 `-template game` 的 `Player`，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`（`-template game` 都已有）。模块之间自动接上的只有联动文件做的那几件（进入时聊天上线与拉全服邮件、签到推进每日任务）；其余要自己写：升级奖励（`profile_levelup.go`）、新玩家初始发放（`enter_first.go`）、别的每日任务何时推进（调 `QuestComp().Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `StaminaComp().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
+- 模块只有十一个；除 chat、leaderboard 外都要求 `-template game` 的 `Player`，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`（`-template game` 都已有）。模块之间自动接上的只有联动文件做的那几件（进入时聊天上线与拉全服邮件、签到推进每日任务）；其余要自己写：升级奖励（`profile_levelup.go`）、新玩家初始发放（`enter_first.go`）、别的每日任务何时推进（调 `TaskComp().Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `StaminaComp().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
 - 没有卸载；分配过的号与存储键不回收。已装模块不会随 roost-core 升级自动更新。
 - 模块没有 Init / Shutdown、后台循环、定时器类型、压测步骤。
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。

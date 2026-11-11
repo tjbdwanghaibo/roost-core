@@ -50,7 +50,7 @@ PY
 project="$(new_project atelier example.com/studio/atelier)"
 cd "$project"
 "$roost" module list > "$review_root/list.log"
-for name in wallet checkin chat enter profile bag leaderboard mailbox quest stamina shop; do
+for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop; do
   grep -q "^  $name " "$review_root/list.log" || { cat "$review_root/list.log"; echo "roost module list does not show $name" >&2; exit 1; }
 done
 "$roost" module plan checkin --json > "$review_root/plan.json"
@@ -131,15 +131,15 @@ grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_roo
 grep -q 'self_sync: true' roost.yaml
 grep -q 'glue chat with enter: written' "$review_root/add-all.log" && grep -q 'glue mailbox with enter: written' "$review_root/add-all.log"
 grep -q 'glue mailbox with bag: written' "$review_root/add-all.log"
-# 第三批：quest（依赖已装的 wallet）。checkin 已在，签到推进每日任务的联动随它写进工程。
-"$roost" module add quest stamina shop > "$review_root/add-quest.log"
-grep -q 'glue quest with checkin: written' "$review_root/add-quest.log"
-grep -q 'module bag: already installed' "$review_root/add-quest.log"
+# 第三批：task（依赖已装的 wallet）。checkin 已在，签到推进每日任务的联动随它写进工程。
+"$roost" module add task stamina shop > "$review_root/add-task.log"
+grep -q 'glue task with checkin: written' "$review_root/add-task.log"
+grep -q 'module bag: already installed' "$review_root/add-task.log"
 ! grep -rn '{{' db/def game/entities game/handler game/controllers internal/errors protocol/def >/dev/null
 commit_all all
-"$roost" module add enter bag mailbox quest shop > "$review_root/add-all-again.log"
+"$roost" module add enter bag mailbox task shop > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=28 mailbox+enter=3 mailbox+bag=9 quest=18 quest+checkin=3 stamina=25 shop=17
+expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=28 mailbox+enter=3 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1

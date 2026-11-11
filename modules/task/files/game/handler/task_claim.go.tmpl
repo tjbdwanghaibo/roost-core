@@ -1,0 +1,17 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerTaskClaim 领取一个已完成任务今天的奖励。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTaskClaim(target player.ITaskEntity, request *pb.TaskClaimRequest, nowUnixMilli int64) (*pb.TaskClaimResponse, error) {
+	result, err := target.TaskComp().Claim(request.TaskID, nowUnixMilli)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.TaskClaimResponse{TaskID: request.TaskID, Reward: result.Reward, Balance: result.Balance}, nil
+}

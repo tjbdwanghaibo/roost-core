@@ -1,0 +1,14 @@
+package task
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleTaskClaim 是领取任务奖励协议的入口；目标取认证会话的玩家，不取请求字段。
+// 任务号是否存在、做完没有、领过没有都在 Nest handler 的锁内判断，这里不预先检查。
+//
+//roost:endpoint nest=TaskClaim
+func (controller *Controller) HandleTaskClaim(ctx *playeraccess.Context, req *pb.TaskClaimRequest) (*pb.TaskClaimResponse, error) {
+	return controller.dispatchTaskClaim(ctx, req)
+}

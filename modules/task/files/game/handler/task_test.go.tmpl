@@ -1,0 +1,537 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// 样例任务表里的数在这里写死，不引用被测代码的常量与任务表：表改错了这些用例要变红。
+// 工程把任务表换成自己的之后，按自己的表改这几个数。
+const (
+	taskTestCheckin = 1 // 做 1 次，奖 20
+	taskTestSpend   = 2 // 做 3 次，奖 30
+	taskTestBattle  = 3 // 做 10 次，奖 100
+	taskTestUnknown = 999
+)
+
+// 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
+type taskGetter map[int64]entity.IThreadSafeEntity
+
+func (g taskGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g taskGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// taskCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚；commits 数提交成功的次数。
+// 没有任何写入的请求不会走到提交器，所以“这次请求零写入”就是 commits 没有变。
+type taskCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *taskCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type taskFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	claimTo   *sender.TaskClaimSender
+	advanceTo *sender.TaskAdvanceSender
+	committer *taskCommitter
+	now       atomic.Int64
+}
+
+// newTaskFixture 用替身提交器起一个 Nest，业务时钟由用例拨：任务按业务日切分（缺省是 UTC 零点）。
+// clock.SetSource 是进程级的：一个用例里只建一个 fixture，后建的会顶掉前一个的时钟。
+func newTaskFixture(t *testing.T) *taskFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterTaskClaimNestHandlers()
+	RegisterTaskAdvanceNestHandlers()
+	f := &taskFixture{committer: &taskCommitter{}}
+	f.now.Store(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(96001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(taskGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.claimTo = sender.NewTaskClaimSender(f.engine)
+	f.advanceTo = sender.NewTaskAdvanceSender(f.engine)
+	return f
+}
+
+// setClock 把业务时间拨到一个确定的时刻；pass 往后拨一段。
+func (f *taskFixture) setClock(at time.Time) { f.now.Store(at.UnixMilli()) }
+func (f *taskFixture) pass(d time.Duration)  { f.now.Add(int64(d / time.Millisecond)) }
+
+// advance 走服务端推进的 handler，返回推进后的进度。
+func (f *taskFixture) advance(taskID, n int64) (int64, error) {
+	return f.advanceTo.Sync_TaskAdvance(context.Background(), f.player.ID(), taskID, n)
+}
+
+func (f *taskFixture) mustAdvance(t *testing.T, taskID, n, want int64) {
+	t.Helper()
+	got, err := f.advance(taskID, n)
+	if err != nil {
+		t.Fatalf("advance task %d by %d: %v", taskID, n, err)
+	}
+	if got != want {
+		t.Fatalf("advance task %d by %d: progress = %d, want %d", taskID, n, got, want)
+	}
+}
+
+// claim 走客户端协议对应的 handler。
+func (f *taskFixture) claim(taskID int64) (*pb.TaskClaimResponse, error) {
+	return f.claimTo.Sync_TaskClaim(context.Background(), f.player.ID(), &pb.TaskClaimRequest{TaskID: taskID})
+}
+
+func (f *taskFixture) mustClaim(t *testing.T, taskID, wantReward, wantBalance int64) {
+	t.Helper()
+	response, err := f.claim(taskID)
+	if err != nil {
+		t.Fatalf("claim task %d: %v", taskID, err)
+	}
+	if response.TaskID != taskID || response.Reward != wantReward || response.Balance != wantBalance {
+		t.Fatalf("claim task %d: response = %+v, want reward %d and balance %d", taskID, response, wantReward, wantBalance)
+	}
+}
+
+// locked 在业务 worker 上持实体锁执行 body。
+func (f *taskFixture) locked(t *testing.T, body func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		body()
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// taskFacts 是每日任务模块自己的全部事实：当日记录、余额、货币回执数与成功提交的次数。
+type taskFacts struct {
+	day      int64
+	progress map[int64]int64
+	claimed  map[int64]bool
+	coins    int64
+	receipts int
+	commits  int64
+}
+
+func (facts taskFacts) String() string {
+	// fmt 按键的顺序打印 map，空 map 与 nil 打印出来一样，所以字符串相等就是事实相等。
+	return fmt.Sprintf("day=%d progress=%v claimed=%v coins=%d wallet-receipts=%d commits=%d",
+		facts.day, facts.progress, facts.claimed, facts.coins, facts.receipts, facts.commits)
+}
+
+func (f *taskFixture) facts(t *testing.T) taskFacts {
+	t.Helper()
+	got := taskFacts{progress: map[int64]int64{}, claimed: map[int64]bool{}}
+	f.locked(t, func() {
+		state := f.player.Dao().GetTask()
+		got.day = state.GetDay()
+		state.RangeProgress(func(taskID, progress int64) bool {
+			got.progress[taskID] = progress
+			return true
+		})
+		state.RangeClaimed(func(taskID int64, claimed bool) bool {
+			got.claimed[taskID] = claimed
+			return true
+		})
+		got.coins = f.player.Dao().GetWallet().GetCoins()
+		got.receipts = f.player.Dao().GetWalletLedger().ReceiptsLen()
+	})
+	got.commits = f.committer.commits.Load()
+	return got
+}
+
+// want 断言事实恰好是 want：多一个键、少一个键、数不同都算错。
+func (f *taskFixture) want(t *testing.T, when string, want taskFacts) {
+	t.Helper()
+	if got := f.facts(t); got.String() != want.String() {
+		t.Fatalf("%s:\n got  %v\n want %v", when, got, want)
+	}
+}
+
+func TestTaskAdvanceAccumulatesAndCapsAtTheTarget(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestSpend, 2, 2)
+	f.want(t, "after two of three", taskFacts{day: 20261110, progress: map[int64]int64{2: 2}, commits: 1})
+	// 多推进的部分不算：进度封顶在目标次数 3。
+	f.mustAdvance(t, taskTestSpend, 5, 3)
+	f.mustAdvance(t, taskTestBattle, 4, 4)
+	// 一次推进的次数再大也只是封顶，不会溢出成负数绕过去。
+	f.mustAdvance(t, taskTestBattle, math.MaxInt64, 10)
+	f.want(t, "after capping", taskFacts{day: 20261110, progress: map[int64]int64{2: 3, 3: 10}, commits: 4})
+}
+
+// 已完成、已领奖的任务再推进是无害的空操作：不报错、返回原进度、没有提交。
+func TestTaskAdvanceOnAFinishedOrClaimedTaskWritesNothing(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.want(t, "advancing a finished task", taskFacts{day: 20261110, progress: map[int64]int64{1: 1}, commits: 1})
+	f.mustClaim(t, taskTestCheckin, 20, 20)
+	f.mustAdvance(t, taskTestCheckin, 7, 1)
+	f.want(t, "advancing a claimed task", taskFacts{day: 20261110, progress: map[int64]int64{1: 1}, claimed: map[int64]bool{1: true}, coins: 20, commits: 2})
+}
+
+func TestTaskAdvanceRefusalsWriteNothing(t *testing.T) {
+	f := newTaskFixture(t)
+	for _, taskID := range []int64{taskTestUnknown, 0, -1} {
+		if _, err := f.advance(taskID, 1); !errors.Is(err, apperrors.ErrTaskUnknown) {
+			t.Fatalf("advance task %d: err = %v, want task_unknown", taskID, err)
+		}
+	}
+	for _, n := range []int64{0, -1, math.MinInt64} {
+		if _, err := f.advance(taskTestSpend, n); !errors.Is(err, apperrors.ErrTaskCountInvalid) {
+			t.Fatalf("advance by %d: err = %v, want task_count_invalid", n, err)
+		}
+	}
+	f.want(t, "refusals on a fresh player", taskFacts{})
+	// 被拒绝的推进也不触发清零：跨天之后记录仍是昨天的。
+	f.mustAdvance(t, taskTestSpend, 2, 2)
+	f.pass(24 * time.Hour)
+	if _, err := f.advance(taskTestUnknown, 1); !errors.Is(err, apperrors.ErrTaskUnknown) {
+		t.Fatalf("err = %v, want task_unknown", err)
+	}
+	if _, err := f.advance(taskTestSpend, 0); !errors.Is(err, apperrors.ErrTaskCountInvalid) {
+		t.Fatalf("err = %v, want task_count_invalid", err)
+	}
+	f.want(t, "refusals on the next day", taskFacts{day: 20261110, progress: map[int64]int64{2: 2}, commits: 1})
+}
+
+func TestTaskClaimPaysTheRewardIntoTheWallet(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestSpend, 3, 3)
+	f.mustClaim(t, taskTestSpend, 30, 30)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.mustClaim(t, taskTestCheckin, 20, 50)
+	// 发奖不占货币的去重窗口：领没领过记在任务自己的状态里。
+	f.want(t, "after two claims", taskFacts{day: 20261110, progress: map[int64]int64{1: 1, 2: 3}, claimed: map[int64]bool{1: true, 2: true}, coins: 50, commits: 4})
+}
+
+func TestTaskClaimTwiceOnTheSameDayWritesNothing(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestSpend, 3, 3)
+	f.mustClaim(t, taskTestSpend, 30, 30)
+	f.pass(3 * time.Hour) // 同一个业务日
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := f.claim(taskTestSpend); !errors.Is(err, apperrors.ErrTaskClaimed) {
+			t.Fatalf("attempt %d: err = %v, want task_claimed", attempt, err)
+		}
+	}
+	f.want(t, "after repeated claims", taskFacts{day: 20261110, progress: map[int64]int64{2: 3}, claimed: map[int64]bool{2: true}, coins: 30, commits: 2})
+}
+
+func TestTaskClaimUnfinishedWritesNothing(t *testing.T) {
+	f := newTaskFixture(t)
+	// 从未推进过任何任务。
+	if _, err := f.claim(taskTestSpend); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+		t.Fatalf("err = %v, want task_incomplete", err)
+	}
+	f.want(t, "claim on a fresh player", taskFacts{})
+	// 差一次没做完；别的任务做完了也不能替它领。
+	f.mustAdvance(t, taskTestSpend, 2, 2)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	if _, err := f.claim(taskTestSpend); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+		t.Fatalf("err = %v, want task_incomplete", err)
+	}
+	if _, err := f.claim(taskTestBattle); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+		t.Fatalf("err = %v, want task_incomplete", err)
+	}
+	f.want(t, "claim one short of the target", taskFacts{day: 20261110, progress: map[int64]int64{1: 1, 2: 2}, commits: 2})
+}
+
+func TestTaskClaimUnknownTaskWritesNothing(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	for _, taskID := range []int64{taskTestUnknown, 0, -1} {
+		if _, err := f.claim(taskID); !errors.Is(err, apperrors.ErrTaskUnknown) {
+			t.Fatalf("claim task %d: err = %v, want task_unknown", taskID, err)
+		}
+	}
+	f.want(t, "after unknown claims", taskFacts{day: 20261110, progress: map[int64]int64{1: 1}, commits: 1})
+}
+
+// 发奖被货币模块拒绝（余额放不下）时领奖记录也不写：之后腾出余额还能领。
+func TestTaskClaimRefusedByTheWalletWritesNothing(t *testing.T) {
+	f := newTaskFixture(t)
+	RegisterWalletGrantNestHandlers()
+	RegisterWalletSpendNestHandlers()
+	if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "fill", math.MaxInt64-10); err != nil {
+		t.Fatal(err)
+	}
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	if _, err := f.claim(taskTestCheckin); !errors.Is(err, apperrors.ErrWalletOverflow) {
+		t.Fatalf("err = %v, want wallet_overflow", err)
+	}
+	f.want(t, "after the wallet refused", taskFacts{day: 20261110, progress: map[int64]int64{1: 1}, coins: math.MaxInt64 - 10, receipts: 1, commits: 2})
+	if _, err := sender.NewWalletSpendSender(f.engine).Sync_WalletSpend(context.Background(), f.player.ID(), &pb.WalletSpendRequest{Key: "room", Amount: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	f.mustClaim(t, taskTestCheckin, 20, math.MaxInt64-10-1000+20)
+}
+
+// 惰性清零发生在只推进、不领奖的路径上：新的一天第一次推进先清空昨天的进度与领奖记录，再记这一次。
+func TestTaskNewDayClearsProgressAndClaimsBeforeAdvancing(t *testing.T) {
+	f := newTaskFixture(t)
+	f.setClock(time.Date(2026, 11, 10, 23, 59, 59, 999_000_000, time.UTC)) // 业务日的最后一毫秒
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.mustClaim(t, taskTestCheckin, 20, 20)
+	f.mustAdvance(t, taskTestSpend, 2, 2)
+	f.mustAdvance(t, taskTestBattle, 4, 4)
+	f.want(t, "end of day one", taskFacts{day: 20261110, progress: map[int64]int64{1: 1, 2: 2, 3: 4}, claimed: map[int64]bool{1: true}, coins: 20, commits: 4})
+
+	f.pass(time.Millisecond) // 下一个业务日的第一毫秒
+	// 昨天的 2 次不带过来：今天从 0 起推进 1 次；别的任务的进度和领奖记录一起清掉，钱不动。
+	f.mustAdvance(t, taskTestSpend, 1, 1)
+	f.want(t, "first advance of day two", taskFacts{day: 20261111, progress: map[int64]int64{2: 1}, coins: 20, commits: 5})
+	// 昨天领过的任务今天做完可以再领一次。
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.mustClaim(t, taskTestCheckin, 20, 40)
+	f.want(t, "claim on day two", taskFacts{day: 20261111, progress: map[int64]int64{1: 1, 2: 1}, claimed: map[int64]bool{1: true}, coins: 40, commits: 7})
+}
+
+// 昨天做完没领的今天不能补领。被拒的领取不清零：跨天后没有新的推进时，记录（也就是客户端经同步
+// 看到的）仍是昨天的，Day 还是昨天——客户端靠比对 Day 知道这份记录已经过期。
+func TestTaskFinishedYesterdayCannotBeClaimedToday(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestSpend, 3, 3)
+	f.pass(24 * time.Hour)
+	if _, err := f.claim(taskTestSpend); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+		t.Fatalf("err = %v, want task_incomplete", err)
+	}
+	f.want(t, "stale record after the refused claim", taskFacts{day: 20261110, progress: map[int64]int64{2: 3}, commits: 1})
+	// 今天重新做完才能领。
+	f.mustAdvance(t, taskTestSpend, 3, 3)
+	f.mustClaim(t, taskTestSpend, 30, 30)
+	f.want(t, "after finishing again today", taskFacts{day: 20261111, progress: map[int64]int64{2: 3}, claimed: map[int64]bool{2: true}, coins: 30, commits: 3})
+}
+
+// 任务记录与货币在同一笔事务里：提交被拒绝时进度、领奖记录、清零与钱一起回滚，之后还能照常再做。
+func TestTaskRejectedCommitRollsBackProgressClaimsAndCoins(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.mustClaim(t, taskTestCheckin, 20, 20)
+	f.mustAdvance(t, taskTestSpend, 2, 2)
+	dayOne := taskFacts{day: 20261110, progress: map[int64]int64{1: 1, 2: 2}, claimed: map[int64]bool{1: true}, coins: 20, commits: 3}
+
+	f.committer.reject.Store(true)
+	if _, err := f.advance(taskTestSpend, 1); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rolled-back advance", dayOne)
+
+	f.mustAdvance(t, taskTestSpend, 1, 3)
+	f.committer.reject.Store(true)
+	if _, err := f.claim(taskTestSpend); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	dayOne.progress[2] = 3
+	dayOne.commits = 4
+	f.want(t, "rolled-back claim", dayOne)
+	// 回滚后同一天还能领：上一次没有生效。
+	f.mustClaim(t, taskTestSpend, 30, 50)
+	dayOne.claimed[2] = true
+	dayOne.coins = 50
+	dayOne.commits = 5
+	f.want(t, "claim after the rollback", dayOne)
+
+	// 跨天后的第一次推进连同清零一起回滚：记录整份退回昨天的样子。
+	f.pass(24 * time.Hour)
+	f.committer.reject.Store(true)
+	if _, err := f.advance(taskTestBattle, 1); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rolled-back day rollover", dayOne)
+	f.mustAdvance(t, taskTestBattle, 1, 1)
+	f.want(t, "day rollover after the rollback", taskFacts{day: 20261111, progress: map[int64]int64{3: 1}, coins: 50, commits: 6})
+}
+
+// 业务时间倒退（时钟被拨回）不清零也不能再领一遍：记录留在较新的那一天继续用。
+func TestTaskClockGoingBackwardsDoesNotReopenClaims(t *testing.T) {
+	f := newTaskFixture(t)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.mustClaim(t, taskTestCheckin, 20, 20)
+	f.pass(-24 * time.Hour)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	if _, err := f.claim(taskTestCheckin); !errors.Is(err, apperrors.ErrTaskClaimed) {
+		t.Fatalf("err = %v, want task_claimed", err)
+	}
+	f.mustAdvance(t, taskTestSpend, 1, 1)
+	f.want(t, "after the clock went back a day", taskFacts{day: 20261110, progress: map[int64]int64{1: 1, 2: 1}, claimed: map[int64]bool{1: true}, coins: 20, commits: 3})
+}
+
+// “哪一天”跟部署配置的业务日走，不是 UTC 自然日：每日 05:00 重置时，凌晨 04:59 还算前一天。
+func TestTaskDayFollowsTheConfiguredBusinessDay(t *testing.T) {
+	f := newTaskFixture(t)
+	calendar, err := clock.NewCalendar(nil, 5*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := clock.ProcessCalendar()
+	clock.SetCalendar(calendar)
+	t.Cleanup(func() { clock.SetCalendar(previous) })
+
+	f.setClock(time.Date(2026, 11, 10, 23, 0, 0, 0, time.UTC))
+	f.mustAdvance(t, taskTestSpend, 2, 2)
+	// UTC 已经是 11 日，业务日还是 10 日：进度接着算。
+	f.setClock(time.Date(2026, 11, 11, 4, 59, 59, 999_000_000, time.UTC))
+	f.mustAdvance(t, taskTestSpend, 1, 3)
+	f.mustClaim(t, taskTestSpend, 30, 30)
+	f.want(t, "before the reset time", taskFacts{day: 20261110, progress: map[int64]int64{2: 3}, claimed: map[int64]bool{2: true}, coins: 30, commits: 3})
+	// 05:00 起是新的业务日。
+	f.pass(time.Millisecond)
+	f.mustAdvance(t, taskTestSpend, 1, 1)
+	f.want(t, "after the reset time", taskFacts{day: 20261111, progress: map[int64]int64{2: 1}, coins: 30, commits: 4})
+}
+
+// 当日记录不随天数增长：做上两百天，进度与领奖记录各自至多是任务表的条数，每天照常发奖，
+// 也不占货币的去重窗口（它只留最近 128 次，按天递增的键会把它占满）。
+func TestTaskRecordStaysBoundedOverManyDays(t *testing.T) {
+	f := newTaskFixture(t)
+	const days = 200
+	for day := 1; day <= days; day++ {
+		f.mustAdvance(t, taskTestCheckin, 1, 1)
+		f.mustAdvance(t, taskTestSpend, 3, 3)
+		f.mustAdvance(t, taskTestBattle, 10, 10)
+		for _, taskID := range []int64{taskTestCheckin, taskTestSpend, taskTestBattle} {
+			if _, err := f.claim(taskID); err != nil {
+				t.Fatalf("day %d task %d: %v", day, taskID, err)
+			}
+		}
+		// 表里没有的任务号进不了记录。
+		if _, err := f.advance(taskTestUnknown+int64(day), 1); !errors.Is(err, apperrors.ErrTaskUnknown) {
+			t.Fatalf("day %d: err = %v, want task_unknown", day, err)
+		}
+		if day < days {
+			f.pass(24 * time.Hour)
+		}
+	}
+	lastDay := int64(clock.Calendar{}.BusinessDay(time.UnixMilli(f.now.Load())))
+	f.want(t, "after 200 days", taskFacts{
+		day:      lastDay,
+		progress: map[int64]int64{1: 1, 2: 3, 3: 10},
+		claimed:  map[int64]bool{1: true, 2: true, 3: true},
+		coins:    days * 150,
+		commits:  days * 6,
+	})
+}
+
+// 组件在拒绝之前什么都不写，不靠事务回滚兜底：别的功能在自己的事务里调 Advance、丢掉它的错误继续提交时，
+// 任务记录不会留下半截写入。这里不经 Nest、持实体锁直接调组件，没有回滚替它擦掉。
+func TestTaskComponentRefusesBeforeWritingAnything(t *testing.T) {
+	f := newTaskFixture(t)
+	RegisterWalletGrantNestHandlers()
+	now := f.now.Load()
+	tomorrow := now + int64(24*time.Hour/time.Millisecond)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	f.mustClaim(t, taskTestCheckin, 20, 20)
+	f.mustAdvance(t, taskTestSpend, 3, 3)
+	f.mustAdvance(t, taskTestBattle, 4, 4)
+	// 把余额填到再也放不下 30 金币：做完的任务 2 领奖会被货币模块拒绝。
+	if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "fill", math.MaxInt64-40); err != nil {
+		t.Fatal(err)
+	}
+	before := taskFacts{
+		day:      20261110,
+		progress: map[int64]int64{1: 1, 2: 3, 3: 4},
+		claimed:  map[int64]bool{1: true},
+		coins:    math.MaxInt64 - 20,
+		receipts: 1,
+		commits:  5,
+	}
+	f.want(t, "before the refusals", before)
+	f.locked(t, func() {
+		tasks := f.player.TaskComp()
+		if _, err := tasks.Advance(taskTestUnknown, 1, tomorrow); !errors.Is(err, apperrors.ErrTaskUnknown) {
+			t.Errorf("advance an unknown task: err = %v", err)
+		}
+		if _, err := tasks.Advance(taskTestBattle, 0, tomorrow); !errors.Is(err, apperrors.ErrTaskCountInvalid) {
+			t.Errorf("advance by zero: err = %v", err)
+		}
+		if _, err := tasks.Claim(taskTestUnknown, now); !errors.Is(err, apperrors.ErrTaskUnknown) {
+			t.Errorf("claim an unknown task: err = %v", err)
+		}
+		if _, err := tasks.Claim(taskTestBattle, now); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+			t.Errorf("claim an unfinished task: err = %v", err)
+		}
+		if _, err := tasks.Claim(taskTestCheckin, now); !errors.Is(err, apperrors.ErrTaskClaimed) {
+			t.Errorf("claim twice: err = %v", err)
+		}
+		if _, err := tasks.Claim(taskTestSpend, now); !errors.Is(err, apperrors.ErrWalletOverflow) {
+			t.Errorf("claim into a full wallet: err = %v", err)
+		}
+		if _, err := tasks.Claim(taskTestSpend, tomorrow); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+			t.Errorf("claim yesterday's task: err = %v", err)
+		}
+	})
+	f.want(t, "after refusals without a transaction", before)
+}
+
+// Task 下发给玩家本人：客户端靠它显示进度，靠其中的 Day 判断记录是不是今天的。
+// 只断言任务模块自己的字段：同一个 DAO 上还有别的模块的字段。
+func TestTaskRecordIsSyncedToThePlayer(t *testing.T) {
+	synced := map[string]bool{}
+	for _, field := range db.PlayerDaoSyncFields() {
+		synced[field.Name] = true
+	}
+	if !synced["Task"] {
+		t.Fatal("PlayerDao.Task is not synced: the player would not see task progress")
+	}
+}
