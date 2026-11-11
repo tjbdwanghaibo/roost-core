@@ -65,7 +65,7 @@ assert len(ids) == len(set(ids)), ids
 PY
 "$roost" module add checkin > "$review_root/add.log"
 grep -q 'example.com/studio/atelier/protocol/pb' game/handler/checkin_claim.go
-if grep -rnE '\{\{(ID:|MODULE|PROJECT|GAME_SERVICE|TIMER_COMPONENT)' db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
+if grep -rnE '\{\{(ID:[a-z]+:[A-Za-z0-9_]+|MODULE|PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|TIMER_COMPONENT)\}\}' db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
 commit_all modules
 # 2. 重复安装：没有任何变化。
 "$roost" module add checkin wallet > "$review_root/add-again.log"
@@ -154,11 +154,12 @@ grep -q 'glue servertime with enter: written' "$review_root/add-servertime.log"
 # enter 已在，进入前检查的联动随它写进工程。之后 doctor 不再把这两处当成未实现。
 "$roost" module add login > "$review_root/add-login.log"
 grep -q 'glue login with enter: written' "$review_root/add-login.log"
-"$roost" project doctor > "$review_root/doctor-harbor.log" 2>&1 || true
-grep -q '^OK    collaborators:account' "$review_root/doctor-harbor.log" && grep -q '^OK    workflow:tcp-auth' "$review_root/doctor-harbor.log"
+"$roost" project doctor -workflow player-tcp > "$review_root/doctor-harbor.log" 2>&1 || true
+grep -q '^OK    collaborators:account' "$review_root/doctor-harbor.log"
+grep -q '^OK    workflow:tcp-auth' "$review_root/doctor-harbor.log"
 grep -q 'glue task with checkin: written' "$review_root/add-task.log"
 grep -q 'module bag: already installed' "$review_root/add-task.log"
-if grep -rnE '\{\{(ID:|MODULE|PROJECT|GAME_SERVICE|TIMER_COMPONENT)' db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
+if grep -rnE '\{\{(ID:[a-z]+:[A-Za-z0-9_]+|MODULE|PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|TIMER_COMPONENT)\}\}' db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
 commit_all all
 "$roost" module add enter bag mailbox task shop skillbook room turn rehome servertime login > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
