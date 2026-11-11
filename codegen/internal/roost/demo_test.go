@@ -266,7 +266,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("roost.yaml does not record %q under the bag module", owned)
 		}
 	}
-	if dao := read("db/def/player.go"); !strings.Contains(dao, "Bag BagState `dao:\"persist,sync\" store:\"bag\"`") || strings.Contains(dao, "store:\"items\"") {
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "Bag BagState `store:\"bag\" dao:\"persist,sync\"`") || strings.Contains(dao, "store:\"items\"") {
 		t.Errorf("PlayerDao does not carry the bag as the module's nested state (or still has the demo's flat Items):\n%s", dao)
 	}
 	if aggregate := read("game/entities/player/entity.go"); !strings.Contains(aggregate, "`comp:\"CompTypeBag\"`") {
