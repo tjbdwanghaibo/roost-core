@@ -1,0 +1,21 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerIdleClaim 的时间由 Nest 冻结；客户端不得上传离线时长或奖励金额。
+//
+//roost:nest rollback=undo durability=strict
+func handlerIdleClaim(target player.IIdleEntity, request *pb.IdleClaimRequest, nowUnixMilli int64) (*pb.IdleClaimResponse, error) {
+	if request == nil {
+		return nil, apperrors.ErrIdleSequence
+	}
+	r, err := target.IdleComp().Claim(request.Sequence, nowUnixMilli)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.IdleClaimResponse{Reward: r.Reward, Balance: r.Balance, SettledAt: r.SettledAt, Sequence: r.Sequence, Capped: r.Capped}, nil
+}

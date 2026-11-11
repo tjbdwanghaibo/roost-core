@@ -1,0 +1,38 @@
+package actor
+
+import (
+	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"sync/atomic"
+	gameheartbeat "{{MODULE}}/game/heartbeat"
+)
+
+func newHost(owner entity.IThreadSafeEntity) *heartbeat.Host {
+	return gameheartbeat.Driver.NewHost(owner)
+}
+
+var lookup atomic.Pointer[func(int64) entity.IThreadSafeEntity]
+
+func Get(id int64) entity.IThreadSafeEntity {
+	if fn := lookup.Load(); fn != nil {
+		return (*fn)(id)
+	}
+	return nil
+}
+
+// Start 只提供跟随目标的已发布视图；驱动的 Bind/Start/Stop 全由 heartbeat Mod 管理。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	access, ok := app.Lookup[*entity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil || access.Manager() == nil {
+		return nil, errors.New("actor: entity runtime is unavailable")
+	}
+	get := func(id int64) entity.IThreadSafeEntity { return access.Manager().Get(id) }
+	if !lookup.CompareAndSwap(nil, &get) {
+		return nil, errors.New("actor: runtime already started")
+	}
+	return func(context.Context) error { lookup.CompareAndSwap(&get, nil); return nil }, nil
+}

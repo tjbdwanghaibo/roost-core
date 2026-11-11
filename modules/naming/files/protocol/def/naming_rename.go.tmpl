@@ -1,0 +1,20 @@
+//go:build protocoldef
+
+package protocoldef
+
+// 同一笔请求必须重用 RequestKey；失败可能是结果未知，客户端不能换 key 绕过在途操作。
+type NamingRenameRequest struct {
+	RequestKey string `pb:"1"`
+	Name       string `pb:"2"`
+}
+type NamingRenameResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	Name   string `pb:"3"`
+}
+
+//roost:protocol group=game handler=naming
+type NamingRenameProtocol interface {
+	//roost:msg id={{ID:protocol:NamingRename}}
+	NamingRename(NamingRenameRequest) NamingRenameResponse
+}

@@ -1,0 +1,16 @@
+name: equipment
+summary: 装备：道具表定义槽位、穿卸与背包原子扣回、同槽替换、可选属性联动
+requires: [bag]
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode, config]
+entity: Player
+state:
+  - {field: Equipment, type: EquipmentState, store: equipment, dao: 'persist,sync', comment: 最多32槽的穿戴事实；与背包扣回在同一事务。}
+component: Equipment
+protocols: [EquipmentEquip, EquipmentUnequip]
+errcodes: [equipment_item_invalid, equipment_level_invalid, equipment_slot_invalid]
+verify:
+  packages: [./game/handler]
+  run: ^TestEquipment
+  pass: 16

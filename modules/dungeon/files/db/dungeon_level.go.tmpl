@@ -1,0 +1,22 @@
+package db
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
+)
+
+// DungeonLevelDAO 只补实体生成器约定的零参工厂与集合常量；持久编码、版本、撤回都由正式LevelDAO负责。
+// 使用类型别名保持MutationParticipant与AggregateMember指针身份一致；不能嵌入包装制造两个参与者。
+// 它作为Dungeon的独立dao字段进入DaoBuilders和DaoAggregate，不能改成普通DAO里的自制JSON字节。
+type DungeonLevelDAO = level.LevelDAO
+
+const DungeonLevelDAOCollection = level.CollectionName
+
+func NewDungeonLevelDAO() *DungeonLevelDAO {
+	return level.NewLevelDAO(0, DungeonDaoDBName)
+}
+
+var _ entity.DaoInterface = (*DungeonLevelDAO)(nil)
+var _ entity.PersistedDaoLoader = (*DungeonLevelDAO)(nil)
+var _ nest.MutationParticipant = (*DungeonLevelDAO)(nil)

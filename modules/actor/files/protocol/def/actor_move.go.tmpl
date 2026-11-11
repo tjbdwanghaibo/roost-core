@@ -1,0 +1,20 @@
+//go:build protocoldef
+
+package protocoldef
+
+type ActorMoveRequest struct {
+	X int64 `pb:"1"`
+	Y int64 `pb:"2"`
+}
+type ActorMoveResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	X      int64  `pb:"3"`
+	Y      int64  `pb:"4"`
+}
+
+//roost:protocol group=game handler=actor
+type ActorMoveProtocol interface {
+	//roost:msg id={{ID:protocol:ActorMove}}
+	ActorMove(ActorMoveRequest) ActorMoveResponse
+}

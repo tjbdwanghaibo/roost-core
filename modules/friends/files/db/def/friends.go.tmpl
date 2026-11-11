@@ -1,0 +1,8 @@
+package dbdef
+
+// FriendsState 仅由同服两实体事务修改。三个名单分别有界，不保存无界历史。
+type FriendsState struct {
+	Peers    map[int64]bool `store:"1"`
+	Incoming map[int64]bool `store:"2"`
+	Blocked  map[int64]bool `store:"3"`
+}

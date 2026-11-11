@@ -1,0 +1,15 @@
+name: monster
+summary: 场景怪物：共享actor移动、AI巡逻与感知追击、生命代际、死亡隐藏与同ID延迟重生；出生与销毁走正式实体管理
+requires: [actor, scene]
+needs:
+  mods: [nest, heartbeat]
+  features: [entity, dao, protocol]
+entity: Monster
+entities: [Monster]
+component: MonsterActor
+protocols: [MonsterInspect]
+runtime: {package: game/monster/service, start: Start}
+verify:
+  packages: [./game/handler, ./game/monster/service]
+  run: ^TestMonster
+  pass: 25

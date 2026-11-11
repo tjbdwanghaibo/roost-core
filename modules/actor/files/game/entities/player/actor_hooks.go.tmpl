@@ -1,0 +1,75 @@
+package player
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"sort"
+	"{{MODULE}}/game/actor"
+)
+
+// 只在 init 登记，在实例初始化时复制；运行中不允许修改注册表。
+// 联动属于使用方：actor 不 import scene / monster / combat。
+var actorHooks = map[string]func(*Player) actor.Hooks{}
+
+func OnActor(name string, factory func(*Player) actor.Hooks) {
+	if name == "" || factory == nil {
+		panic("actor: named hook factory is required")
+	}
+	if _, exists := actorHooks[name]; exists {
+		panic(fmt.Sprintf("actor: duplicate hook %s", name))
+	}
+	actorHooks[name] = factory
+}
+func (component *ActorComponent) hooks() actor.Hooks {
+	names := make([]string, 0, len(actorHooks))
+	for name := range actorHooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var enters, leaves []func(*actor.Body) error
+	var ticks []func(*actor.Body, heartbeat.Beat) error
+	for _, name := range names {
+		hooks := actorHooks[name](component.owner)
+		if hooks.Enter != nil {
+			enters = append(enters, hooks.Enter)
+		}
+		if hooks.Leave != nil {
+			leaves = append(leaves, hooks.Leave)
+		}
+		if hooks.AfterTick != nil {
+			ticks = append(ticks, hooks.AfterTick)
+		}
+	}
+	out := actor.Hooks{}
+	if len(enters) > 0 {
+		out.Enter = func(b *actor.Body) error {
+			for _, fn := range enters {
+				if err := fn(b); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	if len(leaves) > 0 {
+		out.Leave = func(b *actor.Body) error {
+			for _, fn := range leaves {
+				if err := fn(b); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	if len(ticks) > 0 {
+		out.AfterTick = func(b *actor.Body, beat heartbeat.Beat) error {
+			for _, fn := range ticks {
+				if err := fn(b, beat); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	return out
+}

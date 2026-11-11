@@ -1,0 +1,7 @@
+=== RUN   TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations
+    module_monster_test.go:55: compiled mutation killed by TestMonsterOldLifeDamageAndCommandsAreRejected
+    module_monster_test.go:55: compiled mutation killed by TestMonsterDeathHidesButRetainsSpawnSlotUntilRespawn
+    module_monster_test.go:55: compiled mutation killed by TestMonsterChasesPublishedPlayerWithoutRestartingSlowFollow
+--- PASS: TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations (53.42s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	54.481s

@@ -2,6 +2,8 @@
 
 维护者 2026-11-11：“这个方案你来做部分……actor 的可以拆出来和剩下的部分，先整理出文档，我给另一个 agent”。本文是[待办交接](HANDOFF-2026-11-11-module-backlog.md)的补充：`gameplay/` 各包怎么进模块、交接清单之外还能加哪些模块、两个会话各做哪部分。规矩与验证节奏照交接文档 §3。
 
+当前执行归属：维护者已明确，本文“场景会话（另一个 agent）”由本会话承担，包括场景线与交出的六个模块。原会话的 login / servertime、换服 BM-04/05 与 skill 结构重写不在本会话改动范围。完成范围、验证状态和仍未迁移的 demo 适配统一见[交接 §2](HANDOFF-2026-11-11-module-backlog.md#2-现在的状态2026-11-12)。
+
 ## 1. 判断标准
 
 `gameplay/` 下的包是**机制库**（怎么算移动、怎么编译技能），模块是**接好线的业务单元**（状态 + 组件 + 协议 + 测试，装上就能用）。包不搬进模块；由模块把它们包一层接到实体上——game-demo 里这层接线现在靠手写（心跳 8 个文件、移动 7 个文件）。
@@ -54,7 +56,7 @@
 
 | 模块 | 依赖 | 要点 |
 | --- | --- | --- |
-| naming | profile；业务服务 `uses: [directory]` | 做成 profile + directory 的联动或独立模块：改名先向 directory 两阶段占名，占不到答带码错误；改名与占名的失败回退要有场景 |
+| naming | profile；共享 Redis Directory Mod（安装时代办） | 做成 profile + directory 的联动或独立模块：改名先向 directory 两阶段占名，占不到答带码错误；改名与占名的失败回退要有场景 |
 | cdkey | mailbox（发奖走邮件） | 一码一次、一人一次两种；兑换事实记在玩家档里且有界；码表做成配置表；重复兑换零写入 |
 | notice | chat（系统频道 `AnnounceWorld`） | 公告、跑马灯：服务端入口加 GM；要不要定时播放先定（要的话用服务级接线点） |
 | gacha | wallet、bag | 概率表与保底做成配置表；一次事务里扣钱、改保底计数、发卡；十连；请求键防重发（照 shop）；参考 `scripts/testdata/card-rpg/` |
@@ -67,5 +69,5 @@
 
 - 原会话的模块只挂 Player、不碰场景与 actor；会动的公共文件是 `scripts/test-modules-generated.sh`、`modules/README.md`、`docs/framework/CAPABILITIES.md`、`CHANGELOG.md`——各自只加自己的行，合并时取并集。
 - 原会话在自己的 worktree 里做、合回前先并入主线的最新提交；场景会话直接在 `feat/business-modules` 的检出里做。
-- main 上有四项地形修复（`2ec5c577`，RV-20261110-01～04：`Replicator.Want` 返回错误、水深改 64 位、`Meta` 一律是副本）还没并进 `feat/business-modules`；做 `terrain` 模块或动 demo 的地形分区之前先把 main 并进来。
+- main 上四项地形修复（`2ec5c577`，RV-20261110-01～04：`Replicator.Want` 返回错误、水深改 64 位、`Meta` 一律是副本）已由 `3803329c` 并入 `feat/business-modules`；本轮地形基于这些修复实施。
 - 给 agent 用的 skill 最后由原会话统一重写，迁模块时只对 `compose.md` 做事实层面的跟进。

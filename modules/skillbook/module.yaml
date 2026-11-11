@@ -9,4 +9,4 @@ protocols: [SkillCatalog]
 verify:
   packages: [./game/skillbook, ./game/controllers/skillbook]
   run: ^TestSkillbook
-  pass: 8
+  pass: 11

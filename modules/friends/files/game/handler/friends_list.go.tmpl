@@ -1,0 +1,8 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+//roost:nest
+func handlerFriendsList(target player.IFriendsEntity) (player.FriendsSnapshot, error) {
+	return target.FriendsComp().Snapshot(), nil
+}

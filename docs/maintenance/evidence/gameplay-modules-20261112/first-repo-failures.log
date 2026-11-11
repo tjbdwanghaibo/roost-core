@@ -1,0 +1,6 @@
+=== RUN   TestGeneratedBeginnerAndManifestDocumentationIsComplete
+    roost_test.go:2155: manifest guide missing mod "directory"
+--- FAIL: TestGeneratedBeginnerAndManifestDocumentationIsComplete (0.00s)
+            scene_test.go:635: the player's own full lacks "attribute_gear": map[_id:9524228 attribute_base:{map[]} attribute_final:{map[1:100 2:10 3:30]} bag:{map[]} cell_attack:0 cell_hp:0 cell_max_hp:0 cell_power:0 equipment:{map[]} facing:0 guild_id:0 pos_x:0 pos_y:0 profile:{ 0} profile_private:{0} scene_id:0 wallet:{0}]
+        --- FAIL: TestEachObserverGetsOnlyItsViewOfAPlayer (0.01s)
+--- FAIL: TestClientSDKAgainstGeneratedPlayerTCP (147.45s)

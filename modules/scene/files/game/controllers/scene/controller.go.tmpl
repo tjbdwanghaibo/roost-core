@@ -1,0 +1,47 @@
+package scene
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	scenes "{{MODULE}}/game/scene/service"
+	"{{MODULE}}/protocol/pb"
+)
+
+type Controller struct {
+	manager *scenes.Manager
+	client  nest.Client
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	manager, err := scenes.FromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := app.Lookup[nest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("scene: Nest is unavailable")
+	}
+	return &Controller{manager: manager, client: client}, nil
+}
+
+// HandleSceneChange 的玩家身份只取认证上下文；请求不能带任意 PlayerID。
+func (c *Controller) HandleSceneChange(ctx *playeraccess.Context, request *pb.SceneChangeRequest) (*pb.SceneChangeResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("scene: invalid request")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	ids, target, err := c.manager.IDs(request.FromID, request.ToID)
+	if err != nil {
+		return nil, err
+	}
+	return sender.NewSceneChangeSender(c.client).MultiGroupSync_SceneChange(ctx.Context(), id, ids, target)
+}

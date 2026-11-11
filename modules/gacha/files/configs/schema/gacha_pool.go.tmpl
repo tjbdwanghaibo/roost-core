@@ -1,0 +1,13 @@
+package schema
+
+// GachaPool 定义金币价格和硬保底。一次抽出 PityItemID（随机或保底）就清零该池连续未出次数。
+// 配置与 CSV 归工程；保底道具必须也出现在该池掉落表里，引用与合计权重在抽卡前校验。
+//
+//roost:table name=gacha_pool key=ID
+type GachaPool struct {
+	ID         int64 `csv:"id" json:"id" title:"ID" required:"true" unique:"true" min:"1"`
+	Price      int64 `csv:"price" json:"price" title:"Price" min:"1"`
+	PityAfter  int64 `csv:"pity_after" json:"pity_after" title:"PityAfter" min:"1"`
+	PityItemID int64 `csv:"pity_item_id" json:"pity_item_id" title:"PityItemID" min:"1"`
+	Off        bool  `csv:"off" json:"off" title:"Off"`
+}

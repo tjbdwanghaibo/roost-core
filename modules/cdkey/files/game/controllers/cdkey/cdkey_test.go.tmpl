@@ -1,0 +1,550 @@
+package cdkey
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"{{MODULE}}/configs/schema"
+	db "{{MODULE}}/db"
+	gamecdkey "{{MODULE}}/game/cdkey"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	mailbox "{{MODULE}}/game/mailbox"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// 正式生成 Sender/Nest/controller/directory/mail 链路；只有提交器与服务存储在内存，不声称网络或真实持久依赖验收。
+const cdkeyEpoch int64 = 1800000000
+
+type cdkeyGetter map[int64]entity.IThreadSafeEntity
+
+func (g cdkeyGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g cdkeyGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type cdkeyCommitter struct {
+	writes atomic.Int64
+	reject atomic.Bool
+	strict atomic.Bool
+}
+
+func (c *cdkeyCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected commit rejection")
+	}
+	c.writes.Add(1)
+	c.strict.Store(record.Durability == dataengine.DurabilityStrict)
+	return nil
+}
+
+type cdkeyEnvelopes struct {
+	mu    sync.Mutex
+	items map[string]svcmail.Envelope
+}
+
+func (s *cdkeyEnvelopes) Create(_ context.Context, envelope svcmail.Envelope) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.items[envelope.ID]; ok {
+		return false, nil
+	}
+	s.items[envelope.ID] = envelope
+	return true, nil
+}
+func (s *cdkeyEnvelopes) Get(_ context.Context, id string) (svcmail.Envelope, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.items[id]
+	return e, ok, nil
+}
+func (s *cdkeyEnvelopes) GetMany(_ context.Context, ids []string) (map[string]svcmail.Envelope, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]svcmail.Envelope{}
+	for _, id := range ids {
+		if e, ok := s.items[id]; ok {
+			out[id] = e
+		}
+	}
+	return out, nil
+}
+
+type cdkeyMail struct {
+	svcmail.Mail
+	calls atomic.Int64
+	lose  atomic.Bool
+	after func()
+}
+
+func (m *cdkeyMail) Send(ctx context.Context, request svcmail.SendRequest) (svcmail.Envelope, error) {
+	m.calls.Add(1)
+	envelope, err := m.Mail.Send(ctx, request)
+	if err == nil && m.after != nil {
+		m.after()
+	}
+	if err == nil && m.lose.Swap(false) {
+		return svcmail.Envelope{}, errors.New("injected send response lost")
+	}
+	return envelope, err
+}
+
+type cdkeyDirectory struct {
+	directory.Directory
+	calls atomic.Int64
+	lose  atomic.Bool
+}
+
+func (d *cdkeyDirectory) Reserve(ctx context.Context, key string, owner directory.Owner, ttl time.Duration) (directory.Claim, error) {
+	d.calls.Add(1)
+	return d.Directory.Reserve(ctx, key, owner, ttl)
+}
+func (d *cdkeyDirectory) Commit(ctx context.Context, claim directory.Claim) (directory.Entry, error) {
+	entry, err := d.Directory.Commit(ctx, claim)
+	if err == nil && d.lose.Swap(false) {
+		return directory.Entry{}, errors.New("injected directory response lost")
+	}
+	return entry, err
+}
+
+type cdkeyFixture struct {
+	controller *Controller
+	engine     *nest.NestMgr
+	players    map[int64]*player.Player
+	commit     *cdkeyCommitter
+	dir        *cdkeyDirectory
+	mail       *cdkeyMail
+	envelopes  *cdkeyEnvelopes
+	now        atomic.Int64
+}
+
+func cdkeyLoad(t *testing.T, rows []schema.Cdkey) {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	if rows == nil {
+		rows = []schema.Cdkey{}
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cdkey.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[string, schema.Cdkey]{Name: "cdkey", File: "cdkey.json", Key: func(row schema.Cdkey) string { return row.Code }}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+func cdkeyRows() []schema.Cdkey {
+	return []schema.Cdkey{{Code: "WELCOME", Mode: "player", Coins: 100, Subject: "welcome", Body: "reward", ExpiresInSeconds: 3600}, {Code: "ONE-GIFT", Mode: "once", Coins: 500, Subject: "one gift", ExpiresInSeconds: 3600}}
+}
+func newCdkeyFixture(t *testing.T) *cdkeyFixture {
+	t.Helper()
+	cdkeyLoad(t, cdkeyRows())
+	player.RegisterEntity()
+	f := &cdkeyFixture{commit: &cdkeyCommitter{}, players: map[int64]*player.Player{}, envelopes: &cdkeyEnvelopes{items: map[string]svcmail.Envelope{}}}
+	f.now.Store(cdkeyEpoch * 1000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	getter := cdkeyGetter{}
+	for _, raw := range []int64{95101, 95102} {
+		id, err := entity.BuildEntityID(raw, player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		getter[id] = built
+		f.players[raw] = built.(*player.Player)
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	handler.RegisterCdkeyNestHandlers() // 生成的 sync.Once 保证 -count 重复运行不冲突。
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	dir, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: func() time.Time { return time.UnixMilli(f.now.Load()) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.dir = &cdkeyDirectory{Directory: dir}
+	mail, err := svcmail.New(svcmail.Config{Envelopes: f.envelopes, Mailboxes: versionstore.NewMemoryStore[int64, svcmail.Mailbox](), Sends: versionstore.NewMemoryStore[string, svcmail.SentRecord]()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mail = &cdkeyMail{Mail: mail}
+	f.controller = &Controller{ledger: sender.NewCdkeySender(f.engine), directory: f.dir, mailer: f.mail}
+	return f
+}
+func (f *cdkeyFixture) redeem(playerID int64, code string) (gamecdkey.Intent, error) {
+	return f.controller.Redeem(context.Background(), playerID, code)
+}
+func (f *cdkeyFixture) size(t *testing.T, playerID int64) int {
+	t.Helper()
+	size := 0
+	if err := f.engine.RunLocal(context.Background(), func() {
+		p := f.players[playerID]
+		p.GetMutex().Lock()
+		defer p.GetMutex().Unlock()
+		size = p.Dao().GetCdkey().ReceiptsLen()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return size
+}
+
+// restart 从正式持久格式恢复新实体和新 Nest，保留共享服务；不把旧组件指针当作重启证据。
+func (f *cdkeyFixture) restart(t *testing.T) {
+	t.Helper()
+	documents := map[int64][]byte{}
+	if err := f.engine.RunLocal(context.Background(), func() {
+		for playerID, value := range f.players {
+			value.GetMutex().Lock()
+			documents[playerID] = value.Dao().Marshal()
+			value.GetMutex().Unlock()
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	getter := cdkeyGetter{}
+	for playerID, raw := range documents {
+		id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		value := built.(*player.Player)
+		if err := value.Dao().RestorePersisted(raw, db.PlayerDaoSchemaVersion, 1); err != nil {
+			t.Fatal(err)
+		}
+		f.players[playerID], getter[id] = value, value
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(f.commit),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	f.controller = &Controller{ledger: sender.NewCdkeySender(f.engine), directory: f.dir, mailer: f.mail}
+}
+
+func TestCdkeyPlayerCodeSendsOneMailToEachPlayer(t *testing.T) {
+	f := newCdkeyFixture(t)
+	a, err := f.redeem(95101, " welcome ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.redeem(95102, "WELCOME")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.MailID == "" || b.MailID == "" || a.MailID == b.MailID || f.mail.calls.Load() != 2 || f.size(t, 95101) != 1 || f.size(t, 95102) != 1 {
+		t.Fatalf("results=%+v %+v", a, b)
+	}
+	e, _, _ := f.envelopes.Get(context.Background(), a.MailID)
+	attachment, err := mailbox.Decode(e.Attachment)
+	if err != nil || attachment.Amount != 100 || len(e.Recipients) != 1 || e.Recipients[0] != 95101 || !f.commit.strict.Load() {
+		t.Fatalf("mail=%+v attachment=%+v err=%v", e, attachment, err)
+	}
+}
+func TestCdkeyOnceUsesSharedAuthorityAcrossControllers(t *testing.T) {
+	f := newCdkeyFixture(t)
+	first, err := f.redeem(95101, "ONE-GIFT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := *f.controller // 第二个入口没有共享的本地去重缓存，只共用权威服务。
+	if _, err := other.Redeem(context.Background(), 95102, "ONE-GIFT"); !errors.Is(err, apperrors.ErrCdkeyTaken) {
+		t.Fatalf("global code was redeemed twice: %v", err)
+	}
+	if first.MailID == "" || f.mail.calls.Load() != 1 {
+		t.Fatalf("mail calls=%d", f.mail.calls.Load())
+	}
+}
+func TestCdkeyCompletedReplayHasZeroWritesAndNoRPC(t *testing.T) {
+	f := newCdkeyFixture(t)
+	first, err := f.redeem(95101, "WELCOME")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := f.commit.writes.Load()
+	calls := f.dir.calls.Load()
+	cdkeyLoad(t, nil)
+	second, err := f.redeem(95101, "WELCOME")
+	if err != nil || second != first || f.commit.writes.Load() != writes || f.dir.calls.Load() != calls || f.mail.calls.Load() != 1 {
+		t.Fatalf("completed replay was not read-only: %+v %v writes=%d calls=%d mail=%d", second, err, f.commit.writes.Load(), f.dir.calls.Load(), f.mail.calls.Load())
+	}
+}
+func TestCdkeyPrepareRejectionLeavesNoClaimOrMail(t *testing.T) {
+	f := newCdkeyFixture(t)
+	f.commit.reject.Store(true)
+	if _, err := f.redeem(95101, "WELCOME"); err == nil {
+		t.Fatal("commit rejection accepted")
+	}
+	if f.size(t, 95101) != 0 || f.dir.calls.Load() != 0 || f.mail.calls.Load() != 0 {
+		t.Fatal("uncommitted intent escaped to services")
+	}
+	f.commit.reject.Store(false)
+	if result, err := f.redeem(95101, "WELCOME"); err != nil || result.MailID == "" {
+		t.Fatalf("retry=%+v %v", result, err)
+	}
+}
+func TestCdkeyLostDirectoryReplyKeepsExclusiveOwner(t *testing.T) {
+	f := newCdkeyFixture(t)
+	f.dir.lose.Store(true)
+	if _, err := f.redeem(95101, "ONE-GIFT"); err == nil {
+		t.Fatal("lost reply accepted")
+	}
+	if _, err := f.redeem(95102, "ONE-GIFT"); !errors.Is(err, apperrors.ErrCdkeyTaken) {
+		t.Fatalf("unknown commit released code: %v", err)
+	}
+	if result, err := f.redeem(95101, "ONE-GIFT"); err != nil || result.MailID == "" || f.mail.calls.Load() != 1 {
+		t.Fatalf("retry=%+v %v", result, err)
+	}
+}
+func TestCdkeyLostMailReplyRecoversFrozenReward(t *testing.T) {
+	f := newCdkeyFixture(t)
+	f.mail.lose.Store(true)
+	if _, err := f.redeem(95101, "WELCOME"); err == nil {
+		t.Fatal("lost reply accepted")
+	}
+	f.restart(t)
+	cdkeyLoad(t, nil) // 配置下架后仍能恢复旧意图。
+	result, err := f.redeem(95101, "WELCOME")
+	if err != nil || result.MailID == "" || result.Coins != 100 || f.mail.calls.Load() != 2 {
+		t.Fatalf("retry=%+v %v", result, err)
+	}
+	f.envelopes.mu.Lock()
+	count := len(f.envelopes.items)
+	f.envelopes.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("mail duplicated: %d", count)
+	}
+}
+func TestCdkeyCompleteRejectionReplaysSameMail(t *testing.T) {
+	f := newCdkeyFixture(t)
+	f.mail.after = func() { f.commit.reject.Store(true) }
+	if _, err := f.redeem(95101, "WELCOME"); err == nil {
+		t.Fatal("complete rejection accepted")
+	}
+	f.mail.after = nil
+	f.commit.reject.Store(false)
+	result, err := f.redeem(95101, "WELCOME")
+	if err != nil || result.MailID == "" || f.mail.calls.Load() != 2 || f.size(t, 95101) != 1 {
+		t.Fatalf("retry=%+v %v", result, err)
+	}
+	f.envelopes.mu.Lock()
+	count := len(f.envelopes.items)
+	f.envelopes.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("mail duplicated: %d", count)
+	}
+}
+func TestCdkeyInvalidAndExactExpiryHaveZeroWrites(t *testing.T) {
+	f := newCdkeyFixture(t)
+	rows := cdkeyRows()
+	rows[0].EndsAtUnix = cdkeyEpoch
+	cdkeyLoad(t, rows)
+	for _, code := range []string{"WELCOME", "MISSING", "$bad", "x.y", strings.Repeat("X", 65)} {
+		if _, err := f.redeem(95101, code); !errors.Is(err, apperrors.ErrCdkeyInvalid) {
+			t.Fatalf("invalid %q: %v", code, err)
+		}
+	}
+	if f.commit.writes.Load() != 0 || f.dir.calls.Load() != 0 || f.size(t, 95101) != 0 {
+		t.Fatal("invalid input mutated state")
+	}
+}
+func TestCdkeyLedgerIsBoundedWithoutEvictingReceipts(t *testing.T) {
+	f := newCdkeyFixture(t)
+	first, err := f.redeem(95101, "WELCOME")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := cdkeyRows()
+	for i := 0; i < 127; i++ {
+		rows = append(rows, schema.Cdkey{Code: fmt.Sprintf("OLD-%d", i), Mode: "player", Coins: 1, Subject: "old", ExpiresInSeconds: 3600})
+	}
+	cdkeyLoad(t, rows)
+	for i := 0; i < 127; i++ {
+		if _, err := f.controller.ledger.Sync_CdkeyPrepare(context.Background(), f.players[95101].ID(), fmt.Sprintf("OLD-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.redeem(95101, "ONE-GIFT"); !errors.Is(err, apperrors.ErrCdkeyFull) {
+		t.Fatalf("full ledger accepted: %v", err)
+	}
+	second, err := f.redeem(95101, "WELCOME")
+	if err != nil || second != first || f.size(t, 95101) != 128 || f.mail.calls.Load() != 1 {
+		t.Fatalf("bounded replay=%+v %v", second, err)
+	}
+}
+func TestCdkeyRegistryAndPBEndpointUseFormalChain(t *testing.T) {
+	f := newCdkeyFixture(t)
+	registry := app.NewRegistry(viper.New())
+	if _, err := FromRegistry(registry); err == nil {
+		t.Fatal("missing dependencies accepted")
+	}
+	for name, value := range map[app.ModName]any{app.ModName("nest"): nest.Client(f.engine), mods.ModDirectory: directory.Directory(f.dir), svcmail.CapabilityName: svcmail.Mail(f.mail)} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &pb.CdkeyRedeemRequest{Cdkey: "WELCOME"}
+	raw, err := pb.MarshalCdkeyRedeemRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := pb.UnmarshalCdkeyRedeemRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := controller.HandleCdkeyRedeem(&playeraccess.Context{PlayerID: 95101}, decoded)
+	if err != nil || response.Code != 0 || response.MailID == "" {
+		t.Fatalf("response=%+v %v", response, err)
+	}
+	if _, err := controller.HandleCdkeyRedeem(nil, request); err == nil {
+		t.Fatal("nil endpoint context accepted")
+	}
+}
+func TestCdkeyConcurrentReplaysProduceOneEnvelope(t *testing.T) {
+	f := newCdkeyFixture(t)
+	results := make(chan gamecdkey.Intent, 8)
+	failures := make(chan error, 8)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, err := f.redeem(95101, "WELCOME")
+			results <- result
+			failures <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(failures)
+	for err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mailID := ""
+	for result := range results {
+		if mailID == "" {
+			mailID = result.MailID
+		}
+		if result.MailID == "" || result.MailID != mailID {
+			t.Fatalf("result=%+v", result)
+		}
+	}
+	f.envelopes.mu.Lock()
+	count := len(f.envelopes.items)
+	f.envelopes.mu.Unlock()
+	if count != 1 || f.size(t, 95101) != 1 {
+		t.Fatalf("envelopes=%d", count)
+	}
+}
+func TestCdkeyMutationDetectsLostGlobalAuthority(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "..", "..", "cdkey", "cdkey.go")
+	path, err = filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := "\"cdkey:once:\" + intent.Code"
+	after := "fmt.Sprintf(\"cdkey:once:%d:%s\", playerID, intent.Code)"
+	if strings.Count(string(source), before) != 1 {
+		t.Fatal("mutation anchor changed")
+	}
+	scratch := t.TempDir()
+	replacement := filepath.Join(scratch, "cdkey.go")
+	if err := os.WriteFile(replacement, []byte(strings.Replace(string(source), before, after, 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]map[string]string{"Replace": {path: replacement}})
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	compile := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-overlay", overlay, "-run", "^$", ".")
+	compile.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := compile.CombinedOutput(); err != nil {
+		t.Fatalf("mutant did not compile: %v\n%s", err, out)
+	}
+	check := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-count=1", "-overlay", overlay, "-run", "^TestCdkeyOnceUsesSharedAuthorityAcrossControllers$", ".")
+	check.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := check.CombinedOutput(); err == nil || !strings.Contains(string(out), "global code was redeemed twice") {
+		t.Fatalf("mutant survived: %v\n%s", err, out)
+	}
+}

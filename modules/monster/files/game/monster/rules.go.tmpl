@@ -1,0 +1,54 @@
+// Package monster 定义怪物出生规则与一次决策的动作边界，不依赖具体实体包。
+package monster
+
+import (
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// Spec 在服务端 Spawn 时冻结。重生使用同一组规则，不接受客户端填写速度、血量或重刷时间。
+type Spec struct {
+	Template     int32
+	HP           int64
+	Speed        float64
+	PatrolHalf   int64
+	SenseRadius  int64
+	RespawnDelay time.Duration
+	At           spatial.Point
+}
+
+func DefaultSpec() Spec {
+	return Spec{Template: 1, HP: 100, Speed: 6, PatrolHalf: 12, SenseRadius: 30, RespawnDelay: 5 * time.Second, At: spatial.Point{X: 80, Y: 80}}
+}
+
+func (s Spec) Validate() error {
+	if s.Template <= 0 || s.HP <= 0 || s.HP > 1_000_000_000 || math.IsNaN(s.Speed) || math.IsInf(s.Speed, 0) || s.Speed <= 0 || s.Speed > 100 || s.PatrolHalf < 1 || s.PatrolHalf > 1000 || s.SenseRadius < 0 || s.SenseRadius > 10000 || s.RespawnDelay < time.Second || s.RespawnDelay > 24*time.Hour {
+		return fmt.Errorf("monster: invalid spawn rules")
+	}
+	if s.At.X > math.MaxInt64-s.PatrolHalf || s.At.X < math.MinInt64+s.PatrolHalf || s.At.Y > math.MaxInt64-s.PatrolHalf || s.At.Y < math.MinInt64+s.PatrolHalf {
+		return fmt.Errorf("monster: patrol bounds overflow")
+	}
+	return nil
+}
+
+// Candidate 是场景已经提交的感知值；它不能授权攻击或证明目标此刻仍在场。
+type Candidate struct {
+	ID int64
+	At spatial.Point
+}
+
+func Nearest(at spatial.Point, radius int64, candidates []Candidate) int64 {
+	best := float64(radius)
+	var chosen int64
+	for _, candidate := range candidates {
+		d := math.Hypot(float64(at.X)-float64(candidate.At.X), float64(at.Y)-float64(candidate.At.Y))
+		if candidate.ID > 0 && (d < best || d == best && (chosen == 0 || candidate.ID < chosen)) {
+			best = d
+			chosen = candidate.ID
+		}
+	}
+	return chosen
+}

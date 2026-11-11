@@ -1,0 +1,123 @@
+package terrain
+
+import (
+	"context"
+	"errors"
+	"os"
+	"slices"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"{{MODULE}}/game/actor"
+	monster "{{MODULE}}/game/entities/monster"
+	"{{MODULE}}/game/handler"
+	rules "{{MODULE}}/game/monster"
+	monsters "{{MODULE}}/game/monster/service"
+)
+
+func terrainMonsters(t *testing.T) (*terrainFixture, *monsters.Manager) {
+	t.Helper()
+	monster.RegisterEntity()
+	f := newTerrainFixtureWith(t, []func(*nest.NestMgr) error{handler.RegisterMonsterSpawnNestHandlersOn, handler.RegisterMonsterDamageNestHandlersOn, handler.RegisterMonsterRemoveNestHandlersOn})
+	stopActor, err := actor.Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := stopActor(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	stop, err := monsters.Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		f.commit.reject.Store(false)
+		if err := stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	m, err := monsters.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, m
+}
+
+func terrainMonsterSpec() rules.Spec {
+	spec := rules.DefaultSpec()
+	spec.At = spatial.Point{X: 6200, Y: 6200}
+	return spec
+}
+
+// 正式runtime先停terrain时，不依赖monster恰好已全服Stop；只撤出本图成员。
+func TestWithTerrainMonsterStopRemovesOwnMembersAndKeepsOtherMaps(t *testing.T) {
+	f, m := terrainMonsters(t)
+	plain := m.IDs()
+	if len(plain) != 1 {
+		t.Fatal(plain)
+	}
+	id, err := m.Spawn(context.Background(), 2, terrainMonsterSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 死亡等待重生的槽位也必须清除，不能在地图关闭后重新进场。
+	if _, err := m.Damage(context.Background(), id, 1, 100); err != nil {
+		t.Fatal(err)
+	}
+	world := f.world(2)
+	if err := f.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.access.Manager().Get(id) != nil || !slices.Equal(m.IDs(), plain) {
+		t.Fatal("terrain monster survived drain or other-map monster was removed")
+	}
+	if _, err := world.Pack.ReadChunk(core.ChunkKey{}); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("pack not closed: %v", err)
+	}
+	if _, err := m.Spawn(context.Background(), 2, terrainMonsterSpec()); err == nil {
+		t.Fatal("closed terrain accepted spawn")
+	}
+	if _, err := m.Spawn(context.Background(), 1, rules.DefaultSpec()); err != nil {
+		t.Fatal("terrain stop closed other-map ingress", err)
+	}
+}
+
+func TestWithTerrainMonsterInterruptedDrainRetainsFactsAndRetries(t *testing.T) {
+	f, m := terrainMonsters(t)
+	id, err := m.Spawn(context.Background(), 2, terrainMonsterSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.must(brush(1))
+	world := f.world(2)
+	before := f.query(core.ChunkKey{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := f.stop(ctx); err == nil {
+		t.Fatal("interrupted terrain drain unexpectedly completed")
+	}
+	if f.world(2) != world {
+		t.Fatal("failed drain replaced world")
+	}
+	if _, err := world.Pack.ReadChunk(core.ChunkKey{}); err != nil {
+		t.Fatal("failed drain closed pack", err)
+	}
+	after := f.query(core.ChunkKey{})
+	if before.Version != after.Version || !slices.Equal(before.Heights, after.Heights) {
+		t.Fatal("failed drain lost durable edits")
+	}
+	f.ledger(1, 0)
+	if err := f.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.access.Manager().Get(id) != nil {
+		t.Fatal("retried drain retained monster")
+	}
+	if _, err := f.controller.runtime.World(2); err == nil {
+		t.Fatal("retried drain kept terrain open")
+	}
+}

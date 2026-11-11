@@ -30,8 +30,12 @@ func TestSkillbookControllerReadsTheStartupCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stop(context.Background())
+	expected, warnings, err := book.Read(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
 	response, err := controller.HandleSkillCatalog(ctx, request)
-	if err != nil || response == nil || response.Code != 0 || response.Warnings != 0 || !reflect.DeepEqual(response.Skills, []string{"skill.{{PROJECT}}.fireball"}) {
+	if err != nil || response == nil || response.Code != 0 || response.Warnings != warnings || !reflect.DeepEqual(response.Skills, expected) {
 		t.Fatalf("after start: %v %v", response, err)
 	}
 }

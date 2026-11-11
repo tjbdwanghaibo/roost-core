@@ -1,0 +1,15 @@
+package dbdef
+
+// IdleState 以结算间隔计算收益，在线停留同样累计，不检测网络在线状态。
+// 客户端每次新领取用 Sequence+1；最近一次重试回放，旧序号拒绝，因此不需要增长账本。
+type IdleState struct {
+	Initialized bool  `store:"1"`
+	SettledAt   int64 `store:"2"`
+	Sequence    int64 `store:"3"`
+}
+type IdleReceipt struct {
+	Reward    int64 `store:"1"`
+	Balance   int64 `store:"2"`
+	SettledAt int64 `store:"3"`
+	Capped    bool  `store:"4"`
+}

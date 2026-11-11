@@ -1,0 +1,17 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerAttributeGet 只读已派生的最终层；热更后需要业务在事务中显式 Refresh。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAttributeGet(target player.IAttributeEntity, _ *pb.AttributeGetRequest) (*pb.AttributeGetResponse, error) {
+	p, ok := target.AttributeComp().Final()
+	if !ok {
+		return &pb.AttributeGetResponse{}, nil
+	}
+	return &pb.AttributeGetResponse{HP: p.HP, Attack: p.Attack, Power: p.Power}, nil
+}

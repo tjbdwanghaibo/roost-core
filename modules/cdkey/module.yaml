@@ -1,0 +1,21 @@
+name: cdkey
+summary: 兑换码：配置表、一码一次或一人一次，共享 directory 权威占用，玩家持久意图与 mailbox 幂等发奖
+requires: [mailbox]
+needs:
+  mods: [nest, directory]
+  features: [protocol, entity, dao, errcode, config]
+  uses: [mail]
+entity: Player
+state:
+  - field: Cdkey
+    type: CdkeyLedger
+    store: cdkey
+    dao: persist
+    comment: Cdkey 是兑换意图与回执，至多128条，不淘汰已成功记录。
+component: Cdkey
+protocols: [CdkeyRedeem]
+errcodes: [cdkey_invalid, cdkey_full, cdkey_taken]
+verify:
+  packages: [./game/controllers/cdkey]
+  run: ^TestCdkey
+  pass: 12

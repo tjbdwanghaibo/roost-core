@@ -1,0 +1,336 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	controller "{{MODULE}}/game/controllers/attribute"
+	playerentity "{{MODULE}}/game/entities/player"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
+)
+
+type attributeGetter map[int64]entity.IThreadSafeEntity
+
+func (g attributeGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g attributeGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type attributeCommitter struct{ reject atomic.Bool }
+
+func (c *attributeCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type attributeFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	committer *attributeCommitter
+}
+
+func newAttributeFixture(t *testing.T) *attributeFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterAttributeGetNestHandlers()
+	RegisterProfileAddExpNestHandlers()
+	f := &attributeFixture{committer: &attributeCommitter{}}
+	id, err := entity.BuildEntityID(98103, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = e.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(attributeGetter{id: e}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("attributeTestAction"), func(_ []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, p[0].(func() error)()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err = f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+func (f *attributeFixture) local(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() { f.player.GetMutex().Lock(); defer f.player.GetMutex().Unlock(); fn() }); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *attributeFixture) action(fn func() error) error {
+	_, err := f.engine.Request(context.Background(), nest.NewHandlerName("attributeTestAction"), f.player.ID(), nest.NewParams(fn))
+	return err
+}
+func (f *attributeFixture) write(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.action(func() error { fn(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type attributeSnapshot struct {
+	Base, Gear, Final map[int32]int64
+	Level             int32
+	Exp               int64
+}
+
+func (f *attributeFixture) snapshot(t *testing.T) attributeSnapshot {
+	out := attributeSnapshot{Base: map[int32]int64{}, Gear: map[int32]int64{}, Final: map[int32]int64{}}
+	f.local(t, func() {
+		d := f.player.Dao()
+		d.GetAttributeBase().RangeValues(func(k int32, v int64) bool { out.Base[k] = v; return true })
+		d.GetAttributeGear().RangeValues(func(k int32, v int64) bool { out.Gear[k] = v; return true })
+		d.GetAttributeFinal().RangeValues(func(k int32, v int64) bool { out.Final[k] = v; return true })
+		out.Level = f.player.ProfileComp().Level()
+		out.Exp = f.player.ProfileComp().Exp()
+	})
+	return out
+}
+func (f *attributeFixture) get(t *testing.T) *pb.AttributeGetResponse {
+	t.Helper()
+	r, err := sender.NewAttributeGetSender(f.engine).Sync_AttributeGet(context.Background(), f.player.ID(), &pb.AttributeGetRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func (f *attributeFixture) exp(amount int64) (int32, error) {
+	return sender.NewProfileAddExpSender(f.engine).Sync_ProfileAddExp(context.Background(), f.player.ID(), amount)
+}
+
+var attributeRejectHook atomic.Bool
+
+func init() {
+	playerentity.OnProfileLevelUp("zz_attribute_test", func(c *playerentity.ProfileComponent, _, _ int32) error {
+		if attributeRejectHook.Load() {
+			return errors.New("attribute hook rejected")
+		}
+		return nil
+	})
+}
+func TestAttributeNewPlayerDerivesWithoutPersisting(t *testing.T) {
+	f := newAttributeFixture(t)
+	r := f.get(t)
+	if r.HP != 100 || r.Attack != 10 || r.Power != 30 || len(f.snapshot(t).Base) != 0 {
+		t.Fatalf("new attributes %+v", r)
+	}
+}
+func TestAttributeLevelUpGrowsBaseAndFinal(t *testing.T) {
+	f := newAttributeFixture(t)
+	if n, err := f.exp(100); err != nil || n != 1 {
+		t.Fatalf("exp %d %v", n, err)
+	}
+	r := f.get(t)
+	if r.HP != 110 || r.Attack != 12 || r.Power != 35 {
+		t.Fatalf("level attributes %+v", r)
+	}
+}
+func TestAttributeMultipleLevelsGrowOnce(t *testing.T) {
+	f := newAttributeFixture(t)
+	if n, err := f.exp(350); err != nil || n != 3 {
+		t.Fatalf("exp %d %v", n, err)
+	}
+	r := f.get(t)
+	s := f.snapshot(t)
+	if r.HP != 130 || r.Attack != 16 || r.Power != 45 || s.Exp != 50 || s.Level != 3 {
+		t.Fatalf("multi %+v %+v", r, s)
+	}
+}
+func TestAttributeExperienceWithoutLevelDoesNotWriteBase(t *testing.T) {
+	f := newAttributeFixture(t)
+	if _, err := f.exp(99); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.snapshot(t); len(s.Base) != 0 || s.Exp != 99 || s.Level != 0 {
+		t.Fatalf("nonlevel %+v", s)
+	}
+}
+func TestAttributeFinalIsDetached(t *testing.T) {
+	f := newAttributeFixture(t)
+	f.local(t, func() {
+		p, ok := f.player.AttributeComp().Final()
+		if !ok {
+			t.Fatal("no final")
+		}
+		p.SetHP(999)
+	})
+	if r := f.get(t); r.HP != 100 {
+		t.Fatal("final alias")
+	}
+}
+func TestAttributeContainerIsDetached(t *testing.T) {
+	f := newAttributeFixture(t)
+	f.local(t, func() {
+		c := f.player.AttributeComp().Container()
+		c.Apply(coreattr.Final, map[coreattr.AttrID]coreattr.AttrValue{gameattr.AttrHP: 999})
+		if len(c.Layers()) != 3 {
+			t.Fatal("missing layers")
+		}
+	})
+	if r := f.get(t); r.HP != 100 {
+		t.Fatal("container alias")
+	}
+}
+func TestAttributeRefreshPersistsBaseAndIsStable(t *testing.T) {
+	f := newAttributeFixture(t)
+	if err := f.action(f.player.AttributeComp().Refresh); err != nil {
+		t.Fatal(err)
+	}
+	before := f.snapshot(t)
+	if len(before.Base) != 3 {
+		t.Fatalf("base %+v", before)
+	}
+	if err := f.action(f.player.AttributeComp().Refresh); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("refresh changed stable facts")
+	}
+}
+func TestAttributeCommitFailureRollsBackLevelAndAllLayers(t *testing.T) {
+	f := newAttributeFixture(t)
+	before := f.snapshot(t)
+	f.committer.reject.Store(true)
+	if _, err := f.exp(100); err == nil {
+		t.Fatal("commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("attribute commit leaked")
+	}
+	f.committer.reject.Store(false)
+	if _, err := f.exp(100); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.get(t); r.HP != 110 {
+		t.Fatal("retry wrong")
+	}
+}
+func TestAttributeNamedHookFailureRollsBackProfileAndAttributes(t *testing.T) {
+	f := newAttributeFixture(t)
+	before := f.snapshot(t)
+	attributeRejectHook.Store(true)
+	t.Cleanup(func() { attributeRejectHook.Store(false) })
+	if _, err := f.exp(100); err == nil {
+		t.Fatal("hook accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("attribute hook leaked")
+	}
+}
+func TestAttributeInvalidBaseFailsWithoutChangingProfile(t *testing.T) {
+	f := newAttributeFixture(t)
+	f.write(t, func() {
+		f.player.Dao().GetAttributeBase().SetValues(map[int32]int64{int32(gameattr.AttrHP): math.MaxInt64})
+	})
+	before := f.snapshot(t)
+	if _, err := f.exp(100); !errors.Is(err, apperrors.ErrAttributeOverflow) {
+		t.Fatalf("overflow %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("overflow wrote")
+	}
+}
+func TestAttributeConcurrentExperienceSerializesGrowth(t *testing.T) {
+	f := newAttributeFixture(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, err := f.exp(100); errs <- err }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := f.get(t); r.HP != 180 || r.Attack != 26 || r.Power != 70 {
+		t.Fatalf("concurrent %+v", r)
+	}
+}
+func TestAttributeProtocolUsesAuthenticatedIdentity(t *testing.T) {
+	f := newAttributeFixture(t)
+	reg := app.NewRegistry(viper.New())
+	if err := reg.Register("nest", nest.Client(f.engine)); err != nil {
+		t.Fatal(err)
+	}
+	c, err := controller.FromRegistry(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.HandleAttributeGet(&playeraccess.Context{PlayerID: 98103}, &pb.AttributeGetRequest{})
+	if err != nil || r == nil || r.Code != 0 || r.HP != 100 || r.Power != 30 {
+		t.Fatalf("protocol %+v %v", r, err)
+	}
+}
+func TestAttributeExistingBaseBonusSurvivesLevelUp(t *testing.T) {
+	f := newAttributeFixture(t)
+	f.write(t, func() {
+		f.player.Dao().GetAttributeBase().SetValues(map[int32]int64{int32(gameattr.AttrHP): 200, int32(gameattr.AttrAttack): 50})
+	})
+	if _, err := f.exp(100); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.get(t); r.HP != 210 || r.Attack != 52 || r.Power != 125 {
+		t.Fatalf("bonus %+v", r)
+	}
+}
+func TestAttributeReloadRebuildsDerivedLayersWithoutBaseWrite(t *testing.T) {
+	f := newAttributeFixture(t)
+	if _, err := f.exp(100); err != nil {
+		t.Fatal(err)
+	}
+	f.write(t, func() { f.player.Dao().GetAttributeFinal().SetValues(nil) })
+	before := f.snapshot(t).Base
+	f.local(t, func() {
+		if err := f.player.AttributeComp().OnInitFinish(nil, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if r := f.get(t); r.HP != 110 || r.Power != 35 {
+		t.Fatalf("reload %+v", r)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t).Base) {
+		t.Fatal("reload persisted")
+	}
+}

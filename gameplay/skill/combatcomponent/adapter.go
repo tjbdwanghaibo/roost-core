@@ -229,7 +229,7 @@ func (adapter *HostAdapter) applyDamage(command skill.DamageCommand) (skill.Effe
 	}
 	receipt := adapter.Revision.CommitEffect(events)
 	receipt.Changed = true
-	return skill.EffectResult{Commit: receipt, Payload: skill.DamageEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: result}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.DamageEffectResult{ResultOutcome: successfulOutcome(), Result: result}}, nil
 }
 
 func (adapter *HostAdapter) applyHeal(command skill.HealCommand) (skill.EffectResult, error) {
@@ -244,14 +244,14 @@ func (adapter *HostAdapter) applyHeal(command skill.HealCommand) (skill.EffectRe
 	if outcome.Effective == 0 {
 		return skill.EffectResult{
 			Commit:  skill.CommitReceipt{Revision: adapter.Revision.CurrentRevision()},
-			Payload: skill.HealEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.HealResult{Attempted: outcome.Attempted}},
+			Payload: skill.HealEffectResult{ResultOutcome: successfulOutcome(), Result: skill.HealResult{Attempted: outcome.Attempted}},
 		}, nil
 	}
 	context := command.Event
 	context.Source, context.Target, context.Result = command.Source, command.Target, "healed"
 	receipt := adapter.Revision.CommitEffect([]EffectEvent{{Kind: "heal_resolved", Entity: command.Target, Context: context}})
 	receipt.Changed = true
-	return skill.EffectResult{Commit: receipt, Payload: skill.HealEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.HealResult{Attempted: outcome.Attempted, Effective: outcome.Effective}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.HealEffectResult{ResultOutcome: successfulOutcome(), Result: skill.HealResult{Attempted: outcome.Attempted, Effective: outcome.Effective}}}, nil
 }
 
 func (adapter *HostAdapter) applyShield(command skill.ShieldCommand) (skill.EffectResult, error) {
@@ -266,14 +266,14 @@ func (adapter *HostAdapter) applyShield(command skill.ShieldCommand) (skill.Effe
 	if added == 0 {
 		return skill.EffectResult{
 			Commit:  skill.CommitReceipt{Revision: adapter.Revision.CurrentRevision()},
-			Payload: skill.ShieldEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.ShieldResult{}},
+			Payload: skill.ShieldEffectResult{ResultOutcome: successfulOutcome(), Result: skill.ShieldResult{}},
 		}, nil
 	}
 	context := command.Event
 	context.Source, context.Target, context.Result = command.Source, command.Target, "shielded"
 	receipt := adapter.Revision.CommitEffect([]EffectEvent{{Kind: "shield_resolved", Entity: command.Target, Context: context}})
 	receipt.Changed = true
-	return skill.EffectResult{Commit: receipt, Payload: skill.ShieldEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.ShieldResult{Added: added}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.ShieldEffectResult{ResultOutcome: successfulOutcome(), Result: skill.ShieldResult{Added: added}}}, nil
 }
 
 // HostCapabilities 声明这个适配器实现的那部分 skill Host 能力表：Catalog 里可读的属性、ResourceAttribute 映射到的
@@ -407,4 +407,9 @@ func (adapter *HostAdapter) resourceAttribute(name string, handle skill.Resource
 		return 0, false
 	}
 	return adapter.ResourceAttribute(name, handle)
+}
+
+// successfulOutcome 遵守 Runtime 的显式结果契约。空字符串不是 none；免疫或无变化也属于成功结果。
+func successfulOutcome() skill.ResultOutcome {
+	return skill.ResultOutcome{Succeeded: true, FailureReason: skill.ExpectedFailureNone}
 }

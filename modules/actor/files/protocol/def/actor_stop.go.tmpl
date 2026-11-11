@@ -1,0 +1,17 @@
+//go:build protocoldef
+
+package protocoldef
+
+type ActorStopRequest struct{}
+type ActorStopResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	X      int64  `pb:"3"`
+	Y      int64  `pb:"4"`
+}
+
+//roost:protocol group=game handler=actor
+type ActorStopProtocol interface {
+	//roost:msg id={{ID:protocol:ActorStop}}
+	ActorStop(ActorStopRequest) ActorStopResponse
+}

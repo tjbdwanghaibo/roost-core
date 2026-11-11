@@ -1,0 +1,103 @@
+package player
+
+import (
+	"fmt"
+
+	"{{MODULE}}/db"
+	rules "{{MODULE}}/game/equipment"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Equipment}}
+const CompTypeEquipment entity.ComponentType = {{ID:component:Equipment}}
+
+// EquipmentComponent 只拥有逻辑；背包、穿戴与联动属性全由 DAO setter 纳入同一 Nest 事务。
+type EquipmentComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type IEquipmentEntity interface {
+	entity.IThreadSafeEntity
+	EquipmentComp() *EquipmentComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeEquipment, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		p, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("equipment owner %T", owner)
+		}
+		return &EquipmentComponent{owner: p}, nil
+	})
+}
+func (c *EquipmentComponent) Name() string   { return "equipment" }
+func (c *EquipmentComponent) Owner() *Player { return c.owner }
+func (c *EquipmentComponent) Worn(slot int32) (int64, int32, bool) {
+	p, ok := c.owner.Dao().GetEquipment().GetSlots(slot)
+	if !ok || p == nil {
+		return 0, 0, false
+	}
+	return p.GetItemID(), p.GetLevel(), true
+}
+func (c *EquipmentComponent) RangeWorn(fn func(int32, int64, int32) bool) {
+	c.owner.Dao().GetEquipment().RangeSlots(func(slot int32, p *db.GearPiece) bool {
+		if p == nil {
+			return true
+		}
+		return fn(slot, p.GetItemID(), p.GetLevel())
+	})
+}
+
+// Equip 必须由持实体锁的 Nest 事务调用；等级来自可信服务端。先扣新物品再退旧物品，可复用刚腾出的种类位。
+// 同一物品同一等级已穿着时幂等成功；其他失败必须返回 Nest，不能吞错提交半次换装。
+func (c *EquipmentComponent) Equip(itemID int64, level int32) (slot int32, replaced int64, err error) {
+	slot, ok := rules.SlotFor(itemID)
+	if !ok {
+		return 0, 0, apperrors.ErrEquipmentItemInvalid
+	}
+	if level < 1 || level > rules.MaxLevel {
+		return 0, 0, apperrors.ErrEquipmentLevelInvalid
+	}
+	previous, oldLevel, worn := c.Worn(slot)
+	if worn && previous == itemID && oldLevel == level {
+		return slot, 0, nil
+	}
+	if _, err = c.owner.BagComp().Remove(itemID, 1); err != nil {
+		return 0, 0, err
+	}
+	if worn {
+		if _, err = c.owner.BagComp().Add(previous, 1); err != nil {
+			return 0, 0, err
+		}
+		replaced = previous
+	}
+	piece := &db.GearPiece{}
+	piece.SetItemID(itemID)
+	piece.SetLevel(level)
+	c.owner.Dao().GetEquipment().SetSlotsKey(slot, piece)
+	if err = runEquipmentChanged(c); err != nil {
+		return 0, 0, err
+	}
+	return slot, replaced, nil
+}
+
+// Unequip 将物品退回背包后清槽；满包、规则消失或联动失败都不丢装备。空槽幂等返回 found=false。
+func (c *EquipmentComponent) Unequip(slot int32) (itemID int64, found bool, err error) {
+	if !rules.ValidSlot(slot) {
+		return 0, false, apperrors.ErrEquipmentSlotInvalid
+	}
+	itemID, _, found = c.Worn(slot)
+	if !found {
+		return 0, false, nil
+	}
+	if _, err = c.owner.BagComp().Add(itemID, 1); err != nil {
+		return 0, false, err
+	}
+	c.owner.Dao().GetEquipment().DelSlotsKey(slot)
+	if err = runEquipmentChanged(c); err != nil {
+		return 0, false, err
+	}
+	return itemID, true, nil
+}

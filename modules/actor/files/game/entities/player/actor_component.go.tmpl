@@ -1,0 +1,73 @@
+package player
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"{{MODULE}}/game/actor"
+)
+
+//roost:component type={{ID:component:Actor}}
+const CompTypeActor entity.ComponentType = {{ID:component:Actor}}
+
+type ActorComponent struct {
+	entity.ComponentBase
+	owner *Player
+	body  *actor.Body
+}
+type IActorEntity interface {
+	entity.IThreadSafeEntity
+	ActorComp() *ActorComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeActor, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		player, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("actor: owner %T is not Player", owner)
+		}
+		return &ActorComponent{owner: player}, nil
+	})
+}
+func (component *ActorComponent) Name() string      { return "actor" }
+func (component *ActorComponent) Owner() *Player    { return component.owner }
+func (component *ActorComponent) Body() *actor.Body { return component.body }
+func (component *ActorComponent) OnInitFinish(*entity.EntityCreateParam, bool) error {
+	body, err := actor.New(component.owner, actor.Config{Fields: actorFields{component.owner}, Save: component.save, Hooks: component.hooks()})
+	component.body = body
+	return err
+}
+func (component *ActorComponent) OnDestroy(entity.EntityDestroyReason) {
+	if component.body != nil {
+		component.body.Close()
+	}
+}
+func (player *Player) MapBasic() *movement.MapBasic  { return player.ActorComp().body.Map }
+func (player *Player) MoveComponent() *movement.Move { return player.ActorComp().body.Move }
+func (component *ActorComponent) SavedPosition() (int64, spatial.Point, movement.Facing) {
+	saved := component.owner.Dao().GetActorSaved()
+	return saved.GetSceneID(), spatial.Point{X: saved.GetX(), Y: saved.GetY()}, movement.Facing(saved.GetFacing())
+}
+func (component *ActorComponent) save(id int64, p spatial.Point, facing movement.Facing) error {
+	saved := component.owner.Dao().GetActorSaved()
+	saved.SetSceneID(id)
+	saved.SetX(p.X)
+	saved.SetY(p.Y)
+	saved.SetFacing(int32(facing))
+	return nil
+}
+
+type actorFields struct{ owner *Player }
+
+func (f actorFields) SceneID() int64     { return f.owner.Dao().GetActor().GetSceneID() }
+func (f actorFields) SetSceneID(v int64) { f.owner.Dao().GetActor().SetSceneID(v) }
+func (f actorFields) Pos() spatial.Point {
+	s := f.owner.Dao().GetActor()
+	return spatial.Point{X: s.GetX(), Y: s.GetY()}
+}
+func (f actorFields) SetPos(v spatial.Point) { s := f.owner.Dao().GetActor(); s.SetX(v.X); s.SetY(v.Y) }
+func (f actorFields) Facing() movement.Facing {
+	return movement.Facing(f.owner.Dao().GetActor().GetFacing())
+}
+func (f actorFields) SetFacing(v movement.Facing) { f.owner.Dao().GetActor().SetFacing(int32(v)) }

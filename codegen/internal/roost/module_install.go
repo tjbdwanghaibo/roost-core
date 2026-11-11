@@ -57,6 +57,7 @@ type ModulePlanItem struct {
 	IDs map[string]map[string]int64 `json:"ids"`
 	// State 是追加的主 DAO 字段（<Dao>.<Field> <dao 标签>）；Component 是接到实体上的组件（<Entity>.<Component>）。
 	State     []string `json:"state"`
+	DAOs      []string `json:"daos,omitempty"`
 	Component string   `json:"component,omitempty"`
 	Files     []string `json:"files"`
 	// Replaces 是 Files 里会替换掉的生成桩（仍是没改过的生成内容）。
@@ -155,7 +156,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 			if installed.Digest != spec.Digest {
 				item.Status = moduleStatusInstalledOther
 			}
-			item.IDs, item.State, item.Files = installed.IDs, installed.State, installed.Files
+			item.IDs, item.State, item.DAOs, item.Files = installed.IDs, installed.State, installed.DAOs, installed.Files
 			plan.Modules = append(plan.Modules, item)
 			continue
 		}
@@ -166,6 +167,24 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		}
 		if err := checkModuleNeeds(manifest, service, spec); err != nil {
 			return ModulePlan{}, err
+		}
+		if spec.SyncPacker != "" && !newEntities[spec.Entity] {
+			_, path, err := resolveEntitySource(root, spec.Entity)
+			if err != nil {
+				return ModulePlan{}, err
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return ModulePlan{}, err
+			}
+			if _, err := moduleSyncMarker(raw, path, spec.Entity, spec.SyncPacker); err != nil {
+				return ModulePlan{}, err
+			}
+		}
+		if len(spec.DAOs) > 0 && !newEntities[spec.Entity] {
+			if _, _, err := moduleDAOFields(root, manifest, spec); err != nil {
+				return ModulePlan{}, err
+			}
 		}
 		item.Status = moduleStatusInstall
 		// 自带实体的定义和 lifecycle 必须全新，不能把工程已有的实体据为己有。
@@ -195,6 +214,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		for _, field := range spec.State {
 			item.State = append(item.State, fmt.Sprintf("%sDao.%s (%s)", spec.Entity, field.Field, field.Dao))
 		}
+		item.DAOs = moduleDAONames(spec)
 		if spec.Component != "" {
 			item.Component = spec.Entity + "." + spec.Component
 		}
@@ -296,11 +316,11 @@ func planModuleGlue(root string, manifest Manifest, catalog map[string]ModuleSpe
 	return glue, nil
 }
 
-// checkModuleNeeds 检查模块对工程的前提。只检查不代办：改 roost.yaml 的装配是工程的决定。
+// checkModuleNeeds 检查不能自动补齐的前提。可代办的 Mod 复用 roost add mod，列入可审阅的前置命令。
 func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error {
 	var problems []string
 	for _, feature := range spec.Needs.Features {
-		if !contains(manifest.Features, feature) {
+		if !contains(manifest.Features, feature) && feature != "attribute" {
 			problems = append(problems, fmt.Sprintf("feature %q is off: add it to features in roost.yaml and run roost project sync", feature))
 		}
 	}
@@ -309,7 +329,7 @@ func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error 
 		return err
 	}
 	for _, mod := range spec.Needs.Mods {
-		if !contains(resolved, mod) && !contains(manifest.SharedMods, mod) {
+		if !contains(resolved, mod) && !contains(manifest.SharedMods, mod) && !moduleCanAddMod(mod) {
 			problems = append(problems, fmt.Sprintf("service %s has no %s mod: roost add mod %s -service %s", service, mod, mod, service))
 		}
 	}
@@ -324,9 +344,15 @@ func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error 
 	return nil
 }
 
-// modulePrerequisites 是模块要求、工程里还没有的框架骨架，写成会执行的 roost add 命令。
+// modulePrerequisites 列出缺少的框架骨架与本次会启用的能力；自身同步随模块原子安装。
 func modulePrerequisites(root string, manifest Manifest, service string, spec ModuleSpec, options ModuleOptions, newEntity bool) []string {
 	var commands []string
+	if contains(spec.Needs.Features, "attribute") && !hasFeature(manifest, "attribute") {
+		commands = append(commands, "enable features.attribute in roost.yaml; roost project sync")
+	}
+	for _, mod := range moduleMissingMods(manifest, service, spec) {
+		commands = append(commands, "roost add mod "+mod+" -service "+service)
+	}
 	if len(spec.State) > 0 && !newEntity {
 		if source, err := locateDaoStruct(root, spec.Entity+"Dao"); err == nil && source == nil {
 			commands = append(commands, fmt.Sprintf("roost add dao %s --entity %s", spec.Entity, spec.Entity))
@@ -341,12 +367,29 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 		commands = append(commands, "roost add transport "+spec.Access.Transport)
 	}
 	if spec.Access.SelfSync && !access.SelfSync && !options.SkipSelfSync {
-		commands = append(commands, "set access.player.self_sync: true in roost.yaml; roost project sync")
+		commands = append(commands, "enable access.player.self_sync after module declarations; sync in the same installation transaction")
 	}
 	if spec.Access.Lifecycle && !newEntity && !moduleLifecycleExists(root, spec.Entity) {
 		commands = append(commands, fmt.Sprintf("roost add lifecycle %s --service %s", spec.Entity, service))
 	}
 	return commands
+}
+
+// 只代办有确定接线和工程隔离配置的 Mod。外部依赖仍通过 plan 和开发环境配置明确展示。
+func moduleCanAddMod(name string) bool { return name == "heartbeat" || name == "directory" }
+
+func moduleMissingMods(manifest Manifest, service string, spec ModuleSpec) []string {
+	resolved, err := resolveMods(effectiveServiceMods(manifest, service))
+	if err != nil {
+		return nil // checkModuleNeeds 会报告配置错误。
+	}
+	var missing []string
+	for _, mod := range spec.Needs.Mods {
+		if moduleCanAddMod(mod) && !contains(resolved, mod) && !contains(manifest.SharedMods, mod) {
+			missing = append(missing, mod)
+		}
+	}
+	return missing
 }
 
 // moduleLifecycleExists 报告实体的 lifecycle 文件是否已在（roost add lifecycle 的产物）。
@@ -474,11 +517,27 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		record.With[glue.With] = append([]string(nil), glue.Files...)
 		manifest.Modules[glue.Module] = record
 	}
+	// 模块可能同时补 packer 与附加 DAO。全部业务声明就位后再开启自身同步，
+	// 避免中途 project sync 用未完成的默认 packer 校验；开关也纳入同一次回滚。
+	selfSyncChanged := false
+	if !options.SkipSelfSync {
+		for _, item := range plan.Modules {
+			if item.Status != moduleStatusInstall || !item.spec.Access.SelfSync {
+				continue
+			}
+			access := manifest.Access["player"]
+			if !access.SelfSync {
+				access.SelfSync = true
+				manifest.Access["player"] = access
+				selfSyncChanged = true
+			}
+		}
+	}
 	if err := saveManifest(root, manifest); err != nil {
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: len(newEntities) > 0 || modulePlanHasTimers(plan)}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || modulePlanHasTimers(plan)}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true
@@ -488,6 +547,26 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 // ensureModulePrerequisites 经已有的 roost add 补齐模块要求的框架骨架；已经有的不动。
 func ensureModulePrerequisites(root, service string, spec ModuleSpec, options ModuleOptions, newEntity bool) error {
 	warnings := options.Stderr
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		return err
+	}
+	// attribute 只开启正式生成能力，业务 profile 仍由模块提供，不先造一个要覆盖的示例。
+	if contains(spec.Needs.Features, "attribute") && !hasFeature(manifest, "attribute") {
+		before, err := os.ReadFile(filepath.Join(root, ManifestName))
+		if err != nil {
+			return err
+		}
+		manifest.Features = uniqueSorted(append(manifest.Features, "attribute"))
+		if err := commitManifestSync(root, before, manifest); err != nil {
+			return err
+		}
+	}
+	for _, mod := range moduleMissingMods(manifest, service, spec) {
+		if _, err := Add(root, AddOptions{Kind: "mod", Name: mod, Service: service, Warnings: warnings}); err != nil {
+			return fmt.Errorf("roost add mod %s -service %s: %w", mod, service, err)
+		}
+	}
 	if len(spec.State) > 0 && !newEntity {
 		source, err := locateDaoStruct(root, spec.Entity+"Dao")
 		if err != nil {
@@ -508,7 +587,7 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 	if !needsAccess {
 		return nil
 	}
-	manifest, err := LoadManifest(root)
+	manifest, err = LoadManifest(root)
 	if err != nil {
 		return err
 	}
@@ -527,23 +606,7 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 			}
 		}
 	}
-	if spec.Access.SelfSync && !options.SkipSelfSync {
-		// 与手工改 roost.yaml 再 project sync 相同：写清单并同步，同步失败时清单恢复。
-		manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
-		if err != nil {
-			return err
-		}
-		if manifest, err = LoadManifest(root); err != nil {
-			return err
-		}
-		if access := manifest.Access["player"]; !access.SelfSync {
-			access.SelfSync = true
-			manifest.Access["player"] = access
-			if err := commitManifestSync(root, manifestBefore, manifest); err != nil {
-				return fmt.Errorf("turn on access.player.self_sync: %w", err)
-			}
-		}
-	}
+
 	return nil
 }
 
@@ -564,7 +627,7 @@ func moduleTouchedFiles(root string, spec ModuleSpec, newEntity bool) ([]string,
 		}
 		paths = append(paths, relativeSlash(root, source.path))
 	}
-	if spec.Component != "" {
+	if spec.Component != "" || spec.SyncPacker != "" || len(spec.DAOs) > 0 {
 		_, entityPath, err := resolveEntitySource(root, spec.Entity)
 		if err != nil {
 			return nil, err
@@ -625,12 +688,54 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 			return InstalledModule{}, err
 		}
 	}
+	if spec.SyncPacker != "" {
+		if err := wireModuleSync(root, spec); err != nil {
+			return InstalledModule{}, err
+		}
+	}
+	if len(spec.DAOs) > 0 {
+		path, updated, err := moduleDAOFields(root, manifest, spec)
+		if err != nil {
+			return InstalledModule{}, err
+		}
+		if err := writeAtomic(path, updated, 0o644); err != nil {
+			return InstalledModule{}, err
+		}
+		record.DAOs = moduleDAONames(spec)
+	}
 	for _, name := range spec.Entities {
 		if _, err := addEntityLifecycle(root, manifest, AddOptions{Name: name, Service: service}); err != nil {
 			return InstalledModule{}, err
 		}
 	}
 	return record, nil
+}
+
+func moduleDAONames(spec ModuleSpec) []string {
+	var names []string
+	for _, field := range spec.DAOs {
+		names = append(names, fmt.Sprintf("%s.%s: %s (%s)", spec.Entity, field.Field, field.Type, field.Tag))
+	}
+	return names
+}
+
+// moduleDAOFields 在 plan 和 add 共用同一份冲突检查，plan 不写磁盘。
+func moduleDAOFields(root string, manifest Manifest, spec ModuleSpec) (string, []byte, error) {
+	_, path, err := resolveEntitySource(root, spec.Entity)
+	if err != nil {
+		return "", nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, field := range spec.DAOs {
+		raw, err = wireNamedDAOField(raw, path, spec.Entity, manifest.Project.Module+"/db", field.Field, field.Tag, field.Type)
+		if err != nil {
+			return "", nil, fmt.Errorf("module %s: %w", spec.Name, err)
+		}
+	}
+	return path, raw, nil
 }
 
 // renderModuleFile 渲染一个模板：工程名字占位、分配到的号，Go 文件再格式化一遍。

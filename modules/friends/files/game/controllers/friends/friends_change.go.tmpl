@@ -1,0 +1,40 @@
+package friends
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleFriendsChange 的操作者只取已认证连接。两名玩家必须由同一个 game 进程持有；
+// 服务端不能为跨服玩家创建本地替身。Nest 的实体 owner/getter 边界负责拒绝非本服实体。
+func (c *Controller) HandleFriendsChange(ctx *playeraccess.Context, req *pb.FriendsChangeRequest) (*pb.FriendsChangeResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("friends: context and request required")
+	}
+	// ActiveSessions 来自本进程的已认证 TCP 会话，不信任客户端声称的 sid。
+	transport, ok := app.Lookup[interface{ ActiveSessions(int64) int }](c.registry, app.ModName("access.player.tcp"))
+	if !ok || transport == nil || transport.ActiveSessions(ctx.PlayerID) == 0 || transport.ActiveSessions(req.PeerID) == 0 {
+		code, reason := errcode.ClientError(apperrors.ErrFriendsInvalid)
+		return &pb.FriendsChangeResponse{Code: code, Reason: reason}, nil
+	}
+	a, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	var b int64
+	if err == nil {
+		b, err = entity.BuildEntityID(req.PeerID, player.EntityKindPlayer)
+	}
+	if err == nil {
+		err = syncsender.NewFriendsChangeSender(c.nestClient).MultiSync_FriendsChange(ctx.Context(), a, b, req.Action)
+	}
+	out := &pb.FriendsChangeResponse{}
+	if err != nil {
+		out.Code, out.Reason = errcode.ClientError(err)
+	}
+	return out, nil
+}

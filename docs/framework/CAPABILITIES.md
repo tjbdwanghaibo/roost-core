@@ -221,7 +221,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 ### 业务模块
 
-`roost module add <name>` 安装进工程；状态是嵌套结构体，追加在所挂实体主 DAO 的末尾。模块库里没有的需求照着已装模块的文件手写。完整列表以 `roost module list` 为准。
+`roost module add <name>` 安装进工程；状态通常是嵌套结构体，追加在所挂实体主 DAO 的末尾；`daos` 可挂独立 DAO 并沿用正式聚合加载与事务。场景线含 actor / scene / monster / attribute / equipment / combat / dungeon / terrain，运营社交含 naming / cdkey / notice / gacha / friends / idle，具体范围见模块目录。模块库里没有的需求照着已装模块的文件手写。完整列表以 `roost module list` 为准。
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
@@ -230,7 +230,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 顺序回合 turn | 固定名单、当前行动者、命令序号与重放、持久回合超时 | `roost module add turn`（自动装 room）；`TurnStart / TurnEnd / TurnView` | 现成模块。超时不追帧；无默认胜负/伤害、自动广播或跨机房间接管；25 条离线场景 | [turn](../../modules/turn/README.md) |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功的登记点 `OnCheckinClaimed`（别的功能在同一笔事务里顺带做事） | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；钩子返回错误会让这一次签到整笔回滚；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
-| 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；不经过 Nest，不改任何实体 | 同上 |
+| 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；世界/私聊不经过 Nest，scene 附近联动在 Nest 中读取收件人快照后于锁外推送，不改聊天实体 | 同上 |
 | 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里；进入之前的登记点 `OnEntering`（能否决登录，换服模块用它挡住正在换服或已换走的玩家）与进入之后的登记点 `game/enter` 的 `OnEntered`（别的功能在玩家进入后顺带做事：聊天上线、拉全服邮件） | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图；自己的功能要在进入时做事，在自己的包的 `init` 里调 `gameenter.OnEntered(名字, 钩子)` | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化 → 钩子”的串接没有离线用例；进入钩子在事务之外、失败只记日志 | 同上 |
 | 换服 rehome | 把一名玩家从本服改绑到另一个 game sid：申请协议与服务端入口；源服断开会话、交出实体后拒写；目标服首次进入时到达；换服前检查 / 离开时 / 到达后三个登记点 | `roost module add rehome`（业务服务要 `uses: [account]`，`-template game` 已有；装了 enter 时进入前检查与到达由联动接上）；GM 或别的功能调 `rehomecontroller.FromRegistry(registry).Move(ctx, 玩家号, 目标 sid, 备注)`；saga 步骤的属主核对用 `rehome.Binding` | 现成模块，game-demo 用的就是它。缺省允许换到任何别的开放的服、冷却 7 天、不收费（规则文件里改）；只有离线验证；没装 enter 的工程要自己在加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive` | 同上 |
 | 每日任务 task | 按业务日惰性清零的任务进度；服务端推进（组件入口 `Advance`，或不对客户端开放的 handler `TaskAdvance`）；领奖协议，金币在同一笔事务里到账；任务表是一个业务文件 | `roost module add task`（依赖 wallet）；别的功能在自己的事务里调 `TaskComp().Advance(任务号, 次数, nowUnixMilli)`；同时装了 checkin 时签到自动推进“签到一次” | 现成模块。装上之后任务不会自己动，除了签到那一条都要工程接线；推进不判重，由调用方保证只算一次；跨天后没有新写入时客户端看到的仍是昨天的记录，按 `Day` 比对；奖励只有金币 | 同上 |
@@ -284,7 +284,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 同步视图 | 本人、附近的人、队友各拿各的字段 | `game/entities/<kind>/sync_packer.go` | 参考实现（demo）。在 `[Unreleased]` | [同步视图](../../demo/README.md#同步视图谁看见哪些字段) |
 | 兴趣 | 距离视野与关系视野 | 场景的 Interest | 参考实现（demo） | [兴趣](../../demo/WALKTHROUGH.md#兴趣距离是一种视野关系是另一种) |
 | 刷新 | 场景该有多少东西活着 | spawner | 参考实现（demo） | [刷新](../../demo/WALKTHROUGH.md#刷新场景该有多少东西活着) |
-| 装备栏 | demo 唯一的嵌套字段 | `PlayerDao` 的嵌套结构体 | 参考实现（demo） | [装备栏](../../demo/WALKTHROUGH.md#装备栏demo-唯一的嵌套字段以及为什么它在这里) |
+| 装备栏 | demo 唯一的嵌套字段 | `PlayerDao` 的嵌套结构体 | 参考实现（demo） | [装备栏](../../demo/WALKTHROUGH.md#装备栏) |
 | 属性 | 分层、合成与两种存储意图 | `game/gameplay/attribute` | 参考实现（demo） | [属性](../../demo/WALKTHROUGH.md#属性层合成以及两种存储意图) |
 | 排行榜 | rank 服务，与领奖账本同一个准入 | `game/ranking` | 参考实现（demo） | [排行榜](../../demo/WALKTHROUGH.md#排行榜rank-服务与领奖账本同一个准入) |
 | 技能目录 | 启动时编译，客户端可查 | `roost module add skillbook`（demo 已装） | 现成模块；demo 只覆盖技能数据 | [技能目录](../../demo/WALKTHROUGH.md#技能目录启动时编译客户端可查) |

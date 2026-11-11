@@ -1,0 +1,21 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerGachaDraw 把任何拒绝交还 Nest，保证十连不会留下前几次已发的奖励或已扣的金币。
+//
+//roost:nest rollback=undo durability=strict
+func handlerGachaDraw(target player.IGachaEntity, request *pb.GachaDrawRequest) (*pb.GachaDrawResponse, error) {
+	if request == nil {
+		return nil, apperrors.ErrGachaKeyInvalid
+	}
+	r, err := target.GachaComp().Draw(request.Key, request.PoolID, request.Count)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.GachaDrawResponse{Cost: r.Cost, Balance: r.Balance, Items: r.Items, Misses: r.Misses}, nil
+}

@@ -14,6 +14,60 @@ import (
 	"testing"
 )
 
+// Go 的导入别名属于文件；另一 handler 文件使用同名别名，不能污染当前包装器或 Sender。
+// 两种 Sender 实际做类型检查，避免只验证文本没有重复却绑定到了错误的包。
+func TestGeneratedImportsStayInTheHandlerSourceFile(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct{ name, path, typ string }{
+		{"JSON", "encoding/json", "logic.RawMessage"},
+		{"XML", "encoding/xml", "logic.Name"},
+	}
+	for _, tc := range cases {
+		source := `package handler
+import (
+ player "example.com/demo/game/entities/player"
+ logic "` + tc.path + `"
+)
+//roost:nest rollback=undo durability=strict
+func handler` + tc.name + `(target player.IBagEntity, value ` + tc.typ + `) (` + tc.typ + `, error) { return value, nil }
+`
+		if err := os.WriteFile(filepath.Join(dir, strings.ToLower(tc.name)+".go"), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Run([]string{"-dir", dir}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	imp := importer.ForCompiler(fset, "source", nil)
+	for _, pkg := range []string{"", "sender", "syncsender"} {
+		var files []*ast.File
+		for _, tc := range cases {
+			path := filepath.Join(dir, pkg, strings.ToLower(tc.name)+"_nest_gen.go")
+			file, err := parser.ParseFile(fset, path, nil, parser.AllErrors)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var imports []string
+			for _, spec := range file.Imports {
+				if spec.Name != nil && spec.Name.Name == "logic" {
+					imports = append(imports, strings.Trim(spec.Path.Value, `"`))
+				}
+			}
+			if len(imports) != 1 || imports[0] != tc.path {
+				t.Fatalf("%s: file-scoped logic import = %v, want only %s", path, imports, tc.path)
+			}
+			files = append(files, file)
+		}
+		if pkg != "" {
+			config := types.Config{Importer: imp}
+			if _, err := config.Check(pkg, fset, files, nil); err != nil {
+				t.Fatalf("generated %s does not type-check: %v", pkg, err)
+			}
+		}
+	}
+}
+
 // 业务参数名是合法 Go 标识符，不应与 Sender 自己的路由参数、接收者、结果变量、包名、预声明标识符或
 // 包级 handlerName 变量冲突。只做语法解析查不出遮蔽（nest / len / 类型包被参数遮住仍能解析），
 // 所以这里对生成的两个 Sender 包做类型检查。

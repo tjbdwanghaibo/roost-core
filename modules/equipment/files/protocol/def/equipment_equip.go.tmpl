@@ -1,0 +1,19 @@
+//go:build protocoldef
+
+package protocoldef
+
+type EquipmentEquipRequest struct {
+	ItemID int64 `pb:"1"`
+}
+type EquipmentEquipResponse struct {
+	Code     int32  `pb:"1"`
+	Reason   string `pb:"2"`
+	Slot     int32  `pb:"3"`
+	Replaced int64  `pb:"4"`
+}
+
+//roost:protocol group=game handler=equipment
+type EquipmentEquipProtocol interface {
+	//roost:msg id={{ID:protocol:EquipmentEquip}}
+	EquipmentEquip(EquipmentEquipRequest) EquipmentEquipResponse
+}

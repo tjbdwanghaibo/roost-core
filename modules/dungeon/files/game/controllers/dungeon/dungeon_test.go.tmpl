@@ -1,0 +1,645 @@
+package dungeon
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	logic "{{MODULE}}/game/dungeon"
+	runentity "{{MODULE}}/game/entities/dungeon"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+const dungeonNow int64 = 1900000000
+const dungeonPlayer int64 = 96101
+
+type dungeonCommitter struct {
+	writes atomic.Int64
+	reject atomic.Bool
+	mu     sync.Mutex
+	last   dataengine.CommitRecord
+}
+
+func (c *dungeonCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected dungeon commit rejection")
+	}
+	c.mu.Lock()
+	c.last = record
+	c.mu.Unlock()
+	c.writes.Add(1)
+	return nil
+}
+func (c *dungeonCommitter) record() dataengine.CommitRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
+}
+
+type dungeonFixture struct {
+	controller *Controller
+	manager    *entity.EntityManager
+	engine     *nest.NestMgr
+	commit     *dungeonCommitter
+	now        atomic.Int64
+}
+
+// 正式EntityManager、生命周期、生成Sender、Nest与DAO链路；提交器只验收离线事务，不冒充Mongo/WAL部署验收。
+func newDungeonFixture(t *testing.T) *dungeonFixture {
+	t.Helper()
+	player.RegisterEntity()
+	runentity.RegisterEntity()
+	handler.RegisterDungeonCountsNestHandlers()
+	f := &dungeonFixture{manager: entity.NewEntityManager(), commit: &dungeonCommitter{}}
+	f.now.Store(dungeonNow * 1000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	for _, id := range []int64{dungeonPlayer, dungeonPlayer + 1} {
+		value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, UniqueID: id, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.manager.Add(value)
+	}
+	f.start(t)
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+func (f *dungeonFixture) start(t *testing.T) {
+	t.Helper()
+	access := entity.NewManagerAccess(f.manager)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := handler.RegisterDungeonNestHandlersOn(f.engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	registry := app.NewRegistry(viper.New())
+	for name, value := range map[app.ModName]any{app.ModName("nest"): nest.Client(f.engine), mods.ModEntityRuntime: access} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var err error
+	f.controller, err = FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *dungeonFixture) open(t *testing.T, id, season int64) logic.Snapshot {
+	t.Helper()
+	s, err := f.controller.Open(context.Background(), id, dungeonPlayer, season)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func (f *dungeonFixture) event(t *testing.T, id int64, s logic.Snapshot, seq uint64, enemy string) logic.Snapshot {
+	t.Helper()
+	s, err := f.controller.Defeated(context.Background(), id, s.Instance, s.Epoch, "battle", seq, enemy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func (f *dungeonFixture) clear(t *testing.T, id, season int64) logic.Snapshot {
+	t.Helper()
+	s := f.open(t, id, season)
+	s = f.event(t, id, s, 1, "minion")
+	s = f.event(t, id, s, 2, "minion")
+	return f.event(t, id, s, 3, "boss")
+}
+func (f *dungeonFixture) claim(id int64) (logic.ClaimResult, error) {
+	return f.controller.Claim(context.Background(), id, dungeonPlayer)
+}
+func (f *dungeonFixture) view(t *testing.T, id int64) logic.Snapshot {
+	t.Helper()
+	full, err := runEntityID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := f.controller.sender.Sync_DungeonView(context.Background(), full, dungeonPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func (f *dungeonFixture) player(t *testing.T, fn func(*player.Player)) {
+	t.Helper()
+	id, err := entity.BuildEntityID(dungeonPlayer, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.RunLocal(context.Background(), func() {
+		p := f.manager.Get(id).(*player.Player)
+		p.GetMutex().Lock()
+		defer p.GetMutex().Unlock()
+		fn(p)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *dungeonFixture) assertPlayer(t *testing.T, clears int64, claims int) {
+	t.Helper()
+	f.player(t, func(p *player.Player) {
+		if p.ProfileComp().Level() != int32(clears) || p.ProfileComp().Exp() != 0 || p.Dao().GetDungeon().GetTotalClears() != clears || p.Dao().GetDungeon().ClaimsLen() != claims {
+			t.Errorf("reward/ledger drift: level=%d clears=%d claims=%d", p.ProfileComp().Level(), p.Dao().GetDungeon().GetTotalClears(), p.Dao().GetDungeon().ClaimsLen())
+		}
+	})
+}
+
+type dungeonDocument struct {
+	raw     []byte
+	schema  uint32
+	version uint64
+}
+type dungeonAggregate struct {
+	id        int64
+	kind      entity.EntityKind
+	documents map[string]dungeonDocument
+}
+
+func (f *dungeonFixture) documents(t *testing.T) []dungeonAggregate {
+	t.Helper()
+	out := []dungeonAggregate{}
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.manager.Range(func(value entity.IThreadSafeEntity) bool {
+			value.GetMutex().Lock()
+			defer value.GetMutex().Unlock()
+			a := dungeonAggregate{id: value.ID(), kind: entity.ResolveEntityID(value.ID()).Kind, documents: map[string]dungeonDocument{}}
+			value.(entity.Guardable).RangeDao(func(dao entity.DaoInterface) {
+				// 所有生成/手写DAO共用正式MutationParticipant快照，不按具体类型分支或遗漏附加DAO。
+				participant, ok := dao.(nest.MutationParticipant)
+				if !ok {
+					t.Errorf("DAO %T has no persistence participant", dao)
+					return
+				}
+				mutation, err := participant.PrepareMutation(nest.PersistChange{Mask: dataengine.AllFields})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				version := dao.(interface{ DirtyTracker() *dataengine.Tracker }).DirtyTracker().Version()
+				if mutation.Kind != dataengine.MutationPut || mutation.Key.ID != a.id || mutation.Key.ID != dao.Id() || mutation.Key.Database != dao.DbName() || mutation.Key.Resource != dao.CollName() || mutation.Schema != dao.(dataengine.Descriptor).SchemaVersion() || mutation.ExpectedVersion != version || mutation.NextVersion != version+1 || len(mutation.Data) == 0 {
+					t.Errorf("invalid full persistence snapshot for %T: key=%+v schema=%d version=%d/%d", dao, mutation.Key, mutation.Schema, mutation.ExpectedVersion, mutation.NextVersion)
+					return
+				}
+				// 这里只冻结当前版本，不AcceptMutation，也不把伪造的下一版本当成已提交事实。
+				a.documents[dao.CollName()] = dungeonDocument{raw: mutation.Data, schema: mutation.Schema, version: mutation.ExpectedVersion}
+			})
+			out = append(out, a)
+			return true
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// 与仓库相同顺序：每份DAO先SetId与RestorePersisted，再BuildEntity绑定aggregate及执行OnInitFinish。
+func restoreDungeonAggregate(a dungeonAggregate) (entity.IThreadSafeEntity, error) {
+	daos := map[string]entity.DaoInterface{}
+	for _, build := range entity.GetEntityBuilderParam(a.kind).DaoBuilders {
+		dao := build()
+		dao.SetId(a.id)
+		if d, ok := a.documents[dao.CollName()]; ok {
+			if err := dao.(entity.PersistedDaoLoader).RestorePersisted(d.raw, d.schema, d.version); err != nil {
+				return nil, err
+			}
+		}
+		daos[dao.CollName()] = dao
+	}
+	return entity.BuildEntity(&entity.EntityCreateParam{IsCreate: false, Id: a.id, Kind: a.kind, Dao: daos})
+}
+func (f *dungeonFixture) restart(t *testing.T) {
+	t.Helper()
+	saved := f.documents(t)
+	if err := f.engine.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.manager = entity.NewEntityManager()
+	for _, a := range saved {
+		value, err := restoreDungeonAggregate(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.manager.Add(value)
+	}
+	f.start(t)
+}
+
+func TestDungeonOpenPersistsBothOfficialDAOs(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	record := f.commit.record()
+	if s.Instance == "" || s.Epoch != 1 || s.Stage != "waves" || s.Phase != string(level.Running) {
+		t.Fatalf("open=%+v", s)
+	}
+	if len(record.Mutations) != 2 || record.Durability != dataengine.DurabilityStrict {
+		t.Fatalf("aggregate commit=%+v", record)
+	}
+	collections := map[string]bool{}
+	for _, m := range record.Mutations {
+		collections[m.Key.Resource] = true
+	}
+	if !collections["dungeon"] || !collections[level.CollectionName] {
+		t.Fatalf("missing official DAO=%v", collections)
+	}
+}
+func TestDungeonOpenIsIdempotentAndIDCannotChangeOwner(t *testing.T) {
+	f := newDungeonFixture(t)
+	first := f.open(t, 1001, 1)
+	writes := f.commit.writes.Load()
+	second := f.open(t, 1001, 1)
+	if first != second || f.commit.writes.Load() != writes {
+		t.Fatal("open replay wrote state")
+	}
+	if _, err := f.controller.Open(context.Background(), 1001, dungeonPlayer+1, 1); err == nil {
+		t.Fatal("owner conflict accepted")
+	}
+	if _, err := f.controller.Open(context.Background(), 1001, dungeonPlayer, 2); err == nil {
+		t.Fatal("season conflict accepted")
+	}
+	f.clear(t, 1002, 1)
+	terminal := f.view(t, 1002)
+	if s := f.open(t, 1002, 1); s != terminal {
+		t.Fatal("finished ID reused")
+	}
+}
+func TestDungeonLevelConditionsRequireWavesBeforeBoss(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	s = f.event(t, 1001, s, 1, "boss")
+	if s.Result != "" || s.Kills != 0 {
+		t.Fatal("early boss settled")
+	}
+	s = f.event(t, 1001, s, 2, "minion")
+	if s.Kills != 1 || s.Stage != "waves" {
+		t.Fatalf("first=%+v", s)
+	}
+	s = f.event(t, 1001, s, 3, "minion")
+	if s.Kills != 2 || s.Stage != "boss" {
+		t.Fatalf("conditions/actions=%+v", s)
+	}
+	s = f.event(t, 1001, s, 4, "boss")
+	if s.Result != "success" || s.ResolvedAtUnix != dungeonNow {
+		t.Fatalf("terminal=%+v", s)
+	}
+}
+func TestDungeonEventReplayIsReadOnlyAndDigestConflicts(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	s = f.event(t, 1001, s, 1, "minion")
+	writes := f.commit.writes.Load()
+	if got := f.event(t, 1001, s, 1, "minion"); got != s || f.commit.writes.Load() != writes {
+		t.Fatal("event replay changed level")
+	}
+	if _, err := f.controller.Defeated(context.Background(), 1001, s.Instance, s.Epoch, "battle", 1, "boss"); err == nil {
+		t.Fatal("sequence digest conflict accepted")
+	}
+	s = f.event(t, 1001, s, 2, "minion")
+	if _, err := f.controller.Defeated(context.Background(), 1001, s.Instance, s.Epoch, "battle", 1, "minion"); err == nil {
+		t.Fatal("stale sequence accepted")
+	}
+}
+func TestDungeonRejectsWrongInstanceAndEpoch(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	writes := f.commit.writes.Load()
+	if _, err := f.controller.Defeated(context.Background(), 1001, "other", 1, "battle", 1, "minion"); !errors.Is(err, level.ErrStale) {
+		t.Fatalf("instance=%v", err)
+	}
+	if _, err := f.controller.Defeated(context.Background(), 1001, s.Instance, 2, "battle", 1, "minion"); !errors.Is(err, level.ErrStale) {
+		t.Fatalf("epoch=%v", err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("stale event wrote")
+	}
+}
+func TestDungeonSourceLedgerHasFourEntryBudget(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	for i := 0; i < 4; i++ {
+		var err error
+		s, err = f.controller.Defeated(context.Background(), 1001, s.Instance, s.Epoch, fmt.Sprintf("source%d", i), 1, "boss")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	writes := f.commit.writes.Load()
+	if _, err := f.controller.Defeated(context.Background(), 1001, s.Instance, s.Epoch, "fifth", 1, "boss"); err == nil {
+		t.Fatal("source budget exceeded")
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("rejected source wrote")
+	}
+}
+func TestDungeonUnfinishedAndForeignOwnerCannotClaim(t *testing.T) {
+	f := newDungeonFixture(t)
+	f.open(t, 1001, 1)
+	if _, err := f.claim(1001); !errors.Is(err, apperrors.ErrDungeonUnfinished) {
+		t.Fatalf("unfinished=%v", err)
+	}
+	f.clear(t, 1002, 1)
+	if _, err := f.controller.Claim(context.Background(), 1002, dungeonPlayer+1); !errors.Is(err, apperrors.ErrDungeonOwner) {
+		t.Fatalf("owner=%v", err)
+	}
+	f.assertPlayer(t, 0, 0)
+}
+func TestDungeonClaimDuplicateGrantsExactlyOnce(t *testing.T) {
+	f := newDungeonFixture(t)
+	f.clear(t, 1001, 2)
+	a, err := f.claim(1001)
+	if err != nil || !a.Claimed || a.ExpGranted != 100 || a.LevelsGained != 1 || a.Clears != 1 || a.Season != 2 {
+		t.Fatalf("claim=%+v %v", a, err)
+	}
+	writes := f.commit.writes.Load()
+	b, err := f.claim(1001)
+	if err != nil || b.Claimed || b.ExpGranted != 0 || b.Clears != 1 || f.commit.writes.Load() != writes {
+		t.Fatalf("duplicate reward escaped: %+v %v", b, err)
+	}
+	f.assertPlayer(t, 1, 1)
+}
+func TestDungeonClaimCommitFailureRollsBackRewardLedgerAndCounts(t *testing.T) {
+	f := newDungeonFixture(t)
+	f.clear(t, 1001, 1)
+	f.commit.reject.Store(true)
+	if _, err := f.claim(1001); err == nil {
+		t.Fatal("rejected commit succeeded")
+	}
+	f.assertPlayer(t, 0, 0)
+	f.commit.reject.Store(false)
+	if a, err := f.claim(1001); err != nil || !a.Claimed {
+		t.Fatalf("retry=%+v %v", a, err)
+	}
+	f.assertPlayer(t, 1, 1)
+}
+func TestDungeonTerminalCommitFailureRollsBackBothDAOs(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	s = f.event(t, 1001, s, 1, "minion")
+	s = f.event(t, 1001, s, 2, "minion")
+	f.commit.reject.Store(true)
+	if _, err := f.controller.Defeated(context.Background(), 1001, s.Instance, s.Epoch, "battle", 3, "boss"); err == nil {
+		t.Fatal("terminal reject succeeded")
+	}
+	f.commit.reject.Store(false)
+	if got := f.view(t, 1001); got != s {
+		t.Fatalf("partial terminal persisted=%+v", got)
+	}
+	f.event(t, 1001, s, 3, "boss")
+	if a, err := f.claim(1001); err != nil || !a.Claimed {
+		t.Fatalf("retry=%+v %v", a, err)
+	}
+}
+func TestDungeonClaimWindowUsesFrozenAuthorityAndInclusiveBoundary(t *testing.T) {
+	f := newDungeonFixture(t)
+	a := f.clear(t, 1001, 1)
+	f.clear(t, 1002, 1)
+	f.now.Add(logic.ClaimWindowSeconds * 1000)
+	if a2 := f.event(t, 1001, a, 3, "boss"); a2.ResolvedAtUnix != a.ResolvedAtUnix {
+		t.Fatal("replay renewed resolution time")
+	}
+	if result, err := f.claim(1001); err != nil || !result.Claimed {
+		t.Fatalf("exact boundary=%+v %v", result, err)
+	}
+	f.now.Add(1000)
+	if _, err := f.claim(1002); !errors.Is(err, apperrors.ErrDungeonWindow) {
+		t.Fatalf("expired claim accepted: %v", err)
+	}
+	f.assertPlayer(t, 1, 1)
+}
+func TestDungeonLedgerPruneWaitsForGrace(t *testing.T) {
+	f := newDungeonFixture(t)
+	f.clear(t, 1001, 1)
+	if _, err := f.claim(1001); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add((logic.ClaimWindowSeconds + logic.LedgerPruneGraceSeconds) * 1000)
+	f.clear(t, 1002, 1)
+	if _, err := f.claim(1002); err != nil {
+		t.Fatal(err)
+	}
+	f.assertPlayer(t, 2, 2)
+	f.now.Add(1000)
+	f.clear(t, 1003, 1)
+	if _, err := f.claim(1003); err != nil {
+		t.Fatal(err)
+	}
+	f.assertPlayer(t, 3, 2)
+	if _, err := f.claim(1001); !errors.Is(err, apperrors.ErrDungeonWindow) {
+		t.Fatalf("pruned run could reclaim=%v", err)
+	}
+}
+func TestDungeonFullLedgerRejectsWithoutEviction(t *testing.T) {
+	f := newDungeonFixture(t)
+	for i := 0; i < logic.MaxClaims; i++ {
+		id := int64(2000 + i)
+		f.clear(t, id, 1)
+		if _, err := f.claim(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.clear(t, 9999, 1)
+	writes := f.commit.writes.Load()
+	if _, err := f.claim(9999); !errors.Is(err, apperrors.ErrDungeonFull) {
+		t.Fatalf("full ledger=%v", err)
+	}
+	if _, err := f.claim(2000); err != nil {
+		t.Fatal(err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("full ledger/replay wrote")
+	}
+	f.assertPlayer(t, 128, 128)
+}
+func TestDungeonSeasonCountsAreBounded(t *testing.T) {
+	f := newDungeonFixture(t)
+	for season := int64(1); season <= logic.MaxSeasons; season++ {
+		f.clear(t, 2000+season, season)
+		if _, err := f.claim(2000 + season); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.clear(t, 9999, 9)
+	if _, err := f.claim(9999); !errors.Is(err, apperrors.ErrDungeonFull) {
+		t.Fatalf("ninth season=%v", err)
+	}
+	f.assertPlayer(t, 8, 8)
+}
+func TestDungeonConcurrentClaimGrantsOnce(t *testing.T) {
+	f := newDungeonFixture(t)
+	f.clear(t, 1001, 1)
+	var wg sync.WaitGroup
+	results := make(chan logic.ClaimResult, 8)
+	failures := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); result, err := f.claim(1001); results <- result; failures <- err }()
+	}
+	wg.Wait()
+	close(results)
+	close(failures)
+	for err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := 0
+	for result := range results {
+		if result.Claimed {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("claim winners=%d", count)
+	}
+	f.assertPlayer(t, 1, 1)
+}
+func TestDungeonColdRestorePreservesProgressAndMultiEntityClaim(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	s = f.event(t, 1001, s, 1, "minion")
+	f.restart(t)
+	if got := f.view(t, 1001); got != s {
+		t.Fatalf("progress not restored=%+v", got)
+	}
+	s = f.event(t, 1001, s, 2, "minion")
+	s = f.event(t, 1001, s, 3, "boss")
+	f.restart(t)
+	if got := f.view(t, 1001); got != s {
+		t.Fatal("terminal not restored")
+	}
+	if a, err := f.claim(1001); err != nil || !a.Claimed {
+		t.Fatalf("cold claim=%+v %v", a, err)
+	}
+	f.restart(t)
+	writes := f.commit.writes.Load()
+	if a, err := f.claim(1001); err != nil || a.Claimed || f.commit.writes.Load() != writes {
+		t.Fatalf("cold duplicate=%+v %v", a, err)
+	}
+	f.assertPlayer(t, 1, 1)
+}
+func TestDungeonColdRestoreRejectsHalfAggregateAndIdentityMismatch(t *testing.T) {
+	f := newDungeonFixture(t)
+	f.clear(t, 1001, 1)
+	for _, a := range f.documents(t) {
+		if a.kind != runentity.EntityKindDungeon {
+			continue
+		}
+		original := a.documents[level.CollectionName]
+		delete(a.documents, level.CollectionName)
+		if _, err := restoreDungeonAggregate(a); err == nil {
+			t.Fatal("missing official LevelDAO accepted")
+		}
+		a.documents[level.CollectionName] = original
+		a.id++
+		if _, err := restoreDungeonAggregate(a); err == nil {
+			t.Fatal("cross-run DAO identity accepted")
+		}
+	}
+}
+func TestDungeonPBEndpointsAndDeadlineCannotSupplySuccess(t *testing.T) {
+	f := newDungeonFixture(t)
+	f.open(t, 1001, 1)
+	raw, err := pb.MarshalDungeonClaimRequest(&pb.DungeonClaimRequest{RunID: 1001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pb.UnmarshalDungeonClaimRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := f.controller.HandleDungeonClaim(&playeraccess.Context{PlayerID: dungeonPlayer}, request)
+	if err != nil || response.Code == 0 || response.Claimed {
+		t.Fatalf("unfinished PB claim=%+v %v", response, err)
+	}
+	f.now.Add(30 * 60 * 1000)
+	view, err := f.controller.HandleDungeonView(&playeraccess.Context{PlayerID: dungeonPlayer}, &pb.DungeonViewRequest{RunID: 1001})
+	if err != nil || view.Code != 0 || view.Info.Result != "failed" {
+		t.Fatalf("deadline=%+v %v", view, err)
+	}
+	if _, err := f.controller.HandleDungeonClaim(nil, request); err == nil {
+		t.Fatal("unauthenticated request accepted")
+	}
+	f.assertPlayer(t, 0, 0)
+	f.clear(t, 1002, 1)
+	response, err = f.controller.HandleDungeonClaim(&playeraccess.Context{PlayerID: dungeonPlayer}, &pb.DungeonClaimRequest{RunID: 1002})
+	if err != nil || response.Code != 0 || !response.Claimed || response.ExpGranted != 100 {
+		t.Fatalf("successful PB claim=%+v %v", response, err)
+	}
+	f.assertPlayer(t, 1, 1)
+}
+func TestDungeonMutationsDetectDuplicateAndWindowRegression(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ path, before, after, test, marker string }{
+		{"entities/player/dungeon_component.go", "if _, ok := state.GetClaims(runID); ok {", "if _, ok := state.GetClaims(runID); ok && false {", "TestDungeonClaimDuplicateGrantsExactlyOnce", "duplicate reward escaped"},
+		{"dungeon/rules.go", "return now-resolvedAt > ClaimWindowSeconds", "return now-resolvedAt > ClaimWindowSeconds+1", "TestDungeonClaimWindowUsesFrozenAuthorityAndInclusiveBoundary", "expired claim accepted"},
+	}
+	for _, c := range cases {
+		path, err := filepath.Abs(filepath.Join(dir, "../..", c.path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(source), c.before) != 1 {
+			t.Fatalf("mutation anchor changed: %s", c.path)
+		}
+		scratch := t.TempDir()
+		replacement := filepath.Join(scratch, "mutant.go")
+		if err := os.WriteFile(replacement, []byte(strings.Replace(string(source), c.before, c.after, 1)), 0644); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(map[string]map[string]string{"Replace": {path: replacement}})
+		overlay := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlay, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		compile := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-overlay", overlay, "-run", "^$", ".")
+		compile.Env = append(os.Environ(), "GOWORK=off")
+		if out, err := compile.CombinedOutput(); err != nil {
+			cancel()
+			t.Fatalf("mutant did not compile %s: %v\n%s", c.path, err, out)
+		}
+		check := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-count=1", "-overlay", overlay, "-run", "^"+c.test+"$", ".")
+		check.Env = append(os.Environ(), "GOWORK=off")
+		out, err := check.CombinedOutput()
+		cancel()
+		if err == nil || !strings.Contains(string(out), c.marker) {
+			t.Fatalf("mutant survived %s: %v\n%s", c.path, err, out)
+		}
+	}
+}

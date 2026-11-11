@@ -1,0 +1,35 @@
+name: combat
+summary: 固定双人PVP：双方同意、正式技能Runtime和CombatDAO、控制Buff、冷却与延迟推进、整场事务边界
+requires: [actor, attribute, skillbook]
+needs:
+  mods: [nest, heartbeat]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - {field: Combat, type: CombatState, store: combat, dao: 'persist,sync', comment: 战斗公开投影与双人同意绑定；HP权威在附加CombatDAO。}
+  - {field: CombatPrivate, type: CombatPrivateState, store: combat_private, dao: persist, comment: 单调请求回执与双人完整Host/Runtime边界；不下发。}
+daos:
+  - {field: combatState, type: CombatDAO, tag: combat_state}
+component: Combat
+protocols: [CombatReady, CombatCast, CombatStep, CombatLeave]
+errcodes: [combat_invalid, combat_sequence, combat_conflict, combat_boundary, combat_busy, combat_scene, combat_range, combat_consent, combat_dead, combat_silenced, combat_skill]
+runtime: {package: game/combat, start: Start}
+verify:
+  packages: [./game/handler]
+  run: ^TestCombat
+  pass: 36
+with:
+  skillbook:
+    summary: 启动目录的战斗Status策略与统一authority摘要
+  scene:
+    summary: 只向旁观者开放Combat投影字段
+    verify:
+      packages: [./game/controllers/scene]
+      run: ^TestWithCombatScene
+      pass: 2
+  equipment:
+    summary: 真实换装只在下一拍纳入技能世界，换装拒交保持旧权威
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithCombatEquipment
+      pass: 2

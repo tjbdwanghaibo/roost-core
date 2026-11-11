@@ -1,0 +1,16 @@
+package dbdef
+
+// ActorState 是当前实例的位置；存储与同步分别声明，不把每拍位移写进 WAL。
+type ActorState struct {
+	SceneID int64 `store:"1"`
+	X       int64 `store:"2"`
+	Y       int64 `store:"3"`
+	Facing  int32 `store:"4"`
+}
+
+type ActorSavedState struct {
+	SceneID int64 `store:"1"`
+	X       int64 `store:"2"`
+	Y       int64 `store:"3"`
+	Facing  int32 `store:"4"`
+}

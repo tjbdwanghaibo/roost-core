@@ -2,24 +2,13 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	generated "{{MODULE}}/configs/generated"
-	"{{MODULE}}/game/actor"
-	"{{MODULE}}/game/flags"
-	monster "{{MODULE}}/game/entities/monster"
-	player "{{MODULE}}/game/entities/player"
-	sceneentity "{{MODULE}}/game/entities/scene"
-	"{{MODULE}}/game/handler"
-	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/runtimeid"
-	gamescene "{{MODULE}}/game/scene"
-	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -28,6 +17,18 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/actor"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/flags"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/runtimeid"
+	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/protocol/pb"
 )
 
 // Movement end to end: the client sends a goal, the player's own
@@ -308,7 +309,7 @@ func TestAPlayerWalksToItsGoalOnItsOwnHeartbeatAndTheWatcherSeesTheSteps(t *test
 		t.Fatalf("move target: action %d err %v", actionID, err)
 	}
 	w.settle(walker.ID())
-	moveReg := locked(w, walker.ID(), func() *heartbeat.Reg { return walker.MapComp().Behavior().Beat().Reg(actor.GroupMove) })
+	moveReg := locked(w, walker.ID(), func() *heartbeat.Reg { return walker.MapComp().Body().MoveHeartbeat() })
 	if moveReg == nil || !locked(w, walker.ID(), moveReg.Active) {
 		t.Fatalf("walking player: move heartbeat %v, want the move group's registration active", moveReg)
 	}
@@ -752,5 +753,93 @@ func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
 	_, last := w.positionsSeen(watcherID)
 	if state, ok := last[target.ID()]; !ok || state["rooted"] != false {
 		t.Fatalf("the watcher's view of the monster: %v, want it freed (rooted false)", state)
+	}
+}
+
+var sharedBodyWrite = nest.NewHandlerName("scene_movement_test.shared_body_write")
+
+func init() {
+	nest.MustRegisterHandlerWithMeta(sharedBodyWrite, func(_ []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, args[0].(func() error)()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+}
+func sharedBodyRequest(w *moveWorld, p *player.Player, fn func() error) error {
+	_, err := w.engine.Request(w.ctx, sharedBodyWrite, p.ID(), nest.NewParams(fn))
+	return err
+}
+
+func TestPlayerSharedBodyRollsBackARejectedReplacement(t *testing.T) {
+	w := newMoveWorld(t)
+	p := w.join(9811, spatial.Point{X: 500, Y: 500})
+	token, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, p.ID(), w.area.ID(), 560, 500, 0)
+	if err != nil || token <= 0 {
+		t.Fatalf("start %d %v", token, err)
+	}
+	rejected := errors.New("reject replacement")
+	err = sharedBodyRequest(w, p, func() error {
+		if _, err := p.MapComp().WalkTo([]spatial.Point{{X: 500, Y: 560}}); err != nil {
+			return err
+		}
+		return rejected
+	})
+	if !errors.Is(err, rejected) {
+		t.Fatal(err)
+	}
+	current := locked(w, p.ID(), func() uint64 { return p.MapComp().Body().Move.Token() })
+	if current != uint64(token) {
+		t.Fatalf("rejected replacement changed token %d to %d", token, current)
+	}
+	if !locked(w, p.ID(), p.MapComp().Body().MoveHeartbeat().Active) {
+		t.Fatal("rejected replacement stopped heartbeat")
+	}
+	w.clock.advance(200 * time.Millisecond)
+	eventually(t, "original path still advances", func() (bool, string) {
+		at := p.MapBasic().Published().Pos
+		return at == (spatial.Point{X: 512, Y: 500}), fmt.Sprint(at)
+	})
+}
+func TestPlayerSharedBodyRetainsDemoRouteBudget(t *testing.T) {
+	w := newMoveWorld(t)
+	p := w.join(9812, spatial.Point{X: 500, Y: 500})
+	path := make([]spatial.Point, 320)
+	for i := range path {
+		path[i] = spatial.Point{X: 501 + int64(i), Y: 500}
+	}
+	var token int64
+	if err := sharedBodyRequest(w, p, func() error { var err error; token, err = p.MapComp().WalkTo(path); return err }); err != nil || token <= 0 {
+		t.Fatalf("demo route budget shrank: %d %v", token, err)
+	}
+	if err := sharedBodyRequest(w, p, func() error { _, err := p.MapComp().WalkTo(make([]spatial.Point, 4097)); return err }); err == nil {
+		t.Fatal("unbounded demo path accepted")
+	}
+	if current := locked(w, p.ID(), func() uint64 { return p.MapComp().Body().Move.Token() }); current != uint64(token) {
+		t.Fatal("rejected path replaced active movement")
+	}
+}
+func TestPlayerSharedBodyRollsBackTeleportAndItsStop(t *testing.T) {
+	w := newMoveWorld(t)
+	p := w.join(9813, spatial.Point{X: 500, Y: 500})
+	token, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, p.ID(), w.area.ID(), 560, 500, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := errors.New("reject teleport")
+	err = sharedBodyRequest(w, p, func() error {
+		if err := p.MapComp().Teleport(w.area.Terrain(), spatial.Point{X: 530, Y: 530}); err != nil {
+			return err
+		}
+		return rejected
+	})
+	if !errors.Is(err, rejected) {
+		t.Fatal(err)
+	}
+	if at := p.MapBasic().Published().Pos; at != (spatial.Point{X: 500, Y: 500}) {
+		t.Fatal("rejected teleport moved", at)
+	}
+	if current := locked(w, p.ID(), func() uint64 { return p.MapComp().Body().Move.Token() }); current != uint64(token) {
+		t.Fatal("rejected teleport stopped the original walk")
+	}
+	if !locked(w, p.ID(), p.MapComp().Body().MoveHeartbeat().Active) {
+		t.Fatal("rejected teleport stopped heartbeat")
 	}
 }

@@ -1,0 +1,18 @@
+//go:build protocoldef
+
+package protocoldef
+
+type FriendsChangeRequest struct {
+	PeerID int64 `pb:"1"`
+	Action int32 `pb:"2"`
+}
+type FriendsChangeResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+}
+
+//roost:protocol group=game handler=friends
+type FriendsChangeProtocol interface {
+	//roost:msg id={{ID:protocol:FriendsChange}}
+	FriendsChange(FriendsChangeRequest) FriendsChangeResponse
+}

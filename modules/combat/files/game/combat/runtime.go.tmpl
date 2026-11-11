@@ -1,0 +1,127 @@
+package combat
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+
+	"{{MODULE}}/game/skillbook"
+)
+
+// 单个服务worker只做Nest准入/等待，不碰实体。队列有界、相同owner至多一项，饱和交给下一拍重试。
+type delivery struct {
+	Owner, Peer int64
+	Epoch       uint64
+}
+type settledMulti interface {
+	RequestMultiSettled(context.Context, nest.HandlerName, []int64, nest.Params, ...nest.SendOpt) (any, error)
+}
+type runtimeService struct {
+	registry *app.Registry
+	client   settledMulti
+	queue    chan delivery
+	done     chan struct{}
+	mu       sync.Mutex
+	closed   bool
+	pending  map[int64]bool
+	failures atomic.Uint64
+}
+
+var running atomic.Pointer[runtimeService]
+
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	if _, err := skillbook.Resolver(registry); err != nil {
+		return nil, err
+	}
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok {
+		return nil, errors.New("combat: nest client unavailable")
+	}
+	settled, ok := client.(settledMulti)
+	if !ok {
+		return nil, errors.New("combat: Nest RequestMultiSettled is required")
+	}
+	s := &runtimeService{registry: registry, client: settled, queue: make(chan delivery, 128), done: make(chan struct{}), pending: map[int64]bool{}}
+	if !running.CompareAndSwap(nil, s) {
+		return nil, errors.New("combat: runtime already started")
+	}
+	go func() {
+		defer close(s.done)
+		for d := range s.queue {
+			_, err := s.client.RequestMultiSettled(context.Background(), nest.NewHandlerName("handlerCombatTick"), []int64{d.Owner, d.Peer}, nest.NewParams(d.Epoch))
+			if err != nil {
+				s.failures.Add(1)
+			}
+			s.mu.Lock()
+			delete(s.pending, d.Owner)
+			s.mu.Unlock()
+		}
+	}()
+	return func(ctx context.Context) error {
+		s.mu.Lock()
+		if !s.closed {
+			s.closed = true
+			close(s.queue)
+		}
+		s.mu.Unlock()
+		select {
+		case <-s.done:
+			running.CompareAndSwap(s, nil)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}, nil
+}
+
+// Queue 在已提交心跳回调使用，只传ID和会话代际，不把实体、锁或fctx带到后台。
+func Queue(owner, peer int64, epoch uint64) bool {
+	s := running.Load()
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.pending[owner] {
+		return false
+	}
+	select {
+	case s.queue <- delivery{owner, peer, epoch}:
+		s.pending[owner] = true
+		return true
+	default:
+		return false
+	}
+}
+
+func Program(id string) (*skill.Program, error) {
+	s := running.Load()
+	if s == nil {
+		return nil, fmt.Errorf("combat: runtime unavailable")
+	}
+	return skillbook.LookupProgram(s.registry, id)
+}
+
+func Resolver() (skill.ProgramResolver, error) {
+	s := running.Load()
+	if s == nil {
+		return nil, fmt.Errorf("combat: runtime unavailable")
+	}
+	return skillbook.Resolver(s.registry)
+}
+
+func Environment() skill.CompileEnvironment { return skillbook.CompileEnvironment() }
+
+func FailedDeliveries() uint64 {
+	s := running.Load()
+	if s == nil {
+		return 0
+	}
+	return s.failures.Load()
+}

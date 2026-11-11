@@ -1,0 +1,119 @@
+package friends
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"sync/atomic"
+	"testing"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+type friendsEndpointGetter map[int64]entity.IThreadSafeEntity
+
+func (g friendsEndpointGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if v := g[id]; v != nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g friendsEndpointGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, e := g.Get(ctx, id, cats[i])
+		if e != nil {
+			return nil, e
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type friendsEndpointCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *friendsEndpointCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected commit rejection")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type friendsOnline map[int64]int
+
+func (s friendsOnline) ActiveSessions(id int64) int { return s[id] }
+func friendsControllerFixture(t *testing.T, online friendsOnline) (*Controller, *nest.NestMgr, []int64, *friendsEndpointCommitter) {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterFriendsChangeNestHandlers()
+	handler.RegisterFriendsListNestHandlers()
+	g := friendsEndpointGetter{}
+	var ids []int64
+	for i := int64(0); i < 2; i++ {
+		id, e := entity.BuildEntityID(97000+i, player.EntityKindPlayer)
+		if e != nil {
+			t.Fatal(e)
+		}
+		p, e := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if e != nil {
+			t.Fatal(e)
+		}
+		g[id] = p
+		ids = append(ids, id)
+	}
+	commit := &friendsEndpointCommitter{}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(commit))
+	if e := engine.Start(); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		if e := engine.Shutdown(context.Background()); e != nil {
+			t.Error(e)
+		}
+	})
+	r := app.NewRegistry(nil)
+	if e := r.Register("nest", engine); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Register("access.player.tcp", online); e != nil {
+		t.Fatal(e)
+	}
+	c, e := FromRegistry(r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return c, engine, ids, commit
+}
+func TestFriendsEndpointRefusesPeerOutsideThisProcess(t *testing.T) {
+	c, n, ids, commit := friendsControllerFixture(t, friendsOnline{97000: 1})
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsApply})
+	if e != nil || response.Code == 0 {
+		t.Fatalf("response=%+v err=%v", response, e)
+	}
+	s, e := syncsender.NewFriendsListSender(n).Sync_FriendsList(context.Background(), ids[1])
+	if e != nil || len(s.Incoming) != 0 || commit.commits.Load() != 0 {
+		t.Fatalf("remote peer wrote %+v %v", s, e)
+	}
+}
+func TestFriendsEndpointUsesAuthenticatedActorAndListsOwnFacts(t *testing.T) {
+	c, _, _, _ := friendsControllerFixture(t, friendsOnline{97000: 1, 97001: 1})
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsApply})
+	if e != nil || response.Code != 0 {
+		t.Fatalf("response=%+v err=%v", response, e)
+	}
+	list, e := c.HandleFriendsList(&playeraccess.Context{PlayerID: 97001}, &pb.FriendsListRequest{})
+	if e != nil || list.Code != 0 || len(list.Incoming) != 1 || list.Incoming[0] != 97000 {
+		t.Fatalf("list=%+v err=%v", list, e)
+	}
+}

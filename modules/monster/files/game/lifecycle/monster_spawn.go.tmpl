@@ -1,0 +1,20 @@
+package lifecycle
+
+import (
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	monster "{{MODULE}}/game/entities/monster"
+)
+
+// CreateMonster 是生成lifecycle的业务扩展：与标准Create使用同一ManagerAccess，
+// 但必须在组件初始化前注入不可变出生规则/感知回调，不能先造一个缺少参数的可见实体。
+func (l *MonsterLifecycle) CreateMonster(ctx context.Context, uniqueID int64, params monster.CreateParams) (*monster.Monster, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	value, err := l.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: uniqueID, Kind: monster.EntityKindMonster, Param: params})
+	if err != nil {
+		return nil, err
+	}
+	return value.(*monster.Monster), nil
+}

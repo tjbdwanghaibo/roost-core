@@ -1,0 +1,24 @@
+name: terrain
+summary: 可编辑地形Pack/View/Brush/Walker、持久地形块与建筑占地、多实体编辑账本及场景同步
+requires: [scene]
+needs:
+  mods: [nest]
+  features: [entity, dao, protocol]
+entities: [TerrainChunk, TerrainBuilding]
+entity: Player
+component: Terrain
+state:
+  - {field: TerrainLedger, type: TerrainLedgerState, store: terrain_ledger, dao: 'persist,nosync', comment: 全局连续编辑序号与摘要，保留最后结果，拒绝过期重放。}
+protocols: [TerrainBrush, TerrainBuild, TerrainRemove, TerrainQuery]
+runtime: {package: game/terrain/service, start: Start}
+verify:
+  packages: [./game/controllers/terrain]
+  run: ^TestTerrain
+  pass: 23
+with:
+  monster:
+    summary: 地形停机先按场景排空怪物，保留其他场景与失败重试资源
+    verify:
+      packages: [./game/controllers/terrain]
+      run: ^TestWithTerrainMonster
+      pass: 2

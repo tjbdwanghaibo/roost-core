@@ -1,0 +1,6 @@
+package dbdef
+
+// AttributeValues 仅持有生成的属性 ID 与值；每个顶层层级按各自持久/同步边界存放。
+type AttributeValues struct {
+	Values map[int32]int64 `store:"1"`
+}

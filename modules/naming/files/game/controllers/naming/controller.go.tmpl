@@ -1,0 +1,72 @@
+package naming
+
+import (
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	profile "{{MODULE}}/game/profile"
+)
+
+// Controller 不保存可变业务状态。所有在途事实在 Player；每次重试可使用新 Controller。
+type Controller struct {
+	names   directory.Directory
+	profile namingProfile
+}
+type namingProfile interface {
+	Begin(context.Context, int64, string, string) (player.NamingTicket, error)
+	Step(context.Context, int64, int64, string, int32, string, string) (player.NamingTicket, error)
+}
+type nestProfile struct {
+	begin *syncsender.NamingBeginSender
+	step  *syncsender.NamingStepSender
+}
+
+func (p nestProfile) Begin(ctx context.Context, id int64, op, name string) (player.NamingTicket, error) {
+	return p.begin.Sync_NamingBegin(ctx, id, op, name)
+}
+func (p nestProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (player.NamingTicket, error) {
+	return p.step.Sync_NamingStep(ctx, id, seq, op, action, key, token)
+}
+func FromRegistry(r *app.Registry) (*Controller, error) {
+	if r == nil {
+		return nil, fmt.Errorf("naming: registry required")
+	}
+	names, ok := app.Lookup[directory.Directory](r, app.ModName("service.directory"))
+	if !ok || names == nil {
+		return nil, fmt.Errorf("naming: directory capability missing")
+	}
+	client, ok := app.Lookup[nest.Client](r, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("naming: nest capability missing")
+	}
+	return &Controller{names: names, profile: nestProfile{syncsender.NewNamingBeginSender(client), syncsender.NewNamingStepSender(client)}}, nil
+}
+func init() {
+	profile.RegisterRenamer(func(ctx context.Context, r *app.Registry, id int64, name string) (string, error) {
+		c, err := FromRegistry(r)
+		if err != nil {
+			return "", err
+		}
+		// 旧协议没有请求键，以目标名构成固定键；同目标重发恢复同一笔。新协议允许业务自带键。
+		return c.Rename(ctx, id, fmt.Sprintf("%x", sha256.Sum256([]byte(name))), name)
+	})
+}
+
+// Rename 是正式服务端入口；只允许事务之外调用，会等待目录与 Nest。
+func (c *Controller) Rename(ctx context.Context, playerID int64, operation, name string) (string, error) {
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return "", err
+	}
+	ticket, err := c.profile.Begin(ctx, id, operation, name)
+	if err != nil {
+		return "", err
+	}
+	return c.resume(ctx, id, ticket)
+}

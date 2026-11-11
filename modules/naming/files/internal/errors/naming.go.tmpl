@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrNamingBusy     = errcode.Define({{ID:errcode:naming_busy}}, "naming_busy", "another rename is pending; retry its request key")
+	ErrNamingInvalid  = errcode.Define({{ID:errcode:naming_invalid}}, "naming_invalid", "invalid or conflicting rename request")
+	ErrNamingRequired = errcode.Define({{ID:errcode:naming_required}}, "naming_required", "rename must use the naming coordinator")
+)

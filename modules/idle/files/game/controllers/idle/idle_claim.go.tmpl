@@ -1,0 +1,13 @@
+package idle
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleIdleClaim 从认证会话取得玩家身份，规则与持久状态都在 Nest 的实体锁内处理。
+//
+//roost:endpoint nest=IdleClaim
+func (controller *Controller) HandleIdleClaim(ctx *playeraccess.Context, req *pb.IdleClaimRequest) (*pb.IdleClaimResponse, error) {
+	return controller.dispatchIdleClaim(ctx, req)
+}

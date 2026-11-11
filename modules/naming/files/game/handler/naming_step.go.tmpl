@@ -1,0 +1,8 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+//roost:nest rollback=undo durability=strict
+func handlerNamingStep(target player.INamingEntity, seq int64, operation string, action int32, key string, token string) (player.NamingTicket, error) {
+	return target.NamingComp().Step(seq, operation, action, key, token)
+}

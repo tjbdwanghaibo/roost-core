@@ -1,0 +1,12 @@
+package schema
+
+// GachaDrop 是一个池的一个奖励项；权重为0可用于“只从保底产出”的道具。
+// 同池同道具可有多行，它们的概率相加。每池至多256行，非保底总权重必须为正。
+//
+//roost:table name=gacha_drop key=ID
+type GachaDrop struct {
+	ID     int64 `csv:"id" json:"id" title:"ID" required:"true" unique:"true" min:"1"`
+	PoolID int64 `csv:"pool_id" json:"pool_id" title:"PoolID" min:"1"`
+	ItemID int64 `csv:"item_id" json:"item_id" title:"ItemID" min:"1"`
+	Weight int64 `csv:"weight" json:"weight" title:"Weight" min:"0"`
+}

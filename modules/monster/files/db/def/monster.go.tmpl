@@ -1,0 +1,27 @@
+package dbdef
+
+// MonsterDao 不落库；进程启动从规则重建，客户端只接收位置与生命事实。
+//
+//roost:dao coll=monster db=main
+type MonsterDao struct {
+	Actor  ActorState    `dao:"nopersist,sync" store:"1"`
+	Vitals MonsterVitals `dao:"nopersist,sync" store:"2"`
+	Brain  MonsterBrain  `dao:"nopersist,nosync" store:"3"`
+}
+
+// MonsterVitals.LifeSeq 每次重生增加；旧命的伤害与迟到命令不能影响新命。
+type MonsterVitals struct {
+	Template int32  `store:"1"`
+	HP       int64  `store:"2"`
+	LifeSeq  uint64 `store:"3"`
+}
+
+// MonsterBrain 是本次进程的AI与重刷事实，Nest失败会与位置/生命一起撤销。
+type MonsterBrain struct {
+	HomeX     int64 `store:"1"`
+	HomeY     int64 `store:"2"`
+	Target    int64 `store:"3"`
+	Corner    int32 `store:"4"`
+	RespawnAt int64 `store:"5"`
+	Retired   bool  `store:"6"`
+}

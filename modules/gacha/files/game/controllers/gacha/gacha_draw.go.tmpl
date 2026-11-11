@@ -1,0 +1,13 @@
+package gacha
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleGachaDraw 从认证会话取得玩家身份，规则与持久状态都在 Nest 的实体锁内处理。
+//
+//roost:endpoint nest=GachaDraw
+func (controller *Controller) HandleGachaDraw(ctx *playeraccess.Context, req *pb.GachaDrawRequest) (*pb.GachaDrawResponse, error) {
+	return controller.dispatchGachaDraw(ctx, req)
+}

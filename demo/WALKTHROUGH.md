@@ -30,9 +30,9 @@ TCP (player access)
 以及它自己的 17 条场景（`roost module verify`）。demo 在它之上做的：
 
 - **只换道具表的数据**：模块装好之后覆盖 `configs/schema/item.go` 与 `configs/table/item.csv`——多 `attack` / `hp` 两列
-  （属性系统给穿着的装备算加成），行是 demo 的四种道具。背包规则文件 `game/entities/player/bag_items.go` 是模块的缺省实现：
+  （属性系统给穿着的装备算加成），行是 demo 的五种道具。背包规则文件 `game/entities/player/bag_items.go` 是模块的缺省实现：
   表里有这一行道具号就合法，`max_stack` 是单种上限（0 表示不单独限制，按硬上限 999999）。加道具、改上限只改 CSV。
-- **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放、装备、充值发货，
+- **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放、充值发货，
   都在自己的 Nest handler 里调 `target.BagComp().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`
   要求组件文件已经在盘上，而组件在最后的模块步骤才落盘，所以生成步骤里这些 handler 没有骨架步骤，文件直接写出、留在原处
   （骨架本来也会被立刻覆盖）；模块那一步跑生成器时全部 handler 都已经在盘上。邮件附件进背包不在其中：那是 mailbox 模块与
@@ -112,9 +112,9 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 ```
 AddExp 端点 → Nest 锁 World、Player → handlerAddExp → ProfileComponent.AddExp（profile 模块）
   ├─ ProfilePrivate.SetExp / Profile.SetLevel   状态变更
-  └─ onLevelUp(from, to)                         模块的升级钩子，demo 的版本在 profile_levelup.go：
-        ├─ AttributeComponent.LevelUp            属性 Base 层跟着等级涨
-        └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
+  ├─ onLevelUp(from, to)                         demo 的 profile_levelup.go 发升级事件
+  │     └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
+  └─ OnProfileLevelUp 的 attribute 登记钩子       属性 Base 层跟着等级涨，仍在同一事务
         ↓ commit 后由 dataengine 发到 JetStream（<subject_prefix>.player.level_up）
 internal/service/game/level_up_mail.go     kitdataengine.SubscribeEffects：durable + Mongo inbox（每个 EffectID 只处理一次）
   └─ gamemailbox.SendTo(RequestID = EffectID)  mailbox 模块的发件入口 → mail.Send；mail 服务按 RequestID 去重：第二层幂等
@@ -515,22 +515,19 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - GM：`gm.scene.population` 看当前几只，`gm.scene.kill` 杀一只——表里写 20 秒，20 秒（业务时间）后的那一拍回到满员且是一个**新 id**；
   `gm.scene.root` 定身。怪物 id 由 `game/runtimeid` 按 sid 编码，两个进程不会撞。
 
-## 装备栏：demo 唯一的嵌套字段，以及为什么它在这里
+## 装备栏
 
-`PlayerDao.Equipment` 是一个嵌套 struct，里面是 `Slots map[int32]*GearPiece`——**嵌套里再嵌套**。
+装备使用 [equipment 模块](../modules/equipment/README.md)，demo 只提供 `configs/table/equipment_item.csv` 的武器槽位与加成规则。客户端走 `EquipmentEquip` / `EquipmentUnequip`，Robot 的 `equip` 动作也调用同一协议。
 
-- **它在这里的理由不只是玩法**：嵌套字段的标脏、解绑与回调接线路径出过多个缺陷，而之前生成的工程里**一个使用方都没有**，
-  只有生成器自己的运行时门看得见。保留这个字段，让 demo 的测试与实跑也覆盖这条路径。
-- **穿装备是一个事务**：从背包取出、穿上、把换下来的放回背包——三件事一起提交。崩在中间要么丢件要么复制件，两者都是资产错误。
-- **属性的 Gear 层从穿戴集算**，不是从整个背包：背着一把剑不该让人变强。
-- **写入只经 `EquipmentComponent`**，而且整张 `Slots` 重写而不是就地改一个 entry——走 `SetSlots` 才会把离开的件解绑、
-  把新来的件绑上。伸手去改 `Range` 里拿到的指针，等于改 DAO 仍然认为自己拥有的东西。
+`PlayerDao.Equipment` 的 Slots 持有 GearPiece，字段仍有两层嵌套。组件在同一 Nest 事务内扣新物品、替换槽位、退旧物品；逐键 setter 负责绑定与解绑，原有的替换、回滚和失效旧引用场景保留。装了 attribute 后，同事务钩子重算属性，handler 不再重复扣包或重复刷新。
 
 ## 持久 schema
 
-`//roost:dao coll=player db=main schema=2` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
+属性/装备模块化后，当前示例使用 schema 3。schema 2 的旧示例数据会明确拒绝；本轮不提供其格式兼容或自动转换。重新生成示例请用新数据目录/数据库，不能复用已有 WAL。下述 schema 1 教学迁移仍只演示业务显式登记、停写后操作的方式。
 
-改形状时靠离线迁移：`db/migrations` 登记 Player 从 1 到 2 的步骤（v1 的扁平 `weapon_id` 变成 v2 的 `equipment.slots`）和写入前的校验（用生成 DAO 的 `RestorePersisted` 按当前 schema 解码），`offline.go` 是执行器，`cmd/schemamigrate plan|apply|verify|rollback` 是运维入口。只能在停写之后运行；apply 先完整 dry-run、全部通过才“写备份 → 带 `_version` 与 `_schema` 条件改写”，改写时 `_version` 加 1，没停干净的旧进程因此冲突而不是把旧 schema 写回去；rollback 只恢复仍是迁移写的那一版。流程与边界见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md)。
+`//roost:dao coll=player db=main schema=3` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
+
+改形状时靠离线迁移：`db/migrations` 登记 Player 从 1 到当前 3 的教学步骤（v1 的扁平 `weapon_id` 变成当前的 `equipment.1`（模块的稳定存储键））和写入前的校验（用生成 DAO 的 `RestorePersisted` 按当前 schema 解码），`offline.go` 是执行器，`cmd/schemamigrate plan|apply|verify|rollback` 是运维入口。只能在停写之后运行；apply 先完整 dry-run、全部通过才“写备份 → 带 `_version` 与 `_schema` 条件改写”，改写时 `_version` 加 1，没停干净的旧进程因此冲突而不是把旧 schema 写回去；rollback 只恢复仍是迁移写的那一版。流程与边界见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md)。
 
 ## 把一个 sid 搬到另一台机器
 
@@ -578,13 +575,13 @@ demo 在模块之上接的线：
 
 ## 属性：层、合成，以及两种存储意图
 
-`game/gameplay/attribute` 声明属性与派生公式，`game/entities/player/attribute_component.go` 是容器的归属地。
+属性使用 [attribute 模块](../modules/attribute/README.md)：`game/gameplay/attribute` 声明属性与派生公式，组件按 DAO 内容构造只读副本；升级由 profile 的登记点同事务触发，demo 的升级钩子只发奖励邮件事件。
 
-- **三层**：`Base`（玩家自己的值）、`Gear`（背包的投影，按 item 表的 `attack` / `hp` 求和）、`Final`（合成视图）。
+- **三层**：`Base`（玩家自己的值）、`Gear`（穿戴集的投影，按 equipment_item 表的 `attack` / `hp` 求和）、`Final`（合成视图）。
 - **合成规则**：`Final = Base + Gear` 逐属性相加，**然后**才 `Update()` 重算派生属性。派生属性只算一次、且算在合成后的输入上——
   把各层自己的战力相加，等于把两个各用一半输入算出来的评分加起来，那不是战力的意思。
-- **两种存储意图**：`AttrBase` 是 `persist,sync`；`AttrFinal` 是 `nopersist,sync`——能从已存的东西推出来的值不存
-  （存了就是第二个真相，会和第一个打架），但它是客户端要画的，所以照样复制。Mongo 里只有 `attr_base`，线上两个都有。
+- **两种存储意图**：`AttributeBase` 是 `persist,sync`；`AttributeFinal` 是 `nopersist,sync`——能从已存的东西推出来的值不存
+  （存了就是第二个真相，会和第一个打架），但它是客户端要画的，所以照样复制。Mongo 里只有 `attribute_base`，线上两个都有。
 - 容器在 `OnInitFinish` 填充：生成的 builder 先挂 DAO、再初始化组件，所以那时存储值已经在手上了。
 - **没做**：会过期的层。真正的 buff 层需要一个时钟和一次扫描，而它该待在被 tick 调用的组件方法里，不是某个 getter 里的惰性检查。
 

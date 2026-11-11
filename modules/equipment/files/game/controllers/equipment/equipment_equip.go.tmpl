@@ -1,0 +1,13 @@
+package equipment
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// 玩家身份仅来自已认证会话；控制器通过正式 Nest Sender 取得 Player 执行权。
+//
+//roost:endpoint nest=EquipmentEquip
+func (c *Controller) HandleEquipmentEquip(ctx *playeraccess.Context, req *pb.EquipmentEquipRequest) (*pb.EquipmentEquipResponse, error) {
+	return c.dispatchEquipmentEquip(ctx, req)
+}

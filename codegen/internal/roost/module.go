@@ -142,6 +142,9 @@ func listModules(rootFlag string, asJSON bool, stdout io.Writer) error {
 			}
 			fmt.Fprintf(stdout, "    state: %s\n", strings.Join(fields, ", "))
 		}
+		for _, dao := range moduleDAONames(listing.ModuleSpec) {
+			fmt.Fprintf(stdout, "    dao: %s\n", dao)
+		}
 		if names := listing.withNames(); len(names) > 0 {
 			fmt.Fprintf(stdout, "    with: %s (extra files when that module is installed too)\n", strings.Join(names, ", "))
 		}
@@ -178,6 +181,9 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 		}
 		for _, state := range item.State {
 			fmt.Fprintf(stdout, "  state:     %s\n", state)
+		}
+		for _, dao := range item.DAOs {
+			fmt.Fprintf(stdout, "  dao:       %s\n", dao)
 		}
 		if item.Component != "" {
 			fmt.Fprintf(stdout, "  component: %s\n", item.Component)

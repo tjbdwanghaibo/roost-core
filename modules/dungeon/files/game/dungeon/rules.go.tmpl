@@ -1,0 +1,68 @@
+// Package dungeon 保存可替换的副本规则和只读结果。这里不持实体、网络客户端或进程内权威状态。
+package dungeon
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/level"
+
+const (
+	ClearExp                int64 = 100
+	ClaimWindowSeconds      int64 = 4 * 60 * 60
+	LedgerPruneGraceSeconds int64 = 10 * 60
+	MaxClaims                     = 128
+	MaxSeasons                    = 8
+)
+
+// ClaimWindowClosed 先拒绝未知/未来时间，再作差，避免回拨和整数溢出扩大领奖窗口。
+func ClaimWindowClosed(resolvedAt, now int64) bool {
+	if resolvedAt <= 0 || now < resolvedAt {
+		return true
+	}
+	return now-resolvedAt > ClaimWindowSeconds
+}
+func LedgerMayForget(resolvedAt, now int64) bool {
+	return now >= LedgerPruneGraceSeconds && now-LedgerPruneGraceSeconds >= resolvedAt && ClaimWindowClosed(resolvedAt, now-LedgerPruneGraceSeconds)
+}
+
+type Snapshot struct {
+	Instance       string
+	Epoch          uint64
+	Revision       uint64
+	Phase          string
+	Stage          string
+	Kills          int64
+	Result         string
+	ResolvedAtUnix int64
+}
+type ClaimResult struct {
+	Claimed      bool
+	ExpGranted   int64
+	LevelsGained int32
+	Season       int64
+	Clears       int64
+	TotalClears  int64
+	BoardPending bool
+}
+
+// Program 缺省关卡确实经level的事件/条件/动作推进：两只minion后切到boss，boss被可信来源击败才成功。
+// deadline是并行阶段，30分钟后终止；查询/事件会Advance惰性处理过期，不需要周期任务。
+// 更改已运行定义的Revision会拒绝旧存档加载；上线修改需显式保留旧规则版本或迁移，不能默默套新规则。
+func Program() (*level.Program, error) {
+	return level.Compile(level.Definition{
+		Version: 1, Name: "dungeon", Revision: 1, TimeDomain: "millisecond",
+		Initial:   []string{"waves", "deadline"},
+		Limits:    level.Limits{Steps: 64, Timers: 1, Effects: 1, Sources: 4},
+		Variables: []level.Variable{{Scope: level.Global, Name: "kills", Default: level.Int(0), Public: true}},
+		Stages: []level.StageDefinition{
+			{ID: "waves", Triggers: []level.TriggerDefinition{
+				{ID: "count", Event: "enemy.defeated", Conditions: []level.Condition{{Left: level.Field("enemy"), Op: "eq", Right: level.Literal(level.String("minion"))}}, Actions: []level.Action{{Kind: "add", Scope: level.Global, Name: "kills", Value: level.Literal(level.Int(1))}}},
+				{ID: "next", Event: "enemy.defeated", Conditions: []level.Condition{{Left: level.Var(level.Global, "kills"), Op: "ge", Right: level.Literal(level.Int(2))}}, MaxFires: 1, Actions: []level.Action{{Kind: "end", Name: "waves"}, {Kind: "start", Name: "boss"}}},
+			}},
+			{ID: "boss", Triggers: []level.TriggerDefinition{
+				{ID: "clear", Event: "enemy.defeated", Conditions: []level.Condition{{Left: level.Field("enemy"), Op: "eq", Right: level.Literal(level.String("boss"))}}, MaxFires: 1, Actions: []level.Action{{Kind: "finish", Result: "success"}}},
+			}},
+			{ID: "deadline", Triggers: []level.TriggerDefinition{
+				{ID: "clock", Event: level.EventStageStart, MaxFires: 1, Actions: []level.Action{{Kind: "timer", Name: "limit", Delay: 30 * 60 * 1000}}},
+				{ID: "expire", Event: level.EventTimer, Conditions: []level.Condition{{Left: level.Field("name"), Op: "eq", Right: level.Literal(level.String("limit"))}}, MaxFires: 1, Actions: []level.Action{{Kind: "finish", Result: "failed"}}},
+			}},
+		},
+	}, level.Registry{Events: map[string]map[string]level.ValueKind{"enemy.defeated": {"enemy": level.Text}}})
+}

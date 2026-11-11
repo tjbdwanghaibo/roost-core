@@ -1,0 +1,44 @@
+//go:build protocoldef
+
+package protocoldef
+
+type DungeonInfo struct {
+	RunID          int64  `pb:"1"`
+	Instance       string `pb:"2"`
+	Epoch          uint64 `pb:"3"`
+	Phase          string `pb:"4"`
+	Stage          string `pb:"5"`
+	Kills          int64  `pb:"6"`
+	Result         string `pb:"7"`
+	ResolvedAtUnix int64  `pb:"8"`
+}
+type DungeonViewRequest struct {
+	RunID int64 `pb:"1"`
+}
+type DungeonViewResponse struct {
+	Code   int32        `pb:"1"`
+	Reason string       `pb:"2"`
+	Info   *DungeonInfo `pb:"3"`
+}
+type DungeonClaimRequest struct {
+	RunID int64 `pb:"1"`
+}
+type DungeonClaimResponse struct {
+	Code         int32  `pb:"1"`
+	Reason       string `pb:"2"`
+	Claimed      bool   `pb:"3"`
+	ExpGranted   int64  `pb:"4"`
+	LevelsGained int32  `pb:"5"`
+	Season       int64  `pb:"6"`
+	Clears       int64  `pb:"7"`
+	TotalClears  int64  `pb:"8"`
+	BoardPending bool   `pb:"9"`
+}
+
+//roost:protocol group=game handler=dungeon
+type DungeonProtocol interface {
+	//roost:msg id={{ID:protocol:DungeonView}}
+	DungeonView(DungeonViewRequest) DungeonViewResponse
+	//roost:msg id={{ID:protocol:DungeonClaim}}
+	DungeonClaim(DungeonClaimRequest) DungeonClaimResponse
+}

@@ -749,7 +749,7 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 		t.Fatalf("the stub was not replaced by the module's collaborators:\n%s", replaced)
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
-	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 8 {
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 10 {
 		t.Fatalf("verify: %v\n%+v", err, report)
 	}
 	// 再装一次没有变化：现在这个文件是模块自己的。
@@ -890,7 +890,7 @@ func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
 	for _, result := range report.Modules {
 		got[result.Name] = result.Passed
 	}
-	if want := map[string]int{"chat": 8, "chat+enter": 2, "enter": 14}; !reflect.DeepEqual(got, want) {
+	if want := map[string]int{"chat": 10, "chat+enter": 2, "enter": 14}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("verify results = %v, want %v", got, want)
 	}
 }

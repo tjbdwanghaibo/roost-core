@@ -1,0 +1,26 @@
+package monster
+
+import (
+	"fmt"
+
+	scene "{{MODULE}}/game/entities/scene"
+)
+
+// Target 是本进程一对 Monster/Scene 实例的不可变身份，不能持久化、编码或跨进程传递。
+// ID 可能被生命周期重新使用，LifeSeq 也会随新实例重置；因此服务的迟到命令必须保留指针身份。
+// 私有指针只用于相等比较，不在锁外读写实体状态；零值不能授权任何实例。
+type Target struct {
+	value *Monster
+	area  *scene.Scene
+}
+
+// Target 在创建出生槽位时固定期望实例。普通 Nest Params 按值传递它，不重新按 ID 推断所有者。
+func (m *Monster) Target(area *scene.Scene) Target { return Target{value: m, area: area} }
+
+// Check 必须在 Nest 已持有实际 Monster 和 Scene 的锁后、任何业务修改之前执行。
+func (t Target) Check(value IMonsterEntity, area scene.ISceneEntity) error {
+	if t.value == nil || t.area == nil || t.value != value || t.area != area.Scene() {
+		return fmt.Errorf("monster: lifecycle instance changed")
+	}
+	return nil
+}

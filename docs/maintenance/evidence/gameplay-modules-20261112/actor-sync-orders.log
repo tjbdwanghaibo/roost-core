@@ -1,0 +1,8 @@
+=== RUN   TestModuleActorSelfSyncEnterThenCombat
+--- PASS: TestModuleActorSelfSyncEnterThenCombat (74.85s)
+=== RUN   TestModuleActorSelfSyncCombatThenEnter
+--- PASS: TestModuleActorSelfSyncCombatThenEnter (86.95s)
+=== RUN   TestModuleActorSelfSyncRefusalRestoresEnterProject
+--- PASS: TestModuleActorSelfSyncRefusalRestoresEnterProject (6.07s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	173.241s

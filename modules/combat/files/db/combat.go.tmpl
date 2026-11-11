@@ -1,0 +1,18 @@
+package db
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent"
+)
+
+// CombatDAO 保持正式DAO指针身份；由安装器追加到Player声明，生成lifecycle加载与Aggregate提交。
+type CombatDAO = combatcomponent.CombatDao
+
+const CombatDAOCollection = combatcomponent.CollectionName
+
+func NewCombatDAO() *CombatDAO { return combatcomponent.NewCombatDao(0, PlayerDaoDBName) }
+
+var _ entity.DaoInterface = (*CombatDAO)(nil)
+var _ entity.PersistedDaoLoader = (*CombatDAO)(nil)
+var _ nest.MutationParticipant = (*CombatDAO)(nil)

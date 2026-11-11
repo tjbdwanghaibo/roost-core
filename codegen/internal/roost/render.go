@@ -432,6 +432,9 @@ func renderBootstrap(m Manifest) string {
 	if contains(allMods, "heartbeat") {
 		imports[m.Project.Module+"/"+heartbeatDriverDir] = heartbeatDriverAlias
 	}
+	if contains(allMods, "directory") {
+		imports["github.com/tjbdwanghaibo/roost-core/service/directory"] = "directory"
+	}
 	if len(m.Timers) > 0 {
 		imports[entityTimerWiring] = "kitentitytimer"
 		for _, name := range sortedTimerEntities(m) {

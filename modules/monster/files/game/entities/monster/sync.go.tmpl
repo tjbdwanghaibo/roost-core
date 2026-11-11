@@ -1,0 +1,22 @@
+package monster
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	db "{{MODULE}}/db"
+	scene "{{MODULE}}/game/scene"
+)
+
+func NewMonsterSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner := value.(*Monster)
+	views, err := dataengine.NewSyncViewSet((*db.MonsterDao)(nil).SyncFields(), entity.NamedSyncView{Profile: scene.Public, Fields: []string{"Actor", "Vitals"}})
+	if err != nil {
+		panic(fmt.Sprintf("monster sync: %v", err))
+	}
+	packer, err := entity.NewMaskedSyncPacker(views, 2, func(mask uint64) ([]byte, error) { return owner.Dao().MarshalSync(mask), nil })
+	if err != nil {
+		panic(err)
+	}
+	return packer
+}

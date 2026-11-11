@@ -1,0 +1,241 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"sync/atomic"
+	"testing"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+type friendsGetter map[int64]entity.IThreadSafeEntity
+
+func (g friendsGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if v := g[id]; v != nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g friendsGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, e := g.Get(ctx, id, cats[i])
+		if e != nil {
+			return nil, e
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type friendsCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *friendsCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected commit rejection")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type friendsFixture struct {
+	engine  *nest.NestMgr
+	players []*player.Player
+	commit  *friendsCommitter
+	changes *syncsender.FriendsChangeSender
+	lists   *syncsender.FriendsListSender
+}
+
+func newFriendsFixture(t *testing.T, n int) *friendsFixture {
+	t.Helper()
+	player.RegisterEntity()
+	RegisterFriendsChangeNestHandlers()
+	RegisterFriendsListNestHandlers()
+	f := &friendsFixture{commit: &friendsCommitter{}}
+	g := friendsGetter{}
+	for i := 0; i < n; i++ {
+		id, e := entity.BuildEntityID(int64(98000+i), player.EntityKindPlayer)
+		if e != nil {
+			t.Fatal(e)
+		}
+		built, e := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if e != nil {
+			t.Fatal(e)
+		}
+		p := built.(*player.Player)
+		f.players = append(f.players, p)
+		g[id] = p
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if e := f.engine.Start(); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		if e := f.engine.Shutdown(context.Background()); e != nil {
+			t.Error(e)
+		}
+	})
+	f.changes = syncsender.NewFriendsChangeSender(f.engine)
+	f.lists = syncsender.NewFriendsListSender(f.engine)
+	return f
+}
+func (f *friendsFixture) change(a, b int, action int32) error {
+	return f.changes.MultiSync_FriendsChange(context.Background(), f.players[a].ID(), f.players[b].ID(), action)
+}
+func (f *friendsFixture) list(t *testing.T, i int) player.FriendsSnapshot {
+	t.Helper()
+	v, e := f.lists.Sync_FriendsList(context.Background(), f.players[i].ID())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return v
+}
+func (f *friendsFixture) must(t *testing.T, a, b int, action int32) {
+	t.Helper()
+	if e := f.change(a, b, action); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestFriendsApplyIsIdempotent(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	f.must(t, 0, 1, player.FriendsApply)
+	f.must(t, 0, 1, player.FriendsApply)
+	a, b := f.list(t, 0), f.list(t, 1)
+	if len(a.Incoming) != 0 || len(b.Incoming) != 1 || b.Incoming[0] != 98000 || f.commit.commits.Load() != 1 {
+		t.Fatalf("a=%+v b=%+v commits=%d", a, b, f.commit.commits.Load())
+	}
+}
+func TestFriendsAcceptWritesBothAndClearsCrossedApplications(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	f.must(t, 0, 1, player.FriendsApply)
+	f.must(t, 1, 0, player.FriendsApply)
+	f.must(t, 1, 0, player.FriendsAccept)
+	before := f.commit.commits.Load()
+	f.must(t, 0, 1, player.FriendsAccept)
+	a, b := f.list(t, 0), f.list(t, 1)
+	if len(a.Peers) != 1 || a.Peers[0] != 98001 || len(b.Peers) != 1 || b.Peers[0] != 98000 || len(a.Incoming) != 0 || len(b.Incoming) != 0 || f.commit.commits.Load() != before {
+		t.Fatalf("a=%+v b=%+v", a, b)
+	}
+}
+func TestFriendsAcceptRequiresAnApplication(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	if e := f.change(0, 1, player.FriendsAccept); !errors.Is(e, apperrors.ErrFriendsApplicationMissing) {
+		t.Fatal(e)
+	}
+	if f.commit.commits.Load() != 0 {
+		t.Fatal("refusal wrote")
+	}
+}
+func TestFriendsRemoveIsSymmetric(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	f.must(t, 0, 1, player.FriendsApply)
+	f.must(t, 1, 0, player.FriendsAccept)
+	f.must(t, 0, 1, player.FriendsRemove)
+	if len(f.list(t, 0).Peers) != 0 || len(f.list(t, 1).Peers) != 0 {
+		t.Fatal("one-sided removal")
+	}
+}
+func TestFriendsBlockRemovesFriendshipAndDeniesEitherDirection(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	f.must(t, 0, 1, player.FriendsApply)
+	f.must(t, 1, 0, player.FriendsAccept)
+	f.must(t, 0, 1, player.FriendsBlock)
+	before := f.commit.commits.Load()
+	for _, pair := range [][2]int{{0, 1}, {1, 0}} {
+		if e := f.change(pair[0], pair[1], player.FriendsApply); !errors.Is(e, apperrors.ErrFriendsBlocked) {
+			t.Fatal(e)
+		}
+	}
+	a, b := f.list(t, 0), f.list(t, 1)
+	if len(a.Blocked) != 1 || len(b.Blocked) != 0 || len(a.Peers) != 0 || len(b.Peers) != 0 || f.commit.commits.Load() != before {
+		t.Fatalf("a=%+v b=%+v", a, b)
+	}
+}
+func TestFriendsUnblockDoesNotRestoreFriendship(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	f.must(t, 0, 1, player.FriendsBlock)
+	f.must(t, 0, 1, player.FriendsUnblock)
+	if len(f.list(t, 0).Blocked) != 0 || len(f.list(t, 0).Peers) != 0 {
+		t.Fatal("unblock restored data")
+	}
+	f.must(t, 1, 0, player.FriendsApply)
+	if len(f.list(t, 0).Incoming) != 1 {
+		t.Fatal("unblock still rejects")
+	}
+}
+func TestFriendsRejectOnlyConsumesTheReceivedApplication(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	f.must(t, 0, 1, player.FriendsApply)
+	f.must(t, 1, 0, player.FriendsApply)
+	f.must(t, 1, 0, player.FriendsReject)
+	if len(f.list(t, 1).Incoming) != 0 || len(f.list(t, 0).Incoming) != 1 {
+		t.Fatal("reject changed wrong side")
+	}
+}
+func TestFriendsListsAreBounded(t *testing.T) {
+	f := newFriendsFixture(t, 66)
+	for i := 1; i <= 64; i++ {
+		f.must(t, i, 0, player.FriendsApply)
+	}
+	before := f.commit.commits.Load()
+	if e := f.change(65, 0, player.FriendsApply); !errors.Is(e, apperrors.ErrFriendsFull) {
+		t.Fatal(e)
+	}
+	if len(f.list(t, 0).Incoming) != 64 || f.commit.commits.Load() != before {
+		t.Fatal("incoming overflow wrote")
+	}
+	for i := 1; i <= 64; i++ {
+		f.must(t, 0, i, player.FriendsAccept)
+	}
+	if e := f.change(0, 65, player.FriendsApply); !errors.Is(e, apperrors.ErrFriendsFull) {
+		t.Fatal(e)
+	}
+	for i := 1; i <= 64; i++ {
+		f.must(t, 0, i, player.FriendsBlock)
+	}
+	before = f.commit.commits.Load()
+	if e := f.change(0, 65, player.FriendsBlock); !errors.Is(e, apperrors.ErrFriendsFull) {
+		t.Fatal(e)
+	}
+	if len(f.list(t, 0).Blocked) != 64 || f.commit.commits.Load() != before {
+		t.Fatal("blocked overflow wrote")
+	}
+}
+func TestFriendsRejectedCommitRollsBackBothPlayers(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	f.must(t, 0, 1, player.FriendsApply)
+	f.commit.reject.Store(true)
+	if e := f.change(1, 0, player.FriendsAccept); e == nil {
+		t.Fatal("commit accepted")
+	}
+	f.commit.reject.Store(false)
+	if len(f.list(t, 0).Peers) != 0 || len(f.list(t, 1).Peers) != 0 || len(f.list(t, 1).Incoming) != 1 {
+		t.Fatal("partial friendship survived")
+	}
+	f.must(t, 1, 0, player.FriendsAccept)
+}
+func TestFriendsInvalidAndMissingPeerWriteNothing(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	if e := f.change(0, 0, player.FriendsApply); e == nil {
+		t.Fatal("self accepted")
+	}
+	if e := f.change(0, 1, 999); !errors.Is(e, apperrors.ErrFriendsInvalid) {
+		t.Fatal(e)
+	}
+	missing, _ := entity.BuildEntityID(99999, player.EntityKindPlayer)
+	if e := f.changes.MultiSync_FriendsChange(context.Background(), f.players[0].ID(), missing, player.FriendsApply); e == nil {
+		t.Fatal("missing peer accepted")
+	}
+	if f.commit.commits.Load() != 0 {
+		t.Fatal("invalid wrote")
+	}
+}

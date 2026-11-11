@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrEquipmentItemInvalid  = errcode.Define({{ID:errcode:equipment_item_invalid}}, "equipment_item_invalid", "item has no valid equipment rule")
+	ErrEquipmentLevelInvalid = errcode.Define({{ID:errcode:equipment_level_invalid}}, "equipment_level_invalid", "equipment level is outside 1..10000")
+	ErrEquipmentSlotInvalid  = errcode.Define({{ID:errcode:equipment_slot_invalid}}, "equipment_slot_invalid", "equipment slot is outside 1..32")
+)

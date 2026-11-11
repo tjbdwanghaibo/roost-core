@@ -33,6 +33,8 @@ const (
 	ModEtcd       app.ModName = "etcd"
 	ModEtcdDiscov app.ModName = "etcd.discovery"
 
+	// ModEntitySync 发布 Nest 已拥有的 Sync Manager，供业务政策复用；生命周期仍由 Nest Mod 管理。
+	ModEntitySync app.ModName = "nest.entity_sync"
 	ModSyncBus    app.ModName = "syncbus"
 	ModDataEngine app.ModName = "dataengine"
 	// ModDataEngineDatabases 是 DataEngine Mod 启动时冻结的逻辑库 → 物理库表（*dataengine.DatabaseMap）。

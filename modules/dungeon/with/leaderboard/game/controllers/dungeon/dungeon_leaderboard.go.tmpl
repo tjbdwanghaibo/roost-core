@@ -1,0 +1,38 @@
+package dungeon
+
+import (
+	"context"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	logic "{{MODULE}}/game/dungeon"
+	player "{{MODULE}}/game/entities/player"
+	leaderboard "{{MODULE}}/game/leaderboard"
+)
+
+func init() {
+	publishClaim = func(ctx context.Context, registry *app.Registry, playerID int64, result logic.ClaimResult) error {
+		if result.Clears == 0 {
+			return nil
+		}
+		_, err := leaderboard.SubmitSeason(ctx, registry, result.Season, playerID, result.Clears)
+		return err
+	}
+}
+
+// RefreshLeaderboard 在领奖窗口外也能恢复榜：只读Player持久计数，外部UpdateMax，不再发奖或加计数。
+func (controller *Controller) RefreshLeaderboard(ctx context.Context, playerID, season int64) (logic.ClaimResult, error) {
+	if playerID <= 0 || season <= 0 {
+		return logic.ClaimResult{}, fmt.Errorf("dungeon: player and season required")
+	}
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return logic.ClaimResult{}, err
+	}
+	result, err := controller.counts.Sync_DungeonCounts(ctx, id, season)
+	if err != nil {
+		return logic.ClaimResult{}, err
+	}
+	controller.publish(ctx, playerID, &result)
+	return result, nil
+}

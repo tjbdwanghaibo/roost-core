@@ -1,0 +1,5 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var ErrAttributeOverflow = errcode.Define({{ID:errcode:attribute_overflow}}, "attribute_overflow", "attribute values exceed the supported nonnegative range")

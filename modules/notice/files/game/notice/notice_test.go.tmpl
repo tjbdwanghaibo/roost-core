@@ -1,0 +1,198 @@
+package notice
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+type noticeCall struct{ text, key string }
+type noticeChat struct {
+	calls []noticeCall
+	err   error
+}
+
+func (chat *noticeChat) AnnounceWorld(_ context.Context, text, key string) error {
+	chat.calls = append(chat.calls, noticeCall{text, key})
+	return chat.err
+}
+
+func TestNoticeAnnounceUsesStableSystemKey(t *testing.T) {
+	chat := &noticeChat{}
+	publisher := &Publisher{chat: chat}
+	if err := publisher.Publish(context.Background(), "announce", "维护结束", "release-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.calls) != 1 || chat.calls[0] != (noticeCall{"公告：维护结束", "notice:announce:release-1"}) {
+		t.Fatalf("calls=%+v", chat.calls)
+	}
+}
+func TestNoticeMarqueeUsesDistinctNamespace(t *testing.T) {
+	chat := &noticeChat{}
+	publisher := &Publisher{chat: chat}
+	if err := publisher.Publish(context.Background(), "marquee", "欢迎", "release-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.calls) != 1 || chat.calls[0] != (noticeCall{"跑马灯：欢迎", "notice:marquee:release-1"}) {
+		t.Fatalf("calls=%+v", chat.calls)
+	}
+}
+func TestNoticeRejectsInvalidBeforePublish(t *testing.T) {
+	chat := &noticeChat{}
+	publisher := &Publisher{chat: chat}
+	for _, input := range []noticeCall{{"", "id"}, {"   ", "id"}, {"hello", ""}, {strings.Repeat("x", 256), "id"}, {string([]byte{255}), "id"}, {"hello", strings.Repeat("k", 65)}} {
+		if err := publisher.Publish(context.Background(), "announce", input.text, input.key); err == nil {
+			t.Fatal("invalid notice accepted")
+		}
+	}
+	if err := publisher.Publish(context.Background(), "world", "hello", "id"); err == nil {
+		t.Fatal("unknown kind accepted")
+	}
+	if len(chat.calls) != 0 {
+		t.Fatalf("invalid notice reached chat: %+v", chat.calls)
+	}
+}
+func TestNoticeReportsPublishFailure(t *testing.T) {
+	want := errors.New("chat unavailable")
+	chat := &noticeChat{err: want}
+	if err := (&Publisher{chat: chat}).Publish(context.Background(), "announce", "维护", "id"); !errors.Is(err, want) {
+		t.Fatalf("err=%v", err)
+	}
+}
+func TestNoticeGMCommandsAreWiredAndStopRejects(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	chat := &noticeChat{}
+	stop, err := start(registry, chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	for _, name := range []string{CommandAnnounce, CommandMarquee} {
+		result, err := commands.Execute(context.Background(), admin.Command{Name: name, Payload: []byte(`{"text":"欢迎","key":"event-1"}`)})
+		if err != nil || !result.OK {
+			t.Fatalf("%s: %+v %v", name, result, err)
+		}
+	}
+	if len(chat.calls) != 2 || chat.calls[0].key != "notice:announce:event-1" || chat.calls[1].key != "notice:marquee:event-1" {
+		t.Fatalf("calls=%+v", chat.calls)
+	}
+	if err := stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := commands.Execute(context.Background(), admin.Command{Name: CommandAnnounce, Payload: []byte(`{"text":"欢迎","key":"event-2"}`)})
+	if err == nil || result.OK || len(chat.calls) != 2 {
+		t.Fatalf("stopped command=%+v %v", result, err)
+	}
+}
+
+type noticeMessaging struct {
+	svcchat.Messaging
+	requests []svcchat.SystemPublishRequest
+}
+
+func (client *noticeMessaging) PublishSystem(_ context.Context, request svcchat.SystemPublishRequest) (svcchat.Message, error) {
+	client.requests = append(client.requests, request)
+	return svcchat.Message{Channel: request.Channel, Body: request.Body, Origin: svcchat.OriginSystem}, nil
+}
+func TestNoticeStartupUsesChatControllerSystemPath(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	messaging := &noticeMessaging{}
+	if err := registry.Register(svcchat.CapabilityName, svcchat.Messaging(messaging)); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	publisher, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Publish(context.Background(), "announce", "你好", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(messaging.requests) != 1 {
+		t.Fatalf("requests=%+v", messaging.requests)
+	}
+	r := messaging.requests[0]
+	if r.Channel.Kind != svcchat.ChannelWorld || r.Channel.Target != 1 || r.Actor != "game" || string(r.Body) != "公告：你好" || r.RequestID != "notice:announce:v1" {
+		t.Fatalf("system publish=%+v", r)
+	}
+}
+func TestNoticeMissingDependenciesAndMalformedGMFail(t *testing.T) {
+	if _, err := Start(nil); err == nil {
+		t.Fatal("nil registry accepted")
+	}
+	registry := app.NewRegistry(viper.New())
+	if _, err := Start(registry); err == nil {
+		t.Fatal("missing chat accepted")
+	}
+	if _, err := FromRegistry(registry); err == nil {
+		t.Fatal("unstarted publisher accepted")
+	}
+	chat := &noticeChat{}
+	stop, err := start(registry, chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	if _, err := commands.Execute(context.Background(), admin.Command{Name: CommandAnnounce, Payload: []byte(`{`)}); err == nil {
+		t.Fatal("bad JSON accepted")
+	}
+	if len(chat.calls) != 0 {
+		t.Fatal("malformed command reached chat")
+	}
+}
+
+// 变异必须先编译成功，再由业务断言杀死；不能把编译错误当作自检通过。
+func TestNoticeMutationRejectsLostValidation(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "notice.go")
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := "strings.TrimSpace(text) == \"\""
+	after := "strings.TrimSpace(text) == \"impossible-mutation-sentinel\""
+	if strings.Count(string(source), before) != 1 {
+		t.Fatal("mutation anchor changed")
+	}
+	scratch := t.TempDir()
+	replacement := filepath.Join(scratch, "notice.go")
+	if err := os.WriteFile(replacement, []byte(strings.Replace(string(source), before, after, 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]map[string]string{"Replace": {path: replacement}})
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	compile := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-overlay", overlay, "-run", "^$", ".")
+	compile.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := compile.CombinedOutput(); err != nil {
+		t.Fatalf("mutant did not compile: %v\n%s", err, out)
+	}
+	check := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-count=1", "-overlay", overlay, "-run", "^TestNoticeRejectsInvalidBeforePublish$", ".")
+	check.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := check.CombinedOutput(); err == nil || !strings.Contains(string(out), "invalid notice accepted") {
+		t.Fatalf("mutant survived: %v\n%s", err, out)
+	}
+}

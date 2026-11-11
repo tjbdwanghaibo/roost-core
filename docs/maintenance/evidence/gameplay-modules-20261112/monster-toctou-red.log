@@ -1,0 +1,8 @@
+=== RUN   TestMonsterReplacementBetweenGetAndRemoveIsUntouched
+    toctou_audit_test.go:37: interleaving reached: old=0x1eab1b281b80 replacement=0x1eab1b281e00 id=2323435195258110992
+    toctou_audit_test.go:42: Destroy returned: entity manager: entity removed
+    toctou_audit_test.go:45: replacement retired across Get-to-Remove window
+--- FAIL: TestMonsterReplacementBetweenGetAndRemoveIsUntouched (0.00s)
+FAIL
+FAIL	example.com/custom/drainrecover/game/monster/service	0.620s
+FAIL

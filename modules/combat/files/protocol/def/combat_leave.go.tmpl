@@ -1,0 +1,28 @@
+//go:build protocoldef
+
+package protocoldef
+
+// CombatLeaveRequest 的操作者来自认证会话。PeerID是另一玩家原始ID，不能作为第三人代理施法。
+// Ready表示同意固定双人PVP；Cast/Step/Leave必须保留Sequence重试，客户端不提供时刻。
+type CombatLeaveRequest struct {
+	Sequence int64 `pb:"1"`
+	PeerID   int64 `pb:"2"`
+}
+type CombatLeaveResponse struct {
+	Code       int32  `pb:"1"`
+	Reason     string `pb:"2"`
+	Sequence   int64  `pb:"3"`
+	CastID     uint64 `pb:"4"`
+	Health     int64  `pb:"5"`
+	PeerHealth int64  `pb:"6"`
+	Alive      bool   `pb:"7"`
+	PeerAlive  bool   `pb:"8"`
+	Pending    bool   `pb:"9"`
+	Ended      bool   `pb:"10"`
+}
+
+//roost:protocol group=game handler=combat
+type CombatLeaveProtocol interface {
+	//roost:msg id={{ID:protocol:CombatLeave}}
+	CombatLeave(CombatLeaveRequest) CombatLeaveResponse
+}

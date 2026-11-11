@@ -1,0 +1,90 @@
+package terrain
+
+import (
+	"context"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"{{MODULE}}/game/playeraccess"
+	logic "{{MODULE}}/game/terrain"
+	runtime "{{MODULE}}/game/terrain/service"
+	"{{MODULE}}/protocol/pb"
+)
+
+type Controller struct {
+	registry *app.Registry
+	runtime  *runtime.Runtime
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	r, err := runtime.FromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	return &Controller{registry: registry, runtime: r}, nil
+}
+func (c *Controller) Registry() *app.Registry { return c.registry }
+func (c *Controller) Execute(ctx context.Context, playerID int64, command logic.Command) (logic.Result, error) {
+	result, err := c.runtime.Execute(ctx, playerID, command)
+	if err == nil {
+		if world, lookupErr := c.runtime.World(command.SceneID); lookupErr == nil {
+			result.ProjectionPending = world.Failures() != 0
+		}
+	}
+	return result, err
+}
+func editResult(result logic.Result) *pb.TerrainEditResult {
+	return &pb.TerrainEditResult{ProjectionPending: result.ProjectionPending, Sequence: result.Sequence, Duplicate: result.Duplicate, Changed: result.Changed, BuildingID: result.BuildingID, Standing: result.Standing}
+}
+func (c *Controller) HandleTerrainBrush(ctx *playeraccess.Context, request *pb.TerrainBrushRequest) (*pb.TerrainBrushResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
+		return nil, fmt.Errorf("terrain: authenticated request required")
+	}
+	if request.Op != "raise" && request.Op != "lower" && request.Op != "paint" || request.Strength < 0 || request.Strength > 20 || request.Material < 0 || request.Material > 4 {
+		return &pb.TerrainBrushResponse{Code: 1, Reason: logic.ErrInvalid.Error()}, nil
+	}
+	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: request.Op, X: request.X, Y: request.Y, Radius: request.Radius, Strength: uint16(request.Strength), Material: byte(request.Material)})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.TerrainBrushResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.TerrainBrushResponse{Result: editResult(result)}, nil
+}
+func (c *Controller) HandleTerrainBuild(ctx *playeraccess.Context, request *pb.TerrainBuildRequest) (*pb.TerrainBuildResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
+		return nil, fmt.Errorf("terrain: authenticated request required")
+	}
+	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: "build", X: request.X, Y: request.Y})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.TerrainBuildResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.TerrainBuildResponse{Result: editResult(result)}, nil
+}
+func (c *Controller) HandleTerrainRemove(ctx *playeraccess.Context, request *pb.TerrainRemoveRequest) (*pb.TerrainRemoveResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
+		return nil, fmt.Errorf("terrain: authenticated request required")
+	}
+	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: "remove", X: request.X, Y: request.Y})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.TerrainRemoveResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.TerrainRemoveResponse{Result: editResult(result)}, nil
+}
+func (c *Controller) HandleTerrainQuery(ctx *playeraccess.Context, request *pb.TerrainQueryRequest) (*pb.TerrainQueryResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
+		return nil, fmt.Errorf("terrain: authenticated request required")
+	}
+	state, err := c.runtime.Query(ctx.Context(), ctx.PlayerID, request.SceneID, core.ChunkKey{X: request.X, Y: request.Y})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.TerrainQueryResponse{Code: code, Reason: reason}, nil
+	}
+	heights := make([]uint32, len(state.Heights))
+	for i, value := range state.Heights {
+		heights[i] = uint32(value)
+	}
+	return &pb.TerrainQueryResponse{LastSequence: state.LastSequence, Chunk: &pb.TerrainChunkInfo{SceneID: request.SceneID, X: state.Key.X, Y: state.Key.Y, BaseRevision: state.BaseRevision, Version: state.Version, Heights: heights, Materials: state.Materials}}, nil
+}

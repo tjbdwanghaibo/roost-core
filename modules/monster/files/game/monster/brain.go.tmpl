@@ -1,0 +1,74 @@
+package monster
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+)
+
+// Decide 每拍创建独立 AI/动作执行上下文。跨拍事实由调用者写入 DAO 或 actor.Body；
+// actionflow 的 runner 本身不支持 Nest undo，因此不能把路线、目标或巡逻游标保存在 runner 内。
+// 本地动作启动即完成：只把意图交给支持 undo 的 Body，真实移动由 actor 心跳推进。
+func Decide(owner entity.IThreadSafeEntity, now time.Time, decide func() error) error {
+	var first error
+	report := func(err error) {
+		if first == nil {
+			first = err
+		}
+	}
+	registry := actionflow.NewRegistry()
+	if err := registry.RegisterAction(1, func(param any) (actionflow.Action, error) {
+		fn, ok := param.(func() error)
+		if !ok || fn == nil {
+			return nil, fmt.Errorf("monster: invalid command")
+		}
+		return command{fn}, nil
+	}); err != nil {
+		return err
+	}
+	registry.Seal()
+	behavior, err := actionflow.NewBehavior(owner, actionflow.BehaviorConfig{Registry: registry, GroupForKind: func(kind actionflow.ActionKind) (actionflow.ActionGroup, bool) { return 1, kind == 1 }, Now: func() time.Time { return now }, OnError: report})
+	if err != nil {
+		return err
+	}
+	defer behavior.Close(actionflow.NewActionReason("decision finished"))
+	brain := ai.NewController(ai.ControllerHooks{Now: func() time.Time { return now }, Context: func(time.Time) *ai.Context { return &ai.Context{Owner: owner, ActionList: behavior, Now: now} }, OnError: report})
+	defer brain.Close("decision finished")
+	strategy := &decision{run: decide, report: report}
+	if err := brain.SetStrategy(strategy); err != nil {
+		return err
+	}
+	brain.Tick(now)
+	return first
+}
+
+type decision struct {
+	run    func() error
+	report func(error)
+}
+
+func (*decision) Name() string           { return "monster patrol or chase" }
+func (*decision) Init(*ai.Context) error { return nil }
+func (d *decision) Tick(ctx *ai.Context, _ time.Time) {
+	if _, err := ctx.ActionList.CreateAction(1, d.run); err != nil {
+		d.report(err)
+	}
+}
+func (*decision) OnActionEnd(*ai.Context, int64, actionflow.ActionKind, actionflow.ActionReason) {}
+func (*decision) OnMissionEnd(*ai.Context, actionflow.Mission, actionflow.ActionReason)          {}
+func (*decision) CanStopByNext(ai.Strategy) bool                                                 { return true }
+
+type command struct{ run func() error }
+
+func (command) Kind() actionflow.ActionKind { return 1 }
+func (c command) Start(*actionflow.ActionContext) (bool, actionflow.ActionResult, error) {
+	err := c.run()
+	return true, actionflow.ActionResult{Status: actionflow.ActionStatusSuccess}, err
+}
+func (command) Tick(*actionflow.ActionContext) (bool, actionflow.ActionResult) {
+	return true, actionflow.ActionResult{Status: actionflow.ActionStatusSuccess}
+}
+func (command) Cancel(*actionflow.ActionContext, string) {}

@@ -1,0 +1,11 @@
+package handler
+
+import (
+	logic "{{MODULE}}/game/dungeon"
+	player "{{MODULE}}/game/entities/player"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerDungeonCounts(target player.IDungeonRewardEntity, season int64) logic.ClaimResult {
+	return target.DungeonComp().Counts(season)
+}

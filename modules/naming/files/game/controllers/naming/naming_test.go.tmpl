@@ -1,0 +1,448 @@
+package naming
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	profilecontroller "{{MODULE}}/game/controllers/profile"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+type namingGetter map[int64]entity.IThreadSafeEntity
+
+func (g namingGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if v := g[id]; v != nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g namingGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, e := g.Get(ctx, id, cats[i])
+		if e != nil {
+			return nil, e
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type namingCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *namingCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected commit rejection")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+// 故障均在明确边界注入；after=true 表示持久提交成功、只有回包丢了。
+type namingFaultProfile struct {
+	namingProfile
+	action    int32
+	after     bool
+	committer *namingCommitter
+	fired     atomic.Bool
+}
+
+func (p *namingFaultProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (player.NamingTicket, error) {
+	if action == p.action && p.fired.CompareAndSwap(false, true) {
+		if p.committer != nil {
+			p.committer.reject.Store(true)
+			defer p.committer.reject.Store(false)
+			return p.namingProfile.Step(ctx, id, seq, op, action, key, token)
+		}
+		if p.after {
+			if _, err := p.namingProfile.Step(ctx, id, seq, op, action, key, token); err != nil {
+				return player.NamingTicket{}, err
+			}
+		}
+		return player.NamingTicket{}, errors.New("injected step result unknown")
+	}
+	return p.namingProfile.Step(ctx, id, seq, op, action, key, token)
+}
+
+type namingFaultDirectory struct {
+	directory.Directory
+	loseCommit    atomic.Bool
+	failRelease   atomic.Bool
+	loseRelease   atomic.Bool
+	reserveEnter  chan struct{}
+	reserveResume chan struct{}
+	once          sync.Once
+}
+
+func (d *namingFaultDirectory) Reserve(ctx context.Context, raw string, owner directory.Owner, ttl time.Duration) (directory.Claim, error) {
+	if d.reserveEnter != nil {
+		d.once.Do(func() { close(d.reserveEnter); <-d.reserveResume })
+	}
+	return d.Directory.Reserve(ctx, raw, owner, ttl)
+}
+func (d *namingFaultDirectory) Commit(ctx context.Context, c directory.Claim) (directory.Entry, error) {
+	e, err := d.Directory.Commit(ctx, c)
+	if err == nil && d.loseCommit.Swap(false) {
+		return directory.Entry{}, errors.New("directory commit reply lost")
+	}
+	return e, err
+}
+func (d *namingFaultDirectory) Release(ctx context.Context, key string, o directory.Owner) error {
+	if d.failRelease.Swap(false) {
+		return errors.New("release unavailable")
+	}
+	err := d.Directory.Release(ctx, key, o)
+	if err == nil && d.loseRelease.Swap(false) {
+		return errors.New("release reply lost")
+	}
+	return err
+}
+
+type namingFixture struct {
+	engine     *nest.NestMgr
+	players    []*player.Player
+	commit     *namingCommitter
+	names      *namingFaultDirectory
+	controller *Controller
+	registry   *app.Registry
+	now        time.Time
+}
+
+func newNamingFixture(t *testing.T) *namingFixture {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterNamingBeginNestHandlers()
+	handler.RegisterNamingStepNestHandlers()
+	handler.RegisterProfileRenameNestHandlers()
+	handler.RegisterProfileCardNestHandlers()
+	f := &namingFixture{commit: &namingCommitter{}, now: time.Unix(1700000000, 0)}
+	g := namingGetter{}
+	for i := int64(0); i < 2; i++ {
+		id, e := entity.BuildEntityID(99000+i, player.EntityKindPlayer)
+		if e != nil {
+			t.Fatal(e)
+		}
+		built, e := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if e != nil {
+			t.Fatal(e)
+		}
+		p := built.(*player.Player)
+		f.players = append(f.players, p)
+		g[id] = p
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if e := f.engine.Start(); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		if e := f.engine.Shutdown(context.Background()); e != nil {
+			t.Error(e)
+		}
+	})
+	names, e := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: func() time.Time { return f.now }})
+	if e != nil {
+		t.Fatal(e)
+	}
+	f.names = &namingFaultDirectory{Directory: names}
+	f.registry = app.NewRegistry(nil)
+	if e := f.registry.Register("nest", f.engine); e != nil {
+		t.Fatal(e)
+	}
+	if e := f.registry.Register("service.directory", directory.Directory(f.names)); e != nil {
+		t.Fatal(e)
+	}
+	f.controller, e = FromRegistry(f.registry)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return f
+}
+func (f *namingFixture) rename(i int, op, name string) (string, error) {
+	return f.controller.Rename(context.Background(), int64(99000+i), op, name)
+}
+func (f *namingFixture) must(t *testing.T, i int, op, name string) {
+	t.Helper()
+	got, e := f.rename(i, op, name)
+	if e != nil || got != name {
+		t.Fatalf("name=%q err=%v", got, e)
+	}
+}
+func (f *namingFixture) card(t *testing.T, i int) string {
+	t.Helper()
+	c, e := syncsender.NewProfileCardSender(f.engine).Sync_ProfileCard(context.Background(), f.players[i].ID())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return c.Name
+}
+func (f *namingFixture) entry(t *testing.T, name string) (directory.Entry, bool) {
+	t.Helper()
+	v, ok, e := f.names.Lookup(context.Background(), "player-name/"+name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return v, ok
+}
+func TestNamingUniqueAndReplay(t *testing.T) {
+	f := newNamingFixture(t)
+	f.must(t, 0, "one", "Alice")
+	before := f.commit.commits.Load()
+	f.must(t, 0, "one", "Alice")
+	if f.commit.commits.Load() != before {
+		t.Fatal("replay wrote")
+	}
+	if _, e := f.rename(1, "two", "ALICE"); !errors.Is(e, directory.ErrKeyTaken) {
+		t.Fatal(e)
+	}
+	if f.card(t, 1) != "" {
+		t.Fatal("loser got name")
+	}
+	v, ok := f.entry(t, "alice")
+	if !ok || v.State != directory.StateCommitted {
+		t.Fatal("name not permanently owned")
+	}
+}
+func TestNamingRenameReleasesOnlyOldName(t *testing.T) {
+	f := newNamingFixture(t)
+	f.must(t, 0, "one", "Alice")
+	f.must(t, 0, "two", "Bob")
+	if _, ok := f.entry(t, "Alice"); ok {
+		t.Fatal("old name leaked")
+	}
+	if _, ok := f.entry(t, "Bob"); !ok {
+		t.Fatal("new name released")
+	}
+	f.must(t, 1, "claim", "Alice")
+}
+func TestNamingDirectoryCommitUnknownKeepsClaimAndRecovers(t *testing.T) {
+	f := newNamingFixture(t)
+	f.names.loseCommit.Store(true)
+	if _, e := f.rename(0, "one", "Alice"); e == nil {
+		t.Fatal("missing unknown result")
+	}
+	v, ok := f.entry(t, "Alice")
+	if !ok || v.State != directory.StateCommitted || f.card(t, 0) != "" {
+		t.Fatal("unsafe unknown commit handling")
+	}
+	f.must(t, 0, "one", "Alice")
+}
+func TestNamingProfileCommitFailureKeepsBothNamesForRetry(t *testing.T) {
+	f := newNamingFixture(t)
+	f.must(t, 0, "one", "Alice")
+	f.controller.profile = &namingFaultProfile{namingProfile: f.controller.profile, action: 2, committer: f.commit}
+	if _, e := f.rename(0, "two", "Bob"); e == nil {
+		t.Fatal("missing failure")
+	}
+	if f.card(t, 0) != "Alice" {
+		t.Fatal("profile changed before commit")
+	}
+	if _, ok := f.entry(t, "Alice"); !ok {
+		t.Fatal("old name released early")
+	}
+	if _, ok := f.entry(t, "Bob"); !ok {
+		t.Fatal("new claim discarded")
+	}
+	f.must(t, 0, "two", "Bob")
+}
+func TestNamingProfileReplyLostNeverReleasesCurrentName(t *testing.T) {
+	f := newNamingFixture(t)
+	f.controller.profile = &namingFaultProfile{namingProfile: f.controller.profile, action: 2, after: true}
+	if _, e := f.rename(0, "one", "Alice"); e == nil {
+		t.Fatal("missing unknown result")
+	}
+	if f.card(t, 0) != "Alice" {
+		t.Fatal("injection did not commit")
+	}
+	if _, ok := f.entry(t, "Alice"); !ok {
+		t.Fatal("current name released")
+	}
+	f.must(t, 0, "one", "Alice")
+}
+func TestNamingReleaseFailureResumesWithoutRevertingProfile(t *testing.T) {
+	f := newNamingFixture(t)
+	f.must(t, 0, "one", "Alice")
+	f.names.failRelease.Store(true)
+	if _, e := f.rename(0, "two", "Bob"); e == nil {
+		t.Fatal("missing release failure")
+	}
+	if f.card(t, 0) != "Bob" {
+		t.Fatal("profile reverted")
+	}
+	if _, e := f.rename(0, "three", "Carol"); !errors.Is(e, apperrors.ErrNamingBusy) {
+		t.Fatal(e)
+	}
+	f.must(t, 0, "two", "Bob")
+	if _, ok := f.entry(t, "Alice"); ok {
+		t.Fatal("recovery did not release old name")
+	}
+}
+func TestNamingSamePlayerConcurrentDifferentRequestsCannotInterleave(t *testing.T) {
+	f := newNamingFixture(t)
+	f.names.reserveEnter = make(chan struct{})
+	f.names.reserveResume = make(chan struct{})
+	done := make(chan error, 1)
+	go func() { _, e := f.rename(0, "one", "Alice"); done <- e }()
+	<-f.names.reserveEnter
+	if _, e := f.rename(0, "two", "Bob"); !errors.Is(e, apperrors.ErrNamingBusy) {
+		t.Fatal(e)
+	}
+	close(f.names.reserveResume)
+	if e := <-done; e != nil {
+		t.Fatal(e)
+	}
+	if f.card(t, 0) != "Alice" {
+		t.Fatal("concurrent request won")
+	}
+	if _, ok := f.entry(t, "Bob"); ok {
+		t.Fatal("refused request reserved a name")
+	}
+}
+func TestNamingSameOperationConcurrentRetriesAreIdempotent(t *testing.T) {
+	f := newNamingFixture(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, e := f.rename(0, "one", "Alice"); errs <- e }()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	if f.card(t, 0) != "Alice" {
+		t.Fatal("name missing")
+	}
+	v, ok := f.entry(t, "Alice")
+	if !ok || v.State != directory.StateCommitted {
+		t.Fatal("claim missing")
+	}
+}
+func TestNamingExpiredClaimCanBeRetried(t *testing.T) {
+	f := newNamingFixture(t)
+	f.controller.profile = &namingFaultProfile{namingProfile: f.controller.profile, action: 1, after: true}
+	if _, e := f.rename(0, "one", "Alice"); e == nil {
+		t.Fatal("missing failure")
+	}
+	f.now = f.now.Add(2 * time.Minute)
+	if _, e := f.rename(0, "one", "Alice"); !errors.Is(e, directory.ErrClaimNotFound) {
+		t.Fatal(e)
+	}
+	f.must(t, 0, "one", "Alice")
+}
+func TestNamingOldSenderCannotBypassDirectory(t *testing.T) {
+	f := newNamingFixture(t)
+	_, e := syncsender.NewProfileRenameSender(f.engine).Sync_ProfileRename(context.Background(), f.players[0].ID(), &pb.ProfileRenameRequest{Name: "Alice"})
+	if !errors.Is(e, apperrors.ErrNamingRequired) || f.card(t, 0) != "" {
+		t.Fatalf("err=%v", e)
+	}
+}
+func TestNamingOldControllerUsesCoordinator(t *testing.T) {
+	f := newNamingFixture(t)
+	c, e := profilecontroller.FromRegistry(f.registry)
+	if e != nil {
+		t.Fatal(e)
+	}
+	response, e := c.HandleProfileRename(&playeraccess.Context{PlayerID: 99000}, &pb.ProfileRenameRequest{Name: "Alice"})
+	if e != nil || response.Code != 0 || response.Name != "Alice" {
+		t.Fatalf("response=%+v err=%v", response, e)
+	}
+	if _, ok := f.entry(t, "Alice"); !ok {
+		t.Fatal("old endpoint bypassed directory")
+	}
+}
+func TestNamingInvalidAndRejectedBeginWriteNothing(t *testing.T) {
+	f := newNamingFixture(t)
+	if _, e := f.rename(0, "one", " "); !errors.Is(e, apperrors.ErrProfileNameEmpty) {
+		t.Fatal(e)
+	}
+	if _, e := f.rename(0, "", "Alice"); !errors.Is(e, apperrors.ErrNamingInvalid) {
+		t.Fatal(e)
+	}
+	f.commit.reject.Store(true)
+	if _, e := f.rename(0, "one", "Alice"); e == nil {
+		t.Fatal("begin committed")
+	}
+	f.commit.reject.Store(false)
+	if f.commit.commits.Load() != 0 || f.card(t, 0) != "" {
+		t.Fatal("rejected begin wrote")
+	}
+	if _, ok := f.entry(t, "Alice"); ok {
+		t.Fatal("reserve ran before intent commit")
+	}
+	f.must(t, 0, "one", "Alice")
+}
+
+func TestNamingLateCleanupCannotDeleteReusedName(t *testing.T) {
+	f := newNamingFixture(t)
+	f.must(t, 0, "one", "Alice")
+	old, ok := f.entry(t, "Alice")
+	if !ok {
+		t.Fatal("missing first claim")
+	}
+	f.must(t, 0, "two", "Bob")
+	f.must(t, 0, "three", "Alice")
+	if err := f.names.Release(context.Background(), "player-name/Alice", old.Owner); !errors.Is(err, directory.ErrOwnerMismatch) {
+		t.Fatalf("stale cleanup err=%v", err)
+	}
+	now, ok := f.entry(t, "Alice")
+	if !ok || now.Owner == old.Owner || f.card(t, 0) != "Alice" {
+		t.Fatal("late cleanup deleted reused name")
+	}
+}
+func TestNamingDirectoryWaitDoesNotOccupyNestWorker(t *testing.T) {
+	f := newNamingFixture(t)
+	f.names.reserveEnter = make(chan struct{})
+	f.names.reserveResume = make(chan struct{})
+	done := make(chan error, 1)
+	go func() { _, e := f.rename(0, "one", "Alice"); done <- e }()
+	<-f.names.reserveEnter
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := syncsender.NewProfileCardSender(f.engine).Sync_ProfileCard(ctx, f.players[1].ID())
+	close(f.names.reserveResume)
+	if e := <-done; e != nil {
+		t.Fatal(e)
+	}
+	if err != nil {
+		t.Fatalf("directory occupied the only Nest worker: %v", err)
+	}
+}
+
+func TestNamingLostReleaseReplyAndReclaimedOldNameStillFinishes(t *testing.T) {
+	f := newNamingFixture(t)
+	f.must(t, 0, "one", "Alice")
+	f.names.loseRelease.Store(true)
+	if _, err := f.rename(0, "two", "Bob"); err == nil {
+		t.Fatal("missing release failure")
+	}
+	f.must(t, 1, "claim", "Alice")
+	f.must(t, 0, "two", "Bob")
+	if f.card(t, 0) != "Bob" || f.card(t, 1) != "Alice" {
+		t.Fatal("recovery changed a name")
+	}
+	f.must(t, 0, "three", "Carol")
+	if _, ok := f.entry(t, "Alice"); !ok {
+		t.Fatal("cleanup deleted the new owner")
+	}
+}

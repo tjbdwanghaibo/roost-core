@@ -1,0 +1,258 @@
+// Package scene 定义场景的公开配置与空间接线；不依赖具体 Player / Monster。
+package scene
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+var Public = entity.SyncProfile{Key: "scene"}
+
+// Config 在开图时冻结。分线是同一 Template 的不同 Scene 实体，不共享成员、AOI 或时间域。
+// Ground / Surface 可以由 terrain 提供，其实现必须支持并发读取已提交状态。
+type Config struct {
+	Template  string
+	Line      int32
+	Bounds    spatial.Rect
+	Spawn     spatial.Point
+	BlockSize int64
+	Sight     int64
+	Capacity  int
+	Ground    spatial.Terrain
+	Surface   movement.Surface
+	Regions   []Region
+	Objects   []Object
+}
+
+func (c Config) Clone() Config {
+	c.Regions = slices.Clone(c.Regions)
+	c.Objects = slices.Clone(c.Objects)
+	return c
+}
+
+func DefaultConfig() Config {
+	return Config{Template: "plain", Line: 1, Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}},
+		Spawn: spatial.Point{X: 50, Y: 50}, BlockSize: 32, Sight: 64, Capacity: 1000}
+}
+
+func (c Config) Validate() error {
+	if c.Template == "" || c.Line <= 0 || c.Capacity < 1 || c.Capacity > 10000 || !c.Bounds.Contains(c.Spawn) {
+		return errors.New("scene: invalid template, line, capacity or spawn")
+	}
+	if c.Ground != nil && (!c.Ground.InBounds(c.Spawn) || c.Ground.Blocked(c.Spawn)) {
+		return errors.New("scene: spawn is blocked")
+	}
+	if len(c.Regions) > 64 || len(c.Objects) > 256 {
+		return errors.New("scene: region/object limit")
+	}
+	regions := map[int64]bool{}
+	for _, region := range c.Regions {
+		if region.ID <= 0 || regions[region.ID] || region.Bounds.Empty() {
+			return errors.New("scene: invalid or repeated region")
+		}
+		regions[region.ID] = true
+	}
+	objects := map[int64]bool{}
+	for _, object := range c.Objects {
+		if object.ID <= 0 || objects[object.ID] || object.Radius <= 0 || object.Radius > c.Sight || !c.Bounds.Contains(object.Position) || len(object.Text) > 512 {
+			return errors.New("scene: invalid or repeated object")
+		}
+		objects[object.ID] = true
+	}
+	return nil
+}
+
+// Space 只维护提交后的可见性。成员账本在 Scene DAO，不能拿 AOI 当授权或成员权威。
+type Space struct {
+	Interest   *policy.Interest
+	manager    *entitysync.Manager
+	config     Config
+	playerKind entity.EntityKind
+	positions  sync.Map // entity ID -> *committedPosition；位置锁按实体分，不串行化整个场景。
+	index      *spatial.BlockIndex
+	closed     atomic.Bool
+}
+
+type committedPosition struct {
+	mu     sync.Mutex
+	point  spatial.Point
+	player bool
+}
+type SensedActor struct {
+	ID       int64
+	Position spatial.Point
+}
+
+func NewSpace(manager *entitysync.Manager, config Config, playerKind entity.EntityKind) (*Space, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	config = config.Clone()
+	selfVisible := false // 玩家本人已由 access.self_sync 订阅，AOI 只给公开视图。
+	interest, err := policy.NewInterest(policy.InterestConfig{
+		Manager: manager, SelfVisible: &selfVisible,
+		AOI: policy.AOIConfig{Bounds: config.Bounds, BlockSize: config.BlockSize,
+			EnterRadius: config.Sight, LeaveRadius: config.Sight + config.BlockSize, MaxVisible: 128},
+		BandLayer: func(int, int) entity.SyncProfile { return Public },
+	})
+	if err != nil {
+		return nil, err
+	}
+	space := &Space{Interest: interest, manager: manager, config: config, playerKind: playerKind}
+	space.index, err = spatial.NewBlockIndex(config.Bounds, config.BlockSize)
+	if err != nil {
+		interest.Close()
+		return nil, err
+	}
+	if err := interest.DefineRelationView(1, Public); err != nil {
+		interest.Close()
+		return nil, err
+	}
+	return space, nil
+}
+
+// BindMetadata 把场景时间域放进全场关系视图；成员不需要靠近某一点才能收到时停/倍速。
+func (s *Space) BindMetadata(state *entity.SubjectSyncState) error {
+	if err := s.manager.Register(state); err != nil {
+		return err
+	}
+	return s.Interest.SetViewMembers(1, []int64{state.SubjectID()})
+}
+
+func (s *Space) Enter(value entity.IThreadSafeEntity, at spatial.Point) error {
+	if s.closed.Load() {
+		return errors.New("scene: closed")
+	}
+	if err := s.manager.Register(value.Base().Sync()); err != nil {
+		return err
+	}
+	s.positions.Store(value.ID(), &committedPosition{point: at, player: value.GetEntityKind() == s.playerKind})
+	s.index.Add(value.ID(), at)
+	if value.GetEntityKind() == s.playerKind {
+		if err := s.Interest.Enter(value.UniqueID(), value.ID(), at, policy.ObserverView{}); err != nil {
+			return err
+		}
+		return s.Interest.AttachView(value.UniqueID(), 1)
+	}
+	return s.Interest.Show(value.ID(), at)
+}
+
+func (s *Space) Leave(value entity.IThreadSafeEntity) error { return s.Forget(value.ID()) }
+
+// Forget 清理由已卸载角色留下的提交后索引。只供 Scene 持锁核实 Loaded 后、AfterCommit 调用。
+// 只依赖完整 ID；不能为了清旧成员去读取或加载另一个 Player。
+func (s *Space) Forget(id int64) error {
+	if entry, ok := s.positions.LoadAndDelete(id); ok {
+		position := entry.(*committedPosition)
+		position.mu.Lock()
+		s.index.Remove(id, position.point)
+		position.mu.Unlock()
+	}
+	if entity.GetEntityKindFromID(id) == s.playerKind {
+		return s.Interest.Leave(entity.GetUniqueIDFromEntityID(id), id)
+	}
+	return s.Interest.Hide(id)
+}
+
+func (s *Space) QueueMove(value entity.IThreadSafeEntity, at spatial.Point) error {
+	if err := s.Interest.QueueMove(value, at); err != nil {
+		return err
+	}
+	// 与 MapBasic 一样只发布成功提交；同实体的提交后回调由 Nest 保序。
+	id := value.ID()
+	publish := func() {
+		entry, ok := s.positions.Load(id)
+		if !ok {
+			return
+		}
+		position := entry.(*committedPosition)
+		position.mu.Lock()
+		defer position.mu.Unlock()
+		s.index.Move(id, position.point, at)
+		position.point = at
+	}
+	if !nest.AfterCommit(publish) {
+		publish()
+	}
+	return nil
+}
+
+func (s *Space) Close() { s.closed.Store(true); s.Interest.Close() }
+
+// Sense 用独立的块索引查询已提交站位，不读取另一个实体的 DAO、不取另一个实体锁。
+// 这只是决策候选；命中/伤害必须在参与者 Nest 事务内重新判定场景、距离与存活代际。
+func (s *Space) Sense(at spatial.Point, radius int64) []SensedActor {
+	if radius <= 0 || radius > s.config.Sight || s.closed.Load() {
+		return nil
+	}
+	rect := spatial.Rect{Min: spatial.Point{X: spatial.SaturatingSub(at.X, radius), Y: spatial.SaturatingSub(at.Y, radius)},
+		Max: spatial.Point{X: spatial.SaturatingAdd(at.X, radius+1), Y: spatial.SaturatingAdd(at.Y, radius+1)}}
+	var found []SensedActor
+	for _, id := range s.index.QueryRect(rect) {
+		entry, ok := s.positions.Load(id)
+		if !ok {
+			continue
+		}
+		position := entry.(*committedPosition)
+		position.mu.Lock()
+		point, player := position.point, position.player
+		position.mu.Unlock()
+		if player && spatial.WithinDistance(at, point, radius) {
+			found = append(found, SensedActor{ID: id, Position: point})
+		}
+	}
+	slices.SortFunc(found, func(a, b SensedActor) int {
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
+	})
+	return found
+}
+
+// Sight 是本场景固定的可感知半径。
+func (s *Space) Sight() int64 { return s.config.Sight }
+
+func (s *Space) InBounds(at spatial.Point) bool {
+	return s.config.Bounds.Contains(at) && (s.config.Ground == nil || s.config.Ground.InBounds(at))
+}
+func (s *Space) Blocked(at spatial.Point) bool {
+	return s.config.Ground != nil && s.config.Ground.Blocked(at)
+}
+
+// Placement 尝试存档点，再用出生点；不把过期存档直接当成可站立位置。
+func (s *Space) Placement(preferred spatial.Point) (spatial.Point, error) {
+	for _, at := range []spatial.Point{preferred, s.config.Spawn} {
+		if !s.InBounds(at) || s.Blocked(at) {
+			continue
+		}
+		if surface := s.config.Surface; surface != nil {
+			if _, ok := surface.Step(surface.Cell(at), surface.Cell(at)); !ok {
+				continue
+			}
+		}
+		return at, nil
+	}
+	return spatial.Point{}, fmt.Errorf("scene: no usable spawn")
+}
+
+// Nearby 是公开的已提交空间结果，供附近聊天/AI；它不能证明目标当前仍在场。
+// 真正修改目标时仍须在包含目标的 Nest 事务中重查位置与场景。
+func (s *Space) Nearby(playerID int64) []int64 {
+	ids := s.Interest.Seen(playerID)
+	slices.Sort(ids)
+	return ids
+}

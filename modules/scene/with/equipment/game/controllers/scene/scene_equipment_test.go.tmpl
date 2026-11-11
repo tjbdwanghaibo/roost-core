@@ -1,0 +1,77 @@
+package scene
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"testing"
+	"{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	gamescene "{{MODULE}}/game/scene"
+)
+
+func TestWithSceneEquipmentSnapshotSeparatesPrivateFields(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.must(p, func(p *player.Player) error {
+		piece := &db.GearPiece{}
+		piece.SetItemID(1001)
+		piece.SetLevel(7)
+		p.Dao().GetEquipment().SetSlotsKey(1, piece)
+		p.Dao().GetBag().SetItemsKey(9001, 913)
+		packer := player.NewActorPlayerSyncPacker(p)
+		decode := func(view entity.SyncProfile) *db.PlayerDao {
+			_ = dataengine.AllFields
+			payload, err := packer.PackSubjectSnapshot(view)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy := db.NewPlayerDao()
+			if err := copy.ApplySync(payload.BytesCopy()); err != nil {
+				t.Fatal(err)
+			}
+			return copy
+		}
+		pub, self := decode(gamescene.Public), decode(policy.SelfProfile)
+		if pub.GetEquipment().SlotsLen() != 1 || pub.GetBag().ItemsLen() != 0 {
+			return fmt.Errorf("public field missing or private field leaked")
+		}
+		if self.GetBag().ItemsLen() != 1 {
+			return fmt.Errorf("self private field missing")
+		}
+		return nil
+	})
+}
+func TestWithSceneEquipmentDeltaSeparatesPrivateFields(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.must(p, func(p *player.Player) error {
+		piece := &db.GearPiece{}
+		piece.SetItemID(1001)
+		piece.SetLevel(7)
+		p.Dao().GetEquipment().SetSlotsKey(1, piece)
+		p.Dao().GetBag().SetItemsKey(9001, 913)
+		packer := player.NewActorPlayerSyncPacker(p)
+		decode := func(view entity.SyncProfile) *db.PlayerDao {
+			_ = dataengine.AllFields
+			payload, err := packer.PackSubjectDelta(view, dataengine.AllFields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy := db.NewPlayerDao()
+			if err := copy.ApplySync(payload.BytesCopy()); err != nil {
+				t.Fatal(err)
+			}
+			return copy
+		}
+		pub, self := decode(gamescene.Public), decode(policy.SelfProfile)
+		if pub.GetEquipment().SlotsLen() != 1 || pub.GetBag().ItemsLen() != 0 {
+			return fmt.Errorf("public field missing or private field leaked")
+		}
+		if self.GetBag().ItemsLen() != 1 {
+			return fmt.Errorf("self private field missing")
+		}
+		return nil
+	})
+}

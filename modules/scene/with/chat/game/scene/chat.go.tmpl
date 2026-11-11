@@ -1,0 +1,7 @@
+package scene
+
+// ChatAudience 是持有发送者锁时确定的已提交场景候选快照，离开 Nest 后才做网络推送。
+type ChatAudience struct {
+	SceneID int64
+	Players []int64
+}

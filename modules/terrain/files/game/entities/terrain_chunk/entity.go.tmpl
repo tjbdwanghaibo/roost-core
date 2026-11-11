@@ -1,0 +1,152 @@
+package terrain_chunk
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"math"
+	db "{{MODULE}}/db"
+	gamescene "{{MODULE}}/game/scene"
+	logic "{{MODULE}}/game/terrain"
+)
+
+const EntityKindTerrainChunk entity.EntityKind = {{ID:entity:TerrainChunk}}
+
+//roost:entity id={{ID:entity:TerrainChunk}} entityKind=EntityKindTerrainChunk category=entity.EntityCategoryWorld sync=true syncNamespace="terrain" subjectPacker=NewTerrainChunkSyncPacker service={{GAME_SERVICE}}
+type TerrainChunk struct {
+	*entity.EntityBase
+	entity.DaoManager
+	dao *db.TerrainChunkDao `dao:"terrain_chunk"`
+}
+type ITerrainChunkEntity interface {
+	entity.IThreadSafeEntity
+	ChunkState() *TerrainChunk
+}
+
+func (c *TerrainChunk) ChunkState() *TerrainChunk { return c }
+func (c *TerrainChunk) OnInitFinish(*entity.EntityCreateParam) error {
+	if c.Dao().Id() != c.ID() {
+		return logic.ErrInvalid
+	}
+	if c.Dao().GetVersion() == 0 {
+		return nil
+	}
+	id, err := logic.ChunkUnique(c.Dao().GetSceneID(), core.ChunkKey{X: c.Dao().GetX(), Y: c.Dao().GetY()})
+	if err != nil || id != c.UniqueID() {
+		return logic.ErrInvalid
+	}
+	valid := true
+	c.Dao().RangeMaterials(func(_ int, v uint16) bool {
+		if v > 255 {
+			valid = false
+		}
+		return valid
+	})
+	c.Dao().RangeLots(func(index int32, id int64) bool {
+		if index < 0 || index >= core.ChunkPoints || id <= 0 {
+			valid = false
+		}
+		return valid
+	})
+	if !valid {
+		return logic.ErrInvalid
+	}
+	state := c.State()
+	if state.BaseRevision <= 0 || state.Version < 1 {
+		return logic.ErrInvalid
+	}
+	return (core.Chunk{Heights: state.Heights, Materials: state.Materials}).Validate()
+}
+func (c *TerrainChunk) State() logic.ChunkState {
+	d := c.Dao()
+	state := logic.ChunkState{Key: core.ChunkKey{X: d.GetX(), Y: d.GetY()}, BaseRevision: d.GetBaseRevision(), Version: d.GetVersion(), Heights: make([]uint16, 0, d.HeightsLen()), Materials: make([]byte, 0, d.MaterialsLen()), Lots: map[int32]int64{}}
+	d.RangeHeights(func(_ int, value uint16) bool { state.Heights = append(state.Heights, value); return true })
+	d.RangeMaterials(func(_ int, value uint16) bool { state.Materials = append(state.Materials, byte(value)); return true })
+	d.RangeLots(func(index int32, id int64) bool { state.Lots[index] = id; return true })
+	return state
+}
+func (c *TerrainChunk) Initialize(world *logic.World, key core.ChunkKey) error {
+	id, err := logic.ChunkUnique(world.ID, key)
+	if err != nil || id != c.UniqueID() {
+		return logic.ErrInvalid
+	}
+	d := c.Dao()
+	if d.GetVersion() != 0 {
+		if d.GetBaseRevision() != world.Meta().BaseRevision {
+			return logic.ErrBase
+		}
+		if d.GetSceneID() != world.ID || d.GetX() != key.X || d.GetY() != key.Y {
+			return logic.ErrInvalid
+		}
+		return nil
+	}
+	data, err := world.Base(key)
+	if err != nil {
+		return err
+	}
+	d.SetSceneID(world.ID)
+	d.SetX(key.X)
+	d.SetY(key.Y)
+	d.SetBaseRevision(world.Meta().BaseRevision)
+	d.SetVersion(1)
+	d.SetHeightsAll(data.Heights)
+	materials := make([]uint16, len(data.Materials))
+	for i, v := range data.Materials {
+		materials[i] = uint16(v)
+	}
+	d.SetMaterialsAll(materials)
+	return nil
+}
+func (c *TerrainChunk) Validate(world *logic.World, key core.ChunkKey) error {
+	d := c.Dao()
+	id, err := logic.ChunkUnique(world.ID, key)
+	if err != nil || id != c.UniqueID() || d.GetSceneID() != world.ID || d.GetX() != key.X || d.GetY() != key.Y || d.GetVersion() < 1 {
+		return logic.ErrInvalid
+	}
+	if d.GetBaseRevision() != world.Meta().BaseRevision {
+		return logic.ErrBase
+	}
+	if d.GetVersion() == math.MaxInt64 {
+		return logic.ErrFull
+	}
+	return nil
+}
+func (c *TerrainChunk) Apply(points []core.PointChange) {
+	d := c.Dao()
+	for _, point := range points {
+		d.SetHeightsAt(int(point.Index), point.Height)
+		d.SetMaterialsAt(int(point.Index), uint16(point.Material))
+	}
+	d.SetVersion(d.GetVersion() + 1)
+	c.PublishSyncDirty()
+}
+func (c *TerrainChunk) SetLots(indices []int32, id int64) {
+	d := c.Dao()
+	for _, index := range indices {
+		if id == 0 {
+			d.DelLots(index)
+		} else {
+			d.SetLots(index, id)
+		}
+	}
+	d.SetVersion(d.GetVersion() + 1)
+	c.PublishSyncDirty()
+}
+func (c *TerrainChunk) PublishSyncDirty() {
+	if mask := c.TakeEntitySyncChanges(); mask != 0 {
+		c.MarkSyncDirty(mask)
+	}
+}
+func NewTerrainChunkSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner := value.(*TerrainChunk)
+	views, err := dataengine.NewSyncViewSet((*db.TerrainChunkDao)(nil).SyncFields(), entity.NamedSyncView{Profile: gamescene.Public, Fields: []string{"*"}})
+	if err != nil {
+		panic(fmt.Sprintf("terrain sync: %v", err))
+	}
+	packer, err := entity.NewMaskedSyncPacker(views, 2, func(mask uint64) ([]byte, error) { return owner.Dao().MarshalSync(mask), nil })
+	if err != nil {
+		panic(err)
+	}
+	return packer
+}

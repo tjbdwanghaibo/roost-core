@@ -1,0 +1,19 @@
+//go:build protocoldef
+
+package protocoldef
+
+type EquipmentUnequipRequest struct {
+	Slot int32 `pb:"1"`
+}
+type EquipmentUnequipResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	ItemID int64  `pb:"3"`
+	Found  bool   `pb:"4"`
+}
+
+//roost:protocol group=game handler=equipment
+type EquipmentUnequipProtocol interface {
+	//roost:msg id={{ID:protocol:EquipmentUnequip}}
+	EquipmentUnequip(EquipmentUnequipRequest) EquipmentUnequipResponse
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,11 +14,66 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"gopkg.in/yaml.v3"
+
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/clientsync"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/protocol/msgid"
 )
+
+// 规则文件中的同步字段必须与当前 DAO 的线字段一致；模块迁移不能让 Robot 永远等待旧字段。
+func TestSceneScenarioWaitsForDeclaredSyncFields(t *testing.T) {
+	raw, err := os.ReadFile("../../loadtest/scenarios/demo.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	declared := make(map[string]bool)
+	for _, field := range db.PlayerDaoSyncFields() {
+		declared[field.WireName] = true
+	}
+	lookup := func(node *yaml.Node, key string) *yaml.Node {
+		if node.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				if node.Content[i].Value == key {
+					return node.Content[i+1]
+				}
+			}
+		}
+		return nil
+	}
+	checked := 0
+	var visit func(*yaml.Node)
+	visit = func(node *yaml.Node) {
+		if action := lookup(node, "action"); action != nil && action.Value == "scene_expect" {
+			params := lookup(node, "param")
+			if params == nil {
+				t.Fatal("scene_expect has no parameters")
+			}
+			fields := lookup(params, "fields")
+			if fields == nil {
+				t.Fatal("scene_expect has no declared fields")
+			}
+			for _, field := range strings.Split(fields.Value, ",") {
+				if !declared[strings.TrimSpace(field)] {
+					t.Errorf("scene_expect waits for unknown Player sync field %q", field)
+				}
+				checked++
+			}
+		}
+		for _, child := range node.Content {
+			visit(child)
+		}
+	}
+	visit(&document)
+	if checked == 0 {
+		t.Fatal("scenario did not check any Player sync fields")
+	}
+}
 
 // 场景帧在线上的形状由服务端 scene.go 的 PushSyncPlayer 决定：RS v2 Sync 标志、原始帧字节，不包
 // EntitySyncPush PB；robot session 对 Sync 包不做 PB 解码（Message.Value 为 nil）。scene_watch 必须按

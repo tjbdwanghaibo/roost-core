@@ -1,0 +1,128 @@
+package handler
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	"{{MODULE}}/db"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	sender "{{MODULE}}/game/handler/syncsender"
+)
+
+func withAttributeEquipmentFinal(t *testing.T, f *equipmentFixture) *gameattr.Combat {
+	t.Helper()
+	var p *gameattr.Combat
+	f.local(t, func() {
+		var ok bool
+		p, ok = f.player.AttributeComp().Final()
+		if !ok {
+			t.Fatal("no final")
+		}
+	})
+	return p
+}
+func TestWithAttributeEquipmentEquipRefreshesFinal(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1003)
+	p := withAttributeEquipmentFinal(t, f)
+	if p.HP != 105 || p.Attack != 25 || p.Power != 60 {
+		t.Fatalf("gear final %+v", p)
+	}
+}
+func TestWithAttributeEquipmentReplacementReplacesBonus(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	f.grant(t, 1002, 1)
+	f.mustEquip(t, 1003)
+	f.mustEquip(t, 1002)
+	p := withAttributeEquipmentFinal(t, f)
+	if p.HP != 100 || p.Attack != 15 || p.Power != 40 {
+		t.Fatalf("replacement final %+v", p)
+	}
+}
+func TestWithAttributeEquipmentUnequipClearsZeroValues(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1003)
+	f.mustUnequip(t, 1)
+	p := withAttributeEquipmentFinal(t, f)
+	if p.HP != 100 || p.Attack != 10 || p.Power != 30 {
+		t.Fatalf("removed final %+v", p)
+	}
+	f.local(t, func() {
+		if f.player.Dao().GetAttributeGear().ValuesLen() != 0 {
+			t.Fatal("stale gear values")
+		}
+	})
+}
+func TestWithAttributeEquipmentLevelsKeepGearSeparate(t *testing.T) {
+	f := newEquipmentFixture(t)
+	RegisterProfileAddExpNestHandlers()
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1003)
+	if _, err := sender.NewProfileAddExpSender(f.engine).Sync_ProfileAddExp(context.Background(), f.player.ID(), 100); err != nil {
+		t.Fatal(err)
+	}
+	p := withAttributeEquipmentFinal(t, f)
+	if p.HP != 115 || p.Attack != 27 || p.Power != 65 {
+		t.Fatalf("level gear %+v", p)
+	}
+}
+func TestWithAttributeEquipmentDerivedFormulaRunsAfterLayerSum(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1001, 1)
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1001)
+	f.mustEquip(t, 1003)
+	p := withAttributeEquipmentFinal(t, f)
+	if p.HP != 130 || p.Attack != 25 || p.Power != 63 {
+		t.Fatalf("derived final %+v", p)
+	}
+}
+func TestWithAttributeEquipmentRejectedCommitRestoresFinal(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	before, p := f.snapshot(t), withAttributeEquipmentFinal(t, f)
+	f.committer.reject.Store(true)
+	if _, err := f.equip(1003); err == nil {
+		t.Fatal("commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) || !reflect.DeepEqual(p, withAttributeEquipmentFinal(t, f)) {
+		t.Fatal("gear final rollback leaked")
+	}
+}
+func TestWithAttributeEquipmentLateHookFailureRestoresFinal(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	p := withAttributeEquipmentFinal(t, f)
+	equipmentRejectHook.Store(true)
+	t.Cleanup(func() { equipmentRejectHook.Store(false) })
+	if _, err := f.equip(1003); err == nil {
+		t.Fatal("hook accepted")
+	}
+	if !reflect.DeepEqual(p, withAttributeEquipmentFinal(t, f)) {
+		t.Fatal("late hook final leaked")
+	}
+}
+func TestWithAttributeEquipmentLoadDerivesFromPersistedWear(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.write(t, func() {
+		p := &db.GearPiece{}
+		p.SetItemID(1003)
+		p.SetLevel(2)
+		f.player.Dao().GetEquipment().SetSlotsKey(1, p)
+		f.player.Dao().GetAttributeGear().SetValues(nil)
+		f.player.Dao().GetAttributeFinal().SetValues(nil)
+	})
+	f.local(t, func() {
+		if err := f.player.AttributeComp().OnInitFinish(nil, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	p := withAttributeEquipmentFinal(t, f)
+	if p.HP != 110 || p.Attack != 40 || p.Power != 91 {
+		t.Fatalf("load gear %+v", p)
+	}
+}

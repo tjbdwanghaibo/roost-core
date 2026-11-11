@@ -1,0 +1,33 @@
+{
+  "ok": false,
+  "modules_ok": 3,
+  "module_reports": 43,
+  "first_failure": {
+    "name": "actor",
+    "want": 12,
+    "passed": 0,
+    "skipped": 0,
+    "ok": false,
+    "detail": "# example.com/studio/foundry/game/handler/syncsender\ngame/handler/syncsender/dungeon_counts_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/dungeon_counts_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/dungeon_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/dungeon_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/terrain_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/terrain_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/terrain_nest_gen.go:37:103: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:37:123: undefined: logic.ChunkState\ngame/handler/syncsender/terrain_nest_gen.go:60:118: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:60:139: undefined: logic.Command\ngame/handler/syncsender/terrain_nest_gen.go:60:159: undefined: logic.Result\ngame/handler/syncsender/terrain_nest_gen.go:83:130: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:83:151: undefined: logic.Command\ngame/handler/syncsender/terrain_nest_gen.go:83:151: too many errors\nFAIL\texample.com/studio/foundry/game/handler [build failed]\nFAIL"
+  },
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": false,
+      "detail": "game/handler/sender/terrain_nest_gen.go:88:152: undefined: logic.World\ngame/handler/sender/terrain_nest_gen.go:88:173: undefined: logic.Command\ngame/handler/sender/terrain_nest_gen.go:97:130: undefined: logic.World\ngame/handler/sender/terrain_nest_gen.go:97:130: too many errors\n# example.com/studio/foundry/game/handler/syncsender\ngame/handler/syncsender/dungeon_counts_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/dungeon_counts_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/dungeon_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/dungeon_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/terrain_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/terrain_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/terrain_nest_gen.go:37:103: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:37:123: undefined: logic.ChunkState\ngame/handler/syncsender/terrain_nest_gen.go:60:118: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:60:139: undefined: logic.Command\ngame/handler/syncsender/terrain_nest_gen.go:60:159: undefined: logic.Result\ngame/handler/syncsender/terrain_nest_gen.go:83:130: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:83:151: undefined: logic.Command\ngame/handler/syncsender/terrain_nest_gen.go:83:151: too many errors\n# example.com/studio/foundry/game/handler\ngame/handler/terrain_nest_gen.go:10:2: logic redeclared in this block\n\tgame/handler/terrain_nest_gen.go:6:2: other declaration of logic\ngame/handler/terrain_nest_gen.go:10:2: \"example.com/studio/foundry/game/terrain\" imported as logic and not used\ngame/handler/terrain_nest_gen.go:71:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:135:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:140:29: undefined: logic.Command\ngame/handler/terrain_nest_gen.go:215:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:220:29: undefined: logic.Command\ngame/handler/terrain_nest_gen.go:257:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:285:30: undefined: logic.World\nexit status 1"
+    },
+    {
+      "name": "go vet ./...",
+      "ok": false,
+      "detail": "# example.com/studio/foundry/game/handler/syncsender\ngame/handler/syncsender/dungeon_counts_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/dungeon_counts_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/dungeon_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/dungeon_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/terrain_nest_gen.go:7:2: logic redeclared in this block\n\tgame/handler/syncsender/terrain_nest_gen.go:6:2: other declaration of logic\ngame/handler/syncsender/terrain_nest_gen.go:37:103: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:37:123: undefined: logic.ChunkState\ngame/handler/syncsender/terrain_nest_gen.go:60:118: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:60:139: undefined: logic.Command\ngame/handler/syncsender/terrain_nest_gen.go:60:159: undefined: logic.Result\ngame/handler/syncsender/terrain_nest_gen.go:83:130: undefined: logic.World\ngame/handler/syncsender/terrain_nest_gen.go:83:151: undefined: logic.Command\ngame/handler/syncsender/terrain_nest_gen.go:83:151: too many errors\n# example.com/studio/foundry/game/handler\ngame/handler/terrain_nest_gen.go:10:2: logic redeclared in this block\n\tgame/handler/terrain_nest_gen.go:6:2: other declaration of logic\ngame/handler/terrain_nest_gen.go:10:2: \"example.com/studio/foundry/game/terrain\" imported as logic and not used\ngame/handler/terrain_nest_gen.go:71:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:135:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:140:29: undefined: logic.Command\ngame/handler/terrain_nest_gen.go:215:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:220:29: undefined: logic.Command\ngame/handler/terrain_nest_gen.go:257:30: undefined: logic.World\ngame/handler/terrain_nest_gen.go:285:30: undefined: logic.World\n# example.com/studio/foundry/game/handler/sender\n# [example.com/studio/foundry/game/handler/sender]\nvet: game/handler/sender/terrain_nest_gen.go:7:2: logic redeclared in this block\nexit status 1"
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ]
+}

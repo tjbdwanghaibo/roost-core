@@ -17,8 +17,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// PlayerWeaponToEquipment 是 Player 从 schema 1 到 2 的变化：v1 把武器存成 Player 上扁平的
-// weapon_id，v2 存成按槽位键的 equipment 子文档（db/def/player.go 的 Equipment）。
+// PlayerWeaponToEquipment 是 Player 从 schema 1 到当前 3 的变化：v1 把武器存成 Player 上扁平的
+// weapon_id，当前版本存成按槽位键的 equipment 子文档（equipment 模块的 EquipmentState）。
 //
 // 加字段不需要迁移（BSON 解码给零值）；需要迁移的是改形状——新定义无论如何都找不到旧的那个数字。
 const PlayerWeaponToEquipment = "player_weapon_to_equipment"
@@ -30,7 +30,7 @@ const weaponSlot = "1"
 // 而运行的迁移，是没人决定要运行的迁移。
 func PlayerSteps() (*migration.Registry, error) {
 	steps := migration.NewRegistry()
-	if err := steps.Register(migration.Step{Name: PlayerWeaponToEquipment, From: 1, To: 2, Apply: playerWeaponToEquipment}); err != nil {
+	if err := steps.Register(migration.Step{Name: PlayerWeaponToEquipment, From: 1, To: int32(db.PlayerDaoSchemaVersion), Apply: playerWeaponToEquipment}); err != nil {
 		return nil, err
 	}
 	return steps, nil
@@ -53,7 +53,7 @@ func PlayerJob(steps *migration.Registry) Job {
 func playerWeaponToEquipment(_ context.Context, data any) error {
 	document, ok := data.(*Document)
 	if !ok {
-		return fmt.Errorf("player 1->2: want *migrations.Document, got %T", data)
+		return fmt.Errorf("player 1->current: want *migrations.Document, got %T", data)
 	}
 	weapon, worn := document.Fields["weapon_id"]
 	delete(document.Fields, "weapon_id")
@@ -62,10 +62,10 @@ func playerWeaponToEquipment(_ context.Context, data any) error {
 	}
 	itemID, ok := toInt64(weapon)
 	if !ok {
-		return fmt.Errorf("player 1->2: _id=%v weapon_id has type %T", document.Fields["_id"], weapon)
+		return fmt.Errorf("player 1->current: _id=%v weapon_id has type %T", document.Fields["_id"], weapon)
 	}
 	if itemID > 0 {
-		document.Fields["equipment"] = bson.M{"slots": bson.M{weaponSlot: bson.M{"item_id": itemID, "level": int32(1)}}}
+		document.Fields["equipment"] = bson.M{"1": bson.M{weaponSlot: bson.M{"1": itemID, "2": int32(1)}}}
 	}
 	return nil
 }

@@ -9,6 +9,11 @@ import (
 //
 //roost:nest rollback=undo durability=strict
 func handlerProfileRename(target player.IProfileEntity, request *pb.ProfileRenameRequest) (*pb.ProfileRenameResponse, error) {
+	if guard, ok := target.(interface{ CheckProfileRenameRequest() error }); ok {
+		if err := guard.CheckProfileRenameRequest(); err != nil {
+			return nil, err
+		}
+	}
 	name, err := target.ProfileComp().Rename(request.Name)
 	if err != nil {
 		return nil, err

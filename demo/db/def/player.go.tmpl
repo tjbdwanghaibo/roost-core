@@ -1,6 +1,6 @@
 package dbdef
 
-//roost:dao coll=player db=main schema=2
+//roost:dao coll=player db=main schema=3
 type PlayerDao struct {
 	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
 	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
@@ -46,34 +46,7 @@ type PlayerDao struct {
 	SavedPosX    int64 `dao:"persist" store:"saved_pos_x"`
 	SavedPosY    int64 `dao:"persist" store:"saved_pos_y"`
 	SavedFacing  int32 `dao:"persist" store:"saved_facing"`
-	// Equipment is what the player is wearing. It is the demo's one NESTED
-	// struct — a struct inside the DAO, holding a map of pointers to another
-	// struct — and it is here on purpose: real defects
-	// have lived in exactly that path and only the dao runtime gate could see
-	// them, because nothing the demo generated had a nested field. Now the
-	// live run covers it too.
-	Equipment Equipment `dao:"persist,sync" store:"equipment"`
-	// AttrBase is the player's own attribute values: what they are with
-	// nothing applied. AttrID -> value, the bulk form the framework's
-	// Profile exports and loads (game/entities/player/attribute_component.go).
-	// Persisted AND replicated: it is state the server owns and the client
-	// renders.
-	AttrBase map[int32]int64 `dao:"persist,sync,map=fast" store:"attr_base"`
-	// AttrFinal is the composed view — base plus every layer — and it is
-	// deliberately `nopersist,sync`: storing a value that is derivable from
-	// what is already stored buys nothing and creates a second truth that can
-	// disagree with the first. It is recomputed when the entity loads, and
-	// replicated because it is what a client draws. Being a DAO field is
-	// also what rolls it back: the transaction that moved it restores it.
-	AttrFinal map[int32]int64 `dao:"nopersist,sync,map=fast" store:"attr_final"`
-	// AttrGear is the gear layer: what the worn pieces add, priced by the
-	// item table. Derived like AttrFinal, but nothing draws it, so it is
-	// `nopersist,nosync` — kept only so that it is IN the transaction: a
-	// failed equip or a refused commit puts it back with the equipment it
-	// was computed from, by the DAO's own rollback. The attribute component
-	// holds no layer of its own (state a transaction changes lives in
-	// the DAO; see game/entities/player/attribute_component.go).
-	AttrGear map[int32]int64 `dao:"nopersist,nosync,map=fast" store:"attr_gear"`
+	// 装备与属性层由 equipment / attribute 模块追加；demo 不另建一份状态。
 	DungeonClaims map[string]int64 `dao:"persist,map=fast" store:"dungeon_claims"`
 	// DungeonClears counts paid dungeon clears per leaderboard season:
 	// season -> clears. It moves in the same claim transaction that records
@@ -92,7 +65,7 @@ type PlayerDao struct {
 	// side of that handover exactly-once, because the id lands in the same
 	// WAL record as the items.
 	//
-	// 当前 schema 为 2；框架只加载同版本文档，不自动转换历史数据。
+	// 当前 schema 为 3；框架只加载同版本文档，不自动转换历史数据。
 	PurchaseClaims map[string]int64 `dao:"persist,map=fast" store:"purchase_claims"`
 	// GuildID is the guild this player is shown in, or 0 — the player's own
 	// copy of their membership, not the authority.
@@ -207,19 +180,4 @@ type TeamSeat struct {
 	Player int64 `store:"player"`
 	Actor  int64 `store:"actor"`
 	SID    int32 `store:"sid"`
-}
-
-// Equipment is a nested struct: the generator gives it its own dirty
-// propagation, so changing a gear piece marks the Player without anyone
-// writing the link.
-type Equipment struct {
-	// Slots is slot id -> the piece worn there. Nested inside a nested
-	// struct, the shape whose ownership transfer the generated DAO must get right.
-	Slots map[int32]*GearPiece `store:"slots"`
-}
-
-// GearPiece is one worn item.
-type GearPiece struct {
-	ItemID int64 `store:"item_id"`
-	Level  int32 `store:"level"`
 }

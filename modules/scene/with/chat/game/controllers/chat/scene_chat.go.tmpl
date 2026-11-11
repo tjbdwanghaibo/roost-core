@@ -1,0 +1,49 @@
+package chat
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	gamechat "{{MODULE}}/game/chat"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+func init() { OnLocalChannel("nearby", sendSceneChat) }
+func sendSceneChat(c *Controller, ctx *playeraccess.Context, request *pb.ChatSendRequest) (*pb.ChatSendResponse, error) {
+	if request.Target != 0 {
+		return nil, fmt.Errorf("%w: nearby target must be zero", svcchat.ErrChannelInvalid)
+	}
+	client, ok := app.Lookup[nest.Client](c.registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("scene chat: Nest is unavailable")
+	}
+	transport, err := c.pusher()
+	if err != nil {
+		return nil, err
+	}
+	if transport.ActiveSessions(ctx.PlayerID) == 0 {
+		return nil, fmt.Errorf("%w: sender is not connected here", svcchat.ErrNotPermitted)
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	audience, err := sender.NewSceneChatSender(client).Sync_SceneChat(ctx.Context(), id)
+	if err != nil {
+		return nil, err
+	}
+	push := &pb.ChatMessagePush{Kind: "nearby", Target: audience.SceneID, FromID: ctx.PlayerID, FromName: gamechat.PlayerSender(ctx.PlayerID).Name, Text: request.Text}
+	for _, recipient := range audience.Players {
+		if transport.ActiveSessions(recipient) > 0 {
+			_ = transport.PushPlayer(ctx.Context(), recipient, msgid.MsgChatMessage, push)
+		}
+	}
+	return &pb.ChatSendResponse{}, nil
+}

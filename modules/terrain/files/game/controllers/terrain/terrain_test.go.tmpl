@@ -1,0 +1,913 @@
+package terrain
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	db "{{MODULE}}/db"
+	scenecontroller "{{MODULE}}/game/controllers/scene"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	building "{{MODULE}}/game/entities/terrain_building"
+	chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	gamescene "{{MODULE}}/game/scene"
+	scenes "{{MODULE}}/game/scene/service"
+	logic "{{MODULE}}/game/terrain"
+	runtime "{{MODULE}}/game/terrain/service"
+	"{{MODULE}}/protocol/pb"
+)
+
+const terrainPlayer int64 = 97101
+
+type terrainCommit struct {
+	writes atomic.Int64
+	reject atomic.Bool
+	mu     sync.Mutex
+	last   dataengine.CommitRecord
+}
+
+func (c *terrainCommit) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("terrain injected commit failure")
+	}
+	c.mu.Lock()
+	c.last = record
+	c.mu.Unlock()
+	c.writes.Add(1)
+	return nil
+}
+func (c *terrainCommit) record() dataengine.CommitRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
+}
+
+type terrainFixture struct {
+	t          *testing.T
+	controller *Controller
+	access     *entity.ManagerAccess
+	engine     *nest.NestMgr
+	sync       *entitysync.Manager
+	scenes     *scenes.Manager
+	change     *scenecontroller.Controller
+	commit     *terrainCommit
+	registry   *app.Registry
+	stop       func(context.Context) error
+	registers  []func(*nest.NestMgr) error
+}
+
+// 提交器和同步传输是内存替身；其余为正式Pack/实体/DAO/Nest/场景/Walker/controller链。
+func newTerrainFixture(t *testing.T) *terrainFixture {
+	t.Helper()
+	return newTerrainFixtureWith(t, nil)
+}
+func newTerrainFixtureWith(t *testing.T, registers []func(*nest.NestMgr) error) *terrainFixture {
+	t.Helper()
+	player.RegisterEntity()
+	sceneentity.RegisterEntity()
+	chunk.RegisterEntity()
+	building.RegisterEntity()
+	f := &terrainFixture{t: t, access: entity.NewManagerAccess(entity.NewEntityManager()), commit: &terrainCommit{}, registers: registers}
+	for _, id := range []int64{terrainPlayer, terrainPlayer + 1} {
+		if _, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: id, Kind: player.EntityKindPlayer}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.start()
+	t.Cleanup(f.shutdown)
+	return f
+}
+func (f *terrainFixture) start() {
+	t := f.t
+	t.Helper()
+	var err error
+	f.sync, err = entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithEntitySync(f.sync), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range append([]func(*nest.NestMgr) error{handler.RegisterSceneChangeNestHandlersOn, handler.RegisterSceneCloseNestHandlersOn, handler.RegisterSceneDrainNestHandlersOn, handler.RegisterTerrainNestHandlersOn}, f.registers...) {
+		if err := register(f.engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	f.registry = app.NewRegistry(cfg)
+	for name, value := range map[app.ModName]any{mods.ModNest: f.engine, mods.ModEntityRuntime: f.access, mods.ModEntitySync: f.sync} {
+		if err := f.registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := scenes.Start(f.registry); err != nil {
+		t.Fatal(err)
+	}
+	f.scenes, err = scenes.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.stop, err = runtime.Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.controller, err = FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.change, err = scenecontroller.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{terrainPlayer, terrainPlayer + 1} {
+		if err := f.sync.OpenSession(entitysync.SessionID(id)); err != nil {
+			t.Fatal(err)
+		}
+		f.move(id, 0, 2)
+	}
+}
+func (f *terrainFixture) move(playerID, from, to int64) {
+	f.t.Helper()
+	if _, err := f.change.HandleSceneChange(&playeraccess.Context{PlayerID: playerID}, &pb.SceneChangeRequest{FromID: from, ToID: to}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+func (f *terrainFixture) shutdown() {
+	f.commit.reject.Store(false)
+	// Stop的成员排空由scene正式生命周期执行；失败保留诊断，不能跳过资源释放错误。
+	if err := f.scenes.Stop(context.Background()); err != nil {
+		f.t.Error(err)
+	}
+	if f.stop != nil {
+		if err := f.stop(context.Background()); err != nil {
+			f.t.Error(err)
+		}
+	}
+	if err := f.engine.Shutdown(context.Background()); err != nil {
+		f.t.Error(err)
+	}
+	if err := f.sync.Close(context.Background()); err != nil {
+		f.t.Error(err)
+	}
+	f.access.Manager().Range(func(value entity.IThreadSafeEntity) bool {
+		if p, ok := value.(*player.Player); ok {
+			p.ActorComp().OnDestroy(entity.DestroyReasonCommon)
+		}
+		value.OnDestroy(entity.DestroyReasonCommon)
+		return true
+	})
+}
+func (f *terrainFixture) world(id int64) *logic.World {
+	f.t.Helper()
+	world, err := f.controller.runtime.World(id)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return world
+}
+func (f *terrainFixture) execute(command logic.Command) (logic.Result, error) {
+	return f.controller.Execute(context.Background(), terrainPlayer, command)
+}
+func brush(seq int64) logic.Command {
+	return logic.Command{SceneID: 2, Sequence: seq, Op: "raise", X: 6400, Y: 6400, Radius: 150, Strength: 2}
+}
+func build(seq int64) logic.Command {
+	return logic.Command{SceneID: 2, Sequence: seq, Op: "build", X: 6300, Y: 6300}
+}
+func (f *terrainFixture) must(command logic.Command) logic.Result {
+	f.t.Helper()
+	result, err := f.execute(command)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return result
+}
+func (f *terrainFixture) query(key core.ChunkKey) logic.ChunkState {
+	f.t.Helper()
+	state, err := f.controller.runtime.Query(context.Background(), terrainPlayer, 2, key)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return state
+}
+func (f *terrainFixture) player(fn func(*player.Player)) {
+	f.t.Helper()
+	id, _ := entity.BuildEntityID(terrainPlayer, player.EntityKindPlayer)
+	if err := f.engine.RunLocal(context.Background(), func() {
+		value := f.access.Manager().Get(id).(*player.Player)
+		value.GetMutex().Lock()
+		defer value.GetMutex().Unlock()
+		fn(value)
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+func (f *terrainFixture) ledger(seq int64, count int32) {
+	f.t.Helper()
+	f.player(func(p *player.Player) {
+		s := p.Dao().GetTerrainLedger()
+		if s.GetSequence() != seq || s.GetBuildings() != count || s.ReplyLen() > 256 {
+			f.t.Errorf("ledger seq=%d buildings=%d reply=%d", s.GetSequence(), s.GetBuildings(), s.ReplyLen())
+		}
+	})
+}
+func (f *terrainFixture) open(id int64) {
+	f.t.Helper()
+	path, err := runtime.DefaultPack()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.t.Cleanup(func() { os.Remove(path) })
+	if _, err := f.controller.runtime.Open(context.Background(), id, path); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+type terrainDoc struct {
+	raw     []byte
+	schema  uint32
+	version uint64
+}
+type terrainAggregate struct {
+	id        int64
+	kind      entity.EntityKind
+	documents map[string]terrainDoc
+}
+
+// persistedSnapshot只准备整文档，不AcceptMutation；生成DAO和手写附加DAO走相同正式接口。
+func (f *terrainFixture) persistedSnapshot(dao entity.DaoInterface, owner int64) dataengine.Mutation {
+	f.t.Helper()
+	participant, ok := dao.(nest.MutationParticipant)
+	if !ok {
+		f.t.Errorf("DAO %T has no persistence participant", dao)
+		return dataengine.Mutation{}
+	}
+	mutation, err := participant.PrepareMutation(nest.PersistChange{Mask: dataengine.AllFields})
+	if err != nil {
+		f.t.Error(err)
+		return dataengine.Mutation{}
+	}
+	version := dao.(interface{ DirtyTracker() *dataengine.Tracker }).DirtyTracker().Version()
+	if mutation.Kind != dataengine.MutationPut || mutation.Key.ID != owner || mutation.Key.ID != dao.Id() || mutation.Key.Database != dao.DbName() || mutation.Key.Resource != dao.CollName() || mutation.Schema != dao.(dataengine.Descriptor).SchemaVersion() || mutation.ExpectedVersion != version || mutation.NextVersion != version+1 || len(mutation.Data) == 0 {
+		f.t.Errorf("invalid full persistence snapshot for %T: key=%+v schema=%d version=%d/%d", dao, mutation.Key, mutation.Schema, mutation.ExpectedVersion, mutation.NextVersion)
+	}
+	return mutation
+}
+
+// 初次Player持久写必须带齐尚无文档的附加DAO；精确比较每个键，不能把合法的完整聚合当成多写。
+func (f *terrainFixture) editMutationKeys(site bool) map[dataengine.DocumentKey]bool {
+	f.t.Helper()
+	want := map[dataengine.DocumentKey]bool{}
+	f.player(func(p *player.Player) {
+		p.RangeDao(func(dao entity.DaoInterface) {
+			m := f.persistedSnapshot(dao, p.ID())
+			if dao == p.Dao() || m.ExpectedVersion == 0 {
+				want[m.Key] = true
+			}
+		})
+	})
+	keys := []core.ChunkKey{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 0, Y: 1}, {X: 1, Y: 1}}
+	actual := f.world(2).Keys()
+	if len(actual) != 4 {
+		f.t.Fatalf("four-chunk fixture has %d keys", len(actual))
+	}
+	for _, key := range keys {
+		if !slices.Contains(actual, key) {
+			f.t.Fatalf("four-chunk fixture missing %v", key)
+		}
+		unique, _ := logic.ChunkUnique(2, key)
+		id, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+		want[dataengine.DocumentKey{Database: db.TerrainChunkDaoDBName, Resource: db.TerrainChunkDaoCollection, ID: id}] = true
+	}
+	if site {
+		unique, _ := logic.SiteUnique(2, 63, 63)
+		id, _ := entity.BuildEntityID(unique, building.EntityKindTerrainBuilding)
+		want[dataengine.DocumentKey{Database: db.TerrainBuildingDaoDBName, Resource: db.TerrainBuildingDaoCollection, ID: id}] = true
+	}
+	return want
+}
+func (f *terrainFixture) assertMutationKeys(record dataengine.CommitRecord, want map[dataengine.DocumentKey]bool) {
+	f.t.Helper()
+	if record.Durability != dataengine.DurabilityStrict || len(record.Mutations) != len(want) {
+		f.t.Fatalf("aggregate durability=%v documents=%d want=%d", record.Durability, len(record.Mutations), len(want))
+	}
+	for _, mutation := range record.Mutations {
+		if !want[mutation.Key] {
+			f.t.Fatalf("unexpected or repeated aggregate document %+v", mutation.Key)
+		}
+		delete(want, mutation.Key)
+	}
+	if len(want) != 0 {
+		f.t.Fatalf("missing aggregate documents %+v", want)
+	}
+}
+
+func (f *terrainFixture) documents() []terrainAggregate {
+	f.t.Helper()
+	var out []terrainAggregate
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.access.Manager().Range(func(value entity.IThreadSafeEntity) bool {
+			if value.GetEntityKind() == sceneentity.EntityKindScene {
+				return true
+			}
+			value.GetMutex().Lock()
+			defer value.GetMutex().Unlock()
+			a := terrainAggregate{id: value.ID(), kind: value.GetEntityKind(), documents: map[string]terrainDoc{}}
+			value.(entity.Guardable).RangeDao(func(dao entity.DaoInterface) {
+				mutation := f.persistedSnapshot(dao, a.id)
+				a.documents[dao.CollName()] = terrainDoc{mutation.Data, mutation.Schema, mutation.ExpectedVersion}
+			})
+			out = append(out, a)
+			return true
+		})
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	return out
+}
+func (f *terrainFixture) restart() {
+	f.t.Helper()
+	saved := f.documents()
+	f.shutdown()
+	f.access = entity.NewManagerAccess(entity.NewEntityManager())
+	for _, a := range saved {
+		daos := map[string]entity.DaoInterface{}
+		for _, builder := range entity.GetEntityBuilderParam(a.kind).DaoBuilders {
+			d := builder()
+			d.SetId(a.id)
+			doc := a.documents[d.CollName()]
+			if err := d.(entity.PersistedDaoLoader).RestorePersisted(doc.raw, doc.schema, doc.version); err != nil {
+				f.t.Fatal(err)
+			}
+			daos[d.CollName()] = d
+		}
+		value, err := entity.BuildEntity(&entity.EntityCreateParam{Id: a.id, Kind: a.kind, Dao: daos})
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		f.access.Manager().Add(value)
+	}
+	f.start()
+}
+
+func TestTerrainDefaultPackFeedsSceneAndActorWalker(t *testing.T) {
+	f := newTerrainFixture(t)
+	world := f.world(2)
+	if world.Meta().Chunks() != 4 || world.View.Len() != 4 {
+		t.Fatal("default pack not preloaded")
+	}
+	f.player(func(p *player.Player) {
+		env := p.ActorComp().Body().Environment()
+		if env.Surface != world.Walker || env.ID != world.SceneID {
+			t.Fatal("actor did not enter terrain surface")
+		}
+	})
+	if _, _, err := f.scenes.IDs(0, 1); err != nil {
+		t.Fatal("plain scene replaced")
+	}
+	if world.Blocked(spatial.Point{X: 6000, Y: 6000}) {
+		t.Fatal("default spawn blocked")
+	}
+}
+func TestTerrainBrushCommitsFourChunksAndPlayerLedger(t *testing.T) {
+	f := newTerrainFixture(t)
+	want := f.editMutationKeys(false)
+	result := f.must(brush(1))
+	record := f.commit.record()
+	if result.Changed == 0 {
+		t.Fatal("brush changed no points")
+	}
+	f.assertMutationKeys(record, want)
+	for _, key := range f.world(2).Keys() {
+		if f.query(key).Version != 2 {
+			t.Fatalf("chunk %v not changed", key)
+		}
+	}
+	f.ledger(1, 0)
+}
+func TestTerrainDuplicateEditIsReadOnly(t *testing.T) {
+	f := newTerrainFixture(t)
+	a := f.must(brush(1))
+	writes := f.commit.writes.Load()
+	b, err := f.execute(brush(1))
+	if err != nil || !b.Duplicate || b.Changed != a.Changed || f.commit.writes.Load() != writes {
+		t.Fatalf("duplicate edit did not recover: %+v %v", b, err)
+	}
+	f.ledger(1, 0)
+}
+func TestTerrainSequenceRejectsDifferentPayloadOldAndGap(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.must(brush(1))
+	writes := f.commit.writes.Load()
+	bad := brush(1)
+	bad.Strength = 3
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrSequence) {
+		t.Fatalf("digest=%v", err)
+	}
+	if _, err := f.execute(brush(3)); !errors.Is(err, logic.ErrSequence) {
+		t.Fatalf("gap=%v", err)
+	}
+	f.must(brush(2))
+	if _, err := f.execute(brush(1)); !errors.Is(err, logic.ErrSequence) {
+		t.Fatalf("old seq=%v", err)
+	}
+	if f.commit.writes.Load() != writes+1 {
+		t.Fatal("rejected sequence wrote")
+	}
+}
+func TestTerrainCrossSceneAuthorityIsCheckedInsideTransaction(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.open(3)
+	bad := brush(1)
+	bad.SceneID = 3
+	writes := f.commit.writes.Load()
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrDenied) {
+		t.Fatalf("cross-scene edit accepted: %v", err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("cross-scene wrote")
+	}
+}
+func TestTerrainRejectsFarAndMalformedBrushes(t *testing.T) {
+	f := newTerrainFixture(t)
+	writes := f.commit.writes.Load()
+	bad := brush(1)
+	bad.X = 10000
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrDenied) {
+		t.Fatalf("distance=%v", err)
+	}
+	bad = brush(1)
+	bad.Radius = logic.MaxRadius + 1
+	if _, err := f.execute(bad); err == nil {
+		t.Fatal("large brush accepted")
+	}
+	bad = brush(1)
+	bad.X = -1
+	if _, err := f.execute(bad); err == nil {
+		t.Fatal("negative coordinate accepted")
+	}
+	bad = brush(1)
+	bad.X = 6000
+	bad.Y = 6000
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrDenied) {
+		t.Fatalf("spawn edit=%v", err)
+	}
+	bad = build(1)
+	bad.X = 6000
+	bad.Y = 6000
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrDenied) {
+		t.Fatalf("spawn building=%v", err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("invalid edited")
+	}
+}
+func TestTerrainMapCoordinatesHaveIndependentPersistentIDs(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.must(brush(1))
+	f.open(3)
+	f.move(terrainPlayer, 2, 3)
+	state, err := f.controller.runtime.Query(context.Background(), terrainPlayer, 3, core.ChunkKey{X: 1, Y: 1})
+	if err != nil || state.Heights[0] != 100 {
+		t.Fatalf("maps shared edits: %+v %v", state, err)
+	}
+	a, _ := logic.ChunkUnique(2, core.ChunkKey{})
+	b, _ := logic.ChunkUnique(3, core.ChunkKey{})
+	x, _ := logic.SiteUnique(2, 1, 1)
+	y, _ := logic.SiteUnique(3, 1, 1)
+	if a == b || x == y {
+		t.Fatal("scene identity collision")
+	}
+}
+func TestTerrainBuildingLocksFourChunksSiteAndLedger(t *testing.T) {
+	f := newTerrainFixture(t)
+	want := f.editMutationKeys(true)
+	result := f.must(build(1))
+	record := f.commit.record()
+	if !result.Standing || result.BuildingID == 0 {
+		t.Fatalf("building result=%+v", result)
+	}
+	f.assertMutationKeys(record, want)
+	if !f.world(2).Blocked(spatial.Point{X: 6300, Y: 6300}) {
+		t.Fatal("committed building does not block Walker")
+	}
+	f.ledger(1, 1)
+}
+func TestTerrainBuildingOverlapAndForeignRemovalAreRejected(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.must(build(1))
+	writes := f.commit.writes.Load()
+	if _, err := f.controller.Execute(context.Background(), terrainPlayer+1, build(1)); !errors.Is(err, logic.ErrOccupied) {
+		t.Fatalf("overlap=%v", err)
+	}
+	command := build(1)
+	command.Op = "remove"
+	if _, err := f.controller.Execute(context.Background(), terrainPlayer+1, command); !errors.Is(err, logic.ErrDenied) {
+		t.Fatalf("foreign removal=%v", err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("rejected building operation wrote")
+	}
+	f.ledger(1, 1)
+}
+func TestTerrainBrushCannotEditUnderBuilding(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.must(build(1))
+	writes := f.commit.writes.Load()
+	if _, err := f.execute(brush(2)); !errors.Is(err, logic.ErrOccupied) {
+		t.Fatalf("building foundation edited: %v", err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("occupied brush wrote")
+	}
+	f.ledger(1, 1)
+}
+func TestTerrainRemoveReleasesLotsWithoutRestoringOldHeight(t *testing.T) {
+	f := newTerrainFixture(t)
+	command := brush(1)
+	command.X = 6300
+	command.Y = 6300
+	f.must(command)
+	f.must(build(2))
+	before := f.query(core.ChunkKey{})
+	command = build(3)
+	command.Op = "remove"
+	f.must(command)
+	after := f.query(core.ChunkKey{})
+	if !slices.Equal(before.Heights, after.Heights) || f.world(2).Blocked(spatial.Point{X: 6300, Y: 6300}) || len(after.Lots) != 0 {
+		t.Fatal("remove changed ground or kept occupancy")
+	}
+	f.ledger(3, 0)
+}
+func TestTerrainBrushCommitFailureRollsBackAllTargetsAndView(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.commit.reject.Store(true)
+	if _, err := f.execute(brush(1)); err == nil {
+		t.Fatal("rejected brush succeeded")
+	}
+	f.commit.reject.Store(false)
+	for _, key := range f.world(2).Keys() {
+		state := f.query(key)
+		_, version, _ := f.world(2).View.Chunk(key)
+		if state.Version != 1 || version != 1 {
+			t.Fatal("partial rollback or uncommitted overlay")
+		}
+	}
+	f.ledger(0, 0)
+	f.must(brush(1))
+}
+func TestTerrainBuildingCommitFailureDoesNotPublishOccupancy(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.commit.reject.Store(true)
+	if _, err := f.execute(build(1)); err == nil {
+		t.Fatal("rejected build succeeded")
+	}
+	f.commit.reject.Store(false)
+	if f.world(2).Blocked(spatial.Point{X: 6300, Y: 6300}) {
+		t.Fatal("uncommitted occupancy visible")
+	}
+	for _, key := range f.world(2).Keys() {
+		if len(f.query(key).Lots) != 0 {
+			t.Fatal("partial lots persisted")
+		}
+	}
+	f.ledger(0, 0)
+	f.must(build(1))
+}
+func TestTerrainConcurrentOverlappingBuildersHaveOneWinner(t *testing.T) {
+	f := newTerrainFixture(t)
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, id := range []int64{terrainPlayer, terrainPlayer + 1} {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			_, err := f.controller.Execute(context.Background(), id, build(1))
+			results <- err
+		}(id)
+	}
+	wg.Wait()
+	close(results)
+	wins := 0
+	for err := range results {
+		if err == nil {
+			wins++
+		} else if !errors.Is(err, logic.ErrOccupied) {
+			t.Fatal(err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("overlap winners=%d", wins)
+	}
+}
+func TestTerrainColdRestoreKeepsEditsLotsBuildingsAndSequence(t *testing.T) {
+	f := newTerrainFixture(t)
+	command := brush(1)
+	command.X = 5800
+	command.Y = 5800
+	f.must(command)
+	built := f.must(build(2))
+	before := f.query(core.ChunkKey{})
+	f.restart()
+	after := f.query(core.ChunkKey{})
+	if !slices.Equal(before.Heights, after.Heights) || !f.world(2).Blocked(spatial.Point{X: 6300, Y: 6300}) {
+		t.Fatal("cold state lost")
+	}
+	writes := f.commit.writes.Load()
+	result, err := f.execute(build(2))
+	if err != nil || !result.Duplicate || result.BuildingID != built.BuildingID || f.commit.writes.Load() != writes {
+		t.Fatalf("cold replay=%+v %v", result, err)
+	}
+	f.ledger(2, 1)
+	unique, _ := logic.ChunkUnique(2, core.ChunkKey{})
+	full, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+	wrong := db.NewTerrainChunkDao()
+	wrong.SetId(full + 1)
+	if _, err := entity.BuildEntity(&entity.EntityCreateParam{Id: full, Kind: chunk.EntityKindTerrainChunk, Dao: map[string]entity.DaoInterface{wrong.CollName(): wrong}}); err == nil {
+		t.Fatal("cold aggregate accepted a mismatched DAO identity")
+	}
+	// 一份形状合法但建筑占地缺半边的冷档：必须在Scene对客户端开放之前拒绝。
+	for _, aggregate := range f.documents() {
+		if aggregate.id != full {
+			continue
+		}
+		document := aggregate.documents["terrain_chunk"]
+		var stored bson.M
+		if err := bson.Unmarshal(document.raw, &stored); err != nil {
+			t.Fatal(err)
+		}
+		unique3, _ := logic.ChunkUnique(3, core.ChunkKey{})
+		full3, _ := entity.BuildEntityID(unique3, chunk.EntityKindTerrainChunk)
+		stored["_id"], stored["1"] = full3, int64(3)
+		raw, err := bson.Marshal(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		broken := db.NewTerrainChunkDao()
+		broken.SetId(full3)
+		if err := broken.RestorePersisted(raw, document.schema, document.version); err != nil {
+			t.Fatal(err)
+		}
+		value, err := entity.BuildEntity(&entity.EntityCreateParam{Id: full3, Kind: chunk.EntityKindTerrainChunk, Dao: map[string]entity.DaoInterface{broken.CollName(): broken}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.access.Manager().Add(value)
+		path, err := runtime.DefaultPack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(path)
+		if _, err := f.controller.runtime.Open(context.Background(), 3, path); err == nil {
+			t.Fatal("incomplete footprint opened")
+		}
+		if _, _, err := f.scenes.IDs(0, 3); err == nil {
+			t.Fatal("failed terrain was exposed as a scene")
+		}
+	}
+
+}
+func TestTerrainChangedPackRevisionDoesNotOverwriteEdits(t *testing.T) {
+	f := newTerrainFixture(t)
+	f.must(brush(1))
+	before := f.query(core.ChunkKey{})
+	file, err := os.CreateTemp(t.TempDir(), "changed-*.pack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := f.world(2).Meta()
+	meta.BaseRevision++
+	if _, err := core.WritePack(file, meta, core.Flat(meta, 50, 0)); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	world, err := logic.OpenWorld(2, file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer world.Pack.Close()
+	ids := []int64{}
+	for _, key := range world.Keys() {
+		unique, _ := logic.ChunkUnique(2, key)
+		id, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+		ids = append(ids, id)
+	}
+	writes := f.commit.writes.Load()
+	if _, err := sender.NewTerrainSender(f.engine).MultiGroupSync_TerrainLoad(context.Background(), ids, world); !errors.Is(err, logic.ErrBase) {
+		t.Fatalf("base mismatch=%v", err)
+	}
+	if after := f.query(core.ChunkKey{}); after.Version != before.Version || !slices.Equal(after.Heights, before.Heights) || f.commit.writes.Load() != writes {
+		t.Fatal("pack change overwrote edit")
+	}
+}
+func TestTerrainBuildingLedgerHasExplicitCapacity(t *testing.T) {
+	f := newTerrainFixture(t)
+	for i := int64(0); i < int64(logic.MaxBuildings); i++ {
+		command := build(i + 1)
+		command.X = 6100 + (i%8)*200
+		command.Y = 5700 + (i/8)*200
+		f.must(command)
+	}
+	command := build(33)
+	command.X = 5500
+	command.Y = 5500
+	if _, err := f.execute(command); !errors.Is(err, logic.ErrFull) {
+		t.Fatalf("building capacity=%v", err)
+	}
+	f.ledger(32, 32)
+}
+func TestTerrainPackerExposesGroundAndHidesAuthorityLots(t *testing.T) {
+	f := newTerrainFixture(t)
+	built := f.must(build(1))
+	unique, _ := logic.ChunkUnique(2, core.ChunkKey{})
+	id, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+	if err := f.engine.RunLocal(context.Background(), func() {
+		value := f.access.Manager().Get(id).(*chunk.TerrainChunk)
+		value.GetMutex().Lock()
+		defer value.GetMutex().Unlock()
+		packer := chunk.NewTerrainChunkSyncPacker(value)
+		payload, err := packer.PackSubjectSnapshot(gamescene.Public)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		copy := db.NewTerrainChunkDao()
+		if err := copy.ApplySync(payload.BytesCopy()); err != nil {
+			t.Error(err)
+		}
+		if copy.HeightsLen() != core.ChunkPoints || copy.LotsLen() != 0 || copy.GetSceneID() != 2 {
+			t.Error("sync authority leaked or ground missing")
+		}
+		if _, err := packer.PackSubjectSnapshot(entity.SyncProfile{Key: "admin"}); !errors.Is(err, entity.ErrSyncViewUnknown) {
+			t.Error("unknown sync view allowed")
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sync.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	scene := f.access.Manager().Get(f.world(2).SceneID).(*sceneentity.Scene)
+	if !slices.Contains(scene.Space().Nearby(terrainPlayer), built.BuildingID) {
+		t.Fatal("building not registered in scene sync")
+	}
+}
+func TestTerrainProjectionFailureKeepsFactAndRefreshRepairs(t *testing.T) {
+	f := newTerrainFixture(t)
+	world := f.world(2)
+	publish := world.SiteCommit
+	world.SiteCommit = func(entity.IThreadSafeEntity, spatial.Point, bool) error {
+		return errors.New("injected publication failure")
+	}
+	result := f.must(build(1))
+	if !result.ProjectionPending || world.Failures() == 0 {
+		t.Fatal("publication failure was silent")
+	}
+	f.ledger(1, 1)
+	world.SiteCommit = publish
+	writes := f.commit.writes.Load()
+	if err := f.controller.runtime.Refresh(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if world.Failures() != 0 || f.commit.writes.Load() != writes {
+		t.Fatal("refresh changed durable fact or kept pending")
+	}
+}
+func TestTerrainPBEndpointsUseAuthenticatedIdentityAndGeneratedCodec(t *testing.T) {
+	f := newTerrainFixture(t)
+	raw, err := pb.MarshalTerrainBrushRequest(&pb.TerrainBrushRequest{SceneID: 2, Sequence: 1, Op: "paint", X: 6400, Y: 6400, Radius: 150, Material: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pb.UnmarshalTerrainBrushRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := f.controller.HandleTerrainBrush(&playeraccess.Context{PlayerID: terrainPlayer}, request)
+	if err != nil || response.Code != 0 || response.Result.Changed == 0 {
+		t.Fatalf("PB edit=%+v %v", response, err)
+	}
+	query, err := f.controller.HandleTerrainQuery(&playeraccess.Context{PlayerID: terrainPlayer}, &pb.TerrainQueryRequest{SceneID: 2, X: 1, Y: 1})
+	if err != nil || query.Code != 0 || query.LastSequence != 1 || query.Chunk.Materials[0] != 3 || len(query.Chunk.Heights) != core.ChunkPoints {
+		t.Fatalf("PB query=%+v %v", query, err)
+	}
+	if _, err := f.controller.HandleTerrainBrush(nil, request); err == nil {
+		t.Fatal("unauthenticated accepted")
+	}
+}
+func TestTerrainCorruptPackAndMapBudgetAreRejected(t *testing.T) {
+	f := newTerrainFixture(t)
+	bad := filepath.Join(t.TempDir(), "bad.pack")
+	if err := os.WriteFile(bad, []byte("corrupt"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logic.OpenWorld(3, bad); err == nil {
+		t.Fatal("corrupt pack accepted")
+	}
+	f.open(3)
+	f.open(4)
+	f.open(5)
+	path, err := runtime.DefaultPack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	if _, err := f.controller.runtime.Open(context.Background(), 6, path); !errors.Is(err, logic.ErrFull) {
+		t.Fatalf("map capacity=%v", err)
+	}
+}
+func TestTerrainMutationsDetectReplayAndSceneGuardRegression(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := filepath.Abs(filepath.Join(dir, "../../entities/player/terrain_component.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ before, after, test, marker string }{
+		{"if command.Sequence == seq {", "if command.Sequence == seq && false {", "TestTerrainDuplicateEditIsReadOnly", "duplicate edit did not recover"},
+		{"body.Map.SceneID() != sceneID", "false", "TestTerrainCrossSceneAuthorityIsCheckedInsideTransaction", "cross-scene edit accepted"},
+	}
+	for _, c := range cases {
+		if strings.Count(string(source), c.before) != 1 {
+			t.Fatal("mutation anchor changed")
+		}
+		scratch := t.TempDir()
+		replacement := filepath.Join(scratch, "mutant.go")
+		if err := os.WriteFile(replacement, []byte(strings.Replace(string(source), c.before, c.after, 1)), 0644); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(map[string]map[string]string{"Replace": {path: replacement}})
+		overlay := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlay, raw, 0644); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		compile := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-overlay", overlay, "-run", "^$", ".")
+		compile.Env = append(os.Environ(), "GOWORK=off")
+		if out, err := compile.CombinedOutput(); err != nil {
+			cancel()
+			t.Fatalf("mutant did not compile: %v\n%s", err, out)
+		}
+		command := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-count=1", "-overlay", overlay, "-run", "^"+c.test+"$", ".")
+		command.Env = append(os.Environ(), "GOWORK=off")
+		out, err := command.CombinedOutput()
+		cancel()
+		if err == nil || !strings.Contains(string(out), c.marker) {
+			t.Fatalf("mutant survived: %v\n%s", err, out)
+		}
+	}
+}
+
+// 正式module逆序Stop：terrain先停，只排空自己开的图，plain/别的scene保持可用。
+func TestTerrainStopDrainsOnlyTerrainMaps(t *testing.T) {
+	f := newTerrainFixture(t)
+	world := f.world(2)
+	if err := f.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.scenes.IDs(0, 1); err != nil {
+		t.Fatal("terrain stop closed plain scene")
+	}
+	if _, err := f.controller.runtime.World(2); err == nil {
+		t.Fatal("drained terrain still open")
+	}
+	f.player(func(p *player.Player) {
+		if p.ActorComp().Body().Map.SceneID() != 0 {
+			t.Error("actor kept closed terrain membership")
+		}
+	})
+	if _, err := world.Pack.ReadChunk(core.ChunkKey{}); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("pack resource not closed: %v", err)
+	}
+}

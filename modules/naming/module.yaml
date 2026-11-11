@@ -1,0 +1,21 @@
+name: naming
+summary: 全服唯一名字：Player 持久改名状态机、directory 两阶段占名、重试恢复和旧名安全释放；统一接管 profile 改名协议
+requires: [profile]
+conflicts: []
+needs:
+  mods: [nest, directory]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - field: Naming
+    type: NamingState
+    store: naming
+    dao: persist
+    comment: Naming 是有界的改名意图、目录凭据与上一笔回执；不向客户端同步目录 token。
+component: Naming
+protocols: [NamingRename]
+errcodes: [naming_busy, naming_invalid, naming_required]
+verify:
+  packages: [./game/controllers/naming]
+  run: ^TestNaming
+  pass: 15

@@ -1,0 +1,25 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	scene "{{MODULE}}/game/entities/scene"
+)
+
+//roost:nest rollback=undo durability=async
+func handlerSceneBeginClosing(target scene.ISceneEntity) []int64 {
+	return target.Scene().BeginClosing()
+}
+
+// handlerSceneEvacuate 仅供停机入口。若角色已卸载重建且不再此图，仍能清掉旧进场账本。
+//
+//roost:nest rollback=undo durability=async
+func handlerSceneEvacuate(target player.IActorEntity, area scene.ISceneEntity) error {
+	body := target.ActorComp().Body()
+	if body.Map.SceneID() == area.ID() {
+		if err := body.Leave(); err != nil {
+			return err
+		}
+	}
+	area.Scene().Depart(target.ID())
+	return nil
+}

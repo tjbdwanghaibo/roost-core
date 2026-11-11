@@ -1,0 +1,25 @@
+package dbdef
+
+// NamingState 最多一笔在途与一笔最近回执。Seq 不复用，目录 owner 含 Seq，旧清理不能删新一代名字。
+type NamingState struct {
+	// Seq 是单调递增的改名代际，不回收也不绕回。
+	Seq          int64  `store:"1"`
+	// Operation 是当前在途或最近一次已完成请求的有界幂等键。
+	Operation    string `store:"2"`
+	// Target 是经 profile 校验后的显示名。
+	Target       string `store:"3"`
+	// Phase 为 0 完成、1 已受理、2 已记 claim、3 已写档案待清旧名。
+	Phase        int32  `store:"4"`
+	// ClaimKey 是目录返回的规范化键，不能自行拼写替代。
+	ClaimKey     string `store:"5"`
+	// ClaimToken 是目录凭据，只落库，不同步到客户端。
+	ClaimToken   string `store:"6"`
+	// CurrentKey 是当前显示名对应的已提交目录键。
+	CurrentKey   string `store:"7"`
+	// CurrentOwner 是当前目录 owner，含 PlayerID 与改名代际。
+	CurrentOwner string `store:"8"`
+	// OldKey 是这笔操作完成后需要释放的旧名。
+	OldKey       string `store:"9"`
+	// OldOwner 是旧名原来的 owner，晚到清理必须携带它。
+	OldOwner     string `store:"10"`
+}

@@ -1,0 +1,22 @@
+package dbdef
+
+// GachaState 的池号发布后不得复用；删表行不会清掉保底，否则热更会让旧玩家失去进度。
+// 不自动清理，至多记64池；大型轮换卡池需在工程中明确设计赛季/迁移规则。
+type GachaState struct {
+	Misses map[int64]int64 `store:"1"`
+}
+
+// GachaLedger 是有界短期防重窗口。窗口外的旧键会被当作新请求，客户端不得重放旧业务。
+type GachaLedger struct {
+	Receipts map[string]*GachaReceipt `store:"1"`
+	NextSeq  int64                    `store:"2"`
+}
+type GachaReceipt struct {
+	PoolID  int64   `store:"1"`
+	Count   int64   `store:"2"`
+	Cost    int64   `store:"3"`
+	Balance int64   `store:"4"`
+	Items   []int64 `store:"5"`
+	Misses  int64   `store:"6"`
+	Seq     int64   `store:"7"`
+}

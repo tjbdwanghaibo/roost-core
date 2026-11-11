@@ -12,7 +12,7 @@ replaces: [internal/service/chat/collaborators.go]
 verify:
   packages: [./game/chat, ./game/controllers/chat, ./internal/service/chat]
   run: ^TestChat
-  pass: 8
+  pass: 10
 with:
   enter:
     summary: 玩家进入游戏时加进世界频道的在线名单

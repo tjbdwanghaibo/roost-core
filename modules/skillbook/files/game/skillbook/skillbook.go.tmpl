@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sort"
 	"sync/atomic"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 
 	"{{MODULE}}/game/skills"
 )
@@ -19,6 +21,8 @@ type Catalog struct {
 	ids      []string
 	warnings int32
 	stopped  atomic.Bool
+	programs map[string]*skill.Program
+	digests  map[string]string
 }
 
 // Start 在业务 Init 前编译并发布目录；失败不会发布半份结果。
@@ -37,9 +41,12 @@ func start(registry *app.Registry, compile func() (*skills.Catalog, error)) (fun
 	if compiled == nil {
 		return nil, fmt.Errorf("skillbook: compiler returned no catalog")
 	}
-	catalog := &Catalog{}
-	for id := range compiled.Programs {
+	catalog := &Catalog{programs: maps.Clone(compiled.Programs), digests: make(map[string]string, len(compiled.Programs))}
+	for id, program := range compiled.Programs {
 		catalog.ids = append(catalog.ids, id)
+		if program != nil {
+			catalog.digests[id] = skill.Inspect(program).Identity.GameplayDigest
+		}
 	}
 	sort.Strings(catalog.ids)
 	for _, diagnostics := range compiled.Diagnostics {
@@ -50,6 +57,42 @@ func start(registry *app.Registry, compile func() (*skills.Catalog, error)) (fun
 	}
 	slog.Info("skill catalog compiled", "skills", len(catalog.ids), "warnings", catalog.warnings)
 	return func(context.Context) error { catalog.stopped.Store(true); return nil }, nil
+}
+
+// LookupProgram 返回启动时已经编译的只读 Program。Program 的状态不导出，实际施法状态归各自 Runtime。
+// 不在每次请求重新编译，目录副本也不暴露给调用方修改。
+func LookupProgram(registry *app.Registry, id string) (*skill.Program, error) {
+	catalog, ok := app.Lookup[*Catalog](registry, Capability)
+	if !ok || catalog == nil {
+		return nil, fmt.Errorf("skillbook: catalog is not running")
+	}
+	return catalog.lookup(id, "")
+}
+
+func Resolver(registry *app.Registry) (skill.ProgramResolver, error) {
+	catalog, ok := app.Lookup[*Catalog](registry, Capability)
+	if !ok || catalog == nil || catalog.stopped.Load() {
+		return nil, fmt.Errorf("skillbook: catalog is not running")
+	}
+	return catalog, nil
+}
+
+// ResolveProgram 恢复 checkpoint 时同时校验游戏逻辑摘要；不能把同名但已改规则的技能接到旧施法上。
+func (catalog *Catalog) ResolveProgram(id, digest string) (*skill.Program, error) {
+	if digest == "" {
+		return nil, fmt.Errorf("%w: empty gameplay digest", skill.ErrCheckpointProgram)
+	}
+	return catalog.lookup(id, digest)
+}
+func (catalog *Catalog) lookup(id, digest string) (*skill.Program, error) {
+	if catalog == nil || catalog.stopped.Load() {
+		return nil, fmt.Errorf("skillbook: catalog is not running")
+	}
+	program := catalog.programs[id]
+	if program == nil || digest != "" && catalog.digests[id] != digest {
+		return nil, fmt.Errorf("%w: %q", skill.ErrCheckpointProgram, id)
+	}
+	return program, nil
 }
 
 // Read 返回独立的响应数据，不让调用方修改启动目录。

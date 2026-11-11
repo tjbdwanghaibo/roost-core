@@ -102,6 +102,21 @@ func demoSourceFiles() ([]string, error) {
 	return out, err
 }
 
+// writeDemoActorBody 让分区世界示例与 actor 模块共用同一份移动机制。
+// demo 的 MapComponent 仍负责其分区、地形与连接规则，因此不安装另一套闲置的 Actor 组件和 DAO 状态。
+func writeDemoActorBody(root, gameService string) error {
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		return err
+	}
+	const rel = "game/actor/body.go"
+	body, err := renderModuleFile(manifest, gameService, ModuleSpec{Name: "actor"}, "files", rel, nil)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644)
+}
+
 // applyDemoTemplate is the game template plus what the demo's own code needs
 // from the manifest: protocol (its request message), dao (its persistent
 // Player state), config (the item table) and errcode (its coded failures).
@@ -429,7 +444,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}, why: "persistence for the Player's components"},
 		{write: "db/restore_test.go", why: "current schema restores; mismatched schemas leave DAO unchanged"},
 		{write: "db/def/player.go", why: "the persistent fields the generated mutators are built from"},
-		{write: "db/migrations/player.go", why: "the offline schema 1 -> 2 step (flat weapon_id becomes an equipment slot) and its check through the generated RestorePersisted"},
+		{write: "db/migrations/player.go", why: "the offline schema 1 -> current step (flat weapon_id becomes an equipment slot) and its check through the generated RestorePersisted"},
 		{write: "db/migrations/offline.go", why: "offline migration on a stopped collection: dry-run, backup, conditional rewrite, verify and rollback"},
 		{write: "db/migrations/player_test.go", why: "plan writes nothing, apply backs up and rewrites, any failed check writes nothing, a live writer stops the run, rollback refuses documents written afterwards; the same flow on real Mongo"},
 		{write: "cmd/schemamigrate/main.go", why: "the operator tool for the migration: plan | apply | verify | rollback against the game's Mongo"},
@@ -465,16 +480,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/purchase_grant.go", why: "a grant with no order id or no payment moment cannot be made exactly-once"},
 		{write: "internal/errors/player_elsewhere.go", why: "a login that lands on a server the player is not bound to is refused by name, not served from a second copy of their Entity"},
 		{write: "internal/errors/login_timeout.go", why: "a login whose claim or cold load outlived its budget is answered by name and retried, not held on the connection"},
-		{write: "game/gameplay/attribute/combat.go", why: "the attribute profile: three attributes, one derived by formula, plus the dirty mask the generator writes through"},
-		{write: "game/gameplay/attribute/combat_test.go", why: "the derived attribute follows its inputs and a container snapshot is a copy"},
-		{write: "game/equipment/equipment.go", why: "which slots exist and what may go in one: a game decision, not the DAO's"},
-		{write: "game/entities/player/equipment_component.go", why: "the demo's one nested write path: a struct in the DAO holding a map of pointers to another struct"},
 		{write: "game/entities/player/equipment_component_test.go", why: "the nested write path both ways: a change two levels down reaches storage, a piece that came off stops reaching it"},
 		{write: "game/entities/player/map_component.go", why: "where the player is and how it walks: movement.MapBasic over the DAO, a Behavior whose MoveTo / Follow run on the player's own heartbeat, and the teleport kept as the reference path"},
-		{write: "game/actor/actor.go", why: "what every thing that acts on the map shares: the heartbeat driver, the action vocabulary, the state catalog, and the Space that reports moves to the AOI"},
+		{run: writeDemoActorBody, why: "the same Body implementation as the actor module; the partitioned-world demo only keeps its own adapters"},
+		{write: "game/actor/actor.go", why: "the demo's heartbeat driver, action vocabulary and partitioned-world rules around the shared Body"},
 		{write: "game/actor/patrol.go", why: "the monster's AI: walk the corners on its own heartbeat, and never ask whether it is rooted — the state gate does"},
 		{write: "game/actor/patrol_test.go", why: "the patrol decides only when the move group is idle and not frozen, and a refused start retries the same corner"},
-		{write: "game/entities/player/attribute_component.go", why: "the attribute container wired into an Entity: layers decided, composed, persisted and replicated"},
 		{write: "game/entities/player/attribute_component_test.go", why: "the composition rule as a test: Final = Base + Gear with the derived attribute computed once over the composed inputs"},
 		{write: "game/clientsync/decode.go", why: "typed DAO Protobuf patches for client and robot views"},
 		{write: "game/entities/player/sync_packer.go", why: "the client-facing half of sync=true: who serializes a subject, by profile and by dirty mask"},
@@ -532,8 +543,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/gift_debit.go", why: "the saga's debit step as a Nest transaction: Remove plus the command's receipt and completion, all in one WAL record"},
 		{write: "game/handler/gift_refund.go", why: "debit's compensation, with the same saga identity: Add plus the receipt and completion; a compensation that runs twice is as wrong as a step that does"},
 		{write: "game/handler/claim_dungeon.go", why: "the clear reward, paid at most once per run: the claim ledger and the reward commit together, so a replay pays nothing"},
-		{add: &AddOptions{Kind: "handler", Name: "EquipItem", Entity: "Player", Component: "Equipment"}, why: "taking an item out of the bag and putting it on must commit together, or the item is lost or duplicated"},
-		{write: "game/handler/equip_item.go", why: "one transaction over three components: bag, equipment and the attribute layer that follows them"},
 		{write: "game/handler/add_item_test.go", why: "a grant that would overflow the stored count is refused before the bag is written, through the real handler and Sender"},
 		{write: "game/handler/add_exp_test.go", why: "experience and level overflow is refused atomically across Player, World and reward ledger"},
 		{write: "game/handler/claim_harness_test.go", why: "the harness the handler tests share: one entity behind a Getter, a committer that keeps the record, the project's own config data, and a business clock a test can pin"},
@@ -589,9 +598,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "MoveTarget", Group: "game", Handler: "player"}, why: "the server-driven movement endpoint: the client sends a goal"},
 		{write: "protocol/def/move_target.go", why: "a point or a player to follow in, the walk's action id and the start position out"},
 		{write: "game/controllers/player/move_target.go", why: "resolve the scene, start the walk, answer with where it starts"},
-		{add: &AddOptions{Kind: "protocol", Name: "Equip", Group: "game", Handler: "player"}, why: "wearing an item: the slot is the item's property, not the client's choice"},
-		{write: "protocol/def/equip.go", why: "ask with an item id, get back the slot it went in and what came off"},
-		{write: "game/controllers/player/equip.go", why: "the endpoint only addresses the transaction; every decision is under the Player's lock"},
 		{write: "game/activity/activity.go", why: "what this game means by a timed server-wide event: window ids derived from the clock, what a point is worth, what settlement pays, and the board the game keeps because the coordinator has no enumeration"},
 		{write: "game/effects/activity_phase.go", why: "the timer's effect: a bus call recorded inside the World's lock and made outside it"},
 		{write: "game/entities/world/timer_component.go", why: "the World's timers, hand-written on the framework's entity timer runtime: persisted in WorldDao, rebuilt per call, fired inside the transaction that removes the node, the earliest deadline indexed by the framework's driver (the demo does not use roost add timer)"},
@@ -816,7 +822,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // （落点已被占用时安装器拒绝安装）。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding"},
+		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome", "attribute", "equipment"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding"},
 		{write: "game/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件。协议多几个字段，
 		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
@@ -834,6 +840,7 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 行是 demo 的四种道具。背包的规则文件 bag_items.go 用模块的缺省实现（读这张表），不覆盖。
 		{write: "configs/schema/item.go", why: "the bag module's item table with the demo's two extra columns: what a worn item adds to attack and hp"},
 		{write: "configs/table/item.csv", why: "the demo's rows: two potions, a sword, the gold coin; converted to configs/data/item.json by generate"},
+		{write: "configs/table/equipment_item.csv", why: "the demo equipment rules; transaction and attribute linkage belong to the modules"},
 		// demo 自己的两个文件：充值订单的领取账本（给模块的 BagComponent 加方法；邮件的领取账本是 mailbox 模块的），
 		// 以及背包变化经提交观察者同步给本人的断言。
 		{write: "game/entities/player/claim_ledgers.go", why: "the paid-order claim ledger: the demo's own method on the module's Bag component, so a claim and its items stay one transaction"},

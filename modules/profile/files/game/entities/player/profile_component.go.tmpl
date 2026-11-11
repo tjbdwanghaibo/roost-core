@@ -55,14 +55,14 @@ const ProfileNameMaxRunes = 16
 // 要换成按等级查表的曲线时改 planExp，并保持“不按升级数逐级循环”（见那里的说明）。
 const ProfileExpPerLevel int64 = 100
 
-// Rename 把显示名改成 name 去掉首尾空白之后的结果，并返回存下的名字。
+// NormalizeProfileName 只校验并返回去掉首尾空白的名字，不写实体，也不执行 I/O。
 // 拒绝且不写任何字段的情况：不是合法 UTF-8（profile_name_invalid）、去掉首尾空白后为空
 // （profile_name_empty）、去掉首尾空白后超过 ProfileNameMaxRunes 个字符（profile_name_long）。
 //
 // 编码要单独查：数字符时一个坏字节算一个字符，不查的话 16 个以内的坏字节序列会通过另外两条检查存进档里，
 // 之后同步给客户端的就是一段解不出来的名字。
-// 这里不查重名、不查敏感词、不限改名次数与花费：那些是项目自己的规则，加在这个函数里、写入之前。
-func (component *ProfileComponent) Rename(name string) (string, error) {
+// 全服唯一性由 naming 正式入口保证；敏感词、次数与花费仍是工程自己的受理规则。
+func NormalizeProfileName(name string) (string, error) {
 	if !utf8.ValidString(name) {
 		return "", apperrors.ErrProfileNameInvalid
 	}
@@ -72,6 +72,16 @@ func (component *ProfileComponent) Rename(name string) (string, error) {
 	}
 	if utf8.RuneCountInString(name) > ProfileNameMaxRunes {
 		return "", apperrors.ErrProfileNameLong
+	}
+	return name, nil
+}
+
+// Rename 是可信 Nest 事务内的字段原语。装有 naming 时，业务改名必须调用 naming 协调器；
+// 它只在目录 Commit 成功后调用这里，直接改 DAO 或直接调用本方法均不属于唯一命名入口。
+func (component *ProfileComponent) Rename(name string) (string, error) {
+	name, err := NormalizeProfileName(name)
+	if err != nil {
+		return "", err
 	}
 	component.owner.Dao().GetProfile().SetName(name)
 	return name, nil
@@ -134,6 +144,10 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 	from := profile.GetLevel()
 	profile.SetLevel(from + gained)
 	if err := component.onLevelUp(from, from+gained); err != nil {
+		return 0, err
+	}
+	// 工程钩子先执行，再按登记名执行模块钩子；任一个失败都交给同一笔 Nest 事务回滚。
+	if err := runProfileLevelUp(component, from, from+gained); err != nil {
 		return 0, err
 	}
 	return gained, nil

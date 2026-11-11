@@ -1,0 +1,17 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrCombatInvalid  = errcode.Define({{ID:errcode:combat_invalid}}, "combat_invalid", "invalid combat request")
+	ErrCombatSequence = errcode.Define({{ID:errcode:combat_sequence}}, "combat_sequence", "combat sequence must be next or exact latest retry")
+	ErrCombatConflict = errcode.Define({{ID:errcode:combat_conflict}}, "combat_conflict", "combat sequence has a different request")
+	ErrCombatBoundary = errcode.Define({{ID:errcode:combat_boundary}}, "combat_boundary", "combat checkpoint world is inconsistent")
+	ErrCombatBusy     = errcode.Define({{ID:errcode:combat_busy}}, "combat_busy", "participants belong to a different combat session")
+	ErrCombatScene    = errcode.Define({{ID:errcode:combat_scene}}, "combat_scene", "combat requires the same positive scene")
+	ErrCombatRange    = errcode.Define({{ID:errcode:combat_range}}, "combat_range", "combat target is out of range")
+	ErrCombatConsent  = errcode.Define({{ID:errcode:combat_consent}}, "combat_consent", "both participants must consent")
+	ErrCombatDead     = errcode.Define({{ID:errcode:combat_dead}}, "combat_dead", "combat participant is not alive")
+	ErrCombatSilenced = errcode.Define({{ID:errcode:combat_silenced}}, "combat_silenced", "actor state prevents casting")
+	ErrCombatSkill    = errcode.Define({{ID:errcode:combat_skill}}, "combat_skill", "skill was rejected")
+)

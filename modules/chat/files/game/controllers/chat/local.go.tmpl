@@ -1,0 +1,19 @@
+package chat
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// LocalChannel 供可选业务模块登记瞬时频道。统一端点已验证文本；实现必须自行检查角色权限与收件范围。
+// 只在 init 登记，不经 chat 服务存储；Seq=0 表示没有历史游标，不承诺重发去重或可靠送达。
+type LocalChannel func(*Controller, *playeraccess.Context, *pb.ChatSendRequest) (*pb.ChatSendResponse, error)
+
+var localChannels = map[string]LocalChannel{}
+
+func OnLocalChannel(name string, send LocalChannel) {
+	if name == "" || name == "world" || name == "private" || name == "system" || name == "group" || send == nil || localChannels[name] != nil {
+		panic("chat: invalid/duplicate local channel")
+	}
+	localChannels[name] = send
+}

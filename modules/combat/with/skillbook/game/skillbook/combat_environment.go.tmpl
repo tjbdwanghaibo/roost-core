@@ -1,0 +1,12 @@
+package skillbook
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+
+// 战斗目录与服务启动、doctor使用同一编译环境。状态tag由StatusBridge的Category提供。
+func init() {
+	OnCompileEnvironment("combat", func(e *skill.CompileEnvironment) {
+		e.Gameplay.Statuses.Entries = append(e.Gameplay.Statuses.Entries,
+			skill.StatusCatalogEntry{Handle: 10, Key: "stun", Category: "root", RefreshPolicy: "refresh", MaxStacks: 1, DispelCategory: "control", TenacityPolicy: "none", SourceOwnership: "source", RemovalPolicy: "expire", Polarity: "negative", Dispellable: true, MaximumDurationTicks: 600},
+			skill.StatusCatalogEntry{Handle: 11, Key: "silence", Category: "silence", RefreshPolicy: "refresh", MaxStacks: 1, DispelCategory: "control", TenacityPolicy: "none", SourceOwnership: "source", RemovalPolicy: "expire", Polarity: "negative", Dispellable: true, MaximumDurationTicks: 600})
+	})
+}

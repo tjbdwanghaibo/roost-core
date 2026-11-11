@@ -1,0 +1,45 @@
+{
+  "schema": "roost.skill/v2",
+  "id": "skill.{{PROJECT}}.combat.stun",
+  "name": "stun",
+  "description": "Application-owned duel rule.",
+  "activation": {
+    "type": "active",
+    "policy": {
+      "mode": "tap"
+    }
+  },
+  "input_schema": {
+    "type": "entity"
+  },
+  "cooldown_ticks": 20,
+  "costs": [],
+  "memory": {},
+  "initial_phase": "cast",
+  "phases": [
+    {
+      "id": "cast",
+      "timeout_ticks": 0,
+      "on": {
+        "enter": {
+          "flow": "sequence",
+          "steps": [
+            {
+              "flow": "effect",
+              "effect": {
+                "type": "add_status",
+                "target": "$input.target",
+                "status": "stun",
+                "duration_ticks": 20,
+                "stacks": 1
+              }
+            },
+            {
+              "flow": "finish"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

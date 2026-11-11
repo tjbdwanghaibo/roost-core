@@ -1,0 +1,131 @@
+// Package terrain 保存本工程地形规则；框架的Pack/View/Brush/Walker负责原始数据与算法。
+package terrain
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+const MaxMaps = 4
+const MaxSceneID int64 = (1 << 20) - 1
+const MaxBuildings int32 = 32
+const EditReach int64 = 1600
+const MaxRadius int64 = 400
+
+var ErrInvalid = errors.New("terrain: invalid request")
+var ErrDenied = errors.New("terrain: scene, distance or ownership denied")
+var ErrSequence = errors.New("terrain: stale, conflicting or nonconsecutive sequence")
+var ErrOccupied = errors.New("terrain: occupied footprint")
+var ErrBase = errors.New("terrain: persisted base revision requires explicit migration")
+var ErrFull = errors.New("terrain: building limit")
+
+// Command只由controller规范化；客户端不给块ID、owner或地形数组。摘要包含完整操作与地图身份。
+type Command struct {
+	SceneID  int64
+	Sequence int64
+	Op       string
+	X, Y     int64
+	Radius   int64
+	Strength uint16
+	Material byte
+}
+
+func (c Command) Digest() string {
+	raw, _ := json.Marshal(c)
+	return fmt.Sprintf("%x", sha256.Sum256(raw))
+}
+func (c Command) Point() spatial.Point { return spatial.Point{X: c.X, Y: c.Y} }
+func (c Command) Brush() core.Brush {
+	op := core.BrushRaise
+	switch c.Op {
+	case "lower":
+		op = core.BrushLower
+	case "paint":
+		op = core.BrushPaint
+	}
+	return core.Brush{Op: op, X: c.X, Y: c.Y, Radius: c.Radius, Strength: c.Strength, Material: c.Material, Falloff: core.FalloffConstant}
+}
+func (c Command) Validate(meta core.Meta) error {
+	if c.SceneID < 2 || c.SceneID > MaxSceneID || c.Sequence < 1 || !meta.Bounds().Contains(c.Point()) {
+		return ErrInvalid
+	}
+	switch c.Op {
+	case "raise", "lower":
+		if c.Strength < 1 || c.Strength > 20 || c.Material != 0 {
+			return ErrInvalid
+		}
+	case "paint":
+		if c.Material > 4 || c.Strength != 0 {
+			return ErrInvalid
+		}
+	case "build", "remove":
+		if c.X%core.SampleSpacing != 0 || c.Y%core.SampleSpacing != 0 || c.X/core.SampleSpacing+1 >= int64(meta.ChunksX)*core.ChunkSamples || c.Y/core.SampleSpacing+1 >= int64(meta.ChunksY)*core.ChunkSamples || c.Radius != 0 || c.Strength != 0 || c.Material != 0 {
+			return ErrInvalid
+		}
+		return nil
+	default:
+		return ErrInvalid
+	}
+	if c.Radius < 1 || c.Radius > MaxRadius {
+		return ErrInvalid
+	}
+	return c.Brush().Validate(meta, core.Limits{Bedrock: 0, Ceiling: 200})
+}
+func ChunkUnique(sceneID int64, key core.ChunkKey) (int64, error) {
+	if sceneID < 2 || sceneID > MaxSceneID || key.X < 0 || key.X >= core.MaxChunksPerSide || key.Y < 0 || key.Y >= core.MaxChunksPerSide {
+		return 0, ErrInvalid
+	}
+	return sceneID*(1<<20) + int64(key.Y)*(1<<10) + int64(key.X) + 1, nil
+}
+func SiteUnique(sceneID int64, gx, gy int32) (int64, error) {
+	if sceneID < 2 || sceneID > MaxSceneID || gx < 0 || gy < 0 || gx >= 65535 || gy >= 65535 {
+		return 0, ErrInvalid
+	}
+	return sceneID*(1<<32) + int64(gy)*(1<<16) + int64(gx) + 1, nil
+}
+
+// Footprint固定2×2采样点；跨块角点正好至多4块。
+func (c Command) Footprint() map[core.ChunkKey][]int32 {
+	out := map[core.ChunkKey][]int32{}
+	gx, gy := c.X/core.SampleSpacing, c.Y/core.SampleSpacing
+	for y := gy; y < gy+2; y++ {
+		for x := gx; x < gx+2; x++ {
+			key := core.ChunkKey{X: int32(x / core.ChunkSamples), Y: int32(y / core.ChunkSamples)}
+			out[key] = append(out[key], int32(y%core.ChunkSamples*core.ChunkSamples+x%core.ChunkSamples))
+		}
+	}
+	return out
+}
+
+type Result struct {
+	ProjectionPending bool
+	Sequence          int64
+	Duplicate         bool
+	Changed           int32
+	BuildingID        int64
+	Standing          bool
+}
+type ChunkState struct {
+	LastSequence          int64
+	Key                   core.ChunkKey
+	BaseRevision, Version int64
+	Heights               []uint16
+	Materials             []byte
+	Lots                  map[int32]int64
+}
+
+func WithinReach(a, b spatial.Point) bool { return spatial.WithinDistance(a, b, EditReach) }
+
+type SiteState struct {
+	X, Y     int64
+	Standing bool
+	Version  int64
+}
+
+func DistanceToSpawn(world *World, point spatial.Point, radius int64) bool {
+	return spatial.WithinDistance(world.Spawn, point, radius)
+}

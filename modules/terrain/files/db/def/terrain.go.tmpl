@@ -1,0 +1,8 @@
+package dbdef
+
+type TerrainLedgerState struct {
+	Sequence  int64  `store:"1"`
+	Digest    string `store:"2"`
+	Reply     []byte `store:"3"`
+	Buildings int32  `store:"4"`
+}

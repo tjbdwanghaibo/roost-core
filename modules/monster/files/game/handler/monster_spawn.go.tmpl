@@ -1,0 +1,30 @@
+package handler
+
+import (
+	"fmt"
+	monster "{{MODULE}}/game/entities/monster"
+	scene "{{MODULE}}/game/entities/scene"
+)
+
+//roost:nest rollback=undo durability=async
+func handlerMonsterSpawn(target monster.IMonsterEntity, area scene.ISceneEntity, expected monster.Target, nowUnixMilli int64) (monster.Snapshot, error) {
+	if err := expected.Check(target, area); err != nil {
+		return monster.Snapshot{}, err
+	}
+	a := area.Scene()
+	c := target.MonsterActorComp()
+	if c.Body().Map.InScene() && c.Body().Map.SceneID() != area.ID() {
+		return monster.Snapshot{}, fmt.Errorf("monster: different scene")
+	}
+	if err := a.Admit(target.ID()); err != nil {
+		return monster.Snapshot{}, err
+	}
+	at, err := a.Space().Placement(c.SpawnPoint())
+	if err != nil {
+		return monster.Snapshot{}, err
+	}
+	if err := c.Spawn(a.Environment(), at, nowUnixMilli); err != nil {
+		return monster.Snapshot{}, err
+	}
+	return c.Snapshot(), nil
+}

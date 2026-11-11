@@ -149,7 +149,7 @@ scenarios:
         # Wear the sword. The item was granted by add_item above; equipping
         # takes it out of the bag and puts it on in ONE transaction, and the
         # attribute layer follows the worn set — so this is also what makes
-        # the replicated attr_final move.
+        # the replicated attribute_final move.
         - action: add_item
           param:
             item_id: 2001
@@ -267,11 +267,11 @@ scenarios:
             # pipeline had a special case for "not a player", this is where it
             # would show.
             subjects: 2
-            # attr_final is the composed attribute view: it is never stored
+            # attribute_final is the composed attribute view: it is never stored
             # (the DAO field is nopersist) and only exists on the wire, so
             # asking for it here is what proves the attribute container is
             # actually wired into replication rather than just into Mongo.
-            fields: profile,profile_private,attr_base,attr_final,pos_x,equipment
+            fields: profile,profile_private,attribute_base,attribute_final,pos_x,equipment
             timeout: 10s
         # The leaderboard (the leaderboard module's LeaderboardTop: the top
         # page plus this player's own standing). The board holds the player's

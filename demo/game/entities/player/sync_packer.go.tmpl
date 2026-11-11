@@ -34,10 +34,10 @@ func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacke
 //	facing                                   ✓               ✓             ✓             —    —
 //	cell_hp、cell_max_hp（血条）             ✓               ✓             ✓             —    —
 //	profile_private（经验）、bag、wallet     ✓               —             —             —    ✓
-//	attr_base、attr_final、cell_attack、cell_power  ✓        —             —             —    —
+//	attribute_base、attribute_final、cell_attack、cell_power  ✓        —             —             —    —
 //
 // default 是普通场景里玩家经 self 看自己（policy.InterestConfig.SelfLayer 零值）：全部同步字段。near 是场景主视野里
-// 的其他玩家；team 是队伍关系视野（不论距离），与 near 同样的字段——单独一个身份，队友面板要多给（例如 attr_final）时
+// 的其他玩家；team 是队伍关系视野（不论距离），与 near 同样的字段——单独一个身份，队友面板要多给（例如 attribute_final）时
 // 只改这一行，不影响旁人；priority 比 near 小，队友同时在主视野里时订阅保持 team，走近走远不换视图、不重发全量。
 // far 是距离分档的示例（场景没配分档，不用）。self 见下。packer 在实体锁内执行，不再加锁、不阻塞。
 type playerSyncPacker struct{ player *Player }

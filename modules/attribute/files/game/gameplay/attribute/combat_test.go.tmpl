@@ -1,0 +1,20 @@
+package attribute
+
+import "testing"
+
+func TestAttributeGeneratedProfileRejectsDirectDerivedWrite(t *testing.T) {
+	p := ForLevel(0)
+	if p.SetDirectAttr(AttrPower, 999) {
+		t.Fatal("derived direct write accepted")
+	}
+	if p.Power != 30 {
+		t.Fatal("derived changed")
+	}
+}
+func TestAttributeGeneratedProfileClearsZeroAndRecomputes(t *testing.T) {
+	p := ForLevel(0)
+	p.LoadValues(map[AttrID]AttrValue{AttrHP: 0, AttrAttack: 0})
+	if p.HP != 0 || p.Attack != 0 || p.Power != 0 {
+		t.Fatalf("zero %+v", p)
+	}
+}

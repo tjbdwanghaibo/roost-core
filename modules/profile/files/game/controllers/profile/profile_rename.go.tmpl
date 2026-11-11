@@ -1,7 +1,9 @@
 package profile
 
 import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"{{MODULE}}/game/playeraccess"
+	profilelogic "{{MODULE}}/game/profile"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -10,5 +12,14 @@ import (
 //
 //roost:endpoint nest=ProfileRename
 func (controller *Controller) HandleProfileRename(ctx *playeraccess.Context, req *pb.ProfileRenameRequest) (*pb.ProfileRenameResponse, error) {
+	if ctx != nil && req != nil {
+		if name, handled, err := profilelogic.Rename(ctx.Context(), controller.registry, ctx.PlayerID, req.Name); handled {
+			response := &pb.ProfileRenameResponse{Name: name}
+			if err != nil {
+				response.Code, response.Reason = errcode.ClientError(err)
+			}
+			return response, nil
+		}
+	}
 	return controller.dispatchProfileRename(ctx, req)
 }

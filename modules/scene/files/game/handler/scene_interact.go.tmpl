@@ -1,0 +1,44 @@
+package handler
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"math"
+	player "{{MODULE}}/game/entities/player"
+	scene "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerSceneInteract(target player.IActorEntity, area scene.ISceneEntity, sequence uint64, objectID int64) (*pb.SceneInteractResponse, error) {
+	p := target.ActorComp().Owner()
+	state := p.Dao().GetSceneInteraction()
+	if sequence == 0 {
+		return nil, fmt.Errorf("scene: positive interaction sequence is required")
+	}
+	if sequence == state.GetSequence() {
+		if state.GetSceneID() != area.ID() || state.GetObjectID() != objectID {
+			return nil, fmt.Errorf("scene: sequence payload conflict")
+		}
+		return &pb.SceneInteractResponse{Sequence: sequence, Text: state.GetText()}, nil
+	}
+	if state.GetSequence() == math.MaxUint64 || sequence != state.GetSequence()+1 {
+		return nil, fmt.Errorf("scene: stale or skipped interaction sequence")
+	}
+	body := target.ActorComp().Body()
+	if body.Map.SceneID() != area.ID() || area.Scene().Dao().GetClosed() {
+		return nil, fmt.Errorf("scene: actor is not in this scene")
+	}
+	object, ok := area.Scene().Space().Object(objectID)
+	if !ok || !spatial.WithinDistance(body.Position(), object.Position, object.Radius) {
+		return nil, fmt.Errorf("scene: object is unknown or too far")
+	}
+	if err := p.InteractObject(object); err != nil {
+		return nil, err
+	}
+	state.SetSequence(sequence)
+	state.SetSceneID(area.ID())
+	state.SetObjectID(objectID)
+	state.SetText(object.Text)
+	return &pb.SceneInteractResponse{Sequence: sequence, Text: object.Text}, nil
+}

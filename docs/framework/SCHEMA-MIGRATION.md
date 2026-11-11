@@ -4,7 +4,7 @@
 
 ## 1. 现行规则：运行时只认当前 schema
 
-- DAO 标记 `//roost:dao coll=player db=planet schema=2`（`db=` 默认是工程名）声明当前 schema，生成常量 `PlayerDaoSchemaVersion`；投影器写文档时带 `_schema`（[mongo_projection.go](../../framework/dataengine/engine/mongo_projection.go)）。
+- DAO 标记 `//roost:dao coll=player db=planet schema=3`（`db=` 默认是工程名）声明当前 schema，生成常量 `PlayerDaoSchemaVersion`；投影器写文档时带 `_schema`（[mongo_projection.go](../../framework/dataengine/engine/mongo_projection.go)）。
 - 冷加载先校验聚合里**全部** DAO 的 `_schema` 等于当前版本，再水合与发布实体（[entity_repository.go](../../framework/dataengine/engine/entity_repository.go) 的 `checkAggregateSchemas`）；生成的 `RestorePersisted` 在解码前再校验一次。旧版本、未来版本都以 `dataengine.ErrSchemaMismatch` 拒绝，**不自动转换、不写回**。
 - 通用工具 [`infra/storage/migration`](../../infra/storage/migration/migration.go) 只负责“步骤登记与按版本链执行”（`Registry.Register` / `RunFrom`），不接入加载路径。
 - 墓碑（`_deleted: true`）在冷加载时读作“删过档”（`ErrEntityAggregateDeleted`，D10），不水合、不检查 schema。
@@ -43,7 +43,7 @@
 
 ## 4. 示例与验证
 
-game-demo 的 Player 从 schema 1 到 2：v1 的扁平 `weapon_id` 变成 v2 的 `equipment.slots`（槽位 1）。
+game-demo 的当前 Player 为 schema 3；教学步骤从 schema 1 直接转换到当前版本：扁平 `weapon_id` 变成 equipment 模块的 `equipment.1.1`（槽位 1）。schema 2 的旧 demo 数据不在本轮迁移范围，运行期明确拒绝。历史实跑记录保留当时版本，不能当作当前 schema 3 的验收。
 
 ```sh
 # 1 停写之后（所有 game 进程已正常退出）

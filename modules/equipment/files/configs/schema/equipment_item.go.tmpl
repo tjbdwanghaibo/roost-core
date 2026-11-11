@@ -1,0 +1,12 @@
+package schema
+
+// EquipmentItem 给 bag 道具表增加可装备规则。基础 bag schema 不需要增加字段；同一 ID 至多一个槽。
+// Slot 运行时限制1..32，HP/Attack 限制0..1e12；强化级1..10000，乘法与派生值不会溢出。
+//
+//roost:table name=equipment_item key=ItemID
+type EquipmentItem struct {
+	ItemID int64 `csv:"item_id" json:"item_id" title:"ItemID" required:"true" unique:"true" min:"1" ref:"item"`
+	Slot   int32 `csv:"slot" json:"slot" title:"Slot" min:"1"`
+	Attack int64 `csv:"attack" json:"attack" title:"Attack" min:"0"`
+	HP     int64 `csv:"hp" json:"hp" title:"HP" min:"0"`
+}

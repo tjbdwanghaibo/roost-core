@@ -1,0 +1,17 @@
+package handler
+
+import (
+	"fmt"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:nest
+func handlerMonsterInspect(viewer player.IActorEntity, target monster.IMonsterEntity) (*pb.MonsterInspectResponse, error) {
+	s := target.MonsterActorComp().Snapshot()
+	if s.SceneID == 0 || viewer.ActorComp().Body().Map.SceneID() != s.SceneID {
+		return nil, fmt.Errorf("monster: target is outside your scene")
+	}
+	return &pb.MonsterInspectResponse{MonsterID: s.ID, LifeSeq: s.LifeSeq, HP: s.HP, Template: s.Template, X: s.X, Y: s.Y}, nil
+}

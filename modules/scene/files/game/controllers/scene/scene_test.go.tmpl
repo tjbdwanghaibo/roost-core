@@ -1,0 +1,684 @@
+package scene
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/actor"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	gamescene "{{MODULE}}/game/scene"
+	scenes "{{MODULE}}/game/scene/service"
+	"{{MODULE}}/protocol/pb"
+)
+
+type sceneCommit struct{ reject atomic.Bool }
+
+func (c *sceneCommit) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("scene injected commit rejection")
+	}
+	return nil
+}
+
+type sceneFixture struct {
+	t          *testing.T
+	registry   *app.Registry
+	access     *entity.ManagerAccess
+	engine     *nest.NestMgr
+	sync       *entitysync.Manager
+	manager    *scenes.Manager
+	controller *Controller
+	commit     *sceneCommit
+}
+
+var sceneTestPlayer = nest.NewHandlerName("module_scene.player")
+var sceneTestArea = nest.NewHandlerName("module_scene.area")
+
+func newSceneFixture(t *testing.T) *sceneFixture {
+	t.Helper()
+	player.RegisterEntity()
+	sceneentity.RegisterEntity()
+	f := &sceneFixture{t: t, access: entity.NewManagerAccess(entity.NewEntityManager()), commit: &sceneCommit{}}
+	var err error
+	f.sync, err = entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithEntitySync(f.sync),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{handler.RegisterSceneChangeNestHandlersOn, handler.RegisterSceneCloseNestHandlersOn, handler.RegisterSceneTimeNestHandlersOn, handler.RegisterSceneInteractNestHandlersOn, handler.RegisterSceneDrainNestHandlersOn} {
+		if err := register(f.engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.engine.MustRegisterHandlerWithMeta(sceneTestPlayer, func(values []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, args[0].(func(*player.Player) error)(values[0].(*player.Player))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	f.engine.MustRegisterHandlerWithMeta(sceneTestArea, func(values []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, args[0].(func(*sceneentity.Scene) error)(values[0].(*sceneentity.Scene))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	registry := app.NewRegistry(viper.New())
+	f.registry = registry
+	for key, value := range map[app.ModName]any{mods.ModNest: f.engine, mods.ModEntityRuntime: f.access, mods.ModEntitySync: f.sync} {
+		if err := registry.Register(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = scenes.Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager, err = scenes.FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.controller, err = FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+		if err := f.sync.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+		f.access.Manager().Range(func(value entity.IThreadSafeEntity) bool {
+			if p, ok := value.(*player.Player); ok {
+				p.ActorComp().OnDestroy(entity.DestroyReasonCommon)
+			}
+			value.OnDestroy(entity.DestroyReasonCommon)
+			return true
+		})
+	})
+	return f
+}
+func (f *sceneFixture) player(raw int64) *player.Player {
+	f.t.Helper()
+	value, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: raw, Kind: player.EntityKindPlayer})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.sync.OpenSession(entitysync.SessionID(raw)); err != nil {
+		f.t.Fatal(err)
+	}
+	return value.(*player.Player)
+}
+func (f *sceneFixture) change(p *player.Player, from, to int64) (*pb.SceneChangeResponse, error) {
+	return f.controller.HandleSceneChange(&playeraccess.Context{PlayerID: p.UniqueID()}, &pb.SceneChangeRequest{FromID: from, ToID: to})
+}
+func (f *sceneFixture) enter(p *player.Player, id int64) {
+	f.t.Helper()
+	if _, err := f.change(p, 0, id); err != nil {
+		f.t.Fatal(err)
+	}
+}
+func (f *sceneFixture) area(raw int64) *sceneentity.Scene {
+	id, _ := entity.BuildEntityID(raw, sceneentity.EntityKindScene)
+	return f.access.Manager().Get(id).(*sceneentity.Scene)
+}
+func (f *sceneFixture) run(p *player.Player, fn func(*player.Player) error) error {
+	_, err := f.engine.Request(context.Background(), sceneTestPlayer, p.ID(), nest.NewParams(fn))
+	return err
+}
+func (f *sceneFixture) must(p *player.Player, fn func(*player.Player) error) {
+	f.t.Helper()
+	if err := f.run(p, fn); err != nil {
+		f.t.Fatal(err)
+	}
+}
+func (f *sceneFixture) open(id int64, config gamescene.Config) *sceneentity.Scene {
+	f.t.Helper()
+	area, err := f.manager.Open(id, config)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return area
+}
+
+func TestSceneDefaultRuntimeAndPBEntry(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	raw, err := pb.MarshalSceneChangeRequest(&pb.SceneChangeRequest{ToID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pb.UnmarshalSceneChangeRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := f.controller.HandleSceneChange(&playeraccess.Context{PlayerID: p.UniqueID()}, request)
+	if err != nil || response.SceneID != 1 || response.X != 50 || response.Y != 50 {
+		t.Fatalf("%+v %v", response, err)
+	}
+}
+func TestSceneSwitchChangesBothMemberships(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	target := f.open(2, gamescene.DefaultConfig())
+	if _, err := f.change(p, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	f.must(p, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.SceneID() != target.ID() {
+			t.Fatal("wrong map")
+		}
+		return nil
+	})
+	if err := f.manager.Close(context.Background(), 1); err != nil {
+		t.Fatal("old membership retained", err)
+	}
+	if err := f.manager.Close(context.Background(), 2); err == nil {
+		t.Fatal("occupied target closed")
+	}
+}
+func TestSceneRefusesStaleFromWithoutChangingPosition(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	f.open(2, gamescene.DefaultConfig())
+	if _, err := f.change(p, 0, 2); err == nil {
+		t.Fatal("stale from accepted")
+	}
+	f.must(p, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.SceneID() != f.area(1).ID() {
+			t.Fatal("moved")
+		}
+		return nil
+	})
+}
+func TestSceneCannotCreateAClientChosenMap(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	if _, err := f.change(p, 0, 987); err == nil {
+		t.Fatal("unknown map created")
+	}
+}
+func TestSceneOccupiedCloseIsRefused(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	if err := f.manager.Close(context.Background(), 1); err == nil {
+		t.Fatal("occupied map closed")
+	}
+	if _, err := f.change(p, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.Close(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestSceneCapacityRejectsWithoutEvictingSource(t *testing.T) {
+	f := newSceneFixture(t)
+	a, b := f.player(1001), f.player(1002)
+	c := gamescene.DefaultConfig()
+	c.Capacity = 1
+	f.open(2, c)
+	f.enter(a, 1)
+	f.enter(b, 2)
+	if _, err := f.change(a, 1, 2); err == nil {
+		t.Fatal("full target accepted")
+	}
+	f.must(a, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.SceneID() != f.area(1).ID() {
+			t.Fatal("lost original scene")
+		}
+		return nil
+	})
+}
+func TestSceneRejectedSwitchRollsBackSavedPosition(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	f.open(2, gamescene.DefaultConfig())
+	f.commit.reject.Store(true)
+	_, err := f.change(p, 1, 2)
+	f.commit.reject.Store(false)
+	if err == nil {
+		t.Fatal("commit was not rejected")
+	}
+	f.must(p, func(p *player.Player) error {
+		id, _, _ := p.ActorComp().SavedPosition()
+		if id != 0 || p.ActorComp().Body().Map.SceneID() != f.area(1).ID() {
+			t.Fatal("partial switch remained")
+		}
+		return nil
+	})
+	if err := f.manager.Close(context.Background(), 2); err != nil {
+		t.Fatal("target member leaked", err)
+	}
+}
+func TestSceneNearbySubjectsUseOneAOI(t *testing.T) {
+	f := newSceneFixture(t)
+	a, b := f.player(1001), f.player(1002)
+	f.enter(a, 1)
+	f.enter(b, 1)
+	if err := f.sync.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	seen := f.area(1).Space().Nearby(a.UniqueID())
+	if !slices.Contains(seen, b.ID()) || slices.Contains(seen, a.ID()) || !slices.Contains(seen, f.area(1).ID()) {
+		t.Fatalf("seen %v", seen)
+	}
+}
+func TestSceneDifferentLinesDoNotSeeEachOther(t *testing.T) {
+	f := newSceneFixture(t)
+	a, b := f.player(1001), f.player(1002)
+	c := gamescene.DefaultConfig()
+	c.Line = 2
+	f.open(2, c)
+	f.enter(a, 1)
+	f.enter(b, 2)
+	if err := f.sync.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.area(1).Space().Nearby(a.UniqueID()), b.ID()) {
+		t.Fatal("line leaked")
+	}
+}
+func TestSceneMovementChangesInterestAfterCommit(t *testing.T) {
+	f := newSceneFixture(t)
+	a, b := f.player(1001), f.player(1002)
+	f.enter(a, 1)
+	f.enter(b, 1)
+	f.must(b, func(p *player.Player) error {
+		body := p.ActorComp().Body()
+		if err := body.Walk([]spatial.Point{{X: 500, Y: 50}}, 1000); err != nil {
+			return err
+		}
+		return body.Tick(heartbeat.Beat{Now: time.Now().Add(time.Second), Elapsed: time.Second})
+	})
+	// 域时间读取冻结业务时间；直接改位置也走同一个 commit-gated QueueMove。
+	f.must(b, func(p *player.Player) error { return p.ActorComp().Body().Map.SetPos(spatial.Point{X: 500, Y: 50}) })
+	if err := f.sync.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.area(1).Space().Nearby(a.UniqueID()), b.ID()) {
+		t.Fatal("distant actor still visible")
+	}
+}
+func TestSceneRollbackDoesNotMoveAOI(t *testing.T) {
+	f := newSceneFixture(t)
+	a, b := f.player(1001), f.player(1002)
+	f.enter(a, 1)
+	f.enter(b, 1)
+	failure := errors.New("abort move")
+	if err := f.run(b, func(p *player.Player) error {
+		if err := p.ActorComp().Body().Map.SetPos(spatial.Point{X: 500, Y: 50}); err != nil {
+			return err
+		}
+		return failure
+	}); !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	if err := f.sync.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(f.area(1).Space().Nearby(a.UniqueID()), b.ID()) {
+		t.Fatal("uncommitted movement leaked")
+	}
+}
+func TestScenePublicPackerIncludesOnlyRegisteredFields(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	f.must(p, func(p *player.Player) error {
+		payload, err := player.NewActorPlayerSyncPacker(p).PackSubjectSnapshot(gamescene.Public)
+		if err != nil {
+			return err
+		}
+		copy := db.NewPlayerDao()
+		if err := copy.ApplySync(payload.BytesCopy()); err != nil {
+			return err
+		}
+		if copy.GetActor().GetX() != 50 || copy.GetActorSaved().GetSceneID() != 0 {
+			t.Fatal("wrong public payload")
+		}
+		return nil
+	})
+}
+func TestScenePackerRejectsUnknownViews(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.must(p, func(p *player.Player) error {
+		_, err := player.NewActorPlayerSyncPacker(p).PackSubjectSnapshot(entity.SyncProfile{Key: "admin"})
+		if !errors.Is(err, entity.ErrSyncViewUnknown) {
+			t.Fatal(err)
+		}
+		return nil
+	})
+}
+func TestSceneTimeDomainIsIndependentPerMap(t *testing.T) {
+	f := newSceneFixture(t)
+	other := f.open(2, gamescene.DefaultConfig())
+	if err := sender.NewSceneTimeSender(f.engine).Sync_SceneTime(context.Background(), f.area(1).ID(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if f.area(1).TimeDomain().Rate() != 0 || other.TimeDomain().Rate() != 1 {
+		t.Fatal("time domains coupled")
+	}
+}
+func TestSceneInvalidRateDoesNotChangeDomain(t *testing.T) {
+	f := newSceneFixture(t)
+	if err := sender.NewSceneTimeSender(f.engine).Sync_SceneTime(context.Background(), f.area(1).ID(), 100); err == nil {
+		t.Fatal("unbounded rate")
+	}
+	if f.area(1).TimeDomain().Rate() != 1 {
+		t.Fatal("invalid rate changed scene")
+	}
+}
+func TestSceneReconnectReusesTheSameMembership(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	response, err := f.change(p, 1, 1)
+	if err != nil || response.X != 50 {
+		t.Fatalf("%+v %v", response, err)
+	}
+	if _, err := f.change(p, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.Close(context.Background(), 1); err != nil {
+		t.Fatal("duplicate member retained", err)
+	}
+}
+
+var sceneRegionReject atomic.Bool
+
+func init() {
+	player.OnRegion("scene_test", func(_ *player.Player, event gamescene.RegionEvent) error {
+		if event.ID == 33 && sceneRegionReject.Load() {
+			return errors.New("reject region")
+		}
+		return nil
+	})
+	player.OnSceneInteract("scene_test", func(p *player.Player, object gamescene.Object) error {
+		if object.ID == 71 {
+			s := p.Dao().GetActorSaved()
+			s.SetFacing(s.GetFacing() + 1)
+		}
+		return nil
+	})
+}
+func sceneObjects() gamescene.Config {
+	c := gamescene.DefaultConfig()
+	c.Regions = []gamescene.Region{{ID: 33, Bounds: spatial.Rect{Min: spatial.Point{X: 40, Y: 40}, Max: spatial.Point{X: 60, Y: 60}}}}
+	c.Objects = []gamescene.Object{{ID:71,Position:c.Spawn,Radius:10,Text:"well"}}
+	return c
+}
+func TestSceneRegionEntryAndExitAreDerivedFromPosition(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.open(2, sceneObjects())
+	f.enter(p, 2)
+	f.must(p, func(p *player.Player) error {
+		if p.Dao().GetSceneRuntime().RegionsLen() != 1 {
+			t.Fatal("enter region missing")
+		}
+		if err := p.ActorComp().Body().Map.SetPos(spatial.Point{X: 100, Y: 100}); err != nil {
+			return err
+		}
+		return p.ActorComp().Body().Tick(heartbeat.Beat{Now: time.Now(), Elapsed: time.Millisecond})
+	})
+	f.must(p, func(p *player.Player) error {
+		if p.Dao().GetSceneRuntime().RegionsLen() != 0 {
+			t.Fatal("leave region missing")
+		}
+		return nil
+	})
+}
+func TestSceneRegionFailureRollsBackTheEntry(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.open(2, sceneObjects())
+	sceneRegionReject.Store(true)
+	t.Cleanup(func() { sceneRegionReject.Store(false) })
+	if _, err := f.change(p, 0, 2); err == nil {
+		t.Fatal("region rejection ignored")
+	}
+	f.must(p, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.InScene() || p.Dao().GetSceneRuntime().RegionsLen() != 0 {
+			t.Fatal("partial entry")
+		}
+		return nil
+	})
+	if err := f.manager.Close(context.Background(), 2); err != nil {
+		t.Fatal("failed entry occupied scene", err)
+	}
+}
+func TestSceneInteractionIsOncePerContinuousSequence(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.open(2, sceneObjects())
+	f.enter(p, 2)
+	request := &pb.SceneInteractRequest{SceneID: 2, ObjectID: 71, Sequence: 1}
+	ctx := &playeraccess.Context{PlayerID: p.UniqueID()}
+	a, err := f.controller.HandleSceneInteract(ctx, request)
+	if err != nil || a.Text != "well" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	b, err := f.controller.HandleSceneInteract(ctx, request)
+	if err != nil || b.Text != "well" {
+		t.Fatal(err)
+	}
+	f.must(p, func(p *player.Player) error {
+		if p.Dao().GetActorSaved().GetFacing() != 1 {
+			t.Fatal("replayed interaction ran twice")
+		}
+		return nil
+	})
+	request.ObjectID = 72
+	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
+		t.Fatal("same sequence changed content")
+	}
+	request.ObjectID = 71
+	request.Sequence = 3
+	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
+		t.Fatal("sequence gap accepted")
+	}
+}
+func TestSceneInteractionCannotReachAnotherSceneOrDistantObject(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.open(2, sceneObjects())
+	f.enter(p, 1)
+	request := &pb.SceneInteractRequest{SceneID: 2, ObjectID: 71, Sequence: 1}
+	ctx := &playeraccess.Context{PlayerID: p.UniqueID()}
+	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
+		t.Fatal("cross scene interaction")
+	}
+	if _, err := f.change(p, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	f.must(p, func(p *player.Player) error { return p.ActorComp().Body().Map.SetPos(spatial.Point{X: 500, Y: 500}) })
+	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
+		t.Fatal("out of range interaction")
+	}
+}
+func TestSceneSensingOnlySeesCommittedPositions(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	space := f.area(1).Space()
+	if found := space.Sense(spatial.Point{X: 50, Y: 50}, 20); len(found) != 1 || found[0].ID != p.ID() {
+		t.Fatal(found)
+	}
+	failure := errors.New("abort")
+	if err := f.run(p, func(p *player.Player) error {
+		if err := p.ActorComp().Body().Map.SetPos(spatial.Point{X: 500, Y: 500}); err != nil {
+			return err
+		}
+		return failure
+	}); !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	if found := space.Sense(spatial.Point{X: 50, Y: 50}, 20); len(found) != 1 {
+		t.Fatal("rollback changed sensing", found)
+	}
+	f.must(p, func(p *player.Player) error { return p.ActorComp().Body().Map.SetPos(spatial.Point{X: 500, Y: 500}) })
+	if found := space.Sense(spatial.Point{X: 50, Y: 50}, 20); len(found) != 0 {
+		t.Fatal("old position retained", found)
+	}
+}
+
+var sceneStopReject atomic.Bool
+
+func init() {
+	player.OnActor("scene.stop_test", func(*player.Player) actor.Hooks {
+		return actor.Hooks{Leave: func(*actor.Body) error {
+			if sceneStopReject.Load() {
+				return errors.New("reject evacuation")
+			}
+			return nil
+		}}
+	})
+}
+func TestSceneStopEvacuatesAndClosesAdmission(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.must(p, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.InScene() {
+			t.Fatal("player not evacuated")
+		}
+		return nil
+	})
+	if _, _, err := f.manager.IDs(0, 1); err == nil {
+		t.Fatal("closed map remained")
+	}
+	if _, err := f.manager.Open(2, gamescene.DefaultConfig()); err == nil {
+		t.Fatal("stop reopened admission")
+	}
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestSceneStopRetriesRejectedEvacuation(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.enter(p, 1)
+	sceneStopReject.Store(true)
+	t.Cleanup(func() { sceneStopReject.Store(false) })
+	if err := f.manager.Stop(context.Background()); err == nil {
+		t.Fatal("evacuation rejection ignored")
+	}
+	sceneStopReject.Store(false)
+	f.must(p, func(p *player.Player) error {
+		if !p.ActorComp().Body().Map.InScene() {
+			t.Fatal("failed evacuation changed player")
+		}
+		return nil
+	})
+	fresh := f.player(1002)
+	if _, err := sender.NewSceneChangeSender(f.engine).MultiGroupSync_SceneChange(context.Background(), fresh.ID(), []int64{f.area(1).ID()}, f.area(1).ID()); err == nil {
+		t.Fatal("closing map admitted player")
+	}
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal("retry failed", err)
+	}
+}
+func TestScenePrunesUnloadedMembersAndTheirVisibility(t *testing.T) {
+	f := newSceneFixture(t)
+	c := gamescene.DefaultConfig()
+	c.Capacity = 1
+	area := f.open(2, c)
+	old := f.player(1001)
+	f.enter(old, 2)
+	if err := f.access.Destroy(context.Background(), old, entity.DestroyReasonCommon, false); err != nil {
+		t.Fatal(err)
+	}
+	fresh := f.player(1002)
+	f.enter(fresh, 2)
+	found := area.Space().Sense(c.Spawn, c.Sight)
+	if len(found) != 1 || found[0].ID != fresh.ID() {
+		t.Fatalf("unloaded actor retained: %+v", found)
+	}
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal("stale member prevented stop", err)
+	}
+}
+func TestSceneStopPreservesDependentMembersForRetry(t *testing.T) {
+	f := newSceneFixture(t)
+	area := f.area(1)
+	other := f.open(2, gamescene.DefaultConfig())
+	_, err := f.engine.Request(context.Background(), sceneTestArea, area.ID(), nest.NewParams(func(s *sceneentity.Scene) error { return s.Admit(other.ID()) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.engine.Request(context.Background(), sceneTestArea, other.ID(), nest.NewParams(func(s *sceneentity.Scene) error { return s.Admit(other.ID()) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 用独立 Scene 实体模拟还未停止的依赖模块；它必须留下而不能被当成 Player 强制驱逐。
+	if err := f.manager.Stop(context.Background()); err == nil {
+		t.Fatal("dependent member silently discarded")
+	}
+	if f.access.Manager().Get(area.ID()) == nil {
+		t.Fatal("occupied scene destroyed")
+	}
+	for _, s := range []*sceneentity.Scene{area, other} {
+		_, err = f.engine.Request(context.Background(), sceneTestArea, s.ID(), nest.NewParams(func(s *sceneentity.Scene) error { s.Depart(other.ID()); return nil }))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal("dependent cleanup retry failed", err)
+	}
+}
+
+func TestSceneDrainOnlyClosesTheRequestedMap(t *testing.T) {
+	f := newSceneFixture(t)
+	a, b := f.player(1001), f.player(1002)
+	f.open(2, gamescene.DefaultConfig())
+	f.enter(a, 1)
+	f.enter(b, 2)
+	if err := f.manager.Drain(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	f.must(b, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.InScene() {
+			return errors.New("drained player stayed")
+		}
+		return nil
+	})
+	f.must(a, func(p *player.Player) error {
+		if !p.ActorComp().Body().Map.InScene() {
+			return errors.New("unrelated player evacuated")
+		}
+		return nil
+	})
+	if _, err := f.change(f.player(1003), 0, 1); err != nil {
+		t.Fatal("unrelated map closed", err)
+	}
+	f.open(3, gamescene.DefaultConfig())
+	if err := f.manager.Drain(context.Background(), 2); err != nil {
+		t.Fatal("repeat drain", err)
+	}
+}

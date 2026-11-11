@@ -1,0 +1,21 @@
+//go:build protocoldef
+
+package protocoldef
+
+type SceneInteractRequest struct {
+	SceneID  int64  `pb:"1"`
+	ObjectID int64  `pb:"2"`
+	Sequence uint64 `pb:"3"`
+}
+type SceneInteractResponse struct {
+	Code     int32  `pb:"1"`
+	Reason   string `pb:"2"`
+	Sequence uint64 `pb:"3"`
+	Text     string `pb:"4"`
+}
+
+//roost:protocol group=game handler=scene
+type SceneInteractProtocol interface {
+	//roost:msg id={{ID:protocol:SceneInteract}}
+	SceneInteract(SceneInteractRequest) SceneInteractResponse
+}
