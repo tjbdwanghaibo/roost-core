@@ -1,10 +1,10 @@
 name: bag
-summary: 玩家背包：道具号到数量的堆叠背包，种类数与单种数量有上限；丢弃协议；服务端发放 handler
+summary: 玩家背包：道具号到数量的堆叠背包，自带道具表（哪些道具存在、每种的单种上限），种类数有上限；丢弃协议；服务端发放 handler
 requires: []
 conflicts: []
 needs:
   mods: [nest]
-  features: [protocol, entity, dao, errcode]
+  features: [protocol, entity, dao, errcode, config]
 entity: Player
 state:
   - field: Bag
@@ -18,4 +18,4 @@ errcodes: [bag_item_invalid, bag_count_invalid, bag_short, bag_stack_full, bag_k
 verify:
   packages: [./game/handler]
   run: ^TestBag
-  pass: 12
+  pass: 17

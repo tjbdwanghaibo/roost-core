@@ -2,28 +2,120 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 // 需求里的数在这里写死，不引用被测代码的常量：常量改错了这些用例要变红。
 const (
 	bagTestMaxKinds = 200    // 不同道具种类数的上限
-	bagTestMaxStack = 999999 // 单种道具的数量上限
+	bagTestMaxStack = 999999 // 单种道具数量的硬上限：道具表不单独限制时按它算
 )
+
+// 用例自己的道具表里有上限的两种道具。
+const (
+	bagTestCapped    = 1004 // 道具表里单种上限 99
+	bagTestCappedMax = 99
+	bagTestOverCap   = 1005 // 道具表里写的上限比硬上限还大，按硬上限算
+)
+
+// bagTestItems 是用例自己的道具表，不用工程的 configs/table/item.csv：那张表归工程所有，
+// 加减道具、改上限都不该让这里的场景变红。1001～1003、5001、5002 与 1～200 不单独限制
+// （max_stack 为 0），1004 上限 99，1005 的上限写得比硬上限大。4040 不在表里。
+func bagTestItems() []schema.Item {
+	rows := []schema.Item{
+		{ID: 1001, Name: "potion"},
+		{ID: 1002, Name: "ticket"},
+		{ID: 1003, Name: "pack"},
+		{ID: bagTestCapped, Name: "capped", MaxStack: bagTestCappedMax},
+		{ID: bagTestOverCap, Name: "above the hard cap", MaxStack: 2 * bagTestMaxStack},
+		{ID: 5001, Name: "one kind too many"},
+		{ID: 5002, Name: "another kind too many"},
+	}
+	for itemID := int64(1); itemID <= bagTestMaxKinds; itemID++ {
+		rows = append(rows, schema.Item{ID: itemID, Name: fmt.Sprintf("kind-%d", itemID)})
+	}
+	return rows
+}
+
+// bagTestWithout 是去掉了 itemID 那一行的道具表。
+func bagTestWithout(rows []schema.Item, itemID int64) []schema.Item {
+	out := make([]schema.Item, 0, len(rows))
+	for _, row := range rows {
+		if row.ID != itemID {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// bagTestLoadItems 把 rows 装成进程当前的道具表，测试结束时换回原来的。背包经生成的访问器
+// （generated.ItemByID）读配置快照，没有装载过配置的进程里任何道具都不合法，所以往背包里放道具的
+// 测试都要先装一张。再调一次就是换表，相当于线上的配置热更。
+//
+// 表按生成代码的名字与键类型登记（item、int64），只登记这一张：工程里别的配置表不用跟着准备数据。
+// 当前配置是进程级的，本包用例不能 t.Parallel。
+func bagTestLoadItems(t *testing.T, rows []schema.Item) {
+	t.Helper()
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.Item]{
+		Name: configdata.Name("item"), File: "item.json",
+		Key: func(row schema.Item) int64 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bagTestUseStore(t, configdata.NewStore(registry, dir))
+}
+
+// bagTestUseStore 装载 store 并把它发布成进程当前的配置，测试结束时原样换回；store 为 nil 表示
+// “进程里没有装载配置”。
+//
+// 装载会发布两处进程级的东西：缺省 Store，以及新请求钉住的配置快照（Nest 在请求准入时取它）。
+// 两处都要换回，否则这张测试表会漏给本包后面的用例。
+func bagTestUseStore(t *testing.T, store *configdata.Store) {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	if store == nil {
+		configdata.SetDefaultStore(nil)
+		fctx.SetRuntimeConfig(nil)
+		return
+	}
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+}
 
 // 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
 type bagGetter map[int64]entity.IThreadSafeEntity
@@ -70,6 +162,7 @@ func newBagFixture(t *testing.T) *bagFixture {
 	playerentity.RegisterEntity()
 	RegisterBagDiscardNestHandlers()
 	RegisterBagGrantNestHandlers()
+	bagTestLoadItems(t, bagTestItems())
 	f := &bagFixture{committer: &bagCommitter{}}
 	id, err := entity.BuildEntityID(95001, playerentity.EntityKindPlayer)
 	if err != nil {
@@ -224,7 +317,8 @@ func TestBagDiscardWithoutEnoughItemsWritesNothing(t *testing.T) {
 func TestBagInvalidItemOrCountIsRefused(t *testing.T) {
 	f := newBagFixture(t)
 	f.mustGrant(t, 1001, 5)
-	for _, itemID := range []int64{0, -1} {
+	// 0 与负数不是道具号；4040 是正数，但不在道具表里。
+	for _, itemID := range []int64{0, -1, 4040} {
 		if _, err := f.grant(itemID, 1); !errors.Is(err, apperrors.ErrBagItemInvalid) {
 			t.Fatalf("grant item %d: err = %v, want bag_item_invalid", itemID, err)
 		}
@@ -243,7 +337,8 @@ func TestBagInvalidItemOrCountIsRefused(t *testing.T) {
 	f.wantItems(t, "after the refusals", map[int64]int64{1001: 5})
 }
 
-// 单种上限 999999：正好放满可以，多一个被拒且不写；数量大到相加会溢出 int64 时同样被拒。
+// 道具表不单独限制的道具按硬上限 999999 算：正好放满可以，多一个被拒且不写；
+// 数量大到相加会溢出 int64 时同样被拒。
 func TestBagStackOverflowIsRefused(t *testing.T) {
 	f := newBagFixture(t)
 	f.mustGrant(t, 1001, 1)
@@ -365,6 +460,8 @@ func TestBagComponentRefusalsWriteNothingWithoutARollback(t *testing.T) {
 			held   int64 // 拒绝之后这种道具应有的数量；0 表示键不存在
 		}{
 			{"add to a full stack", func() (int64, error) { return bag.Add(1, 1) }, apperrors.ErrBagStackFull, 1, bagTestMaxStack},
+			{"add past the item's own cap", func() (int64, error) { return bag.Add(bagTestCapped, bagTestCappedMax+1) }, apperrors.ErrBagStackFull, bagTestCapped, 0},
+			{"add an item that is not in the table", func() (int64, error) { return bag.Add(4040, 1) }, apperrors.ErrBagItemInvalid, 4040, 0},
 			{"add a kind past the cap", func() (int64, error) { return bag.Add(5001, 1) }, apperrors.ErrBagKindsFull, 5001, 0},
 			{"add an invalid item", func() (int64, error) { return bag.Add(0, 1) }, apperrors.ErrBagItemInvalid, 0, 0},
 			{"add a non-positive count", func() (int64, error) { return bag.Add(2, -1) }, apperrors.ErrBagCountInvalid, 2, 2},
@@ -382,6 +479,153 @@ func TestBagComponentRefusalsWriteNothingWithoutARollback(t *testing.T) {
 			}
 		}
 	})
+}
+
+// 每种道具的单种上限来自道具表：放满可以，多一个被拒且不写；扣掉的可以补回到正好满。
+// 表里写得比硬上限还大的，按硬上限算。
+func TestBagStackCapComesFromTheItemTable(t *testing.T) {
+	f := newBagFixture(t)
+	if _, err := f.grant(bagTestCapped, bagTestCappedMax+1); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("a new item granted past its own cap in one go: err = %v, want bag_stack_full", err)
+	}
+	f.wantItems(t, "after the refused first grant", map[int64]int64{})
+	if held := f.mustGrant(t, bagTestCapped, bagTestCappedMax); held != bagTestCappedMax {
+		t.Fatalf("held = %d, want a full stack of %d", held, bagTestCappedMax)
+	}
+	for _, count := range []int64{1, bagTestMaxStack, math.MaxInt64} {
+		if _, err := f.grant(bagTestCapped, count); !errors.Is(err, apperrors.ErrBagStackFull) {
+			t.Fatalf("grant %d more on a full stack: err = %v, want bag_stack_full", count, err)
+		}
+	}
+	if response, err := f.discard(bagTestCapped, 1); err != nil || response.Left != bagTestCappedMax-1 {
+		t.Fatalf("discard from a full stack: response=%+v err=%v", response, err)
+	}
+	if _, err := f.grant(bagTestCapped, 2); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("grant 2 with room for 1: err = %v, want bag_stack_full, not a partial grant", err)
+	}
+	if held := f.mustGrant(t, bagTestCapped, 1); held != bagTestCappedMax {
+		t.Fatalf("held = %d, want %d", held, bagTestCappedMax)
+	}
+	// 一种道具的上限不影响别的道具：不单独限制的那种照常放到硬上限。
+	if held := f.mustGrant(t, 1001, bagTestCappedMax+1); held != bagTestCappedMax+1 {
+		t.Fatalf("an uncapped item: held = %d, want %d", held, bagTestCappedMax+1)
+	}
+	// 表里的上限比硬上限大：按硬上限算。
+	if held := f.mustGrant(t, bagTestOverCap, bagTestMaxStack); held != bagTestMaxStack {
+		t.Fatalf("held = %d, want the hard cap %d", held, bagTestMaxStack)
+	}
+	if _, err := f.grant(bagTestOverCap, 1); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("grant past the hard cap of an item whose table cap is larger: err = %v, want bag_stack_full", err)
+	}
+	f.wantItems(t, "at the end", map[int64]int64{bagTestCapped: bagTestCappedMax, 1001: bagTestCappedMax + 1, bagTestOverCap: bagTestMaxStack})
+}
+
+// 道具表热更把一种道具的上限调小：持有量超过新上限的玩家不被扣，只是不能再放入；
+// 扣到新上限以下之后又能放到新上限。
+func TestBagStackCapLoweredBelowTheHoldingRefusesGrantsOnly(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, bagTestCapped, bagTestCappedMax)
+	lowered := bagTestWithout(bagTestItems(), bagTestCapped)
+	lowered = append(lowered, schema.Item{ID: bagTestCapped, Name: "capped", MaxStack: 50})
+	bagTestLoadItems(t, lowered)
+	if _, err := f.grant(bagTestCapped, 1); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("grant with the holding above the new cap: err = %v, want bag_stack_full", err)
+	}
+	f.wantItems(t, "after the cap was lowered", map[int64]int64{bagTestCapped: bagTestCappedMax})
+	if response, err := f.discard(bagTestCapped, 10); err != nil || response.Left != bagTestCappedMax-10 {
+		t.Fatalf("discard above the new cap: response=%+v err=%v", response, err)
+	}
+	if _, err := f.grant(bagTestCapped, 1); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("grant while still above the new cap: err = %v, want bag_stack_full", err)
+	}
+	if response, err := f.discard(bagTestCapped, bagTestCappedMax-10-49); err != nil || response.Left != 49 {
+		t.Fatalf("discard down to 49: response=%+v err=%v", response, err)
+	}
+	if held := f.mustGrant(t, bagTestCapped, 1); held != 50 {
+		t.Fatalf("held = %d, want the new cap 50", held)
+	}
+	if _, err := f.grant(bagTestCapped, 1); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("grant past the new cap: err = %v, want bag_stack_full", err)
+	}
+	f.wantItems(t, "at the end", map[int64]int64{bagTestCapped: 50})
+}
+
+// 道具表热更删掉一种道具：不能再放入，已经在背包里的照常能数、能扣、能丢到 0。
+func TestBagItemRemovedFromTheTableCanBeDiscardedButNotGranted(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 5)
+	f.mustGrant(t, 1002, 1)
+	bagTestLoadItems(t, bagTestWithout(bagTestItems(), 1001))
+	if _, err := f.grant(1001, 1); !errors.Is(err, apperrors.ErrBagItemInvalid) {
+		t.Fatalf("grant of an item that left the table: err = %v, want bag_item_invalid", err)
+	}
+	f.locked(t, func() {
+		if bag := f.player.BagComp(); bag.Count(1001) != 5 || !bag.Has(1001, 5) {
+			t.Errorf("an item that left the table: Count = %d, Has(5) = %v, want 5 and true", bag.Count(1001), bag.Has(1001, 5))
+		}
+	})
+	if response, err := f.discard(1001, 2); err != nil || response.Left != 3 {
+		t.Fatalf("discard of an item that left the table: response=%+v err=%v", response, err)
+	}
+	if response, err := f.discard(1001, 3); err != nil || response.Left != 0 {
+		t.Fatalf("discard to zero: response=%+v err=%v", response, err)
+	}
+	// 别的道具不受影响。
+	if held := f.mustGrant(t, 1002, 1); held != 2 {
+		t.Fatalf("held = %d, want 2", held)
+	}
+	f.wantItems(t, "at the end", map[int64]int64{1002: 2})
+}
+
+// 进程里没有装载配置时道具表是空的：任何道具都放不进去，不会退回“只要是正数就行”。
+// 已有的道具照常能丢。
+func TestBagWithoutALoadedItemTableRefusesEveryGrant(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 5)
+	bagTestUseStore(t, nil)
+	for _, itemID := range []int64{1001, 1002, bagTestCapped} {
+		if _, err := f.grant(itemID, 1); !errors.Is(err, apperrors.ErrBagItemInvalid) {
+			t.Fatalf("grant item %d without a loaded item table: err = %v, want bag_item_invalid", itemID, err)
+		}
+	}
+	if response, err := f.discard(1001, 1); err != nil || response.Left != 4 {
+		t.Fatalf("discard without a loaded item table: response=%+v err=%v", response, err)
+	}
+	f.wantItems(t, "at the end", map[int64]int64{1001: 4})
+}
+
+// 工程自己的道具表（configs/table/item.csv 经 roost generate 转成的 configs/data/item.json）按生成的
+// 登记装载之后，表里的每种道具都放得进背包，表里没有的号放不进。只断言这两件事，不断言表里有哪几行：
+// 那张表归工程所有。
+func TestBagAcceptsTheItemsOfTheProjectItemTable(t *testing.T) {
+	f := newBagFixture(t)
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	bagTestUseStore(t, configdata.NewStore(registry, filepath.Join("..", "..", "configs", "data")))
+	rows := generated.ItemTable().Rows()
+	if len(rows) == 0 {
+		t.Fatal("configs/data/item.json has no rows: the bag accepts no item; add rows to configs/table/item.csv and run roost generate")
+	}
+	want := map[int64]int64{}
+	unknown := int64(1)
+	for _, row := range rows {
+		if row.ID >= unknown {
+			unknown = row.ID + 1
+		}
+		if len(want) == bagTestMaxKinds {
+			continue
+		}
+		if held := f.mustGrant(t, row.ID, 1); held != 1 {
+			t.Fatalf("item %d of the project table: held = %d, want 1", row.ID, held)
+		}
+		want[row.ID] = 1
+	}
+	if _, err := f.grant(unknown, 1); !errors.Is(err, apperrors.ErrBagItemInvalid) {
+		t.Fatalf("grant item %d, which is not in the project table: err = %v, want bag_item_invalid", unknown, err)
+	}
+	f.wantItems(t, "after one of each item of the project table", want)
 }
 
 // 提交被拒绝时，加、减、删键、新增键都回滚；之后同样的请求照常生效。
