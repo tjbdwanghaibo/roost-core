@@ -63,12 +63,12 @@
 
 | 情况 | 行为 | 谁负责“结果不确定” |
 | --- | --- | --- |
-| **玩家换服 / 不再绑定本服** | 属主核对在执行之前（实体未加载），`BounceStep` 退回协调器：一份可重试失败（`Completion.Route` = 新地址或空），PubAck 之后 ack。协调器消耗一次尝试、按退避派下一次，有新地址就改 `Record.Route`。换服中不给地址 → 照原地址重试；换服完成后旧 sid 退回时给出新 sid → 下一次投到新 sid 执行一次。尝试用尽 → 补偿（补偿方向 → `ManualRequired`）。不用 nak：路由 durable 只有本 sid 绑定，nak 只会投回自己 | 退回只发生在执行之前，零写入；同一操作若更早的一次尝试已在旧 sid 生效，回执随实体搬到新 sid，新 sid 读到回执回放 |
+| **玩家换服 / 不再绑定本服** | 属主核对在执行之前（实体未加载），`BounceStep` 退回协调器：一份退回结果（`Completion.Bounced`，`Route` = 新地址或空），PubAck 之后 ack。退回不算重试（维护者 2026-11-11）：协调器按退回次数退避后重派，不消耗尝试次数（`Record.Bounces`），有新地址就改 `Record.Route`。换服中不给地址 → 照原地址重派；换服完成后旧 sid 退回时给出新 sid → 下一次投到新 sid 执行一次。正向到 saga 截止 → 补偿；补偿方向没有截止，等到属主收下。不用 nak：路由 durable 只有本 sid 绑定，nak 只会投回自己 | 退回只发生在执行之前，零写入；同一操作若更早的一次尝试已在旧 sid 生效，回执随实体搬到新 sid，新 sid 读到回执回放 |
 | **属主停机** | 命令留在它的 durable 上（未确认），别的 sid 拿不到；协调器按 Timeout 派下一次尝试到同一地址，用尽走补偿——与此前“别的进程只拒绝、等到超时”的超时与补偿语义相同。属主恢复后积压的各次尝试依次投给它 | 回执：至多一次生效，回放的结果 CommandID 是生效的那次，协调器按“成功接收规则”接收或补偿迟到成功 |
 | **重复投递**（JetStream 重投、协调器的新尝试） | 都只到属主；原生步骤读实体里的回执回放，Mongo 步骤读收件箱；结果 MsgID `res.<CommandID>`，协调器按回执摘要去重 | 沿用现有机制，没有新增去重层 |
 | **没有路由键的旧载荷** | 启动阶段：有路由步骤而 `StartRequest.Route` 为空 → 拒绝启动（`ErrInvalidRecord`，分区计 `rejected_input_total{reason="route"}`）。步骤阶段（理论上到不了）：载荷没有 sid → `RejectStep`，ERROR 日志，协调器随即补偿 / 人工。不迁移、不兜底 | — |
 
-“换服中”的状态由业务提供。game-demo 的玩家是**静态绑定**，没有单个玩家换服：整服搬机器时 sid 不变（命令在 durable 上等新进程，[PLAYER-MIGRATION §2](../framework/PLAYER-MIGRATION.md)），别名合服是离线操作、要求全部 saga 终态。所以 demo 的退回只用于“载荷里的 sid 与本服不符”，换服中的那一支由框架用例（`TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid`）以替身绑定表证明，见 §7 待确认 1。
+“换服中”的状态由业务提供。game-demo 的玩家是**静态绑定**，没有单个玩家换服：整服搬机器时 sid 不变（命令在 durable 上等新进程，[PLAYER-MIGRATION §2](../framework/PLAYER-MIGRATION.md)），别名合服是离线操作、要求全部 saga 终态。demo 的 `admitBound` 保留换服中的入口：钩子 `playerMoving`（`giftSteps.moving` / `guildSteps.moving`），缺省 `notMoving` 恒返回“不在换服中”，代码里标 `TODO（维护者 2026-11-11）`；生成工程用例 `TestAStepForAMovingSenderIsBouncedBackToTheSender` 注入钩子证明“换服中 → 退回、不接入；换服后接入”。协调器一侧由框架用例 `TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid` 以替身绑定表证明，见 §7。
 
 ## 4. 未采用：方案 ②（考虑过，维护者 11-11 改为 ③）
 
@@ -88,7 +88,7 @@
 ## 6. 限制
 
 - 一笔 saga 一个路由地址：改两个不同 sid 上实体的 saga（两名玩家之间的交易）需要“按步骤的地址”，未实现。需要时的方向：`StartRequest.Routes map[步骤名]route` 或让步骤结果带下一步的地址；改记录与线格式。
-- 退回消耗一次尝试、按步骤退避重派：换服窗口长于“尝试数 × 退避”时走补偿。demo 扣款的预算（15 次）按崩溃重启定，退回时最长约 Σ 退避 ≈ 46s。
+- 退回不消耗尝试（维护者 2026-11-11），时间上只受 saga 截止约束：正向到截止补偿；**补偿方向没有截止**，退回的补偿（例如退款）按 `BackoffMax` 间隔一直重派到属主收下；**没有截止的 saga** 正向也一样一直等。见 §7 第 2 条。
 - 同一条命令先后被退回两次、两次的地址不同（换服完成前后）：第二份结果按身份冲突被分区跳过（`rejected_input_total{reason="identity"}`，WARN），协调器已按第一份推进，无害但有日志噪声。
 - 定义与消费者的路由一致性只在协调器与步骤消费者同进程时由 `Steps.Start` 核对；拆分部署靠两边用同一份生成的定义。
 - JetStream durable 数随 sid 数线性增长（§3.2）；没有测 1000 个 sid 量级的服务端开销。
@@ -96,42 +96,19 @@
 
 ## 7. 待确认
 
-1. **玩家换服的状态来源**：维护者要求“用现有迁移的状态”。仓库里没有单个玩家改绑 sid 的能力（[PLAYER-MIGRATION §1](../framework/PLAYER-MIGRATION.md#1-先说清迁移的对象)：account 没有修改 `ServerID` 的接口），现有的“迁移”是整服搬机器（sid 不变，不需要退回）与离线别名合服（要求 saga 全部终态）。框架的退回机制与用例已就绪；demo 的 `admitBound` 里换服中那一支要等单个玩家换服的功能存在（或维护者指定现有哪个状态算“换服中”）再接。
-2. 退回是否应当**不消耗**尝试（例如按 Timeout 而不是按退避重派）：现在与可重试失败同一语义，见 §6 第 2 条。
+1. **玩家换服的状态来源（维护者 2026-11-11 定：先标 TODO）**：仓库里没有单个玩家改绑 sid 的能力（[PLAYER-MIGRATION §1](../framework/PLAYER-MIGRATION.md#1-先说清迁移的对象)：account 没有修改 `ServerID` 的接口），现有的“迁移”是整服搬机器（sid 不变，不需要退回）与离线别名合服（要求 saga 全部终态）。demo 保留入口：`gift_saga.go` 的钩子 `playerMoving`，缺省 `notMoving` 返回“不在换服中”，标 `TODO（维护者 2026-11-11）`，测试注入；单个玩家换服的功能存在后把它的状态接到这里。退回路径（换服中 / 不绑定本服）与用例保留。KNOWN-LIMITS 同记。
+2. **退回不算重试（维护者 2026-11-11 定，已实施）**：退回不消耗尝试次数（`Completion.Bounced` + `Record.Bounces`），按退回次数退避重派，时间上受 saga 截止约束、到期照常补偿；用例 `TestABouncedStepKeepsItsAttemptsAndCompensatesAtTheDeadline`（退回 9 次、MaxAttempts 3，saga 仍在正向；截止时补偿）。由此带出的**待确认**：补偿方向没有截止、没有截止的 saga 正向也没有时间上限，退回会一直重派（按 `BackoffMax` 间隔）。可选：A（推荐）有路由步骤的 saga 启动时必须带截止，补偿方向维持“等到属主收下”（退款只能落在属主上），代价是 `StartRequest` 多一条校验；B 维持现状，靠 `saga.step.bounced_total` 与 `LastError` 监控。
 
 ## 8. 验证与演练阈值
 
-单元与生成工程的红绿、变异与命令见[证据](evidence/saga-step-sid-route-20261111/README.md)。演练阈值：本机私有真实依赖复跑 14 步 ok，最后一步 p95 5.00s（11-10 为 27.85s），回到 16s 以内，所以 `scripts/test-seamless-demo.sh` 最后一步撤掉 `-max-p95 40`、改回 loadtest 缺省 16s。改阈值后没有再整轮复跑（5.00s 远低于 16s）；维护者合入时复跑。
+单元与生成工程的红绿、变异与命令见[证据](evidence/saga-step-sid-route-20261111/README.md)。演练阈值：本机私有真实依赖复跑 14 步 ok，最后一步 p95 5.00s（11-10 为 27.85s），回到 16s 以内，所以 `scripts/test-seamless-demo.sh` 最后一步撤掉 `-max-p95 40`、改回 loadtest 缺省 16s。改回缺省后复跑一次：14 步 ok，最后一步 p95 5.45s（阈值 16s）。
 
 ## 9. 工作量（实际）
 
 框架（framework/saga + wiring/saga）约 300 行改动、测试约 600 行；codegen `-routed` 约 80 行与用例；demo 净删交接代码约 250 行；文档。约一个工作日（含生成工程全测与演练）。
 
-## 10. 进度（2026-11-11 暂停）
+## 10. 进度
 
-额度用完，按协调者要求在安全点暂停，改动以一笔 WIP 提交推到 `feat/saga-step-direct-route`（未合 main、未发版）。
-
-**已完成**
-
-- 框架（framework/saga）：`Step.Routed`、`StartRequest.Route`（`SidRoute`）、启动时的路由检查、`ev.to.<route>.<topic>` 路由主题、`Command.Route`、退回 / 拒收（`BounceStep` / `RejectStep`，退回可带新地址并改 `Record.Route`）、WireVersion 4、冷备 Route；参与方按 sid 的 durable 与过滤；`Engine.RoutedTopic`。
-- wiring/saga `WithSidRoute`（定义与消费者不一致在订阅前拒绝），删 `RunHandedOver`；sidmerge 清单文字。
-- codegen `roost add saga -routed`；game-demo 赠礼 / 公会玩家步骤改路由，删交接代码，`admitBound` 保留。
-- 红（修前原文见证据 §1）、绿、5 处框架变异与 2 处生成工程变异都红过；文档（SAGA、guide / impl 06、MMORPG-INTEGRATION、PLAYER-MIGRATION、OBSERVABILITY、WALKTHROUGH、KNOWN-LIMITS、CHANGELOG、本文、证据）。
-- 本机私有真实依赖无缝演练 14 步 ok，最后一步 p95 27.85s → 5.00s；`scripts/test-seamless-demo.sh` 撤掉 `-max-p95 40`，私有环境已 `clean`。
-
-**暂停时正在做**：收尾验证。改文档后的全量 `go test ./...` 跑到 codegen 一段时被停掉（已完成的包全 ok，未完成）；重新生成的 game-demo build / vet / 全量 `go test ./...` ok，但 `internal/service/game -race` 红了（见下）。
-
-**已知问题 / 红着的测试（原文）**
-
-```text
-FAIL	example.com/sagaroute/internal/service/game	106.143s
-```
-
-重新生成的 game-demo（`--skip-deps`，replace 指向本分支）上 `go test -count=1 -race ./internal/service/game`。只保留了最后一行，失败的用例与输出没有保存，**尚未确认**是本分支引入的缺陷还是负载下的偶发；同一包在暂停前第一次生成的工程上 `-race` 通过过（83s），之后只改了文档与演练脚本，没改模板。
-
-**下一步（按顺序）**
-
-1. 重新生成 game-demo，`go test -count=1 -race -v ./internal/service/game 2>&1 | tee` 保存全文，找出失败用例；按证据定性（本分支缺陷则先红后绿修，偶发则多轮复现并记录）。
-2. `GOWORK=off go test -count=1 ./...` 全量、根包 `go test -count=1 .`、`python3 scripts/check-doc-anchors.py`、`go generate ./...` 后 porcelain 干净。
-3. 把证据 §6 的结果表改成最终结果；`git fetch origin && git merge origin/main`，整理成正式提交（合 main 由维护者决定）。
-4. 维护者合入前按 §8 复跑一次无缝演练（阈值已是缺省 16s）。
+- 11-11 额度用完暂停，WIP 提交 `e90d1dbe` 推到 `feat/saga-step-direct-route`；当时重新生成的 game-demo 上 `internal/service/game -race` 红过一次。
+- 11-11 恢复：按维护者对 §7 的两条决定实施——退回不算重试（`Completion.Bounced` / `Record.Bounces`，用例 `TestABouncedStepKeepsItsAttemptsAndCompensatesAtTheDeadline`）；“换服中”留钩子 `playerMoving` 与 `TODO（维护者 2026-11-11）`（用例 `TestAStepForAMovingSenderIsBouncedBackToTheSender`）。那次 `-race` 失败 5 次复跑没有复现，记为尚未确认（证据 §6）。全量验证与阈值 16s 下的无缝演练（p95 5.45s）通过，结果见证据 §5、§6。
+- 没有合入 main、没有发版；合入由维护者决定。待确认见 §7 第 2 条（补偿方向与没有截止的 saga 上退回一直重派）。

@@ -259,7 +259,7 @@ func planResume(record Record, defined bool, request ResumeRequest, deadline tim
 	after := record.Clone()
 	after.Version++
 	after.UpdatedAt = now
-	after.Attempt = 0
+	after.Attempt, after.Bounces = 0, 0
 	after.LastError = ""
 	after.CommandID = ""
 	after.OperationKey = ""
@@ -443,7 +443,7 @@ func lateStepState(record Record, completion Completion, step int) Record {
 // 选择规则只有这一处。after 的版本、时间、错误由调用方设置。
 func nextCompensation(after Record, now time.Time) Record {
 	after.Phase = PhaseCompensate
-	after.Attempt = 0
+	after.Attempt, after.Bounces = 0, 0
 	after.CommandID = ""
 	after.OperationKey = ""
 	switch {
@@ -481,7 +481,7 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 		if result.Data != nil && !late {
 			after.Data = append(after.Data[:0], result.Data...)
 		}
-		after.Attempt = 0
+		after.Attempt, after.Bounces = 0, 0
 		after.LastError = ""
 		if record.Phase == PhaseForward {
 			after.CompletedSteps = record.Step + 1
@@ -507,9 +507,8 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 		}
 		return after
 	}
-	if result.Route != "" {
-		// 参与方退回了这一步并给出新地址（StepBounce）：下一次尝试投到那里。退回本身是一次可重试失败，照常消耗一次尝试。
-		after.Route = result.Route
+	if result.Bounced {
+		return bounceState(after, definition, result, now)
 	}
 	if !result.Retryable {
 		if after.Phase == PhaseCompensate {
@@ -520,6 +519,35 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 		return compensationState(after, result.Error, now)
 	}
 	return retryState(after, definition, result.Error, now)
+}
+
+// bounceState 处理参与方退回（Completion.Bounced，StepBounce）：这次尝试没有执行，按退回的次数退避后重派同一步，
+// 给了新地址就改投那里（Record.Route）。退回不算重试（维护者 2026-11-11）：不计入 MaxAttempts，所以玩家换服再久也不会
+// 因为尝试用尽而补偿；正向的时间上限是 saga 截止——下一次派发不晚于截止，到期循环在截止时转补偿（planDue）。
+// 补偿方向没有截止，退回的补偿一直等到属主收下（退款类补偿只能落在属主上）。after 的版本已由调用方推进。
+func bounceState(after Record, definition Definition, result Completion, now time.Time) Record {
+	after.Bounces++
+	after.UpdatedAt = now
+	after.LastError = result.Error
+	if result.Route != "" {
+		after.Route = result.Route
+	}
+	step, ok := stepFor(after, definition)
+	if !ok {
+		after.Status = StatusManualRequired
+		after.NextRunAt = time.Time{}
+		return after
+	}
+	if after.Phase == PhaseForward {
+		after.Status = StatusPending
+	} else {
+		after.Status = StatusCompensating
+	}
+	after.NextRunAt = now.Add(backoff(after.ID, after.Bounces, step.BackoffMin, step.BackoffMax))
+	if after.Phase == PhaseForward && !after.DeadlineAt.IsZero() && after.DeadlineAt.Before(after.NextRunAt) {
+		after.NextRunAt = after.DeadlineAt
+	}
+	return after
 }
 
 // retryOrCompensate 是从已存记录出发的转移（到期循环的超时路径）：推进一次版本，再决定重试还是补偿。applyCompletion
@@ -544,13 +572,14 @@ func retryState(after Record, definition Definition, reason string, now time.Tim
 		after.NextRunAt = time.Time{}
 		return after
 	}
-	if after.Attempt < step.MaxAttempts {
+	// 退回的尝试不算（Bounces，见 bounceState）：只按真正执行过或超时的尝试数判上限、算退避。
+	if tried := after.Attempt - after.Bounces; tried < step.MaxAttempts {
 		if after.Phase == PhaseForward {
 			after.Status = StatusPending
 		} else {
 			after.Status = StatusCompensating
 		}
-		after.NextRunAt = now.Add(backoff(record.ID, after.Attempt, step.BackoffMin, step.BackoffMax))
+		after.NextRunAt = now.Add(backoff(record.ID, tried, step.BackoffMin, step.BackoffMax))
 		return after
 	}
 	if after.Phase == PhaseCompensate {
@@ -573,7 +602,7 @@ func beginCompensation(record Record, reason string, now time.Time) Record {
 func compensationState(after Record, reason string, now time.Time) Record {
 	after.UpdatedAt = now
 	after.LastError = reason
-	after.Attempt = 0
+	after.Attempt, after.Bounces = 0, 0
 	after.CommandID = ""
 	after.OperationKey = ""
 	if after.CompletedSteps == 0 && after.LateStep == 0 {

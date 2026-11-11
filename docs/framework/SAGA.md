@@ -247,10 +247,13 @@ return left, step.Complete(true, "")
   里有协调器时 `Steps.Start` 用 `Engine.RoutedTopic` 核对定义与消费者的路由是否一致，不一致拒绝启动（一边路由一边不路由的命令永远到不了）；协调器
   在别的进程时靠两边用同一份生成的定义。本进程没有 sid 时拒绝启动。
 - **属主核对仍在**：路由不是防第二个写者的保证，属主进程收到步骤后 `WithAdmit` 仍核对“这个实体此刻是不是本进程的”，结论有三种（`StepConsumerConfig.Admit`）：
-  - **退回发送端**（`saga.BounceStep(route, reason)`）：不执行、零写入（在步骤体与实体加载之前），把一份可重试失败发回命令所属分区（`Completion.Route`
-    带新地址，空表示照原地址），PubAck 之后 ack。协调器按步骤预算安排下一次尝试（**退回消耗一次尝试**、按退避），有新地址就改 `Record.Route`，下一次
-    尝试投到新地址；尝试用尽走补偿（补偿方向用尽是 `ManualRequired`）。用于“实体已不绑定本 sid”（给出最新绑定）与“实体正在换服”（不给地址，换服完成
-    前照原地址重试，完成后旧 sid 退回时给出新 sid）。**不用 nak**：路由 durable 只有本 sid 绑定，nak 只会投回自己。计 `saga.step.bounced_total{consumer}`。
+  - **退回发送端**（`saga.BounceStep(route, reason)`）：不执行、零写入（在步骤体与实体加载之前），把一份退回结果发回命令所属分区（`Completion.Bounced`，
+    可重试失败，`Route` 带新地址，空表示照原地址），PubAck 之后 ack。**退回不算重试**（维护者 2026-11-11）：协调器按退回次数退避（`BackoffMin`～`BackoffMax`）
+    后重派同一步，有新地址就改 `Record.Route`，不消耗 `MaxAttempts`——退回的那次仍占一个 `Attempt`（下一次派发换 CommandID，命令与结果的 MsgID
+    由它派生），另记 `Record.Bounces`，有效尝试数是 `Attempt - Bounces`。时间上限是 saga 截止：正向的下一次派发不晚于截止，截止一到照常补偿；补偿
+    方向没有截止，退回的补偿一直等到属主收下；没有截止的 saga 正向也一直等（按 `BackoffMax` 间隔重派）。用于“实体已不绑定本 sid”（给出最新绑定）
+    与“实体正在换服”（不给地址，换服完成前照原地址重派，完成后旧 sid 退回时给出新 sid）。**不用 nak**：路由 durable 只有本 sid 绑定，nak 只会投回
+    自己。计 `saga.step.bounced_total{consumer}`。
   - **拒收**（`saga.RejectStep(reason)`）：命令永远不能执行（例如载荷里没有路由需要的 sid），发回不可重试失败（正向随即补偿，补偿方向 `ManualRequired`），
     ERROR 日志，计 `saga.step.rejected_total{consumer}`。旧载荷不兼容、不迁移、不兜底（维护者 2026-10-05 / 2026-11-11）。
   - **暂时不能执行**（其他错误，例如实体副本正在卸载）：nak，按退避重投给**同一个** durable（同一个 sid）。

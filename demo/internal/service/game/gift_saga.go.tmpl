@@ -183,6 +183,32 @@ type giftSteps struct {
 	// owners is who may touch which player. nil means a single-process
 	// deployment, where every player is this process's.
 	owners playerOwnership
+	// moving is the "is this player moving between sids" hook; nil is
+	// notMoving. See playerMoving.
+	moving playerMoving
+}
+
+// playerMoving reports whether a player is moving between sids right now.
+// A routed Player step that meets a moving player is bounced back to the
+// coordinator (saga.BounceStep("", …)): it is not run here, nothing is
+// written, and the coordinator dispatches it again after a backoff without
+// spending an attempt, until the move completes and the old sid can name the
+// new one, or the saga's deadline compensates it.
+//
+// TODO（维护者 2026-11-11）：玩家换服还没有对应的现有状态——demo 的玩家绑定是静态的（整服搬机器 sid 不变，
+// 离线别名合服要求 saga 全部终态），所以缺省 notMoving 恒返回“不在换服中”。等单个玩家换服的功能存在，
+// 把它的状态接到这里（giftSteps.moving / guildSteps.moving）；退回发送端的路径与用例（gift_route_test.go）已经就绪。
+type playerMoving func(playerID int64) bool
+
+// notMoving is the default playerMoving: no player is ever moving (TODO above).
+func notMoving(int64) bool { return false }
+
+// isMoving asks the hook, nil meaning notMoving.
+func (moving playerMoving) isMoving(playerID int64) bool {
+	if moving == nil {
+		return notMoving(playerID)
+	}
+	return moving(playerID)
 }
 
 // admitBound is debit's and refund's admission: may THIS process run this
@@ -212,17 +238,17 @@ type giftSteps struct {
 //     the new route, so the next attempt goes there. With static binding the
 //     binding is the payload's FromSID; the route and FromSID are written from
 //     the same value at start, so this only happens if the two disagree.
+//   - the sender is moving between sids (playerMoving; no such state yet,
+//     TODO 维护者 2026-11-11): saga.BounceStep with no new route — back to the
+//     coordinator, not run, nothing written, dispatched again at the same
+//     route without spending an attempt. Never a nak, which on a routed
+//     durable only comes back to this same process.
 //   - the sender is bound here but his copy is being unloaded: a plain error,
 //     so the delivery is redelivered to this sid's durable after a backoff and
 //     finds the unload finished. There is no better process to give it to.
 //
-// A player "moving between sids" has no state in this demo: players never
-// change sid (static binding; moving a whole sid to another machine keeps the
-// route, and the commands wait on that sid's durable for the new process). A
-// game that adds a player move answers it here with saga.BounceStep("", …) —
-// back to the coordinator, retried at the old route until the move completes
-// and the old sid can name the new one — never with a nak, which on a routed
-// durable only comes back to this same process.
+// Moving a whole sid to another machine keeps the route: the commands wait on
+// that sid's durable for the new process, nothing to bounce.
 func (steps giftSteps) admitBound(_ context.Context, command saga.Command) error {
 	if steps.owners == nil {
 		return nil
@@ -240,6 +266,9 @@ func (steps giftSteps) admitBound(_ context.Context, command saga.Command) error
 	if state.FromSID <= 0 {
 		slog.Error("gift saga: rejecting a step whose payload names no sender sid", "player_id", state.From, "command", command.ID, "saga_id", command.SagaID)
 		return saga.RejectStep(fmt.Sprintf("gift step %s for player %d names no sender sid; it cannot be routed", command.ID, state.From))
+	}
+	if steps.moving.isMoving(state.From) {
+		return saga.BounceStep("", fmt.Sprintf("player %d is moving between sids", state.From))
 	}
 	local, err := steps.owners.AdmitBound(state.From, state.FromSID)
 	if !local {

@@ -59,10 +59,11 @@ type StepConsumerConfig struct {
 	// 返回值的三种结论：
 	//
 	//   - nil：执行。
-	//   - StepBounce（BounceStep）：这条命令此刻不该在这里执行，退回发送端（协调器）——消费者把一份可重试失败（Completion.Route
-	//     带上新地址，空表示照原地址）发回命令所属分区，PubAck 之后 ack。协调器按步骤预算安排下一次尝试（退回消耗一次尝试），
-	//     有新地址就投到那里；尝试用尽走补偿（补偿方向用尽是 ManualRequired）。用于路由步骤的属主核对：玩家已不绑定本 sid、
-	//     或正在换服。不用 nak：路由步骤的 durable 只有这一个 sid 绑定，nak 只会把它再投回来。
+	//   - StepBounce（BounceStep）：这条命令此刻不该在这里执行，退回发送端（协调器）——消费者把一份退回结果（Completion.Bounced，
+	//     可重试失败，Route 带上新地址，空表示照原地址）发回命令所属分区，PubAck 之后 ack。协调器按退回次数退避后重派，
+	//     有新地址就投到那里；退回不算重试，不消耗尝试次数（维护者 2026-11-11），正向到 saga 截止走补偿，补偿方向一直等到
+	//     属主收下。用于路由步骤的属主核对：玩家已不绑定本 sid、或正在换服。不用 nak：路由步骤的 durable 只有这一个 sid
+	//     绑定，nak 只会把它再投回来。
 	//   - StepRejection（RejectStep）：这条命令永远不能执行（例如载荷里没有路由需要的 sid），把不可重试失败发回，PubAck 之后 ack。
 	//   - 其他错误：暂时不能执行（例如实体正在卸载），原样返回，nak 后按退避重投给同一个 durable。不路由的步骤里所有进程共享
 	//     durable，重投会落到任意进程；路由步骤只回到本 sid。没有任何进程准入的命令会一直重投到 MaxDeliver，所以不能处处返回它。
@@ -123,7 +124,7 @@ func admitCommand(ctx context.Context, js fnats.IJetStream, layout Layout, confi
 		if bounce.Route != "" && !validRoute(bounce.Route) {
 			return true, fmt.Errorf("saga: step %s bounced to an invalid route %q", command.ID, bounce.Route)
 		}
-		completion.Retryable, completion.Route, completion.Error = true, bounce.Route, bounce.Error()
+		completion.Retryable, completion.Bounced, completion.Route, completion.Error = true, true, bounce.Route, bounce.Error()
 		metrics.IncCounter("saga.step.bounced_total", metrics.Labels{"consumer": config.Durable}, 1)
 		slog.Info("saga: step bounced to the sender", "command_id", command.ID, "saga_id", command.SagaID, "route", command.Route, "next_route", bounce.Route, "reason", bounce.Reason)
 	case errors.As(err, &rejection):

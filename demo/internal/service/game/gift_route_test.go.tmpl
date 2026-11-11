@@ -134,6 +134,45 @@ func TestAStepForASenderBoundElsewhereIsBouncedToHisSid(t *testing.T) {
 	}
 }
 
+// A step for a sender who is moving between sids is bounced back to the
+// coordinator with no new route (the next attempt goes to the same sid and
+// does not spend an attempt — roost-core framework/saga
+// TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid pins the coordinator side):
+// not run, and nothing is recorded — even on the sid he is still bound to.
+// Once the move is over the same command is admitted. The demo has no player
+// move yet (playerMoving, TODO 维护者 2026-11-11), so the hook is injected
+// here; its default never reports a move.
+func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
+	steps, owners := routeSteps(routeLocalSID)
+	if steps.moving.isMoving(42) {
+		t.Fatal("the default hook reported a move; the demo has no player move state yet")
+	}
+	moving := map[int64]bool{42: true}
+	steps.moving = func(playerID int64) bool { return moving[playerID] }
+	err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID))
+	var bounce *saga.StepBounce
+	if !errors.As(err, &bounce) || bounce.Route != "" {
+		t.Fatalf("a step for a moving sender = %v, want a bounce back to the coordinator with no new route", err)
+	}
+	if owners.Resident(42) {
+		t.Fatal("bouncing the step of a moving sender took him into service here")
+	}
+	moving[42] = false
+	if err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
+		t.Fatalf("after the move the step = %v, want it admitted", err)
+	}
+	guildSteps := guildSteps{owners: owners, moving: func(int64) bool { return true }}
+	payload, err := json.Marshal(guild.State{PlayerID: 42, SID: routeLocalSID, Coins: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := giftCommand(t, 42, routeLocalSID, routeLocalSID)
+	command.SagaType, command.Topic, command.Payload = alliancedonate.Type, alliancedonate.TopicDebit, payload
+	if err := guildSteps.admitBound(context.Background(), command); !errors.As(err, &bounce) || bounce.Route != "" {
+		t.Fatalf("a guild step for a moving player = %v, want a bounce with no new route", err)
+	}
+}
+
 // A payload with no sender sid cannot be routed: it is rejected (a
 // non-retryable failure goes back to the coordinator, logged as an error)
 // and nobody is taken into service — even a sender who happens to be resident

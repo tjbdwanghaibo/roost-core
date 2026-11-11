@@ -25,7 +25,7 @@ GOWORK=off go test -count=1 -v -run 'TestARoutedStep|TestAStepBounced|TestAStepT
 | --- | --- |
 | `TestARoutedStepIsDeliveredOnlyToTheOwnerSidsConsumer` | 一次投递、只到 1002、nak 退避 0；JetStream 重投（同一条消息再来）仍只到 1002，回执回放、业务只执行一次，两份结果同一 MsgID、同一回执摘要；协调器收到结果与重复后 saga 完成 |
 | `TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid` | 玩家正在从 1000 换到 1001：投到 1000 的步骤被退回发送端（一次 ack 的投递、零执行、零回执写入、发回不带地址的可重试失败，没有 nak）；协调器照原地址再派；换服完成后 1000 退回并给出 1001；协调器改 `Record.Route`，第三次尝试投到 1001 执行一次；1002 全程没收到 |
-| `TestAStepThatKeepsBouncingEndsInCompensation` | 换服一直不完成：每次尝试都被退回，尝试用尽后按原有语义结束（第 0 步没有可补偿的，saga failed），业务一次也没执行 |
+| `TestABouncedStepKeepsItsAttemptsAndCompensatesAtTheDeadline` | 换服一直不完成：连续退回 9 次（MaxAttempts 3），每次之后 saga 仍在正向等待，退回都记在 `Record.Bounces`、不耗尝试（维护者 2026-11-11：退回不算重试）；saga 截止一到按原有语义结束（第 0 步没有可补偿的，saga failed，`saga deadline exceeded`），业务一次也没执行 |
 | `TestARoutedStepWaitsForItsOwnerToComeBack` | 属主 1002 停机：命令留在 `game-gift-debit-1002` 上，别的 sid 收不到；协调器按超时派第二次尝试，地址不变；1002 重新订阅后积压的两次尝试都投给它，业务只执行一次，两份结果都是生效那次的 CommandID，saga 完成 |
 | `TestARoutedSagaWithoutARouteIsRefused` | 有路由步骤而 Route 为空、`10.02`、`a b`：启动被拒绝（分区不写事件；`StartSaga` 返回 `ErrInvalidRecord`）；载荷没有 sid 的命令在属主被拒收：零执行、发回不可重试失败，saga failed |
 | `TestEngineReportsWhichTopicsAreRouted` | `Engine.RoutedTopic`：路由步骤的正向、补偿（含缺省的 `<forward>.compensate`）主题是路由的 |
@@ -34,7 +34,7 @@ GOWORK=off go test -count=1 -v -run 'TestARoutedStep|TestAStepBounced|TestAStepT
 
 `codegen`：`TestAddSagaRoutedRoutesTheNamedStepsBySid`（`-routed` 的定义、`EmitStart` / `Start` 签名、登记），`TestAddSagaNativeRejectsBadInputWithoutTouchingTheProject` 加了 `-routed` 不在 `-steps` 里、重复两种。
 
-生成的 game-demo（`internal/service/game/gift_route_test.go`）：定义只路由写 Player 的步骤；属主核对的四种结论（本服执行、离线发送方在本服接入、绑定别的服退回并指明其 sid 且不接入、没有 sid 拒收且不接入、卸载中普通错误）；公会玩家步骤同一规则。
+生成的 game-demo（`internal/service/game/gift_route_test.go`）：定义只路由写 Player 的步骤；属主核对的结论（本服执行、离线发送方在本服接入、绑定别的服退回并指明其 sid 且不接入、没有 sid 拒收且不接入、卸载中普通错误）；公会玩家步骤同一规则；`TestAStepForAMovingSenderIsBouncedBackToTheSender`：缺省钩子不报换服，注入“换服中”后赠礼与公会步骤都退回发送端、不带新地址、不接入，换服结束后同一命令接入（换服状态是 `TODO（维护者 2026-11-11）`）。
 
 ## 3. 变异（每次只改一处，确认变红后还原）
 
@@ -45,8 +45,10 @@ GOWORK=off go test -count=1 -v -run 'TestARoutedStep|TestAStepBounced|TestAStepT
 | 退回当成普通错误（nak） | 16 次投递全部回到 sid 1000、nak 退避累计 5m1.75s；`attempt 1 result = [], want one bounce` |
 | 不做启动时的路由检查 | `route "": a routed saga started (1 events), want the start refused` |
 | 路由消费者不按 sid 区分 durable 名 | `durable game-gift-debit on UNIT_SAGA_G0 has filter unit.saga.*.ev.to.1000.gift.debit, not unit.saga.*.ev.to.1001.gift.debit`（JetStream 拒绝用另一个过滤绑定已有 durable） |
+| 退回照旧按可重试失败消耗尝试（11-11 暂停时的提交 `e90d1dbe` 的行为） | `after bounce 3 of 9 (MaxAttempts 3) the saga is failed/forward ("saga: step bounced to the sender: player is moving between sids"), want still pending forward: a bounce must not use up the attempts` |
 | 生成工程：赠礼定义去掉 `Routed` | `gift_route_test.go:82: gift_item step debit: routed=false, want true` |
 | 生成工程：`admitBound` 对不绑定本服的玩家返回普通错误 | `gift_route_test.go:130: a step for a sender bound to sid 1000 = leaving it, want a bounce to route 1000` |
+| 生成工程：`admitBound` 不问换服钩子 | `gift_route_test.go:155: a step for a moving sender = <nil>, want a bounce back to the coordinator with no new route` |
 
 ## 4. 验证命令
 
@@ -72,7 +74,7 @@ python3 scripts/check-doc-anchors.py
 | --- | --- | --- |
 | 单元（3 个 sid，属主排第 3） | 3 次投递，结果前 nak 退避 0.75s | 1 次投递，0 |
 | 推算（5 个 sid，属主排第 5） | 每个原生步骤 +3.75s（250 + 500 + 1000 + 2000ms） | 0（一次投递） |
-| 真实依赖无缝演练最后一步（`cmd/loadtest` sid 1003，2 个机器人） | p95 27.85s（11-10，[证据](../perf-terrain-acceptance-20261110/README.md#第-2-轮无缝演练最后一步的-p95已定位)；saga 终态记录：礼物完成 3.80s、补偿 7.56s、联盟领奖 3.82s） | p95 5.00s（见下） |
+| 真实依赖无缝演练最后一步（`cmd/loadtest` sid 1003，2 个机器人） | p95 27.85s（11-10，[证据](../perf-terrain-acceptance-20261110/README.md#第-2-轮无缝演练最后一步的-p95已定位)；saga 终态记录：礼物完成 3.80s、补偿 7.56s、联盟领奖 3.82s） | p95 5.00s；阈值改回 16s 后复跑 5.45s（见下） |
 
 ### 真实依赖演练
 
@@ -85,19 +87,30 @@ python3 scripts/check-doc-anchors.py
 | 场景里的 saga 状态查询 | 礼物状态（10014）共 4 次、公会操作状态（10030）共 7 次，即每个机器人每笔 saga 一两次查询就看到终态 |
 | 各游戏进程日志里的退回 / 拒收 | 0 条（玩家都绑定在发起方 sid，步骤一次投给属主） |
 
+恢复后（最终代码，脚本最后一步已用缺省阈值 16s）在同样的私有环境上复跑一次：14 步全部 ok；最后一步成功 2、失败 0，p50 5.45s、p95 5.45s，阈值 16s 没有越过；礼物状态查询 4 次、公会操作状态 8 次；退回 / 拒收日志 0 条；`clean` 退出 0。
+
 修前同一脚本同一步 p95 27.85s（11-10，5 进程拓扑下每个原生步骤被非属主拒一次、nak 退避，约多出 22s）。修后 5.00s 回到缺省阈值 16s 以内，所以脚本这一步撤掉 `-max-p95 40`、改回缺省；改阈值后没有再整轮复跑。本机有后台负载，数值只作同机参考。
 
 ## 6. 结果
+
+最终一轮（含“退回不算重试”与换服钩子，2026-11-11 恢复后）：
 
 | 检查 | 结果 |
 | --- | --- |
 | `gofmt -l` | 空 |
 | `go build ./...`、`go vet`（上列包） | 通过 |
 | `-race`：`framework/saga`、`wiring/saga`、`wiring/sidmerge` | ok |
-| 根包 `go test -count=1 .` | ok（改文档前） |
-| `go test ./codegen/...` | ok（改文档前） |
-| `go test ./...` 全量 | 改文档前一轮：除根包外全 ok，根包的文档断链已修、根包单独复跑 ok；改文档后的一轮因暂停中途停掉，未完成 |
-| 生成 game-demo（第一次生成）：build / vet、`internal/service/game -race` | ok（-race 83s） |
-| 生成 game-demo（暂停前重新生成）：build / vet、全量 `go test ./...` | ok（36 个包 ok） |
-| 生成 game-demo（暂停前重新生成）：`internal/service/game -race` | **FAIL**（106s，原文只留下 `FAIL	example.com/sagaroute/internal/service/game	106.143s`，失败用例未保存，**尚未确认**） |
+| `go test ./...` 全量（含根包与 `codegen/...`） | 164 个包 ok，退出 0 |
+| `go generate ./...` | 之后 porcelain 与 diff 不变 |
+| 生成 game-demo：build / vet、全量 `go test ./...` | ok（36 个包） |
+| 生成 game-demo：`internal/service/game -race` | 5 次 ok：暂停时提交的代码上空载 3 次（85s、90s、87s），最终代码上与全量 `go test ./...` 同时跑 2 次（93s、106s） |
 | `check-doc-anchors.py` | 0 个断链 |
+| 真实依赖无缝演练（阈值缺省 16s） | 14 步 ok，最后一步 p95 5.45s，见 §5 |
+
+**暂停前那次 `-race` 失败（尚未确认）**：11-11 暂停前，重新生成的 game-demo 上 `go test -count=1 -race ./internal/service/game` 失败一次，只留下最后一行：
+
+```text
+FAIL	example.com/sagaroute/internal/service/game	106.143s
+```
+
+当时它与仓库全量 `go test ./...` 同时跑（机器满载）；失败用例与输出没有保存。之后同一份代码空载 3 次、最终代码在同样的并发负载下 2 次，全部通过（`-v` 全文保存在本机，失败 0、DATA RACE 0）。没有复现，不能确定是本改动引入的缺陷还是负载下的时序问题，按“尚未确认”记录；复现时先保存 `-v` 全文。

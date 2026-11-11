@@ -74,7 +74,7 @@ if err := steps.Start(ctx); err != nil { ... }                   // 登记错误
 - **按 sid 确切路由**（维护者 2026-11-11 方案 ③）：只能在某个 sid 上执行的步骤，定义里 `Routed: true`（`roost add saga ... -routed <step>`），
   发起方在 `StartRequest.Route` 写 `saga.SidRoute(属主 sid)`（没写就拒绝启动），参与方 `kitsaga.WithSidRoute()`：协调器把命令发到
   `ev.to.<sid>.<topic>`，只有那个 sid 的 durable 收到，非属主进程收不到，结果一次投递就发出，不再受 nak 退避控制。属主仍用 `WithAdmit` 核对实体
-  归属：不在本服（或正在换服）时 `saga.BounceStep` 退回协调器（不执行、零写入，可带新地址，消耗一次尝试），永远不能执行的 `saga.RejectStep` 拒收，
+  归属：不在本服（或正在换服）时 `saga.BounceStep` 退回协调器（不执行、零写入，可带新地址；退回不算重试，不消耗尝试次数，正向受 saga 截止约束），永远不能执行的 `saga.RejectStep` 拒收，
   暂时不能执行的返回普通错误（nak 回到同一 sid）。细则与 JetStream 资源变化见 [SAGA §按 sid 确切路由](../SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③)。
   game-demo 的赠礼 saga（`internal/service/game/gift_saga.go`）与公会 saga（`alliance_saga.go`）是完整样例。
 - 底层 API（`SubscribeNativeStep` / `SubscribeMongoStep` / `RunNativeStep` / `NewLoadPublisher`）公开，只在需要自定义消费者参数时直接用。

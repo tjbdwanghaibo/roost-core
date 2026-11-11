@@ -492,8 +492,14 @@ func routedPartition(t *testing.T) *unitPartition {
 // routedStart 是一条 gift 启动意图，地址是 route。
 func routedStart(t *testing.T, u *unitPartition, businessKey string, payload sidPayload, route string) fnats.LogMsg {
 	t.Helper()
+	return routedStartUntil(t, u, businessKey, payload, route, time.Time{})
+}
+
+// routedStartUntil 同 routedStart，带 saga 截止（零值表示没有）。
+func routedStartUntil(t *testing.T, u *unitPartition, businessKey string, payload sidPayload, route string, deadline time.Time) fnats.LogMsg {
+	t.Helper()
 	data, _ := json.Marshal(payload)
-	request, err := prepareStart(StartRequest{Type: "gift", BusinessKey: businessKey, DefinitionVersion: 1, Data: data, Route: route}, u.e.opts.MaxPayloadBytes)
+	request, err := prepareStart(StartRequest{Type: "gift", BusinessKey: businessKey, DefinitionVersion: 1, Data: data, Route: route, DeadlineAt: deadline}, u.e.opts.MaxPayloadBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,32 +714,47 @@ func TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid(t *testing.T) {
 	}
 }
 
-// 换服一直没有完成：每次尝试都被退回，尝试用尽后协调器按原有语义补偿（正向的第 0 步没有已完成的步骤可补，saga 判失败）；
-// 业务一次也没执行。退回不改变“超时 / 用尽走补偿”的语义，只是更早知道。
-func TestAStepThatKeepsBouncingEndsInCompensation(t *testing.T) {
+// 换服一直不完成：每次派发都被退回。退回不算重试（维护者 2026-11-11）——退回次数远超 MaxAttempts，saga 仍在正向等着，
+// 尝试一次也没耗；时间上受 saga 截止约束，截止一到走补偿（第 0 步没有可补偿的，saga failed）。业务一次也没执行。
+func TestABouncedStepKeepsItsAttemptsAndCompensatesAtTheDeadline(t *testing.T) {
 	u := routedPartition(t)
 	broker := newRouteBroker()
 	facts := &bindings{sid: map[int64]int32{}, moving: map[int64]bool{}}
 	facts.set(7, 1000, true)
 	processes := subscribeSids(t, broker, u.e.layout, []int32{1000, 1001}, facts.admitBound)
 	stream := u.e.layout.StreamOf(0)
-	r := u.round(u.clock.Now(), routedStart(t, u, "gift-stuck", sidPayload{Player: 7, SID: 1000}, SidRoute(1000)))
+	deadline := u.clock.Now().Add(time.Minute)
+	r := u.round(u.clock.Now(), routedStartUntil(t, u, "gift-stuck", sidPayload{Player: 7, SID: 1000}, SidRoute(1000), deadline))
+	bounces := 3 * int(routedDefinition().Steps[0].MaxAttempts)
 	var id string
-	for attempt := 1; attempt <= int(routedDefinition().Steps[0].MaxAttempts); attempt++ {
+	for bounce := 1; bounce <= bounces; bounce++ {
 		subject, raw, command := dispatched(t, r)
 		id = command.SagaID
+		if command.Route != SidRoute(1000) {
+			t.Fatalf("dispatch %d went to route %q, want 1000", bounce, command.Route)
+		}
 		broker.emit(stream, subject, raw)
 		published := broker.takePublished()
-		if len(published) != 1 || !published[0].input.Completion.Retryable {
-			t.Fatalf("attempt %d result = %+v, want one bounce", attempt, published)
+		if len(published) != 1 || !published[0].input.Completion.Bounced {
+			t.Fatalf("dispatch %d result = %+v, want one bounce", bounce, published)
 		}
 		r = u.round(u.clock.Now(), u.resultInput(published[0].input.Completion))
-		if attempt < int(routedDefinition().Steps[0].MaxAttempts) {
+		record := u.record(id)
+		if record.Status != StatusPending || record.Phase != PhaseForward {
+			t.Fatalf("after bounce %d of %d (MaxAttempts %d) the saga is %s/%s (%q), want still pending forward: a bounce must not use up the attempts",
+				bounce, bounces, routedDefinition().Steps[0].MaxAttempts, record.Status, record.Phase, record.LastError)
+		}
+		if bounce < bounces {
 			r = u.round(u.clock.Advance(backoffPassed))
 		}
 	}
-	if record := u.record(id); record.Status != StatusFailed {
-		t.Fatalf("saga = %s after every attempt bounced, want failed (nothing to compensate)", record.Status)
+	if record := u.record(id); int(record.Bounces) != bounces || record.Attempt != record.Bounces {
+		t.Fatalf("after %d bounces the record has attempt %d, bounces %d; want every attempt counted as a bounce", bounces, record.Attempt, record.Bounces)
+	}
+	u.clock.Set(deadline.Add(time.Millisecond))
+	u.round(u.clock.Now())
+	if record := u.record(id); record.Status != StatusFailed || record.LastError != "saga deadline exceeded" {
+		t.Fatalf("at the deadline the saga is %s (%q), want failed by the deadline (nothing to compensate)", record.Status, record.LastError)
 	}
 	if processes[1000].harness.business+processes[1001].harness.business != 0 {
 		t.Fatal("a bounced step ran the business")

@@ -87,8 +87,9 @@ func receiptDigest(c Completion) string {
 		Retryable bool   `json:"retryable"`
 		Data      []byte `json:"data"`
 		Error     string `json:"error"`
+		Bounced   bool   `json:"bounced,omitempty"`
 		Route     string `json:"route,omitempty"`
-	}{c.CommandID, c.IdempotencyKey, c.SagaID, c.Success, c.Retryable, c.Data, c.Error, c.Route}
+	}{c.CommandID, c.IdempotencyKey, c.SagaID, c.Success, c.Retryable, c.Data, c.Error, c.Bounced, c.Route}
 	raw, _ := json.Marshal(stable) // 只有字符串、布尔与字节切片，不会失败
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])

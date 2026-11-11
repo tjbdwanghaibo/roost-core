@@ -232,6 +232,7 @@ type coldRecordDoc struct {
 	Step              int       `bson:"step"`
 	CompletedSteps    int       `bson:"completed_steps"`
 	Attempt           uint32    `bson:"attempt"`
+	Bounces           uint32    `bson:"bounces,omitempty"`
 	Incarnation       uint32    `bson:"incarnation,omitempty"`
 	LateStep          int       `bson:"late_step,omitempty"`
 	LateData          []byte    `bson:"late_data,omitempty"`
@@ -255,7 +256,7 @@ func toColdRecordDoc(r Record) coldRecordDoc {
 		return t.UTC().Truncate(time.Millisecond)
 	}
 	return coldRecordDoc{ID: r.ID, Type: r.Type, DefinitionVersion: r.DefinitionVersion, BusinessKey: r.BusinessKey, StartDigest: r.StartDigest,
-		StartAttempt: r.StartAttempt, Lifecycle: r.Lifecycle, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt,
+		StartAttempt: r.StartAttempt, Lifecycle: r.Lifecycle, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt, Bounces: r.Bounces,
 		Incarnation: r.Incarnation, LateStep: r.LateStep, LateData: append([]byte(nil), r.LateData...), Route: r.Route, Version: int64(r.Version),
 		Data: append([]byte(nil), r.Data...), LastError: r.LastError, OperationKey: r.OperationKey, CommandID: r.CommandID,
 		NextRunAt: ms(r.NextRunAt), DeadlineAt: ms(r.DeadlineAt), CreatedAt: ms(r.CreatedAt), UpdatedAt: ms(r.UpdatedAt)}
@@ -267,7 +268,7 @@ func (d coldRecordDoc) validated() (Record, error) {
 		lateData = append([]byte(nil), d.LateData...)
 	}
 	record := Record{ID: d.ID, Type: d.Type, DefinitionVersion: d.DefinitionVersion, BusinessKey: d.BusinessKey, StartDigest: d.StartDigest,
-		StartAttempt: d.StartAttempt, Lifecycle: d.Lifecycle, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt,
+		StartAttempt: d.StartAttempt, Lifecycle: d.Lifecycle, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt, Bounces: d.Bounces,
 		Incarnation: d.Incarnation, LateStep: d.LateStep, LateData: lateData, Route: d.Route, Version: uint64(max(d.Version, 0)),
 		Data: append([]byte(nil), d.Data...), LastError: d.LastError, OperationKey: d.OperationKey, CommandID: d.CommandID,
 		NextRunAt: d.NextRunAt, DeadlineAt: d.DeadlineAt, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt}

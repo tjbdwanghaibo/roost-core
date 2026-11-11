@@ -267,6 +267,10 @@ type Record struct {
 	Step           int
 	CompletedSteps int
 	Attempt        uint32
+	// Bounces 是当前操作的 Attempt 里被参与方退回（Completion.Bounced）的次数：退回的那次尝试照样占一个 Attempt，
+	// 让下一次派发换一个 CommandID（命令与结果的 MsgID 都由它派生，复用会被 JetStream 去重吞掉），但不计入尝试上限，
+	// 有效尝试数是 Attempt - Bounces。随 Attempt 一起清零。
+	Bounces uint32
 	// Incarnation 记 Resume 的代际，并编进 CommandID：Resume 会重置 Attempt，若不换代，恢复后的操作会复用同一 saga
 	// 上一生的 CommandID，撞上陈旧的 completion 回执，被当成重复而卡住。
 	Incarnation uint32
@@ -309,7 +313,7 @@ func (r Record) Clone() Record {
 
 func (r Record) Validate() error {
 	waitingFields := r.OperationKey != "" && len(r.OperationKey) <= 192 && r.CommandID != "" && len(r.CommandID) <= 192 && r.Attempt > 0
-	if !validSubjectToken(r.ID, 128) || !validLifecycle(r.Lifecycle) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !r.lateStepValid() || (r.Route != "" && !validRoute(r.Route)) {
+	if !validSubjectToken(r.ID, 128) || !validLifecycle(r.Lifecycle) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !r.lateStepValid() || (r.Route != "" && !validRoute(r.Route)) || r.Bounces > r.Attempt || (r.Status == StatusWaiting && r.Bounces >= r.Attempt) {
 		return ErrInvalidRecord
 	}
 	return nil
@@ -369,7 +373,10 @@ type Completion struct {
 	Retryable      bool   `json:"retryable,omitempty"`
 	Data           []byte `json:"data,omitempty"`
 	Error          string `json:"error,omitempty"`
-	// Route 只出现在参与方退回的结果上（可重试失败，StepBounce）：这笔 saga 下一次尝试改投的地址；空表示照原地址重试。
+	// Bounced 标记参与方退回的结果（StepBounce，只与可重试失败同时出现）：这次没有执行，命令回到发送端。协调器按它
+	// 重派，但不消耗尝试次数（维护者 2026-11-11：退回不算重试），时间上仍受 saga 截止约束。
+	Bounced bool `json:"bounced,omitempty"`
+	// Route 只出现在退回的结果上（Bounced）：这笔 saga 下一次尝试改投的地址；空表示照原地址重派。
 	Route       string    `json:"route,omitempty"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
@@ -377,7 +384,7 @@ type Completion struct {
 // Validate 校验身份字段与结果组合：成功不能带错误或可重试标记，失败必须带错误。
 func (c Completion) Validate() error {
 	invalidOutcome := (c.Success && (c.Retryable || c.Error != "")) || (!c.Success && strings.TrimSpace(c.Error) == "") ||
-		(c.Route != "" && (c.Success || !c.Retryable || !validRoute(c.Route)))
+		(c.Bounced && (c.Success || !c.Retryable)) || (c.Route != "" && (!c.Bounced || !validRoute(c.Route)))
 	if c.CommandID == "" || len(c.CommandID) > 192 || c.IdempotencyKey == "" || len(c.IdempotencyKey) > 192 || !validSubjectToken(c.SagaID, 128) || len(c.Error) > 4096 || len(c.Data) > 4<<20 || invalidOutcome {
 		return ErrInvalidRecord
 	}
