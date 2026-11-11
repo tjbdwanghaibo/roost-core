@@ -43,4 +43,6 @@
 
 单个玩家换服的[方案](FEATURE-2026-11-11-player-rehome.md)（2026-11-11）：设计定稿、一期实施中；account 的换服接口、DataEngine 的“交出实体”与模块 `rehome`。
 
+业务模块的[待办交接](HANDOFF-2026-11-11-module-backlog.md)（2026-11-11）：换服之外还要做的事——安装器的两个缺口、从 game-demo 继续迁的业务、场景、task 的扩展、验证欠账；给接手的 agent。
+
 App 生命周期“停机先关外部输入”的[方案](FEATURE-2026-11-04-app-lifecycle.md)（2026-11-04）：现行契约以 [App 生命周期设计篇](../framework/guide/01-app-lifecycle.md) 为准，方案保留盘点、决定与实施记录。
