@@ -1,0 +1,51 @@
+package player
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+)
+
+// FirstEnterHook 在 EnterInit 的同一笔 Nest 事务、同一把 Player 锁内执行。
+// 只修改当前玩家的 DAO，不调用服务、不发消息；返回错误让发放和初始化标记一起回滚。
+// 重试只在上次未提交时再次执行；已经初始化的玩家永远不会再次执行。
+type FirstEnterHook func(owner *Player, nowUnixMilli int64) error
+
+var (
+	firstEnterMu    sync.RWMutex
+	firstEnterHooks = map[string]FirstEnterHook{}
+)
+
+// OnFirstEnter 登记事务内的首次初始化钩子，name 用功能自己的名字（模块名）。
+func OnFirstEnter(name string, hook FirstEnterHook) {
+	if name == "" || hook == nil {
+		panic("enter: OnFirstEnter needs a name and a hook")
+	}
+	firstEnterMu.Lock()
+	defer firstEnterMu.Unlock()
+	if _, taken := firstEnterHooks[name]; taken {
+		panic(fmt.Sprintf("enter: hook %q is registered twice", name))
+	}
+	firstEnterHooks[name] = hook
+}
+
+// runFirstEnter 按名字顺序执行钩子；第一个错误原样返回，交给事务回滚。
+func runFirstEnter(owner *Player, nowUnixMilli int64) error {
+	firstEnterMu.RLock()
+	names := make([]string, 0, len(firstEnterHooks))
+	for name := range firstEnterHooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hooks := make([]FirstEnterHook, len(names))
+	for i, name := range names {
+		hooks[i] = firstEnterHooks[name]
+	}
+	firstEnterMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, nowUnixMilli); err != nil {
+			return fmt.Errorf("enter: hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

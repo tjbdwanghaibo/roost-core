@@ -211,6 +211,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
+| `roost project new -recipe` | 从 game 底座安装休闲或回合房间组合、正式 session 鉴权和业务规则 | `-recipe casual` / `-recipe turn-pvp` | 新工程支持；身份验证、匹配与胜负仍由业务提供 | [配方](../../modules/README.md#从配方创建工程) |
 | `roost module list` | 列出内置业务模块；在工程里执行时标出已安装的 | `roost module list [--json]` | 正式。目录以它的输出为准 | [modules](../../modules/README.md) |
 | `roost module plan` | 只预览，不改动工程：依赖的安装顺序、会先执行的 `roost add`、追加的 DAO 字段、分配的号、写入的文件 | `roost module plan <name…> [--json] [--service <svc>]` | 正式。`--json` 与 `add` 同一个结构 | 同上 |
 | `roost module add` | 安装模块（连同依赖）并运行生成器；已安装的不再处理；这次装的模块与已装的模块之间有联动文件（`glue <模块> with <另一个模块>`）时一并写进工程 | `roost module add <name…> [--json] [--service <svc>]` | 正式。落点被业务文件占用时拒绝、不覆盖；失败时模块写过的文件与 `roost.yaml` 恢复；没有卸载，分配过的号与存储键不回收 | 同上 |

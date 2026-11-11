@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- **新增**（codegen/modules）：`roost project new -recipe casual|turn-pvp` 复用 game 底座、模块安装、自动联动、ID 与自身同步；支持自定义业务服务，失败不发布半个工程。生成正式 Account session 认证器与业务 `RECIPE.md`；平台身份/角色号分配、匹配/胜负保留明确接入边界。配方内层安装延后依赖解析，`--skip-deps` 不再提前执行 tidy，普通 module add 仍校验依赖。
+- **新增**（modules/enter）：事务内 `OnFirstEnter` 登记点，先执行业务 firstEnter 再按名字执行钩子，最后写初始化事实；休闲配方用它发初始金币，提交失败整笔回滚，重复进入不重复发放。enter 验收 11 → 14；未改 Nest / DataEngine / Sync 底层。
+
+- **验证**（本轮配方）：休闲 / 回合接线场景 9 / 7 条，普通与 race 通过；真实 TCP/Robot/PB/Nest 两条链路通过，Account/跨服务客户端与持久提交仍为替身。三项行为变异、301 条模块组合、新生成 game-demo 724 条场景通过；全仓 9,736 PASS / 99 条条件 SKIP / 0 FAIL，收尾依赖解析调整另作定向复验。范围与复跑说明见[交接](docs/maintenance/HANDOFF-2026-11-11-module-backlog.md)。
+
 - **修复**（service/account）：**换服的迟到 Begin 留下无法自动收尾的目标占位**（`fix/core-game-server-review` 的审查 RV-20261111-BM-01，[报告](https://github.com/tjbdwanghaibo/roost-core/blob/67036dc26cf268f39e9d8de722d29dc5dd6de053/docs/maintenance/BUSINESS-MODULES-REVIEW-20261111.md)）。
   - 缺陷：Begin 写了 `Role.Transfer`、停在目标 slot 创建之前；Abort 记已中止，看到目标 slot 不存在就收尾并记 `Settled`；恢复的 Begin 依据旧的角色记录建了占位、不复核，返回成功与旧的“换服在途”。之后重发的 Abort、`SelectRole` 都因为 `Settled` 跳过清理，往同一个服的新 Begin 得到 `ErrTransferInProgress`、同服建角得到 `ErrRoleLimit`，名额被一次已中止的换服永久占住。
   - 根因：占位与角色记录不是一次原子写，而“占位写完”没有与角色当前的结论对账；`Settled` 被当成“以后也不会再有占位”。

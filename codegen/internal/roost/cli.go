@@ -119,6 +119,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		// be separable.
 		newSkipDeps := fs.Bool("skip-deps", false, "write the project but do not resolve framework dependencies")
 		core := fs.String("roost-core-version", "", "roost-core version")
+		recipe := fs.String("recipe", "", "business composition on template game: casual or turn-pvp")
 		template := fs.String("template", "", "opt-in starting shape: game (hosts all nine framework services and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
@@ -129,7 +130,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		if strings.TrimSpace(*module) == "" {
 			return fmt.Errorf("-module is required so generated imports do not use someone else's repository; example: roost project new %s -module github.com/<your-account>/%s", args[1], toSnake(args[1]))
 		}
-		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitOrderedList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core}, Template: *template})
+		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitOrderedList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core}, Template: *template, Recipe: *recipe})
 		if err != nil {
 			return err
 		}

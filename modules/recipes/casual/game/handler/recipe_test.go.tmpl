@@ -1,0 +1,159 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	gameenter "{{MODULE}}/game/enter"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+type recipeGetter map[int64]entity.IThreadSafeEntity
+
+func (g recipeGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g recipeGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// recipeCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚。
+type recipeCommitter struct{ reject atomic.Bool }
+
+func (c *recipeCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type recipeFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	inits     *sender.EnterInitSender
+	committer *recipeCommitter
+	now       atomic.Int64
+}
+
+// newRecipeFixture 用替身提交器起一个 Nest，玩家是一份全新的档。
+// clock.SetSource 是进程级的：一个用例里只建一个 fixture。
+func newRecipeFixture(t *testing.T) *recipeFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterEnterInitNestHandlers()
+	f := &recipeFixture{committer: &recipeCommitter{}}
+	f.now.Store(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(94001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(recipeGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.inits = sender.NewEnterInitSender(f.engine)
+	return f
+}
+
+func (f *recipeFixture) init() (gameenter.InitResult, error) {
+	return f.inits.Sync_EnterInit(context.Background(), f.player.ID())
+}
+
+// snapshot 在业务 worker 上持实体锁读记录。
+func (f *recipeFixture) snapshot(t *testing.T) (initialized bool, firstAt int64) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		state := f.player.Dao().GetEnter()
+		initialized, firstAt = state.GetInitialized(), state.GetFirstAt()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return initialized, firstAt
+}
+
+func (f *recipeFixture) coins(t *testing.T) int64 {
+	t.Helper()
+	var coins int64
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		coins = f.player.WalletComp().Balance()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return coins
+}
+
+func TestRecipeFirstGrantAndRepeatEnter(t *testing.T) {
+	f := newRecipeFixture(t)
+	if result, err := f.init(); err != nil || !result.First {
+		t.Fatalf("first = %+v, %v", result, err)
+	}
+	if got := f.coins(t); got != 100 {
+		t.Fatalf("initial coins = %d, want 100", got)
+	}
+	if result, err := f.init(); err != nil || result.First {
+		t.Fatalf("repeat = %+v, %v", result, err)
+	}
+	if got := f.coins(t); got != 100 {
+		t.Fatalf("repeat grant: %d", got)
+	}
+}
+
+func TestRecipeFailedCommitRollsBackGrantAndMarker(t *testing.T) {
+	f := newRecipeFixture(t)
+	f.committer.reject.Store(true)
+	if _, err := f.init(); err == nil {
+		t.Fatal("commit failure reported success")
+	}
+	if got := f.coins(t); got != 0 {
+		t.Fatalf("uncommitted grant = %d", got)
+	}
+	if initialized, _ := f.snapshot(t); initialized {
+		t.Fatal("uncommitted initialization marker")
+	}
+	f.committer.reject.Store(false)
+	if result, err := f.init(); err != nil || !result.First {
+		t.Fatalf("retry = %+v, %v", result, err)
+	}
+	if got := f.coins(t); got != 100 {
+		t.Fatalf("retry coins = %d", got)
+	}
+}

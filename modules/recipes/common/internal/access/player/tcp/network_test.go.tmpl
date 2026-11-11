@@ -1,0 +1,187 @@
+package tcp
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/service/rank"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	accessplayer "{{MODULE}}/internal/access/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// 真 TCP、Robot 公共传输、生成 PB 分发、正式 lifecycle/Nest；Account、邮件、排行榜客户端和持久提交用替身。
+// 这是接线验收，不把替身提交说成 Mongo / WAL 验收，也未启动 self-sync 推送驱动。
+type recipeNetworkCommitter struct{}
+
+func (recipeNetworkCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type recipeNetworkAccounts struct{ account.Accounts }
+
+func (recipeNetworkAccounts) ValidateSession(_ context.Context, id int64, token string) (account.Role, error) {
+	if (id != 42 && id != 43) || token != "verified-ticket" {
+		return account.Role{}, gateway.ErrUnauthenticated
+	}
+	return account.Role{PlayerID: id, ServerID: 1000, ServingServerID: 1000}, nil
+}
+
+type recipeNetworkMail struct{ mail.Mail }
+
+func (recipeNetworkMail) PullBroadcasts(context.Context, int64, mail.BroadcastProfile) (mail.Summary, error) {
+	return mail.Summary{}, nil
+}
+
+type recipeRankClient = rank.Rank
+type recipeNetworkRank struct{ recipeRankClient }
+
+var _ rank.Rank = recipeNetworkRank{}
+
+type recipeNetwork struct {
+	registry *app.Registry
+	server   *gateway.TCPServer
+	ctx      context.Context
+}
+
+func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *recipeNetwork {
+	t.Helper()
+	playerentity.RegisterEntity()
+	handler.RegisterEnterInitNestHandlers()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(recipeNetworkCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range registers {
+		if err := register(engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	registry := app.NewRegistry(cfg)
+	for name, value := range map[app.ModName]any{"nest": engine, mods.ModEntityRuntime: access, account.CapabilityName: recipeNetworkAccounts{}, mail.CapabilityName: recipeNetworkMail{}, rank.CapabilityName: recipeNetworkRank{}} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mod := accessplayer.NewMod()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	runtime, ok := app.Lookup[*accessplayer.Runtime](registry, accessplayer.Name)
+	if !ok {
+		t.Fatal("missing player runtime")
+	}
+	auth := &applicationAuthenticator{}
+	if err := auth.BindRegistry(registry); err != nil {
+		t.Fatal(err)
+	}
+	config := gateway.DefaultTCPConfig()
+	config.Enabled, config.Addr = true, "127.0.0.1:0"
+	server, err := NewServer(config, runtime, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcpRuntime := NewRuntime(runtime.Protocols, time.Second)
+	if err := server.ConnectRuntime(tcpRuntime.TCPRuntime); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := server.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	return &recipeNetwork{registry: registry, server: server, ctx: ctx}
+}
+func (f *recipeNetwork) login(t *testing.T, id int64) transport.Conn {
+	t.Helper()
+	conn, err := transport.DialPlayerTCP(f.ctx, transport.Config{Endpoint: f.server.Addr().String(), DialTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := context.AfterFunc(f.ctx, func() { _ = conn.Close() })
+	t.Cleanup(func() { stop(); _ = conn.Close() })
+	packet := transport.AuthPacket(fmt.Sprintf("session:%d:verified-ticket", id))
+	packet.Seq = 1
+	if err := conn.WritePackets([]*transport.Packet{packet}); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := conn.ReadPacket()
+	if err != nil || ack.MsgID != 0 || len(ack.Payload) != 0 {
+		t.Fatalf("handshake: %+v %v", ack, err)
+	}
+	return conn
+}
+func recipeRequest(t *testing.T, conn transport.Conn, id uint32, payload []byte) []byte {
+	t.Helper()
+	// Robot transport 自己分配 wire sequence；这里一次只挂一个请求，复用本地关联号 2。
+	if err := conn.WritePackets([]*transport.Packet{{MsgID: id, Seq: 2, Payload: payload}}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := conn.ReadPacket()
+	if err != nil || response.Seq != 2 {
+		t.Fatalf("response: %+v %v", response, err)
+	}
+	return response.Payload
+}
+func recipeEnter(t *testing.T, conn transport.Conn) *pb.EnterGameResponse {
+	t.Helper()
+	raw, err := pb.MarshalEnterGameRequest(&pb.EnterGameRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := pb.UnmarshalEnterGameResponse(recipeRequest(t, conn, {{ID:protocol:EnterGame}}, raw))
+	if err != nil || reply.Code != 0 {
+		t.Fatalf("enter: %+v %v", reply, err)
+	}
+	return reply
+}
+func TestRecipeTCPLoginEntersPlayerExactlyOnce(t *testing.T) {
+	f := newRecipeNetwork(t)
+	conn := f.login(t, 42)
+	if !recipeEnter(t, conn).First {
+		t.Fatal("new player was not initialized")
+	}
+	if recipeEnter(t, conn).First {
+		t.Fatal("repeat enter initialized again")
+	}
+}
+
+func recipeRPC[Request, Response any](t *testing.T, conn transport.Conn, id uint32, request Request, encode func(Request) ([]byte, error), decode func([]byte) (Response, error)) Response {
+	t.Helper()
+	raw, err := encode(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := decode(recipeRequest(t, conn, id, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}

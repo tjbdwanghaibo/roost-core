@@ -11,7 +11,7 @@
 | [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 14 |
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后执行别的功能登记的钩子（`OnCheckinClaimed`，同一笔事务） | wallet | `PlayerDao.Checkin`（同步） | 8 |
 | [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）、向在线玩家的推送（`ChatMessage`）、按序号翻历史（`ChatHistory`）、给服务端用的系统公告（`AnnounceWorld`）；经托管的 chat 服务存储，替换它默认拒绝一切的 collaborators。game-demo 用的就是它 | 无（要求业务服务 `uses: [chat]` 与玩家 TCP 接入，后者安装时代办） | 无 | 8 |
-| [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放写在 `game/entities/player/enter_first.go`；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`；钩子拿到 `Entered{PlayerID, First, FirstAtUnixMilli, Claims}`，`Claims` 是会话的 claims，可为 nil）；安装时打开玩家 TCP 接入与自身视图；别的功能登记的进入前检查（`OnEntering`，能否决登录）在加载 Player 之前执行；进入的骨架是 `gameenter.Enter`（检查 → 加载与首次初始化 → 钩子） | 无 | `PlayerDao.Enter`（只落库） | 11 |
+| [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放可写在 `game/entities/player/enter_first.go`，模块联动可用 `player.OnFirstEnter` 登记同一事务内的发放；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`；钩子拿到 `Entered{PlayerID, First, FirstAtUnixMilli, Claims}`，`Claims` 是会话的 claims，可为 nil）；安装时打开玩家 TCP 接入与自身视图；别的功能登记的进入前检查（`OnEntering`，能否决登录）在加载 Player 之前执行；进入的骨架是 `gameenter.Enter`（检查 → 加载与首次初始化 → 钩子） | 无 | `PlayerDao.Enter`（只落库） | 14 |
 | [profile](profile/module.yaml) | 玩家档案：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）与只检查不执行的 `CheckAddExp`；给服务端按玩家号读的名片 handler `ProfileCard`（名字、等级）；升级钩子写在 `game/entities/player/profile_levelup.go`。game-demo 用的就是它 | 无 | `PlayerDao.Profile`（同步，名字与等级，别的玩家也可以看）、`PlayerDao.ProfilePrivate`（同步，经验，只给本人） | 19 |
 | [bag](bag/module.yaml) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种硬上限 999999）；自带道具表 `configs/schema/item.go` 与 `configs/table/item.csv`（哪些道具存在、每种的单种上限；加道具只改 CSV 再 `roost generate`）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；规则入口 `game/entities/player/bag_items.go`（缺省读道具表）。game-demo 用的就是它 | 无（要求 `config` 特性，`-template game` 缺省已开） | `PlayerDao.Bag`（同步） | 17 |
 | [leaderboard](leaderboard/module.yaml) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 20 |
@@ -203,6 +203,24 @@ bash scripts/test-modules-generated.sh
 ```
 
 第一条包含在生成工程上真实安装并验收的用例（约一分钟）。第二条是发版门禁里的那一条：全新工程、自定义 module 名、逐个模块安装、组合安装、重复安装无变化。
+
+## 从配方创建工程
+
+```sh
+roost project new mygame -module example.com/studio/mygame -recipe casual
+roost project new arena -module example.com/studio/arena -recipe turn-pvp
+```
+
+配方以 `game` 为底，复用同一个模块安装器、自动联动、ID 分配和自身同步；可用 `-services arena` 指定业务服务名。不能与 `-template game-demo` 混用。所有文件在新工程的暂存树里完成，失败不留下半个目标工程。已装模块仍由 `module list / verify` 管理，配方不是第二种可重复安装的模块。
+
+- `casual`：enter、wallet、checkin、task、stamina、shop、bag、mailbox；新玩家 100 金币写在 `recipe_first_enter.go`，由事务内 `OnFirstEnter` 发放。重复进入不再发；提交失败时余额与初始化标记一起回滚。
+- `turn-pvp`：enter、profile、room、turn、leaderboard；可信匹配方通过 `room.Open` 创建房间，两位玩家 Join → Start → End。没有替业务假设胜负规则、排行榜结算或客户端开房授权。
+
+两者都提供正式 Account session 认证器，拒绝错误承载服与在途迁移，开启开发 TCP。业务仍要接入 Account 的平台身份验证与持久角色号分配，不能把测试身份当作上线鉴权。生产 TCP 配置仍需显式开启。操作顺序和边界写入新工程的 `RECIPE.md`，规则文件归业务所有，后续 sync 不覆盖。
+
+`OnFirstEnter(name, hook)` 只在 `init` 登记，按名字排序；先跑原来的 `firstEnter`，再跑登记钩子，最后写初始化标记。钩子在同一把 Player 锁内，只改该玩家 DAO，禁止 I/O/发消息，失败返回错误交给 Nest 整笔回滚。不要把它与事务外、失败只记录日志的 `game/enter.OnEntered` 混用。
+
+配方验收入口：`GOWORK=off go test -count=1 -run '^TestRecipe' -timeout 15m ./codegen/internal/roost`。生成两个自定义 module/service 的工程，真实 TCP + Robot 传输 + PB + Nest 场景分别 9 / 7 条（含鉴权与回滚检查），再做模块 verify、build、vet 与漂移检查；Account/邮件/排行客户端、持久提交是替身，自身 Sync 的推送驱动和真实存储未在这里联合验收。
 
 ## 模块的持久定时器
 

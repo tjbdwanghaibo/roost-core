@@ -11,7 +11,7 @@ DAO / 嵌套类型的每个生成字段必须显式声明稳定 `store` 键（�
 按玩法生成或验证工程时读取仓内 [roost-genre](docs/agent-skills/roost-genre/SKILL.md) 及其 `references/`。这是 agent 的游戏接入流程，随框架 tag 发布；不是 `gameplay/skill` 游戏内技能系统。本机安装只保留指向检出仓库的入口，不维护第二份正文。
 
 - 权威说明：[按玩法学习与验收](docs/framework/README.md#学习文档按游戏场景学框架)、[已知限制](docs/maintenance/KNOWN-LIMITS.md)。覆盖 SLG、MOBA、MMORPG、卡牌 RPG、塔防、生存撤离、自走棋、放置、合成、派对房间，以及[回合 PvP / 合作 Roguelike / 异步社交经营](docs/framework/SESSION-GENRES.md)。
-- 按需求定制服务逻辑（不是照搬某类玩法）时：先查[能力清单](docs/framework/CAPABILITIES.md)，现成的业务单元用 `roost module list / plan / add / verify` 安装（[modules](modules/README.md)，以 `roost module list` 为准），其余用 `roost add …` 手写；流程见 skill 的[按需求组合](docs/agent-skills/roost-genre/references/compose.md)。模块装进工程后是业务代码，不是生成物。
+- 按需求定制服务逻辑（不是照搬某类玩法）时：先查[能力清单](docs/framework/CAPABILITIES.md)，新工程可用 `roost project new -recipe casual|turn-pvp` 创建组合；现成的业务单元用 `roost module list / plan / add / verify` 安装（[modules](modules/README.md)，以 `roost module list` 为准），其余用 `roost add …` 手写；流程见 skill 的[按需求组合](docs/agent-skills/roost-genre/references/compose.md)。模块装进工程后是业务代码，不是生成物。
 - 生成器只生成框架骨架；玩法参考来自 `scripts/testdata/<genre>/`。完整参考工程沿用 `-template game-demo`，源码在 [demo](demo/README.md)，不另建一套重复的完整 demo。
 - 先确认目标 tag / main：skill 命令、夹具、CLI 与运行依赖必须属于同一版本。派对房间 v1.33.2 / v1.34.0 / v1.34.1 的接线不同；以目标检出的 `scripts/test-party-room-generated.sh` 为准，不把最新命令套到旧夹具。
 - 变更玩法夹具、生成步骤或公共接线时，同时更新仓内 skill 对应 reference 与玩法手册。验收包含自定义 module、实际场景数、零意外 SKIP、build / vet、ID 与生成物漂移检查；不能仅凭脚本退出 0 宣称已覆盖。

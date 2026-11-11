@@ -53,6 +53,9 @@ func (component *EnterComponent) Init(nowUnixMilli int64) (gameenter.InitResult,
 	if err := component.firstEnter(nowUnixMilli); err != nil {
 		return gameenter.InitResult{}, err
 	}
+	if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {
+		return gameenter.InitResult{}, err
+	}
 	state.SetInitialized(true)
 	state.SetFirstAt(nowUnixMilli)
 	return gameenter.InitResult{First: true, FirstAtUnixMilli: nowUnixMilli}, nil

@@ -890,7 +890,7 @@ func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
 	for _, result := range report.Modules {
 		got[result.Name] = result.Passed
 	}
-	if want := map[string]int{"chat": 8, "chat+enter": 2, "enter": 11}; !reflect.DeepEqual(got, want) {
+	if want := map[string]int{"chat": 8, "chat+enter": 2, "enter": 14}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("verify results = %v, want %v", got, want)
 	}
 }

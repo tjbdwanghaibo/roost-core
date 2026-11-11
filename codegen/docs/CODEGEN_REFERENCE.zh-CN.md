@@ -68,6 +68,15 @@ roost project new hello_roost -module example.com/hello_roost \
   -features protocol,config,entity,nest,dao,errcode
 ```
 
+也可从业务配方创建（自动采用 `game` 底座）：
+
+```bash
+roost project new mygame -module example.com/mygame -recipe casual
+roost project new arena -module example.com/arena -recipe turn-pvp
+```
+
+`casual` 是休闲养成组合，`turn-pvp` 是回合房间组合；可指定 `-services`，不能与 `game-demo` 模板混用。配方复用模块安装与自身同步，带正式 Account session 鉴权及工程内 `RECIPE.md`；平台验证/角色号分配、匹配和胜负仍由业务定义。规则、验证与边界见 [配方](../../modules/README.md#从配方创建工程)。
+
 ### 1.2 同步、预览和诊断
 
 ```bash
