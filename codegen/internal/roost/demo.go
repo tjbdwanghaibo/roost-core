@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"context"
 	"fmt"
 	"go/format"
 	"io"
@@ -67,6 +68,12 @@ func writeDemoFile(root string, vars demoVars, rel string) (string, error) {
 		return "", fmt.Errorf("template %s: read demo source: %w", demoTemplateName, err)
 	}
 	body := vars.apply(string(raw))
+	if moduleIDPlaceholder.MatchString(body) {
+		// demo 覆盖模块的业务文件时沿用模块安装时分配到的号（roost.yaml 的 modules 记录）。
+		if body, err = applyInstalledModuleIDs(root, rel, body); err != nil {
+			return "", err
+		}
+	}
 	destination := demoDestination(rel, vars.gameService)
 	if strings.HasSuffix(rel, ".go") {
 		formatted, formatErr := format.Source([]byte(body))
@@ -158,7 +165,10 @@ type demoScaffoldStep struct {
 	add   *AddOptions
 	write string
 	run   func(root, gameService string) error
-	why   string
+	// modules 安装业务模块（roost module add）：demo 与模块共用同一份实现的功能由它装进来，
+	// demo 自己不再带一份。之后的 write 步骤可以覆盖模块写下的业务文件（demo 在模块之上的定制）。
+	modules []string
+	why     string
 }
 
 // enableDemoMatchSweep lists the demo's duel queue under match.sweep_queues in
@@ -578,16 +588,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/controllers/player/world_stats.go", why: "a Nest read handler on the World"},
 		{add: &AddOptions{Kind: "protocol", Name: "MatchFound", Group: "game", Handler: "player"}, why: "the server push announcing a match"},
 		{write: "protocol/def/match_found.go", why: "a notify: no request, the bind registers its encoder"},
-		{write: "game/chatroom/chatroom.go", why: "the game's side of the chat contract: channels, the text type, who is online"},
-		{add: &AddOptions{Kind: "protocol", Name: "SendChat", Group: "game", Handler: "player"}, why: "the cross-service call: game → chat"},
-		{write: "protocol/def/send_chat.go", why: "kind, target, text; the stored sequence comes back"},
-		{write: "game/controllers/player/send_chat.go", why: "Publish through the typed chat client, then fan the stored line out"},
-		{add: &AddOptions{Kind: "protocol", Name: "ChatHistory", Group: "game", Handler: "player"}, why: "the reconnect path: page a channel forwards"},
-		{write: "protocol/def/chat_history.go", why: "cursor in, lines and cursor out"},
-		{write: "game/controllers/player/chat_history.go", why: "History through the typed chat client, viewer checked by the service"},
-		{add: &AddOptions{Kind: "protocol", Name: "ChatMessage", Group: "game", Handler: "player"}, why: "the server push carrying one chat line"},
-		{write: "protocol/def/chat_message.go", why: "a notify with the same shape history returns"},
-		{write: "game/controllers/player/chat_push.go", why: "Message → push, and who receives it: presence for world, the pair for private"},
 		{write: "game/rewards/rewards_test.go", why: "补丁点的三条：没注册时用原函数、替换立刻生效、revert 回到原样"},
 		{write: "game/rewards/rewards.go", why: "what a mail attachment means to this game; shared by the mailer and the claim endpoint"},
 		{add: &AddOptions{Kind: "protocol", Name: "ListMail", Group: "game", Handler: "player"}, why: "the mailbox, paged"},
@@ -829,7 +829,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/gift_handoff_test.go", why: "赠礼步骤按发送方绑定的 sid（FromSID）准入与转交：本服的离线发送方照常执行，别的服的转交给其 sid、不在本进程接入，FromSID=0 拒绝，接收端非本服静默丢弃"},
 		{write: "internal/service/game/activity_test.go", why: "结算榜只升不降：两条贡献回复乱序时旧的累计分不能覆盖新的（真实 Redis）；贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里；expected 集合等于 App 单实例锁 Live 返回的活 sid、为空时只有自己、查询失败不开窗，取不到 Live 能力时 activity 拒绝启动；activity.game_sids 含重复 sid、超出 int32 或超过一次 Live 的上限时按键名拒绝启动"},
 		{write: "internal/service/game/gift_recipient_test.go", why: "收件人检查读 Player DAO 自己的库和集合，与 dataengine.database 无关；从未进过游戏的收件人仍是业务拒绝"},
-		{write: "internal/service/game/presence.go", why: "chat presence follows the same session-close source the scene does"},
 		{write: "internal/service/game/activity.go", why: "the World's timer driver wired by hand (business clock, Nest, start before the World loads), the window loop (expected servers from the App singleton lock's Live query), the phase effect consumer and the settlement: mail → record → ack"},
 		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
 		{write: "internal/service/platform/collaborators.go", why: "a platform service that verifies a demo channel, resolves the player and records a durable grant instead of pretending it can reach an Entity"},
@@ -838,10 +837,18 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 		{write: "internal/service/account/collaborators_test.go", why: "the id counter is the deployment's (under account.key_prefix) and an upgraded demo keeps counting from the old fixed key"},
-		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},
 		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
-	return append(steps, demoAllianceSteps(gameService)...)
+	return append(append(steps, demoAllianceSteps(gameService)...), demoModuleSteps()...)
+}
+
+// demoModuleSteps 是 demo 经业务模块装进来的功能。排在全部 demo 步骤之后：模块的协议号从
+// roost.yaml 的 ids 段分配，要等 demo 里写死号的协议都在盘上之后再分配，才不会撞号。
+// 不打开 access.player.self_sync：demo 的场景自己装着 entitysync Manager，一个 Nest 只有一个观察者。
+func demoModuleSteps() []demoScaffoldStep {
+	return []demoScaffoldStep{
+		{modules: []string{"chat"}, why: "chat is the chat module: channels, send, push to online players, history, system announcements, the chat service's collaborators"},
+	}
 }
 
 // scaffoldDemoTemplate builds the demo on top of the game template: Player
@@ -857,6 +864,12 @@ func scaffoldDemoTemplate(root string, m Manifest, gameService string) ([]string
 	}
 	vars := demoVars{module: m.Project.Module, gameService: gameService, project: m.Project.Name}
 	for _, step := range demoScaffoldSteps(gameService) {
+		if len(step.modules) > 0 {
+			if _, moduleErr := AddModules(context.Background(), root, step.modules, ModuleOptions{Service: gameService, SkipSelfSync: true}); moduleErr != nil {
+				return created, fmt.Errorf("template %s: install modules %s (%s): %w", demoTemplateName, strings.Join(step.modules, ", "), step.why, moduleErr)
+			}
+			continue
+		}
 		if step.add != nil {
 			files, addErr := Add(root, *step.add)
 			if addErr != nil {
@@ -881,4 +894,27 @@ func scaffoldDemoTemplate(root string, m Manifest, gameService string) ([]string
 		return created, fmt.Errorf("template %s: regenerate: %w", demoTemplateName, err)
 	}
 	return created, nil
+}
+
+// applyInstalledModuleIDs 把模板里的 {{ID:<kind>:<name>}} 换成已装模块记录里的号。
+func applyInstalledModuleIDs(root, rel, body string) (string, error) {
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		return "", err
+	}
+	var missing []string
+	body = moduleIDPlaceholder.ReplaceAllStringFunc(body, func(placeholder string) string {
+		match := moduleIDPlaceholder.FindStringSubmatch(placeholder)
+		for _, installed := range manifest.Modules {
+			if id, ok := installed.IDs[match[1]][match[2]]; ok {
+				return fmt.Sprintf("%d", id)
+			}
+		}
+		missing = append(missing, placeholder)
+		return placeholder
+	})
+	if len(missing) > 0 {
+		return "", fmt.Errorf("template %s: %s refers to %s, but no installed module was allocated that id", demoTemplateName, rel, strings.Join(missing, ", "))
+	}
+	return body, nil
 }

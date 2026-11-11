@@ -12,7 +12,7 @@ import (
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 )
 
-// HandleChatSend 经 chat 服务发布一行：一次跨进程的类型化调用，不涉及 Entity 锁。
+// HandleChatSend 经 chat 服务发布一行，再把存好的这一行推给在线玩家：一次跨进程的类型化调用，不涉及 Entity 锁。
 // 发送者是认证会话的玩家，从不取请求字段；连接的会话号加帧序号是幂等键，重发的帧不会存两次。
 // 频道政策在这里先查一遍（省一次往返），chat 进程按同一份规则再查，以它为准。
 func (controller *Controller) HandleChatSend(context *playeraccess.Context, request *pb.ChatSendRequest) (*pb.ChatSendResponse, error) {
@@ -27,7 +27,7 @@ func (controller *Controller) HandleChatSend(context *playeraccess.Context, requ
 		return &pb.ChatSendResponse{Code: code, Reason: reason}, nil
 	}
 	channel, ok := gamechat.ChannelOf(request.Kind, request.Target)
-	if !ok {
+	if !ok || channel.Kind == svcchat.ChannelSystem {
 		return refuse(fmt.Errorf("%w: kind %q is not one a player may publish to", svcchat.ErrChannelInvalid, request.Kind))
 	}
 	sender := gamechat.PlayerSender(context.PlayerID)
@@ -45,5 +45,8 @@ func (controller *Controller) HandleChatSend(context *playeraccess.Context, requ
 	if err != nil {
 		return refuse(err)
 	}
+	// 用过聊天的玩家算在线：没有“进入游戏”把人加进名单时，世界频道的推送也到得了说过话的人。
+	controller.presence.Add(context.PlayerID)
+	controller.deliver(context.Context(), message)
 	return &pb.ChatSendResponse{Seq: int64(message.Seq)}, nil
 }

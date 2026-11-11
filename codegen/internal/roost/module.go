@@ -17,7 +17,7 @@ import (
 
 // runModule 是 `roost module <list|plan|add|verify>`。
 func runModule(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	const usage = "usage: roost module <list|plan|add|verify> [module ...] [--json] [--service name] [--root dir]"
+	const usage = "usage: roost module <list|plan|add|verify> [module ...] [--json] [--service name] [--no-self-sync] [--root dir]"
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
@@ -26,6 +26,7 @@ func runModule(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	rootFlag := fs.String("root", ".", "project directory")
 	service := fs.String("service", "", "business service to install into (when several run Nest)")
 	asJSON := fs.Bool("json", false, "machine-readable output")
+	noSelfSync := fs.Bool("no-self-sync", false, "do not turn on access.player.self_sync for modules that ask for it (the project runs its own entitysync Manager)")
 	names, flags := splitModuleArgs(args[1:])
 	if err := fs.Parse(flags); err != nil {
 		return err
@@ -39,7 +40,7 @@ func runModule(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		if err != nil {
 			return err
 		}
-		options := ModuleOptions{Service: *service, Stderr: stderr}
+		options := ModuleOptions{Service: *service, Stderr: stderr, SkipSelfSync: *noSelfSync}
 		var plan ModulePlan
 		if args[0] == "plan" {
 			plan, err = PlanModules(root, names, options)

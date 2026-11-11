@@ -87,7 +87,7 @@ expect_verify wallet=8 checkin=6
 commit_all checkin
 "$roost" module add chat > "$review_root/add-chat.log"
 grep -q 'replaces the untouched generated stub' "$review_root/add-chat.log"
-expect_verify wallet=8 checkin=6 chat=6
+expect_verify wallet=8 checkin=6 chat=8
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:chat' "$review_root/doctor.log"
 # 6. enter：进入游戏端点，并由安装器打开玩家 TCP 接入与自身视图；之后 doctor 的 self-sync 为 OK。
@@ -95,7 +95,7 @@ commit_all chat
 "$roost" module add enter > "$review_root/add-enter.log"
 grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-enter.log"
 grep -q 'self_sync: true' roost.yaml
-expect_verify wallet=8 checkin=6 chat=6 enter=3
+expect_verify wallet=8 checkin=6 chat=8 enter=3
 go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review_root/test-all.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    self-sync' "$review_root/doctor.log"

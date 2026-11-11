@@ -2,9 +2,8 @@
 
 package protocoldef
 
-// ChatMessagePush is one chat line as delivered to a connected player: the
-// same shape history returns. FromID is zero and FromName is the actor label
-// for a system message (a login announcement, for instance).
+// ChatMessagePush 是送到在线玩家手里的一行聊天，也是历史返回的形状：客户端只处理一种。
+// 系统消息（例如登录公告）的 FromID 为 0，FromName 是发言方的标签。
 type ChatMessagePush struct {
 	Kind     string `pb:"1"`
 	Target   int64  `pb:"2"`
@@ -15,8 +14,8 @@ type ChatMessagePush struct {
 	System   bool   `pb:"7"`
 }
 
-//roost:protocol group=game handler=player
+//roost:protocol group=game handler=chat
 type ChatMessageProtocol interface {
-	//roost:msg id=10101
+	//roost:msg id={{ID:protocol:ChatMessage}}
 	ChatMessage() ChatMessagePush
 }

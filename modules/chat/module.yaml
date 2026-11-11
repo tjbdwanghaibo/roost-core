@@ -1,13 +1,15 @@
 name: chat
-summary: 聊天：世界频道与一对一私聊的发送和按序号翻历史，经托管的 chat 服务存储
+summary: 聊天：世界频道与一对一私聊的发送、向在线玩家的推送、按序号翻历史、系统公告，经托管的 chat 服务存储
 requires: []
 conflicts: []
 needs:
   features: [protocol]
   uses: [chat]
-protocols: [ChatSend, ChatHistory]
+access:
+  transport: tcp
+protocols: [ChatSend, ChatHistory, ChatMessage]
 replaces: [internal/service/chat/collaborators.go]
 verify:
-  packages: [./game/chat, ./internal/service/chat]
+  packages: [./game/chat, ./game/controllers/chat, ./internal/service/chat]
   run: ^TestChat
-  pass: 6
+  pass: 8

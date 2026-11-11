@@ -49,7 +49,6 @@ type Service struct {
 	stopFlags      func()
 	// stopBuildingConfig 撤销建筑配置的热更新检查（building_config.go）。
 	stopBuildingConfig func()
-	stopPresence   func()
 	activity       *ActivityRunner
 	stopActivity   func()
 	stopTimers     func(context.Context) error
@@ -293,14 +292,9 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := installPatchPoints(); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	// Chat presence follows the same session-close source the scene does:
-	// without it an offline player stays in the world channel's recipient set
-	// until some later push to them happens to fail (presence.go).
-	stopPresence, err := watchPresence(registry)
-	if err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
-	s.stopPresence = stopPresence
+	// Chat presence (who gets world-channel pushes) is the chat module's: its
+	// controller subscribes to session closes the first time it pushes
+	// (game/controllers/chat/chat_push.go), so nothing is wired here.
 	// 传输层此时已经起来：卸载要用它判断玩家还有没有连接，停机要用它断开服务中的玩家。没有它就不卸载。
 	if runtime, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && runtime != nil {
 		owners.Fence(runtime)
@@ -390,10 +384,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.levelUpMail != nil {
 		s.levelUpMail.Drain()
 		s.levelUpMail = nil
-	}
-	if s.stopPresence != nil {
-		s.stopPresence()
-		s.stopPresence = nil
 	}
 	if s.stopBuildingConfig != nil {
 		s.stopBuildingConfig()

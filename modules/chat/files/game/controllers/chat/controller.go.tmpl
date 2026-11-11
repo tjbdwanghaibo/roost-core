@@ -1,19 +1,45 @@
 package chat
 
 import (
+	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
+
+	gamechat "{{MODULE}}/game/chat"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 )
 
-// Controller 持有聊天端点的依赖：chat 服务的客户端。聊天不改任何 Entity，不经过 Nest。
+// Controller 持有聊天端点的依赖：chat 服务的客户端、玩家连接的推送面、本进程的在线名单。
+// 聊天不改任何 Entity，不经过 Nest。
 type Controller struct {
 	registry  *app.Registry
 	messaging svcchat.Messaging
+	presence  *gamechat.Presence
+	transport atomic.Pointer[pushTransport]
+	watch     sync.Once
 }
 
-// FromRegistry 取 chat 服务的客户端（业务服务在 roost.yaml 里 uses: [chat] 时由 ClientMod 发布）。
+// pushTransport 是端点用到的玩家 TCP Runtime 的一小部分。这里写成接口、能力按名字取，
+// 因为传输包 import 构造这个 controller 的协议绑定——反过来 import 它就成环了。
+type pushTransport interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	ActiveSessions(playerID int64) int
+}
+
+// sessionSource 是同一个 Runtime 的另一面：连接关闭的通知。
+type sessionSource interface {
+	OnSessionClosed(func(gateway.TCPSessionClosed)) func()
+}
+
+// playerTCPCapability 是 internal/access/player/tcp 的 Name：传输 Mod 发布 Runtime 用的能力名。
+const playerTCPCapability app.ModName = "access.player.tcp"
+
+// FromRegistry 由生成的协议绑定在每个进程里调用一次。chat 服务的客户端在业务服务 uses: [chat] 时
+// 由 ClientMod 发布；玩家传输此时可能还没发布，推送面在第一次用到时再取。
 func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("chat controller: app registry is required")
@@ -22,7 +48,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || messaging == nil {
 		return nil, fmt.Errorf("chat controller: capability %q not found; list chat under services.<service>.uses in roost.yaml", svcchat.CapabilityName)
 	}
-	return &Controller{registry: registry, messaging: messaging}, nil
+	return &Controller{registry: registry, messaging: messaging, presence: gamechat.DefaultPresence()}, nil
 }
 
 // Registry 供需要别的能力的端点使用。
@@ -31,4 +57,12 @@ func (controller *Controller) Registry() *app.Registry {
 		return nil
 	}
 	return controller.registry
+}
+
+// Presence 是本进程的世界频道在线名单。别的功能（进入游戏）在玩家上线时调 Presence().Add。
+func (controller *Controller) Presence() *gamechat.Presence {
+	if controller == nil {
+		return gamechat.DefaultPresence()
+	}
+	return controller.presence
 }

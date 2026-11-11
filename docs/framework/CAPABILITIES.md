@@ -225,7 +225,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | --- | --- | --- | --- | --- |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
-| 聊天 chat | 世界频道与一对一私聊：发送、按序号翻历史；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩） | 现成模块。没有推送（客户端靠翻历史拉新消息）、没有系统消息、没有群组频道；不经过 Nest，不改任何实体 | 同上 |
+| 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；不经过 Nest，不改任何实体 | 同上 |
 | 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里 | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图 | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化”的串接没有离线用例 | 同上 |
 
 ### 13 类玩法纵切
@@ -259,7 +259,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 升级发奖励邮件 | effect 与状态变更同一条 WAL 记录，消费者调 mail | `effects.EmitPlayerLevelUp` 与 game 的消费者 | 参考实现（demo） | [事件链](../../demo/WALKTHROUGH.md#事件链升级--奖励邮件事务性-outbox) |
 | 邮件列表与领附件 | 客户端这一半：列表、领取到背包 | 端点 + mail 访问器 | 参考实现（demo） | [邮件](../../demo/WALKTHROUGH.md#邮件列表与领附件客户端这一半) |
 | 匹配组队 | game 调 match 成局 | `game/matchmaking` | 参考实现（demo） | [组队](../../demo/WALKTHROUGH.md#跨服务game--match-组队) |
-| 聊天 | game 调 chat 发布与读取 | `game/chatroom` | 参考实现（demo） | [聊天](../../demo/WALKTHROUGH.md#跨服务game--chat-聊天) |
+| 聊天 | game 调 chat 发布、推送与读取；demo 用的就是 chat 业务模块，只在登录时加在线名单并发公告 | `roost module add chat`（demo 生成时已装） | 现成模块 | [聊天](../../demo/WALKTHROUGH.md#跨服务game--chat-聊天) |
 | 副本 | session 的一次运行，进入、通关、领奖 | `game/dungeon` | 参考实现（demo） | [副本](../../demo/WALKTHROUGH.md#跨服务game--session-副本) |
 | 送礼 saga | 扣 → 送，失败补偿；原生步骤带准入 | `saga/gift_item/` | 参考实现（demo） | [送礼 saga](../../demo/WALKTHROUGH.md#跨域事务送礼-sagadebit--deliver失败补偿) |
 | 公会 = alliance 服务 | 独立进程独占联盟实体，写走路由 RPC 或 saga，game 读 Mirror | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/guild/` | 参考实现（demo）。联盟服务方案实施中，不在 `service/` 下；边界见 KNOWN-LIMITS“Remote” | [公会](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)、[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md) |

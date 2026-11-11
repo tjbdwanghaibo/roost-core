@@ -26,14 +26,17 @@ func TestChatTextIsValidatedByLengthAndEncoding(t *testing.T) {
 	}
 }
 
-func TestChatChannelOfOnlyAddressesWorldAndPrivate(t *testing.T) {
+func TestChatChannelOfAddressesWorldPrivateAndSystem(t *testing.T) {
 	if channel, ok := ChannelOf("world", 99); !ok || channel != WorldChannel {
 		t.Fatalf("world: %+v %v (the target is ignored: there is one world)", channel, ok)
 	}
 	if channel, ok := ChannelOf("private", 7); !ok || channel != PrivateChannel(7) {
 		t.Fatalf("private: %+v %v", channel, ok)
 	}
-	for _, kind := range []string{"system", "group", "", "World"} {
+	if channel, ok := ChannelOf("system", 0); !ok || channel.Kind != svcchat.ChannelSystem {
+		t.Fatalf("system: %+v %v (readable; publishing is refused by Allow)", channel, ok)
+	}
+	for _, kind := range []string{"group", "", "World"} {
 		if _, ok := ChannelOf(kind, 1); ok {
 			t.Errorf("kind %q is addressable by a player", kind)
 		}
@@ -62,5 +65,29 @@ func TestChatPolicyRefusesEverythingElse(t *testing.T) {
 		if err := Allow(who, channel); err == nil {
 			t.Errorf("%s: allowed", name)
 		}
+	}
+}
+
+// 在线名单：加入、移除、快照是副本。
+func TestChatPresenceTracksWhoIsOnline(t *testing.T) {
+	presence := NewPresence()
+	presence.Add(1001)
+	presence.Add(1002)
+	presence.Add(1001)
+	if !presence.Holds(1001) || !presence.Holds(1002) || presence.Holds(1003) {
+		t.Fatalf("presence = %v", presence.Snapshot())
+	}
+	snapshot := presence.Snapshot()
+	if len(snapshot) != 2 {
+		t.Fatalf("snapshot = %v, want two players", snapshot)
+	}
+	snapshot[0] = 9999
+	if presence.Holds(9999) {
+		t.Fatal("changing the snapshot changed the presence set")
+	}
+	presence.Remove(1001)
+	presence.Remove(1001)
+	if presence.Holds(1001) || !presence.Holds(1002) {
+		t.Fatalf("after removing 1001: %v", presence.Snapshot())
 	}
 }

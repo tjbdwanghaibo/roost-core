@@ -73,8 +73,12 @@ const (
 type ModuleOptions struct {
 	// Service 在工程有多个运行 Nest 的业务服务时指定装进哪一个。
 	Service string
-	Stdout  io.Writer
-	Stderr  io.Writer
+	// SkipSelfSync 不替工程打开 access.player.self_sync（模块清单 access.self_sync 的那一步）。
+	// 工程自己管 Player 的同步时用：一个 Nest 只有一个 EntitySync 观察者，自建了 entitysync Manager
+	// （game-demo 的场景同步）再打开自身视图会在启动时冲突。
+	SkipSelfSync bool
+	Stdout       io.Writer
+	Stderr       io.Writer
 }
 
 // PlanModules 算出安装 names（连同依赖）要做的事，不改动工程。
@@ -131,7 +135,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 			return ModulePlan{}, err
 		}
 		item.Status = moduleStatusInstall
-		for _, command := range modulePrerequisites(root, manifest, service, spec) {
+		for _, command := range modulePrerequisites(root, manifest, service, spec, options) {
 			if !pending[command] {
 				pending[command] = true
 				plan.Prerequisites = append(plan.Prerequisites, command)
@@ -209,7 +213,7 @@ func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error 
 }
 
 // modulePrerequisites 是模块要求、工程里还没有的框架骨架，写成会执行的 roost add 命令。
-func modulePrerequisites(root string, manifest Manifest, service string, spec ModuleSpec) []string {
+func modulePrerequisites(root string, manifest Manifest, service string, spec ModuleSpec, options ModuleOptions) []string {
 	var commands []string
 	if len(spec.State) > 0 {
 		if source, err := locateDaoStruct(root, spec.Entity+"Dao"); err == nil && source == nil {
@@ -224,7 +228,7 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 	if spec.Access.Transport != "" && !contains(access.Transports, spec.Access.Transport) {
 		commands = append(commands, "roost add transport "+spec.Access.Transport)
 	}
-	if spec.Access.SelfSync && !access.SelfSync {
+	if spec.Access.SelfSync && !access.SelfSync && !options.SkipSelfSync {
 		commands = append(commands, "set access.player.self_sync: true in roost.yaml; roost project sync")
 	}
 	if spec.Access.Lifecycle && !moduleLifecycleExists(root, spec.Entity) {
@@ -264,7 +268,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		if item.Status != moduleStatusInstall {
 			continue
 		}
-		if err := ensureModulePrerequisites(root, plan.Service, item.spec, options.Stderr); err != nil {
+		if err := ensureModulePrerequisites(root, plan.Service, item.spec, options); err != nil {
 			return ModulePlan{}, fmt.Errorf("module %s: %w", item.Name, err)
 		}
 	}
@@ -316,7 +320,8 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 }
 
 // ensureModulePrerequisites 经已有的 roost add 补齐模块要求的框架骨架；已经有的不动。
-func ensureModulePrerequisites(root, service string, spec ModuleSpec, warnings io.Writer) error {
+func ensureModulePrerequisites(root, service string, spec ModuleSpec, options ModuleOptions) error {
+	warnings := options.Stderr
 	if len(spec.State) > 0 {
 		source, err := locateDaoStruct(root, spec.Entity+"Dao")
 		if err != nil {
@@ -356,7 +361,7 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, warnings i
 			}
 		}
 	}
-	if spec.Access.SelfSync {
+	if spec.Access.SelfSync && !options.SkipSelfSync {
 		// 与手工改 roost.yaml 再 project sync 相同：写清单并同步，同步失败时清单恢复。
 		manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
 		if err != nil {

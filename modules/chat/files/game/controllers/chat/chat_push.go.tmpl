@@ -1,0 +1,111 @@
+package chat
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	gamechat "{{MODULE}}/game/chat"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// toPush 把 chat 服务的消息换成线上形状；推送与历史都用它，客户端只处理一种。
+func toPush(message svcchat.Message) pb.ChatMessagePush {
+	return pb.ChatMessagePush{
+		Kind:     string(message.Channel.Kind),
+		Target:   message.Channel.Target,
+		Seq:      int64(message.Seq),
+		FromID:   message.From.RoleID,
+		FromName: message.From.Name,
+		Text:     string(message.Body),
+		System:   message.Origin == svcchat.OriginSystem,
+	}
+}
+
+// pusher 取玩家连接的推送面。第一次取到时顺带订阅连接关闭：玩家最后一条连接关掉就离开在线名单。
+// 只靠“推送失败时移除”不够——安静的世界里没有推送，离线的玩家会一直留在名单里。
+func (controller *Controller) pusher() (pushTransport, error) {
+	if controller == nil {
+		return nil, fmt.Errorf("chat controller: nil")
+	}
+	if runtime := controller.transport.Load(); runtime != nil {
+		return *runtime, nil
+	}
+	runtime, ok := app.Lookup[pushTransport](controller.registry, playerTCPCapability)
+	if !ok || runtime == nil {
+		return nil, fmt.Errorf("chat controller: capability %q not found; the player tcp transport is not assembled", playerTCPCapability)
+	}
+	controller.transport.Store(&runtime)
+	controller.watch.Do(func() {
+		if source, ok := runtime.(sessionSource); ok {
+			watchSessions(source, runtime, controller.presence)
+		}
+	})
+	return runtime, nil
+}
+
+// watchSessions 订阅连接关闭：玩家没有别的连接了才移出在线名单（关掉一条连接不等于下线）。
+// 返回退订函数；进程退出时传输先停，订阅随之失效，这里不持有需要释放的资源。
+func watchSessions(source sessionSource, sessions pushTransport, presence *gamechat.Presence) func() {
+	return source.OnSessionClosed(func(event gateway.TCPSessionClosed) {
+		if sessions != nil && sessions.ActiveSessions(event.PlayerID) > 0 {
+			return
+		}
+		presence.Remove(event.PlayerID)
+		slog.Debug("chat: player left the world channel", "player_id", event.PlayerID)
+	})
+}
+
+// deliver 把存好的消息推给该看到它的在线玩家：世界与系统频道推给在线名单，私聊推给双方。
+// chat 服务里的才是记录，推送只是捷径：没有会话的玩家移出名单，漏掉推送的玩家经 ChatHistory 读回来——
+// 所以每条推送都带 Seq。
+func (controller *Controller) deliver(ctx context.Context, message svcchat.Message) {
+	var recipients []int64
+	switch message.Channel.Kind {
+	case svcchat.ChannelWorld, svcchat.ChannelSystem:
+		recipients = controller.presence.Snapshot()
+	case svcchat.ChannelPrivate:
+		recipients = []int64{message.From.RoleID, message.Channel.Target}
+	default:
+		return
+	}
+	transport, err := controller.pusher()
+	if err != nil {
+		slog.Debug("chat: no transport to deliver through", "err", err)
+		return
+	}
+	push := toPush(message)
+	for _, playerID := range recipients {
+		if playerID == 0 {
+			continue
+		}
+		if err := transport.PushPlayer(ctx, playerID, msgid.MsgChatMessage, &push); err != nil {
+			if transport.ActiveSessions(playerID) == 0 {
+				controller.presence.Remove(playerID)
+			}
+			slog.Debug("chat: push not delivered", "player_id", playerID, "seq", message.Seq, "err", err)
+		}
+	}
+}
+
+// AnnounceWorld 以游戏的名义在世界频道说一句话（例如登录公告），并推给在线玩家。
+// requestID 是幂等键：同一个键重发不会存两次。给别的功能调用，不对客户端开放。
+func (controller *Controller) AnnounceWorld(ctx context.Context, text, requestID string) error {
+	if controller == nil {
+		return fmt.Errorf("chat controller: nil")
+	}
+	message, err := controller.messaging.PublishSystem(ctx, svcchat.SystemPublishRequest{
+		Channel: gamechat.WorldChannel, Actor: gamechat.SystemActor, Type: gamechat.TypeText,
+		Body: []byte(text), RequestID: requestID,
+	})
+	if err != nil {
+		return err
+	}
+	controller.deliver(ctx, message)
+	return nil
+}

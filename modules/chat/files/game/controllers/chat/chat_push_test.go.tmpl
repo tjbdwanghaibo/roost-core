@@ -1,0 +1,65 @@
+package chat
+
+import (
+	"context"
+	"sync"
+	"testing"
+
+	gamechat "{{MODULE}}/game/chat"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// chatSessions 是玩家传输的替身：记下订阅的回调与每个玩家还剩几条连接。
+type chatSessions struct {
+	mu     sync.Mutex
+	closed []func(gateway.TCPSessionClosed)
+	active map[int64]int
+}
+
+func (s *chatSessions) OnSessionClosed(fn func(gateway.TCPSessionClosed)) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = append(s.closed, fn)
+	return func() {}
+}
+
+func (s *chatSessions) PushPlayer(context.Context, int64, uint32, any) error { return nil }
+
+func (s *chatSessions) ActiveSessions(playerID int64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active[playerID]
+}
+
+func (s *chatSessions) close(playerID int64) {
+	s.mu.Lock()
+	subscribers := append([]func(gateway.TCPSessionClosed){}, s.closed...)
+	s.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(gateway.TCPSessionClosed{PlayerID: playerID})
+	}
+}
+
+// 最后一条连接关闭的玩家离开世界频道的在线名单；还有别的连接的玩家留下。
+// 只靠“推送失败时移除”不够：安静的世界里没有推送，离线的玩家会一直留在名单里。
+func TestChatClosedSessionLeavesTheWorldChannel(t *testing.T) {
+	sessions := &chatSessions{active: map[int64]int{}}
+	presence := gamechat.NewPresence()
+	watchSessions(sessions, sessions, presence)
+
+	presence.Add(4242)
+	sessions.close(4242)
+	if presence.Holds(4242) {
+		t.Fatal("the player is still in the world channel's recipient set after their last session closed")
+	}
+
+	presence.Add(4243)
+	sessions.mu.Lock()
+	sessions.active[4243] = 1 // 关掉的是两条连接里的一条
+	sessions.mu.Unlock()
+	sessions.close(4243)
+	if !presence.Holds(4243) {
+		t.Fatal("a player with another live connection was removed from the world channel")
+	}
+}

@@ -4,7 +4,6 @@ package chat
 
 import (
 	"context"
-	"errors"
 
 	gamechat "{{MODULE}}/game/chat"
 
@@ -38,11 +37,14 @@ func Bodies() *chat.BodyRegistry {
 	return registry
 }
 
-// System 认证特权入口（系统消息）。聊天模块不发系统消息，所以保持拒绝：
-// 要开放时在这里按传输身份（mTLS 对端、ctx 里的服务凭据）授权，不要无条件放行。
+// System 认证特权入口（PublishSystem：游戏自己说的话，例如登录公告）。
+//
+// 这里无条件授予，这是关于部署的陈述、不是关于信任的一般结论：chat 服务只经内部 NATS 总线可达，
+// 客户端够不着它——玩家唯一的入口是 game 的 TCP 端点，而没有任何端点把请求转给 PublishSystem。
+// 总线能被不那么可信的一方够着的部署，必须把这里换成对调用方身份的检查（mTLS 对端、ctx 里的服务凭据）。
 func System() chat.SystemAuthenticator {
 	return chat.SystemAuthenticatorFunc(func(context.Context) (chat.SystemToken, error) {
-		return chat.SystemToken{}, errors.New("chat: this game publishes no system messages")
+		return chat.GrantSystem(), nil
 	})
 }
 

@@ -748,7 +748,7 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 		t.Fatalf("the stub was not replaced by the module's collaborators:\n%s", replaced)
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
-	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 6 {
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 8 {
 		t.Fatalf("verify: %v\n%+v", err, report)
 	}
 	// 再装一次没有变化：现在这个文件是模块自己的。

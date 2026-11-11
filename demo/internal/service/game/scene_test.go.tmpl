@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"{{MODULE}}/game/chatroom"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	gamescene "{{MODULE}}/game/scene"
@@ -1101,52 +1100,6 @@ func TestSceneViewRequestWidensClampsAndIsRateLimited(t *testing.T) {
 	if !sees() {
 		t.Fatal("a refused request changed the view")
 	}
-}
-
-// The other half of the same source: chat presence.
-//
-// Wiring only the scene and leaving presence to the lazy path is not enough:
-// the chat push removes a player when a push to them fails and they have no
-// sessions left. In a quiet world nothing pushes, so an offline player would
-// stay in the world channel's recipient set indefinitely.
-func TestAClosedSessionLeavesTheWorldChannel(t *testing.T) {
-	recorder := &sceneRecorder{}
-	presence := chatroom.DefaultPresence()
-	const playerID = int64(4242)
-	presence.Add(playerID)
-	t.Cleanup(func() { presence.Remove(playerID) })
-
-	unsubscribe := subscribePresence(recorder, recorder)
-	defer unsubscribe()
-
-	recorder.close(playerID)
-	if presenceHolds(presence, playerID) {
-		t.Fatal("the player is still in the world channel's recipient set after their last session closed")
-	}
-
-	// A player with another connection still up stays: one closed session is
-	// not one offline player.
-	const stillOnline = int64(4243)
-	presence.Add(stillOnline)
-	t.Cleanup(func() { presence.Remove(stillOnline) })
-	recorder.mu.Lock()
-	subscribers := append([]func(gateway.TCPSessionClosed){}, recorder.closed...)
-	recorder.mu.Unlock()
-	for _, fn := range subscribers {
-		fn(gateway.TCPSessionClosed{PlayerID: stillOnline, SessionID: "one-of-two"})
-	}
-	if !presenceHolds(presence, stillOnline) {
-		t.Fatal("a player with another live connection was removed from the world channel")
-	}
-}
-
-func presenceHolds(presence *chatroom.Presence, playerID int64) bool {
-	for _, id := range presence.Snapshot() {
-		if id == playerID {
-			return true
-		}
-	}
-	return false
 }
 
 // 房间拒绝的 subscribe 必须重发。

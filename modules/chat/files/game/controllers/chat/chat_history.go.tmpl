@@ -37,12 +37,10 @@ func (controller *Controller) HandleChatHistory(context *playeraccess.Context, r
 	if err != nil {
 		return refuse(err)
 	}
+	controller.presence.Add(context.PlayerID)
 	response := &pb.ChatHistoryResponse{NextCursor: int64(page.NextCursor), HasMore: page.HasMore}
 	for _, message := range page.Messages {
-		response.Lines = append(response.Lines, pb.ChatLine{
-			Seq: int64(message.Seq), FromID: message.From.RoleID, FromName: message.From.Name,
-			Text: string(message.Body), System: message.Origin == svcchat.OriginSystem,
-		})
+		response.Messages = append(response.Messages, toPush(message))
 	}
 	return response, nil
 }

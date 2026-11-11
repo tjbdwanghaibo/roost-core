@@ -5,6 +5,7 @@ package chat
 
 import (
 	"fmt"
+	"sync"
 	"unicode/utf8"
 
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
@@ -19,6 +20,9 @@ const MaxTextBytes = 256
 // WorldChannelTarget 是世界频道的目标号：只有一个世界。分区的游戏把区号放在这里。
 const WorldChannelTarget int64 = 1
 
+// SystemActor 是系统消息在历史里带的标签，审计时看得出是游戏的哪一部分说的。
+const SystemActor = "game"
+
 // WorldChannel 是所有玩家说话的频道。
 var WorldChannel = svcchat.Channel{Kind: svcchat.ChannelWorld, Target: WorldChannelTarget}
 
@@ -32,13 +36,16 @@ func PlayerSender(playerID int64) svcchat.Sender {
 	return svcchat.Sender{RoleID: playerID, Name: fmt.Sprintf("player-%d", playerID)}
 }
 
-// ChannelOf 把协议里的频道种类与目标号换成频道。玩家能寻址的只有世界与私聊。
+// ChannelOf 把协议里的频道种类与目标号换成频道。玩家能寻址世界、私聊与系统频道；
+// 系统频道只能读（发布是特权入口，端点与 Allow 都拒绝玩家往里发）。
 func ChannelOf(kind string, target int64) (svcchat.Channel, bool) {
 	switch svcchat.ChannelKind(kind) {
 	case svcchat.ChannelWorld:
 		return WorldChannel, true
 	case svcchat.ChannelPrivate:
 		return PrivateChannel(target), true
+	case svcchat.ChannelSystem:
+		return svcchat.Channel{Kind: svcchat.ChannelSystem}, true
 	default:
 		return svcchat.Channel{}, false
 	}
@@ -82,4 +89,55 @@ func Allow(who svcchat.Sender, channel svcchat.Channel) error {
 	default:
 		return fmt.Errorf("channel kind %q is not open to players", channel.Kind)
 	}
+}
+
+// Presence 是本进程认为在线的玩家：世界频道的推送对象。进入游戏或用过聊天时加入，
+// 最后一条连接关闭、或推送发现没有会话时移除。它按进程计：多个 game 进程的游戏要么各推各的在线玩家
+// （每个进程都收到 chat 服务存下的消息才行），要么改为订阅 chat 服务的流，不要指望这份内存名单跨进程。
+type Presence struct {
+	mu      sync.RWMutex
+	players map[int64]struct{}
+}
+
+// NewPresence 建一份空名单。
+func NewPresence() *Presence { return &Presence{players: map[int64]struct{}{}} }
+
+// processPresence 是本进程的世界频道在线名单。它是包级单例：一个进程只有一份，而用它的有两处——
+// 端点（玩家出现时加入、推送时遍历）与连接关闭的回调（移除）。
+var processPresence = NewPresence()
+
+// DefaultPresence 返回本进程的在线名单。
+func DefaultPresence() *Presence { return processPresence }
+
+// Add 把玩家记为在线。
+func (p *Presence) Add(playerID int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.players[playerID] = struct{}{}
+}
+
+// Remove 把玩家记为离线。
+func (p *Presence) Remove(playerID int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.players, playerID)
+}
+
+// Holds 报告玩家是否在名单里。
+func (p *Presence) Holds(playerID int64) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	_, ok := p.players[playerID]
+	return ok
+}
+
+// Snapshot 返回在线玩家号的副本：推送时不持锁做网络写。
+func (p *Presence) Snapshot() []int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]int64, 0, len(p.players))
+	for id := range p.players {
+		out = append(out, id)
+	}
+	return out
 }

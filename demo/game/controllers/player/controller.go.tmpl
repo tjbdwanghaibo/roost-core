@@ -9,7 +9,7 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
-	"{{MODULE}}/game/chatroom"
+	chatctl "{{MODULE}}/game/controllers/chat"
 	alliance "{{MODULE}}/game/entities/alliance"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
@@ -25,7 +25,6 @@ import (
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
-	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
@@ -56,7 +55,10 @@ type Controller struct {
 	// A partitioned scene's team (game/entities/team): this game service owns it.
 	teams *lifecycle.TeamLifecycle
 	matcher    svcmatch.Matchmaker
-	messaging  svcchat.Messaging
+	// chat is the chat module's controller (game/controllers/chat): the login
+	// announcement and the online set go through it; SendChat / ChatHistory are
+	// its own endpoints, not this controller's.
+	chat *chatctl.Controller
 	mailer     svcmail.Mail
 	sessions   svcsession.Session
 	ranking    svcrank.Rank
@@ -64,7 +66,6 @@ type Controller struct {
 	purchases  atomic.Pointer[purchaseDrainer]
 	activities atomic.Pointer[activityRunner]
 	owners     atomic.Pointer[playerOwners]
-	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	battles    atomic.Pointer[battleRouter]
 	scene      atomic.Pointer[sceneJoiner]
@@ -220,9 +221,9 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || matcher == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list match under services.<game>.uses", svcmatch.CapabilityName)
 	}
-	messaging, ok := app.Lookup[svcchat.Messaging](registry, svcchat.CapabilityName)
-	if !ok || messaging == nil {
-		return nil, fmt.Errorf("player controller: capability %q not found; list chat under services.<game>.uses", svcchat.CapabilityName)
+	chat, err := chatctl.FromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
 	if !ok || mailer == nil {
@@ -285,11 +286,11 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	return &Controller{
 		registry: registry, nestClient: client, players: players, teams: teams,
 		alliances: alliances, allianceMirrors: allianceMirrors, guildSettings: guildSettings,
-		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
+		matcher: matcher, chat: chat, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
 		teamIDs: mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
-		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
+		worldID: worldID, sceneID: sceneID,
 	}, nil
 }
 
@@ -316,12 +317,13 @@ func (controller *Controller) Matcher() svcmatch.Matchmaker {
 	return controller.matcher
 }
 
-// Messaging is the chat service, reached over the bus.
-func (controller *Controller) Messaging() svcchat.Messaging {
+// Chat is the chat module's controller: AnnounceWorld publishes a system line
+// and fans it out, Presence is the set of players online in this process.
+func (controller *Controller) Chat() *chatctl.Controller {
 	if controller == nil {
 		return nil
 	}
-	return controller.messaging
+	return controller.chat
 }
 
 // Mailer is the mail service, reached over the bus.
@@ -338,14 +340,6 @@ func (controller *Controller) Sessions() svcsession.Session {
 		return nil
 	}
 	return controller.sessions
-}
-
-// Presence is the set of players online in this process.
-func (controller *Controller) Presence() *chatroom.Presence {
-	if controller == nil {
-		return nil
-	}
-	return controller.presence
 }
 
 // Transport is the push side of the player connection. It is looked up

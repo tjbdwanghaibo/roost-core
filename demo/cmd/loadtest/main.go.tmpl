@@ -421,8 +421,8 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// send_chat publishes through the chat service; the world channel fans
 	// the stored line back to every online robot, including the sender, so
 	// the scenario can wait for its own push (msg 10101).
-	action.MustRegisterCall[pb.SendChatRequest, pb.SendChatResponse](actions, protocols, "send_chat", msgid.MsgSendChat,
-		action.OnResp(func(rb *robot.Context, resp *pb.SendChatResponse) error {
+	action.MustRegisterCall[pb.ChatSendRequest, pb.ChatSendResponse](actions, protocols, "send_chat", msgid.MsgChatSend,
+		action.OnResp(func(rb *robot.Context, resp *pb.ChatSendResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
@@ -987,8 +987,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalPollMatchRequest(message)
 	case *pb.WorldStatsRequest:
 		return pb.MarshalWorldStatsRequest(message)
-	case *pb.SendChatRequest:
-		return pb.MarshalSendChatRequest(message)
+	case *pb.ChatSendRequest:
+		return pb.MarshalChatSendRequest(message)
 	case *pb.ChatHistoryRequest:
 		return pb.MarshalChatHistoryRequest(message)
 	case *pb.ListMailRequest:
@@ -1078,8 +1078,8 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 			return err
 		}
 		*message = *decoded
-	case *pb.SendChatResponse:
-		decoded, err := pb.UnmarshalSendChatResponse(data)
+	case *pb.ChatSendResponse:
+		decoded, err := pb.UnmarshalChatSendResponse(data)
 		if err != nil {
 			return err
 		}

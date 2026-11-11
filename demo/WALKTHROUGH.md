@@ -122,22 +122,28 @@ PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务�
 
 ## 跨服务：game → chat 聊天
 
-chat 服务也是通用的：它按频道存带序号的消息、执行这个工程交给它的策略；哪些频道存在、一句话长什么样、谁在线能收到，
-是游戏的事，住在 `game/chatroom/`（game 进程与 chat 进程都 import 它——这就是两边对 `text` 这个消息类型名达成一致的方式）：
+聊天不是 demo 自己的代码：它是 [chat 业务模块](../modules/README.md)，`-template game-demo` 生成时由 `roost module add chat` 装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。demo 在它之上只做一件事：登录时把玩家加进在线名单并发一条公告（`game/controllers/player/enter_game.go`）。
+
+chat 服务是通用的：它按频道存带序号的消息、执行这个工程交给它的策略；哪些频道存在、一句话长什么样、谁在线能收到，
+是游戏的事，住在 `game/chat/`（game 进程与 chat 进程都 import 它——这就是两边对 `text` 这个消息类型名达成一致的方式）：
 
 ```
-SendChat 端点 ─ Publish(sender=认证玩家, requestID=帧序号) ─▶ chat 服务（typed servicerpc，经生成的 Chat() 客户端）
-              └─ deliver：world 频道推给本进程 presence 里的每个在线玩家（含发送者），private 推给双方 ── ChatMessage 推送 10101
-EnterGame 端点 ─ PublishSystem(actor=game, "player N entered") ─▶ chat 服务的特权入口 ── 同样 deliver
+ChatSend 端点 ─ Publish(sender=认证玩家, requestID=帧序号) ─▶ chat 服务（typed servicerpc）
+              └─ deliver：world 频道推给本进程在线名单里的每个玩家（含发送者），private 推给双方 ── ChatMessage 推送
+EnterGame 端点 ─ Chat().AnnounceWorld("player N entered") ─▶ chat 服务的特权入口 PublishSystem ── 同样 deliver
 ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（服务端校验读权限）—— 重连补读路径
 ```
 
-- `internal/service/chat/collaborators.go`：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（demo 没有队伍；
+端点在模块自己的 controller 域 `game/controllers/chat/`，协议号在安装时从 `roost.yaml` 的 `ids` 段分配（记在 `modules.chat`）。
+
+- `internal/service/chat/collaborators.go`（模块替换了生成的拒绝桩）：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（没有队伍；
   公会群聊没接，接时成员来源是 alliance 服务的 Mirror 与成员变化通知），system 频道只读；`Bodies()` 注册唯一的 `text` 类型，校验函数与端点共用（端点先校验，免一次总线往返）；
   `System()` 无条件 `GrantSystem()`——这是对部署的陈述：chat 只经内网 NATS 可达，没有端点转发 PublishSystem。总线对不可信一方可达的部署要换成查调用者身份。
 - **推送是捷径，序号是依据**：每条投递都带 `Seq`，错过推送的客户端用 `ChatHistory(after_seq)` 补读——机器人脚本就是这么写的
   （它自己那句的推送可能先于响应到达而被丢，所以 `wait_push` 外面套了 selector，再用 history 断言）。
-- `Presence` 是**每进程**的在线集合：EnterGame 加入，推送失败且没有活动会话时移除。多个 game 进程的部署应改为订阅 chat 的流或走同步总线（syncbus），而不是从内存扇出。
+- `Presence` 是**每进程**的在线集合：EnterGame 加入（用过聊天的玩家也算在线），最后一条连接关闭、或推送失败且没有活动会话时移除。
+  连接关闭的订阅由 chat 的 controller 在第一次取推送面时挂上（`game/controllers/chat/chat_push.go`），服务的 `Init` 里没有聊天的接线。
+  多个 game 进程的部署应改为订阅 chat 的流或走同步总线（syncbus），而不是从内存扇出。
 - 机器人 transport（`loadtest/playertcp/conn.go`）靠帧头的 server-push 标志位识别推送——服务端给推送编的是自己的会话序号，与客户端序号同起点，
   只看序号会把一条世界频道推送当成正在等的响应。
 

@@ -11,7 +11,7 @@
 | [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 8 |
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | wallet | `PlayerDao.Checkin`（同步） | 6 |
 
-| [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）和按序号翻历史（`ChatHistory`），经托管的 chat 服务存储；替换 chat 服务默认拒绝一切的 collaborators | 无（要求业务服务 `uses: [chat]`，`-template game` 已有） | 无 | 6 |
+| [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）、向在线玩家的推送（`ChatMessage`）、按序号翻历史（`ChatHistory`）、给服务端用的系统公告（`AnnounceWorld`）；经托管的 chat 服务存储，替换它默认拒绝一切的 collaborators。game-demo 用的就是它 | 无（要求业务服务 `uses: [chat]` 与玩家 TCP 接入，后者安装时代办） | 无 | 8 |
 | [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放写在 `game/entities/player/enter_first.go`；安装时打开玩家 TCP 接入与自身视图 | 无 | `PlayerDao.Enter`（只落库） | 3 |
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。

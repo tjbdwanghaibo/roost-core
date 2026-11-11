@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strconv"
 
-	"{{MODULE}}/game/chatroom"
 	apperrors "{{MODULE}}/internal/errors"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -17,7 +16,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
-	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
@@ -158,20 +156,15 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 		}
 	}
 	// From here on the player receives world-channel pushes.
-	controller.Presence().Add(context.PlayerID)
-	// The game announces the login on the world channel through the chat
-	// service's privileged path (PublishSystem: no player could have sent
-	// this). Best effort — a missed announcement is not a failed login — and
-	// idempotent per frame, so a retried EnterGame announces once.
+	// Chat presence and the login announcement go through the chat module
+	// (game/controllers/chat): the player joins this process's online set,
+	// and the game says so on the world channel through the privileged system
+	// path — a client cannot publish there. The request id is the session and
+	// frame, so a retried login frame is announced once.
+	controller.Chat().Presence().Add(context.PlayerID)
 	requestID := fmt.Sprintf("enter:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
-	message, err := controller.Messaging().PublishSystem(context.Context(), svcchat.SystemPublishRequest{
-		Channel: chatroom.WorldChannel, Actor: chatroom.SystemActor, Type: chatroom.TypeText,
-		Body: []byte(fmt.Sprintf("player %d entered the world", context.PlayerID)), RequestID: requestID,
-	})
-	if err != nil {
+	if err := controller.Chat().AnnounceWorld(context.Context(), fmt.Sprintf("player %d entered the world", context.PlayerID), requestID); err != nil {
 		slog.Warn("enter_game: login not announced on the world channel", "player_id", context.PlayerID, "err", err)
-	} else {
-		controller.deliver(context.Context(), message)
 	}
 	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created}, nil
 }

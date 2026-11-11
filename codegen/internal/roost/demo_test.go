@@ -73,8 +73,21 @@ func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 		if step.add != nil || step.run != nil {
 			continue
 		}
+		if len(step.modules) > 0 {
+			// 模块步骤装的是 modules/ 里的模块，名字必须在目录里。
+			catalog, err := loadModuleCatalog()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range step.modules {
+				if _, ok := catalog[name]; !ok {
+					t.Errorf("a step installs module %q, which is not in modules/", name)
+				}
+			}
+			continue
+		}
 		if step.write == "" {
-			t.Fatal("a step neither adds, runs nor writes")
+			t.Fatal("a step neither adds, runs, installs modules nor writes")
 		}
 		if written[step.write] {
 			t.Errorf("step writes %s twice", step.write)
@@ -213,11 +226,12 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("%s collaborators still read as unconfigured to doctor:\n%s", service, collaborators)
 		}
 	}
-	if chatCollaborators := read("internal/service/chat/collaborators.go"); !strings.Contains(chatCollaborators, "chat.GrantSystem()") || !strings.Contains(chatCollaborators, "chatroom.TypeText") {
+	if chatCollaborators := read("internal/service/chat/collaborators.go"); !strings.Contains(chatCollaborators, "chat.GrantSystem()") || !strings.Contains(chatCollaborators, "gamechat.TypeText") {
 		t.Errorf("chat collaborators do not grant the system path and register the text type:\n%s", chatCollaborators)
 	}
-	for _, rel := range []string{"game/chatroom/chatroom.go", "protocol/def/send_chat.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
-		"game/controllers/player/send_chat.go", "game/controllers/player/chat_history.go", "game/controllers/player/chat_push.go", "deploy/dev/run.sh",
+	// 聊天是 chat 模块装进来的（demoModuleSteps），demo 自己不带一份。
+	for _, rel := range []string{"game/chat/chat.go", "protocol/def/chat_send.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
+		"game/controllers/chat/chat_send.go", "game/controllers/chat/chat_history.go", "game/controllers/chat/chat_push.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "protocol/def/list_mail.go", "protocol/def/claim_mail.go",
 		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go",
 		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/player_level.go",

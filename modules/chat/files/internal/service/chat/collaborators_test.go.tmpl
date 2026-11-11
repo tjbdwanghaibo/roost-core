@@ -32,10 +32,10 @@ func TestChatCollaboratorsEnforceTheGamePolicy(t *testing.T) {
 	}
 }
 
-// 系统入口保持拒绝；文本类型登记在案。
-func TestChatCollaboratorsKeepTheSystemPathClosed(t *testing.T) {
-	if _, err := System().AuthenticateSystem(context.Background()); err == nil {
-		t.Fatal("the system path is open")
+// 系统入口授予（总线只在内部可达，见 System 的注释）；消息体类型登记在案。
+func TestChatCollaboratorsGrantTheSystemPath(t *testing.T) {
+	if _, err := System().AuthenticateSystem(context.Background()); err != nil {
+		t.Fatalf("the system path is closed: %v", err)
 	}
 	if Bodies() == nil {
 		t.Fatal("no body registry")
