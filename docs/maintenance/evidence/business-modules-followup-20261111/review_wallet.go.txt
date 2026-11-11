@@ -1,0 +1,8 @@
+package handler
+
+import player "example.com/businessaudit/game/entities/player"
+
+//roost:nest rollback=undo durability=strict
+func handlerReviewWalletDelta(target player.IWalletEntity, delta int64) (int64, error) {
+	return target.WalletComp().Apply("review-debit", delta)
+}

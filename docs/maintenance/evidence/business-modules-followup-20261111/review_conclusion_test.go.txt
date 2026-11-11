@@ -1,0 +1,112 @@
+package rehome
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+)
+
+type reviewAllocator struct{}
+
+func (reviewAllocator) Allocate(context.Context, int32) (int64, error) { return rehomePlayer, nil }
+
+func reviewAccount(t *testing.T) *svcaccount.Service {
+	t.Helper()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Roles: versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](), Slots: versionstore.NewMemoryStore[string, svcaccount.Slot](), Names: names,
+		Verifier: svcaccount.VerifierFunc(func(_ context.Context, id svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil
+		}),
+		Allocator: reviewAllocator{}, NameRules: svcaccount.NameValidatorFunc(func(string) error { return nil }), SessionSecret: "review-only-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, sid := range []int32{rehomeSelf, rehomeTarget, 1002} {
+		if _, err := accounts.UpsertServer(ctx, svcaccount.GameServer{ID: sid, Name: fmt.Sprint(sid), Status: svcaccount.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := accounts.Login(ctx, svcaccount.Identity{Channel: "review", OpenID: "mover", Credential: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accounts.CreateRole(ctx, a.ID, rehomeSelf, "Mover"); err != nil {
+		t.Fatal(err)
+	}
+	return accounts
+}
+
+type reviewLostCommit struct {
+	Directory
+	accounts  *svcaccount.Service
+	overwrite bool
+	calls     int
+	t         *testing.T
+}
+
+func (d *reviewLostCommit) Commit(ctx context.Context, id int64, transfer string) (svcaccount.RoleBinding, error) {
+	d.calls++
+	result, err := d.Directory.Commit(ctx, id, transfer)
+	if d.calls == 1 && err == nil {
+		// Commit A is durable, but its reply is lost. Target accepts a second attempt,
+		// then aborts it (no second handoff is needed to overwrite LastTransfer).
+		if d.overwrite {
+			_, err = d.accounts.BeginRoleTransfer(ctx, id, svcaccount.TransferRequest{ID: "later", FromSID: rehomeTarget, To: 1002, ExpectEpoch: result.BindEpoch, ExpectSeq: result.TransferSeq})
+			if err != nil {
+				d.t.Fatal(err)
+			}
+			if _, err = d.accounts.AbortRoleTransfer(ctx, id, "later", "later attempt canceled"); err != nil {
+				d.t.Fatal(err)
+			}
+		}
+		return svcaccount.RoleBinding{}, errRehomeLost
+	}
+	return result, err
+}
+func TestReviewLostCommitAfterLaterAbort(t *testing.T) {
+	for _, overwrite := range []bool{false, true} {
+		name := "control"
+		if overwrite {
+			name = "later_abort"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newRehomeFixture(t)
+			accounts := reviewAccount(t)
+			authority := &reviewLostCommit{Directory: accountDirectory{accounts: accounts}, accounts: accounts, overwrite: overwrite, t: t}
+			f.driver.directory = authority
+			held := false
+			f.residency.handOff = func(context.Context, int64) (func(context.Context) error, error) {
+				held = true
+				return func(context.Context) error { held = false; return nil }, nil
+			}
+			if _, err := f.apply(); err != nil {
+				t.Fatal(err)
+			}
+			f.runBackground()
+			binding, err := accounts.RoleBinding(context.Background(), rehomePlayer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			where, tracked := f.residency.Where(rehomePlayer)
+			// A handshake started before the migration can finish after CloseSessions.
+			// Normally the migration record blocks its stale claims.
+			admit := f.driver.Admit(context.Background(), rehomePlayer, map[string]string{"server_id": "1000", "bind_epoch": "0"})
+			t.Logf("authority sid=%d epoch=%d last=%+v; held=%v tracked=%v where=%+v stale-session-admit=%v", binding.ServingServerID, binding.BindEpoch, binding.LastTransfer, held, tracked, where, admit)
+			if binding.ServingServerID != rehomeTarget || !held || !tracked || where.Moving || admit == nil {
+				t.Fatal("committed migration lost its source fence or admitted stale source session")
+			}
+		})
+	}
+}

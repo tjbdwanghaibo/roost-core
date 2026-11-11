@@ -1,0 +1,163 @@
+{
+  "modules": [
+    {
+      "name": "bag",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "chat",
+      "want": 8,
+      "passed": 8,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "chat+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "checkin",
+      "want": 8,
+      "passed": 8,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "enter",
+      "want": 11,
+      "passed": 11,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "leaderboard",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox",
+      "want": 32,
+      "passed": 32,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+bag",
+      "want": 9,
+      "passed": 9,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "profile",
+      "want": 19,
+      "passed": 19,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 30,
+      "passed": 30,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "room",
+      "want": 22,
+      "passed": 22,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "shop",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "skillbook",
+      "want": 8,
+      "passed": 8,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "stamina",
+      "want": 25,
+      "passed": 25,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task",
+      "want": 18,
+      "passed": 18,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+checkin",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "turn",
+      "want": 25,
+      "passed": 25,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "wallet",
+      "want": 14,
+      "passed": 14,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}

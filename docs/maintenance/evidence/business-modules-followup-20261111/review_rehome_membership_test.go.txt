@@ -1,0 +1,125 @@
+package game
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"example.com/businessdemo/game/alliancerule"
+	rehomectl "example.com/businessdemo/game/controllers/rehome"
+	"example.com/businessdemo/game/handler"
+	gamerehome "example.com/businessdemo/game/rehome"
+	apperrors "example.com/businessdemo/internal/errors"
+	rpcalliance "example.com/businessdemo/internal/rpc/alliance"
+	"example.com/businessdemo/protocol/msgid"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+type reviewMembershipDirectory struct {
+	gamerehome.Directory
+	afterBegin func()
+}
+
+func (d reviewMembershipDirectory) Begin(ctx context.Context, id int64, req svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
+	binding, err := d.Directory.Begin(ctx, id, req)
+	if err == nil && d.afterBegin != nil {
+		d.afterBegin()
+	}
+	return binding, err
+}
+
+func TestReviewRehomeMembershipChangesAfterPrepare(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		name := "control_joined_before_prepare"
+		if late {
+			name = "notice_after_prepare"
+		}
+		t.Run(name, func(t *testing.T) {
+			world := newRouteWorld(t)
+			home := world.server(t, routeLocalSID)
+			ctx := context.Background()
+			if err := home.owners.Serve(ctx, world.player, routeLocalSID); err != nil {
+				t.Fatal(err)
+			}
+			p := newScenePlayer(t, world.player)
+			handler.RegisterShowGuildNestHandlers()
+			handler.RegisterRehomePrepareNestHandlers()
+			handler.RegisterRehomeCancelNestHandlers()
+			handler.RegisterRehomeArriveNestHandlers()
+			engine := nest.NewEngine(
+				nest.NestOptionWithGetter(sceneGetter{p.ID(): p}),
+				nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+				nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+			)
+			if err := engine.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = engine.Shutdown(ctx) })
+			if err := home.registry.Register(app.ModName("nest"), nest.Client(engine)); err != nil {
+				t.Fatal(err)
+			}
+			notices := guildNotices{nest: engine, push: &noticePush{online: map[int64]bool{world.player: true}}}
+			joinNotice := func() {
+				if err := home.owners.AdmitMessage(world.player, msgid.MsgJoinGuild); err != nil {
+					t.Fatal(err)
+				}
+				if err := notices.apply(ctx, &rpcalliance.MemberNotice{PlayerID: world.player, AllianceID: 7, Change: alliancerule.MemberJoined, Version: 1}); err != nil {
+					t.Fatal(err)
+				}
+				if p.ProfileComp().GuildID() != 7 {
+					t.Fatal("membership update did not reach the real Player")
+				}
+			}
+			directory, err := gamerehome.DirectoryOf(home.registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrapped := reviewMembershipDirectory{Directory: directory}
+			if late {
+				wrapped.afterBegin = joinNotice
+			} else {
+				joinNotice()
+			}
+			if err := home.registry.Register(gamerehome.DirectoryCapability, gamerehome.Directory(wrapped)); err != nil {
+				t.Fatal(err)
+			}
+			// Use the formal controller driver, Profile adapter and demo Residency.
+			driver, err := rehomectl.DriverFromRegistry(home.registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ticket, applyErr := driver.Apply(ctx, gamerehome.Request{PlayerID: world.player, To: routeOtherSID})
+			if !late {
+				if !errors.Is(applyErr, apperrors.ErrRehomeRefused) {
+					t.Fatalf("existing guild was not refused: %v", applyErr)
+				}
+				return
+			}
+			if applyErr != nil {
+				t.Fatal(applyErr)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				where, tracked := home.owners.Where(world.player)
+				if tracked && !where.Moving {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if where, tracked := home.owners.Where(world.player); !tracked || where.Moving {
+				t.Fatal("background transfer did not settle")
+			}
+			binding, err := world.accounts.RoleBinding(ctx, world.player)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("ticket=%+v guild=%d authority_sid=%d", ticket, p.ProfileComp().GuildID(), binding.ServingServerID)
+			if binding.ServingServerID == routeOtherSID && p.ProfileComp().GuildID() != 0 {
+				t.Fatal("player committed to another server after the membership precondition became false")
+			}
+		})
+	}
+}

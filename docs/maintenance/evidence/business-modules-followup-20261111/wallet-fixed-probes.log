@@ -1,0 +1,26 @@
+=== RUN   TestReviewWalletMinDebit
+=== RUN   TestReviewWalletMinDebit/control
+    review_wallet_test.go:24: delta=-101 result=0 err=wallet_short: not enough coins stored=100 receipts=1
+=== RUN   TestReviewWalletMinDebit/min_int64
+    review_wallet_test.go:24: delta=-9223372036854775808 result=0 err=wallet_short: not enough coins stored=100 receipts=1
+--- PASS: TestReviewWalletMinDebit (0.01s)
+    --- PASS: TestReviewWalletMinDebit/control (0.01s)
+    --- PASS: TestReviewWalletMinDebit/min_int64 (0.00s)
+=== RUN   TestReviewWalletMinDebit
+=== RUN   TestReviewWalletMinDebit/control
+    review_wallet_test.go:24: delta=-101 result=0 err=wallet_short: not enough coins stored=100 receipts=1
+=== RUN   TestReviewWalletMinDebit/min_int64
+    review_wallet_test.go:24: delta=-9223372036854775808 result=0 err=wallet_short: not enough coins stored=100 receipts=1
+--- PASS: TestReviewWalletMinDebit (0.01s)
+    --- PASS: TestReviewWalletMinDebit/control (0.00s)
+    --- PASS: TestReviewWalletMinDebit/min_int64 (0.00s)
+=== RUN   TestReviewWalletMinDebit
+=== RUN   TestReviewWalletMinDebit/control
+    review_wallet_test.go:24: delta=-101 result=0 err=wallet_short: not enough coins stored=100 receipts=1
+=== RUN   TestReviewWalletMinDebit/min_int64
+    review_wallet_test.go:24: delta=-9223372036854775808 result=0 err=wallet_short: not enough coins stored=100 receipts=1
+--- PASS: TestReviewWalletMinDebit (0.01s)
+    --- PASS: TestReviewWalletMinDebit/control (0.00s)
+    --- PASS: TestReviewWalletMinDebit/min_int64 (0.00s)
+PASS
+ok  	example.com/businessaudit/game/handler	1.049s

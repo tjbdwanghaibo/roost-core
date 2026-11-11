@@ -1,0 +1,30 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	sender "example.com/businessaudit/game/handler/syncsender"
+	apperrors "example.com/businessaudit/internal/errors"
+	"math"
+	"testing"
+)
+
+func TestReviewWalletMinDebit(t *testing.T) {
+	for _, delta := range []int64{-101, math.MinInt64} {
+		name := "control"
+		if delta == math.MinInt64 {
+			name = "min_int64"
+		}
+		t.Run(name, func(t *testing.T) {
+			RegisterReviewWalletNestHandlers()
+			f := newWalletFixture(t)
+			f.grant(t, "initial", 100)
+			got, applyErr := sender.NewReviewWalletSender(f.engine).Sync_ReviewWalletDelta(context.Background(), f.player.ID(), delta)
+			coins, receipts := f.snapshot(t)
+			t.Logf("delta=%d result=%d err=%v stored=%d receipts=%d", delta, got, applyErr, coins, receipts)
+			if !errors.Is(applyErr, apperrors.ErrWalletShort) || coins != 100 || receipts != 1 {
+				t.Fatal("insufficient debit mutated balance or receipt")
+			}
+		})
+	}
+}

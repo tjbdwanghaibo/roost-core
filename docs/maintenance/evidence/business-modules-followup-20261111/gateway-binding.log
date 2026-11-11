@@ -1,0 +1,11 @@
+=== RUN   TestGateForwardExposesTheBoundConnectionIdentity
+2026/11/11 15:12:16 INFO player tcp listener started addr=127.0.0.1:40029 max_connections=10000
+--- PASS: TestGateForwardExposesTheBoundConnectionIdentity (0.04s)
+=== RUN   TestGateForwardExposesTheBoundConnectionIdentity
+2026/11/11 15:12:16 INFO player tcp listener started addr=127.0.0.1:39265 max_connections=10000
+--- PASS: TestGateForwardExposesTheBoundConnectionIdentity (0.04s)
+=== RUN   TestGateForwardExposesTheBoundConnectionIdentity
+2026/11/11 15:12:16 INFO player tcp listener started addr=127.0.0.1:36891 max_connections=10000
+--- PASS: TestGateForwardExposesTheBoundConnectionIdentity (0.05s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	1.141s

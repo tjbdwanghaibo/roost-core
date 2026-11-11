@@ -1,0 +1,4 @@
+ok  	example.com/businessaudit/game/rehome	1.032s
+ok  	example.com/businessaudit/game/handler	2.246s
+ok  	example.com/businessaudit/game/controllers/room	1.048s
+ok  	example.com/businessaudit/game/controllers/turn	1.053s

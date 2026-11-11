@@ -1,0 +1,69 @@
+=== RUN   TestReviewLostCommitAfterLaterAbort
+=== RUN   TestReviewLostCommitAfterLaterAbort/control
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=t-1 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:54 INFO rehome: accepted player_id=94301 transfer_id=t-1 from=1000 to=1001 operator=false
+2026/11/11 15:16:54 INFO account: role transfer committed player_id=94301 transfer_id=t-1 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:54 WARN rehome: outcome unknown; sending the same request again player_id=94301 transfer_id=t-1 commit=true attempt=1 err="injected: request lost"
+2026/11/11 15:16:54 INFO rehome: committed player_id=94301 transfer_id=t-1 from=1000 to=1001
+    review_conclusion_test.go:106: authority sid=1001 epoch=1 last=&{ID:t-1 From:1000 To:1001 Committed:true Epoch:1 AtUnix:1794410214 Note: Settled:true}; held=true tracked=true where={Move:{PlayerID:94301 EntityID:7094301 ID:t-1 From:1000 To:1001 Epoch:0 Operator:false} Moving:false Since:2027-01-15 08:00:00 +0000 UTC} stale-session-admit=rehome_elsewhere: the player is bound to another server; select the role again [player_id=94301 owner_sid=1001]
+=== RUN   TestReviewLostCommitAfterLaterAbort/later_abort
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=t-1 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:54 INFO rehome: accepted player_id=94301 transfer_id=t-1 from=1000 to=1001 operator=false
+2026/11/11 15:16:54 INFO account: role transfer committed player_id=94301 transfer_id=t-1 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=later from=1001 to=1002 epoch=1 transfer_seq=2
+2026/11/11 15:16:54 INFO account: role transfer aborted player_id=94301 transfer_id=later from=1001 to=1002 reason="later attempt canceled"
+2026/11/11 15:16:54 INFO account: released a transfer hold no role record stands behind player_id=94301 transfer_id=later server_id=1002
+2026/11/11 15:16:54 WARN rehome: outcome unknown; sending the same request again player_id=94301 transfer_id=t-1 commit=true attempt=1 err="injected: request lost"
+2026/11/11 15:16:54 WARN rehome: the account service did not rebind the player; the transfer is aborted player_id=94301 transfer_id=t-1
+    review_conclusion_test.go:106: authority sid=1001 epoch=1 last=&{ID:later From:1001 To:1002 Committed:false Epoch:1 AtUnix:1794410214 Note:later attempt canceled Settled:true}; held=false tracked=false where={Move:{PlayerID:0 EntityID:0 ID: From:0 To:0 Epoch:0 Operator:false} Moving:false Since:0001-01-01 00:00:00 +0000 UTC} stale-session-admit=<nil>
+    review_conclusion_test.go:108: committed migration lost its source fence or admitted stale source session
+--- FAIL: TestReviewLostCommitAfterLaterAbort (0.00s)
+    --- PASS: TestReviewLostCommitAfterLaterAbort/control (0.00s)
+    --- FAIL: TestReviewLostCommitAfterLaterAbort/later_abort (0.00s)
+=== RUN   TestReviewLostCommitAfterLaterAbort
+=== RUN   TestReviewLostCommitAfterLaterAbort/control
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=t-1 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:54 INFO rehome: accepted player_id=94301 transfer_id=t-1 from=1000 to=1001 operator=false
+2026/11/11 15:16:54 INFO account: role transfer committed player_id=94301 transfer_id=t-1 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:54 WARN rehome: outcome unknown; sending the same request again player_id=94301 transfer_id=t-1 commit=true attempt=1 err="injected: request lost"
+2026/11/11 15:16:54 INFO rehome: committed player_id=94301 transfer_id=t-1 from=1000 to=1001
+    review_conclusion_test.go:106: authority sid=1001 epoch=1 last=&{ID:t-1 From:1000 To:1001 Committed:true Epoch:1 AtUnix:1794410214 Note: Settled:true}; held=true tracked=true where={Move:{PlayerID:94301 EntityID:7094301 ID:t-1 From:1000 To:1001 Epoch:0 Operator:false} Moving:false Since:2027-01-15 08:00:00 +0000 UTC} stale-session-admit=rehome_elsewhere: the player is bound to another server; select the role again [player_id=94301 owner_sid=1001]
+=== RUN   TestReviewLostCommitAfterLaterAbort/later_abort
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=t-1 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:54 INFO rehome: accepted player_id=94301 transfer_id=t-1 from=1000 to=1001 operator=false
+2026/11/11 15:16:54 INFO account: role transfer committed player_id=94301 transfer_id=t-1 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=later from=1001 to=1002 epoch=1 transfer_seq=2
+2026/11/11 15:16:54 INFO account: role transfer aborted player_id=94301 transfer_id=later from=1001 to=1002 reason="later attempt canceled"
+2026/11/11 15:16:54 INFO account: released a transfer hold no role record stands behind player_id=94301 transfer_id=later server_id=1002
+2026/11/11 15:16:54 WARN rehome: outcome unknown; sending the same request again player_id=94301 transfer_id=t-1 commit=true attempt=1 err="injected: request lost"
+2026/11/11 15:16:54 WARN rehome: the account service did not rebind the player; the transfer is aborted player_id=94301 transfer_id=t-1
+    review_conclusion_test.go:106: authority sid=1001 epoch=1 last=&{ID:later From:1001 To:1002 Committed:false Epoch:1 AtUnix:1794410214 Note:later attempt canceled Settled:true}; held=false tracked=false where={Move:{PlayerID:0 EntityID:0 ID: From:0 To:0 Epoch:0 Operator:false} Moving:false Since:0001-01-01 00:00:00 +0000 UTC} stale-session-admit=<nil>
+    review_conclusion_test.go:108: committed migration lost its source fence or admitted stale source session
+--- FAIL: TestReviewLostCommitAfterLaterAbort (0.00s)
+    --- PASS: TestReviewLostCommitAfterLaterAbort/control (0.00s)
+    --- FAIL: TestReviewLostCommitAfterLaterAbort/later_abort (0.00s)
+=== RUN   TestReviewLostCommitAfterLaterAbort
+=== RUN   TestReviewLostCommitAfterLaterAbort/control
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=t-1 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:54 INFO rehome: accepted player_id=94301 transfer_id=t-1 from=1000 to=1001 operator=false
+2026/11/11 15:16:54 INFO account: role transfer committed player_id=94301 transfer_id=t-1 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:54 WARN rehome: outcome unknown; sending the same request again player_id=94301 transfer_id=t-1 commit=true attempt=1 err="injected: request lost"
+2026/11/11 15:16:54 INFO rehome: committed player_id=94301 transfer_id=t-1 from=1000 to=1001
+    review_conclusion_test.go:106: authority sid=1001 epoch=1 last=&{ID:t-1 From:1000 To:1001 Committed:true Epoch:1 AtUnix:1794410214 Note: Settled:true}; held=true tracked=true where={Move:{PlayerID:94301 EntityID:7094301 ID:t-1 From:1000 To:1001 Epoch:0 Operator:false} Moving:false Since:2027-01-15 08:00:00 +0000 UTC} stale-session-admit=rehome_elsewhere: the player is bound to another server; select the role again [player_id=94301 owner_sid=1001]
+=== RUN   TestReviewLostCommitAfterLaterAbort/later_abort
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=t-1 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:54 INFO rehome: accepted player_id=94301 transfer_id=t-1 from=1000 to=1001 operator=false
+2026/11/11 15:16:54 INFO account: role transfer committed player_id=94301 transfer_id=t-1 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:54 INFO account: role transfer begun player_id=94301 transfer_id=later from=1001 to=1002 epoch=1 transfer_seq=2
+2026/11/11 15:16:54 INFO account: role transfer aborted player_id=94301 transfer_id=later from=1001 to=1002 reason="later attempt canceled"
+2026/11/11 15:16:54 INFO account: released a transfer hold no role record stands behind player_id=94301 transfer_id=later server_id=1002
+2026/11/11 15:16:54 WARN rehome: outcome unknown; sending the same request again player_id=94301 transfer_id=t-1 commit=true attempt=1 err="injected: request lost"
+2026/11/11 15:16:54 WARN rehome: the account service did not rebind the player; the transfer is aborted player_id=94301 transfer_id=t-1
+    review_conclusion_test.go:106: authority sid=1001 epoch=1 last=&{ID:later From:1001 To:1002 Committed:false Epoch:1 AtUnix:1794410214 Note:later attempt canceled Settled:true}; held=false tracked=false where={Move:{PlayerID:0 EntityID:0 ID: From:0 To:0 Epoch:0 Operator:false} Moving:false Since:0001-01-01 00:00:00 +0000 UTC} stale-session-admit=<nil>
+    review_conclusion_test.go:108: committed migration lost its source fence or admitted stale source session
+--- FAIL: TestReviewLostCommitAfterLaterAbort (0.00s)
+    --- PASS: TestReviewLostCommitAfterLaterAbort/control (0.00s)
+    --- FAIL: TestReviewLostCommitAfterLaterAbort/later_abort (0.00s)
+FAIL
+FAIL	example.com/businessaudit/game/rehome	0.017s
+FAIL

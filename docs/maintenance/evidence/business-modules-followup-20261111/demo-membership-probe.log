@@ -1,0 +1,39 @@
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare/control_joined_before_prepare
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare/notice_after_prepare
+2026/11/11 15:16:03 INFO account: role transfer begun player_id=94501 transfer_id=rh1000-37d29e409d74f64568d8a54d from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:03 INFO rehome: accepted player_id=94501 transfer_id=rh1000-37d29e409d74f64568d8a54d from=1000 to=1001 operator=false
+2026/11/11 15:16:03 INFO account: role transfer committed player_id=94501 transfer_id=rh1000-37d29e409d74f64568d8a54d from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:03 INFO rehome: committed player_id=94501 transfer_id=rh1000-37d29e409d74f64568d8a54d from=1000 to=1001
+    review_rehome_membership_test.go:119: ticket={ID:rh1000-37d29e409d74f64568d8a54d From:1000 To:1001} guild=7 authority_sid=1001
+    review_rehome_membership_test.go:121: player committed to another server after the membership precondition became false
+--- FAIL: TestReviewRehomeMembershipChangesAfterPrepare (0.52s)
+    --- PASS: TestReviewRehomeMembershipChangesAfterPrepare/control_joined_before_prepare (0.01s)
+    --- FAIL: TestReviewRehomeMembershipChangesAfterPrepare/notice_after_prepare (0.51s)
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare/control_joined_before_prepare
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare/notice_after_prepare
+2026/11/11 15:16:03 INFO account: role transfer begun player_id=94501 transfer_id=rh1000-f5cf0dfd8661e76015767ad7 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:03 INFO rehome: accepted player_id=94501 transfer_id=rh1000-f5cf0dfd8661e76015767ad7 from=1000 to=1001 operator=false
+2026/11/11 15:16:04 INFO account: role transfer committed player_id=94501 transfer_id=rh1000-f5cf0dfd8661e76015767ad7 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:04 INFO rehome: committed player_id=94501 transfer_id=rh1000-f5cf0dfd8661e76015767ad7 from=1000 to=1001
+    review_rehome_membership_test.go:119: ticket={ID:rh1000-f5cf0dfd8661e76015767ad7 From:1000 To:1001} guild=7 authority_sid=1001
+    review_rehome_membership_test.go:121: player committed to another server after the membership precondition became false
+--- FAIL: TestReviewRehomeMembershipChangesAfterPrepare (0.52s)
+    --- PASS: TestReviewRehomeMembershipChangesAfterPrepare/control_joined_before_prepare (0.00s)
+    --- FAIL: TestReviewRehomeMembershipChangesAfterPrepare/notice_after_prepare (0.52s)
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare/control_joined_before_prepare
+=== RUN   TestReviewRehomeMembershipChangesAfterPrepare/notice_after_prepare
+2026/11/11 15:16:04 INFO account: role transfer begun player_id=94501 transfer_id=rh1000-1a9b5eddacd0efdd9cdea060 from=1000 to=1001 epoch=0 transfer_seq=1
+2026/11/11 15:16:04 INFO rehome: accepted player_id=94501 transfer_id=rh1000-1a9b5eddacd0efdd9cdea060 from=1000 to=1001 operator=false
+2026/11/11 15:16:04 INFO account: role transfer committed player_id=94501 transfer_id=rh1000-1a9b5eddacd0efdd9cdea060 from=1000 to=1001 bind_epoch=1 note=""
+2026/11/11 15:16:04 INFO rehome: committed player_id=94501 transfer_id=rh1000-1a9b5eddacd0efdd9cdea060 from=1000 to=1001
+    review_rehome_membership_test.go:119: ticket={ID:rh1000-1a9b5eddacd0efdd9cdea060 From:1000 To:1001} guild=7 authority_sid=1001
+    review_rehome_membership_test.go:121: player committed to another server after the membership precondition became false
+--- FAIL: TestReviewRehomeMembershipChangesAfterPrepare (0.52s)
+    --- PASS: TestReviewRehomeMembershipChangesAfterPrepare/control_joined_before_prepare (0.01s)
+    --- FAIL: TestReviewRehomeMembershipChangesAfterPrepare/notice_after_prepare (0.51s)
+FAIL
+FAIL	example.com/businessdemo/internal/service/game	1.583s
+FAIL

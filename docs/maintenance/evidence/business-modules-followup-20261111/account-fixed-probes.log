@@ -1,0 +1,101 @@
+=== RUN   TestReviewBeginHoldAfterAbort
+=== RUN   TestReviewBeginHoldAfterAbort/control
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=first from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=first from=1 to=2 reason=cancel
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=first server_id=2
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=second from=1 to=2 epoch=0 transfer_seq=3
+    review_business_test.go:68: before second Begin: hold={AccountID: ServerID:0 PlayerID:0 Creation:{ID: PlayerID:0 Name: CreatedAtUnix:0 Claim:{Key: Owner: Token: ExpiresAt:0001-01-01 00:00:00 +0000 UTC} Admitted:false} TransferID: BindEpoch:0} found=false; second Begin=<nil>; last=&{ID:first From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel Settled:true}
+=== RUN   TestReviewBeginHoldAfterAbort/delayed
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=first from=1 to=2 reason=cancel
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=first server_id=2
+    review_business_test.go:56: late Begin result=account: role binding or transfer id is stale: transfer first of role 1000001 is already settled; begin again with a new id
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=second from=1 to=2 epoch=0 transfer_seq=3
+    review_business_test.go:68: before second Begin: hold={AccountID: ServerID:0 PlayerID:0 Creation:{ID: PlayerID:0 Name: CreatedAtUnix:0 Claim:{Key: Owner: Token: ExpiresAt:0001-01-01 00:00:00 +0000 UTC} Admitted:false} TransferID: BindEpoch:0} found=false; second Begin=<nil>; last=&{ID:first From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel Settled:true}
+--- PASS: TestReviewBeginHoldAfterAbort (0.00s)
+    --- PASS: TestReviewBeginHoldAfterAbort/control (0.00s)
+    --- PASS: TestReviewBeginHoldAfterAbort/delayed (0.00s)
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort/control
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=old from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=old from=1 to=2 reason="cancel first"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=old server_id=2
+    review_business_test.go:98: late Begin=account: role binding or transfer id is stale: transfer old of role 1000001 is already settled; begin again with a new id; transfer=<nil> last=&{ID:old From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel first Settled:true} epoch=0
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort/second_abort
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=old from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=old from=1 to=2 reason="cancel first"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=old server_id=2
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=new from=1 to=2 epoch=0 transfer_seq=3
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=new from=1 to=2 reason="cancel second"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=new server_id=2
+    review_business_test.go:98: late Begin=account: role binding or transfer id is stale: role 1000001 is at transfer seq 4, caller presented 0; read the binding again; transfer=<nil> last=&{ID:new From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel second Settled:true} epoch=0
+--- PASS: TestReviewAbortTombstoneSurvivesOtherAbort (0.00s)
+    --- PASS: TestReviewAbortTombstoneSurvivesOtherAbort/control (0.00s)
+    --- PASS: TestReviewAbortTombstoneSurvivesOtherAbort/second_abort (0.00s)
+=== RUN   TestReviewBeginHoldAfterAbort
+=== RUN   TestReviewBeginHoldAfterAbort/control
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=first from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=first from=1 to=2 reason=cancel
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=first server_id=2
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=second from=1 to=2 epoch=0 transfer_seq=3
+    review_business_test.go:68: before second Begin: hold={AccountID: ServerID:0 PlayerID:0 Creation:{ID: PlayerID:0 Name: CreatedAtUnix:0 Claim:{Key: Owner: Token: ExpiresAt:0001-01-01 00:00:00 +0000 UTC} Admitted:false} TransferID: BindEpoch:0} found=false; second Begin=<nil>; last=&{ID:first From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel Settled:true}
+=== RUN   TestReviewBeginHoldAfterAbort/delayed
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=first from=1 to=2 reason=cancel
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=first server_id=2
+    review_business_test.go:56: late Begin result=account: role binding or transfer id is stale: transfer first of role 1000001 is already settled; begin again with a new id
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=second from=1 to=2 epoch=0 transfer_seq=3
+    review_business_test.go:68: before second Begin: hold={AccountID: ServerID:0 PlayerID:0 Creation:{ID: PlayerID:0 Name: CreatedAtUnix:0 Claim:{Key: Owner: Token: ExpiresAt:0001-01-01 00:00:00 +0000 UTC} Admitted:false} TransferID: BindEpoch:0} found=false; second Begin=<nil>; last=&{ID:first From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel Settled:true}
+--- PASS: TestReviewBeginHoldAfterAbort (0.00s)
+    --- PASS: TestReviewBeginHoldAfterAbort/control (0.00s)
+    --- PASS: TestReviewBeginHoldAfterAbort/delayed (0.00s)
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort/control
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=old from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=old from=1 to=2 reason="cancel first"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=old server_id=2
+    review_business_test.go:98: late Begin=account: role binding or transfer id is stale: transfer old of role 1000001 is already settled; begin again with a new id; transfer=<nil> last=&{ID:old From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel first Settled:true} epoch=0
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort/second_abort
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=old from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=old from=1 to=2 reason="cancel first"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=old server_id=2
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=new from=1 to=2 epoch=0 transfer_seq=3
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=new from=1 to=2 reason="cancel second"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=new server_id=2
+    review_business_test.go:98: late Begin=account: role binding or transfer id is stale: role 1000001 is at transfer seq 4, caller presented 0; read the binding again; transfer=<nil> last=&{ID:new From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel second Settled:true} epoch=0
+--- PASS: TestReviewAbortTombstoneSurvivesOtherAbort (0.00s)
+    --- PASS: TestReviewAbortTombstoneSurvivesOtherAbort/control (0.00s)
+    --- PASS: TestReviewAbortTombstoneSurvivesOtherAbort/second_abort (0.00s)
+=== RUN   TestReviewBeginHoldAfterAbort
+=== RUN   TestReviewBeginHoldAfterAbort/control
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=first from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=first from=1 to=2 reason=cancel
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=first server_id=2
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=second from=1 to=2 epoch=0 transfer_seq=3
+    review_business_test.go:68: before second Begin: hold={AccountID: ServerID:0 PlayerID:0 Creation:{ID: PlayerID:0 Name: CreatedAtUnix:0 Claim:{Key: Owner: Token: ExpiresAt:0001-01-01 00:00:00 +0000 UTC} Admitted:false} TransferID: BindEpoch:0} found=false; second Begin=<nil>; last=&{ID:first From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel Settled:true}
+=== RUN   TestReviewBeginHoldAfterAbort/delayed
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=first from=1 to=2 reason=cancel
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=first server_id=2
+    review_business_test.go:56: late Begin result=account: role binding or transfer id is stale: transfer first of role 1000001 is already settled; begin again with a new id
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=second from=1 to=2 epoch=0 transfer_seq=3
+    review_business_test.go:68: before second Begin: hold={AccountID: ServerID:0 PlayerID:0 Creation:{ID: PlayerID:0 Name: CreatedAtUnix:0 Claim:{Key: Owner: Token: ExpiresAt:0001-01-01 00:00:00 +0000 UTC} Admitted:false} TransferID: BindEpoch:0} found=false; second Begin=<nil>; last=&{ID:first From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel Settled:true}
+--- PASS: TestReviewBeginHoldAfterAbort (0.00s)
+    --- PASS: TestReviewBeginHoldAfterAbort/control (0.00s)
+    --- PASS: TestReviewBeginHoldAfterAbort/delayed (0.00s)
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort/control
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=old from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=old from=1 to=2 reason="cancel first"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=old server_id=2
+    review_business_test.go:98: late Begin=account: role binding or transfer id is stale: transfer old of role 1000001 is already settled; begin again with a new id; transfer=<nil> last=&{ID:old From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel first Settled:true} epoch=0
+=== RUN   TestReviewAbortTombstoneSurvivesOtherAbort/second_abort
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=old from=1 to=2 epoch=0 transfer_seq=1
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=old from=1 to=2 reason="cancel first"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=old server_id=2
+2026/11/11 15:09:32 INFO account: role transfer begun player_id=1000001 transfer_id=new from=1 to=2 epoch=0 transfer_seq=3
+2026/11/11 15:09:32 INFO account: role transfer aborted player_id=1000001 transfer_id=new from=1 to=2 reason="cancel second"
+2026/11/11 15:09:32 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=new server_id=2
+    review_business_test.go:98: late Begin=account: role binding or transfer id is stale: role 1000001 is at transfer seq 4, caller presented 0; read the binding again; transfer=<nil> last=&{ID:new From:1 To:2 Committed:false Epoch:0 AtUnix:1700000000 Note:cancel second Settled:true} epoch=0
+--- PASS: TestReviewAbortTombstoneSurvivesOtherAbort (0.00s)
+    --- PASS: TestReviewAbortTombstoneSurvivesOtherAbort/control (0.00s)
+    --- PASS: TestReviewAbortTombstoneSurvivesOtherAbort/second_abort (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.041s
