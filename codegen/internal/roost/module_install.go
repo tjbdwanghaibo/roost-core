@@ -233,6 +233,9 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 				return ModulePlan{}, fmt.Errorf("module %s: %s already exists and is not this module's file; the installer does not overwrite business files (rename or remove it, or keep your own implementation and do not install %s)", spec.Name, rel, spec.Name)
 			} else if !os.IsNotExist(err) {
 				return ModulePlan{}, err
+			} else if contains(spec.Replaces, rel) && stubComesFromPrerequisite(manifest, rel, pending) {
+				// 文件现在还没有，但这次安装的前置命令会先把桩生成出来、模块再替换它：计划里照样写明。
+				item.Replaces = append(item.Replaces, rel)
 			}
 		}
 		plan.Modules = append(plan.Modules, item)
@@ -869,25 +872,75 @@ func (source *daoStructSource) appendFields(root string, fields []daoFieldSpec) 
 	return formatted, nil
 }
 
-// isUntouchedGeneratedStub 报告工程里的 rel 是否仍是生成器当初写下、之后没被改过的桩。
-// 目前认识一种：托管框架服务的 internal/service/<name>/collaborators.go（默认拒绝一切，留给项目实现）。
-// 判定是逐字节的：与生成器现在会写出的内容相同才算；改过一个字符就是业务代码。
-func isUntouchedGeneratedStub(manifest Manifest, rel string, current []byte) (bool, error) {
+// generatedStubKind 是安装器认识的一种生成桩：生成器建一次、默认拒绝一切、留给项目实现的文件。
+// 模块清单的 replaces 只能接管这里列出的种类；加一种新的桩就在 generatedStubKinds 里加一项。
+type generatedStubKind struct {
+	// name 给人看（测试与报错里点名是哪一种）。
+	name string
+	// render 返回生成器现在会给 rel 写出的桩内容（格式化之前）；rel 不是这一种桩时 ok 为 false。
+	render func(manifest Manifest, rel string) (stub string, ok bool)
+	// prerequisite 是会写下这种桩的前置命令（modulePrerequisites 给出的原文）；建工程时就有的桩为空。
+	// 工程里还没有这个文件、而这次安装要先执行这条命令时，桩由它生成、随即被模块替换。
+	prerequisite string
+}
+
+// generatedStubKinds 是安装器认识的全部生成桩种类。
+var generatedStubKinds = []generatedStubKind{
+	{name: "hosted framework service collaborators", render: frameworkCollaboratorsStub},
+	{name: "player TCP authenticator", render: playerTCPAuthenticatorStub, prerequisite: "roost add transport tcp"},
+}
+
+// stubComesFromPrerequisite 报告 rel 是不是一个“现在还没有、但待执行的前置命令会生成”的桩。
+func stubComesFromPrerequisite(manifest Manifest, rel string, pending map[string]bool) bool {
+	for _, kind := range generatedStubKinds {
+		if _, ok := kind.render(manifest, rel); ok {
+			return kind.prerequisite != "" && pending[kind.prerequisite]
+		}
+	}
+	return false
+}
+
+// frameworkCollaboratorsStub：托管框架服务的 internal/service/<name>/collaborators.go（默认拒绝一切）。
+func frameworkCollaboratorsStub(manifest Manifest, rel string) (string, bool) {
 	const prefix, suffix = "internal/service/", "/collaborators.go"
 	if !strings.HasPrefix(rel, prefix) || !strings.HasSuffix(rel, suffix) {
-		return false, nil
+		return "", false
 	}
 	name := strings.TrimSuffix(strings.TrimPrefix(rel, prefix), suffix)
 	if !manifest.isFrameworkService(name) {
-		return false, nil
+		return "", false
 	}
-	stub := renderFrameworkCollaborators(manifest, name)
-	if bytes.Equal(current, []byte(stub)) {
-		return true, nil
+	return renderFrameworkCollaborators(manifest, name), true
+}
+
+// playerTCPAuthenticatorPath 是 roost add transport tcp 写下的鉴权桩（一律答 gateway.ErrUnauthenticated）。
+const playerTCPAuthenticatorPath = "internal/access/player/tcp/auth.go"
+
+// playerTCPAuthenticatorStub：玩家 TCP 接入的鉴权桩。内容与工程无关，所以不看 manifest。
+func playerTCPAuthenticatorStub(_ Manifest, rel string) (string, bool) {
+	if rel != playerTCPAuthenticatorPath {
+		return "", false
 	}
-	formatted, err := format.Source([]byte(stub))
-	if err != nil {
-		return false, fmt.Errorf("format the generated %s stub: %w", rel, err)
+	return renderPlayerTCPAuthenticator(), true
+}
+
+// isUntouchedGeneratedStub 报告工程里的 rel 是否仍是生成器当初写下、之后没被改过的桩。
+// 认识的种类见 generatedStubKinds；不是其中任何一种的文件一律不算桩。
+// 判定是逐字节的：与生成器现在会写出的内容相同才算；改过一个字符就是业务代码。
+func isUntouchedGeneratedStub(manifest Manifest, rel string, current []byte) (bool, error) {
+	for _, kind := range generatedStubKinds {
+		stub, ok := kind.render(manifest, rel)
+		if !ok {
+			continue
+		}
+		if bytes.Equal(current, []byte(stub)) {
+			return true, nil
+		}
+		formatted, err := format.Source([]byte(stub))
+		if err != nil {
+			return false, fmt.Errorf("format the generated %s stub (%s): %w", rel, kind.name, err)
+		}
+		return bytes.Equal(current, formatted), nil
 	}
-	return bytes.Equal(current, formatted), nil
+	return false, nil
 }

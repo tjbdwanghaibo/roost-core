@@ -121,7 +121,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 			if err := addGo("internal/access/player/tcp/server_gen_test.go", renderPlayerTCPServerTests(m), true); err != nil {
 				return nil, err
 			}
-			if err := addGo("internal/access/player/tcp/auth.go", renderPlayerTCPAuthenticator(), false); err != nil {
+			if err := addGo(playerTCPAuthenticatorPath, renderPlayerTCPAuthenticator(), false); err != nil {
 				return nil, err
 			}
 			if err := addGo("cmd/playerprobe/main.go", renderPlayerTCPProbe(), true); err != nil {

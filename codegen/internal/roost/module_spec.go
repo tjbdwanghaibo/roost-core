@@ -46,7 +46,8 @@ type ModuleSpec struct {
 	Protocols []string `yaml:"protocols" json:"protocols,omitempty"`
 	Errcodes  []string `yaml:"errcodes" json:"errcodes,omitempty"`
 	// Replaces 是模块要接管的生成桩（工程内路径，必须也在 files/ 里）：生成器建一次、默认拒绝一切、
-	// 留给项目实现的文件，例如托管服务的 internal/service/chat/collaborators.go。只有它仍是没改过的
+	// 留给项目实现的文件，例如托管服务的 internal/service/chat/collaborators.go、玩家 TCP 的鉴权桩
+	// internal/access/player/tcp/auth.go（安装器认识的种类见 generatedStubKinds）。只有它仍是没改过的
 	// 生成桩时才替换；业务改过就拒绝安装。
 	Replaces []string     `yaml:"replaces" json:"replaces,omitempty"`
 	Verify   ModuleVerify `yaml:"verify" json:"verify"`

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"go/format"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -757,6 +758,61 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 	roost("module", "add", "chat")
 	if moduleProjectDigest(t, root) != installed {
 		t.Fatal("installing chat again changed the project")
+	}
+}
+
+// 安装器认识的生成桩是一张表（generatedStubKinds）：托管服务的 collaborators.go 与玩家 TCP 的鉴权桩。
+// 每一种都只在逐字节等于生成器现在写出的内容（格式化前后都算）时才是“没改过的桩”；
+// 表里没有的路径不算桩，表里的路径改过一个字符也不算。
+func TestModuleStubKindsRecogniseOnlyUntouchedGeneratedStubs(t *testing.T) {
+	manifest := gameTemplateManifest(t)
+	formatted := func(source string) []byte {
+		t.Helper()
+		out, err := format.Source([]byte(source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	stubs := map[string]string{
+		"internal/service/chat/collaborators.go":    renderFrameworkCollaborators(manifest, "chat"),
+		"internal/service/account/collaborators.go": renderFrameworkCollaborators(manifest, "account"),
+		"internal/access/player/tcp/auth.go":        renderPlayerTCPAuthenticator(),
+	}
+	for rel, stub := range stubs {
+		for name, body := range map[string][]byte{"as rendered": []byte(stub), "as formatted": formatted(stub)} {
+			pristine, err := isUntouchedGeneratedStub(manifest, rel, body)
+			if err != nil || !pristine {
+				t.Errorf("%s %s: pristine = %v, err = %v; want an untouched stub", rel, name, pristine, err)
+			}
+		}
+		edited := append(formatted(stub), []byte("\n// 业务加的一行。\n")...)
+		if pristine, err := isUntouchedGeneratedStub(manifest, rel, edited); err != nil || pristine {
+			t.Errorf("%s with one added line: pristine = %v, err = %v; want business code", rel, pristine, err)
+		}
+	}
+	// 鉴权桩的内容放在别的路径上不算桩；业务服务（不是托管服务）的 collaborators.go 也不算。
+	authStub := formatted(renderPlayerTCPAuthenticator())
+	for _, rel := range []string{
+		"internal/access/player/ws/auth.go",
+		"internal/access/player/tcp/auth_extra.go",
+		"internal/service/game/collaborators.go",
+		"game/handler/auth.go",
+	} {
+		if pristine, err := isUntouchedGeneratedStub(manifest, rel, authStub); err != nil || pristine {
+			t.Errorf("%s: pristine = %v, err = %v; want not a stub", rel, pristine, err)
+		}
+	}
+	// 一种桩的内容不能冒充另一种。
+	if pristine, _ := isUntouchedGeneratedStub(manifest, "internal/service/chat/collaborators.go", authStub); pristine {
+		t.Error("the authenticator stub passed as chat's collaborators stub")
+	}
+	if pristine, _ := isUntouchedGeneratedStub(manifest, "internal/access/player/tcp/auth.go", formatted(stubs["internal/service/chat/collaborators.go"])); pristine {
+		t.Error("chat's collaborators stub passed as the authenticator stub")
+	}
+	// 生成的鉴权桩确实是 doctor 说的“还是拒绝骨架”，否则接管它就没有意义。
+	if playerTCPAuthenticatorImplemented(authStub) {
+		t.Error("doctor takes the generated authenticator stub for an implemented authenticator")
 	}
 }
 
