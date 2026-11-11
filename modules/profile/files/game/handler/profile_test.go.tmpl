@@ -673,14 +673,16 @@ func TestProfileExpStaysOutOfTheHalfOthersMaySee(t *testing.T) {
 		t.Fatalf("a view listing only ProfilePrivate: card=%+v private=%+v, want exp 75 alone", card, own)
 	}
 
-	// dirtied 清掉到此为止的同步脏位，执行 change，返回 change 标脏的档案字段位。
+	// dirtied 清掉到此为止的同步脏位，执行 change，返回 change 标脏的档案字段位。读的是给客户端同步用的那一份脏位
+	// （TakeEntitySyncDirty）：提交时由同步观察者取走，这里的 Nest 没装观察者，所以它留在 DAO 上；工程在升级钩子里
+	// 自己取走另一份脏位（TakeSyncDirty，例如手工标脏主体）也不影响这里。
 	dirtied := func(change func()) uint64 {
 		t.Helper()
 		take := func() (mask uint64) {
 			if err := f.engine.RunLocal(context.Background(), func() {
 				f.player.GetMutex().Lock()
 				defer f.player.GetMutex().Unlock()
-				mask = f.player.Dao().DirtyTracker().TakeSyncDirty()
+				mask = f.player.Dao().DirtyTracker().TakeEntitySyncDirty()
 			}); err != nil {
 				t.Fatal(err)
 			}

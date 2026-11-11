@@ -94,7 +94,8 @@ func (component *StatsComponent) RecordMatch() {
 
 // CheckRecordExp reports, without writing, whether RecordExp(amount) would be
 // accepted: the server-wide total is an int64 and must not wrap. Handlers
-// call it before their first DAO write, next to ProfileComponent.CheckAddExp.
+// call it before their first DAO write, next to the profile module's
+// ProfileComponent.CheckAddExp (game/handler/add_exp.go checkExpGrant).
 func (component *StatsComponent) CheckRecordExp(amount int64) error {
 	current := component.Owner().Dao().GetExpGranted()
 	if amount <= 0 || current < 0 || amount > math.MaxInt64-current {

@@ -1,0 +1,80 @@
+package player
+
+import "{{MODULE}}/game/dungeon"
+
+// 这个文件是 demo 自己的，不属于 profile 模块：副本通关奖励的领奖账本与每赛季的通关计数。
+//
+// 方法挂在 ProfileComponent 上（组件本身是 profile 模块装进来的，同一个包里可以给它加方法），因为领奖事务
+// handlerClaimDungeon 在同一个窄接口 IProfileEntity 上既记账又发经验；另立一个组件只会让那一笔事务多一个 getter。
+// 状态在 demo 自己的 PlayerDao.DungeonClaims / DungeonClears 里，不在模块的 Profile 里。
+
+// ClaimDungeonRun records runID as paid and reports whether this call is the
+// one that recorded it. A second call for the same run returns false and
+// changes nothing, which is what makes the clear reward exactly-once: the
+// record lands in the same Nest transaction as the reward itself.
+//
+// The value stored is the run's **resolution time**, not the time of the
+// claim: that is the number the reward's deadline is computed from, so the
+// ledger and the admission check read the same fact (game/dungeon explains
+// why one number for both is the whole argument).
+//
+// Pruning happens here, on the write path, so the ledger is bounded without
+// a sweeper. It is safe because a record can only be dropped a grace after
+// the run it names is past its claim window (dungeon.LedgerMayForget), and a
+// run past its claim window is refused before it ever reaches this function
+// — with the time the claim executes, not the time its caller read. Everything moves through generated
+// mutators, so a handler that fails later takes the whole ledger change back
+// with the reward.
+//
+// A record that holds the claim time instead is never earlier than the
+// resolution time — it simply expires a little later, never sooner, so no
+// such record can start paying again.
+func (component *ProfileComponent) ClaimDungeonRun(runID string, resolvedAtUnix, nowUnix int64) bool {
+	dao := component.Owner().Dao()
+	if _, claimed := dao.GetDungeonClaims(runID); claimed {
+		return false
+	}
+	var stale []string
+	dao.RangeDungeonClaims(func(key string, resolvedAt int64) bool {
+		if dungeon.LedgerMayForget(resolvedAt, nowUnix) {
+			stale = append(stale, key)
+		}
+		return true
+	})
+	for _, key := range stale {
+		dao.DelDungeonClaims(key)
+	}
+	dao.SetDungeonClaims(runID, resolvedAtUnix)
+	return true
+}
+
+// CountDungeonClear adds one paid clear to season's count and returns the new
+// count. It is called only from the claim transaction, right after
+// ClaimDungeonRun recorded the run, so the count moves exactly when a run is
+// paid and rolls back with the payment.
+//
+// The count is the clears board's source (game/leaderboard): the board is brought
+// up to it with rank UpdateMax rather than incremented, which is what makes a
+// replay of any run — however many clears later — harmless there. Unlike the
+// claim ledger it is never pruned: one entry per season the player cleared in.
+func (component *ProfileComponent) CountDungeonClear(season int64) int64 {
+	dao := component.Owner().Dao()
+	current, _ := dao.GetDungeonClears(season)
+	dao.SetDungeonClears(season, current+1)
+	return current + 1
+}
+
+// DungeonClears is the player's count of paid clears in season. A read for
+// callers holding the lock.
+func (component *ProfileComponent) DungeonClears(season int64) int64 {
+	current, _ := component.Owner().Dao().GetDungeonClears(season)
+	return current
+}
+
+// DungeonRunClaimed reports whether a run has already been paid. It is a
+// read for callers holding the lock; the claim itself must go through
+// ClaimDungeonRun, inside the transaction that pays.
+func (component *ProfileComponent) DungeonRunClaimed(runID string) bool {
+	_, claimed := component.Owner().Dao().GetDungeonClaims(runID)
+	return claimed
+}

@@ -270,7 +270,7 @@ scenarios:
             # (the DAO field is nopersist) and only exists on the wire, so
             # asking for it here is what proves the attribute container is
             # actually wired into replication rather than just into Mongo.
-            fields: level,exp,attr_base,attr_final,pos_x,equipment
+            fields: profile,profile_private,attr_base,attr_final,pos_x,equipment
             timeout: 10s
         # The leaderboard (the leaderboard module's LeaderboardTop: the top
         # page plus this player's own standing). The board holds the player's

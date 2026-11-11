@@ -25,6 +25,7 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 	if err != nil {
 		return 0, err
 	}
+	publishExpGrant(target)
 	if err := stats.StatsComp().RecordExp(amount); err != nil {
 		return 0, err
 	}
@@ -34,10 +35,19 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 // checkExpGrant is the read-only admission every experience grant shares
 // (AddExp, ClaimDungeon, and through them the GM command and the dungeon
 // finish endpoint): the Player's experience and level and the World's total
-// must all stay in range, or nothing is written.
+// must all stay in range, or nothing is written. The Player's half is the
+// profile module's CheckAddExp (codes profile_exp_invalid /
+// profile_exp_overflow); the World's half is the demo's own (exp_amount).
 func checkExpGrant(target player.IProfileEntity, stats world.IStatsEntity, amount int64) error {
 	if err := target.ProfileComp().CheckAddExp(amount); err != nil {
 		return err
 	}
 	return stats.StatsComp().CheckRecordExp(amount)
+}
+
+// publishExpGrant 把这次发放改动的同步字段交给场景同步，一次发放调一次。档案是 profile 模块的，它的 AddExp 只经
+// 生成的 setter 改 DAO；“何时把 DAO 的脏位交给主体”是 demo 自己的约定（Player.PublishSyncDirty），所以由 demo 的
+// handler 在发放之后做。升了级时属性组件已经交过一次，这里取到的是空掩码，不会多发一条增量。
+func publishExpGrant(target player.IProfileEntity) {
+	target.ProfileComp().Owner().PublishSyncDirty()
 }

@@ -144,7 +144,7 @@ type Scene struct {
 	sessionObjects int
 	// self binds, in a partitioned scene only, each member's own session to
 	// its Player subject with the "self" view (maintainer decision E4 = A):
-	// what the scene actor's mirror does not carry — exp, gold, the bag,
+	// what the scene actor's mirror does not carry — name, level, exp, the bag,
 	// equipment, guild — reaches the client over the same connection. In an
 	// ordinary scene the Player is the member's subject and the interest
 	// policy's self already shows it; self stays empty there.
@@ -511,7 +511,7 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 	// player id. Bands are not configured (one band, the main view's whole
 	// radius); what the band gives is a VIEW: BandLayer says the main view
 	// shows its subjects with the "near" view (what others may see of a
-	// player: no exp / gold / items / attributes), self shows a player its
+	// player: no exp / items / attributes), self shows a player its
 	// own entity with the default view (everything), and ViewSets has the
 	// Interest check at construction that every kind on the map declares
 	// every view these hand out (sceneNearLayer, sceneViewSets).
@@ -581,7 +581,7 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 // 场景给出的同步层级（视图身份）；每个视图的字段由各实体的 packer 声明（game/entities/<kind>/sync_packer.go）。
 //
 //	本人看自己               缺省视图（SelfLayer 零值）：全部同步字段
-//	主视野里的别人           sceneNearLayer：他人可见的字段（Player 没有 exp、gold、items、属性；怪没有 scene_id）
+//	主视野里的别人           sceneNearLayer：他人可见的字段（Player 没有经验 profile_private、items、属性；怪没有 scene_id）
 //	队伍关系视野（不论距离） sceneTeamLayer：队友可见的字段（demo 里与 near 相同）
 //	场景主体（时间域）       缺省视图（sceneView）
 //

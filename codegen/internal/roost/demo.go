@@ -426,7 +426,6 @@ func demoActivityKeys(root, gameService string) error {
 
 func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 	steps := []demoScaffoldStep{
-		{add: &AddOptions{Kind: "component", Name: "Profile", Entity: "Player"}, why: "Player's identity state"},
 		{add: &AddOptions{Kind: "component", Name: "Bag", Entity: "Player"}, why: "Player's item state"},
 		{add: &AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}, why: "persistence for both components"},
 		{write: "db/restore_test.go", why: "current schema restores; mismatched schemas leave DAO unchanged"},
@@ -435,7 +434,11 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "db/migrations/offline.go", why: "offline migration on a stopped collection: dry-run, backup, conditional rewrite, verify and rollback"},
 		{write: "db/migrations/player_test.go", why: "plan writes nothing, apply backs up and rewrites, any failed check writes nothing, a live writer stops the run, rollback refuses documents written afterwards; the same flow on real Mongo"},
 		{write: "cmd/schemamigrate/main.go", why: "the operator tool for the migration: plan | apply | verify | rollback against the game's Mongo"},
-		{write: "game/entities/player/profile_component.go", why: "rename and level-up through generated mutators; level-up emits an effect"},
+		// 档案（名字、等级、经验）是 profile 模块的：ProfileComponent 与 PlayerDao.Profile / ProfilePrivate 在最后的模块步骤
+		// 里装进来（demoModuleSteps）。下面两个文件是 demo 自己挂在那个组件上的东西——公会副本与副本领奖账本，不属于档案，
+		// 状态字段也在 demo 自己的 PlayerDao 里。它们与后面引用 ProfileComp() 的 handler 一样，等模块装好之后才一起编译。
+		{write: "game/entities/player/guild_membership.go", why: "the player's own copy of their guild membership (PlayerDao.GuildID): read for advisory pre-checks, written with the player's transaction"},
+		{write: "game/entities/player/dungeon_ledger.go", why: "the exactly-once ledger for dungeon clear rewards and the per-season clear count, pruned on the write path"},
 		{write: "game/entities/player/bag_component.go", why: "add-item: table lookup, coded errors, generated map mutators"},
 		{write: "game/entities/player/entity.go", why: "EntityCategoryPlayer: the kind's lock rank, decided before the first document is persisted"},
 		{write: "game/effects/level_up.go", why: "the level-up effect: topic, payload, and the Emit onto the current transaction"},
@@ -456,7 +459,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "errcode", Name: "ItemCount", ID: 100002}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "BagFull", ID: 100003}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "ExpAmount", ID: 100004}, why: "a coded failure in the manifest's errcode space"},
-		{add: &AddOptions{Kind: "errcode", Name: "NameEmpty", ID: 100005}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "ItemShort", ID: 100006}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "BattleNotFound", ID: 100007}, why: "a coded failure in the manifest's errcode space"},
 		{add: &AddOptions{Kind: "errcode", Name: "BattleNotSeated", ID: 100008}, why: "a coded failure in the manifest's errcode space"},
@@ -467,7 +469,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/item_count.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/bag_full.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/exp_amount.go", why: "client-facing message instead of the TODO placeholder"},
-		{write: "internal/errors/name_empty.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/item_short.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_not_found.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_not_seated.go", why: "client-facing message instead of the TODO placeholder"},
@@ -531,24 +532,22 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/gift/gift_test.go", why: "complete session identity keeps gifts on distinct logins apart while preserving retries"},
 		{add: &AddOptions{Kind: "handler", Name: "AddItem", Entity: "Player", Component: "Bag"}, why: "the write transaction"},
 		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},
-		{add: &AddOptions{Kind: "handler", Name: "AddExp", Entity: "Player", Component: "Profile"}, why: "the transaction that starts the event chain"},
-		{write: "game/handler/add_exp.go", why: "two entity parameters (Player, World) in one transaction; the Sender becomes MultiSync_AddExp"},
+		// AddExp、ClaimDungeon、PlayerTeam（以及公会的 ShowGuild、PlayerGuild）锁的是 Profile 组件，它由 profile 模块在最后一步
+		// 装进来；`roost add handler` 要求组件已经在盘上，所以这几个 handler 没有骨架步骤，直接写文件（骨架本来也会被立刻覆盖）。
+		{write: "game/handler/add_exp.go", why: "the transaction that starts the event chain: two entity parameters (Player, World) in one transaction; the Sender becomes MultiSync_AddExp"},
 		{add: &AddOptions{Kind: "handler", Name: "RecordEnter", Entity: "World", Component: "Stats"}, why: "World counts a login"},
 		{write: "game/handler/record_enter.go", why: "a separate Nest call after the Player one"},
 		{add: &AddOptions{Kind: "handler", Name: "RecordMatch", Entity: "World", Component: "Stats"}, why: "World counts a formed match"},
 		{write: "game/handler/record_match.go", why: "called by the matchmaker after the remote Commit"},
 		{add: &AddOptions{Kind: "handler", Name: "WorldStats", Entity: "World", Component: "Stats"}, why: "a read under the lock"},
 		{write: "game/handler/world_stats.go", why: "returns a value, not the Entity"},
-		{add: &AddOptions{Kind: "handler", Name: "PlayerLevel", Entity: "Player", Component: "Profile"}, why: "the ranked queue's score, read under the Player's lock"},
-		{write: "game/handler/player_level.go", why: "a read handler on the Player"},
 		{add: &AddOptions{Kind: "handler", Name: "StartGift", Entity: "Player", Component: "Bag"}, why: "the saga start: check under the lock, emit the start intent in the same WAL record"},
 		{write: "game/handler/start_gift.go", why: "no mutation, one effect: saga.EmitStart"},
 		{add: &AddOptions{Kind: "handler", Name: "GiftDebit", Entity: "Player", Component: "Bag"}, why: "the saga's debit step as a Nest transaction"},
 		{write: "game/handler/gift_debit.go", why: "RemoveItem plus the command's receipt and completion, all in one WAL record"},
 		{add: &AddOptions{Kind: "handler", Name: "GiftRefund", Entity: "Player", Component: "Bag"}, why: "debit's compensation, with the same saga identity"},
 		{write: "game/handler/gift_refund.go", why: "AddItem plus the receipt and completion; a compensation that runs twice is as wrong as a step that does"},
-		{add: &AddOptions{Kind: "handler", Name: "ClaimDungeon", Entity: "Player", Component: "Profile"}, why: "the clear reward, paid at most once per run"},
-		{write: "game/handler/claim_dungeon.go", why: "the claim ledger and the reward commit together, so a replay pays nothing"},
+		{write: "game/handler/claim_dungeon.go", why: "the clear reward, paid at most once per run: the claim ledger and the reward commit together, so a replay pays nothing"},
 		{add: &AddOptions{Kind: "handler", Name: "ClaimMailReward", Entity: "Player", Component: "Bag"}, why: "the mail attachment, granted at most once per mail"},
 		{add: &AddOptions{Kind: "handler", Name: "EquipItem", Entity: "Player", Component: "Equipment"}, why: "taking an item out of the bag and putting it on must commit together, or the item is lost or duplicated"},
 		{write: "game/handler/equip_item.go", why: "one transaction over three components: bag, equipment and the attribute layer that follows them"},
@@ -679,8 +678,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/team_disband.go", why: "the other members' copies are on other processes: a notice clears them, a reread catches a lost one"},
 		{add: &AddOptions{Kind: "handler", Name: "TeamSync", Entity: "Team", Component: "Roster"}, why: "a Base rereads a member's roster from the team"},
 		{write: "game/handler/team_sync.go", why: "after a restart (the copy's version is 0) and every resync_every, so a lost change notice is caught"},
-		{add: &AddOptions{Kind: "handler", Name: "PlayerTeam", Entity: "Player", Component: "Profile"}, why: "\"which team am I in\" costs a local lock"},
-		{write: "game/handler/player_team.go", why: "the player's own copy, written by the team transactions"},
+		{write: "game/handler/player_team.go", why: "\"which team am I in\" costs a local lock: the player's own copy, written by the team transactions"},
 		{write: "protocol/def/team.go", why: "invite, accept, leave, disband, info behind one roster answer; teammates' positions come from the team panel, not from here"},
 		{write: "game/controllers/player/team.go", why: "a persistent team id for a new team, then one [Team, Player] transaction per call; scene_not_partitioned on an ordinary scene"},
 		{add: &AddOptions{Kind: "entity", Name: "TerrainChunk", ID: 11}, why: "an edited 64m terrain chunk (editable terrain plan P1): only chunks a player changed have one, overlaying the base pack; its id comes from the chunk's coordinates"},
@@ -841,7 +839,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // 不打开 access.player.self_sync：demo 的场景自己装着 entitysync Manager，一个 Nest 只有一个观察者。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"enter", "chat", "leaderboard"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls)"},
+		{modules: []string{"enter", "chat", "leaderboard", "profile"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook)"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件。协议多几个字段，
 		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、邮件、公告）。
 		{write: "protocol/def/enter_game.go", why: "the enter module's protocol with the demo's fields: client version in, player id / created / owner sid out; the message id is the one the module was allocated"},
@@ -853,6 +851,11 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 所以 leaderboard 必须与 enter、chat 在同一步里装：模块步骤结束时要跑生成器与 go mod tidy。
 		{write: "game/leaderboard/leaderboard_board.go", why: "the module's project-owned board rules with the demo's board: dungeon clears, global, per season, pages of ten; and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
 		{write: "game/leaderboard/leaderboard_board_test.go", why: "the demo's board rules pinned with literal numbers, in place of the module's test of its default board"},
+		// 档案是 profile 模块：组件、状态（PlayerDao.Profile 别人可见、ProfilePrivate 只给本人）、改名协议、CheckAddExp、
+		// 名片 handler ProfileCard 都是模块的。demo 的 handler（AddExp、ClaimDungeon、JoinQueue……）在前面的步骤里就引用
+		// ProfileComp()，所以 profile 也必须与别的模块在同一步里装。demo 只覆盖模块留给工程的升级钩子：升一级之后属性跟着涨、
+		// 发 player.level_up 这个 effect（奖励邮件由它的消费者发），都与经验、等级在同一笔事务里。
+		{write: "game/entities/player/profile_levelup.go", why: "the module's project-owned level-up hook with the demo's two consequences of a level: the attribute base layer follows it, and the player.level_up effect rides on the same transaction (the reward mail is its consumer's)"},
 	}
 }
 

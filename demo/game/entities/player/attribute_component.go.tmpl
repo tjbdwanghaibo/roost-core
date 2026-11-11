@@ -95,7 +95,7 @@ func (component *AttributeComponent) OnInitFinish(_ *entity.EntityCreateParam, _
 func (component *AttributeComponent) Container() *coreattr.Container {
 	dao := component.owner.Dao()
 	container := coreattr.NewContainer()
-	container.Install(coreattr.Base, component.baseAt(dao.GetLevel()))
+	container.Install(coreattr.Base, component.baseAt(dao.GetProfile().GetLevel()))
 	container.Install(Gear, combatFrom(dao.RangeAttrGear))
 	container.Install(coreattr.Final, combatFrom(dao.RangeAttrFinal))
 	return container
@@ -112,15 +112,16 @@ func (component *AttributeComponent) Final() (*gameattr.Combat, bool) {
 }
 
 // LevelUp raises the base layer by levels and recomposes. It is the attribute
-// half of ProfileComponent.AddExp, which has already moved the DAO's level
-// by levels when it calls this: the level is the DAO's, the numbers that
-// follow from it are the attributes'.
+// half of a level-up: the profile module's ProfileComponent.AddExp has already
+// moved the DAO's level by levels when its level-up hook (profile_levelup.go)
+// calls this: the level is the profile's, the numbers that follow from it are
+// the attributes'.
 func (component *AttributeComponent) LevelUp(levels int32) {
 	if levels <= 0 {
 		return
 	}
 	dao := component.owner.Dao()
-	base := component.baseAt(dao.GetLevel() - levels)
+	base := component.baseAt(dao.GetProfile().GetLevel() - levels)
 	base.LevelUp(levels)
 	writeAttrs(base, dao.RangeAttrBase, dao.SetAttrBase, dao.DelAttrBase)
 	component.recompose()
@@ -138,7 +139,7 @@ func (component *AttributeComponent) RefreshGear() {
 		return
 	}
 	dao := component.owner.Dao()
-	writeAttrs(component.baseAt(dao.GetLevel()), dao.RangeAttrBase, dao.SetAttrBase, dao.DelAttrBase)
+	writeAttrs(component.baseAt(dao.GetProfile().GetLevel()), dao.RangeAttrBase, dao.SetAttrBase, dao.DelAttrBase)
 	component.recompose()
 	component.owner.PublishSyncDirty()
 	component.owner.cellPanelChanged()
@@ -194,7 +195,7 @@ func (component *AttributeComponent) baseAt(level int32) *gameattr.Combat {
 func (component *AttributeComponent) recompose() {
 	dao := component.owner.Dao()
 	sum := make(map[coreattr.AttrID]coreattr.AttrValue)
-	for _, layer := range []*gameattr.Combat{component.baseAt(dao.GetLevel()), combatFrom(dao.RangeAttrGear)} {
+	for _, layer := range []*gameattr.Combat{component.baseAt(dao.GetProfile().GetLevel()), combatFrom(dao.RangeAttrGear)} {
 		values := make(map[coreattr.AttrID]coreattr.AttrValue)
 		layer.ExportValues(values)
 		for id, value := range values {

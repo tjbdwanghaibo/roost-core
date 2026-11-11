@@ -2,10 +2,8 @@ package dbdef
 
 //roost:dao coll=player db=main schema=2
 type PlayerDao struct {
-	Name  string          `dao:"persist,sync" store:"name"`
-	Level int32           `dao:"persist,sync" store:"level"`
-	Exp   int64           `dao:"persist,sync" store:"exp"`
-	Gold  int64           `dao:"persist,sync" store:"gold"`
+	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
+	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
 	Items map[int64]int32 `dao:"persist,sync,map=fast" store:"items"`
 	// DungeonClaims is the exactly-once ledger for dungeon clear rewards:
 	// run id -> the run's resolution time. The claim transaction records the

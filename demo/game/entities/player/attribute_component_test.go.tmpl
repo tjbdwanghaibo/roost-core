@@ -164,13 +164,17 @@ func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
 	}
 	doc, err := patch.Values()
  if err != nil { t.Fatal(err) }
-	for _, name := range []string{"gold", "exp", "items", "attr_base", "attr_final"} {
+	// profile_private 是档案里只给本人的那一半（等级内经验）；别人看得到的那一半是 profile（名字、等级）。
+	for _, name := range []string{"profile_private", "items", "attr_base", "attr_final"} {
 		if _, exists := doc[name]; exists {
 			t.Fatalf("near view leaked %s", name)
 		}
 	}
 	if _, exists := doc["pos_x"]; !exists {
 		t.Fatal("near view lost position")
+	}
+	if _, exists := doc["profile"]; !exists {
+		t.Fatal("near view lost the name and level (PlayerDao.Profile)")
 	}
 	position, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "PosX")
 	if !ok {
@@ -190,11 +194,11 @@ func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
 	if _, moved := doc["pos_x"]; !moved || len(doc) != 1 {
 		t.Fatalf("delta sent unchanged fields: %v", doc)
 	}
-	gold, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "Gold")
+	exp, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "ProfilePrivate")
 	if !ok {
-		t.Fatal("gold metadata missing")
+		t.Fatal("exp (ProfilePrivate) metadata missing")
 	}
-	hidden, err := packer.PackSubjectDelta(near, gold.Bit)
+	hidden, err := packer.PackSubjectDelta(near, exp.Bit)
 	if err != nil || !hidden.Empty() {
 		t.Fatalf("private change packed: %v", err)
 	}
@@ -220,11 +224,11 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			subject := newAttributePlayer(t, tc.uniqueID)
 			component := subject.AttributeComp()
-			level := subject.Dao().GetLevel()
+			level := subject.Dao().GetProfile().GetLevel()
 			start := gameattr.ForLevel(level)
 
 			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "level_up_then_fail", func() (any, error) {
-				if _, err := subject.ProfileComp().AddExp(ExpPerLevel); err != nil {
+				if _, err := subject.ProfileComp().AddExp(ProfileExpPerLevel); err != nil {
 					return nil, err
 				}
 				if tc.failAfter {
@@ -235,7 +239,7 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 			if err == nil {
 				t.Fatal("the transaction was expected to fail")
 			}
-			if got := subject.Dao().GetLevel(); got != level {
+			if got := subject.Dao().GetProfile().GetLevel(); got != level {
 				t.Fatalf("the level was not rolled back: %d, want %d", got, level)
 			}
 			base, ok := gameattr.CombatLive(component.Container(), coreattr.Base)
@@ -255,18 +259,18 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 			// DOES commit must store the numbers of the level it reached, not one
 			// level-up on top of a rolled-back one.
 			if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
-				return subject.ProfileComp().AddExp(ExpPerLevel)
+				return subject.ProfileComp().AddExp(ProfileExpPerLevel)
 			}); err != nil {
 				t.Fatalf("the retry failed: %v", err)
 			}
-			want := gameattr.ForLevel(subject.Dao().GetLevel())
+			want := gameattr.ForLevel(subject.Dao().GetProfile().GetLevel())
 			stored := make(map[int32]int64)
 			subject.Dao().RangeAttrBase(func(id int32, value int64) bool {
 				stored[id] = value
 				return true
 			})
 			if got := stored[int32(gameattr.AttrHP)]; got != want.HP {
-				t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetLevel(), got, want.HP)
+				t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetProfile().GetLevel(), got, want.HP)
 			}
 		})
 	}
@@ -372,12 +376,12 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("grant the sword: %v", err)
 				}
-				level := subject.Dao().GetLevel()
+				level := subject.Dao().GetProfile().GetLevel()
 				start := gameattr.ForLevel(level)
 				startFinal := attrFinalOf(subject)
 
 				err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, failure.committer, func(p *Player) error {
-					if _, err := p.ProfileComp().AddExp(ExpPerLevel); err != nil {
+					if _, err := p.ProfileComp().AddExp(ProfileExpPerLevel); err != nil {
 						return err
 					}
 					if _, err := p.BagComp().RemoveItem(ironSword, 1); err != nil {
@@ -395,7 +399,7 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 				if err == nil {
 					t.Fatal("the transaction was expected to fail")
 				}
-				if got := subject.Dao().GetLevel(); got != level {
+				if got := subject.Dao().GetProfile().GetLevel(); got != level {
 					t.Fatalf("the level was not rolled back: %d, want %d", got, level)
 				}
 				component := subject.AttributeComp()
@@ -415,14 +419,14 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 				}
 
 				if err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, attributeCommitter{}, func(p *Player) error {
-					_, err := p.ProfileComp().AddExp(ExpPerLevel)
+					_, err := p.ProfileComp().AddExp(ProfileExpPerLevel)
 					return err
 				}); err != nil {
 					t.Fatalf("the retry failed: %v", err)
 				}
-				want := gameattr.ForLevel(subject.Dao().GetLevel())
+				want := gameattr.ForLevel(subject.Dao().GetProfile().GetLevel())
 				if got, _ := subject.Dao().GetAttrBase(int32(gameattr.AttrHP)); got != want.HP {
-					t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetLevel(), got, want.HP)
+					t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetProfile().GetLevel(), got, want.HP)
 				}
 			})
 		}
@@ -460,7 +464,7 @@ func TestNonPersistentAttributeLayersStayOutOfTheWAL(t *testing.T) {
 	}
 	worn, _ := subject.AttributeComp().Final()
 	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "level_up", func() (any, error) {
-		return subject.ProfileComp().AddExp(ExpPerLevel)
+		return subject.ProfileComp().AddExp(ProfileExpPerLevel)
 	}); err != nil {
 		t.Fatalf("level up: %v", err)
 	}
@@ -639,7 +643,7 @@ func TestCellPanelIsTheFinalLayer(t *testing.T) {
 	check("built")
 	before := subject.CellPanel()
 	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
-		return subject.ProfileComp().AddExp(ExpPerLevel)
+		return subject.ProfileComp().AddExp(ProfileExpPerLevel)
 	}); err != nil {
 		t.Fatal(err)
 	}

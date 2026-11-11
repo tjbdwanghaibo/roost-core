@@ -15,7 +15,7 @@ import (
 // directions: a stored document's guild_id is loaded, and the document the
 // DAO writes carries it. Nearby players see the guild (the "near" sync view).
 func TestPlayerGuildIDIsPersistedAsThePlayersCopy(t *testing.T) {
-	stored, err := bson.Marshal(bson.M{"_id": int64(42), "name": "stored", "guild_id": int64(7)})
+	stored, err := bson.Marshal(bson.M{"_id": int64(42), "profile": bson.M{"1": "stored"}, "guild_id": int64(7)})
 	if err != nil {
 		t.Fatal(err)
 	}

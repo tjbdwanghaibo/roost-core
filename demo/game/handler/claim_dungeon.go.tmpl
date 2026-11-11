@@ -68,6 +68,7 @@ func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity,
 	if err != nil {
 		return dungeon.ClaimResult{}, err
 	}
+	publishExpGrant(target)
 	if err := stats.StatsComp().RecordExp(amount); err != nil {
 		return dungeon.ClaimResult{}, err
 	}

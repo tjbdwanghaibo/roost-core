@@ -1530,7 +1530,10 @@ func expectSceneAlive(ctx context.Context, rb *robot.Context, param any) error {
 		defer watcher.mu.Unlock()
 		for subjectID, document := range watcher.subjects {
 			if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
-				exp, level = syncInt64(document["exp"]), syncInt64(document["level"])
+				// 档案是 profile 模块的两个同步字段：等级在 profile 里，经验在只给本人的 profile_private 里。
+				ownExp, _ := clientsync.PlayerExp(document)
+				ownLevel, _ := clientsync.PlayerLevel(document)
+				exp, level = ownExp, int64(ownLevel)
 				break
 			}
 		}
@@ -1579,7 +1582,7 @@ func syncInt64(value any) int64 {
 func expectScene(ctx context.Context, rb *robot.Context, param any) error {
 	params := action.ParamsOf(rb, param)
 	timeout := params.Duration("timeout", 10*time.Second)
-	wanted := strings.Split(params.String("fields", "level"), ",")
+	wanted := strings.Split(params.String("fields", "profile"), ",")
 	wantSubjects := int(params.Int64("subjects", 1))
 	raw, _ := rb.Blackboard.Get("scene_watcher")
 	watcher, ok := raw.(*sceneWatcher)

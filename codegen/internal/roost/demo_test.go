@@ -234,7 +234,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/controllers/chat/chat_send.go", "game/controllers/chat/chat_history.go", "game/controllers/chat/chat_push.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "protocol/def/list_mail.go", "protocol/def/claim_mail.go",
 		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go",
-		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/player_level.go",
+		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
 		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skill_catalog.go", "game/controllers/player/skill_catalog.go",
 		"internal/service/game/gm.go",
@@ -453,10 +453,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if server := read("internal/access/player/tcp/server_gen.go"); !strings.Contains(server, "type RegistryBound interface") {
 		t.Errorf("the generated transport lost the RegistryBound hook the demo authenticator relies on")
 	}
-	// The event chain: the component emits on the transaction, the service
+	// The event chain: the profile module's level-up hook (the demo's own
+	// version of the project-owned file) emits on the transaction, the service
 	// consumes with an inbox and sends mail keyed by the effect id.
-	if profile := read("game/entities/player/profile_component.go"); !strings.Contains(profile, "effects.EmitPlayerLevelUp(") {
-		t.Errorf("profile component does not emit the level-up effect:\n%s", profile)
+	if hook := read("game/entities/player/profile_levelup.go"); !strings.Contains(hook, "effects.EmitPlayerLevelUp(") || !strings.Contains(hook, "AttributeComp().LevelUp(") {
+		t.Errorf("the level-up hook does not raise the attributes and emit the level-up effect:\n%s", hook)
 	}
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "startLevelUpMailer(") {
 		t.Errorf("game service does not start the effect consumer:\n%s", service)
@@ -533,6 +534,35 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if finish := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(finish, "gameleaderboard.SubmitSeason(") || strings.Contains(finish, "svcrank") {
 		t.Errorf("the dungeon settlement does not submit through the leaderboard module:\n%s", finish)
+	}
+	// 档案是 profile 模块装进来的：demo 不带自己的档案组件、PlayerLevel 读 handler 与 name_empty 错误码；模块的组件文件原样
+	// （不发 effect、不碰属性），demo 只覆盖升级钩子；名字、等级、经验不再是 PlayerDao 的平铺字段，而是模块追加的两个
+	// 顶层字段（Profile 别人可见、ProfilePrivate 只给本人）；公会副本与副本领奖账本在 demo 自己的文件里。
+	for _, gone := range []string{"game/handler/player_level.go", "internal/errors/name_empty.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(gone))); !os.IsNotExist(err) {
+			t.Errorf("the demo still ships its own profile file %s (err=%v)", gone, err)
+		}
+	}
+	if component := read("game/entities/player/profile_component.go"); !strings.Contains(component, "func (component *ProfileComponent) CheckAddExp(") ||
+		strings.Contains(component, "effects.") || strings.Contains(component, "AttributeComp()") || strings.Contains(component, "GuildID") || strings.Contains(component, "Dungeon") {
+		t.Errorf("game/entities/player/profile_component.go is not the module's own component file:\n%s", component)
+	}
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "Profile ProfileState `store:\"profile\" dao:\"persist,sync\"`") ||
+		!strings.Contains(dao, "ProfilePrivate ProfilePrivateState `store:\"profile_private\" dao:\"persist,sync\"`") ||
+		strings.Contains(dao, `store:"name"`) || strings.Contains(dao, `store:"exp"`) || strings.Contains(dao, `store:"gold"`) {
+		t.Errorf("PlayerDao does not take its name, level and exp from the profile module's two fields:\n%s", dao)
+	}
+	if packer := read("game/entities/player/sync_packer.go"); !strings.Contains(packer, `playerPublicFields = []string{"Profile", `) || strings.Contains(packer, `playerPublicFields = []string{"Profile", "ProfilePrivate"`) {
+		t.Errorf("the view other players get does not list Profile without ProfilePrivate:\n%s", packer)
+	}
+	if guild := read("game/entities/player/guild_membership.go"); !strings.Contains(guild, "func (component *ProfileComponent) SetGuild(") {
+		t.Errorf("the guild copy is not in the demo's own file:\n%s", guild)
+	}
+	if ledger := read("game/entities/player/dungeon_ledger.go"); !strings.Contains(ledger, "func (component *ProfileComponent) ClaimDungeonRun(") {
+		t.Errorf("the dungeon claim ledger is not in the demo's own file:\n%s", ledger)
+	}
+	if queue := read("game/controllers/player/join_queue.go"); !strings.Contains(queue, "Sync_ProfileCard(") {
+		t.Errorf("the ranked queue does not read the level through the profile module's ProfileCard:\n%s", queue)
 	}
 	if robot := read("cmd/loadtest/main.go"); !strings.Contains(robot, "msgid.MsgLeaderboardTop") || strings.Contains(robot, "RankTop") {
 		t.Errorf("the load-test robot does not read the board through the module's LeaderboardTop")
