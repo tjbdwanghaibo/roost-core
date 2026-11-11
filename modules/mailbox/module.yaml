@@ -1,5 +1,5 @@
 name: mailbox
-summary: 邮件：分页列出自己的邮件、领取附件；附件的种类是登记点（金币内置），经托管的 mail 服务三步领取，Player 上的领取账本保证每封至多到账一次
+summary: 邮件：分页列出自己的邮件、领取附件；附件的种类是登记点（金币内置），经托管的 mail 服务三步领取，Player 上的领取账本保证每封至多到账一次；给服务端发件用的 SendTo（附件先校验、幂等键必填）
 requires: [wallet]
 conflicts: []
 needs:
@@ -19,14 +19,14 @@ errcodes: [mailbox_invalid, mailbox_attachment]
 verify:
   packages: [./game/handler, ./game/mailbox, ./game/controllers/mailbox]
   run: ^TestMailbox
-  pass: 28
+  pass: 32
 with:
   enter:
-    summary: 玩家进入游戏时把属于他的全服邮件合并进邮箱（PullBroadcasts）
+    summary: 玩家进入游戏时把属于他的全服邮件合并进邮箱（PullBroadcasts）；画像缺省取首次进入的时间，会话带着 account 的角色创建时间与区服时改用它们
     verify:
       packages: [./game/controllers/mailbox]
       run: ^TestWithMailboxEnter
-      pass: 3
+      pass: 5
   bag:
     summary: 道具附件：登记 item 这个附件种类，领取时道具进背包（BagComp().Add），与领取账本同一笔事务
     verify:

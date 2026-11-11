@@ -11,7 +11,8 @@ import "fmt"
 // TypeItem 是道具附件。线上格式 {"type":"item","id":1001,"amount":3}。
 const TypeItem Type = "item"
 
-// Item 是 amount 个 itemID 号道具的附件，给发件方用：mailbox.Encode(mailbox.Item(1001, 3))。
+// Item 是 amount 个 itemID 号道具的附件，给发件方用：
+// mailbox.SendTo(ctx, mailer, mailbox.Letter{..., Attachment: mailbox.Item(1001, 3)})。
 func Item(itemID, amount int64) Attachment {
 	return Attachment{Type: TypeItem, ID: itemID, Amount: amount}
 }

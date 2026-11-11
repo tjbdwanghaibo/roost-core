@@ -109,7 +109,7 @@ func TestMailboxDecodeRefusesWhatThisVersionCannotGrant(t *testing.T) {
 		"refused by the type's validator": `{"type":"mailbox_test_ticket","id":10,"amount":1}`,
 		"trailing object":                 `{"type":"coins","amount":5}{"type":"coins","amount":5}`,
 		"trailing text":                   `{"type":"coins","amount":5} x`,
-		"the demo item reward":            `{"item_id":1002,"count":1}`,
+		"an item written another way":     `{"item_id":1002,"count":1}`,
 	}
 	if _, raw, withoutBag := mailboxItemWithoutBag(); withoutBag {
 		refused["an item without the bag glue"] = raw

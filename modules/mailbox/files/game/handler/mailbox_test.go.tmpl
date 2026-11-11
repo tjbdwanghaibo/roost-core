@@ -394,6 +394,19 @@ func TestMailboxRecordOutlivesTheExpiryByTheGrace(t *testing.T) {
 	if !f.recorded(t, "other") || !f.recorded(t, "another") {
 		t.Fatal("a record whose mail is still claimable was pruned: a replay would be paid again")
 	}
+	// 账本的记忆以邮件自己的过期时刻为界，不是游戏这边定的固定保留期：一封 40 天后才过期的邮件，
+	// 第 39 天的重放照样不发——这期间别的发放已经把过期的记录清过了。
+	const day = int64(24 * 3600)
+	f.mustPay(t, "long-lived", 5, mailboxStart+40*day, 115)
+	f.setNow(mailboxStart + 39*day)
+	f.mustPay(t, "a-month-later", 5, mailboxStart+46*day, 120)
+	if f.recorded(t, "other") || f.recorded(t, "another") {
+		t.Fatal("premise: the seven-day mails' records were not pruned a month later")
+	}
+	replay, err := f.claim("long-lived", 5, mailboxStart+40*day)
+	if err != nil || replay.Claimed || replay.Held != 120 {
+		t.Fatalf("a replay on day 39 of a mail that lives 40 days = %+v, err = %v, want Claimed=false with the balance 120", replay, err)
+	}
 }
 
 // 领了很多封之后账本不无限增长：每小时领一封、每封邮件 3 小时后过期，账本里始终只有还没过期满宽限的那几封。

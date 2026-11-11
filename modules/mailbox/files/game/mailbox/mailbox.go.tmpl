@@ -6,8 +6,10 @@
 // （RegisterType）。这里只管“这样的附件合不合法”；“怎么发到玩家身上”登记在 Player 实体包
 // （RegisterMailboxGrant），因为这个包不能认识实体。
 //
-// 这里只有纯函数，不读时钟、不碰实体，不 import 任何 controller 或实体包：端点、Player 上的 Mailbox 组件、
-// 别的功能与测试都可以 import 它而不成环。
+// 发件方的标准写法是 SendTo（mailbox_send.go）：给一名玩家发一封带附件的邮件，附件先校验、幂等键必填。
+//
+// 除了 SendTo 那一次对 mail 服务的调用，这里只有纯函数，不读时钟、不碰实体，不 import 任何 controller 或实体包：
+// 端点、Player 上的 Mailbox 组件、别的功能与测试都可以 import 它而不成环。
 package mailbox
 
 import (
@@ -37,7 +39,7 @@ type Attachment struct {
 	Amount int64 `json:"amount,omitempty"`
 }
 
-// Coins 是 amount 个金币的附件，给发件方用：mailbox.Encode(mailbox.Coins(100))。
+// Coins 是 amount 个金币的附件，给发件方用：mailbox.SendTo(ctx, mailer, mailbox.Letter{..., Attachment: mailbox.Coins(100)})。
 func Coins(amount int64) Attachment { return Attachment{Type: TypeCoins, Amount: amount} }
 
 // Validator 判断一份本种类的附件合不合法，不合法时返回原因。它拿到的附件种类已经是登记的那个、

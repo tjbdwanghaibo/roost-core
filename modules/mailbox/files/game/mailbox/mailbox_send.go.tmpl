@@ -1,0 +1,98 @@
+package mailbox
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// 这个文件是发件方的标准写法：服务端给一名玩家发一封邮件，可以带一份附件。GM 补偿、活动结算、升级奖励、
+// 玩家之间送礼的“送达”那一步都是这一件事，差别只在标题、正文、附件与幂等键，所以写成一个入口，
+// 不让每个发件方各自拼 svcmail.SendRequest、各自记得先校验附件。
+//
+// 它是这个包里唯一会出进程的函数（一次对 mail 服务的调用）；附件的编码、校验与账本的时间规则仍是纯函数。
+
+// DefaultExpiresInSeconds 是 Letter 没写保留期时邮件保留多久：7 天。过期之后 mail 服务不再给出预留，
+// 附件就领不到了，所以奖励邮件不要给得太短；要更长或更短在 Letter.ExpiresInSeconds 里写。
+const DefaultExpiresInSeconds int64 = 7 * 24 * 60 * 60
+
+// Letter 是发给一名玩家的一封邮件。
+type Letter struct {
+	// To 是收件人的玩家 id。
+	To int64
+	// Subject 是标题，不能为空；Body 是正文，可以为空。长度上限由 mail 服务决定。
+	Subject string
+	Body    string
+	// Attachment 是附件，例如 Coins(100)、装了 bag 时的 Item(1001, 3)。零值表示这封邮件不带附件。
+	Attachment Attachment
+	// ExpiresInSeconds 是邮件保留多久（秒）；0 用 DefaultExpiresInSeconds，负数拒绝。
+	ExpiresInSeconds int64
+	// RequestID 是这一次发件的幂等键，必填：mail 服务对同一个键只产生一封邮件，重发返回第一次的那一封。
+	//
+	// 键取“这件事”自己的身份，同一件事不管重试多少次、换哪个进程重试都是同一个键：
+	// 事件 id（outbox 的 EffectID）、订单号、saga 步骤的幂等键、“活动 id + 玩家 id”、GM 命令的 trace id。
+	// 不要用当前时间、随机数、自增计数——那样每次重试都是一封新邮件，带附件时就是多发一份奖励。
+	// 一件事给多名玩家各发一封时，键里要带上玩家 id；不同来源的键加上各自的前缀（"gift:"、"activity:"），
+	// 免得两个功能的 id 撞在一起。
+	RequestID string
+}
+
+// Sender 是发件用到的 mail 客户端的那一个方法；svcmail.Mail（业务服务 uses: [mail] 时由 ClientMod 发布）满足它。
+type Sender interface {
+	Send(ctx context.Context, request svcmail.SendRequest) (svcmail.Envelope, error)
+}
+
+// ErrLetterInvalid 表示这封信本身发不出去，原样重试多少次结果都一样：没有收件人、没有标题、没有幂等键、
+// 保留期为负，或者附件这一版发不了（种类没登记、数量不为正、没通过种类自己的校验）。
+// 调用方用 errors.Is 把它与“mail 服务暂时不可用”分开——前者不要重试（事件消费者把它当毒消息丢弃，
+// saga 步骤把它当业务拒绝去补偿），后者照常重试。SendTo 在调 mail 服务之前返回它，什么都没有发出去。
+var ErrLetterInvalid = errors.New("mailbox: this letter can never be sent")
+
+// SendTo 给一名玩家发一封邮件，返回 mail 服务产生的信封（重发时是第一次的那一封）。
+//
+// 发不出去的附件在这里就拒绝（与 Encode 同一个判断），不让一封领不了的邮件进玩家的邮箱。
+// 注意“发得出去”不等于“一定领得到”：道具号在不在道具表里、背包放不放得下是领取那一刻背包的判断，
+// 发件方要自己保证道具存在、数量不超过单种上限（见道具附件的校验 validateItem 的注释）。
+//
+// 返回的错误分三种：ErrLetterInvalid（见上，没有调 mail 服务）；mail 服务的带码拒绝
+// （邮箱已满、标题过长……用 errcode.ClientError 取码，重试同样会被拒绝）；其余是传输或存储失败，
+// 用同一个 RequestID 重试是安全的。
+//
+// 它不在任何实体事务里，也不该在：发邮件是跨进程调用，事务回滚收不回来。要让“状态变化”与“发邮件”
+// 一起成立，在事务里记一条 effect（outbox），由消费者拿 EffectID 当幂等键来调这个函数。
+func SendTo(ctx context.Context, mailer Sender, letter Letter) (svcmail.Envelope, error) {
+	if mailer == nil {
+		return svcmail.Envelope{}, fmt.Errorf("mailbox: SendTo needs the mail client")
+	}
+	if letter.To <= 0 {
+		return svcmail.Envelope{}, fmt.Errorf("%w: recipient %d is not a player", ErrLetterInvalid, letter.To)
+	}
+	if strings.TrimSpace(letter.Subject) == "" {
+		return svcmail.Envelope{}, fmt.Errorf("%w: the subject is empty", ErrLetterInvalid)
+	}
+	if strings.TrimSpace(letter.RequestID) == "" {
+		return svcmail.Envelope{}, fmt.Errorf("%w: a request id (the send idempotency key) is required", ErrLetterInvalid)
+	}
+	if letter.ExpiresInSeconds < 0 {
+		return svcmail.Envelope{}, fmt.Errorf("%w: expires in %d seconds", ErrLetterInvalid, letter.ExpiresInSeconds)
+	}
+	request := svcmail.SendRequest{
+		Audience: svcmail.AudienceDirect, Recipients: []int64{letter.To},
+		Subject: letter.Subject, Body: letter.Body,
+		ExpiresInSeconds: letter.ExpiresInSeconds, RequestID: letter.RequestID,
+	}
+	if request.ExpiresInSeconds == 0 {
+		request.ExpiresInSeconds = DefaultExpiresInSeconds
+	}
+	if letter.Attachment != (Attachment{}) {
+		raw, err := Encode(letter.Attachment)
+		if err != nil {
+			return svcmail.Envelope{}, fmt.Errorf("%w: %v", ErrLetterInvalid, err)
+		}
+		request.Attachment = raw
+	}
+	return mailer.Send(ctx, request)
+}

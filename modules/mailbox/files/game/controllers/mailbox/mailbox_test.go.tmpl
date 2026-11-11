@@ -392,7 +392,7 @@ func TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce(t *testing.T) {
 }
 
 // 这一版解不出来的附件：归还预留、答 mailbox_attachment，邮件保持未领、不被占用，认识它的版本上线后还能领。
-// 列表里它有附件但不可领、说不出是什么。三种：种类没登记；带着不认识的字段（旧 demo 的道具写法）；
+// 列表里它有附件但不可领、说不出是什么。三种：种类没登记；带着不认识的字段（道具写成了别的字段名）；
 // 以及没装 bag（没有联动）的工程里一份写得完全正确的道具附件——道具这个种类由联动登记，没有它就是没登记。
 // 装了联动的工程里最后一种是合法的，由联动自己的用例覆盖。
 func TestMailboxClaimEndpointUnknownAttachmentIsReleasedAndStaysUnclaimed(t *testing.T) {
@@ -581,5 +581,59 @@ func TestMailboxListEndpointPagesOnlyTheCallersMail(t *testing.T) {
 	}
 	if bad := f.list(t, mailboxPlayerA, "", -1); bad.Code != mailboxCodeRangeInvalid || len(bad.Mails) != 0 {
 		t.Fatalf("a negative limit = %+v, want the mail service's range code", bad)
+	}
+}
+
+// 发件方的标准写法（gamemailbox.SendTo）与领取这一头接得上：发出去的信在收件人的列表里可领、领得到；
+// 同一件事重发（同一个幂等键）不产生第二封，哪怕第一封已经领过——否则每次重试就是多发一份奖励。
+// 换一个幂等键才是另一封。
+func TestMailboxSendToLetterIsListedClaimedAndNeverSentTwice(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	ctx := context.Background()
+	letter := gamemailbox.Letter{
+		To: mailboxPlayerA, Subject: "Race 7: rank 1", Body: "You finished first.",
+		Attachment: gamemailbox.Coins(300), ExpiresInSeconds: 2 * 3600, RequestID: "activity:7:94001",
+	}
+	envelope, err := gamemailbox.SendTo(ctx, f.service, letter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := f.listed(t, mailboxPlayerA, envelope.ID)
+	if listed.Subject != "Race 7: rank 1" || listed.Body != "You finished first." || !listed.Claimable || listed.ExpiresAtUnix != mailboxEpoch+2*3600 {
+		t.Fatalf("listed = %+v", listed)
+	}
+	if listed.AttachmentType != "coins" || listed.Amount != 300 {
+		t.Fatalf("listed attachment = %+v, want 300 coins", listed)
+	}
+	// 别的玩家的邮箱里没有它。
+	if other := f.list(t, mailboxPlayerB, "", 0); len(other.Mails) != 0 {
+		t.Fatalf("a direct letter reached another player: %+v", other.Mails)
+	}
+	// 领之前重发：还是那一封。
+	if again, err := gamemailbox.SendTo(ctx, f.service, letter); err != nil || again.ID != envelope.ID {
+		t.Fatalf("resend = %+v (%v), want the first mail %s", again, err, envelope.ID)
+	}
+	if claimed := f.claim(t, mailboxPlayerA, envelope.ID); claimed.Code != 0 || claimed.Amount != 300 || claimed.Held != 300 {
+		t.Fatalf("claim = %+v, want 300 coins", claimed)
+	}
+	// 领过之后再重发（发件方的重试晚到了）：仍是那一封，列表里只有一封、已领、不可领。
+	if again, err := gamemailbox.SendTo(ctx, f.service, letter); err != nil || again.ID != envelope.ID {
+		t.Fatalf("resend after the claim = %+v (%v), want the first mail %s", again, err, envelope.ID)
+	}
+	after := f.list(t, mailboxPlayerA, "", 0)
+	if len(after.Mails) != 1 || after.Mails[0].Claimable || after.Mails[0].Status != "claimed" {
+		t.Fatalf("list after the resends = %+v, want the one claimed mail", after.Mails)
+	}
+	if coins, ledger := f.wallet(t); coins != 300 || ledger != 1 {
+		t.Fatalf("the resends paid again: coins=%d ledger=%d", coins, ledger)
+	}
+	// 另一件事（另一个键）是另一封。
+	letter.RequestID = "activity:8:94001"
+	next, err := gamemailbox.SendTo(ctx, f.service, letter)
+	if err != nil || next.ID == envelope.ID {
+		t.Fatalf("a letter under another request id = %+v (%v), want a second mail", next, err)
+	}
+	if claimed := f.claim(t, mailboxPlayerA, next.ID); claimed.Code != 0 || claimed.Held != 600 {
+		t.Fatalf("claim of the second mail = %+v, want the balance at 600", claimed)
 	}
 }
