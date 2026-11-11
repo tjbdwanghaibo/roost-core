@@ -50,7 +50,7 @@ PY
 project="$(new_project atelier example.com/studio/atelier)"
 cd "$project"
 "$roost" module list > "$review_root/list.log"
-for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn rehome servertime; do
+for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn rehome servertime login; do
   grep -q "^  $name " "$review_root/list.log" || { cat "$review_root/list.log"; echo "roost module list does not show $name" >&2; exit 1; }
 done
 "$roost" module plan checkin --json > "$review_root/plan.json"
@@ -150,13 +150,19 @@ grep -q 'glue rehome with enter: written' "$review_root/add-rehome.log"
 # servertime（服务器时间）：不挂实体；enter 已在，进入时推送的联动随它写进工程。
 "$roost" module add servertime > "$review_root/add-servertime.log"
 grep -q 'glue servertime with enter: written' "$review_root/add-servertime.log"
+# login（登录鉴权）：接管玩家 TCP 的鉴权桩与 account 的 collaborators（都还是没改过的生成桩）；
+# enter 已在，进入前检查的联动随它写进工程。之后 doctor 不再把这两处当成未实现。
+"$roost" module add login > "$review_root/add-login.log"
+grep -q 'glue login with enter: written' "$review_root/add-login.log"
+"$roost" project doctor > "$review_root/doctor-harbor.log" 2>&1 || true
+grep -q '^OK    collaborators:account' "$review_root/doctor-harbor.log" && grep -q '^OK    workflow:tcp-auth' "$review_root/doctor-harbor.log"
 grep -q 'glue task with checkin: written' "$review_root/add-task.log"
 grep -q 'module bag: already installed' "$review_root/add-task.log"
 if grep -rnE '\{\{(ID:|MODULE|PROJECT|GAME_SERVICE|TIMER_COMPONENT)' db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
 commit_all all
-"$roost" module add enter bag mailbox task shop skillbook room turn rehome servertime > "$review_root/add-all-again.log"
+"$roost" module add enter bag mailbox task shop skillbook room turn rehome servertime login > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=14 checkin=8 chat=8 enter=14 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25 rehome=40 rehome+enter=5 servertime=12 servertime+enter=3
+expect_verify wallet=14 checkin=8 chat=8 enter=14 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25 rehome=40 rehome+enter=5 servertime=12 servertime+enter=3 login=19 login+enter=2
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1
