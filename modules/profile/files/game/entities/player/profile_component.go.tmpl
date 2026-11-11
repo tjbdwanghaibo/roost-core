@@ -9,6 +9,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 //roost:component type={{ID:component:Profile}}
@@ -93,17 +94,18 @@ func (component *ProfileComponent) CheckAddExp(amount int64) error {
 // 已存的经验或等级为负说明存档已坏，一并拒绝，不在坏值上继续累加。
 func (component *ProfileComponent) planExp(amount int64) (exp int64, gained int32, err error) {
 	if amount <= 0 {
-		return 0, 0, apperrors.ErrProfileExpInvalid
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpInvalid, nil, "amount", amount)
 	}
 	dao := component.owner.Dao()
 	currentExp, currentLevel := dao.GetProfilePrivate().GetExp(), dao.GetProfile().GetLevel()
+	// 拒绝时带上数额与当时的经验、等级：业务码回给调用方，这三个数留给日志，排查“为什么这次发放被拒”不用再去读档。
 	if currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
-		return 0, 0, apperrors.ErrProfileExpOverflow
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
 	}
 	total := currentExp + amount
 	levels := total / ProfileExpPerLevel
 	if levels > int64(math.MaxInt32)-int64(currentLevel) {
-		return 0, 0, apperrors.ErrProfileExpOverflow
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
 	}
 	return total % ProfileExpPerLevel, int32(levels), nil
 }

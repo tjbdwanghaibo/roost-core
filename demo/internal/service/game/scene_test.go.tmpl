@@ -432,6 +432,124 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	}
 }
 
+// 档案是 profile 模块的，它的 handler（ProfileRename、ProfileAddExp）只经生成的 setter 改 DAO，不知道 demo 的
+// Player.PublishSyncDirty。生产接线下这不妨碍复制：Nest 装着场景的提交观察者（Service.NestSyncObserver），提交时由它
+// 取走这笔事务标脏的同步字段。这条用例按生产的接法（Nest 的 EntitySync 观察者 + on_change 的场景，与
+// building_sync_test 的夹具同一种）钉住：模块的写入照常复制给本人和旁人；旁人拿到的是 Profile（名字、等级），
+// 拿不到 ProfilePrivate（经验），只涨经验的发放对旁人没有任何增量。
+func TestProfileModuleWritesReplicateThroughTheCommitObserver(t *testing.T) {
+	const (
+		watcherID = int64(9101)
+		moverID   = int64(9102)
+	)
+	recorder := newSceneRecorder()
+	observer := &sceneSyncObserver{}
+	watcher := newScenePlayer(t, watcherID)
+	mover := newScenePlayer(t, moverID)
+	handler.RegisterProfileRenameNestHandlers()
+	handler.RegisterProfileAddExpNestHandlers()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(sceneGetter{watcher.ID(): watcher, mover.ID(): mover}),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+		nest.NestOptionWithEntitySync(observer),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	config := gamescene.DefaultConfig()
+	scene, err := newSceneWithObserver(sceneLane{transport: recorder}, recorder, nil, config, config.Normalize().View.MaxVisible, nil, observer)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	ctx := context.Background()
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 520, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
+	recorder.take(watcherID)
+	recorder.take(moverID)
+
+	// await 反复 Flush，直到 observerID 这名玩家收到 mover 的更新：提交的确认与放行可能略晚于 Sender 返回。
+	// 场景没有 Start，帧只在这里的 Flush 里出，所以同一笔提交给两名玩家的帧出自同一次 Flush。
+	await := func(what string, observerID int64) map[string]any {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			if err := scene.Flush(ctx); err != nil {
+				t.Fatalf("%s: flush: %v", what, err)
+			}
+			if document, ok := decodeSceneFrames(t, observerID, recorder.take(observerID))[mover.ID()]; ok {
+				return document
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: player %d received no update of the mover: the module's write was not replicated", what, observerID)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	// 改名：旁人与本人都收到新名字；旁人的增量里没有经验。
+	response, err := syncsender.NewProfileRenameSender(engine).Sync_ProfileRename(ctx, mover.ID(), &pb.ProfileRenameRequest{Name: " Mover "})
+	if err != nil || response.Name != "Mover" {
+		t.Fatalf("rename: %+v err=%v", response, err)
+	}
+	seen := await("rename", watcherID)
+	if name, ok := clientsync.PlayerName(seen); !ok || name != "Mover" {
+		t.Fatalf("the watcher's update after the rename: %v", seen)
+	}
+	if _, ok := clientsync.PlayerExp(seen); ok {
+		t.Fatalf("the rename carried the mover's exp to another player: %v", seen)
+	}
+	own := decodeSceneFrames(t, moverID, recorder.take(moverID))[mover.ID()]
+	if name, ok := clientsync.PlayerName(own); !ok || name != "Mover" {
+		t.Fatalf("the mover's own update after the rename: %v", own)
+	}
+
+	// 只涨经验、没升级：本人收到经验；旁人没有任何关于这名玩家的增量。
+	if gained, err := syncsender.NewProfileAddExpSender(engine).Sync_ProfileAddExp(ctx, mover.ID(), 40); err != nil || gained != 0 {
+		t.Fatalf("add 40 exp: gained=%d err=%v", gained, err)
+	}
+	own = await("an exp grant below a level", moverID)
+	if exp, ok := clientsync.PlayerExp(own); !ok || exp != 40 {
+		t.Fatalf("the mover's own update after the grant: %v", own)
+	}
+	if _, ok := clientsync.PlayerLevel(own); ok {
+		t.Fatalf("a grant that did not level up sent the name and level again: %v", own)
+	}
+	if update, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[mover.ID()]; ok {
+		t.Fatalf("a grant that only moved the exp reached another player: %v", update)
+	}
+
+	// 升级（模块的 handler，经 demo 的升级钩子）：旁人收到等级、仍然没有经验；本人两样都收到。
+	if gained, err := syncsender.NewProfileAddExpSender(engine).Sync_ProfileAddExp(ctx, mover.ID(), 70); err != nil || gained != 1 {
+		t.Fatalf("add 70 exp: gained=%d err=%v", gained, err)
+	}
+	seen = await("a level-up", watcherID)
+	if level, ok := clientsync.PlayerLevel(seen); !ok || level != 1 {
+		t.Fatalf("the watcher's update after the level-up: %v", seen)
+	}
+	if name, _ := clientsync.PlayerName(seen); name != "Mover" {
+		t.Fatalf("the level-up's update lost the name it travels with: %v", seen)
+	}
+	if _, ok := clientsync.PlayerExp(seen); ok {
+		t.Fatalf("the level-up carried the mover's exp to another player: %v", seen)
+	}
+	own = decodeSceneFrames(t, moverID, recorder.take(moverID))[mover.ID()]
+	level, hasLevel := clientsync.PlayerLevel(own)
+	exp, hasExp := clientsync.PlayerExp(own)
+	if !hasLevel || level != 1 || !hasExp || exp != 10 {
+		t.Fatalf("the mover's own update after the level-up: %v", own)
+	}
+}
+
 // playerPrivateFields 是 Player 只给本人看的同步字段：别的玩家（主视野里的、队友）都不该收到（同步视图的字段表见
 // demo/README“同步视图”）。
 var playerPrivateFields = []string{"profile_private", "items", "attr_base", "attr_final", "cell_attack", "cell_power"}
