@@ -92,7 +92,7 @@
 
 ### R7. team + matchmaking + matchroom（一起设计）
 
-部分完成（2026-11-12）：`team` 基础与 rehome 联动已实现并定向验收，25 + 2 条场景，组合原 rehome 40 条均通过，8 个变异与两轮 race 通过。[证据与边界](evidence/module-team-20261112/README.md)。`matchmaking`、`matchroom`、turn-pvp 接入与 demo 队伍迁移仍未完成。
+部分完成（提交 `f5234510`，2026-11-12）：`team` 基础与 rehome 联动已实现并定向验收，25 + 2 条场景，组合原 rehome 40 条均通过，8 个变异与两轮 race 通过。[证据与边界](evidence/module-team-20261112/README.md)。`matchmaking`、`matchroom`、turn-pvp 接入与 demo 队伍迁移仍未完成。
 
 - **team**：队伍实体（game-demo 的 `game/entities/team`）；建队、入队、离队、队长；入队与写玩家档在同一笔 `[Team, Player]` 事务里（rehome 的排空依赖这一点，不能改成两笔）。
 - **matchmaking**：排队、成局，经托管的 match 服务（demo 的 `game/matchmaking`、`internal/service/game/matchmaker.go`）。
@@ -107,6 +107,8 @@
 3. `matchroom` 负责成局到 room 的可重试移交：可信分配器持久分配唯一房号，按 matchID 幂等映射；开房成功才返回房号。不能把一次推送当成移交事实，查询匹配结果也能恢复开房。匹配房保留成员名单并校验入房资格，掉线成员可重连，不让旁人占用其座位。
 4. rehome 在同一 Player 事务里拒绝有队伍 / 排队意图的玩家；反向入口也拒绝已记下换服意图的入队 / 排队。turn-pvp 最后接入匹配入口。普通流程不引入 Saga。
 5. 每个模块先跑生成工程定向场景、回滚与重复安装；三者组合后验证成局 / 取消竞态、重复通知、掉线重试和换服互斥。Remote、match、room 的真实存储与跨进程验收仍归 §6，不用内存替身宣称通过。
+
+下一步实现前需处理的现有契约：托管 match 的 `GroupSize` 计数的是 subject / ticket，并不理解一个队伍内的人数；已结束 ticket、match、requestID 记录只有有限保留期，不能当永久幂等账本。组队方案需要把人数与每名成员可查询的结果写清楚；排队意图的未知结果不能靠超过保留期后盲目重新 Enqueue 来证明“原来没有成局”。现有 demo 只保留本进程驻留玩家作候选，复用时不能丢掉房间属主边界。
 
 ### R8. gift（玩家间送礼）
 
