@@ -1,6 +1,6 @@
 # R4/R5 事件、任务与初始等级验收（2026-11-12）
 
-基线 `61a1cc25`，分支 feat/business-modules，macOS；实际生成工程替换依赖到本工作树 core。实现提交将在提交后登记。没有修改 Nest / DataEngine / Sync 核心、合 main 或发版。
+基线 `61a1cc25`，分支 feat/business-modules，macOS；实际生成工程替换依赖到本工作树 core。实现提交 `35153b75`。没有修改 Nest / DataEngine / Sync 核心、合 main 或发版。
 
 ## 实现与边界
 
@@ -17,7 +17,7 @@
 
 `GOWORK=off go test -count=1 -run '^TestModule(ProfileMailScenariosAndMutations|AttributeEquipmentScenariosAndMutations|EquipmentInstallsIndependentlyAndAddsAttributeLater|GMScenariosAndMutations)$' ./codegen/internal/roost` [通过](profile-enter-acceptance.log)：复核 profile 新依赖对邮件、GM、attribute/equipment 的影响；邮件组合 99、GM 组合 199，零跳过，原变异与定向 race 通过。profile + enter 4 条分别覆盖初始 1 级不触发升级、重进不重置、拒绝建档可重试、存档重载；attribute + enter 2 条覆盖初始派生和回滚重试。
 
-根包、模块清单/with、文档锚点检查 [通过](checks.log)。全仓、完整 demo、全部模块排列与真实依赖统一留到最终批次，不把替身提交器/Rank 当作 TCP、WAL、Mongo、NATS 或跨进程验收。
+根包、模块清单/with、文档锚点检查 [通过](checks.log)；新增文件暂存后为 313 文件、0 断链。全仓、完整 demo、全部模块排列与真实依赖统一留到最终批次，不把替身提交器/Rank 当作 TCP、WAL、Mongo、NATS 或跨进程验收。
 
 ## 开发中发现的失败
 
