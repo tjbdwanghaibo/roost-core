@@ -1,0 +1,95 @@
+package portal
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// MaxServers 是 portal.servers 的条数上限：登录时入口对清单里的每个服问 account 两次（区服记录与
+// 本账号在那个服的角色），清单越长登录越慢。区服比这多的工程应该自己做带分页的区服列表。
+const MaxServers = 64
+
+// config 是入口在 game 进程配置（configs/service/config.<game>.yaml）里读的键，全部可以不写：
+//
+//	portal:
+//	  ticket_secret: ""          # 账号票据的签名密钥；开发环境留空 = 每次启动随机生成一把
+//	  ticket_ttl: 10m            # 账号票据的有效期
+//	  servers:                   # 区服清单：服号 -> 客户端连得到的玩家 TCP 地址（host:port）
+//	    "1000": 203.0.113.7:7000
+//	    "1001": 203.0.113.8:7000
+//
+// 这些键由入口在启动时自己读（Start），不在 App 的配置声明里：`--print-config` 不会打印这一段，
+// `--check-config` 也不检查它，写错了要等进程启动到入口这一步才报错并退出。
+type config struct {
+	Portal struct {
+		TicketSecret string            `config:"ticket_secret" secret:"optional" example:"" help:"账号票据的签名密钥，至少 32 字节。开发环境留空则每次启动随机生成一把（重启后旧票据失效、只在本进程有效）；生产配置必须写，多个进程共用一个入口域名时必须相同"`
+		TicketTTL    time.Duration     `config:"ticket_ttl" default:"10m" min:"10s" max:"24h" example:"10m" help:"账号票据的有效期：登录之后多久之内可以建角、选角"`
+		Servers      map[string]string `config:"servers" help:"区服清单：服号 -> 客户端连得到的玩家 TCP 地址（host:port）。不写时清单只有本进程自己的服"`
+	} `config:"portal"`
+}
+
+// ValidateConfig 在读配置时执行（进程启动时，任何请求之前），不通过进程不启动：
+//
+//   - 写了 ticket_secret 而它不足 32 字节：拒绝，不分环境——短密钥在哪里都是写错了。
+//   - 生产配置（env / app.env / environment 是 prod / production）里 ticket_secret 为空：拒绝。
+//     随机密钥只适合单进程的开发环境：进程一重启在外的票据全部失效，两个进程之间互不相认。
+//     以 dev- 开头的值在生产配置里同样被拒（标了 secret 的键的通用规则，在这之前就报了）。
+//   - servers 的键不是正的服号、值不是 host:port、条数超过 MaxServers：拒绝，点名是哪一条。
+func (c *config) ValidateConfig(production bool) error {
+	var problems []error
+	secret := c.Portal.TicketSecret
+	switch {
+	case secret == "" && production:
+		problems = append(problems, errors.New("config: portal.ticket_secret is empty in a production config; set a secret of at least 32 bytes (every process behind the same login address needs the same one)"))
+	case secret != "" && len(secret) < MinSecretBytes:
+		problems = append(problems, fmt.Errorf("config: portal.ticket_secret is %d bytes; it must be at least %d", len(secret), MinSecretBytes))
+	}
+	if len(c.Portal.Servers) > MaxServers {
+		problems = append(problems, fmt.Errorf("config: portal.servers lists %d servers; at most %d", len(c.Portal.Servers), MaxServers))
+	}
+	if _, err := parseServers(c.Portal.Servers); err != nil {
+		problems = append(problems, err)
+	}
+	return errors.Join(problems...)
+}
+
+// parseServers 把 portal.servers 变成 服号 -> 地址。键必须是正的服号的规范十进制写法（"+7"、"007" 不算），
+// 值必须是带主机的 host:port——只写端口（":7000"）的地址客户端连不了。
+func parseServers(raw map[string]string) (map[int32]string, error) {
+	servers := make(map[int32]string, len(raw))
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		sid, err := strconv.ParseInt(key, 10, 32)
+		if err != nil || sid <= 0 || strconv.FormatInt(sid, 10) != key {
+			return nil, fmt.Errorf("config: portal.servers key %q is not a server id (a positive number, the game process's sid)", key)
+		}
+		addr := strings.TrimSpace(raw[key])
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil || host == "" || !validPort(port) || len(addr) > 255 {
+			return nil, fmt.Errorf("config: portal.servers.%s must be the host:port clients connect to", key)
+		}
+		servers[int32(sid)] = addr
+	}
+	return servers, nil
+}
+
+func validPort(port string) bool {
+	number, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && number > 0
+}
+
+// playerTCPConfig 是本进程玩家 TCP 监听的两个键（internal/access/player/tcp 的声明里的同名键）。
+// 入口只读它们来回答“本服的 TCP 地址是什么”，不改变监听的行为。
+type playerTCPConfig struct {
+	Enabled bool   `config:"player_access.tcp.enabled"`
+	Addr    string `config:"player_access.tcp.addr"`
+}

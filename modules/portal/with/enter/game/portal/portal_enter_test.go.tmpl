@@ -1,0 +1,139 @@
+package portal
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"testing"
+	"time"
+
+	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 这个文件是 portal 与 enter 两个模块的联动：两个都装着时才有。它不往工程里加任何运行时代码——
+// 入口与进入游戏之间隔着一次握手，接线早就在了（握手票据由登录模块的认证器校验，认证器写的 claims 由
+// 登录模块与 enter 的联动在进入前检查）。这里只有场景：把 登录 -> 建角 -> 选角 -> 握手 -> 进入 整条链路
+// 在进程里走一遍，证明装上 login、portal、enter 之后这条路是通的，而且每一段用的是工程里真实的那一份代码。
+//
+// account 是真实的服务（内存存储），请求经真实的路由引擎进入口，握手经登录模块的认证器，
+// 进入经 gameenter.Enter（进入前检查是登录模块登记的那一条）。没有经真实的 TCP、总线与存储。
+
+// withPortalGameRegistry 是一个 game 进程的 Registry：只有配置里的 sid。
+func withPortalGameRegistry(sid int) *app.Registry {
+	cfg := viper.New()
+	cfg.Set("sid", sid)
+	return app.NewRegistry(cfg)
+}
+
+// withPortalHandshake 把选角拿到的握手票据交给登录模块的认证器，要求通过。
+func withPortalHandshake(t *testing.T, w *portalWorld, ticket string) gateway.Principal {
+	t.Helper()
+	principal, err := gamelogin.Authenticator{Accounts: w.service}.Authenticate(context.Background(), ticket)
+	if err != nil {
+		t.Fatalf("the handshake ticket was refused: %v", err)
+	}
+	return principal
+}
+
+// withPortalEnter 照进入端点那样走一遍 gameenter.Enter；load 只计数，第一次算首次进入。
+func withPortalEnter(registry *app.Registry, principal gateway.Principal, loads *int) (gameenter.Entered, error) {
+	return gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims},
+		func(context.Context) (gameenter.InitResult, error) {
+			*loads++
+			return gameenter.InitResult{First: *loads == 1, FirstAtUnixMilli: 1_800_000_000_000}, nil
+		})
+}
+
+// 整条链路：HTTP 开发登录 -> 清单里没有角色 -> 建角 -> 选角拿到握手票据 -> 认证器校验得到身份，
+// 承载服是本服 -> 进入游戏成功（首次）。再登录一次：清单里是刚建的角色，选它、握手、再进入（不再是首次）。
+func TestWithPortalEnterWalksFromLoginIntoTheGame(t *testing.T) {
+	w := newPortalWorld(t)
+	registry := withPortalGameRegistry(1000)
+	loads := 0
+
+	ticket, login := w.login("alice")
+	if role := portalServers(t, login)[1000]["role"]; role != nil {
+		t.Fatalf("a brand-new account already has a role on 1000: %v", role)
+	}
+	playerID := w.createRole(ticket, 1000, "Alice")
+	selected := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID})
+	if selected.status != http.StatusOK || selected.number("serving_server_id") != 1000 || selected.text("tcp_addr") != "portal.test:7000" {
+		t.Fatalf("select role: %d %s", selected.status, selected.raw)
+	}
+	principal := withPortalHandshake(t, w, selected.text("ticket"))
+	if principal.PlayerID != playerID || principal.ServerID != 1000 || principal.Claims[svcaccount.ServerIDClaim] != "1000" {
+		t.Fatalf("principal = %+v, want player %d served by 1000", principal, playerID)
+	}
+	entered, err := withPortalEnter(registry, principal, &loads)
+	if err != nil || loads != 1 {
+		t.Fatalf("entering the game with the portal's ticket: %v (%d loads)", err, loads)
+	}
+	if entered.PlayerID != playerID || !entered.First || entered.Claims[svcaccount.ServerIDClaim] != "1000" || entered.Claims[svcaccount.RoleCreatedAtClaim] != "1800000000" {
+		t.Fatalf("entered = %+v, want the first enter of player %d with the authenticator's claims", entered, playerID)
+	}
+
+	// 第二天换了设备：重新登录，清单里就是这个角色。
+	w.advance(26 * time.Hour)
+	fresh, relogin := w.login("alice")
+	role, _ := portalServers(t, relogin)[1000]["role"].(map[string]any)
+	if role == nil || role["player_id"] != float64(playerID) || role["name"] != "Alice" {
+		t.Fatalf("the list after logging in again shows %v, want player %d (Alice)", role, playerID)
+	}
+	// 昨天的握手票据已经过期（会话 30 分钟），昨天的账号票据也过期了（10 分钟）：都得用新的。
+	if _, err := (gamelogin.Authenticator{Accounts: w.service}).Authenticate(context.Background(), selected.text("ticket")); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("yesterday's handshake ticket: %v, want unauthenticated", err)
+	}
+	if stale := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID}); stale.code() != portalCodeTicketInvalid {
+		t.Fatalf("yesterday's account ticket: %d %s", stale.status, stale.raw)
+	}
+	again := w.post("/portal/select-role", map[string]any{"account_ticket": fresh, "player_id": playerID})
+	if again.status != http.StatusOK {
+		t.Fatalf("select the listed role: %d %s", again.status, again.raw)
+	}
+	entered, err = withPortalEnter(registry, withPortalHandshake(t, w, again.text("ticket")), &loads)
+	if err != nil || loads != 2 || entered.First || entered.PlayerID != playerID {
+		t.Fatalf("the second enter: %+v, %v (%d loads); want admitted and not first", entered, err, loads)
+	}
+}
+
+// 入口答的承载服就是进入游戏时认的那个：角色由别的服承载时，选角结果指向那个服、本服的地址留空，
+// 拿这张票据硬连本服，握手通过而进入被拒（login_elsewhere），不加载也不创建 Player；连到承载服就能进。
+// 合服之后承载服变成本服，重新选角拿到本服的地址，进入成功。
+func TestWithPortalEnterPointsTheClientAtTheServingServer(t *testing.T) {
+	w := newPortalWorld(t)
+	loads := 0
+	ticket, _ := w.login("alice")
+	playerID := w.createRole(ticket, 1001, "Alice")
+
+	selected := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID})
+	if selected.status != http.StatusOK || selected.number("serving_server_id") != 1001 ||
+		selected.text("tcp_addr") != "" || selected.text("tcp_addr_source") != "unlisted_server" {
+		t.Fatalf("select a role served by 1001 on the portal of 1000: %d %s", selected.status, selected.raw)
+	}
+	principal := withPortalHandshake(t, w, selected.text("ticket"))
+	if _, err := withPortalEnter(withPortalGameRegistry(1000), principal, &loads); !errors.Is(err, apperrors.ErrLoginElsewhere) || loads != 0 {
+		t.Fatalf("entering server 1000 with a role served by 1001: %v (%d loads); want login_elsewhere before any load", err, loads)
+	}
+	if _, err := withPortalEnter(withPortalGameRegistry(1001), principal, &loads); err != nil || loads != 1 {
+		t.Fatalf("entering the serving server 1001: %v (%d loads)", err, loads)
+	}
+
+	if _, err := w.service.MergeServer(context.Background(), svcaccount.MergeRequest{From: 1001, Into: 1000, Note: "portal scenario"}); err != nil {
+		t.Fatal(err)
+	}
+	merged := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID})
+	if merged.status != http.StatusOK || merged.number("server_id") != 1001 || merged.number("serving_server_id") != 1000 || merged.text("tcp_addr") != "portal.test:7000" {
+		t.Fatalf("select after 1001 merged into 1000: %d %s; want served by 1000 at this process's address", merged.status, merged.raw)
+	}
+	entered, err := withPortalEnter(withPortalGameRegistry(1000), withPortalHandshake(t, w, merged.text("ticket")), &loads)
+	if err != nil || loads != 2 || entered.Claims[svcaccount.OriginServerIDClaim] != "1001" {
+		t.Fatalf("entering 1000 after the merge: %+v, %v (%d loads)", entered, err, loads)
+	}
+}

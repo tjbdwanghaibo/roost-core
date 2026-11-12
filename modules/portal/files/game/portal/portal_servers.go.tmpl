@@ -1,0 +1,122 @@
+package portal
+
+import (
+	"net"
+	"sort"
+	"strings"
+)
+
+// 选角结果里 tcp_addr_source 的取值：地址是怎么来的；地址为空时是为什么没有。
+const (
+	// AddrFromConfig：portal.servers 里给这个服写的地址。
+	AddrFromConfig = "config"
+	// AddrFromListen：没有配置，取本进程玩家 TCP 的监听地址（player_access.tcp.addr），它绑的是一个具体的主机。
+	AddrFromListen = "listen"
+	// AddrFromRequestHost：没有配置，监听绑的是通配地址（0.0.0.0、::、只写端口），主机取客户端访问入口时
+	// 用的那个（HTTP 请求的 Host），端口取监听端口。见 serverBook.tcpAddr。
+	AddrFromRequestHost = "request_host"
+	// AddrUnlistedServer：角色的承载服不在清单里——配置了 portal.servers 而里面没有它，或者没有配置而它不是本服。地址为空。
+	AddrUnlistedServer = "unlisted_server"
+	// AddrTCPDisabled：承载服是本服，但本进程的玩家 TCP 监听没有打开（player_access.tcp.enabled 为 false）。地址为空。
+	AddrTCPDisabled = "tcp_disabled"
+	// AddrUnknown：承载服是本服、监听开着，但绑的是通配地址，而请求的 Host 又不是一个能用的主机名。地址为空。
+	AddrUnknown = "unknown"
+)
+
+// serverBook 是入口知道的区服：清单里有哪些服、每个服的玩家 TCP 地址。构造之后只读。
+type serverBook struct {
+	// self 是本进程的 sid。
+	self int32
+	// configured 是 portal.servers：服号 -> 客户端连得到的地址。空表示没有配置。
+	configured map[int32]string
+	// tcpEnabled / tcpListen 是本进程玩家 TCP 的开关与监听地址。
+	tcpEnabled bool
+	tcpListen  string
+}
+
+// list 是登录时列给客户端的服，按服号升序。配置了 portal.servers 就是配置里的那些（不自动加上本服：
+// 清单写了就以清单为准）；没有配置时只有本进程自己的服——装上模块什么都不配，客户端看到的就是这一个服。
+func (book serverBook) list() []int32 {
+	if len(book.configured) == 0 {
+		return []int32{book.self}
+	}
+	servers := make([]int32, 0, len(book.configured))
+	for sid := range book.configured {
+		servers = append(servers, sid)
+	}
+	sort.Slice(servers, func(i, j int) bool { return servers[i] < servers[j] })
+	return servers
+}
+
+// tcpAddr 回答：客户端要连 sid 这个服，该连哪个地址。requestHost 是客户端访问入口用的 HTTP Host。
+//
+//   - 配置了 portal.servers：只认配置。清单里有这个服就是配置的地址，没有就是 unlisted_server——
+//     本服也一样，清单写了就以清单为准，不再去猜。上线的部署都应该走这一条。
+//   - 没有配置、sid 是本服：取本进程玩家 TCP 的监听地址。监听绑在一个具体的主机上时就是它；
+//     绑在通配地址上时（生成的配置缺省是 0.0.0.0:7000）监听地址本身客户端连不了，主机改用客户端访问入口时
+//     用的那个——客户端既然用这个主机连到了本进程的 HTTP，本进程的 TCP 多半也在这个主机上。这是让
+//     零配置的开发环境能用的猜测：入口在反向代理、负载均衡后面时它是代理的主机，未必对，要写 portal.servers。
+//     这个主机只回给发请求的客户端自己，伪造 Host 只能骗到自己。
+//   - 没有配置、sid 不是本服（合服、换服之后承载服是别的进程）：unlisted_server。
+//   - 地址为空时 source 说明原因；选角照样成功（票据是好的），客户端得从别处知道地址。
+func (book serverBook) tcpAddr(sid int32, requestHost string) (addr, source string) {
+	if len(book.configured) > 0 {
+		if configured, ok := book.configured[sid]; ok {
+			return configured, AddrFromConfig
+		}
+		return "", AddrUnlistedServer
+	}
+	if sid != book.self {
+		return "", AddrUnlistedServer
+	}
+	if !book.tcpEnabled {
+		return "", AddrTCPDisabled
+	}
+	host, port, err := net.SplitHostPort(strings.TrimSpace(book.tcpListen))
+	if err != nil || !validPort(port) {
+		return "", AddrUnknown
+	}
+	if !wildcardHost(host) {
+		return net.JoinHostPort(host, port), AddrFromListen
+	}
+	if host = hostOf(requestHost); host == "" {
+		return "", AddrUnknown
+	}
+	return net.JoinHostPort(host, port), AddrFromRequestHost
+}
+
+// wildcardHost 报告监听地址的主机是不是“所有网卡”：空、0.0.0.0、::。
+func wildcardHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
+}
+
+// hostOf 从 HTTP 的 Host（可能带端口）里取出主机，只接受 IP 字面量与由字母、数字、点、连字符组成的主机名，
+// 至多 253 字节；别的一律当作没有。它的结果要拼进回给客户端的地址里，不认识的字符不往外带。
+func hostOf(requestHost string) string {
+	host := strings.TrimSpace(requestHost)
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		host = parsed
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if host == "" || len(host) > 253 {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsUnspecified() {
+			return ""
+		}
+		return host
+	}
+	for _, char := range host {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9', char == '.', char == '-':
+		default:
+			return ""
+		}
+	}
+	return host
+}

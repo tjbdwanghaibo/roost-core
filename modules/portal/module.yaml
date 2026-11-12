@@ -1,0 +1,27 @@
+name: portal
+summary: 登录入口：三个 HTTP 端点代客户端调只在内部总线上的 account——渠道登录拿账号票据与区服清单（含本账号在各服的角色）、建角、选角拿握手票据与该连的玩家 TCP 地址；建角选角只认入口自己签发的账号票据（HMAC，缺省 10 分钟），不从请求里读账号
+requires: [login]
+conflicts: []
+needs:
+  mods: [web]
+  features: [errcode]
+  uses: [account]
+runtime:
+  package: game/portal
+  start: Start
+errcodes: [portal_ticket_invalid, portal_request_invalid]
+next:
+  - "登录入口随 {{GAME_SERVICE}} 进程监听 web.addr（configs/service/config.{{GAME_SERVICE}}.yaml，缺省 127.0.0.1:8080）：POST /portal/login、/portal/create-role、/portal/select-role；请求与响应见 roost-core 的 modules/portal/README.md"
+  - "多个区服、或入口在代理后面：在 config.{{GAME_SERVICE}}.yaml 写 portal.servers（服号 -> 客户端连得到的玩家 TCP 地址 host:port）；不写时清单只有本进程的服，地址按监听地址与请求的 Host 推出"
+  - "上线前：生产配置必须写 portal.ticket_secret（至少 32 字节，同一入口后面的进程用同一把），否则进程不启动；入口没有限流，对外要放在终止 TLS 的反向代理后面并显式写 web.allow_public_addr"
+verify:
+  packages: [./game/portal]
+  run: ^TestPortal
+  pass: 13
+with:
+  enter:
+    summary: 整条链路的场景：HTTP 登录 → 建角 → 选角 → 握手（登录模块的认证器）→ 进入游戏（gameenter.Enter），以及选角给出的承载服与进入时认的是同一个；只有测试，不加运行时代码
+    verify:
+      packages: [./game/portal]
+      run: ^TestWithPortalEnter
+      pass: 2

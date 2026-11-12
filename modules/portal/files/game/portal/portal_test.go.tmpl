@@ -1,0 +1,1310 @@
+package portal
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	gamelogin "{{MODULE}}/game/login"
+	apperrors "{{MODULE}}/internal/errors"
+	accountcollaborators "{{MODULE}}/internal/service/account"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/webroute"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	wiringaccount "github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 登录入口的场景。account 是真实的 svcaccount.Service（内存存储），身份校验是登录模块写进工程的那一个
+// （开发登录：渠道 dev、凭据是 login.dev_token），握手校验是登录模块的认证器——入口夹在它们中间，
+// 场景证明的是“客户端只经 HTTP 就能从渠道身份走到一条认证过的连接”，以及入口守住了 accountID。
+// 请求经真实的路由引擎（httpserver.Engine + webroute.Registrar）进处理器，不开端口。
+// 只有“account 给不出结论”用替身。场景名以 TestPortal 开头；需求里的数在这里写死，不引用被测常量。
+
+// 入口自己的两个业务码。码值是安装时分配的（不是需求里的数），所以取自定义；account 的码是框架固定的，
+// 场景里直接写数字。
+var (
+	portalCodeTicketInvalid  = int(apperrors.ErrPortalTicketInvalid.Code())
+	portalCodeRequestInvalid = int(apperrors.ErrPortalRequestInvalid.Code())
+)
+
+const (
+	portalDevToken   = "dev-portal-scenarios"
+	portalTestSecret = "portal-scenario-ticket-secret-0123456789"
+	portalSessionKey = "portal-scenario-session-secret"
+)
+
+// portalWorld 是一套内存里的 account 加一个入口。时钟从 2027-01-15 08:00:00 UTC（Unix 1800000000）起，
+// account 的两个时钟与入口的票据时钟共用它，由用例拨。玩家号从 100001 起。
+type portalWorld struct {
+	t        *testing.T
+	now      atomic.Int64 // Unix 毫秒
+	nextID   atomic.Int64
+	roles    versionstore.Store[int64, svcaccount.Role]
+	servers  versionstore.Store[int32, svcaccount.GameServer]
+	slots    versionstore.Store[string, svcaccount.Slot]
+	service  *svcaccount.Service
+	accounts *portalRecordingAccounts
+	portal   *Portal
+	engine   http.Handler
+}
+
+func (w *portalWorld) clock() time.Time { return time.UnixMilli(w.now.Load()) }
+
+func (w *portalWorld) advance(d time.Duration) { w.now.Add(d.Milliseconds()) }
+
+func (w *portalWorld) Allocate(context.Context, int32) (int64, error) {
+	return 100_000 + w.nextID.Add(1), nil
+}
+
+// portalRecordingAccounts 包着真实的 account：数每个接口被调了几次、记下写接口收到的 accountID，
+// 并能让指定的接口答“问不到”（没有码的错误——总线断了、超时就是这个样子）。
+type portalRecordingAccounts struct {
+	svcaccount.Accounts
+	mu    sync.Mutex
+	calls map[string]int
+	// asAccount 是 CreateRole / SelectRole 收到的 accountID，按调用顺序。
+	asAccount []string
+	// down 里的接口名一律答 errPortalBusDown。
+	down map[string]bool
+	// roleOnServer / selectRole 非 nil 时取代真实的回答：造一个“答非所问”的 account。
+	roleOnServer func(accountID string, serverID int32) (svcaccount.Role, error)
+	selectRole   func(accountID string, playerID int64) (svcaccount.Session, error)
+}
+
+var errPortalBusDown = errors.New("bus: no responders for account (redis 10.9.8.7:6379 unreachable)")
+
+func (accounts *portalRecordingAccounts) enter(method, accountID string) error {
+	accounts.mu.Lock()
+	defer accounts.mu.Unlock()
+	accounts.calls[method]++
+	if accountID != "" {
+		accounts.asAccount = append(accounts.asAccount, accountID)
+	}
+	if accounts.down[method] {
+		return errPortalBusDown
+	}
+	return nil
+}
+
+func (accounts *portalRecordingAccounts) count(method string) int {
+	accounts.mu.Lock()
+	defer accounts.mu.Unlock()
+	return accounts.calls[method]
+}
+
+// writes 是到达 account 写接口的次数：建角与选角（选角会改最近登录时间并签发会话）。
+func (accounts *portalRecordingAccounts) writes() int {
+	return accounts.count("CreateRole") + accounts.count("SelectRole")
+}
+
+func (accounts *portalRecordingAccounts) fail(methods ...string) {
+	accounts.mu.Lock()
+	defer accounts.mu.Unlock()
+	accounts.down = map[string]bool{}
+	for _, method := range methods {
+		accounts.down[method] = true
+	}
+}
+
+func (accounts *portalRecordingAccounts) Login(ctx context.Context, identity svcaccount.Identity) (svcaccount.Account, error) {
+	if err := accounts.enter("Login", ""); err != nil {
+		return svcaccount.Account{}, err
+	}
+	return accounts.Accounts.Login(ctx, identity)
+}
+
+func (accounts *portalRecordingAccounts) CreateRole(ctx context.Context, accountID string, serverID int32, name string) (svcaccount.Role, error) {
+	if err := accounts.enter("CreateRole", accountID); err != nil {
+		return svcaccount.Role{}, err
+	}
+	return accounts.Accounts.CreateRole(ctx, accountID, serverID, name)
+}
+
+func (accounts *portalRecordingAccounts) SelectRole(ctx context.Context, accountID string, playerID int64) (svcaccount.Session, error) {
+	if err := accounts.enter("SelectRole", accountID); err != nil {
+		return svcaccount.Session{}, err
+	}
+	if accounts.selectRole != nil {
+		return accounts.selectRole(accountID, playerID)
+	}
+	return accounts.Accounts.SelectRole(ctx, accountID, playerID)
+}
+
+func (accounts *portalRecordingAccounts) GetServer(ctx context.Context, serverID int32) (svcaccount.GameServer, error) {
+	if err := accounts.enter("GetServer", ""); err != nil {
+		return svcaccount.GameServer{}, err
+	}
+	return accounts.Accounts.GetServer(ctx, serverID)
+}
+
+func (accounts *portalRecordingAccounts) RoleOnServer(ctx context.Context, accountID string, serverID int32) (svcaccount.Role, error) {
+	if err := accounts.enter("RoleOnServer", ""); err != nil {
+		return svcaccount.Role{}, err
+	}
+	if accounts.roleOnServer != nil {
+		return accounts.roleOnServer(accountID, serverID)
+	}
+	return accounts.Accounts.RoleOnServer(ctx, accountID, serverID)
+}
+
+// portalDevVerifier 是登录模块写进工程的身份校验，绑定到一份写了 login.dev_token 的 account 配置上。
+func portalDevVerifier(t *testing.T) svcaccount.IdentityVerifier {
+	t.Helper()
+	verifier := accountcollaborators.Verifier()
+	bound, ok := verifier.(wiringaccount.RegistryBound)
+	if !ok {
+		t.Fatal("the project's identity verifier no longer reads its config from the registry; the development login cannot be switched on for this scenario")
+	}
+	cfg := viper.New()
+	cfg.Set("login.dev_token", portalDevToken)
+	if err := bound.BindRegistry(app.NewRegistry(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	return verifier
+}
+
+// portalVerifier 是场景里 account 的身份校验：开发登录走工程里真实的那一个；另有一个只在场景里存在的渠道
+// "store"，它像真正的平台那样只认凭据——凭据是 "receipt-of-<用户>"，确认的身份是凭据里的用户，
+// 不是请求里随手填的 open_id。
+func portalVerifier(t *testing.T) svcaccount.IdentityVerifier {
+	t.Helper()
+	dev := portalDevVerifier(t)
+	return svcaccount.VerifierFunc(func(ctx context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+		if identity.Channel != "store" {
+			return dev.Verify(ctx, identity)
+		}
+		user, ok := strings.CutPrefix(identity.Credential, "receipt-of-")
+		if !ok || user == "" {
+			return svcaccount.Verified{}, fmt.Errorf("%w: the store does not know this receipt", svcaccount.ErrIdentityDenied)
+		}
+		return svcaccount.Verified{Channel: "store", OpenID: user}, nil
+	})
+}
+
+// newPortalWorld 建一套 account（1000、1001 两个开放的服）与一个 sid 为 1000 的入口。
+// mutate 改入口的参数：区服清单、监听地址、密钥。
+func newPortalWorld(t *testing.T, mutate ...func(*Options)) *portalWorld {
+	t.Helper()
+	w := &portalWorld{
+		t:       t,
+		roles:   versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		slots:   versionstore.NewMemoryStore[string, svcaccount.Slot](),
+	}
+	w.now.Store(time.Unix(1_800_000_000, 0).UnixMilli())
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{
+		Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: w.clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.service, err = svcaccount.New(svcaccount.Config{
+		Accounts:      versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:         w.roles,
+		Servers:       w.servers,
+		Names:         names,
+		Slots:         w.slots,
+		Verifier:      portalVerifier(t),
+		Allocator:     w,
+		NameRules:     accountcollaborators.NameRules(),
+		SessionSecret: portalSessionKey,
+		SessionTTL:    30 * time.Minute,
+		Now:           w.clock,
+		SystemNow:     w.clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []int32{1000, 1001} {
+		if _, err := w.service.UpsertServer(context.Background(), svcaccount.GameServer{ID: sid, Name: fmt.Sprintf("s%d", sid), Status: svcaccount.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.accounts = &portalRecordingAccounts{Accounts: w.service, calls: map[string]int{}}
+	options := Options{
+		Accounts: w.accounts, TicketSecret: []byte(portalTestSecret), SelfServerID: 1000,
+		PlayerTCPEnabled: true, PlayerTCPListen: "0.0.0.0:7000", Now: w.clock,
+	}
+	for _, change := range mutate {
+		change(&options)
+	}
+	if w.portal, err = New(options); err != nil {
+		t.Fatal(err)
+	}
+	w.engine = portalEngine(t, w.portal)
+	return w
+}
+
+// portalEngine 把入口的路由装进真实的路由引擎：与 web Mod 用的是同一个引擎与同一个登记器。
+func portalEngine(t *testing.T, portal *Portal) http.Handler {
+	t.Helper()
+	engine := httpserver.NewEngine()
+	if err := portal.RegisterRoutes(webroute.NewRegistrar(engine)); err != nil {
+		t.Fatal(err)
+	}
+	return engine
+}
+
+// portalReply 是一次 HTTP 调用的结果。
+type portalReply struct {
+	status int
+	raw    string
+	body   map[string]any
+}
+
+// code 是错误响应里的业务码；成功响应里没有，返回 0。
+func (reply portalReply) code() int {
+	code, _ := reply.body["code"].(float64)
+	return int(code)
+}
+
+func (reply portalReply) text(key string) string {
+	value, _ := reply.body[key].(string)
+	return value
+}
+
+func (reply portalReply) number(key string) int64 {
+	value, _ := reply.body[key].(float64)
+	return int64(value)
+}
+
+// portalPostRaw 向 engine 发一个请求体；host 是 HTTP 的 Host。
+func portalPostRaw(t *testing.T, engine http.Handler, method, path, host string, body []byte) portalReply {
+	t.Helper()
+	request := httptest.NewRequest(method, "http://"+host+path, bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+	reply := portalReply{status: recorder.Code, raw: recorder.Body.String(), body: map[string]any{}}
+	if strings.HasPrefix(strings.TrimSpace(reply.raw), "{") {
+		if err := json.Unmarshal(recorder.Body.Bytes(), &reply.body); err != nil {
+			t.Fatalf("%s %s answered a body that is not JSON: %q", method, path, reply.raw)
+		}
+	}
+	return reply
+}
+
+func (w *portalWorld) post(path string, payload map[string]any) portalReply {
+	w.t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return portalPostRaw(w.t, w.engine, http.MethodPost, path, "portal.test:8080", body)
+}
+
+// login 走一次开发登录，要求成功，返回账号票据与整个响应。
+func (w *portalWorld) login(openID string) (ticket string, reply portalReply) {
+	w.t.Helper()
+	reply = w.post("/portal/login", map[string]any{"channel": "dev", "open_id": openID, "credential": portalDevToken})
+	if reply.status != http.StatusOK || reply.body["ok"] != true || reply.text("account_ticket") == "" {
+		w.t.Fatalf("development login of %s: %d %s", openID, reply.status, reply.raw)
+	}
+	return reply.text("account_ticket"), reply
+}
+
+// createRole 建一个角色，要求成功，返回玩家号。
+func (w *portalWorld) createRole(ticket string, sid int, name string) int64 {
+	w.t.Helper()
+	reply := w.post("/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": sid, "name": name})
+	role, _ := reply.body["role"].(map[string]any)
+	playerID, _ := role["player_id"].(float64)
+	if reply.status != http.StatusOK || playerID <= 0 {
+		w.t.Fatalf("create role %s on %d: %d %s", name, sid, reply.status, reply.raw)
+	}
+	return int64(playerID)
+}
+
+// portalServers 取出登录响应里的区服清单：服号 -> 那一项。
+func portalServers(t *testing.T, reply portalReply) map[int]map[string]any {
+	t.Helper()
+	list, ok := reply.body["servers"].([]any)
+	if !ok {
+		t.Fatalf("the login response has no server list: %s", reply.raw)
+	}
+	servers := map[int]map[string]any{}
+	previous := 0
+	for _, item := range list {
+		entry, _ := item.(map[string]any)
+		sid, _ := entry["server_id"].(float64)
+		if int(sid) <= previous {
+			t.Fatalf("the server list is not in ascending order of server id: %s", reply.raw)
+		}
+		previous = int(sid)
+		servers[int(sid)] = entry
+	}
+	return servers
+}
+
+// storedRole 读 account 存储里的角色记录。
+func (w *portalWorld) storedRole(playerID int64) svcaccount.Role {
+	w.t.Helper()
+	role, found, err := w.roles.Get(context.Background(), playerID)
+	if err != nil || !found {
+		w.t.Fatalf("role %d: found=%v err=%v", playerID, found, err)
+	}
+	return role.Value
+}
+
+// 整条链路，只经 HTTP：开发登录 -> 清单里没有角色 -> 建角 -> 选角 -> 握手票据。票据交给登录模块的认证器，
+// 得到这名玩家在承载服上的身份。换一台设备再登录（只知道渠道身份），清单里就是刚建的角色，直接选它。
+func TestPortalWalksFromAChannelIdentityToAnAuthenticatedHandshake(t *testing.T) {
+	w := newPortalWorld(t)
+	ticket, reply := w.login("alice")
+	if expires := reply.number("account_ticket_expires_at"); expires != 1_800_000_600 {
+		t.Fatalf("the account ticket expires at %d, want 10 minutes after the login (1800000600)", expires)
+	}
+	servers := portalServers(t, reply)
+	if len(servers) != 1 {
+		t.Fatalf("with no portal.servers the list must be this process's own server only: %s", reply.raw)
+	}
+	home := servers[1000]
+	if home["registered"] != true || home["name"] != "s1000" || home["status"] != "open" || home["role"] != nil {
+		t.Fatalf("server 1000 before any role = %v, want registered, open and without a role", home)
+	}
+	if _, present := home["role"]; !present {
+		t.Fatalf("a server without a role must say \"role\": null, not omit the field: %s", reply.raw)
+	}
+
+	playerID := w.createRole(ticket, 1000, "Alice")
+	if playerID != 100_001 {
+		t.Fatalf("the first role is player %d, want 100001", playerID)
+	}
+	// 同一个名字重试拿到同一个角色；换一个名字不会多得一个角色，account 的拒绝带着它的码回来。
+	if again := w.createRole(ticket, 1000, "Alice"); again != playerID {
+		t.Fatalf("a retried create-role answered player %d, want the same role %d", again, playerID)
+	}
+	second := w.post("/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": 1000, "name": "Alice2"})
+	if second.status != http.StatusBadRequest || second.code() != 560108 {
+		t.Fatalf("a second role on the same server: %d %s; want 400 with account's role-limit code 560108", second.status, second.raw)
+	}
+
+	selected := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID})
+	if selected.status != http.StatusOK || selected.body["ok"] != true {
+		t.Fatalf("select role: %d %s", selected.status, selected.raw)
+	}
+	handshake := selected.text("ticket")
+	if !strings.HasPrefix(handshake, "session:100001:") || len(handshake) <= len("session:100001:") {
+		t.Fatalf("handshake ticket = %q, want session:100001:<token>", handshake)
+	}
+	if selected.number("player_id") != 100_001 || selected.number("server_id") != 1000 || selected.number("serving_server_id") != 1000 {
+		t.Fatalf("select role answered %s, want player 100001 bound to and served by 1000", selected.raw)
+	}
+	if selected.number("expires_at") != 1_800_001_800 {
+		t.Fatalf("the session expires at %d, want 30 minutes after the selection (1800001800)", selected.number("expires_at"))
+	}
+	// 监听绑在通配地址上、没有配置清单：主机取客户端访问入口用的那个，端口取监听端口。
+	if selected.text("tcp_addr") != "portal.test:7000" || selected.text("tcp_addr_source") != "request_host" {
+		t.Fatalf("tcp address = %q (%s), want portal.test:7000 from the request host", selected.text("tcp_addr"), selected.text("tcp_addr_source"))
+	}
+
+	// 握手：登录模块的认证器向同一个 account 校验这张票据。
+	principal, err := gamelogin.Authenticator{Accounts: w.service}.Authenticate(context.Background(), handshake)
+	if err != nil {
+		t.Fatalf("the handshake ticket from select-role was refused by the authenticator: %v", err)
+	}
+	if principal.PlayerID != 100_001 || principal.ServerID != 1000 || !principal.Authenticated() {
+		t.Fatalf("principal = %+v, want player 100001 on server 1000", principal)
+	}
+	if serving, ok := gamelogin.ServingServer(principal.Claims); !ok || serving != 1000 || principal.Claims["origin_server_id"] != "1000" {
+		t.Fatalf("session claims = %v, want serving and origin server 1000", principal.Claims)
+	}
+
+	// 换设备：只有渠道身份。清单里是刚建的角色，拿新的票据直接选它。
+	w.advance(3 * time.Minute)
+	fresh, relogin := w.login("alice")
+	if fresh == ticket {
+		t.Fatal("a later login handed out the same account ticket")
+	}
+	role, _ := portalServers(t, relogin)[1000]["role"].(map[string]any)
+	if role == nil || role["player_id"] != float64(100_001) || role["name"] != "Alice" || role["serving_server_id"] != float64(1000) || role["created_at"] != float64(1_800_000_000) {
+		t.Fatalf("after logging in again the list shows role %v, want player 100001 (Alice) served by 1000", role)
+	}
+	if reselected := w.post("/portal/select-role", map[string]any{"account_ticket": fresh, "player_id": 100_001}); reselected.status != http.StatusOK ||
+		!strings.HasPrefix(reselected.text("ticket"), "session:100001:") {
+		t.Fatalf("selecting the listed role with the new ticket: %d %s", reselected.status, reselected.raw)
+	}
+	// 另一个账号看不到它。
+	_, stranger := w.login("bob")
+	if other := portalServers(t, stranger)[1000]; other["role"] != nil {
+		t.Fatalf("another account sees a role on server 1000: %v", other)
+	}
+}
+
+// 账号票据的形状与寿命：pt1.<过期秒>.<账号>.<签名>；绑定账号与过期时刻；到期那一秒起失效；
+// 改动任何一个字符都验不过；别的密钥签的不认。全部是同一个错误。
+func TestPortalAccountTicketsAreSignedBoundAndShortLived(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	keeper := newTicketKeeper([]byte(portalTestSecret), 10*time.Minute, func() time.Time { return now })
+	ticket, expiresAt := keeper.issue("dev:alice")
+	parts := strings.Split(ticket, ".")
+	if len(parts) != 4 || parts[0] != "pt1" || parts[1] != "1800000600" || expiresAt != 1_800_000_600 {
+		t.Fatalf("ticket = %q (expires %d), want pt1.1800000600.<account>.<signature>", ticket, expiresAt)
+	}
+	if account, err := base64.RawURLEncoding.DecodeString(parts[2]); err != nil || string(account) != "dev:alice" {
+		t.Fatalf("the account segment decodes to %q, %v", account, err)
+	}
+	if signature, err := base64.RawURLEncoding.DecodeString(parts[3]); err != nil || len(signature) != 32 {
+		t.Fatalf("the signature is %d bytes (%v), want the 32 bytes of HMAC-SHA256", len(signature), err)
+	}
+	if account, err := keeper.verify(ticket); err != nil || account != "dev:alice" {
+		t.Fatalf("a fresh ticket: account %q, %v", account, err)
+	}
+	// 另一个账号的票据不同，各认各的。
+	other, _ := keeper.issue("dev:bob")
+	if account, err := keeper.verify(other); err != nil || account != "dev:bob" || other == ticket {
+		t.Fatalf("bob's ticket: account %q, %v", account, err)
+	}
+
+	wantCode := func(label string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: the ticket was accepted", label)
+		}
+		if got := svcaccountCode(err); int(got) != portalCodeTicketInvalid {
+			t.Fatalf("%s: err = %v (code %d), want portal_ticket_invalid", label, err, got)
+		}
+		if err.Error() != invalidTicket().Error() {
+			t.Fatalf("%s: the refusal %q differs from the common one %q; every bad ticket must look the same", label, err, invalidTicket())
+		}
+	}
+	// 逐个位置改一个字符：没有一处改动验得过。
+	for index := range ticket {
+		replacement := byte('A')
+		if ticket[index] == 'A' {
+			replacement = 'B'
+		}
+		_, err := keeper.verify(ticket[:index] + string(replacement) + ticket[index+1:])
+		wantCode(fmt.Sprintf("a ticket changed at byte %d", index), err)
+	}
+	// 把账号段换成别人的、把过期时刻往后改，签名留着原来的。
+	forgedAccount := strings.Join([]string{parts[0], parts[1], base64.RawURLEncoding.EncodeToString([]byte("dev:bob")), parts[3]}, ".")
+	_, err := keeper.verify(forgedAccount)
+	wantCode("alice's signature on bob's account", err)
+	_, err = keeper.verify(strings.Join([]string{parts[0], "1900000000", parts[2], parts[3]}, "."))
+	wantCode("a later expiry under the old signature", err)
+	for label, bad := range map[string]string{
+		"an empty ticket":         "",
+		"three segments":          strings.Join(parts[:3], "."),
+		"five segments":           ticket + ".x",
+		"another version":         "pt2" + ticket[3:],
+		"no signature":            strings.Join(parts[:3], ".") + ".",
+		"an oversized ticket":     ticket + strings.Repeat("A", 1025),
+		"a session ticket":        "session:100001:abc",
+		"the signature as base64": strings.Join(parts[:3], ".") + "." + base64.StdEncoding.EncodeToString(make([]byte, 32)),
+	} {
+		_, err := keeper.verify(bad)
+		wantCode(label, err)
+	}
+	// 版本与长度不靠签名兜底：用同一把密钥给 pt2 版本签一张（将来换格式时就是这样），这一版不认；
+	// 一张签名无误但超过 1024 字节的票据（账号 1000 字节）同样不认，900 字节以内的照常。
+	nextVersion := "pt2." + parts[1] + "." + parts[2]
+	_, err = keeper.verify(nextVersion + "." + base64.RawURLEncoding.EncodeToString(keeper.mac(nextVersion)))
+	wantCode("a correctly signed ticket of another version", err)
+	oversized, _ := keeper.issue(strings.Repeat("a", 1000))
+	if len(oversized) <= 1024 {
+		t.Fatalf("fixture: the long ticket is only %d bytes", len(oversized))
+	}
+	_, err = keeper.verify(oversized)
+	wantCode("a correctly signed ticket over 1024 bytes", err)
+	roomy, _ := keeper.issue(strings.Repeat("a", 600))
+	if account, err := keeper.verify(roomy); err != nil || len(account) != 600 || len(roomy) > 1024 {
+		t.Fatalf("a %d-byte ticket for a 600-byte account: %d-byte account, %v", len(roomy), len(account), err)
+	}
+	// 另一把密钥：签得出一模一样形状的票据，这里不认；它自己的也不认这边的。
+	foreign := newTicketKeeper([]byte("another-portal-secret-0123456789abcdef"), 10*time.Minute, func() time.Time { return now })
+	foreignTicket, _ := foreign.issue("dev:alice")
+	_, err = keeper.verify(foreignTicket)
+	wantCode("a ticket signed with another secret", err)
+	_, err = foreign.verify(ticket)
+	wantCode("this ticket under another secret", err)
+
+	// 寿命：差一秒到期还能用，到期那一秒起不能用。
+	now = time.Unix(1_800_000_599, 0)
+	if _, err := keeper.verify(ticket); err != nil {
+		t.Fatalf("one second before expiry: %v", err)
+	}
+	now = time.Unix(1_800_000_600, 0)
+	_, err = keeper.verify(ticket)
+	wantCode("at the expiry second", err)
+	now = time.Unix(1_900_000_000, 0)
+	_, err = keeper.verify(ticket)
+	wantCode("long after expiry", err)
+}
+
+// svcaccountCode 取错误的客户端码（入口自己的码与 account 的码走同一套 errcode）。
+func svcaccountCode(err error) int32 { return svcaccount.Code(err) }
+
+// 伪造的、过期的、别的密钥签的票据在两个端点上都是 400 与同一个码，响应一模一样；
+// 没有一次到达 account 的写接口，account 里什么都没变。
+func TestPortalRefusesBadTicketsBeforeAnyAccountWrite(t *testing.T) {
+	w := newPortalWorld(t)
+	ticket, _ := w.login("alice")
+	playerID := w.createRole(ticket, 1000, "Alice")
+	writesBefore, roleBefore := w.accounts.writes(), w.storedRole(playerID)
+
+	parts := strings.Split(ticket, ".")
+	foreignPortal := newPortalWorld(t, func(options *Options) { options.TicketSecret = []byte("another-portal-secret-0123456789abcdef") })
+	foreignTicket, _ := foreignPortal.login("alice")
+	bad := map[string]string{
+		"an empty ticket":           "",
+		"garbage":                   "not-a-ticket",
+		"a flipped signature":       portalFlipLastByte(ticket),
+		"another account, same mac": strings.Join([]string{parts[0], parts[1], base64.RawURLEncoding.EncodeToString([]byte("dev:bob")), parts[3]}, "."),
+		"a later expiry, same mac":  strings.Join([]string{parts[0], "1900000000", parts[2], parts[3]}, "."),
+		"signed by another secret":  foreignTicket,
+		"a handshake ticket":        "session:100001:" + parts[3],
+	}
+	var common string
+	check := func(label string, reply portalReply) {
+		t.Helper()
+		if reply.status != http.StatusBadRequest || reply.code() != portalCodeTicketInvalid || reply.body["ok"] != false {
+			t.Fatalf("%s: %d %s; want 400 with the portal_ticket_invalid code", label, reply.status, reply.raw)
+		}
+		if common == "" {
+			common = reply.raw
+		}
+		if reply.raw != common {
+			t.Fatalf("%s: the refusal %s differs from %s; every bad ticket must get the same answer", label, reply.raw, common)
+		}
+	}
+	for label, value := range bad {
+		check(label+" on create-role", w.post("/portal/create-role", map[string]any{"account_ticket": value, "server_id": 1001, "name": "Mallory"}))
+		check(label+" on select-role", w.post("/portal/select-role", map[string]any{"account_ticket": value, "player_id": playerID}))
+	}
+	// 没带票据字段也是同一个回答。
+	check("no ticket field on select-role", w.post("/portal/select-role", map[string]any{"player_id": playerID}))
+
+	if got := w.accounts.writes(); got != writesBefore {
+		t.Fatalf("forged tickets reached account's write interfaces %d times", got-writesBefore)
+	}
+
+	// 过期：10 分钟整。差一秒时还能选角（这一次是合法的写），到点之后两个端点都拒绝。
+	w.advance(10*time.Minute - time.Second)
+	if reply := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID}); reply.status != http.StatusOK {
+		t.Fatalf("one second before the ticket expires: %d %s", reply.status, reply.raw)
+	}
+	writesBefore, roleBefore = w.accounts.writes(), w.storedRole(playerID)
+	w.advance(time.Second)
+	check("an expired ticket on select-role", w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID}))
+	check("an expired ticket on create-role", w.post("/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": 1001, "name": "Late"}))
+
+	if got := w.accounts.writes(); got != writesBefore {
+		t.Fatalf("refused tickets reached account's write interfaces %d times", got-writesBefore)
+	}
+	if after := w.storedRole(playerID); after.LastLoginAtUnix != roleBefore.LastLoginAtUnix {
+		t.Fatalf("a refused select-role stamped the role's login time: %d -> %d", roleBefore.LastLoginAtUnix, after.LastLoginAtUnix)
+	}
+	for _, sid := range []int32{1000, 1001} {
+		if _, found, err := w.slots.Get(context.Background(), "dev:bob@"+strconv.Itoa(int(sid))); err != nil || found {
+			t.Fatalf("a forged ticket created a slot for dev:bob on %d (found=%v err=%v)", sid, found, err)
+		}
+	}
+	if _, found, _ := w.slots.Get(context.Background(), "dev:alice@1001"); found {
+		t.Fatal("a refused create-role left a slot for dev:alice on server 1001")
+	}
+}
+
+// portalFlipLastByte 改掉票据的最后一个字符（签名的最后一段）。
+func portalFlipLastByte(ticket string) string {
+	last := byte('A')
+	if ticket[len(ticket)-1] == 'A' {
+		last = 'B'
+	}
+	return ticket[:len(ticket)-1] + string(last)
+}
+
+// accountID 只来自票据。拿 A 的票据选 B 的角色：account 说不是你的角色，入口原样带着它的码拒绝，B 的角色没被碰。
+// 请求里夹带 account_id（或任何别的写法）不起作用：到达 account 的始终是票据里的那个账号。
+func TestPortalTakesTheAccountOnlyFromTheTicket(t *testing.T) {
+	w := newPortalWorld(t)
+	aliceTicket, _ := w.login("alice")
+	bobTicket, _ := w.login("bob")
+	bobPlayer := w.createRole(bobTicket, 1000, "Bob")
+	bobBefore := w.storedRole(bobPlayer)
+	w.advance(time.Minute)
+
+	for label, payload := range map[string]map[string]any{
+		"alice's ticket, bob's role": {"account_ticket": aliceTicket, "player_id": bobPlayer},
+		"with account_id smuggled in": {
+			"account_ticket": aliceTicket, "player_id": bobPlayer,
+			"account_id": "dev:bob", "accountID": "dev:bob", "AccountID": "dev:bob", "account": "dev:bob", "open_id": "bob",
+		},
+	} {
+		reply := w.post("/portal/select-role", payload)
+		if reply.status != http.StatusBadRequest || reply.code() != 560110 {
+			t.Fatalf("%s: %d %s; want 400 with account's not-permitted code 560110", label, reply.status, reply.raw)
+		}
+		if strings.Contains(reply.raw, "session:") || reply.text("ticket") != "" {
+			t.Fatalf("%s: the refusal carries a handshake ticket: %s", label, reply.raw)
+		}
+	}
+	if after := w.storedRole(bobPlayer); after.LastLoginAtUnix != bobBefore.LastLoginAtUnix {
+		t.Fatalf("selecting bob's role with alice's ticket stamped bob's login time: %d -> %d", bobBefore.LastLoginAtUnix, after.LastLoginAtUnix)
+	}
+
+	// 建角时夹带 account_id：角色建在票据的账号（alice）名下，bob 在 1001 上仍然没有角色。
+	created := w.post("/portal/create-role", map[string]any{
+		"account_ticket": aliceTicket, "server_id": 1001, "name": "Alice",
+		"account_id": "dev:bob", "accountID": "dev:bob", "AccountID": "dev:bob",
+	})
+	if created.status != http.StatusOK {
+		t.Fatalf("create role with a smuggled account_id: %d %s", created.status, created.raw)
+	}
+	ctx := context.Background()
+	if role, err := w.service.RoleOnServer(ctx, "dev:alice", 1001); err != nil || role.Name != "Alice" {
+		t.Fatalf("alice's role on 1001 = %+v, %v; the ticket's account must own the new role", role, err)
+	}
+	if _, err := w.service.RoleOnServer(ctx, "dev:bob", 1001); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+		t.Fatalf("bob has a role on 1001 after alice's create-role with account_id=dev:bob: %v", err)
+	}
+	w.accounts.mu.Lock()
+	seen := strings.Join(w.accounts.asAccount, ",")
+	w.accounts.mu.Unlock()
+	if seen != "dev:bob,dev:alice,dev:alice,dev:alice" {
+		t.Fatalf("account's CreateRole / SelectRole were called as %s; want bob's own create, then alice three times", seen)
+	}
+	// 登录请求里的 open_id 也只是提示：账号以渠道确认的身份为准。拿自己（carol）的凭据配上别人（dave）的
+	// open_id 登录，得到的票据是 carol 的——用它建的角色在 carol 名下，dave 的账号根本不存在。
+	mixed := w.post("/portal/login", map[string]any{"channel": "store", "open_id": "dave", "credential": "receipt-of-carol"})
+	if mixed.status != http.StatusOK {
+		t.Fatalf("store login: %d %s", mixed.status, mixed.raw)
+	}
+	if strings.Contains(mixed.raw, "receipt-of-carol") {
+		t.Fatalf("the login response echoes the credential: %s", mixed.raw)
+	}
+	w.createRole(mixed.text("account_ticket"), 1000, "Carol")
+	if role, err := w.service.RoleOnServer(ctx, "store:carol", 1000); err != nil || role.Name != "Carol" {
+		t.Fatalf("the role made with carol's receipt = %+v, %v; want it under store:carol", role, err)
+	}
+	if _, err := w.service.RoleOnServer(ctx, "store:dave", 1000); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+		t.Fatalf("store:dave got a role from carol's receipt: %v", err)
+	}
+}
+
+// 不成样子的请求——字段超长、必填没填、服号玩家号不是正数、请求体过大、不是 JSON、不是 POST——
+// 一律不去问 account，响应里也不回显提交的内容。
+func TestPortalRefusesOversizedAndMalformedRequestsWithoutAskingAccount(t *testing.T) {
+	w := newPortalWorld(t)
+	ticket, _ := w.login("alice")
+	playerID := w.createRole(ticket, 1000, "Alice")
+	loginsBefore, writesBefore := w.accounts.count("Login"), w.accounts.writes()
+	long := func(n int) string { return strings.Repeat("x", n) }
+
+	type attempt struct {
+		label   string
+		path    string
+		payload map[string]any
+	}
+	attempts := []attempt{
+		{label: "a 33-byte channel", path: "/portal/login", payload: map[string]any{"channel": long(33), "open_id": "alice", "credential": portalDevToken}},
+		{label: "a 129-byte open id", path: "/portal/login", payload: map[string]any{"channel": "dev", "open_id": long(129), "credential": portalDevToken}},
+		{label: "an 8193-byte credential", path: "/portal/login", payload: map[string]any{"channel": "dev", "open_id": "alice", "credential": long(8193)}},
+		{label: "no channel", path: "/portal/login", payload: map[string]any{"open_id": "alice", "credential": portalDevToken}},
+		{label: "a blank open id", path: "/portal/login", payload: map[string]any{"channel": "dev", "open_id": "   ", "credential": portalDevToken}},
+		{label: "an empty login", path: "/portal/login", payload: map[string]any{}},
+		{label: "a 129-byte name", path: "/portal/create-role", payload: map[string]any{"account_ticket": ticket, "server_id": 1001, "name": long(129)}},
+		{label: "no name", path: "/portal/create-role", payload: map[string]any{"account_ticket": ticket, "server_id": 1001}},
+		{label: "server id zero", path: "/portal/create-role", payload: map[string]any{"account_ticket": ticket, "server_id": 0, "name": "Zero"}},
+		{label: "a negative server id", path: "/portal/create-role", payload: map[string]any{"account_ticket": ticket, "server_id": -1000, "name": "Minus"}},
+		{label: "player id zero", path: "/portal/select-role", payload: map[string]any{"account_ticket": ticket, "player_id": 0}},
+		{label: "a negative player id", path: "/portal/select-role", payload: map[string]any{"account_ticket": ticket, "player_id": -playerID}},
+	}
+	for _, try := range attempts {
+		reply := w.post(try.path, try.payload)
+		if reply.status != http.StatusBadRequest || reply.code() != portalCodeRequestInvalid || reply.body["ok"] != false {
+			t.Fatalf("%s: %d %s; want 400 with the portal_request_invalid code", try.label, reply.status, reply.raw)
+		}
+		if strings.Contains(reply.raw, "xxxxxxxx") || strings.Contains(reply.raw, portalDevToken) {
+			t.Fatalf("%s: the refusal echoes the request: %s", try.label, reply.raw)
+		}
+	}
+	// 恰好在上限上的字段不被这一层拦（之后由 account 判断）：128 字节的 open id 能登录。
+	if reply := w.post("/portal/login", map[string]any{"channel": "dev", "open_id": long(128), "credential": portalDevToken}); reply.status != http.StatusOK {
+		t.Fatalf("a 128-byte open id: %d %s", reply.status, reply.raw)
+	}
+	loginsBefore++
+
+	// 一张超长的票据按坏票据答，同样不到 account。
+	if reply := w.post("/portal/select-role", map[string]any{"account_ticket": ticket + long(1025), "player_id": playerID}); reply.status != http.StatusBadRequest || reply.code() != portalCodeTicketInvalid {
+		t.Fatalf("an oversized ticket: %d %s", reply.status, reply.raw)
+	}
+	// 类型不对、不是 JSON：解码这一层就拒绝了。
+	for label, body := range map[string]string{
+		"not JSON":                 "channel=dev&open_id=alice",
+		"a string for a number":    `{"account_ticket":"` + ticket + `","player_id":"100001"}`,
+		"two documents":            `{"channel":"dev","open_id":"alice","credential":"` + portalDevToken + `"}{"channel":"dev"}`,
+		"a fraction for server id": `{"account_ticket":"` + ticket + `","server_id":1000.5,"name":"Half"}`,
+	} {
+		for _, path := range []string{"/portal/login", "/portal/create-role", "/portal/select-role"} {
+			reply := portalPostRaw(t, w.engine, http.MethodPost, path, "portal.test", []byte(body))
+			if reply.status != http.StatusBadRequest || reply.body["ok"] != false {
+				t.Fatalf("%s on %s: %d %s; want 400", label, path, reply.status, reply.raw)
+			}
+		}
+	}
+	// 请求体超过 16 KiB：413，不管里面写了什么。
+	huge, _ := json.Marshal(map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "padding": long(17 << 10)})
+	for _, path := range []string{"/portal/login", "/portal/create-role", "/portal/select-role"} {
+		if reply := portalPostRaw(t, w.engine, http.MethodPost, path, "portal.test", huge); reply.status != http.StatusRequestEntityTooLarge {
+			t.Fatalf("a %d-byte body on %s: %d %s; want 413", len(huge), path, reply.status, reply.raw)
+		}
+	}
+	// 只有 POST。
+	for _, path := range []string{"/portal/login", "/portal/create-role", "/portal/select-role"} {
+		if reply := portalPostRaw(t, w.engine, http.MethodGet, path, "portal.test", nil); reply.status != http.StatusMethodNotAllowed {
+			t.Fatalf("GET %s: %d; want 405", path, reply.status)
+		}
+	}
+	if logins, writes := w.accounts.count("Login"), w.accounts.writes(); logins != loginsBefore || writes != writesBefore {
+		t.Fatalf("malformed requests reached account: %d logins (want %d), %d writes (want %d)", logins, loginsBefore, writes, writesBefore)
+	}
+}
+
+// account 的拒绝是 4xx 带它自己的码；account 给不出结论（总线断了、超时、存储出错）是 500，
+// 响应里没有内部的错误文本，也没有签出去的票据。两种不能混：把“问不到”答成 4xx，客户端会以为是自己的凭据坏了。
+func TestPortalSeparatesAccountRefusalsFromAccountOutages(t *testing.T) {
+	w := newPortalWorld(t)
+	ticket, _ := w.login("alice")
+	playerID := w.createRole(ticket, 1000, "Alice")
+
+	// 拒绝：凭据不对、渠道没接、名字不合规则、服没登记。都是 400，码是 account 的。
+	for label, try := range map[string]struct {
+		path    string
+		payload map[string]any
+		code    int
+	}{
+		"a wrong development credential": {"/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": "dev-wrong"}, 560102},
+		"a channel nobody wired":         {"/portal/login", map[string]any{"channel": "appstore", "open_id": "alice", "credential": "receipt"}, 560102},
+		"a name with whitespace":         {"/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": 1001, "name": "two words"}, 560106},
+		"a server nobody registered":     {"/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": 4242, "name": "Nowhere"}, 560104},
+		"a role that does not exist":     {"/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": 999_999}, 560109},
+	} {
+		reply := w.post(try.path, try.payload)
+		if reply.status != http.StatusBadRequest || reply.code() != try.code || reply.body["ok"] != false {
+			t.Fatalf("%s: %d %s; want 400 with account's code %d", label, reply.status, reply.raw, try.code)
+		}
+		if reply.text("account_ticket") != "" || reply.text("ticket") != "" {
+			t.Fatalf("%s: a refusal handed out a ticket: %s", label, reply.raw)
+		}
+	}
+
+	// 问不到：每个用到的 account 接口各断一次。
+	outage := func(label string, reply portalReply) {
+		t.Helper()
+		if reply.status != http.StatusInternalServerError || reply.code() != 1 || reply.body["ok"] != false {
+			t.Fatalf("%s: %d %s; want 500 with the internal code 1", label, reply.status, reply.raw)
+		}
+		for _, leak := range []string{"10.9.8.7", "redis", "no responders", "pt1.", "session:", "dev:alice"} {
+			if strings.Contains(reply.raw, leak) {
+				t.Fatalf("%s: the 500 response leaks %q: %s", label, leak, reply.raw)
+			}
+		}
+	}
+	loginPayload := map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken}
+	w.accounts.fail("Login")
+	outage("Login is down", w.post("/portal/login", loginPayload))
+	w.accounts.fail("GetServer")
+	outage("GetServer is down during login", w.post("/portal/login", loginPayload))
+	w.accounts.fail("RoleOnServer")
+	outage("RoleOnServer is down during login", w.post("/portal/login", loginPayload))
+	writesBefore := w.accounts.writes()
+	w.accounts.fail("CreateRole", "SelectRole")
+	outage("CreateRole is down", w.post("/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": 1001, "name": "Alice"}))
+	outage("SelectRole is down", w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID}))
+	if got := w.accounts.writes() - writesBefore; got != 2 {
+		t.Fatalf("the two outage calls reached account %d times, want 2 (the portal does not retry behind the client's back)", got)
+	}
+	// account 回来之后，同一张票据照常可用：断线期间没有东西被弄坏。
+	w.accounts.fail()
+	if reply := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": playerID}); reply.status != http.StatusOK {
+		t.Fatalf("after the outage: %d %s", reply.status, reply.raw)
+	}
+}
+
+// account 答了“成功”、内容却对不上问题时（别的账号的角色、别的玩家的会话、没有令牌、没有承载服），
+// 入口不把它交给客户端：500，不带角色也不带握手票据。正常情况下 account 不会这样答；这一层防的是
+// 总线另一头的版本不一致或存储被改坏，宁可失败也不把别人的角色列给玩家、不拼一张必然握手失败的票据。
+func TestPortalDoesNotPassOnAnAccountAnswerThatDoesNotMatchTheQuestion(t *testing.T) {
+	w := newPortalWorld(t)
+	ticket, _ := w.login("alice")
+	playerID := w.createRole(ticket, 1000, "Alice")
+	bobTicket, _ := w.login("bob")
+	bobPlayer := w.createRole(bobTicket, 1000, "Bob")
+	ctx := context.Background()
+	loginPayload := map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken}
+	selectPayload := map[string]any{"account_ticket": ticket, "player_id": playerID}
+	serverError := func(label string, reply portalReply) {
+		t.Helper()
+		if reply.status != http.StatusInternalServerError || reply.code() != 1 {
+			t.Fatalf("%s: %d %s; want 500", label, reply.status, reply.raw)
+		}
+		for _, leak := range []string{"Bob", "pt1.", "session:", strconv.FormatInt(bobPlayer, 10)} {
+			if strings.Contains(reply.raw, leak) {
+				t.Fatalf("%s: the 500 response carries %q: %s", label, leak, reply.raw)
+			}
+		}
+	}
+
+	// 问 alice 在 1000 上的角色，答的是 bob 的。
+	w.accounts.roleOnServer = func(string, int32) (svcaccount.Role, error) {
+		return w.service.RoleOnServer(ctx, "dev:bob", 1000)
+	}
+	serverError("another account's role in the list", w.post("/portal/login", loginPayload))
+	w.accounts.roleOnServer = func(accountID string, serverID int32) (svcaccount.Role, error) {
+		return svcaccount.Role{AccountID: accountID, ServerID: serverID, ServingServerID: serverID, Name: "Ghost"}, nil
+	}
+	serverError("a role without a player id in the list", w.post("/portal/login", loginPayload))
+	w.accounts.roleOnServer = nil
+
+	real, err := w.service.SelectRole(ctx, "dev:alice", playerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, twist := range map[string]func(*svcaccount.Session){
+		"a session for another player":       func(session *svcaccount.Session) { session.PlayerID = bobPlayer },
+		"a session without a token":          func(session *svcaccount.Session) { session.Token = "" },
+		"a session without a serving server": func(session *svcaccount.Session) { session.ServingServerID = 0 },
+	} {
+		w.accounts.selectRole = func(string, int64) (svcaccount.Session, error) {
+			session := real
+			twist(&session)
+			return session, nil
+		}
+		serverError(label, w.post("/portal/select-role", selectPayload))
+	}
+	// 原样的回答照常通过：上面拒绝的确实是被改动的那一处。
+	w.accounts.selectRole = func(string, int64) (svcaccount.Session, error) { return real, nil }
+	if reply := w.post("/portal/select-role", selectPayload); reply.status != http.StatusOK || reply.text("ticket") != "session:"+strconv.FormatInt(playerID, 10)+":"+real.Token {
+		t.Fatalf("an untouched session: %d %s", reply.status, reply.raw)
+	}
+}
+
+// 配置了区服清单：按服号列出每一个，带着 account 里的名字与状态、是否已并入别的服、本账号在那里的角色。
+// 清单里有而 account 没登记的服照实标出来；换服在途的角色带着目标服。选角给的是承载服的地址。
+func TestPortalListsTheConfiguredServersWithTheAccountsRoles(t *testing.T) {
+	w := newPortalWorld(t, func(options *Options) {
+		options.Servers = map[int32]string{1000: "203.0.113.7:7000", 1001: "203.0.113.8:7001", 1002: "203.0.113.9:7002", 1003: "203.0.113.10:7003"}
+	})
+	ctx := context.Background()
+	if _, err := w.service.UpsertServer(ctx, svcaccount.GameServer{ID: 1003, Name: "s1003", Status: svcaccount.ServerMaintenance}); err != nil {
+		t.Fatal(err)
+	}
+	ticket, first := w.login("alice")
+	servers := portalServers(t, first)
+	if len(servers) != 4 {
+		t.Fatalf("the list has %d servers, want the 4 configured ones: %s", len(servers), first.raw)
+	}
+	for sid, want := range map[int]map[string]any{
+		1000: {"registered": true, "name": "s1000", "status": "open"},
+		1001: {"registered": true, "name": "s1001", "status": "open"},
+		1002: {"registered": false, "name": "", "status": ""},
+		1003: {"registered": true, "name": "s1003", "status": "maintenance"},
+	} {
+		for key, value := range want {
+			if servers[sid][key] != value {
+				t.Fatalf("server %d: %s = %v, want %v (%v)", sid, key, servers[sid][key], value, servers[sid])
+			}
+		}
+		if servers[sid]["role"] != nil {
+			t.Fatalf("server %d lists a role before any was created: %v", sid, servers[sid])
+		}
+		if _, merged := servers[sid]["merged_into"]; merged {
+			t.Fatalf("server %d says merged_into without a merge: %v", sid, servers[sid])
+		}
+	}
+	// 清单里没登记的服、维护中的服建不了角：account 的码。
+	if reply := w.post("/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": 1002, "name": "Nowhere"}); reply.code() != 560104 {
+		t.Fatalf("create role on the unregistered server: %d %s", reply.status, reply.raw)
+	}
+	if reply := w.post("/portal/create-role", map[string]any{"account_ticket": ticket, "server_id": 1003, "name": "Closed"}); reply.code() != 560105 {
+		t.Fatalf("create role on the server in maintenance: %d %s", reply.status, reply.raw)
+	}
+
+	onHome := w.createRole(ticket, 1000, "AliceHome")
+	onAway := w.createRole(ticket, 1001, "AliceAway")
+	// 1001 并入 1000；1000 上的角色开始换到 1003（先把 1003 开放）。
+	if _, err := w.service.MergeServer(ctx, svcaccount.MergeRequest{From: 1001, Into: 1000, Note: "portal scenario"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.service.UpsertServer(ctx, svcaccount.GameServer{ID: 1003, Name: "s1003", Status: svcaccount.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.service.BeginRoleTransfer(ctx, onHome, svcaccount.TransferRequest{ID: "move-1", FromSID: 1000, To: 1003}); err != nil {
+		t.Fatal(err)
+	}
+	_, second := w.login("alice")
+	servers = portalServers(t, second)
+	home, _ := servers[1000]["role"].(map[string]any)
+	if home == nil || home["player_id"] != float64(onHome) || home["name"] != "AliceHome" || home["serving_server_id"] != float64(1000) || home["transferring_to"] != float64(1003) {
+		t.Fatalf("server 1000's role = %v, want player %d moving to 1003", home, onHome)
+	}
+	away, _ := servers[1001]["role"].(map[string]any)
+	if servers[1001]["merged_into"] != float64(1000) || servers[1001]["status"] != "closed" ||
+		away == nil || away["player_id"] != float64(onAway) || away["server_id"] != float64(1001) || away["serving_server_id"] != float64(1000) {
+		t.Fatalf("server 1001 = %v, want merged into 1000 with player %d served by 1000", servers[1001], onAway)
+	}
+	if _, moving := away["transferring_to"]; moving {
+		t.Fatalf("a role that is not moving says transferring_to: %v", away)
+	}
+	// 换服的占位不是角色：目标服 1003 上仍然没有角色。
+	if servers[1003]["role"] != nil {
+		t.Fatalf("the transfer hold on 1003 is listed as a role: %v", servers[1003])
+	}
+
+	// 选并入服的角色：承载服是 1000，地址是 1000 的。
+	selected := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": onAway})
+	if selected.status != http.StatusOK || selected.number("server_id") != 1001 || selected.number("serving_server_id") != 1000 ||
+		selected.text("tcp_addr") != "203.0.113.7:7000" || selected.text("tcp_addr_source") != "config" {
+		t.Fatalf("select the merged server's role: %d %s; want serving 1000 at 203.0.113.7:7000", selected.status, selected.raw)
+	}
+	principal, err := gamelogin.Authenticator{Accounts: w.service}.Authenticate(ctx, selected.text("ticket"))
+	if err != nil || principal.ServerID != 1000 || principal.Claims["origin_server_id"] != "1001" {
+		t.Fatalf("the merged role's handshake: %+v, %v; want served by 1000, origin 1001", principal, err)
+	}
+	// 选换服在途的角色：票据照发，带着目标服。
+	moving := w.post("/portal/select-role", map[string]any{"account_ticket": ticket, "player_id": onHome})
+	if moving.status != http.StatusOK || moving.number("transferring_to") != 1003 || moving.number("serving_server_id") != 1000 || moving.text("ticket") == "" {
+		t.Fatalf("select the role in transfer: %d %s", moving.status, moving.raw)
+	}
+}
+
+// 选角结果里的 TCP 地址：配置优先；没有配置时取本进程的监听地址，监听绑通配地址时主机取请求的 Host；
+// 都不行时地址为空并说明原因，票据照发。
+func TestPortalAnswersWhereToConnect(t *testing.T) {
+	for _, test := range []struct {
+		label                string
+		options              func(*Options)
+		host                 string
+		wantAddr, wantSource string
+		// sid 是角色建在哪个服（0 取本服 1000）。
+		sid int
+	}{
+		{label: "configured", options: func(o *Options) { o.Servers = map[int32]string{1000: "play.example.test:7443"} }, host: "portal.test", wantAddr: "play.example.test:7443", wantSource: "config"},
+		{label: "a specific listen host", options: func(o *Options) { o.PlayerTCPListen = "10.1.2.3:7000" }, host: "portal.test", wantAddr: "10.1.2.3:7000", wantSource: "listen"},
+		{label: "wildcard, host with port", options: func(o *Options) {}, host: "192.168.1.20:8080", wantAddr: "192.168.1.20:7000", wantSource: "request_host"},
+		{label: "wildcard, bare host name", options: func(o *Options) { o.PlayerTCPListen = ":7100" }, host: "dev-box.local", wantAddr: "dev-box.local:7100", wantSource: "request_host"},
+		{label: "wildcard, IPv6 host", options: func(o *Options) { o.PlayerTCPListen = "[::]:7000" }, host: "[2001:db8::7]:8080", wantAddr: "[2001:db8::7]:7000", wantSource: "request_host"},
+		{label: "wildcard, unusable host", options: func(o *Options) {}, host: "bad_host!:8080", wantAddr: "", wantSource: "unknown"},
+		{label: "listener off", options: func(o *Options) { o.PlayerTCPEnabled = false }, host: "portal.test", wantAddr: "", wantSource: "tcp_disabled"},
+		{label: "no listen address", options: func(o *Options) { o.PlayerTCPListen = "" }, host: "portal.test", wantAddr: "", wantSource: "unknown"},
+		{label: "configured list without the serving server", options: func(o *Options) { o.Servers = map[int32]string{1001: "203.0.113.8:7001"} }, host: "portal.test", wantAddr: "", wantSource: "unlisted_server"},
+		{label: "no list, served by another process", options: func(o *Options) {}, host: "portal.test", wantAddr: "", wantSource: "unlisted_server", sid: 1001},
+	} {
+		w := newPortalWorld(t, test.options)
+		ticket, _ := w.login("alice")
+		if test.sid == 0 {
+			test.sid = 1000
+		}
+		// 清单里没有这个服时也能在那里建角：能不能建是 account 的区服记录说了算。
+		playerID := w.createRole(ticket, test.sid, "Alice")
+		body, _ := json.Marshal(map[string]any{"account_ticket": ticket, "player_id": playerID})
+		reply := portalPostRaw(t, w.engine, http.MethodPost, "/portal/select-role", test.host, body)
+		if reply.status != http.StatusOK || !strings.HasPrefix(reply.text("ticket"), "session:") {
+			t.Fatalf("%s: select role: %d %s; the ticket must be issued whatever the address", test.label, reply.status, reply.raw)
+		}
+		if reply.text("tcp_addr") != test.wantAddr || reply.text("tcp_addr_source") != test.wantSource {
+			t.Fatalf("%s: tcp address = %q (%s), want %q (%s)", test.label, reply.text("tcp_addr"), reply.text("tcp_addr_source"), test.wantAddr, test.wantSource)
+		}
+		if _, present := reply.body["tcp_addr"]; !present {
+			t.Fatalf("%s: an unknown address must be an empty tcp_addr, not a missing field: %s", test.label, reply.raw)
+		}
+	}
+}
+
+// portalProcess 是一个 game 进程里入口看得到的东西：配置、account 的客户端、web Mod 的路由登记器。
+// 返回 Start 的结果与装着路由的引擎（Start 失败时引擎上没有路由）。
+func portalProcess(t *testing.T, accounts svcaccount.Accounts, settings map[string]any) (http.Handler, error) {
+	t.Helper()
+	cfg := viper.New()
+	for key, value := range settings {
+		cfg.Set(key, value)
+	}
+	registry := app.NewRegistry(cfg)
+	if accounts != nil {
+		if err := registry.Register(svcaccount.CapabilityName, accounts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := httpserver.NewEngine()
+	if err := registry.Register(mods.ModWeb, webroute.Registerer(webroute.NewRegistrar(engine))); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := Start(registry)
+	if stop != nil {
+		t.Fatal("Start returned a stop function; the portal holds nothing to stop")
+	}
+	return engine, err
+}
+
+// 零配置：装上模块、什么都不写，入口就能用——清单是本进程自己的服，地址来自监听配置，票据用本进程随机生成的
+// 密钥签。随机密钥只在本进程有效：另一个同样零配置的进程不认这张票据。
+func TestPortalStartsWithZeroConfigAndARandomPerProcessSecret(t *testing.T) {
+	w := newPortalWorld(t)
+	zero := map[string]any{"sid": 1000, "player_access.tcp.enabled": true, "player_access.tcp.addr": "0.0.0.0:7000"}
+	engine, err := portalProcess(t, w.accounts, zero)
+	if err != nil {
+		t.Fatalf("Start with no portal.* keys: %v", err)
+	}
+	loginBody, _ := json.Marshal(map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken})
+	login := portalPostRaw(t, engine, http.MethodPost, "/portal/login", "127.0.0.1:8080", loginBody)
+	if login.status != http.StatusOK || len(portalServers(t, login)) != 1 || portalServers(t, login)[1000]["registered"] != true {
+		t.Fatalf("zero-config login: %d %s; want the list to be server 1000 alone", login.status, login.raw)
+	}
+	// 缺省有效期 10 分钟（这个入口用的是真实的系统时钟）。
+	if left := login.number("account_ticket_expires_at") - time.Now().Unix(); left < 590 || left > 610 {
+		t.Fatalf("the default ticket lifetime is %d seconds, want 600", left)
+	}
+	ticket := login.text("account_ticket")
+	createBody, _ := json.Marshal(map[string]any{"account_ticket": ticket, "server_id": 1000, "name": "Alice"})
+	created := portalPostRaw(t, engine, http.MethodPost, "/portal/create-role", "127.0.0.1:8080", createBody)
+	role, _ := created.body["role"].(map[string]any)
+	if created.status != http.StatusOK || role["player_id"] != float64(100_001) {
+		t.Fatalf("zero-config create role: %d %s", created.status, created.raw)
+	}
+	selectBody, _ := json.Marshal(map[string]any{"account_ticket": ticket, "player_id": 100_001})
+	selected := portalPostRaw(t, engine, http.MethodPost, "/portal/select-role", "127.0.0.1:8080", selectBody)
+	if selected.status != http.StatusOK || selected.text("tcp_addr") != "127.0.0.1:7000" || selected.text("tcp_addr_source") != "request_host" {
+		t.Fatalf("zero-config select role: %d %s; want tcp_addr 127.0.0.1:7000", selected.status, selected.raw)
+	}
+
+	// 第二个零配置的进程（或者同一个进程重启之后）：各有各的随机密钥。
+	other, err := portalProcess(t, w.accounts, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply := portalPostRaw(t, other, http.MethodPost, "/portal/select-role", "127.0.0.1:8080", selectBody); reply.status != http.StatusBadRequest || reply.code() != portalCodeTicketInvalid {
+		t.Fatalf("another process accepted a ticket signed with this process's random secret: %d %s", reply.status, reply.raw)
+	}
+
+	// 监听没开的进程照样起得来，选角时地址为空并说明原因。
+	closed, err := portalProcess(t, w.accounts, map[string]any{"sid": 1000, "player_access.tcp.enabled": false, "player_access.tcp.addr": "0.0.0.0:7000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relogin := portalPostRaw(t, closed, http.MethodPost, "/portal/login", "127.0.0.1:8080", loginBody)
+	reselectBody, _ := json.Marshal(map[string]any{"account_ticket": relogin.text("account_ticket"), "player_id": 100_001})
+	if reply := portalPostRaw(t, closed, http.MethodPost, "/portal/select-role", "127.0.0.1:8080", reselectBody); reply.status != http.StatusOK ||
+		reply.text("tcp_addr") != "" || reply.text("tcp_addr_source") != "tcp_disabled" {
+		t.Fatalf("select role on a process whose listener is off: %d %s", reply.status, reply.raw)
+	}
+
+	// 缺了入口离不开的东西：进程不启动，错误说出缺什么、怎么补；引擎上没有登记任何路由。
+	if _, err := portalProcess(t, nil, zero); err == nil || !strings.Contains(err.Error(), "services.<service>.uses") {
+		t.Fatalf("Start without the account client: %v", err)
+	}
+	if _, err := portalProcess(t, w.accounts, map[string]any{"player_access.tcp.enabled": true}); err == nil || !strings.Contains(err.Error(), "sid") {
+		t.Fatalf("Start without a sid: %v", err)
+	}
+	noWeb := app.NewRegistry(viper.New())
+	noWeb.Config().Set("sid", 1000)
+	if err := noWeb.Register(svcaccount.CapabilityName, svcaccount.Accounts(w.accounts)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(noWeb); err == nil || !strings.Contains(err.Error(), "roost add mod web") {
+		t.Fatalf("Start without the web mod: %v", err)
+	}
+	if _, err := Start(nil); err == nil {
+		t.Fatal("Start without a registry succeeded")
+	}
+}
+
+// 生产配置必须带一把像样的票据密钥：为空、不足 32 字节、以 dev- 开头都不启动，一条路由都不登记，
+// 错误里不带密钥本身。短密钥在开发配置里同样被拒。配置了同一把密钥的两个进程互认对方的票据。
+func TestPortalRefusesToStartInProductionWithoutAProperSecret(t *testing.T) {
+	w := newPortalWorld(t)
+	base := func(extra map[string]any) map[string]any {
+		settings := map[string]any{"sid": 1000, "player_access.tcp.enabled": true, "player_access.tcp.addr": "0.0.0.0:7000"}
+		for key, value := range extra {
+			settings[key] = value
+		}
+		return settings
+	}
+	loginBody, _ := json.Marshal(map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken})
+	const short, devLooking = "only-31-bytes-of-secret-0123456", "dev-0123456789abcdef0123456789abcdef0123"
+	if len(short) != 31 || len(devLooking) < 32 {
+		t.Fatalf("fixture: short is %d bytes, dev-looking is %d", len(short), len(devLooking))
+	}
+	for label, settings := range map[string]map[string]any{
+		"production, no secret":               base(map[string]any{"env": "prod"}),
+		"production (app.env), no secret":     base(map[string]any{"app.env": "production"}),
+		"production (environment), empty":     base(map[string]any{"environment": "prod", "portal.ticket_secret": ""}),
+		"production, a 31-byte secret":        base(map[string]any{"env": "prod", "portal.ticket_secret": short}),
+		"production, a dev- secret":           base(map[string]any{"env": "prod", "portal.ticket_secret": devLooking}),
+		"development, a 31-byte secret":       base(map[string]any{"portal.ticket_secret": short}),
+		"development, a one-byte secret":      base(map[string]any{"portal.ticket_secret": "x"}),
+		"production, a good secret, bad list": base(map[string]any{"env": "prod", "portal.ticket_secret": portalTestSecret, "portal.servers": map[string]any{"1000": ":7000"}}),
+	} {
+		engine, err := portalProcess(t, w.accounts, settings)
+		if err == nil {
+			t.Fatalf("%s: the portal started", label)
+		}
+		if !strings.Contains(err.Error(), "portal.") {
+			t.Fatalf("%s: the error does not name the config key: %v", label, err)
+		}
+		if strings.Contains(err.Error(), short) || strings.Contains(err.Error(), devLooking) {
+			t.Fatalf("%s: the error prints the secret: %v", label, err)
+		}
+		if reply := portalPostRaw(t, engine, http.MethodPost, "/portal/login", "portal.test", loginBody); reply.status != http.StatusNotFound {
+			t.Fatalf("%s: a refused start still registered /portal/login (%d)", label, reply.status)
+		}
+	}
+	if got := w.accounts.count("Login"); got != 0 {
+		t.Fatalf("refused starts reached account %d times", got)
+	}
+
+	// 生产配置、32 字节以上的密钥：启动。两个进程用同一把密钥，互认票据；换一把就不认。
+	good := base(map[string]any{"env": "prod", "portal.ticket_secret": portalTestSecret})
+	first, err := portalProcess(t, w.accounts, good)
+	if err != nil {
+		t.Fatalf("production with a proper secret: %v", err)
+	}
+	second, err := portalProcess(t, w.accounts, good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := portalPostRaw(t, first, http.MethodPost, "/portal/login", "portal.test", loginBody)
+	if login.status != http.StatusOK {
+		t.Fatalf("login on the first process: %d %s", login.status, login.raw)
+	}
+	createBody, _ := json.Marshal(map[string]any{"account_ticket": login.text("account_ticket"), "server_id": 1000, "name": "Alice"})
+	if reply := portalPostRaw(t, second, http.MethodPost, "/portal/create-role", "portal.test", createBody); reply.status != http.StatusOK {
+		t.Fatalf("the second process refused a ticket signed by the first with the same secret: %d %s", reply.status, reply.raw)
+	}
+	rotated, err := portalProcess(t, w.accounts, base(map[string]any{"env": "prod", "portal.ticket_secret": "a-rotated-portal-secret-0123456789abcdef"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply := portalPostRaw(t, rotated, http.MethodPost, "/portal/create-role", "portal.test", createBody); reply.status != http.StatusBadRequest || reply.code() != portalCodeTicketInvalid {
+		t.Fatalf("a process with a rotated secret accepted an old ticket: %d %s", reply.status, reply.raw)
+	}
+}
+
+// 区服清单与票据有效期从服务配置文件读：YAML 里服号写成字符串或数字都行。写错的条目在启动时点名拒绝。
+func TestPortalReadsItsServersAndTicketLifetimeFromTheServiceConfig(t *testing.T) {
+	w := newPortalWorld(t)
+	cfg := viper.New()
+	cfg.SetConfigType("yaml")
+	if err := cfg.ReadConfig(strings.NewReader(`
+sid: 1000
+player_access:
+  tcp:
+    enabled: true
+    addr: 0.0.0.0:7000
+portal:
+  ticket_ttl: 2m
+  servers:
+    "1001": game2.example.test:7001
+    1000: 203.0.113.7:7000
+`)); err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]any{}
+	for _, key := range cfg.AllKeys() {
+		settings[key] = cfg.Get(key)
+	}
+	engine, err := portalProcess(t, w.accounts, settings)
+	if err != nil {
+		t.Fatalf("Start with a YAML config: %v", err)
+	}
+	loginBody, _ := json.Marshal(map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken})
+	login := portalPostRaw(t, engine, http.MethodPost, "/portal/login", "portal.test", loginBody)
+	servers := portalServers(t, login)
+	if login.status != http.StatusOK || len(servers) != 2 || servers[1000] == nil || servers[1001] == nil {
+		t.Fatalf("login with two configured servers: %d %s", login.status, login.raw)
+	}
+	if left := login.number("account_ticket_expires_at") - time.Now().Unix(); left < 110 || left > 130 {
+		t.Fatalf("portal.ticket_ttl: 2m gave a ticket that lives %d seconds", left)
+	}
+	createBody, _ := json.Marshal(map[string]any{"account_ticket": login.text("account_ticket"), "server_id": 1001, "name": "Alice"})
+	created := portalPostRaw(t, engine, http.MethodPost, "/portal/create-role", "portal.test", createBody)
+	role, _ := created.body["role"].(map[string]any)
+	selectBody, _ := json.Marshal(map[string]any{"account_ticket": login.text("account_ticket"), "player_id": role["player_id"]})
+	selected := portalPostRaw(t, engine, http.MethodPost, "/portal/select-role", "portal.test", selectBody)
+	if selected.status != http.StatusOK || selected.text("tcp_addr") != "game2.example.test:7001" || selected.text("tcp_addr_source") != "config" {
+		t.Fatalf("select a role on the second configured server: %d %s", selected.status, selected.raw)
+	}
+
+	tooMany := map[string]any{}
+	for sid := 1; sid <= 65; sid++ {
+		tooMany[strconv.Itoa(sid)] = "203.0.113.7:7000"
+	}
+	for label, test := range map[string]struct {
+		settings map[string]any
+		want     string
+	}{
+		"a key that is not a number":    {map[string]any{"portal.servers": map[string]any{"main": "203.0.113.7:7000"}}, `"main"`},
+		"server id zero":                {map[string]any{"portal.servers": map[string]any{"0": "203.0.113.7:7000"}}, `"0"`},
+		"a leading zero":                {map[string]any{"portal.servers": map[string]any{"01000": "203.0.113.7:7000"}}, `"01000"`},
+		"an address without a host":     {map[string]any{"portal.servers": map[string]any{"1000": ":7000"}}, "portal.servers.1000"},
+		"an address without a port":     {map[string]any{"portal.servers": map[string]any{"1000": "203.0.113.7"}}, "portal.servers.1000"},
+		"port zero":                     {map[string]any{"portal.servers": map[string]any{"1000": "203.0.113.7:0"}}, "portal.servers.1000"},
+		"65 servers":                    {map[string]any{"portal.servers": tooMany}, "portal.servers lists 65 servers; at most 64"},
+		"a ticket lifetime of zero":     {map[string]any{"portal.ticket_ttl": "0s"}, "portal.ticket_ttl"},
+		"a ticket lifetime of two days": {map[string]any{"portal.ticket_ttl": "48h"}, "portal.ticket_ttl"},
+	} {
+		test.settings["sid"] = 1000
+		refused, err := portalProcess(t, w.accounts, test.settings)
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("%s: err = %v, want it to name %s", label, err, test.want)
+		}
+		if reply := portalPostRaw(t, refused, http.MethodPost, "/portal/login", "portal.test", loginBody); reply.status != http.StatusNotFound {
+			t.Fatalf("%s: a refused start registered routes (%d)", label, reply.status)
+		}
+	}
+}
+
+// New 不接受不完整的参数：没有 account 的客户端、密钥太短、没有 sid、清单太长——零值的入口不该存在。
+// 同一条路由登记两次（工程自己占了 /portal/...）在登记时就报错。
+func TestPortalNewRefusesIncompleteOptions(t *testing.T) {
+	w := newPortalWorld(t)
+	good := Options{Accounts: w.accounts, TicketSecret: []byte(portalTestSecret), SelfServerID: 1000}
+	if _, err := New(good); err != nil {
+		t.Fatalf("complete options: %v", err)
+	}
+	tooMany := map[int32]string{}
+	for sid := int32(1); sid <= 65; sid++ {
+		tooMany[sid] = "203.0.113.7:7000"
+	}
+	for label, change := range map[string]func(*Options){
+		"no account client": func(o *Options) { o.Accounts = nil },
+		"no secret":         func(o *Options) { o.TicketSecret = nil },
+		"a 31-byte secret":  func(o *Options) { o.TicketSecret = []byte(portalTestSecret[:31]) },
+		"sid zero":          func(o *Options) { o.SelfServerID = 0 },
+		"a negative sid":    func(o *Options) { o.SelfServerID = -1000 },
+		"65 servers":        func(o *Options) { o.Servers = tooMany },
+	} {
+		options := good
+		change(&options)
+		if portal, err := New(options); err == nil || portal != nil {
+			t.Fatalf("%s: New accepted the options", label)
+		}
+	}
+	registrar := webroute.NewRegistrar(httpserver.NewEngine())
+	if err := w.portal.RegisterRoutes(registrar); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.portal.RegisterRoutes(registrar); err == nil || !strings.Contains(err.Error(), "/portal/login") {
+		t.Fatalf("registering the routes twice: %v", err)
+	}
+	if err := w.portal.RegisterRoutes(nil); err == nil {
+		t.Fatal("RegisterRoutes accepted a nil registerer")
+	}
+}
