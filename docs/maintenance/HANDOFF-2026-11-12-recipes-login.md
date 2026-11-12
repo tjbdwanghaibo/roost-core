@@ -39,6 +39,20 @@
 
 **更新（同日稍晚）**：上一个 agent 的结束报告说，这份改动在它那边其实已经做完——两个配方工程 build / vet / `go test ./...` / `roost module verify` 全过，`go test -run TestRecipe ./codegen/internal/roost` 通过（164s）；它交出的补丁与这个提交内容相同。但那些结果**没有被复核过**，变异自检、§3 第 4 项（开发配置开箱可用）与第 7 项（文档）没有做。所以接手的第一步是照 §5 重新验证一遍，对得上就在它上面补完剩下的项，对不上再逐个文件判断。本分支已并入登录线的 `b94c99d5`（game-demo 接入完成）。
 
+**复核结果（同日，原会话在本分支 `a1feef89` 上独立跑了一遍）**：代码与用例是做完了的——
+
+- `-recipe casual`、`-recipe turn-pvp` 各新建一个工程：`go build ./...`、`go vet ./...` 通过；`go test ./...` casual 15 个包、turn-pvp 18 个包全过，零 SKIP；`roost module verify` 全过（login 32、portal 12、servertime 12、enter 29，联动 login+enter 6、portal+enter 2、servertime+enter 3，其余模块数目照旧）；重复 `roost module add` 没有变化。
+- `go test -count=1 -run TestRecipe ./codegen/internal/roost` 通过（164s）。
+- 读过用例：新号先新建再进入、未新建进入被拒且零写入、重连、会话令牌老路、连错服、换服在途被拒都有；casual 的首次发放只发一次有断言（发在新建那一笔事务里）。
+
+**还没做的，就是接手要补的全部**：
+
+1. turn-pvp 没有断言“`EnterCreate` 的名字进了档案”“空名字被拒”（§3 第 3 项）。
+2. 开发配置不是开箱可用：新建的配方工程 `config.account.yaml` 里没有 `login.dev_token` 与 `portal.servers`，现在只在 `RECIPE.md` 里写了手工步骤（§3 第 4 项）。game-demo 是生成时代办的（`codegen/internal/roost/demo.go` 的 `demoLoginDevConfig`），配方可以照做；那个文件归原会话，要改它先在报告里说。
+3. 文档没同步（§3 第 7 项）：`modules/README.md` 配方一节的模块列表、`docs/framework/CAPABILITIES.md` 的 `-recipe` 一行（还写着“正式 session 鉴权”）、`KNOWN-LIMITS.md`、`CHANGELOG.md`。
+4. 变异自检没做（§5）。
+5. 没有真实进程验证：配方工程 `make dev-run` 之后 curl 三步加一次真实握手没人跑过。game 模板与 game-demo 各做过一次（见 CHANGELOG），配方没有。
+
 它留下的三条提示：
 
 1. login 模块的 `Admit` 只拦承载服不符，不拦“换服在途”；所以才有 `recipe_entering.go.tmpl` 那条配方自己的进入前检查。
