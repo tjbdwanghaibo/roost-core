@@ -95,12 +95,10 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
   同步的白名单按顶层字段列，所以“别人看不到经验”就是别人的视图里不列 `ProfilePrivate`（[同步视图](README.md#同步视图谁看见哪些字段)）。存储键是
   `profile` / `profile_private`，里面是数字短键（`profile.1` 名字、`profile.2` 等级、`profile_private.1` 经验）。
 - **demo 只覆盖模块留给工程的一个文件**：升级邮件的奖励规则 `game/entities/player/mailbox_profile_rules.go`（见下一节）。
-- **demo 自己挂在这个组件上的两样东西不是档案**，各在自己的文件里、状态也在 demo 自己的 `PlayerDao` 字段里：公会副本
-  `guild_membership.go`（`GuildID` / `SetGuild`）与副本领奖账本 `dungeon_ledger.go`（`ClaimDungeonRun`、通关计数）。它们仍是
-  `ProfileComponent` 的方法：相关 handler 一直经 `IProfileEntity` 这个窄接口拿玩家，另立组件只多一个组件号。
+- **demo 的副本领奖账本** `dungeon_ledger.go`（`ClaimDungeonRun`、通关计数）仍挂在 Profile 上。联盟展示已由 alliance 模块的独立 AllianceComponent 提供，状态是 `PlayerDao.Alliance.ID`。
 - **两实体的 `AddExp` 是 demo 的**（Player 加经验、World 记全服累计，见[实体锁档与跨实体事务](#实体锁档与跨实体事务)），它调模块的
   `CheckAddExp` 与 `AddExp`。模块的 `ProfileAddExp` 只动 Player，不记 World 的累计，demo 的入口（端点、GM、副本结算）都不走它。
-- 生成步骤里锁 Profile 组件的 handler（`AddExp`、`ClaimDungeon`、`PlayerTeam`、公会的 `ShowGuild` / `PlayerGuild`）与背包的那些一样，
+- 生成步骤里锁 Profile 组件的 handler（`AddExp`、`ClaimDungeon`）与背包的那些一样，
   没有 `roost add handler` 骨架步骤（组件在最后的模块步骤才落盘），直接写文件。全部模块在同一步里装，号按列表顺序分配
   （`enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox`），新换用的模块加在末尾。
 
@@ -297,20 +295,20 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 
 ## 跨服务：公会 = alliance 服务（写走 RPC 或 saga，读走 Mirror）
 
-公会由独立的 alliance 服务独占（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：`Alliance`（联盟）与
+这条链路来自 [alliance 模块](../modules/alliance/README.md)，demo 只保留货币规则、PlayerOwners 启动适配和运维脚本。公会由独立的 alliance 服务独占（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：`Alliance`（联盟）与
 `AllianceMember`（每个玩家的成员守卫）是 Remote 托管实体、`service=alliance`，只有 alliance 进程能认领、能写。game 进程装着
 `remote_entity`，但只为它自己拥有的一种 Remote 实体——分区场景的组队 `Team`（`service=game`，无缝大世界原型，见
 [方案 §14](../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#14-合入-main2026-11-04)）；联盟两种 kind 对它是“别的服务的”
 （生成的 `ForeignKinds`），它的 Remote 运行时对它们拒绝认领与写（`entity.ErrRemoteKindNotOwned`），读经同一个 Mod 提供的 Mirror。
 `uses_rpcs: [alliance]` 让它拿到生成的 `rpcalliance` ClientMod（路由查找经 `RouteSource`）。所以 game 改公会只有两条路：
 
-- **只改公会**——`join_guild`（10022）、`leave_guild`（10027）：一次路由 RPC（`Join` / `Leave`，发往联盟的 owner 实例），
-  请求号 = 玩家 + 会话 + 帧序号（`guild.RequestID`），同一帧重发由服务端回执回放；答复带联盟新状态、版本与处理实例
-  `ServedBySID`。成功后端点在玩家自己的 Nest 事务里改显示字段（`ShowGuild`）。
-- **公会与玩家背包一起改**——`found_guild`（10021，建盟费 `guild.found_cost`，金币是道具 9001）、`donate_guild`（10028）、
-  `claim_guild_reward`（10029）：两个事务域，各一个 saga（`saga/alliance_found`、`alliance_donate`、`alliance_reward`）。端点
-  `StartGuildOp` 在玩家锁内做建议性检查后 `saga.EmitStart`，立即答“已受理”与交易号（`SagaKey`），结果用 `guild_op_status`（10030）查。
-  步骤在 `internal/service/<game>/alliance_saga.go`：Player 一侧是**原生步骤**（`GuildDebit` / `GuildCredit`，`durability=pipelined`，
+- **只改公会**——`join_alliance`、`leave_alliance`：一次路由 RPC（`Join` / `Leave`，发往联盟的 owner 实例），
+  请求号 = 玩家 + 会话 + 帧序号（`alliance.RequestID`），同一帧重发由服务端回执回放；答复带联盟新状态、版本与处理实例
+  `ServedBySID`。成功后端点在玩家自己的 Nest 事务里改显示字段（`ShowAlliance`）。
+- **公会与玩家背包一起改**——`found_alliance`（建盟费由 Controller.foundCost 指定，默认 100；demo 金币道具为 9001）、`donate_alliance`、
+  `claim_alliance_reward`：两个事务域，各一个 saga（`saga/alliance_found`、`alliance_donate`、`alliance_reward`）。端点
+  `StartAllianceOp` 在玩家锁内做建议性检查后 `saga.EmitStart`，立即答“已受理”与交易号（`SagaKey`），结果用 `alliance_op_status`查。
+  步骤在 `game/alliance/runtime/saga.go`：Player 一侧是**原生步骤**（`AllianceDebit` / `AllianceCredit`，`durability=pipelined`，
   回执在 `PlayerDao.SagaReceipts`，按 sid 路由到玩家绑定的 sid、属主核对与送礼相同）；公会一侧是 **Mongo 步骤**，步骤体调 alliance RPC，
   请求号 = 命令的 `IdempotencyKey`。
 
@@ -323,25 +321,27 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   公会步骤按 RPC 的四类答复回应：成功 → 下一步；业务拒绝（名字非法、已在联盟、不是成员、本周期已领）→ 不可重试的失败，
   协调器补偿已完成的步骤（建盟被拒即退费）；“没执行”“结果未知”→ 返回错误，步骤回滚重投、同一请求号再问一次，
   真执行过的由服务端回执答出，不会退了费又建成盟。
-- **读**——`guild_info`（10023）：“我的公会”取玩家自己的副本 `PlayerDao.GuildID`（`PlayerGuild` 读 handler，玩家锁内读），
+- **读**——`alliance_info`：“我的公会”取玩家自己的副本 `PlayerDao.Alliance.ID`（`PlayerAlliance` 读 handler，玩家锁内读），
   再读 `AllianceMirror`（`//roost:mirror` 只读 DTO，形状与 `alliancerule.View` 相同），用 Monotonic：缓存未命中时会回源加载
-  （Cached 不加载）；客户端带上写答复里的 `Version` 作 `MinVersion`，读到的不会比自己刚写的旧，镜像还没追上时答 `guild_busy`、
+  （Cached 不加载）；客户端带上写答复里的 `Version` 作 `MinVersion`，读到的不会比自己刚写的旧，镜像还没追上时答 `alliance_busy`、
   稍后再查。副本与 Mirror 只用于展示与预检（例如“已在公会”直接提示），写判断一律在服务里按权威（名单）做。
 
 守卫 `AllianceMember` 不同步给 game 进程（`snapshots=none`：它的提交只写守卫文档，没有 Remote 快照、L2 条目与广播）；game
-只镜像 `Alliance`。“玩家在哪个公会”是 `PlayerDao.GuildID`（`persist,sync`，附近玩家头顶也显示）：玩家自己的入会 / 退会 /
-建盟成功后在玩家事务里写（`ShowGuild`；建盟在 `guild_op_status` 看到 saga 完成时写），在线时收到成员变化通知更新，登录时
-（`EnterGame` 的 `refreshGuild`）对照该公会的 Mirror：公会不存在或名单里已没有这名玩家（离线时被踢 / 退出的通知没收到）就清掉；
-副本为 0 时向 alliance 问一次（只读 RPC `Membership`，按玩家守卫路由；守卫被占就先自愈再答），答出公会就在玩家事务里写回——
-离线时被批准入会的玩家下次登录就能看到公会。这次查询在登录流程的 RPC 阶段做（不在快池里等），超时 1 秒；失败只记日志、副本保持 0，
-不影响登录。
-这条路径有一个机器人场景 `guild_offline_join`（`loadtest/scenarios/demo.yaml`，`make dev-smoke` 的第二轮）：机器人建开放公会，
-第二个身份登录一次后断开，运维命令 `gm.player.join_guild {player_id, guild_id, request_id}`（game 进程，按玩家代发 `Join`；
+只镜像 `Alliance`。“玩家在哪个公会”是 `PlayerDao.Alliance.ID`（`persist,sync`，附近玩家头顶也显示）：玩家自己的入会 / 退会 /
+建盟成功后在玩家事务里写（`ShowAlliance`；建盟在 `alliance_op_status` 看到 saga 完成时写），在线通知也更新该副本。
+进入与重连经 enter 联动调用 `game/controllers/alliance.Controller.RefreshMembership`：在 IO 上下文先检查当前绑定，
+再向联盟服务查询 Membership（守卫先按权威名单自愈）。只有确定的实体不存在才清掉展示；超时、网络错误保留原值并记日志，不影响登录成功。
+整个对账共用一秒预算，改展示仍经 Player Nest。模块不依赖 Profile 组件。
+对账还从 Mirror 取得同一入盟批次的 HomeSID，调用 `RefreshHome` 比较 JoinRequestID 和旧 SID 后修正通知地址。
+联盟成员因此可以换服；HomeSID 仅为尽力通知提示，不是权限来源。account 与 RPC 没有跨服务事务，快速往返换服的短暂旧提示由下一次对账继续修正。
+PB 号由模块安装器分配，以生成的 msgid 为准，不再硬编码本文旧号。
+这条路径有一个机器人场景 `alliance_offline_join`（`loadtest/scenarios/demo.yaml`，`make dev-smoke` 的第二轮）：机器人建开放公会，
+第二个身份登录一次后断开，运维命令 `gm.player.join_alliance {player_id, alliance_id, request_id}`（game 进程，按玩家代发 `Join`；
 本进程仍有该玩家会话时不入会、答 `joined=false`，机器人重试它，所以“已离线”是一个事实而不是等出来的）把它拉进公会，
 再登录后“我的公会”必须就是这个公会。
 通知是 alliance 写答复成功之后由**服务层直接**按成员的原服 sid 经 Bus 发的 `alliance.member_notice`（不经 effect；
-`internal/service/<game>/alliance_notice.go`）：玩家在本进程在线才处理——改副本（离开只清“正显示这个公会”的，晚到的旧
-退盟不会盖掉新公会）并推 `GuildNoticePush`（10104）；至多一次，丢了不重发、只记日志与 `alliance.member_notice_lost_total`。
+`game/alliance/runtime/notices.go`）：玩家在本进程在线才处理——改副本（离开只清“正显示这个公会”的，晚到的旧
+退盟不会盖掉新公会）并推 `AllianceNoticePush`；至多一次，丢了不重发、只记日志与 `alliance.member_notice_lost_total`。
 
 alliance 服务不产生、不消费任何 effect（2026-11-05 晚起）：守卫是名单的缓存，只允许“过时地占着”、绝不“过时地空着”。跨实例两步写成功后服务直接调
 `ResolveGuard` / `ClearGuard` 收尾（尽力而为）；丢了，下一个碰到守卫被占的请求（Join / Found 的预约、`ClaimReward`、登录查询）先向持有它的
@@ -354,7 +354,7 @@ alliance 服务不产生、不消费任何 effect（2026-11-05 晚起）：守�
 多实例：`sh deploy/dev/second-alliance.sh start` 在同一台机器上起第二个 alliance（sid 1001、ops 9210）。建盟经队列组分到两个实例，
 每个联盟归接到它的实例；其余调用经路由登记找到 owner。缩容一台：在它的 ops 上 ① `alliance.stop_founding`（退出 `Found` 的队列组，
 新联盟只落到别的实例）② 反复 `alliance.transfer {"count": N, "to_sid": <另一个 sid>}` 直到它什么都不拥有（按 owner 枚举本实例持有的；一次调用在 `ops.admin_timeout` 前停下时答 `"more": true`，接着再调）③ 停进程。
-公会的 GM 读写（原 `gm.guild.*`）改为 alliance 进程自己的 `alliance.info` / `alliance.guard`，按权威读。
+公会的 GM 读写（原 `gm.alliance.*`）改为 alliance 进程自己的 `alliance.info` / `alliance.guard`，按权威读。
 
 ## 地图：Scene 是一个实体，它的 system 各自带锁
 
@@ -540,8 +540,9 @@ demo 在模块之上接的线：
 
 - **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
 - **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gameenter.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gameenter.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
-- **saga 步骤按当前绑定准入**（`gift_saga.go`、`alliance_saga.go` 的 `admitBound`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
-- **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：在公会里、在队伍里的玩家被拒绝（先退出），开着分区场景的服一律拒绝——这些东西记着“玩家在哪个服”，换服时还没有人替它们改。申请时查一次不够（客户端还连着、成员通知还在路上），所以分三处：申请时看档里的 `GuildID` / `TeamID`（尽早拒绝）；驻留表从标记起在写闸门拒绝他新的请求（`PlayerOwners.Admit`），受理之后 `Quiesce` 断开会话、等在途的请求执行完，模块随即在事务里复核——队伍在这里是可靠的（入队与写档同一笔事务）；离开钩子再向联盟服务问权威的成员卡（`Membership`：成员、入会预留在途、问不到都中止），因为档里的 `GuildID` 只是展示副本。用例 `rehome_checks_test.go` 用 channel 固定了“检查之后才入会”“标记之前准入的入会请求还在执行”“通知迟到、联盟已记着成员关系”三种交错。匹配队列里的票据、进行中的副本与对战、名下的建筑这里看不到，没有拦；运营给这样的玩家换服前要先确认。
+- **saga 步骤按当前绑定准入**（`gift_saga.go` 与 `game/alliance/runtime`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
+- **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：只保留尚不能交接 SceneActor 的分区场景限制，非法分区配置也拒绝迁服。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。matchmaking 同装时会保护排队意图；尚未接入的副本、对战与建筑仍须由工程提供迁移规则。
+- **联盟消费者启动**（`internal/service/game/alliance.go`）：Service.Init 先创建 PlayerOwners，再发布模块 PlayerBinding 适配并启动联盟 runtime。demo 在 manifest 关闭该 runtime 的自动接线，业务逻辑仍全部来自模块。App 先排空 Saga ingress，再关闭业务服务。
 
 用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
 
@@ -792,7 +793,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
 `MultiSync_AddExp(ctx, target, stats, amount)`，一个实体一个 id；`roost add endpoint` 只接单实体 handler，所以这个端点手写。
 
 公会名字的规则只写在 `alliancerule.ValidateName` 一处（空、全空白、超过 48 字节、含控制字符、非法 UTF-8 拒绝为
-`alliance_name`）：`found_guild` 端点第一步调用它，在扣建盟费、启动 saga 之前拒绝；alliance 服务的 `Found` 再按同一规则判一次。
+`alliance_name`）：`found_alliance` 端点第一步调用它，在扣建盟费、启动 saga 之前拒绝；alliance 服务的 `Found` 再按同一规则判一次。
 
 **敏感词、全服唯一是业务规则，框架不处理**（维护者 2026-10-17 决定），demo 也不实现，两个公会可以同名、靠联盟号区分。
 敏感词加在 `ValidateName` 同一处。需要全服唯一的名字时用框架已有的占名原语 `service/directory`（`wiring/directory` 装配，用法见

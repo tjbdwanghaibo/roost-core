@@ -12,16 +12,17 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	gamemailbox "{{MODULE}}/game/mailbox"
 	giftitem "{{MODULE}}/saga/gift_item"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -252,7 +253,7 @@ func (steps giftSteps) admitBound(ctx context.Context, command saga.Command) err
 }
 
 // admitByBinding turns the ownership table's answer about a player's current
-// binding into a routed step's verdict; the gift and guild steps share it.
+// binding into the gift step's verdict. Alliance uses the same PlayerOwners through its binding adapter.
 func admitByBinding(ctx context.Context, owners playerOwnership, who string, playerID int64) error {
 	admission, err := owners.AdmitBound(ctx, playerID)
 	switch {
@@ -398,4 +399,3 @@ func giftTarget(command saga.Command, pick func(gift.State) int64) (gift.State, 
 func refuse(reason string) saga.Completion {
 	return saga.Completion{Success: false, Retryable: false, Error: reason}
 }
-

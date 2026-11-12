@@ -1,0 +1,60 @@
+name: alliance
+summary: 独立联盟服务单写者、成员预约与对账、Mirror 读视图、建盟捐赠领奖三个路由 Saga
+requires: [bag]
+needs:
+  mods: [nest, saga, remote_mirror]
+  features: [protocol, entity, dao, errcode, saga]
+  uses_rpcs: [alliance]
+access:
+  transport: tcp
+  self_sync: true
+runtime:
+  package: game/alliance/runtime
+  start: Start
+services:
+  alliance:
+    mods: [dataengine, etcd, mongo, nats, nest, redis, remote_entity]
+    rpcs: [alliance]
+    entities: [Alliance, AllianceMember]
+entities: [Alliance, AllianceMember]
+entity: Player
+component: Alliance
+components: [AllianceRoster, AllianceGuard]
+state:
+  - field: Alliance
+    type: AllianceState
+    store: alliance
+    dao: persist,sync
+    comment: 玩家展示的联盟引用；权威名单归独立 alliance 服务。
+sagas:
+  - name: alliance_found
+    steps: [debit, found]
+    routed: [debit]
+    receipts: [Player]
+  - name: alliance_donate
+    steps: [debit, donate]
+    routed: [debit]
+    receipts: [Player]
+  - name: alliance_reward
+    steps: [claim, grant]
+    routed: [grant]
+    receipts: [Player]
+protocols: [FoundAlliance, JoinAlliance, AllianceInfo, LeaveAlliance, DonateAlliance, ClaimAllianceReward, AllianceOpStatus, AllianceNotice]
+errcodes: [alliance_request_invalid, alliance_name, alliance_missing, alliance_full, alliance_denied, alliance_membership, alliance_application, alliance_leader, alliance_amount, alliance_cooldown, alliance_war, alliance_expired, alliance_reward, alliance_busy, alliance_view_missing, alliance_moved, alliance_pending]
+verify:
+  packages: [./internal/rpc/alliance, ./game/handler, ./game/alliance/runtime, ./game/controllers/alliance, ./db]
+  run: ^TestAlliance
+  pass: 49
+with:
+  enter:
+    summary: 进入和重连后对账成员展示与 HomeSID，失败留待下次进入
+    verify:
+      packages: [./game/controllers/alliance]
+      run: ^TestWithAllianceEnter
+      pass: 2
+  rehome:
+    summary: Saga 原生步骤先在 IO 上下文核对当前绑定，换服中等待、已换服改投
+    verify:
+      packages: [./game/alliance]
+      run: ^TestWithAllianceRehome
+      pass: 2

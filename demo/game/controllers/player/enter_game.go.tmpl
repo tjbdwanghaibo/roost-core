@@ -7,13 +7,14 @@ import (
 	"log/slog"
 	"strconv"
 
-	apperrors "{{MODULE}}/internal/errors"
 	gameenter "{{MODULE}}/game/enter"
-	lifecycle "{{MODULE}}/game/lifecycle"
-	gamerehome "{{MODULE}}/game/rehome"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
 	playeraccess "{{MODULE}}/game/playeraccess"
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
@@ -91,7 +92,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 		if errors.Is(err, apperrors.ErrPlayerElsewhere) {
 			slog.Warn("enter_game: player is bound to another server", "player_id", context.PlayerID, "owner_sid", boundSID)
 			code, reason := errcode.ClientError(err)
-			return &pb.EnterGameResponse{Code:code, Reason:reason, OwnerSID:boundSID},nil
+			return &pb.EnterGameResponse{Code: code, Reason: reason, OwnerSID: boundSID}, nil
 		} else if sid, moved := gamerehome.OwnerSID(err); moved {
 			// 检查与接入之间他刚被换走（迁出表在建驻留记录的同一把锁下复核）。
 			code, reason := errcode.ClientError(err)
@@ -153,16 +154,6 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 		// just do not see the others until the next login.
 		slog.Warn("enter_game: player did not join the replicated scene", "player_id", context.PlayerID, "err", joinErr)
 	}
-	// The guild the player is shown in (PlayerDao.GuildID, the player's own
-	// persisted copy) is brought in line with the alliance service at every
-	// login, which makes up for membership notices the player missed while
-	// offline (alliance_notice.go in the service package): a guild shown is
-	// checked against its mirror (a leave or kick), and when none is shown
-	// the alliance service is asked which guild the player is in (an
-	// approval). Best effort, bounded (guildLookupTimeout) — the guild is the
-	// alliance service's, and a failure leaves the copy as it is without
-	// failing the login.
-	controller.refreshGuild(context)
 	// The enter module's hooks (game/enter): what other modules do when a
 	// player enters, each written as that module's glue with the enter module
 	// because both are installed. A failed hook is logged and does not fail the
@@ -183,7 +174,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	//     whose origin server was merged into this one, of the origin too
 	//     (OriginServerIDClaim). Without LazyBroadcast configured
 	//     (internal/service/mail/collaborators.go Broadcast()) it is a no-op.
-	//     A game with guild-wide broadcasts adds mail.GuildScope(guild) in that
+	//     A game with alliance-wide broadcasts adds mail.GuildScope(alliance) in that
 	//     function and pulls again when a membership notice says the player
 	//     joined or left.
 	gameenter.RunEntered(context.Context(), controller.registry, gameenter.Entered{

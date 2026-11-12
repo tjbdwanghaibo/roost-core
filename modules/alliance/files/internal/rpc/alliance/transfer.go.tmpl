@@ -1,0 +1,149 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// transferStopMargin is how much of the command's deadline (ops.admin_timeout)
+// a transfer leaves unused: once less than this remains it starts no further
+// move and reports More, so the operator command answers inside its deadline
+// whatever count asked for. One move takes tens of milliseconds.
+const transferStopMargin = 2 * time.Second
+
+// transferListPage is how many owned ids one listing page asks for.
+const transferListPage = 1000
+
+// TransferReport is what a transfer did.
+type TransferReport struct {
+	// Moved: ownership is now toSID's.
+	Moved []int64 `json:"moved"`
+	// Pending: alliances with a cross-instance war their enemy has not
+	// acknowledged yet (AllianceDao.WarAcks), left in place — this instance
+	// is the one asking the enemy. Run the transfer again once the enemy
+	// answered (usually at once; while its instance is unreachable, as soon
+	// as it is back). Not a correctness condition: a wait that does move
+	// (declared after this check) is asked for by the new owner.
+	Pending []int64 `json:"pending,omitempty"`
+	// Failed: entity id -> why; nothing was moved for them.
+	Failed map[int64]string `json:"failed,omitempty"`
+	// More: the command's deadline came near and it stopped early; the
+	// entities not reached are still this instance's. Run it again.
+	More bool `json:"more,omitempty"`
+}
+
+// TransferOwnership moves alliances and guards this instance owns to toSID
+// (plan §2.7: scaling out, or emptying an instance before it is stopped):
+// the entities in ids (full entity ids, AllianceTarget / GuardTarget), or —
+// ids empty — the first count of the entities this instance owns, alliances
+// first, listed by owner from the ownership records (Deps.Owned): the cost is
+// what this instance owns, not every alliance in the store. One
+// TransferRemoteOwnership per entity: it drains the writes already admitted
+// here and fences this instance before toSID may write; toSID loads the
+// entity on the first request routed to it. Only the current owner can
+// transfer, so the command runs on the instance that gives the entities away.
+//
+// It is bounded by ctx: with less than transferStopMargin left it stops and
+// reports More (moved so far stays moved); run it again for the rest. An
+// owned id may be an empty claim (an alliance whose founding was refused):
+// it moves like any other, and stays an entity that does not exist.
+//
+// While it runs, a write to an entity being moved answers "not executed";
+// after it, this instance's route check redirects to toSID and the route
+// registration names toSID once it has loaded the entity. Callers need no
+// configuration change.
+//
+// An alliance whose cross-instance war still waits for the enemy is not moved
+// (Pending): its owner, which has been asking, finishes the wait first. The
+// check is a read before the move and does not hold off a declaration: one
+// committed between the check and the fence moves with the alliance, the old
+// owner's ask stops once it sees the alliance gone, and the new owner's war
+// scan picks the wait up (ScanWars, within warScanInterval). A guard with an
+// open reservation moves like any other: its deadline, armed in this process,
+// heals it through the route RPC wherever it is, and a lost deadline is made
+// up by the next request that finds it held.
+func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int, toSID int32) (TransferReport, error) {
+	report := TransferReport{Failed: map[int64]string{}}
+	switch {
+	case toSID <= 0 || toSID == s.deps.LocalSID:
+		return report, fmt.Errorf("%w: target sid %d", ErrRequestInvalid, toSID)
+	case (len(ids) == 0) == (count <= 0):
+		return report, fmt.Errorf("%w: give either entity ids or a positive count", ErrRequestInvalid)
+	case len(ids) == 0 && s.deps.Owned == nil:
+		return report, fmt.Errorf("alliance: transfer by count needs the owned-entity listing")
+	}
+	if len(ids) == 0 {
+		var err error
+		if ids, err = s.ownedEntities(ctx, count); err != nil {
+			return report, err
+		}
+	}
+	for _, id := range ids {
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < transferStopMargin {
+			report.More = true
+			break
+		}
+		if !entity.MatchEntityID(id, alliance.EntityKindAlliance) && !entity.MatchEntityID(id, alliance_member.EntityKindAllianceMember) {
+			report.Failed[id] = "not an alliance or a guard entity id"
+			continue
+		}
+		lease, found, err := s.deps.Owners.GetRemoteOwnership(ctx, id)
+		switch {
+		case err != nil:
+			report.Failed[id] = err.Error()
+			continue
+		case !found || lease.OwnerSid != s.deps.LocalSID:
+			report.Failed[id] = fmt.Sprintf("not owned by this instance (owner %d)", lease.OwnerSid)
+			continue
+		}
+		if entity.MatchEntityID(id, alliance.EntityKindAlliance) {
+			acks, err := s.warAcks(ctx, id)
+			if err != nil {
+				report.Failed[id] = err.Error()
+				continue
+			}
+			if len(acks) > 0 {
+				report.Pending = append(report.Pending, id)
+				continue
+			}
+			// Whatever is declared from here until the transfer fences this
+			// instance moves with the alliance; the new owner's war scan
+			// picks it up in its tenure, and so does this instance's if the
+			// alliance ever comes back (pickedUp).
+		}
+		if _, err := s.deps.Owners.TransferRemoteOwnership(ctx, id, toSID); err != nil {
+			report.Failed[id] = err.Error()
+			continue
+		}
+		report.Moved = append(report.Moved, id)
+	}
+	return report, nil
+}
+
+// ownedEntities is the first count alliances, then guards, whose ownership
+// record names this instance: pages of the owner listing (an index read per
+// page), so a count of thousands costs a few reads, not a scan of the store.
+func (s *Service) ownedEntities(ctx context.Context, count int) ([]int64, error) {
+	var owned []int64
+	for _, kind := range []entity.EntityKind{alliance.EntityKindAlliance, alliance_member.EntityKindAllianceMember} {
+		after := int64(0)
+		for len(owned) < count {
+			ids, next, err := s.deps.Owned.ListOwnedRemoteEntities(ctx, []entity.EntityKind{kind}, after, min(transferListPage, count-len(owned)))
+			if err != nil {
+				return nil, fmt.Errorf("alliance: list owned entities: %w", err)
+			}
+			owned = append(owned, ids...)
+			if next == 0 {
+				break
+			}
+			after = next
+		}
+	}
+	return owned[:min(len(owned), count)], nil
+}

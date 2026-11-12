@@ -1,0 +1,58 @@
+package alliance
+
+import (
+	"fmt"
+
+	allianceentity "{{MODULE}}/game/entities/alliance"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitremote "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+)
+
+// Controller 只持有 RPC、Mirror 与 Nest 客户端；不会在 game 取得 Alliance 的写锁。
+type Controller struct {
+	registry        *app.Registry
+	nestClient      nest.Client
+	alliances       rpcalliance.Alliance
+	allianceMirrors *entity.RemoteMirrorReader[allianceentity.AllianceMirror]
+	sid             int32
+	foundCost       int32
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("alliance: registry required")
+	}
+	client, ok := app.Lookup[nest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("alliance: nest unavailable")
+	}
+	remote, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.CapabilityName)
+	if !ok || remote == nil {
+		return nil, fmt.Errorf("alliance: RPC client unavailable")
+	}
+	source, err := kitremote.MirrorSource(registry)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := allianceentity.NewAllianceMirrorReader(source)
+	if err != nil {
+		return nil, err
+	}
+	var identity app.ServiceIdentity
+	if registry.Config() == nil {
+		return nil, fmt.Errorf("alliance: service config required")
+	}
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return nil, err
+	}
+	if identity.Sid <= 0 {
+		return nil, fmt.Errorf("alliance: positive sid required")
+	}
+	// 归工程所有的价格规则；普通入会/退出仅 RPC，不使用 Saga。
+	return &Controller{registry: registry, nestClient: client, alliances: remote, allianceMirrors: reader, sid: identity.Sid, foundCost: 100}, nil
+}

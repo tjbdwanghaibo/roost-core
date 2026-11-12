@@ -2,6 +2,7 @@ package player
 
 import (
 	"fmt"
+
 	db "{{MODULE}}/db"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -29,7 +30,7 @@ func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacke
 // ProfilePrivate（等级内经验）只给本人——所以“别人看不到经验”靠的是不把 ProfilePrivate 列进他们的视图。字段 × 视图：
 //
 //	字段                                   default（本人）  near（他人）  team（队友）  far  self（分区场景本人）
-//	profile（名字、等级）、equipment、guild_id  ✓            ✓             ✓             profile      ✓
+//	profile（名字、等级）、equipment、alliance  ✓            ✓             ✓             profile      ✓
 //	pos_x、pos_y、scene_id                   ✓               ✓             ✓             ✓    —
 //	facing                                   ✓               ✓             ✓             —    —
 //	cell_hp、cell_max_hp（血条）             ✓               ✓             ✓             —    —
@@ -43,7 +44,7 @@ func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacke
 type playerSyncPacker struct{ player *Player }
 
 // playerPublicFields 是别的玩家看得见的字段（near / team）。
-var playerPublicFields = []string{"Profile", "PosX", "PosY", "SceneID", "Facing", "Equipment", "GuildID", "CellHP", "CellMaxHP"}
+var playerPublicFields = []string{"Profile", "PosX", "PosY", "SceneID", "Facing", "Equipment", "Alliance", "CellHP", "CellMaxHP"}
 
 var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
@@ -54,7 +55,7 @@ var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFiel
 	// state. Not the position and not the HP — the scene actor's mirror carries those, and the partitioned scene's
 	// position and HP live on the cell; not the attribute maps either (which combat field lives where in a
 	// partitioned scene waits on the maintainer, FEATURE §11).
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Profile", "ProfilePrivate", "Bag", "Wallet", "Equipment", "GuildID"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Profile", "ProfilePrivate", "Bag", "Wallet", "Equipment", "Alliance"}, Priority: 0},
 )
 
 // SyncViews 是 Player 的视图集（不可变，可共享）：场景把它交给 Interest（policy.InterestConfig.ViewSets）在构造时核对

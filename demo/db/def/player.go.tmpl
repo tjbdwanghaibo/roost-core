@@ -57,26 +57,6 @@ type PlayerDao struct {
 	// see game/leaderboard for why the rank service's request ring cannot be the
 	// ledger for this.
 	DungeonClears map[int64]int64 `dao:"persist,map=fast" store:"dungeon_clears"`
-	// GuildID is the guild this player is shown in, or 0 — the player's own
-	// copy of their membership, not the authority.
-	//
-	// Membership has one authority: the alliance's roster, owned and written
-	// by the alliance service (decision 1 of the alliance plan,
-	// docs/maintenance/FEATURE-2026-11-04-alliance-service.md in roost-core).
-	// This copy is written in the player's own transaction after the player's
-	// join / leave / founding succeeded, by the alliance service's membership
-	// notices while the player is online
-	// (internal/service/{{GAME_SERVICE}}/alliance_notice.go), and at login
-	// hidden when the guild's mirror no longer has the player, or — when it
-	// shows none — set from the alliance service's Membership answer (a join
-	// approved while the player was offline). It is persisted
-	// because nothing else on the game side knows the player's guild: the
-	// membership guards are not mirrored to game servers (AllianceMember
-	// declares snapshots=none). It may drift from the roster (a lost notice);
-	// the game's guild endpoints use it only for advisory pre-checks and the
-	// alliance service decides every write on its roster. Replicated (sync)
-	// so nearby players see the guild.
-	GuildID int64 `dao:"persist,sync" store:"guild_id"`
 	// SagaReceipts is where the gift saga's native steps (debit and its
 	// refund) keep their receipts: operation (saga.Command.IdempotencyKey) ->
 	// the framework's encoding of saga.StepReceipt. The step writes it in the

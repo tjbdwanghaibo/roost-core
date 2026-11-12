@@ -25,6 +25,7 @@
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 25 |
 | [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
+| [alliance](alliance/README.md) | 独立联盟服务单写者、路由 RPC / 三个跨域 Saga、Mirror 展示与换服惰性校正 | bag；代办 saga / Mirror 与 alliance 服务 | AllianceDao、AllianceMemberDao、PlayerDao.Alliance / SagaReceipts | 49 |
 | [team](team/README.md) | Remote 共享权威队伍，六个 PB 端点；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 27 |
 | [matchmaking](matchmaking/README.md) | 单人/整队按服分池；持久意图、取消竞态、结果补查、组队冻结 | team、matchroom；托管 match | PlayerDao.Matchmaking | 16 |
 | [matchroom](matchroom/README.md) | MatchID 幂等移交到 Room，固定准入名单、掉线保座 | room、Mongo | RoomDao.Matchroom、持久房号映射 | 12 |
@@ -52,6 +53,7 @@
 
 | 联动 | 做什么 | 场景数 |
 | --- | --- | --- |
+| alliance + enter / rehome | 进入/重连对账与 HomeSID 条件修正 / 原生步骤按当前绑定准入 | 各 2 |
 | matchmaking + rehome | 排队与换服双向互斥，未知结果继续保持屏障 | 2 |
 | team + rehome | 在队伍中拒绝换服，换服意图未清除前拒绝建队/入队 | 2 |
 | chat + enter | 玩家进入游戏时加进世界频道的在线名单（`game/chat/chat_enter.go`） | 2 |
@@ -74,7 +76,7 @@
 | combat + scene / equipment | 公开战斗投影 / 真实换装对冻结输入的影响 | 各 2 |
 | terrain + monster | 关图清本图怪物；失败保留资源与事实供重试 | 2 |
 
-以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox`、`skillbook`、`rehome`、`attribute`、`equipment`（连带 `wallet`）。
+以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox`、`skillbook`、`rehome`、`attribute`、`equipment`、`team`、`alliance`（连带 `wallet`）。
 
 ## 使用
 
@@ -140,7 +142,7 @@ runtime:
 
 App 在 Init 失败后调用 Shutdown，适配层只清理已经启动（包括部分启动失败）且提供停止函数的模块；业务 Init 被调用后即纳入清理。停机函数必须等待真实退出并遵守 ctx，返回错误时停止继续关闭依赖，保留回调；再次 Shutdown 从未完成处继续，不重复关闭已成功退出的模块。模块停止共享业务服务的停机时间预算，不自动增加超时时间。失败不会自动重启；当前一个服务实例只允许一轮 Init → Shutdown，调用方不能并发调用生命周期。
 
-模块只安装到一个业务服务。依赖必须属于同一服务；跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
+模块的玩家侧只安装到一个业务服务，依赖属于同一服务；模块也可声明自己独占的新业务服务（如 alliance）。跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
 ### 清单
 
@@ -153,6 +155,7 @@ needs:
   mods: [nest]               # 业务服务必须有的 Mod
   features: [protocol, entity, dao, errcode]
   uses: []                   # 业务服务必须 uses 的托管框架服务（rank、mail……）
+  uses_rpcs: []               # 模块新增的业务 RPC，安装器接到目标业务服务
 entity: Player               # 状态与组件挂在哪个实体上
 entities: []                 # 自带实体名字；与挂靠既有实体分开，见上文
 state:                       # 追加到主 DAO 末尾的顶层字段
@@ -162,6 +165,9 @@ state:                       # 追加到主 DAO 末尾的顶层字段
     dao: persist,sync
     comment: 写进 DAO 定义的注释
 component: Wallet            # 挂在实体上的组件
+components: []               # 自带实体的其他组件名，安装时分配类型号
+services: {}                 # 模块独占的新服务；mods/rpcs/entities，已有同名服务拒绝接管
+sagas: []                    # name/steps/routed/receipts；定义与实体回执原子安装，业务由 runtime 提供
 timer_types: []              # 实体内的持久定时器类型名，例如 turn 的 [TurnDeadline]
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字

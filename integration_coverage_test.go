@@ -533,7 +533,7 @@ var generatedRealDependencyEntries = []struct {
 }{
 	{"codegen/internal/entity/testdata/dataengine", "scripts/test-dataengine-generated.sh", "^TestGeneratedDataEngine"},
 	{"codegen/internal/entity/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
-	{"demo/internal/service/alliance/admin_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestStopFoundingSendsNewAlliancesToTheOtherInstances$"},
+	{"modules/alliance/files/internal/service/alliance/admin_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances$"},
 	{"modules/purchase/files/game/purchase/queue_integration_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseRedis"},
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
 	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},

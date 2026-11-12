@@ -25,7 +25,7 @@
 
 ## 2. 验证节奏
 
-当前优先级（维护者 2026-11-12）：先完成 R7，再完成 R8 gift、R10 alliance；R9 activity、R11 lockstep 保留待做。本轮不扩展这两个延期模块，§5 / §6 的既有欠账仍单独登记。
+当前优先级（维护者 2026-11-12 更正）：R7 已完成；先完成 R10 alliance，再完成 R9 activity。R9 是可供多个业务复用的核心时间阶段框架；R8 gift 不急做，R11 lockstep 仍待做。§5 / §6 的既有欠账单独登记。
 
 维护者 2026-11-12：“测试最终再跑，我还会继续开发”。每一步只跑与改动直接相关的检查（模块自己的 `roost module verify`、`go test -run 'TestModuleCatalog|TestModuleWith' ./codegen/internal/roost`、根包 `go test -count=1 .`、`python3 scripts/check-doc-anchors.py`）。完整测试（`scripts/test-modules-generated.sh`、`TestDemo|TestModule`、重新生成 game-demo 跑全量、全仓 `go test ./...`）留到最后统一跑一次；没跑的在提交说明与报告里写明。
 
@@ -94,7 +94,7 @@
 
 ### R7. team + matchmaking + matchroom（一起设计）
 
-已完成（实现与定向验收，2026-11-12）：team27、matchmaking16、matchroom12、room22、rehome40与两组联动各2，组合121 PASS / 0 SKIP；9个变异与两轮 race。turn-pvp 真实 TCP/Robot 7场景通过，demo 队伍迁移定向测试与编译通过。[证据与边界](evidence/module-matching-20261112/README.md)。完整矩阵、真实存储/跨进程和 §5/§6 保留，不以本批替代。
+已完成（提交 `7e62d6f6`，实现与定向验收）：team27、matchmaking16、matchroom12、room22、rehome40与两组联动各2，组合121 PASS / 0 SKIP；9个变异与两轮 race。turn-pvp 真实 TCP/Robot 7场景通过，demo 队伍迁移定向测试与编译通过。[证据与边界](evidence/module-matching-20261112/README.md)。完整矩阵、真实存储/跨进程和 §5/§6 保留，不以本批替代。
 
 - **team**：队伍实体（game-demo 的 `game/entities/team`）；建队、入队、离队、队长；入队与写玩家档在同一笔 `[Team, Player]` 事务里（rehome 的排空依赖这一点，不能改成两笔）。
 - **matchmaking**：排队、成局，经托管的 match 服务（demo 的 `game/matchmaking`、`internal/service/game/matchmaker.go`）。
@@ -127,6 +127,8 @@
 - 活动定义做成配置表；零配置时没有任何活动在跑。定向验收覆盖边界时刻、延迟触发、重启恢复、重复投递、提交失败回滚及无排行 / 邮件的纯阶段活动。
 
 ### R10. alliance（联盟）
+
+已完成（实现与定向验收，2026-11-12）：49 条基础、enter/rehome 各 2 条联动；组合 158 PASS / 0 SKIP、6 个变异与两轮 race、安装失败回滚及 demo 相邻链路通过。独立单写者、三个跨域 Saga、Player 展示、当前绑定准入与 HomeSID 条件修正；demo 删除重复实现，仅保留规则和驻留表适配。完整矩阵及 §5/§6 真实联合验收不在本批。见[模块说明](../../modules/alliance/README.md)、[证据](evidence/module-alliance-20261112/README.md)。
 
 - **维护者明确（2026-11-12）**：模块、服务、目录和新业务 API 统一使用 `alliance`，不新增 `guild` 别名。迁移 demo 时一起处理其旧字段与协议命名；不为未上线旧工程保留兼容层。
 - 最重的一项：独立进程的联盟服务独占联盟实体，写走路由 RPC 或 saga（demo 的 `saga/alliance_*`、`internal/service/alliance/`），game 读 Mirror。

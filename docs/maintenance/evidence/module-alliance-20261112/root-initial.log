@@ -1,0 +1,151 @@
+--- FAIL: TestTrackedMarkdownRelativeLinksResolve (0.11s)
+    doc_links_gate_test.go:88: 1 relative links in tracked Markdown point at nothing tracked (fix the path, or add a reasoned exemption to docLinkExemptSources):
+          modules/alliance/README.md:31: ../../docs/maintenance/evidence/module-alliance-20261112/README.md
+--- FAIL: TestGeneratedProjectRealDependencyTestsHaveAnEntry (0.19s)
+    integration_coverage_test.go:785: TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances (modules/alliance/files/internal/service/alliance/admin_test.go.tmpl) needs real dependencies but no entry runs it: add it to a script's -run in generatedRealDependencyEntries (hooked into dataengine-env.sh test) or name its dedicated entry in generatedRealDependencyElsewhere
+    integration_coverage_test.go:790: entry scripts/test-demo-generated.sh -run '^TestStopFoundingSendsNewAlliancesToTheOtherInstances$' matches no real-dependency test in demo/internal/service/alliance/admin_test.go.tmpl: an empty cell reports green for nothing
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestAByteSliceFieldReadsAsACopyAndRoundTripsAsBinary
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestAFreshlyConstructedDaoPropagatesNestedChanges
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestAMapOfByteSlicesNeverSharesItsBytesWithTheCaller
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestANestedValueCanBeMovedBetweenKeys
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestANestedValueCannotBeSharedBetweenDaos
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestANestedValueHasOneParentAtATime
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestANoCollectionDaoHasNoStorageCapability
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestANoCollectionDaoReplicatesAndNeverPersists
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestANoCollectionDaoRollsBackInMemory
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestATransientFieldIsInTheStateSnapshot
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestATransientFieldNeverReachesTheCommitRecordOrSync
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestATransientFieldRollsBackWithTheTransaction
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestClearingAPointerFieldDetachesTheValue
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestFullFieldDominatesManualPaths
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestGeneratedRangeXContract
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestNestedChildChangeMarksItsParentThroughEveryEntry
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestNestedChildNotificationOwnership
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestNestedValuesSurviveTheCommitDocument
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestNestedValuesSurviveTheRollbackSnapshot
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestNilNestedPointersStayNull
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestNumericStorageKeysRealMongo
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestNumericStorageKeysRoundtrip
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestOldStoredKeysAreNotLoadedAndTheNextFullWriteDropsThemRealMongo
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestPersistPathsBinaryIsWholeValue
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestPersistPathsNullContainersRealMongo
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestPersistPathsPressure
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestPersistPathsReadFinalValues
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestPersistPathsRealMongo
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestPersistPathsRollbackAndSyncIndependence
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestPersistPathsUnsafeKeyAndBudgetFallback
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestRebindingTheSameSlotIsAccepted
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestRemoteEnvelopePayloadDropsOldStoredKeysRealMongo
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestReplacedChildStopsMarkingTheOldParent
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestReplacedNestedValueStillNotifies
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestRestoredChildStillReachesTheCommitRecord
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestRestoredDescendantReachesCommit
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestSyncFieldTableAgreesWithWhatTheSettersMark
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestSyncPBZeroEmptyAndNullableFields
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestThePersistDocumentHasOneShapeAndRoundTrips
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestTopLevelMapValueOwnership
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestTopLevelPointerFieldOwnership
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestTopLevelSliceItemOwnership
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestTrackedChangesRollbackAndLaterWrite
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestTrackedIndexedMutationsAndRollback
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestTrackedInvalidPatchIsAtomic
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestTrackedSyncChanges
+    integration_coverage_test.go:800: discovered: codegen/internal/dao/testdata/runtime TestUnknownStoredKeysWarnOncePerKeyAndAreNotLoaded
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineAdminUnload
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineColdLoadFillsADAOAddedLater
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineColdRequestWaitsForPendingProjection
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineCreateInHandlerIsTransactional
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineCreatedEntityRecoversAfterLostAckRestart
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineCreatedEntityWritesEveryDAOAndReloads
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineCrossCreateResolvesOnRealWAL
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineMultiEntity
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineNestedIsolatedWriteToOuterSnapshotIsRefused
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineNestedIsolatedWriteUnderMemoryOuterCommits
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineOuterCommitAfterFenceIsRefusedBeforeWAL
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEnginePressure
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineProcessLifecycle
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineRecreateAfterDeleteSameID
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineReleaseHookPanicAfterCommitCarriesSentinel
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineReloadDoesNotResurrectPendingTombstone
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineReloadWaitsForProjection
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/dataengine TestGeneratedDataEngineRolledBackReleaseHookPanicKeepsBusinessError
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/nestgame TestHeartbeatDriverTicksGeneratedUnits
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/nestgame TestNestGameLoad
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/nestgame TestSpatialComponentNestCommitAndRollback
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteCloseFailureAfterCommitCarriesSentinel
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteDurableRejectionOfUnpersistedEntityRemovesIt
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteDurableRejectionReloadsSubscribers
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteEntityWritableAfterUnlockFailure
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteHandlerEmitsEffectsWithTheRemoteWrite
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteMirrorGuildSummary
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteMirrorLocal
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteMirrorLocalProcess
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteMirrorReaderProcess
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteNestFlow
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteNestedIsolatedTransactionIsRefused
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemotePipelinedRemoteRecordIsFsyncedBeforeProjection
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemotePrepareFailureAbortsWithoutShortContinuation
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteRecreateAfterDeleteIsRefused
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteReleaseHookPanicAfterDurableCommitStillCommits
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteRolledBackReleaseHookPanicKeepsBusinessError
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteShortWorkerDeleteIsDefiniteRejection
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteStrictConfirmDeadlineDefersPostCommit
+    integration_coverage_test.go:800: discovered: codegen/internal/entity/testdata/remoteflow TestGeneratedRemoteUnknownOutcomeAfterNestStopIsNotRunOffThePool
+    integration_coverage_test.go:800: discovered: codegen/internal/roost TestGateGeneratedBusinessConsumer
+    integration_coverage_test.go:800: discovered: codegen/internal/roost TestGeneratedSagaNativeStepsAndEffectConsumer
+    integration_coverage_test.go:800: discovered: codegen/internal/roost/testdata/gate TestGeneratedGateNestDAOAndWAL
+    integration_coverage_test.go:800: discovered: codegen/internal/roost/testdata/gate TestGeneratedGateProjectionCapabilities
+    integration_coverage_test.go:800: discovered: codegen/internal/roost/testdata/saga_native/internal/bootstrap TestSagaNativeStepsAndEffectRealDependencies
+    integration_coverage_test.go:800: discovered: demo/db/migrations/player_test.go.tmpl TestPlayerMigrationRealMongo
+    integration_coverage_test.go:800: discovered: demo/game/controllers/player/finish_dungeon_test.go.tmpl TestDungeonClearsBoardCountsEachRunOnceRealRedis
+    integration_coverage_test.go:800: discovered: demo/internal/service/game/activity_test.go.tmpl TestActivityBoardKeepsTheLatestCumulativeScore
+    integration_coverage_test.go:800: discovered: demo/internal/service/game/terrain_building_test.go.tmpl TestBuildingRestartRealMongo
+    integration_coverage_test.go:800: discovered: demo/internal/service/game/terrain_test.go.tmpl TestTerrainEditLedgerRealMongo
+    integration_coverage_test.go:800: discovered: demo/internal/service/game/terrain_test.go.tmpl TestTerrainRestartRealMongo
+    integration_coverage_test.go:800: discovered: modules/alliance/files/internal/service/alliance/admin_test.go.tmpl TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances
+    integration_coverage_test.go:800: discovered: modules/purchase/files/game/purchase/queue_integration_test.go.tmpl TestPurchaseRedisBoundedDrainAndReplay
+    integration_coverage_test.go:800: discovered: modules/purchase/files/game/purchase/queue_integration_test.go.tmpl TestPurchaseRedisConcurrentCallbackUsesOneSequence
+    integration_coverage_test.go:800: discovered: modules/purchase/files/game/purchase/queue_integration_test.go.tmpl TestPurchaseRedisRefusedWriteDoesNotAllocate
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2ECrashTakeoverAndScaleIn
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2EGamePlayers
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2EMirrorRevalidation
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2EOneAllianceUnderRace
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2EPreloadOrder
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2ERPCConcurrency
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2ERedisOutage
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2ERejectedFoundingAfterRestart
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2ERobotOfflineJoin
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2EShortPerf
+    integration_coverage_test.go:800: discovered: scripts/testdata/alliance-e2e TestAllianceE2EWarScanStartup
+    integration_coverage_test.go:800: discovered: scripts/testdata/auto-chess/persistence TestAutoChessRealCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/card-rpg/persistence TestCardRPGRealCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/idle-sim/persistence TestIdleSimRealCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/merge-casual/persistence TestMergeCasualRealCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/mmorpg/persistence TestMMORPGRealCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/mmorpg/persistence TestMMORPGRealPersistenceAcrossProcesses
+    integration_coverage_test.go:800: discovered: scripts/testdata/moba/active TestMOBARealActiveRoundCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/moba/active TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL
+    integration_coverage_test.go:800: discovered: scripts/testdata/moba/active TestMOBARealCrossSIDHostRouting
+    integration_coverage_test.go:800: discovered: scripts/testdata/moba/persistence TestMOBARealSettlementAcrossProcesses
+    integration_coverage_test.go:800: discovered: scripts/testdata/party-room/persistence TestPartyGameRealCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/slg/alliance TestAllianceReceiverBudgetRejectsLateSuccess
+    integration_coverage_test.go:800: discovered: scripts/testdata/slg/alliance TestAllianceReportWindowFollowsTheCoordinatorReservationTTL
+    integration_coverage_test.go:800: discovered: scripts/testdata/slg/alliance TestSLGAllianceActivity
+    integration_coverage_test.go:800: discovered: scripts/testdata/slg/alliance TestSLGAlliancePlayerDelivery
+    integration_coverage_test.go:800: discovered: scripts/testdata/slg/alliance TestSLGAllianceRPCReceiverBudget
+    integration_coverage_test.go:800: discovered: scripts/testdata/slg/alliance TestSLGAllianceRemoteDelivery
+    integration_coverage_test.go:800: discovered: scripts/testdata/survival-extraction/persistence TestSurvivalExtractionRealCrashRecovery
+    integration_coverage_test.go:800: discovered: scripts/testdata/tower-defense/persistence TestTowerDefenseRealCrashRecovery
+--- FAIL: TestObservabilityDocNamesExistingMetrics (0.41s)
+    metric_names_gate_test.go:923: docs/framework/OBSERVABILITY.md 指标清单第 299 行: `alliance.guard_finish_lost_total` names no metric written anywhere in the source
+    metric_names_gate_test.go:923: docs/framework/OBSERVABILITY.md 指标清单第 300 行: `alliance.guard_healed_total` names no metric written anywhere in the source
+    metric_names_gate_test.go:923: docs/framework/OBSERVABILITY.md 指标清单第 301 行: `alliance.member_notice_lost_total` names no metric written anywhere in the source
+    metric_names_gate_test.go:923: docs/framework/OBSERVABILITY.md 指标清单第 302 行: `alliance.war_ack_retry_total` names no metric written anywhere in the source
+--- FAIL: TestDashboardsQueryExistingMetricsAndLabels (0.42s)
+    metric_names_gate_test.go:975: docs/framework/OBSERVABILITY.md 指标清单第 299 行: `alliance.guard_finish_lost_total` names no metric written anywhere in the source
+    metric_names_gate_test.go:975: docs/framework/OBSERVABILITY.md 指标清单第 300 行: `alliance.guard_healed_total` names no metric written anywhere in the source
+    metric_names_gate_test.go:975: docs/framework/OBSERVABILITY.md 指标清单第 301 行: `alliance.member_notice_lost_total` names no metric written anywhere in the source
+    metric_names_gate_test.go:975: docs/framework/OBSERVABILITY.md 指标清单第 302 行: `alliance.war_ack_retry_total` names no metric written anywhere in the source
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	10.158s
+FAIL

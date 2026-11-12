@@ -1,0 +1,69 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+)
+
+// handlerAllianceRemove unseats a player (leave: actor == target; kick: the
+// leader) when their guard is on the same instance, clearing the guard in the
+// same transaction. The answer names the membership that ended (Member) for
+// the service's notice.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceRemove(target alliance.IAllianceRosterEntity, member alliance_member.IAllianceGuardEntity, requestID string, actorID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, guard := target.AllianceRosterComp(), member.AllianceGuardComp()
+	targetID := guard.PlayerID()
+	var left alliancerule.MemberChange
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := roster.CheckRemoval(actorID, targetID); err != nil {
+			return targetID, err
+		}
+		joinRequestID, homeSID := roster.Remove(targetID)
+		guard.Clear(roster.AllianceID(), joinRequestID, nowUnix)
+		left = removal(actorID, targetID, homeSID)
+		return targetID, nil
+	})
+	reply, err := answer(roster, outcome, err)
+	reply.Member = left
+	return reply, err
+}
+
+// handlerAllianceRemoveDetached unseats a player whose guard is on another
+// instance. The service clears the guard there with a direct ClearGuard
+// afterwards (best effort: a lost one leaves the guard stale-occupied until
+// the next request that finds it held heals it from this roster). The answer
+// carries the membership that ended (Ended), which ClearGuard names; a replay
+// does not (the first delivery already tried, and healing covers a loss).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceRemoveDetached(target alliance.IAllianceRosterEntity, requestID string, actorID int64, targetID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRosterComp()
+	var ended string
+	var left alliancerule.MemberChange
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := roster.CheckRemoval(actorID, targetID); err != nil {
+			return targetID, err
+		}
+		joinRequestID, homeSID := roster.Remove(targetID)
+		ended = joinRequestID
+		left = removal(actorID, targetID, homeSID)
+		return targetID, nil
+	})
+	reply, err := answer(roster, outcome, err)
+	reply.Ended, reply.Member = ended, left
+	return reply, err
+}
+
+// removal is the membership change of unseating targetID: they left, or the
+// leader (actorID) kicked them.
+func removal(actorID, targetID int64, homeSID int32) alliancerule.MemberChange {
+	change := alliancerule.MemberLeft
+	if actorID != targetID {
+		change = alliancerule.MemberKicked
+	}
+	return alliancerule.MemberChange{PlayerID: targetID, HomeSID: homeSID, Change: change}
+}

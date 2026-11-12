@@ -1,0 +1,83 @@
+package allianceruntime
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/alliancerule"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+type allianceNoticePush interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	ActiveSessions(playerID int64) int
+}
+
+type allianceNotices struct {
+	nest corenest.Client
+	push allianceNoticePush
+}
+
+func installAllianceNotices(registry *app.Registry) error {
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return errors.New("alliance notices: nest client is unavailable")
+	}
+	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || transport == nil {
+		return errors.New("alliance notices: player tcp runtime is unavailable")
+	}
+	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return fmt.Errorf("alliance notices: capability %q not found", mods.ModBus)
+	}
+	notices := allianceNotices{nest: nestClient, push: transport}
+	if err := ownerroute.RegisterBusHandler(busClient, rpcalliance.NoticeModule, rpcalliance.MemberNotice{}.MsgName(), notices.apply); err != nil {
+		return fmt.Errorf("alliance notices: register handler: %w", err)
+	}
+	return nil
+}
+
+func (n allianceNotices) apply(ctx context.Context, notice *rpcalliance.MemberNotice) error {
+	if notice == nil || notice.PlayerID <= 0 || notice.AllianceID <= 0 {
+		return nil
+	}
+	if n.push.ActiveSessions(notice.PlayerID) == 0 {
+		return nil
+	}
+	shown, replaces := notice.AllianceID, int64(0)
+	switch notice.Change {
+	case alliancerule.MemberJoined:
+	case alliancerule.MemberLeft, alliancerule.MemberKicked:
+		shown, replaces = 0, notice.AllianceID
+	default:
+		slog.Debug("alliance notice: unknown change", "player_id", notice.PlayerID, "change", notice.Change)
+		return nil
+	}
+	playerID, err := entity.BuildEntityID(notice.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil
+	}
+	if _, err := syncsender.NewShowAllianceSender(n.nest).Sync_ShowAlliance(ctx, playerID, shown, replaces); err != nil {
+		slog.Debug("alliance notice: copy not updated; the next login checks it against the mirror", "player_id", notice.PlayerID, "err", err)
+	}
+	push := pb.AllianceNoticePush{AllianceID: notice.AllianceID, Change: notice.Change, Version: notice.Version}
+	if err := n.push.PushPlayer(ctx, notice.PlayerID, msgid.MsgAllianceNotice, &push); err != nil {
+		slog.Debug("alliance notice: push not delivered", "player_id", notice.PlayerID, "err", err)
+	}
+	return nil
+}

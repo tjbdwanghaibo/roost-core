@@ -1,0 +1,23 @@
+package alliance
+
+import (
+	"context"
+
+	allianceentity "{{MODULE}}/game/entities/alliance"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+func (s *Service) RefreshHome(ctx context.Context, target int64, playerID int64, joinRequestID string, expectedSID int32, nextSID int32) (reply HomeReply, err error) {
+	if err = requireRequest(joinRequestID, playerID); err != nil {
+		return reply, err
+	}
+	if expectedSID <= 0 || nextSID <= 0 {
+		return reply, ErrRequestInvalid
+	}
+	err = s.call(ctx, target, allianceentity.EntityKindAlliance, func(ctx context.Context) error {
+		answer, callErr := syncsender.NewAllianceHomeSender(s.deps.Nest).Sync_AllianceHome(ctx, target, playerID, joinRequestID, expectedSID, nextSID)
+		reply = HomeReply{Changed: answer.Changed, HomeSID: answer.HomeSID}
+		return callErr
+	})
+	return reply, err
+}

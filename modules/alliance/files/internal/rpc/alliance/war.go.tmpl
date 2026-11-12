@@ -1,0 +1,377 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"maps"
+	"sync"
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+)
+
+// DeclareWar implements Alliance (plan §2.9). Two alliances this instance
+// owns are written in one transaction. An enemy on another instance: this
+// side records the war and a durable wait for the enemy (AllianceDao.WarAcks)
+// in one transaction, the declaration answers, and the service then asks the
+// enemy to record its side (acknowledgeWar → AcknowledgeWar there, a route
+// RPC) — no effect. Operations that must be atomic across instances move the
+// alliances onto one instance first (alliance.transfer); nothing here
+// coordinates two instances atomically. An enemy id that has no ownership
+// record was never founded: refused as alliance_missing, before anything is
+// written.
+//
+// Why the enemy's side is recorded eventually (plan §2.9): the wait commits
+// with this side, and is ended only once the enemy gave a final answer
+// (recorded, or refused — the declaring side keeps its record either way).
+// While it exists, the instance that owns this alliance asks again: right
+// after the declaration, then with backoff while it runs (retryDelay), and
+// whenever the declaration is retried (its replay reports the wait). An
+// instance that comes to own the alliance — its start (the preload), or an
+// alliance.transfer to it while it runs — picks the wait up from the store
+// with its war scan (ScanWars, at start and every warScanInterval), so the
+// asking follows the alliance wherever it is owned, whatever the order of a
+// declaration and a transfer. AcknowledgeWar is idempotent by request id, so
+// an acknowledgment that arrives late or twice (the old and the new owner
+// both asking around a transfer) is a replay.
+func (s *Service) DeclareWar(ctx context.Context, requestID string, callerID int64, _ int32, target int64, enemyID int64) (Reply, error) {
+	if err := requireRequest(requestID, callerID, enemyID); err != nil {
+		return s.reply(alliancerule.Answer{}, err)
+	}
+	enemy, err := AllianceTarget(enemyID)
+	if err != nil {
+		return s.reply(alliancerule.Answer{}, fmt.Errorf("%w: enemy %d: %v", ErrRequestInvalid, enemyID, err))
+	}
+	var answer alliancerule.Answer
+	err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) error {
+		exists, here, err := s.owned(ctx, enemy)
+		switch {
+		case err != nil:
+			return err
+		case !exists:
+			return errAllianceMissing(enemyID)
+		}
+		wars := syncsender.NewAllianceWarSender(s.deps.Nest)
+		if here {
+			answer, err = wars.MultiSync_AllianceDeclareWar(ctx, target, enemy, requestID, callerID, s.retention())
+			if !s.moved(ctx, enemy, err) {
+				return err
+			}
+		}
+		answer, err = wars.Sync_AllianceDeclareWarDetached(ctx, target, requestID, callerID, enemyID, s.retention())
+		return err
+	})
+	if err == nil && answer.WarPending {
+		s.askEnemy(entity.GetUniqueIDFromEntityID(target), enemyID, requestID, 0)
+	}
+	return s.reply(answer, err)
+}
+
+// AcknowledgeWar implements Alliance.
+func (s *Service) AcknowledgeWar(ctx context.Context, requestID string, target int64, declarerID int64) (Reply, error) {
+	var answer alliancerule.Answer
+	err := requireRequest(requestID, declarerID)
+	if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceWarSender(s.deps.Nest).Sync_AllianceAcknowledgeWar(ctx, target, requestID, declarerID, s.retention())
+			return err
+		})
+	}
+	return s.reply(answer, err)
+}
+
+// warKey names a war's wait among the follow-ups.
+func warKey(declarerID int64, requestID string) string {
+	return fmt.Sprintf("war:%d:%s", declarerID, requestID)
+}
+
+// askEnemy arms acknowledgeWar for the war declarerID declared on enemyID
+// under requestID: now for the first attempt (the declaration has answered),
+// later for the next ones (attemptDelay).
+func (s *Service) askEnemy(declarerID, enemyID int64, requestID string, attempt int) {
+	s.follow.arm(warKey(declarerID, requestID), attemptDelay(attempt), func(ctx context.Context) {
+		s.acknowledgeWar(ctx, declarerID, enemyID, requestID, attempt)
+	})
+}
+
+// acknowledgeWar asks the enemy to record its side of the war declarerID
+// declared under requestID (AcknowledgeWar, the route RPC), then ends the
+// declarer's wait with a conditional transaction (by request id). Only the
+// declarer's owner does it: one that has given the alliance away leaves the
+// wait to the new owner, whose war scan picks it up (ScanWars). An answer
+// that is not final — the enemy's instance not reachable, not executed,
+// unknown — or a wait that could not be ended is tried again later
+// (retryDelay); a final one (recorded or refused) ends it.
+func (s *Service) acknowledgeWar(ctx context.Context, declarerID, enemyID int64, requestID string, attempt int) {
+	declarer, err := AllianceTarget(declarerID)
+	if err != nil {
+		return
+	}
+	enemy, err := AllianceTarget(enemyID)
+	if err != nil {
+		return
+	}
+	if _, here, err := s.owned(ctx, declarer); err == nil && !here {
+		slog.Info("alliance: war wait left to the declarer's new owner", "alliance_id", declarerID, "request_id", requestID)
+		return
+	}
+	_, err = s.deps.Peers.AcknowledgeWar(ctx, requestID, enemy, declarerID)
+	if final(err) {
+		if err != nil {
+			slog.Info("alliance: the enemy refused its side of a war; the declaring side keeps its record",
+				"alliance_id", declarerID, "enemy_id", enemyID, "request_id", requestID, "err", err)
+		}
+		err = s.call(ctx, declarer, alliance.EntityKindAlliance, func(ctx context.Context) error {
+			_, err := syncsender.NewAllianceWarSender(s.deps.Nest).Sync_AllianceWarAcknowledged(ctx, declarer, requestID)
+			return err
+		})
+		if err == nil {
+			return
+		}
+	}
+	if ctx.Err() != nil {
+		return // stopping: the wait is durable, the next start scans it
+	}
+	metrics.IncCounter("alliance.war_ack_retry_total", nil, 1)
+	slog.Warn("alliance: the enemy's side of a war is not recorded yet; asking again",
+		"alliance_id", declarerID, "enemy_id", enemyID, "request_id", requestID, "attempt", attempt, "err", err)
+	s.askEnemy(declarerID, enemyID, requestID, attempt+1)
+}
+
+// warScanInterval is how long the war scan waits after one that went
+// through before it runs again. It bounds how long a wait that came to this
+// instance with its alliance — an alliance.transfer to this instance while it
+// runs — waits before this instance asks for it.
+const warScanInterval = time.Minute
+
+// ScanWars starts the war scan, which finds the wars the alliances this
+// instance owns still wait for and asks their enemies again. The alliance Mod
+// starts it in Start, after the startup preload loaded this instance's
+// alliances and the handlers were registered; from then on it runs every
+// warScanInterval while the service runs. It runs among the follow-ups (in
+// the background, stopped with them: it never holds up the start); a scan
+// that fails is tried again with backoff (retryDelay).
+//
+// Why it runs again: the asks are this process's (followUps), so a wait must
+// be picked up by whichever process owns its alliance. The first scan picks
+// up every alliance this instance owns at start; a later one picks up the
+// alliances it came to own since — transferred to it while it runs, or founded
+// here — and reads nothing else (pickedUp). TransferOwnership leaves an
+// alliance whose war waits where it is, but that check is a read before the
+// move: a declaration committed between the check and the transfer's fence
+// moves with the alliance, and the old owner's ask stops once it sees the
+// alliance gone (acknowledgeWar). The new owner's next scan asks for it, so
+// the wait is asked for however a declaration and a transfer interleave.
+//
+// Cost: the first scan, once per start, is one Nest read per alliance this
+// instance owns — and each of those is a Remote write admission that takes a
+// write grant from the ownership record (one Mongo findAndModify), although
+// it writes nothing — plus one owner-listing query per transferListPage
+// alliances; the reads run scanConcurrency at a time (scanPage). A later scan
+// is the owner listing again and one read per alliance not picked up yet.
+func (s *Service) ScanWars() {
+	if s.deps.Owned == nil {
+		return
+	}
+	s.scanWars(0, 0)
+}
+
+// scanWars arms the next scan after delay; attempt counts the scans that
+// failed in a row.
+func (s *Service) scanWars(delay time.Duration, attempt int) {
+	s.follow.arm("war-scan", delay, func(ctx context.Context) {
+		err := s.scanWarsOnce(ctx)
+		switch {
+		case ctx.Err() != nil:
+			return // stopping: the waits are durable, the next start scans them
+		case err != nil:
+			slog.Warn("alliance: scan for wars waiting for their enemy failed; trying again", "attempt", attempt, "err", err)
+			s.scanWars(retryDelay(attempt), attempt+1)
+		default:
+			s.scanWars(warScanInterval, 0)
+		}
+	})
+}
+
+func (s *Service) scanWarsOnce(ctx context.Context) error {
+	started := time.Now()
+	after := int64(0)
+	scanned, waiting := 0, 0
+	var owned []int64
+	for {
+		ids, next, err := s.deps.Owned.ListOwnedRemoteEntities(ctx, []entity.EntityKind{alliance.EntityKindAlliance}, after, transferListPage)
+		if err != nil {
+			return fmt.Errorf("list owned alliances: %w", err)
+		}
+		owned = append(owned, ids...)
+		read, found, err := s.scanPage(ctx, ids)
+		if err != nil {
+			return err
+		}
+		scanned += read
+		waiting += found
+		if next == 0 {
+			s.picked.keepOnly(owned)
+			if scanned > 0 {
+				slog.Info("alliance: war scan done", "alliances", scanned, "waiting", waiting, "took", time.Since(started))
+			}
+			return nil
+		}
+		after = next
+	}
+}
+
+// scanConcurrency is how many alliances the war scan reads at once. One at a
+// time, the scan of N alliances was N write-grant round trips end to end
+// (about 12 s for 1000 alliances on a loaded machine, 2026-11-06), and a wait
+// near the end was asked again only after all of them; the bound keeps the
+// burst of grants a restart sends to Mongo, next to the requests the instance
+// serves at the same time, small.
+const scanConcurrency = 8
+
+// scanPage reads the waits of one page of alliances, scanConcurrency at a
+// time, asks the enemy of every wait it finds, and marks each alliance it
+// read picked up for the tenure it read it in; an alliance already picked up
+// in its current tenure is skipped, one no longer owned here is left to its
+// owner. read is how many alliances it read. A definite rejection of the read — the alliance does not
+// exist: an empty claim, whose founding was refused — means there is nothing
+// to wait for. The first other failed read stops the page: the scan is tried
+// again (scanWars), and reads only what it has not picked up; an ask armed
+// twice is armed once (followUps.arm by key).
+func (s *Service) scanPage(ctx context.Context, ids []int64) (read, waiting int, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		mu       sync.Mutex
+		firstErr error
+		wg       sync.WaitGroup
+	)
+	next := make(chan int64)
+	for range min(scanConcurrency, len(ids)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range next {
+				// The tenure first, the read after: should the alliance
+				// move between them, the tenure kept is the older one and
+				// the next scan reads it again, never the other way round.
+				lease, owned, err := s.deps.Owners.GetRemoteOwnership(ctx, id)
+				if err == nil && (!owned || lease.OwnerSid != s.deps.LocalSID) {
+					continue // moved away since the listing: its owner's scan reads it
+				}
+				at := tenureOf(lease)
+				if err == nil && s.picked.has(id, at) {
+					continue
+				}
+				var acks []alliancerule.WarAck
+				if err == nil {
+					acks, err = s.warAcks(ctx, id)
+				}
+				if err != nil && !final(err) {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("alliance %d: %w", id, err)
+						cancel()
+					}
+					mu.Unlock()
+					continue
+				}
+				mu.Lock()
+				read++
+				waiting += len(acks)
+				mu.Unlock()
+				for _, ack := range acks {
+					s.askEnemy(entity.GetUniqueIDFromEntityID(id), ack.EnemyID, ack.RequestID, 0)
+				}
+				s.picked.add(id, at)
+			}
+		}()
+	}
+feed:
+	for _, id := range ids {
+		select {
+		case next <- id:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(next)
+	wg.Wait()
+	if firstErr == nil && ctx.Err() != nil {
+		firstErr = ctx.Err()
+	}
+	return read, waiting, firstErr
+}
+
+// pickedUp is the alliances whose waits this process has taken over, each
+// with the tenure it took them over in: the war scan read them and armed an
+// ask for every wait (askEnemy, which goes on until the enemy answers), and a
+// wait declared since arms its own ask (DeclareWar). In memory only: a new
+// process starts with none, so its first scan reads every alliance it owns.
+//
+// The tenure is the ownership record's epochs, which every transfer moves on
+// (RV-20261107-03): an alliance that leaves and comes back is in a new tenure
+// and read again, whatever this process remembered about the old one and
+// whenever a scan of the old one finished. Until 2026-11-07 the entry was
+// dropped once, before the move; a scan between the drop and the move put it
+// back, and the alliance, back here with a war declared on the way, was
+// skipped for good. Nothing else invalidates an entry: a complete scan only
+// lets go of the alliances it did not list, to keep the map to what is owned.
+type pickedUp struct {
+	mu  sync.Mutex
+	ids map[int64]tenure
+}
+
+// tenure identifies one stretch of ownership of an alliance.
+type tenure struct{ marker, route uint64 }
+
+func tenureOf(lease entity.RemoteEntityMarkerLease) tenure {
+	return tenure{marker: lease.MarkerEpoch, route: lease.RouteEpoch}
+}
+
+func newPickedUp() *pickedUp {
+	return &pickedUp{ids: map[int64]tenure{}}
+}
+
+func (p *pickedUp) has(id int64, at tenure) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	got, ok := p.ids[id]
+	return ok && got == at
+}
+
+func (p *pickedUp) add(id int64, at tenure) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ids[id] = at
+}
+
+// keepOnly lets go of every alliance not in owned (a complete listing).
+func (p *pickedUp) keepOnly(owned []int64) {
+	keep := make(map[int64]struct{}, len(owned))
+	for _, id := range owned {
+		keep[id] = struct{}{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	maps.DeleteFunc(p.ids, func(id int64, _ tenure) bool {
+		_, ok := keep[id]
+		return !ok
+	})
+}
+
+// warAcks reads the wars the alliance target (this instance's) still waits for.
+func (s *Service) warAcks(ctx context.Context, target int64) ([]alliancerule.WarAck, error) {
+	var acks []alliancerule.WarAck
+	err := s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+		acks, err = syncsender.NewAllianceWarSender(s.deps.Nest).Sync_AllianceWarAcks(ctx, target)
+		return err
+	})
+	return acks, err
+}

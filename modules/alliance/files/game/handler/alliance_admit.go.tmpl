@@ -1,0 +1,51 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+)
+
+// handlerAllianceAdmit seats a player when the alliance and the player's guard
+// are on the same service instance: the guard check, the seat and the guard
+// update are one transaction, so two alliances admitting the same player are
+// serialised on the guard's lock and only one of them finds it free.
+// viaApplication: the leader approves an application; otherwise the player
+// joins an open alliance.
+//
+// deferHeld: when the guard is held by another alliance or request and the
+// request was not decided before, answer GuardHeld and record nothing — the
+// service heals the guard from its holder first (it may be stale) and asks
+// again with deferHeld=false, which records the refusal if it still holds.
+//
+// Nothing is left to finish and no effect is recorded: the answer names the
+// membership it changed (Member), and the service sends the player's game
+// server a best-effort notice of it after the write answered.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceAdmit(target alliance.IAllianceRosterEntity, member alliance_member.IAllianceGuardEntity, requestID string, actorID int64, callerSID int32, viaApplication bool, deferHeld bool, maxMembers int32, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, guard := target.AllianceRosterComp(), member.AllianceGuardComp()
+	playerID := guard.PlayerID()
+	if _, decided := roster.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
+		return alliancerule.Answer{GuardHeld: true, Guard: guard.State(guard.CurrentVersion())}, nil
+	}
+	var joined alliancerule.MemberChange
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		homeSID, err := roster.AdmissionHome(actorID, playerID, callerSID, viaApplication, int(maxMembers))
+		if err != nil {
+			return playerID, err
+		}
+		if err := guard.CheckFree(requestID, nowUnix, time.Duration(cooldownSeconds)*time.Second); err != nil {
+			return playerID, err
+		}
+		roster.Admit(playerID, homeSID, requestID, nowUnix)
+		guard.Join(roster.AllianceID(), requestID)
+		joined = alliancerule.MemberChange{PlayerID: playerID, HomeSID: homeSID, Change: alliancerule.MemberJoined}
+		return playerID, nil
+	})
+	reply, err := answer(roster, outcome, err)
+	reply.Member = joined
+	return reply, err
+}

@@ -1,0 +1,34 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// Binding 只能在 IO 上下文调用。装有 rehome 时联动文件改为询问当前归属；
+// 无 rehome 的工程使用既有静态绑定，调用方提供的 SID 来自可信会话或持久 Saga 数据。
+var bindingResolver = staticBinding
+
+func Binding(ctx context.Context, registry *app.Registry, playerID int64, sid int32) (int32, bool, error) {
+	if own, ok := app.Lookup[PlayerBinding](registry, PlayerBindingCapability); ok && own != nil {
+		return own.Binding(ctx, playerID, sid)
+	}
+	return bindingResolver(ctx, registry, playerID, sid)
+}
+
+func staticBinding(_ context.Context, _ *app.Registry, _ int64, sid int32) (int32, bool, error) {
+	if sid <= 0 {
+		return 0, false, fmt.Errorf("alliance: positive player sid required")
+	}
+	return sid, false, nil
+}
+
+// PlayerBinding 是工程自有驻留表的适配：核对归属，并在同一把表锁下记录本进程正在使用的 Player。
+// 有闲置卸载/自定义写闸门的工程在启动联盟消费者前发布它；不需要驻留表的工程沿用模块默认实现。
+const PlayerBindingCapability app.ModName = "game.alliance.player_binding"
+
+type PlayerBinding interface {
+	Binding(context.Context, int64, int32) (int32, bool, error)
+}

@@ -1,7 +1,6 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"context"
 	"errors"
 	"fmt"
@@ -14,22 +13,24 @@ import (
 	building "{{MODULE}}/game/entities/building"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	"{{MODULE}}/game/settings"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"{{MODULE}}/protocol/msgid"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 )
@@ -94,7 +95,7 @@ const (
 	// outside it: its own entity (self), the scene's subject (the scene view)
 	// and the other member of its duel / ranked team (GroupSize 2, one team
 	// at a time) — sceneReservedObjects —, plus sceneRelationHeadroom for the
-	// relation views a game adds later (a guild — its members from the
+	// relation views a game adds later (a alliance — its members from the
 	// alliance mirror and the membership notices —, a party of more than
 	// two). sceneSessionObjects puts the three together, so the session limit
 	// follows the cap: the demo's 64 gives frame.DefaultLimits' 100 (the
@@ -145,7 +146,7 @@ type Scene struct {
 	// self binds, in a partitioned scene only, each member's own session to
 	// its Player subject with the "self" view (maintainer decision E4 = A):
 	// what the scene actor's mirror does not carry — name, level, exp, the bag,
-	// equipment, guild — reaches the client over the same connection. In an
+	// equipment, alliance — reaches the client over the same connection. In an
 	// ordinary scene the Player is the member's subject and the interest
 	// policy's self already shows it; self stays empty there.
 	self *policy.Direct
@@ -441,8 +442,8 @@ func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, wate
 // replicate exactly as without terrain (terrain_sync.go,
 // terrainNamespaceLimits; maintainer decision D15).
 func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig) (*Scene, error) {
- // 原周期构造器保留给历史功能/测量夹具；生产 NewScene 必须通过有提交观察者的构造路径。
- return newSceneWithObserver(lane, transport, watermark, config, maxVisible, terrainConfig, nil)
+	// 原周期构造器保留给历史功能/测量夹具；生产 NewScene 必须通过有提交观察者的构造路径。
+	return newSceneWithObserver(lane, transport, watermark, config, maxVisible, terrainConfig, nil)
 }
 
 // sceneTypeSchedules 是生产场景 Manager（on_change）里按实体类型的例外：只有地形块 1 秒一批（方案 §22.5）。玩家、怪、
@@ -477,14 +478,14 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 	// survives a crash. The Data Engine names the watermark and the manager
 	// holds a subject back until it reaches the commit that produced it.
 	mode := entitysync.ModePeriodic
- var schedules map[uint32]entitysync.TypeSchedule
- if observer != nil {
-  mode = entitysync.ModeOnChange
-  schedules = sceneTypeSchedules()
- }
- manager, err := entitysync.NewManager(entitysync.ManagerConfig{
-        Mode: mode,
-        TypeSchedules: schedules,
+	var schedules map[uint32]entitysync.TypeSchedule
+	if observer != nil {
+		mode = entitysync.ModeOnChange
+		schedules = sceneTypeSchedules()
+	}
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+		Mode:          mode,
+		TypeSchedules: schedules,
 		// The name the framework's refusals use for this manager: a Player
 		// state feeds one manager, so with access.player.self_sync also on,
 		// whichever registers the player second is refused naming the first.
@@ -567,12 +568,12 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 			return nil, fmt.Errorf("scene: %w", err)
 		}
 	}
- if observer != nil {
-  if err := observer.attach(manager); err != nil {
-   _ = scene.Close(context.Background())
-   return nil, err
-  }
- }
+	if observer != nil {
+		if err := observer.attach(manager); err != nil {
+			_ = scene.Close(context.Background())
+			return nil, err
+		}
+	}
 	return scene, nil
 }
 
@@ -825,7 +826,7 @@ func playerOf(entityID int64) int64 {
 // sends once it listens. Nothing here decides who sees whom; the policy does.
 //
 // A quick reconnect can find the previous Join's leave still in flight
-//: the subject is retiring — the others are owed its
+// : the subject is retiring — the others are owed its
 // ObjectRemove — or the transport is still closing the old session. Neither
 // loses this Join: the registration waits for the retirement
 // (RegisterAfterRetirement) and the session open is retried (openLater).

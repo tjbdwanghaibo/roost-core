@@ -1,0 +1,36 @@
+package player
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Alliance}}
+const CompTypeAlliance entity.ComponentType = {{ID:component:Alliance}}
+
+type AllianceComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type IAllianceEntity interface {
+	entity.IThreadSafeEntity
+	AllianceComp() *AllianceComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeAlliance, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		p, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("alliance component: owner %T", owner)
+		}
+		return &AllianceComponent{owner: p}, nil
+	})
+}
+func (*AllianceComponent) Name() string        { return "alliance" }
+func (c *AllianceComponent) AllianceID() int64 { return c.owner.Dao().GetAlliance().GetID() }
+
+// SetAlliance 只在 Player Nest 事务中调用；副本不参与联盟权限判定。
+func (c *AllianceComponent) SetAlliance(id int64) {
+	c.owner.Dao().GetAlliance().SetID(id)
+}

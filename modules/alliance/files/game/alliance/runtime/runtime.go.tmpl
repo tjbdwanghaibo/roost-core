@@ -1,0 +1,69 @@
+package allianceruntime
+
+import (
+	"context"
+	"fmt"
+
+	"{{MODULE}}/game/alliance"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+)
+
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("alliance: registry required")
+	}
+	if _, err := selfSID(registry); err != nil {
+		return nil, err
+	}
+	steps, err := startSteps(registry)
+	if err != nil {
+		return nil, err
+	}
+	stop := func(ctx context.Context) error {
+		if err := steps.Drain(ctx); err != nil {
+			steps.Stop()
+			return err
+		}
+		return nil
+	}
+	if err := installAllianceNotices(registry); err != nil {
+		return stop, err
+	}
+	return stop, nil
+}
+func selfSID(registry *app.Registry) (int32, error) {
+	if registry == nil || registry.Config() == nil {
+		return 0, fmt.Errorf("alliance: config required")
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return 0, err
+	}
+	if identity.Sid <= 0 {
+		return 0, fmt.Errorf("alliance: positive sid required")
+	}
+	return identity.Sid, nil
+}
+
+func localAdmission(ctx context.Context, registry *app.Registry, playerID int64, sid int32) error {
+	self, err := selfSID(registry)
+	if err != nil {
+		return err
+	}
+	if sid <= 0 {
+		return saga.RejectStep("alliance: player sid missing")
+	}
+	bound, moving, err := alliance.Binding(ctx, registry, playerID, sid)
+	if err != nil {
+		return err
+	}
+	if moving {
+		return saga.BounceStep("", "alliance: player is moving")
+	}
+	if bound != self {
+		return saga.BounceStep(saga.SidRoute(bound), "alliance: foreign player")
+	}
+	return nil
+}

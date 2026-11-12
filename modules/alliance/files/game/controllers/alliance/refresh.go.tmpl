@@ -1,0 +1,72 @@
+package alliance
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"{{MODULE}}/game/alliance"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// RefreshMembership 在进入/重连后的 IO 上下文对账。所有查询共用一秒预算，失败交给调用方记录，下一次重试。
+// Guard 由联盟名单校正，Player 只是展示副本；Mirror 仅提供 HomeSID 的条件更新前像。
+// HomeSID 是尽力通知提示：account 查询与修正 RPC 不构成跨服务事务，后续对账仍可能再次修正。
+func (controller *Controller) RefreshMembership(ctx context.Context, playerID int64) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	sid, moving, err := alliance.Binding(ctx, controller.registry, playerID, controller.sid)
+	if err != nil {
+		return err
+	}
+	if moving || sid != controller.sid {
+		return nil
+	}
+	playerRef, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return err
+	}
+	shown, err := syncsender.NewPlayerAllianceSender(controller.nestClient).Sync_PlayerAlliance(ctx, playerRef)
+	if err != nil {
+		return err
+	}
+	guard, err := rpcalliance.GuardTarget(playerID)
+	if err != nil {
+		return err
+	}
+	reply, err := controller.alliances.Membership(ctx, guard)
+	if err != nil {
+		if !errors.Is(err, errcode.ErrEntityNotFound) {
+			return err
+		}
+		reply = rpcalliance.GuardReply{}
+	}
+	current := reply.State.AllianceID
+	if current != shown {
+		if _, err = syncsender.NewShowAllianceSender(controller.nestClient).Sync_ShowAlliance(ctx, playerRef, current, shown); err != nil {
+			return err
+		}
+	}
+	if current == 0 {
+		return nil
+	}
+	target, err := rpcalliance.AllianceTarget(current)
+	if err != nil {
+		return err
+	}
+	value, found, err := controller.allianceMirrors.Read(ctx, target, entity.RemoteReadMonotonic, entity.RemoteObservation{})
+	if err != nil || !found {
+		return err
+	}
+	seat, seated := value.Value.Members[playerID]
+	if !seated || seat.JoinRequestID != reply.State.JoinRequestID || seat.HomeSID == sid {
+		return nil
+	}
+	_, err = controller.alliances.RefreshHome(ctx, target, playerID, reply.State.JoinRequestID, seat.HomeSID, sid)
+	return err
+}

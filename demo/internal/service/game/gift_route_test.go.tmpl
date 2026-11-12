@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/alliance"
+	allianceruntime "{{MODULE}}/game/alliance/runtime"
 	"{{MODULE}}/game/gift"
-	"{{MODULE}}/game/guild"
 	gamerehome "{{MODULE}}/game/rehome"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/msgid"
@@ -17,6 +18,7 @@ import (
 	alliancefound "{{MODULE}}/saga/alliance_found"
 	alliancereward "{{MODULE}}/saga/alliance_reward"
 	giftitem "{{MODULE}}/saga/gift_item"
+
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
@@ -27,7 +29,7 @@ import (
 
 // A step that runs on a process which does not serve its player writes a
 // second copy of the Player document and takes a process down. The gift's
-// debit and refund (and the guild sagas' Player steps) are routed steps: the
+// debit and refund (and the alliance sagas' Player steps) are routed steps: the
 // coordinator delivers them only to the durable of the sid the saga was
 // started with, so the wrong process never sees them (roost-core SAGA.md,
 // 按 sid 确切路由; the delivery itself is pinned in roost-core
@@ -156,13 +158,12 @@ func (d *routeDeparter) DepartPlayer(_ context.Context, playerID int64) (func(co
 // routeServer is one game process of the world: its real ownership table,
 // wired the way service.go wires it — the current binding asked through the
 // rehome module (the table itself, published as the module's Residency, then
-// the account service) — and the gift and guild steps on top of it.
+// the account service) — and the gift and alliance steps on top of it.
 type routeServer struct {
 	registry *app.Registry
 	owners   *PlayerOwners
 	departer *routeDeparter
 	gifts    giftSteps
-	guilds   guildSteps
 }
 
 func (w *routeWorld) server(t *testing.T, sid int32) *routeServer {
@@ -182,7 +183,10 @@ func (w *routeWorld) server(t *testing.T, sid int32) *routeServer {
 	if err := registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners)); err != nil {
 		t.Fatal(err)
 	}
-	return &routeServer{registry: registry, owners: owners, departer: departer, gifts: giftSteps{owners: owners}, guilds: guildSteps{owners: owners}}
+	if err := registry.Register(alliance.PlayerBindingCapability, alliancePlayerBinding{owners: owners}); err != nil {
+		t.Fatal(err)
+	}
+	return &routeServer{registry: registry, owners: owners, departer: departer, gifts: giftSteps{owners: owners}}
 }
 
 // debit is a gift debit command for the world's player that reached this
@@ -191,10 +195,10 @@ func (w *routeWorld) debit(t *testing.T, startedOn, reached int32) saga.Command 
 	return giftCommand(t, w.player, startedOn, reached)
 }
 
-// guildDebit is the same command carrying a guild donation's Player step.
-func (w *routeWorld) guildDebit(t *testing.T, startedOn, reached int32) saga.Command {
+// allianceDebit is the same command carrying a alliance donation's Player step.
+func (w *routeWorld) allianceDebit(t *testing.T, startedOn, reached int32) saga.Command {
 	t.Helper()
-	payload, err := json.Marshal(guild.State{PlayerID: w.player, SID: startedOn, Coins: 10})
+	payload, err := json.Marshal(alliance.State{PlayerID: w.player, SID: startedOn, Coins: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +219,7 @@ func expectBounce(t *testing.T, what string, err error, route string) {
 
 // Exactly the steps that write a Player are routed — the debit (whose
 // compensation is the refund) of the gift, founding and donation, and the
-// reward's grant — and the mail and guild steps are not: they may run on
+// reward's grant — and the mail and alliance steps are not: they may run on
 // any process. A step routed in the definition but not in the consumers (or
 // the other way round) would never be delivered; kitsaga.Steps refuses to
 // start such a process.
@@ -228,8 +232,8 @@ func TestThePlayerStepsAreRoutedBySid(t *testing.T) {
 			}
 		}
 	}
-	if _, err := guild.Encode(guild.State{PlayerID: 42, Coins: 10}); err == nil {
-		t.Fatal("guild.Encode wrote a Player step state with no sid; its saga could not be routed")
+	if _, err := alliance.Encode(alliance.State{PlayerID: 42, Coins: 10}); err == nil {
+		t.Fatal("alliance.Encode wrote a Player step state with no sid; its saga could not be routed")
 	}
 }
 
@@ -279,9 +283,9 @@ func TestAStepForASenderBoundElsewhereIsBouncedToHisSid(t *testing.T) {
 	if other.owners.Resident(world.player) {
 		t.Fatal("bouncing the step took a player bound to another sid into service here")
 	}
-	// The guild sagas' Player steps answer the same way.
-	expectBounce(t, "a guild step for a player bound to sid 1000 that reached 1001",
-		other.guilds.admitBound(context.Background(), world.guildDebit(t, routeOtherSID, routeOtherSID)), saga.SidRoute(routeLocalSID))
+	// The alliance sagas' Player steps answer the same way.
+	expectBounce(t, "a alliance step for a player bound to sid 1000 that reached 1001",
+		allianceruntime.AdmitPlayerStep(context.Background(), other.registry, world.allianceDebit(t, routeOtherSID, routeOtherSID)), saga.SidRoute(routeLocalSID))
 	// The account service is away and this process knows nothing of him: a
 	// plain error (redelivered here), neither a bounce nor a rejection.
 	unreachable := world.server(t, routeOtherSID)
@@ -301,19 +305,19 @@ func TestAStepForASenderBoundElsewhereIsBouncedToHisSid(t *testing.T) {
 // TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid pins the coordinator side):
 // not run, and nothing is recorded — even on the sid he is still bound to.
 // Once the transfer is committed the old sid bounces the same command naming
-// the new one, and the new sid admits it. The guild sagas' Player steps
+// the new one, and the new sid admits it. The alliance sagas' Player steps
 // follow the same rules.
 func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
 	world := newRouteWorld(t)
 	ctx := context.Background()
 	old, next := world.server(t, routeLocalSID), world.server(t, routeOtherSID)
-	command, guildCommand := world.debit(t, routeLocalSID, routeLocalSID), world.guildDebit(t, routeLocalSID, routeLocalSID)
+	command, allianceCommand := world.debit(t, routeLocalSID, routeLocalSID), world.allianceDebit(t, routeLocalSID, routeLocalSID)
 	// Begin: the transfer is in flight; he is still bound to 1000.
 	if _, err := world.accounts.BeginRoleTransfer(ctx, world.player, svcaccount.TransferRequest{ID: "move-1", FromSID: routeLocalSID, To: routeOtherSID}); err != nil {
 		t.Fatal(err)
 	}
 	expectBounce(t, "a step for a moving sender on the sid he is still bound to", old.gifts.admitBound(ctx, command), "")
-	expectBounce(t, "a guild step for a moving player", old.guilds.admitBound(ctx, guildCommand), "")
+	expectBounce(t, "a alliance step for a moving player", allianceruntime.AdmitPlayerStep(ctx, old.registry, allianceCommand), "")
 	expectBounce(t, "a step for a moving sender on the sid he is moving to", next.gifts.admitBound(ctx, command), "")
 	if old.owners.Resident(world.player) || next.owners.Resident(world.player) {
 		t.Fatal("bouncing the step of a moving sender took him into service")
@@ -324,7 +328,7 @@ func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectBounce(t, "the step on the old sid after the commit", old.gifts.admitBound(ctx, command), saga.SidRoute(routeOtherSID))
-	expectBounce(t, "the guild step on the old sid after the commit", old.guilds.admitBound(ctx, guildCommand), saga.SidRoute(routeOtherSID))
+	expectBounce(t, "the alliance step on the old sid after the commit", allianceruntime.AdmitPlayerStep(ctx, old.registry, allianceCommand), saga.SidRoute(routeOtherSID))
 	if old.owners.Resident(world.player) {
 		t.Fatal("the old sid took a player who moved away into service")
 	}
@@ -334,8 +338,8 @@ func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
 	if !next.owners.Resident(world.player) {
 		t.Fatal("the admitted step left no resident record on the new sid")
 	}
-	if err := next.guilds.admitBound(ctx, guildCommand); err != nil {
-		t.Fatalf("the guild step on the new sid = %v, want it admitted", err)
+	if err := allianceruntime.AdmitPlayerStep(ctx, next.registry, allianceCommand); err != nil {
+		t.Fatalf("the alliance step on the new sid = %v, want it admitted", err)
 	}
 }
 
@@ -497,24 +501,6 @@ func (routeProfile) Arrive(context.Context, int64, int32) (gamerehome.ArriveResu
 	return gamerehome.ArriveResult{}, nil
 }
 
-// The demo's own checks before a move (rehome_checks.go): a guild or team
-// member is refused; a player in neither is not.
-func TestAGuildOrTeamMemberMayNotChangeServers(t *testing.T) {
-	if err := rehomeBlockedBy(0, 0); err != nil {
-		t.Fatalf("a player in no guild and no team = %v, want allowed", err)
-	}
-	for _, guildID := range []int64{0, 7} {
-		for _, teamID := range []int64{0, 9} {
-			if guildID == 0 && teamID == 0 {
-				continue
-			}
-			if err := rehomeBlockedBy(guildID, teamID); !errors.Is(err, apperrors.ErrRehomeRefused) {
-				t.Fatalf("guild %d team %d = %v, want rehome_refused", guildID, teamID, err)
-			}
-		}
-	}
-}
-
 // A payload with no sender sid cannot be routed: it is rejected (a
 // non-retryable failure goes back to the coordinator, logged as an error)
 // and nobody is taken into service — even a sender who happens to be resident
@@ -561,23 +547,23 @@ func TestAStepForASenderBeingUnloadedIsRetriedHere(t *testing.T) {
 	}
 }
 
-// The guild sagas' Player steps answer the same way (alliance_saga.go
+// The alliance sagas' Player steps answer the same way (alliance_saga.go
 // admitBound): no sid → reject; this sid's own player → admitted and resident.
 // (Bound elsewhere and moving are pinned beside the gift's above.)
-func TestAGuildPlayerStepFollowsTheSameRules(t *testing.T) {
+func TestAAlliancePlayerStepFollowsTheSameRules(t *testing.T) {
 	world := newRouteWorld(t)
 	home := world.server(t, routeLocalSID)
 	var rejection *saga.StepRejection
-	if err := home.guilds.admitBound(context.Background(), world.guildDebit(t, 0, routeLocalSID)); !errors.As(err, &rejection) {
-		t.Fatalf("a guild step with no sid = %v, want a rejection", err)
+	if err := allianceruntime.AdmitPlayerStep(context.Background(), home.registry, world.allianceDebit(t, 0, routeLocalSID)); !errors.As(err, &rejection) {
+		t.Fatalf("a alliance step with no sid = %v, want a rejection", err)
 	}
 	if home.owners.Resident(world.player) {
-		t.Fatal("rejecting a guild step with no sid took the player into service")
+		t.Fatal("rejecting a alliance step with no sid took the player into service")
 	}
-	if err := home.guilds.admitBound(context.Background(), world.guildDebit(t, routeLocalSID, routeLocalSID)); err != nil {
-		t.Fatalf("a guild step for this sid's own player = %v, want it admitted", err)
+	if err := allianceruntime.AdmitPlayerStep(context.Background(), home.registry, world.allianceDebit(t, routeLocalSID, routeLocalSID)); err != nil {
+		t.Fatalf("a alliance step for this sid's own player = %v, want it admitted", err)
 	}
 	if !home.owners.Resident(world.player) {
-		t.Fatal("the admitted guild step left no resident record")
+		t.Fatal("the admitted alliance step left no resident record")
 	}
 }

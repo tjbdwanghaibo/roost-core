@@ -1,0 +1,49 @@
+package allianceruntime
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 同时适用于未装 rehome 的静态路由和安装后的权威查询。所有准入在投 Nest 前完成。
+type admissionAccount struct {
+	svcaccount.Accounts
+	sid int32
+}
+
+func (a admissionAccount) RoleBinding(context.Context, int64) (svcaccount.RoleBinding, error) {
+	return svcaccount.RoleBinding{PlayerID: 10, ServingServerID: a.sid}, nil
+}
+func admissionRegistry(t *testing.T, bound int32) *app.Registry {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	r := app.NewRegistry(cfg)
+	if err := r.Register(svcaccount.CapabilityName, admissionAccount{sid: bound}); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func TestAllianceAdmissionAcceptsLocalPlayer(t *testing.T) {
+	if err := localAdmission(context.Background(), admissionRegistry(t, 1000), 10, 1000); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestAllianceAdmissionBouncesForeignPlayer(t *testing.T) {
+	err := localAdmission(context.Background(), admissionRegistry(t, 1002), 10, 1002)
+	var bounce *saga.StepBounce
+	if !errors.As(err, &bounce) || bounce.Route != saga.SidRoute(1002) {
+		t.Fatalf("foreign admission=%v", err)
+	}
+}
+func TestAllianceAdmissionRejectsMissingSID(t *testing.T) {
+	if err := localAdmission(context.Background(), admissionRegistry(t, 1000), 10, 0); err == nil {
+		t.Fatal("accepted missing sid")
+	}
+}

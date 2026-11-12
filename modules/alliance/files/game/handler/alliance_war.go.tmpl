@@ -1,0 +1,95 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+)
+
+// handlerAllianceDeclareWar declares war between two alliances on the same
+// service instance: both sides are checked and recorded in one transaction,
+// so either both alliances are at war or neither is (plan §2.9).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceDeclareWar(target alliance.IAllianceRosterEntity, enemy alliance.IAllianceRosterEntity, requestID string, actorID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, other := target.AllianceRosterComp(), enemy.AllianceRosterComp()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		enemyID := other.AllianceID()
+		if err := roster.DeclareWar(actorID, enemyID); err != nil {
+			return enemyID, err
+		}
+		if err := other.CheckWar(roster.AllianceID()); err != nil {
+			return enemyID, err
+		}
+		roster.RecordWar(enemyID, nowUnix)
+		other.RecordWar(roster.AllianceID(), nowUnix)
+		return enemyID, nil
+	})
+	return answer(roster, outcome, err)
+}
+
+// handlerAllianceDeclareWarDetached declares war on an alliance on another
+// instance: this side is recorded now, together with the wait for the
+// enemy's acknowledgment (WarAcks), in one transaction — no effect. The
+// service then calls AcknowledgeWar on the enemy (same request id) and ends
+// the wait once the enemy answered; until then the wait is what makes the
+// service ask again (with backoff while it runs, and from the war scan of the
+// instance that owns the alliance: after a restart, or after a transfer to
+// it). WarPending reports the wait, fresh or replayed, so a
+// retried declaration asks the enemy again too.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceDeclareWarDetached(target alliance.IAllianceRosterEntity, requestID string, actorID int64, enemyID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRosterComp()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := roster.DeclareWar(actorID, enemyID); err != nil {
+			return enemyID, err
+		}
+		roster.RecordWar(enemyID, nowUnix)
+		roster.AwaitWarAck(requestID, enemyID)
+		return enemyID, nil
+	})
+	reply, err := answer(roster, outcome, err)
+	reply.WarPending = err == nil && roster.WarAckPending(requestID)
+	return reply, err
+}
+
+// handlerAllianceWarAcknowledged ends the wait of the war declared under
+// requestID: the enemy answered AcknowledgeWar with a final answer (recorded
+// its side, or refused it — the declaring side keeps its record either way).
+// Conditional on the request id, so a second answer changes nothing.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceWarAcknowledged(target alliance.IAllianceRosterEntity, requestID string) (bool, error) {
+	return target.AllianceRosterComp().EndWarAck(requestID), nil
+}
+
+// handlerAllianceWarAcks lists the declarations still waiting for their enemy
+// (the service's war scan).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceWarAcks(target alliance.IAllianceRosterEntity) ([]alliancerule.WarAck, error) {
+	return target.AllianceRosterComp().WarAcks(), nil
+}
+
+// handlerAllianceAcknowledgeWar records the enemy side of a cross-instance
+// declaration. A side that cannot take the war (already at war with too
+// many) records the refusal in its receipt; the declaring side keeps its
+// record — the two-step form is eventually consistent, not atomic, which is
+// the maintainer's decision for cross-instance diplomacy (plan §6, item 4 A).
+// The receipt makes a repeated acknowledgment (the declarer asks again after a
+// lost answer, a restart, a retried declaration) a replay.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceAcknowledgeWar(target alliance.IAllianceRosterEntity, requestID string, declarerID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRosterComp()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := roster.CheckWar(declarerID); err != nil {
+			return declarerID, err
+		}
+		roster.RecordWar(declarerID, nowUnix)
+		return declarerID, nil
+	})
+	return answer(roster, outcome, err)
+}

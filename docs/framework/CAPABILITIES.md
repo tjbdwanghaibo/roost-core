@@ -230,6 +230,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/skills/*.json` 与 `game/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
+| 联盟 alliance | 独立服务独占联盟与成员守卫；路由 RPC、Mirror、跨域 Saga 与换服惰性校正 | `roost module add alliance` | 现成模块；普通联盟操作不用 Saga，真实跨进程与存储验收待最终批次 | [alliance](../../modules/alliance/README.md) |
 | 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`；六个 PB 端点，安装时代办 Remote | 现成模块；邀请有界，解散后成员引用惰性核对。matchmaking 可组合，demo 通过登记点保留分区队伍视野；真实跨进程验收待补 | [team](../../modules/team/README.md) |
 | 本服匹配与房间移交 | 单人/整队，取消与补查，固定名单房间 | `roost module add matchmaking`，自动安装 matchroom / team / room | 默认两支同人数队伍；历史消失时保留屏障；跨服房间不在本轮 | [matchmaking](../../modules/matchmaking/README.md) |
 | 基础房间 room | 服务端开房；1～64 席、进出、房主交接、重连代际、关闭 | `roost module add room`；`game/room.Open` / `Disconnect` 与生成的 Nest Sender | 现成模块。自带持久实体；客户端读 PB 快照；不含自动断线订阅、广播、匹配移交或回合超时 | [room](../../modules/room/README.md) |
@@ -284,7 +285,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 聊天 | game 调 chat 发布、推送与读取；demo 用的就是 chat 业务模块，只在登录时加在线名单并发公告 | `roost module add chat`（demo 生成时已装） | 现成模块 | [聊天](../../demo/WALKTHROUGH.md#跨服务game--chat-聊天) |
 | 副本 | session 的一次运行，进入、通关、领奖 | `game/dungeon` | 参考实现（demo） | [副本](../../demo/WALKTHROUGH.md#跨服务game--session-副本) |
 | 送礼 saga | 扣 → 送，失败补偿；原生步骤带准入 | `saga/gift_item/` | 参考实现（demo） | [送礼 saga](../../demo/WALKTHROUGH.md#跨域事务送礼-sagadebit--deliver失败补偿) |
-| 公会 = alliance 服务 | 独立进程独占联盟实体，写走路由 RPC 或 saga，game 读 Mirror | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/guild/` | 参考实现（demo）。联盟服务方案实施中，不在 `service/` 下；边界见 KNOWN-LIMITS“Remote” | [公会](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)、[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md) |
+| 公会 = alliance 服务 | 独立进程独占联盟实体，写走路由 RPC 或 saga，game 读 Mirror | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliance/` | alliance 模块；demo 只留规则与 PlayerOwners 启动适配，边界见 KNOWN-LIMITS“Remote” | [公会](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)、[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md) |
 | 地图 Scene | Scene 是一个实体，子系统各自带锁 | `game/scene`、`internal/service/game/scene.go` | 参考实现（demo） | [地图](../../demo/WALKTHROUGH.md#地图scene-是一个实体它的-system-各自带锁) |
 | 移动 | 客户端发目标，服务端在实体心跳里走 | `game/actor` | 参考实现（demo） | [移动](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20) |
 | 怪物 | 巡逻、定身与状态门控 | Monster 实体 + 行为组件 | 参考实现（demo） | [怪物](../../demo/WALKTHROUGH.md#怪物巡逻定身与状态门控d21) |
@@ -364,7 +365,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 邮件列表、领附件 | 现成模块 mailbox（`roost module add mailbox`，连同 wallet）：列表与领取；金币附件内置，道具附件装了 bag 就有，别的奖励种类登记进去 | 模块 mailbox；game-demo“邮件” |
 | 全服邮件、补偿邮件 | mail 服务的广播邮件；GM 命令发单人补偿 | game-demo“邮件”“GM 运维面” |
 | 聊天 | 现成模块 chat（`roost module add chat`）：世界与私聊；群组频道需手写 | 模块 chat；game-demo“聊天”（用的就是它） |
-| 公会、联盟跨进程 / 跨服 | Remote 托管实体 + 路由 RPC + Mirror + Saga | game-demo“公会 = alliance 服务”（联盟服务方案实施中）；SLG 夹具的联盟活动联合链路 |
+| 公会、联盟跨进程 / 跨服 | Remote 托管实体 + 路由 RPC + Mirror + Saga | alliance 模块与 game-demo“公会 = alliance 服务”；SLG 夹具的联盟活动联合链路 |
 | 定时活动、跨服活动 | activity 服务 + 实体持久定时器（准点动作）；活动规则需手写业务 | SLG 夹具的联盟活动 |
 | 登录、账号、选角 | account 服务 + 现成模块 login（`roost module add login`：握手校验会话令牌、开发令牌登录）；渠道验签与客户端登录入口需手写 | 模块 login；game-demo“登录与凭据” |
 | 角色名、公会名全服唯一 | directory 服务的两阶段占名；敏感词需手写业务 | [Service §4](guide/09-services.md#4-关键业务边界) |

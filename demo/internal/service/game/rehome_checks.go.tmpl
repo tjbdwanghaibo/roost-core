@@ -2,118 +2,27 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
+	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/game/settings"
 	apperrors "{{MODULE}}/internal/errors"
-	gamerehome "{{MODULE}}/game/rehome"
-	player "{{MODULE}}/game/entities/player"
-	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 )
 
-// demo 自己的换服检查（rehome 模块的登记点）。换服只交接 Player 这一份档的写权；demo 里还有几样东西
-// 记着“这名玩家在哪个服”，换服时没有人替它们改——处置它们属于换服的二期。在那之前宁可拒绝，也不让玩家
-// 换了服、旧服的东西还挂着。玩家自己申请与 GM 发起（gm.player.rehome）同样受这些检查约束。
-//
-// 规则：
-//
-//   - 在公会里：拒绝，先退出公会。联盟服务记着成员所在的服（捐献、领奖的 saga 按它路由），成员通知也按它投递；
-//     换服之后这些都指向旧服。
-//   - 在队伍里：拒绝，先离队。成员表（Team 实体）记着每名成员的 Base sid。
-//   - 本服开着分区场景（scene.partition.enabled）：一律拒绝。玩家在格子进程上还有 SceneActor，
-//     它的租约、回写都认原来的 Base；离开时怎么收回它还没有接到换服的离开钩子上。
-//
-// 这些规则要一直成立到交出实体，申请时查一次不够（RV-20261111-BM-05）：申请之后客户端还连着，
-// 标记之前已经准入的入会请求还在执行，联盟服务的成员通知还在路上。所以分三处：
-//
-//  1. 申请时（事务内，player.OnRehomeApplying；事务外，gamerehome.OnApplying）：看他档里的 GuildID / TeamID 与
-//     分区场景的开关。它只是尽早拒绝——GuildID 是一份展示副本，通知可以丢、可以乱序，不能当权威。
-//  2. 从驻留表打上“离开中”的标记起，他新的请求在写闸门被拒（PlayerOwners.Admit），saga 步骤退回。
-//     受理之后驱动器先让他安静下来（PlayerOwners.Quiesce：断开会话，等标记之前已经准入的请求执行完），
-//     然后把第 1 条里事务内的检查重跑一遍（模块的 Recheck）。
-//     这时档里的 TeamID 是事实：入队与写这份档在同一笔 [Team, Player] 事务里，而能发起入队的只有他自己的请求——
-//     新的进不来，旧的已经执行完。别人解散队伍只会让它从非 0 变成 0，往“可以换”的方向变。
-//  3. 离开钩子（事务外，gamerehome.OnLeaving，在复核之后、交出实体之前）：向联盟服务问权威的成员关系
-//     （Membership，读的是他的成员卡：现有的成员关系，以及正在途中的入会预留）。是成员、有预留在途、
-//     或者问不到，都中止。为什么这时问到的可靠：能让他入会的只有两种事——他自己的入会 / 建会请求，
-//     新的在第 2 条被拒，旧的在安静下来时已经返回（应答到了，或者被断开取消了）；被取消的那一种，请求若已经
-//     到了联盟服务，成员卡上就有预留或成员关系，这里看得到。
-//
-// 仍然开着的（记在 KNOWN-LIMITS）：入会请求发出之后还在去联盟服务的路上、比这里的询问晚到；
-// 别人替他改成员关系（GM 的 gm.player.join_guild、会长批准）发生在询问之后。这两种要靠联盟服务那一侧
-// 认得“这名玩家正在换服”，属于二期；到那时为止，目标服登录时照常向联盟服务对一次账（refreshGuild）。
-//
-// 普通场景不在这里：离开本进程时驻留表先让他离开场景（PlayerOwners.Depart），到达之后登录照常把他放到出生点。
-//
-// 这里看不到、因而没有拦的（记在 KNOWN-LIMITS，二期处理）：匹配队列里的票据（match 服务按票据的时限自己作废，
-// 但撮合成功的通知会发到旧服）、进行中的副本与对战（session 服务的房间、lockstep 对局在旧服的进程里）、
-// 名下的建筑与地形账本（按 sid 分库）。运营要给这样的玩家换服，先确认他不在排队、不在副本或对战里。
-func init() {
-	gamerehome.OnApplying("{{GAME_SERVICE}}", refuseRehomeInAPartitionedScene)
-	gamerehome.OnLeaving("{{GAME_SERVICE}}", refuseRehomeOfAGuildMember)
-	player.OnRehomeApplying("{{GAME_SERVICE}}", func(owner *player.Player, _ gamerehome.Move, _ int64) error {
-		return rehomeBlockedBy(owner.Dao().GetGuildID(), owner.TeamComp().TeamID())
-	})
-}
+// 联盟成员可以换服：Saga 在 IO 上下文核对当前绑定，进入/重连修正展示与通知地址。
+// 队伍中的换服互斥由 team/rehome 联动负责。demo 这里只保留尚不能迁出的分区 SceneActor 限制。
+func init() { gamerehome.OnApplying("{{GAME_SERVICE}}", refuseRehomeInAPartitionedScene) }
 
-// rehomeBlockedBy 是事务内的那一条：只看这名玩家自己档里的两个事实。
-func rehomeBlockedBy(guildID, teamID int64) error {
-	switch {
-	case guildID != 0:
-		return errcode.Wrap(apperrors.ErrRehomeRefused, errors.New("leave the guild first"), "guild_id", guildID)
-	case teamID != 0:
-		return errcode.Wrap(apperrors.ErrRehomeRefused, errors.New("leave the team first"), "team_id", teamID)
-	}
-	return nil
-}
-
-// refuseRehomeInAPartitionedScene 是事务外的那一条：本服的场景是分区场景时不让换服。
-// 读不出配置（测试的 Registry 没有这些键）按“没开”处理：分区场景缺省是关的。
 func refuseRehomeInAPartitionedScene(_ context.Context, registry *app.Registry, move gamerehome.Move) error {
 	partition, err := settings.LoadPartition(registry)
-	if err != nil || !partition.Enabled {
+	if err != nil {
+		return err
+	}
+	if !partition.Enabled {
 		return nil
 	}
 	return errcode.Wrap(apperrors.ErrRehomeRefused, fmt.Errorf("server %d runs a partitioned scene; moving its players is not supported yet", move.From), "player_id", move.PlayerID)
-}
-
-// rehomeGuildLookupTimeout 是离开钩子问联盟服务的上限。问不到就中止换服，所以不必久等。
-const rehomeGuildLookupTimeout = 3 * time.Second
-
-// refuseRehomeOfAGuildMember 是离开钩子：他已经安静下来（见文件头第 2、3 条），向联盟服务问他的成员卡。
-// 是某个公会的成员、或者有一笔入会 / 建会的预留在途，返回错误（换服中止）；联盟服务答“没有这张成员卡”
-// 是从没进过公会，放行；别的错误是问不到——同样中止，不带着没核实的成员关系换走。
-// 装配里没有联盟客户端（不用公会的部署、只测别的东西的测试）时没有公会可言，放行。
-func refuseRehomeOfAGuildMember(ctx context.Context, registry *app.Registry, move gamerehome.Move) error {
-	alliances, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.CapabilityName)
-	if !ok || alliances == nil {
-		return nil
-	}
-	target, err := rpcalliance.GuardTarget(move.PlayerID)
-	if err != nil {
-		return fmt.Errorf("guild membership of player %d: %w", move.PlayerID, err)
-	}
-	asking, cancel := context.WithTimeout(ctx, rehomeGuildLookupTimeout)
-	defer cancel()
-	reply, err := alliances.Membership(asking, target)
-	switch {
-	case err == nil:
-	case servicerpc.Classify(err) == servicerpc.OutcomeRejected:
-		return nil // 没有成员卡：从没进过公会
-	default:
-		return fmt.Errorf("guild membership of player %d could not be confirmed: %w", move.PlayerID, err)
-	}
-	if guildID, _, pending, held := reply.State.Holder(); held {
-		if pending {
-			return fmt.Errorf("player %d has a guild join on its way (guild %d); the move is refused until it settles", move.PlayerID, guildID)
-		}
-		return fmt.Errorf("player %d is a member of guild %d; leave the guild first", move.PlayerID, guildID)
-	}
-	return nil
 }

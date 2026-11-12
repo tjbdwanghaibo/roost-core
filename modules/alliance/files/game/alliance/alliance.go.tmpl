@@ -1,0 +1,153 @@
+// Package alliance is the game server's side of the alliance service: what a
+// alliance costs in this game, what the three sagas that change the player's own
+// state carry, and how the service's answers become client codes.
+//
+// The alliance itself is not here. Since phase 4 of the alliance plan
+// (docs/maintenance/FEATURE-2026-11-04-alliance-service.md in roost-core) every
+// alliance and every player's membership guard (AllianceMember) is owned by
+// the alliance service and written only there; this process has no Remote
+// write runtime at all (no remote_entity Mod), so the only way it can change a
+// alliance is the alliance RPC (internal/rpc/alliance). It reads alliances through
+// the alliance's Remote mirror (game/entities/alliance AllianceMirror), which
+// is read-only and eventually consistent; the membership guards are not
+// mirrored to game servers at all (AllianceMember declares snapshots=none).
+// Which alliance a player is in is the player's own copy (PlayerDao.Alliance.ID),
+// written after their own join / leave / founding and by membership notices.
+// Neither is trusted for a decision — the service decides every write on its
+// authoritative state.
+//
+// Which path an operation takes (plan §2.6):
+//
+//   - found, donate, claim reward change the player's Bag as well as the
+//     alliance, two transaction domains in two processes: a saga each, with the
+//     Player steps native (their receipts in PlayerDao.SagaReceipts) and the
+//     alliance steps Mongo steps that call the alliance RPC with the command's
+//     IdempotencyKey as request id (game/alliance/runtime/saga.go);
+//   - join and leave change only the alliance: one RPC, answered with the
+//     alliance's new state and version;
+//   - reading a alliance is a mirror read.
+package alliance
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+)
+
+// The three alliance sagas (saga/alliance_found, alliance_donate,
+// alliance_reward). Each is started from inside the player's own Nest
+// transaction (game/handler/start_alliance_op.go) and reported by business key
+// (AllianceOpStatus).
+const (
+	OpFound  = "found"
+	OpDonate = "donate"
+	OpReward = "reward"
+)
+
+// Deadline bounds one alliance saga. Long enough for the alliance service's
+// crash restart (a step answered "not executed" is retried) and the Player
+// step's admission on its bound sid; a saga past it is failed and its
+// completed steps compensated.
+const Deadline = 10 * time.Minute
+
+// State is a alliance saga's payload. The game writes it when the saga starts;
+// the alliance step of found and reward adds what the service answered
+// (AllianceID; the claim's request id and the reward), and that becomes the
+// payload of the next step and of the compensations (saga.Completion.Data).
+type State struct {
+	PlayerID int64 `json:"player_id"`
+	// SID is the player's bound sid, where the Player steps run: the saga's
+	// route (StartRequest.Route) is taken from it, and the step's admission
+	// checks it again, as for the gift saga.
+	SID int32 `json:"sid"`
+	// Coins is what the debit takes: the founding fee or the donation.
+	Coins int32 `json:"coins,omitempty"`
+	// Found.
+	Name     string `json:"name,omitempty"`
+	OpenJoin bool   `json:"open_join,omitempty"`
+	// AllianceID: donate — the alliance donated to (the endpoint read it
+	// from the player's own copy, PlayerDao.Alliance.ID; the service checks
+	// membership again);
+	// found / reward — the alliance the service answered with.
+	AllianceID int64 `json:"alliance_id,omitempty"`
+	// Reward: the claim the compensation releases, and what the grant gives.
+	ClaimRequestID string `json:"claim_request_id,omitempty"`
+	ItemID         int64  `json:"item_id,omitempty"`
+	Count          int32  `json:"count,omitempty"`
+}
+
+// Encode refuses a payload no step could route: the Player steps run on the
+// player's bound sid.
+func Encode(state State) ([]byte, error) {
+	if state.PlayerID <= 0 || state.SID <= 0 {
+		return nil, fmt.Errorf("alliance saga: player %d on sid %d cannot be routed", state.PlayerID, state.SID)
+	}
+	return json.Marshal(state)
+}
+
+// Decode reads a saga payload.
+func Decode(data []byte) (State, error) {
+	var state State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return State{}, fmt.Errorf("alliance saga: decode payload: %w", err)
+	}
+	if state.PlayerID <= 0 {
+		return State{}, errors.New("alliance saga: payload names no player")
+	}
+	return state, nil
+}
+
+// BusinessKey is one client request's saga key: player, session and frame
+// sequence, so a retried frame folds into the same saga (saga.IDOf).
+func BusinessKey(op string, playerID int64, sessionID string, seq uint32) string {
+	return fmt.Sprintf("alliance-%s:%d:%s:%d", op, playerID, sessionID, seq)
+}
+
+// RequestID is one client request's alliance RPC request id (join, leave):
+// the same frame retried is the same request, answered from its receipt.
+func RequestID(op string, playerID int64, sessionID string, seq uint32) string {
+	return fmt.Sprintf("alliance-%s:%d:%s:%d", op, playerID, sessionID, seq)
+}
+
+// Answer turns an alliance RPC error into what the client sees (plan §2.3,
+// the four answers):
+//
+//   - nil: success;
+//   - a rejection: the service's own code (alliance_*), except that an
+//     alliance nobody founded (servicerpc.EntityNotFound) is alliance_view_missing;
+//   - not executed: alliance_busy — or alliance_moved when even the redirect did
+//     not reach the owner (an operator is moving the alliance); send again;
+//   - unknown (a timeout, an indeterminate commit): alliance_pending — the
+//     write may have happened; the same frame sent again is answered from
+//     the receipt.
+//
+// internal reports an error worth logging (an unknown outcome or a code the
+// service does not send).
+func Answer(err error) (code int32, reason string, internal bool) {
+	if err == nil {
+		return 0, "", false
+	}
+	switch servicerpc.Classify(err) {
+	case servicerpc.OutcomeRejected:
+		if errcode.CodeOf(err) == errcode.CodeEntityNotFound {
+			err = errcode.Wrap(apperrors.ErrAllianceViewMissing, err)
+		}
+	case servicerpc.OutcomeRetryable:
+		if errcode.CodeOf(err) == servicerpc.CodeRedirect {
+			err = errcode.Wrap(apperrors.ErrAllianceMoved, err)
+		} else {
+			err = errcode.Wrap(apperrors.ErrAllianceBusy, err)
+		}
+	default:
+		err = errcode.Wrap(apperrors.ErrAlliancePending, err)
+		internal = true
+	}
+	code, reason = errcode.ClientError(err)
+	return code, reason, internal || code == errcode.CodeInternal
+}

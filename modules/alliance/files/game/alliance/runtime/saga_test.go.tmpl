@@ -1,0 +1,182 @@
+package allianceruntime
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/alliance"
+	"{{MODULE}}/game/alliancerule"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+)
+
+// allianceAllianceStub is the alliance service as the alliance steps see it.
+type allianceAllianceStub struct {
+	foundErr   error
+	claimErr   error
+	releaseErr error
+	requests   []string
+	released   []string
+}
+
+func (s *allianceAllianceStub) Found(_ context.Context, requestID string, callerID int64, _ int32, name string, _ bool) (rpcalliance.Reply, error) {
+	s.requests = append(s.requests, requestID)
+	return rpcalliance.Reply{Alliance: alliancerule.View{AllianceID: 31, Name: name, LeaderID: callerID}}, s.foundErr
+}
+
+func (s *allianceAllianceStub) Donate(_ context.Context, requestID string, _ int64, _ int32, _ int64, _ int64) (rpcalliance.Reply, error) {
+	s.requests = append(s.requests, requestID)
+	return rpcalliance.Reply{}, nil
+}
+
+func (s *allianceAllianceStub) ClaimReward(_ context.Context, requestID string, _ int64, _ int32, _ int64) (rpcalliance.RewardReply, error) {
+	s.requests = append(s.requests, requestID)
+	return rpcalliance.RewardReply{AllianceID: 31, ItemID: 1002, Count: 5}, s.claimErr
+}
+
+func (s *allianceAllianceStub) ReleaseReward(_ context.Context, _ int64, claimRequestID string) (rpcalliance.GuardReply, error) {
+	s.released = append(s.released, claimRequestID)
+	return rpcalliance.GuardReply{}, s.releaseErr
+}
+
+// stepNest records which Nest handler a alliance Player step asked for, with
+// what. It runs no transaction, so the step reaches no outcome
+// (saga.ErrNativeStepNoOutcome); what the handlers do inside Nest — the
+// receipt, the Bag — is game/handler/alliance_steps_test.go on a real Nest.
+type stepNest struct {
+	corenest.Client
+	calls []string
+}
+
+func (n *stepNest) Request(_ context.Context, name corenest.HandlerName, _ int64, params corenest.Params, _ ...corenest.SendOpt) (any, error) {
+	n.calls = append(n.calls, fmt.Sprintf("%s(%v,%v)", name.String(), params[0], params[1]))
+	if _, ok := params[len(params)-1].(saga.NativeStep); !ok {
+		return nil, fmt.Errorf("%s: the last parameter is %T, want the native step", name, params[len(params)-1])
+	}
+	return int32(0), nil
+}
+
+// runPlayerStep runs a native step body against stepNest.
+func runPlayerStep(t *testing.T, command saga.Command, body saga.NativeStepBody) {
+	t.Helper()
+	if _, err := saga.RunNativeStep(context.Background(), command, 0, body); !errors.Is(err, saga.ErrNativeStepNoOutcome) {
+		t.Fatalf("step %s: %v", command.ID, err)
+	}
+}
+
+func allianceStepCommand(t *testing.T, state alliance.State, key, topic string, phase saga.Phase) saga.Command {
+	t.Helper()
+	payload, err := alliance.Encode(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	return saga.Command{
+		ID: key + "/1", IdempotencyKey: key, SagaID: "alliance-saga", SagaType: alliancefound.Type, DefinitionVersion: alliancefound.Version,
+		BusinessKey: "alliance-found:7", StepName: "step", Phase: phase, Attempt: 1, Topic: topic, Payload: payload,
+		DeadlineAt: now.Add(time.Hour), CreatedAt: now,
+	}
+}
+
+// The found saga, step by step as the coordinator drives it: the fee is
+// debited, the alliance service refuses the founding (an invalid name, or the
+// player already leads a alliance), the step answers a non-retryable refusal —
+// which is what makes the coordinator compensate — and the compensation
+// credits the same fee back. "Not executed" and "unknown" are not refusals:
+// they redeliver the step with the same request id, so a founding that did
+// happen is answered from the service's receipt instead of being refunded.
+func TestAllianceARefusedFoundingRefundsTheFee(t *testing.T) {
+	player.RegisterEntity()
+	ctx := context.Background()
+	state := alliance.State{PlayerID: 7, SID: 1000, Coins: 100, Name: "seven", OpenJoin: true}
+	nest := &stepNest{}
+	alliances := &allianceAllianceStub{foundErr: apperrors.ErrAllianceMembership}
+	steps := allianceSteps{nest: nest, alliances: alliances}
+
+	runPlayerStep(t, allianceStepCommand(t, state, "found-1/debit", alliancefound.TopicDebit, saga.PhaseForward), steps.debitCoins)
+	found, err := steps.found(ctx, allianceStepCommand(t, state, "found-1/found", alliancefound.TopicFound, saga.PhaseForward))
+	if err != nil || found.Success || found.Retryable || found.Error == "" {
+		t.Fatalf("a refused founding answered %+v, %v; want a non-retryable refusal, so the coordinator compensates the debit", found, err)
+	}
+	if len(alliances.requests) != 1 || alliances.requests[0] != "found-1/found" {
+		t.Fatalf("Found was asked with request ids %v, want the command's IdempotencyKey", alliances.requests)
+	}
+	runPlayerStep(t, allianceStepCommand(t, state, "found-1/debit/compensate", alliancefound.TopicDebitCompensation, saga.PhaseCompensate), steps.refundCoins)
+	want := []string{fmt.Sprintf("handlerAllianceDebit(%d,100)", alliance.CoinItemID), fmt.Sprintf("handlerAllianceCredit(%d,100)", alliance.CoinItemID)}
+	if fmt.Sprint(nest.calls) != fmt.Sprint(want) {
+		t.Fatalf("Player steps = %v, want %v: the fee taken, then the same fee given back", nest.calls, want)
+	}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"not executed", fmt.Errorf("call: %w", fnats.ErrNoResponders)},
+		{"redirected away", servicerpc.Redirect(3001, errors.New("fenced"))},
+		{"unknown", fmt.Errorf("call: %w", context.DeadlineExceeded)},
+	} {
+		alliances.foundErr = tc.err
+		if completion, err := steps.found(ctx, allianceStepCommand(t, state, "found-2/found", alliancefound.TopicFound, saga.PhaseForward)); err == nil {
+			t.Fatalf("%s: Found answered %+v with no error; it must redeliver (same request id), not refund a founding that may have happened", tc.name, completion)
+		}
+	}
+	alliances.foundErr = nil
+	completion, err := steps.found(ctx, allianceStepCommand(t, state, "found-3/found", alliancefound.TopicFound, saga.PhaseForward))
+	if err != nil || !completion.Success {
+		t.Fatalf("founded = %+v, %v", completion, err)
+	}
+	if next, err := alliance.Decode(completion.Data); err != nil || next.AllianceID != 31 || next.Coins != 100 {
+		t.Fatalf("payload after founding = %+v, %v; want the alliance founded, the fee kept for a compensation", next, err)
+	}
+}
+
+// The reward saga: the claim's request id and the reward go into the payload,
+// the grant gives that reward, and the claim's compensation — what the
+// coordinator runs when the grant is refused (bag full) — releases exactly
+// that claim.
+func TestAllianceARefusedRewardGrantReleasesTheClaim(t *testing.T) {
+	player.RegisterEntity()
+	alliance_member.RegisterEntity()
+	ctx := context.Background()
+	alliances := &allianceAllianceStub{}
+	nest := &stepNest{}
+	steps := allianceSteps{nest: nest, alliances: alliances}
+	state := alliance.State{PlayerID: 7, SID: 1000}
+
+	claimed, err := steps.claim(ctx, allianceStepCommand(t, state, "reward-1/claim", alliancereward.TopicClaim, saga.PhaseForward))
+	if err != nil || !claimed.Success {
+		t.Fatalf("claim = %+v, %v", claimed, err)
+	}
+	next, err := alliance.Decode(claimed.Data)
+	if err != nil || next.ClaimRequestID != "reward-1/claim" || next.ItemID != 1002 || next.Count != 5 {
+		t.Fatalf("payload after the claim = %+v, %v", next, err)
+	}
+	runPlayerStep(t, allianceStepCommand(t, next, "reward-1/grant", alliancereward.TopicGrant, saga.PhaseForward), steps.grant)
+	if fmt.Sprint(nest.calls) != "[handlerAllianceCredit(1002,5)]" {
+		t.Fatalf("grant asked %v, want the claimed reward", nest.calls)
+	}
+	// The grant into a full bag refuses (game/handler/alliance_steps_test.go);
+	// the coordinator then compensates the claim:
+	released, err := steps.release(ctx, allianceStepCommand(t, next, "reward-1/claim/compensate", alliancereward.TopicClaimCompensation, saga.PhaseCompensate))
+	if err != nil || !released.Success || fmt.Sprint(alliances.released) != "[reward-1/claim]" {
+		t.Fatalf("release = %+v, %v, released %v; want the claim reward-1/claim released", released, err, alliances.released)
+	}
+
+	alliances.claimErr = apperrors.ErrAllianceReward
+	refused, err := steps.claim(ctx, allianceStepCommand(t, state, "reward-2/claim", alliancereward.TopicClaim, saga.PhaseForward))
+	if err != nil || refused.Success || refused.Retryable {
+		t.Fatalf("a second claim in the period = %+v, %v; want a refusal (nothing to compensate)", refused, err)
+	}
+}

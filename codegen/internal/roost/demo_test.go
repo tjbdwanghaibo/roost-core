@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -171,14 +171,11 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 			t.Errorf("%s is the %s module's file and is written before the module is installed", step.write, module)
 		}
 	}
-	// 建在模块组件上的 handler 仍然由 demo 写出：背包上的八个、档案上的五个。邮件附件的发放不在其中：
-	// 那是 mailbox 模块自己的 MailboxClaimReward，建在模块的 Mailbox 组件上。
+	// demo 只写自己的跨模块玩法。联盟、邮件和付费发货 handler 由各自模块提供。
 	for _, rel := range []string{
 		"game/handler/add_item.go", "game/handler/start_gift.go", "game/handler/gift_debit.go", "game/handler/gift_refund.go",
 		"game/handler/purchase_balance.go",
-		"game/handler/start_guild_op.go", "game/handler/guild_debit.go", "game/handler/guild_credit.go",
 		"game/handler/add_exp.go", "game/handler/claim_dungeon.go",
-		"game/handler/show_guild.go", "game/handler/player_guild.go",
 	} {
 		if !written[rel] {
 			t.Errorf("no step writes %s", rel)
@@ -336,8 +333,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/handler/add_item.go":                    "target.BagComp().Add(itemID, int64(count))",
 		"game/handler/gift_debit.go":                  "target.BagComp().Remove(itemID, int64(count))",
 		"game/handler/gift_refund.go":                 "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/guild_debit.go":                 "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/guild_credit.go":                "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/alliance_debit.go":              "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/alliance_credit.go":             "target.BagComp().Add(itemID, int64(count))",
 		"game/entities/player/equipment_component.go": "c.owner.BagComp().Remove(itemID, 1)",
 		"game/entities/player/purchase_item.go":       "owner.BagComp().Add",
 	} {
@@ -408,7 +405,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/controllers/player/battle_input.go", "internal/service/game/battle.go",
 		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go",
 		"internal/service/game/battle_test.go", "game/handler/claim_harness_test.go",
-		"game/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/player/guild_test.go"} {
+		"game/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/alliance/refresh_test.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -608,14 +605,14 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("the robot scenario does not exercise both gift saga paths")
 	}
 	// 离线入会再登录（联盟方案 §2.5B 决定 D）：机器人场景、它用的运维命令与 dev-smoke 的第二轮都在。
-	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "name: guild_offline_join") || !strings.Contains(scenario, "action: join_guild_offline") || !strings.Contains(scenario, "action: my_guild") {
-		t.Errorf("the robot scenarios lack guild_offline_join (a guild joined while offline, seen at the next login)")
+	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "name: alliance_offline_join") || !strings.Contains(scenario, "action: join_alliance_offline") || !strings.Contains(scenario, "action: my_alliance") {
+		t.Errorf("the robot scenarios lack alliance_offline_join (a alliance joined while offline, seen at the next login)")
 	}
-	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, `"gm.player.join_guild"`) {
-		t.Errorf("the game GM lacks gm.player.join_guild, the operator step guild_offline_join runs")
+	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, `"gm.player.join_alliance"`) {
+		t.Errorf("the game GM lacks gm.player.join_alliance, the operator step alliance_offline_join runs")
 	}
-	if makefile := read("Makefile"); !strings.Contains(makefile, "-scenario guild_offline_join") {
-		t.Errorf("make dev-smoke does not run the guild_offline_join scenario")
+	if makefile := read("Makefile"); !strings.Contains(makefile, "-scenario alliance_offline_join") {
+		t.Errorf("make dev-smoke does not run the alliance_offline_join scenario")
 	}
 	// 步骤消费者只有 wiring/saga Steps 一种写法（D12 方向 B 去掉了 definition.go 的 Subscribe* 辅助）；demo 的登记
 	// 在 gift_saga.go，生成的单进程 steps.go 被换成指向它的说明（送礼的扣款 / 退款要按 sid 准入与转交）。
@@ -642,8 +639,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "owners.AdmitBound(ctx, playerID)") || !strings.Contains(steps, `saga.BounceStep("", `) || strings.Contains(steps, "playerMoving") || strings.Contains(steps, "notMoving") {
 		t.Errorf("gift saga does not admit its Player steps by the sender's current binding")
 	}
-	if steps := read("internal/service/game/alliance_saga.go"); !strings.Contains(steps, `admitByBinding(ctx, steps.owners, "guild saga", state.PlayerID)`) || strings.Contains(steps, "playerMoving") {
-		t.Errorf("the guild sagas do not admit their Player steps by the player's current binding")
+	if steps := read("game/alliance/runtime/runtime.go"); !strings.Contains(steps, "alliance.Binding(ctx, registry, playerID, sid)") || strings.Contains(steps, "playerMoving") {
+		t.Errorf("the alliance sagas do not admit their Player steps by the player's current binding")
 	}
 	// 驻留表实现并发布 rehome 模块的 Residency；GM 有换服命令；demo 自己的换服前检查在盘上。
 	if owners := read("internal/service/game/playerowner.go"); !strings.Contains(owners, "var _ gamerehome.Residency = (*PlayerOwners)(nil)") || !strings.Contains(owners, "gamerehome.Binding(ctx, registry, playerID)") {
@@ -655,7 +652,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if gm := read("game/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, unique, payload.To,") {
 		t.Errorf("the game GM lacks gm.player.rehome, or it does not go through the rehome module's server-side entry")
 	}
-	if checks := read("internal/service/game/rehome_checks.go"); !strings.Contains(checks, `gamerehome.OnApplying("game"`) || !strings.Contains(checks, `player.OnRehomeApplying("game"`) {
+	if checks := read("internal/service/game/rehome_checks.go"); !strings.Contains(checks, `gamerehome.OnApplying("game"`) {
 		t.Errorf("the demo's own checks before a server change are not registered:\n%s", checks)
 	}
 	// The debit is routed to the sender's sid from the start (plan ③, 2026-11-11).
@@ -682,8 +679,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// player_id takes either id an operator has at hand: the unique id the
 	// client sees or the full entity id Mongo stores as _id. Re-wrapping a
 	// full id produced an id no Player has (live run, 2026-09-17).
-	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, "entity.MatchEntityID(raw, player.EntityKindPlayer)") || !strings.Contains(gm, "entity.GetUniqueIDFromEntityID(raw)") {
-		t.Errorf("gm.go does not accept the full Player entity id as player_id")
+	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, "gamemodgm.PlayerIDs(payload.PlayerID, player.EntityKindPlayer)") {
+		t.Errorf("gm.go does not use the module PlayerIDs normalizer")
 	}
 	if scrape := read("deploy/dev/observability/prometheus.yml"); !strings.Contains(scrape, "job_name: chat") || !strings.Contains(scrape, ":9102") {
 		t.Errorf("prometheus.yml does not scrape the chat process on its assigned port")
@@ -715,8 +712,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "lifecycle.PlayerFromRegistry(") {
 		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
 	}
-	// Guilds live in the alliance service (FEATURE-2026-11-04-alliance-service
-	// §2.6): the game reads guilds through the mirrors and changes them only
+	// Alliances live in the alliance service (FEATURE-2026-11-04-alliance-service
+	// §2.6): the game reads alliances through the mirrors and changes them only
 	// through the alliance RPC. It keeps remote_entity for the partitioned
 	// scene's Team, the one Remote kind it owns (FEATURE-2026-11-03-seamless-world
 	// §14); the alliance kinds are foreign to its Remote runtime.
@@ -731,12 +728,12 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if ownership := read("internal/registry/ownership_gen.go"); !strings.Contains(ownership, "alliance.EntityKindAlliance") || !strings.Contains(ownership, "team.EntityKindTeam") {
 		t.Errorf("ownership does not split the alliance kinds and the team between the two services:\n%s", ownership)
 	}
-	if guild := read("game/controllers/player/guild.go"); !strings.Contains(guild, "controller.alliances.Join(") || !strings.Contains(guild, "entity.RemoteReadMonotonic") {
-		t.Errorf("guild endpoints do not go through the alliance RPC and the mirrors:\n%s", guild)
+	if alliance := read("game/controllers/alliance/alliance.go"); !strings.Contains(alliance, "controller.alliances.Join(") || !strings.Contains(alliance, "entity.RemoteReadMonotonic") {
+		t.Errorf("alliance endpoints do not go through the alliance RPC and the mirrors:\n%s", alliance)
 	}
 	for _, gone := range []string{"game/entities/guild", "db/def/guild.go", "game/controllers/player/guild_ids.go", "game/handler/join_guild.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(gone))); !os.IsNotExist(err) {
-			t.Errorf("%s still generated (err=%v): the game-local guild is gone", gone, err)
+			t.Errorf("%s still generated (err=%v): the game-local alliance is gone", gone, err)
 		}
 	}
 	// EnterGame 的协议与初始化标记来自 enter 模块：端点绑在 enter 域上，demo 用自己的进入流程覆盖模块的 controller。
@@ -794,7 +791,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		}
 	}
 	if component := read("game/entities/player/profile_component.go"); !strings.Contains(component, "func (component *ProfileComponent) CheckAddExp(") ||
-		strings.Contains(component, "effects.") || strings.Contains(component, "AttributeComp()") || strings.Contains(component, "GuildID") || strings.Contains(component, "Dungeon") {
+		strings.Contains(component, "effects.") || strings.Contains(component, "AttributeComp()") || strings.Contains(component, "AllianceID") || strings.Contains(component, "Dungeon") {
 		t.Errorf("game/entities/player/profile_component.go is not the module's own component file:\n%s", component)
 	}
 	if dao := read("db/def/player.go"); !strings.Contains(dao, "Profile ProfileState `store:\"profile\" dao:\"persist,sync\"`") ||
@@ -805,8 +802,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if packer := read("game/entities/player/sync_packer.go"); !strings.Contains(packer, `playerPublicFields = []string{"Profile", `) || strings.Contains(packer, `playerPublicFields = []string{"Profile", "ProfilePrivate"`) {
 		t.Errorf("the view other players get does not list Profile without ProfilePrivate:\n%s", packer)
 	}
-	if guild := read("game/entities/player/guild_membership.go"); !strings.Contains(guild, "func (component *ProfileComponent) SetGuild(") {
-		t.Errorf("the guild copy is not in the demo's own file:\n%s", guild)
+	if alliance := read("game/entities/player/alliance_component.go"); !strings.Contains(alliance, "func (c *AllianceComponent) SetAlliance(") {
+		t.Errorf("the alliance copy is not provided by its module:\n%s", alliance)
 	}
 	if ledger := read("game/entities/player/dungeon_ledger.go"); !strings.Contains(ledger, "func (component *ProfileComponent) ClaimDungeonRun(") {
 		t.Errorf("the dungeon claim ledger is not in the demo's own file:\n%s", ledger)

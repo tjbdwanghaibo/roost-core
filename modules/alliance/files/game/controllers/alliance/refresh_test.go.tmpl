@@ -1,0 +1,147 @@
+package alliance
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+
+	"{{MODULE}}/game/alliancerule"
+	allianceentity "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	player "{{MODULE}}/game/entities/player"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+type refreshNest struct {
+	nest.Client
+	shown  int64
+	writes int
+}
+
+func (n *refreshNest) Request(_ context.Context, name nest.HandlerName, _ int64, params nest.Params, _ ...nest.SendOpt) (any, error) {
+	switch name.String() {
+	case "handlerPlayerAlliance":
+		return n.shown, nil
+	case "handlerShowAlliance":
+		next, old := params[0].(int64), params[1].(int64)
+		if old != 0 && n.shown != old || n.shown == next {
+			return false, nil
+		}
+		n.shown = next
+		n.writes++
+		return true, nil
+	}
+	return nil, fmt.Errorf("unexpected handler %s", name.String())
+}
+
+type refreshRPC struct {
+	rpcalliance.Alliance
+	membership alliancerule.MemberState
+	err        error
+	reads      int
+	repairs    []HomeCall
+}
+type HomeCall struct {
+	playerID  int64
+	join      string
+	old, next int32
+}
+
+func (r *refreshRPC) Membership(ctx context.Context, _ int64) (rpcalliance.GuardReply, error) {
+	if _, bounded := ctx.Deadline(); !bounded {
+		return rpcalliance.GuardReply{}, errors.New("unbounded lookup")
+	}
+	r.reads++
+	return rpcalliance.GuardReply{State: r.membership}, r.err
+}
+func (r *refreshRPC) RefreshHome(_ context.Context, _ int64, playerID int64, join string, old, next int32) (rpcalliance.HomeReply, error) {
+	r.repairs = append(r.repairs, HomeCall{playerID, join, old, next})
+	return rpcalliance.HomeReply{Changed: true, HomeSID: next}, nil
+}
+
+type refreshSnapshot struct{ value allianceentity.AllianceMirror }
+
+func (s refreshSnapshot) ReadSnapshot(_ context.Context, read entity.RemoteSnapshotRead) (entity.RemoteSnapshotEnvelope, bool, error) {
+	raw, err := bson.Marshal(s.value)
+	if err != nil {
+		return entity.RemoteSnapshotEnvelope{}, false, err
+	}
+	return entity.RemoteSnapshotEnvelope{Key: read.Key, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: entity.RemoteSnapshotSchema(read.Key.Kind, read.Key.Scope), Codec: 1, Payload: entity.CopyFrozenRemoteSnapshotPayload(raw)}, true, nil
+}
+
+type refreshAccount struct{ svcaccount.Accounts }
+
+func (refreshAccount) RoleBinding(_ context.Context, id int64) (svcaccount.RoleBinding, error) {
+	return svcaccount.RoleBinding{PlayerID: id, ServingServerID: 1001}, nil
+}
+func refreshFixture(t *testing.T, shown int64) (*Controller, *refreshRPC, *refreshNest) {
+	t.Helper()
+	player.RegisterEntity()
+	alliance_member.RegisterEntity()
+	allianceentity.RegisterEntity()
+	cfg := viper.New()
+	cfg.Set("sid", 1001)
+	registry := app.NewRegistry(cfg)
+	n := &refreshNest{shown: shown}
+	rpc := &refreshRPC{membership: alliancerule.MemberState{AllianceID: 7, JoinRequestID: "join-7"}}
+	source := refreshSnapshot{value: allianceentity.AllianceMirror{LeaderID: 10, Members: map[int64]allianceentity.AllianceMirrorSeat{10: {HomeSID: 1000, JoinRequestID: "join-7"}}}}
+	for name, value := range map[app.ModName]any{mods.ModNest: n, mods.ModRemoteMirror: source, rpcalliance.CapabilityName: rpc, svcaccount.CapabilityName: refreshAccount{}} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return controller, rpc, n
+}
+func TestAllianceRefreshRepairsDisplayAndHome(t *testing.T) {
+	c, r, n := refreshFixture(t, 0)
+	if err := c.RefreshMembership(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n.shown != 7 || n.writes != 1 || len(r.repairs) != 1 || r.repairs[0] != (HomeCall{10, "join-7", 1000, 1001}) {
+		t.Fatalf("shown=%d writes=%d repair=%+v", n.shown, n.writes, r.repairs)
+	}
+}
+func TestAllianceRefreshClearsMissingGuard(t *testing.T) {
+	c, r, n := refreshFixture(t, 7)
+	r.err = errcode.ErrEntityNotFound
+	if err := c.RefreshMembership(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n.shown != 0 || n.writes != 1 || len(r.repairs) != 0 {
+		t.Fatal("missing guard not cleared")
+	}
+}
+func TestAllianceRefreshKeepsDisplayOnUnknownFailure(t *testing.T) {
+	c, r, n := refreshFixture(t, 7)
+	r.err = context.DeadlineExceeded
+	if err := c.RefreshMembership(context.Background(), 10); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if n.shown != 7 || n.writes != 0 || len(r.repairs) != 0 {
+		t.Fatal("unknown result changed display")
+	}
+}
+func TestAllianceRefreshRejectsStaleMirrorGeneration(t *testing.T) {
+	c, r, n := refreshFixture(t, 7)
+	r.membership.JoinRequestID = "join-new"
+	if err := c.RefreshMembership(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n.writes != 0 || len(r.repairs) != 0 {
+		t.Fatal("stale mirror used to repair another membership")
+	}
+}

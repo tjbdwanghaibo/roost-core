@@ -1,0 +1,81 @@
+package alliance
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestAllianceHomeUpdatesOnce(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	id := found(t, c, 3000, "found", 100, true)
+	target := mustAllianceTarget(t, id)
+	first, err := c.client().RefreshHome(ctx, target, 100, "found", 1000, 1001)
+	if err != nil || !first.Changed || first.HomeSID != 1001 {
+		t.Fatalf("first=%+v %v", first, err)
+	}
+	commits := c.instances[3000].committer.count()
+	replay, err := c.client().RefreshHome(ctx, target, 100, "found", 1000, 1001)
+	if err != nil || replay.Changed || replay.HomeSID != 1001 || c.instances[3000].committer.count() != commits {
+		t.Fatalf("replay=%+v %v commits=%d/%d", replay, err, c.instances[3000].committer.count(), commits)
+	}
+	if guardState(t, c, 100).AllianceID != id {
+		t.Fatal("changed membership")
+	}
+}
+func TestAllianceHomeRejectsStaleSIDAndInvalidAddress(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	id := found(t, c, 3000, "found", 100, true)
+	target := mustAllianceTarget(t, id)
+	answer, err := c.client().RefreshHome(ctx, target, 100, "found", 999, 1002)
+	if err != nil || answer.Changed || answer.HomeSID != 1000 {
+		t.Fatalf("stale=%+v %v", answer, err)
+	}
+	if _, err = c.client().RefreshHome(ctx, target, 100, "found", 1000, 0); err == nil {
+		t.Fatal("accepted sid zero")
+	}
+	missing, err := c.client().RefreshHome(ctx, target, 999, "join", 1000, 1001)
+	if err != nil || missing.Changed || missing.HomeSID != 0 {
+		t.Fatalf("missing=%+v %v", missing, err)
+	}
+}
+func TestAllianceHomeCannotChangeRejoinedMembership(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	id := found(t, c, 3000, "found", 100, true)
+	target := mustAllianceTarget(t, id)
+	if _, err := c.client().Join(ctx, "first", 101, 1000, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.client().Leave(ctx, "leave", 101, 1000, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.client().Join(ctx, "second", 101, 1000, target); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := c.client().RefreshHome(ctx, target, 101, "first", 1000, 1001)
+	if err != nil || stale.Changed || stale.HomeSID != 1000 {
+		t.Fatalf("stale=%+v %v", stale, err)
+	}
+	current, err := c.client().RefreshHome(ctx, target, 101, "second", 1000, 1002)
+	if err != nil || !current.Changed || current.HomeSID != 1002 {
+		t.Fatalf("current=%+v %v", current, err)
+	}
+}
+func TestAllianceHomeCommitFailureRollsBack(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	id := found(t, c, 3000, "found", 100, true)
+	target := mustAllianceTarget(t, id)
+	log := c.instances[3000].committer
+	log.mu.Lock()
+	log.reject = errors.New("reject commit")
+	log.mu.Unlock()
+	if _, err := c.client().RefreshHome(ctx, target, 100, "found", 1000, 1001); err == nil {
+		t.Fatal("commit failure hidden")
+	}
+	log.mu.Lock()
+	log.reject = nil
+	log.mu.Unlock()
+	retry, err := c.client().RefreshHome(ctx, target, 100, "found", 1000, 1001)
+	if err != nil || !retry.Changed || retry.HomeSID != 1001 {
+		t.Fatalf("retry=%+v %v", retry, err)
+	}
+}

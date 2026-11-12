@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// ErrAlliancePending: the alliance service's answer did not arrive in time, so
+// the request may or may not have taken effect. Show "processing"; the same
+// request sent again (the same frame: the same request id) is answered from
+// the service's receipt, never applied twice.
+var ErrAlliancePending = errcode.Define({{ID:errcode:alliance_pending}}, "alliance_pending", "alliance request is still being processed")

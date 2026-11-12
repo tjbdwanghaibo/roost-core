@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **新增**（modules/alliance）：独立联盟服务、单写者路由 RPC、game Mirror、Player 展示组件与建盟/捐赠/领奖三个跨域 Saga；与 enter/rehome 联动，进入时按权威成员关系对账，HomeSID 按入盟批次与旧 SID 条件修正。HomeSID 仅用于尽力通知，联盟成员允许换服；普通联盟写不用 Saga。demo 删除重复联盟代码，统一 alliance 名字，未保留旧 guild API/字段兼容。
+- **新增**（module 安装器）：模块可声明独占新服务、RPC、额外组件及 Saga；实体回执与生成失败一起回滚。自动代办 saga/Mirror，已有只读 Mirror 可提升为 Remote 写 Mod；新增服务开发 WAL 目录隔离。demo 的自有 PlayerOwners 在模块消费者启动前接入，启动与业务逻辑分开。
+- **修复**（demo）：分区配置读取错误不再放行换服；模块迁移后真实依赖脚本、Robot 场景入口与监控指标来源一并更新。
+
 - **新增**（modules/matchmaking、matchroom）：本服单排/完整队伍匹配，持久意图、未知结果保护、取消竞态与结果补查；MatchID 持久映射到唯一 RoomID，固定名单准入。turn-pvp 接入客户端匹配至回合链路；不使用 Saga，不改 Nest/DataEngine/Sync。
 - **整理**（modules/team、demo）：Team 生命周期使用正式构造入口；队伍冻结与事务内 OnTeamChanged。demo 社交队伍迁入模块，分区视野保留，Player 引用改为 Team.TeamID，旧 PB/配置不兼容（先 TeamCreate，TeamResponse.Info，规则默认 8 人/60 秒）。真实跨进程验收仍待最终批次。
 

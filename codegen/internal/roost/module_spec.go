@@ -31,6 +31,10 @@ type ModuleSpec struct {
 	Needs     ModuleNeeds    `yaml:"needs" json:"needs"`
 	Access    ModuleAccess   `yaml:"access" json:"access"`
 	Runtime   *ModuleRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	// Sagas 复用 add saga 的定义与实体回执生成；步骤业务和启动入口由模块模板提供。
+	Sagas []ModuleSaga `yaml:"sagas,omitempty" json:"sagas,omitempty"`
+	// Services 是模块独占的新业务服务；不接管工程已经存在的同名服务。
+	Services map[string]ModuleService `yaml:"services,omitempty" json:"services,omitempty"`
 	// Entity 是模块状态与组件挂靠的实体（PascalCase，如 Player）。没有状态也没有组件的模块可以不写。
 	Entity string `yaml:"entity" json:"entity,omitempty"`
 	// Entities 是模块自带的实体：模板提供 Entity 与 DAO 定义，安装器分配实体号、补 lifecycle。
@@ -43,6 +47,8 @@ type ModuleSpec struct {
 	DAOs []ModuleDAOField `yaml:"daos" json:"daos,omitempty"`
 	// Component 是挂在 Entity 上的组件名（PascalCase）；组件号在安装时分配。
 	Component string `yaml:"component" json:"component,omitempty"`
+	// Components 为自带实体的其他组件分配类型号，聚合字段由实体模板声明。
+	Components []string `yaml:"components,omitempty" json:"components,omitempty"`
 	// SyncPacker 把模块自带的有限视图打包器接到目标实体；不覆盖已有业务打包器。
 	SyncPacker string `yaml:"sync_packer,omitempty" json:"sync_packer,omitempty"`
 	// TimerTypes 在 Entity 的持久定时器中分配类型号；定时器组件提供 register<模块组件>Timers(*entitytimer.Handlers)。
@@ -73,12 +79,13 @@ type ModuleRuntime struct {
 	Start   string `yaml:"start" json:"start"`     // func(*app.Registry) (func(context.Context) error, error)
 }
 
-// ModuleNeeds 是模块对工程的前提。heartbeat / directory / remote_entity 经正式 add mod 代办，其余缺项给出接入命令。
+// ModuleNeeds 是模块对工程的前提。可确定接线的 Mod 由 moduleCanAddMod 代办，其余缺项给出接入命令。
 type ModuleNeeds struct {
 	Mods     []string `yaml:"mods" json:"mods,omitempty"`
 	Features []string `yaml:"features" json:"features,omitempty"`
 	// Uses 是业务服务必须 uses 的托管框架服务（如 rank、mail）。
-	Uses []string `yaml:"uses" json:"uses,omitempty"`
+	Uses     []string `yaml:"uses" json:"uses,omitempty"`
+	UsesRPCs []string `yaml:"uses_rpcs" json:"uses_rpcs,omitempty"`
 }
 
 // ModuleAccess 是模块要求的玩家接入形态。与 Needs 不同，这些由安装器代办：它们是确定的框架骨架
@@ -336,6 +343,19 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	if err := validateModuleRuntime(spec.Runtime); err != nil {
 		return err
 	}
+	if err := validateModuleSagas(spec); err != nil {
+		return err
+	}
+	if err := validateModuleServices(spec); err != nil {
+		return err
+	}
+	seenComponents := map[string]bool{spec.Component: true}
+	for _, name := range spec.Components {
+		if !modulePascalPattern.MatchString(name) || seenComponents[name] {
+			return fmt.Errorf("components: invalid or duplicate name %q", name)
+		}
+		seenComponents[name] = true
+	}
 	seenEntities := map[string]bool{}
 	for _, name := range spec.Entities {
 		if !modulePascalPattern.MatchString(name) || seenEntities[name] {
@@ -488,6 +508,9 @@ func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
 	if spec.Component != "" {
 		declared["component"][spec.Component] = true
 	}
+	for _, name := range spec.Components {
+		declared["component"][name] = true
+	}
 	for _, name := range spec.Errcodes {
 		declared["errcode"][name] = true
 	}
@@ -508,6 +531,9 @@ func moduleEntityLifecycle(name string) string {
 // ownedFiles 包括模板和安装时补出的 lifecycle；计划、冲突检查、回滚与归属使用同一份清单。
 func (spec ModuleSpec) ownedFiles() []string {
 	files := append([]string(nil), spec.Files...)
+	for _, saga := range spec.Sagas {
+		files = append(files, moduleSagaDefinition(saga.Name))
+	}
 	for _, name := range spec.Entities {
 		files = append(files, moduleEntityLifecycle(name))
 	}

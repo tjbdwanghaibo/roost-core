@@ -1,0 +1,23 @@
+package handler
+
+import (
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+)
+
+// handlerAllianceHome 只修改通知提示。入盟批次隔离退出/重新入盟，旧 SID 的比较防止晚到的修正覆盖较新的观察。
+// 这里不访问 account；调用方在 IO 上下文确认归属后才发 RPC。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceHome(target alliance.IAllianceRosterEntity, playerID int64, joinRequestID string, expectedSID int32, nextSID int32) (alliancerule.HomeUpdate, error) {
+	seat, found := target.AllianceRosterComp().Seat(playerID)
+	if !found {
+		return alliancerule.HomeUpdate{}, nil
+	}
+	current := seat.GetHomeSID()
+	if seat.GetJoinRequestID() != joinRequestID || current != expectedSID || current == nextSID {
+		return alliancerule.HomeUpdate{HomeSID: current}, nil
+	}
+	seat.SetHomeSID(nextSID)
+	return alliancerule.HomeUpdate{Changed: true, HomeSID: nextSID}, nil
+}

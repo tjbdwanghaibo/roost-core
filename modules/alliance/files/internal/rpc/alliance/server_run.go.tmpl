@@ -1,0 +1,9 @@
+package alliance
+
+import "context"
+
+// run 供生成的独立 RPC Server 使用；业务服务通过 Mod 注册 RPC，后台任务由 Service 管理。
+func (s *Server) run(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}

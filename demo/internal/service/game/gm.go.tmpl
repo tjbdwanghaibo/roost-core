@@ -5,14 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/hotcode"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/framework/saga"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	gameactivity "{{MODULE}}/game/activity"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
@@ -24,6 +16,15 @@ import (
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/hotcode"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // GM commands: the operator surface of the game process.
@@ -43,7 +44,7 @@ import (
 // The dev config enables admin with a dev-token; config check --production
 // refuses dev tokens, so a production deployment has to mint a real one.
 const (
-	gmJoinGuild    = "gm.player.join_guild"
+	gmJoinAlliance = "gm.player.join_alliance"
 	gmWorldStat    = "gm.world.stats"
 	gmSagaGet      = "gm.saga.get"
 	gmSagaList     = "gm.saga.list"
@@ -110,10 +111,10 @@ func gmSagaRecord(record saga.Record) map[string]any {
 	}
 }
 
-type gmJoinGuildPayload struct {
-	PlayerID  int64  `json:"player_id"`
-	GuildID   int64  `json:"guild_id"`
-	RequestID string `json:"request_id"`
+type gmJoinAlliancePayload struct {
+	PlayerID   int64  `json:"player_id"`
+	AllianceID int64  `json:"alliance_id"`
+	RequestID  string `json:"request_id"`
 }
 
 // registerGMCommands is called from Init, after every Mod has started.
@@ -147,14 +148,14 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	}
 	definitions := []admin.CommandDef{
 		{
-			Name: gmJoinGuild,
-			Description: "put a player of this server who is offline here into a guild open to joining: {player_id, guild_id, request_id}. " +
+			Name: gmJoinAlliance,
+			Description: "put a player of this server who is offline here into a alliance open to joining: {player_id, alliance_id, request_id}. " +
 				"The alliance service's Join on the player's behalf (request_id makes a retry a replay); the membership notice finds " +
-				"nobody online, so the player sees the guild at the next login, which asks the alliance service (Membership). " +
+				"nobody online, so the player sees the alliance at the next login, which asks the alliance service (Membership). " +
 				"While the player has a session on this process nothing is joined: it answers joined=false with the session count, " +
 				"to be retried once they are gone",
 			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmJoinGuildPayload](cmd)
+				payload, err := admin.DecodePayload[gmJoinAlliancePayload](cmd)
 				if err != nil {
 					return admin.Result{}, err
 				}
@@ -165,9 +166,9 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				if payload.RequestID == "" {
 					return admin.Result{}, fmt.Errorf("%w: request_id is required", admin.ErrCommandInvalid)
 				}
-				target, err := rpcalliance.AllianceTarget(payload.GuildID)
-				if payload.GuildID <= 0 || err != nil {
-					return admin.Result{}, fmt.Errorf("%w: guild_id %d: %v", admin.ErrCommandInvalid, payload.GuildID, err)
+				target, err := rpcalliance.AllianceTarget(payload.AllianceID)
+				if payload.AllianceID <= 0 || err != nil {
+					return admin.Result{}, fmt.Errorf("%w: alliance_id %d: %v", admin.ErrCommandInvalid, payload.AllianceID, err)
 				}
 				// Looked up per call: the command is an operator's tool, and a
 				// registry without the player transport or the alliance client
@@ -187,7 +188,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				// "Offline" is what the membership notice checks (the same
 				// session count, alliance_notice.go): with no session here the
 				// notice changes nothing and the login lookup is what shows the
-				// guild. A session that is still closing counts as online.
+				// alliance. A session that is still closing counts as online.
 				if sessions := transport.ActiveSessions(playerID); sessions > 0 {
 					return admin.Result{
 						Message: "the player has a session on this process; nothing joined",
@@ -199,7 +200,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{
-					"player_id": playerID, "joined": true, "guild_id": reply.Alliance.AllianceID,
+					"player_id": playerID, "joined": true, "alliance_id": reply.Alliance.AllianceID,
 					"members": len(reply.Alliance.Members), "version": reply.Alliance.Version, "served_by": reply.ServedBySID,
 				}}, nil
 			},

@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// ErrAllianceViewMissing: there is no alliance with that id (nobody founded it: the
+// alliance service has no ownership record for it), or the player is in no
+// alliance. It is a coded refusal rather than an empty answer because "you joined
+// nothing" and "the alliance is gone" are different things to a player.
+var ErrAllianceViewMissing = errcode.Define({{ID:errcode:alliance_view_missing}}, "alliance_view_missing", "alliance not found")
