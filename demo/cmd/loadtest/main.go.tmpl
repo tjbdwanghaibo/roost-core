@@ -2,6 +2,14 @@
 //
 //	go run ./cmd/accountctl upsert-server -sid 1000        # once: account must know the server
 //	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://127.0.0.1:4222
+//	go run ./cmd/loadtest -login portal -portal http://127.0.0.1:8081 -count 20   # log in the way a client does
+//
+// Two ways to log in (-login). The default, bus, is the one a login server
+// takes: Login → CreateRole → SelectRole on the account service over the bus,
+// then a session ticket on the handshake. portal is the client's way through
+// the front door (the portal module, HTTP on the account process): login →
+// server list → enter ticket, handshake with enter:<ticket>, wait for the
+// server's EnterStatus, send EnterCreate when it says so, then EnterGame.
 //
 // It is a load test and the demo's regression test in one: every robot logs
 // in through the account service, creates or loads its Player, adds an item,
@@ -13,6 +21,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,6 +59,7 @@ import (
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	"{{MODULE}}/game/battle"
 	"{{MODULE}}/game/clientsync"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/loadtest/playertcp"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
@@ -77,7 +87,9 @@ func main() {
 	// hundred milliseconds is the floor, not a regression.
 	maxP95 := flag.Float64("max-p95", 16.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO. The scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and then plays a lockstep battle for its full frame budget: the slowest robot of a healthy run takes 7-10s (two game servers on one machine at the top of that range), so the bound is about twice that. The p95 is estimated from power-of-two buckets narrowed to the observed fastest and slowest robot; with 10 robots or fewer it is the slowest robot")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
-	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
+	loginMode := flag.String("login", "bus", "how robots log in: bus (Login → CreateRole → SelectRole on the account service over -account-nats, session ticket on the handshake) or portal (the front door at -portal: login → server list → enter ticket, then EnterStatus / EnterCreate / EnterGame)")
+	portalURL := flag.String("portal", "http://127.0.0.1:8081", "-login portal: base URL of the front door (web.addr in config.account.yaml)")
+	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "-login bus: NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "{{PROJECT}}", "bus subject prefix (nats.prefix in the services' configs; generated from the project name)")
 	serverID := flag.Int("server-id", 1000, "the game server's sid, which roles are created on")
 	gameOps := flag.String("game-ops", "127.0.0.1:9100", "ops address of that game server (ops.addr in config.game.yaml); the guild_offline_join scenario runs its operator step there (gm.player.join_guild)")
@@ -88,12 +100,24 @@ func main() {
 		go serveMetrics(*metricsAddr)
 	}
 
-	login, err := newAccountLogin(*accountNATS, *natsPrefix, int32(*serverID))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
-		os.Exit(1)
+	// The credential path. bus needs the account service's bus; portal needs
+	// nothing but HTTP, like a client.
+	var login robotLogin
+	switch *loginMode {
+	case "bus":
+		accounts, err := newAccountLogin(*accountNATS, *natsPrefix, int32(*serverID))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+			os.Exit(1)
+		}
+		defer accounts.Close()
+		login = accounts
+	case "portal":
+		login = newPortalLogin(*portalURL, int32(*serverID))
+	default:
+		fmt.Fprintf(os.Stderr, "loadtest: -login %q is not bus or portal\n", *loginMode)
+		os.Exit(2)
 	}
-	defer login.Close()
 
 	cfg := runner.Config{Executor: runner.Executor(*executor), Count: *count, Rate: *rate, MaxConcurrent: *maxConcurrent, Seed: *seed, Duration: *duration, Scenario: *scenarioName, Ramp: runner.Ramp{Step: *rampStep, Interval: *rampInterval}, Transport: transport.Config{Type: playertcp.TransportType, Endpoint: *endpoint}}
 	if cfg.Executor != runner.ExecutorPool && cfg.Duration <= 0 {
@@ -107,13 +131,14 @@ func main() {
 	}
 }
 
-func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login *accountLogin, ops gameOpsClient) error {
+func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login robotLogin, ops gameOpsClient) error {
 	playertcp.MustRegister()
 
 	protocols := protocol.NewRegistry(pbCodec{})
 	actions := action.NewRegistry()
 	scenarios := scenario.NewRegistry()
 	registerCalls(actions, protocols)
+	login.registerEnter(actions, protocols)
 	registerOfflineJoin(actions, protocols, ops)
 	registerPushes(protocols)
 	if err := loadScenarios(scenarios, scenarioDir); err != nil {
@@ -171,6 +196,207 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 		return fmt.Errorf("run %s ended %s (%s): %s", snapshot.RunID, snapshot.State, snapshot.StopReason, snapshot.Error)
 	}
 	return nil
+}
+
+// robotLogin is how a robot gets onto the game: the handshake credential, and
+// the scenario's enter_game action. The two belong together — which ticket
+// was presented decides what the server expects next.
+type robotLogin interface {
+	// authPacket is the handshake frame for this robot's next connect.
+	authPacket(rb *robot.Context) (*transport.Packet, error)
+	// registerEnter registers the action the scenarios call enter_game.
+	registerEnter(actions *action.Registry, protocols *protocol.Registry)
+}
+
+// registerEnter for the bus login: a session-ticket session is loaded or
+// created by EnterGame itself, so enter_game is the plain call.
+func (login *accountLogin) registerEnter(actions *action.Registry, protocols *protocol.Registry) {
+	action.MustRegisterCall[pb.EnterGameRequest, pb.EnterGameResponse](actions, protocols, "enter_game", msgid.MsgEnterGame,
+		action.OnResp(func(_ *robot.Context, resp *pb.EnterGameResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
+}
+
+// portalLogin is the client's path through the front door (the portal
+// module): three HTTP calls on the account process, none of which needs the
+// bus or a secret.
+//
+//	POST /portal/login    channel demo, credential demo:<open_id>  -> account ticket
+//	POST /portal/servers  account ticket                            -> the server must be listed
+//	POST /portal/enter    account ticket, server id                 -> enter:<ticket>
+//
+// The robot does not learn its player id here: the front door does not know
+// it for a new account (the mapping is made by the handshake). It is adopted
+// from the EnterGame answer.
+type portalLogin struct {
+	base     string
+	serverID int32
+	nonce    string
+	http     *http.Client
+}
+
+func newPortalLogin(base string, serverID int32) *portalLogin {
+	return &portalLogin{
+		base: strings.TrimRight(base, "/"), serverID: serverID,
+		nonce: strconv.FormatInt(time.Now().UnixNano()%1_000_000_000, 36),
+		http:  &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// post sends one front-door request and decodes the answer. A refusal
+// ("ok": false) is an error carrying the front door's code and reason.
+func (login *portalLogin) post(ctx context.Context, path string, request, response any) error {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, login.base+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	answer, err := login.http.Do(httpRequest)
+	if err != nil {
+		return fmt.Errorf("portal %s: %w", path, err)
+	}
+	defer answer.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(answer.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("portal %s: %w", path, err)
+	}
+	var verdict struct {
+		OK     bool   `json:"ok"`
+		Code   int64  `json:"code"`
+		Reason string `json:"reason"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &verdict); err != nil {
+		return fmt.Errorf("portal %s: http %d, not JSON: %w", path, answer.StatusCode, err)
+	}
+	if !verdict.OK {
+		return fmt.Errorf("portal %s: http %d code %d %s%s", path, answer.StatusCode, verdict.Code, verdict.Reason, verdict.Error)
+	}
+	return json.Unmarshal(raw, response)
+}
+
+// createNameKey is the blackboard key of the name the next EnterCreate asks for.
+const createNameKey = "create_name"
+
+func (login *portalLogin) authPacket(rb *robot.Context) (*transport.Packet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// The same identities as the bus login: one account per robot, plus one
+	// per login_as name.
+	identity, _ := rb.Blackboard.Get(identityKey)
+	name, _ := identity.(string)
+	openID := fmt.Sprintf("robot-%s-%d", login.nonce, rb.ID)
+	// The name is the game's now (the profile module's rule: at most 16
+	// characters), asked for in EnterCreate.
+	createName := fmt.Sprintf("r%s_%d", login.nonce, rb.ID)
+	if name != "" {
+		openID += "-" + name
+		createName += name[:1]
+	}
+	var loggedIn struct {
+		AccountTicket string `json:"account_ticket"`
+	}
+	if err := login.post(ctx, "/portal/login", map[string]any{"channel": "demo", "open_id": openID, "credential": "demo:" + openID}, &loggedIn); err != nil {
+		return nil, err
+	}
+	var listed struct {
+		Servers []struct {
+			ServerID int32 `json:"server_id"`
+			Role     *struct {
+				PlayerID int64 `json:"player_id"`
+			} `json:"role"`
+		} `json:"servers"`
+	}
+	if err := login.post(ctx, "/portal/servers", map[string]any{"account_ticket": loggedIn.AccountTicket}, &listed); err != nil {
+		return nil, err
+	}
+	found := false
+	for _, server := range listed.Servers {
+		if server.ServerID != login.serverID {
+			continue
+		}
+		found = true
+		if server.Role != nil {
+			// A returning identity: the front door knows the player.
+			rb.PlayerID = server.Role.PlayerID
+			rb.Blackboard.Set("player_id", rb.PlayerID)
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("portal: server %d is not in the list of %d servers (accountctl upsert-server -sid %d)", login.serverID, len(listed.Servers), login.serverID)
+	}
+	var entered struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := login.post(ctx, "/portal/enter", map[string]any{"account_ticket": loggedIn.AccountTicket, "server_id": login.serverID}, &entered); err != nil {
+		return nil, err
+	}
+	rb.Blackboard.Set(createNameKey, createName)
+	return playertcp.AuthPacket(entered.Ticket), nil
+}
+
+// enterStatusWait is how long enter_game waits for the server's EnterStatus
+// before going on without it. The notice is only a notice: it can be lost, or
+// land before this action listens.
+const enterStatusWait = time.Second
+
+// registerEnter for the portal login: an enter-ticket session must create
+// first. enter_game waits for EnterStatus; when it says need_create — or does
+// not arrive — it sends EnterCreate (a player already built answers
+// enter_created, which is as good), then EnterGame. The player id the
+// handshake resolved is adopted from the EnterGame answer.
+func (login *portalLogin) registerEnter(actions *action.Registry, protocols *protocol.Registry) {
+	protocols.MustRegisterDecoder(msgid.MsgEnterStatus, protocol.DecodeTyped(msgid.MsgEnterStatus, pb.UnmarshalEnterStatusPush))
+	action.MustRegisterCall[pb.EnterCreateRequest, pb.EnterCreateResponse](actions, protocols, "enter_create", msgid.MsgEnterCreate,
+		action.MapField[pb.EnterCreateResponse]("Name", createNameKey),
+		action.OnResp(func(_ *robot.Context, resp *pb.EnterCreateResponse) error {
+			if resp.Code == apperrors.ErrEnterCreated.Code() {
+				return nil
+			}
+			return coded(resp.Code, resp.Reason)
+		}))
+	action.MustRegisterCall[pb.EnterGameRequest, pb.EnterGameResponse](actions, protocols, "enter_game_built", msgid.MsgEnterGame,
+		action.OnResp(func(rb *robot.Context, resp *pb.EnterGameResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rb.PlayerID = resp.PlayerID
+			rb.Blackboard.Set("player_id", rb.PlayerID)
+			rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", rb.PlayerID))
+			return nil
+		}))
+	actions.MustRegister(action.Func{ActionName: "enter_game", Handle: func(ctx context.Context, rb *robot.Context, param any) error {
+		robotSession := rb.Session()
+		if robotSession == nil {
+			return fmt.Errorf("session not connected")
+		}
+		needCreate := true
+		waitCtx, cancel := context.WithTimeout(ctx, enterStatusWait)
+		pushed, err := robotSession.WaitPush(waitCtx, msgid.MsgEnterStatus, nil)
+		cancel()
+		if err == nil {
+			status, ok := pushed.Value.(*pb.EnterStatusPush)
+			if !ok {
+				return fmt.Errorf("unexpected EnterStatus type %T", pushed.Value)
+			}
+			if err := coded(status.Code, status.Reason); err != nil {
+				return fmt.Errorf("the server will not serve this session: %w", err)
+			}
+			needCreate = status.NeedCreate
+		} else if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if needCreate {
+			if err := actions.Run(ctx, rb, "enter_create", nil); err != nil {
+				return err
+			}
+		}
+		return actions.Run(ctx, rb, "enter_game_built", param)
+	}})
 }
 
 // accountLogin is the real credential path: the robot process talks to the
@@ -383,10 +609,8 @@ func registerOfflineJoin(actions *action.Registry, protocols *protocol.Registry,
 // GetCode(), so each call checks Code itself: a coded failure from the server
 // is a failed robot, which is what makes this a regression test.
 func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
-	action.MustRegisterCall[pb.EnterGameRequest, pb.EnterGameResponse](actions, protocols, "enter_game", msgid.MsgEnterGame,
-		action.OnResp(func(_ *robot.Context, resp *pb.EnterGameResponse) error {
-			return coded(resp.Code, resp.Reason)
-		}))
+	// enter_game is registered by the login in use (robotLogin.registerEnter):
+	// what a session must send before EnterGame depends on how it shook hands.
 	action.MustRegisterCall[pb.AddItemRequest, pb.AddItemResponse](actions, protocols, "add_item", msgid.MsgAddItem,
 		action.OnResp(func(_ *robot.Context, resp *pb.AddItemResponse) error {
 			return coded(resp.Code, resp.Reason)
@@ -996,6 +1220,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 	switch message := value.(type) {
 	case *pb.EnterGameRequest:
 		return pb.MarshalEnterGameRequest(message)
+	case *pb.EnterCreateRequest:
+		return pb.MarshalEnterCreateRequest(message)
 	case *pb.AddItemRequest:
 		return pb.MarshalAddItemRequest(message)
 	case *pb.AddExpRequest:
@@ -1063,6 +1289,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 	switch message := target.(type) {
 	case *pb.EnterGameResponse:
 		decoded, err := pb.UnmarshalEnterGameResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.EnterCreateResponse:
+		decoded, err := pb.UnmarshalEnterCreateResponse(data)
 		if err != nil {
 			return err
 		}

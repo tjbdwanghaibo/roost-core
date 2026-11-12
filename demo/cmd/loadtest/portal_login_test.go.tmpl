@@ -1,0 +1,160 @@
+package main
+
+import (
+	"context"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	gamelogin "{{MODULE}}/game/login"
+	"{{MODULE}}/game/portal"
+	accountcollaborators "{{MODULE}}/internal/service/account"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/webroute"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+)
+
+// -login portal 的凭据那一段：机器人对着真的登录入口（portal 模块的处理器，真实的 account 内存存储，工程自己的
+// 身份校验）走三次 HTTP，拿到的握手票据登录模块的认证器认。入口的字段名改了、机器人没跟着改，这里就红。
+// 握手之后的 EnterStatus / EnterCreate / EnterGame 要一条真的连接，这里没有覆盖。
+
+// portalFrontDoor 起一个登录入口：account 里只有 1000 服是开放的。
+func portalFrontDoor(t *testing.T) (*svcaccount.Service, string, versionstore.Store[string, svcaccount.Account]) {
+	t.Helper()
+	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := int64(100_000)
+	stored := versionstore.NewMemoryStore[string, svcaccount.Account]()
+	accounts, err := svcaccount.New(svcaccount.Config{
+		Accounts:      stored,
+		Roles:         versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:       versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Slots:         versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Names:         names,
+		Verifier:      accountcollaborators.Verifier(),
+		Allocator:     svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) { next++; return next, nil }),
+		NameRules:     accountcollaborators.NameRules(),
+		SessionSecret: "loadtest-portal-secret",
+		Now:           now,
+		SystemNow:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accounts.UpsertServer(context.Background(), svcaccount.GameServer{ID: 1000, Name: "s1000", Status: svcaccount.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	frontDoor, err := portal.New(portal.Options{Accounts: accounts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := httpserver.NewEngine()
+	if err := frontDoor.RegisterRoutes(webroute.NewRegistrar(engine)); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+	return accounts, server.URL, stored
+}
+
+// handshakeTicket 读回握手帧里的票据。
+func handshakeTicket(t *testing.T, packet *transport.Packet) string {
+	t.Helper()
+	ticket, _, err := wire.DecodeAuth(packet.Payload)
+	if err != nil {
+		t.Fatalf("the auth packet does not decode: %v", err)
+	}
+	return string(ticket)
+}
+
+func TestPortalLoginHandsTheRobotAnEnterTicketTheHandshakeTakes(t *testing.T) {
+	accounts, url, _ := portalFrontDoor(t)
+	login := newPortalLogin(url+"/", 1000)
+	authenticator := gamelogin.Authenticator{Accounts: accounts}
+
+	rb := robot.NewContext(robot.Config{ID: 7, PlayerID: 900_007})
+	packet, err := login.authPacket(rb)
+	if err != nil {
+		t.Fatalf("portal login: %v", err)
+	}
+	ticket := handshakeTicket(t, packet)
+	if !strings.HasPrefix(ticket, "enter:") {
+		t.Fatalf("the handshake ticket is %q, want enter:<ticket>", ticket)
+	}
+	principal, err := authenticator.Authenticate(context.Background(), ticket)
+	if err != nil || principal.PlayerID != 100_001 || !gamelogin.EnterTicketSession(principal.Claims) {
+		t.Fatalf("the handshake with the robot's ticket: %+v, %v", principal, err)
+	}
+	// 新号：入口不知道玩家号，机器人还带着临时号；要新建时用的名字已经在黑板上，不超过档案的 16 个字符。
+	if rb.PlayerID != 900_007 {
+		t.Fatalf("the robot adopted player id %d before the game answered", rb.PlayerID)
+	}
+	name, _ := rb.Blackboard.String(createNameKey)
+	if name == "" || len(name) > 16 || strings.ContainsAny(name, " \t") {
+		t.Fatalf("the name for EnterCreate is %q, want 1..16 characters without blanks", name)
+	}
+
+	// 同一个机器人再连：入口的清单里已经有它的角色，玩家号从那里来；握手解析到同一名玩家。
+	packet, err = login.authPacket(rb)
+	if err != nil {
+		t.Fatalf("portal login again: %v", err)
+	}
+	if rb.PlayerID != 100_001 {
+		t.Fatalf("the returning robot's player id is %d, want 100001 from the server list", rb.PlayerID)
+	}
+	if again, err := authenticator.Authenticate(context.Background(), handshakeTicket(t, packet)); err != nil || again.PlayerID != 100_001 {
+		t.Fatalf("the second handshake: %+v, %v", again, err)
+	}
+
+	// login_as 的另一个身份是另一个账号、另一名玩家，名字也不同。
+	rb.Blackboard.Set(identityKey, "member")
+	packet, err = login.authPacket(rb)
+	if err != nil {
+		t.Fatalf("portal login as another identity: %v", err)
+	}
+	if other, err := authenticator.Authenticate(context.Background(), handshakeTicket(t, packet)); err != nil || other.PlayerID != 100_002 {
+		t.Fatalf("the other identity's handshake: %+v, %v", other, err)
+	}
+	if otherName, _ := rb.Blackboard.String(createNameKey); otherName == name || len(otherName) > 16 {
+		t.Fatalf("the other identity's name is %q (the first was %q)", otherName, name)
+	}
+}
+
+// 走不通的三种：要进的服不在清单里（没登记）、入口拒绝（被封的账号）、入口不可达。每一种都是错误，没有握手帧。
+func TestPortalLoginFailsWithoutATicket(t *testing.T) {
+	_, url, stored := portalFrontDoor(t)
+	rb := robot.NewContext(robot.Config{ID: 1})
+
+	if packet, err := newPortalLogin(url, 1001).authPacket(rb); err == nil || packet != nil || !strings.Contains(err.Error(), "server 1001 is not in the list") {
+		t.Fatalf("a server that is not registered: packet %v, err %v", packet, err)
+	}
+	down := newPortalLogin("http://127.0.0.1:1", 1000)
+	if packet, err := down.authPacket(rb); err == nil || packet != nil {
+		t.Fatalf("an unreachable front door: packet %v, err %v", packet, err)
+	}
+	// 被拒绝的登录：把这名机器人的账号封掉之后再登录。
+	login := newPortalLogin(url, 1000)
+	if _, err := login.authPacket(rb); err != nil {
+		t.Fatal(err)
+	}
+	accountID := svcaccount.Identity{Channel: "demo", OpenID: "robot-" + login.nonce + "-1"}.AccountID()
+	if _, _, err := stored.Update(context.Background(), accountID, func(current svcaccount.Account, found bool) (svcaccount.Account, bool, error) {
+		current.Banned = true
+		return current, found, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if packet, err := login.authPacket(rb); err == nil || packet != nil || !strings.Contains(err.Error(), "portal /portal/") {
+		t.Fatalf("a banned account: packet %v, err %v", packet, err)
+	}
+}
