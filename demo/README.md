@@ -1,5 +1,7 @@
 # `-template game-demo` 的源码
 
+通用运维命令由 [gm 业务模块](../modules/gm/README.md)及各功能联动提供；`internal/service/game/gm.go` 保留 demo 专属命令，以及加经验同时计入 World 的双实体执行回调。
+
 `roost project new <name> -module <mod> -template game-demo` 在 `game` 模板之上再生成**一条可运行的完整游戏链路**：
 登录、背包与经验、升级发奖励邮件、匹配、聊天、副本、送礼 saga、地图与服务端权威同步、lockstep 战斗、GM 运维面和机器人压测。
 这个目录就是它写进项目的那些文件，**按生成后的真实路径原样存放**（多一个 `.tmpl` 后缀）。

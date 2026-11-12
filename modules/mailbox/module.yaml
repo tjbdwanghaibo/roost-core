@@ -33,3 +33,9 @@ with:
       packages: [./game/mailbox, ./game/handler, ./game/controllers/mailbox]
       run: ^TestWithMailboxBag
       pass: 9
+  gm:
+    summary: 经 GM 审计入口调用本模块正式事务或服务入口
+    verify:
+      packages: [./game/gm]
+      run: ^TestWithMailboxGM
+      pass: 4

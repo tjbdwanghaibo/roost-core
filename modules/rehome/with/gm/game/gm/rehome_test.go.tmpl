@@ -1,0 +1,139 @@
+package gm
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	rehome "{{MODULE}}/game/rehome"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 替身只占 account 与交出实体的位置；Prepare/Recheck/Cancel 是真实 Nest 事务。
+type gmMoveDirectory struct {
+	mu      sync.Mutex
+	binding svcaccount.RoleBinding
+	begins  int
+	note    string
+}
+
+func (d *gmMoveDirectory) Binding(_ context.Context, id int64) (svcaccount.RoleBinding, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if id != 97001 {
+		return svcaccount.RoleBinding{}, svcaccount.ErrRoleMissing
+	}
+	return d.binding, nil
+}
+func (d *gmMoveDirectory) Begin(_ context.Context, _ int64, r svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.begins++
+	d.note = r.Note
+	d.binding.Transfer = &svcaccount.RoleTransfer{ID: r.ID, From: r.FromSID, To: r.To, Epoch: r.ExpectEpoch}
+	return d.binding, nil
+}
+func (d *gmMoveDirectory) Commit(_ context.Context, _ int64, _ string) (svcaccount.RoleBinding, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.binding.ServerID = 1001
+	d.binding.ServingServerID = 1001
+	d.binding.BindEpoch++
+	d.binding.Transfer = nil
+	return d.binding, nil
+}
+func (d *gmMoveDirectory) Abort(context.Context, int64, string, string) (svcaccount.RoleBinding, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.binding.Transfer = nil
+	return d.binding, nil
+}
+
+type gmMoveResidency struct{ done chan rehome.Outcome }
+
+func (r *gmMoveResidency) Reserve(rehome.Move) error                  { return nil }
+func (r *gmMoveResidency) Quiesce(context.Context, rehome.Move) error { return nil }
+func (r *gmMoveResidency) Depart(context.Context, rehome.Move) error  { return nil }
+func (r *gmMoveResidency) Settle(_ context.Context, _ rehome.Move, outcome rehome.Outcome) error {
+	r.done <- outcome
+	return nil
+}
+func (r *gmMoveResidency) Where(int64) (rehome.Whereabouts, bool) { return rehome.Whereabouts{}, false }
+func newRehomeGM(t *testing.T) (*gmFixture, *player.Player, *gmMoveDirectory, *gmMoveResidency) {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterRehomePrepareNestHandlers()
+	handler.RegisterRehomeCancelNestHandlers()
+	handler.RegisterRehomeArriveNestHandlers()
+	id, err := entity.BuildEntityID(97001, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newGMFixture(t, target)
+	f.registry.Config().Set("sid", 1000)
+	d := &gmMoveDirectory{binding: svcaccount.RoleBinding{PlayerID: 97001, ServerID: 1000, ServingServerID: 1000, BindEpoch: 1}}
+	r := &gmMoveResidency{done: make(chan rehome.Outcome, 4)}
+	if err := f.registry.Register(rehome.DirectoryCapability, rehome.Directory(d)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.Register(rehome.ResidencyCapability, rehome.Residency(r)); err != nil {
+		t.Fatal(err)
+	}
+	return f, target.(*player.Player), d, r
+}
+func TestWithRehomeGMSuccess(t *testing.T) {
+	f, _, d, r := newRehomeGM(t)
+	result, err := f.execute(CommandRehome, `{"player_id":97001,"to":1001,"note":"move"}`)
+	if err != nil || !result.OK || result.Data["accepted"] != true {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	select {
+	case outcome := <-r.done:
+		if outcome != rehome.Committed {
+			t.Fatalf("outcome=%v", outcome)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("move did not settle")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.begins != 1 || d.note != "gm tester: move" || d.binding.ServingServerID != 1001 || f.committer.commits.Load() != 1 {
+		t.Fatalf("binding=%+v note=%q begins=%d commits=%d", d.binding, d.note, d.begins, f.committer.commits.Load())
+	}
+}
+func TestWithRehomeGMInvalidWritesNothing(t *testing.T) {
+	f, _, d, _ := newRehomeGM(t)
+	result, err := f.execute(CommandRehome, `{"player_id":97001,"to":0,"note":"bad"}`)
+	if err == nil || result.OK || d.begins != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithRehomeGMMissingTargetWritesNothing(t *testing.T) {
+	f, _, d, _ := newRehomeGM(t)
+	result, err := f.execute(CommandRehome, `{"player_id":97002,"to":1001,"note":"missing"}`)
+	if err == nil || result.OK || d.begins != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithRehomeGMCommitFailureRollsBack(t *testing.T) {
+	f, target, d, _ := newRehomeGM(t)
+	f.committer.reject.Store(true)
+	result, err := f.execute(CommandRehome, `{"player_id":97001,"to":1001,"note":"reject"}`)
+	if err == nil || result.OK || d.begins != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	var pending string
+	f.read(t, target, func() { pending = target.Dao().GetRehome().GetPendingID() })
+	if pending != "" {
+		t.Fatalf("intent remained: %s", pending)
+	}
+}

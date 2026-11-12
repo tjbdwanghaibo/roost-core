@@ -1,0 +1,12 @@
+=== RUN   TestModuleGMScenariosAndMutations
+    module_gm_test.go:35: caught mutation in game/gm/gm.go: calls=1
+    module_gm_test.go:36: caught mutation in game/gm/gm.go: calls=1
+    module_gm_test.go:37: caught mutation in game/gm/gm.go: calls=1
+    module_gm_test.go:38: caught mutation in game/gm/wallet.go: value=
+    module_gm_test.go:39: caught mutation in game/gm/bag.go: value=
+    module_gm_test.go:40: caught mutation in game/gm/profile.go: value=
+    module_gm_test.go:41: caught mutation in game/gm/mailbox.go: result=
+    module_gm_test.go:42: caught mutation in game/gm/rehome.go: note=
+--- PASS: TestModuleGMScenariosAndMutations (65.89s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	66.485s

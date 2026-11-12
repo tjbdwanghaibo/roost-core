@@ -1,0 +1,147 @@
+package gm
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	"github.com/tjbdwanghaibo/roost-core/wiring/ops"
+)
+
+func gmTestCommand(payload string) admin.Command {
+	return admin.Command{Name: "gm.test", Operator: "operator", TraceID: "audit-1", Payload: []byte(payload)}
+}
+func gmTestRuntime(t *testing.T) (*runtime, *admin.Registry, *int) {
+	t.Helper()
+	registry := app.NewRegistry(viper.New())
+	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	r := &runtime{registry: registry, commands: commands}
+	calls := new(int)
+	if err := r.install(Definition{Name: "gm.test", Handler: func(context.Context, *app.Registry, admin.Command) (admin.Result, error) {
+		*calls++
+		return admin.Result{}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	return r, commands, calls
+}
+func TestGMStartsWithoutFeatureCommands(t *testing.T) {
+	saved := definitions
+	definitions = map[string]Definition{}
+	defer func() { definitions = saved }()
+	registry := app.NewRegistry(viper.New())
+	stop, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	if _, err = commands.Execute(context.Background(), gmTestCommand(`{"note":"test"}`)); !errors.Is(err, admin.ErrCommandNotFound) {
+		t.Fatalf("unexpected command: %v", err)
+	}
+	if err = stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestGMRequiresOperator(t *testing.T) {
+	_, commands, calls := gmTestRuntime(t)
+	cmd := gmTestCommand(`{"note":"compensate"}`)
+	cmd.Operator = " "
+	result, err := commands.Execute(context.Background(), cmd)
+	if !errors.Is(err, apperrors.ErrGMInvalid) || result.OK || *calls != 0 || result.Data["code"] != errcode.CodeOf(apperrors.ErrGMInvalid) {
+		t.Fatalf("result=%+v err=%v calls=%d", result, err, *calls)
+	}
+}
+func TestGMRequiresNote(t *testing.T) {
+	_, commands, calls := gmTestRuntime(t)
+	result, err := commands.Execute(context.Background(), gmTestCommand(`{"note":" "}`))
+	if !errors.Is(err, apperrors.ErrGMInvalid) || result.OK || *calls != 0 {
+		t.Fatalf("result=%+v err=%v calls=%d", result, err, *calls)
+	}
+}
+func TestGMRejectsMalformedPayload(t *testing.T) {
+	_, commands, calls := gmTestRuntime(t)
+	result, err := commands.Execute(context.Background(), gmTestCommand(`{"note":3}`))
+	if !errors.Is(err, apperrors.ErrGMInvalid) || result.OK || *calls != 0 {
+		t.Fatalf("result=%+v err=%v calls=%d", result, err, *calls)
+	}
+}
+func TestGMAuditedCommandExecutes(t *testing.T) {
+	_, commands, calls := gmTestRuntime(t)
+	result, err := commands.Execute(context.Background(), gmTestCommand(`{"note":"restore missing reward"}`))
+	if err != nil || !result.OK || *calls != 1 || result.TraceID != "audit-1" {
+		t.Fatalf("result=%+v err=%v calls=%d", result, err, *calls)
+	}
+}
+func TestGMStopRejectsNewCalls(t *testing.T) {
+	r, commands, calls := gmTestRuntime(t)
+	r.stopped.Store(true)
+	result, err := commands.Execute(context.Background(), gmTestCommand(`{"note":"test"}`))
+	if !errors.Is(err, apperrors.ErrGMUnavailable) || result.OK || *calls != 0 {
+		t.Fatalf("result=%+v err=%v calls=%d", result, err, *calls)
+	}
+}
+func TestGMKeepsCodedCause(t *testing.T) {
+	r, commands, _ := gmTestRuntime(t)
+	if err := r.install(Definition{Name: "gm.test", Handler: func(context.Context, *app.Registry, admin.Command) (admin.Result, error) {
+		return admin.Result{}, apperrors.ErrGMUnavailable
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := commands.Execute(context.Background(), gmTestCommand(`{"note":"test"}`))
+	if !errors.Is(err, apperrors.ErrGMUnavailable) || result.Data["code"] != errcode.CodeOf(apperrors.ErrGMUnavailable) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestGMProductionRefusesDevToken(t *testing.T) {
+	config := viper.New()
+	config.Set("env", "production")
+	config.Set("ops.enabled", true)
+	config.Set("ops.admin_enabled", true)
+	config.Set("ops.admin_token", "dev-gm-test")
+	config.Set("ops.allow_dev_token", true)
+	if err := ops.NewOpsMod().Init(config); err == nil {
+		t.Fatal("production accepted dev token")
+	}
+}
+
+func TestGMReplacePreservesAudit(t *testing.T) {
+	saved := definitions
+	definitions = map[string]Definition{}
+	defer func() { definitions = saved }()
+	calls := 0
+	def := Definition{Name: "gm.replace", Handler: func(context.Context, *app.Registry, admin.Command) (admin.Result, error) {
+		calls++
+		return admin.Result{}, nil
+	}}
+	Register(def)
+	registry := app.NewRegistry(viper.New())
+	stop, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	def.Handler = func(context.Context, *app.Registry, admin.Command) (admin.Result, error) {
+		calls += 10
+		return admin.Result{}, nil
+	}
+	if err := Replace(registry, def); err != nil {
+		t.Fatal(err)
+	}
+	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	cmd := gmTestCommand(`{"note":"override"}`)
+	cmd.Name = "gm.replace"
+	cmd.Operator = ""
+	if _, err := commands.Execute(context.Background(), cmd); err == nil || calls != 0 {
+		t.Fatalf("audit bypass: %v %d", err, calls)
+	}
+	cmd.Operator = "tester"
+	if _, err := commands.Execute(context.Background(), cmd); err != nil || calls != 10 {
+		t.Fatalf("override: %v %d", err, calls)
+	}
+}

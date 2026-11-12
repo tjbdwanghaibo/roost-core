@@ -1,0 +1,44 @@
+package gm
+
+import (
+	"context"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+)
+
+const CommandCoins = "gm.player.coins"
+
+func init() {
+	Register(Definition{Name: CommandCoins, Description: "加减币：{player_id, delta, note}；不自动重试", Handler: adjustCoins})
+}
+
+func adjustCoins(ctx context.Context, registry *app.Registry, command admin.Command) (admin.Result, error) {
+	payload, err := Decode[struct {
+		Audit
+		PlayerID int64 `json:"player_id"`
+		Delta    int64 `json:"delta"`
+	}](command)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	unique, full, err := PlayerIDs(payload.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	if payload.Delta == 0 {
+		return admin.Result{}, Invalid("delta must be nonzero")
+	}
+	client, err := nestClient(registry)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	balance, err := syncsender.NewGmWalletAdjustSender(client).Sync_GMWalletAdjust(ctx, full, payload.Delta)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	return admin.Result{Data: map[string]any{"player_id": unique, "entity_id": full, "balance": balance}}, nil
+}

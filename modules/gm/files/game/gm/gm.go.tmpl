@@ -1,0 +1,174 @@
+// Package gm 登记可信运维命令；HTTP、token 与请求期限沿用 ops，不另开监听器。
+package gm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"unicode/utf8"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+)
+
+const capability app.ModName = "gm.commands"
+
+// Definition 的 Handler 在实体锁之外运行。实体修改必须调用 Nest Sender；不能在这里直接改 DAO。
+type Definition struct {
+	Name        string
+	Description string
+	Handler     func(context.Context, *app.Registry, admin.Command) (admin.Result, error)
+}
+
+var definitions = map[string]Definition{}
+
+// Register 仅供各模块的 with/gm 文件在 init 中调用。重名是配置错误，不能悄悄覆盖别的模块。
+func Register(def Definition) {
+	if def.Name == "" || def.Handler == nil {
+		panic("gm: command name and handler are required")
+	}
+	if _, exists := definitions[def.Name]; exists {
+		panic("gm: duplicate command " + def.Name)
+	}
+	definitions[def.Name] = def
+}
+
+type runtime struct {
+	registry *app.Registry
+	commands *admin.Registry
+	stopped  atomic.Bool
+}
+
+// Start 不自动打开 /admin，也不填开发 token。game 模板已带 ops；需要启用时按 README 配置。
+// 没有联动模块时零条命令也能启动。没有后台协程；HTTP 在途排空仍由 ops 生命周期负责。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("gm: registry is required")
+	}
+	commands, ok := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	if !ok || commands == nil {
+		return nil, apperrors.ErrGMUnavailable
+	}
+	r := &runtime{registry: registry, commands: commands}
+	if err := registry.Register(capability, r); err != nil {
+		return nil, err
+	}
+	stop := func(context.Context) error { r.stopped.Store(true); return nil }
+	names := make([]string, 0, len(definitions))
+	for name := range definitions {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if err := r.install(definitions[name]); err != nil {
+			return stop, err
+		}
+	}
+	return stop, nil
+}
+
+// Replace 在服务初始化时替换已登记命令的业务执行部分，仍走相同审计与停止屏障。
+// 例如 demo 的加经验同时更新 World，使用 ProfileAddExpCommand 包装它自己的双实体 Sender。
+func Replace(registry *app.Registry, def Definition) error {
+	if registry == nil {
+		return apperrors.ErrGMUnavailable
+	}
+	r, ok := app.Lookup[*runtime](registry, capability)
+	if !ok || r == nil || r.stopped.Load() {
+		return apperrors.ErrGMUnavailable
+	}
+	if _, exists := definitions[def.Name]; !exists || def.Handler == nil {
+		return Invalid("command is not registered")
+	}
+	return r.install(def)
+}
+
+func (r *runtime) install(def Definition) error {
+	return r.commands.Register(admin.CommandDef{Name: def.Name, Description: def.Description,
+		Handler: func(ctx context.Context, command admin.Command) (result admin.Result, err error) {
+			// admin 记录命令名、trace 与结果；这里只补必要的操作理由，不记录整份载荷或 token。
+			defer func() {
+				if err != nil {
+					if result.Data == nil {
+						result.Data = make(map[string]any)
+					}
+					result.Data["code"] = errcode.CodeOf(err)
+				}
+			}()
+			if r.stopped.Load() {
+				return result, apperrors.ErrGMUnavailable
+			}
+			var meta struct {
+				Note string `json:"note"`
+			}
+			if err := json.Unmarshal(command.Payload, &meta); err != nil {
+				return result, Invalid("invalid audit payload")
+			}
+			if !auditText(command.Operator, 64) || !auditText(meta.Note, 256) {
+				return result, Invalid("operator (1..64 bytes) and note (1..256 bytes) are required")
+			}
+			slog.InfoContext(ctx, "gm: executing", "command", command.Name, "trace_id", command.TraceID,
+				"operator", command.Operator, "note", meta.Note)
+			return def.Handler(ctx, r.registry, command)
+		}})
+}
+
+func auditText(text string, max int) bool {
+	return strings.TrimSpace(text) != "" && len(text) <= max && utf8.ValidString(text)
+}
+
+// Invalid 保留 admin 与业务码两种错误身份；HTTP 的 result.data.code 给运维工具判断拒绝原因。
+func Invalid(reason string) error {
+	return fmt.Errorf("%w: %w: %s", apperrors.ErrGMInvalid, admin.ErrCommandInvalid, reason)
+}
+
+type Audit struct {
+	Note string `json:"note"`
+}
+
+func Decode[T any](command admin.Command) (T, error) {
+	var result T
+	decoder := json.NewDecoder(bytes.NewReader(command.Payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return result, Invalid("invalid JSON payload or unknown field")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return result, Invalid("payload must contain one JSON object")
+	}
+	return result, nil
+}
+
+// PlayerIDs 接受玩家唯一号或完整 Player 文档号；kind 由联动传入，gm 本身不依赖 Player 组件。
+func PlayerIDs(raw int64, kind entity.EntityKind) (unique, full int64, err error) {
+	if raw <= 0 {
+		return 0, 0, Invalid("player_id must be positive")
+	}
+	if entity.MatchEntityID(raw, kind) {
+		return entity.GetUniqueIDFromEntityID(raw), raw, nil
+	}
+	full, err = entity.BuildEntityID(raw, kind)
+	if err != nil {
+		return 0, 0, Invalid("invalid player_id")
+	}
+	return raw, full, nil
+}
+
+func nestClient(registry *app.Registry) (nest.Client, error) {
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, apperrors.ErrGMUnavailable
+	}
+	return client, nil
+}

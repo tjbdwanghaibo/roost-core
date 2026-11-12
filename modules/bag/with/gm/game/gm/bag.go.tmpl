@@ -1,0 +1,45 @@
+package gm
+
+import (
+	"context"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+)
+
+const CommandAddItem = "gm.player.add_item"
+
+func init() {
+	Register(Definition{Name: CommandAddItem, Description: "加道具：{player_id, item_id, count, note}；不自动重试", Handler: addItem})
+}
+
+func addItem(ctx context.Context, registry *app.Registry, command admin.Command) (admin.Result, error) {
+	payload, err := Decode[struct {
+		Audit
+		PlayerID int64 `json:"player_id"`
+		ItemID   int64 `json:"item_id"`
+		Count    int64 `json:"count"`
+	}](command)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	unique, full, err := PlayerIDs(payload.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	if payload.ItemID <= 0 || payload.Count <= 0 {
+		return admin.Result{}, Invalid("item_id and count must be positive")
+	}
+	client, err := nestClient(registry)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	count, err := syncsender.NewBagGrantSender(client).Sync_BagGrant(ctx, full, payload.ItemID, payload.Count)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	return admin.Result{Data: map[string]any{"player_id": unique, "entity_id": full, "item_id": payload.ItemID, "count": count}}, nil
+}

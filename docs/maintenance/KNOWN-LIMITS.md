@@ -532,9 +532,11 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 ### 业务模块（roost module）
 
+- **gm 联动边界**：直接加减币 / 道具 / 经验不自动重试，超时不等于未生效；可重试的补偿使用稳定 `request_id` 的邮件。操作者字段是 token 持有人自报的审计信息，不是独立账号认证。只读 Nest 验收收件人后才调 mail，发件 RPC 不在实体锁内；换服返回 accepted 表示已受理。模块与 Nest 的离线验收不替代真实 ops HTTP / 跨进程 mail / 真实 DataEngine 交出实体，统一验收仍待本轮结束。
+
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **31 个模块**（含 2026-11-12 新增的 login 登录鉴权与 servertime 服务器时间，边界见下面各自的条目）：现行清单、固定场景数与联动以 [modules/README](../../modules/README.md) 和各 `module.yaml` 为准。新增场景线与六个补充模块面向新工程，不兼容旧生成工程/存储形状。game-demo 的属性/装备已换模块，移动共用 actor Body；cellworld、LOD/队伍视图、SceneReady、玩法刷怪、副本与地形适配仍在 demo，不能宣称全面迁移。13 类玩法尚未改成模块组合；casual / turn-pvp 仍需业务提供平台身份验证、角色号分配或可信匹配/胜负规则。
+- **32 个模块**（含 2026-11-12 新增的 gm 运维命令、login 登录鉴权与 servertime 服务器时间，边界见下面各自的条目）：现行清单、固定场景数与联动以 [modules/README](../../modules/README.md) 和各 `module.yaml` 为准。新增场景线与六个补充模块面向新工程，不兼容旧生成工程/存储形状。game-demo 的属性/装备已换模块，移动共用 actor Body；cellworld、LOD/队伍视图、SceneReady、玩法刷怪、副本与地形适配仍在 demo，不能宣称全面迁移。13 类玩法尚未改成模块组合；casual / turn-pvp 仍需业务提供平台身份验证、角色号分配或可信匹配/胜负规则。
 - **场景模块的边界**：scene / monster / terrain 是单进程所有权，没有跨进程切图或分布式容量。combat 仅固定双人同意会话，墙钟 50ms 拍，不跟随 scene 倍速，不含怪物或开放世界技能适配。friends 要求双方本进程在线；notice 不默认调度；naming / cdkey 的共享占名依赖 Directory。真实 Redis/NATS/Mongo 故障联合验证另列；模块离线场景和 race 不等于生产验收，各模块 README 列明替身与范围。
 - **chat 模块的边界**：在线名单是每进程的内存集合，多个 game 进程不互相扇出世界频道的推送（要么各推各的在线玩家，要么改为订阅 chat 的流）；连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订；系统消息入口无条件授予（前提是 chat 只经内部总线可达，见 collaborators 的注释）；没有群组频道。基础 10 条场景覆盖频道规则、消息体校验、在线名单和本地频道登记；scene 联动增加 5 条附近聊天场景，Nest 锁内只取收件人快照，实际发送在锁外，没有附近历史或离线投递。game-demo 使用同一 chat 模块。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。

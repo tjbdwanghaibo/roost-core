@@ -24,3 +24,10 @@ verify:
   packages: [./game/handler]
   run: ^TestWallet
   pass: 14
+with:
+  gm:
+    summary: 经 GM 审计入口调用本模块正式事务或服务入口
+    verify:
+      packages: [./game/gm]
+      run: ^TestWithWalletGM
+      pass: 4

@@ -209,6 +209,8 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 ### 业务模块命令
 
+运维入口可安装 [gm 模块](../../modules/gm/README.md)：各功能模块按联动登记命令，复用 ops 的鉴权与 Nest 事务。
+
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | `roost project new -recipe` | 从 game 底座安装休闲或回合房间组合、正式 session 鉴权和业务规则 | `-recipe casual` / `-recipe turn-pvp` | 新工程支持；身份验证、匹配与胜负仍由业务提供 | [配方](../../modules/README.md#从配方创建工程) |

@@ -1,0 +1,10 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerGMWalletAdjust 只给可信运维入口调用；不接玩家协议。运维补发需要可重试时用补偿邮件。
+//
+//roost:nest rollback=undo durability=strict
+func handlerGMWalletAdjust(target player.IWalletEntity, delta int64) (int64, error) {
+	return target.WalletComp().Add(delta)
+}

@@ -1,0 +1,8 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrGMInvalid     = errcode.Define({{ID:errcode:gm_invalid}}, "gm_invalid", "invalid GM command or audit information")
+	ErrGMUnavailable = errcode.Define({{ID:errcode:gm_unavailable}}, "gm_unavailable", "GM command is unavailable")
+)

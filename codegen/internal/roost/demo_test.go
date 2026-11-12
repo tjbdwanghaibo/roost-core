@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -654,7 +654,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners))") {
 		t.Errorf("the game service does not publish its ownership table as the rehome module's Residency")
 	}
-	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, playerID, payload.To, note)") {
+	if gm := read("game/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, unique, payload.To,") {
 		t.Errorf("the game GM lacks gm.player.rehome, or it does not go through the rehome module's server-side entry")
 	}
 	if checks := read("internal/service/game/rehome_checks.go"); !strings.Contains(checks, `gamerehome.OnApplying("game"`) || !strings.Contains(checks, `player.OnRehomeApplying("game"`) {

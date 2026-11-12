@@ -1,0 +1,88 @@
+package gm
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// RPC 替身只记录交出的信封；mail 服务的持久幂等由 mailbox 自带场景及真实依赖档验证。
+type gmMail struct {
+	svcmail.Mail
+	requests []svcmail.SendRequest
+	reject   bool
+}
+
+func (m *gmMail) Send(_ context.Context, r svcmail.SendRequest) (svcmail.Envelope, error) {
+	if m.reject {
+		return svcmail.Envelope{}, fmt.Errorf("injected mail store failure")
+	}
+	m.requests = append(m.requests, r)
+	return svcmail.Envelope{ID: "mail-1", Recipients: r.Recipients}, nil
+}
+func newMailboxGM(t *testing.T) (*gmFixture, *gmMail) {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterGmMailTargetNestHandlers()
+	id, err := entity.BuildEntityID(97001, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newGMFixture(t, target)
+	m := &gmMail{}
+	if err := f.registry.Register(svcmail.CapabilityName, svcmail.Mail(m)); err != nil {
+		t.Fatal(err)
+	}
+	return f, m
+}
+
+const gmMailPayload = `{"player_id":97001,"subject":"compensate","body":"sorry","attachment":{"type":"coins","amount":100},"request_id":"comp-1","note":"incident"}`
+
+func TestWithMailboxGMSuccess(t *testing.T) {
+	f, m := newMailboxGM(t)
+	result, err := f.execute(CommandSendMail, gmMailPayload)
+	if err != nil || !result.OK || result.Data["mail_id"] != "mail-1" || len(m.requests) != 1 {
+		t.Fatalf("result=%+v err=%v calls=%d", result, err, len(m.requests))
+	}
+	r := m.requests[0]
+	if r.RequestID != "gm:comp-1" || len(r.Recipients) != 1 || r.Recipients[0] != 97001 || string(r.Attachment) != `{"type":"coins","amount":100}` || f.committer.commits.Load() != 0 {
+		t.Fatalf("request=%+v commits=%d", r, f.committer.commits.Load())
+	}
+}
+func TestWithMailboxGMInvalidWritesNothing(t *testing.T) {
+	f, m := newMailboxGM(t)
+	result, err := f.execute(CommandSendMail, `{"player_id":97001,"subject":"compensate","request_id":"key","attachment":{"type":"coins","amount":-1},"note":"invalid"}`)
+	if err == nil || result.OK || len(m.requests) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithMailboxGMMissingTargetWritesNothing(t *testing.T) {
+	f, m := newMailboxGM(t)
+	result, err := f.execute(CommandSendMail, `{"player_id":97002,"subject":"compensate","request_id":"key","note":"missing"}`)
+	if err == nil || result.OK || len(m.requests) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithMailboxGMStoreFailureKeepsPlayerUnchanged(t *testing.T) {
+	f, m := newMailboxGM(t)
+	m.reject = true
+	result, err := f.execute(CommandSendMail, gmMailPayload)
+	if err == nil || result.OK || len(m.requests) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	m.reject = false
+	result, err = f.execute(CommandSendMail, gmMailPayload)
+	if err != nil || !result.OK || len(m.requests) != 1 || m.requests[0].RequestID != "gm:comp-1" {
+		t.Fatalf("retry=%+v err=%v", result, err)
+	}
+}

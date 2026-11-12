@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **新增**（modules/gm）：运维命令登记与审计，wallet / bag / profile / mailbox / rehome 按 `with/gm` 接入；复用 ops token，命令要求 operator 与 note，拒绝在 `result.data.code` 返回业务码。demo 的相应命令迁入模块，经验发放仍保留 Player + World 双实体事务。补偿邮件改为显式 `request_id` 与统一 `attachment`，旧平铺奖励参数不再接受。
+
 - **新增**（modules/login + codegen）：登录鉴权模块。玩家 TCP 握手校验 account 签发的会话令牌（`session:<player_id>:<token>`），把承载服、原服、角色创建时间、绑定代数与换服标记写进会话；接管生成的鉴权桩与 account 的 collaborators：开发令牌登录（渠道 `dev`，`login.dev_token` 必须以 `dev-` 开头、生产配置里非空即拒绝启动）、Redis 玩家号计数器，渠道入口 `login_channels.go` 缺省全拒。联动 login + enter：会话记的承载服不是本服时答 `login_elsewhere`，不加载也不创建 Player。安装器的 `replaces` 认识的生成桩做成一张表（`generatedStubKinds`），新增玩家 TCP 鉴权桩；桩由这次安装的前置命令生成时 plan 照样列出。场景 19 + 2 条，模块 42 条、安装器 6 条变异全部被杀。只有离线场景；客户端登录入口、渠道验签仍归工程（KNOWN-LIMITS“login 的边界”）。game-demo 与两个配方尚未换用。
 - **新增**（modules/servertime）：服务器时间模块。协议 `ServertimeSync`（拉取，原样带回 `ClientTick`）与推送 `ServertimeNow`：业务时间、当前业务日、前后两个业务日、本业务日起点、下一次每日重置的时刻、业务时区的偏移与名字；纯函数 `servertime.At(nowUnixMilli)` / `Now()` 与 `clock.BusinessDay` 同一份日历。联动 servertime + enter：每次进入游戏推一次，推送不成只记日志。不挂实体、无状态；偏移与日历只在启动时读，不做“时间被拨动”的广播。场景 12 + 3 条，26 条变异全部被杀。checkin / task / stamina / shop 给客户端的注释改为指向它下发的业务日。只有离线场景，未验证真实 TCP 与独立 Gate。
 - **修复**（scripts/test-modules-generated.sh）：两处“安装后的文件不带占位符”的检查写成 `! grep …`，在 `set -e` 下取反的命令不触发退出，这条检查从未生效；改成明确的 `if grep …; then exit 1; fi`，并只认安装器的占位符（Go 的复合字面量里也有 `{{`）。

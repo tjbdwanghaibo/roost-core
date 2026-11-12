@@ -1,0 +1,94 @@
+package gm
+
+import (
+	"context"
+	"fmt"
+	"sync/atomic"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+)
+
+// 离线替身只替换目标仓库与提交器；命令、生成 Sender、实体锁和回滚使用真实 Nest。
+type gmGetter map[int64]entity.IThreadSafeEntity
+
+func (g gmGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if value := g[id]; value != nil {
+		return value, nil
+	}
+	return nil, fmt.Errorf("missing entity %d", id)
+}
+func (g gmGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	values := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		values[i] = value
+	}
+	return values, nil
+}
+
+type gmCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *gmCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return fmt.Errorf("injected commit rejection")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type gmFixture struct {
+	engine    *nest.NestMgr
+	registry  *app.Registry
+	commands  *admin.Registry
+	committer *gmCommitter
+}
+
+func newGMFixture(t *testing.T, target entity.IThreadSafeEntity) *gmFixture {
+	t.Helper()
+	f := &gmFixture{committer: &gmCommitter{}}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(gmGetter{target.ID(): target}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.registry = app.NewRegistry(viper.New())
+	if err := f.registry.Register(app.ModName("nest"), nest.Client(f.engine)); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.commands, _ = app.Lookup[*admin.Registry](f.registry, app.ModAdmin)
+	return f
+}
+func (f *gmFixture) execute(name, payload string) (admin.Result, error) {
+	return f.commands.Execute(context.Background(), admin.Command{Name: name, Operator: "tester", Payload: []byte(payload)})
+}
+func (f *gmFixture) read(t *testing.T, target entity.IThreadSafeEntity, read func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() { target.GetMutex().Lock(); defer target.GetMutex().Unlock(); read() }); err != nil {
+		t.Fatal(err)
+	}
+}

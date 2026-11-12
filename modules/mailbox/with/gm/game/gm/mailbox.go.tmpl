@@ -1,0 +1,64 @@
+package gm
+
+import (
+	"context"
+	"strings"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamemailbox "{{MODULE}}/game/mailbox"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+const CommandSendMail = "gm.mail.send"
+
+func init() {
+	Register(Definition{Name: CommandSendMail, Description: "单人补偿邮件：{player_id, subject, body, attachment?, request_id, note}；同一 request_id 可重试", Handler: sendMail})
+}
+
+func sendMail(ctx context.Context, registry *app.Registry, command admin.Command) (admin.Result, error) {
+	payload, err := Decode[struct {
+		Audit
+		PlayerID   int64                  `json:"player_id"`
+		Subject    string                 `json:"subject"`
+		Body       string                 `json:"body"`
+		Attachment gamemailbox.Attachment `json:"attachment"`
+		RequestID  string                 `json:"request_id"`
+	}](command)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	unique, full, err := PlayerIDs(payload.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	if strings.TrimSpace(payload.Subject) == "" || strings.TrimSpace(payload.RequestID) == "" || len(payload.RequestID) > 64 {
+		return admin.Result{}, Invalid("subject and stable request_id (1..64 bytes) are required")
+	}
+	if payload.Attachment != (gamemailbox.Attachment{}) {
+		if err := gamemailbox.Validate(payload.Attachment); err != nil {
+			return admin.Result{}, Invalid(err.Error())
+		}
+	}
+	client, err := nestClient(registry)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	// 只读 Nest handler 负责冷加载与目标存在性；发件 RPC 在 handler 返回、解锁后执行。
+	if err := syncsender.NewGmMailTargetSender(client).Sync_GMMailTarget(ctx, full); err != nil {
+		return admin.Result{}, err
+	}
+	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mailer == nil {
+		return admin.Result{}, apperrors.ErrGMUnavailable
+	}
+	envelope, err := gamemailbox.SendTo(ctx, mailer, gamemailbox.Letter{To: unique, Subject: payload.Subject, Body: payload.Body, Attachment: payload.Attachment, RequestID: "gm:" + payload.RequestID})
+	if err != nil {
+		return admin.Result{}, err
+	}
+	return admin.Result{Data: map[string]any{"mail_id": envelope.ID, "recipients": envelope.Recipients}}, nil
+}

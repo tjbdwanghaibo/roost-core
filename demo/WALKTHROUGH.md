@@ -175,7 +175,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
 - **金币**：装 mailbox 连带装进了 wallet 模块（`PlayerDao.Wallet` 是同步字段、`WalletLedger` 与 `MailboxLedger` 只落库、协议 `WalletSpend`）。
   同步视图里 `Wallet` 只给本人：普通场景的 default 视图（全部同步字段）与分区场景的 `self` 视图带它，
   别的玩家（near / team / far）的字段白名单里没有（`game/entities/player/sync_packer.go`）。
-  demo 的玩法不产出金币；GM 可以发金币附件（`gm.mail.send` 的 `coins`），领取后进 wallet 的余额，`WalletSpend` 能把它花掉。
+  demo 的玩法不产出金币；GM 可以发金币附件（`gm.mail.send` 的 `attachment: {"type":"coins","amount":100}`），领取后进 wallet 的余额，`WalletSpend` 能把它花掉。
 - 机器人脚本：add_exp 之后 `retry × 20 { wait 250ms; mailbox_list }`（效果链是异步的：WAL → outbox → JetStream → consumer → mail.Send），
   拿到第一封可领邮件的 id 再 `mailbox_claim`，断言领到的是道具、背包里这个道具的数量 ≥ 领到的数量；`mailbox_claim_replay`
   再领同一封，断言数量不再增加。
@@ -661,18 +661,18 @@ demo 把两者都给出来：匹配成功后，形成这场比赛的 game 进程
 
 ## GM 运维面：admin 命令，不是另一个 HTTP 服务
 
-`internal/service/game/gm.go` 把四条 GM 命令注册进 app 发布的 admin 命令表（`app.ModAdmin`），ops Mod 把它们经 HTTP 端出来：
+`gm` 模块与功能联动注册通用命令，`internal/service/game/gm.go` 保留 demo 专属命令与双实体经验回调；它们共用 app 的 admin 命令表（`app.ModAdmin`），ops Mod 经 HTTP 端出来：
 `GET /admin/commands` 列命令、`POST /admin/execute` 执行，鉴权 `X-Admin-Token` 或 Bearer；`ops.admin_enabled=false` 时两个端点 404。
 demo 的**开发配置**开着 admin、token 是 `dev-gm-token`（`allow_dev_token: true`）；生产示例配置关着，而且 `config check --production` 拒绝 `dev-` token。
 
 ```bash
 curl -s -H 'X-Admin-Token: dev-gm-token' http://127.0.0.1:9100/admin/commands
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
-  -d '{"name":"gm.player.add_item","trace_id":"t1","payload":{"player_id":100866,"item_id":2001,"count":1}}'
+  -d '{"name":"gm.player.add_item","operator":"ops","trace_id":"t1","payload":{"player_id":100866,"item_id":2001,"count":1,"note":"客服补偿"}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
-  -d '{"name":"gm.mail.send","trace_id":"t2","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","item_id":1002,"count":5}}'
+  -d '{"name":"gm.mail.send","operator":"ops","trace_id":"t2","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","attachment":{"type":"item","id":1002,"amount":5},"request_id":"incident-item-1","note":"故障补偿"}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
-  -d '{"name":"gm.mail.send","trace_id":"t3","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","coins":100}}'
+  -d '{"name":"gm.mail.send","operator":"ops","trace_id":"t3","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","attachment":{"type":"coins","amount":100},"request_id":"incident-coins-1","note":"故障补偿"}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.world.stats"}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.list","payload":{"status":"manual_required","limit":20}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.get","payload":{"id":"gift-100866-demo-100866-1789-15"}}'
@@ -694,7 +694,8 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
   （已经用这个前缀跑着的部署先停写，把该前缀下的全部键连同计数器迁到新前缀）。处置分配时的拒绝前先确认这个键不是同一 Redis 上另一份仍用 `roost:demo` 前缀的部署的当前计数器；
   确认是旧计数器后停止分配，若 `<account.key_prefix>:player_id` 还不存在就把旧键的值迁过去，再移除旧键；否则给这份部署换一个没有该键的 Redis。
 - 加道具受 Player 的背包规则约束（道具必须在道具表里、每种道具的叠加上限），超出时命令按业务错误码拒绝（`bag_stack_full`，道具表里没有的是 `bag_item_invalid`），不是 GM 越过规则。
-- 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走 mailbox 模块的 `gamemailbox.SendTo`（同一个 mail 客户端、同一份附件编码：`item_id` / `count` 是道具附件，`coins` 是金币附件，一封只带一种），玩家经 `MailboxClaim` 领；发不出去的附件（数量不为正……）在命令这里就按参数错误拒绝。
+- wallet / bag / profile / mailbox / rehome 命令由 `gm` 模块联动提供，必须带 `operator` 与 `payload.note`；命令名与完整参数见 [GM 模块](../modules/gm/README.md)。demo 只保留额外的场景、联盟、活动等命令，以及加经验同时计入 World 的双实体执行回调。
+- 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走 mailbox 模块的 `gamemailbox.SendTo`（同一个 mail 客户端、同一份 `attachment` 附件编码，一封只带一种；稳定 `request_id` 必填，同一键重试不另发），玩家经 `MailboxClaim` 领；发不出去的附件（数量不为正……）在命令这里就按参数错误拒绝。
 - `trace_id` 是邮件的幂等键：同一 trace 重试不会发两封。
 - 为什么不是 webroute：这套 admin 命令表就是框架给运维面的位置（Wiring 的 nats / bus 也把 DLQ 命令注册在这里），共用鉴权、开关和 `/admin/commands` 的自描述；`webroute` 留给面向玩家 / 第三方的 HTTP 接口。
 
