@@ -1,0 +1,26 @@
+//go:build protocoldef
+
+package protocoldef
+
+// EnterStatusPush 是会话激活之后服务器主动告诉客户端的一句话：本服能不能进、要不要先新建。
+// 只有接了“会话激活后的告知”的工程会推（login 与 enter 两个模块都装着时）。
+//
+//   - Code 为 0、NeedCreate 为 false：直接发 EnterGame。
+//   - Code 为 0、NeedCreate 为 true：先发 EnterCreate（带名字），成功之后发 EnterGame。
+//   - Code 非 0：本服此刻不该服务这名玩家（login_elsewhere：他由别的服承载；rehome_moving：正在换服……），
+//     Code / Reason 就是发 EnterGame 会得到的那个拒绝，服务器随后断开连接。客户端回到选服。
+//
+// 它只是告知，不是关口：推送可能丢（发送队列满、连接刚好断开），也可能过时（推送之后状态变了）。
+// 客户端等一两秒没收到就直接发 EnterGame——需要新建时会得到 enter_need_create，再发 EnterCreate；
+// 结论以那两个请求的应答为准。
+type EnterStatusPush struct {
+	Code       int32  `pb:"1"`
+	Reason     string `pb:"2"`
+	NeedCreate bool   `pb:"3"`
+}
+
+//roost:protocol group=game handler=enter
+type EnterStatusProtocol interface {
+	//roost:msg id={{ID:protocol:EnterStatus}}
+	EnterStatus() EnterStatusPush
+}

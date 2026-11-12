@@ -11,9 +11,9 @@ import (
 func TestModuleActorSelfSyncEnterThenCombat(t *testing.T) {
 	root, roost, _ := moduleProject(t, "entercombat")
 	roost("module", "add", "enter")
-	verifyActorCombatSelf(t, root, []string{"enter"}, map[string]int{"enter": 14})
+	verifyActorCombatSelf(t, root, []string{"enter"}, map[string]int{"enter": 29})
 	roost("module", "add", "combat")
-	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 12, "combat": 36, "enter": 14})
+	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 12, "combat": 36, "enter": 29})
 	checkActorCombatSelfPayload(t, root, "example.com/studio/entercombat")
 }
 func TestModuleActorSelfSyncCombatThenEnter(t *testing.T) {
@@ -21,7 +21,7 @@ func TestModuleActorSelfSyncCombatThenEnter(t *testing.T) {
 	roost("module", "add", "combat")
 	verifyActorCombatSelf(t, root, []string{"actor", "combat"}, map[string]int{"actor": 12, "combat": 36})
 	roost("module", "add", "enter")
-	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 12, "combat": 36, "enter": 14})
+	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 12, "combat": 36, "enter": 29})
 	checkActorCombatSelfPayload(t, root, "example.com/studio/combatenter")
 }
 func verifyActorCombatSelf(t *testing.T, root string, names []string, want map[string]int) {

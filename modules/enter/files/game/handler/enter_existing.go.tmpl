@@ -1,0 +1,15 @@
+package handler
+
+import (
+	gameenter "{{MODULE}}/game/enter"
+	player "{{MODULE}}/game/entities/player"
+)
+
+// handlerEnterExisting 是“先新建”的会话的进入：只进入已经建成的玩家，没建成返回 enter_need_create、
+// 什么都不写。由进入端点在加载到玩家的档之后调用，不直接对客户端开放。
+// 经新建请求建成之后的第一次进入在这里清掉 Fresh，所以它要落盘。
+//
+//roost:nest rollback=undo durability=strict
+func handlerEnterExisting(target player.IEnterEntity) (gameenter.InitResult, error) {
+	return target.EnterComp().Existing()
+}

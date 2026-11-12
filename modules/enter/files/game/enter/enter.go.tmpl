@@ -4,10 +4,13 @@
 // 邮件把离线期间的全服邮件合并进邮箱……），进入端点不该认识它们。功能在自己的包里用 init 登记一个钩子，
 // 进入端点在首次初始化成功之后调 RunEntered，按名字顺序逐个执行。
 //
-// 登记点有两个，互不相干：
+// 进入的登记点有两个，互不相干：
 //
 //   - 进入前检查（OnEntering / RunEntering）：在加载或创建 Player 之前执行，能否决这一次进入；
 //   - 进入钩子（OnEntered / RunEntered）：进入成功之后执行，失败只记日志。
+//
+// “先新建、再进入”的那条路（新建请求 EnterCreate、它的登记点、会话激活后的告知）在 enter_create.go。
+// 没有人登记 RequireCreateFirst 的工程用不到它：EnterGame 照旧加载或创建。
 //
 // 这个包不 import 任何 controller 或实体包，所以谁都可以 import 它而不成环。
 package enter

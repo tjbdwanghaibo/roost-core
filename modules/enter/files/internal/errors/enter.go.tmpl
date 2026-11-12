@@ -1,0 +1,16 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 进入游戏模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+var (
+	// ErrEnterNeedCreate：这条会话要先新建（EnterCreate）才能进入，而这名玩家在本服还没有建成
+	// （没有档，或者上次建到一半）。什么都没写。只有“先新建”的会话（game/enter 的 CreateFirst）会得到它；
+	// 别的会话的 EnterGame 照旧加载或创建。
+	ErrEnterNeedCreate = errcode.Define({{ID:errcode:enter_need_create}}, "enter_need_create", "the player is not created on this server yet; create it first")
+	// ErrEnterCreated：这名玩家已经建成，新建请求什么都没改（名字也没改）。客户端接着发 EnterGame。
+	ErrEnterCreated = errcode.Define({{ID:errcode:enter_created}}, "enter_created", "the player is already created; enter the game")
+	// ErrEnterNameLong：新建请求里的名字超过了请求字段的上限（game/enter 的 MaxCreateNameBytes，按字节）。
+	// 这是请求的边界，不是名字规则：在任何检查与实体操作之前被拒；名字的格式规则由登记的新建前检查回答。
+	ErrEnterNameLong = errcode.Define({{ID:errcode:enter_name_long}}, "enter_name_long", "the name in the create request is too long")
+)

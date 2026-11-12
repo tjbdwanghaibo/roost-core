@@ -1,0 +1,13 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+)
+
+// handlerEnterBuilt 在这名玩家的锁内读“建成了没有”（首次初始化提交过）。只读，不写任何字段，不产生提交。
+// 会话激活后的告知用它决定 need_create；不对客户端开放。
+//
+//roost:nest
+func handlerEnterBuilt(target player.IEnterEntity) (bool, error) {
+	return target.EnterComp().Built(), nil
+}

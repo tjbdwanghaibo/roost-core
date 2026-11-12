@@ -7,4 +7,7 @@ type EnterState struct {
 	Initialized bool `store:"1"`
 	// FirstAt 是首次初始化提交时的业务时间（Unix 毫秒）。
 	FirstAt int64 `store:"2"`
+	// Fresh 为 true 表示这名玩家是经新建请求（EnterCreate）建成的，建成之后还没有进入过：
+	// 下一次进入报 First=true 并把它清掉。在 EnterGame 里直接建成的玩家从不置位。
+	Fresh bool `store:"3"`
 }

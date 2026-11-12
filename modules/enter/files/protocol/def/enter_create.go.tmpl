@@ -1,0 +1,26 @@
+//go:build protocoldef
+
+package protocoldef
+
+// EnterCreateRequest 是新建请求：在本服把这名玩家建成（建档、首次初始化、起名）。玩家是谁取自已认证的连接。
+// 只有“先新建”的会话需要它（用进服票据握手的会话）：这样的会话在玩家没建成时发 EnterGame 得到
+// enter_need_create，发这一条建成之后再发 EnterGame。
+type EnterCreateRequest struct {
+	// Name 是角色名。规则在游戏服：装了 profile 模块时按它的名字规则校验并写进档案，装了 naming 模块时
+	// 还要全服唯一；都没装时没人看它，可以为空。
+	Name string `pb:"1"`
+}
+
+// EnterCreateResponse：Code 为 0 表示建成了，接着发 EnterGame（那一次进入的 First 为 true）。
+// enter_created 表示这名玩家早就建成了（重发的请求、另一条连接先建成），什么都没改，同样接着发 EnterGame。
+// 名字被拒（profile_name_* / naming_*）时玩家仍是没建成，换个名字再发。
+type EnterCreateResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+}
+
+//roost:protocol group=game handler=enter
+type EnterCreateProtocol interface {
+	//roost:msg id={{ID:protocol:EnterCreate}}
+	EnterCreate(EnterCreateRequest) EnterCreateResponse
+}

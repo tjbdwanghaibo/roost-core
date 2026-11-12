@@ -1,0 +1,155 @@
+package enter
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+	"time"
+
+	gameenter "{{MODULE}}/game/enter"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 告知的场景：进入前检查与“先新建”的规则登记在 game/enter 的登记表里（进程级，只能在 init 里登记），
+// 所以这里登记一组按玩家号、按 claims 回答的替身。
+const (
+	statusElsewherePlayer = 94201 // 进入前检查拒绝：本服不该服务他
+	statusUnknownPlayer   = 94202 // 进入前检查自己出错：判断不了
+	statusPlayer          = 94203
+)
+
+var errStatusAway = errors.New("account is away")
+
+func init() {
+	gameenter.OnEntering("enter-status-scenarios", func(_ context.Context, _ *app.Registry, entering gameenter.Entering) error {
+		switch entering.PlayerID {
+		case statusElsewherePlayer:
+			// 借用模块自己的一个码当作“本服不该服务他”的拒绝：场景不另占错误码。
+			return apperrors.ErrEnterNameLong
+		case statusUnknownPlayer:
+			return errStatusAway
+		}
+		return nil
+	})
+	gameenter.RequireCreateFirst("enter-status-scenarios", func(claims map[string]string) bool { return claims["handshake"] == "ticket" })
+}
+
+// statusRecorder 是玩家传输的替身：按发生顺序记下推送与断开。
+type statusRecorder struct {
+	events  []string
+	pushes  []*pb.EnterStatusPush
+	pushErr error
+}
+
+func (r *statusRecorder) PushSession(_ context.Context, sessionID string, messageID uint32, value any) error {
+	push, ok := value.(*pb.EnterStatusPush)
+	if !ok || messageID != msgid.MsgEnterStatus {
+		r.events = append(r.events, "push:unexpected")
+		return nil
+	}
+	r.events = append(r.events, "push:"+sessionID)
+	r.pushes = append(r.pushes, push)
+	return r.pushErr
+}
+
+func (r *statusRecorder) CloseSessions(playerID int64, reason error) int {
+	if playerID == statusElsewherePlayer && reason != nil {
+		r.events = append(r.events, "close")
+	} else {
+		r.events = append(r.events, "close:unexpected")
+	}
+	return 1
+}
+
+var statusTicket = map[string]string{"handshake": "ticket"}
+
+func statusBuilt(built bool, err error, asked *int) func(context.Context) (bool, error) {
+	return func(context.Context) (bool, error) { *asked++; return built, err }
+}
+
+// 该服务的玩家：把“要不要先新建”推给刚激活的那条会话，不断开。没建成的“先新建”会话是 need_create；
+// 建成了的、以及 EnterGame 会代建的会话都是“直接进入”。
+func TestEnterStatusPushesNeedCreateToTheActivatedSession(t *testing.T) {
+	asked := 0
+	recorder := &statusRecorder{}
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-1", statusBuilt(false, nil, &asked), time.Hour)
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-2", statusBuilt(true, nil, &asked), time.Hour)
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer}, "s-3", statusBuilt(false, nil, &asked), time.Hour)
+	if want := []string{"push:s-1", "push:s-2", "push:s-3"}; !reflect.DeepEqual(recorder.events, want) {
+		t.Fatalf("events = %v, want %v", recorder.events, want)
+	}
+	for i, want := range []bool{true, false, false} {
+		if got := recorder.pushes[i]; got.Code != 0 || got.Reason != "" || got.NeedCreate != want {
+			t.Fatalf("push %d = %+v, want need_create=%v and no code", i+1, got, want)
+		}
+	}
+	if asked != 2 {
+		t.Fatalf("the record was read %d times, want 2: a load-or-create session is not asked", asked)
+	}
+	// 推送不成只是少了一次告知，不报错也不断开。
+	recorder = &statusRecorder{pushErr: errors.New("queue is full")}
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-4", statusBuilt(false, nil, &asked), time.Hour)
+	if want := []string{"push:s-4"}; !reflect.DeepEqual(recorder.events, want) {
+		t.Fatalf("after a failed push: events = %v, want %v", recorder.events, want)
+	}
+}
+
+// 本服不该服务的玩家：推进入前检查的那个码，然后断开他的连接——先推后断，推送失败、期限已到也照样断开；
+// 他的档没有被读过。
+func TestEnterStatusRefusalIsPushedThenThePlayerIsDisconnected(t *testing.T) {
+	wantCode, wantReason := apperrors.ErrEnterNameLong.Code(), apperrors.ErrEnterNameLong.Error()
+	asked := 0
+	entering := gameenter.Entering{PlayerID: statusElsewherePlayer, Claims: statusTicket}
+	recorder := &statusRecorder{}
+	started := time.Now()
+	announce(context.Background(), nil, recorder, entering, "s-1", statusBuilt(false, nil, &asked), 20*time.Millisecond)
+	if want := []string{"push:s-1", "close"}; !reflect.DeepEqual(recorder.events, want) {
+		t.Fatalf("events = %v, want %v", recorder.events, want)
+	}
+	if waited := time.Since(started); waited < 20*time.Millisecond {
+		t.Fatalf("closed after %v, want the frame given 20ms to leave first", waited)
+	}
+	if got := recorder.pushes[0]; got.Code != wantCode || got.Reason == "" || got.NeedCreate {
+		t.Fatalf("push = %+v, want code %d (%s) and no need_create", got, wantCode, wantReason)
+	}
+	recorder = &statusRecorder{pushErr: errors.New("queue is full")}
+	announce(context.Background(), nil, recorder, entering, "s-2", statusBuilt(false, nil, &asked), 0)
+	if want := []string{"push:s-2", "close"}; !reflect.DeepEqual(recorder.events, want) {
+		t.Fatalf("after a failed push: events = %v, want %v", recorder.events, want)
+	}
+	// 期限已经到了：不再等那一帧，但仍然断开。
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	recorder = &statusRecorder{}
+	started = time.Now()
+	announce(ended, nil, recorder, entering, "s-3", statusBuilt(false, nil, &asked), time.Hour)
+	if want := []string{"push:s-3", "close"}; !reflect.DeepEqual(recorder.events, want) || time.Since(started) > 5*time.Second {
+		t.Fatalf("with an ended context: events = %v after %v, want %v at once", recorder.events, time.Since(started), want)
+	}
+	if asked != 0 {
+		t.Fatalf("the record of a refused player was read %d times", asked)
+	}
+}
+
+// 判断不了（进入前检查问不到权威、读档出错）：什么都不推、不断开，客户端从 EnterGame 得到结论。
+// 删过档的玩家是确定的结论：把码告诉他，但不断开——那不是“本服不该服务他”。
+func TestEnterStatusSaysNothingWhenItCannotTell(t *testing.T) {
+	asked := 0
+	recorder := &statusRecorder{}
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusUnknownPlayer, Claims: statusTicket}, "s-1", statusBuilt(false, nil, &asked), 0)
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-2", statusBuilt(false, errStatusAway, &asked), 0)
+	if len(recorder.events) != 0 || asked != 1 {
+		t.Fatalf("events = %v, the record read %d times; want silence, and the record not read after a failed check", recorder.events, asked)
+	}
+	deleted := errcode.ErrEntityDeleted
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-3", statusBuilt(false, deleted, &asked), 0)
+	if want := []string{"push:s-3"}; !reflect.DeepEqual(recorder.events, want) || recorder.pushes[0].Code == 0 || recorder.pushes[0].NeedCreate {
+		t.Fatalf("a deleted player: events = %v, pushes %+v; want its code pushed and no disconnect", recorder.events, recorder.pushes)
+	}
+}

@@ -1,0 +1,68 @@
+package enter
+
+import (
+	stdcontext "context"
+	"fmt"
+	"log/slog"
+
+	gameenter "{{MODULE}}/game/enter"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleEnterCreate 是新建请求的端点：在本服把已认证的这名玩家建成（建档、起名、首次初始化）。
+// 顺序与每一步被拒时留下了什么由 gameenter.Create 保证（见它的注释）；这里只给出两个档操作：
+//
+//	Ensure  GetOrCreate：没有档就建一份空档，不做首次初始化。删过档的玩家得到 entity_deleted。
+//	Commit  Nest handler EnterCreate：名字、初始发放与“建成了”的标记一笔事务。
+//
+// 应答的 Code 为 0 表示建成了；enter_created 表示早就建成了（什么都没改）。两种情况客户端都接着发 EnterGame。
+// 哪条会话都可以发它：“先新建”的会话必须先发，别的会话（EnterGame 会代建）想带着名字建也可以发。
+func (controller *Controller) HandleEnterCreate(context *playeraccess.Context, request *pb.EnterCreateRequest) (*pb.EnterCreateResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("enter_create endpoint: context and request are required")
+	}
+	creating := gameenter.Creating{PlayerID: context.PlayerID, Name: request.Name}
+	if context.Session != nil {
+		creating.Claims = context.Session.Principal().Claims
+	}
+	err := gameenter.Create(context.Context(), controller.registry, creating, gameenter.CreateSteps{
+		Ensure: func(ctx stdcontext.Context) error { return controller.ensure(ctx, context.PlayerID) },
+		Commit: func(ctx stdcontext.Context, name string) error {
+			return controller.commitCreate(ctx, context.PlayerID, name)
+		},
+	})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_create failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterCreateResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.EnterCreateResponse{}, nil
+}
+
+// ensure 保证玩家的档在：只在持久层确认这个实体不存在时才创建。
+func (controller *Controller) ensure(ctx stdcontext.Context, playerID int64) error {
+	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	if err != nil {
+		return err
+	}
+	_, _, err = entities.GetOrCreate(ctx, playerID)
+	return err
+}
+
+// commitCreate 发新建的那一笔事务。
+func (controller *Controller) commitCreate(ctx stdcontext.Context, playerID int64, name string) error {
+	entityID, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return err
+	}
+	return syncsender.NewEnterCreateSender(controller.nestClient).Sync_EnterCreate(ctx, entityID, name)
+}

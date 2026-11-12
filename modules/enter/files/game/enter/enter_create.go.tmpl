@@ -1,0 +1,280 @@
+package enter
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sort"
+	"sync"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 这个文件是“先新建、再进入”的那条路：新建请求（EnterCreate）的骨架与它的登记点，会话激活之后给客户端的告知，
+// 以及“这条会话走不走这条路”的判断。
+//
+// 两条路并存，由会话决定走哪一条：
+//
+//   - 缺省（没有人登记 RequireCreateFirst，或者登记的规则对这条会话答 false）：EnterGame 就是“加载或创建”，
+//     新玩家的档在第一次 EnterGame 里建成。没装登录模块的工程、用角色会话令牌握手的会话都是这一条，
+//     与没有这个文件时完全相同。
+//   - 先新建（规则对这条会话答 true）：EnterGame 只进入已经建成的玩家，没建成答 enter_need_create、什么都不写；
+//     客户端发 EnterCreate（带名字）建成之后再发 EnterGame。角色名的规则因此在游戏服：名字的校验与写入
+//     由别的功能登记在新建的登记点上（OnCreating、OnCreatePrepare、实体包的 OnCreate）。
+//
+// “建成”只有一个事实：档里的首次初始化标记（PlayerDao.Enter.Initialized）。有档而标记没置位（上次建到一半）
+// 与没有档是一回事——都要新建。
+
+var (
+	createFirstMu   sync.RWMutex
+	createFirstName string
+	createFirstRule func(claims map[string]string) bool
+)
+
+// RequireCreateFirst 登记“哪些会话必须先新建”的规则：rule 拿到会话的 claims，返回 true 表示这条会话的
+// EnterGame 不代建。全工程只能登记一条（登记的是握手方式与进入方式的对应关系，两条规则没有合并的办法），
+// 只在 init 里调用；重复、空名或 nil 直接 panic。login 模块的联动登记的是“用进服票据握手的会话”。
+func RequireCreateFirst(name string, rule func(claims map[string]string) bool) {
+	if name == "" || rule == nil {
+		panic("enter: RequireCreateFirst needs a name and a rule")
+	}
+	createFirstMu.Lock()
+	defer createFirstMu.Unlock()
+	if createFirstRule != nil {
+		panic(fmt.Sprintf("enter: RequireCreateFirst is registered twice (%q, then %q)", createFirstName, name))
+	}
+	createFirstName, createFirstRule = name, rule
+}
+
+// CreateFirst 报告带着这些 claims 的会话是不是必须先新建。这是唯一的判断处：进入的骨架（EnterSession）据此选
+// “只进入已建成的”还是“加载或创建”，会话激活后的告知（Assess）据此决定 need_create。没有登记规则时总是 false。
+func CreateFirst(claims map[string]string) bool {
+	createFirstMu.RLock()
+	rule := createFirstRule
+	createFirstMu.RUnlock()
+	return rule != nil && rule(claims)
+}
+
+// Loads 是进入端点给出的两种 load，EnterSession 按会话选一种。
+type Loads struct {
+	// LoadOrCreate 加载或创建 Player 并提交首次初始化：新玩家的档在这里建成。
+	LoadOrCreate func(context.Context) (InitResult, error)
+	// Existing 只进入已经建成的 Player：没有档、或者首次初始化没做过，返回 ErrNeedCreate，什么都不写。
+	Existing func(context.Context) (InitResult, error)
+}
+
+// EnterSession 是进入端点调的入口：按会话选 load，再走 Enter（检查 → load → 钩子）。
+// “先新建”的会话（CreateFirst）用 Existing，别的会话用 LoadOrCreate——没有登记规则的工程永远是后者，
+// 与直接调 Enter(…, LoadOrCreate) 相同。
+func EnterSession(ctx context.Context, registry *app.Registry, entering Entering, loads Loads) (Entered, error) {
+	if loads.LoadOrCreate == nil || loads.Existing == nil {
+		return Entered{}, fmt.Errorf("enter: EnterSession needs both loads")
+	}
+	load := loads.LoadOrCreate
+	if CreateFirst(entering.Claims) {
+		load = loads.Existing
+	}
+	return Enter(ctx, registry, entering, load)
+}
+
+// Creating 是一次还没有被受理的新建：会话已经认证，这名玩家还没有建成。
+type Creating struct {
+	PlayerID int64
+	// Name 是客户端在新建请求里给的名字，原样（没有去空白、没有校验）。没有任何功能登记名字规则时没人看它。
+	Name string
+	// Claims 与 Entering.Claims 同源，可为 nil，只读。
+	Claims map[string]string
+}
+
+// CreateCheck 是一条新建前检查：这一次新建能不能受理。它在进入前检查（OnEntering）全部放行之后、
+// 任何实体操作之前执行，约定与 Check 相同：返回 nil 放行，返回带码错误就拒绝——这时玩家的档没有被加载，
+// 也没有被创建，什么都没写；只读；可以重复；要快。
+//
+// 名字的格式规则放在这里（profile 模块的联动登记了它的规则），所以不合规的名字在建档之前被拒。
+// 要先有档才能做的事（全服唯一占名）用 OnCreatePrepare。
+type CreateCheck func(ctx context.Context, registry *app.Registry, creating Creating) error
+
+// CreateStep 是建档之后、初始化事务之前在事务之外做的一步（naming 模块装着时的全服唯一占名）。
+// 执行它时玩家的档已经在（可能是这一次刚建的空档），首次初始化还没做。返回错误时这一次新建到此为止：
+// 初始化事务不执行，玩家仍然是“没建成”，客户端可以换个名字再发新建请求。所以它必须可以重复执行，
+// 并且自己留下的东西要么能被下一次覆盖、要么本来就无害。
+type CreateStep func(ctx context.Context, registry *app.Registry, creating Creating) error
+
+var (
+	createMu     sync.RWMutex
+	createChecks = map[string]CreateCheck{}
+	createSteps  = map[string]CreateStep{}
+)
+
+// OnCreating 登记一条新建前检查，name 用功能自己的名字。只在 init 里调用；重名、空名或 nil 直接 panic。
+func OnCreating(name string, check CreateCheck) {
+	if name == "" || check == nil {
+		panic("enter: OnCreating needs a name and a check")
+	}
+	createMu.Lock()
+	defer createMu.Unlock()
+	if _, taken := createChecks[name]; taken {
+		panic(fmt.Sprintf("enter: create check %q is registered twice", name))
+	}
+	createChecks[name] = check
+}
+
+// OnCreatePrepare 登记一个建档之后、初始化事务之前的步骤，name 用功能自己的名字。只在 init 里调用。
+func OnCreatePrepare(name string, step CreateStep) {
+	if name == "" || step == nil {
+		panic("enter: OnCreatePrepare needs a name and a step")
+	}
+	createMu.Lock()
+	defer createMu.Unlock()
+	if _, taken := createSteps[name]; taken {
+		panic(fmt.Sprintf("enter: create step %q is registered twice", name))
+	}
+	createSteps[name] = step
+}
+
+// RunCreating 按名字顺序执行全部新建前检查，遇到第一个拒绝就停下并原样返回它的错误。
+func RunCreating(ctx context.Context, registry *app.Registry, creating Creating) error {
+	createMu.RLock()
+	names := make([]string, 0, len(createChecks))
+	for name := range createChecks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	run := make([]CreateCheck, len(names))
+	for i, name := range names {
+		run[i] = createChecks[name]
+	}
+	createMu.RUnlock()
+	for i, check := range run {
+		if err := check(ctx, registry, creating); err != nil {
+			slog.Info("enter: create refused by a check", "check", names[i], "player_id", creating.PlayerID, "err", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// RunCreatePrepare 按名字顺序执行全部新建步骤，遇到第一个失败就停下并原样返回它的错误。
+func RunCreatePrepare(ctx context.Context, registry *app.Registry, creating Creating) error {
+	createMu.RLock()
+	names := make([]string, 0, len(createSteps))
+	for name := range createSteps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	run := make([]CreateStep, len(names))
+	for i, name := range names {
+		run[i] = createSteps[name]
+	}
+	createMu.RUnlock()
+	for i, step := range run {
+		if err := step(ctx, registry, creating); err != nil {
+			slog.Info("enter: create stopped at a step", "step", names[i], "player_id", creating.PlayerID, "err", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// MaxCreateNameBytes 是新建请求里名字的字节上限。它只是请求字段的边界（没有登记任何名字规则的工程也有效），
+// 比任何合理的名字规则都宽；超过它的请求在一切检查之前答 enter_name_long。
+const MaxCreateNameBytes = 256
+
+// CreateSteps 是新建端点交给 Create 的两个档操作。
+type CreateSteps struct {
+	// Ensure 保证玩家的档在：没有就创建一份空档（不做首次初始化），有就什么都不做。
+	Ensure func(ctx context.Context) error
+	// Commit 在一笔事务里把玩家建成：事务内的新建钩子（实体包的 OnCreate，名字写进档案）、首次初始化
+	// （初始发放）与“建成了”的标记一起提交或一起回滚。已经建成的玩家返回 enter_created，不写任何东西。
+	Commit func(ctx context.Context, name string) error
+}
+
+// Create 是一次新建的骨架，新建端点只调它：
+//
+//  0. 名字超过 MaxCreateNameBytes：答 enter_name_long，后面都不做。
+//  1. 进入前检查（RunEntering）：本服不该服务这名玩家（不承载、正在换服……）就不在本服给他建档。
+//     与 EnterGame 用的是同一组检查，结论相同。
+//  2. 新建前检查（RunCreating）：名字不合规在这里被拒。到这一步为止什么都没写。
+//  3. steps.Ensure：建一份空档（已经有就不动）。
+//  4. 新建步骤（RunCreatePrepare）：要有档才能做的事务外步骤。失败则到此为止，玩家仍是没建成。
+//  5. steps.Commit：一笔事务建成。失败（提交被拒、钩子报错）整笔回滚，玩家仍是没建成，可以重试。
+//
+// 成功之后玩家已经建成，但这不是一次进入：进入钩子（OnEntered）不在这里跑，客户端接着发 EnterGame，
+// 那一次进入报 First=true（档里记着“建成之后还没进过”）。
+//
+// 已经建成的玩家再发新建：第 5 步答 enter_created，什么都不改（名字也不改）。选“带码拒绝”而不是“当作成功”，
+// 是因为重发的请求可以带着另一个名字，当作成功会让客户端以为名字换成了。客户端把这个码当作“去发 EnterGame”。
+// 同一名玩家两条连接同时新建：两边的 Commit 在实体锁上排队，先到的建成，后到的得到 enter_created。
+func Create(ctx context.Context, registry *app.Registry, creating Creating, steps CreateSteps) error {
+	if steps.Ensure == nil || steps.Commit == nil {
+		return fmt.Errorf("enter: Create needs both steps")
+	}
+	if len(creating.Name) > MaxCreateNameBytes {
+		return apperrors.ErrEnterNameLong
+	}
+	if err := RunEntering(ctx, registry, Entering{PlayerID: creating.PlayerID, Claims: creating.Claims}); err != nil {
+		return err
+	}
+	if err := RunCreating(ctx, registry, creating); err != nil {
+		return err
+	}
+	if err := steps.Ensure(ctx); err != nil {
+		return err
+	}
+	if err := RunCreatePrepare(ctx, registry, creating); err != nil {
+		return err
+	}
+	return steps.Commit(ctx, creating.Name)
+}
+
+// Status 是会话激活之后告诉客户端的一句话（EnterStatus 推送的内容）。
+type Status struct {
+	// Code 非 0：本服此刻不该服务这名玩家，Code / Reason 就是他发 EnterGame 会得到的那个拒绝。
+	Code   int32
+	Reason string
+	// NeedCreate 为 true：这条会话要先发 EnterCreate，再发 EnterGame。Code 非 0 时不看它。
+	NeedCreate bool
+}
+
+// Assess 算出该告诉客户端什么，不推送、不断开——那是调用方的事。built 回答“这名玩家建成了没有”
+// （只读；端点用加载加一次只读的 Nest 请求实现）。
+//
+//   - 进入前检查（RunEntering，与 EnterGame、EnterCreate 用的是同一组）拒绝：返回那条拒绝的码，refused 为 true。
+//     检查自己出错（问不到权威，不是带码的拒绝）时返回 err：不知道该不该服务他，就什么都不说。
+//   - 放行：NeedCreate = 这条会话必须先新建（CreateFirst）且玩家没建成。不必先新建的会话不问 built。
+//     built 出错：带码的（删过档的玩家是 entity_deleted）原样告诉客户端，refused 为 false——那是这名玩家的档的事，
+//     不是“本服不该服务他”；别的错误返回 err。
+//
+// 这里的结论只是告知：它与随后的 EnterGame / EnterCreate 之间状态可以变，权威判断在那两个请求各自的检查与事务里。
+// 所以它不写任何东西，丢了、错了都不影响正确性，只是让客户端少走一次往返。
+func Assess(ctx context.Context, registry *app.Registry, entering Entering, built func(context.Context) (bool, error)) (status Status, refused bool, err error) {
+	if built == nil {
+		return Status{}, false, fmt.Errorf("enter: Assess needs a way to ask whether the player is built")
+	}
+	if err := RunEntering(ctx, registry, entering); err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			return Status{}, false, err
+		}
+		return Status{Code: code, Reason: reason}, true, nil
+	}
+	if !CreateFirst(entering.Claims) {
+		return Status{}, false, nil
+	}
+	ready, err := built(ctx)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			return Status{}, false, err
+		}
+		return Status{Code: code, Reason: reason}, false, nil
+	}
+	return Status{NeedCreate: !ready}, false, nil
+}
+
+// ErrNeedCreate 是“先新建”的会话在玩家没建成时发 EnterGame 得到的拒绝（码 enter_need_create）。
+// 端点的“只进入已建成的”那一步在没有档时返回它；有档而没建成由事务内的同一个判断返回同一个错误。
+var ErrNeedCreate = apperrors.ErrEnterNeedCreate

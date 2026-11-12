@@ -1,0 +1,14 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+)
+
+// handlerEnterCreate 由新建端点（EnterCreate）在保证玩家的档存在之后调用，不直接对客户端开放。
+// 它把这名玩家建成：名字（事务内的新建钩子）、初始发放、“建成了”的标记在同一笔事务里。
+// 已经建成的玩家得到 enter_created，什么都不写。nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerEnterCreate(target player.IEnterEntity, name string, nowUnixMilli int64) error {
+	return target.EnterComp().Create(name, nowUnixMilli)
+}

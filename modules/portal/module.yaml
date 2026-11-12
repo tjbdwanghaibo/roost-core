@@ -21,7 +21,7 @@ verify:
   pass: 12
 with:
   enter:
-    summary: 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（登录模块的认证器，account 按账号解析或新建玩家号）→ 进入游戏（gameenter.Enter），以及入口给的地址与进入时认的是同一个承载服；只有测试，不加运行时代码
+    summary: 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（登录模块的认证器，account 按账号解析或新建玩家号）→ 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入游戏，以及入口给的地址与进入时认的是同一个承载服；只有测试，不加运行时代码
     verify:
       packages: [./game/portal]
       run: ^TestWithPortalEnter

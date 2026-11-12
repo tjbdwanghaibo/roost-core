@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
@@ -92,5 +93,263 @@ func TestWithLoginEnterComparesWithThisProcessSid(t *testing.T) {
 	}
 	if loads != 1 {
 		t.Fatalf("%d loads, want 1", loads)
+	}
+}
+
+// 下面是握手方式与进入游戏两条路的场景。account 是真实的（newLoginWorld），握手经真实的认证器；
+// 游戏服的档用内存替身（withLoginRecords），它照 enter 模块的事务规则回答：建成了没有只看首次初始化的标记。
+
+type withLoginRecord struct {
+	built  bool
+	fresh  bool
+	name   string
+	grants int
+}
+
+type withLoginRecords struct{ players map[int64]*withLoginRecord }
+
+func (records *withLoginRecords) loads(playerID int64) gameenter.Loads {
+	return gameenter.Loads{
+		LoadOrCreate: func(context.Context) (gameenter.InitResult, error) {
+			record := records.players[playerID]
+			if record == nil {
+				record = &withLoginRecord{}
+				records.players[playerID] = record
+			}
+			if !record.built {
+				record.built, record.grants = true, record.grants+1
+				return gameenter.InitResult{First: true}, nil
+			}
+			first := record.fresh
+			record.fresh = false
+			return gameenter.InitResult{First: first}, nil
+		},
+		Existing: func(context.Context) (gameenter.InitResult, error) {
+			record := records.players[playerID]
+			if record == nil || !record.built {
+				return gameenter.InitResult{}, gameenter.ErrNeedCreate
+			}
+			first := record.fresh
+			record.fresh = false
+			return gameenter.InitResult{First: first}, nil
+		},
+	}
+}
+
+func (records *withLoginRecords) steps(playerID int64) gameenter.CreateSteps {
+	return gameenter.CreateSteps{
+		Ensure: func(context.Context) error {
+			if records.players[playerID] == nil {
+				records.players[playerID] = &withLoginRecord{}
+			}
+			return nil
+		},
+		Commit: func(_ context.Context, name string) error {
+			record := records.players[playerID]
+			if record.built {
+				return apperrors.ErrEnterCreated
+			}
+			record.built, record.fresh, record.name, record.grants = true, true, name, record.grants+1
+			return nil
+		},
+	}
+}
+
+func (records *withLoginRecords) built(playerID int64) func(context.Context) (bool, error) {
+	return func(context.Context) (bool, error) {
+		record := records.players[playerID]
+		return record != nil && record.built, nil
+	}
+}
+
+// withLoginAnnounced 换掉推 EnterStatus 的入口，记下告知被叫到时拿的会话；结束时换回去。
+type withLoginAnnounced struct {
+	entering  gameenter.Entering
+	sessionID string
+	calls     int
+}
+
+func withLoginAnnounce(t *testing.T) *withLoginAnnounced {
+	t.Helper()
+	seen := &withLoginAnnounced{}
+	saved := enterAnnounce
+	enterAnnounce = func(_ context.Context, _ *app.Registry, entering gameenter.Entering, sessionID string) {
+		seen.entering, seen.sessionID = entering, sessionID
+		seen.calls++
+	}
+	t.Cleanup(func() { enterAnnounce = saved })
+	return seen
+}
+
+// 新号的整条路：进服票据握手 → 会话激活后的告知拿到这条会话 → 告知的结论是“要先新建”→ 没新建就进入被拒、
+// 什么都没建 → 新建（带名字）→ 进入是首次 → 再握手（重连）告知“直接进入”。
+func TestWithLoginEnterANewAccountIsToldToCreateThenCreatesAndEnters(t *testing.T) {
+	w := newLoginWorld(t)
+	registry := withLoginRegistry(1000)
+	records := &withLoginRecords{players: map[int64]*withLoginRecord{}}
+	announced := withLoginAnnounce(t)
+	authenticator := Authenticator{Accounts: w.service}
+	notifier := NewNotifier()
+	handshake := w.enterHandshake("alice", 1000)
+
+	principal, err := authenticator.Authenticate(context.Background(), handshake)
+	if err != nil || principal.Claims[svcaccount.NewRoleClaim] != "1" {
+		t.Fatalf("a new account's handshake: %+v, %v", principal, err)
+	}
+	notifier.SessionActive(registry, principal, true)
+	notifier.Wait()
+	if announced.calls != 1 || announced.sessionID != principal.SessionID || announced.entering.PlayerID != 100_001 || announced.entering.Claims[EnterTicketClaim] != "1" {
+		t.Fatalf("the status notice got %+v for session %q (%d calls), want this session and its claims once", announced.entering, announced.sessionID, announced.calls)
+	}
+	entering := announced.entering
+	status, refused, err := gameenter.Assess(context.Background(), registry, entering, records.built(100_001))
+	if err != nil || refused || status != (gameenter.Status{NeedCreate: true}) {
+		t.Fatalf("status for a new account = %+v refused=%v err=%v, want need_create", status, refused, err)
+	}
+	// 推送丢了也一样：直接进入得到 enter_need_create，游戏服什么都没建。
+	if _, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001)); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+		t.Fatalf("entering before creating: err = %v, want enter_need_create", err)
+	}
+	if len(records.players) != 0 {
+		t.Fatalf("a refused enter created a record: %v", records.players)
+	}
+	creating := gameenter.Creating{PlayerID: entering.PlayerID, Name: "Alice", Claims: entering.Claims}
+	if err := gameenter.Create(context.Background(), registry, creating, records.steps(100_001)); err != nil {
+		t.Fatal(err)
+	}
+	if record := records.players[100_001]; record == nil || !record.built || record.name != "Alice" || record.grants != 1 {
+		t.Fatalf("after create: %+v, want built, named by the game server, one grant", record)
+	}
+	// account 那一侧只有映射，没有名字。
+	if role, err := w.service.RoleOnServer(context.Background(), "store:alice", 1000); err != nil || role.PlayerID != 100_001 || role.Name != "" {
+		t.Fatalf("account holds %+v, %v; want the mapping without a name", role, err)
+	}
+	entered, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001))
+	if err != nil || !entered.First || entered.PlayerID != 100_001 {
+		t.Fatalf("the first enter after create: %+v, %v; want first", entered, err)
+	}
+	if err := gameenter.Create(context.Background(), registry, creating, records.steps(100_001)); !errors.Is(err, apperrors.ErrEnterCreated) {
+		t.Fatalf("creating again: err = %v, want enter_created", err)
+	}
+	// 重连：同一张票据，不再是新映射；告知的结论是直接进入，进入不再是首次。
+	again, err := authenticator.Authenticate(context.Background(), handshake)
+	if err != nil || again.PlayerID != 100_001 {
+		t.Fatal(err)
+	}
+	if _, isNew := again.Claims[svcaccount.NewRoleClaim]; isNew {
+		t.Fatal("the reconnect is marked as a new mapping")
+	}
+	status, refused, err = gameenter.Assess(context.Background(), registry, gameenter.Entering{PlayerID: again.PlayerID, Claims: again.Claims}, records.built(100_001))
+	if err != nil || refused || status != (gameenter.Status{}) {
+		t.Fatalf("status on reconnect = %+v refused=%v err=%v, want enter directly", status, refused, err)
+	}
+	if entered, err = gameenter.EnterSession(context.Background(), registry, gameenter.Entering{PlayerID: again.PlayerID, Claims: again.Claims}, records.loads(100_001)); err != nil || entered.First {
+		t.Fatalf("enter on reconnect: %+v, %v; want not first", entered, err)
+	}
+	if records.players[100_001].grants != 1 {
+		t.Fatalf("%d grants, want 1", records.players[100_001].grants)
+	}
+}
+
+// 要不要新建由游戏服的档说了算，不看 account 的“映射是不是这次新建的”：映射早就有、玩家数据没建成
+// （上次握手之后没有新建，或者建到一半）的账号再来，照样被告知要新建、进入照样被拒。
+func TestWithLoginEnterAMappedAccountWithoutPlayerDataStillCreates(t *testing.T) {
+	w := newLoginWorld(t)
+	registry := withLoginRegistry(1000)
+	records := &withLoginRecords{players: map[int64]*withLoginRecord{}}
+	authenticator := Authenticator{Accounts: w.service}
+	handshake := w.enterHandshake("alice", 1000)
+	if _, err := authenticator.Authenticate(context.Background(), handshake); err != nil {
+		t.Fatal(err)
+	}
+	// 有档而没建成：上次新建到一半。
+	records.players[100_001] = &withLoginRecord{}
+	principal, err := authenticator.Authenticate(context.Background(), handshake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, isNew := principal.Claims[svcaccount.NewRoleClaim]; isNew {
+		t.Fatal("the second handshake is marked as a new mapping; the scenario needs an old one")
+	}
+	entering := gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
+	status, refused, err := gameenter.Assess(context.Background(), registry, entering, records.built(100_001))
+	if err != nil || refused || !status.NeedCreate {
+		t.Fatalf("status = %+v refused=%v err=%v, want need_create although the mapping is old", status, refused, err)
+	}
+	if _, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001)); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+		t.Fatalf("entering: err = %v, want enter_need_create", err)
+	}
+	if record := records.players[100_001]; record.built || record.grants != 0 {
+		t.Fatalf("a refused enter changed the record: %+v", record)
+	}
+	if err := gameenter.Create(context.Background(), registry, gameenter.Creating{PlayerID: 100_001, Name: "Alice", Claims: principal.Claims}, records.steps(100_001)); err != nil {
+		t.Fatal(err)
+	}
+	if entered, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001)); err != nil || !entered.First {
+		t.Fatalf("enter after create: %+v, %v", entered, err)
+	}
+}
+
+// 用角色会话令牌握手的会话（名字在 account 的 CreateRole 里起过）不是“先新建”的会话：告知里没有 need_create
+// （也不去读档），EnterGame 照旧加载或创建。
+func TestWithLoginEnterSessionTokenSessionsKeepLoadOrCreate(t *testing.T) {
+	w := newLoginWorld(t)
+	registry := withLoginRegistry(1000)
+	records := &withLoginRecords{players: map[int64]*withLoginRecord{}}
+	session := w.role("alice", 1000)
+	principal, err := Authenticator{Accounts: w.service}.Authenticate(context.Background(), Ticket(session.PlayerID, session.Token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if EnterTicketSession(principal.Claims) || gameenter.CreateFirst(principal.Claims) {
+		t.Fatalf("a session-token session is treated as create-first: %v", principal.Claims)
+	}
+	entering := gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
+	asked := 0
+	status, refused, err := gameenter.Assess(context.Background(), registry, entering, func(context.Context) (bool, error) { asked++; return false, nil })
+	if err != nil || refused || status != (gameenter.Status{}) || asked != 0 {
+		t.Fatalf("status = %+v refused=%v err=%v, record read %d times; want enter directly without reading the record", status, refused, err, asked)
+	}
+	entered, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(principal.PlayerID))
+	if err != nil || !entered.First || !records.players[principal.PlayerID].built {
+		t.Fatalf("EnterGame of a new player on a session-token session: %+v, %v; want it built by the enter", entered, err)
+	}
+}
+
+// 本服不该服务的角色（票据是给 1001 服的，连到了 1000 服）：握手照样成功，告知的结论是 login_elsewhere 并要断开；
+// 他在本服进入、新建都被同一条检查拒绝，什么都没建。独立 Gate 下激活通知不带 claims，取认证器记下的那一份，
+// 结论相同。
+func TestWithLoginEnterARoleOfAnotherServerIsToldToLeave(t *testing.T) {
+	w := newLoginWorld(t)
+	registry := withLoginRegistry(1000)
+	records := &withLoginRecords{players: map[int64]*withLoginRecord{}}
+	announced := withLoginAnnounce(t)
+	notifier := NewNotifier()
+	principal, err := Authenticator{Accounts: w.service}.Authenticate(context.Background(), w.enterHandshake("alice", 1001))
+	if err != nil || principal.ServerID != 1001 {
+		t.Fatalf("handshake for server 1001: %+v, %v", principal, err)
+	}
+	// 独立 Gate：Game Ingress 认证之后把会话号换成 Gate 的，激活通知只有玩家号与会话号。
+	notifier.Remember(principal)
+	notifier.SessionActive(registry, gateway.Principal{PlayerID: principal.PlayerID, SessionID: "gate-session"}, false)
+	notifier.Wait()
+	if announced.calls != 1 || announced.sessionID != "gate-session" || announced.entering.Claims[svcaccount.ServerIDClaim] != "1001" {
+		t.Fatalf("under an independent Gate the notice got %+v for %q (%d calls)", announced.entering, announced.sessionID, announced.calls)
+	}
+	entering := announced.entering
+	asked := 0
+	status, refused, err := gameenter.Assess(context.Background(), registry, entering, func(context.Context) (bool, error) { asked++; return false, nil })
+	if err != nil || !refused || status.Code != apperrors.ErrLoginElsewhere.Code() || status.NeedCreate || asked != 0 {
+		t.Fatalf("status = %+v refused=%v err=%v asked=%d; want login_elsewhere, refused, the record not read", status, refused, err, asked)
+	}
+	if _, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(principal.PlayerID)); !errors.Is(err, apperrors.ErrLoginElsewhere) {
+		t.Fatalf("entering: err = %v, want login_elsewhere", err)
+	}
+	creating := gameenter.Creating{PlayerID: principal.PlayerID, Name: "Alice", Claims: entering.Claims}
+	if err := gameenter.Create(context.Background(), registry, creating, records.steps(principal.PlayerID)); !errors.Is(err, apperrors.ErrLoginElsewhere) {
+		t.Fatalf("creating: err = %v, want login_elsewhere", err)
+	}
+	if len(records.players) != 0 {
+		t.Fatalf("this server built a record for a role it does not serve: %v", records.players)
 	}
 }

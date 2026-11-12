@@ -1,10 +1,10 @@
 name: enter
-summary: 进入游戏：建档（加载或创建 Player）、首次进入的初始化入口；打开玩家 TCP 接入与自身视图
+summary: 进入游戏：建档（EnterGame 加载或创建 Player）、首次进入的初始化入口；“先新建、再进入”的另一条路（新建请求 EnterCreate 带角色名，名字规则的登记点，会话激活后的告知 EnterStatus），只对被登记为“先新建”的会话生效；打开玩家 TCP 接入与自身视图
 requires: []
 conflicts: []
 needs:
   mods: [nest]
-  features: [protocol, entity, dao]
+  features: [protocol, entity, dao, errcode]
 access:
   transport: tcp
   self_sync: true
@@ -17,8 +17,16 @@ state:
     dao: persist
     comment: Enter 是进入游戏模块的服务端记录（首次初始化做过没有、第一次进入的时间），只落库、不下发。
 component: Enter
-protocols: [EnterGame]
+protocols: [EnterGame, EnterCreate, EnterStatus]
+errcodes: [enter_need_create, enter_created, enter_name_long]
 verify:
-  packages: [./game/handler, ./game/enter, ./game/entities/player]
+  packages: [./game/handler, ./game/enter, ./game/entities/player, ./game/controllers/enter]
   run: ^TestEnter
-  pass: 14
+  pass: 29
+with:
+  profile:
+    summary: 角色名的规则在游戏服：新建请求（EnterCreate）的名字按档案模块的名字规则校验（不合规在建档之前被拒），没装 naming 时在新建的那笔事务里写进档案，装了 naming 时经它的唯一命名入口占名
+    verify:
+      packages: [./game/profile]
+      run: ^TestWithEnterProfile
+      pass: 3

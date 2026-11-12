@@ -643,6 +643,10 @@ func TestLoginEnterTicketHandshakeMapsTheAccountToAPlayer(t *testing.T) {
 		"role_created_at":  "1800000000",
 		"bind_epoch":       "0",
 		"new_role":         "1",
+		"enter_ticket":     "1",
+	}
+	if EnterTicketClaim != "enter_ticket" {
+		t.Fatal("the enter-ticket claim was renamed; sessions issued before the change stop being told apart")
 	}
 	if len(principal.Claims) != len(want) {
 		t.Fatalf("claims = %v, want exactly %v", principal.Claims, want)
@@ -665,8 +669,8 @@ func TestLoginEnterTicketHandshakeMapsTheAccountToAPlayer(t *testing.T) {
 	if err != nil || again.PlayerID != 100_001 || again.SessionID == principal.SessionID {
 		t.Fatalf("the second handshake with the same ticket: %+v, %v", again, err)
 	}
-	if _, isNew := again.Claims["new_role"]; isNew || len(again.Claims) != 4 {
-		t.Fatalf("the second handshake's claims = %v, want the four role facts and no new_role", again.Claims)
+	if _, isNew := again.Claims["new_role"]; isNew || len(again.Claims) != 5 || again.Claims["enter_ticket"] != "1" {
+		t.Fatalf("the second handshake's claims = %v, want the four role facts and the enter-ticket mark, no new_role", again.Claims)
 	}
 	// 另一个账号是另一名玩家；同一个账号在另一个服也是另一名玩家。
 	if other, err := authenticator.Authenticate(context.Background(), w.enterHandshake("bob", 1000)); err != nil || other.PlayerID != 100_002 {

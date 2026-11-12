@@ -1,0 +1,287 @@
+package enter
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// withCreation 把新建的两张登记表与“先新建”的规则换成这条用例自己的，结束时换回去。
+func withCreation(t *testing.T) {
+	t.Helper()
+	createMu.Lock()
+	savedChecks, savedSteps := createChecks, createSteps
+	createChecks, createSteps = map[string]CreateCheck{}, map[string]CreateStep{}
+	createMu.Unlock()
+	createFirstMu.Lock()
+	savedName, savedRule := createFirstName, createFirstRule
+	createFirstName, createFirstRule = "", nil
+	createFirstMu.Unlock()
+	t.Cleanup(func() {
+		createMu.Lock()
+		createChecks, createSteps = savedChecks, savedSteps
+		createMu.Unlock()
+		createFirstMu.Lock()
+		createFirstName, createFirstRule = savedName, savedRule
+		createFirstMu.Unlock()
+	})
+}
+
+// enterCreateTrace 记下一次新建走到了哪几步。
+type enterCreateTrace struct{ steps []string }
+
+func (trace *enterCreateTrace) run(creating Creating, ensureErr, commitErr error) error {
+	return Create(context.Background(), nil, creating, CreateSteps{
+		Ensure: func(context.Context) error { trace.steps = append(trace.steps, "ensure"); return ensureErr },
+		Commit: func(_ context.Context, name string) error {
+			trace.steps = append(trace.steps, "commit:"+name)
+			return commitErr
+		},
+	})
+}
+
+// 一次被受理的新建按固定顺序走完：进入前检查 → 新建前检查 → 建空档 → 新建步骤 → 提交；每一步拿到的都是
+// 请求里的那个名字与会话的 claims。
+func TestEnterCreateRunsChecksThenEnsuresThenCommits(t *testing.T) {
+	withChecks(t)
+	withCreation(t)
+	trace := &enterCreateTrace{}
+	claims := map[string]string{"server_id": "7"}
+	OnEntering("login", func(_ context.Context, _ *app.Registry, entering Entering) error {
+		if entering.PlayerID != 94001 || !reflect.DeepEqual(entering.Claims, claims) {
+			t.Errorf("the enter check saw %+v", entering)
+		}
+		trace.steps = append(trace.steps, "entering")
+		return nil
+	})
+	seen := func(step string) func(context.Context, *app.Registry, Creating) error {
+		return func(_ context.Context, _ *app.Registry, creating Creating) error {
+			if creating.PlayerID != 94001 || creating.Name != " Alice " || !reflect.DeepEqual(creating.Claims, claims) {
+				t.Errorf("%s saw %+v", step, creating)
+			}
+			trace.steps = append(trace.steps, step)
+			return nil
+		}
+	}
+	OnCreating("profile", seen("check:profile"))
+	OnCreating("alpha", seen("check:alpha"))
+	OnCreatePrepare("naming", seen("prepare:naming"))
+	if err := trace.run(Creating{PlayerID: 94001, Name: " Alice ", Claims: claims}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"entering", "check:alpha", "check:profile", "ensure", "prepare:naming", "commit: Alice "}
+	if !reflect.DeepEqual(trace.steps, want) {
+		t.Fatalf("steps = %v, want %v", trace.steps, want)
+	}
+	// 没有登记任何检查与步骤的工程：名字没人看，空着也能建。
+	withChecks(t)
+	withCreation(t)
+	trace = &enterCreateTrace{}
+	if err := trace.run(Creating{PlayerID: 94001}, nil, nil); err != nil || !reflect.DeepEqual(trace.steps, []string{"ensure", "commit:"}) {
+		t.Fatalf("a create with no rules: %v, steps %v", err, trace.steps)
+	}
+}
+
+// 被拒的新建停在被拒的那一步：进入前检查、新建前检查、超长的名字拒绝时档没有被碰过；
+// 新建步骤失败时空档已经在，但没有提交；每种拒绝的码原样回到调用方。
+func TestEnterCreateRefusedStopsBeforeTheNextStep(t *testing.T) {
+	elsewhere := errcode.Define(94101, "scenario_elsewhere", "served elsewhere")
+	badName := errcode.Define(94102, "scenario_bad_name", "bad name")
+	nameTaken := errcode.Define(94103, "scenario_name_taken", "name taken")
+	storage := errors.New("storage is away")
+	cases := []struct {
+		name      string
+		creating  Creating
+		ensureErr error
+		commitErr error
+		want      error
+		steps     []string
+	}{
+		{"this server does not serve the player", Creating{PlayerID: 1, Name: "Alice"}, nil, nil, elsewhere, nil},
+		{"the name breaks a rule", Creating{PlayerID: 2, Name: "bad"}, nil, nil, badName, nil},
+		{"the name is over the request bound", Creating{PlayerID: 2, Name: strings.Repeat("x", MaxCreateNameBytes+1)}, nil, nil, apperrors.ErrEnterNameLong, nil},
+		{"the record cannot be ensured", Creating{PlayerID: 2, Name: "Alice"}, storage, nil, storage, []string{"ensure"}},
+		{"the name is taken", Creating{PlayerID: 2, Name: "taken"}, nil, nil, nameTaken, []string{"ensure"}},
+		{"the commit fails", Creating{PlayerID: 2, Name: "Alice"}, nil, storage, storage, []string{"ensure", "commit:Alice"}},
+		{"the player is already built", Creating{PlayerID: 2, Name: "Alice"}, nil, apperrors.ErrEnterCreated, apperrors.ErrEnterCreated, []string{"ensure", "commit:Alice"}},
+	}
+	for _, tc := range cases {
+		withChecks(t)
+		withCreation(t)
+		OnEntering("login", func(_ context.Context, _ *app.Registry, entering Entering) error {
+			if entering.PlayerID == 1 {
+				return elsewhere
+			}
+			return nil
+		})
+		OnCreating("profile", func(_ context.Context, _ *app.Registry, creating Creating) error {
+			if creating.Name == "bad" {
+				return badName
+			}
+			if len(creating.Name) > MaxCreateNameBytes {
+				t.Errorf("%s: an oversized name reached a check", tc.name)
+			}
+			return nil
+		})
+		OnCreatePrepare("naming", func(_ context.Context, _ *app.Registry, creating Creating) error {
+			if creating.Name == "taken" {
+				return nameTaken
+			}
+			return nil
+		})
+		trace := &enterCreateTrace{}
+		err := trace.run(tc.creating, tc.ensureErr, tc.commitErr)
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
+		if !reflect.DeepEqual(trace.steps, tc.steps) {
+			t.Fatalf("%s: steps = %v, want %v", tc.name, trace.steps, tc.steps)
+		}
+	}
+	// 名字正好在上限上不算超长。
+	withChecks(t)
+	withCreation(t)
+	trace := &enterCreateTrace{}
+	if err := trace.run(Creating{PlayerID: 2, Name: strings.Repeat("x", MaxCreateNameBytes)}, nil, nil); err != nil || len(trace.steps) != 2 {
+		t.Fatalf("a name at the bound: %v, steps %v", err, trace.steps)
+	}
+}
+
+// “先新建”的判断只有一处：没有登记规则时任何会话都不是；登记之后由规则按会话的 claims 回答；
+// 规则只能登记一条，登记错了当场 panic。
+func TestEnterCreateFirstIsDecidedByTheOneRegisteredRule(t *testing.T) {
+	withCreation(t)
+	ticket := map[string]string{"handshake": "ticket"}
+	for _, claims := range []map[string]string{nil, {}, ticket} {
+		if CreateFirst(claims) {
+			t.Fatalf("with no rule, claims %v must create first", claims)
+		}
+	}
+	mustPanic := func(what string, register func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", what)
+			}
+		}()
+		register()
+	}
+	mustPanic("an empty name", func() { RequireCreateFirst("", func(map[string]string) bool { return true }) })
+	mustPanic("a nil rule", func() { RequireCreateFirst("login", nil) })
+	RequireCreateFirst("login", func(claims map[string]string) bool { return claims["handshake"] == "ticket" })
+	if !CreateFirst(ticket) || CreateFirst(nil) || CreateFirst(map[string]string{"handshake": "session"}) {
+		t.Fatal("the registered rule is not what CreateFirst answers")
+	}
+	mustPanic("a second rule", func() { RequireCreateFirst("other", func(map[string]string) bool { return false }) })
+	mustPanic("an empty create check", func() { OnCreating("", func(context.Context, *app.Registry, Creating) error { return nil }) })
+	mustPanic("a nil create check", func() { OnCreating("profile", nil) })
+	mustPanic("a nil create step", func() { OnCreatePrepare("naming", nil) })
+	OnCreating("profile", func(context.Context, *app.Registry, Creating) error { return nil })
+	OnCreatePrepare("naming", func(context.Context, *app.Registry, Creating) error { return nil })
+	mustPanic("a duplicate create check", func() { OnCreating("profile", func(context.Context, *app.Registry, Creating) error { return nil }) })
+	mustPanic("a duplicate create step", func() { OnCreatePrepare("naming", func(context.Context, *app.Registry, Creating) error { return nil }) })
+}
+
+// 会话激活后的告知：进入前检查拒绝就是那个码（要断开）；放行时只有“先新建”的会话才问玩家建成了没有；
+// 判断不了就什么都不说。
+func TestEnterCreateStatusTellsWhatEnterGameWouldAnswer(t *testing.T) {
+	withChecks(t)
+	withCreation(t)
+	elsewhere := errcode.Define(94104, "scenario_status_elsewhere", "served elsewhere")
+	away := errors.New("account is away")
+	OnEntering("login", func(_ context.Context, _ *app.Registry, entering Entering) error {
+		switch entering.PlayerID {
+		case 1:
+			return elsewhere
+		case 2:
+			return away
+		}
+		return nil
+	})
+	RequireCreateFirst("login", func(claims map[string]string) bool { return claims["handshake"] == "ticket" })
+	ticket := map[string]string{"handshake": "ticket"}
+	asked := 0
+	answer := func(built bool, err error) func(context.Context) (bool, error) {
+		return func(context.Context) (bool, error) { asked++; return built, err }
+	}
+	assess := func(playerID int64, claims map[string]string, built func(context.Context) (bool, error)) (Status, bool, error) {
+		return Assess(context.Background(), nil, Entering{PlayerID: playerID, Claims: claims}, built)
+	}
+
+	status, refused, err := assess(1, ticket, answer(false, nil))
+	if err != nil || !refused || status.Code != elsewhere.Code() || status.Reason == "" || status.NeedCreate || asked != 0 {
+		t.Fatalf("a player served elsewhere: %+v refused=%v err=%v asked=%d; want the check's code, refused, the record not read", status, refused, err, asked)
+	}
+	if status, refused, err = assess(2, ticket, answer(false, nil)); !errors.Is(err, away) || refused || status != (Status{}) || asked != 0 {
+		t.Fatalf("a check that could not decide: %+v refused=%v err=%v", status, refused, err)
+	}
+	// 不必先新建的会话：EnterGame 会代建，不问也不说要新建。
+	if status, refused, err = assess(3, map[string]string{"handshake": "session"}, answer(false, nil)); err != nil || refused || status != (Status{}) || asked != 0 {
+		t.Fatalf("a load-or-create session: %+v refused=%v err=%v asked=%d", status, refused, err, asked)
+	}
+	if status, refused, err = assess(3, ticket, answer(false, nil)); err != nil || refused || status != (Status{NeedCreate: true}) || asked != 1 {
+		t.Fatalf("an unbuilt player: %+v refused=%v err=%v asked=%d; want need_create", status, refused, err, asked)
+	}
+	if status, refused, err = assess(3, ticket, answer(true, nil)); err != nil || refused || status != (Status{}) {
+		t.Fatalf("a built player: %+v refused=%v err=%v; want nothing to do", status, refused, err)
+	}
+	// 删过档的玩家：把码告诉客户端，但这不是“本服不该服务他”，不断开。
+	if status, refused, err = assess(3, ticket, answer(false, errcode.ErrEntityDeleted)); err != nil || refused || status.Code != errcode.ErrEntityDeleted.Code() || status.NeedCreate {
+		t.Fatalf("a deleted player: %+v refused=%v err=%v", status, refused, err)
+	}
+	if status, refused, err = assess(3, ticket, answer(false, away)); !errors.Is(err, away) || refused || status != (Status{}) {
+		t.Fatalf("a record that could not be read: %+v refused=%v err=%v", status, refused, err)
+	}
+	if _, _, err = Assess(context.Background(), nil, Entering{PlayerID: 3}, nil); err == nil {
+		t.Fatal("Assess accepted a nil built")
+	}
+}
+
+// 进入的骨架按会话选 load：“先新建”的会话只进入已建成的玩家（没建成时那一步答 enter_need_create，
+// 加载或创建那一步没有被调用）；别的会话、以及没有登记规则的工程，照旧加载或创建。
+func TestEnterCreateFirstSessionsEnterOnlyBuiltPlayers(t *testing.T) {
+	withChecks(t)
+	withHooks(t)
+	withCreation(t)
+	var calls []string
+	loads := Loads{
+		LoadOrCreate: func(context.Context) (InitResult, error) {
+			calls = append(calls, "load-or-create")
+			return InitResult{First: true}, nil
+		},
+		Existing: func(context.Context) (InitResult, error) {
+			calls = append(calls, "existing")
+			return InitResult{}, ErrNeedCreate
+		},
+	}
+	ticket := map[string]string{"handshake": "ticket"}
+	// 没有登记规则：带着同样 claims 的会话也是加载或创建。
+	if entered, err := EnterSession(context.Background(), nil, Entering{PlayerID: 94001, Claims: ticket}, loads); err != nil || !entered.First {
+		t.Fatalf("with no rule: %+v, %v", entered, err)
+	}
+	RequireCreateFirst("login", func(claims map[string]string) bool { return claims["handshake"] == "ticket" })
+	hooked := 0
+	OnEntered("chat", func(context.Context, *app.Registry, Entered) error { hooked++; return nil })
+	if _, err := EnterSession(context.Background(), nil, Entering{PlayerID: 94001, Claims: ticket}, loads); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+		t.Fatalf("a create-first session of an unbuilt player: err = %v, want enter_need_create", err)
+	}
+	if code, _ := errcode.ClientError(ErrNeedCreate); code != apperrors.ErrEnterNeedCreate.Code() || hooked != 0 {
+		t.Fatalf("the refusal's client code is %d and %d enter hooks ran; want enter_need_create and none", code, hooked)
+	}
+	if _, err := EnterSession(context.Background(), nil, Entering{PlayerID: 94001, Claims: map[string]string{"handshake": "session"}}, loads); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"load-or-create", "existing", "load-or-create"}; !reflect.DeepEqual(calls, want) || hooked != 1 {
+		t.Fatalf("loads called %v, %d enter hooks; want %v and the hook once", calls, hooked, want)
+	}
+	if _, err := EnterSession(context.Background(), nil, Entering{PlayerID: 94001}, Loads{LoadOrCreate: loads.LoadOrCreate}); err == nil {
+		t.Fatal("EnterSession accepted a missing load")
+	}
+}

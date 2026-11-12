@@ -90,7 +90,7 @@ func TestSelfSyncRendersVisibleWiring(t *testing.T) {
 	for _, want := range []string{
 		"func (mod *Mod) WithSelfSync(self *selfsync.SelfSync) *Mod",
 		"mod.selfSync.BindPlayers(mod.transportRuntime)",
-		"server.ConnectHandshake(mod.selfSync.Handshake())",
+		"if mod.selfSync != nil {\n\t\thooks = mod.selfSync.Handshake()\n\t}",
 		"func (mod *IngressMod) WithSelfSync(self *selfsync.SelfSync) *IngressMod",
 		"return self.OnActive(binding, receiver)",
 		"mod.selfSync.BindPlayers(ingress)",

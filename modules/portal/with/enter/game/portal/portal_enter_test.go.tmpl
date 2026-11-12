@@ -17,12 +17,14 @@ import (
 )
 
 // 这个文件是 portal 与 enter 两个模块的联动：两个都装着时才有。它不往工程里加任何运行时代码——
-// 入口与进入游戏之间隔着一次握手，接线早就在了（进服票据由登录模块的认证器交给 account，认证器写的 claims 由
-// 登录模块与 enter 的联动在进入前检查）。这里只有场景：把 登录 -> 清单与推荐 -> 进服 -> 握手 -> 进入 整条链路
-// 在进程里走一遍，证明装上 login、portal、enter 之后这条路是通的，而且每一段用的是工程里真实的那一份代码。
+// 入口与进入游戏之间隔着一次握手，接线早就在了（进服票据由登录模块的认证器交给 account；认证器写的 claims 由
+// 登录模块与 enter 的联动决定这条会话“先新建、再进入”，并在进入前检查）。这里只有场景：把
+// 登录 -> 清单与推荐 -> 进服 -> 握手 -> 告知 -> 新建 -> 进入 整条链路在进程里走一遍，证明装上 login、portal、enter
+// 之后这条路是通的，而且每一段用的是工程里真实的那一份代码。
 //
-// account 是真实的服务（内存存储），请求经真实的路由引擎进入口，握手经登录模块的认证器，
-// 进入经 gameenter.Enter（进入前检查是登录模块登记的那一条）。没有经真实的 TCP、总线与存储。
+// account 是真实的服务（内存存储），请求经真实的路由引擎进入口，握手经登录模块的认证器，告知的结论、
+// 新建与进入经 enter 模块的骨架（gameenter.Assess / Create / EnterSession，检查与“先新建”的规则是登录模块
+// 登记的那两条）。游戏服的档是内存替身；没有经真实的 TCP、总线、存储与 Nest。
 
 // withPortalGameRegistry 是一个 game 进程的 Registry：只有配置里的 sid。
 func withPortalGameRegistry(sid int) *app.Registry {
@@ -41,23 +43,97 @@ func withPortalHandshake(t *testing.T, w *portalWorld, ticket string) gateway.Pr
 	return principal
 }
 
-// withPortalEnter 照进入端点那样走一遍 gameenter.Enter；load 只计数，第一次算首次进入。
-func withPortalEnter(registry *app.Registry, principal gateway.Principal, loads *int) (gameenter.Entered, error) {
-	return gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims},
-		func(context.Context) (gameenter.InitResult, error) {
-			*loads++
-			return gameenter.InitResult{First: *loads == 1, FirstAtUnixMilli: 1_800_000_000_000}, nil
-		})
+// withPortalRecord 是游戏服里一名玩家的档的替身；withPortalGame 是一个游戏服进程：它的 sid 与它的档。
+// 档照 enter 模块的事务规则回答：建成了没有只看首次初始化做过没有。
+type withPortalRecord struct {
+	built  bool
+	fresh  bool
+	name   string
+	grants int
+}
+
+type withPortalGame struct {
+	registry *app.Registry
+	players  map[int64]*withPortalRecord
+}
+
+func newWithPortalGame(sid int) *withPortalGame {
+	return &withPortalGame{registry: withPortalGameRegistry(sid), players: map[int64]*withPortalRecord{}}
+}
+
+func withPortalEntering(principal gateway.Principal) gameenter.Entering {
+	return gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
+}
+
+// status 是会话激活之后这个服会告诉客户端的话（EnterStatus 的内容）。
+func (game *withPortalGame) status(principal gateway.Principal) (gameenter.Status, bool, error) {
+	return gameenter.Assess(context.Background(), game.registry, withPortalEntering(principal), func(context.Context) (bool, error) {
+		record := game.players[principal.PlayerID]
+		return record != nil && record.built, nil
+	})
+}
+
+// enter 照进入端点那样走一遍 gameenter.EnterSession。
+func (game *withPortalGame) enter(principal gateway.Principal) (gameenter.Entered, error) {
+	playerID := principal.PlayerID
+	return gameenter.EnterSession(context.Background(), game.registry, withPortalEntering(principal), gameenter.Loads{
+		LoadOrCreate: func(context.Context) (gameenter.InitResult, error) {
+			record := game.players[playerID]
+			if record == nil {
+				record = &withPortalRecord{}
+				game.players[playerID] = record
+			}
+			if !record.built {
+				record.built, record.grants = true, record.grants+1
+				return gameenter.InitResult{First: true}, nil
+			}
+			first := record.fresh
+			record.fresh = false
+			return gameenter.InitResult{First: first}, nil
+		},
+		Existing: func(context.Context) (gameenter.InitResult, error) {
+			record := game.players[playerID]
+			if record == nil || !record.built {
+				return gameenter.InitResult{}, gameenter.ErrNeedCreate
+			}
+			first := record.fresh
+			record.fresh = false
+			return gameenter.InitResult{First: first}, nil
+		},
+	})
+}
+
+// create 照新建端点那样走一遍 gameenter.Create。
+func (game *withPortalGame) create(principal gateway.Principal, name string) error {
+	playerID := principal.PlayerID
+	creating := gameenter.Creating{PlayerID: playerID, Name: name, Claims: principal.Claims}
+	return gameenter.Create(context.Background(), game.registry, creating, gameenter.CreateSteps{
+		Ensure: func(context.Context) error {
+			if game.players[playerID] == nil {
+				game.players[playerID] = &withPortalRecord{}
+			}
+			return nil
+		},
+		Commit: func(_ context.Context, name string) error {
+			record := game.players[playerID]
+			if record.built {
+				return apperrors.ErrEnterCreated
+			}
+			record.built, record.fresh, record.name, record.grants = true, true, name, record.grants+1
+			return nil
+		},
+	})
 }
 
 // 整条链路：HTTP 登录 -> 清单（新号，推荐最新开的、有地址的服）-> 进服拿到票据与地址 -> 认证器握手，
-// account 建出映射（会话带着“新建”的标记），承载服是本服 -> 进入游戏成功（首次）。
-// 第二天再来一遍：清单里那个服已经有角色、推荐的就是它，握手不再新建，进入不再是首次。
+// account 建出“账号 ↔ 玩家号”的映射 -> 游戏服告知要先新建 -> 没新建就进入被拒 -> 新建（角色名在游戏服）->
+// 进入成功（首次）。第二天再来一遍：清单里那个服已经有角色、推荐的就是它，握手不再新建映射，
+// 游戏服告知直接进入，进入不再是首次。
 func TestWithPortalEnterWalksFromLoginIntoTheGame(t *testing.T) {
 	w := newPortalWorld(t, func(options *Options) {
 		options.Directory = portalAddrs(t, map[int32]string{1000: "127.0.0.1:7000", 1001: "127.0.0.1:7001"})
 	})
-	loads := 0
+	game := newWithPortalGame(1001)
 
 	ticket := w.login("alice")
 	servers, recommended := w.servers(ticket)
@@ -73,12 +149,31 @@ func TestWithPortalEnterWalksFromLoginIntoTheGame(t *testing.T) {
 		t.Fatalf("principal = %+v, want a new player served by 1001", principal)
 	}
 	playerID := principal.PlayerID
-	in, err := withPortalEnter(withPortalGameRegistry(1001), principal, &loads)
-	if err != nil || loads != 1 {
-		t.Fatalf("entering the game with the portal's ticket: %v (%d loads)", err, loads)
+	// 握手之后入口的清单里这个服已经有角色了：映射是握手时建的，名字不在 account。
+	servers, _ = w.servers(ticket)
+	if role, _ := servers[1001]["role"].(map[string]any); role == nil || role["player_id"] != float64(playerID) {
+		t.Fatalf("the list after the handshake: %v, want player %d on 1001", servers[1001]["role"], playerID)
 	}
-	if in.PlayerID != playerID || !in.First || in.Claims[svcaccount.ServerIDClaim] != "1001" || in.Claims[svcaccount.RoleCreatedAtClaim] != "1800000000" {
-		t.Fatalf("entered = %+v, want the first enter of player %d with the authenticator's claims", in, playerID)
+	if _, named := servers[1001]["role"].(map[string]any)["name"]; named {
+		t.Fatal("the portal lists a role name; names belong to the game server")
+	}
+
+	status, refused, err := game.status(principal)
+	if err != nil || refused || status != (gameenter.Status{NeedCreate: true}) {
+		t.Fatalf("the game server tells a new account %+v (refused=%v, err=%v), want need_create", status, refused, err)
+	}
+	if _, err := game.enter(principal); !errors.Is(err, apperrors.ErrEnterNeedCreate) || len(game.players) != 0 {
+		t.Fatalf("entering before creating: %v with %d records; want enter_need_create and nothing built", err, len(game.players))
+	}
+	if err := game.create(principal, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if record := game.players[playerID]; record == nil || !record.built || record.name != "Alice" || record.grants != 1 {
+		t.Fatalf("after create: %+v, want built with the name and one grant", record)
+	}
+	in, err := game.enter(principal)
+	if err != nil || in.PlayerID != playerID || !in.First || in.Claims[svcaccount.ServerIDClaim] != "1001" || in.Claims[svcaccount.RoleCreatedAtClaim] != "1800000000" {
+		t.Fatalf("entered = %+v, %v; want the first enter of player %d with the authenticator's claims", in, err, playerID)
 	}
 
 	// 第二天换了设备：重新登录。昨天的账号票据与握手票据都过期了。
@@ -99,26 +194,42 @@ func TestWithPortalEnterWalksFromLoginIntoTheGame(t *testing.T) {
 	if again.PlayerID != playerID || again.Claims[svcaccount.NewRoleClaim] != "" {
 		t.Fatalf("the second handshake = %+v, want the same player and no new-role mark", again)
 	}
-	in, err = withPortalEnter(withPortalGameRegistry(1001), again, &loads)
-	if err != nil || loads != 2 || in.First || in.PlayerID != playerID {
-		t.Fatalf("the second enter: %+v, %v (%d loads); want admitted and not first", in, err, loads)
+	if status, refused, err = game.status(again); err != nil || refused || status != (gameenter.Status{}) {
+		t.Fatalf("the game server tells a built player %+v (refused=%v, err=%v), want enter directly", status, refused, err)
+	}
+	if in, err = game.enter(again); err != nil || in.First || in.PlayerID != playerID {
+		t.Fatalf("the second enter: %+v, %v; want admitted and not first", in, err)
+	}
+	if err := game.create(again, "Other"); !errors.Is(err, apperrors.ErrEnterCreated) || game.players[playerID].name != "Alice" || game.players[playerID].grants != 1 {
+		t.Fatalf("creating a built player again: %v, record %+v; want enter_created and nothing changed", err, game.players[playerID])
 	}
 }
 
 // 入口给的地址就是进入游戏时认的那个服：选中的服并入了别的服，入口给承载服的地址；拿这张票据硬连别的服，
-// 握手通过而进入被拒（login_elsewhere），不加载也不创建 Player；连到承载服就能进。
+// 握手通过，但那个服告知 login_elsewhere（并断开），进入与新建都被拒，不建任何东西；连到承载服就能新建、进入。
 func TestWithPortalEnterPointsTheClientAtTheServingServer(t *testing.T) {
 	w := newPortalWorld(t, func(options *Options) {
 		options.Directory = portalAddrs(t, map[int32]string{1000: "127.0.0.1:7000", 1001: "127.0.0.1:7001"})
 	})
-	loads := 0
+	wrong, serving := newWithPortalGame(1000), newWithPortalGame(1001)
 	ticket := w.login("alice")
 	first := withPortalHandshake(t, w, w.enter(ticket, 1001).text("ticket"))
-	if _, err := withPortalEnter(withPortalGameRegistry(1000), first, &loads); !errors.Is(err, apperrors.ErrLoginElsewhere) || loads != 0 {
-		t.Fatalf("entering server 1000 with a role served by 1001: %v (%d loads); want login_elsewhere before any load", err, loads)
+
+	status, refused, err := wrong.status(first)
+	if err != nil || !refused || status.Code != apperrors.ErrLoginElsewhere.Code() || status.NeedCreate {
+		t.Fatalf("server 1000 tells a role served by 1001 %+v (refused=%v, err=%v); want login_elsewhere and a disconnect", status, refused, err)
 	}
-	if _, err := withPortalEnter(withPortalGameRegistry(1001), first, &loads); err != nil || loads != 1 {
-		t.Fatalf("entering the serving server 1001: %v (%d loads)", err, loads)
+	if _, err := wrong.enter(first); !errors.Is(err, apperrors.ErrLoginElsewhere) {
+		t.Fatalf("entering server 1000 with a role served by 1001: %v, want login_elsewhere", err)
+	}
+	if err := wrong.create(first, "Alice"); !errors.Is(err, apperrors.ErrLoginElsewhere) || len(wrong.players) != 0 {
+		t.Fatalf("creating on server 1000: %v with %d records; want login_elsewhere and nothing built", err, len(wrong.players))
+	}
+	if err := serving.create(first, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if in, err := serving.enter(first); err != nil || !in.First {
+		t.Fatalf("entering the serving server 1001: %+v, %v", in, err)
 	}
 
 	if _, err := w.service.MergeServer(context.Background(), svcaccount.MergeRequest{From: 1001, Into: 1000, Note: "portal scenario"}); err != nil {
@@ -129,8 +240,16 @@ func TestWithPortalEnterPointsTheClientAtTheServingServer(t *testing.T) {
 		t.Fatalf("enter after 1001 merged into 1000: %s; want served by 1000 at its address", merged.raw)
 	}
 	principal := withPortalHandshake(t, w, merged.text("ticket"))
-	in, err := withPortalEnter(withPortalGameRegistry(1000), principal, &loads)
-	if err != nil || loads != 2 || in.PlayerID != first.PlayerID || in.Claims[svcaccount.OriginServerIDClaim] != "1001" {
-		t.Fatalf("entering 1000 after the merge: %+v, %v (%d loads)", in, err, loads)
+	// 合服把 1001 的档并进了 1000 的库：承载服 1000 认得这名玩家。
+	wrong.players[first.PlayerID] = serving.players[first.PlayerID]
+	if status, refused, err = wrong.status(principal); err != nil || refused || status != (gameenter.Status{}) {
+		t.Fatalf("server 1000 tells the merged role %+v (refused=%v, err=%v); want enter directly", status, refused, err)
+	}
+	in, err := wrong.enter(principal)
+	if err != nil || in.First || in.PlayerID != first.PlayerID || in.Claims[svcaccount.OriginServerIDClaim] != "1001" {
+		t.Fatalf("entering 1000 after the merge: %+v, %v", in, err)
+	}
+	if status, refused, err = serving.status(principal); err != nil || !refused || status.Code != apperrors.ErrLoginElsewhere.Code() {
+		t.Fatalf("the merged-away server 1001 tells the role %+v (refused=%v, err=%v); want login_elsewhere", status, refused, err)
 	}
 }

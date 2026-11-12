@@ -49,3 +49,48 @@ func runFirstEnter(owner *Player, nowUnixMilli int64) error {
 	}
 	return nil
 }
+
+// CreateHook 在新建请求（EnterCreate）的同一笔 Nest 事务、同一把 Player 锁内执行，排在首次初始化之前。
+// name 是客户端给的名字，原样。约定与 FirstEnterHook 相同：只修改当前玩家的 DAO，不调用服务、不发消息；
+// 返回错误让整笔新建回滚（带码错误的码回给客户端）。它只在新建请求里执行——在 EnterGame 里直接建成的玩家
+// （“加载或创建”那条路）不经过它，那条路上没有名字。
+type CreateHook func(owner *Player, name string, nowUnixMilli int64) error
+
+var (
+	createMu    sync.RWMutex
+	createHooks = map[string]CreateHook{}
+)
+
+// OnCreate 登记事务内的新建钩子，name 用功能自己的名字（模块名）。只在 init 里调用。
+func OnCreate(name string, hook CreateHook) {
+	if name == "" || hook == nil {
+		panic("enter: OnCreate needs a name and a hook")
+	}
+	createMu.Lock()
+	defer createMu.Unlock()
+	if _, taken := createHooks[name]; taken {
+		panic(fmt.Sprintf("enter: create hook %q is registered twice", name))
+	}
+	createHooks[name] = hook
+}
+
+// runCreate 按名字顺序执行钩子；第一个错误原样返回（errors.Is 与 errcode 的码都还在），交给事务回滚。
+func runCreate(owner *Player, name string, nowUnixMilli int64) error {
+	createMu.RLock()
+	names := make([]string, 0, len(createHooks))
+	for hookName := range createHooks {
+		names = append(names, hookName)
+	}
+	sort.Strings(names)
+	hooks := make([]CreateHook, len(names))
+	for i, hookName := range names {
+		hooks[i] = createHooks[hookName]
+	}
+	createMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, name, nowUnixMilli); err != nil {
+			return fmt.Errorf("enter: create hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

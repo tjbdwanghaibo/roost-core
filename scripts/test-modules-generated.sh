@@ -11,7 +11,7 @@ verify_index=0
 all_modules=(wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn rehome actor scene monster attribute equipment dungeon naming cdkey notice gacha friends idle terrain combat servertime login portal)
 reverse_modules=()
 for ((i=${#all_modules[@]}-1; i>=0; i--)); do reverse_modules+=("${all_modules[i]}"); done
-all_counts=(wallet=14 checkin=8 chat=10 enter=14 profile=20 bag=17 leaderboard=20 mailbox=32 task=18 stamina=25 shop=17 skillbook=11 room=22 turn=25 rehome=40 actor=12 scene=26 monster=25 attribute=16 equipment=16 dungeon=19 naming=15 cdkey=12 notice=8 gacha=24 friends=12 idle=19 terrain=23 combat=36 servertime=12 login=22 portal=13 chat+enter=2 mailbox+enter=5 mailbox+bag=9 task+checkin=3 rehome+enter=5 scene+chat=5 scene+profile=2 scene+attribute=2 scene+equipment=2 attribute+equipment=8 dungeon+leaderboard=3 combat+scene=2 combat+equipment=2 terrain+monster=2 servertime+enter=3 login+enter=2 portal+enter=2)
+all_counts=(wallet=14 checkin=8 chat=10 enter=29 profile=20 bag=17 leaderboard=20 mailbox=32 task=18 stamina=25 shop=17 skillbook=11 room=22 turn=25 rehome=40 actor=12 scene=26 monster=25 attribute=16 equipment=16 dungeon=19 naming=15 cdkey=12 notice=8 gacha=24 friends=12 idle=19 terrain=23 combat=36 servertime=12 login=32 portal=12 chat+enter=2 enter+profile=3 mailbox+enter=5 mailbox+bag=9 task+checkin=3 rehome+enter=5 scene+chat=5 scene+profile=2 scene+attribute=2 scene+equipment=2 attribute+equipment=8 dungeon+leaderboard=3 combat+scene=2 combat+equipment=2 terrain+monster=2 servertime+enter=3 login+enter=6 portal+enter=2)
 cleanup() {
   if [[ -z "${ROOST_MODULES_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_MODULES_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
@@ -113,7 +113,7 @@ grep -Fq 'prerequisite (did run): enable access.player.self_sync after module de
 grep -q 'glue chat with enter: written' "$review_root/add-enter.log"
 [[ -f game/chat/chat_enter.go ]]
 grep -q 'self_sync: true' roost.yaml
-expect_verify wallet=14 checkin=8 chat=10 enter=14 chat+enter=2
+expect_verify wallet=14 checkin=8 chat=10 enter=29 chat+enter=2
 go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review_root/test-all.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    self-sync' "$review_root/doctor.log"
@@ -124,9 +124,11 @@ commit_all enter
 "$roost" module add profile bag leaderboard mailbox > "$review_root/add-batch2.log"
 grep -q 'module wallet: already installed' "$review_root/add-batch2.log"
 grep -q 'glue mailbox with enter: written' "$review_root/add-batch2.log"
+# enter 已在：角色名的联动（新建请求的名字按档案的规则校验并写进档案）随 profile 写进工程。
+grep -q 'glue enter with profile: written' "$review_root/add-batch2.log"
 # bag 与 mailbox 同一次装：道具附件的联动（mailbox 的附件种类登记点）也在这一步写。
 grep -q 'glue mailbox with bag: written' "$review_root/add-batch2.log"
-expect_verify wallet=14 checkin=8 chat=10 enter=14 chat+enter=2 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9
+expect_verify wallet=14 checkin=8 chat=10 enter=29 chat+enter=2 enter+profile=3 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9
 go test -mod=mod ./... > "$review_root/test-all-batch2.log" 2>&1 || { tail -30 "$review_root/test-all-batch2.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK    collaborators:rank' "$review_root/doctor.log"
@@ -136,12 +138,12 @@ grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK   
 commit_all batch2
 "$roost" module add room > "$review_root/add-room.log"
 [[ -f game/entities/room/entity.go && -f db/def/room.go && -f game/lifecycle/room.go ]]
-expect_verify wallet=14 checkin=8 chat=10 enter=14 chat+enter=2 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22
+expect_verify wallet=14 checkin=8 chat=10 enter=29 chat+enter=2 enter+profile=3 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22
 
 # A3: reuse the room installed above, and wire its persistent deadline atomically.
 commit_all room
 "$roost" module add turn > "$review_root/add-turn.log"
-expect_verify wallet=14 checkin=8 chat=10 enter=14 chat+enter=2 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22 turn=25
+expect_verify wallet=14 checkin=8 chat=10 enter=29 chat+enter=2 enter+profile=3 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22 turn=25
 
 # 8. 全新工程、一条命令、与上面相反的顺序装全部模块：结果与安装顺序无关，重复安装无变化。
 project="$(new_project harbor example.com/studio/harbor)"
@@ -168,20 +170,23 @@ grep -q 'glue login with enter: written' "$review_root/add-login.log"
 grep -q '^OK    collaborators:account' "$review_root/doctor-harbor.log"
 grep -q '^OK    workflow:tcp-auth' "$review_root/doctor-harbor.log"
 [[ -f cmd/accountctl/main.go ]]
-# portal（登录入口）：依赖已装的 login；安装器代办 web Mod；enter 已在，整条链路的联动场景随它写进工程；
+# portal（登录入口）：依赖已装的 login；入口挂在托管 account 服务的进程上（清单的 runtime.framework），
+# 安装器代办的 web Mod 加在 account 上，game 不因此多出 HTTP 监听；enter 已在，整条链路的联动场景随它写进工程；
 # 安装后提示（清单的 next）打印成 todo: 行。
 "$roost" module add portal > "$review_root/add-portal.log"
-grep -q 'prerequisite (did run): roost add mod web -service game' "$review_root/add-portal.log"
+grep -q 'prerequisite (did run): roost add mod web -service account' "$review_root/add-portal.log"
 grep -q 'glue portal with enter: written' "$review_root/add-portal.log"
 grep -q '^  todo:      ' "$review_root/add-portal.log"
-grep -q '^web:' configs/service/config.game.yaml
+grep -q '^web:' configs/service/config.account.yaml
+! grep -q '^web:' configs/service/config.game.yaml
+grep -q 'kitmodulehost.NewMod("account"' internal/bootstrap/generated.go
 grep -q 'glue task with checkin: written' "$review_root/add-task.log"
 grep -q 'module bag: already installed' "$review_root/add-task.log"
 if grep -rnE '\{\{(ID:[a-z]+:[A-Za-z0-9_]+|MODULE|PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|TIMER_COMPONENT)\}\}' cmd db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
 commit_all all
 "$roost" module add enter bag mailbox task shop skillbook room turn rehome servertime login portal > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=14 checkin=8 chat=10 enter=14 chat+enter=2 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=11 room=22 turn=25 rehome=40 rehome+enter=5 servertime=12 servertime+enter=3 login=22 login+enter=2 portal=13 portal+enter=2
+expect_verify wallet=14 checkin=8 chat=10 enter=29 chat+enter=2 enter+profile=3 profile=20 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=11 room=22 turn=25 rehome=40 rehome+enter=5 servertime=12 servertime+enter=3 login=32 login+enter=6 portal=12 portal+enter=2
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 # 9. 全批次正常/反向顺序各建一个新工程。计划必须覆盖全部模块和所有联动，且不改工程。
@@ -221,7 +226,7 @@ verify_full_project() {
   check_full_plan "$review_root/$name-plan.json"
   check_clean 'full module plan'
   "$roost" module add "$@" > "$review_root/$name-add.log" 2>&1 || { tail -80 "$review_root/$name-add.log"; exit 1; }
-  for pair in chat:enter mailbox:enter mailbox:bag task:checkin rehome:enter scene:chat scene:profile scene:attribute scene:equipment attribute:equipment dungeon:leaderboard combat:skillbook combat:scene combat:equipment terrain:monster servertime:enter login:enter portal:enter; do
+  for pair in chat:enter mailbox:enter mailbox:bag task:checkin rehome:enter scene:chat scene:profile scene:attribute scene:equipment attribute:equipment dungeon:leaderboard combat:skillbook combat:scene combat:equipment terrain:monster servertime:enter login:enter portal:enter enter:profile; do
     grep -q "glue ${pair%:*} with ${pair#*:}: written" "$review_root/$name-add.log" || { cat "$review_root/$name-add.log"; echo "missing glue $pair" >&2; exit 1; }
   done
   if grep -rnE '\{\{(ID:[a-z]+:[A-Za-z0-9_]+|MODULE|PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|TIMER_COMPONENT)\}\}' cmd db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi

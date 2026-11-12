@@ -2,6 +2,7 @@ package enter
 
 import (
 	stdcontext "context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -12,6 +13,7 @@ import (
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 
+	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -19,12 +21,12 @@ import (
 // HandleEnterGame 是登录边界：保证已认证的玩家在任何玩法请求到达 Nest 之前有一个 Player。
 // Nest handler 的目标必须是已存在的实体，新玩家没有，所以在它之前发来的玩法请求答 entity_not_found。
 //
-// 顺序由 gameenter.Enter 保证：
+// 顺序由 gameenter.Enter 保证（经 gameenter.EnterSession 调它）：
 //
 //	进入前检查  别的功能登记的检查（game/enter 的 OnEntering：单个玩家换服的“正在换服”“已经绑定到别的服”……）。
 //	            任何一条拒绝，这一次进入到此为止：不加载也不创建 Player、不跑首次初始化、不跑进入钩子，
 //	            客户端拿到那条检查的码。没有登记任何检查时这一步什么都不做。
-//	load        下面的 loadAndInit，两步：
+//	load        缺省是下面的 loadAndInit，两步（“先新建”的会话见本注释末尾）：
 //	            1. GetOrCreate：只在持久层确认这个实体不存在时才创建；数据库、解码、超时错误原样返回，不当成“不存在”。
 //	               删过档的实体（只剩墓碑）不再创建，客户端得到 entity_deleted，重试或重新登录都不会变。
 //	            2. 首次初始化（EnterInit）：每次进入都发，不只在第 1 步新建时发——“做过没有”是档里的事实，
@@ -34,6 +36,10 @@ import (
 //
 // 检查与钩子拿到的 claims 是会话的 claims（Entering.Claims / Entered.Claims）。工程改写这个端点时，
 // 把自己的加载与初始化包成 load 交给 gameenter.Enter；不经 Enter 的写法见它的注释。
+//
+// “先新建”的会话（gameenter.CreateFirst：login 模块装着时，用进服票据握手的会话）由 gameenter.EnterSession 把 load 换成 enterExisting：
+// 只进入已经建成的玩家，没建成答 enter_need_create，不创建档、不做首次初始化——那是新建请求
+// （HandleEnterCreate）的事，角色名的规则也在那里。别的会话仍是 loadAndInit，与没有这条路时相同。
 func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
@@ -43,8 +49,13 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 		// 认证器写进会话的 claims 原样带给检查与钩子：这里不解释它们，哪个键是什么意思由写它的认证器与读它的一方约定。
 		entering.Claims = context.Session.Principal().Claims
 	}
-	entered, err := gameenter.Enter(context.Context(), controller.registry, entering, func(ctx stdcontext.Context) (gameenter.InitResult, error) {
-		return controller.loadAndInit(ctx, context.PlayerID)
+	entered, err := gameenter.EnterSession(context.Context(), controller.registry, entering, gameenter.Loads{
+		LoadOrCreate: func(ctx stdcontext.Context) (gameenter.InitResult, error) {
+			return controller.loadAndInit(ctx, context.PlayerID)
+		},
+		Existing: func(ctx stdcontext.Context) (gameenter.InitResult, error) {
+			return controller.enterExisting(ctx, context.PlayerID)
+		},
 	})
 	if err != nil {
 		code, reason := errcode.ClientError(err)
@@ -70,4 +81,38 @@ func (controller *Controller) loadAndInit(ctx stdcontext.Context, playerID int64
 		return gameenter.InitResult{}, err
 	}
 	return syncsender.NewEnterInitSender(controller.nestClient).Sync_EnterInit(ctx, entityID)
+}
+
+// enterExisting 是“先新建”的会话的 load：只进入已经建成的玩家。没有档直接答 enter_need_create（不创建）；
+// 有档就在它的锁内问一次（EnterExisting）：没建成同样答 enter_need_create，建成了就是一次进入。
+// 删过档的玩家与 loadAndInit 一样得到 entity_deleted。
+func (controller *Controller) enterExisting(ctx stdcontext.Context, playerID int64) (gameenter.InitResult, error) {
+	entityID, found, err := controller.find(ctx, playerID)
+	if err != nil {
+		return gameenter.InitResult{}, err
+	}
+	if !found {
+		return gameenter.InitResult{}, gameenter.ErrNeedCreate
+	}
+	return syncsender.NewEnterExistingSender(controller.nestClient).Sync_EnterExisting(ctx, entityID)
+}
+
+// find 加载玩家的档，不创建。found 为 false 表示持久层确认没有这个实体；别的错误（数据库、解码、超时、
+// 删过档）原样返回，不当成“没有”。
+func (controller *Controller) find(ctx stdcontext.Context, playerID int64) (entityID int64, found bool, err error) {
+	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	if err != nil {
+		return 0, false, err
+	}
+	if _, err := entities.Get(ctx, playerID); err != nil {
+		if errors.Is(err, lifecycle.ErrPlayerNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	entityID, err = entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return 0, false, err
+	}
+	return entityID, true, nil
 }

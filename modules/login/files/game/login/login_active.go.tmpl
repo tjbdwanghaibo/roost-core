@@ -1,0 +1,223 @@
+package login
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// 这个文件是“会话激活后的告知”：握手成功、会话已经能收推送之后，让别的功能对这条会话说一句话。
+//
+// 握手本身只有成功与失败（失败时客户端拿不到原因），成功与否只由认证器向 account 验票据决定，不等游戏服。
+// 游戏服想让客户端知道的事——这名玩家在本服建成了没有、本服此刻该不该服务他——在会话激活之后推给客户端：
+// 别的功能登记一条告知（OnSessionActive），认证器在会话激活时把会话交给它们。enter 模块装着时，
+// 联动（login_enter.go）登记的告知推 EnterStatus。
+//
+// 告知只是告知：它在握手之后、后台执行，可能被丢弃（见 Notifier），所以不能是任何规则的唯一执行处——
+// 权威判断仍在客户端随后发的请求里。没有登记任何告知的工程，这个文件什么都不做。
+
+// EnterTicketClaim 只在用进服票据握手的会话上有，值 "1"（authenticateEnter 写）。它说的是握手的方式：
+// 这条会话的客户端走的是“登录 → 选服 → 进服票据”那条链路，账号在本服的角色名与玩家数据由游戏服负责建。
+// 用角色会话令牌握手的会话没有它。
+const EnterTicketClaim = "enter_ticket"
+
+// Active 是一条刚激活的会话。
+type Active struct {
+	PlayerID int64
+	// SessionID 是这条会话在本进程玩家传输上的会话号，按会话推送用它。
+	SessionID string
+	// Claims 是握手时认证器写的 claims（Claims 与 authenticateEnter），只读。
+	Claims map[string]string
+}
+
+// Notice 是一条告知。它在后台执行（不在握手协程里），ctx 带着期限（NoticeTimeout）；可以读档、调别的服务、
+// 推送。约定：
+//
+//   - 尽力而为：会话太多时新的告知会被丢弃，进程退出时在途的告知不被等待。必须成立的事不放在这里；
+//   - 可以重复、可以过时：同一名玩家的每条会话各调一次；执行时会话可能已经断开；
+//   - 不改握手的结论：握手已经成功。要让一条不该留在本服的会话离开，自己推送原因并断开它。
+type Notice func(ctx context.Context, registry *app.Registry, session Active)
+
+var (
+	noticesMu sync.RWMutex
+	notices   = map[string]Notice{}
+)
+
+// OnSessionActive 登记一条告知，name 用功能自己的名字（模块名）。只在 init 里调用；重名、空名或 nil 直接 panic。
+func OnSessionActive(name string, notice Notice) {
+	if name == "" || notice == nil {
+		panic("login: OnSessionActive needs a name and a notice")
+	}
+	noticesMu.Lock()
+	defer noticesMu.Unlock()
+	if _, taken := notices[name]; taken {
+		panic(fmt.Sprintf("login: notice %q is registered twice", name))
+	}
+	notices[name] = notice
+}
+
+// registeredNotices 按名字顺序返回全部告知。
+func registeredNotices() (names []string, run []Notice) {
+	noticesMu.RLock()
+	defer noticesMu.RUnlock()
+	for name := range notices {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	run = make([]Notice, len(names))
+	for i, name := range names {
+		run[i] = notices[name]
+	}
+	return names, run
+}
+
+const (
+	// MaxPendingNotices 是同时在后台执行的告知的上限（按会话计）。到了上限，新激活的会话不再告知——
+	// 登录洪峰时宁可少一次告知，也不为每条连接起一个协程去读档。
+	MaxPendingNotices = 256
+	// NoticeTimeout 是一条会话的全部告知加起来的期限。
+	NoticeTimeout = 5 * time.Second
+	// rememberFor 与 maxRemembered 界定“按玩家号记住最近一次认证的 claims”那张表（见 Notifier.Remember）。
+	rememberFor   = 30 * time.Second
+	maxRemembered = 4096
+)
+
+// Notifier 把“会话激活了”交给登记的告知。每个认证器一个（internal/access/player/tcp/auth.go 持有），
+// 由它实现传输 Mod 的会话激活通知（SessionObserver）。
+//
+// 两种部署下激活通知带的东西不一样：嵌入 TCP 带握手时的 Principal（有 claims）；独立 Gate 下 Game Ingress 的
+// 激活回调只带绑定——玩家号与会话号，没有 claims。告知要 claims（进入前检查读承载服、换服标记），所以认证器
+// 在每次认证成功时把 claims 按玩家号记一下（Remember），独立 Gate 下的激活通知按玩家号取回。这依赖
+// “Game Ingress 在 Bind 时用同一个认证器再认证一次，紧接着才激活”；取不到（不是这个认证器认证的、隔得太久、
+// 表满了）就不告知。同一名玩家两条几乎同时握手的连接取到的是后一次认证的 claims——两次都来自 account 的
+// 当前状态，差别只在新旧。
+type Notifier struct {
+	slots chan struct{}
+	now   func() time.Time
+	// running 让测试能等后台的告知跑完（Wait）；生产代码不等。
+	running sync.WaitGroup
+
+	mu         sync.Mutex
+	remembered map[int64]rememberedClaims
+}
+
+type rememberedClaims struct {
+	claims map[string]string
+	at     time.Time
+}
+
+// NewNotifier 建一个空的 Notifier。
+func NewNotifier() *Notifier {
+	return &Notifier{
+		slots:      make(chan struct{}, MaxPendingNotices),
+		now:        time.Now, //glsvet:system-clock the claims memo is a process-local cache bounded by real time, not business state
+		remembered: map[int64]rememberedClaims{},
+	}
+}
+
+// Remember 记下一次成功的认证给出的 claims，供随后只带玩家号的激活通知取回。没有登记任何告知时什么都不记。
+// 表至多 maxRemembered 行、每行至多留 rememberFor；满了先清过期的，还满就不记这一次。
+func (notifier *Notifier) Remember(principal gateway.Principal) {
+	if notifier == nil || principal.PlayerID == 0 {
+		return
+	}
+	if names, _ := registeredNotices(); len(names) == 0 {
+		return
+	}
+	now := notifier.now()
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if _, known := notifier.remembered[principal.PlayerID]; !known && len(notifier.remembered) >= maxRemembered {
+		for playerID, entry := range notifier.remembered {
+			if now.Sub(entry.at) > rememberFor {
+				delete(notifier.remembered, playerID)
+			}
+		}
+		if len(notifier.remembered) >= maxRemembered {
+			return
+		}
+	}
+	notifier.remembered[principal.PlayerID] = rememberedClaims{claims: principal.Claims, at: now}
+}
+
+// recall 取回 Remember 记下的 claims；没有或者过期了 ok 为 false。
+func (notifier *Notifier) recall(playerID int64) (claims map[string]string, ok bool) {
+	now := notifier.now()
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	entry, known := notifier.remembered[playerID]
+	if !known {
+		return nil, false
+	}
+	if now.Sub(entry.at) > rememberFor {
+		delete(notifier.remembered, playerID)
+		return nil, false
+	}
+	return entry.claims, true
+}
+
+// forget 丢掉一名玩家的记录：嵌入 TCP 的激活通知自己带着 claims，用不着它。
+func (notifier *Notifier) forget(playerID int64) {
+	notifier.mu.Lock()
+	delete(notifier.remembered, playerID)
+	notifier.mu.Unlock()
+}
+
+// SessionActive 是传输 Mod 的会话激活通知（internal/access/player/tcp 的 SessionObserver）。
+// complete 为 true 时 principal 带着握手的 claims（嵌入 TCP）；为 false 时只有玩家号与会话号（独立 Gate），
+// claims 从 Remember 的记录里取。它立即返回：告知在后台执行，同时至多 MaxPendingNotices 条会话，超过的丢弃。
+func (notifier *Notifier) SessionActive(registry *app.Registry, principal gateway.Principal, complete bool) {
+	if notifier == nil {
+		return
+	}
+	names, run := registeredNotices()
+	if len(run) == 0 {
+		return
+	}
+	claims := principal.Claims
+	if complete {
+		notifier.forget(principal.PlayerID)
+	} else {
+		var known bool
+		if claims, known = notifier.recall(principal.PlayerID); !known {
+			slog.Debug("login: session not announced; its claims are not known to this authenticator", "player_id", principal.PlayerID)
+			return
+		}
+	}
+	select {
+	case notifier.slots <- struct{}{}:
+	default:
+		slog.Debug("login: session not announced; too many notices are pending", "player_id", principal.PlayerID)
+		return
+	}
+	session := Active{PlayerID: principal.PlayerID, SessionID: principal.SessionID, Claims: claims}
+	notifier.running.Add(1)
+	go func() {
+		defer notifier.running.Done()
+		defer func() { <-notifier.slots }()
+		ctx, cancel := context.WithTimeout(context.Background(), NoticeTimeout)
+		defer cancel()
+		for i, notice := range run {
+			runNotice(ctx, registry, names[i], notice, session)
+		}
+	}()
+}
+
+// runNotice 执行一条告知；它 panic 只记一条 Error，不带倒别的告知，也不带倒进程。
+func runNotice(ctx context.Context, registry *app.Registry, name string, notice Notice, session Active) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("login: notice panicked", "notice", name, "player_id", session.PlayerID, "panic", recovered)
+		}
+	}()
+	notice(ctx, registry, session)
+}
+
+// Wait 等在途的告知跑完。给测试用；生产代码不调（进程退出时在途的告知最多再跑 NoticeTimeout）。
+func (notifier *Notifier) Wait() { notifier.running.Wait() }

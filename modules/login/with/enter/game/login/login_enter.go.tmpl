@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	enterendpoint "{{MODULE}}/game/controllers/enter"
 	gameenter "{{MODULE}}/game/enter"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -23,8 +24,30 @@ import (
 // 会话因此答 login_elsewhere 而不是 rehome_elsewhere——对客户端是同一件事：重新选角。
 //
 // 自己改写进入端点、不经 gameenter.Enter 的工程，在加载 Player 之前调 Admit，或者调 gameenter.RunEntering。
+//
+// 这个文件还把登录的握手方式接到进入游戏的两条路上（维护者定的分工：account 只管“账号 ↔ 玩家号”，
+// 角色名与玩家数据由游戏服建）：
+//
+//   - 用进服票据握手的会话（EnterTicketClaim）是“先新建”的会话（gameenter.RequireCreateFirst）：
+//     这样的会话发 EnterGame 时不代建，玩家在本服没建成就答 enter_need_create，客户端先发 EnterCreate（带名字）。
+//     用角色会话令牌握手的会话（名字在 account 的 CreateRole 里起过了）照旧由 EnterGame 加载或创建。
+//   - 会话激活之后把结论推给客户端（OnSessionActive → EnterStatus）：本服该不该服务他、要不要先新建。
+//     判断复用进入前检查与玩家自己的档，这里不另写规则；它只是告知，权威仍在 EnterGame / EnterCreate。
 func init() {
 	gameenter.OnEntering("login", admitOnEnter)
+	gameenter.RequireCreateFirst("login", EnterTicketSession)
+	OnSessionActive("enter", announceEnterStatus)
+}
+
+// EnterTicketSession 报告带着这些 claims 的会话是不是用进服票据握手的。
+func EnterTicketSession(claims map[string]string) bool { return claims[EnterTicketClaim] == "1" }
+
+// enterAnnounce 是推 EnterStatus 的入口；写成变量是为了让场景能看到它被叫到时拿的是什么。
+var enterAnnounce = enterendpoint.Announce
+
+// announceEnterStatus 是登记给 OnSessionActive 的告知：把刚激活的会话交给 enter 模块去告诉客户端。
+func announceEnterStatus(ctx context.Context, registry *app.Registry, session Active) {
+	enterAnnounce(ctx, registry, gameenter.Entering{PlayerID: session.PlayerID, Claims: session.Claims}, session.SessionID)
 }
 
 func admitOnEnter(_ context.Context, registry *app.Registry, entering gameenter.Entering) error {

@@ -1,0 +1,269 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 新建那条路的场景（需求：新建与进入分开，角色名的规则在游戏服）。它们与上面的“加载或创建”场景共用同一个
+// Nest fixture；事务内的两个登记点各登记一个本文件的钩子，记下被调用的次数与名字，并能按开关拒绝。
+
+var (
+	enterCreateNames  []string // 新建钩子收到的名字，按调用顺序
+	enterCreateGrants atomic.Int64
+	enterCreateMu     sync.Mutex
+	// errEnterCreateName 是新建钩子拒绝名字 "taken" 时返回的带码错误：证明钩子的码原样到达调用方。
+	// 借用模块自己的一个码，场景不另占错误码。
+	errEnterCreateName = apperrors.ErrEnterNameLong
+)
+
+func init() {
+	playerentity.OnCreate("enter-scenarios", func(_ *playerentity.Player, name string, _ int64) error {
+		if name == "taken" {
+			return errEnterCreateName
+		}
+		enterCreateMu.Lock()
+		enterCreateNames = append(enterCreateNames, name)
+		enterCreateMu.Unlock()
+		return nil
+	})
+	playerentity.OnFirstEnter("enter-scenarios", func(*playerentity.Player, int64) error {
+		enterCreateGrants.Add(1)
+		return nil
+	})
+}
+
+type enterCreateFixture struct {
+	*enterFixture
+	creates  *sender.EnterCreateSender
+	existing *sender.EnterExistingSender
+	builts   *sender.EnterBuiltSender
+}
+
+func newEnterCreateFixture(t *testing.T) *enterCreateFixture {
+	t.Helper()
+	RegisterEnterCreateNestHandlers()
+	RegisterEnterExistingNestHandlers()
+	RegisterEnterBuiltNestHandlers()
+	enterCreateMu.Lock()
+	enterCreateNames = nil
+	enterCreateMu.Unlock()
+	enterCreateGrants.Store(0)
+	f := &enterCreateFixture{enterFixture: newEnterFixture(t)}
+	f.creates = sender.NewEnterCreateSender(f.engine)
+	f.existing = sender.NewEnterExistingSender(f.engine)
+	f.builts = sender.NewEnterBuiltSender(f.engine)
+	return f
+}
+
+func (f *enterCreateFixture) create(name string) error {
+	return f.creates.Sync_EnterCreate(context.Background(), f.player.ID(), name)
+}
+
+func (f *enterCreateFixture) built(t *testing.T) bool {
+	t.Helper()
+	built, err := f.builts.Sync_EnterBuilt(context.Background(), f.player.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return built
+}
+
+// state 在业务 worker 上持实体锁读整条记录。
+func (f *enterCreateFixture) state(t *testing.T) (initialized bool, firstAt int64, fresh bool) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		state := f.player.Dao().GetEnter()
+		initialized, firstAt, fresh = state.GetInitialized(), state.GetFirstAt(), state.GetFresh()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return initialized, firstAt, fresh
+}
+
+func enterCreateSeen() []string {
+	enterCreateMu.Lock()
+	defer enterCreateMu.Unlock()
+	return append([]string(nil), enterCreateNames...)
+}
+
+// 没建成的玩家：先新建的进入被拒（enter_need_create）且什么都没写；新建之后建成，名字到了新建钩子、
+// 初始发放发了一次；接下来的第一次进入是 First，之后不是，注册时间一直是新建的那一刻。
+func TestEnterCreateBuildsThePlayerAndTheNextEnterIsFirst(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	if f.built(t) {
+		t.Fatal("a fresh record reports built")
+	}
+	if _, err := f.existing.Sync_EnterExisting(context.Background(), f.player.ID()); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+		t.Fatalf("enter before create: err = %v, want enter_need_create", err)
+	}
+	if initialized, firstAt, fresh := f.state(t); initialized || firstAt != 0 || fresh || enterCreateGrants.Load() != 0 {
+		t.Fatalf("a refused enter wrote initialized=%v firstAt=%d fresh=%v grants=%d", initialized, firstAt, fresh, enterCreateGrants.Load())
+	}
+	createdAt := f.now.Load()
+	if err := f.create("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if initialized, firstAt, fresh := f.state(t); !initialized || firstAt != createdAt || !fresh || !f.built(t) {
+		t.Fatalf("after create: initialized=%v firstAt=%d fresh=%v, want built at %d and not entered yet", initialized, firstAt, fresh, createdAt)
+	}
+	if seen := enterCreateSeen(); len(seen) != 1 || seen[0] != "Alice" || enterCreateGrants.Load() != 1 {
+		t.Fatalf("create hooks saw %v, %d grants; want the name once and one grant", seen, enterCreateGrants.Load())
+	}
+	f.now.Add(int64(time.Hour / time.Millisecond))
+	result, err := f.existing.Sync_EnterExisting(context.Background(), f.player.ID())
+	if err != nil || !result.First || result.FirstAtUnixMilli != createdAt {
+		t.Fatalf("first enter after create: %+v, %v; want first, registered at %d", result, err, createdAt)
+	}
+	for i := 0; i < 2; i++ {
+		if result, err := f.existing.Sync_EnterExisting(context.Background(), f.player.ID()); err != nil || result.First || result.FirstAtUnixMilli != createdAt {
+			t.Fatalf("enter %d after the first: %+v, %v; want not first", i+2, result, err)
+		}
+	}
+	if _, _, fresh := f.state(t); fresh || enterCreateGrants.Load() != 1 {
+		t.Fatalf("fresh=%v grants=%d after entering, want cleared and still one grant", fresh, enterCreateGrants.Load())
+	}
+}
+
+// 已经建成的玩家再发新建：enter_created，名字钩子与发放都不再执行，记录不变——不论是经新建请求建成的，
+// 还是在“加载或创建”的进入里建成的。
+func TestEnterCreateOfABuiltPlayerIsRefusedAndChangesNothing(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	createdAt := f.now.Load()
+	if err := f.create("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add(int64(time.Minute / time.Millisecond))
+	for _, name := range []string{"Alice", "Bob", "taken"} {
+		if err := f.create(name); !errors.Is(err, apperrors.ErrEnterCreated) {
+			t.Fatalf("create %q again: err = %v, want enter_created", name, err)
+		}
+	}
+	if initialized, firstAt, fresh := f.state(t); !initialized || firstAt != createdAt || !fresh {
+		t.Fatalf("after refused creates: initialized=%v firstAt=%d fresh=%v", initialized, firstAt, fresh)
+	}
+	if seen := enterCreateSeen(); len(seen) != 1 || enterCreateGrants.Load() != 1 {
+		t.Fatalf("hooks ran again: names %v, %d grants", seen, enterCreateGrants.Load())
+	}
+}
+
+// 在“加载或创建”的进入里建成的玩家（没装登录模块的工程、角色会话令牌握手的会话）：新建同样被拒，
+// 先新建的进入把他当作已建成、不是 First——两条路认的是同一个事实。
+func TestEnterCreateAndLoadOrCreateAgreeOnWhoIsBuilt(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	start := f.now.Load()
+	if result, err := f.init(); err != nil || !result.First {
+		t.Fatalf("load-or-create enter: %+v, %v", result, err)
+	}
+	if !f.built(t) {
+		t.Fatal("a player built by EnterGame does not report built")
+	}
+	if err := f.create("Alice"); !errors.Is(err, apperrors.ErrEnterCreated) {
+		t.Fatalf("create after a load-or-create enter: err = %v, want enter_created", err)
+	}
+	if result, err := f.existing.Sync_EnterExisting(context.Background(), f.player.ID()); err != nil || result.First || result.FirstAtUnixMilli != start {
+		t.Fatalf("strict enter of a built player: %+v, %v; want not first", result, err)
+	}
+	if seen := enterCreateSeen(); len(seen) != 0 {
+		t.Fatalf("the create hook ran for a player built by EnterGame: %v", seen)
+	}
+}
+
+// 反过来：经新建请求建成的玩家，第一次进入走的是“加载或创建”那条路（另一条会话）时同样报 First，只报一次。
+func TestEnterCreatedPlayerIsFirstOnceOnTheLoadOrCreatePathToo(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	createdAt := f.now.Load()
+	if err := f.create("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := f.init(); err != nil || !result.First || result.FirstAtUnixMilli != createdAt {
+		t.Fatalf("first enter after create: %+v, %v", result, err)
+	}
+	if result, err := f.init(); err != nil || result.First {
+		t.Fatalf("second enter: %+v, %v; want not first", result, err)
+	}
+	if enterCreateGrants.Load() != 1 {
+		t.Fatalf("%d grants, want the one made by create", enterCreateGrants.Load())
+	}
+}
+
+// 新建钩子拒绝名字：带着它的码回到调用方，整笔回滚——没建成、没发放；换个名字再建就成了。
+func TestEnterCreateRefusedByTheNameHookWritesNothing(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	err := f.create("taken")
+	if !errors.Is(err, errEnterCreateName) {
+		t.Fatalf("create with a refused name: err = %v, want the hook's coded error", err)
+	}
+	if code, _ := errcode.ClientError(err); code != errEnterCreateName.Code() {
+		t.Fatalf("client code = %d, want the hook's %d", code, errEnterCreateName.Code())
+	}
+	if initialized, firstAt, fresh := f.state(t); initialized || firstAt != 0 || fresh || enterCreateGrants.Load() != 0 || f.built(t) {
+		t.Fatalf("a refused name left initialized=%v firstAt=%d fresh=%v grants=%d", initialized, firstAt, fresh, enterCreateGrants.Load())
+	}
+	if err := f.create("Alice"); err != nil || !f.built(t) {
+		t.Fatalf("create with another name: %v", err)
+	}
+}
+
+// 新建的提交被拒：标记与发放一起回滚，玩家仍是没建成（先新建的进入照旧被拒），重试之后建成，注册时间是重试那一刻。
+func TestEnterCreateRejectedCommitRollsBackAndCanBeRetried(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	f.committer.reject.Store(true)
+	if err := f.create("Alice"); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	if initialized, firstAt, fresh := f.state(t); initialized || firstAt != 0 || fresh || f.built(t) {
+		t.Fatalf("rollback left initialized=%v firstAt=%d fresh=%v", initialized, firstAt, fresh)
+	}
+	if _, err := f.existing.Sync_EnterExisting(context.Background(), f.player.ID()); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+		t.Fatalf("enter after the rollback: err = %v, want enter_need_create", err)
+	}
+	retryAt := f.now.Add(int64(time.Minute / time.Millisecond))
+	if err := f.create("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if initialized, firstAt, _ := f.state(t); !initialized || firstAt != retryAt {
+		t.Fatalf("after the retry: initialized=%v firstAt=%d, want built at %d", initialized, firstAt, retryAt)
+	}
+}
+
+// 同一名玩家的多条连接同时新建：恰好一条建成，其余都是 enter_created；名字钩子执行一次，发放一次。
+func TestEnterCreateConcurrentRequestsBuildThePlayerOnce(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	const requests = 16
+	results := make([]error, requests)
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = f.create("Alice")
+		}()
+	}
+	wg.Wait()
+	built := 0
+	for i, err := range results {
+		switch {
+		case err == nil:
+			built++
+		case !errors.Is(err, apperrors.ErrEnterCreated):
+			t.Fatalf("request %d: err = %v, want success or enter_created", i, err)
+		}
+	}
+	if built != 1 || len(enterCreateSeen()) != 1 || enterCreateGrants.Load() != 1 {
+		t.Fatalf("%d requests built the player, name hook ran %d times, %d grants; want 1, 1, 1", built, len(enterCreateSeen()), enterCreateGrants.Load())
+	}
+}

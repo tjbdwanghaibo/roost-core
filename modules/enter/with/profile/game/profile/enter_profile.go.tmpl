@@ -1,0 +1,51 @@
+package profile
+
+import (
+	"context"
+
+	gameenter "{{MODULE}}/game/enter"
+	player "{{MODULE}}/game/entities/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是 enter 与 profile 两个模块的联动：两个都装着时才有。它把角色名接到新建请求（EnterCreate）上——
+// 角色名的规则在游戏服，就是档案模块的名字规则：
+//
+//   - 新建前检查（gameenter.OnCreating）：名字按 NormalizeProfileName 校验。不合规的名字在建档之前被拒，
+//     客户端拿到 profile_name_empty / profile_name_long / profile_name_invalid，什么都没写。
+//     所以装了档案模块之后新建必须带名字。
+//   - 没有全服唯一的改名入口时（没装 naming）：名字在新建的那笔事务里写进档案（player.OnCreate），
+//     与初始发放、“建成了”的标记一起提交或回滚。
+//   - 装了 naming 时：名字只能经它写。建档之后、新建事务之前（gameenter.OnCreatePrepare）调它的改名入口
+//     （本包的 Rename）：目录两阶段占名、提交之后写进档案。名字被占（或它的任何拒绝）时这一次新建到此为止，
+//     玩家仍是没建成，换个名字再发；同一个名字重发（上次建到一半）由它按同一笔改名续完。事务内不再写名字。
+//     这时名字先于“建成了”落定：占了名而新建事务没成的玩家，下一次新建换名字时由 naming 释放旧名。
+//
+// 在 EnterGame 里直接建成的玩家（“加载或创建”那条路）不经过这里，名字是空的，照旧用改名协议起名。
+func init() {
+	gameenter.OnCreating("profile", checkCreateName)
+	gameenter.OnCreatePrepare("profile", reserveCreateName)
+	player.OnCreate("profile", writeCreateName)
+}
+
+func checkCreateName(_ context.Context, _ *app.Registry, creating gameenter.Creating) error {
+	_, err := player.NormalizeProfileName(creating.Name)
+	return err
+}
+
+// reserveCreateName 在装了唯一命名入口时经它起名；没装时什么都不做（名字留给事务内的 writeCreateName）。
+func reserveCreateName(ctx context.Context, registry *app.Registry, creating gameenter.Creating) error {
+	_, _, err := Rename(ctx, registry, creating.PlayerID, creating.Name)
+	return err
+}
+
+// writeCreateName 在新建事务里把名字写进档案。装了唯一命名入口时不写：名字已经由它提交，
+// 在这里直接写会绕过全服唯一。
+func writeCreateName(owner *player.Player, name string, _ int64) error {
+	if rename != nil {
+		return nil
+	}
+	_, err := owner.ProfileComp().Rename(name)
+	return err
+}

@@ -1,0 +1,205 @@
+package profile
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
+	gameenter "{{MODULE}}/game/enter"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 联动的场景：新建请求的骨架是真实的（gameenter.Create，登记表里是本文件 init 登记的那三项），
+// 新建的那笔事务也是真实的（Nest handler EnterCreate，替身提交器）。
+
+type enterProfileGetter map[int64]entity.IThreadSafeEntity
+
+func (g enterProfileGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g enterProfileGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type enterProfileCommitter struct{}
+
+func (enterProfileCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+// enterProfileFixture 是一名还没有建成的玩家与一个 Nest；create 照新建端点那样走一遍 gameenter.Create。
+type enterProfileFixture struct {
+	engine  *nest.NestMgr
+	player  *playerentity.Player
+	ensured int
+}
+
+func newEnterProfileFixture(t *testing.T) *enterProfileFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	handler.RegisterEnterCreateNestHandlers()
+	id, err := entity.BuildEntityID(94301, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &enterProfileFixture{player: built.(*playerentity.Player)}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(enterProfileGetter{id: built}), nest.NestOptionWithTransactionCommitter(enterProfileCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
+func (f *enterProfileFixture) create(name string) error {
+	return gameenter.Create(context.Background(), app.NewRegistry(nil), gameenter.Creating{PlayerID: 94301, Name: name}, gameenter.CreateSteps{
+		Ensure: func(context.Context) error { f.ensured++; return nil },
+		Commit: func(ctx context.Context, name string) error {
+			return sender.NewEnterCreateSender(f.engine).Sync_EnterCreate(ctx, f.player.ID(), name)
+		},
+	})
+}
+
+// state 在业务 worker 上持实体锁读名字与“建成了没有”。
+func (f *enterProfileFixture) state(t *testing.T) (name string, built bool) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		name, built = f.player.ProfileComp().DisplayName(), f.player.EnterComp().Built()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return name, built
+}
+
+// 没装唯一命名入口时（rename 为 nil），名字的规则就是档案模块的规则：不合规的名字在建档之前被拒、带着档案的码、
+// 什么都没写；合规的名字去掉首尾空白后在新建的那笔事务里写进档案。
+func TestWithEnterProfileCreateNameFollowsTheProfileRules(t *testing.T) {
+	saved := rename
+	rename = nil
+	t.Cleanup(func() { rename = saved })
+	f := newEnterProfileFixture(t)
+	refusals := []struct {
+		name string
+		want error
+	}{
+		{"", apperrors.ErrProfileNameEmpty},
+		{"   ", apperrors.ErrProfileNameEmpty},
+		{strings.Repeat("字", 17), apperrors.ErrProfileNameLong},
+		{"bad\xffname", apperrors.ErrProfileNameInvalid},
+	}
+	for _, refusal := range refusals {
+		if err := f.create(refusal.name); !errors.Is(err, refusal.want) {
+			t.Fatalf("create %q: err = %v, want %v", refusal.name, err, refusal.want)
+		}
+	}
+	if name, built := f.state(t); name != "" || built || f.ensured != 0 {
+		t.Fatalf("refused names left name=%q built=%v and the record was ensured %d times; want nothing touched", name, built, f.ensured)
+	}
+	if err := f.create("  " + strings.Repeat("字", 16) + " "); err != nil {
+		t.Fatal(err)
+	}
+	if name, built := f.state(t); name != strings.Repeat("字", 16) || !built || f.ensured != 1 {
+		t.Fatalf("after create: name=%q built=%v ensured=%d; want the trimmed 16-rune name, built", name, built, f.ensured)
+	}
+	// 已经建成：再新建不改名字。
+	if err := f.create("Other"); !errors.Is(err, apperrors.ErrEnterCreated) {
+		t.Fatalf("creating again: err = %v, want enter_created", err)
+	}
+	if name, _ := f.state(t); name != strings.Repeat("字", 16) {
+		t.Fatalf("a refused create renamed the player to %q", name)
+	}
+}
+
+// 事务里的那一次写入自己也按规则校验：绕过新建前检查直接发新建事务（别的服务端代码调 Sender）时，
+// 不合规的名字让整笔事务回滚，玩家没有建成。
+func TestWithEnterProfileTheCreateTransactionRefusesABadNameItself(t *testing.T) {
+	saved := rename
+	rename = nil
+	t.Cleanup(func() { rename = saved })
+	f := newEnterProfileFixture(t)
+	creates := sender.NewEnterCreateSender(f.engine)
+	if err := creates.Sync_EnterCreate(context.Background(), f.player.ID(), strings.Repeat("x", 17)); !errors.Is(err, apperrors.ErrProfileNameLong) {
+		t.Fatalf("a 17-rune name sent straight to the transaction: err = %v, want profile_name_long", err)
+	}
+	if name, built := f.state(t); name != "" || built {
+		t.Fatalf("the refused transaction left name=%q built=%v", name, built)
+	}
+	if err := creates.Sync_EnterCreate(context.Background(), f.player.ID(), "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if name, built := f.state(t); name != "Alice" || !built {
+		t.Fatalf("after the retry: name=%q built=%v", name, built)
+	}
+}
+
+// 装了唯一命名入口时（naming 模块登记的 Renamer），名字只经它写：新建在建档之后、事务之前调它；
+// 它拒绝（名字被占）时没有新建事务，玩家仍是没建成；它成功之后新建事务不再自己写名字。
+func TestWithEnterProfileCreateGoesThroughTheUniqueNameEntryWhenThereIsOne(t *testing.T) {
+	saved := rename
+	t.Cleanup(func() { rename = saved })
+	taken := errors.New("naming: the name is taken")
+	var asked []string
+	rename = func(_ context.Context, registry *app.Registry, playerID int64, name string) (string, error) {
+		if registry == nil || playerID != 94301 {
+			t.Errorf("the renamer got registry %v, player %d", registry, playerID)
+		}
+		asked = append(asked, name)
+		if name == "Taken" {
+			return "", taken
+		}
+		return name, nil
+	}
+	f := newEnterProfileFixture(t)
+	// 格式规则仍然先于它：不合规的名字到不了命名入口。
+	if err := f.create(""); !errors.Is(err, apperrors.ErrProfileNameEmpty) || len(asked) != 0 {
+		t.Fatalf("an empty name: err = %v, the renamer was asked %v", err, asked)
+	}
+	if err := f.create("Taken"); !errors.Is(err, taken) {
+		t.Fatalf("a taken name: err = %v, want the renamer's refusal", err)
+	}
+	if _, built := f.state(t); built || f.ensured != 1 {
+		t.Fatalf("after a taken name: built=%v, ensured=%d; want not built, the record ensured once", built, f.ensured)
+	}
+	if err := f.create("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Taken", "Alice"}; !reflect.DeepEqual(asked, want) {
+		t.Fatalf("the renamer was asked %v, want %v", asked, want)
+	}
+	// 替身命名入口没有往档案里写名字；新建事务如果自己写了，这里会是 "Alice"。
+	if name, built := f.state(t); name != "" || !built {
+		t.Fatalf("after create: name=%q built=%v; want built, and the name left to the unique-name entry", name, built)
+	}
+}

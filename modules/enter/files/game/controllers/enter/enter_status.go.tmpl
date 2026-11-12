@@ -1,0 +1,103 @@
+package enter
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	gameenter "{{MODULE}}/game/enter"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是会话激活之后给客户端的告知（EnterStatus 推送）：本服能不能进、要不要先新建。
+// 谁在会话激活时调 Announce 不归这个模块管：login 模块装着时由它的联动接上（认证器的会话激活通知）；
+// 用自己的认证器的工程想要这条推送，在自己的激活回调里调它。没有人调，就没有这条推送，别的都不变。
+
+// statusTransport 是告知用到的玩家传输的两个方法（internal/access/player/tcp 发布的 Runtime，
+// 嵌入 TCP 与独立 Gate 的 Game Ingress 都实现）。写成接口、按能力名取，理由同别的模块：传输包 import
+// 构造这个 controller 的协议绑定，反过来 import 它就成环了。
+type statusTransport interface {
+	PushSession(ctx context.Context, sessionID string, messageID uint32, value any) error
+	CloseSessions(playerID int64, reason error) int
+}
+
+// playerTCPCapability 是 internal/access/player/tcp 的 Name：传输 Mod 发布 Runtime 用的能力名。
+const playerTCPCapability app.ModName = "access.player.tcp"
+
+// StatusCloseDelay 是推出带码的拒绝之后、断开连接之前等的时间。推送只进发送队列，立刻断开会把还没写出的
+// 那一帧一起丢掉；等这一小会儿让它先写出去。它不是保证：慢的连接仍可能收不到——客户端收不到就照常发
+// EnterGame，得到的是同一个码。
+const StatusCloseDelay = 300 * time.Millisecond
+
+// errStatusRefused 是告知之后断开连接时交给传输的原因。
+var errStatusRefused = errors.New("enter: this server does not serve the player; the session was closed after telling the client")
+
+// Announce 在一条会话激活之后告诉客户端它该做什么（EnterStatus），entering 是这条会话的玩家与 claims，
+// sessionID 是要推给的那条会话。
+//
+//   - 本服不该服务这名玩家（进入前检查拒绝——与 EnterGame 用的是同一组检查）：推那个码，然后断开这名玩家
+//     在本进程的连接。传输没有“只断这一条会话”的入口，断的是这名玩家的全部会话——本服不该服务他，
+//     他的哪条会话都一样。
+//   - 该服务：推 need_create（“先新建”的会话且玩家没建成时为 true）。
+//   - 判断不了（检查问不到权威、读档出错）：什么都不推，记一条 Warn。
+//
+// 它只是告知：不写任何状态，推送不成只记日志；客户端没收到就直接发 EnterGame，结论以那个请求为准。
+// 调用方要在后台执行它并自己限量（它要读档，不能放在握手协程里），ctx 带上期限。
+func Announce(ctx context.Context, registry *app.Registry, entering gameenter.Entering, sessionID string) {
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		slog.Warn("enter: status not announced", "player_id", entering.PlayerID, "err", err)
+		return
+	}
+	transport, ok := app.Lookup[statusTransport](registry, playerTCPCapability)
+	if !ok || transport == nil {
+		slog.Warn("enter: status not announced; the player tcp transport is not assembled", "player_id", entering.PlayerID)
+		return
+	}
+	announce(ctx, registry, transport, entering, sessionID, func(ctx context.Context) (bool, error) {
+		return controller.built(ctx, entering.PlayerID)
+	}, StatusCloseDelay)
+}
+
+// announce 是 Announce 去掉“从 registry 取东西”之后的部分，测试直接调它。
+func announce(ctx context.Context, registry *app.Registry, transport statusTransport, entering gameenter.Entering, sessionID string,
+	built func(context.Context) (bool, error), closeDelay time.Duration) {
+	status, refused, err := gameenter.Assess(ctx, registry, entering, built)
+	if err != nil {
+		slog.Warn("enter: status not announced; the client finds out from EnterGame", "player_id", entering.PlayerID, "err", err)
+		return
+	}
+	push := &pb.EnterStatusPush{Code: status.Code, Reason: status.Reason, NeedCreate: status.NeedCreate}
+	if err := transport.PushSession(ctx, sessionID, msgid.MsgEnterStatus, push); err != nil {
+		slog.Info("enter: status push failed; the client finds out from EnterGame", "player_id", entering.PlayerID, "err", err)
+	}
+	if !refused {
+		return
+	}
+	// 推送成不成都断开：本服不该服务他。等一小会儿让那一帧先写出去；期限到了也照样断开。
+	if closeDelay > 0 {
+		timer := time.NewTimer(closeDelay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+		}
+	}
+	closed := transport.CloseSessions(entering.PlayerID, fmt.Errorf("%w (code %d)", errStatusRefused, status.Code))
+	slog.Info("enter: closed the sessions of a player this server does not serve", "player_id", entering.PlayerID, "code", status.Code, "closed", closed)
+}
+
+// built 回答这名玩家建成了没有：没有档是 false；有档就在它的锁内读一次首次初始化的标记。只读。
+func (controller *Controller) built(ctx context.Context, playerID int64) (bool, error) {
+	entityID, found, err := controller.find(ctx, playerID)
+	if err != nil || !found {
+		return false, err
+	}
+	return syncsender.NewEnterBuiltSender(controller.nestClient).Sync_EnterBuilt(ctx, entityID)
+}

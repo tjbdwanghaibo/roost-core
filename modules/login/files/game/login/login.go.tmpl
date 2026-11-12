@@ -173,6 +173,7 @@ func (authenticator Authenticator) authenticateEnter(ctx context.Context, handsh
 			gateway.ErrUnauthenticated, role.PlayerID, role.ServerID, role.ServingServerID)
 	}
 	claims := Claims(role)
+	claims[EnterTicketClaim] = "1"
 	if entry.Created {
 		claims[svcaccount.NewRoleClaim] = "1"
 	}
@@ -220,6 +221,8 @@ func refusedByAccount(err error) bool {
 //	svcaccount.BindEpochClaim       绑定代数：没换过服是 "0"，每换一次服加一。换服模块拿它认“换回来的”。
 //	svcaccount.TransferClaim        只在换服在途时有：目标 sid 与换服 ID（svcaccount.ParseTransferClaim 读回）。
 //	svcaccount.NewRoleClaim         只在进服票据的握手新建了“账号 ↔ 玩家号”的映射时有，值 "1"（authenticateEnter 写）。
+//	EnterTicketClaim                只在用进服票据握手的会话上有，值 "1"（authenticateEnter 写）。enter 模块装着时，
+//	                                这样的会话要先新建（EnterCreate）再进入（login_enter.go）。
 //
 // 工程要多记别的事实（渠道、设备、白名单标记）就在这里加键；已有的键不要改名、不要改写法，
 // 别的模块按它们读。
