@@ -57,7 +57,11 @@ func (controller *Controller) Open(ctx context.Context, uniqueID, playerID, seas
 	if _, _, err := runs.GetOrCreate(ctx, uniqueID); err != nil {
 		return logic.Snapshot{}, err
 	}
-	return controller.sender.Sync_DungeonOpen(ctx, id, playerID, season)
+	result, err := controller.sender.Sync_DungeonOpen(ctx, id, playerID, season)
+	if err == nil {
+		slog.InfoContext(ctx, "dungeon: open confirmed", "player_id", playerID, "run_id", uniqueID, "instance", result.Instance, "epoch", result.Epoch, "season", season)
+	}
+	return result, err
 }
 
 // Defeated 由可信战斗服务发事实；Source固定为有限来源，Sequence单调，相同序号只能重发同一内容。
@@ -66,7 +70,11 @@ func (controller *Controller) Defeated(ctx context.Context, uniqueID int64, inst
 	if err != nil {
 		return logic.Snapshot{}, err
 	}
-	return controller.sender.Sync_DungeonDefeated(ctx, id, instance, epoch, source, sequence, enemy)
+	result, err := controller.sender.Sync_DungeonDefeated(ctx, id, instance, epoch, source, sequence, enemy)
+	if err == nil && result.Result != "" {
+		slog.DebugContext(ctx, "dungeon: terminal result confirmed", "run_id", uniqueID, "instance", result.Instance, "epoch", result.Epoch, "result", result.Result, "resolved_at", result.ResolvedAtUnix)
+	}
+	return result, err
 }
 
 // publishClaim 由leaderboard联动在启动前登记；仅投影已提交的事实，不参与奖励事务。
@@ -88,6 +96,7 @@ func (controller *Controller) Claim(ctx context.Context, uniqueID, playerID int6
 	if err != nil {
 		return logic.ClaimResult{}, err
 	}
+	slog.InfoContext(ctx, "dungeon: claim confirmed", "player_id", playerID, "run_id", uniqueID, "newly_claimed", result.Claimed, "exp_granted", result.ExpGranted, "levels_gained", result.LevelsGained, "season", result.Season, "clears", result.Clears)
 	controller.publish(ctx, playerID, &result)
 	return result, nil
 }
@@ -114,6 +123,9 @@ func (controller *Controller) HandleDungeonView(ctx *playeraccess.Context, reque
 	}
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
+		if response.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "dungeon: view failed", "player_id", ctx.PlayerID, "run_id", request.RunID, "err", err)
+		}
 	}
 	return response, nil
 }
@@ -124,6 +136,9 @@ func (controller *Controller) HandleDungeonClaim(ctx *playeraccess.Context, requ
 	result, err := controller.Claim(ctx.Context(), request.RunID, ctx.PlayerID)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "dungeon: claim failed", "player_id", ctx.PlayerID, "run_id", request.RunID, "err", err)
+		}
 		return &pb.DungeonClaimResponse{Code: code, Reason: reason}, nil
 	}
 	return &pb.DungeonClaimResponse{Claimed: result.Claimed, ExpGranted: result.ExpGranted, LevelsGained: result.LevelsGained, Season: result.Season, Clears: result.Clears, TotalClears: result.TotalClears, BoardPending: result.BoardPending}, nil

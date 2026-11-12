@@ -1,0 +1,41 @@
+package handler
+
+import (
+ "bytes"
+ "context"
+ "log/slog"
+ "strings"
+ "testing"
+ walletcontroller "{{MODULE}}/game/controllers/wallet"
+ "{{MODULE}}/game/playeraccess"
+ "{{MODULE}}/protocol/pb"
+ "github.com/tjbdwanghaibo/roost-core/framework/app"
+ "github.com/spf13/viper"
+)
+
+// Scratch acceptance uses the real Nest rollback boundary and handwritten endpoint.
+func TestLoggingWalletCommitBoundary(t *testing.T) {
+ f:=newWalletFixture(t)
+ f.grant(t,"initial",100)
+ registry:=app.NewRegistry(viper.New())
+ if err:=registry.Register(app.ModName("nest"),f.engine);err!=nil {t.Fatal(err)}
+ c,err:=walletcontroller.FromRegistry(registry);if err!=nil {t.Fatal(err)}
+ var buffer bytes.Buffer
+ old:=slog.Default();slog.SetDefault(slog.New(slog.NewJSONHandler(&buffer,nil)));defer slog.SetDefault(old)
+ ctx:=&playeraccess.Context{BaseCtx:context.Background(),PlayerID:91001}
+ f.committer.reject.Store(true)
+ response,err:=c.HandleWalletSpend(ctx,&pb.WalletSpendRequest{Key:"rollback",Amount:10})
+ if err!=nil||response.Code==0 {t.Fatalf("want rejected commit: %v %v",response,err)}
+ if strings.Contains(buffer.String(),"wallet: spend completed") {t.Fatal("success logged for rolled-back transaction")}
+ if balance,_:=f.snapshot(t);balance!=100 {t.Fatalf("rollback balance=%d",balance)}
+ buffer.Reset();f.committer.reject.Store(false)
+ response,err=c.HandleWalletSpend(ctx,&pb.WalletSpendRequest{Key:"short",Amount:101})
+ if err!=nil||response.Code==0 {t.Fatalf("want business refusal: %v %v",response,err)}
+ if buffer.Len()!=0 {t.Fatalf("business refusal logged: %s",buffer.String())}
+ response,err=c.HandleWalletSpend(ctx,&pb.WalletSpendRequest{Key:"ok",Amount:10})
+ if err!=nil||response.Code!=0||response.Balance!=90 {t.Fatalf("spend: %v %v",response,err)}
+ text:=buffer.String()
+ for _,want:=range []string{`"msg":"wallet: spend completed"`,`"player_id":91001`,`"balance":90`,`"request_key":"ok"`} {
+  if !strings.Contains(text,want) {t.Fatalf("missing %s: %s",want,text)}
+ }
+}

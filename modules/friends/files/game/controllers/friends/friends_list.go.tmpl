@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"log/slog"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
@@ -23,6 +24,9 @@ func (c *Controller) HandleFriendsList(ctx *playeraccess.Context, req *pb.Friend
 	}
 	if err != nil {
 		out.Code, out.Reason = errcode.ClientError(err)
+		if out.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "friends: list failed", "player_id", ctx.PlayerID, "err", err)
+		}
 	}
 	return out, nil
 }

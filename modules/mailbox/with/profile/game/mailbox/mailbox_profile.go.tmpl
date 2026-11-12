@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -70,12 +71,15 @@ func consumeProfileReward(ctx context.Context, mail Sender, envelope nestwal.Eff
 	if err := event.validate(); err != nil {
 		return kitdataengine.PoisonEffect(err)
 	}
-	_, err := SendTo(ctx, mail, Letter{
+	sent, err := SendTo(ctx, mail, Letter{
 		To: event.PlayerID, Subject: fmt.Sprintf("Level %d reached", event.Level),
 		Body:       fmt.Sprintf("Reward for levels %d–%d.", event.From+1, event.Level),
 		Attachment: event.Reward, RequestID: envelope.EffectID,
 		ExpiresInSeconds: DefaultExpiresInSeconds,
 	})
+	if err == nil {
+		slog.InfoContext(ctx, "mailbox: level reward mail confirmed", "player_id", event.PlayerID, "from_level", event.From, "to_level", event.Level, "mail_id", sent.ID, "effect_id", envelope.EffectID)
+	}
 	if errors.Is(err, ErrLetterInvalid) {
 		return kitdataengine.PoisonEffect(err)
 	}

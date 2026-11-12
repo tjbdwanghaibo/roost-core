@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	"log/slog"
 	"time"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/playeraccess"
@@ -74,6 +75,9 @@ func (c *Controller) HandleNamingRename(ctx *playeraccess.Context, req *pb.Namin
 	out := &pb.NamingRenameResponse{Name: name}
 	if err != nil {
 		out.Code, out.Reason = errcode.ClientError(err)
+		if out.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "naming: request failed", "player_id", ctx.PlayerID, "code", out.Code)
+		}
 	}
 	return out, nil
 }

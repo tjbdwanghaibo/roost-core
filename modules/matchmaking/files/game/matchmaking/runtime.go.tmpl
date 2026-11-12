@@ -9,19 +9,19 @@ import (
 	"slices"
 	"time"
 
-	"{{MODULE}}/game/matchroom"
-	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
-	room "{{MODULE}}/game/room"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/matchroom"
+	room "{{MODULE}}/game/room"
+	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"github.com/vmihailenco/msgpack/v5"
-	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 )
 
 const Capability app.ModName = "matchmaking.runtime"
@@ -193,7 +193,14 @@ func (r *Runtime) update(ctx context.Context, s player.MatchSnapshot, u player.M
 		return player.MatchSnapshot{}, err
 	}
 	u.Key = s.Key
-	return sender.NewMatchUpdateSender(r.client).MultiGroupSync_MatchUpdate(ctx, ids, u)
+	result, err := sender.NewMatchUpdateSender(r.client).MultiGroupSync_MatchUpdate(ctx, ids, u)
+	// 只记已确认的阶段改变，轮询得到同一阶段不打印；每名成员都能按 player_id 追到成局事实。
+	if err == nil && result.Phase != s.Phase {
+		for _, member := range s.Members {
+			slog.InfoContext(ctx, "matchmaking: phase confirmed", "player_id", member, "request_key", result.Key, "phase", result.Phase, "action", u.Action, "match_id", result.MatchID, "room_id", result.RoomID)
+		}
+	}
+	return result, err
 }
 func (r *Runtime) release(ctx context.Context, s player.MatchSnapshot) error {
 	if s.TeamID == 0 || !s.Terminal() {
@@ -245,6 +252,7 @@ func (r *Runtime) Enqueue(ctx context.Context, id, sequence int64, asTeam bool) 
 			return s, err
 		}
 	}
+	slog.InfoContext(ctx, "matchmaking: intent accepted", "player_id", id, "request_key", s.Key, "sequence", s.Sequence, "team_id", s.TeamID, "members", s.Members)
 	_, resumeErr := r.resume(ctx, s)
 	current, readErr := r.State(ctx, id)
 	if readErr != nil {

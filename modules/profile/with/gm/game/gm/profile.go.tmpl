@@ -2,6 +2,7 @@ package gm
 
 import (
 	"context"
+	"log/slog"
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -47,6 +48,9 @@ func ProfileAddExpCommand(grant func(context.Context, *app.Registry, int64, int6
 		gained, err := grant(ctx, registry, full, payload.Amount)
 		if err != nil {
 			return admin.Result{}, err
+		}
+		if gained > 0 {
+			slog.InfoContext(ctx, "profile: level gain confirmed", "player_id", unique, "trace_id", command.TraceID, "levels_gained", gained, "exp_granted", payload.Amount)
 		}
 		return admin.Result{Data: map[string]any{"player_id": unique, "entity_id": full, "levels_gained": gained}}, nil
 	}}

@@ -22,6 +22,8 @@
 - **配置**：没有配置表。规则写在留给工程的 `game/entities/player/stamina_rules.go`：`staminaRules()` 返回 `StaminaRules{Max, HardCap, RegenMillis, RefillDailyLimit}`，缺省上限 100、硬顶 999、每 5 分钟恢复 1 点、每业务日能买 3 次补满；`staminaRefillPrice(nth)` 返回当日第 `nth` 次补满的金币价格，缺省 50、100、150。
 - **错误码**（`internal/errors/stamina.go`）：`stamina_invalid`（点数不为正）、`stamina_short`（体力不够）、`stamina_full`（已满，不能买补满）、`stamina_refill_limit`（今天的购买次数用完）。补满时金币不够透出货币模块的 `wallet_short`。
 
+**日志**：付费补满确认，记录花费、次数、体力和余额；Spend 不记录。服务端 Grant 的实际截断数量仍由调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/stamina/stamina_refill.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：不提供消耗体力的客户端协议；不判重——`Spend` / `Grant` 调一次算一次，`handlerStaminaGrant` 重发会多发；没有多种体力（只有一条）；不发“体力满了”的通知。

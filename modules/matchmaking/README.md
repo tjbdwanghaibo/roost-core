@@ -40,6 +40,8 @@
 - `matchmaking_unknown`：票已经绑定，但 match 服务里查不到它或它的成局记录，需要人工核对。
 - 整队排队还会原样带回 team 模块的码（没有队伍、不是队长）。
 
+**日志**：持久意图受理及阶段变化确认，记录玩家、请求键、阶段、MatchID / RoomID；unknown 记 Warn，内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/matchmaking/controller.go`, `game/matchmaking/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：没有 MMR、没有按等级 / 分数配对、没有跨池扩圈、没有跨服房间路由、没有补位；不推送匹配结果（客户端靠 `MatchStatus` 轮询，建议间隔 500 毫秒左右）；不决定胜负、不发奖励；成局后只开房，不替玩家入房（客户端自己发 `RoomJoin`）。

@@ -4,6 +4,7 @@ package room
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -51,7 +52,11 @@ func Open(ctx context.Context, registry *app.Registry, uniqueID int64, capacity 
 	if _, _, err := rooms.GetOrCreate(ctx, uniqueID); err != nil {
 		return err
 	}
-	return syncsender.NewRoomOpenSender(client).Sync_RoomOpen(ctx, id, capacity)
+	err = syncsender.NewRoomOpenSender(client).Sync_RoomOpen(ctx, id, capacity)
+	if err == nil {
+		slog.DebugContext(ctx, "room: open completed", "room_id", uniqueID, "capacity", capacity)
+	}
+	return err
 }
 
 // Disconnect 由接入层在关闭连接时调；epoch 必须是该连接最后成功 Join/Reconnect 得到的值。
@@ -64,7 +69,11 @@ func Disconnect(ctx context.Context, client nest.Client, roomID, playerID int64,
 	if client == nil {
 		return false, fmt.Errorf("room: nest client is required")
 	}
-	return syncsender.NewRoomDisconnectSender(client).Sync_RoomDisconnect(ctx, id, playerID, epoch)
+	changed, err := syncsender.NewRoomDisconnectSender(client).Sync_RoomDisconnect(ctx, id, playerID, epoch)
+	if err == nil && changed {
+		slog.InfoContext(ctx, "room: player disconnected", "player_id", playerID, "room_id", roomID, "epoch", epoch)
+	}
+	return changed, err
 }
 
 // ConnectionKey 来自服务端 Session：直连 TCP 与 Gate 代理都提供随机 nonce。

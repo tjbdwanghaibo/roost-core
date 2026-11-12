@@ -2,6 +2,7 @@ package gm
 
 import (
 	"context"
+	"log/slog"
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -41,5 +42,6 @@ func addItem(ctx context.Context, registry *app.Registry, command admin.Command)
 	if err != nil {
 		return admin.Result{}, err
 	}
+	slog.InfoContext(ctx, "bag: GM grant confirmed", "player_id", unique, "trace_id", command.TraceID, "item_id", payload.ItemID, "granted", payload.Count, "held", count)
 	return admin.Result{Data: map[string]any{"player_id": unique, "entity_id": full, "item_id": payload.ItemID, "count": count}}, nil
 }

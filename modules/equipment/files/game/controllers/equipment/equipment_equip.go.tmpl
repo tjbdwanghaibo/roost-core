@@ -1,6 +1,8 @@
 package equipment
 
 import (
+	"log/slog"
+
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -9,5 +11,10 @@ import (
 //
 //roost:endpoint nest=EquipmentEquip
 func (c *Controller) HandleEquipmentEquip(ctx *playeraccess.Context, req *pb.EquipmentEquipRequest) (*pb.EquipmentEquipResponse, error) {
-	return c.dispatchEquipmentEquip(ctx, req)
+	response, err := c.dispatchEquipmentEquip(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "equipment: equip completed", "player_id", ctx.PlayerID, "item_id", req.ItemID, "slot", response.Slot, "replaced", response.Replaced)
+	}
+	return response, err
 }

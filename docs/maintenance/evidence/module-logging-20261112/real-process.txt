@@ -1,0 +1,5 @@
+PASS: curl login, servers, enter; server=1000; address=127.0.0.1:7000; tickets redacted
+PASS: purchase delivered and wallet spend; player_id=100001 balance=93 order_id=demo-100001-106048e8039494693e0557234cc9e489-6
+PASS: TCP auth, create-first rejection, create, first enter, reconnect; profile validation=true
+
+Captured logs: 11 records. No probe credential/account ticket/enter ticket found in process logs.

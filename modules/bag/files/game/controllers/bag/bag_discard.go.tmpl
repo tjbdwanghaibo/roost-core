@@ -1,6 +1,8 @@
 package bag
 
 import (
+	"log/slog"
+
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -10,5 +12,10 @@ import (
 //
 //roost:endpoint nest=BagDiscard
 func (controller *Controller) HandleBagDiscard(ctx *playeraccess.Context, req *pb.BagDiscardRequest) (*pb.BagDiscardResponse, error) {
-	return controller.dispatchBagDiscard(ctx, req)
+	response, err := controller.dispatchBagDiscard(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "bag: discard completed", "player_id", ctx.PlayerID, "item_id", response.ItemID, "count", req.Count, "left", response.Left)
+	}
+	return response, err
 }

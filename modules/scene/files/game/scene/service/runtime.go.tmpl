@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -96,6 +97,7 @@ func (m *Manager) Open(uniqueID int64, config gamescene.Config) (*sceneentity.Sc
 		return nil, errors.Join(err, m.access.Destroy(context.Background(), area, entity.DestroyReasonCommon, false))
 	}
 	m.areas[uniqueID] = area
+	slog.Debug("scene: opened", "scene_id", uniqueID, "template", config.Template, "capacity", config.Capacity)
 	return area, nil
 }
 
@@ -144,6 +146,7 @@ func (m *Manager) closeLocked(ctx context.Context, id int64) error {
 	}
 	delete(m.areas, id)
 	delete(m.draining, id)
+	slog.DebugContext(ctx, "scene: closed", "scene_id", id)
 	return nil
 }
 
@@ -184,6 +187,7 @@ func (m *Manager) Drain(ctx context.Context, id int64) error {
 		return err
 	}
 	m.draining[id] = area
+	slog.DebugContext(ctx, "scene: drain admitted", "scene_id", id)
 	// 不能按成员表筛kind：退出事务可能已Depart，但回复丢失/生命周期销毁失败，
 	// 所属模块仍有待清理记录。每个已登记模块按Scene实例核对自己的记录。
 	callbacks := make(map[entity.EntityKind]*drainer, len(m.drainers))
@@ -225,7 +229,11 @@ func (m *Manager) drainLocked(ctx context.Context, id int64) error {
 			result = errors.Join(result, fmt.Errorf("scene: dependent member %d remains", member))
 			continue
 		}
-		result = errors.Join(result, sender.NewSceneDrainSender(m.client).MultiSync_SceneEvacuate(ctx, member, area.ID()))
+		err := sender.NewSceneDrainSender(m.client).MultiSync_SceneEvacuate(ctx, member, area.ID())
+		if err == nil {
+			slog.InfoContext(ctx, "scene: evacuation confirmed", "player_id", entity.GetUniqueIDFromEntityID(member), "scene_id", id)
+		}
+		result = errors.Join(result, err)
 	}
 	return errors.Join(result, m.closeLocked(ctx, id))
 }

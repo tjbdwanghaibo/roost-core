@@ -87,6 +87,7 @@ func (controller *Controller) HandleMailboxClaim(context *playeraccess.Context, 
 		// 这封邮件已经到过账：这一次是 CommitClaim 丢失之后的重试。下面把确认补上，回的是玩家现有的持有量。
 		slog.Info("mailbox_claim: attachment was already granted; committing the mail only", "player_id", context.PlayerID, "mail_id", request.MailID)
 	}
+	slog.InfoContext(ctx, "mailbox: claim confirmed", "player_id", context.PlayerID, "mail_id", request.MailID, "attachment_type", attachment.Type, "item_id", attachment.ID, "amount", attachment.Amount, "held", result.Held, "newly_granted", result.Claimed)
 	if _, err := controller.mailer.CommitClaim(ctx, context.PlayerID, request.MailID, claim.Token); err != nil {
 		// 奖励已到账，只是 mail 服务那边没记上。答成功（客户端确实拿到了），记 ERROR；
 		// 不归还预留、不回滚发放：账本已经保证这封邮件不会再发第二次。

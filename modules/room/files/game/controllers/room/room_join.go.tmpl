@@ -33,8 +33,11 @@ func (controller *Controller) HandleRoomJoin(ctx *playeraccess.Context, req *pb.
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
 		if response.Code == errcode.CodeInternal {
-			slog.Error("room join failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
+			slog.ErrorContext(ctx.Context(), "room join failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
 		}
+	}
+	if err == nil && response.Info != nil {
+		slog.InfoContext(ctx.Context(), "room: join completed", "player_id", ctx.PlayerID, "room_id", req.RoomID, "host_id", response.Info.HostID)
 	}
 	return response, nil
 }

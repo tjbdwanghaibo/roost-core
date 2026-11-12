@@ -1,0 +1,217 @@
+// Run inside a generated recipe project after the three HTTP portal requests.
+// The ticket stays in a local file and is never printed or put on the command line.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"gopkg.in/yaml.v3"
+
+	"{{MODULE}}/protocol/pb"
+ "{{MODULE}}/protocol/msgid"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	file := flag.String("enter", ".acceptance/enter.json", "portal enter response file")
+	checkName := flag.Bool("check-name", false, "require the profile module to reject an empty name")
+	flag.Parse()
+	raw, err := os.ReadFile(*file)
+	if err != nil {
+		return err
+	}
+	var ticket struct{ Ticket, Addr string }
+	if err = json.Unmarshal(raw, &ticket); err != nil {
+		return err
+	}
+	if ticket.Ticket == "" || ticket.Addr == "" {
+		return fmt.Errorf("portal did not return a ticket and address")
+	}
+	raw, err = os.ReadFile("roost.yaml")
+	if err != nil {
+		return err
+	}
+	var manifest struct {
+		Modules map[string]struct {
+			IDs struct {
+				Protocol map[string]uint32 `yaml:"protocol"`
+			} `yaml:"ids"`
+		} `yaml:"modules"`
+	}
+	if err = yaml.Unmarshal(raw, &manifest); err != nil {
+		return err
+	}
+	ids := manifest.Modules["enter"].IDs.Protocol
+	for _, name := range []string{"EnterCreate", "EnterGame", "EnterStatus"} {
+		if ids[name] == 0 {
+			return fmt.Errorf("protocol %s missing", name)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	connect := func() (transport.Conn, *pb.EnterStatusPush, error) {
+		conn, err := transport.DialPlayerTCP(ctx, transport.Config{Endpoint: ticket.Addr, DialTimeout: time.Second})
+		if err != nil {
+			return nil, nil, err
+		}
+		context.AfterFunc(ctx, func() { _ = conn.Close() })
+		auth := transport.AuthPacket(ticket.Ticket)
+		auth.Seq = 1
+		if err = conn.WritePackets([]*transport.Packet{auth}); err != nil {
+			_ = conn.Close()
+			return nil, nil, err
+		}
+		ack, err := conn.ReadPacket()
+		if err != nil {
+			_ = conn.Close()
+			return nil, nil, err
+		}
+		if ack.MsgID != 0 || len(ack.Payload) != 0 {
+			_ = conn.Close()
+			return nil, nil, fmt.Errorf("invalid auth ACK")
+		}
+		for {
+			packet, err := conn.ReadPacket()
+			if err != nil {
+				_ = conn.Close()
+				return nil, nil, err
+			}
+			if packet.MsgID != ids["EnterStatus"] {
+				continue
+			}
+			status, err := pb.UnmarshalEnterStatusPush(packet.Payload)
+			return conn, status, err
+		}
+	}
+	var sequence uint32 = 1
+	request := func(conn transport.Conn, id uint32, raw []byte) ([]byte, error) {
+		sequence++
+		if err := conn.WritePackets([]*transport.Packet{{MsgID: id, Seq: sequence, Payload: raw}}); err != nil {
+			return nil, err
+		}
+		for {
+			packet, err := conn.ReadPacket()
+			if err != nil {
+				return nil, err
+			}
+			if packet.MsgID == id && packet.Seq == sequence {
+				return packet.Payload, nil
+			}
+			if packet.Seq != 0 {
+				return nil, fmt.Errorf("unexpected correlated response")
+			}
+		}
+	}
+	conn, status, err := connect()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if status.Code != 0 || !status.NeedCreate {
+		return fmt.Errorf("fresh role status: %+v", status)
+	}
+	enterRaw, err := pb.MarshalEnterGameRequest(&pb.EnterGameRequest{})
+	if err != nil {
+		return err
+	}
+	answer, err := request(conn, ids["EnterGame"], enterRaw)
+	if err != nil {
+		return err
+	}
+	refused, err := pb.UnmarshalEnterGameResponse(answer)
+	if err != nil {
+		return err
+	}
+	if refused.Code == 0 {
+		return fmt.Errorf("uncreated player entered")
+	}
+	create := func(name string) (*pb.EnterCreateResponse, error) {
+		raw, err := pb.MarshalEnterCreateRequest(&pb.EnterCreateRequest{Name: name})
+		if err != nil {
+			return nil, err
+		}
+		answer, err := request(conn, ids["EnterCreate"], raw)
+		if err != nil {
+			return nil, err
+		}
+		return pb.UnmarshalEnterCreateResponse(answer)
+	}
+	if *checkName {
+		rejected, err := create("")
+		if err != nil {
+			return err
+		}
+		if rejected.Code == 0 {
+			return fmt.Errorf("empty profile name accepted")
+		}
+	}
+	created, err := create("LoggingPlayer")
+	if err != nil {
+		return err
+	}
+	if created.Code != 0 {
+		return fmt.Errorf("create: %+v", created)
+	}
+	answer, err = request(conn, ids["EnterGame"], enterRaw)
+	if err != nil {
+		return err
+	}
+	entered, err := pb.UnmarshalEnterGameResponse(answer)
+	if err != nil {
+		return err
+	}
+	if entered.Code != 0 || !entered.First {
+		return fmt.Errorf("first enter: %+v", entered)
+	}
+
+	// The demo signs a simulated provider callback; platform, queue, Nest and WAL are real.
+	buy, err := pb.MarshalPurchaseRequest(&pb.PurchaseRequest{ProductID: "coins_100"})
+	if err != nil { return err }
+	answer, err = request(conn, msgid.MsgPurchase, buy)
+	if err != nil { return err }
+	purchase, err := pb.UnmarshalPurchaseResponse(answer)
+	if err != nil || purchase.Code != 0 || !purchase.Delivered { return fmt.Errorf("purchase: %+v %v", purchase, err) }
+	spend, err := pb.MarshalWalletSpendRequest(&pb.WalletSpendRequest{Key: "logging-spend-1", Amount: 7})
+	if err != nil { return err }
+	answer, err = request(conn, manifest.Modules["wallet"].IDs.Protocol["WalletSpend"], spend)
+	if err != nil { return err }
+	wallet, err := pb.UnmarshalWalletSpendResponse(answer)
+	if err != nil || wallet.Code != 0 || wallet.Balance != 93 { return fmt.Errorf("wallet: %+v %v", wallet, err) }
+	fmt.Printf("PASS: purchase delivered and wallet spend; player_id=%d balance=%d order_id=%s\n", entered.PlayerID, wallet.Balance, purchase.OrderID)
+	if err = conn.Close(); err != nil {
+		return err
+	}
+	reconnected, status, err := connect()
+	if err != nil {
+		return err
+	}
+	defer reconnected.Close()
+	if status.Code != 0 || status.NeedCreate {
+		return fmt.Errorf("reconnected status: %+v", status)
+	}
+	answer, err = request(reconnected, ids["EnterGame"], enterRaw)
+	if err != nil {
+		return err
+	}
+	again, err := pb.UnmarshalEnterGameResponse(answer)
+	if err != nil {
+		return err
+	}
+	if again.Code != 0 || again.First {
+		return fmt.Errorf("repeat enter: %+v", again)
+	}
+	fmt.Printf("PASS: TCP auth, create-first rejection, create, first enter, reconnect; profile validation=%t\n", *checkName)
+	return nil
+}

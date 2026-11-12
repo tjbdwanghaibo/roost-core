@@ -23,6 +23,8 @@
   - 新增业务服务 `activity_world`（`internal/service/activity_world/service.go`），带 `configdata`、`dataengine`、`etcd`、`mongo`、`nats`、`nest`、`redis`、`remote_entity` 这些 Mod。
 - **错误码**：`activity_world_request_invalid`（`ErrRequestInvalid`，RPC 请求无法解码或不合法时由生成的 RPC 代码使用）。引擎自身的拒绝仍是 `activity` 的包级错误值。
 
+**日志**：显式事件触发与 Complete 确认记 Debug，记录宿主、scope、活动号、代数、期次与阶段；空事件恢复扫描不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `internal/rpc/activity_world/service.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：不给玩家提供查看全服活动的协议，也不向 game 推送阶段变化——game 要自己写端点，调 `Pulse(target, "", 0)` 取快照再转给客户端。不校验调用方身份与玩家资格：RPC 只面向可信服务器，面向玩家的端点要先校验区服与资格，不能把客户端自报的事件直接转发。不含任何具体活动内容。

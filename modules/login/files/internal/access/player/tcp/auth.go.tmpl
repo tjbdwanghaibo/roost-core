@@ -69,9 +69,9 @@ func (authenticator *applicationAuthenticator) Authenticate(ctx context.Context,
 		return principal, nil
 	}
 	if errors.Is(err, gamelogin.ErrAccountUnavailable) {
-		slog.Warn("login: the handshake failed because account gave no verdict; the client may retry the same ticket", "remote", remote, "ticket_bytes", len(ticket), "err", err)
+		slog.WarnContext(ctx, "login: the handshake failed because account gave no verdict; the client may retry the same ticket", "remote", remote, "ticket_bytes", len(ticket), "err", err)
 	} else {
-		slog.Debug("login: session ticket refused", "remote", remote, "ticket_bytes", len(ticket), "err", err)
+		slog.DebugContext(ctx, "login: session ticket refused", "remote", remote, "ticket_bytes", len(ticket), "err", err)
 	}
 	return gateway.Principal{}, err
 }

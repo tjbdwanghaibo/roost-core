@@ -1,6 +1,8 @@
 package stamina
 
 import (
+	"log/slog"
+
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -10,5 +12,10 @@ import (
 //
 //roost:endpoint nest=StaminaRefill
 func (controller *Controller) HandleStaminaRefill(ctx *playeraccess.Context, req *pb.StaminaRefillRequest) (*pb.StaminaRefillResponse, error) {
-	return controller.dispatchStaminaRefill(ctx, req)
+	response, err := controller.dispatchStaminaRefill(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "stamina: refill completed", "player_id", ctx.PlayerID, "cost", response.Cost, "refill_count", response.RefillCount, "value", response.Value, "balance", response.Balance)
+	}
+	return response, err
 }

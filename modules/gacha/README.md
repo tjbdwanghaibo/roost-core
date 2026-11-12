@@ -37,6 +37,8 @@
 
 `gacha_key_invalid`、`gacha_key_conflict`（同一个键换了池或次数）、`gacha_count_invalid`（次数不是 1 或 10）、`gacha_pool_invalid`（池不存在、已关闭或配置不合法）、`gacha_overflow`（价格乘次数溢出，或回执序号耗尽）、`gacha_pool_limit`（这名玩家记着保底的池已到上限）。金币不足、背包放不下原样透出 wallet 与 bag 的码。
 
+**日志**：抽卡确认，记录请求键、池、次数、花费、结果和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/gacha/gacha_draw.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做付费。** 只扣 wallet 的金币；没有充值渠道、付费货币与免费货币之分、抽卡券。

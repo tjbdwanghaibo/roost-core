@@ -201,6 +201,7 @@ func (m *Manager) Spawn(ctx context.Context, sceneID int64, spec rules.Spec) (in
 		}
 		return monsterID, errors.Join(err, cleanup)
 	}
+	slog.DebugContext(ctx, "monster: spawn confirmed", "monster_id", monsterID, "scene_id", sceneID)
 	return monsterID, nil
 }
 
@@ -217,7 +218,12 @@ func (m *Manager) Damage(ctx context.Context, id int64, life uint64, amount int6
 	if !ok {
 		return monster.Snapshot{}, fmt.Errorf("monster: unknown id")
 	}
-	return sender.NewMonsterDamageSender(m.client).MultiSync_MonsterDamage(ctx, id, r.areaID, r.target, life, amount)
+	state, err := sender.NewMonsterDamageSender(m.client).MultiSync_MonsterDamage(ctx, id, r.areaID, r.target, life, amount)
+	// 组件拒绝已死亡生命的重复伤害；只有本次确认死亡才记录，不记录普通命中。
+	if err == nil && state.HP == 0 {
+		slog.DebugContext(ctx, "monster: death confirmed", "monster_id", id, "scene_entity_id", r.areaID, "life", state.LifeSeq)
+	}
+	return state, err
 }
 
 // Destroy先在Monster+Scene事务停心跳/离场/释放成员，再移除实体；移除失败保留记录，可重试。
@@ -257,6 +263,7 @@ func (m *Manager) destroy(ctx context.Context, id int64) error {
 		return err
 	}
 	delete(m.records, id)
+	slog.DebugContext(ctx, "monster: destroyed", "monster_id", id, "scene_entity_id", r.areaID)
 	return nil
 }
 
@@ -311,6 +318,9 @@ func (m *Manager) DrainScene(ctx context.Context, area *scene.Scene) error {
 		if r.area == area {
 			result = errors.Join(result, m.destroy(ctx, id))
 		}
+	}
+	if result == nil {
+		slog.DebugContext(ctx, "monster: scene drained", "scene_entity_id", area.ID())
 	}
 	return result
 }

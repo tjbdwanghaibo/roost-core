@@ -21,7 +21,7 @@ func (c *Controller) HandlePurchaseCollect(ctx *playeraccess.Context, request *p
 	}
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
-		slog.Warn("purchase collect incomplete", "player_id", ctx.PlayerID, "settled", len(receipts), "err", err)
+		slog.WarnContext(ctx.Context(), "purchase collect incomplete", "player_id", ctx.PlayerID, "settled", len(receipts), "err", err)
 	}
 	return response, nil
 }

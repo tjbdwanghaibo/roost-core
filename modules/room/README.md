@@ -33,6 +33,8 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 **错误码**（`internal/errors/room.go`）：`room_invalid`（参数或操作不合法）、`room_unopened`（还没初始化）、`room_closed`、`room_full`、`room_not_member`、`room_stale_epoch`（代际或连接对不上）、`room_not_host`。
 
+**日志**：玩家加入、离开、重连、关闭、断线确认记 Info；服务端开房记 Debug。加入返回房主；离开不返回新房主，不为日志追加查询。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/room/room_close.go`, `game/controllers/room/room_join.go`, `game/controllers/room/room_leave.go`, `game/controllers/room/room_reconnect.go`, `game/room/room.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：不做匹配与邀请码；没有全服房间目录；不约束“一名玩家只能在一间房里”；不广播、不装 EntitySync 订阅（成员变化要别人知道，由玩法在提交成功之后自己推）；不订阅网络关闭事件（要接入层自己调 `room.Disconnect`）；不踢人、不设掉线保留时长、不做重启后的房间清理；不分配房号。

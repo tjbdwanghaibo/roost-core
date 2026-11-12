@@ -2,6 +2,7 @@ package gm
 
 import (
 	"context"
+	"log/slog"
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -40,5 +41,6 @@ func adjustCoins(ctx context.Context, registry *app.Registry, command admin.Comm
 	if err != nil {
 		return admin.Result{}, err
 	}
+	slog.InfoContext(ctx, "wallet: GM adjustment confirmed", "player_id", unique, "trace_id", command.TraceID, "delta", payload.Delta, "balance", balance)
 	return admin.Result{Data: map[string]any{"player_id": unique, "entity_id": full, "balance": balance}}, nil
 }

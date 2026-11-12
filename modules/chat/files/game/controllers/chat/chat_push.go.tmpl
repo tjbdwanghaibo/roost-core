@@ -104,8 +104,10 @@ func (controller *Controller) AnnounceWorld(ctx context.Context, text, requestID
 		Body: []byte(text), RequestID: requestID,
 	})
 	if err != nil {
+		slog.ErrorContext(ctx, "chat: system announcement failed", "request_key", requestID, "err", err)
 		return err
 	}
+	slog.DebugContext(ctx, "chat: system announcement confirmed", "request_key", requestID, "seq", message.Seq)
 	controller.deliver(ctx, message)
 	return nil
 }

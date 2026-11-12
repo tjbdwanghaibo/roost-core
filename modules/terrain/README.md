@@ -29,6 +29,8 @@
 - **配置**：没有配置表与配置键。启动时生成一份缺省地形包（2×2 块即 128m×128m、版本 1、高度 10m 的平地、水位 0）放在临时文件里，并用它打开 **2 号**场景；scene 自带的 1 号平面场景保留。业务规则是 `game/terrain/rules.go` 里的常量：`MaxMaps = 4`、`MaxBuildings = 32`、`EditReach = 1600`、`MaxRadius = 400`、`MaxSceneID`。
 - **错误码**：无。拒绝是不带业务码的普通错误（`ErrInvalid`、`ErrDenied`、`ErrSequence`、`ErrOccupied`、`ErrBase`、`ErrFull`）。
 
+**日志**：建造 / 拆除确认记 Info，带序号、建筑号和 duplicate；开图、关闭、Refresh 记 Debug；端点异常记 Error，已知规则拒绝静默，笔刷成功不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/terrain/controller.go`, `game/terrain/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **规模上限**（写在 `rules.go` 与 `world.go`）：一个进程至多 4 张地形图；每张图至多 2×2 块；每名玩家至多 32 座站立的建筑；场景号必须在 2 到 2²⁰−1 之间，并且一个编号必须始终代表同一个编辑空间——关图、重启后不能把这个编号配给另一张地图。

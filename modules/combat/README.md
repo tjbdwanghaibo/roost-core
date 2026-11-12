@@ -36,6 +36,8 @@
   - `combat_silenced`：施法者处于沉默状态（眩晕也会派生沉默），不能施法。
   - `combat_skill`：技能被拒绝（技能号不存在、冷却中、时钟回拨、同一拍内输入变化等）。
 
+**日志**：准备 / 离开确认记 Info；combat_boundary 与未知内部失败记 Error，后台推进同样记录异常；施法、伤害和每拍成功推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/combat/runtime.go`, `game/controllers/combat/combat_cast.go`, `game/controllers/combat/combat_leave.go`, `game/controllers/combat/combat_ready.go`, `game/controllers/combat/combat_step.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**

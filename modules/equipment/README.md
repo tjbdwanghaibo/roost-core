@@ -36,6 +36,8 @@
 
 `equipment_item_invalid`（这个道具没有合法的装备规则）、`equipment_level_invalid`（等级不在 1～10000）、`equipment_slot_invalid`（槽号不在 1～32）。背包的拒绝（没有这件道具、退回时放不下）原样透出 bag 的码。
 
+**日志**：穿戴、卸下确认，记录槽位、道具和替换结果。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/equipment/equipment_equip.go`, `game/controllers/equipment/equipment_unequip.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做物品实例。** 没有独立实例、耐久、随机词条、镶嵌、套装。强化等级只属于“穿着”这个事实：卸下退回的是基础堆叠道具，等级不保留。需要实例装备的工程要扩展 `GearPiece` 的事实模型。

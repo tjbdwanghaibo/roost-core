@@ -2,6 +2,7 @@ package player
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"reflect"
 
@@ -95,6 +96,8 @@ func (c *AttributeComponent) LevelUp(levels int32) error {
 	}
 	p := c.baseAt(c.owner.ProfileComp().Level() - levels)
 	if !attributeSafe(p) || p.HP > math.MaxInt64/4-int64(levels)*10 || p.Attack > math.MaxInt64/4-int64(levels)*2 {
+		// 这是异常拒绝，不是成功事实；即使事务随后回滚也需要保留溢出诊断。
+		slog.Warn("attribute: overflow rejected", "player_id", entity.GetUniqueIDFromEntityID(c.owner.ID()), "code", apperrors.ErrAttributeOverflow.Code())
 		return apperrors.ErrAttributeOverflow
 	}
 	p.LevelUp(levels)
@@ -120,6 +123,8 @@ func (c *AttributeComponent) refresh(persist bool, base *gameattr.Combat) error 
 		return err
 	}
 	if !attributeSafe(base) || !attributeSafe(gear) || base.HP > math.MaxInt64/4-gear.HP || base.Attack > math.MaxInt64/4-gear.Attack {
+		// 这是异常拒绝，不是成功事实；即使事务随后回滚也需要保留溢出诊断。
+		slog.Warn("attribute: overflow rejected", "player_id", entity.GetUniqueIDFromEntityID(c.owner.ID()), "code", apperrors.ErrAttributeOverflow.Code())
 		return apperrors.ErrAttributeOverflow
 	}
 	// 经正式 Container.Apply 写直接属性并由生成的 profile 仅推导一次 Power；不把各层派生值相加。

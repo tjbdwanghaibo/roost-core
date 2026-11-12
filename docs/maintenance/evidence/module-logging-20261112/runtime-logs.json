@@ -1,0 +1,131 @@
+[
+  {
+    "time": "2026-11-12T19:30:35.453201+08:00",
+    "level": "INFO",
+    "msg": "portal: login completed",
+    "goId": 181,
+    "frame": 0,
+    "server_time_ms": 1794483035453,
+    "account_id": "dev:logging-smoke-1794483035444950000",
+    "channel": "dev"
+  },
+  {
+    "time": "2026-11-12T19:30:35.48898+08:00",
+    "level": "INFO",
+    "msg": "portal: enter ticket issued",
+    "goId": 166,
+    "frame": 0,
+    "server_time_ms": 1794483035488,
+    "account_id": "dev:logging-smoke-1794483035444950000",
+    "server_id": 1000,
+    "serving_server_id": 1000
+  },
+  {
+    "time": "2026-11-12T19:30:36.21927+08:00",
+    "level": "INFO",
+    "msg": "purchase: order queued",
+    "goId": 130,
+    "frame": 0,
+    "server_time_ms": 1794483036219,
+    "source": "bus_rpc",
+    "handler": "platform.HandleCallback",
+    "player_id": 100001,
+    "order_id": "demo-100001-106048e8039494693e0557234cc9e489-6",
+    "product_id": "coins_100",
+    "sequence": 1
+  },
+  {
+    "time": "2026-11-12T19:30:36.183084+08:00",
+    "level": "INFO",
+    "msg": "login: handshake authenticated",
+    "goId": 5818,
+    "frame": 594,
+    "server_time_ms": 1794483036183,
+    "player_id": 100001,
+    "server_id": 1000,
+    "method": "enter",
+    "mapping_created": true
+  },
+  {
+    "time": "2026-11-12T19:30:36.197813+08:00",
+    "level": "INFO",
+    "msg": "enter: player created",
+    "goId": 5818,
+    "frame": 595,
+    "server_time_ms": 1794483036197,
+    "player_id": 100001,
+    "name": "LoggingPlayer"
+  },
+  {
+    "time": "2026-11-12T19:30:36.2058+08:00",
+    "level": "INFO",
+    "msg": "enter: first entry confirmed",
+    "goId": 5818,
+    "frame": 595,
+    "server_time_ms": 1794483036205,
+    "player_id": 100001
+  },
+  {
+    "time": "2026-11-12T19:30:36.216115+08:00",
+    "level": "INFO",
+    "msg": "enter: player entered",
+    "goId": 5818,
+    "frame": 595,
+    "server_time_ms": 1794483036216,
+    "player_id": 100001,
+    "first": true,
+    "created": false,
+    "server_id": 1000
+  },
+  {
+    "time": "2026-11-12T19:30:36.22661+08:00",
+    "level": "INFO",
+    "msg": "purchase: grant confirmed",
+    "goId": 5818,
+    "frame": 595,
+    "server_time_ms": 1794483036226,
+    "player_id": 100001,
+    "order_id": "demo-100001-106048e8039494693e0557234cc9e489-6",
+    "sequence": 1,
+    "reward_kind": "coins",
+    "item_id": 0,
+    "count": 100,
+    "settled": false
+  },
+  {
+    "time": "2026-11-12T19:30:36.234717+08:00",
+    "level": "INFO",
+    "msg": "wallet: spend completed",
+    "goId": 5818,
+    "frame": 595,
+    "server_time_ms": 1794483036234,
+    "player_id": 100001,
+    "request_key": "logging-spend-1",
+    "amount": 7,
+    "balance": 93
+  },
+  {
+    "time": "2026-11-12T19:30:36.236128+08:00",
+    "level": "INFO",
+    "msg": "login: handshake authenticated",
+    "goId": 5832,
+    "frame": 595,
+    "server_time_ms": 1794483036236,
+    "player_id": 100001,
+    "server_id": 1000,
+    "method": "enter",
+    "mapping_created": false
+  },
+  {
+    "time": "2026-11-12T19:30:36.24793+08:00",
+    "level": "INFO",
+    "msg": "enter: player entered",
+    "goId": 5832,
+    "frame": 596,
+    "server_time_ms": 1794483036247,
+    "player_id": 100001,
+    "first": false,
+    "created": false,
+    "server_id": 1000
+  }
+]

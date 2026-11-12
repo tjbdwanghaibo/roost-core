@@ -2,6 +2,7 @@ package activity_world
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -32,12 +33,21 @@ func (s *Service) Pulse(ctx context.Context, target int64, event string, created
 	if err := s.CheckRoute(ctx, target); err != nil {
 		return nil, err
 	}
-	return syncsender.NewWorldActivityPulseSender(s.client).Sync_WorldActivityPulse(ctx, target, event, createdAt)
+	views, err := syncsender.NewWorldActivityPulseSender(s.client).Sync_WorldActivityPulse(ctx, target, event, createdAt)
+	// 空事件是周期扫描，不为每拍打印日志；明确触发只记录请求已确认。
+	if err == nil && event != "" {
+		slog.DebugContext(ctx, "activity: trigger confirmed", "owner_entity_id", target, "scope", "world", "event", event, "activities", len(views))
+	}
+	return views, err
 }
 
 func (s *Service) Complete(ctx context.Context, target int64, token activity.Token) error {
 	if err := s.CheckRoute(ctx, target); err != nil {
 		return err
 	}
-	return syncsender.NewWorldActivityCompleteSender(s.client).Sync_WorldActivityComplete(ctx, target, token)
+	err := syncsender.NewWorldActivityCompleteSender(s.client).Sync_WorldActivityComplete(ctx, target, token)
+	if err == nil {
+		slog.DebugContext(ctx, "activity: completion confirmed", "owner_entity_id", target, "scope", token.Scope, "definition", token.Definition, "generation", token.Generation, "cycle", token.Cycle, "phase", token.Phase, "flow_version", token.FlowVersion)
+	}
+	return err
 }

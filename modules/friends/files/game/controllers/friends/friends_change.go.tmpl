@@ -5,6 +5,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"log/slog"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
@@ -35,6 +36,11 @@ func (c *Controller) HandleFriendsChange(ctx *playeraccess.Context, req *pb.Frie
 	out := &pb.FriendsChangeResponse{}
 	if err != nil {
 		out.Code, out.Reason = errcode.ClientError(err)
+		if out.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "friends: change failed", "player_id", ctx.PlayerID, "peer_id", req.PeerID, "err", err)
+		}
+	} else {
+		slog.InfoContext(ctx.Context(), "friends: change completed", "player_id", ctx.PlayerID, "peer_id", req.PeerID, "action", req.Action)
 	}
 	return out, nil
 }

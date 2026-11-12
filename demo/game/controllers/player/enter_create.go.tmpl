@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	gameenter "{{MODULE}}/game/enter"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // EnterCreate 是 demo 这一侧的新建请求，由 enter 域的端点调用（game/controllers/enter/enter_create.go；协议与
@@ -57,7 +57,11 @@ func (controller *Controller) EnterCreate(context *playeraccess.Context, request
 			if err != nil {
 				return err
 			}
-			return syncsender.NewEnterCreateSender(controller.NestClient()).Sync_EnterCreate(ctx, entityID, name)
+			err = syncsender.NewEnterCreateSender(controller.NestClient()).Sync_EnterCreate(ctx, entityID, name)
+			if err == nil {
+				slog.InfoContext(ctx, "enter: player created", "player_id", context.PlayerID, "name", name)
+			}
+			return err
 		},
 	})
 	if err != nil {

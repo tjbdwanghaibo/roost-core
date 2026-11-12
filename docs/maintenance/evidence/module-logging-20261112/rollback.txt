@@ -1,0 +1,4 @@
+=== RUN   TestLoggingWalletCommitBoundary
+--- PASS: TestLoggingWalletCommitBoundary (0.03s)
+PASS
+ok  	example.com/logging/batch2/game/handler	1.718s

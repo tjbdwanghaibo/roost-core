@@ -153,6 +153,9 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 		}
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
+	if entered.First {
+		slog.InfoContext(context.Context(), "enter: first entry confirmed", "player_id", context.PlayerID)
+	}
 	if err := syncsender.NewRecordEnterSender(controller.NestClient()).Sync_RecordEnter(context.Context(), controller.WorldID()); err != nil {
 		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
 	}
@@ -211,6 +214,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	if err := controller.Chat().AnnounceWorld(context.Context(), fmt.Sprintf("player %d entered the world", context.PlayerID), requestID); err != nil {
 		slog.Warn("enter_game: login not announced on the world channel", "player_id", context.PlayerID, "err", err)
 	}
+	slog.InfoContext(context.Context(), "enter: player entered", "player_id", context.PlayerID, "first", entered.First, "created", created, "server_id", boundSID)
 	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created, First: entered.First}, nil
 }
 

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -137,6 +138,8 @@ func (authenticator Authenticator) Authenticate(ctx context.Context, ticket stri
 		return gateway.Principal{}, fmt.Errorf("%w: account returned role %d on server %d (serving %d) for player %d",
 			gateway.ErrUnauthenticated, role.PlayerID, role.ServerID, role.ServingServerID, playerID)
 	}
+	// 只写校验后的身份；票据、令牌与完整 Claims 都不能进入日志。
+	slog.InfoContext(ctx, "login: handshake authenticated", "player_id", role.PlayerID, "server_id", role.ServingServerID, "method", "session", "mapping_created", false)
 	return gateway.Principal{
 		PlayerID:  role.PlayerID,
 		ServerID:  role.ServingServerID,
@@ -177,6 +180,7 @@ func (authenticator Authenticator) authenticateEnter(ctx context.Context, handsh
 	if entry.Created {
 		claims[svcaccount.NewRoleClaim] = "1"
 	}
+	slog.InfoContext(ctx, "login: handshake authenticated", "player_id", role.PlayerID, "server_id", role.ServingServerID, "method", "enter", "mapping_created", entry.Created)
 	return gateway.Principal{
 		PlayerID:  role.PlayerID,
 		ServerID:  role.ServingServerID,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
@@ -292,6 +293,9 @@ func (s *Service) Apply(ctx context.Context, requestID string, callerID int64, c
 			return err
 		})
 	}
+	if err == nil && answer.Err() == nil {
+		slog.InfoContext(ctx, "alliance: apply confirmed", "player_id", callerID, "request_key", requestID, "alliance_id", answer.View.AllianceID, "version", answer.View.Version, "replayed", answer.Replayed)
+	}
 	return s.reply(answer, err)
 }
 
@@ -304,6 +308,9 @@ func (s *Service) Reject(ctx context.Context, requestID string, callerID int64, 
 			answer, err = syncsender.NewAllianceRejectSender(s.deps.Nest).Sync_AllianceReject(ctx, target, requestID, callerID, applicantID, s.retention())
 			return err
 		})
+	}
+	if err == nil && answer.Err() == nil {
+		slog.InfoContext(ctx, "alliance: reject confirmed", "player_id", callerID, "request_key", requestID, "alliance_id", answer.View.AllianceID, "version", answer.View.Version, "replayed", answer.Replayed, "applicant_id", applicantID)
 	}
 	return s.reply(answer, err)
 }
@@ -318,6 +325,9 @@ func (s *Service) Transfer(ctx context.Context, requestID string, callerID int64
 			return err
 		})
 	}
+	if err == nil && answer.Err() == nil {
+		slog.InfoContext(ctx, "alliance: transfer confirmed", "player_id", callerID, "request_key", requestID, "alliance_id", answer.View.AllianceID, "version", answer.View.Version, "replayed", answer.Replayed, "new_leader_id", newLeaderID)
+	}
 	return s.reply(answer, err)
 }
 
@@ -330,6 +340,9 @@ func (s *Service) Donate(ctx context.Context, requestID string, callerID int64, 
 			answer, err = syncsender.NewAllianceDonateSender(s.deps.Nest).Sync_AllianceDonate(ctx, target, requestID, callerID, amount, s.retention())
 			return err
 		})
+	}
+	if err == nil && answer.Err() == nil {
+		slog.InfoContext(ctx, "alliance: donate confirmed", "player_id", callerID, "request_key", requestID, "alliance_id", answer.View.AllianceID, "version", answer.View.Version, "replayed", answer.Replayed, "amount", amount)
 	}
 	return s.reply(answer, err)
 }

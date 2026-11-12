@@ -1,6 +1,8 @@
 package task
 
 import (
+	"log/slog"
+
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -10,5 +12,10 @@ import (
 //
 //roost:endpoint nest=TaskClaim
 func (controller *Controller) HandleTaskClaim(ctx *playeraccess.Context, req *pb.TaskClaimRequest) (*pb.TaskClaimResponse, error) {
-	return controller.dispatchTaskClaim(ctx, req)
+	response, err := controller.dispatchTaskClaim(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "task: claim completed", "player_id", ctx.PlayerID, "task_id", response.TaskID, "reward_kind", response.RewardKind, "reward_id", response.RewardID, "reward", response.Reward, "balance", response.Balance)
+	}
+	return response, err
 }

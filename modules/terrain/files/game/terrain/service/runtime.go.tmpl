@@ -176,6 +176,7 @@ func (r *Runtime) Open(ctx context.Context, id int64, path string) (*logic.World
 	}
 
 	success = true
+	slog.DebugContext(ctx, "terrain: opened", "scene_id", id, "chunks", len(states), "buildings", len(restored), "projection_pending", world.Failures() != 0)
 	return world, nil
 }
 
@@ -340,7 +341,11 @@ func (r *Runtime) Stop(ctx context.Context) error {
 			result = errors.Join(result, err)
 			continue
 		}
-		result = errors.Join(result, world.Pack.Close())
+		closeErr := world.Pack.Close()
+		if closeErr == nil {
+			slog.DebugContext(ctx, "terrain: closed", "scene_id", id)
+		}
+		result = errors.Join(result, closeErr)
 		delete(r.worlds, id)
 		delete(r.areas, id)
 	}
@@ -415,5 +420,6 @@ func (r *Runtime) Refresh(ctx context.Context, id int64) error {
 		}
 	}
 	world.Recovered(generation)
+	slog.DebugContext(ctx, "terrain: refresh completed", "scene_id", id, "chunks", len(states), "projection_pending", world.Failures() != 0)
 	return nil
 }

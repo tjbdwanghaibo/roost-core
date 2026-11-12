@@ -47,6 +47,8 @@
   - `alliance_request_invalid`（`internal/rpc/alliance/alliance.go` 的 `ErrRequestInvalid`）：RPC 请求无法解码、缺请求号或目标种类不对。
   - 背包不足时直接返回 `bag` 模块的 `bag_short`。
 
+**日志**：建盟、申请 / 审批 / 入盟 / 退盟 / 踢人、转让、捐赠、领奖、宣战确认，以及实际成员变更；记录业务键、玩家、联盟、数量、版本或重放标记。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `internal/rpc/alliance/guard.go`, `internal/rpc/alliance/membership.go`, `internal/rpc/alliance/service.go`, `internal/rpc/alliance/war.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **客户端协议只覆盖一部分操作**：申请 / 批准 / 拒绝、踢人、转让盟主、宣战在联盟服务里已经实现为 RPC，但**没有客户端协议与 game 端点**。只装本模块时，玩家只能建盟、加入开放联盟、退出、捐赠、领奖、查看；不开放加入的联盟没有玩家可用的入盟途径，盟主也无法转让（因而无法退出）。这些端点要工程照现有的 `HandleJoinAlliance` 自己加。

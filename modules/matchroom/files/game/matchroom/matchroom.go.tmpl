@@ -5,20 +5,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 
-	"{{MODULE}}/game/lifecycle"
 	db "{{MODULE}}/db"
 	roomentity "{{MODULE}}/game/entities/room"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	"go.mongodb.org/mongo-driver/v2/bson"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // Binding 保存的是移交身份，不依赖 match 服务短期历史，也不以推送成功当作开房事实。
@@ -121,10 +122,12 @@ func (r *Rooms) Open(ctx context.Context, matchID string, members []int64) (int6
 		return 0, err
 	}
 	if binding.MatchID != matchID || binding.SID != r.sid || binding.RoomID <= 0 || uint64(binding.RoomID) >= entity.StaticUniqueIDBase || !slices.Equal(binding.Members, ids) {
+		slog.WarnContext(ctx, "matchroom: conflicting handoff", "match_id", matchID, "room_id", binding.RoomID, "sid", r.sid)
 		return 0, fmt.Errorf("matchroom: conflicting handoff")
 	}
 	if err := r.open(ctx, binding); err != nil {
 		return 0, err
 	}
+	slog.DebugContext(ctx, "matchroom: handoff confirmed", "match_id", matchID, "room_id", binding.RoomID, "members", ids, "sid", r.sid)
 	return binding.RoomID, nil
 }

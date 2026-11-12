@@ -6,6 +6,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"log/slog"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
@@ -43,5 +44,9 @@ func (c *Controller) HandleSceneChange(ctx *playeraccess.Context, request *pb.Sc
 	if err != nil {
 		return nil, err
 	}
-	return sender.NewSceneChangeSender(c.client).MultiGroupSync_SceneChange(ctx.Context(), id, ids, target)
+	result, err := sender.NewSceneChangeSender(c.client).MultiGroupSync_SceneChange(ctx.Context(), id, ids, target)
+	if err == nil && result != nil && result.Code == 0 {
+		slog.InfoContext(ctx.Context(), "scene: change confirmed", "player_id", ctx.PlayerID, "from_scene", request.FromID, "to_scene", request.ToID)
+	}
+	return result, err
 }

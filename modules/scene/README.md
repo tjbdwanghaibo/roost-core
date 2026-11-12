@@ -38,6 +38,8 @@
 - **配置**：没有配置表与配置键。启动时自动打开 1 号场景，用 `DefaultConfig()`：模板 `plain`、分线 1、范围 [0,1000)×[0,1000)、出生点 (50,50)、块大小 32、视距 64、容量 1000。别的图由工程在服务端代码里调 `Open`。
 - **错误码**：无。拒绝是不带业务码的普通错误（文本如 `scene: full`、`scene: stale membership`、`scene: closed`）。
 
+**日志**：玩家切图、撤离确认记 Info；开图、关闭、排空准入记 Debug。时间倍率只提供 handler / Sender，日志由外部调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/scene/controller.go`, `game/scene/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **只管本进程**：Scene 是进程内的实体，成员、视野、时间域都是进程内权威。不做跨 game 进程切图、全服同图成员、分布式容量；跨服迁移要另做所有权交接。进程重启后场景要用同样的配置重新 `Open`，在线成员与时间域不恢复。
