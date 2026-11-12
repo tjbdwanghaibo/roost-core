@@ -1,0 +1,464 @@
+package activity
+
+import (
+	"fmt"
+	"math"
+	"slices"
+
+	"{{MODULE}}/db"
+)
+
+// Activate 由可信业务入口调用。created 的 factTime 必须是已持久化的创建事实；
+// event 的条件回调读取当前 Owner，不能把客户端参数当条件。相同定义首次激活后不重置锚点。
+func (h Host) Activate(d Definition, event string, factTime, now int64) (Snapshot, error) {
+	if h.Owner == nil || h.Book == nil || d.Scope != h.Scope || now <= 0 || now >= maxMillis {
+		return Snapshot{}, ErrRule
+	}
+	if record, ok := h.Book.GetRecords(d.ID); ok {
+		rule, err := decode(record.GetRule())
+		if err != nil {
+			return Snapshot{}, err
+		}
+		return h.snapshot(d.ID, record, rule), nil
+	}
+	return h.activate(d, event, factTime, now, 1)
+}
+
+func (h Host) activate(d Definition, event string, factTime, now, generation int64) (Snapshot, error) {
+	rule, raw, err := freeze(d)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	hooks, err := hooksFor(d.Logic)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if d.Trigger == "event" && (event != d.Event || hooks.Eligible == nil) {
+		return Snapshot{}, ErrDenied
+	}
+	if hooks.Eligible != nil && !hooks.Eligible(h.Owner, event) {
+		return Snapshot{}, ErrDenied
+	}
+	anchor := d.StartMilli
+	if d.Trigger != "fixed" {
+		if factTime <= 0 || factTime > now || factTime >= maxMillis-d.DelayMillis {
+			return Snapshot{}, ErrRule
+		}
+		anchor = factTime + d.DelayMillis
+		// 相对解锁的日历活动从下一个业务日界开期；已经落在日界则使用当天。
+		// 不把上午解锁的“每日”偷偷解释成每隔固定 24 小时。
+		if d.Repeat == "daily" || d.Repeat == "weekly" {
+			anchor, err = rule.calendarAnchor(anchor)
+			if err != nil {
+				return Snapshot{}, err
+			}
+		}
+	}
+	start, open, close, err := rule.window(anchor, 1)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	r := &db.ActivityRecord{}
+	r.SetRule(raw)
+	r.SetGeneration(generation)
+	r.SetAnchor(anchor)
+	r.SetCycle(1)
+	r.SetPhase(int32(Initializing))
+	r.SetStart(start)
+	r.SetOpenAt(open)
+	r.SetCloseAt(close)
+	h.Book.SetRecordsKey(d.ID, r)
+	return h.snapshot(d.ID, r, rule), nil
+}
+
+// Reopen 只允许已彻底结束的序列；新代际必须是 old+1。重复的新代际请求返回已有实例。
+// 活动定义变更不会自动重开，运营入口必须显式调用本方法。
+func (h Host) Reopen(d Definition, event string, factTime, now, nextGeneration int64) (Snapshot, error) {
+	old, ok := h.Book.GetRecords(d.ID)
+	if !ok || d.Scope != h.Scope || now <= 0 || now >= maxMillis {
+		return Snapshot{}, ErrStale
+	}
+	rule, err := decode(old.GetRule())
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if nextGeneration == old.GetGeneration() {
+		return h.snapshot(d.ID, old, rule), nil
+	}
+	_, more, err := rule.next(old.GetAnchor(), old.GetCycle())
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if old.GetGeneration() == math.MaxInt64 || nextGeneration != old.GetGeneration()+1 || Phase(old.GetPhase()) != Ended || !old.GetEntered() || more {
+		return Snapshot{}, ErrStale
+	}
+	return h.activate(d, event, factTime, now, nextGeneration)
+}
+
+// Reconcile 首次加载、进入和业务操作使用同一入口。fixed 自动激活；created 只在调用方
+// 有持久创建事实时激活。event 只响应同一实体事务中的可信事件，不通过客户端查询触发。
+func (h Host) Reconcile(definitions []Definition, event string, createdAt, now int64) error {
+	for _, d := range definitions {
+		if d.Disabled || d.Scope != h.Scope {
+			continue
+		}
+		if d.Trigger == "event" && d.Event != event || d.Trigger == "created" && createdAt == 0 {
+			continue
+		}
+		fact := createdAt
+		if d.Trigger == "event" {
+			fact = now
+		}
+		if _, err := h.Activate(d, event, fact, now); err != nil {
+			if err == ErrDenied {
+				continue
+			}
+			return err
+		}
+	}
+	return h.Advance(now)
+}
+
+// Advance 每个宿主每次至多处理 32 次阶段/流程动作；按定义轮转。
+// queue 不丢结算；skip_empty 只能由零业务钩子的活动显式选择。不会追放玩法 tick。
+func (h Host) Advance(now int64) error {
+	if now <= 0 || now >= maxMillis {
+		return ErrRule
+	}
+	var ids []int32
+	h.Book.RangeRecords(func(id int32, _ *db.ActivityRecord) bool { ids = append(ids, id); return true })
+	slices.Sort(ids)
+	if len(ids) > MaxDefinitions {
+		return ErrRule
+	}
+	cursor := h.Book.GetCursor()
+	start := 0
+	for start < len(ids) && ids[start] <= cursor {
+		start++
+	}
+	budget := AdvanceBudget
+	for offset := 0; offset < len(ids); offset++ {
+		id := ids[(start+offset)%len(ids)]
+		r, _ := h.Book.GetRecords(id)
+		rule, err := decode(r.GetRule())
+		if err != nil {
+			return err
+		}
+		if rule.ID != id || rule.Scope != h.Scope {
+			return ErrRule
+		}
+		hooks, err := hooksFor(rule.Logic)
+		if err != nil {
+			return err
+		}
+		effective := max(now, r.GetLastNow()) // 时钟回拨不重开已关闭阶段，也不延长业务期限。
+		for budget > 0 {
+			changed, err := h.step(id, r, rule, hooks, effective)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				break
+			}
+			r.SetLastNow(effective)
+			budget--
+		}
+		h.Book.SetCursor(id)
+		if budget == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+func (h Host) step(id int32, r *db.ActivityRecord, rule frozenRule, hooks Hooks, now int64) (bool, error) {
+	if now < r.GetStart() {
+		return false, nil
+	}
+	phase := Phase(r.GetPhase())
+	if !r.GetEntered() {
+		pending := false
+		if hooks.Enter != nil {
+			var err error
+			pending, err = hooks.Enter(Context{h.Owner, h.snapshot(id, r, rule), now})
+			if err != nil {
+				return false, fmt.Errorf("activity %d cycle %d phase %d: %w", id, r.GetCycle(), phase, err)
+			}
+		}
+		if pending && phase != Initializing && phase != Settling {
+			return false, fmt.Errorf("%w: pending only allowed in initialization or settlement", ErrRule)
+		}
+		r.SetEntered(true)
+		r.SetPending(pending)
+		if phase == Ended {
+			r.SetCompletedThrough(r.GetCycle())
+		}
+		return true, nil
+	}
+	if r.GetPending() {
+		return false, nil
+	}
+	switch phase {
+	case Initializing:
+		h.changePhase(r, Warmup)
+	case Warmup:
+		if now >= r.GetOpenAt() {
+			h.changePhase(r, Open)
+		} else {
+			return h.fireFlow(id, r, rule, hooks, now)
+		}
+	case Open:
+		if now >= r.GetCloseAt() {
+			h.changePhase(r, Settling)
+		} else {
+			return h.fireFlow(id, r, rule, hooks, now)
+		}
+	case Settling:
+		h.changePhase(r, Ended)
+	case Ended:
+		next, more, err := rule.next(r.GetAnchor(), r.GetCycle())
+		if err != nil {
+			return false, err
+		}
+		if !more || now < next {
+			return false, nil
+		}
+		cycle := r.GetCycle() + 1
+		// 无业务纯展示循环可跳过完整过期的周期；二分查找避免离线多年时逐期循环。
+		if rule.Catchup == "skip_empty" {
+			cycle, err = rule.visibleCycle(r.GetAnchor(), cycle, now)
+			if err != nil {
+				return false, err
+			}
+		}
+		start, open, close, err := rule.window(r.GetAnchor(), cycle)
+		if err != nil {
+			return false, err
+		}
+		if cycle > r.GetCycle()+1 {
+			r.SetCompletedThrough(cycle - 1)
+		}
+		r.SetCycle(cycle)
+		r.SetStart(start)
+		r.SetOpenAt(open)
+		r.SetCloseAt(close)
+		h.changePhase(r, Initializing)
+	default:
+		return false, ErrRule
+	}
+	return true, nil
+}
+
+func (h Host) changePhase(r *db.ActivityRecord, phase Phase) {
+	r.SetPhase(int32(phase))
+	r.SetEntered(false)
+	r.SetPending(false)
+	r.SetFlow("")
+	r.SetFlowDue(0)
+	r.SetFlowVersion(0)
+}
+
+func (r frozenRule) visibleCycle(anchor, minimum, now int64) (int64, error) {
+	// 查找开始时间不晚于 now 的最后一期，最多 63 次；上界由输入时间范围限制。
+	low, high := minimum, int64(366001)
+	if r.Repeat == "interval" {
+		high = (maxMillis-anchor)/r.Period + 1
+	}
+	if r.MaxCycles > 0 {
+		high = min(high, r.MaxCycles)
+	}
+	for low < high {
+		mid := low + (high-low+1)/2
+		start, err := r.start(anchor, mid)
+		if err != nil || start > now || r.UntilMilli != 0 && start+r.WarmupMillis >= r.UntilMilli {
+			high = mid - 1
+		} else {
+			low = mid
+		}
+	}
+	return low, nil
+}
+
+func (h Host) fireFlow(id int32, r *db.ActivityRecord, rule frozenRule, hooks Hooks, now int64) (bool, error) {
+	if r.GetFlowDue() == 0 || now < r.GetFlowDue() {
+		return false, nil
+	}
+	if hooks.Flow == nil {
+		return false, fmt.Errorf("%w: flow deadline without a flow hook", ErrRule)
+	}
+	next, err := hooks.Flow(Context{h.Owner, h.snapshot(id, r, rule), now})
+	if err != nil {
+		return false, err
+	}
+	if err = h.setFlow(r, next, now); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (h Host) match(token Token) (*db.ActivityRecord, frozenRule, error) {
+	r, ok := h.Book.GetRecords(token.Definition)
+	if !ok {
+		return nil, frozenRule{}, ErrStale
+	}
+	if h.token(token.Definition, r) != token {
+		return nil, frozenRule{}, ErrStale
+	}
+	rule, err := decode(r.GetRule())
+	return r, rule, err
+}
+
+func (h Host) Complete(token Token, now int64) error {
+	r, _, err := h.match(token)
+	if err != nil {
+		return err
+	}
+	if !r.GetEntered() || !r.GetPending() || (token.Phase != Initializing && token.Phase != Settling) {
+		return ErrStale
+	}
+	r.SetPending(false)
+	return h.Advance(now)
+}
+
+// CheckOpen 是业务修改前的准入检查，即使定时消息还在排队也不会接受过期行为。
+func (h Host) CheckOpen(token Token, now int64) error {
+	r, _, err := h.match(token)
+	if err != nil {
+		return err
+	}
+	now = max(now, r.GetLastNow())
+	if token.Phase != Open || !r.GetEntered() || now < r.GetOpenAt() || now >= r.GetCloseAt() {
+		return ErrClosed
+	}
+	return nil
+}
+
+// MoveFlow 用于报名、分组、比赛等自定义流程；Warmup/Open 之外禁止改流程。
+func (h Host) MoveFlow(token Token, next Flow, now int64) error {
+	r, _, err := h.match(token)
+	if err != nil {
+		return err
+	}
+	now = max(now, r.GetLastNow())
+	if !r.GetEntered() || token.Phase != Warmup && token.Phase != Open {
+		return ErrClosed
+	}
+	end := r.GetOpenAt()
+	if token.Phase == Open {
+		end = r.GetCloseAt()
+	}
+	if now >= end {
+		return ErrClosed
+	}
+	return h.setFlow(r, next, now)
+}
+
+func (h Host) setFlow(r *db.ActivityRecord, next Flow, now int64) error {
+	end := r.GetOpenAt()
+	if Phase(r.GetPhase()) == Open {
+		end = r.GetCloseAt()
+	}
+	if len(next.Name) > 64 || next.Due != 0 && (next.Due <= now || next.Due >= end) || r.GetFlowVersion() == math.MaxInt64 {
+		return ErrRule
+	}
+	r.SetFlow(next.Name)
+	r.SetFlowDue(next.Due)
+	r.SetFlowVersion(r.GetFlowVersion() + 1)
+	return nil
+}
+
+func (h Host) Views() ([]Snapshot, error) {
+	var values []Snapshot
+	var failure error
+	h.Book.RangeRecords(func(id int32, r *db.ActivityRecord) bool {
+		rule, err := decode(r.GetRule())
+		if err != nil {
+			failure = err
+			return false
+		}
+		values = append(values, h.snapshot(id, r, rule))
+		return true
+	})
+	slices.SortFunc(values, func(a, b Snapshot) int { return int(a.Token.Definition - b.Token.Definition) })
+	return values, failure
+}
+
+// NextDeadline 返回唯一宿主定时器应唤醒的时刻；没有到期任务则返回 0。
+// pending 的异步工作等可靠完成入口，不做忙轮询。有界恢复的剩余工作延后 1 秒继续。
+func (h Host) NextDeadline(now int64) (int64, error) {
+	var earliest int64
+	var failure error
+	h.Book.RangeRecords(func(_ int32, r *db.ActivityRecord) bool {
+		rule, err := decode(r.GetRule())
+		if err != nil {
+			failure = err
+			return false
+		}
+		var due int64
+		if !r.GetEntered() {
+			due = r.GetStart()
+		} else if !r.GetPending() {
+			switch Phase(r.GetPhase()) {
+			case Initializing, Settling:
+				due = now
+			case Warmup:
+				due = r.GetOpenAt()
+			case Open:
+				due = r.GetCloseAt()
+			case Ended:
+				var more bool
+				due, more, err = rule.next(r.GetAnchor(), r.GetCycle())
+				if err != nil {
+					failure = err
+					return false
+				}
+				if !more {
+					due = 0
+				}
+			default:
+				failure = ErrRule
+				return false
+			}
+			if flow := r.GetFlowDue(); flow != 0 && (due == 0 || flow < due) {
+				due = flow
+			}
+		}
+		if due != 0 {
+			if due <= now {
+				due = now + 1000
+			}
+			if earliest == 0 || due < earliest {
+				earliest = due
+			}
+		}
+		return true
+	})
+	return earliest, failure
+}
+
+// JoinShared 只记参加资格，不创建个人活动、不改变共享时间线。
+// shared 必须来自服务端已授权查询；业务在实际贡献/领奖时仍要向权威宿主校验期次和资格。
+func (h Host) JoinShared(shared Snapshot, now int64) error {
+	t := shared.Token
+	if h.Scope != "player" || (t.Scope != "world" && t.Scope != "alliance") || t.Owner <= 0 || t.Definition < 1 || t.Definition > MaxDefinitions || t.Generation <= 0 || t.Cycle <= 0 || t.Phase != Open || now < shared.OpenAt || now >= shared.CloseAt {
+		return ErrClosed
+	}
+	key := fmt.Sprintf("%s/%d/%d", t.Scope, t.Owner, t.Definition)
+	record, exists := h.Book.GetParticipation(key)
+	if exists {
+		if t.Generation < record.GetGeneration() || t.Generation == record.GetGeneration() && t.Cycle < record.GetCycle() {
+			return ErrStale
+		}
+	} else {
+		if h.Book.ParticipationLen() >= MaxDefinitions {
+			return ErrCapacity
+		}
+		record = &db.ActivityParticipation{}
+	}
+	record.SetGeneration(t.Generation)
+	record.SetCycle(t.Cycle)
+	if !exists {
+		h.Book.SetParticipationKey(key, record)
+	}
+	return nil
+}

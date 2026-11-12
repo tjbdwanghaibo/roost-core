@@ -1,0 +1,35 @@
+package dbdef
+
+// ActivityBook 属于宿主实体。定义 ID 只用 1..128，退役后保留终态水位，不回收 ID。
+// Cursor 让恢复预算在定义间轮转；TimerID 对应整个宿主的唯一活动定时器。
+type ActivityBook struct {
+	Records map[int32]*ActivityRecord `store:"1"`
+	TimerID int64                     `store:"2"`
+	NextDue int64                     `store:"5"` // Remote 宿主恢复驱动读取的持久期限。
+	Cursor  int32                     `store:"3"`
+	// Participation 与个人实例分开；最多 128 个资格，旧资格只允许被更新代际替换。
+	Participation map[string]*ActivityParticipation `store:"4"`
+}
+
+type ActivityRecord struct {
+	Rule             string `store:"1"` // 激活时冻结的配置，不跟随热更；JSON 仅是服务器内部配置快照。
+	Generation       int64  `store:"2"`
+	Anchor           int64  `store:"3"`
+	Cycle            int64  `store:"4"`
+	Phase            int32  `store:"5"`
+	Entered          bool   `store:"6"`
+	Pending          bool   `store:"7"`
+	Flow             string `store:"8"`
+	FlowVersion      int64  `store:"9"`
+	FlowDue          int64  `store:"10"`
+	LastNow          int64  `store:"11"`
+	CompletedThrough int64  `store:"12"`
+	Start            int64  `store:"13"`
+	OpenAt           int64  `store:"14"`
+	CloseAt          int64  `store:"15"`
+}
+
+type ActivityParticipation struct {
+	Generation int64 `store:"1"`
+	Cycle      int64 `store:"2"`
+}

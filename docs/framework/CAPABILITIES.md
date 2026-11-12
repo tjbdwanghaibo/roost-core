@@ -230,6 +230,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/skills/*.json` 与 `game/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
+| 活动生命周期 | 共用活动状态与阶段引擎，个人/全服/联盟 Entity 适配；五阶段、循环、解锁与自定义流程 | `roost module add activity`；共享宿主另装 `activity_world` / `activity_alliance` | 现成模块；空配置无活动；个人持久定时器，Remote 权威服务有界扫描；真实恢复待最终批次 | [activity](../../modules/activity/README.md) |
 | 联盟 alliance | 独立服务独占联盟与成员守卫；路由 RPC、Mirror、跨域 Saga 与换服惰性校正 | `roost module add alliance` | 现成模块；普通联盟操作不用 Saga，真实跨进程与存储验收待最终批次 | [alliance](../../modules/alliance/README.md) |
 | 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`；六个 PB 端点，安装时代办 Remote | 现成模块；邀请有界，解散后成员引用惰性核对。matchmaking 可组合，demo 通过登记点保留分区队伍视野；真实跨进程验收待补 | [team](../../modules/team/README.md) |
 | 本服匹配与房间移交 | 单人/整队，取消与补查，固定名单房间 | `roost module add matchmaking`，自动安装 matchroom / team / room | 默认两支同人数队伍；历史消失时保留屏障；跨服房间不在本轮 | [matchmaking](../../modules/matchmaking/README.md) |
@@ -366,7 +367,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 全服邮件、补偿邮件 | mail 服务的广播邮件；GM 命令发单人补偿 | game-demo“邮件”“GM 运维面” |
 | 聊天 | 现成模块 chat（`roost module add chat`）：世界与私聊；群组频道需手写 | 模块 chat；game-demo“聊天”（用的就是它） |
 | 公会、联盟跨进程 / 跨服 | Remote 托管实体 + 路由 RPC + Mirror + Saga | alliance 模块与 game-demo“公会 = alliance 服务”；SLG 夹具的联盟活动联合链路 |
-| 定时活动、跨服活动 | activity 服务 + 实体持久定时器（准点动作）；活动规则需手写业务 | SLG 夹具的联盟活动 |
+| 定时活动、跨服活动 | activity 模块共用阶段引擎；个人定时器、Remote 权威扫描；跨服汇聚可接 service/activity | activity / activity_world / activity_alliance；具体业务条件与奖励由工程定义 |
 | 登录、账号、选角 | account 服务 + 现成模块 login（`roost module add login`：握手校验会话令牌、开发令牌登录）；渠道验签与客户端登录入口需手写 | 模块 login；game-demo“登录与凭据” |
 | 角色名、公会名全服唯一 | directory 服务的两阶段占名；敏感词需手写业务 | [Service §4](guide/09-services.md#4-关键业务边界) |
 | 支付回调 | 业务 HTTP 路由 + platform 服务（回调换恰好一次发货）；渠道验签需手写 | 合成休闲夹具的签名广告回调（模拟） |

@@ -61,9 +61,13 @@ func planModuleTimer(root string, manifest Manifest, service string, spec Module
 				if err != nil {
 					return nil, err
 				}
-				dao, err = timerHostDao(name, host)
-				if err != nil {
-					return nil, err
+				// 首个有状态模块会在前置骨架阶段补主 DAO。计划阶段只确认该明确的
+				// 缺项，不吞掉多 DAO 歧义、非持久或 Remote 宿主的错误。
+				if len(host.Daos) != 0 || len(spec.State) == 0 {
+					dao, err = timerHostDao(name, host)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 			timer = TimerSpec{Component: timerDefaultComponent, ID: id, Service: service, Dao: dao}

@@ -1,0 +1,20 @@
+package activity
+
+import (
+	"fmt"
+
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// Board 隔离定义/宿主/激活代际，Season 使用期次；全服共用一张，不按玩家复制。
+// 业务从服务端 Token 构造榜，在 Open 准入成功的持久事实之外提交分数；
+// 结算要先停贡献并冻结榜单/奖单，再进入可重试的外部发奖，不能边发边读可变 Top。
+func Board(token Token) (svcrank.Board, error) {
+	if token.Definition < 1 || token.Definition > MaxDefinitions || token.Owner <= 0 || token.Generation <= 0 || token.Cycle <= 0 {
+		return svcrank.Board{}, ErrRule
+	}
+	if token.Scope != "world" && token.Scope != "alliance" && token.Scope != "player" {
+		return svcrank.Board{}, ErrRule
+	}
+	return svcrank.Board{ID: fmt.Sprintf("activity.%s.%d.%d.%d", token.Scope, token.Owner, token.Definition, token.Generation), Scope: svcrank.ScopeGlobal, Season: token.Cycle}, nil
+}

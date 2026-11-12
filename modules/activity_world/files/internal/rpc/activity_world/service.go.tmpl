@@ -1,0 +1,43 @@
+package activity_world
+
+import (
+	"context"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+
+	"{{MODULE}}/game/activity"
+	host "{{MODULE}}/game/entities/activity_world"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+type Service struct {
+	client nest.Client
+	owners entity.RemoteOwnershipManager
+	sid    int32
+}
+
+func New() *Service { return &Service{} }
+
+func (s *Service) CheckRoute(ctx context.Context, target int64) error {
+	if entity.GetEntityKindFromID(target) != host.EntityKindActivityWorld {
+		return activity.ErrRule
+	}
+	return remoteentity.RPCRouteCheck(ctx, s.owners, s.sid, target)
+}
+
+func (s *Service) Pulse(ctx context.Context, target int64, event string, createdAt int64) ([]activity.Snapshot, error) {
+	// 直接调用与总线调用同样检查路由，防止恢复扫描拿到的旧属主快照越权。
+	if err := s.CheckRoute(ctx, target); err != nil {
+		return nil, err
+	}
+	return syncsender.NewWorldActivityPulseSender(s.client).Sync_WorldActivityPulse(ctx, target, event, createdAt)
+}
+
+func (s *Service) Complete(ctx context.Context, target int64, token activity.Token) error {
+	if err := s.CheckRoute(ctx, target); err != nil {
+		return err
+	}
+	return syncsender.NewWorldActivityCompleteSender(s.client).Sync_WorldActivityComplete(ctx, target, token)
+}

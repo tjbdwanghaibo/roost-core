@@ -1,0 +1,29 @@
+package handler
+
+import (
+	"testing"
+
+	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/entities/player"
+)
+
+func TestWithActivityEnterKeepsCreationAnchorOnReconnect(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.Trigger = "created"
+	d.StartMilli = 0
+	activityRows(t, d)
+	enter := func(p *player.Player) error { _, err := p.EnterComp().Init(f.now.Load()); return err }
+	if err := f.call(0, enter); err != nil {
+		t.Fatal(err)
+	}
+	before := f.view(t, 0)
+	f.now.Add(500)
+	if err := f.call(0, enter); err != nil {
+		t.Fatal(err)
+	}
+	f.do(t, 0, func(h activity.Host) error { return h.Advance(f.now.Load()) })
+	if after := f.view(t, 0); after.Start != before.Start || after.Token.Generation != before.Token.Generation {
+		t.Fatal(before, after)
+	}
+}

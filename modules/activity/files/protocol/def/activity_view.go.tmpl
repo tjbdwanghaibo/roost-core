@@ -1,0 +1,30 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ActivityState 是个人活动的显式查询视图；内部规则和异步任务事实不直接下发。
+type ActivityState struct {
+	Definition  int32  `pb:"1"`
+	Generation  int64  `pb:"2"`
+	Cycle       int64  `pb:"3"`
+	Phase       int32  `pb:"4"`
+	Flow        string `pb:"5"`
+	FlowVersion int64  `pb:"6"`
+	Start       int64  `pb:"7"`
+	OpenAt      int64  `pb:"8"`
+	CloseAt     int64  `pb:"9"`
+	Pending     bool   `pb:"10"`
+	Version     int64  `pb:"11"`
+}
+type ActivityViewRequest struct{}
+type ActivityViewResponse struct {
+	Code       int32            `pb:"1"`
+	Reason     string           `pb:"2"`
+	Activities []*ActivityState `pb:"3"`
+}
+
+//roost:protocol group=game handler=activity
+type ActivityViewProtocol interface {
+	//roost:msg id={{ID:protocol:ActivityView}}
+	ActivityView(ActivityViewRequest) ActivityViewResponse
+}

@@ -1,0 +1,20 @@
+package activity_world
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/db"
+)
+
+const EntityKindActivityWorld entity.EntityKind = {{ID:entity:ActivityWorld}}
+
+// ActivityWorld 的唯一 ID 是逻辑区服/服务器组 ID，不是执行进程 SID。
+// 单写者由 Remote ownership 约束；重启预加载后恢复扫描继续处理未完成结算。
+//
+//roost:entity id={{ID:entity:ActivityWorld}} entityKind=EntityKindActivityWorld category=entity.EntityCategoryRemote remote=managed service=activity_world preload=startup
+type ActivityWorld struct {
+	*entity.RemoteEntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao *db.ActivityWorldDao `dao:"activity_world"`
+}

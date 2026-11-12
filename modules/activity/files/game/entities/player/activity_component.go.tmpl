@@ -1,0 +1,32 @@
+package player
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/activity"
+)
+
+//roost:component type={{ID:component:Activity}}
+const CompTypeActivity entity.ComponentType = {{ID:component:Activity}}
+
+// ActivityComponent 是同一个 activity.Component 的类型别名，只为当前实体的生成接线命名。
+// 活动业务全部在共用组件中；这里仅提供宿主状态与归属。
+type ActivityComponent = activity.Component
+
+type IActivityEntity interface {
+	entity.IThreadSafeEntity
+	ActivityComp() *ActivityComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeActivity, activity.NewComponent)
+}
+
+func (e *Player) ActivityBook() *db.ActivityBook { return e.Dao().GetActivity() }
+func (e *Player) ActivityScope() string          { return "player" }
+
+// enter 联动安装时提供首次建档时间；没有持久事实时返回 0，不用当前时间冒充。
+var activityCreatedAt = func(*Player) int64 { return 0 }
+
+func (e *Player) ActivityCreatedAt() int64 { return activityCreatedAt(e) }

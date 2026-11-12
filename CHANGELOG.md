@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **新增**（modules/activity、activity_world、activity_alliance）：同一个 activity.Component 与阶段引擎适配 Player、全服/服务器组 Entity 与联盟权威 Entity。初始化→预热→开启→结算→结束，支持固定/日历循环、可信解锁、独立业务流程、异步完成与有界恢复；排行、邮件、跨服汇聚按需接入。空配置不运行活动。个人使用持久定时器，Remote 由权威服务分批扫描，不改 Nest/DataEngine/Sync 契约。33 条定向场景、9 个变异与两轮 race 通过；全矩阵与真实跨进程/存储仍待最终验收。
+- **新增**（module 安装器）：已有服务可声明 `existing: true` 追加 Mod/RPC 与缺少的配置段，禁止接管实体；开发/生产/Secret 示例配置一并纳入回滚。代办 configdata，首个有状态定时模块可在计划阶段识别随后补建的主 DAO。
+
 - **新增**（modules/alliance）：独立联盟服务、单写者路由 RPC、game Mirror、Player 展示组件与建盟/捐赠/领奖三个跨域 Saga；与 enter/rehome 联动，进入时按权威成员关系对账，HomeSID 按入盟批次与旧 SID 条件修正。HomeSID 仅用于尽力通知，联盟成员允许换服；普通联盟写不用 Saga。demo 删除重复联盟代码，统一 alliance 名字，未保留旧 guild API/字段兼容。
 - **新增**（module 安装器）：模块可声明独占新服务、RPC、额外组件及 Saga；实体回执与生成失败一起回滚。自动代办 saga/Mirror，已有只读 Mirror 可提升为 Remote 写 Mod；新增服务开发 WAL 目录隔离。demo 的自有 PlayerOwners 在模块消费者启动前接入，启动与业务逻辑分开。
 - **修复**（demo）：分区配置读取错误不再放行换服；模块迁移后真实依赖脚本、Robot 场景入口与监控指标来源一并更新。
@@ -12,7 +15,7 @@
 - **整理**（modules/team、demo）：Team 生命周期使用正式构造入口；队伍冻结与事务内 OnTeamChanged。demo 社交队伍迁入模块，分区视野保留，Player 引用改为 Team.TeamID，旧 PB/配置不兼容（先 TeamCreate，TeamResponse.Info，规则默认 8 人/60 秒）。真实跨进程验收仍待最终批次。
 
 - 业务模块新增 team：共享 Remote 权威队伍，建队/入队/离队与 Player 引用在同一 Nest 事务中提交；邀请有界、队长交接、解散后惰性核对、rehome 双向互斥。安装器可代办 remote_entity Mod；未改三大核心模块。匹配与匹配房已在本轮 R7 补齐。
-- 需求命名收敛：联盟新模块统一 `alliance`；activity 核心定义为通用时间阶段框架，排行与发奖按需联动（尚待实施）。
+- 需求命名收敛：联盟新模块统一 `alliance`；activity 核心定义为通用时间阶段框架，排行与发奖按需联动（本轮 R9 已实现，边界见模块说明）。
 
 - 业务模块：shop 商品目录使用配置表与道具引用校验；新增 rules 统一在 Player Nest 中读取体力/商店 PB 规则，进入或重连后推送，RulesGet 可补取。shop / stamina 自动依赖 rules / enter；不包含热更广播。
 

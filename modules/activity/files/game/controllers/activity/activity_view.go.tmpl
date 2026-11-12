@@ -1,0 +1,11 @@
+package activity
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:endpoint nest=ActivityView
+func (c *Controller) HandleActivityView(ctx *playeraccess.Context, req *pb.ActivityViewRequest) (*pb.ActivityViewResponse, error) {
+	return c.dispatchActivityView(ctx, req)
+}

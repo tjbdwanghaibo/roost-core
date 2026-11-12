@@ -1,0 +1,11 @@
+package schema
+
+// ActivityScope 指定逻辑全服/服务器组及首次承载它的服务 SID；ID 永久稳定。
+// 迁移后更新 BootstrapSID，不能用新 ID 替代；CreatedAt 是持久开服事实。
+//
+//roost:table name=activity_scope key=ID
+type ActivityScope struct {
+	ID           int64 `csv:"id" json:"id" required:"true" unique:"true" min:"1"`
+	BootstrapSID int32 `csv:"bootstrap_sid" json:"bootstrap_sid" min:"1"`
+	CreatedAt    int64 `csv:"created_at" json:"created_at" min:"1"`
+}

@@ -1,0 +1,25 @@
+name: activity_alliance
+summary: 联盟活动权威宿主与恢复驱动，共用 activity 生命周期
+requires: [activity, alliance]
+needs:
+  mods: [nest]
+  features: [entity, dao, nest, config, rpc]
+  uses_rpcs: [activity_alliance]
+entity: Alliance
+component: AllianceActivity
+state:
+  - field: ActivityAlliance
+    type: ActivityBook
+    store: activity_alliance
+    dao: persist,nosync
+    comment: 活动权威状态；所有推进在宿主实体事务内。
+services:
+  alliance:
+    existing: true
+    mods: [configdata]
+    rpcs: [activity_alliance]
+errcodes: [activity_alliance_request_invalid]
+verify:
+  packages: [./internal/rpc/activity_alliance]
+  run: ^TestAllianceActivity
+  pass: 4

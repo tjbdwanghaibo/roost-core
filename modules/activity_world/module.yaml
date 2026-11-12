@@ -1,0 +1,26 @@
+name: activity_world
+summary: 全服/服务器组活动权威宿主与恢复驱动，共用 activity 生命周期
+requires: [activity]
+needs:
+  mods: [nest]
+  features: [entity, dao, nest, config, rpc]
+  uses_rpcs: [activity_world]
+entity: ActivityWorld
+component: WorldActivity
+state:
+  - field: ActivityWorld
+    type: ActivityBook
+    store: activity_world
+    dao: persist,nosync
+    comment: 活动权威状态；所有推进在宿主实体事务内。
+services:
+  activity_world:
+    mods: [configdata, dataengine, etcd, mongo, nats, nest, redis, remote_entity]
+    rpcs: [activity_world]
+    entities: [ActivityWorld]
+entities: [ActivityWorld]
+errcodes: [activity_world_request_invalid]
+verify:
+  packages: [./internal/rpc/activity_world]
+  run: ^TestWorldActivity
+  pass: 4

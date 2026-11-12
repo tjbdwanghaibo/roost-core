@@ -1,0 +1,6 @@
+package player
+
+func init() {
+	activityCreatedAt = func(owner *Player) int64 { return owner.Dao().GetEnter().GetFirstAt() }
+	OnFirstEnter("activity", func(owner *Player, now int64) error { return owner.ActivityComp().Reconcile("created", now) })
+}

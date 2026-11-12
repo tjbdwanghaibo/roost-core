@@ -1,0 +1,21 @@
+package activity
+
+import "testing"
+
+func TestWithActivityLeaderboardSeparatesInstances(t *testing.T) {
+	token := Token{Scope: "world", Owner: 71, Definition: 1, Generation: 1, Cycle: 1}
+	a, e := Board(token)
+	if e != nil {
+		t.Fatal(e)
+	}
+	token.Cycle = 2
+	b, e := Board(token)
+	if e != nil || a.ID != b.ID || a.Season == b.Season {
+		t.Fatal(a, b, e)
+	}
+	token.Generation = 2
+	c, e := Board(token)
+	if e != nil || c.ID == b.ID {
+		t.Fatal(c, e)
+	}
+}

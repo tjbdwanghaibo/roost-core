@@ -1,0 +1,18 @@
+package handler
+
+import (
+	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/entities/player"
+)
+
+// ActivityEvent 只给可信业务入口使用；客户端只有 ActivityView，不提供任意事件上报。
+// 已持有 Player 的 handler 应直接调 ActivityComp().Reconcile，与触发事实同事务。
+//
+//roost:nest rollback=undo durability=strict
+func handlerActivityEvent(target player.IActivityEntity, event string, createdAt int64) ([]activity.Snapshot, error) {
+	c := target.ActivityComp()
+	if err := c.Reconcile(event, createdAt); err != nil {
+		return nil, err
+	}
+	return c.Host().Views()
+}

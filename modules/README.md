@@ -25,6 +25,9 @@
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 25 |
 | [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
+| [activity](activity/README.md) | 共用 activity.Component 五阶段活动状态机：一次性/日历循环、可信条件解锁、自定义流程、有界恢复；个人宿主 | 无；configdata / 个人持久定时器由安装器接入 | PlayerDao.Activity（只落库） | 21 |
+| [activity_world](activity_world/README.md) | 全服/服务器组权威 Entity，独立服务、ownership 恢复扫描 | activity | ActivityWorldDao.ActivityWorld（只落库） | 4 |
+| [activity_alliance](activity_alliance/README.md) | 既有联盟 Entity 的活动适配，扩展 alliance 配置/RPC | activity、alliance | AllianceDao.ActivityAlliance（只落库） | 4 |
 | [alliance](alliance/README.md) | 独立联盟服务单写者、路由 RPC / 三个跨域 Saga、Mirror 展示与换服惰性校正 | bag；代办 saga / Mirror 与 alliance 服务 | AllianceDao、AllianceMemberDao、PlayerDao.Alliance / SagaReceipts | 49 |
 | [team](team/README.md) | Remote 共享权威队伍，六个 PB 端点；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 27 |
 | [matchmaking](matchmaking/README.md) | 单人/整队按服分池；持久意图、取消竞态、结果补查、组队冻结 | team、matchroom；托管 match | PlayerDao.Matchmaking | 16 |
@@ -53,6 +56,10 @@
 
 | 联动 | 做什么 | 场景数 |
 | --- | --- | --- |
+| activity + enter | 持久创建锚点与进入对账，锁外恢复 pending | 1 |
+| activity + profile | 升级与条件解锁在同一 Player 事务 | 1 |
+| activity + leaderboard | 活动实例分榜身份 | 1 |
+| activity + mailbox | 结算发件使用稳定期次/收件人键 | 1 |
 | alliance + enter / rehome | 进入/重连对账与 HomeSID 条件修正 / 原生步骤按当前绑定准入 | 各 2 |
 | matchmaking + rehome | 排队与换服双向互斥，未知结果继续保持屏障 | 2 |
 | team + rehome | 在队伍中拒绝换服，换服意图未清除前拒绝建队/入队 | 2 |
@@ -97,12 +104,14 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 
 ## 安装做了什么
 
-1. **前置骨架**：缺少的 heartbeat / directory / remote_entity Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
+1. **前置骨架**：缺少的 configdata / heartbeat / directory / remote_entity Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
 2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
 3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
 4. **组件与附加 DAO**：把模块组件接到实体上；`daos: [{field: combatState, type: CombatDAO, tag: combat_state}]` 追加独立 DAO 的聚合声明，复用同一份实例的加载、事务与恢复。字段/集合被占用时拒绝。`sync_packer` 只接明确的模块视图工厂，已有业务 packer 时拒绝覆盖。
 5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires` 与可选 `runtime`。
 6. **生成**：运行全部生成器。自带实体时同时刷新 owner / handler / shutdown 接线；有 `runtime` 时生成服务适配层。自身同步在 packer、附加 DAO 与模块文件全部就位后开启，并在同一暂存树补齐推送协议。全部生成物与需刷新配置一起暂存、提交，失败不会留下半套接线。
+
+模块可用 `services` 声明独占的新业务服务；`existing: true` 只给已存在服务追加 Mod/RPC 及缺少的配置段，不能接管实体所有权或覆盖 `service.go`。新服务模板、开发/生产示例配置及 Kubernetes Secret 示例的修改都纳入安装失败回滚。
 
 两个模块之间的**联动文件**在第 4 步之后写：这次装的模块与工程里已有的（或同一次装的）模块凑成一对、而这一对有联动时，把联动文件写进工程，归属记在拥有它的模块的 `with` 下。`plan` 与 `add` 的输出里是 `glue <模块> with <另一个模块>`。两个都早已装好的不补。
 

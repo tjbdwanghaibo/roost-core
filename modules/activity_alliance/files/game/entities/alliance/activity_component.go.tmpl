@@ -1,0 +1,27 @@
+package alliance
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/activity"
+)
+
+//roost:component type={{ID:component:AllianceActivity}}
+const CompTypeAllianceActivity entity.ComponentType = {{ID:component:AllianceActivity}}
+
+// AllianceActivityComponent 是同一个 activity.Component 的类型别名，只为当前实体的生成接线命名。
+// 活动业务全部在共用组件中；这里仅提供宿主状态与归属。
+type AllianceActivityComponent = activity.Component
+
+type IAllianceActivityEntity interface {
+	entity.IThreadSafeEntity
+	AllianceActivityComp() *AllianceActivityComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeAllianceActivity, activity.NewComponent)
+}
+
+func (e *Alliance) ActivityBook() *db.ActivityBook { return e.Dao().GetActivityAlliance() }
+func (e *Alliance) ActivityScope() string          { return "alliance" }

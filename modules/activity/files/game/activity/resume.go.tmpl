@@ -1,0 +1,41 @@
+package activity
+
+import (
+	"context"
+	"errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+// ResumePending 只在事务提交后的 I/O 段使用。没有 Resume 时保留 pending，等业务可靠完成入口。
+// 外部成功而 Complete 失败会再次 Resume，因而 Resume 必须按 Context.Key/Token 幂等。
+// 本次一个活动失败不丢失其他活动的责任，错误汇总给调用方，下次扫描/进入继续。
+func ResumePending(ctx context.Context, registry *app.Registry, views []Snapshot, complete func(context.Context, Token) error) error {
+	if err := fctx.BlockingError("activity.ResumePending"); err != nil {
+		return err
+	}
+	var failures error
+	for _, v := range views {
+		if !v.Pending {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
+		hooks, err := hooksFor(v.Logic)
+		if err != nil {
+			failures = errors.Join(failures, err)
+			continue
+		}
+		if hooks.Resume == nil {
+			continue
+		}
+		done, err := hooks.Resume(ctx, registry, v)
+		if err == nil && done {
+			err = complete(ctx, v.Token)
+		}
+		failures = errors.Join(failures, err)
+	}
+	return failures
+}

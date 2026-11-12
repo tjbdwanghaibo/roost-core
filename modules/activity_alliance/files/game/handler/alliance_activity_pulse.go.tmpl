@@ -1,0 +1,17 @@
+package handler
+
+import (
+	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/entities/alliance"
+)
+
+// AllianceActivityPulse 只能由权威服务登记；所有权由 RPC 和 Nest 的 Remote 提交再次校验。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceActivityPulse(target alliance.IAllianceActivityEntity, event string, createdAt int64) ([]activity.Snapshot, error) {
+	c := target.AllianceActivityComp()
+	if err := c.Reconcile(event, createdAt); err != nil {
+		return nil, err
+	}
+	return c.Host().Views()
+}

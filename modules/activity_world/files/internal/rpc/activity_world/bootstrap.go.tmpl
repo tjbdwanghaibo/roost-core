@@ -1,0 +1,34 @@
+package activity_world
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+)
+
+// bootstrap 只在指定的初始宿主建档，随后由 Remote 授权记录保证唯一写者。
+func (m *Mod) bootstrap(sid int32) error {
+	life, err := lifecycle.ActivityWorldFromRegistry(m.registry)
+	if err != nil {
+		return err
+	}
+	for _, scope := range generated.ActivityScopeTable().Rows() {
+		if scope.BootstrapSID != sid {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		value, _, err := life.GetOrCreate(ctx, scope.ID)
+		if err == nil {
+			err = syncsender.NewWorldActivityInitSender(m.service.client).Sync_WorldActivityInit(ctx, value.ID(), scope.CreatedAt)
+		}
+		cancel()
+		if err != nil {
+			return fmt.Errorf("activity scope %d: %w", scope.ID, err)
+		}
+	}
+	return nil
+}

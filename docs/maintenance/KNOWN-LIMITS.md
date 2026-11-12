@@ -1,5 +1,11 @@
 # 当前已知限制与验证边界
 
+## 2026-11-12：活动模块的驱动与验收边界
+
+[activity](../../modules/activity/README.md) 共用同一个 activity.Component 与 ActivityBook，分别挂在 Player、ActivityWorld、Alliance 上；实体包只有类型别名及宿主适配。个人活动复用 entitytimer；全服/联盟保留 Remote 不挂本地持久定时器的限制，权威服务每秒最多扫描一页 128 个宿主、8 个并发调用。扫描积压会延后推进，业务操作仍按冻结期限拒绝过期请求，不把扫描周期当准点保证。个人离线默认加载/进入时惰性恢复，需要离线准点结算时由业务提供可靠后台驱动。
+
+每宿主单次最多 32 次阶段/流程动作；128 个定义号、128 条共享参与资格，满后明确拒绝，不驱逐未完成责任。排行榜/邮件/coordinator 只提供可组合适配，业务仍需冻结奖单并幂等执行。生成工程 33 条场景、9 个变异与两轮 race 已通过；Remote 替身、BSON 恢复和进程内路由验证不等同真实 Mongo/WAL/NATS、跨进程迁移或长稳。全模块矩阵与真实依赖按交接 §5/§6 最终验收。[证据](evidence/module-activity-20261112/README.md)。
+
 ## 2026-11-12：purchase 模块的恢复与验收边界
 
 [purchase](../../modules/purchase/README.md) 的 Player 账本是常量大小游标，Redis 未履行订单和 platform 支付历史仍会增长；每次补领最多 32 笔，较早的异常订单会暂缓该玩家后续订单。渠道缺省拒绝，真实支付验签/查单由工程接入。队列依赖部署提供的持久 Redis，游标、待发和 Player 必须协调恢复，不支持单独重置其中一侧。新工程离线场景、变异/race 与独立 Redis Lua 已验证；真实 NATS/TCP/Mongo/WAL、跨 sid 和故障恢复仍在新任务 §6，不宣称已验收。demo schema 4 不自动迁移旧订单账本。

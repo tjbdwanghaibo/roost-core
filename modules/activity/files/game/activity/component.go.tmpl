@@ -1,0 +1,82 @@
+package activity
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	"{{MODULE}}/db"
+)
+
+// Owner 是活动组件的宿主。Player、全服和联盟只提供各自的 DAO 与归属，
+// 组件不依赖具体 Entity 类型，也不另存一份可变活动状态。
+type Owner interface {
+	entity.IThreadSafeEntity
+	ActivityBook() *db.ActivityBook
+	ActivityScope() string
+}
+
+// createdOwner 提供已持久化的创建事实；没有它的宿主由可信业务入口显式传入。
+type createdOwner interface {
+	ActivityCreatedAt() int64
+}
+
+// deadlineOwner 把同一活动期限接到宿主的唤醒方式；实现必须与当前 DAO 同事务。
+// Player 使用 entitytimer。Remote 没有此接口，由权威服务扫描持久 NextDue。
+type deadlineOwner interface {
+	SetActivityDeadline(int64) error
+}
+
+// Component 是三种宿主共用的组件实现。实体包中的类型别名仅供模块安装器接线，
+// 不复制 Reconcile/Rearm。所有业务方法都在宿主 Entity 的 Nest 事务中调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 直接用作各实体的组件工厂；DAO 在 Entity 构造时先于组件装载。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("activity: owner %T does not implement activity.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "activity" }
+
+// Host 供业务直接调用 Activate/Complete/MoveFlow；修改成功后调用 Rearm。
+func (c *Component) Host() Host {
+	return Host{Owner: c.owner, Scope: c.owner.ActivityScope(), Book: c.owner.ActivityBook()}
+}
+
+func (c *Component) Reconcile(event string, createdAt int64) error {
+	if createdAt == 0 {
+		if owner, ok := c.owner.(createdOwner); ok {
+			createdAt = owner.ActivityCreatedAt()
+		}
+	}
+	host := c.Host()
+	definitions, err := Definitions(host.Scope)
+	if err != nil {
+		return err
+	}
+	if err = host.Reconcile(definitions, event, createdAt, fctx.NowMilli()); err != nil {
+		return err
+	}
+	return c.Rearm()
+}
+
+func (c *Component) Rearm() error {
+	host := c.Host()
+	due, err := host.NextDeadline(fctx.NowMilli())
+	if err != nil {
+		return err
+	}
+	if owner, ok := c.owner.(deadlineOwner); ok {
+		return owner.SetActivityDeadline(due)
+	}
+	host.Book.SetNextDue(due)
+	return nil
+}

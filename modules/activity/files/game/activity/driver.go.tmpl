@@ -1,0 +1,93 @@
+package activity
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// Driver 只属于 Remote 权威服务，列出当前归本进程的实体，然后通过正式 Nest 入口推进。
+// 期限保存在 DAO，进程内游标只影响扫描公平性。重启从头扫描；迁移后新属主从自己的清单接手。
+// 每轮最多 128 个、8 个并行 I/O 调用，调用方在进入 Nest 前再次核对 ownership。
+// 这是有界恢复扫描，不承诺离线或超容量时准点结算；个人活动不走它。
+type Driver struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func StartDriver(owned entity.RemoteOwnedEntityLister, kind entity.EntityKind, advance func(context.Context, int64) error) *Driver {
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &Driver{cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(d.done)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		var after int64
+		for {
+			ids, next, err := owned.ListOwnedRemoteEntities(ctx, []entity.EntityKind{kind}, after, 128)
+			if err != nil {
+				if ctx.Err() == nil {
+					slog.Error("activity: list owned scopes failed", "kind", kind, "error", err)
+				}
+			} else {
+				var group sync.WaitGroup
+				jobs := make(chan int64, len(ids))
+				for _, id := range ids {
+					jobs <- id
+				}
+				close(jobs)
+				var mu sync.Mutex
+				var first error
+				for range min(8, len(ids)) {
+					group.Go(func() {
+						for id := range jobs {
+							if ctx.Err() != nil {
+								return
+							}
+							callCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+							err := advance(callCtx, id)
+							stop()
+							if err != nil {
+								mu.Lock()
+								if first == nil {
+									first = err
+								}
+								mu.Unlock()
+							}
+						}
+					})
+				}
+				group.Wait()
+				if first != nil && ctx.Err() == nil {
+					slog.Error("activity: advance scope failed; retained for next scan", "kind", kind, "error", first)
+				}
+				after = next
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return d
+}
+
+// Stop 首先取消准入并等待所有在途调用；超时仍保留 done 和依赖，下次可继续等待。
+func (d *Driver) Stop(ctx context.Context) error {
+	d.cancel()
+	select {
+	case <-d.done:
+		return nil
+	default:
+	}
+	select {
+	case <-d.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

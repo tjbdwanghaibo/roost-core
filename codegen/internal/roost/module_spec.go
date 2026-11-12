@@ -33,7 +33,7 @@ type ModuleSpec struct {
 	Runtime   *ModuleRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	// Sagas 复用 add saga 的定义与实体回执生成；步骤业务和启动入口由模块模板提供。
 	Sagas []ModuleSaga `yaml:"sagas,omitempty" json:"sagas,omitempty"`
-	// Services 是模块独占的新业务服务；不接管工程已经存在的同名服务。
+	// Services 声明新业务服务，或通过 existing 为已有服务追加 Mod/RPC。
 	Services map[string]ModuleService `yaml:"services,omitempty" json:"services,omitempty"`
 	// Entity 是模块状态与组件挂靠的实体（PascalCase，如 Player）。没有状态也没有组件的模块可以不写。
 	Entity string `yaml:"entity" json:"entity,omitempty"`

@@ -414,7 +414,7 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 
 // 只代办有确定接线和工程隔离配置的 Mod。外部依赖仍通过 plan 和开发环境配置明确展示。
 func moduleCanAddMod(name string) bool {
-	return name == "heartbeat" || name == "directory" || name == "remote_entity" || name == "remote_mirror" || name == "saga"
+	return name == "configdata" || name == "heartbeat" || name == "directory" || name == "remote_entity" || name == "remote_mirror" || name == "saga"
 }
 
 func moduleModPresent(resolved []string, name string) bool {
@@ -486,6 +486,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 			serviceSpecs = append(serviceSpecs, item.spec)
 		}
 	}
+	beforeServices := manifest
 	manifest, err = planModuleServices(root, manifest, plan.Service, serviceSpecs)
 	if err != nil {
 		return ModulePlan{}, err
@@ -502,7 +503,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		}
 		touched = append(touched, paths...)
 		for service := range item.Services {
-			touched = append(touched, moduleServiceConfig(service))
+			touched = append(touched, moduleServiceConfig(service), "configs/service/config."+service+".prod.example.yaml", kubernetesSecretExampleRel(service))
 		}
 		sagaPaths, err := moduleSagaTouchedFiles(root, item.spec, newEntities)
 		if err != nil {
@@ -558,7 +559,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 			}
 			record.TimerEntity = item.Timer.Entity
 		}
-		if err := writeModuleServiceConfigs(root, manifest, item.spec); err != nil {
+		if err := writeModuleServiceConfigs(root, beforeServices, manifest, item.spec); err != nil {
 			return fail(err)
 		}
 		manifest.Modules[item.Name] = record
