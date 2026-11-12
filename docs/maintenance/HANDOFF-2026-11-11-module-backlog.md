@@ -202,3 +202,9 @@ mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件�
 提交 `35153b75`。实现 wallet/shop/stamina/dungeon/leaderboard 命名登记点，task 事件推进、配置表、每日/每周/永久、前置链、道具奖励与八组联动。实体钩子使用冻结时间、与业务一起回滚；排行通知是尽力推进。默认任务不变、原 18 条场景保留，进度与领取记录按固定 ID 空间有界。新角色在首次进入事务中默认 1 级、不触发升级奖励，attribute 同事务派生；普通购买不默认使用 Saga。
 
 最小 49、组合 215 PASS / 0 SKIP，15 个变异与两轮定向 race 通过；profile 新 enter 依赖影响的邮件/GM/attribute/equipment 组合复验通过（邮件 99、GM 199）。根包、清单与文档检查通过。失败过程、CBM 补证与真实依赖边界见[报告](evidence/module-task-events-20261112/README.md)。全矩阵、全 demo、全仓与 §6 联合验收仍延后；后续 R6～R11、§5、§6，guild 先出方案、worldstats 不做。
+
+## 附录：R6 规则数据（2026-11-12）
+
+shop 商品表改为 configdata 配置，删除生产测试替换函数；rules 统一在 Player Nest 锁内读取模块 PB、锁外推送，进入/重连推一次，RulesGet 补取。stamina/shop 自动安装 rules/enter，业务日继续使用 servertime，不改登录线。
+
+最小24、组合104 PASS / 0 SKIP，6个变异与两轮 race；任务影响组合232、15个原变异和两轮 race 通过；根包/清单/文档检查通过。未运行的全矩阵、全demo、全仓和真实依赖按最终批次；[证据与当前边界](evidence/module-client-rules-20261112/README.md)。下一项为 R7 team/matchmaking/matchroom；R8～R11、§5、§6 仍待实施，guild先报告方案，worldstats不做。

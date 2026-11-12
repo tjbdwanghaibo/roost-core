@@ -1,0 +1,15 @@
+name: rules
+summary: 客户端规则快照：进入时统一推送、RulesGet 补取；各模块按名字登记，在同一个 Player Nest 读取中打包 PB
+requires: [enter]
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao]
+entity: Player
+access:
+  transport: tcp
+protocols: [RulesGet, RulesNow]
+verify:
+  packages: [./game/entities/player, ./game/handler, ./game/controllers/rules]
+  run: ^TestRules
+  pass: 10

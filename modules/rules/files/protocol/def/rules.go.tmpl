@@ -1,0 +1,31 @@
+//go:build protocoldef
+
+package protocoldef
+
+// RulePart 的 Payload 使用 MessageID 对应的生成 PB 解码器；它是纯数据，不应再次发往网络。
+// 例如 MsgStaminaRules 对应 UnmarshalStaminaRulesPush。未知 MessageID 可以忽略。
+type RulePart struct {
+	MessageID uint32 `pb:"1"`
+	Payload   []byte `pb:"2"`
+}
+
+// RulesNowPush 是一次完整规则快照。各模块内容在同一个 Player 锁与配置快照里读取。
+// 收到后整份替换；进入时未收到或本地规则可能过期时可 RulesGet 补取。
+// 业务日来自 ServertimeNow，不能用规则包判断每日重置。
+type RulesNowPush struct {
+	Parts []*RulePart `pb:"1"`
+}
+type RulesGetRequest struct{}
+type RulesGetResponse struct {
+	Code   int32         `pb:"1"`
+	Reason string        `pb:"2"`
+	Rules  *RulesNowPush `pb:"3"`
+}
+
+//roost:protocol group=game handler=rules
+type RulesProtocol interface {
+	//roost:msg id={{ID:protocol:RulesGet}}
+	RulesGet(RulesGetRequest) RulesGetResponse
+	//roost:msg id={{ID:protocol:RulesNow}}
+	RulesNow() RulesNowPush
+}

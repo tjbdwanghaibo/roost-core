@@ -10,6 +10,7 @@
 
 | 模块 | 做什么 | 依赖 | 状态字段 | 场景数 |
 | --- | --- | --- | --- | --- |
+| [rules](rules/README.md) | 进入/重连推送完整规则快照，RulesGet 补取；同一 Player Nest 中读取各功能 PB | enter | 无 | 10 |
 | [purchase](purchase/README.md) | 充值发货：platform 验签与订单去重、Redis 顺序待发、Player 常量大小游标；金币内置，道具与入场补发联动；渠道缺省拒绝 | wallet、托管 platform；bag / enter 联动 | `PlayerDao.Purchase`（只落库） | 21；bag 4、enter 2 条联动 |
 | [gm](gm/README.md) | 运维命令登记、必填操作者与备注、带码拒绝；复用 ops `/admin`；功能模块按 `with/gm` 接入 | 无；game 底座的 ops | 无 | 9；wallet / bag / profile / mailbox / rehome 各 4 条联动 |
 | [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 14 |
@@ -21,8 +22,8 @@
 | [leaderboard](leaderboard/module.yaml) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 20 |
 | [mailbox](mailbox/README.md) | 邮件：分页列出自己的邮件（`MailboxList`）、领取附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；附件是（种类、号、数量），种类是登记点：金币内置，别的种类由登记了校验（`game/mailbox` 的 `RegisterType`）与发放方式（`RegisterMailboxGrant`）的功能提供；给服务端发件用的 `mailbox.SendTo`（一名玩家一封、附件先校验、幂等键必填）。与 profile 联动在升级时冻结奖励、通过 effect 发邮件（缺省不发奖），10 条场景；game-demo 用的就是它 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 32 |
 | [task](task/README.md) | 事件任务：每日/每周/永久与前置链，配置表，金币/道具奖励；事务内事件联动 | wallet；bag 等联动 | `PlayerDao.Task`（同步） | 29；八组联动 25 条 |
-| [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go` | wallet | `PlayerDao.Stamina`（同步） | 25 |
-| [shop](shop/module.yaml) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录写在 `game/entities/player/shop_goods.go` | wallet、bag | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 17 |
+| [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 25 |
+| [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
@@ -55,6 +56,7 @@
 | task + wallet / shop / stamina / profile / dungeon | 首次消费、购买份数、消耗点数、提升等级数、副本领奖在原事务中推进 | 6 / 3 / 3 / 2 / 2 |
 | task + bag | 道具奖励与任务领奖在同一笔事务 | 3 |
 | task + leaderboard | rank 成功答复后独立推进，尽力通知且重复提交计数 | 3 |
+| shop + rules / stamina + rules | 统一导出商品目录 / 体力规则，保持快照独立 | 各 2 |
 | profile + enter | 初次建档 1 级；不触发升级奖励，重进/冷加载不重置 | 4 |
 | attribute + enter | 按初始等级建立基础/最终属性，同事务回滚 | 2 |
 | login + enter | 进入前检查：会话记的承载服不是本服（或没有记）答 `login_elsewhere`，不加载也不创建 Player（`game/login/login_enter.go`） | 2 |

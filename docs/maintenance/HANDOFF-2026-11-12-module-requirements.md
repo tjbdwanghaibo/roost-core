@@ -83,6 +83,8 @@
 
 ### R6. 规则数据
 
+实现与定向验收完成（本批提交后补号）：shop 商品配置表与约束；rules 统一 Player Nest 只读快照，进入/重连推送、RulesGet 补取，stamina/shop 自动依赖。组合 104 PASS / 0 SKIP、6 个变异与两轮 race；任务影响复验 232 PASS / 0 SKIP、原 15 个变异与 race 通过。[验收与边界](evidence/module-client-rules-20261112/README.md)。
+
 - shop 的商品目录改成配置表（照 bag 的道具表）；模块带缺省表，零配置可用。
 - 规则导出给客户端：stamina 的上限与周期、shop 的限购规则——定一个统一做法（协议里带，或进入时推一次），不要每个模块各做各的。当前业务日已由 servertime 下发，不要重复做。
 

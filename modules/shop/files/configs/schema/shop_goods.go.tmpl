@@ -1,0 +1,15 @@
+package schema
+
+// ShopGoods 是商城商品目录。临时下架使用 Off；商品号与限购类型发布后不要重新分配。
+// 限购按购买份数，ItemCount 是每份包含的道具数量。免费发放走奖励，不作为零价商品。
+//
+//roost:table name=shop_goods key=ID
+type ShopGoods struct {
+	ID         int64 `csv:"id" json:"id" required:"true" unique:"true" min:"1"`
+	ItemID     int64 `csv:"item_id" json:"item_id" min:"1" ref:"item"`
+	ItemCount  int64 `csv:"item_count" json:"item_count" min:"1"`
+	Price      int64 `csv:"price" json:"price" min:"1"`
+	Limit      int32 `csv:"limit" json:"limit" enum:"0|1|2"`
+	LimitCount int64 `csv:"limit_count" json:"limit_count" min:"0"`
+	Off        bool  `csv:"off" json:"off"`
+}

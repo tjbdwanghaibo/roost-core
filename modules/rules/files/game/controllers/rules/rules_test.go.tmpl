@@ -1,0 +1,203 @@
+package rules
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
+	"sync/atomic"
+	"testing"
+
+	gameenter "{{MODULE}}/game/enter"
+	player "{{MODULE}}/game/entities/player"
+	handlers "{{MODULE}}/game/handler"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+type rulesGetter map[int64]entity.IThreadSafeEntity
+
+func (g rulesGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if v := g[id]; v != nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g rulesGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type rulesCommitter struct{ calls atomic.Int64 }
+
+func (c *rulesCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	c.calls.Add(1)
+	return nil
+}
+
+type rulesPush struct {
+	id    int64
+	msg   uint32
+	value any
+}
+type rulesTransport struct {
+	calls []rulesPush
+	fail  error
+}
+
+func (t *rulesTransport) PushPlayer(_ context.Context, id int64, msg uint32, value any) error {
+	if t.fail != nil {
+		return t.fail
+	}
+	t.calls = append(t.calls, rulesPush{id, msg, value})
+	return nil
+}
+
+type rulesFixture struct {
+	registry   *app.Registry
+	controller *Controller
+	committer  *rulesCommitter
+	transport  *rulesTransport
+}
+
+func newRulesFixture(t *testing.T) *rulesFixture {
+	t.Helper()
+	player.RegisterEntity()
+	handlers.RegisterRulesReadNestHandlers()
+	id, err := entity.BuildEntityID(96501, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &rulesFixture{registry: app.NewRegistry(nil), committer: &rulesCommitter{}, transport: &rulesTransport{}}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(rulesGetter{id: p}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := f.registry.Register("nest", engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.Register("access.player.tcp", f.transport); err != nil {
+		t.Fatal(err)
+	}
+	f.controller, err = FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+func (f *rulesFixture) get(t *testing.T) *pb.RulesNowPush {
+	t.Helper()
+	result, err := f.controller.HandleRulesGet(&playeraccess.Context{PlayerID: 96501}, &pb.RulesGetRequest{})
+	if err != nil || result.Code != 0 || result.Rules == nil {
+		t.Fatalf("get rules=%v %v", result, err)
+	}
+	return result.Rules
+}
+func TestRulesQueryUsesNestWithoutCommitting(t *testing.T) {
+	f := newRulesFixture(t)
+	first := f.get(t)
+	second := f.get(t)
+	if !reflect.DeepEqual(first, second) || f.committer.calls.Load() != 0 {
+		t.Fatal("rules read mutated the player or snapshots diverged")
+	}
+	raw, err := pb.MarshalRulesNowPush(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := pb.UnmarshalRulesNowPush(raw)
+	if err != nil || !reflect.DeepEqual(first, decoded) {
+		t.Fatalf("rules PB roundtrip=%v %v", decoded, err)
+	}
+}
+func TestRulesQueryForAnUnloadedPlayerDoesNotCreateIt(t *testing.T) {
+	f := newRulesFixture(t)
+	got, err := f.controller.HandleRulesGet(&playeraccess.Context{PlayerID: 96502}, &pb.RulesGetRequest{})
+	if err != nil || got.Code == 0 || got.Rules != nil || f.committer.calls.Load() != 0 {
+		t.Fatalf("unloaded rules=%v %v", got, err)
+	}
+}
+func TestRulesQueryAndPushRejectMissingDependencies(t *testing.T) {
+	if _, err := FromRegistry(nil); err == nil {
+		t.Fatal("nil registry accepted")
+	}
+	if err := PushNow(context.Background(), app.NewRegistry(nil), 96501); err == nil {
+		t.Fatal("missing transport accepted")
+	}
+	f := newRulesFixture(t)
+	if _, err := f.controller.HandleRulesGet(nil, &pb.RulesGetRequest{}); err == nil {
+		t.Fatal("nil context accepted")
+	}
+	if _, err := f.controller.HandleRulesGet(&playeraccess.Context{PlayerID: 96501}, nil); err == nil {
+		t.Fatal("nil request accepted")
+	}
+}
+func TestRulesPushUsesTheSameSnapshotAndCorrectPlayer(t *testing.T) {
+	f := newRulesFixture(t)
+	want := f.get(t)
+	if err := PushNow(context.Background(), f.registry, 96501); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.transport.calls) != 1 {
+		t.Fatalf("push count=%d", len(f.transport.calls))
+	}
+	call := f.transport.calls[0]
+	if call.id != 96501 || call.msg != msgid.MsgRulesNow || !reflect.DeepEqual(call.value, want) {
+		t.Fatalf("wrong rule push=%+v", call)
+	}
+}
+func TestRulesEntryAndReconnectEachPushOneSnapshot(t *testing.T) {
+	f := newRulesFixture(t)
+	for i := 0; i < 2; i++ {
+		failed := gameenter.RunEntered(context.Background(), f.registry, gameenter.Entered{PlayerID: 96501})
+		if slices.Contains(failed, "rules") {
+			t.Fatalf("rules enter failed=%v", failed)
+		}
+	}
+	count := 0
+	for _, call := range f.transport.calls {
+		if call.msg == msgid.MsgRulesNow {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("entry rule pushes=%d", count)
+	}
+}
+func TestRulesPushFailureCanBeRecoveredByQuery(t *testing.T) {
+	f := newRulesFixture(t)
+	refused := errors.New("send queue full")
+	f.transport.fail = refused
+	if err := PushNow(context.Background(), f.registry, 96501); !errors.Is(err, refused) {
+		t.Fatalf("push failure=%v", err)
+	}
+	failed := gameenter.RunEntered(context.Background(), f.registry, gameenter.Entered{PlayerID: 96501})
+	if !slices.Contains(failed, "rules") {
+		t.Fatalf("rules hook hid failure=%v", failed)
+	}
+	if f.get(t) == nil {
+		t.Fatal("fallback did not return rules")
+	}
+}

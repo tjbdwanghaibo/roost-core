@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 业务模块：shop 商品目录使用配置表与道具引用校验；新增 rules 统一在 Player Nest 中读取体力/商店 PB 规则，进入或重连后推送，RulesGet 可补取。shop / stamina 自动依赖 rules / enter；不包含热更广播。
+
 - 业务模块：wallet/shop/stamina/leaderboard 登记点及真实 task 消费者；task 配置表、事件索引、每日/每周/永久、前置链与道具奖励。去重回执不重复上报，跨服务排行通知明确为尽力推进。
 - 新角色完成首次进入的建档事务后默认 1 级，不触发升级奖励；profile 依赖 enter，attribute 同事务按初始等级建立属性。购买不默认使用 Saga，普通购买/领奖继续使用 Player Nest 事务。
 

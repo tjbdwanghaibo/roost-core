@@ -1,0 +1,73 @@
+package rules
+
+import (
+	"context"
+	"fmt"
+
+	gameenter "{{MODULE}}/game/enter"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+type Controller struct{ nestClient nest.Client }
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	client, ok := app.Lookup[nest.Client](registry, "nest")
+	if !ok || client == nil {
+		return nil, fmt.Errorf("rules: nest client unavailable")
+	}
+	return &Controller{nestClient: client}, nil
+}
+
+func (controller *Controller) read(ctx context.Context, playerID int64) (*pb.RulesNowPush, error) {
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	return sender.NewRulesReadSender(controller.nestClient).Sync_RulesRead(ctx, id)
+}
+func (controller *Controller) HandleRulesGet(ctx *playeraccess.Context, request *pb.RulesGetRequest) (*pb.RulesGetResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("rules_get: context and request required")
+	}
+	result, err := controller.read(ctx.Context(), ctx.PlayerID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.RulesGetResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.RulesGetResponse{Rules: result}, nil
+}
+
+type pushTransport interface {
+	PushPlayer(context.Context, int64, uint32, any) error
+}
+
+// PushNow 在快池取值，在调用方阶段发送。失败由进入钩子记录，客户端可补取，不回滚已完成的建档。
+func PushNow(ctx context.Context, registry *app.Registry, playerID int64) error {
+	transport, ok := app.Lookup[pushTransport](registry, "access.player.tcp")
+	if !ok || transport == nil {
+		return fmt.Errorf("rules: access.player.tcp unavailable")
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		return err
+	}
+	snapshot, err := controller.read(ctx, playerID)
+	if err != nil {
+		return err
+	}
+	return transport.PushPlayer(ctx, playerID, msgid.MsgRulesNow, snapshot)
+}
+func init() {
+	gameenter.OnEntered("rules", func(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+		return PushNow(ctx, registry, entered.PlayerID)
+	})
+}

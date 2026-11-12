@@ -1,0 +1,24 @@
+=== RUN   TestModuleClientRulesAndShopTable
+    module_rules_test.go:15: enter: pass=14 skip=0 ok=true
+    module_rules_test.go:15: rules: pass=10 skip=0 ok=true
+    module_rules_test.go:21: bag: pass=17 skip=0 ok=true
+    module_rules_test.go:21: enter: pass=14 skip=0 ok=true
+    module_rules_test.go:21: rules: pass=10 skip=0 ok=true
+    module_rules_test.go:21: shop: pass=20 skip=0 ok=true
+    module_rules_test.go:21: shop+rules: pass=2 skip=0 ok=true
+    module_rules_test.go:21: stamina: pass=25 skip=0 ok=true
+    module_rules_test.go:21: stamina+rules: pass=2 skip=0 ok=true
+    module_rules_test.go:21: wallet: pass=14 skip=0 ok=true
+    module_rules_test.go:27: caught mutation in game/entities/player/rules.go: ordered owned snapshot=
+    module_rules_test.go:28: caught mutation in game/entities/player/rules.go: duplicate rules accepted
+    module_rules_test.go:29: caught mutation in game/entities/player/stamina_client_rules.go: stamina client rule=
+    module_rules_test.go:30: caught mutation in game/entities/player/shop_client_rules.go: visible goods=
+    module_rules_test.go:31: caught mutation in game/entities/player/shop_client_rules.go: shop rule=
+    module_rules_test.go:32: caught mutation in game/entities/player/shop_goods.go: purchase diverged
+--- PASS: TestModuleClientRulesAndShopTable (61.15s)
+=== RUN   TestModuleCatalogEmbedsEveryTemplateAndValidates
+--- PASS: TestModuleCatalogEmbedsEveryTemplateAndValidates (0.06s)
+=== RUN   TestModuleWithValidationNamesWhatIsWrong
+--- PASS: TestModuleWithValidationNamesWhatIsWrong (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	61.808s

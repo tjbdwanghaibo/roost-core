@@ -1,0 +1,17 @@
+package player
+
+import (
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+func init() {
+	RegisterPlayerRules("stamina", func(owner *Player) (*pb.RulePart, error) {
+		rules := owner.StaminaComp().staminaRules()
+		payload, err := pb.MarshalStaminaRulesPush(&pb.StaminaRulesPush{Max: rules.Max, HardCap: rules.HardCap, RegenMillis: rules.RegenMillis, RefillDailyLimit: rules.RefillDailyLimit})
+		if err != nil {
+			return nil, err
+		}
+		return &pb.RulePart{MessageID: msgid.MsgStaminaRules, Payload: payload}, nil
+	})
+}

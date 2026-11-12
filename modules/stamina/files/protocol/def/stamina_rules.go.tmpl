@@ -1,0 +1,18 @@
+//go:build protocoldef
+
+package protocoldef
+
+// StaminaRulesPush 用于客户端按同步状态推算体力；不包含当前业务日，也不复制当前体力状态。
+// 规则若随等级变化，升级后补取 RulesGet；服务端每次操作仍使用当时的权威规则。
+type StaminaRulesPush struct {
+	Max              int64 `pb:"1"`
+	HardCap          int64 `pb:"2"`
+	RegenMillis      int64 `pb:"3"`
+	RefillDailyLimit int32 `pb:"4"`
+}
+
+//roost:protocol group=game handler=rules
+type StaminaRulesProtocol interface {
+	//roost:msg id={{ID:protocol:StaminaRules}}
+	StaminaRules() StaminaRulesPush
+}

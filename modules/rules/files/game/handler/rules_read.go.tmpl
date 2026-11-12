@@ -1,0 +1,13 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerRulesRead 读取已经进入游戏的玩家；没有写入、落库和 I/O。
+//
+//roost:nest
+func handlerRulesRead(target player.IRulesEntity) (*pb.RulesNowPush, error) {
+	return target.RulesSnapshot()
+}
