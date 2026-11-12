@@ -244,6 +244,6 @@ R10 提交 `fc0fa6e9`，实现和定向验收完成：模块安装独立 allianc
 
 ## 附录：R9 活动框架交付（2026-11-12）
 
-新增 activity / activity_world / activity_alliance：五阶段、固定锚点、日历循环、条件解锁、自定义流程、异步初始化/结算、共享参与资格和有界恢复。三个实体直接挂同一个 activity.Component Go 类型；本地别名用于生成接线，宿主只提供 DAO/归属/驱动，业务状态机共用 ActivityBook/Host。个人复用持久定时器；Remote 保留既有约束，以权威服务有界扫描推进。安装器支持既有服务追加 Mod/RPC，保留原业务文件和配置；不改三大核心契约。
+提交 `d84d97cf`。新增 activity / activity_world / activity_alliance：五阶段、固定锚点、日历循环、条件解锁、自定义流程、异步初始化/结算、共享参与资格和有界恢复。三个实体直接挂同一个 activity.Component Go 类型；本地别名用于生成接线，宿主只提供 DAO/归属/驱动，业务状态机共用 ActivityBook/Host。个人复用持久定时器；Remote 保留既有约束，以权威服务有界扫描推进。安装器支持既有服务追加 Mod/RPC，保留原业务文件和配置；不改三大核心契约。
 
 生成工程基础 21 + 全服 4 + 联盟 4 + 四组联动 4 = 33 PASS / 0 SKIP；9 个变异全部检出，两轮 race、最小安装、组合安装、重复安装与安装失败回滚通过。详见[使用说明](../../modules/activity/README.md)与[证据](evidence/module-activity-20261112/README.md)。全模块正反序、完整 demo、全仓与真实存储/跨进程仍按 §5/§6 最终批次处理。R8 gift / R11 lockstep 未实施；配方登录另按 6ee057c2 的新交接任务书继续，本批未改其 worktree。不合 main、不发版。

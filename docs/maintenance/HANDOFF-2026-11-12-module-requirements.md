@@ -121,7 +121,7 @@
 
 ### R9. activity（活动）
 
-实现与定向验收已完成（2026-11-12，本批提交）：activity 21、activity_world 4、activity_alliance 4，enter/profile/leaderboard/mailbox 四组联动各 1，共 33 PASS / 0 SKIP；9 个变异、两轮 race、最小安装、组合安装、重复安装与安装失败回滚通过。[使用说明](../../modules/activity/README.md)、[证据](evidence/module-activity-20261112/README.md)。全矩阵、完整 demo、§5/§6 真实依赖仍留到最终批次；配方登录另按 6ee057c2 的新交接任务书后续继续，本批未改其工作树。
+实现与定向验收已完成（2026-11-12，提交 `d84d97cf`）：activity 21、activity_world 4、activity_alliance 4，enter/profile/leaderboard/mailbox 四组联动各 1，共 33 PASS / 0 SKIP；9 个变异、两轮 race、最小安装、组合安装、重复安装与安装失败回滚通过。[使用说明](../../modules/activity/README.md)、[证据](evidence/module-activity-20261112/README.md)。全矩阵、完整 demo、§5/§6 真实依赖仍留到最终批次；配方登录另按 6ee057c2 的新交接任务书后续继续，本批未改其工作树。
 
 实现调整：同一个 activity.Component 通过 activity.Owner 接口挂在不同 Entity 上；状态与阶段推进共用 ActivityBook/Host，实体包只保留接线别名及 DAO/归属/唤醒适配，不复制组件实现。个人使用正式 entitytimer；现有 Remote 生成契约禁止本地持久定时器，因此全服/联盟采用 ownership 分页扫描，期限仍在 DAO，推进仍在 Nest。扫描不是准点保证。未修改三大核心契约。排行榜/邮件为身份与发件适配，跨服协调可接 service/activity；具体奖单和阶段业务由工程定义。本分支 demo 已没有旧活动实现，未恢复第二套 demo。
 
