@@ -1,6 +1,6 @@
 # R2 Purchase 生成模块验收（2026-11-12）
 
-基线 `6d9e6431`，工作分支 `feat/business-modules`，macOS、本地当前 core（生成工程 go.mod replace 指向本工作树）。实现与边界见 [purchase](../../../../modules/purchase/README.md)。不合 main、不发版；不兼容旧生成工程或旧订单格式。Player schema 4 删除 PurchaseClaims，常量大小的已发货序号与奖励同事务。
+实现提交 `cc0d7855`，基线 `6d9e6431`，工作分支 `feat/business-modules`，macOS、本地当前 core（生成工程 go.mod replace 指向本工作树）。实现与边界见 [purchase](../../../../modules/purchase/README.md)。不合 main、不发版；不兼容旧生成工程或旧订单格式。Player schema 4 删除 PurchaseClaims，常量大小的已发货序号与奖励同事务。
 
 ## 执行结果
 
@@ -8,7 +8,7 @@
 - 同一入口完成 13 个变异，逐条要求命中指定行为失败，见下表；并运行 `go test -race -count=2 -run '^TestPurchase|^TestWithPurchase' ./game/handler ./game/purchase ./game/controllers/purchase ./internal/service/platform`。
 - 临时独立 Redis（本机 redis-server，随机 loopback 端口，测试后只停止该子进程），生成工程 `ROOST_PURCHASE_REDIS_ADDR=<isolated> GOWORK=off go test -tags=integration -race -count=2 -v -run '^TestPurchaseRedis' ./game/purchase`：3 条 × 2 轮，**6 PASS / 0 SKIP**，见 [redis.log](redis.log)。65 笔分批清理后 hash 只剩两个游标；16 个并发 Record 同单仅分配一个序号；错金额/类型拒绝无空号。没有启用持久化，不声称验证了断电恢复或副本集。
 - 新生成 game-demo 定向 `TestPurchase|TestWithPurchase|TestDemoPurchase` 通过（初版 18 条基础场景时生成），见 [demo-tests.log](demo-tests.log)。player controller、game service、loadtest **仅编译**通过，见 [demo-build.log](demo-build.log)；新加的终态/订单身份三条由最终新工程验收覆盖。全量 demo 延后，不把 `-run '^$'` 算行为测试。
-- `GOWORK=off go test -count=1 ./service/platform`；清单/联动/安装步骤定向；`GOWORK=off go test -count=1 .`；文档链接检查：通过，见 [checks.log](checks.log)。文档检查当时 306 个文件，0 断链；报告自身入库后另补文档检查。
+- `GOWORK=off go test -count=1 ./service/platform`；清单/联动/安装步骤定向；`GOWORK=off go test -count=1 .`；文档链接检查：通过，见 [checks.log](checks.log)。文档检查当时 306 个文件，0 断链；报告自身暂存后再检查 308 个文件、0 断链。
 
 ## 变异
 
