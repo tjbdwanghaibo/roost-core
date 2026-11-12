@@ -11,10 +11,16 @@ errcodes: [login_elsewhere]
 replaces:
   - internal/access/player/tcp/auth.go
   - internal/service/account/collaborators.go
+next:
+  - "打开玩家 TCP 监听：roost config enable player-tcp（鉴权已经不是拒绝桩；生产示例配置仍是关的）"
+  - "开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录"
+  - "登记区服：account 与它的 Redis 起来之后执行 go run ./cmd/accountctl upsert-server -sid <{{GAME_SERVICE}} 进程的 sid>；没有状态是 open 的服建不了角"
+  - "客户端的登录入口：没装 portal 模块的话 roost module add portal（HTTP 的登录 / 建角 / 选角），或者由工程自己的入口代客户端调 account"
+  - "上线前在 internal/service/account/login_channels.go 接渠道验签；缺省一个渠道都没接"
 verify:
-  packages: [./game/login, ./internal/access/player/tcp, ./internal/service/account]
+  packages: [./game/login, ./internal/access/player/tcp, ./internal/service/account, ./cmd/accountctl]
   run: ^TestLogin
-  pass: 19
+  pass: 21
 with:
   enter:
     summary: 进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player

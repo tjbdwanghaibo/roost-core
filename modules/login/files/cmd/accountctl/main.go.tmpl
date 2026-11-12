@@ -1,0 +1,187 @@
+// Command accountctl 是 account 服务故意不放上总线的那部分运维操作里，登录要用到的最小一块：
+// 登记一个区服、改它的状态、看它的记录。
+//
+//	go run ./cmd/accountctl upsert-server -sid 1000                       # 登记并开放 1000 服（名字缺省 {{GAME_SERVICE}}-1000）
+//	go run ./cmd/accountctl upsert-server -sid 1000 -status maintenance   # 停止在这个服建角（已有角色照常登录）
+//	go run ./cmd/accountctl show-server -sid 1000
+//	go run ./cmd/accountctl -redis 10.0.0.5:6379 -redis-password ... -prefix roost:{{PROJECT}}:account upsert-server -sid 1001 -name 二服
+//
+// 为什么要有它：account 里没有状态是 open 的服，CreateRole 一律拒绝；而登记区服（UpsertServer）改的是
+// “所有玩家能登录到哪里”，account 不让任何一个连得上总线的进程做这件事（roost-core 的
+// service/account/account_rpc.go）。所以这个工具做运维会做的事：用 account 自己的 Redis 配置直接打开它的
+// 存储，把区服记录写进去。服号就是 game 进程的 sid（configs/service/config.{{GAME_SERVICE}}.yaml 的 sid，
+// 或启动时的 --sid）。
+//
+// 连接参数取自 account 进程的配置（configs/service/config.account.yaml）：-redis / -redis-password /
+// -redis-db / -redis-cluster 对应 redis.*，-prefix 对应 account.key_prefix。缺省值就是生成的开发配置里的值，
+// 所以本机开发不用带任何参数；别的环境照那个环境的配置填。前缀填错不会报错——只是写进了另一套部署
+// （或谁也不读）的键里，登记之后用 show-server 与一次真实的建角确认。
+//
+// 合服、单个角色换服的人工兜底不在这里（需要时照 roost-core demo 的 cmd/accountctl 加
+// merge-server / unmerge-server / show-role / transfer-role）。
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	accountcollaborators "{{MODULE}}/internal/service/account"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+const usage = "usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-redis-password P] [-redis-db N] [-prefix key_prefix] " +
+	"upsert-server -sid N [-name NAME] [-status open|maintenance|full|closed] [-region R] | show-server -sid N"
+
+func main() {
+	redisAddr := flag.String("redis", "127.0.0.1:6379", "account 服务的 Redis（config.account.yaml 的 redis.addr）")
+	redisPassword := flag.String("redis-password", "", "Redis 口令（redis.password）")
+	redisDB := flag.Int("redis-db", 0, "Redis 库号（redis.db）")
+	// 单机客户端连 Cluster 只够得着那个节点负责的槽，别的键会得到 MOVED。
+	redisCluster := flag.String("redis-cluster", "", "Redis Cluster 种子地址，逗号分隔（redis.cluster_addrs）；写了就不用 -redis 与 -redis-db")
+	prefix := flag.String("prefix", "roost:{{PROJECT}}:account", "config.account.yaml 的 account.key_prefix：与运行中的 account 服务靠它共用同一份存储")
+	flag.Parse()
+	if flag.NArg() < 1 {
+		fail(errors.New(usage))
+	}
+	cfg := fredis.DefaultConfig(*redisAddr)
+	cfg.Password = *redisPassword
+	cfg.DB = *redisDB
+	for _, addr := range strings.Split(*redisCluster, ",") {
+		if addr = strings.TrimSpace(addr); addr != "" {
+			cfg.ClusterAddrs = append(cfg.ClusterAddrs, addr)
+		}
+	}
+	service, closeStore, err := openService(cfg, *prefix)
+	if err != nil {
+		fail(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = run(ctx, service, flag.Args(), os.Stdout)
+	cancel()
+	closeStore()
+	if err != nil {
+		fail(err)
+	}
+}
+
+// serverRecords 是两个子命令用到的 account 接口；*svcaccount.Service 满足它。UpsertServer 不在总线接口
+// （svcaccount.Accounts）上，所以这里要的是服务本身，不是它的客户端。
+type serverRecords interface {
+	UpsertServer(ctx context.Context, server svcaccount.GameServer) (svcaccount.GameServer, error)
+	GetServer(ctx context.Context, serverID int32) (svcaccount.GameServer, error)
+}
+
+// run 执行一个子命令，把结果记录以 JSON 写到 out。参数不对、account 拒绝都返回错误，什么也不写。
+func run(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return errors.New(usage)
+	}
+	switch args[0] {
+	case "upsert-server":
+		return upsertServer(ctx, records, args[1:], out)
+	case "show-server":
+		return showServer(ctx, records, args[1:], out)
+	default:
+		return fmt.Errorf("unknown command %q (commands: upsert-server, show-server)", args[0])
+	}
+}
+
+// upsertServer 登记或更新一个区服。它整条覆盖名字、状态与区域（合服字段由 account 原样保留）：
+// 只想改状态时也要把名字带上，不带就回到缺省名。-sid 必填、没有缺省：写错服号是登记了一个没有进程的服。
+func upsertServer(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("upsert-server", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	sid := flags.Int("sid", 0, "区服号：game 进程的 sid")
+	name := flags.String("name", "", "显示名（缺省 {{GAME_SERVICE}}-<sid>）")
+	status := flags.String("status", string(svcaccount.ServerOpen), "open | maintenance | full | closed；只有 open 的服能建角")
+	region := flags.String("region", "", "区域标签，account 不解释它")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("upsert-server: %w", err)
+	}
+	if *sid <= 0 {
+		return errors.New("upsert-server: -sid is required (the game process's sid, a positive number)")
+	}
+	if *name == "" {
+		*name = fmt.Sprintf("{{GAME_SERVICE}}-%d", *sid)
+	}
+	serverStatus := svcaccount.ServerStatus(*status)
+	switch serverStatus {
+	case svcaccount.ServerOpen, svcaccount.ServerMaintenance, svcaccount.ServerFull, svcaccount.ServerClosed:
+	default:
+		return fmt.Errorf("upsert-server: invalid -status %q (open, maintenance, full or closed)", *status)
+	}
+	server, err := records.UpsertServer(ctx, svcaccount.GameServer{ID: int32(*sid), Name: *name, Status: serverStatus, Region: *region})
+	if err != nil {
+		return fmt.Errorf("upsert-server: %w", err)
+	}
+	return printJSON(out, server)
+}
+
+// showServer 打印一个区服的记录（含合服字段）；没登记过的服是错误。
+func showServer(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("show-server", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	sid := flags.Int("sid", 0, "区服号")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("show-server: %w", err)
+	}
+	if *sid <= 0 {
+		return errors.New("show-server: -sid is required")
+	}
+	server, err := records.GetServer(ctx, int32(*sid))
+	if err != nil {
+		return fmt.Errorf("show-server: %w", err)
+	}
+	return printJSON(out, server)
+}
+
+func printJSON(out io.Writer, value any) error {
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, string(encoded))
+	return err
+}
+
+// openService 在运行中的 account 进程用的同一份 Redis 存储上建一个 account 服务。协作者用工程自己的那一套
+// （bootstrap 交给 account Mod 的同一份），名字规则因此一致；两个子命令不登录也不建角，所以身份校验与
+// 玩家号分配器不会被调用，它们要的 Registry 绑定这里不需要。
+func openService(cfg *fredis.Config, prefix string) (*svcaccount.Service, func(), error) {
+	assembly, err := redisdriver.Assemble(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("redis: %w", err)
+	}
+	closeStore := func() { _ = assembly.Close() }
+	stores, err := svcaccount.NewRedisStores(assembly.Client, prefix, svcaccount.DefaultClaimTTL)
+	if err != nil {
+		closeStore()
+		return nil, nil, fmt.Errorf("account stores: %w", err)
+	}
+	service, err := svcaccount.New(svcaccount.Config{
+		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names,
+		Verifier: accountcollaborators.Verifier(), Allocator: accountcollaborators.Allocator(), NameRules: accountcollaborators.NameRules(),
+		// 构造服务必须给一把会话密钥；这个工具从不签发会话，值无所谓，而且不能是真的那一把。
+		SessionSecret: "accountctl-does-not-mint-sessions",
+	})
+	if err != nil {
+		closeStore()
+		return nil, nil, fmt.Errorf("account service: %w", err)
+	}
+	return service, closeStore, nil
+}
+
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "accountctl: %v\n", err)
+	os.Exit(1)
+}

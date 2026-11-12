@@ -1,0 +1,146 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+)
+
+// accountctl 的场景。account 是内存存储上的正式服务：子命令只经 serverRecords 用它，与连着 Redis 的那一个
+// 是同一份实现。没有连真实的 Redis——openService 那一段（地址、前缀）这里验不到。
+
+// loginCtlAccount 给出一个空的 account：一个区服都没登记。
+func loginCtlAccount(t *testing.T) *svcaccount.Service {
+	t.Helper()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Names:    names,
+		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) { return 100_001, nil }),
+		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "accountctl-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// loginCtlRun 执行一个子命令，返回它打印的记录（没有打印时是零值）与错误。
+func loginCtlRun(t *testing.T, service *svcaccount.Service, args ...string) (svcaccount.GameServer, string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	err := run(context.Background(), service, args, &out)
+	var server svcaccount.GameServer
+	if out.Len() > 0 {
+		if decodeErr := json.Unmarshal(out.Bytes(), &server); decodeErr != nil {
+			t.Fatalf("accountctl %s printed something that is not a server record: %q", strings.Join(args, " "), out.String())
+		}
+	}
+	return server, out.String(), err
+}
+
+// 登记区服之前建不了角；upsert-server 之后建得了。show-server 打印同一条记录；
+// 把状态改成 maintenance 之后新账号建不了角，已有的角色照常选。
+func TestLoginAccountctlRegistersAServerSoRolesCanBeCreated(t *testing.T) {
+	service := loginCtlAccount(t)
+	ctx := context.Background()
+	alice, err := service.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateRole(ctx, alice.ID, 1000, "Alice"); !errors.Is(err, svcaccount.ErrServerInvalid) {
+		t.Fatalf("create role before the server is registered: %v, want ErrServerInvalid", err)
+	}
+	if _, _, err := loginCtlRun(t, service, "show-server", "-sid", "1000"); !errors.Is(err, svcaccount.ErrServerInvalid) {
+		t.Fatalf("show-server of an unregistered server: %v, want ErrServerInvalid", err)
+	}
+
+	server, printed, err := loginCtlRun(t, service, "upsert-server", "-sid", "1000")
+	if err != nil {
+		t.Fatalf("upsert-server: %v", err)
+	}
+	if server.ID != 1000 || server.Name != "{{GAME_SERVICE}}-1000" || server.Status != svcaccount.ServerOpen || server.UpdatedAtUnix == 0 {
+		t.Fatalf("upsert-server -sid 1000 wrote %+v, want an open server named {{GAME_SERVICE}}-1000", server)
+	}
+	if !strings.Contains(printed, `"status": "open"`) {
+		t.Fatalf("upsert-server printed %q, want the record as indented JSON", printed)
+	}
+	role, err := service.CreateRole(ctx, alice.ID, 1000, "Alice")
+	if err != nil {
+		t.Fatalf("create role after upsert-server: %v", err)
+	}
+	shown, _, err := loginCtlRun(t, service, "show-server", "-sid", "1000")
+	if err != nil || shown.ID != 1000 || shown.Name != server.Name || shown.Status != svcaccount.ServerOpen {
+		t.Fatalf("show-server = %+v, %v; want the record upsert-server wrote", shown, err)
+	}
+
+	// 改名字、区域与状态：整条覆盖。
+	renamed, _, err := loginCtlRun(t, service, "upsert-server", "-sid", "1000", "-name", "一服", "-region", "cn", "-status", "maintenance")
+	if err != nil || renamed.Name != "一服" || renamed.Region != "cn" || renamed.Status != svcaccount.ServerMaintenance {
+		t.Fatalf("upsert-server with a name, region and status = %+v, %v", renamed, err)
+	}
+	bob, err := service.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateRole(ctx, bob.ID, 1000, "Bob"); !errors.Is(err, svcaccount.ErrServerClosed) {
+		t.Fatalf("create role on a server in maintenance: %v, want ErrServerClosed", err)
+	}
+	if _, err := service.SelectRole(ctx, alice.ID, role.PlayerID); err != nil {
+		t.Fatalf("an existing role on a server in maintenance cannot be selected: %v", err)
+	}
+	// 第二个服各记各的。
+	if second, _, err := loginCtlRun(t, service, "upsert-server", "-sid", "1001", "-status", "full"); err != nil || second.ID != 1001 || second.Status != svcaccount.ServerFull {
+		t.Fatalf("upsert-server -sid 1001 -status full = %+v, %v", second, err)
+	}
+	if again, _, _ := loginCtlRun(t, service, "show-server", "-sid", "1000"); again.Name != "一服" || again.Status != svcaccount.ServerMaintenance {
+		t.Fatalf("registering 1001 changed 1000: %+v", again)
+	}
+}
+
+// 参数不对的命令返回错误、什么也不写、什么也不打印：没有 -sid、服号不是正数、状态不认识、命令不认识。
+func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
+	service := loginCtlAccount(t)
+	for label, args := range map[string][]string{
+		"no command":              {},
+		"an unknown command":      {"merge-server", "-from", "1001", "-into", "1000"},
+		"upsert without -sid":     {"upsert-server", "-name", "nameless"},
+		"upsert with sid zero":    {"upsert-server", "-sid", "0"},
+		"upsert with a bad sid":   {"upsert-server", "-sid", "-1000"},
+		"upsert with a bad state": {"upsert-server", "-sid", "1000", "-status", "opened"},
+		"upsert with a bad flag":  {"upsert-server", "-sid", "1000", "-open"},
+		"show without -sid":       {"show-server"},
+		"show with a bad flag":    {"show-server", "-id", "1000"},
+	} {
+		_, printed, err := loginCtlRun(t, service, args...)
+		if err == nil {
+			t.Fatalf("%s: accountctl %s succeeded", label, strings.Join(args, " "))
+		}
+		if printed != "" {
+			t.Fatalf("%s: a refused command printed %q", label, printed)
+		}
+	}
+	for _, sid := range []int32{1000, 1001} {
+		if _, err := service.GetServer(context.Background(), sid); !errors.Is(err, svcaccount.ErrServerInvalid) {
+			t.Fatalf("a refused command registered server %d: %v", sid, err)
+		}
+	}
+}
