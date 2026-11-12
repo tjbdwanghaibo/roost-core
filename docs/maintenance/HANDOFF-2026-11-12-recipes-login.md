@@ -4,7 +4,7 @@
 
 ## 0. 从哪里开始
 
-- **分支**：远端 `feat/business-modules-recipes-login`（本机 worktree `/Users/whb/roost/worktrees/recipes-login`，本地分支 `tmp/recipes-login`）。它在登录线分支的 `fc053259` 之上多两个提交：一份**未验证的半成品**（见 §2）和本文。
+- **分支**：远端 `feat/business-modules-recipes-login`（本机 worktree `/Users/whb/roost/worktrees/recipes-login`，本地分支 `tmp/recipes-login`）。它在登录线分支的 `fc053259` 之上多出：一份**未经复核**的配方改动（见 §2）和本文，并已并入登录线后来的提交（到 `b94c99d5`）。
 - **不要在别的 worktree 里改**：登录线的原会话在 `/Users/whb/roost/worktrees/mod-portal`（`tmp/mod-portal`，远端 `feat/business-modules-portal`）继续做 game-demo 的接入；主线 `feat/business-modules` 是另一条线。两条都不要动。
 - 做完推到 `feat/business-modules-recipes-login`，**不要合进任何别的分支**；由原会话在统一跑完整测试之前把它并进登录线分支。
 - `GOWORK=off`。模块与配方的模板是编进 CLI 的：每次改模板后重新 `go build -o <scratch>/roost ./codegen/cmd/roost` 再生成工程验。
@@ -37,7 +37,13 @@
 | 两份 `RECIPE.md.tmpl` | 改了登录一节 |
 | `codegen/internal/roost/recipe_test.go` | 期望值改了一部分 |
 
-把它当草稿：逐个文件读过、判断对不对再用，不对就重写。它可能编译不过。
+**更新（同日稍晚）**：上一个 agent 的结束报告说，这份改动在它那边其实已经做完——两个配方工程 build / vet / `go test ./...` / `roost module verify` 全过，`go test -run TestRecipe ./codegen/internal/roost` 通过（164s）；它交出的补丁与这个提交内容相同。但那些结果**没有被复核过**，变异自检、§3 第 4 项（开发配置开箱可用）与第 7 项（文档）没有做。所以接手的第一步是照 §5 重新验证一遍，对得上就在它上面补完剩下的项，对不上再逐个文件判断。本分支已并入登录线的 `b94c99d5`（game-demo 接入完成）。
+
+它留下的三条提示：
+
+1. login 模块的 `Admit` 只拦承载服不符，不拦“换服在途”；所以才有 `recipe_entering.go.tmpl` 那条配方自己的进入前检查。
+2. login 模块的 `login_test.go` 用进程级通道收会话激活后的告知；配方的网络测试结束时要清空它，否则模块自己的用例会读到脏数据。
+3. 配方网络测试里的 `recipeRequest` 要跳过不带关联号的推送（进入时 servertime 推的 `ServertimeNow`、`EnterStatus`）。
 
 ## 3. 要做成什么样
 
