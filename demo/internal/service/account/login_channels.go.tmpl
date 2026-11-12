@@ -1,0 +1,46 @@
+package account
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 这个文件是登录模块留给工程的渠道入口（roost module add login 写下缺省“全部拒绝”的那一份），demo 在模块装好之后
+// 用自己的规则覆盖它。别的协作者（collaborators.go、开发登录 login_dev.go、玩家号计数器 login_player_id.go）
+// 都是模块的，demo 不改。
+
+// DemoChannel is the one login channel this demo accepts besides the login
+// module's development channel (login_dev.go). A real project has one Channel
+// per platform (an app store, a device attestation service, …) and a
+// verifier that calls that platform.
+const DemoChannel svcaccount.Channel = "demo"
+
+// demoCredentialPrefix: the credential that "proves" open id X is "demo:X".
+const demoCredentialPrefix = "demo:"
+
+// verifyChannel confirms a login identity with its channel: every login that
+// is not the development channel comes here.
+//
+// THIS IS NOT IDENTITY VERIFICATION. It accepts any open id whose credential
+// is the open id with a fixed prefix, so anyone can log in as anyone. It does
+// two things the real one must also do — it fails closed on every channel it
+// does not know, and it returns the identity it confirmed rather than the one
+// submitted — and nothing else. Replace the body with a call to the platform
+// before this project takes outside traffic.
+//
+// 机器人（cmd/loadtest）、scripts/ 下的演练与 WALKTHROUGH 都用这个渠道登录，所以它不看配置、哪份配置下都开着。
+// 装了 portal 模块之后它不再只在内部总线上：POST /portal/login 把它交给了够得着入口的任何人。入口缺省只听
+// 127.0.0.1（生产配置要显式写 web.allow_public_addr 才能对外），对外之前必须先把这里换成真的渠道。
+func verifyChannel(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+	if identity.Channel != DemoChannel {
+		return svcaccount.Verified{}, fmt.Errorf("%w: channel %q is not a login channel of this demo (only %q is)", svcaccount.ErrIdentityDenied, identity.Channel, DemoChannel)
+	}
+	openID, ok := strings.CutPrefix(identity.Credential, demoCredentialPrefix)
+	if !ok || openID == "" || openID != identity.OpenID {
+		return svcaccount.Verified{}, fmt.Errorf("%w: demo credential does not match the open id", svcaccount.ErrIdentityDenied)
+	}
+	return svcaccount.Verified{Channel: DemoChannel, OpenID: openID}, nil
+}

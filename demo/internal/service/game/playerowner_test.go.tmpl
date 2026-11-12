@@ -279,15 +279,25 @@ func TestAdmitBoundServesOnlyThePlayersBoundHere(t *testing.T) {
 	}
 }
 
-// 边界上的闸门：登录必须放行（它就是建立驻留记录的那条消息），其余一律按 Admit 判。
+// 边界上的闸门：登录必须放行（它就是建立驻留记录的那条消息），新建请求同样放行（用进服票据握手的新玩家在
+// 建成之前只有它能建立驻留记录），其余一律按 Admit 判——包括 enter 模块的另外两条协议之外的每一条玩法消息。
+// 放行不建立驻留记录：记录仍然只由端点里的 Serve 在核对绑定之后建立。
 func TestTheWriteGateExemptsLoginAndRefusesEverythingElse(t *testing.T) {
 	owners, _, _ := ownersUnderTest(t)
 
 	if err := owners.AdmitMessage(42, msgid.MsgEnterGame); err != nil {
 		t.Fatalf("login was gated on already serving the player: %v", err)
 	}
-	if err := owners.AdmitMessage(42, msgid.MsgAddItem); !errors.Is(err, ErrNotServedHere) {
-		t.Fatalf("a write was admitted for a player this process does not serve: %v", err)
+	if err := owners.AdmitMessage(42, msgid.MsgEnterCreate); err != nil {
+		t.Fatalf("the create request was gated on already serving the player: %v", err)
+	}
+	if owners.Resident(42) {
+		t.Fatal("passing the gate took the player into service; only Serve does that, after the binding check")
+	}
+	for _, message := range []uint32{msgid.MsgAddItem, msgid.MsgProfileRename, msgid.MsgServertimeSync} {
+		if err := owners.AdmitMessage(42, message); !errors.Is(err, ErrNotServedHere) {
+			t.Fatalf("message %d was admitted for a player this process does not serve: %v", message, err)
+		}
 	}
 	if err := owners.Serve(context.Background(), 42, ownSID); err != nil {
 		t.Fatal(err)

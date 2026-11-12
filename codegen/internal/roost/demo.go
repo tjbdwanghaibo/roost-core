@@ -6,12 +6,14 @@ import (
 	"go/format"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/demo"
+	"gopkg.in/yaml.v3"
 )
 
 // demoModulePlaceholder is replaced with the project's module path.
@@ -550,8 +552,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/config_snapshot_test.go", why: "the config generation a handler reads is the one pinned at admission: a reload or rollback between two reads of one handler is not seen"},
 		{add: &AddOptions{Kind: "access", Name: "player", Service: gameService}, why: "the player request boundary"},
 		{add: &AddOptions{Kind: "transport", Name: "tcp"}, why: "a transport a client can actually connect to"},
-		{write: "internal/access/player/tcp/auth.go", why: "session tickets validated by the account service, plus a terminal shortcut"},
-		{write: "internal/access/player/tcp/auth_test.go", why: "the authenticator's principal read back by the login endpoint's BoundServerID: the bound sid's claim key cannot drift between the two"},
 		{write: "internal/access/player/required_gate_test.go", why: "required ownership gate refuses startup-window requests until Service.Init registers it"},
 		{run: enableDemoPlayerTCP, why: "a listener that is actually on; doctor's player-tcp workflow passes on the generated project"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddItem", Group: "game", Handler: "player"}, why: "the wire message"},
@@ -783,8 +783,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/spawner_test.go", why: "where the sid comes from: the registry's config, not the runtime-config slot the config-data Mod overwrites"},
 		{write: "internal/service/game/gm.go", why: "GM commands on the admin registry: add item / add exp / send mail / world stats, served by ops over HTTP behind a token"},
 		{run: enableDemoAdmin, why: "the dev config enables the ops admin endpoint with a dev token, so the GM commands are reachable on a developer machine"},
-		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works; record or undo a server merge (merge-server / unmerge-server / show-server); the manual fallback for moving one role to another server (show-role / transfer-role)"},
-		{write: "cmd/accountctl/main_test.go", why: "transfer-role begin / commit / abort on the real account service over memory stores: begin presents the binding it read, commit records the operator's note, an incomplete command writes nothing"},
 		{write: "cmd/sidmove/main.go", why: "the checks between the steps of moving a game sid to another machine: the old WAL is fully projected, the singleton lock is free, nobody wrote the players in between"},
 		{write: "cmd/sidmove/main_test.go", why: "a held or unacknowledged WAL fails the drain check, the lock holder is reported without its token, a write between two player snapshots is caught"},
 		{write: "cmd/sidmerge/main.go", why: "the offline half of merging one server into another: preconditions (drained WALs, co-located shared databases, outbox, terminal sagas, persistent bus list), the copy of dbscope=sid data with a manifest, and its revert (wiring/sidmerge)"},
@@ -805,8 +803,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/platform/purchase_delivery_test.go", why: "the first durable grant survives retries, lost replies and catalog changes"},
 		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and its activity group comes from the groups file the coordinator reads too"},
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
-		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
-		{write: "internal/service/account/collaborators_test.go", why: "the id counter is the deployment's (under account.key_prefix) and an upgraded demo keeps counting from the old fixed key"},
 		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
 	return append(append(steps, demoAllianceSteps(gameService)...), demoModuleSteps()...)
@@ -823,14 +819,19 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // （落点已被占用时安装器拒绝安装）。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome", "attribute", "equipment"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding"},
+		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome", "attribute", "equipment", "login", "portal", "servertime"}, why: "login is the login module (the handshake authenticator that hands enter:<ticket> and session:<player_id>:<token> to account, the account collaborators, cmd/accountctl); portal is the HTTP front door on the account process (login, server list, enter ticket); servertime is the server clock a client reads; enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding"},
 		{write: "game/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
-		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件。协议多几个字段，
-		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
-		// 拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter 的联动登记）。
+		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的四个业务文件。协议多几个字段，
+		// 两个要装载 Player 的端点交给 player controller——EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
+		// 拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter 的联动登记）与 EnterCreate（区服归属、
+		// 登录预算、接入驻留表之后才建档）。会话激活后的告知 enter_status.go 是模块的，不覆盖。
 		{write: "protocol/def/enter_game.go", why: "the enter module's protocol with the demo's fields: client version in, player id / created / owner sid out; the message id is the one the module was allocated"},
 		{write: "game/controllers/enter/controller.go", why: "the enter domain's controller holds the player controller: the demo's login needs everything that controller has"},
 		{write: "game/controllers/enter/enter_game.go", why: "the endpoint hands the login to the player controller's EnterGame"},
+		{write: "game/controllers/enter/enter_create.go", why: "the create request's endpoint hands over to the player controller's EnterCreate: creating a Player loads it, and the demo loads a Player only where its role is bound, after the ownership table took it into service"},
+		{write: "game/controllers/player/enter_create.go", why: "the demo's two record operations behind the enter module's Create: Serve then GetOrCreate on the login budget, and the module's EnterCreate transaction"},
+		{write: "game/controllers/player/enter_login_export_test.go", why: "the test-only constructor the external login scenario builds its player controller with"},
+		{write: "game/controllers/player/enter_login_scenario_test.go", why: "the whole chain landing on the demo's own login: an enter-ticket handshake against the real account service, EnterStatus says create, EnterGame before the create is refused and writes nothing, EnterCreate, the demo's EnterGame, and a reconnect that is not asked to create again; the session-token path still loads or creates"},
 		// 排行榜是 leaderboard 模块：读榜的两条协议（LeaderboardTop 带自己的名次、LeaderboardMe）与提交入口
 		// SubmitSeason 都是模块的；demo 只覆盖模块留给工程的业务文件——哪张榜、哪个赛季、分数范围、一屏多长——
 		// 与钉住这些数的测试。副本结算（finish_dungeon）在事务之外调模块的提交，它 import game/leaderboard。
@@ -861,7 +862,78 @@ func demoModuleSteps() []demoScaffoldStep {
 		// （playerowner.go、service.go），saga 步骤按当前绑定准入（gift_saga.go、alliance_saga.go），
 		// 登录在装载玩家之前跑进入前检查（game/controllers/player/enter_game.go），GM 命令 gm.player.rehome，
 		// 以及 demo 自己的换服前检查（rehome_checks.go）。
+		//
+		// 登录是 login 模块：握手的认证器（internal/access/player/tcp/auth.go 与 game/login）、account 的协作者
+		// （开发登录、玩家号计数器、名字规则、指标）与 cmd/accountctl 都是模块的，demo 不带自己的认证器与 collaborators。
+		// demo 只动模块留给工程的地方：渠道入口 login_channels.go 换成 demo 渠道（机器人、演练脚本与 WALKTHROUGH 用它登录），
+		// accountctl 经模块的 registerCommand 多登记四个命令（另一个文件，模块的 main.go 不动）。
+		// 登录入口是 portal 模块（挂在托管 account 的进程上），服务器时间是 servertime 模块，demo 都不覆盖。
+		{write: "internal/service/account/login_channels.go", why: "the login module's project-owned channel entry with the demo channel: credential demo:<open_id>, which the robots, the drills and the walkthrough log in with; every other channel is refused"},
+		{write: "internal/service/account/login_channels_test.go", why: "the demo channel on the real account service: the matching credential logs in (session token and enter ticket both), anything else is identity_denied and leaves no account, and the development channel still answers to login.dev_token only"},
+		{write: "internal/access/player/tcp/login_claims_test.go", why: "the login module's authenticator read back by the demo's own reader: the bound sid BoundServerID reads, the broadcast profile of the mailbox enter hook, the bind epoch and a transfer in flight; and what the demo's former authenticator refused is still refused"},
+		{write: "cmd/accountctl/operator.go", why: "the demo's operator commands registered beside the login module's own: record or undo a server merge (merge-server / unmerge-server), and the manual fallback for moving one role to another server (show-role, transfer-role begin / commit / abort)"},
+		{write: "cmd/accountctl/operator_test.go", why: "transfer-role begin / commit / abort on the real account service over memory stores: begin presents the binding it read, commit records the operator's note, an incomplete command writes nothing; the four commands are reachable through the module's dispatch"},
+		{run: demoLoginDevConfig, why: "the account service's DEV config gets the development login token and the address of this machine's game server, so the walkthrough's three curl calls end with an enter ticket and where to connect; the production example gets neither"},
 	}
+}
+
+// demoDevLoginToken 是开发配置里的开发登录令牌（渠道 dev 的凭据）。WALKTHROUGH 与 README 里写的就是这个值。
+const demoDevLoginToken = "dev-local"
+
+// demoLoginDevConfig 给托管 account 的进程的**开发配置**补两段，让新生成的 demo 起来之后登录入口直接可用：
+//
+//	login.dev_token   开发登录（渠道 dev）的令牌。demo 渠道不看配置，这一段是给照着 portal 文档用 dev 渠道的人准备的。
+//	portal.servers    本机这台 game 的地址：服号取 game 开发配置的 sid，端口取它的 player_access.tcp.addr。
+//	                  不写这一段，清单与进服结果里的 addr 是空的。
+//
+// 只写 configs/service/config.account.yaml。生产示例与 k8s Secret 示例不动：生产配置里写了开发令牌 account 进程
+// 不启动，区服地址是部署的事（Gate 的地址，或者动态目录）。已经有这两段的文件不动。
+func demoLoginDevConfig(root, gameService string) error {
+	gamePath := filepath.Join(root, "configs", "service", "config."+gameService+".yaml")
+	raw, err := os.ReadFile(gamePath)
+	if err != nil {
+		return err
+	}
+	var game struct {
+		Sid          int32 `yaml:"sid"`
+		PlayerAccess struct {
+			TCP struct {
+				Addr string `yaml:"addr"`
+			} `yaml:"tcp"`
+		} `yaml:"player_access"`
+	}
+	if err := yaml.Unmarshal(raw, &game); err != nil {
+		return fmt.Errorf("%s: %w", gamePath, err)
+	}
+	_, port, err := net.SplitHostPort(game.PlayerAccess.TCP.Addr)
+	if err != nil || game.Sid <= 0 {
+		return fmt.Errorf("%s: expected a positive sid and player_access.tcp.addr as host:port, got sid %d and %q", gamePath, game.Sid, game.PlayerAccess.TCP.Addr)
+	}
+	accountPath := filepath.Join(root, "configs", "service", "config.account.yaml")
+	raw, err = os.ReadFile(accountPath)
+	if err != nil {
+		return err
+	}
+	body := string(raw)
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	if !strings.Contains("\n"+body, "\nlogin:\n") {
+		body += "# Development login (the login module, internal/service/account/login_dev.go): channel \"dev\" with this\n" +
+			"# token as the credential. DEV ONLY: a production config that sets it stops the account process at start.\n" +
+			"# The demo channel (login_channels.go, credential demo:<open_id>) does not read it.\n" +
+			"login:\n  dev_token: " + demoDevLoginToken + "\n"
+	}
+	if !strings.Contains("\n"+body, "\nportal:\n") {
+		body += "# The front door's server directory (the portal module): server id -> the address a client connects to.\n" +
+			"# This machine's game server; a deployment lists its Gate addresses here or plugs in a dynamic directory\n" +
+			"# (game/portal/portal_rules.go).\n" +
+			fmt.Sprintf("portal:\n  servers:\n    \"%d\": 127.0.0.1:%s\n", game.Sid, port)
+	}
+	if body == string(raw) {
+		return nil
+	}
+	return writeAtomic(accountPath, []byte(body), 0o644)
 }
 
 // scaffoldDemoTemplate builds the demo on top of the game template: Player
@@ -878,7 +950,9 @@ func scaffoldDemoTemplate(root string, m Manifest, gameService string) ([]string
 	vars := demoVars{module: m.Project.Module, gameService: gameService, project: m.Project.Name}
 	for _, step := range demoScaffoldSteps(gameService) {
 		if len(step.modules) > 0 {
-			if _, moduleErr := AddModules(context.Background(), root, step.modules, ModuleOptions{Service: gameService, SkipSelfSync: true}); moduleErr != nil {
+			// deferDependencies：与配方一样，依赖解析留给 project new 的外层（解析或 --skip-deps）。安装器自己的
+			// go mod tidy 按已发布的 core 解析，模块用到还没发布的包时（portal 的 wiring/modulehost）会让整个工程生成不出来。
+			if _, moduleErr := AddModules(context.Background(), root, step.modules, ModuleOptions{Service: gameService, SkipSelfSync: true, deferDependencies: true}); moduleErr != nil {
 				return created, fmt.Errorf("template %s: install modules %s (%s): %w", demoTemplateName, strings.Join(step.modules, ", "), step.why, moduleErr)
 			}
 			continue

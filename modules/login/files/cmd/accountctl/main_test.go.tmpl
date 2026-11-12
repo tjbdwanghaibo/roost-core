@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +126,7 @@ func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 		want string
 	}{
 		"no command":              {nil, "usage: accountctl"},
-		"an unknown command":      {[]string{"merge-server", "-from", "1001", "-into", "1000"}, `unknown command "merge-server"`},
+		"an unknown command":      {[]string{"drop-server", "-sid", "1000"}, `unknown command "drop-server"`},
 		"upsert without -sid":     {[]string{"upsert-server", "-name", "nameless"}, "-sid is required"},
 		"upsert with sid zero":    {[]string{"upsert-server", "-sid", "0"}, "-sid is required"},
 		"upsert with a bad sid":   {[]string{"upsert-server", "-sid", "-1000"}, "-sid is required"},
@@ -147,6 +148,43 @@ func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 		if _, err := service.GetServer(context.Background(), sid); !errors.Is(err, svcaccount.ErrServerInvalid) {
 			t.Fatalf("a refused command registered server %d: %v", sid, err)
 		}
+	}
+
+	// 工程自己登记的子命令（registerCommand）：dispatch 先认它，交给它的是 account 服务本身与子命令名之后的参数；
+	// 用法与“不认识的命令”里都列着它。没登记的名字仍然落到自带的命令上。与自带的命令重名、重复登记是写错了。
+	var got []string
+	registerCommand("login-test-echo", "login-test-echo WORD", func(_ context.Context, given *svcaccount.Service, args []string, out io.Writer) error {
+		if given != service {
+			t.Errorf("a registered command was handed %p, want the account service %p", given, service)
+		}
+		got = args
+		_, err := io.WriteString(out, "echoed\n")
+		return err
+	})
+	defer delete(operatorCommands, "login-test-echo")
+	var out bytes.Buffer
+	if err := dispatch(context.Background(), service, []string{"login-test-echo", "-sid", "7"}, &out); err != nil || strings.Join(got, " ") != "-sid 7" || out.String() != "echoed\n" {
+		t.Fatalf("dispatch of a registered command: err %v, args %q, printed %q", err, got, out.String())
+	}
+	if err := dispatch(context.Background(), service, []string{"drop-server"}, &out); err == nil || !strings.Contains(err.Error(), `unknown command "drop-server"`) || !strings.Contains(err.Error(), "login-test-echo") {
+		t.Fatalf("dispatch of an unknown command: %v, want the refusal to list the registered command too", err)
+	}
+	if err := dispatch(context.Background(), service, nil, &out); err == nil || !strings.Contains(err.Error(), "| login-test-echo WORD") {
+		t.Fatalf("the usage does not list the registered command: %v", err)
+	}
+	for label, register := range map[string]func(){
+		"a built-in name":  func() { registerCommand("show-server", "", func(context.Context, *svcaccount.Service, []string, io.Writer) error { return nil }) },
+		"a name twice":     func() { registerCommand("login-test-echo", "", func(context.Context, *svcaccount.Service, []string, io.Writer) error { return nil }) },
+		"no run function": func() { registerCommand("login-test-nil", "", nil) },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("registering %s did not panic", label)
+				}
+			}()
+			register()
+		}()
 	}
 }
 

@@ -1,0 +1,24 @@
+package player
+
+import (
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 这个文件只在测试里编译。登录的整条链路场景（enter_login_scenario_test.go）在外部测试包 player_test 里：
+// 它要 import 登录模块的 game/login（认证器，以及它与 enter 的联动登记的“先新建”规则与进入前检查），而 game/login
+// 经 enter 域的 controller import 本包，放在本包的内部测试里会成环。外部测试包够不着未导出的字段，所以这里给它
+// 一个只装登录要用的那几样的构造函数。
+
+// LoginOwners 是登录端点用到的驻留表（playerOwners），导出给外部测试包实现替身。
+type LoginOwners = playerOwners
+
+// NewLoginControllerForTest 建一个只够跑 EnterGame / EnterCreate 的 Controller：Registry、Nest 客户端、Player 的
+// lifecycle 与驻留表。登录在装载之后顺带做的事（世界计数、进场景、补单、公会、公告）取不到各自的依赖，
+// 按端点自己的约定只记日志、不让登录失败。
+func NewLoginControllerForTest(registry *app.Registry, nestClient corenest.Client, players *lifecycle.PlayerLifecycle, owners LoginOwners) *Controller {
+	controller := &Controller{registry: registry, nestClient: nestClient, players: players}
+	controller.owners.Store(&owners)
+	return controller
+}

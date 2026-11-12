@@ -42,6 +42,14 @@ type alwaysOwner struct{}
 func (alwaysOwner) Serve(context.Context, int64, int32) error { return nil }
 func (alwaysOwner) SID() int32                                 { return 1000 }
 
+// thisServer 是本进程（sid 1000）的 Registry。sid 写在配置里：登录模块与 enter 的联动登记的进入前检查读它
+// （这个测试进程里它是登记着的——外部测试包的登录场景 import 了 game/login），读不到就判断不了玩家归不归本服。
+func thisServer() *app.Registry {
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	return app.NewRegistry(cfg)
+}
+
 // boundSession 是一条已认证的会话，Claims 里带着认证器从 account 取来的角色绑定 sid。
 type boundSession struct{ claims map[string]string }
 
@@ -141,7 +149,7 @@ func newStuckLogin(t *testing.T) *stuckLogin {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := app.NewRegistry(viper.New())
+	registry := thisServer()
 	if err := registry.Register(playerTCPCapability, fixedLoginBudget(stuckLoginBudget)); err != nil {
 		t.Fatal(err)
 	}
@@ -245,20 +253,27 @@ func (owners *recordingOwners) Serve(_ context.Context, playerID int64, boundSID
 	return nil
 }
 
-// 静态绑定：登录只在玩家绑定的服上服务。
-// Claims 里没有 server_id → fail-closed，按名拒绝、不问驻留表、不装载；绑定在别的服 → 驻留表回答
-// player_elsewhere，端点原样转给客户端、不装载。两种情况都在装载之前结束（controller 没有 Players，
-// 走到装载会 panic）。
+// 静态绑定：登录只在玩家绑定的服上服务（boundHere）。
+// Claims 里没有 server_id → fail-closed，按名拒绝；绑定在别的服 → player_elsewhere，带上该连的服。
+// 两种情况都不问驻留表、不跑进入前检查、不装载（controller 没有 Players，走到装载会 panic）。
 func TestEnterGameServesOnlyThePlayersBoundToThisServer(t *testing.T) {
 	enter := func(t *testing.T, session gateway.Session) (*pb.EnterGameResponse, *recordingOwners) {
 		t.Helper()
 		owners := &recordingOwners{}
-		controller := &Controller{registry: app.NewRegistry(viper.New())}
+		controller := &Controller{registry: thisServer()}
 		var published playerOwners = owners
 		controller.owners.Store(&published)
 		response, err := controller.EnterGame(&playeraccess.Context{BaseCtx: context.Background(), Session: session, PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
 		if err != nil {
 			t.Fatalf("enter game returned a transport error instead of an answer: %v", err)
+		}
+		// 新建请求（EnterCreate）走的是同一个归属检查：同样的会话得到同样的码，同样不问驻留表。
+		created, err := controller.EnterCreate(&playeraccess.Context{BaseCtx: context.Background(), Session: session, PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterCreate, Seq: 2}, &pb.EnterCreateRequest{Name: "Somebody"})
+		if err != nil {
+			t.Fatalf("enter create returned a transport error instead of an answer: %v", err)
+		}
+		if created.Code != response.Code {
+			t.Fatalf("EnterCreate answered code %d (%q) where EnterGame answered %d (%q)", created.Code, created.Reason, response.Code, response.Reason)
 		}
 		return response, owners
 	}
@@ -291,8 +306,8 @@ func TestEnterGameServesOnlyThePlayersBoundToThisServer(t *testing.T) {
 		if response.Code != apperrors.ErrPlayerElsewhere.Code() {
 			t.Fatalf("code=%d reason=%q, want player_elsewhere (%d)", response.Code, response.Reason, apperrors.ErrPlayerElsewhere.Code())
 		}
-		if len(owners.served) != 1 || owners.served[0] != 2000 {
-			t.Fatalf("the ownership table was asked about %v, want the session's bound sid 2000", owners.served)
+		if len(owners.served) != 0 {
+			t.Fatalf("a login bound to another server reached the ownership table with %v", owners.served)
 		}
 	})
 }
@@ -313,7 +328,7 @@ func (owners *unloadOutlivesTheWait) Serve(_ context.Context, playerID int64, _ 
 // Players，走到装载会 panic。驻留表在卸载期间拒绝准入，装载一个马上被销毁的副本正是它要防的事。
 func TestEnterGameAnswersLoginTimeoutWhenTheUnloadOutlivesTheWait(t *testing.T) {
 	owners := &unloadOutlivesTheWait{}
-	controller := &Controller{registry: app.NewRegistry(viper.New())}
+	controller := &Controller{registry: thisServer()}
 	var published playerOwners = owners
 	controller.owners.Store(&published)
 	response, err := controller.EnterGame(&playeraccess.Context{BaseCtx: context.Background(), Session: boundTo(1000), PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})

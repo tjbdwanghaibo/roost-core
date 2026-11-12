@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -147,5 +149,73 @@ func TestTransferRoleRefusesAnIncompleteCommand(t *testing.T) {
 	}
 	if after, err := showRole(ctx, service, []string{"-player", player}); err != nil || after.Transfer != nil || after.LastTransfer != nil || after.ServerID != sourceSID {
 		t.Fatalf("a refused command changed the role: %+v, %v", after, err)
+	}
+}
+
+// demo 的四个命令是经登录模块的 registerCommand 加进来的（operator.go 的 init）：从 main 的入口 dispatch 进来能走到，
+// 自带的三个命令照旧，用法里列着全部。merge-server 把 1001 并入 1000 之后 show-server 看得到别名，
+// unmerge-server 撤掉它；show-role / transfer-role 打印绑定，拒绝时命令失败。
+func TestTheDemoCommandsAreReachableBesideTheLoginModulesOwn(t *testing.T) {
+	ctx := context.Background()
+	service, role := accountWithRole(t)
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		var out bytes.Buffer
+		err := dispatch(ctx, service, args, &out)
+		return out.String(), err
+	}
+	for _, name := range []string{"merge-server", "unmerge-server", "show-role", "transfer-role"} {
+		if _, registered := operatorCommands[name]; !registered {
+			t.Fatalf("the demo command %s is not registered", name)
+		}
+		if !strings.Contains(usageText(), name) {
+			t.Errorf("the usage does not mention %s: %s", name, usageText())
+		}
+	}
+	// 登录模块自带的命令没有被顶掉。
+	if printed, err := run("list-servers"); err != nil || !strings.Contains(printed, `"id": 1000`) || !strings.Contains(printed, `"id": 1001`) {
+		t.Fatalf("list-servers = %q, %v", printed, err)
+	}
+
+	printed, err := run("merge-server", "-from", strconv.Itoa(targetSID), "-into", strconv.Itoa(sourceSID), "-note", "merge window")
+	var merged svcaccount.MergeResult
+	if err != nil || json.Unmarshal([]byte(printed), &merged) != nil || merged.From != targetSID || merged.Into != sourceSID || !merged.Changed {
+		t.Fatalf("merge-server printed %q, %v", printed, err)
+	}
+	if server, err := service.GetServer(ctx, targetSID); err != nil || server.MergedInto != sourceSID {
+		t.Fatalf("after merge-server the record of %d is %+v, %v", targetSID, server, err)
+	}
+	// 没有备注的合服被 account 拒绝：命令失败，记录不变。
+	if _, err := run("merge-server", "-from", strconv.Itoa(targetSID), "-into", strconv.Itoa(sourceSID)); err == nil || !strings.Contains(err.Error(), "merge-server:") {
+		t.Fatalf("merge-server without a note = %v, want a refusal", err)
+	}
+	if _, err := run("merge-server", "-from", "1001", "-bogus"); err == nil || !strings.Contains(err.Error(), "merge-server: flag provided but not defined") {
+		t.Fatalf("merge-server with an unknown flag = %v", err)
+	}
+	if printed, err := run("unmerge-server", "-from", strconv.Itoa(targetSID), "-note", "revert"); err != nil || !strings.Contains(printed, `"changed": true`) {
+		t.Fatalf("unmerge-server printed %q, %v", printed, err)
+	}
+	if server, err := service.GetServer(ctx, targetSID); err != nil || server.MergedInto != 0 || server.Status != svcaccount.ServerClosed {
+		t.Fatalf("after unmerge-server the record of %d is %+v, %v; want no alias and still closed", targetSID, server, err)
+	}
+	// 解除合服之后那个服仍是关的：用登录模块自带的 upsert-server 重新开放。
+	if _, err := run("upsert-server", "-sid", strconv.Itoa(targetSID)); err != nil {
+		t.Fatalf("upsert-server after the unmerge: %v", err)
+	}
+
+	printed, err = run("show-role", "-player", playerFlag(role))
+	var binding svcaccount.RoleBinding
+	if err != nil || json.Unmarshal([]byte(printed), &binding) != nil || binding.PlayerID != role.PlayerID || binding.ServerID != sourceSID {
+		t.Fatalf("show-role printed %q, %v", printed, err)
+	}
+	if printed, err := run("show-role", "-player", "99"); !errors.Is(err, svcaccount.ErrRoleMissing) || printed != "" {
+		t.Fatalf("show-role of an unknown player printed %q, %v; want ErrRoleMissing and nothing printed", printed, err)
+	}
+	if printed, err := run("transfer-role", "begin", "-player", playerFlag(role), "-to", strconv.Itoa(targetSID), "-id", "move-9", "-note", "ticket"); err != nil || !strings.Contains(printed, `"move-9"`) {
+		t.Fatalf("transfer-role begin printed %q, %v", printed, err)
+	}
+	// 在途时再 begin：拒绝，并把在途的绑定打印出来给操作者看。
+	if printed, err := run("transfer-role", "begin", "-player", playerFlag(role), "-to", strconv.Itoa(targetSID), "-id", "move-10", "-note", "again"); err == nil || !strings.Contains(err.Error(), "transfer-role:") {
+		t.Fatalf("a second begin while one is in flight printed %q, %v; want a refusal", printed, err)
 	}
 }

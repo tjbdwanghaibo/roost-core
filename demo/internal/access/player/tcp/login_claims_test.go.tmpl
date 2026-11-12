@@ -8,11 +8,16 @@ import (
 	controllermailbox "{{MODULE}}/game/controllers/mailbox"
 	controllerplayer "{{MODULE}}/game/controllers/player"
 	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
+// 认证器是登录模块的（auth.go 与 game/login，roost module add login 写下，demo 不改）；读它写进会话的 claims 的一方
+// 有一半是 demo 自己的——登录端点的 BoundServerID。这个文件钉住两边对得上，用例名不以 TestLogin 开头
+// （那个前缀是登录模块自己的验收口径）。
+//
 // sessionAccounts 是只认一张会话票据的 account 客户端：票据对得上就返回原服 originID、由 serverID 承载的
 // 角色（originID 为 0 表示没有合服，原服就是 serverID）；bindEpoch 与 transfer 是角色的绑定代数与在途的
 // 换服。其余方法不会被认证器调用，留给嵌入的 nil 接口。
@@ -28,7 +33,7 @@ type sessionAccounts struct {
 
 func (accounts sessionAccounts) ValidateSession(_ context.Context, playerID int64, token string) (svcaccount.Role, error) {
 	if playerID != accounts.playerID || token != accounts.token {
-		return svcaccount.Role{}, errors.New("unknown session")
+		return svcaccount.Role{}, svcaccount.ErrSessionInvalid
 	}
 	origin := accounts.originID
 	if origin == 0 {
@@ -47,16 +52,26 @@ func (session principalSession) Principal() gateway.Principal { return session.p
 func (principalSession) Reply(context.Context, any) error     { return nil }
 func (principalSession) Close(error) error                    { return nil }
 
-// 认证器写、登录端点读：角色绑定的 sid 在两边用的键和格式必须一致，否则每一次登录都按“没有记下
-// 绑定”fail-closed（player_elsewhere，owner_sid=0），而两边各自的测试都还是绿的。这里用真实的认证器
-// （只把 account 客户端换成替身）产出 Principal，交给登录端点真正使用的 BoundServerID 去读。
-func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
-	authenticator := &applicationAuthenticator{}
-	authenticator.accounts.Store(&accountsHandle{accounts: sessionAccounts{playerID: 42, token: "ticket", serverID: 1300}})
-	principal, err := authenticator.Authenticate(context.Background(), sessionTokenPrefix+"42:ticket", nil)
+// authenticate 用真实的认证器（照传输 Mod 的做法建出来并绑定 Registry，只把 account 客户端换成替身）
+// 校验玩家 42 的会话票据。
+func authenticate(t *testing.T, accounts sessionAccounts) gateway.Principal {
+	t.Helper()
+	authenticator, err := loginTCPAuthenticator(t, accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := authenticator.Authenticate(context.Background(), gamelogin.Ticket(42, "ticket"), nil)
 	if err != nil {
 		t.Fatalf("a valid session ticket was refused: %v", err)
 	}
+	return principal
+}
+
+// 认证器写、登录端点读：角色绑定的 sid 在两边用的键和格式必须一致，否则每一次登录都按“没有记下
+// 绑定”fail-closed（player_elsewhere，owner_sid=0），而两边各自的测试都还是绿的。这里用真实的认证器
+// 产出 Principal，交给登录端点真正使用的 BoundServerID 去读。
+func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
+	principal := authenticate(t, sessionAccounts{playerID: 42, token: "ticket", serverID: 1300})
 	if principal.PlayerID != 42 {
 		t.Fatalf("principal names player %d, want 42", principal.PlayerID)
 	}
@@ -76,12 +91,7 @@ func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
 
 // 合服之后（原服 1301 并入 1300）：登录端点读到的是承载服 1300，原服记在 OriginServerIDClaim。
 func TestAMergedRolesPrincipalCarriesTheServingServer(t *testing.T) {
-	authenticator := &applicationAuthenticator{}
-	authenticator.accounts.Store(&accountsHandle{accounts: sessionAccounts{playerID: 42, token: "ticket", serverID: 1300, originID: 1301}})
-	principal, err := authenticator.Authenticate(context.Background(), sessionTokenPrefix+"42:ticket", nil)
-	if err != nil {
-		t.Fatalf("a valid session ticket was refused: %v", err)
-	}
+	principal := authenticate(t, sessionAccounts{playerID: 42, token: "ticket", serverID: 1300, originID: 1301})
 	sid, bound := controllerplayer.BoundServerID(principalSession{principal: principal})
 	if !bound || sid != 1300 {
 		t.Fatalf("the login endpoint read (%d, %v), want the serving server 1300", sid, bound)
@@ -100,18 +110,7 @@ func TestAMergedRolesPrincipalCarriesTheServingServer(t *testing.T) {
 // "0"），换服在途时把目标 sid 与换服 ID 记在 TransferClaim；原有的三项不变，在途的角色仍按源服承载。认证器
 // 只记不拒：握手失败客户端拿不到原因，放不放行由登录端点决定。
 func TestTheAuthenticatorsPrincipalCarriesTheBindEpochAndATransferInFlight(t *testing.T) {
-	authenticate := func(accounts sessionAccounts) gateway.Principal {
-		t.Helper()
-		authenticator := &applicationAuthenticator{}
-		authenticator.accounts.Store(&accountsHandle{accounts: accounts})
-		principal, err := authenticator.Authenticate(context.Background(), sessionTokenPrefix+"42:ticket", nil)
-		if err != nil {
-			t.Fatalf("a valid session ticket was refused: %v", err)
-		}
-		return principal
-	}
-
-	settled := authenticate(sessionAccounts{playerID: 42, token: "ticket", serverID: 1300})
+	settled := authenticate(t, sessionAccounts{playerID: 42, token: "ticket", serverID: 1300})
 	if got := settled.Claims[svcaccount.BindEpochClaim]; got != "0" {
 		t.Fatalf("BindEpochClaim of a role that never moved = %q, want 0 (claims %v)", got, settled.Claims)
 	}
@@ -119,7 +118,7 @@ func TestTheAuthenticatorsPrincipalCarriesTheBindEpochAndATransferInFlight(t *te
 		t.Fatalf("a role that is not moving carries TransferClaim %q", value)
 	}
 
-	moving := authenticate(sessionAccounts{
+	moving := authenticate(t, sessionAccounts{
 		playerID: 42, token: "ticket", serverID: 1300, bindEpoch: 3,
 		transfer: &svcaccount.RoleTransfer{ID: "rehome:42:7", From: 1300, To: 1301, Epoch: 3},
 	})
@@ -136,5 +135,24 @@ func TestTheAuthenticatorsPrincipalCarriesTheBindEpochAndATransferInFlight(t *te
 	}
 	if moving.Claims[svcaccount.OriginServerIDClaim] != "1300" || moving.Claims[svcaccount.RoleCreatedAtClaim] != "1700000000" {
 		t.Fatalf("the existing claims changed: %v", moving.Claims)
+	}
+}
+
+// demo 原来的认证器只认 session: 票据、别的一律拒绝；换成登录模块的之后多认一种 enter:<进服票据>，其余照旧：
+// 没有“直接报玩家号”的旁路，票据前后带空白、玩家号不是规范写法都是拒绝（原来的认证器会去掉首尾空白，
+// 现在不会——握手帧里的票据必须原样）。account 拒绝的票据是 ErrUnauthenticated。
+func TestTheAuthenticatorKeepsRefusingWhatTheDemosOwnRefused(t *testing.T) {
+	authenticator, err := loginTCPAuthenticator(t, sessionAccounts{playerID: 42, token: "ticket", serverID: 1300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ticket := range []string{
+		"", "42", "player:42", "42:ticket", "session:42", "session:42:", "session:0:ticket", "session:-42:ticket", "session:forty:ticket",
+		" session:42:ticket", "session:42:ticket ", "session:042:ticket", "session:+42:ticket", "session:43:ticket", "session:42:other",
+	} {
+		principal, err := authenticator.Authenticate(context.Background(), ticket, nil)
+		if !errors.Is(err, gateway.ErrUnauthenticated) || principal.PlayerID != 0 {
+			t.Errorf("ticket %q: principal %+v, err %v; want ErrUnauthenticated", ticket, principal, err)
+		}
 	}
 }

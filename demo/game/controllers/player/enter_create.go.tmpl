@@ -1,0 +1,71 @@
+package player
+
+import (
+	stdcontext "context"
+	"fmt"
+	"log/slog"
+
+	gameenter "{{MODULE}}/game/enter"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// EnterCreate 是 demo 这一侧的新建请求，由 enter 域的端点调用（game/controllers/enter/enter_create.go；协议与
+// 它的域是 enter 模块的）。用进服票据握手的会话（登录入口那条路）在本服还没建成时，EnterGame 答 enter_need_create，
+// 客户端发它把玩家建成：建档、名字、首次初始化。建成之后不是一次进入——客户端接着发 EnterGame。
+//
+// 顺序、每一步被拒时留下了什么、重复与并发的结论都是模块的（gameenter.Create）：进入前检查 → 新建前检查
+// （名字规则：enter 与 profile 的联动）→ Ensure → 新建步骤 → Commit。demo 只给出两个档操作，并且守住自己的规矩——
+// 一个 Player 只在承载他的服上、被驻留表接入服务之后才装载：
+//
+//	之前    boundHere：会话记的承载服不是本服（或没有记）答 player_elsewhere，与 EnterGame 相同，什么检查都不跑。
+//	Ensure  驻留表 Serve（等上一份副本的卸载、复核迁出表），然后 GetOrCreate 建一份空档（已有就不动）。两步共用
+//	        登录预算（player_access.tcp.login_timeout）；预算用完或连接关闭答 login_timeout，客户端重试。
+//	Commit  模块的 handler EnterCreate：名字、初始发放与“建成了”的标记一笔事务。已经建成的答 enter_created。
+//
+// 到 Ensure 之前什么都没写、也没有装载：名字不合规、本服不该服务他的新建请求不会让他在本进程多出一份档。
+// 写闸门（驻留表的 AdmitMessage）对这条消息与 EnterGame 一样豁免——它就是建立驻留记录的那条消息之一。
+func (controller *Controller) EnterCreate(context *playeraccess.Context, request *pb.EnterCreateRequest) (*pb.EnterCreateResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("enter_create endpoint: context and request are required")
+	}
+	owners, boundSID, refusal := controller.boundHere(context, "enter_create")
+	if refusal != nil {
+		return &pb.EnterCreateResponse{Code: refusal.code, Reason: refusal.reason}, nil
+	}
+	creating := gameenter.Creating{PlayerID: context.PlayerID, Name: request.Name, Claims: context.Session.Principal().Claims}
+	err := gameenter.Create(context.Context(), controller.registry, creating, gameenter.CreateSteps{
+		Ensure: func(ctx stdcontext.Context) error {
+			loginCtx, cancelLogin := controller.loginContext(ctx)
+			defer cancelLogin()
+			if err := owners.Serve(loginCtx, context.PlayerID, boundSID); err != nil {
+				timeout, _ := loginTimeout(context.PlayerID, "serve", err)
+				return timeout
+			}
+			if _, _, err := controller.Players().GetOrCreate(loginCtx, context.PlayerID); err != nil {
+				timeout, _ := loginTimeout(context.PlayerID, "load", err)
+				return timeout
+			}
+			return nil
+		},
+		Commit: func(ctx stdcontext.Context, name string) error {
+			entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+			if err != nil {
+				return err
+			}
+			return syncsender.NewEnterCreateSender(controller.NestClient()).Sync_EnterCreate(ctx, entityID, name)
+		},
+	})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_create failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterCreateResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.EnterCreateResponse{}, nil
+}

@@ -1,8 +1,6 @@
 package enter
 
 import (
-	"fmt"
-
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -11,10 +9,14 @@ import (
 // controller's EnterGame (game/controllers/player/enter_game.go): take the
 // player into service on the server the role is bound to, load or create the
 // Player within the login budget, run the enter module's first-time
-// initialization, then everything a login does in this game.
+// initialization, then everything a login does in this game. A session that
+// must create first (the enter module's rule — with the login module, one
+// that shook hands with an enter ticket) is only entered when its player is
+// already built; otherwise it is answered enter_need_create there.
 func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
-	if controller == nil || controller.player == nil {
-		return nil, fmt.Errorf("enter_game endpoint: controller is not assembled")
+	player, err := controller.login()
+	if err != nil {
+		return nil, err
 	}
-	return controller.player.EnterGame(context, request)
+	return player.EnterGame(context, request)
 }

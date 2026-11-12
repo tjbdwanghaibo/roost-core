@@ -39,11 +39,12 @@ import (
 // fails, which is what a half-dead old connection does in production.
 
 // sceneAccounts is the account service, stood in for: every ticket names the
-// player it claims to be.
+// player it claims to be, a role of server 1000. The server is not optional:
+// the login module's authenticator refuses a role account returns without one.
 type sceneAccounts struct{ svcaccount.Accounts }
 
 func (sceneAccounts) ValidateSession(_ context.Context, playerID int64, _ string) (svcaccount.Role, error) {
-	return svcaccount.Role{PlayerID: playerID}, nil
+	return svcaccount.Role{PlayerID: playerID, ServerID: 1000, ServingServerID: 1000}, nil
 }
 
 // startScenePlayerTransport starts the generated player TCP Mod on a loopback

@@ -2,6 +2,7 @@ package enter
 
 import (
 	"fmt"
+	"sync"
 
 	playerctl "{{MODULE}}/game/controllers/player"
 
@@ -9,36 +10,57 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// Controller is the enter domain's controller. The domain and its protocol
+// Controller is the enter domain's controller. The domain and its protocols
 // are the enter module's; the demo replaces this file because its login is
 // more than "load or create the Player": which server the role is bound to,
 // the login budget, the scene, paid orders, the guild and the announcement
-// all live on the player controller, so this one holds it and the endpoint
-// hands the login over (enter_game.go). What other modules do on entering —
-// the chat presence, the pull of server-wide mail — is not there: those are
-// enter hooks, which that flow runs with the session's claims.
+// all live on the player controller, so this one reaches it and the two
+// endpoints that load a Player hand over to it (enter_game.go: EnterGame;
+// enter_create.go: EnterCreate). What other modules do on entering — the chat
+// presence, the pull of server-wide mail — is not there: those are enter
+// hooks, which that flow runs with the session's claims.
 //
-// registry and nestClient are what the module's own endpoints need — the ones
-// the demo does not replace (enter_create.go: EnterCreate; enter_status.go: the
-// EnterStatus notice). They are the same two fields the module's controller has.
+// registry and nestClient are what the module's own file needs — the one the
+// demo does not replace (enter_status.go: the EnterStatus notice after a
+// session becomes active). They are the same two fields the module's
+// controller has.
 type Controller struct {
-	player     *playerctl.Controller
 	registry   *app.Registry
 	nestClient corenest.Client
+	// player builds the player controller on first use and keeps it. Not in
+	// FromRegistry: the EnterStatus notice calls FromRegistry once per
+	// activated session (enter_status.go's Announce) and only reads whether
+	// the player is built — it must not assemble a second copy of everything
+	// the player controller holds each time. Nothing is validated later
+	// because of this: the player domain's own controller is built from the
+	// same registry by the generated protocol binding at start, and a process
+	// whose registry cannot build it does not start.
+	player func() (*playerctl.Controller, error)
 }
 
-// FromRegistry is what the generated protocol binding calls once per process.
-// It builds its own player controller: the binding builds one per domain, and
-// what they share (presence, ownership, the scene) is published through the
-// Registry or process-wide, not held in a controller.
+// FromRegistry is what the generated protocol binding calls once per process,
+// and what the enter module's Announce calls per notice.
 func FromRegistry(registry *app.Registry) (*Controller, error) {
-	player, err := playerctl.FromRegistry(registry)
-	if err != nil {
-		return nil, fmt.Errorf("enter controller: %w", err)
+	if registry == nil {
+		return nil, fmt.Errorf("enter controller: app registry is required")
 	}
 	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
 	if !ok || client == nil {
 		return nil, fmt.Errorf("enter controller: nest client is unavailable")
 	}
-	return &Controller{player: player, registry: registry, nestClient: client}, nil
+	return &Controller{registry: registry, nestClient: client, player: sync.OnceValues(func() (*playerctl.Controller, error) {
+		return playerctl.FromRegistry(registry)
+	})}, nil
+}
+
+// login is the player controller the two login endpoints hand over to.
+func (controller *Controller) login() (*playerctl.Controller, error) {
+	if controller == nil || controller.player == nil {
+		return nil, fmt.Errorf("enter controller: not assembled")
+	}
+	player, err := controller.player()
+	if err != nil {
+		return nil, fmt.Errorf("enter controller: %w", err)
+	}
+	return player, nil
 }

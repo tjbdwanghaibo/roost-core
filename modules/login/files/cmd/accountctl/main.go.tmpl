@@ -22,8 +22,9 @@
 // 旗标的名字与 roost-core demo 的同名命令相同：生成的 deploy/dev/run.sh 发现工程里有 cmd/accountctl 时，
 // 在全部服务起来之后用它们登记本机的服（upsert-server -sid $SID）。改旗标名字会让那一步失败。
 //
-// 合服、单个角色换服的人工兜底不在这里（需要时照 roost-core demo 的 cmd/accountctl 加
-// merge-server / unmerge-server / show-role / transfer-role）。
+// 合服、单个角色换服的人工兜底不在这里。工程要加自己的子命令时不用改这个文件：在这个包里另写一个文件，
+// 用 init 调 registerCommand 登记（见它的注释）。roost-core 的 game-demo 就是这样加的
+// merge-server / unmerge-server / show-role / transfer-role（它的 cmd/accountctl/operator.go）。
 package main
 
 import (
@@ -34,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,14 +55,14 @@ func main() {
 		fail(err)
 	}
 	if len(command) == 0 {
-		fail(errors.New(usage))
+		fail(errors.New(usageText()))
 	}
 	service, closeStore, err := openService(target.redis, target.prefix)
 	if err != nil {
 		fail(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err = run(ctx, service, command, os.Stdout)
+	err = dispatch(ctx, service, command, os.Stdout)
 	cancel()
 	closeStore()
 	if err != nil {
@@ -86,7 +88,7 @@ func parseConnection(args []string) (connection, []string, error) {
 	redisCluster := flags.String("redis-cluster", "", "Redis Cluster 种子地址，逗号分隔（redis.cluster_addrs）；写了就不用 -redis 与 -redis-db")
 	prefix := flags.String("prefix", "roost:{{PROJECT}}:account", "config.account.yaml 的 account.key_prefix：与运行中的 account 服务靠它共用同一份存储")
 	if err := flags.Parse(args); err != nil {
-		return connection{}, nil, fmt.Errorf("%w\n%s", err, usage)
+		return connection{}, nil, fmt.Errorf("%w\n%s", err, usageText())
 	}
 	cfg := fredis.DefaultConfig(*redisAddr)
 	cfg.Password = *redisPassword
@@ -107,10 +109,76 @@ type serverRecords interface {
 	ListServers(ctx context.Context) ([]svcaccount.GameServer, error)
 }
 
-// run 执行一个子命令，把结果记录以 JSON 写到 out。参数不对、account 拒绝都返回错误，什么也不写。
+// builtinCommands 是这个文件自带的三个子命令的名字，按用法里的顺序。
+var builtinCommands = []string{"upsert-server", "show-server", "list-servers"}
+
+// operatorCommand 是工程自己登记的一个子命令。
+type operatorCommand struct {
+	// usage 是它在用法里的那一段，例如 "merge-server -from A -into B -note TEXT"。
+	usage string
+	run   func(ctx context.Context, service *svcaccount.Service, args []string, out io.Writer) error
+}
+
+// operatorCommands 是工程登记的子命令，按名字查。只在 init 里写，之后只读。
+var operatorCommands = map[string]operatorCommand{}
+
+// registerCommand 登记一个工程自己的子命令。在这个包的另一个文件里用 init 调它，这个文件不用改：
+//
+//	func init() {
+//		registerCommand("merge-server", "merge-server -from A -into B -note TEXT", mergeServer)
+//	}
+//
+// run 拿到的是 account 服务本身（与运行中的 account 进程共用同一份存储），args 是子命令名之后的参数，
+// 结果写到 out；返回错误时命令以非零状态退出。空名、nil、与自带的三个命令重名、重复登记都是写错了，直接 panic。
+func registerCommand(name, usage string, run func(ctx context.Context, service *svcaccount.Service, args []string, out io.Writer) error) {
+	if name == "" || run == nil {
+		panic("accountctl: registerCommand needs a name and a run function")
+	}
+	for _, builtin := range builtinCommands {
+		if name == builtin {
+			panic(fmt.Sprintf("accountctl: command %q is built in and cannot be registered again", name))
+		}
+	}
+	if _, taken := operatorCommands[name]; taken {
+		panic(fmt.Sprintf("accountctl: command %q is registered twice", name))
+	}
+	operatorCommands[name] = operatorCommand{usage: usage, run: run}
+}
+
+// commandNames 是全部子命令的名字：自带的三个，然后是工程登记的（按名字排序）。
+func commandNames() []string {
+	names := make([]string, 0, len(operatorCommands))
+	for name := range operatorCommands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return append(append([]string{}, builtinCommands...), names...)
+}
+
+// usageText 是完整的用法：自带的那一行，后面接工程登记的子命令各自的用法。
+func usageText() string {
+	text := usage
+	for _, name := range commandNames()[len(builtinCommands):] {
+		text += " | " + operatorCommands[name].usage
+	}
+	return text
+}
+
+// dispatch 是 main 调的入口：工程登记的子命令交给它自己，其余交给 run。
+func dispatch(ctx context.Context, service *svcaccount.Service, args []string, out io.Writer) error {
+	if len(args) > 0 {
+		if command, ok := operatorCommands[args[0]]; ok {
+			return command.run(ctx, service, args[1:], out)
+		}
+	}
+	return run(ctx, service, args, out)
+}
+
+// run 执行一个自带的子命令，把结果记录以 JSON 写到 out。参数不对、account 拒绝都返回错误，什么也不写。
+// 工程登记的子命令不经过这里（dispatch 先认它们）。
 func run(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New(usage)
+		return errors.New(usageText())
 	}
 	switch args[0] {
 	case "upsert-server":
@@ -120,7 +188,7 @@ func run(ctx context.Context, records serverRecords, args []string, out io.Write
 	case "list-servers":
 		return listServers(ctx, records, args[1:], out)
 	default:
-		return fmt.Errorf("unknown command %q (commands: upsert-server, show-server, list-servers)", args[0])
+		return fmt.Errorf("unknown command %q (commands: %s)", args[0], strings.Join(commandNames(), ", "))
 	}
 }
 

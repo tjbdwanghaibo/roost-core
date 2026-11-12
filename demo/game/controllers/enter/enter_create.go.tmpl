@@ -1,0 +1,23 @@
+package enter
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleEnterCreate is the create request's endpoint: build this
+// authenticated player on this server (the Player, its name, the first-time
+// initialization). The protocol, the order of the steps and what a refusal
+// leaves behind are the enter module's (gameenter.Create); the demo replaces
+// this file for the same reason it replaces enter_game.go — creating a Player
+// loads it, and in this game a Player is only loaded on the server its role
+// is bound to, after the ownership table took it into service. So the two
+// record operations are the player controller's EnterCreate
+// (game/controllers/player/enter_create.go).
+func (controller *Controller) HandleEnterCreate(context *playeraccess.Context, request *pb.EnterCreateRequest) (*pb.EnterCreateResponse, error) {
+	player, err := controller.login()
+	if err != nil {
+		return nil, err
+	}
+	return player.EnterCreate(context, request)
+}

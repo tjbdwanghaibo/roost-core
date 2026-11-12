@@ -1,0 +1,119 @@
+package account
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// demo 渠道的场景（login_channels.go）。account 是真实的服务（内存存储），协作者就是这个包交给 account Mod 的那几个；
+// 帮手（loginRegistry / loginBind / loginAccounts）来自登录模块的 login_test.go。用例名不以 TestLogin 开头：
+// 那个前缀是登录模块自己的验收口径（roost module verify 数它的条数）。
+
+// 机器人、演练脚本与 WALKTHROUGH 的登录：渠道 demo、凭据 demo:<open_id>。登录、建角、选角拿到的会话令牌
+// account 自己认——没有写开发令牌的配置下也可用（它不看 login.dev_token）。
+func TestDemoChannelLogsInWithTheOpenIDAsCredential(t *testing.T) {
+	redis := &loginCounterRedis{}
+	accounts := loginAccounts(t, loginRegistry(t, redis, "account.key_prefix", "roost:test:account"))
+	ctx := context.Background()
+
+	account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "robot-7", Credential: "demo:robot-7"})
+	if err != nil {
+		t.Fatalf("demo login: %v", err)
+	}
+	if account.ID != "demo:robot-7" || account.Channel != DemoChannel {
+		t.Fatalf("account = %+v, want demo:robot-7 on channel demo", account)
+	}
+	role, err := accounts.CreateRole(ctx, account.ID, 1000, "robot_7")
+	if err != nil || role.PlayerID != 100_001 {
+		t.Fatalf("create role: %+v, %v; want the first id 100001 from the module's counter", role, err)
+	}
+	session, err := accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatalf("select role: %v", err)
+	}
+	if validated, err := accounts.ValidateSession(ctx, session.PlayerID, session.Token); err != nil || validated.PlayerID != role.PlayerID || validated.ServingServerID != 1000 {
+		t.Fatalf("the session does not validate: role %+v, err %v", validated, err)
+	}
+	// 进服票据那条路上是同一个账号：EnterServer 解析到的就是刚才建的那名玩家。
+	ticket, err := accounts.IssueEnterTicket(ctx, account.ID, 1000)
+	if err != nil {
+		t.Fatalf("issue enter ticket: %v", err)
+	}
+	if entry, err := accounts.EnterServer(ctx, ticket.Ticket); err != nil || entry.Role.PlayerID != role.PlayerID || entry.Created {
+		t.Fatalf("EnterServer for the demo account = %+v, %v; want the existing role %d", entry, err, role.PlayerID)
+	}
+	if got := redis.value("roost:test:account:player_id"); got != 1 {
+		t.Fatalf("the player id counter is %d, want 1 under the account prefix", got)
+	}
+}
+
+// 凭据必须是 demo:<这个 open_id>：别人的、空的、没有前缀的、前缀对了后面是空的，一律拒绝（identity_denied，
+// 不是“没问到渠道”），也没有账号被建出来。确认的身份取自凭据里的 open id，渠道写死是 demo。
+func TestDemoChannelRefusesACredentialThatIsNotTheOpenID(t *testing.T) {
+	verifier := Verifier()
+	if err := loginBind(t, verifier, loginRegistry(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for label, identity := range map[string]svcaccount.Identity{
+		"another open id's credential": {Channel: "demo", OpenID: "alice", Credential: "demo:bob"},
+		"no credential":                {Channel: "demo", OpenID: "alice"},
+		"the bare open id":             {Channel: "demo", OpenID: "alice", Credential: "alice"},
+		"the prefix alone":             {Channel: "demo", OpenID: "", Credential: "demo:"},
+		"an empty open id":             {Channel: "demo", OpenID: "", Credential: "demo:alice"},
+		"a longer credential":          {Channel: "demo", OpenID: "alice", Credential: "demo:alice2"},
+		"a prefix of the open id":      {Channel: "demo", OpenID: "alice2", Credential: "demo:alice"},
+		"the wrong prefix":             {Channel: "demo", OpenID: "alice", Credential: "dev:alice"},
+		"upper case prefix":            {Channel: "demo", OpenID: "alice", Credential: "DEMO:alice"},
+	} {
+		verified, err := verifier.Verify(ctx, identity)
+		if !errors.Is(err, svcaccount.ErrIdentityDenied) || errors.Is(err, svcaccount.ErrVerifierUnavailable) {
+			t.Errorf("%s: err = %v, want identity_denied", label, err)
+		}
+		if verified.OpenID != "" || verified.Channel != "" {
+			t.Errorf("%s: confirmed %+v", label, verified)
+		}
+	}
+	verified, err := verifier.Verify(ctx, svcaccount.Identity{Channel: "demo", OpenID: "alice", Credential: "demo:alice"})
+	if err != nil || verified.Channel != DemoChannel || verified.OpenID != "alice" {
+		t.Fatalf("the matching credential: %+v, %v", verified, err)
+	}
+
+	// 经 account 的 Login：被拒的登录不留下账号。
+	accounts := loginAccounts(t, loginRegistry(t, &loginCounterRedis{}, "account.key_prefix", "roost:test:account"))
+	if _, err := accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "alice", Credential: "demo:mallory"}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+		t.Fatalf("login with another open id's credential: %v, want identity_denied", err)
+	}
+	if _, err := accounts.IssueAccountTicket(ctx, "demo:alice"); !errors.Is(err, svcaccount.ErrAccountMissing) {
+		t.Fatalf("a refused login left an account behind: %v", err)
+	}
+}
+
+// demo 渠道之外只有登录模块的开发渠道，它照旧按 login.dev_token 判；别的渠道名一律拒绝，
+// 拿着 demo 的凭据换个渠道名（含大小写、带空白的 demo）也不行。
+func TestDemoChannelIsTheOnlyProjectChannel(t *testing.T) {
+	verifier := Verifier()
+	if err := loginBind(t, verifier, loginRegistry(t, nil, "login.dev_token", "dev-local")); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, channel := range []svcaccount.Channel{"appstore", "guest", "Demo", "DEMO", "demo ", " demo", "demo2", ""} {
+		verified, err := verifier.Verify(ctx, svcaccount.Identity{Channel: channel, OpenID: "alice", Credential: "demo:alice"})
+		if !errors.Is(err, svcaccount.ErrIdentityDenied) || verified.OpenID != "" {
+			t.Errorf("channel %q: confirmed %+v, err %v; want identity_denied", channel, verified, err)
+		}
+	}
+	// 开发渠道不认 demo 的凭据，demo 渠道不认开发令牌。
+	if _, err := verifier.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "demo:alice"}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+		t.Errorf("the development channel took a demo credential: %v", err)
+	}
+	if _, err := verifier.Verify(ctx, svcaccount.Identity{Channel: "demo", OpenID: "alice", Credential: "dev-local"}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+		t.Errorf("the demo channel took the development token: %v", err)
+	}
+	if verified, err := verifier.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "dev-local"}); err != nil || verified.Channel != DevChannel {
+		t.Errorf("the development login stopped working beside the demo channel: %+v, %v", verified, err)
+	}
+}

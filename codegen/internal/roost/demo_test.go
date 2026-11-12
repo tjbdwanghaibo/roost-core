@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment login portal servertime"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -303,11 +303,31 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if endpoint := read("game/controllers/player/add_item.go"); !strings.Contains(endpoint, "request.ItemID") || !strings.Contains(endpoint, "request.Count") {
 		t.Errorf("endpoint does not pass the request through:\n%s", endpoint)
 	}
-	// The demo replaces the fail-closed skeleton with a session-ticket
-	// authenticator and ships no debug credential: a token the server does
-	// not verify is not a credential.
-	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, sessionTokenPrefixName) || strings.Contains(auth, `"player:"`) {
-		t.Errorf("auth.go is not the session-ticket authenticator, or still carries the debug shortcut:\n%s", auth)
+	// 握手的认证器是 login 模块的（demoModuleSteps），demo 不带自己的一份：生成的“一律拒绝”的桩被模块替换，
+	// 票据规则在 game/login。没有“直接报玩家号”的调试旁路。
+	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, "gamelogin.Authenticator{Accounts: accounts}") || strings.Contains(auth, `"player:"`) {
+		t.Errorf("auth.go is not the login module's authenticator, or carries a debug shortcut:\n%s", auth)
+	}
+	if rules := read("game/login/login.go"); strings.Contains(rules, `"player:"`) || !strings.Contains(rules, `enterTicketPrefix = "enter:"`) {
+		t.Errorf("game/login/login.go is not the login module's ticket rules:\n%s", rules)
+	}
+	// demo 只覆盖登录模块留给工程的渠道入口：demo 渠道，凭据 demo:<open_id>。开发登录、玩家号计数器是模块的。
+	if channels := read("internal/service/account/login_channels.go"); !strings.Contains(channels, `DemoChannel svcaccount.Channel = "demo"`) || !strings.Contains(channels, `demoCredentialPrefix = "demo:"`) {
+		t.Errorf("login_channels.go is not the demo channel:\n%s", channels)
+	}
+	for _, rel := range []string{"internal/service/account/login_dev.go", "internal/service/account/login_player_id.go", "game/portal/portal.go", "game/servertime/servertime.go", "game/login/login_enter.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s is missing: the login, portal and servertime modules are not installed: %v", rel, err)
+		}
+	}
+	// 开发配置开箱可用：开发令牌与本机这台 game 的地址只在 account 的开发配置里；生产示例与 k8s Secret 示例都没有。
+	if dev := read("configs/service/config.account.yaml"); !strings.Contains(dev, "\nlogin:\n  dev_token: dev-local\n") || !strings.Contains(dev, "\nportal:\n  servers:\n    \"1000\": 127.0.0.1:7000\n") {
+		t.Errorf("the account dev config lacks the development login token or the server directory:\n%s", dev)
+	}
+	for _, rel := range []string{"configs/service/config.account.prod.example.yaml", "deploy/k8s/base/secret.account.example.yaml"} {
+		if production := read(rel); strings.Contains(production, "dev_token: dev-") || strings.Contains(production, "dev-local") || strings.Contains(production, "portal:") {
+			t.Errorf("%s carries the development login or the dev server directory:\n%s", rel, production)
+		}
 	}
 	// 背包是 bag 模块装进来的（demoModuleSteps），demo 自己不带一份：组件、PlayerDao.Bag、错误码与道具表的
 	// 落点都记在 roost.yaml 的 modules.bag 下。组件只经生成的 mutator 改状态；道具号与单种上限的规则在
@@ -476,13 +496,13 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if glue := read("game/controllers/mailbox/mailbox_enter.go"); !strings.Contains(glue, `gameenter.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
 		t.Errorf("the mailbox+enter glue was not written into the demo:\n%s", glue)
 	}
-	if login := read("game/controllers/player/enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "Claims: context.Session.Principal().Claims") {
+	if login := read("game/controllers/player/enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "claims := context.Session.Principal().Claims") || !strings.Contains(login, "InitResult: entered, Claims: claims,") {
 		t.Errorf("the demo's enter flow still pulls server-wide mail by hand, or does not hand the session claims to the enter hooks:\n%s", login)
 	}
 	if controller := read("game/controllers/player/controller.go"); strings.Contains(controller, "svcmail") {
 		t.Errorf("the player controller still holds the mail client:\n%s", controller)
 	}
-	if auth := read("internal/access/player/tcp/auth_test.go"); !strings.Contains(auth, "controllermailbox.BroadcastProfileOnEnter(") {
+	if auth := read("internal/access/player/tcp/login_claims_test.go"); !strings.Contains(auth, "controllermailbox.BroadcastProfileOnEnter(") {
 		t.Errorf("the authenticator's test does not read its claims back through the mailbox enter hook's profile:\n%s", auth)
 	}
 	if robot := read("cmd/loadtest/main.go"); !strings.Contains(robot, "msgid.MsgMailboxList") || !strings.Contains(robot, "msgid.MsgMailboxClaim") || strings.Contains(robot, "ClaimMail") || strings.Contains(robot, "ListMail") {
@@ -690,13 +710,20 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if scrape := read("deploy/dev/observability/prometheus.yml"); !strings.Contains(scrape, "job_name: chat") || !strings.Contains(scrape, ":9102") {
 		t.Errorf("prometheus.yml does not scrape the chat process on its assigned port")
 	}
-	if collaborators := read("internal/service/account/collaborators.go"); !strings.Contains(collaborators, "account.RegistryBound") || strings.Contains(collaborators, "is not configured; implement") {
+	// account 的协作者是 login 模块的：玩家号计数器经 RegistryBound 拿 account 进程的 Redis。
+	if collaborators := read("internal/service/account/collaborators.go"); !strings.Contains(collaborators, "&playerIDCounter{}") || strings.Contains(collaborators, "is not configured; implement") {
 		t.Errorf("account collaborators are still the refusing defaults:\n%s", collaborators)
 	}
-	// The authenticator validates session tickets through the account client
-	// it is bound to in Provide; the generated transport must expose the hook.
-	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, "ValidateSession(") || !strings.Contains(auth, "BindRegistry(") {
-		t.Errorf("auth.go does not validate sessions through a bound account client:\n%s", auth)
+	if counter := read("internal/service/account/login_player_id.go"); !strings.Contains(counter, "wiringaccount.RegistryBound") {
+		t.Errorf("the player id counter does not bind to the account process's registry:\n%s", counter)
+	}
+	// The authenticator validates tickets through the account client it is
+	// bound to in Provide; the generated transport must expose the hook.
+	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, "BindRegistry(") {
+		t.Errorf("auth.go does not bind an account client:\n%s", auth)
+	}
+	if rules := read("game/login/login.go"); !strings.Contains(rules, "ValidateSession(") || !strings.Contains(rules, "EnterServer(") {
+		t.Errorf("game/login/login.go does not validate both kinds of ticket through account:\n%s", rules)
 	}
 	if server := read("internal/access/player/tcp/server_gen.go"); !strings.Contains(server, "type RegistryBound interface") {
 		t.Errorf("the generated transport lost the RegistryBound hook the demo authenticator relies on")
@@ -751,8 +778,23 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if bind := read("game/protocol_handlers/enter/protocol_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
 		t.Errorf("EnterGame is not bound to the enter controller:\n%s", bind)
 	}
-	if enter := read("game/controllers/enter/enter_game.go"); !strings.Contains(enter, "controller.player.EnterGame(") {
+	if enter := read("game/controllers/enter/enter_game.go"); !strings.Contains(enter, "player.EnterGame(context, request)") {
 		t.Errorf("the enter endpoint does not hand over to the demo's own enter flow:\n%s", enter)
+	}
+	// 新建请求（EnterCreate）同样交给 player controller：建档之前先核对归属、接入驻留表；
+	// 会话激活后的告知（enter_status.go）是模块的，demo 不覆盖。
+	if create := read("game/controllers/enter/enter_create.go"); !strings.Contains(create, "player.EnterCreate(context, request)") {
+		t.Errorf("the create endpoint does not hand over to the demo's own flow:\n%s", create)
+	}
+	if create := read("game/controllers/player/enter_create.go"); !strings.Contains(create, "controller.boundHere(context, \"enter_create\")") ||
+		!strings.Contains(create, "gameenter.Create(") || !strings.Contains(create, "owners.Serve(loginCtx, context.PlayerID, boundSID)") {
+		t.Errorf("the demo's EnterCreate does not check the binding, take the player into service and run the module's Create:\n%s", create)
+	}
+	if status := read("game/controllers/enter/enter_status.go"); !strings.Contains(status, "func Announce(") || !strings.Contains(status, "gameenter.Assess(") {
+		t.Errorf("enter_status.go is not the enter module's notice:\n%s", status)
+	}
+	if gate := read("internal/service/game/playerowner.go"); !strings.Contains(gate, "messageID == msgid.MsgEnterGame || messageID == msgid.MsgEnterCreate") {
+		t.Errorf("the write gate does not exempt the create request beside the login:\n%s", gate)
 	}
 	flow := read("game/controllers/player/enter_game.go")
 	if !strings.Contains(flow, "Sync_EnterInit(") {
@@ -882,8 +924,13 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if sender := read("game/handler/syncsender/add_exp_nest_gen.go"); !strings.Contains(sender, "MultiSync_AddExp(ctx context.Context, target int64, stats int64, amount int64)") {
 		t.Errorf("AddExp Sender is not the two-entity form:\n%s", sender)
 	}
-	if operator := read("cmd/accountctl/main.go"); !strings.Contains(operator, ".UpsertServer(") || !strings.Contains(operator, `"roost:planet:account"`) {
-		t.Errorf("accountctl does not register a server on the project's account store:\n%s", operator)
+	if operator := read("cmd/accountctl/main.go"); !strings.Contains(operator, ".UpsertServer(") || !strings.Contains(operator, `"roost:planet:account"`) || !strings.Contains(operator, "func registerCommand(") {
+		t.Errorf("accountctl is not the login module's command on the project's account store:\n%s", operator)
+	}
+	// demo 多出来的四个命令经模块的 registerCommand 登记在另一个文件里，模块的 main.go 没有被覆盖。
+	if extra := read("cmd/accountctl/operator.go"); !strings.Contains(extra, `registerCommand("merge-server"`) || !strings.Contains(extra, `registerCommand("unmerge-server"`) ||
+		!strings.Contains(extra, `registerCommand("show-role"`) || !strings.Contains(extra, `registerCommand("transfer-role"`) {
+		t.Errorf("the demo's operator commands are not registered beside the module's:\n%s", extra)
 	}
 	// Observability: the dashboard is valid JSON with panels that all query
 	// the provisioned datasource, and the scrape config covers the three
@@ -1016,11 +1063,6 @@ func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
 		t.Errorf("service.go does not name the arena service:\n%s", service)
 	}
 }
-
-// sessionTokenPrefixName is the identifier the demo authenticator declares.
-// The test asserts on the name rather than the literal so renaming the
-// credential format does not silently pass.
-const sessionTokenPrefixName = "sessionTokenPrefix"
 
 // Every generated Makefile carries a loadtest target. The target guards on
 // cmd/loadtest existing, so the game template — which ships no load test —
@@ -1286,6 +1328,11 @@ func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
 			var missing []string
 			for _, key := range sortedKeys(dev) {
 				if rel == secretRel && !demoGameSection(key) {
+					continue
+				}
+				// 只属于开发配置的两段（demoLoginDevConfig）：开发登录令牌在生产配置里写了 account 进程不启动；
+				// 区服地址是部署的事。两段都可以不写，缺了它们进程照常启动。
+				if service == "account" && (key == "login.dev_token" || strings.HasPrefix(key, "portal.servers.")) {
 					continue
 				}
 				if _, ok := leaves[key]; !ok {

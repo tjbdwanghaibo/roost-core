@@ -376,13 +376,15 @@ func (owners *PlayerOwners) Admit(playerID int64) error {
 
 // AdmitMessage 是接入边界的闸门（accessplayer.WriteGate）：本进程能不能处理这个请求？
 //
-// 登录豁免：它就是建立驻留记录的那条消息（Serve 在里面做绑定校验）。其余消息一律按 Admit 判，
+// 登录豁免：EnterGame 就是建立驻留记录的那条消息（Serve 在里面做绑定校验）。新建请求 EnterCreate 同样豁免：
+// 用进服票据握手的新玩家在建成之前，EnterGame 只答 enter_need_create，他的第一条要装载 Player 的消息是 EnterCreate，
+// 它的端点与 EnterGame 一样先核对绑定、再 Serve（game/controllers/player/enter_create.go）。其余消息一律按 Admit 判，
 // 这样以后新增的端点也被覆盖，检查因此放在这里而不是每个 handler 里。
 func (owners *PlayerOwners) AdmitMessage(playerID int64, messageID uint32) error {
 	if owners == nil {
 		return nil
 	}
-	if messageID == msgid.MsgEnterGame {
+	if messageID == msgid.MsgEnterGame || messageID == msgid.MsgEnterCreate {
 		return nil
 	}
 	return owners.Admit(playerID)
