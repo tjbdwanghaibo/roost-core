@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **完善**（codegen + 两个 recipes）：casual / turn-pvp 的 login / portal / servertime 接入收尾。保留模块认证器、先新建再进入、换服在途拒绝及 casual 首次发放链路；新增 turn-pvp 名字写入档案、空名字零提交、重复新建不改名的 TCP 断言。配方生成时读取业务服务 SID / TCP 端口，自动填写 account 的开发令牌与本机目录；生产配置与 Secret 示例不带开发值，`compose.md` 与登录模块未改。
+  - **验收**：两个自定义 module/service 工程的 `go test ./...`、定向 race、build / vet、module verify、生成漂移均通过，配方场景分别 **7 / 6，零 SKIP**；7 条行为变异均被断言捕获、无存活。两份生成工程各自实际 `make dev-run`，使用 Mongo 副本集、Redis、NATS JetStream、etcd，经 curl 登录三步与 Robot TCP 完成先新建、首次进入和重连；turn-pvp 另验空名字拒绝。根包与文档检查结果见[证据](docs/maintenance/evidence/recipes-login-20261112/README.md)。
+  - **边界**：只影响新生成的配方，已安装业务代码不自动迁移；未运行全仓测试、完整 Module/Demo 或玩法矩阵，没有验证 self_sync 解码、完整对局/购买的真实存储、跨机、恢复与压测，统一验收仍由登录线完成。
+
 - **变更**（game-demo + modules/login + codegen；分支 `tmp/mod-portal`）：game-demo 接入登录链路，装 `login`、`portal`、`servertime` 三个模块（加在模块列表末尾，前面模块分到的号不变），不再带自己的认证器与 account collaborators。说明见 [demo 的登录一节](demo/WALKTHROUGH.md#登录入口--握手--先新建--进入)。
   - **握手与 account**：认证器、开发登录、玩家号计数器、名字规则、指标都是登录模块的；demo 只覆盖模块留给工程的渠道入口 `internal/service/account/login_channels.go`（demo 渠道，凭据 `demo:<open_id>`，机器人、演练脚本与 WALKTHROUGH 照旧可用）。与原认证器相比：多认 `enter:<进服票据>`；票据首尾带空白、玩家号不是规范十进制、account 返回的角色没有区服，现在是拒绝；account 给不出结论与票据被拒分开记日志；会话号改用 `gateway.NewBroadcastID()`；claims 的键与写法不变。
   - **accountctl**：模块的 `main.go` 多一个登记点 `registerCommand`（工程在另一个文件里加自己的子命令，用法与“不认识的命令”里都列出）；demo 的 `merge-server` / `unmerge-server` / `show-role` / `transfer-role` 改为经它登记（`cmd/accountctl/operator.go`），多了模块的 `list-servers`，连接旗标不变。

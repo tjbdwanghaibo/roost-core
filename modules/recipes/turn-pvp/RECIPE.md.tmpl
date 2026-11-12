@@ -1,19 +1,38 @@
 # 回合房间配方
 
 本工程由 `roost project new {{PROJECT}} -module {{MODULE}} -recipe turn-pvp` 创建。
-包含 enter、profile、room、turn、leaderboard；代码安装后归业务所有，sync 不会重写。
+包含 enter、profile、room、turn、leaderboard、login、portal、servertime；代码安装后归业务所有，sync 不会重写。
 
 ## 跑起来
 
 按照生成工程 README 配置 MongoDB、Redis、NATS 与 etcd，运行需要的托管服务和 `{{GAME_SERVICE}}`。
-Account 的 `internal/service/account/collaborators.go` 仍要求业务实现 IdentityVerifier 与 PlayerIDAllocator：
-框架无法替你的游戏验证平台身份或决定角色号，不用固定前缀口令假装认证。
-已有 Account 服务的项目接入它即可。TCP 票据为 `session:<player_id>:<token>`，角色承载服必须匹配当前 sid。
+登录链路是 login 与 portal 两个模块的（细节见 roost-core 的 `modules/login/README.md`、`modules/portal/README.md`）：
+
+- 握手的认证器（`internal/access/player/tcp/auth.go` 与 `game/login`）和 account 的协作者由 login 模块写下：票据全部由 account
+  签发与校验，玩家号是 account 的 Redis 里的计数器。渠道验签在 `internal/service/account/login_channels.go` 接，缺省一个渠道都没接；
+  认证保持 fail-closed，没有接受任意身份的测试密码。
+- 新建配方时已在开发配置 `configs/service/config.account.yaml` 写入 `login.dev_token: dev-recipe-local` 和
+  `portal.servers`（地址取本工程业务服务的 SID / TCP 端口）。登录使用渠道 `dev`、自选 `open_id`、凭据 `dev-recipe-local`。
+  这些值只供本机试用，不进入生产配置或 Secret 示例；生产环境设置开发令牌时 account 会拒绝启动。
+  `make dev-run` 起完全部服务后自动登记本机的服；
+  别的环境执行一次 `go run ./cmd/accountctl upsert-server -sid <{{GAME_SERVICE}} 的 sid>`。
+- 登录入口挂在托管 account 的进程上（`web.addr`）：`POST /portal/login` → `/portal/servers` → `/portal/enter`，
+  最后一步给出握手票据 `enter:<进服票据>` 与该连的地址。入口没有限流，对外要放在终止 TLS 的反向代理后面。
+
+与配方原先自带的认证器不同的一处：承载服不是当前 sid、或者正在换服的角色，握手不再被拒绝（握手失败客户端拿不到原因）。
+握手照常成功，随后服务器推 `EnterStatus{code=login_elsewhere}` 并断开连接；这样的会话发 `EnterGame` / `EnterCreate` 得到同一个码，
+不加载也不创建 Player。“承载服不是本服”是 login 与 enter 的联动；“换服在途”是配方自己的进入前检查
+（`internal/access/player/tcp/recipe_entering.go`，以后装 rehome 模块时删掉它）。
 
 ## 完整调用顺序
 
-1. Account 登录、创建/选择角色，取得 session token；客户端完成 TCP 握手。
-2. `EnterGame` 加载/创建 Player 并完成首次初始化；通过自身 EntitySync 读取档案，`ProfileRename` 改名。
+1. 客户端经登录入口登录、拿区服清单、换进服票据，用 `enter:<进服票据>` 完成 TCP 握手。
+2. 服务器推 `EnterStatus`：`need_create` 为 true 就先发 `EnterCreate{name}`——角色名在这里起，按档案模块的名字规则校验
+   （不合规在建档之前被拒），与建档、首次初始化同一笔事务写进档案；再发 `EnterGame`。为 false 直接发 `EnterGame`。
+   推送只是告知：一两秒没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。
+   通过自身 EntitySync 读取档案，`ProfileRename` 改名；进入时服务器把业务时间推给客户端（`ServertimeNow`）。
+   不经登录入口、由自己的入口调 account 的 CreateRole / SelectRole 拿 `session:<player_id>:<token>` 握手的会话照旧：
+   `EnterGame` 加载或创建 Player，名字是空的，用 `ProfileRename` 起名。
 3. **服务端匹配或邀请逻辑**调用 `game/room.Open(ctx, registry, uniqueID, 2)`，把同一个房间号告诉两位客户端。
    uniqueID 由业务持久分配且不能复用；Open 同号、同容量可重试。这里没有将客户端给的任意房间号当作创建授权。
 4. 两人各发 `RoomJoin`；记住各自返回的 Epoch。房主发 `TurnStart`（例如 TurnMillis=30000、MaxTurns=10）。
@@ -28,4 +47,11 @@ Account 的 `internal/service/account/collaborators.go` 仍要求业务实现 Id
 ## 验证
 
 `GOWORK=off go test -count=1 ./...` 与 `roost module verify` 验证安装的模块。
-配方另有双人真实 TCP/Robot → PB → Controller → Nest 场景，包含登录、可信开房、加入、推进、重放与结束。Account、邮件/排行客户端与持久提交仍是替身，未验证自身 Sync 的推送驱动或真实存储。
+配方另有双人真实 TCP/Robot → PB → Controller → Nest 场景：两名新号各自进服票据握手 → `EnterStatus` → `EnterCreate`（带名字）→ `EnterGame`，
+然后可信开房、加入、推进、重放与结束；另有单人的整条登录链路（没新建就进入被拒、重连不再要求新建）、连错服的会话被告知并断开、
+会话令牌握手的老路；另测空名字在写入前拒绝、提交后的名字能从档案读出、重复新建不改名。
+上述自动化场景中 account 是真实的服务（内存存储），认证器是登录模块的；邮件/排行客户端与持久提交仍是替身，
+登录入口的 HTTP 那一段在 portal 模块自己的场景里。
+2026-11-12 另用生成工程的 `make dev-run` 完成单机真实进程演练：Mongo 副本集、Redis、NATS JetStream、etcd，
+curl 登录三步 → TCP 握手 → 拒绝未新建进入与空名字 → 新建 → 首次进入 → 重连。复跑探针见 roost-core 的
+`docs/maintenance/evidence/recipes-login-20261112/`。未验证完整对局的真实存储、进程重启恢复、自身 Sync 解码或跨机故障。

@@ -1,0 +1,19 @@
+Initial root gate while evidence files were still being written:
+--- FAIL: TestTrackedMarkdownRelativeLinksResolve (0.12s)
+    doc_links_gate_test.go:88: 2 relative links in tracked Markdown point at nothing tracked (fix the path, or add a reasoned exemption to docLinkExemptSources):
+          docs/maintenance/evidence/recipes-login-20261112/README.md:14: recipe-tests.txt
+          docs/maintenance/evidence/recipes-login-20261112/README.md:20: repository-checks.txt
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	9.979s
+FAIL
+
+The two referenced evidence files are materialized before the final root gate; no exemptions added.
+
+Final GOWORK=off go test -count=1 .:
+ok  	github.com/tjbdwanghaibo/roost-core	7.582s
+
+python3 scripts/check-doc-anchors.py:
+checked 306 files, 0 broken
+
+git diff --check: PASS
+bash -n portal-smoke.sh: PASS

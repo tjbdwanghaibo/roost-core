@@ -63,7 +63,7 @@
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。再装 `portal`（连带 `login`），客户端就能从渠道身份经 HTTP 登录、拿区服清单与推荐、换进服票据，握手后由游戏服告知要不要先新建，新建（带角色名）之后进入游戏；入口在托管 account 的进程上监听。
 
-谁在用这三个登录模块（2026-11-12）：**game-demo 模板**装的是 `login`、`portal`、`servertime`（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`，排在它原有的十个模块之后）。它不带自己的认证器与 account collaborators，只动模块留给工程的地方——渠道入口 `login_channels.go` 换成 demo 渠道、经 `registerCommand` 给 `cmd/accountctl` 多登记四个命令——并覆盖 enter 域的两个端点，让“加载 Player 之前先核对归属、接入驻留表”的规矩在 `EnterGame` 与 `EnterCreate` 上都成立（[demo 的说明](../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入)）。**两个配方（casual、turn-pvp）还没有接**：它们仍用自带的、只认会话令牌的认证器。
+谁在用这三个登录模块（2026-11-12）：**game-demo 模板**装的是 `login`、`portal`、`servertime`（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`，排在它原有的十个模块之后）。它不带自己的认证器与 account collaborators，只动模块留给工程的地方——渠道入口 `login_channels.go` 换成 demo 渠道、经 `registerCommand` 给 `cmd/accountctl` 多登记四个命令——并覆盖 enter 域的两个端点，让“加载 Player 之前先核对归属、接入驻留表”的规矩在 `EnterGame` 与 `EnterCreate` 上都成立（[demo 的说明](../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入)）。**两个配方（casual、turn-pvp）也已接入** login / portal / servertime；采用模块认证器与先新建再进入的链路，开发配置包含本机登录令牌和区服地址。
 
 ## 使用
 
@@ -256,14 +256,14 @@ roost project new arena -module example.com/studio/arena -recipe turn-pvp
 
 配方以 `game` 为底，复用同一个模块安装器、自动联动、ID 分配和自身同步；可用 `-services arena` 指定业务服务名。不能与 `-template game-demo` 混用。所有文件在新工程的暂存树里完成，失败不留下半个目标工程。已装模块仍由 `module list / verify` 管理，配方不是第二种可重复安装的模块。
 
-- `casual`：enter、wallet、checkin、task、stamina、shop、bag、mailbox；新玩家 100 金币写在 `recipe_first_enter.go`，由事务内 `OnFirstEnter` 发放。重复进入不再发；提交失败时余额与初始化标记一起回滚。
-- `turn-pvp`：enter、profile、room、turn、leaderboard；可信匹配方通过 `room.Open` 创建房间，两位玩家 Join → Start → End。没有替业务假设胜负规则、排行榜结算或客户端开房授权。
+- `casual`：enter、wallet、checkin、task、stamina、shop、bag、mailbox、login、portal、servertime；新玩家 100 金币写在 `recipe_first_enter.go`，由事务内 `OnFirstEnter` 发放。重复进入不再发；提交失败时余额与初始化标记一起回滚。
+- `turn-pvp`：enter、profile、room、turn、leaderboard、login、portal、servertime；可信匹配方通过 `room.Open` 创建房间，两位玩家 Join → Start → End。没有替业务假设胜负规则、排行榜结算或客户端开房授权。
 
-两者都提供正式 Account session 认证器，拒绝错误承载服与在途迁移，开启开发 TCP。业务仍要接入 Account 的平台身份验证与持久角色号分配，不能把测试身份当作上线鉴权。生产 TCP 配置仍需显式开启。操作顺序和边界写入新工程的 `RECIPE.md`，规则文件归业务所有，后续 sync 不覆盖。
+两者使用 login 模块认证器，支持进服票据与 session 令牌；错误承载服、在途迁移在进入前带码拒绝。账号票据与角色号由 account/Redis 提供，角色名与建档归 game。开发 TCP 已开启，account 开发配置带 dev-recipe-local 与本机目录；生产渠道验签与生产监听仍由工程配置，开发值不进入生产/Secret 示例。操作顺序和边界写入新工程的 `RECIPE.md`，规则文件归业务所有，后续 sync 不覆盖。
 
 `OnFirstEnter(name, hook)` 只在 `init` 登记，按名字排序；先跑原来的 `firstEnter`，再跑登记钩子，最后写初始化标记。钩子在同一把 Player 锁内，只改该玩家 DAO，禁止 I/O/发消息，失败返回错误交给 Nest 整笔回滚。不要把它与事务外、失败只记录日志的 `game/enter.OnEntered` 混用。
 
-配方验收入口：`GOWORK=off go test -count=1 -run '^TestRecipe' -timeout 15m ./codegen/internal/roost`。生成两个自定义 module/service 的工程，真实 TCP + Robot 传输 + PB + Nest 场景分别 9 / 7 条（含鉴权与回滚检查），再做模块 verify、build、vet 与漂移检查；Account/邮件/排行客户端、持久提交是替身，自身 Sync 的推送驱动和真实存储未在这里联合验收。
+配方验收入口：`GOWORK=off go test -count=1 -run '^TestRecipe' -timeout 15m ./codegen/internal/roost`。生成两个自定义 module/service 的工程，配方场景分别 7 / 6 条（真实 TCP + Robot 传输 + PB + Nest，以及休闲配方首次发放/回滚），再做模块 verify、build、vet 与漂移检查；Account 使用真实服务与内存存储，邮件/排行客户端及持久提交是替身。两份配方另有单机真实进程登录演练；边界与复跑见[记录](../docs/maintenance/evidence/recipes-login-20261112/README.md)。没有把这次登录演练算作全玩法、自身 Sync 解码或跨机故障验收。
 
 ## 模块的持久定时器
 

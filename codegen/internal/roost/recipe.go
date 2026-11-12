@@ -144,6 +144,10 @@ func scaffoldRecipe(ctx context.Context, root string, manifest Manifest, service
 	if _, err := ensurePlayerTCPConfig(root, service, "", true); err != nil {
 		return nil, err
 	}
+	if err := writeRecipeLoginDevConfig(root, service); err != nil {
+		return nil, err
+	}
+	written = append(written, "configs/service/config.account.yaml")
 	if err := generate(ctx, root, GenerateOptions{Stdout: io.Discard}); err != nil {
 		return nil, fmt.Errorf("recipe %s: regenerate: %w", recipe.Name, err)
 	}

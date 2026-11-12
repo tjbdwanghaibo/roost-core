@@ -1,0 +1,19 @@
+=== RUN   TestRecipeSelectionRejectsUnknownAndConflictingTemplates
+--- PASS: TestRecipeSelectionRejectsUnknownAndConflictingTemplates (0.01s)
+=== RUN   TestRecipesCreateBuildableCompositions
+    recipe_test.go:112: recipe casual: 7 integration/login scenarios, zero skips
+    recipe_test.go:112: recipe casual: 7 integration/login scenarios, zero skips
+    recipe_test.go:119: caught mutation in game/entities/player/enter_component.go: initial coins = 0
+    recipe_test.go:120: caught mutation in game/entities/player/enter_component.go: repeat =
+    recipe_test.go:122: caught mutation in game/login/login_enter.go: EnterStatus for a new account
+    recipe_test.go:123: caught mutation in internal/access/player/tcp/recipe_entering.go: want login_elsewhere
+    recipe_test.go:124: caught mutation in game/entities/player/enter_component.go: want enter_created
+    recipe_test.go:112: recipe turn-pvp: 6 integration/login scenarios, zero skips
+    recipe_test.go:112: recipe turn-pvp: 6 integration/login scenarios, zero skips
+    recipe_test.go:127: caught mutation in game/profile/enter_profile.go: created profile name
+    recipe_test.go:128: caught mutation in game/entities/player/profile_component.go: empty create name
+--- PASS: TestRecipesCreateBuildableCompositions (166.09s)
+=== RUN   TestRecipeSkipDepsDefersDependencyCommands
+--- PASS: TestRecipeSkipDepsDefersDependencyCommands (7.16s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	173.849s

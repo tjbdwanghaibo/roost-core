@@ -4,18 +4,63 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
+	playerentity "{{MODULE}}/game/entities/player"
 	roomentity "{{MODULE}}/game/entities/room"
 	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 	roomlogic "{{MODULE}}/game/room"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
+
+func TestRecipeTCPCreatePersistsProfileName(t *testing.T) {
+	handler.RegisterProfileCardNestHandlers()
+	f := newRecipeNetwork(t)
+	conn, status := f.handshake(t, f.enterTicket(t, "named-player", 1000))
+	if status.Code != 0 || !status.NeedCreate {
+		t.Fatalf("new player status: %+v", status)
+	}
+	if refused := recipeCreate(t, conn, ""); refused.Code != apperrors.ErrProfileNameEmpty.Code() {
+		t.Fatalf("empty create name: %+v", refused)
+	}
+	if f.committed() != 0 {
+		t.Fatalf("empty name committed %d transactions", f.committed())
+	}
+	if created := recipeCreate(t, conn, "First"); created.Code != 0 {
+		t.Fatalf("valid create name: %+v", created)
+	}
+	recipeEnter(t, conn)
+	client, ok := app.Lookup[nest.Client](f.registry, mods.ModNest)
+	if !ok {
+		t.Fatal("Nest missing")
+	}
+	id, err := entity.BuildEntityID(42, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := syncsender.NewProfileCardSender(client).Sync_ProfileCard(f.ctx, id)
+	if err != nil || card.Name != "First" {
+		t.Fatalf("created profile name: %+v %v", card, err)
+	}
+	if repeated := recipeCreate(t, conn, "Changed"); repeated.Code != apperrors.ErrEnterCreated.Code() {
+		t.Fatalf("repeated create: %+v", repeated)
+	}
+	card, err = syncsender.NewProfileCardSender(client).Sync_ProfileCard(f.ctx, id)
+	if err != nil || card.Name != "First" {
+		t.Fatalf("repeated create changed profile name: %+v %v", card, err)
+	}
+}
 
 func TestRecipeTCPTwoPlayersFinishATurn(t *testing.T) {
 	roomentity.RegisterEntity()
 	f := newRecipeNetwork(t, handler.RegisterRoomOpenNestHandlersOn, handler.RegisterRoomJoinNestHandlersOn, handler.RegisterTurnStartNestHandlersOn, handler.RegisterTurnEndNestHandlersOn, handler.RegisterTurnViewNestHandlersOn)
-	a, b := f.login(t, 42), f.login(t, 43)
-	recipeEnter(t, a)
-	recipeEnter(t, b)
+	// 两名新号经登录入口进来（进服票据握手 → 新建，名字进档案 → 进入）；玩家号按握手先后是 42、43。
+	a, b := f.login(t, "first", "First"), f.login(t, "second", "Second")
 	// 模拟可信匹配方已经分配唯一房间号；客户端没有任意创建房间的权限。
 	if err := roomlogic.Open(context.Background(), f.registry, 88001, 2); err != nil {
 		t.Fatal(err)

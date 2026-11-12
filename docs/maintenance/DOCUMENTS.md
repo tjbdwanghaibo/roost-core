@@ -47,4 +47,6 @@
 
 业务模块的[后续需求](HANDOFF-2026-11-12-module-requirements.md)（2026-11-12）：登录线之外还要做的模块与联动——运维命令、充值发货、task 扩成核心系统、组队 / 匹配 / 送礼 / 活动 / 公会、现有模块的后续与验证欠账；每项的需求、依赖与验收口径，给接手的 agent。
 
+两个配方接入登录链路的[交接](HANDOFF-2026-11-12-recipes-login.md)（2026-11-12）：配方 casual、turn-pvp 换用模块 login / portal / servertime 的任务书，含一份未验证的半成品从哪里接、不要碰哪些文件、只跑哪些检查。
+
 App 生命周期“停机先关外部输入”的[方案](FEATURE-2026-11-04-app-lifecycle.md)（2026-11-04）：现行契约以 [App 生命周期设计篇](../framework/guide/01-app-lifecycle.md) 为准，方案保留盘点、决定与实施记录。
