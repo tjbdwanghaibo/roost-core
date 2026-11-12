@@ -1,0 +1,153 @@
+package team
+
+import (
+	"math"
+	"slices"
+
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// 队伍规则归工程所有；邀请不占座位，接受时再核对容量。
+const MaxMembers = 8
+const MaxInvites = 64
+const InviteMillis int64 = 60000
+
+// Snapshot 是锁内读取后交给网络层的值拷贝；成员号是玩家 unique ID。
+type Snapshot struct {
+	TeamID   int64
+	Leader   int64
+	Revision int64
+	Members  []int64
+	SIDs     map[int64]int32
+}
+
+// Info 只可在持有 Team 锁时调用；不把 DAO 的集合交给锁外调用方。
+func (t *Team) Info() Snapshot {
+	d := t.Dao()
+	out := Snapshot{TeamID: t.ID(), Leader: d.GetLeader(), Revision: d.GetRevision(), SIDs: map[int64]int32{}}
+	d.RangeMembers(func(id int64, sid int32) bool { out.Members = append(out.Members, id); out.SIDs[id] = sid; return true })
+	slices.Sort(out.Members)
+	return out
+}
+func (t *Team) IsMember(id int64) bool { _, ok := t.Dao().GetMembers(id); return ok }
+
+func (t *Team) Found(id int64, sid int32) error {
+	if id <= 0 || sid <= 0 {
+		return apperrors.ErrTeamInvalid
+	}
+	d := t.Dao()
+	if d.GetRevision() != 0 {
+		return apperrors.ErrTeamExists
+	}
+	d.SetLeader(id)
+	d.SetMembers(id, sid)
+	d.SetRevision(1)
+	return nil
+}
+func (t *Team) Invite(leader, invitee, now int64) error {
+	d := t.Dao()
+	if d.GetLeader() == 0 {
+		return apperrors.ErrTeamMissing
+	}
+	if d.GetLeader() != leader {
+		return apperrors.ErrTeamNotLeader
+	}
+	if invitee <= 0 || invitee == leader || now < 0 || now > math.MaxInt64-InviteMillis {
+		return apperrors.ErrTeamInvalid
+	}
+	if t.IsMember(invitee) {
+		return nil
+	}
+	if d.MembersLen() >= MaxMembers {
+		return apperrors.ErrTeamFull
+	}
+	t.pruneInvites(now)
+	if _, exists := d.GetInvites(invitee); !exists && d.InvitesLen() >= MaxInvites {
+		return apperrors.ErrTeamInvitesFull
+	}
+	d.SetInvites(invitee, now+InviteMillis)
+	return nil
+}
+func (t *Team) Accept(id int64, sid int32, now int64) error {
+	d := t.Dao()
+	if id <= 0 || sid <= 0 || now < 0 {
+		return apperrors.ErrTeamInvalid
+	}
+	if d.GetLeader() == 0 {
+		return apperrors.ErrTeamMissing
+	}
+	if t.IsMember(id) {
+		return nil
+	}
+	expiry, invited := d.GetInvites(id)
+	if !invited || now >= expiry {
+		return apperrors.ErrTeamNotInvited
+	}
+	if d.MembersLen() >= MaxMembers {
+		return apperrors.ErrTeamFull
+	}
+	if d.GetRevision() == math.MaxInt64 {
+		return apperrors.ErrTeamBlocked
+	}
+	d.DelInvites(id)
+	d.SetMembers(id, sid)
+	d.SetRevision(d.GetRevision() + 1)
+	return nil
+}
+func (t *Team) Leave(id int64) error {
+	d := t.Dao()
+	if !t.IsMember(id) {
+		return apperrors.ErrTeamMissing
+	}
+	if d.GetRevision() == math.MaxInt64 {
+		return apperrors.ErrTeamBlocked
+	}
+	d.DelMembers(id)
+	if d.GetLeader() == id {
+		next := int64(0)
+		d.RangeMembers(func(member int64, _ int32) bool {
+			if next == 0 || member < next {
+				next = member
+			}
+			return true
+		})
+		d.SetLeader(next)
+		if next == 0 {
+			t.clearInvites()
+		}
+	}
+	d.SetRevision(d.GetRevision() + 1)
+	return nil
+}
+func (t *Team) Disband(leader int64) error {
+	d := t.Dao()
+	if d.GetLeader() == 0 {
+		return apperrors.ErrTeamMissing
+	}
+	if d.GetLeader() != leader {
+		return apperrors.ErrTeamNotLeader
+	}
+	if d.GetRevision() == math.MaxInt64 {
+		return apperrors.ErrTeamBlocked
+	}
+	for _, id := range t.Info().Members {
+		d.DelMembers(id)
+	}
+	t.clearInvites()
+	d.SetLeader(0)
+	d.SetRevision(d.GetRevision() + 1)
+	return nil
+}
+func (t *Team) pruneInvites(now int64) {
+	d := t.Dao()
+	d.RangeInvites(func(id, expiry int64) bool {
+		if now >= expiry {
+			d.DelInvites(id)
+		}
+		return true
+	})
+}
+func (t *Team) clearInvites() {
+	d := t.Dao()
+	d.RangeInvites(func(id, _ int64) bool { d.DelInvites(id); return true })
+}

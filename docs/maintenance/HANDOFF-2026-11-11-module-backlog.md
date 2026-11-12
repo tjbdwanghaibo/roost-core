@@ -207,4 +207,10 @@ mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件�
 
 提交 `29fd4f25`。shop 商品表改为 configdata 配置，删除生产测试替换函数；rules 统一在 Player Nest 锁内读取模块 PB、锁外推送，进入/重连推一次，RulesGet 补取。stamina/shop 自动安装 rules/enter，业务日继续使用 servertime，不改登录线。
 
-最小24、组合104 PASS / 0 SKIP，6个变异与两轮 race；任务影响组合232、15个原变异和两轮 race 通过；根包/清单/文档检查通过。未运行的全矩阵、全demo、全仓和真实依赖按最终批次；[证据与当前边界](evidence/module-client-rules-20261112/README.md)。下一项为 R7 team/matchmaking/matchroom；R8～R11、§5、§6 仍待实施，guild先报告方案，worldstats不做。
+最小24、组合104 PASS / 0 SKIP，6个变异与两轮 race；任务影响组合232、15个原变异和两轮 race 通过；根包/清单/文档检查通过。未运行的全矩阵、全demo、全仓和真实依赖按最终批次；[证据与当前边界](evidence/module-client-rules-20261112/README.md)。下一项为 R7 team/matchmaking/matchroom；R8～R11、§5、§6 仍待实施，alliance先报告方案，worldstats不做。
+
+## 附录：R7 的 team 基础（2026-11-12）
+
+新增 team 模块，保留 Remote 共享权威与 `[Team, Player]` 同事务边界，去掉分区场景前提；六个 PB 端点、持久唯一号、有限邀请、队长交接和 rehome 双向准入。最小 25，组合 67 PASS / 0 SKIP（含 rehome 40 与联动 2）；8 个变异与两轮 race、生成 build/vet/ID/漂移、根包与清单检查通过。[证据](evidence/module-team-20261112/README.md)。
+
+CBM 已刷新并核对本批 21 个路径，5 个局部模板缺口逐段补读。仍未运行完整矩阵与真实依赖；R7 剩匹配、匹配房、turn-pvp 与 demo 队伍迁移，R8～R11、§5、§6 不变。维护者明确联盟使用 `alliance` 名字，activity 是通用时间阶段框架，排行/奖励为可选联动；已写入后续需求。

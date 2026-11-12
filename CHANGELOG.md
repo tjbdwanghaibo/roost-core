@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- 业务模块新增 team：共享 Remote 权威队伍，建队/入队/离队与 Player 引用在同一 Nest 事务中提交；邀请有界、队长交接、解散后惰性核对、rehome 双向互斥。安装器可代办 remote_entity Mod；未改三大核心模块。匹配与匹配房仍待 R7 后续。
+- 需求命名收敛：联盟新模块统一 `alliance`；activity 核心定义为通用时间阶段框架，排行与发奖按需联动（尚待实施）。
+
 - 业务模块：shop 商品目录使用配置表与道具引用校验；新增 rules 统一在 Player Nest 中读取体力/商店 PB 规则，进入或重连后推送，RulesGet 可补取。shop / stamina 自动依赖 rules / enter；不包含热更广播。
 
 - 业务模块：wallet/shop/stamina/leaderboard 登记点及真实 task 消费者；task 配置表、事件索引、每日/每周/永久、前置链与道具奖励。去重回执不重复上报，跨服务排行通知明确为尽力推进。

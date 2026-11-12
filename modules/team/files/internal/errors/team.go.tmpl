@@ -1,0 +1,14 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrTeamInvalid     = errcode.Define({{ID:errcode:team_invalid}}, "team_invalid", "invalid team operation")
+	ErrTeamMissing     = errcode.Define({{ID:errcode:team_missing}}, "team_missing", "team membership is missing")
+	ErrTeamExists      = errcode.Define({{ID:errcode:team_exists}}, "team_exists", "player or team already belongs to a team")
+	ErrTeamNotLeader   = errcode.Define({{ID:errcode:team_not_leader}}, "team_not_leader", "only the leader may perform this operation")
+	ErrTeamNotInvited  = errcode.Define({{ID:errcode:team_not_invited}}, "team_not_invited", "team invitation is missing or expired")
+	ErrTeamFull        = errcode.Define({{ID:errcode:team_full}}, "team_full", "team is full")
+	ErrTeamInvitesFull = errcode.Define({{ID:errcode:team_invites_full}}, "team_invites_full", "team invitations are full")
+	ErrTeamBlocked     = errcode.Define({{ID:errcode:team_blocked}}, "team_blocked", "team operation is blocked")
+)

@@ -25,6 +25,7 @@
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 25 |
 | [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
+| [team](team/README.md) | Remote 共享权威队伍，六个 PB 端点；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 25 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
 | [login](login/README.md) | 登录鉴权：玩家 TCP 握手校验 account 签发的会话令牌（`session:<player_id>:<token>`），把承载服 / 原服 / 角色创建时间 / 绑定代数 / 换服标记写进会话；接管鉴权桩与 account 的 collaborators（开发令牌登录 `login.dev_token`、Redis 玩家号计数器；渠道入口 `login_channels.go` 缺省全拒） | 无（要求业务服务 `uses: [account]`；玩家 TCP 接入安装时代办，监听要自己 `roost config enable player-tcp`） | 无 | 19 |
@@ -49,6 +50,7 @@
 
 | 联动 | 做什么 | 场景数 |
 | --- | --- | --- |
+| team + rehome | 在队伍中拒绝换服，换服意图未清除前拒绝建队/入队 | 2 |
 | chat + enter | 玩家进入游戏时加进世界频道的在线名单（`game/chat/chat_enter.go`） | 2 |
 | mailbox + enter | 玩家进入游戏时把属于他的全服邮件合并进邮箱（`game/controllers/mailbox/mailbox_enter.go`）；画像缺省取首次进入的时间，会话带着 account 的角色创建时间与区服时改用它们（读 `gameenter.Entered.Claims`） | 5 |
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
@@ -90,7 +92,7 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 
 ## 安装做了什么
 
-1. **前置骨架**：缺少的 heartbeat / directory Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
+1. **前置骨架**：缺少的 heartbeat / directory / remote_entity Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
 2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
 3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
 4. **组件与附加 DAO**：把模块组件接到实体上；`daos: [{field: combatState, type: CombatDAO, tag: combat_state}]` 追加独立 DAO 的聚合声明，复用同一份实例的加载、事务与恢复。字段/集合被占用时拒绝。`sync_packer` 只接明确的模块视图工厂，已有业务 packer 时拒绝覆盖。

@@ -1,0 +1,6 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+//roost:nest
+func handlerPlayerTeam(member player.ITeamEntity) int64 { return member.TeamComp().TeamID() }

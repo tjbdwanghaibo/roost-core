@@ -1,0 +1,62 @@
+package team
+
+import (
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+func TestTeamEndpointRequiresAuthenticatedPlayer(t *testing.T) {
+	player.RegisterEntity()
+	c := &Controller{}
+	if _, err := c.HandleTeamInfo(nil, &pb.TeamInfoRequest{}); err == nil {
+		t.Fatal("anonymous team read accepted")
+	}
+	if _, err := c.HandleTeamCreate(&playeraccess.Context{}, &pb.TeamCreateRequest{}); err == nil {
+		t.Fatal("zero player created team")
+	}
+}
+func TestTeamEndpointRejectsMissingRequest(t *testing.T) {
+	player.RegisterEntity()
+	c := &Controller{}
+	ctx := &playeraccess.Context{PlayerID: 101}
+	if _, err := c.HandleTeamCreate(ctx, nil); err == nil {
+		t.Fatal("nil request accepted")
+	}
+	if _, err := c.HandleTeamInvite(ctx, nil); err == nil {
+		t.Fatal("nil invite accepted")
+	}
+	if _, err := c.HandleTeamAccept(ctx, nil); err == nil {
+		t.Fatal("nil accept accepted")
+	}
+	if _, err := c.HandleTeamLeave(ctx, nil); err == nil {
+		t.Fatal("nil leave accepted")
+	}
+	if _, err := c.HandleTeamDisband(ctx, nil); err == nil {
+		t.Fatal("nil disband accepted")
+	}
+	if _, err := c.HandleTeamInfo(ctx, nil); err == nil {
+		t.Fatal("nil info accepted")
+	}
+}
+func TestTeamEndpointRejectsWrongKindBeforeDispatch(t *testing.T) {
+	player.RegisterEntity()
+	c := &Controller{}
+	response, err := c.HandleTeamAccept(&playeraccess.Context{PlayerID: 101}, &pb.TeamAcceptRequest{TeamID: 123})
+	if err != nil || response.Code != int32(errcode.CodeOf(apperrors.ErrTeamInvalid)) {
+		t.Fatalf("wrong kind: %+v %v", response, err)
+	}
+}
+func TestTeamEndpointRejectsInvalidInviteeBeforeDispatch(t *testing.T) {
+	player.RegisterEntity()
+	c := &Controller{}
+	response, err := c.HandleTeamInvite(&playeraccess.Context{PlayerID: 101}, &pb.TeamInviteRequest{Invitee: -1})
+	if err != nil || response.Code != int32(errcode.CodeOf(apperrors.ErrTeamInvalid)) {
+		t.Fatalf("invalid invitee: %+v %v", response, err)
+	}
+}

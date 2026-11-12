@@ -1,0 +1,143 @@
+package player
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+
+	team "{{MODULE}}/game/entities/team"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Team}}
+const CompTypeTeam entity.ComponentType = {{ID:component:Team}}
+
+type TeamComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type ITeamEntity interface {
+	entity.IThreadSafeEntity
+	TeamComp() *TeamComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeTeam, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		p, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("team: owner %T is not Player", owner)
+		}
+		return &TeamComponent{owner: p}, nil
+	})
+}
+func (c *TeamComponent) Name() string  { return "team" }
+func (c *TeamComponent) TeamID() int64 { return c.owner.Dao().GetTeam().GetTeamID() }
+
+// OnTeamJoining 登记事务内准入检查；只在初始化时注册，回调不得 I/O。rehome 等模块在这里挡住新入队。
+var teamChecks = struct {
+	sync.RWMutex
+	hooks map[string]func(*Player) error
+}{hooks: map[string]func(*Player) error{}}
+
+func OnTeamJoining(name string, check func(*Player) error) {
+	if name == "" || check == nil {
+		panic("team: joining check needs name and function")
+	}
+	teamChecks.Lock()
+	defer teamChecks.Unlock()
+	if teamChecks.hooks[name] != nil {
+		panic("team: duplicate joining check " + name)
+	}
+	teamChecks.hooks[name] = check
+}
+func (c *TeamComponent) checkJoin(id int64) error {
+	if current := c.TeamID(); current != 0 && current != id {
+		return apperrors.ErrTeamExists
+	}
+	teamChecks.RLock()
+	names := make([]string, 0, len(teamChecks.hooks))
+	for name := range teamChecks.hooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	checks := make([]func(*Player) error, 0, len(names))
+	for _, name := range names {
+		checks = append(checks, teamChecks.hooks[name])
+	}
+	teamChecks.RUnlock()
+	for _, check := range checks {
+		if err := check(c.owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Create / Accept 同时修改 Team 与 Player，调用者必须声明两者；提交失败由 DAO 一起回滚。
+func (c *TeamComponent) Create(target *team.Team, sid int32) (team.Snapshot, error) {
+	if err := c.checkJoin(target.ID()); err != nil {
+		return team.Snapshot{}, err
+	}
+	self := entity.GetUniqueIDFromEntityID(c.owner.ID())
+	if c.TeamID() == target.ID() && target.IsMember(self) {
+		return target.Info(), nil
+	}
+	if err := target.Found(self, sid); err != nil {
+		return team.Snapshot{}, err
+	}
+	c.owner.Dao().GetTeam().SetTeamID(target.ID())
+	return target.Info(), nil
+}
+func (c *TeamComponent) Accept(target *team.Team, sid int32, now int64) (team.Snapshot, error) {
+	if err := c.checkJoin(target.ID()); err != nil {
+		return team.Snapshot{}, err
+	}
+	if err := target.Accept(entity.GetUniqueIDFromEntityID(c.owner.ID()), sid, now); err != nil {
+		return team.Snapshot{}, err
+	}
+	c.owner.Dao().GetTeam().SetTeamID(target.ID())
+	return target.Info(), nil
+}
+func (c *TeamComponent) Invite(target *team.Team, invitee, now int64) (team.Snapshot, error) {
+	if c.TeamID() != target.ID() {
+		return team.Snapshot{}, apperrors.ErrTeamMissing
+	}
+	if err := target.Invite(entity.GetUniqueIDFromEntityID(c.owner.ID()), invitee, now); err != nil {
+		return team.Snapshot{}, err
+	}
+	return target.Info(), nil
+}
+func (c *TeamComponent) Leave(target *team.Team, disband bool) error {
+	if c.TeamID() != target.ID() {
+		return apperrors.ErrTeamMissing
+	}
+	self := entity.GetUniqueIDFromEntityID(c.owner.ID())
+	// 解散后的成员引用惰性清除；不能重新加入或换服前跳过这次权威核对。
+	if !target.IsMember(self) {
+		c.owner.Dao().GetTeam().SetTeamID(0)
+		return nil
+	}
+	var err error
+	if disband {
+		err = target.Disband(self)
+	} else {
+		err = target.Leave(self)
+	}
+	if err != nil {
+		return err
+	}
+	c.owner.Dao().GetTeam().SetTeamID(0)
+	return nil
+}
+func (c *TeamComponent) Info(target *team.Team) (team.Snapshot, error) {
+	if c.TeamID() != target.ID() {
+		return team.Snapshot{}, apperrors.ErrTeamMissing
+	}
+	if !target.IsMember(entity.GetUniqueIDFromEntityID(c.owner.ID())) {
+		c.owner.Dao().GetTeam().SetTeamID(0)
+		return team.Snapshot{}, nil
+	}
+	return target.Info(), nil
+}

@@ -73,7 +73,7 @@ type ModuleRuntime struct {
 	Start   string `yaml:"start" json:"start"`     // func(*app.Registry) (func(context.Context) error, error)
 }
 
-// ModuleNeeds 是模块对工程的前提。heartbeat 可经正式 add mod 代办，其余缺项给出接入命令。
+// ModuleNeeds 是模块对工程的前提。heartbeat / directory / remote_entity 经正式 add mod 代办，其余缺项给出接入命令。
 type ModuleNeeds struct {
 	Mods     []string `yaml:"mods" json:"mods,omitempty"`
 	Features []string `yaml:"features" json:"features,omitempty"`

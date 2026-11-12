@@ -379,7 +379,9 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 }
 
 // 只代办有确定接线和工程隔离配置的 Mod。外部依赖仍通过 plan 和开发环境配置明确展示。
-func moduleCanAddMod(name string) bool { return name == "heartbeat" || name == "directory" }
+func moduleCanAddMod(name string) bool {
+	return name == "heartbeat" || name == "directory" || name == "remote_entity"
+}
 
 func moduleMissingMods(manifest Manifest, service string, spec ModuleSpec) []string {
 	resolved, err := resolveMods(effectiveServiceMods(manifest, service))

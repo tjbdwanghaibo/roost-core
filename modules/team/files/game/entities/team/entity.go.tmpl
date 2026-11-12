@@ -1,0 +1,28 @@
+package team
+
+import (
+	db "{{MODULE}}/db"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+const EntityKindTeam entity.EntityKind = {{ID:entity:Team}}
+
+// Team 是跨进程共享的组队权威；写者在 Nest 准备阶段取得 Remote 权限，随后与本地 Player 一起提交。
+// 建队入口先切到共享模式；不挂心跳。EntityCategoryRemote 保证锁序先于 Player。
+//
+//roost:entity id={{ID:entity:Team}} entityKind=EntityKindTeam category=entity.EntityCategoryRemote remote=managed service={{GAME_SERVICE}}
+type Team struct {
+	*entity.RemoteEntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao *db.TeamDao `dao:"team"`
+}
+
+// ITeamEntity 让生成的 Nest sender 声明 Team ID 与 Remote 访问，不能把实体指针当普通业务参数传入。
+type ITeamEntity interface {
+	entity.IThreadSafeEntity
+	TeamEntity() *Team
+}
+
+func (t *Team) TeamEntity() *Team { return t }
