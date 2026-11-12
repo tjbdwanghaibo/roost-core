@@ -171,7 +171,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
   `PullBroadcasts`，demo 的进入流程里不再手写。画像规则是模块的 `BroadcastProfileOnEnter`：demo 的登录端点把会话的 claims
   带给进入钩子（`gameenter.Entered.Claims`），规则从里面读认证器写下的三个键——注册时间取 account 的角色创建时间
   （`RoleCreatedAtClaim`），范围是承载服（`ServerIDClaim`），别名合服后原服不同的角色另带原服（`OriginServerIDClaim`）。
-  `internal/access/player/tcp/auth_test.go` 用真实的认证器产出 Principal、交给这个函数读，钉住两边的键对得上。
+  `internal/access/player/tcp/login_claims_test.go` 用真实的认证器（登录模块的）产出 Principal、交给这个函数读，钉住两边的键对得上。
 - **金币**：装 mailbox 连带装进了 wallet 模块（`PlayerDao.Wallet` 是同步字段、`WalletLedger` 与 `MailboxLedger` 只落库、协议 `WalletSpend`）。
   同步视图里 `Wallet` 只给本人：普通场景的 default 视图（全部同步字段）与分区场景的 `self` 视图带它，
   别的玩家（near / team / far）的字段白名单里没有（`game/entities/player/sync_packer.go`）。
@@ -735,9 +735,19 @@ make loadtest LOADTEST_COUNT=20                                           # 等�
 go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1:9300 -account-nats nats://127.0.0.1:4222
 ```
 
-机器人走真实凭据：在压测进程里起一条 bus，用 account 的 typed 客户端依次 `Login`（demo 渠道，凭据 `demo:<open_id>`）→
-`CreateRole`（在 `-server-id` 上）→ `SelectRole`，再以 `session:<player_id>:<token>` 握手；每次运行用新的 open id
-（账号在一个服务器上只能有一个角色，且没有角色列表可查）。
+机器人走真实凭据，有两种登录方式（`-login`）：
+
+- **`bus`（缺省，上面三行命令用的就是它）**：在压测进程里起一条 bus，用 account 的 typed 客户端依次 `Login`（demo 渠道，凭据
+  `demo:<open_id>`）→ `CreateRole`（在 `-server-id` 上）→ `SelectRole`，再以 `session:<player_id>:<token>` 握手；每次运行用新的
+  open id（账号在一个服务器上只能有一个角色）。这是登录服务器走的路，不经登录入口；这样的会话 `EnterGame` 就是“加载或创建”。
+  `make dev-smoke`、`make loadtest`、`scripts/` 下的演练与性能基线都用它，命令行没有变。
+- **`portal`**：客户端走的路，只用 HTTP，不需要 bus：
+  `go run ./cmd/loadtest -login portal -portal http://127.0.0.1:8081 -count 20`。机器人对登录入口发三次请求（demo 渠道登录 →
+  清单里要有 `-server-id` → 进服票据），以 `enter:<进服票据>` 握手，等服务器的 `EnterStatus`（至多 1 秒；它只是告知，没等到就当作要新建），
+  需要时发 `EnterCreate`（名字 `r<本次运行的随机串>_<机器人序号>`，不超过档案的 16 个字符；已经建成的答 `enter_created`，同样算过），
+  再发 `EnterGame`，玩家号取自它的应答。场景文件是同一份：`enter_game` 这个动作由所用的登录方式登记。
+  凭据那一段（三次 HTTP 与握手票据）有离线场景 `cmd/loadtest/portal_login_test.go`；握手之后的三步在机器人里**没有离线场景，也没有做过真实进程的实跑**。
+  整条链路见[登录](#登录入口--握手--先新建--进入)。
 
 `CreateRole` 会拒绝未知或未开放的服务器，而 **`UpsertServer` 刻意不在 account 的 RPC 接口上**：登记 / 开关服务器改变的是
 所有玩家能登录什么，game 进程无权做，放在 Login 同一条总线上等于任何能到达 account 的进程都能关服。所以 demo 给了一个
@@ -804,28 +814,105 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
 **档位编进实体 id**：改一个 kind 的 category 会改它所有实体的 id，已落库的文档全部失配。所以这是在第一条文档落库之前
 决定一次的事；之后再改等于一次数据迁移。
 
-## account 的 collaborators
+## 登录：入口 → 握手 → 先新建 → 进入
 
-`game` 模板给的 `Verifier` / `Allocator` 默认全拒绝（这是对的：没有校验的身份和会重复的 id 都不该有默认值）。
-demo 换成能跑的版本：
+登录是三个业务模块的，demo 不带自己的认证器与 account collaborators（`demoModuleSteps` 末尾的 `login`、`portal`、`servertime`）：
+[login](../modules/login/README.md) 给握手的认证器、account 的协作者与 `cmd/accountctl`，[portal](../modules/portal/README.md) 给客户端够得着的
+登录入口，servertime 给服务器时间。四个角色的分工（account 签发与校验全部票据、只映射账号 ↔ 玩家号；入口给清单与进服票据；
+握手只问 account；角色名与玩家数据由游戏服建）见 portal 的 README，本节只写 demo 在它们之上做了什么。
 
-- `Verifier` 只认 `demo` 渠道，凭据必须是 `demo:<open_id>`，其它渠道一律 fail-closed，返回的是它确认过的身份而不是提交
-  上来的那份。**这不是身份校验**，只是把"该做的两件事"做了个样子，上线前换成对平台的真实调用。
-- `Allocator` 用 account 服务自己 Redis 里的一个 `INCR` 计数器——持久、跨副本共享，满足 allocator 契约。它通过
-  `account.RegistryBound`（`wiring/account`）在 `Provide` 里拿到 registry 再查 Redis 客户端：collaborator 是在 app 存在之前
-  构造的，没有这个钩子就拿不到任何持久的东西。
+### 用 curl 走一遍
 
-## auth.go：两种凭据
+`make dev-run` 起来之后（它在服务都起来后用 `cmd/accountctl` 登记了 1000 服）。入口挂在 account 进程的 `web.addr` 上，开发配置是
+`127.0.0.1:8081`；`configs/service/config.account.yaml` 末尾带着开箱可用的两段——`login.dev_token: dev-local` 与
+`portal.servers`（`"1000": 127.0.0.1:7000`，本机这台 game）。**这两段只在开发配置里**：生产示例与 k8s Secret 示例都没有，
+生产配置里写了开发令牌 account 进程不启动。
 
-`internal/access/player/tcp/auth.go` 认两种字符串：
+```bash
+curl -s -X POST http://127.0.0.1:8081/portal/login -H 'Content-Type: application/json' \
+  -d '{"channel":"demo","open_id":"alice","credential":"demo:alice"}'
+# {"ok":true,"account_ticket":"at1.…","account_ticket_expires_at":…}
 
-- `session:<player_id>:<token>` —— **真实路径**。token 由 account 服务签发（Login → CreateRole → SelectRole），
-  这里经 account 客户端 `ValidateSession` 校验，principal 用的是 account 返回的角色而不是 socket 声称的 id。
-  客户端拿到 account 客户端靠生成的 TCP 传输层新增的 `RegistryBound` 钩子：authenticator 在 `Init` 里只有 viper 配置，
-  Mod 在 `Provide` 里把 registry 交给它。
-- `player:<id>` —— **不是认证**，直接信任 socket 给的 id，只为了能用一个裸 TCP 客户端把 demo 跑通。上线前删掉
-  `demoTokenPrefix` 和读它的分支。
+curl -s -X POST http://127.0.0.1:8081/portal/servers -H 'Content-Type: application/json' \
+  -d '{"account_ticket":"at1.…"}'
+# {"ok":true,"recommended_server_id":1000,"servers":[{"server_id":1000,…,"status":"open","addr":"127.0.0.1:7000","addr_source":"directory","role":null}]}
 
-生成器默认给的是 fail-closed 骨架，demo 故意替换掉它——这也是 `roost config` 启用 TCP 时会检查的那个文件。
-脚手架同时把 `player_access.tcp.enabled` 置为 true（等价于 `roost config enable player-tcp`），
-所以 `roost project doctor -workflow player-tcp` 在刚生成的工程上全绿。
+curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application/json' \
+  -d '{"account_ticket":"at1.…","server_id":1000}'
+# {"ok":true,"ticket":"enter:et1.…","server_id":1000,"serving_server_id":1000,"expires_at":…,"addr":"127.0.0.1:7000","addr_source":"directory"}
+```
+
+第一步也可以用登录模块的开发渠道：`{"channel":"dev","open_id":"bob","credential":"dev-local"}`。拿到的 `ticket` 就是握手帧里出示的
+票据；之后的 `EnterStatus` / `EnterCreate` / `EnterGame` 要一条真的连接，用 `go run ./cmd/loadtest -login portal -count 2`。
+这三步在工程自带的开发配置上有离线场景（`game/portal/dev_walkthrough_test.go`：入口的 `Start` 读那份配置文件，两个渠道各走一遍，
+拿到的票据握手成功）；**起真实进程后用 curl 走这三步没有实跑过**。
+
+### 握手：两种票据
+
+`internal/access/player/tcp/auth.go` 是登录模块写下的接线，票据规则在 `game/login/login.go`：
+
+- `enter:<进服票据>`——登录入口那条路。认证器把票据交给 account 的 `EnterServer`：按“账号 + 服”解析玩家号，没有映射就新建。
+- `session:<player_id>:<token>`——老路，机器人的缺省方式与演练脚本在用。token 由 account 签发（`Login` → `CreateRole` → `SelectRole`），
+  经 `ValidateSession` 校验。
+
+两种票据下，会话里的身份都取自 account 返回的角色，不取自票据；没有“直接报玩家号”的调试旁路。握手成功与否只看 account：
+承载服不是本服、正在换服的角色认证器只记不拒（握手失败客户端拿不到原因），由进入的那一步给码。与 demo 原来的认证器相比
+（对照见 `login_claims_test.go`）：多认一种票据；account 给不出结论（不可达、超时）与票据被拒绝分开记日志；票据首尾带空白、玩家号不是
+规范十进制写法、account 返回的角色没有区服，现在都是拒绝；会话号改用 `gateway.NewBroadcastID()`。写进会话的 claims 的键与写法没有变。
+脚手架把 `player_access.tcp.enabled` 置为 true，所以 `roost project doctor -workflow player-tcp` 在刚生成的工程上全绿。
+
+### 进入：demo 的 EnterGame 与 EnterCreate
+
+协议、“先新建”的规则、会话激活后的告知都是模块的；demo 覆盖 enter 域的两个端点（`game/controllers/enter/enter_game.go`、
+`enter_create.go`），把要装载 Player 的两件事交给 player controller（`game/controllers/player/enter_game.go`、`enter_create.go`），
+因为在这个 demo 里装载 Player 之前有自己的规矩：
+
+1. **归属（`boundHere`）**：会话记的承载服不是本进程的 sid 答 `player_elsewhere` 并带 `owner_sid`，没有记答 `player_elsewhere`（`owner_sid=0`）。
+   在任何别的检查之前，不问驻留表、不装载。两个端点相同。
+2. **进入前检查**（`gameenter.RunEntering`）：rehome 模块的“正在换服 / 已经换走”，以及登录模块与 enter 的联动（与第 1 步是同一个比较）。
+3. **接入服务**：驻留表 `Serve`，在登录预算内（`player_access.tcp.login_timeout`）等上一份副本的卸载、复核迁出表。
+4. **装载**，按会话走两条路之一，判断只调模块的 `gameenter.CreateFirst`（规则是登录模块与 enter 的联动登记的：进服票据握手的会话）：
+   - 会话令牌握手的会话：`EnterGame` 加载或创建并做首次初始化——与接入登录模块之前相同，机器人的缺省方式与演练脚本不用改。
+   - 进服票据握手的会话：`EnterGame` 只装载、不创建。没有档、或者有档而没建成，答 `enter_need_create`，什么都不写；客户端发
+     `EnterCreate{name}`：名字先过档案模块的规则（enter 与 profile 的联动，不合规在建档之前被拒），然后建档，名字、首次初始化与
+     “建成了”的标记一笔事务。再发 `EnterGame`，这一次 `first=true`。已经建成的再发新建答 `enter_created`，名字不变。
+5. 之后是这个游戏登录时顺带做的事（世界计数、进场景、补单、公会、进入钩子、公告），两条路相同。
+
+写闸门（`PlayerOwners.AdmitMessage`）原来只豁免 `EnterGame`，现在也豁免 `EnterCreate`：新号在建成之前，它是第一条要装载 Player 的消息。
+豁免不建立驻留记录，记录仍然只由端点里的 `Serve` 在核对归属之后建立。
+
+握手成功、会话激活之后，服务器推 `EnterStatus{code, reason, need_create}`（模块的 `enter_status.go`，demo 不覆盖）：告诉客户端要不要先新建；
+本服不该服务这条会话时推那个码，300 毫秒后断开他在本进程的连接。**会话令牌握手的会话现在也会收到这条推送**（`need_create=false`），
+不认识它的客户端应当忽略。它只是告知，结论以 `EnterGame` / `EnterCreate` 的应答为准。连错服的会话在告知里看到的是登录模块的
+`login_elsewhere`，发 `EnterGame` 得到的是 demo 的 `player_elsewhere`（带 `owner_sid`）——同一件事两个码，见“边界”。
+
+整条链路落在 demo 登录流程上的离线场景是 `game/controllers/player/enter_login_scenario_test.go`：真实的 account（内存存储）、
+登录模块的认证器与告知、demo 的 `EnterGame` / `EnterCreate`、真实的 Nest；持久层、驻留表与传输是替身。
+
+### account 这一侧与 accountctl
+
+- 协作者是登录模块的：开发登录（渠道 `dev`，凭据是 `login.dev_token`）、玩家号（account 的 Redis 里 `<account.key_prefix>:player_id` 的
+  `INCR` 计数器，从 100001 起）、名字规则、指标。demo 只覆盖模块留给工程的渠道入口 `internal/service/account/login_channels.go`：
+  `demo` 渠道，凭据必须是 `demo:<open_id>`，其它渠道一律拒绝，返回的是它确认过的身份而不是提交上来的那份。
+  **这不是身份校验**——任何人都能以任何账号登录——上线前换成对平台的真实调用。它不看配置，哪份配置下都开着；装了 portal 之后
+  够得着入口的人都能用它，入口缺省只听 `127.0.0.1`。
+- demo 原来的玩家号分配器多一条：旧的固定计数键 `roost:demo:player_id` 还在时拒绝分配、`account.key_prefix=roost:demo` 时拒绝绑定。
+  改用模块的计数器之后**这两条没有了**（键与起点相同）；新生成的工程没有那个旧键。
+- `cmd/accountctl` 是模块的（`upsert-server`、`show-server`、`list-servers`，连接旗标不变）。demo 多出来的 `merge-server`、`unmerge-server`、
+  `show-role`、`transfer-role` 经模块的 `registerCommand` 登记在 `cmd/accountctl/operator.go`，模块的 `main.go` 没有被覆盖。
+  与原来的差别：`upsert-server` 的 `-sid` 现在必填（原来缺省 1000），`-region` 缺省为空（原来是 `demo`）。
+
+### 服务器时间
+
+servertime 模块：`ServertimeSync` 拉、进入游戏时推 `ServertimeNow`（业务时间、当前业务日、下一次每日重置的时刻）。demo 原来没有
+对应的协议，没有要删的重复代码。
+
+### 边界
+
+- **连错服有两个码**：`EnterGame` / `EnterCreate` 答 demo 的 `player_elsewhere`（带 `owner_sid`，客户端按它重连），会话激活后的告知推的是
+  登录模块的 `login_elsewhere`。保留 `player_elsewhere` 是为了不改老路的应答；要统一成一个码得改协议的约定，没有做。
+- **告知会在驻留表之外装载 Player**：对进服票据握手、已经有档的玩家，`EnterStatus` 要读“建成了没有”，这一步经 lifecycle 装载他的档，
+  不经驻留表的 `Serve`。它排在进入前检查之后（只对本服承载、不在换服的会话发生），随后的 `EnterGame` 会照常 `Serve`。握手之后不进入
+  就断开的玩家，这份内存副本没有驻留记录，闲置卸载扫不到它，要到进程重启才释放。记录在 [已知限制](../docs/maintenance/KNOWN-LIMITS.md)。
+- 没有经真实的 TCP、总线、Redis 与 Mongo 验证过新链路：`make dev-run` 加 curl、`-login portal` 的机器人都没有实跑。
+- 独立 Gate 部署下的差别（Gate 与 Game Ingress 各认证一次、告知靠 30 秒的 claims 备忘）见 login 模块 README 的“边界”；demo 用的是嵌入 TCP。

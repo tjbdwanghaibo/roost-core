@@ -49,9 +49,10 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
 | `game/guild/`、`saga/alliance_*/`、`internal/service/<game>/alliance_saga.go`、`alliance_notice.go` | game 侧的公会：game 只装联盟的只读 Mirror（`game/entities/alliance/mirror.go`），玩家所在公会是自己的副本 `PlayerDao.GuildID`，入会 / 退会一次 RPC，建盟扣费 / 捐献 / 领奖各一个 saga（Player 原生步骤 + 调 RPC 的 Mongo 步骤），接收成员变化通知推给在线玩家；见 [WALKTHROUGH](WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror) |
 | `game/terrainmap/`、`game/entities/terrain_chunk/`、`game/entities/building/`、`configs/schema/building*.go`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`building_sync.go`、`building_config.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格、P3 普通场景的移动与寻路，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步、高度场上的行走与寻路、P4 水位区域与普通场景的建筑，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2)、[移动与寻路](#移动与寻路p3)、[水与建筑](#水与建筑p4) |
-| `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
+| `internal/access/player/tcp/`、`game/login/`、`internal/service/account/`、`cmd/accountctl/main.go` | 登录鉴权。不在本目录里：握手的认证器、account 的协作者（开发登录、玩家号计数器）与 `accountctl` 来自 [login 业务模块](../modules/login/README.md)；本目录只带覆盖用的渠道入口 `internal/service/account/login_channels.go`（demo 渠道，凭据 `demo:<open_id>`）、多登记四个命令的 `cmd/accountctl/operator.go` 与两份对照测试 |
+| `game/portal/`、`game/servertime/`、`game/controllers/servertime/`、`protocol/def/servertime_*.go` | 登录入口（HTTP 的登录 / 清单 / 进服票据，挂在 account 进程上）与服务器时间，来自 [portal](../modules/portal/README.md) 与 servertime 业务模块；本目录只带一条在工程自带开发配置上走三步登录的场景 `game/portal/dev_walkthrough_test.go` |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
-| `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
+| `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本（`-login bus` 缺省，`-login portal` 经登录入口）；`cmd/accountctl` 是操作员工具 |
 | `db/migrations/`、`cmd/schemamigrate` | Player schema 1 → 2 的离线迁移示例（plan / apply / verify / rollback），见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md) |
 | `cmd/sidmove` | 把一个 game sid 搬到另一台机器时的检查工具（WAL 已排空、单实例锁、玩家文档未变），见[参考流程](../docs/framework/PLAYER-MIGRATION.md) |
 | `cmd/sidmerge` | 把一个服并入另一个服（别名合服）的离线数据工具：合服清单、前置检查、按 sid 分库的迁移与回退；account 记录用 `cmd/accountctl merge-server`，见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b) |
@@ -132,7 +133,8 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
   2026-10-22 冒烟时本机恰好有一个在跑。本机没有、或要用隔离环境之外的 etcd 时改这一项。
 - **`CreateRole` 拒绝**：account 还不知道这台服。环境准备时跑一次 `go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000`
   （Redis Cluster 用 `-redis-cluster <种子,…>`；`make dev-run` 已代为执行）。
-- **`player:<id>` 凭据与 demo 渠道不是认证**：只为了让裸客户端跑通 demo，上线前按[功能逐项说明 · auth.go](WALKTHROUGH.md#authgo两种凭据)替换。
+- **demo 渠道不是认证**：凭据 `demo:<open_id>` 谁都写得出来，只为了让机器人与演练跑通 demo，上线前在 `internal/service/account/login_channels.go` 换成对平台的真实调用，见[功能逐项说明 · 登录](WALKTHROUGH.md#登录入口--握手--先新建--进入)。握手没有 `player:<id>` 这类旁路。
+- **客户端的登录入口**：`make dev-run` 之后 account 进程在 `127.0.0.1:8081` 上有 `POST /portal/login`、`/portal/servers`、`/portal/enter`，三步拿到 `enter:<进服票据>` 与 game 的地址；开发配置（`config.account.yaml` 末尾的 `login.dev_token` 与 `portal.servers`）已经带好，生产示例不带。curl 的写法与握手之后的 `EnterStatus` / `EnterCreate` / `EnterGame` 见同一节。机器人缺省不走入口（总线登录、会话令牌握手），`-login portal` 才走。
 
 ## 同步视图：谁看见哪些字段
 

@@ -58,17 +58,27 @@ func (scenarioStore) LoadEntity(context.Context, int64, entity.EntityKind) (enti
 	return nil, engine.ErrEntityAggregateNotFound
 }
 
-// scenarioCommitter 记下 Nest 交来的每一笔提交。
+// scenarioCommitter 记下 Nest 交来的每一笔提交；reject 打开时拒绝提交（事务回滚），用来造“建到一半”的玩家。
 type scenarioCommitter struct {
 	mu      sync.Mutex
 	records int
+	reject  bool
 }
 
 func (committer *scenarioCommitter) Commit(context.Context, coredata.CommitRecord) error {
 	committer.mu.Lock()
+	defer committer.mu.Unlock()
+	if committer.reject {
+		return errors.New("scenario: the store refused the commit")
+	}
 	committer.records++
-	committer.mu.Unlock()
 	return nil
+}
+
+func (committer *scenarioCommitter) refuse(reject bool) {
+	committer.mu.Lock()
+	committer.reject = reject
+	committer.mu.Unlock()
 }
 
 func (committer *scenarioCommitter) count() int {
@@ -402,6 +412,43 @@ func TestEnterTicketLoginCreatesFirstThenEntersThroughTheDemoLogin(t *testing.T)
 	}
 	if len(s.transport.closed) != 0 {
 		t.Fatalf("sessions of %v were closed; this server serves them", s.transport.closed)
+	}
+}
+
+// 建到一半的玩家：新建请求建了空档，新建的那笔事务却没提交成（这里是持久层拒绝）。他有档、没建成——
+// 进服票据握手的会话发 EnterGame 仍然答 enter_need_create，不替他把首次初始化补上（那是“加载或创建”那条路的做法）；
+// 服务器的告知仍是要先新建；再发一次 EnterCreate 才建成，首次发放与名字只落这一次。
+func TestEnterGameDoesNotFinishAPlayerTheCreateLeftHalfBuilt(t *testing.T) {
+	s := newLoginScenario(t)
+	ticket := s.enterTicket("halfway", scenarioSID)
+	session := s.handshake(ticket)
+	playerID := session.principal.PlayerID
+
+	s.committer.refuse(true)
+	if answer := s.enterCreate(session, "Halfway"); answer.Code != errcode.CodeInternal {
+		t.Fatalf("EnterCreate whose commit the store refused = %+v, want the server error", answer)
+	}
+	s.committer.refuse(false)
+	if !s.loaded(playerID) || s.committer.count() != 0 {
+		t.Fatalf("after the failed create: loaded %v (want the empty record), %d commits (want 0)", s.loaded(playerID), s.committer.count())
+	}
+	if name := s.displayName(playerID); name == "Halfway" {
+		t.Fatalf("the rolled-back create left the name %q on the record", name)
+	}
+	if refused := s.enterGame(session); refused.Code != apperrors.ErrEnterNeedCreate.Code() || refused.First || refused.PlayerID != 0 {
+		t.Fatalf("EnterGame of a half-built player = %+v, want enter_need_create (%d)", refused, apperrors.ErrEnterNeedCreate.Code())
+	}
+	if s.committer.count() != 0 {
+		t.Fatalf("EnterGame finished the half-built player: %d commits", s.committer.count())
+	}
+	if status := s.status(s.handshake(ticket)); status.Code != 0 || !status.NeedCreate {
+		t.Fatalf("EnterStatus for a half-built player = %+v, want need_create", status)
+	}
+	if answer := s.enterCreate(session, "Halfway"); answer.Code != 0 {
+		t.Fatalf("the second EnterCreate = %+v, want success", answer)
+	}
+	if entered := s.enterGame(session); entered.Code != 0 || !entered.First || s.displayName(playerID) != "Halfway" || s.committer.count() != 2 {
+		t.Fatalf("EnterGame after the create went through = %+v (name %q, %d commits); want the first enter, the name Halfway and 2 commits", entered, s.displayName(playerID), s.committer.count())
 	}
 }
 

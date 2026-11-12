@@ -88,7 +88,7 @@ EnterGame                         -> first=true
    go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance   # 整条覆盖：只改状态也要带上名字
    ```
 
-   它用 account 的存储配置直连 Redis（登记区服是不上总线的控制面写）：`-redis` / `-redis-password` / `-redis-db` / `-redis-cluster` 对应 `config.account.yaml` 的 `redis.*`，`-prefix` 对应 `account.key_prefix`，缺省值就是生成的开发配置里的值。旗标的名字与 game-demo 的同名命令相同（`deploy/dev/run.sh` 就是按这些名字调它的），别的环境照那个环境的配置填；前缀填错不会报错，只是写进了没人读的键里，登记之后用 `list-servers` 与一次真实的握手确认。合服、换服的人工兜底不在这个最小命令里（照 roost-core `demo/cmd/accountctl` 加）。
+   它用 account 的存储配置直连 Redis（登记区服是不上总线的控制面写）：`-redis` / `-redis-password` / `-redis-db` / `-redis-cluster` 对应 `config.account.yaml` 的 `redis.*`，`-prefix` 对应 `account.key_prefix`，缺省值就是生成的开发配置里的值。旗标的名字与 game-demo 的同名命令相同（`deploy/dev/run.sh` 就是按这些名字调它的），别的环境照那个环境的配置填；前缀填错不会报错，只是写进了没人读的键里，登记之后用 `list-servers` 与一次真实的握手确认。合服、换服的人工兜底不在这个最小命令里。要加自己的子命令不用改 `main.go`：在 `cmd/accountctl` 里另写一个文件，用 `init` 调 `registerCommand(名字, 用法, 函数)`，函数拿到的是 account 服务本身；与自带的三个命令重名、重复登记会 panic。roost-core 的 game-demo 这样加了 `merge-server` / `unmerge-server` / `show-role` / `transfer-role`（`demo/cmd/accountctl/operator.go.tmpl`）。
 4. **给客户端一个登录入口**：account 只在内部总线上，客户端够不着。装 [portal](../portal/README.md) 模块（`roost module add portal`）就有了 HTTP 的登录、清单与推荐、进服三个端点，进服的结果里就是握手要出示的 `enter:<进服票据>`；也可以由工程自己的入口（平台回调、自建网关）代客户端调 `Login` → `IssueEnterTicket`（或老路 `CreateRole` → `SelectRole`）。
 5. **上线前接渠道**：在 `internal/service/account/login_channels.go` 的 `verifyChannel` 里接平台验签。缺省一个渠道都没接。登录 account 的参数是渠道与渠道里的用户标识（`Identity{Channel, OpenID, Credential}`）。
 
