@@ -12,6 +12,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "account.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:account", Required: true},
 		{Name: "account.session_secret", Kind: "string", Starter: true, Example: "CHANGE_ME", Required: true, Secret: true},
 		{Name: "account.session_ttl", Kind: "duration", Default: "30m", Min: "1ns", Starter: true, Example: "30m"},
+		{Name: "account.ticket_ttl", Kind: "duration", Default: "10m", Min: "10s", Max: "24h", Help: "账号票据的有效期（登录之后多久之内可以拿区服清单、要进服票据）；进服票据与角色会话令牌用 session_ttl"},
 		{Name: "account.claim_ttl", Kind: "duration", Default: "30s", Min: "1ns", Starter: true, Example: "5m"},
 	}},
 	"account.client": {Keys: []configschema.Key{

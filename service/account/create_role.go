@@ -115,6 +115,11 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 				s.report.Refused("create_role", "role_limit")
 				return Role{}, false, fmt.Errorf("%w: role transfer %s holds the slot of %s on server %d", ErrRoleLimit, slot.Value.TransferID, accountID, serverID)
 			}
+			if state == slotPendingUnnamed {
+				// 握手那条路（EnterServer）正在给这个账号在这个服上建角：名额是它的，下一次进服把它做完。
+				s.report.Refused("create_role", "role_limit")
+				return Role{}, false, fmt.Errorf("%w: a role without a name is being created for %s on server %d by EnterServer", ErrRoleLimit, accountID, serverID)
+			}
 			return Role{}, false, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
 		case actRefuseConflict:
 			if state == slotForeign {
@@ -264,7 +269,19 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	if _, err = s.cfg.Names.Commit(ctx, claim); err != nil {
 		return Role{}, false, err
 	}
-	_, published, err := s.cfg.Slots.Update(ctx, key, func(current Slot, found bool) (Slot, bool, error) {
+	published, err := s.publishRole(ctx, key, plan, role)
+	if err != nil {
+		return role, false, err
+	}
+	s.report.Accepted("create_role")
+	return role.clone(), published, nil
+}
+
+// publishRole 是建角的最后一步：把 slot 的 PlayerID 写上，角色从此可用（roleReady）、RoleOnServer 问得到。
+// 带名字的计划与无名计划共用这一步。published 报告是不是这一次调用写上的（见 createRole）：
+// slot 已经指向这个角色时不写、报 false；这一步报了错而事后读到 slot 已经指向这个角色，按 true 报。
+func (s *Service) publishRole(ctx context.Context, key string, plan RoleCreation, role Role) (published bool, err error) {
+	_, published, err = s.cfg.Slots.Update(ctx, key, func(current Slot, found bool) (Slot, bool, error) {
 		if !found || current.Creation.ID != plan.ID {
 			return current, false, fmt.Errorf("%w: slot %s vanished during create or changed identity", ErrConflict, key)
 		}
@@ -280,16 +297,14 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	if err != nil {
 		actual, found, readErr := s.cfg.Slots.Get(ctx, key)
 		if readErr != nil {
-			return role, false, errors.Join(err, fmt.Errorf("account: slot outcome unknown: %w", readErr))
+			return false, errors.Join(err, fmt.Errorf("account: slot outcome unknown: %w", readErr))
 		}
 		if !found || actual.Value.Creation.ID != plan.ID || actual.Value.PlayerID != role.PlayerID {
-			return role, false, err
+			return false, err
 		}
-		// 发布那一步报了错，而 slot 已经指向这个角色：按这一次发布的报（见 createRole 的 published）。
-		published = true
+		return true, nil
 	}
-	s.report.Accepted("create_role")
-	return role.clone(), published, nil
+	return published, nil
 }
 
 // refuseResumedName is the table's answer once a same-name resume was

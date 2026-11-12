@@ -283,16 +283,35 @@ hold          same            limit     limit    limit    limit     limit     li
 hold          same-refused    limit     limit    limit    limit     limit     limit
 hold          other           limit     limit    limit    limit     limit     limit
 hold          resolve         unres     unres    unres    unres     unres     unres
+
+# 无名计划（EnterServer 建的，enter.go）：只有“账号 ↔ 玩家号”的映射，不占名字，所以从不读名字。它没有可以被
+# 别人占走的东西、总能做完：带名字的建角一律按名额已占回答，运维也不能释放它，只有 EnterServer 续完它。
+unnamed       same            limit     limit    limit    limit     limit     limit
+unnamed       same-refused    limit     limit    limit    limit     limit     limit
+unnamed       other           limit     limit    limit    limit     limit     limit
+unnamed       resolve         unres     unres    unres    unres     unres     unres
+unnamed       enter           resume    resume   resume   resume    resume    resume
+
+# EnterServer 的入口（不带名字，只要“账号在这个服上的角色”）：没有 slot 就建无名计划；已发布的（有名无名都算）
+# 交回角色；CreateRole 留下的带名字的待定计划按同名重试续完，不读名字；换服占位是名额已占。
+absent        enter           plan      plan     plan     plan      plan      plan
+foreign       enter           confl     confl    confl    confl     confl     confl
+malformed     enter           confl     confl    confl    confl     confl     confl
+unadmitted    enter           resume    resume   resume   resume    resume    resume
+admitted      enter           resume    resume   resume   resume    resume    resume
+published     enter           role      role     role     role      role      role
+hold          enter           limit     limit    limit    limit     limit     limit
 `
 
 func TestCreationTableEveryCell(t *testing.T) {
 	slots := map[string]slotState{
 		"absent": slotAbsent, "foreign": slotForeign, "malformed": slotMalformed,
 		"unadmitted": slotPendingUnadmitted, "admitted": slotPendingAdmitted, "published": slotPublished,
-		"hold": slotTransferHold,
+		"hold": slotTransferHold, "unnamed": slotPendingUnnamed,
 	}
 	entries := map[string]creationEntry{
 		"same": entrySameName, "same-refused": entrySameNameRefused, "other": entryOtherName, "resolve": entryResolve,
+		"enter": entryUnnamed,
 	}
 	seen := map[[2]string]bool{}
 	covered := 0
@@ -354,6 +373,9 @@ func TestCreationTableClassifiers(t *testing.T) {
 		{"plan without player id", slotOf(func(s *Slot) { s.Creation.PlayerID = 0 }), true, slotMalformed},
 		{"pending", slotOf(func(*Slot) {}), true, slotPendingUnadmitted},
 		{"admitted", slotOf(func(s *Slot) { s.Creation.Admitted = true }), true, slotPendingAdmitted},
+		// 名字为空的待定计划是无名计划；发布之后与别的已发布 slot 一样。
+		{"unnamed plan", slotOf(func(s *Slot) { s.Creation.Name = "" }), true, slotPendingUnnamed},
+		{"published unnamed plan", slotOf(func(s *Slot) { s.Creation.Name = ""; s.PlayerID = 42 }), true, slotPublished},
 		// 换服占位带着角色的 PlayerID 与建角计划，但它先是占位：不按已发布处理。
 		{"transfer hold", slotOf(func(s *Slot) { s.PlayerID = 42; s.Creation.Admitted = true; s.TransferID = "t-1" }), true, slotTransferHold},
 		{"transfer hold of another account", slotOf(func(s *Slot) { s.AccountID = "b"; s.PlayerID = 42; s.TransferID = "t-1" }), true, slotForeign},

@@ -36,6 +36,7 @@ type Mod struct {
 	prefix        string
 	sessionSecret string
 	sessionTTL    time.Duration
+	ticketTTL     time.Duration
 	claimTTL      time.Duration
 	service       *domain.Service
 }
@@ -83,7 +84,9 @@ type config struct {
 		keyPrefixConfig
 		SessionSecret string        `config:"session_secret" required:"true" secret:"true" example:"CHANGE_ME"`
 		SessionTTL    time.Duration `config:"session_ttl" default:"30m" min:"1ns" example:"30m"`
-		ClaimTTL      time.Duration `config:"claim_ttl" default:"30s" min:"1ns" example:"5m"`
+		// 不带 example：缺省值够用，不写进生成的配置文件；要改时在 account: 段里加 ticket_ttl。
+		TicketTTL time.Duration `config:"ticket_ttl" default:"10m" min:"10s" max:"24h" help:"账号票据的有效期（登录之后多久之内可以拿区服清单、要进服票据）；进服票据与角色会话令牌用 session_ttl"`
+		ClaimTTL  time.Duration `config:"claim_ttl" default:"30s" min:"1ns" example:"5m"`
 	} `config:"account"`
 }
 
@@ -96,6 +99,7 @@ func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 //	  key_prefix: roost:account   # required, no default
 //	  session_secret: "..."       # required, non-empty
 //	  session_ttl: 30m            # optional
+//	  ticket_ttl: 10m             # optional：账号票据的有效期
 //	  claim_ttl: 30s              # optional
 func (m *Mod) Init(cfg *viper.Viper) error {
 	var settings config
@@ -122,7 +126,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("account mod: %v are required and have no defaults; each of them "+
 			"was absent in the implementation this replaces, and the absence looked like a default", missing)
 	}
-	m.prefix, m.sessionSecret, m.sessionTTL, m.claimTTL = c.KeyPrefix, c.SessionSecret, c.SessionTTL, c.ClaimTTL
+	m.prefix, m.sessionSecret, m.sessionTTL, m.ticketTTL, m.claimTTL = c.KeyPrefix, c.SessionSecret, c.SessionTTL, c.TicketTTL, c.ClaimTTL
 	return nil
 }
 
@@ -146,7 +150,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
 		Slots: stores.Slots, Names: stores.Names,
 		Verifier: m.verifier, Allocator: m.allocator, NameRules: m.nameRules,
-		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL, ClaimTTL: m.claimTTL,
+		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL, AccountTicketTTL: m.ticketTTL, ClaimTTL: m.claimTTL,
 		Metrics: m.metrics,
 		// Creation and login times are business time; session tokens and
 		// operator stamps are system time.

@@ -40,6 +40,10 @@ const (
 	slotPendingAdmitted
 	// slotPublished: the role exists and the slot names it.
 	slotPublished
+	// slotPendingUnnamed：无名计划（enter.go 的 EnterServer 建的）——只有“账号 ↔ 玩家号”的映射，计划里没有名字，
+	// 建角时不碰名字目录。它没有可以被别人占走的东西，所以总能做完；带名字的建角遇到它一律按名额已占回答，
+	// 运维不能把它当悬挂的计划释放，只由下一次 EnterServer 续完。
+	slotPendingUnnamed
 	// slotTransferHold：slot 带着 TransferID（transfer.go）——某次换服在目标服的占位，或那次换服已经提交、
 	// 收尾还没做完。它不是建角计划：名额已经被一个现成的角色占住，建角一律按名额已占回答（同名也是，
 	// 这个角色此刻未必绑定在本服），运维不能当作悬挂的计划释放；它只由换服的提交 / 中止了结。
@@ -81,6 +85,10 @@ const (
 	entryOtherName
 	// entryResolve: the operator's Admin.ResolvePendingCreation.
 	entryResolve
+	// entryUnnamed：EnterServer（enter.go）——不带名字，只要“账号在这个服上的角色”：没有 slot 就建无名计划；
+	// 已发布的 slot（有名无名都算）交回角色；待定的计划不论有没有名字都往前推（带名字的按同名重试续完，
+	// 名字在计划里）。它从不读名字。
+	entryUnnamed
 )
 
 // creationAction is what the entry does next.
@@ -135,7 +143,7 @@ func decideCreation(slot slotState, entry creationEntry, name nameState) creatio
 		return actRefuseConflict
 	case slotPublished:
 		switch entry {
-		case entrySameName, entrySameNameRefused:
+		case entrySameName, entrySameNameRefused, entryUnnamed:
 			return actReturnRole
 		case entryResolve:
 			return actRefuseUnresolvable
@@ -148,13 +156,23 @@ func decideCreation(slot slotState, entry creationEntry, name nameState) creatio
 			return actRefuseUnresolvable
 		}
 		return actRefuseRoleLimit
+	case slotPendingUnnamed:
+		// 无名计划不读名字：EnterServer 续完它，别的入口都得等它做完。
+		switch entry {
+		case entryUnnamed:
+			return actResume
+		case entryResolve:
+			return actRefuseUnresolvable
+		default:
+			return actRefuseRoleLimit
+		}
 	}
-	// A pending plan, admitted or not.
-	if name == nameNotRead && entry != entrySameName {
+	// A pending plan with a name, admitted or not.
+	if name == nameNotRead && entry != entrySameName && entry != entryUnnamed {
 		return actReadName
 	}
 	switch entry {
-	case entrySameName:
+	case entrySameName, entryUnnamed:
 		return actResume
 	case entrySameNameRefused:
 		if name == nameCommittedElsewhere || slot == slotPendingUnadmitted {
@@ -209,6 +227,9 @@ func classifySlot(slot versionstore.Versioned[Slot], found bool, accountID strin
 		return slotTransferHold
 	case slot.Value.PlayerID != 0:
 		return slotPublished
+	case slot.Value.Creation.Name == "":
+		// 名字为空的待定计划就是无名计划：带名字的计划在建之前已经过了名字规则，不会是空的。
+		return slotPendingUnnamed
 	case slot.Value.Creation.Admitted:
 		return slotPendingAdmitted
 	default:

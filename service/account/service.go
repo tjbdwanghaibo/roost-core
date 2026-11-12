@@ -44,6 +44,10 @@ type Config struct {
 	SessionSecret string
 	// SessionTTL bounds a token's life; zero selects DefaultSessionTTL.
 	SessionTTL time.Duration
+	// AccountTicketTTL 是账号票据（tickets.go，IssueAccountTicket）的有效期；零取 DefaultAccountTicketTTL。
+	// 它与 SessionTTL 是两个量：账号票据只用来在登录之后拿清单、要进服票据，几分钟就够；
+	// 进服票据与角色会话令牌是“凭它握手”的凭证，用 SessionTTL。
+	AccountTicketTTL time.Duration
 	// RolesPerServer is how many roles one account may hold on one server;
 	// zero selects one. It is configuration, not a compiled-in constant.
 	RolesPerServer int
@@ -79,6 +83,8 @@ type Config struct {
 const (
 	// DefaultSessionTTL is how long a role session token lasts.
 	DefaultSessionTTL = 30 * time.Minute
+	// DefaultAccountTicketTTL 是账号票据的缺省有效期。
+	DefaultAccountTicketTTL = 10 * time.Minute
 	// DefaultClaimTTL is how long a name or slot reservation is held during
 	// role creation. Short, because it only has to cover one create.
 	DefaultClaimTTL = 30 * time.Second
@@ -132,6 +138,9 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.ClaimTTL <= 0 {
 		cfg.ClaimTTL = DefaultClaimTTL
+	}
+	if cfg.AccountTicketTTL <= 0 {
+		cfg.AccountTicketTTL = DefaultAccountTicketTTL
 	}
 	if cfg.RolesPerServer <= 0 {
 		cfg.RolesPerServer = 1
@@ -235,21 +244,8 @@ func (s *Service) admitAndCreateRole(ctx context.Context, accountID string, serv
 	if account.Value.Banned {
 		return Role{}, false, fmt.Errorf("%w: account is banned", ErrIdentityDenied)
 	}
-	server, found, err := s.cfg.Servers.Get(ctx, serverID)
-	if err != nil {
+	if err := s.serverAcceptsNewRoles(ctx, serverID); err != nil {
 		return Role{}, false, err
-	}
-	if !found {
-		return Role{}, false, fmt.Errorf("%w: server %d is unknown", ErrServerInvalid, serverID)
-	}
-	if into := server.Value.MergedInto; into != 0 {
-		// 已并入的服不再建角（与状态无关：并入以 MergedInto 为准）；新角色建在承载服上。
-		s.report.Refused("create_role", "server_merged")
-		return Role{}, false, fmt.Errorf("%w: server %d is merged into %d; create the role there", ErrServerClosed, serverID, into)
-	}
-	if !server.Value.Status.acceptsNewRoles() {
-		s.report.Refused("create_role", "server_closed")
-		return Role{}, false, fmt.Errorf("%w: server %d is %s", ErrServerClosed, serverID, server.Value.Status)
 	}
 
 	role, published, err := s.createRole(ctx, accountID, serverID, strings.TrimSpace(name))
@@ -259,6 +255,28 @@ func (s *Service) admitAndCreateRole(ctx context.Context, accountID string, serv
 	}
 	role, err = s.withServing(ctx, role)
 	return role, published, err
+}
+
+// serverAcceptsNewRoles 是“这个服现在能不能建新角色”的唯一判断，带名字的建角与握手时的无名建角共用：
+// 没登记答 ErrServerInvalid；已并入别的服、或状态不是 open 答 ErrServerClosed。
+func (s *Service) serverAcceptsNewRoles(ctx context.Context, serverID int32) error {
+	server, found, err := s.cfg.Servers.Get(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%w: server %d is unknown", ErrServerInvalid, serverID)
+	}
+	if into := server.Value.MergedInto; into != 0 {
+		// 已并入的服不再建角（与状态无关：并入以 MergedInto 为准）；新角色建在承载服上。
+		s.report.Refused("create_role", "server_merged")
+		return fmt.Errorf("%w: server %d is merged into %d; create the role there", ErrServerClosed, serverID, into)
+	}
+	if !server.Value.Status.acceptsNewRoles() {
+		s.report.Refused("create_role", "server_closed")
+		return fmt.Errorf("%w: server %d is %s", ErrServerClosed, serverID, server.Value.Status)
+	}
+	return nil
 }
 
 func sameVerifiedIdentity(account Account, identity Verified) bool {

@@ -154,6 +154,9 @@ func (s *Service) ResolvePendingCreation(ctx context.Context, accountID string, 
 		case state == slotMalformed:
 			return RoleCreation{}, fmt.Errorf("%w: the slot of %s on server %d has no creation plan; reconcile it offline",
 				ErrNotResolvable, accountID, serverID)
+		case state == slotPendingUnnamed:
+			return RoleCreation{}, fmt.Errorf("%w: plan %s of %s on server %d has no name (it maps the account to player %d for EnterServer); "+
+				"nothing can take it away, it completes on the account's next enter", ErrNotResolvable, plan.ID, accountID, serverID, plan.PlayerID)
 		case name == nameCommittedByPlan:
 			return RoleCreation{}, fmt.Errorf("%w: plan %s of %s on server %d already committed name %q; it "+
 				"completes by CreateRole with the same name", ErrNotResolvable, plan.ID, accountID, serverID, plan.Name)

@@ -36,21 +36,23 @@ const ServiceType = "account"
 // The RPC method names, prefixed with the service type so a bus subject is
 // unambiguous when several services register handlers on one connection.
 const (
-	MethodLogin              = "account.Login"
-	MethodCreateRole         = "account.CreateRole"
-	MethodSelectRole         = "account.SelectRole"
-	MethodValidateSession    = "account.ValidateSession"
-	MethodUpdateProfile      = "account.UpdateProfile"
-	MethodMarkLogout         = "account.MarkLogout"
-	MethodGetServer          = "account.GetServer"
-	MethodListServers        = "account.ListServers"
-	MethodRoleOnServer       = "account.RoleOnServer"
-	MethodIssueEnterTicket   = "account.IssueEnterTicket"
-	MethodEnterServer        = "account.EnterServer"
-	MethodRoleBinding        = "account.RoleBinding"
-	MethodBeginRoleTransfer  = "account.BeginRoleTransfer"
-	MethodCommitRoleTransfer = "account.CommitRoleTransfer"
-	MethodAbortRoleTransfer  = "account.AbortRoleTransfer"
+	MethodLogin                 = "account.Login"
+	MethodCreateRole            = "account.CreateRole"
+	MethodSelectRole            = "account.SelectRole"
+	MethodValidateSession       = "account.ValidateSession"
+	MethodUpdateProfile         = "account.UpdateProfile"
+	MethodMarkLogout            = "account.MarkLogout"
+	MethodGetServer             = "account.GetServer"
+	MethodListServers           = "account.ListServers"
+	MethodRoleOnServer          = "account.RoleOnServer"
+	MethodIssueAccountTicket    = "account.IssueAccountTicket"
+	MethodValidateAccountTicket = "account.ValidateAccountTicket"
+	MethodIssueEnterTicket      = "account.IssueEnterTicket"
+	MethodEnterServer           = "account.EnterServer"
+	MethodRoleBinding           = "account.RoleBinding"
+	MethodBeginRoleTransfer     = "account.BeginRoleTransfer"
+	MethodCommitRoleTransfer    = "account.CommitRoleTransfer"
+	MethodAbortRoleTransfer     = "account.AbortRoleTransfer"
 )
 
 // Methods is every method on Accounts, in interface order.
@@ -67,6 +69,8 @@ var Methods = []string{
 	MethodGetServer,
 	MethodListServers,
 	MethodRoleOnServer,
+	MethodIssueAccountTicket,
+	MethodValidateAccountTicket,
 	MethodIssueEnterTicket,
 	MethodEnterServer,
 	MethodRoleBinding,
@@ -253,6 +257,38 @@ type rpcRoleOnServerResponse struct {
 	Role Role `json:"role"`
 }
 
+// rpcIssueAccountTicketRequest is the IssueAccountTicket request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcIssueAccountTicketRequest struct {
+	AccountID string `json:"account_id"`
+}
+
+// rpcIssueAccountTicketResponse is the IssueAccountTicket response on the wire.
+type rpcIssueAccountTicketResponse struct {
+	rpcStatus
+	Ticket AccountTicket `json:"ticket"`
+}
+
+// rpcValidateAccountTicketRequest is the ValidateAccountTicket request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcValidateAccountTicketRequest struct {
+	Ticket string `json:"ticket"`
+}
+
+// rpcValidateAccountTicketResponse is the ValidateAccountTicket response on the wire.
+type rpcValidateAccountTicketResponse struct {
+	rpcStatus
+	Account Account `json:"account"`
+}
+
 // rpcIssueEnterTicketRequest is the IssueEnterTicket request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -278,7 +314,6 @@ type rpcIssueEnterTicketResponse struct {
 // rather than a struct field whose zero value looks valid.
 type rpcEnterServerRequest struct {
 	Ticket string `json:"ticket"`
-	Name   string `json:"name"`
 }
 
 // rpcEnterServerResponse is the EnterServer response on the wire.
@@ -443,6 +478,22 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			role, err := service.RoleOnServer(ctx.Context(), wire.AccountID, wire.ServerID)
 			return rpcRoleOnServerResponse{rpcStatus: statusOf(err), Role: role}, nil
 		},
+		MethodIssueAccountTicket: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcIssueAccountTicketRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcIssueAccountTicketResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			ticket, err := service.IssueAccountTicket(ctx.Context(), wire.AccountID)
+			return rpcIssueAccountTicketResponse{rpcStatus: statusOf(err), Ticket: ticket}, nil
+		},
+		MethodValidateAccountTicket: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcValidateAccountTicketRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcValidateAccountTicketResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			account, err := service.ValidateAccountTicket(ctx.Context(), wire.Ticket)
+			return rpcValidateAccountTicketResponse{rpcStatus: statusOf(err), Account: account}, nil
+		},
 		MethodIssueEnterTicket: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcIssueEnterTicketRequest
 			if err := ctx.Decode(&wire); err != nil {
@@ -456,7 +507,7 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			if err := ctx.Decode(&wire); err != nil {
 				return rpcEnterServerResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
 			}
-			entry, err := service.EnterServer(ctx.Context(), wire.Ticket, wire.Name)
+			entry, err := service.EnterServer(ctx.Context(), wire.Ticket)
 			return rpcEnterServerResponse{rpcStatus: statusOf(err), Entry: entry}, nil
 		},
 		MethodRoleBinding: func(ctx *bus.RpcContext) (any, error) {
@@ -664,8 +715,31 @@ func (c *BusClient) RoleOnServer(ctx context.Context, accountID string, serverID
 	return resp.Role, err
 }
 
-// IssueEnterTicket 给 accountID 签一张进 serverID 的票据（只绑定账号、服与过期时刻）。可信调用方
-// 提供 accountID，信任模型同 SelectRole。只读；账号不存在、被封、服没登记时拒绝。
+// IssueAccountTicket 给 accountID 签一张账号票据（寿命 account.ticket_ttl）。可信调用方在 Login 之后
+// 给出 accountID。只读；账号不存在、被封时拒绝。
+// IssueAccountTicket implements Accounts.
+func (c *BusClient) IssueAccountTicket(ctx context.Context, accountID string) (AccountTicket, error) {
+	var resp rpcIssueAccountTicketResponse
+	err := c.call(ctx, MethodIssueAccountTicket, rpcIssueAccountTicketRequest{
+		AccountID: accountID,
+	}, &resp)
+	return resp.Ticket, err
+}
+
+// ValidateAccountTicket 校验账号票据并返回它绑定的账号。无效的票据一律 ErrSessionInvalid；
+// 账号不在或被封时 ErrAccountMissing / ErrIdentityDenied。只读。
+// ValidateAccountTicket implements Accounts.
+func (c *BusClient) ValidateAccountTicket(ctx context.Context, ticket string) (Account, error) {
+	var resp rpcValidateAccountTicketResponse
+	err := c.call(ctx, MethodValidateAccountTicket, rpcValidateAccountTicketRequest{
+		Ticket: ticket,
+	}, &resp)
+	return resp.Account, err
+}
+
+// IssueEnterTicket 给 accountID 签一张进 serverID 的票据（只绑定账号、服与过期时刻，寿命
+// account.session_ttl）。可信调用方提供 accountID，信任模型同 SelectRole。只读；账号不存在、被封、
+// 服没登记时拒绝。
 // IssueEnterTicket implements Accounts.
 func (c *BusClient) IssueEnterTicket(ctx context.Context, accountID string, serverID int32) (EnterTicket, error) {
 	var resp rpcIssueEnterTicketResponse
@@ -676,15 +750,14 @@ func (c *BusClient) IssueEnterTicket(ctx context.Context, accountID string, serv
 	return resp.Ticket, err
 }
 
-// EnterServer 凭进服票据返回账号在那个服上的角色；没有就用 name 走 CreateRole 的同一条路径新建
-// （name 为空答 ErrRoleNameRequired），并记一次登录。它会写。调用方是握手的认证器。
-// 票据无效一律 ErrSessionInvalid。同一张票据重放或并发只会有一个角色。
+// EnterServer 凭进服票据返回账号在那个服上的角色；没有就新建“账号 ↔ 玩家号”的映射（不带名字），
+// 并记一次登录。它会写。调用方是握手的认证器。票据无效一律 ErrSessionInvalid。
+// 同一张票据重放或并发只会有一个映射。
 // EnterServer implements Accounts.
-func (c *BusClient) EnterServer(ctx context.Context, ticket string, name string) (ServerEntry, error) {
+func (c *BusClient) EnterServer(ctx context.Context, ticket string) (ServerEntry, error) {
 	var resp rpcEnterServerResponse
 	err := c.call(ctx, MethodEnterServer, rpcEnterServerRequest{
 		Ticket: ticket,
-		Name:   name,
 	}, &resp)
 	return resp.Entry, err
 }
@@ -809,12 +882,20 @@ func (c capability) RoleOnServer(ctx context.Context, accountID string, serverID
 	return c.inner.RoleOnServer(ctx, accountID, serverID)
 }
 
+func (c capability) IssueAccountTicket(ctx context.Context, accountID string) (AccountTicket, error) {
+	return c.inner.IssueAccountTicket(ctx, accountID)
+}
+
+func (c capability) ValidateAccountTicket(ctx context.Context, ticket string) (Account, error) {
+	return c.inner.ValidateAccountTicket(ctx, ticket)
+}
+
 func (c capability) IssueEnterTicket(ctx context.Context, accountID string, serverID int32) (EnterTicket, error) {
 	return c.inner.IssueEnterTicket(ctx, accountID, serverID)
 }
 
-func (c capability) EnterServer(ctx context.Context, ticket string, name string) (ServerEntry, error) {
-	return c.inner.EnterServer(ctx, ticket, name)
+func (c capability) EnterServer(ctx context.Context, ticket string) (ServerEntry, error) {
+	return c.inner.EnterServer(ctx, ticket)
 }
 
 func (c capability) RoleBinding(ctx context.Context, playerID int64) (RoleBinding, error) {

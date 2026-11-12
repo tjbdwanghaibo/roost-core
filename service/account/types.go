@@ -93,9 +93,6 @@ const (
 	// 要调用方先重读绑定（RoleBinding）再决定。
 	CodeTransferStale      int32 = 560118
 	CodeTransferInProgress int32 = 560119
-	// CodeRoleNameRequired 属于凭票进服（enter.go）：账号在那个服上没有角色、需要新建，而调用方没有给名字。
-	// 与 CodeNameInvalid 分开：那个是“给的名字不合规则”，这个是“这一步需要一个名字”。
-	CodeRoleNameRequired int32 = 560120
 )
 
 var (
@@ -139,8 +136,6 @@ var (
 	ErrTransferStale = errcode.Define(CodeTransferStale, "account: role binding or transfer id is stale", "")
 	// ErrTransferInProgress：这个角色正有另一次换服在途（另一个 ID，或同一个 ID 但目标不同）。
 	ErrTransferInProgress = errcode.Define(CodeTransferInProgress, "account: another role transfer is in progress", "")
-	// ErrRoleNameRequired：EnterServer 要为账号在这个服上新建角色，而调用方没有给名字。
-	ErrRoleNameRequired = errcode.Define(CodeRoleNameRequired, "account: a role name is required to create the role", "")
 )
 
 // Error maps an error to the code and reason a client sees.
@@ -326,6 +321,8 @@ type Role struct {
 	// 消费者（Gate 与嵌入 TCP 的认证器）一律用它决定路由与驻留。
 	ServingServerID int32 `json:"serving_server_id,omitempty"`
 	// Name is the display name; uniqueness is enforced on its normalized form.
+	// 经 EnterServer（握手时按“账号 ↔ 玩家号”新建映射，enter.go）建出来的角色没有名字，这里是空串：
+	// 那条路上 account 不碰角色名，显示名归游戏服自己的数据。只有 CreateRole 建的角色带名字。
 	Name string `json:"name"`
 	// Profile is opaque game state — level, power, guild, avatar. It is a
 	// blob because those are gameplay concepts: baking them into this schema
@@ -483,10 +480,10 @@ const RoleCreatedAtClaim = "role_created_at"
 // 这个会话是换服之前签发的。
 const BindEpochClaim = "bind_epoch"
 
-// NewRoleClaim 是认证器在“这次握手新建了角色”（EnterServer 的 ServerEntry.Created）时记进 Principal.Claims 的键，
-// 值是 "1"；不是新建的握手不写这个键。它只供业务参考（日志、新号引导的提示）：建角的应答丢失后重试时，
-// 新建发生在上一次调用里，这一次不带它。首次发放这类只能做一次的事以游戏服自己的持久事实为准
-// （进入游戏时的首次初始化），不要读这个键。
+// NewRoleClaim 是认证器在“这次握手新建了账号 ↔ 玩家号的映射”（EnterServer 的 ServerEntry.Created）时记进
+// Principal.Claims 的键，值是 "1"；不是新建的握手不写这个键。它只是 account 给的提示：建映射的应答丢失后
+// 重试时，新建发生在上一次调用里，这一次不带它。游戏服要不要为这名玩家建数据以它自己的档为准，
+// 首次发放这类只能做一次的事更不要读这个键。
 const NewRoleClaim = "new_role"
 
 // TransferClaim 是认证器在角色换服在途（Role.Transfer 非空）时记进 Principal.Claims 的键，值由
@@ -550,8 +547,9 @@ type Slot struct {
 // insert it. After Admitted, storage errors are recovered forward, never by
 // deleting a role whose Create may already have committed.
 type RoleCreation struct {
-	ID            string          `json:"id"`
-	PlayerID      int64           `json:"player_id"`
+	ID       string `json:"id"`
+	PlayerID int64  `json:"player_id"`
+	// Name 为空表示无名计划（EnterServer 建的，enter.go）：不占名字，Claim / Admitted 始终是零值。
 	Name          string          `json:"name"`
 	CreatedAtUnix int64           `json:"created_at_unix"`
 	Claim         directory.Claim `json:"claim"`
