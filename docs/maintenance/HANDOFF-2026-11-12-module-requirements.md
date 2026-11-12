@@ -50,7 +50,7 @@
 
 ### R3. 升级奖励邮件（mailbox + profile 联动）
 
-实现与定向验收完成（提交号随后补记）：联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race 与 demo 经验事务定向通过。奖励在升级时冻结，连升一次一封，缺省不发；demo 已迁移。[证据与边界](evidence/module-profile-mail-20261112/README.md)。真实联合验收留在 §6。
+已完成（提交 `7f91c18f`）：实现与定向验收完成：联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race 与 demo 经验事务定向通过。奖励在升级时冻结，连升一次一封，缺省不发；demo 已迁移。[证据与边界](evidence/module-profile-mail-20261112/README.md)。真实联合验收留在 §6。
 
 - profile 已有按名字登记的升级钩子（attribute 在用）。做成 `mailbox` 的 `with/profile/` 联动：升级那一刻在同一条 WAL 记录里产生 effect，消费者发邮件（game-demo 的 `level_up_mail.go` 是现成写法）。奖励内容写在一个归工程所有的业务文件里，缺省不发（零配置不能凭空发奖）。
 - **验收**：升级一次恰好一封；连升多级的行为写死并有场景；消费者重放不重发。

@@ -1,6 +1,6 @@
 # R3 升级邮件联动验收（2026-11-12）
 
-基线 `8891da69`，分支 feat/business-modules，macOS、本工作树 core 的生成工程替换依赖。规则、生命周期及恢复前提见 [mailbox](../../../../modules/mailbox/README.md)。没有修改 Nest / DataEngine / Sync 核心，也没有合 main 或发版。
+实现提交 `7f91c18f`，基线 `8891da69`，分支 feat/business-modules，macOS、本工作树 core 的生成工程替换依赖。规则、生命周期及恢复前提见 [mailbox](../../../../modules/mailbox/README.md)。没有修改 Nest / DataEngine / Sync 核心，也没有合 main 或发版。
 
 ## 实现
 
@@ -13,7 +13,7 @@ demo 删除自己的 effect 定义、升级钩子与消费者，仅覆盖 mailbo
 - `GOWORK=off go test -count=1 -run '^TestModuleProfileMailScenariosAndMutations$' ./codegen/internal/roost`：[通过](acceptance.log)。新 game 工程，mailbox 32、profile 20、wallet 14、联动 10，**76 PASS / 0 SKIP**；build/vet、ID、生成物、反向重复安装通过。
 - 同入口 6 个变异检出：零奖励也 Emit、篡改最终等级、丢掉连升起始等级、取消奖励校验、同 EffectID 根据奖励生成新 RequestID、所有 EffectID 用同一个常量请求键；均要求指定场景与错误文字失败。`-race -count=2` 执行两个包的全部 10 条联动场景。
 - 新 game-demo：`go test -count=1 -run '^TestWithMailboxProfile|^TestLevelUpCarries|^TestExperience|^TestWorldExperience' ./game/handler ./game/mailbox` [通过](demo-tests.log)。game service、player controller、loadtest [编译通过](demo-build.log)，`-run '^$'` 不是行为验收。
-- 清单/联动/模块安装步骤定向、根包和现行文档检查通过；新增联动后的 GM 定向组合也通过，171 PASS / 0 SKIP、原 8 个变异及 race 未退化；见 [checks.log](checks.log)。
+- 清单/联动/模块安装步骤定向、根包和现行文档检查通过（新增报告暂存后 310 文件、0 断链）；新增联动后的 GM 定向组合也通过，171 PASS / 0 SKIP、原 8 个变异及 race 未退化；见 [checks.log](checks.log)。
 
 ## 原始失败
 

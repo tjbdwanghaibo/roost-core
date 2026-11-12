@@ -195,4 +195,4 @@ GM 基础 9 条、每组联动 4 条；新 game 合计 161 PASS / 0 SKIP，8 个
 
 mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件与起止等级到 effect；一次连升一封，消费者以 EffectID 发件，App 负责排空。demo 改用同一联动，只留奖励规则，双实体经验路径不变；奖励热更现在在升级时取快照，非法奖励回滚升级。
 
-联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race、demo 定向升级/经验场景与服务/Robot 编译通过；实际提交号记在新任务 R3。原始错误断言与修正、真实依赖边界见[证据](evidence/module-profile-mail-20261112/README.md)。全量与真实联合验收按最终批次；后续继续 R4～R11、§5、§6。
+联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race、demo 定向升级/经验场景与服务/Robot 编译通过；提交 `7f91c18f`。原始错误断言与修正、真实依赖边界见[证据](evidence/module-profile-mail-20261112/README.md)。全量与真实联合验收按最终批次；后续继续 R4～R11、§5、§6。
