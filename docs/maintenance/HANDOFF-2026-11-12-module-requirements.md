@@ -31,6 +31,8 @@
 
 ### R1. gm（运维命令）
 
+已完成（提交 `8a49fe25`）：实现与定向验收完成，GM 9 条、五组联动各 4 条，8 个变异与定向 race 通过。demo 通用命令迁入模块，双实体经验事务保留；[验收与边界](evidence/module-gm-20261112/README.md)。全模块正反序新装与 §6 真实依赖仍按 §2 留到最后。
+
 - **要解决的**：拼出来的工程没有办法发道具、加经验、发补偿邮件、查玩家；这些现在只在 game-demo 的 `internal/service/game/gm.go` 里手写（`gm.player.add_item` / `add_exp`、`gm.mail.send`、`gm.player.rehome`、`gm.world.stats`、`gm.saga.get|list` 等）。
 - **形态（按推荐项做，待维护者确认）**：一个 `gm` 模块提供登记点与 ops `/admin` 的接线（命令名、参数解析、鉴权沿用 ops 的 admin token 规则）；各功能模块用联动文件（`with/gm/`）登记自己的命令——装了 bag 才有加道具，装了 mailbox 才有发补偿邮件。不做“一个模块里写死全部命令”。
 - **需求**：命令经 Nest 的正式 handler 落到实体上（不绕过事务）；每条命令带操作者备注并记日志；命令的拒绝有带码错误；开发 token 在生产配置下被拒（沿用 ops 的规则，不另起一套）。
