@@ -1,60 +1,70 @@
-# 基础房间 room
+# room：有限座位的持久房间（进出、房主交接、重连代际）
 
-`roost module add room` 安装一个持久化的 Room 实体及其 DAO、lifecycle、组件、Nest handler、PB 端点和场景测试。它负责 1～64 个座位、进出、房主交接与连接代际；匹配、回合规则、超时、房间广播和跨房玩家唯一归属由上层玩法组合。
+一个自带 `Room` 实体的基础房间：服务端开房，玩家加入、查看、重连、离开，房主可以关闭。它只管“谁坐在哪个座位、谁是房主、每个座位现在认哪条连接”，匹配、回合规则、广播都由上层模块组合。
 
-```sh
-roost module plan room
-roost module add room
-roost module verify room
-```
+## 能力
 
-安装器分配实体号、组件号、消息号和错误码，补玩家 TCP 骨架与服务 owner 接线。默认 `-template game` 可直接生成和离线验收；真实客户端仍需工程实现鉴权并启用 TCP 配置，这不是房间模块代办的事。安装后的源码归工程；重复安装不覆盖修改。
+**客户端协议**（`protocol/def/room.go`；操作者一律取自认证会话，协议里没有玩家号与连接标识）
 
-## 服务端入口
-
-工程的 `game/room` 提供：
-
-```go
-// uniqueID 由服务端 ID 分配器分配；不能由客户端任选，也不能复用已关闭/删除的 ID。
-err := room.Open(ctx, registry, uniqueID, 4)
-```
-
-`Open` 先通过生成的 `RoomLifecycle.GetOrCreate` 加载或创建，再通过 `RoomOpenSender` 初始化。相同容量的重复调用不重置房间；存储错误原样返回，不能当作“不存在”；首次初始化失败可用相同 ID 重试。这里只创建空房，第一位成功加入者成为房主。
-
-`RoomComp()` 的方法只在正式 Nest 持锁事务里调用；事务外使用生成的 `game/handler/syncsender`。开房与席位写入都是 strict 提交：提交失败回滚，不提前确认。普通 Entity 的落库仍遵守框架现有 WAL / checkpoint 契约，模块没有新增持久化通路。
-
-## 客户端协议与重连
-
-| 协议 | 请求字段 | 行为 |
+| 协议 | 请求字段 | 做什么 |
 | --- | --- | --- |
-| RoomJoin | RoomID | 加入一个已开房间；同玩家、同物理连接重放不占第二席，也不换代际 |
-| RoomView | RoomID | 只有该玩家的当前连接可以查看成员快照 |
-| RoomReconnect | RoomID、Epoch | 新连接携带上次确认的代际做 CAS；成功分配新代际，同一连接重放返回原结果 |
-| RoomLeave | RoomID、Epoch | 退出自己的当前席位；房主退出后由最小座位号的成员接任，最后一人离开即关闭 |
-| RoomClose | RoomID、Epoch | 只有当前房主的当前连接可关闭并清空成员 |
+| `RoomJoin` | `RoomID` | 加入一间已开的房。同一玩家、同一条物理连接重发不占第二席，也不换代际 |
+| `RoomView` | `RoomID` | 成员用自己当前的连接读成员快照 |
+| `RoomReconnect` | `RoomID`、`Epoch` | 换了连接之后，带着上次确认的代际做 CAS 接管自己的席位；成功分配新代际，同一条连接重发返回原结果 |
+| `RoomLeave` | `RoomID`、`Epoch` | 退出自己的席位。房主退出后由座位号最小的成员接任；最后一人离开，房间关闭 |
+| `RoomClose` | `RoomID`、`Epoch` | 只有当前房主用当前连接可以关闭房间并清空成员 |
 
-Join / Reconnect / View 返回 `Info{RoomID, Capacity, HostID, Epoch, Seats}`；Epoch 只属于请求者，各席位只公开玩家号、座位号与连接事件状态。所有响应都有 `Code / Reason`。PB 中没有操作者 ID 或连接 nonce：操作者从认证 Context 取，nonce 从 Session 的 `ConnectionID()` 取。直连 TCP 与 Gate 代理均支持；自定义接入适配器必须提供每条物理连接唯一、不能复用的可信 ID，不能以账号 SessionID 代替。
+Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, Seats}`：`Epoch` 只是请求者自己的代际，别人的不给；每个席位只公开 `PlayerID`、`Slot`、`Connected`。所有应答都有 `Code` / `Reason`。
 
-客户端保存 RoomID / Epoch。连接改变后调用 Reconnect，不能用重复 Join 接管旧席位。不同新连接并发用相同 Epoch 重连，至多一条成功；回包丢失而物理连接未变时可重放同一请求。丢失本地 Epoch 的账号恢复、邀请或私房权限应由业务另加受信入口，不能去掉 CAS 或暴露其他成员代际。
+**服务端入口**（`game/room/room.go`）
 
-房间的 EpochSeed 持久化且只增不减，退出后重入也不复用。考虑 BSON 的整数范围，到 `MaxInt64` 拒绝再分配。连接 nonce 与代际一起检查：旧请求即使猜到新 Epoch，也不能操作新连接。
+- `room.Open(ctx, registry, uniqueID, capacity) error`：开一间空房。`uniqueID` 由服务端分配、不能复用；先经生成的 lifecycle `GetOrCreate`，再经 `RoomOpen` 初始化。同样容量重复调用不重置房间；初始化失败可以用同一个号重试。第一位成功加入的人成为房主。
+- `room.Disconnect(ctx, nestClient, roomID, playerID, epoch) (bool, error)`：接入层在连接关闭时调，把那个席位标成断线。`epoch` 必须是这条连接最后一次成功 Join / Reconnect 拿到的值；迟到或重复的旧关闭事件返回 `false`，不影响新连接。
+- `room.EntityID(roomID) (int64, error)`：把房间唯一号换成 Room 的完整 Entity ID。
+- `room.ConnectionKey(session) (string, error)`：从服务端 Session 的 `ConnectionID()` 取连接标识。
 
-## 断线、恢复与容量边界
+**Nest handler**（`game/handler/room_*.go`，写入的都是 `rollback=undo durability=strict`）：`RoomOpen`、`RoomJoin`、`RoomView`、`RoomReconnect`、`RoomDisconnect`、`RoomLeave`、`RoomClose`。事务之外用生成的 `syncsender`（例如 `syncsender.NewRoomJoinSender(client).Sync_RoomJoin(ctx, id, playerID, connection)`）；`RoomComp()` 的方法（`Open`、`Join`、`Reconnect`、`Disconnect`、`Leave`、`Close`、`View`）只能在持有 Room 锁的事务里调用。
 
-接入层记录每条连接成功 Join / Reconnect 的 `(roomID, playerID, epoch)`，关闭事件使用当时的值调用：
+**登记点**：`room.OnRoomJoining(name, func(*Room, playerID int64) error)`（`game/entities/room/room_join_checks.go`）。在 `Join` 的事务里、检查房间已开之后、占座之前执行；返回错误即拒绝入房。不能做 I/O。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。`matchroom` 用它校验名单。
 
-```go
-changed, err := room.Disconnect(ctx, nestClient, roomID, playerID, epoch)
-```
+**状态**：模块自带实体 `Room`（`game/entities/room/entity.go`，类别是 World）与 `RoomDao`（`db/def/room.go`，集合 `room`）：`Capacity`、`Closed`、`HostID`、`EpochSeed`、`Seats`（玩家号 → `RoomSeat{Slot, Epoch, Connected, Connection}`）。只落库，不同步；成员经 `RoomView` 读 PB 快照。连接标识不出现在任何对外的快照里。
 
-迟到或重复的旧关闭事件返回 `false`，不影响新连接；提交错误仍须按业务的重试策略处理。断线只改状态，保留座位和房主。模块暂不自动订阅网络关闭事件；接入方需处理“关闭先于 Join 回包”的登记竞态，不能只在回包后无条件放进一个连接表。
+**配置**：无。容量上限是代码常量 `MaxSeats = 64`（`game/entities/room/room_component.go`）。
 
-`Connected` 是最后已处理的连接事件事实，不是跨进程重启的在线权威。恢复后接入层需按当前连接重建状态，或让客户端显式重连；掉线保留时长、踢人、重启时的房间清理由玩法决定。单个房间有唯一 owner，不提供跨节点接管。
+**错误码**（`internal/errors/room.go`）：`room_invalid`（参数或操作不合法）、`room_unopened`（还没初始化）、`room_closed`、`room_full`、`room_not_member`、`room_stale_epoch`（代际或连接对不上）、`room_not_host`。
 
-基础准入允许已认证玩家加入任意已开的未满房间；需要邀请码、匹配名单等限制时在同一 Nest 事务内加业务检查。没有全服房间目录，也没有“一名玩家只能处于一个房间”的跨实体约束。快照通过 PB 按请求返回，不自动广播、不安装 EntitySync 订阅；玩法广播必须安排在提交成功后。
+## 能力边界
 
-## 验证口径
+- **不做的事**：不做匹配与邀请码；没有全服房间目录；不约束“一名玩家只能在一间房里”；不广播、不装 EntitySync 订阅（成员变化要别人知道，由玩法在提交成功之后自己推）；不订阅网络关闭事件（要接入层自己调 `room.Disconnect`）；不踢人、不设掉线保留时长、不做重启后的房间清理；不分配房号。
+- **客户端不能开房**：开房只有服务端入口。缺省准入是“任何已认证的玩家都能加入任何已开、未满的房”，要限制就登记 `OnRoomJoining`。
+- **上限**：容量 1 到 64；连接标识至多 128 字节；一间房只有一个房主。`EpochSeed` 只增不减，到 `MaxInt64` 之后拒绝再分配。
+- **一致性**：开房与每一次席位变更都是 Room 上的一笔严格事务，提交失败时座位、房主与代际一起回滚，不提前确认。同一个代际的并发重连至多一条成功。已关闭的房号永不再开。
+- **`Connected` 不是在线权威**：它是“最后处理过的连接事件”。进程重启之后不会自动重建，接入层要按当前连接重建，或让客户端显式重连。接入层还要处理“关闭事件先于 Join 回包”的登记竞态。
+- **连接标识必须可信**：来自服务端 Session（直连 TCP 与 Gate 代理都提供）。自定义接入适配器要给每条物理连接一个唯一、不复用的标识，不能用账号的 SessionID 代替，否则旧连接能操作新席位。
+- **客户端要保存 `RoomID` 与 `Epoch`**：换了连接之后只能 `RoomReconnect`，不能靠重复 `RoomJoin` 接管旧席位。客户端丢了本地 `Epoch` 的恢复途径要业务另加受信入口。
+- **前提**：业务服务要有 `nest` Mod；有协议所以要玩家 TCP 接入（安装时代办骨架）。鉴权与启用监听仍归工程。一间房只属于一个 game 进程，不提供跨节点接管。
+- **已知限制**：[KNOWN-LIMITS“room 的边界”](../../docs/maintenance/KNOWN-LIMITS.md)。
 
-22 条离线场景覆盖容量、幂等、座位复用、房主交接、关闭终态、CAS 竞争、旧连接请求/关闭、PB 编解码、成员权限、BSON 恢复、代际上限，以及 Join / Reconnect / Leave / Close 提交失败的完整回滚。生命周期端点用正式 ManagerAccess、Nest、生成 Sender 和替身提交器；加载失败不能创建空实体。
+## 复用方式
 
-安装器另测实体号避让、已有文件冲突、生成失败回滚、归属接线、重复安装与业务文件保留。Core 的 TCP → Gate → Game 用例验证连接 nonce 能随可信会话传到业务层；它不等于房间 PB 在真实网络、Mongo、Redis 下的联合验收。
+- **需求正好是它**：`roost module add room`。安装器分配实体号、组件号、消息号与错误码，生成 `game/lifecycle/room.go`，补玩家 TCP 骨架。没有依赖。
+- **需求多一点**：
+  - 入房条件（邀请码、名单、等级）：登记 `OnRoomJoining`。
+  - 房内玩法状态：给 `Room` 加自己的组件与状态（像 `matchroom`、`turn` 那样声明 `entity: Room`），在自己的 handler 里与席位一起提交。
+  - 断线处理：在接入层的连接关闭回调里调 `room.Disconnect`；踢人与超时用自己的定时器加 `RoomLeave` 的服务端等价逻辑。
+  - 房号：自己写分配器，或者装 `matchroom` 用它的 `_room_id_sequence`。
+  - 不要改 `room_component.go` 里代际与连接的 CAS 检查。
+- **别的代码要用它**：开房 `room.Open(ctx, registry, uniqueID, capacity)`；读成员快照用 `syncsender.NewRoomViewSender(client).Sync_RoomView(ctx, id, playerID, connection)`（要那名成员当前的连接标识）；在自己的 Room handler 里直接用 `target.RoomComp()`。
+- **只适合借鉴的情形**：大规模场景（用 scene 与视野模块）、需要观战或不占座旁观、需要跨进程迁移的房间。值得借鉴的是“席位代际 + 连接标识”的重连 CAS，以及断线事件带代际、迟到的旧事件伤不到新连接。
+
+## 联动
+
+本模块没有 `with/` 联动。依赖它的模块：`matchroom`（登记 `OnRoomJoining` 做名单准入）、`turn`（回合玩法挂在 Room 上）、`matchmaking`（经 `matchroom` 开房，清匹配结果前核对房间已关）。
+
+## 验证范围
+
+- `roost module verify room`：22 条场景（`game/handler` 与 `game/controllers/room`）。
+- 离线：真实的 Nest 引擎、生成的 Sender、正式的 ManagerAccess 与 lifecycle，提交器是替身（可以注入提交失败）；没有 Mongo、Redis 与真实网络。
+- 覆盖：容量、幂等、座位复用、房主交接、关闭终态、CAS 竞争、旧连接的请求与关闭事件、PB 编解码、成员权限、BSON 往返恢复、代际上限，以及 Join / Reconnect / Leave / Close 提交失败后的完整回滚；加载失败不会建出空实体。
+- 安装器另测实体号避让、已有文件冲突、生成失败回滚、重复安装与业务文件保留。
+- 没有验证：房间协议在真实 Mongo / WAL 下的联合验收。连接标识随可信会话经 TCP → Gate → Game 传到业务层，在 core 的用例里验证过；配方的双人房间端点跑过真实 TCP，Account 与持久提交仍是替身。

@@ -209,7 +209,8 @@ for name, module in modules.items():
 for name, item in glue.items():
     if name in expected:
         assert item['verify']['pass'] == expected[name], (name, item)
-ids = [(kind, value) for module in modules.values() for kind, names in (module.get('ids') or {}).items() for value in names.values()]
+# timer type ids are numbered per entity (turn on Room and activity on Player both start at 2), every other kind is project-wide.
+ids = [(kind if kind != 'timer' else 'timer@' + ((module.get('timer') or {}).get('entity') or ''), value) for module in modules.values() for kind, names in (module.get('ids') or {}).items() for value in names.values()]
 assert len(ids) == len(set(ids)), ids
 print('plan:', len(modules), 'modules,', len(glue), 'glue, unique IDs and dependency order')
 PY

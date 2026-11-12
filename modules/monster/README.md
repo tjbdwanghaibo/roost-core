@@ -1,44 +1,92 @@
-# monster：巡逻、追击与死亡重生
+# monster：场景里的怪物（巡逻、追击、死亡隐藏、原地重生）
 
-`roost module add monster` 自动安装 actor 与 scene，接入心跳、Player/Monster/Scene、AOI、PB 与模块 runtime。新 game 工程按默认规则在场景 1 的 `(80,80)` 放一只怪：模板 1、100 HP、速度 6、半径 12 的四角巡逻、感知半径 30，死亡 5 秒后重生。规则在归工程所有的 `game/monster/rules.go`，不需要用户先填表才能运行。
+模块自带 `Monster` 实体：服务端按一份不可变的出生规则在某个场景里放怪；怪在四个角点之间巡逻，感知到玩家就追；被打死后从视野里消失，过一段时间在出生点以同一个 ID 重生。它只提供“怪的生命周期与移动”，战斗、掉落、仇恨都不在这里。
 
-Monster 是 `noPersist=true lifetime=runtime_rebuild` 实体，不写 WAL/Mongo。重启会按当前启动规则重建，运行中临时 Spawn 的种群不自动跨重启恢复；需要长期种群计划时由业务保存规则并在启动时重放。每个进程最多 256 个出生槽位；静态 ID 编码本进程 sid 与不回收的序号，sid 必须在 1–65535 内，同一 sid 不能同时运行两个写者。它不参与跨进程分区、迁移或接力。
+## 能力
 
-## 入口与边界
+**客户端协议**（`protocol/def/monster_inspect.go`）
 
-`game/monster/service.FromRegistry(registry)` 得到 Manager。以下入口会等待 Nest，必须在业务 worker 之外调用：
+- `MonsterInspect{MonsterID}` → `MonsterInspectResponse{Code, Reason, MonsterID, LifeSeq, HP, Template, X, Y}`：查看一只怪。`MonsterID` 是完整的 Entity ID（就是 AOI 同步里的 subject id）。只有查看者与怪在同一个场景时才答，否则带错误返回。客户端没有出生、伤害、杀怪的入口。
+- 怪的位置与生命经场景视野同步下发：公开视图只有 `Actor`（场景、坐标、朝向）与 `Vitals`（`Template`、`HP`、`LifeSeq`）两个字段（`game/entities/monster/sync.go`）。
 
-- `Spawn(ctx, sceneUniqueID, spec)`：可信服务端按不可变规则创建，返回完整 Monster EntityID。使用生成生命周期的带参数扩展创建；先在 Monster + Scene 事务中入场，再由场景提交后发布给 AOI。失败走同样的事务退出与生命周期销毁；清理失败保留记录并返回 ID/错误，调用方可重试 Destroy。
-- `Damage(ctx, entityID, expectedLife, amount)`：服务端伤害入口。`expectedLife` 必须匹配当前 LifeSeq；同一命内每次攻击的幂等由 combat 自己的账本保证，不能把 LifeSeq 当攻击请求键。
-- `Destroy(ctx, entityID)`：先在 Monster + Scene 事务中停止心跳、离场并释放成员槽位，再通过 lifecycle.Destroy 从 EntityManager 移除；移除失败保留记录供重试。
-- `IDs()`：本进程的出生槽位快照。
+**服务端入口**（`game/monster/service/runtime.go`；`service.FromRegistry(registry)` 取 `*Manager`，能力名 `gameplay.monster`。都会等待 Nest，必须在 Nest 业务 worker 之外调用）
 
-客户端只有 `MonsterInspect(MonsterID)`，MonsterID 是 AOI subject 使用的完整 EntityID。PB/controller/Nest 从认证会话取得 Player，与 Monster 同时持锁，只允许查看当前同场景的存活怪；客户端没有出生、伤害或杀怪权限。公开 Sync 仅包含 Actor 与 Vitals，巡逻游标、目标、重刷截止及退休标志不公开。
+- `Spawn(ctx, sceneUniqueID, spec) (monsterEntityID int64, err error)`：在已开的场景里按 `spec` 放一只怪。失败会自己清理；清理也失败时同时返回 ID 与错误，调用方可以对这个 ID 重试 `Destroy`。
+- `Damage(ctx, entityID, expectedLife, amount) (monster.Snapshot, error)`：扣血。`expectedLife` 必须等于怪当前的 `LifeSeq`，否则拒绝（上一条命的迟到伤害打不到新命）。血量扣到 0 即死亡。
+- `Destroy(ctx, entityID) error`：让怪退出场景并从 EntityManager 移除，不再重生。可重试。
+- `IDs() []int64`：本进程全部出生槽位的怪物 ID。
+- `DrainScene(ctx, area)`：scene 关图时回调，清掉这个场景实例的全部怪（含死亡待重生的）。模块启动时已经登记到 scene。
 
-`MonsterActorComp()` 提供 `Body()`、`Snapshot()`、`Damage(expectedLife, amount, now)`、`Decide(expectedLife)`。后两者仅可持锁调用；生命相关修改要带相应 Scene 参与者。出生、伤害、退出的正式 Sender 分别是 `MonsterSpawn`、`MonsterDamage`、`MonsterRemove`。下一步 combat 应在自己的多实体事务里重新检查场景、距离与 LifeSeq，不能把感知列表当伤害授权。
+**Nest handler**（`game/handler/monster_*.go`）：`MonsterSpawn`、`MonsterDamage`、`MonsterRemove`（都同时锁 Monster 与 Scene，`rollback=undo durability=async`）、`MonsterInspect`（同时锁查看的 Player 与 Monster，只读）。组件 `MonsterActorComp()` 提供 `Body()`、`Snapshot()`、`Damage(expectedLife, amount, now)`、`Decide(expectedLife)`、`Spawn`、`Retire`、`SpawnPoint()`，只能持锁调用。
+
+**登记点**：模块不提供给别的功能的登记点。它自己登记了 scene 的关图清理（`RegisterDrainer`）与 App 的 ingress（停机时先拒绝新操作）。
+
+**状态**：`MonsterDao`（`db/def/monster.go`）三个字段，**都不落库**：`Actor`（同步）、`Vitals`（同步）、`Brain`（不同步：出生点、当前目标、巡逻角点游标、重生截止时间、是否已退休）。实体声明为 `noPersist=true lifetime=runtime_rebuild`。
+
+**配置**：没有配置表与配置键。出生规则是归工程所有的 `game/monster/rules.go`：
+
+- `Spec{Template, HP, Speed, PatrolHalf, SenseRadius, RespawnDelay, At}`，`Spec.Validate()` 限定取值范围。
+- `DefaultSpec()`：模板 1、100 HP、速度 6、巡逻半边长 12、感知半径 30、死亡 5 秒后重生、出生点 `(80,80)`。模块启动时用它在场景 1 放一只怪。
+- `Nearest(at, radius, candidates)`：选追击目标的规则（最近的玩家，距离相同取 ID 小的）。
+
+**错误码**：模块没有登记自己的业务码，拒绝都是不带码的普通错误。`MonsterInspect` 被拒时（不同场景、怪已死亡离场、ID 不是怪）客户端拿到的是框架的内部错误码与通用文本，分不出原因。
+
+## 能力边界
+
+- **不做的事**：没有战斗（伤害数值由调用方算好传进来）、没有仇恨表、不攻击玩家、不放技能；没有掉落、击杀奖励与击杀记录；没有寻路（巡逻角点的地形碰撞由 actor 的移动处理，绕不过去就停）；没有刷怪点配置表、没有种群计划。
+- **不持久**：怪不写 WAL 与 Mongo。进程重启后只按启动规则重建（缺省就是场景 1 的那一只）；运行中临时 `Spawn` 的怪不会跨重启恢复。要长期种群，业务自己保存规则并在启动时重放。
+- **上限**：每个进程至多 256 个出生槽位（`MaxMonsters`）；`sid` 必须在 1 到 65535；重生队列容量 64（满了由下一秒的心跳重试）；`Spec` 的范围是 HP 1 到 10 亿、速度大于 0 且不超过 100、`PatrolHalf` 1 到 1000、`SenseRadius` 0 到 10000 且不能大于场景的 `Sight`、`RespawnDelay` 1 秒到 24 小时。
+- **`Damage` 不判重**：同一条命里同一次攻击发两遍就扣两次。攻击的幂等由调用方（战斗）自己的账本负责，不能把 `LifeSeq` 当请求键。
+- **感知不是授权**：怪看到的是场景已提交的玩家位置快照。战斗要在自己的多实体事务里重新检查场景、距离与 `LifeSeq`。
+- **一致性**：出生、伤害、退出都是 Monster 与 Scene 两个实体的一笔事务，失败时位置、生命、AI 状态与场景成员一起撤回。提交是 `async` 的——怪本来就不落库。
+- **死亡期间仍占场景成员槽位**：尸体隐藏但算容量，所以等重生时不能关掉它所在的场景，除非走 scene 的正式关图（会先清怪）。
+- **重生用业务时间**：等待时长不随场景倍速或时停改变；时钟回拨会推迟重生。
+- **前提**：依赖 `actor` 与 `scene`；业务服务要有 `nest` 与 `heartbeat` 两个 Mod。单进程所有权：怪不跨进程迁移，同一个 `sid` 不能同时跑两个写者；模块启动时场景 1 必须已开（scene 模块缺省会开）。
+- **已知限制**：[KNOWN-LIMITS“场景模块的边界”](../../docs/maintenance/KNOWN-LIMITS.md)（scene / monster / terrain 单进程所有权，没有跨进程切图）与“运行期接线的边界”。
+
+## 复用方式
+
+- **需求正好是它**：`roost module add monster`，连带装上 `actor` 与 `scene`，并接好心跳、AOI 与模块启动入口。
+- **需求多一点**：
+  - 改缺省怪或不要它：改 `game/monster/rules.go` 的 `DefaultSpec`，或改 `runtime.go` 的 `Start` 里那一次 `Spawn`。
+  - 多种怪、多个刷怪点：在自己的启动代码或玩法逻辑里多次调 `Spawn`，每次给不同的 `Spec`。
+  - 改选目标的规则：改 `rules.go` 的 `Nearest`。改巡逻路线：改 `monster_actor_component.go` 的 `Decide`。
+  - 不要把跨拍的状态存进 `game/monster/brain.go` 里每拍新建的 AI / actionflow 对象：它们不支持 Nest 回滚，跨拍事实只放 DAO 与 actor 的 `Body`。
+- **别的代码要用它**：
+  - 打怪：`manager.Damage(ctx, monsterEntityID, lifeSeq, amount)`，`lifeSeq` 取自先前读到的快照（`MonsterInspect` 的应答或同步下来的 `Vitals.LifeSeq`）。
+  - 在自己的事务里读怪：handler 的目标接口用 `monster.IMonsterEntity`，调 `target.MonsterActorComp().Snapshot()`。
+  - 放怪与收怪：`manager.Spawn(ctx, sceneUniqueID, spec)`、`manager.Destroy(ctx, id)`。
+- **只适合借鉴的情形**：需要持久的世界 Boss、需要跨进程的大世界怪、数量远超 256 的群怪。值得借鉴的是：用 `LifeSeq` 挡住上一条命的迟到命令；重生复用同一个 Entity ID；死亡与重生在“实体 + 场景”一笔事务里；以及 `monster.Target`（`game/entities/monster/target.go`）用本进程内的实例身份挡住“同 ID 被重建之后的迟到操作”。
+
+## 联动
+
+- 本模块没有 `with/` 联动文件。
+- `terrain` + `monster`（`terrain/with/monster`）：只有场景测试，验证关图时先清本图的怪、失败时保留资源供重试；不加运行时代码。
+- scene 的正式关图入口按实体种类调本模块的 `DrainScene`；terrain 先于 monster 停止时也走这条链。
+
+## 验证范围
+
+- `roost module verify monster`：25 条场景，全部在 `game/monster/service`（清单的包列表里还有 `./game/handler`，那里没有本模块的场景）。
+- 离线，但用的是真实的 Nest、实体 Manager 与 lifecycle、heartbeat、AI / actionflow、movement、Sync / AOI；持久提交与网络传输是替身。
+- 覆盖：正式出生与 AOI 可见、`MonsterInspect`、巡逻、定身、低速追击、感知边界、决策失败回滚、死亡隐藏与重生截止、旧命的伤害被拒、销毁、非法规则与 sid、停机准入、真实心跳驱动的巡逻与重生、出生失败清理、死亡失败回滚、退出回复丢失后续做，以及出生 / 异步重生 / 伤害 / 退出遇到同 ID 重建的 8 种交错。
+- 没有验证：真实数据库、TCP 联网、跨进程故障、长期稳定性、大规模性能。
 
 ## AI 与回滚
 
-移动、位置、朝向、跟随和定身门控共用 actor.Body。场景通过实例回调提供 `Space.Sense` 的**已提交玩家位置**；怪只在自己的锁里读值快照，不读取别人的 DAO 或拿别人的锁。感知半径不能大于场景 Sight，优先最近玩家，距离相同时以 EntityID 确定顺序。当前目标仍相同且 Follow 在运行时不重新发起，低速移动的小数进度不会每拍归零。目标离开或不可见时恢复四角巡逻。没有仇恨表、寻敌攻击或技能释放；战斗由 combat 接入。
+移动、位置、朝向、跟随与定身门控共用 actor 的 `Body`。场景通过实例回调提供已提交的玩家位置；怪只在自己的锁里读这份值快照，不读别人的 DAO、不拿别人的锁。当前目标没变且跟随仍在进行时不重新发起，低速移动的小数进度不会每拍归零。目标离开或看不见时回到四角巡逻。
 
-每拍实际创建 `ai.Controller` 和 `actionflow.Behavior`，AI 经瞬时动作提交一次巡逻/追击意图。actionflow runner 不支持 Nest undo，所以它不保存跨拍状态，也不登记第二套移动心跳；真正持续的移动只留在支持 undo 的 actor.Body，目标、游标与生命留在 DAO。一次决策后续失败时，DAO 与 Body 同时撤销，不会留下后台动作。巡逻角点的地形碰撞由 actor/movement 处理，不提供全图寻路。
+每拍实际创建一个 `ai.Controller` 与一个 `actionflow.Behavior`（`game/monster/brain.go` 的 `Decide`），AI 经一个瞬时动作提交一次巡逻或追击意图。真正持续的移动只留在支持回滚的 `Body` 里，目标、游标与生命留在 DAO。一次决策的后续步骤失败时，DAO 与 `Body` 同时撤销，不会留下后台动作。
 
-actor 心跳按场景时间域移动。死亡重刷使用**业务时间**的独立 1 秒心跳，不随场景倍速或时停改变等待时长；时钟回拨会推迟截止。
+actor 的心跳按场景时间域移动；死亡重生用单独的 1 秒心跳（`monster.respawn`），按业务时间。
 
 ## 死亡、重生与停机
 
-死亡在同一笔 Monster + Scene 事务中把 HP 置 0、Body.Leave 隐藏 AOI并启动重刷心跳。尸体保留同一 runtime 实体和 Scene 成员槽位，容量仍计数，因此不能在等待重刷时关掉它的场景。显式 Destroy 或模块 Stop 才释放槽位。
+死亡在 Monster + Scene 的同一笔事务里把 HP 置 0、让 `Body` 离场（从 AOI 隐藏）并启动重生心跳。截止到达后，心跳在提交之后只向队列投一个 ID、不等待；后台 worker 再发 Monster + Scene 的重生事务：恢复出生位置与 HP、`LifeSeq` 加一、清目标与游标、重启移动。重生失败（例如还没到截止）由下一拍重试。
 
-截止到达后，心跳 AfterCommit 只向容量 64 的队列投递 ID，不等待。队列满、临时失败或正在重试均由下一拍继续，worker 再发送 Monster + Scene 的重生事务。重生恢复出生位置/HP、增加 LifeSeq、清目标游标、重启 actor；旧命的迟到伤害和 AI 命令被 LifeSeq 拒绝。**重生复用同一 EntityID**，每命历史与击杀奖励不由本模块记录。
+模块启动时登记了 ingress：停机时先拒绝新操作、取消并等完已接受的操作与队列 worker，再逐只退出场景并销毁。超时或销毁失败返回错误、保留可重试的记录；scene 在 monster 停止成功之后才停。玩家的排空仍按 scene 的协议由业务负责。
 
-runtime 注册正式 ingress：先拒绝新操作、取消并等所有已接受操作和队列 worker退出，再按事务退出和 lifecycle逐个销毁。超时或销毁失败返回错误、保留可重试资源；依赖 scene 在 monster 停止成功后才停止。业务仍需按 scene 的协议排空玩家。
+## 退出恢复与实例身份
 
-## 验证
+`Destroy` 分两步：`MonsterRemove` 的结果未知时保留记录、重做这一步（它是幂等的）；明确成功后记下已退休，之后只重试 lifecycle 的销毁。删除前核对 EntityManager 里的对象仍是记录的那个实例，同 ID 的新实例拒绝接管。
 
-`roost module verify monster` 固定 25 条、无子测试：正式出生/AOI/PB、巡逻、定身、低速追击、感知边界、决策失败回滚、死亡隐藏/截止/槽位、旧命拒绝、销毁、非法规则与 sid、停止准入、真实 heartbeat 的巡逻和重刷、出生失败清理、缺省 runtime/ingress、死亡失败回滚、退出回复丢失后续做、同ID不同实例提前拒绝清理，以及初生/异步重刷/伤害/退出分别遇到Monster或Scene同ID重建的8种确定交错。
-
-`codegen/internal/roost/module_monster_test.go` 在自定义 Go module 的全新 game 上安装、重复安装、核对场景数并跑 build/vet/ID/漂移；十一种变异先证明可编译，再由旧命伤害、死亡隐藏、低速 Follow、退出恢复与实例身份交错场景击中。场景使用真实 Nest、实体 Manager/lifecycle、heartbeat、AI/actionflow、movement、Sync/AOI，持久提交与网络传输为替身。未验证真实数据库、TCP 联网、跨进程故障、长期稳定性或大规模性能。
-
-Scene 的正式关图入口会按kind调用 Monster.Manager.DrainScene：先关闭目标图准入，再串行清理该Scene实例的全部怪物记录（包括死亡待重生槽），不关闭其他图的Monster入口。回调不持Scene.Manager管理锁，避免与Spawn查询Scene的锁顺序相反；失败保留记录和地图供重试。terrain先于monster停止时也经过这条链，不直接删除仍运行的怪物。
-
-退出恢复区分两阶段：MonsterRemove的回复未知时保留记录并重做幂等Nest退出；明确成功后记下retired，只重试生命周期销毁。Scene对所有已登记模块调用按实例过滤的drainer，不以已Depart的成员表推断没有待清理记录。删除前核对EntityManager中的对象仍是记录实例；同ID的新实例必须拒绝接管。初生、异步重刷、伤害与退出还统一携带出生槽位固定的`monster.Target`：它是只含私有Monster/Scene指针的不可变本地值，生成Sender以普通Nest Params传递，三个handler在持有实际双实体锁后首先检查身份。外层Get检查与handler之间发生同ID重建也会拒绝，旧LifeSeq不能授权新实例；此值不能持久化、编码或跨进程传送。记录缓存原始SceneID，不在卸载后读取已清理的实例ID。
+出生、异步重生、伤害与退出都带着出生槽位固定下来的 `monster.Target`：一个只含本进程内 Monster / Scene 指针的不可变值，handler 在拿到两个实体的锁之后首先核对它。外层检查与 handler 之间发生同 ID 重建也会被拒绝，旧的 `LifeSeq` 不能授权新实例。这个值不能持久化、编码或跨进程传送。

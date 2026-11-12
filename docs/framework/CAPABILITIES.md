@@ -351,8 +351,8 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 离线收益、建造 / 行军倒计时 | 实体持久定时器（离线只补一次）+ 按区间惰性结算 | 放置模拟夹具；SLG 夹具的建造、行军与离线收益 |
 | 每日签到 | 现成模块 checkin（`roost module add checkin`，连同 wallet） | 模块 checkin |
 | 任务、成就与前置链 | 现成模块 task：事件、配置表、每日/每周/永久与资产奖励 | [任务模块](../../modules/task/README.md) |
-| 体力恢复 | 现成模块 stamina（`roost module add stamina`，连同 wallet）：惰性恢复、消耗、金币补满 | 模块 stamina；合成休闲夹具的体力 |
-| 商店、限购 | 现成模块 shop（`roost module add shop`，连同 wallet 与 bag）：金币买道具、每日 / 终身限购、请求键防重发；充值到账走 platform 服务 | 模块 shop；充值另装 purchase |
+| 体力恢复 | 现成模块 stamina（`roost module add stamina`，连同 wallet、rules 与 enter）：惰性恢复、消耗、金币补满 | 模块 stamina；合成休闲夹具的体力 |
+| 商店、限购 | 现成模块 shop（`roost module add shop`，连同 wallet、bag、rules 与 enter）：金币买道具、每日 / 终身限购、请求键防重发；充值到账走 platform 服务 | 模块 shop；充值另装 purchase |
 | 每日重置 | 业务日与时区 + DAO 里存上次重置的业务日，惰性重置；需手写业务 | 模块 checkin、task 的日界写法；放置模拟夹具的每日奖励 |
 | 玩家间交易、转账 | 多实体事务与锁序 | MMORPG 夹具的托管交易 |
 | 跨服送礼、跨服交易 | Saga（原生步骤 + 补偿） | game-demo“送礼 saga”；MMORPG 的双 sid 赠礼脚本 |
