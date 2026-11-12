@@ -4,13 +4,13 @@ import (
 	stdcontext "context"
 	"fmt"
 
-	"{{MODULE}}/game/alliance"
-	playeraccess "{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	rpcalliance "{{MODULE}}/internal/rpc/alliance"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	"{{MODULE}}/game/alliance"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 )
 
 // 申请入盟、盟主审批、踢人、转让盟主与名单查询的端点。

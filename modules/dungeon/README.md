@@ -21,7 +21,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 - `Open` 的 `uniqueID` 必须由工程的全局 ID 分配器给出、永不复用；换所有者或赛季答 `dungeon_invalid`。
 - `Defeated(ctx, uniqueID, instance, epoch, source, sequence, enemy)`：`enemy` 只认关卡规则里出现过的敌人种类（`logic.KnownEnemy`，缺省规则是 `"minion"` 与 `"boss"`），别的名字答 `dungeon_invalid`、不写、不占事件序号；每个 `source` 的 `sequence` 单调递增。
-- Nest handler（`game/handler/dungeon.go`、`dungeon_counts.go`，都不直接对客户端开放）：`handlerDungeonOpen`、`handlerDungeonDefeated`、`handlerDungeonView`、`handlerDungeonClaim`（同时锁 `Dungeon` 与 `Player` 两个实体）、`handlerDungeonCounts`（只读 Player 的通关计数，不带事务选项）。
+- Nest handler（`game/handler/dungeon.go`、`dungeon_counts.go`，都不直接对客户端开放）：`handlerDungeonOpen`、`handlerDungeonDefeated`、`handlerDungeonView`、`handlerDungeonClaim`（同时锁 `Dungeon` 与 `Player` 两个实体）、`handlerDungeonCounts`（只读 Player 的通关计数，显式声明 `durability=memory`）。
 - 组件 `DungeonComp()`（`game/entities/player/dungeon_component.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
 
 ### 关卡规则（`game/dungeon/rules.go`，归工程）

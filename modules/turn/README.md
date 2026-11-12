@@ -80,3 +80,5 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 
 - 清单里的 `timer_types: [TurnDeadline]` 让安装器在 Room 这个实体的作用域内分配一个类型号，写进 `roost.yaml` 的 `timers.room.types`，并在已安装记录里记下作用域。已有的显式 int32 常量、iota、直接登记的常量实参与分配记录都占号；删除源码不回收记录里的号。登记表无法静态解析、或被交给外部代码时安装失败，要求先整理登记。
 - 模板里的定时器组件名是占位的，安装时换成工程实际的定时器组件名（不必叫 Timer）。组件构造期间只登记回调，不读取尚未构造的 Turn 组件。
+
+只读声明：TurnView 对局快照 使用 `//roost:nest durability=memory`，仍在正式 Nest 实体锁内执行，不取持久状态回滚快照、不写 WAL。裸 `//roost:nest` 的默认值是 state / async，不能与 memory 混同；带状态推进、回执写入或引用校正的入口保持写事务声明。

@@ -1,12 +1,14 @@
 package handler
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"math"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
 	scene "{{MODULE}}/game/entities/scene"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
 )
 
 // handlerSceneInteract 的拒绝都是玩家自己能触发的，返回带业务码的错误、不写任何状态：

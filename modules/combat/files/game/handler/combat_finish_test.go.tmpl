@@ -1,0 +1,63 @@
+package handler
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	"{{MODULE}}/protocol/pb"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	sender "{{MODULE}}/game/handler/syncsender"
+)
+
+func combatDefeatPeer(t *testing.T, f *combatFixture) {
+	t.Helper()
+	f.pair(t)
+	f.must(t, func() error {
+		f.players[0].Dao().GetAttributeBase().SetValues(map[int32]int64{int32(gameattr.AttrHP): 100, int32(gameattr.AttrAttack): 100})
+		return f.players[0].AttributeComp().Refresh()
+	})
+	result := f.mustCast(t, 0, 1, 2, "strike")
+	if result.PeerAlive || result.PeerHealth != 0 {
+		t.Fatalf("defeat did not reach the formal combat path: %+v", result)
+	}
+}
+
+// 死亡仍保留本局的结果；显式结束后双方回满血、撤同意，才可开始下一局。
+func TestCombatLeaveRestoresHealthAfterDefeat(t *testing.T) {
+	f := newCombatFixture(t)
+	combatDefeatPeer(t, f)
+	result, err := sender.NewCombatLeaveSender(f.engine).MultiSync_CombatLeave(context.Background(), f.players[0].ID(), f.players[1].ID(), &pb.CombatLeaveRequest{Sequence: 3})
+	if err != nil || !result.Ended || !result.Alive || !result.PeerAlive || result.Health != 100 || result.PeerHealth != 100 {
+		t.Fatalf("finished duel cannot restart: result=%+v err=%v", result, err)
+	}
+	if _, err := sender.NewCombatReadySender(f.engine).Sync_CombatReady(context.Background(), f.players[0].ID(), &pb.CombatReadyRequest{Sequence: 4, Ready: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewCombatReadySender(f.engine).Sync_CombatReady(context.Background(), f.players[1].ID(), &pb.CombatReadyRequest{Sequence: 2, Ready: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add(1000)
+	f.mustCast(t, 0, 1, 5, "strike")
+	before := f.snapshot(t)
+	replay, err := sender.NewCombatLeaveSender(f.engine).MultiSync_CombatLeave(context.Background(), f.players[1].ID(), f.players[0].ID(), &pb.CombatLeaveRequest{Sequence: 2})
+	if err == nil || replay != nil || !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("conflicting old request changed the new duel")
+	}
+}
+
+func TestCombatRejectedLeaveKeepsDefeatUntilRetry(t *testing.T) {
+	f := newCombatFixture(t)
+	combatDefeatPeer(t, f)
+	before := f.snapshot(t)
+	f.commit.reject.Store(true)
+	_, err := sender.NewCombatLeaveSender(f.engine).MultiSync_CombatLeave(context.Background(), f.players[0].ID(), f.players[1].ID(), &pb.CombatLeaveRequest{Sequence: 3})
+	f.commit.reject.Store(false)
+	if err == nil || !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("rejected finish changed health or session")
+	}
+	result, err := sender.NewCombatLeaveSender(f.engine).MultiSync_CombatLeave(context.Background(), f.players[0].ID(), f.players[1].ID(), &pb.CombatLeaveRequest{Sequence: 3})
+	if err != nil || !result.PeerAlive || result.PeerHealth != 100 || !result.Ended {
+		t.Fatalf("retry=%+v err=%v", result, err)
+	}
+}

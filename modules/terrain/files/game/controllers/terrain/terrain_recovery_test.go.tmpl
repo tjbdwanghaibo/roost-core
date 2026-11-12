@@ -1,0 +1,68 @@
+package terrain
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// RV-20261112-BM-01：两个恢复读到同一代，先完成的清掉旧故障后又发生新故障。
+// 直接调用 Recovered 模拟第二个恢复最后一步，提交、投影失败与第一个 Refresh 均走正式模块。
+func TestTerrainRecoveryOldCompletionKeepsNewFailure(t *testing.T) {
+	f := newTerrainFixture(t)
+	world := f.world(2)
+	publish := world.SiteCommit
+	fail := func(entity.IThreadSafeEntity, spatial.Point, bool) error {
+		return errors.New("review: publication unavailable")
+	}
+	world.SiteCommit = fail
+	built := f.must(build(1))
+	if !built.ProjectionPending {
+		t.Fatal("initial failure not recorded")
+	}
+	oldGeneration := world.Failures()
+	world.SiteCommit = publish
+	if err := f.controller.runtime.Refresh(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if world.Failures() != 0 {
+		t.Fatal("first Refresh did not recover")
+	}
+	world.SiteCommit = fail
+	command := build(2)
+	command.Op = "remove"
+	removed := f.must(command)
+	if !removed.ProjectionPending {
+		t.Fatal("new failure not recorded")
+	}
+	newGeneration := world.Failures()
+	world.Recovered(oldGeneration)
+	retry := f.must(command)
+	f.ledger(2, 0)
+	t.Logf("old=%d new=%d after=%d duplicate=%t pending=%t", oldGeneration, newGeneration, world.Failures(), retry.Duplicate, retry.ProjectionPending)
+	world.SiteCommit = publish
+	if !retry.ProjectionPending {
+		t.Fatal("stale recovery completion erased an unrepaired committed removal")
+	}
+}
+
+func TestTerrainRecoveryKeepsFailuresAddedDuringRefresh(t *testing.T) {
+	f := newTerrainFixture(t)
+	world := f.world(2)
+	world.MarkFailure()
+	first := world.Failures()
+	world.MarkFailure()
+	second := world.Failures()
+	world.Recovered(first)
+	if world.Failures() != second {
+		t.Fatalf("new failure lost: first=%d second=%d pending=%d", first, second, world.Failures())
+	}
+	world.Recovered(second)
+	world.Recovered(first)
+	if world.Failures() != 0 {
+		t.Fatalf("old completion moved the recovery watermark backwards: %d", world.Failures())
+	}
+}

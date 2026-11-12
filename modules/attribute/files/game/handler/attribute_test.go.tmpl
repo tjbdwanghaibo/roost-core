@@ -12,20 +12,20 @@ import (
 	"sync/atomic"
 	"testing"
 
-	controller "{{MODULE}}/game/controllers/attribute"
-	playerentity "{{MODULE}}/game/entities/player"
-	gameattr "{{MODULE}}/game/gameplay/attribute"
-	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	controller "{{MODULE}}/game/controllers/attribute"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
 )
 
 type attributeGetter map[int64]entity.IThreadSafeEntity
@@ -309,6 +309,7 @@ func TestAttributeProtocolUsesAuthenticatedIdentity(t *testing.T) {
 		t.Fatalf("protocol %+v %v", r, err)
 	}
 }
+
 // AttributeGet 是只读 handler：它的事务声明必须是 memory 快路径（生成的注册代码里是空的 HandlerMeta）。
 // 不带选项的 //roost:nest 是 rollback=state durability=async，每次读都要先把整个 PlayerDao 序列化成回滚快照；
 // 写成 rollback=undo durability=strict 则是在声明“这里会写、答复要等落盘”。读完之后提交器一次都没被调用。

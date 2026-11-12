@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
 	"{{MODULE}}/game/alliance"
-	player "{{MODULE}}/game/entities/player"
-	apperrors "{{MODULE}}/internal/errors"
 	alliancedonate "{{MODULE}}/saga/alliance_donate"
 	alliancefound "{{MODULE}}/saga/alliance_found"
 	alliancereward "{{MODULE}}/saga/alliance_reward"
-
-	"github.com/tjbdwanghaibo/roost-core/framework/saga"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
 )
 
 // handlerStartAllianceOp starts one of the alliance sagas (found, donate, claim

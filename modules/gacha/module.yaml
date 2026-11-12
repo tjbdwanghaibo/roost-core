@@ -4,6 +4,9 @@ requires: [wallet, bag]
 needs:
   mods: [nest]
   features: [protocol, entity, dao, errcode, config]
+access:
+  transport: tcp
+  self_sync: true
 entity: Player
 state:
   - {field: Gacha, type: GachaState, store: gacha, dao: 'persist,sync', comment: 每个卡池距离上次保底道具的抽数；最多记64池，客户端只读。}

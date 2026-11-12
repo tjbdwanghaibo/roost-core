@@ -16,13 +16,13 @@ func TestModuleActivityGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activity: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 4, "activity_alliance": 4})
+	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 4, "activity_alliance": 5})
 	roost("module", "add", "profile", "leaderboard", "mailbox")
 	report, err = VerifyModules(context.Background(), root, []string{"activity", "activity_world", "activity_alliance"}, nil)
 	if err != nil {
 		t.Fatalf("activity combined: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 4, "activity_alliance": 4, "activity+enter": 1, "activity+profile": 1, "activity+leaderboard": 1, "activity+mailbox": 1})
+	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 4, "activity_alliance": 5, "activity+enter": 2, "activity+profile": 1, "activity+leaderboard": 1, "activity+mailbox": 1})
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)

@@ -63,7 +63,7 @@ func handlerGuardClear(target alliance_member.IAllianceGuardEntity, allianceID i
 
 // handlerGuardInfo reads the player's guard.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest durability=memory
 func handlerGuardInfo(target alliance_member.IAllianceGuardEntity) (alliancerule.MemberState, error) {
 	guard := target.AllianceGuardComp()
 	return guard.State(guard.CurrentVersion()), nil
@@ -71,7 +71,7 @@ func handlerGuardInfo(target alliance_member.IAllianceGuardEntity) (alliancerule
 
 // handlerGuardReceipt reads one request's receipt on the guard (Found, Reserve).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest durability=memory
 func handlerGuardReceipt(target alliance_member.IAllianceGuardEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
 	receipt, found := target.AllianceGuardComp().Receipt(requestID)
 	return alliancerule.ReceiptAnswer{Found: found, Receipt: receipt}, nil

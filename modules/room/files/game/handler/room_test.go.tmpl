@@ -6,19 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-
-	apperrors "{{MODULE}}/internal/errors"
-	room "{{MODULE}}/game/entities/room"
-	sender "{{MODULE}}/game/handler/syncsender"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	apperrors "{{MODULE}}/internal/errors"
+	room "{{MODULE}}/game/entities/room"
+	sender "{{MODULE}}/game/handler/syncsender"
 )
 
 type roomGetter map[int64]entity.IThreadSafeEntity
@@ -404,6 +406,17 @@ func TestRoomOnlyTheCurrentHostCanClose(t *testing.T) {
 	})
 }
 func TestRoomViewIsMembersOnlyAndDetached(t *testing.T) {
+	// 只读入口仍经正式 Nest 持锁；元数据不声明写事务的回滚和刷盘策略。
+	{
+		raw, err := os.ReadFile("room_view_nest_gen.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "invokeRoomView, nest.HandlerMeta{})") {
+			t.Fatal("RoomView read-only metadata regressed")
+		}
+	}
+
 	f := newRoomFixture(t, 2)
 	f.join(t, 101)
 	f.join(t, 102)

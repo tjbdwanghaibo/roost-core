@@ -1,0 +1,45 @@
+package handler
+
+import (
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+
+	"{{MODULE}}/game/skillbook"
+	gamecombat "{{MODULE}}/game/combat"
+)
+
+// 从正式启动目录取技能，经 Nest 施法，验证编译期 Status 策略与运行期控制、到期释放一致。
+func TestWithCombatSkillbookUsesCompiledStatusPolicy(t *testing.T) {
+	f := newCombatFixture(t)
+	catalog, err := skillbook.LookupProgram(f.registry, "skill.{{PROJECT}}.combat.stun")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := gamecombat.Program("skill.{{PROJECT}}.combat.stun")
+	if err != nil || runtime != catalog {
+		t.Fatalf("runtime program=%p catalog=%p err=%v", runtime, catalog, err)
+	}
+	resolver, err := gamecombat.Resolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := skill.Inspect(catalog).Identity.GameplayDigest
+	resolved, err := resolver.ResolveProgram("skill.{{PROJECT}}.combat.stun", digest)
+	if err != nil || resolved != catalog {
+		t.Fatalf("resolve: %p %v", resolved, err)
+	}
+	if _, err := resolver.ResolveProgram("skill.{{PROJECT}}.combat.stun", "wrong-digest"); err == nil {
+		t.Fatal("mismatched authority accepted")
+	}
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "stun")
+	if move, cast := f.gates(t, 1); move || cast {
+		t.Fatal("compiled stun did not gate movement and casting")
+	}
+	f.now.Add(1000)
+	f.mustStep(t, 3)
+	if move, cast := f.gates(t, 1); !move || !cast {
+		t.Fatal("expired status kept gates closed")
+	}
+}

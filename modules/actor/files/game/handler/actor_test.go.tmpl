@@ -21,14 +21,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
 	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
 	actorcontroller "{{MODULE}}/game/controllers/actor"
+	apperrors "{{MODULE}}/internal/errors"
+	gameheartbeat "{{MODULE}}/game/heartbeat"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
-	gameheartbeat "{{MODULE}}/game/heartbeat"
-	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
 )
 
 type actorGetter struct{ value *player.Player }
@@ -278,9 +279,13 @@ func TestActorRepeatedEnterDoesNotTeleport(t *testing.T) {
 	}
 }
 func TestActorRejectsOversizedPathAndSelfFollow(t *testing.T) {
- f := newActorFixture(t)
- if _,err:=actor.New(f.value,actor.Config{MaxPathPoints:actor.MaxConfiguredPathPoints+1});err==nil{t.Fatal("unbounded configured path budget")}
- if _,err:=actor.New(f.value,actor.Config{MaxPathPoints:-1});err==nil{t.Fatal("negative configured path budget")}
+	f := newActorFixture(t)
+	if _, err := actor.New(f.value, actor.Config{MaxPathPoints: actor.MaxConfiguredPathPoints + 1}); err == nil {
+		t.Fatal("unbounded configured path budget")
+	}
+	if _, err := actor.New(f.value, actor.Config{MaxPathPoints: -1}); err == nil {
+		t.Fatal("negative configured path budget")
+	}
 	f.place()
 	f.must(func(p *player.Player) error {
 		b := p.ActorComp().Body()

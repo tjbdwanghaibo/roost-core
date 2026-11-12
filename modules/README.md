@@ -21,7 +21,7 @@
 | [enter](enter/README.md) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放可写在 `game/entities/player/enter_first.go`，模块联动可用 `player.OnFirstEnter` 登记同一事务内的发放；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`；钩子拿到 `Entered{PlayerID, First, FirstAtUnixMilli, Claims}`，`Claims` 是会话的 claims，可为 nil）；安装时打开玩家 TCP 接入与自身视图；别的功能登记的进入前检查（`OnEntering`，能否决登录）在加载 Player 之前执行；进入的骨架是 `gameenter.Enter`（检查 → 加载与首次初始化 → 钩子）；另一条路“先新建、再进入”只对被登记为“先新建”的会话生效（`gameenter.RequireCreateFirst`，login 的联动登记的是用进服票据握手的会话）：`EnterGame` 不代建、没建成答 `enter_need_create`，新建请求 `EnterCreate{name}` 一笔事务里起名、初始发放、建成，名字规则的登记点 `OnCreating` / `OnCreatePrepare` / `player.OnCreate`，会话激活后的告知 `EnterStatus{code, need_create}`（`game/controllers/enter` 的 `Announce`）；没有人登记时 `EnterGame` 与原来相同 | 无 | `PlayerDao.Enter`（只落库） | 29 |
 | [profile](profile/README.md) | 玩家档案（首次建档 1 级）：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）与只检查不执行的 `CheckAddExp`；给服务端按玩家号读的名片 handler `ProfileCard`（名字、等级）；工程升级钩子写在 `game/entities/player/profile_levelup.go`，模块扩展用 `OnProfileLevelUp` 按名字登记。game-demo 用的就是它 | enter | `PlayerDao.Profile`（同步，名字与等级，别的玩家也可以看）、`PlayerDao.ProfilePrivate`（同步，经验，只给本人） | 20 |
 | [bag](bag/README.md) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种硬上限 999999）；自带道具表 `configs/schema/item.go` 与 `configs/table/item.csv`（哪些道具存在、每种的单种上限；加道具只改 CSV 再 `roost generate`）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；规则入口 `game/entities/player/bag_items.go`（缺省读道具表）。game-demo 用的就是它 | 无（要求 `config` 特性，`-template game` 缺省已开） | `PlayerDao.Bag`（同步） | 17 |
-| [leaderboard](leaderboard/README.md) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 20 |
+| [leaderboard](leaderboard/README.md) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 21 |
 | [mailbox](mailbox/README.md) | 邮件：分页列出自己的邮件（`MailboxList`）、领取附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；附件是（种类、号、数量），种类是登记点：金币内置，别的种类由登记了校验（`game/mailbox` 的 `RegisterType`）与发放方式（`RegisterMailboxGrant`）的功能提供；给服务端发件用的 `mailbox.SendTo`（一名玩家一封、附件先校验、幂等键必填）。与 profile 联动在升级时冻结奖励、通过 effect 发邮件（缺省不发奖），10 条场景；game-demo 用的就是它 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 32 |
 | [task](task/README.md) | 事件任务：每日/每周/永久与前置链，配置表，金币/道具奖励；事务内事件联动 | wallet；bag 等联动 | `PlayerDao.Task`（同步） | 29；八组联动 25 条 |
 | [stamina](stamina/README.md) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 25 |
@@ -29,10 +29,10 @@
 | [skillbook](skillbook/README.md) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
 | [activity](activity/README.md) | 共用 activity.Component 五阶段活动状态机：一次性/日历循环、可信条件解锁、自定义流程、有界恢复；个人宿主 | 无；configdata / 个人持久定时器由安装器接入 | PlayerDao.Activity（只落库） | 21 |
 | [activity_world](activity_world/README.md) | 全服/服务器组权威 Entity，独立服务、ownership 恢复扫描 | activity | ActivityWorldDao.ActivityWorld（只落库） | 4 |
-| [activity_alliance](activity_alliance/README.md) | 既有联盟 Entity 的活动适配，扩展 alliance 配置/RPC | activity、alliance | AllianceDao.ActivityAlliance（只落库） | 4 |
-| [alliance](alliance/README.md) | 独立联盟服务单写者、路由 RPC / 三个跨域 Saga、Mirror 展示与换服惰性校正 | bag；代办 saga / Mirror 与 alliance 服务 | AllianceDao、AllianceMemberDao、PlayerDao.Alliance / SagaReceipts | 49 |
-| [team](team/README.md) | Remote 共享权威队伍，六个 PB 端点；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 27 |
-| [matchmaking](matchmaking/README.md) | 单人/整队按服分池；持久意图、取消竞态、结果补查、组队冻结 | team、matchroom；托管 match | PlayerDao.Matchmaking | 16 |
+| [activity_alliance](activity_alliance/README.md) | 既有联盟 Entity 的活动适配，扩展 alliance 配置/RPC | activity、alliance | AllianceDao.ActivityAlliance（只落库） | 5 |
+| [alliance](alliance/README.md) | 独立联盟服务单写者、路由 RPC / 三个跨域 Saga、Mirror 展示与换服惰性校正 | bag；代办 saga / Mirror 与 alliance 服务 | AllianceDao、AllianceMemberDao、PlayerDao.Alliance / SagaReceipts | 55 |
+| [team](team/README.md) | Remote 共享权威队伍，七个 PB 请求和邀请推送；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 35 |
+| [matchmaking](matchmaking/README.md) | 单人/整队按服分池；持久意图、取消竞态、结果补查、组队冻结 | team、matchroom；托管 match | PlayerDao.Matchmaking | 17 |
 | [matchroom](matchroom/README.md) | MatchID 幂等移交到 Room，固定准入名单、掉线保座 | room、Mongo | RoomDao.Matchroom、持久房号映射 | 12 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
@@ -40,19 +40,19 @@
 | [portal](portal/README.md) | 登录入口（manifest）：三个 HTTP 端点代客户端调只在内部总线上的 account——`POST /portal/login` 渠道登录拿账号票据，`/portal/servers` 凭票拿区服清单（地址、负载、本账号在各服有没有角色）与推荐的服，`/portal/enter` 换握手票据 `enter:<进服票据>` 与承载服的地址。**入口挂在托管 account 服务的进程上**（清单的 `runtime.framework: account`），game 不因此多出 HTTP 监听；入口不持有任何密钥（票据全部由 account 签发与校验）、不建角不选角，只守“账号只取自 account 校验过的账号票据”；区服目录 `Directory`（静态配置 `portal.servers`、进程内带过期的 `Registry`）与推荐规则在归工程所有的 `portal_rules.go` | login（web Mod 安装时代办，加在托管 account 的服务上） | 无 | 12 |
 | [servertime](servertime/README.md) | 服务器时间：客户端拿到服务器的业务时间、当前业务日、前后两个业务日、本业务日起点与下一次每日重置的时刻（拉取 `ServertimeSync`，原样带回 `ClientTick`；推送 `ServertimeNow`）；给别的功能调的纯函数 `servertime.At(nowUnixMilli)` / `Now()`，与 `clock.BusinessDay` 同一份日历；`PushNow` 按能力名取玩家 TCP 传输；对外展示的时区名写在 `game/servertime/servertime_zone.go` | 无（玩家 TCP 接入安装时代办） | 无 | 12 |
 | [rehome](rehome/README.md) | 单个玩家换服（改绑 game sid）：申请协议 `RehomeApply` 与服务端入口 `Move`；account 的发起 / 提交 / 中止，结论按它带回的当前绑定判定；源服从“离开中”的标记起在写闸门拒绝这名玩家新的请求，受理之后断开会话、等在途的请求执行完、复核检查、跑离开钩子，再交出实体（之后拒写），目标服首次进入时到达；可去的服与冷却写在 `game/rehome/rehome_rules.go`；三个登记点（换服前检查、离开时、到达后）；给 saga 准入用的 `rehome.Binding`（这名玩家现在绑定在哪个服、是否正在换服）。game-demo 用的就是它 | 无（要求业务服务 `uses: [account]`） | `PlayerDao.Rehome`（只落库） | 40 |
-| [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 12 |
-| [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor | SceneDao；Player 场景交互回执 | 26 |
-| [monster](monster/README.md) | 正式实体生命周期、AI/actionflow 巡逻追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 25 |
-| [attribute](attribute/README.md) | 生成的属性 profile 与 Container：基础/装备/最终三层、升级成长 | profile | AttributeBase / AttributeGear / AttributeFinal | 16 |
-| [equipment](equipment/README.md) | 配置表槽位、穿卸、背包原子扣回；不包含物品实例和随机词条 | bag | Equipment | 16 |
-| [combat](combat/README.md) | 双人同意战斗、正式技能 Runtime / CombatDAO、Buff 与冷却恢复 | actor、attribute、skillbook | CombatDAO；Player 的公开投影与私有 checkpoint | 36 |
-| [dungeon](dungeon/README.md) | 正式 level 阶段推进、可信通关事件、领奖与赛季计数；客户端不能提交胜利 | profile | DungeonDao + LevelDAO；玩家领取账本 | 19 |
-| [terrain](terrain/README.md) | 地形块、笔刷与建筑，玩家序号去重，持久事实重建 View/占位；单进程有界地图 | scene | TerrainChunk / TerrainBuilding；玩家编辑回执 | 23 |
+| [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 14 |
+| [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor | SceneDao；Player 场景交互回执 | 28 |
+| [monster](monster/README.md) | 正式实体生命周期、AI/actionflow 巡逻追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 26 |
+| [attribute](attribute/README.md) | 生成的属性 profile 与 Container：基础/装备/最终三层、升级成长 | profile | AttributeBase / AttributeGear / AttributeFinal | 17 |
+| [equipment](equipment/README.md) | 配置表槽位、穿卸、背包原子扣回；不包含物品实例和随机词条 | bag | Equipment | 18 |
+| [combat](combat/README.md) | 双人同意战斗、正式技能 Runtime / CombatDAO、Buff 与冷却恢复 | actor、attribute、skillbook | CombatDAO；Player 的公开投影与私有 checkpoint | 38 |
+| [dungeon](dungeon/README.md) | 正式 level 阶段推进、可信通关事件、领奖与赛季计数；客户端不能提交胜利 | profile | DungeonDao + LevelDAO；玩家领取账本 | 21 |
+| [terrain](terrain/README.md) | 地形块、笔刷与建筑，玩家序号去重，持久事实重建 View/占位；单进程有界地图 | scene | TerrainChunk / TerrainBuilding；玩家编辑回执 | 28 |
 | [naming](naming/README.md) | Directory 两阶段占名、未知结果恢复；接管 ProfileRename 的唯一名字流程 | profile（代办 directory Mod） | Naming | 15 |
 | [cdkey](cdkey/README.md) | 一码一次或一人一次；配置表、持久兑换意图、以稳定键发邮件 | mailbox（代办 directory Mod） | Cdkey 的有限意图/回执 | 12 |
 | [notice](notice/README.md) | 可信公告与跑马灯入口，经 chat 的 AnnounceWorld；不默认定时播放 | chat | 无 | 8 |
 | [gacha](gacha/README.md) | 配置概率/保底、十连；扣钱、发卡和请求去重同事务 | wallet、bag | Gacha / GachaLedger | 24 |
-| [friends](friends/README.md) | 好友、申请与黑名单；双方在线、同进程双 Player 事务 | 无 | Friends | 12 |
+| [friends](friends/README.md) | 好友、申请与黑名单；双边动作在本进程事务中，拒绝申请/取消拉黑可离线 | 无 | Friends | 18 |
 | [idle](idle/README.md) | 惰性离线收益、时长上限、回拨处理与序号重放 | wallet | Idle | 19 |
 
 两个模块都装着时还会多出**联动文件**（不论先装哪个，在第二个装上的那一次写）：
@@ -86,7 +86,11 @@
 | scene + chat | 同地图范围内瞬时聊天，锁内取得收件人快照、锁外推送；不提供历史 | 5 |
 | scene + profile / attribute / equipment | 各自显式登记公开字段，快照与增量均检查权限 | 各 2 |
 | combat + scene / equipment | 公开战斗投影 / 真实换装对冻结输入的影响 | 各 2 |
+| combat + skillbook | 编译目录 / digest resolver 共用、正式 Nest 施放定身与到期 | 1 |
+| notice + gm | 运维命令统一登记、操作者 / 备注校验与执行前后审计 | 4 |
 | terrain + monster | 关图清本图怪物；失败保留资源与事实供重试 | 2 |
+
+42 个模块、47 条带验证的联动；场景数与验收见[本轮修复记录](../docs/maintenance/evidence/module-fixes-20261112/README.md)。scene 的真实工程启动仍有接线限制，见其 README。
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。再装 `portal`（连带 `login`），客户端就能从渠道身份经 HTTP 登录、拿区服清单与推荐、换进服票据，握手后由游戏服告知要不要先新建，新建（带角色名）之后进入游戏；入口在托管 account 的进程上监听。
 

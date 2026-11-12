@@ -1,17 +1,17 @@
 package handler
 
 import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
 	"{{MODULE}}/game/alliancerule"
 	alliance "{{MODULE}}/game/entities/alliance"
 	apperrors "{{MODULE}}/internal/errors"
-
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // handlerAllianceInfo is the authoritative read (GM, checking after a write).
 // Players read the alliance through its mirror instead (AllianceMirror).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest durability=memory
 func handlerAllianceInfo(target alliance.IAllianceRosterEntity) (alliancerule.View, error) {
 	roster := target.AllianceRosterComp()
 	if !roster.Founded() {
@@ -22,7 +22,7 @@ func handlerAllianceInfo(target alliance.IAllianceRosterEntity) (alliancerule.Vi
 
 // handlerAllianceReceipt reads one request's receipt (Result).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest durability=memory
 func handlerAllianceReceipt(target alliance.IAllianceRosterEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
 	receipt, found := target.AllianceRosterComp().Receipt(requestID)
 	return alliancerule.ReceiptAnswer{Found: found, Receipt: receipt}, nil

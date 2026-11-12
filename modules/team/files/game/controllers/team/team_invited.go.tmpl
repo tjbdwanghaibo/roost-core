@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 
-	player "{{MODULE}}/game/entities/player"
-	teamentity "{{MODULE}}/game/entities/team"
-	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	teamentity "{{MODULE}}/game/entities/team"
 )
 
 // inviteTransport 是告知被邀请人用到的玩家 TCP Runtime 的两个方法。写成接口、能力按名字取，
@@ -55,8 +55,8 @@ func (c *Controller) announceInvite(ctx context.Context, invitation teamentity.I
 	}
 }
 
-// HandleTeamInvites 列出自己收到的、还没过期的邀请。列表来自本人档里的收件记录：它说的是“收到过且没过期”，
-// 队伍后来解散、满员或撤掉邀请时，接受会被队伍一侧拒绝。
+// HandleTeamInvites 先读本人的有界收件记录，再逐个核对 Team 权威；不持 Player 锁等待 Remote。
+// 任一权威读取失败就返回错误码，不把部分结果伪装成完整列表。接受时仍须再次检查。
 func (c *Controller) HandleTeamInvites(ctx *playeraccess.Context, req *pb.TeamInvitesRequest) (*pb.TeamInvitesResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("team: request required")
@@ -74,8 +74,22 @@ func (c *Controller) HandleTeamInvites(ctx *playeraccess.Context, req *pb.TeamIn
 		}
 		return response, nil
 	}
-	for _, invite := range invites {
-		response.Invites = append(response.Invites, pb.TeamInvitedPush{TeamID: invite.TeamID, Inviter: invite.Inviter, ExpireAtUnixMilli: invite.ExpireAt})
+	lookup := sender.NewTeamInvitationSender(c.nestClient)
+	for _, note := range invites {
+		invitation, err := lookup.Sync_TeamInvitation(ctx.Context(), note.TeamID, ctx.PlayerID)
+		if err != nil {
+			code, reason := errcode.ClientError(err)
+			if code == errcode.CodeEntityNotFound {
+				continue
+			}
+			if code == errcode.CodeInternal {
+				slog.ErrorContext(ctx.Context(), "team invitation lookup failed", "player_id", ctx.PlayerID, "team_id", note.TeamID, "err", err)
+			}
+			return &pb.TeamInvitesResponse{Code: code, Reason: reason}, nil
+		}
+		if invitation.ExpireAt != 0 {
+			response.Invites = append(response.Invites, pb.TeamInvitedPush{TeamID: invitation.TeamID, Inviter: note.Inviter, ExpireAtUnixMilli: invitation.ExpireAt})
+		}
 	}
 	return response, nil
 }

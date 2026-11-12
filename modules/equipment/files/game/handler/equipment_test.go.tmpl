@@ -13,15 +13,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"{{MODULE}}/configs/schema"
-	"{{MODULE}}/db"
-	controller "{{MODULE}}/game/controllers/equipment"
-	playerentity "{{MODULE}}/game/entities/player"
-	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
@@ -30,6 +21,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	controller "{{MODULE}}/game/controllers/equipment"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
 )
 
 type equipmentGetter map[int64]entity.IThreadSafeEntity

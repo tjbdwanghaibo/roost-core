@@ -1,0 +1,261 @@
+Baseline: 5b99e8ae931e3bda3539b50a011117fc1c78d03d
+Review branch: 8650913fde77d67ab99b937fddd35952a47f149d
+GOWORK=off; macOS local verification; no release / merge.
+
+world-final: module verify OK; 293 passed, 0 skipped; build/vet/id/generate checks OK
+alliance-final: module verify OK; 303 passed, 0 skipped; build/vet/id/generate checks OK
+social-final: module verify OK; 309 passed, 0 skipped; build/vet/id/generate checks OK
+misc-final: module verify OK; 355 passed, 0 skipped; build/vet/id/generate checks OK
+demo-final: module verify OK; 496 passed, 0 skipped; build/vet/id/generate checks OK
+turn-clean: module verify OK; 47 passed, 0 skipped; build/vet/id/generate checks OK
+verify-10-foundry.json: 89 module/glue rows, 1006 passed, 0 skipped
+verify-11-citadel.json: 89 module/glue rows, 1006 passed, 0 skipped
+
+scripts/test-modules-generated.sh: exit 0
+modules: ok
+Generated consumers and evidence: /Users/whb/roost/worktrees/module-fixes/artifacts/module-fixes-20261112/all-generated
+
+Final readonly declarations and neighboring behavior:
+PASS world-final readonly + module behavior race
+PASS alliance-final readonly + module behavior race
+PASS social-final readonly + module behavior race
+PASS misc-final readonly + module behavior race
+PASS demo-final readonly + module behavior race
+
+Real NATS StopFounding:
+ok  	example.com/modulefix/alliance-final/internal/service/alliance	2.709s
+
+Root final after report staged:
+ok  	github.com/tjbdwanghaibo/roost-core	18.117s
+
+Mutation checks: 27/27 compile-valid mutants killed; restored implementations passed.
+
+Generated game-demo skipped tests (explicit external-service/measurement gates):
+example.com/modulefix/demofinal/db/migrations TestPlayerMigrationRealMongo
+example.com/modulefix/demofinal/deploy/docker TestProductionComposeResolvesToTheShapeTheDeploymentReliesOn
+example.com/modulefix/demofinal/game/controllers/player TestDungeonClearsBoardCountsEachRunOnceRealRedis
+example.com/modulefix/demofinal/internal/service/game TestActivityBoardKeepsTheLatestCumulativeScore
+example.com/modulefix/demofinal/internal/service/game TestTerrainGameScaleLoadMeasure
+example.com/modulefix/demofinal/internal/service/game TestBuildingRestartRealMongo
+example.com/modulefix/demofinal/internal/service/game TestTerrainMeasureUpdateBytes
+example.com/modulefix/demofinal/internal/service/game TestTerrainMeasureDownlinkScenarios
+example.com/modulefix/demofinal/internal/service/game TestTerrainMeasureBrushCost
+example.com/modulefix/demofinal/internal/service/game TestTerrainRestartRealMongo
+example.com/modulefix/demofinal/internal/service/game TestTerrainEditLedgerRealMongo
+
+Not a performance or Linux/production acceptance.
+
+Full generated Demo/Module/Recipe suite (2132.769s): one failure in the old Scene mutation diagnostic; no other failures reported (non-verbose go test does not enumerate skips).
+--- FAIL: TestModuleSceneInstallsAndKeepsPublicViewsSeparate (32.06s)
+    module_scene_test.go:36: caught mutation in game/entities/scene/entity.go: occupied map closed
+    module_scene_test.go:37: mutation not caught by expected behavior TestSceneInteractionIsOncePerContinuousSequence: exit status 1
+        2026/11/12 23:37:47 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=2
+        --- FAIL: TestSceneInteractionIsOncePerContinuousSequence (0.00s)
+            scene_test.go:579: <nil>
+        FAIL
+        FAIL	example.com/studio/scenemodule/game/controllers/scene	0.927s
+        FAIL
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	2132.769s
+FAIL
+
+Final Scene mutation contract recheck:
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	27.969s
+
+Template repair targeted suite (411.242s): same one Scene diagnostic failure; no other Actor/Monster/Scene/Terrain/Turn generation check failures reported. Final Scene recheck above closes it.
+
+Repository-wide go test ./... first run: exit 1; 163 packages reported OK, root and codegen/internal/roost failed.
+Root: report link was not yet staged, final root recheck passed.
+Codegen: the executable embedded the intermediate malformed test templates; repaired before commit.
+Failed top-level tests:
+TestTrackedMarkdownRelativeLinksResolve
+TestModuleActorSelfSyncEnterThenCombat
+TestModuleActorSelfSyncCombatThenEnter
+TestModuleActorInstallsHeartbeatAndRunsWithoutScene
+TestModuleCombatScenariosAndMutations
+TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations
+TestModuleMonsterDrainRecoveryMutations
+TestModuleSceneInstallsAndKeepsPublicViewsSeparate
+TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat
+TestModuleSceneReplacesOnlyTheGeneratedEnterSelfPacker
+TestModuleTerrainInstallAndVerify
+TestRecipesCreateBuildableCompositions
+TestModuleTimerInstallAndFailureAreTransactional
+TestModuleTimerReusesCustomTimerAndAvoidsManualTypes
+
+Original successful package lines:
+ok  	github.com/tjbdwanghaibo/roost-core/client/wire	5.284s
+ok  	github.com/tjbdwanghaibo/roost-core/cmd/glsvet	5.915s
+ok  	github.com/tjbdwanghaibo/roost-core/cmd/mongocheck	6.184s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/attribute	6.605s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/cfggen	8.706s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/dao	34.735s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity	8.147s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	8.307s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/marker	9.640s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/nest	25.544s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/project	8.760s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol	9.231s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/registry	9.065s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc	28.304s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen	17.297s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/webroute	17.780s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/app	21.927s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo	6.978s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/cache	7.351s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/configdata	10.455s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/configdata/rules	11.542s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine	11.253s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	19.114s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/entity	13.098s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/hotcode	10.996s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/hotcode/plugintest	21.225s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/manager	10.923s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	15.725s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	10.652s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nestwal	13.519s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	24.649s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	10.008s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/statslog	9.151s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync	9.098s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	7.958s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	9.058s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/frame	4.386s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	17.076s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport	4.364s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus	4.843s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver	4.037s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror	3.993s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream	5.067s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/actionflow	3.099s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/ai	2.658s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/attribute	2.734s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	138.007s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	6.325s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	4.734s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/level	1.939s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/movement	31.959s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/physics	1.357s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill	25.005s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat	0.777s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent	3.129s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/skillcompose	1.188s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/skillsync	1.775s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/state	3.466s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	4.685s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/timedomain	2.703s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/clock	2.705s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/container	2.754s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/errcode	2.849s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/fctx	5.869s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/featureflag	6.743s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/goroutine	7.368s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/index	7.392s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle	7.473s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/lock	7.573s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/misc	6.764s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/safemap	7.354s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/security	6.951s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/spatial	7.834s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/timer	7.752s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/worker	8.451s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/bus	8.026s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd	4.718s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver	5.743s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	7.832s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpclient	4.494s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	7.054s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats	4.095s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	5.412s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute	4.729s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc	3.827s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/webroute	4.018s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/admin	2.262s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/failurelog	2.559s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/health	3.174s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/log	3.037s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/metrics	4.220s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/ops	7.547s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics	4.845s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/migration	5.141s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver	6.153s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest	5.594s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/redis	5.041s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver	7.687s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest	4.400s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore	3.671s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/configfile	3.871s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/configschema	3.230s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/hoptrace	3.436s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/operation	3.291s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/stopcontract	4.608s
+ok  	github.com/tjbdwanghaibo/roost-core/robot	4.095s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/action	3.541s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/loadtest	3.845s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/protocol	3.264s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/runner	4.261s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/scenario	3.424s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/session	3.635s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/transport	3.805s
+ok  	github.com/tjbdwanghaibo/roost-core/scripts/perf/nest-msg	2.827s
+ok  	github.com/tjbdwanghaibo/roost-core/scripts/perf/sync-aoi	3.231s
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	2.833s
+ok  	github.com/tjbdwanghaibo/roost-core/service/activity	3.248s
+ok  	github.com/tjbdwanghaibo/roost-core/service/chat	3.415s
+ok  	github.com/tjbdwanghaibo/roost-core/service/directory	3.672s
+ok  	github.com/tjbdwanghaibo/roost-core/service/global	3.935s
+ok  	github.com/tjbdwanghaibo/roost-core/service/mail	3.782s
+ok  	github.com/tjbdwanghaibo/roost-core/service/match	4.110s
+ok  	github.com/tjbdwanghaibo/roost-core/service/physicsroom	4.442s
+ok  	github.com/tjbdwanghaibo/roost-core/service/platform	4.758s
+ok  	github.com/tjbdwanghaibo/roost-core/service/rank	5.467s
+ok  	github.com/tjbdwanghaibo/roost-core/service/session	5.602s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring	7.338s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/account	7.672s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/activity	9.494s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/chat	9.420s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/configdata	9.422s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	10.461s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/directory	9.425s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/entitytimer	9.327s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/etcd	9.414s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/examples/split	9.411s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	8.779s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/global	8.883s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/heartbeat	9.059s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/integration	8.800s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lock	8.441s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/mail	8.684s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/manager	5.755s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/match	5.626s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/mods	4.574s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/modulehost	5.084s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/mongo	4.651s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nats	5.247s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	4.947s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/ops	5.338s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom	4.825s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom/cmd/physicsroom-local	5.050s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/platform	5.119s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/rank	4.621s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/redis	4.581s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/remoteentity	4.298s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/saga	4.465s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/selfsync	4.758s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/session	4.655s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/sidmerge	5.030s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/statslog	4.227s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/syncbus	4.334s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/web	4.445s
+
+Final remaining Combat/Recipe/Timer rechecks:
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	293.964s
+
+Final staged root checks:
+ok  	github.com/tjbdwanghaibo/roost-core	17.477s
+
+Document anchor checks:
+checked 344 files, 0 broken
+
+Closure: all 14 top-level failures from the first repository run have passing targeted rechecks (root + 9 Actor/Monster/Scene/Terrain + 4 Combat/Recipe/Timer).
+The first full command was not a one-shot green run; its failures are retained above.

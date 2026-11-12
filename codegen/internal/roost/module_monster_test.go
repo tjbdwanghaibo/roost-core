@@ -20,7 +20,7 @@ func TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations(t *testing.T) {
 		t.Fatal("repeated install changed source")
 	}
 	report, err := VerifyModules(context.Background(), root, []string{"monster"}, nil)
-	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 25 || report.Modules[0].Skipped != 0 {
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 26 || report.Modules[0].Skipped != 0 {
 		t.Fatalf("verify: %v %+v", err, report)
 	}
 	mutations := []struct{ from, to, test string }{

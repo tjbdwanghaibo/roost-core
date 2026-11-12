@@ -33,7 +33,7 @@ func TestModuleTerrainInstallAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v %+v", err, report)
 	}
-	if len(report.Modules) != 1 || report.Modules[0].Passed != 23 || report.Modules[0].Skipped != 0 {
+	if len(report.Modules) != 1 || report.Modules[0].Passed != 28 || report.Modules[0].Skipped != 0 {
 		t.Fatalf("scenario counts=%+v", report.Modules)
 	}
 	roost("module", "add", "monster")
@@ -41,7 +41,7 @@ func TestModuleTerrainInstallAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("terrain with monster: %v %+v", err, report)
 	}
-	if len(report.Modules) != 2 || report.Modules[0].Name != "terrain" || report.Modules[0].Passed != 23 || report.Modules[0].Skipped != 0 || report.Modules[1].Name != "terrain+monster" || report.Modules[1].Passed != 2 || report.Modules[1].Skipped != 0 {
+	if len(report.Modules) != 2 || report.Modules[0].Name != "terrain" || report.Modules[0].Passed != 28 || report.Modules[0].Skipped != 0 || report.Modules[1].Name != "terrain+monster" || report.Modules[1].Passed != 2 || report.Modules[1].Skipped != 0 {
 		t.Fatalf("combined scenario counts=%+v", report.Modules)
 	}
 	before := moduleProjectDigest(t, root)

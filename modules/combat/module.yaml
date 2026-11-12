@@ -17,10 +17,14 @@ runtime: {package: game/combat, start: Start}
 verify:
   packages: [./game/handler]
   run: ^TestCombat
-  pass: 36
+  pass: 38
 with:
   skillbook:
     summary: 启动目录的战斗Status策略与统一authority摘要
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithCombatSkillbook
+      pass: 1
   scene:
     summary: 只向旁观者开放Combat投影字段
     verify:

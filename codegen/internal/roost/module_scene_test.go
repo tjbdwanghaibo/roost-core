@@ -15,7 +15,7 @@ func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify scene: %v %+v", err, report)
 	}
-	want := map[string]int{"actor": 12, "scene": 26}
+	want := map[string]int{"actor": 14, "scene": 28}
 	for _, result := range report.Modules {
 		if !result.OK || result.Skipped != 0 || result.Passed != want[result.Name] {
 			t.Fatalf("%+v", result)
@@ -34,7 +34,7 @@ func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 		t.Fatal("repeated install changed business files")
 	}
 	recipeMutationMustFail(t, root, "game/entities/scene/entity.go", "s.Dao().MembersLen() != 0", "false && s.Dao().MembersLen() != 0", "./game/controllers/scene", "TestSceneOccupiedCloseIsRefused", "occupied map closed")
-	recipeMutationMustFail(t, root, "game/handler/scene_interact.go", "sequence == state.GetSequence()", "false && sequence == state.GetSequence()", "./game/controllers/scene", "TestSceneInteractionIsOncePerContinuousSequence", "stale or skipped")
+	recipeMutationMustFail(t, root, "game/handler/scene_interact.go", "sequence == state.GetSequence()", "false && sequence == state.GetSequence()", "./game/controllers/scene", "TestSceneInteractionIsOncePerContinuousSequence", "replayed interaction refused")
 }
 
 func TestModuleScenePlanRefusesExplicitBusinessPacker(t *testing.T) {
@@ -66,7 +66,7 @@ func TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify scene glues: %v %+v", err, report)
 	}
-	want := map[string]int{"scene": 26, "chat": 10, "scene+chat": 5, "chat+enter": 2, "scene+profile": 2, "scene+attribute": 2, "scene+equipment": 2}
+	want := map[string]int{"scene": 28, "chat": 10, "scene+chat": 5, "chat+enter": 2, "scene+profile": 2, "scene+attribute": 2, "scene+equipment": 2}
 	if len(report.Modules) != len(want) {
 		t.Fatalf("unexpected glues %+v", report.Modules)
 	}

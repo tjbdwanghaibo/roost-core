@@ -32,7 +32,7 @@ func TestModuleActorInstallsHeartbeatAndRunsWithoutScene(t *testing.T) {
 		t.Fatalf("mods %v: %v", resolved, err)
 	}
 	report, err := VerifyModules(context.Background(), root, []string{"actor"}, nil)
-	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 12 || !report.Modules[0].OK {
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 14 || !report.Modules[0].OK {
 		t.Fatalf("actor verification: %v %+v", err, report)
 	}
 	before = moduleProjectDigest(t, root)

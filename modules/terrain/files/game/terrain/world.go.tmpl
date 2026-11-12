@@ -3,16 +3,18 @@ package terrain
 import (
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	"sync"
-	"sync/atomic"
 )
 
 // World只提供不可变原始数据与提交后的投影。放置重叠必须查锁内DAO，不能以这里的占位缓存为权威。
 type World struct {
 	failures   atomic.Uint64
+	recovered  atomic.Uint64
 	siteMu     sync.Mutex
 	sites      map[int64]committedSite
 	SiteCommit func(entity.IThreadSafeEntity, spatial.Point, bool) error
@@ -129,10 +131,26 @@ func (w *World) Blocked(at spatial.Point) bool {
 	return !w.Walker.Standable(at)
 }
 
-// Failures记录本地投影失败代际；恢复只清除自身开始前看到的一代，不吞掉并发新失败。
-func (w *World) Failures() uint64            { return w.failures.Load() }
-func (w *World) MarkFailure()                { w.failures.Add(1) }
-func (w *World) Recovered(generation uint64) { w.failures.CompareAndSwap(generation, 0) }
+// Failures 返回尚未恢复的故障序号，0 表示没有待恢复故障。
+// 故障序号永不归零；恢复另记水位，避免两个恢复完成之间发生新故障时复用旧代际（RV-20261112-BM-01）。
+func (w *World) Failures() uint64 {
+	generation := w.failures.Load()
+	if generation <= w.recovered.Load() {
+		return 0
+	}
+	return generation
+}
+
+func (w *World) MarkFailure() { w.failures.Add(1) }
+
+// Recovered 只推进已恢复水位；迟到的完成不能清掉新故障，也不能倒退新恢复已经达到的水位。
+func (w *World) Recovered(generation uint64) {
+	for previous := w.recovered.Load(); previous < generation; previous = w.recovered.Load() {
+		if w.recovered.CompareAndSwap(previous, generation) {
+			return
+		}
+	}
+}
 
 type committedSite struct {
 	value   entity.IThreadSafeEntity

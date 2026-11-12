@@ -35,6 +35,17 @@ func (t *Team) InviteExpiry(invitee int64) int64 {
 	return expiry
 }
 
+// PendingInvitation 在 Team 权威锁内核对当前可接受的邀请。收件记录只是发现入口，不能代替这里的判断。
+// 查询不预留席位；应答之后发生满员、解散或匹配冻结，Accept 仍会再次核对。
+func (t *Team) PendingInvitation(invitee, now int64) Invitation {
+	d := t.Dao()
+	expiry := t.InviteExpiry(invitee)
+	if d.GetLeader() == 0 || d.GetMatchKey() != "" || d.MembersLen() >= MaxMembers || t.IsMember(invitee) || now >= expiry || d.GetRevision() == math.MaxInt64 {
+		return Invitation{}
+	}
+	return Invitation{Snapshot: t.Info(), Invitee: invitee, ExpireAt: expiry}
+}
+
 // Info 只可在持有 Team 锁时调用；不把 DAO 的集合交给锁外调用方。
 func (t *Team) Info() Snapshot {
 	d := t.Dao()

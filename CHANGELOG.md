@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **修复与补齐**（modules，2026-11-12）：收敛模块交接草稿，业务拒绝使用稳定错误码；修复 activity 进入实体号、联盟创建活动毫秒换算、装备同件换等级、地形恢复 ABA；补齐联盟管理协议、组队邀请查询/推送、战斗结束恢复与 Skillbook 联动；好友离线单边操作与双边归属边界、Notice 的 GM 审计、只读声明、独立客户端接线、场景数及文档同步整理。验收、原问题变异证据和未覆盖边界见[本轮报告](docs/maintenance/evidence/module-fixes-20261112/README.md)。不改核心框架执行契约。
+
 - **整合与完整测试**（2026-11-12）：登录线（login / portal / servertime、enter 的“先新建再进入”、account 的票据与区服清单、独立 Gate 的接法、game-demo 与两个配方接入、组合 skill 重写、42 个模块的能力与边界说明）与主线的新模块（gm、purchase、rules、team、matchmaking、matchroom、alliance、activity 三个）合在一起。下面各条里写着“完整测试没有跑”的，是各自提交时的事实；合并之后统一跑过一轮，结果在这里。
   - **合并**：主线 `cb388ced` 并入登录线，20 个文件冲突按两边的并集解决（安装器、game-demo 的模块名单与登录端点、机器人、两个配方、门禁脚本、文档）。回合配方现在是“登录链路 + 匹配开房”；enter 与 profile 之间有两组互补的联动（`profile+enter` 设初始 1 级，`enter+profile` 把新建请求的名字写进档案）。
   - **完整测试（最终一轮，本机 macOS）**：全仓 `go test ./...` 165 个包全部通过；`scripts/test-modules-generated.sh` 通过（42 个模块、46 组联动，正序与反序各建一个工程同装）；新生成的 game-demo build / vet / `roost id check` / `roost generate --check` 通过，自己的 `go test ./...` 62 个包、零 SKIP，`roost module verify` 通过；文档锚点 341 个文件无断链。另有本机隔离环境与临时 NATS 上的 Gate 联合回归（C# 客户端）通过；C++ 客户端那条没有跑（本机没有 protobuf）。

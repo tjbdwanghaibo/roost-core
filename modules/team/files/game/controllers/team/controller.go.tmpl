@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	db "{{MODULE}}/db"
-	"{{MODULE}}/game/lifecycle"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -14,6 +11,9 @@ import (
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"{{MODULE}}/game/lifecycle"
+	db "{{MODULE}}/db"
 )
 
 type Controller struct {

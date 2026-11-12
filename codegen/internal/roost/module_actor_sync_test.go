@@ -13,15 +13,15 @@ func TestModuleActorSelfSyncEnterThenCombat(t *testing.T) {
 	roost("module", "add", "enter")
 	verifyActorCombatSelf(t, root, []string{"enter"}, map[string]int{"enter": 29})
 	roost("module", "add", "combat")
-	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 12, "combat": 36, "enter": 29, "enter+profile": 3})
+	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 14, "combat": 38, "combat+skillbook": 1, "enter": 29, "enter+profile": 3})
 	checkActorCombatSelfPayload(t, root, "example.com/studio/entercombat")
 }
 func TestModuleActorSelfSyncCombatThenEnter(t *testing.T) {
 	root, roost, _ := moduleProject(t, "combatenter")
 	roost("module", "add", "combat")
-	verifyActorCombatSelf(t, root, []string{"actor", "combat"}, map[string]int{"actor": 12, "combat": 36})
+	verifyActorCombatSelf(t, root, []string{"actor", "combat"}, map[string]int{"actor": 14, "combat": 38, "combat+skillbook": 1})
 	roost("module", "add", "enter")
-	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 12, "combat": 36, "enter": 29, "enter+profile": 3})
+	verifyActorCombatSelf(t, root, []string{"actor", "combat", "enter"}, map[string]int{"actor": 14, "combat": 38, "combat+skillbook": 1, "enter": 29, "enter+profile": 3})
 	checkActorCombatSelfPayload(t, root, "example.com/studio/combatenter")
 }
 func verifyActorCombatSelf(t *testing.T, root string, names []string, want map[string]int) {
@@ -79,15 +79,16 @@ func TestModuleActorSelfSyncRefusalRestoresEnterProject(t *testing.T) {
 
 const actorCombatSelfScenario = `package handler
 import (
- "errors"
- "fmt"
- "testing"
- "MODULE/db"
- player "MODULE/game/entities/player"
- "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
- "github.com/tjbdwanghaibo/roost-core/framework/entity"
- "github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
- corecombat "github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
+	"MODULE/db"
+	"errors"
+	"fmt"
+	"testing"
+	player "MODULE/game/entities/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	corecombat "github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 )
 func TestGeneratedActorCombatSelfUsesOnlyPlayerDao(t *testing.T){
  f:=newActorFixture(t)

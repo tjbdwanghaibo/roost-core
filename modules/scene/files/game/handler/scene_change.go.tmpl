@@ -2,12 +2,14 @@ package handler
 
 import (
 	"fmt"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
 )
 
 // handlerSceneChange 的 areas 包含当前图与目标图，初次入场只有目标，离场只有当前图。

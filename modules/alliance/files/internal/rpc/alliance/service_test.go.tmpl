@@ -4,16 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
-
-	"{{MODULE}}/game/alliancerule"
-	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+
+	"{{MODULE}}/game/alliancerule"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 const homeSID int32 = 1000
@@ -81,6 +82,44 @@ func requireRejected(t *testing.T, what string, err error, want *errcode.IntErro
 // result — success or rejection — and runs nothing, even when running it again
 // would now give a different answer.
 func TestAllianceWriteReplaysItsReceipt(t *testing.T) {
+	// 只读入口仍经正式 Nest 持锁；元数据不声明写事务的回滚和刷盘策略。
+	{
+		raw, err := os.ReadFile("../../../game/handler/alliance_info_nest_gen.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "invokeAllianceInfo, nest.HandlerMeta{})") {
+			t.Fatal("AllianceInfo read-only metadata regressed")
+		}
+	}
+	{
+		raw, err := os.ReadFile("../../../game/handler/alliance_info_nest_gen.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "invokeAllianceReceipt, nest.HandlerMeta{})") {
+			t.Fatal("AllianceReceipt read-only metadata regressed")
+		}
+	}
+	{
+		raw, err := os.ReadFile("../../../game/handler/alliance_guard_nest_gen.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "invokeGuardInfo, nest.HandlerMeta{})") {
+			t.Fatal("GuardInfo read-only metadata regressed")
+		}
+	}
+	{
+		raw, err := os.ReadFile("../../../game/handler/alliance_guard_nest_gen.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "invokeGuardReceipt, nest.HandlerMeta{})") {
+			t.Fatal("GuardReceipt read-only metadata regressed")
+		}
+	}
+
 	c := newCluster(t, defaultRules(), 3000)
 	client := c.client()
 	allianceID := found(t, c, 3000, "found", 100, false)

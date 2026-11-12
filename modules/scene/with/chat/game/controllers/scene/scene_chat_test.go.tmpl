@@ -3,17 +3,19 @@ package scene
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
-	"testing"
-	chatcontroller "{{MODULE}}/game/controllers/chat"
-	player "{{MODULE}}/game/entities/player"
+
 	"{{MODULE}}/game/handler"
 	"{{MODULE}}/game/playeraccess"
-	gamescene "{{MODULE}}/game/scene"
-	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	chatcontroller "{{MODULE}}/game/controllers/chat"
+	gamescene "{{MODULE}}/game/scene"
+	player "{{MODULE}}/game/entities/player"
 )
 
 type sceneChatTransport struct {

@@ -4,25 +4,27 @@
 
 ## 能力
 
-- **客户端协议**（`protocol/def/team.go`，六条，应答都是 `TeamResponse{Code, Reason, Info}`，`Info` 是 `TeamView{TeamID, Leader, Revision, Members}`）
+- **客户端协议**（`protocol/def/team.go`，七个请求加一个推送；原六个请求的应答是 `TeamResponse{Code, Reason, Info}`，`Info` 是 `TeamView{TeamID, Leader, Revision, Members}`）
   - `TeamCreate`（`TeamCreateRequest{}`）：自己当队长建一支队。已经在队伍里时返回现有队伍，不再建。
   - `TeamInvite`（`TeamInviteRequest{Invitee}`）：队长邀请一名玩家，`Invitee` 是玩家号。
   - `TeamAccept`（`TeamAcceptRequest{TeamID}`）：被邀请的人入队，`TeamID` 是完整实体号。
   - `TeamLeave`（`TeamLeaveRequest{}`）：离队。队长离队时队长交给玩家号最小的成员；最后一人离开后队伍留下一个空壳，号不复用。
   - `TeamDisband`（`TeamDisbandRequest{}`）：队长解散队伍，清空成员与邀请。
   - `TeamInfo`（`TeamInfoRequest{}`）：读自己所在的队伍。
-  - 操作人与所在服的 sid 都来自认证会话和本服务配置，客户端不能指定。没有推送协议。
+  - `TeamInvites`：查本人收件记录中的有效邀请，最多 64 条；逐条经 Nest 核对共享 Team 权威，过滤已过期、已解散、已满员、匹配冻结的邀请。一次权威查询失败就返回错误码，不伪装完整列表。
+  - `TeamInvited`：邀请提交后，向本进程在线的被邀请人推送 `{TeamID, Inviter, ExpireAtUnixMilli}`，先记有界收件记录；推送失败不撤销权威邀请。
+  - 操作人与所在服的 sid 都来自认证会话和本服务配置，客户端不能指定。
 - **服务端入口**
   - 组件 `TeamComponent`（`game/entities/player/team_component.go`，经 `ITeamEntity` 的 `TeamComp()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
   - Team 实体（`game/entities/team/entity.go` 与 `roster.go`）：`Info() Snapshot`（`Snapshot{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
   - Nest handler（`game/handler/`）：`handlerPlayerTeam`（只读本人的队伍号：`sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`）、`handlerTeamCreate`、`handlerTeamInvite`、`handlerTeamAccept`、`handlerTeamLeave`、`handlerTeamInfo`（后五个都是 `[Team, Player]` 两个实体的事务，`rollback=undo durability=strict`，例如 `sender.NewTeamCreateSender(client).MultiSync_TeamCreate(ctx, teamEntityID, playerEntityID, sid)`）。
-  - Controller（`game/controllers/team/`）：六个 `HandleTeam…` 端点；`FromRegistry` 里的建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
+  - Controller（`game/controllers/team/`）：七个 `HandleTeam…` 端点；`FromRegistry` 里的建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
 - **登记点**（都在 `game/entities/player/`，只在 `init` 登记，空名、nil、重名 panic，按名字排序执行）
   - `OnTeamJoining(name, check func(*Player) error)`（`team_component.go`）：建队与入队的事务内准入检查。返回错误就拒绝这次入队。回调不能做 I/O。
   - `OnTeamChanged(name, hook func(*Player, TeamChange) error)`（`team_changed.go`）：队伍关系变化时调用，`TeamChange{Before, After, Refresh}`；`Refresh` 为真表示只是当前玩家核对了一次（`TeamInfo` 等），不是名单变了。在同一笔事务里，回调出错整笔回滚；回调里不能做 I/O，要发通知得用提交后的机制。
 - **状态**（`db/def/team.go`）
   - `TeamDao`（集合 `team`，主库）：`Leader`、`Members`（玩家号 → 所在服 sid）、`Invites`（玩家号 → 过期时刻）、`MatchKey`、`Revision`。只落库。
-  - `PlayerDao.Team`（`TeamState{TeamID}`）：只落库、不同步。客户端要知道自己的队伍得发 `TeamInfo`。
+  - `PlayerDao.Team`（`TeamState{TeamID, Invited}`）：只落库、不同步。客户端查自己的队伍用 `TeamInfo`，查邀请用 `TeamInvites`；`Invited` 只用于发现，不是接受邀请的权威。
 - **配置**：没有配置表。规则是 `game/entities/team/roster.go` 里的三个常量，归工程所有：`MaxMembers = 8`、`MaxInvites = 64`、`InviteMillis = 60000`（邀请 60 秒有效）。
 - **错误码**（`internal/errors/team.go`）：`team_invalid`、`team_missing`（不在这支队伍 / 队伍不存在）、`team_exists`（已经在别的队伍）、`team_not_leader`、`team_not_invited`（没被邀请或邀请已过期）、`team_full`、`team_invites_full`、`team_blocked`（队伍正在匹配中被冻结、与换服互斥等）。
 
@@ -30,7 +32,8 @@
 
 ## 能力边界
 
-- **不做的事**：不通知任何人——被邀请的人不会收到邀请、成员不会收到名单变化，都要靠客户端查 `TeamInfo` 或工程自己加通知（被邀请者也得从别处拿到 `TeamID`）；没有踢人、没有主动转让队长、没有申请入队、没有拒绝邀请；不做匹配、匹配房、队友视野或队伍聊天。
+- **通知范围**：当前只给本进程在线的被邀请人记录收件箱并推送；离线或连在其他 game 的玩家，Team 上的邀请仍有效，但不会自动送达其收件箱。尚无跨服投递、离线补发或成员变化推送。记录提交或推送失败只记 Debug，调用方邀请已经成交；重试邀请可再次告知，可能重复推送，客户端按 TeamID 合并。
+- **不做的事**：没有踢人、主动转让队长、申请入队、拒绝邀请、队伍聊天。查询不预留席位，接受时仍须核对 Team 当前权威。
 - **数量上限**：一支队至多 8 人；同时有效的邀请至多 64 份（过期的邀请在下一次邀请时清掉）；邀请 60 秒后过期，恰好到期那一刻就算过期。邀请不占座位，接受时才检查容量。一名玩家同一时刻只能在一支队伍里。
 - **一致性**
   - 建队、入队、离队、解散都在一笔 `[Team, Player]` 事务里：成员表的变化与操作者本人的引用一起提交或回滚。
@@ -42,7 +45,7 @@
 
 ## 复用方式
 
-- **需求正好是它**：`roost module add team`。新工程通常先装 enter（要鉴权再装 login），通过 `EnterGame` 建好 Player 后再请求这六个端点。流程：`TeamCreate` → 队长 `TeamInvite` → 被邀请方 `TeamAccept`；其他成员操作前先 `TeamInfo`。
+- **需求正好是它**：`roost module add team`。新工程通常先装 enter（要鉴权再装 login），通过 `EnterGame` 建好 Player 后再请求这些端点。流程：`TeamCreate` → 队长 `TeamInvite` → 被邀请方接收 `TeamInvited` 或查询 `TeamInvites` → `TeamAccept`；其他成员操作前先 `TeamInfo`。
 - **需求多一点**
   - 改人数、邀请数、邀请时长：改 `game/entities/team/roster.go` 顶部的三个常量。
   - 加入队条件（等级、冷却、正在副本里不能入队）：`init` 里登记 `OnTeamJoining`。
@@ -63,7 +66,8 @@
 
 ## 验证范围
 
-- `roost module verify team`：27 条场景（`^TestTeam`，包 `./game/handler` 22 条、`./game/controllers/team` 5 条）。覆盖：建队与入队同一笔事务、准入失败回滚建队与双方成员、同一条提交记录同时含 Remote 的变化与 Player 的变化、重复接受与重复建队不改事实、必须有邀请、邀请恰好到期即失效、只有队长能邀请与解散、容量在接受时检查、邀请有界且可续期、过期邀请释放名额、队长交给最小号成员、最后一人离开留下不可复用的空壳、解散后其他人的引用在读权威时清除、不能加入第二支队、快照自有集合、并发接受被串行化、离队 / 解散被拒时双方恢复、非法 sid、外人不能读或改名单、投影钩子失败整笔回滚；端点要求已认证玩家、拒绝空请求、拒绝错误类型的实体号与非法被邀请人、Controller 使用实体运行时的 lifecycle。
+- `roost module verify team`：35 条场景（`^TestTeam`，包 `./game/handler` 28 条、`./game/controllers/team` 7 条）。覆盖：建队与入队同一笔事务、准入失败回滚建队与双方成员、同一条提交记录同时含 Remote 的变化与 Player 的变化、重复接受与重复建队不改事实、必须有邀请、邀请恰好到期即失效、只有队长能邀请与解散、容量在接受时检查、邀请有界且可续期、过期邀请释放名额、队长交给最小号成员、最后一人离开留下不可复用的空壳、解散后其他人的引用在读权威时清除、不能加入第二支队、快照自有集合、并发接受被串行化、离队 / 解散被拒时双方恢复、非法 sid、外人不能读或改名单、投影钩子失败整笔回滚；端点要求已认证玩家、拒绝空请求、拒绝错误类型的实体号与非法被邀请人、Controller 使用实体运行时的 lifecycle。
+- 新增覆盖：收件记录的回滚、过期、容量与迟到告知；入队同事务清收件记录；查询过滤权威已失效邀请；在线推送失败不改变邀请，离线不冷加载。
 - rehome 联动另有 2 条（`^TestWithTeamRehome`）。
 - 这些是离线场景：真实的 Nest 引擎与生成的 DAO / Sender；提交器、Remote 的外部锁与权威回执是进程内的内存替身。不能据此说跨进程的持久化已经验收：真实 Mongo / Redis / NATS、独立 Gate、多个 game 进程同时操作一支队伍都没有跑过。
 - 仓库侧的安装验收是 `codegen/internal/roost` 里的 `TestModuleTeamGenerated`（含缺少 remote_entity 时自动补齐、重复安装不改文件）。

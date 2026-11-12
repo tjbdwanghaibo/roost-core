@@ -110,7 +110,7 @@
 - 场景是离线的。真实的部分：每个实例的 Nest 引擎、生成的 Sender 与分发、handler 与实体规则、生成的路由 RPC 客户端与服务端处理（路由检查、一次改投）。替身的部分：进程内的测试总线、内存的 Remote 所有权表与提交器；Saga 场景里没有真实的协调器，用例按协调器的顺序逐步调用步骤函数，联盟服务一侧是桩。
 - 覆盖：一人一盟（单实例与跨实例）、守卫并发创建只有一个属主、预约期限由联盟裁决、建盟在另一实例重试不产生第二个联盟、同实例宣战一笔事务与跨实例最终双侧、路由检查先于 Nest、写错误映射成四种应答、所有权迁移、守卫的各种丢失后修复、通知地址的条件更新、回执重放、权限、成员上限、奖励每周期一次与撤销、原生步骤每次操作只生效一次、建盟被拒退费、发奖被拒撤销标记、归属准入、成员通知到达在线成员、进入对账的四种情况、展示副本落库；最后一名成员（盟主）退出即解散（同实例与守卫在另一实例两种、有成员时仍拒绝、解散后一律 `alliance_missing`、申请清空、号不再被建成联盟、原盟主可再建盟）；八个端点场景（建盟两条、加入、读联盟、申请只转交且不动展示副本、四个盟主操作只转交并原样带回服务的拒绝、名单里申请人只给盟主、退出成功才清展示副本）；`alliance.stop_founding` 只退出建盟的队列组、可重复执行、路由 RPC 仍到达属主。
 - `internal/service/alliance` 的 `TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances` 有两种跑法：设了 `ROOST_DATAENGINE_IT_NATS_URL` 时在真实 NATS 上跑（`scripts/test-demo-generated.sh` 的入口）；没设时同一套步骤跑在进程内的队列组替身上，不跳过——`roost module verify` 走的是后一种，验证的是模块自己的部分（命令退出的是哪个方法的队列组、重复执行、生成的客户端与 handler），队列组本身的行为这时是替身的，不是 NATS 的。
-- 没有验证：真实的双进程持久运行、真实的 Mongo / Redis / NATS（上一条的真实 NATS 跑法除外）、经 TCP 的客户端链路、换服时强杀进程；申请 / 审批 / 踢人 / 转让 / 解散没有“真实联盟服务 + game 端点”连在一起的场景（服务侧规则与端点转交分别验证）。验收记录见 [证据](../../docs/maintenance/evidence/module-alliance-20261112/README.md)。
+- 2026-11-12 补充真实单机进程验收：独立 account / game / alliance，真实 Mongo 副本集、Redis、NATS JetStream、etcd；两个账号经 Portal + TCP 新建进入，完成建盟 Saga、申请、拒绝、重新申请、批准、成员名单、转让、踢人、末位盟主退出解散。见[本轮修复证据](../../docs/maintenance/evidence/module-fixes-20261112/README.md)。未验证多实例故障、跨机、独立 Gate、强杀恢复与容量；较早离线证据见[模块初始验收](../../docs/maintenance/evidence/module-alliance-20261112/README.md)。
 
 ## 权威与调用链
 
@@ -133,3 +133,5 @@
 安装器在一次模块写入里新增 `services.alliance`、`uses_rpcs`、实体生命周期、Saga 定义和 `Player` 的原生回执；生成失败时恢复这些文件，重复安装不改工程。已有的只读 `remote_mirror` 升级为 `remote_entity` 时去掉重复的 Mod，其他服务的读能力保留。
 
 game-demo 只把规则里的货币道具覆盖成它已有的道具 9001，并在 `internal/service/game/alliance.go` 里先发布自己的归属适配、再手动启动模块的运行期入口（demo 的工程清单关闭了这个模块的自动启动，避免启动两份消费者）。模块没有为旧的 guild 接口、字段或旧生成工程保留兼容层。
+
+只读声明：AllianceInfo / AllianceReceipt / GuardInfo / GuardReceipt 使用 `//roost:nest durability=memory`，仍在正式 Nest 实体锁内执行，不取持久状态回滚快照、不写 WAL。裸 `//roost:nest` 的默认值是 state / async，不能与 memory 混同；带状态推进、回执写入或引用校正的入口保持写事务声明。

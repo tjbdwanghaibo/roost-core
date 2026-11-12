@@ -2,17 +2,19 @@ package scene
 
 import (
 	"fmt"
+	"log/slog"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	"log/slog"
-	player "{{MODULE}}/game/entities/player"
-	sender "{{MODULE}}/game/handler/syncsender"
+
 	"{{MODULE}}/game/playeraccess"
-	scenes "{{MODULE}}/game/scene/service"
 	"{{MODULE}}/protocol/pb"
+	player "{{MODULE}}/game/entities/player"
+	scenes "{{MODULE}}/game/scene/service"
+	sender "{{MODULE}}/game/handler/syncsender"
 )
 
 type Controller struct {

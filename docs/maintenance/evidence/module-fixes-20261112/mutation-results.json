@@ -1,0 +1,282 @@
+[
+  {
+    "name": "scene-refusal",
+    "project": "world",
+    "file": "game/controllers/scene/controller.go",
+    "test": "^TestScene",
+    "status": "killed",
+    "failing_tests": [
+      "TestSceneRefusesStaleFromWithoutChangingPosition",
+      "TestSceneCannotCreateAClientChosenMap",
+      "TestSceneCapacityRejectsWithoutEvictingSource",
+      "TestSceneCodedCallbackRefusalIsAnsweredAndRolledBack",
+      "TestSceneRefusalCodesAreDistinctBusinessCodes",
+      "TestSceneInteractionIsOncePerContinuousSequence",
+      "TestSceneInteractionCannotReachAnotherSceneOrDistantObject",
+      "TestSceneStopRetriesRejectedEvacuation"
+    ]
+  },
+  {
+    "name": "actor-refusal",
+    "project": "world",
+    "file": "game/handler/actor_move.go",
+    "test": "^TestActorMoveRefusals",
+    "status": "killed",
+    "failing_tests": [
+      "TestActorMoveRefusalsAnswerBusinessCodesWithoutErrorLogs"
+    ]
+  },
+  {
+    "name": "monster-refusal",
+    "project": "world",
+    "file": "game/handler/monster_inspect.go",
+    "test": "^TestMonsterInspectRefusals",
+    "status": "killed",
+    "failing_tests": [
+      "TestMonsterInspectRefusalsCarryBusinessCodes"
+    ]
+  },
+  {
+    "name": "terrain-recovery",
+    "project": "world",
+    "file": "game/terrain/world.go",
+    "test": "^TestTerrainRecovery",
+    "status": "killed",
+    "failing_tests": [
+      "TestTerrainRecoveryOldCompletionKeepsNewFailure"
+    ]
+  },
+  {
+    "name": "activity-enter-id",
+    "project": "alliance",
+    "file": "game/controllers/activity/activity_enter.go",
+    "test": "^TestWithActivityEnterHook",
+    "status": "killed",
+    "failing_tests": [
+      "TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer"
+    ]
+  },
+  {
+    "name": "activity-created-ms",
+    "project": "alliance",
+    "file": "game/entities/alliance/activity_component.go",
+    "test": "^TestAllianceActivityCreatedTrigger",
+    "status": "killed",
+    "failing_tests": [
+      "TestAllianceActivityCreatedTriggerStartsFromTheFoundingTime"
+    ]
+  },
+  {
+    "name": "alliance-last-leader",
+    "project": "alliance",
+    "file": "game/entities/alliance/roster_component.go",
+    "test": "^TestAllianceLastMemberLeader",
+    "status": "killed",
+    "failing_tests": [
+      "TestAllianceLastMemberLeaderLeavingDisbandsTheAlliance"
+    ]
+  },
+  {
+    "name": "alliance-roster-privacy",
+    "project": "alliance",
+    "file": "game/controllers/alliance/alliance_manage.go",
+    "test": "^TestAllianceRosterShowsApplicants",
+    "status": "killed",
+    "failing_tests": [
+      "TestAllianceRosterShowsApplicantsOnlyToTheLeader"
+    ]
+  },
+  {
+    "name": "friends-own-offline",
+    "project": "social",
+    "file": "game/controllers/friends/friends_change.go",
+    "test": "^TestFriendsEndpointOwnSide",
+    "status": "killed",
+    "failing_tests": [
+      "TestFriendsEndpointOwnSideActionsWorkWhilePeerIsOffline"
+    ]
+  },
+  {
+    "name": "friends-ownership",
+    "project": "social",
+    "file": "game/controllers/friends/friends_change.go",
+    "test": "^TestFriendsEndpointRemoveAndBlock",
+    "status": "killed",
+    "failing_tests": [
+      "TestFriendsEndpointRemoveAndBlockRequirePeerOwnership"
+    ]
+  },
+  {
+    "name": "equipment-relevel",
+    "project": "social",
+    "file": "game/entities/player/equipment_component.go",
+    "test": "^TestEquipmentRelevel",
+    "status": "killed",
+    "failing_tests": [
+      "TestEquipmentRelevelSameItemLeavesBagAlone",
+      "TestEquipmentRelevelRunsChangedHooks"
+    ]
+  },
+  {
+    "name": "dungeon-enemy-rule",
+    "project": "social",
+    "file": "game/entities/dungeon/run.go",
+    "test": "^TestDungeonNewEnemyOnlyNeeds",
+    "status": "killed",
+    "failing_tests": [
+      "TestDungeonNewEnemyOnlyNeedsTheRulesFile"
+    ]
+  },
+  {
+    "name": "team-query-authority",
+    "project": "social",
+    "file": "game/controllers/team/team_invited.go",
+    "test": "^TestTeamEndpointInvitationQuery",
+    "status": "killed",
+    "failing_tests": [
+      "TestTeamEndpointInvitationQueryChecksAuthority"
+    ]
+  },
+  {
+    "name": "team-late-notice",
+    "project": "social",
+    "file": "game/entities/player/team_component.go",
+    "test": "^TestTeamLateInviteNotice",
+    "status": "killed",
+    "failing_tests": [
+      "TestTeamLateInviteNoticeDoesNotShortenRenewal"
+    ]
+  },
+  {
+    "name": "team-push",
+    "project": "social",
+    "file": "game/controllers/team/team_invited.go",
+    "test": "^TestTeamEndpointInvitationNotice",
+    "status": "killed",
+    "failing_tests": [
+      "TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority"
+    ]
+  },
+  {
+    "name": "combat-revive",
+    "project": "world",
+    "file": "game/entities/player/combat_component.go",
+    "test": "^TestCombat(LeaveRestores|RejectedLeave)",
+    "status": "killed",
+    "failing_tests": [
+      "TestCombatLeaveRestoresHealthAfterDefeat",
+      "TestCombatRejectedLeaveKeepsDefeatUntilRetry"
+    ]
+  },
+  {
+    "name": "combat-skillbook",
+    "project": "world",
+    "file": "game/skillbook/combat_environment.go",
+    "test": "^TestWithCombatSkillbook",
+    "status": "killed",
+    "failing_tests": [
+      "TestWithCombatSkillbookUsesCompiledStatusPolicy"
+    ]
+  },
+  {
+    "name": "notice-audit",
+    "project": "misc",
+    "file": "game/gm/gm.go",
+    "test": "^TestWithNoticeGMRequires",
+    "status": "killed",
+    "failing_tests": [
+      "TestWithNoticeGMRequiresOperatorAndNote"
+    ]
+  },
+  {
+    "name": "notice-audit-success",
+    "project": "misc",
+    "file": "game/gm/gm.go",
+    "test": "^TestWithNoticeGMPublishes",
+    "status": "killed",
+    "failing_tests": [
+      "TestWithNoticeGMPublishesThroughAudit"
+    ]
+  },
+  {
+    "name": "readonly-attribute_get",
+    "project": "social",
+    "file": "game/handler/attribute_get_nest_gen.go",
+    "test": "^TestAttributeGetIsDeclaredReadOnly$",
+    "status": "killed",
+    "failing_tests": [
+      "TestAttributeGetIsDeclaredReadOnly"
+    ]
+  },
+  {
+    "name": "readonly-match_state",
+    "project": "social",
+    "file": "game/handler/match_state_nest_gen.go",
+    "test": "^TestMatchmakingReadOnlyHandlersAreDeclaredReadOnly$",
+    "status": "killed",
+    "failing_tests": [
+      "TestMatchmakingReadOnlyHandlersAreDeclaredReadOnly"
+    ]
+  },
+  {
+    "name": "terrain-refusal",
+    "project": "world",
+    "file": "game/terrain/rules.go",
+    "test": "^TestTerrainEndpointsAnswer",
+    "status": "killed",
+    "failing_tests": [
+      "TestTerrainEndpointsAnswerEachRefusalWithItsOwnCode"
+    ]
+  },
+  {
+    "name": "wallet-error-text",
+    "project": "misc",
+    "file": "internal/errors/wallet.go",
+    "test": "^TestWallet",
+    "status": "killed",
+    "failing_tests": [
+      "TestWalletApplyRefusesKeysThatCannotBeStored"
+    ]
+  },
+  {
+    "name": "leaderboard-max",
+    "status": "killed",
+    "project": "misc",
+    "file": "game/leaderboard/leaderboard.go",
+    "test": "^TestLeaderboard(RepeatedAndStale|EqualTotals)",
+    "failing_tests": [
+      "TestLeaderboardRepeatedAndStaleSubmitsNeverMoveTheBoard",
+      "TestLeaderboardEqualTotalsRankWhoeverGotThereFirst"
+    ]
+  },
+  {
+    "name": "readonly-room",
+    "status": "killed",
+    "project": "social-final",
+    "file": "game/handler/room_view_nest_gen.go",
+    "test": "^TestRoomViewIsMembersOnlyAndDetached$",
+    "failing_tests": [
+      "TestRoomViewIsMembersOnlyAndDetached"
+    ]
+  },
+  {
+    "name": "readonly-alliance",
+    "status": "killed",
+    "project": "alliance-final",
+    "file": "game/handler/alliance_info_nest_gen.go",
+    "test": "^TestAllianceWriteReplaysItsReceipt$",
+    "failing_tests": [
+      "TestAllianceWriteReplaysItsReceipt"
+    ]
+  },
+  {
+    "name": "readonly-turn",
+    "status": "killed",
+    "project": "turn-clean",
+    "file": "game/handler/turn_view_nest_gen.go",
+    "test": "^TestTurnLateJoinCanViewButCannotAct$",
+    "failing_tests": [
+      "TestTurnLateJoinCanViewButCannotAct"
+    ]
+  }
+]

@@ -1,0 +1,14 @@
+PASS login + TCP + EnterCreate + EnterGame player=100001
+PASS login + TCP + EnterCreate + EnterGame player=100002
+GM response: map[data:map[count:100 entity_id:1.02401029e+08 item_id:1003 player_id:100001] ended_at:1.794497222018e+12 name:gm.player.add_item ok:true started_at:1.79449722201e+12 trace_id:accept-1794497222007075000]
+PASS FoundAlliance alliance=0 version=0 members=0
+PASS ApplyAlliance alliance=1 version=2 members=1
+PASS AllianceRoster leader sees applicant
+PASS RejectAllianceApply alliance=1 version=3 members=1
+PASS ApplyAlliance alliance=1 version=4 members=1
+PASS ApproveAllianceApply alliance=1 version=5 members=2
+PASS AllianceRoster member sees two members and no applicants
+PASS TransferAllianceLeader alliance=1 version=6 members=2
+PASS KickAllianceMember new leader removes old leader
+PASS LeaveAlliance alliance=1 version=8 members=0
+PASS final leader leaves and disbands; network remained open

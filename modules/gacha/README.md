@@ -56,7 +56,7 @@
   - 应答里的 `Balance` 与 `Misses` 是成交时的快照；最新值以客户端的自身同步视图为准。
 - **背包空间的检查是保守的：** 抽样之前按“每种候选道具都可能来 `Count` 个、可能新增 `min(Count, 未持有的候选种类数)` 个种类”检查，含权重为 0 的保底项。因此可能拒绝一次实际放得下的抽卡；这样做是为了不让玩家靠塞满背包、利用“失败不扣费”反复重抽。
 - **配置热更：** 新配置对下一次新的抽卡生效，一次十连用同一份快照，旧回执不重算。
-- **前提：** 依赖 wallet、bag、nest Mod 与 configdata。只操作一个 Player。模块自己不打开玩家接入与自身视图同步（不装 enter 时见 KNOWN-LIMITS 的“不装 enter 时安装不打开客户端同步”），与 wallet、checkin、stamina 等同类模块一致：`GachaDraw` 不靠自身视图也能用（请求键由客户端生成，应答带回花费、余额、道具与保底抽数），同步下来的 `Gacha` 只是让客户端随时看到最新的保底抽数；要它就装 enter，或按 KNOWN-LIMITS 那一条自己打开。
+- **前提：** 依赖清单声明的业务模块与 Nest/configdata。单装即代办玩家 TCP 和自身同步（`access: {transport: tcp, self_sync: true}`），可读取穿戴、背包或保底的初始全量及后续变化；不依赖 enter 顺带打开。真正连入仍须实现认证器（或装 login）、启用 player-tcp 配置并创建 Player。已有自建 Sync Manager 的工程按 `--no-self-sync` 的正式接法装配，不能同时创建两个 Manager。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 里没有单独的 gacha 条目；通用的模块边界见“业务模块目录”“模块的规则大多还是 Go 写的业务文件”。
 
 ## 复用方式

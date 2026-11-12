@@ -72,6 +72,7 @@ func TestNoticeReportsPublishFailure(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
 // 没装 gm 模块时本模块只有服务端入口：启动不往运维命令表里登记任何命令（装了 gm 时由联动经 gm 的登记点提供）。
 func TestNoticeStartRegistersNoOpsCommandAndStopRejects(t *testing.T) {
 	registry := app.NewRegistry(viper.New())

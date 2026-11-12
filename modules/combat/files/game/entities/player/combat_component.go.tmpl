@@ -16,8 +16,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
 	"{{MODULE}}/game/actor"
-	gamecombat "{{MODULE}}/game/combat"
 	apperrors "{{MODULE}}/internal/errors"
+	gamecombat "{{MODULE}}/game/combat"
 )
 
 //roost:component type={{ID:component:Combat}}
@@ -315,7 +315,8 @@ func (c *CombatComponent) Tick(peer *CombatComponent, epoch uint64, now time.Tim
 	return err
 }
 
-// Leave 是投降/结束，不重置HP；冷却属于这一场会话，结束后丢弃。双方同意位清零，必须重新同意才能开下一场。
+// Leave 是投降/结束：双方恢复本场确认的满生命、清除护盾与控制，冷却随本场丢弃。
+// 同意位清零，必须重新同意才能开下一场；死亡后也可经此入口结束，不能靠重复 Ready 在战斗中回血。
 func (c *CombatComponent) Leave(peer *CombatComponent, seq int64) (CombatResult, error) {
 	if peer == nil {
 		return CombatResult{}, apperrors.ErrCombatInvalid
@@ -451,6 +452,9 @@ func (c *CombatComponent) end(peer *CombatComponent) {
 		for _, buff := range p.core.ActiveBuffs() {
 			p.core.RemoveBuff(buff.Instance)
 		}
+		vitals := p.core.Combatant()
+		vitals.Health, vitals.Shield, vitals.Alive = vitals.MaxHealth, 0, true
+		p.core.InitCombatant(vitals)
 		p.beat.Stop()
 		p.project()
 	}

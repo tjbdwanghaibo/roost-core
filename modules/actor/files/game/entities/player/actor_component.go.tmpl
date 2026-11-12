@@ -3,10 +3,12 @@ package player
 import (
 	"errors"
 	"fmt"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+
 	"{{MODULE}}/game/actor"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -46,6 +48,7 @@ func (component *ActorComponent) OnDestroy(entity.EntityDestroyReason) {
 		component.body.Close()
 	}
 }
+
 // MoveRefusal 把 Body.Walk / Follow 的正常拒绝换成带业务码的错误，必须在同一把实体锁内、紧接着失败的那次调用使用：
 // 不在空间里答 actor_not_placed，在空间里但被定身答 actor_rooted，路径点超限答 actor_path_too_long。
 // 原错误保留在链上（errors.Is(err, actor.ErrCannotMove) 仍成立）。别的错误原样返回，端点按内部错误处理并记日志。

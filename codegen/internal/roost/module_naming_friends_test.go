@@ -45,7 +45,7 @@ func TestModuleNamingFriendsInstallVerifyAndMutations(t *testing.T) {
 			t.Fatal("unexpected skip")
 		}
 	}
-	if counts["naming"] != 15 || counts["friends"] != 12 {
+	if counts["naming"] != 15 || counts["friends"] != 18 {
 		t.Fatalf("scenario counts: %v", counts)
 	}
 	if moduleProjectDigest(t, root) != before {

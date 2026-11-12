@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,10 +17,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	apperrors "{{MODULE}}/internal/errors"
 	db "{{MODULE}}/db"
 	room "{{MODULE}}/game/entities/room"
 	sender "{{MODULE}}/game/handler/syncsender"
-	apperrors "{{MODULE}}/internal/errors"
 )
 
 // 本模块独立的替身与场景，不依赖 room 的测试辅助函数。只验证事务与 BSON 恢复，不宣称 Mongo 落盘。
@@ -348,6 +351,15 @@ func TestTurnFinishesAtLimitAndReplaysLastCommand(t *testing.T) {
 	f.unchanged(t, before)
 }
 func TestTurnLateJoinCanViewButCannotAct(t *testing.T) {
+	// 只读快照仍经正式 Nest 持锁，显式 memory 避免无用的回滚快照。
+	raw, err := os.ReadFile("turn_view_nest_gen.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "invokeTurnView, nest.HandlerMeta{})") {
+		t.Fatal("TurnView read-only metadata regressed")
+	}
+
 	f := newTurnFixture(t, 2)
 	f.start(t, 8)
 	f.join(t, 103)

@@ -1,0 +1,239 @@
+package main
+
+import (
+	"{{MODULE}}/protocol/pb"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"gopkg.in/yaml.v3"
+	"net/http"
+	"os"
+	"time"
+)
+
+var ids = map[string]uint32{}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+func post(url string, v any, out any) {
+	raw, e := json.Marshal(v)
+	must(e)
+	req, e := http.NewRequest("POST", url, bytes.NewReader(raw))
+	must(e)
+	req.Header.Set("Content-Type", "application/json")
+	if url == "http://127.0.0.1:9100/admin/execute" {
+		req.Header.Set("X-Admin-Token", "dev-modulefix-admin")
+	}
+	resp, e := http.DefaultClient.Do(req)
+	must(e)
+	defer resp.Body.Close()
+	must(json.NewDecoder(resp.Body).Decode(out))
+}
+
+type client struct {
+	conn   transport.Conn
+	seq    uint32
+	player int64
+	ticket string
+}
+
+func (c *client) call(name string, raw []byte, e error) []byte {
+	must(e)
+	c.seq++
+	must(c.conn.WritePackets([]*transport.Packet{{MsgID: ids[name], Seq: c.seq, Payload: raw}}))
+	for {
+		p, e := c.conn.ReadPacket()
+		must(e)
+		if p.MsgID == ids[name] && p.Seq == c.seq {
+			return p.Payload
+		}
+	}
+}
+func (c *client) alliance(name string, raw []byte, e error) *pb.AllianceResponse {
+	v, e := pb.UnmarshalAllianceResponse(c.call(name, raw, e))
+	must(e)
+	if v.Code != 0 {
+		panic(fmt.Sprintf("%s: %+v", name, v))
+	}
+	fmt.Printf("PASS %s alliance=%d version=%d members=%d\n", name, v.AllianceID, v.Version, v.Members)
+	return v
+}
+func login(name string) *client {
+	var l struct {
+		OK            bool
+		AccountTicket string `json:"account_ticket"`
+		Code          any
+	}
+	post("http://127.0.0.1:8081/portal/login", map[string]any{"channel": "dev", "open_id": fmt.Sprintf("%s-%d", name, time.Now().UnixNano()), "credential": "dev-modulefix-local"}, &l)
+	if !l.OK {
+		panic(fmt.Sprintf("login refused %v", l.Code))
+	}
+	var en struct {
+		OK           bool
+		Ticket, Addr string
+	}
+	post("http://127.0.0.1:8081/portal/enter", map[string]any{"account_ticket": l.AccountTicket, "server_id": 1000}, &en)
+	if !en.OK {
+		panic("enter refused")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	conn, e := transport.DialPlayerTCP(ctx, transport.Config{Endpoint: en.Addr, DialTimeout: time.Second})
+	must(e)
+	context.AfterFunc(ctx, func() { _ = conn.Close(); cancel() })
+	c := &client{conn: conn, seq: 1, ticket: l.AccountTicket}
+	auth := transport.AuthPacket(en.Ticket)
+	auth.Seq = 1
+	must(conn.WritePackets([]*transport.Packet{auth}))
+	ack, e := conn.ReadPacket()
+	must(e)
+	if ack.MsgID != 0 || len(ack.Payload) != 0 {
+		panic("auth rejected")
+	}
+	for {
+		p, e := conn.ReadPacket()
+		must(e)
+		if p.MsgID == ids["EnterStatus"] {
+			v, e := pb.UnmarshalEnterStatusPush(p.Payload)
+			must(e)
+			if v.Code != 0 || !v.NeedCreate {
+				panic("unexpected enter status")
+			}
+			break
+		}
+	}
+	raw, e := pb.MarshalEnterCreateRequest(&pb.EnterCreateRequest{Name: name})
+	created, e := pb.UnmarshalEnterCreateResponse(c.call("EnterCreate", raw, e))
+	must(e)
+	if created.Code != 0 {
+		panic(created.Reason)
+	}
+	raw, e = pb.MarshalEnterGameRequest(&pb.EnterGameRequest{})
+	entered, e := pb.UnmarshalEnterGameResponse(c.call("EnterGame", raw, e))
+	must(e)
+	if entered.Code != 0 {
+		panic(entered.Reason)
+	}
+	var servers struct {
+		OK      bool
+		Servers []struct {
+			Role struct {
+				PlayerID int64 `json:"player_id"`
+			} `json:"role"`
+		}
+	}
+	post("http://127.0.0.1:8081/portal/servers", map[string]string{"account_ticket": l.AccountTicket}, &servers)
+	for _, s := range servers.Servers {
+		if s.Role.PlayerID != 0 {
+			c.player = s.Role.PlayerID
+			break
+		}
+	}
+	if c.player == 0 {
+		panic("no player id")
+	}
+	fmt.Printf("PASS login + TCP + EnterCreate + EnterGame player=%d\n", c.player)
+	return c
+}
+func main() {
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(1)
+		}
+	}()
+	http.DefaultClient.Timeout = 10 * time.Second
+	raw, e := os.ReadFile("roost.yaml")
+	must(e)
+	var manifest struct {
+		Modules map[string]struct {
+			IDs struct {
+				Protocol map[string]uint32 `yaml:"protocol"`
+			} `yaml:"ids"`
+		} `yaml:"modules"`
+	}
+	must(yaml.Unmarshal(raw, &manifest))
+	for _, m := range manifest.Modules {
+		for k, v := range m.IDs.Protocol {
+			ids[k] = v
+		}
+	}
+	a := login("FixLeader")
+	defer a.conn.Close()
+	b := login("FixMember")
+	defer b.conn.Close()
+	var gm map[string]any
+	post("http://127.0.0.1:9100/admin/execute", map[string]any{"name": "gm.player.add_item", "operator": "module-fixes", "trace_id": fmt.Sprintf("accept-%d", time.Now().UnixNano()), "payload": map[string]any{"player_id": a.player, "item_id": 1003, "count": 100, "note": "isolated module acceptance"}}, &gm)
+	fmt.Printf("GM response: %v\n", gm)
+	raw, e = pb.MarshalFoundAllianceRequest(&pb.FoundAllianceRequest{Name: fmt.Sprintf("Fix%d", time.Now().Unix()%100000), OpenJoin: false})
+	found := a.alliance("FoundAlliance", raw, e)
+	var allianceID int64
+	deadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, e = pb.MarshalAllianceOpStatusRequest(&pb.AllianceOpStatusRequest{Op: "found", SagaKey: found.SagaKey})
+		v, e := pb.UnmarshalAllianceOpStatusResponse(a.call("AllianceOpStatus", raw, e))
+		must(e)
+		if v.Code != 0 {
+			panic(v.Reason)
+		}
+		if v.Status == "completed" {
+			allianceID = v.AllianceID
+			break
+		}
+		if v.Status == "compensated" || v.Status == "failed" || v.Status == "manual_required" {
+			panic(fmt.Sprintf("found saga: %+v", v))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if allianceID == 0 {
+		panic("found saga timed out")
+	}
+	raw, e = pb.MarshalApplyAllianceRequest(&pb.ApplyAllianceRequest{AllianceID: allianceID})
+	applied := b.alliance("ApplyAlliance", raw, e)
+	raw, e = pb.MarshalAllianceRosterRequest(&pb.AllianceRosterRequest{AllianceID: allianceID, MinVersion: applied.Version})
+	roster, e := pb.UnmarshalAllianceRosterResponse(a.call("AllianceRoster", raw, e))
+	must(e)
+	if roster.Code != 0 || len(roster.Applicants) != 1 || roster.Applicants[0] != b.player {
+		panic(fmt.Sprintf("leader roster %+v", roster))
+	}
+	fmt.Println("PASS AllianceRoster leader sees applicant")
+	raw, e = pb.MarshalRejectAllianceApplyRequest(&pb.RejectAllianceApplyRequest{PlayerID: b.player})
+	a.alliance("RejectAllianceApply", raw, e)
+	raw, e = pb.MarshalApplyAllianceRequest(&pb.ApplyAllianceRequest{AllianceID: allianceID})
+	b.alliance("ApplyAlliance", raw, e)
+	raw, e = pb.MarshalApproveAllianceApplyRequest(&pb.ApproveAllianceApplyRequest{PlayerID: b.player})
+	approved := a.alliance("ApproveAllianceApply", raw, e)
+	raw, e = pb.MarshalAllianceRosterRequest(&pb.AllianceRosterRequest{AllianceID: allianceID, MinVersion: approved.Version})
+	roster, e = pb.UnmarshalAllianceRosterResponse(b.call("AllianceRoster", raw, e))
+	must(e)
+	if roster.Code != 0 || len(roster.Members) != 2 || len(roster.Applicants) != 0 {
+		panic(fmt.Sprintf("member roster %+v", roster))
+	}
+	fmt.Println("PASS AllianceRoster member sees two members and no applicants")
+	raw, e = pb.MarshalTransferAllianceLeaderRequest(&pb.TransferAllianceLeaderRequest{PlayerID: b.player})
+	a.alliance("TransferAllianceLeader", raw, e)
+	raw, e = pb.MarshalKickAllianceMemberRequest(&pb.KickAllianceMemberRequest{PlayerID: a.player})
+	var kicked *pb.AllianceResponse
+	for n := 0; n < 30; n++ {
+		kicked, e = pb.UnmarshalAllianceResponse(b.call("KickAllianceMember", raw, e))
+		must(e)
+		if kicked.Code == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if kicked.Code != 0 {
+		panic(fmt.Sprintf("kick %+v", kicked))
+	}
+	fmt.Println("PASS KickAllianceMember new leader removes old leader")
+	raw, e = pb.MarshalLeaveAllianceRequest(&pb.LeaveAllianceRequest{})
+	left := b.alliance("LeaveAlliance", raw, e)
+	if left.Members != 0 {
+		panic("last leader did not disband")
+	}
+	fmt.Println("PASS final leader leaves and disbands; network remained open")
+}

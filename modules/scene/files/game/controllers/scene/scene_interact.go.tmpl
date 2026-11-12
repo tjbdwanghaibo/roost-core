@@ -2,12 +2,14 @@ package scene
 
 import (
 	"fmt"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
 )
 
 // HandleSceneInteract 与 HandleSceneChange 同一个规矩：业务拒绝答在应答的 Code / Reason 里、连接保留，

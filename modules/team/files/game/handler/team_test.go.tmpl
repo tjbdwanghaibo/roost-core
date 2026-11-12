@@ -12,16 +12,16 @@ import (
 	"testing"
 	"time"
 
-	apperrors "{{MODULE}}/internal/errors"
-	player "{{MODULE}}/game/entities/player"
-	sender "{{MODULE}}/game/handler/syncsender"
-	team "{{MODULE}}/game/entities/team"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	team "{{MODULE}}/game/entities/team"
 )
 
 type teamGetter map[int64]entity.IThreadSafeEntity

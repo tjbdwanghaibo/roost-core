@@ -22,13 +22,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	logic "{{MODULE}}/game/dungeon"
-	runentity "{{MODULE}}/game/entities/dungeon"
-	player "{{MODULE}}/game/entities/player"
+
 	"{{MODULE}}/game/handler"
 	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	logic "{{MODULE}}/game/dungeon"
+	player "{{MODULE}}/game/entities/player"
+	runentity "{{MODULE}}/game/entities/dungeon"
 )
 
 const dungeonNow int64 = 1900000000
@@ -596,6 +597,7 @@ func TestDungeonPBEndpointsAndDeadlineCannotSupplySuccess(t *testing.T) {
 	}
 	f.assertPlayer(t, 1, 1)
 }
+
 // dungeonScenarioEnemy 是“这份规则认识的一种敌人”：缺省取缺省规则里的 minion；
 // TestDungeonNewEnemyOnlyNeedsTheRulesFile 换一份规则文件重跑时用环境变量指到新加的敌人上。
 func dungeonScenarioEnemy() string {

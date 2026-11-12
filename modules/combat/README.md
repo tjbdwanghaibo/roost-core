@@ -38,12 +38,14 @@
 
 **日志**：准备 / 离开确认记 Info；combat_boundary 与未知内部失败记 Error，后台推进同样记录异常；施法、伤害和每拍成功推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/combat/runtime.go`, `game/controllers/combat/combat_cast.go`, `game/controllers/combat/combat_leave.go`, `game/controllers/combat/combat_ready.go`, `game/controllers/combat/combat_step.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
+结束规则：死亡状态保留到显式 `CombatLeave` 或场景结束；结束时双方恢复到各自已确认的最大生命、护盾清零，清除控制、冷却与施法状态。双方须重新 Ready 才能再战。恢复和会话清理在同一事务中，提交拒绝时全部回滚；重复 Ready 不能用于会话内回血。新增死亡后结束、拒交后重试两条场景。
+
 ## 能力边界
 
 - **不做的事**
   - 不是多人战斗：会话固定两人，绑定期间第三人的施法答 `combat_busy`。不支持怪物参战。
   - 不判定胜负、不发奖励、不记战绩。一方死亡后会话并不自动结束：之后的施法答 `combat_dead`，要有人发 `CombatLeave` 或双方不在同一空间才结束。
-  - 不补血、不复活：生命只在玩家第一次同意时按当时的最大生命初始化一次；死亡的玩家再同意会答 `combat_dead`。模块没有提供恢复生命的入口，工程要自己在会话之外设计。
+
   - 技能宿主只支持“对已声明的两名参与者读属性、读位置、造成战斗效果与加状态”。范围选择、召唤物、投射物、持久技能变量都明确返回不支持（`ErrUnsupported`），不伪造命中。
   - 不跟随 `scene` 的时间倍速：战斗用服务端墙钟，1 拍 50 毫秒。
 - **数量与大小**：施法距离 5000；一场会话同时至多 4 个进行中的施法、32 个排队任务；运行时检查点至多 512 KiB、宿主检查点至多 256 KiB，超过答 `combat_boundary`。后台推进队列容量 128，每场会话至多排 1 项，队满时等下一拍重试。
@@ -62,7 +64,7 @@
   - 改技能数值或加技能：改或新增 `game/skills/` 下的 JSON（技能由 `skillbook` 在服务启动时编译）。新技能用到的状态要在技能编译环境里登记，写法见本模块的 `with/skillbook` 联动文件。
   - 改施法距离、拍长：改 `combat_component.go` 的 `CombatRange`、`CombatClock`。
   - 加胜负判定与奖励：在 `combat_component.go` 的 `run` 之后（`Cast` / `Step` / `Tick` 拿到结果处）检查 `Alive`，调用 `end` 并在同一笔事务里写自己的结算状态。
-  - 加回血或复活：在明确的会话边界（没有绑定对手时）经 `Core()` 重新初始化，不要在会话进行中绕过 `Host` 改生命或 Buff——下一拍的哈希校验会拒绝（`combat_boundary`）。
+
   - `game/combat/host.go` 的检查点格式与哈希校验不要改。
 - **别的模块 / 业务代码要用它**
   - 读战斗状态：持锁时读 `owner.Dao().GetCombat()`（是否在战斗 `GetOpponent() != 0`、生命、是否存活）。
@@ -71,14 +73,14 @@
 
 ## 联动
 
-- `combat` + `skillbook`（`with/skillbook/game/skillbook/combat_environment.go`）：经 `OnCompileEnvironment("combat", …)` 往技能编译环境里登记 `stun`、`silence` 两个状态；清单里这组联动没有声明场景。
+- `combat` + `skillbook`（`with/skillbook/game/skillbook/combat_environment.go`）：经 `OnCompileEnvironment("combat", …)` 往技能编译环境里登记 `stun`、`silence` 两个状态；另有 1 条正式目录、摘要校验、眩晕与到期释放的联动场景。
 - `combat` + `scene`（`with/scene/game/entities/player/combat_scene.go`）：经 `OnSceneFields("combat", "Combat")` 只把公开投影 `Combat` 开放给附近玩家，`CombatPrivate` 不公开。
 - `combat` + `equipment`（`with/equipment/`，只有场景测试）：验证真实换装只在下一拍进入战斗世界、换装提交被拒时保持原权威。
 - 别的模块没有 `with/combat`。
 
 ## 验证范围
 
-- `roost module verify combat`：36 个场景（`./game/handler`，`^TestCombat`）；与 `scene` 的联动另有 2 个场景（`./game/controllers/scene`），与 `equipment` 的联动另有 2 个场景（`./game/handler`）。
+- `roost module verify combat`：38 个场景（`./game/handler`，`^TestCombat`）；与 `scene` 的联动另有 2 个场景（`./game/controllers/scene`），与 `equipment` 的联动另有 2 个场景（`./game/handler`）。
 - 场景是离线的：真实生成的 PB、controller、Nest 与技能运行时；提交器是替身（`combatCommitter`，可注入拒绝与阻塞）。
 - 覆盖：双方同意、伤害经两个 `CombatDAO`、原样重试不重复伤害、序号冲突与跳号、冷却随检查点恢复并按服务端时间到期、延迟技能按拍结算、提交被拒后绑定生命冷却回滚、眩晕驱动 `actor` 门控、Buff 到期、沉默拒绝施法、跨空间与超距拒绝、第三人不能加入、时钟回拨、绕过会话改生命或 Buff 被拒、属性变化下一拍生效、离开清理、附加 DAO 的登记与往返、协议使用会话身份并返回业务码、并发重放共用一份回执、未知技能不绑定、检查点损坏时拒绝、心跳队列驱动双实体推进、离开或切换空间取消施法与控制、重新加载后继续延迟技能并恢复 Buff 投影、停止时等待队列中的事务完成。
-- 没有验证：有人死亡之后的行为没有专门场景；跨服、真实数据库恢复、经 TCP 的客户端链路与长时间运行都没有验证，不能当作生产验收。
+- 没有验证：跨服、真实数据库恢复、经 TCP 的客户端链路与长时间运行都没有验证，不能当作生产验收。

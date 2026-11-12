@@ -3,14 +3,16 @@ package terrain
 import (
 	"context"
 	"fmt"
+	"log/slog"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"log/slog"
+
 	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
 	logic "{{MODULE}}/game/terrain"
 	runtime "{{MODULE}}/game/terrain/service"
-	"{{MODULE}}/protocol/pb"
 )
 
 type Controller struct {

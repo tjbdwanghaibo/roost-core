@@ -4,6 +4,9 @@ requires: [bag]
 needs:
   mods: [nest]
   features: [protocol, entity, dao, errcode, config]
+access:
+  transport: tcp
+  self_sync: true
 entity: Player
 state:
   - {field: Equipment, type: EquipmentState, store: equipment, dao: 'persist,sync', comment: 最多32槽的穿戴事实；与背包扣回在同一事务。}

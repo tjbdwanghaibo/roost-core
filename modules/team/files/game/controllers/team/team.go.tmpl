@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"log/slog"
 
-	player "{{MODULE}}/game/entities/player"
-	teamentity "{{MODULE}}/game/entities/team"
-	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	teamentity "{{MODULE}}/game/entities/team"
 )
 
 func teamPlayerID(ctx *playeraccess.Context) (int64, error) {

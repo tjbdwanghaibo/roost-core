@@ -8,15 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"{{MODULE}}/game/alliancerule"
-	alliance "{{MODULE}}/game/entities/alliance"
-	playerentity "{{MODULE}}/game/entities/player"
-	playeraccess "{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	rpcalliance "{{MODULE}}/internal/rpc/alliance"
-	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -26,6 +17,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"{{MODULE}}/game/alliancerule"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	alliance "{{MODULE}}/game/entities/alliance"
+	apperrors "{{MODULE}}/internal/errors"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	playerentity "{{MODULE}}/game/entities/player"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 )
 
 // allianceStub is the alliance service as the game endpoints see it: the
@@ -276,7 +276,9 @@ func TestAllianceApplyGoesThroughTheAllianceRPCAndLeavesTheDisplayAlone(t *testi
 		t.Fatalf("an application changed the player's copy: %q", nest.handler)
 	}
 
-	stub.manage = func(managedCall) (rpcalliance.Reply, error) { return rpcalliance.Reply{}, apperrors.ErrAllianceApplication }
+	stub.manage = func(managedCall) (rpcalliance.Reply, error) {
+		return rpcalliance.Reply{}, apperrors.ErrAllianceApplication
+	}
 	response, err = controller.HandleApplyAlliance(allianceContext(12), &pb.ApplyAllianceRequest{AllianceID: 7})
 	if err != nil || response.Code != apperrors.ErrAllianceApplication.Code() || nest.handler != "" {
 		t.Fatalf("a second application = %+v, %v (nest %q); want alliance_application", response, err, nest.handler)

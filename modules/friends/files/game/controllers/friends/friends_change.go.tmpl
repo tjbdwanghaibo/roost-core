@@ -2,15 +2,17 @@ package friends
 
 import (
 	"fmt"
+	"log/slog"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"log/slog"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
 )
 
 // HandleFriendsChange 的操作者只取已认证连接；按动作决定要不要对方在场（见 change）。
@@ -31,13 +33,9 @@ func (c *Controller) HandleFriendsChange(ctx *playeraccess.Context, req *pb.Frie
 	return out, nil
 }
 
-// change 按动作分三种情况：
-//
-//   - 拒绝申请、取消拉黑只改操作者自己的名单：单实体事务，对方在不在线、在不在本进程都无关。
-//   - 删除好友、拉黑要把双方名单里的对方一起去掉，但对方不需要当场知情：两个 Player 同一笔事务，对方不必在线，
-//     Nest 按需冷加载他的档（没建过档的玩家不会被创建，答 entity_not_found）；对方名单里没有操作者时不写他的档。
-//   - 申请、同意是建立关系：要求对方此刻在本进程有已认证会话。会话是“这名玩家的档归本进程写”的证明——
-//     申请会往任意一个玩家号的档里写，没有这个证明就不能写。服务端不能为跨服玩家创建本地替身。
+// change 把拒绝申请、取消拉黑作为只改本人的单实体事务。
+// 其余动作修改双边关系，要求双方在本进程有认证会话；不能因删除/拉黑就绕过归属检查冷加载对方档案。
+// 离线、跨服关系需要独立的关系权威或归属路由，此模块不创建另一份 Player 来替代它。
 func (c *Controller) change(ctx *playeraccess.Context, req *pb.FriendsChangeRequest) error {
 	actor, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
 	if err != nil {
@@ -50,8 +48,6 @@ func (c *Controller) change(ctx *playeraccess.Context, req *pb.FriendsChangeRequ
 	switch req.Action {
 	case player.FriendsReject, player.FriendsUnblock:
 		return syncsender.NewFriendsOwnSender(c.nestClient).Sync_FriendsOwn(ctx.Context(), actor, peer, req.Action)
-	case player.FriendsRemove, player.FriendsBlock:
-		return syncsender.NewFriendsChangeSender(c.nestClient).MultiSync_FriendsChange(ctx.Context(), actor, peer, req.Action)
 	}
 	// ActiveSessions 来自本进程的已认证 TCP 会话，不信任客户端声称的 sid。
 	transport, ok := app.Lookup[interface{ ActiveSessions(int64) int }](c.registry, app.ModName("access.player.tcp"))

@@ -14,11 +14,11 @@ func TestModuleCombatScenariosAndMutations(t *testing.T) {
 		t.Fatal("combat plan wrote project")
 	}
 	roost("module", "add", "combat")
-	verifyCombatModules(t, root, map[string]int{"combat": 36, "skillbook": 11}, "combat", "skillbook")
+	verifyCombatModules(t, root, map[string]int{"combat": 38, "combat+skillbook": 1, "skillbook": 11}, "combat", "skillbook")
 	roost("module", "add", "scene")
-	verifyCombatModules(t, root, map[string]int{"combat": 36, "combat+scene": 2}, "combat")
+	verifyCombatModules(t, root, map[string]int{"combat": 38, "combat+skillbook": 1, "combat+scene": 2}, "combat")
 	roost("module", "add", "equipment")
-	verifyCombatModules(t, root, map[string]int{"combat": 36, "combat+scene": 2, "combat+equipment": 2}, "combat")
+	verifyCombatModules(t, root, map[string]int{"combat": 38, "combat+skillbook": 1, "combat+scene": 2, "combat+equipment": 2}, "combat")
 
 	recipeMutationMustFail(t, root, "game/entities/player/combat_component.go",
 		"if len(raw) == 0 {", "if true {",

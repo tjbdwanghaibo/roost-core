@@ -1,0 +1,66 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+
+	sender "{{MODULE}}/game/handler/syncsender"
+	team "{{MODULE}}/game/entities/team"
+)
+
+func TestTeamInvitationQueryHidesRevokedOrUnavailableTeams(t *testing.T) {
+	f := newTeamFixture(t, func(n *nest.NestMgr) {
+		registerTeamTestHandler(n, handlerNameTeamInvitation, invokeTeamInvitation, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
+	})
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	lookup := func() team.Invitation {
+		out, err := sender.NewTeamInvitationSender(f.engine).Sync_TeamInvitation(context.Background(), f.teamID, 102)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := lookup(); got.ExpireAt != f.now.Load()+team.InviteMillis || got.Invitee != 102 {
+		t.Fatalf("valid invitation: %+v", got)
+	}
+	for id := int64(103); id <= 109; id++ {
+		f.invite(t, 101, id)
+		f.accept(t, id)
+	}
+	if got := lookup(); got.ExpireAt != 0 {
+		t.Fatalf("full team exposed: %+v", got)
+	}
+	if err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(109), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := lookup(); got.ExpireAt == 0 {
+		t.Fatal("available seat did not restore invitation")
+	}
+	f.now.Add(team.InviteMillis)
+	if got := lookup(); got.ExpireAt != 0 {
+		t.Fatalf("expired invite: %+v", got)
+	}
+	f.invite(t, 101, 102)
+	if err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(101), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := lookup(); got.ExpireAt != 0 {
+		t.Fatalf("disbanded team exposed: %+v", got)
+	}
+}
+
+func TestTeamLateInviteNoticeDoesNotShortenRenewal(t *testing.T) {
+	f := newTeamFixture(t)
+	expiry := f.now.Load() + team.InviteMillis
+	f.note(t, 102, f.teamID, 101, expiry+1000)
+	before := f.facts(t)
+	f.note(t, 102, f.teamID, 103, expiry)
+	f.unchanged(t, before)
+	got := f.invites(t, 102)
+	if len(got) != 1 || got[0].ExpireAt != expiry+1000 || got[0].Inviter != 101 {
+		t.Fatalf("late notice replaced renewal: %+v", got)
+	}
+}

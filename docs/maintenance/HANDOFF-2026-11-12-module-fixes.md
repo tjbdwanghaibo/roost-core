@@ -88,3 +88,7 @@ game-demo 用了 actor / scene / terrain 的一部分（`demo/` 下自己的场�
 - 对改了客户端可见行为的至少两处（建议 scene 的拒绝不断连接、alliance 新增的客户端入口）起真实进程走一遍，记下结果；做不到就写明只有离线验证。
 - 文档：改到的模块的 README；`modules/README.md` 与 `CAPABILITIES.md` 里对应的行；`KNOWN-LIMITS.md` 里已经不成立的条目删掉或改写、新出现的限制补上；`CHANGELOG.md` 的 `[Unreleased]` 加一条；`docs/maintenance/HANDOFF-2026-11-12-module-logging.md` 最后一节（“读代码时已经发现、不在本任务里修的问题”）里修掉的划掉或删掉。
 - 报告：每个问题一行（修了 / 没修及原因 / 未复现、改了哪些文件、新增或改动的场景名）；场景数与联动的变化；新协议与错误码；你定的取舍；变异自检的结果；跑了哪些检查及原样的结果行；没验证的；过程中又发现的新问题（不要自己扩大范围去修）。
+
+## 5. 接手结果
+
+本轮由 `feat/business-modules-fixes` 承接，逐项结果、行为取舍、场景数、变异与真实进程验收见[修复报告](evidence/module-fixes-20261112/README.md)。保留的离线双边好友、离线队伍邀请、停战入口与新发现 Scene 启动接线限制均在报告中明确列出。仅推回本分支，不合并、不发版。

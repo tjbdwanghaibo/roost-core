@@ -2,14 +2,16 @@ package scene
 
 import (
 	"fmt"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
-	gamescene "{{MODULE}}/game/scene"
 	apperrors "{{MODULE}}/internal/errors"
+	gamescene "{{MODULE}}/game/scene"
 )
 
 const EntityKindScene entity.EntityKind = {{ID:entity:Scene}}

@@ -2,9 +2,9 @@ package handler
 
 import room "{{MODULE}}/game/entities/room"
 
-// handlerTurnView 在 Room 的同一笔持久事务中处理，成功提交后才回复。
+// handlerTurnView 在 Room 的 Nest 锁内只读对局快照，不推进回合或执行持久化。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest durability=memory
 func handlerTurnView(target room.ITurnEntity, playerID int64, epoch uint64, connection string) (room.TurnSnapshot, error) {
 	return target.TurnComp().View(playerID, epoch, connection)
 }

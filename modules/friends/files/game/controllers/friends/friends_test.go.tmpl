@@ -4,20 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
+	"testing"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"sync/atomic"
-	"testing"
-	player "{{MODULE}}/game/entities/player"
+
 	"{{MODULE}}/game/handler"
-	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
-	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 )
 
 type friendsEndpointGetter map[int64]entity.IThreadSafeEntity
@@ -100,6 +102,7 @@ func friendsControllerFixture(t *testing.T, online friendsOnline) (*Controller, 
 	}
 	return c, engine, ids, commit
 }
+
 // 申请、同意是建立关系，要求对方此刻在本进程在线：对方离线时两者都被拒且零写入。
 func TestFriendsEndpointRefusesPeerOutsideThisProcess(t *testing.T) {
 	c, n, ids, commit := friendsControllerFixture(t, friendsOnline{97000: 1})
@@ -171,39 +174,41 @@ func TestFriendsEndpointOwnSideActionsWorkWhilePeerIsOffline(t *testing.T) {
 	}
 }
 
-// 删除好友、拉黑不需要对方当场知情：对方离线时同样在一笔事务里改掉双方的名单。
-func TestFriendsEndpointRemoveAndBlockWorkWhilePeerIsOffline(t *testing.T) {
-	c, n, ids, _ := friendsControllerFixture(t, friendsOnline{97000: 1})
-	befriend := func() {
+// 离线归属不明时不冷加载对方档案；双边关系必须原子修改，不能只清本人名单。
+func TestFriendsEndpointRemoveAndBlockRequirePeerOwnership(t *testing.T) {
+	online := friendsOnline{97000: 1}
+	c, n, ids, commit := friendsControllerFixture(t, online)
+	invalid, _ := errcode.ClientError(apperrors.ErrFriendsInvalid)
+	for _, action := range []int32{player.FriendsRemove, player.FriendsBlock} {
 		friendsEndpointSetup(t, n, ids[0], ids[1], player.FriendsApply)
 		friendsEndpointSetup(t, n, ids[1], ids[0], player.FriendsAccept)
-	}
-	befriend()
-	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsRemove})
-	if e != nil || response.Code != 0 {
-		t.Fatalf("remove while the friend is offline: response=%+v err=%v", response, e)
-	}
-	if a, b := friendsEndpointList(t, n, ids[0]), friendsEndpointList(t, n, ids[1]); len(a.Peers) != 0 || len(b.Peers) != 0 {
-		t.Fatalf("one-sided removal: a=%+v b=%+v", a, b)
-	}
-	befriend()
-	response, e = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsBlock})
-	if e != nil || response.Code != 0 {
-		t.Fatalf("block while the peer is offline: response=%+v err=%v", response, e)
-	}
-	a, b := friendsEndpointList(t, n, ids[0]), friendsEndpointList(t, n, ids[1])
-	if len(a.Blocked) != 1 || a.Blocked[0] != 97001 || len(a.Peers) != 0 || len(b.Peers) != 0 {
-		t.Fatalf("block left the friendship: a=%+v b=%+v", a, b)
+		before := commit.commits.Load()
+		response, err := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: action})
+		if err != nil || response.Code != invalid || commit.commits.Load() != before {
+			t.Fatalf("unowned peer changed: action=%d response=%+v commits=%d err=%v", action, response, commit.commits.Load()-before, err)
+		}
+		if a, b := friendsEndpointList(t, n, ids[0]), friendsEndpointList(t, n, ids[1]); len(a.Peers) != 1 || len(b.Peers) != 1 {
+			t.Fatalf("refused operation changed relationship: a=%+v b=%+v", a, b)
+		}
+		online[97001] = 1
+		response, err = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: action})
+		if err != nil || response.Code != 0 {
+			t.Fatalf("owned peer rejected: %+v %v", response, err)
+		}
+		if a, b := friendsEndpointList(t, n, ids[0]), friendsEndpointList(t, n, ids[1]); len(a.Peers) != 0 || len(b.Peers) != 0 {
+			t.Fatalf("one-sided relationship: a=%+v b=%+v", a, b)
+		}
+		delete(online, 97001)
 	}
 }
 
-// 对方离线时的删除、拉黑不会替不存在的玩家建档：没有档的玩家号答 entity_not_found（不是内部错误），操作者自己也不写；
+// 对方离线时的删除、拉黑在装载前拒绝，不为未知玩家建档，操作者自己也不写；
 // 对象是自己答 friends_invalid。
 func TestFriendsEndpointOfflinePeerWithoutRecordIsNotCreated(t *testing.T) {
 	c, n, ids, commit := friendsControllerFixture(t, friendsOnline{97000: 1})
 	for _, action := range []int32{player.FriendsRemove, player.FriendsBlock} {
 		response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97009, Action: action})
-		if e != nil || response.Code != errcode.CodeEntityNotFound {
+		if e != nil || response.Code != errcode.CodeOf(apperrors.ErrFriendsInvalid) {
 			t.Fatalf("action %d on a player without a record: response=%+v err=%v", action, response, e)
 		}
 	}

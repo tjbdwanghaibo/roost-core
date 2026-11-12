@@ -1,0 +1,289 @@
+=== activity-created-ms.log ===
+2026/11/12 23:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.1105ms changed=0 added=3 removed=0 unchanged=0 members="[activity activity_scope item]"
+2026/11/12 23:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=413.833µs changed=0 added=3 removed=0 unchanged=0 members="[activity activity_scope item]"
+--- FAIL: TestAllianceActivityCreatedTriggerStartsFromTheFoundingTime (0.01s)
+    activity_test.go:286: activity = {Token:{Definition:2 Scope:alliance Owner:4611686018527843341 Generation:1 Cycle:1 Phase:5 FlowVersion:0} Version:1 Logic: Start:1899996000 OpenAt:1899997000 CloseAt:1900002000 Pending:false Flow: FlowDue:0 CompletedThrough:1}, want it anchored at the founding time in milliseconds (start 1899936060000)
+FAIL
+FAIL	example.com/modulefix/alliance/internal/rpc/activity_alliance	0.600s
+FAIL
+
+=== activity-enter-id.log ===
+2026/11/12 23:12:38 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=429.791µs changed=0 added=3 removed=0 unchanged=0 members="[activity activity_scope item]"
+2026/11/12 23:12:38 WARN enter: hook failed; it runs again on the next enter hook=activity player_id=79301 err="nest: invalid message: entity id 79301: entity id: invalid: kind 113 category is not registered"
+--- FAIL: TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer (0.00s)
+    activity_enter_test.go:149: the activity enter hook failed (failed hooks: [activity])
+FAIL
+FAIL	example.com/modulefix/alliance/game/controllers/activity	0.577s
+FAIL
+
+=== actor-refusal.log ===
+--- FAIL: TestActorMoveRefusalsAnswerBusinessCodesWithoutErrorLogs (0.00s)
+    actor_test.go:374: not placed: &{Code:1 Reason:server error X:0 Y:0} <nil>
+FAIL
+FAIL	example.com/modulefix/world/game/handler	0.644s
+FAIL
+
+=== alliance-last-leader.log ===
+2026/11/12 23:12:42 INFO alliance: membership changed player_id=100 alliance_id=1 change=joined version=1 home_sid=1000
+2026/11/12 23:12:42 INFO alliance: founding confirmed player_id=100 request_key=found alliance_id=1 name=alliance-found replayed=false
+2026/11/12 23:12:42 INFO alliance: apply confirmed player_id=103 request_key=apply-103 alliance_id=1 version=1 replayed=false
+2026/11/12 23:12:42 INFO alliance: membership changed player_id=103 alliance_id=1 change=joined version=1 home_sid=1000
+2026/11/12 23:12:42 INFO alliance: approve confirmed player_id=100 member_id=103 alliance_id=1 request_key=approve-103 replayed=false
+2026/11/12 23:12:42 INFO alliance: membership changed player_id=103 alliance_id=1 change=left version=1 home_sid=1000
+2026/11/12 23:12:42 INFO alliance: leave confirmed player_id=103 member_id=103 alliance_id=1 request_key=member-leaves replayed=false
+2026/11/12 23:12:42 INFO alliance: apply confirmed player_id=104 request_key=apply-104 alliance_id=1 version=1 replayed=false
+--- FAIL: TestAllianceLastMemberLeaderLeavingDisbandsTheAlliance (0.00s)
+    service_test.go:350: the last member, the leader, leaves: remote.100012: the leader must transfer leadership first
+FAIL
+FAIL	example.com/modulefix/alliance/internal/rpc/alliance	0.570s
+FAIL
+
+=== alliance-roster-privacy.log ===
+--- FAIL: TestAllianceRosterShowsApplicantsOnlyToTheLeader (0.00s)
+    endpoints_test.go:390: a player who does not lead the alliance was shown its applicants: [77]
+FAIL
+FAIL	example.com/modulefix/alliance/game/controllers/alliance	0.563s
+FAIL
+
+=== combat-revive.log ===
+2026/11/12 23:12:57 INFO skill catalog compiled skills=5 warnings=0
+--- FAIL: TestCombatLeaveRestoresHealthAfterDefeat (0.01s)
+    combat_finish_test.go:32: finished duel cannot restart: result=&{Code:0 Reason: Sequence:3 CastID:0 Health:100 PeerHealth:0 Alive:true PeerAlive:false Pending:false Ended:true} err=<nil>
+2026/11/12 23:12:57 INFO skill catalog compiled skills=5 warnings=0
+--- FAIL: TestCombatRejectedLeaveKeepsDefeatUntilRetry (0.00s)
+    combat_finish_test.go:52: retry=&{Code:0 Reason: Sequence:3 CastID:0 Health:100 PeerHealth:0 Alive:true PeerAlive:false Pending:false Ended:true} err=<nil>
+FAIL
+FAIL	example.com/modulefix/world/game/handler	0.598s
+FAIL
+
+=== combat-skillbook.log ===
+2026/11/12 23:12:59 INFO skill catalog compiled skills=5 warnings=0
+--- FAIL: TestWithCombatSkillbookUsesCompiledStatusPolicy (0.01s)
+    combat_skillbook_test.go:25: compiled stun did not gate movement and casting
+FAIL
+FAIL	example.com/modulefix/world/game/handler	0.636s
+FAIL
+
+=== dungeon-enemy-rule.log ===
+--- FAIL: TestDungeonNewEnemyOnlyNeedsTheRulesFile (1.59s)
+    dungeon_test.go:665: an enemy added only in the rules file was not accepted: exit status 1
+        2026/11/12 23:12:51 INFO dungeon: open confirmed player_id=96101 run_id=1001 instance=dungeon-1025038 epoch=1 season=1
+        --- FAIL: TestDungeonEnemyAdmissionFollowsRules (0.00s)
+            dungeon_test.go:622: enemy "elite" named by the rules refused: dungeon_invalid: 副本参数无效或同ID内容冲突
+        FAIL
+        FAIL	example.com/modulefix/social/game/controllers/dungeon	0.585s
+        FAIL
+FAIL
+FAIL	example.com/modulefix/social/game/controllers/dungeon	2.166s
+FAIL
+
+=== equipment-relevel.log ===
+2026/11/12 23:12:48 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=460.291µs changed=0 added=2 removed=0 unchanged=0 members="[equipment_item item]"
+--- FAIL: TestEquipmentRelevelSameItemLeavesBagAlone (0.01s)
+    equipment_test.go:421: relevel with an empty bag: bag_short: not enough items [item_id=1003 have=0 want=1]
+2026/11/12 23:12:48 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=265.959µs changed=0 added=2 removed=0 unchanged=0 members="[equipment_item item]"
+--- FAIL: TestEquipmentRelevelRunsChangedHooks (0.00s)
+    equipment_test.go:445: relevel skipped the changed hooks: bag_short: not enough items [item_id=1003 have=0 want=1]
+FAIL
+FAIL	example.com/modulefix/social/game/handler	0.695s
+FAIL
+
+=== friends-own-offline.log ===
+--- FAIL: TestFriendsEndpointOwnSideActionsWorkWhilePeerIsOffline (0.00s)
+    friends_test.go:159: reject while the applicant is offline: response=&{Code:100003 Reason:invalid friend operation, or the peer must be online on this server for it} err=<nil>
+FAIL
+FAIL	example.com/modulefix/social/game/controllers/friends	0.578s
+FAIL
+
+=== friends-ownership.log ===
+2026/11/12 23:12:46 INFO friends: change completed player_id=97000 peer_id=97001 action=3
+--- FAIL: TestFriendsEndpointRemoveAndBlockRequirePeerOwnership (0.00s)
+    friends_test.go:185: unowned peer changed: action=3 response=&{Code:0 Reason:} commits=1 err=<nil>
+FAIL
+FAIL	example.com/modulefix/social/game/controllers/friends	0.722s
+FAIL
+
+=== leaderboard-max.log ===
+--- FAIL: TestLeaderboardRepeatedAndStaleSubmitsNeverMoveTheBoard (0.00s)
+    leaderboard_test.go:505: a redelivered submit returned {OnBoard:true Rank:2 Score:100}
+--- FAIL: TestLeaderboardEqualTotalsRankWhoeverGotThereFirst (0.00s)
+    leaderboard_test.go:541: board after resubmits of the same total = "#1 p1005=100 #2 p1001=100 #3 p1009=100 "
+FAIL
+FAIL	example.com/modulefix/misc/game/controllers/leaderboard	9.527s
+FAIL
+
+=== monster-refusal.log ===
+2026/11/12 23:12:35 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:35 INFO scene: change confirmed player_id=1001 from_scene=1 to_scene=0
+2026/11/12 23:12:35 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:35 ERROR monster: inspect failed player_id=1001 monster_id=2323435195258111000 err="monster: gone"
+--- FAIL: TestMonsterInspectRefusalsCarryBusinessCodes (0.00s)
+    monster_test.go:253: a dead monster: &{Code:1 Reason:server error MonsterID:0 LifeSeq:0 HP:0 Template:0 X:0 Y:0} <nil>, want code 100016
+FAIL
+FAIL	example.com/modulefix/world/game/monster/service	0.581s
+FAIL
+
+=== notice-audit-success.log ===
+--- FAIL: TestWithNoticeGMPublishesThroughAudit (0.00s)
+    notice_test.go:98: gm.notice.announce: audit after=[map[code:1 command:gm.notice.announce level:INFO msg:gm: completed operator:support-17 time:2026-11-12T23:13:02.246857+08:00 trace_id:trace-announce]]
+FAIL
+FAIL	example.com/modulefix/misc/game/gm	0.573s
+FAIL
+
+=== notice-audit.log ===
+--- FAIL: TestWithNoticeGMRequiresOperatorAndNote (0.00s)
+    notice_test.go:116: gm.notice.announce trace-no-operator: result={Name:gm.notice.announce TraceID:trace-no-operator OK:true Message: Data:map[key:event-1 kind:announce] StartedAt:1794496380919 EndedAt:1794496380920} err=<nil>
+FAIL
+FAIL	example.com/modulefix/misc/game/gm	0.631s
+FAIL
+
+=== readonly-alliance.log ===
+--- FAIL: TestAllianceWriteReplaysItsReceipt (0.00s)
+    service_test.go:92: AllianceInfo read-only metadata regressed
+FAIL
+FAIL	example.com/modulefix/alliance-final/internal/rpc/alliance	4.257s
+FAIL
+
+=== readonly-attribute_get.log ===
+--- FAIL: TestAttributeGetIsDeclaredReadOnly (0.00s)
+    attribute_test.go:322: handlerAttributeGet is not registered on the memory fast path; declare it //roost:nest durability=memory
+FAIL
+FAIL	example.com/modulefix/social/game/handler	0.639s
+FAIL
+
+=== readonly-match_state.log ===
+--- FAIL: TestMatchmakingReadOnlyHandlersAreDeclaredReadOnly (0.00s)
+    matchmaking_test.go:116: match_state_nest_gen.go: the read-only handler is not registered on the memory fast path; declare it //roost:nest durability=memory
+FAIL
+FAIL	example.com/modulefix/social/game/handler	0.586s
+FAIL
+
+=== readonly-room.log ===
+--- FAIL: TestRoomViewIsMembersOnlyAndDetached (0.00s)
+    room_test.go:416: RoomView read-only metadata regressed
+FAIL
+FAIL	example.com/modulefix/social-final/game/handler	4.687s
+FAIL
+
+=== readonly-turn.log ===
+--- FAIL: TestTurnLateJoinCanViewButCannotAct (0.00s)
+    turn_test.go:360: TurnView read-only metadata regressed
+FAIL
+FAIL	example.com/modulefix/turnclean/game/handler	0.437s
+FAIL
+
+=== scene-refusal.log ===
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=1 to_scene=2
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+--- FAIL: TestSceneRefusesStaleFromWithoutChangingPosition (0.00s)
+    scene_test.go:227: stale from: controller returned an error, the access layer would close the connection: scene_stale: FromID is not the scene the player is in
+--- FAIL: TestSceneCannotCreateAClientChosenMap (0.00s)
+    scene_test.go:246: unknown map: controller returned an error, the access layer would close the connection: scene_unavailable: scene is not open [scene_id=987]
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=1 to_scene=0
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1002 from_scene=0 to_scene=2
+--- FAIL: TestSceneCapacityRejectsWithoutEvictingSource (0.00s)
+    scene_test.go:280: full target: controller returned an error, the access layer would close the connection: scene_full: scene is full
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1002 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1002 from_scene=0 to_scene=2
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1002 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1002 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=1 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=1 to_scene=0
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=2
+--- FAIL: TestSceneCodedCallbackRefusalIsAnsweredAndRolledBack (0.00s)
+    scene_test.go:531: coded region refusal: controller returned an error, the access layer would close the connection: scene region 33: scene_object_far: object is out of reach
+--- FAIL: TestSceneRefusalCodesAreDistinctBusinessCodes (0.00s)
+    scene_test.go:551: scene_unavailable would be returned as an error
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=2
+--- FAIL: TestSceneInteractionIsOncePerContinuousSequence (0.00s)
+    scene_test.go:589: same sequence, other object: controller returned an error, the access layer would close the connection: scene_sequence: interaction sequence is not the next one
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+--- FAIL: TestSceneInteractionCannotReachAnotherSceneOrDistantObject (0.00s)
+    scene_test.go:617: cross scene: controller returned an error, the access layer would close the connection: scene_not_here: player is not in that scene
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: evacuation confirmed player_id=1001 scene_id=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+--- FAIL: TestSceneStopRetriesRejectedEvacuation (0.00s)
+    scene_test.go:719: closing map: controller returned an error, the access layer would close the connection: scene_unavailable: scene is not open [scene_id=1 closing=true]
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=2
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1002 from_scene=0 to_scene=2
+2026/11/12 23:12:31 INFO scene: evacuation confirmed player_id=1002 scene_id=2
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1001 from_scene=0 to_scene=1
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1002 from_scene=0 to_scene=2
+2026/11/12 23:12:31 INFO scene: evacuation confirmed player_id=1002 scene_id=2
+2026/11/12 23:12:31 INFO scene: change confirmed player_id=1003 from_scene=0 to_scene=1
+FAIL
+FAIL	example.com/modulefix/world/game/controllers/scene	0.814s
+FAIL
+
+=== team-late-notice.log ===
+--- FAIL: TestTeamLateInviteNoticeDoesNotShortenRenewal (0.00s)
+    team_invitation_test.go:38: team/player changed after rejection: before=map[103429:{"_schema":{"$numberLong":"1"},"friends":{"1":null,"2":null,"3":null},"bag":{"1":null},"equipment":{"1":null},"profile_private":{"1":{"$numberLong":"0"}},"attribute_base":{"1":null},"team":{"1":{"$numberLong":"0"},"2":null},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"combat":{"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"},"8":false,"1":false,"2":false,"3":{"$numberLong":"0"},"7":false,"9":false},"combat_private":{"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"},"5":null,"6":null,"7":null},"_id":{"$numberLong":"103429"},"profile":{"1":"","2":{"$numberInt":"0"}},"enter":{"3":false,"1":false,"2":{"$numberLong":"0"}},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"matchmaking":{"10":{"$numberLong":"0"},"11":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","4":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"8":"","9":"","3":{"$numberLong":"0"},"7":""}} 104453:{"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"actor_saved":{"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"},"1":{"$numberLong":"0"}},"combat_private":{"4":{"$numberLong":"0"},"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":""},"friends":{"1":null,"2":null,"3":null},"bag":{"1":null},"_id":{"$numberLong":"104453"},"_schema":{"$numberLong":"1"},"profile_private":{"1":{"$numberLong":"0"}},"attribute_base":{"1":null},"combat":{"1":false,"2":false,"6":{"$numberLong":"0"},"7":false,"8":false,"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"9":false},"matchmaking":{"11":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":null,"7":"","10":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","6":{"$numberInt":"0"},"8":"","9":""},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"team":{"1":{"$numberLong":"0"},"2":{"4611686018520572945":{"1":{"$numberLong":"101"},"2":{"$numberLong":"1061000"}}}},"equipment":{"1":null},"profile":{"1":"","2":{"$numberInt":"0"}}} 105477:{"team":{"1":{"$numberLong":"0"},"2":null},"attribute_base":{"1":null},"_schema":{"$numberLong":"1"},"equipment":{"1":null},"combat":{"1":false,"2":false,"6":{"$numberLong":"0"},"9":false,"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"7":false,"8":false},"_id":{"$numberLong":"105477"},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"profile_private":{"1":{"$numberLong":"0"}},"combat_private":{"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"},"5":null},"bag":{"1":null},"profile":{"1":"","2":{"$numberInt":"0"}},"actor_saved":{"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"},"1":{"$numberLong":"0"}},"matchmaking":{"11":{"$numberLong":"0"},"3":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"8":"","9":"","1":{"$numberLong":"0"},"2":"","4":{"$numberLong":"0"},"7":"","10":{"$numberLong":"0"}},"friends":{"1":null,"2":null,"3":null},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}}} 106501:{"profile_private":{"1":{"$numberLong":"0"}},"dungeon":{"3":{"$numberLong":"0"},"1":null,"2":null},"actor_saved":{"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"},"1":{"$numberLong":"0"}},"_id":{"$numberLong":"106501"},"_schema":{"$numberLong":"1"},"friends":{"1":null,"2":null,"3":null},"bag":{"1":null},"team":{"1":{"$numberLong":"0"},"2":null},"combat_private":{"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"}},"matchmaking":{"2":"","9":"","11":{"$numberLong":"0"},"1":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"7":"","8":"","10":{"$numberLong":"0"}},"equipment":{"1":null},"profile":{"1":"","2":{"$numberInt":"0"}},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"attribute_base":{"1":null},"combat":{"8":false,"9":false,"1":false,"3":{"$numberLong":"0"},"5":{"$numberLong":"0"},"2":false,"4":{"$numberLong":"0"},"6":{"$numberLong":"0"},"7":false}} 107525:{"profile_private":{"1":{"$numberLong":"0"}},"team":{"1":{"$numberLong":"0"},"2":null},"bag":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"attribute_base":{"1":null},"combat_private":{"2":"","3":"","4":{"$numberLong":"0"},"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"}},"matchmaking":{"4":{"$numberLong":"0"},"5":null,"3":{"$numberLong":"0"},"6":{"$numberInt":"0"},"7":"","8":"","9":"","10":{"$numberLong":"0"},"11":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":""},"equipment":{"1":null},"actor_saved":{"3":{"$numberLong":"0"},"4":{"$numberInt":"0"},"1":{"$numberLong":"0"},"2":{"$numberLong":"0"}},"combat":{"1":false,"2":false,"3":{"$numberLong":"0"},"7":false,"8":false,"9":false,"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"}},"profile":{"1":"","2":{"$numberInt":"0"}},"_id":{"$numberLong":"107525"},"_schema":{"$numberLong":"1"},"friends":{"1":null,"2":null,"3":null}} 108549:{"actor_saved":{"4":{"$numberInt":"0"},"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"}},"_id":{"$numberLong":"108549"},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"attribute_base":{"1":null},"combat":{"2":false,"3":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"},"7":false,"8":false,"9":false,"1":false,"4":{"$numberLong":"0"}},"_schema":{"$numberLong":"1"},"bag":{"1":null},"profile":{"1":"","2":{"$numberInt":"0"}},"enter":{"2":{"$numberLong":"0"},"3":false,"1":false},"matchmaking":{"10":{"$numberLong":"0"},"3":{"$numberLong":"0"},"6":{"$numberInt":"0"},"7":"","11":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","4":{"$numberLong":"0"},"5":null,"8":"","9":""},"combat_private":{"3":"","4":{"$numberLong":"0"},"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":""},"friends":{"1":null,"2":null,"3":null},"equipment":{"1":null},"profile_private":{"1":{"$numberLong":"0"}},"team":{"2":null,"1":{"$numberLong":"0"}}} 109573:{"profile":{"1":"","2":{"$numberInt":"0"}},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"attribute_base":{"1":null},"_id":{"$numberLong":"109573"},"profile_private":{"1":{"$numberLong":"0"}},"_schema":{"$numberLong":"1"},"friends":{"2":null,"3":null,"1":null},"combat":{"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"},"8":false,"9":false,"7":false,"1":false,"2":false,"3":{"$numberLong":"0"}},"matchmaking":{"7":"","8":"","9":"","10":{"$numberLong":"0"},"1":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"11":{"$numberLong":"0"},"2":""},"team":{"1":{"$numberLong":"0"},"2":null},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"combat_private":{"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"},"5":null,"6":null},"bag":{"1":null},"equipment":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false}} 110597:{"combat":{"3":{"$numberLong":"0"},"6":{"$numberLong":"0"},"7":false,"8":false,"9":false,"2":false,"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"1":false},"_schema":{"$numberLong":"1"},"friends":{"1":null,"2":null,"3":null},"equipment":{"1":null},"profile":{"1":"","2":{"$numberInt":"0"}},"profile_private":{"1":{"$numberLong":"0"}},"combat_private":{"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"},"5":null,"6":null},"matchmaking":{"5":null,"7":"","9":"","10":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"6":{"$numberInt":"0"},"8":"","11":{"$numberLong":"0"}},"_id":{"$numberLong":"110597"},"team":{"1":{"$numberLong":"0"},"2":null},"attribute_base":{"1":null},"bag":{"1":null},"enter":{"2":{"$numberLong":"0"},"3":false,"1":false},"dungeon":{"2":null,"3":{"$numberLong":"0"},"1":null},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}}} 111621:{"_schema":{"$numberLong":"1"},"profile_private":{"1":{"$numberLong":"0"}},"team":{"1":{"$numberLong":"0"},"2":null},"bag":{"1":null},"equipment":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"attribute_base":{"1":null},"combat":{"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"7":false,"8":false,"9":false,"1":false,"2":false,"6":{"$numberLong":"0"}},"friends":{"1":null,"2":null,"3":null},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"_id":{"$numberLong":"111621"},"profile":{"2":{"$numberInt":"0"},"1":""},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"combat_private":{"3":"","4":{"$numberLong":"0"},"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":""},"matchmaking":{"11":{"$numberLong":"0"},"2":"","5":null,"7":"","8":"","9":"","1":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"6":{"$numberInt":"0"},"10":{"$numberLong":"0"}}} 4611686018520572945:{"1":{"$numberLong":"0"},"2":{},"3":{},"5":"","4":{"$numberLong":"0"},"_id":{"$numberLong":"4611686018520572945"},"_schema":{"$numberLong":"1"}} 4611686018520573969:{"_schema":{"$numberLong":"1"},"1":{"$numberLong":"0"},"2":{},"3":{},"5":"","4":{"$numberLong":"0"},"_id":{"$numberLong":"4611686018520573969"}}] after=map[103429:{"bag":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"profile_private":{"1":{"$numberLong":"0"}},"matchmaking":{"5":null,"7":"","9":"","1":{"$numberLong":"0"},"2":"","3":{"$numberLong":"0"},"6":{"$numberInt":"0"},"8":"","10":{"$numberLong":"0"},"11":{"$numberLong":"0"},"4":{"$numberLong":"0"}},"equipment":{"1":null},"actor_saved":{"4":{"$numberInt":"0"},"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"}},"combat_private":{"3":"","4":{"$numberLong":"0"},"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":""},"attribute_base":{"1":null},"_id":{"$numberLong":"103429"},"_schema":{"$numberLong":"1"},"profile":{"1":"","2":{"$numberInt":"0"}},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"team":{"1":{"$numberLong":"0"},"2":null},"friends":{"1":null,"2":null,"3":null},"combat":{"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"7":false,"8":false,"9":false,"2":false,"6":{"$numberLong":"0"},"1":false,"3":{"$numberLong":"0"}}} 104453:{"equipment":{"1":null},"profile_private":{"1":{"$numberLong":"0"}},"combat":{"1":false,"5":{"$numberLong":"0"},"7":false,"9":false,"2":false,"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"6":{"$numberLong":"0"},"8":false},"combat_private":{"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"}},"matchmaking":{"7":"","9":"","10":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":null,"8":"","11":{"$numberLong":"0"},"6":{"$numberInt":"0"}},"bag":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"_id":{"$numberLong":"104453"},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"friends":{"1":null,"2":null,"3":null},"profile":{"1":"","2":{"$numberInt":"0"}},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"team":{"2":{"4611686018520572945":{"1":{"$numberLong":"103"},"2":{"$numberLong":"1060000"}}},"1":{"$numberLong":"0"}},"attribute_base":{"1":null},"_schema":{"$numberLong":"1"}} 105477:{"_id":{"$numberLong":"105477"},"_schema":{"$numberLong":"1"},"team":{"1":{"$numberLong":"0"},"2":null},"matchmaking":{"2":"","3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":null,"7":"","8":"","10":{"$numberLong":"0"},"11":{"$numberLong":"0"},"1":{"$numberLong":"0"},"6":{"$numberInt":"0"},"9":""},"friends":{"3":null,"1":null,"2":null},"equipment":{"1":null},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"bag":{"1":null},"profile":{"1":"","2":{"$numberInt":"0"}},"profile_private":{"1":{"$numberLong":"0"}},"dungeon":{"3":{"$numberLong":"0"},"1":null,"2":null},"combat":{"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"},"7":false,"8":false,"9":false,"1":false,"2":false},"combat_private":{"3":"","4":{"$numberLong":"0"},"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":""},"enter":{"2":{"$numberLong":"0"},"3":false,"1":false},"attribute_base":{"1":null}} 106501:{"team":{"1":{"$numberLong":"0"},"2":null},"combat":{"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"7":false,"8":false,"9":false,"1":false,"3":{"$numberLong":"0"},"6":{"$numberLong":"0"},"2":false},"equipment":{"1":null},"profile_private":{"1":{"$numberLong":"0"}},"_schema":{"$numberLong":"1"},"friends":{"1":null,"2":null,"3":null},"bag":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"_id":{"$numberLong":"106501"},"profile":{"1":"","2":{"$numberInt":"0"}},"attribute_base":{"1":null},"combat_private":{"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"},"5":null},"matchmaking":{"10":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","4":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"7":"","9":"","11":{"$numberLong":"0"},"3":{"$numberLong":"0"},"8":""}} 107525:{"team":{"2":null,"1":{"$numberLong":"0"}},"combat":{"9":false,"7":false,"8":false,"1":false,"2":false,"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"}},"combat_private":{"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"}},"equipment":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"actor_saved":{"4":{"$numberInt":"0"},"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"}},"_id":{"$numberLong":"107525"},"profile_private":{"1":{"$numberLong":"0"}},"profile":{"1":"","2":{"$numberInt":"0"}},"attribute_base":{"1":null},"matchmaking":{"1":{"$numberLong":"0"},"2":"","3":{"$numberLong":"0"},"8":"","11":{"$numberLong":"0"},"4":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"7":"","9":"","10":{"$numberLong":"0"}},"_schema":{"$numberLong":"1"},"friends":{"1":null,"2":null,"3":null},"bag":{"1":null},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}}} 108549:{"team":{"1":{"$numberLong":"0"},"2":null},"combat_private":{"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"}},"profile":{"1":"","2":{"$numberInt":"0"}},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"combat":{"2":false,"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"},"9":false,"1":false,"3":{"$numberLong":"0"},"7":false,"8":false},"friends":{"1":null,"2":null,"3":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"profile_private":{"1":{"$numberLong":"0"}},"attribute_base":{"1":null},"_id":{"$numberLong":"108549"},"_schema":{"$numberLong":"1"},"bag":{"1":null},"matchmaking":{"10":{"$numberLong":"0"},"11":{"$numberLong":"0"},"1":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"7":"","8":"","2":"","5":null,"6":{"$numberInt":"0"},"9":""},"equipment":{"1":null},"dungeon":{"2":null,"3":{"$numberLong":"0"},"1":null}} 109573:{"combat":{"2":false,"4":{"$numberLong":"0"},"5":{"$numberLong":"0"},"9":false,"1":false,"3":{"$numberLong":"0"},"6":{"$numberLong":"0"},"7":false,"8":false},"combat_private":{"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"},"5":null},"matchmaking":{"2":"","3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"6":{"$numberInt":"0"},"7":"","10":{"$numberLong":"0"},"1":{"$numberLong":"0"},"5":null,"8":"","9":"","11":{"$numberLong":"0"}},"_schema":{"$numberLong":"1"},"equipment":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"profile_private":{"1":{"$numberLong":"0"}},"team":{"2":null,"1":{"$numberLong":"0"}},"_id":{"$numberLong":"109573"},"friends":{"1":null,"2":null,"3":null},"profile":{"1":"","2":{"$numberInt":"0"}},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"actor_saved":{"4":{"$numberInt":"0"},"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"}},"attribute_base":{"1":null},"bag":{"1":null}} 110597:{"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"matchmaking":{"2":"","3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"7":"","8":"","9":"","1":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"10":{"$numberLong":"0"},"11":{"$numberLong":"0"}},"_id":{"$numberLong":"110597"},"profile_private":{"1":{"$numberLong":"0"}},"attribute_base":{"1":null},"enter":{"1":false,"2":{"$numberLong":"0"},"3":false},"combat":{"7":false,"1":false,"4":{"$numberLong":"0"},"6":{"$numberLong":"0"},"8":false,"9":false,"2":false,"3":{"$numberLong":"0"},"5":{"$numberLong":"0"}},"friends":{"3":null,"1":null,"2":null},"team":{"1":{"$numberLong":"0"},"2":null},"combat_private":{"3":"","4":{"$numberLong":"0"},"5":null,"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":""},"_schema":{"$numberLong":"1"},"bag":{"1":null},"equipment":{"1":null},"profile":{"1":"","2":{"$numberInt":"0"}}} 111621:{"friends":{"1":null,"2":null,"3":null},"profile":{"1":"","2":{"$numberInt":"0"}},"_id":{"$numberLong":"111621"},"_schema":{"$numberLong":"1"},"equipment":{"1":null},"enter":{"3":false,"1":false,"2":{"$numberLong":"0"}},"profile_private":{"1":{"$numberLong":"0"}},"dungeon":{"1":null,"2":null,"3":{"$numberLong":"0"}},"attribute_base":{"1":null},"bag":{"1":null},"team":{"2":null,"1":{"$numberLong":"0"}},"actor_saved":{"1":{"$numberLong":"0"},"2":{"$numberLong":"0"},"3":{"$numberLong":"0"},"4":{"$numberInt":"0"}},"combat_private":{"6":null,"7":null,"8":{"$numberLong":"0"},"1":{"$numberLong":"0"},"2":"","3":"","4":{"$numberLong":"0"},"5":null},"matchmaking":{"11":{"$numberLong":"0"},"1":{"$numberLong":"0"},"5":null,"6":{"$numberInt":"0"},"8":"","10":{"$numberLong":"0"},"2":"","3":{"$numberLong":"0"},"4":{"$numberLong":"0"},"7":"","9":""},"combat":{"7":false,"8":false,"9":false,"4":{"$numberLong":"0"},"1":false,"2":false,"3":{"$numberLong":"0"},"5":{"$numberLong":"0"},"6":{"$numberLong":"0"}}} 4611686018520572945:{"2":{},"3":{},"5":"","4":{"$numberLong":"0"},"_id":{"$numberLong":"4611686018520572945"},"_schema":{"$numberLong":"1"},"1":{"$numberLong":"0"}} 4611686018520573969:{"_schema":{"$numberLong":"1"},"1":{"$numberLong":"0"},"2":{},"3":{},"5":"","4":{"$numberLong":"0"},"_id":{"$numberLong":"4611686018520573969"}}]
+FAIL
+FAIL	example.com/modulefix/social/game/handler	0.632s
+FAIL
+
+=== team-push.log ===
+--- FAIL: TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority (0.00s)
+    team_invited_test.go:70: note=0 push=&{calls:0 fail:true online:true push:<nil>}
+FAIL
+FAIL	example.com/modulefix/social/game/controllers/team	0.579s
+FAIL
+
+=== team-query-authority.log ===
+--- FAIL: TestTeamEndpointInvitationQueryChecksAuthority (0.00s)
+    team_invited_test.go:53: stale inbox exposed: response=&{Code:0 Reason: Invites:[{TeamID:0 Inviter:101 ExpireAtUnixMilli:0} {TeamID:4611686018520573969 Inviter:103 ExpireAtUnixMilli:70000}]} checked=2 err=<nil>
+FAIL
+FAIL	example.com/modulefix/social/game/controllers/team	0.592s
+FAIL
+
+=== terrain-recovery.log ===
+2026/11/12 23:12:37 INFO scene: change confirmed player_id=97101 from_scene=0 to_scene=2
+2026/11/12 23:12:37 INFO scene: change confirmed player_id=97102 from_scene=0 to_scene=2
+2026/11/12 23:12:37 ERROR terrain: building sync needs reload scene=2 id=8800320946194 err="review: publication unavailable"
+2026/11/12 23:12:37 INFO terrain: building edit confirmed player_id=97101 scene_id=2 op=build sequence=1 building_id=8800320946194 duplicate=false standing=true
+2026/11/12 23:12:37 ERROR terrain: building sync needs reload scene=2 id=8800320946194 err="review: publication unavailable"
+2026/11/12 23:12:37 INFO terrain: building edit confirmed player_id=97101 scene_id=2 op=remove sequence=2 building_id=8800320946194 duplicate=false standing=false
+2026/11/12 23:12:37 INFO terrain: building edit confirmed player_id=97101 scene_id=2 op=remove sequence=2 building_id=8800320946194 duplicate=true standing=false
+2026/11/12 23:12:37 INFO scene: evacuation confirmed player_id=97102 scene_id=2
+2026/11/12 23:12:37 INFO scene: evacuation confirmed player_id=97101 scene_id=2
+--- FAIL: TestTerrainRecoveryOldCompletionKeepsNewFailure (0.01s)
+    terrain_recovery_test.go:45: old=1 new=1 after=0 duplicate=true pending=false
+    terrain_recovery_test.go:48: stale recovery completion erased an unrepaired committed removal
+2026/11/12 23:12:37 INFO scene: change confirmed player_id=97101 from_scene=0 to_scene=2
+2026/11/12 23:12:37 INFO scene: change confirmed player_id=97102 from_scene=0 to_scene=2
+2026/11/12 23:12:37 INFO scene: evacuation confirmed player_id=97102 scene_id=2
+2026/11/12 23:12:37 INFO scene: evacuation confirmed player_id=97101 scene_id=2
+FAIL
+FAIL	example.com/modulefix/world/game/controllers/terrain	0.596s
+FAIL
+
+=== terrain-refusal.log ===
+2026/11/12 23:15:27 INFO scene: change confirmed player_id=97101 from_scene=0 to_scene=2
+2026/11/12 23:15:27 INFO scene: change confirmed player_id=97102 from_scene=0 to_scene=2
+2026/11/12 23:15:27 INFO scene: evacuation confirmed player_id=97102 scene_id=2
+2026/11/12 23:15:27 INFO scene: evacuation confirmed player_id=97101 scene_id=2
+--- FAIL: TestTerrainEndpointsAnswerEachRefusalWithItsOwnCode (0.01s)
+    terrain_test.go:868: denied and invalid share code 100012
+FAIL
+FAIL	example.com/modulefix/world/game/controllers/terrain	1.236s
+FAIL
+
+=== wallet-error-text.log ===
+--- FAIL: TestWalletApplyRefusesKeysThatCannotBeStored (0.00s)
+    wallet_test.go:325: wallet_invalid reason "empty key or zero amount" does not mention "1..64"
+FAIL
+FAIL	example.com/modulefix/misc/game/handler	2.026s
+FAIL

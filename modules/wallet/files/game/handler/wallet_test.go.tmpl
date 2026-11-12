@@ -10,16 +10,16 @@ import (
 	"sync/atomic"
 	"testing"
 
-	db "{{MODULE}}/db"
-	playerentity "{{MODULE}}/game/entities/player"
-	sender "{{MODULE}}/game/handler/syncsender"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	db "{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
 )
 
 type walletGetter map[int64]entity.IThreadSafeEntity

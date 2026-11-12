@@ -17,19 +17,19 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	gamescene "{{MODULE}}/game/scene"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	"{{MODULE}}/game/handler"
-	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/playeraccess"
-	gamescene "{{MODULE}}/game/scene"
 	scenes "{{MODULE}}/game/scene/service"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
+	sender "{{MODULE}}/game/handler/syncsender"
 )
 
 type sceneCommit struct{ reject atomic.Bool }
@@ -571,12 +571,12 @@ func TestSceneInteractionIsOncePerContinuousSequence(t *testing.T) {
 	request := &pb.SceneInteractRequest{SceneID: 2, ObjectID: 71, Sequence: 1}
 	ctx := &playeraccess.Context{PlayerID: p.UniqueID()}
 	a, err := f.controller.HandleSceneInteract(ctx, request)
-	if err != nil || a.Text != "well" {
+	if err != nil || a == nil || a.Code != 0 || a.Text != "well" {
 		t.Fatalf("%+v %v", a, err)
 	}
 	b, err := f.controller.HandleSceneInteract(ctx, request)
-	if err != nil || b.Text != "well" {
-		t.Fatal(err)
+	if err != nil || b == nil || b.Code != 0 || b.Text != "well" {
+		t.Fatalf("replayed interaction refused: response=%+v err=%v", b, err)
 	}
 	f.must(p, func(p *player.Player) error {
 		if p.Dao().GetActorSaved().GetFacing() != 1 {

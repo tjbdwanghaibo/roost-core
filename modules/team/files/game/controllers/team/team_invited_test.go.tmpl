@@ -1,0 +1,112 @@
+package team
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	player "{{MODULE}}/game/entities/player"
+	teamentity "{{MODULE}}/game/entities/team"
+)
+
+// 这里替代 Nest 只验证端点的编排和失败答法；权威邀请、事务回滚另由 handler 场景走正式 Nest 验证。
+type teamEndpointClient struct {
+	nest.Client
+	request func(nest.HandlerName, int64, nest.Params) (any, error)
+}
+
+func (c teamEndpointClient) Request(_ context.Context, name nest.HandlerName, id int64, args nest.Params, _ ...nest.SendOpt) (any, error) {
+	return c.request(name, id, args)
+}
+
+type teamPushRecorder struct {
+	calls  int
+	fail   bool
+	online bool
+	push   *pb.TeamInvitedPush
+}
+
+func (p *teamPushRecorder) ActiveSessions(int64) int {
+	if p.online {
+		return 1
+	}
+	return 0
+}
+func (p *teamPushRecorder) PushPlayer(_ context.Context, id int64, message uint32, value any) error {
+	if id != 102 || message != msgid.MsgTeamInvited {
+		return errors.New("unexpected recipient or protocol")
+	}
+	p.calls++
+	p.push = value.(*pb.TeamInvitedPush)
+	if p.fail {
+		return errors.New("injected delivery failure")
+	}
+	return nil
+}
+
+func TestTeamEndpointInvitationQueryChecksAuthority(t *testing.T) {
+	player.RegisterEntity()
+	teamentity.RegisterEntity()
+	first, _ := entity.BuildEntityID(91001, teamentity.EntityKindTeam)
+	second, _ := entity.BuildEntityID(91002, teamentity.EntityKindTeam)
+	self, _ := entity.BuildEntityID(102, player.EntityKindPlayer)
+	checked := 0
+	c := &Controller{nestClient: teamEndpointClient{request: func(name nest.HandlerName, id int64, _ nest.Params) (any, error) {
+		switch name.String() {
+		case "handlerTeamInvites":
+			if id != self {
+				t.Fatalf("wrong observer: %d", id)
+			}
+			return []player.TeamInvitation{{TeamID: first, Inviter: 101, ExpireAt: 60000}, {TeamID: second, Inviter: 103, ExpireAt: 60000}}, nil
+		case "handlerTeamInvitation":
+			checked++
+			if id == first {
+				return teamentity.Invitation{}, nil
+			} // 队伍已解散，收件记录仍在。
+			return teamentity.Invitation{Snapshot: teamentity.Snapshot{TeamID: second, Leader: 104}, Invitee: 102, ExpireAt: 70000}, nil
+		default:
+			t.Fatalf("unexpected request %s", name.String())
+			return nil, nil
+		}
+	}}}
+	out, err := c.HandleTeamInvites(&playeraccess.Context{PlayerID: 102}, &pb.TeamInvitesRequest{})
+	if err != nil || out.Code != 0 || checked != 2 || len(out.Invites) != 1 || out.Invites[0].TeamID != second || out.Invites[0].ExpireAtUnixMilli != 70000 {
+		t.Fatalf("stale inbox exposed: response=%+v checked=%d err=%v", out, checked, err)
+	}
+}
+
+func TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority(t *testing.T) {
+	player.RegisterEntity()
+	teamentity.RegisterEntity()
+	id, _ := entity.BuildEntityID(91001, teamentity.EntityKindTeam)
+	self, _ := entity.BuildEntityID(102, player.EntityKindPlayer)
+	noted := 0
+	c := &Controller{registry: app.NewRegistry(nil), nestClient: teamEndpointClient{request: func(name nest.HandlerName, target int64, _ nest.Params) (any, error) {
+		if name.String() != "handlerTeamInviteNote" || target != self {
+			t.Fatalf("unexpected request %s/%d", name.String(), target)
+		}
+		noted++
+		return true, nil
+	}}}
+	push := &teamPushRecorder{online: true, fail: true}
+	if err := c.registry.Register(playerTCPCapability, push); err != nil {
+		t.Fatal(err)
+	}
+	invitation := teamentity.Invitation{Snapshot: teamentity.Snapshot{TeamID: id, Leader: 101}, Invitee: 102, ExpireAt: 60000}
+	c.announceInvite(context.Background(), invitation)
+	if noted != 1 || push.calls != 1 || push.push.TeamID != id || push.push.ExpireAtUnixMilli != 60000 {
+		t.Fatalf("note=%d push=%+v", noted, push)
+	}
+	push.online = false
+	c.announceInvite(context.Background(), invitation)
+	if noted != 1 || push.calls != 1 {
+		t.Fatal("offline player was cold loaded or pushed")
+	}
+}

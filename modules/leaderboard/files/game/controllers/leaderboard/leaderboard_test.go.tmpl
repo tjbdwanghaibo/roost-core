@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	gameleaderboard "{{MODULE}}/game/leaderboard"
-	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/pb"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	gameleaderboard "{{MODULE}}/game/leaderboard"
 )
 
 // 这个文件的场景跑在真实的 rank 服务实现上：svcrank.RedisStore（合并方式、同分保留较早的 Tie、

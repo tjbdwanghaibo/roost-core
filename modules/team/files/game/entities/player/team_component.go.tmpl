@@ -7,11 +7,11 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
 	"{{MODULE}}/db"
 	apperrors "{{MODULE}}/internal/errors"
 	team "{{MODULE}}/game/entities/team"
-
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 //roost:component type={{ID:component:Team}}
@@ -147,6 +147,9 @@ func (c *TeamComponent) NoteInvite(teamID, inviter, expireAt, now int64) bool {
 	})
 	for _, id := range expired {
 		notes.DelInvitedKey(id)
+	}
+	if previous, ok := notes.GetInvited(teamID); ok && previous != nil && previous.GetExpireAt() >= expireAt {
+		return true
 	}
 	if _, renewed := notes.GetInvited(teamID); !renewed && notes.InvitedLen() >= team.MaxInvites {
 		return false

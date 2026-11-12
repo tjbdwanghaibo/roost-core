@@ -5,13 +5,13 @@ import (
 	"errors"
 	"testing"
 
-	apperrors "{{MODULE}}/internal/errors"
-
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/wiring/ops"
+
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 func gmTestCommand(payload string) admin.Command {

@@ -50,7 +50,7 @@
   - 同一道具同一等级已经穿着时 `Equip` 幂等成功、不扣背包；空槽 `Unequip` 幂等返回 `found=false`。这只是状态幂等，不是请求账本：延迟到达的旧请求可能再次改变穿戴。
   - 同一槽位上同一道具换一个等级再 `Equip`：穿着的还是这一件，背包不动（不扣、不退，空包也能换），只改等级；变化钩子照常执行，钩子失败时等级保持原值。
 - **配置变更：** 从 `equipment_item` 删掉一行之后，这件道具不能再穿，已经穿着的不再提供属性；卸下仍受 bag 的道具表与容量约束，退不回去时整件装备保留。数据迁移由工程负责，模块不自动销毁物品。
-- **前提：** 依赖 bag 模块、nest Mod 与 configdata。只操作一个 Player，没有跨实体、跨进程的部分。模块自己不打开玩家接入与自身视图同步（不装 enter 时要自己做，见 KNOWN-LIMITS 的“不装 enter 时安装不打开客户端同步”）。
+- **前提：** 依赖清单声明的业务模块与 Nest/configdata。单装即代办玩家 TCP 和自身同步（`access: {transport: tcp, self_sync: true}`），可读取穿戴、背包或保底的初始全量及后续变化；不依赖 enter 顺带打开。真正连入仍须实现认证器（或装 login）、启用 player-tcp 配置并创建 Player。已有自建 Sync Manager 的工程按 `--no-self-sync` 的正式接法装配，不能同时创建两个 Manager。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“业务模块目录”一条：game-demo 的属性 / 装备已换成模块。
 
 ## 复用方式

@@ -45,7 +45,7 @@ func TestModuleDungeonInstallAndVerify(t *testing.T) {
 		}
 		counts[module.Name] = module.Passed
 	}
-	if counts["dungeon"] != 19 || counts["dungeon+leaderboard"] != 3 {
+	if counts["dungeon"] != 21 || counts["dungeon+leaderboard"] != 3 {
 		t.Fatalf("scenario counts=%v", counts)
 	}
 	before := moduleProjectDigest(t, root)

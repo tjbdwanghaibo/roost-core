@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
-	apperrors "{{MODULE}}/internal/errors"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 const capability app.ModName = "gm.commands"
