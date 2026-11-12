@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
     closed = false;
     connection.connect("127.0.0.1", port, ticket);
     wait([&] { return full == 1; });
-    auto level = state.level().value();
+    auto level = state.profile().value().level();
     roost::protocol::AddExpRequest request;
     request.set_amount(250);
     connection.request_pb(
@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
           response = true;
         });
     wait([&] { return response && delta > 0; });
-    if (state.level().value() <= level)
+    if (state.profile().value().level() <= level)
       throw std::runtime_error("incremental level missing");
     auto committed = state;
     std::cout << "READY_REMOVE" << std::endl;

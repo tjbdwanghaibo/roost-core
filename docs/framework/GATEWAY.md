@@ -149,6 +149,8 @@ C# 入口位于 `client/dotnet/Roost.Client.Demo`，使用 SDK 回调，不另�
 
 2026-11-01 在 macOS arm64、MongoDB 8.0.32 隔离环境中，C# 和 C++ 两条链均通过，生成 Go 测试启用 race、零 SKIP，Full/Delta/Remove/重连与存储检查均执行。C++ 复跑方式：在同一环境中设置 `ROOST_GATE_REAL=1 ROOST_GATE_CPP=1 ROOST_PROTOBUF_PREFIX=<本机 protobuf 安装目录>`，运行 `go test -count=1 -v -timeout 10m -run '^TestGateGeneratedBusinessConsumer$' ./codegen/internal/roost`，需要 CMake/C++ 工具链。
 
+2026-11-12 复跑：game-demo 的经验与等级搬进 profile 模块之后这两个入口的夹具与演示客户端没有跟着改、一直编译不过，当日修复；C# 链在临时 NATS（`test-gate-client.sh`）与隔离环境（`test-gate-real.sh`）下都通过，C++ 链改了没有跑（本机没有 protobuf）。
+
 这里的恢复是对象/驱动/WAL 重开及 DAO 冷水合，不是进程 SIGKILL、断电或 Redis 重启。未验证 Linux、跨机、Unity Editor/IL2CPP、其他设备、多玩家容量与第三方身份平台；该结果也不替代各玩法自己的真实持久恢复验证。
 
 ### Robot 混合诊断

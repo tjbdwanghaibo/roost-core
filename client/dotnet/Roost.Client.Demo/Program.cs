@@ -40,7 +40,7 @@ internal static class Program
         if (!rejected || client.Connection.State == ConnectionState.Ready) throw new Exception("Invalid ticket accepted");
         client.Connection.ConnectAsync(Environment.GetEnvironmentVariable("ROOST_GATE_TICKET") ?? "ticket").GetAwaiter().GetResult();
         Wait(() => full == 1);
-        int before = current!.Level?.Value ?? 0;
+        int before = current!.Profile?.Value?.Level ?? 0;
         bool response = false;
         client.Request(MessageIds.RequestAddExp, MessageIds.ResponseAddExp, new AddExpRequest { Amount = 250 }, AddExpResponse.Parser,
             result => {
@@ -48,7 +48,7 @@ internal static class Program
                 response = true;
             }, error => failure = error);
         Wait(() => response && delta > 0);
-        if ((current?.Level?.Value ?? 0) <= before) throw new Exception("DAO patch did not update level");
+        if ((current?.Profile?.Value?.Level ?? 0) <= before) throw new Exception("DAO patch did not update level");
         var committed = current!.Clone();
         // 测试宿主在这条观察屏障之后撤销订阅；不是生产网络中的控制协议。
         Console.WriteLine("READY_REMOVE"); Console.Out.Flush();

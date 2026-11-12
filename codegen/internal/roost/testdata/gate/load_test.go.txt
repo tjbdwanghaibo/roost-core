@@ -138,11 +138,11 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 					}
 					if observation.kind != robot.SyncRemove {
 						var ok bool
-						observation.exp, ok = fields["exp"].(int64)
+						observation.exp, ok = clientsync.PlayerExp(fields)
 						if !ok {
 							return fmt.Errorf("missing typed exp")
 						}
-						observation.level, ok = fields["level"].(int32)
+						observation.level, ok = clientsync.PlayerLevel(fields)
 						if !ok {
 							return fmt.Errorf("missing typed level")
 						}
@@ -206,7 +206,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	}()
 	initial := wait(robot.SyncFull)
 	confirm(initial)
-	base := initial.exp + int64(initial.level)*playerentity.ExpPerLevel
+	base := initial.exp + int64(initial.level)*playerentity.ProfileExpPerLevel
 	var completed int64
 	send := func() {
 		t.Helper()
@@ -233,7 +233,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 		}
 		v := wait(robot.SyncDelta)
 		completed++
-		if v.exp+int64(v.level)*playerentity.ExpPerLevel != base+completed {
+		if v.exp+int64(v.level)*playerentity.ProfileExpPerLevel != base+completed {
 			t.Fatal("client state differs from acknowledged changes")
 		}
 		confirm(v)
@@ -330,7 +330,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	probe.CancelConnection(connection)
 	connect()
 	recovered := wait(robot.SyncFull)
-	if recovered.exp+int64(recovered.level)*playerentity.ExpPerLevel != base+completed {
+	if recovered.exp+int64(recovered.level)*playerentity.ProfileExpPerLevel != base+completed {
 		t.Fatal("reconnect did not recover authoritative state")
 	}
 	confirm(recovered)

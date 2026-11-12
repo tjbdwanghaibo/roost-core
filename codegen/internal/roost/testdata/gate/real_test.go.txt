@@ -266,7 +266,7 @@ func (f *realGateFixture) verifyRecovery(t *testing.T, walDir string, record cor
 			t.Fatal(err)
 		}
 	}
-	if coldPlayer.Dao().GetExp() != player.Dao().GetExp() || coldPlayer.Dao().GetLevel() != player.Dao().GetLevel() || coldWorld.Dao().GetExpGranted() != world.Dao().GetExpGranted() {
+	if coldPlayer.Dao().GetProfilePrivate().GetExp() != player.Dao().GetProfilePrivate().GetExp() || coldPlayer.Dao().GetProfile().GetLevel() != player.Dao().GetProfile().GetLevel() || coldWorld.Dao().GetExpGranted() != world.Dao().GetExpGranted() {
 		t.Fatal("cold DAO differs from acknowledged business result")
 	}
 	t.Log("PASS real Gate: Redis account reload, Mongo two-DAO transaction, WAL reopen, transaction replay and cold generated DAO hydration")
