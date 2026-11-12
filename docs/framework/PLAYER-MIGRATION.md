@@ -191,7 +191,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 ### 7.4 运维：查看与人工了结
 
-工具是 game-demo 的 [cmd/accountctl](../../demo/cmd/accountctl/main.go.tmpl)，直接连 account 的存储。三个 `transfer-role` 步骤都要求 `-note`，备注写进角色记录。
+工具是 game-demo 的 [cmd/accountctl](../../demo/cmd/accountctl/operator.go.tmpl)（命令登记在 login 模块的 accountctl 上），直接连 account 的存储。三个 `transfer-role` 步骤都要求 `-note`，备注写进角色记录。
 
 ```bash
 # 这个角色绑定在哪、有没有在途的换服（Transfer）、最近一次是怎么了结的（LastTransfer）

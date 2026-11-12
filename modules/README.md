@@ -63,6 +63,8 @@
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。再装 `portal`（连带 `login`），客户端就能从渠道身份经 HTTP 登录、拿区服清单与推荐、换进服票据，握手后由游戏服告知要不要先新建，新建（带角色名）之后进入游戏；入口在托管 account 的进程上监听。
 
+谁在用这三个登录模块（2026-11-12）：**game-demo 模板**装的是 `login`、`portal`、`servertime`（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`，排在它原有的十个模块之后）。它不带自己的认证器与 account collaborators，只动模块留给工程的地方——渠道入口 `login_channels.go` 换成 demo 渠道、经 `registerCommand` 给 `cmd/accountctl` 多登记四个命令——并覆盖 enter 域的两个端点，让“加载 Player 之前先核对归属、接入驻留表”的规矩在 `EnterGame` 与 `EnterCreate` 上都成立（[demo 的说明](../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入)）。**两个配方（casual、turn-pvp）还没有接**：它们仍用自带的、只认会话令牌的认证器。
+
 ## 使用
 
 ```sh

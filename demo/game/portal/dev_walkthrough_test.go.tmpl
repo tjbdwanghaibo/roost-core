@@ -1,0 +1,131 @@
+package portal
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	gamelogin "{{MODULE}}/game/login"
+	accountcollaborators "{{MODULE}}/internal/service/account"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/webroute"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	wiringaccount "github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// WALKTHROUGH 的“登录”一节照着工程自带的开发配置走：三次 POST 之后手里是进服票据与本机这台 game 的地址。
+// 这个场景用的就是那份配置文件（configs/service/config.account.yaml，不是场景里另写的键值）、入口真正的启动入口
+// Start、工程自己的身份校验（demo 渠道与开发渠道）与真实的 account（内存存储）；拿到的票据交给登录模块的认证器握手。
+// 没有起进程：没有经真实的 HTTP 监听、总线与 Redis。帮手（portalPost 等）来自 portal 模块的 portal_test.go；
+// 用例名不以 TestPortal 开头——那个前缀是模块自己的验收口径。
+func TestDevConfigWalksTheThreeCallsToAnEnterTicket(t *testing.T) {
+	cfg := viper.New()
+	cfg.SetConfigFile(filepath.Join("..", "..", "configs", "service", "config.account.yaml"))
+	if err := cfg.ReadInConfig(); err != nil {
+		t.Fatalf("read the account service's dev config: %v", err)
+	}
+	// 文档里写的值：改了配置里的令牌或地址，WALKTHROUGH 与 README 要跟着改。
+	if token := cfg.GetString("login.dev_token"); token != "dev-local" {
+		t.Fatalf("login.dev_token in the dev config is %q; the walkthrough logs in with dev-local", token)
+	}
+	if addr := cfg.GetString("portal.servers.1000"); addr != "127.0.0.1:7000" {
+		t.Fatalf("portal.servers.1000 in the dev config is %q; the walkthrough connects to 127.0.0.1:7000", addr)
+	}
+	registry := app.NewRegistry(cfg)
+
+	verifier := accountcollaborators.Verifier()
+	if err := verifier.(wiringaccount.RegistryBound).BindRegistry(registry); err != nil {
+		t.Fatalf("the dev config does not pass the identity verifier's own checks: %v", err)
+	}
+	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := int64(100_000)
+	accounts, err := svcaccount.New(svcaccount.Config{
+		Accounts:      versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:         versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:       versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Slots:         versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Names:         names,
+		Verifier:      verifier,
+		Allocator:     svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) { next++; return next, nil }),
+		NameRules:     accountcollaborators.NameRules(),
+		SessionSecret: "dev-walkthrough-secret",
+		Now:           now,
+		SystemNow:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// make dev-run 在服务都起来之后做的那一步：accountctl upsert-server -sid 1000。
+	if _, err := accounts.UpsertServer(context.Background(), svcaccount.GameServer{ID: 1000, Name: "{{GAME_SERVICE}}-1000", Status: svcaccount.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	engine := httpserver.NewEngine()
+	if err := registry.Register(svcaccount.CapabilityName, svcaccount.Accounts(accounts)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModWeb, webroute.Registerer(webroute.NewRegistrar(engine))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(registry); err != nil {
+		t.Fatalf("the front door does not start on the dev config: %v", err)
+	}
+
+	players := map[string]int64{}
+	for _, login := range []struct{ channel, openID, credential string }{
+		{"demo", "alice", "demo:alice"}, // 机器人、演练脚本与 WALKTHROUGH 用的 demo 渠道
+		{"dev", "bob", "dev-local"},     // 登录模块的开发渠道：凭据是配置里的开发令牌
+	} {
+		loggedIn := portalPost(t, engine, PathLogin, map[string]any{"channel": login.channel, "open_id": login.openID, "credential": login.credential})
+		ticket := loggedIn.text("account_ticket")
+		if loggedIn.status != 200 || ticket == "" {
+			t.Fatalf("%s login: http %d %s", login.channel, loggedIn.status, loggedIn.raw)
+		}
+		listed := portalPost(t, engine, PathServers, map[string]any{"account_ticket": ticket})
+		servers, _ := listed.body["servers"].([]any)
+		if listed.status != 200 || listed.number("recommended_server_id") != 1000 || len(servers) != 1 {
+			t.Fatalf("%s server list: http %d %s", login.channel, listed.status, listed.raw)
+		}
+		if server, _ := servers[0].(map[string]any); server["addr"] != "127.0.0.1:7000" || server["status"] != "open" || server["role"] != nil {
+			t.Fatalf("%s server list entry = %v, want the open server 1000 at 127.0.0.1:7000 with no role yet", login.channel, servers[0])
+		}
+		entered := portalPost(t, engine, PathEnter, map[string]any{"account_ticket": ticket, "server_id": 1000})
+		handshake := entered.text("ticket")
+		if entered.status != 200 || !strings.HasPrefix(handshake, "enter:") || entered.text("addr") != "127.0.0.1:7000" || entered.number("serving_server_id") != 1000 {
+			t.Fatalf("%s enter: http %d %s", login.channel, entered.status, entered.raw)
+		}
+		// 握手：登录模块的认证器把票据交回 account，新号在这一步有了玩家号。
+		principal, err := gamelogin.Authenticator{Accounts: accounts}.Authenticate(context.Background(), handshake)
+		if err != nil || principal.PlayerID <= 100_000 || !gamelogin.EnterTicketSession(principal.Claims) {
+			t.Fatalf("%s handshake with the enter ticket: %+v, %v", login.channel, principal, err)
+		}
+		if serving, ok := gamelogin.ServingServer(principal.Claims); !ok || serving != 1000 {
+			t.Fatalf("%s handshake: the session is served by %d (%v), want 1000", login.channel, serving, ok)
+		}
+		players[login.channel] = principal.PlayerID
+	}
+	if players["demo"] == players["dev"] {
+		t.Fatalf("two accounts were mapped to one player: %v", players)
+	}
+	// 凭据不对的登录在入口被拒，拿不到票据。
+	for _, bad := range []map[string]any{
+		{"channel": "demo", "open_id": "alice", "credential": "demo:bob"},
+		{"channel": "dev", "open_id": "bob", "credential": "dev-guess"},
+		{"channel": "store", "open_id": "alice", "credential": "demo:alice"},
+	} {
+		if refused := portalPost(t, engine, PathLogin, bad); refused.status != 400 || refused.text("account_ticket") != "" || refused.code() == 0 {
+			t.Fatalf("login %v: http %d %s; want a coded refusal", bad, refused.status, refused.raw)
+		}
+	}
+}
