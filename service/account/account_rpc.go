@@ -70,6 +70,12 @@ type Accounts interface {
 	// (wiring/account ServingGuardMod).
 	GetServer(ctx context.Context, serverID int32) (server GameServer, err error)
 
+	// ListServers 返回登记过的全部区服记录，按服号升序，至多 MaxServers 条（到了上限 UpsertServer 拒绝
+	// 登记新的服号，所以这里从不截断）。只读；区服记录是登录前就公开的列表信息，不需要调用方身份。
+	// 登录入口与清单服务（manifest）用它知道“有哪些服”；连接地址、负载与推荐不在 account 里。
+	// 索引与记录的一致性见 servers.go。
+	ListServers(ctx context.Context) (servers []GameServer, err error)
+
 	// RoleOnServer 返回 accountID 在 serverID 上的角色（一个账号在一个服至多一个）；只读。没有角色、角色还
 	// 没发布、角色已经换到别的服，都答 ErrRoleMissing（各种 slot 状态的回答见 Service.RoleOnServer）。
 	// 登录入口用它告诉客户端“你在这个服上的角色是谁”：换设备、重装之后客户端不知道自己的 player_id，

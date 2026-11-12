@@ -110,6 +110,13 @@ func (s *Service) MergeServer(ctx context.Context, request MergeRequest) (MergeR
 		return result, nil
 	}
 
+	// 两个服都补登记进区服索引（servers.go）：正常情况下它们早就在里面，这一步不写；索引功能之前登记的
+	// 区服靠这里补上。
+	for _, id := range []int32{from, into} {
+		if err := s.ensureServerListed(ctx, id); err != nil {
+			return result, err
+		}
+	}
 	nowUnix := s.cfg.SystemNow().Unix() // 运维记录，系统时间
 	updatedTarget, _, err := s.cfg.Servers.Update(ctx, into, func(current GameServer, found bool) (GameServer, bool, error) {
 		if !found {

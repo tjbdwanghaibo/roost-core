@@ -462,6 +462,9 @@ func (s *Service) MarkLogout(ctx context.Context, accountID string, playerID int
 // UpsertServer records a server. Operator-facing. It never touches the merge
 // fields (MergedInto, MergedFrom, MergedAtUnix, MergeNote): those belong to
 // MergeServer and UnmergeServer, and a rename must not erase an alias.
+//
+// 它同时把服号登记进区服索引（ListServers 读的那一条，servers.go）：先索引、后记录。索引已满
+// （MaxServers）而这是一个新服号时答 ErrRangeInvalid，什么也不写；已登记的服照常更新。
 func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServer, error) {
 	if server.ID <= 0 {
 		return GameServer{}, fmt.Errorf("%w: id is zero or negative", ErrServerInvalid)
@@ -474,10 +477,14 @@ func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServ
 	default:
 		return GameServer{}, fmt.Errorf("%w: unsupported status %q", ErrServerInvalid, server.Status)
 	}
+	if err := s.ensureServerListed(ctx, server.ID); err != nil {
+		return GameServer{}, err
+	}
 	now := s.cfg.SystemNow() // an operator record, not game time
 	var result GameServer
 	_, _, err := s.cfg.Servers.Update(ctx, server.ID, func(current GameServer, _ bool) (GameServer, bool, error) {
 		next := server
+		next.Listed = nil // 索引只在保留键上，调用方带进来的不算
 		// 合服字段只由 MergeServer / UnmergeServer 写：改名、改状态不能把别名抹掉。
 		next.MergedInto, next.MergedFrom = current.MergedInto, append([]int32(nil), current.MergedFrom...)
 		next.MergedAtUnix, next.MergeNote = current.MergedAtUnix, current.MergeNote

@@ -43,6 +43,7 @@ const (
 	MethodUpdateProfile      = "account.UpdateProfile"
 	MethodMarkLogout         = "account.MarkLogout"
 	MethodGetServer          = "account.GetServer"
+	MethodListServers        = "account.ListServers"
 	MethodRoleOnServer       = "account.RoleOnServer"
 	MethodRoleBinding        = "account.RoleBinding"
 	MethodBeginRoleTransfer  = "account.BeginRoleTransfer"
@@ -62,6 +63,7 @@ var Methods = []string{
 	MethodUpdateProfile,
 	MethodMarkLogout,
 	MethodGetServer,
+	MethodListServers,
 	MethodRoleOnServer,
 	MethodRoleBinding,
 	MethodBeginRoleTransfer,
@@ -213,6 +215,21 @@ type rpcGetServerRequest struct {
 type rpcGetServerResponse struct {
 	rpcStatus
 	Server GameServer `json:"server"`
+}
+
+// rpcListServersRequest is the ListServers request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcListServersRequest struct {
+}
+
+// rpcListServersResponse is the ListServers response on the wire.
+type rpcListServersResponse struct {
+	rpcStatus
+	Servers []GameServer `json:"servers"`
 }
 
 // rpcRoleOnServerRequest is the RoleOnServer request on the wire.
@@ -371,6 +388,14 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			server, err := service.GetServer(ctx.Context(), wire.ServerID)
 			return rpcGetServerResponse{rpcStatus: statusOf(err), Server: server}, nil
+		},
+		MethodListServers: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcListServersRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcListServersResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			servers, err := service.ListServers(ctx.Context())
+			return rpcListServersResponse{rpcStatus: statusOf(err), Servers: servers}, nil
 		},
 		MethodRoleOnServer: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcRoleOnServerRequest
@@ -559,6 +584,17 @@ func (c *BusClient) GetServer(ctx context.Context, serverID int32) (GameServer, 
 	return resp.Server, err
 }
 
+// ListServers 返回登记过的全部区服记录，按服号升序，至多 MaxServers 条（到了上限 UpsertServer 拒绝
+// 登记新的服号，所以这里从不截断）。只读；区服记录是登录前就公开的列表信息，不需要调用方身份。
+// 登录入口与清单服务（manifest）用它知道“有哪些服”；连接地址、负载与推荐不在 account 里。
+// 索引与记录的一致性见 servers.go。
+// ListServers implements Accounts.
+func (c *BusClient) ListServers(ctx context.Context) ([]GameServer, error) {
+	var resp rpcListServersResponse
+	err := c.call(ctx, MethodListServers, rpcListServersRequest{}, &resp)
+	return resp.Servers, err
+}
+
 // RoleOnServer 返回 accountID 在 serverID 上的角色（一个账号在一个服至多一个）；只读。没有角色、角色还
 // 没发布、角色已经换到别的服，都答 ErrRoleMissing（各种 slot 状态的回答见 Service.RoleOnServer）。
 // 登录入口用它告诉客户端“你在这个服上的角色是谁”：换设备、重装之后客户端不知道自己的 player_id，
@@ -684,6 +720,10 @@ func (c capability) MarkLogout(ctx context.Context, accountID string, playerID i
 
 func (c capability) GetServer(ctx context.Context, serverID int32) (GameServer, error) {
 	return c.inner.GetServer(ctx, serverID)
+}
+
+func (c capability) ListServers(ctx context.Context) ([]GameServer, error) {
+	return c.inner.ListServers(ctx)
 }
 
 func (c capability) RoleOnServer(ctx context.Context, accountID string, serverID int32) (Role, error) {

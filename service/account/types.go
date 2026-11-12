@@ -286,11 +286,16 @@ type GameServer struct {
 	// account 没有独立的审计日志，运维记录写在记录本身（与 ResolvePendingCreation 相同）。
 	MergedAtUnix int64  `json:"merged_at_unix,omitempty"`
 	MergeNote    string `json:"merge_note,omitempty"`
+
+	// Listed 只出现在区服索引记录上（Servers 存储的保留键 0，servers.go）：登记过的全部服号，升序。
+	// 任何一个区服的记录都不带它，任何接口交出去的 GameServer 上它都是空的。
+	Listed []int32 `json:"listed,omitempty"`
 }
 
-// clone 复制 MergedFrom，调用方拿到的记录不与存储共享切片。
+// clone 复制 MergedFrom，调用方拿到的记录不与存储共享切片；Listed 不随区服记录交出去。
 func (g GameServer) clone() GameServer {
 	g.MergedFrom = append([]int32(nil), g.MergedFrom...)
+	g.Listed = nil
 	return g
 }
 
