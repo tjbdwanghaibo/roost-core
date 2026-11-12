@@ -139,7 +139,7 @@ func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *rec
 		}
 	}
 	if recipeExtraRegistry != nil {
-		if err := recipeExtraRegistry(registry); err != nil {
+		if err := recipeExtraRegistry(f.registry); err != nil {
 			t.Fatal(err)
 		}
 	}

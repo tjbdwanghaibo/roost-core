@@ -631,7 +631,7 @@ func TestEachObserverGetsOnlyItsViewOfAPlayer(t *testing.T) {
 	seenNearby, nearbyBytes := fullOf(nearbyID, "near")
 	seenByTeammate, teammateBytes := fullOf(teammateID, "team")
 	seenByNearTeammate, _ := fullOf(nearTeammateID, "team")
-	for _, field := range append([]string{"profile", "pos_x", "pos_y", "scene_id", "facing", "equipment", "alliance_id", "cell_hp", "cell_max_hp"}, playerPrivateFields...) {
+	for _, field := range append([]string{"profile", "pos_x", "pos_y", "scene_id", "facing", "equipment", "alliance", "cell_hp", "cell_max_hp"}, playerPrivateFields...) {
 		if _, ok := own[field]; !ok {
 			t.Errorf("the player's own full lacks %q: %v", field, own)
 		}
@@ -642,7 +642,7 @@ func TestEachObserverGetsOnlyItsViewOfAPlayer(t *testing.T) {
 				t.Errorf("%s received the player's private %q: %v", who, field, seen)
 			}
 		}
-		for _, field := range []string{"profile", "pos_x", "pos_y", "facing", "equipment", "alliance_id", "cell_hp", "cell_max_hp"} {
+		for _, field := range []string{"profile", "pos_x", "pos_y", "facing", "equipment", "alliance", "cell_hp", "cell_max_hp"} {
 			if _, ok := seen[field]; !ok {
 				t.Errorf("%s did not receive the player's public %q: %v", who, field, seen)
 			}
