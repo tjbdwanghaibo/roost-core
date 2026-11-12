@@ -214,3 +214,8 @@ mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件�
 新增 team 模块，保留 Remote 共享权威与 `[Team, Player]` 同事务边界，去掉分区场景前提；六个 PB 端点、持久唯一号、有限邀请、队长交接和 rehome 双向准入。最小 25，组合 67 PASS / 0 SKIP（含 rehome 40 与联动 2）；8 个变异与两轮 race、生成 build/vet/ID/漂移、根包与清单检查通过。[证据](evidence/module-team-20261112/README.md)。
 
 CBM 已刷新并核对本批 21 个路径，5 个局部模板缺口逐段补读。仍未运行完整矩阵与真实依赖；R7 剩匹配、匹配房、turn-pvp 与 demo 队伍迁移，R8～R11、§5、§6 不变。维护者明确联盟使用 `alliance` 名字，activity 是通用时间阶段框架，排行/奖励为可选联动；已写入后续需求。
+
+
+## 附录：R7 优先级与 Team 接线修正（2026-11-12）
+
+维护者指定先完成 R7，再 R8 gift、R10 alliance；R9 activity 与 R11 lockstep 留待做。Team Controller 使用不存在的 lifecycle capability 导致启动失败，已补红测并改用正式生成的 TeamFromRegistry；26 + 40 + 2 场景、原变异和 race 通过，证据见 Team 报告。该补测不等于真实存储启动验收。

@@ -37,13 +37,13 @@ func TestModuleTeamGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("team: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"team": 25})
+	checkTaskModuleRows(t, report, map[string]int{"team": 26})
 	roost("module", "add", "rehome")
 	report, err = VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
 		t.Fatalf("team/rehome: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"team": 25, "rehome": 40, "team+rehome": 2})
+	checkTaskModuleRows(t, report, map[string]int{"team": 26, "rehome": 40, "team+rehome": 2})
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "rehome", "team")
 	if moduleProjectDigest(t, root) != before {

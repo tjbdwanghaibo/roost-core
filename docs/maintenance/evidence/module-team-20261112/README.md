@@ -34,3 +34,9 @@ CBM Tier 2：项目 `Users-whb-roost-worktrees-business-modules` 已刷新至 `2
 提交器、Remote 外部锁和权威回执使用隔离内存替身；Remote 载荷仍由正式生成的 `BuildRemoteCommitLocked` 构建并经正式 Nest 提交。没有真实 Redis / Mongo / NATS、独立 Gate、跨进程故障恢复或 TCP 端点验收。唯一号的 Mongo 原子计数器沿用 demo 做法，本批没有真实数据库压测。
 
 全模块正反序全新安装、全 demo、全仓以及交接 §6 联合验收按维护者要求留到最终批次。team 已加入完整矩阵入口，本批没有提前执行矩阵。空队伍与已解散墓碑没有自动清理；组队不推送队友视野，后续移交给匹配也尚未接入。
+
+## 构造入口补测与修复
+
+后续 R7 接线复核发现 Controller 按 `lifecycle.Team` 名称查表，但生成器只提供 `lifecycle.TeamFromRegistry` 构造入口，没有发布该 capability。业务事务夹具绕过构造器，原 25 条通过未覆盖真实装配。这会使安装后的 Team Controller 启动失败。
+
+新增构造回归，使用正式 `entity.runtime` 和 Nest capability，先得到 [失败证据](lifecycle-red.log)，再改用生成的构造函数并保留错误链。[复跑](lifecycle-green.log)通过：最小 26 条、加 rehome 共 68 条，包含原 8 个变异、两轮 race、build/vet/ID/生成检查。此测试只证明生命周期依赖查找正确，不替代 Mongo/Remote 的真实启动验收。后续新增 Controller 必须覆盖 FromRegistry，不只直接构造测试对象。

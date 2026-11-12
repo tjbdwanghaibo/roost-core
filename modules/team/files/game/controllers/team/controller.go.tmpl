@@ -30,9 +30,9 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || client == nil {
 		return nil, fmt.Errorf("team: nest unavailable")
 	}
-	teams, ok := app.Lookup[*lifecycle.TeamLifecycle](registry, app.ModName("lifecycle.Team"))
-	if !ok || teams == nil {
-		return nil, fmt.Errorf("team: lifecycle unavailable")
+	teams, err := lifecycle.TeamFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("team: lifecycle: %w", err)
 	}
 	remote, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
 	if !ok || remote == nil {

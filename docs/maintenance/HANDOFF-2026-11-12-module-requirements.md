@@ -25,6 +25,8 @@
 
 ## 2. 验证节奏
 
+当前优先级（维护者 2026-11-12）：先完成 R7，再完成 R8 gift、R10 alliance；R9 activity、R11 lockstep 保留待做。本轮不扩展这两个延期模块，§5 / §6 的既有欠账仍单独登记。
+
 维护者 2026-11-12：“测试最终再跑，我还会继续开发”。每一步只跑与改动直接相关的检查（模块自己的 `roost module verify`、`go test -run 'TestModuleCatalog|TestModuleWith' ./codegen/internal/roost`、根包 `go test -count=1 .`、`python3 scripts/check-doc-anchors.py`）。完整测试（`scripts/test-modules-generated.sh`、`TestDemo|TestModule`、重新生成 game-demo 跑全量、全仓 `go test ./...`）留到最后统一跑一次；没跑的在提交说明与报告里写明。
 
 ## 3. 第一优先：让拼出来的工程“能运营”

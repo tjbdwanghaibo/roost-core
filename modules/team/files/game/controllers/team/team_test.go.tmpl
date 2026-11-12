@@ -8,7 +8,12 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 func TestTeamEndpointRequiresAuthenticatedPlayer(t *testing.T) {
@@ -58,5 +63,22 @@ func TestTeamEndpointRejectsInvalidInviteeBeforeDispatch(t *testing.T) {
 	response, err := c.HandleTeamInvite(&playeraccess.Context{PlayerID: 101}, &pb.TeamInviteRequest{Invitee: -1})
 	if err != nil || response.Code != int32(errcode.CodeOf(apperrors.ErrTeamInvalid)) {
 		t.Fatalf("invalid invitee: %+v %v", response, err)
+	}
+}
+
+// 启动只发布 entity.runtime，不发布名为 lifecycle.Team 的能力。
+// 不放入 Remote，检查构造器已经越过正式 lifecycle 装配而到达下一项依赖。
+func TestTeamControllerUsesEntityRuntimeLifecycle(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	engine := nest.NewEngine()
+	if err := registry.Register(mods.ModNest, engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEntityRuntime, entity.NewManagerAccess(entity.NewEntityManager())); err != nil {
+		t.Fatal(err)
+	}
+	_, err := FromRegistry(registry)
+	if err == nil || err.Error() != "team: remote runtime unavailable" {
+		t.Fatalf("controller did not construct lifecycle from entity.runtime: %v", err)
 	}
 }
