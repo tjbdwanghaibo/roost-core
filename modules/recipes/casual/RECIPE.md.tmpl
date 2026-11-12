@@ -12,8 +12,10 @@
 - 握手的认证器（`internal/access/player/tcp/auth.go` 与 `game/login`）和 account 的协作者由 login 模块写下：票据全部由 account
   签发与校验，玩家号是 account 的 Redis 里的计数器。渠道验签在 `internal/service/account/login_channels.go` 接，缺省一个渠道都没接；
   认证保持 fail-closed，没有接受任意身份的测试密码。
-- 开发时在 `configs/service/config.account.yaml` 末尾写 `login.dev_token: dev-…`（渠道 `dev` 的凭据，生产配置里写了它进程不启动）
-  与 `portal.servers`（服号 → 客户端连得到的地址，例如 `"1000": 127.0.0.1:7000`）。`make dev-run` 起完全部服务后自动登记本机的服；
+- 新建配方时已在开发配置 `configs/service/config.account.yaml` 写入 `login.dev_token: dev-recipe-local` 和
+  `portal.servers`（地址取本工程业务服务的 SID / TCP 端口）。登录使用渠道 `dev`、自选 `open_id`、凭据 `dev-recipe-local`。
+  这些值只供本机试用，不进入生产配置或 Secret 示例；生产环境设置开发令牌时 account 会拒绝启动。
+  `make dev-run` 起完全部服务后自动登记本机的服；
   别的环境执行一次 `go run ./cmd/accountctl upsert-server -sid <{{GAME_SERVICE}} 的 sid>`。
 - 登录入口挂在托管 account 的进程上（`web.addr`）：`POST /portal/login` → `/portal/servers` → `/portal/enter`，
   最后一步给出握手票据 `enter:<进服票据>` 与该连的地址。入口没有限流，对外要放在终止 TLS 的反向代理后面。
@@ -44,5 +46,8 @@
 `GOWORK=off go test -count=1 ./...`、`roost module verify`；`TestRecipe*` 专门验证首次发放与提交拒绝重试。
 配方另有真实 TCP/Robot → PB → Controller → Nest 验收：进服票据握手 → `EnterStatus` → 没新建就进入被拒且没有提交 → `EnterCreate` → `EnterGame`，
 重连不再要求新建，首次发放在“先新建再进入”下只发一次，购买重放，连错服的会话被告知并断开，会话令牌握手的老路。
-account 是真实的服务（内存存储），认证器是登录模块的；邮件/排行客户端与持久提交仍是替身，登录入口的 HTTP 那一段在 portal 模块自己的场景里，
-未验证自身 Sync 的推送驱动、真实存储与真实进程。
+上述自动化场景中 account 是真实的服务（内存存储），认证器是登录模块的；邮件/排行客户端与持久提交仍是替身，
+登录入口的 HTTP 那一段在 portal 模块自己的场景里。
+2026-11-12 另用生成工程的 `make dev-run` 完成单机真实进程演练：Mongo 副本集、Redis、NATS JetStream、etcd，
+curl 登录三步 → TCP 握手 → 拒绝未新建进入 → 新建 → 首次进入 → 重连。复跑探针见 roost-core 的
+`docs/maintenance/evidence/recipes-login-20261112/`。未验证全玩法的真实存储、进程重启恢复、自身 Sync 解码或跨机故障。

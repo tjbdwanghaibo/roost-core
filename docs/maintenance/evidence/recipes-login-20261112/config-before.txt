@@ -1,0 +1,6 @@
+=== RUN   TestRecipesCreateBuildableCompositions
+    recipe_test.go:85: recipe development login is not ready: token configured=false, servers=map[]
+--- FAIL: TestRecipesCreateBuildableCompositions (11.41s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	11.990s
+FAIL

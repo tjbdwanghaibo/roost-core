@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestRecipeSelectionRejectsUnknownAndConflictingTemplates(t *testing.T) {
@@ -80,6 +82,7 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 		if runtime := manifest.Modules["portal"].Runtime; runtime == nil || runtime.Framework != "account" {
 			t.Fatalf("%s: the front door is not hosted on the account service: %+v", name, manifest.Modules["portal"])
 		}
+		checkRecipeLoginDevelopmentConfig(t, target)
 		for _, args := range [][]string{{"test", "-json", "-count=1", "./..."}, {"test", "-json", "-race", "-count=1", "-run", "^TestRecipe|^TestEnter", "./game/handler", "./game/entities/player", "./internal/access/player/tcp"}, {"build", "./..."}, {"vet", "./..."}} {
 			cmd := exec.Command("go", args...)
 			cmd.Dir, cmd.Env = target, generatedProjectGoEnv()
@@ -101,8 +104,8 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 					}
 				}
 				// 公共的四条（整条登录链路、会话令牌的老路、连错服被告知并断开、换服在途的进入前检查），
-				// casual 另有首次发放两条与购买一条，turn-pvp 另有双人回合一条。
-				want := map[string]int{"casual": 7, "turn-pvp": 5}[name]
+				// casual 另有首次发放两条与购买一条，turn-pvp 另有建角名字与双人回合两条。
+				want := map[string]int{"casual": 7, "turn-pvp": 6}[name]
 				if passed != want || skipped != 0 {
 					t.Fatalf("recipe %s scenarios: %d passed, %d skipped, want %d/0", name, passed, skipped, want)
 				}
@@ -119,6 +122,10 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 			recipeMutationMustFail(t, target, "game/login/login_enter.go", `return claims[EnterTicketClaim] == "1"`, "return false", "./internal/access/player/tcp", "TestRecipeTCPEnterTicketCreatesFirstThenEnters", "EnterStatus for a new account")
 			recipeMutationMustFail(t, target, "internal/access/player/tcp/recipe_entering.go", "if !moving {", "if !moving || true {", "./internal/access/player/tcp", "TestRecipeEnteringRefusesARoleInTransfer", "want login_elsewhere")
 			recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if component.Built() {", "if false && component.Built() {", "./internal/access/player/tcp", "TestRecipeTCPFirstGrantPaysForAShopPurchase", "want enter_created")
+		}
+		if name == "turn-pvp" {
+			recipeMutationMustFail(t, target, "game/profile/enter_profile.go", "owner.ProfileComp().Rename(name)", "owner.ProfileComp().Rename(\"Wrong\")", "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "created profile name")
+			recipeMutationMustFail(t, target, "game/entities/player/profile_component.go", `if name == "" {`, `if false && name == "" {`, "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "empty create name")
 		}
 		// 同步后仍保持业务文件；再生不应改变框架生成物。
 		rule := filepath.Join(target, "RECIPE.md")
@@ -139,6 +146,37 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 		}
 		if err := Generate(target, GenerateOptions{Check: true}); err != nil {
 			t.Fatalf("recipe %s drift: %v", name, err)
+		}
+	}
+}
+
+func checkRecipeLoginDevelopmentConfig(t *testing.T, root string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "configs/service/config.account.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Login struct {
+			DevToken string `yaml:"dev_token"`
+		} `yaml:"login"`
+		Portal struct {
+			Servers map[string]string `yaml:"servers"`
+		} `yaml:"portal"`
+	}
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Login.DevToken != "dev-recipe-local" || config.Portal.Servers["1000"] != "127.0.0.1:7000" {
+		t.Fatalf("recipe development login is not ready: token configured=%t, servers=%v", config.Login.DevToken != "", config.Portal.Servers)
+	}
+	for _, rel := range []string{"configs/service/config.account.prod.example.yaml", kubernetesSecretExampleRel("account")} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(body, []byte("dev-recipe-local")) || bytes.Contains(body, []byte("127.0.0.1:7000")) {
+			t.Fatalf("recipe development credentials or directory leaked to %s", rel)
 		}
 	}
 }

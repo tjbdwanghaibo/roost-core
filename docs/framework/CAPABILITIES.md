@@ -211,7 +211,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| `roost project new -recipe` | 从 game 底座安装休闲或回合房间组合、正式 session 鉴权和业务规则 | `-recipe casual` / `-recipe turn-pvp` | 新工程支持；身份验证、匹配与胜负仍由业务提供 | [配方](../../modules/README.md#从配方创建工程) |
+| `roost project new -recipe` | 从 game 底座安装休闲或回合房间组合、login/portal/servertime 与业务规则 | `-recipe casual` / `-recipe turn-pvp` | 新工程支持 HTTP 登录到进服票据/新建/进入；开发配置可直接试用，生产渠道验签、匹配与胜负由业务提供 | [配方](../../modules/README.md#从配方创建工程) |
 | `roost module list` | 列出内置业务模块；在工程里执行时标出已安装的 | `roost module list [--json]` | 正式。目录以它的输出为准 | [modules](../../modules/README.md) |
 | `roost module plan` | 只预览，不改动工程：依赖的安装顺序、会先执行的 `roost add`、追加的 DAO 字段、分配的号、写入的文件 | `roost module plan <name…> [--json] [--service <svc>]` | 正式。`--json` 与 `add` 同一个结构 | 同上 |
 | `roost module add` | 安装模块（连同依赖）并运行生成器；已安装的不再处理；这次装的模块与已装的模块之间有联动文件（`glue <模块> with <另一个模块>`）时一并写进工程 | `roost module add <name…> [--json] [--service <svc>]` | 正式。落点被业务文件占用时拒绝、不覆盖；失败时模块写过的文件与 `roost.yaml` 恢复；没有卸载，分配过的号与存储键不回收 | 同上 |
@@ -306,7 +306,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 需求或类型 | 结论 | 是哪条限制 | 出处 |
 | --- | --- | --- | --- |
-| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有十三个模块和四组模块间联动，支持自带 Entity / DAO / lifecycle 与服务级启动、停机接线；game-demo 用上了其中的 enter、chat、leaderboard、bag、profile、mailbox 与 skillbook（连带 wallet）；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
+| 把其余玩法夹具与 game-demo 拆成模块 | 部分已实现 | 业务模块安装器支持自带 Entity / DAO / lifecycle 与服务级启动、停机接线，现行模块与联动以模块目录为准；casual / turn-pvp 配方及登录链路已实现，game-demo 已部分使用模块，其余玩法与剩余功能的迁移仍待推进 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
 | 业务模块的卸载 | 不做 | 分配过的号与存储键不回收；要去掉一个模块时按 `roost.yaml` 的 `modules.<name>` 归属清单手工删 | [业务模块方案“决定一览”](../maintenance/FEATURE-2026-11-10-business-modules.md#决定一览) |
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
 | 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |

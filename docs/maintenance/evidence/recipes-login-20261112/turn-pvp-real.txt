@@ -1,0 +1,2 @@
+PASS: curl login, servers, enter; server=1000; address=127.0.0.1:7000; tickets redacted
+PASS: TCP auth, create-first rejection, create, first enter, reconnect; profile validation=true

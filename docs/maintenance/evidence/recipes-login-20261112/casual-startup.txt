@@ -1,0 +1,13 @@
+building bin/app
+starting account (ready probe http://127.0.0.1:9101/readyz, log .dev/account.log)
+starting activity (ready probe http://127.0.0.1:9102/readyz, log .dev/activity.log)
+starting chat (ready probe http://127.0.0.1:9103/readyz, log .dev/chat.log)
+starting global (ready probe http://127.0.0.1:9104/readyz, log .dev/global.log)
+starting mail (ready probe http://127.0.0.1:9105/readyz, log .dev/mail.log)
+starting match (ready probe http://127.0.0.1:9106/readyz, log .dev/match.log)
+starting platform (ready probe http://127.0.0.1:9107/readyz, log .dev/platform.log)
+starting rank (ready probe http://127.0.0.1:9108/readyz, log .dev/rank.log)
+starting session (ready probe http://127.0.0.1:9109/readyz, log .dev/session.log)
+starting game (ready probe http://127.0.0.1:9100/readyz, log .dev/game.log)
+registering game server 1000 with the account service
+all services ready; logs in .dev/, stop with: sh deploy/dev/run.sh stop

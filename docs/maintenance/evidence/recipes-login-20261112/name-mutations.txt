@@ -1,0 +1,18 @@
+game/profile/enter_profile.go
+2026/11/12 17:03:29 INFO player tcp listener started addr=127.0.0.1:50015 max_connections=10000
+2026/11/12 17:03:29 INFO enter: create refused by a check check=profile player_id=42 err="profile_name_empty: name must not be empty"
+--- FAIL: TestRecipeTCPCreatePersistsProfileName (0.00s)
+    turn_network_test.go:48: created profile name: {Name:Wrong Level:0} <nil>
+FAIL
+FAIL	example.com/acceptance/recipeturn/internal/access/player/tcp	0.565s
+FAIL
+
+game/entities/player/profile_component.go
+2026/11/12 17:03:30 INFO player tcp listener started addr=127.0.0.1:50019 max_connections=10000
+--- FAIL: TestRecipeTCPCreatePersistsProfileName (0.00s)
+    turn_network_test.go:29: empty create name: &{Code:0 Reason:}
+FAIL
+FAIL	example.com/acceptance/recipeturn/internal/access/player/tcp	0.555s
+FAIL
+
+PASS: both name mutations caught by behavior; files restored
