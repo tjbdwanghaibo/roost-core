@@ -2,6 +2,7 @@ package combat
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -9,6 +10,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -24,7 +26,13 @@ func (c *Controller) HandleCombatReady(ctx *playeraccess.Context, req *pb.Combat
 	}
 	if err != nil {
 		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+			slog.ErrorContext(ctx.Context(), "combat: ready failed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "err", err)
+		}
 		return &pb.CombatReadyResponse{Code: code, Reason: reason}, nil
+	}
+	if out != nil && out.Code == 0 {
+		slog.InfoContext(ctx.Context(), "combat: ready confirmed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "ready", req.Ready)
 	}
 	return out, nil
 }

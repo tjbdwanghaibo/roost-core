@@ -40,6 +40,8 @@ name, err := c.Rename(ctx, playerID, requestKey, name) // 只能在 Nest 事务�
 - 名字不合规时是 profile 的 `profile_name_empty` / `profile_name_long` / `profile_name_invalid`。
 - 名字被占时是 Directory 的码原样带回（`directory: key is taken`，530101）；凭据失效是 530102 / 530103。
 
+**日志**：改名确认，记录请求键、旧名键中的名称与新名；重放时旧名可能为空。结果未知与内部错误记 Warn/Error，不打印占用票据。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/naming/controller.go`, `game/controllers/naming/naming_rename.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：没有敏感词过滤、改名花费、次数或冷却限制（要加就在受理之前加）；没有“只改大小写”的专门路径（只改大小写也会重新占名）；不导入旧数据——装它之前直接写进档案的名字不会自动补登记到目录；没有按玩家查询在途改名的协议；没有全服扫描器与自动清扫；没有后台任务。

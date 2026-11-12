@@ -3,8 +3,10 @@ package activity
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -34,6 +36,9 @@ func ResumePending(ctx context.Context, registry *app.Registry, views []Snapshot
 		done, err := hooks.Resume(ctx, registry, v)
 		if err == nil && done {
 			err = complete(ctx, v.Token)
+			if err == nil && v.Token.Scope == "player" {
+				slog.InfoContext(ctx, "activity: completion confirmed", "player_id", entity.GetUniqueIDFromEntityID(v.Token.Owner), "definition", v.Token.Definition, "generation", v.Token.Generation, "cycle", v.Token.Cycle, "phase", v.Token.Phase, "flow_version", v.Token.FlowVersion)
+			}
 		}
 		failures = errors.Join(failures, err)
 	}

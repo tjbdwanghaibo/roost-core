@@ -29,6 +29,8 @@ err = publisher.Publish(ctx, "announce", "维护完成", "maintenance-20261112")
 
 **错误码**：模块没有自己的业务码。输入不合法时返回框架的 `admin.ErrCommandInvalid`；chat 的错误原样返回。
 
+**日志**：服务端公告发布确认记 Debug，记录 kind / key，不打印正文。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/notice/notice.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：没有玩家发公告的协议；不周期播放、没有定时器与调度；不做定向公告（按服、按渠道、按玩家）；不做富文本与多语言；不单独存公告列表，也没有“登录时弹出最新公告”的入口。

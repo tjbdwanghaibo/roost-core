@@ -54,11 +54,18 @@ func (s *Service) Found(ctx context.Context, requestID string, callerID int64, c
 	if here {
 		reply, done, id, err := s.foundHere(ctx, requestID, callerID, callerSID, guard, name, openJoin)
 		if done {
+			if err == nil {
+				slog.InfoContext(ctx, "alliance: founding confirmed", "player_id", callerID, "request_key", requestID, "alliance_id", reply.Alliance.AllianceID, "name", name, "replayed", reply.Replayed)
+			}
 			return reply, err
 		}
 		minted = id // the guard moved: go on in two steps, with the id already minted
 	}
-	return s.foundInTwoSteps(ctx, requestID, callerID, callerSID, guard, name, openJoin, minted)
+	reply, err := s.foundInTwoSteps(ctx, requestID, callerID, callerSID, guard, name, openJoin, minted)
+	if err == nil {
+		slog.InfoContext(ctx, "alliance: founding confirmed", "player_id", callerID, "request_key", requestID, "alliance_id", reply.Alliance.AllianceID, "name", name, "replayed", reply.Replayed)
+	}
+	return reply, err
 }
 
 // foundHere is Found when the founder's guard is (or becomes) this
@@ -216,7 +223,11 @@ func (s *Service) Approve(ctx context.Context, requestID string, callerID int64,
 	if err := requireRequest(requestID, callerID, applicantID); err != nil {
 		return s.reply(alliancerule.Answer{}, err)
 	}
-	return s.admit(ctx, requestID, callerID, callerSID, target, applicantID, true)
+	reply, err := s.admit(ctx, requestID, callerID, callerSID, target, applicantID, true)
+	if err == nil {
+		slog.InfoContext(ctx, "alliance: approve confirmed", "player_id", callerID, "member_id", applicantID, "alliance_id", reply.Alliance.AllianceID, "request_key", requestID, "replayed", reply.Replayed)
+	}
+	return reply, err
 }
 
 // Join implements Alliance.
@@ -224,7 +235,11 @@ func (s *Service) Join(ctx context.Context, requestID string, callerID int64, ca
 	if err := requireRequest(requestID, callerID); err != nil {
 		return s.reply(alliancerule.Answer{}, err)
 	}
-	return s.admit(ctx, requestID, callerID, callerSID, target, callerID, false)
+	reply, err := s.admit(ctx, requestID, callerID, callerSID, target, callerID, false)
+	if err == nil {
+		slog.InfoContext(ctx, "alliance: join confirmed", "player_id", callerID, "member_id", callerID, "alliance_id", reply.Alliance.AllianceID, "request_key", requestID, "replayed", reply.Replayed)
+	}
+	return reply, err
 }
 
 // admit seats playerID in the alliance target under requestID (plan §2.5).
@@ -330,7 +345,11 @@ func (s *Service) Leave(ctx context.Context, requestID string, callerID int64, _
 	if err := requireRequest(requestID, callerID); err != nil {
 		return s.reply(alliancerule.Answer{}, err)
 	}
-	return s.remove(ctx, requestID, callerID, target, callerID)
+	reply, err := s.remove(ctx, requestID, callerID, target, callerID)
+	if err == nil {
+		slog.InfoContext(ctx, "alliance: leave confirmed", "player_id", callerID, "member_id", callerID, "alliance_id", reply.Alliance.AllianceID, "request_key", requestID, "replayed", reply.Replayed)
+	}
+	return reply, err
 }
 
 // Kick implements Alliance.
@@ -338,7 +357,11 @@ func (s *Service) Kick(ctx context.Context, requestID string, callerID int64, _ 
 	if err := requireRequest(requestID, callerID, memberID); err != nil {
 		return s.reply(alliancerule.Answer{}, err)
 	}
-	return s.remove(ctx, requestID, callerID, target, memberID)
+	reply, err := s.remove(ctx, requestID, callerID, target, memberID)
+	if err == nil {
+		slog.InfoContext(ctx, "alliance: kick confirmed", "player_id", callerID, "member_id", memberID, "alliance_id", reply.Alliance.AllianceID, "request_key", requestID, "replayed", reply.Replayed)
+	}
+	return reply, err
 }
 
 // remove unseats memberID: the roster first, then the guard — in the same

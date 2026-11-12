@@ -30,6 +30,8 @@
 - **错误码**（`internal/errors/attribute.go`）
   - `attribute_overflow`：属性为负，或超过支持的范围（单项上限是 `math.MaxInt64/4`）。
 
+**日志**：溢出拒绝记 Warn 并带 player_id；它是异常诊断，允许在组件发现拒绝时记录，不是事务成功事实。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/entities/player/attribute_component.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：没有 buff 与临时加成层、没有百分比加成、没有随机词条、没有战斗中的当前血量（那在 `combat` 模块的战斗 DAO 里）。只有 `HP`、`Attack`、`Power` 三个属性，要更多属性需要改属性定义文件。

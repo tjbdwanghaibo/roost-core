@@ -22,6 +22,8 @@
 - **配置**：没有配置表与配置键。两个常量写在组件里：`WalletReceiptWindow = 128`（去重窗口大小）、`WalletKeyMaxLen = 64`（业务键最大字节数）。
 - **错误码**（`internal/errors/wallet.go`）：`wallet_short`（余额不足）、`wallet_invalid`（键不合规或金额为 0 / 不为正）、`wallet_conflict`（同一个键换了金额）、`wallet_overflow`（余额超过 int64 上限）。
 
+**日志**：客户端消费与 GM 调整确认，记录请求键 / delta、确认余额。服务端直接用 WalletGrant Sender 的调用方负责记原因。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/wallet/wallet_spend.go`, `game/gm/wallet.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：只有一种货币（`Coins`），没有多货币；不做充值到账（另装 purchase）；不做玩家之间转账；不记流水——`WalletLedger` 只是防重发的窗口，不能当对账账本查历史。

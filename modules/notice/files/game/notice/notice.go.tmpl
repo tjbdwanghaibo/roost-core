@@ -4,6 +4,7 @@ package notice
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 
@@ -48,7 +49,11 @@ func (publisher *Publisher) Publish(ctx context.Context, kind, text, key string)
 	if err := gamechat.ValidateText([]byte(prefix + text)); err != nil {
 		return fmt.Errorf("%w: %v", admin.ErrCommandInvalid, err)
 	}
-	return publisher.chat.AnnounceWorld(ctx, prefix+text, "notice:"+kind+":"+key)
+	err := publisher.chat.AnnounceWorld(ctx, prefix+text, "notice:"+kind+":"+key)
+	if err == nil {
+		slog.DebugContext(ctx, "notice: publish completed", "kind", kind, "key", key)
+	}
+	return err
 }
 
 // FromRegistry 供可信业务代码取启动时发布的入口，不经玩家网络端点。

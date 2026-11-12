@@ -193,6 +193,10 @@ func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := portal.login(r.Context(), request)
+	if code, _ := errcode.ClientError(err); err != nil && code == errcode.CodeInternal {
+		// 上游错误可能含渠道原始凭证，只写错误码，不透传错误文本。
+		slog.ErrorContext(r.Context(), "portal: login failed", "code", code)
+	}
 	webroute.WriteResult(w, http.StatusOK, response, err)
 }
 
@@ -207,6 +211,9 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 	}
 	account, err := portal.accounts.Login(ctx, svcaccount.Identity{Channel: svcaccount.Channel(channel), OpenID: openID, Credential: request.Credential})
 	if err != nil {
+		if svcaccount.Code(err) == svcaccount.CodeIdentityDenied {
+			slog.InfoContext(ctx, "portal: channel login refused", "channel", channel, "code", svcaccount.Code(err))
+		}
 		return loginResponse{}, err
 	}
 	if account.ID == "" {
@@ -219,6 +226,7 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 	if ticket.Ticket == "" {
 		return loginResponse{}, errors.New("portal: account answered without an account ticket")
 	}
+	slog.InfoContext(ctx, "portal: login completed", "account_id", account.ID, "channel", channel)
 	return loginResponse{OK: true, AccountTicket: ticket.Ticket, AccountTicketExpiresAt: ticket.ExpiresAtUnix}, nil
 }
 
@@ -276,6 +284,9 @@ func (portal *Portal) handleServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := portal.servers(r.Context(), request)
+	if code, _ := errcode.ClientError(err); err != nil && code == errcode.CodeInternal {
+		slog.ErrorContext(r.Context(), "portal: server list failed", "code", code)
+	}
 	webroute.WriteResult(w, http.StatusOK, response, err)
 }
 
@@ -379,6 +390,9 @@ func (portal *Portal) handleEnter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := portal.enter(r.Context(), request)
+	if code, _ := errcode.ClientError(err); err != nil && code == errcode.CodeInternal {
+		slog.ErrorContext(r.Context(), "portal: enter ticket failed", "server_id", request.ServerID, "code", code)
+	}
 	webroute.WriteResult(w, http.StatusOK, response, err)
 }
 
@@ -413,6 +427,7 @@ func (portal *Portal) enter(ctx context.Context, request enterRequest) (enterRes
 		ServerID: ticket.ServerID, ServingServerID: ticket.ServingServerID, ExpiresAt: ticket.ExpiresAtUnix,
 	}
 	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID)
+	slog.InfoContext(ctx, "portal: enter ticket issued", "account_id", account.ID, "server_id", ticket.ServerID, "serving_server_id", ticket.ServingServerID)
 	return response, nil
 }
 

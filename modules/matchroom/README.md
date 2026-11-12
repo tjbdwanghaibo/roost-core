@@ -29,6 +29,8 @@ roomID, err := rooms.Open(ctx, matchID, []int64{playerA, playerB}) // 返回房�
 
 **错误码**：模块没有自己的错误码。组件拒绝时用 room 的 `room_invalid`、`room_not_member`、`room_closed`；`Open` 入口的拒绝（参数不对、映射冲突）是不带业务码的普通错误。
 
+**日志**：房间移交确认记 Debug，记录 MatchID / RoomID、人数与服务号；绑定冲突记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/matchroom/matchroom.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：不做匹配；不替成员入房（成员自己发 `RoomJoin`）；不通知成员；不改名单、不补位、成员离开不把资格让给别人；不提供跨节点接管——同一个 MatchID 在另一个 sid 上或带着不同名单再来，被拒绝（`matchroom: conflicting handoff`）。

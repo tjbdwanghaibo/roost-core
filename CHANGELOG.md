@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **完善**（modules + game-demo）：补齐已有手写入口的玩家提交后 Info 日志、服务管理 Debug 与异常诊断；不打印票据、渠道凭据、兑换码，不增加高频成功日志。幂等确认保留业务键 / 版本，不按日志条数推导资产流水。模板不改事务、协议、生成器或场景数；直接 Sender、事务内定时推进等剩余边界与验收见[日志报告](docs/maintenance/evidence/module-logging-20261112/README.md)。
+
 - **完善**（codegen + 两个 recipes）：casual / turn-pvp 的 login / portal / servertime 接入收尾。保留模块认证器、先新建再进入、换服在途拒绝及 casual 首次发放链路；新增 turn-pvp 名字写入档案、空名字零提交、重复新建不改名的 TCP 断言。配方生成时读取业务服务 SID / TCP 端口，自动填写 account 的开发令牌与本机目录；生产配置与 Secret 示例不带开发值，`compose.md` 与登录模块未改。
   - **验收**：两个自定义 module/service 工程的 `go test ./...`、定向 race、build / vet、module verify、生成漂移均通过，配方场景分别 **7 / 6，零 SKIP**；7 条行为变异均被断言捕获、无存活。两份生成工程各自实际 `make dev-run`，使用 Mongo 副本集、Redis、NATS JetStream、etcd，经 curl 登录三步与 Robot TCP 完成先新建、首次进入和重连；turn-pvp 另验空名字拒绝。根包与文档检查结果见[证据](docs/maintenance/evidence/recipes-login-20261112/README.md)。
   - **边界**：只影响新生成的配方，已安装业务代码不自动迁移；未运行全仓测试、完整 Module/Demo 或玩法矩阵，没有验证 self_sync 解码、完整对局/购买的真实存储、跨机、恢复与压测，统一验收仍由登录线完成。

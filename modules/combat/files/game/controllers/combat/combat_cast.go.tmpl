@@ -2,6 +2,7 @@ package combat
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -9,6 +10,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -28,6 +30,9 @@ func (c *Controller) HandleCombatCast(ctx *playeraccess.Context, req *pb.CombatC
 	}
 	if err != nil {
 		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+			slog.ErrorContext(ctx.Context(), "combat: cast failed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "err", err)
+		}
 		return &pb.CombatCastResponse{Code: code, Reason: reason}, nil
 	}
 	return out, nil

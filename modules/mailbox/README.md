@@ -50,6 +50,8 @@
 
 邮件不存在、已过期、已领取、正被占用由 mail 服务答它自己的码；余额溢出、背包放不下原样透出 wallet、bag 的码。
 
+**日志**：附件领取与 SendTo 发件确认；profile 联动记录升级区间、邮件号和 effect_id。发件只记收件人和确认邮件号，不把重放请求里的附件当成首次发件事实，也不记录可能承载兑换凭据的 RequestID。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/mailbox/mailbox_claim.go`, `game/mailbox/mailbox_send.go`, `game/mailbox/mailbox_profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **发件只有一种：一名玩家、一封、至多一份附件。** `SendTo` 不发全服邮件、不群发；“100 金币加 3 个道具”要发两封。

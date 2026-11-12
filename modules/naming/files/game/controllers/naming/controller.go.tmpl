@@ -3,14 +3,19 @@ package naming
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	"log/slog"
+	"strings"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	profile "{{MODULE}}/game/profile"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 // Controller 不保存可变业务状态。所有在途事实在 Player；每次重试可使用新 Controller。
@@ -68,5 +73,12 @@ func (c *Controller) Rename(ctx context.Context, playerID int64, operation, name
 	if err != nil {
 		return "", err
 	}
-	return c.resume(ctx, id, ticket)
+	result, err := c.resume(ctx, id, ticket)
+	if err == nil {
+		// 不记录 Ticket：里面有占名凭据。重试也可能返回完成，用请求键关联同一笔操作。
+		slog.InfoContext(ctx, "naming: rename completed", "player_id", playerID, "request_key", operation, "old_name", strings.TrimPrefix(ticket.OldKey, "player-name/"), "name", result)
+	} else if !errors.Is(err, directory.ErrKeyTaken) && !errors.Is(err, apperrors.ErrNamingBusy) && !errors.Is(err, apperrors.ErrNamingInvalid) {
+		slog.WarnContext(ctx, "naming: rename unresolved", "player_id", playerID, "request_key", operation, "started_phase", ticket.Phase, "code", errcode.CodeOf(err))
+	}
+	return result, err
 }

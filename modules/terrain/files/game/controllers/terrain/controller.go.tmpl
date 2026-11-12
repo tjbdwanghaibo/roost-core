@@ -2,10 +2,12 @@ package terrain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"log/slog"
 	"{{MODULE}}/game/playeraccess"
 	logic "{{MODULE}}/game/terrain"
 	runtime "{{MODULE}}/game/terrain/service"
@@ -32,6 +34,9 @@ func (c *Controller) Execute(ctx context.Context, playerID int64, command logic.
 			result.ProjectionPending = world.Failures() != 0
 		}
 	}
+	if err == nil && (command.Op == "build" || command.Op == "remove") {
+		slog.InfoContext(ctx, "terrain: building edit confirmed", "player_id", playerID, "scene_id", command.SceneID, "op", command.Op, "sequence", command.Sequence, "building_id", result.BuildingID, "duplicate", result.Duplicate, "standing", result.Standing)
+	}
 	return result, err
 }
 func editResult(result logic.Result) *pb.TerrainEditResult {
@@ -46,6 +51,7 @@ func (c *Controller) HandleTerrainBrush(ctx *playeraccess.Context, request *pb.T
 	}
 	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: request.Op, X: request.X, Y: request.Y, Radius: request.Radius, Strength: uint16(request.Strength), Material: byte(request.Material)})
 	if err != nil {
+		logFailure(ctx, request.SceneID, err)
 		code, reason := errcode.ClientError(err)
 		return &pb.TerrainBrushResponse{Code: code, Reason: reason}, nil
 	}
@@ -57,6 +63,7 @@ func (c *Controller) HandleTerrainBuild(ctx *playeraccess.Context, request *pb.T
 	}
 	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: "build", X: request.X, Y: request.Y})
 	if err != nil {
+		logFailure(ctx, request.SceneID, err)
 		code, reason := errcode.ClientError(err)
 		return &pb.TerrainBuildResponse{Code: code, Reason: reason}, nil
 	}
@@ -68,6 +75,7 @@ func (c *Controller) HandleTerrainRemove(ctx *playeraccess.Context, request *pb.
 	}
 	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: "remove", X: request.X, Y: request.Y})
 	if err != nil {
+		logFailure(ctx, request.SceneID, err)
 		code, reason := errcode.ClientError(err)
 		return &pb.TerrainRemoveResponse{Code: code, Reason: reason}, nil
 	}
@@ -79,6 +87,7 @@ func (c *Controller) HandleTerrainQuery(ctx *playeraccess.Context, request *pb.T
 	}
 	state, err := c.runtime.Query(ctx.Context(), ctx.PlayerID, request.SceneID, core.ChunkKey{X: request.X, Y: request.Y})
 	if err != nil {
+		logFailure(ctx, request.SceneID, err)
 		code, reason := errcode.ClientError(err)
 		return &pb.TerrainQueryResponse{Code: code, Reason: reason}, nil
 	}
@@ -87,4 +96,12 @@ func (c *Controller) HandleTerrainQuery(ctx *playeraccess.Context, request *pb.T
 		heights[i] = uint32(value)
 	}
 	return &pb.TerrainQueryResponse{LastSequence: state.LastSequence, Chunk: &pb.TerrainChunkInfo{SceneID: request.SceneID, X: state.Key.X, Y: state.Key.Y, BaseRevision: state.BaseRevision, Version: state.Version, Heights: heights, Materials: state.Materials}}, nil
+}
+
+// 日志分类不改变现有回包；常规规则拒绝保持安静，持久基线不符等未知错误必须可追查。
+func logFailure(ctx *playeraccess.Context, sceneID int64, err error) {
+	if errors.Is(err, logic.ErrInvalid) || errors.Is(err, logic.ErrDenied) || errors.Is(err, logic.ErrSequence) || errors.Is(err, logic.ErrOccupied) || errors.Is(err, logic.ErrFull) {
+		return
+	}
+	slog.ErrorContext(ctx.Context(), "terrain: request failed", "player_id", ctx.PlayerID, "scene_id", sceneID, "err", err)
 }

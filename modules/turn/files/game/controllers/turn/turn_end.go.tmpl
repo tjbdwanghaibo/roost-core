@@ -32,8 +32,11 @@ func (controller *Controller) HandleTurnEnd(ctx *playeraccess.Context, req *pb.T
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
 		if response.Code == errcode.CodeInternal {
-			slog.Error("turn end failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
+			slog.ErrorContext(ctx.Context(), "turn end failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
 		}
+	}
+	if err == nil && response.Info != nil && response.Info.Status == int32(room.TurnFinished) {
+		slog.InfoContext(ctx.Context(), "turn: game finished", "player_id", ctx.PlayerID, "room_id", req.RoomID, "round", response.Info.Round, "status", response.Info.Status)
 	}
 	return response, nil
 }

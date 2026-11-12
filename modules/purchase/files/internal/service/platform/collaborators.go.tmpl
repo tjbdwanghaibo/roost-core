@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"{{MODULE}}/game/purchase"
 
@@ -46,7 +47,12 @@ func (delivery *paymentDelivery) Deliver(ctx context.Context, order svcplatform.
 	if delivery.queue == nil {
 		return fmt.Errorf("%w: purchase queue is unavailable", svcplatform.ErrDeliveryNotApplied)
 	}
-	_, err := delivery.queue.Record(ctx, order)
+	grant, err := delivery.queue.Record(ctx, order)
+	if err == nil {
+		slog.InfoContext(ctx, "purchase: order queued", "player_id", order.PlayerID, "order_id", order.OrderID, "product_id", order.ProductID, "sequence", grant.Sequence)
+	} else {
+		slog.WarnContext(ctx, "purchase: order enqueue failed", "player_id", order.PlayerID, "order_id", order.OrderID, "product_id", order.ProductID, "err", err)
+	}
 	return err
 }
 

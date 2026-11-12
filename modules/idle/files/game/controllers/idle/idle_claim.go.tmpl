@@ -1,6 +1,9 @@
 package idle
 
 import (
+	"log/slog"
+	apperrors "{{MODULE}}/internal/errors"
+
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -9,5 +12,13 @@ import (
 //
 //roost:endpoint nest=IdleClaim
 func (controller *Controller) HandleIdleClaim(ctx *playeraccess.Context, req *pb.IdleClaimRequest) (*pb.IdleClaimResponse, error) {
-	return controller.dispatchIdleClaim(ctx, req)
+	response, err := controller.dispatchIdleClaim(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "idle: claim completed", "player_id", ctx.PlayerID, "sequence", response.Sequence, "reward", response.Reward, "balance", response.Balance, "capped", response.Capped)
+	}
+	if err == nil && response != nil && response.Code == apperrors.ErrIdleClockBack.Code() && ctx != nil {
+		slog.WarnContext(ctx.Context(), "idle: clock moved backwards", "player_id", ctx.PlayerID)
+	}
+	return response, err
 }

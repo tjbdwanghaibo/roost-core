@@ -2,6 +2,7 @@ package combat
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -9,6 +10,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -28,7 +30,13 @@ func (c *Controller) HandleCombatLeave(ctx *playeraccess.Context, req *pb.Combat
 	}
 	if err != nil {
 		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+			slog.ErrorContext(ctx.Context(), "combat: leave failed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "err", err)
+		}
 		return &pb.CombatLeaveResponse{Code: code, Reason: reason}, nil
+	}
+	if out != nil && out.Code == 0 {
+		slog.InfoContext(ctx.Context(), "combat: leave confirmed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "peer_id", req.PeerID, "ended", out.Ended)
 	}
 	return out, nil
 }

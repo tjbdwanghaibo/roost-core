@@ -1,6 +1,8 @@
 package checkin
 
 import (
+	"log/slog"
+
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -9,5 +11,10 @@ import (
 //
 //roost:endpoint nest=CheckinClaim
 func (controller *Controller) HandleCheckinClaim(ctx *playeraccess.Context, req *pb.CheckinClaimRequest) (*pb.CheckinClaimResponse, error) {
-	return controller.dispatchCheckinClaim(ctx, req)
+	response, err := controller.dispatchCheckinClaim(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "checkin: claim completed", "player_id", ctx.PlayerID, "streak", response.Streak, "reward", response.Reward, "balance", response.Balance)
+	}
+	return response, err
 }

@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -64,6 +65,7 @@ func (c *Controller) Collect(ctx context.Context, playerID int64) ([]purchase.Re
 			return receipts, err
 		}
 		if !found || order.OrderID != grant.OrderID || order.PlayerID != playerID || order.PayloadDigest != grant.Digest || order.ProductID != grant.ProductID {
+			slog.WarnContext(ctx, "purchase: queued order mismatch", "player_id", playerID, "order_id", grant.OrderID, "product_id", grant.ProductID)
 			return receipts, svcplatform.ErrOrderMismatch
 		}
 		if len(order.PendingAttempts) != 0 {
@@ -81,6 +83,8 @@ func (c *Controller) Collect(ctx context.Context, playerID int64) ([]purchase.Re
 			return receipts, err
 		}
 		receipts = append(receipts, receipt)
+		// 确认在 Nest 提交后、队列确认之前：Ack 失败仍保留本次已确认的事实；同订单重试可能再次出现。
+		slog.InfoContext(ctx, "purchase: grant confirmed", "player_id", playerID, "order_id", receipt.OrderID, "sequence", receipt.Sequence, "reward_kind", receipt.Reward.Kind, "item_id", receipt.Reward.ID, "count", receipt.Reward.Count, "settled", receipt.Settled)
 		if err := c.queue.Ack(ctx, grant); err != nil {
 			return receipts, err
 		}

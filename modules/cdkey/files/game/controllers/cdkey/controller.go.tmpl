@@ -3,6 +3,7 @@ package cdkey
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -63,23 +64,38 @@ func (controller *Controller) Redeem(ctx context.Context, playerID int64, code s
 	}
 	intent, err := controller.ledger.Sync_CdkeyPrepare(ctx, id, code)
 	if err != nil || intent.MailID != "" {
+		if failure, _ := errcode.ClientError(err); err != nil && failure == errcode.CodeInternal {
+			slog.ErrorContext(ctx, "cdkey: prepare failed", "player_id", playerID, "code", failure)
+		}
 		return intent, err
 	}
+	// 兑换码也是凭证，不记 code、Intent、Claim 或由兑换码派生的请求键。
+	slog.InfoContext(ctx, "cdkey: redemption accepted", "player_id", playerID, "code_bytes", len(code))
 	claim, err := controller.directory.Reserve(ctx, intent.ClaimKey(playerID), directory.Owner(strconv.FormatInt(playerID, 10)), time.Minute)
 	if err != nil {
 		if directory.Code(err) == directory.CodeKeyTaken {
 			return gamecdkey.Intent{}, apperrors.ErrCdkeyTaken
 		}
+		slog.WarnContext(ctx, "cdkey: reserve unresolved", "player_id", playerID, "code", directory.Code(err))
 		return gamecdkey.Intent{}, err
 	}
 	if _, err := controller.directory.Commit(ctx, claim); err != nil {
+		slog.WarnContext(ctx, "cdkey: reservation commit unresolved", "player_id", playerID, "code", directory.Code(err))
 		return gamecdkey.Intent{}, err
 	}
 	envelope, err := mailbox.SendTo(ctx, controller.mailer, mailbox.Letter{To: playerID, Subject: intent.Subject, Body: intent.Body, Attachment: mailbox.Coins(intent.Coins), ExpiresInSeconds: intent.ExpiresInSeconds, RequestID: intent.RequestID(playerID)})
 	if err != nil {
+		slog.WarnContext(ctx, "cdkey: mail send unresolved", "player_id", playerID, "code", errcode.CodeOf(err))
 		return gamecdkey.Intent{}, err
 	}
-	return controller.ledger.Sync_CdkeyComplete(ctx, id, intent.Code, envelope.ID)
+	slog.InfoContext(ctx, "cdkey: mail confirmed", "player_id", playerID, "mail_id", envelope.ID, "coins", intent.Coins)
+	result, err := controller.ledger.Sync_CdkeyComplete(ctx, id, intent.Code, envelope.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "cdkey: completion unresolved", "player_id", playerID, "mail_id", envelope.ID, "code", errcode.CodeOf(err))
+	} else {
+		slog.InfoContext(ctx, "cdkey: redemption completed", "player_id", playerID, "mail_id", result.MailID)
+	}
+	return result, err
 }
 
 func (controller *Controller) HandleCdkeyRedeem(ctx *playeraccess.Context, request *pb.CdkeyRedeemRequest) (*pb.CdkeyRedeemResponse, error) {
@@ -89,6 +105,9 @@ func (controller *Controller) HandleCdkeyRedeem(ctx *playeraccess.Context, reque
 	result, err := controller.Redeem(ctx.Context(), ctx.PlayerID, request.Cdkey)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "cdkey: request failed", "player_id", ctx.PlayerID, "code", code)
+		}
 		return &pb.CdkeyRedeemResponse{Code: code, Reason: reason}, nil
 	}
 	return &pb.CdkeyRedeemResponse{MailID: result.MailID}, nil

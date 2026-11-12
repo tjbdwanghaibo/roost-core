@@ -58,10 +58,11 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
-			slog.Error("enter_game failed", "player_id", context.PlayerID, "err", err)
+			slog.ErrorContext(context.Context(), "enter_game failed", "player_id", context.PlayerID, "err", err)
 		}
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
+	slog.InfoContext(context.Context(), "enter: player entered", "player_id", context.PlayerID, "first", entered.First)
 	return &pb.EnterGameResponse{First: entered.First}, nil
 }
 
@@ -78,7 +79,11 @@ func (controller *Controller) loadAndInit(ctx stdcontext.Context, playerID int64
 	if err != nil {
 		return gameenter.InitResult{}, err
 	}
-	return syncsender.NewEnterInitSender(controller.nestClient).Sync_EnterInit(ctx, entityID)
+	result, err := syncsender.NewEnterInitSender(controller.nestClient).Sync_EnterInit(ctx, entityID)
+	if err == nil && result.First {
+		slog.InfoContext(ctx, "enter: first entry confirmed", "player_id", playerID)
+	}
+	return result, err
 }
 
 // enterExisting 是“先新建”的会话的 load：只进入已经建成的玩家。没有档直接答 enter_need_create（不创建）；

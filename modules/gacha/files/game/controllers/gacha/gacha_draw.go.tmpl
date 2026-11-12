@@ -1,6 +1,8 @@
 package gacha
 
 import (
+	"log/slog"
+
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -9,5 +11,10 @@ import (
 //
 //roost:endpoint nest=GachaDraw
 func (controller *Controller) HandleGachaDraw(ctx *playeraccess.Context, req *pb.GachaDrawRequest) (*pb.GachaDrawResponse, error) {
-	return controller.dispatchGachaDraw(ctx, req)
+	response, err := controller.dispatchGachaDraw(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "gacha: draw completed", "player_id", ctx.PlayerID, "request_key", req.Key, "pool_id", req.PoolID, "count", req.Count, "cost", response.Cost, "balance", response.Balance, "items", response.Items)
+	}
+	return response, err
 }

@@ -24,6 +24,8 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 - **配置**：没有配置表。规则范围写在 `turn_component.go` 的 `Start` 里：每回合 1000～3600000 毫秒（1 秒～1 小时），总回合数 1～10000；工程可以收窄。
 - **错误码**（`internal/errors/turn.go`）：`turn_invalid`（规则越界、重试时换了规则、不足两人）、`turn_not_running`、`turn_not_actor`（不是当前行动者、回合号不对、不在名单里）、`turn_sequence`（跳号、旧号、同序号配了不同回合）、`turn_expired`（已到期限，等定时器推进）。成员与连接校验透出 room 的 `room_stale_epoch`、`room_not_host` 等。
 
+**日志**：开局、对局结束确认；每回合推进 / timer 超时回调不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/turn/turn_end.go`, `game/controllers/turn/turn_start.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：没有任何默认玩法——伤害、出牌、移动、奖励、胜负都不提供；没有自动广播（轮到谁要靠客户端查 `TurnView` 或工程自己推）；没有同时行动、抢答、多阶段回合；断线不踢人、不代打；一个房间只开一场，结束后不能在同一个房间号上重开。

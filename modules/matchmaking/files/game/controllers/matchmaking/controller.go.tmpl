@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/pb"
-	game "{{MODULE}}/game/matchmaking"
 	player "{{MODULE}}/game/entities/player"
+	game "{{MODULE}}/game/matchmaking"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -29,12 +30,15 @@ func authenticated(ctx *playeraccess.Context) error {
 	}
 	return nil
 }
-func response(s player.MatchSnapshot, err error) *pb.MatchmakingResponse {
+func response(ctx *playeraccess.Context, s player.MatchSnapshot, err error) *pb.MatchmakingResponse {
 	out := &pb.MatchmakingResponse{Sequence: s.Sequence, Key: s.Key, Phase: s.Phase, RoomID: s.RoomID, MatchID: s.MatchID, Members: s.Members}
 	if err != nil {
 		out.Code, out.Reason = errcode.ClientError(err)
+		if out.Code == apperrors.ErrMatchmakingUnknown.Code() {
+			slog.WarnContext(ctx.Context(), "matchmaking: result unknown", "player_id", ctx.PlayerID, "request_key", s.Key, "phase", s.Phase)
+		}
 		if out.Code == errcode.CodeInternal {
-			slog.Error("matchmaking request failed", "err", err)
+			slog.ErrorContext(ctx.Context(), "matchmaking request failed", "player_id", ctx.PlayerID, "err", err)
 		}
 	}
 	return out
@@ -48,10 +52,10 @@ func (c *Controller) HandleMatchEnqueue(ctx *playeraccess.Context, req *pb.Match
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(player.MatchSnapshot{}, err), nil
+		return response(ctx, player.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Enqueue(ctx.Context(), ctx.PlayerID, req.Sequence, req.Team)
-	return response(s, err), nil
+	return response(ctx, s, err), nil
 }
 func (c *Controller) HandleMatchCancel(ctx *playeraccess.Context, req *pb.MatchCancelRequest) (*pb.MatchmakingResponse, error) {
 	if err := authenticated(ctx); err != nil {
@@ -62,10 +66,10 @@ func (c *Controller) HandleMatchCancel(ctx *playeraccess.Context, req *pb.MatchC
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(player.MatchSnapshot{}, err), nil
+		return response(ctx, player.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Cancel(ctx.Context(), ctx.PlayerID, req.Key)
-	return response(s, err), nil
+	return response(ctx, s, err), nil
 }
 func (c *Controller) HandleMatchStatus(ctx *playeraccess.Context, req *pb.MatchStatusRequest) (*pb.MatchmakingResponse, error) {
 	if err := authenticated(ctx); err != nil {
@@ -76,10 +80,10 @@ func (c *Controller) HandleMatchStatus(ctx *playeraccess.Context, req *pb.MatchS
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(player.MatchSnapshot{}, err), nil
+		return response(ctx, player.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Status(ctx.Context(), ctx.PlayerID)
-	return response(s, err), nil
+	return response(ctx, s, err), nil
 }
 func (c *Controller) HandleMatchClear(ctx *playeraccess.Context, req *pb.MatchClearRequest) (*pb.MatchmakingResponse, error) {
 	if err := authenticated(ctx); err != nil {
@@ -90,8 +94,8 @@ func (c *Controller) HandleMatchClear(ctx *playeraccess.Context, req *pb.MatchCl
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(player.MatchSnapshot{}, err), nil
+		return response(ctx, player.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Clear(ctx.Context(), ctx.PlayerID, req.Key)
-	return response(s, err), nil
+	return response(ctx, s, err), nil
 }

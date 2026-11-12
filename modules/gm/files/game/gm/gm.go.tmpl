@@ -120,7 +120,9 @@ func (r *runtime) install(def Definition) error {
 			}
 			slog.InfoContext(ctx, "gm: executing", "command", command.Name, "trace_id", command.TraceID,
 				"operator", command.Operator, "note", meta.Note)
-			return def.Handler(ctx, r.registry, command)
+			result, err = def.Handler(ctx, r.registry, command)
+			slog.InfoContext(ctx, "gm: completed", "command", command.Name, "trace_id", command.TraceID, "operator", command.Operator, "code", errcode.CodeOf(err))
+			return result, err
 		}})
 }
 

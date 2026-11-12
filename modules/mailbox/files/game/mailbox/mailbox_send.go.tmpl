@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
@@ -94,5 +95,11 @@ func SendTo(ctx context.Context, mailer Sender, letter Letter) (svcmail.Envelope
 		}
 		request.Attachment = raw
 	}
-	return mailer.Send(ctx, request)
+	envelope, err := mailer.Send(ctx, request)
+	if err == nil {
+		// 发件键可能由兑换码派生，不记 RequestID、标题和正文；用最终邮件号关联重试。
+		// 幂等重放可返回首次信封，不能把本次请求里的附件当成已发出的奖励。
+		slog.InfoContext(ctx, "mailbox: send confirmed", "player_id", letter.To, "mail_id", envelope.ID)
+	}
+	return envelope, err
 }

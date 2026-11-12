@@ -6,6 +6,7 @@ import (
 
 	"{{MODULE}}/game/playeraccess"
 	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -29,6 +30,9 @@ func (controller *Controller) HandleRehomeApply(context *playeraccess.Context, r
 	ticket, err := controller.driver.Apply(context.Context(), gamerehome.Request{PlayerID: context.PlayerID, To: request.To})
 	if err != nil {
 		code, reason := errcode.ClientError(err)
+		if code == apperrors.ErrRehomeRefused.Code() || code == apperrors.ErrRehomeCooldown.Code() {
+			slog.InfoContext(context.Context(), "rehome: application refused", "player_id", context.PlayerID, "to", request.To, "code", code)
+		}
 		if code == errcode.CodeInternal {
 			slog.Error("rehome_apply failed", "player_id", context.PlayerID, "to", request.To, "err", err)
 		}

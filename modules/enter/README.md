@@ -66,6 +66,8 @@
 
 删过档的玩家在两条路上都得到框架的 `entity_deleted`；进入前检查与名字规则的拒绝原样透出登记方的码。
 
+**日志**：新建提交、首次进入与每次进入确认，记录玩家、名字或 first；game-demo 的覆盖端点同步处理。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/enter/enter_create.go`, `game/controllers/enter/enter_game.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做鉴权。** 握手票据怎么验、玩家号从哪来不归它管。模块安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`，但生成的 `auth.go` 仍是一律拒绝的桩，监听也没有打开（`roost config enable player-tcp` 没有执行），所以单装 enter 时真实客户端连不上。

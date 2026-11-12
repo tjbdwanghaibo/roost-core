@@ -21,6 +21,8 @@
   - 安装时给已有的 `alliance` 服务追加 `configdata` Mod 与 `activity_alliance` RPC；只补缺少的配置段，不覆盖联盟服务已有的文件与配置。
 - **错误码**：`activity_alliance_request_invalid`（`ErrRequestInvalid`，RPC 请求无法解码或不合法时由生成的 RPC 代码使用）。引擎自身的拒绝仍是 `activity` 的包级错误值。
 
+**日志**：显式事件触发与 Complete 确认记 Debug，记录宿主、scope、活动号、代数、期次与阶段；空事件恢复扫描不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `internal/rpc/activity_alliance/service.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：不给玩家开协议，不向 game 或联盟成员推送阶段变化。不校验成员资格与操作权限：RPC 只面向可信服务器，game 的端点必须自己验证“这名玩家是不是这个联盟的成员、有没有资格”，不能把客户端声称的事件直接转发。不决定贡献归属、退盟后的领奖范围——这些是业务规则。

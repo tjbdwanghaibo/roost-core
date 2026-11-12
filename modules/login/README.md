@@ -81,6 +81,8 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 - **配置键：** `login.dev_token`（写在 `configs/service/config.account.yaml`，必须以 `dev-` 开头；生产配置里写了它 account 进程不启动）。握手的认证器要求承载玩家接入的业务服务在 `roost.yaml` 的 `uses` 里有 `account`。
 - **错误码：** `login_elsewhere`（`internal/errors/login.go`）：这条会话的角色不由本服承载，客户端重新选角。握手失败没有码。
 
+**日志**：握手认证成功，记录玩家、承载服、握手方式与是否新建映射，不记录票据和 claims。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/login/login.go`, `internal/access/player/tcp/auth.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做渠道验签。** 装上模块、什么都不配的 account 仍然拒绝每一次登录；`login_channels.go` 的 `verifyChannel` 缺省一个渠道都没接。`roost project doctor` 的 `collaborators:account` 变 OK 只说明“不再是拒绝桩”。

@@ -38,6 +38,8 @@
 
 **错误码**（`internal/errors/profile.go`）：`profile_name_empty`（去掉首尾空白后为空）、`profile_name_long`（超过 16 个字符）、`profile_name_invalid`（不是合法 UTF-8）、`profile_exp_invalid`（数额不是正数）、`profile_exp_overflow`（经验或等级超出存储范围，或存档里的值已坏）。
 
+**日志**：默认改名确认（新名）；GM 发经验只在升级时记录 levels_gained，升级奖励邮件另记 from/to。接管改名的 naming 记录旧名、新名和请求键。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/profile/profile_rename.go`, `game/gm/profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：名字不查重（要全服唯一装 `naming`）、不查敏感词、改名不收费也不限次数；没有等级上限；经验曲线是平的，没有按等级查表；没有头像、签名、称号等别的档案字段；不记累计经验；不提供客户端查别人档案的协议。

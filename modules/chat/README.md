@@ -23,6 +23,8 @@
 - **错误码**
   - 模块自己不定义错误码。拒绝时应答的 `Code` / `Reason` 来自框架 `service/chat` 的错误（例如 `ErrMessageInvalid`、`ErrChannelInvalid`、`ErrNotPermitted`、`ErrRequestInvalid`）经 `errcode.ClientError` 的映射。
 
+**日志**：服务端 AnnounceWorld 发布确认记 Debug，失败记 Error；不记录玩家发言正文和每次发言。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/chat/chat_push.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：没有群组频道（队伍、公会频道被 `Allow` 明确拒绝）；没有敏感词过滤、禁言、屏蔽、举报；没有发言频率限制；没有已读与离线消息提醒；玩家不能往系统频道发。发送者名字固定是 `player-<玩家号>`（`PlayerSender`），不读档案里的名字。

@@ -45,6 +45,8 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 `dungeon_invalid`（参数无效或同 ID 内容冲突）、`dungeon_owner`（不是这局的所有者）、`dungeon_unfinished`（还没成功通关）、`dungeon_window`（领奖窗口已关闭）、`dungeon_full`（领奖账本或赛季计数到上限）。事件串局、旧序号、内容冲突由 `gameplay/level` 自己的错误拒绝；经验溢出透出 profile 的码。
 
+**日志**：开局、领奖确认记 Info；可信战斗事件返回终局记 Debug（接口没有玩家号）；记录局、实例 / 代数、经验、赛季。端点内部错误补 Error。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/dungeon/controller.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不判定战斗是否真实发生。** `Defeated` 信任调用方；工程的战斗服务负责证明击杀。模块也不含战斗、怪物、掉落表、多人副本、扫荡、体力消耗。

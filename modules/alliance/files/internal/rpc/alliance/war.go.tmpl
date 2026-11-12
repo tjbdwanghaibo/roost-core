@@ -70,6 +70,9 @@ func (s *Service) DeclareWar(ctx context.Context, requestID string, callerID int
 	if err == nil && answer.WarPending {
 		s.askEnemy(entity.GetUniqueIDFromEntityID(target), enemyID, requestID, 0)
 	}
+	if err == nil && answer.Err() == nil {
+		slog.InfoContext(ctx, "alliance: war declaration confirmed", "player_id", callerID, "alliance_id", answer.View.AllianceID, "enemy_id", enemyID, "request_key", requestID, "replayed", answer.Replayed, "ack_pending", answer.WarPending)
+	}
 	return s.reply(answer, err)
 }
 

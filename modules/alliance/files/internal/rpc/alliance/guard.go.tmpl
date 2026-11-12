@@ -129,6 +129,9 @@ func (s *Service) ClaimReward(ctx context.Context, requestID string, callerID in
 	if err == nil {
 		err = answer.Err()
 	}
+	if err == nil {
+		slog.InfoContext(ctx, "alliance: reward claim confirmed", "player_id", callerID, "request_key", requestID, "alliance_id", answer.Subject, "item_id", s.deps.Rules.RewardItemID, "count", s.deps.Rules.RewardCount, "replayed", answer.Replayed)
+	}
 	return RewardReply{
 		State: answer.State, AllianceID: answer.Subject, ItemID: s.deps.Rules.RewardItemID, Count: s.deps.Rules.RewardCount,
 		Replayed: answer.Replayed, ServedBySID: s.deps.LocalSID,
@@ -318,6 +321,10 @@ const NoticeModule = "alliance"
 // shown until the next notice or login.
 func (s *Service) notify(ctx context.Context, answer alliancerule.Answer) {
 	change := answer.Member
+	// Member 只由本次实际提交的成员变更填充，通知未配置也保留权威变更日志。
+	if change.PlayerID > 0 {
+		slog.InfoContext(ctx, "alliance: membership changed", "player_id", change.PlayerID, "alliance_id", answer.View.AllianceID, "change", change.Change, "version", answer.View.Version, "home_sid", change.HomeSID)
+	}
 	if s.deps.Notify == nil || change.PlayerID <= 0 || change.HomeSID <= 0 {
 		return
 	}

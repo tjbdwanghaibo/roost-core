@@ -26,6 +26,8 @@
 - **配置**：没有配置表。规则是 `game/entities/team/roster.go` 里的三个常量，归工程所有：`MaxMembers = 8`、`MaxInvites = 64`、`InviteMillis = 60000`（邀请 60 秒有效）。
 - **错误码**（`internal/errors/team.go`）：`team_invalid`、`team_missing`（不在这支队伍 / 队伍不存在）、`team_exists`（已经在别的队伍）、`team_not_leader`、`team_not_invited`（没被邀请或邀请已过期）、`team_full`、`team_invites_full`、`team_blocked`（队伍正在匹配中被冻结、与换服互斥等）。
 
+**日志**：建队、邀请、加入、离开 / 解散确认；返回快照时记录队长、版本和成员，错误补 player_id。离队 Sender 不返回新队长，因此不另查快照伪称本次交接结果。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/team/team.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：不通知任何人——被邀请的人不会收到邀请、成员不会收到名单变化，都要靠客户端查 `TeamInfo` 或工程自己加通知（被邀请者也得从别处拿到 `TeamID`）；没有踢人、没有主动转让队长、没有申请入队、没有拒绝邀请；不做匹配、匹配房、队友视野或队伍聊天。

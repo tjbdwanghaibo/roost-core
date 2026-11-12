@@ -35,6 +35,8 @@
 
 **错误码**（`internal/errors/purchase.go`）：`purchase_invalid`（待发记录不合法或不是这名玩家的）、`purchase_sequence`（前一笔还没发，不能越过）、`purchase_reward`（奖励种类没有登记）。补领时还会原样带回 platform 的码：订单对不上（600106）、投递还在途或订单未终结（600107）。
 
+**日志**：订单入队和每笔发货确认，记录玩家、订单、序号、奖励、结清状态；发货确认在队列 Ack 前，重试按订单号关联。身份 / 商品不符及入队失败记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/purchase/controller.go`, `game/controllers/purchase/purchase_collect.go`, `internal/service/platform/collaborators.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **不做的事**：不接任何真实渠道（没有渠道的 HTTPS 入口、没有验签与查单实现，都归工程）；不下单、不出价签；不做退款流程（只认 platform 已经标成结清的订单并跳过发奖）；不推送到账通知；回执里不带余额；不相信客户端自报的“付款成功”。

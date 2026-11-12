@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -11,7 +12,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"{{MODULE}}/game/skillbook"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 // 单个服务worker只做Nest准入/等待，不碰实体。队列有界、相同owner至多一项，饱和交给下一拍重试。
@@ -57,6 +61,9 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 			_, err := s.client.RequestMultiSettled(context.Background(), nest.NewHandlerName("handlerCombatTick"), []int64{d.Owner, d.Peer}, nest.NewParams(d.Epoch))
 			if err != nil {
 				s.failures.Add(1)
+				if code := errcode.CodeOf(err); code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+					slog.Error("combat: background advance failed", "player_id", entity.GetUniqueIDFromEntityID(d.Owner), "peer_id", entity.GetUniqueIDFromEntityID(d.Peer), "epoch", d.Epoch, "err", err)
+				}
 			}
 			s.mu.Lock()
 			delete(s.pending, d.Owner)

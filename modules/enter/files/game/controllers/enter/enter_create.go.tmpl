@@ -41,7 +41,7 @@ func (controller *Controller) HandleEnterCreate(context *playeraccess.Context, r
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
-			slog.Error("enter_create failed", "player_id", context.PlayerID, "err", err)
+			slog.ErrorContext(context.Context(), "enter_create failed", "player_id", context.PlayerID, "err", err)
 		}
 		return &pb.EnterCreateResponse{Code: code, Reason: reason}, nil
 	}
@@ -64,5 +64,9 @@ func (controller *Controller) commitCreate(ctx stdcontext.Context, playerID int6
 	if err != nil {
 		return err
 	}
-	return syncsender.NewEnterCreateSender(controller.nestClient).Sync_EnterCreate(ctx, entityID, name)
+	err = syncsender.NewEnterCreateSender(controller.nestClient).Sync_EnterCreate(ctx, entityID, name)
+	if err == nil {
+		slog.InfoContext(ctx, "enter: player created", "player_id", playerID, "name", name)
+	}
+	return err
 }

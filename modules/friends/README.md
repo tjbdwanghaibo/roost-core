@@ -43,6 +43,8 @@
 
 `friends_invalid`（操作不合法、对象是自己、未知的 `Action`，或对方不在本进程在线）、`friends_full`（名单已满）、`friends_blocked`（任一方拉黑了对方）、`friends_application_missing`（同意时没有对应的申请）。
 
+**日志**：关系操作确认，记录 action 与对方玩家号；内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/friends/friends_change.go`, `game/controllers/friends/friends_list.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+
 ## 能力边界
 
 - **只在同一个 game 进程内、双方都有已认证 TCP 会话时能改。** 端点用本进程玩家传输的 `ActiveSessions` 核对操作者与对方；任何一方没有本地会话就答 `friends_invalid`，六种 `Action` 都一样——包括取消拉黑、拒绝申请、删除好友，对方不在线时也做不了。读自己的名单不受这个限制。

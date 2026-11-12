@@ -1,0 +1,22 @@
+Baseline: feat/business-modules-portal @ 17d35554
+Branch: feat/business-modules-logging
+Toolchain: go1.27.3 darwin/arm64
+
+Command: bash scripts/test-modules-generated.sh
+Result: exit 0; modules: ok
+verify-10-foundry.json: ok=True, groups=87, passed=960, skipped=0, project_checks=4
+verify-11-citadel.json: ok=True, groups=87, passed=960, skipped=0, project_checks=4
+
+Command: GOWORK=off go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	19.468s
+
+Final targeted race checks:
+ok  	example.com/logging/batch2/game/mailbox	2.216s
+ok  	example.com/logging/batch2/game/controllers/naming	7.388s
+
+Document anchors: checked 342 files, 0 broken
+git diff --check: passed
+bash -n portal-smoke.sh: passed
+
+Command: GOWORK=off go test -count=1 -timeout 45m -run 'TestDemo|TestModule|TestRecipe' ./codegen/internal/roost
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	2140.111s

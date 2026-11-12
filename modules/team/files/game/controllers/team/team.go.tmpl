@@ -21,12 +21,12 @@ func teamPlayerID(ctx *playeraccess.Context) (int64, error) {
 	}
 	return entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
 }
-func teamResponse(info teamentity.Snapshot, err error) *pb.TeamResponse {
+func teamResponse(ctx *playeraccess.Context, info teamentity.Snapshot, err error) *pb.TeamResponse {
 	response := &pb.TeamResponse{}
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
 		if response.Code == errcode.CodeInternal {
-			slog.Error("team request failed", "err", err)
+			slog.ErrorContext(ctx.Context(), "team request failed", "player_id", ctx.PlayerID, "err", err)
 		}
 		return response
 	}
@@ -46,7 +46,7 @@ func (c *Controller) HandleTeamCreate(ctx *playeraccess.Context, req *pb.TeamCre
 	}
 	current, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
 	if err != nil {
-		return teamResponse(teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
 	}
 	if current != 0 {
 		return c.HandleTeamInfo(ctx, &pb.TeamInfoRequest{})
@@ -56,10 +56,13 @@ func (c *Controller) HandleTeamCreate(ctx *playeraccess.Context, req *pb.TeamCre
 	}
 	id, err := c.create(ctx.Context())
 	if err != nil {
-		return teamResponse(teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
 	}
 	info, err := sender.NewTeamCreateSender(c.nestClient).MultiSync_TeamCreate(ctx.Context(), id, self, c.sid)
-	return teamResponse(info, err), nil
+	if err == nil {
+		slog.InfoContext(ctx.Context(), "team: create completed", "player_id", ctx.PlayerID, "team_id", info.TeamID, "leader", info.Leader, "revision", info.Revision, "members", info.Members)
+	}
+	return teamResponse(ctx, info, err), nil
 }
 func (c *Controller) HandleTeamInvite(ctx *playeraccess.Context, req *pb.TeamInviteRequest) (*pb.TeamResponse, error) {
 	if req == nil {
@@ -70,17 +73,20 @@ func (c *Controller) HandleTeamInvite(ctx *playeraccess.Context, req *pb.TeamInv
 		return nil, err
 	}
 	if req.Invitee <= 0 || uint64(req.Invitee) >= entity.StaticUniqueIDBase {
-		return teamResponse(teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
+		return teamResponse(ctx, teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
 	}
 	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
 	if err != nil {
-		return teamResponse(teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
 	}
 	if id == 0 {
-		return teamResponse(teamentity.Snapshot{}, apperrors.ErrTeamMissing), nil
+		return teamResponse(ctx, teamentity.Snapshot{}, apperrors.ErrTeamMissing), nil
 	}
 	info, err := sender.NewTeamInviteSender(c.nestClient).MultiSync_TeamInvite(ctx.Context(), id, self, req.Invitee)
-	return teamResponse(info, err), nil
+	if err == nil {
+		slog.InfoContext(ctx.Context(), "team: invite completed", "player_id", ctx.PlayerID, "team_id", info.TeamID, "leader", info.Leader, "revision", info.Revision, "members", info.Members)
+	}
+	return teamResponse(ctx, info, err), nil
 }
 func (c *Controller) HandleTeamAccept(ctx *playeraccess.Context, req *pb.TeamAcceptRequest) (*pb.TeamResponse, error) {
 	if req == nil {
@@ -91,10 +97,13 @@ func (c *Controller) HandleTeamAccept(ctx *playeraccess.Context, req *pb.TeamAcc
 		return nil, err
 	}
 	if !entity.MatchEntityID(req.TeamID, teamentity.EntityKindTeam) {
-		return teamResponse(teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
+		return teamResponse(ctx, teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
 	}
 	info, err := sender.NewTeamAcceptSender(c.nestClient).MultiSync_TeamAccept(ctx.Context(), req.TeamID, self, c.sid)
-	return teamResponse(info, err), nil
+	if err == nil {
+		slog.InfoContext(ctx.Context(), "team: join completed", "player_id", ctx.PlayerID, "team_id", info.TeamID, "leader", info.Leader, "revision", info.Revision, "members", info.Members)
+	}
+	return teamResponse(ctx, info, err), nil
 }
 func (c *Controller) HandleTeamInfo(ctx *playeraccess.Context, req *pb.TeamInfoRequest) (*pb.TeamResponse, error) {
 	if req == nil {
@@ -106,10 +115,10 @@ func (c *Controller) HandleTeamInfo(ctx *playeraccess.Context, req *pb.TeamInfoR
 	}
 	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
 	if err != nil || id == 0 {
-		return teamResponse(teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
 	}
 	info, err := sender.NewTeamInfoSender(c.nestClient).MultiSync_TeamInfo(ctx.Context(), id, self)
-	return teamResponse(info, err), nil
+	return teamResponse(ctx, info, err), nil
 }
 func (c *Controller) HandleTeamLeave(ctx *playeraccess.Context, req *pb.TeamLeaveRequest) (*pb.TeamResponse, error) {
 	if req == nil {
@@ -131,6 +140,9 @@ func (c *Controller) leave(ctx *playeraccess.Context, disband bool) (*pb.TeamRes
 	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
 	if err == nil && id != 0 {
 		err = sender.NewTeamLeaveSender(c.nestClient).MultiSync_TeamLeave(ctx.Context(), id, self, disband)
+		if err == nil {
+			slog.InfoContext(ctx.Context(), "team: leave completed", "player_id", ctx.PlayerID, "team_id", id, "disband", disband)
+		}
 	}
-	return teamResponse(teamentity.Snapshot{}, err), nil
+	return teamResponse(ctx, teamentity.Snapshot{}, err), nil
 }

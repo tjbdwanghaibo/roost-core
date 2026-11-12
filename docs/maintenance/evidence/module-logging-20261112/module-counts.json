@@ -1,0 +1,632 @@
+{
+  "ok": true,
+  "modules": [
+    {
+      "name": "activity",
+      "want": 21,
+      "passed": 21,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity+enter",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity+leaderboard",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity+mailbox",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity+profile",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity_alliance",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity_world",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "actor",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "alliance",
+      "want": 49,
+      "passed": 49,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "alliance+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "alliance+rehome",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "attribute",
+      "want": 16,
+      "passed": 16,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "attribute+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "attribute+equipment",
+      "want": 8,
+      "passed": 8,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "bag",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "bag+gm",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "cdkey",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "chat",
+      "want": 10,
+      "passed": 10,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "chat+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "checkin",
+      "want": 8,
+      "passed": 8,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "combat",
+      "want": 36,
+      "passed": 36,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "combat+equipment",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "combat+scene",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "dungeon",
+      "want": 19,
+      "passed": 19,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "dungeon+leaderboard",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "enter",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "enter+profile",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "equipment",
+      "want": 16,
+      "passed": 16,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "friends",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "gacha",
+      "want": 24,
+      "passed": 24,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "gm",
+      "want": 9,
+      "passed": 9,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "idle",
+      "want": 19,
+      "passed": 19,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "leaderboard",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login",
+      "want": 32,
+      "passed": 32,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login+enter",
+      "want": 6,
+      "passed": 6,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox",
+      "want": 32,
+      "passed": 32,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+bag",
+      "want": 9,
+      "passed": 9,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+gm",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+profile",
+      "want": 10,
+      "passed": 10,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "matchmaking",
+      "want": 16,
+      "passed": 16,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "matchmaking+rehome",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "matchroom",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "monster",
+      "want": 25,
+      "passed": 25,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "naming",
+      "want": 15,
+      "passed": 15,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "notice",
+      "want": 8,
+      "passed": 8,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "profile",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "profile+enter",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "profile+gm",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "purchase",
+      "want": 21,
+      "passed": 21,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "purchase+bag",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "purchase+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 40,
+      "passed": 40,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome+gm",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "room",
+      "want": 22,
+      "passed": 22,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rules",
+      "want": 10,
+      "passed": 10,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "scene",
+      "want": 26,
+      "passed": 26,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "scene+attribute",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "scene+chat",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "scene+equipment",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "scene+profile",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "servertime",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "servertime+enter",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "shop",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "shop+rules",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "skillbook",
+      "want": 11,
+      "passed": 11,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "stamina",
+      "want": 25,
+      "passed": 25,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "stamina+rules",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+bag",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+checkin",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+dungeon",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+leaderboard",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+profile",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+shop",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+stamina",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+wallet",
+      "want": 6,
+      "passed": 6,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "team",
+      "want": 27,
+      "passed": 27,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "team+rehome",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "terrain",
+      "want": 23,
+      "passed": 23,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "terrain+monster",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "turn",
+      "want": 25,
+      "passed": 25,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "wallet",
+      "want": 14,
+      "passed": 14,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "wallet+gm",
+      "want": 4,
+      "passed": 4,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ]
+}

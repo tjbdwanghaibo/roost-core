@@ -33,8 +33,11 @@ func (controller *Controller) HandleRoomReconnect(ctx *playeraccess.Context, req
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
 		if response.Code == errcode.CodeInternal {
-			slog.Error("room reconnect failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
+			slog.ErrorContext(ctx.Context(), "room reconnect failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
 		}
+	}
+	if err == nil {
+		slog.InfoContext(ctx.Context(), "room: reconnect completed", "player_id", ctx.PlayerID, "room_id", req.RoomID)
 	}
 	return response, nil
 }
