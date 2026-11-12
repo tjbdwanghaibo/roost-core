@@ -1,0 +1,208 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"sync/atomic"
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/purchase"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+type purchaseGetter map[int64]entity.IThreadSafeEntity
+
+func (g purchaseGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if target := g[id]; target != nil {
+		return target, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g purchaseGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	targets := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		target, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		targets[i] = target
+	}
+	return targets, nil
+}
+
+type purchaseCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *purchaseCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return fmt.Errorf("injected purchase commit failure")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type purchaseFixture struct {
+	engine    *nest.NestMgr
+	target    *player.Player
+	committer *purchaseCommitter
+	sender    *syncsender.PurchaseGrantSender
+}
+
+func newPurchaseFixture(t *testing.T) *purchaseFixture {
+	t.Helper()
+	player.RegisterEntity()
+	RegisterPurchaseGrantNestHandlers()
+	id, err := entity.BuildEntityID(98801, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &purchaseFixture{target: target.(*player.Player), committer: &purchaseCommitter{}}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(purchaseGetter{id: target}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.sender = syncsender.NewPurchaseGrantSender(f.engine)
+	return f
+}
+func purchaseTestGrant(seq uint64) purchase.Grant {
+	return purchase.Grant{Sequence: seq, OrderID: fmt.Sprintf("order-%d", seq), PlayerID: 98801, ProductID: "coins_100", Digest: fmt.Sprintf("digest-%d", seq), Reward: purchase.Reward{Kind: "coins", Count: 100}}
+}
+func (f *purchaseFixture) apply(grant purchase.Grant) (purchase.Receipt, error) {
+	return f.sender.Sync_PurchaseGrant(context.Background(), f.target.ID(), grant)
+}
+func (f *purchaseFixture) facts(t *testing.T) (uint64, int64) {
+	t.Helper()
+	var sequence uint64
+	var coins int64
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.target.GetMutex().Lock()
+		defer f.target.GetMutex().Unlock()
+		sequence = f.target.Dao().GetPurchase().GetApplied()
+		coins = f.target.WalletComp().Balance()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return sequence, coins
+}
+func (f *purchaseFixture) expect(t *testing.T, sequence uint64, coins, commits int64) {
+	t.Helper()
+	gotSeq, gotCoins := f.facts(t)
+	if gotSeq != sequence || gotCoins != coins || f.committer.commits.Load() != commits {
+		t.Fatalf("facts seq=%d coins=%d commits=%d", gotSeq, gotCoins, f.committer.commits.Load())
+	}
+}
+
+func TestPurchaseGrantCommitsRewardAndCursor(t *testing.T) {
+	f := newPurchaseFixture(t)
+	r, err := f.apply(purchaseTestGrant(1))
+	if err != nil || r.OrderID != "order-1" || r.Sequence != 1 || r.Reward.Count != 100 || r.Settled {
+		t.Fatalf("receipt=%+v err=%v", r, err)
+	}
+	f.expect(t, 1, 100, 1)
+}
+func TestPurchaseReplayReturnsOriginalWithoutWriting(t *testing.T) {
+	f := newPurchaseFixture(t)
+	first, err := f.apply(purchaseTestGrant(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := f.apply(purchaseTestGrant(1))
+	if err != nil || !reflect.DeepEqual(first, again) {
+		t.Fatalf("replay=%+v first=%+v err=%v", again, first, err)
+	}
+	f.expect(t, 1, 100, 1)
+}
+func TestPurchaseOutOfOrderWaitsForPrevious(t *testing.T) {
+	f := newPurchaseFixture(t)
+	if _, err := f.apply(purchaseTestGrant(2)); err == nil {
+		t.Fatal("sequence gap was accepted")
+	}
+	f.expect(t, 0, 0, 0)
+	if _, err := f.apply(purchaseTestGrant(1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.apply(purchaseTestGrant(2)); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, 2, 200, 2)
+}
+func TestPurchaseCommitFailureCanReplay(t *testing.T) {
+	f := newPurchaseFixture(t)
+	f.committer.reject.Store(true)
+	if _, err := f.apply(purchaseTestGrant(1)); err == nil {
+		t.Fatal("commit failure was hidden")
+	}
+	f.expect(t, 0, 0, 0)
+	f.committer.reject.Store(false)
+	if _, err := f.apply(purchaseTestGrant(1)); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, 1, 100, 1)
+}
+func TestPurchaseMoreThanAReceiptWindowKeepsOldReplaySafe(t *testing.T) {
+	f := newPurchaseFixture(t)
+	for seq := uint64(1); seq <= 513; seq++ {
+		if _, err := f.apply(purchaseTestGrant(seq)); err != nil {
+			t.Fatalf("sequence %d: %v", seq, err)
+		}
+	}
+	f.expect(t, 513, 51300, 513)
+	r, err := f.apply(purchaseTestGrant(1))
+	if err != nil || r.Sequence != 1 || r.Reward.Count != 100 {
+		t.Fatalf("old receipt=%+v err=%v", r, err)
+	}
+	f.expect(t, 513, 51300, 513)
+}
+func TestPurchaseOtherPlayersGrantIsRejected(t *testing.T) {
+	f := newPurchaseFixture(t)
+	grant := purchaseTestGrant(1)
+	grant.PlayerID = 98802
+	if _, err := f.apply(grant); err == nil {
+		t.Fatal("another player was accepted")
+	}
+	f.expect(t, 0, 0, 0)
+}
+func TestPurchaseSettledOrderOnlyAdvancesCursor(t *testing.T) {
+	f := newPurchaseFixture(t)
+	grant := purchaseTestGrant(1)
+	grant.Settled = true
+	r, err := f.apply(grant)
+	if err != nil || !r.Settled {
+		t.Fatalf("receipt=%+v err=%v", r, err)
+	}
+	f.expect(t, 1, 0, 1)
+	if _, err := f.apply(purchaseTestGrant(2)); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, 2, 100, 2)
+}
+func TestPurchaseMissingPlayerDoesNotCommit(t *testing.T) {
+	f := newPurchaseFixture(t)
+	id, err := entity.BuildEntityID(98802, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := purchaseTestGrant(1)
+	grant.PlayerID = 98802
+	if _, err := f.sender.Sync_PurchaseGrant(context.Background(), id, grant); err == nil {
+		t.Fatal("missing target was accepted")
+	}
+	f.expect(t, 0, 0, 0)
+}

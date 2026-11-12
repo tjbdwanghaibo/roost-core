@@ -8,6 +8,7 @@
 
 | 模块 | 做什么 | 依赖 | 状态字段 | 场景数 |
 | --- | --- | --- | --- | --- |
+| [purchase](purchase/README.md) | 充值发货：platform 验签与订单去重、Redis 顺序待发、Player 常量大小游标；金币内置，道具与入场补发联动；渠道缺省拒绝 | wallet、托管 platform；bag / enter 联动 | `PlayerDao.Purchase`（只落库） | 21；bag 4、enter 2 条联动 |
 | [gm](gm/README.md) | 运维命令登记、必填操作者与备注、带码拒绝；复用 ops `/admin`；功能模块按 `with/gm` 接入 | 无；game 底座的 ops | 无 | 9；wallet / bag / profile / mailbox / rehome 各 4 条联动 |
 | [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 14 |
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后执行别的功能登记的钩子（`OnCheckinClaimed`，同一笔事务） | wallet | `PlayerDao.Checkin`（同步） | 8 |

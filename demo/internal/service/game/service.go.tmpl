@@ -270,16 +270,6 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := installGuildNotices(registry); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	// The paid-order drain: the game side of the platform service's handover
-	// (purchase_drain.go). Published rather than started — it runs when a
-	// player is in hand, not on a timer.
-	drain, err := NewPurchaseDrain(registry)
-	if err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
-	if err := registry.Register(PurchaseCapability, drain); err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: publish purchase drain: %w", err)
-	}
 	// The kill switches, before anything they gate: a process that comes up
 	// during an incident must come up with the store closed if that is how
 	// the operator left it (flags.go).

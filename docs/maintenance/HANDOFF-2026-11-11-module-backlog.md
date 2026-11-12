@@ -184,3 +184,9 @@ shop 的商品目录、task 的任务表改成配置表（照 bag 的道具表�
 GM 基础 9 条、每组联动 4 条；新 game 合计 161 PASS / 0 SKIP，8 个变异全部检出，定向 race 两轮通过。新 demo 的 GM、经验事务场景和服务编译通过；清单/联动/安装步骤、根包门禁与文档检查通过。首次编译和夹具失败及修正保留在[验收说明](evidence/module-gm-20261112/README.md)。未跑全仓、完整 demo、全模块正反序新装、真实 HTTP/NATS/Redis/Mongo/TCP；这些仍按新需求 §2、§6 最后统一验证。CBM 已刷新到 2026-11-12T02:48:06Z，新增错误码模板的占位符局部解析缺口已逐行读源码补证。
 
 后续继续新需求 R2～R11 与 §5、§6；登录线和最终拼装 skill 重写仍归原会话。guild 先出方案，worldstats 暂不做。
+
+## 附录：R2 Purchase 付费发货（2026-11-12）
+
+新需求 R2 实现与定向验收完成，当前提交记录见新任务 R2。purchase 模块通过平台 HMAC + 工程渠道校验，按玩家 Redis 顺序队列保存奖励快照；只在平台终态无在途投递时进入 Nest，Player 连续游标与奖励同一笔事务，确认后清理待发。默认币、bag/enter 联动，离线订单不设到期；平台投递次数上限不变。demo 删掉独立 drain、不断增长的 PurchaseClaims，schema 4，只保留商品/模拟渠道与展示查询。
+
+基础 21、bag 4、enter 2 条；新工程合计 72 PASS / 0 SKIP，13 个变异与两轮 race 通过；真实独立 Redis 3 条 × 2 轮；demo 定向场景及服务/Robot 编译通过。根包、清单、文档检查通过。初次入口/链接失败与最终边界见[证据](evidence/module-purchase-20261112/README.md)。CBM 本批路径已刷新补证；全量组合及 §6 真实联合验收仍延后。后续继续 R3～R11、§5、§6；guild 先出方案，worldstats 不做。

@@ -772,7 +772,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// The replay direction — the same order id granted twice — cannot be
 	// reached from a client, because a client cannot resend a frame sequence.
 	// It is asserted against the real handler in game/handler/
-	// grant_purchase_test.go instead, which is where that window lives.
+	// purchase_test.go in the module: the durable applied cursor rejects old sequences.
 	action.MustRegisterCall[pb.PurchaseRequest, pb.PurchaseResponse](actions, protocols, "purchase_again", msgid.MsgPurchase,
 		action.OnResp(func(rb *robot.Context, resp *pb.PurchaseResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {

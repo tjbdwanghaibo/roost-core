@@ -69,7 +69,6 @@ func pinBusinessClock(t *testing.T, unix int64) {
 func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommitter) {
 	t.Helper()
 	player.RegisterEntity()
-	RegisterGrantPurchaseNestHandlers()
 	// The item table the Bag validates against, loaded from the project's own
 	// data files: the generated accessors read the active snapshot, so a test
 	// that grants an item needs one.

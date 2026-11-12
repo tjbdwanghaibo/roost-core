@@ -1,0 +1,89 @@
+package purchase
+
+import (
+	"context"
+	"fmt"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	purchase "{{MODULE}}/game/purchase"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+type Controller struct {
+	queue    purchase.Queue
+	platform svcplatform.Platform
+	sender   *syncsender.PurchaseGrantSender
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("purchase: Nest client is unavailable")
+	}
+	platform, ok := app.Lookup[svcplatform.Platform](registry, svcplatform.CapabilityName)
+	if !ok || platform == nil {
+		return nil, fmt.Errorf("purchase: platform client is unavailable")
+	}
+	redis, err := mods.Redis(registry)
+	if err != nil {
+		return nil, err
+	}
+	queue, err := purchase.NewRedisQueue(redis, purchase.StoragePrefix)
+	if err != nil {
+		return nil, err
+	}
+	return &Controller{queue: queue, platform: platform, sender: syncsender.NewPurchaseGrantSender(client)}, nil
+}
+
+// Collect 只接受可信会话给出的玩家号，序号与奖励全部从队列取；客户端不得提供发货载荷。
+// 所有 Redis / platform I/O 都在 Nest 之外。单次最多处理 BatchLimit 条；失败保留当前和后续记录。
+func (c *Controller) Collect(ctx context.Context, playerID int64) ([]purchase.Receipt, error) {
+	full, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	pending, err := c.queue.Pending(ctx, playerID, purchase.BatchLimit)
+	if err != nil {
+		return nil, err
+	}
+	receipts := make([]purchase.Receipt, 0, len(pending))
+	for _, grant := range pending {
+		if grant.PlayerID != playerID {
+			return receipts, fmt.Errorf("purchase: queue returned another player's grant")
+		}
+		// 先等 platform 投递完全终结再入账；这时不能重新打开订单或改成另一种结局。
+		// 该检查同时是稍后删除队列的依据，不把“超时/失败”当成“已没有在途投递”。
+		order, found, err := c.platform.Order(ctx, grant.OrderID)
+		if err != nil {
+			return receipts, err
+		}
+		if !found || order.OrderID != grant.OrderID || order.PlayerID != playerID || order.PayloadDigest != grant.Digest || order.ProductID != grant.ProductID {
+			return receipts, svcplatform.ErrOrderMismatch
+		}
+		if len(order.PendingAttempts) != 0 {
+			return receipts, svcplatform.ErrDeliveryHeld
+		}
+		switch order.State {
+		case svcplatform.DeliveryDelivered:
+		case svcplatform.DeliverySettled:
+			grant.Settled = true
+		default:
+			return receipts, svcplatform.ErrDeliveryHeld
+		}
+		receipt, err := c.sender.Sync_PurchaseGrant(ctx, full, grant)
+		if err != nil {
+			return receipts, err
+		}
+		receipts = append(receipts, receipt)
+		if err := c.queue.Ack(ctx, grant); err != nil {
+			return receipts, err
+		}
+	}
+	return receipts, nil
+}

@@ -41,6 +41,8 @@
 
 ### R2. purchase（充值发货）
 
+实现与定向验收完成（提交号随后补记）：基础 21 条、bag 4 条、enter 2 条；新工程 72 PASS / 0 SKIP，13 个变异、两轮 race 与独立 Redis Lua 通过。demo 改用模块、删除无界旧账本；[验收与恢复前提](evidence/module-purchase-20261112/README.md)。全模块正反序和 §6 联合验收仍留到最后。
+
 - **要解决的**：付费订单“恰好一次发货”。现在在 game-demo 的 `game/purchase/` 与 `internal/service/game/purchase_drain.go`，订单账本挂在 demo 的 `claim_ledgers.go`。
 - **需求**：平台回调（经 platform 服务）到账 → 订单号去重 → 发货（wallet 加币或 bag 加道具，经登记点扩展）在同一笔事务里；重复回调零写入并答同一个结果；玩家不在线时到账也要发（下次进入时补发或直接冷加载，取 demo 现有做法并写明）；订单账本有界且到界后仍正确（不能“满了就拒绝”）。
 - **依赖**：wallet；bag（联动）；platform 托管服务（验签仍归工程，缺省全拒，照 login 的 `login_channels.go` 写法留一个业务文件）。

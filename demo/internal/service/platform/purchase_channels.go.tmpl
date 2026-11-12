@@ -1,0 +1,20 @@
+package platform
+
+import (
+	"{{MODULE}}/game/purchase"
+	"context"
+	"encoding/json"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+// 模块缺省拒绝所有渠道；demo 明确接入模拟渠道。framework 已校验 HMAC 后才调用这里。
+// 此入口没有真实扣款，不能用于生产。正式项目在这里校验渠道凭据，不能相信客户端自报付款成功。
+func verifyPaymentCallback(_ context.Context, raw []byte, _ string) error {
+	var callback struct {
+		Channel string `json:"channel"`
+	}
+	if err := json.Unmarshal(raw, &callback); err != nil || callback.Channel != purchase.Channel {
+		return svcplatform.ErrSignatureInvalid
+	}
+	return nil
+}

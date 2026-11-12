@@ -1,0 +1,4 @@
+ok  	example.com/studio/purchasedemo/game/handler	1.058s
+ok  	example.com/studio/purchasedemo/game/purchase	0.485s
+ok  	example.com/studio/purchasedemo/game/controllers/purchase	1.574s
+ok  	example.com/studio/purchasedemo/internal/service/platform	2.025s

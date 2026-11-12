@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -175,7 +175,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	// 那是 mailbox 模块自己的 MailboxClaimReward，建在模块的 Mailbox 组件上。
 	for _, rel := range []string{
 		"game/handler/add_item.go", "game/handler/start_gift.go", "game/handler/gift_debit.go", "game/handler/gift_refund.go",
-		"game/handler/grant_purchase.go",
+		"game/handler/purchase_balance.go",
 		"game/handler/start_guild_op.go", "game/handler/guild_debit.go", "game/handler/guild_credit.go",
 		"game/handler/add_exp.go", "game/handler/claim_dungeon.go", "game/handler/player_team.go",
 		"game/handler/show_guild.go", "game/handler/player_guild.go",
@@ -331,8 +331,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if aggregate := read("game/entities/player/entity.go"); !strings.Contains(aggregate, "`comp:\"CompTypeBag\"`") {
 		t.Errorf("the Player aggregate does not hold the module's Bag component:\n%s", aggregate)
 	}
-	// demo 建在背包组件上的写入都换用模块的入口；充值订单的领取账本是 demo 自己的文件，仍是 BagComponent 上的方法
-	// （邮件的领取账本是 mailbox 模块的，见下面 mailbox 那一段）。
+	// demo 的业务调用模块组件；充值与邮件的去重状态分别由 purchase / mailbox 模块维护。
 	for rel, call := range map[string]string{
 		"game/handler/add_item.go":                    "target.BagComp().Add(itemID, int64(count))",
 		"game/handler/gift_debit.go":                  "target.BagComp().Remove(itemID, int64(count))",
@@ -340,14 +339,14 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/handler/guild_debit.go":                 "target.BagComp().Remove(itemID, int64(count))",
 		"game/handler/guild_credit.go":                "target.BagComp().Add(itemID, int64(count))",
 		"game/entities/player/equipment_component.go": "c.owner.BagComp().Remove(itemID, 1)",
-		"game/handler/grant_purchase.go":              "bag.Add(itemID, int64(count))",
+		"game/entities/player/purchase_item.go":       "owner.BagComp().Add",
 	} {
 		if body := read(rel); !strings.Contains(body, call) {
 			t.Errorf("%s does not go through the bag module's component (%s):\n%s", rel, call, body)
 		}
 	}
-	if ledgers := read("game/entities/player/claim_ledgers.go"); !strings.Contains(ledgers, "func (component *BagComponent) ClaimPurchase(") || strings.Contains(ledgers, "MailClaims") {
-		t.Errorf("the paid-order claim ledger is not the demo's own method on the Bag component (or the mail ledger is still beside it):\n%s", ledgers)
+	if state := read("db/def/purchase.go"); !strings.Contains(state, "Applied uint64") {
+		t.Errorf("purchase module cursor missing: %s", state)
 	}
 	// The demo endpoint replaces the generated scaffold with the error
 	// boundary; a handler error that reached the access layer would close the
@@ -552,7 +551,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("the Player DAO has no nested struct field, so the demo never exercises two-level dirty propagation")
 	}
 	// 持久 schema 继续声明，用于加载前的严格版本校验。
-	if def := read("db/def/player.go"); !strings.Contains(def, "schema=3") {
+	if def := read("db/def/player.go"); !strings.Contains(def, "schema=4") {
 		t.Errorf("the Player DAO does not declare a schema version, so stored data cannot be checked")
 	}
 	// Entity sync: the Player is a replicated subject, the scene is the room
@@ -1234,10 +1233,6 @@ func checkDemoGameInitConfig(body string) error {
 	}
 	if cfg.IsSet("activity.game_sids") {
 		return fmt.Errorf("activity: activity.game_sids is the removed per-service list; the group comes from activity.groups_file (C4)")
-	}
-	// internal/service/<game>/purchase_drain.go: mods.KeyPrefix(cfg, "platform")
-	if prefix := strings.TrimSpace(cfg.GetString("platform.key_prefix")); prefix == "" || strings.ContainsAny(prefix, " \t\n") {
-		return fmt.Errorf("purchase drain: platform.key_prefix %q", prefix)
 	}
 	return nil
 }

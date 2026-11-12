@@ -1,0 +1,35 @@
+package purchase
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"{{MODULE}}/game/enter"
+	"{{MODULE}}/game/purchase"
+)
+
+type purchaseEnterCollector struct {
+	playerID int64
+	calls    int
+	err      error
+}
+
+func (c *purchaseEnterCollector) Collect(_ context.Context, id int64) ([]purchase.Receipt, error) {
+	c.calls++
+	c.playerID = id
+	return nil, c.err
+}
+func TestWithPurchaseEnterCollectsAuthenticatedPlayer(t *testing.T) {
+	c := &purchaseEnterCollector{}
+	if err := collectOnEnter(context.Background(), c, enter.Entered{PlayerID: 98801}); err != nil || c.calls != 1 || c.playerID != 98801 {
+		t.Fatalf("calls=%d player=%d err=%v", c.calls, c.playerID, err)
+	}
+}
+func TestWithPurchaseEnterReportsRetryableFailure(t *testing.T) {
+	want := errors.New("queue unavailable")
+	c := &purchaseEnterCollector{err: want}
+	if err := collectOnEnter(context.Background(), c, enter.Entered{PlayerID: 98801}); !errors.Is(err, want) || c.calls != 1 {
+		t.Fatalf("calls=%d err=%v", c.calls, err)
+	}
+}

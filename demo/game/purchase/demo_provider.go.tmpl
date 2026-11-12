@@ -1,0 +1,10 @@
+package purchase
+
+import "fmt"
+
+// Channel 只用于 demo 的模拟支付入口；正式项目接入渠道通知，不能让客户端铸造付款事实。
+const Channel = "demo"
+
+func OrderID(playerID int64, sessionID string, sequence uint32) string {
+	return fmt.Sprintf("%s-%d-%s-%d", Channel, playerID, sessionID, sequence)
+}

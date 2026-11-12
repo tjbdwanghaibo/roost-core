@@ -1,6 +1,6 @@
 package dbdef
 
-//roost:dao coll=player db=main schema=3
+//roost:dao coll=player db=main schema=4
 type PlayerDao struct {
 	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
 	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
@@ -57,16 +57,6 @@ type PlayerDao struct {
 	// see game/leaderboard for why the rank service's request ring cannot be the
 	// ledger for this.
 	DungeonClears map[int64]int64 `dao:"persist,map=fast" store:"dungeon_clears"`
-	// PurchaseClaims is the same ledger for paid orders (the ledger for mail
-	// attachments is the mailbox module's PlayerDao.MailboxLedger): order id -> the
-	// moment after which that grant can no longer be claimed (payment time
-	// plus game/purchase.ClaimRetentionSeconds). The platform service runs in
-	// another process and records a grant there; this is what makes the game
-	// side of that handover exactly-once, because the id lands in the same
-	// WAL record as the items.
-	//
-	// 当前 schema 为 3；框架只加载同版本文档，不自动转换历史数据。
-	PurchaseClaims map[string]int64 `dao:"persist,map=fast" store:"purchase_claims"`
 	// GuildID is the guild this player is shown in, or 0 — the player's own
 	// copy of their membership, not the authority.
 	//

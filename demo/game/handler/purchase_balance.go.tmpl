@@ -1,0 +1,10 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerPurchaseBalance 返回当前背包快照，不参与模块的不可变发货回执。
+//
+//roost:nest
+func handlerPurchaseBalance(target player.IBagEntity, itemID int64) (int64, error) {
+	return target.BagComp().Count(itemID), nil
+}

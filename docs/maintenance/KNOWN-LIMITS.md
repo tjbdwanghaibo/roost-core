@@ -1,5 +1,9 @@
 # 当前已知限制与验证边界
 
+## 2026-11-12：purchase 模块的恢复与验收边界
+
+[purchase](../../modules/purchase/README.md) 的 Player 账本是常量大小游标，Redis 未履行订单和 platform 支付历史仍会增长；每次补领最多 32 笔，较早的异常订单会暂缓该玩家后续订单。渠道缺省拒绝，真实支付验签/查单由工程接入。队列依赖部署提供的持久 Redis，游标、待发和 Player 必须协调恢复，不支持单独重置其中一侧。新工程离线场景、变异/race 与独立 Redis Lua 已验证；真实 NATS/TCP/Mongo/WAL、跨 sid 和故障恢复仍在新任务 §6，不宣称已验收。demo schema 4 不自动迁移旧订单账本。
+
 ## 2026-11-11：地形审查 RV-20261110-01～04（已修复，未发版）留下的边界
 
 [审查报告](https://github.com/tjbdwanghaibo/roost-core/blob/fix/core-game-server-review/docs/maintenance/TERRAIN-REVIEW-20261110.md)（固定审查分支）登记的四项已在 main 修复，现象、根因与修前的红见 CHANGELOG `[Unreleased]`，状态见 [地形进度总表 §2](TERRAIN-STATUS.md#2-缺陷修复均已关闭)。留下的限制：

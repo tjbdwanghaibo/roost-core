@@ -39,6 +39,13 @@ type Deliverer interface {
 	Deliver(ctx context.Context, order Order) error
 }
 
+// CallbackVerifier 是工程发货协作者可选实现的附加渠道验证。框架先验证 HMAC 与载荷大小，
+// 再调用它；只有通过之后才解析、登记订单。它拿到完整原文，不能在这里发货或改订单。
+// 未实现时沿用框架 HMAC 契约；purchase 模块实现此接口，业务渠道尚未接入时一律拒绝。
+type CallbackVerifier interface {
+	VerifyCallback(ctx context.Context, raw []byte, signature string) error
+}
+
 // DelivererFunc adapts a function to Deliverer.
 type DelivererFunc func(context.Context, Order) error
 
@@ -321,6 +328,13 @@ func (s *Service) HandleCallback(ctx context.Context, raw []byte, signature stri
 	if !security.VerifyPayloadSignature(raw, signature, s.cfg.PaymentSecret) {
 		s.report.Refused("callback", "bad_signature")
 		return Receipt{}, ErrSignatureInvalid
+	}
+
+	if verifier, ok := s.cfg.Deliver.(CallbackVerifier); ok {
+		if err := verifier.VerifyCallback(ctx, raw, signature); err != nil {
+			s.report.Refused("callback", "channel_denied")
+			return Receipt{}, err
+		}
 	}
 
 	var payload callbackPayload

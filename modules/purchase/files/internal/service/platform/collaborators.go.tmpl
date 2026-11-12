@@ -1,0 +1,49 @@
+package platform
+
+import (
+	"context"
+	"fmt"
+
+	"{{MODULE}}/game/purchase"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 充值不接管登录职责。platform 的会话入口缺省拒绝，登录走 login/account 模块。
+func Verify() svcplatform.Verifier {
+	return svcplatform.VerifierFunc(func(context.Context, svcplatform.Credential) (svcplatform.Verified, error) {
+		return svcplatform.Verified{}, svcplatform.ErrIdentityDenied
+	})
+}
+func Players() svcplatform.PlayerResolver {
+	return svcplatform.PlayerResolverFunc(func(context.Context, svcplatform.Verified) (int64, error) { return 0, svcplatform.ErrIdentityDenied })
+}
+func Deliver() svcplatform.Deliverer     { return &paymentDelivery{} }
+func Pending() svcplatform.PendingOrders { return nil }
+func Metrics() servicemetrics.Reporter   { return servicemetrics.NewMetricsReporter("platform") }
+
+type paymentDelivery struct{ queue purchase.Queue }
+
+func (delivery *paymentDelivery) BindRegistry(registry *app.Registry) error {
+	client, err := mods.Redis(registry)
+	if err != nil {
+		return err
+	}
+	delivery.queue, err = purchase.NewRedisQueue(client, purchase.StoragePrefix)
+	return err
+}
+func (delivery *paymentDelivery) VerifyCallback(ctx context.Context, raw []byte, signature string) error {
+	return verifyPaymentCallback(ctx, raw, signature)
+}
+func (delivery *paymentDelivery) Deliver(ctx context.Context, order svcplatform.Order) error {
+	if delivery.queue == nil {
+		return fmt.Errorf("%w: purchase queue is unavailable", svcplatform.ErrDeliveryNotApplied)
+	}
+	_, err := delivery.queue.Record(ctx, order)
+	return err
+}
+
+var _ svcplatform.CallbackVerifier = (*paymentDelivery)(nil)

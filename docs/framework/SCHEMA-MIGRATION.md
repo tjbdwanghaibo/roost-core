@@ -43,7 +43,7 @@
 
 ## 4. 示例与验证
 
-game-demo 的当前 Player 为 schema 3；教学步骤从 schema 1 直接转换到当前版本：扁平 `weapon_id` 变成 equipment 模块的 `equipment.1.1`（槽位 1）。schema 2 的旧 demo 数据不在本轮迁移范围，运行期明确拒绝。历史实跑记录保留当时版本，不能当作当前 schema 3 的验收。
+game-demo 的当前 Player 为 schema 4；教学步骤从 schema 1 直接转换到当前版本：扁平 `weapon_id` 变成 equipment 模块的 `equipment.1.1`（槽位 1）。schema 2 / 3 的旧 demo 数据与旧 PurchaseClaims/待发订单不在本轮迁移范围，运行期明确拒绝。历史实跑记录保留当时版本，不能当作当前 schema 4 的验收。
 
 ```sh
 # 1 停写之后（所有 game 进程已正常退出）

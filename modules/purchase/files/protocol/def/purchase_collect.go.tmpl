@@ -1,0 +1,25 @@
+//go:build protocoldef
+
+package protocoldef
+
+// PurchaseCollectRequest 不收玩家号、订单号、奖励或序号；只拉取认证会话自己的待发订单。
+type PurchaseCollectRequest struct{}
+type PurchaseReceipt struct {
+	OrderID  string `pb:"1"`
+	Sequence uint64 `pb:"2"`
+	Kind     string `pb:"3"`
+	ItemID   int64  `pb:"4"`
+	Count    int64  `pb:"5"`
+	Settled  bool   `pb:"6"`
+}
+type PurchaseCollectResponse struct {
+	Code     int32             `pb:"1"`
+	Reason   string            `pb:"2"`
+	Receipts []PurchaseReceipt `pb:"3"`
+}
+
+//roost:protocol group=game handler=purchase
+type PurchaseCollectProtocol interface {
+	//roost:msg id={{ID:protocol:PurchaseCollect}}
+	PurchaseCollect(PurchaseCollectRequest) PurchaseCollectResponse
+}

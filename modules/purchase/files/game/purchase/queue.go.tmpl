@@ -1,0 +1,183 @@
+package purchase
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+// RedisQueue 每个玩家一个 hash。next/acked 是两个游标；o:<订单号> 与 g:<序号> 只存尚未安全清理的发货。
+// 编号与发货快照使用同一条 HSET，没有 INCR 成功、写发货失败造成的空号；不使用 Lua 不具备的回滚保证。
+type RedisQueue struct {
+	client fredis.IRedis
+	prefix string
+}
+
+func NewRedisQueue(client fredis.IRedis, prefix string) (*RedisQueue, error) {
+	if client == nil || prefix == "" {
+		return nil, fmt.Errorf("purchase: Redis and a deployment prefix are required")
+	}
+	return &RedisQueue{client: client, prefix: prefix}, nil
+}
+func (q *RedisQueue) key(playerID int64) string {
+	return q.prefix + ":{" + strconv.FormatInt(playerID, 10) + "}"
+}
+
+const findGrantScript = `
+local seq=redis.call('HGET',KEYS[1],'o:'..ARGV[1])
+if not seq then return {} end
+local raw=redis.call('HGET',KEYS[1],'g:'..seq)
+if not raw then return redis.error_reply('purchase: missing grant for allocated sequence') end
+return {seq,raw}
+`
+const recordGrantScript = `
+local seq=redis.call('HGET',KEYS[1],'o:'..ARGV[1])
+if seq then
+ local raw=redis.call('HGET',KEYS[1],'g:'..seq)
+ if not raw then return redis.error_reply('purchase: missing existing grant') end
+ return {seq,raw}
+end
+local current=tonumber(redis.call('HGET',KEYS[1],'next') or '0')
+if current>=9007199254740991 then return redis.error_reply('purchase: sequence exhausted') end
+seq=string.format('%.0f',current+1)
+redis.call('HSET',KEYS[1],'next',seq,'o:'..ARGV[1],seq,'g:'..seq,ARGV[2])
+return {seq,ARGV[2]}
+`
+const pendingGrantsScript = `
+local first=tonumber(redis.call('HGET',KEYS[1],'acked') or '0')+1
+local last=tonumber(redis.call('HGET',KEYS[1],'next') or '0')
+local result={}
+for n=first,math.min(last,first+tonumber(ARGV[1])-1) do
+ local seq=string.format('%.0f',n)
+ local raw=redis.call('HGET',KEYS[1],'g:'..seq)
+ if not raw then return redis.error_reply('purchase: sequence gap') end
+ result[#result+1]=seq
+ result[#result+1]=raw
+end
+return result
+`
+const ackGrantScript = `
+local acked=tonumber(redis.call('HGET',KEYS[1],'acked') or '0')
+local seq=tonumber(ARGV[1])
+if seq<=acked then return 1 end
+if seq~=acked+1 then return 0 end
+if redis.call('HGET',KEYS[1],'o:'..ARGV[2])~=ARGV[1] or redis.call('HGET',KEYS[1],'g:'..ARGV[1])~=ARGV[3] then
+ return redis.error_reply('purchase: acknowledgement differs from queued grant')
+end
+redis.call('HSET',KEYS[1],'acked',ARGV[1])
+redis.call('HDEL',KEYS[1],'o:'..ARGV[2],'g:'..ARGV[1])
+return 1
+`
+
+func (q *RedisQueue) Record(ctx context.Context, order svcplatform.Order) (Grant, error) {
+	if order.OrderID == "" || order.PlayerID <= 0 || order.PayloadDigest == "" {
+		return Grant{}, fmt.Errorf("%w: missing order identity", svcplatform.ErrDeliveryNotApplied)
+	}
+	result, err := q.client.Eval(ctx, findGrantScript, []string{q.key(order.PlayerID)}, order.OrderID)
+	if err != nil {
+		return Grant{}, err
+	}
+	existing, err := decodeGrants(result)
+	if err != nil {
+		return Grant{}, err
+	}
+	if len(existing) == 1 {
+		return existing[0], sameOrder(existing[0], order)
+	}
+	if len(existing) != 0 {
+		return Grant{}, fmt.Errorf("purchase: lookup returned multiple grants")
+	}
+	product, ok := LookupProduct(order.ProductID)
+	if !ok || product.AmountMinor != order.AmountMinor || product.Currency != order.Currency || product.Reward.Count <= 0 {
+		return Grant{}, fmt.Errorf("%w: %w: price or product differs", svcplatform.ErrDeliveryNotApplied, svcplatform.ErrOrderMismatch)
+	}
+	grant := Grant{OrderID: order.OrderID, PlayerID: order.PlayerID, ProductID: order.ProductID, Digest: order.PayloadDigest, Reward: product.Reward}
+	raw, err := json.Marshal(grant)
+	if err != nil {
+		return Grant{}, fmt.Errorf("%w: %v", svcplatform.ErrDeliveryNotApplied, err)
+	}
+	result, err = q.client.Eval(ctx, recordGrantScript, []string{q.key(order.PlayerID)}, order.OrderID, string(raw))
+	if err != nil {
+		return Grant{}, err
+	}
+	stored, err := decodeGrants(result)
+	if err != nil {
+		return Grant{}, err
+	}
+	if len(stored) != 1 {
+		return Grant{}, fmt.Errorf("purchase: record did not return one grant")
+	}
+	return stored[0], sameOrder(stored[0], order)
+}
+func (q *RedisQueue) Pending(ctx context.Context, playerID int64, limit int) ([]Grant, error) {
+	if playerID <= 0 || limit <= 0 || limit > BatchLimit {
+		return nil, fmt.Errorf("purchase: invalid player or batch limit")
+	}
+	result, err := q.client.Eval(ctx, pendingGrantsScript, []string{q.key(playerID)}, limit)
+	if err != nil {
+		return nil, err
+	}
+	return decodeGrants(result)
+}
+func (q *RedisQueue) Ack(ctx context.Context, grant Grant) error {
+	if err := grant.Validate(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(grant)
+	if err != nil {
+		return err
+	}
+	result, err := q.client.Eval(ctx, ackGrantScript, []string{q.key(grant.PlayerID)}, strconv.FormatUint(grant.Sequence, 10), grant.OrderID, string(raw))
+	if err != nil {
+		return err
+	}
+	if value, ok := result.(int64); !ok || value != 1 {
+		return fmt.Errorf("purchase: an earlier grant still needs acknowledgement")
+	}
+	return nil
+}
+func decodeGrants(result any) ([]Grant, error) {
+	values, ok := result.([]any)
+	if !ok || len(values)%2 != 0 {
+		return nil, fmt.Errorf("purchase: invalid queue result %T", result)
+	}
+	grants := make([]Grant, 0, len(values)/2)
+	for i := 0; i < len(values); i += 2 {
+		seq, ok := queueText(values[i])
+		if !ok {
+			return nil, fmt.Errorf("purchase: invalid sequence encoding")
+		}
+		raw, ok := queueText(values[i+1])
+		if !ok {
+			return nil, fmt.Errorf("purchase: invalid grant encoding")
+		}
+		var grant Grant
+		if err := json.Unmarshal([]byte(raw), &grant); err != nil {
+			return nil, err
+		}
+		n, err := strconv.ParseUint(seq, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		grant.Sequence = n
+		if err := grant.Validate(); err != nil {
+			return nil, err
+		}
+		grants = append(grants, grant)
+	}
+	return grants, nil
+}
+func queueText(value any) (string, bool) {
+	switch text := value.(type) {
+	case string:
+		return text, true
+	case []byte:
+		return string(text), true
+	default:
+		return "", false
+	}
+}

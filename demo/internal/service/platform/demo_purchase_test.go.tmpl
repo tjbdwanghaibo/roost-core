@@ -1,0 +1,17 @@
+package platform
+
+import (
+	"context"
+	"errors"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+	"testing"
+)
+
+func TestDemoPurchaseChannel(t *testing.T) {
+	if err := verifyPaymentCallback(context.Background(), []byte(`{"channel":"demo"}`), "already-HMAC-verified"); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPaymentCallback(context.Background(), []byte(`{"channel":"unknown"}`), "already-HMAC-verified"); !errors.Is(err, svcplatform.ErrSignatureInvalid) {
+		t.Fatalf("untrusted channel: %v", err)
+	}
+}

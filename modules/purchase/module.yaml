@@ -1,0 +1,35 @@
+name: purchase
+summary: 充值发货：platform 记单、Redis 顺序待发队列、Player 常量大小发货游标；金币默认、道具联动、渠道缺省拒绝
+requires: [wallet]
+needs:
+  mods: [nest, redis]
+  features: [protocol, entity, dao, errcode]
+  uses: [platform]
+entity: Player
+state:
+  - field: Purchase
+    type: PurchaseState
+    store: purchase
+    dao: persist
+    comment: Purchase 的已发货序号与奖励在同一笔事务提交，不保存随订单数增长的本地回执表。
+component: Purchase
+protocols: [PurchaseCollect]
+errcodes: [purchase_invalid, purchase_sequence, purchase_reward]
+replaces: [internal/service/platform/collaborators.go]
+verify:
+  packages: [./game/handler, ./game/purchase, ./game/controllers/purchase, ./internal/service/platform]
+  run: ^TestPurchase
+  pass: 21
+with:
+  bag:
+    summary: 付费道具在发货游标同一笔事务中进入背包
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithPurchaseBag
+      pass: 4
+  enter:
+    summary: 进入游戏后有界拉取待发订单，离线到账不丢弃
+    verify:
+      packages: [./game/controllers/purchase]
+      run: ^TestWithPurchaseEnter
+      pass: 2

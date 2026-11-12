@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **新增**（modules/purchase）：付费发货模块，Redis 按玩家分配连续序号并保存不可变奖励，Player 游标与奖励同一笔严格事务；确认后删除待发记录，不保留随历史订单增长的 Player 回执表。默认金币、bag 道具和 enter 补发联动；平台终态且无在途投递才允许发货/清理，退款结清只推进游标。platform 新增可选 CallbackVerifier，强制 HMAC 之后、记单之前执行；模块的工程渠道缺省拒绝。demo 使用模块，Player schema 3 → 4，删除旧 PurchaseClaims 与独立 drain；不兼容旧生成工程/订单格式，不自动转换生产数据。验证及容量/恢复边界见 [模块说明](modules/purchase/README.md)。
+
 - **新增**（modules/gm）：运维命令登记与审计，wallet / bag / profile / mailbox / rehome 按 `with/gm` 接入；复用 ops token，命令要求 operator 与 note，拒绝在 `result.data.code` 返回业务码。demo 的相应命令迁入模块，经验发放仍保留 Player + World 双实体事务。补偿邮件改为显式 `request_id` 与统一 `attachment`，旧平铺奖励参数不再接受。
 
 - **新增**（modules/login + codegen）：登录鉴权模块。玩家 TCP 握手校验 account 签发的会话令牌（`session:<player_id>:<token>`），把承载服、原服、角色创建时间、绑定代数与换服标记写进会话；接管生成的鉴权桩与 account 的 collaborators：开发令牌登录（渠道 `dev`，`login.dev_token` 必须以 `dev-` 开头、生产配置里非空即拒绝启动）、Redis 玩家号计数器，渠道入口 `login_channels.go` 缺省全拒。联动 login + enter：会话记的承载服不是本服时答 `login_elsewhere`，不加载也不创建 Player。安装器的 `replaces` 认识的生成桩做成一张表（`generatedStubKinds`），新增玩家 TCP 鉴权桩；桩由这次安装的前置命令生成时 plan 照样列出。场景 19 + 2 条，模块 42 条、安装器 6 条变异全部被杀。只有离线场景；客户端登录入口、渠道验签仍归工程（KNOWN-LIMITS“login 的边界”）。game-demo 与两个配方尚未换用。

@@ -1,0 +1,23 @@
+package purchase
+
+// Product 是工程自己的商品规则；上线前与渠道后台逐一核对。金额使用货币最小单位，不能用浮点数。
+type Product struct {
+	ID          string
+	AmountMinor int64
+	Currency    string
+	Reward      Reward
+}
+
+// LookupProduct 在首次投递时调用。已记录的发货只读原快照，不因规则改变而增减奖励。
+func LookupProduct(id string) (Product, bool) {
+	switch id {
+	case "coins_100":
+		return Product{ID: id, AmountMinor: 99, Currency: "USD", Reward: Reward{Kind: "coins", Count: 100}}, true
+	default:
+		return Product{}, false
+	}
+}
+
+// StoragePrefix 是本工程付款待发事实的 Redis 命名空间，platform 与 game 必须使用同一值和同一 Redis。
+// 不同世界共享 Redis 时由部署明确改成不同前缀；不能在有在途发货时修改它或清空计数器。
+const StoragePrefix = "roost:{{PROJECT}}:purchase"

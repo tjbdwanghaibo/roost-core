@@ -1,0 +1,25 @@
+package platform
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+func TestPurchaseChannelDefaultsToDeny(t *testing.T) {
+	delivery := Deliver()
+	verifier, ok := delivery.(svcplatform.CallbackVerifier)
+	if !ok {
+		t.Fatal("payment delivery does not guard callbacks")
+	}
+	if err := verifier.VerifyCallback(context.Background(), []byte(`{"order_id":"forged"}`), "anything"); !errors.Is(err, svcplatform.ErrSignatureInvalid) {
+		t.Fatalf("default channel admitted callback: %v", err)
+	}
+}
+func TestPurchaseUnboundDeliveryIsNotApplied(t *testing.T) {
+	if err := Deliver().Deliver(context.Background(), svcplatform.Order{OrderID: "one"}); !errors.Is(err, svcplatform.ErrDeliveryNotApplied) {
+		t.Fatalf("err=%v", err)
+	}
+}

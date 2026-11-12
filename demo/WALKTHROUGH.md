@@ -32,14 +32,15 @@ TCP (player access)
 - **只换道具表的数据**：模块装好之后覆盖 `configs/schema/item.go` 与 `configs/table/item.csv`——多 `attack` / `hp` 两列
   （属性系统给穿着的装备算加成），行是 demo 的五种道具。背包规则文件 `game/entities/player/bag_items.go` 是模块的缺省实现：
   表里有这一行道具号就合法，`max_stack` 是单种上限（0 表示不单独限制，按硬上限 999999）。加道具、改上限只改 CSV。
-- **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放、充值发货，
+- **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放，
   都在自己的 Nest handler 里调 `target.BagComp().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`
   要求组件文件已经在盘上，而组件在最后的模块步骤才落盘，所以生成步骤里这些 handler 没有骨架步骤，文件直接写出、留在原处
   （骨架本来也会被立刻覆盖）；模块那一步跑生成器时全部 handler 都已经在盘上。邮件附件进背包不在其中：那是 mailbox 模块与
   bag 模块的联动（`game/entities/player/mailbox_item.go`，见下文[邮件](#邮件列表与领附件客户端这一半)）。
-- **领取账本不是背包的职责**：已付订单（`ClaimPurchase`）的“这一次发过没有”记在 demo 自己的 `PlayerDao.PurchaseClaims` 里，
-  方法写在 demo 的 `game/entities/player/claim_ledgers.go`（给模块的 `BagComponent` 加方法：账本与道具在同一笔事务里提交或回滚）。
-  邮件附件的领取账本是 mailbox 模块的（`PlayerDao.MailboxLedger`），demo 不再带一份。
+- **领取账本不是背包的职责**：付费发货来自 [purchase 模块](../modules/purchase/README.md)，Redis 按玩家保存待发快照，
+  Player 的 `Purchase.Applied` 连续游标与奖励在同一笔事务提交；确认后清理待发，旧序号不能再发一次。demo 不保留不断增长的
+  `PurchaseClaims`。商品表与模拟渠道是 demo 的规则，真实渠道仍需工程接入；模块与 enter 联动补发离线订单。
+  邮件附件账本仍由 mailbox 模块维护。demo 购买响应里的 BagCount 是另一笔只读 Nest 查询的当前快照，不是发货幂等回执。
 - **同步不用组件自己标脏**：模块的组件不调 `Player.PublishSyncDirty()`（模块不认识工程的同步）。demo 的 Nest 装着场景的
   提交观察者，事务准入时按实体收集生成的 setter 留下的同步标记，所以背包的变化照样作为增量到本人的客户端；被拒绝而回滚的
   发放什么都不发；别的玩家的视图里没有 `bag`。`internal/service/game/bag_sync_test.go` 在与服务相同的接线上断言这三件事。
@@ -525,7 +526,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 属性/装备模块化后，当前示例使用 schema 3。schema 2 的旧示例数据会明确拒绝；本轮不提供其格式兼容或自动转换。重新生成示例请用新数据目录/数据库，不能复用已有 WAL。下述 schema 1 教学迁移仍只演示业务显式登记、停写后操作的方式。
 
-`//roost:dao coll=player db=main schema=3` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
+`//roost:dao coll=player db=main schema=4` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
 
 改形状时靠离线迁移：`db/migrations` 登记 Player 从 1 到当前 3 的教学步骤（v1 的扁平 `weapon_id` 变成当前的 `equipment.1`（模块的稳定存储键））和写入前的校验（用生成 DAO 的 `RestorePersisted` 按当前 schema 解码），`offline.go` 是执行器，`cmd/schemamigrate plan|apply|verify|rollback` 是运维入口。只能在停写之后运行；apply 先完整 dry-run、全部通过才“写备份 → 带 `_version` 与 `_schema` 条件改写”，改写时 `_version` 加 1，没停干净的旧进程因此冲突而不是把旧 schema 写回去；rollback 只恢复仍是迁移写的那一版。流程与边界见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md)。
 

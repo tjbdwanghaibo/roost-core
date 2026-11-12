@@ -1,0 +1,6 @@
+package dbdef
+
+// PurchaseState 只记录连续完成到哪一个序号。订单身份与奖励快照由权威待发记录提供，不保存在 Player 的无界 map 里。
+type PurchaseState struct {
+	Applied uint64 `store:"1"`
+}

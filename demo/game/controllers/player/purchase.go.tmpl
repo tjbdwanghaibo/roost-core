@@ -6,10 +6,13 @@ import (
 	"log/slog"
 	"time"
 
+	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/flags"
-	"{{MODULE}}/game/purchase"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/game/purchase"
 	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 )
@@ -51,7 +54,7 @@ func (controller *Controller) HandlePurchase(context *playeraccess.Context, requ
 	if !flags.Enabled(flags.Purchase) {
 		return refuse(fmt.Errorf("%w: the store is closed", svcplatform.ErrRequestInvalid), "flag")
 	}
-	product, ok := purchase.Lookup(request.ProductID)
+	product, ok := purchase.LookupProduct(request.ProductID)
 	if !ok {
 		return refuse(fmt.Errorf("%w: product %q is not in the catalogue", svcplatform.ErrRequestInvalid, request.ProductID), "catalogue")
 	}
@@ -77,7 +80,7 @@ func (controller *Controller) HandlePurchase(context *playeraccess.Context, requ
 	// here is not a failed purchase, so it is reported as what it is — the
 	// goods arrive on the next drain.
 	response := &pb.PurchaseResponse{
-		OrderID: receipt.Order.OrderID, ItemID: product.ItemID, Count: product.Count,
+		OrderID: receipt.Order.OrderID, ItemID: product.Reward.ID, Count: int32(product.Reward.Count),
 		Delivered: receipt.Delivered, Replayed: receipt.Replayed,
 	}
 	drain, err := controller.Purchases()
@@ -85,7 +88,7 @@ func (controller *Controller) HandlePurchase(context *playeraccess.Context, requ
 		slog.Error("purchase: the grant is recorded but the drain is unavailable", "player_id", context.PlayerID, "order_id", orderID, "err", err)
 		return response, nil
 	}
-	settled, err := drain.DrainPlayer(ctx, context.PlayerID)
+	settled, err := drain.Collect(ctx, context.PlayerID)
 	if err != nil {
 		slog.Error("purchase: the grant is recorded but was not settled", "player_id", context.PlayerID, "order_id", orderID, "err", err)
 		return response, nil
@@ -94,7 +97,18 @@ func (controller *Controller) HandlePurchase(context *playeraccess.Context, requ
 		// The drain may have settled grants that were waiting from earlier
 		// purchases; the answer to THIS request is the one with this order id.
 		if settlement.OrderID == orderID {
-			response.BagCount = settlement.BagCount
+			if settlement.Settled {
+				break
+			}
+			full, buildErr := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+			if buildErr != nil {
+				return refuse(buildErr, "identity")
+			}
+			held, readErr := syncsender.NewPurchaseBalanceSender(controller.NestClient()).Sync_PurchaseBalance(ctx, full, product.Reward.ID)
+			if readErr != nil {
+				return refuse(readErr, "balance")
+			}
+			response.BagCount = int32(held)
 		}
 	}
 	return response, nil

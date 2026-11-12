@@ -17,7 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// PlayerWeaponToEquipment 是 Player 从 schema 1 到当前 3 的变化：v1 把武器存成 Player 上扁平的
+// PlayerWeaponToEquipment 是 Player 从 schema 1 到当前 4 的变化：v1 把武器存成 Player 上扁平的
 // weapon_id，当前版本存成按槽位键的 equipment 子文档（equipment 模块的 EquipmentState）。
 //
 // 加字段不需要迁移（BSON 解码给零值）；需要迁移的是改形状——新定义无论如何都找不到旧的那个数字。
