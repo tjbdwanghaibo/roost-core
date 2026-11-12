@@ -1,0 +1,94 @@
+package portal
+
+import (
+	"context"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件归工程所有：登录入口里“由游戏自己决定”的两件事都在这里——区服的地址从哪里来、给玩家推荐哪个服。
+// 模块别的文件是机制，不带规则；要改规则改这里，project sync / upgrade 不会改写它。
+
+// newDirectory 决定入口用哪个区服目录（Directory：每个服该连哪个地址、多忙）。入口启动时调一次。
+//
+// configured 是配置 portal.servers 的静态目录（没有配置时是空的）。缺省就用它：清单里有哪些服由 account
+// 说了算（ListServers），这里只给地址；没写地址的服照常列出，只是没有地址。
+//
+// 要动态的目录时，在这里建一张注册表（Registry）叠在配置上面，并把“登记从哪里来”接上：
+//
+//	dynamic := NewRegistry(nil)
+//	// 例一：Gate / game 定时经内部总线上报——在这里订阅工程自己的主题，收到一条就
+//	//       dynamic.Announce(Entry{ServerID: sid, Addr: addr, Load: online}, 30*time.Second)，
+//	//       正常下线的通知调 dynamic.Withdraw(sid)；返回的 stop 里取消订阅。
+//	// 例二：读服务发现——不用注册表，自己实现 Directory（Entries 里读发现结果，带上缓存）。
+//	// 例三：运维手工登记——把 dynamic.Announce / Withdraw 挂到工程的运维入口上。
+//	return Overlay(configured, dynamic), stop, nil
+//
+// 三种接法的注意事项（入口多副本时注册表各在各的进程里）见模块的 README“动态目录”。
+//
+// registry 是本进程（托管 account 服务的进程）的能力表：总线、Redis 这些从它取。返回的 stop 在进程停机时
+// 调用，没有要停的东西就返回 nil；返回错误进程不启动。
+func newDirectory(_ *app.Registry, configured Directory) (Directory, func(context.Context) error, error) {
+	return configured, nil, nil
+}
+
+// ServerChoice 是推荐规则看到的一个服：account 的区服记录、目录给的地址与负载、本账号在这个服的角色。
+type ServerChoice struct {
+	ServerID int32
+	Name     string
+	// Status 是 account 里的状态：open、maintenance、full、closed。只有 open 的服能建角。
+	Status string
+	// MergedInto 非 0 表示这个服已经并入那个服（不能在这里建新角色）。
+	MergedInto int32
+	// Addr 为空表示目录里没有这个服的地址：客户端现在连不上它。
+	Addr string
+	Load int
+	Tags []string
+	// HasRole 表示本账号在这个服上有角色；RoleLastLoginAt 是那个角色最近一次选角的时间（Unix 秒，没登录过是 0）。
+	HasRole         bool
+	RoleLastLoginAt int64
+}
+
+// recommend 是导量规则：从清单里挑一个服推荐给这名玩家，返回它的服号；没有可推荐的返回 0。
+// servers 按服号升序。返回一个不在清单里的服号按“没有推荐”处理。
+//
+// 缺省规则：
+//
+//   - 老玩家（至少在一个服有角色）：推荐最近登录过的那个角色所在的服；登录时间相同（例如都没登录过）取服号大的。
+//     不看那个服现在的状态与负载——玩家要回的是自己的号。
+//   - 新玩家（哪个服都没有角色）：在状态是 open、没有并入别的服的服里推荐服号最大的（最新开的服）。
+//     有地址的服优先于没有地址的：目录里一个地址都没有时（零配置）照样推荐最新的开放服，
+//     只有一部分服有地址时不把玩家导向一个连不上的服。
+//
+// 想按负载分流（Load）、按标签（Tags）或按渠道导量，改这个函数；规则数据（阈值、白名单）也放在这个文件里。
+func recommend(servers []ServerChoice) int32 {
+	var home *ServerChoice
+	for i := range servers {
+		server := &servers[i]
+		if !server.HasRole {
+			continue
+		}
+		if home == nil || server.RoleLastLoginAt > home.RoleLastLoginAt ||
+			(server.RoleLastLoginAt == home.RoleLastLoginAt && server.ServerID > home.ServerID) {
+			home = server
+		}
+	}
+	if home != nil {
+		return home.ServerID
+	}
+	var newest *ServerChoice
+	for i := range servers {
+		server := &servers[i]
+		if server.Status != "open" || server.MergedInto != 0 {
+			continue
+		}
+		reachable, best := server.Addr != "", newest != nil && newest.Addr != ""
+		if newest == nil || (reachable && !best) || (reachable == best && server.ServerID > newest.ServerID) {
+			newest = server
+		}
+	}
+	if newest != nil {
+		return newest.ServerID
+	}
+	return 0
+}

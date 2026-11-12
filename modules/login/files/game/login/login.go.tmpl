@@ -5,8 +5,14 @@
 // Authenticator。规则放在 game 下面而不是接入包里，是因为读这些记录的一方（进入游戏的检查与钩子、
 // 邮件、换服）在 game 这一侧，它们不能 import 接入包。
 //
-// 凭据只有一种：account 服务签发的会话令牌。没有“开发口令”“直接报玩家号”这类旁路——
-// 服务器不校验的凭据不是凭据。开发环境怎么拿到会话令牌见 internal/service/account 的开发登录。
+// 凭据都是 account 服务签发的，校验也都交给 account——这里不持有任何密钥：
+//
+//   - 进服票据（enter:<票据>）：登录入口在玩家选定一个服之后向 account 要的，只绑定账号与服。握手时
+//     account 按“账号 + 服”解析出玩家号，没有映射就新建。走登录入口（portal 模块）的客户端用这一种。
+//   - 角色会话令牌（session:<player_id>:<token>）：入口自己调 CreateRole / SelectRole 选好了角色的工程用。
+//
+// 没有“开发口令”“直接报玩家号”这类旁路——服务器不校验的凭据不是凭据。
+// 开发环境怎么登录见 internal/service/account 的开发登录。
 package login
 
 import (
@@ -20,16 +26,22 @@ import (
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
-// 握手帧里的票据：
+// 握手帧里的票据有两种写法：
 //
+//	enter:<进服票据>
 //	session:<player_id>:<token>
 //
+// 进服票据是 account 的 IssueEnterTicket 签的（登录入口的 /portal/enter 转交给客户端），对这里是不透明的一串，
+// 原样交回 account 的 EnterServer。
 // token 是 account 的 SelectRole 返回的会话令牌（Session.Token），player_id 是那个角色的玩家号，十进制、
-// 正数、不带符号与前导零。玩家号只是“问 account 哪一个角色”的提示，没有任何权限：会话里的身份一律取自
-// account 校验之后返回的角色，不取自票据。
-const ticketPrefix = "session:"
+// 正数、不带符号与前导零。玩家号只是“问 account 哪一个角色”的提示，没有任何权限。
+// 两种写法下，会话里的身份都取自 account 校验之后返回的角色，不取自票据。
+const (
+	ticketPrefix      = "session:"
+	enterTicketPrefix = "enter:"
+)
 
-// MaxTicketBytes 是票据的长度上限。会话令牌只有一百多字节；超过这个长度的不问 account，直接拒绝。
+// MaxTicketBytes 是票据的长度上限。两种票据都只有一两百字节；超过这个长度的不问 account，直接拒绝。
 const MaxTicketBytes = 8192
 
 // ErrAccountUnavailable：account 没有给出结论——不可达、超时、存储出错、角色正在对账。它不是拒绝：
@@ -38,9 +50,26 @@ const MaxTicketBytes = 8192
 // 拒绝是另一个错误：errors.Is(err, gateway.ErrUnauthenticated)。两者不会同时成立。
 var ErrAccountUnavailable = errors.New("login: account gave no verdict on the session ticket")
 
-// Ticket 拼出握手票据。给客户端工具、机器人与测试用，保证与 ParseTicket 是同一种写法。
+// Ticket 拼出角色会话令牌的握手票据。给客户端工具、机器人与测试用，保证与 ParseTicket 是同一种写法。
 func Ticket(playerID int64, token string) string {
 	return ticketPrefix + strconv.FormatInt(playerID, 10) + ":" + token
+}
+
+// EnterTicket 拼出进服票据的握手票据。登录入口（portal 模块）用它把 account 签的进服票据交给客户端，
+// 保证与 ParseEnterTicket 是同一种写法。
+func EnterTicket(ticket string) string { return enterTicketPrefix + ticket }
+
+// ParseEnterTicket 拆出握手票据里的进服票据。格式不对时 ok 为 false：前缀不是 enter:、后面是空的、
+// 超过 MaxTicketBytes。它只看形状，不判断票据真假。
+func ParseEnterTicket(handshake string) (ticket string, ok bool) {
+	if len(handshake) > MaxTicketBytes {
+		return "", false
+	}
+	ticket, found := strings.CutPrefix(handshake, enterTicketPrefix)
+	if !found || ticket == "" {
+		return "", false
+	}
+	return ticket, true
 }
 
 // ParseTicket 拆出票据里的玩家号与会话令牌。格式不对时 ok 为 false：前缀不是 session:、没有令牌、
@@ -76,9 +105,9 @@ type Authenticator struct {
 //
 //   - 通过：Principal 的 PlayerID 与区服取自 account 返回的角色，Claims 见 Claims。每次握手一个新的
 //     SessionID，同一名玩家的两条连接靠它区分。
-//   - 拒绝（errors.Is(err, gateway.ErrUnauthenticated)）：票据格式不对；令牌验不过——签名不对、过期、
-//     不是这名玩家的、签发它的密钥已经换掉（account 轮换 session_secret 就是吊销全部在外的令牌）；
-//     account 没有这个角色；account 返回的角色与票据对不上。重试同一张票据没有用，客户端要重新登录选角。
+//   - 拒绝（errors.Is(err, gateway.ErrUnauthenticated)）：票据格式不对；account 明确拒绝——签名不对、过期、
+//     不是这名玩家的、签发它的密钥已经换掉（account 轮换 session_secret 就是吊销全部在外的凭证）、
+//     账号被封、区服不让建新角色；account 返回的角色与票据对不上。重试同一张票据没有用，客户端要重新登录。
 //   - 判断不了（errors.Is(err, ErrAccountUnavailable)）：见 ErrAccountUnavailable。
 //
 // 它不拒绝“不该由本服服务”的角色（承载服是别的服、正在换服）：握手失败客户端拿不到原因，这两种情况
@@ -86,9 +115,12 @@ type Authenticator struct {
 //
 // 并发安全：没有可变状态，握手可以并发调用。ctx 是握手的期限，问 account 用的就是它。
 func (authenticator Authenticator) Authenticate(ctx context.Context, ticket string) (gateway.Principal, error) {
+	if strings.HasPrefix(ticket, enterTicketPrefix) {
+		return authenticator.authenticateEnter(ctx, ticket)
+	}
 	playerID, token, ok := ParseTicket(ticket)
 	if !ok {
-		return gateway.Principal{}, fmt.Errorf("%w: the ticket is not session:<player_id>:<token>", gateway.ErrUnauthenticated)
+		return gateway.Principal{}, fmt.Errorf("%w: the ticket is neither enter:<ticket> nor session:<player_id>:<token>", gateway.ErrUnauthenticated)
 	}
 	if authenticator.Accounts == nil {
 		return gateway.Principal{}, fmt.Errorf("%w: no account client", ErrAccountUnavailable)
@@ -113,6 +145,58 @@ func (authenticator Authenticator) Authenticate(ctx context.Context, ticket stri
 	}, nil
 }
 
+// authenticateEnter 是进服票据的握手：把票据原样交给 account 的 EnterServer。account 验票据、按“账号 + 服”
+// 解析玩家号，没有映射就新建——所以这一步**可能写**（新号的第一次握手建出映射）；同一张票据重放、
+// 两条连接同时握手，account 保证只有一个映射。
+//
+// account 只管“账号 ↔ 玩家号”，不管角色名，也不知道这名玩家在游戏服里的数据建没建过：
+// 会话里的 svcaccount.NewRoleClaim 只是“映射是这一次握手新建的”的提示，玩家数据要不要新建由游戏服按自己的档判断。
+func (authenticator Authenticator) authenticateEnter(ctx context.Context, handshake string) (gateway.Principal, error) {
+	ticket, ok := ParseEnterTicket(handshake)
+	if !ok {
+		return gateway.Principal{}, fmt.Errorf("%w: the ticket is not enter:<ticket>", gateway.ErrUnauthenticated)
+	}
+	if authenticator.Accounts == nil {
+		return gateway.Principal{}, fmt.Errorf("%w: no account client", ErrAccountUnavailable)
+	}
+	entry, err := authenticator.Accounts.EnterServer(ctx, ticket)
+	if err != nil {
+		if enterRefusedByAccount(err) {
+			return gateway.Principal{}, fmt.Errorf("%w: %w", gateway.ErrUnauthenticated, err)
+		}
+		return gateway.Principal{}, fmt.Errorf("%w: %w", ErrAccountUnavailable, err)
+	}
+	role := entry.Role
+	// 票据里写着它要进哪个服（只读，不验证——验证是 account 的事）；account 答的角色必须绑定在那个服上。
+	if bound, readable := svcaccount.PeekEnterTicket(ticket); role.PlayerID <= 0 || role.ServerID <= 0 || role.ServingServerID <= 0 || !readable || bound != role.ServerID {
+		return gateway.Principal{}, fmt.Errorf("%w: account returned role %d on server %d (serving %d) for an enter ticket",
+			gateway.ErrUnauthenticated, role.PlayerID, role.ServerID, role.ServingServerID)
+	}
+	claims := Claims(role)
+	if entry.Created {
+		claims[svcaccount.NewRoleClaim] = "1"
+	}
+	return gateway.Principal{
+		PlayerID:  role.PlayerID,
+		ServerID:  role.ServingServerID,
+		SessionID: gateway.NewBroadcastID(),
+		Claims:    claims,
+	}, nil
+}
+
+// enterRefusedByAccount 报告 account 对一次凭票进服的回答是不是明确的拒绝：票据无效、账号不在或被封、
+// 区服没登记或不让建新角色、名额被占着、不是这个账号的角色。与 refusedByAccount 一样按码判断。
+// 其余一切（总线错误、超时、存储错误、对账中的冲突 CodeConflict、没见过的码）都不算拒绝——同一张票据稍后重试。
+func enterRefusedByAccount(err error) bool {
+	switch svcaccount.Code(err) {
+	case svcaccount.CodeSessionInvalid, svcaccount.CodeIdentityDenied, svcaccount.CodeAccountMissing,
+		svcaccount.CodeServerInvalid, svcaccount.CodeServerClosed, svcaccount.CodeRoleLimit,
+		svcaccount.CodeNameTaken, svcaccount.CodeNotPermitted, svcaccount.CodeServerMergeCycle:
+		return true
+	}
+	return false
+}
+
 // refusedByAccount 报告 account 的回答是不是对这张票据的明确拒绝：令牌无效（CodeSessionInvalid）或
 // 没有这个角色（CodeRoleMissing）。按码判断而不是按哨兵：game 进程里 account 是总线另一头的服务，
 // 业务拒绝回来时只剩码。其余一切（总线错误、超时、存储错误、对账中的冲突、没见过的码）都不算拒绝——
@@ -135,6 +219,7 @@ func refusedByAccount(err error) bool {
 //	svcaccount.RoleCreatedAtClaim   角色创建时间（Unix 秒）。全服邮件“注册早于发送才收得到”用它。
 //	svcaccount.BindEpochClaim       绑定代数：没换过服是 "0"，每换一次服加一。换服模块拿它认“换回来的”。
 //	svcaccount.TransferClaim        只在换服在途时有：目标 sid 与换服 ID（svcaccount.ParseTransferClaim 读回）。
+//	svcaccount.NewRoleClaim         只在进服票据的握手新建了“账号 ↔ 玩家号”的映射时有，值 "1"（authenticateEnter 写）。
 //
 // 工程要多记别的事实（渠道、设备、白名单标记）就在这里加键；已有的键不要改名、不要改写法，
 // 别的模块按它们读。

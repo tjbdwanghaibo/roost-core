@@ -19,8 +19,9 @@ import (
 // applicationAuthenticator 是玩家 TCP 握手的认证器。登录模块（roost module add login）写下这个文件，
 // 取代生成的“一律拒绝”的桩；之后归工程所有，project sync / upgrade 不改写。
 //
-// 它只做接线：握手票据（session:<player_id>:<token>）怎么拆、怎么向 account 校验、通过之后往会话里
-// 记什么，都在 game/login（Authenticator 与 Claims），要改规则改那里。
+// 它只做接线：握手票据（enter:<进服票据>，或 session:<player_id>:<token>）怎么拆、怎么向 account 校验、
+// 通过之后往会话里记什么，都在 game/login（Authenticator 与 Claims），要改规则改那里。
+// 握手这一步会调 account——进服票据的握手在新号第一次来时让 account 建出账号与玩家号的映射。
 //
 // account 的客户端在 Init 时还拿不到（Init 只看得到配置），所以实现 RegistryBound：传输 Mod 在 Provide 里、
 // 监听开始之前调 BindRegistry。绑定之前到达的握手一律拒绝。

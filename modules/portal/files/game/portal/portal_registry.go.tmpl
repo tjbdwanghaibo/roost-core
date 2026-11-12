@@ -1,0 +1,120 @@
+package portal
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+)
+
+// Registry 是动态的区服目录：一张带过期的注册表。谁在提供某个服的入口（Gate，或者直连部署里的 game 进程），
+// 谁就定期往里登记“这个服现在连这个地址、这么忙”；超过期限没有再登记的条目不再给出——进程死了、
+// 网络断了，它的地址自己从清单里消失，不用谁去删。
+//
+// 这里只有机制。**登记从哪里来由工程接**（portal_rules.go 的 newDirectory）：经内部总线收上报、
+// 读服务发现、运维接口手工登记，常见的三种接法见模块的 README。入口不替工程订阅任何东西。
+//
+// 它是**进程内**的：入口多副本时每个副本各有一张表，互不相通。上报要么让每个副本都收到（广播，而不是
+// 只投给一个副本的队列），要么换成一个读共享存储的 Directory；否则同一个客户端两次请求打到两个副本，
+// 看到的清单会不一样。
+//
+// 并发安全。零值不可用，用 NewRegistry 构造。
+type Registry struct {
+	now func() time.Time
+
+	mu      sync.Mutex
+	entries map[int32]announced
+}
+
+type announced struct {
+	entry     Entry
+	expiresAt time.Time
+}
+
+// 登记的期限。
+const (
+	// MaxAnnounceTTL 是一次登记的最长期限。上报的间隔应该明显短于期限（例如每 10 秒报一次、期限 30 秒）：
+	// 期限就是“进程死了之后它的地址还会被发出去多久”。
+	MaxAnnounceTTL = 10 * time.Minute
+)
+
+// ErrRegistryFull：注册表已经有 MaxEntries 个没过期的服，又来了一个新的服号。已登记的服照常续期。
+var ErrRegistryFull = errors.New("portal: the registry holds the maximum number of servers")
+
+// NewRegistry 返回一张空的注册表。now 是判断过期用的时钟，nil 取 time.Now（系统时间：过期是真实时间里的事）。
+func NewRegistry(now func() time.Time) *Registry {
+	if now == nil {
+		now = time.Now
+	}
+	return &Registry{now: now, entries: map[int32]announced{}}
+}
+
+// Announce 登记或续期一个服：从现在起 ttl 之内，Entries 给出这个条目；同一个服再登记一次就是覆盖
+// （地址、负载、标签都以最后一次为准）并重新计时。
+//
+// 拒绝且什么都不改：条目不成样子（服号不是正数、地址不是带主机的 host:port、负的负载、标签超限）；
+// ttl 不是正数或超过 MaxAnnounceTTL；表里已有 MaxEntries 个没过期的服而这是一个新的服号（ErrRegistryFull）。
+// 过期的条目不占名额。
+func (registry *Registry) Announce(entry Entry, ttl time.Duration) error {
+	checked, err := checkEntry(entry)
+	if err != nil {
+		return err
+	}
+	if ttl <= 0 || ttl > MaxAnnounceTTL {
+		return fmt.Errorf("portal: announce ttl %s of server %d is outside (0, %s]", ttl, entry.ServerID, MaxAnnounceTTL)
+	}
+	now := registry.now()
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if _, known := registry.entries[checked.ServerID]; !known {
+		registry.dropExpired(now)
+		if len(registry.entries) >= MaxEntries {
+			return fmt.Errorf("%w: server %d was not added", ErrRegistryFull, checked.ServerID)
+		}
+	}
+	registry.entries[checked.ServerID] = announced{entry: checked, expiresAt: now.Add(ttl)}
+	return nil
+}
+
+// Withdraw 立刻撤掉一个服的登记（正常下线时调它，不用等过期）。没有登记过也不是错误。
+func (registry *Registry) Withdraw(serverID int32) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	delete(registry.entries, serverID)
+}
+
+// Entries 实现 Directory：没过期的条目，按服号升序；每次返回副本。到期的那一刻起不再给出。
+func (registry *Registry) Entries(context.Context) ([]Entry, error) {
+	now := registry.now()
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.dropExpired(now)
+	out := make([]Entry, 0, len(registry.entries))
+	for _, item := range registry.entries {
+		out = append(out, item.entry)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ServerID < out[j].ServerID })
+	return cloneEntries(out), nil
+}
+
+// Len 是没过期的条目数。
+func (registry *Registry) Len() int {
+	now := registry.now()
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.dropExpired(now)
+	return len(registry.entries)
+}
+
+// dropExpired 删掉到期的条目。调用方持有锁。
+func (registry *Registry) dropExpired(now time.Time) {
+	for sid, item := range registry.entries {
+		if !now.Before(item.expiresAt) {
+			delete(registry.entries, sid)
+		}
+	}
+}
+
+var _ Directory = (*Registry)(nil)

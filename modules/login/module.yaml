@@ -1,5 +1,5 @@
 name: login
-summary: 登录鉴权：玩家 TCP 握手用 account 服务签发的会话令牌校验（session:<player_id>:<token>），把承载服、原服、角色创建时间、绑定代数与换服标记写进会话；接管生成的鉴权桩与 account 的 collaborators（开发令牌登录、Redis 玩家号计数器；渠道验签留给工程）
+summary: 登录鉴权：玩家 TCP 握手把票据交给 account 校验——进服票据（enter:<票据>，account 按账号与服解析玩家号、没有就新建映射）或角色会话令牌（session:<player_id>:<token>），把承载服、原服、角色创建时间、绑定代数、换服与新建标记写进会话；接管生成的鉴权桩与 account 的 collaborators（开发令牌登录、Redis 玩家号计数器；渠道验签留给工程）；带运维命令 cmd/accountctl（登记、查看、列出区服）
 requires: []
 conflicts: []
 needs:
@@ -14,13 +14,13 @@ replaces:
 next:
   - "打开玩家 TCP 监听：roost config enable player-tcp（鉴权已经不是拒绝桩；生产示例配置仍是关的）"
   - "开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录"
-  - "登记区服：没有状态是 open 的服建不了角。make dev-run 起完全部服务后会自动登记本机的服；别的环境在 account 与它的 Redis 起来之后执行 go run ./cmd/accountctl upsert-server -sid <{{GAME_SERVICE}} 进程的 sid>"
-  - "客户端的登录入口：没装 portal 模块的话 roost module add portal（HTTP 的登录 / 建角 / 选角），或者由工程自己的入口代客户端调 account"
+  - "登记区服：没有状态是 open 的服，新号进不了任何服、入口的清单也是空的。make dev-run 起完全部服务后会自动登记本机的服；别的环境在 account 与它的 Redis 起来之后执行 go run ./cmd/accountctl upsert-server -sid <{{GAME_SERVICE}} 进程的 sid>（list-servers 看已登记的）"
+  - "客户端的登录入口：没装 portal 模块的话 roost module add portal（HTTP 的登录 / 清单与推荐 / 进服，握手用 enter:<进服票据>），或者由工程自己的入口代客户端调 account"
   - "上线前在 internal/service/account/login_channels.go 接渠道验签；缺省一个渠道都没接"
 verify:
   packages: [./game/login, ./internal/access/player/tcp, ./internal/service/account, ./cmd/accountctl]
   run: ^TestLogin
-  pass: 22
+  pass: 28
 with:
   enter:
     summary: 进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player

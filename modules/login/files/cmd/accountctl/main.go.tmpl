@@ -4,9 +4,11 @@
 //	go run ./cmd/accountctl upsert-server -sid 1000                       # 登记并开放 1000 服（名字缺省 {{GAME_SERVICE}}-1000）
 //	go run ./cmd/accountctl upsert-server -sid 1000 -status maintenance   # 停止在这个服建角（已有角色照常登录）
 //	go run ./cmd/accountctl show-server -sid 1000
+//	go run ./cmd/accountctl list-servers                                  # 登记过的全部区服，按服号升序
 //	go run ./cmd/accountctl -redis 10.0.0.5:6379 -redis-password ... -prefix roost:{{PROJECT}}:account upsert-server -sid 1001 -name 二服
 //
-// 为什么要有它：account 里没有状态是 open 的服，CreateRole 一律拒绝；而登记区服（UpsertServer）改的是
+// 为什么要有它：account 里没有状态是 open 的服，新号进不了任何服（握手时建不出账号与玩家号的映射，
+// CreateRole 也一律拒绝），登录入口的区服清单也是空的；而登记区服（UpsertServer）改的是
 // “所有玩家能登录到哪里”，account 不让任何一个连得上总线的进程做这件事（roost-core 的
 // service/account/account_rpc.go）。所以这个工具做运维会做的事：用 account 自己的 Redis 配置直接打开它的
 // 存储，把区服记录写进去。服号就是 game 进程的 sid（configs/service/config.{{GAME_SERVICE}}.yaml 的 sid，
@@ -43,7 +45,7 @@ import (
 )
 
 const usage = "usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-redis-password P] [-redis-db N] [-prefix key_prefix] " +
-	"upsert-server -sid N [-name NAME] [-status open|maintenance|full|closed] [-region R] | show-server -sid N"
+	"upsert-server -sid N [-name NAME] [-status open|maintenance|full|closed] [-region R] | show-server -sid N | list-servers"
 
 func main() {
 	target, command, err := parseConnection(os.Args[1:])
@@ -97,11 +99,12 @@ func parseConnection(args []string) (connection, []string, error) {
 	return connection{redis: cfg, prefix: *prefix}, flags.Args(), nil
 }
 
-// serverRecords 是两个子命令用到的 account 接口；*svcaccount.Service 满足它。UpsertServer 不在总线接口
+// serverRecords 是子命令用到的 account 接口；*svcaccount.Service 满足它。UpsertServer 不在总线接口
 // （svcaccount.Accounts）上，所以这里要的是服务本身，不是它的客户端。
 type serverRecords interface {
 	UpsertServer(ctx context.Context, server svcaccount.GameServer) (svcaccount.GameServer, error)
 	GetServer(ctx context.Context, serverID int32) (svcaccount.GameServer, error)
+	ListServers(ctx context.Context) ([]svcaccount.GameServer, error)
 }
 
 // run 执行一个子命令，把结果记录以 JSON 写到 out。参数不对、account 拒绝都返回错误，什么也不写。
@@ -114,8 +117,10 @@ func run(ctx context.Context, records serverRecords, args []string, out io.Write
 		return upsertServer(ctx, records, args[1:], out)
 	case "show-server":
 		return showServer(ctx, records, args[1:], out)
+	case "list-servers":
+		return listServers(ctx, records, args[1:], out)
 	default:
-		return fmt.Errorf("unknown command %q (commands: upsert-server, show-server)", args[0])
+		return fmt.Errorf("unknown command %q (commands: upsert-server, show-server, list-servers)", args[0])
 	}
 }
 
@@ -166,6 +171,23 @@ func showServer(ctx context.Context, records serverRecords, args []string, out i
 		return fmt.Errorf("show-server: %w", err)
 	}
 	return printJSON(out, server)
+}
+
+// listServers 打印登记过的全部区服（account 的 ListServers：登录入口给客户端的清单就是从它来的），
+// 一个 JSON 数组，按服号升序；一个都没有时是 []。区服索引是随 upsert-server 维护的：
+// 这个命令之前登记的服不在清单里，对它再执行一次 upsert-server 即补上。
+func listServers(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+	if len(args) != 0 {
+		return fmt.Errorf("list-servers: takes no arguments, got %q", strings.Join(args, " "))
+	}
+	servers, err := records.ListServers(ctx)
+	if err != nil {
+		return fmt.Errorf("list-servers: %w", err)
+	}
+	if servers == nil {
+		servers = []svcaccount.GameServer{}
+	}
+	return printJSON(out, servers)
 }
 
 func printJSON(out io.Writer, value any) error {

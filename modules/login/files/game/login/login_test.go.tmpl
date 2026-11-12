@@ -589,3 +589,349 @@ func TestLoginAdmitOnlyLetsInRolesThisServerServes(t *testing.T) {
 		t.Fatalf("server 1001 admitted a role of server 1000: %v", err)
 	}
 }
+
+// ---- 进服票据的握手（enter:<票据>）----
+
+// enterHandshake 走一遍登录入口替客户端做的事：登录、要一张进 sid 的进服票据，拼成握手票据。
+func (w *loginWorld) enterHandshake(openID string, sid int32) string {
+	w.t.Helper()
+	ctx := context.Background()
+	account, err := w.service.Login(ctx, svcaccount.Identity{Channel: "store", OpenID: openID, Credential: "good"})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	ticket, err := w.service.IssueEnterTicket(ctx, account.ID, sid)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return EnterTicket(ticket.Ticket)
+}
+
+// loginEnterAccounts 对每一次 EnterServer 给同一个回答，并数被问了几次。
+type loginEnterAccounts struct {
+	svcaccount.Accounts
+	entry svcaccount.ServerEntry
+	err   error
+	asked atomic.Int64
+}
+
+func (accounts *loginEnterAccounts) EnterServer(context.Context, string) (svcaccount.ServerEntry, error) {
+	accounts.asked.Add(1)
+	return accounts.entry, accounts.err
+}
+
+// 新号拿进服票据握手：account 建出“账号 ↔ 玩家号”的映射，会话里是这名玩家在承载服上的身份，
+// 并带着“映射是这次新建的”的标记。同一张票据再握手（重连）是同一名玩家、另一个会话、不再带那个标记。
+// 老号（已经有映射）握手没有那个标记。
+func TestLoginEnterTicketHandshakeMapsTheAccountToAPlayer(t *testing.T) {
+	w := newLoginWorld(t)
+	handshake := w.enterHandshake("alice", 1000)
+	if !strings.HasPrefix(handshake, "enter:et1.") {
+		t.Fatalf("handshake ticket = %q, want enter:<enter ticket>", handshake)
+	}
+	authenticator := Authenticator{Accounts: w.service}
+	principal, err := authenticator.Authenticate(context.Background(), handshake)
+	if err != nil {
+		t.Fatalf("a new account's enter ticket was refused: %v", err)
+	}
+	if principal.PlayerID != 100_001 || principal.ServerID != 1000 || principal.SessionID == "" || !principal.Authenticated() {
+		t.Fatalf("principal = %+v, want player 100001 on server 1000", principal)
+	}
+	want := map[string]string{
+		"server_id":        "1000",
+		"origin_server_id": "1000",
+		"role_created_at":  "1800000000",
+		"bind_epoch":       "0",
+		"new_role":         "1",
+	}
+	if len(principal.Claims) != len(want) {
+		t.Fatalf("claims = %v, want exactly %v", principal.Claims, want)
+	}
+	for key, value := range want {
+		if principal.Claims[key] != value {
+			t.Fatalf("claim %s = %q, want %q (claims %v)", key, principal.Claims[key], value, principal.Claims)
+		}
+	}
+	if svcaccount.NewRoleClaim != "new_role" {
+		t.Fatal("the account package renamed the new-role claim; every reader has to follow")
+	}
+	// account 那一侧：映射建好了，没有名字。
+	role, err := w.service.RoleOnServer(context.Background(), "store:alice", 1000)
+	if err != nil || role.PlayerID != 100_001 || role.Name != "" {
+		t.Fatalf("the mapping account holds = %+v, %v; want player 100001 without a name", role, err)
+	}
+	// 重连：同一张票据，同一名玩家，另一个会话，不再是新建。
+	again, err := authenticator.Authenticate(context.Background(), handshake)
+	if err != nil || again.PlayerID != 100_001 || again.SessionID == principal.SessionID {
+		t.Fatalf("the second handshake with the same ticket: %+v, %v", again, err)
+	}
+	if _, isNew := again.Claims["new_role"]; isNew || len(again.Claims) != 4 {
+		t.Fatalf("the second handshake's claims = %v, want the four role facts and no new_role", again.Claims)
+	}
+	// 另一个账号是另一名玩家；同一个账号在另一个服也是另一名玩家。
+	if other, err := authenticator.Authenticate(context.Background(), w.enterHandshake("bob", 1000)); err != nil || other.PlayerID != 100_002 {
+		t.Fatalf("bob's handshake: %+v, %v", other, err)
+	}
+	if elsewhere, err := authenticator.Authenticate(context.Background(), w.enterHandshake("alice", 1001)); err != nil || elsewhere.PlayerID != 100_003 || elsewhere.ServerID != 1001 {
+		t.Fatalf("alice on server 1001: %+v, %v", elsewhere, err)
+	}
+	// 已经自己选好角色的那条路照旧：session 票据握手到的是同一名玩家。
+	session, err := w.service.SelectRole(context.Background(), "store:alice", 100_001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if viaSession, err := authenticator.Authenticate(context.Background(), Ticket(100_001, session.Token)); err != nil || viaSession.PlayerID != 100_001 {
+		t.Fatalf("the session ticket of the same role: %+v, %v", viaSession, err)
+	}
+}
+
+// 无效的进服票据是拒绝，而且没有建出任何映射：格式不对的根本不问 account；被改过的、过期的、
+// 拿账号票据或角色会话令牌套上 enter: 前缀的，account 不认。进服票据套上 session: 前缀也过不了。
+func TestLoginEnterTicketRefusesBadTicketsWithoutCreatingAnything(t *testing.T) {
+	w := newLoginWorld(t)
+	ctx := context.Background()
+	handshake := w.enterHandshake("alice", 1000)
+	counting := &loginEnterCounting{Accounts: w.service}
+	authenticator := Authenticator{Accounts: counting}
+	for label, bad := range map[string]string{
+		"an empty enter ticket": "enter:",
+		"an oversized ticket":   "enter:" + strings.Repeat("x", 8192),
+	} {
+		if _, err := authenticator.Authenticate(ctx, bad); !errors.Is(err, gateway.ErrUnauthenticated) {
+			t.Fatalf("%s: err = %v, want unauthenticated", label, err)
+		}
+	}
+	if counting.asked.Load() != 0 {
+		t.Fatalf("malformed enter tickets reached account %d times", counting.asked.Load())
+	}
+	session := w.role("bob", 1000)
+	accountTicket, err := w.service.IssueAccountTicket(ctx, "store:alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := handshake[:len(handshake)-1] + "A"
+	if strings.HasSuffix(handshake, "A") {
+		flipped = handshake[:len(handshake)-1] + "B"
+	}
+	for label, bad := range map[string]string{
+		"a changed signature":                 flipped,
+		"a role session token as enter":       "enter:" + session.Token,
+		"an account ticket as enter":          "enter:" + accountTicket.Ticket,
+		"an enter ticket as a session ticket": "session:100001:" + strings.TrimPrefix(handshake, "enter:"),
+		"an enter ticket without the prefix":  strings.TrimPrefix(handshake, "enter:"),
+	} {
+		_, err := authenticator.Authenticate(ctx, bad)
+		if !errors.Is(err, gateway.ErrUnauthenticated) || errors.Is(err, ErrAccountUnavailable) {
+			t.Fatalf("%s: err = %v, want unauthenticated", label, err)
+		}
+	}
+	// 过期：会话有效期 30 分钟，到点起不认。
+	w.now.Add((30 * time.Minute).Milliseconds())
+	if _, err := authenticator.Authenticate(ctx, handshake); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("an expired enter ticket: %v", err)
+	}
+	if _, err := w.service.RoleOnServer(ctx, "store:alice", 1000); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+		t.Fatalf("refused handshakes created a mapping for alice: %v", err)
+	}
+}
+
+// loginEnterCounting 数 EnterServer 被问了几次，回答交给真实的 account。
+type loginEnterCounting struct {
+	svcaccount.Accounts
+	asked atomic.Int64
+}
+
+func (accounts *loginEnterCounting) EnterServer(ctx context.Context, ticket string) (svcaccount.ServerEntry, error) {
+	accounts.asked.Add(1)
+	return accounts.Accounts.EnterServer(ctx, ticket)
+}
+
+// 同一张进服票据的两条连接同时握手：只有一个映射，两边是同一名玩家、各自的会话，恰好一边带着“新建”的标记。
+func TestLoginEnterTicketConcurrentHandshakesShareOnePlayer(t *testing.T) {
+	w := newLoginWorld(t)
+	handshake := w.enterHandshake("alice", 1000)
+	authenticator := Authenticator{Accounts: w.service}
+	const connections = 12
+	principals := make([]gateway.Principal, connections)
+	errs := make([]error, connections)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range connections {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			principals[i], errs[i] = authenticator.Authenticate(context.Background(), handshake)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	created := 0
+	sessions := map[string]bool{}
+	// 玩家号是哪一个由赢得名额的那一次握手决定（并发的握手各自先领了一个号，没用上的作废），
+	// 这里只要求所有连接是同一名玩家。
+	var playerID int64
+	for i := range connections {
+		if errs[i] != nil {
+			// 存储竞争可以让个别握手“稍后重试”，不能是拒绝。
+			if !errors.Is(errs[i], ErrAccountUnavailable) {
+				t.Fatalf("connection %d: %v", i, errs[i])
+			}
+			continue
+		}
+		if playerID == 0 {
+			playerID = principals[i].PlayerID
+		}
+		if principals[i].PlayerID != playerID || playerID <= 100_000 {
+			t.Fatalf("connection %d is player %d, the others are player %d", i, principals[i].PlayerID, playerID)
+		}
+		if principals[i].Claims["new_role"] == "1" {
+			created++
+		}
+		sessions[principals[i].SessionID] = true
+	}
+	if created != 1 {
+		t.Fatalf("%d handshakes carry new_role, want exactly one", created)
+	}
+	if len(sessions) < 2 {
+		t.Fatalf("the handshakes share a session id: %v", sessions)
+	}
+	if role, err := w.service.RoleOnServer(context.Background(), "store:alice", 1000); err != nil || role.PlayerID != playerID {
+		t.Fatalf("the mapping after the concurrent handshakes = %+v, %v; want player %d", role, err, playerID)
+	}
+	// 之后再握手还是他。
+	if again, err := authenticator.Authenticate(context.Background(), handshake); err != nil || again.PlayerID != playerID || again.Claims["new_role"] != "" {
+		t.Fatalf("a later handshake: %+v, %v", again, err)
+	}
+}
+
+// account 明确拒绝一次凭票进服（票据无效、账号被封、区服不让建新角色、名额被占……）是握手被拒；
+// account 给不出结论（总线、存储、对账中的冲突、没见过的码）是“判断不了”，同一张票据可以重试。
+// account 答了成功、角色却对不上票据要进的服时按拒绝处理。
+func TestLoginEnterTicketSeparatesRefusalFromNoVerdict(t *testing.T) {
+	w := newLoginWorld(t)
+	handshake := w.enterHandshake("alice", 1000)
+	ctx := context.Background()
+	answering := func(entry svcaccount.ServerEntry, err error) (*loginEnterAccounts, Authenticator) {
+		accounts := &loginEnterAccounts{entry: entry, err: err}
+		return accounts, Authenticator{Accounts: accounts}
+	}
+	for label, refusal := range map[string]error{
+		"an invalid ticket":             svcaccount.ErrSessionInvalid,
+		"a banned account":              svcaccount.ErrIdentityDenied,
+		"an account that is gone":       svcaccount.ErrAccountMissing,
+		"a server nobody registered":    svcaccount.ErrServerInvalid,
+		"a server closed to new roles":  fmt.Errorf("%w: server 1000 is maintenance", svcaccount.ErrServerClosed),
+		"a slot held by a transfer":     svcaccount.ErrRoleLimit,
+		"a named plan's name was taken": svcaccount.ErrNameTaken,
+		"a role of another account":     svcaccount.ErrNotPermitted,
+		"a merge alias with two hops":   svcaccount.ErrServerMergeCycle,
+		"a refusal over the bus":        errcode.Remote(svcaccount.CodeServerClosed, "account: server is not open", ""),
+	} {
+		accounts, authenticator := answering(svcaccount.ServerEntry{}, refusal)
+		_, err := authenticator.Authenticate(ctx, handshake)
+		if !errors.Is(err, gateway.ErrUnauthenticated) || errors.Is(err, ErrAccountUnavailable) || accounts.asked.Load() != 1 {
+			t.Fatalf("%s: err = %v (asked %d), want unauthenticated", label, err, accounts.asked.Load())
+		}
+	}
+	for label, outage := range map[string]error{
+		"the bus is down":          errors.New("bus: no responders"),
+		"the store conflicts":      svcaccount.ErrConflict,
+		"a versionstore conflict":  versionstore.ErrConflict,
+		"a deadline":               context.DeadlineExceeded,
+		"a code nobody knows":      errcode.Remote(560_199, "account: something new", ""),
+		"an internal error (bus)":  errcode.Remote(errcode.CodeInternal, "server error", ""),
+		"the role is reconciling":  fmt.Errorf("%w: role creation is pending reconciliation", svcaccount.ErrConflict),
+		"a range error (untyped)":  svcaccount.ErrRangeInvalid,
+		"a missing role (no such)": svcaccount.ErrRoleMissing,
+	} {
+		_, authenticator := answering(svcaccount.ServerEntry{}, outage)
+		_, err := authenticator.Authenticate(ctx, handshake)
+		if !errors.Is(err, ErrAccountUnavailable) || errors.Is(err, gateway.ErrUnauthenticated) {
+			t.Fatalf("%s: err = %v, want no verdict (retry the same ticket)", label, err)
+		}
+	}
+	// 没有 account 的客户端：判断不了，不是拒绝。
+	if _, err := (Authenticator{}).Authenticate(ctx, handshake); !errors.Is(err, ErrAccountUnavailable) {
+		t.Fatalf("no account client: %v", err)
+	}
+	// account 答了成功，但角色不成样子、或者不在票据要进的那个服上。
+	good := svcaccount.Role{PlayerID: 100_001, ServerID: 1000, ServingServerID: 1000}
+	for label, twist := range map[string]func(*svcaccount.Role){
+		"no player id":        func(role *svcaccount.Role) { role.PlayerID = 0 },
+		"no bound server":     func(role *svcaccount.Role) { role.ServerID = 0 },
+		"no serving server":   func(role *svcaccount.Role) { role.ServingServerID = 0 },
+		"bound to another":    func(role *svcaccount.Role) { role.ServerID = 1001 },
+		"a negative serving":  func(role *svcaccount.Role) { role.ServingServerID = -1 },
+		"a negative playerid": func(role *svcaccount.Role) { role.PlayerID = -5 },
+	} {
+		role := good
+		twist(&role)
+		_, authenticator := answering(svcaccount.ServerEntry{Role: role}, nil)
+		if _, err := authenticator.Authenticate(ctx, handshake); !errors.Is(err, gateway.ErrUnauthenticated) {
+			t.Fatalf("%s: err = %v, want unauthenticated", label, err)
+		}
+	}
+	_, authenticator := answering(svcaccount.ServerEntry{Role: good}, nil)
+	if principal, err := authenticator.Authenticate(ctx, handshake); err != nil || principal.PlayerID != 100_001 || principal.Claims["new_role"] != "" {
+		t.Fatalf("an untouched answer: %+v, %v", principal, err)
+	}
+}
+
+// 区服与归属：维护中的服，老号照常握手、新号被拒；并入别的服的服，老号凭原服的票据握手、会话记的承载服是
+// 并入的那个服；换服在途的角色握手通过、带着换服标记；被封的账号握手被拒。
+func TestLoginEnterTicketFollowsTheServerAndTheBinding(t *testing.T) {
+	w := newLoginWorld(t)
+	ctx := context.Background()
+	authenticator := Authenticator{Accounts: w.service}
+	veteran, err := authenticator.Authenticate(ctx, w.enterHandshake("veteran", 1001))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.service.UpsertServer(ctx, svcaccount.GameServer{ID: 1001, Name: "s1001", Status: svcaccount.ServerMaintenance}); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := authenticator.Authenticate(ctx, w.enterHandshake("veteran", 1001)); err != nil || again.PlayerID != veteran.PlayerID {
+		t.Fatalf("an existing mapping on a server in maintenance: %+v, %v", again, err)
+	}
+	if _, err := authenticator.Authenticate(ctx, w.enterHandshake("newcomer", 1001)); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("a new account on a server in maintenance: %v, want unauthenticated", err)
+	}
+	if _, err := w.service.RoleOnServer(ctx, "store:newcomer", 1001); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+		t.Fatalf("the refused handshake created a mapping: %v", err)
+	}
+	// 1001 并入 1000。
+	if _, err := w.service.MergeServer(ctx, svcaccount.MergeRequest{From: 1001, Into: 1000, Note: "login scenario"}); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := authenticator.Authenticate(ctx, w.enterHandshake("veteran", 1001))
+	if err != nil || merged.PlayerID != veteran.PlayerID || merged.ServerID != 1000 || merged.Claims["server_id"] != "1000" || merged.Claims["origin_server_id"] != "1001" {
+		t.Fatalf("a role of the merged server: %+v, %v; want served by 1000, origin 1001", merged, err)
+	}
+	// 换服在途。
+	mover, err := authenticator.Authenticate(ctx, w.enterHandshake("mover", 1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.service.UpsertServer(ctx, svcaccount.GameServer{ID: 1002, Name: "s1002", Status: svcaccount.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.service.BeginRoleTransfer(ctx, mover.PlayerID, svcaccount.TransferRequest{ID: "move-1", FromSID: 1000, To: 1002}); err != nil {
+		t.Fatal(err)
+	}
+	moving, err := authenticator.Authenticate(ctx, w.enterHandshake("mover", 1000))
+	if err != nil || moving.PlayerID != mover.PlayerID || moving.Claims["transfer"] != "1002:move-1" {
+		t.Fatalf("a role in transfer: %+v, %v; want the transfer claim", moving, err)
+	}
+	// 封号：已经签出去的票据也握不了手。
+	issued := w.enterHandshake("veteran", 1001)
+	if _, _, err := w.accounts.Update(ctx, "store:veteran", func(current svcaccount.Account, found bool) (svcaccount.Account, bool, error) {
+		current.Banned = true
+		return current, found, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authenticator.Authenticate(ctx, issued); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("a banned account's enter ticket: %v", err)
+	}
+}

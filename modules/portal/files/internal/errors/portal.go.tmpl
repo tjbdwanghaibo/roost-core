@@ -3,12 +3,9 @@ package errors
 import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
 // 登录入口（portal）自己的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
-// account 的拒绝（凭据不对、名字被占、名额已满、不是你的角色……）不在这里：入口原样带着 account 的码答回去。
+// 票据不对、凭据不对、账号被封、区服没登记……都不在这里：那些是 account 的判断，入口原样带着 account 的码答回去。
 var (
-	// ErrPortalTicketInvalid：建角、选角出示的账号票据不能用——过期、被改过、不是本入口的密钥签的、
-	// 格式不对，一律是这一个码，不告诉对方是哪一种。客户端重新登录（POST /portal/login）拿一张新的。
-	ErrPortalTicketInvalid = errcode.Define({{ID:errcode:portal_ticket_invalid}}, "portal_ticket_invalid", "the account ticket is not valid; log in again")
-	// ErrPortalRequestInvalid：请求本身不成样子——必填字段没填、字段超过长度上限、服号或玩家号不是正数。
+	// ErrPortalRequestInvalid：请求本身不成样子——必填字段没填、字段超过长度上限、服号不是正数。
 	// 这样的请求不去问 account。重试同一个请求没有用。
 	ErrPortalRequestInvalid = errcode.Define({{ID:errcode:portal_request_invalid}}, "portal_request_invalid", "the request is missing a field or a field is out of bounds")
 )

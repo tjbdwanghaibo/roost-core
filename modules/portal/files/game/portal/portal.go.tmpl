@@ -1,28 +1,28 @@
 // Package portal 是客户端够得着的登录入口：三个 HTTP 端点，代客户端去问只在内部总线上的 account 服务。
+// 它就是常说的 manifest（清单）那一层，缺省与 account 跑在同一个进程里。
 //
-//	POST /portal/login        渠道身份 -> 账号票据 + 区服清单（每个服上本账号的角色）
-//	POST /portal/create-role  账号票据 + 服号 + 名字 -> 角色
-//	POST /portal/select-role  账号票据 + 玩家号 -> 握手票据（session:<player_id>:<token>）+ 该连的 TCP 地址
+//	POST /portal/login    渠道身份 -> 账号票据
+//	POST /portal/servers  账号票据 -> 区服清单（每个服的地址、负载、本账号有没有角色）与推荐的服
+//	POST /portal/enter    账号票据 + 服号 -> 进服票据 + 该连的地址
 //
-// 客户端走完这三步，拿握手票据去连玩家 TCP（登录模块 login 的认证器校验它），再发进入游戏的请求。
+// 客户端走完这三步，拿进服票据去连那个地址（Gate，或直连的 game），握手时出示它；握手的认证器再去问
+// account 这个账号在这个服上是哪一名玩家（登录模块 login）。入口不建角、不选角，也不知道玩家号。
 //
-// 入口自己不存任何东西，也不认证任何人：身份由 account 向渠道确认（Login），角色归谁由 account 判断
-// （SelectRole 的归属检查）。入口只守一件事——account 的 CreateRole / SelectRole 信任调用方给的 accountID，
-// 所以这个 accountID 只能来自入口自己签发的账号票据（portal_ticket.go），绝不来自请求。
+// 入口是无状态的一层薄壳：HTTP 入参检查、调 account、区服目录（Directory）与推荐规则。它不认证任何人
+// （身份由 account 向渠道确认），不持有任何密钥（票据由 account 签发与校验），也不存任何东西。
+// 它只守一件事：**账号只取自 account 校验过的账号票据**，绝不取自请求。
 //
-// 路由在服务启动时登记到 web Mod（Start），监听地址、超时、请求体上限都是 web.* 的配置。web Mod 不做鉴权也
-// 不做限流；生产环境它缺省只绑回环地址，对外要放在终止 TLS 的反向代理后面（凭据与票据都在请求体里明文传）。
+// 路由在进程启动时登记到本进程的 web Mod（Start），监听地址、超时、请求体上限都是 web.* 的配置。web Mod
+// 不做鉴权也不做限流；生产环境它缺省只绑回环地址，对外要放在终止 TLS 的反向代理后面（凭据与票据都在请求体里明文传）。
 package portal
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	gamelogin "{{MODULE}}/game/login"
 	apperrors "{{MODULE}}/internal/errors"
@@ -36,9 +36,9 @@ import (
 
 // 三个端点的路径。
 const (
-	PathLogin      = "/portal/login"
-	PathCreateRole = "/portal/create-role"
-	PathSelectRole = "/portal/select-role"
+	PathLogin   = "/portal/login"
+	PathServers = "/portal/servers"
+	PathEnter   = "/portal/enter"
 )
 
 // 请求的上限。请求体整段读进内存再解码，所以先按 MaxRequestBytes 截断，再逐个字段检查；
@@ -51,71 +51,55 @@ const (
 	MaxChannelBytes    = 32
 	MaxOpenIDBytes     = 128
 	MaxCredentialBytes = 8 << 10
-	// MaxNameBytes 是建角请求里名字的上限。它只是“不把明显过长的东西送去 account”的闸，
-	// 名字真正的规则是 account 的 NameRules（internal/service/account/collaborators.go）。
-	MaxNameBytes = 128
+	// MaxTicketBytes 是请求里账号票据的上限，与 account 的票据上限一致；更长的不去问 account。
+	MaxTicketBytes = 1024
+)
+
+// 清单与进服结果里 addr_source 的取值：地址是怎么来的。
+const (
+	// AddrFromDirectory：区服目录给了这个服的地址。
+	AddrFromDirectory = "directory"
+	// AddrNone：目录里没有这个服的地址（没有配置、没有登记、登记过期了，或者那一条不成样子）。addr 为空。
+	AddrNone = "none"
 )
 
 // Portal 是三个端点的处理器。用 New 构造；构造之后只读，请求可以并发。
 type Portal struct {
-	accounts svcaccount.Accounts
-	tickets  *ticketKeeper
-	servers  serverBook
+	accounts  svcaccount.Accounts
+	directory Directory
+	recommend func([]ServerChoice) int32
 }
 
 // Options 是 New 的参数。Start 按进程配置填它；测试直接填。
 type Options struct {
-	// Accounts 是 account 服务的客户端（game 进程里由 account 的 ClientMod 发布）。必填。
+	// Accounts 是 account 服务（入口与 account 同进程时就是本进程的服务；拆成独立服务时是它的总线客户端）。必填。
 	Accounts svcaccount.Accounts
-	// TicketSecret 是账号票据的签名密钥，至少 MinSecretBytes 字节。必填——“没配置就随机生成”是 Start 的事。
-	TicketSecret []byte
-	// TicketTTL 是账号票据的有效期；零取 10 分钟。
-	TicketTTL time.Duration
-	// SelfServerID 是本进程的 sid。必填。
-	SelfServerID int32
-	// Servers 是 portal.servers（服号 -> 客户端连得到的 TCP 地址）；空表示清单只有本服。
-	Servers map[int32]string
-	// PlayerTCPEnabled / PlayerTCPListen 是本进程玩家 TCP 的开关与监听地址，没有配置 Servers 时用来回答本服的地址。
-	PlayerTCPEnabled bool
-	PlayerTCPListen  string
-	// Now 是系统时钟（账号票据的过期按它算）；nil 取 time.Now。
-	Now func() time.Time
+	// Directory 是区服目录；nil 表示一个地址都没有（每个服都照常列出，只是没有地址）。
+	Directory Directory
+	// Recommend 是推荐规则；nil 取 portal_rules.go 的 recommend。只有测试需要换它。
+	Recommend func([]ServerChoice) int32
 }
 
 // New 检查参数并返回处理器。
 func New(options Options) (*Portal, error) {
 	if options.Accounts == nil {
-		return nil, errors.New("portal: the account client is required")
+		return nil, errors.New("portal: the account service is required")
 	}
-	if len(options.TicketSecret) < MinSecretBytes {
-		return nil, fmt.Errorf("portal: the ticket secret is %d bytes; it must be at least %d", len(options.TicketSecret), MinSecretBytes)
+	directory := options.Directory
+	if directory == nil {
+		directory = staticDirectory{}
 	}
-	if options.SelfServerID <= 0 {
-		return nil, errors.New("portal: this process has no positive sid")
+	rule := options.Recommend
+	if rule == nil {
+		rule = recommend
 	}
-	if len(options.Servers) > MaxServers {
-		return nil, fmt.Errorf("portal: %d servers listed; at most %d", len(options.Servers), MaxServers)
-	}
-	if options.TicketTTL <= 0 {
-		options.TicketTTL = 10 * time.Minute
-	}
-	configured := make(map[int32]string, len(options.Servers))
-	for sid, addr := range options.Servers {
-		configured[sid] = addr
-	}
-	return &Portal{
-		accounts: options.Accounts,
-		tickets:  newTicketKeeper(options.TicketSecret, options.TicketTTL, options.Now),
-		servers: serverBook{
-			self: options.SelfServerID, configured: configured,
-			tcpEnabled: options.PlayerTCPEnabled, tcpListen: options.PlayerTCPListen,
-		},
-	}, nil
+	return &Portal{accounts: options.Accounts, directory: directory, recommend: rule}, nil
 }
 
-// Start 是模块的服务级启动入口（清单的 runtime）：全部 Mod 启动之后、业务 Service.Init 之前执行一次，
-// 把三个端点登记到本进程的 web Mod。它读配置、取 account 的客户端，任何一样不对都返回错误、进程不启动——
-// 一个签不了票据、问不到 account 的登录入口不该开门。没有需要停止的东西，所以不返回停止函数。
+// Start 是模块的服务级启动入口（清单的 runtime）：在托管 account 服务的进程里，全部 Mod 启动之后、
+// 路由表冻结之前执行一次，把三个端点登记到本进程的 web Mod。它读配置、取本进程的 account 服务、
+// 让 portal_rules.go 选区服目录，任何一样不对都返回错误、进程不启动。返回的停止函数是 newDirectory 给的
+// （没有要停的东西时是 nil）。
 func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if registry == nil {
 		return nil, errors.New("portal: the app registry is required")
@@ -124,50 +108,38 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if err := app.LoadConfig(registry.Config(), &settings); err != nil {
 		return nil, fmt.Errorf("portal: %w", err)
 	}
-	servers, err := parseServers(settings.Portal.Servers)
+	addrs, err := parseServers(settings.Portal.Servers)
 	if err != nil {
 		return nil, fmt.Errorf("portal: %w", err)
 	}
-	var identity app.ServiceIdentity
-	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
-		return nil, fmt.Errorf("portal: read this process's sid: %w", err)
-	}
-	var tcp playerTCPConfig
-	if err := app.LoadConfig(registry.Config(), &tcp); err != nil {
-		return nil, fmt.Errorf("portal: read the player tcp listener: %w", err)
-	}
-	accounts, ok := app.Lookup[svcaccount.Accounts](registry, svcaccount.CapabilityName)
-	if !ok || accounts == nil {
-		return nil, fmt.Errorf("portal: capability %q not found; the service that runs the login entry must list account under services.<service>.uses in roost.yaml", svcaccount.CapabilityName)
-	}
-	routes, ok := app.Lookup[webroute.Registerer](registry, mods.ModWeb)
-	if !ok || routes == nil {
-		return nil, fmt.Errorf("portal: capability %q not found; add the web mod to this service (roost add mod web -service <service>)", mods.ModWeb)
-	}
-	secret := []byte(settings.Portal.TicketSecret)
-	if len(secret) == 0 {
-		// 只会在非生产配置下走到这里：生产配置里密钥为空，上面读配置时已经拒绝了。
-		secret = make([]byte, MinSecretBytes)
-		if _, err := rand.Read(secret); err != nil {
-			return nil, fmt.Errorf("portal: generate a ticket secret: %w", err)
-		}
-		slog.Info("portal: portal.ticket_secret is not set; signing account tickets with a random secret generated for this process. " +
-			"Tickets die when the process restarts and no other process accepts them; set portal.ticket_secret to share or keep them")
-	}
-	portal, err := New(Options{
-		Accounts: accounts, TicketSecret: secret, TicketTTL: settings.Portal.TicketTTL,
-		SelfServerID: identity.Sid, Servers: servers,
-		PlayerTCPEnabled: tcp.Enabled, PlayerTCPListen: tcp.Addr,
-	})
+	configured, err := NewStaticDirectory(addrs)
 	if err != nil {
 		return nil, err
 	}
-	if err := portal.RegisterRoutes(routes); err != nil {
-		return nil, fmt.Errorf("portal: %w", err)
+	accounts, ok := app.Lookup[svcaccount.Accounts](registry, svcaccount.CapabilityName)
+	if !ok || accounts == nil {
+		return nil, fmt.Errorf("portal: capability %q not found; the login entry runs in the process that hosts the account service (or, split out, in a service that lists account under uses)", svcaccount.CapabilityName)
 	}
-	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "create_role", PathCreateRole, "select_role", PathSelectRole,
-		"sid", identity.Sid, "listed_servers", len(portal.servers.list()), "servers_configured", len(servers) > 0, "ticket_ttl", settings.Portal.TicketTTL.String())
-	return nil, nil
+	routes, ok := app.Lookup[webroute.Registerer](registry, mods.ModWeb)
+	if !ok || routes == nil {
+		return nil, fmt.Errorf("portal: capability %q not found; add the web mod to the service that hosts account (roost add mod web -service <that service>)", mods.ModWeb)
+	}
+	directory, stop, err := newDirectory(registry, configured)
+	if err != nil {
+		return stop, fmt.Errorf("portal: choose the server directory: %w", err)
+	}
+	if directory == nil {
+		return stop, errors.New("portal: newDirectory returned no directory")
+	}
+	portal, err := New(Options{Accounts: accounts, Directory: directory})
+	if err != nil {
+		return stop, err
+	}
+	if err := portal.RegisterRoutes(routes); err != nil {
+		return stop, fmt.Errorf("portal: %w", err)
+	}
+	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "servers", PathServers, "enter", PathEnter, "configured_addresses", len(addrs))
+	return stop, nil
 }
 
 // RegisterRoutes 把三个端点登记到 reg（web Mod，或测试里的替身）。实现 webroute.Module。
@@ -181,8 +153,8 @@ func (portal *Portal) RegisterRoutes(reg webroute.Registerer) error {
 		handler http.HandlerFunc
 	}{
 		{PathLogin, portal.handleLogin},
-		{PathCreateRole, portal.handleCreateRole},
-		{PathSelectRole, portal.handleSelectRole},
+		{PathServers, portal.handleServers},
+		{PathEnter, portal.handleEnter},
 	} {
 		if err := reg.Register(http.MethodPost, route.path, route.handler); err != nil {
 			return err
@@ -205,54 +177,14 @@ type loginRequest struct {
 	Credential string `json:"credential"`
 }
 
-// loginResponse 是登录成功的响应。
+// loginResponse 是登录成功的响应：只有账号票据。区服清单是下一步（/portal/servers）。
 type loginResponse struct {
 	OK bool `json:"ok"`
-	// AccountTicket 是账号票据：建角、选角时原样带上。不要长期保存——它只有 portal.ticket_ttl 那么久。
+	// AccountTicket 是 account 签发的账号票据：拿清单、要进服票据时原样带上。不要长期保存——
+	// 它只有 account.ticket_ttl 那么久（缺省 10 分钟），过期了重新登录。
 	AccountTicket string `json:"account_ticket"`
 	// AccountTicketExpiresAt 是票据的过期时刻（Unix 秒，服务器的系统时间）。
 	AccountTicketExpiresAt int64 `json:"account_ticket_expires_at"`
-	// Servers 是区服清单，按服号升序。
-	Servers []serverView `json:"servers"`
-}
-
-// serverView 是清单里的一个服，连同本账号在这个服上的角色。
-type serverView struct {
-	ServerID int32 `json:"server_id"`
-	// Registered 为 false 表示 account 里没有登记这个服（清单里有、但没有人跑过 accountctl upsert-server）：
-	// 这样的服建不了角，Name 与 Status 为空。
-	Registered bool   `json:"registered"`
-	Name       string `json:"name"`
-	// Status 是 account 里这个服的状态：open、maintenance、full、closed。只有 open 的服能建角；
-	// 已有角色在任何状态下都能选。
-	Status string `json:"status"`
-	// MergedInto 非 0 表示这个服已经并入那个服：这里的角色照常选，由那个服承载；不能在这里建新角色。
-	MergedInto int32 `json:"merged_into,omitempty"`
-	// Role 是本账号在这个服上的角色；没有时是 null，客户端该引导建角。
-	Role *roleView `json:"role"`
-}
-
-// roleView 是回给客户端的角色。
-type roleView struct {
-	PlayerID int64  `json:"player_id"`
-	Name     string `json:"name"`
-	// ServerID 是角色绑定的服（原服），ServingServerID 是现在承载它的服；没有合服时两者相同。
-	ServerID        int32 `json:"server_id"`
-	ServingServerID int32 `json:"serving_server_id"`
-	CreatedAt       int64 `json:"created_at"`
-	// TransferringTo 非 0 表示这个角色正在换到那个服（还没换完，仍由 ServingServerID 承载）。
-	TransferringTo int32 `json:"transferring_to,omitempty"`
-}
-
-func roleViewOf(role svcaccount.Role) *roleView {
-	view := &roleView{
-		PlayerID: role.PlayerID, Name: role.Name, ServerID: role.ServerID,
-		ServingServerID: role.ServingServerID, CreatedAt: role.CreatedAtUnix,
-	}
-	if role.Transfer != nil {
-		view.TransferringTo = role.Transfer.To
-	}
-	return view
 }
 
 func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -264,15 +196,10 @@ func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
 	webroute.WriteResult(w, http.StatusOK, response, err)
 }
 
-// login 向 account 确认身份，签发账号票据，再列出区服清单。
+// login 向 account 确认身份，再向它要一张账号票据。
 //
-// 票据里的 accountID 取自 account 返回的账号（渠道确认过的身份），不是请求里的 open_id：
-// 拿自己的凭据配上别人的 open_id，得到的仍是自己的账号。account 拒绝登录（凭据不对、账号被封、
-// 渠道没接）时原样带着它的码答回去，不签票据。
-//
-// 清单里每个服问 account 两次：区服记录（GetServer）与本账号在那个服的角色（RoleOnServer）。
-// “没有登记这个服”“这个服上没有角色”是清单的内容，不是错误；其余的失败（account 不可达、存储出错、
-// 记录对不上）让整个登录失败——宁可让客户端重试，也不给一份缺了角色的清单，让玩家以为号没了。
+// 票据绑定的是 account 返回的账号（渠道确认过的身份），不是请求里的 open_id：拿自己的凭据配上别人的
+// open_id，得到的仍是自己的账号。account 拒绝登录（凭据不对、账号被封、渠道没接）时原样带着它的码答回去。
 func (portal *Portal) login(ctx context.Context, request loginRequest) (loginResponse, error) {
 	channel, openID := strings.TrimSpace(request.Channel), strings.TrimSpace(request.OpenID)
 	if channel == "" || len(channel) > MaxChannelBytes || openID == "" || len(openID) > MaxOpenIDBytes || len(request.Credential) > MaxCredentialBytes {
@@ -285,158 +212,249 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 	if account.ID == "" {
 		return loginResponse{}, errors.New("portal: account answered a login without an account id")
 	}
-	servers := make([]serverView, 0, len(portal.servers.list()))
-	for _, sid := range portal.servers.list() {
-		view, err := portal.serverView(ctx, account.ID, sid)
-		if err != nil {
-			return loginResponse{}, err
-		}
-		servers = append(servers, view)
+	ticket, err := portal.accounts.IssueAccountTicket(ctx, account.ID)
+	if err != nil {
+		return loginResponse{}, err
 	}
-	// 清单都拿到了才签票据：失败的登录不留下一张可用的票据。
-	ticket, expiresAt := portal.tickets.issue(account.ID)
-	return loginResponse{OK: true, AccountTicket: ticket, AccountTicketExpiresAt: expiresAt, Servers: servers}, nil
+	if ticket.Ticket == "" {
+		return loginResponse{}, errors.New("portal: account answered without an account ticket")
+	}
+	return loginResponse{OK: true, AccountTicket: ticket.Ticket, AccountTicketExpiresAt: ticket.ExpiresAtUnix}, nil
 }
 
-func (portal *Portal) serverView(ctx context.Context, accountID string, sid int32) (serverView, error) {
-	view := serverView{ServerID: sid}
-	server, err := portal.accounts.GetServer(ctx, sid)
-	switch {
-	case err == nil:
-		view.Registered, view.Name, view.Status, view.MergedInto = true, server.Name, string(server.Status), server.MergedInto
-	case svcaccount.Code(err) == svcaccount.CodeServerInvalid:
-		// 清单里有、account 里没登记：照实列出来，运维一眼看得出少了哪一步。
-	default:
-		return serverView{}, err
-	}
-	role, err := portal.accounts.RoleOnServer(ctx, accountID, sid)
-	switch {
-	case err == nil:
-		if role.PlayerID <= 0 || role.AccountID != accountID {
-			return serverView{}, fmt.Errorf("portal: account answered the role on server %d with a role that is not this account's", sid)
-		}
-		view.Role = roleViewOf(role)
-	case svcaccount.Code(err) == svcaccount.CodeRoleMissing:
-	default:
-		return serverView{}, err
-	}
-	return view, nil
-}
+// ---- 清单与推荐 ----
 
-// ---- 建角 ----
-
-// createRoleRequest 是 POST /portal/create-role 的请求体。
-type createRoleRequest struct {
+// serversRequest 是 POST /portal/servers 的请求体。
+type serversRequest struct {
 	AccountTicket string `json:"account_ticket"`
-	ServerID      int32  `json:"server_id"`
-	Name          string `json:"name"`
 }
 
-// createRoleResponse 是建角成功的响应。
-type createRoleResponse struct {
-	OK   bool      `json:"ok"`
+// serversResponse 是清单。
+type serversResponse struct {
+	OK bool `json:"ok"`
+	// RecommendedServerID 是推荐规则（portal_rules.go 的 recommend）挑的服；0 表示没有推荐。
+	RecommendedServerID int32 `json:"recommended_server_id"`
+	// Servers 是 account 登记过的全部区服，按服号升序。
+	Servers []serverView `json:"servers"`
+}
+
+// serverView 是清单里的一个服。
+type serverView struct {
+	ServerID int32  `json:"server_id"`
+	Name     string `json:"name"`
+	// Status 是 account 里这个服的状态：open、maintenance、full、closed。新号只能进 open 的服；
+	// 已经有角色的在任何状态下都能拿到进服票据。
+	Status string `json:"status"`
+	// MergedInto 非 0 表示这个服已经并入那个服：这里的老角色照常进（由那个服承载），新号进不了。
+	MergedInto int32 `json:"merged_into,omitempty"`
+	// Addr 是进这个服该连的地址（它的承载服在目录里的地址）；目录里没有时是空串。
+	Addr string `json:"addr"`
+	// AddrSource 说明 Addr 是怎么来的：directory、none。
+	AddrSource string `json:"addr_source"`
+	// Load 与 Tags 是目录给的负载与标签，入口不解释；目录里没有这个服时是 0 与空。
+	Load int      `json:"load"`
+	Tags []string `json:"tags,omitempty"`
+	// Role 是本账号在这个服上的角色；没有是 null——这就是“新号还是旧号”。
 	Role *roleView `json:"role"`
 }
 
-func (portal *Portal) handleCreateRole(w http.ResponseWriter, r *http.Request) {
-	var request createRoleRequest
-	if !decode(w, r, &request) {
-		return
-	}
-	response, err := portal.createRole(r.Context(), request)
-	webroute.WriteResult(w, http.StatusOK, response, err)
-}
-
-// createRole 给票据里的账号在 server_id 上建角。名字的规则、服开没开、名额、重名都由 account 判断，
-// 它的拒绝原样带码答回去。同一个名字重试是安全的：account 把它接到同一个建角计划上，回同一个角色
-// （回复丢了的那一次也算）；换一个名字不会多得一个角色。
-//
-// 不限制 server_id 必须在清单里：能不能在那个服建角是 account 的区服记录说了算，入口不再加一层口径。
-func (portal *Portal) createRole(ctx context.Context, request createRoleRequest) (createRoleResponse, error) {
-	if request.ServerID <= 0 || request.Name == "" || len(request.Name) > MaxNameBytes {
-		return createRoleResponse{}, invalidRequest()
-	}
-	accountID, err := portal.tickets.verify(request.AccountTicket)
-	if err != nil {
-		return createRoleResponse{}, err
-	}
-	role, err := portal.accounts.CreateRole(ctx, accountID, request.ServerID, request.Name)
-	if err != nil {
-		return createRoleResponse{}, err
-	}
-	return createRoleResponse{OK: true, Role: roleViewOf(role)}, nil
-}
-
-// ---- 选角 ----
-
-// selectRoleRequest 是 POST /portal/select-role 的请求体。
-type selectRoleRequest struct {
-	AccountTicket string `json:"account_ticket"`
-	PlayerID      int64  `json:"player_id"`
-}
-
-// selectRoleResponse 是选角成功的响应。
-type selectRoleResponse struct {
-	OK bool `json:"ok"`
-	// Ticket 是玩家 TCP 握手帧里出示的票据（session:<player_id>:<token>），原样使用。
-	Ticket   string `json:"ticket"`
-	PlayerID int64  `json:"player_id"`
-	// ServerID 是角色绑定的服（原服），ServingServerID 是承载它的服：客户端要连的是承载服。
-	ServerID        int32 `json:"server_id"`
+// roleView 是清单里本账号在一个服上的角色。角色名不在这里：名字是游戏服的数据。
+type roleView struct {
+	PlayerID int64 `json:"player_id"`
+	// ServingServerID 是现在承载它的服；没有合服时就是这个服自己。
 	ServingServerID int32 `json:"serving_server_id"`
-	// ExpiresAt 是握手票据的过期时刻（Unix 秒）：过期之前可以反复握手（断线重连），过期之后重新选角。
-	ExpiresAt int64 `json:"expires_at"`
-	// TCPAddr 是承载服的玩家 TCP 地址（host:port）。可能为空——TCPAddrSource 说明原因。
-	TCPAddr string `json:"tcp_addr"`
-	// TCPAddrSource 说明地址是怎么来的（config、listen、request_host），地址为空时说明为什么没有
-	// （unlisted_server、tcp_disabled、unknown）。取值与含义见 portal_servers.go。
-	TCPAddrSource string `json:"tcp_addr_source"`
-	// TransferringTo 非 0 表示这个角色正在换到那个服。票据照发，进入游戏时由换服模块决定放不放行。
+	CreatedAt       int64 `json:"created_at"`
+	// LastLoginAt 是最近一次进服的时间（Unix 秒）；还没进过是 0。
+	LastLoginAt int64 `json:"last_login_at"`
+	// TransferringTo 非 0 表示这个角色正在换到那个服（还没换完，仍由 ServingServerID 承载）。
 	TransferringTo int32 `json:"transferring_to,omitempty"`
 }
 
-func (portal *Portal) handleSelectRole(w http.ResponseWriter, r *http.Request) {
-	var request selectRoleRequest
+func (portal *Portal) handleServers(w http.ResponseWriter, r *http.Request) {
+	var request serversRequest
 	if !decode(w, r, &request) {
 		return
 	}
-	response, err := portal.selectRole(r.Context(), request, r.Host)
+	response, err := portal.servers(r.Context(), request)
 	webroute.WriteResult(w, http.StatusOK, response, err)
 }
 
-// selectRole 给票据里的账号选 player_id 这个角色，拿到 account 签发的会话令牌，拼成握手票据。
-// 角色是不是这个账号的由 account 判断（存储里角色的归属对票据里的账号）：拿自己的票据选别人的角色，
-// account 答“不是你的角色”，入口原样带码拒绝，不签发任何东西。
+// servers 给出清单与推荐。三样东西按服号拼起来：
 //
-// 承载服不在清单里（或者本服的监听没开）时照样成功、地址留空：票据是好的，只是入口不知道那个服的地址。
-func (portal *Portal) selectRole(ctx context.Context, request selectRoleRequest, requestHost string) (selectRoleResponse, error) {
-	if request.PlayerID <= 0 {
-		return selectRoleResponse{}, invalidRequest()
-	}
-	accountID, err := portal.tickets.verify(request.AccountTicket)
+//   - 有哪些服、名字、状态、并没并：account 的 ListServers；
+//   - 每个服连哪里、多忙：区服目录（Directory）。地址给的是**承载服**的——并入别的服的服，连的是那个服；
+//   - 本账号在每个服有没有角色：account 的 RoleOnServer。“没有角色”是清单的内容，不是错误。
+//
+// 任何一样问不到（account 出错、目录出错、角色记录对不上）整个请求失败：宁可让客户端重试，
+// 也不给一份缺了角色或缺了地址的清单，让玩家以为号没了、或者被推荐去一个其实有号的服的隔壁。
+// 开销是 1 次清单 + 每个服 1 次角色查询，顺序执行；区服很多、请求很密的部署见 README 的“边界”。
+func (portal *Portal) servers(ctx context.Context, request serversRequest) (serversResponse, error) {
+	account, err := portal.account(ctx, request.AccountTicket)
 	if err != nil {
-		return selectRoleResponse{}, err
+		return serversResponse{}, err
 	}
-	session, err := portal.accounts.SelectRole(ctx, accountID, request.PlayerID)
+	listed, err := portal.accounts.ListServers(ctx)
 	if err != nil {
-		return selectRoleResponse{}, err
+		return serversResponse{}, err
 	}
-	if session.PlayerID != request.PlayerID || session.Token == "" || session.ServingServerID <= 0 {
-		// account 答了“成功”，但会话不是问的那个角色、没有令牌或没有承载服：不拼一张握手必然失败的票据。
-		return selectRoleResponse{}, fmt.Errorf("portal: account answered select-role for player %d with an unusable session", request.PlayerID)
+	entries, err := portal.entries(ctx)
+	if err != nil {
+		return serversResponse{}, err
 	}
-	response := selectRoleResponse{
-		OK: true, Ticket: gamelogin.Ticket(session.PlayerID, session.Token), PlayerID: session.PlayerID,
-		ServerID: session.ServerID, ServingServerID: session.ServingServerID, ExpiresAt: session.ExpiresAtUnix,
+	views := make([]serverView, 0, len(listed))
+	choices := make([]ServerChoice, 0, len(listed))
+	for _, server := range listed {
+		if server.ID <= 0 {
+			return serversResponse{}, errors.New("portal: account listed a server without an id")
+		}
+		view := serverView{ServerID: server.ID, Name: server.Name, Status: string(server.Status), MergedInto: server.MergedInto}
+		serving := server.ID
+		if server.MergedInto > 0 {
+			serving = server.MergedInto
+		}
+		view.Addr, view.AddrSource, view.Load, view.Tags = addressOf(entries, serving)
+		role, err := portal.accounts.RoleOnServer(ctx, account.ID, server.ID)
+		switch {
+		case err == nil:
+			if role.PlayerID <= 0 || role.AccountID != account.ID || role.ServerID != server.ID {
+				return serversResponse{}, fmt.Errorf("portal: account answered the role on server %d with a role that is not this account's role there", server.ID)
+			}
+			view.Role = &roleView{PlayerID: role.PlayerID, ServingServerID: role.ServingServerID, CreatedAt: role.CreatedAtUnix, LastLoginAt: role.LastLoginAtUnix}
+			if role.Transfer != nil {
+				view.Role.TransferringTo = role.Transfer.To
+			}
+		case svcaccount.Code(err) == svcaccount.CodeRoleMissing:
+		default:
+			return serversResponse{}, err
+		}
+		views = append(views, view)
+		choice := ServerChoice{
+			ServerID: view.ServerID, Name: view.Name, Status: view.Status, MergedInto: view.MergedInto,
+			Addr: view.Addr, Load: view.Load, Tags: append([]string(nil), view.Tags...),
+		}
+		if view.Role != nil {
+			choice.HasRole, choice.RoleLastLoginAt = true, view.Role.LastLoginAt
+		}
+		choices = append(choices, choice)
 	}
-	response.TCPAddr, response.TCPAddrSource = portal.servers.tcpAddr(session.ServingServerID, requestHost)
-	if session.Transfer != nil {
-		response.TransferringTo = session.Transfer.To
+	response := serversResponse{OK: true, Servers: views}
+	// 推荐规则是工程的代码：它返回一个不在清单里的服号时按没有推荐处理，不把一个客户端进不了的服推出去。
+	if recommended := portal.recommend(choices); recommended > 0 {
+		for _, view := range views {
+			if view.ServerID == recommended {
+				response.RecommendedServerID = recommended
+				break
+			}
+		}
 	}
 	return response, nil
 }
 
+// ---- 进服 ----
+
+// enterRequest 是 POST /portal/enter 的请求体。
+type enterRequest struct {
+	AccountTicket string `json:"account_ticket"`
+	ServerID      int32  `json:"server_id"`
+}
+
+// enterResponse 是进服的响应。
+type enterResponse struct {
+	OK bool `json:"ok"`
+	// Ticket 是握手帧里出示的票据（enter:<进服票据>），原样使用。
+	Ticket string `json:"ticket"`
+	// ServerID 是选中的服，ServingServerID 是承载它的服（选中的服并入了别的服时两者不同）：客户端连的是承载服。
+	ServerID        int32 `json:"server_id"`
+	ServingServerID int32 `json:"serving_server_id"`
+	// ExpiresAt 是进服票据的过期时刻（Unix 秒）：过期之前可以反复握手（断线重连），过期之后重新要一张。
+	ExpiresAt int64 `json:"expires_at"`
+	// Addr 是承载服的地址（host:port，目录给的）；目录里没有时是空串——票据照发，AddrSource 是 none。
+	Addr       string `json:"addr"`
+	AddrSource string `json:"addr_source"`
+}
+
+func (portal *Portal) handleEnter(w http.ResponseWriter, r *http.Request) {
+	var request enterRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	response, err := portal.enter(r.Context(), request)
+	webroute.WriteResult(w, http.StatusOK, response, err)
+}
+
+// enter 替票据里的账号向 account 要一张进 server_id 的进服票据，连同承载服的地址回给客户端。
+// 它**不建角、不选角**：这个账号在那个服上是哪一名玩家、要不要新建映射，是握手时认证器问 account 的事。
+//
+// 账号只取自账号票据。服号必须是 account 登记过的服，否则带着 account 的码拒绝；被封的账号拿不到票据。
+// 区服的状态这里不拦（维护中的服，老号照常能进），新号能不能进由握手时的 account 按建角的规则回答。
+// 目录里没有承载服的地址时照样成功、地址留空：票据是好的，只是入口不知道该连哪里。
+func (portal *Portal) enter(ctx context.Context, request enterRequest) (enterResponse, error) {
+	if request.ServerID <= 0 {
+		return enterResponse{}, invalidRequest()
+	}
+	account, err := portal.account(ctx, request.AccountTicket)
+	if err != nil {
+		return enterResponse{}, err
+	}
+	ticket, err := portal.accounts.IssueEnterTicket(ctx, account.ID, request.ServerID)
+	if err != nil {
+		return enterResponse{}, err
+	}
+	if ticket.Ticket == "" || ticket.ServerID != request.ServerID || ticket.ServingServerID <= 0 {
+		// account 答了“成功”，但票据不是问的那个服的、或者没有承载服：不把一张握手必然失败的票据交出去。
+		return enterResponse{}, fmt.Errorf("portal: account answered an enter ticket for server %d with one that does not match", request.ServerID)
+	}
+	entries, err := portal.entries(ctx)
+	if err != nil {
+		return enterResponse{}, err
+	}
+	response := enterResponse{
+		OK: true, Ticket: gamelogin.EnterTicket(ticket.Ticket),
+		ServerID: ticket.ServerID, ServingServerID: ticket.ServingServerID, ExpiresAt: ticket.ExpiresAtUnix,
+	}
+	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID)
+	return response, nil
+}
+
 // ---- 公共 ----
+
+// account 把请求里的账号票据交给 account 校验，返回它绑定的账号。这是入口里账号的唯一来源。
+// 票据为空或超长的不去问 account，直接按 account 对无效票据的同一个回答（它的码）拒绝。
+func (portal *Portal) account(ctx context.Context, ticket string) (svcaccount.Account, error) {
+	if ticket == "" || len(ticket) > MaxTicketBytes {
+		return svcaccount.Account{}, fmt.Errorf("%w: the ticket is not valid", svcaccount.ErrSessionInvalid)
+	}
+	account, err := portal.accounts.ValidateAccountTicket(ctx, ticket)
+	if err != nil {
+		return svcaccount.Account{}, err
+	}
+	if account.ID == "" {
+		return svcaccount.Account{}, errors.New("portal: account validated a ticket without an account id")
+	}
+	return account, nil
+}
+
+// entries 问一次区服目录，整理成 服号 -> 条目（丢掉不成样子的与重复的，见 Directory 的约定）。
+func (portal *Portal) entries(ctx context.Context) (map[int32]Entry, error) {
+	raw, err := portal.directory.Entries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("portal: the server directory gave no answer: %w", err)
+	}
+	usable, dropped := usableEntries(raw)
+	if dropped > 0 {
+		slog.Warn("portal: the server directory returned entries that were dropped (bad server id, address, load or tags, a duplicate, or over the limit)", "dropped", dropped, "kept", len(usable))
+	}
+	return usable, nil
+}
+
+// addressOf 取 sid 这个服在目录里的地址、负载与标签。
+func addressOf(entries map[int32]Entry, sid int32) (addr, source string, load int, tags []string) {
+	entry, ok := entries[sid]
+	if !ok {
+		return "", AddrNone, 0, nil
+	}
+	return entry.Addr, AddrFromDirectory, entry.Load, entry.Tags
+}
 
 // decode 读一个 JSON 请求体。超过 MaxRequestBytes 答 413，不是 JSON 答 400（两者都由 webroute 写好了响应，
 // 返回 false 时调用方直接返回）。不认识的字段被忽略——请求里夹带 account_id 不起任何作用，

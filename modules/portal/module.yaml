@@ -1,26 +1,27 @@
 name: portal
-summary: 登录入口：三个 HTTP 端点代客户端调只在内部总线上的 account——渠道登录拿账号票据与区服清单（含本账号在各服的角色）、建角、选角拿握手票据与该连的玩家 TCP 地址；建角选角只认入口自己签发的账号票据（HMAC，缺省 10 分钟），不从请求里读账号
+summary: 登录入口（manifest）：三个 HTTP 端点，挂在托管的 account 服务进程上，代客户端调 account——渠道登录拿账号票据、凭票据拿区服清单与推荐（每个服的地址 / 负载 / 本账号有没有角色）、选定一个服换进服票据与该连的地址；票据全部由 account 签发与校验，入口不持有密钥、不建角不选角；区服地址来自可替换的目录（静态配置 portal.servers，或带过期的动态注册表）
 requires: [login]
 conflicts: []
 needs:
   mods: [web]
   features: [errcode]
-  uses: [account]
 runtime:
   package: game/portal
   start: Start
-errcodes: [portal_ticket_invalid, portal_request_invalid]
+  framework: account
+errcodes: [portal_request_invalid]
 next:
-  - "登录入口随 {{GAME_SERVICE}} 进程监听 web.addr（configs/service/config.{{GAME_SERVICE}}.yaml，缺省 127.0.0.1:8080）：POST /portal/login、/portal/create-role、/portal/select-role；请求与响应见 roost-core 的 modules/portal/README.md"
-  - "多个区服、或入口在代理后面：在 config.{{GAME_SERVICE}}.yaml 写 portal.servers（服号 -> 客户端连得到的玩家 TCP 地址 host:port）；不写时清单只有本进程的服，地址按监听地址与请求的 Host 推出"
-  - "上线前：生产配置必须写 portal.ticket_secret（至少 32 字节，同一入口后面的进程用同一把），否则进程不启动；入口没有限流，对外要放在终止 TLS 的反向代理后面并显式写 web.allow_public_addr"
+  - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发配置的端口是 8080 + account 的端口块号，新建的 game 模板工程是 127.0.0.1:8081）：POST /portal/login、/portal/servers、/portal/enter；请求与响应见 roost-core 的 modules/portal/README.md"
+  - "区服的连接地址：在 config.account.yaml 写 portal.servers（服号 -> 客户端连得到的地址 host:port，通常是 Gate）；不写时清单照常列出 account 登记过的服，只是没有地址。要动态的地址（上报、服务发现）改 game/portal/portal_rules.go 的 newDirectory"
+  - "推荐规则（导量）在 game/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服"
+  - "上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr"
 verify:
   packages: [./game/portal]
   run: ^TestPortal
-  pass: 13
+  pass: 12
 with:
   enter:
-    summary: 整条链路的场景：HTTP 登录 → 建角 → 选角 → 握手（登录模块的认证器）→ 进入游戏（gameenter.Enter），以及选角给出的承载服与进入时认的是同一个；只有测试，不加运行时代码
+    summary: 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（登录模块的认证器，account 按账号解析或新建玩家号）→ 进入游戏（gameenter.Enter），以及入口给的地址与进入时认的是同一个承载服；只有测试，不加运行时代码
     verify:
       packages: [./game/portal]
       run: ^TestWithPortalEnter

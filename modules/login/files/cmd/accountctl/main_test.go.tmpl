@@ -132,6 +132,7 @@ func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 		"upsert with a bad state": {[]string{"upsert-server", "-sid", "1000", "-status", "opened"}, `invalid -status "opened"`},
 		"upsert with a bad flag":  {[]string{"upsert-server", "-sid", "1000", "-open"}, "upsert-server: flag provided but not defined"},
 		"show without -sid":       {[]string{"show-server"}, "-sid is required"},
+		"list with an argument":   {[]string{"list-servers", "-sid", "1000"}, "list-servers: takes no arguments"},
 		"show with a bad flag":    {[]string{"show-server", "-id", "1000"}, "show-server: flag provided but not defined"},
 	} {
 		_, printed, err := loginCtlRun(t, service, test.args...)
@@ -146,6 +147,50 @@ func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 		if _, err := service.GetServer(context.Background(), sid); !errors.Is(err, svcaccount.ErrServerInvalid) {
 			t.Fatalf("a refused command registered server %d: %v", sid, err)
 		}
+	}
+}
+
+// list-servers 打印登记过的全部区服，按服号升序，是一个 JSON 数组；一个都没有时是空数组而不是 null。
+// 登记、改状态之后清单跟着变。
+func TestLoginAccountctlListsTheRegisteredServers(t *testing.T) {
+	service := loginCtlAccount(t)
+	list := func() []svcaccount.GameServer {
+		t.Helper()
+		var out bytes.Buffer
+		if err := run(context.Background(), service, []string{"list-servers"}, &out); err != nil {
+			t.Fatalf("list-servers: %v", err)
+		}
+		if strings.TrimSpace(out.String()) == "null" {
+			t.Fatal("list-servers printed null; an empty list must be []")
+		}
+		var servers []svcaccount.GameServer
+		if err := json.Unmarshal(out.Bytes(), &servers); err != nil || servers == nil {
+			t.Fatalf("list-servers printed %q, which is not a JSON array: %v", out.String(), err)
+		}
+		return servers
+	}
+	if servers := list(); len(servers) != 0 {
+		t.Fatalf("a fresh account lists %+v", servers)
+	}
+	for _, args := range [][]string{
+		{"upsert-server", "-sid", "1001", "-name", "二服"},
+		{"upsert-server", "-sid", "1000"},
+		{"upsert-server", "-sid", "7", "-status", "closed"},
+	} {
+		if _, _, err := loginCtlRun(t, service, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	servers := list()
+	if len(servers) != 3 || servers[0].ID != 7 || servers[0].Status != svcaccount.ServerClosed ||
+		servers[1].ID != 1000 || servers[1].Name != "{{GAME_SERVICE}}-1000" || servers[2].ID != 1001 || servers[2].Name != "二服" {
+		t.Fatalf("list-servers = %+v, want 7 (closed), 1000, 1001 in that order", servers)
+	}
+	if _, _, err := loginCtlRun(t, service, "upsert-server", "-sid", "1000", "-status", "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	if servers := list(); len(servers) != 3 || servers[1].Status != svcaccount.ServerMaintenance {
+		t.Fatalf("after changing server 1000's status: %+v", servers)
 	}
 }
 

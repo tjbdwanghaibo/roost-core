@@ -1,0 +1,195 @@
+package portal
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// 区服目录：入口的扩展点，回答“每个区服现在该连哪个地址”。
+//
+// “有哪些服、叫什么、开没开、并没并”是 account 的数据（ListServers）；“客户端连哪里、现在多忙”不是——
+// 那通常是 Gate 的地址，由部署决定、会随扩缩容变化。入口把两边按服号拼起来，再加上本账号在各服的角色，
+// 就是给客户端的清单。目录只管地址这一半：
+//
+//   - 缺省实现是静态的：配置 portal.servers（服号 -> host:port），见 NewStaticDirectory；
+//   - 动态的那一种是一张带过期的注册表（Registry，portal_registry.go），谁往里登记由工程接；
+//   - 工程也可以自己实现 Directory（读服务发现、读共享存储……）。
+//
+// 用哪一个在 portal_rules.go 的 newDirectory 里选，那个文件归工程所有。
+
+// MaxEntries 是入口从目录里接受的条目数上限，与 account 的区服上限（256）一致。
+const MaxEntries = 256
+
+// 目录条目里各字段的上限。
+const (
+	// MaxAddrBytes 是地址的长度上限。
+	MaxAddrBytes = 255
+	// MaxTags / MaxTagBytes 是一个条目的标签个数与单个标签的长度上限。
+	MaxTags     = 8
+	MaxTagBytes = 32
+)
+
+// Entry 是目录给一个区服的连接信息。
+type Entry struct {
+	// ServerID 是区服号（game 进程的 sid），正数。
+	ServerID int32
+	// Addr 是客户端该连的地址，host:port，主机不能为空——通常是这个服前面的 Gate。
+	Addr string
+	// Load 是这个服现在多忙，刻度由工程自己定（在线人数、百分比……），不小于 0；0 表示没有上报。
+	// 入口原样带给客户端与推荐规则，自己不解释它。
+	Load int
+	// Tags 是给客户端与推荐规则看的标签（“new”“recommended”“crowded”……），入口不解释。
+	Tags []string
+}
+
+// Directory 给出当前的全部条目。入口每次要地址时都问它（清单、选角），所以实现要快：读内存，或者自己带缓存。
+//
+// 约定：
+//   - 返回错误表示“现在问不到”，入口答 500，不给客户端一份没有地址的清单；
+//   - 一个服至多一个条目。不成样子的条目（服号不是正数、地址不是带主机的 host:port、字段超长、负的负载）与
+//     重复的服号（留第一个）由入口丢掉，那个服在清单里就是“没有地址”——坏数据不会让整个请求失败，也不会被带给客户端；
+//   - account 没登记的服即使目录里有也不会列给客户端；account 登记了而目录里没有的服照常列出，只是没有地址；
+//   - 并发安全：请求是并发的。
+type Directory interface {
+	Entries(ctx context.Context) ([]Entry, error)
+}
+
+// DirectoryFunc 把一个函数当作 Directory。
+type DirectoryFunc func(ctx context.Context) ([]Entry, error)
+
+// Entries 实现 Directory。
+func (fn DirectoryFunc) Entries(ctx context.Context) ([]Entry, error) { return fn(ctx) }
+
+// checkEntry 检查一个条目成不成样子，返回整理过的条目（地址去掉两端空白、标签另拷一份）。
+func checkEntry(entry Entry) (Entry, error) {
+	if entry.ServerID <= 0 {
+		return Entry{}, fmt.Errorf("portal: directory entry has server id %d; it must be positive", entry.ServerID)
+	}
+	addr, err := checkAddr(entry.Addr)
+	if err != nil {
+		return Entry{}, fmt.Errorf("portal: directory entry of server %d: %w", entry.ServerID, err)
+	}
+	if entry.Load < 0 {
+		return Entry{}, fmt.Errorf("portal: directory entry of server %d has a negative load", entry.ServerID)
+	}
+	if len(entry.Tags) > MaxTags {
+		return Entry{}, fmt.Errorf("portal: directory entry of server %d has %d tags; at most %d", entry.ServerID, len(entry.Tags), MaxTags)
+	}
+	tags := make([]string, 0, len(entry.Tags))
+	for _, tag := range entry.Tags {
+		if tag == "" || len(tag) > MaxTagBytes {
+			return Entry{}, fmt.Errorf("portal: directory entry of server %d has an empty or oversized tag", entry.ServerID)
+		}
+		tags = append(tags, tag)
+	}
+	return Entry{ServerID: entry.ServerID, Addr: addr, Load: entry.Load, Tags: tags}, nil
+}
+
+// checkAddr 检查一个给客户端的地址：带主机的 host:port，端口 1～65535，至多 MaxAddrBytes 字节。
+// 只写端口（":7000"）的地址客户端连不了。
+func checkAddr(raw string) (string, error) {
+	addr := strings.TrimSpace(raw)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || len(addr) > MaxAddrBytes {
+		return "", errors.New("the address must be the host:port clients connect to")
+	}
+	if number, err := strconv.ParseUint(port, 10, 16); err != nil || number == 0 {
+		return "", errors.New("the address must be the host:port clients connect to")
+	}
+	return addr, nil
+}
+
+// usableEntries 把目录的回答整理成 服号 -> 条目：丢掉不成样子的与重复的（留第一个），至多 MaxEntries 个
+// （按回答的顺序数，多出来的丢掉）。dropped 是丢掉了几个，给日志用。
+func usableEntries(entries []Entry) (byServer map[int32]Entry, dropped int) {
+	byServer = make(map[int32]Entry, min(len(entries), MaxEntries))
+	for _, entry := range entries {
+		checked, err := checkEntry(entry)
+		if err != nil {
+			dropped++
+			continue
+		}
+		if _, duplicate := byServer[checked.ServerID]; duplicate || len(byServer) >= MaxEntries {
+			dropped++
+			continue
+		}
+		byServer[checked.ServerID] = checked
+	}
+	return byServer, dropped
+}
+
+// staticDirectory 是不会变的目录：构造时给定的条目。
+type staticDirectory struct{ entries []Entry }
+
+// NewStaticDirectory 用 服号 -> 地址 建一个静态目录（配置 portal.servers 就是这样用的）。
+// 地址不成样子、服号不是正数、条目超过 MaxEntries 时返回错误：静态的数据写错了应该在启动时就知道。
+func NewStaticDirectory(addrs map[int32]string) (Directory, error) {
+	if len(addrs) > MaxEntries {
+		return nil, fmt.Errorf("portal: %d servers in the static directory; at most %d", len(addrs), MaxEntries)
+	}
+	entries := make([]Entry, 0, len(addrs))
+	for sid, addr := range addrs {
+		entry, err := checkEntry(Entry{ServerID: sid, Addr: addr})
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ServerID < entries[j].ServerID })
+	return staticDirectory{entries: entries}, nil
+}
+
+// Entries 实现 Directory：每次返回一份副本，调用方改它不影响目录。
+func (directory staticDirectory) Entries(context.Context) ([]Entry, error) {
+	return cloneEntries(directory.entries), nil
+}
+
+func cloneEntries(entries []Entry) []Entry {
+	out := make([]Entry, len(entries))
+	for i, entry := range entries {
+		entry.Tags = append([]string(nil), entry.Tags...)
+		out[i] = entry
+	}
+	return out
+}
+
+// Overlay 把几个目录叠起来：同一个服在几个目录里都有时，后面的盖住前面的。
+// 常见用法是 Overlay(静态配置, 动态注册表)：注册表里有的服用上报的地址与负载，没有上报（或已过期）的回到配置。
+// 任何一个目录出错，整体出错——不拿一份不完整的回答冒充全部。nil 的目录跳过。
+func Overlay(directories ...Directory) Directory {
+	layers := make([]Directory, 0, len(directories))
+	for _, directory := range directories {
+		if directory != nil {
+			layers = append(layers, directory)
+		}
+	}
+	return DirectoryFunc(func(ctx context.Context) ([]Entry, error) {
+		merged := map[int32]Entry{}
+		for _, layer := range layers {
+			entries, err := layer.Entries(ctx)
+			if err != nil {
+				return nil, err
+			}
+			// 一层之内重复的服号留第一个（与 Directory 的约定相同），层与层之间后面的盖住前面的。
+			seen := map[int32]bool{}
+			for _, entry := range entries {
+				if seen[entry.ServerID] {
+					continue
+				}
+				seen[entry.ServerID] = true
+				merged[entry.ServerID] = entry
+			}
+		}
+		out := make([]Entry, 0, len(merged))
+		for _, entry := range merged {
+			out = append(out, entry)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].ServerID < out[j].ServerID })
+		return out, nil
+	})
+}
