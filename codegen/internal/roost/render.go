@@ -491,7 +491,14 @@ func renderBootstrap(m Manifest) string {
 		} else {
 			b.WriteString(" return accessplayertcp.NewIngressMod(*options.GameIngress)\n")
 		}
-		b.WriteString("}\n\nfunc NewWithOptions(options Options) (*app.App, error) {\n")
+		b.WriteString("}\n")
+		if playerTCPServiceHasEtcd(m, services, allMods) {
+			// One Discovery has one registration owner. A Game Ingress that registers its own candidate
+			// (RegisterDiscovery: the incarnation a Gate resolves the game by) needs an etcd Mod that does
+			// not register the service itself, or the process stops at start with "service is already registered".
+			b.WriteString("\n// playerDiscovery 选这个服务的 etcd Mod：Game Ingress 自己登记发现候选（GameIngress.RegisterDiscovery，\n// 带 Gate 用来认 game 的 incarnation）时，etcd Mod 不再自动登记——一个 Discovery 只有一个登记拥有者。\nfunc playerDiscovery(options Options, local app.Mod) app.Mod {\n if options.GameIngress == nil || !options.GameIngress.RegisterDiscovery { return local }\n return kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration())\n}\n")
+		}
+		b.WriteString("\nfunc NewWithOptions(options Options) (*app.App, error) {\n")
 	} else {
 		b.WriteString("\nfunc New() (*app.App, error) {\n")
 	}
@@ -525,9 +532,14 @@ func renderBootstrap(m Manifest) string {
 			}
 			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.%s()", name, safeIdent(name), constructor)
 		}
-		for _, constructor := range serviceModConstructors(m, name, allMods) {
+		constructors := serviceModConstructors(m, name, allMods)
+		ownsPlayerTCP := playerTCP && hasPlayerTCPMod(constructors)
+		for _, constructor := range constructors {
 			if playerTCP && strings.HasPrefix(constructor, "accessplayertcp.NewMod()") {
 				constructor = "playerTransport(options, " + constructor + ")"
+			}
+			if ownsPlayerTCP && constructor == etcdModConstructor {
+				constructor = "playerDiscovery(options, " + constructor + ")"
 			}
 			fmt.Fprintf(&b, ",\n\t\t%s", constructor)
 		}
@@ -535,6 +547,31 @@ func renderBootstrap(m Manifest) string {
 	}
 	b.WriteString("\treturn a, nil\n}\n")
 	return b.String()
+}
+
+// etcdModConstructor is the catalog's etcd Mod constructor as the bootstrap renders it.
+const etcdModConstructor = "kitetcd.NewEtcdMod()"
+
+// hasPlayerTCPMod reports whether a service's Mods include the player TCP transport.
+func hasPlayerTCPMod(constructors []string) bool {
+	for _, constructor := range constructors {
+		if strings.HasPrefix(constructor, "accessplayertcp.NewMod()") {
+			return true
+		}
+	}
+	return false
+}
+
+// playerTCPServiceHasEtcd reports whether the service that owns the player TCP transport also
+// registers the etcd Mod; only then the bootstrap renders playerDiscovery.
+func playerTCPServiceHasEtcd(m Manifest, services []string, allMods []string) bool {
+	for _, name := range services {
+		constructors := serviceModConstructors(m, name, allMods)
+		if hasPlayerTCPMod(constructors) && contains(constructors, etcdModConstructor) {
+			return true
+		}
+	}
+	return false
 }
 
 // serviceModConstructors is every Mod the bootstrap registers for one service

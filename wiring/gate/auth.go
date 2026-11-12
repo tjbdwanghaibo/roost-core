@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -10,7 +11,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
-// AccountAuthenticator 使用正式 Accounts 能力校验角色票据。PlayerID 提示没有权限，
+// AccountAuthenticator 使用正式 Accounts 能力校验握手票据：角色票据 session:<player_id>:<token>，
+// 以及进服票据 enter:<票据>（见 authenticateEnter）。下面说的是角色票据。PlayerID 提示没有权限，
 // 只有 ValidateSession 返回的 Role 决定 PlayerID 与固定区服，不接受 accountId 代替角色。
 //
 // 固定区服是承载服（Role.ServingServerID）：原服已并入另一服（别名合服，service/account 的 MergeServer）时
@@ -28,6 +30,9 @@ type AccountAuthenticator struct{ Accounts account.Accounts }
 func (auth AccountAuthenticator) Authenticate(ctx context.Context, ticket string, _ net.Addr) (gateway.Principal, error) {
 	if auth.Accounts == nil || len(ticket) > 8192 {
 		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	if enter, found := strings.CutPrefix(ticket, enterTicketPrefix); found {
+		return auth.authenticateEnter(ctx, enter)
 	}
 	parts := strings.SplitN(ticket, ":", 3)
 	if len(parts) != 3 || parts[0] != "session" || parts[2] == "" {
@@ -53,5 +58,43 @@ func (auth AccountAuthenticator) Authenticate(ctx context.Context, ticket string
 		claims[account.TransferClaim] = account.TransferClaimValue(*role.Transfer)
 	}
 	// 两端各自生成候选 SessionID，Game 只采用已通过角色/区服复核的 Gate 绑定 SessionID。
+	return gateway.Principal{PlayerID: role.PlayerID, ServerID: role.ServingServerID, SessionID: gateway.NewBroadcastID(), Claims: claims}, nil
+}
+
+// enterTicketPrefix 是进服票据在握手帧里的写法：enter:<票据>。票据本身对这里是不透明的一串。
+const enterTicketPrefix = "enter:"
+
+// authenticateEnter 处理 enter:<票据>——经登录入口进来的客户端出示的握手凭证（account 的 IssueEnterTicket 签发）。
+// 票据原样交给 Accounts.EnterServer：account 验票据、按“账号 + 服”解析玩家号，新号第一次握手时建出映射，
+// 所以这一步**可能写**。同一张票据重放、两条连接同时握手，仍只有一个映射（account 的保证）。
+//
+// 固定区服与角色票据一样取承载服。票据无效（过期、伪造、拿账号票据或角色会话令牌冒充）答 ErrUnauthenticated；
+// account 的其余拒绝与故障原样返回。两种情况连接都被关闭。
+//
+// 独立 Gate 部署下，Game Ingress 在绑定时会用同一张票据再认证一次，所以每次握手 EnterServer 执行两次；
+// 第二次读到的是第一次建好的映射。
+func (auth AccountAuthenticator) authenticateEnter(ctx context.Context, ticket string) (gateway.Principal, error) {
+	if ticket == "" {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	entry, err := auth.Accounts.EnterServer(ctx, ticket)
+	if err != nil {
+		if account.Code(err) == account.CodeSessionInvalid {
+			return gateway.Principal{}, fmt.Errorf("%w: %w", gateway.ErrUnauthenticated, err)
+		}
+		return gateway.Principal{}, err
+	}
+	role := entry.Role
+	if bound, ok := account.PeekEnterTicket(ticket); !ok || role.PlayerID <= 0 || role.ServerID != bound || role.ServingServerID <= 0 {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	claims := map[string]string{
+		account.ServerIDClaim:       strconv.FormatInt(int64(role.ServingServerID), 10),
+		account.OriginServerIDClaim: strconv.FormatInt(int64(role.ServerID), 10),
+		account.BindEpochClaim:      strconv.FormatUint(role.BindEpoch, 10),
+	}
+	if role.Transfer != nil {
+		claims[account.TransferClaim] = account.TransferClaimValue(*role.Transfer)
+	}
 	return gateway.Principal{PlayerID: role.PlayerID, ServerID: role.ServingServerID, SessionID: gateway.NewBroadcastID(), Claims: claims}, nil
 }

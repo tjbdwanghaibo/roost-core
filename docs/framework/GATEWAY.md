@@ -19,7 +19,7 @@ v1.25.0已实现嵌入 Game 的 TCP 与独立 Gate 两种正式接入。两者�
 
 `DefaultOptions()` 提供资源默认值。Gate 要明确设置 `TCP.Enabled=true`、监听地址及业务 `Ready`；Game 提供业务 `Ready`。Ready 只快速读取已维护的准入状态，不能每包执行 I/O。两端必须启用 App singleton，并依赖同一应用命名空间下的 NATS。
 
-未提供 Authenticator 时，接线使用正式 Accounts.ValidateSession 校验签名 session 票据、PlayerID 与固定 Game SID。自定义 Authenticator 也必须返回可信固定路由；不是依据客户端自报 SID 随机选 Game。绑定阶段 Gate/Game 各自验证，后续数据包不重复查 Account。
+未提供 Authenticator 时，接线使用正式 Accounts.ValidateSession 校验签名 session 票据、PlayerID 与固定 Game SID；握手票据是 `enter:<进服票据>`（登录入口签发）时交给 Accounts.EnterServer，新号第一次握手由 account 建出账号与玩家号的映射（2026-11-12）。自定义 Authenticator 也必须返回可信固定路由；不是依据客户端自报 SID 随机选 Game。绑定阶段 Gate/Game 各自验证，后续数据包不重复查 Account。
 
 使用发现时，两端设置 `RegisterDiscovery=true`，并装配 `etcd.NewEtcdMod(etcd.WithoutServiceRegistration())`。接入监听/订阅启动及 NATS Flush 完成后才登记候选；一个 Discovery 只有一个登记拥有者。Game 候选必须带 `access.incarnation` 与 `access.ingress_ready=true`。Gate 默认用 FixedGameResolver 只查固定 SID；也可以显式注入 ResolveGame。发现只是候选，真正的身份由 SingletonIdentityChecker 核对。
 
@@ -119,7 +119,7 @@ if err == nil {
 }
 ```
 
-该选项不替代独立 Gate 服务的启动、NATS/单实例身份能力和鉴权配置。启用 `access.player.self_sync` 时，生成器把同一个 SelfSync 接到所选 Ingress；组同步仍共用它。没有该开关的业务继续显式配置自己的 Sync Manager。
+该选项不替代独立 Gate 服务的启动、NATS/单实例身份能力和鉴权配置。`GameIngress.RegisterDiscovery` 为 true 时，生成的 bootstrap 给承载玩家接入的服务换上不自动登记的 etcd Mod（`playerDiscovery`），发现候选只由 Game Ingress 登记；2026-11-12 之前两者都登记，进程启动即以 `etcd Discovery: service is already registered` 退出（真实进程演练发现，此前只有测试宿主里的 Game Ingress，没有用生成的 bootstrap 起过带发现登记的进程）。启用 `access.player.self_sync` 时，生成器把同一个 SelfSync 接到所选 Ingress；组同步仍共用它。没有该开关的业务继续显式配置自己的 Sync Manager。
 
 联合验证入口：
 

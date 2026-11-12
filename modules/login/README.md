@@ -108,7 +108,12 @@ EnterGame                         -> first=true
 - 票据都是无状态的签名：单张不能吊销，最长到它的有效期（进服票据与会话令牌是 `account.session_ttl`，缺省 30 分钟）。封号对**进服票据**立即生效（`EnterServer` 每次都再读账号），对已签发的**会话令牌**不生效。要立刻踢人用 `entity.kick` 断开连接；要让全部在外的票据作废，轮换 `account.session_secret`。
 - claims 是握手那一刻的快照。握手之后才合服、换服的，要等下一次握手才看得见；换服期间靠 rehome 模块的驻留屏障。
 - 新号握手就在 account 里建了映射（占了这个账号在这个服的名额、用掉一个玩家号），不等游戏服建成。握手之后不新建就离开的账号，下次来还是那个玩家号，游戏服仍告知要新建。
-- **独立 Gate 部署没有验证过**。生成的接线两种部署都有（`SessionObserver`、Game Ingress 的 Mod 也调 `BindRegistry`），告知的代码是同一份，场景只在进程内驱动过 Game Ingress 的激活回调，没有经真实的 Gate 与 NATS。已知要工程自己做的：Game 侧把 `accessplayertcp.NewAuthenticator()` 交给 `bootstrap.Options.GameIngress.Authenticator`；Gate 进程要装一个认 `enter:` 票据的认证器（`wiring/gate` 缺省的 `AccountAuthenticator` 只认会话令牌）。告知要的 claims 靠“Game Ingress 在 Bind 时用同一个认证器再认证一次”按玩家号取回——更干净的做法是让激活回调带上 Principal，那是 gateway 的改动，没有做。
+- **独立 Gate 部署只做过一次单机真实进程演练**（2026-11-12：account、走 Game Ingress 的 game、Gate 三个进程，真实 NATS / Redis / Mongo / etcd，整条链路与各种拒绝，记录在仓库 CHANGELOG）。生成器不生成 Gate 进程，接法是：
+  - Game：`bootstrap.NewWithOptions(bootstrap.Options{GameIngress: &options})`，`options.Authenticator = accessplayertcp.NewAuthenticator()`（claims 与会话激活后的告知都靠它），`options.RegisterDiscovery = true`，再给 `options.Ready` 与 `options.AdvertiseAddr`；配置里 `player_access.tcp.enabled: false`。`RegisterDiscovery` 为 true 时生成的 bootstrap 让这个服务的 etcd Mod 不再自动登记（`playerDiscovery`），发现里 game 的记录改由 Game Ingress 写（服务类型固定是 `game`，地址是 `options.AdvertiseAddr`）。
+  - Gate：工程自己加一个服务，Mod 是 NATS、`kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration())`、account 的 `NewClientMod()`、`gatewiring.NewGateMod(options)`（`options.TCP.Enabled`、监听地址、`Ready`、`RegisterDiscovery`）。不带认证器时用 `wiring/gate` 缺省的 `AccountAuthenticator`，它认 `enter:` 与 `session:` 两种票据。
+  - 两端的 `options.Config.Namespace` 相同，都开单实例锁（`singleton.enabled`）。
+  - 与嵌入 TCP 不同的地方：每次握手 account 的 `EnterServer` 执行两次（Gate 一次，Game Ingress 绑定时用同一张票据再认证一次；第二次读到已建好的映射，所以 Game 侧的会话上没有 `NewRoleClaim`）。别的服的票据在 Gate 上握手直接被断开（Gate 按承载服找不到 game），客户端收不到 `login_elsewhere`。激活回调不带 Principal，告知要的 claims 靠 Game Ingress 绑定时的那次认证按玩家号记 30 秒取回（至多 4096 名；取不到就不告知，客户端直接发 `EnterGame` 仍然走得通）——更干净的做法是让 gateway 的激活回调带上 Principal，没有做。
+  - 没有跑：多个 Gate、Gate 或 Game 重启之后的重连、跨机、业务服务不叫 `game` 的工程。
 - `EnterStatus` 里“断开”断的是这名玩家在本进程的全部会话（传输没有只断一条会话的入口），并且是推出去 300 毫秒之后才断——慢的连接可能没收到那一帧就被断开。
 - 装了 login 之后 `roost project doctor` 的 `collaborators:account` 是 OK，但这只说明“不再是拒绝桩”：没接渠道的生产环境仍然没有人登录得了。
 - 场景是离线的：真实的 `account.Service`（内存存储）加认证器；与 enter 的联动里游戏服的档是内存替身，新建与进入的事务在 enter 模块自己的场景里用真实的 Nest（替身提交器）验证。没有经真实的 TCP、总线、Redis 与持久层。`cmd/accountctl` 的场景里，子命令在内存存储上跑，连接旗标只验到“读对了”；真正去连 Redis 的那一段（`openService`）与 `deploy/dev/run.sh` 的自动登记没有被执行过。

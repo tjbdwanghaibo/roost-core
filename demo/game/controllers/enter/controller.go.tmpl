@@ -6,6 +6,7 @@ import (
 	playerctl "{{MODULE}}/game/controllers/player"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 // Controller is the enter domain's controller. The domain and its protocol
@@ -16,8 +17,14 @@ import (
 // hands the login over (enter_game.go). What other modules do on entering —
 // the chat presence, the pull of server-wide mail — is not there: those are
 // enter hooks, which that flow runs with the session's claims.
+//
+// registry and nestClient are what the module's own endpoints need — the ones
+// the demo does not replace (enter_create.go: EnterCreate; enter_status.go: the
+// EnterStatus notice). They are the same two fields the module's controller has.
 type Controller struct {
-	player *playerctl.Controller
+	player     *playerctl.Controller
+	registry   *app.Registry
+	nestClient corenest.Client
 }
 
 // FromRegistry is what the generated protocol binding calls once per process.
@@ -29,5 +36,9 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("enter controller: %w", err)
 	}
-	return &Controller{player: player}, nil
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("enter controller: nest client is unavailable")
+	}
+	return &Controller{player: player, registry: registry, nestClient: client}, nil
 }

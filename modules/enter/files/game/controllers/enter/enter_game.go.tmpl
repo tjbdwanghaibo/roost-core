@@ -2,7 +2,6 @@ package enter
 
 import (
 	stdcontext "context"
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -13,7 +12,6 @@ import (
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 
-	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -95,24 +93,4 @@ func (controller *Controller) enterExisting(ctx stdcontext.Context, playerID int
 		return gameenter.InitResult{}, gameenter.ErrNeedCreate
 	}
 	return syncsender.NewEnterExistingSender(controller.nestClient).Sync_EnterExisting(ctx, entityID)
-}
-
-// find 加载玩家的档，不创建。found 为 false 表示持久层确认没有这个实体；别的错误（数据库、解码、超时、
-// 删过档）原样返回，不当成“没有”。
-func (controller *Controller) find(ctx stdcontext.Context, playerID int64) (entityID int64, found bool, err error) {
-	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
-	if err != nil {
-		return 0, false, err
-	}
-	if _, err := entities.Get(ctx, playerID); err != nil {
-		if errors.Is(err, lifecycle.ErrPlayerNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	entityID, err = entity.BuildEntityID(playerID, player.EntityKindPlayer)
-	if err != nil {
-		return 0, false, err
-	}
-	return entityID, true, nil
 }

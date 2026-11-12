@@ -1374,6 +1374,7 @@ func TestGateGeneratedBusinessConsumer(t *testing.T) {
 import (
  "testing"
  playertcp "example.com/planet/internal/access/player/tcp"
+ kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
  gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 )
 func TestGeneratedGateTransportSelection(t *testing.T) {
@@ -1381,6 +1382,10 @@ func TestGeneratedGateTransportSelection(t *testing.T) {
  if playerTransport(Options{},local) != local { t.Fatal("default changed from local TCP") }
  options := gatewiring.DefaultOptions()
  if _,ok := playerTransport(Options{GameIngress:&options},local).(*playertcp.IngressMod); !ok { t.Fatal("Gate option did not select Game Ingress") }
+ discovery := kitetcd.NewEtcdMod()
+ if playerDiscovery(Options{},discovery) != discovery || playerDiscovery(Options{GameIngress:&options},discovery) != discovery { t.Fatal("the etcd Mod changed although Game Ingress does not register discovery") }
+ options.RegisterDiscovery = true
+ if playerDiscovery(Options{GameIngress:&options},discovery) == discovery { t.Fatal("Game Ingress registers discovery but the etcd Mod still registers the service") }
 }
 `
 	if err := os.WriteFile(filepath.Join(root, "internal/bootstrap/gate_transport_test.go"), []byte(bootstrapTest), 0644); err != nil {

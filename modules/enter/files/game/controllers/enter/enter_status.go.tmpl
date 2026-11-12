@@ -8,11 +8,15 @@ import (
 	"time"
 
 	gameenter "{{MODULE}}/game/enter"
+	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 // 这个文件是会话激活之后给客户端的告知（EnterStatus 推送）：本服能不能进、要不要先新建。
@@ -100,4 +104,24 @@ func (controller *Controller) built(ctx context.Context, playerID int64) (bool, 
 		return false, err
 	}
 	return syncsender.NewEnterBuiltSender(controller.nestClient).Sync_EnterBuilt(ctx, entityID)
+}
+
+// find 加载玩家的档，不创建。found 为 false 表示持久层确认没有这个实体；别的错误（数据库、解码、超时、
+// 删过档）原样返回，不当成“没有”。
+func (controller *Controller) find(ctx context.Context, playerID int64) (entityID int64, found bool, err error) {
+	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	if err != nil {
+		return 0, false, err
+	}
+	if _, err := entities.Get(ctx, playerID); err != nil {
+		if errors.Is(err, lifecycle.ErrPlayerNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	entityID, err = entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return 0, false, err
+	}
+	return entityID, true, nil
 }

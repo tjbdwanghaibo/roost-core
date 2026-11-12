@@ -580,3 +580,40 @@ func TestMailBroadcastSkeletonDescribesTheWholeAudience(t *testing.T) {
 		}
 	}
 }
+
+// 独立 Gate：Game Ingress 自己登记发现候选时（GameIngress.RegisterDiscovery），承载玩家 TCP 的服务的 etcd Mod
+// 不能再自动登记——一个 Discovery 只有一个登记拥有者，两者都登记的进程在启动时以
+// "etcd Discovery: service is already registered" 退出（2026-11-12 真实进程演练）。生成的 bootstrap 经
+// playerDiscovery 选 etcd Mod；只包住承载玩家 TCP 的那个服务，没有玩家 TCP 的工程不生成这个函数。
+func TestBootstrapLetsGameIngressOwnTheDiscoveryRegistration(t *testing.T) {
+	m := gameTemplateManifest(t)
+	plain := renderBootstrap(m)
+	if strings.Contains(plain, "playerDiscovery") {
+		t.Fatalf("a project without player TCP renders playerDiscovery:\n%s", plain)
+	}
+	m.Access = map[string]AccessSpec{"player": {Service: "game", Transports: []string{"tcp"}}}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(effectiveServiceMods(m, "game"), "etcd") {
+		t.Fatalf("the game service of the game template has no etcd Mod: %v", effectiveServiceMods(m, "game"))
+	}
+	generated := renderBootstrap(m)
+	for _, want := range []string{
+		"func playerDiscovery(options Options, local app.Mod) app.Mod {",
+		"if options.GameIngress == nil || !options.GameIngress.RegisterDiscovery { return local }",
+		"return kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration())",
+	} {
+		if !strings.Contains(generated, want) {
+			t.Fatalf("generated bootstrap misses %q:\n%s", want, generated)
+		}
+	}
+	if got := strings.Count(generated, "playerDiscovery(options, kitetcd.NewEtcdMod())"); got != 1 {
+		t.Fatalf("playerDiscovery wraps %d etcd Mods, want only the one of the service that owns player TCP:\n%s", got, generated)
+	}
+	game := generated[strings.Index(generated, `a.RegisterServer(app.ServiceName("game")`):]
+	game = game[:strings.Index(game, ")\n")+1]
+	if !strings.Contains(game, "playerDiscovery(options, kitetcd.NewEtcdMod())") || !strings.Contains(game, "playerTransport(options, accessplayertcp.NewMod()") {
+		t.Fatalf("the game service does not choose both its transport and its discovery by the options:\n%s", game)
+	}
+}

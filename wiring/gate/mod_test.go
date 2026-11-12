@@ -300,3 +300,70 @@ func TestDiscoveryFixedRouteAndRegistrationOwnership(t *testing.T) {
 		t.Fatal("took ownership of another registration")
 	}
 }
+
+// 进服票据（enter:<票据>，登录入口的 /portal/enter 给客户端的那一种）：缺省认证器把它原样交给 account 的
+// EnterServer。新号的第一次握手建出“账号 ↔ 玩家号”的映射，再握手拿到同一个玩家号；路由服是承载服。
+// 票据无效、拿账号票据冒充、前缀后面是空的，一律按未认证拒绝，并且不建映射。
+func TestAccountAuthenticatorAcceptsAnEnterTicket(t *testing.T) {
+	const sid = int32(1000)
+	ctx := context.Background()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nextID atomic.Int64
+	service, err := account.New(account.Config{
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: versionstore.NewMemoryStore[int64, account.Role](),
+		Servers: versionstore.NewMemoryStore[int32, account.GameServer](), Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
+		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
+			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     account.AllocatorFunc(func(context.Context, int32) (int64, error) { return 7000 + nextID.Add(1), nil }),
+		NameRules:     account.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "gate-enter-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpsertServer(ctx, account.GameServer{ID: sid, Status: account.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	acct, err := service.Login(ctx, account.Identity{Channel: "dev", OpenID: "newcomer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountTicket, err := service.IssueAccountTicket(ctx, acct.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enter, err := service.IssueEnterTicket(ctx, acct.ID, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := AccountAuthenticator{Accounts: service}
+	for _, bad := range []string{"enter:", "enter:" + accountTicket.Ticket, "enter:" + enter.Ticket + "x", "enter:et1.1.1000.bm8.c2ln"} {
+		if _, err := auth.Authenticate(ctx, bad, nil); !errors.Is(err, gateway.ErrUnauthenticated) {
+			t.Fatalf("Authenticate(%q) = %v, want ErrUnauthenticated", bad, err)
+		}
+	}
+	if _, err := service.RoleOnServer(ctx, acct.ID, sid); !errors.Is(err, account.ErrRoleMissing) {
+		t.Fatalf("refused tickets must not create the mapping: RoleOnServer = %v", err)
+	}
+	first, err := auth.Authenticate(ctx, "enter:"+enter.Ticket, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PlayerID != 7001 || first.ServerID != sid || !first.Authenticated() {
+		t.Fatalf("first handshake principal = %+v, want player 7001 on server %d", first, sid)
+	}
+	if got := first.Claims[account.OriginServerIDClaim]; got != strconv.Itoa(int(sid)) {
+		t.Fatalf("OriginServerIDClaim = %q, want %d", got, sid)
+	}
+	again, err := auth.Authenticate(ctx, "enter:"+enter.Ticket, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.PlayerID != first.PlayerID || again.SessionID == first.SessionID {
+		t.Fatalf("second handshake principal = %+v, want the same player on a new session (first %+v)", again, first)
+	}
+}
