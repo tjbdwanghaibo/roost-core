@@ -12,6 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"slices"
@@ -32,6 +33,7 @@ import (
 	"{{MODULE}}/game/playeraccess"
 	gamescene "{{MODULE}}/game/scene"
 	sceneservice "{{MODULE}}/game/scene/service"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -199,6 +201,56 @@ func TestMonsterSpawnVisibleAndPBInspect(t *testing.T) {
 	if err != nil || out.Code != 0 || out.LifeSeq != 1 || out.HP != 100 {
 		t.Fatalf("inspect=%+v %v", out, err)
 	}
+}
+func TestMonsterInspectRefusalsCarryBusinessCodes(t *testing.T) {
+	f := newMonsterFixture(t)
+	p := f.player()
+	m := f.spawn(rules.DefaultSpec())
+	c, err := monstercontroller.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &playeraccess.Context{PlayerID: p.UniqueID()}
+	refused := func(name string, viewer *playeraccess.Context, id int64, want int32) {
+		t.Helper()
+		out, err := c.HandleMonsterInspect(viewer, &pb.MonsterInspectRequest{MonsterID: id})
+		if err != nil || out.Code != want || out.Reason == "" || out.MonsterID != 0 || out.HP != 0 {
+			t.Fatalf("%s: %+v %v, want code %d", name, out, err, want)
+		}
+	}
+	codes := []int32{apperrors.ErrMonsterInvalid.Code(), apperrors.ErrMonsterGone.Code(), apperrors.ErrMonsterNotHere.Code()}
+	for i, code := range codes {
+		if code <= errcode.FrameworkCodeLast || slices.Index(codes, code) != i {
+			t.Fatalf("monster codes are not distinct business codes: %v", codes)
+		}
+	}
+	refused("a player id", ctx, p.ID(), apperrors.ErrMonsterInvalid.Code())
+	missing, err := entity.BuildEntityID(999, monster.EntityKindMonster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused("an id no monster has", ctx, missing, apperrors.ErrMonsterGone.Code())
+	// 查看者自己不存在（没进入游戏）仍是框架码，不能被说成“怪没了”。
+	refused("a viewer that never entered", &playeraccess.Context{PlayerID: 4242}, m.ID(), errcode.CodeEntityNotFound)
+	// 查看者离开场景：怪还活着，只是不在同一个场景。
+	scenes, err := scenecontroller.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := scenes.HandleSceneChange(ctx, &pb.SceneChangeRequest{FromID: 1}); err != nil || out.Code != 0 {
+		t.Fatalf("leave=%+v %v", out, err)
+	}
+	refused("another scene", ctx, m.ID(), apperrors.ErrMonsterNotHere.Code())
+	if out, err := scenes.HandleSceneChange(ctx, &pb.SceneChangeRequest{ToID: 1}); err != nil || out.Code != 0 {
+		t.Fatalf("enter=%+v %v", out, err)
+	}
+	if out, err := c.HandleMonsterInspect(ctx, &pb.MonsterInspectRequest{MonsterID: m.ID()}); err != nil || out.Code != 0 || out.HP != 100 {
+		t.Fatalf("inspect after refusals=%+v %v", out, err)
+	}
+	if _, err := f.manager.Damage(context.Background(), m.ID(), 1, 100); err != nil {
+		t.Fatal(err)
+	}
+	refused("a dead monster", ctx, m.ID(), apperrors.ErrMonsterGone.Code())
 }
 func TestMonsterPatrolMovesThroughActor(t *testing.T) {
 	f := newMonsterFixture(t)

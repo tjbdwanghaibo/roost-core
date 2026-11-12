@@ -103,7 +103,8 @@ func (run *Dungeon) Defeated(instance string, epoch uint64, source string, seque
 	if instance != run.instance() || epoch != 1 {
 		return logic.Snapshot{}, level.ErrStale
 	}
-	if enemy != "minion" && enemy != "boss" {
+	// 认识哪些敌人只由规则文件决定（logic.KnownEnemy 读关卡定义），这里不另写一份名单。
+	if !logic.KnownEnemy(enemy) {
 		return logic.Snapshot{}, apperrors.ErrDungeonInvalid
 	}
 	before := machine.Snapshot().Phase
@@ -115,7 +116,7 @@ func (run *Dungeon) Defeated(instance string, epoch uint64, source string, seque
 		run.resolve(machine, now)
 		return run.snapshot()
 	}
-	if err := machine.Handle(level.Event{Instance: instance, Epoch: epoch, Source: source, Sequence: sequence, Kind: "enemy.defeated", Fields: map[string]level.Value{"enemy": level.String(enemy)}}, now); err != nil {
+	if err := machine.Handle(level.Event{Instance: instance, Epoch: epoch, Source: source, Sequence: sequence, Kind: logic.EventEnemyDefeated, Fields: map[string]level.Value{logic.FieldEnemy: level.String(enemy)}}, now); err != nil {
 		return logic.Snapshot{}, err
 	}
 	run.resolve(machine, now)

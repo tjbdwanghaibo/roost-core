@@ -61,17 +61,22 @@ func (c *EquipmentComponent) Equip(itemID int64, level int32) (slot int32, repla
 		return 0, 0, apperrors.ErrEquipmentLevelInvalid
 	}
 	previous, oldLevel, worn := c.Worn(slot)
-	if worn && previous == itemID && oldLevel == level {
+	sameItem := worn && previous == itemID
+	if sameItem && oldLevel == level {
 		return slot, 0, nil
 	}
-	if _, err = c.owner.BagComp().Remove(itemID, 1); err != nil {
-		return 0, 0, err
-	}
-	if worn {
-		if _, err = c.owner.BagComp().Add(previous, 1); err != nil {
+	// 同一件道具只换等级时穿着的还是这一件：背包不动（不扣新的、不退旧的），replaced 为 0；
+	// 下面照常写穿戴事实并执行变化钩子，属性联动据此重算。
+	if !sameItem {
+		if _, err = c.owner.BagComp().Remove(itemID, 1); err != nil {
 			return 0, 0, err
 		}
-		replaced = previous
+		if worn {
+			if _, err = c.owner.BagComp().Add(previous, 1); err != nil {
+				return 0, 0, err
+			}
+			replaced = previous
+		}
 	}
 	piece := &db.GearPiece{}
 	piece.SetItemID(itemID)

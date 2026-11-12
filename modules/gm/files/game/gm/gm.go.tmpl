@@ -121,7 +121,12 @@ func (r *runtime) install(def Definition) error {
 			slog.InfoContext(ctx, "gm: executing", "command", command.Name, "trace_id", command.TraceID,
 				"operator", command.Operator, "note", meta.Note)
 			result, err = def.Handler(ctx, r.registry, command)
-			slog.InfoContext(ctx, "gm: completed", "command", command.Name, "trace_id", command.TraceID, "operator", command.Operator, "code", errcode.CodeOf(err))
+			// 结果码：成功是 0；errcode.CodeOf(nil) 给的是 internal，不能直接拿来记成功的那条。
+			code := errcode.CodeOK
+			if err != nil {
+				code = errcode.CodeOf(err)
+			}
+			slog.InfoContext(ctx, "gm: completed", "command", command.Name, "trace_id", command.TraceID, "operator", command.Operator, "code", code)
 			return result, err
 		}})
 }

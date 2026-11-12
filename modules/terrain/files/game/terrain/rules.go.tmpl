@@ -8,6 +8,7 @@ import (
 	"fmt"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 const MaxMaps = 4
@@ -16,12 +17,22 @@ const MaxBuildings int32 = 32
 const EditReach int64 = 1600
 const MaxRadius int64 = 400
 
-var ErrInvalid = errors.New("terrain: invalid request")
-var ErrDenied = errors.New("terrain: scene, distance or ownership denied")
-var ErrSequence = errors.New("terrain: stale, conflicting or nonconsecutive sequence")
-var ErrOccupied = errors.New("terrain: occupied footprint")
+// 玩家自己能触发的正常拒绝，每种一个业务码（定义在 internal/errors/terrain.go）；端点把码填进应答，
+// 调用方用 errors.Is 判别。被拒的命令不写任何东西、不消耗序号。
+var (
+	ErrInvalid  = apperrors.ErrTerrainInvalid  // 请求本身不合规
+	ErrDenied   = apperrors.ErrTerrainDenied   // 不在这张图、离得太远、不是属主
+	ErrSequence = apperrors.ErrTerrainSequence // 序号不连续或同号换了内容；用 TerrainQuery 的 LastSequence 续号
+	ErrOccupied = apperrors.ErrTerrainOccupied // 脚下或落点有建筑
+	ErrSite     = apperrors.ErrTerrainSite     // 出生点受保护，或落点在水下 / 太陡
+	ErrFull     = apperrors.ErrTerrainFull     // 建筑数到上限
+)
+
+// 下面两个不是玩家的拒绝，不带业务码：端点答框架的内部码并记 Error。
+// ErrBase：持久地形的 BaseRevision 与地形包不符，要先显式迁移。
+// ErrState：持久数据或服务端传入的参与者与这张图对不上（实体号、块坐标、占地与建筑不一致）。
 var ErrBase = errors.New("terrain: persisted base revision requires explicit migration")
-var ErrFull = errors.New("terrain: building limit")
+var ErrState = errors.New("terrain: persisted or routed state does not match this map")
 
 // Command只由controller规范化；客户端不给块ID、owner或地形数组。摘要包含完整操作与地图身份。
 type Command struct {
@@ -73,7 +84,10 @@ func (c Command) Validate(meta core.Meta) error {
 	if c.Radius < 1 || c.Radius > MaxRadius {
 		return ErrInvalid
 	}
-	return c.Brush().Validate(meta, core.Limits{Bedrock: 0, Ceiling: 200})
+	if err := c.Brush().Validate(meta, core.Limits{Bedrock: 0, Ceiling: 200}); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return nil
 }
 func ChunkUnique(sceneID int64, key core.ChunkKey) (int64, error) {
 	if sceneID < 2 || sceneID > MaxSceneID || key.X < 0 || key.X >= core.MaxChunksPerSide || key.Y < 0 || key.Y >= core.MaxChunksPerSide {

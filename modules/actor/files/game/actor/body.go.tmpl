@@ -24,7 +24,10 @@ const (
 	MaxConfiguredPathPoints          = 4096
 )
 
+// ErrCannotMove / ErrPathTooLong 是 Walk / Follow 的两种正常拒绝。Body 由 Player、怪物与别的工程共用，
+// 不认识工程的错误码；要答复客户端的一侧（Player 的 ActorComp().MoveRefusal）用 errors.Is 换成业务码。
 var ErrCannotMove = errors.New("actor: movement is disabled")
+var ErrPathTooLong = errors.New("actor: path has too many points")
 var Catalog = newCatalog()
 
 func newCatalog() *state.Catalog {
@@ -194,7 +197,7 @@ func (body *Body) Walk(path []spatial.Point, speed float64) error {
 		return ErrCannotMove
 	}
 	if len(path) > body.config.MaxPathPoints {
-		return fmt.Errorf("actor: path exceeds %d points", body.config.MaxPathPoints)
+		return fmt.Errorf("%w: limit %d", ErrPathTooLong, body.config.MaxPathPoints)
 	}
 	if _, err := body.Move.MoveTo(path, speed); err != nil {
 		return err

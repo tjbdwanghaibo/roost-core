@@ -2,8 +2,11 @@ package activity_alliance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/game/activity"
@@ -207,6 +211,105 @@ func TestAllianceActivityFailureLeavesNoActivation(t *testing.T) {
 	values, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0)
 	if err != nil || len(values) != 0 {
 		t.Fatalf("rollback=%+v %v", values, err)
+	}
+}
+
+// scopeRows 只换 activity 这张表（其余表原样带上），用例结束时把缺省 Store 与运行期配置换回。
+func scopeRows(t *testing.T, rows ...activity.Definition) {
+	t.Helper()
+	previous, config := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(config) })
+	dir := t.TempDir()
+	entries, err := os.ReadDir("../../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" || e.Name() == "_manifest.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../../configs/data", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, e.Name()), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "activity.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err = generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Trigger=created 的联盟活动在建盟之后由恢复扫描自动激活：扫描的调用形态是 Pulse(target, "", 0)，
+// 不带创建时间，创建事实取自联盟自己的持久建盟时间。建盟时间以秒落库（AllianceDao.CreatedAtUnix），
+// 活动引擎用毫秒，时间线必须锚在“建盟时刻 + DelayMillis”上。没建成的联盟没有创建事实，不激活。
+func TestAllianceActivityCreatedTriggerStartsFromTheFoundingTime(t *testing.T) {
+	f := newScopeFixture(t)
+	scopeRows(t, activity.Definition{ID: 2, Version: 1, Scope: "alliance", Trigger: "created", DelayMillis: 60000, WarmupMillis: 1000, OpenMillis: 5000, Repeat: "none", Catchup: "queue"})
+	scan := func() []activity.Snapshot {
+		t.Helper()
+		views, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return views
+	}
+	if views := scan(); len(views) != 0 {
+		t.Fatalf("an alliance nobody founded activated %+v", views)
+	}
+	// 建盟走联盟自己的规则入口，写下的是秒。
+	foundedUnix := f.now.Load() / 1000
+	if err := f.call(func(h activity.Host) error {
+		return h.Owner.(*host.Alliance).AllianceRosterComp().Found("seven", 100, 1000, true, "found-seven", foundedUnix)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add(30500) // 扫描在建盟 30.5 秒之后才轮到这个联盟
+	views := scan()
+	if len(views) != 1 {
+		t.Fatalf("after the founding the scan sees %+v, want the created-trigger activity", views)
+	}
+	start := foundedUnix*1000 + 60000
+	if got := views[0]; got.Token.Definition != 2 || got.Token.Scope != "alliance" || got.Token.Owner != f.owner.ID() || got.Start != start || got.OpenAt != start+1000 || got.CloseAt != start+6000 {
+		t.Fatalf("activity = %+v, want it anchored at the founding time in milliseconds (start %d)", got, start)
+	}
+	if views[0].Token.Phase == activity.Open || views[0].Token.Phase == activity.Settling || views[0].Token.Phase == activity.Ended {
+		t.Fatalf("phase %v before the start time: the timeline is not anchored on the founding", views[0].Token.Phase)
+	}
+	// 再扫不重置锚点；到开启时间后进入 Open。
+	f.now.Store(start + 1000)
+	views = scan()
+	if len(views) != 1 || views[0].Start != start || views[0].Token.Generation != 1 || views[0].Token.Phase != activity.Open {
+		t.Fatalf("at the open time: %+v", views)
+	}
+	// 最后一名成员（盟主）退出后联盟解散：之后才配置的 created 定义不在它身上新激活，已激活的时间线照常保留。
+	if err := f.call(func(h activity.Host) error {
+		roster := h.Owner.(*host.Alliance).AllianceRosterComp()
+		if err := roster.CheckRemoval(100, 100); err != nil {
+			return err
+		}
+		roster.Remove(100)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	scopeRows(t,
+		activity.Definition{ID: 2, Version: 1, Scope: "alliance", Trigger: "created", DelayMillis: 60000, WarmupMillis: 1000, OpenMillis: 5000, Repeat: "none", Catchup: "queue"},
+		activity.Definition{ID: 3, Version: 1, Scope: "alliance", Trigger: "created", WarmupMillis: 1000, OpenMillis: 5000, Repeat: "none", Catchup: "queue"})
+	if views = scan(); len(views) != 1 || views[0].Token.Definition != 2 || views[0].Start != start {
+		t.Fatalf("a disbanded alliance: %+v, want only the activity that was already running", views)
 	}
 }
 

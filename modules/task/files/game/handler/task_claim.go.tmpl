@@ -5,7 +5,9 @@ import (
 	"{{MODULE}}/protocol/pb"
 )
 
-// handlerTaskClaim 领取一个已完成任务今天的奖励。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
+// handlerTaskClaim 领取一个已完成任务在当前周期的奖励：每日任务每个业务日一次、每周任务每个业务周一次、
+// 永久任务终身一次；过期周期不补领。奖励的种类由任务表定（金币内置，道具由 bag 联动登记），
+// 发奖与“领过”的事实在同一笔事务里。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
 //
 //roost:nest rollback=undo durability=strict
 func handlerTaskClaim(target player.ITaskEntity, request *pb.TaskClaimRequest, nowUnixMilli int64) (*pb.TaskClaimResponse, error) {

@@ -15,7 +15,7 @@ errcodes: [attribute_overflow]
 verify:
   packages: [./game/handler, ./game/gameplay/attribute]
   run: ^TestAttribute
-  pass: 16
+  pass: 17
 with:
   equipment:
     summary: 穿卸同事务重算属性；加载按已穿装备重建非持久层

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -153,8 +156,8 @@ func (f *terrainFixture) start() {
 }
 func (f *terrainFixture) move(playerID, from, to int64) {
 	f.t.Helper()
-	if _, err := f.change.HandleSceneChange(&playeraccess.Context{PlayerID: playerID}, &pb.SceneChangeRequest{FromID: from, ToID: to}); err != nil {
-		f.t.Fatal(err)
+	if response, err := f.change.HandleSceneChange(&playeraccess.Context{PlayerID: playerID}, &pb.SceneChangeRequest{FromID: from, ToID: to}); err != nil || response.Code != 0 {
+		f.t.Fatalf("scene change %d -> %d: %+v %v", from, to, response, err)
 	}
 }
 func (f *terrainFixture) shutdown() {
@@ -463,24 +466,25 @@ func TestTerrainRejectsFarAndMalformedBrushes(t *testing.T) {
 	}
 	bad = brush(1)
 	bad.Radius = logic.MaxRadius + 1
-	if _, err := f.execute(bad); err == nil {
-		t.Fatal("large brush accepted")
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrInvalid) {
+		t.Fatalf("large brush=%v", err)
 	}
 	bad = brush(1)
 	bad.X = -1
-	if _, err := f.execute(bad); err == nil {
-		t.Fatal("negative coordinate accepted")
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrInvalid) {
+		t.Fatalf("negative coordinate=%v", err)
 	}
+	// 出生点受保护说的是“这块地”，不是“你没有权限”：与越权分开答。
 	bad = brush(1)
 	bad.X = 6000
 	bad.Y = 6000
-	if _, err := f.execute(bad); !errors.Is(err, logic.ErrDenied) {
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrSite) || errors.Is(err, logic.ErrDenied) {
 		t.Fatalf("spawn edit=%v", err)
 	}
 	bad = build(1)
 	bad.X = 6000
 	bad.Y = 6000
-	if _, err := f.execute(bad); !errors.Is(err, logic.ErrDenied) {
+	if _, err := f.execute(bad); !errors.Is(err, logic.ErrSite) || errors.Is(err, logic.ErrDenied) {
 		t.Fatalf("spawn building=%v", err)
 	}
 	if f.commit.writes.Load() != writes {
@@ -819,6 +823,178 @@ func TestTerrainPBEndpointsUseAuthenticatedIdentityAndGeneratedCodec(t *testing.
 	if _, err := f.controller.HandleTerrainBrush(nil, request); err == nil {
 		t.Fatal("unauthenticated accepted")
 	}
+}
+
+// terrainErrorLogs 数 Error 及以上的日志条数：正常拒绝客户端已经拿到码，不应该再留下 Error。
+type terrainErrorLogs struct{ count atomic.Int64 }
+
+func (h *terrainErrorLogs) Enabled(context.Context, slog.Level) bool { return true }
+func (h *terrainErrorLogs) Handle(_ context.Context, record slog.Record) error {
+	if record.Level >= slog.LevelError {
+		h.count.Add(1)
+	}
+	return nil
+}
+func (h *terrainErrorLogs) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *terrainErrorLogs) WithGroup(string) slog.Handler      { return h }
+func captureTerrainErrors(t *testing.T) *terrainErrorLogs {
+	t.Helper()
+	logs := &terrainErrorLogs{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() {
+		slog.SetDefault(previous)
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
+	return logs
+}
+
+// 每种正常拒绝各有一个业务码，经PB端点答在Code/Reason里：不返回error、不写、不消耗序号、不记Error。
+func TestTerrainEndpointsAnswerEachRefusalWithItsOwnCode(t *testing.T) {
+	f := newTerrainFixture(t)
+	logs := captureTerrainErrors(t)
+	owner := &playeraccess.Context{PlayerID: terrainPlayer}
+	other := &playeraccess.Context{PlayerID: terrainPlayer + 1}
+	start := f.commit.writes.Load()
+	codes := map[string]int32{}
+	for name, def := range map[string]*errcode.IntError{"invalid": logic.ErrInvalid, "denied": logic.ErrDenied, "sequence": logic.ErrSequence, "occupied": logic.ErrOccupied, "site": logic.ErrSite, "full": logic.ErrFull} {
+		code, reason := errcode.ClientError(def)
+		if code <= errcode.FrameworkCodeLast || reason == "" {
+			t.Fatalf("%s: code %d reason %q is not a business refusal", name, code, reason)
+		}
+		for prior, used := range codes {
+			if used == code {
+				t.Fatalf("%s and %s share code %d", name, prior, code)
+			}
+		}
+		codes[name] = code
+	}
+	refused := func(name, want string, code int32, reason string, result *pb.TerrainEditResult, err error) {
+		t.Helper()
+		if err != nil || code != codes[want] || reason == "" || result != nil {
+			t.Fatalf("%s: code=%d reason=%q result=%+v err=%v, want terrain_%s (%d)", name, code, reason, result, err, want, codes[want])
+		}
+	}
+	brushRequest := func(seq int64) *pb.TerrainBrushRequest {
+		return &pb.TerrainBrushRequest{SceneID: 2, Sequence: seq, Op: "raise", X: 6400, Y: 6400, Radius: 150, Strength: 2}
+	}
+	// 请求不合规：端点预检与规则校验是同一个码。
+	bad := brushRequest(1)
+	bad.Op = "dig"
+	b, err := f.controller.HandleTerrainBrush(owner, bad)
+	refused("unknown op", "invalid", b.Code, b.Reason, b.Result, err)
+	bad = brushRequest(1)
+	bad.Strength = 21
+	b, err = f.controller.HandleTerrainBrush(owner, bad)
+	refused("strength above the limit", "invalid", b.Code, b.Reason, b.Result, err)
+	bad = brushRequest(1)
+	bad.Radius = 401
+	b, err = f.controller.HandleTerrainBrush(owner, bad)
+	refused("radius above the limit", "invalid", b.Code, b.Reason, b.Result, err)
+	q, err := f.controller.HandleTerrainQuery(owner, &pb.TerrainQueryRequest{SceneID: 2, X: 9, Y: 9})
+	refused("query outside the map", "invalid", q.Code, q.Reason, nil, err)
+	if q.Chunk != nil {
+		t.Fatal("refused query returned a chunk")
+	}
+	// 与“玩家是谁、在哪”有关。
+	bad = brushRequest(1)
+	bad.X = 10000
+	b, err = f.controller.HandleTerrainBrush(owner, bad)
+	refused("too far", "denied", b.Code, b.Reason, b.Result, err)
+	bad = brushRequest(1)
+	bad.SceneID = 9
+	b, err = f.controller.HandleTerrainBrush(owner, bad)
+	refused("not a terrain scene", "denied", b.Code, b.Reason, b.Result, err)
+	// 序号错了：按应答去重查 LastSequence，从它的下一个接着发。
+	b, err = f.controller.HandleTerrainBrush(owner, brushRequest(3))
+	refused("sequence gap", "sequence", b.Code, b.Reason, b.Result, err)
+	q, err = f.controller.HandleTerrainQuery(owner, &pb.TerrainQueryRequest{SceneID: 2})
+	if err != nil || q.Code != 0 || q.LastSequence != 0 {
+		t.Fatalf("query after the sequence refusal: %+v %v", q, err)
+	}
+	if f.commit.writes.Load() != start {
+		t.Fatalf("refused edits wrote %d times", f.commit.writes.Load()-start)
+	}
+	built, err := f.controller.HandleTerrainBuild(owner, &pb.TerrainBuildRequest{SceneID: 2, Sequence: q.LastSequence + 1, X: 6300, Y: 6300})
+	if err != nil || built.Code != 0 || !built.Result.Standing {
+		t.Fatalf("build with the queried sequence: %+v %v", built, err)
+	}
+	writes := f.commit.writes.Load()
+	// 这里不能建 / 不能刷：有建筑、出生点受保护。
+	o, err := f.controller.HandleTerrainBuild(other, &pb.TerrainBuildRequest{SceneID: 2, Sequence: 1, X: 6300, Y: 6300})
+	refused("overlapping building", "occupied", o.Code, o.Reason, o.Result, err)
+	b, err = f.controller.HandleTerrainBrush(owner, brushRequest(2))
+	refused("brush under a building", "occupied", b.Code, b.Reason, b.Result, err)
+	o, err = f.controller.HandleTerrainBuild(owner, &pb.TerrainBuildRequest{SceneID: 2, Sequence: 2, X: 6000, Y: 6000})
+	refused("building on the spawn point", "site", o.Code, o.Reason, o.Result, err)
+	rm, err := f.controller.HandleTerrainRemove(other, &pb.TerrainRemoveRequest{SceneID: 2, Sequence: 1, X: 6300, Y: 6300})
+	refused("removing someone else's building", "denied", rm.Code, rm.Reason, rm.Result, err)
+	if f.commit.writes.Load() != writes {
+		t.Fatal("a refused request wrote")
+	}
+	f.ledger(1, 1)
+	if logs.count.Load() != 0 {
+		t.Fatalf("normal refusals logged %d errors", logs.count.Load())
+	}
+	// 拒绝没有消耗序号，同一条连接上接着发下一个序号成功。
+	rm, err = f.controller.HandleTerrainRemove(owner, &pb.TerrainRemoveRequest{SceneID: 2, Sequence: 2, X: 6300, Y: 6300})
+	if err != nil || rm.Code != 0 || rm.Result.Standing {
+		t.Fatalf("remove after refusals: %+v %v", rm, err)
+	}
+}
+
+// 落点太陡是“这块地不能建”，不是请求不合规；整平之后同一个序号可以再建。
+func TestTerrainUnevenGroundRefusesBuildingWithSiteCode(t *testing.T) {
+	f := newTerrainFixture(t)
+	raise := brush(1)
+	raise.Strength = 6
+	f.must(raise)
+	site := build(2)
+	site.X, site.Y = 6500, 6500
+	writes := f.commit.writes.Load()
+	if _, err := f.execute(site); !errors.Is(err, logic.ErrSite) || errors.Is(err, logic.ErrInvalid) {
+		t.Fatalf("building across a 60cm step=%v", err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("refused building wrote")
+	}
+	f.ledger(1, 0)
+	flat := build(2)
+	flat.X, flat.Y = 6700, 6700
+	if result := f.must(flat); !result.Standing {
+		t.Fatalf("flat ground refused: %+v", result)
+	}
+}
+
+// 不是玩家的拒绝（提交失败、参与者与地图对不上）不带业务码：端点答框架的内部码、记Error、连接保留。
+func TestTerrainInternalFailureAnswersInternalCodeAndIsLogged(t *testing.T) {
+	f := newTerrainFixture(t)
+	logs := captureTerrainErrors(t)
+	f.commit.reject.Store(true)
+	response, err := f.controller.HandleTerrainBrush(&playeraccess.Context{PlayerID: terrainPlayer}, &pb.TerrainBrushRequest{SceneID: 2, Sequence: 1, Op: "raise", X: 6400, Y: 6400, Radius: 150, Strength: 2})
+	f.commit.reject.Store(false)
+	if err != nil || response.Code != errcode.CodeInternal || response.Result != nil {
+		t.Fatalf("commit failure: %+v %v", response, err)
+	}
+	if logs.count.Load() != 1 {
+		t.Fatalf("internal failure logged %d errors, want 1", logs.count.Load())
+	}
+	world := f.world(2)
+	ids := []int64{}
+	for _, key := range world.Keys() {
+		unique, _ := logic.ChunkUnique(2, key)
+		id, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+		ids = append(ids, id)
+	}
+	_, err = sender.NewTerrainSender(f.engine).MultiGroupSync_TerrainLoad(context.Background(), ids[:1], world)
+	if !errors.Is(err, logic.ErrState) || errcode.CodeOf(err) != errcode.CodeInternal {
+		t.Fatalf("participant mismatch=%v", err)
+	}
+	if errcode.CodeOf(logic.ErrBase) != errcode.CodeInternal {
+		t.Fatal("base revision mismatch became a business refusal")
+	}
+	f.ledger(0, 0)
 }
 func TestTerrainCorruptPackAndMapBudgetAreRejected(t *testing.T) {
 	f := newTerrainFixture(t)

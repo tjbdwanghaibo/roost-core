@@ -1,0 +1,12 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerTeamInviteNote 只锁被邀请人：把一份已经提交的邀请记进他的收件记录，供 TeamInvites 查询。
+// 由邀请方的端点在邀请提交之后调用，没有客户端协议。记录只是提示（权威在 Team 上，有效期至多一分钟），
+// 所以写入 WAL 即可回复，不等刷盘。返回这份邀请有没有记下。
+//
+//roost:nest rollback=undo durability=async
+func handlerTeamInviteNote(member player.ITeamEntity, teamID int64, inviter int64, expireAt int64, nowUnixMilli int64) (bool, error) {
+	return member.TeamComp().NoteInvite(teamID, inviter, expireAt, nowUnixMilli), nil
+}

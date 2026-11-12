@@ -9,4 +9,4 @@ protocols: [LeaderboardTop, LeaderboardMe]
 verify:
   packages: [./game/leaderboard, ./game/controllers/leaderboard]
   run: ^TestLeaderboard
-  pass: 20
+  pass: 21

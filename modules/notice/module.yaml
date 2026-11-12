@@ -1,5 +1,5 @@
 name: notice
-summary: 公告与跑马灯：可信服务端入口和GM命令，复用chat系统发布、历史和在线推送，默认不周期播放
+summary: 公告与跑马灯：可信服务端入口，复用chat系统发布、历史和在线推送，默认不周期播放；运维命令与gm联动提供
 requires: [chat]
 runtime:
   package: game/notice
@@ -8,3 +8,10 @@ verify:
   packages: [./game/notice]
   run: ^TestNotice
   pass: 8
+with:
+  gm:
+    summary: 公告与跑马灯两条运维命令经 gm 的登记点提供（操作者与备注必填、带审计）
+    verify:
+      packages: [./game/gm]
+      run: ^TestWithNoticeGM
+      pass: 4

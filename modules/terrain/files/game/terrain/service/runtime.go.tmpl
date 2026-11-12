@@ -213,7 +213,7 @@ func (r *Runtime) loadBuildings(ctx context.Context, world *logic.World, states 
 				return nil, err
 			}
 			if value.ID() != id {
-				return nil, logic.ErrInvalid
+				return nil, logic.ErrState
 			}
 			snapshot, err := r.sender.Sync_TerrainSite(ctx, value.ID(), world)
 			if err != nil {

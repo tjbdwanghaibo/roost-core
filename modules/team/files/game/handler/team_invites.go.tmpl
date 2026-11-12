@@ -1,0 +1,10 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerTeamInvites 只读本人收到的、还没过期的邀请。
+//
+//roost:nest
+func handlerTeamInvites(member player.ITeamEntity, nowUnixMilli int64) []player.TeamInvitation {
+	return member.TeamComp().Invites(nowUnixMilli)
+}

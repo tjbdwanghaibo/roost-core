@@ -1,0 +1,51 @@
+package gm
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	gamenotice "{{MODULE}}/game/notice"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+)
+
+const CommandNoticeAnnounce = "gm.notice.announce"
+const CommandNoticeMarquee = "gm.notice.marquee"
+
+// 两条命令经 gm 的登记点装进运维命令表：操作者与备注必填、执行前后各记一条审计日志、拒绝带业务码。
+// 没装 gm 模块时没有这个文件，notice 只有服务端入口。
+func init() {
+	Register(Definition{Name: CommandNoticeAnnounce, Description: "发公告：{text, key, note}；key 是稳定业务键，同键内容不可变，可重试", Handler: publishNotice("announce")})
+	Register(Definition{Name: CommandNoticeMarquee, Description: "发跑马灯：{text, key, note}；key 是稳定业务键，同键内容不可变，可重试", Handler: publishNotice("marquee")})
+}
+
+func publishNotice(kind string) func(context.Context, *app.Registry, admin.Command) (admin.Result, error) {
+	return func(ctx context.Context, registry *app.Registry, command admin.Command) (admin.Result, error) {
+		payload, err := Decode[struct {
+			Audit
+			Text string `json:"text"`
+			Key  string `json:"key"`
+		}](command)
+		if err != nil {
+			return admin.Result{}, err
+		}
+		publisher, err := gamenotice.FromRegistry(registry)
+		if err != nil {
+			return admin.Result{}, fmt.Errorf("%w: %v", apperrors.ErrGMUnavailable, err)
+		}
+		// 在实体锁之外直接调 notice 的服务端入口；它不改实体，幂等靠 key（chat 保留期内同键只存一条历史）。
+		err = publisher.Publish(ctx, kind, payload.Text, payload.Key)
+		switch {
+		case errors.Is(err, gamenotice.ErrInvalid):
+			return admin.Result{}, Invalid(err.Error())
+		case errors.Is(err, gamenotice.ErrStopped):
+			return admin.Result{}, fmt.Errorf("%w: %v", apperrors.ErrGMUnavailable, err)
+		case err != nil:
+			return admin.Result{}, err
+		}
+		return admin.Result{Data: map[string]any{"kind": kind, "key": payload.Key}}, nil
+	}
+}

@@ -25,3 +25,16 @@ func init() {
 
 func (e *Alliance) ActivityBook() *db.ActivityBook { return e.Dao().GetActivityAlliance() }
 func (e *Alliance) ActivityScope() string          { return "alliance" }
+
+// ActivityCreatedAt 是联盟的持久创建事实，供 Trigger=created 的定义使用：恢复扫描与业务入口
+// 不带创建时间调 Reconcile 时，共用组件从这里取。建盟时间以秒落库（AllianceDao.CreatedAtUnix），
+// 活动引擎的时间一律是毫秒，这里换算。
+// 没建成的联盟（没有盟主：号发出去了但没建成，或最后一名成员退出后已解散）返回 0——没有创建事实，
+// 不拿当前时间冒充，created 触发的定义不会在它身上新激活；已经激活的时间线不受影响。
+func (e *Alliance) ActivityCreatedAt() int64 {
+	dao := e.Dao()
+	if dao.GetLeaderID() == 0 || dao.GetCreatedAtUnix() <= 0 {
+		return 0
+	}
+	return dao.GetCreatedAtUnix() * 1000
+}

@@ -9,6 +9,7 @@ import (
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
 	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 const EntityKindScene entity.EntityKind = {{ID:entity:Scene}}
@@ -72,16 +73,17 @@ func (s *Scene) OnDestroy(entity.EntityDestroyReason) {
 }
 
 // Admit / Depart 必须与相关 actor 同时持锁。关闭检查、容量与成员变更同一事务，不留 Enter/Close 竞态。
+// 已关闭 / 正在关闭、满员是正常拒绝，返回带业务码的错误（scene_unavailable / scene_full）。
 func (s *Scene) Admit(id int64) error {
 	if s.Dao().GetClosed() || s.Dao().GetClosing() {
-		return fmt.Errorf("scene: closed")
+		return apperrors.ErrSceneUnavailable
 	}
 	if _, found := s.Dao().GetMembers(id); found {
 		return nil
 	}
 	s.purgeMissing()
 	if s.Dao().MembersLen() >= s.config.Capacity {
-		return fmt.Errorf("scene: full")
+		return apperrors.ErrSceneFull
 	}
 	s.Dao().SetMembers(id, true)
 	return nil

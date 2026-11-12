@@ -13,7 +13,7 @@ import (
 // in Provide, the bus handlers in Start.
 //
 // roost add rpc -entity-service generated it depending on the bus, Nest and
-// the Remote Mod, and ordered after the startup preload; the demo's Start
+// the Remote Mod, and ordered after the startup preload; Start below
 // binds the whole service (BindRegistry) where the scaffold only handed it
 // the ownership manager. The App starts Mods in dependency order, so the Data
 // Engine has drained its WAL, Nest is running and this instance's alliances

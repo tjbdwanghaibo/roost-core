@@ -1,0 +1,170 @@
+package activity
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/activity"
+	gameenter "{{MODULE}}/game/enter"
+	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+// 进入钩子场景自带的替身：只认完整实体号的 getter 与总是成功的提交器。
+type enterHookGetter map[int64]entity.IThreadSafeEntity
+
+func (g enterHookGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if v := g[id]; v != nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("missing entity %d", id)
+}
+
+func (g enterHookGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type enterHookCommitter struct{}
+
+func (enterHookCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+var enterHookResumed atomic.Int32
+
+func init() {
+	// 初始化阶段等后台工作；Resume 报告完成后，进入钩子必须用原 Token 调 Complete。
+	activity.Register("with_enter_resume", activity.Hooks{
+		Enter: func(c activity.Context) (bool, error) { return c.Snapshot.Token.Phase == activity.Initializing, nil },
+		Resume: func(context.Context, *app.Registry, activity.Snapshot) (bool, error) {
+			enterHookResumed.Add(1)
+			return true, nil
+		},
+	})
+}
+
+// 只换 activity 这张表；其余表原样带上，装载后把缺省 Store 与运行期配置一起换回。
+func enterHookRows(t *testing.T, rows ...activity.Definition) {
+	t.Helper()
+	previous, config := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(config) })
+	dir := t.TempDir()
+	entries, err := os.ReadDir("../../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" || e.Name() == "_manifest.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../../configs/data", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, e.Name()), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "activity.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err = generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 真正经过 gameenter.RunEntered 登记的进入钩子：正式 Nest、生成的 Sender 与 handler。
+// 钩子拿到的是会话里的玩家号（不是完整实体号），必须自己换成 Player 的实体号才能定位到宿主；
+// 定位不到时“每次进入对账并继续 pending”整条路都不生效。
+func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *testing.T) {
+	const playerID = int64(79301)
+	now := int64(1900000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(now) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	enterHookRows(t, activity.Definition{ID: 1, Version: 1, Scope: "player", Trigger: "fixed", StartMilli: now, WarmupMillis: 1000, OpenMillis: 2000, Repeat: "none", Catchup: "queue", Logic: "with_enter_resume"})
+
+	player.RegisterEntity()
+	handler.RegisterActivityEventNestHandlers()
+	handler.RegisterActivityCompleteNestHandlers()
+	entityID, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: entityID, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := value.(*player.Player)
+	engine := nest.NewEngine(nest.NestOptionWithGetter(enterHookGetter{entityID: p}), nest.NestOptionWithTransactionCommitter(enterHookCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err = engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+		p.{{TIMER_COMPONENT}}Comp().OnDestroy(0)
+	})
+	registry := app.NewRegistry(viper.New())
+	if err = registry.Register(app.ModName("nest"), engine); err != nil {
+		t.Fatal(err)
+	}
+
+	enterHookResumed.Store(0)
+	entered := gameenter.Entered{PlayerID: playerID, InitResult: gameenter.InitResult{FirstAtUnixMilli: now}}
+	// 只看本模块的钩子：同一个测试进程里可能还登记着别的功能的进入钩子，这个 registry 没有它们要的能力。
+	if failed := gameenter.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
+		t.Fatalf("the activity enter hook failed (failed hooks: %v)", failed)
+	}
+	if got := enterHookResumed.Load(); got != 1 {
+		t.Fatalf("Resume ran %d times, want once", got)
+	}
+	views, err := syncsender.NewActivityEventSender(engine).Sync_ActivityEvent(context.Background(), entityID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 1 || views[0].Pending || views[0].Token.Phase != activity.Warmup {
+		t.Fatalf("after the enter hook the activity is %+v, want one confirmed instance in warmup", views)
+	}
+	// 重连再进入一次：已确认的期次不再 Resume，时间线不变。
+	start := views[0].Start
+	if failed := gameenter.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
+		t.Fatalf("the activity enter hook failed on reconnect (failed hooks: %v)", failed)
+	}
+	views, err = syncsender.NewActivityEventSender(engine).Sync_ActivityEvent(context.Background(), entityID, "", 0)
+	if err != nil || len(views) != 1 || views[0].Start != start || enterHookResumed.Load() != 1 {
+		t.Fatalf("reconnect changed the instance: %+v resumed=%d err=%v", views, enterHookResumed.Load(), err)
+	}
+}

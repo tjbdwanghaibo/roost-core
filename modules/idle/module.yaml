@@ -4,6 +4,11 @@ requires: [wallet]
 needs:
   mods: [nest]
   features: [protocol, entity, dao, errcode]
+# 客户端只能从自身视图里的 Idle.Sequence 得知下一个序号（协议不回答“现在是第几号”），
+# 所以本模块的协议离不开玩家 TCP 接入与自身视图：单装（不装 enter）时由安装器代办打开。
+access:
+  transport: tcp
+  self_sync: true
 entity: Player
 state:
   - {field: Idle, type: IdleState, store: idle, dao: 'persist,sync', comment: 离线结算游标和最后成功序号；首次领取建立起点，不追溯建档之前。}

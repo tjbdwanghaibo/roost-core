@@ -12,6 +12,7 @@
     - `target` 是联盟的完整实体号。`Snapshot`、`Token` 是 `activity` 包同名类型的别名。
   - 服务实现 `Service`（`internal/rpc/activity_alliance/service.go`）：`CheckRoute`、`Pulse`、`Complete`，先核对目标种类与 Remote 所有权再进 Nest。
   - 组件：`AllianceActivityComp()`，类型 `AllianceActivityComponent` 是 `activity.Component` 的别名（`game/entities/alliance/activity_component.go`），窄接口 `IAllianceActivityEntity`。在联盟实体的 Nest 事务里调 `AllianceActivityComp().Reconcile(event, createdAt)`、`Host()`、`Rearm()`。
+  - 创建事实：`Alliance.ActivityCreatedAt()`（同一文件）返回联盟的持久建盟时间，单位毫秒（`AllianceDao.CreatedAtUnix` 以秒落库，这里乘 1000）。`Reconcile` / `Pulse` 的 `createdAt` 传 0 时共用组件从它取，所以 `Trigger=created` 的定义不需要调用方带创建时间。没建成或已解散的联盟（没有盟主）返回 0。
   - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerAllianceActivityPulse`、`handlerAllianceActivityComplete`。
 - **登记点 / 钩子**：本模块不新增登记函数。活动逻辑仍用 `activity.Register` 登记，要登记在**联盟服务进程**会加载的代码里；`Hooks` 回调拿到的 `Owner` 是 `*Alliance`，`Eligible` 读的是权威联盟实体的真实状态。
 - **状态**
@@ -26,7 +27,9 @@
 ## 能力边界
 
 - **不做的事**：不给玩家开协议，不向 game 或联盟成员推送阶段变化。不校验成员资格与操作权限：RPC 只面向可信服务器，game 的端点必须自己验证“这名玩家是不是这个联盟的成员、有没有资格”，不能把客户端声称的事件直接转发。不决定贡献归属、退盟后的领奖范围——这些是业务规则。
-- **联盟没有自动提供创建时间**：`Alliance` 实体没有实现 `ActivityCreatedAt()`。`Trigger=created` 的定义只有在调用方把创建时间显式传给 `Reconcile` 或 `Pulse` 时才会激活；恢复扫描传的是 0，只会自动激活 `fixed` 触发的定义。
+- **`created` 触发靠恢复扫描激活，不是建盟那一刻**：建盟事务（`alliance` 模块）不认识本模块，不会在同一笔事务里激活活动。`Trigger=created` 的定义由下一轮恢复扫描（或任何一次 `Pulse` / `Reconcile`）激活，时间线锚在“建盟时间 + `DelayMillis`”上，与哪一轮扫到无关；但建盟时间只精确到秒（向下取整），而且 `DelayMillis`、预热都为 0 的定义在扫到之前不会进入开启阶段——扫描晚了，开启阶段的实际可用时间就短了（期限仍按建盟时间算）。要求建盟瞬间就开启的活动，在联盟侧自己的建盟后续里调一次 `Pulse(target, "", 0)`。
+- **调用方显式传的创建时间优先**：`createdAt` 非 0 时用调用方的值，不再读联盟的建盟时间；首次激活后锚点冻结。显式传值要传毫秒，并且必须是真实的持久事实。
+- **已解散的联盟**（最后一名成员退出，见 `alliance` 的能力边界）没有创建事实：`created` 定义不会在它身上新激活；已经激活的时间线继续由扫描推进到结束，模块不替业务清理。
 - **推进不是准点的**：Remote 实体不能挂本地持久定时器，期限存在 `ActivityBook` 里，由联盟服务进程里的恢复扫描推进：每秒至多一页 128 个联盟、8 个并行调用、每次调用预算 5 秒。联盟很多时一轮扫完的时间随联盟数增长。业务操作仍按冻结的期限拒绝过期请求（`CheckOpen`）。
 - **数量上限**：沿用 `activity`——每个联盟 128 个定义号、每次推进至多 32 个动作。
 - **一致性**：所有推进都在联盟实体自己的 Nest 事务里，与联盟的其他写入共用同一个单写者；所有权迁移后旧实例的调用被拒。入盟、退盟、成员所在 game 变动都不会重开或重置联盟的活动时间线。game 侧的联盟镜像不参与推进。
@@ -41,7 +44,9 @@
   2. 在联盟服务进程加载的包里 `activity.Register` 登记逻辑。
   3. 事件触发的活动（联盟建成、升级等）：在产生这个事实的联盟 Nest 事务里调 `AllianceActivityComp().Reconcile("<事件名>", createdAt)`。
   4. game 侧写自己的端点：校验成员资格后，用生成的 RPC 客户端调 `Pulse` 取视图；玩家参加时在 `Player` 事务里调 `ActivityComp().Host().JoinShared(快照, now)` 记参与资格。
-- **需求比它多一点**：让 `created` 触发自动生效，可以在 `game/entities/alliance/activity_component.go` 里给 `Alliance` 加一个 `ActivityCreatedAt()` 方法返回持久的建盟时间（毫秒）。
+- **需求比它多一点**
+  - 联盟建成就开的活动：定义用 `Trigger=created`（`DelayMillis` 是建盟后多久开期），不用写代码；恢复扫描会激活它。
+  - 换一个创建事实（例如按“首次满 10 人”的时间）：改 `game/entities/alliance/activity_component.go` 的 `ActivityCreatedAt()`，返回毫秒，没有事实时返回 0。
 - **别的模块 / 业务代码要用它**：取得 `AllianceActivities` 客户端后调 `Pulse(ctx, target, event, createdAt)` / `Complete(ctx, target, token)`；`target` 是联盟的完整实体号（`alliance` 模块的 `AllianceTarget(联盟号)` 可以构造）。
 - **只适合借鉴的情形**：见 `activity_world` 的同名小节；本模块展示的是“给一个已有的 Remote 实体追加活动宿主”需要的最少文件。
 
@@ -51,7 +56,7 @@
 
 ## 验证范围
 
-- `roost module verify activity_alliance`：4 个场景（`./internal/rpc/activity_alliance`，`^TestAllianceActivity`）。
+- `roost module verify activity_alliance`：5 个场景（`./internal/rpc/activity_alliance`，`^TestAllianceActivity`）。
 - 场景是离线的：Nest、生成的 DAO 与组件、handler、Remote 准入检查是真实代码；Remote 所有权与提交是内存替身。
-- 覆盖：一期活动在权威联盟实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做。
+- 覆盖：一期活动在权威联盟实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做；`created` 触发——没建成的联盟不激活，建盟（联盟自己的 `Found`，写秒）之后按恢复扫描的调用形态 `Pulse(target, "", 0)` 自动激活，开始时间等于建盟时间换成毫秒再加 `DelayMillis`，再扫不重置锚点，解散后不新激活。
 - 没有验证：恢复扫描在真实联盟服务进程里的行为、与真实联盟写入并发时的表现、真实的 Mongo / WAL / NATS、跨进程迁移与长时间运行。

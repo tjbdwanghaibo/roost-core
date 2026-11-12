@@ -13,4 +13,4 @@ errcodes: [equipment_item_invalid, equipment_level_invalid, equipment_slot_inval
 verify:
   packages: [./game/handler]
   run: ^TestEquipment
-  pass: 16
+  pass: 18

@@ -1,11 +1,14 @@
 package player
 
 import (
+	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"{{MODULE}}/game/actor"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 //roost:component type={{ID:component:Actor}}
@@ -42,6 +45,23 @@ func (component *ActorComponent) OnDestroy(entity.EntityDestroyReason) {
 	if component.body != nil {
 		component.body.Close()
 	}
+}
+// MoveRefusal 把 Body.Walk / Follow 的正常拒绝换成带业务码的错误，必须在同一把实体锁内、紧接着失败的那次调用使用：
+// 不在空间里答 actor_not_placed，在空间里但被定身答 actor_rooted，路径点超限答 actor_path_too_long。
+// 原错误保留在链上（errors.Is(err, actor.ErrCannotMove) 仍成立）。别的错误原样返回，端点按内部错误处理并记日志。
+func (component *ActorComponent) MoveRefusal(err error) error {
+	switch {
+	case errors.Is(err, movement.ErrNotInScene):
+		return errcode.Wrap(apperrors.ErrActorNotPlaced, err)
+	case errors.Is(err, actor.ErrCannotMove):
+		if !component.body.Map.InScene() {
+			return errcode.Wrap(apperrors.ErrActorNotPlaced, err)
+		}
+		return errcode.Wrap(apperrors.ErrActorRooted, err)
+	case errors.Is(err, actor.ErrPathTooLong):
+		return errcode.Wrap(apperrors.ErrActorPathTooLong, err)
+	}
+	return err
 }
 func (player *Player) MapBasic() *movement.MapBasic  { return player.ActorComp().body.Map }
 func (player *Player) MoveComponent() *movement.Move { return player.ActorComp().body.Move }

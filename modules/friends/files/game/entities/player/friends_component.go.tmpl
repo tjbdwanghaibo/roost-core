@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"slices"
+	"{{MODULE}}/db"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
@@ -42,6 +43,39 @@ const (
 )
 
 type FriendsSnapshot struct{ Peers, Incoming, Blocked []int64 }
+
+// ChangeOwnSide 是只改操作者自己名单的两种动作：取消拉黑、拒绝申请。只需要锁住本人，对方的档不参与，
+// 所以对方不在线、不在本进程都能做。peerID 是对方的完整 EntityID。别的动作要同时改对方的名单，走 Change。
+func (c *FriendsComponent) ChangeOwnSide(peerID int64, action int32) error {
+	if peerID == c.owner.ID() {
+		return apperrors.ErrFriendsInvalid
+	}
+	own := c.owner.Dao().GetFriends()
+	switch action {
+	case FriendsUnblock:
+		if _, ok := own.GetBlocked(peerID); ok {
+			own.DelBlockedKey(peerID)
+		}
+	case FriendsReject:
+		if _, ok := own.GetIncoming(peerID); ok {
+			own.DelIncomingKey(peerID)
+		}
+	default:
+		return apperrors.ErrFriendsInvalid
+	}
+	return nil
+}
+
+// forgetFriend 把 id 从一份名单的好友与收到的申请里去掉。名单里没有就不动：DAO 的删除对不存在的键也会登记一次修改，
+// 这里不让“没有可删的”变成一笔写入——删除、拉黑对没有关系的对方不写他的档。
+func forgetFriend(list *db.FriendsState, id int64) {
+	if _, ok := list.GetPeers(id); ok {
+		list.DelPeersKey(id)
+	}
+	if _, ok := list.GetIncoming(id); ok {
+		list.DelIncomingKey(id)
+	}
+}
 
 // Change 只可在同时锁住双方的 Nest 事务内调用；先检查全部容量和权限，再写双方 DAO。
 // ID 保存的是完整 EntityID，客户端快照转回玩家号。跨服实体不允许拿镜像替代。
@@ -88,23 +122,19 @@ func (c *FriendsComponent) Change(peer *FriendsComponent, action int32) error {
 		a.DelIncomingKey(bid)
 		b.DelIncomingKey(aid)
 	case FriendsRemove:
-		a.DelPeersKey(bid)
-		b.DelPeersKey(aid)
-		a.DelIncomingKey(bid)
-		b.DelIncomingKey(aid)
+		forgetFriend(a, bid)
+		forgetFriend(b, aid)
 	case FriendsBlock:
 		if !ab && a.BlockedLen() >= FriendsLimit {
 			return apperrors.ErrFriendsFull
 		}
-		a.SetBlockedKey(bid, true)
-		a.DelPeersKey(bid)
-		b.DelPeersKey(aid)
-		a.DelIncomingKey(bid)
-		b.DelIncomingKey(aid)
-	case FriendsUnblock:
-		a.DelBlockedKey(bid)
-	case FriendsReject:
-		a.DelIncomingKey(bid)
+		if !ab {
+			a.SetBlockedKey(bid, true)
+		}
+		forgetFriend(a, bid)
+		forgetFriend(b, aid)
+	case FriendsUnblock, FriendsReject:
+		return c.ChangeOwnSide(bid, action)
 	default:
 		return apperrors.ErrFriendsInvalid
 	}

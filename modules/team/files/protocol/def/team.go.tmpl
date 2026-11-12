@@ -24,6 +24,22 @@ type TeamLeaveRequest struct{}
 type TeamDisbandRequest struct{}
 type TeamInfoRequest struct{}
 
+// TeamInvitedPush 是一份收到的组队邀请：推送与 TeamInvites 的应答用同一个形状，客户端只处理一种。
+type TeamInvitedPush struct {
+	// TeamID 是队伍的完整实体号，接受邀请时原样填进 TeamAcceptRequest.TeamID。
+	TeamID int64 `pb:"1"`
+	// Inviter 是发出邀请的队长的玩家号。
+	Inviter int64 `pb:"2"`
+	// ExpireAtUnixMilli 是这份邀请过期的业务时间（Unix 毫秒）；到这一刻就不能再接受。
+	ExpireAtUnixMilli int64 `pb:"3"`
+}
+type TeamInvitesRequest struct{}
+type TeamInvitesResponse struct {
+	Code    int32             `pb:"1"`
+	Reason  string            `pb:"2"`
+	Invites []TeamInvitedPush `pb:"3"`
+}
+
 //roost:protocol group=game handler=team
 type TeamProtocol interface {
 	//roost:msg id={{ID:protocol:TeamCreate}}
@@ -38,4 +54,8 @@ type TeamProtocol interface {
 	TeamDisband(TeamDisbandRequest) TeamResponse
 	//roost:msg id={{ID:protocol:TeamInfo}}
 	TeamInfo(TeamInfoRequest) TeamResponse
+	//roost:msg id={{ID:protocol:TeamInvites}}
+	TeamInvites(TeamInvitesRequest) TeamInvitesResponse
+	//roost:msg id={{ID:protocol:TeamInvited}}
+	TeamInvited() TeamInvitedPush
 }

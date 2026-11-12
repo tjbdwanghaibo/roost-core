@@ -1,0 +1,23 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// scene 模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+// 都是玩家自己能触发的正常拒绝：SceneChange / SceneInteract 的端点把它们填进应答的 Code / Reason，连接保留。
+var (
+	// ErrSceneUnavailable：要进入（或要交互）的场景没有开放、正在关闭或已经关闭。换一个场景，或者稍后再试。
+	ErrSceneUnavailable = errcode.Define({{ID:errcode:scene_unavailable}}, "scene_unavailable", "scene is not open")
+	// ErrSceneFull：目标场景满员；玩家留在原来的场景里。
+	ErrSceneFull = errcode.Define({{ID:errcode:scene_full}}, "scene_full", "scene is full")
+	// ErrSceneStale：请求里的 FromID 不是玩家此刻实际所在的场景（客户端的记录过期了）。什么都没有改；
+	// 客户端按最近一次成功应答或自身视图里的站位对齐之后重发。
+	ErrSceneStale = errcode.Define({{ID:errcode:scene_stale}}, "scene_stale", "FromID is not the scene the player is in")
+	// ErrSceneNotHere：交互请求指的场景不是玩家此刻所在的场景。
+	ErrSceneNotHere = errcode.Define({{ID:errcode:scene_not_here}}, "scene_not_here", "player is not in that scene")
+	// ErrSceneObjectUnknown：这张图上没有这个交互对象。
+	ErrSceneObjectUnknown = errcode.Define({{ID:errcode:scene_object_unknown}}, "scene_object_unknown", "no such object in this scene")
+	// ErrSceneObjectFar：对象存在，但玩家已提交的位置不在它的交互半径内；走近再试，序号不变。
+	ErrSceneObjectFar = errcode.Define({{ID:errcode:scene_object_far}}, "scene_object_far", "object is out of reach")
+	// ErrSceneSequence：交互序号不是上一次成功的序号加 1（跳号、旧号、0），或者同一个序号换了场景或对象。
+	ErrSceneSequence = errcode.Define({{ID:errcode:scene_sequence}}, "scene_sequence", "interaction sequence is not the next one")
+)

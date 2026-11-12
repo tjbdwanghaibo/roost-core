@@ -72,10 +72,19 @@ func TestGMRejectsMalformedPayload(t *testing.T) {
 	}
 }
 func TestGMAuditedCommandExecutes(t *testing.T) {
+	audit := captureGMAudit(t)
 	_, commands, calls := gmTestRuntime(t)
 	result, err := commands.Execute(context.Background(), gmTestCommand(`{"note":"restore missing reward"}`))
 	if err != nil || !result.OK || *calls != 1 || result.TraceID != "audit-1" {
 		t.Fatalf("result=%+v err=%v calls=%d", result, err, *calls)
+	}
+	// 执行前后各一条，按 trace_id 对齐；成功的结果码是 0，不是 internal。
+	before, after := audit.records(t, "gm: executing", "audit-1"), audit.records(t, "gm: completed", "audit-1")
+	if len(before) != 1 || before[0]["command"] != "gm.test" || before[0]["operator"] != "operator" || before[0]["note"] != "restore missing reward" {
+		t.Fatalf("audit before=%+v", before)
+	}
+	if len(after) != 1 || after[0]["command"] != "gm.test" || after[0]["operator"] != "operator" || after[0]["code"] != float64(errcode.CodeOK) {
+		t.Fatalf("audit after=%+v", after)
 	}
 }
 func TestGMStopRejectsNewCalls(t *testing.T) {
@@ -87,6 +96,7 @@ func TestGMStopRejectsNewCalls(t *testing.T) {
 	}
 }
 func TestGMKeepsCodedCause(t *testing.T) {
+	audit := captureGMAudit(t)
 	r, commands, _ := gmTestRuntime(t)
 	if err := r.install(Definition{Name: "gm.test", Handler: func(context.Context, *app.Registry, admin.Command) (admin.Result, error) {
 		return admin.Result{}, apperrors.ErrGMUnavailable
@@ -96,6 +106,9 @@ func TestGMKeepsCodedCause(t *testing.T) {
 	result, err := commands.Execute(context.Background(), gmTestCommand(`{"note":"test"}`))
 	if !errors.Is(err, apperrors.ErrGMUnavailable) || result.Data["code"] != errcode.CodeOf(apperrors.ErrGMUnavailable) {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if after := audit.records(t, "gm: completed", "audit-1"); len(after) != 1 || after[0]["code"] != float64(errcode.CodeOf(apperrors.ErrGMUnavailable)) {
+		t.Fatalf("audit after=%+v", after)
 	}
 }
 func TestGMProductionRefusesDevToken(t *testing.T) {

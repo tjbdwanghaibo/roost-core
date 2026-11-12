@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,18 +39,114 @@ type ownedBy int32
 
 func (o ownedBy) LookupRoute(context.Context, int64) (int32, error) { return int32(o), nil }
 
-// Scale-in, step 1 (plan §2.7), on a real NATS bus with the generated
-// handlers and client: after alliance.stop_founding on instance 3000, every
-// founding request goes to 3001 — new alliances are no longer created on the
-// instance being drained — while a route RPC for an alliance 3000 owns still
-// reaches 3000 on its own subject, until alliance.transfer moves it.
+// queueGroup is the offline stand-in for the bus of one service type: every
+// instance's handlers, and which instances are still in a method's queue
+// group. Call (no sid) is the queue group: it goes round robin to the
+// instances that have not left that method's group; CallTo reaches an
+// instance's own subject whether or not it left. That is the contract of
+// bus.RPCQueueLeaver (LeaveRPCQueue drops only that method's queue
+// subscription; idempotent; an unknown method is an error) — the real bus is
+// checked against it by the framework's own tests and by this scenario when
+// ROOST_DATAENGINE_IT_NATS_URL is set.
+type queueGroup struct {
+	mu       sync.Mutex
+	handlers map[int32]map[string]bus.RpcHandlerFunc
+	left     map[int32]map[string]bool
+	next     int
+}
+
+// queueBus is the group as one process sees it; sid 0 is a caller outside
+// the service, which registers nothing.
+type queueBus struct {
+	bus.IBus
+	group *queueGroup
+	sid   int32
+}
+
+var queueCodec = bus.MessagePackCodec{}
+
+func (b queueBus) HandleRpc(method string, handler bus.RpcHandlerFunc) error {
+	b.group.mu.Lock()
+	defer b.group.mu.Unlock()
+	if b.group.handlers[b.sid] == nil {
+		b.group.handlers[b.sid] = map[string]bus.RpcHandlerFunc{}
+	}
+	b.group.handlers[b.sid][method] = handler
+	return nil
+}
+
+func (b queueBus) LeaveRPCQueue(method string) error {
+	b.group.mu.Lock()
+	defer b.group.mu.Unlock()
+	if b.group.handlers[b.sid][method] == nil {
+		return fmt.Errorf("queue bus: sid %d registered no %s", b.sid, method)
+	}
+	if b.group.left[b.sid] == nil {
+		b.group.left[b.sid] = map[string]bool{}
+	}
+	b.group.left[b.sid][method] = true
+	return nil
+}
+
+func (b queueBus) Call(ctx context.Context, svcType, method string, req, resp any) error {
+	b.group.mu.Lock()
+	var sids []int32
+	for sid, handlers := range b.group.handlers {
+		if handlers[method] != nil && !b.group.left[sid][method] {
+			sids = append(sids, sid)
+		}
+	}
+	slices.Sort(sids)
+	if len(sids) == 0 {
+		b.group.mu.Unlock()
+		return fmt.Errorf("%w: nobody is in the queue group of %s", fnats.ErrNoResponders, method)
+	}
+	sid := sids[b.group.next%len(sids)]
+	b.group.next++
+	b.group.mu.Unlock()
+	return b.CallTo(ctx, svcType, sid, method, req, resp)
+}
+
+func (b queueBus) CallTo(ctx context.Context, _ string, sid int32, method string, req, resp any) error {
+	b.group.mu.Lock()
+	handle := b.group.handlers[sid][method]
+	b.group.mu.Unlock()
+	if handle == nil {
+		return fmt.Errorf("%w: %s on sid %d", fnats.ErrNoResponders, method, sid)
+	}
+	payload, err := queueCodec.Marshal(req)
+	if err != nil {
+		return err
+	}
+	out, err := handle(bus.NewRPCContext(ctx, method, payload, queueCodec))
+	if err != nil {
+		return err
+	}
+	encoded, err := queueCodec.Marshal(out)
+	if err != nil {
+		return err
+	}
+	return queueCodec.Unmarshal(encoded, resp)
+}
+
+// Scale-in, step 1 (plan §2.7), with the generated handlers and client:
+// after alliance.stop_founding on instance 3000, every founding request goes
+// to 3001 — new alliances are no longer created on the instance being
+// drained — while a route RPC for an alliance 3000 owns still reaches 3000 on
+// its own subject, until alliance.transfer moves it.
 //
-// ROOST_DATAENGINE_IT_NATS_URL (scripts/test-demo-generated.sh); skipped
-// without it.
+// It runs on a real NATS bus when ROOST_DATAENGINE_IT_NATS_URL is set
+// (scripts/test-demo-generated.sh). Without it the same steps run on the
+// in-process queueGroup, so roost module verify covers what this module owns
+// — which method the command leaves, that leaving twice is fine, that the
+// generated client still reaches the owner — without a NATS server; the
+// queue group's own behaviour is then the stand-in's, not NATS's.
 func TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances(t *testing.T) {
 	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if url == "" {
-		t.Skip("ROOST_DATAENGINE_IT_NATS_URL not set")
+		group := &queueGroup{handlers: map[int32]map[string]bus.RpcHandlerFunc{}, left: map[int32]map[string]bool{}}
+		stopFoundingScenario(t, func(_ string, sid int32) bus.IBus { return queueBus{group: group, sid: sid} }, func(context.Context) error { return nil })
+		return
 	}
 	assembly, err := driver.Assemble(fnats.DefaultConfig(url), driver.ClientOptions{})
 	if err != nil {
@@ -56,7 +154,7 @@ func TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances(t *testing.T) 
 	}
 	t.Cleanup(assembly.Client.Close)
 	prefix := fmt.Sprintf("roost.alliance.scalein.%d", time.Now().UnixNano())
-	newBus := func(serviceType string, sid int32) *bus.Bus {
+	stopFoundingScenario(t, func(serviceType string, sid int32) bus.IBus {
 		b := bus.New(assembly.Client, assembly.RPC, nil, bus.Config{Sid: sid, SvcType: serviceType, Prefix: prefix, WorkerNum: 2, QueueCap: 64})
 		if err := b.Start(); err != nil {
 			t.Fatal(err)
@@ -67,10 +165,16 @@ func TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances(t *testing.T) 
 			_ = b.StopWithContext(ctx)
 		})
 		return b
-	}
+	}, assembly.Client.FlushContext)
+}
+
+// stopFoundingScenario is the scenario over whichever bus newBus hands out;
+// flush waits until the subscriptions made so far are in effect.
+func stopFoundingScenario(t *testing.T, newBus func(serviceType string, sid int32) bus.IBus, flush func(context.Context) error) {
+	t.Helper()
 	draining, staying := newBus(rpcalliance.ServiceType, 3000), newBus(rpcalliance.ServiceType, 3001)
 	for _, instance := range []struct {
-		bus *bus.Bus
+		bus bus.IBus
 		sid int32
 	}{{draining, 3000}, {staying, 3001}} {
 		if err := rpcalliance.RegisterHandlers(instance.bus, foundingInstance{sid: instance.sid}); err != nil {
@@ -83,7 +187,7 @@ func TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances(t *testing.T) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := assembly.Client.FlushContext(ctx); err != nil {
+	if err := flush(ctx); err != nil {
 		t.Fatal(err)
 	}
 	found := func(calls int) map[int32]int {
@@ -106,7 +210,7 @@ func TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances(t *testing.T) 
 	if err := stopFounding(draining); err != nil {
 		t.Fatalf("stop_founding again: %v; it must be idempotent", err)
 	}
-	if err := assembly.Client.FlushContext(ctx); err != nil {
+	if err := flush(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if after := found(64); after[3000] != 0 || after[3001] != 64 {

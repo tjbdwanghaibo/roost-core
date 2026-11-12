@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -399,5 +400,51 @@ func TestEquipmentNilPieceIsAnEmptySlot(t *testing.T) {
 	f.mustEquip(t, 1003)
 	if s := f.snapshot(t); s.Worn[1][0] != 1003 {
 		t.Fatal("nil slot unusable")
+	}
+}
+
+// 同一槽位上同一道具只换等级：穿着的还是这一件，背包不动——空包能换，包里另有一件时那一件也不被动用。
+func TestEquipmentRelevelSameItemLeavesBagAlone(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1003)
+	var slot int32
+	var replaced int64
+	relevel := func(level int32) error {
+		return f.action(func() error {
+			var err error
+			slot, replaced, err = f.player.EquipmentComp().Equip(1003, level)
+			return err
+		})
+	}
+	if err := relevel(5); err != nil {
+		t.Fatalf("relevel with an empty bag: %v", err)
+	}
+	if s := f.snapshot(t); slot != 1 || replaced != 0 || s.Bag[1003] != 0 || s.Worn[1] != [2]int64{1003, 5} {
+		t.Fatalf("relevel with an empty bag: slot=%d replaced=%d %+v", slot, replaced, s)
+	}
+	f.grant(t, 1003, 1)
+	if err := relevel(7); err != nil {
+		t.Fatalf("relevel with a spare: %v", err)
+	}
+	if s := f.snapshot(t); replaced != 0 || s.Bag[1003] != 1 || s.Worn[1] != [2]int64{1003, 7} {
+		t.Fatalf("relevel with a spare: replaced=%d %+v", replaced, s)
+	}
+}
+
+// 换等级同样执行穿戴变化钩子（属性联动靠它重算）；钩子失败时等级保持原值。
+func TestEquipmentRelevelRunsChangedHooks(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1003)
+	before := f.snapshot(t)
+	equipmentRejectHook.Store(true)
+	t.Cleanup(func() { equipmentRejectHook.Store(false) })
+	err := f.action(func() error { _, _, err := f.player.EquipmentComp().Equip(1003, 5); return err })
+	if err == nil || !strings.Contains(err.Error(), "equipment hook rejected") {
+		t.Fatalf("relevel skipped the changed hooks: %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("rejected relevel leaked")
 	}
 }

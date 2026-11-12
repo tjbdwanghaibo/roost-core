@@ -54,10 +54,12 @@ func TestNoticeRejectsInvalidBeforePublish(t *testing.T) {
 	for _, input := range []noticeCall{{"", "id"}, {"   ", "id"}, {"hello", ""}, {strings.Repeat("x", 256), "id"}, {string([]byte{255}), "id"}, {"hello", strings.Repeat("k", 65)}} {
 		if err := publisher.Publish(context.Background(), "announce", input.text, input.key); err == nil {
 			t.Fatal("invalid notice accepted")
+		} else if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid notice %+v: %v is not ErrInvalid", input, err)
 		}
 	}
-	if err := publisher.Publish(context.Background(), "world", "hello", "id"); err == nil {
-		t.Fatal("unknown kind accepted")
+	if err := publisher.Publish(context.Background(), "world", "hello", "id"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown kind: %v", err)
 	}
 	if len(chat.calls) != 0 {
 		t.Fatalf("invalid notice reached chat: %+v", chat.calls)
@@ -70,7 +72,8 @@ func TestNoticeReportsPublishFailure(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
-func TestNoticeGMCommandsAreWiredAndStopRejects(t *testing.T) {
+// 没装 gm 模块时本模块只有服务端入口：启动不往运维命令表里登记任何命令（装了 gm 时由联动经 gm 的登记点提供）。
+func TestNoticeStartRegistersNoOpsCommandAndStopRejects(t *testing.T) {
 	registry := app.NewRegistry(viper.New())
 	chat := &noticeChat{}
 	stop, err := start(registry, chat)
@@ -78,21 +81,27 @@ func TestNoticeGMCommandsAreWiredAndStopRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
-	for _, name := range []string{CommandAnnounce, CommandMarquee} {
+	for _, name := range []string{"gm.notice.announce", "gm.notice.marquee"} {
 		result, err := commands.Execute(context.Background(), admin.Command{Name: name, Payload: []byte(`{"text":"欢迎","key":"event-1"}`)})
-		if err != nil || !result.OK {
-			t.Fatalf("%s: %+v %v", name, result, err)
+		if !errors.Is(err, admin.ErrCommandNotFound) || result.OK {
+			t.Fatalf("%s is registered without the gm module: %+v %v", name, result, err)
 		}
 	}
-	if len(chat.calls) != 2 || chat.calls[0].key != "notice:announce:event-1" || chat.calls[1].key != "notice:marquee:event-1" {
+	publisher, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Publish(context.Background(), "announce", "欢迎", "event-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.calls) != 1 || chat.calls[0].key != "notice:announce:event-1" {
 		t.Fatalf("calls=%+v", chat.calls)
 	}
 	if err := stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	result, err := commands.Execute(context.Background(), admin.Command{Name: CommandAnnounce, Payload: []byte(`{"text":"欢迎","key":"event-2"}`)})
-	if err == nil || result.OK || len(chat.calls) != 2 {
-		t.Fatalf("stopped command=%+v %v", result, err)
+	if err := publisher.Publish(context.Background(), "announce", "欢迎", "event-2"); !errors.Is(err, ErrStopped) || len(chat.calls) != 1 {
+		t.Fatalf("stopped publish: %v calls=%+v", err, chat.calls)
 	}
 }
 
@@ -131,7 +140,7 @@ func TestNoticeStartupUsesChatControllerSystemPath(t *testing.T) {
 		t.Fatalf("system publish=%+v", r)
 	}
 }
-func TestNoticeMissingDependenciesAndMalformedGMFail(t *testing.T) {
+func TestNoticeMissingDependenciesFail(t *testing.T) {
 	if _, err := Start(nil); err == nil {
 		t.Fatal("nil registry accepted")
 	}
@@ -142,18 +151,8 @@ func TestNoticeMissingDependenciesAndMalformedGMFail(t *testing.T) {
 	if _, err := FromRegistry(registry); err == nil {
 		t.Fatal("unstarted publisher accepted")
 	}
-	chat := &noticeChat{}
-	stop, err := start(registry, chat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stop(context.Background())
-	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
-	if _, err := commands.Execute(context.Background(), admin.Command{Name: CommandAnnounce, Payload: []byte(`{`)}); err == nil {
-		t.Fatal("bad JSON accepted")
-	}
-	if len(chat.calls) != 0 {
-		t.Fatal("malformed command reached chat")
+	if err := (*Publisher)(nil).Publish(context.Background(), "announce", "欢迎", "event-1"); !errors.Is(err, ErrStopped) {
+		t.Fatalf("nil publisher: %v", err)
 	}
 }
 

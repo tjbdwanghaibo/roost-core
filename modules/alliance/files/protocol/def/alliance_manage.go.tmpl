@@ -1,0 +1,96 @@
+//go:build protocoldef
+
+package protocoldef
+
+// The endpoints of an alliance that is not open to join, and of its leader:
+// applying, the leader answering an application, kicking a member, handing
+// the leadership over, and the roster the leader needs to do any of it.
+//
+// Each write is one alliance RPC, answered with the alliance after it
+// (AllianceResponse), exactly as JoinAlliance and LeaveAlliance are. The game
+// server only forwards: who the caller is comes from the session, and whether
+// they may do it — are the leader, the other player is seated or has applied —
+// is decided by the alliance service on its roster. A request the service
+// refuses is answered with its code (alliance_denied, alliance_application,
+// alliance_missing, alliance_leader, alliance_membership, alliance_full).
+
+// ApplyAllianceRequest asks to join the alliance AllianceID. The application
+// waits in the alliance until its leader approves or rejects it; a second one
+// while it waits is refused (alliance_application). Applying does not reserve
+// the player: they may still join or found another alliance, and an approval
+// that comes after that is refused (alliance_membership).
+type ApplyAllianceRequest struct {
+	AllianceID int64 `pb:"1"`
+}
+
+// ApproveAllianceApplyRequest seats the applicant PlayerID in the alliance the
+// caller leads. The new member is told by AllianceNotice (joined) when online.
+type ApproveAllianceApplyRequest struct {
+	PlayerID int64 `pb:"1"`
+}
+
+// RejectAllianceApplyRequest drops PlayerID's application to the alliance the
+// caller leads. The applicant is not told; they may apply again.
+type RejectAllianceApplyRequest struct {
+	PlayerID int64 `pb:"1"`
+}
+
+// KickAllianceMemberRequest removes the member PlayerID from the alliance the
+// caller leads. The member is told by AllianceNotice (kicked) when online.
+type KickAllianceMemberRequest struct {
+	PlayerID int64 `pb:"1"`
+}
+
+// TransferAllianceLeaderRequest makes the member PlayerID the leader of the
+// alliance the caller leads; the caller stays in it as a member and may then
+// leave.
+type TransferAllianceLeaderRequest struct {
+	PlayerID int64 `pb:"1"`
+}
+
+// AllianceRosterRequest reads who is in an alliance, from its mirror.
+// AllianceID 0 means "the one I am in"; MinVersion as for AllianceInfoRequest.
+type AllianceRosterRequest struct {
+	AllianceID int64 `pb:"1"`
+	MinVersion int64 `pb:"2"`
+}
+
+// AllianceMemberInfo is one member: Role 1 is a member, 2 the leader.
+type AllianceMemberInfo struct {
+	PlayerID     int64 `pb:"1"`
+	Role         int32 `pb:"2"`
+	Contribution int64 `pb:"3"`
+}
+
+// AllianceRosterResponse is an alliance's roster as its mirror has it (it may
+// lag a write by a moment; send the write's Version as MinVersion to read no
+// older than it). Members are sorted by player id. Applicants — the players
+// whose applications wait — is filled only when the reader is the alliance's
+// leader, the one player who can answer them; it is what is shown, not a
+// permission.
+type AllianceRosterResponse struct {
+	Code       int32                 `pb:"1"`
+	Reason     string                `pb:"2"`
+	AllianceID int64                 `pb:"3"`
+	LeaderID   int64                 `pb:"4"`
+	OpenJoin   bool                  `pb:"5"`
+	Version    int64                 `pb:"6"`
+	Members    []*AllianceMemberInfo `pb:"7"`
+	Applicants []int64               `pb:"8"`
+}
+
+//roost:protocol group=game handler=alliance
+type AllianceManageProtocol interface {
+	//roost:msg id={{ID:protocol:ApplyAlliance}}
+	ApplyAlliance(ApplyAllianceRequest) AllianceResponse
+	//roost:msg id={{ID:protocol:ApproveAllianceApply}}
+	ApproveAllianceApply(ApproveAllianceApplyRequest) AllianceResponse
+	//roost:msg id={{ID:protocol:RejectAllianceApply}}
+	RejectAllianceApply(RejectAllianceApplyRequest) AllianceResponse
+	//roost:msg id={{ID:protocol:KickAllianceMember}}
+	KickAllianceMember(KickAllianceMemberRequest) AllianceResponse
+	//roost:msg id={{ID:protocol:TransferAllianceLeader}}
+	TransferAllianceLeader(TransferAllianceLeaderRequest) AllianceResponse
+	//roost:msg id={{ID:protocol:AllianceRoster}}
+	AllianceRoster(AllianceRosterRequest) AllianceRosterResponse
+}

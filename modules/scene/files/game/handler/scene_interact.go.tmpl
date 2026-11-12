@@ -1,37 +1,44 @@
 package handler
 
 import (
-	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"math"
 	player "{{MODULE}}/game/entities/player"
 	scene "{{MODULE}}/game/entities/scene"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
+// handlerSceneInteract 的拒绝都是玩家自己能触发的，返回带业务码的错误、不写任何状态：
+// 序号不对（scene_sequence）、不在这张图（scene_not_here）、没有这个对象（scene_object_unknown）、够不着（scene_object_far）。
+// 登记的交互回调返回的错误原样带出：带码的照样答给客户端，不带码的按内部错误处理。
+//
 //roost:nest rollback=undo durability=strict
 func handlerSceneInteract(target player.IActorEntity, area scene.ISceneEntity, sequence uint64, objectID int64) (*pb.SceneInteractResponse, error) {
 	p := target.ActorComp().Owner()
 	state := p.Dao().GetSceneInteraction()
 	if sequence == 0 {
-		return nil, fmt.Errorf("scene: positive interaction sequence is required")
+		return nil, apperrors.ErrSceneSequence
 	}
 	if sequence == state.GetSequence() {
 		if state.GetSceneID() != area.ID() || state.GetObjectID() != objectID {
-			return nil, fmt.Errorf("scene: sequence payload conflict")
+			return nil, apperrors.ErrSceneSequence
 		}
 		return &pb.SceneInteractResponse{Sequence: sequence, Text: state.GetText()}, nil
 	}
 	if state.GetSequence() == math.MaxUint64 || sequence != state.GetSequence()+1 {
-		return nil, fmt.Errorf("scene: stale or skipped interaction sequence")
+		return nil, apperrors.ErrSceneSequence
 	}
 	body := target.ActorComp().Body()
 	if body.Map.SceneID() != area.ID() || area.Scene().Dao().GetClosed() {
-		return nil, fmt.Errorf("scene: actor is not in this scene")
+		return nil, apperrors.ErrSceneNotHere
 	}
 	object, ok := area.Scene().Space().Object(objectID)
-	if !ok || !spatial.WithinDistance(body.Position(), object.Position, object.Radius) {
-		return nil, fmt.Errorf("scene: object is unknown or too far")
+	if !ok {
+		return nil, apperrors.ErrSceneObjectUnknown
+	}
+	if !spatial.WithinDistance(body.Position(), object.Position, object.Radius) {
+		return nil, apperrors.ErrSceneObjectFar
 	}
 	if err := p.InteractObject(object); err != nil {
 		return nil, err

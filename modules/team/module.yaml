@@ -14,7 +14,7 @@ state:
     store: team
     dao: persist
     comment: 组队引用；权威成员表在 Remote Team 上
-protocols: [TeamCreate, TeamInvite, TeamAccept, TeamLeave, TeamDisband, TeamInfo]
+protocols: [TeamCreate, TeamInvite, TeamAccept, TeamLeave, TeamDisband, TeamInfo, TeamInvites, TeamInvited]
 errcodes: [team_invalid, team_missing, team_exists, team_not_leader, team_not_invited, team_full, team_invites_full, team_blocked]
 verify:
   packages: [./game/handler, ./game/controllers/team]

@@ -26,7 +26,7 @@ type ITerrainBuildingEntity interface {
 func (b *TerrainBuilding) BuildingState() *TerrainBuilding { return b }
 func (b *TerrainBuilding) OnInitFinish(*entity.EntityCreateParam) error {
 	if b.Dao().Id() != b.ID() {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	d := b.Dao()
 	if d.GetVersion() == 0 {
@@ -34,18 +34,18 @@ func (b *TerrainBuilding) OnInitFinish(*entity.EntityCreateParam) error {
 	}
 	id, err := logic.SiteUnique(d.GetSceneID(), d.GetGX(), d.GetGY())
 	if err != nil || id != b.UniqueID() || d.GetOwnerID() <= 0 || d.GetVersion() < 1 {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	return nil
 }
 func (b *TerrainBuilding) Validate(command logic.Command, ownerID int64) error {
 	id, err := logic.SiteUnique(command.SceneID, int32(command.X/100), int32(command.Y/100))
 	if err != nil || id != b.UniqueID() {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	d := b.Dao()
 	if d.GetVersion() == math.MaxInt64 {
-		return logic.ErrFull
+		return logic.ErrState
 	}
 	if command.Op == "build" {
 		if d.GetStanding() {

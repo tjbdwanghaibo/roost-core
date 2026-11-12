@@ -2,7 +2,10 @@ package handler
 
 import player "{{MODULE}}/game/entities/player"
 
-//roost:nest
+// handlerMatchState 只读匹配意图的快照（客户端轮询结果时每次都走这里）。
+// 只读 handler 声明 durability=memory：不开事务、不取回滚快照、不写 WAL；在这里改持久字段会直接 panic。
+//
+//roost:nest durability=memory
 func handlerMatchState(member player.IMatchmakingEntity) player.MatchSnapshot {
 	return member.MatchmakingComp().Snapshot()
 }

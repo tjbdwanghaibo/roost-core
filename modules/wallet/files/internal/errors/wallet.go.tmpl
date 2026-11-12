@@ -5,7 +5,7 @@ import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 // 货币模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
 var (
 	ErrWalletShort      = errcode.Define({{ID:errcode:wallet_short}}, "wallet_short", "not enough coins")
-	ErrWalletInvalid    = errcode.Define({{ID:errcode:wallet_invalid}}, "wallet_invalid", "empty key or zero amount")
+	ErrWalletInvalid    = errcode.Define({{ID:errcode:wallet_invalid}}, "wallet_invalid", "invalid key (1..64 ASCII letters, digits, '-', '_', ':') or amount (zero, or not positive where a positive amount is required)")
 	ErrWalletConflict   = errcode.Define({{ID:errcode:wallet_conflict}}, "wallet_conflict", "the key was used with another amount")
 	ErrWalletOverflow   = errcode.Define({{ID:errcode:wallet_overflow}}, "wallet_overflow", "balance overflow")
 )

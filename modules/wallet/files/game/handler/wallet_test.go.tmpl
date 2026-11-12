@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 type walletGetter map[int64]entity.IThreadSafeEntity
@@ -315,6 +317,19 @@ func TestWalletApplyRefusesKeysThatCannotBeStored(t *testing.T) {
 		if gotCoins, gotReceipts := f.snapshot(t); gotCoins != coins || gotReceipts != receipts {
 			t.Fatalf("key %q: a refused key wrote: coins=%d receipts=%d", key, gotCoins, gotReceipts)
 		}
+	}
+	// 给客户端的拒绝文案要覆盖实际拒绝的几种情况（键的长度与字符、金额为 0 或不为正），不能只说“空键或零金额”。
+	reason := errcode.ReasonOf(apperrors.ErrWalletInvalid)
+	for _, want := range []string{"key", "1..64", "letters", "amount", "zero", "positive"} {
+		if !strings.Contains(reason, want) {
+			t.Fatalf("wallet_invalid reason %q does not mention %q", reason, want)
+		}
+	}
+	if _, err := f.spend("negative-1", -10); !errors.Is(err, apperrors.ErrWalletInvalid) {
+		t.Fatalf("negative amount: err = %v, want wallet_invalid", err)
+	}
+	if gotCoins, gotReceipts := f.snapshot(t); gotCoins != coins || gotReceipts != receipts {
+		t.Fatalf("negative amount wrote: coins=%d receipts=%d", gotCoins, gotReceipts)
 	}
 	for i, key := range []string{long[:64], "0f8fad5b-d9cb-469f-a165-70867728950e", "session_7:42"} {
 		if _, err := f.spend(key, 10); err != nil {

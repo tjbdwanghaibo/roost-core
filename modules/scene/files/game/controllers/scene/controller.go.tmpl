@@ -5,6 +5,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"log/slog"
 	player "{{MODULE}}/game/entities/player"
@@ -31,7 +32,17 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	return &Controller{manager: manager, client: client}, nil
 }
 
+// refusal 把一次失败分成两类。带码的错误是业务拒绝（场景已满、目标未开放、FromID 过期、对象太远、序号跳号，
+// 以及登记的回调返回的带码错误）：ok 为 true，端点把码与原因填进应答，连接保留。
+// 不带码的是内部错误（提交被拒、回调失败、结果未知）：ok 为 false，端点把它作为 error 返回——接入层按分发失败
+// 结束这条连接（infra/network/gateway 的 dispatchRequest），客户端重连后用 FromID==ToID 重新对齐。
+func refusal(err error) (code int32, reason string, ok bool) {
+	code, reason = errcode.ClientError(err)
+	return code, reason, code != errcode.CodeInternal
+}
+
 // HandleSceneChange 的玩家身份只取认证上下文；请求不能带任意 PlayerID。
+// 业务拒绝答在应答的 Code / Reason 里、不返回 error（见 refusal）；被拒的请求没有改任何状态，日志也不记。
 func (c *Controller) HandleSceneChange(ctx *playeraccess.Context, request *pb.SceneChangeRequest) (*pb.SceneChangeResponse, error) {
 	if ctx == nil || request == nil {
 		return nil, fmt.Errorf("scene: invalid request")
@@ -40,13 +51,20 @@ func (c *Controller) HandleSceneChange(ctx *playeraccess.Context, request *pb.Sc
 	if err != nil {
 		return nil, err
 	}
+	var result *pb.SceneChangeResponse
 	ids, target, err := c.manager.IDs(request.FromID, request.ToID)
+	if err == nil {
+		result, err = sender.NewSceneChangeSender(c.client).MultiGroupSync_SceneChange(ctx.Context(), id, ids, target)
+	}
 	if err != nil {
+		if code, reason, ok := refusal(err); ok {
+			return &pb.SceneChangeResponse{Code: code, Reason: reason}, nil
+		}
 		return nil, err
 	}
-	result, err := sender.NewSceneChangeSender(c.client).MultiGroupSync_SceneChange(ctx.Context(), id, ids, target)
-	if err == nil && result != nil && result.Code == 0 {
-		slog.InfoContext(ctx.Context(), "scene: change confirmed", "player_id", ctx.PlayerID, "from_scene", request.FromID, "to_scene", request.ToID)
+	if result == nil {
+		return nil, fmt.Errorf("scene: change returned no response")
 	}
-	return result, err
+	slog.InfoContext(ctx.Context(), "scene: change confirmed", "player_id", ctx.PlayerID, "from_scene", request.FromID, "to_scene", request.ToID)
+	return result, nil
 }

@@ -22,4 +22,4 @@ errcodes: [activity_alliance_request_invalid]
 verify:
   packages: [./internal/rpc/activity_alliance]
   run: ^TestAllianceActivity
-  pass: 4
+  pass: 5

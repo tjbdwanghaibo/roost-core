@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,12 +48,16 @@ func (g attributeGetter) GetMany(ctx context.Context, ids []int64, cats []entity
 	return out, nil
 }
 
-type attributeCommitter struct{ reject atomic.Bool }
+type attributeCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
 
 func (c *attributeCommitter) Commit(context.Context, dataengine.CommitRecord) error {
 	if c.reject.Load() {
 		return errors.New("injected rejection")
 	}
+	c.commits.Add(1)
 	return nil
 }
 
@@ -301,6 +307,34 @@ func TestAttributeProtocolUsesAuthenticatedIdentity(t *testing.T) {
 	r, err := c.HandleAttributeGet(&playeraccess.Context{PlayerID: 98103}, &pb.AttributeGetRequest{})
 	if err != nil || r == nil || r.Code != 0 || r.HP != 100 || r.Power != 30 {
 		t.Fatalf("protocol %+v %v", r, err)
+	}
+}
+// AttributeGet 是只读 handler：它的事务声明必须是 memory 快路径（生成的注册代码里是空的 HandlerMeta）。
+// 不带选项的 //roost:nest 是 rollback=state durability=async，每次读都要先把整个 PlayerDao 序列化成回滚快照；
+// 写成 rollback=undo durability=strict 则是在声明“这里会写、答复要等落盘”。读完之后提交器一次都没被调用。
+func TestAttributeGetIsDeclaredReadOnly(t *testing.T) {
+	raw, err := os.ReadFile("attribute_get_nest_gen.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "invokeAttributeGet, nest.HandlerMeta{})") {
+		t.Fatal("handlerAttributeGet is not registered on the memory fast path; declare it //roost:nest durability=memory")
+	}
+	f := newAttributeFixture(t)
+	if n, err := f.exp(100); err != nil || n != 1 {
+		t.Fatalf("exp %d %v", n, err)
+	}
+	commits := f.committer.commits.Load()
+	if commits == 0 {
+		t.Fatal("the level-up was not committed")
+	}
+	for range 3 {
+		if r := f.get(t); r.HP != 110 || r.Attack != 12 || r.Power != 35 {
+			t.Fatalf("read %+v", r)
+		}
+	}
+	if got := f.committer.commits.Load(); got != commits {
+		t.Fatalf("reading attributes committed %d transactions", got-commits)
 	}
 }
 func TestAttributeExistingBaseBonusSurvivesLevelUp(t *testing.T) {

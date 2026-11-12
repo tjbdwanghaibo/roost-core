@@ -20,13 +20,13 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 ```
 
 - `Open` 的 `uniqueID` 必须由工程的全局 ID 分配器给出、永不复用；换所有者或赛季答 `dungeon_invalid`。
-- `Defeated(ctx, uniqueID, instance, epoch, source, sequence, enemy)`：`enemy` 只认 `"minion"` 与 `"boss"`；每个 `source` 的 `sequence` 单调递增。
-- Nest handler（`game/handler/dungeon.go`、`dungeon_counts.go`，都不直接对客户端开放）：`handlerDungeonOpen`、`handlerDungeonDefeated`、`handlerDungeonView`、`handlerDungeonClaim`（同时锁 `Dungeon` 与 `Player` 两个实体）、`handlerDungeonCounts`。
+- `Defeated(ctx, uniqueID, instance, epoch, source, sequence, enemy)`：`enemy` 只认关卡规则里出现过的敌人种类（`logic.KnownEnemy`，缺省规则是 `"minion"` 与 `"boss"`），别的名字答 `dungeon_invalid`、不写、不占事件序号；每个 `source` 的 `sequence` 单调递增。
+- Nest handler（`game/handler/dungeon.go`、`dungeon_counts.go`，都不直接对客户端开放）：`handlerDungeonOpen`、`handlerDungeonDefeated`、`handlerDungeonView`、`handlerDungeonClaim`（同时锁 `Dungeon` 与 `Player` 两个实体）、`handlerDungeonCounts`（只读 Player 的通关计数，不带事务选项）。
 - 组件 `DungeonComp()`（`game/entities/player/dungeon_component.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
 
 ### 关卡规则（`game/dungeon/rules.go`，归工程）
 
-`Program()` 用框架的 `gameplay/level`（事件、条件、动作、计时器）定义缺省关卡：`waves` 阶段累计击败两只 `minion` → 切到 `boss` 阶段 → `boss` 被击败才产生 `success`。并行的 `deadline` 阶段在开局 30 分钟后把结果定为 `failed`；没有周期任务，超时由下一次查看或下一条事件顺带处理。同文件的常量：`ClearExp`（100 经验）、`ClaimWindowSeconds`（4 小时）、`LedgerPruneGraceSeconds`（10 分钟）、`MaxClaims`（128）、`MaxSeasons`（8）。
+`Program()` 用框架的 `gameplay/level`（事件、条件、动作、计时器）定义缺省关卡：`waves` 阶段累计击败两只 `minion` → 切到 `boss` 阶段 → `boss` 被击败才产生 `success`。并行的 `deadline` 阶段在开局 30 分钟后把结果定为 `failed`；没有周期任务，超时由下一次查看或下一条事件顺带处理。敌人种类只在这个文件里定义：触发器用 `enemyIs("名字")` 写“被击败的是谁”，写过的名字就是关卡认识的敌人，`KnownEnemy(name)` 从定义里读出来（事件名与字段名是常量 `EventEnemyDefeated`、`FieldEnemy`）。同文件的常量：`ClearExp`（100 经验）、`ClaimWindowSeconds`（4 小时）、`LedgerPruneGraceSeconds`（10 分钟）、`MaxClaims`（128）、`MaxSeasons`（8）。
 
 ### 登记点
 
@@ -71,7 +71,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 - **需求正好是它：** `roost module add dungeon`，连带装上 profile（profile 又依赖 enter）。想要通关数排行榜再 `roost module add leaderboard`。
 - **需求比它多一点：**
   - 换关卡流程、时限、奖励数额、窗口与上限：改 `game/dungeon/rules.go`。改了 `Program()` 的定义要考虑已有存档。
-  - `enemy` 的取值写死在 `game/entities/dungeon/run.go` 的 `Defeated` 里，加新的敌人种类要同时改那里与 `Program()`。
+  - 加一种敌人：只改 `game/dungeon/rules.go`——在关卡定义里加一条用 `enemyIs("新名字")` 的触发器（它被击败时做什么），`Defeated` 就接受这个名字；`run.go` 不用动。改了定义同样要考虑已有存档。
   - 首次通关要顺带推进任务、成就：登记 `player.OnDungeonClaimed`，不要改 `dungeon_component.go` 的判断顺序。
   - 奖励想发别的东西：在 `DungeonComponent.Claim` 里把 `ProfileComp().AddExp` 换成同一实体上别的组件的入口，保持“先检查、后写、账本同事务”。
 - **别的业务代码要开局 / 上报战斗结果：** `dungeon.FromRegistry(registry)` 取 `Controller`，调 `Open` 与 `Defeated`；每次都要检查错误。读某赛季通关数用 `DungeonCountsSender` 的 `Sync_DungeonCounts(ctx, playerEntityID, season)`。
@@ -89,4 +89,4 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 ## 验证范围
 
-`roost module verify` 跑 19 条场景（`^TestDungeon`），与 leaderboard 的联动另 3 条（`^TestWithDungeonLeaderboard`），零跳过。场景是离线的：用真实生成的 Sender、Nest、controller 与两个 DAO 的持久形态，覆盖开局幂等、阶段条件、事件重放与冲突、4 个来源的上限、非所有者与未通关不能领、重复与并发领奖只发一次、提交失败回滚、窗口边界、账本清理与满额、8 季上限、冷恢复与残缺存档拒绝、协议端点。提交器与 rank 的传输是内存替身；没有验证真实 Mongo / WAL、Redis / NATS、跨进程部署与崩溃后的耐久性。
+`roost module verify` 跑 21 条场景（`^TestDungeon`），与 leaderboard 的联动另 3 条（`^TestWithDungeonLeaderboard`），零跳过。场景是离线的：用真实生成的 Sender、Nest、controller 与两个 DAO 的持久形态，覆盖开局幂等、阶段条件、事件重放与冲突、4 个来源的上限、非所有者与未通关不能领、重复与并发领奖只发一次、提交失败回滚、窗口边界、账本清理与满额、8 季上限、冷恢复与残缺存档拒绝、协议端点、敌人种类只由规则文件决定（规则里没有的名字被拒且零写入；换一份只多了一种敌人的 `rules.go` 重跑，新敌人即被接受）。提交器与 rank 的传输是内存替身；没有验证真实 Mongo / WAL、Redis / NATS、跨进程部署与崩溃后的耐久性。

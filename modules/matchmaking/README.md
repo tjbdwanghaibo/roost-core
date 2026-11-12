@@ -21,7 +21,7 @@
 - `(*Runtime).Step(ctx)`：做一轮配对。模块的 `Start` 每 500 毫秒调一次，单轮上限 5 秒。
 - `NewRuntime(client, match, rooms, sid, resident)`：显式装配与离线验收用。
 
-**Nest handler**（`game/handler/match_*.go`，由 `Runtime` 经生成的 Sender 调用，不对客户端开放）：`MatchBegin`（单人记意图）、`MatchTeamBegin`（队伍与全部成员同一笔事务记意图并冻结名单）、`MatchUpdate`（全部成员同一笔事务推进阶段）、`MatchClear`、`MatchRelease`（解除队伍名单冻结）、`MatchState`（只读）、`MatchRoomClosed`（只读：这一局的匹配房关了没有）。写入的 handler 都是 `rollback=undo durability=strict`。
+**Nest handler**（`game/handler/match_*.go`，由 `Runtime` 经生成的 Sender 调用，不对客户端开放）：`MatchBegin`（单人记意图）、`MatchTeamBegin`（队伍与全部成员同一笔事务记意图并冻结名单）、`MatchUpdate`（全部成员同一笔事务推进阶段）、`MatchClear`、`MatchRelease`（解除队伍名单冻结）、`MatchState`（只读）、`MatchRoomClosed`（只读：这一局的匹配房关了没有）。写入的 handler 都是 `rollback=undo durability=strict`；两个只读 handler 声明 `durability=memory`（不开事务、不取回滚快照、不写 WAL，在里面改持久字段会 panic）——`MatchState` 是客户端轮询每次都走的路。
 
 **登记点**
 
@@ -77,9 +77,9 @@
 
 ## 验证范围
 
-- `roost module verify matchmaking`：16 条场景（`game/handler` 12 条、`game/matchmaking` 2 条、`game/controllers/matchmaking` 2 条）；与 `rehome` 的联动另有 2 条。
+- `roost module verify matchmaking`：17 条场景（`game/handler` 13 条、`game/matchmaking` 2 条、`game/controllers/matchmaking` 2 条）；与 `rehome` 的联动另有 2 条。
 - 场景是离线的：真实的 Nest 引擎与 match 的 `MemoryStore`，Remote / WAL 提交是替身，开房用测试夹具里的单间房；没有经过真实的 Redis、Mongo、NATS 与 TCP。
-- 覆盖：单排与两队成局、取消与 Commit 的两种先后、掉线后补查并重连、重复结果、Enqueue 回包丢失、未绑定意图到期、历史到期不解除屏障、队伍冻结与整组回滚、旧序号、活房不能清、端点可在模块启动前注册。
+- 覆盖：单排与两队成局、取消与 Commit 的两种先后、掉线后补查并重连、重复结果、Enqueue 回包丢失、未绑定意图到期、历史到期不解除屏障、队伍冻结与整组回滚、旧序号、活房不能清、端点可在模块启动前注册、两个只读 handler 的事务声明是 memory 快路径（核对生成的注册代码）。
 - turn-pvp 配方另有一条经 TCP / Robot 的“排队到回合”链路，房号映射用 mongotest；真实依赖的联合验收没有做。
 
 ## 客户端流程

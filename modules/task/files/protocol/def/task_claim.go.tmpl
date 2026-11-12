@@ -11,12 +11,16 @@ type TaskClaimRequest struct {
 	TaskID int64 `pb:"1"`
 }
 
-// TaskClaimResponse 的 Code 非 0 时是拒绝：任务号不存在（task_unknown）、本周期还没做完（task_incomplete）、
-// 本周期已经领过（task_claimed），或发奖被货币模块拒绝（wallet_overflow）。拒绝时什么都没有改。
+// TaskClaimResponse 的 Code 非 0 时是拒绝：任务号不存在、已停用或这一行不合法（task_unknown）、
+// 本周期还没做完或前置任务还没领奖（task_incomplete）、本周期已经领过（永久任务是终身领过，task_claimed），
+// 或发奖被奖励方拒绝——金币是货币模块的 wallet_overflow；道具（装了 bag 联动才有）是背包模块的
+// bag_item_invalid（道具不在道具表里）、bag_stack_full（超过单种上限）、bag_kinds_full（种类已满）。
+// 拒绝时什么都没有改，背包腾出位置后可以再领。
 type TaskClaimResponse struct {
 	Code   int32  `pb:"1"`
 	Reason string `pb:"2"`
-	// TaskID 是领到奖的任务号，Reward 是这次到账的资产数量，Balance 是到账后的余额。
+	// TaskID 是领到奖的任务号，Reward 是这次到账的资产数量；RewardKind / RewardID 写明是哪种资产
+	// （coins 时 RewardID 为 0，item 时是道具号）。Balance 是领奖后的金币余额，道具奖励不改变它。
 	TaskID     int64  `pb:"3"`
 	Reward     int64  `pb:"4"`
 	Balance    int64  `pb:"5"`

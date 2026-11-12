@@ -2,9 +2,11 @@ package handler
 
 import player "{{MODULE}}/game/entities/player"
 
-// handlerTaskAdvance 把一个任务的当日进度推进 n 次，返回推进后的进度。不对客户端开放：没有协议与端点，
+// handlerTaskAdvance 把一个任务在它当前周期里的进度推进 n 次，返回推进后的进度。周期由任务表定：
+// 每日任务按业务日、每周任务按业务周、永久任务不分周期。不对客户端开放：没有协议与端点，
 // 由服务端代码经生成的 Sender 调用——给不在这名玩家的事务里的调用方用（房间结算后给每名玩家记一场战斗、GM）。
-// nowUnixMilli 由 Nest 填这条消息冻结的业务时间：按哪一天算由服务端收到消息的时刻决定，调用方不传时间。
+// nowUnixMilli 由 Nest 填这条消息冻结的业务时间：算进哪个业务日 / 业务周由服务端收到消息的时刻决定，调用方不传时间。
+// 任务未解锁（前置任务还没领奖）答 task_incomplete，任务号不存在答 task_unknown，n 不为正答 task_count_invalid。
 //
 // 已经在这名玩家的 Nest handler 里的功能（签到、消费）不要发这条消息，直接调同一个实体上的
 // TaskComp().Advance：进度与那个功能的写入在同一笔事务里提交或回滚。

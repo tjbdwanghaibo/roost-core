@@ -2,7 +2,9 @@ package handler
 
 import room "{{MODULE}}/game/entities/room"
 
-//roost:nest
+// handlerMatchRoomClosed 只读房间是否已为这场匹配关闭。只读 handler 声明 durability=memory（见 match_state.go）。
+//
+//roost:nest durability=memory
 func handlerMatchRoomClosed(target room.IMatchroomEntity, matchID string) bool {
 	return target.MatchroomComp().Closed(matchID)
 }

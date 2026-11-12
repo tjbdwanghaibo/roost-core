@@ -7,12 +7,13 @@ import (
 )
 
 // handlerActorMove 的速度是服务端规则，客户端只能指定目标；每一步经过实际场景地形校验。
+// 没进空间、被定身是玩家自己能触发的正常拒绝：换成业务码返回，生成的端点把它填进应答，不记 Error。
 //
 //roost:nest rollback=undo durability=async
 func handlerActorMove(target player.IActorEntity, request *pb.ActorMoveRequest) (*pb.ActorMoveResponse, error) {
 	body := target.ActorComp().Body()
 	if err := body.Walk([]spatial.Point{{X: request.X, Y: request.Y}}, 60); err != nil {
-		return nil, err
+		return nil, target.ActorComp().MoveRefusal(err)
 	}
 	pos := body.Position()
 	return &pb.ActorMoveResponse{X: pos.X, Y: pos.Y}, nil

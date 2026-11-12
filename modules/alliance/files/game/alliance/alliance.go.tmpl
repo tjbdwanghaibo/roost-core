@@ -23,8 +23,9 @@
 //     Player steps native (their receipts in PlayerDao.SagaReceipts) and the
 //     alliance steps Mongo steps that call the alliance RPC with the command's
 //     IdempotencyKey as request id (game/alliance/runtime/saga.go);
-//   - join and leave change only the alliance: one RPC, answered with the
-//     alliance's new state and version;
+//   - join and leave — and apply, approve, reject, kick, transfer — change
+//     only the alliance: one RPC, answered with the alliance's new state and
+//     version;
 //   - reading a alliance is a mirror read.
 package alliance
 
@@ -64,7 +65,8 @@ type State struct {
 	PlayerID int64 `json:"player_id"`
 	// SID is the player's bound sid, where the Player steps run: the saga's
 	// route (StartRequest.Route) is taken from it, and the step's admission
-	// checks it again, as for the gift saga.
+	// checks it again before the step enters Nest (game/alliance/runtime
+	// AdmitPlayerStep).
 	SID int32 `json:"sid"`
 	// Coins is what the debit takes: the founding fee or the donation.
 	Coins int32 `json:"coins,omitempty"`

@@ -1,0 +1,178 @@
+package gm
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	gamenotice "{{MODULE}}/game/notice"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// 替身只占 chat 服务的位置：notice 的 Publish、chat controller 的 AnnounceWorld、gm 的审计包装都是真实代码。
+type gmNoticeChat struct {
+	svcchat.Messaging
+	requests []svcchat.SystemPublishRequest
+	err      error
+}
+
+func (chat *gmNoticeChat) PublishSystem(_ context.Context, request svcchat.SystemPublishRequest) (svcchat.Message, error) {
+	if chat.err != nil {
+		return svcchat.Message{}, chat.err
+	}
+	chat.requests = append(chat.requests, request)
+	return svcchat.Message{Channel: request.Channel, Body: request.Body, Origin: svcchat.OriginSystem}, nil
+}
+
+type gmNoticeFixture struct {
+	chat       *gmNoticeChat
+	commands   *admin.Registry
+	logs       *gmAuditLog
+	stopNotice func(context.Context) error
+}
+
+func newNoticeGM(t *testing.T) *gmNoticeFixture {
+	t.Helper()
+	f := &gmNoticeFixture{chat: &gmNoticeChat{}, logs: captureGMAudit(t)}
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(svcchat.CapabilityName, svcchat.Messaging(f.chat)); err != nil {
+		t.Fatal(err)
+	}
+	stopNotice, err := gamenotice.Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.stopNotice = stopNotice
+	stopGM, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := stopGM(context.Background()); err != nil {
+			t.Error(err)
+		}
+		if err := stopNotice(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.commands, _ = app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	return f
+}
+
+func (f *gmNoticeFixture) execute(name, operator, trace, payload string) (admin.Result, error) {
+	return f.commands.Execute(context.Background(), admin.Command{Name: name, Operator: operator, TraceID: trace, Payload: []byte(payload)})
+}
+
+// audit 取 gm 这一层给某个 trace 记的日志（msg 是 "gm: executing" 或 "gm: completed"）。
+func (f *gmNoticeFixture) audit(t *testing.T, message, trace string) []map[string]any {
+	t.Helper()
+	return f.logs.records(t, message, trace)
+}
+
+func TestWithNoticeGMPublishesThroughAudit(t *testing.T) {
+	f := newNoticeGM(t)
+	for _, step := range []struct{ command, trace, body, key string }{
+		{CommandNoticeAnnounce, "trace-announce", "公告：维护完成", "notice:announce:event-1"},
+		{CommandNoticeMarquee, "trace-marquee", "跑马灯：维护完成", "notice:marquee:event-1"},
+	} {
+		result, err := f.execute(step.command, "support-17", step.trace, `{"text":"维护完成","key":"event-1","note":"工单 42"}`)
+		if err != nil || !result.OK || result.Data["key"] != "event-1" {
+			t.Fatalf("%s: result=%+v err=%v", step.command, result, err)
+		}
+		last := f.chat.requests[len(f.chat.requests)-1]
+		if string(last.Body) != step.body || last.RequestID != step.key {
+			t.Fatalf("%s: published %+v", step.command, last)
+		}
+		before, after := f.audit(t, "gm: executing", step.trace), f.audit(t, "gm: completed", step.trace)
+		if len(before) != 1 || before[0]["command"] != step.command || before[0]["operator"] != "support-17" || before[0]["note"] != "工单 42" {
+			t.Fatalf("%s: audit before=%+v", step.command, before)
+		}
+		if len(after) != 1 || after[0]["command"] != step.command || after[0]["operator"] != "support-17" || after[0]["code"] != float64(errcode.CodeOK) {
+			t.Fatalf("%s: audit after=%+v", step.command, after)
+		}
+	}
+	if len(f.chat.requests) != 2 {
+		t.Fatalf("requests=%+v", f.chat.requests)
+	}
+}
+
+func TestWithNoticeGMRequiresOperatorAndNote(t *testing.T) {
+	f := newNoticeGM(t)
+	for _, step := range []struct{ operator, trace, payload string }{
+		{"", "trace-no-operator", `{"text":"维护完成","key":"event-1","note":"工单 42"}`},
+		{"support-17", "trace-no-note", `{"text":"维护完成","key":"event-1"}`},
+		{"support-17", "trace-blank-note", `{"text":"维护完成","key":"event-1","note":"  "}`},
+	} {
+		for _, command := range []string{CommandNoticeAnnounce, CommandNoticeMarquee} {
+			result, err := f.execute(command, step.operator, step.trace, step.payload)
+			if !errors.Is(err, apperrors.ErrGMInvalid) || result.OK || result.Data["code"] != errcode.CodeOf(apperrors.ErrGMInvalid) {
+				t.Fatalf("%s %s: result=%+v err=%v", command, step.trace, result, err)
+			}
+		}
+		// 必填检查不过时命令没有开始执行，gm 这一层不记执行前后的日志。
+		if before, after := f.audit(t, "gm: executing", step.trace), f.audit(t, "gm: completed", step.trace); len(before) != 0 || len(after) != 0 {
+			t.Fatalf("%s: audit before=%+v after=%+v", step.trace, before, after)
+		}
+	}
+	if len(f.chat.requests) != 0 {
+		t.Fatalf("unaudited command reached chat: %+v", f.chat.requests)
+	}
+}
+
+func TestWithNoticeGMInvalidInputKeepsCode(t *testing.T) {
+	f := newNoticeGM(t)
+	for _, step := range []struct{ trace, payload string }{
+		{"trace-blank-text", `{"text":"  ","key":"event-1","note":"工单 42"}`},
+		{"trace-no-key", `{"text":"维护完成","note":"工单 42"}`},
+		{"trace-long-text", `{"text":"` + strings.Repeat("x", 256) + `","key":"event-1","note":"工单 42"}`},
+		{"trace-unknown-field", `{"text":"维护完成","key":"event-1","target":7,"note":"工单 42"}`},
+	} {
+		result, err := f.execute(CommandNoticeAnnounce, "support-17", step.trace, step.payload)
+		if !errors.Is(err, apperrors.ErrGMInvalid) || !errors.Is(err, admin.ErrCommandInvalid) || result.OK || result.Data["code"] != errcode.CodeOf(apperrors.ErrGMInvalid) {
+			t.Fatalf("%s: result=%+v err=%v", step.trace, result, err)
+		}
+		// 审计信息齐全，命令开始执行后被拒：执行后那条带的是拒绝的码。
+		after := f.audit(t, "gm: completed", step.trace)
+		if len(f.audit(t, "gm: executing", step.trace)) != 1 || len(after) != 1 || after[0]["code"] != float64(errcode.CodeOf(apperrors.ErrGMInvalid)) {
+			t.Fatalf("%s: audit after=%+v", step.trace, after)
+		}
+	}
+	if len(f.chat.requests) != 0 {
+		t.Fatalf("invalid command reached chat: %+v", f.chat.requests)
+	}
+}
+
+func TestWithNoticeGMFailureAndStopAreReported(t *testing.T) {
+	f := newNoticeGM(t)
+	const payload = `{"text":"维护完成","key":"event-1","note":"工单 42"}`
+	injected := errors.New("injected chat failure")
+	f.chat.err = injected
+	result, err := f.execute(CommandNoticeAnnounce, "support-17", "trace-chat-down", payload)
+	if !errors.Is(err, injected) || result.OK || result.Data["code"] != errcode.CodeOf(injected) {
+		t.Fatalf("chat failure: result=%+v err=%v", result, err)
+	}
+	if after := f.audit(t, "gm: completed", "trace-chat-down"); len(after) != 1 || after[0]["code"] != float64(errcode.CodeOf(injected)) {
+		t.Fatalf("chat failure audit=%+v", after)
+	}
+	f.chat.err = nil
+	if err := f.stopNotice(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result, err = f.execute(CommandNoticeMarquee, "support-17", "trace-stopped", payload)
+	if !errors.Is(err, apperrors.ErrGMUnavailable) || result.OK || result.Data["code"] != errcode.CodeOf(apperrors.ErrGMUnavailable) {
+		t.Fatalf("stopped notice: result=%+v err=%v", result, err)
+	}
+	if after := f.audit(t, "gm: completed", "trace-stopped"); len(after) != 1 || after[0]["code"] != float64(errcode.CodeOf(apperrors.ErrGMUnavailable)) {
+		t.Fatalf("stopped audit=%+v", after)
+	}
+	if len(f.chat.requests) != 0 {
+		t.Fatalf("failed command reached chat: %+v", f.chat.requests)
+	}
+}

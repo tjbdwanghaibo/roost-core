@@ -3,9 +3,11 @@ package handler
 import player "{{MODULE}}/game/entities/player"
 
 // handlerPlayerAlliance reads the alliance the player is shown in (PlayerDao.Alliance.ID)
-// under the Player's lock: a read handler, like WorldStats. The alliance
+// under the Player's lock. It only reads: nothing is changed, so there is
+// nothing to roll back or persist and the tag carries no options. The alliance
 // endpoints use it for their advisory pre-checks and to know which alliance to
-// leave, donate to or claim from; the alliance service decides on its roster.
+// leave, donate to, claim from or manage; the alliance service decides on its
+// roster.
 //
 //roost:nest
 func handlerPlayerAlliance(target player.IAllianceEntity) (int64, error) {

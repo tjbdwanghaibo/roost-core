@@ -23,7 +23,7 @@ errcodes: [matchmaking_invalid, matchmaking_busy, matchmaking_stale, matchmaking
 verify:
   packages: [./game/handler, ./game/matchmaking, ./game/controllers/matchmaking]
   run: ^TestMatchmaking
-  pass: 16
+  pass: 17
 with:
   rehome:
     summary: 排队与换服双向排斥，未知匹配结果继续阻挡换服

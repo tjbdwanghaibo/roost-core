@@ -3,7 +3,7 @@ summary: 场景实体、多图与分线、原子切换、区域 AOI 与公开字
 requires: [actor]
 needs:
   mods: [nest, heartbeat]
-  features: [entity, dao, protocol]
+  features: [entity, dao, protocol, errcode]
 access: {transport: tcp, self_sync: true, lifecycle: true}
 entity: Player
 entities: [Scene]
@@ -12,11 +12,12 @@ state:
   - {field: SceneRuntime, type: SceneRuntimeState, store: scene_runtime, dao: 'nopersist,nosync', comment: 当前区域集合，只在场景运行期使用。}
   - {field: SceneInteraction, type: SceneInteractionState, store: scene_interaction, dao: 'persist,nosync', comment: 交互连续序号与最后应答，防止重发重复触发。}
 protocols: [SceneChange, SceneInteract]
+errcodes: [scene_unavailable, scene_full, scene_stale, scene_not_here, scene_object_unknown, scene_object_far, scene_sequence]
 runtime: {package: game/scene/service, start: Start}
 verify:
   packages: [./game/controllers/scene]
   run: ^TestScene
-  pass: 26
+  pass: 28
 with:
   chat:
     summary: 同进程同场景附近即时聊天，无历史和补发

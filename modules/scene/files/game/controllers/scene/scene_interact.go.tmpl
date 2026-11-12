@@ -6,9 +6,12 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
+// HandleSceneInteract 与 HandleSceneChange 同一个规矩：业务拒绝答在应答的 Code / Reason 里、连接保留，
+// 只有不带码的内部错误才作为 error 返回（见 refusal）。
 func (c *Controller) HandleSceneInteract(ctx *playeraccess.Context, request *pb.SceneInteractRequest) (*pb.SceneInteractResponse, error) {
 	if ctx == nil || request == nil {
 		return nil, fmt.Errorf("scene: invalid interaction")
@@ -17,9 +20,26 @@ func (c *Controller) HandleSceneInteract(ctx *playeraccess.Context, request *pb.
 	if err != nil {
 		return nil, err
 	}
-	_, area, err := c.manager.IDs(0, request.SceneID)
+	var result *pb.SceneInteractResponse
+	if request.SceneID == 0 {
+		// 0 不是场景号；IDs 会把它当成“没有目标”放过去，这里先按“不在那张图”拒绝。
+		err = apperrors.ErrSceneNotHere
+	}
+	var area int64
+	if err == nil {
+		_, area, err = c.manager.IDs(0, request.SceneID)
+	}
+	if err == nil {
+		result, err = sender.NewSceneInteractSender(c.client).MultiSync_SceneInteract(ctx.Context(), id, area, request.Sequence, request.ObjectID)
+	}
 	if err != nil {
+		if code, reason, ok := refusal(err); ok {
+			return &pb.SceneInteractResponse{Code: code, Reason: reason}, nil
+		}
 		return nil, err
 	}
-	return sender.NewSceneInteractSender(c.client).MultiSync_SceneInteract(ctx.Context(), id, area, request.Sequence, request.ObjectID)
+	if result == nil {
+		return nil, fmt.Errorf("scene: interaction returned no response")
+	}
+	return result, nil
 }

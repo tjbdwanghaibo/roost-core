@@ -1,17 +1,23 @@
 package handler
 
 import (
-	"fmt"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
+// handlerMonsterInspect 只读。两种正常拒绝带业务码：怪不在任何场景里（死亡待重生或已退出）答 monster_gone，
+// 怪活着但查看者不在同一个场景答 monster_not_here。死亡的怪没有场景可核对，所以 monster_gone 不看查看者在哪。
+//
 //roost:nest
 func handlerMonsterInspect(viewer player.IActorEntity, target monster.IMonsterEntity) (*pb.MonsterInspectResponse, error) {
 	s := target.MonsterActorComp().Snapshot()
-	if s.SceneID == 0 || viewer.ActorComp().Body().Map.SceneID() != s.SceneID {
-		return nil, fmt.Errorf("monster: target is outside your scene")
+	if s.SceneID == 0 {
+		return nil, apperrors.ErrMonsterGone
+	}
+	if viewer.ActorComp().Body().Map.SceneID() != s.SceneID {
+		return nil, apperrors.ErrMonsterNotHere
 	}
 	return &pb.MonsterInspectResponse{MonsterID: s.ID, LifeSeq: s.LifeSeq, HP: s.HP, Template: s.Template, X: s.X, Y: s.Y}, nil
 }

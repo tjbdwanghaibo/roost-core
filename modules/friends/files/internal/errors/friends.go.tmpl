@@ -3,7 +3,7 @@ package errors
 import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
 var (
-	ErrFriendsInvalid            = errcode.Define({{ID:errcode:friends_invalid}}, "friends_invalid", "invalid friend operation or peer is not online in this server")
+	ErrFriendsInvalid            = errcode.Define({{ID:errcode:friends_invalid}}, "friends_invalid", "invalid friend operation, or the peer must be online on this server for it")
 	ErrFriendsFull               = errcode.Define({{ID:errcode:friends_full}}, "friends_full", "friend list is full")
 	ErrFriendsBlocked            = errcode.Define({{ID:errcode:friends_blocked}}, "friends_blocked", "friend request is blocked")
 	ErrFriendsApplicationMissing = errcode.Define({{ID:errcode:friends_application_missing}}, "friends_application_missing", "friend application is missing")

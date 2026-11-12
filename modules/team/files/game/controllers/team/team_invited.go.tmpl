@@ -1,0 +1,81 @@
+package team
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	teamentity "{{MODULE}}/game/entities/team"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// inviteTransport 是告知被邀请人用到的玩家 TCP Runtime 的两个方法。写成接口、能力按名字取，
+// 因为传输包 import 构造这个 controller 的协议绑定——反过来 import 它就成环了。
+type inviteTransport interface {
+	ActiveSessions(playerID int64) int
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+}
+
+// playerTCPCapability 是 internal/access/player/tcp 的 Name：传输 Mod 发布 Runtime 用的能力名。
+const playerTCPCapability app.ModName = "access.player.tcp"
+
+// announceInvite 在邀请提交之后把它告知被邀请人：他此刻在本进程在线时，先在他的档里记一条收件记录（之后能用
+// TeamInvites 查到），再推一条 TeamInvited。只对在线的人做，因为本进程的会话是“他的档归本进程写”的证明——
+// 不在线、或连在别的 game 进程上的被邀请人收不到告知，邀请本身照常有效。
+//
+// 这一步只是告知，不是邀请的一部分：传输没装配、记录没记上（记满、玩家还没建档）、推送失败都只记日志，
+// 邀请（Team 上的权威记录）不受影响，调用方的应答也不变。
+func (c *Controller) announceInvite(ctx context.Context, invitation teamentity.Invitation) {
+	if invitation.ExpireAt == 0 || c.registry == nil {
+		return
+	}
+	transport, ok := app.Lookup[inviteTransport](c.registry, playerTCPCapability)
+	if !ok || transport == nil || transport.ActiveSessions(invitation.Invitee) == 0 {
+		return
+	}
+	invitee, err := entity.BuildEntityID(invitation.Invitee, player.EntityKindPlayer)
+	if err != nil {
+		return
+	}
+	noted, err := sender.NewTeamInviteNoteSender(c.nestClient).Sync_TeamInviteNote(ctx, invitee, invitation.TeamID, invitation.Leader, invitation.ExpireAt)
+	if err != nil || !noted {
+		slog.DebugContext(ctx, "team: invitation not recorded for the invitee; it stays valid on the team", "player_id", invitation.Invitee, "team_id", invitation.TeamID, "err", err)
+	}
+	push := &pb.TeamInvitedPush{TeamID: invitation.TeamID, Inviter: invitation.Leader, ExpireAtUnixMilli: invitation.ExpireAt}
+	if err := transport.PushPlayer(ctx, invitation.Invitee, msgid.MsgTeamInvited, push); err != nil {
+		slog.DebugContext(ctx, "team: invitation push not delivered", "player_id", invitation.Invitee, "team_id", invitation.TeamID, "err", err)
+	}
+}
+
+// HandleTeamInvites 列出自己收到的、还没过期的邀请。列表来自本人档里的收件记录：它说的是“收到过且没过期”，
+// 队伍后来解散、满员或撤掉邀请时，接受会被队伍一侧拒绝。
+func (c *Controller) HandleTeamInvites(ctx *playeraccess.Context, req *pb.TeamInvitesRequest) (*pb.TeamInvitesResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	response := &pb.TeamInvitesResponse{}
+	invites, err := sender.NewTeamInvitesSender(c.nestClient).Sync_TeamInvites(ctx.Context(), self)
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		if response.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "team invites request failed", "player_id", ctx.PlayerID, "err", err)
+		}
+		return response, nil
+	}
+	for _, invite := range invites {
+		response.Invites = append(response.Invites, pb.TeamInvitedPush{TeamID: invite.TeamID, Inviter: invite.Inviter, ExpireAtUnixMilli: invite.ExpireAt})
+	}
+	return response, nil
+}

@@ -13,7 +13,7 @@
   - `AttributeComp().Refresh() error`：在 Nest 事务里重算全部三层；玩家还没有持久基础记录时，这一次把缺省基础值写进持久层。`RefreshGear()` 是它的别名，供装备变化时调用。
   - `AttributeComp().LevelUp(levels int32) error`：基础层一次性成长 `levels` 级并重算。由档案升级钩子调用，一般不直接调。
   - `IAttributeEntity`：窄实体接口。
-  - Nest handler `handlerAttributeGet`（`game/handler/attribute_get.go`）：协议背后的只读 handler。
+  - Nest handler `handlerAttributeGet`（`game/handler/attribute_get.go`）：协议背后的只读 handler，声明 `//roost:nest durability=memory`（不开事务、不取回滚快照、不写 WAL；在里面改持久字段会 panic）。
 - **属性定义**（`game/gameplay/attribute/combat.go`，归工程所有）
   - `Combat` 结构带 `//roost:attribute` 标注，属性号、Setter 与公式更新代码由框架的 attribute 生成器产出。
   - `_Power` 是推导公式：`Power = Attack*2 + HP/10`。`Power` 不能直接写。
@@ -65,7 +65,7 @@
 
 ## 验证范围
 
-- `roost module verify attribute`：16 个场景（`./game/handler` 与 `./game/gameplay/attribute`，`^TestAttribute`）；与 `equipment` 的联动另有 8 个场景，与 `enter` 的联动另有 2 个场景（都在 `./game/handler`）。
+- `roost module verify attribute`：17 个场景（`./game/handler` 与 `./game/gameplay/attribute`，`^TestAttribute`）；与 `equipment` 的联动另有 8 个场景，与 `enter` 的联动另有 2 个场景（都在 `./game/handler`）。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO、属性生成代码与 `profile` 组件；提交器是替身（`attributeCommitter`，可注入拒绝）。
-- 覆盖：新玩家只派生不落库、升级成长、一次升多级只成长一次、只加经验不升级时不写基础层、`Final` 与 `Container` 返回副本、`Refresh` 落库且重复调用稳定、提交被拒与钩子失败时等级和各层一起回滚、非法基础值拒绝、并发加经验串行成长、协议使用认证身份、基础层加成在升级后保留、重新加载后重建派生层且不写基础层；生成的属性定义拒绝直接写推导属性。
+- 覆盖：新玩家只派生不落库、升级成长、一次升多级只成长一次、只加经验不升级时不写基础层、`Final` 与 `Container` 返回副本、`Refresh` 落库且重复调用稳定、提交被拒与钩子失败时等级和各层一起回滚、非法基础值拒绝、并发加经验串行成长、协议使用认证身份、只读 handler 的事务声明是 memory 快路径且读取不产生提交、基础层加成在升级后保留、重新加载后重建派生层且不写基础层；生成的属性定义拒绝直接写推导属性。
 - 没有验证：真实数据库、经 TCP 的客户端链路与同步载荷到达客户端。

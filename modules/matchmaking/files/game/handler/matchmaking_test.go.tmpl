@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +22,7 @@ import (
 )
 
 func registerMatchmaking(engine *nest.NestMgr) {
-	registerTeamTestHandler(engine, handlerNameMatchState, invokeMatchState, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
+	registerTeamTestHandler(engine, handlerNameMatchState, invokeMatchState, nest.HandlerMeta{})
 	registerTeamTestHandler(engine, handlerNameMatchBegin, invokeMatchBegin, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	registerTeamTestHandler(engine, handlerNameMatchUpdate, invokeMatchUpdate, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	registerTeamTestHandler(engine, handlerNameMatchClear, invokeMatchClear, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
@@ -97,6 +99,24 @@ func (f *matchFixture) status(t *testing.T, id int64) player.MatchSnapshot {
 	}
 	return s
 }
+// 两个只读 handler（轮询用的 MatchState、查房间是否已关的 MatchRoomClosed）的事务声明必须是 memory 快路径：
+// 生成的注册代码里是空的 HandlerMeta。不带选项的 //roost:nest 是 rollback=state durability=async，
+// 每次轮询都要先把整个实体的 DAO 序列化成回滚快照。本文件 registerMatchmaking 里手写的那份声明与它一致。
+func TestMatchmakingReadOnlyHandlersAreDeclaredReadOnly(t *testing.T) {
+	for file, want := range map[string]string{
+		"match_state_nest_gen.go":       "invokeMatchState, nest.HandlerMeta{})",
+		"match_room_closed_nest_gen.go": "invokeMatchRoomClosed, nest.HandlerMeta{})",
+	} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("%s: the read-only handler is not registered on the memory fast path; declare it //roost:nest durability=memory", file)
+		}
+	}
+}
+
 func TestMatchmakingSoloCreatesReservedRoomAndReturnsBothResults(t *testing.T) {
 	f := newMatchFixture(t)
 	f.enqueue(t, 101, false)

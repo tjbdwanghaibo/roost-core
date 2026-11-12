@@ -7,6 +7,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	player "{{MODULE}}/game/entities/player"
@@ -37,18 +39,36 @@ func (g friendsGetter) GetMany(ctx context.Context, ids []int64, cats []entity.E
 type friendsCommitter struct {
 	reject  atomic.Bool
 	commits atomic.Int64
+	mu      sync.Mutex
+	touched []int64
 }
 
-func (c *friendsCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+func (c *friendsCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
 	if c.reject.Load() {
 		return errors.New("injected commit rejection")
 	}
 	c.commits.Add(1)
+	c.mu.Lock()
+	c.touched = c.touched[:0]
+	for _, mutation := range record.Mutations {
+		c.touched = append(c.touched, mutation.Key.ID)
+	}
+	c.mu.Unlock()
 	return nil
+}
+
+// lastTouched 是最近一笔提交写到的实体号（升序、去重；一个实体可以有不止一份 DAO）：用来断言“这笔事务没有写对方的档”。
+func (c *friendsCommitter) lastTouched() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := slices.Clone(c.touched)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 type friendsFixture struct {
 	engine  *nest.NestMgr
+	getter  friendsGetter
 	players []*player.Player
 	commit  *friendsCommitter
 	changes *syncsender.FriendsChangeSender
@@ -59,9 +79,10 @@ func newFriendsFixture(t *testing.T, n int) *friendsFixture {
 	t.Helper()
 	player.RegisterEntity()
 	RegisterFriendsChangeNestHandlers()
+	RegisterFriendsOwnNestHandlers()
 	RegisterFriendsListNestHandlers()
-	f := &friendsFixture{commit: &friendsCommitter{}}
 	g := friendsGetter{}
+	f := &friendsFixture{commit: &friendsCommitter{}, getter: g}
 	for i := 0; i < n; i++ {
 		id, e := entity.BuildEntityID(int64(98000+i), player.EntityKindPlayer)
 		if e != nil {
@@ -237,5 +258,76 @@ func TestFriendsInvalidAndMissingPeerWriteNothing(t *testing.T) {
 	}
 	if f.commit.commits.Load() != 0 {
 		t.Fatal("invalid wrote")
+	}
+}
+
+// 取消拉黑、拒绝申请只锁操作者：对方的档拿不到（不在线、不在本进程）也能做，提交里只有操作者一份档；
+// 这条单实体入口不接受要改对方的动作。
+func TestFriendsOwnSideActionsLockOnlyTheActor(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	own := syncsender.NewFriendsOwnSender(f.engine)
+	actor, peer := f.players[0].ID(), f.players[1].ID()
+	f.must(t, 0, 1, player.FriendsBlock)
+	delete(f.getter, peer)
+	if e := own.Sync_FriendsOwn(context.Background(), actor, peer, player.FriendsUnblock); e != nil {
+		t.Fatalf("unblock without the peer: %v", e)
+	}
+	if s, touched := f.list(t, 0), f.commit.lastTouched(); len(s.Blocked) != 0 || !slices.Equal(touched, []int64{actor}) {
+		t.Fatalf("unblock: %+v touched=%v", s, touched)
+	}
+	before := f.commit.commits.Load()
+	for _, action := range []int32{player.FriendsApply, player.FriendsAccept, player.FriendsRemove, player.FriendsBlock, 999} {
+		if e := own.Sync_FriendsOwn(context.Background(), actor, peer, action); !errors.Is(e, apperrors.ErrFriendsInvalid) {
+			t.Fatalf("own-side entry accepted action %d: %v", action, e)
+		}
+	}
+	if e := own.Sync_FriendsOwn(context.Background(), actor, actor, player.FriendsUnblock); !errors.Is(e, apperrors.ErrFriendsInvalid) {
+		t.Fatalf("own-side entry accepted self: %v", e)
+	}
+	if e := own.Sync_FriendsOwn(context.Background(), actor, peer, player.FriendsReject); e != nil {
+		t.Fatalf("reject with nothing to reject: %v", e)
+	}
+	if f.commit.commits.Load() != before {
+		t.Fatal("refused or empty own-side action wrote")
+	}
+}
+
+// 拒绝申请走单实体入口时同样只消费自己收到的那一条，申请人的档不参与。
+func TestFriendsOwnSideRejectConsumesTheReceivedApplication(t *testing.T) {
+	f := newFriendsFixture(t, 2)
+	actor, peer := f.players[0].ID(), f.players[1].ID()
+	f.must(t, 1, 0, player.FriendsApply)
+	delete(f.getter, peer)
+	if e := syncsender.NewFriendsOwnSender(f.engine).Sync_FriendsOwn(context.Background(), actor, peer, player.FriendsReject); e != nil {
+		t.Fatalf("reject without the applicant: %v", e)
+	}
+	if s, touched := f.list(t, 0), f.commit.lastTouched(); len(s.Incoming) != 0 || !slices.Equal(touched, []int64{actor}) {
+		t.Fatalf("reject: %+v touched=%v", s, touched)
+	}
+}
+
+// 删除、拉黑只在对方名单里确实有操作者时才写对方的档：对没有关系的玩家，删除零写入，拉黑只写操作者自己的黑名单。
+func TestFriendsRemoveAndBlockLeaveUnrelatedPeerUntouched(t *testing.T) {
+	f := newFriendsFixture(t, 3)
+	actor := f.players[0].ID()
+	// 让对方的名单非空：DAO 对“非空名单里不存在的键”的删除也会登记修改，空名单测不出来。
+	f.must(t, 1, 2, player.FriendsApply)
+	f.must(t, 2, 1, player.FriendsAccept)
+	f.must(t, 2, 1, player.FriendsApply)
+	before := f.commit.commits.Load()
+	f.must(t, 0, 1, player.FriendsRemove)
+	if f.commit.commits.Load() != before {
+		t.Fatal("removing a stranger wrote")
+	}
+	f.must(t, 0, 1, player.FriendsBlock)
+	if touched := f.commit.lastTouched(); f.commit.commits.Load() != before+1 || !slices.Equal(touched, []int64{actor}) {
+		t.Fatalf("blocking a stranger touched %v", touched)
+	}
+	f.must(t, 0, 1, player.FriendsBlock)
+	if f.commit.commits.Load() != before+1 {
+		t.Fatal("repeated block wrote")
+	}
+	if b := f.list(t, 1); len(b.Peers) != 1 || b.Peers[0] != 98002 {
+		t.Fatalf("unrelated peer changed: %+v", b)
 	}
 }

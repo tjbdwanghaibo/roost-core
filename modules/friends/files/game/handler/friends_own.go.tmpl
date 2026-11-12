@@ -1,0 +1,11 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerFriendsOwn 只锁操作者一人：取消拉黑、拒绝申请只改自己的名单，对方的档不进这笔事务。
+// peerID 是对方的完整 EntityID；别的动作在这里一律拒绝（它们要同时改对方，走 handlerFriendsChange）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerFriendsOwn(actor player.IFriendsEntity, peerID int64, action int32) error {
+	return actor.FriendsComp().ChangeOwnSide(peerID, action)
+}

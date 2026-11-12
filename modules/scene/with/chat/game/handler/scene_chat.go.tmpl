@@ -1,21 +1,22 @@
 package handler
 
 import (
-	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	player "{{MODULE}}/game/entities/player"
 	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 // handlerSceneChat 不遍历或读取其他 Player DAO；空间索引只提供本进程、同一场景已提交站位。
 // 收件人在快照之后可能离场；消息没有持久化/补发，边界是取快照时的附近玩家。
+// 发送者不在任何场景里是正常拒绝，返回 scene 模块的业务码 scene_not_here（联动不另外申请号）。
 //
 //roost:nest rollback=undo durability=async
 func handlerSceneChat(target player.IActorEntity) (*gamescene.ChatAudience, error) {
 	body := target.ActorComp().Body()
 	space, ok := body.Environment().Space.(*gamescene.Space)
 	if !body.Map.InScene() || !ok {
-		return nil, fmt.Errorf("scene chat: player is outside a scene")
+		return nil, apperrors.ErrSceneNotHere
 	}
 	result := &gamescene.ChatAudience{SceneID: entity.GetUniqueIDFromEntityID(body.Map.SceneID())}
 	for _, candidate := range space.Sense(body.Position(), space.Sight()) {

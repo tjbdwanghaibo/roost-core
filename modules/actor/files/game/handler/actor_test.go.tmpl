@@ -4,20 +4,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"log/slog"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"{{MODULE}}/game/actor"
+	actorcontroller "{{MODULE}}/game/controllers/actor"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gameheartbeat "{{MODULE}}/game/heartbeat"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -314,4 +324,103 @@ func TestActorHeartbeatAdvancesThroughNest(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("heartbeat never arrived, at %v", f.position())
+}
+
+// actorErrorLogs 数 Error 及以上的日志条数：正常拒绝客户端已经拿到码，不应该再留下 Error。
+type actorErrorLogs struct{ count atomic.Int64 }
+
+func (h *actorErrorLogs) Enabled(context.Context, slog.Level) bool { return true }
+func (h *actorErrorLogs) Handle(_ context.Context, record slog.Record) error {
+	if record.Level >= slog.LevelError {
+		h.count.Add(1)
+	}
+	return nil
+}
+func (h *actorErrorLogs) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *actorErrorLogs) WithGroup(string) slog.Handler      { return h }
+
+// endpoint 走正式的协议端点（手写入口 + 生成的转交），日志换成只计数的替身。
+func (f *actorFixture) endpoint() (*actorcontroller.Controller, *actorErrorLogs) {
+	f.t.Helper()
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(mods.ModNest, f.engine); err != nil {
+		f.t.Fatal(err)
+	}
+	controller, err := actorcontroller.FromRegistry(registry)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	logs := &actorErrorLogs{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	f.t.Cleanup(func() {
+		slog.SetDefault(previous)
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
+	return controller, logs
+}
+func TestActorMoveRefusalsAnswerBusinessCodesWithoutErrorLogs(t *testing.T) {
+	f := newActorFixture(t)
+	controller, logs := f.endpoint()
+	ctx := &playeraccess.Context{PlayerID: f.value.UniqueID()}
+	request := &pb.ActorMoveRequest{X: 100, Y: 20}
+	out, err := controller.HandleActorMove(ctx, request)
+	if err != nil || out.Code != apperrors.ErrActorNotPlaced.Code() || out.Reason == "" {
+		t.Fatalf("not placed: %+v %v", out, err)
+	}
+	f.place()
+	f.must(func(p *player.Player) error {
+		return p.ActorComp().Body().States.Add(actor.Rooted, state.Source{Kind: 1, ID: 1})
+	})
+	out, err = controller.HandleActorMove(ctx, request)
+	if err != nil || out.Code != apperrors.ErrActorRooted.Code() || out.Reason == "" {
+		t.Fatalf("rooted: %+v %v", out, err)
+	}
+	if apperrors.ErrActorRooted.Code() == apperrors.ErrActorNotPlaced.Code() || out.Code == errcode.CodeInternal {
+		t.Fatal("the two refusals are not distinguishable")
+	}
+	f.tick()
+	if f.position().X != 10 {
+		t.Fatal("refused move started a path")
+	}
+	if logs.count.Load() != 0 {
+		t.Fatalf("normal refusals logged %d errors", logs.count.Load())
+	}
+	f.must(func(p *player.Player) error {
+		return p.ActorComp().Body().States.Remove(actor.Rooted, state.Source{Kind: 1, ID: 1})
+	})
+	out, err = controller.HandleActorMove(ctx, request)
+	if err != nil || out.Code != 0 || out.X != 10 {
+		t.Fatalf("move after root ended: %+v %v", out, err)
+	}
+	f.tick()
+	if f.position().X != 22 {
+		t.Fatalf("accepted move did not advance: %v", f.position())
+	}
+}
+func TestActorMoveRefusalCodesPathLimitAndLeavesOtherErrorsInternal(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	unrelated := errors.New("unrelated failure")
+	f.must(func(p *player.Player) error {
+		component := p.ActorComp()
+		err := component.MoveRefusal(component.Body().Walk(make([]spatial.Point, 257), 50))
+		if !errors.Is(err, apperrors.ErrActorPathTooLong) || !errors.Is(err, actor.ErrPathTooLong) {
+			t.Fatalf("oversized path: %v", err)
+		}
+		if code, _ := errcode.ClientError(err); code != apperrors.ErrActorPathTooLong.Code() {
+			t.Fatalf("oversized path code %d", code)
+		}
+		if err := component.MoveRefusal(component.Body().Follow(p.ID(), 50, 2)); err == nil || errcode.CodeOf(err) != errcode.CodeInternal {
+			t.Fatalf("self follow must stay an internal error: %v", err)
+		}
+		if err := component.MoveRefusal(unrelated); err != unrelated {
+			t.Fatalf("unrelated error was rewritten: %v", err)
+		}
+		if component.MoveRefusal(nil) != nil {
+			t.Fatal("nil became an error")
+		}
+		return nil
+	})
 }

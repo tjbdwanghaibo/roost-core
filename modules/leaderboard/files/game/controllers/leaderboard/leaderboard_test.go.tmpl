@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gameleaderboard "{{MODULE}}/game/leaderboard"
 	"{{MODULE}}/game/playeraccess"
@@ -15,204 +16,266 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
 )
 
-// leaderboardFakeRank 是 rank 客户端的内存替身，按 service/rank 写明的语义实现本模块用到的部分：
-// 三种合并方式、每个玩家最近 8 个请求号的去重环、Tie 为 0 时填提交先后、分高在前同分 Tie 小在前、
-// 条数必须在 [1, 200]。它让“提交 → 查前 N → 查自己”能离线跑通，并记下端点交给 rank 的榜与条数。
+// 这个文件的场景跑在真实的 rank 服务实现上：svcrank.RedisStore（合并方式、同分保留较早的 Tie、
+// 排序编码、分页与名次都是它的代码），它背后的存储换成下面的内存实现 leaderboardMemoryRedis。
+// “只升不降”“同分先到在前”因此是 rank 服务自己算出来的，不是照文档模拟的。
 //
 // 这个文件的用例只按名字引用榜的规则（gameleaderboard.CurrentBoard、DefaultTop、MaxTop），工程改了
 // game/leaderboard/leaderboard_board.go 之后不用动它——除了一点：用例提交的分数都在 1 到 1000 之间，
 // 分数范围不含这一段时要跟着改。
-//
-// 它的边界：这是照接口文档写的替身，不是 rank 服务本身——真实的 Redis 脚本、跨进程调用、
-// 并发下的 compare-and-swap 都不在这里；那些由 roost-core 的 service/rank 自己的测试覆盖。
-type leaderboardFakeRank struct {
-	mu     sync.Mutex
-	boards map[svcrank.Board]map[int64]*leaderboardFakeRow
-	clock  int64
 
-	// 记下每次调用用的榜与 Page 收到的条数：端点不该读别的榜，也不该把超限的条数交给 rank。
+// leaderboardMemoryRedis 是 RedisStore 用到的那一小块 Redis 的内存实现：有序集合（分值都是 0，
+// 名次全在成员的字节序里）、哈希，以及 RedisStore 的三段脚本——按脚本文本认出是哪一段，用 Go 实现它的语义
+// （读玩家当前成员与请求环、比较后换成员、删除）。
+//
+// 它的边界：脚本是按语义重写的，不是执行 Lua，脚本文本本身的缺陷这里看不到；认不出的脚本直接报错，
+// rank 服务改了脚本时这些场景会失败而不是悄悄通过。真实的 Redis、跨进程调用、并发下抢 compare-and-swap
+// 不在这里，由 roost-core 的 service/rank 自己的测试覆盖。
+type leaderboardMemoryRedis struct {
+	mu     sync.Mutex
+	zsets  map[string]map[string]bool
+	hashes map[string]map[string]string
+
+	// vanished 为真时名次读不到这一行（ZREVRANK 答不存在）：真实服务在“读到成员”与“读名次”之间
+	// 这一行被删掉时就是这样，RedisStore 对此回答“找到、名次 0”。
+	vanished bool
+}
+
+func newLeaderboardMemoryRedis() *leaderboardMemoryRedis {
+	return &leaderboardMemoryRedis{zsets: map[string]map[string]bool{}, hashes: map[string]map[string]string{}}
+}
+
+// membersLocked 是一个有序集合按 ZREVRANGE 的顺序（分值相同，按成员字节序从大到小）排好的成员。
+func (memory *leaderboardMemoryRedis) membersLocked(key string) []string {
+	members := make([]string, 0, len(memory.zsets[key]))
+	for member := range memory.zsets[key] {
+		members = append(members, member)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(members)))
+	return members
+}
+
+func (memory *leaderboardMemoryRedis) ZCard(_ context.Context, key string) (int64, error) {
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	return int64(len(memory.zsets[key])), nil
+}
+
+func (memory *leaderboardMemoryRedis) ZRevRangeWithScores(_ context.Context, key string, start, stop int64) ([]fredis.Z, error) {
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	members := memory.membersLocked(key)
+	if start < 0 {
+		start = 0
+	}
+	if stop < 0 || stop >= int64(len(members)) {
+		stop = int64(len(members)) - 1
+	}
+	if start >= int64(len(members)) || stop < start {
+		return nil, nil
+	}
+	out := make([]fredis.Z, 0, stop-start+1)
+	for _, member := range members[start : stop+1] {
+		out = append(out, fredis.Z{Member: member})
+	}
+	return out, nil
+}
+
+func (memory *leaderboardMemoryRedis) ZRevRank(_ context.Context, key string, member string) (int64, error) {
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	if memory.vanished {
+		return 0, fredis.ErrNil
+	}
+	for index, candidate := range memory.membersLocked(key) {
+		if candidate == member {
+			return int64(index), nil
+		}
+	}
+	return 0, fredis.ErrNil
+}
+
+func (memory *leaderboardMemoryRedis) Del(_ context.Context, keys ...string) (int64, error) {
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	removed := int64(0)
+	for _, key := range keys {
+		if _, ok := memory.zsets[key]; ok {
+			delete(memory.zsets, key)
+			removed++
+		}
+		if _, ok := memory.hashes[key]; ok {
+			delete(memory.hashes, key)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+// Eval 实现 RedisStore 的三段脚本。参数都是字符串（RedisStore 传的就是字符串）。
+func (memory *leaderboardMemoryRedis) Eval(_ context.Context, script string, keys []string, args ...any) (any, error) {
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	text := make([]string, len(args))
+	for index, arg := range args {
+		text[index] = fmt.Sprint(arg)
+	}
+	hash := func(key string) map[string]string {
+		if memory.hashes[key] == nil {
+			memory.hashes[key] = map[string]string{}
+		}
+		return memory.hashes[key]
+	}
+	switch {
+	case strings.Contains(script, "HEXISTS") && len(keys) == 1 && len(text) == 1:
+		// 读一名玩家：当前成员、请求环、是否还留着已废弃格式的环。
+		owners := hash(keys[0])
+		retired := int64(0)
+		if _, found := owners[text[0]+":applied"]; found {
+			retired = 1
+		}
+		return []any{owners[text[0]], owners[text[0]+":applied_v2"], retired}, nil
+	case strings.Contains(script, "ZADD") && len(keys) == 2 && len(text) == 6:
+		// 比较后换成员：请求环与当前成员都还是调用方读到的那样才换。
+		owner, expected, next, requestID, ring, previousRing := text[0], text[1], text[2], text[3], text[4], text[5]
+		owners := hash(keys[1])
+		stored, exists := owners[owner]
+		if owners[owner+":applied_v2"] != previousRing {
+			return []any{int64(0), stored}, nil
+		}
+		if expected == "" {
+			if exists {
+				return []any{int64(0), stored}, nil
+			}
+		} else {
+			if !exists || stored != expected {
+				return []any{int64(0), stored}, nil
+			}
+			delete(memory.zsets[keys[0]], stored)
+		}
+		if memory.zsets[keys[0]] == nil {
+			memory.zsets[keys[0]] = map[string]bool{}
+		}
+		memory.zsets[keys[0]][next] = true
+		owners[owner] = next
+		if requestID != "" {
+			owners[owner+":applied_v2"] = ring
+		}
+		return []any{int64(1), next}, nil
+	case strings.Contains(script, "HDEL") && len(keys) == 2 && len(text) == 1:
+		owners := hash(keys[1])
+		stored, exists := owners[text[0]]
+		if !exists {
+			return int64(0), nil
+		}
+		delete(memory.zsets[keys[0]], stored)
+		delete(owners, text[0])
+		delete(owners, text[0]+":applied_v2")
+		return int64(1), nil
+	}
+	return nil, fmt.Errorf("leaderboard test: the rank service ran a script this memory store does not know (%d keys, %d args); update leaderboardMemoryRedis", len(keys), len(args))
+}
+
+// leaderboardProbeRank 包在真实的 rank 服务外面，不改它的回答：只记下端点交给 rank 的榜、条数、
+// 问的是谁、带没带请求号，并能让下一次读失败（注入失败的场景用）。榜的行为全部来自里面的 RedisStore。
+type leaderboardProbeRank struct {
+	real svcrank.Rank
+
+	mu         sync.Mutex
 	seenBoards []svcrank.Board
 	pageLimits []int
 	rankOwners []int64
 	requestIDs []string
 
-	// 让下一次读失败 / 让 Rank 回答“找到但名次 0”（真实服务在两次读之间这一行被删掉时的回答）。
-	pageErr  error
-	rankErr  error
-	vanished bool
+	// 让下一次读失败。
+	pageErr error
+	rankErr error
 }
 
-type leaderboardFakeRow struct {
-	value int64
-	tie   int64
-	ring  []string
+func (probe *leaderboardProbeRank) Submit(ctx context.Context, board svcrank.Board, score svcrank.Score, mode svcrank.UpdateMode, requestID string) (svcrank.Entry, error) {
+	probe.mu.Lock()
+	probe.seenBoards = append(probe.seenBoards, board)
+	probe.requestIDs = append(probe.requestIDs, requestID)
+	probe.mu.Unlock()
+	return probe.real.Submit(ctx, board, score, mode, requestID)
 }
 
-func newLeaderboardFakeRank() *leaderboardFakeRank {
-	return &leaderboardFakeRank{boards: make(map[svcrank.Board]map[int64]*leaderboardFakeRow)}
+func (probe *leaderboardProbeRank) Page(ctx context.Context, board svcrank.Board, offset, limit int) (svcrank.Page, error) {
+	probe.mu.Lock()
+	probe.seenBoards = append(probe.seenBoards, board)
+	probe.pageLimits = append(probe.pageLimits, limit)
+	err := probe.pageErr
+	probe.mu.Unlock()
+	if err != nil {
+		return svcrank.Page{}, err
+	}
+	return probe.real.Page(ctx, board, offset, limit)
 }
 
-func (fake *leaderboardFakeRank) Submit(_ context.Context, board svcrank.Board, score svcrank.Score, mode svcrank.UpdateMode, requestID string) (svcrank.Entry, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.seenBoards = append(fake.seenBoards, board)
-	fake.requestIDs = append(fake.requestIDs, requestID)
-	if err := board.Validate(); err != nil {
-		return svcrank.Entry{}, err
+func (probe *leaderboardProbeRank) Rank(ctx context.Context, board svcrank.Board, ownerID int64) (svcrank.Entry, bool, error) {
+	probe.mu.Lock()
+	probe.seenBoards = append(probe.seenBoards, board)
+	probe.rankOwners = append(probe.rankOwners, ownerID)
+	err := probe.rankErr
+	probe.mu.Unlock()
+	if err != nil {
+		return svcrank.Entry{}, false, err
 	}
-	if score.OwnerID == 0 {
-		return svcrank.Entry{}, svcrank.ErrOwnerInvalid
-	}
-	if mode == svcrank.UpdateAdd && requestID == "" {
-		return svcrank.Entry{}, svcrank.ErrRequestInvalid
-	}
-	fake.clock++
-	if score.Tie == 0 {
-		score.Tie = fake.clock
-	}
-	rows := fake.boards[board]
-	if rows == nil {
-		rows = make(map[int64]*leaderboardFakeRow)
-		fake.boards[board] = rows
-	}
-	row := rows[score.OwnerID]
-	if row != nil && requestID != "" {
-		for _, applied := range row.ring {
-			if applied == requestID {
-				return fake.entryLocked(board, score.OwnerID), nil
-			}
-		}
-	}
-	switch {
-	case row == nil:
-		row = &leaderboardFakeRow{value: score.Value, tie: score.Tie}
-		rows[score.OwnerID] = row
-	case mode == svcrank.UpdateSet:
-		row.value, row.tie = score.Value, score.Tie
-	case mode == svcrank.UpdateMax:
-		// 分数更高才换；相同分数保留较早的 Tie，重复提交不会把人往后挪。
-		if score.Value > row.value {
-			row.value, row.tie = score.Value, score.Tie
-		}
-	case mode == svcrank.UpdateAdd:
-		row.value, row.tie = row.value+score.Value, score.Tie
-	default:
-		return svcrank.Entry{}, svcrank.ErrScoreInvalid
-	}
-	if requestID != "" {
-		row.ring = append(row.ring, requestID)
-		if len(row.ring) > 8 {
-			row.ring = row.ring[len(row.ring)-8:]
-		}
-	}
-	return fake.entryLocked(board, score.OwnerID), nil
+	return probe.real.Rank(ctx, board, ownerID)
 }
 
-// orderedLocked 是一张榜按名次排好的玩家号：分高在前，同分 Tie 小在前，再同按玩家号小在前。
-func (fake *leaderboardFakeRank) orderedLocked(board svcrank.Board) []int64 {
-	rows := fake.boards[board]
-	owners := make([]int64, 0, len(rows))
-	for owner := range rows {
-		owners = append(owners, owner)
-	}
-	sort.Slice(owners, func(i, j int) bool {
-		a, b := rows[owners[i]], rows[owners[j]]
-		if a.value != b.value {
-			return a.value > b.value
-		}
-		if a.tie != b.tie {
-			return a.tie < b.tie
-		}
-		return owners[i] < owners[j]
-	})
-	return owners
-}
-
-func (fake *leaderboardFakeRank) entryLocked(board svcrank.Board, ownerID int64) svcrank.Entry {
-	for index, owner := range fake.orderedLocked(board) {
-		if owner == ownerID {
-			row := fake.boards[board][owner]
-			return svcrank.Entry{Rank: int64(index) + 1, Score: svcrank.Score{OwnerID: owner, Value: row.value, Tie: row.tie}}
-		}
-	}
-	return svcrank.Entry{}
-}
-
-func (fake *leaderboardFakeRank) Page(_ context.Context, board svcrank.Board, offset, limit int) (svcrank.Page, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.seenBoards = append(fake.seenBoards, board)
-	fake.pageLimits = append(fake.pageLimits, limit)
-	if fake.pageErr != nil {
-		return svcrank.Page{}, fake.pageErr
-	}
-	if offset < 0 || limit <= 0 || limit > 200 {
-		return svcrank.Page{}, fmt.Errorf("%w: offset %d limit %d", svcrank.ErrRangeInvalid, offset, limit)
-	}
-	owners := fake.orderedLocked(board)
-	page := svcrank.Page{Total: int64(len(owners))}
-	for index := offset; index < len(owners) && index < offset+limit; index++ {
-		row := fake.boards[board][owners[index]]
-		page.Entries = append(page.Entries, svcrank.Entry{
-			Rank: int64(index) + 1, Score: svcrank.Score{OwnerID: owners[index], Value: row.value, Tie: row.tie},
-		})
-	}
-	return page, nil
-}
-
-func (fake *leaderboardFakeRank) Rank(_ context.Context, board svcrank.Board, ownerID int64) (svcrank.Entry, bool, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.seenBoards = append(fake.seenBoards, board)
-	fake.rankOwners = append(fake.rankOwners, ownerID)
-	if fake.rankErr != nil {
-		return svcrank.Entry{}, false, fake.rankErr
-	}
-	row := fake.boards[board][ownerID]
-	if row == nil {
-		return svcrank.Entry{}, false, nil
-	}
-	if fake.vanished {
-		return svcrank.Entry{Rank: 0, Score: svcrank.Score{OwnerID: ownerID, Value: row.value, Tie: row.tie}}, true, nil
-	}
-	return fake.entryLocked(board, ownerID), true, nil
-}
-
-func (fake *leaderboardFakeRank) Remove(context.Context, svcrank.Board, int64) error {
+func (probe *leaderboardProbeRank) Remove(context.Context, svcrank.Board, int64) error {
 	return errors.New("leaderboard test: Remove is not part of this module")
 }
 
-func (fake *leaderboardFakeRank) Around(context.Context, svcrank.Board, int64, int) (svcrank.Page, error) {
+func (probe *leaderboardProbeRank) Around(context.Context, svcrank.Board, int64, int) (svcrank.Page, error) {
 	return svcrank.Page{}, errors.New("leaderboard test: Around is not part of this module")
 }
 
-func (fake *leaderboardFakeRank) Size(context.Context, svcrank.Board) (int64, error) {
+func (probe *leaderboardProbeRank) Size(context.Context, svcrank.Board) (int64, error) {
 	return 0, errors.New("leaderboard test: Size is not part of this module")
 }
 
 // leaderboardFixture 是一个装了排行榜端点的进程的最小形状：Registry 里只有 rank 客户端。
+// rank 是真实的 RedisStore（经 probe 记录调用），redis 是它背后的内存存储。
 type leaderboardFixture struct {
 	t          *testing.T
-	rank       *leaderboardFakeRank
+	rank       *leaderboardProbeRank
+	redis      *leaderboardMemoryRedis
 	registry   *app.Registry
 	controller *Controller
+	// now 是 rank 服务给“首次达到这个分数”记时间用的时钟，每读一次走 1 毫秒：先后提交的两次一定分得出先后。
+	// 真实服务用业务时钟的毫秒；同一毫秒内达到同分的两名玩家按玩家号小的在前。
+	now int64
 }
 
 func newLeaderboardFixture(t *testing.T) *leaderboardFixture {
 	t.Helper()
-	rank := newLeaderboardFakeRank()
-	registry := app.NewRegistry(nil)
-	if err := registry.Register(svcrank.CapabilityName, svcrank.Rank(rank)); err != nil {
-		t.Fatal(err)
-	}
-	controller, err := FromRegistry(registry)
+	fixture := &leaderboardFixture{t: t, redis: newLeaderboardMemoryRedis(), now: 1_700_000_000_000}
+	store, err := svcrank.NewRedisStore(fixture.redis, svcrank.RedisConfig{
+		Prefix: "leaderboard-test",
+		Now: func() time.Time {
+			fixture.now++
+			return time.UnixMilli(fixture.now)
+		},
+		RetryBackoff: -1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &leaderboardFixture{t: t, rank: rank, registry: registry, controller: controller}
+	fixture.rank = &leaderboardProbeRank{real: store}
+	fixture.registry = app.NewRegistry(nil)
+	if err := fixture.registry.Register(svcrank.CapabilityName, svcrank.Rank(fixture.rank)); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.controller, err = FromRegistry(fixture.registry); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
 }
 
 // submit 走服务端别的功能会走的那条路：game/leaderboard 的 Submit。
@@ -287,7 +350,7 @@ func TestLeaderboardSubmitThenTopThenMe(t *testing.T) {
 	// 读与写用的是同一张榜：服务端定的、当前周期的那一张。
 	want := gameleaderboard.CurrentBoard()
 	if len(fixture.rank.seenBoards) == 0 {
-		t.Fatal("the fake saw no calls")
+		t.Fatal("the rank service saw no calls")
 	}
 	for index, board := range fixture.rank.seenBoards {
 		if board != want {
@@ -337,12 +400,12 @@ func TestLeaderboardTopCarriesTheCallersOwnStanding(t *testing.T) {
 	}
 
 	// rank 在读分数与读名次之间这一行被删掉（找到、名次 0）：对客户端是没上榜，不是“第 0 名”。
-	fixture.rank.vanished = true
+	fixture.redis.vanished = true
 	top = fixture.top(1001, 2)
 	if got := mine(top); top.Code != 0 || got != "on=false rank=0 score=0" {
 		t.Fatalf("own standing for a row removed mid-read: code %d %s", top.Code, got)
 	}
-	fixture.rank.vanished = false
+	fixture.redis.vanished = false
 
 	// 读与写、榜头与“我”用的都是同一张榜。
 	for index, board := range fixture.rank.seenBoards {
@@ -413,11 +476,11 @@ func TestLeaderboardMeOffTheBoardIsAnAnswerNotAnError(t *testing.T) {
 	}
 	// rank 在读分数与读名次之间这一行被删掉：回“找到、名次 0”，对客户端仍是没上榜。
 	fixture.submit(1001, 70)
-	fixture.rank.vanished = true
+	fixture.redis.vanished = true
 	if got := fixture.me(1001); *got != (pb.LeaderboardMeResponse{}) {
 		t.Fatalf("me for a row removed mid-read = %+v, want off board", *got)
 	}
-	fixture.rank.vanished = false
+	fixture.redis.vanished = false
 	if got := fixture.me(1001); *got != (pb.LeaderboardMeResponse{OnBoard: true, Rank: 1, Score: 70}) {
 		t.Fatalf("me once ranked = %+v", *got)
 	}
@@ -456,6 +519,44 @@ func TestLeaderboardRepeatedAndStaleSubmitsNeverMoveTheBoard(t *testing.T) {
 	}
 }
 
+// 同分时先达到这个分数的在前，与玩家号无关；后来者不论是一步到位还是从低分涨上来，都排在已经在那里的人后面，
+// 先到的人重发同一个总分也不会被挪到后面。这条规则由 rank 服务（UpdateMax 对相同分数保留较早的 Tie）算出。
+func TestLeaderboardEqualTotalsRankWhoeverGotThereFirst(t *testing.T) {
+	fixture := newLeaderboardFixture(t)
+	fixture.submit(1009, 100) // 玩家号大的先到
+	fixture.submit(1001, 100) // 玩家号小的后到
+	fixture.submit(1005, 40)
+	if got := leaderboardRows(fixture.top(1001, 10)); got != "#1 p1009=100 #2 p1001=100 #3 p1005=40 " {
+		t.Fatalf("equal totals must rank by arrival, not by player id: %q", got)
+	}
+	// 1005 从低分涨到同一个总分：排在已经在 100 分的两个人后面。
+	if standing := fixture.submit(1005, 100); standing != (gameleaderboard.Standing{OnBoard: true, Rank: 3, Score: 100}) {
+		t.Fatalf("a later climber to the same total returned %+v", standing)
+	}
+	// 先到的人重发同一个总分：位置不变（重发的那次时间更晚，不能顶掉首次达到的时间）。
+	for _, player := range []int64{1009, 1001, 1009} {
+		fixture.submit(player, 100)
+	}
+	if got := leaderboardRows(fixture.top(1001, 10)); got != "#1 p1009=100 #2 p1001=100 #3 p1005=100 " {
+		t.Fatalf("board after resubmits of the same total = %q", got)
+	}
+	// 后到的人超过去再被追平：追平的人是后达到这个新分数的，排在后面。
+	fixture.submit(1001, 150)
+	fixture.submit(1009, 150)
+	if got := leaderboardRows(fixture.top(1001, 10)); got != "#1 p1001=150 #2 p1009=150 #3 p1005=100 " {
+		t.Fatalf("board after 1001 reached 150 first = %q", got)
+	}
+	for player, want := range map[int64]pb.LeaderboardMeResponse{
+		1001: {OnBoard: true, Rank: 1, Score: 150},
+		1009: {OnBoard: true, Rank: 2, Score: 150},
+		1005: {OnBoard: true, Rank: 3, Score: 100},
+	} {
+		if got := fixture.me(player); *got != want {
+			t.Errorf("me(%d) = %+v, want %+v", player, *got, want)
+		}
+	}
+}
+
 func TestLeaderboardReplayingEveryOldSnapshotStillAddsNothing(t *testing.T) {
 	fixture := newLeaderboardFixture(t)
 	// 连续 20 件事各提交一次当时的总分。rank 服务只记每个玩家最近 8 个请求号，20 件事远超这个数：
@@ -469,7 +570,9 @@ func TestLeaderboardReplayingEveryOldSnapshotStillAddsNothing(t *testing.T) {
 		t.Fatalf("after 20 events of 5 points = %+v, want score 100", got)
 	}
 	// 第 1 件事重放两种形态：带当时的总分 5，或带现在的总分 100。哪一种都不能让榜变成别的数。
-	fixture.submit(1001, 5)
+	if standing := fixture.submit(1001, 5); standing != (gameleaderboard.Standing{OnBoard: true, Rank: 1, Score: 100}) {
+		t.Fatalf("replaying the first event's snapshot returned %+v", standing)
+	}
 	fixture.submit(1001, 100)
 	// 20 件事全部重放一遍（端点重试风暴）。
 	replay := int64(0)

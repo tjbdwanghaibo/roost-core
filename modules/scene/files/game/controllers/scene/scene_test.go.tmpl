@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -27,6 +28,7 @@ import (
 	"{{MODULE}}/game/playeraccess"
 	gamescene "{{MODULE}}/game/scene"
 	scenes "{{MODULE}}/game/scene/service"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -131,8 +133,29 @@ func (f *sceneFixture) change(p *player.Player, from, to int64) (*pb.SceneChange
 }
 func (f *sceneFixture) enter(p *player.Player, id int64) {
 	f.t.Helper()
-	if _, err := f.change(p, 0, id); err != nil {
-		f.t.Fatal(err)
+	if response, err := f.change(p, 0, id); err != nil || response.Code != 0 {
+		f.t.Fatalf("enter %d: %+v %v", id, response, err)
+	}
+}
+
+// refusedChange / refusedInteract 断言一次业务拒绝的形状：controller 不返回 error（否则接入层会断开这条连接），
+// 应答带着指定的业务码与非空的原因，不带任何成功字段。
+func (f *sceneFixture) refusedChange(name string, want *errcode.IntError, response *pb.SceneChangeResponse, err error) {
+	f.t.Helper()
+	if err != nil {
+		f.t.Fatalf("%s: controller returned an error, the access layer would close the connection: %v", name, err)
+	}
+	if response == nil || response.Code != want.Code() || response.Reason == "" || response.SceneID != 0 {
+		f.t.Fatalf("%s: response %+v, want code %d (%s)", name, response, want.Code(), want.Name())
+	}
+}
+func (f *sceneFixture) refusedInteract(name string, want *errcode.IntError, response *pb.SceneInteractResponse, err error) {
+	f.t.Helper()
+	if err != nil {
+		f.t.Fatalf("%s: controller returned an error, the access layer would close the connection: %v", name, err)
+	}
+	if response == nil || response.Code != want.Code() || response.Reason == "" || response.Text != "" || response.Sequence != 0 {
+		f.t.Fatalf("%s: response %+v, want code %d (%s)", name, response, want.Code(), want.Name())
 	}
 }
 func (f *sceneFixture) area(raw int64) *sceneentity.Scene {
@@ -179,8 +202,8 @@ func TestSceneSwitchChangesBothMemberships(t *testing.T) {
 	p := f.player(1001)
 	f.enter(p, 1)
 	target := f.open(2, gamescene.DefaultConfig())
-	if _, err := f.change(p, 1, 2); err != nil {
-		t.Fatal(err)
+	if response, err := f.change(p, 1, 2); err != nil || response.Code != 0 || response.SceneID != 2 {
+		t.Fatalf("%+v %v", response, err)
 	}
 	f.must(p, func(p *player.Player) error {
 		if p.ActorComp().Body().Map.SceneID() != target.ID() {
@@ -200,22 +223,36 @@ func TestSceneRefusesStaleFromWithoutChangingPosition(t *testing.T) {
 	p := f.player(1001)
 	f.enter(p, 1)
 	f.open(2, gamescene.DefaultConfig())
-	if _, err := f.change(p, 0, 2); err == nil {
-		t.Fatal("stale from accepted")
-	}
+	response, err := f.change(p, 0, 2)
+	f.refusedChange("stale from", apperrors.ErrSceneStale, response, err)
 	f.must(p, func(p *player.Player) error {
 		if p.ActorComp().Body().Map.SceneID() != f.area(1).ID() {
 			t.Fatal("moved")
 		}
 		return nil
 	})
+	// 来源已经不是开着的图，同样是“客户端记的位置过期了”，不是目标不可用。
+	response, err = f.change(p, 987, 2)
+	f.refusedChange("closed from", apperrors.ErrSceneStale, response, err)
+	// 拒绝之后连接还在：带上正确的 FromID 重发就成功。
+	if response, err = f.change(p, 1, 2); err != nil || response.Code != 0 || response.SceneID != 2 {
+		t.Fatalf("retry with the right FromID: %+v %v", response, err)
+	}
 }
 func TestSceneCannotCreateAClientChosenMap(t *testing.T) {
 	f := newSceneFixture(t)
 	p := f.player(1001)
-	if _, err := f.change(p, 0, 987); err == nil {
-		t.Fatal("unknown map created")
+	response, err := f.change(p, 0, 987)
+	f.refusedChange("unknown map", apperrors.ErrSceneUnavailable, response, err)
+	if _, _, err := f.manager.IDs(0, 987); !errors.Is(err, apperrors.ErrSceneUnavailable) {
+		t.Fatal("unknown map created", err)
 	}
+	f.must(p, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.InScene() {
+			t.Fatal("refused entry placed the player")
+		}
+		return nil
+	})
 }
 func TestSceneOccupiedCloseIsRefused(t *testing.T) {
 	f := newSceneFixture(t)
@@ -224,8 +261,8 @@ func TestSceneOccupiedCloseIsRefused(t *testing.T) {
 	if err := f.manager.Close(context.Background(), 1); err == nil {
 		t.Fatal("occupied map closed")
 	}
-	if _, err := f.change(p, 1, 0); err != nil {
-		t.Fatal(err)
+	if response, err := f.change(p, 1, 0); err != nil || response.Code != 0 {
+		t.Fatalf("%+v %v", response, err)
 	}
 	if err := f.manager.Close(context.Background(), 1); err != nil {
 		t.Fatal(err)
@@ -239,15 +276,21 @@ func TestSceneCapacityRejectsWithoutEvictingSource(t *testing.T) {
 	f.open(2, c)
 	f.enter(a, 1)
 	f.enter(b, 2)
-	if _, err := f.change(a, 1, 2); err == nil {
-		t.Fatal("full target accepted")
-	}
+	response, err := f.change(a, 1, 2)
+	f.refusedChange("full target", apperrors.ErrSceneFull, response, err)
 	f.must(a, func(p *player.Player) error {
 		if p.ActorComp().Body().Map.SceneID() != f.area(1).ID() {
 			t.Fatal("lost original scene")
 		}
 		return nil
 	})
+	// 满员的那张图空出来之后，同一条连接上的重试成功。
+	if response, err = f.change(b, 2, 0); err != nil || response.Code != 0 {
+		t.Fatalf("%+v %v", response, err)
+	}
+	if response, err = f.change(a, 1, 2); err != nil || response.Code != 0 || response.SceneID != 2 {
+		t.Fatalf("retry after a slot opened: %+v %v", response, err)
+	}
 }
 func TestSceneRejectedSwitchRollsBackSavedPosition(t *testing.T) {
 	f := newSceneFixture(t)
@@ -255,10 +298,11 @@ func TestSceneRejectedSwitchRollsBackSavedPosition(t *testing.T) {
 	f.enter(p, 1)
 	f.open(2, gamescene.DefaultConfig())
 	f.commit.reject.Store(true)
-	_, err := f.change(p, 1, 2)
+	response, err := f.change(p, 1, 2)
 	f.commit.reject.Store(false)
-	if err == nil {
-		t.Fatal("commit was not rejected")
+	// 提交被拒不是业务拒绝：不带码，controller 仍把它作为 error 返回。
+	if err == nil || response != nil {
+		t.Fatalf("commit was not rejected: %+v %v", response, err)
 	}
 	f.must(p, func(p *player.Player) error {
 		id, _, _ := p.ActorComp().SavedPosition()
@@ -398,8 +442,8 @@ func TestSceneReconnectReusesTheSameMembership(t *testing.T) {
 	if err != nil || response.X != 50 {
 		t.Fatalf("%+v %v", response, err)
 	}
-	if _, err := f.change(p, 1, 0); err != nil {
-		t.Fatal(err)
+	if response, err := f.change(p, 1, 0); err != nil || response.Code != 0 {
+		t.Fatalf("%+v %v", response, err)
 	}
 	if err := f.manager.Close(context.Background(), 1); err != nil {
 		t.Fatal("duplicate member retained", err)
@@ -408,8 +452,14 @@ func TestSceneReconnectReusesTheSameMembership(t *testing.T) {
 
 var sceneRegionReject atomic.Bool
 
+// sceneRegionCoded 让区域回调返回一个带业务码的拒绝（借用模块自己的码，测试不另外申请号）。
+var sceneRegionCoded atomic.Bool
+
 func init() {
 	player.OnRegion("scene_test", func(_ *player.Player, event gamescene.RegionEvent) error {
+		if event.ID == 33 && sceneRegionCoded.Load() {
+			return apperrors.ErrSceneObjectFar
+		}
 		if event.ID == 33 && sceneRegionReject.Load() {
 			return errors.New("reject region")
 		}
@@ -456,8 +506,9 @@ func TestSceneRegionFailureRollsBackTheEntry(t *testing.T) {
 	f.open(2, sceneObjects())
 	sceneRegionReject.Store(true)
 	t.Cleanup(func() { sceneRegionReject.Store(false) })
-	if _, err := f.change(p, 0, 2); err == nil {
-		t.Fatal("region rejection ignored")
+	// 回调返回的是不带码的错误：按内部错误处理，controller 返回 error。
+	if response, err := f.change(p, 0, 2); err == nil || response != nil {
+		t.Fatalf("region rejection ignored: %+v %v", response, err)
 	}
 	f.must(p, func(p *player.Player) error {
 		if p.ActorComp().Body().Map.InScene() || p.Dao().GetSceneRuntime().RegionsLen() != 0 {
@@ -467,6 +518,49 @@ func TestSceneRegionFailureRollsBackTheEntry(t *testing.T) {
 	})
 	if err := f.manager.Close(context.Background(), 2); err != nil {
 		t.Fatal("failed entry occupied scene", err)
+	}
+}
+func TestSceneCodedCallbackRefusalIsAnsweredAndRolledBack(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.open(2, sceneObjects())
+	sceneRegionCoded.Store(true)
+	t.Cleanup(func() { sceneRegionCoded.Store(false) })
+	// 登记的回调用带码的错误拒绝：与模块自己的拒绝一样答在应答里，这次进入整笔撤销。
+	response, err := f.change(p, 0, 2)
+	f.refusedChange("coded region refusal", apperrors.ErrSceneObjectFar, response, err)
+	f.must(p, func(p *player.Player) error {
+		if p.ActorComp().Body().Map.InScene() || p.Dao().GetSceneRuntime().RegionsLen() != 0 {
+			t.Fatal("partial entry")
+		}
+		return nil
+	})
+	sceneRegionCoded.Store(false)
+	if response, err = f.change(p, 0, 2); err != nil || response.Code != 0 || response.SceneID != 2 {
+		t.Fatalf("entry after the refusal: %+v %v", response, err)
+	}
+}
+func TestSceneRefusalCodesAreDistinctBusinessCodes(t *testing.T) {
+	seen := map[int32]string{}
+	for _, def := range []*errcode.IntError{apperrors.ErrSceneUnavailable, apperrors.ErrSceneFull, apperrors.ErrSceneStale, apperrors.ErrSceneNotHere, apperrors.ErrSceneObjectUnknown, apperrors.ErrSceneObjectFar, apperrors.ErrSceneSequence} {
+		code, reason := errcode.ClientError(def)
+		if code <= errcode.FrameworkCodeLast || reason == "" {
+			t.Fatalf("%s: code %d reason %q is not a business refusal", def.Name(), code, reason)
+		}
+		if _, _, ok := refusal(def); !ok {
+			t.Fatalf("%s would be returned as an error", def.Name())
+		}
+		if prior := seen[code]; prior != "" {
+			t.Fatalf("%s and %s share code %d", def.Name(), prior, code)
+		}
+		seen[code] = def.Name()
+	}
+	// 框架码（没进入游戏、可重试……）同样答在应答里；只有不带码的才算内部错误。
+	if _, _, ok := refusal(errcode.ErrEntityNotFound); !ok {
+		t.Fatal("a framework-coded refusal would close the connection")
+	}
+	if code, _, ok := refusal(errors.New("anything without a code")); ok || code != errcode.CodeInternal {
+		t.Fatal("an uncoded error was answered as a business refusal")
 	}
 }
 func TestSceneInteractionIsOncePerContinuousSequence(t *testing.T) {
@@ -491,14 +585,26 @@ func TestSceneInteractionIsOncePerContinuousSequence(t *testing.T) {
 		return nil
 	})
 	request.ObjectID = 72
-	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
-		t.Fatal("same sequence changed content")
-	}
+	response, err := f.controller.HandleSceneInteract(ctx, request)
+	f.refusedInteract("same sequence, other object", apperrors.ErrSceneSequence, response, err)
 	request.ObjectID = 71
 	request.Sequence = 3
-	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
-		t.Fatal("sequence gap accepted")
+	response, err = f.controller.HandleSceneInteract(ctx, request)
+	f.refusedInteract("sequence gap", apperrors.ErrSceneSequence, response, err)
+	request.Sequence = 0
+	response, err = f.controller.HandleSceneInteract(ctx, request)
+	f.refusedInteract("zero sequence", apperrors.ErrSceneSequence, response, err)
+	// 被拒的序号没有被消耗：同一条连接上发正确的下一个序号成功，回调只多跑一次。
+	request.Sequence = 2
+	if response, err = f.controller.HandleSceneInteract(ctx, request); err != nil || response.Code != 0 || response.Sequence != 2 || response.Text != "well" {
+		t.Fatalf("next sequence after refusals: %+v %v", response, err)
 	}
+	f.must(p, func(p *player.Player) error {
+		if p.Dao().GetActorSaved().GetFacing() != 2 || p.Dao().GetSceneInteraction().GetSequence() != 2 {
+			t.Fatal("refused interactions changed state")
+		}
+		return nil
+	})
 }
 func TestSceneInteractionCannotReachAnotherSceneOrDistantObject(t *testing.T) {
 	f := newSceneFixture(t)
@@ -507,15 +613,24 @@ func TestSceneInteractionCannotReachAnotherSceneOrDistantObject(t *testing.T) {
 	f.enter(p, 1)
 	request := &pb.SceneInteractRequest{SceneID: 2, ObjectID: 71, Sequence: 1}
 	ctx := &playeraccess.Context{PlayerID: p.UniqueID()}
-	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
-		t.Fatal("cross scene interaction")
+	response, err := f.controller.HandleSceneInteract(ctx, request)
+	f.refusedInteract("cross scene", apperrors.ErrSceneNotHere, response, err)
+	response, err = f.controller.HandleSceneInteract(ctx, &pb.SceneInteractRequest{SceneID: 987, ObjectID: 71, Sequence: 1})
+	f.refusedInteract("scene that is not open", apperrors.ErrSceneUnavailable, response, err)
+	response, err = f.controller.HandleSceneInteract(ctx, &pb.SceneInteractRequest{ObjectID: 71, Sequence: 1})
+	f.refusedInteract("zero scene id", apperrors.ErrSceneNotHere, response, err)
+	if response, err := f.change(p, 1, 2); err != nil || response.Code != 0 {
+		t.Fatalf("%+v %v", response, err)
 	}
-	if _, err := f.change(p, 1, 2); err != nil {
-		t.Fatal(err)
-	}
+	response, err = f.controller.HandleSceneInteract(ctx, &pb.SceneInteractRequest{SceneID: 2, ObjectID: 72, Sequence: 1})
+	f.refusedInteract("unknown object", apperrors.ErrSceneObjectUnknown, response, err)
 	f.must(p, func(p *player.Player) error { return p.ActorComp().Body().Map.SetPos(spatial.Point{X: 500, Y: 500}) })
-	if _, err := f.controller.HandleSceneInteract(ctx, request); err == nil {
-		t.Fatal("out of range interaction")
+	response, err = f.controller.HandleSceneInteract(ctx, request)
+	f.refusedInteract("out of range", apperrors.ErrSceneObjectFar, response, err)
+	// 走回对象旁边，同一个序号、同一条连接上重试成功；之前的拒绝都没有记账。
+	f.must(p, func(p *player.Player) error { return p.ActorComp().Body().Map.SetPos(spatial.Point{X: 50, Y: 50}) })
+	if response, err = f.controller.HandleSceneInteract(ctx, request); err != nil || response.Code != 0 || response.Sequence != 1 || response.Text != "well" {
+		t.Fatalf("retry in range: %+v %v", response, err)
 	}
 }
 func TestSceneSensingOnlySeesCommittedPositions(t *testing.T) {
@@ -596,9 +711,12 @@ func TestSceneStopRetriesRejectedEvacuation(t *testing.T) {
 		return nil
 	})
 	fresh := f.player(1002)
-	if _, err := sender.NewSceneChangeSender(f.engine).MultiGroupSync_SceneChange(context.Background(), fresh.ID(), []int64{f.area(1).ID()}, f.area(1).ID()); err == nil {
-		t.Fatal("closing map admitted player")
+	if _, err := sender.NewSceneChangeSender(f.engine).MultiGroupSync_SceneChange(context.Background(), fresh.ID(), []int64{f.area(1).ID()}, f.area(1).ID()); !errors.Is(err, apperrors.ErrSceneUnavailable) {
+		t.Fatal("closing map admitted player", err)
 	}
+	// 客户端入口在停机期间同样是带码拒绝，不是断开。
+	response, err := f.change(fresh, 0, 1)
+	f.refusedChange("closing map", apperrors.ErrSceneUnavailable, response, err)
 	if err := f.manager.Stop(context.Background()); err != nil {
 		t.Fatal("retry failed", err)
 	}
@@ -674,8 +792,8 @@ func TestSceneDrainOnlyClosesTheRequestedMap(t *testing.T) {
 		}
 		return nil
 	})
-	if _, err := f.change(f.player(1003), 0, 1); err != nil {
-		t.Fatal("unrelated map closed", err)
+	if response, err := f.change(f.player(1003), 0, 1); err != nil || response.Code != 0 {
+		t.Fatal("unrelated map closed", response, err)
 	}
 	f.open(3, gamescene.DefaultConfig())
 	if err := f.manager.Drain(context.Background(), 2); err != nil {

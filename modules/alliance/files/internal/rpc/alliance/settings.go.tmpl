@@ -18,8 +18,9 @@ type Settings struct {
 	ReceiptRetention time.Duration `config:"receipt_retention" default:"168h" min:"1h" example:"168h" help:"how long a request receipt is kept: longer than any caller retries one request id (the saga step receipts use the same default)"`
 	RejoinCooldown   time.Duration `config:"rejoin_cooldown" default:"0s" min:"0s" example:"0s" help:"how long after leaving or being removed a player may not join an alliance; 0 disables it"`
 	// The alliance reward (ClaimReward, the game's reward saga). Prototype
-	// defaults: one stack of an item from the demo's item table per member per
-	// period. The alliance service does not read the game's item table; an
+	// defaults: five of item 1002 — an id in the item table the bag module
+	// installs (configs/table/item.csv) — per member per period; change them
+	// to the project's own reward. The alliance service does not read the game's item table; an
 	// item the game does not know is refused by the game's grant step, and the
 	// saga then releases the claim.
 	RewardItemID int64         `config:"reward_item_id" default:"1002" min:"1" example:"1002" help:"prototype default: the item a member gets for claiming the alliance reward (an id in the game's item table)"`

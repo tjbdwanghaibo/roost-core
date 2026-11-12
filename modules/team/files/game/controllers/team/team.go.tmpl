@@ -82,11 +82,12 @@ func (c *Controller) HandleTeamInvite(ctx *playeraccess.Context, req *pb.TeamInv
 	if id == 0 {
 		return teamResponse(ctx, teamentity.Snapshot{}, apperrors.ErrTeamMissing), nil
 	}
-	info, err := sender.NewTeamInviteSender(c.nestClient).MultiSync_TeamInvite(ctx.Context(), id, self, req.Invitee)
+	invitation, err := sender.NewTeamInviteSender(c.nestClient).MultiSync_TeamInvite(ctx.Context(), id, self, req.Invitee)
 	if err == nil {
-		slog.InfoContext(ctx.Context(), "team: invite completed", "player_id", ctx.PlayerID, "team_id", info.TeamID, "leader", info.Leader, "revision", info.Revision, "members", info.Members)
+		slog.InfoContext(ctx.Context(), "team: invite completed", "player_id", ctx.PlayerID, "team_id", invitation.TeamID, "invitee", invitation.Invitee, "expire_at", invitation.ExpireAt, "leader", invitation.Leader, "revision", invitation.Revision, "members", invitation.Members)
+		c.announceInvite(ctx.Context(), invitation)
 	}
-	return teamResponse(ctx, info, err), nil
+	return teamResponse(ctx, invitation.Snapshot, err), nil
 }
 func (c *Controller) HandleTeamAccept(ctx *playeraccess.Context, req *pb.TeamAcceptRequest) (*pb.TeamResponse, error) {
 	if req == nil {

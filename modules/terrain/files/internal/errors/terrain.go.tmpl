@@ -1,0 +1,22 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// terrain 模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+// 每种正常拒绝一个码，四个端点把它们填进应答的 Code / Reason，不记 Error 日志；被拒的命令不消耗序号。
+// game/terrain 的 ErrInvalid / ErrDenied / ErrSequence / ErrOccupied / ErrSite / ErrFull 就是这几个值。
+var (
+	// ErrTerrainInvalid：请求本身不合规（未知操作、坐标出界、半径 / 强度 / 材质超出范围、建筑锚点不在整米上）。改请求，不要原样重发。
+	ErrTerrainInvalid = errcode.Define({{ID:errcode:terrain_invalid}}, "terrain_invalid", "malformed terrain request")
+	// ErrTerrainDenied：与“玩家是谁、在哪”有关——不在这张地形图里、操作点离得太远、要拆的建筑不是自己的或已不在。
+	ErrTerrainDenied = errcode.Define({{ID:errcode:terrain_denied}}, "terrain_denied", "not in that scene, too far away, or not the owner")
+	// ErrTerrainSequence：序号不是上一个成功序号加 1（跳号、旧号），或同一个序号换了内容。
+	// 用 TerrainQuery 取 LastSequence 之后从它的下一个接着发。
+	ErrTerrainSequence = errcode.Define({{ID:errcode:terrain_sequence}}, "terrain_sequence", "edit sequence is not the next one; query the last sequence")
+	// ErrTerrainOccupied：这块地上有建筑——笔刷盖到了建筑脚下，或新建筑与已有的重叠。
+	ErrTerrainOccupied = errcode.Define({{ID:errcode:terrain_occupied}}, "terrain_occupied", "a building occupies this ground")
+	// ErrTerrainSite：与“这块地”有关——出生点受保护（不能刷、不能建），或要建的四个点在水下、高差超过 50cm。
+	ErrTerrainSite = errcode.Define({{ID:errcode:terrain_site}}, "terrain_site", "this ground is protected or cannot hold a building")
+	// ErrTerrainFull：这名玩家站立的建筑数到了上限。
+	ErrTerrainFull = errcode.Define({{ID:errcode:terrain_full}}, "terrain_full", "building limit reached")
+)

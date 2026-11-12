@@ -12,6 +12,16 @@ type TeamDao struct {
 }
 
 // TeamState 的 TeamID 是完整实体号，只有同时声明 [Team, Player] 的事务可修改。
+// Invited 是“我收到的邀请”的收件记录（队伍完整实体号 → 邀请）：被邀请人在本进程在线时由邀请方的端点在邀请提交之后补记，
+// 只给本人查询用。邀请的权威仍是 Team 上的 Invites，接受时以它为准。条数与过期沿用队伍的规则
+// （至多 MaxInvites 条、InviteMillis 后过期），过期的在下一次记录时清掉。
 type TeamState struct {
-	TeamID int64 `store:"1"`
+	TeamID  int64                 `store:"1"`
+	Invited map[int64]*TeamInvite `store:"2"`
+}
+
+// TeamInvite 是一条收件记录：谁邀请的、什么时候过期（业务时间，Unix 毫秒）。
+type TeamInvite struct {
+	Inviter  int64 `store:"1"`
+	ExpireAt int64 `store:"2"`
 }

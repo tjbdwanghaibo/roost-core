@@ -2,7 +2,7 @@ name: actor
 summary: 实体移动底座：共用心跳、位置与朝向、路径与跟随、定身与沉默门控；场景注入地形与空间，不依赖 scene
 needs:
   mods: [nest, heartbeat]
-  features: [entity, dao, protocol]
+  features: [entity, dao, protocol, errcode]
 entity: Player
 sync_packer: NewActorPlayerSyncPacker
 state:
@@ -10,8 +10,9 @@ state:
   - {field: ActorSaved, type: ActorSavedState, store: actor_saved, dao: 'persist,nosync', comment: 离开与周期存档的位置。}
 component: Actor
 protocols: [ActorMove, ActorStop]
+errcodes: [actor_not_placed, actor_rooted, actor_path_too_long]
 runtime: {package: game/actor, start: Start}
 verify:
   packages: [./game/handler]
   run: ^TestActor
-  pass: 12
+  pass: 14

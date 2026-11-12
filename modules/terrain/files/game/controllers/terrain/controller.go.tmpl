@@ -2,7 +2,6 @@ package terrain
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -46,13 +45,14 @@ func (c *Controller) HandleTerrainBrush(ctx *playeraccess.Context, request *pb.T
 	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
 		return nil, fmt.Errorf("terrain: authenticated request required")
 	}
+	// 入参预检挡住转成 uint16 / byte 会被截断的取值；与规则里的不合规是同一个业务码。
 	if request.Op != "raise" && request.Op != "lower" && request.Op != "paint" || request.Strength < 0 || request.Strength > 20 || request.Material < 0 || request.Material > 4 {
-		return &pb.TerrainBrushResponse{Code: 1, Reason: logic.ErrInvalid.Error()}, nil
+		code, reason := refusal(ctx, request.SceneID, logic.ErrInvalid)
+		return &pb.TerrainBrushResponse{Code: code, Reason: reason}, nil
 	}
 	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: request.Op, X: request.X, Y: request.Y, Radius: request.Radius, Strength: uint16(request.Strength), Material: byte(request.Material)})
 	if err != nil {
-		logFailure(ctx, request.SceneID, err)
-		code, reason := errcode.ClientError(err)
+		code, reason := refusal(ctx, request.SceneID, err)
 		return &pb.TerrainBrushResponse{Code: code, Reason: reason}, nil
 	}
 	return &pb.TerrainBrushResponse{Result: editResult(result)}, nil
@@ -63,8 +63,7 @@ func (c *Controller) HandleTerrainBuild(ctx *playeraccess.Context, request *pb.T
 	}
 	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: "build", X: request.X, Y: request.Y})
 	if err != nil {
-		logFailure(ctx, request.SceneID, err)
-		code, reason := errcode.ClientError(err)
+		code, reason := refusal(ctx, request.SceneID, err)
 		return &pb.TerrainBuildResponse{Code: code, Reason: reason}, nil
 	}
 	return &pb.TerrainBuildResponse{Result: editResult(result)}, nil
@@ -75,8 +74,7 @@ func (c *Controller) HandleTerrainRemove(ctx *playeraccess.Context, request *pb.
 	}
 	result, err := c.Execute(ctx.Context(), ctx.PlayerID, logic.Command{SceneID: request.SceneID, Sequence: request.Sequence, Op: "remove", X: request.X, Y: request.Y})
 	if err != nil {
-		logFailure(ctx, request.SceneID, err)
-		code, reason := errcode.ClientError(err)
+		code, reason := refusal(ctx, request.SceneID, err)
 		return &pb.TerrainRemoveResponse{Code: code, Reason: reason}, nil
 	}
 	return &pb.TerrainRemoveResponse{Result: editResult(result)}, nil
@@ -87,8 +85,7 @@ func (c *Controller) HandleTerrainQuery(ctx *playeraccess.Context, request *pb.T
 	}
 	state, err := c.runtime.Query(ctx.Context(), ctx.PlayerID, request.SceneID, core.ChunkKey{X: request.X, Y: request.Y})
 	if err != nil {
-		logFailure(ctx, request.SceneID, err)
-		code, reason := errcode.ClientError(err)
+		code, reason := refusal(ctx, request.SceneID, err)
 		return &pb.TerrainQueryResponse{Code: code, Reason: reason}, nil
 	}
 	heights := make([]uint32, len(state.Heights))
@@ -98,10 +95,13 @@ func (c *Controller) HandleTerrainQuery(ctx *playeraccess.Context, request *pb.T
 	return &pb.TerrainQueryResponse{LastSequence: state.LastSequence, Chunk: &pb.TerrainChunkInfo{SceneID: request.SceneID, X: state.Key.X, Y: state.Key.Y, BaseRevision: state.BaseRevision, Version: state.Version, Heights: heights, Materials: state.Materials}}, nil
 }
 
-// 日志分类不改变现有回包；常规规则拒绝保持安静，持久基线不符等未知错误必须可追查。
-func logFailure(ctx *playeraccess.Context, sceneID int64, err error) {
-	if errors.Is(err, logic.ErrInvalid) || errors.Is(err, logic.ErrDenied) || errors.Is(err, logic.ErrSequence) || errors.Is(err, logic.ErrOccupied) || errors.Is(err, logic.ErrFull) {
-		return
+// refusal 把一次失败换成应答里的码与原因；四个端点都不为业务失败返回 error（那会让接入层断开连接）。
+// 带业务码的是玩家的正常拒绝（logic.ErrInvalid / ErrDenied / ErrSequence / ErrOccupied / ErrSite / ErrFull），
+// 客户端已经拿到码，不记日志。不带码的（持久基线不符、参与者对不上、提交失败）答框架的内部码，并记一条 Error 以便追查。
+func refusal(ctx *playeraccess.Context, sceneID int64, err error) (int32, string) {
+	code, reason := errcode.ClientError(err)
+	if code == errcode.CodeInternal {
+		slog.ErrorContext(ctx.Context(), "terrain: request failed", "player_id", ctx.PlayerID, "scene_id", sceneID, "err", err)
 	}
-	slog.ErrorContext(ctx.Context(), "terrain: request failed", "player_id", ctx.PlayerID, "scene_id", sceneID, "err", err)
+	return code, reason
 }

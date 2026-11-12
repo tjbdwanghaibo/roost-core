@@ -12,11 +12,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 const Capability app.ModName = "gameplay.scene"
@@ -102,6 +104,8 @@ func (m *Manager) Open(uniqueID int64, config gamescene.Config) (*sceneentity.Sc
 }
 
 // IDs 返回请求参与者的快照；即使取完后发生关闭，Nest 中的 closed 检查仍会拒绝进入。
+// 找不到图是正常拒绝，带业务码：目标（to）没开或正在关是 scene_unavailable；来源（from）没开说明
+// 调用方记的“我在哪张图”已经过期（那张图关掉时成员都被撤走了），是 scene_stale。
 func (m *Manager) IDs(from, to int64) ([]int64, int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -113,10 +117,13 @@ func (m *Manager) IDs(from, to int64) ([]int64, int64, error) {
 		}
 		area := m.areas[id]
 		if area == nil {
-			return nil, 0, fmt.Errorf("scene: %d is not open", id)
+			if id == to {
+				return nil, 0, errcode.Wrap(apperrors.ErrSceneUnavailable, nil, "scene_id", id)
+			}
+			return nil, 0, errcode.Wrap(apperrors.ErrSceneStale, nil, "scene_id", id)
 		}
 		if id == to && (m.stopping || m.draining[id] == area) {
-			return nil, 0, fmt.Errorf("scene: %d is closing", id)
+			return nil, 0, errcode.Wrap(apperrors.ErrSceneUnavailable, nil, "scene_id", id, "closing", true)
 		}
 		if len(ids) == 0 || ids[0] != area.ID() {
 			ids = append(ids, area.ID())

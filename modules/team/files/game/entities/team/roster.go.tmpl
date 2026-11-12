@@ -21,6 +21,20 @@ type Snapshot struct {
 	SIDs     map[int64]int32
 }
 
+// Invitation 是一次邀请成交之后交给端点的事实：队伍快照，加上被邀请人与这份邀请的过期时刻（业务时间，Unix 毫秒）。
+// ExpireAt 为 0 表示这次没有产生邀请（对方已经是成员）。
+type Invitation struct {
+	Snapshot
+	Invitee  int64
+	ExpireAt int64
+}
+
+// InviteExpiry 是给这名玩家的邀请的过期时刻；没有邀请时为 0。只可在持有 Team 锁时调用。
+func (t *Team) InviteExpiry(invitee int64) int64 {
+	expiry, _ := t.Dao().GetInvites(invitee)
+	return expiry
+}
+
 // Info 只可在持有 Team 锁时调用；不把 DAO 的集合交给锁外调用方。
 func (t *Team) Info() Snapshot {
 	d := t.Dao()

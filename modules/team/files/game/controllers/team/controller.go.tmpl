@@ -17,6 +17,8 @@ import (
 )
 
 type Controller struct {
+	// registry 只用来在告知被邀请人时按能力名现取玩家传输（见 announceInvite）；没有它时不告知。
+	registry   *app.Registry
 	nestClient nest.Client
 	sid        int32
 	create     func(context.Context) (int64, error)
@@ -57,7 +59,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("team: positive service sid required")
 	}
 	ids := mongo.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence")
-	return &Controller{nestClient: client, sid: identity.Sid, create: func(ctx context.Context) (int64, error) {
+	return &Controller{registry: registry, nestClient: client, sid: identity.Sid, create: func(ctx context.Context) (int64, error) {
 		unique, err := nextTeamID(ctx, ids)
 		if err != nil {
 			return 0, err

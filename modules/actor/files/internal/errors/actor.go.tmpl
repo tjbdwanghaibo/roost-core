@@ -1,0 +1,14 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// actor 模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+// 都是玩家自己能触发的正常拒绝：端点把它们填进应答的 Code / Reason，不记 Error 日志。
+var (
+	// ErrActorNotPlaced：还没有被放进任何空间（没进场景或房间），先进场再移动。
+	ErrActorNotPlaced = errcode.Define({{ID:errcode:actor_not_placed}}, "actor_not_placed", "not placed in any space yet")
+	// ErrActorRooted：在空间里但被定身，状态解除之后才能移动。
+	ErrActorRooted = errcode.Define({{ID:errcode:actor_rooted}}, "actor_rooted", "movement is disabled")
+	// ErrActorPathTooLong：一次给的路径点超过这个身体的上限（缺省 256）。
+	ErrActorPathTooLong = errcode.Define({{ID:errcode:actor_path_too_long}}, "actor_path_too_long", "path has too many points")
+)

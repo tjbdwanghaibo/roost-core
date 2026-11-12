@@ -6,12 +6,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
 // handlerSceneChange 的 areas 包含当前图与目标图，初次入场只有目标，离场只有当前图。
 // 两张图和玩家一起持锁：容量、成员、存档、心跳和位置一起提交或撤销。
 // 不能把客户端的 From 当事实；锁内重新核对玩家实际归属，不一致即拒绝重试。
+// 正常拒绝返回带业务码的错误（scene_stale、Admit 的 scene_unavailable / scene_full），端点把它填进应答；
+// 不带码的（参与者数目不对、找不到落脚点、进出回调失败）是内部错误。
 //
 //roost:nest rollback=undo durability=async
 func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEntity, toID int64) (*pb.SceneChangeResponse, error) {
@@ -30,7 +33,7 @@ func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEn
 		}
 	}
 	if fromID != 0 && from == nil || toID != 0 && to == nil {
-		return nil, fmt.Errorf("scene: stale membership")
+		return nil, apperrors.ErrSceneStale
 	}
 	if toID == fromID {
 		if to != nil {

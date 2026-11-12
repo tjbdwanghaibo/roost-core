@@ -1,8 +1,13 @@
 package gm
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -91,4 +96,47 @@ func (f *gmFixture) read(t *testing.T, target entity.IThreadSafeEntity, read fun
 	if err := f.engine.RunLocal(context.Background(), func() { target.GetMutex().Lock(); defer target.GetMutex().Unlock(); read() }); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// gmAuditLog 把进程日志改写到内存里，供场景读 gm 这一层的审计记录（执行前 "gm: executing"、执行后 "gm: completed"）。
+// 本包的场景不并行；结束时还原全局 logger。联动（with/gm）的场景也用它。
+type gmAuditLog struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (l *gmAuditLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buffer.Write(p)
+}
+func captureGMAudit(t *testing.T) *gmAuditLog {
+	t.Helper()
+	l := &gmAuditLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(l, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return l
+}
+
+// records 取某个 trace_id 下指定 msg 的日志，按写入顺序。
+func (l *gmAuditLog) records(t *testing.T, message, trace string) []map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	text := l.buffer.String()
+	l.mu.Unlock()
+	var matched []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if line == "" {
+			continue
+		}
+		record := map[string]any{}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		if record["msg"] == message && record["trace_id"] == trace {
+			matched = append(matched, record)
+		}
+	}
+	return matched
 }

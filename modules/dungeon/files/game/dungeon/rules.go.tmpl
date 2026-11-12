@@ -1,7 +1,11 @@
 // Package dungeon 保存可替换的副本规则和只读结果。这里不持实体、网络客户端或进程内权威状态。
 package dungeon
 
-import "github.com/tjbdwanghaibo/roost-core/gameplay/level"
+import (
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
+)
 
 const (
 	ClearExp                int64 = 100
@@ -42,27 +46,73 @@ type ClaimResult struct {
 	BoardPending bool
 }
 
-// Program 缺省关卡确实经level的事件/条件/动作推进：两只minion后切到boss，boss被可信来源击败才成功。
+// 可信战斗事实的事件名与其中表示敌人种类的字段名；definition 的触发器和 run.go 发出的事件都用这两个名字。
+const (
+	EventEnemyDefeated = "enemy.defeated"
+	FieldEnemy         = "enemy"
+)
+
+// definition 缺省关卡确实经level的事件/条件/动作推进：两只minion后切到boss，boss被可信来源击败才成功。
 // deadline是并行阶段，30分钟后终止；查询/事件会Advance惰性处理过期，不需要周期任务。
 // 更改已运行定义的Revision会拒绝旧存档加载；上线修改需显式保留旧规则版本或迁移，不能默默套新规则。
-func Program() (*level.Program, error) {
-	return level.Compile(level.Definition{
+//
+// 敌人种类只在这里出现：触发器用 enemyIs("名字") 写“被击败的是谁”，写过的名字就是关卡认识的敌人，
+// KnownEnemy 从这份定义里读出来。加一种敌人只要在这里加用到它的触发器，别的文件不用动。
+func definition() level.Definition {
+	return level.Definition{
 		Version: 1, Name: "dungeon", Revision: 1, TimeDomain: "millisecond",
 		Initial:   []string{"waves", "deadline"},
 		Limits:    level.Limits{Steps: 64, Timers: 1, Effects: 1, Sources: 4},
 		Variables: []level.Variable{{Scope: level.Global, Name: "kills", Default: level.Int(0), Public: true}},
 		Stages: []level.StageDefinition{
 			{ID: "waves", Triggers: []level.TriggerDefinition{
-				{ID: "count", Event: "enemy.defeated", Conditions: []level.Condition{{Left: level.Field("enemy"), Op: "eq", Right: level.Literal(level.String("minion"))}}, Actions: []level.Action{{Kind: "add", Scope: level.Global, Name: "kills", Value: level.Literal(level.Int(1))}}},
-				{ID: "next", Event: "enemy.defeated", Conditions: []level.Condition{{Left: level.Var(level.Global, "kills"), Op: "ge", Right: level.Literal(level.Int(2))}}, MaxFires: 1, Actions: []level.Action{{Kind: "end", Name: "waves"}, {Kind: "start", Name: "boss"}}},
+				{ID: "count", Event: EventEnemyDefeated, Conditions: []level.Condition{enemyIs("minion")}, Actions: []level.Action{{Kind: "add", Scope: level.Global, Name: "kills", Value: level.Literal(level.Int(1))}}},
+				{ID: "next", Event: EventEnemyDefeated, Conditions: []level.Condition{{Left: level.Var(level.Global, "kills"), Op: "ge", Right: level.Literal(level.Int(2))}}, MaxFires: 1, Actions: []level.Action{{Kind: "end", Name: "waves"}, {Kind: "start", Name: "boss"}}},
 			}},
 			{ID: "boss", Triggers: []level.TriggerDefinition{
-				{ID: "clear", Event: "enemy.defeated", Conditions: []level.Condition{{Left: level.Field("enemy"), Op: "eq", Right: level.Literal(level.String("boss"))}}, MaxFires: 1, Actions: []level.Action{{Kind: "finish", Result: "success"}}},
+				{ID: "clear", Event: EventEnemyDefeated, Conditions: []level.Condition{enemyIs("boss")}, MaxFires: 1, Actions: []level.Action{{Kind: "finish", Result: "success"}}},
 			}},
 			{ID: "deadline", Triggers: []level.TriggerDefinition{
 				{ID: "clock", Event: level.EventStageStart, MaxFires: 1, Actions: []level.Action{{Kind: "timer", Name: "limit", Delay: 30 * 60 * 1000}}},
 				{ID: "expire", Event: level.EventTimer, Conditions: []level.Condition{{Left: level.Field("name"), Op: "eq", Right: level.Literal(level.String("limit"))}}, MaxFires: 1, Actions: []level.Action{{Kind: "finish", Result: "failed"}}},
 			}},
 		},
-	}, level.Registry{Events: map[string]map[string]level.ValueKind{"enemy.defeated": {"enemy": level.Text}}})
+	}
+}
+
+// Program 把缺省关卡定义编译成可执行的关卡；编译失败（定义写错）由调用方拒绝启动这一局。
+func Program() (*level.Program, error) {
+	return level.Compile(definition(), level.Registry{Events: map[string]map[string]level.ValueKind{EventEnemyDefeated: {FieldEnemy: level.Text}}})
+}
+
+// enemyIs 是“这条战斗事实里被击败的是 name”这个条件。
+func enemyIs(name string) level.Condition {
+	return level.Condition{Left: level.Field(FieldEnemy), Op: "eq", Right: level.Literal(level.String(name))}
+}
+
+// enemyKinds 从关卡定义里读出它认识的敌人种类：战斗事实的触发器里 enemyIs 写过的名字。
+func enemyKinds(d level.Definition) map[string]struct{} {
+	kinds := map[string]struct{}{}
+	for _, stage := range d.Stages {
+		for _, trigger := range stage.Triggers {
+			if trigger.Event != EventEnemyDefeated {
+				continue
+			}
+			for _, condition := range trigger.Conditions {
+				if name := condition.Right.Literal; condition.Op == "eq" && condition.Left.EventField == FieldEnemy && name != nil && name.Kind == level.Text {
+					kinds[name.Text] = struct{}{}
+				}
+			}
+		}
+	}
+	return kinds
+}
+
+var knownEnemies = sync.OnceValue(func() map[string]struct{} { return enemyKinds(definition()) })
+
+// KnownEnemy 回答一种敌人是不是关卡定义里出现过的。可信战斗事实里的敌人种类先过这一关：
+// 定义里没有的名字多半是调用方写错了，直接拒绝，不让它占用事件序号。
+func KnownEnemy(enemy string) bool {
+	_, ok := knownEnemies()[enemy]
+	return ok
 }

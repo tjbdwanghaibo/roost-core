@@ -50,7 +50,6 @@
 - **历史不保留**：每个定义只保留当前一期和已完成期次的水位；历史成绩、领奖凭据要业务自己存。
 - **前提**：需要 `nest`、`configdata` 两个 Mod 与 `config` 特性；个人持久定时器由安装器接入。不依赖别的模块。实体必须叫 `Player`。个人活动只在持有这名 `Player` 的进程内推进，换服沿用同一份已持久化的数据。
 - **已知限制**：`docs/maintenance/KNOWN-LIMITS.md` 的“活动模块的驱动与验收边界”一节。
-- **未确认**：与 `enter` 的联动里，进入回调把 `entered.PlayerID` 直接传给 `Sync_ActivityEvent` 与 `Sync_ActivityComplete` 作为目标实体号；其他模块的同类代码都先用 `entity.BuildEntityID` 换成完整实体号。这条“进入时对账并继续 `pending`”的路径没有场景覆盖，是否能正确定位到 `Player` 尚未确认。
 
 ## 复用方式
 
@@ -73,7 +72,7 @@
 
 ## 联动
 
-- `activity` + `enter`（`with/enter/`）：首次建档时经 `OnFirstEnter("activity", …)` 在建档事务里以建档时间激活 `created` 触发的活动，并把宿主的创建时间接到 `PlayerDao.Enter` 的首次进入时间；每次进入经 `gameenter.OnEntered("activity", …)` 在事务外对账一次并 `ResumePending`（见上面的“未确认”）。
+- `activity` + `enter`（`with/enter/`）：首次建档时经 `OnFirstEnter("activity", …)` 在建档事务里以建档时间激活 `created` 触发的活动，并把宿主的创建时间接到 `PlayerDao.Enter` 的首次进入时间；每次进入经 `gameenter.OnEntered("activity", …)` 在事务外对账一次并 `ResumePending`（`with/enter/game/controllers/activity/activity_enter.go`）：钩子拿到的是会话里的玩家号，先用 `entity.BuildEntityID(玩家号, player.EntityKindPlayer)` 换成完整实体号再发 `Sync_ActivityEvent` / `Sync_ActivityComplete`；钩子失败只记日志，下一次进入再来。
 - `activity` + `profile`（`with/profile/`）：经 `OnProfileLevelUp("activity", …)` 在升级的同一笔事务里上报事件 `profile.level_up`。
 - `activity` + `leaderboard`（`with/leaderboard/game/activity/leaderboard.go`）：`activity.Board(token)` 按“范围、宿主、定义、代际”给出独立的榜，期次作为赛季。
 - `activity` + `mailbox`（`with/mailbox/game/activity/mailbox.go`）：`activity.SendReward(ctx, mailer, token, action, letter)` 以“实例身份 + 动作 + 收件人”生成稳定的发件键，只允许在 `Settling` 阶段的 `Token` 上用，且只能在事务之外调用。
@@ -81,9 +80,10 @@
 
 ## 验证范围
 
-- `roost module verify activity`：21 个场景（`./game/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter`、`profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
+- `roost module verify activity`：21 个场景（`./game/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter` 的联动 2 个场景（`./game/handler` 与 `./game/controllers/activity`），与 `profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO 与实体定时器；提交器是替身。覆盖五阶段与期限、异步初始化与结算、零预热、独立解锁与重复激活、初始化失败回滚、定时器回调出错时保留期限并回滚、循环的有界补期与规则冻结、自定义流程与迟到事件、时钟回拨与显式重开、参与资格不是个人实例、`pending` 经 BSON 往返恢复、并发激活只有一个锚点；规则校验、业务日历不按 24 小时、重叠周期拒绝、跳过空期的有界查找、`Resume` 重试、驱动停止时保留在途工作、汇聚键、相对日历等到业务日界。
-- 没有验证：与 `enter` 联动的进入回调（场景只直接调用了建档初始化）；真实的 Mongo、WAL、NATS、跨进程迁移与长时间运行。验收记录见 [证据](../../docs/maintenance/evidence/module-activity-20261112/README.md)。
+- 与 `enter` 的联动：一个场景直接调建档初始化，验证重连不重置创建锚点；另一个经 `gameenter.RunEntered` 真正执行登记的进入钩子（正式 Nest、生成的 Sender 与 handler），验证钩子按玩家号定位到 `Player`、对账激活、`Resume` 报告完成后用原 `Token` 确认 `pending`，重连再进入不重复 `Resume`、不改时间线。
+- 没有验证：经 `EnterGame` 端点与真实会话的整条进入链路（场景从 `RunEntered` 起）；真实的 Mongo、WAL、NATS、跨进程迁移与长时间运行。验收记录见 [证据](../../docs/maintenance/evidence/module-activity-20261112/README.md)。
 
 ## 生命周期
 

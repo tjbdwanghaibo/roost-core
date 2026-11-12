@@ -6,7 +6,7 @@
 
 **客户端协议**（`protocol/def/monster_inspect.go`）
 
-- `MonsterInspect{MonsterID}` → `MonsterInspectResponse{Code, Reason, MonsterID, LifeSeq, HP, Template, X, Y}`：查看一只怪。`MonsterID` 是完整的 Entity ID（就是 AOI 同步里的 subject id）。只有查看者与怪在同一个场景时才答，否则带错误返回。客户端没有出生、伤害、杀怪的入口。
+- `MonsterInspect{MonsterID}` → `MonsterInspectResponse{Code, Reason, MonsterID, LifeSeq, HP, Template, X, Y}`：查看一只怪。`MonsterID` 是完整的 Entity ID（就是 AOI 同步里的 subject id）。只有查看者与怪在同一个场景时才答；被拒时应答只有 `Code` / `Reason`（见“错误码”），连接保留。客户端没有出生、伤害、杀怪的入口。
 - 怪的位置与生命经场景视野同步下发：公开视图只有 `Actor`（场景、坐标、朝向）与 `Vitals`（`Template`、`HP`、`LifeSeq`）两个字段（`game/entities/monster/sync.go`）。
 
 **服务端入口**（`game/monster/service/runtime.go`；`service.FromRegistry(registry)` 取 `*Manager`，能力名 `gameplay.monster`。都会等待 Nest，必须在 Nest 业务 worker 之外调用）
@@ -29,7 +29,12 @@
 - `DefaultSpec()`：模板 1、100 HP、速度 6、巡逻半边长 12、感知半径 30、死亡 5 秒后重生、出生点 `(80,80)`。模块启动时用它在场景 1 放一只怪。
 - `Nearest(at, radius, candidates)`：选追击目标的规则（最近的玩家，距离相同取 ID 小的）。
 
-**错误码**：模块没有登记自己的业务码，拒绝都是不带码的普通错误。`MonsterInspect` 被拒时（不同场景、怪已死亡离场、ID 不是怪）客户端拿到的是框架的内部错误码与通用文本，分不出原因。
+**错误码**（`internal/errors/monster.go`，都是 `MonsterInspect` 的正常拒绝；端点把码填进应答，不记 Error 日志）
+
+- `monster_invalid`：请求里的 `MonsterID` 不是怪物的实体号。
+- `monster_gone`：这只怪现在不在任何场景里——已经死亡（等待重生）、已被销毁，或者这个号从来没有怪。重生之后经场景视野重新同步下来，带着新的 `LifeSeq`。它不核对查看者在哪个场景（死亡的怪没有场景可核对），所以任何已进入游戏的玩家都能知道某个怪物号“现在不在场”。
+- `monster_not_here`：怪活着，但查看者不在它所在的场景里（或查看者还没进任何场景）。
+- 查看者自己还没进入游戏时仍是框架码 `entity_not_found`；不带码的失败答框架的内部码并记一条 Error。服务端入口（`Spawn` / `Damage` / `Destroy`）的拒绝仍是不带码的普通错误，它们不面向客户端。
 
 **日志**：出生、死亡、销毁、关图清怪确认记 Debug；普通命中、AI 与重生扫描不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/monster/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
@@ -68,9 +73,9 @@
 
 ## 验证范围
 
-- `roost module verify monster`：25 条场景，全部在 `game/monster/service`（清单的包列表里还有 `./game/handler`，那里没有本模块的场景）。
+- `roost module verify monster`：26 条场景，全部在 `game/monster/service`（清单的包列表只有这一个包）。
 - 离线，但用的是真实的 Nest、实体 Manager 与 lifecycle、heartbeat、AI / actionflow、movement、Sync / AOI；持久提交与网络传输是替身。
-- 覆盖：正式出生与 AOI 可见、`MonsterInspect`、巡逻、定身、低速追击、感知边界、决策失败回滚、死亡隐藏与重生截止、旧命的伤害被拒、销毁、非法规则与 sid、停机准入、真实心跳驱动的巡逻与重生、出生失败清理、死亡失败回滚、退出回复丢失后续做，以及出生 / 异步重生 / 伤害 / 退出遇到同 ID 重建的 8 种交错。
+- 覆盖：正式出生与 AOI 可见、`MonsterInspect`、`MonsterInspect` 的每种拒绝各答自己的业务码（不是怪的号、不存在的怪物号、查看者离开场景、怪已死亡；查看者没进入游戏仍是框架码；拒绝之后同一个入口照常可用）、巡逻、定身、低速追击、感知边界、决策失败回滚、死亡隐藏与重生截止、旧命的伤害被拒、销毁、非法规则与 sid、停机准入、真实心跳驱动的巡逻与重生、出生失败清理、死亡失败回滚、退出回复丢失后续做，以及出生 / 异步重生 / 伤害 / 退出遇到同 ID 重建的 8 种交错。
 - 没有验证：真实数据库、TCP 联网、跨进程故障、长期稳定性、大规模性能。
 
 ## AI 与回滚

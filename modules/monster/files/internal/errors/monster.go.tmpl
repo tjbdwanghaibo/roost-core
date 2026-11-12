@@ -1,0 +1,15 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// monster 模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+// 都是 MonsterInspect 的正常拒绝：端点把它们填进应答的 Code / Reason，不记 Error 日志。
+var (
+	// ErrMonsterInvalid：请求里的 MonsterID 不是怪物的实体号。
+	ErrMonsterInvalid = errcode.Define({{ID:errcode:monster_invalid}}, "monster_invalid", "not a monster id")
+	// ErrMonsterGone：这只怪现在不在任何场景里——已经死亡（等待重生）、已被销毁，或者这个号从来没有怪。
+	// 重生之后会经场景视野重新同步下来，带着新的 LifeSeq。
+	ErrMonsterGone = errcode.Define({{ID:errcode:monster_gone}}, "monster_gone", "monster is dead or no longer exists")
+	// ErrMonsterNotHere：怪活着，但查看者不在它所在的场景里（或者查看者还没有进任何场景）。
+	ErrMonsterNotHere = errcode.Define({{ID:errcode:monster_not_here}}, "monster_not_here", "monster is not in your scene")
+)

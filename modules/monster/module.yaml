@@ -3,13 +3,14 @@ summary: 场景怪物：共享actor移动、AI巡逻与感知追击、生命代�
 requires: [actor, scene]
 needs:
   mods: [nest, heartbeat]
-  features: [entity, dao, protocol]
+  features: [entity, dao, protocol, errcode]
 entity: Monster
 entities: [Monster]
 component: MonsterActor
 protocols: [MonsterInspect]
+errcodes: [monster_invalid, monster_gone, monster_not_here]
 runtime: {package: game/monster/service, start: Start}
 verify:
-  packages: [./game/handler, ./game/monster/service]
+  packages: [./game/monster/service]
   run: ^TestMonster
-  pass: 25
+  pass: 26

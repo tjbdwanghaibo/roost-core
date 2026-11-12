@@ -27,14 +27,14 @@ type ITerrainChunkEntity interface {
 func (c *TerrainChunk) ChunkState() *TerrainChunk { return c }
 func (c *TerrainChunk) OnInitFinish(*entity.EntityCreateParam) error {
 	if c.Dao().Id() != c.ID() {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	if c.Dao().GetVersion() == 0 {
 		return nil
 	}
 	id, err := logic.ChunkUnique(c.Dao().GetSceneID(), core.ChunkKey{X: c.Dao().GetX(), Y: c.Dao().GetY()})
 	if err != nil || id != c.UniqueID() {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	valid := true
 	c.Dao().RangeMaterials(func(_ int, v uint16) bool {
@@ -50,11 +50,11 @@ func (c *TerrainChunk) OnInitFinish(*entity.EntityCreateParam) error {
 		return valid
 	})
 	if !valid {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	state := c.State()
 	if state.BaseRevision <= 0 || state.Version < 1 {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	return (core.Chunk{Heights: state.Heights, Materials: state.Materials}).Validate()
 }
@@ -69,7 +69,7 @@ func (c *TerrainChunk) State() logic.ChunkState {
 func (c *TerrainChunk) Initialize(world *logic.World, key core.ChunkKey) error {
 	id, err := logic.ChunkUnique(world.ID, key)
 	if err != nil || id != c.UniqueID() {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	d := c.Dao()
 	if d.GetVersion() != 0 {
@@ -77,7 +77,7 @@ func (c *TerrainChunk) Initialize(world *logic.World, key core.ChunkKey) error {
 			return logic.ErrBase
 		}
 		if d.GetSceneID() != world.ID || d.GetX() != key.X || d.GetY() != key.Y {
-			return logic.ErrInvalid
+			return logic.ErrState
 		}
 		return nil
 	}
@@ -102,13 +102,13 @@ func (c *TerrainChunk) Validate(world *logic.World, key core.ChunkKey) error {
 	d := c.Dao()
 	id, err := logic.ChunkUnique(world.ID, key)
 	if err != nil || id != c.UniqueID() || d.GetSceneID() != world.ID || d.GetX() != key.X || d.GetY() != key.Y || d.GetVersion() < 1 {
-		return logic.ErrInvalid
+		return logic.ErrState
 	}
 	if d.GetBaseRevision() != world.Meta().BaseRevision {
 		return logic.ErrBase
 	}
 	if d.GetVersion() == math.MaxInt64 {
-		return logic.ErrFull
+		return logic.ErrState
 	}
 	return nil
 }

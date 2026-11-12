@@ -110,6 +110,8 @@ func newTeamFixture(t *testing.T, registrations ...func(*nest.NestMgr)) *teamFix
 		}
 	}
 	registerTeamTestHandler(f.engine, handlerNamePlayerTeam, invokePlayerTeam, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
+	registerTeamTestHandler(f.engine, handlerNameTeamInviteNote, invokeTeamInviteNote, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	registerTeamTestHandler(f.engine, handlerNameTeamInvites, invokeTeamInvites, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
 	for _, register := range registrations {
 		register(f.engine)
 	}
@@ -615,6 +617,151 @@ func TestTeamProjectionHookFailureRollsBackBothEntities(t *testing.T) {
 		t.Fatal("projection hook failure ignored")
 	}
 	f.unchanged(t, before)
+}
+
+func (f *teamFixture) note(t *testing.T, invitee, teamID, inviter, expireAt int64) bool {
+	t.Helper()
+	noted, err := sender.NewTeamInviteNoteSender(f.engine).Sync_TeamInviteNote(context.Background(), f.playerID(invitee), teamID, inviter, expireAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return noted
+}
+func (f *teamFixture) invites(t *testing.T, invitee int64) []player.TeamInvitation {
+	t.Helper()
+	out, err := sender.NewTeamInvitesSender(f.engine).Sync_TeamInvites(context.Background(), f.playerID(invitee))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// 邀请成交时带回被邀请人与过期时刻（端点据此告知对方）：过期时刻就是队伍上记的那一个；续期带回新的；
+// 对已是成员的人“邀请”不产生邀请，过期时刻为 0。
+func TestTeamInviteReportsInviteeAndExpiry(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	invite := func(invitee int64) team.Invitation {
+		out, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), f.teamID, f.playerID(101), invitee)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	first := invite(102)
+	if first.TeamID != f.teamID || first.Leader != 101 || first.Invitee != 102 || first.ExpireAt != f.now.Load()+team.InviteMillis {
+		t.Fatalf("invitation=%+v", first)
+	}
+	f.now.Add(1000)
+	if renewed := invite(102); renewed.ExpireAt != first.ExpireAt+1000 {
+		t.Fatalf("renewed invitation=%+v", renewed)
+	}
+	f.accept(t, 102)
+	if member := invite(102); member.ExpireAt != 0 || len(member.Members) != 2 {
+		t.Fatalf("invitation for a member=%+v", member)
+	}
+}
+
+// 收件记录：记下之后本人能查到，恰好到期那一刻起查不到；提交失败不留记录；已过期的邀请、不是队伍的号不记也不写。
+func TestTeamInviteNoteIsListedUntilItExpires(t *testing.T) {
+	f := newTeamFixture(t)
+	expireAt := f.now.Load() + team.InviteMillis
+	f.commit.reject.Store(true)
+	if _, err := sender.NewTeamInviteNoteSender(f.engine).Sync_TeamInviteNote(context.Background(), f.playerID(102), f.teamID, 101, expireAt); err == nil {
+		t.Fatal("note admitted despite rejected commit")
+	}
+	f.commit.reject.Store(false)
+	if got := f.invites(t, 102); len(got) != 0 {
+		t.Fatalf("rejected note kept: %+v", got)
+	}
+	if !f.note(t, 102, f.teamID, 101, expireAt) {
+		t.Fatal("valid invitation not noted")
+	}
+	want := []player.TeamInvitation{{TeamID: f.teamID, Inviter: 101, ExpireAt: expireAt}}
+	if got := f.invites(t, 102); !reflect.DeepEqual(got, want) {
+		t.Fatalf("listed=%+v want=%+v", got, want)
+	}
+	if got := f.invites(t, 103); len(got) != 0 {
+		t.Fatalf("another player sees the note: %+v", got)
+	}
+	before := f.facts(t)
+	if f.note(t, 102, f.teamID, 101, f.now.Load()) || f.note(t, 102, f.playerID(101), 101, expireAt) || f.note(t, 102, f.teamID, 0, expireAt) {
+		t.Fatal("expired invitation, non-team id or missing inviter noted")
+	}
+	f.unchanged(t, before)
+	f.now.Add(team.InviteMillis - 1)
+	if got := f.invites(t, 102); len(got) != 1 {
+		t.Fatalf("note dropped before its deadline: %+v", got)
+	}
+	f.now.Add(1)
+	if got := f.invites(t, 102); len(got) != 0 {
+		t.Fatalf("note listed at its deadline: %+v", got)
+	}
+}
+
+// 收件记录有界：至多 MaxInvites 条，记满时新的不记、已有的可以续期；过期的在下一次记录时清掉并让出名额。
+func TestTeamInviteNotesAreBoundedAndPruned(t *testing.T) {
+	f := newTeamFixture(t)
+	expireAt := f.now.Load() + team.InviteMillis
+	teamID := func(unique int64) int64 {
+		id, err := entity.BuildEntityID(unique, team.EntityKindTeam)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	for i := int64(1); i <= team.MaxInvites; i++ {
+		if !f.note(t, 102, teamID(92000+i), 101, expireAt) {
+			t.Fatalf("note %d refused", i)
+		}
+	}
+	before := f.facts(t)
+	if f.note(t, 102, teamID(92999), 101, expireAt) {
+		t.Fatal("note beyond the bound accepted")
+	}
+	f.unchanged(t, before)
+	if !f.note(t, 102, teamID(92001), 103, expireAt+5) {
+		t.Fatal("renewal refused when full")
+	}
+	if got := f.invites(t, 102); len(got) != team.MaxInvites || got[0].Inviter != 103 || got[0].ExpireAt != expireAt+5 {
+		t.Fatalf("after renewal: %d notes, first=%+v", len(got), got[0])
+	}
+	f.now.Store(expireAt + 5)
+	if !f.note(t, 102, teamID(92999), 101, expireAt+team.InviteMillis) {
+		t.Fatal("expired notes did not release capacity")
+	}
+	var kept int
+	if err := f.engine.RunLocal(context.Background(), func() {
+		p := f.values[f.playerID(102)].(*player.Player)
+		p.GetMutex().Lock()
+		defer p.GetMutex().Unlock()
+		kept = p.Dao().GetTeam().InvitedLen()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 1 {
+		t.Fatalf("expired notes retained: %d", kept)
+	}
+}
+
+// 接受邀请的同一笔事务清掉这支队伍的收件记录，别的队伍的记录不动。
+func TestTeamAcceptClearsItsInviteNote(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	expireAt := f.now.Load() + team.InviteMillis
+	other, err := entity.BuildEntityID(91002, team.EntityKindTeam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.note(t, 102, f.teamID, 101, expireAt) || !f.note(t, 102, other, 105, expireAt) {
+		t.Fatal("notes refused")
+	}
+	calls := f.commit.calls.Load()
+	f.accept(t, 102)
+	if got := f.invites(t, 102); len(got) != 1 || got[0].TeamID != other || f.commit.calls.Load() != calls+1 {
+		t.Fatalf("after accept: %+v commits=%d", got, f.commit.calls.Load()-calls)
+	}
 }
 
 // NewEngine 会复制包级注册；其他模块场景可能已经登记同一个正式 handler。

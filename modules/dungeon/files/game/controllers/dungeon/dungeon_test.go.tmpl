@@ -596,6 +596,74 @@ func TestDungeonPBEndpointsAndDeadlineCannotSupplySuccess(t *testing.T) {
 	}
 	f.assertPlayer(t, 1, 1)
 }
+// dungeonScenarioEnemy 是“这份规则认识的一种敌人”：缺省取缺省规则里的 minion；
+// TestDungeonNewEnemyOnlyNeedsTheRulesFile 换一份规则文件重跑时用环境变量指到新加的敌人上。
+func dungeonScenarioEnemy() string {
+	if enemy := os.Getenv("DUNGEON_SCENARIO_ENEMY"); enemy != "" {
+		return enemy
+	}
+	return "minion"
+}
+
+// 敌人种类只有规则文件一个来源：规则里出现的被接受，规则里没有的答 dungeon_invalid、不写、不占事件序号。
+func TestDungeonEnemyAdmissionFollowsRules(t *testing.T) {
+	f := newDungeonFixture(t)
+	s := f.open(t, 1001, 1)
+	writes := f.commit.writes.Load()
+	if _, err := f.controller.Defeated(context.Background(), 1001, s.Instance, s.Epoch, "battle", 1, "not-in-the-rules"); !errors.Is(err, apperrors.ErrDungeonInvalid) {
+		t.Fatalf("enemy outside the rules: %v", err)
+	}
+	if f.commit.writes.Load() != writes {
+		t.Fatal("refused enemy wrote")
+	}
+	enemy := dungeonScenarioEnemy()
+	if _, err := f.controller.Defeated(context.Background(), 1001, s.Instance, s.Epoch, "battle", 1, enemy); err != nil {
+		t.Fatalf("enemy %q named by the rules refused: %v", enemy, err)
+	}
+	if f.commit.writes.Load() != writes+1 {
+		t.Fatalf("enemy %q named by the rules did not advance the level", enemy)
+	}
+}
+
+// 加一种敌人只改规则文件：用 overlay 换一份多了 elite 触发器的 rules.go（别的文件一个字不动），
+// 可信战斗事实里的 elite 就被接受。
+func TestDungeonNewEnemyOnlyNeedsTheRulesFile(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := filepath.Abs(filepath.Join(dir, "../..", "dungeon/rules.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const anchor = `{ID: "next", Event: EventEnemyDefeated`
+	const elite = `{ID: "elite", Event: EventEnemyDefeated, Conditions: []level.Condition{enemyIs("elite")}, Actions: []level.Action{{Kind: "add", Scope: level.Global, Name: "kills", Value: level.Literal(level.Int(2))}}},
+				`
+	if strings.Count(string(source), anchor) != 1 {
+		t.Fatal("rules anchor changed: dungeon/rules.go")
+	}
+	scratch := t.TempDir()
+	replacement := filepath.Join(scratch, "rules.go")
+	if err := os.WriteFile(replacement, []byte(strings.Replace(string(source), anchor, elite+anchor, 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]map[string]string{"Replace": {path: replacement}})
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	check := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-count=1", "-overlay", overlay, "-run", "^TestDungeonEnemyAdmissionFollowsRules$", ".")
+	check.Env = append(os.Environ(), "GOWORK=off", "DUNGEON_SCENARIO_ENEMY=elite")
+	if out, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("an enemy added only in the rules file was not accepted: %v\n%s", err, out)
+	}
+}
 func TestDungeonMutationsDetectDuplicateAndWindowRegression(t *testing.T) {
 	dir, err := os.Getwd()
 	if err != nil {

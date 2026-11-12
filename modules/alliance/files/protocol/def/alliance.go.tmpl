@@ -7,26 +7,33 @@ package protocoldef
 // alliance's new state; founding, donating and claiming the alliance reward also
 // change the player's Bag, so they start a saga and answer "accepted" with the
 // saga's key (AllianceOpStatus reports how it went); reading a alliance reads its
-// Remote mirror. See game/alliance for the rules and the codes.
+// Remote mirror. See game/alliance for the rules and the codes. Applying to an
+// alliance that is not open, and what its leader does (approve, reject, kick,
+// hand the leadership over, read the roster), are in alliance_manage.go.
 
-// FoundAllianceRequest founds a alliance led by this player. The fee (Controller.foundCost
-// gold coins, item 9001) is taken by the saga and refunded if the alliance
-// service refuses (an invalid name, the player is already in a alliance).
+// FoundAllianceRequest founds a alliance led by this player. The fee is
+// Controller.foundCost of the bag item game/alliance.CoinItemID (100 of item
+// 1003 unless the project changed them); the saga takes it and refunds it if
+// the alliance service refuses (an invalid name, the player is already in a
+// alliance).
 type FoundAllianceRequest struct {
 	Name     string `pb:"1"`
 	OpenJoin bool   `pb:"2"`
 }
 
 // JoinAllianceRequest joins an open alliance by id. The id comes from somewhere
-// outside this demo — a list endpoint, a friend, a recruitment board — which
-// is deliberately not modelled: the point here is the cross-process join, not
-// alliance discovery.
+// outside this module — a list endpoint, a friend, a recruitment board: there
+// is no alliance list or search here. An alliance that is not open to join
+// answers alliance_denied; apply to it instead (ApplyAlliance).
 type JoinAllianceRequest struct {
 	AllianceID int64 `pb:"1"`
 }
 
-// LeaveAllianceRequest leaves the alliance the player is in. A leader transfers the
-// leadership first (alliance_leader).
+// LeaveAllianceRequest leaves the alliance the player is in. A leader who still
+// has members transfers the leadership first (alliance_leader;
+// TransferAllianceLeader). A leader who is the last member leaves like anyone
+// else, and that disbands the alliance: it has nobody left, answers
+// alliance_missing from then on, and its funds are not paid out.
 type LeaveAllianceRequest struct{}
 
 // AllianceInfoRequest reads a alliance from its mirror. AllianceID 0 means "the one I
@@ -37,7 +44,8 @@ type AllianceInfoRequest struct {
 	MinVersion int64 `pb:"2"`
 }
 
-// DonateAllianceRequest donates gold coins to the alliance the player is in.
+// DonateAllianceRequest donates Amount of the bag item game/alliance.CoinItemID
+// to the alliance the player is in.
 type DonateAllianceRequest struct {
 	Amount int32 `pb:"1"`
 }

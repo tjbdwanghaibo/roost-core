@@ -49,7 +49,7 @@
   - 发金币、前移游标、记序号、写回执在一笔事务里；钱包溢出或提交被拒全部回滚，之后可以用同一个序号重试。
   - 当前序号的重发返回原回包、不再结算（即使隔了很久）；更旧的序号与跳号一律拒绝，所以旧请求永远不会消费新的时间段。防重放只靠“最后一条回执 + 单调序号”，没有增长的账本。
   - 业务时钟回拨到上次结算之前时拒绝、零写入，不会重复发。
-- **前提：** 依赖 wallet 与 nest Mod。只操作一个 Player。模块自己不打开玩家接入与自身视图同步（不装 enter 时见 `docs/maintenance/KNOWN-LIMITS.md` 的“不装 enter 时安装不打开客户端同步”），而客户端要靠同步视图里的 `Idle.Sequence` 才知道下一个序号。
+- **前提：** 依赖 wallet 与 nest Mod。只操作一个 Player。客户端要靠同步视图里的 `Idle.Sequence` 才知道下一个序号（协议不回答“现在是第几号”，序号不对只答 `idle_sequence`），所以清单声明了 `access: {transport: tcp, self_sync: true}`：工程还没有玩家 TCP 接入与自身视图时（没装 enter），安装器代办 `roost add transport tcp` 并打开 `access.player.self_sync`；已经有的不重复做。真实客户端连上还要工程自己实现 `internal/access/player/tcp/auth.go`（缺省拒绝一切）、`roost config enable player-tcp`，并有建档的入口（enter 模块或自己的进入流程）。
 - **已知限制：** KNOWN-LIMITS 里没有单独的 idle 模块条目。
 
 ## 复用方式

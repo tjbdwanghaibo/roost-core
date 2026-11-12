@@ -316,3 +316,82 @@ func TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim(t *testing.T)
 		t.Fatal("player 101 claimed on player 100's guard")
 	}
 }
+
+// A leader who is the last member leaves by leaving, and that disbands the
+// alliance: nobody is left to hand the leadership to, and without this a
+// player who founded an alliance nobody joined could never be in another one.
+// While anyone else is seated the leader still transfers first. A disbanded
+// alliance answers alliance_missing to everything, drops its pending
+// applications, and its id is never founded again; the former leader's guard
+// is free — in the same transaction when it is on the alliance's instance,
+// by the usual ClearGuard when it is on another.
+func TestAllianceLastMemberLeaderLeavingDisbandsTheAlliance(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	allianceID := found(t, c, 3000, "found", 100, false)
+	target := mustAllianceTarget(t, allianceID)
+	if _, err := client.Apply(ctx, "apply-103", 103, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Approve(ctx, "approve-103", 100, homeSID, target, 103); err != nil {
+		t.Fatal(err)
+	}
+	_, err := client.Leave(ctx, "leader-leaves-early", 100, homeSID, target)
+	requireRejected(t, "the leader leaves while a member is seated", err, apperrors.ErrAllianceLeader)
+	if _, err := client.Leave(ctx, "member-leaves", 103, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Apply(ctx, "apply-104", 104, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+
+	left, err := client.Leave(ctx, "leader-leaves-last", 100, homeSID, target)
+	if err != nil {
+		t.Fatalf("the last member, the leader, leaves: %v", err)
+	}
+	if left.Alliance.LeaderID != 0 || len(left.Alliance.Members) != 0 || len(left.Alliance.Applicants) != 0 {
+		t.Fatalf("after the last member left: %+v, want no leader, no members and no applications", left.Alliance)
+	}
+	if guard := guardState(t, c, 100); guard.AllianceID != 0 || guard.PendingRequestID != "" {
+		t.Fatalf("the former leader's guard = %+v, want free", guard)
+	}
+	_, err = client.Info(ctx, target)
+	requireRejected(t, "info of a disbanded alliance", err, apperrors.ErrAllianceMissing)
+	_, err = client.Apply(ctx, "apply-105", 105, homeSID, target)
+	requireRejected(t, "apply to a disbanded alliance", err, apperrors.ErrAllianceMissing)
+	_, err = client.Join(ctx, "join-105", 105, homeSID, target)
+	requireRejected(t, "join a disbanded alliance", err, apperrors.ErrAllianceMissing)
+	if guard := guardState(t, c, 105); guard.AllianceID != 0 || guard.PendingRequestID != "" {
+		t.Fatalf("the refused player's guard = %+v, want free", guard)
+	}
+	replay, err := client.Leave(ctx, "leader-leaves-last", 100, homeSID, target)
+	if err != nil || !replay.Replayed {
+		t.Fatalf("the same leave again: %+v, %v; want its receipt replayed", replay, err)
+	}
+	// The id stays used: a founding that reaches it again founds nothing.
+	if _, err := client.Establish(ctx, "found-it-again", 106, homeSID, target, "again", true); err == nil {
+		t.Fatal("a disbanded alliance was founded again under its old id")
+	}
+	if leaders := c.instances[3000].store.founded(t); leaders[allianceID] != 0 {
+		t.Fatalf("alliance %d has a leader again: %v", allianceID, leaders)
+	}
+	// The former leader is free to found (or join) another alliance.
+	if next := found(t, c, 3000, "found-next", 100, true); next == allianceID {
+		t.Fatalf("the next founding reused the disbanded id %d", allianceID)
+	}
+
+	// The guard on another instance than the alliance: the roster first, the
+	// guard by ClearGuard afterwards.
+	c.seedGuard(t, 3000, 200)
+	otherID := found(t, c, 3001, "found-other", 200, true)
+	other := mustAllianceTarget(t, otherID)
+	if _, err := client.Leave(ctx, "other-leader-leaves", 200, homeSID, other); err != nil {
+		t.Fatalf("the last member leaves an alliance on another instance than their guard: %v", err)
+	}
+	c.runFollowUps()
+	if guard := guardState(t, c, 200); guard.AllianceID != 0 {
+		t.Fatalf("the former leader's guard on the other instance = %+v, want free", guard)
+	}
+	_, err = client.Info(ctx, other)
+	requireRejected(t, "info of the alliance disbanded across instances", err, apperrors.ErrAllianceMissing)
+}

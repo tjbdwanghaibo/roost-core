@@ -18,7 +18,7 @@ errcodes: [dungeon_invalid, dungeon_owner, dungeon_unfinished, dungeon_window, d
 verify:
   packages: [./game/controllers/dungeon]
   run: ^TestDungeon
-  pass: 19
+  pass: 21
 with:
   leaderboard:
     summary: 副本通关数在领奖提交后按赛季UpdateMax投影，失败回报BoardPending，重复领取或RefreshLeaderboard恢复

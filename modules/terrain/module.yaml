@@ -3,18 +3,19 @@ summary: 可编辑地形Pack/View/Brush/Walker、持久地形块与建筑占地�
 requires: [scene]
 needs:
   mods: [nest]
-  features: [entity, dao, protocol]
+  features: [entity, dao, protocol, errcode]
 entities: [TerrainChunk, TerrainBuilding]
 entity: Player
 component: Terrain
 state:
   - {field: TerrainLedger, type: TerrainLedgerState, store: terrain_ledger, dao: 'persist,nosync', comment: 全局连续编辑序号与摘要，保留最后结果，拒绝过期重放。}
 protocols: [TerrainBrush, TerrainBuild, TerrainRemove, TerrainQuery]
+errcodes: [terrain_invalid, terrain_denied, terrain_sequence, terrain_occupied, terrain_site, terrain_full]
 runtime: {package: game/terrain/service, start: Start}
 verify:
   packages: [./game/controllers/terrain]
   run: ^TestTerrain
-  pass: 23
+  pass: 26
 with:
   monster:
     summary: 地形停机先按场景排空怪物，保留其他场景与失败重试资源

@@ -16,8 +16,8 @@ import (
 )
 
 // handlerStartAllianceOp starts one of the alliance sagas (found, donate, claim
-// reward) from inside the player's Nest transaction, the way StartGift starts
-// the gift saga: it changes nothing on the Player, checks under the lock that
+// reward) from inside the player's Nest transaction: it changes nothing on
+// the Player, checks under the lock that
 // the coins the saga's debit will take are there, and emits the saga start
 // intent into the same WAL record; the Data Engine outbox delivers it to the
 // coordinator, which commands the steps (game/alliance/runtime/saga.go).

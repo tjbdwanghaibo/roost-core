@@ -12,6 +12,7 @@ import (
 	"{{MODULE}}/game/handler"
 	"{{MODULE}}/game/playeraccess"
 	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -103,8 +104,9 @@ func TestWithSceneChatRequiresSceneAndLocalConnection(t *testing.T) {
 	f, c, transport, _ := newSceneChat(t)
 	a := f.player(1001)
 	transport.online[a.UniqueID()] = true
-	if response := sendNearby(t, c, a); response.Code == 0 {
-		t.Fatal("outside scene accepted")
+	// 不在任何场景里是正常拒绝：答 scene 的业务码，不是内部错误。
+	if response := sendNearby(t, c, a); response.Code != apperrors.ErrSceneNotHere.Code() || response.Reason == "" {
+		t.Fatal("outside scene accepted or answered without the scene code", response)
 	}
 	f.enter(a, 1)
 	delete(transport.online, a.UniqueID())

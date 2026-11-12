@@ -32,6 +32,13 @@ func TestTaskCatalogEntriesAreUsable(t *testing.T) {
 			t.Fatalf("invalid row: %+v", row)
 		}
 	}
+	// 命名常量指的是缺省任务表里的那三行：名字要与那一行的事件对得上（3 号是副本领奖，不是“战斗”）。
+	for id, event := range map[int64]string{TaskDailyCheckin: "checkin.claimed", TaskDailySpend: "wallet.spent", TaskDailyDungeon: "dungeon.claimed"} {
+		row, ok := taskDefinition(id)
+		if !ok || row.Event != event || row.Period != TaskPeriodDaily {
+			t.Fatalf("task %d = %+v (found %v), want the daily %q task", id, row, ok, event)
+		}
+	}
 }
 
 func TestTaskCatalogRefusesUnusableEntries(t *testing.T) {

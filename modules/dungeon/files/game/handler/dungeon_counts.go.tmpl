@@ -5,7 +5,9 @@ import (
 	player "{{MODULE}}/game/entities/player"
 )
 
-//roost:nest rollback=undo durability=strict
+// handlerDungeonCounts 只读 Player 的持久通关计数，不改任何状态；与别的只读 handler 一样不带事务选项。
+//
+//roost:nest
 func handlerDungeonCounts(target player.IDungeonRewardEntity, season int64) logic.ClaimResult {
 	return target.DungeonComp().Counts(season)
 }

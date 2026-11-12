@@ -5,8 +5,8 @@
 ## 能力
 
 - **客户端协议**
-  - `SceneChange`（`protocol/def/scene_change.go`）：请求 `SceneChangeRequest{FromID, ToID}`，应答 `SceneChangeResponse{Code, Reason, SceneID, X, Y}`。进入、离开或切换场景。`FromID` 是上一次应答里的场景号（第一次进场填 0），`ToID` 填 0 表示离场；两者相同表示重连（保留站位、重新订阅视野）。场景号是服务端开图时给的编号，客户端只能进已经开放的场景。
-  - `SceneInteract`（`protocol/def/scene_interact.go`）：请求 `SceneInteractRequest{SceneID, ObjectID, Sequence}`，应答 `SceneInteractResponse{Code, Reason, Sequence, Text}`。与场景里一个静态交互对象交互一次；`Sequence` 是这名玩家自己的连续序号，从 1 起每次加 1。
+  - `SceneChange`（`protocol/def/scene_change.go`）：请求 `SceneChangeRequest{FromID, ToID}`，应答 `SceneChangeResponse{Code, Reason, SceneID, X, Y}`。进入、离开或切换场景。`FromID` 是上一次应答里的场景号（第一次进场填 0），`ToID` 填 0 表示离场；两者相同表示重连（保留站位、重新订阅视野）。场景号是服务端开图时给的编号，客户端只能进已经开放的场景。被拒时应答只有 `Code` / `Reason`（见“错误码”），玩家留在原处、连接保留。
+  - `SceneInteract`（`protocol/def/scene_interact.go`）：请求 `SceneInteractRequest{SceneID, ObjectID, Sequence}`，应答 `SceneInteractResponse{Code, Reason, Sequence, Text}`。与场景里一个静态交互对象交互一次；`Sequence` 是这名玩家自己的连续序号，从 1 起每次加 1。被拒的请求不消耗序号。
   - 没有专门的推送协议：附近玩家的公开字段经框架的实体同步（entitysync）按视野下发；场景的时间域放在全场关系视图里，下发给这张图的所有成员，不需要靠近某一点。
 - **服务端入口**
   - 场景管理器 `Manager`（`game/scene/service/runtime.go`），用 `service.FromRegistry(registry)` 取得（能力名 `gameplay.scene`）：
@@ -14,7 +14,7 @@
     - `Close(ctx, uniqueID) error`：关一张**空**图；还有成员就拒绝。
     - `Drain(ctx, id) error`：先关准入，再通知登记过的模块清走自己的成员，撤离玩家，最后关图；只动指定的这一张。失败可重试。
     - `Stop(ctx) error`：停机入口（模块的 `runtime` 接线自动调用）。先禁止再开图，再逐图 `Drain`。
-    - `IDs(from, to int64) ([]int64, int64, error)`：把场景号换成实体号，供要把 Scene 放进自己事务的调用方声明参与者。
+    - `IDs(from, to int64) ([]int64, int64, error)`：把场景号换成实体号，供要把 Scene 放进自己事务的调用方声明参与者。`to` 没开或正在关返回 `scene_unavailable`，`from` 没开返回 `scene_stale`。
     - `RegisterDrainer(kind, run) (func(), error)`：见“登记点”。
   - 场景配置 `Config`（`game/scene/scene.go`）：`Template`、`Line`（分线号）、`Bounds`、`Spawn`、`BlockSize`、`Sight`（视距）、`Capacity`、`Ground`、`Surface`、`Regions`、`Objects`；`DefaultConfig()` 是缺省的一份。
   - 空间 `Space`（同文件，经 `Scene.Space()` 取得）：
@@ -23,20 +23,29 @@
     - `Enter(value, at)` / `Leave(value)` / `QueueMove(value, at)`：把一个实体放进 / 移出 / 移动这张图的视野索引（怪物、地形块、建筑等非玩家实体用 `Enter` 显示）。
     - `Placement(preferred)`：先试给定点，再试出生点，返回一个能站的位置。
     - `RegionsAt(at)`、`Object(id)`（`game/scene/regions.go`）：某点所在的区域号、按号取交互对象。
-  - Scene 实体（`game/entities/scene/entity.go`）：`Admit(id)` / `Depart(id)`（成员账本，必须与对应的 actor 同时持锁）、`Environment()`（交给 actor 的环境）、`TimeDomain()`、`Config()`。
+  - Scene 实体（`game/entities/scene/entity.go`）：`Admit(id)` / `Depart(id)`（成员账本，必须与对应的 actor 同时持锁；`Admit` 在已关闭 / 正在关闭时返回 `scene_unavailable`，满员返回 `scene_full`）、`Environment()`（交给 actor 的环境）、`TimeDomain()`、`Config()`。
   - Nest handler（`game/handler/`）：`handlerSceneChange`（`rollback=undo durability=async`，Player 与至多两张 Scene 同一笔事务）、`handlerSceneInteract`（`durability=strict`）、`handlerSceneTime`（改场景时间倍率，只给可信管理逻辑：`sender.NewSceneTimeSender(client).Sync_SceneTime(ctx, sceneEntityID, rate)`）、`handlerSceneClose`、`handlerSceneBeginClosing`、`handlerSceneEvacuate`（后三个由 `Manager` 内部使用）。
 - **登记点**
   - `OnSceneFields(name string, fields ...string)`（`game/entities/player/scene_sync.go`）：登记“附近的人能看到 Player 的哪些顶层字段”。只在 `init` 登记；没登记的字段默认只有本人能看。模块自己登记了 `Actor`（位置与朝向）。
   - `OnRegion(name, handler func(*Player, gamescene.RegionEvent) error)`（`game/entities/player/scene_hooks.go`）：玩家进入 / 离开一个静态区域时调用。区域由服务端按玩家已验证的位置计算，在位置变化的**同一笔 Nest 事务**里触发；返回错误会撤销这一拍的位置与区域列表。
   - `OnSceneInteract(name, handler func(*Player, gamescene.Object) error)`（同文件）：`SceneInteract` 的场景、距离与序号都通过之后触发一次，同一笔事务。
   - 以上两类回调只能改已经持锁的实体，不能发 RPC、不能加载或锁别的实体；只在 `init` 登记，空名、nil、重名 panic；按名字排序执行。
+  - 回调要拒绝玩家的这次进入 / 交互（等级不够、任务没接）时返回**带业务码的错误**（工程 `internal/errors` 里 `errcode.Define` 的值）：端点把它的码填进应答、连接保留。返回不带码的错误会被当成内部错误，这名玩家的连接被关掉。
   - `Manager.RegisterDrainer(kind entity.EntityKind, run func(context.Context, *sceneentity.Scene) error)`：别的模块登记“关这张图之前怎么把我这一类实体清走”。回调在 Nest 与管理器锁之外执行，必须按传入的 Scene 实例清理、失败时保留可重试的状态。每种实体 kind 只能登记一个，不能给 Player 登记。monster 模块启动时登记了自己。
 - **状态**
   - Scene 实体的 `SceneDao`（`db/def/scene.go`）：`Members`、`Closed`、`Closing` 不落库不同步；`AnchorBusiness`、`AnchorDomain`、`Rate`（时间域）不落库但同步给全场。整个 DAO 不落库（`nocoll`）：场景从开图配置重建，成员与时间域不从数据库恢复。
   - Player 上两个字段（`db/def/scene_player.go`）：`PlayerDao.SceneRuntime`（当前所在的区域号列表，不落库不同步）、`PlayerDao.SceneInteraction`（交互序号与最后一次应答，落库不同步）。
   - 谁能看到什么：本人视图包含 Player 所有可同步字段；附近视图只包含 `OnSceneFields` 登记过的顶层字段，快照与增量用同一个掩码。
 - **配置**：没有配置表与配置键。启动时自动打开 1 号场景，用 `DefaultConfig()`：模板 `plain`、分线 1、范围 [0,1000)×[0,1000)、出生点 (50,50)、块大小 32、视距 64、容量 1000。别的图由工程在服务端代码里调 `Open`。
-- **错误码**：无。拒绝是不带业务码的普通错误（文本如 `scene: full`、`scene: stale membership`、`scene: closed`）。
+- **错误码**（`internal/errors/scene.go`，都是玩家自己能触发的正常拒绝；`HandleSceneChange` / `HandleSceneInteract` 把码填进应答的 `Code` / `Reason`，不返回 error）
+  - `scene_unavailable`：要进入（或要交互）的场景没有开放、正在关闭或已经关闭。
+  - `scene_full`：目标场景满员；玩家留在原来的场景里。
+  - `scene_stale`：请求里的 `FromID` 不是玩家此刻实际所在的场景（包括 `FromID` 指的图已经关了）。什么都没改，客户端对齐之后重发。
+  - `scene_not_here`：交互请求指的场景不是玩家此刻所在的场景（`SceneID` 填 0 也是它）。
+  - `scene_object_unknown`：这张图上没有这个交互对象。
+  - `scene_object_far`：对象存在，但玩家已提交的位置不在它的交互半径内。
+  - `scene_sequence`：交互序号不是上一次成功的序号加 1（跳号、旧号、0），或同一个序号换了场景或对象。
+  - 框架码（没进入游戏的 `entity_not_found` 等）与登记的回调返回的带码错误同样答在应答里。
 
 **日志**：玩家切图、撤离确认记 Info；开图、关闭、排空准入记 Debug。时间倍率只提供 handler / Sender，日志由外部调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/scene/controller.go`, `game/scene/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
@@ -51,7 +60,9 @@
   - `SceneInteract`：序号必须是上一次的加 1。重发**最后一次**的同一请求返回上次的应答、不再触发回调；跳号、旧号、同序号换了场景或对象都拒绝。只保留最后一份回执，所以它只防紧接着的重发。
   - 断线不改成员：仍加载但断线的角色继续占容量（方便重连）；已卸载的角色留下的成员在 `Admit` / `Close` / `Stop` 持锁核实后清理。
   - 关图：`Close` 不会踢人；`Drain` / `Stop` 失败（某个模块没清干净、撤离事务被拒）时保留场景，可重试；别的实体 kind 没登记 `RegisterDrainer` 却还在图里时，`Drain` 返回错误。
-- **拒绝会断开连接**：`HandleSceneChange` / `HandleSceneInteract`（`game/controllers/scene/`）把所有拒绝作为 Go error 直接返回，应答里的 `Code` / `Reason` 不会被填。按接入层的行为（`infra/network/gateway/tcp.go` 的 `dispatchRequest`：端点返回 error 时结束这条连接），场景已满、目标未开放、`FromID` 过期、交互对象太远、序号跳号这些业务拒绝都会让这名玩家的连接被关掉。要让客户端收到可恢复的拒绝，工程需要自己在这两个端点里把错误转成应答。
+- **只有内部错误才断开连接**：`HandleSceneChange` / `HandleSceneInteract`（`game/controllers/scene/`，分类在 `controller.go` 的 `refusal`）把带码的错误答在应答里、连接保留；不带码的错误（提交被拒、回调返回了不带码的错误、找不到落脚点、结果未知）作为 Go error 返回，接入层按分发失败结束这条连接（`infra/network/gateway/tcp.go` 的 `dispatchRequest`），客户端重连后用 `FromID == ToID` 重新对齐。这一点与生成的端点不同——生成的端点对内部错误也答 `CodeInternal`、不断开。
+- **`scene_stale` 之后客户端要自己知道在哪**：应答不带玩家实际所在的场景号。客户端按最近一次成功的 `SceneChange` 应答对齐；自身视图里的 `Actor.SceneID` 是 Scene 的完整实体号，不是 `SceneChange` 用的场景号。
+- **交互序号没有查询入口**：`SceneInteraction` 只落库不下发，也没有读它的协议；客户端丢了自己的序号（重装、换设备）之后只能逐个试，每次不对都答 `scene_sequence`。
 - **不做的事**：不做移动（在 actor）；不做怪物、战斗、掉落；不做有状态的 NPC / 建筑（`Config` 里的区域与对象是静态只读的，有状态的要另建实体）；不做场景内广播协议；不做动态开图的客户端入口；时间域只有倍率（0～4），不影响全局业务时间。
 - **前提**：依赖 actor 模块、nest 与 heartbeat 两个 Mod；安装时代办玩家 TCP 接入、`access.player.self_sync` 与实体 lifecycle 的接线；Player 的同步 packer 必须是 actor 提供的 `NewActorPlayerSyncPacker`——工程已有自定义 packer 时安装被拒绝。
 - **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md`）：“场景模块的边界”一条（scene / monster / terrain 是单进程所有权）、“运行期接线的边界”一条（`runtime` 入口在业务 Init 之前运行、只支持一次启动与串行停机）、“chat 模块的边界”一条里关于附近聊天的部分。
@@ -90,7 +101,7 @@ scene 自己的 `with/`：
 
 ## 验证范围
 
-- `roost module verify scene`：26 条场景（`^TestScene`，包 `./game/controllers/scene`）。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期 `FromID` 拒绝、客户端不能开图、有人的图不能关、满员拒绝且不把人从原图踢掉、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与回调失败回滚、交互按连续序号只生效一次、不能够到别的场景或远处的对象、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
+- `roost module verify scene`：28 条场景（`^TestScene`，包 `./game/controllers/scene`）。每一种业务拒绝都断言“controller 不返回 error、应答带着指定的业务码与原因、状态没变、同一条连接上改对之后重发成功”。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期或已关闭的 `FromID` 答 `scene_stale`、客户端不能开图（`scene_unavailable`）、有人的图不能关、满员答 `scene_full` 且不把人从原图踢掉、停机中的图答 `scene_unavailable`、回调的带码拒绝照样答码并整笔撤销、七个码互不相同且不带码的错误不被当成业务拒绝、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与回调失败回滚、交互按连续序号只生效一次（同号换内容、跳号、0 都答 `scene_sequence` 且不消耗序号）、不能够到别的场景（`scene_not_here`）、没开的场景（`scene_unavailable`）、不存在的对象（`scene_object_unknown`）或远处的对象（`scene_object_far`）、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
 - 联动：`with/chat` 5 条，`with/profile` / `with/attribute` / `with/equipment` 各 2 条；combat 模块拥有的 `with/scene` 另有 2 条。各联动都实际解码快照与增量，检查公开值存在、私有值不泄露、本人仍能看到私有值。
 - 这些是离线场景：使用实际的 Controller、生成的 Sender、Nest 多实体事务、DAO、movement、Sync AOI 与时间域；提交器与同步 / 网络传输是受控的内存替身。没有验证真实数据库、跨进程 RPC、TCP 链路或容量性能。
 - 仓库侧的安装验收在 `codegen/internal/roost/module_scene_test.go`（安装、重复安装不漂移、拒绝覆盖已有 packer 等）。

@@ -114,14 +114,24 @@ func (component *AllianceRosterComponent) Seat(playerID int64) (*db.AllianceSeat
 	return seat, ok && seat != nil
 }
 
+// Disbanded reports whether the alliance was founded and then left by its
+// last member (Remove). It has no leader, so every write that needs a founded
+// alliance answers alliance_missing, and its founding time stays as the mark
+// that the id was used: Found never founds it again.
+func (component *AllianceRosterComponent) Disbanded() bool {
+	dao := component.owner.Dao()
+	return dao.GetLeaderID() == 0 && dao.GetCreatedAtUnix() != 0
+}
+
 // Found makes a fresh alliance entity into an alliance led by leaderID.
 func (component *AllianceRosterComponent) Found(name string, leaderID int64, homeSID int32, openJoin bool, joinRequestID string, nowUnix int64) error {
 	if err := alliancerule.ValidateName(name); err != nil {
 		return err
 	}
-	if component.Founded() {
+	if component.Founded() || component.Disbanded() {
 		// The id was minted for this request; an alliance already founded under
-		// it is a broken id allocator, not something to answer the player with.
+		// it (or founded and disbanded since) is a broken id allocator or a
+		// stale retry, not something to answer the player with.
 		return fmt.Errorf("alliance %d is already founded", component.AllianceID())
 	}
 	dao := component.owner.Dao()
@@ -211,13 +221,19 @@ func (component *AllianceRosterComponent) Admit(playerID int64, homeSID int32, j
 }
 
 // CheckRemoval checks that actorID may remove targetID: a member leaving
-// (actor == target), or the leader kicking a member. The leader can do
-// neither to themselves: leadership is transferred first.
+// (actor == target), or the leader kicking a member. While anyone else is
+// seated the leader can do neither to themselves: leadership is transferred
+// first. A leader who is the last member may leave — there is nobody to hand
+// the alliance to — and Remove then disbands it.
 func (component *AllianceRosterComponent) CheckRemoval(actorID, targetID int64) error {
 	if _, member := component.Seat(targetID); !member {
 		return errcode.Wrap(apperrors.ErrAllianceMissing, nil, "player_id", targetID)
 	}
-	if targetID == component.owner.Dao().GetLeaderID() {
+	dao := component.owner.Dao()
+	if targetID == dao.GetLeaderID() {
+		if actorID == targetID && dao.MembersLen() == 1 {
+			return nil
+		}
 		return errcode.Wrap(apperrors.ErrAllianceLeader, nil, "player_id", targetID)
 	}
 	if actorID == targetID {
@@ -228,10 +244,30 @@ func (component *AllianceRosterComponent) CheckRemoval(actorID, targetID int64) 
 
 // Remove takes targetID's seat (after CheckRemoval) and returns what the
 // membership was: its join request id and the member's home sid.
+//
+// Removing the leader — only possible for the last member — disbands the
+// alliance: it has no leader from here on (Founded is false, so applying,
+// joining, donating and declaring war answer alliance_missing and readers
+// treat it as missing), and the applications still waiting are dropped,
+// since nobody can answer them. The name, the funds, the founding time and
+// the war records stay in the record as they were; the entity is not
+// deleted and its id is not founded again (Disbanded).
 func (component *AllianceRosterComponent) Remove(targetID int64) (string, int32) {
 	seat, _ := component.Seat(targetID)
 	joinRequestID, homeSID := seat.GetJoinRequestID(), seat.GetHomeSID()
-	component.owner.Dao().DelMembers(targetID)
+	dao := component.owner.Dao()
+	dao.DelMembers(targetID)
+	if targetID == dao.GetLeaderID() {
+		dao.SetLeaderID(0)
+		var applicants []int64
+		dao.RangeApplications(func(playerID int64, _ *db.AllianceApplication) bool {
+			applicants = append(applicants, playerID)
+			return true
+		})
+		for _, playerID := range applicants {
+			dao.DelApplications(playerID)
+		}
+	}
 	return joinRequestID, homeSID
 }
 

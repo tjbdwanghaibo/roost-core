@@ -1,5 +1,5 @@
 name: friends
-summary: 同服好友：申请、同意、拒绝、双向删除、单向黑名单；两个 Player 同一笔 Nest 事务，名单有界
+summary: 同服好友：申请、同意、拒绝、双向删除、单向黑名单；改双方的动作是两个 Player 同一笔 Nest 事务，申请与同意要求对方在线，名单有界
 requires: []
 conflicts: []
 needs:
@@ -20,4 +20,4 @@ errcodes: [friends_invalid, friends_full, friends_blocked, friends_application_m
 verify:
   packages: [./game/handler, ./game/controllers/friends]
   run: ^TestFriends
-  pass: 12
+  pass: 18

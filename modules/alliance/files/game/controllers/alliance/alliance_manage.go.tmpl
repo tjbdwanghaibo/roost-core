@@ -1,0 +1,142 @@
+package alliance
+
+import (
+	stdcontext "context"
+	"fmt"
+
+	"{{MODULE}}/game/alliance"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 申请入盟、盟主审批、踢人、转让盟主与名单查询的端点。
+//
+// 四个盟主操作与申请都只改联盟，各是一次联盟 RPC（与 JoinAlliance / LeaveAlliance 相同）。本进程只转交：
+// 调用者取自已认证的会话，请求号取自这一帧，目标联盟是玩家自己的展示副本所指的那个。
+// “调用者是不是盟主、对方在不在名单里、有没有待批的申请”一律由联盟服务在联盟的锁内按名单裁决——
+// 这里不读镜像判断角色，展示副本过时最多换来服务的一次拒绝（alliance_denied / alliance_missing）。
+
+// HandleApplyAlliance 向一个不开放加入的联盟提交申请。申请只记在那个联盟里，不占用玩家的守卫，
+// 所以成功后玩家的展示副本不变；被批准时由成员通知（joined）与进入时的对账更新。
+func (controller *Controller) HandleApplyAlliance(context *playeraccess.Context, request *pb.ApplyAllianceRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("apply_alliance endpoint: context and request are required")
+	}
+	target, err := rpcalliance.AllianceTarget(request.AllianceID)
+	if request.AllianceID <= 0 || err != nil {
+		return allianceRefusal(context, "apply_alliance", errcode.Wrap(apperrors.ErrAllianceViewMissing, err, "alliance_id", request.AllianceID)), nil
+	}
+	sid, err := controller.boundSID(context)
+	if err != nil {
+		return allianceRefusal(context, "apply_alliance", err), nil
+	}
+	requestID := alliance.RequestID("apply", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	reply, err := controller.alliances.Apply(context.Context(), requestID, context.PlayerID, sid, target)
+	if err != nil {
+		return allianceRefusal(context, "apply_alliance", err), nil
+	}
+	return allianceReply(reply.Alliance, reply.ServedBySID), nil
+}
+
+// HandleApproveAllianceApply 批准一份申请：申请人入盟。只有盟主做得到，由联盟服务裁决。
+func (controller *Controller) HandleApproveAllianceApply(context *playeraccess.Context, request *pb.ApproveAllianceApplyRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("approve_alliance_apply endpoint: context and request are required")
+	}
+	return controller.manageAlliance(context, "approve_alliance_apply", "approve", request.PlayerID, controller.alliances.Approve)
+}
+
+// HandleRejectAllianceApply 拒绝一份申请。申请人不会收到通知，可以再次申请。
+func (controller *Controller) HandleRejectAllianceApply(context *playeraccess.Context, request *pb.RejectAllianceApplyRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("reject_alliance_apply endpoint: context and request are required")
+	}
+	return controller.manageAlliance(context, "reject_alliance_apply", "reject", request.PlayerID, controller.alliances.Reject)
+}
+
+// HandleKickAllianceMember 把一名成员移出联盟。盟主不能踢自己：先转让，或者作为最后一名成员直接退出。
+func (controller *Controller) HandleKickAllianceMember(context *playeraccess.Context, request *pb.KickAllianceMemberRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("kick_alliance_member endpoint: context and request are required")
+	}
+	return controller.manageAlliance(context, "kick_alliance_member", "kick", request.PlayerID, controller.alliances.Kick)
+}
+
+// HandleTransferAllianceLeader 把盟主交给另一名成员；原盟主留在盟内成为普通成员，之后可以退出。
+func (controller *Controller) HandleTransferAllianceLeader(context *playeraccess.Context, request *pb.TransferAllianceLeaderRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("transfer_alliance_leader endpoint: context and request are required")
+	}
+	return controller.manageAlliance(context, "transfer_alliance_leader", "transfer", request.PlayerID, controller.alliances.Transfer)
+}
+
+// manageAlliance 是四个盟主操作共用的转交：在玩家展示副本所指的联盟上，对 subjectID 这名玩家发一次联盟 RPC。
+// 展示副本只用来找到目标联盟；它为 0 时没有可操作的联盟，直接答 alliance_view_missing。
+// subjectID 不是正数时不发 RPC（联盟里不可能有这名玩家）。其余一律交给联盟服务，答复原样映射成客户端码。
+func (controller *Controller) manageAlliance(context *playeraccess.Context, endpoint, op string, subjectID int64,
+	call func(ctx stdcontext.Context, requestID string, callerID int64, callerSID int32, target int64, subjectID int64) (rpcalliance.Reply, error)) (*pb.AllianceResponse, error) {
+	if context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("%s endpoint: an authenticated session is required", endpoint)
+	}
+	if subjectID <= 0 {
+		return allianceRefusal(context, endpoint, errcode.Wrap(apperrors.ErrAllianceMissing, nil, "player_id", subjectID)), nil
+	}
+	shown, err := controller.shownAlliance(context)
+	if err != nil {
+		return allianceRefusal(context, endpoint, err), nil
+	}
+	if shown == 0 {
+		return allianceRefusal(context, endpoint, errcode.Wrap(apperrors.ErrAllianceViewMissing, nil, "player_id", context.PlayerID)), nil
+	}
+	target, err := rpcalliance.AllianceTarget(shown)
+	if err != nil {
+		return allianceRefusal(context, endpoint, err), nil
+	}
+	sid, err := controller.boundSID(context)
+	if err != nil {
+		return allianceRefusal(context, endpoint, err), nil
+	}
+	requestID := alliance.RequestID(op, context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	reply, err := call(context.Context(), requestID, context.PlayerID, sid, target, subjectID)
+	if err != nil {
+		return allianceRefusal(context, endpoint, err), nil
+	}
+	return allianceReply(reply.Alliance, reply.ServedBySID), nil
+}
+
+// HandleAllianceRoster 从镜像读一个联盟的名单（AllianceID 为 0 读自己所在的）。成员列表对能读到这个联盟的人都可见；
+// 待批的申请人只下发给镜像里的盟主本人——只有他能处理。这是“给谁看”的筛选，不是权限：
+// 审批时联盟服务仍按自己的名单裁决。
+func (controller *Controller) HandleAllianceRoster(context *playeraccess.Context, request *pb.AllianceRosterRequest) (*pb.AllianceRosterResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("alliance_roster endpoint: context and request are required")
+	}
+	refuse := func(err error) (*pb.AllianceRosterResponse, error) {
+		refusal := allianceRefusal(context, "alliance_roster", err)
+		return &pb.AllianceRosterResponse{Code: refusal.Code, Reason: refusal.Reason}, nil
+	}
+	allianceID := request.AllianceID
+	if allianceID == 0 {
+		shown, err := controller.shownAlliance(context)
+		if err != nil {
+			return refuse(err)
+		}
+		allianceID = shown
+	}
+	view, err := controller.allianceMirror(context, allianceID, request.MinVersion)
+	if err != nil {
+		return refuse(err)
+	}
+	response := &pb.AllianceRosterResponse{AllianceID: view.AllianceID, LeaderID: view.LeaderID, OpenJoin: view.OpenJoin, Version: view.Version}
+	for _, member := range view.Members {
+		response.Members = append(response.Members, &pb.AllianceMemberInfo{PlayerID: member.PlayerID, Role: member.Role, Contribution: member.Contribution})
+	}
+	if view.LeaderID == context.PlayerID {
+		response.Applicants = view.Applicants
+	}
+	return response, nil
+}

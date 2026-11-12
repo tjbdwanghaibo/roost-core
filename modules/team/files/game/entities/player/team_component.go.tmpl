@@ -1,10 +1,13 @@
 package player
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 
+	"{{MODULE}}/db"
 	apperrors "{{MODULE}}/internal/errors"
 	team "{{MODULE}}/game/entities/team"
 
@@ -101,17 +104,71 @@ func (c *TeamComponent) Accept(target *team.Team, sid int32, now int64) (team.Sn
 		return team.Snapshot{}, err
 	}
 	c.owner.Dao().GetTeam().SetTeamID(target.ID())
+	// 这份邀请已经用掉，收件记录随入队一起清。没有记录时不动：重复接受仍是零写入。
+	if _, noted := c.owner.Dao().GetTeam().GetInvited(target.ID()); noted {
+		c.owner.Dao().GetTeam().DelInvitedKey(target.ID())
+	}
 	after := target.Info()
 	return after, c.changed(before, after, false)
 }
-func (c *TeamComponent) Invite(target *team.Team, invitee, now int64) (team.Snapshot, error) {
+
+// Invite 由队长发出邀请；返回的 Invitation 带着被邀请人与过期时刻，端点据此在提交之后告知被邀请人。
+func (c *TeamComponent) Invite(target *team.Team, invitee, now int64) (team.Invitation, error) {
 	if c.TeamID() != target.ID() {
-		return team.Snapshot{}, apperrors.ErrTeamMissing
+		return team.Invitation{}, apperrors.ErrTeamMissing
 	}
 	if err := target.Invite(entity.GetUniqueIDFromEntityID(c.owner.ID()), invitee, now); err != nil {
-		return team.Snapshot{}, err
+		return team.Invitation{}, err
 	}
-	return target.Info(), nil
+	return team.Invitation{Snapshot: target.Info(), Invitee: invitee, ExpireAt: target.InviteExpiry(invitee)}, nil
+}
+
+// TeamInvitation 是被邀请人看到的一份邀请：哪支队伍（完整实体号，TeamAccept 要的就是它）、谁邀请的、什么时候过期。
+type TeamInvitation struct {
+	TeamID   int64
+	Inviter  int64
+	ExpireAt int64
+}
+
+// NoteInvite 把一份收到的邀请记进本人的收件记录，只锁本人。它只是给本人查询用的提示：邀请成立与否看 Team 上的权威记录，
+// 所以这里不查队伍。先清掉已过期的记录；同一支队伍的新邀请覆盖旧的；记满（team.MaxInvites 条）时不记，返回 false。
+// 已经过期的邀请、不是队伍的实体号同样不记。
+func (c *TeamComponent) NoteInvite(teamID, inviter, expireAt, now int64) bool {
+	if !entity.MatchEntityID(teamID, team.EntityKindTeam) || inviter <= 0 || now >= expireAt {
+		return false
+	}
+	notes := c.owner.Dao().GetTeam()
+	var expired []int64
+	notes.RangeInvited(func(id int64, note *db.TeamInvite) bool {
+		if note == nil || now >= note.GetExpireAt() {
+			expired = append(expired, id)
+		}
+		return true
+	})
+	for _, id := range expired {
+		notes.DelInvitedKey(id)
+	}
+	if _, renewed := notes.GetInvited(teamID); !renewed && notes.InvitedLen() >= team.MaxInvites {
+		return false
+	}
+	note := &db.TeamInvite{}
+	note.SetInviter(inviter)
+	note.SetExpireAt(expireAt)
+	notes.SetInvitedKey(teamID, note)
+	return true
+}
+
+// Invites 列出本人收到的、此刻还没过期的邀请，按队伍号升序；恰好到期那一刻就算过期，与队伍一侧的判断相同。只读。
+func (c *TeamComponent) Invites(now int64) []TeamInvitation {
+	var out []TeamInvitation
+	c.owner.Dao().GetTeam().RangeInvited(func(id int64, note *db.TeamInvite) bool {
+		if note != nil && now < note.GetExpireAt() {
+			out = append(out, TeamInvitation{TeamID: id, Inviter: note.GetInviter(), ExpireAt: note.GetExpireAt()})
+		}
+		return true
+	})
+	slices.SortFunc(out, func(a, b TeamInvitation) int { return cmp.Compare(a.TeamID, b.TeamID) })
+	return out
 }
 func (c *TeamComponent) Leave(target *team.Team, disband bool) error {
 	if c.TeamID() != target.ID() {
