@@ -231,6 +231,6 @@ team + matchmaking + matchroom 实现、turn-pvp 接入和 demo 队伍迁移完�
 
 维护者更正：R7 完成后先 R10 alliance，再 R9 activity；R8 gift 不急做，R11 lockstep 待做。R9 是通用时间阶段核心，供多个业务复用，排行与发奖只是可选联动。
 
-R10 实现和定向验收完成：模块安装独立 alliance 服务、owned Remote 实体、game Mirror、Player 展示与三个跨域 Saga，普通 Join/Leave 不引入 Saga。enter 对账、rehome 当前绑定准入与入盟批次/旧 SID 条件修正 HomeSID；HomeSID 仅作尽力通知提示，不承担权威权限。demo 改用模块，只有规则与 PlayerOwners 启动适配保留，无旧 guild 兼容。
+R10 提交 `fc0fa6e9`，实现和定向验收完成：模块安装独立 alliance 服务、owned Remote 实体、game Mirror、Player 展示与三个跨域 Saga，普通 Join/Leave 不引入 Saga。enter 对账、rehome 当前绑定准入与入盟批次/旧 SID 条件修正 HomeSID；HomeSID 仅作尽力通知提示，不承担权威权限。demo 改用模块，只有规则与 PlayerOwners 启动适配保留，无旧 guild 兼容。
 
 最小 66、组合158 PASS / 0 SKIP，6个变异、两轮 race，安装回滚、重复安装、build/vet/ID/漂移与 demo 定向链路通过。根包/目录/文档检查通过；CBM 113路径、16个局部模板缺口补证。见[证据](evidence/module-alliance-20261112/README.md)。全矩阵、完整 demo、真实存储和跨进程、§5/§6 仍待最终批次；没有把旧性能报告算作本轮验收。

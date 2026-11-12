@@ -128,7 +128,7 @@
 
 ### R10. alliance（联盟）
 
-已完成（实现与定向验收，2026-11-12）：49 条基础、enter/rehome 各 2 条联动；组合 158 PASS / 0 SKIP、6 个变异与两轮 race、安装失败回滚及 demo 相邻链路通过。独立单写者、三个跨域 Saga、Player 展示、当前绑定准入与 HomeSID 条件修正；demo 删除重复实现，仅保留规则和驻留表适配。完整矩阵及 §5/§6 真实联合验收不在本批。见[模块说明](../../modules/alliance/README.md)、[证据](evidence/module-alliance-20261112/README.md)。
+已完成（提交 `fc0fa6e9`，实现与定向验收）：49 条基础、enter/rehome 各 2 条联动；组合 158 PASS / 0 SKIP、6 个变异与两轮 race、安装失败回滚及 demo 相邻链路通过。独立单写者、三个跨域 Saga、Player 展示、当前绑定准入与 HomeSID 条件修正；demo 删除重复实现，仅保留规则和驻留表适配。完整矩阵及 §5/§6 真实联合验收不在本批。见[模块说明](../../modules/alliance/README.md)、[证据](evidence/module-alliance-20261112/README.md)。
 
 - **维护者明确（2026-11-12）**：模块、服务、目录和新业务 API 统一使用 `alliance`，不新增 `guild` 别名。迁移 demo 时一起处理其旧字段与协议命名；不为未上线旧工程保留兼容层。
 - 最重的一项：独立进程的联盟服务独占联盟实体，写走路由 RPC 或 saga（demo 的 `saga/alliance_*`、`internal/service/alliance/`），game 读 Mirror。
