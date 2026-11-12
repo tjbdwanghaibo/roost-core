@@ -27,7 +27,7 @@ v1.25.0已实现嵌入 Game 的 TCP 与独立 Gate 两种正式接入。两者�
 
 ## 3. 绑定与请求结果
 
-完整绑定含 PlayerID、SessionID、Gate/Game SID 与 incarnation、连接 nonce、Game 签发 BindID。先 Bind，再物理写出 AuthACK，最后 Activate。OnActive/OnClosed 用 Game 分配的不复用数值 receiver 建立和关闭 Sync/Room 生命周期；旧关闭、旧出站失败不会解绑新连接。不同 SessionID 可属于同一玩家，没有框架隐式全局单点登录。
+完整绑定含 PlayerID、SessionID、Gate/Game SID 与 incarnation、连接 nonce、Game 签发 BindID。先 Bind，再物理写出 AuthACK，最后 Activate。OnActive/OnClosed 用 Game 分配的不复用数值 receiver 建立和关闭 Sync/Room 生命周期；`OnActivated`（可选，2026-11-12）在 OnActive 成功之后调用一次，多带 Game 在 Bind 时自己认证得到的 Principal（含 Claims）的副本——它只是通知，没有返回值、不能拒绝绑定，自身 panic 被恢复并计数；生成的 Game Ingress 用它把会话激活告诉认证器（`SessionObserver`）。旧关闭、旧出站失败不会解绑新连接。不同 SessionID 可属于同一玩家，没有框架隐式全局单点登录。
 
 同一 SessionID 的新连接替换旧连接，新旧按连接被接受的先后定，不按握手完成的先后（2026-11-04 修复；修前后完成者胜出，客户端放弃握手立即重连时旧连接会把新连接踢掉）。每条连接被接受时取得本进程内递增的接受序号（`ConnectionSession.Admission`）；客户端还可以在认证帧里带一个**连接代号**（`ConnectionSession.Generation`，2026-11-05），用于接受序号不可比较的跨 Gate 情形：
 

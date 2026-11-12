@@ -66,7 +66,6 @@ func (authenticator *applicationAuthenticator) Authenticate(ctx context.Context,
 	}
 	principal, err := bound.Authenticate(ctx, ticket)
 	if err == nil {
-		authenticator.notifier.Remember(principal)
 		return principal, nil
 	}
 	if errors.Is(err, gamelogin.ErrAccountUnavailable) {
@@ -78,8 +77,8 @@ func (authenticator *applicationAuthenticator) Authenticate(ctx context.Context,
 }
 
 // SessionActive 是传输 Mod 的会话激活通知：交给 game/login 的 Notifier，立即返回。
-func (authenticator *applicationAuthenticator) SessionActive(registry *app.Registry, principal gateway.Principal, complete bool) {
-	authenticator.notifier.SessionActive(registry, principal, complete)
+func (authenticator *applicationAuthenticator) SessionActive(registry *app.Registry, principal gateway.Principal) {
+	authenticator.notifier.SessionActive(registry, principal)
 }
 
 var _ SessionObserver = (*applicationAuthenticator)(nil)

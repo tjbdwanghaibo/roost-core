@@ -41,9 +41,9 @@ login.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry,
 })
 ```
 
-- 接线：生成的传输 Mod 认认证器的可选接口 `SessionObserver`（`internal/access/player/tcp/server_gen.go`）。嵌入 TCP 是鉴权 ACK 写出、自身视图登记之后；独立 Gate 是 Game Ingress 的 `OnActive` 之后。没有登记任何告知的工程这一步什么都不做。
+- 接线：生成的传输 Mod 认认证器的可选接口 `SessionObserver`（`internal/access/player/tcp/server_gen.go`）。嵌入 TCP 是鉴权 ACK 写出、自身视图登记之后；独立 Gate 是 Game Ingress 的 `OnActive` 成功之后（`OnActivated`）。没有登记任何告知的工程这一步什么都不做。
 - 告知在后台执行、**有界**：同时至多 256 条会话，超过的直接丢弃（登录洪峰时宁可少一次告知）；进程退出不等在途的告知。所以它只能是“告知”，任何规则都不能只在这里执行。
-- 独立 Gate 下激活回调只带玩家号与会话号、不带 claims：认证器把每次认证成功的 claims 按玩家号记 30 秒（至多 4096 名），激活时取回；取不到就不告知。见“边界”。
+- 两种部署下告知拿到的都是这条会话认证出来的 claims：嵌入 TCP 是握手时的 Principal；独立 Gate 是 Game Ingress 绑定时认证出来的 Principal，由 gateway 的激活通知 `OnActivated` 带过来（2026-11-12 之前激活回调不带身份，认证器要按玩家号把 claims 记 30 秒再取回，那份缓存已删）。
 
 ## 与 enter 一起装
 
@@ -112,7 +112,7 @@ EnterGame                         -> first=true
   - Game：`bootstrap.NewWithOptions(bootstrap.Options{GameIngress: &options})`，`options.Authenticator = accessplayertcp.NewAuthenticator()`（claims 与会话激活后的告知都靠它），`options.RegisterDiscovery = true`，再给 `options.Ready` 与 `options.AdvertiseAddr`；配置里 `player_access.tcp.enabled: false`。`RegisterDiscovery` 为 true 时生成的 bootstrap 让这个服务的 etcd Mod 不再自动登记（`playerDiscovery`），发现里 game 的记录改由 Game Ingress 写（服务类型固定是 `game`，地址是 `options.AdvertiseAddr`）。
   - Gate：工程自己加一个服务，Mod 是 NATS、`kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration())`、account 的 `NewClientMod()`、`gatewiring.NewGateMod(options)`（`options.TCP.Enabled`、监听地址、`Ready`、`RegisterDiscovery`）。不带认证器时用 `wiring/gate` 缺省的 `AccountAuthenticator`，它认 `enter:` 与 `session:` 两种票据。
   - 两端的 `options.Config.Namespace` 相同，都开单实例锁（`singleton.enabled`）。
-  - 与嵌入 TCP 不同的地方：每次握手 account 的 `EnterServer` 执行两次（Gate 一次，Game Ingress 绑定时用同一张票据再认证一次；第二次读到已建好的映射，所以 Game 侧的会话上没有 `NewRoleClaim`）。别的服的票据在 Gate 上握手直接被断开（Gate 按承载服找不到 game），客户端收不到 `login_elsewhere`。激活回调不带 Principal，告知要的 claims 靠 Game Ingress 绑定时的那次认证按玩家号记 30 秒取回（至多 4096 名；取不到就不告知，客户端直接发 `EnterGame` 仍然走得通）——更干净的做法是让 gateway 的激活回调带上 Principal，没有做。
+  - 与嵌入 TCP 不同的地方：每次握手 account 的 `EnterServer` 执行两次（Gate 一次，Game Ingress 绑定时用同一张票据再认证一次；第二次读到已建好的映射，所以 Game 侧的会话上没有 `NewRoleClaim`）。别的服的票据在 Gate 上握手直接被断开（Gate 按承载服找不到 game），客户端收不到 `login_elsewhere`。告知要的 claims 来自 Game Ingress 绑定时的那次认证，由激活通知直接带到（没有旁路缓存）。
   - 没有跑：多个 Gate、Gate 或 Game 重启之后的重连、跨机、业务服务不叫 `game` 的工程。
 - `EnterStatus` 里“断开”断的是这名玩家在本进程的全部会话（传输没有只断一条会话的入口），并且是推出去 300 毫秒之后才断——慢的连接可能没收到那一帧就被断开。
 - 装了 login 之后 `roost project doctor` 的 `collaborators:account` 是 OK，但这只说明“不再是拒绝桩”：没接渠道的生产环境仍然没有人登录得了。

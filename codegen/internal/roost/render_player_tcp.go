@@ -286,15 +286,16 @@ type RegistryBound interface {
 // 它认证过的会话激活之后，Mod 调一次 SessionActive。
 //
 //   - 嵌入 TCP：鉴权 ACK 已经写出、会话已经登记（握手钩子的 AfterACK），在自身视图的登记之后。
-//     principal 是握手时认证器返回的那一个（带 claims），complete 为 true。
-//   - 独立 Gate：Gate 已经 Bind → ACK → Activate（Game Ingress 的 OnActive），在 options 原有的回调与自身视图之后。
-//     激活回调只带绑定、不带 Principal，所以 principal 只有 PlayerID 与 SessionID，complete 为 false。
+//     principal 是握手时认证器返回的那一个（带 claims）。
+//   - 独立 Gate：Gate 已经 Bind → ACK → Activate，Game Ingress 的 OnActive（options 原有的回调与自身视图）
+//     成功之后（OnActivated）。principal 是 Game Ingress 绑定时用同一个认证器认证出来的那一个（带 claims），
+//     SessionID 是绑定的会话号。
 //
 // 两种部署下这时都已经可以按会话推送。SessionActive 在连接的握手协程 / Ingress 的控制协程里执行，
 // 只记事实、立即返回：不做 I/O、不拿实体锁，要做的事自己另起有界的后台执行。它没有返回值——会话已经成立，
 // 这里不能否决；panic 被拦住并记一条 Error，不影响这条会话。认证器没实现这个接口时接线与没有它时相同。
 type SessionObserver interface {
-	SessionActive(registry *app.Registry, principal gateway.Principal, complete bool)
+	SessionActive(registry *app.Registry, principal gateway.Principal)
 }
 
 // observeHandshake 把 SessionObserver 接到嵌入 TCP 的握手钩子上：inner 是原有的钩子（自身视图，可为 nil），
@@ -320,7 +321,7 @@ func (hooks observedHandshake) AfterACK(ctx context.Context, session gateway.Con
 	if hooks.inner != nil {
 		if err := hooks.inner.AfterACK(ctx, session); err != nil { return err }
 	}
-	notifySessionActive(hooks.observer, hooks.registry, session.Principal(), true)
+	notifySessionActive(hooks.observer, hooks.registry, session.Principal())
 	return nil
 }
 
@@ -328,29 +329,27 @@ func (hooks observedHandshake) Closed(session gateway.ConnectionSession) {
 	if hooks.inner != nil { hooks.inner.Closed(session) }
 }
 
-// observeIngress 是独立 Gate 部署下的同一件事：把 SessionObserver 接在 options.OnActive 之后。
-// options 没带认证器（用缺省的 account 角色票据认证器）或它不是 SessionObserver 时原样返回。
+// observeIngress 是独立 Gate 部署下的同一件事：把 SessionObserver 接到 options.OnActivated 上——Game Ingress 在
+// OnActive（options 原有的回调、自身视图）成功之后调它，带上绑定时认证出来的 Principal。options 原有的
+// OnActivated 先执行。options 没带认证器（用缺省的 account 认证器）或它不是 SessionObserver 时原样返回。
 func observeIngress(registry *app.Registry, options gatewiring.Options) gatewiring.Options {
 	observer, ok := options.Authenticator.(SessionObserver)
 	if !ok { return options }
-	active := options.OnActive
-	options.OnActive = func(binding gateway.Binding, receiver uint64) error {
-		if active != nil {
-			if err := active(binding, receiver); err != nil { return err }
-		}
-		notifySessionActive(observer, registry, gateway.Principal{PlayerID: binding.PlayerID, SessionID: binding.SessionID}, false)
-		return nil
+	activated := options.OnActivated
+	options.OnActivated = func(binding gateway.Binding, receiver uint64, principal gateway.Principal) {
+		if activated != nil { activated(binding, receiver, principal) }
+		notifySessionActive(observer, registry, principal)
 	}
 	return options
 }
 
-func notifySessionActive(observer SessionObserver, registry *app.Registry, principal gateway.Principal, complete bool) {
+func notifySessionActive(observer SessionObserver, registry *app.Registry, principal gateway.Principal) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			slog.Error("player tcp: session observer panicked", "player_id", principal.PlayerID, "panic", recovered)
 		}
 	}()
-	observer.SessionActive(registry, principal, complete)
+	observer.SessionActive(registry, principal)
 }
 
 type AuthenticatorFunc func(context.Context, string, net.Addr) (gateway.Principal, error)
@@ -575,13 +574,13 @@ func TestAdminEntityKickClosesThePlayersConnections(t *testing.T){
 
 // observingAuthenticator 是实现了 SessionObserver 的认证器：记下每一次通知。
 type observingAuthenticator struct{ seen chan observedSession }
-type observedSession struct{ registry *app.Registry; principal gateway.Principal; complete bool }
+type observedSession struct{ registry *app.Registry; principal gateway.Principal }
 func (observingAuthenticator) Authenticate(_ context.Context,token string,_ net.Addr)(gateway.Principal,error){
  return gateway.Principal{PlayerID:9,SessionID:token,Claims:map[string]string{"k":"v"}},nil
 }
-func (auth observingAuthenticator) SessionActive(registry *app.Registry,principal gateway.Principal,complete bool){
+func (auth observingAuthenticator) SessionActive(registry *app.Registry,principal gateway.Principal){
  if principal.SessionID=="panics"{panic("observer blew up")}
- auth.seen<-observedSession{registry:registry,principal:principal,complete:complete}
+ auth.seen<-observedSession{registry:registry,principal:principal}
 }
 
 // recordingHandshake 是原有握手钩子（自身视图）的替身；observedConnection 是只答 Principal 的连接。
@@ -593,8 +592,9 @@ type observedConnection struct{ gateway.ConnectionSession; principal gateway.Pri
 func (conn observedConnection) Principal()gateway.Principal{return conn.principal}
 
 // 认证器实现 SessionObserver 时，它认证过的会话激活之后被通知一次：嵌入 TCP 在鉴权 ACK 写出、会话登记之后，
-// 带握手时的 Principal（complete）；独立 Gate 接在 options.OnActive 之后，只有绑定里的玩家号与会话号。
-// 原有的激活回调拒绝时不通知；通知里 panic 不影响会话；认证器没实现这个接口时接线不变。
+// 带握手时的 Principal；独立 Gate 接在 options.OnActivated 上（Game Ingress 在 OnActive 成功之后调它），
+// 带 Game Ingress 绑定时认证出来的 Principal。通知里 panic 不影响会话；认证器没实现这个接口时接线不变。
+// “OnActive 拒绝就不调 OnActivated”是 Game Ingress 的保证，测试在 infra/network/gateway。
 func TestSessionObserverHearsEveryActivatedSession(t *testing.T){
  registry:=app.NewRegistry(viper.New())
  if err:=registry.Register(accessplayer.Name,&accessplayer.Runtime{Protocols:playeraccess.NewProtocolRegistry()});err!=nil{t.Fatal(err)}
@@ -621,8 +621,8 @@ func TestSessionObserverHearsEveryActivatedSession(t *testing.T){
  // 嵌入 TCP：客户端读到 ACK 之后才会有通知，通知到达时会话已经能按玩家找到。
  dialAuthenticated(t,mod.server,"embedded")
  got:=next("embedded TCP")
- if got.registry!=registry||!got.complete||got.principal.PlayerID!=9||got.principal.SessionID!="embedded"||got.principal.Claims["k"]!="v"{
-  t.Fatalf("embedded TCP notice = %%+v, want the handshake principal, complete, with this registry",got)
+ if got.registry!=registry||got.principal.PlayerID!=9||got.principal.SessionID!="embedded"||got.principal.Claims["k"]!="v"{
+  t.Fatalf("embedded TCP notice = %%+v, want the handshake principal with this registry",got)
  }
  if mod.transportRuntime.ActiveSessions(9)!=1{t.Fatalf("sessions when the notice arrived = %%d, want 1",mod.transportRuntime.ActiveSessions(9))}
  quiet("one connection")
@@ -632,39 +632,45 @@ func TestSessionObserverHearsEveryActivatedSession(t *testing.T){
  if got=next("after a panicking notice");got.principal.SessionID!="after"{t.Fatalf("notice after a panic = %%+v",got)}
  deadline:=time.Now().Add(2*time.Second)
  for mod.transportRuntime.ActiveSessions(9)!=3 {if time.Now().After(deadline){t.Fatalf("sessions = %%d, want 3: a panicking notice closed its connection",mod.transportRuntime.ActiveSessions(9))};time.Sleep(5*time.Millisecond)}
- // 独立 Gate：接在原有回调之后，只带绑定里的两项。
+ // 独立 Gate：接在 options.OnActivated 上，原有的 OnActivated 先执行；拿到的是带 claims 的 Principal。
+ // 原有的 OnActive 原样留着，不再被包一层。
  var order []string
- options:=observeIngress(registry,gatewiring.Options{Authenticator:auth,OnActive:func(gateway.Binding,uint64)error{order=append(order,"first");return nil}})
- if err:=options.OnActive(gateway.Binding{PlayerID:11,SessionID:"gate"},3);err!=nil{t.Fatal(err)}
+ options:=observeIngress(registry,gatewiring.Options{Authenticator:auth,
+  OnActive:func(gateway.Binding,uint64)error{order=append(order,"active");return nil},
+  OnActivated:func(gateway.Binding,uint64,gateway.Principal){order=append(order,"first")}})
+ options.OnActivated(gateway.Binding{PlayerID:11,SessionID:"gate"},3,gateway.Principal{PlayerID:11,SessionID:"gate",Claims:map[string]string{"k":"gate"}})
  got=next("independent Gate")
- if got.registry!=registry||got.complete||got.principal.PlayerID!=11||got.principal.SessionID!="gate"||got.principal.Claims!=nil||len(order)!=1{
-  t.Fatalf("independent Gate notice = %%+v after %%v, want the binding's ids only, after the original callback",got,order)
+ if got.registry!=registry||got.principal.PlayerID!=11||got.principal.SessionID!="gate"||got.principal.Claims["k"]!="gate"||!slices.Equal(order,[]string{"first"}){
+  t.Fatalf("independent Gate notice = %%+v after %%v, want the bound principal with its claims, after the original OnActivated",got,order)
  }
+ if err:=options.OnActive(gateway.Binding{PlayerID:11,SessionID:"gate"},3);err!=nil||!slices.Equal(order,[]string{"first","active"}){
+  t.Fatalf("the original OnActive = %%v after %%v, want it untouched",err,order)
+ }
+ quiet("the original OnActive alone")
  bare:=observeIngress(registry,gatewiring.Options{Authenticator:auth})
- if err:=bare.OnActive(gateway.Binding{PlayerID:12,SessionID:"bare"},4);err!=nil{t.Fatal(err)}
+ if bare.OnActive!=nil{t.Fatal("observeIngress added an OnActive of its own")}
+ bare.OnActivated(gateway.Binding{PlayerID:12,SessionID:"bare"},4,gateway.Principal{PlayerID:12,SessionID:"bare"})
  if got=next("independent Gate without a callback");got.principal.PlayerID!=12{t.Fatalf("notice = %%+v",got)}
- refused:=errors.New("activation refused")
- options=observeIngress(registry,gatewiring.Options{Authenticator:auth,OnActive:func(gateway.Binding,uint64)error{return refused}})
- if err:=options.OnActive(gateway.Binding{PlayerID:13,SessionID:"refused"},5);!errors.Is(err,refused){t.Fatalf("a refused activation = %%v, want the callback's error",err)}
- quiet("a refused activation")
- if err:=bare.OnActive(gateway.Binding{PlayerID:14,SessionID:"panics"},6);err!=nil{t.Fatalf("a panicking notice failed the activation: %%v",err)}
+ // 通知里 panic 被拦住，不会顺着 Game Ingress 的控制协程抛出去。
+ bare.OnActivated(gateway.Binding{PlayerID:14,SessionID:"panics"},6,gateway.Principal{PlayerID:14,SessionID:"panics"})
  // 握手钩子的组合：原有的钩子（自身视图）先执行，BeforeACK / Closed 原样转给它；它的 AfterACK 失败就不通知。
  inner:=&recordingHandshake{}
  hooks:=observeHandshake(registry,auth,inner)
  conn:=observedConnection{principal:gateway.Principal{PlayerID:21,SessionID:"composed"}}
  if err:=hooks.BeforeACK(context.Background(),conn,"ticket");err!=nil{t.Fatal(err)}
  if err:=hooks.AfterACK(context.Background(),conn);err!=nil{t.Fatal(err)}
- if got=next("composed hooks");got.principal.PlayerID!=21||!got.complete{t.Fatalf("composed notice = %%+v",got)}
+ if got=next("composed hooks");got.principal.PlayerID!=21{t.Fatalf("composed notice = %%+v",got)}
  hooks.Closed(conn)
  if want:=[]string{"before","after","closed"};!slices.Equal(inner.calls,want){t.Fatalf("the original hooks saw %%v, want %%v",inner.calls,want)}
+ refused:=errors.New("the original AfterACK failed")
  inner.fail=refused
  if err:=hooks.AfterACK(context.Background(),conn);!errors.Is(err,refused){t.Fatalf("a failed original AfterACK = %%v, want its error",err)}
  quiet("a failed original AfterACK")
  // 没实现接口的认证器：接线与没有这个接口时相同。
  plain:=AuthenticatorFunc(func(context.Context,string,net.Addr)(gateway.Principal,error){return gateway.Principal{},nil})
  if hooks:=observeHandshake(registry,plain,nil);hooks!=nil{t.Fatalf("handshake hooks for a plain authenticator = %%v, want none",hooks)}
- if options=observeIngress(registry,gatewiring.Options{Authenticator:plain});options.OnActive!=nil{t.Fatal("a plain authenticator got an activation callback")}
- if options=observeIngress(registry,gatewiring.Options{});options.OnActive!=nil{t.Fatal("the default authenticator got an activation callback")}
+ if options=observeIngress(registry,gatewiring.Options{Authenticator:plain});options.OnActivated!=nil{t.Fatal("a plain authenticator got an activation notice")}
+ if options=observeIngress(registry,gatewiring.Options{});options.OnActivated!=nil{t.Fatal("the default authenticator got an activation notice")}
 }
 func TestHandlerPanicHasErrorLevelStack(t *testing.T){
  var logs bytes.Buffer;old:=slog.Default();slog.SetDefault(slog.New(slog.NewTextHandler(&logs,&slog.HandlerOptions{Level:slog.LevelInfo})));defer slog.SetDefault(old)

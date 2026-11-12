@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -1030,5 +1031,107 @@ func TestBindingTableOrdersASessionAcrossGatesByConnectionGeneration(t *testing.
 	request.Generation = 6
 	if _, _, err := table.reserve(request, time.Now()); !errors.Is(err, ErrBindingStale) {
 		t.Fatalf("a retried Bind with another generation = %v, want ErrBindingStale", err)
+	}
+}
+
+// OnActivated 是带身份的激活通知：OnActive 成功之后调用一次，拿到的是 Game 在 Bind 时自己认证出来的 Principal
+// （含 Claims）的副本。OnActive 拒绝时不调；它自己 panic 不影响绑定；改它拿到的 Claims 不会改到 Ingress 留着的那份。
+func TestIngressActivationNotifiesThePrincipalItAuthenticated(t *testing.T) {
+	identity := packetTestBinding()
+	var game *GameIngress
+	var order []string
+	var seen []Principal
+	refuse, explode := false, false
+	newGame := func() {
+		var err error
+		game, err = NewGameIngress(DefaultConfig(), identity.Game, GameDependencies{
+			Client: payloadClient{limit: 1 << 20}, Authenticator: AuthenticatorFunc(nil), Ready: func() bool { return true },
+			Dispatch: func(context.Context, Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) { return nil, nil },
+			QueueFactory: func(OutboundLimits, func(context.Context, uint64, []byte) error, func(uint64, error)) (ReliableQueue, error) {
+				return benchGateQueue{}, nil
+			},
+			Matches: func(context.Context, string, ProcessIdentity) (bool, error) { return true, nil },
+			OnActive: func(Binding, uint64) error {
+				order = append(order, "active")
+				if refuse {
+					return errors.New("activation refused")
+				}
+				return nil
+			},
+			OnActivated: func(binding Binding, receiver uint64, principal Principal) {
+				order = append(order, "activated")
+				if binding.PlayerID != identity.PlayerID || receiver == 0 {
+					t.Errorf("OnActivated got binding %+v receiver %d", binding, receiver)
+				}
+				// 先留一份自己的副本再改：下一次通知必须仍然看到原值。
+				kept := principal
+				kept.Claims = maps.Clone(principal.Claims)
+				seen = append(seen, kept)
+				principal.Claims["server_id"] = "tampered"
+				if explode {
+					panic("observer exploded")
+				}
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var last *bindingRecord
+	activate := func() error {
+		t.Helper()
+		request := bindRequest(identity)
+		request.Binding.ConnectionNonce = newBindingToken()
+		record, _, err := game.bindings.reserve(request, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, result := game.bindings.finish(record, true)
+		authenticated := Principal{PlayerID: identity.PlayerID, ServerID: identity.Game.ServerID, SessionID: identity.SessionID, Claims: map[string]string{"server_id": "1000", "enter_ticket": "1"}}
+		if err := game.register(record, authenticated); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := game.bindings.control(ControlRequest{Version: InternalVersion, Operation: Activate, Binding: result.Binding}); err != nil {
+			t.Fatal(err)
+		}
+		last = record
+		return game.activate(context.Background(), record)
+	}
+	kept := func() string {
+		game.mu.Lock()
+		defer game.mu.Unlock()
+		return game.resources[last.receiverID].principal.Claims["server_id"]
+	}
+
+	newGame()
+	if err := activate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 2 || order[0] != "active" || order[1] != "activated" {
+		t.Fatalf("callback order = %v, want OnActive then OnActivated", order)
+	}
+	if len(seen) != 1 || seen[0].PlayerID != identity.PlayerID || seen[0].SessionID != identity.SessionID || seen[0].ServerID != identity.Game.ServerID || seen[0].Claims["enter_ticket"] != "1" {
+		t.Fatalf("OnActivated principal = %+v, want the one registered at bind with its claims", seen)
+	}
+	if got := kept(); got != "1000" {
+		t.Fatalf("the ingress now keeps server_id %q: the observer's edit of its copy leaked into the session's principal", got)
+	}
+
+	order, seen, explode = nil, nil, true
+	newGame()
+	if err := activate(); err != nil {
+		t.Fatalf("a panicking OnActivated failed the activation: %v", err)
+	}
+	if got := game.ActiveSessions(identity.PlayerID); got != 1 {
+		t.Fatalf("after a panicking OnActivated: connections = %d, want 1", got)
+	}
+
+	order, seen, explode, refuse = nil, nil, false, true
+	newGame()
+	if err := activate(); err == nil {
+		t.Fatal("OnActive refused but the activation succeeded")
+	}
+	if len(seen) != 0 || len(order) != 1 {
+		t.Fatalf("OnActive refused, yet callbacks = %v", order)
 	}
 }

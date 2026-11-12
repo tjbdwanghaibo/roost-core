@@ -83,96 +83,28 @@ const (
 	MaxPendingNotices = 256
 	// NoticeTimeout 是一条会话的全部告知加起来的期限。
 	NoticeTimeout = 5 * time.Second
-	// rememberFor 与 maxRemembered 界定“按玩家号记住最近一次认证的 claims”那张表（见 Notifier.Remember）。
-	rememberFor   = 30 * time.Second
-	maxRemembered = 4096
 )
 
 // Notifier 把“会话激活了”交给登记的告知。每个认证器一个（internal/access/player/tcp/auth.go 持有），
 // 由它实现传输 Mod 的会话激活通知（SessionObserver）。
 //
-// 两种部署下激活通知带的东西不一样：嵌入 TCP 带握手时的 Principal（有 claims）；独立 Gate 下 Game Ingress 的
-// 激活回调只带绑定——玩家号与会话号，没有 claims。告知要 claims（进入前检查读承载服、换服标记），所以认证器
-// 在每次认证成功时把 claims 按玩家号记一下（Remember），独立 Gate 下的激活通知按玩家号取回。这依赖
-// “Game Ingress 在 Bind 时用同一个认证器再认证一次，紧接着才激活”；取不到（不是这个认证器认证的、隔得太久、
-// 表满了）就不告知。同一名玩家两条几乎同时握手的连接取到的是后一次认证的 claims——两次都来自 account 的
-// 当前状态，差别只在新旧。
+// 两种部署下通知带的都是这条会话认证出来的 Principal（含 claims）：嵌入 TCP 是握手时认证器返回的那一个；
+// 独立 Gate 是 Game Ingress 绑定会话时用同一个认证器认证出来的那一个（激活通知 OnActivated 把它带过来）。
+// Notifier 自己不记任何会话的状态。
 type Notifier struct {
 	slots chan struct{}
-	now   func() time.Time
 	// running 让测试能等后台的告知跑完（Wait）；生产代码不等。
 	running sync.WaitGroup
-
-	mu         sync.Mutex
-	remembered map[int64]rememberedClaims
-}
-
-type rememberedClaims struct {
-	claims map[string]string
-	at     time.Time
 }
 
 // NewNotifier 建一个空的 Notifier。
 func NewNotifier() *Notifier {
-	return &Notifier{
-		slots:      make(chan struct{}, MaxPendingNotices),
-		now:        time.Now, //glsvet:system-clock the claims memo is a process-local cache bounded by real time, not business state
-		remembered: map[int64]rememberedClaims{},
-	}
+	return &Notifier{slots: make(chan struct{}, MaxPendingNotices)}
 }
 
-// Remember 记下一次成功的认证给出的 claims，供随后只带玩家号的激活通知取回。没有登记任何告知时什么都不记。
-// 表至多 maxRemembered 行、每行至多留 rememberFor；满了先清过期的，还满就不记这一次。
-func (notifier *Notifier) Remember(principal gateway.Principal) {
-	if notifier == nil || principal.PlayerID == 0 {
-		return
-	}
-	if names, _ := registeredNotices(); len(names) == 0 {
-		return
-	}
-	now := notifier.now()
-	notifier.mu.Lock()
-	defer notifier.mu.Unlock()
-	if _, known := notifier.remembered[principal.PlayerID]; !known && len(notifier.remembered) >= maxRemembered {
-		for playerID, entry := range notifier.remembered {
-			if now.Sub(entry.at) > rememberFor {
-				delete(notifier.remembered, playerID)
-			}
-		}
-		if len(notifier.remembered) >= maxRemembered {
-			return
-		}
-	}
-	notifier.remembered[principal.PlayerID] = rememberedClaims{claims: principal.Claims, at: now}
-}
-
-// recall 取回 Remember 记下的 claims；没有或者过期了 ok 为 false。
-func (notifier *Notifier) recall(playerID int64) (claims map[string]string, ok bool) {
-	now := notifier.now()
-	notifier.mu.Lock()
-	defer notifier.mu.Unlock()
-	entry, known := notifier.remembered[playerID]
-	if !known {
-		return nil, false
-	}
-	if now.Sub(entry.at) > rememberFor {
-		delete(notifier.remembered, playerID)
-		return nil, false
-	}
-	return entry.claims, true
-}
-
-// forget 丢掉一名玩家的记录：嵌入 TCP 的激活通知自己带着 claims，用不着它。
-func (notifier *Notifier) forget(playerID int64) {
-	notifier.mu.Lock()
-	delete(notifier.remembered, playerID)
-	notifier.mu.Unlock()
-}
-
-// SessionActive 是传输 Mod 的会话激活通知（internal/access/player/tcp 的 SessionObserver）。
-// complete 为 true 时 principal 带着握手的 claims（嵌入 TCP）；为 false 时只有玩家号与会话号（独立 Gate），
-// claims 从 Remember 的记录里取。它立即返回：告知在后台执行，同时至多 MaxPendingNotices 条会话，超过的丢弃。
-func (notifier *Notifier) SessionActive(registry *app.Registry, principal gateway.Principal, complete bool) {
+// SessionActive 是传输 Mod 的会话激活通知（internal/access/player/tcp 的 SessionObserver）：principal 是这条
+// 会话认证出来的身份，带着 claims。它立即返回：告知在后台执行，同时至多 MaxPendingNotices 条会话，超过的丢弃。
+func (notifier *Notifier) SessionActive(registry *app.Registry, principal gateway.Principal) {
 	if notifier == nil {
 		return
 	}
@@ -180,23 +112,13 @@ func (notifier *Notifier) SessionActive(registry *app.Registry, principal gatewa
 	if len(run) == 0 {
 		return
 	}
-	claims := principal.Claims
-	if complete {
-		notifier.forget(principal.PlayerID)
-	} else {
-		var known bool
-		if claims, known = notifier.recall(principal.PlayerID); !known {
-			slog.Debug("login: session not announced; its claims are not known to this authenticator", "player_id", principal.PlayerID)
-			return
-		}
-	}
 	select {
 	case notifier.slots <- struct{}{}:
 	default:
 		slog.Debug("login: session not announced; too many notices are pending", "player_id", principal.PlayerID)
 		return
 	}
-	session := Active{PlayerID: principal.PlayerID, SessionID: principal.SessionID, Claims: claims}
+	session := Active{PlayerID: principal.PlayerID, SessionID: principal.SessionID, Claims: principal.Claims}
 	notifier.running.Add(1)
 	go func() {
 		defer notifier.running.Done()

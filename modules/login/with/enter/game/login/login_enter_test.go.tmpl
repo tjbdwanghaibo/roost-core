@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
@@ -196,7 +195,7 @@ func TestWithLoginEnterANewAccountIsToldToCreateThenCreatesAndEnters(t *testing.
 	if err != nil || principal.Claims[svcaccount.NewRoleClaim] != "1" {
 		t.Fatalf("a new account's handshake: %+v, %v", principal, err)
 	}
-	notifier.SessionActive(registry, principal, true)
+	notifier.SessionActive(registry, principal)
 	notifier.Wait()
 	if announced.calls != 1 || announced.sessionID != principal.SessionID || announced.entering.PlayerID != 100_001 || announced.entering.Claims[EnterTicketClaim] != "1" {
 		t.Fatalf("the status notice got %+v for session %q (%d calls), want this session and its claims once", announced.entering, announced.sessionID, announced.calls)
@@ -317,8 +316,8 @@ func TestWithLoginEnterSessionTokenSessionsKeepLoadOrCreate(t *testing.T) {
 }
 
 // 本服不该服务的角色（票据是给 1001 服的，连到了 1000 服）：握手照样成功，告知的结论是 login_elsewhere 并要断开；
-// 他在本服进入、新建都被同一条检查拒绝，什么都没建。独立 Gate 下激活通知不带 claims，取认证器记下的那一份，
-// 结论相同。
+// 他在本服进入、新建都被同一条检查拒绝，什么都没建。独立 Gate 下激活通知带的是 Game Ingress 绑定时认证出来的 Principal
+// （会话号是 Gate 的），结论相同。
 func TestWithLoginEnterARoleOfAnotherServerIsToldToLeave(t *testing.T) {
 	w := newLoginWorld(t)
 	registry := withLoginRegistry(1000)
@@ -329,9 +328,10 @@ func TestWithLoginEnterARoleOfAnotherServerIsToldToLeave(t *testing.T) {
 	if err != nil || principal.ServerID != 1001 {
 		t.Fatalf("handshake for server 1001: %+v, %v", principal, err)
 	}
-	// 独立 Gate：Game Ingress 认证之后把会话号换成 Gate 的，激活通知只有玩家号与会话号。
-	notifier.Remember(principal)
-	notifier.SessionActive(registry, gateway.Principal{PlayerID: principal.PlayerID, SessionID: "gate-session"}, false)
+	// 独立 Gate：Game Ingress 认证之后把会话号换成 Gate 的，激活通知带着这个 Principal。
+	bound := principal
+	bound.SessionID = "gate-session"
+	notifier.SessionActive(registry, bound)
 	notifier.Wait()
 	if announced.calls != 1 || announced.sessionID != "gate-session" || announced.entering.Claims[svcaccount.ServerIDClaim] != "1001" {
 		t.Fatalf("under an independent Gate the notice got %+v for %q (%d calls)", announced.entering, announced.sessionID, announced.calls)

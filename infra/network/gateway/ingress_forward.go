@@ -86,6 +86,18 @@ func (game *GameIngress) activate(ctx context.Context, record *bindingRecord) er
 			err = game.deps.OnActive(record.identity, record.receiverID)
 		}
 	}()
+	if err == nil && game.deps.OnActivated != nil {
+		// 带身份的激活通知：principal 在 register 时写下之后不再改，这里交出副本。通知自己的 panic 只计数，
+		// 不让一条已经建好生命周期（OnActive 成功）的绑定因为旁观者出错而被关掉。
+		func() {
+			defer func() {
+				if recover() != nil {
+					observeFailure("game", "activated")
+				}
+			}()
+			game.deps.OnActivated(record.identity, record.receiverID, clonePrincipal(resource.principal))
+		}()
+	}
 	game.mu.Lock()
 	if err == nil && resource.closed {
 		err = ErrBindingStale

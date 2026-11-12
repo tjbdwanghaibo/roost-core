@@ -260,7 +260,7 @@ func (s *loginScenario) handshake(ticket string) scenarioSession {
 	if err != nil {
 		s.t.Fatalf("handshake: %v", err)
 	}
-	s.notifier.SessionActive(s.registry, principal, true)
+	s.notifier.SessionActive(s.registry, principal)
 	s.notifier.Wait()
 	return scenarioSession{principal: principal}
 }

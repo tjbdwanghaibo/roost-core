@@ -72,7 +72,7 @@ func TestLoginSessionActiveRunsTheNoticesInTheBackground(t *testing.T) {
 	claims := map[string]string{"server_id": "1000", "enter_ticket": "1"}
 	returned := make(chan struct{})
 	go func() {
-		notifier.SessionActive(registry, gateway.Principal{PlayerID: 100_001, SessionID: "s-1", Claims: claims}, true)
+		notifier.SessionActive(registry, gateway.Principal{PlayerID: 100_001, SessionID: "s-1", Claims: claims})
 		close(returned)
 	}()
 	select {
@@ -94,60 +94,45 @@ func TestLoginSessionActiveRunsTheNoticesInTheBackground(t *testing.T) {
 	if deadline <= 0 || deadline > 5*time.Second {
 		t.Fatalf("the notice's context ends in %v, want a deadline of at most 5s", deadline)
 	}
-	// 没有登记任何告知的工程：什么都不做，也不记 claims。
+	// 没有登记任何告知的工程：什么都不做，连后台的名额都不占。
 	withNotices(t)
 	idle := NewNotifier()
-	idle.Remember(gateway.Principal{PlayerID: 100_001, Claims: claims})
-	idle.SessionActive(registry, gateway.Principal{PlayerID: 100_001, SessionID: "s-2"}, false)
+	idle.SessionActive(registry, gateway.Principal{PlayerID: 100_001, SessionID: "s-2", Claims: claims})
 	idle.Wait()
-	if len(idle.remembered) != 0 {
-		t.Fatalf("%d players remembered with no notice registered", len(idle.remembered))
+	if len(idle.slots) != 0 {
+		t.Fatalf("%d notice slots taken with no notice registered", len(idle.slots))
 	}
 }
 
-// 独立 Gate：激活通知只有玩家号与会话号，claims 取认证器最近一次认证这名玩家时记下的。
-// 记录 30 秒过期；没有记录（不是这个认证器认证的）就不告知，不拿空的 claims 去告知。
-func TestLoginSessionActiveUnderAnIndependentGateRecallsTheClaims(t *testing.T) {
+// 独立 Gate：激活通知带的是 Game Ingress 绑定这条会话时认证出来的 Principal（会话号是 Gate 的），告知看到的
+// 就是它的 claims。Notifier 不记任何会话的状态：同一名玩家的下一条会话只看到自己那一次的 claims，
+// 不带 claims 的会话看到的是空的，不会捡到上一条会话的。
+func TestLoginSessionActiveUnderAnIndependentGateUsesTheBoundPrincipal(t *testing.T) {
 	withNotices(t)
 	log := &noticeLog{}
 	OnSessionActive("enter", func(_ context.Context, _ *app.Registry, session Active) { log.record("enter", session) })
 	notifier := NewNotifier()
-	now := time.Unix(1_800_000_000, 0)
-	notifier.now = func() time.Time { return now }
 	claims := map[string]string{"server_id": "1000", "enter_ticket": "1"}
 
-	// Game Ingress 在 Bind 时认证（认证器给的会话号被换成 Gate 的），随后激活。
-	notifier.Remember(gateway.Principal{PlayerID: 100_001, SessionID: "candidate", Claims: claims})
-	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_001, SessionID: "gate-1"}, false)
+	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_001, SessionID: "gate-1", Claims: claims})
 	notifier.Wait()
 	if want := []string{"enter:gate-1"}; !reflect.DeepEqual(log.events(), want) || !reflect.DeepEqual(log.last.Claims, claims) {
-		t.Fatalf("notices saw %v with %+v, want the gate's session with the remembered claims", log.events(), log.last)
+		t.Fatalf("notices saw %v with %+v, want the gate's session with the bound principal's claims", log.events(), log.last)
 	}
-	// 没认证过的玩家、过期的记录：不告知。
-	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_002, SessionID: "gate-2"}, false)
-	now = now.Add(30 * time.Second)
-	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_001, SessionID: "gate-3"}, false)
+	later := map[string]string{"server_id": "1001"}
+	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_001, SessionID: "gate-2", Claims: later})
 	notifier.Wait()
-	if want := []string{"enter:gate-1", "enter:gate-3"}; !reflect.DeepEqual(log.events(), want) {
-		t.Fatalf("at exactly 30s: notices saw %v, want %v", log.events(), want)
+	if want := []string{"enter:gate-1", "enter:gate-2"}; !reflect.DeepEqual(log.events(), want) || !reflect.DeepEqual(log.last.Claims, later) {
+		t.Fatalf("the second session saw %v with %+v, want its own claims", log.events(), log.last)
 	}
-	now = now.Add(time.Second)
-	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_001, SessionID: "gate-4"}, false)
+	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_001, SessionID: "gate-3"})
 	notifier.Wait()
-	if got := log.events(); len(got) != 2 {
-		t.Fatalf("a record older than 30s was used: %v", got)
-	}
-	// 嵌入 TCP 的激活通知自己带着 claims：用它的，并丢掉记录。
-	notifier.Remember(gateway.Principal{PlayerID: 100_003, Claims: map[string]string{"server_id": "stale"}})
-	notifier.SessionActive(nil, gateway.Principal{PlayerID: 100_003, SessionID: "tcp-1", Claims: claims}, true)
-	notifier.Wait()
-	if !reflect.DeepEqual(log.last.Claims, claims) || len(notifier.remembered) != 0 {
-		t.Fatalf("an embedded activation saw %+v and left %d records; want its own claims and none", log.last, len(notifier.remembered))
+	if got := log.events(); len(got) != 3 || got[2] != "enter:gate-3" || len(log.last.Claims) != 0 {
+		t.Fatalf("a session without claims saw %v with %+v, want the notice with no claims", got, log.last)
 	}
 }
 
-// 有界：同时在后台执行的告知至多 256 条会话，超过的丢弃而不是排队；记 claims 的表至多 4096 名玩家，
-// 满了先清过期的，还满就不记。
+// 有界：同时在后台执行的告知至多 256 条会话，超过的丢弃而不是排队。
 func TestLoginSessionActiveIsBounded(t *testing.T) {
 	withNotices(t)
 	log := &noticeLog{}
@@ -161,11 +146,11 @@ func TestLoginSessionActiveIsBounded(t *testing.T) {
 		t.Fatalf("%d notices may be pending, want 256", cap(notifier.slots))
 	}
 	for i := 0; i < 256; i++ {
-		notifier.SessionActive(nil, gateway.Principal{PlayerID: int64(i + 1), SessionID: "held"}, true)
+		notifier.SessionActive(nil, gateway.Principal{PlayerID: int64(i + 1), SessionID: "held"})
 	}
 	over := make(chan struct{})
 	go func() {
-		notifier.SessionActive(nil, gateway.Principal{PlayerID: 999, SessionID: "over"}, true)
+		notifier.SessionActive(nil, gateway.Principal{PlayerID: 999, SessionID: "over"})
 		close(over)
 	}()
 	select {
@@ -185,34 +170,10 @@ func TestLoginSessionActiveIsBounded(t *testing.T) {
 		}
 	}
 	// 腾出来之后照常告知。
-	notifier.SessionActive(nil, gateway.Principal{PlayerID: 999, SessionID: "later"}, true)
+	notifier.SessionActive(nil, gateway.Principal{PlayerID: 999, SessionID: "later"})
 	notifier.Wait()
 	if got := log.events(); got[len(got)-1] != "enter:later" {
 		t.Fatalf("a notice after the burst did not run: last = %s", got[len(got)-1])
-	}
-
-	now := time.Unix(1_800_000_000, 0)
-	notifier.now = func() time.Time { return now }
-	for i := 0; i < 4096; i++ {
-		notifier.Remember(gateway.Principal{PlayerID: int64(i + 1), Claims: map[string]string{}})
-	}
-	notifier.Remember(gateway.Principal{PlayerID: 5000})
-	if _, known := notifier.recall(5000); known || len(notifier.remembered) != 4096 {
-		t.Fatalf("the table holds %d players and the 4097th is known=%v; want 4096 and not remembered", len(notifier.remembered), known)
-	}
-	// 已经在表里的玩家照常更新。
-	notifier.Remember(gateway.Principal{PlayerID: 1, Claims: map[string]string{"server_id": "1001"}})
-	if claims, known := notifier.recall(1); !known || claims["server_id"] != "1001" {
-		t.Fatalf("a remembered player was not refreshed: %v, %v", claims, known)
-	}
-	now = now.Add(31 * time.Second)
-	notifier.Remember(gateway.Principal{PlayerID: 5000})
-	if _, known := notifier.recall(5000); !known || len(notifier.remembered) != 1 {
-		t.Fatalf("after the old records lapsed: known=%v with %d records; want the new one alone", known, len(notifier.remembered))
-	}
-	notifier.Remember(gateway.Principal{})
-	if len(notifier.remembered) != 1 {
-		t.Fatal("a principal without a player was remembered")
 	}
 }
 
@@ -234,6 +195,5 @@ func TestLoginSessionActiveRegistrationMistakesPanic(t *testing.T) {
 	mustPanic("a duplicate name", func() { OnSessionActive("enter", func(context.Context, *app.Registry, Active) {}) })
 	// nil 的 Notifier（认证器没建它）不 panic。
 	var none *Notifier
-	none.Remember(gateway.Principal{PlayerID: 1})
-	none.SessionActive(nil, gateway.Principal{PlayerID: 1}, true)
+	none.SessionActive(nil, gateway.Principal{PlayerID: 1})
 }

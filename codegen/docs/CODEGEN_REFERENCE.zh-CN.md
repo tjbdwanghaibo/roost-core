@@ -202,7 +202,7 @@ roost add rpc guild -service game
 **认证器的两个可选接口**（生成的 `internal/access/player/tcp/server_gen.go`）：
 
 - `RegistryBound`——`BindRegistry(registry)`。传输 Mod 在 `Provide` 里、监听开始之前调；独立 Gate 部署下 Game Ingress 的 Mod 对 `options.Authenticator` 同样调。认证器在这里取 account 的客户端。
-- `SessionObserver`——`SessionActive(registry, principal, complete)`。它认证过的会话**激活之后**被通知一次：嵌入 TCP 是鉴权 ACK 写出、会话登记、自身视图登记之后，`principal` 是握手时的那一个（带 claims，`complete` 为 true）；独立 Gate 是 Game Ingress 的 `OnActive`（`options` 原有的回调与自身视图之后），只有绑定里的玩家号与会话号（`complete` 为 false——激活回调不带 Principal）。它在握手协程 / Ingress 控制协程里执行，只记事实、立即返回，不能否决会话；panic 被拦住。
+- `SessionObserver`——`SessionActive(registry, principal)`。它认证过的会话**激活之后**被通知一次：嵌入 TCP 是鉴权 ACK 写出、会话登记、自身视图登记之后，`principal` 是握手时的那一个（带 claims）；独立 Gate 接在 Game Ingress 的 `OnActivated` 上（`OnActive`——`options` 原有的回调与自身视图——成功之后），`principal` 是 Game Ingress 绑定这条会话时用同一个认证器认证出来的那一个（带 claims，会话号是绑定的）。它在握手协程 / Ingress 控制协程里执行，只记事实、立即返回，不能否决会话；panic 被拦住。
 
 没实现这两个接口的认证器，接线与没有它们时相同。登录模块用 `SessionObserver` 在握手之后告诉客户端“要不要先新建”（[modules/login](../../modules/login/README.md)）。回归是生成进工程的 `TestSessionObserverHearsEveryActivatedSession`（真实 TCP 监听，加进程内驱动 Ingress 的回调；没有经真实的 Gate / NATS）。
 

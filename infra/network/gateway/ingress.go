@@ -29,6 +29,11 @@ type GameDependencies struct {
 	// 不在控制工作协程中直接取得 Entity local 锁。
 	OnActive func(Binding, uint64) error
 	OnClosed func(Binding, uint64)
+	// OnActivated is optional. It runs once, right after OnActive returned nil, on the same goroutine, and
+	// receives a copy of the Principal this Game authenticated when it bound the session (claims included;
+	// SessionID is the binding's). It is a notice, not a gate: no result, and a panic in it is recovered and
+	// counted without failing the binding. It still precedes OnClosed for the same binding.
+	OnActivated func(Binding, uint64, Principal)
 }
 
 // GameIngress 只拥有接入身份、准入及发送关系。业务执行仍由注入的正式 dispatcher 完成。

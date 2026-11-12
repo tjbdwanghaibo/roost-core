@@ -35,7 +35,10 @@ type Options struct {
 	Ready             func() bool
 	OnActive          func(gateway.Binding, uint64) error
 	OnClosed          func(gateway.Binding, uint64)
-	DependsOn         []app.ModName
+	// OnActivated 只对 Game Ingress 有效：OnActive 成功之后的通知，带上 Game 在绑定时自己认证得到的
+	// Principal（含 Claims）的副本。没有返回值，不能拒绝绑定（gateway.GameDependencies.OnActivated）。
+	OnActivated func(gateway.Binding, uint64, gateway.Principal)
+	DependsOn   []app.ModName
 }
 
 func DefaultOptions() Options {
@@ -241,7 +244,7 @@ func (mod *GameIngressMod) Provide(registry *app.Registry) error {
 		return err
 	}
 	mod.connections = deps
-	mod.runtime, err = gateway.NewGameIngress(mod.options.Config, deps.identity, gateway.GameDependencies{Client: deps.client, Authenticator: deps.auth, Dispatch: mod.dispatch, Encoder: mod.encoder, QueueFactory: AsyncQueueFactory, Ready: deps.ready, Matches: deps.matches, OnActive: mod.options.OnActive, OnClosed: mod.options.OnClosed})
+	mod.runtime, err = gateway.NewGameIngress(mod.options.Config, deps.identity, gateway.GameDependencies{Client: deps.client, Authenticator: deps.auth, Dispatch: mod.dispatch, Encoder: mod.encoder, QueueFactory: AsyncQueueFactory, Ready: deps.ready, Matches: deps.matches, OnActive: mod.options.OnActive, OnClosed: mod.options.OnClosed, OnActivated: mod.options.OnActivated})
 	if err != nil {
 		return fmt.Errorf("game ingress wiring: %w", err)
 	}

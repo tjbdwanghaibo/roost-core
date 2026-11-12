@@ -85,18 +85,20 @@ func TestLoginAuthenticatorValidatesTicketsThroughAccount(t *testing.T) {
 			t.Fatalf("ticket %q: principal %+v, err %v; want a refusal", ticket, refused, err)
 		}
 	}
-	// 会话激活通知接到了 game/login 的告知上：独立 Gate 的通知只有玩家号与会话号，告知拿到的 claims 是
-	// 这个认证器刚才认证这名玩家时记下的那一份。
+	// 会话激活通知接到了 game/login 的告知上：独立 Gate 的通知带着 Game Ingress 绑定时认证出来的 Principal
+	// （会话号换成 Gate 的），告知拿到的就是它的 claims。
 	observer, ok := authenticator.(SessionObserver)
 	if !ok {
 		t.Fatalf("%T is not a SessionObserver, so the transport never tells it about activated sessions", authenticator)
 	}
-	observer.SessionActive(app.NewRegistry(viper.New()), gateway.Principal{PlayerID: 100_001, SessionID: "gate-session"}, false)
+	bound := principal
+	bound.SessionID = "gate-session"
+	observer.SessionActive(app.NewRegistry(viper.New()), bound)
 	authenticator.(*applicationAuthenticator).notifier.Wait()
 	select {
 	case session := <-loginTCPNotices:
 		if session.PlayerID != 100_001 || session.SessionID != "gate-session" || session.Claims["server_id"] != "1000" {
-			t.Fatalf("the notice saw %+v, want the gate's session with the claims of the handshake", session)
+			t.Fatalf("the notice saw %+v, want the gate's session with the bound principal's claims", session)
 		}
 	default:
 		t.Fatal("no notice ran for an activated session")
