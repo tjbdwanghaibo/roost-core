@@ -212,6 +212,10 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 			}
 			fmt.Fprintf(stdout, "  file:      %s\n", file)
 		}
+		// 安装后提示：安装器不代办、要工程自己做的事（清单的 next）。plan 与 add 都列出，add 之后它们仍然没做。
+		for _, hint := range item.Next {
+			fmt.Fprintf(stdout, "  todo:      %s\n", hint)
+		}
 	}
 	for _, glue := range plan.Glue {
 		if plan.Applied {

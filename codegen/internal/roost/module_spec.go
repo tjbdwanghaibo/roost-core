@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tjbdwanghaibo/roost-core/modules"
 	"gopkg.in/yaml.v3"
@@ -59,6 +60,11 @@ type ModuleSpec struct {
 	// With 是与别的模块的联动：键是另一个模块的名字，文件在 with/<另一个模块>/ 下。两个模块都装着时
 	// 才写进工程（不论先装哪个），用来把本模块接到对方留的登记点上；只装了其中一个时什么都不写。
 	With map[string]ModuleWith `yaml:"with" json:"with,omitempty"`
+	// Next 是安装之后还要工程自己做的事：安装器不代办的配置、要跑一次的运维命令、端点在哪里。每条一行，
+	// `roost module plan / add` 在这次要装的模块下原样列出（只替换 {{PROJECT}}、{{GAME_SERVICE}} 这类
+	// 工程名字占位，不能用 {{ID:...}}）。它是给人和 agent 看的提示，安装器从不执行它；
+	// 完整的说明仍写在模块的 README 里，这里只放“装完马上要做的那几步”。
+	Next []string `yaml:"next" json:"next,omitempty"`
 
 	// Files 是模板在工程里的落点（不带 .tmpl），由 files/ 目录读出，不写在清单里。
 	Files []string `yaml:"-" json:"files"`
@@ -336,6 +342,9 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	if err := validateModuleRuntime(spec.Runtime); err != nil {
 		return err
 	}
+	if err := validateModuleNext(spec.Next); err != nil {
+		return err
+	}
 	seenEntities := map[string]bool{}
 	for _, name := range spec.Entities {
 		if !modulePascalPattern.MatchString(name) || seenEntities[name] {
@@ -573,6 +582,34 @@ func sortedModuleNames(catalog map[string]ModuleSpec) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// 安装后提示的上限：它是装完马上要做的几步，不是文档。超过的内容写进模块的 README。
+const (
+	moduleNextMaxHints = 8
+	moduleNextMaxRunes = 240
+)
+
+// validateModuleNext 检查清单的 next：条数与每条的长度有上限，每条是非空的一行，不带 {{ID:...}}
+// （提示里没有分配号的上下文，带了只会原样打印出一个占位符）。
+func validateModuleNext(hints []string) error {
+	if len(hints) > moduleNextMaxHints {
+		return fmt.Errorf("next lists %d hints; at most %d (the rest belongs in the module's README)", len(hints), moduleNextMaxHints)
+	}
+	for index, hint := range hints {
+		trimmed := strings.TrimSpace(hint)
+		switch {
+		case trimmed == "":
+			return fmt.Errorf("next[%d] is empty", index)
+		case strings.ContainsAny(trimmed, "\r\n"):
+			return fmt.Errorf("next[%d] spans several lines; one hint is one line", index)
+		case utf8.RuneCountInString(trimmed) > moduleNextMaxRunes:
+			return fmt.Errorf("next[%d] is %d characters; at most %d", index, utf8.RuneCountInString(trimmed), moduleNextMaxRunes)
+		case moduleIDPlaceholder.MatchString(trimmed):
+			return fmt.Errorf("next[%d] uses an {{ID:...}} placeholder; hints only know the project names", index)
+		}
+	}
+	return nil
 }
 
 var moduleRuntimePackagePattern = regexp.MustCompile(`^game/[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$`)

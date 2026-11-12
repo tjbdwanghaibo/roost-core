@@ -112,6 +112,13 @@ func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 		"unknown key":   {moduleFixtureYAML + "surprise: 1\n", good, "field surprise not found"},
 		"name mismatch": {strings.Replace(moduleFixtureYAML, "name: demo", "name: other", 1), good, "the directory is the name"},
 		"no files":      {moduleFixtureYAML, nil, "files/ is empty"},
+		// next（安装后提示）：每条是非空的一行、不带 {{ID:...}}，条数与长度有上限；写错键名照样按未知键拒绝。
+		"empty hint":     {moduleFixtureYAML + "next: [\"roost config enable player-tcp\", \"  \"]\n", good, "next[1] is empty"},
+		"multiline hint": {moduleFixtureYAML + "next: [\"first line\\nsecond line\"]\n", good, "next[0] spans several lines"},
+		"hint with id":   {moduleFixtureYAML + "next: [\"code {{ID:errcode:demo_bad}}\"]\n", good, "next[0] uses an {{ID:...}} placeholder"},
+		"long hint":      {moduleFixtureYAML + "next: [\"" + strings.Repeat("长", 241) + "\"]\n", good, "next[0] is 241 characters; at most 240"},
+		"too many hints": {moduleFixtureYAML + "next: [a, b, c, d, e, f, g, h, i]\n", good, "next lists 9 hints; at most 8"},
+		"misspelt next":  {moduleFixtureYAML + "nexts: [a]\n", good, "field nexts not found"},
 	} {
 		_, err := loadModuleCatalogFS(moduleFixtureFS(test.yaml, test.files))
 		if err == nil || !strings.Contains(err.Error(), test.want) {

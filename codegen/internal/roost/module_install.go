@@ -65,6 +65,9 @@ type ModulePlanItem struct {
 	Verify   ModuleVerify     `json:"verify"`
 	Runtime  *ModuleRuntime   `json:"runtime,omitempty"`
 	Timer    *ModuleTimerPlan `json:"timer,omitempty"`
+	// Next 是清单里的安装后提示（ModuleSpec.Next），工程名字占位已经替换。只有这次要装的模块带着它：
+	// 已装的模块不再提示。安装器不执行它们。
+	Next []string `json:"next,omitempty"`
 
 	spec ModuleSpec
 }
@@ -187,6 +190,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 			}
 		}
 		item.Status = moduleStatusInstall
+		item.Next = moduleNextHints(manifest, service, spec)
 		// 自带实体的定义和 lifecycle 必须全新，不能把工程已有的实体据为己有。
 		for _, name := range spec.Entities {
 			for _, rel := range append(moduleEntityDefinitions(name), moduleEntityLifecycle(name)) {
@@ -379,7 +383,11 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 }
 
 // 只代办有确定接线和工程隔离配置的 Mod。外部依赖仍通过 plan 和开发环境配置明确展示。
-func moduleCanAddMod(name string) bool { return name == "heartbeat" || name == "directory" }
+// web（业务 HTTP 监听）在此列：接线是固定的一行，roost add mod 写下的 web.* 配置缺省只绑回环地址，
+// 生产绑非回环要工程显式写 web.allow_public_addr，代办不会替工程把端点暴露出去。
+func moduleCanAddMod(name string) bool {
+	return name == "heartbeat" || name == "directory" || name == "web"
+}
 
 func moduleMissingMods(manifest Manifest, service string, spec ModuleSpec) []string {
 	resolved, err := resolveMods(effectiveServiceMods(manifest, service))
@@ -393,6 +401,20 @@ func moduleMissingMods(manifest Manifest, service string, spec ModuleSpec) []str
 		}
 	}
 	return missing
+}
+
+// moduleNextHints 渲染清单的安装后提示：只替换工程名字占位（{{MODULE}}、{{PROJECT}}、{{GAME_SERVICE}}、
+// {{GAME_SERVICE_PKG}}），与模板里的写法相同。没有提示时返回 nil，JSON 里不出现这个键。
+func moduleNextHints(manifest Manifest, service string, spec ModuleSpec) []string {
+	if len(spec.Next) == 0 {
+		return nil
+	}
+	vars := demoVars{module: manifest.Project.Module, gameService: service, project: manifest.Project.Name}
+	hints := make([]string, 0, len(spec.Next))
+	for _, hint := range spec.Next {
+		hints = append(hints, vars.apply(strings.TrimSpace(hint)))
+	}
+	return hints
 }
 
 // moduleLifecycleExists 报告实体的 lifecycle 文件是否已在（roost add lifecycle 的产物）。
