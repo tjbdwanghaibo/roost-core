@@ -9,6 +9,7 @@ import (
 	generated "{{MODULE}}/configs/generated"
 
 	"{{MODULE}}/game/handler"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -26,11 +27,17 @@ func TestRecipeTCPFirstGrantPaysForAShopPurchase(t *testing.T) {
 	configdata.SetDefaultStore(store)
 	handler.RegisterShopBuyNestHandlers()
 	f := newRecipeNetwork(t)
-	conn := f.login(t, 42)
+	// 经登录入口进来的新号：新建（EnterCreate）那一笔事务里发首次的 100 金币。之后再发新建（已经建成，
+	// enter_created）、再进入两次，都不再发——下面买 10 金币的东西之后余额是 90，多发一次就是 190。
+	conn := f.login(t, "casual-player", "Casual")
+	if again := recipeCreate(t, conn, "Again"); again.Code != apperrors.ErrEnterCreated.Code() {
+		t.Fatalf("a second EnterCreate = %+v, want enter_created", again)
+	}
+	recipeEnter(t, conn)
 	recipeEnter(t, conn)
 	response := recipeRPC(t, conn, {{ID:protocol:ShopBuy}}, &pb.ShopBuyRequest{GoodsID: 1, Count: 1, Key: "purchase-1"}, pb.MarshalShopBuyRequest, pb.UnmarshalShopBuyResponse)
 	if response.Code != 0 || response.Balance != 90 || response.Cost != 10 || response.ItemID != 1001 || response.Held != 1 {
-		t.Fatalf("initial grant did not fund purchase: %+v", response)
+		t.Fatalf("initial grant did not fund exactly one purchase budget of 100 coins: %+v", response)
 	}
 	again := recipeRPC(t, conn, {{ID:protocol:ShopBuy}}, &pb.ShopBuyRequest{GoodsID: 1, Count: 1, Key: "purchase-1"}, pb.MarshalShopBuyRequest, pb.UnmarshalShopBuyResponse)
 	if again.Code != 0 || again.Balance != 90 || again.Held != 1 {

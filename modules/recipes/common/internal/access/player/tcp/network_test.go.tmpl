@@ -2,40 +2,51 @@ package tcp
 
 import (
 	"context"
-	"fmt"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 	"github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	"github.com/tjbdwanghaibo/roost-core/service/mail"
 	"github.com/tjbdwanghaibo/roost-core/service/rank"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	gameenter "{{MODULE}}/game/enter"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
+	gamelogin "{{MODULE}}/game/login"
 	accessplayer "{{MODULE}}/internal/access/player"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
-// 真 TCP、Robot 公共传输、生成 PB 分发、正式 lifecycle/Nest；Account、邮件、排行榜客户端和持久提交用替身。
-// 这是接线验收，不把替身提交说成 Mongo / WAL 验收，也未启动 self-sync 推送驱动。
-type recipeNetworkCommitter struct{}
+// 真 TCP、Robot 公共传输、生成 PB 分发、登录模块的认证器、正式 lifecycle/Nest；account 是真实的服务（内存存储），
+// 票据由它签发与校验。持久层（空的装载器 + 只计数的提交器）、邮件与排行榜客户端是替身。
+// 这是接线验收，不把替身提交说成 Mongo / WAL 验收，也未启动 self-sync 推送驱动；登录入口的 HTTP 那一段在
+// portal 模块自己的场景里，这里从“账号已经登录、向 account 要进服票据”开始。
+type recipeNetworkCommitter struct{ records chan struct{} }
 
-func (recipeNetworkCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+func (committer recipeNetworkCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	committer.records <- struct{}{}
+	return nil
+}
 
-type recipeNetworkAccounts struct{ account.Accounts }
+// recipeNetworkStore 是空的持久层：哪名玩家都没有档。
+type recipeNetworkStore struct{}
 
-func (recipeNetworkAccounts) ValidateSession(_ context.Context, id int64, token string) (account.Role, error) {
-	if (id != 42 && id != 43) || token != "verified-ticket" {
-		return account.Role{}, gateway.ErrUnauthenticated
-	}
-	return account.Role{PlayerID: id, ServerID: 1000, ServingServerID: 1000}, nil
+func (recipeNetworkStore) LoadEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	return nil, engine.ErrEntityAggregateNotFound
 }
 
 type recipeNetworkMail struct{ mail.Mail }
@@ -53,32 +64,73 @@ type recipeNetwork struct {
 	registry *app.Registry
 	server   *gateway.TCPServer
 	ctx      context.Context
+	accounts *account.Service
+	roles    versionstore.Store[int64, account.Role]
+	commits  chan struct{}
 }
 
+// newRecipeNetwork 搭出本服（sid 1000）。account 里 1000 与 1001 两个开放的服，玩家号从 42 起按握手的先后分配。
 func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *recipeNetwork {
 	t.Helper()
 	playerentity.RegisterEntity()
 	handler.RegisterEnterInitNestHandlers()
+	handler.RegisterEnterCreateNestHandlers()
+	handler.RegisterEnterExistingNestHandlers()
+	handler.RegisterEnterBuiltNestHandlers()
+	f := &recipeNetwork{commits: make(chan struct{}, 1024), roles: versionstore.NewMemoryStore[int64, account.Role]()}
 	access := entity.NewManagerAccess(entity.NewEntityManager())
-	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(recipeNetworkCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if _, err := access.ConfigureLoader(recipeNetworkStore{}); err != nil {
+		t.Fatal(err)
+	}
+	nestEngine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(recipeNetworkCommitter{records: f.commits}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	for _, register := range registers {
-		if err := register(engine); err != nil {
+		if err := register(nestEngine); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := engine.Start(); err != nil {
+	if err := nestEngine.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := engine.Shutdown(context.Background()); err != nil {
+		if err := nestEngine.Shutdown(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
+
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nextID atomic.Int64 // 握手在连接的协程里分配玩家号
+	nextID.Store(41)
+	f.accounts, err = account.New(account.Config{
+		Accounts: versionstore.NewMemoryStore[string, account.Account](),
+		Roles:    f.roles,
+		Servers:  versionstore.NewMemoryStore[int32, account.GameServer](),
+		Slots:    versionstore.NewMemoryStore[string, account.Slot](),
+		Names:    names,
+		// 身份校验是场景里的替身（哪个渠道都认）：配方工程的渠道要业务自己接，这里验的是握手之后的接线。
+		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
+			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     account.AllocatorFunc(func(context.Context, int32) (int64, error) { return nextID.Add(1), nil }),
+		NameRules:     account.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "recipe-network-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []int32{1000, 1001} {
+		if _, err := f.accounts.UpsertServer(context.Background(), account.GameServer{ID: sid, Name: "s" + strconv.Itoa(int(sid)), Status: account.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	cfg := viper.New()
 	cfg.Set("sid", 1000)
-	registry := app.NewRegistry(cfg)
-	for name, value := range map[app.ModName]any{"nest": engine, mods.ModEntityRuntime: access, account.CapabilityName: recipeNetworkAccounts{}, mail.CapabilityName: recipeNetworkMail{}, rank.CapabilityName: recipeNetworkRank{}} {
-		if err := registry.Register(name, value); err != nil {
+	f.registry = app.NewRegistry(cfg)
+	for name, value := range map[app.ModName]any{"nest": nestEngine, mods.ModEntityRuntime: access, account.CapabilityName: account.Accounts(f.accounts), mail.CapabilityName: recipeNetworkMail{}, rank.CapabilityName: recipeNetworkRank{}} {
+		if err := f.registry.Register(name, value); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -86,15 +138,17 @@ func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *rec
 	if err := mod.Init(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := mod.Provide(registry); err != nil {
+	if err := mod.Provide(f.registry); err != nil {
 		t.Fatal(err)
 	}
-	runtime, ok := app.Lookup[*accessplayer.Runtime](registry, accessplayer.Name)
+	runtime, ok := app.Lookup[*accessplayer.Runtime](f.registry, accessplayer.Name)
 	if !ok {
 		t.Fatal("missing player runtime")
 	}
-	auth := &applicationAuthenticator{}
-	if err := auth.BindRegistry(registry); err != nil {
+	// 与传输 Mod 的 Provide / Start 相同的接线：认证器绑定 Registry，传输 Runtime 发布出去（会话激活后的告知
+	// 按能力名取它来推送），握手钩子接上认证器的会话激活通知。
+	auth := NewAuthenticator()
+	if err := auth.(RegistryBound).BindRegistry(f.registry); err != nil {
 		t.Fatal(err)
 	}
 	config := gateway.DefaultTCPConfig()
@@ -104,9 +158,27 @@ func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *rec
 		t.Fatal(err)
 	}
 	tcpRuntime := NewRuntime(runtime.Protocols, time.Second)
+	if err := f.registry.Register(Name, tcpRuntime); err != nil {
+		t.Fatal(err)
+	}
 	if err := server.ConnectRuntime(tcpRuntime.TCPRuntime); err != nil {
 		t.Fatal(err)
 	}
+	if err := server.ConnectHandshake(observeHandshake(f.registry, auth, nil)); err != nil {
+		t.Fatal(err)
+	}
+	// 告知在后台执行。监听停下之后等它们跑完，再把登录模块的场景收告知用的进程级通道（login_test.go 的
+	// loginTCPNotices，登记表是进程级的）清空：这里握手过的会话不留给它的用例。先登记、后执行。
+	t.Cleanup(func() {
+		auth.(*applicationAuthenticator).notifier.Wait()
+		for {
+			select {
+			case <-loginTCPNotices:
+			default:
+				return
+			}
+		}
+	})
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -117,9 +189,47 @@ func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *rec
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
-	return &recipeNetwork{registry: registry, server: server, ctx: ctx}
+	f.server, f.ctx = server, ctx
+	return f
 }
-func (f *recipeNetwork) login(t *testing.T, id int64) transport.Conn {
+
+// committed 是到现在为止 Nest 交给持久层的提交数。
+func (f *recipeNetwork) committed() int { return len(f.commits) }
+
+// enterTicket 是登录入口在玩家选定一个服之后给客户端的握手票据：账号登录、向 account 要这个服的进服票据。
+func (f *recipeNetwork) enterTicket(t *testing.T, openID string, sid int32) string {
+	t.Helper()
+	logged, err := f.accounts.Login(f.ctx, account.Identity{Channel: "recipe", OpenID: openID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := f.accounts.IssueEnterTicket(f.ctx, logged.ID, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gamelogin.EnterTicket(ticket.Ticket)
+}
+
+// sessionTicket 是不经登录入口的老路：Login → CreateRole → SelectRole 拿到的会话令牌。
+func (f *recipeNetwork) sessionTicket(t *testing.T, openID string) (string, int64) {
+	t.Helper()
+	logged, err := f.accounts.Login(f.ctx, account.Identity{Channel: "recipe", OpenID: openID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := f.accounts.CreateRole(f.ctx, logged.ID, 1000, openID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := f.accounts.SelectRole(f.ctx, logged.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gamelogin.Ticket(role.PlayerID, session.Token), role.PlayerID
+}
+
+// handshake 连上本服并出示票据；握手成功后读到服务器的告知 EnterStatus（每条激活的会话都有一条）。
+func (f *recipeNetwork) handshake(t *testing.T, ticket string) (transport.Conn, *pb.EnterStatusPush) {
 	t.Helper()
 	conn, err := transport.DialPlayerTCP(f.ctx, transport.Config{Endpoint: f.server.Addr().String(), DialTimeout: time.Second})
 	if err != nil {
@@ -127,7 +237,7 @@ func (f *recipeNetwork) login(t *testing.T, id int64) transport.Conn {
 	}
 	stop := context.AfterFunc(f.ctx, func() { _ = conn.Close() })
 	t.Cleanup(func() { stop(); _ = conn.Close() })
-	packet := transport.AuthPacket(fmt.Sprintf("session:%d:verified-ticket", id))
+	packet := transport.AuthPacket(ticket)
 	packet.Seq = 1
 	if err := conn.WritePackets([]*transport.Packet{packet}); err != nil {
 		t.Fatal(err)
@@ -136,40 +246,215 @@ func (f *recipeNetwork) login(t *testing.T, id int64) transport.Conn {
 	if err != nil || ack.MsgID != 0 || len(ack.Payload) != 0 {
 		t.Fatalf("handshake: %+v %v", ack, err)
 	}
+	pushed, err := conn.ReadPacket()
+	if err != nil || pushed.MsgID != {{ID:protocol:EnterStatus}} {
+		t.Fatalf("the first frame after the handshake is %+v (%v), want the EnterStatus notice", pushed, err)
+	}
+	status, err := pb.UnmarshalEnterStatusPush(pushed.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn, status
+}
+
+// login 是一名玩家经登录入口进来的整条路：进服票据握手 → 告知 → 需要时新建（名字 name）→ 进入。
+// 别的场景用它拿到一条已经进入游戏的连接。
+func (f *recipeNetwork) login(t *testing.T, openID, name string) transport.Conn {
+	t.Helper()
+	conn, status := f.handshake(t, f.enterTicket(t, openID, 1000))
+	if status.Code != 0 {
+		t.Fatalf("EnterStatus for %s: %+v", openID, status)
+	}
+	if status.NeedCreate {
+		if created := recipeCreate(t, conn, name); created.Code != 0 {
+			t.Fatalf("create %s: %+v", openID, created)
+		}
+	}
+	if entered := recipeEnterAnswer(t, conn); entered.Code != 0 {
+		t.Fatalf("enter %s: %+v", openID, entered)
+	}
 	return conn
 }
+
 func recipeRequest(t *testing.T, conn transport.Conn, id uint32, payload []byte) []byte {
 	t.Helper()
 	// Robot transport 自己分配 wire sequence；这里一次只挂一个请求，复用本地关联号 2。
 	if err := conn.WritePackets([]*transport.Packet{{MsgID: id, Seq: 2, Payload: payload}}); err != nil {
 		t.Fatal(err)
 	}
-	response, err := conn.ReadPacket()
-	if err != nil || response.Seq != 2 {
-		t.Fatalf("response: %+v %v", response, err)
+	for {
+		response, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("response to %d: %v", id, err)
+		}
+		// 应答之前可能先到推送（进入游戏时的服务器时间等），它们不带关联号。
+		if response.Seq == 2 && response.MsgID == id {
+			return response.Payload
+		}
+		if response.Seq != 0 {
+			t.Fatalf("response to %d: %+v", id, response)
+		}
 	}
-	return response.Payload
 }
-func recipeEnter(t *testing.T, conn transport.Conn) *pb.EnterGameResponse {
+
+// recipeEnterAnswer 发 EnterGame，原样返回应答（不要求成功）。
+func recipeEnterAnswer(t *testing.T, conn transport.Conn) *pb.EnterGameResponse {
 	t.Helper()
 	raw, err := pb.MarshalEnterGameRequest(&pb.EnterGameRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	reply, err := pb.UnmarshalEnterGameResponse(recipeRequest(t, conn, {{ID:protocol:EnterGame}}, raw))
-	if err != nil || reply.Code != 0 {
-		t.Fatalf("enter: %+v %v", reply, err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return reply
 }
-func TestRecipeTCPLoginEntersPlayerExactlyOnce(t *testing.T) {
+
+func recipeEnter(t *testing.T, conn transport.Conn) *pb.EnterGameResponse {
+	t.Helper()
+	reply := recipeEnterAnswer(t, conn)
+	if reply.Code != 0 {
+		t.Fatalf("enter: %+v", reply)
+	}
+	return reply
+}
+
+func recipeCreate(t *testing.T, conn transport.Conn, name string) *pb.EnterCreateResponse {
+	t.Helper()
+	raw, err := pb.MarshalEnterCreateRequest(&pb.EnterCreateRequest{Name: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := pb.UnmarshalEnterCreateResponse(recipeRequest(t, conn, {{ID:protocol:EnterCreate}}, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reply
+}
+
+// 新号经登录入口进来：进服票据握手 → 服务器告知要先新建 → 不新建直接 EnterGame 被拒、什么都没写 →
+// EnterCreate 建成 → EnterGame 是首次 → 再进入不是首次 → 重连（同一张票据）被告知直接进入。
+func TestRecipeTCPEnterTicketCreatesFirstThenEnters(t *testing.T) {
 	f := newRecipeNetwork(t)
-	conn := f.login(t, 42)
+	ticket := f.enterTicket(t, "alice", 1000)
+	conn, status := f.handshake(t, ticket)
+	if status.Code != 0 || !status.NeedCreate {
+		t.Fatalf("EnterStatus for a new account = %+v, want need_create", status)
+	}
+	if refused := recipeEnterAnswer(t, conn); refused.Code != apperrors.ErrEnterNeedCreate.Code() || refused.First {
+		t.Fatalf("EnterGame before the create = %+v, want enter_need_create (%d)", refused, apperrors.ErrEnterNeedCreate.Code())
+	}
+	if f.committed() != 0 {
+		t.Fatalf("a refused EnterGame committed %d transactions", f.committed())
+	}
+	if created := recipeCreate(t, conn, "Alice"); created.Code != 0 {
+		t.Fatalf("EnterCreate = %+v", created)
+	}
+	if f.committed() != 1 {
+		t.Fatalf("the create committed %d transactions, want 1", f.committed())
+	}
+	if again := recipeCreate(t, conn, "Alicia"); again.Code != apperrors.ErrEnterCreated.Code() {
+		t.Fatalf("a second EnterCreate = %+v, want enter_created (%d)", again, apperrors.ErrEnterCreated.Code())
+	}
 	if !recipeEnter(t, conn).First {
-		t.Fatal("new player was not initialized")
+		t.Fatal("the first enter after the create was not reported as the first")
+	}
+	if recipeEnter(t, conn).First {
+		t.Fatal("repeat enter was reported as the first again")
+	}
+	reconnected, status := f.handshake(t, ticket)
+	if status.Code != 0 || status.NeedCreate {
+		t.Fatalf("EnterStatus on the reconnect = %+v, want enter directly", status)
+	}
+	if recipeEnter(t, reconnected).First {
+		t.Fatal("enter on the reconnect was reported as the first")
+	}
+}
+
+// 不经登录入口的老路照旧：会话令牌握手的会话，EnterGame 就是“加载或创建”，不会被要求先新建。
+func TestRecipeTCPSessionTokenStillLoadsOrCreates(t *testing.T) {
+	f := newRecipeNetwork(t)
+	ticket, _ := f.sessionTicket(t, "bob")
+	conn, status := f.handshake(t, ticket)
+	if status.Code != 0 || status.NeedCreate {
+		t.Fatalf("EnterStatus for a session-token session = %+v, want enter directly", status)
+	}
+	if !recipeEnter(t, conn).First {
+		t.Fatal("new player was not initialized by EnterGame")
 	}
 	if recipeEnter(t, conn).First {
 		t.Fatal("repeat enter initialized again")
+	}
+}
+
+// 承载服不是本服的角色（账号选的是 1001 服，却连到了 1000 服）：握手照常成功（票据是真的），
+// 服务器告知 login_elsewhere 并断开连接；本服没有为他建档。原来的配方认证器在握手时就拒绝，客户端拿不到原因。
+func TestRecipeTCPRoleOfAnotherServerIsToldAndDisconnected(t *testing.T) {
+	f := newRecipeNetwork(t)
+	conn, status := f.handshake(t, f.enterTicket(t, "carol", 1001))
+	if status.Code != apperrors.ErrLoginElsewhere.Code() || status.NeedCreate {
+		t.Fatalf("EnterStatus for a role of server 1001 = %+v, want login_elsewhere (%d)", status, apperrors.ErrLoginElsewhere.Code())
+	}
+	if extra, err := conn.ReadPacket(); err == nil {
+		t.Fatalf("the connection stayed open after the refusal and delivered %+v", extra)
+	}
+	if f.committed() != 0 {
+		t.Fatalf("a role of another server caused %d commits here", f.committed())
+	}
+}
+
+// 换服在途的角色（配方的进入前检查，recipe_entering.go）：EnterGame、EnterCreate 都答 login_elsewhere，
+// 什么都不加载、不提交；告知里是同一个码。没有在途换服的会话不受影响。
+func TestRecipeEnteringRefusesARoleInTransfer(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	moving := map[string]string{account.TransferClaim: account.TransferClaimValue(account.RoleTransfer{ID: "move-1", To: 1001})}
+	for label, claims := range map[string]map[string]string{
+		"a transfer in flight":   moving,
+		"an unreadable transfer": {account.TransferClaim: "garbage"},
+		"an empty transfer mark": {account.TransferClaim: ""},
+	} {
+		err := refuseTransferOnEnter(context.Background(), registry, gameenter.Entering{PlayerID: 42, Claims: claims})
+		if code, _ := errcode.ClientError(err); err == nil || code != apperrors.ErrLoginElsewhere.Code() {
+			t.Fatalf("%s: entering = %v, want login_elsewhere", label, err)
+		}
+	}
+	for label, claims := range map[string]map[string]string{
+		"no claims":            nil,
+		"a settled role":       {account.ServerIDClaim: "1000", account.BindEpochClaim: "3"},
+		"another key's value":  {account.OriginServerIDClaim: "1001:move-1"},
+	} {
+		if err := refuseTransferOnEnter(context.Background(), registry, gameenter.Entering{PlayerID: 42, Claims: claims}); err != nil {
+			t.Fatalf("%s: entering was refused: %v", label, err)
+		}
+	}
+
+	// 接在进入的骨架上：在途的角色发 EnterGame、EnterCreate，load 与档操作都没有被调用。
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	served := app.NewRegistry(cfg)
+	moving[account.ServerIDClaim] = "1000"
+	touched := 0
+	_, err := gameenter.Enter(context.Background(), served, gameenter.Entering{PlayerID: 42, Claims: moving}, func(context.Context) (gameenter.InitResult, error) {
+		touched++
+		return gameenter.InitResult{}, nil
+	})
+	if code, _ := errcode.ClientError(err); code != apperrors.ErrLoginElsewhere.Code() || touched != 0 {
+		t.Fatalf("EnterGame of a role in transfer: err %v, load called %d times; want login_elsewhere and no load", err, touched)
+	}
+	err = gameenter.Create(context.Background(), served, gameenter.Creating{PlayerID: 42, Name: "Mover", Claims: moving}, gameenter.CreateSteps{
+		Ensure: func(context.Context) error { touched++; return nil },
+		Commit: func(context.Context, string) error { touched++; return nil },
+	})
+	if code, _ := errcode.ClientError(err); code != apperrors.ErrLoginElsewhere.Code() || touched != 0 {
+		t.Fatalf("EnterCreate of a role in transfer: err %v, record touched %d times; want login_elsewhere and nothing touched", err, touched)
+	}
+	delete(moving, account.TransferClaim)
+	if _, err := gameenter.Enter(context.Background(), served, gameenter.Entering{PlayerID: 42, Claims: moving}, func(context.Context) (gameenter.InitResult, error) {
+		touched++
+		return gameenter.InitResult{}, nil
+	}); err != nil || touched != 1 {
+		t.Fatalf("a settled role of this server: err %v, load called %d times; want it let in", err, touched)
 	}
 }
 

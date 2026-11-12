@@ -69,6 +69,17 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 		if !manifest.Access["player"].SelfSync {
 			t.Fatal("recipe omitted self-sync")
 		}
+		// 握手的认证器是 login 模块的，配方不再带自己的一份；登录入口装在托管 account 的服务上。
+		auth, err := os.ReadFile(filepath.Join(target, "internal", "access", "player", "tcp", "auth.go"))
+		if err != nil || !bytes.Contains(auth, []byte("gamelogin.Authenticator{Accounts: accounts}")) || bytes.Contains(auth, []byte("recipeAuthBinding")) {
+			t.Fatalf("%s: auth.go is not the login module's authenticator: %v\n%s", name, err, auth)
+		}
+		if _, err := os.Stat(filepath.Join(target, "internal", "access", "player", "tcp", "auth_test.go")); !os.IsNotExist(err) {
+			t.Fatalf("%s: the recipe still ships its own authenticator test: %v", name, err)
+		}
+		if runtime := manifest.Modules["portal"].Runtime; runtime == nil || runtime.Framework != "account" {
+			t.Fatalf("%s: the front door is not hosted on the account service: %+v", name, manifest.Modules["portal"])
+		}
 		for _, args := range [][]string{{"test", "-json", "-count=1", "./..."}, {"test", "-json", "-race", "-count=1", "-run", "^TestRecipe|^TestEnter", "./game/handler", "./game/entities/player", "./internal/access/player/tcp"}, {"build", "./..."}, {"vet", "./..."}} {
 			cmd := exec.Command("go", args...)
 			cmd.Dir, cmd.Env = target, generatedProjectGoEnv()
@@ -89,11 +100,13 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 						}
 					}
 				}
-				want := map[string]int{"casual": 9, "turn-pvp": 7}[name]
+				// 公共的四条（整条登录链路、会话令牌的老路、连错服被告知并断开、换服在途的进入前检查），
+				// casual 另有首次发放两条与购买一条，turn-pvp 另有双人回合一条。
+				want := map[string]int{"casual": 7, "turn-pvp": 5}[name]
 				if passed != want || skipped != 0 {
 					t.Fatalf("recipe %s scenarios: %d passed, %d skipped, want %d/0", name, passed, skipped, want)
 				}
-				t.Logf("recipe %s: %d integration/auth scenarios, zero skips", name, passed)
+				t.Logf("recipe %s: %d integration/login scenarios, zero skips", name, passed)
 			}
 		}
 		if _, err := VerifyModules(context.Background(), target, nil, nil); err != nil {
@@ -102,7 +115,10 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 		if name == "casual" {
 			recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {", "if err := error(nil); err != nil {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "initial coins = 0")
 			recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if state.GetInitialized() {", "if false && state.GetInitialized() {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "repeat =")
-			recipeMutationMustFail(t, target, "internal/access/player/tcp/auth.go", "principal.ServerID != bound.sid || ", "", "./internal/access/player/tcp", "TestRecipeAuthenticationRejectsWrongServer", "wrong server:")
+			// 登录链路的三条：进服票据握手的会话不再被当成“先新建”、换服在途的角色被放进来、已经建成的玩家能再新建一次（首次发放会再发）。
+			recipeMutationMustFail(t, target, "game/login/login_enter.go", `return claims[EnterTicketClaim] == "1"`, "return false", "./internal/access/player/tcp", "TestRecipeTCPEnterTicketCreatesFirstThenEnters", "EnterStatus for a new account")
+			recipeMutationMustFail(t, target, "internal/access/player/tcp/recipe_entering.go", "if !moving {", "if !moving || true {", "./internal/access/player/tcp", "TestRecipeEnteringRefusesARoleInTransfer", "want login_elsewhere")
+			recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if component.Built() {", "if false && component.Built() {", "./internal/access/player/tcp", "TestRecipeTCPFirstGrantPaysForAShopPurchase", "want enter_created")
 		}
 		// 同步后仍保持业务文件；再生不应改变框架生成物。
 		rule := filepath.Join(target, "RECIPE.md")

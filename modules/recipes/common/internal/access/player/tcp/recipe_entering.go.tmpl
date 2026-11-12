@@ -1,0 +1,39 @@
+package tcp
+
+import (
+	"context"
+
+	gameenter "{{MODULE}}/game/enter"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 配方的一条进入前检查：换服在途的角色不在本服进入、也不在本服新建。
+//
+// 握手用的是登录模块的认证器（auth.go 与 game/login）：票据由 account 校验，认证器只记不拒。握手之后
+// “本服该不该服务他”由进入前检查回答，客户端拿到的是带码的拒绝（握手失败拿不到原因）：
+//
+//   - 承载服不是本服（或会话没有记承载服）：登录模块与 enter 的联动答 login_elsewhere（game/login/login_enter.go）。
+//   - 换服在途（svcaccount.TransferClaim）：登录模块不拒——那是换服模块 rehome 的事，而配方没有装它，
+//     在途的角色放进来会在一个即将不再承载他的进程里被加载、被新建。所以这里补上：同样答 login_elsewhere，
+//     owner_sid 是换服的目标服。配方自己没有发起换服的入口，这一条防的是别的工具（运维命令、另一个服务）
+//     经 account 发起的换服。
+//
+// 两条都在加载或创建 Player 之前执行，EnterGame、EnterCreate 与会话激活后的告知（EnterStatus）用的是同一组检查。
+// 以后装 rehome 模块时删掉这个文件：检查按名字顺序执行，这一条排在 rehome 之前，会抢先拒绝它要接着做完的换服。
+func init() {
+	gameenter.OnEntering("recipe_transfer", refuseTransferOnEnter)
+}
+
+func refuseTransferOnEnter(_ context.Context, _ *app.Registry, entering gameenter.Entering) error {
+	value, moving := entering.Claims[svcaccount.TransferClaim]
+	if !moving {
+		return nil
+	}
+	// 读不出目标服的标记同样拒绝（owner_sid 为 0）：标记在，就不能当成没有在换服。
+	target, _, _ := svcaccount.ParseTransferClaim(value)
+	return errcode.Wrap(apperrors.ErrLoginElsewhere, nil, "player_id", entering.PlayerID, "owner_sid", target, "transfer", true)
+}

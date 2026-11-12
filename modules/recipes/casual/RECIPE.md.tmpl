@@ -1,20 +1,37 @@
 # 休闲配方
 
 本工程由 `roost project new {{PROJECT}} -module {{MODULE}} -recipe casual` 创建。
-包含 enter、wallet、checkin、task、stamina、shop、bag、mailbox，自动安装签到→任务、邮件→进入/背包联动。
+包含 enter、wallet、checkin、task、stamina、shop、bag、mailbox、login、portal、servertime，
+自动安装签到→任务、邮件→进入/背包、登录→进入、登录入口→进入、服务器时间→进入联动。
 
 ## 跑起来
 
 按照生成工程 README 配置 MongoDB、Redis、NATS 与 etcd，运行需要的托管服务和 `{{GAME_SERVICE}}`。
-Account 的 `internal/service/account/collaborators.go` 要实现平台 IdentityVerifier 与持久 PlayerIDAllocator。
-认证保持 fail-closed，没有接受任意身份的测试密码；也可直接接入你已有的 Account 服务。
-客户端凭 Account 签发的 `session:<player_id>:<token>` 握手，角色承载服必须匹配当前 sid。
+登录链路是 login 与 portal 两个模块的（细节见 roost-core 的 `modules/login/README.md`、`modules/portal/README.md`）：
+
+- 握手的认证器（`internal/access/player/tcp/auth.go` 与 `game/login`）和 account 的协作者由 login 模块写下：票据全部由 account
+  签发与校验，玩家号是 account 的 Redis 里的计数器。渠道验签在 `internal/service/account/login_channels.go` 接，缺省一个渠道都没接；
+  认证保持 fail-closed，没有接受任意身份的测试密码。
+- 开发时在 `configs/service/config.account.yaml` 末尾写 `login.dev_token: dev-…`（渠道 `dev` 的凭据，生产配置里写了它进程不启动）
+  与 `portal.servers`（服号 → 客户端连得到的地址，例如 `"1000": 127.0.0.1:7000`）。`make dev-run` 起完全部服务后自动登记本机的服；
+  别的环境执行一次 `go run ./cmd/accountctl upsert-server -sid <{{GAME_SERVICE}} 的 sid>`。
+- 登录入口挂在托管 account 的进程上（`web.addr`）：`POST /portal/login` → `/portal/servers` → `/portal/enter`，
+  最后一步给出握手票据 `enter:<进服票据>` 与该连的地址。入口没有限流，对外要放在终止 TLS 的反向代理后面。
+
+与配方原先自带的认证器不同的一处：承载服不是当前 sid、或者正在换服的角色，握手不再被拒绝（握手失败客户端拿不到原因）。
+握手照常成功，随后服务器推 `EnterStatus{code=login_elsewhere}` 并断开连接；这样的会话发 `EnterGame` / `EnterCreate` 得到同一个码，
+不加载也不创建 Player。“承载服不是本服”是 login 与 enter 的联动；“换服在途”是配方自己的进入前检查
+（`internal/access/player/tcp/recipe_entering.go`，以后装 rehome 模块时删掉它）。
 
 ## 完整调用顺序
 
-1. Account 登录、创建/选择角色，取得 session token；客户端完成 TCP 握手。
-2. `EnterGame` 加载/创建玩家、完成首次初始化。`game/entities/player/recipe_first_enter.go` 登记首次 100 金币；
-   发放和初始化标记在同一笔事务内，拒绝提交时一起回滚，重复进入不会再发。
+1. 客户端经登录入口登录、拿区服清单、换进服票据，用 `enter:<进服票据>` 完成 TCP 握手。
+2. 服务器推 `EnterStatus`：`need_create` 为 true 就先发 `EnterCreate{name}`（本配方没装档案模块，名字没有规则、也不保存），
+   再发 `EnterGame`；为 false 直接发 `EnterGame`。推送只是告知：一两秒没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。
+   `game/entities/player/recipe_first_enter.go` 登记首次 100 金币：在新建的那一笔事务里发，与“建成了”的标记一起提交或回滚；
+   再发新建（`enter_created`）与重复进入都不会再发。进入时服务器把业务时间推给客户端（`ServertimeNow`），也可以用 `ServertimeSync` 拉。
+   不经登录入口、由自己的入口调 account 的 CreateRole / SelectRole 拿 `session:<player_id>:<token>` 握手的会话照旧：
+   `EnterGame` 加载或创建玩家并完成首次初始化，发放规则与只发一次的保证相同。
 3. `CheckinClaim` 签到，自动推进每日签到任务；`TaskClaim` 领取已完成任务的奖励。
 4. `ShopBuy` 购买商品 1，扣 10 金币并向背包发放道具 1001；请求重放沿用商店自己的去重回执。
 5. 通过模块的体力、背包、邮件查询/操作协议继续业务；自身 EntitySync 已接入，默认 PB 全量/增量由客户端库解析。
@@ -25,4 +42,7 @@ Account 的 `internal/service/account/collaborators.go` 要实现平台 Identity
 ## 验证
 
 `GOWORK=off go test -count=1 ./...`、`roost module verify`；`TestRecipe*` 专门验证首次发放与提交拒绝重试。
-配方另有真实 TCP/Robot → PB → Controller → Nest 验收，包含购买重放；Account、邮件/排行客户端与持久提交仍是替身，未验证自身 Sync 的推送驱动或真实存储。
+配方另有真实 TCP/Robot → PB → Controller → Nest 验收：进服票据握手 → `EnterStatus` → 没新建就进入被拒且没有提交 → `EnterCreate` → `EnterGame`，
+重连不再要求新建，首次发放在“先新建再进入”下只发一次，购买重放，连错服的会话被告知并断开，会话令牌握手的老路。
+account 是真实的服务（内存存储），认证器是登录模块的；邮件/排行客户端与持久提交仍是替身，登录入口的 HTTP 那一段在 portal 模块自己的场景里，
+未验证自身 Sync 的推送驱动、真实存储与真实进程。

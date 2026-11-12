@@ -1,6 +1,6 @@
 casual:
-  summary: 休闲养成：首次发放、签到、任务、体力、商店、背包与邮件
-  modules: [enter, wallet, checkin, task, stamina, shop, bag, mailbox]
+  summary: 休闲养成：登录入口、首次发放、签到、任务、体力、商店、背包与邮件
+  modules: [enter, wallet, checkin, task, stamina, shop, bag, mailbox, login, portal, servertime]
 turn-pvp:
-  summary: 回合房间：进入、档案、成员席位、回合推进与排行榜查询
-  modules: [enter, profile, room, turn, leaderboard]
+  summary: 回合房间：登录入口、进入、档案、成员席位、回合推进与排行榜查询
+  modules: [enter, profile, room, turn, leaderboard, login, portal, servertime]
