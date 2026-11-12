@@ -20,7 +20,12 @@ import (
 // the plan's name is committed to another owner — the refusal never tells the
 // client the pending name, so a player who simply picks another name is the
 // ordinary path to that state.
-func (s *Service) createRole(ctx context.Context, accountID string, serverID int32, name string) (Role, error) {
+//
+// published 报告是不是**这一次调用**把角色发布出来的（把 slot 的 PlayerID 写上的那一次版本比较是它赢的）：
+// 并发的同名请求里只有一个为 true，角色早已发布（重放、应答丢失后角色其实已发布）时为 false。
+// 发布那一步的应答丢失、事后读到 slot 已经指向这个角色时按 true 报——那一次写多半就是这次调用的。
+// EnterServer 把它交给握手方当“这次新建了角色”的参考；它不是任何发放的依据。
+func (s *Service) createRole(ctx context.Context, accountID string, serverID int32, name string) (role Role, published bool, err error) {
 	key := slotKeyFor(accountID, serverID)
 	// At most one release per call: a second pass that still meets another
 	// name met a plan some other request just made, which is a live one.
@@ -30,7 +35,7 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 	for {
 		slot, found, err := s.cfg.Slots.Get(ctx, key)
 		if err != nil {
-			return Role{}, err
+			return Role{}, false, err
 		}
 		state := classifySlot(slot, found, accountID, serverID)
 		if state == slotTransferHold && !holdChecked {
@@ -38,7 +43,7 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 			// 只有那个角色自己的入口能撤它，而账号在这个服建角恰恰是被它卡住的那一方。
 			holdChecked = true
 			if err := s.releaseStrayHold(ctx, key); err != nil {
-				return Role{}, err
+				return Role{}, false, err
 			}
 			continue
 		}
@@ -47,7 +52,7 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 			// The stored plan — this request's, or a concurrent one's that won
 			// the insert — is what the rest of the table decides on.
 			if slot, err = s.makeCreationPlan(ctx, key, accountID, serverID, name); err != nil {
-				return Role{}, err
+				return Role{}, false, err
 			}
 			state = classifySlot(slot, true, accountID, serverID)
 			action = decideCreation(state, creationEntryFor(slot.Value, name), nameNotRead)
@@ -57,11 +62,11 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 		if action == actReadName {
 			if released {
 				// The plan that took the released slot is a fresh one.
-				return Role{}, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
+				return Role{}, false, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
 			}
 			entryInDirectory, held, err := s.cfg.Names.Lookup(ctx, slot.Value.Creation.Name)
 			if err != nil {
-				return Role{}, err
+				return Role{}, false, err
 			}
 			nameAt = classifyName(entryInDirectory, held, creationOwner(key, slot.Value.Creation))
 			action = decideCreation(state, entry, nameAt)
@@ -70,19 +75,19 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 		case actReturnRole:
 			stored, found, err := s.cfg.Roles.Get(ctx, slot.Value.PlayerID)
 			if err != nil {
-				return Role{}, err
+				return Role{}, false, err
 			}
 			if !found || stored.Value.CreationID != slot.Value.Creation.ID {
-				return Role{}, fmt.Errorf("%w: completed creation has no matching role", ErrConflict)
+				return Role{}, false, fmt.Errorf("%w: completed creation has no matching role", ErrConflict)
 			}
 			if stored.Value.ServerID != serverID {
 				// 角色已经换服走了，这个 slot 是提交之后还没删掉的旧服 slot（transfer.go 的收尾）。收尾补完
 				// 之前名额仍按已占用回答，与换一个名字时相同；不把绑定在别的服的角色当作本服的建角结果交回。
 				s.report.Refused("create_role", "role_limit")
-				return Role{}, fmt.Errorf("%w: the slot of %s on server %d still belongs to role %d, which moved to server %d; "+
+				return Role{}, false, fmt.Errorf("%w: the slot of %s on server %d still belongs to role %d, which moved to server %d; "+
 					"its transfer is not settled yet", ErrRoleLimit, accountID, serverID, stored.Value.PlayerID, stored.Value.ServerID)
 			}
-			return stored.Value.clone(), nil
+			return stored.Value.clone(), false, nil
 		case actResume:
 			return s.resumeRoleCreation(ctx, key, slot)
 		case actReleaseAndRetry:
@@ -94,7 +99,7 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 			// 只在删除时它仍未 admitted 才删（releaseCreationSlot），与并发的 admission 互斥。
 			done, err := s.releaseCreationSlot(ctx, key, slot, planDead(nameAt))
 			if err := s.compensated(err); err != nil {
-				return Role{}, fmt.Errorf("account: release the pending plan for name %q: %w", plan.Name, err)
+				return Role{}, false, fmt.Errorf("account: release the pending plan for name %q: %w", plan.Name, err)
 			}
 			if done {
 				s.report.Dropped("create_role.plan_released", 1)
@@ -104,20 +109,20 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 		case actRefuseRoleLimit:
 			if state == slotPublished {
 				s.report.Refused("create_role", "role_limit")
-				return Role{}, fmt.Errorf("%w: %s already holds a role on server %d", ErrRoleLimit, accountID, serverID)
+				return Role{}, false, fmt.Errorf("%w: %s already holds a role on server %d", ErrRoleLimit, accountID, serverID)
 			}
 			if state == slotTransferHold {
 				s.report.Refused("create_role", "role_limit")
-				return Role{}, fmt.Errorf("%w: role transfer %s holds the slot of %s on server %d", ErrRoleLimit, slot.Value.TransferID, accountID, serverID)
+				return Role{}, false, fmt.Errorf("%w: role transfer %s holds the slot of %s on server %d", ErrRoleLimit, slot.Value.TransferID, accountID, serverID)
 			}
-			return Role{}, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
+			return Role{}, false, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
 		case actRefuseConflict:
 			if state == slotForeign {
-				return Role{}, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
+				return Role{}, false, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
 			}
-			return Role{}, fmt.Errorf("%w: slot has no creation plan; reconcile it offline", ErrConflict)
+			return Role{}, false, fmt.Errorf("%w: slot has no creation plan; reconcile it offline", ErrConflict)
 		default:
-			return Role{}, fmt.Errorf("account: creation table answered %d for slot %d, entry %d, name %d", action, state, entry, nameAt)
+			return Role{}, false, fmt.Errorf("account: creation table answered %d for slot %d, entry %d, name %d", action, state, entry, nameAt)
 		}
 	}
 }
@@ -168,7 +173,7 @@ func (s *Service) compensated(err error) error {
 	return err
 }
 
-func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versionstore.Versioned[Slot]) (Role, error) {
+func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versionstore.Versioned[Slot]) (Role, bool, error) {
 	plan := slot.Value.Creation
 	// An operation-specific owner prevents an abandoned attempt from reusing
 	// or compensating a later attempt's reservation on the same account/slot.
@@ -189,16 +194,16 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 			if lookupErr == nil {
 				name = classifyName(entry, held, owner)
 			}
-			return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), lookupErr, s.refuseResumedName(ctx, key, slot, name))
+			return Role{}, false, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), lookupErr, s.refuseResumedName(ctx, key, slot, name))
 		}
-		return Role{}, err
+		return Role{}, false, err
 	}
 	// Another retry may have committed the name after our slot snapshot.
 	// Verify its durable admission before treating that commit as foreign.
 	if claim.ExpiresAt.IsZero() && plan.Claim.Token != claim.Token {
 		current, found, err := s.cfg.Slots.Get(ctx, key)
 		if err != nil {
-			return Role{}, err
+			return Role{}, false, err
 		}
 		if found && current.Value.Creation.ID == plan.ID {
 			plan = current.Value.Creation
@@ -207,7 +212,7 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	}
 	if claim.ExpiresAt.IsZero() && (plan.Claim.Token == "" || claim.Token != plan.Claim.Token) {
 		// Committed under our owner but a token this plan never admitted.
-		return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), s.refuseResumedName(ctx, key, slot, nameCommittedByPlan))
+		return Role{}, false, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), s.refuseResumedName(ctx, key, slot, nameCommittedByPlan))
 	}
 	admitted, _, err := s.cfg.Slots.Update(ctx, key, func(current Slot, found bool) (Slot, bool, error) {
 		if !found {
@@ -231,21 +236,21 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	})
 	// A failed admission can itself have committed; keep the intent and claim.
 	if err != nil {
-		return Role{}, err
+		return Role{}, false, err
 	}
 	role := Role{CreationID: plan.ID, PlayerID: plan.PlayerID, AccountID: slot.Value.AccountID, ServerID: slot.Value.ServerID, Name: plan.Name, CreatedAtUnix: plan.CreatedAtUnix}
 	stored, created, err := s.cfg.Roles.Create(ctx, role.PlayerID, role)
 	if err != nil {
-		return Role{}, err
+		return Role{}, false, err
 	}
 	if !created {
 		var found bool
 		stored, found, err = s.cfg.Roles.Get(ctx, role.PlayerID)
 		if err != nil {
-			return Role{}, err
+			return Role{}, false, err
 		}
 		if !found {
-			return Role{}, fmt.Errorf("%w: role disappeared during creation recovery", ErrConflict)
+			return Role{}, false, fmt.Errorf("%w: role disappeared during creation recovery", ErrConflict)
 		}
 	}
 	if stored.Value.CreationID != plan.ID || stored.Value.AccountID != role.AccountID || stored.Value.ServerID != role.ServerID || stored.Value.Name != role.Name {
@@ -253,13 +258,13 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 		// Cancel is token-fenced; slot removal is fenced by the creation identity.
 		_, releaseErr := s.releaseCreationSlot(ctx, key, admitted, true)
 		cleanup := errors.Join(s.compensated(s.cfg.Names.Cancel(ctx, claim)), s.compensated(releaseErr))
-		return Role{}, errors.Join(fmt.Errorf("%w: player id %d is already in use", ErrConflict, role.PlayerID), cleanup)
+		return Role{}, false, errors.Join(fmt.Errorf("%w: player id %d is already in use", ErrConflict, role.PlayerID), cleanup)
 	}
 	role = stored.Value.clone()
 	if _, err = s.cfg.Names.Commit(ctx, claim); err != nil {
-		return Role{}, err
+		return Role{}, false, err
 	}
-	_, _, err = s.cfg.Slots.Update(ctx, key, func(current Slot, found bool) (Slot, bool, error) {
+	_, published, err := s.cfg.Slots.Update(ctx, key, func(current Slot, found bool) (Slot, bool, error) {
 		if !found || current.Creation.ID != plan.ID {
 			return current, false, fmt.Errorf("%w: slot %s vanished during create or changed identity", ErrConflict, key)
 		}
@@ -275,14 +280,16 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	if err != nil {
 		actual, found, readErr := s.cfg.Slots.Get(ctx, key)
 		if readErr != nil {
-			return role, errors.Join(err, fmt.Errorf("account: slot outcome unknown: %w", readErr))
+			return role, false, errors.Join(err, fmt.Errorf("account: slot outcome unknown: %w", readErr))
 		}
 		if !found || actual.Value.Creation.ID != plan.ID || actual.Value.PlayerID != role.PlayerID {
-			return role, err
+			return role, false, err
 		}
+		// 发布那一步报了错，而 slot 已经指向这个角色：按这一次发布的报（见 createRole 的 published）。
+		published = true
 	}
 	s.report.Accepted("create_role")
-	return role.clone(), nil
+	return role.clone(), published, nil
 }
 
 // refuseResumedName is the table's answer once a same-name resume was

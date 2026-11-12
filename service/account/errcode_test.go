@@ -21,7 +21,7 @@ import (
 const (
 	segmentFirst     = 560101
 	segmentLast      = 560199
-	segmentAllocated = 19
+	segmentAllocated = 20
 )
 
 // internalReason is what errcode.ClientError returns for anything it cannot
@@ -52,6 +52,8 @@ var codedSentinels = map[int32]error{
 	// Role transfer (transfer.go).
 	CodeTransferStale:      ErrTransferStale,
 	CodeTransferInProgress: ErrTransferInProgress,
+	// Entering a server with a ticket (enter.go).
+	CodeRoleNameRequired: ErrRoleNameRequired,
 }
 
 // Every sentinel this package returns must carry its own code.

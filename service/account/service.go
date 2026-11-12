@@ -212,45 +212,53 @@ func (s *Service) Login(ctx context.Context, identity Identity) (Account, error)
 // The slot persists its plan before other writes. Unknown results retain the
 // plan for retry; a completed slot still refuses a second role.
 func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int32, name string) (Role, error) {
+	role, _, err := s.admitAndCreateRole(ctx, accountID, serverID, name)
+	return role, err
+}
+
+// admitAndCreateRole 是建角的唯一入口：CreateRole 与 EnterServer（握手时按需新建）都经它，检查与建角计划是同一套。
+// published 的含义见 createRole。
+func (s *Service) admitAndCreateRole(ctx context.Context, accountID string, serverID int32, name string) (Role, bool, error) {
 	if strings.TrimSpace(accountID) == "" {
-		return Role{}, fmt.Errorf("%w: account id is empty", ErrAccountMissing)
+		return Role{}, false, fmt.Errorf("%w: account id is empty", ErrAccountMissing)
 	}
 	if err := s.cfg.NameRules.Validate(name); err != nil {
-		return Role{}, fmt.Errorf("%w: %s", ErrNameInvalid, err)
+		return Role{}, false, fmt.Errorf("%w: %s", ErrNameInvalid, err)
 	}
 	account, found, err := s.cfg.Accounts.Get(ctx, accountID)
 	if err != nil {
-		return Role{}, err
+		return Role{}, false, err
 	}
 	if !found {
-		return Role{}, fmt.Errorf("%w: %s", ErrAccountMissing, accountID)
+		return Role{}, false, fmt.Errorf("%w: %s", ErrAccountMissing, accountID)
 	}
 	if account.Value.Banned {
-		return Role{}, fmt.Errorf("%w: account is banned", ErrIdentityDenied)
+		return Role{}, false, fmt.Errorf("%w: account is banned", ErrIdentityDenied)
 	}
 	server, found, err := s.cfg.Servers.Get(ctx, serverID)
 	if err != nil {
-		return Role{}, err
+		return Role{}, false, err
 	}
 	if !found {
-		return Role{}, fmt.Errorf("%w: server %d is unknown", ErrServerInvalid, serverID)
+		return Role{}, false, fmt.Errorf("%w: server %d is unknown", ErrServerInvalid, serverID)
 	}
 	if into := server.Value.MergedInto; into != 0 {
 		// 已并入的服不再建角（与状态无关：并入以 MergedInto 为准）；新角色建在承载服上。
 		s.report.Refused("create_role", "server_merged")
-		return Role{}, fmt.Errorf("%w: server %d is merged into %d; create the role there", ErrServerClosed, serverID, into)
+		return Role{}, false, fmt.Errorf("%w: server %d is merged into %d; create the role there", ErrServerClosed, serverID, into)
 	}
 	if !server.Value.Status.acceptsNewRoles() {
 		s.report.Refused("create_role", "server_closed")
-		return Role{}, fmt.Errorf("%w: server %d is %s", ErrServerClosed, serverID, server.Value.Status)
+		return Role{}, false, fmt.Errorf("%w: server %d is %s", ErrServerClosed, serverID, server.Value.Status)
 	}
 
-	role, err := s.createRole(ctx, accountID, serverID, strings.TrimSpace(name))
+	role, published, err := s.createRole(ctx, accountID, serverID, strings.TrimSpace(name))
 	if err != nil {
 		// 结果未知时 createRole 连同错误交回角色（恢复身份），原样转交。
-		return role, err
+		return role, false, err
 	}
-	return s.withServing(ctx, role)
+	role, err = s.withServing(ctx, role)
+	return role, published, err
 }
 
 func sameVerifiedIdentity(account Account, identity Verified) bool {

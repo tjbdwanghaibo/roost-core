@@ -83,6 +83,18 @@ type Accounts interface {
 	// 没有“列出账号的全部角色 / 全部区服”：存储是键值的，没有扫描；区服清单由登录入口的配置给出。
 	RoleOnServer(ctx context.Context, accountID string, serverID int32) (role Role, err error)
 
+	// 进服（enter.go）：登录入口选定一个服之后签一张进服票据，握手的认证器凭票据解析角色、没有就新建。
+	// 与 CreateRole / SelectRole / ValidateSession 那条“入口自己选角”的路并存。
+
+	// IssueEnterTicket 给 accountID 签一张进 serverID 的票据（只绑定账号、服与过期时刻）。可信调用方
+	// 提供 accountID，信任模型同 SelectRole。只读；账号不存在、被封、服没登记时拒绝。
+	IssueEnterTicket(ctx context.Context, accountID string, serverID int32) (ticket EnterTicket, err error)
+
+	// EnterServer 凭进服票据返回账号在那个服上的角色；没有就用 name 走 CreateRole 的同一条路径新建
+	// （name 为空答 ErrRoleNameRequired），并记一次登录。它会写。调用方是握手的认证器。
+	// 票据无效一律 ErrSessionInvalid。同一张票据重放或并发只会有一个角色。
+	EnterServer(ctx context.Context, ticket string, name string) (entry ServerEntry, err error)
+
 	// 单个角色换服（transfer.go）。四个接口都在总线上：发起与提交的是源服的 game 进程（它知道自己什么
 	// 时候停写、卸载完），冷准入时任何 game 进程都要读绑定。它们改的是一个角色自己的绑定，不是
 	// UpsertServer / MergeServer 那样改变所有玩家能登录到哪里的控制面写；调用方可信的前提与本接口其余

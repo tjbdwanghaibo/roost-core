@@ -45,6 +45,8 @@ const (
 	MethodGetServer          = "account.GetServer"
 	MethodListServers        = "account.ListServers"
 	MethodRoleOnServer       = "account.RoleOnServer"
+	MethodIssueEnterTicket   = "account.IssueEnterTicket"
+	MethodEnterServer        = "account.EnterServer"
 	MethodRoleBinding        = "account.RoleBinding"
 	MethodBeginRoleTransfer  = "account.BeginRoleTransfer"
 	MethodCommitRoleTransfer = "account.CommitRoleTransfer"
@@ -65,6 +67,8 @@ var Methods = []string{
 	MethodGetServer,
 	MethodListServers,
 	MethodRoleOnServer,
+	MethodIssueEnterTicket,
+	MethodEnterServer,
 	MethodRoleBinding,
 	MethodBeginRoleTransfer,
 	MethodCommitRoleTransfer,
@@ -249,6 +253,40 @@ type rpcRoleOnServerResponse struct {
 	Role Role `json:"role"`
 }
 
+// rpcIssueEnterTicketRequest is the IssueEnterTicket request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcIssueEnterTicketRequest struct {
+	AccountID string `json:"account_id"`
+	ServerID  int32  `json:"server_id"`
+}
+
+// rpcIssueEnterTicketResponse is the IssueEnterTicket response on the wire.
+type rpcIssueEnterTicketResponse struct {
+	rpcStatus
+	Ticket EnterTicket `json:"ticket"`
+}
+
+// rpcEnterServerRequest is the EnterServer request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcEnterServerRequest struct {
+	Ticket string `json:"ticket"`
+	Name   string `json:"name"`
+}
+
+// rpcEnterServerResponse is the EnterServer response on the wire.
+type rpcEnterServerResponse struct {
+	rpcStatus
+	Entry ServerEntry `json:"entry"`
+}
+
 // rpcRoleBindingRequest is the RoleBinding request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -404,6 +442,22 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			role, err := service.RoleOnServer(ctx.Context(), wire.AccountID, wire.ServerID)
 			return rpcRoleOnServerResponse{rpcStatus: statusOf(err), Role: role}, nil
+		},
+		MethodIssueEnterTicket: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcIssueEnterTicketRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcIssueEnterTicketResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			ticket, err := service.IssueEnterTicket(ctx.Context(), wire.AccountID, wire.ServerID)
+			return rpcIssueEnterTicketResponse{rpcStatus: statusOf(err), Ticket: ticket}, nil
+		},
+		MethodEnterServer: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcEnterServerRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcEnterServerResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			entry, err := service.EnterServer(ctx.Context(), wire.Ticket, wire.Name)
+			return rpcEnterServerResponse{rpcStatus: statusOf(err), Entry: entry}, nil
 		},
 		MethodRoleBinding: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcRoleBindingRequest
@@ -610,6 +664,31 @@ func (c *BusClient) RoleOnServer(ctx context.Context, accountID string, serverID
 	return resp.Role, err
 }
 
+// IssueEnterTicket 给 accountID 签一张进 serverID 的票据（只绑定账号、服与过期时刻）。可信调用方
+// 提供 accountID，信任模型同 SelectRole。只读；账号不存在、被封、服没登记时拒绝。
+// IssueEnterTicket implements Accounts.
+func (c *BusClient) IssueEnterTicket(ctx context.Context, accountID string, serverID int32) (EnterTicket, error) {
+	var resp rpcIssueEnterTicketResponse
+	err := c.call(ctx, MethodIssueEnterTicket, rpcIssueEnterTicketRequest{
+		AccountID: accountID,
+		ServerID:  serverID,
+	}, &resp)
+	return resp.Ticket, err
+}
+
+// EnterServer 凭进服票据返回账号在那个服上的角色；没有就用 name 走 CreateRole 的同一条路径新建
+// （name 为空答 ErrRoleNameRequired），并记一次登录。它会写。调用方是握手的认证器。
+// 票据无效一律 ErrSessionInvalid。同一张票据重放或并发只会有一个角色。
+// EnterServer implements Accounts.
+func (c *BusClient) EnterServer(ctx context.Context, ticket string, name string) (ServerEntry, error) {
+	var resp rpcEnterServerResponse
+	err := c.call(ctx, MethodEnterServer, rpcEnterServerRequest{
+		Ticket: ticket,
+		Name:   name,
+	}, &resp)
+	return resp.Entry, err
+}
+
 // RoleBinding returns where a role is bound right now: its server, the
 // server that serves it, the bind epoch, the transfer seq, and the
 // transfer in flight or last settled. Read-only.
@@ -728,6 +807,14 @@ func (c capability) ListServers(ctx context.Context) ([]GameServer, error) {
 
 func (c capability) RoleOnServer(ctx context.Context, accountID string, serverID int32) (Role, error) {
 	return c.inner.RoleOnServer(ctx, accountID, serverID)
+}
+
+func (c capability) IssueEnterTicket(ctx context.Context, accountID string, serverID int32) (EnterTicket, error) {
+	return c.inner.IssueEnterTicket(ctx, accountID, serverID)
+}
+
+func (c capability) EnterServer(ctx context.Context, ticket string, name string) (ServerEntry, error) {
+	return c.inner.EnterServer(ctx, ticket, name)
 }
 
 func (c capability) RoleBinding(ctx context.Context, playerID int64) (RoleBinding, error) {

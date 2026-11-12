@@ -93,6 +93,9 @@ const (
 	// 要调用方先重读绑定（RoleBinding）再决定。
 	CodeTransferStale      int32 = 560118
 	CodeTransferInProgress int32 = 560119
+	// CodeRoleNameRequired 属于凭票进服（enter.go）：账号在那个服上没有角色、需要新建，而调用方没有给名字。
+	// 与 CodeNameInvalid 分开：那个是“给的名字不合规则”，这个是“这一步需要一个名字”。
+	CodeRoleNameRequired int32 = 560120
 )
 
 var (
@@ -136,6 +139,8 @@ var (
 	ErrTransferStale = errcode.Define(CodeTransferStale, "account: role binding or transfer id is stale", "")
 	// ErrTransferInProgress：这个角色正有另一次换服在途（另一个 ID，或同一个 ID 但目标不同）。
 	ErrTransferInProgress = errcode.Define(CodeTransferInProgress, "account: another role transfer is in progress", "")
+	// ErrRoleNameRequired：EnterServer 要为账号在这个服上新建角色，而调用方没有给名字。
+	ErrRoleNameRequired = errcode.Define(CodeRoleNameRequired, "account: a role name is required to create the role", "")
 )
 
 // Error maps an error to the code and reason a client sees.
@@ -477,6 +482,12 @@ const RoleCreatedAtClaim = "role_created_at"
 // 没换过服的角色是 "0"。game 侧拿它与自己记下的绑定代数比较：claim 是认证那一刻的快照，代数落后说明
 // 这个会话是换服之前签发的。
 const BindEpochClaim = "bind_epoch"
+
+// NewRoleClaim 是认证器在“这次握手新建了角色”（EnterServer 的 ServerEntry.Created）时记进 Principal.Claims 的键，
+// 值是 "1"；不是新建的握手不写这个键。它只供业务参考（日志、新号引导的提示）：建角的应答丢失后重试时，
+// 新建发生在上一次调用里，这一次不带它。首次发放这类只能做一次的事以游戏服自己的持久事实为准
+// （进入游戏时的首次初始化），不要读这个键。
+const NewRoleClaim = "new_role"
 
 // TransferClaim 是认证器在角色换服在途（Role.Transfer 非空）时记进 Principal.Claims 的键，值由
 // TransferClaimValue 给出、ParseTransferClaim 读回；没有换服时不写这个键。认证器只负责记下，拒绝由登录
