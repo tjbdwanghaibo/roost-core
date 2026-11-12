@@ -1,0 +1,433 @@
+// Package matchmaking 保存本服的匹配策略和锁外 RPC 编排；可变业务事实都在 Player / Team DAO 中。
+package matchmaking
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"time"
+
+	"{{MODULE}}/game/matchroom"
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	room "{{MODULE}}/game/room"
+	sender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"github.com/vmihailenco/msgpack/v5"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+)
+
+const Capability app.ModName = "matchmaking.runtime"
+
+type roomOpener interface {
+	Open(context.Context, string, []int64) (int64, error)
+}
+type Runtime struct {
+	client   nest.Client
+	match    svcmatch.Matchmaker
+	rooms    roomOpener
+	sid      int32
+	resident func(int64) bool
+}
+
+// party 是 match 的一个主体：一张票代表完整队伍。GroupSize=2 表示两支同人数队伍，不是两名玩家。
+// 单排也是一人队伍。按人数与 sid 分池，因此名单不会被拆队、也不会在错误的进程开房。
+type party struct {
+	Key     string
+	Leader  int64
+	TeamID  int64
+	Members []int64
+	SID     int32
+}
+
+func queue(sid int32, size int) svcmatch.Queue {
+	return svcmatch.Queue{Mode: "module-duel", GroupSize: 2, Partition: fmt.Sprintf("sid-%d-size-%d", sid, size)}
+}
+func subject(s player.MatchSnapshot) (svcmatch.Subject, error) {
+	p := party{Key: s.Key, Leader: s.Leader, TeamID: s.TeamID, Members: s.Members, SID: s.SID}
+	raw, err := msgpack.Marshal(p)
+	if err != nil {
+		return svcmatch.Subject{}, err
+	}
+	kind, id := svcmatch.SubjectKind("player"), s.Leader
+	if s.TeamID != 0 {
+		kind, id = "team", s.TeamID
+	}
+	return svcmatch.Subject{Kind: kind, ID: id, Payload: raw}, nil
+}
+func decode(value svcmatch.Subject) (party, error) {
+	var p party
+	if err := msgpack.Unmarshal(value.Payload, &p); err != nil {
+		return p, err
+	}
+	if p.Key == "" || p.Leader <= 0 || p.SID <= 0 || len(p.Members) == 0 || len(p.Members) > 8 || !slices.IsSorted(p.Members) || !slices.Contains(p.Members, p.Leader) {
+		return p, apperrors.ErrMatchmakingInvalid
+	}
+	for i, id := range p.Members {
+		if id <= 0 || (i > 0 && p.Members[i-1] == id) {
+			return p, apperrors.ErrMatchmakingInvalid
+		}
+	}
+	if p.TeamID == 0 {
+		if value.Kind != "player" || value.ID != p.Leader || len(p.Members) != 1 {
+			return p, apperrors.ErrMatchmakingInvalid
+		}
+	} else if value.Kind != "team" || value.ID != p.TeamID {
+		return p, apperrors.ErrMatchmakingInvalid
+	}
+	return p, nil
+}
+func playerID(unique int64) (int64, error) {
+	if unique <= 0 {
+		return 0, apperrors.ErrMatchmakingInvalid
+	}
+	return entity.BuildEntityID(unique, player.EntityKindPlayer)
+}
+func playerIDs(unique []int64) ([]int64, error) {
+	ids := make([]int64, len(unique))
+	for i, id := range unique {
+		full, err := playerID(id)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = full
+	}
+	return ids, nil
+}
+func FromRegistry(registry *app.Registry) (*Runtime, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("matchmaking: registry required")
+	}
+	r, ok := app.Lookup[*Runtime](registry, Capability)
+	if !ok || r == nil {
+		return nil, fmt.Errorf("matchmaking: runtime unavailable")
+	}
+	return r, nil
+}
+func buildRuntime(registry *app.Registry) (*Runtime, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("matchmaking: registry required")
+	}
+	client, ok := app.Lookup[nest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("matchmaking: nest unavailable")
+	}
+	match, ok := app.Lookup[svcmatch.Matchmaker](registry, svcmatch.CapabilityName)
+	if !ok || match == nil {
+		return nil, fmt.Errorf("matchmaking: match client unavailable")
+	}
+	access, ok := app.Lookup[*entity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil {
+		return nil, fmt.Errorf("matchmaking: entity runtime unavailable")
+	}
+	rooms, err := matchroom.FromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return nil, err
+	}
+	if identity.Sid <= 0 {
+		return nil, fmt.Errorf("matchmaking: positive sid required")
+	}
+	return &Runtime{client: client, match: match, rooms: rooms, sid: identity.Sid, resident: func(id int64) bool { full, err := playerID(id); return err == nil && access.Manager().Get(full) != nil }}, nil
+}
+
+// Start 由 moduleService 自动装配。一个有界循环，无每票 goroutine；停机先取消 I/O，再等待循环退出。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	r, err := buildRuntime(registry)
+	if err != nil {
+		return nil, err
+	}
+	if err := registry.Register(Capability, r); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			stepCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+			err := r.Step(stepCtx)
+			stop()
+			if err != nil && ctx.Err() == nil {
+				slog.Warn("matchmaking pass failed", "sid", r.sid, "err", err)
+			}
+		}
+	}()
+	return func(stopCtx context.Context) error {
+		cancel()
+		select {
+		case <-done:
+			return nil
+		case <-stopCtx.Done():
+			return stopCtx.Err()
+		}
+	}, nil
+}
+func (r *Runtime) State(ctx context.Context, id int64) (player.MatchSnapshot, error) {
+	full, err := playerID(id)
+	if err != nil {
+		return player.MatchSnapshot{}, err
+	}
+	return sender.NewMatchStateSender(r.client).Sync_MatchState(ctx, full)
+}
+func (r *Runtime) update(ctx context.Context, s player.MatchSnapshot, u player.MatchUpdate) (player.MatchSnapshot, error) {
+	ids, err := playerIDs(s.Members)
+	if err != nil {
+		return player.MatchSnapshot{}, err
+	}
+	u.Key = s.Key
+	return sender.NewMatchUpdateSender(r.client).MultiGroupSync_MatchUpdate(ctx, ids, u)
+}
+func (r *Runtime) release(ctx context.Context, s player.MatchSnapshot) error {
+	if s.TeamID == 0 || !s.Terminal() {
+		return nil
+	}
+	ids, err := playerIDs(s.Members)
+	if err != nil {
+		return err
+	}
+	return sender.NewMatchReleaseSender(r.client).MultiGroupSync_MatchRelease(ctx, s.TeamID, ids, s.Key)
+}
+func (r *Runtime) Enqueue(ctx context.Context, id, sequence int64, asTeam bool) (player.MatchSnapshot, error) {
+	full, err := playerID(id)
+	if err != nil {
+		return player.MatchSnapshot{}, err
+	}
+	var s player.MatchSnapshot
+	if asTeam {
+		teamID, err := sender.NewPlayerTeamSender(r.client).Sync_PlayerTeam(ctx, full)
+		if err != nil {
+			return s, err
+		}
+		if teamID == 0 {
+			return s, apperrors.ErrTeamMissing
+		}
+		info, err := sender.NewTeamInfoSender(r.client).MultiSync_TeamInfo(ctx, teamID, full)
+		if err != nil {
+			return s, err
+		}
+		if info.Leader != id {
+			return s, apperrors.ErrTeamNotLeader
+		}
+		for _, member := range info.Members {
+			if info.SIDs[member] != r.sid || !r.resident(member) {
+				return s, apperrors.ErrMatchmakingBusy
+			}
+		}
+		ids, err := playerIDs(info.Members)
+		if err != nil {
+			return s, err
+		}
+		s, err = sender.NewMatchTeamBeginSender(r.client).MultiGroupSync_MatchTeamBegin(ctx, teamID, ids, id, sequence, r.sid)
+		if err != nil {
+			return s, err
+		}
+	} else {
+		s, err = sender.NewMatchBeginSender(r.client).Sync_MatchBegin(ctx, full, sequence, r.sid)
+		if err != nil {
+			return s, err
+		}
+	}
+	_, resumeErr := r.resume(ctx, s)
+	current, readErr := r.State(ctx, id)
+	if readErr != nil {
+		return s, readErr
+	}
+	return current, resumeErr
+}
+func (r *Runtime) Status(ctx context.Context, id int64) (player.MatchSnapshot, error) {
+	s, err := r.State(ctx, id)
+	if err != nil {
+		return s, err
+	}
+	if s.Key == "" {
+		return s, nil
+	}
+	_, resumeErr := r.resume(ctx, s)
+	current, readErr := r.State(ctx, id)
+	if readErr != nil {
+		return s, readErr
+	}
+	return current, resumeErr
+}
+func (r *Runtime) Cancel(ctx context.Context, id int64, key string) (player.MatchSnapshot, error) {
+	s, err := r.State(ctx, id)
+	if err != nil {
+		return s, err
+	}
+	if key == "" || s.Key != key {
+		return s, apperrors.ErrMatchmakingStale
+	}
+	if !s.Terminal() {
+		s, err = r.update(ctx, s, player.MatchUpdate{Action: "cancel"})
+		if err != nil {
+			return s, err
+		}
+	}
+	_, resumeErr := r.resume(ctx, s)
+	current, readErr := r.State(ctx, id)
+	if readErr != nil {
+		return s, readErr
+	}
+	return current, resumeErr
+}
+func (r *Runtime) Clear(ctx context.Context, id int64, key string) (player.MatchSnapshot, error) {
+	s, err := r.State(ctx, id)
+	if err != nil {
+		return s, err
+	}
+	if key == "" || key != s.Key || !s.Terminal() {
+		return s, apperrors.ErrMatchmakingStale
+	}
+	if s.Phase == player.MatchMatched {
+		full, err := room.EntityID(s.RoomID)
+		if err != nil {
+			return s, err
+		}
+		closed, err := sender.NewMatchRoomClosedSender(r.client).Sync_MatchRoomClosed(ctx, full, s.MatchID)
+		if err != nil {
+			return s, err
+		}
+		if !closed {
+			return s, apperrors.ErrMatchmakingBusy
+		}
+	}
+	if err := r.release(ctx, s); err != nil {
+		return s, err
+	}
+	full, _ := playerID(id)
+	if err := sender.NewMatchClearSender(r.client).Sync_MatchClear(ctx, full, key); err != nil {
+		return s, err
+	}
+	return r.State(ctx, id)
+}
+
+// resume 不把未知 RPC 当失败撤销。未绑定的票不能成为候选；超过意图期限可安全收尾。
+// 已绑定票若丢失服务历史，则保留意图并返回 unknown，需要核对，不能当取消成功。
+func (r *Runtime) resume(ctx context.Context, s player.MatchSnapshot) (player.MatchSnapshot, error) {
+	if s.SID != r.sid {
+		return s, apperrors.ErrMatchmakingInvalid
+	}
+	if s.Terminal() {
+		return s, r.release(ctx, s)
+	}
+	value, err := subject(s)
+	if err != nil {
+		return s, err
+	}
+	q := queue(s.SID, len(s.Members))
+	if s.TicketID == "" && clock.UnixMilli() >= s.Deadline {
+		s, err = r.update(ctx, s, player.MatchUpdate{Action: "abandon", Now: clock.UnixMilli()})
+		if err != nil {
+			return s, err
+		}
+		return s, r.release(ctx, s)
+	}
+	if s.Phase == player.MatchPreparing {
+		claimed, err := r.update(ctx, s, player.MatchUpdate{Action: "dispatch"})
+		if err != nil {
+			return s, err
+		}
+		s = claimed
+		ticket, err := r.match.Enqueue(ctx, q, value, s.Key)
+		if err != nil {
+			return s, err
+		}
+		s, err = r.update(ctx, s, player.MatchUpdate{Action: "bind", TicketID: ticket.ID})
+		if err != nil {
+			return s, err
+		}
+	}
+	if s.TicketID == "" {
+		// 丢失 Enqueue 回包只查询候选，不再次发送可能越过保留期的 Enqueue。
+		candidates, err := r.match.Candidates(ctx, q, 64)
+		if err != nil {
+			return s, err
+		}
+		for _, t := range candidates {
+			if t.Subject.Key() == value.Key() && t.RequestID == s.Key {
+				s, err = r.update(ctx, s, player.MatchUpdate{Action: "bind", TicketID: t.ID})
+				if err != nil {
+					return s, err
+				}
+				break
+			}
+		}
+		if s.TicketID == "" {
+			return s, nil
+		}
+	}
+	var ticket svcmatch.Ticket
+	if s.Phase == player.MatchCancelling {
+		ticket, err = r.match.Cancel(ctx, q, s.TicketID, value)
+	} else {
+		var found bool
+		ticket, found, err = r.match.Ticket(ctx, q, s.TicketID, value)
+		if err == nil && !found {
+			return s, apperrors.ErrMatchmakingUnknown
+		}
+	}
+	if errors.Is(err, svcmatch.ErrTicketMatched) {
+		var found bool
+		ticket, found, err = r.match.Ticket(ctx, q, s.TicketID, value)
+		if err == nil && !found {
+			return s, apperrors.ErrMatchmakingUnknown
+		}
+	}
+	if err != nil {
+		return s, err
+	}
+	switch ticket.State {
+	case svcmatch.TicketMatched:
+		result, found, err := r.match.Match(ctx, q, ticket.MatchID)
+		if err != nil {
+			return s, err
+		}
+		if !found {
+			return s, apperrors.ErrMatchmakingUnknown
+		}
+		if err := r.accept(ctx, result); err != nil {
+			return s, err
+		}
+		return r.State(ctx, s.Leader)
+	case svcmatch.TicketCancelled, svcmatch.TicketExpired:
+		action := "cancelled"
+		if ticket.State == svcmatch.TicketExpired {
+			action = "expired"
+		}
+		s, err = r.update(ctx, s, player.MatchUpdate{Action: action})
+		if err != nil {
+			return s, err
+		}
+		return s, r.release(ctx, s)
+	default:
+		return s, nil
+	}
+}
+
+// NewRuntime 供显式装配和离线验收注入依赖；App 的正常入口仍为 Start。
+func NewRuntime(client nest.Client, match svcmatch.Matchmaker, rooms interface {
+	Open(context.Context, string, []int64) (int64, error)
+}, sid int32, resident func(int64) bool) (*Runtime, error) {
+	if client == nil || match == nil || rooms == nil || sid <= 0 || resident == nil {
+		return nil, fmt.Errorf("matchmaking: complete dependencies required")
+	}
+	return &Runtime{client: client, match: match, rooms: rooms, sid: sid, resident: resident}, nil
+}

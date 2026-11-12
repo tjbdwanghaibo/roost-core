@@ -1,0 +1,154 @@
+//go:build integration
+
+package purchase
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+// 显式开启 integration 才运行；只删本用例唯一前缀下的键，不操作共享 Redis 生命周期。
+func realPurchaseQueue(t *testing.T) (*RedisQueue, fredis.IRedis) {
+	t.Helper()
+	addr := os.Getenv("ROOST_PURCHASE_REDIS_ADDR")
+	if addr == "" {
+		t.Fatal("ROOST_PURCHASE_REDIS_ADDR is required for integration tests")
+	}
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := fmt.Sprintf("purchase-it:%d:%d", os.Getpid(), time.Now().UnixNano())
+	q, err := NewRedisQueue(client, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, err := client.Del(context.Background(), q.key(98801))
+		if err != nil {
+			t.Error(err)
+		}
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return q, client
+}
+func purchaseOrder(n int) svcplatform.Order {
+	return svcplatform.Order{OrderID: fmt.Sprintf("order-%d", n), PlayerID: 98801, ProductID: "coins_100", PayloadDigest: fmt.Sprintf("digest-%d", n), AmountMinor: 99, Currency: "USD"}
+}
+
+func TestPurchaseRedisBoundedDrainAndReplay(t *testing.T) {
+	q, client := realPurchaseQueue(t)
+	ctx := context.Background()
+	for n := 1; n <= 65; n++ {
+		got, err := q.Record(ctx, purchaseOrder(n))
+		if err != nil || got.Sequence != uint64(n) {
+			t.Fatalf("record %d: %+v %v", n, got, err)
+		}
+	}
+	first, err := q.Pending(ctx, 98801, 32)
+	if err != nil || len(first) != 32 {
+		t.Fatalf("batch=%d err=%v", len(first), err)
+	}
+	if err := q.Ack(ctx, first[1]); err == nil {
+		t.Fatal("out-of-order ack accepted")
+	}
+	modified := first[0]
+	modified.Reward.Count++
+	if err := q.Ack(ctx, modified); err == nil {
+		t.Fatal("changed reward acknowledged")
+	}
+	for n := 0; n < 3; n++ {
+		grants, err := q.Pending(ctx, 98801, 32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, grant := range grants {
+			if err := q.Ack(ctx, grant); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// 已确认旧批次可再次 Ack；不能影响后续订单。只有 platform 投递终结后才允许首次 Ack。
+	if err := q.Ack(ctx, first[0]); err != nil {
+		t.Fatal(err)
+	}
+	fields, err := client.HGetAll(ctx, q.key(98801))
+	if err != nil || len(fields) != 2 || fields["next"] != "65" || fields["acked"] != "65" {
+		t.Fatalf("after drain=%v err=%v", fields, err)
+	}
+	got, err := q.Record(ctx, purchaseOrder(66))
+	if err != nil || got.Sequence != 66 {
+		t.Fatalf("after cleanup: %+v %v", got, err)
+	}
+}
+
+func TestPurchaseRedisConcurrentCallbackUsesOneSequence(t *testing.T) {
+	q, client := realPurchaseQueue(t)
+	var wg sync.WaitGroup
+	grants := make(chan Grant, 16)
+	failures := make(chan error, 16)
+	for n := 0; n < 16; n++ {
+		wg.Go(func() {
+			got, err := q.Record(context.Background(), purchaseOrder(1))
+			if err != nil {
+				failures <- err
+				return
+			}
+			grants <- got
+		})
+	}
+	wg.Wait()
+	close(grants)
+	close(failures)
+	for err := range failures {
+		t.Error(err)
+	}
+	count := 0
+	for grant := range grants {
+		count++
+		if grant.Sequence != 1 || grant.Reward.Count != 100 {
+			t.Errorf("grant=%+v", grant)
+		}
+	}
+	fields, err := client.HGetAll(context.Background(), q.key(98801))
+	if count != 16 || err != nil || len(fields) != 3 || fields["next"] != "1" {
+		t.Fatalf("count=%d fields=%v err=%v", count, fields, err)
+	}
+}
+
+func TestPurchaseRedisRefusedWriteDoesNotAllocate(t *testing.T) {
+	q, client := realPurchaseQueue(t)
+	ctx := context.Background()
+	order := purchaseOrder(1)
+	order.AmountMinor = 1
+	if _, err := q.Record(ctx, order); err == nil {
+		t.Fatal("incorrect amount admitted")
+	}
+	fields, err := client.HGetAll(ctx, q.key(98801))
+	if err != nil || len(fields) != 0 {
+		t.Fatalf("refused order wrote: %v %v", fields, err)
+	}
+	if err := client.Set(ctx, q.key(98801), "wrong-type", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Record(ctx, purchaseOrder(1)); err == nil {
+		t.Fatal("wrong type accepted")
+	}
+	if _, err := client.Del(ctx, q.key(98801)); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := q.Record(ctx, purchaseOrder(1))
+	if err != nil || grant.Sequence != 1 {
+		t.Fatalf("failed write consumed sequence: %+v %v", grant, err)
+	}
+}

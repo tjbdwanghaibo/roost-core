@@ -1,0 +1,54 @@
+package player
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+)
+
+const ActivityDeadline int32 = {{ID:timer:ActivityDeadline}}
+
+func (c *{{TIMER_COMPONENT}}Component) registerActivityTimers(handlers *entitytimer.Handlers) {
+	handlers.Register(ActivityDeadline, c.onActivityDeadline)
+}
+
+func (c *{{TIMER_COMPONENT}}Component) onActivityDeadline(fire entitytimer.Fire) time.Duration {
+	owner := c.Owner()
+	state := owner.Dao().GetActivity()
+	if state.GetTimerID() != fire.ID {
+		return 0
+	}
+	// entitytimer 的回调没有 error 返回值；panic 由正式 Nest 回滚整笔事务，包含节点删除和业务修改。
+	// 不能吞错后返回 0，否则失败的初始化/结算会永久丢失唤醒。本边界有生成工程回滚用例。
+	if err := owner.ActivityComp().Host().Advance(fire.Now.UnixMilli()); err != nil {
+		panic(fmt.Errorf("activity timer: %w", err))
+	}
+	if err := owner.ActivityComp().Rearm(); err != nil {
+		panic(fmt.Errorf("activity timer: %w", err))
+	}
+	return 0
+}
+
+// SetActivityDeadline 是个人宿主的唤醒适配。共用组件计算期限，这里只管理同事务的定时节点。
+func (p *Player) SetActivityDeadline(due int64) error {
+	state := p.Dao().GetActivity()
+	timer := p.{{TIMER_COMPONENT}}Comp()
+	if due == state.GetNextDue() && (due == 0 || state.GetTimerID() != 0) {
+		return nil
+	}
+	state.SetNextDue(due)
+	if state.GetTimerID() != 0 {
+		timer.Remove{{TIMER_COMPONENT}}(state.GetTimerID())
+		state.SetTimerID(0)
+	}
+	if due == 0 {
+		return nil
+	}
+	id := timer.New{{TIMER_COMPONENT}}At(time.UnixMilli(due), ActivityDeadline, 0, 0, nil)
+	if id == 0 {
+		return fmt.Errorf("activity: failed to arm deadline")
+	}
+	state.SetTimerID(id)
+	return nil
+}

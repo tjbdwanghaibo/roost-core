@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # A second alliance service instance on this machine, against the same Mongo /
-# Redis / NATS (the demo's guild service; FEATURE-2026-11-04-alliance-service
+# Redis / NATS (the demo's alliance service; FEATURE-2026-11-04-alliance-service
 # §2.7 in roost-core).
 #   sh deploy/dev/run.sh start              # every service, alliance on its configured sid
 #   sh deploy/dev/second-alliance.sh start  # this one, afterwards
@@ -13,8 +13,8 @@
 # WAL directory serves one process).
 #
 # With two instances, founding spreads over both (Found is delivered through
-# the bus queue group) and each guild is owned by the instance that founded it;
-# every other guild call goes to its owner through the route registration.
+# the bus queue group) and each alliance is owned by the instance that founded it;
+# every other alliance call goes to its owner through the route registration.
 # Scaling this instance in again, on its own ops endpoint:
 #   1. alliance.stop_founding                 — it leaves Found's queue group;
 #   2. alliance.transfer {"count": N, "to_sid": <the other sid>} until it owns nothing;

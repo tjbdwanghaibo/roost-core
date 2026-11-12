@@ -1,0 +1,54 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+func TestWithTeamRehomeRejectsAPlayerInTeam(t *testing.T) {
+	f := newTeamFixture(t, func(engine *nest.NestMgr) {
+		registerTeamTestHandler(engine, handlerNameRehomePrepare, invokeRehomePrepare, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	f.create(t, 101)
+	err := sender.NewRehomePrepareSender(f.engine).Sync_RehomePrepare(context.Background(), f.playerID(101), "move-1", 1, 2, true)
+	if !errors.Is(err, apperrors.ErrTeamBlocked) {
+		t.Fatalf("team allowed rehome: %v", err)
+	}
+	var pending string
+	if err := f.engine.RunLocal(context.Background(), func() {
+		p := f.values[f.playerID(101)].(*player.Player)
+		p.GetMutex().Lock()
+		defer p.GetMutex().Unlock()
+		pending = p.Dao().GetRehome().GetPendingID()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if pending != "" {
+		t.Fatalf("rejected rehome wrote %q", pending)
+	}
+}
+func TestWithTeamRehomeRejectsJoiningDuringMove(t *testing.T) {
+	f := newTeamFixture(t, func(engine *nest.NestMgr) {
+		registerTeamTestHandler(engine, handlerNameRehomePrepare, invokeRehomePrepare, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	if err := sender.NewRehomePrepareSender(f.engine).Sync_RehomePrepare(context.Background(), f.playerID(102), "move-2", 1, 2, true); err != nil {
+		t.Fatal(err)
+	}
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1)
+	if !errors.Is(err, apperrors.ErrTeamBlocked) {
+		t.Fatalf("moving player joined: %v", err)
+	}
+	current, err := sender.NewPlayerTeamSender(f.engine).Sync_PlayerTeam(context.Background(), f.playerID(102))
+	if err != nil || current != 0 {
+		t.Fatalf("rejected join wrote %d: %v", current, err)
+	}
+}

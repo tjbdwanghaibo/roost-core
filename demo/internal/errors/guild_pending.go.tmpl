@@ -1,9 +1,0 @@
-package errors
-
-import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-
-// ErrGuildPending: the alliance service's answer did not arrive in time, so
-// the request may or may not have taken effect. Show "processing"; the same
-// request sent again (the same frame: the same request id) is answered from
-// the service's receipt, never applied twice.
-var ErrGuildPending = errcode.Define(100025, "guild_pending", "guild request is still being processed")

@@ -1,0 +1,42 @@
+package alliance_member
+
+import (
+	db "{{MODULE}}/db"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+const EntityKindAllianceMember entity.EntityKind = {{ID:entity:AllianceMember}}
+
+// IAllianceMemberEntity is the lock-safe business view used by Nest handlers.
+type IAllianceMemberEntity interface{ entity.IThreadSafeEntity }
+
+// AllianceMember is one player's alliance guard, owned by the alliance
+// service: its unique id is the player's. It is not preloaded (one per
+// player who ever joined): an instance loads it on the first request routed
+// to it, and the instance that creates it first owns it (the claim is atomic,
+// plan §2.5). It enforces "one player, one alliance" across alliances
+// that may be on different service instances (game/alliancerule, plan §2.5)
+// and is not a second roster — the alliance's Members is the authority: the
+// guard is a cache of the rosters that may be stale-occupied (a finishing
+// call was lost) and is healed by the next request that finds it held
+// (internal/rpc/alliance healGuard), never stale-empty.
+//
+// remote=managed, EntityCategoryRemote and service=alliance for the same
+// reasons as Alliance. snapshots=none: nothing reads a guard's Remote
+// snapshot — game servers mirror only the alliance and keep the player's
+// alliance on the Player (asking Membership at login when it shows none), and
+// the guard's owner loads it, hands it over (alliance.transfer, scale-in)
+// and answers alliance.guard and Membership from its DAO document and the
+// ownership record — so its commits write the guard
+// document and nothing else (no _remote_entity_snapshots document, no L2
+// entry, no broadcast).
+//
+//roost:entity id={{ID:entity:AllianceMember}} entityKind=EntityKindAllianceMember category=entity.EntityCategoryRemote remote=managed service=alliance snapshots=none
+type AllianceMember struct {
+	*entity.RemoteEntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	guard *AllianceGuardComponent `comp:"CompTypeAllianceGuard"`
+	dao   *db.AllianceMemberDao   `dao:"alliance_member"`
+}

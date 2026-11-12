@@ -1,0 +1,64 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+func shopClientRules(t *testing.T, f *shopFixture) *pb.ShopRulesPush {
+	t.Helper()
+	RegisterRulesReadNestHandlers()
+	all, err := sender.NewRulesReadSender(f.engine).Sync_RulesRead(context.Background(), f.player.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range all.Parts {
+		if part.MessageID == msgid.MsgShopRules {
+			got, err := pb.UnmarshalShopRulesPush(part.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return got
+		}
+	}
+	t.Fatal("missing shop rules")
+	return nil
+}
+func TestWithShopRulesExportsSortedVisibleGoods(t *testing.T) {
+	f := newShopFixture(t, 100)
+	got := shopClientRules(t, f)
+	if len(got.Goods) != 9 {
+		t.Fatalf("visible goods=%v", got.Goods)
+	}
+	previous := int64(0)
+	for _, row := range got.Goods {
+		if row.ID <= previous || row.ID == 4 {
+			t.Fatalf("unsorted or off goods=%v", got.Goods)
+		}
+		previous = row.ID
+	}
+	if row := got.Goods[1]; row.ID != 2 || row.Price != 30 || row.ItemID != 1002 || row.ItemCount != 5 || row.Limit != 1 || row.LimitCount != 3 {
+		t.Fatalf("shop rule=%v", row)
+	}
+}
+func TestWithShopRulesReadsNewTableAndKeepsOldSnapshot(t *testing.T) {
+	f := newShopFixture(t, 100)
+	old := shopClientRules(t, f)
+	changed := shopTestGoods()
+	row := changed[1]
+	row.Price = 17
+	changed[1] = row
+	shopTestLoadTables(t, changed)
+	fresh := shopClientRules(t, f)
+	if fresh.Goods[0].Price != 17 || old.Goods[0].Price != 10 {
+		t.Fatalf("rule hot reload: old=%v fresh=%v", old.Goods[0], fresh.Goods[0])
+	}
+	bought := f.mustBuy(t, "new-price", 1, 1)
+	if bought.Cost != 17 || bought.Balance != 83 {
+		t.Fatalf("purchase diverged from exported rules=%v", bought)
+	}
+}

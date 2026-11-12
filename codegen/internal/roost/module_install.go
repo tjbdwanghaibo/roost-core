@@ -61,10 +61,12 @@ type ModulePlanItem struct {
 	Component string   `json:"component,omitempty"`
 	Files     []string `json:"files"`
 	// Replaces 是 Files 里会替换掉的生成桩（仍是没改过的生成内容）。
-	Replaces []string         `json:"replaces,omitempty"`
-	Verify   ModuleVerify     `json:"verify"`
-	Runtime  *ModuleRuntime   `json:"runtime,omitempty"`
-	Timer    *ModuleTimerPlan `json:"timer,omitempty"`
+	Replaces []string                 `json:"replaces,omitempty"`
+	Verify   ModuleVerify             `json:"verify"`
+	Runtime  *ModuleRuntime           `json:"runtime,omitempty"`
+	Sagas    []ModuleSaga             `json:"sagas,omitempty"`
+	Services map[string]ModuleService `json:"services,omitempty"`
+	Timer    *ModuleTimerPlan         `json:"timer,omitempty"`
 	// Next 是清单里的安装后提示（ModuleSpec.Next），工程名字占位已经替换。只有这次要装的模块带着它：
 	// 已装的模块不再提示。安装器不执行它们。
 	Next []string `json:"next,omitempty"`
@@ -125,7 +127,16 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	if err != nil {
 		return ModulePlan{}, err
 	}
-	service, err := nestService(manifest, options.Service, "roost module add", "modules run their business in Nest transactions")
+	requestedService := options.Service
+	if requestedService == "" {
+		// 联盟等模块会增加 Nest 服务；后续 Player 模块仍默认装进既有的玩家接入服务。
+		requestedService = manifest.Access["player"].Service
+	}
+	service, err := nestService(manifest, requestedService, "roost module add", "modules run their business in Nest transactions")
+	if err != nil {
+		return ModulePlan{}, err
+	}
+	manifest, err = planModuleServices(root, manifest, service, order)
 	if err != nil {
 		return ModulePlan{}, err
 	}
@@ -136,6 +147,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	}
 	timerPlans := map[string]*ModuleTimerPlan{}
 	pending := map[string]bool{}
+	pendingSagas := map[string]string{}
 	newEntities := map[string]bool{}
 	for _, spec := range order {
 		if _, installed := manifest.Modules[spec.Name]; !installed {
@@ -191,6 +203,17 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		}
 		item.Status = moduleStatusInstall
 		item.Next = moduleNextHints(manifest, service, spec)
+		item.Sagas = spec.Sagas
+		item.Services = spec.Services
+		if err := checkModuleSagaConflicts(root, manifest, spec); err != nil {
+			return ModulePlan{}, err
+		}
+		for _, definition := range spec.Sagas {
+			if owner := pendingSagas[definition.Name]; owner != "" {
+				return ModulePlan{}, fmt.Errorf("modules %s and %s both own saga %s", owner, spec.Name, definition.Name)
+			}
+			pendingSagas[definition.Name] = spec.Name
+		}
 		// 自带实体的定义和 lifecycle 必须全新，不能把工程已有的实体据为己有。
 		for _, name := range spec.Entities {
 			for _, rel := range append(moduleEntityDefinitions(name), moduleEntityLifecycle(name)) {
@@ -327,7 +350,7 @@ func planModuleGlue(root string, manifest Manifest, catalog map[string]ModuleSpe
 func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error {
 	var problems []string
 	for _, feature := range spec.Needs.Features {
-		if !contains(manifest.Features, feature) && feature != "attribute" {
+		if !contains(manifest.Features, feature) && feature != "attribute" && !(feature == "saga" && len(spec.Sagas) > 0) {
 			problems = append(problems, fmt.Sprintf("feature %q is off: add it to features in roost.yaml and run roost project sync", feature))
 		}
 	}
@@ -341,13 +364,18 @@ func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error 
 		return err
 	}
 	for _, mod := range spec.Needs.Mods {
-		if !contains(resolved, mod) && !contains(manifest.SharedMods, mod) && !moduleCanAddMod(mod) {
+		if !moduleModPresent(resolved, mod) && !contains(manifest.SharedMods, mod) && !moduleCanAddMod(mod) {
 			problems = append(problems, fmt.Sprintf("service %s has no %s mod: roost add mod %s -service %s", modsService, mod, mod, modsService))
 		}
 	}
 	for _, used := range spec.Needs.Uses {
 		if !contains(manifest.Services[service].Uses, used) {
 			problems = append(problems, fmt.Sprintf("service %s does not use the %s framework service: declare services.%s.framework: %s and add %s to services.%s.uses in roost.yaml, then roost project sync (roost help services)", service, used, used, used, used, service))
+		}
+	}
+	for _, used := range spec.Needs.UsesRPCs {
+		if !contains(manifest.Services[service].UsesRpcs, used) {
+			problems = append(problems, fmt.Sprintf("service %s does not use RPC %s", service, used))
 		}
 	}
 	if len(problems) > 0 {
@@ -366,6 +394,12 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 		for _, mod := range moduleMissingMods(manifest, service, spec) {
 			commands = append(commands, "roost add mod "+mod+" -service "+modsService)
 		}
+	}
+	for _, saga := range spec.Sagas {
+		commands = append(commands, "install saga "+saga.Name+" definition and entity receipts in the module transaction")
+	}
+	for name := range spec.Services {
+		commands = append(commands, "install business service "+name+" in the module transaction")
 	}
 	if len(spec.State) > 0 && !newEntity {
 		if source, err := locateDaoStruct(root, spec.Entity+"Dao"); err == nil && source == nil {
@@ -393,7 +427,7 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 // web（业务 HTTP 监听）在此列：接线是固定的一行，roost add mod 写下的 web.* 配置缺省只绑回环地址，
 // 生产绑非回环要工程显式写 web.allow_public_addr，代办不会替工程把端点暴露出去。
 func moduleCanAddMod(name string) bool {
-	return name == "heartbeat" || name == "directory" || name == "web"
+	return name == "configdata" || name == "heartbeat" || name == "directory" || name == "remote_entity" || name == "remote_mirror" || name == "saga" || name == "web"
 }
 
 // moduleModsService 是清单的 needs.mods 所指的服务：模块的入口在哪个服务的进程里启动，Mod 就得在哪个服务上。
@@ -403,6 +437,10 @@ func moduleModsService(manifest Manifest, service string, spec ModuleSpec) (stri
 		return service, nil
 	}
 	return frameworkHostService(manifest, spec.Runtime.Framework)
+}
+
+func moduleModPresent(resolved []string, name string) bool {
+	return contains(resolved, name) || name == "remote_mirror" && contains(resolved, "remote_entity")
 }
 
 func moduleMissingMods(manifest Manifest, service string, spec ModuleSpec) []string {
@@ -416,7 +454,7 @@ func moduleMissingMods(manifest Manifest, service string, spec ModuleSpec) []str
 	}
 	var missing []string
 	for _, mod := range spec.Needs.Mods {
-		if moduleCanAddMod(mod) && !contains(resolved, mod) && !contains(manifest.SharedMods, mod) {
+		if moduleCanAddMod(mod) && !moduleModPresent(resolved, mod) && !contains(manifest.SharedMods, mod) {
 			missing = append(missing, mod)
 		}
 	}
@@ -482,6 +520,17 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 	if err != nil {
 		return ModulePlan{}, err
 	}
+	var serviceSpecs []ModuleSpec
+	for _, item := range plan.Modules {
+		if item.Status == moduleStatusInstall {
+			serviceSpecs = append(serviceSpecs, item.spec)
+		}
+	}
+	beforeServices := manifest
+	manifest, err = planModuleServices(root, manifest, plan.Service, serviceSpecs)
+	if err != nil {
+		return ModulePlan{}, err
+	}
 	// 2～3. 模块自己的写入。先把会动到的文件全部记下来，失败时原样恢复。
 	touched := []string{ManifestName}
 	for _, item := range plan.Modules {
@@ -493,6 +542,14 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 			return ModulePlan{}, fmt.Errorf("module %s: %w", item.Name, err)
 		}
 		touched = append(touched, paths...)
+		for service := range item.Services {
+			touched = append(touched, moduleServiceConfig(service), "configs/service/config."+service+".prod.example.yaml", kubernetesSecretExampleRel(service))
+		}
+		sagaPaths, err := moduleSagaTouchedFiles(root, item.spec, newEntities)
+		if err != nil {
+			return ModulePlan{}, err
+		}
+		touched = append(touched, sagaPaths...)
 		if item.Timer != nil {
 			touched = append(touched, newTimerNames(manifest.Project.Module, item.Timer.Entity, item.Timer.Spec).handlersFile())
 			// 模块可能只带回调、没有自己的 State；新增定时器仍会改主 DAO，必须独立备份。
@@ -542,7 +599,18 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 			}
 			record.TimerEntity = item.Timer.Entity
 		}
+		if err := writeModuleServiceConfigs(root, beforeServices, manifest, item.spec); err != nil {
+			return fail(err)
+		}
 		manifest.Modules[item.Name] = record
+	}
+	// 模块的实体与组件全部就位后补回执；多个 Saga 共用一个实体回执适配。
+	for _, item := range plan.Modules {
+		if item.Status == moduleStatusInstall {
+			if err := installModuleSagas(root, &manifest, item.spec); err != nil {
+				return fail(err)
+			}
+		}
 	}
 	// 联动文件在全部模块写完之后写：它们同时引用两边的包。归属记在拥有它的那个模块名下。
 	for _, glue := range plan.Glue {
@@ -582,7 +650,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || modulePlanHasTimers(plan) || modulePlanHasHostedRuntime(plan)}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || modulePlanHasTimers(plan) || modulePlanHasHostedRuntime(plan) || modulePlanHasServices(plan)}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true
@@ -624,7 +692,7 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 			return err
 		}
 		for _, mod := range missing {
-			if _, err := Add(root, AddOptions{Kind: "mod", Name: mod, Service: modsService, Warnings: warnings}); err != nil {
+			if err := addModuleMod(root, modsService, mod, warnings); err != nil {
 				return fmt.Errorf("roost add mod %s -service %s: %w", mod, modsService, err)
 			}
 		}
@@ -766,7 +834,7 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 		record.DAOs = moduleDAONames(spec)
 	}
 	for _, name := range spec.Entities {
-		if _, err := addEntityLifecycle(root, manifest, AddOptions{Name: name, Service: service}); err != nil {
+		if _, err := addEntityLifecycle(root, manifest, AddOptions{Name: name, Service: spec.entityService(name, service)}); err != nil {
 			return InstalledModule{}, err
 		}
 	}

@@ -60,7 +60,7 @@ demo 有 371 个模板文件、约 5.9 万行（含测试）。三个包汇集�
 
 ```
 配方      slg / mmorpg / game-demo / 用户自定义        = 模块清单 + 参数
-模块      wallet / bag / room / chat / guild / dungeon / terrain …
+模块      wallet / bag / room / chat / alliance / dungeon / terrain …
 原子命令  roost add entity|component|dao|handler|…     （已有）
 框架      framework / gameplay / service / wiring       （已有）
 ```
@@ -583,6 +583,8 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 仍然成立的局限（两轮都指出）：入口里的手写串接（进入游戏之后调初始发放）没有离线测法；端点层、自身视图首帧、真实进程下的建档都没有跑；这一档不含登录鉴权、Robot 与网络验收。也就是说，现在能做到的是“凭一段需求得到一个业务逻辑写完、离线场景通过的工程”，还不是“可以直接上线的服务”。
 
 ## 18. 模块清单与后续顺序（2026-11-11）
+
+当前待实施项以[后续需求](HANDOFF-2026-11-12-module-requirements.md)为准。维护者补充：联盟模块统一命名 `alliance`，与既有联盟服务一致；`activity` 是通用时间阶段框架，配置阶段、推进与恢复是核心，排行、结算和邮件奖励通过可选联动接入。以下历史批次的状态以该交接中的最新验收记录更新，不把早期“未做”当成当前事实。
 
 后续是继续拆解：把 game-demo、13 类玩法夹具与两轮实测里反复手写的业务拆成模块。清单按“新工程最先需要什么”排。按决定 5，拆出来的模块只要求新生成的工程能直接用，不为以前生成的工程做兼容；game-demo 已改用 chat 与 enter 两个模块（生成时安装，见 `demo.go` 的 `demoModuleSteps`）；profile、bag、leaderboard、mailbox 是照 demo 的做法拆出来的独立版本，demo 自己的那几块还没有换成它们（决定 3 的那一步对这四个仍待做）。
 

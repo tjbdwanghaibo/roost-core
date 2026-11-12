@@ -3,7 +3,7 @@
 #
 # 这些用例只在新生成的 game-demo 里存在（模板在 demo/ 下），或由 codegen/internal/roost 写进新生成的 game-demo
 # 再运行；门变量没人设置时它们到处跳过，go test ./... 与 framework-compat / demo-publish 的生成工程测试都看不到：
-#   - internal/service/alliance 的 TestStopFoundingSendsNewAlliancesToTheOtherInstances（ROOST_DATAENGINE_IT_NATS_URL：
+#   - internal/service/alliance 的 TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances（ROOST_DATAENGINE_IT_NATS_URL：
 #     两个真实 Bus 上的 alliance 实例，运维命令 alliance.stop_founding 让一个退出 Found 队列组后，新建联盟全部落到另一个，
 #     路由到它的已有联盟照常服务）；
 #   - internal/service/game 的 TestTerrainRestartRealMongo（ROOST_TERRAIN_IT_MONGO_URI：可编辑地形改块重启后一致——真实
@@ -13,8 +13,8 @@
 #     TestBuildingRestartRealMongo（同一门变量：建筑与块上的占地落库，重启后对账找回、原始地形换版后地基重新整平；P4）；
 #   - db/migrations 的 TestPlayerMigrationRealMongo（ROOST_MIGRATION_IT_MONGO_URI：Player schema 离线迁移的
 #     plan / apply / verify / rollback 在真实副本集上跑一遍，唯一库名、结束删库）；
-#   - internal/service/platform 的 TestPurchaseDeliveryDurableWinner（ROOST_REVIEW_REDIS；ROOST_REVIEW_CLUSTER
-#     由调用方给，mirror-local.sh test-core 传入私有 3 主 3 从，没给时集群子用例跳过）；
+#   - game/purchase 的 TestPurchaseRedis*（ROOST_PURCHASE_REDIS_ADDR：实际执行序号分配、并发去重、分批清理 Lua；
+#     显式 integration 构建标签，未设置地址直接失败；原 demo 发货实现已迁入 purchase 模块）；
 #   - internal/service/game 的 TestActivityBoardKeepsTheLatestCumulativeScore（ROOST_REVIEW_REDIS：真实 Redis 上
 #     延后旧贡献回复，验证结算榜不被较低的累计分快照覆盖；协调器使用内存版本存储）；
 #   - game/controllers/player 的 TestDungeonClearsBoardCountsEachRunOnceRealRedis（ROOST_REVIEW_REDIS：正式端点 +
@@ -40,8 +40,8 @@ go run ./codegen/cmd/roost project new planet -module example.com/planet -out "$
 printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$work_dir/planet/go.mod"
 (
 	cd "$work_dir/planet"
-	go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestStopFoundingSendsNewAlliancesToTheOtherInstances$' ./internal/service/alliance
-	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseDeliveryDurableWinner$' ./internal/service/platform
+	go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances$' ./internal/service/alliance
+	ROOST_PURCHASE_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseRedis' ./game/purchase
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestDungeonClearsBoardCountsEachRunOnceRealRedis$' ./game/controllers/player
 	ROOST_MIGRATION_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPlayerMigrationRealMongo$' ./db/migrations

@@ -1,0 +1,139 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+func taskSpend(t *testing.T, f *taskFixture, key string, amount int64) error {
+	t.Helper()
+	RegisterWalletSpendNestHandlers()
+	_, err := sender.NewWalletSpendSender(f.engine).Sync_WalletSpend(context.Background(), f.player.ID(), &pb.WalletSpendRequest{Key: key, Amount: amount})
+	return err
+}
+func taskCoins(t *testing.T, f *taskFixture, amount int64) {
+	t.Helper()
+	RegisterWalletGrantNestHandlers()
+	if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "task-seed", amount); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestWithTaskWalletOnlyCountsFreshSpend(t *testing.T) {
+	f := newTaskFixture(t)
+	taskCoins(t, f, 100)
+	if err := taskSpend(t, f, "one", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := taskSpend(t, f, "one", 10); err != nil {
+		t.Fatal(err)
+	}
+	facts := f.facts(t)
+	if facts.progress[2] != 1 || facts.coins != 90 || facts.commits != 2 {
+		t.Fatalf("spend facts=%v", facts)
+	}
+}
+func TestWithTaskWalletRefusalsDoNotCount(t *testing.T) {
+	f := newTaskFixture(t)
+	taskCoins(t, f, 10)
+	if err := taskSpend(t, f, "one", 20); !errors.Is(err, apperrors.ErrWalletShort) {
+		t.Fatal(err)
+	}
+	if f.facts(t).day != 0 {
+		t.Fatal("refused spend created task")
+	}
+	if err := taskSpend(t, f, "one", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := taskSpend(t, f, "one", 2); !errors.Is(err, apperrors.ErrWalletConflict) {
+		t.Fatal(err)
+	}
+	if f.facts(t).progress[2] != 1 {
+		t.Fatal("conflict counted")
+	}
+}
+func TestWithTaskWalletRejectedCommitRollsBackBoth(t *testing.T) {
+	f := newTaskFixture(t)
+	taskCoins(t, f, 20)
+	before := f.facts(t)
+	f.committer.reject.Store(true)
+	if err := taskSpend(t, f, "one", 5); err == nil {
+		t.Fatal("rejected spend accepted")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rollback", before)
+	if err := taskSpend(t, f, "one", 5); err != nil {
+		t.Fatal(err)
+	}
+	if f.facts(t).progress[2] != 1 {
+		t.Fatal("retry did not count exactly once")
+	}
+}
+func TestWithTaskWalletGrantsDoNotCountAsSpending(t *testing.T) {
+	f := newTaskFixture(t)
+	taskCoins(t, f, 100)
+	if f.facts(t).day != 0 {
+		t.Fatal("grant counted as spend")
+	}
+}
+
+var taskWalletRejectHook atomic.Bool
+
+func init() {
+	player.OnWalletSpent("zz_task_wallet_test", func(*player.Player, int64, int64) error {
+		if taskWalletRejectHook.Load() {
+			return errors.New("injected wallet hook failure")
+		}
+		return nil
+	})
+}
+func TestWithTaskWalletHookFailureRollsBackBusinessAndProgress(t *testing.T) {
+	f := newTaskFixture(t)
+	taskCoins(t, f, 100)
+	before := f.facts(t)
+	taskWalletRejectHook.Store(true)
+	t.Cleanup(func() { taskWalletRejectHook.Store(false) })
+	if err := taskSpend(t, f, "one", 10); err == nil {
+		t.Fatal("hook failure accepted")
+	}
+	f.want(t, "hook rollback", before)
+	taskWalletRejectHook.Store(false)
+	if err := taskSpend(t, f, "one", 10); err != nil {
+		t.Fatal(err)
+	}
+	if facts := f.facts(t); facts.progress[2] != 1 || facts.coins != 90 {
+		t.Fatalf("retry=%v", facts)
+	}
+}
+func TestWithTaskWalletUsesTheTransactionsFrozenDay(t *testing.T) {
+	f := newTaskFixture(t)
+	taskCoins(t, f, 100)
+	f.setClock(time.Date(2026, 11, 10, 23, 59, 59, 999000000, time.UTC))
+
+	if _, err := f.engine.Request(context.Background(), taskWalletFrozenHandler, f.player.ID(), nest.NewParams(func() { f.pass(time.Millisecond) })); err != nil {
+		t.Fatal(err)
+	}
+	if facts := f.facts(t); facts.day != 20261110 || facts.progress[2] != 1 || facts.coins != 90 {
+		t.Fatalf("frozen day=%v", facts)
+	}
+}
+
+var taskWalletFrozenHandler = nest.NewHandlerName("taskWalletFrozenDayTest")
+
+func init() {
+	nest.MustRegisterHandlerWithMeta(taskWalletFrozenHandler, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		// 模拟业务运行途中跨日，消费仍应使用进入事务时的冻结时间。
+		args[0].(func())()
+		return es[0].(*player.Player).WalletComp().Apply("frozen", -10)
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+}

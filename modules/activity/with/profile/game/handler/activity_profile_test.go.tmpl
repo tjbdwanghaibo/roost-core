@@ -1,0 +1,51 @@
+package handler
+
+import (
+	"sync"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/entities/player"
+)
+
+var activityProfileHook sync.Once
+
+func TestWithActivityProfileUnlockRollsBackWithLevel(t *testing.T) {
+	activityProfileHook.Do(func() {
+		activity.Register("profile_gate", activity.Hooks{Eligible: func(owner entity.IThreadSafeEntity, event string) bool {
+			return owner.(*player.Player).Dao().GetProfile().GetLevel() >= 2
+		}})
+	})
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.Trigger = "event"
+	d.Event = "profile.level_up"
+	d.Logic = "profile_gate"
+	d.StartMilli = 0
+	activityRows(t, d)
+	if err := f.call(0, func(p *player.Player) error { _, err := p.EnterComp().Init(f.now.Load()); return err }); err != nil {
+		t.Fatal(err)
+	}
+	f.commit.reject.Store(true)
+	add := func(p *player.Player) error { _, err := p.ProfileComp().AddExp(100); return err }
+	if err := f.call(0, add); err == nil {
+		t.Fatal("rejected level accepted")
+	}
+	f.commit.reject.Store(false)
+	if err := f.call(0, func(p *player.Player) error {
+		if p.Dao().GetProfile().GetLevel() != 1 || p.Dao().GetActivity().RecordsLen() != 0 {
+			t.Error("level or unlock survived rejection")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.call(0, add); err != nil {
+		t.Fatal(err)
+	}
+	if v := f.view(t, 0); v.Token.Generation != 1 {
+		t.Fatal(v)
+	}
+}

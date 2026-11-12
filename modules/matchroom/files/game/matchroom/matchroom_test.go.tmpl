@@ -1,0 +1,147 @@
+package matchroom
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	db "{{MODULE}}/db"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+)
+
+func TestMatchroomHandoffRetriesSameReservedID(t *testing.T) {
+	calls := 0
+	r := &Rooms{sid: 1, bind: func(_ context.Context, key string, ids []int64) (Binding, error) {
+		return Binding{MatchID: key, RoomID: 91, SID: 1, Members: ids}, nil
+	}, open: func(_ context.Context, b Binding) error {
+		calls++
+		if b.RoomID != 91 {
+			t.Fatal("changed room")
+		}
+		if calls == 1 {
+			return errors.New("lost open reply")
+		}
+		return nil
+	}}
+	if id, err := r.Open(context.Background(), "m", []int64{2, 1}); err == nil || id != 0 {
+		t.Fatal("unconfirmed room exposed")
+	}
+	if id, err := r.Open(context.Background(), "m", []int64{1, 2}); err != nil || id != 91 {
+		t.Fatalf("retry %d %v", id, err)
+	}
+}
+func TestMatchroomConflictingBindingCannotOpen(t *testing.T) {
+	called := false
+	r := &Rooms{sid: 1, open: func(context.Context, Binding) error { called = true; return nil }, bind: func(_ context.Context, key string, ids []int64) (Binding, error) {
+		return Binding{MatchID: key, RoomID: 1, SID: 2, Members: ids}, nil
+	}}
+	if _, err := r.Open(context.Background(), "m", []int64{1, 2}); err == nil || called {
+		t.Fatal("foreign owner opened")
+	}
+}
+func TestMatchroomInvalidRosterDoesNotAllocate(t *testing.T) {
+	called := false
+	r := &Rooms{sid: 1, open: func(context.Context, Binding) error { return nil }, bind: func(context.Context, string, []int64) (Binding, error) { called = true; return Binding{}, nil }}
+	for _, ids := range [][]int64{nil, {1}, {1, 1}, {0, 2}} {
+		if _, err := r.Open(context.Background(), "m", ids); err == nil {
+			t.Fatal("invalid roster allocated")
+		}
+	}
+	if called {
+		t.Fatal("allocator called")
+	}
+}
+func TestMatchroomAllocationFailureDoesNotOpen(t *testing.T) {
+	cause := errors.New("mongo unavailable")
+	called := false
+	r := &Rooms{sid: 1, bind: func(context.Context, string, []int64) (Binding, error) { return Binding{}, cause }, open: func(context.Context, Binding) error { called = true; return nil }}
+	if _, err := r.Open(context.Background(), "m", []int64{1, 2}); !errors.Is(err, cause) || called {
+		t.Fatalf("allocation: %v", err)
+	}
+}
+func TestMatchroomRegistryRejectsMissingDependencies(t *testing.T) {
+	if _, err := FromRegistry(nil); err == nil {
+		t.Fatal("nil registry accepted")
+	}
+}
+
+// Mongo 替身实际执行 _id 唯一约束、查询与 $inc；不用“始终返回同一 ID”的 allocator stub 证明并发分配正确。
+func TestMatchroomPersistentBindingSurvivesConcurrentRetry(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("sid", 1)
+	registry := app.NewRegistry(cfg)
+	mongo := mongotest.NewClient()
+	databases, err := kitdataengine.LoadDatabaseMap(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[app.ModName]any{mods.ModNest: nest.NewEngine(), mods.ModEntityRuntime: entity.NewManagerAccess(entity.NewEntityManager()), mods.ModMongo: mongo, mods.ModDataEngineDatabases: databases} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rooms, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		binding Binding
+		err     error
+	}
+	results := make(chan result, 16)
+	var workers sync.WaitGroup
+	for range 16 {
+		workers.Go(func() {
+			binding, err := rooms.bind(context.Background(), "same", []int64{1, 2})
+			results <- result{binding, err}
+		})
+	}
+	workers.Wait()
+	close(results)
+	var id int64
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if id == 0 {
+			id = result.binding.RoomID
+		}
+		if result.binding.RoomID != id {
+			t.Fatal("one match allocated multiple room ids")
+		}
+	}
+	counter := mongo.Database(databases.Physical(db.RoomDaoDBName)).Collection("_room_id_sequence")
+	var before, after struct {
+		Next int64 `bson:"next"`
+	}
+	if err := counter.FindOne(context.Background(), bson.M{"_id": "room"}, &before); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := restarted.bind(context.Background(), "same", []int64{1, 2})
+	if err != nil || binding.RoomID != id {
+		t.Fatalf("restart mapping: %+v %v", binding, err)
+	}
+	if err := counter.FindOne(context.Background(), bson.M{"_id": "room"}, &after); err != nil {
+		t.Fatal(err)
+	}
+	if before.Next != after.Next {
+		t.Fatal("replay consumed another room id")
+	}
+	other, err := restarted.bind(context.Background(), "other", []int64{3, 4})
+	if err != nil || other.RoomID == id {
+		t.Fatalf("another match reused room: %+v %v", other, err)
+	}
+}

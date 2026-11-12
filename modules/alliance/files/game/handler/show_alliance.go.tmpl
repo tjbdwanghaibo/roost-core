@@ -1,0 +1,20 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+)
+
+// handlerShowAlliance 更新 PlayerDao.Alliance.ID 展示副本，权威名单仍归联盟服务。
+// 自己的入退盟、在线通知与进入后对账都走这里，生成的同步层在提交后发送变化。
+// replaces 非零时仅替换那个联盟，防止晚到的旧退盟通知清掉新联盟。
+//
+//roost:nest rollback=undo durability=strict
+func handlerShowAlliance(target player.IAllianceEntity, allianceID int64, replaces int64) (bool, error) {
+	profile := target.AllianceComp()
+	current := profile.AllianceID()
+	if current == allianceID || (replaces != 0 && current != replaces) {
+		return false, nil
+	}
+	profile.SetAlliance(allianceID)
+	return true, nil
+}

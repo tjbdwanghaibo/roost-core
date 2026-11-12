@@ -2,10 +2,13 @@ package player
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"math"
+
 	logic "{{MODULE}}/game/dungeon"
 	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 //roost:component type={{ID:component:Dungeon}}
@@ -84,5 +87,8 @@ func (component *DungeonComponent) Claim(runID, season, amount, resolvedAt, now 
 	result.Claimed = true
 	result.ExpGranted = amount
 	result.LevelsGained = gained
+	if err := runDungeonClaimed(component.owner, runID, season, fctx.NowMilli()); err != nil {
+		return logic.ClaimResult{}, err
+	}
 	return result, nil
 }

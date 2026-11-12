@@ -1,0 +1,20 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+)
+
+// effectSettings is where the dataengine Mod publishes effects, read through
+// that Mod's own declaration (kitdataengine.EffectSettings), so producer and
+// consumer cannot disagree about where effects go and the defaults are not
+// copied here. The activity phase consumer (activity.go) reads it; the
+// mailbox module leaves its consumer settings to kitdataengine.SubscribeEffects.
+func effectSettings(registry *app.Registry) (database, prefix, stream string, err error) {
+	database, prefix, stream, err = kitdataengine.EffectSettings(registry.Config())
+	if err != nil {
+		return "", "", "", fmt.Errorf("effect settings: %w", err)
+	}
+	return database, prefix, stream, nil
+}

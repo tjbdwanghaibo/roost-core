@@ -1,0 +1,83 @@
+package mailbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+)
+
+const TopicProfileReward = "mailbox.profile_reward"
+
+// ProfileReward 在升级时冻结奖励；消费时不重新查表，热更不会改变同一 EffectID 的内容。
+type ProfileReward struct {
+	PlayerID int64      `json:"player_id"`
+	From     int32      `json:"from"`
+	Level    int32      `json:"level"`
+	Reward   Attachment `json:"reward"`
+}
+
+func EmitProfileReward(playerID int64, from, to int32, reward Attachment) error {
+	if reward == (Attachment{}) {
+		return nil
+	}
+	event := ProfileReward{PlayerID: playerID, From: from, Level: to, Reward: reward}
+	if err := event.validate(); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	return nest.Emit(nest.Effect{Topic: TopicProfileReward, Key: strconv.FormatInt(playerID, 10), Payload: payload})
+}
+
+func (event ProfileReward) validate() error {
+	if event.PlayerID <= 0 || event.From < 0 || event.Level <= event.From {
+		return fmt.Errorf("mailbox: invalid level-up identity or range")
+	}
+	return Validate(event.Reward)
+}
+
+func init() { mailboxConsumers = append(mailboxConsumers, startProfileRewardMail) }
+
+func startProfileRewardMail(ctx context.Context, registry *app.Registry) error {
+	mail, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mail == nil {
+		return fmt.Errorf("mailbox: mail service is unavailable")
+	}
+	_, err := kitdataengine.SubscribeEffects(ctx, registry, kitdataengine.EffectConsumer{
+		Durable: "{{GAME_SERVICE}}-profile-reward-mail", Topic: TopicProfileReward,
+	}, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
+		return consumeProfileReward(ctx, mail, envelope)
+	})
+	return err
+}
+
+// Mongo inbox 记录消费事实；跨服务 Send 仍以 EffectID 去重，覆盖邮件成功而 inbox/ACK 未完成的窗口。
+func consumeProfileReward(ctx context.Context, mail Sender, envelope nestwal.EffectEnvelope) error {
+	var event ProfileReward
+	if err := json.Unmarshal(envelope.Payload, &event); err != nil {
+		return kitdataengine.PoisonEffect(fmt.Errorf("profile reward payload: %w", err))
+	}
+	if err := event.validate(); err != nil {
+		return kitdataengine.PoisonEffect(err)
+	}
+	_, err := SendTo(ctx, mail, Letter{
+		To: event.PlayerID, Subject: fmt.Sprintf("Level %d reached", event.Level),
+		Body:       fmt.Sprintf("Reward for levels %d–%d.", event.From+1, event.Level),
+		Attachment: event.Reward, RequestID: envelope.EffectID,
+		ExpiresInSeconds: DefaultExpiresInSeconds,
+	})
+	if errors.Is(err, ErrLetterInvalid) {
+		return kitdataengine.PoisonEffect(err)
+	}
+	return err
+}

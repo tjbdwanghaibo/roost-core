@@ -39,6 +39,13 @@ import (
 	"syscall"
 	"time"
 
+	"{{MODULE}}/game/battle"
+	"{{MODULE}}/game/clientsync"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/loadtest/playertcp"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -57,12 +64,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
-	"{{MODULE}}/game/battle"
-	"{{MODULE}}/game/clientsync"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/loadtest/playertcp"
-	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
 )
 
 const profileName = "demo"
@@ -92,7 +93,7 @@ func main() {
 	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "-login bus: NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "{{PROJECT}}", "bus subject prefix (nats.prefix in the services' configs; generated from the project name)")
 	serverID := flag.Int("server-id", 1000, "the game server's sid, which roles are created on")
-	gameOps := flag.String("game-ops", "127.0.0.1:9100", "ops address of that game server (ops.addr in config.game.yaml); the guild_offline_join scenario runs its operator step there (gm.player.join_guild)")
+	gameOps := flag.String("game-ops", "127.0.0.1:9100", "ops address of that game server (ops.addr in config.game.yaml); the alliance_offline_join scenario runs its operator step there (gm.player.join_alliance)")
 	adminToken := flag.String("admin-token", "dev-gm-token", "ops admin token for that operator step (ops.admin_token in config.game.yaml)")
 	flag.Parse()
 
@@ -472,10 +473,10 @@ func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, err
 	}
 	rb.PlayerID = playerID.(int64)
 	rb.Blackboard.Set("player_id", rb.PlayerID)
-	// Every robot founds its own guild, under a name of its own: names are not
+	// Every robot founds its own alliance, under a name of its own: names are not
 	// unique in the alliance service, but a per-robot name keeps a run's
-	// guilds apart when reading them back.
-	rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", rb.PlayerID))
+	// alliances apart when reading them back.
+	rb.Blackboard.Set("alliance_name", fmt.Sprintf("robot alliance %d", rb.PlayerID))
 	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", rb.PlayerID, session.Token)), nil
 }
 
@@ -532,22 +533,22 @@ func (ops gameOpsClient) execute(ctx context.Context, name string, payload any) 
 	return decoded.Data, nil
 }
 
-// registerOfflineJoin is the guild_offline_join scenario's half (alliance
-// plan §2.5B, decision D): a player made a guild member while offline sees
-// the guild at the next login. Nobody tells the game process about it at the
+// registerOfflineJoin is the alliance_offline_join scenario's half (alliance
+// plan §2.5B, decision D): a player made a alliance member while offline sees
+// the alliance at the next login. Nobody tells the game process about it at the
 // time — the membership notice finds nobody online — so the login asks the
-// alliance service (refreshGuild → Membership) and writes the answer into the
-// player's copy. Without that question "my guild" stays empty until the next
+// alliance service (refreshAlliance → Membership) and writes the answer into the
+// player's copy. Without that question "my alliance" stays empty until the next
 // notice, which may never come.
 //
-// One robot plays two roles: its own founds an open guild through the found
+// One robot plays two roles: its own founds an open alliance through the found
 // saga, then a second one (login_as member) logs in once and disconnects.
-// The operator step (gm.player.join_guild on the game's ops) joins the member
-// to the guild — and only once the game holds no session of the member: the
+// The operator step (gm.player.join_alliance on the game's ops) joins the member
+// to the alliance — and only once the game holds no session of the member: the
 // command refuses while one is there, so the retry around it is the barrier
 // that makes "offline" a fact, not a timing. Then the member logs in again
-// and reads "my guild" with no guild id and the version the join answered:
-// it must be the founder's guild with the member in it.
+// and reads "my alliance" with no alliance id and the version the join answered:
+// it must be the founder's alliance with the member in it.
 func registerOfflineJoin(actions *action.Registry, protocols *protocol.Registry, ops gameOpsClient) {
 	// login_as {identity}: the identity the next connect logs in as.
 	actions.MustRegister(action.Func{ActionName: "login_as", Handle: func(_ context.Context, rb *robot.Context, param any) error {
@@ -560,16 +561,16 @@ func registerOfflineJoin(actions *action.Registry, protocols *protocol.Registry,
 		rb.SetSession(nil)
 		return nil
 	}})
-	// join_guild_offline: the operator joins the current identity (offline)
-	// to the guild on the blackboard (the one the found saga reported).
-	actions.MustRegister(action.Func{ActionName: "join_guild_offline", Handle: func(ctx context.Context, rb *robot.Context, _ any) error {
-		raw, _ := rb.Blackboard.Get("guild_id")
-		guildID, _ := raw.(int64)
-		if guildID == 0 {
-			return fmt.Errorf("join_guild_offline: no guild on the blackboard; found one first")
+	// join_alliance_offline: the operator joins the current identity (offline)
+	// to the alliance on the blackboard (the one the found saga reported).
+	actions.MustRegister(action.Func{ActionName: "join_alliance_offline", Handle: func(ctx context.Context, rb *robot.Context, _ any) error {
+		raw, _ := rb.Blackboard.Get("alliance_id")
+		allianceID, _ := raw.(int64)
+		if allianceID == 0 {
+			return fmt.Errorf("join_alliance_offline: no alliance on the blackboard; found one first")
 		}
-		data, err := ops.execute(ctx, "gm.player.join_guild", map[string]any{
-			"player_id": rb.PlayerID, "guild_id": guildID, "request_id": fmt.Sprintf("robot-offline-join-%d", rb.PlayerID),
+		data, err := ops.execute(ctx, "gm.player.join_alliance", map[string]any{
+			"player_id": rb.PlayerID, "alliance_id": allianceID, "request_id": fmt.Sprintf("robot-offline-join-%d", rb.PlayerID),
 		})
 		if err != nil {
 			return err
@@ -583,21 +584,21 @@ func registerOfflineJoin(actions *action.Registry, protocols *protocol.Registry,
 		rb.Blackboard.Set("offline_join_members", int64(members))
 		return nil
 	}})
-	// my_guild reads "the guild I am in" (no guild id: the player's own copy,
-	// then the guild's mirror at least as new as the join).
-	action.MustRegisterCall[pb.GuildInfoRequest, pb.GuildResponse](actions, protocols, "my_guild", msgid.MsgGuildInfo,
-		action.MapField[pb.GuildResponse]("GuildID", "my_guild_query_id"),
-		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
-			raw, _ := rb.Blackboard.Get("guild_id")
+	// my_alliance reads "the alliance I am in" (no alliance id: the player's own copy,
+	// then the alliance's mirror at least as new as the join).
+	action.MustRegisterCall[pb.AllianceInfoRequest, pb.AllianceResponse](actions, protocols, "my_alliance", msgid.MsgAllianceInfo,
+		action.MapField[pb.AllianceResponse]("AllianceID", "my_alliance_query_id"),
+		action.OnResp(func(rb *robot.Context, resp *pb.AllianceResponse) error {
+			raw, _ := rb.Blackboard.Get("alliance_id")
 			want, _ := raw.(int64)
 			if err := coded(resp.Code, resp.Reason); err != nil {
-				return fmt.Errorf("player %d joined guild %d while offline, then logged in: my guild answers %w", rb.PlayerID, want, err)
+				return fmt.Errorf("player %d joined alliance %d while offline, then logged in: my alliance answers %w", rb.PlayerID, want, err)
 			}
 			rawMembers, _ := rb.Blackboard.Get("offline_join_members")
 			members, _ := rawMembers.(int64)
-			if resp.GuildID != want || int64(resp.Members) < members {
-				return fmt.Errorf("player %d joined guild %d (%d members) while offline, then logged in: my guild is %d with %d members",
-					rb.PlayerID, want, members, resp.GuildID, resp.Members)
+			if resp.AllianceID != want || int64(resp.Members) < members {
+				return fmt.Errorf("player %d joined alliance %d (%d members) while offline, then logged in: my alliance is %d with %d members",
+					rb.PlayerID, want, members, resp.AllianceID, resp.Members)
 			}
 			return nil
 		}))
@@ -874,87 +875,87 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			rb.Blackboard.Set("activity_id", resp.ActivityID)
 			return nil
 		}))
-	// The guild is the alliance service's (game/guild in the generated
-	// project). found_guild, donate_guild and claim_guild_reward change the
+	// The alliance is the alliance service's (game/alliance in the generated
+	// project). found_alliance, donate_alliance and claim_alliance_reward change the
 	// robot's Bag as well, so each starts a saga and answers with its key;
-	// guild_op_status polls it (in a retry node, like gift_status) and
-	// expect_guild_op judges the end. join_guild / leave_guild are one alliance
-	// RPC each, answered with the guild after the write and the alliance
-	// instance that served it (served_by). guild_info reads the guild mirror:
+	// alliance_op_status polls it (in a retry node, like gift_status) and
+	// expect_alliance_op judges the end. join_alliance / leave_alliance are one alliance
+	// RPC each, answered with the alliance after the write and the alliance
+	// instance that served it (served_by). alliance_info reads the alliance mirror:
 	// eventually consistent, so the scenario reads it in a retry node too.
-	guildStarted := func(op string) action.CallOption[pb.GuildResponse] {
-		return action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+	allianceStarted := func(op string) action.CallOption[pb.AllianceResponse] {
+		return action.OnResp(func(rb *robot.Context, resp *pb.AllianceResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
 			if resp.SagaKey == "" {
-				return fmt.Errorf("%s_guild was accepted without a saga key", op)
+				return fmt.Errorf("%s_alliance was accepted without a saga key", op)
 			}
-			rb.Blackboard.Set("guild_op", op)
-			rb.Blackboard.Set("guild_saga", resp.SagaKey)
+			rb.Blackboard.Set("alliance_op", op)
+			rb.Blackboard.Set("alliance_saga", resp.SagaKey)
 			return nil
 		})
 	}
-	action.MustRegisterCall[pb.FoundGuildRequest, pb.GuildResponse](actions, protocols, "found_guild", msgid.MsgFoundGuild,
-		action.MapField[pb.GuildResponse]("Name", "guild_name"), guildStarted("found"))
-	action.MustRegisterCall[pb.DonateGuildRequest, pb.GuildResponse](actions, protocols, "donate_guild", msgid.MsgDonateGuild, guildStarted("donate"))
-	action.MustRegisterCall[pb.ClaimGuildRewardRequest, pb.GuildResponse](actions, protocols, "claim_guild_reward", msgid.MsgClaimGuildReward, guildStarted("reward"))
-	action.MustRegisterCall[pb.GuildOpStatusRequest, pb.GuildOpStatusResponse](actions, protocols, "guild_op_status", msgid.MsgGuildOpStatus,
-		action.MapField[pb.GuildOpStatusResponse]("Op", "guild_op"),
-		action.MapField[pb.GuildOpStatusResponse]("SagaKey", "guild_saga"),
-		action.OnResp(func(rb *robot.Context, resp *pb.GuildOpStatusResponse) error {
+	action.MustRegisterCall[pb.FoundAllianceRequest, pb.AllianceResponse](actions, protocols, "found_alliance", msgid.MsgFoundAlliance,
+		action.MapField[pb.AllianceResponse]("Name", "alliance_name"), allianceStarted("found"))
+	action.MustRegisterCall[pb.DonateAllianceRequest, pb.AllianceResponse](actions, protocols, "donate_alliance", msgid.MsgDonateAlliance, allianceStarted("donate"))
+	action.MustRegisterCall[pb.ClaimAllianceRewardRequest, pb.AllianceResponse](actions, protocols, "claim_alliance_reward", msgid.MsgClaimAllianceReward, allianceStarted("reward"))
+	action.MustRegisterCall[pb.AllianceOpStatusRequest, pb.AllianceOpStatusResponse](actions, protocols, "alliance_op_status", msgid.MsgAllianceOpStatus,
+		action.MapField[pb.AllianceOpStatusResponse]("Op", "alliance_op"),
+		action.MapField[pb.AllianceOpStatusResponse]("SagaKey", "alliance_saga"),
+		action.OnResp(func(rb *robot.Context, resp *pb.AllianceOpStatusResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
 			switch resp.Status {
 			case "completed", "compensated", "failed", "manual_required":
-				rb.Blackboard.Set("guild_op_status", resp.Status)
-				rb.Blackboard.Set("guild_op_error", resp.LastError)
-				if resp.GuildID != 0 {
-					rb.Blackboard.Set("guild_id", resp.GuildID)
+				rb.Blackboard.Set("alliance_op_status", resp.Status)
+				rb.Blackboard.Set("alliance_op_error", resp.LastError)
+				if resp.AllianceID != 0 {
+					rb.Blackboard.Set("alliance_id", resp.AllianceID)
 				}
 				return nil
 			}
-			return fmt.Errorf("guild saga still %s (step %d)", resp.Status, resp.Step)
+			return fmt.Errorf("alliance saga still %s (step %d)", resp.Status, resp.Step)
 		}))
-	actions.MustRegister(action.Func{ActionName: "expect_guild_op", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+	actions.MustRegister(action.Func{ActionName: "expect_alliance_op", Handle: func(_ context.Context, rb *robot.Context, param any) error {
 		want := action.ParamsOf(rb, param).String("status", "completed")
-		got, _ := rb.Blackboard.Get("guild_op_status")
+		got, _ := rb.Blackboard.Get("alliance_op_status")
 		if got != want {
-			op, _ := rb.Blackboard.Get("guild_op")
-			lastError, _ := rb.Blackboard.Get("guild_op_error")
-			return fmt.Errorf("guild %v saga ended %v, want %s (last error: %v)", op, got, want, lastError)
+			op, _ := rb.Blackboard.Get("alliance_op")
+			lastError, _ := rb.Blackboard.Get("alliance_op_error")
+			return fmt.Errorf("alliance %v saga ended %v, want %s (last error: %v)", op, got, want, lastError)
 		}
 		return nil
 	}})
-	guildAnswered := action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+	allianceAnswered := action.OnResp(func(rb *robot.Context, resp *pb.AllianceResponse) error {
 		if err := coded(resp.Code, resp.Reason); err != nil {
 			return err
 		}
 		if resp.ServedBySID == 0 {
 			return fmt.Errorf("the answer does not say which alliance instance served it")
 		}
-		rb.Blackboard.Set("guild_version", resp.Version)
+		rb.Blackboard.Set("alliance_version", resp.Version)
 		return nil
 	})
-	action.MustRegisterCall[pb.JoinGuildRequest, pb.GuildResponse](actions, protocols, "join_guild", msgid.MsgJoinGuild, guildAnswered)
-	action.MustRegisterCall[pb.LeaveGuildRequest, pb.GuildResponse](actions, protocols, "leave_guild", msgid.MsgLeaveGuild, guildAnswered)
-	// guild_info with no id reads "the guild I am in": the robot's own copy
-	// (PlayerDao.GuildID, set when its found saga's status was read), then
-	// the guild's mirror. It has to agree with what the found saga reported,
-	// and a guild has at least its founder.
-	action.MustRegisterCall[pb.GuildInfoRequest, pb.GuildResponse](actions, protocols, "guild_info", msgid.MsgGuildInfo,
-		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+	action.MustRegisterCall[pb.JoinAllianceRequest, pb.AllianceResponse](actions, protocols, "join_alliance", msgid.MsgJoinAlliance, allianceAnswered)
+	action.MustRegisterCall[pb.LeaveAllianceRequest, pb.AllianceResponse](actions, protocols, "leave_alliance", msgid.MsgLeaveAlliance, allianceAnswered)
+	// alliance_info with no id reads "the alliance I am in": the robot's own copy
+	// (PlayerDao.Alliance.ID, set when its found saga's status was read), then
+	// the alliance's mirror. It has to agree with what the found saga reported,
+	// and a alliance has at least its founder.
+	action.MustRegisterCall[pb.AllianceInfoRequest, pb.AllianceResponse](actions, protocols, "alliance_info", msgid.MsgAllianceInfo,
+		action.OnResp(func(rb *robot.Context, resp *pb.AllianceResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
-			raw, _ := rb.Blackboard.Get("guild_id")
+			raw, _ := rb.Blackboard.Get("alliance_id")
 			founded, _ := raw.(int64)
-			if founded != 0 && resp.GuildID != founded {
-				return fmt.Errorf("the mirror says guild %d, the one the robot founded is %d", resp.GuildID, founded)
+			if founded != 0 && resp.AllianceID != founded {
+				return fmt.Errorf("the mirror says alliance %d, the one the robot founded is %d", resp.AllianceID, founded)
 			}
 			if resp.Members < 1 {
-				return fmt.Errorf("guild %d reports %d members", resp.GuildID, resp.Members)
+				return fmt.Errorf("alliance %d reports %d members", resp.AllianceID, resp.Members)
 			}
 			return nil
 		}))
@@ -996,7 +997,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// The replay direction — the same order id granted twice — cannot be
 	// reached from a client, because a client cannot resend a frame sequence.
 	// It is asserted against the real handler in game/handler/
-	// grant_purchase_test.go instead, which is where that window lives.
+	// purchase_test.go in the module: the durable applied cursor rejects old sequences.
 	action.MustRegisterCall[pb.PurchaseRequest, pb.PurchaseResponse](actions, protocols, "purchase_again", msgid.MsgPurchase,
 		action.OnResp(func(rb *robot.Context, resp *pb.PurchaseResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -1266,20 +1267,20 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalPurchaseRequest(message)
 	case *pb.ActivityStandingRequest:
 		return pb.MarshalActivityStandingRequest(message)
-	case *pb.FoundGuildRequest:
-		return pb.MarshalFoundGuildRequest(message)
-	case *pb.JoinGuildRequest:
-		return pb.MarshalJoinGuildRequest(message)
-	case *pb.GuildInfoRequest:
-		return pb.MarshalGuildInfoRequest(message)
-	case *pb.LeaveGuildRequest:
-		return pb.MarshalLeaveGuildRequest(message)
-	case *pb.DonateGuildRequest:
-		return pb.MarshalDonateGuildRequest(message)
-	case *pb.ClaimGuildRewardRequest:
-		return pb.MarshalClaimGuildRewardRequest(message)
-	case *pb.GuildOpStatusRequest:
-		return pb.MarshalGuildOpStatusRequest(message)
+	case *pb.FoundAllianceRequest:
+		return pb.MarshalFoundAllianceRequest(message)
+	case *pb.JoinAllianceRequest:
+		return pb.MarshalJoinAllianceRequest(message)
+	case *pb.AllianceInfoRequest:
+		return pb.MarshalAllianceInfoRequest(message)
+	case *pb.LeaveAllianceRequest:
+		return pb.MarshalLeaveAllianceRequest(message)
+	case *pb.DonateAllianceRequest:
+		return pb.MarshalDonateAllianceRequest(message)
+	case *pb.ClaimAllianceRewardRequest:
+		return pb.MarshalClaimAllianceRewardRequest(message)
+	case *pb.AllianceOpStatusRequest:
+		return pb.MarshalAllianceOpStatusRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -1431,14 +1432,14 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 			return err
 		}
 		*message = *decoded
-	case *pb.GuildResponse:
-		decoded, err := pb.UnmarshalGuildResponse(data)
+	case *pb.AllianceResponse:
+		decoded, err := pb.UnmarshalAllianceResponse(data)
 		if err != nil {
 			return err
 		}
 		*message = *decoded
-	case *pb.GuildOpStatusResponse:
-		decoded, err := pb.UnmarshalGuildOpStatusResponse(data)
+	case *pb.AllianceOpStatusResponse:
+		decoded, err := pb.UnmarshalAllianceOpStatusResponse(data)
 		if err != nil {
 			return err
 		}

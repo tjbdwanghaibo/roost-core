@@ -1,0 +1,28 @@
+package activity
+
+import (
+	"context"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+
+	"{{MODULE}}/game/activity"
+	gameenter "{{MODULE}}/game/enter"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+// 进入回调失败只会记日志；下一次进入/操作仍按持久时间线恢复，不假装离线准点结算。
+func init() {
+	gameenter.OnEntered("activity", func(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+		c, err := FromRegistry(registry)
+		if err != nil {
+			return err
+		}
+		views, err := syncsender.NewActivityEventSender(c.NestClient()).Sync_ActivityEvent(ctx, entered.PlayerID, "", entered.FirstAtUnixMilli)
+		if err != nil {
+			return err
+		}
+		return activity.ResumePending(ctx, registry, views, func(ctx context.Context, token activity.Token) error {
+			return syncsender.NewActivityCompleteSender(c.NestClient()).Sync_ActivityComplete(ctx, entered.PlayerID, token)
+		})
+	})
+}

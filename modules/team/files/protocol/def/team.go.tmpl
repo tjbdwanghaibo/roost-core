@@ -1,0 +1,41 @@
+//go:build protocoldef
+
+package protocoldef
+
+type TeamView struct {
+	TeamID   int64   `pb:"1"`
+	Leader   int64   `pb:"2"`
+	Revision int64   `pb:"3"`
+	Members  []int64 `pb:"4"`
+}
+type TeamResponse struct {
+	Code   int32     `pb:"1"`
+	Reason string    `pb:"2"`
+	Info   *TeamView `pb:"3"`
+}
+type TeamCreateRequest struct{}
+type TeamInviteRequest struct {
+	Invitee int64 `pb:"1"`
+}
+type TeamAcceptRequest struct {
+	TeamID int64 `pb:"1"`
+}
+type TeamLeaveRequest struct{}
+type TeamDisbandRequest struct{}
+type TeamInfoRequest struct{}
+
+//roost:protocol group=game handler=team
+type TeamProtocol interface {
+	//roost:msg id={{ID:protocol:TeamCreate}}
+	TeamCreate(TeamCreateRequest) TeamResponse
+	//roost:msg id={{ID:protocol:TeamInvite}}
+	TeamInvite(TeamInviteRequest) TeamResponse
+	//roost:msg id={{ID:protocol:TeamAccept}}
+	TeamAccept(TeamAcceptRequest) TeamResponse
+	//roost:msg id={{ID:protocol:TeamLeave}}
+	TeamLeave(TeamLeaveRequest) TeamResponse
+	//roost:msg id={{ID:protocol:TeamDisband}}
+	TeamDisband(TeamDisbandRequest) TeamResponse
+	//roost:msg id={{ID:protocol:TeamInfo}}
+	TeamInfo(TeamInfoRequest) TeamResponse
+}

@@ -1,0 +1,73 @@
+package gm
+
+import (
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+func newProfileGM(t *testing.T) (*gmFixture, *player.Player) {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterProfileAddExpNestHandlers()
+	id, err := entity.BuildEntityID(97001, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newGMFixture(t, built), built.(*player.Player)
+}
+func ProfileGMValue(t *testing.T, f *gmFixture, target *player.Player) int64 {
+	t.Helper()
+	var value int64
+	f.read(t, target, func() { value = target.Dao().GetProfilePrivate().GetExp() })
+	return value
+}
+func TestWithProfileGMSuccess(t *testing.T) {
+	f, target := newProfileGM(t)
+	result, err := f.execute(CommandAddExp, `{"player_id":97001,"amount":150,"note":"test grant"}`)
+	if err != nil || !result.OK {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if got := ProfileGMValue(t, f, target); got != 50 || f.committer.commits.Load() != 1 {
+		t.Fatalf("value=%d commits=%d", got, f.committer.commits.Load())
+	}
+}
+func TestWithProfileGMInvalidWritesNothing(t *testing.T) {
+	f, target := newProfileGM(t)
+	result, err := f.execute(CommandAddExp, `{"player_id":97001,"amount":0,"note":"bad grant"}`)
+	if err == nil || result.OK || result.Data["code"] == nil || ProfileGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithProfileGMMissingTargetWritesNothing(t *testing.T) {
+	f, target := newProfileGM(t)
+	result, err := f.execute(CommandAddExp, `{"player_id":97002,"amount":150,"note":"missing"}`)
+	if err == nil || result.OK || ProfileGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	var level int32
+	f.read(t, target, func() { level = target.Dao().GetProfile().GetLevel() })
+	if level != 0 {
+		t.Fatalf("level remained: %d", level)
+	}
+}
+func TestWithProfileGMCommitFailureRollsBack(t *testing.T) {
+	f, target := newProfileGM(t)
+	f.committer.reject.Store(true)
+	result, err := f.execute(CommandAddExp, `{"player_id":97001,"amount":150,"note":"reject"}`)
+	if err == nil || result.OK || ProfileGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	var level int32
+	f.read(t, target, func() { level = target.Dao().GetProfile().GetLevel() })
+	if level != 0 {
+		t.Fatalf("level remained: %d", level)
+	}
+}

@@ -1,0 +1,15 @@
+package platform
+
+import (
+	"context"
+
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+// verifyPaymentCallback 归工程维护：接入渠道验签/查单之后才返回 nil，缺省全部拒绝。
+// raw 是 framework 已校验 HMAC 的原始支付 JSON，签名覆盖玩家、商品、币种、金额与订单号。
+// HMAC 只证明请求来自持有内部回调密钥的接入方，不能代替外部商店的支付凭据验证。
+// 外部渠道的 HTTPS 接入、原文/凭据到内部支付 JSON 的转换也归工程；不可相信客户端自报“付款成功”。
+func verifyPaymentCallback(ctx context.Context, raw []byte, signature string) error {
+	return svcplatform.ErrSignatureInvalid
+}

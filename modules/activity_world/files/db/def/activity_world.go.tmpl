@@ -1,0 +1,6 @@
+package dbdef
+
+//roost:dao coll=activity_world db=main
+type ActivityWorldDao struct {
+	CreatedAt int64 `dao:"persist,nosync" store:"1"`
+}

@@ -1,0 +1,27 @@
+package purchase
+
+import (
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+func (c *Controller) HandlePurchaseCollect(ctx *playeraccess.Context, request *pb.PurchaseCollectRequest) (*pb.PurchaseCollectResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("purchase_collect: context and request are required")
+	}
+	receipts, err := c.Collect(ctx.Context(), ctx.PlayerID)
+	response := &pb.PurchaseCollectResponse{}
+	for _, receipt := range receipts {
+		response.Receipts = append(response.Receipts, pb.PurchaseReceipt{OrderID: receipt.OrderID, Sequence: receipt.Sequence, Kind: receipt.Reward.Kind, ItemID: receipt.Reward.ID, Count: receipt.Reward.Count, Settled: receipt.Settled})
+	}
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		slog.Warn("purchase collect incomplete", "player_id", ctx.PlayerID, "settled", len(receipts), "err", err)
+	}
+	return response, nil
+}

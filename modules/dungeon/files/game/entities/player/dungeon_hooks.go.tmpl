@@ -1,0 +1,48 @@
+package player
+
+import (
+	"fmt"
+	"slices"
+	"sync"
+)
+
+// DungeonClaimedHook 在副本首次领奖；重复领取不执行。
+// 钩子在 Player 锁内、同一笔 Nest 事务中执行，只改同一实体，不能做 I/O。
+// 任一钩子失败，调用方必须把错误返回给 Nest，让原业务与钩子的全部写入一起回滚。
+type DungeonClaimedHook func(owner *Player, runID, season, nowUnixMilli int64) error
+
+var dungeonHooksMu sync.RWMutex
+var dungeonHooks = map[string]DungeonClaimedHook{}
+
+// OnDungeonClaimed 只在 init 登记。名字用于确定执行顺序，空名、nil、重名直接 panic。
+func OnDungeonClaimed(name string, hook DungeonClaimedHook) {
+	if name == "" || hook == nil {
+		panic("dungeon: hook needs name and function")
+	}
+	dungeonHooksMu.Lock()
+	defer dungeonHooksMu.Unlock()
+	if _, exists := dungeonHooks[name]; exists {
+		panic(fmt.Sprintf("dungeon: duplicate hook %q", name))
+	}
+	dungeonHooks[name] = hook
+}
+
+func runDungeonClaimed(owner *Player, runID, season, nowUnixMilli int64) error {
+	dungeonHooksMu.RLock()
+	names := make([]string, 0, len(dungeonHooks))
+	for name := range dungeonHooks {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	hooks := make([]DungeonClaimedHook, len(names))
+	for i, name := range names {
+		hooks[i] = dungeonHooks[name]
+	}
+	dungeonHooksMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, runID, season, nowUnixMilli); err != nil {
+			return fmt.Errorf("dungeon: hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

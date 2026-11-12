@@ -1,18 +1,19 @@
 package dbdef
 
-// TaskState 是每日任务的当日记录，随同步下发给玩家本人。“哪一天”按业务日算（业务时区与每日重置时刻是
-// 部署配置，time.business_timezone / time.business_day_start），存成 YYYYMMDD 的十进制数。
-//
-// 清零是惰性的：服务端只在新的一天第一次推进任务时才清空 Progress 与 Claimed 并改写 Day，没有定时器。
-// 所以跨天之后、第一次推进之前，这里（和客户端收到的）仍是上一个业务日的记录：
-// Day 不是当前业务日时，整份记录都按“今天还没有任何进度、什么都没领”看待。
-// 当前业务日取 servertime 模块下发的 Day（没装它的工程由客户端自己按业务时区推算）。
+// TaskState 的每日记录按 BusinessDay 惰性清零；周记录按该业务日所在周的周一清零。
+// 客户端用 Day / Weekly.Day 判断是否过期；Permanent 永不清零。
+// ID 空间限制为 1..4096，退役任务保留事实，防止同号重新上架重复领奖。
 type TaskState struct {
-	// Day 是 Progress 与 Claimed 所属的业务日（如 20261110）；0 表示从未推进过任务。
-	Day int64 `store:"1"`
-	// Progress 是任务号 -> 当日进度，封顶在任务表里的目标次数。只存任务表里有的任务，
-	// 所以键的个数不超过任务表的条数；每个业务日整份清空一次。
+	Day       int64           `store:"1"`
+	Progress  map[int64]int64 `store:"2"`
+	Claimed   map[int64]bool  `store:"3"`
+	Weekly    TaskPeriodState `store:"4"`
+	Permanent TaskPeriodState `store:"5"`
+}
+
+type TaskPeriodState struct {
+	// Day 对周任务为周一的 YYYYMMDD，对永久任务恒为 0。
+	Day      int64           `store:"1"`
 	Progress map[int64]int64 `store:"2"`
-	// Claimed 是当日已经领过奖的任务号（值恒为 true）。领奖前必须已完成，所以它的键都在 Progress 里。
-	Claimed map[int64]bool `store:"3"`
+	Claimed  map[int64]bool  `store:"3"`
 }

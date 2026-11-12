@@ -3,352 +3,38 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
+	"strings"
 	"testing"
-	"time"
 
-	"{{MODULE}}/game/alliancerule"
-	rehomecontroller "{{MODULE}}/game/controllers/rehome"
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
-	player "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/handler"
 	gamerehome "{{MODULE}}/game/rehome"
 	apperrors "{{MODULE}}/internal/errors"
-	rpcalliance "{{MODULE}}/internal/rpc/alliance"
-	"{{MODULE}}/protocol/msgid"
+
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
-	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
-// 换服前的公会 / 队伍检查要撑到交出实体（RV-20261111-BM-05）。申请时查一次不够：从那一刻到提交之间，
-// 标记之前已经准入的请求还在执行，联盟服务的成员通知还在路上，客户端也还连着。这里用正式的驱动器
-// （game/controllers/rehome 的 DriverFromRegistry）、正式的 Profile 适配、demo 登记的检查与离开钩子、
-// 真实的 Nest 与 Player、真实的驻留表与 account.Service 把这些交错固定下来；联盟服务是按脚本回答的替身，
-// 提交器不落盘，交出实体是替身。时序由 channel 固定。
-
-// rehomeAlliance 站在联盟服务的位置上：只回答 Membership，别的方法没有（没人该调）。
-type rehomeAlliance struct {
-	rpcalliance.Alliance
-	mu     sync.Mutex
-	state  alliancerule.MemberState
-	err    error
-	asked  int
-	onAsk  func()
-}
-
-func (a *rehomeAlliance) Membership(context.Context, int64) (rpcalliance.GuardReply, error) {
-	a.mu.Lock()
-	a.asked++
-	state, err, onAsk := a.state, a.err, a.onAsk
-	a.mu.Unlock()
-	if onAsk != nil {
-		onAsk()
+func TestRehomeRefusesPartitionedScene(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("scene.partition.enabled", true)
+	cfg.Set("scene.partition.owners", []string{"1001", "1002"})
+	r := app.NewRegistry(cfg)
+	if err := refuseRehomeInAPartitionedScene(context.Background(), r, gamerehome.Move{PlayerID: 7, From: 1000, To: 1001}); !errors.Is(err, apperrors.ErrRehomeRefused) {
+		t.Fatalf("partitioned scene: %v", err)
 	}
-	return rpcalliance.GuardReply{State: state}, err
 }
-
-func (a *rehomeAlliance) set(state alliancerule.MemberState, err error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.state, a.err = state, err
-}
-
-func (a *rehomeAlliance) questions() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.asked
-}
-
-// rehomeAfterBegin 让用例在 account 已经登记换服、驱动器还没往下走的那一刻插进一件事。
-type rehomeAfterBegin struct {
-	gamerehome.Directory
-	afterBegin func()
-}
-
-func (d rehomeAfterBegin) Begin(ctx context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
-	binding, err := d.Directory.Begin(ctx, playerID, request)
-	if err == nil && d.afterBegin != nil {
-		d.afterBegin()
-	}
-	return binding, err
-}
-
-// rehomeCheckWorld 是一个服（1000）上的一名在线玩家，接着正式的换服驱动器。
-type rehomeCheckWorld struct {
-	t        *testing.T
-	world    *routeWorld
-	home     *routeServer
-	player   *player.Player
-	engine   *nest.NestMgr
-	notices  guildNotices
-	alliance *rehomeAlliance
-	fencer   *fakeFencer
-	// afterBegin 在 account 登记换服之后、驱动器继续之前执行（见 rehomeAfterBegin）。
-	afterBegin func()
-}
-
-func newRehomeCheckWorld(t *testing.T) *rehomeCheckWorld {
-	t.Helper()
-	w := &rehomeCheckWorld{t: t, world: newRouteWorld(t), alliance: &rehomeAlliance{}, fencer: &fakeFencer{}}
-	w.home = w.world.server(t, routeLocalSID)
-	w.home.owners.Fence(w.fencer)
-	ctx := context.Background()
-	if err := w.home.owners.Serve(ctx, w.world.player, routeLocalSID); err != nil {
+func TestRehomeOrdinarySceneHasNoDemoMembershipRestriction(t *testing.T) {
+	r := app.NewRegistry(viper.New())
+	if err := refuseRehomeInAPartitionedScene(context.Background(), r, gamerehome.Move{PlayerID: 7, From: 1000, To: 1001}); err != nil {
 		t.Fatal(err)
 	}
-	w.player = newScenePlayer(t, w.world.player)
-	// 离开钩子按成员卡的实体号问联盟服务：成员卡这一类实体要登记过（正式进程在启动时登记）。
-	alliance_member.RegisterEntity()
-	handler.RegisterShowGuildNestHandlers()
-	handler.RegisterRehomePrepareNestHandlers()
-	handler.RegisterRehomeCancelNestHandlers()
-	handler.RegisterRehomeArriveNestHandlers()
-	w.engine = nest.NewEngine(
-		nest.NestOptionWithGetter(sceneGetter{w.player.ID(): w.player}),
-		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
-	)
-	if err := w.engine.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = w.engine.Shutdown(ctx) })
-	w.notices = guildNotices{nest: w.engine, push: &noticePush{online: map[int64]bool{w.world.player: true}}}
-	directory, err := gamerehome.DirectoryOf(w.home.registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wrapped := rehomeAfterBegin{Directory: directory, afterBegin: func() {
-		if w.afterBegin != nil {
-			w.afterBegin()
-		}
-	}}
-	for name, value := range map[app.ModName]any{
-		app.ModName("nest"):            nest.Client(w.engine),
-		gamerehome.DirectoryCapability: gamerehome.Directory(wrapped),
-		rpcalliance.CapabilityName:     rpcalliance.Alliance(w.alliance),
-	} {
-		if err := w.home.registry.Register(name, value); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return w
 }
 
-// apply 走正式的驱动器申请换到 1001。
-func (w *rehomeCheckWorld) apply() (gamerehome.Ticket, error) {
-	driver, err := rehomecontroller.DriverFromRegistry(w.home.registry)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	return driver.Apply(context.Background(), gamerehome.Request{PlayerID: w.world.player, To: routeOtherSID})
-}
-
-// joined 把一条“已入会”的成员通知经正式的通知处理写进 Player（guildNotices.apply → ShowGuild）。
-func (w *rehomeCheckWorld) joined(guildID int64) {
-	w.t.Helper()
-	notice := &rpcalliance.MemberNotice{PlayerID: w.world.player, AllianceID: guildID, Change: alliancerule.MemberJoined, Version: 1}
-	if err := w.notices.apply(context.Background(), notice); err != nil {
-		w.t.Fatal(err)
-	}
-	if w.player.ProfileComp().GuildID() != guildID {
-		w.t.Fatal("the membership notice did not reach the Player")
-	}
-}
-
-// settled 等后台部分有了结论：迁出表里没有他（没换成），或者记着他已迁走。返回他是否换走了。
-func (w *rehomeCheckWorld) settled() (gone bool) {
-	w.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		where, tracked := w.home.owners.Where(w.world.player)
-		if !tracked || !where.Moving {
-			return tracked
-		}
-		if time.Now().After(deadline) {
-			w.t.Fatalf("the transfer %s did not settle", where.Move.ID)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-// expectStayed：换服被中止——account 上他仍绑定在 1000、没有换服在途，源服照常为他服务，实体没有被交出。
-func (w *rehomeCheckWorld) expectStayed(what string) {
-	w.t.Helper()
-	if w.settled() {
-		w.t.Fatalf("%s: the player was moved out although the precondition no longer held", what)
-	}
-	binding, err := w.world.accounts.RoleBinding(context.Background(), w.world.player)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	if binding.ServingServerID != routeLocalSID || binding.Transfer != nil || len(w.home.departer.handed) != 0 {
-		w.t.Fatalf("%s: account binds him to %d (transfer in flight: %v), handed off %v; want him on 1000, nothing in flight, nothing handed off",
-			what, binding.ServingServerID, binding.Transfer != nil, w.home.departer.handed)
-	}
-}
-
-// 申请时不在公会里，检查通过；account 登记换服之后，一条“已入会”的成员通知把公会写进了他的档。
-// 这一次换服必须中止：他没有被交出，account 上仍绑定在 1000。同一时刻他自己新的请求已经在写闸门被拒——
-// 通知不经闸门，照常写档（否则权威那边成员关系变了，这份副本永远不更新）。
-// 对照：通知在申请之前到，申请当场被拒。
-func TestRehomeIsAbortedWhenTheGuildCheckStopsHoldingAfterTheApplication(t *testing.T) {
-	early := newRehomeCheckWorld(t)
-	early.joined(7)
-	if _, err := early.apply(); !errors.Is(err, apperrors.ErrRehomeRefused) {
-		t.Fatalf("a guild member's application: %v, want rehome_refused", err)
-	}
-
-	w := newRehomeCheckWorld(t)
-	var gate error
-	w.afterBegin = func() {
-		gate = w.home.owners.AdmitMessage(w.world.player, msgid.MsgJoinGuild)
-		w.joined(7)
-	}
-	if _, err := w.apply(); err != nil {
-		t.Fatalf("the application of a player in no guild: %v", err)
-	}
-	if !errors.Is(gate, apperrors.ErrRehomeMoving) {
-		t.Fatalf("a JoinGuild request sent after the leaving mark was answered %v at the write gate, want rehome_moving", gate)
-	}
-	w.expectStayed("joined a guild after the application")
-	if w.player.ProfileComp().GuildID() != 7 {
-		t.Fatalf("guild id = %d, want the notice's 7", w.player.ProfileComp().GuildID())
-	}
-	// 中止之后他照常被服务：闸门重新放行。
-	if err := w.home.owners.AdmitMessage(w.world.player, msgid.MsgJoinGuild); err != nil {
-		t.Fatalf("after the abort the write gate still refuses the player: %v", err)
-	}
-}
-
-// 他档里的公会是一份展示副本，通知可以迟到、可以丢：申请时、复核时它都是 0，联盟服务却已经记着他入会了
-// （入会请求的应答迟到，或者成员通知还在路上）。离开钩子在他安静下来之后去问联盟服务：是成员、有一笔
-// 入会的预留在途、或者问不到，都中止；联盟服务说没有（或者他从来没有过成员卡）才换走。
-func TestRehomeAsksTheAllianceServiceBeforeHandingThePlayerOff(t *testing.T) {
-	member := newRehomeCheckWorld(t)
-	member.alliance.set(alliancerule.MemberState{PlayerID: member.world.player, AllianceID: 7}, nil)
-	if _, err := member.apply(); err != nil {
-		t.Fatal(err)
-	}
-	member.expectStayed("the alliance service says he is a member")
-	if member.alliance.questions() != 1 || member.player.ProfileComp().GuildID() != 0 {
-		t.Fatalf("asked %d times, guild copy %d; want one question and the copy still 0", member.alliance.questions(), member.player.ProfileComp().GuildID())
-	}
-
-	pending := newRehomeCheckWorld(t)
-	pending.alliance.set(alliancerule.MemberState{PlayerID: pending.world.player, PendingAllianceID: 7, PendingRequestID: "join-1"}, nil)
-	if _, err := pending.apply(); err != nil {
-		t.Fatal(err)
-	}
-	pending.expectStayed("a join reservation is on its way")
-
-	away := newRehomeCheckWorld(t)
-	away.alliance.set(alliancerule.MemberState{}, errors.New("alliance service is away"))
-	if _, err := away.apply(); err != nil {
-		t.Fatal(err)
-	}
-	away.expectStayed("the alliance service cannot be asked")
-
-	// 没有成员卡（从没进过公会）与“不在任何公会里”都放行。
-	for _, answer := range []error{nil, servicerpc.EntityNotFound(1)} {
-		free := newRehomeCheckWorld(t)
-		free.alliance.set(alliancerule.MemberState{PlayerID: free.world.player}, answer)
-		if _, err := free.apply(); err != nil {
-			t.Fatal(err)
-		}
-		if !free.settled() {
-			t.Fatalf("answer %v: a player in no guild was not moved", answer)
-		}
-		binding, err := free.world.accounts.RoleBinding(context.Background(), free.world.player)
-		if err != nil || binding.ServingServerID != routeOtherSID {
-			t.Fatalf("answer %v: account binds him to %d (%v), want 1001", answer, binding.ServingServerID, err)
-		}
-	}
-}
-
-// 标记之前已经准入、还在执行的入会请求：它的会话还没收尾，后台部分就等着——不复核、不问联盟服务、不交出实体。
-// 那个请求执行完的时候联盟服务已经记下他入会了（应答到没到客户端无所谓）；后台这才往下走，问到的是入会之后的事实，
-// 于是中止。时序由 channel 固定：waiting 是“后台已经在等那条会话（而且还在等）”，之后才让请求执行完。
-func TestRehomeWaitsForARequestAdmittedBeforeTheMarkAndThenAsks(t *testing.T) {
-	w := newRehomeCheckWorld(t)
-	w.fencer.connect(w.world.player)
-	waiting, finish := make(chan struct{}), make(chan struct{})
-	// waiting 在后台第三次来问“他还有没有会话”时才关：问一次就往下走的实现到不了这里，用例因此不靠时机。
-	var once sync.Once
-	var polls atomic.Int64
-	w.home.owners.Fence(inFlightSessions{fakeFencer: w.fencer, finish: finish, onWait: func() {
-		if polls.Add(1) >= 3 {
-			once.Do(func() { close(waiting) })
-		}
-	}})
-	if _, err := w.apply(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-waiting:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the move never waited for the request admitted before the mark")
-	}
-	if asked := w.alliance.questions(); asked != 0 || len(w.home.departer.handed) != 0 {
-		t.Fatalf("while a request admitted before the mark was still running: asked the alliance service %d times, handed off %v; want neither", asked, w.home.departer.handed)
-	}
-	if err := w.home.owners.AdmitMessage(w.world.player, msgid.MsgJoinGuild); !errors.Is(err, apperrors.ErrRehomeMoving) {
-		t.Fatalf("a new request during the wait: %v, want rehome_moving", err)
-	}
-	// 那个入会请求在联盟服务那边生效了，然后才执行完（会话收尾）。
-	w.alliance.set(alliancerule.MemberState{PlayerID: w.world.player, AllianceID: 7}, nil)
-	close(finish)
-	w.expectStayed("a join admitted before the mark landed while the move was waiting")
-	if w.alliance.questions() != 1 {
-		t.Fatalf("asked the alliance service %d times, want once, after the request finished", w.alliance.questions())
-	}
-}
-
-// rehomeTestJoinTeam 是测试登记的 Nest handler：在 Player 的事务里写 TeamID，代替真实的入队（它还要一个 Team 实体）。
-var rehomeTestJoinTeam = nest.NewHandlerName("rehomeTestJoinTeam")
-
-func init() {
-	nest.MustRegisterHandlerWithMeta(rehomeTestJoinTeam, func(targets []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-		targets[0].(*player.Player).Dao().SetTeamID(params[0].(int64))
-		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
-}
-
-// inFlightSessions 是一条正在执行请求的会话：断开它之后，它要等 finish 才从会话表里摘掉。
-type inFlightSessions struct {
-	*fakeFencer
-	finish <-chan struct{}
-	onWait func()
-}
-
-func (s inFlightSessions) ActiveSessions(int64) int {
-	select {
-	case <-s.finish:
-		return 0
-	default:
-	}
-	s.onWait()
-	return 1
-}
-
-// 队伍同理：申请时不在队伍里，之后（标记之前准入的入队事务提交了）档里有了队伍——复核不过，中止。
-// 入队与写这份档在同一笔事务里，所以他安静下来之后这份档里的队伍就是事实，不用再问别人。
-func TestRehomeIsAbortedWhenThePlayerJoinedATeamAfterTheApplication(t *testing.T) {
-	w := newRehomeCheckWorld(t)
-	w.afterBegin = func() {
-		// 入队的事务：这里只要它写档的那一半，用一个测试自己登记的 Nest handler 在事务里写 TeamID。
-		if _, err := w.engine.Request(context.Background(), rehomeTestJoinTeam, w.player.ID(), nest.NewParams(int64(9))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := w.apply(); err != nil {
-		t.Fatal(err)
-	}
-	w.expectStayed("joined a team after the application")
-	if w.alliance.questions() != 0 {
-		t.Fatalf("the alliance service was asked %d times although the recheck already refused", w.alliance.questions())
+func TestRehomeRejectsInvalidPartitionSettings(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("scene.partition.enabled", true)
+	r := app.NewRegistry(cfg)
+	err := refuseRehomeInAPartitionedScene(context.Background(), r, gamerehome.Move{PlayerID: 7, From: 1000, To: 1001})
+	if err == nil || !strings.Contains(err.Error(), "owners lists") {
+		t.Fatalf("invalid settings allowed rehome: %v", err)
 	}
 }

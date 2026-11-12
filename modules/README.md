@@ -4,22 +4,34 @@
 
 它不是生成器输出。生成器（`roost generate`、`roost add`）只产出框架骨架；模块是业务代码，只是提前写好、验收过。设计与取舍见[业务模块与配方方案](../docs/maintenance/FEATURE-2026-11-10-business-modules.md)。
 
+普通商店购买、任务领奖在一笔 Player Nest 事务里完成，不使用 Saga；充值到账用 purchase 的订单与补发游标。只有多个独立提交方必须协调与补偿的复杂交易才用 Saga，本地多实体事务能覆盖的也不引入 Saga。
+
 ## 现有模块
 
 | 模块 | 做什么 | 依赖 | 状态字段 | 场景数 |
 | --- | --- | --- | --- | --- |
+| [rules](rules/README.md) | 进入/重连推送完整规则快照，RulesGet 补取；同一 Player Nest 中读取各功能 PB | enter | 无 | 10 |
+| [purchase](purchase/README.md) | 充值发货：platform 验签与订单去重、Redis 顺序待发、Player 常量大小游标；金币内置，道具与入场补发联动；渠道缺省拒绝 | wallet、托管 platform；bag / enter 联动 | `PlayerDao.Purchase`（只落库） | 21；bag 4、enter 2 条联动 |
+| [gm](gm/README.md) | 运维命令登记、必填操作者与备注、带码拒绝；复用 ops `/admin`；功能模块按 `with/gm` 接入 | 无；game 底座的 ops | 无 | 9；wallet / bag / profile / mailbox / rehome 各 4 条联动 |
 | [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 14 |
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后执行别的功能登记的钩子（`OnCheckinClaimed`，同一笔事务） | wallet | `PlayerDao.Checkin`（同步） | 8 |
 | [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）、向在线玩家的推送（`ChatMessage`）、按序号翻历史（`ChatHistory`）、给服务端用的系统公告（`AnnounceWorld`）；经托管的 chat 服务存储，替换它默认拒绝一切的 collaborators。game-demo 用的就是它 | 无（要求业务服务 `uses: [chat]` 与玩家 TCP 接入，后者安装时代办） | 无 | 10 |
 | [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放可写在 `game/entities/player/enter_first.go`，模块联动可用 `player.OnFirstEnter` 登记同一事务内的发放；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`；钩子拿到 `Entered{PlayerID, First, FirstAtUnixMilli, Claims}`，`Claims` 是会话的 claims，可为 nil）；安装时打开玩家 TCP 接入与自身视图；别的功能登记的进入前检查（`OnEntering`，能否决登录）在加载 Player 之前执行；进入的骨架是 `gameenter.Enter`（检查 → 加载与首次初始化 → 钩子）；另一条路“先新建、再进入”只对被登记为“先新建”的会话生效（`gameenter.RequireCreateFirst`，login 的联动登记的是用进服票据握手的会话）：`EnterGame` 不代建、没建成答 `enter_need_create`，新建请求 `EnterCreate{name}` 一笔事务里起名、初始发放、建成，名字规则的登记点 `OnCreating` / `OnCreatePrepare` / `player.OnCreate`，会话激活后的告知 `EnterStatus{code, need_create}`（`game/controllers/enter` 的 `Announce`）；没有人登记时 `EnterGame` 与原来相同 | 无 | `PlayerDao.Enter`（只落库） | 29 |
-| [profile](profile/module.yaml) | 玩家档案：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）与只检查不执行的 `CheckAddExp`；给服务端按玩家号读的名片 handler `ProfileCard`（名字、等级）；工程升级钩子写在 `game/entities/player/profile_levelup.go`，模块扩展用 `OnProfileLevelUp` 按名字登记。game-demo 用的就是它 | 无 | `PlayerDao.Profile`（同步，名字与等级，别的玩家也可以看）、`PlayerDao.ProfilePrivate`（同步，经验，只给本人） | 20 |
+| [profile](profile/README.md) | 玩家档案（首次建档 1 级）：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）与只检查不执行的 `CheckAddExp`；给服务端按玩家号读的名片 handler `ProfileCard`（名字、等级）；工程升级钩子写在 `game/entities/player/profile_levelup.go`，模块扩展用 `OnProfileLevelUp` 按名字登记。game-demo 用的就是它 | enter | `PlayerDao.Profile`（同步，名字与等级，别的玩家也可以看）、`PlayerDao.ProfilePrivate`（同步，经验，只给本人） | 20 |
 | [bag](bag/module.yaml) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种硬上限 999999）；自带道具表 `configs/schema/item.go` 与 `configs/table/item.csv`（哪些道具存在、每种的单种上限；加道具只改 CSV 再 `roost generate`）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；规则入口 `game/entities/player/bag_items.go`（缺省读道具表）。game-demo 用的就是它 | 无（要求 `config` 特性，`-template game` 缺省已开） | `PlayerDao.Bag`（同步） | 17 |
 | [leaderboard](leaderboard/module.yaml) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 20 |
-| [mailbox](mailbox/module.yaml) | 邮件：分页列出自己的邮件（`MailboxList`）、领取附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；附件是（种类、号、数量），种类是登记点：金币内置，别的种类由登记了校验（`game/mailbox` 的 `RegisterType`）与发放方式（`RegisterMailboxGrant`）的功能提供；给服务端发件用的 `mailbox.SendTo`（一名玩家一封、附件先校验、幂等键必填）。game-demo 用的就是它 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 32 |
-| [task](task/module.yaml) | 每日任务：按业务日惰性清零的进度；服务端推进（组件入口 `Advance`、不对客户端开放的 handler `TaskAdvance`）；领奖协议 `TaskClaim`，金币经货币模块在同一笔事务里到账；任务表写在 `game/entities/player/task_catalog.go` | wallet | `PlayerDao.Task`（同步） | 18 |
-| [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go` | wallet | `PlayerDao.Stamina`（同步） | 25 |
-| [shop](shop/module.yaml) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录写在 `game/entities/player/shop_goods.go` | wallet、bag | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 17 |
+| [mailbox](mailbox/README.md) | 邮件：分页列出自己的邮件（`MailboxList`）、领取附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；附件是（种类、号、数量），种类是登记点：金币内置，别的种类由登记了校验（`game/mailbox` 的 `RegisterType`）与发放方式（`RegisterMailboxGrant`）的功能提供；给服务端发件用的 `mailbox.SendTo`（一名玩家一封、附件先校验、幂等键必填）。与 profile 联动在升级时冻结奖励、通过 effect 发邮件（缺省不发奖），10 条场景；game-demo 用的就是它 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 32 |
+| [task](task/README.md) | 事件任务：每日/每周/永久与前置链，配置表，金币/道具奖励；事务内事件联动 | wallet；bag 等联动 | `PlayerDao.Task`（同步） | 29；八组联动 25 条 |
+| [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 25 |
+| [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
+| [activity](activity/README.md) | 共用 activity.Component 五阶段活动状态机：一次性/日历循环、可信条件解锁、自定义流程、有界恢复；个人宿主 | 无；configdata / 个人持久定时器由安装器接入 | PlayerDao.Activity（只落库） | 21 |
+| [activity_world](activity_world/README.md) | 全服/服务器组权威 Entity，独立服务、ownership 恢复扫描 | activity | ActivityWorldDao.ActivityWorld（只落库） | 4 |
+| [activity_alliance](activity_alliance/README.md) | 既有联盟 Entity 的活动适配，扩展 alliance 配置/RPC | activity、alliance | AllianceDao.ActivityAlliance（只落库） | 4 |
+| [alliance](alliance/README.md) | 独立联盟服务单写者、路由 RPC / 三个跨域 Saga、Mirror 展示与换服惰性校正 | bag；代办 saga / Mirror 与 alliance 服务 | AllianceDao、AllianceMemberDao、PlayerDao.Alliance / SagaReceipts | 49 |
+| [team](team/README.md) | Remote 共享权威队伍，六个 PB 端点；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 27 |
+| [matchmaking](matchmaking/README.md) | 单人/整队按服分池；持久意图、取消竞态、结果补查、组队冻结 | team、matchroom；托管 match | PlayerDao.Matchmaking | 16 |
+| [matchroom](matchroom/README.md) | MatchID 幂等移交到 Room，固定准入名单、掉线保座 | room、Mongo | RoomDao.Matchroom、持久房号映射 | 12 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
 | [login](login/README.md) | 登录鉴权：玩家 TCP 握手把票据交给 account 校验——进服票据（`enter:<票据>`，account 的 `EnterServer` 按账号与服解析玩家号、没有映射就新建，不带名字）或角色会话令牌（`session:<player_id>:<token>`）；把承载服 / 原服 / 映射创建时间 / 绑定代数 / 换服 / 握手方式 / 新建标记写进会话；会话激活后的告知登记点 `login.OnSessionActive`（有界的后台执行，只是告知）；接管鉴权桩与 account 的 collaborators（开发令牌登录 `login.dev_token`、Redis 玩家号计数器；渠道入口 `login_channels.go` 缺省全拒）；带运维命令 `cmd/accountctl`（`upsert-server` / `show-server` / `list-servers`，`make dev-run` 自动登记本机的服） | 无（要求业务服务 `uses: [account]`；玩家 TCP 接入安装时代办，监听要自己 `roost config enable player-tcp`） | 无 | 32 |
@@ -45,10 +57,23 @@
 
 | 联动 | 做什么 | 场景数 |
 | --- | --- | --- |
+| activity + enter | 持久创建锚点与进入对账，锁外恢复 pending | 1 |
+| activity + profile | 升级与条件解锁在同一 Player 事务 | 1 |
+| activity + leaderboard | 活动实例分榜身份 | 1 |
+| activity + mailbox | 结算发件使用稳定期次/收件人键 | 1 |
+| alliance + enter / rehome | 进入/重连对账与 HomeSID 条件修正 / 原生步骤按当前绑定准入 | 各 2 |
+| matchmaking + rehome | 排队与换服双向互斥，未知结果继续保持屏障 | 2 |
+| team + rehome | 在队伍中拒绝换服，换服意图未清除前拒绝建队/入队 | 2 |
 | chat + enter | 玩家进入游戏时加进世界频道的在线名单（`game/chat/chat_enter.go`） | 2 |
 | mailbox + enter | 玩家进入游戏时把属于他的全服邮件合并进邮箱（`game/controllers/mailbox/mailbox_enter.go`）；画像缺省取首次进入的时间，会话带着 account 的角色创建时间与区服时改用它们（读 `gameenter.Entered.Claims`） | 5 |
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
 | task + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/task_checkin.go`） | 3 |
+| task + wallet / shop / stamina / profile / dungeon | 首次消费、购买份数、消耗点数、提升等级数、副本领奖在原事务中推进 | 6 / 3 / 3 / 2 / 2 |
+| task + bag | 道具奖励与任务领奖在同一笔事务 | 3 |
+| task + leaderboard | rank 成功答复后独立推进，尽力通知且重复提交计数 | 3 |
+| shop + rules / stamina + rules | 统一导出商品目录 / 体力规则，保持快照独立 | 各 2 |
+| profile + enter | 初次建档 1 级；不触发升级奖励，重进/冷加载不重置 | 4 |
+| attribute + enter | 按初始等级建立基础/最终属性，同事务回滚 | 2 |
 | portal + enter | 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手 → 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入，以及入口给的地址与进入时认的是同一个承载服（只有测试 `game/portal/portal_enter_test.go`，不加运行时代码） | 2 |
 | login + enter | 进入前检查：会话记的承载服不是本服（或没有记）答 `login_elsewhere`，不加载也不创建 Player；用进服票据握手的会话先新建再进入（`EnterGame` 不代建，没建成答 `enter_need_create`）；会话激活之后推 `EnterStatus`，本服不该服务的会话推完断开（`game/login/login_enter.go`） | 6 |
 | enter + profile | 角色名的规则在游戏服：新建请求（`EnterCreate`）的名字按档案模块的名字规则校验，不合规在建档之前被拒；没装 naming 时在新建的那笔事务里写进档案，装了 naming 时经它的唯一命名入口占名（`game/profile/enter_profile.go`） | 3 |
@@ -63,7 +88,7 @@
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。再装 `portal`（连带 `login`），客户端就能从渠道身份经 HTTP 登录、拿区服清单与推荐、换进服票据，握手后由游戏服告知要不要先新建，新建（带角色名）之后进入游戏；入口在托管 account 的进程上监听。
 
-谁在用这三个登录模块（2026-11-12）：**game-demo 模板**装的是 `login`、`portal`、`servertime`（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`，排在它原有的十个模块之后）。它不带自己的认证器与 account collaborators，只动模块留给工程的地方——渠道入口 `login_channels.go` 换成 demo 渠道、经 `registerCommand` 给 `cmd/accountctl` 多登记四个命令——并覆盖 enter 域的两个端点，让“加载 Player 之前先核对归属、接入驻留表”的规矩在 `EnterGame` 与 `EnterCreate` 上都成立（[demo 的说明](../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入)）。**两个配方（casual、turn-pvp）也已接入** login / portal / servertime；采用模块认证器与先新建再进入的链路，开发配置包含本机登录令牌和区服地址。
+谁在用这三个登录模块（2026-11-12）：**game-demo 模板**装的是 `login`、`portal`、`servertime`（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`，排在 `enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox`、`skillbook`、`rehome`、`attribute`、`equipment`、`gm`、`purchase`、`team`、`alliance` 之后）。它不带自己的认证器与 account collaborators，只动模块留给工程的地方——渠道入口 `login_channels.go` 换成 demo 渠道、经 `registerCommand` 给 `cmd/accountctl` 多登记四个命令——并覆盖 enter 域的两个端点，让“加载 Player 之前先核对归属、接入驻留表”的规矩在 `EnterGame` 与 `EnterCreate` 上都成立（[demo 的说明](../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入)）。**两个配方（casual、turn-pvp）也已接入** login / portal / servertime；采用模块认证器与先新建再进入的链路，开发配置包含本机登录令牌和区服地址。
 
 ## 使用
 
@@ -84,12 +109,14 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 
 ## 安装做了什么
 
-1. **前置骨架**：缺少的 heartbeat / directory / web Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
+1. **前置骨架**：缺少的 configdata / heartbeat / directory / remote_entity / remote_mirror / saga / web Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
 2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
 3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
 4. **组件与附加 DAO**：把模块组件接到实体上；`daos: [{field: combatState, type: CombatDAO, tag: combat_state}]` 追加独立 DAO 的聚合声明，复用同一份实例的加载、事务与恢复。字段/集合被占用时拒绝。`sync_packer` 只接明确的模块视图工厂，已有业务 packer 时拒绝覆盖。
 5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires` 与可选 `runtime`。
 6. **生成**：运行全部生成器。自带实体时同时刷新 owner / handler / shutdown 接线；有 `runtime` 时生成服务适配层。自身同步在 packer、附加 DAO 与模块文件全部就位后开启，并在同一暂存树补齐推送协议。全部生成物与需刷新配置一起暂存、提交，失败不会留下半套接线。
+
+模块可用 `services` 声明独占的新业务服务；`existing: true` 只给已存在服务追加 Mod/RPC 及缺少的配置段，不能接管实体所有权或覆盖 `service.go`。新服务模板、开发/生产示例配置及 Kubernetes Secret 示例的修改都纳入安装失败回滚。
 
 两个模块之间的**联动文件**在第 4 步之后写：这次装的模块与工程里已有的（或同一次装的）模块凑成一对、而这一对有联动时，把联动文件写进工程，归属记在拥有它的模块的 `with` 下。`plan` 与 `add` 的输出里是 `glue <模块> with <另一个模块>`。两个都早已装好的不补。
 
@@ -111,7 +138,7 @@ modules/<name>/
 
 实体、DAO、lifecycle 都记入归属清单，并在模块安装的回滚边界内。它们不作为先执行、失败后保留的前置命令。实体号与其他号一样按最小空号分配，扫描已有代码与安装记录，已分配号不回收。依赖模块可以通过 `requires` 使用先安装的实体；需要追加状态时仍声明自己的 `entity` / `state` / `component`。
 
-安装器在生成暂存区先同步服务归属，再生成全部接口；bootstrap、相关 shutdown 配置、模块源码和清单失败时一并回退。普通 `roost generate` 的行为不变，手工修改实体归属仍需 `project sync`。第一个使用者是 [room](room/README.md)；scene、monster、dungeon、terrain 同样复用，team / guild 尚未迁移。
+安装器在生成暂存区先同步服务归属，再生成全部接口；bootstrap、相关 shutdown 配置、模块源码和清单失败时一并回退。普通 `roost generate` 的行为不变，手工修改实体归属仍需 `project sync`。第一个使用者是 [room](room/README.md)；scene、monster、dungeon、terrain 同样复用，team 同样支持；alliance 尚未迁移。
 
 ### 服务级启动与停机
 
@@ -140,7 +167,7 @@ runtime:
 
 这时安装器不动业务服务的 `modules_gen.go`：bootstrap 在托管那个框架服务的 Mod 列表末尾加一个 `wiring/modulehost` 的 Mod（`kitmodulehost.NewMod("account", …, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`），在全部 Mod 启动之后、`Service.Init` 之前调入口，停机按反序。清单的 `needs.mods` 这时是对那个托管服务的要求（portal 的 `web` 加在 account 上，开发端口取 8080 + 它的端口块号），不是对业务服务的；模块的文件仍按落点写进工程，安装记录的 `service` 仍是业务服务。工程里没有托管那个框架服务的服务时拒绝安装。自己手写 bootstrap 的工程要照着加这一个 Mod。
 
-模块只安装到一个业务服务。依赖必须属于同一服务；跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
+模块的玩家侧只安装到一个业务服务，依赖属于同一服务；模块也可声明自己独占的新业务服务（如 alliance）。跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
 ### 清单
 
@@ -153,6 +180,7 @@ needs:
   mods: [nest]               # 业务服务必须有的 Mod（写了 runtime.framework 时：托管那个框架服务的服务必须有的）
   features: [protocol, entity, dao, errcode]
   uses: []                   # 业务服务必须 uses 的托管框架服务（rank、mail……）
+  uses_rpcs: []               # 模块新增的业务 RPC，安装器接到目标业务服务
 entity: Player               # 状态与组件挂在哪个实体上
 entities: []                 # 自带实体名字；与挂靠既有实体分开，见上文
 state:                       # 追加到主 DAO 末尾的顶层字段
@@ -162,6 +190,9 @@ state:                       # 追加到主 DAO 末尾的顶层字段
     dao: persist,sync
     comment: 写进 DAO 定义的注释
 component: Wallet            # 挂在实体上的组件
+components: []               # 自带实体的其他组件名，安装时分配类型号
+services: {}                 # 模块独占的新服务；mods/rpcs/entities，已有同名服务拒绝接管
+sagas: []                    # name/steps/routed/receipts；定义与实体回执原子安装，业务由 runtime 提供
 timer_types: []              # 实体内的持久定时器类型名，例如 turn 的 [TurnDeadline]
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字
@@ -257,7 +288,7 @@ roost project new arena -module example.com/studio/arena -recipe turn-pvp
 配方以 `game` 为底，复用同一个模块安装器、自动联动、ID 分配和自身同步；可用 `-services arena` 指定业务服务名。不能与 `-template game-demo` 混用。所有文件在新工程的暂存树里完成，失败不留下半个目标工程。已装模块仍由 `module list / verify` 管理，配方不是第二种可重复安装的模块。
 
 - `casual`：enter、wallet、checkin、task、stamina、shop、bag、mailbox、login、portal、servertime；新玩家 100 金币写在 `recipe_first_enter.go`，由事务内 `OnFirstEnter` 发放。重复进入不再发；提交失败时余额与初始化标记一起回滚。
-- `turn-pvp`：enter、profile、room、turn、leaderboard、login、portal、servertime；可信匹配方通过 `room.Open` 创建房间，两位玩家 Join → Start → End。没有替业务假设胜负规则、排行榜结算或客户端开房授权。
+- `turn-pvp`：enter、profile、room、turn、leaderboard、team、matchroom、matchmaking、login、portal、servertime；客户端 MatchEnqueue → MatchStatus → RoomJoin → TurnStart → TurnEnd。没有替业务假设胜负规则、排行榜结算或客户端开房授权。
 
 两者使用 login 模块认证器，支持进服票据与 session 令牌；错误承载服、在途迁移在进入前带码拒绝。账号票据与角色号由 account/Redis 提供，角色名与建档归 game。开发 TCP 已开启，account 开发配置带 dev-recipe-local 与本机目录；生产渠道验签与生产监听仍由工程配置，开发值不进入生产/Secret 示例。操作顺序和边界写入新工程的 `RECIPE.md`，规则文件归业务所有，后续 sync 不覆盖。
 

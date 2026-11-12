@@ -1,0 +1,27 @@
+package activity
+
+import (
+	"context"
+	"crypto/sha256"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+
+	"{{MODULE}}/game/mailbox"
+)
+
+// SendReward 必须拿已持久冻结的收件人/奖单调用。使用实例身份 + 动作 + 收件人，
+// 不包含当前时间、随机数或流程版本，因此超时/迁移重试不会重复发件。
+// 本方法只负责邮件的幂等发送；所有奖励确认送达后，Resume 才能回 done=true。
+func SendReward(ctx context.Context, mailer mailbox.Sender, token Token, action string, letter mailbox.Letter) (svcmail.Envelope, error) {
+	if err := fctx.BlockingError("activity.SendReward"); err != nil {
+		return svcmail.Envelope{}, err
+	}
+	if token.Definition < 1 || token.Definition > MaxDefinitions || token.Owner <= 0 || token.Generation <= 0 || token.Cycle <= 0 || token.Phase != Settling || action == "" || len(action) > 64 || (token.Scope != "world" && token.Scope != "player" && token.Scope != "alliance") {
+		return svcmail.Envelope{}, ErrRule
+	}
+	key := fmt.Sprintf("%s/%d/%d/%d/%d/%s/%d", token.Scope, token.Owner, token.Definition, token.Generation, token.Cycle, action, letter.To)
+	letter.RequestID = fmt.Sprintf("activity:%x", sha256.Sum256([]byte(key)))
+	return mailbox.SendTo(ctx, mailer, letter)
+}

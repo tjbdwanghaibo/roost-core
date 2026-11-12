@@ -66,12 +66,10 @@ type PartitionSpawn struct {
 	HP     int32 `config:"hp" default:"100" min:"1" help:"each monster's HP"`
 }
 
-// PartitionTeam 是分区场景的组队规则与队伍面板的节奏（原型缺省：demo 级合理值，产品可改）。成员表在 Remote 托管的
+// PartitionTeam 仅控制分区场景队伍面板的节奏（组队规则归 team 模块）（原型缺省：demo 级合理值，产品可改）。成员表在 Remote 托管的
 // Team 实体上；每名队员的 Base 每 snapshot_every 把他的位置 / HP 发给其他队员的 Base，3 个周期没更新的队友从面板移除
 // （维护者定的规则，不另设键）；Base 每 resync_every 从 Team 重读一次成员表，兜住丢失的变化通知。
 type PartitionTeam struct {
-	MaxMembers    int32         `config:"max_members" default:"4" min:"2" max:"16" help:"most members of one team (prototype default)"`
-	InviteTTL     time.Duration `config:"invite_ttl" default:"60s" min:"1s" help:"an invitation not accepted within this expires"`
 	SnapshotEvery time.Duration `config:"snapshot_every" default:"1s" min:"100ms" help:"how often each member's Base sends the member's position and HP to the other members' Bases; a teammate with no snapshot for 3 of these leaves the team panel"`
 	ResyncEvery   time.Duration `config:"resync_every" default:"10s" min:"1s" help:"how often a Base rereads a member's roster from the team, so a lost change notice is caught; longer than snapshot_every"`
 }
@@ -122,9 +120,6 @@ func (p ScenePartition) ValidateConfig(bool) error {
 	}
 	if t := p.Team; t.ResyncEvery <= t.SnapshotEvery {
 		bad("team.resync_every %v must exceed team.snapshot_every %v", t.ResyncEvery, t.SnapshotEvery)
-	}
-	if t := p.Team; t.InviteTTL%time.Second != 0 {
-		bad("team.invite_ttl %v must be whole seconds (invitations expire on the second)", t.InviteTTL)
 	}
 	if p.LeaseTimeout <= 500*time.Millisecond {
 		bad("lease_timeout %v must exceed the Base's lease renewal (500ms)", p.LeaseTimeout)

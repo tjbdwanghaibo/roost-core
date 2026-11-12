@@ -1,0 +1,26 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+
+	"{{MODULE}}/game/alliance"
+	allianceruntime "{{MODULE}}/game/alliance/runtime"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// demo 的 PlayerOwners 带闲置卸载和写闸门。消费者启动前先发布这一适配，
+// 与 gift 共用 AdmitBound，不让联盟原生步骤绕过驻留表或碰到正在卸载的副本。
+type alliancePlayerBinding struct{ owners *PlayerOwners }
+
+func (a alliancePlayerBinding) Binding(ctx context.Context, playerID int64, _ int32) (int32, bool, error) {
+	admission, err := a.owners.AdmitBound(ctx, playerID)
+	return admission.SID, admission.Moving, err
+}
+
+func startAlliance(registry *app.Registry, owners *PlayerOwners) (func(context.Context) error, error) {
+	if err := registry.Register(alliance.PlayerBindingCapability, alliancePlayerBinding{owners: owners}); err != nil {
+		return nil, err
+	}
+	return allianceruntime.Start(registry)
+}

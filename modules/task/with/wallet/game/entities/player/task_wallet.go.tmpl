@@ -1,0 +1,6 @@
+package player
+
+// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
+func init() {
+	OnWalletSpent("task", func(owner *Player, _ int64, now int64) error { return owner.TaskComp().Report("wallet.spent", 1, now) })
+}

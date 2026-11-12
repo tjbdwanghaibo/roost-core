@@ -1,0 +1,23 @@
+package handler
+
+import (
+	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerActivityView(target player.IActivityEntity, request *pb.ActivityViewRequest) (*pb.ActivityViewResponse, error) {
+	c := target.ActivityComp()
+	if err := c.Reconcile("", 0); err != nil {
+		return nil, err
+	}
+	values, err := c.Host().Views()
+	if err != nil {
+		return nil, err
+	}
+	result := &pb.ActivityViewResponse{}
+	for _, v := range values {
+		result.Activities = append(result.Activities, &pb.ActivityState{Definition: v.Token.Definition, Generation: v.Token.Generation, Cycle: v.Token.Cycle, Phase: int32(v.Token.Phase), Flow: v.Flow, FlowVersion: v.Token.FlowVersion, Start: v.Start, OpenAt: v.OpenAt, CloseAt: v.CloseAt, Pending: v.Pending, Version: v.Version})
+	}
+	return result, nil
+}

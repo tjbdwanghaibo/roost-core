@@ -1,0 +1,25 @@
+=== RUN   TestModuleAllianceGenerated
+    module_alliance_test.go:51: alliance: pass=49 skip=0 ok=true
+    module_alliance_test.go:51: bag: pass=17 skip=0 ok=true
+    module_alliance_test.go:62: alliance: pass=49 skip=0 ok=true
+    module_alliance_test.go:62: alliance+enter: pass=2 skip=0 ok=true
+    module_alliance_test.go:62: alliance+rehome: pass=2 skip=0 ok=true
+    module_alliance_test.go:62: bag: pass=17 skip=0 ok=true
+    module_alliance_test.go:62: enter: pass=14 skip=0 ok=true
+    module_alliance_test.go:62: rehome: pass=40 skip=0 ok=true
+    module_alliance_test.go:62: rehome+enter: pass=5 skip=0 ok=true
+    module_alliance_test.go:62: team: pass=27 skip=0 ok=true
+    module_alliance_test.go:62: team+rehome: pass=2 skip=0 ok=true
+    module_alliance_test.go:70: caught mutation in game/handler/alliance_home.go: stale=
+    module_alliance_test.go:71: caught mutation in game/handler/alliance_home.go: stale=
+    module_alliance_test.go:72: caught mutation in game/handler/alliance_home.go: replay=
+    module_alliance_test.go:73: caught mutation in game/controllers/alliance/refresh.go: <nil>
+    module_alliance_test.go:74: caught mutation in game/controllers/alliance/refresh.go: stale mirror
+    module_alliance_test.go:75: caught mutation in game/alliance/rehome.go:
+--- PASS: TestModuleAllianceGenerated (84.32s)
+=== RUN   TestDemoAllianceModuleIntegration
+--- PASS: TestDemoAllianceModuleIntegration (33.56s)
+=== RUN   TestModuleAllianceFailedGenerationRollsBackServiceAndSagas
+--- PASS: TestModuleAllianceFailedGenerationRollsBackServiceAndSagas (7.69s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	126.326s

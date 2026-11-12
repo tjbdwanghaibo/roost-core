@@ -21,15 +21,19 @@
 | **原会话（不要动）** | 登录线：模块 login、portal、servertime，game-demo 与两个配方换用它们，客户端登录链路的真实演练；给 agent 用的拼装 skill 的最终重写 |
 | **接手 agent（本文）** | 下面 §3～§6 的全部需求 |
 
-登录线的工作在分支 `tmp/mod-portal`（worktree `/Users/whb/roost/worktrees/mod-portal`，远端 `feat/business-modules-portal`），**还没有合进 `feat/business-modules`**（维护者：主线等最终 skill 也加完后再合并）。它改了这些公共文件，接手 agent 在主线上改同一处时只加自己的行，合并时取并集：`scripts/test-modules-generated.sh`（`all_modules` / `all_counts` 加了 portal，login 的场景数 19 → 22）、`modules/README.md`、`docs/framework/CAPABILITIES.md`、`docs/maintenance/KNOWN-LIMITS.md`、`CHANGELOG.md`、`codegen/internal/roost/module_install.go`（`moduleCanAddMod` 认 web）、`module_spec.go`（清单新字段 `next`：安装后提示）。第二轮（同日，按维护者的三条定型）又动了：**模块 enter 本身**（新建请求 `EnterCreate`、推送 `EnterStatus`、三个业务码、`PlayerDao.Enter.Fresh`、新的登记点；原有 14 条场景与 `EnterGame` 的缺省行为不变，场景数 14 → 29，`needs.features` 多了 errcode，多一组联动 `enter/with/profile`——接手 agent 改 enter 或它的场景数时以登录线的为准）、`scripts/test-modules-generated.sh`（enter=29、login=32、portal=12、login+enter=6、enter+profile=3，portal 那一步断言 web 加在 account 上）、`codegen/internal/roost` 的 `module_test.go` / `module_actor_sync_test.go` / `module_portal_test.go`（场景数）、`module_runtime.go` / `module_install.go` / `module.go` / `render.go` / `port_blocks.go`（清单新字段 `runtime.framework`、web 开发端口按端口块）、`render_player_tcp.go`（认证器的可选接口 `SessionObserver`）、`docs/framework/guide/09-services.md`、`codegen/docs/CODEGEN_REFERENCE.zh-CN.md`，以及 `service/account`（`Accounts` 多六个方法）与新包 `wiring/modulehost`。接手 agent 的模块需要“安装后提示”或 web Mod 代办时，等登录线合入后再用，或先写进模块 README。
+登录线的工作在分支 `tmp/mod-portal`（worktree `/Users/whb/roost/worktrees/mod-portal`，远端 `feat/business-modules-portal`），**还没有合进 `feat/business-modules`**（维护者：主线等最终 skill 也加完后再合并）。它改了这些公共文件，接手 agent 在主线上改同一处时只加自己的行，合并时取并集：`scripts/test-modules-generated.sh`（`all_modules` / `all_counts` 加了 portal，login 的场景数 19 → 22）、`modules/README.md`、`docs/framework/CAPABILITIES.md`、`docs/maintenance/KNOWN-LIMITS.md`、`CHANGELOG.md`、`codegen/internal/roost/module_install.go`（`moduleCanAddMod` 认 web）、`module_spec.go`（清单新字段 `next`：安装后提示）。接手 agent 的模块需要“安装后提示”或 web Mod 代办时，等登录线合入后再用，或先写进模块 README。
 
 ## 2. 验证节奏
+
+当前优先级（维护者 2026-11-12 更正）：R7 已完成；先完成 R10 alliance，再完成 R9 activity。R9 是可供多个业务复用的核心时间阶段框架；R8 gift 不急做，R11 lockstep 仍待做。§5 / §6 的既有欠账单独登记。
 
 维护者 2026-11-12：“测试最终再跑，我还会继续开发”。每一步只跑与改动直接相关的检查（模块自己的 `roost module verify`、`go test -run 'TestModuleCatalog|TestModuleWith' ./codegen/internal/roost`、根包 `go test -count=1 .`、`python3 scripts/check-doc-anchors.py`）。完整测试（`scripts/test-modules-generated.sh`、`TestDemo|TestModule`、重新生成 game-demo 跑全量、全仓 `go test ./...`）留到最后统一跑一次；没跑的在提交说明与报告里写明。
 
 ## 3. 第一优先：让拼出来的工程“能运营”
 
 ### R1. gm（运维命令）
+
+已完成（提交 `8a49fe25`）：实现与定向验收完成，GM 9 条、五组联动各 4 条，8 个变异与定向 race 通过。demo 通用命令迁入模块，双实体经验事务保留；[验收与边界](evidence/module-gm-20261112/README.md)。全模块正反序新装与 §6 真实依赖仍按 §2 留到最后。
 
 - **要解决的**：拼出来的工程没有办法发道具、加经验、发补偿邮件、查玩家；这些现在只在 game-demo 的 `internal/service/game/gm.go` 里手写（`gm.player.add_item` / `add_exp`、`gm.mail.send`、`gm.player.rehome`、`gm.world.stats`、`gm.saga.get|list` 等）。
 - **形态（按推荐项做，待维护者确认）**：一个 `gm` 模块提供登记点与 ops `/admin` 的接线（命令名、参数解析、鉴权沿用 ops 的 admin token 规则）；各功能模块用联动文件（`with/gm/`）登记自己的命令——装了 bag 才有加道具，装了 mailbox 才有发补偿邮件。不做“一个模块里写死全部命令”。
@@ -39,6 +43,10 @@
 
 ### R2. purchase（充值发货）
 
+维护者补充（2026-11-12）：购买不默认用 Saga。普通金币购买走单 Player Nest 事务；充值到账走平台订单与补发游标。只有涉及多个独立提交方、确需失败补偿的复杂交易才使用 Saga；本地多实体事务能覆盖的也不引入 Saga。
+
+已完成（提交 `cc0d7855`）：实现与定向验收完成：基础 21 条、bag 4 条、enter 2 条；新工程 72 PASS / 0 SKIP，13 个变异、两轮 race 与独立 Redis Lua 通过。demo 改用模块、删除无界旧账本；[验收与恢复前提](evidence/module-purchase-20261112/README.md)。全模块正反序和 §6 联合验收仍留到最后。
+
 - **要解决的**：付费订单“恰好一次发货”。现在在 game-demo 的 `game/purchase/` 与 `internal/service/game/purchase_drain.go`，订单账本挂在 demo 的 `claim_ledgers.go`。
 - **需求**：平台回调（经 platform 服务）到账 → 订单号去重 → 发货（wallet 加币或 bag 加道具，经登记点扩展）在同一笔事务里；重复回调零写入并答同一个结果；玩家不在线时到账也要发（下次进入时补发或直接冷加载，取 demo 现有做法并写明）；订单账本有界且到界后仍正确（不能“满了就拒绝”）。
 - **依赖**：wallet；bag（联动）；platform 托管服务（验签仍归工程，缺省全拒，照 login 的 `login_channels.go` 写法留一个业务文件）。
@@ -46,10 +54,14 @@
 
 ### R3. 升级奖励邮件（mailbox + profile 联动）
 
+已完成（提交 `7f91c18f`）：实现与定向验收完成：联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race 与 demo 经验事务定向通过。奖励在升级时冻结，连升一次一封，缺省不发；demo 已迁移。[证据与边界](evidence/module-profile-mail-20261112/README.md)。真实联合验收留在 §6。
+
 - profile 已有按名字登记的升级钩子（attribute 在用）。做成 `mailbox` 的 `with/profile/` 联动：升级那一刻在同一条 WAL 记录里产生 effect，消费者发邮件（game-demo 的 `level_up_mail.go` 是现成写法）。奖励内容写在一个归工程所有的业务文件里，缺省不发（零配置不能凭空发奖）。
 - **验收**：升级一次恰好一封；连升多级的行为写死并有场景；消费者重放不重发。
 
 ### R4. 登记点补齐
+
+已完成（提交 `35153b75`，实现与定向验收）：消费、购买、体力、副本与排行登记点已有 task 实际使用者；实体内钩子与业务同事务，使用冻结业务时间。排行提交后的任务是单独的尽力投递，不承担恰好一次结算。[R4/R5 证据](evidence/module-task-events-20261112/README.md)。
 
 每个登记点都要有真实使用者（R5 的 task 就是）：
 
@@ -58,6 +70,8 @@
 - 写法照 checkin 的 `OnCheckinClaimed`：提供方留登记函数，接入方带一个自己的联动文件在 `init` 里登记；事务内的钩子不能做 I/O。
 
 ### R5. task 扩成核心系统
+
+已完成（提交 `35153b75`，实现与定向验收）：事件、每日/每周/永久、前置链、金币/道具奖励与配置表；基础 29 条（原 18 条保留），八组 task 联动 25 条，组合 215 PASS / 0 SKIP、15 个变异与两轮 race 通过。完整矩阵和真实依赖按 §2/§6 留到最终批次。维护者补充的新角色默认 1 级已通过 profile + enter 的正式首次建档事务实现，失败回滚、不触发升级钩子；attribute 同事务派生初始属性。[使用说明](../../modules/task/README.md)、[默认等级](../../modules/profile/README.md)。
 
 维护者：“task 是一个比较核心的系统，很多业务需求可以加到 task 中去。”方案见[业务模块方案 §18](FEATURE-2026-11-10-business-modules.md) 末尾，按这个先后做：
 
@@ -71,6 +85,8 @@
 
 ### R6. 规则数据
 
+已完成（提交 `29fd4f25`，实现与定向验收）：shop 商品配置表与约束；rules 统一 Player Nest 只读快照，进入/重连推送、RulesGet 补取，stamina/shop 自动依赖。组合 104 PASS / 0 SKIP、6 个变异与两轮 race；任务影响复验 232 PASS / 0 SKIP、原 15 个变异与 race 通过。[验收与边界](evidence/module-client-rules-20261112/README.md)。
+
 - shop 的商品目录改成配置表（照 bag 的道具表）；模块带缺省表，零配置可用。
 - 规则导出给客户端：stamina 的上限与周期、shop 的限购规则——定一个统一做法（协议里带，或进入时推一次），不要每个模块各做各的。当前业务日已由 servertime 下发，不要重复做。
 
@@ -78,26 +94,90 @@
 
 ### R7. team + matchmaking + matchroom（一起设计）
 
+已完成（提交 `7e62d6f6`，实现与定向验收）：team27、matchmaking16、matchroom12、room22、rehome40与两组联动各2，组合121 PASS / 0 SKIP；9个变异与两轮 race。turn-pvp 真实 TCP/Robot 7场景通过，demo 队伍迁移定向测试与编译通过。[证据与边界](evidence/module-matching-20261112/README.md)。完整矩阵、真实存储/跨进程和 §5/§6 保留，不以本批替代。
+
 - **team**：队伍实体（game-demo 的 `game/entities/team`）；建队、入队、离队、队长；入队与写玩家档在同一笔 `[Team, Player]` 事务里（rehome 的排空依赖这一点，不能改成两笔）。
 - **matchmaking**：排队、成局，经托管的 match 服务（demo 的 `game/matchmaking`、`internal/service/game/matchmaker.go`）。
 - **matchroom**：成局后移交到 room（`room.Open`），可信匹配方提供唯一号。
 - **联动**：rehome（在队伍里 / 排队中时拒绝换服，现在只有 demo 的 `rehome_checks.go` 做了）；turn-pvp 配方现在“没有客户端开房 / 匹配入口”，做完后把配方接上。
 - **验收**：单人排队成局进房、组队排队、排队中取消、成局后一方掉线、重复成局通知各有场景。
 
+采用方案（2026-11-12）：
+
+1. `team` 先提供独立组队能力：保留 Remote managed 的共享 Team 权威，Player 仅持久保存队伍引用；建队 / 入队 / 离队必须同时声明 Team 与 Player。取消 demo 的分区场景前置条件，队伍视野作为后续场景联动；队长离队选最小玩家号接任。邀请有数量和时间界限，队伍号通过持久计数器分配、不复用。安装器代办已有 `remote_entity` Mod，不修改 Nest / DataEngine / Sync。
+2. `matchmaking` 持久保存排队意图，再在锁外调用托管 match 服务。同一意图使用稳定 requestID，未知结果保留意图，取消得到确定终态后再解除排队限制。组队排队冻结权威成员版本，排队期间不可改队；默认按本服分队列（room 由本进程拥有），跨服社交队伍要先明确房间路由，不能直接当作本地房间成员。
+3. `matchroom` 负责成局到 room 的可重试移交：可信分配器持久分配唯一房号，按 matchID 幂等映射；开房成功才返回房号。不能把一次推送当成移交事实，查询匹配结果也能恢复开房。匹配房保留成员名单并校验入房资格，掉线成员可重连，不让旁人占用其座位。
+4. rehome 在同一 Player 事务里拒绝有队伍 / 排队意图的玩家；反向入口也拒绝已记下换服意图的入队 / 排队。turn-pvp 最后接入匹配入口。普通流程不引入 Saga。
+5. 每个模块先跑生成工程定向场景、回滚与重复安装；三者组合后验证成局 / 取消竞态、重复通知、掉线重试和换服互斥。Remote、match、room 的真实存储与跨进程验收仍归 §6，不用内存替身宣称通过。
+
+实现遵守的现有契约：托管 match 的 `GroupSize` 计数的是 subject / ticket，并不理解一个队伍内的人数；已结束 ticket、match、requestID 记录只有有限保留期，不能当永久幂等账本。组队方案需要把人数与每名成员可查询的结果写清楚；排队意图的未知结果不能靠超过保留期后盲目重新 Enqueue 来证明“原来没有成局”。现有 demo 只保留本进程驻留玩家作候选，复用时不能丢掉房间属主边界。
+
 ### R8. gift（玩家间送礼）
 
 - 扣 → 送的 saga，失败补偿；扣款步骤按 sid 确切路由（v1.44.0 的 `roost add saga -routed`）。game-demo 的 `saga/gift_item/` 与 `game/gift/` 是现成实现。
 - 属主核对用 `rehome.Binding`（demo 的 `admitByBinding`）；没装 rehome 时退化为“本服即属主”，两种都要有场景。
-- **安装器**：saga Mod 与 `roost add saga` 现在只检查、不代办；需要代办时在安装器里补（照 heartbeat / directory 的代办写法）并配测试。
+- **安装器**：R10 已补模块声明 Saga、代办 saga Mod、原生回执与失败回滚；gift 复用同一入口，不再单独补一套安装逻辑。
 - **只有离线场景时写明**：真实双 sid 的恰好一次要等真实依赖演练。
 
 ### R9. activity（活动）
 
-- 活动榜、定时结算、发奖（demo 的 `game/activity`、`internal/service/game/activity.go`）；用模块的定时器类型分配；发奖走 mailbox。
-- 活动定义做成配置表；零配置时没有任何活动在跑。
+实现与定向验收已完成（2026-11-12，提交 `d84d97cf`）：activity 21、activity_world 4、activity_alliance 4，enter/profile/leaderboard/mailbox 四组联动各 1，共 33 PASS / 0 SKIP；9 个变异、两轮 race、最小安装、组合安装、重复安装与安装失败回滚通过。[使用说明](../../modules/activity/README.md)、[证据](evidence/module-activity-20261112/README.md)。全矩阵、完整 demo、§5/§6 真实依赖仍留到最终批次；配方登录另按 6ee057c2 的新交接任务书后续继续，本批未改其工作树。
 
-### R10. guild（公会）
+实现调整：同一个 activity.Component 通过 activity.Owner 接口挂在不同 Entity 上；状态与阶段推进共用 ActivityBook/Host，实体包只保留接线别名及 DAO/归属/唤醒适配，不复制组件实现。个人使用正式 entitytimer；现有 Remote 生成契约禁止本地持久定时器，因此全服/联盟采用 ownership 分页扫描，期限仍在 DAO，推进仍在 Nest。扫描不是准点保证。未修改三大核心契约。排行榜/邮件为身份与发件适配，跨服协调可接 service/activity；具体奖单和阶段业务由工程定义。本分支 demo 已没有旧活动实现，未恢复第二套 demo。
 
+- **维护者明确（2026-11-12）**：activity 是通用活动生命周期框架，不以活动榜或发奖定义它。标准生命周期为**初始化 → 预热 → 开启 → 结算 → 结束**；报名、分组、比赛等属于业务自定义流程，不加入标准生命周期枚举。
+- **范围补充（维护者 2026-11-12）**：一次性与循环活动都要支持；实例可以归全服、个人或联盟所有，支持满足业务条件后解锁。以下是本轮采用的契约；实现调整和验证范围见上文。
+- 核心提供活动定义、实例、标准阶段的配置与时间边界、业务时钟驱动的阶段推进、当前阶段查询及阶段进入登记点；个人用模块的持久定时器类型分配，Remote 宿主用权威服务有界扫描。暂停 / 重启后按持久游标恢复，明确跨过多个阶段时的处理和重复触发的幂等边界。
+- 活动榜、结算与 mailbox 发奖作为可选联动，复用现有 rank/mail 接口与托管 activity 服务，不让没有排行或奖励的活动依赖它们。
+- 活动定义做成配置表；零配置时没有任何活动在跑。共用一套阶段推进逻辑，通过归属适配接入 Player、Alliance 与全服活动宿主，不复制三套调度器。
+
+**标准生命周期与自定义流程分层**：
+
+| 标准阶段 | 框架语义 | 业务扩展 |
+| --- | --- | --- |
+| 初始化 `Initializing` | 创建本期实例、冻结规则与时间锚点、准备本期状态；初始化完成才进入后续阶段 | 初始化计数、奖池、参赛规则等 |
+| 预热 `Warmup` | 已准备好，等待开启边界；可以展示信息，具体允许的操作由规则决定 | 预告、预约、预报名 |
+| 开启 `Open` | 在本期有效时间内开放业务；具体准入仍由业务规则校验 | 报名→分组→比赛，或采集、挑战、消费等流程 |
+| 结算 `Settling` | 停止接受新的活动行为，冻结结算依据并完成本期收尾 | 排名、生成奖励意图、统计归档；无这些需求时可为空操作 |
+| 结束 `Ended` | 本期终态，不再推进本期流程；保留必要结果供查询、领取或审计 | 结束展示、独立领奖期限与历史清理规则 |
+
+生命周期状态与业务流程状态分别保存、查询。例如 `Open + Registration`、`Open + Grouping`、`Open + Match` 都仍是标准开启阶段；某业务需要预热报名，也可把报名放在 Warmup。简单活动不必定义内部流程。自定义流程使用同一实体事务、业务时间和持久定时器，不要求再建一套调度器或通用工作流引擎；业务回调可以按时间或可信事件推进自己的流程。
+
+标准阶段提供进入/完成的登记点；初始化、结算完成由已提交的业务事实判定，不能仅因期限已过就伪造成功。预热可设为零时长，无需结算业务时可直接完成空结算，但仍经过同一套阶段转换与回滚规则。结算允许异步等待：持久保存任务/可靠意图并按业务声明的完成条件确认，失败可恢复；不在 Nest 快池等待外部调用。开启期限一到，即使后台结算尚未完成也应拒绝新的活动行为。
+
+进入结算后不再接受原开启流程的迟到事件；回调同时核对实例、期次与流程代际，不能凭一个当前阶段名写入。循环活动开启**下一期实例**重新经过五阶段，不能把已结束旧期重置为初始化。结算延误与下一期时间冲突时保留固定排期及旧期未决事实，按显式的排队/跳过策略处理，不隐式丢结算或无限并发补期。
+
+**三个维度独立组合**：
+
+| 维度 | 必须支持 | 示例 |
+| --- | --- | --- |
+| 阶段与重复 | 一次性五阶段生命周期；按固定间隔或业务日历重复开期；循环可限定次数或总结束时间 | 七日活动；每周开启一期，开启期间运行报名→分组→比赛 |
+| 实例归属 | 全服/配置的服务器组、Player、Alliance；归属 ID 不等同执行进程 SID | 全服节日、个人成长活动、联盟周赛 |
+| 开启依据 | 固定业务时间；创建/解锁等持久事实的相对时间；可信业务事件触发 | 开服第七天、玩家达到 20 级后持续三天、联盟达到 3 级后开启 |
+
+循环只决定何时开始下一期，每一期仍有自己的阶段流程。固定间隔与每日/每周日历规则分开，日历沿用业务时区与日界，不能拿固定 24 小时替代业务日。按固定锚点推算期次，不能在每次回调时以“现在 + 周期”顺延产生漂移。默认同一活动的一条实例序列不重叠；配置中的阶段、间隔和结束边界必须校验。
+
+**定义、实例、参与记录分开**：
+
+- 定义保存阶段与循环/开启规则；实例持久保存归属、开启批次、时间锚点、当前期次、推进游标和采用的定义版本。定义 ID、归属类型/ID、开启批次、期次共同隔离一轮活动；配置版本是被冻结的规则事实，热更不能悄悄重新开一轮或改已生效的期限。
+- 全服活动共享一个时间线，不为每个玩家复制全服定时器。玩家的参加资格、进度、领奖记录是该实例下独立的参与记录。个人活动则每个 Player 有自己的时间锚点与实例，互不推进；联盟活动由联盟实体的权威服务推进，game Mirror 只能读。
+- **“解锁后个人独立开一期”与“解锁后可以参加当前全服一期”必须区分**。前者创建本人的实例，后者只开放参与资格，不重开全服实例。玩家入盟/退盟也不重置联盟的活动时间线；贡献归属与领奖成员范围由活动规则显式决定。
+
+**开启、恢复与幂等边界**：
+
+- 解锁条件走工程登记点，优先由升级、任务完成、联盟变化等正式业务事件触发，在所属实体的 Nest 事务内记录解锁事实与创建实例。条件回调不得做 I/O；外部条件先取得可信结果，再经正式业务入口处理，客户端不能直接宣称已解锁。
+- 默认首次解锁持久生效，重复事件不会改开始时间；循环期间不反复解锁。需要每期重新准入或显式重开的规则单独声明，重开产生新批次，旧请求不能命中新批次。操作时的资格检查与首次解锁不是一回事。
+- 已加载实体使用持久定时器；允许延后处理的离线个人活动在加载/进入/操作时按同一锚点对账，不为所有离线玩家常驻计时器。必须离线准点执行的结算需要明确可靠后台驱动，不能把惰性恢复描述为准点执行。
+- 跨多期恢复按有界批次处理。查询可以算出当前时间窗口，但未完成的结算/奖励不能因跳到当前期被丢弃；是否跳过已过时的纯展示阶段由显式策略决定。冻结期限，不追放业务 tick，不在一次 Nest handler 中补跑无限历史。
+- 阶段游标、同实体业务变化与可靠 effect 意图在同一事务；失败一起回滚。外部副作用以实例/期次/阶段/动作组成稳定幂等键，不承诺任意回调恰好执行一次。关闭旧期、清理历史时保留必要终态水位，防止迟到请求重新开期或重复领奖；已完成历史有界，未完成结算不能被容量清理吞掉。
+
+**验收**：一次性全服活动、全服每周循环、两个玩家在不同时间解锁个人活动、个人解锁后参加当前全服活动、联盟条件解锁后循环；五个标准阶段、零预热/空结算、初始化失败、异步结算恢复、开启内自定义报名/分组/比赛、阶段关闭后的迟到业务事件分别有场景。另覆盖边界时刻、重复解锁、并发开启、回拨、停机跨多期、旧期投递、提交失败回滚、定义变更、换服/联盟成员变化以及无排行/邮件的纯阶段活动。真实离线定时、跨进程与存储恢复另记，不用内存替身代替。
+
+### R10. alliance（联盟）
+
+已完成（提交 `fc0fa6e9`，实现与定向验收）：49 条基础、enter/rehome 各 2 条联动；组合 158 PASS / 0 SKIP、6 个变异与两轮 race、安装失败回滚及 demo 相邻链路通过。独立单写者、三个跨域 Saga、Player 展示、当前绑定准入与 HomeSID 条件修正；demo 删除重复实现，仅保留规则和驻留表适配。完整矩阵及 §5/§6 真实联合验收不在本批。见[模块说明](../../modules/alliance/README.md)、[证据](evidence/module-alliance-20261112/README.md)。
+
+- **维护者明确（2026-11-12）**：模块、服务、目录和新业务 API 统一使用 `alliance`，不新增 `guild` 别名。迁移 demo 时一起处理其旧字段与协议命名；不为未上线旧工程保留兼容层。
 - 最重的一项：独立进程的联盟服务独占联盟实体，写走路由 RPC 或 saga（demo 的 `saga/alliance_*`、`internal/service/alliance/`），game 读 Mirror。
 - 先出方案再动手（报告维护者）：模块能不能装出一个新的业务服务、三个 saga 怎样随模块安装、成员名单与 `HomeSID` 的惰性修正（与 rehome 二期相关）。不要为了塞进模块而简化掉“联盟实体只有一个写者”。
 
@@ -128,7 +208,7 @@
 | gm 的形态 | 一个 gm 模块提供登记点，各模块用联动登记自己的命令（R1） |
 | worldstats 是否单独成模块 | 先不做 |
 | 保留号（demo 每删掉一个写死的号，模块的号按最小空号重排） | 先不做；出现客户端兼容需求时再让安装器支持保留号 |
-| guild 能否作为模块装出一个新服务 | 先出方案 |
+| alliance 能否作为模块装出一个新服务 | 先出方案，仍保持单写者 |
 | 规则导出给客户端的统一做法 | 进入时推一次（照 servertime 的联动），协议里不重复带 |
 
 ## 8. 不做

@@ -1,0 +1,155 @@
+package task
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+
+	"{{MODULE}}/configs/schema"
+	player "{{MODULE}}/game/entities/player"
+	handler "{{MODULE}}/game/handler"
+	"{{MODULE}}/game/leaderboard"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+type taskRankMethods = svcrank.Rank
+
+type taskRank struct {
+	taskRankMethods
+	fail  bool
+	calls int
+}
+
+func (r *taskRank) Submit(_ context.Context, _ svcrank.Board, score svcrank.Score, _ svcrank.UpdateMode, _ string) (svcrank.Entry, error) {
+	r.calls++
+	if r.fail {
+		return svcrank.Entry{}, errors.New("rank unavailable")
+	}
+	return svcrank.Entry{Score: score, Rank: 1}, nil
+}
+
+type taskRankGetter struct{ p *player.Player }
+
+func (g taskRankGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if id != g.p.ID() {
+		return nil, fmt.Errorf("missing player")
+	}
+	return g.p, nil
+}
+func (g taskRankGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type taskRankCommitter struct{ fail atomic.Bool }
+
+func (c *taskRankCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.fail.Load() {
+		return errors.New("commit rejected")
+	}
+	return nil
+}
+func taskRankFixture(t *testing.T) (*app.Registry, *taskRank, *taskRankCommitter, func() int64) {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "task.json"), []byte(`[{"id":10,"event":"leaderboard.submitted","period":"permanent","target":10,"reward_kind":"coins","reward_count":7}]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tables := configdata.NewRegistry()
+	if err := configdata.RegisterTable(tables, configdata.TableDef[int64, schema.Task]{Name: "task", File: "task.json", Key: func(row schema.Task) int64 { return row.ID }}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(tables, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	player.RegisterEntity()
+	handler.RegisterTaskReportNestHandlers()
+	id, err := entity.BuildEntityID(991, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := built.(*player.Player)
+	c := &taskRankCommitter{}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(taskRankGetter{p}), nest.NestOptionWithTransactionCommitter(c), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	registry := app.NewRegistry(nil)
+	rank := &taskRank{}
+	if err := registry.Register(svcrank.CapabilityName, svcrank.Rank(rank)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(app.ModName("nest"), nest.Client(engine)); err != nil {
+		t.Fatal(err)
+	}
+	progress := func() int64 {
+		var n int64
+		if err := engine.RunLocal(context.Background(), func() {
+			p.GetMutex().Lock()
+			defer p.GetMutex().Unlock()
+			n, _ = p.Dao().GetTask().GetPermanent().GetProgress(10)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	return registry, rank, c, progress
+}
+func TestWithTaskLeaderboardCountsSuccessfulRepliesIncludingReplay(t *testing.T) {
+	registry, rank, _, progress := taskRankFixture(t)
+	for i := 0; i < 2; i++ {
+		if _, err := leaderboard.SubmitSeason(context.Background(), registry, 1, 991, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rank.calls != 2 || progress() != 2 {
+		t.Fatalf("calls=%d progress=%d", rank.calls, progress())
+	}
+}
+func TestWithTaskLeaderboardFailureDoesNotReport(t *testing.T) {
+	registry, rank, _, progress := taskRankFixture(t)
+	rank.fail = true
+	if _, err := leaderboard.SubmitSeason(context.Background(), registry, 1, 991, 100); err == nil {
+		t.Fatal("rank failure accepted")
+	}
+	if progress() != 0 {
+		t.Fatal("failed rank progressed task")
+	}
+}
+func TestWithTaskLeaderboardTaskFailureDoesNotUndoRank(t *testing.T) {
+	registry, rank, c, progress := taskRankFixture(t)
+	c.fail.Store(true)
+	standing, err := leaderboard.SubmitSeason(context.Background(), registry, 1, 991, 100)
+	if err != nil || standing.Rank != 1 || rank.calls != 1 || progress() != 0 {
+		t.Fatalf("standing=%+v err=%v calls=%d progress=%d", standing, err, rank.calls, progress())
+	}
+}

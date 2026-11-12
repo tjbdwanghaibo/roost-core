@@ -1,0 +1,8 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+//roost:nest
+func handlerMatchState(member player.IMatchmakingEntity) player.MatchSnapshot {
+	return member.MatchmakingComp().Snapshot()
+}

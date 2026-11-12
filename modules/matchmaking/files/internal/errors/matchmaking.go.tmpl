@@ -1,0 +1,10 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrMatchmakingInvalid = errcode.Define({{ID:errcode:matchmaking_invalid}}, "matchmaking_invalid", "invalid matchmaking operation")
+	ErrMatchmakingBusy    = errcode.Define({{ID:errcode:matchmaking_busy}}, "matchmaking_busy", "player or team is busy")
+	ErrMatchmakingStale   = errcode.Define({{ID:errcode:matchmaking_stale}}, "matchmaking_stale", "stale matchmaking intent")
+	ErrMatchmakingUnknown = errcode.Define({{ID:errcode:matchmaking_unknown}}, "matchmaking_unknown", "match outcome needs reconciliation")
+)

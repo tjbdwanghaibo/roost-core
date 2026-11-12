@@ -1,0 +1,34 @@
+--- FAIL: TestModuleTeamGenerated (16.42s)
+    module_team_test.go:38: team: module verification failed {Modules:[{Name:team Want:25 Passed:25 Skipped:0 OK:false Detail:=== RUN   TestTeamMemberCannotJoinASecondTeam
+        --- PASS: TestTeamMemberCannotJoinASecondTeam (0.00s)
+        === RUN   TestTeamSnapshotOwnsItsCollections
+        --- PASS: TestTeamSnapshotOwnsItsCollections (0.00s)
+        === RUN   TestTeamConcurrentAcceptsSerializePlayerMembership
+        --- PASS: TestTeamConcurrentAcceptsSerializePlayerMembership (0.00s)
+        === RUN   TestTeamLeaveAdmissionFailureRestoresBothSides
+        --- PASS: TestTeamLeaveAdmissionFailureRestoresBothSides (0.00s)
+        === RUN   TestTeamDisbandAdmissionFailureRestoresRoster
+        --- PASS: TestTeamDisbandAdmissionFailureRestoresRoster (0.00s)
+        === RUN   TestTeamInvalidSIDCannotCreateMembership
+        --- PASS: TestTeamInvalidSIDCannotCreateMembership (0.00s)
+        === RUN   TestTeamOutsiderCannotReadOrChangeRoster
+        --- PASS: TestTeamOutsiderCannotReadOrChangeRoster (0.00s)
+        PASS
+        ok  	example.com/studio/teamplay/game/handler	1.709s
+        === RUN   TestTeamEndpointRequiresAuthenticatedPlayer
+        --- PASS: TestTeamEndpointRequiresAuthenticatedPlayer (0.00s)
+        === RUN   TestTeamEndpointRejectsMissingRequest
+        --- PASS: TestTeamEndpointRejectsMissingRequest (0.00s)
+        === RUN   TestTeamEndpointRejectsWrongKindBeforeDispatch
+        --- PASS: TestTeamEndpointRejectsWrongKindBeforeDispatch (0.00s)
+        === RUN   TestTeamEndpointRejectsInvalidInviteeBeforeDispatch
+        --- PASS: TestTeamEndpointRejectsInvalidInviteeBeforeDispatch (0.00s)
+        === RUN   TestTeamControllerUsesEntityRuntimeLifecycle
+            team_test.go:82: controller did not construct lifecycle from entity.runtime: team: lifecycle unavailable
+        --- FAIL: TestTeamControllerUsesEntityRuntimeLifecycle (0.00s)
+        FAIL
+        FAIL	example.com/studio/teamplay/game/controllers/team	0.943s
+        FAIL}] Checks:[{Name:go build ./... OK:true Detail:} {Name:go vet ./... OK:true Detail:} {Name:roost id check OK:true Detail:} {Name:roost generate --check OK:true Detail:}] OK:false}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	16.992s
+FAIL

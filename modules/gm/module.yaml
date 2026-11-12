@@ -1,0 +1,13 @@
+name: gm
+summary: 运维命令登记与审计；各模块联动提供命令，经现有 ops admin token 鉴权，实体写入仍走 Nest
+needs:
+  mods: [ops]
+  features: [errcode]
+runtime:
+  package: game/gm
+  start: Start
+errcodes: [gm_invalid, gm_unavailable]
+verify:
+  packages: [./game/gm]
+  run: ^TestGM
+  pass: 9

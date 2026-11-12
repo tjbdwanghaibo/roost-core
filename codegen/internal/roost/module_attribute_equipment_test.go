@@ -16,9 +16,9 @@ func TestModuleAttributeEquipmentScenariosAndMutations(t *testing.T) {
 		t.Fatal("plan wrote project")
 	}
 	roost("module", "add", "attribute")
-	verifyAttributeEquipment(t, root, []string{"attribute"}, map[string]int{"attribute": 16})
+	verifyAttributeEquipment(t, root, []string{"attribute"}, map[string]int{"attribute": 16, "attribute+enter": 2})
 	roost("module", "add", "equipment")
-	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 16, "equipment": 16, "attribute+equipment": 8})
+	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 16, "equipment": 16, "attribute+equipment": 8, "attribute+enter": 2})
 	// 真实默认 CSV 与工程原有升级钩子的顺序都在独立生成工程验证，不把 fixture 的 JSON 当默认数据。
 	path := filepath.Join(root, "game/handler/attribute_equipment_generated_test.go")
 	if err := os.WriteFile(path, []byte(attributeEquipmentGeneratedScenarios), 0600); err != nil {
@@ -64,7 +64,7 @@ func TestModuleEquipmentInstallsIndependentlyAndAddsAttributeLater(t *testing.T)
 	roost("module", "add", "equipment")
 	verifyAttributeEquipment(t, root, []string{"equipment"}, map[string]int{"equipment": 16})
 	roost("module", "add", "attribute")
-	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 16, "equipment": 16, "attribute+equipment": 8})
+	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 16, "equipment": 16, "attribute+equipment": 8, "attribute+enter": 2})
 }
 
 func verifyAttributeEquipment(t *testing.T, root string, names []string, want map[string]int) {

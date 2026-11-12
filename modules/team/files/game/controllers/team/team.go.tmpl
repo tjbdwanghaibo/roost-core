@@ -1,0 +1,136 @@
+package team
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	teamentity "{{MODULE}}/game/entities/team"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+func teamPlayerID(ctx *playeraccess.Context) (int64, error) {
+	if ctx == nil || ctx.PlayerID <= 0 {
+		return 0, fmt.Errorf("team: authenticated player context required")
+	}
+	return entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+}
+func teamResponse(info teamentity.Snapshot, err error) *pb.TeamResponse {
+	response := &pb.TeamResponse{}
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		if response.Code == errcode.CodeInternal {
+			slog.Error("team request failed", "err", err)
+		}
+		return response
+	}
+	response.Info = &pb.TeamView{TeamID: info.TeamID, Leader: info.Leader, Revision: info.Revision, Members: info.Members}
+	return response
+}
+
+// HandleTeamCreate 先保留持久唯一号、创建共享 Remote 空实体，再在 [Team, Player] 事务中建立队伍。
+// 准备失败只留下不可复用的空实体，不写玩家引用；重试已完成的建队返回现有队伍。
+func (c *Controller) HandleTeamCreate(ctx *playeraccess.Context, req *pb.TeamCreateRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err != nil {
+		return teamResponse(teamentity.Snapshot{}, err), nil
+	}
+	if current != 0 {
+		return c.HandleTeamInfo(ctx, &pb.TeamInfoRequest{})
+	}
+	if c.create == nil {
+		return nil, fmt.Errorf("team: allocator unavailable")
+	}
+	id, err := c.create(ctx.Context())
+	if err != nil {
+		return teamResponse(teamentity.Snapshot{}, err), nil
+	}
+	info, err := sender.NewTeamCreateSender(c.nestClient).MultiSync_TeamCreate(ctx.Context(), id, self, c.sid)
+	return teamResponse(info, err), nil
+}
+func (c *Controller) HandleTeamInvite(ctx *playeraccess.Context, req *pb.TeamInviteRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.Invitee <= 0 || uint64(req.Invitee) >= entity.StaticUniqueIDBase {
+		return teamResponse(teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
+	}
+	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err != nil {
+		return teamResponse(teamentity.Snapshot{}, err), nil
+	}
+	if id == 0 {
+		return teamResponse(teamentity.Snapshot{}, apperrors.ErrTeamMissing), nil
+	}
+	info, err := sender.NewTeamInviteSender(c.nestClient).MultiSync_TeamInvite(ctx.Context(), id, self, req.Invitee)
+	return teamResponse(info, err), nil
+}
+func (c *Controller) HandleTeamAccept(ctx *playeraccess.Context, req *pb.TeamAcceptRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !entity.MatchEntityID(req.TeamID, teamentity.EntityKindTeam) {
+		return teamResponse(teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
+	}
+	info, err := sender.NewTeamAcceptSender(c.nestClient).MultiSync_TeamAccept(ctx.Context(), req.TeamID, self, c.sid)
+	return teamResponse(info, err), nil
+}
+func (c *Controller) HandleTeamInfo(ctx *playeraccess.Context, req *pb.TeamInfoRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err != nil || id == 0 {
+		return teamResponse(teamentity.Snapshot{}, err), nil
+	}
+	info, err := sender.NewTeamInfoSender(c.nestClient).MultiSync_TeamInfo(ctx.Context(), id, self)
+	return teamResponse(info, err), nil
+}
+func (c *Controller) HandleTeamLeave(ctx *playeraccess.Context, req *pb.TeamLeaveRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	return c.leave(ctx, false)
+}
+func (c *Controller) HandleTeamDisband(ctx *playeraccess.Context, req *pb.TeamDisbandRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	return c.leave(ctx, true)
+}
+func (c *Controller) leave(ctx *playeraccess.Context, disband bool) (*pb.TeamResponse, error) {
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err == nil && id != 0 {
+		err = sender.NewTeamLeaveSender(c.nestClient).MultiSync_TeamLeave(ctx.Context(), id, self, disband)
+	}
+	return teamResponse(teamentity.Snapshot{}, err), nil
+}

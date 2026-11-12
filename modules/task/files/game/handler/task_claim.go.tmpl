@@ -13,5 +13,5 @@ func handlerTaskClaim(target player.ITaskEntity, request *pb.TaskClaimRequest, n
 	if err != nil {
 		return nil, err
 	}
-	return &pb.TaskClaimResponse{TaskID: request.TaskID, Reward: result.Reward, Balance: result.Balance}, nil
+	return &pb.TaskClaimResponse{TaskID: request.TaskID, Reward: result.Reward, Balance: result.Balance, RewardKind: result.RewardKind, RewardID: result.RewardID}, nil
 }

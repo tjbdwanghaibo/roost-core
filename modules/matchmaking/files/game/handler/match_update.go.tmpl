@@ -1,0 +1,8 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+//roost:nest rollback=undo durability=strict
+func handlerMatchUpdate(members []player.IMatchmakingEntity, change player.MatchUpdate) (player.MatchSnapshot, error) {
+	return player.UpdateMatching(members, change)
+}

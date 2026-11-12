@@ -1,0 +1,44 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+func staminaClientRules(t *testing.T, f *staminaFixture) *pb.StaminaRulesPush {
+	t.Helper()
+	RegisterRulesReadNestHandlers()
+	all, err := sender.NewRulesReadSender(f.engine).Sync_RulesRead(context.Background(), f.player.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range all.Parts {
+		if part.MessageID == msgid.MsgStaminaRules {
+			got, err := pb.UnmarshalStaminaRulesPush(part.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return got
+		}
+	}
+	t.Fatal("missing stamina rules")
+	return nil
+}
+func TestWithStaminaRulesExportsTheActualRecoveryRule(t *testing.T) {
+	f := newStaminaFixture(t)
+	got := staminaClientRules(t, f)
+	if got.Max != 100 || got.HardCap != 999 || got.RegenMillis != 300000 || got.RefillDailyLimit != 3 {
+		t.Fatalf("stamina client rule=%v", got)
+	}
+}
+func TestWithStaminaRulesDoesNotSettleOrWriteState(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 10, 90)
+	before := f.facts(t)
+	staminaClientRules(t, f)
+	f.expectFacts(t, "readonly rules", before)
+}

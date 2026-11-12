@@ -1,0 +1,45 @@
+package gm
+
+import (
+	"context"
+
+	controller "{{MODULE}}/game/controllers/rehome"
+	player "{{MODULE}}/game/entities/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+)
+
+const CommandRehome = "gm.player.rehome"
+
+func init() {
+	Register(Definition{Name: CommandRehome, Description: "发起换服：{player_id, to, note}；accepted 只是受理，最终状态看 account 角色记录", Handler: movePlayer})
+}
+
+func movePlayer(ctx context.Context, registry *app.Registry, command admin.Command) (admin.Result, error) {
+	payload, err := Decode[struct {
+		PlayerID int64  `json:"player_id"`
+		To       int32  `json:"to"`
+		Note     string `json:"note"`
+	}](command)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	unique, _, err := PlayerIDs(payload.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	if payload.To <= 0 {
+		return admin.Result{}, Invalid("to must be positive")
+	}
+	rehome, err := controller.FromRegistry(registry)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	// 沿用换服驱动器的 Nest prepare、排空与 account 提交。失败和后台续行由驱动器负责，不另起流程。
+	ticket, err := rehome.Move(ctx, unique, payload.To, "gm "+command.Operator+": "+payload.Note)
+	if err != nil {
+		return admin.Result{}, err
+	}
+	return admin.Result{Data: map[string]any{"player_id": unique, "accepted": true, "transfer_id": ticket.ID, "from": ticket.From, "to": ticket.To}}, nil
+}

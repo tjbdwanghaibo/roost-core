@@ -1,0 +1,20 @@
+package activity_world
+
+import (
+	"context"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 活动规则是业务表；进程装配与扫描生命周期由 RPC Mod 管理。
+type Service struct{}
+
+func New() *Service { return &Service{} }
+
+func (*Service) Name() app.ServiceName { return "activity_world" }
+
+func (*Service) Init(*app.Registry) error { return nil }
+
+func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+
+func (*Service) Shutdown(context.Context) error { return nil }

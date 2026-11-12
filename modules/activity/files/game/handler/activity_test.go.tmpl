@@ -1,0 +1,543 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+// 正式 Nest + 生成 DAO/定时器。提交器可拒绝；BSON 冷恢复不等于真实 Mongo 恢复验收。
+type activityGetter struct {
+	values map[int64]entity.IThreadSafeEntity
+}
+
+func (g *activityGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	v := g.values[id]
+	if v == nil {
+		return nil, fmt.Errorf("missing %d", id)
+	}
+	return v, nil
+}
+
+func (g *activityGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, e := g.Get(ctx, id, cats[i])
+		if e != nil {
+			return nil, e
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type activityCommitter struct{ reject atomic.Bool }
+
+func (c *activityCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected activity commit failure")
+	}
+	return nil
+}
+
+type activityFixture struct {
+	engine  *nest.NestMgr
+	getter  *activityGetter
+	commit  *activityCommitter
+	now     atomic.Int64
+	players []*player.Player
+}
+
+var activityTestHandler = nest.NewHandlerName("test_activity_transaction")
+
+func newActivityFixture(t *testing.T) *activityFixture {
+	t.Helper()
+	registerActivityTestHooks()
+	player.RegisterEntity()
+	f := &activityFixture{getter: &activityGetter{values: map[int64]entity.IThreadSafeEntity{}}, commit: &activityCommitter{}}
+	f.now.Store(1900000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	for i := range 2 {
+		id, err := entity.BuildEntityID(int64(79101+i), player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := value.(*player.Player)
+		f.players = append(f.players, p)
+		f.getter.values[id] = p
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.getter), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	err := f.engine.RegisterHandlerWithMeta(activityTestHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		p := es[0].(*player.Player)
+		if err := params[0].(func(*player.Player) error)(p); err != nil {
+			return nil, err
+		}
+		return nil, p.ActivityComp().Rearm()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.engine.RegisterHandlerWithMeta(nest.NewHandlerName("handlerTickPlayer{{TIMER_COMPONENT}}"), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		return handlerTickPlayer{{TIMER_COMPONENT}}(es[0].(player.I{{TIMER_COMPONENT}}Entity))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+		for _, p := range f.players {
+			p.{{TIMER_COMPONENT}}Comp().OnDestroy(0)
+		}
+	})
+	return f
+}
+
+func (f *activityFixture) call(index int, run func(*player.Player) error) error {
+	_, err := f.engine.Request(context.Background(), activityTestHandler, f.players[index].ID(), nest.NewParams(run))
+	return err
+}
+
+func (f *activityFixture) do(t *testing.T, index int, run func(activity.Host) error) {
+	t.Helper()
+	if err := f.call(index, func(p *player.Player) error { return run(p.ActivityComp().Host()) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *activityFixture) view(t *testing.T, index int) activity.Snapshot {
+	t.Helper()
+	var out activity.Snapshot
+	f.do(t, index, func(h activity.Host) error {
+		v, e := h.Views()
+		if e != nil {
+			return e
+		}
+		if len(v) != 1 {
+			return fmt.Errorf("views=%v", v)
+		}
+		out = v[0]
+		return nil
+	})
+	return out
+}
+
+func (f *activityFixture) tick(index int) error {
+	_, err := syncsender.NewTickPlayer{{TIMER_COMPONENT}}GenSender(f.engine).Sync_TickPlayer{{TIMER_COMPONENT}}(context.Background(), f.players[index].ID())
+	return err
+}
+
+func activityRule() activity.Definition {
+	return activity.Definition{ID: 1, Version: 1, Scope: "player", Trigger: "fixed", StartMilli: 1900000000000, WarmupMillis: 1000, OpenMillis: 2000, Repeat: "none", Catchup: "queue"}
+}
+
+func (f *activityFixture) activate(t *testing.T, index int, d activity.Definition) {
+	t.Helper()
+	f.do(t, index, func(h activity.Host) error {
+		if _, err := h.Activate(d, d.Event, f.now.Load(), f.now.Load()); err != nil {
+			return err
+		}
+		return h.Advance(f.now.Load())
+	})
+}
+
+var activityHooksOnce sync.Once
+
+func registerActivityTestHooks() {
+	activityHooksOnce.Do(func() {
+		activity.Register("test_pending", activity.Hooks{Enter: func(c activity.Context) (bool, error) {
+			return c.Snapshot.Token.Phase == activity.Initializing || c.Snapshot.Token.Phase == activity.Settling, nil
+		}})
+		activity.Register("test_unlock", activity.Hooks{Eligible: func(owner entity.IThreadSafeEntity, event string) bool { return event == "level.20" }})
+		activity.Register("test_error", activity.Hooks{Enter: func(c activity.Context) (bool, error) {
+			if c.Snapshot.Token.Phase == activity.Settling {
+				// 钩子在出错前也改了 DAO，错误必须回滚这部分与阶段/定时器一起。
+				c.Owner.(*player.Player).Dao().GetActivity().SetCursor(99)
+				return false, errors.New("settlement failed")
+			}
+			return false, nil
+		}})
+		activity.Register("test_flow", activity.Hooks{Flow: func(c activity.Context) (activity.Flow, error) { return activity.Flow{Name: "match"}, nil }})
+	})
+}
+
+func TestActivityFivePhasesAndDeadline(t *testing.T) {
+	f := newActivityFixture(t)
+	f.activate(t, 0, activityRule())
+	if v := f.view(t, 0); v.Token.Phase != activity.Warmup {
+		t.Fatalf("warmup=%+v", v)
+	}
+	f.now.Add(1000)
+	if err := f.tick(0); err != nil {
+		t.Fatal(err)
+	}
+	open := f.view(t, 0)
+	if open.Token.Phase != activity.Open {
+		t.Fatalf("open=%+v", open)
+	}
+	f.now.Add(2000)
+	if err := f.call(0, func(p *player.Player) error { return p.ActivityComp().Host().CheckOpen(open.Token, f.now.Load()) }); !errors.Is(err, activity.ErrClosed) {
+		t.Fatalf("deadline admission=%v", err)
+	}
+	if err := f.tick(0); err != nil {
+		t.Fatal(err)
+	}
+	if v := f.view(t, 0); v.Token.Phase != activity.Ended || v.CompletedThrough != 1 {
+		t.Fatalf("ended=%+v", v)
+	}
+}
+
+func TestActivityAsyncInitializationAndSettlement(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.Logic = "test_pending"
+	f.activate(t, 0, d)
+	initial := f.view(t, 0)
+	if initial.Token.Phase != activity.Initializing || !initial.Pending {
+		t.Fatalf("initial=%+v", initial)
+	}
+	f.now.Add(9000)
+	f.do(t, 0, func(h activity.Host) error { return h.Advance(f.now.Load()) })
+	if v := f.view(t, 0); v.Token != initial.Token || !v.Pending {
+		t.Fatalf("deadline forged completion=%+v", v)
+	}
+	f.do(t, 0, func(h activity.Host) error { return h.Complete(initial.Token, f.now.Load()) })
+	settling := f.view(t, 0)
+	if settling.Token.Phase != activity.Settling || !settling.Pending {
+		t.Fatalf("settling=%+v", settling)
+	}
+	f.do(t, 0, func(h activity.Host) error { return h.Complete(settling.Token, f.now.Load()) })
+	if err := f.call(0, func(p *player.Player) error { return p.ActivityComp().Host().Complete(settling.Token, f.now.Load()) }); !errors.Is(err, activity.ErrStale) {
+		t.Fatalf("late completion=%v", err)
+	}
+}
+
+func TestActivityZeroWarmupAndEmptySettlement(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.WarmupMillis = 0
+	f.activate(t, 0, d)
+	if v := f.view(t, 0); v.Token.Phase != activity.Open {
+		t.Fatal(v)
+	}
+	f.now.Add(d.OpenMillis)
+	if err := f.tick(0); err != nil {
+		t.Fatal(err)
+	}
+	if v := f.view(t, 0); v.Token.Phase != activity.Ended {
+		t.Fatal(v)
+	}
+}
+
+func TestActivityIndependentUnlockAndDuplicate(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.Trigger = "event"
+	d.Event = "level.20"
+	d.Logic = "test_unlock"
+	d.StartMilli = 0
+	f.activate(t, 0, d)
+	first := f.view(t, 0)
+	f.now.Add(500)
+	f.activate(t, 1, d)
+	second := f.view(t, 1)
+	f.activate(t, 0, d)
+	if got := f.view(t, 0); got.Start != first.Start || second.Start-first.Start != 500 {
+		t.Fatalf("anchors first=%+v second=%+v got=%+v", first, second, got)
+	}
+}
+
+func TestActivityFailedInitializationRollsBack(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	f.commit.reject.Store(true)
+	if err := f.call(0, func(p *player.Player) error {
+		h := p.ActivityComp().Host()
+		_, err := h.Activate(d, "", 0, f.now.Load())
+		return err
+	}); err == nil {
+		t.Fatal("commit accepted")
+	}
+	f.commit.reject.Store(false)
+	f.do(t, 0, func(h activity.Host) error {
+		if h.Book.RecordsLen() != 0 || h.Book.GetTimerID() != 0 {
+			return fmt.Errorf("rejected activation survived")
+		}
+		return nil
+	})
+	f.activate(t, 0, d)
+}
+
+func TestActivityTimerErrorKeepsDeadlineAndRollsBackHook(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.Logic = "test_error"
+	f.activate(t, 0, d)
+	f.now.Add(1000)
+	if err := f.tick(0); err != nil {
+		t.Fatal(err)
+	}
+	before := f.view(t, 0)
+	var timer int64
+	f.do(t, 0, func(h activity.Host) error { timer = h.Book.GetTimerID(); return nil })
+	f.now.Add(2000)
+	if err := f.tick(0); err == nil {
+		t.Fatal("timer swallowed settlement failure")
+	}
+	// 只读快照不改定时器（fixture.do 会重新设期限）。
+	f.engine.RunLocal(context.Background(), func() {
+		p := f.players[0]
+		p.GetMutex().Lock()
+		defer p.GetMutex().Unlock()
+		h := p.ActivityComp().Host()
+		v, _ := h.Views()
+		if v[0].Token != before.Token || h.Book.GetCursor() == 99 || h.Book.GetTimerID() != timer {
+			t.Errorf("rollback lost state: %+v timer=%d/%d", v, h.Book.GetTimerID(), timer)
+		}
+	})
+}
+
+func TestActivityLoopBoundedCatchupAndFrozenDefinition(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.WarmupMillis = 0
+	d.OpenMillis = 500
+	d.Repeat = "interval"
+	d.Period = 1000
+	d.MaxCycles = 100
+	f.activate(t, 0, d)
+	first := f.view(t, 0)
+	f.now.Add(20000)
+	f.do(t, 0, func(h activity.Host) error { return h.Advance(f.now.Load()) })
+	v := f.view(t, 0)
+	if v.Token.Cycle >= 20 || v.CompletedThrough == 0 {
+		t.Fatalf("unbounded or missing catchup=%+v", v)
+	}
+	for i := 0; i < 10; i++ {
+		f.do(t, 0, func(h activity.Host) error { return h.Advance(f.now.Load()) })
+	}
+	v = f.view(t, 0)
+	if v.Token.Cycle != 21 || v.Start != d.StartMilli+20000 {
+		t.Fatalf("drift=%+v", v)
+	}
+	changed := d
+	changed.Version = 2
+	changed.OpenMillis = 100
+	f.activate(t, 0, changed)
+	if got := f.view(t, 0); got.Version != 1 || got.CloseAt-got.OpenAt != 500 {
+		t.Fatalf("configuration changed active rule: %+v", got)
+	}
+	if err := f.call(0, func(p *player.Player) error { return p.ActivityComp().Host().CheckOpen(first.Token, f.now.Load()) }); !errors.Is(err, activity.ErrStale) {
+		t.Fatalf("old cycle=%v", err)
+	}
+}
+
+func TestActivityCustomFlowAndLateEvents(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.WarmupMillis = 0
+	d.Logic = "test_flow"
+	f.activate(t, 0, d)
+	v := f.view(t, 0)
+	f.do(t, 0, func(h activity.Host) error {
+		return h.MoveFlow(v.Token, activity.Flow{Name: "registration", Due: f.now.Load() + 500}, f.now.Load())
+	})
+	if err := f.call(0, func(p *player.Player) error {
+		return p.ActivityComp().Host().MoveFlow(v.Token, activity.Flow{Name: "stale"}, f.now.Load())
+	}); !errors.Is(err, activity.ErrStale) {
+		t.Fatal(err)
+	}
+	f.now.Add(500)
+	if err := f.tick(0); err != nil {
+		t.Fatal(err)
+	}
+	v = f.view(t, 0)
+	if v.Flow != "match" || v.Token.Phase != activity.Open {
+		t.Fatal(v)
+	}
+	f.now.Add(1500)
+	if err := f.call(0, func(p *player.Player) error {
+		return p.ActivityComp().Host().MoveFlow(v.Token, activity.Flow{Name: "late"}, f.now.Load())
+	}); !errors.Is(err, activity.ErrClosed) {
+		t.Fatal(err)
+	}
+}
+
+func TestActivityClockRollbackAndExplicitReopen(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.WarmupMillis = 0
+	f.activate(t, 0, d)
+	first := f.view(t, 0)
+	f.now.Add(2000)
+	if err := f.tick(0); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add(-1000)
+	f.do(t, 0, func(h activity.Host) error { return h.Advance(f.now.Load()) })
+	if v := f.view(t, 0); v.Token.Phase != activity.Ended {
+		t.Fatal(v)
+	}
+	d.Trigger = "created"
+	d.StartMilli = 0
+	f.do(t, 0, func(h activity.Host) error {
+		_, err := h.Reopen(d, "", f.now.Load(), f.now.Load(), 2)
+		if err != nil {
+			return err
+		}
+		return h.Advance(f.now.Load())
+	})
+	if got := f.view(t, 0); got.Token.Generation != 2 {
+		t.Fatal(got)
+	}
+	if err := f.call(0, func(p *player.Player) error { return p.ActivityComp().Host().CheckOpen(first.Token, f.now.Load()) }); !errors.Is(err, activity.ErrStale) {
+		t.Fatal(err)
+	}
+}
+
+func TestActivityParticipationIsNotPersonalInstance(t *testing.T) {
+	f := newActivityFixture(t)
+	shared := activity.Snapshot{Token: activity.Token{Scope: "world", Owner: 771, Definition: 4, Generation: 1, Cycle: 3, Phase: activity.Open}, OpenAt: f.now.Load(), CloseAt: f.now.Load() + 1000}
+	f.do(t, 0, func(h activity.Host) error {
+		if err := h.JoinShared(shared, f.now.Load()); err != nil {
+			return err
+		}
+		return h.JoinShared(shared, f.now.Load())
+	})
+	f.do(t, 0, func(h activity.Host) error {
+		if h.Book.RecordsLen() != 0 || h.Book.ParticipationLen() != 1 {
+			return fmt.Errorf("participation created a private instance")
+		}
+		return nil
+	})
+	shared.Token.Cycle = 2
+	if err := f.call(0, func(p *player.Player) error { return p.ActivityComp().Host().JoinShared(shared, f.now.Load()) }); !errors.Is(err, activity.ErrStale) {
+		t.Fatal(err)
+	}
+}
+
+func TestActivityPendingBSONRecovery(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.Logic = "test_pending"
+	f.activate(t, 0, d)
+	before := f.view(t, 0)
+	f.do(t, 0, func(h activity.Host) error {
+		raw := f.players[0].Dao().Marshal()
+		// 生成 Unmarshal 恢复嵌套活动字段；不调用 JSON 替身保存活动事实。
+		copy := db.NewPlayerDao()
+		if err := copy.Unmarshal(raw); err != nil {
+			return err
+		}
+		restored := activity.Host{Owner: h.Owner, Scope: h.Scope, Book: copy.GetActivity()}
+		views, err := restored.Views()
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(views, []activity.Snapshot{before}) {
+			return fmt.Errorf("restored=%+v", views)
+		}
+		if copy.GetActivity().GetNextDue() != h.Book.GetNextDue() || copy.GetActivity().GetTimerID() != h.Book.GetTimerID() {
+			return errors.New("persistent wakeup changed")
+		}
+		return nil
+	})
+}
+
+func TestActivityConcurrentActivationKeepsOneAnchor(t *testing.T) {
+	f := newActivityFixture(t)
+	d := activityRule()
+	d.Trigger = "created"
+	d.StartMilli = 0
+	results := make(chan error, 8)
+	for range 8 {
+		go func() {
+			results <- f.call(0, func(p *player.Player) error {
+				h := p.ActivityComp().Host()
+				if _, err := h.Activate(d, "", f.now.Load(), f.now.Load()); err != nil {
+					return err
+				}
+				return h.Advance(f.now.Load())
+			})
+		}()
+	}
+	for range 8 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	v := f.view(t, 0)
+	if v.Token.Generation != 1 || v.Token.Cycle != 1 || v.Start != f.now.Load() {
+		t.Fatal(v)
+	}
+}
+
+// 通过正式配置快照装载；不向产品目录增加测试规则或开关。
+func activityRows(t *testing.T, rows ...activity.Definition) {
+	t.Helper()
+	previous, config := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(config) })
+	dir := t.TempDir()
+	entries, err := os.ReadDir("../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" || e.Name() == "_manifest.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../configs/data", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, e.Name()), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rows == nil {
+		rows = []activity.Definition{}
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "activity.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err = generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

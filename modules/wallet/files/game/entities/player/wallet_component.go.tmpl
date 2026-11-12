@@ -8,6 +8,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 //roost:component type={{ID:component:Wallet}}
@@ -124,6 +125,11 @@ func (component *WalletComponent) Add(delta int64) (int64, error) {
 		return 0, apperrors.ErrWalletOverflow
 	}
 	wallet.SetCoins(coins + delta)
+	if delta < 0 {
+		if err := runWalletSpent(component.owner, -delta, fctx.NowMilli()); err != nil {
+			return 0, err
+		}
+	}
 	return coins + delta, nil
 }
 
@@ -141,7 +147,9 @@ func oldestWalletReceipt(ledger *db.WalletLedger) string {
 }
 
 // Balance 返回当前余额。
-func (component *WalletComponent) Balance() int64 { return component.owner.Dao().GetWallet().GetCoins() }
+func (component *WalletComponent) Balance() int64 {
+	return component.owner.Dao().GetWallet().GetCoins()
+}
 
 // ErrWalletAmount 是“金额必须为正”的拒绝。
 func ErrWalletAmount() error { return apperrors.ErrWalletInvalid }

@@ -1,0 +1,17 @@
+package handler
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/entities/alliance"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerAllianceActivityComplete(target alliance.IAllianceActivityEntity, token activity.Token) error {
+	c := target.AllianceActivityComp()
+	if err := c.Host().Complete(token, fctx.NowMilli()); err != nil {
+		return err
+	}
+	return c.Rearm()
+}

@@ -1,0 +1,52 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	sender "{{MODULE}}/game/handler/syncsender"
+)
+
+func taskExp(f *taskFixture, n int64) error {
+	RegisterProfileAddExpNestHandlers()
+	_, err := sender.NewProfileAddExpSender(f.engine).Sync_ProfileAddExp(context.Background(), f.player.ID(), n)
+	return err
+}
+func TestWithTaskProfileCountsLevelsNotCalls(t *testing.T) {
+	f := newTaskFixture(t)
+	row := taskRow(10, "profile.level_up", "daily")
+	row.Target = 100
+	taskRows(t, row)
+	if err := taskExp(f, 300); err != nil {
+		t.Fatal(err)
+	}
+	var level int32
+	f.locked(t, func() { level = f.player.Dao().GetProfile().GetLevel() })
+	if level != 4 || f.facts(t).progress[10] != 3 {
+		t.Fatalf("level=%d progress=%v", level, f.facts(t))
+	}
+}
+func TestWithTaskProfileRollbackDoesNotKeepProgress(t *testing.T) {
+	f := newTaskFixture(t)
+	taskRows(t, taskRow(10, "profile.level_up", "daily"))
+	f.committer.reject.Store(true)
+	if err := taskExp(f, 100); err == nil {
+		t.Fatal("rejected upgrade accepted")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rollback", taskFacts{})
+	if err := taskExp(f, 100); err != nil {
+		t.Fatal(err)
+	}
+	if f.facts(t).progress[10] != 1 {
+		t.Fatal("retry counted wrong")
+	}
+}
+
+func init() {
+	taskTestInitializers = append(taskTestInitializers, func(f *taskFixture) error {
+		RegisterEnterInitNestHandlers()
+		_, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), f.player.ID())
+		return err
+	})
+}

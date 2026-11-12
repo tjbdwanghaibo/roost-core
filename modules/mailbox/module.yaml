@@ -3,9 +3,12 @@ summary: 邮件：分页列出自己的邮件、领取附件；附件的种类�
 requires: [wallet]
 conflicts: []
 needs:
-  mods: [nest]
+  mods: [nest, dataengine]
   features: [protocol, entity, dao, errcode]
   uses: [mail]
+runtime:
+  package: game/mailbox
+  start: Start
 entity: Player
 state:
   - field: MailboxLedger
@@ -33,3 +36,15 @@ with:
       packages: [./game/mailbox, ./game/handler, ./game/controllers/mailbox]
       run: ^TestWithMailboxBag
       pass: 9
+  gm:
+    summary: 经 GM 审计入口调用本模块正式事务或服务入口
+    verify:
+      packages: [./game/gm]
+      run: ^TestWithMailboxGM
+      pass: 4
+  profile:
+    summary: 升级与奖励快照同一 WAL，消费者以 EffectID 发一封邮件；默认不发奖
+    verify:
+      packages: [./game/handler, ./game/mailbox]
+      run: ^TestWithMailboxProfile
+      pass: 10

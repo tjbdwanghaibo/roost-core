@@ -533,8 +533,8 @@ var generatedRealDependencyEntries = []struct {
 }{
 	{"codegen/internal/entity/testdata/dataengine", "scripts/test-dataengine-generated.sh", "^TestGeneratedDataEngine"},
 	{"codegen/internal/entity/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
-	{"demo/internal/service/alliance/admin_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestStopFoundingSendsNewAlliancesToTheOtherInstances$"},
-	{"demo/internal/service/platform/purchase_delivery_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseDeliveryDurableWinner$"},
+	{"modules/alliance/files/internal/service/alliance/admin_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances$"},
+	{"modules/purchase/files/game/purchase/queue_integration_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseRedis"},
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
 	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
 	{"demo/db/migrations/player_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPlayerMigrationRealMongo$"},
@@ -629,6 +629,13 @@ func discoverGeneratedRealDependencyTests(t *testing.T, envSuites []string) []ge
 				testdataDirs[filepath.ToSlash(filepath.Dir(path))] = true
 			}
 		case template:
+			// integration 模板可能统一由 helper 读取依赖地址；整个文件显式选择真实环境，所有 Test 都必须有入口。
+			if strings.HasPrefix(strings.TrimSpace(text), "//go:build integration") && realDependencyEnvRead.MatchString(text) {
+				for _, match := range testFuncDecl.FindAllStringSubmatch(text, -1) {
+					found = append(found, generatedRealDependencyTest{slashed, match[1]})
+				}
+				return nil
+			}
 			for _, name := range testFuncsReading(text, realDependencyEnvRead) {
 				found = append(found, generatedRealDependencyTest{slashed, name})
 			}

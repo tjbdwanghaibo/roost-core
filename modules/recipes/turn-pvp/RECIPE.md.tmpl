@@ -1,7 +1,7 @@
 # 回合房间配方
 
 本工程由 `roost project new {{PROJECT}} -module {{MODULE}} -recipe turn-pvp` 创建。
-包含 enter、profile、room、turn、leaderboard、login、portal、servertime；代码安装后归业务所有，sync 不会重写。
+包含 enter、profile、room、turn、leaderboard、team、matchroom、matchmaking、login、portal、servertime；代码安装后归业务所有，sync 不会重写。
 
 ## 跑起来
 
@@ -33,22 +33,21 @@
    通过自身 EntitySync 读取档案，`ProfileRename` 改名；进入时服务器把业务时间推给客户端（`ServertimeNow`）。
    不经登录入口、由自己的入口调 account 的 CreateRole / SelectRole 拿 `session:<player_id>:<token>` 握手的会话照旧：
    `EnterGame` 加载或创建 Player，名字是空的，用 `ProfileRename` 起名。
-3. **服务端匹配或邀请逻辑**调用 `game/room.Open(ctx, registry, uniqueID, 2)`，把同一个房间号告诉两位客户端。
-   uniqueID 由业务持久分配且不能复用；Open 同号、同容量可重试。这里没有将客户端给的任意房间号当作创建授权。
+3. 单人先 `MatchStatus` 取得 Sequence，再 `MatchEnqueue{Sequence:当前+1}`；组队先 `TeamCreate` / `TeamInvite` / `TeamAccept`，由队长带 Team=true 排队。默认按服和队伍人数分池，两支同人数队伍成局。轮询 `MatchStatus` 得到同一 RoomID，取消用当前 Key 调 `MatchCancel`；未知结果不得当作取消成功。
 4. 两人各发 `RoomJoin`；记住各自返回的 Epoch。房主发 `TurnStart`（例如 TurnMillis=30000、MaxTurns=10）。
 5. 当前 Actor 发 `TurnEnd`（当前 Round、自己连续的 Sequence、Epoch）；另一方通过 `TurnView` 看结果。
    服务器的持久定时器负责超时推进。重连先用 `RoomReconnect` 获取新 Epoch。
 6. `LeaderboardTop` / `LeaderboardMe` 可查榜；可信服务端通过 `game/leaderboard.Submit` 提交分数。
    本配方没有胜负规则，不能把客户端回合数当作分数。加入胜负规则后再接结算和排行榜。
 
-这是可组合的回合骨架，不包含客户端开房/匹配、默认伤害与胜负、断线保留或自动广播；这些是业务接入点。
-房间结束后不复用同一房间号开新局。所有协议号查 roost.yaml，PB 类型与编解码函数在 protocol/pb。
+这是可组合的回合骨架，已包含客户端匹配入口，不包含默认伤害与胜负、断线保留或自动广播；这些是业务接入点。
+房间关闭后先 MatchClear，再用新的 Sequence 排下一局，不复用房号。所有协议号查 roost.yaml，PB 类型与编解码函数在 protocol/pb。
 
 ## 验证
 
 `GOWORK=off go test -count=1 ./...` 与 `roost module verify` 验证安装的模块。
 配方另有双人真实 TCP/Robot → PB → Controller → Nest 场景：两名新号各自进服票据握手 → `EnterStatus` → `EnterCreate`（带名字）→ `EnterGame`，
-然后可信开房、加入、推进、重放与结束；另有单人的整条登录链路（没新建就进入被拒、重连不再要求新建）、连错服的会话被告知并断开、
+然后双人排队、查询成局、名单开房、加入、推进、重放与结束（match 使用正式内存 Store，Mongo 计数器与映射使用 mongotest）；另有单人的整条登录链路（没新建就进入被拒、重连不再要求新建）、连错服的会话被告知并断开、
 会话令牌握手的老路；另测空名字在写入前拒绝、提交后的名字能从档案读出、重复新建不改名。
 上述自动化场景中 account 是真实的服务（内存存储），认证器是登录模块的；邮件/排行客户端与持久提交仍是替身，
 登录入口的 HTTP 那一段在 portal 模块自己的场景里。

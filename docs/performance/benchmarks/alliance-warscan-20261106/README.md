@@ -102,7 +102,7 @@
 
 新玩家 Join 少 2 条元数据点读：认领之后的对齐读、认领之前的读。按调用栈逐条归因（修前版本临时打点，不提交；每段 389 次请求）：新玩家 Join 修前的 5 条是 ① 联盟服务 `claimable` 经 `Manager.GetRemoteOwnership` 读守卫所有权、② 写准入 `confirmWriteOwnership` 的 `ReadAuthorityState`（缓存未知）、③ `ClaimOwnership` 插入前的读、④ `alignExclusive` 的对齐读、⑤ 成员冷加载在一致性读事务里查删档墓碑（`EntityRepository.readAggregate` → `RemoteEntityDeleted`，区分删过档与从未创建，D10）。修后剩 ①②⑤：② 是要不要认领的依据，⑤ 是冷加载的语义，都保留。
 
-**Leave 与已有玩家 Join 剩下的 1 条**是上面的 ①：[service.go.tmpl](../../../../demo/internal/rpc/alliance/service.go.tmpl) 的 `claimable`（`admit`，Join / 批准入会）与 `owned`（`remove`，Leave / 踢人）每次经 `Owners.GetRemoteOwnership`（`Manager.GetRemoteOwnership` → `MongoCommitter.GetOwnership`，一次 `FindOne`）读守卫的所有权，用来决定守卫能否与联盟在本实例的一个事务里写（守卫在别的实例上时走两步路由 RPC）。`GetRemoteOwnership` 的契约是读权威记录，所以守卫已由本实例独占持有时也读。修前那次打点：Join 与 Leave 各 778 次（= 2 × 389），与请求数一一对应；建盟的 `claimable` 17 次。
+**Leave 与已有玩家 Join 剩下的 1 条**是上面的 ①：[service.go.tmpl](../../../../modules/alliance/files/internal/rpc/alliance/service.go.tmpl) 的 `claimable`（`admit`，Join / 批准入会）与 `owned`（`remove`，Leave / 踢人）每次经 `Owners.GetRemoteOwnership`（`Manager.GetRemoteOwnership` → `MongoCommitter.GetOwnership`，一次 `FindOne`）读守卫的所有权，用来决定守卫能否与联盟在本实例的一个事务里写（守卫在别的实例上时走两步路由 RPC）。`GetRemoteOwnership` 的契约是读权威记录，所以守卫已由本实例独占持有时也读。修前那次打点：Join 与 Leave 各 778 次（= 2 × 389），与请求数一一对应；建盟的 `claimable` 17 次。
 
 是否必要：守卫由本实例独占持有时，在“一个实体同一时刻只有一个 owner”的前提下，所有权只由本进程改，读到的就是本进程缓存里那份，这次读不必要；守卫不在本实例、或还没有所有权记录时必须读（别的实例可能认领或持有它）。判断错了也不破坏正确性：写准入会按 fence 拒绝、业务按 `moved` 改投。去掉它要改框架 API 的契约或业务代码，按要求未改，交维护者决定：
 

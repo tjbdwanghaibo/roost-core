@@ -164,7 +164,7 @@ func (f *profileFixture) expectRefused(t *testing.T, what string, err, want erro
 func TestProfileRenameStoresTheTrimmedName(t *testing.T) {
 	f := newProfileFixture(t)
 	if got := f.facts(t); got != (profileFacts{}) {
-		t.Fatalf("a new player starts at %+v, want no name, level 0, exp 0", got)
+		t.Fatalf("an uninitialized DAO starts at %+v, want no name, level 0, exp 0", got)
 	}
 	name, err := f.rename(" \t Alice 小明 \n")
 	if err != nil || name != "Alice 小明" {
@@ -605,7 +605,7 @@ func TestProfileCardCarriesNameAndLevel(t *testing.T) {
 	f := newProfileFixture(t)
 	card, err := f.cards.Sync_ProfileCard(context.Background(), f.player.ID())
 	if err != nil || card != (playerentity.ProfileCard{}) {
-		t.Fatalf("a new player's card = %+v err=%v, want no name and level 0", card, err)
+		t.Fatalf("an uninitialized DAO's card = %+v err=%v, want no name and level 0", card, err)
 	}
 	if _, err := f.rename(" Alice "); err != nil {
 		t.Fatal(err)

@@ -2,7 +2,7 @@
 // mail attachment's bytes mean, how one is sent and how it is claimed exactly
 // once are the mailbox module's (game/mailbox, game/controllers/mailbox, the
 // Mailbox component); this package only answers "which attachment", so the
-// answer sits where the mail is sent, not where it is claimed.
+// answer is frozen at the level-up transaction, then the mail consumer uses that snapshot.
 package rewards
 
 import (
@@ -21,8 +21,7 @@ const LevelUpPatchPoint = "rewards.level_up"
 // 1002 in configs/table/item.csv) per level-up, as a mailbox attachment
 // (gamemailbox.Item — the item kind the mailbox and bag modules register
 // together, so claiming it puts the potion in the Bag). A real game reads a
-// reward table; the point here is that the reward is decided where the mail
-// is sent, not where it is claimed.
+// reward table; the attachment is chosen when the level changes, not again during retries.
 //
 // It goes through a PATCH POINT rather than being called directly, and the
 // reason is the kind of incident a hot patch is for: a reward table that is
@@ -37,10 +36,8 @@ const LevelUpPatchPoint = "rewards.level_up"
 // point is safe exactly when each call stands alone, as this one does — it
 // reads a level and returns a value.
 //
-// A patched reward the mailbox cannot grant (an attachment kind nobody
-// registered, a count that is not positive) does not reach a mailbox: the
-// mailer sends through gamemailbox.SendTo, which refuses it before the mail
-// service is called.
+// A patched reward the mailbox cannot grant is rejected by the level-up hook;
+// the caller returns that error to Nest and the whole upgrade rolls back.
 func LevelUpReward(level int32) gamemailbox.Attachment {
 	return hotcode.Resolve(LevelUpPatchPoint, OriginalLevelUpReward)(level)
 }

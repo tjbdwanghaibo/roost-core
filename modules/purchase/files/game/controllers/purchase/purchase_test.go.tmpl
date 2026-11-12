@@ -1,0 +1,120 @@
+package purchase
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"testing"
+
+	"{{MODULE}}/game/purchase"
+
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+type purchaseQueue struct {
+	pending []purchase.Grant
+	acks    int
+	fail    bool
+}
+
+func (q *purchaseQueue) Record(context.Context, svcplatform.Order) (purchase.Grant, error) {
+	panic("not used by collection")
+}
+func (q *purchaseQueue) Pending(context.Context, int64, int) ([]purchase.Grant, error) {
+	return append([]purchase.Grant(nil), q.pending...), nil
+}
+func (q *purchaseQueue) Ack(_ context.Context, g purchase.Grant) error {
+	if q.fail {
+		return fmt.Errorf("injected ack failure")
+	}
+	q.acks++
+	q.pending = q.pending[1:]
+	return nil
+}
+
+type purchasePlatform struct {
+	svcplatform.Platform
+	order svcplatform.Order
+}
+
+func (p *purchasePlatform) Order(context.Context, string) (svcplatform.Order, bool, error) {
+	return p.order, true, nil
+}
+func newPurchaseController(t *testing.T) (*Controller, *purchaseFixture, *purchaseQueue, *purchasePlatform) {
+	t.Helper()
+	f := newPurchaseFixture(t)
+	grant := purchaseTestGrant(1)
+	q := &purchaseQueue{pending: []purchase.Grant{grant}}
+	p := &purchasePlatform{order: svcplatform.Order{OrderID: grant.OrderID, PlayerID: 98801, ProductID: grant.ProductID, PayloadDigest: grant.Digest, State: svcplatform.DeliveryDelivered}}
+	return &Controller{queue: q, platform: p, sender: f.sender}, f, q, p
+}
+func TestPurchaseCollectionWaitsForInFlightDelivery(t *testing.T) {
+	c, f, q, p := newPurchaseController(t)
+	p.order.PendingAttempts = []uint64{1}
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("in-flight delivery accepted")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 || len(q.pending) != 1 {
+		t.Fatal("in-flight order deleted")
+	}
+}
+func TestPurchaseCollectionCommitFailureKeepsQueue(t *testing.T) {
+	c, f, q, _ := newPurchaseController(t)
+	f.committer.reject.Store(true)
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("commit failure hidden")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 || len(q.pending) != 1 {
+		t.Fatal("uncommitted order deleted")
+	}
+}
+func TestPurchaseCollectionAckFailureReturnsSameReceiptOnRetry(t *testing.T) {
+	c, f, q, _ := newPurchaseController(t)
+	q.fail = true
+	first, err := c.Collect(context.Background(), 98801)
+	if err == nil || len(first) != 1 {
+		t.Fatalf("receipts=%+v err=%v", first, err)
+	}
+	f.expect(t, 1, 100, 1)
+	q.fail = false
+	again, err := c.Collect(context.Background(), 98801)
+	if err != nil || !reflect.DeepEqual(first, again) || q.acks != 1 || len(q.pending) != 0 {
+		t.Fatalf("retry=%+v first=%+v err=%v", again, first, err)
+	}
+	f.expect(t, 1, 100, 1)
+}
+func TestPurchaseCollectionSettledElsewhereDoesNotGrant(t *testing.T) {
+	c, f, q, p := newPurchaseController(t)
+	p.order.State = svcplatform.DeliverySettled
+	receipts, err := c.Collect(context.Background(), 98801)
+	if err != nil || len(receipts) != 1 || !receipts[0].Settled || q.acks != 1 {
+		t.Fatalf("receipts=%+v err=%v", receipts, err)
+	}
+	f.expect(t, 1, 0, 1)
+}
+
+func TestPurchaseCollectionWaitsForNonterminalOrder(t *testing.T) {
+	c, f, q, p := newPurchaseController(t)
+	p.order.State = svcplatform.DeliveryExhausted
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("nonterminal order was granted")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 {
+		t.Fatal("nonterminal order deleted")
+	}
+}
+
+func TestPurchaseCollectionRejectsWrongOrder(t *testing.T) {
+	c, f, q, p := newPurchaseController(t)
+	p.order.OrderID = "another-order"
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("different order was granted")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 {
+		t.Fatal("different order acknowledged")
+	}
+}

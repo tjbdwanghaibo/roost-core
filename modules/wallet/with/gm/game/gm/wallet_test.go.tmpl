@@ -1,0 +1,67 @@
+package gm
+
+import (
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+func newWalletGM(t *testing.T) (*gmFixture, *player.Player) {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterGmWalletAdjustNestHandlers()
+	id, err := entity.BuildEntityID(97001, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newGMFixture(t, built), built.(*player.Player)
+}
+func WalletGMValue(t *testing.T, f *gmFixture, target *player.Player) int64 {
+	t.Helper()
+	var value int64
+	f.read(t, target, func() { value = target.WalletComp().Balance() })
+	return value
+}
+func TestWithWalletGMSuccess(t *testing.T) {
+	f, target := newWalletGM(t)
+	result, err := f.execute(CommandCoins, `{"player_id":97001,"delta":150,"note":"test grant"}`)
+	if err != nil || !result.OK {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	result, err = f.execute(CommandCoins, `{"player_id":97001,"delta":-90,"note":"reclaim"}`)
+	if err != nil || !result.OK {
+		t.Fatalf("subtract=%+v %v", result, err)
+	}
+	if got := WalletGMValue(t, f, target); got != 60 || f.committer.commits.Load() != 2 {
+		t.Fatalf("value=%d commits=%d", got, f.committer.commits.Load())
+	}
+}
+func TestWithWalletGMInvalidWritesNothing(t *testing.T) {
+	f, target := newWalletGM(t)
+	result, err := f.execute(CommandCoins, `{"player_id":97001,"delta":0,"note":"bad grant"}`)
+	if err == nil || result.OK || result.Data["code"] == nil || WalletGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithWalletGMMissingTargetWritesNothing(t *testing.T) {
+	f, target := newWalletGM(t)
+	result, err := f.execute(CommandCoins, `{"player_id":97002,"delta":150,"note":"missing"}`)
+	if err == nil || result.OK || WalletGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithWalletGMCommitFailureRollsBack(t *testing.T) {
+	f, target := newWalletGM(t)
+	f.committer.reject.Store(true)
+	result, err := f.execute(CommandCoins, `{"player_id":97001,"delta":150,"note":"reject"}`)
+	if err == nil || result.OK || WalletGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

@@ -2,29 +2,28 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
 	gameactivity "{{MODULE}}/game/activity"
-	rehomecontroller "{{MODULE}}/game/controllers/rehome"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
+	gamemodgm "{{MODULE}}/game/gm"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	gamemailbox "{{MODULE}}/game/mailbox"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
 	"github.com/tjbdwanghaibo/roost-core/framework/hotcode"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
@@ -45,23 +44,19 @@ import (
 // The dev config enables admin with a dev-token; config check --production
 // refuses dev tokens, so a production deployment has to mint a real one.
 const (
-	gmAddItem   = "gm.player.add_item"
-	gmAddExp    = "gm.player.add_exp"
-	gmJoinGuild = "gm.player.join_guild"
-	gmRehome    = "gm.player.rehome"
-	gmMailSend  = "gm.mail.send"
-	gmWorldStat = "gm.world.stats"
-	gmSagaGet   = "gm.saga.get"
-	gmSagaList  = "gm.saga.list"
-	gmScenePop  = "gm.scene.population"
-	gmSceneKill = "gm.scene.kill"
-	gmSceneRoot = "gm.scene.root"
-	gmSceneTime = "gm.scene.time_rate"
-	gmScenePart = "gm.scene.partition"
+	gmJoinAlliance = "gm.player.join_alliance"
+	gmWorldStat    = "gm.world.stats"
+	gmSagaGet      = "gm.saga.get"
+	gmSagaList     = "gm.saga.list"
+	gmScenePop     = "gm.scene.population"
+	gmSceneKill    = "gm.scene.kill"
+	gmSceneRoot    = "gm.scene.root"
+	gmSceneTime    = "gm.scene.time_rate"
+	gmScenePart    = "gm.scene.partition"
 	gmTerrainProbe = "gm.terrain.probe"
-	gmActClose  = "gm.activity.close"
-	gmFlagList  = "gm.flag.list"
-	gmFlagSet   = "gm.flag.set"
+	gmActClose     = "gm.activity.close"
+	gmFlagList     = "gm.flag.list"
+	gmFlagSet      = "gm.flag.set"
 )
 
 type gmFlagSetPayload struct {
@@ -116,38 +111,10 @@ func gmSagaRecord(record saga.Record) map[string]any {
 	}
 }
 
-type gmAddItemPayload struct {
-	PlayerID int64 `json:"player_id"`
-	ItemID   int64 `json:"item_id"`
-	Count    int32 `json:"count"`
-}
-
-type gmAddExpPayload struct {
-	PlayerID int64 `json:"player_id"`
-	Amount   int64 `json:"amount"`
-}
-
-type gmJoinGuildPayload struct {
-	PlayerID  int64  `json:"player_id"`
-	GuildID   int64  `json:"guild_id"`
-	RequestID string `json:"request_id"`
-}
-
-type gmRehomePayload struct {
-	PlayerID int64  `json:"player_id"`
-	To       int32  `json:"to"`
-	Note     string `json:"note"`
-}
-
-type gmMailSendPayload struct {
-	PlayerID int64  `json:"player_id"`
-	Subject  string `json:"subject"`
-	Body     string `json:"body"`
-	ItemID   int64  `json:"item_id,omitempty"`
-	Count    int32  `json:"count,omitempty"`
-	// Coins attaches coins instead of an item stack (the wallet module's
-	// balance; claimed through the same MailboxClaim).
-	Coins int64 `json:"coins,omitempty"`
+type gmJoinAlliancePayload struct {
+	PlayerID   int64  `json:"player_id"`
+	AllianceID int64  `json:"alliance_id"`
+	RequestID  string `json:"request_id"`
 }
 
 // registerGMCommands is called from Init, after every Mod has started.
@@ -160,10 +127,6 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	if !ok || nestClient == nil {
 		return fmt.Errorf("gm: nest client is unavailable")
 	}
-	mailer, err := Mail(registry)
-	if err != nil {
-		return fmt.Errorf("gm: %w", err)
-	}
 	sagas, ok := app.Lookup[*saga.Engine](registry, mods.ModSaga)
 	if !ok || sagas == nil {
 		return fmt.Errorf("gm: saga engine %q is unavailable", mods.ModSaga)
@@ -172,95 +135,40 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	if err != nil {
 		return fmt.Errorf("gm: %w", err)
 	}
+	// 参数、审计与返回值由模块提供；demo 的经验同时计入 World，仍保留双实体事务。
+	if err := gamemodgm.Replace(registry, gamemodgm.ProfileAddExpCommand(func(ctx context.Context, _ *app.Registry, id, amount int64) (int32, error) {
+		return syncsender.NewAddExpSender(nestClient).MultiSync_AddExp(ctx, id, worldID, amount)
+	})); err != nil {
+		return err
+	}
+
 	sceneID, err := entity.BuildEntityID(lifecycle.WorldSceneUniqueID, sceneentity.EntityKindScene)
 	if err != nil {
 		return fmt.Errorf("gm: %w", err)
 	}
-	// player_id is whichever id the operator has at hand: the unique id the
-	// client sees (EnterGameResponse.PlayerID, the mail recipient) or the
-	// full entity id Mongo stores as the Player document's _id. The two
-	// differ by the kind/category bits, so a full id passed where a unique
-	// id is expected gets re-wrapped into an id that no Player has
-	// ("entity aggregate not found: entity=105765670916" for _id 103286788).
-	// MatchEntityID recognises a well-formed Player entity id; anything else
-	// is taken as the unique id.
-	playerIDs := func(raw int64) (uniqueID, entityID int64, err error) {
-		if raw <= 0 {
-			return 0, 0, fmt.Errorf("%w: player_id is required", admin.ErrCommandInvalid)
-		}
-		if entity.MatchEntityID(raw, player.EntityKindPlayer) {
-			return entity.GetUniqueIDFromEntityID(raw), raw, nil
-		}
-		entityID, err = entity.BuildEntityID(raw, player.EntityKindPlayer)
-		if err != nil {
-			return 0, 0, fmt.Errorf("%w: player_id %d: %v", admin.ErrCommandInvalid, raw, err)
-		}
-		return raw, entityID, nil
-	}
 	definitions := []admin.CommandDef{
 		{
-			Name:        gmAddItem,
-			Description: "grant an item to a player's bag: {player_id, item_id, count}; player_id is the unique id or the Player document _id; the same transaction the AddItem endpoint runs",
-			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmAddItemPayload](cmd)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				playerID, entityID, err := playerIDs(payload.PlayerID)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				// Grants often target an offline, unloaded player: Nest sees the
-				// cold declared target at admission and loads it on the io pool
-				// before the handler runs, so no SendOptionIO is needed.
-				count, err := syncsender.NewAddItemSender(nestClient).Sync_AddItem(ctx, entityID, payload.ItemID, payload.Count)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				return admin.Result{Data: map[string]any{"player_id": playerID, "entity_id": entityID, "item_id": payload.ItemID, "count": count}}, nil
-			},
-		},
-		{
-			Name:        gmAddExp,
-			Description: "grant exp to a player: {player_id, amount}; a level-up sends the reward mail like any other",
-			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmAddExpPayload](cmd)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				playerID, entityID, err := playerIDs(payload.PlayerID)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				gained, err := syncsender.NewAddExpSender(nestClient).MultiSync_AddExp(ctx, entityID, worldID, payload.Amount)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				return admin.Result{Data: map[string]any{"player_id": playerID, "entity_id": entityID, "levels_gained": gained}}, nil
-			},
-		},
-		{
-			Name: gmJoinGuild,
-			Description: "put a player of this server who is offline here into a guild open to joining: {player_id, guild_id, request_id}. " +
+			Name: gmJoinAlliance,
+			Description: "put a player of this server who is offline here into a alliance open to joining: {player_id, alliance_id, request_id}. " +
 				"The alliance service's Join on the player's behalf (request_id makes a retry a replay); the membership notice finds " +
-				"nobody online, so the player sees the guild at the next login, which asks the alliance service (Membership). " +
+				"nobody online, so the player sees the alliance at the next login, which asks the alliance service (Membership). " +
 				"While the player has a session on this process nothing is joined: it answers joined=false with the session count, " +
 				"to be retried once they are gone",
 			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmJoinGuildPayload](cmd)
+				payload, err := admin.DecodePayload[gmJoinAlliancePayload](cmd)
 				if err != nil {
 					return admin.Result{}, err
 				}
-				playerID, _, err := playerIDs(payload.PlayerID)
+				playerID, _, err := gamemodgm.PlayerIDs(payload.PlayerID, player.EntityKindPlayer)
 				if err != nil {
 					return admin.Result{}, err
 				}
 				if payload.RequestID == "" {
 					return admin.Result{}, fmt.Errorf("%w: request_id is required", admin.ErrCommandInvalid)
 				}
-				target, err := rpcalliance.AllianceTarget(payload.GuildID)
-				if payload.GuildID <= 0 || err != nil {
-					return admin.Result{}, fmt.Errorf("%w: guild_id %d: %v", admin.ErrCommandInvalid, payload.GuildID, err)
+				target, err := rpcalliance.AllianceTarget(payload.AllianceID)
+				if payload.AllianceID <= 0 || err != nil {
+					return admin.Result{}, fmt.Errorf("%w: alliance_id %d: %v", admin.ErrCommandInvalid, payload.AllianceID, err)
 				}
 				// Looked up per call: the command is an operator's tool, and a
 				// registry without the player transport or the alliance client
@@ -280,7 +188,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				// "Offline" is what the membership notice checks (the same
 				// session count, alliance_notice.go): with no session here the
 				// notice changes nothing and the login lookup is what shows the
-				// guild. A session that is still closing counts as online.
+				// alliance. A session that is still closing counts as online.
 				if sessions := transport.ActiveSessions(playerID); sessions > 0 {
 					return admin.Result{
 						Message: "the player has a session on this process; nothing joined",
@@ -292,92 +200,9 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{
-					"player_id": playerID, "joined": true, "guild_id": reply.Alliance.AllianceID,
+					"player_id": playerID, "joined": true, "alliance_id": reply.Alliance.AllianceID,
 					"members": len(reply.Alliance.Members), "version": reply.Alliance.Version, "served_by": reply.ServedBySID,
 				}}, nil
-			},
-		},
-		{
-			Name: gmRehome,
-			Description: "move a player to another game server (the rehome module's server-side entry): {player_id, to, note}. " +
-				"Run it on the process of the server the player is bound to now (another one answers rehome_elsewhere). " +
-				"The player's cooldown and the allowed-target rule do not apply; the registered checks do (a guild or team member is refused), " +
-				"and so do the account service's own conditions (the target exists, is open, the account has no role there). " +
-				"accepted=true means the transfer is recorded with the account service and carries on in the background: the player's " +
-				"sessions are closed, the Player is handed off, the role is rebound. Read the outcome with accountctl show-role",
-			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmRehomePayload](cmd)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				playerID, _, err := playerIDs(payload.PlayerID)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				if payload.To <= 0 {
-					return admin.Result{}, fmt.Errorf("%w: to (the target server's sid) is required", admin.ErrCommandInvalid)
-				}
-				// Looked up per call, like the transport above: a registry
-				// without the account client (a test's) still registers the rest.
-				rehome, err := rehomecontroller.FromRegistry(registry)
-				if err != nil {
-					return admin.Result{}, fmt.Errorf("gm: %w", err)
-				}
-				note := payload.Note
-				if cmd.Operator != "" {
-					note = "gm " + cmd.Operator + ": " + note
-				}
-				ticket, err := rehome.Move(ctx, playerID, payload.To, note)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				slog.Info("gm.player.rehome: accepted", "player_id", playerID, "transfer_id", ticket.ID, "from", ticket.From, "to", ticket.To,
-					"trace_id", cmd.TraceID, "operator", cmd.Operator)
-				return admin.Result{Data: map[string]any{"player_id": playerID, "accepted": true, "transfer_id": ticket.ID, "from": ticket.From, "to": ticket.To}}, nil
-			},
-		},
-		{
-			Name:        gmMailSend,
-			Description: "send a mail to a player: {player_id, subject, body, item_id?, count?, coins?}; item_id/count attach an item stack, coins attaches coins (one or the other), claimed through MailboxClaim",
-			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmMailSendPayload](cmd)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				if payload.Subject == "" {
-					return admin.Result{}, fmt.Errorf("%w: subject is required", admin.ErrCommandInvalid)
-				}
-				// Mail is addressed by the unique id, whichever form came in.
-				playerID, _, err := playerIDs(payload.PlayerID)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				letter := gamemailbox.Letter{
-					To: playerID, Subject: payload.Subject, Body: payload.Body, ExpiresInSeconds: levelUpMailExpiresIn,
-					// Idempotent per trace: an operator retrying the same
-					// command (same trace id) does not send twice.
-					RequestID: gmRequestID(cmd),
-				}
-				// One attachment per mail: an item stack or coins, not both.
-				switch {
-				case payload.ItemID != 0 && payload.Coins != 0:
-					return admin.Result{}, fmt.Errorf("%w: a mail carries one attachment: item_id/count or coins, not both", admin.ErrCommandInvalid)
-				case payload.ItemID != 0:
-					letter.Attachment = gamemailbox.Item(payload.ItemID, int64(payload.Count))
-				case payload.Coins != 0:
-					letter.Attachment = gamemailbox.Coins(payload.Coins)
-				}
-				// The mailbox module's sender: an attachment the mailbox
-				// cannot grant (an unknown kind, a count that is not positive)
-				// is refused here, before a mail nobody can claim is stored.
-				envelope, err := gamemailbox.SendTo(ctx, mailer, letter)
-				if errors.Is(err, gamemailbox.ErrLetterInvalid) {
-					return admin.Result{}, fmt.Errorf("%w: %v", admin.ErrCommandInvalid, err)
-				}
-				if err != nil {
-					return admin.Result{}, err
-				}
-				return admin.Result{Data: map[string]any{"mail_id": envelope.ID, "recipients": envelope.Recipients}}, nil
 			},
 		},
 		{
@@ -505,7 +330,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				if payload.PlayerID != 0 {
-					_, entityID, err := playerIDs(payload.PlayerID)
+					_, entityID, err := gamemodgm.PlayerIDs(payload.PlayerID, player.EntityKindPlayer)
 					if err != nil {
 						return admin.Result{}, err
 					}
@@ -644,14 +469,4 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 		}
 	}
 	return nil
-}
-
-// gmRequestID is the mail idempotency key for a GM send: the trace id when
-// the operator supplied one, else a fresh key (a retry without a trace id is
-// a second mail, which is what "no idempotency key" has to mean).
-func gmRequestID(cmd admin.Command) string {
-	if cmd.TraceID != "" {
-		return "gm:" + cmd.TraceID
-	}
-	return fmt.Sprintf("gm:%s:%d", cmd.Name, cmd.CreatedAt)
 }

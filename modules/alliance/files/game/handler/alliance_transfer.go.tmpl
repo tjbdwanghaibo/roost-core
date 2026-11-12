@@ -1,0 +1,19 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+)
+
+// handlerAllianceTransfer hands leadership to another member; leader only.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceTransfer(target alliance.IAllianceRosterEntity, requestID string, actorID int64, newLeaderID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRosterComp()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		return newLeaderID, roster.Transfer(actorID, newLeaderID)
+	})
+	return answer(roster, outcome, err)
+}

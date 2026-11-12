@@ -1,0 +1,27 @@
+package activity_world
+
+import (
+	"context"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	"{{MODULE}}/game/activity"
+)
+
+// WorldActivities 只用于可信服务器之间；玩家请求须先验证账号/联盟成员和操作资格。
+// Pulse 的空 event 是查询/对账，有 event 时必须来自已验证的业务事实。
+//
+//roost:rpc service_type=activity_world capability=rpc.activity_world
+type WorldActivities interface {
+	//roost:rpc route
+	Pulse(ctx context.Context, target int64, event string, createdAt int64) (views []Snapshot, err error)
+	//roost:rpc route
+	Complete(ctx context.Context, target int64, token Token) (err error)
+}
+
+var ErrRequestInvalid = errcode.Define({{ID:errcode:activity_world_request_invalid}}, "activity_world_request_invalid", "invalid activity request")
+
+func Error(err error) (int32, string) { return errcode.ClientError(err) }
+
+type Snapshot = activity.Snapshot
+type Token = activity.Token

@@ -1,0 +1,68 @@
+// Package purchase 定义付款后的发货事实。platform 与 game 共用，不依赖 Entity，也不在这里修改玩家。
+package purchase
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+// BatchLimit 是单次进入或补领处理的订单数；更多订单由下一次调用继续，不丢弃、不一次读全量。
+const BatchLimit = 32
+
+// Reward 与邮件附件采用相同的种类/号/数量表达。注册的组件决定如何入账。
+type Reward struct {
+	Kind  string `json:"type"`
+	ID    int64  `json:"id,omitempty"`
+	Count int64  `json:"amount"`
+}
+
+// Grant 是第一次持久投递时确定的快照。商品改价、下架不修改已存在的快照。
+// Sequence 由队列分配，业务不得自行造号；队列删除后计数器也不能重置。
+type Grant struct {
+	Sequence uint64 `json:"-"`
+	// Settled 仅由消费者根据 platform 不可重开的 settled 终态设置；退款/人工结清只推进游标、不再发奖。
+	Settled   bool   `json:"-"`
+	OrderID   string `json:"order_id"`
+	PlayerID  int64  `json:"player_id"`
+	ProductID string `json:"product_id"`
+	Digest    string `json:"digest"`
+	Reward    Reward `json:"reward"`
+}
+
+// Receipt 是这笔已发货的不可变结果。重放仍答同一订单/序号/奖励，不返回会随其他操作改变的当前余额。
+type Receipt struct {
+	Settled  bool
+	OrderID  string
+	Sequence uint64
+	Reward   Reward
+}
+
+func (g Grant) Validate() error {
+	if g.Sequence == 0 || g.PlayerID <= 0 || strings.TrimSpace(g.OrderID) == "" || len(g.OrderID) > svcplatform.MaxOrderIDBytes || g.Digest == "" || g.ProductID == "" || g.Reward.Kind == "" || g.Reward.Count <= 0 {
+		return apperrors.ErrPurchaseInvalid
+	}
+	return nil
+}
+
+func (g Grant) Receipt() Receipt {
+	return Receipt{OrderID: g.OrderID, Sequence: g.Sequence, Reward: g.Reward, Settled: g.Settled}
+}
+
+// Queue 的待发事实必须持久且按玩家连续编号。Ack 只能在 Nest 已确认发货且平台投递已终结后调用。
+type Queue interface {
+	Record(context.Context, svcplatform.Order) (Grant, error)
+	Pending(context.Context, int64, int) ([]Grant, error)
+	Ack(context.Context, Grant) error
+}
+
+func sameOrder(grant Grant, order svcplatform.Order) error {
+	if grant.OrderID != order.OrderID || grant.PlayerID != order.PlayerID || grant.ProductID != order.ProductID || grant.Digest != order.PayloadDigest {
+		return fmt.Errorf("%w: queued grant differs from platform order", svcplatform.ErrOrderMismatch)
+	}
+	return nil
+}

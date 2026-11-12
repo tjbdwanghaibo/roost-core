@@ -1,0 +1,73 @@
+package gm
+
+import (
+	"context"
+	"testing"
+
+	generated "{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+func newBagGM(t *testing.T) (*gmFixture, *player.Player) {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterBagGrantNestHandlers()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(registry, "../../configs/data").Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id, err := entity.BuildEntityID(97001, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newGMFixture(t, built), built.(*player.Player)
+}
+func BagGMValue(t *testing.T, f *gmFixture, target *player.Player) int64 {
+	t.Helper()
+	var value int64
+	f.read(t, target, func() { value = target.BagComp().Count(1001) })
+	return value
+}
+func TestWithBagGMSuccess(t *testing.T) {
+	f, target := newBagGM(t)
+	result, err := f.execute(CommandAddItem, `{"player_id":97001,"item_id":1001,"count":3,"note":"test grant"}`)
+	if err != nil || !result.OK {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if got := BagGMValue(t, f, target); got != 3 || f.committer.commits.Load() != 1 {
+		t.Fatalf("value=%d commits=%d", got, f.committer.commits.Load())
+	}
+}
+func TestWithBagGMInvalidWritesNothing(t *testing.T) {
+	f, target := newBagGM(t)
+	result, err := f.execute(CommandAddItem, `{"player_id":97001,"item_id":1001,"count":0,"note":"bad grant"}`)
+	if err == nil || result.OK || result.Data["code"] == nil || BagGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithBagGMMissingTargetWritesNothing(t *testing.T) {
+	f, target := newBagGM(t)
+	result, err := f.execute(CommandAddItem, `{"player_id":97002,"item_id":1001,"count":3,"note":"missing"}`)
+	if err == nil || result.OK || BagGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+func TestWithBagGMCommitFailureRollsBack(t *testing.T) {
+	f, target := newBagGM(t)
+	f.committer.reject.Store(true)
+	result, err := f.execute(CommandAddItem, `{"player_id":97001,"item_id":1001,"count":3,"note":"reject"}`)
+	if err == nil || result.OK || BagGMValue(t, f, target) != 0 || f.committer.commits.Load() != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

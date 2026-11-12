@@ -1,7 +1,6 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"context"
 	"errors"
 	"fmt"
@@ -10,24 +9,26 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/clientsync"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
-	gamescene "{{MODULE}}/game/scene"
 	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
-	"{{MODULE}}/game/clientsync"
 )
 
 // What this asserts is the whole claim of sync=true: a change made on the
@@ -85,7 +86,7 @@ func newSceneRecorder() *sceneRecorder {
 }
 
 func (recorder *sceneRecorder) PushSyncPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
- return recorder.PushPlayer(ctx,playerID,messageID,&pb.EntitySyncPush{Payload:payload})
+	return recorder.PushPlayer(ctx, playerID, messageID, &pb.EntitySyncPush{Payload: payload})
 }
 
 func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, messageID uint32, value any) error {
@@ -232,7 +233,7 @@ func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[i
 				if len(payload) == 0 {
 					continue
 				}
-				document,err:=clientsync.DecodeFields(update)
+				document, err := clientsync.DecodeFields(update)
 				if err != nil {
 					t.Fatalf("decode player sync payload: %v", err)
 				}
@@ -260,7 +261,6 @@ func removesIn(t *testing.T, pushes []*pb.EntitySyncPush) int {
 	}
 	return removes
 }
-
 
 // joinReady is what the login path does end to end: Join (session held) and
 // the client's scene_ready (session released).
@@ -631,7 +631,7 @@ func TestEachObserverGetsOnlyItsViewOfAPlayer(t *testing.T) {
 	seenNearby, nearbyBytes := fullOf(nearbyID, "near")
 	seenByTeammate, teammateBytes := fullOf(teammateID, "team")
 	seenByNearTeammate, _ := fullOf(nearTeammateID, "team")
-	for _, field := range append([]string{"profile", "pos_x", "pos_y", "scene_id", "facing", "equipment", "guild_id", "cell_hp", "cell_max_hp"}, playerPrivateFields...) {
+	for _, field := range append([]string{"profile", "pos_x", "pos_y", "scene_id", "facing", "equipment", "alliance_id", "cell_hp", "cell_max_hp"}, playerPrivateFields...) {
 		if _, ok := own[field]; !ok {
 			t.Errorf("the player's own full lacks %q: %v", field, own)
 		}
@@ -642,7 +642,7 @@ func TestEachObserverGetsOnlyItsViewOfAPlayer(t *testing.T) {
 				t.Errorf("%s received the player's private %q: %v", who, field, seen)
 			}
 		}
-		for _, field := range []string{"profile", "pos_x", "pos_y", "facing", "equipment", "guild_id", "cell_hp", "cell_max_hp"} {
+		for _, field := range []string{"profile", "pos_x", "pos_y", "facing", "equipment", "alliance_id", "cell_hp", "cell_max_hp"} {
 			if _, ok := seen[field]; !ok {
 				t.Errorf("%s did not receive the player's public %q: %v", who, field, seen)
 			}
@@ -1985,7 +1985,7 @@ func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]map[s
 				if !update.Full {
 					continue
 				}
-				document,err:=clientsync.DecodeFields(update)
+				document, err := clientsync.DecodeFields(update)
 				if err != nil {
 					t.Fatalf("decode player sync payload: %v", err)
 				}

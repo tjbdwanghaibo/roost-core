@@ -1,0 +1,13 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/purchase"
+)
+
+// handlerPurchaseGrant 的参数只能来自可信待发队列；客户端补领端点只能提供自己身份，不能提供奖励或序号。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPurchaseGrant(target player.IPurchaseEntity, grant purchase.Grant) (purchase.Receipt, error) {
+	return target.PurchaseComp().Apply(grant)
+}

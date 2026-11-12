@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	db "{{MODULE}}/db"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -14,7 +13,7 @@ import (
 //roost:component type={{ID:component:Task}}
 const CompTypeTask entity.ComponentType = {{ID:component:Task}}
 
-// TaskComponent 是每日任务的业务逻辑。它不保存事务会改的状态：当日记录在 PlayerDao.Task 里，
+// TaskComponent 是任务的业务逻辑。它不保存事务会改的状态：周期记录在 PlayerDao.Task 里，
 // 经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
 type TaskComponent struct {
 	entity.ComponentBase
@@ -43,29 +42,84 @@ func (component *TaskComponent) Name() string { return "task" }
 // Owner 只在实体存活且被 Nest 锁住期间可用。
 func (component *TaskComponent) Owner() *Player { return component.owner }
 
-// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
-
-// TaskClaimResult 是一次领奖的结果。
+// TaskClaimResult 带奖励的种类、号、数量；Balance 是金币余额，非金币奖励不改变它。
 type TaskClaimResult struct {
-	Reward  int64
-	Balance int64
+	Reward     int64
+	RewardKind string
+	RewardID   int64
+	Balance    int64
 }
 
-// Advance 把任务 taskID 的当日进度推进 n 次，返回推进后的进度。nowUnixMilli 是这条消息冻结的业务时间
-// （handler 的最后一个参数，原样传进来；不要自己取墙上时间）。
-//
-// 它是给服务端别的功能调的：同一个实体上的组件在自己的业务方法里调
-// component.owner.TaskComp().Advance(TaskDailyCheckin, 1, nowUnixMilli)，进度与那个功能的写入
-// 在同一笔事务里提交或回滚。不在 Player 事务里的调用方走 Nest handler TaskAdvance。
-//
-//   - 先清零再推进：这是新的一个业务日的第一次推进时，先清空上一个业务日的进度与领奖记录。
-//   - 进度封顶在任务表里的目标次数；已经完成（包括已经领过奖）的任务再推进什么都不写，也不报错，
-//     所以调用方不用先查“做完没有”。
-//   - 任务号不在任务表里（task_unknown）、n 不为正（task_count_invalid）时拒绝，拒绝前不写任何字段。
-//     调用方不想让自己的业务因此失败时可以丢掉这个错误：组件在拒绝之前什么都没改。
-//
-// 它不判重，调一次推进一次。“这件事算过没有”由调用方保证：通常调用方那一次业务本身只会成功一次
-// （签到一天一次、一笔消费一个业务键），跟着它在同一笔事务里推进即可。
+// taskProgress 是每日与两个嵌套周期 DAO 都具备的访问器。写入全部经过生成的 setter。
+type taskProgress interface {
+	GetDay() int64
+	SetDay(int64)
+	GetProgress(int64) (int64, bool)
+	SetProgressKey(int64, int64)
+	SetProgress(map[int64]int64)
+	GetClaimed(int64) (bool, bool)
+	SetClaimedKey(int64, bool)
+	SetClaimed(map[int64]bool)
+}
+
+func (component *TaskComponent) period(kind string) taskProgress {
+	state := component.owner.Dao().GetTask()
+	switch kind {
+	case TaskPeriodWeekly:
+		return state.GetWeekly()
+	case TaskPeriodPermanent:
+		return state.GetPermanent()
+	default:
+		return state
+	}
+}
+
+func taskPeriodDay(kind string, now int64) int64 {
+	if kind == TaskPeriodPermanent {
+		return 0
+	}
+	day := int64(clock.BusinessDay(time.UnixMilli(now)))
+	if kind != TaskPeriodWeekly {
+		return day
+	}
+	// 先取业务日，再算该日所在周的周一；不能拿 YYYYMMDD / 7 当周号。
+	date := time.Date(int(day/10000), time.Month(day/100%100), int(day%100), 0, 0, 0, 0, time.UTC)
+	monday := date.AddDate(0, 0, -(int(date.Weekday())+6)%7)
+	return int64(monday.Year()*10000 + int(monday.Month())*100 + monday.Day())
+}
+
+func (component *TaskComponent) unlocked(definition TaskDefinition, now int64) bool {
+	if definition.Previous == 0 {
+		return true
+	}
+	previous, ok := taskDefinition(definition.Previous)
+	if !ok {
+		return false
+	}
+	state := component.period(previous.Period)
+	claimed, _ := state.GetClaimed(previous.ID)
+	return taskPeriodDay(previous.Period, now) <= state.GetDay() && claimed
+}
+
+// Report 按事件推进所有已解锁的任务。次数由服务端提供；无匹配任务时零写入。
+// 它不判重：事件提供方必须在首次业务生效时调用，与业务在同一笔 Player 事务里提交。
+// 一次事件只推进当时已解锁的任务，不把同一个事件沿前置链重复消费。
+func (component *TaskComponent) Report(event string, n, nowUnixMilli int64) error {
+	if n <= 0 {
+		return apperrors.ErrTaskCountInvalid
+	}
+	for _, definition := range taskDefinitions().events[event] {
+		if !component.unlocked(definition, nowUnixMilli) {
+			continue
+		}
+		component.advance(definition, n, nowUnixMilli)
+	}
+
+	return nil
+}
+
+// Advance 是直接按任务号推进的服务端入口。未解锁任务返回 task_incomplete，拒绝前不写。
+// nowUnixMilli 来自 Nest 的冻结业务时间，不采信客户端时间。回拨不清零；进度封顶在目标。
 func (component *TaskComponent) Advance(taskID, n, nowUnixMilli int64) (int64, error) {
 	definition, ok := taskDefinition(taskID)
 	if !ok {
@@ -74,69 +128,57 @@ func (component *TaskComponent) Advance(taskID, n, nowUnixMilli int64) (int64, e
 	if n <= 0 {
 		return 0, apperrors.ErrTaskCountInvalid
 	}
-	state := component.owner.Dao().GetTask()
-	taskRollOver(state, taskToday(nowUnixMilli))
-	progress, _ := state.GetProgress(taskID)
-	if progress >= definition.Target {
-		return progress, nil
+	if !component.unlocked(definition, nowUnixMilli) {
+		return 0, apperrors.ErrTaskIncomplete
 	}
-	// 用减法比较：progress + n 在 n 接近 int64 上限时会溢出成负数，绕过封顶。
+	return component.advance(definition, n, nowUnixMilli), nil
+}
+
+func (component *TaskComponent) advance(definition TaskDefinition, n, now int64) int64 {
+	state := component.period(definition.Period)
+	day := taskPeriodDay(definition.Period, now)
+	if day > state.GetDay() {
+		state.SetDay(day)
+		state.SetProgress(nil)
+		state.SetClaimed(nil)
+	}
+	progress, _ := state.GetProgress(definition.ID)
+	if progress >= definition.Target {
+		return progress
+	}
 	if n >= definition.Target-progress {
 		progress = definition.Target
 	} else {
 		progress += n
 	}
-	state.SetProgressKey(taskID, progress)
-	return progress, nil
+	state.SetProgressKey(definition.ID, progress)
+	return progress
 }
 
-// Claim 领取任务 taskID 今天的奖励。nowUnixMilli 是这条消息冻结的业务时间。
-//
-// 拒绝时不写任何字段：任务号不在任务表里（task_unknown）、今天已经领过（task_claimed）、
-// 今天还没做完（task_incomplete）。记录还停在更早的业务日时，今天的进度就是零：昨天做完没领的，
-// 今天不能补领，这里也不替它清零（清零只发生在推进时）。
-//
-// “今天领过没有”记在任务自己的状态里（Claimed），所以发奖用货币组件的 Add、不占货币的去重窗口；
-// 领奖记录与余额在同一笔事务里，任何一步被拒绝（例如余额溢出）都一起回滚。先发钱、后记领奖：
-// 发钱被拒时这里还什么都没写。
+// Claim 发奖与领奖事实在同一笔 Nest 事务；奖励失败必须原样交还 Nest。
+// 不补领过期周期，也不在拒绝路径顺便清零。永久任务下架重上不清除领奖事实。
 func (component *TaskComponent) Claim(taskID, nowUnixMilli int64) (TaskClaimResult, error) {
 	definition, ok := taskDefinition(taskID)
 	if !ok {
 		return TaskClaimResult{}, apperrors.ErrTaskUnknown
 	}
-	state := component.owner.Dao().GetTask()
-	if taskToday(nowUnixMilli) > state.GetDay() {
+	state := component.period(definition.Period)
+	if taskPeriodDay(definition.Period, nowUnixMilli) > state.GetDay() {
 		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
 	}
 	if claimed, _ := state.GetClaimed(taskID); claimed {
 		return TaskClaimResult{}, apperrors.ErrTaskClaimed
 	}
+	if !component.unlocked(definition, nowUnixMilli) {
+		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
+	}
 	if progress, _ := state.GetProgress(taskID); progress < definition.Target {
 		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
 	}
-	balance, err := component.owner.WalletComp().Add(definition.Reward)
-	if err != nil {
+	reward := TaskReward{Kind: definition.RewardKind, ID: definition.RewardID, Count: definition.RewardCount}
+	if err := grantTaskReward(component.owner, reward); err != nil {
 		return TaskClaimResult{}, err
 	}
 	state.SetClaimedKey(taskID, true)
-	return TaskClaimResult{Reward: definition.Reward, Balance: balance}, nil
-}
-
-// taskToday 把业务时间换成业务日（YYYYMMDD）。业务时区与每日重置时刻由部署配置决定，缺省 UTC 零点；
-// 不要用毫秒数除以一天自己算。
-func taskToday(nowUnixMilli int64) int64 {
-	return int64(clock.BusinessDay(time.UnixMilli(nowUnixMilli)))
-}
-
-// taskRollOver 是惰性清零：today 比记录所属的业务日新时，清空进度与领奖记录并把记录改到 today。
-//
-// 只在 today 更新时才清，不是“不相等就清”：业务时间倒退（运维把时钟拨回、改了业务时区）时记录留在
-// 较新的那一天继续用。否则倒退回去能再领一遍，时间走回来又领一遍。
-func taskRollOver(state *db.TaskState, today int64) {
-	if today <= state.GetDay() {
-		return
-	}
-	state.SetDay(today)
-	state.SetProgress(nil)
-	state.SetClaimed(nil)
+	return TaskClaimResult{Reward: reward.Count, RewardKind: reward.Kind, RewardID: reward.ID, Balance: component.owner.WalletComp().Balance()}, nil
 }

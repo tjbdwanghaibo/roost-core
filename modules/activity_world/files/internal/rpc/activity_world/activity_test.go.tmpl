@@ -1,0 +1,219 @@
+package activity_world
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/activity"
+	host "{{MODULE}}/game/entities/activity_world"
+	"{{MODULE}}/game/handler"
+)
+
+// Nest、生成 DAO/组件、handler 和 Remote 准入是真实接口；Remote 授权及提交是内存替身。
+// 不把这里的通过当成 Mongo、WAL、迁移进程或 NATS 已验收。
+type scopeRemote struct {
+	entity.IRemoteEntityManager
+	owner atomic.Int32
+}
+
+func (r *scopeRemote) GetRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, bool, error) {
+	return entity.RemoteEntityMarkerLease{OwnerSid: r.owner.Load(), MarkerEpoch: 1, RouteEpoch: 1}, true, nil
+}
+
+func (r *scopeRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (entity.RemoteWriteBatch, error) {
+	if r.owner.Load() != 1000 {
+		return nil, entity.ErrRemoteFenced
+	}
+	return &scopeBatch{ids: ids}, nil
+}
+
+type scopeBatch struct{ ids []int64 }
+
+func (b *scopeBatch) EntityIDs() []int64 { return b.ids }
+
+func (*scopeBatch) FinalizeLocked(entity.RemoteTransactionOutcome) error { return nil }
+
+func (*scopeBatch) Commits() []entity.RemoteCommit { return nil }
+
+func (*scopeBatch) Commit(context.Context) ([]entity.RemoteCommitReceipt, error) { return nil, nil }
+
+func (*scopeBatch) Abort(context.Context, error) error { return nil }
+
+func (*scopeBatch) Indeterminate(context.Context, error) error { return nil }
+
+func (*scopeBatch) Close(context.Context) error { return nil }
+
+type scopeGetter struct{ value *host.ActivityWorld }
+
+func (g scopeGetter) Get(context.Context, int64, entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	return g.value, nil
+}
+
+func (g scopeGetter) GetMany(_ context.Context, ids []int64, _ []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i := range ids {
+		out[i] = g.value
+	}
+	return out, nil
+}
+
+type scopeCommitter struct{ reject atomic.Bool }
+
+func (c *scopeCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("scope commit rejected")
+	}
+	return nil
+}
+
+type scopeFixture struct {
+	owner   *host.ActivityWorld
+	remote  *scopeRemote
+	client  *nest.NestMgr
+	service *Service
+	commit  *scopeCommitter
+	now     atomic.Int64
+}
+
+var scopeAction = nest.NewHandlerName("test_world_activity_scope")
+
+func newScopeFixture(t *testing.T) *scopeFixture {
+	t.Helper()
+	host.RegisterEntity()
+	config := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(config, "../../../configs/data").Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id, err := entity.BuildEntityID(98101, host.EntityKindActivityWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: host.EntityKindActivityWorld})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &scopeFixture{owner: value.(*host.ActivityWorld), remote: &scopeRemote{}, commit: &scopeCommitter{}}
+	f.remote.owner.Store(1000)
+	f.now.Store(clock.ProcessCalendar().DayStart(time.UnixMilli(1900000000000)).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	f.client = nest.NewEngine(nest.NestOptionWithGetter(scopeGetter{f.owner}), nest.NestOptionWithRemoteEntityManager(f.remote), nest.NestOptionWithTransactionCommitter(f.commit))
+	if err = f.client.RegisterHandlerWithMeta(scopeAction, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		c := es[0].(*host.ActivityWorld).WorldActivityComp()
+		if err := params[0].(func(activity.Host) error)(c.Host()); err != nil {
+			return nil, err
+		}
+		return nil, c.Rearm()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict}); err != nil {
+		t.Fatal(err)
+	}
+	for _, register := range []func(*nest.NestMgr) error{handler.RegisterWorldActivityPulseNestHandlersOn, handler.RegisterWorldActivityCompleteNestHandlersOn} {
+		if err = register(f.client); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = f.client.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.client.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.service = &Service{client: f.client, owners: f.remote, sid: 1000}
+	return f
+}
+
+func (f *scopeFixture) call(fn func(activity.Host) error) error {
+	_, err := f.client.Request(context.Background(), scopeAction, f.owner.ID(), nest.NewParams(fn))
+	return err
+}
+
+func (f *scopeFixture) rule() activity.Definition {
+	return activity.Definition{ID: 1, Version: 1, Scope: "world", Trigger: "fixed", StartMilli: f.now.Load(), WarmupMillis: 1000, OpenMillis: 1000, Repeat: "weekly", Period: 1, MaxCycles: 3, Catchup: "queue"}
+}
+
+func TestWorldActivityCycleUsesAuthorityAndStableScope(t *testing.T) {
+	f := newScopeFixture(t)
+	d := f.rule()
+	if err := f.call(func(h activity.Host) error {
+		_, err := h.Activate(d, "", 0, f.now.Load())
+		if err != nil {
+			return err
+		}
+		return h.Advance(f.now.Load())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	if first[0].Token.Scope != "world" || first[0].Token.Owner != f.owner.ID() || first[0].Token.Phase != activity.Warmup {
+		t.Fatal(first)
+	}
+	f.now.Add(2000)
+	if _, err = f.service.Pulse(context.Background(), f.owner.ID(), "", 0); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Store(time.UnixMilli(d.StartMilli).AddDate(0, 0, 7).UnixMilli())
+	second, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0)
+	if err != nil || len(second) != 1 {
+		t.Fatal(second, err)
+	}
+	if second[0].Token.Cycle != 2 || second[0].Token.Generation != 1 || second[0].Start != f.now.Load() {
+		t.Fatalf("drifting scope=%+v", second)
+	}
+}
+
+func TestWorldActivityChangedOwnerRejectsOldDriver(t *testing.T) {
+	f := newScopeFixture(t)
+	f.remote.owner.Store(1001)
+	if err := f.service.CheckRoute(context.Background(), f.owner.ID()); err == nil {
+		t.Fatal("route accepted foreign owner")
+	}
+	if _, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0); err == nil {
+		t.Fatal("stale driver wrote foreign owner")
+	}
+	if err := f.call(func(h activity.Host) error { _, e := h.Activate(f.rule(), "", 0, f.now.Load()); return e }); !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatal(err)
+	}
+}
+
+func TestWorldActivityFailureLeavesNoActivation(t *testing.T) {
+	f := newScopeFixture(t)
+	if err := f.call(func(h activity.Host) error {
+		if _, err := h.Activate(f.rule(), "", 0, f.now.Load()); err != nil {
+			return err
+		}
+		return fmt.Errorf("business rejected")
+	}); err == nil {
+		t.Fatal("missing rejection")
+	}
+	values, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0)
+	if err != nil || len(values) != 0 {
+		t.Fatalf("rollback=%+v %v", values, err)
+	}
+}
+
+func TestWorldActivityEmptyConfigurationDoesNothing(t *testing.T) {
+	f := newScopeFixture(t)
+	values, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0)
+	if err != nil || len(values) != 0 {
+		t.Fatalf("empty config=%+v %v", values, err)
+	}
+}

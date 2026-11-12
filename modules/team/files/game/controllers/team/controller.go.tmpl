@@ -1,0 +1,95 @@
+package team
+
+import (
+	"context"
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/lifecycle"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+type Controller struct {
+	nestClient nest.Client
+	sid        int32
+	create     func(context.Context) (int64, error)
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("team: registry required")
+	}
+	client, ok := app.Lookup[nest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("team: nest unavailable")
+	}
+	teams, err := lifecycle.TeamFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("team: lifecycle: %w", err)
+	}
+	remote, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
+	if !ok || remote == nil {
+		return nil, fmt.Errorf("team: remote runtime unavailable")
+	}
+	mongo, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+	if !ok || mongo == nil {
+		return nil, fmt.Errorf("team: mongo unavailable")
+	}
+	databases, err := kitdataengine.Databases(registry)
+	if err != nil {
+		return nil, err
+	}
+	if registry.Config() == nil {
+		return nil, fmt.Errorf("team: service config unavailable")
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return nil, err
+	}
+	if identity.Sid <= 0 {
+		return nil, fmt.Errorf("team: positive service sid required")
+	}
+	ids := mongo.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence")
+	return &Controller{nestClient: client, sid: identity.Sid, create: func(ctx context.Context) (int64, error) {
+		unique, err := nextTeamID(ctx, ids)
+		if err != nil {
+			return 0, err
+		}
+		value, err := teams.Create(ctx, unique)
+		if err != nil {
+			return 0, err
+		}
+		id := value.ID()
+		lease, err := remote.ClaimRemoteOwnership(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		if !lease.Shared {
+			if _, err := remote.EnterRemoteSharedMode(ctx, id); err != nil {
+				return 0, err
+			}
+		}
+		return id, nil
+	}}, nil
+}
+
+// nextTeamID 的计数器与 Team 使用相同物理库；拒绝回绕。未知结果允许跳号，绝不复用旧号。
+func nextTeamID(ctx context.Context, ids fmongo.ICollection) (int64, error) {
+	var value struct {
+		Next int64 `bson:"next"`
+	}
+	if err := ids.FindOneAndUpdate(ctx, bson.M{"_id": "team"}, bson.M{"$inc": bson.M{"next": int64(1)}}, &value, fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true}); err != nil {
+		return 0, err
+	}
+	if value.Next <= 0 || uint64(value.Next) >= entity.StaticUniqueIDBase {
+		return 0, fmt.Errorf("team: id counter outside dynamic range")
+	}
+	return value.Next, nil
+}

@@ -1,0 +1,44 @@
+name: activity
+summary: 五阶段活动、固定/日历循环、可信解锁、个人状态与持久定时器；全服和联盟共用此引擎
+needs:
+  mods: [nest, configdata]
+  features: [protocol, entity, dao, nest, config]
+entity: Player
+component: Activity
+timer_types: [ActivityDeadline]
+state:
+  - field: Activity
+    type: ActivityBook
+    store: activity
+    dao: persist,nosync
+    comment: 个人活动实例和参与共享活动的资格；不向客户端暴露内部规则。
+protocols: [ActivityView]
+verify:
+  packages: [./game/activity, ./game/handler]
+  run: ^TestActivity
+  pass: 21
+with:
+  enter:
+    summary: 首次建档记录相对锚点；每次进入惰性对账，锁外恢复 pending 工作
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithActivityEnter
+      pass: 1
+  profile:
+    summary: 升级事实在同一事务触发活动条件，不允许客户端自报等级
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithActivityProfile
+      pass: 1
+  leaderboard:
+    summary: 按实例身份隔离活动榜；结算前由业务冻结结果
+    verify:
+      packages: [./game/activity]
+      run: ^TestWithActivityLeaderboard
+      pass: 1
+  mailbox:
+    summary: 以活动期次和收件人组成稳定邮件幂等键
+    verify:
+      packages: [./game/activity]
+      run: ^TestWithActivityMailbox
+      pass: 1

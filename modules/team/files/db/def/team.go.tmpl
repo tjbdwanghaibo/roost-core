@@ -1,0 +1,17 @@
+package dbdef
+
+// TeamDao 保存唯一成员表，Player 上只保存引用；解散保留墓碑，不重用 ID。
+//
+//roost:dao coll=team db=main
+type TeamDao struct {
+	Leader   int64           `dao:"persist" store:"1"`
+	Members  map[int64]int32 `dao:"persist,map=fast" store:"2"`
+	Invites  map[int64]int64 `dao:"persist,map=fast" store:"3"`
+	MatchKey string          `dao:"persist" store:"5"`
+	Revision int64           `dao:"persist" store:"4"`
+}
+
+// TeamState 的 TeamID 是完整实体号，只有同时声明 [Team, Player] 的事务可修改。
+type TeamState struct {
+	TeamID int64 `store:"1"`
+}

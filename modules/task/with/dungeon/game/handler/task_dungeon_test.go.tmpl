@@ -1,0 +1,54 @@
+package handler
+
+import (
+	"context"
+	"sync"
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+var taskDungeonOnce sync.Once
+var taskDungeonHandler = nest.NewHandlerName("taskDungeonTest")
+
+func taskDungeonClaim(f *taskFixture) error {
+	taskDungeonOnce.Do(func() {
+		nest.MustRegisterHandlerWithMeta(taskDungeonHandler, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+			now := fctx.NowMilli() / 1000
+			return es[0].(*player.Player).DungeonComp().Claim(12345, 1, 100, now, now)
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	_, err := f.engine.Request(context.Background(), taskDungeonHandler, f.player.ID(), nest.NewParams())
+	return err
+}
+func TestWithTaskDungeonReplayDoesNotCountAgain(t *testing.T) {
+	f := newTaskFixture(t)
+	if err := taskDungeonClaim(f); err != nil {
+		t.Fatal(err)
+	}
+	if err := taskDungeonClaim(f); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.facts(t); got.progress[3] != 1 || got.day != 20261110 || got.commits != 1 {
+		t.Fatalf("dungeon=%v", got)
+	}
+}
+func TestWithTaskDungeonRollbackCanRetry(t *testing.T) {
+	f := newTaskFixture(t)
+	f.committer.reject.Store(true)
+	if err := taskDungeonClaim(f); err == nil {
+		t.Fatal("rejected clear accepted")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rollback", taskFacts{})
+	if err := taskDungeonClaim(f); err != nil {
+		t.Fatal(err)
+	}
+	if f.facts(t).progress[3] != 1 {
+		t.Fatal("retry not counted once")
+	}
+}

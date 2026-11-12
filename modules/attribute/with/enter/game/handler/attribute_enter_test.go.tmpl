@@ -1,0 +1,41 @@
+package handler
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	sender "{{MODULE}}/game/handler/syncsender"
+)
+
+func TestWithAttributeEnterUsesInitialLevel(t *testing.T) {
+	f := newAttributeFixture(t)
+	RegisterEnterInitNestHandlers()
+	if _, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), f.player.ID()); err != nil {
+		t.Fatal(err)
+	}
+	got := f.get(t)
+	state := f.snapshot(t)
+	if state.Level != 1 || got.HP != 110 || got.Attack != 12 || got.Power != 35 || len(state.Base) == 0 {
+		t.Fatalf("initial attributes=%+v state=%+v", got, state)
+	}
+}
+func TestWithAttributeEnterRollsBackInitialAttributes(t *testing.T) {
+	f := newAttributeFixture(t)
+	RegisterEnterInitNestHandlers()
+	before := f.snapshot(t)
+	f.committer.reject.Store(true)
+	if _, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), f.player.ID()); err == nil {
+		t.Fatal("rejected creation accepted")
+	}
+	f.committer.reject.Store(false)
+	if after := f.snapshot(t); !reflect.DeepEqual(after, before) {
+		t.Fatalf("rollback=%+v before=%+v", after, before)
+	}
+	if _, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), f.player.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.get(t); got.HP != 110 || got.Attack != 12 {
+		t.Fatalf("retry=%+v", got)
+	}
+}

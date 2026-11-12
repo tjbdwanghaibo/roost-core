@@ -1,0 +1,19 @@
+//go:build protocoldef
+
+package protocoldef
+
+// AllianceNoticePush is sent when the alliance service tells this game server
+// that an online player's membership changed (joined, left, kicked). Best
+// effort: a player who was offline, or whose notice was lost, sees the change
+// at the next login, which reads the alliance mirror.
+type AllianceNoticePush struct {
+	AllianceID int64  `pb:"1"`
+	Change     string `pb:"2"`
+	Version    int64  `pb:"3"`
+}
+
+//roost:protocol group=game handler=alliance
+type AllianceNoticeProtocol interface {
+	//roost:msg id={{ID:protocol:AllianceNotice}}
+	AllianceNotice() AllianceNoticePush
+}

@@ -18,7 +18,7 @@ package roostcore_test
 //     名字参数是字面量、包级常量（本包或别的包）、函数内的字符串局部变量，或一层包装函数的形参
 //     （kit/statslog 的 publishCounts）——包装函数的调用方传进来的字面量照样收；
 //   - 各包导出的 Metric* 字符串常量（类型未知时按四种导出形状都算存在）；
-//   - 生成器产物里的写入：codegen 渲染进字符串的 Go 代码与 demo/ 的 .tmpl，按文本扫描同样的调用与 *Metric* 常量。
+//   - 生成器产物里的写入：codegen 渲染进字符串的 Go 代码与 demo/、modules/ 的 .tmpl，按文本扫描同样的调用与 *Metric* 常量。
 // 标签键从标签参数里的 metrics.Labels{...} / map[string]string{...} 字面量收；参数是变量、调用或字段时，
 // 能在函数内找到字面量赋值就用它，否则该指标的标签记为“开放”，不做标签核对（宁可漏报不误报）。
 
@@ -168,7 +168,7 @@ func collectMetricInventory(t *testing.T) *metricInventory {
 			return nil
 		}
 		slash := filepath.ToSlash(path)
-		if strings.HasSuffix(slash, ".tmpl") && strings.HasPrefix(slash, "demo/") {
+		if strings.HasSuffix(slash, ".tmpl") && (strings.HasPrefix(slash, "demo/") || strings.HasPrefix(slash, "modules/")) {
 			templates = append(templates, path)
 			return nil
 		}
@@ -550,7 +550,7 @@ var (
 )
 
 // scanTemplateMetrics reads metric writes from generator output that only
-// exists as text: demo/*.tmpl and the Go code codegen renders into strings.
+// exists as text: demo/modules templates and the Go code codegen renders into strings.
 func scanTemplateMetrics(t *testing.T, inv *metricInventory, path string) {
 	t.Helper()
 	raw, err := os.ReadFile(path)

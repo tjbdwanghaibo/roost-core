@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// ErrAllianceMoved: the request went to the alliance instance the route said
+// owned the alliance, was redirected once, and the redirect did not reach the
+// owner either — an operator is moving the alliance between instances
+// (alliance.transfer). Nothing happened; send the same request again.
+var ErrAllianceMoved = errcode.Define({{ID:errcode:alliance_moved}}, "alliance_moved", "alliance is moving between servers, try again")

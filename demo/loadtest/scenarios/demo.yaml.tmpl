@@ -2,7 +2,7 @@
 # exists, chat on the world channel and read it back, add an item, earn
 # exp (the reward mail it sends is then listed and claimed), gift an item to
 # itself through the saga and claim it back, watch a gift to nobody get
-# compensated, clear a dungeon run, found a guild in the alliance service,
+# compensated, clear a dungeon run, found a alliance in the alliance service,
 # donate to it and claim its reward (three sagas),
 # queue for a duel and then a ranked match, earn enough exp to level up (which sends a reward mail
 # through the effect chain), queue for a duel until matched, read the World's
@@ -163,30 +163,30 @@ scenarios:
         # the action, because "the replay was free" is only visible as an
         # exact count.
         - action: activity_standing
-        # The guild lives in the alliance service, not in this game process.
-        # Founding costs gold coins (item 9001, guild.found_cost: 100), so it is
+        # The alliance lives in the alliance service, not in this game process.
+        # Founding costs gold coins (item 9001, Controller.foundCost: 100), so it is
         # a saga: the game debits the fee, the alliance service founds the
-        # guild, and a refusal would refund the fee. found_guild answers
-        # "accepted" with the saga's key; guild_op_status polls it until it
-        # ends, and expect_guild_op wants it completed (the status also names
-        # the guild founded). Donating and claiming the guild reward are sagas
+        # alliance, and a refusal would refund the fee. found_alliance answers
+        # "accepted" with the saga's key; alliance_op_status polls it until it
+        # ends, and expect_alliance_op wants it completed (the status also names
+        # the alliance founded). Donating and claiming the alliance reward are sagas
         # of the same shape.
         - action: add_item
           param:
             item_id: 9001
             count: 200
-        - action: found_guild
+        - action: found_alliance
         - retry:
             times: 40
             node:
               sequence:
                 - wait: 250ms
-                - action: guild_op_status
-        - action: expect_guild_op
+                - action: alliance_op_status
+        - action: expect_alliance_op
           param:
             status: completed
-        # "My guild" reads the robot's own copy (set when guild_op_status saw
-        # the founding completed), then the guild's mirror: Remote mirrors are
+        # "My alliance" reads the robot's own copy (set when alliance_op_status saw
+        # the founding completed), then the alliance's mirror: Remote mirrors are
         # eventually consistent (the owner publishes after each commit), so
         # the read is retried until the snapshot is there.
         - retry:
@@ -194,8 +194,8 @@ scenarios:
             node:
               sequence:
                 - wait: 100ms
-                - action: guild_info
-        - action: donate_guild
+                - action: alliance_info
+        - action: donate_alliance
           param:
             amount: 10
         - retry:
@@ -203,18 +203,18 @@ scenarios:
             node:
               sequence:
                 - wait: 250ms
-                - action: guild_op_status
-        - action: expect_guild_op
+                - action: alliance_op_status
+        - action: expect_alliance_op
           param:
             status: completed
-        - action: claim_guild_reward
+        - action: claim_alliance_reward
         - retry:
             times: 40
             node:
               sequence:
                 - wait: 250ms
-                - action: guild_op_status
-        - action: expect_guild_op
+                - action: alliance_op_status
+        - action: expect_alliance_op
           param:
             status: completed
         # A paid order, across the platform process: the endpoint signs a
@@ -342,21 +342,21 @@ scenarios:
         - action: scene_alive
           param:
             timeout: 10s
-  # A guild joined while offline (alliance plan §2.5B, decision D): run it on
-  # its own, `go run ./cmd/loadtest -scenario guild_offline_join -count 2`
+  # A alliance joined while offline (alliance plan §2.5B, decision D): run it on
+  # its own, `go run ./cmd/loadtest -scenario alliance_offline_join -count 2`
   # (make dev-smoke runs both). The game's ops listener must be reachable
   # (-game-ops, -admin-token): the operator step runs there.
   #
-  # The robot founds an open guild as itself, then plays a second role, the
+  # The robot founds an open alliance as itself, then plays a second role, the
   # member: it logs in once (so it has a Player) and disconnects. The operator
-  # joins the member to the guild — gm.player.join_guild refuses while the
+  # joins the member to the alliance — gm.player.join_alliance refuses while the
   # game still holds a session of the member, so the retry around it is the
   # barrier that makes "offline" a fact rather than a timing. The membership
   # notice the join sends finds nobody online and changes nothing; at the
-  # next login the game asks the alliance service which guild the member is
-  # in (refreshGuild → Membership) and shows it. my_guild reads "the guild I
-  # am in" with no id: it must be the founder's guild, with the member in it.
-  - name: guild_offline_join
+  # next login the game asks the alliance service which alliance the member is
+  # in (refreshAlliance → Membership) and shows it. my_alliance reads "the alliance I
+  # am in" with no id: it must be the founder's alliance, with the member in it.
+  - name: alliance_offline_join
     node:
       sequence:
         - action: connect
@@ -365,7 +365,7 @@ scenarios:
           param:
             item_id: 9001
             count: 200
-        - action: found_guild
+        - action: found_alliance
           param:
             open_join: true
         - retry:
@@ -373,8 +373,8 @@ scenarios:
             node:
               sequence:
                 - wait: 250ms
-                - action: guild_op_status
-        - action: expect_guild_op
+                - action: alliance_op_status
+        - action: expect_alliance_op
           param:
             status: completed
         - action: disconnect
@@ -389,7 +389,7 @@ scenarios:
             node:
               sequence:
                 - wait: 20ms
-                - action: join_guild_offline
+                - action: join_alliance_offline
         - action: connect
         - action: enter_game
-        - action: my_guild
+        - action: my_alliance

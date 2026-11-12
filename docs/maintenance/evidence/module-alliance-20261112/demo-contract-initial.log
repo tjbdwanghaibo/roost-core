@@ -1,0 +1,8 @@
+=== RUN   TestDemoTemplateGeneratesABuildableWritePath
+=== PAUSE TestDemoTemplateGeneratesABuildableWritePath
+=== CONT  TestDemoTemplateGeneratesABuildableWritePath
+    demo_test.go:683: gm.go does not accept the full Player entity id as player_id
+--- FAIL: TestDemoTemplateGeneratesABuildableWritePath (24.34s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	24.761s
+FAIL

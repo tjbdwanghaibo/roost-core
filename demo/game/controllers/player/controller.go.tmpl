@@ -7,29 +7,23 @@ import (
 	"sync/atomic"
 	"time"
 
-	db "{{MODULE}}/db"
 	chatctl "{{MODULE}}/game/controllers/chat"
-	alliance "{{MODULE}}/game/entities/alliance"
+	purchasecontroller "{{MODULE}}/game/controllers/purchase"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/purchase"
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
-	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
-	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 	svcsession "github.com/tjbdwanghaibo/roost-core/service/session"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // Controller hosts the player protocol endpoints. It holds what an endpoint
@@ -42,22 +36,14 @@ type Controller struct {
 	registry   *app.Registry
 	nestClient corenest.Client
 	players    *lifecycle.PlayerLifecycle
-	// The guild is the alliance service's (game/guild): writes go through its
-	// RPC client, reads through the alliance's Remote mirror. Which guild a
-	// player is in is the player's own copy (PlayerDao.GuildID).
-	alliances       rpcalliance.Alliance
-	allianceMirrors *entity.RemoteMirrorReader[alliance.AllianceMirror]
-	guildSettings   settings.Guild
-	// A partitioned scene's team (game/entities/team): this game service owns it.
-	teams *lifecycle.TeamLifecycle
-	matcher    svcmatch.Matchmaker
+	// 匹配仍由 demo 的锁步战斗使用，社交队伍端点来自 team 模块。
+	matcher svcmatch.Matchmaker
 	// chat is the chat module's controller (game/controllers/chat): the login
 	// announcement and the online set go through it; SendChat / ChatHistory are
 	// its own endpoints, not this controller's.
-	chat *chatctl.Controller
+	chat       *chatctl.Controller
 	sessions   svcsession.Session
 	payments   svcplatform.Platform
-	purchases  atomic.Pointer[purchaseDrainer]
 	activities atomic.Pointer[activityRunner]
 	owners     atomic.Pointer[playerOwners]
 	transport  atomic.Pointer[pushTransport]
@@ -71,11 +57,6 @@ type Controller struct {
 	// Runtime IDs are only for ephemeral objects.
 	serverSID int32
 	ids       *runtimeid.Allocator
-	// teamIDs is the persistent counter a new team's id comes from (another
-	// incarnation of this sid, or another sid, never reuses one).
-	teamIDs fmongo.ICollection
-
-
 }
 
 // battleRouter is the slice of the game service's battle manager the
@@ -119,13 +100,6 @@ type activityRunner interface {
 	Settled(ctx context.Context, activityID string) (bool, error)
 }
 
-// purchaseDrainer is the slice of the game service's paid-order drain an
-// endpoint uses: settle whatever the platform service has recorded for this
-// player. Looked up by capability name for the same reason the scene is.
-type purchaseDrainer interface {
-	DrainPlayer(ctx context.Context, playerID int64) ([]purchase.Settlement, error)
-}
-
 // pushTransport is the slice of the player TCP Runtime the endpoints use.
 // It is an interface here, and the capability is looked up by name, because
 // the transport package imports the protocol binding that constructs this
@@ -156,10 +130,6 @@ const battleCapability app.ModName = "{{GAME_SERVICE}}.battle"
 // (SceneCapability there).
 const sceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
 
-// purchaseCapability is what internal/service/<game> publishes its paid-order
-// drain under (PurchaseCapability there).
-const purchaseCapability app.ModName = "{{GAME_SERVICE}}.purchases"
-
 // activityCapability is what internal/service/<game> publishes its activity
 // runner under (ActivityCapability there).
 const activityCapability app.ModName = "{{GAME_SERVICE}}.activity"
@@ -179,29 +149,6 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("player controller: nest client is unavailable")
 	}
 	players, err := lifecycle.PlayerFromRegistry(registry)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
-	// The alliance service: its RPC client (assembled from uses_rpcs:
-	// [alliance]) and the read-only mirrors of its two kinds (the
-	// remote_mirror Mod's snapshot source).
-	alliances, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.CapabilityName)
-	if !ok || alliances == nil {
-		return nil, fmt.Errorf("player controller: capability %q not found; list alliance under services.<game>.uses_rpcs", rpcalliance.CapabilityName)
-	}
-	mirrors, err := kitremoteentity.MirrorSource(registry)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
-	allianceMirrors, err := alliance.NewAllianceMirrorReader(mirrors)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
-	guildSettings, err := settings.LoadGuild(registry)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
-	teams, err := lifecycle.TeamFromRegistry(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
@@ -249,15 +196,6 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
-	if !ok || mongoClient == nil {
-		return nil, fmt.Errorf("player controller: the team id allocator requires mongo")
-	}
-	// 队伍号序列与 Team 文档在同一个物理库：Team DAO 的 db= 是逻辑库名，经 DataEngine 冻结的映射表换算。
-	databases, err := kitdataengine.Databases(registry)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
 	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -267,12 +205,10 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
-		registry: registry, nestClient: client, players: players, teams: teams,
-		alliances: alliances, allianceMirrors: allianceMirrors, guildSettings: guildSettings,
+		registry: registry, nestClient: client, players: players,
 		matcher: matcher, chat: chat, sessions: sessions,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
-		teamIDs: mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
 		worldID: worldID, sceneID: sceneID,
 	}, nil
 }
@@ -416,20 +352,12 @@ func (controller *Controller) PaymentSecret() string {
 	return controller.paymentSecret
 }
 
-// Purchases is the paid-order drain, looked up lazily like the scene.
-func (controller *Controller) Purchases() (purchaseDrainer, error) {
+// Purchases uses the module's bounded collector. The Redis queue and platform client live outside Nest.
+func (controller *Controller) Purchases() (*purchasecontroller.Controller, error) {
 	if controller == nil {
 		return nil, errors.New("player controller: nil")
 	}
-	if drain := controller.purchases.Load(); drain != nil {
-		return *drain, nil
-	}
-	drain, ok := app.Lookup[purchaseDrainer](controller.registry, purchaseCapability)
-	if !ok || drain == nil {
-		return nil, fmt.Errorf("player controller: capability %q not found; the purchase drain is not running", purchaseCapability)
-	}
-	controller.purchases.Store(&drain)
-	return drain, nil
+	return purchasecontroller.FromRegistry(controller.registry)
 }
 
 // PlayerOwners is the ownership table, looked up lazily like the scene.

@@ -1,0 +1,13 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerMatchBegin(member player.IMatchmakingEntity, sequence int64, sid int32) (player.MatchSnapshot, error) {
+	return player.BeginMatching([]player.IMatchmakingEntity{member}, entity.GetUniqueIDFromEntityID(member.ID()), sequence, 0, sid, clock.UnixMilli())
+}

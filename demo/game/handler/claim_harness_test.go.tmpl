@@ -8,6 +8,7 @@ import (
 
 	generated "{{MODULE}}/configs/generated"
 	player "{{MODULE}}/game/entities/player"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -16,7 +17,7 @@ import (
 )
 
 // The harness the handler tests in this package share (the bag grants, the
-// paid-order ledger, the dungeon claim, the guild steps): the answer to "how
+// paid-order ledger, the dungeon claim, the alliance steps): the answer to "how
 // do I test a handler without Mongo". A Getter that hands back one entity, a
 // committer that keeps the record instead of writing it, and the project's
 // own config data. Everything else is the real thing — the generated handler
@@ -69,7 +70,6 @@ func pinBusinessClock(t *testing.T, unix int64) {
 func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommitter) {
 	t.Helper()
 	player.RegisterEntity()
-	RegisterGrantPurchaseNestHandlers()
 	// The item table the Bag validates against, loaded from the project's own
 	// data files: the generated accessors read the active snapshot, so a test
 	// that grants an item needs one.

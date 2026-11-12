@@ -13,11 +13,12 @@ import (
 	"{{MODULE}}/game/terrainmap"
 	accessplayer "{{MODULE}}/internal/access/player"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
- "github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
@@ -28,32 +29,31 @@ import (
 // matchmaker that turns waiting tickets into matches, the gift saga's step
 // consumers, and the lockstep rooms those matches play in.
 type Service struct {
- // sceneSync 先由 Nest 绑定，Init 建好 Scene 后再接上目标 Manager。
- sceneSync sceneSyncObserver
+	stopAlliance func(context.Context) error
+	// sceneSync 先由 Nest 绑定，Init 建好 Scene 后再接上目标 Manager。
+	sceneSync      sceneSyncObserver
 	world          *world.World
-	levelUpMail    fnats.IJetStreamSubscription
 	stopMatchmaker func()
 	giftSteps      *kitsaga.Steps
-	guildSteps     *kitsaga.Steps
 	battles        *battleManager
 	scene          *Scene
 	stopSpawner    func()
 	spawner        *spawner
 	partition      *partitionRuntime
 	// terrain 是可编辑地形（terrain.go）；没配 scene.terrain.pack 时为 nil。
-	terrain        *terrainmap.Map
+	terrain *terrainmap.Map
 	// cellHandlers 是分区场景 cellworld.Node 的 handler 名单：引擎启动前由 InstallNestHandlers 注册（partition.go），
 	// Init 里建 Node 时接上。不分区的进程也注册，只是永远不会被投递。
-	cellHandlers   *cellworld.Handlers
-	owners         *PlayerOwners
-	stopFlags      func()
+	cellHandlers *cellworld.Handlers
+	owners       *PlayerOwners
+	stopFlags    func()
 	// stopBuildingConfig 撤销建筑配置的热更新检查（building_config.go）。
 	stopBuildingConfig func()
-	activity       *ActivityRunner
-	stopActivity   func()
-	stopTimers     func(context.Context) error
-	stopHeartbeat  func(context.Context) error
-	activityPhase  fnats.IJetStreamSubscription
+	activity           *ActivityRunner
+	stopActivity       func()
+	stopTimers         func(context.Context) error
+	stopHeartbeat      func(context.Context) error
+	activityPhase      fnats.IJetStreamSubscription
 }
 
 func New() *Service                    { return &Service{cellHandlers: cellworld.NewHandlers()} }
@@ -129,11 +129,6 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	subscription, err := startLevelUpMailer(context.Background(), registry)
-	if err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
-	s.levelUpMail = subscription
 	// The battle manager before the matchmaker: a match that forms opens a
 	// lockstep room through it, so it must be published and reachable first.
 	battles, err := newBattleManager(registry)
@@ -179,8 +174,10 @@ func (s *Service) Init(registry *app.Registry) error {
 		// (partitionSurface). Before any player can join, so no walk starts flat.
 		installSurface(area.Terrain(), s.terrain)
 	}
- // Scene 自己拥有 Manager；Nest Mod 没有这个句柄，健康检查由此登记。
- if checks,ok:=app.Lookup[*health.Registry](registry,mods.ModHealth);ok && checks!=nil {checks.Register("entitysync.scene",scene)}
+	// Scene 自己拥有 Manager；Nest Mod 没有这个句柄，健康检查由此登记。
+	if checks, ok := app.Lookup[*health.Registry](registry, mods.ModHealth); ok && checks != nil {
+		checks.Register("entitysync.scene", scene)
+	}
 	// A partitioned scene (scene.partition, partition.go) instead of the
 	// spawner: this process is a Cell (its sid owns a cell: it hosts the
 	// cell's region and spawns the cell's monsters) and the Base of its own
@@ -259,27 +256,12 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.giftSteps = giftSteps
-	// The guild sagas' step consumers (alliance_saga.go: found, donate, claim
-	// reward — the Player steps here, the guild steps through the alliance
-	// RPC), and the alliance service's membership notices (alliance_notice.go).
-	guildSteps, err := startGuildSagas(context.Background(), registry)
+	stopAlliance, err := startAlliance(registry, owners)
+	s.stopAlliance = stopAlliance
 	if err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+		return err
 	}
-	s.guildSteps = guildSteps
-	if err := installGuildNotices(registry); err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
-	// The paid-order drain: the game side of the platform service's handover
-	// (purchase_drain.go). Published rather than started — it runs when a
-	// player is in hand, not on a timer.
-	drain, err := NewPurchaseDrain(registry)
-	if err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
-	if err := registry.Register(PurchaseCapability, drain); err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: publish purchase drain: %w", err)
-	}
+
 	// The kill switches, before anything they gate: a process that comes up
 	// during an incident must come up with the store closed if that is how
 	// the operator left it (flags.go).
@@ -362,6 +344,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	// The gift steps finish what they are running within the stop budget;
 	// past it they are stopped and JetStream redelivers what was not acked.
+	if s.stopAlliance != nil {
+		if err := s.stopAlliance(ctx); err != nil {
+			return err
+		}
+		s.stopAlliance = nil
+	}
 	if s.giftSteps != nil {
 		if err := s.giftSteps.Drain(ctx); err != nil {
 			slog.Warn("gift saga steps did not drain in time; stopping them", "err", err)
@@ -369,21 +357,11 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		s.giftSteps = nil
 	}
-	if s.guildSteps != nil {
-		if err := s.guildSteps.Drain(ctx); err != nil {
-			slog.Warn("guild saga steps did not drain in time; stopping them", "err", err)
-			s.guildSteps.Stop()
-		}
-		s.guildSteps = nil
-	}
+
 	// After the matchmaker, so no new battle is opened while rooms close.
 	if s.battles != nil {
 		s.battles.Close()
 		s.battles = nil
-	}
-	if s.levelUpMail != nil {
-		s.levelUpMail.Drain()
-		s.levelUpMail = nil
 	}
 	if s.stopBuildingConfig != nil {
 		s.stopBuildingConfig()

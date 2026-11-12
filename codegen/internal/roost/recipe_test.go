@@ -40,113 +40,115 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"casual", "turn-pvp"} {
-		target := filepath.Join(t.TempDir(), "starter")
-		var out bytes.Buffer
-		if err := Run([]string{"project", "new", "starter", "-module", "example.com/studio/starter", "-services", "arena", "-recipe", name, "-out", target, "-skip-deps"}, &out, &out); err != nil {
-			t.Fatalf("%s: %v\n%s", name, err, &out)
-		}
-		modFile := filepath.Join(target, "go.mod")
-		raw, err := os.ReadFile(modFile)
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw = regexp.MustCompile(`(?m)^replace github\.com/tjbdwanghaibo/roost-core\b.*$\n?`).ReplaceAll(raw, nil)
-		raw = append(raw, []byte("\nreplace github.com/tjbdwanghaibo/roost-core => "+strconv.Quote(filepath.ToSlash(repo))+"\n")...)
-		if err := os.WriteFile(modFile, raw, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		manifest, err := LoadManifest(target)
-		if err != nil {
-			t.Fatal(err)
-		}
-		recipes, err := loadRecipes()
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, module := range recipes[name].Modules {
-			if installed, ok := manifest.Modules[module]; !ok || installed.Service != "arena" {
-				t.Fatalf("%s: missing %s on arena", name, module)
+		t.Run(name, func(t *testing.T) {
+			target := filepath.Join(t.TempDir(), "starter")
+			var out bytes.Buffer
+			if err := Run([]string{"project", "new", "starter", "-module", "example.com/studio/starter", "-services", "arena", "-recipe", name, "-out", target, "-skip-deps"}, &out, &out); err != nil {
+				t.Fatalf("%s: %v\n%s", name, err, &out)
 			}
-		}
-		if !manifest.Access["player"].SelfSync {
-			t.Fatal("recipe omitted self-sync")
-		}
-		// 握手的认证器是 login 模块的，配方不再带自己的一份；登录入口装在托管 account 的服务上。
-		auth, err := os.ReadFile(filepath.Join(target, "internal", "access", "player", "tcp", "auth.go"))
-		if err != nil || !bytes.Contains(auth, []byte("gamelogin.Authenticator{Accounts: accounts}")) || bytes.Contains(auth, []byte("recipeAuthBinding")) {
-			t.Fatalf("%s: auth.go is not the login module's authenticator: %v\n%s", name, err, auth)
-		}
-		if _, err := os.Stat(filepath.Join(target, "internal", "access", "player", "tcp", "auth_test.go")); !os.IsNotExist(err) {
-			t.Fatalf("%s: the recipe still ships its own authenticator test: %v", name, err)
-		}
-		if runtime := manifest.Modules["portal"].Runtime; runtime == nil || runtime.Framework != "account" {
-			t.Fatalf("%s: the front door is not hosted on the account service: %+v", name, manifest.Modules["portal"])
-		}
-		checkRecipeLoginDevelopmentConfig(t, target)
-		for _, args := range [][]string{{"test", "-json", "-count=1", "./..."}, {"test", "-json", "-race", "-count=1", "-run", "^TestRecipe|^TestEnter", "./game/handler", "./game/entities/player", "./internal/access/player/tcp"}, {"build", "./..."}, {"vet", "./..."}} {
-			cmd := exec.Command("go", args...)
-			cmd.Dir, cmd.Env = target, generatedProjectGoEnv()
-			output, err := cmd.CombinedOutput()
+			modFile := filepath.Join(target, "go.mod")
+			raw, err := os.ReadFile(modFile)
 			if err != nil {
-				t.Fatalf("recipe %s go %s: %v\n%s", name, strings.Join(args, " "), err, output)
+				t.Fatal(err)
 			}
-			if args[0] == "test" {
-				var passed, skipped int
-				for _, line := range bytes.Split(output, []byte("\n")) {
-					var event struct{ Action, Test string }
-					if json.Unmarshal(line, &event) == nil && strings.HasPrefix(event.Test, "TestRecipe") {
-						if event.Action == "pass" {
-							passed++
-						}
-						if event.Action == "skip" {
-							skipped++
+			raw = regexp.MustCompile(`(?m)^replace github\.com/tjbdwanghaibo/roost-core\b.*$\n?`).ReplaceAll(raw, nil)
+			raw = append(raw, []byte("\nreplace github.com/tjbdwanghaibo/roost-core => "+strconv.Quote(filepath.ToSlash(repo))+"\n")...)
+			if err := os.WriteFile(modFile, raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := LoadManifest(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recipes, err := loadRecipes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, module := range recipes[name].Modules {
+				if installed, ok := manifest.Modules[module]; !ok || installed.Service != "arena" {
+					t.Fatalf("%s: missing %s on arena", name, module)
+				}
+			}
+			if !manifest.Access["player"].SelfSync {
+				t.Fatal("recipe omitted self-sync")
+			}
+			// 握手的认证器是 login 模块的，配方不再带自己的一份；登录入口装在托管 account 的服务上。
+			auth, err := os.ReadFile(filepath.Join(target, "internal", "access", "player", "tcp", "auth.go"))
+			if err != nil || !bytes.Contains(auth, []byte("gamelogin.Authenticator{Accounts: accounts}")) || bytes.Contains(auth, []byte("recipeAuthBinding")) {
+				t.Fatalf("%s: auth.go is not the login module's authenticator: %v\n%s", name, err, auth)
+			}
+			if _, err := os.Stat(filepath.Join(target, "internal", "access", "player", "tcp", "auth_test.go")); !os.IsNotExist(err) {
+				t.Fatalf("%s: the recipe still ships its own authenticator test: %v", name, err)
+			}
+			if runtime := manifest.Modules["portal"].Runtime; runtime == nil || runtime.Framework != "account" {
+				t.Fatalf("%s: the front door is not hosted on the account service: %+v", name, manifest.Modules["portal"])
+			}
+			checkRecipeLoginDevelopmentConfig(t, target)
+			for _, args := range [][]string{{"test", "-json", "-count=1", "./..."}, {"test", "-json", "-race", "-count=1", "-run", "^TestRecipe|^TestEnter", "./game/handler", "./game/entities/player", "./internal/access/player/tcp"}, {"build", "./..."}, {"vet", "./..."}} {
+				cmd := exec.Command("go", args...)
+				cmd.Dir, cmd.Env = target, generatedProjectGoEnv()
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("recipe %s go %s: %v\n%s", name, strings.Join(args, " "), err, output)
+				}
+				if args[0] == "test" {
+					var passed, skipped int
+					for _, line := range bytes.Split(output, []byte("\n")) {
+						var event struct{ Action, Test string }
+						if json.Unmarshal(line, &event) == nil && strings.HasPrefix(event.Test, "TestRecipe") {
+							if event.Action == "pass" {
+								passed++
+							}
+							if event.Action == "skip" {
+								skipped++
+							}
 						}
 					}
+					// 公共的四条（整条登录链路、会话令牌的老路、连错服被告知并断开、换服在途的进入前检查），
+					// casual 另有首次发放两条与购买一条，turn-pvp 另有建角名字与双人回合两条。
+					want := map[string]int{"casual": 7, "turn-pvp": 6}[name]
+					if passed != want || skipped != 0 {
+						t.Fatalf("recipe %s scenarios: %d passed, %d skipped, want %d/0", name, passed, skipped, want)
+					}
+					t.Logf("recipe %s: %d integration/login scenarios, zero skips", name, passed)
 				}
-				// 公共的四条（整条登录链路、会话令牌的老路、连错服被告知并断开、换服在途的进入前检查），
-				// casual 另有首次发放两条与购买一条，turn-pvp 另有建角名字与双人回合两条。
-				want := map[string]int{"casual": 7, "turn-pvp": 6}[name]
-				if passed != want || skipped != 0 {
-					t.Fatalf("recipe %s scenarios: %d passed, %d skipped, want %d/0", name, passed, skipped, want)
-				}
-				t.Logf("recipe %s: %d integration/login scenarios, zero skips", name, passed)
 			}
-		}
-		if _, err := VerifyModules(context.Background(), target, nil, nil); err != nil {
-			t.Fatalf("recipe %s verify: %v", name, err)
-		}
-		if name == "casual" {
-			recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {", "if err := error(nil); err != nil {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "initial coins = 0")
-			recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if state.GetInitialized() {", "if false && state.GetInitialized() {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "repeat =")
-			// 登录链路的三条：进服票据握手的会话不再被当成“先新建”、换服在途的角色被放进来、已经建成的玩家能再新建一次（首次发放会再发）。
-			recipeMutationMustFail(t, target, "game/login/login_enter.go", `return claims[EnterTicketClaim] == "1"`, "return false", "./internal/access/player/tcp", "TestRecipeTCPEnterTicketCreatesFirstThenEnters", "EnterStatus for a new account")
-			recipeMutationMustFail(t, target, "internal/access/player/tcp/recipe_entering.go", "if !moving {", "if !moving || true {", "./internal/access/player/tcp", "TestRecipeEnteringRefusesARoleInTransfer", "want login_elsewhere")
-			recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if component.Built() {", "if false && component.Built() {", "./internal/access/player/tcp", "TestRecipeTCPFirstGrantPaysForAShopPurchase", "want enter_created")
-		}
-		if name == "turn-pvp" {
-			recipeMutationMustFail(t, target, "game/profile/enter_profile.go", "owner.ProfileComp().Rename(name)", "owner.ProfileComp().Rename(\"Wrong\")", "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "created profile name")
-			recipeMutationMustFail(t, target, "game/entities/player/profile_component.go", `if name == "" {`, `if false && name == "" {`, "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "empty create name")
-		}
-		// 同步后仍保持业务文件；再生不应改变框架生成物。
-		rule := filepath.Join(target, "RECIPE.md")
-		text, err := os.ReadFile(rule)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text = append(text, []byte("\nBusiness-owned addition.\n")...)
-		if err := os.WriteFile(rule, text, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := SyncProjectContext(context.Background(), target); err != nil {
-			t.Fatal(err)
-		}
-		after, err := os.ReadFile(rule)
-		if err != nil || !bytes.Equal(text, after) {
-			t.Fatalf("sync changed recipe business file: %v", err)
-		}
-		if err := Generate(target, GenerateOptions{Check: true}); err != nil {
-			t.Fatalf("recipe %s drift: %v", name, err)
-		}
+			if _, err := VerifyModules(context.Background(), target, nil, nil); err != nil {
+				t.Fatalf("recipe %s verify: %v", name, err)
+			}
+			if name == "casual" {
+				recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {", "if err := error(nil); err != nil {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "initial coins = 0")
+				recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if state.GetInitialized() {", "if false && state.GetInitialized() {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "repeat =")
+				// 登录链路的三条：进服票据握手的会话不再被当成“先新建”、换服在途的角色被放进来、已经建成的玩家能再新建一次（首次发放会再发）。
+				recipeMutationMustFail(t, target, "game/login/login_enter.go", `return claims[EnterTicketClaim] == "1"`, "return false", "./internal/access/player/tcp", "TestRecipeTCPEnterTicketCreatesFirstThenEnters", "EnterStatus for a new account")
+				recipeMutationMustFail(t, target, "internal/access/player/tcp/recipe_entering.go", "if !moving {", "if !moving || true {", "./internal/access/player/tcp", "TestRecipeEnteringRefusesARoleInTransfer", "want login_elsewhere")
+				recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if component.Built() {", "if false && component.Built() {", "./internal/access/player/tcp", "TestRecipeTCPFirstGrantPaysForAShopPurchase", "want enter_created")
+			}
+			if name == "turn-pvp" {
+				recipeMutationMustFail(t, target, "game/profile/enter_profile.go", "owner.ProfileComp().Rename(name)", "owner.ProfileComp().Rename(\"Wrong\")", "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "created profile name")
+				recipeMutationMustFail(t, target, "game/entities/player/profile_component.go", `if name == "" {`, `if false && name == "" {`, "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "empty create name")
+			}
+			// 同步后仍保持业务文件；再生不应改变框架生成物。
+			rule := filepath.Join(target, "RECIPE.md")
+			text, err := os.ReadFile(rule)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text = append(text, []byte("\nBusiness-owned addition.\n")...)
+			if err := os.WriteFile(rule, text, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := SyncProjectContext(context.Background(), target); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.ReadFile(rule)
+			if err != nil || !bytes.Equal(text, after) {
+				t.Fatalf("sync changed recipe business file: %v", err)
+			}
+			if err := Generate(target, GenerateOptions{Check: true}); err != nil {
+				t.Fatalf("recipe %s drift: %v", name, err)
+			}
+		})
 	}
 }
 

@@ -1,0 +1,11 @@
+roost-purchase-platform-tests.log
+ok  	github.com/tjbdwanghaibo/roost-core/service/platform	0.671s
+
+roost-purchase-catalog3.log
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.627s
+
+roost-purchase-root-gates.log
+ok  	github.com/tjbdwanghaibo/roost-core	8.461s
+
+roost-purchase-doc-check.log
+checked 306 files, 0 broken

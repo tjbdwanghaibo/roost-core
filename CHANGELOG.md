@@ -41,6 +41,30 @@
   - **本条的完整测试没有跑**（维护者 2026-11-12：最后统一跑）：只跑了模块验收（全部模块正序 / 反序同装）、`TestModule`、`service/account`、`wiring/account`、`wiring/modulehost`、根包门禁与文档锚点；`scripts/test-modules-generated.sh`（场景数与 portal 那一步的断言已按最终形态改）、`TestDemo`、重新生成 game-demo、全仓 `go test ./...` 留到最后。独立 Gate 部署没有经真实的 Gate / NATS 验证。
   - 边界见 KNOWN-LIMITS“login 的边界”“portal 的边界”“enter 模块的边界”。**升级要求**：`Accounts` 接口多了六个方法（`ListServers`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`EnterServer`），自己逐个方法实现它的替身要补上；account 进程要先于调用它们的进程升级；有区服索引之前登记的服要重新 `UpsertServer` 一次才出现在 `ListServers` 里；已生成的工程 `roost project sync` 之后 `internal/access/player/tcp/server_gen.go` 会变（多了 `SessionObserver` 的接线，行为不变），带 web Mod 而端口块不是 0 的服务的开发配置 `web.addr` 不会被改写（只有新生成的配置按端口块派生）。
 - **新增**（modules/login + codegen）：登录鉴权模块（第一种形态，握手只认角色会话令牌；进服票据的握手、会话激活后的告知见上一条）。玩家 TCP 握手校验 account 签发的会话令牌（`session:<player_id>:<token>`），把承载服、原服、角色创建时间、绑定代数与换服标记写进会话；接管生成的鉴权桩与 account 的 collaborators：开发令牌登录（渠道 `dev`，`login.dev_token` 必须以 `dev-` 开头、生产配置里非空即拒绝启动）、Redis 玩家号计数器，渠道入口 `login_channels.go` 缺省全拒。联动 login + enter：会话记的承载服不是本服时答 `login_elsewhere`，不加载也不创建 Player。安装器的 `replaces` 认识的生成桩做成一张表（`generatedStubKinds`），新增玩家 TCP 鉴权桩；桩由这次安装的前置命令生成时 plan 照样列出。场景 19 + 2 条，模块 42 条、安装器 6 条变异全部被杀。只有离线场景；客户端登录入口、渠道验签仍归工程（KNOWN-LIMITS“login 的边界”）。game-demo 与两个配方尚未换用。
+- **新增**（modules/activity、activity_world、activity_alliance）：同一个 activity.Component 与阶段引擎适配 Player、全服/服务器组 Entity 与联盟权威 Entity。初始化→预热→开启→结算→结束，支持固定/日历循环、可信解锁、独立业务流程、异步完成与有界恢复；排行、邮件、跨服汇聚按需接入。空配置不运行活动。个人使用持久定时器，Remote 由权威服务分批扫描，不改 Nest/DataEngine/Sync 契约。33 条定向场景、9 个变异与两轮 race 通过；全矩阵与真实跨进程/存储仍待最终验收。
+- **新增**（module 安装器）：已有服务可声明 `existing: true` 追加 Mod/RPC 与缺少的配置段，禁止接管实体；开发/生产/Secret 示例配置一并纳入回滚。代办 configdata，首个有状态定时模块可在计划阶段识别随后补建的主 DAO。
+
+- **新增**（modules/alliance）：独立联盟服务、单写者路由 RPC、game Mirror、Player 展示组件与建盟/捐赠/领奖三个跨域 Saga；与 enter/rehome 联动，进入时按权威成员关系对账，HomeSID 按入盟批次与旧 SID 条件修正。HomeSID 仅用于尽力通知，联盟成员允许换服；普通联盟写不用 Saga。demo 删除重复联盟代码，统一 alliance 名字，未保留旧 guild API/字段兼容。
+- **新增**（module 安装器）：模块可声明独占新服务、RPC、额外组件及 Saga；实体回执与生成失败一起回滚。自动代办 saga/Mirror，已有只读 Mirror 可提升为 Remote 写 Mod；新增服务开发 WAL 目录隔离。demo 的自有 PlayerOwners 在模块消费者启动前接入，启动与业务逻辑分开。
+- **修复**（demo）：分区配置读取错误不再放行换服；模块迁移后真实依赖脚本、Robot 场景入口与监控指标来源一并更新。
+
+- **新增**（modules/matchmaking、matchroom）：本服单排/完整队伍匹配，持久意图、未知结果保护、取消竞态与结果补查；MatchID 持久映射到唯一 RoomID，固定名单准入。turn-pvp 接入客户端匹配至回合链路；不使用 Saga，不改 Nest/DataEngine/Sync。
+- **整理**（modules/team、demo）：Team 生命周期使用正式构造入口；队伍冻结与事务内 OnTeamChanged。demo 社交队伍迁入模块，分区视野保留，Player 引用改为 Team.TeamID，旧 PB/配置不兼容（先 TeamCreate，TeamResponse.Info，规则默认 8 人/60 秒）。真实跨进程验收仍待最终批次。
+
+- 业务模块新增 team：共享 Remote 权威队伍，建队/入队/离队与 Player 引用在同一 Nest 事务中提交；邀请有界、队长交接、解散后惰性核对、rehome 双向互斥。安装器可代办 remote_entity Mod；未改三大核心模块。匹配与匹配房已在本轮 R7 补齐。
+- 需求命名收敛：联盟新模块统一 `alliance`；activity 核心定义为通用时间阶段框架，排行与发奖按需联动（本轮 R9 已实现，边界见模块说明）。
+
+- 业务模块：shop 商品目录使用配置表与道具引用校验；新增 rules 统一在 Player Nest 中读取体力/商店 PB 规则，进入或重连后推送，RulesGet 可补取。shop / stamina 自动依赖 rules / enter；不包含热更广播。
+
+- 业务模块：wallet/shop/stamina/leaderboard 登记点及真实 task 消费者；task 配置表、事件索引、每日/每周/永久、前置链与道具奖励。去重回执不重复上报，跨服务排行通知明确为尽力推进。
+- 新角色完成首次进入的建档事务后默认 1 级，不触发升级奖励；profile 依赖 enter，attribute 同事务按初始等级建立属性。购买不默认使用 Saga，普通购买/领奖继续使用 Player Nest 事务。
+
+- **新增**（modules/mailbox + profile）：升级奖励邮件联动，零配置缺省不发奖；一次连升只产生一份工程定义的总奖励，附件在升级时冻结进同一 WAL effect。模块启动可靠消费者，Mongo inbox + EffectID 发件去重，App 排空订阅；demo 删除自有升级 effect/消费者，只保留奖励规则与热更点。旧 demo 的 player.level_up 不自动兼容，当前 topic 为 mailbox.profile_reward；非法热更奖励现在拒绝并回滚升级，消费时不再重新取奖励。联动 10 条、6 个变异和定向 race 通过；真实联合验收仍待最终批次。
+
+- **新增**（modules/purchase）：付费发货模块，Redis 按玩家分配连续序号并保存不可变奖励，Player 游标与奖励同一笔严格事务；确认后删除待发记录，不保留随历史订单增长的 Player 回执表。默认金币、bag 道具和 enter 补发联动；平台终态且无在途投递才允许发货/清理，退款结清只推进游标。platform 新增可选 CallbackVerifier，强制 HMAC 之后、记单之前执行；模块的工程渠道缺省拒绝。demo 使用模块，Player schema 3 → 4，删除旧 PurchaseClaims 与独立 drain；不兼容旧生成工程/订单格式，不自动转换生产数据。验证及容量/恢复边界见 [模块说明](modules/purchase/README.md)。
+
+- **新增**（modules/gm）：运维命令登记与审计，wallet / bag / profile / mailbox / rehome 按 `with/gm` 接入；复用 ops token，命令要求 operator 与 note，拒绝在 `result.data.code` 返回业务码。demo 的相应命令迁入模块，经验发放仍保留 Player + World 双实体事务。补偿邮件改为显式 `request_id` 与统一 `attachment`，旧平铺奖励参数不再接受。
+
 - **新增**（modules/servertime）：服务器时间模块。协议 `ServertimeSync`（拉取，原样带回 `ClientTick`）与推送 `ServertimeNow`：业务时间、当前业务日、前后两个业务日、本业务日起点、下一次每日重置的时刻、业务时区的偏移与名字；纯函数 `servertime.At(nowUnixMilli)` / `Now()` 与 `clock.BusinessDay` 同一份日历。联动 servertime + enter：每次进入游戏推一次，推送不成只记日志。不挂实体、无状态；偏移与日历只在启动时读，不做“时间被拨动”的广播。场景 12 + 3 条，26 条变异全部被杀。checkin / task / stamina / shop 给客户端的注释改为指向它下发的业务日。只有离线场景，未验证真实 TCP 与独立 Gate。
 - **修复**（scripts/test-modules-generated.sh）：两处“安装后的文件不带占位符”的检查写成 `! grep …`，在 `set -e` 下取反的命令不触发退出，这条检查从未生效；改成明确的 `if grep …; then exit 1; fi`，并只认安装器的占位符（Go 的复合字面量里也有 `{{`）。
 

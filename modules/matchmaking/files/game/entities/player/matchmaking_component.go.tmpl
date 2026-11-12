@@ -1,0 +1,279 @@
+package player
+
+import (
+	"fmt"
+	"math"
+	"slices"
+	"sort"
+	"sync"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Matchmaking}}
+const CompTypeMatchmaking entity.ComponentType = {{ID:component:Matchmaking}}
+
+type MatchmakingComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type IMatchmakingEntity interface {
+	entity.IThreadSafeEntity
+	MatchmakingComp() *MatchmakingComponent
+}
+
+const (
+	MatchPreparing   = "preparing"
+	MatchDispatching = "dispatching"
+	MatchQueued      = "queued"
+	MatchCancelling  = "cancelling"
+	MatchMatched     = "matched"
+	MatchCancelled   = "cancelled"
+	MatchExpired     = "expired"
+)
+
+// MatchSnapshot 是锁外 I/O 用的独立值；不是另一份可写权威。
+type MatchSnapshot struct {
+	Sequence int64
+	Key      string
+	Leader   int64
+	TeamID   int64
+	Members  []int64
+	SID      int32
+	Phase    string
+	TicketID string
+	MatchID  string
+	RoomID   int64
+	Deadline int64
+}
+
+func (s MatchSnapshot) Terminal() bool {
+	return s.Phase == MatchMatched || s.Phase == MatchCancelled || s.Phase == MatchExpired
+}
+func init() {
+	entity.RegisterComponentFactory(CompTypeMatchmaking, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		p, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("matchmaking: owner %T is not Player", owner)
+		}
+		return &MatchmakingComponent{owner: p}, nil
+	})
+	// 排队中不能通过普通 TeamAccept / TeamCreate 改换队伍。
+	OnTeamJoining("matchmaking", func(p *Player) error {
+		if p.Dao().GetMatchmaking().GetPhase() != "" {
+			return apperrors.ErrMatchmakingBusy
+		}
+		return nil
+	})
+}
+func (c *MatchmakingComponent) Name() string { return "matchmaking" }
+func (c *MatchmakingComponent) Snapshot() MatchSnapshot {
+	d := c.owner.Dao().GetMatchmaking()
+	s := MatchSnapshot{Sequence: d.GetSequence(), Key: d.GetKey(), Leader: d.GetLeader(), TeamID: d.GetTeamID(), SID: d.GetSID(), Phase: d.GetPhase(), TicketID: d.GetTicketID(), MatchID: d.GetMatchID(), RoomID: d.GetRoomID(), Deadline: d.GetDeadline()}
+	d.RangeMembers(func(_ int, id int64) bool { s.Members = append(s.Members, id); return true })
+	return s
+}
+
+// OnMatchmakingStarting 的真实消费者为 rehome：检查和意图写入必须在同一 Player 事务里。
+var matchmakingChecks = struct {
+	sync.RWMutex
+	hooks map[string]func(*Player) error
+}{hooks: map[string]func(*Player) error{}}
+
+func OnMatchmakingStarting(name string, check func(*Player) error) {
+	if name == "" || check == nil {
+		panic("matchmaking: invalid check")
+	}
+	matchmakingChecks.Lock()
+	defer matchmakingChecks.Unlock()
+	if matchmakingChecks.hooks[name] != nil {
+		panic("matchmaking: duplicate check " + name)
+	}
+	matchmakingChecks.hooks[name] = check
+}
+func (c *MatchmakingComponent) checkStart() error {
+	matchmakingChecks.RLock()
+	names := make([]string, 0, len(matchmakingChecks.hooks))
+	for n := range matchmakingChecks.hooks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	checks := make([]func(*Player) error, 0, len(names))
+	for _, n := range names {
+		checks = append(checks, matchmakingChecks.hooks[n])
+	}
+	matchmakingChecks.RUnlock()
+	for _, check := range checks {
+		if err := check(c.owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BeginMatching 由 solo 或 Team+Players handler 调用；请求者必须在声明的组中，重复请求不重新申请外部票。
+func BeginMatching(group []IMatchmakingEntity, leader, sequence, teamID int64, sid int32, now int64) (MatchSnapshot, error) {
+	if len(group) == 0 || len(group) > 8 || leader <= 0 || sequence <= 0 || sid <= 0 || now < 0 || now > math.MaxInt64-60000 {
+		return MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
+	}
+	ids := make([]int64, 0, len(group))
+	var first *MatchmakingComponent
+	for _, v := range group {
+		id := entity.GetUniqueIDFromEntityID(v.ID())
+		ids = append(ids, id)
+		if id == leader {
+			first = v.MatchmakingComp()
+		}
+	}
+	slices.Sort(ids)
+	if first == nil || len(slices.Compact(slices.Clone(ids))) != len(ids) {
+		return MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
+	}
+	key := fmt.Sprintf("%d:%d", leader, sequence)
+	previous := first.Snapshot()
+	if previous.Key == key {
+		if previous.TeamID != teamID || previous.SID != sid || !slices.Equal(previous.Members, ids) {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+		return previous, nil
+	}
+	if previous.Sequence == math.MaxInt64 || sequence != previous.Sequence+1 {
+		return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+	}
+	for _, v := range group {
+		c := v.MatchmakingComp()
+		d := c.owner.Dao().GetMatchmaking()
+		if d.GetPhase() != "" || d.GetSequence() == math.MaxInt64 || c.owner.TeamComp().TeamID() != teamID {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingBusy
+		}
+		if err := c.checkStart(); err != nil {
+			return MatchSnapshot{}, err
+		}
+	}
+	for _, v := range group {
+		d := v.MatchmakingComp().owner.Dao().GetMatchmaking()
+		d.SetSequence(d.GetSequence() + 1)
+		d.SetKey(key)
+		d.SetLeader(leader)
+		d.SetTeamID(teamID)
+		d.SetMembers(slices.Clone(ids))
+		d.SetSID(sid)
+		d.SetPhase(MatchPreparing)
+		d.SetDeadline(now + 60000)
+	}
+	return first.Snapshot(), nil
+}
+
+// MatchUpdate 只能由可信服务端构造，客户端只能发协议中允许的动作。组内每个成员必须仍属于该意图。
+type MatchUpdate struct {
+	Key, Action, TicketID, MatchID string
+	RoomID                         int64
+	Now                            int64
+}
+
+func UpdateMatching(group []IMatchmakingEntity, u MatchUpdate) (MatchSnapshot, error) {
+	if len(group) == 0 || u.Key == "" {
+		return MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
+	}
+	s := group[0].MatchmakingComp().Snapshot()
+	ids := make([]int64, 0, len(group))
+	for _, v := range group {
+		p := v.MatchmakingComp().Snapshot()
+		ids = append(ids, entity.GetUniqueIDFromEntityID(v.ID()))
+		if p.Key != u.Key || p.Phase != s.Phase || p.TicketID != s.TicketID || p.MatchID != s.MatchID || p.RoomID != s.RoomID {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, s.Members) {
+		return MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
+	}
+	phase := s.Phase
+	switch u.Action {
+	case "dispatch":
+		if phase != MatchPreparing {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+		phase = MatchDispatching
+	case "bind":
+		if u.TicketID == "" || s.Terminal() || (s.TicketID != "" && s.TicketID != u.TicketID) {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+		if phase != MatchDispatching && phase != MatchCancelling && phase != MatchQueued {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+		if phase != MatchCancelling {
+			phase = MatchQueued
+		}
+	case "cancel":
+		if s.Terminal() {
+			return s, nil
+		}
+		if phase == MatchPreparing {
+			phase = MatchCancelled
+		} else {
+			phase = MatchCancelling
+		}
+	case "cancelled", "expired":
+		if s.Terminal() {
+			if s.Phase == u.Action {
+				return s, nil
+			}
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+		phase = u.Action
+	case "abandon":
+		// 没有绑定过 Ticket 的意图从未成为候选。到期后允许收尾；迟到回包的 bind 会因终态拒绝。
+		if s.TicketID != "" || u.Now < s.Deadline || s.Terminal() {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+		phase = MatchExpired
+	case "matched":
+		if u.MatchID == "" || u.RoomID <= 0 || s.TicketID == "" {
+			return MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
+		}
+		if s.Terminal() {
+			if s.Phase == MatchMatched && s.MatchID == u.MatchID && s.RoomID == u.RoomID {
+				return s, nil
+			}
+			return MatchSnapshot{}, apperrors.ErrMatchmakingStale
+		}
+		phase = MatchMatched
+	default:
+		return MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
+	}
+	for _, v := range group {
+		d := v.MatchmakingComp().owner.Dao().GetMatchmaking()
+		d.SetPhase(phase)
+		if u.Action == "bind" {
+			d.SetTicketID(u.TicketID)
+		}
+		if u.Action == "matched" {
+			d.SetMatchID(u.MatchID)
+			d.SetRoomID(u.RoomID)
+		}
+	}
+	return group[0].MatchmakingComp().Snapshot(), nil
+}
+
+// Clear 保留个人递增序号。匹配成功必须先在锁外核对 Room 已关闭，然后按 Key 做 CAS。
+func (c *MatchmakingComponent) Clear(key string) error {
+	s := c.Snapshot()
+	if s.Key != key || !s.Terminal() {
+		return apperrors.ErrMatchmakingStale
+	}
+	d := c.owner.Dao().GetMatchmaking()
+	d.SetKey("")
+	d.SetLeader(0)
+	d.SetTeamID(0)
+	d.SetMembers(nil)
+	d.SetSID(0)
+	d.SetPhase("")
+	d.SetTicketID("")
+	d.SetMatchID("")
+	d.SetRoomID(0)
+	d.SetDeadline(0)
+	return nil
+}

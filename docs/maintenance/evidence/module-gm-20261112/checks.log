@@ -1,0 +1,7 @@
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.600s
+ok  	github.com/tjbdwanghaibo/roost-core	9.937s
+checked 304 files, 0 broken
+ok  	example.com/studio/gmdemo/game/gm	1.092s
+ok  	example.com/studio/gmdemo/game/handler	1.125s [no tests to run]
+ok  	example.com/studio/gmdemo/internal/service/game	0.695s [no tests to run]
+ok  	example.com/studio/gmdemo/game/handler	0.327s

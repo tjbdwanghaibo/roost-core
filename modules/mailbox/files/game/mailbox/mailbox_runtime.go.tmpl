@@ -1,0 +1,25 @@
+package mailbox
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 联动文件在 init 追加自己的消费者；只装 mailbox 时没有消费者，也不会额外连接存储。
+var mailboxConsumers []func(context.Context, *app.Registry) error
+
+// Start 由模块生命周期接线。SubscribeEffects 把订阅登记为 App 输入，App 在停 Nest/存储之前排空它们。
+// 所以这里不再另存一份订阅、不在业务 Shutdown 提前释放依赖。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("mailbox: registry is required")
+	}
+	for _, start := range mailboxConsumers {
+		if err := start(context.Background(), registry); err != nil {
+			return nil, err
+		}
+	}
+	return nil, nil
+}

@@ -1,0 +1,68 @@
+package player
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
+
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// RuleProvider 只在 Player 已被 Nest 锁住时调用；只读、不做 I/O，不返回持有 DAO 内存的切片。
+// 每个功能使用自己的生成 PB 编码器，规则入口不依赖任何可选玩法。
+type RuleProvider func(*Player) (*pb.RulePart, error)
+type namedRuleProvider struct {
+	name string
+	read RuleProvider
+}
+
+var playerRuleProviders struct {
+	sync.RWMutex
+	entries []namedRuleProvider
+}
+
+// RegisterPlayerRules 由功能的 with/rules 文件在 init 中登记。运行期不增删。
+func RegisterPlayerRules(name string, read RuleProvider) {
+	if strings.TrimSpace(name) == "" || read == nil {
+		panic("player rules: name and reader required")
+	}
+	playerRuleProviders.Lock()
+	defer playerRuleProviders.Unlock()
+	for _, old := range playerRuleProviders.entries {
+		if old.name == name {
+			panic("player rules: duplicate " + name)
+		}
+	}
+	playerRuleProviders.entries = append(playerRuleProviders.entries, namedRuleProvider{name: name, read: read})
+	slices.SortFunc(playerRuleProviders.entries, func(a, b namedRuleProvider) int { return strings.Compare(a.name, b.name) })
+}
+
+type IRulesEntity interface {
+	entity.IThreadSafeEntity
+	RulesSnapshot() (*pb.RulesNowPush, error)
+}
+
+// RulesSnapshot 只生成值快照，不写 Player。快阶段内完成所有提供方读取，解锁后才推送。
+func (owner *Player) RulesSnapshot() (*pb.RulesNowPush, error) {
+	playerRuleProviders.RLock()
+	readers := slices.Clone(playerRuleProviders.entries)
+	playerRuleProviders.RUnlock()
+	result := &pb.RulesNowPush{}
+	seen := make(map[uint32]bool, len(readers))
+	for _, reader := range readers {
+		part, err := reader.read(owner)
+		if err != nil {
+			return nil, fmt.Errorf("rules %s: %w", reader.name, err)
+		}
+		if part == nil || part.MessageID == 0 || seen[part.MessageID] {
+			return nil, fmt.Errorf("rules %s: missing or duplicate message ID", reader.name)
+		}
+		seen[part.MessageID] = true
+		// 提供方也可能复用内存；快照脱离它的所有权，客户端响应不随后续调用变化。
+		result.Parts = append(result.Parts, &pb.RulePart{MessageID: part.MessageID, Payload: slices.Clone(part.Payload)})
+	}
+	return result, nil
+}

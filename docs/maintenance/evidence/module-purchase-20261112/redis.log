@@ -1,0 +1,14 @@
+=== RUN   TestPurchaseRedisBoundedDrainAndReplay
+--- PASS: TestPurchaseRedisBoundedDrainAndReplay (0.05s)
+=== RUN   TestPurchaseRedisConcurrentCallbackUsesOneSequence
+--- PASS: TestPurchaseRedisConcurrentCallbackUsesOneSequence (0.01s)
+=== RUN   TestPurchaseRedisRefusedWriteDoesNotAllocate
+--- PASS: TestPurchaseRedisRefusedWriteDoesNotAllocate (0.00s)
+=== RUN   TestPurchaseRedisBoundedDrainAndReplay
+--- PASS: TestPurchaseRedisBoundedDrainAndReplay (0.04s)
+=== RUN   TestPurchaseRedisConcurrentCallbackUsesOneSequence
+--- PASS: TestPurchaseRedisConcurrentCallbackUsesOneSequence (0.00s)
+=== RUN   TestPurchaseRedisRefusedWriteDoesNotAllocate
+--- PASS: TestPurchaseRedisRefusedWriteDoesNotAllocate (0.00s)
+PASS
+ok  	example.com/studio/purchasereview/game/purchase	1.610s

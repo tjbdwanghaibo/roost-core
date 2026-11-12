@@ -176,3 +176,74 @@ shop 的商品目录、task 的任务表改成配置表（照 bag 的道具表�
 - CBM 已刷新，所有本批代码证据路径核对 freshness；局部模板解析范围直接读源码补证。`compose.md` 仅两处事实更新，结构未改。
 
 本会话分工的 14 个模块已实现并通过上述验收；不代表整份 backlog 已清空。仍未做本批模块的真实存储/Gate 联合验收、Linux、跨机、性能与长稳；demo 剩余专有适配及原会话的任务仍按本文和补充分工推进。本批仅提交推送 `feat/business-modules`，没有合入 main 或发版。
+
+## 附录：R1 GM 运维入口（2026-11-12）
+
+新需求文档 R1 已实施，提交 `8a49fe25`。gm 单独提供登记、审计与 ops 接线；wallet / bag / profile / mailbox / rehome 通过各自 `with/gm` 文件接入。每条通用命令要求操作者与备注，参数拒绝带码，实体修改仍经正式 Sender。补偿邮件要求稳定 request_id，发件在实体锁外；demo 的通用命令迁入模块，经验仍同时更新 Player 与 World。
+
+GM 基础 9 条、每组联动 4 条；新 game 合计 161 PASS / 0 SKIP，8 个变异全部检出，定向 race 两轮通过。新 demo 的 GM、经验事务场景和服务编译通过；清单/联动/安装步骤、根包门禁与文档检查通过。首次编译和夹具失败及修正保留在[验收说明](evidence/module-gm-20261112/README.md)。未跑全仓、完整 demo、全模块正反序新装、真实 HTTP/NATS/Redis/Mongo/TCP；这些仍按新需求 §2、§6 最后统一验证。CBM 已刷新到 2026-11-12T02:48:06Z，新增错误码模板的占位符局部解析缺口已逐行读源码补证。
+
+后续继续新需求 R2～R11 与 §5、§6；登录线和最终拼装 skill 重写仍归原会话。guild 先出方案，worldstats 暂不做。
+
+## 附录：R2 Purchase 付费发货（2026-11-12）
+
+新需求 R2 实现与定向验收完成，提交 `cc0d7855`。purchase 模块通过平台 HMAC + 工程渠道校验，按玩家 Redis 顺序队列保存奖励快照；只在平台终态无在途投递时进入 Nest，Player 连续游标与奖励同一笔事务，确认后清理待发。默认币、bag/enter 联动，离线订单不设到期；平台投递次数上限不变。demo 删掉独立 drain、不断增长的 PurchaseClaims，schema 4，只保留商品/模拟渠道与展示查询。
+
+基础 21、bag 4、enter 2 条；新工程合计 72 PASS / 0 SKIP，13 个变异与两轮 race 通过；真实独立 Redis 3 条 × 2 轮；demo 定向场景及服务/Robot 编译通过。根包、清单、文档检查通过。初次入口/链接失败与最终边界见[证据](evidence/module-purchase-20261112/README.md)。CBM 本批路径已刷新补证；全量组合及 §6 真实联合验收仍延后。后续继续 R3～R11、§5、§6；guild 先出方案，worldstats 不做。
+
+## 附录：R3 升级奖励邮件联动（2026-11-12）
+
+mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件与起止等级到 effect；一次连升一封，消费者以 EffectID 发件，App 负责排空。demo 改用同一联动，只留奖励规则，双实体经验路径不变；奖励热更现在在升级时取快照，非法奖励回滚升级。
+
+联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race、demo 定向升级/经验场景与服务/Robot 编译通过；提交 `7f91c18f`。原始错误断言与修正、真实依赖边界见[证据](evidence/module-profile-mail-20261112/README.md)。全量与真实联合验收按最终批次；后续继续 R4～R11、§5、§6。
+
+## 附录：R4/R5 事件与任务（2026-11-12）
+
+提交 `35153b75`。实现 wallet/shop/stamina/dungeon/leaderboard 命名登记点，task 事件推进、配置表、每日/每周/永久、前置链、道具奖励与八组联动。实体钩子使用冻结时间、与业务一起回滚；排行通知是尽力推进。默认任务不变、原 18 条场景保留，进度与领取记录按固定 ID 空间有界。新角色在首次进入事务中默认 1 级、不触发升级奖励，attribute 同事务派生；普通购买不默认使用 Saga。
+
+最小 49、组合 215 PASS / 0 SKIP，15 个变异与两轮定向 race 通过；profile 新 enter 依赖影响的邮件/GM/attribute/equipment 组合复验通过（邮件 99、GM 199）。根包、清单与文档检查通过。失败过程、CBM 补证与真实依赖边界见[报告](evidence/module-task-events-20261112/README.md)。全矩阵、全 demo、全仓与 §6 联合验收仍延后；后续 R6～R11、§5、§6，guild 先出方案、worldstats 不做。
+
+## 附录：R6 规则数据（2026-11-12）
+
+提交 `29fd4f25`。shop 商品表改为 configdata 配置，删除生产测试替换函数；rules 统一在 Player Nest 锁内读取模块 PB、锁外推送，进入/重连推一次，RulesGet 补取。stamina/shop 自动安装 rules/enter，业务日继续使用 servertime，不改登录线。
+
+最小24、组合104 PASS / 0 SKIP，6个变异与两轮 race；任务影响组合232、15个原变异和两轮 race 通过；根包/清单/文档检查通过。未运行的全矩阵、全demo、全仓和真实依赖按最终批次；[证据与当前边界](evidence/module-client-rules-20261112/README.md)。下一项为 R7 team/matchmaking/matchroom；R8～R11、§5、§6 仍待实施，alliance先报告方案，worldstats不做。
+
+## 附录：R7 的 team 基础（2026-11-12）
+
+新增 team 模块，保留 Remote 共享权威与 `[Team, Player]` 同事务边界，去掉分区场景前提；六个 PB 端点、持久唯一号、有限邀请、队长交接和 rehome 双向准入。最小 25，组合 67 PASS / 0 SKIP（含 rehome 40 与联动 2）；8 个变异与两轮 race、生成 build/vet/ID/漂移、根包与清单检查通过。[证据](evidence/module-team-20261112/README.md)。
+
+CBM 已刷新并核对本批 21 个路径，5 个局部模板缺口逐段补读。仍未运行完整矩阵与真实依赖；R7 剩匹配、匹配房、turn-pvp 与 demo 队伍迁移，R8～R11、§5、§6 不变。维护者明确联盟使用 `alliance` 名字，activity 是通用时间阶段框架，排行/奖励为可选联动；已写入后续需求。
+
+
+## 附录：R7 优先级与 Team 接线修正（2026-11-12）
+
+维护者指定先完成 R7，再 R8 gift、R10 alliance；R9 activity 与 R11 lockstep 留待做。Team Controller 使用不存在的 lifecycle capability 导致启动失败，已补红测并改用正式生成的 TeamFromRegistry；26 + 40 + 2 场景、原变异和 race 通过，证据见 Team 报告。该补测不等于真实存储启动验收。
+
+## 附录：R7 完整链路（2026-11-12）
+
+team + matchmaking + matchroom 实现、turn-pvp 接入和 demo 队伍迁移完成。121 PASS / 0 SKIP、9个变异、两轮 race；配方7个真实TCP/Robot场景与 demo 定向编译通过。未知排队结果保留屏障，整队同事务冻结，MatchID 持久绑定房号且保留名单限制入房；详见[证据与边界](evidence/module-matching-20261112/README.md)。CBM 已刷新、模板缺口源码补证。
+
+按维护者优先级继续 R8 gift、R10 alliance；R9 activity、R11 lockstep 待做。全矩阵、完整 demo、真实存储及跨进程联合验收、§5 后续仍单列，没有改成已完成。
+
+
+## 附录：优先级更正与 R10 联盟（2026-11-12）
+
+维护者更正：R7 完成后先 R10 alliance，再 R9 activity；R8 gift 不急做，R11 lockstep 待做。R9 是通用时间阶段核心，供多个业务复用，排行与发奖只是可选联动。
+
+R10 提交 `fc0fa6e9`，实现和定向验收完成：模块安装独立 alliance 服务、owned Remote 实体、game Mirror、Player 展示与三个跨域 Saga，普通 Join/Leave 不引入 Saga。enter 对账、rehome 当前绑定准入与入盟批次/旧 SID 条件修正 HomeSID；HomeSID 仅作尽力通知提示，不承担权威权限。demo 改用模块，只有规则与 PlayerOwners 启动适配保留，无旧 guild 兼容。
+
+最小 66、组合158 PASS / 0 SKIP，6个变异、两轮 race，安装回滚、重复安装、build/vet/ID/漂移与 demo 定向链路通过。根包/目录/文档检查通过；CBM 113路径、16个局部模板缺口补证。见[证据](evidence/module-alliance-20261112/README.md)。全矩阵、完整 demo、真实存储和跨进程、§5/§6 仍待最终批次；没有把旧性能报告算作本轮验收。
+
+## 附录：R9 活动范围补充（2026-11-12）
+
+维护者要求一次性与循环活动、全服/个人/联盟实例、按条件解锁全部纳入 R9。阶段流程、重复规则、实例归属和开启依据可组合；个人独立活动与个人获准参加共享活动分开。采用同一阶段推进逻辑，实例按归属、开启批次与期次隔离；解锁事实持久去重，联盟活动保留单写者，离线恢复有界且不丢未完成结算。详细契约与验收在[后续需求 R9](HANDOFF-2026-11-12-module-requirements.md#r9-activity活动)。该条原为范围补充；实现与定向验收已在下列 R9 交付记录完成。R8 仍暂缓。
+
+维护者进一步明确标准生命周期为“初始化 → 预热 → 开启 → 结算 → 结束”。报名、分组、比赛归业务自定义流程，与标准生命周期分别保存状态；可挂在对应阶段内，简单活动无需内部流程。初始化/结算完成以持久业务事实为准，零预热/空结算仍经统一转换；循环重开新一期，不重置已结束旧期。需求与验收已同步，尚未实施。
+
+
+## 附录：R9 活动框架交付（2026-11-12）
+
+提交 `d84d97cf`。新增 activity / activity_world / activity_alliance：五阶段、固定锚点、日历循环、条件解锁、自定义流程、异步初始化/结算、共享参与资格和有界恢复。三个实体直接挂同一个 activity.Component Go 类型；本地别名用于生成接线，宿主只提供 DAO/归属/驱动，业务状态机共用 ActivityBook/Host。个人复用持久定时器；Remote 保留既有约束，以权威服务有界扫描推进。安装器支持既有服务追加 Mod/RPC，保留原业务文件和配置；不改三大核心契约。
+
+生成工程基础 21 + 全服 4 + 联盟 4 + 四组联动 4 = 33 PASS / 0 SKIP；9 个变异全部检出，两轮 race、最小安装、组合安装、重复安装与安装失败回滚通过。详见[使用说明](../../modules/activity/README.md)与[证据](evidence/module-activity-20261112/README.md)。全模块正反序、完整 demo、全仓与真实存储/跨进程仍按 §5/§6 最终批次处理。R8 gift / R11 lockstep 未实施；配方登录另按 6ee057c2 的新交接任务书继续，本批未改其 worktree。不合 main、不发版。

@@ -1,0 +1,16 @@
+package dbdef
+
+// Sequence 不清零；旧客户端请求不能在清理上一局后再次开出一次排队。集合上限由 Team.MaxMembers 限定。
+type MatchmakingState struct {
+	Sequence int64   `store:"1"`
+	Key      string  `store:"2"`
+	Leader   int64   `store:"3"`
+	TeamID   int64   `store:"4"`
+	Members  []int64 `store:"5"`
+	SID      int32   `store:"6"`
+	Phase    string  `store:"7"`
+	TicketID string  `store:"8"`
+	MatchID  string  `store:"9"`
+	RoomID   int64   `store:"10"`
+	Deadline int64   `store:"11"`
+}

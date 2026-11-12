@@ -9,16 +9,19 @@ import (
 	"testing"
 	"time"
 
+	generated "{{MODULE}}/configs/generated"
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 // 样例任务表里的数在这里写死，不引用被测代码的常量与任务表：表改错了这些用例要变红。
@@ -78,8 +81,20 @@ type taskFixture struct {
 
 // newTaskFixture 用替身提交器起一个 Nest，业务时钟由用例拨：任务按业务日切分（缺省是 UTC 零点）。
 // clock.SetSource 是进程级的：一个用例里只建一个 fixture，后建的会顶掉前一个的时钟。
+var taskTestInitializers []func(*taskFixture) error
+
 func newTaskFixture(t *testing.T) *taskFixture {
 	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(registry, "../../configs/data").Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	RegisterTaskReportNestHandlers()
 	playerentity.RegisterEntity()
 	RegisterTaskClaimNestHandlers()
 	RegisterTaskAdvanceNestHandlers()
@@ -108,6 +123,13 @@ func newTaskFixture(t *testing.T) *taskFixture {
 	})
 	f.claimTo = sender.NewTaskClaimSender(f.engine)
 	f.advanceTo = sender.NewTaskAdvanceSender(f.engine)
+	for _, initialize := range taskTestInitializers {
+		if err := initialize(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 场景从已建档角色开始；建档已走真实Nest事务，下面只统计被测业务的提交。
+	f.committer.commits.Store(0)
 	return f
 }
 

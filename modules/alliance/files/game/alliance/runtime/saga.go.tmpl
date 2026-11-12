@@ -1,0 +1,241 @@
+package allianceruntime
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/alliance"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
+)
+
+const (
+	allianceSagaSteps = "game-alliance"
+
+	phaseFoundDebit     = "found-debit"
+	phaseFoundRefund    = "found-refund"
+	phaseDonateDebit    = "donate-debit"
+	phaseDonateRefund   = "donate-refund"
+	phaseRewardGrant    = "reward-grant"
+	phaseRewardTakeBack = "reward-take-back"
+)
+
+type allianceRPC interface {
+	Found(ctx context.Context, requestID string, callerID int64, callerSID int32, name string, openJoin bool) (rpcalliance.Reply, error)
+	Donate(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64, amount int64) (rpcalliance.Reply, error)
+	ClaimReward(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.RewardReply, error)
+	ReleaseReward(ctx context.Context, target int64, claimRequestID string) (rpcalliance.GuardReply, error)
+}
+
+type allianceSteps struct {
+	nest      corenest.Client
+	alliances allianceRPC
+	registry  *app.Registry
+}
+
+func startSteps(registry *app.Registry) (*kitsaga.Steps, error) {
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("alliance: nest unavailable")
+	}
+	remote, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.CapabilityName)
+	if !ok || remote == nil {
+		return nil, fmt.Errorf("alliance: RPC unavailable")
+	}
+	runtime, err := kitsaga.NewSteps(registry, allianceSagaSteps)
+	if err != nil {
+		return nil, err
+	}
+	steps := allianceSteps{nest: client, alliances: remote, registry: registry}
+	steps.register(runtime)
+	if err := runtime.Start(context.Background()); err != nil {
+		runtime.Stop()
+		return nil, err
+	}
+	return runtime, nil
+}
+func (steps allianceSteps) register(runtime *kitsaga.Steps) {
+	native := func(phase, topic string, body saga.NativeStepBody) {
+		runtime.Native(phase, topic, body, kitsaga.WithSidRoute(), kitsaga.WithAdmit(steps.admitBound))
+	}
+	native(phaseFoundDebit, alliancefound.TopicDebit, steps.debitCoins)
+	native(phaseFoundRefund, alliancefound.TopicDebitCompensation, steps.refundCoins)
+	runtime.Mongo("found", alliancefound.TopicFound, steps.found)
+	runtime.Mongo("found-undo", alliancefound.TopicFoundCompensation, steps.keep("found"))
+	native(phaseDonateDebit, alliancedonate.TopicDebit, steps.debitCoins)
+	native(phaseDonateRefund, alliancedonate.TopicDebitCompensation, steps.refundCoins)
+	runtime.Mongo("donate", alliancedonate.TopicDonate, steps.donate)
+	runtime.Mongo("donate-undo", alliancedonate.TopicDonateCompensation, steps.keep("donate"))
+	runtime.Mongo("claim", alliancereward.TopicClaim, steps.claim)
+	runtime.Mongo("claim-undo", alliancereward.TopicClaimCompensation, steps.release)
+	native(phaseRewardGrant, alliancereward.TopicGrant, steps.grant)
+	native(phaseRewardTakeBack, alliancereward.TopicGrantCompensation, steps.takeBack)
+}
+
+func (steps allianceSteps) debitCoins(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := allianceTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewAllianceDebitSender(steps.nest).Sync_AllianceDebit(ctx, playerID, alliance.CoinItemID, state.Coins, step)
+	return err
+}
+
+func (steps allianceSteps) refundCoins(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := allianceTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewAllianceCreditSender(steps.nest).Sync_AllianceCredit(ctx, playerID, alliance.CoinItemID, state.Coins, step)
+	return err
+}
+
+func (steps allianceSteps) grant(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := allianceTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewAllianceCreditSender(steps.nest).Sync_AllianceCredit(ctx, playerID, state.ItemID, state.Count, step)
+	return err
+}
+
+func (steps allianceSteps) takeBack(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := allianceTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewAllianceDebitSender(steps.nest).Sync_AllianceDebit(ctx, playerID, state.ItemID, state.Count, step)
+	return err
+}
+
+func (steps allianceSteps) found(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := alliance.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	reply, err := steps.alliances.Found(ctx, command.IdempotencyKey, state.PlayerID, state.SID, state.Name, state.OpenJoin)
+	return allianceCompletion(command, err, func() alliance.State {
+		state.AllianceID = reply.Alliance.AllianceID
+		return state
+	})
+}
+
+func (steps allianceSteps) donate(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := alliance.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	target, err := rpcalliance.AllianceTarget(state.AllianceID)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	_, err = steps.alliances.Donate(ctx, command.IdempotencyKey, state.PlayerID, state.SID, target, int64(state.Coins))
+	return allianceCompletion(command, err, nil)
+}
+
+func (steps allianceSteps) claim(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := alliance.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	target, err := rpcalliance.GuardTarget(state.PlayerID)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	reply, err := steps.alliances.ClaimReward(ctx, command.IdempotencyKey, state.PlayerID, state.SID, target)
+	return allianceCompletion(command, err, func() alliance.State {
+		state.ClaimRequestID = command.IdempotencyKey
+		state.AllianceID, state.ItemID, state.Count = reply.AllianceID, reply.ItemID, reply.Count
+		return state
+	})
+}
+
+func (steps allianceSteps) release(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := alliance.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	if state.ClaimRequestID == "" {
+		return saga.Completion{Success: true}, nil
+	}
+	target, err := rpcalliance.GuardTarget(state.PlayerID)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	_, err = steps.alliances.ReleaseReward(ctx, target, state.ClaimRequestID)
+	if err != nil && errcode.CodeOf(err) == errcode.CodeEntityNotFound {
+		err = nil
+	}
+	return allianceCompletion(command, err, nil)
+}
+
+func (allianceSteps) keep(step string) saga.StepHandler {
+	return func(_ context.Context, command saga.Command) (saga.Completion, error) {
+		slog.Warn("alliance saga: the "+step+" step succeeded after the saga gave up; its result is kept and the coins were refunded",
+			"saga_id", command.SagaID, "operation", command.IdempotencyKey)
+		return saga.Completion{Success: true}, nil
+	}
+}
+
+func allianceCompletion(command saga.Command, err error, next func() alliance.State) (saga.Completion, error) {
+	if err == nil {
+		completion := saga.Completion{Success: true}
+		if next != nil {
+			data, encodeErr := alliance.Encode(next())
+			if encodeErr != nil {
+				return saga.Completion{}, encodeErr
+			}
+			completion.Data = data
+		}
+		return completion, nil
+	}
+	if servicerpc.Classify(err) == servicerpc.OutcomeRejected {
+		_, reason := errcode.ClientError(err)
+		return refuse(reason), nil
+	}
+	return saga.Completion{}, fmt.Errorf("alliance saga %s: %s: %w", command.SagaID, command.StepName, err)
+}
+
+func allianceTarget(command saga.Command) (alliance.State, int64, error) {
+	state, err := alliance.Decode(command.Payload)
+	if err != nil {
+		return alliance.State{}, 0, err
+	}
+	playerID, err := entity.BuildEntityID(state.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return alliance.State{}, 0, err
+	}
+	return state, playerID, nil
+}
+
+// 在原生步骤进入 Nest/冷加载之前查属主；未知结果不能放行。
+func (steps allianceSteps) admitBound(ctx context.Context, command saga.Command) error {
+	return AdmitPlayerStep(ctx, steps.registry, command)
+}
+
+// AdmitPlayerStep 是原生步骤投 Nest 前的 IO 准入，也供自定义消费者复用。
+// 命令 SID 只给第一次投递定位；装有 rehome 时按当前绑定判断，结果未知不放行。
+func AdmitPlayerStep(ctx context.Context, registry *app.Registry, command saga.Command) error {
+	state, err := alliance.Decode(command.Payload)
+	if err != nil || state.SID <= 0 {
+		return saga.RejectStep("alliance: invalid player or sid")
+	}
+	return localAdmission(ctx, registry, state.PlayerID, state.SID)
+}
+
+func refuse(reason string) saga.Completion {
+	return saga.Completion{Success: false, Retryable: false, Error: reason}
+}

@@ -1,0 +1,23 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ShopGoodsRule 与实际购买使用同一张表。按商品号升序，只展示当前可售商品。
+// 限购数量是份数，已买数量来自 Player.Shop；周期解释沿用 servertime。
+type ShopGoodsRule struct {
+	ID         int64 `pb:"1"`
+	ItemID     int64 `pb:"2"`
+	ItemCount  int64 `pb:"3"`
+	Price      int64 `pb:"4"`
+	Limit      int32 `pb:"5"`
+	LimitCount int64 `pb:"6"`
+}
+type ShopRulesPush struct {
+	Goods []*ShopGoodsRule `pb:"1"`
+}
+
+//roost:protocol group=game handler=rules
+type ShopRulesProtocol interface {
+	//roost:msg id={{ID:protocol:ShopRules}}
+	ShopRules() ShopRulesPush
+}

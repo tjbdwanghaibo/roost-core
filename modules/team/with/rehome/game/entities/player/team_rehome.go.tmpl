@@ -1,0 +1,21 @@
+package player
+
+import (
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func init() {
+	OnRehomeApplying("team", func(owner *Player, _ gamerehome.Move, _ int64) error {
+		if owner.TeamComp().TeamID() != 0 {
+			return apperrors.ErrTeamBlocked
+		}
+		return nil
+	})
+	OnTeamJoining("rehome", func(owner *Player) error {
+		if owner.Dao().GetRehome().GetPendingID() != "" {
+			return apperrors.ErrTeamBlocked
+		}
+		return nil
+	})
+}

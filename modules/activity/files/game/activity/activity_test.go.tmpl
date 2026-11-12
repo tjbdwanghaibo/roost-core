@@ -1,0 +1,159 @@
+package activity
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+func TestActivityRuleValidation(t *testing.T) {
+	d := Definition{ID: 1, Version: 1, Scope: "player", Trigger: "fixed", StartMilli: 1900000000000, OpenMillis: 1000, Repeat: "none", Catchup: "queue"}
+	if err := Validate(d); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestActivityInvalidRulesAreRejected(t *testing.T) {
+	base := Definition{ID: 1, Version: 1, Scope: "player", Trigger: "fixed", StartMilli: 1900000000000, OpenMillis: 1000, Repeat: "none", Catchup: "queue"}
+	cases := []func(*Definition){func(d *Definition) { d.ID = 129 }, func(d *Definition) { d.Scope = "any" }, func(d *Definition) { d.Trigger = "event"; d.Event = "" }, func(d *Definition) { d.OpenMillis = 0 }, func(d *Definition) { d.Repeat = "interval"; d.Period = 1 }, func(d *Definition) { d.Catchup = "skip_empty"; d.Logic = "reward" }, func(d *Definition) { d.Repeat = "weekly"; d.Period = 0 }, func(d *Definition) { d.StartMilli = maxMillis }}
+	for _, change := range cases {
+		d := base
+		change(&d)
+		if err := Validate(d); err == nil {
+			t.Fatalf("invalid rule accepted: %+v", d)
+		}
+	}
+}
+
+func TestActivityBusinessCalendarDoesNotUse24Hours(t *testing.T) {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := time.Date(2026, 3, 8, 0, 0, 0, 0, location).UnixMilli()
+	r := frozenRule{Definition: Definition{ID: 1, Version: 1, Scope: "world", Trigger: "fixed", StartMilli: anchor, OpenMillis: 3600000, Repeat: "daily", Period: 1, Catchup: "queue"}, Zone: location.String()}
+	next, err := r.start(anchor, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next-anchor != 23*3600000 {
+		t.Fatalf("DST day=%d hours", (next-anchor)/3600000)
+	}
+	r.Zone = "UTC"
+	next, err = r.start(anchor, 1)
+	if err == nil {
+		t.Fatalf("misaligned anchor=%d", next)
+	}
+}
+
+func TestActivityCalendarRejectsOverlappingDSTCycle(t *testing.T) {
+	location, _ := time.LoadLocation("America/New_York")
+	anchor := time.Date(2026, 3, 8, 0, 0, 0, 0, location).UnixMilli()
+	r := frozenRule{Definition: Definition{ID: 1, Version: 1, Scope: "world", Trigger: "fixed", StartMilli: anchor, OpenMillis: 24 * 3600000, Repeat: "daily", Period: 1, Catchup: "queue"}, Zone: location.String()}
+	if _, _, _, err := r.window(anchor, 1); err == nil {
+		t.Fatal("DST overlapping activity allowed")
+	}
+}
+
+func TestActivitySkipEmptyCycleSearchIsBoundedAndHonorsLimit(t *testing.T) {
+	r := frozenRule{Definition: Definition{ID: 1, Version: 1, Scope: "world", Trigger: "fixed", StartMilli: 1900000000000, OpenMillis: 10, Repeat: "interval", Period: 1000, MaxCycles: 100, Catchup: "skip_empty"}, Zone: "UTC"}
+	cycle, err := r.visibleCycle(r.StartMilli, 2, r.StartMilli+10000000)
+	if err != nil || cycle != 100 {
+		t.Fatal(cycle, err)
+	}
+	r.MaxCycles = 0
+	r.UntilMilli = r.StartMilli + 5001
+	cycle, err = r.visibleCycle(r.StartMilli, 2, r.StartMilli+10000000)
+	if err != nil || cycle != 6 {
+		t.Fatal(cycle, err)
+	}
+}
+
+var resumeTestOnce sync.Once
+var resumeTestAttempts atomic.Int32
+
+func TestActivityResumeRetriesBeforeCompleting(t *testing.T) {
+	resumeTestOnce.Do(func() {
+		Register("resume_test", Hooks{Resume: func(context.Context, *app.Registry, Snapshot) (bool, error) {
+			if resumeTestAttempts.Add(1) == 1 {
+				return false, errors.New("mail unavailable")
+			}
+			return true, nil
+		}})
+	})
+	resumeTestAttempts.Store(0)
+	completed := 0
+	views := []Snapshot{{Token: Token{Definition: 1, Scope: "world", Owner: 81, Generation: 1, Cycle: 1, Phase: Settling}, Pending: true, Logic: "resume_test"}}
+	complete := func(context.Context, Token) error { completed++; return nil }
+	if err := ResumePending(context.Background(), nil, views, complete); err == nil || completed != 0 {
+		t.Fatalf("first %v completed=%d", err, completed)
+	}
+	if err := ResumePending(context.Background(), nil, views, complete); err != nil || completed != 1 {
+		t.Fatalf("retry %v completed=%d", err, completed)
+	}
+}
+
+type oneScope struct{}
+
+func (oneScope) ListOwnedRemoteEntities(context.Context, []entity.EntityKind, int64, int) ([]int64, int64, error) {
+	return []int64{71}, 0, nil
+}
+
+func TestActivityDriverStopRetainsInFlightWork(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	d := StartDriver(oneScope{}, 1, func(context.Context, int64) error { close(entered); <-release; return nil })
+	<-entered
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.Stop(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("early stop=%v", err)
+	}
+	close(release)
+	if err := d.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Stop(ctx); err != nil {
+		t.Fatalf("repeat stop=%v", err)
+	}
+}
+
+func TestActivityCoordinatorKeepsInstanceAndPhaseSeparate(t *testing.T) {
+	token := Token{Scope: "world", Owner: 71, Definition: 1, Generation: 1, Cycle: 1, Phase: Open}
+	a, err := CoordinatorKey(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token.Phase = Settling
+	b, err := CoordinatorKey(token)
+	if err != nil || a.ActivityID != b.ActivityID || a.Phase == b.Phase {
+		t.Fatal(a, b, err)
+	}
+	token.Cycle = 2
+	c, err := CoordinatorKey(token)
+	if err != nil || c.ActivityID == b.ActivityID {
+		t.Fatal(c, err)
+	}
+}
+
+func TestActivityRelativeCalendarWaitsForBusinessBoundary(t *testing.T) {
+	r := frozenRule{Zone: "Asia/Shanghai", DayOffset: 5 * 3600000}
+	loc, _ := time.LoadLocation(r.Zone)
+	unlock := time.Date(2026, 11, 12, 13, 30, 0, 0, loc)
+	anchor, err := r.calendarAnchor(unlock.UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := time.UnixMilli(anchor).In(loc); got.Day() != 13 || got.Hour() != 5 {
+		t.Fatal(got)
+	}
+	same, err := r.calendarAnchor(anchor)
+	if err != nil || same != anchor {
+		t.Fatal(same, err)
+	}
+}

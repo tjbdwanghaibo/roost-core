@@ -1,28 +1,70 @@
 name: task
-summary: 任务：任务表、进度、领奖；这一版是每日任务（按业务日惰性清零），服务端推进，奖励经货币模块在同一笔事务里发放
+summary: 任务：任务表、进度、领奖；事件推进、每日/每周/永久和前置链，服务端推进，奖励经货币模块在同一笔事务里发放
 requires: [wallet]
 conflicts: []
 needs:
   mods: [nest]
-  features: [protocol, entity, dao, errcode]
+  features: [protocol, entity, dao, errcode, config]
 entity: Player
 state:
   - field: Task
     type: TaskState
     store: task
     dao: persist,sync
-    comment: Task 是每日任务模块给玩家本人看的当日记录（所属业务日、各任务进度、已领奖的任务）；Day 不是当前业务日时整份记录已过期。
+    comment: Task 是每日、每周、永久任务记录；Day 和 Weekly.Day 分别表示每日与每周进度所属的业务周期。
 component: Task
 protocols: [TaskClaim]
 errcodes: [task_unknown, task_incomplete, task_claimed, task_count_invalid]
 verify:
   packages: [./game/handler, ./game/entities/player]
   run: ^TestTask
-  pass: 18
+  pass: 29
 with:
   checkin:
     summary: 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务
     verify:
       packages: [./game/handler]
       run: ^TestWithTaskCheckin
+      pass: 3
+  wallet:
+    summary: wallet 与任务事件或奖励在同一笔事务中提交
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithTaskWallet
+      pass: 6
+  shop:
+    summary: shop 与任务事件或奖励在同一笔事务中提交
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithTaskShop
+      pass: 3
+  stamina:
+    summary: stamina 与任务事件或奖励在同一笔事务中提交
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithTaskStamina
+      pass: 3
+  profile:
+    summary: profile 与任务事件或奖励在同一笔事务中提交
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithTaskProfile
+      pass: 2
+  bag:
+    summary: bag 与任务事件或奖励在同一笔事务中提交
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithTaskBag
+      pass: 3
+  dungeon:
+    summary: 副本首次领奖推进任务，重复领取不重复计算
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithTaskDungeon
+      pass: 2
+  leaderboard:
+    summary: 排行成功提交通知独立推进任务，尽力通知且重放会计数，不用于恰好一次结算奖励
+    verify:
+      packages: [./game/controllers/task]
+      run: ^TestWithTaskLeaderboard
       pass: 3

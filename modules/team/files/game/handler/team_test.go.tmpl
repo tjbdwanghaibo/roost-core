@@ -1,0 +1,626 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	team "{{MODULE}}/game/entities/team"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+type teamGetter map[int64]entity.IThreadSafeEntity
+
+func (g teamGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if v := g[id]; v != nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("team fixture: missing %d", id)
+}
+func (g teamGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// 提交替身只验证正式 Nest 的事务与回滚，不宣称 Redis 权威或 Mongo 投影已经通过。
+type teamCommitter struct {
+	reject atomic.Bool
+	calls  atomic.Int32
+	lastMu sync.Mutex
+	last   dataengine.CommitRecord
+}
+
+func (c *teamCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.calls.Add(1)
+	c.lastMu.Lock()
+	c.last = dataengine.CloneCommitRecord(record)
+	c.lastMu.Unlock()
+	if c.reject.Load() {
+		return errors.New("team commit rejected")
+	}
+	return nil
+}
+
+type teamFixture struct {
+	engine *nest.NestMgr
+	values teamGetter
+	teamID int64
+	commit *teamCommitter
+	now    atomic.Int64
+}
+
+func newTeamFixture(t *testing.T, registrations ...func(*nest.NestMgr)) *teamFixture {
+	t.Helper()
+	player.RegisterEntity()
+	team.RegisterEntity()
+	f := &teamFixture{values: teamGetter{}, commit: &teamCommitter{}}
+	for _, spec := range []struct {
+		unique int64
+		kind   entity.EntityKind
+	}{{91001, team.EntityKindTeam}, {91002, team.EntityKindTeam}, {101, player.EntityKindPlayer}, {102, player.EntityKindPlayer}, {103, player.EntityKindPlayer}, {104, player.EntityKindPlayer}, {105, player.EntityKindPlayer}, {106, player.EntityKindPlayer}, {107, player.EntityKindPlayer}, {108, player.EntityKindPlayer}, {109, player.EntityKindPlayer}} {
+		id, err := entity.BuildEntityID(spec.unique, spec.kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: spec.kind})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.values[id] = built
+		if spec.unique == 91001 {
+			f.teamID = id
+		}
+	}
+	f.now.Store(1000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	remote := teamRemote{values: f.values, locks: map[int64]*sync.Mutex{}, versions: map[int64]*uint64{}}
+	for id := range f.values {
+		if entity.MatchEntityID(id, team.EntityKindTeam) {
+			remote.locks[id] = &sync.Mutex{}
+			remote.versions[id] = new(uint64)
+		}
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithRemoteEntityManager(remote), nest.NestOptionWithGetter(f.values), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{RegisterTeamCreateNestHandlersOn, RegisterTeamAcceptNestHandlersOn, RegisterTeamInviteNestHandlersOn, RegisterTeamLeaveNestHandlersOn, RegisterTeamInfoNestHandlersOn} {
+		if err := register(f.engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registerTeamTestHandler(f.engine, handlerNamePlayerTeam, invokePlayerTeam, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
+	for _, register := range registrations {
+		register(f.engine)
+	}
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+func (f *teamFixture) playerID(id int64) int64 {
+	result, _ := entity.BuildEntityID(id, player.EntityKindPlayer)
+	return result
+}
+func (f *teamFixture) create(t *testing.T, id int64) team.Snapshot {
+	t.Helper()
+	out, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), f.teamID, f.playerID(id), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+func (f *teamFixture) invite(t *testing.T, leader, invitee int64) {
+	t.Helper()
+	_, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), f.teamID, f.playerID(leader), invitee)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *teamFixture) accept(t *testing.T, id int64) team.Snapshot {
+	t.Helper()
+	out, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(id), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+func TestTeamCreateAndJoinShareOneTransaction(t *testing.T) {
+	f := newTeamFixture(t)
+	first := f.create(t, 101)
+	f.invite(t, 101, 102)
+	before := f.commit.calls.Load()
+	joined := f.accept(t, 102)
+	current, err := sender.NewPlayerTeamSender(f.engine).Sync_PlayerTeam(context.Background(), f.playerID(102))
+	if err != nil || first.Leader != 101 || len(joined.Members) != 2 || joined.Members[1] != 102 || current != f.teamID || f.commit.calls.Load() != before+1 {
+		t.Fatalf("joined=%+v current=%d commits=%d err=%v", joined, current, f.commit.calls.Load()-before, err)
+	}
+}
+
+// teamRemote 在离线场景里替代外部锁与权威存储，仍用生成的 BuildRemoteCommitLocked
+// 冻结事务内的 Team 变化。测试断言它和 Player 变化出现在同一份正式提交记录中。
+// 它不验证跨进程租约、Redis 原子提交、Mongo 投影或进程崩溃恢复。
+type teamRemote struct {
+	entity.IRemoteEntityManager
+	values   teamGetter
+	locks    map[int64]*sync.Mutex
+	versions map[int64]*uint64
+}
+
+func (m teamRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (entity.RemoteWriteBatch, error) {
+	ordered := slices.Clone(ids)
+	slices.Sort(ordered)
+	for _, id := range ordered {
+		m.locks[id].Lock()
+	}
+	return &teamBatch{manager: m, ids: ordered}, nil
+}
+
+type teamBatch struct {
+	manager teamRemote
+	ids     []int64
+	commits []entity.RemoteCommit
+}
+
+func (b *teamBatch) EntityIDs() []int64 { return b.ids }
+func (b *teamBatch) FinalizeLocked(outcome entity.RemoteTransactionOutcome) error {
+	for _, id := range b.ids {
+		participant := b.manager.values[id].(entity.IRemoteCommitParticipant)
+		if !participant.HasRemoteCommitLocked(outcome) {
+			continue
+		}
+		lease := entity.RemoteWriteLease{EntityID: id, OwnerSID: 1, Mode: entity.RemoteWriteSharedLock, State: entity.RemoteOwnershipShared, BaseVersion: *b.manager.versions[id], MarkerEpoch: 1, LockFence: 1, RouteEpoch: 1}
+		commit, err := participant.BuildRemoteCommitLocked(lease, outcome)
+		if err != nil {
+			return err
+		}
+		for i := range commit.Snapshots {
+			snapshot := &commit.Snapshots[i]
+			snapshot.BaseVersion = commit.BaseVersion
+			snapshot.StateVersion = commit.NextVersion
+			snapshot.MarkerEpoch = commit.MarkerEpoch
+			snapshot.RouteEpoch = commit.RouteEpoch
+		}
+		b.commits = append(b.commits, commit)
+	}
+	return nil
+}
+func (b *teamBatch) Commits() []entity.RemoteCommit { return b.commits }
+func (b *teamBatch) Commit(context.Context) ([]entity.RemoteCommitReceipt, error) {
+	for _, commit := range b.commits {
+		if err := b.manager.values[commit.EntityID].(entity.IRemoteCommitParticipant).AcknowledgeRemoteCommit(commit); err != nil {
+			return nil, err
+		}
+		*b.manager.versions[commit.EntityID] = commit.NextVersion
+	}
+	return nil, nil
+}
+func (b *teamBatch) Abort(context.Context, error) error { return nil }
+func (b *teamBatch) Indeterminate(context.Context, error) error {
+	return fmt.Errorf("unexpected indeterminate team fixture commit")
+}
+func (b *teamBatch) Close(context.Context) error {
+	for i := len(b.ids) - 1; i >= 0; i-- {
+		b.manager.locks[b.ids[i]].Unlock()
+	}
+	return nil
+}
+
+func (f *teamFixture) facts(t *testing.T) map[int64]bson.M {
+	t.Helper()
+	out := map[int64]bson.M{}
+	var decodeErr error
+	err := f.engine.RunLocal(context.Background(), func() {
+		for id, value := range f.values {
+			value.GetMutex().Lock()
+			var raw []byte
+			if v, ok := value.(*team.Team); ok {
+				raw = v.Dao().Marshal()
+			} else {
+				raw = value.(*player.Player).Dao().Marshal()
+			}
+			value.GetMutex().Unlock()
+			var doc bson.M
+			decoder := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(raw)))
+			decoder.DefaultDocumentM()
+			if err := decoder.Decode(&doc); err != nil {
+				decodeErr = err
+				return
+			}
+			out[id] = doc
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	return out
+}
+func (f *teamFixture) unchanged(t *testing.T, before map[int64]bson.M) {
+	t.Helper()
+	if after := f.facts(t); !reflect.DeepEqual(before, after) {
+		t.Fatalf("team/player changed after rejection: before=%v after=%v", before, after)
+	}
+}
+func (f *teamFixture) info(t *testing.T, id int64) team.Snapshot {
+	t.Helper()
+	out, err := sender.NewTeamInfoSender(f.engine).MultiSync_TeamInfo(context.Background(), f.teamID, f.playerID(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+func (f *teamFixture) leave(t *testing.T, id int64, disband bool) {
+	t.Helper()
+	if err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(id), disband); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestTeamAdmissionFailureRollsBackCreation(t *testing.T) {
+	f := newTeamFixture(t)
+	before := f.facts(t)
+	f.commit.reject.Store(true)
+	_, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), f.teamID, f.playerID(101), 1)
+	if err == nil {
+		t.Fatal("creation admitted despite rejected commit")
+	}
+	f.unchanged(t, before)
+	f.commit.reject.Store(false)
+	f.create(t, 101)
+}
+func TestTeamAdmissionFailureRollsBackBothMemberships(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	before := f.facts(t)
+	f.commit.reject.Store(true)
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1)
+	if err == nil {
+		t.Fatal("join admitted despite rejected commit")
+	}
+	f.unchanged(t, before)
+	f.commit.reject.Store(false)
+	f.accept(t, 102)
+}
+func TestTeamCommitContainsRemoteAndPlayerChanges(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	f.commit.lastMu.Lock()
+	record := dataengine.CloneCommitRecord(f.commit.last)
+	f.commit.lastMu.Unlock()
+	var remote, local bool
+	for _, mutation := range record.Mutations {
+		if mutation.Remote != nil {
+			remote = true
+		} else if mutation.Key.ID == f.playerID(102) {
+			local = true
+		}
+	}
+	if !remote || !local {
+		t.Fatalf("join record misses remote/player: %+v", record)
+	}
+}
+func TestTeamRepeatedAcceptAndCreateDoNotChangeFacts(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	before := f.facts(t)
+	calls := f.commit.calls.Load()
+	f.accept(t, 102)
+	f.create(t, 101)
+	f.unchanged(t, before)
+	if f.commit.calls.Load() != calls {
+		t.Fatal("idempotent team operations committed again")
+	}
+}
+func TestTeamRequiresInvitation(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	before := f.facts(t)
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1)
+	if !errors.Is(err, apperrors.ErrTeamNotInvited) {
+		t.Fatalf("uninvited join=%v", err)
+	}
+	f.unchanged(t, before)
+}
+func TestTeamInviteExpiresAtExactDeadline(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.now.Add(60000)
+	before := f.facts(t)
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1)
+	if !errors.Is(err, apperrors.ErrTeamNotInvited) {
+		t.Fatalf("deadline accepted: %v", err)
+	}
+	f.unchanged(t, before)
+}
+func TestTeamOnlyLeaderInvitesOrDisbands(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	before := f.facts(t)
+	_, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), f.teamID, f.playerID(102), 103)
+	if !errors.Is(err, apperrors.ErrTeamNotLeader) {
+		t.Fatalf("member invited: %v", err)
+	}
+	err = sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(102), true)
+	if !errors.Is(err, apperrors.ErrTeamNotLeader) {
+		t.Fatalf("member disbanded: %v", err)
+	}
+	f.unchanged(t, before)
+}
+func TestTeamCapacityIsCheckedWhenAccepting(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	for id := int64(102); id <= 109; id++ {
+		f.invite(t, 101, id)
+	}
+	for id := int64(102); id <= 108; id++ {
+		f.accept(t, id)
+	}
+	before := f.facts(t)
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(109), 1)
+	if !errors.Is(err, apperrors.ErrTeamFull) {
+		t.Fatalf("ninth member accepted: %v", err)
+	}
+	f.unchanged(t, before)
+}
+func TestTeamInvitationsAreBoundedAndCanBeRenewed(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	for id := int64(201); id <= 264; id++ {
+		f.invite(t, 101, id)
+	}
+	f.now.Add(1)
+	f.invite(t, 101, 201)
+	before := f.facts(t)
+	_, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), f.teamID, f.playerID(101), 265)
+	if !errors.Is(err, apperrors.ErrTeamInvitesFull) {
+		t.Fatalf("65th invitation accepted: %v", err)
+	}
+	f.unchanged(t, before)
+}
+func TestTeamExpiredInvitationsReleaseCapacity(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	for id := int64(201); id <= 264; id++ {
+		f.invite(t, 101, id)
+	}
+	f.now.Add(60000)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	var count int
+	if err := f.engine.RunLocal(context.Background(), func() {
+		v := f.values[f.teamID].(*team.Team)
+		v.GetMutex().Lock()
+		defer v.GetMutex().Unlock()
+		count = v.Dao().InvitesLen()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expired invitations retained: %d", count)
+	}
+}
+func TestTeamLeaderPassesToSmallestMember(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 103)
+	f.invite(t, 103, 102)
+	f.accept(t, 102)
+	f.invite(t, 103, 101)
+	f.accept(t, 101)
+	f.leave(t, 103, false)
+	info := f.info(t, 101)
+	if info.Leader != 101 || !reflect.DeepEqual(info.Members, []int64{101, 102}) {
+		t.Fatalf("leader handoff=%+v", info)
+	}
+}
+func TestTeamLastLeaveKeepsNonReusableTombstone(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.leave(t, 101, false)
+	_, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), f.teamID, f.playerID(102), 1)
+	if !errors.Is(err, apperrors.ErrTeamExists) {
+		t.Fatalf("empty team ID reused: %v", err)
+	}
+}
+func TestTeamDisbandClearsOtherReferencesOnAuthoritativeRead(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	f.leave(t, 101, true)
+	before, err := sender.NewPlayerTeamSender(f.engine).Sync_PlayerTeam(context.Background(), f.playerID(102))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := f.info(t, 102)
+	after, err := sender.NewPlayerTeamSender(f.engine).Sync_PlayerTeam(context.Background(), f.playerID(102))
+	if err != nil || before != f.teamID || info.TeamID != 0 || after != 0 {
+		t.Fatalf("lazy clear before=%d info=%+v after=%d err=%v", before, info, after, err)
+	}
+}
+func TestTeamMemberCannotJoinASecondTeam(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	other, _ := entity.BuildEntityID(91002, team.EntityKindTeam)
+	if _, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), other, f.playerID(103), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), other, f.playerID(103), 102); err != nil {
+		t.Fatal(err)
+	}
+	before := f.facts(t)
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), other, f.playerID(102), 1)
+	if !errors.Is(err, apperrors.ErrTeamExists) {
+		t.Fatalf("joined second team: %v", err)
+	}
+	f.unchanged(t, before)
+}
+func TestTeamSnapshotOwnsItsCollections(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	out := f.accept(t, 102)
+	out.Members[0] = 999
+	out.SIDs[101] = 999
+	info := f.info(t, 101)
+	if info.Members[0] != 101 || info.SIDs[101] != 1 {
+		t.Fatalf("snapshot aliases roster: %+v", info)
+	}
+}
+func TestTeamConcurrentAcceptsSerializePlayerMembership(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	other, _ := entity.BuildEntityID(91002, team.EntityKindTeam)
+	if _, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), other, f.playerID(103), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), other, f.playerID(103), 102); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	for _, id := range []int64{f.teamID, other} {
+		go func() {
+			<-start
+			_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), id, f.playerID(102), 1)
+			done <- err
+		}()
+	}
+	close(start)
+	a, b := <-done, <-done
+	if !(a == nil && errors.Is(b, apperrors.ErrTeamExists) || b == nil && errors.Is(a, apperrors.ErrTeamExists)) {
+		t.Fatalf("concurrent memberships: %v / %v", a, b)
+	}
+	current, err := sender.NewPlayerTeamSender(f.engine).Sync_PlayerTeam(context.Background(), f.playerID(102))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := f.info(t, 101)
+	second, err := sender.NewTeamInfoSender(f.engine).MultiSync_TeamInfo(context.Background(), other, f.playerID(103))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Members)+len(second.Members) != 3 || !(current == f.teamID && len(first.Members) == 2 || current == other && len(second.Members) == 2) {
+		t.Fatalf("conflicting authority: %d %+v %+v", current, first, second)
+	}
+}
+func TestTeamLeaveAdmissionFailureRestoresBothSides(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	before := f.facts(t)
+	f.commit.reject.Store(true)
+	err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(101), false)
+	if err == nil {
+		t.Fatal("leave admitted despite rejected commit")
+	}
+	f.unchanged(t, before)
+}
+func TestTeamDisbandAdmissionFailureRestoresRoster(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	before := f.facts(t)
+	f.commit.reject.Store(true)
+	err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(101), true)
+	if err == nil {
+		t.Fatal("disband admitted despite rejected commit")
+	}
+	f.unchanged(t, before)
+}
+func TestTeamInvalidSIDCannotCreateMembership(t *testing.T) {
+	f := newTeamFixture(t)
+	before := f.facts(t)
+	_, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), f.teamID, f.playerID(101), 0)
+	if !errors.Is(err, apperrors.ErrTeamInvalid) {
+		t.Fatalf("zero sid allowed: %v", err)
+	}
+	f.unchanged(t, before)
+}
+func TestTeamOutsiderCannotReadOrChangeRoster(t *testing.T) {
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	before := f.facts(t)
+	_, err := sender.NewTeamInfoSender(f.engine).MultiSync_TeamInfo(context.Background(), f.teamID, f.playerID(102))
+	if !errors.Is(err, apperrors.ErrTeamMissing) {
+		t.Fatalf("outsider read roster: %v", err)
+	}
+	_, err = sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), f.teamID, f.playerID(102), 103)
+	if !errors.Is(err, apperrors.ErrTeamMissing) {
+		t.Fatalf("outsider invited: %v", err)
+	}
+	f.unchanged(t, before)
+}
+
+var teamHookOnce sync.Once
+var teamHookReject atomic.Bool
+
+func TestTeamProjectionHookFailureRollsBackBothEntities(t *testing.T) {
+	teamHookOnce.Do(func() {
+		player.OnTeamChanged("test-rejection", func(_ *player.Player, _ player.TeamChange) error {
+			if teamHookReject.Load() {
+				return errors.New("projection hook rejected")
+			}
+			return nil
+		})
+	})
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	before := f.facts(t)
+	teamHookReject.Store(true)
+	t.Cleanup(func() { teamHookReject.Store(false) })
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1)
+	teamHookReject.Store(false)
+	if err == nil {
+		t.Fatal("projection hook failure ignored")
+	}
+	f.unchanged(t, before)
+}
+
+// NewEngine 会复制包级注册；其他模块场景可能已经登记同一个正式 handler。
+// 未登记时装到当前实例，不清全局表，也不吞掉重复登记以外的错误。
+func registerTeamTestHandler(engine *nest.NestMgr, name nest.HandlerName, invoke nest.BaseHandler, meta nest.HandlerMeta) {
+	if nest.GetHandler(name) == nil {
+		engine.MustRegisterHandlerWithMeta(name, invoke, meta)
+	}
+}

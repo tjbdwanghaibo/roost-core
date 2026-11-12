@@ -1,0 +1,11 @@
+roost-profilemail-catalog-final.log
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.638s
+
+roost-profilemail-root-gates.log
+ok  	github.com/tjbdwanghaibo/roost-core	10.708s
+
+roost-profilemail-docs.log
+checked 308 files, 0 broken
+
+roost-profilemail-gm-combination.log
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	71.061s

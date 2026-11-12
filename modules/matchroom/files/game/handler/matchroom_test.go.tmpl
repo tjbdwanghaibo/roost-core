@@ -1,0 +1,94 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+	sender "{{MODULE}}/game/handler/syncsender"
+)
+
+func matchedRoom(t *testing.T) *roomFixture {
+	t.Helper()
+	f := newRoomFixture(t, 0, RegisterMatchroomOpenNestHandlersOn)
+	if err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(context.Background(), f.id, "match-1", []int64{101, 102}); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+func TestMatchroomRejectsOutsiderWithoutTakingReservedSeat(t *testing.T) {
+	f := matchedRoom(t)
+	before := f.document(t)
+	_, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 999, "outside")
+	if !errors.Is(err, apperrors.ErrRoomNotMember) {
+		t.Fatalf("outsider admitted: %v", err)
+	}
+	f.unchanged(t, before)
+	f.join(t, 101)
+	f.join(t, 102)
+}
+func TestMatchroomDuplicateHandoffKeepsSeatsAndEpoch(t *testing.T) {
+	f := matchedRoom(t)
+	f.join(t, 101)
+	before := f.document(t)
+	if err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(context.Background(), f.id, "match-1", []int64{102, 101}); err != nil {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestMatchroomDroppedMemberCanJoinAndReconnect(t *testing.T) {
+	f := matchedRoom(t)
+	f.join(t, 101)
+	second := f.join(t, 102)
+	if _, err := f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 102, second.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 102, second.Epoch, "replacement")
+	if err != nil || got.Epoch == second.Epoch {
+		t.Fatalf("reconnect: %+v %v", got, err)
+	}
+}
+func TestMatchroomRejectsChangedRosterAndOrdinaryRoomConversion(t *testing.T) {
+	f := matchedRoom(t)
+	before := f.document(t)
+	for _, members := range [][]int64{{101, 103}, {101, 101}, {0, 102}} {
+		if err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(context.Background(), f.id, "match-1", members); err == nil {
+			t.Fatalf("invalid roster accepted: %v", members)
+		}
+		f.unchanged(t, before)
+	}
+	ordinary := newRoomFixture(t, 2, RegisterMatchroomOpenNestHandlersOn)
+	if err := sender.NewMatchroomOpenSender(ordinary.engine).Sync_MatchroomOpen(context.Background(), ordinary.id, "late", []int64{101, 102}); err == nil {
+		t.Fatal("ordinary room converted")
+	}
+}
+func TestMatchroomCommitFailureRollsBackRoomAndRoster(t *testing.T) {
+	f := newRoomFixture(t, 0, RegisterMatchroomOpenNestHandlersOn)
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	if err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(context.Background(), f.id, "rejected", []int64{101, 102}); err == nil {
+		t.Fatal("commit rejection ignored")
+	}
+	f.unchanged(t, before)
+	f.commit.reject.Store(false)
+	if err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(context.Background(), f.id, "accepted", []int64{101, 103}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMatchroomClosedHandoffConfirmsIdentityWithoutReopening(t *testing.T) {
+	f := matchedRoom(t)
+	seat := f.join(t, 101)
+	if err := f.closes.Sync_RoomClose(context.Background(), f.id, 101, seat.Epoch, "connection-101"); err != nil {
+		t.Fatal(err)
+	}
+	before := f.document(t)
+	if err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(context.Background(), f.id, "match-1", []int64{101, 102}); err != nil {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 102, "new"); !errors.Is(err, apperrors.ErrRoomClosed) {
+		t.Fatalf("closed match reopened: %v", err)
+	}
+}

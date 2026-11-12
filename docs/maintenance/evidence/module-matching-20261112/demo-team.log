@@ -1,0 +1,4 @@
+=== RUN   TestDemoTeamModuleIntegration
+--- PASS: TestDemoTeamModuleIntegration (58.14s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	58.860s

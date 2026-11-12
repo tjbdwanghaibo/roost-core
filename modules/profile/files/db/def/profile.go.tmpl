@@ -9,7 +9,8 @@ package dbdef
 type ProfileState struct {
 	// Name 是显示名，存的是去掉首尾空白之后的名字；没改过名时为空。
 	Name string `store:"1"`
-	// Level 是等级，新档从 0 起，只由 ProfileComponent.AddExp 往上加。
+	// Level 是等级，完成首次建档时为 1（profile + enter 联动），之后由 ProfileComponent.AddExp 往上加。
+	// 只有刚分配、尚未执行建档事务的 DAO 是 0；它还不是可进入游戏的角色。
 	Level int32 `store:"2"`
 }
 

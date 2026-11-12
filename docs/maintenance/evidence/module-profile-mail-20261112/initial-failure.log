@@ -1,0 +1,10 @@
+[
+  {
+    "name": "mailbox+profile",
+    "want": 10,
+    "passed": 9,
+    "skipped": 0,
+    "ok": false,
+    "detail": "=== RUN   TestWithMailboxProfileDefaultDoesNotReward\n--- PASS: TestWithMailboxProfileDefaultDoesNotReward (0.01s)\n=== RUN   TestWithMailboxProfileOneUpgradeOneEffect\n--- PASS: TestWithMailboxProfileOneUpgradeOneEffect (0.00s)\n=== RUN   TestWithMailboxProfileSeveralLevelsOneCombinedMail\n--- PASS: TestWithMailboxProfileSeveralLevelsOneCombinedMail (0.00s)\n=== RUN   TestWithMailboxProfileCommitFailureDoesNotPublish\n--- PASS: TestWithMailboxProfileCommitFailureDoesNotPublish (0.00s)\n=== RUN   TestWithMailboxProfileInvalidRewardRollsBackUpgrade\n--- PASS: TestWithMailboxProfileInvalidRewardRollsBackUpgrade (0.00s)\nPASS\nok  \texample.com/studio/profilemail/game/handler\t1.584s\n=== RUN   TestWithMailboxProfileReplayCreatesOneMail\n--- PASS: TestWithMailboxProfileReplayCreatesOneMail (0.00s)\n=== RUN   TestWithMailboxProfileMalformedEffectDoesNotSend\n--- PASS: TestWithMailboxProfileMalformedEffectDoesNotSend (0.00s)\n=== RUN   TestWithMailboxProfileMissingIdentityDoesNotSend\n--- PASS: TestWithMailboxProfileMissingIdentityDoesNotSend (0.00s)\n=== RUN   TestWithMailboxProfileTransportFailureCanRetry\n--- PASS: TestWithMailboxProfileTransportFailureCanRetry (0.00s)\n=== RUN   TestWithMailboxProfileConflictingReplayDoesNotCreateMail\n    mailbox_profile_test.go:140: changed reward accepted\n--- FAIL: TestWithMailboxProfileConflictingReplayDoesNotCreateMail (0.00s)\nFAIL\nFAIL\texample.com/studio/profilemail/game/mailbox\t0.309s\nFAIL"
+  }
+]

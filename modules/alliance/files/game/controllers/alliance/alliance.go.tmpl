@@ -1,0 +1,334 @@
+package alliance
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/alliance"
+	"{{MODULE}}/game/alliancerule"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"{{MODULE}}/protocol/pb"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// The alliance endpoints. The alliance is the alliance service's (game/alliance): this
+// process cannot write it — it has no Remote write runtime — so every write is
+// an alliance RPC or a saga whose alliance step is one, and every alliance read is a
+// mirror read of the alliance. Which alliance the player is in is the player's
+// own copy (PlayerDao.Alliance.ID, persisted and synced): written in the player's
+// transaction after their own join / leave / founding succeeded, by a
+// membership notice while they are online, and at login checked against the
+// alliance's mirror — or, when it shows none, looked up from the alliance
+// service (refreshAlliance). What the endpoints still decide from it is the cheap part:
+// a name that is invalid on its face, a request from a player shown in no
+// alliance. Those pre-checks are advisory and may be stale; the alliance service
+// decides again on its roster, and its answer wins.
+//
+// Mirror reads are Monotonic: with no version they serve the cache within its
+// staleness bound and load on a miss (a Cached read never loads, so a alliance
+// this process never saw would read as missing once the shared L2 entry
+// expired); with AllianceInfoRequest.MinVersion, the version a write answered
+// with, they never show a state older than that write.
+
+// HandleFoundAlliance starts the found saga: the fee is debited, then the
+// alliance service founds the alliance, and a refusal refunds the fee. The answer
+// is "accepted" with the saga key; AllianceOpStatus reports the alliance founded.
+func (controller *Controller) HandleFoundAlliance(context *playeraccess.Context, request *pb.FoundAllianceRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("found_alliance endpoint: context and request are required")
+	}
+	// The name rule is the service's own (alliancerule.ValidateName); a name
+	// that is invalid on its face is refused before any coin moves.
+	if err := alliancerule.ValidateName(request.Name); err != nil {
+		return allianceRefusal(context, "found_alliance", err), nil
+	}
+	if shown, err := controller.shownAlliance(context); err != nil {
+		return allianceRefusal(context, "found_alliance", err), nil
+	} else if shown != 0 {
+		return allianceRefusal(context, "found_alliance", errcode.Wrap(apperrors.ErrAllianceMembership, nil, "alliance_id", shown)), nil
+	}
+	cost := controller.foundCost
+	return controller.startAllianceOp(context, alliance.OpFound, alliance.State{Coins: cost, Name: request.Name, OpenJoin: request.OpenJoin}, cost)
+}
+
+// HandleJoinAlliance joins an open alliance: one alliance RPC to the instance that
+// owns it (the generated client finds it through the route registration), with
+// a request id from this frame, answered with the alliance after the join.
+func (controller *Controller) HandleJoinAlliance(context *playeraccess.Context, request *pb.JoinAllianceRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("join_alliance endpoint: context and request are required")
+	}
+	target, err := rpcalliance.AllianceTarget(request.AllianceID)
+	if request.AllianceID <= 0 || err != nil {
+		return allianceRefusal(context, "join_alliance", errcode.Wrap(apperrors.ErrAllianceViewMissing, err, "alliance_id", request.AllianceID)), nil
+	}
+	sid, err := controller.boundSID(context)
+	if err != nil {
+		return allianceRefusal(context, "join_alliance", err), nil
+	}
+	requestID := alliance.RequestID("join", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	reply, err := controller.alliances.Join(context.Context(), requestID, context.PlayerID, sid, target)
+	if err != nil {
+		return allianceRefusal(context, "join_alliance", err), nil
+	}
+	controller.showAlliance(context, reply.Alliance.AllianceID, 0)
+	return allianceReply(reply.Alliance, reply.ServedBySID), nil
+}
+
+// HandleLeaveAlliance leaves the alliance the player is shown in. A stale copy at
+// worst names a alliance the player already left: the service answers that from
+// its roster.
+func (controller *Controller) HandleLeaveAlliance(context *playeraccess.Context, request *pb.LeaveAllianceRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("leave_alliance endpoint: context and request are required")
+	}
+	shown, err := controller.shownAlliance(context)
+	if err != nil {
+		return allianceRefusal(context, "leave_alliance", err), nil
+	}
+	if shown == 0 {
+		return allianceRefusal(context, "leave_alliance", errcode.Wrap(apperrors.ErrAllianceViewMissing, nil, "player_id", context.PlayerID)), nil
+	}
+	target, err := rpcalliance.AllianceTarget(shown)
+	if err != nil {
+		return allianceRefusal(context, "leave_alliance", err), nil
+	}
+	sid, err := controller.boundSID(context)
+	if err != nil {
+		return allianceRefusal(context, "leave_alliance", err), nil
+	}
+	requestID := alliance.RequestID("leave", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	reply, err := controller.alliances.Leave(context.Context(), requestID, context.PlayerID, sid, target)
+	if err != nil {
+		return allianceRefusal(context, "leave_alliance", err), nil
+	}
+	controller.showAlliance(context, 0, shown)
+	return allianceReply(reply.Alliance, reply.ServedBySID), nil
+}
+
+// HandleAllianceInfo reads a alliance from its mirror: by id, or the one the player
+// is shown in.
+func (controller *Controller) HandleAllianceInfo(context *playeraccess.Context, request *pb.AllianceInfoRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("alliance_info endpoint: context and request are required")
+	}
+	allianceID := request.AllianceID
+	if allianceID == 0 {
+		shown, err := controller.shownAlliance(context)
+		if err != nil {
+			return allianceRefusal(context, "alliance_info", err), nil
+		}
+		allianceID = shown
+	}
+	view, err := controller.allianceMirror(context, allianceID, request.MinVersion)
+	if err != nil {
+		return allianceRefusal(context, "alliance_info", err), nil
+	}
+	return allianceReply(view, 0), nil
+}
+
+// HandleDonateAlliance starts the donate saga: the coins are debited, then
+// recorded in the alliance's funds and the member's contribution; a refusal (no
+// longer a member) refunds them.
+func (controller *Controller) HandleDonateAlliance(context *playeraccess.Context, request *pb.DonateAllianceRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("donate_alliance endpoint: context and request are required")
+	}
+	if request.Amount <= 0 {
+		return allianceRefusal(context, "donate_alliance", errcode.Wrap(apperrors.ErrAllianceAmount, nil, "amount", request.Amount)), nil
+	}
+	shown, err := controller.shownAlliance(context)
+	if err != nil {
+		return allianceRefusal(context, "donate_alliance", err), nil
+	}
+	if shown == 0 {
+		return allianceRefusal(context, "donate_alliance", errcode.Wrap(apperrors.ErrAllianceViewMissing, nil, "player_id", context.PlayerID)), nil
+	}
+	return controller.startAllianceOp(context, alliance.OpDonate, alliance.State{Coins: request.Amount, AllianceID: shown}, request.Amount)
+}
+
+// HandleClaimAllianceReward starts the reward saga: the alliance service marks
+// this period's reward as claimed, then the game grants it; a full bag
+// releases the claim.
+func (controller *Controller) HandleClaimAllianceReward(context *playeraccess.Context, request *pb.ClaimAllianceRewardRequest) (*pb.AllianceResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("claim_alliance_reward endpoint: context and request are required")
+	}
+	shown, err := controller.shownAlliance(context)
+	if err != nil {
+		return allianceRefusal(context, "claim_alliance_reward", err), nil
+	}
+	if shown == 0 {
+		return allianceRefusal(context, "claim_alliance_reward", errcode.Wrap(apperrors.ErrAllianceViewMissing, nil, "player_id", context.PlayerID)), nil
+	}
+	return controller.startAllianceOp(context, alliance.OpReward, alliance.State{}, 0)
+}
+
+// HandleAllianceOpStatus reports a alliance saga by its key, for the player who
+// started it.
+func (controller *Controller) HandleAllianceOpStatus(context *playeraccess.Context, request *pb.AllianceOpStatusRequest) (*pb.AllianceOpStatusResponse, error) {
+	if context == nil || request == nil || context.PlayerID <= 0 || context.Session == nil {
+		return nil, fmt.Errorf("alliance_op_status endpoint: context and request are required")
+	}
+	const unknown = "unknown"
+	var sagaType string
+	switch request.Op {
+	case alliance.OpFound:
+		sagaType = alliancefound.Type
+	case alliance.OpDonate:
+		sagaType = alliancedonate.Type
+	case alliance.OpReward:
+		sagaType = alliancereward.Type
+	default:
+		return &pb.AllianceOpStatusResponse{Status: unknown}, nil
+	}
+	engine, ok := app.Lookup[*saga.Engine](controller.registry, mods.ModSaga)
+	if !ok || engine == nil {
+		return nil, fmt.Errorf("alliance_op_status endpoint: capability %q not found; the saga mod is not assembled", mods.ModSaga)
+	}
+	if request.SagaKey == "" {
+		return &pb.AllianceOpStatusResponse{Status: unknown}, nil
+	}
+	record, err := engine.GetByBusinessKey(context.Context(), sagaType, request.SagaKey)
+	if err != nil {
+		if errors.Is(err, saga.ErrNotFound) {
+			return &pb.AllianceOpStatusResponse{Status: unknown}, nil
+		}
+		code, reason := errcode.ClientError(err)
+		slog.Error("alliance_op_status: saga read failed", "player_id", context.PlayerID, "saga_key", request.SagaKey, "err", err)
+		return &pb.AllianceOpStatusResponse{Code: code, Reason: reason}, nil
+	}
+	// Someone else's key reads as unknown: a key is not a capability.
+	state, err := alliance.Decode(record.Data)
+	if err != nil || state.PlayerID != context.PlayerID {
+		return &pb.AllianceOpStatusResponse{Status: unknown}, nil
+	}
+	if request.Op == alliance.OpFound && record.Status == saga.StatusCompleted && state.AllianceID != 0 {
+		// The founder's own copy, in case the founding's notice was lost: the
+		// completed saga is the alliance service's answer. Idempotent.
+		controller.showAlliance(context, state.AllianceID, 0)
+	}
+	return &pb.AllianceOpStatusResponse{Status: record.Status.String(), Step: int32(record.Step), LastError: record.LastError, AllianceID: state.AllianceID}, nil
+}
+
+// startAllianceOp starts a alliance saga from inside the player's transaction
+// (StartAllianceOp: checks the coins, emits the start in the same WAL record).
+func (controller *Controller) startAllianceOp(context *playeraccess.Context, op string, state alliance.State, coins int32) (*pb.AllianceResponse, error) {
+	endpoint := op + "_alliance"
+	sid, err := controller.boundSID(context)
+	if err != nil {
+		return allianceRefusal(context, endpoint, err), nil
+	}
+	state.PlayerID, state.SID = context.PlayerID, sid
+	data, err := alliance.Encode(state)
+	if err != nil {
+		return nil, fmt.Errorf("%s endpoint: %w", endpoint, err)
+	}
+	playerID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("%s endpoint: %w", endpoint, err)
+	}
+	key := alliance.BusinessKey(op, context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	started, err := syncsender.NewStartAllianceOpSender(controller.nestClient).Sync_StartAllianceOp(context.Context(), playerID, op, data, coins, key)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error(endpoint+" failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.AllianceResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.AllianceResponse{SagaKey: started}, nil
+}
+
+// shownAlliance reads the alliance the player is shown in (PlayerDao.Alliance.ID),
+// under the player's lock: the player's own copy of their membership, 0 for
+// none. Advisory: the alliance service decides every alliance write on its roster.
+func (controller *Controller) shownAlliance(context *playeraccess.Context) (int64, error) {
+	playerID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return 0, err
+	}
+	return syncsender.NewPlayerAllianceSender(controller.nestClient).Sync_PlayerAlliance(context.Context(), playerID)
+}
+
+// allianceMirror reads a alliance; minVersion > 0 asks for a state no older than
+// that version (the player's own write).
+func (controller *Controller) allianceMirror(context *playeraccess.Context, allianceID int64, minVersion int64) (alliancerule.View, error) {
+	if allianceID <= 0 {
+		return alliancerule.View{}, errcode.Wrap(apperrors.ErrAllianceViewMissing, nil, "player_id", context.PlayerID)
+	}
+	target, err := rpcalliance.AllianceTarget(allianceID)
+	if err != nil {
+		return alliancerule.View{}, errcode.Wrap(apperrors.ErrAllianceViewMissing, err, "alliance_id", allianceID)
+	}
+	var after entity.RemoteObservation
+	if minVersion > 0 {
+		after.StateVersion = uint64(minVersion)
+	}
+	value, found, err := controller.allianceMirrors.Read(context.Context(), target, entity.RemoteReadMonotonic, after)
+	if err != nil {
+		return alliancerule.View{}, errcode.Wrap(apperrors.ErrAllianceBusy, err, "alliance_id", allianceID)
+	}
+	if !found || !value.Value.Founded() {
+		return alliancerule.View{}, errcode.Wrap(apperrors.ErrAllianceViewMissing, nil, "alliance_id", allianceID)
+	}
+	return value.Value.View(allianceID, int64(value.Observation.StateVersion)), nil
+}
+
+// showAlliance updates the player's copy after their own join or leave (or a
+// founding they asked the status of). Best effort: a copy left stale is
+// corrected by a notice or checked at the next login.
+func (controller *Controller) showAlliance(context *playeraccess.Context, allianceID int64, replaces int64) {
+	playerID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err == nil {
+		_, err = syncsender.NewShowAllianceSender(controller.nestClient).Sync_ShowAlliance(context.Context(), playerID, allianceID, replaces)
+	}
+	if err != nil {
+		slog.Warn("alliance: display not updated", "player_id", context.PlayerID, "alliance_id", allianceID, "err", err)
+	}
+}
+
+// boundSID 在 IO 上下文核对归属；搬服中、已换服或归属未知时不发起新的联盟写。
+func (controller *Controller) boundSID(context *playeraccess.Context) (int32, error) {
+	sid, moving, err := alliance.Binding(context.Context(), controller.registry, context.PlayerID, controller.sid)
+	if err != nil {
+		return 0, err
+	}
+	if moving {
+		return 0, errcode.Wrap(apperrors.ErrAllianceBusy, nil, "player_id", context.PlayerID)
+	}
+	if sid != controller.sid {
+		return 0, errcode.Wrap(apperrors.ErrAllianceMoved, nil, "player_id", context.PlayerID, "sid", sid)
+	}
+	return sid, nil
+}
+
+// allianceRefusal is a refused alliance request, coded for the client (alliance.Answer).
+func allianceRefusal(context *playeraccess.Context, endpoint string, err error) *pb.AllianceResponse {
+	code, reason, internal := alliance.Answer(err)
+	if internal {
+		slog.Warn(endpoint+": alliance service answer", "player_id", context.PlayerID, "code", code, "err", err)
+	}
+	return &pb.AllianceResponse{Code: code, Reason: reason}
+}
+
+// allianceReply is a alliance on the wire.
+func allianceReply(view alliancerule.View, servedBy int32) *pb.AllianceResponse {
+	return &pb.AllianceResponse{
+		AllianceID: view.AllianceID, Name: view.Name, Members: int32(len(view.Members)), ServedBySID: servedBy,
+		LeaderID: view.LeaderID, Funds: view.Funds, Version: view.Version,
+	}
+}

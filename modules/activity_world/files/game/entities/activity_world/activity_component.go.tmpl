@@ -1,0 +1,30 @@
+package activity_world
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/activity"
+)
+
+//roost:component type={{ID:component:WorldActivity}}
+const CompTypeWorldActivity entity.ComponentType = {{ID:component:WorldActivity}}
+
+// WorldActivityComponent 是同一个 activity.Component 的类型别名，只为当前实体的生成接线命名。
+// 活动业务全部在共用组件中；这里仅提供宿主状态与归属。
+type WorldActivityComponent = activity.Component
+
+type IWorldActivityEntity interface {
+	entity.IThreadSafeEntity
+	WorldActivityComp() *WorldActivityComponent
+	Dao() *db.ActivityWorldDao
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeWorldActivity, activity.NewComponent)
+}
+
+func (e *ActivityWorld) ActivityBook() *db.ActivityBook { return e.Dao().GetActivityWorld() }
+func (e *ActivityWorld) ActivityScope() string          { return "world" }
+
+func (e *ActivityWorld) ActivityCreatedAt() int64 { return e.Dao().GetCreatedAt() }

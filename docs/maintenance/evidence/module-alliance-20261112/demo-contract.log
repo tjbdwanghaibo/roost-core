@@ -1,0 +1,6 @@
+=== RUN   TestDemoTemplateGeneratesABuildableWritePath
+=== PAUSE TestDemoTemplateGeneratesABuildableWritePath
+=== CONT  TestDemoTemplateGeneratesABuildableWritePath
+--- PASS: TestDemoTemplateGeneratesABuildableWritePath (24.44s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	25.243s

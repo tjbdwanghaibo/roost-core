@@ -1,0 +1,35 @@
+package activity
+
+import (
+	"context"
+	"testing"
+
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+
+	"{{MODULE}}/game/mailbox"
+)
+
+type activityMailSink struct{ keys []string }
+
+func (s *activityMailSink) Send(_ context.Context, r svcmail.SendRequest) (svcmail.Envelope, error) {
+	s.keys = append(s.keys, r.RequestID)
+	return svcmail.Envelope{}, nil
+}
+
+func TestWithActivityMailboxUsesStableInstanceKey(t *testing.T) {
+	sink := &activityMailSink{}
+	token := Token{Scope: "world", Owner: 71, Definition: 1, Generation: 1, Cycle: 1, Phase: Settling}
+	letter := mailbox.Letter{To: 91, Subject: "activity", Attachment: mailbox.Coins(10)}
+	for range 2 {
+		if _, e := SendReward(context.Background(), sink, token, "winner", letter); e != nil {
+			t.Fatal(e)
+		}
+	}
+	token.Cycle = 2
+	if _, e := SendReward(context.Background(), sink, token, "winner", letter); e != nil {
+		t.Fatal(e)
+	}
+	if sink.keys[0] != sink.keys[1] || sink.keys[1] == sink.keys[2] {
+		t.Fatal(sink.keys)
+	}
+}

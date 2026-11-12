@@ -1,0 +1,34 @@
+=== RUN   TestModuleMatchmakingGenerated
+    module_matchmaking_test.go:15: matchmaking: pass=16 skip=0 ok=true
+    module_matchmaking_test.go:15: matchroom: pass=12 skip=0 ok=true
+    module_matchmaking_test.go:15: room: pass=22 skip=0 ok=true
+    module_matchmaking_test.go:15: team: pass=27 skip=0 ok=true
+    module_matchmaking_test.go:21: matchmaking: pass=16 skip=0 ok=true
+    module_matchmaking_test.go:21: matchmaking+rehome: pass=2 skip=0 ok=true
+    module_matchmaking_test.go:21: matchroom: pass=12 skip=0 ok=true
+    module_matchmaking_test.go:21: rehome: pass=40 skip=0 ok=true
+    module_matchmaking_test.go:21: room: pass=22 skip=0 ok=true
+    module_matchmaking_test.go:21: team: pass=27 skip=0 ok=true
+    module_matchmaking_test.go:21: team+rehome: pass=2 skip=0 ok=true
+--- PASS: TestModuleMatchmakingGenerated (57.59s)
+=== RUN   TestModuleMatchroomGenerated
+    module_matchroom_test.go:15: matchroom: pass=12 skip=0 ok=true
+    module_matchroom_test.go:15: room: pass=22 skip=0 ok=true
+    module_matchroom_test.go:21: caught mutation in game/entities/room/matchroom_component.go: outsider admitted:
+--- PASS: TestModuleMatchroomGenerated (19.15s)
+=== RUN   TestModuleTeamGenerated
+    module_team_test.go:41: team: pass=27 skip=0 ok=true
+    module_team_test.go:47: rehome: pass=40 skip=0 ok=true
+    module_team_test.go:47: team: pass=27 skip=0 ok=true
+    module_team_test.go:47: team+rehome: pass=2 skip=0 ok=true
+    module_team_test.go:53: caught mutation in game/entities/team/roster.go: deadline accepted:
+    module_team_test.go:54: caught mutation in game/entities/team/roster.go: ninth member accepted:
+    module_team_test.go:55: caught mutation in game/entities/team/roster.go: 65th invitation accepted:
+    module_team_test.go:56: caught mutation in game/entities/team/roster.go: leader handoff=
+    module_team_test.go:57: caught mutation in game/entities/team/roster.go: empty team ID reused:
+    module_team_test.go:58: caught mutation in game/entities/player/team_component.go: joined second team:
+    module_team_test.go:59: caught mutation in game/entities/player/team_rehome.go: team allowed rehome:
+    module_team_test.go:60: caught mutation in game/entities/player/team_rehome.go: moving player joined:
+--- PASS: TestModuleTeamGenerated (47.60s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	125.068s

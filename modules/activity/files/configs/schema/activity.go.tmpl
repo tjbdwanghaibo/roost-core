@@ -1,0 +1,26 @@
+package schema
+
+// Activity 是活动定义，不含业务流程或奖励。ID 不复用；改规则必须提升 Version。
+// Trigger: fixed 用 StartMilli；created 由建档事实提供时间；event 由可信业务事件触发。
+// Repeat: none / interval / daily / weekly。日历活动从业务日界开期，Period 是日/周数。
+// Catchup: queue 保留每期责任；skip_empty 只允许没有 Logic 的纯展示活动跳过完整过期的期次。
+//
+//roost:table name=activity key=ID
+type Activity struct {
+	ID           int32  `csv:"id" json:"id" required:"true" unique:"true" min:"1" max:"128"`
+	Version      int64  `csv:"version" json:"version" min:"1"`
+	Scope        string `csv:"scope" json:"scope" required:"true" enum:"player|world|alliance"`
+	Trigger      string `csv:"trigger" json:"trigger" required:"true" enum:"fixed|created|event"`
+	Event        string `csv:"event" json:"event"`
+	StartMilli   int64  `csv:"start_milli" json:"start_milli"`
+	DelayMillis  int64  `csv:"delay_millis" json:"delay_millis" min:"0"`
+	WarmupMillis int64  `csv:"warmup_millis" json:"warmup_millis" min:"0"`
+	OpenMillis   int64  `csv:"open_millis" json:"open_millis" min:"1"`
+	Repeat       string `csv:"repeat" json:"repeat" required:"true" enum:"none|interval|daily|weekly"`
+	Period       int64  `csv:"period" json:"period" min:"0"`
+	MaxCycles    int64  `csv:"max_cycles" json:"max_cycles" min:"0"`
+	UntilMilli   int64  `csv:"until_milli" json:"until_milli" min:"0"`
+	Catchup      string `csv:"catchup" json:"catchup" required:"true" enum:"queue|skip_empty"`
+	Logic        string `csv:"logic" json:"logic"`
+	Disabled     bool   `csv:"disabled" json:"disabled"`
+}

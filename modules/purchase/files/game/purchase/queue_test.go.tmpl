@@ -1,0 +1,67 @@
+package purchase
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+type purchaseRedis struct {
+	fredis.IRedis
+	result any
+	calls  int
+}
+
+func (c *purchaseRedis) Eval(context.Context, string, []string, ...any) (any, error) {
+	c.calls++
+	return c.result, nil
+}
+func TestPurchaseDefaultProductHasExactMoneyAndReward(t *testing.T) {
+	product, ok := LookupProduct("coins_100")
+	if !ok || product.AmountMinor != 99 || product.Currency != "USD" || product.Reward != (Reward{Kind: "coins", Count: 100}) {
+		t.Fatalf("product=%+v found=%v", product, ok)
+	}
+	if _, ok := LookupProduct("unknown"); ok {
+		t.Fatal("unknown product accepted")
+	}
+}
+func TestPurchaseMismatchedMoneyDoesNotQueue(t *testing.T) {
+	client := &purchaseRedis{result: []any{}}
+	queue, _ := NewRedisQueue(client, "test")
+	_, err := queue.Record(context.Background(), svcplatform.Order{OrderID: "one", PlayerID: 98801, ProductID: "coins_100", PayloadDigest: "digest", AmountMinor: 1, Currency: "USD"})
+	if !errors.Is(err, svcplatform.ErrOrderMismatch) || client.calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, client.calls)
+	}
+}
+func TestPurchaseExistingSnapshotSurvivesCatalogueChange(t *testing.T) {
+	grant := Grant{OrderID: "one", PlayerID: 98801, ProductID: "removed", Digest: "digest", Reward: Reward{Kind: "coins", Count: 500}}
+	raw, _ := json.Marshal(grant)
+	client := &purchaseRedis{result: []any{"7", string(raw)}}
+	queue, _ := NewRedisQueue(client, "test")
+	got, err := queue.Record(context.Background(), svcplatform.Order{OrderID: "one", PlayerID: 98801, ProductID: "removed", PayloadDigest: "digest", AmountMinor: 99, Currency: "USD"})
+	if err != nil || got.Sequence != 7 || got.Reward.Count != 500 || client.calls != 1 {
+		t.Fatalf("grant=%+v err=%v calls=%d", got, err, client.calls)
+	}
+}
+func TestPurchaseCorruptQueueReplyIsNeverAReceipt(t *testing.T) {
+	for _, input := range []any{nil, 1, []any{"1"}, []any{"bad", `{}`}, []any{"1", `{}`}, []any{"0", `{"order_id":"one","player_id":1,"product_id":"x","digest":"d","reward":{"type":"coins","amount":1}}`}} {
+		if grants, err := decodeGrants(input); err == nil {
+			t.Fatalf("invalid input accepted: %v => %+v", input, grants)
+		}
+	}
+}
+
+func TestPurchaseExistingOrderRejectsChangedPayment(t *testing.T) {
+	grant := Grant{OrderID: "one", PlayerID: 98801, ProductID: "coins_100", Digest: "original", Reward: Reward{Kind: "coins", Count: 100}}
+	raw, _ := json.Marshal(grant)
+	client := &purchaseRedis{result: []any{"1", string(raw)}}
+	queue, _ := NewRedisQueue(client, "test")
+	_, err := queue.Record(context.Background(), svcplatform.Order{OrderID: "one", PlayerID: 98801, ProductID: "coins_100", PayloadDigest: "changed", AmountMinor: 99, Currency: "USD"})
+	if !errors.Is(err, svcplatform.ErrOrderMismatch) || client.calls != 1 {
+		t.Fatalf("changed payment err=%v calls=%d", err, client.calls)
+	}
+}

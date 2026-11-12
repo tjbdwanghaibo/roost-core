@@ -9,7 +9,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"{{MODULE}}/game/effects"
+	"{{MODULE}}/game/mailbox"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
@@ -17,7 +17,7 @@ import (
 
 // 档案（名字、等级、经验）是 profile 模块的，它自己的规则由模块的场景钉住（game/handler/profile_test.go）。
 // 这里钉的是 demo 在它之上的东西：Player 与 World 两个实体的发放要么都成、要么都不动；升级的两个后果
-// （属性、player.level_up 这个 effect）经模块的升级钩子随同一笔事务走。
+// （属性、mailbox.profile_reward 这个 effect）经模块的升级钩子随同一笔事务走。
 
 // 两个正数溢出不能被当作成功经验发放；Player 与 World 必须一起保持原值。
 func TestExperienceAdditionRejectsOverflow(t *testing.T) {
@@ -162,10 +162,8 @@ func TestExperienceOverflowIsRefusedBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-// “升级 → 奖励邮件”这条事件链的起点：升级的那一笔提交里带着 player.level_up 这个 effect（奖励邮件由它的消费者发），
-// 没升级的发放不带。升级的事由档案模块的 AddExp 调升级钩子发出（game/entities/player/profile_levelup.go，demo 覆盖了
-// 模块的缺省钩子），所以不论从哪条路进 AddExp——demo 的两实体 AddExp、副本领奖、模块自己的 ProfileAddExp——都一样：
-// 钩子要是被换回模块的缺省实现，这里就没有 effect、属性也不涨。
+// 升级事务的奖励 effect 来自 mailbox/profile 联动；demo 仅覆盖奖励规则。
+// 两实体 AddExp 与模块 ProfileAddExp 都必须带同一条奖励快照，没升级则没有 effect。
 func TestLevelUpCarriesTheRewardEffectInTheSameCommit(t *testing.T) {
 	const now int64 = 1_800_000_000
 	pinBusinessClock(t, now)
@@ -174,20 +172,20 @@ func TestLevelUpCarriesTheRewardEffectInTheSameCommit(t *testing.T) {
 	RegisterProfileAddExpNestHandlers()
 	ctx := context.Background()
 
-	// levelUps 是上一笔提交里的 player.level_up；同时要求这笔提交确实是新的一笔。
+	// levelUps 是上一笔提交里的 mailbox.profile_reward；同时要求这笔提交确实是新的一笔。
 	seen := 0
-	levelUps := func(what string) []effects.PlayerLevelUp {
+	levelUps := func(what string) []mailbox.ProfileReward {
 		t.Helper()
 		if len(committer.records) != seen+1 {
 			t.Fatalf("%s: %d commits so far, want %d", what, len(committer.records), seen+1)
 		}
 		seen = len(committer.records)
-		var out []effects.PlayerLevelUp
+		var out []mailbox.ProfileReward
 		for _, effect := range committer.records[seen-1].Effects {
-			if effect.Topic != effects.TopicPlayerLevelUp {
+			if effect.Topic != mailbox.TopicProfileReward {
 				t.Fatalf("%s: unexpected effect %q", what, effect.Topic)
 			}
-			var event effects.PlayerLevelUp
+			var event mailbox.ProfileReward
 			if err := json.Unmarshal(effect.Payload, &event); err != nil {
 				t.Fatalf("%s: decode the effect: %v", what, err)
 			}
@@ -195,7 +193,7 @@ func TestLevelUpCarriesTheRewardEffectInTheSameCommit(t *testing.T) {
 		}
 		return out
 	}
-	wantOne := func(what string, got []effects.PlayerLevelUp, level int32) {
+	wantOne := func(what string, got []mailbox.ProfileReward, level int32) {
 		t.Helper()
 		if len(got) != 1 || got[0].PlayerID != subject.UniqueID() || got[0].Level != level {
 			t.Fatalf("%s: effects = %+v, want one level-up of player %d to level %d", what, got, subject.UniqueID(), level)

@@ -1,0 +1,95 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/purchase"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+)
+
+func newPurchaseBag(t *testing.T) *purchaseFixture {
+	t.Helper()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(registry, "../../configs/data").Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return newPurchaseFixture(t)
+}
+func purchaseItemGrant() purchase.Grant {
+	g := purchaseTestGrant(1)
+	g.Reward = purchase.Reward{Kind: "item", ID: 1001, Count: 3}
+	return g
+}
+func purchaseBagCount(t *testing.T, f *purchaseFixture) int64 {
+	t.Helper()
+	var count int64
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.target.GetMutex().Lock()
+		defer f.target.GetMutex().Unlock()
+		count = f.target.BagComp().Count(1001)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+func TestWithPurchaseBagGrantAndReplay(t *testing.T) {
+	f := newPurchaseBag(t)
+	first, err := f.apply(purchaseItemGrant())
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := f.apply(purchaseItemGrant())
+	if err != nil || first != again || purchaseBagCount(t, f) != 3 {
+		t.Fatalf("replay=%+v first=%+v count=%d err=%v", again, first, purchaseBagCount(t, f), err)
+	}
+	f.expect(t, 1, 0, 1)
+}
+func TestWithPurchaseBagUnknownItemLeavesCursor(t *testing.T) {
+	f := newPurchaseBag(t)
+	g := purchaseItemGrant()
+	g.Reward.ID = 999999
+	if _, err := f.apply(g); err == nil {
+		t.Fatal("unknown item accepted")
+	}
+	f.expect(t, 0, 0, 0)
+	if purchaseBagCount(t, f) != 0 {
+		t.Fatal("bag changed")
+	}
+}
+func TestWithPurchaseBagOverflowLeavesCursor(t *testing.T) {
+	f := newPurchaseBag(t)
+	g := purchaseItemGrant()
+	g.Reward.Count = 1000000
+	if _, err := f.apply(g); err == nil {
+		t.Fatal("overflow accepted")
+	}
+	f.expect(t, 0, 0, 0)
+	if purchaseBagCount(t, f) != 0 {
+		t.Fatal("bag changed")
+	}
+}
+func TestWithPurchaseBagCommitFailureRollsBackBoth(t *testing.T) {
+	f := newPurchaseBag(t)
+	f.committer.reject.Store(true)
+	if _, err := f.apply(purchaseItemGrant()); err == nil {
+		t.Fatal("commit failure hidden")
+	}
+	f.expect(t, 0, 0, 0)
+	if purchaseBagCount(t, f) != 0 {
+		t.Fatal("bag changed")
+	}
+	f.committer.reject.Store(false)
+	if _, err := f.apply(purchaseItemGrant()); err != nil {
+		t.Fatal(err)
+	}
+	if purchaseBagCount(t, f) != 3 {
+		t.Fatal("retry did not grant exactly once")
+	}
+	f.expect(t, 1, 0, 1)
+}

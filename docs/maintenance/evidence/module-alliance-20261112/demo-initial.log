@@ -1,0 +1,21 @@
+=== RUN   TestDemoAllianceModuleIntegration
+    module_alliance_test.go:96: go test -count=1 -run ^TestAlliance|^TestWithAlliance|^TestRehome|^TestTeam|^TestA.*Step|^TestThePlayerSteps ./game/handler ./game/alliance/... ./game/controllers/alliance ./internal/rpc/alliance ./internal/service/game ./db in the generated project: exit status 1
+        ok  	example.com/planet/game/handler	0.580s
+        ok  	example.com/planet/game/alliance	1.037s
+        ok  	example.com/planet/game/alliance/runtime	2.059s
+        ok  	example.com/planet/game/controllers/alliance	1.505s
+        ok  	example.com/planet/internal/rpc/alliance	2.687s
+        2026/11/12 14:44:44 INFO account: role transfer begun player_id=94501 transfer_id=move-1 from=1000 to=1001 epoch=0 transfer_seq=1
+        2026/11/12 14:44:44 INFO account: role transfer committed player_id=94501 transfer_id=move-1 from=1000 to=1001 bind_epoch=1 note=""
+        2026/11/12 14:44:44 ERROR gift saga: rejecting a step whose payload names no sender sid player_id=42 command=cmd-1 saga_id=saga-1
+        2026/11/12 14:44:44 ERROR gift saga: rejecting a step whose payload names no sender sid player_id=77 command=cmd-1 saga_id=saga-1
+        --- FAIL: TestRehomeRefusesPartitionedScene (0.00s)
+            rehome_checks_test.go:18: partitioned scene allowed rehome
+        FAIL
+        FAIL	example.com/planet/internal/service/game	3.991s
+        ok  	example.com/planet/db	2.041s
+        FAIL
+--- FAIL: TestDemoAllianceModuleIntegration (34.10s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	34.851s
+FAIL

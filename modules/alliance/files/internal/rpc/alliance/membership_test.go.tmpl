@@ -1,0 +1,1194 @@
+package alliance
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+)
+
+// approveBoth has the leaders of two alliances approve the same applicant at
+// the same time, through the generated client, and returns the two answers.
+func approveBoth(t *testing.T, c *cluster, player int64, alliances [2]int64, leaders [2]int64) [2]error {
+	var answers [2]error
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range alliances {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, answers[i] = c.client().Approve(ctx, fmt.Sprintf("approve-%d-%d", alliances[i], player), leaders[i], homeSID, mustAllianceTarget(t, alliances[i]), player)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	return answers
+}
+
+// applyBoth has player apply to both alliances.
+func applyBoth(t *testing.T, c *cluster, player int64, alliances [2]int64) {
+	t.Helper()
+	for _, allianceID := range alliances {
+		if _, err := c.client().Apply(ctx, fmt.Sprintf("apply-%d-%d", allianceID, player), player, homeSID, mustAllianceTarget(t, allianceID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// requireOneAlliance checks one player, one alliance after a race: exactly one
+// approval succeeded, the other was refused for membership, exactly one
+// roster holds the player and the guard names that alliance with nothing
+// pending.
+func requireOneAlliance(t *testing.T, c *cluster, player int64, alliances [2]int64, answers [2]error) {
+	t.Helper()
+	winner := -1
+	for i, err := range answers {
+		switch {
+		case err == nil:
+			if winner >= 0 {
+				t.Fatalf("player %d: both approvals succeeded", player)
+			}
+			winner = i
+		case !errors.Is(err, apperrors.ErrAllianceMembership):
+			t.Fatalf("player %d: approval %d answered %v (outcome %s), want success or alliance_membership", player, i, err, servicerpc.Classify(err))
+		}
+	}
+	if winner < 0 {
+		t.Fatalf("player %d: neither approval succeeded: %v", player, answers)
+	}
+	for i, allianceID := range alliances {
+		if in := has(members(info(t, c, allianceID)), player); in != (i == winner) {
+			t.Fatalf("player %d: in alliance %d = %v, winner is %d", player, allianceID, in, alliances[winner])
+		}
+	}
+	if guard := guardState(t, c, player); guard.AllianceID != alliances[winner] || guard.PendingRequestID != "" {
+		t.Fatalf("player %d: guard %+v, want alliance %d and nothing pending", player, guard, alliances[winner])
+	}
+}
+
+// Two alliances on one instance approving the same player at once: the guard
+// check and the seat are one transaction, so only one finds the guard free.
+func TestAllianceOnePlayerOneAllianceOnOneInstance(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	alliances := [2]int64{found(t, c, 3000, "found-a", 100, false), found(t, c, 3000, "found-b", 104, false)}
+	leaders := [2]int64{100, 104}
+	for player := int64(200); player < 240; player++ {
+		applyBoth(t, c, player, alliances)
+		requireOneAlliance(t, c, player, alliances, approveBoth(t, c, player, alliances, leaders))
+	}
+}
+
+// The same race with the alliances on two instances: alliance A and the
+// player's guard on 3000, alliance B on 3001. A admits in one transaction;
+// B reserves the guard on 3000 first (a route RPC). Whatever the
+// interleaving, one wins.
+func TestAllianceOnePlayerOneAllianceAcrossInstances(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	alliances, leaders := [2]int64{found(t, c, 3000, "found-a", 100, false), found(t, c, 3001, "found-b", 102, false)}, [2]int64{100, 102}
+	for player := int64(201); player < 241; player++ {
+		c.seedGuard(t, 3000, player) // the player's guard was created on 3000 earlier
+		applyBoth(t, c, player, alliances)
+		answers := approveBoth(t, c, player, alliances, leaders)
+		c.runFollowUps() // nothing to run: B's win is confirmed on the guard by its direct finish, and no effect is recorded
+		requireOneAlliance(t, c, player, alliances, answers)
+	}
+	// Every membership change was noticed to the player's game server,
+	// straight from the service.
+	if len(c.notices) == 0 || c.notices[len(c.notices)-1].Change != alliancerule.MemberJoined {
+		t.Fatalf("notices = %+v", c.notices)
+	}
+}
+
+// Two instances that both find a player's guard missing create it at once:
+// the claim of the first write is atomic, so exactly one becomes the guard's
+// owner; the other's transaction is fenced, commits nothing, and goes on in
+// two steps through the route RPC to the winner — one player, one alliance,
+// and both answers final (plan §2.5).
+func TestAllianceConcurrentGuardCreationHasOneOwner(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	alliances, leaders := [2]int64{found(t, c, 3000, "found-a", 100, false), found(t, c, 3001, "found-b", 102, false)}, [2]int64{100, 102}
+	for player := int64(500); player < 520; player++ {
+		guard := mustGuardTarget(t, player)
+		applyBoth(t, c, player, alliances)
+		c.gate(guard, 2) // both admissions reach the claim together
+		answers := approveBoth(t, c, player, alliances, leaders)
+		c.runFollowUps()
+		owner, claimed := c.owner(guard)
+		if !claimed {
+			t.Fatalf("player %d: nobody owns the guard", player)
+		}
+		requireOneAlliance(t, c, player, alliances, answers)
+		// The loser loaded a copy of the guard while trying; the guard the
+		// route RPC reaches is the owner's.
+		if served, err := c.client().Guard(ctx, guard); err != nil || served.ServedBySID != owner {
+			t.Fatalf("player %d: guard served by %d (err %v), owner %d", player, served.ServedBySID, err, owner)
+		}
+	}
+}
+
+// A guard reservation whose deadline passed is settled by the alliance, the
+// authority: released when the alliance never seated the player (and that
+// request can then never seat them), confirmed when it did — never released
+// on the clock alone, even while the alliance cannot be reached. The
+// deadline is armed in the process of the instance that made the reservation
+// (the guard's owner), not in a shared entity.
+func TestAllianceReservationDeadlineIsSettledByTheAlliance(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	allianceID := found(t, c, 3001, "found", 102, false)
+	target := mustAllianceTarget(t, allianceID)
+	guards, alliances := c.instances[3000], c.instances[3001]
+
+	// The approving instance reserved player 201's guard (on 3000) and then
+	// went away before seating them.
+	const player, request = int64(201), "approve-lost"
+	c.seedGuard(t, 3000, player)
+	if _, err := client.Apply(ctx, "apply-201", player, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+	deadline := c.now.Add(c.rules.ReservationTTL).Unix()
+	if _, err := client.ReserveGuard(ctx, request, mustGuardTarget(t, player), allianceID, deadline); err != nil {
+		t.Fatal(err)
+	}
+	if armed := guards.svc.follow.pending(); armed != 1 {
+		t.Fatalf("reservation deadline not armed on the guard's instance: %d armed", armed)
+	}
+	if c.runFollowUps() != 0 {
+		t.Fatal("the deadline ran before it passed")
+	}
+
+	// The deadline passes while the alliance cannot be reached: the guard
+	// stays reserved and the deadline is armed again for later.
+	alliances.remote.fence(target, fmt.Errorf("reloading: %w", entity.ErrRemoteEntityReloading))
+	c.now = c.now.Add(c.rules.ReservationTTL)
+	c.runFollowUps()
+	if guard := guardState(t, c, player); guard.PendingRequestID != request {
+		t.Fatalf("guard released on the clock: %+v", guard)
+	}
+	if armed := guards.svc.follow.pending(); armed != 1 {
+		t.Fatalf("an unsettled deadline is not tried again: %d armed", armed)
+	}
+	alliances.remote.fence(target, nil)
+
+	c.now = c.now.Add(retryDelay(0))
+	c.runFollowUps()
+	if guard := guardState(t, c, player); guard.PendingRequestID != "" || guard.AllianceID != 0 {
+		t.Fatalf("after settling a request the alliance never ran: guard %+v, want released", guard)
+	}
+	if armed := guards.svc.follow.pending(); armed != 0 {
+		t.Fatalf("the settled reservation's deadline is still armed (%d)", armed)
+	}
+	// The approval arrives late with the same request id: refused, and the
+	// player is not seated behind a released guard.
+	_, err := client.Approve(ctx, request, 102, homeSID, target, player)
+	requireRejected(t, "the late approval", err, apperrors.ErrAllianceExpired)
+	if has(members(info(t, c, allianceID)), player) {
+		t.Fatal("the late approval seated the player after the guard was released")
+	}
+
+	// The other way round: the alliance seated player 205 but the call that
+	// confirms the guard was lost. At the deadline the guard asks, and is
+	// confirmed, not released.
+	const seated = int64(205)
+	c.seedGuard(t, 3000, seated)
+	if _, err := client.Apply(ctx, "apply-205", seated, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+	c.lose(MethodResolveGuard, 1) // the confirmation is lost
+	if _, err := client.Approve(ctx, "approve-205", 102, homeSID, target, seated); err != nil {
+		t.Fatal(err)
+	}
+	c.now = c.now.Add(c.rules.ReservationTTL)
+	c.runFollowUps()
+	if guard := guardState(t, c, seated); guard.AllianceID != allianceID || guard.PendingRequestID != "" {
+		t.Fatalf("seated player's guard after the deadline = %+v, want confirmed in %d", guard, allianceID)
+	}
+
+	// The deadline is not persistent: lost with the guard instance's process,
+	// the reservation is settled by the next request that finds it held.
+	const orphan = int64(206)
+	c.seedGuard(t, 3000, orphan)
+	if _, err := client.ReserveGuard(ctx, "approve-orphan", mustGuardTarget(t, orphan), allianceID, c.now.Add(c.rules.ReservationTTL).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	c.restartFollowUps(3000)
+	c.now = c.now.Add(c.rules.ReservationTTL)
+	if c.runFollowUps() != 0 {
+		t.Fatal("a deadline survived the restart")
+	}
+	if _, err := client.Apply(ctx, "apply-206", orphan, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Approve(ctx, "approve-206", 102, homeSID, target, orphan); err != nil {
+		t.Fatalf("the next approval after a lost deadline: %v", err)
+	}
+	if guard := guardState(t, c, orphan); guard.AllianceID != allianceID || guard.PendingRequestID != "" {
+		t.Fatalf("guard after the lost deadline and a join: %+v", guard)
+	}
+}
+
+// Found carries no route, so a retry of the same request id may reach
+// another instance (plan §2.3): it founds the alliance the founder's guard
+// bound the request to, never a second one.
+func TestAllianceFoundRetriedOnAnotherInstanceFoundsNoSecondAlliance(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+
+	// The first delivery founded alliance X on 3000 (the founder's guard is
+	// there too); its answer was lost, and the retry lands on 3001.
+	x := found(t, c, 3000, "found-300", 300, false)
+	retry, err := c.via(3001).Found(ctx, "found-300", 300, homeSID, "alliance-found-300", false)
+	if err != nil || retry.Alliance.AllianceID != x || !retry.Replayed {
+		t.Fatalf("retry on 3001: reply %+v err %v, want alliance %d replayed", retry, err, x)
+	}
+	if extra := c.instances[3001].store.founded(t); len(extra) != 0 {
+		t.Fatalf("the retry on 3001 founded %v, want alliance %d replayed and nothing founded on 3001", extra, x)
+	}
+
+	// The first delivery (on 3001, the guard on 3000) reserved the guard for
+	// the id it minted and stopped before creating the alliance. The retry,
+	// on 3001 again or anywhere, founds that id — the one the guard holds.
+	c.seedGuard(t, 3000, 301)
+	minted := must(c.Next(ctx))
+	if _, err := c.client().ReserveGuard(ctx, "found-301", mustGuardTarget(t, 301), minted, c.now.Add(c.rules.ReservationTTL).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := c.via(3001).Found(ctx, "found-301", 301, homeSID, "alliance-found-301", false)
+	if err != nil || resumed.Alliance.AllianceID != minted || resumed.Alliance.LeaderID != 301 {
+		t.Fatalf("resumed founding: reply %+v err %v, want alliance %d led by 301", resumed, err, minted)
+	}
+	// the resumed founding confirms the guard directly
+	if guard := guardState(t, c, 301); guard.AllianceID != minted || guard.PendingRequestID != "" {
+		t.Fatalf("founder's guard = %+v, want in %d", guard, minted)
+	}
+	// Once more, now that it is founded: replayed, from whichever instance.
+	for _, sid := range []int32{3000, 3001} {
+		again, err := c.via(sid).Found(ctx, "found-301", 301, homeSID, "alliance-found-301", false)
+		if err != nil || again.Alliance.AllianceID != minted || !again.Replayed {
+			t.Fatalf("retry on %d: reply %+v err %v, want alliance %d replayed", sid, again, err, minted)
+		}
+	}
+	leaders := map[int64]int64{}
+	for _, sid := range c.sids() {
+		for id, leader := range c.instances[sid].store.founded(t) {
+			leaders[id] = leader
+		}
+	}
+	if len(leaders) != 2 || leaders[x] != 300 || leaders[minted] != 301 {
+		t.Fatalf("founded alliances %v, want %d led by 300 and %d led by 301", leaders, x, minted)
+	}
+
+	// A founding whose instance stopped for good: at the deadline the guard
+	// settles the minted id, which nobody created — it is created empty and
+	// the request recorded as expired, so a late retry is refused.
+	c.seedGuard(t, 3000, 302)
+	abandoned := must(c.Next(ctx))
+	if _, err := c.client().ReserveGuard(ctx, "found-302", mustGuardTarget(t, 302), abandoned, c.now.Add(c.rules.ReservationTTL).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	c.now = c.now.Add(c.rules.ReservationTTL)
+	c.runFollowUps() // the reservation's deadline, armed on the guard's instance
+	if guard := guardState(t, c, 302); guard.PendingRequestID != "" || guard.AllianceID != 0 {
+		t.Fatalf("abandoned founding: guard %+v, want released", guard)
+	}
+	_, err = c.via(3001).Found(ctx, "found-302", 302, homeSID, "alliance-found-302", false)
+	requireRejected(t, "the late founding", err, apperrors.ErrAllianceExpired)
+}
+
+// Two alliances on one instance change in one transaction: a war declaration
+// records both sides or neither.
+func TestAllianceWarIsOneTransactionOnOneInstance(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	client := c.client()
+	in := c.instances[3000]
+	a, b := found(t, c, 3000, "found-a", 100, false), found(t, c, 3000, "found-b", 104, false)
+
+	records := in.committer.count()
+	if _, err := client.DeclareWar(ctx, "war-a-b", 100, homeSID, mustAllianceTarget(t, a), b); err != nil {
+		t.Fatal(err)
+	}
+	if !has(info(t, c, a).Wars, b) || !has(info(t, c, b).Wars, a) {
+		t.Fatalf("war recorded on one side only: a=%v b=%v", info(t, c, a).Wars, info(t, c, b).Wars)
+	}
+	if got := in.committer.count() - records; got != 1 {
+		t.Fatalf("the declaration committed %d records, want both alliances in one", got)
+	}
+
+	// B fills up its wars; a declaration B cannot take changes A neither,
+	// although A's own check passes.
+	for i := int64(0); i < alliancerule.MaxWars-1; i++ {
+		enemy := found(t, c, 3000, fmt.Sprintf("found-enemy-%d", i), 108+4*i, false)
+		if _, err := client.DeclareWar(ctx, fmt.Sprintf("war-b-%d", i), 104, homeSID, mustAllianceTarget(t, b), enemy); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := found(t, c, 3000, "found-d", 200, false)
+	_, err := client.DeclareWar(ctx, "war-d-b", 200, homeSID, mustAllianceTarget(t, d), b)
+	requireRejected(t, "declaring on a full side", err, apperrors.ErrAllianceWar)
+	if wars := info(t, c, d).Wars; len(wars) != 0 {
+		t.Fatalf("the refused declaration left %v on the declaring side", wars)
+	}
+	// An enemy nobody founded is refused before anything is written.
+	_, err = client.DeclareWar(ctx, "war-d-nowhere", 200, homeSID, mustAllianceTarget(t, d), 404)
+	requireRejected(t, "declaring on an alliance nobody founded", err, apperrors.ErrAllianceMissing)
+}
+
+// Across instances the declaration is two steps (plan §2.9): the declaring side
+// now, the enemy's side asked for by the service after the declaration
+// answered (AcknowledgeWar, the route RPC) — no effect.
+func TestAllianceWarAcrossInstancesIsEventuallyBothSides(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	a, b := found(t, c, 3000, "found-a", 100, false), found(t, c, 3001, "found-b", 102, false)
+	if _, err := c.client().DeclareWar(ctx, "war", 100, homeSID, mustAllianceTarget(t, a), b); err != nil {
+		t.Fatal(err)
+	}
+	if !has(info(t, c, a).Wars, b) || has(info(t, c, b).Wars, a) {
+		t.Fatal("want the declaring side recorded first, alone")
+	}
+	c.runFollowUps() // the service asks the enemy once the declaration answered
+	if !has(info(t, c, b).Wars, a) {
+		t.Fatal("the enemy side was not recorded by the service's acknowledgment")
+	}
+}
+
+// A stale route (an old registration or cache naming an instance that does
+// not own the alliance) costs one redirect: that instance's route check
+// answers with the recorded owner before entering Nest, and the generated
+// client follows it to the owner.
+func TestAllianceRouteCheckRedirectsBeforeNest(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	allianceID := found(t, c, 3001, "found", 102, false)
+	target := mustAllianceTarget(t, allianceID)
+	c.hint(target, 3000)
+	reply, err := c.client().Apply(ctx, "apply-stale", 101, homeSID, target)
+	if err != nil || reply.ServedBySID != 3001 || !has(reply.Alliance.Applicants, 101) {
+		t.Fatalf("apply through a stale route: reply %+v err %v, want served by the owner 3001", reply, err)
+	}
+	if n := c.instances[3000].remote.admissions(target); n != 0 {
+		t.Fatalf("3000 entered Nest for an alliance it does not own: %d write admissions", n)
+	}
+}
+
+// A write's error reaches the caller as one of the four answers. (Called on
+// the instance directly: the route check passed, and then the write
+// admission said what it says.)
+func TestAllianceWriteErrorsMapToFourAnswers(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	in := c.instances[3000]
+	allianceID := found(t, c, 3000, "found", 100, true)
+	target := mustAllianceTarget(t, allianceID)
+	apply := func(requestID string) error {
+		_, err := in.svc.Apply(ctx, requestID, 101, homeSID, target)
+		return err
+	}
+	for _, tc := range []struct {
+		name     string
+		fence    error
+		owner    int32 // the ownership record while the write runs; -1: none
+		want     servicerpc.Outcome
+		redirect int32
+	}{
+		{name: "ok", want: servicerpc.OutcomeOK},
+		{name: "rejected", want: servicerpc.OutcomeRejected}, // 101 applied in "ok"
+		{name: "reloading", fence: entity.ErrRemoteEntityReloading, want: servicerpc.OutcomeRetryable},
+		{name: "owner transition", fence: entity.ErrRemoteOwnerTransition, want: servicerpc.OutcomeRetryable},
+		{name: "fenced, owner elsewhere", fence: entity.ErrRemoteFenced, owner: 3001, want: servicerpc.OutcomeRetryable, redirect: 3001},
+		{name: "fenced, owner unknown", fence: entity.ErrRemoteFenced, owner: -1, want: servicerpc.OutcomeRetryable},
+		{name: "indeterminate", fence: errors.Join(entity.ErrRemotePersistenceIndeterminate, errors.New("reply lost")), want: servicerpc.OutcomeUnknown},
+	} {
+		in.remote.fence(target, tc.fence)
+		c.mu.Lock()
+		switch {
+		case tc.owner > 0:
+			c.owners[target] = tc.owner
+		case tc.owner < 0:
+			delete(c.owners, target)
+		}
+		c.mu.Unlock()
+		err := apply("apply-" + tc.name)
+		redirect, _ := servicerpc.RedirectSID(err)
+		if got := servicerpc.Classify(err); got != tc.want || redirect != tc.redirect {
+			t.Errorf("%s: outcome %s redirect %d (err %v), want %s redirect %d", tc.name, got, redirect, err, tc.want, tc.redirect)
+		}
+		in.remote.fence(target, nil)
+		c.mu.Lock()
+		c.owners[target] = 3000
+		c.mu.Unlock()
+	}
+}
+
+// alliance.transfer moves what this instance owns — by id, or the first N.
+// A guard with an open reservation moves like any other (its deadline, armed
+// in this process, heals it through the route RPC wherever it is); an
+// alliance whose cross-instance war still waits for its enemy stays
+// (TestLostWarAcknowledgmentIsMadeUp). Afterwards this instance's route check
+// sends callers to the new owner.
+func TestAllianceTransferOwnershipMovesWhatThisInstanceOwns(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	in := c.instances[3000]
+	allianceID := found(t, c, 3000, "found", 100, true) // alliance and guard 100 on 3000
+	target := mustAllianceTarget(t, allianceID)
+	if _, err := client.Join(ctx, "join-101", 101, homeSID, target); err != nil { // guard 101 created on 3000
+		t.Fatal(err)
+	}
+	other := found(t, c, 3001, "found-other", 102, true)
+	c.seedGuard(t, 3000, 105)
+	reservation := c.now.Add(c.rules.ReservationTTL).Unix()
+	if _, err := client.ReserveGuard(ctx, "reserve-105", mustGuardTarget(t, 105), other, reservation); err != nil {
+		t.Fatal(err)
+	}
+	c.seedGuard(t, 3001, 102) // not this instance's
+
+	report, err := in.svc.TransferOwnership(ctx, []int64{mustGuardTarget(t, 102)}, 0, 3001)
+	if err != nil || len(report.Moved) != 0 || report.Failed[mustGuardTarget(t, 102)] == "" {
+		t.Fatalf("transfer of another instance's guard: report %+v err %v, want it refused", report, err)
+	}
+	report, err = in.svc.TransferOwnership(ctx, nil, 10, 3001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := map[int64]bool{}
+	for _, id := range report.Moved {
+		moved[id] = true
+	}
+	want := []int64{target, mustGuardTarget(t, 100), mustGuardTarget(t, 101), mustGuardTarget(t, 105)}
+	for _, id := range want {
+		if owner, _ := c.owner(id); !moved[id] || owner != 3001 {
+			t.Fatalf("report %+v: %d not moved (owner %d)", report, id, owner)
+		}
+	}
+	if len(report.Moved) != len(want) || len(report.Pending) != 0 || len(report.Failed) != 0 {
+		t.Fatalf("report %+v, want %v moved and nothing pending", report, want)
+	}
+	err = in.svc.CheckRoute(ctx, target)
+	if redirect, _ := servicerpc.RedirectSID(err); redirect != 3001 {
+		t.Fatalf("route check on the old owner: err %v, want redirect to 3001", err)
+	}
+	// The moved reservation's deadline, armed on 3000, still settles it on
+	// 3001: the alliance never admitted 105, so it is released.
+	c.now = time.Unix(reservation, 0)
+	c.runFollowUps()
+	if guard := guardState(t, c, 105); guard.PendingRequestID != "" {
+		t.Fatalf("the moved reservation was not settled by its deadline: %+v", guard)
+	}
+
+	// Bounded by the command's deadline: with less than the stop margin left
+	// nothing more is moved, and the report says to run it again.
+	c.seedGuard(t, 3000, 106)
+	short, cancel := context.WithTimeout(ctx, transferStopMargin/2)
+	defer cancel()
+	report, err = in.svc.TransferOwnership(short, nil, 10, 3001)
+	if err != nil || !report.More || len(report.Moved) != 0 {
+		t.Fatalf("transfer near its deadline: report %+v err %v, want nothing moved and More", report, err)
+	}
+	if owner, _ := c.owner(mustGuardTarget(t, 106)); owner != 3000 {
+		t.Fatalf("guard 106 moved to %d past the deadline margin", owner)
+	}
+}
+
+// No alliance write records an effect, reliable or best effort (maintainer,
+// 2026-11-05): founding, joining, approving, leaving and kicking on one
+// instance and across two, a reservation and its deadline, wars on one
+// instance and across. What effects used to carry is the service's, after
+// the write answered: the member's game server is notified straight away —
+// one notice per membership change, none for a replay — a guard on another
+// instance is finished by a direct call, and the enemy's side of a war is
+// asked for directly (the follow-ups).
+func TestAllianceWritesRecordNoEffect(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	a := found(t, c, 3000, "found-a", 100, true) // a and its founder's guard on 3000
+	b := found(t, c, 3001, "found-b", 102, true) // b and its founder's guard on 3001
+	c.seedGuard(t, 3000, 201)                    // 201 joins b in two steps
+	step := func(what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	_, err := client.Join(ctx, "join-200", 200, homeSID, mustAllianceTarget(t, a))
+	step("same-instance join", err)
+	_, err = client.Join(ctx, "join-201", 201, homeSID, mustAllianceTarget(t, b))
+	step("cross-instance join", err)
+	_, err = client.Join(ctx, "join-201", 201, homeSID, mustAllianceTarget(t, b))
+	step("the same join again (a replay)", err)
+	_, err = client.Leave(ctx, "leave-201", 201, homeSID, mustAllianceTarget(t, b))
+	step("cross-instance leave", err)
+	_, err = client.Apply(ctx, "apply-202", 202, homeSID, mustAllianceTarget(t, a))
+	step("apply", err)
+	_, err = client.Approve(ctx, "approve-202", 100, homeSID, mustAllianceTarget(t, a), 202)
+	step("approve", err)
+	_, err = client.Kick(ctx, "kick-202", 100, homeSID, mustAllianceTarget(t, a), 202)
+	step("kick", err)
+	_, err = client.Leave(ctx, "leave-200", 200, homeSID, mustAllianceTarget(t, a))
+	step("same-instance leave", err)
+	d := found(t, c, 3000, "found-d", 104, true)
+	_, err = client.DeclareWar(ctx, "war-a-d", 100, homeSID, mustAllianceTarget(t, a), d)
+	step("war on one instance", err)
+	_, err = client.DeclareWar(ctx, "war-a-b", 100, homeSID, mustAllianceTarget(t, a), b)
+	step("war across instances", err)
+	c.seedGuard(t, 3000, 205) // a reservation whose admission never comes, past its deadline
+	_, err = client.ReserveGuard(ctx, "reserve-205", mustGuardTarget(t, 205), b, c.now.Add(c.rules.ReservationTTL).Unix())
+	step("reserve", err)
+	c.now = c.now.Add(c.rules.ReservationTTL)
+	c.runFollowUps()
+
+	for _, sid := range c.sids() {
+		in := c.instances[sid]
+		var topics []string
+		for _, effect := range append(in.committer.take(), in.committer.takeBestEffort()...) {
+			topics = append(topics, effect.Topic+" ("+effect.Delivery.String()+")")
+		}
+		if len(topics) != 0 {
+			t.Errorf("instance %d: alliance writes recorded effects %v, want none", sid, topics)
+		}
+	}
+	if !has(info(t, c, b).Wars, a) {
+		t.Errorf("the enemy's side of the cross-instance war was not recorded without an effect: b's wars %v", info(t, c, b).Wars)
+	}
+	if guard := guardState(t, c, 205); guard.PendingRequestID != "" {
+		t.Errorf("the reservation past its deadline was not settled without an effect: guard %+v", guard)
+	}
+	type notice struct {
+		alliance, player int64
+		change           string
+	}
+	want := []notice{
+		{a, 100, alliancerule.MemberJoined}, {b, 102, alliancerule.MemberJoined},
+		{a, 200, alliancerule.MemberJoined}, {b, 201, alliancerule.MemberJoined}, {b, 201, alliancerule.MemberLeft},
+		{a, 202, alliancerule.MemberJoined}, {a, 202, alliancerule.MemberKicked}, {a, 200, alliancerule.MemberLeft},
+		{d, 104, alliancerule.MemberJoined},
+	}
+	c.mu.Lock()
+	var got []notice
+	for _, sent := range c.notices {
+		got = append(got, notice{sent.AllianceID, sent.PlayerID, sent.Change})
+		if sent.Version <= 0 {
+			t.Errorf("notice %+v carries no alliance version", sent)
+		}
+	}
+	c.mu.Unlock()
+	if !slices.Equal(got, want) {
+		t.Errorf("membership notices sent straight from the service:\n got %v\nwant %v", got, want)
+	}
+}
+
+// Across instances the enemy's side of a war is asked for after the
+// declaration answered, with no effect: a durable wait on the declaring
+// alliance (WarAcks) is ended only once the enemy answered. An
+// acknowledgment that is lost is asked again by the declarer's owner — later
+// while it runs, and after a restart from the scan of its alliances — and
+// one that arrives twice is a replay.
+func TestAllianceLostWarAcknowledgmentIsMadeUp(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	a, b := found(t, c, 3000, "found-a", 100, false), found(t, c, 3001, "found-b", 102, false)
+	waits := func(allianceID int64) []alliancerule.WarAck {
+		t.Helper()
+		in := c.instances[3000]
+		return must(in.svc.warAcks(ctx, mustAllianceTarget(t, allianceID)))
+	}
+
+	// Lost once, asked again later by the running instance.
+	c.lose(MethodAcknowledgeWar, 1)
+	if _, err := client.DeclareWar(ctx, "war-a-b", 100, homeSID, mustAllianceTarget(t, a), b); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps() // the first ask is lost
+	if has(info(t, c, b).Wars, a) || len(waits(a)) != 1 {
+		t.Fatalf("after a lost acknowledgment: b's wars %v, a's waits %v; want b without the war and a still waiting", info(t, c, b).Wars, waits(a))
+	}
+	c.now = c.now.Add(retryDelay(0))
+	c.runFollowUps()
+	if !has(info(t, c, b).Wars, a) || len(waits(a)) != 0 {
+		t.Fatalf("after the retry: b's wars %v, a's waits %v; want both sides and no wait", info(t, c, b).Wars, waits(a))
+	}
+
+	// Lost, and the declaring instance stops before asking again: after the
+	// restart the scan of its alliances finds the wait and asks.
+	e := found(t, c, 3001, "found-e", 104, false)
+	c.lose(MethodAcknowledgeWar, 1)
+	if _, err := client.DeclareWar(ctx, "war-a-e", 100, homeSID, mustAllianceTarget(t, a), e); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps()
+	c.restartFollowUps(3000) // the armed retry is gone with the process
+	c.runFollowUps()
+	if has(info(t, c, e).Wars, a) {
+		t.Fatal("e recorded the war before anyone asked again")
+	}
+	c.instances[3000].svc.ScanWars()
+	c.runFollowUps()
+	if !has(info(t, c, e).Wars, a) || len(waits(a)) != 0 {
+		t.Fatalf("after the restart scan: e's wars %v, a's waits %v; want both sides and no wait", info(t, c, e).Wars, waits(a))
+	}
+
+	// The same declaration again: a replay, and the enemy answers its
+	// acknowledgment from its receipt — nothing is recorded twice.
+	if _, err := client.DeclareWar(ctx, "war-a-e", 100, homeSID, mustAllianceTarget(t, a), e); err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := client.AcknowledgeWar(ctx, "war-a-e", mustAllianceTarget(t, e), a); err != nil || !reply.Replayed {
+		t.Fatalf("a repeated acknowledgment: reply %+v err %v, want a replay", reply, err)
+	}
+	if wars := info(t, c, e).Wars; len(wars) != 1 {
+		t.Fatalf("e's wars %v, want the one war", wars)
+	}
+
+	// While a wait is open the declaring alliance is not transferred: its
+	// owner is the one that keeps asking.
+	f := found(t, c, 3001, "found-f", 106, false)
+	c.lose(MethodAcknowledgeWar, 1)
+	if _, err := client.DeclareWar(ctx, "war-a-f", 100, homeSID, mustAllianceTarget(t, a), f); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps()
+	report, err := c.instances[3000].svc.TransferOwnership(ctx, []int64{mustAllianceTarget(t, a)}, 0, 3001)
+	if err != nil || len(report.Moved) != 0 || len(report.Pending) != 1 {
+		t.Fatalf("transfer of an alliance waiting for its enemy: report %+v err %v, want it pending", report, err)
+	}
+	c.now = c.now.Add(retryDelay(0))
+	c.runFollowUps()
+	if !has(info(t, c, f).Wars, a) || len(waits(a)) != 0 {
+		t.Fatalf("f's wars %v, a's waits %v", info(t, c, f).Wars, waits(a))
+	}
+}
+
+// transferHook runs before the ownership transfer it wraps: what commits
+// there has passed TransferOwnership's checks and still lands on the old
+// owner, because the transfer has not fenced it yet.
+type transferHook struct {
+	entity.RemoteOwnershipManager
+	before func(id int64)
+}
+
+func (h transferHook) TransferRemoteOwnership(ctx context.Context, id int64, to int32) (entity.RemoteEntityMarkerLease, error) {
+	h.before(id)
+	return h.RemoteOwnershipManager.TransferRemoteOwnership(ctx, id, to)
+}
+
+// A war's wait (WarAcks) is asked for by whichever instance owns the
+// declaring alliance, however the declaration and an alliance.transfer
+// interleave. TransferOwnership's Pending check is a read before the move: a
+// declaration committed after it and before the transfer fences the old
+// owner moves with the alliance, and the old owner's ask stops once it sees
+// the alliance gone. The new owner — running all along, not restarted — picks
+// the wait up from the store when its war scan finds the alliance among the
+// ones it owns (the scan runs at start and then every warScanInterval), and
+// asks until the enemy answers:
+//   - declared before the check: not moved (Pending), the old owner asks;
+//   - declared between the check and the fence: moved, the new owner asks;
+//   - the same, with the old owner's process gone right after the transfer
+//     and the new owner's first ask lost: the new owner asks again;
+//   - the same, back to an instance that owned the alliance before: it reads
+//     the alliance again (what it picked up then is dropped on the transfer).
+//
+// The declaration is made inside the transfer (transferHook), so the
+// interleaving is fixed, not raced.
+func TestAllianceWarDeclaredDuringTransferIsAskedByTheNewOwner(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	for _, sid := range c.sids() {
+		c.instances[sid].svc.ScanWars() // Mod.Start: the instances are running
+	}
+	c.runFollowUps()
+	old := c.instances[3000]
+	enemy := found(t, c, 3001, "found-enemy", 102, false)
+	waits := func(allianceID int64) []alliancerule.WarAck {
+		t.Helper()
+		target := mustAllianceTarget(t, allianceID)
+		owner, _ := c.owner(target)
+		return must(c.instances[owner].svc.warAcks(ctx, target))
+	}
+	// declareDuringTransfer moves the alliance led by leader from the
+	// instance from to the instance to, with a war on enemyID declared under
+	// requestID after TransferOwnership's checks.
+	declareDuringTransfer := func(from *instance, to int32, allianceID, leader int64, requestID string, enemyID int64) {
+		t.Helper()
+		target := mustAllianceTarget(t, allianceID)
+		owners := from.svc.deps.Owners
+		from.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners, before: func(int64) {
+			if _, err := client.DeclareWar(ctx, requestID, leader, homeSID, target, enemyID); err != nil {
+				t.Fatalf("declaration during the transfer: %v", err)
+			}
+			if len(waits(allianceID)) != 1 {
+				t.Fatalf("the declaration during the transfer left no wait: %v", waits(allianceID))
+			}
+		}}
+		defer func() { from.svc.deps.Owners = owners }()
+		report, err := from.svc.TransferOwnership(ctx, []int64{target}, 0, to)
+		if err != nil || len(report.Moved) != 1 {
+			t.Fatalf("transfer: report %+v err %v, want the alliance moved", report, err)
+		}
+	}
+
+	// Declared before the check: the alliance stays, its owner asks.
+	before := found(t, c, 3000, "found-before", 100, false)
+	c.lose(MethodAcknowledgeWar, 1)
+	if _, err := client.DeclareWar(ctx, "war-before", 100, homeSID, mustAllianceTarget(t, before), enemy); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps() // the first ask is lost
+	report, err := old.svc.TransferOwnership(ctx, []int64{mustAllianceTarget(t, before)}, 0, 3001)
+	if err != nil || len(report.Moved) != 0 || len(report.Pending) != 1 {
+		t.Fatalf("transfer of an alliance waiting for its enemy: report %+v err %v, want it pending", report, err)
+	}
+	c.now = c.now.Add(retryDelay(0))
+	c.runFollowUps()
+	if !has(info(t, c, enemy).Wars, before) || len(waits(before)) != 0 {
+		t.Fatalf("declared before the check: enemy's wars %v, waits %v; want the war recorded and no wait", info(t, c, enemy).Wars, waits(before))
+	}
+
+	// Declared between the check and the fence: the old owner's ask finds
+	// the alliance gone and stops; the new owner's scan asks.
+	between := found(t, c, 3000, "found-between", 104, false)
+	declareDuringTransfer(old, 3001, between, 104, "war-between", enemy)
+	c.runFollowUps()
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps()
+	if !has(info(t, c, enemy).Wars, between) || len(waits(between)) != 0 {
+		t.Fatalf("declared between the check and the fence: enemy's wars %v, waits %v; want the war recorded by the new owner's ask and no wait",
+			info(t, c, enemy).Wars, waits(between))
+	}
+
+	// The same, and the old owner's process is gone before its ask ran; the
+	// new owner's first ask is lost too: it asks again, as for its own war.
+	gone := found(t, c, 3000, "found-gone", 106, false)
+	declareDuringTransfer(old, 3001, gone, 106, "war-gone", enemy)
+	c.restartFollowUps(3000)
+	old.svc.ScanWars() // the restarted process's Mod.Start
+	c.lose(MethodAcknowledgeWar, 1)
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps() // the new owner's first ask is lost
+	if has(info(t, c, enemy).Wars, gone) || len(waits(gone)) != 1 {
+		t.Fatalf("after a lost ask: enemy's wars %v, waits %v; want no war yet and the wait kept", info(t, c, enemy).Wars, waits(gone))
+	}
+	c.now = c.now.Add(retryDelay(0))
+	c.runFollowUps()
+	if !has(info(t, c, enemy).Wars, gone) || len(waits(gone)) != 0 {
+		t.Fatalf("old owner gone after the transfer: enemy's wars %v, waits %v; want the war recorded by the new owner and no wait",
+			info(t, c, enemy).Wars, waits(gone))
+	}
+
+	// Back to an instance whose scan read the alliance before it left: that
+	// reading is no longer this alliance's waits, and the scan reads it again.
+	// (The war goes to an enemy on 3000, so it is cross-instance while the
+	// alliance is on 3001.)
+	back := found(t, c, 3000, "found-back", 108, false)
+	enemyOnOld := found(t, c, 3000, "found-enemy-old", 110, false)
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps() // 3000's scan reads back
+	if _, err := old.svc.TransferOwnership(ctx, []int64{mustAllianceTarget(t, back)}, 0, 3001); err != nil {
+		t.Fatal(err)
+	}
+	declareDuringTransfer(c.instances[3001], 3000, back, 108, "war-back", enemyOnOld)
+	c.runFollowUps()
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps()
+	if !has(info(t, c, enemyOnOld).Wars, back) || len(waits(back)) != 0 {
+		t.Fatalf("back on 3000: enemy's wars %v, waits %v; want the war recorded by 3000 and no wait", info(t, c, enemyOnOld).Wars, waits(back))
+	}
+}
+
+// The start-up scan reads several alliances at once. Each read is a Nest
+// transaction on an owned Remote entity, and its admission takes a write grant
+// from the ownership record — one Mongo round trip — although it writes
+// nothing; read one at a time, the scan of N alliances is N round trips
+// end to end (about 12 s for 1000 alliances on a loaded machine, 2026-11-06),
+// and the last wait found is asked again only after all of them. The fake
+// Remote holds every Alliance admission until the test releases it, so the
+// number waiting at once is the number of reads the scan has in flight: it
+// must reach scanConcurrency, and never exceed it.
+func TestAllianceStartupWarScanReadsAlliancesConcurrently(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	in := c.instances[3000]
+	for i := 0; i < 3*scanConcurrency; i++ {
+		found(t, c, 3000, fmt.Sprintf("found-scan-%d", i), int64(500+i), false)
+	}
+	release := in.remote.hold()
+	done := make(chan error, 1)
+	go func() { done <- in.svc.scanWarsOnce(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if now, _ := in.remote.waiting(); now >= scanConcurrency || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	now, _ := in.remote.waiting()
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	_, peak := in.remote.waiting()
+	if now < scanConcurrency || peak > scanConcurrency {
+		t.Fatalf("the start-up scan had %d alliance reads waiting for their write grant at once (at most %d), want %d", now, peak, scanConcurrency)
+	}
+}
+
+// RV-20261107-03: what the war scan picked up belongs to one tenure of the
+// alliance. A scan that runs while the alliance is on its way out (after the
+// transfer's own check, before the move) reads it as still owned; it must not
+// keep the alliance picked up for when it comes back. Back on this instance
+// with a war declared on the way (after the other owner's check, before its
+// move), the waits are read again and the enemy is asked. Until 2026-11-07
+// the cache was dropped once before the move, the scan in between put the
+// alliance back, and every later scan skipped it: the war stayed one-sided.
+// The control runs the same moves without the scan in between.
+func TestAllianceWarScanDuringATransferOutDoesNotSkipTheReturn(t *testing.T) { warScanReturn(t, true) }
+func TestAllianceWarScanTransferReturnWithoutInterveningScan(t *testing.T)   { warScanReturn(t, false) }
+func warScanReturn(t *testing.T, scanInBetween bool) {
+	t.Helper()
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	a := found(t, c, 3000, "a", 100, false)
+	b := found(t, c, 3000, "b", 102, false)
+	target := mustAllianceTarget(t, a)
+	home, other := c.instances[3000], c.instances[3001]
+	if err := home.svc.scanWarsOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owners := home.svc.deps.Owners
+	home.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners, before: func(int64) {
+		if scanInBetween {
+			if err := home.svc.scanWarsOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}}
+	report, err := home.svc.TransferOwnership(ctx, []int64{target}, 0, 3001)
+	home.svc.deps.Owners = owners
+	if err != nil || len(report.Moved) != 1 {
+		t.Fatalf("transfer to 3001: %+v %v", report, err)
+	}
+	owners = other.svc.deps.Owners
+	other.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners, before: func(int64) {
+		if _, err := c.client().DeclareWar(ctx, "war-on-the-way-back", 100, homeSID, target, b); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	report, err = other.svc.TransferOwnership(ctx, []int64{target}, 0, 3000)
+	other.svc.deps.Owners = owners
+	if err != nil || len(report.Moved) != 1 {
+		t.Fatalf("transfer back to 3000: %+v %v", report, err)
+	}
+	c.runFollowUps()
+	for range 3 {
+		if err := home.svc.scanWarsOnce(ctx); err != nil {
+			t.Fatal(err)
+		}
+		c.runFollowUps()
+	}
+	waits, err := home.svc.warAcks(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 0 || !has(info(t, c, b).Wars, a) {
+		t.Fatalf("back on 3000 after a scan during the move out: waits %v, enemy's wars %v; want the war asked by the new tenure's scan", waits, info(t, c, b).Wars)
+	}
+}
+
+// An empty claim — an alliance id whose founding was refused: its ownership
+// record names this instance, the store has nothing for it — has no war to
+// wait for. The war scan takes its read's definite "entity not found" as
+// nothing to ask, and goes on to the other alliances. (Until 2026-11-07 that
+// answer failed the scan, which was tried again with backoff and failed again
+// on every attempt, never reaching the alliances after the empty claim: seen
+// in the real process after a restart, TestAllianceE2ERejectedFoundingAfterRestart.)
+func TestAllianceWarScanPassesAnEmptyClaim(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	in := c.instances[3000]
+	empty := must(c.Next(ctx)) // minted before a: listed first
+	c.emptyClaim(t, 3000, empty)
+	a, b := found(t, c, 3000, "found-a", 100, false), found(t, c, 3001, "found-b", 102, false)
+	c.lose(MethodAcknowledgeWar, 1)
+	if _, err := c.client().DeclareWar(ctx, "war-a-b", 100, homeSID, mustAllianceTarget(t, a), b); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps()         // the first ask is lost
+	c.restartFollowUps(3000) // and the retry with the process
+	if err := in.svc.scanWarsOnce(ctx); err != nil {
+		t.Fatalf("war scan with an empty claim among the alliances: %v", err)
+	}
+	c.runFollowUps()
+	if !has(info(t, c, b).Wars, a) {
+		t.Fatalf("b's wars %v: the scan did not ask for a's war", info(t, c, b).Wars)
+	}
+}
+
+// Every guard write is a transaction on the guard alone: reservations of two
+// players on the same instance do not wait on each other. (Until 2026-11-05
+// both took the instance's one AllianceShard to arm or disarm the deadline,
+// so every cross-instance join on an instance went through one lock in
+// turn: about 10 joins a second at 16 callers.) The first reservation is held
+// at its write admission — inside its transaction, with its locks taken —
+// and the second must complete meanwhile.
+func TestAllianceReservationsOfDifferentPlayersDoNotWaitOnEachOther(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	b := found(t, c, 3001, "found-b", 102, true)
+	c.seedGuard(t, 3000, 301)
+	c.seedGuard(t, 3000, 302)
+	first, second := mustGuardTarget(t, 301), mustGuardTarget(t, 302)
+	deadline := c.now.Add(c.rules.ReservationTTL).Unix()
+	c.gate(first, 2) // 301's reservation stops at its admission until released
+	held := make(chan error, 1)
+	go func() {
+		_, err := c.client().ReserveGuard(ctx, "reserve-301", first, b, deadline)
+		held <- err
+	}()
+	c.awaitArrival(t, first)
+	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := c.client().ReserveGuard(bounded, "reserve-302", second, b, deadline)
+	c.await([]int64{first}) // release 301
+	if err != nil {
+		t.Fatalf("302's reservation waited for 301's: %v", err)
+	}
+	if err := <-held; err != nil {
+		t.Fatalf("301's reservation: %v", err)
+	}
+	for _, player := range []int64{301, 302} {
+		if guard := guardState(t, c, player); guard.PendingAllianceID != b {
+			t.Fatalf("guard %d: %+v, want reserved for %d", player, guard, b)
+		}
+	}
+}
+
+// The game asks Membership at login when the player's copy shows no alliance:
+// the answer is the roster's, the guard healed first — a membership made
+// while the player was offline is reported, a stale membership the roster no
+// longer has is cleared and reported as none, a reservation the roster
+// seated (its confirmation lost) is confirmed, and a player who never had a
+// guard is "entity not found".
+func TestAllianceMembershipAnswersTheRostersAlliance(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	a := found(t, c, 3001, "found-a", 102, true)
+	c.seedGuard(t, 3000, 201)
+	if _, err := client.Join(ctx, "join-201", 201, homeSID, mustAllianceTarget(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := client.Membership(ctx, mustGuardTarget(t, 201)); err != nil || reply.State.AllianceID != a {
+		t.Fatalf("a member: reply %+v err %v, want alliance %d", reply, err, a)
+	}
+
+	c.lose(MethodClearGuard, 1) // left, the guard's clear lost: stale-occupied
+	if _, err := client.Leave(ctx, "leave-201", 201, homeSID, mustAllianceTarget(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	if guard := guardState(t, c, 201); guard.AllianceID != a {
+		t.Fatalf("the lost clear left %+v", guard)
+	}
+	if reply, err := client.Membership(ctx, mustGuardTarget(t, 201)); err != nil || reply.State.AllianceID != 0 {
+		t.Fatalf("a stale membership: reply %+v err %v, want none", reply, err)
+	}
+
+	c.seedGuard(t, 3000, 202)
+	c.lose(MethodResolveGuard, 1) // seated, the confirmation lost: pending
+	if _, err := client.Join(ctx, "join-202", 202, homeSID, mustAllianceTarget(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := client.Membership(ctx, mustGuardTarget(t, 202)); err != nil || reply.State.AllianceID != a || reply.State.PendingRequestID != "" {
+		t.Fatalf("a seated reservation: reply %+v err %v, want confirmed in %d", reply, err, a)
+	}
+
+	_, err := client.Membership(ctx, mustGuardTarget(t, 203))
+	if servicerpc.Classify(err) != servicerpc.OutcomeRejected {
+		t.Fatalf("a player with no guard: err %v (%s), want entity not found", err, servicerpc.Classify(err))
+	}
+}
+
+// The guard is a cache of the roster that may be stale-occupied, never
+// stale-empty. A cross-instance leave whose ClearGuard is lost leaves the
+// guard naming the alliance the player left; the player's next join asks that
+// alliance, finds no seat under that membership, clears the guard and joins —
+// no effect, no operator.
+func TestAllianceGuardHealsAfterALostCrossInstanceClear(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	a, b := found(t, c, 3001, "found-a", 102, true), found(t, c, 3001, "found-b", 104, true)
+	const player = int64(201)
+	c.seedGuard(t, 3000, player) // the player's guard is on 3000, the alliances on 3001
+	if _, err := c.client().Join(ctx, "join-a", player, homeSID, mustAllianceTarget(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps() // whatever follows the join runs; the clear below is lost
+	if guard := guardState(t, c, player); guard.AllianceID != a {
+		t.Fatalf("after joining %d: guard %+v", a, guard)
+	}
+	c.lose(MethodClearGuard, 1)
+	if _, err := c.client().Leave(ctx, "leave-a", player, homeSID, mustAllianceTarget(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.client().Join(ctx, "join-b", player, homeSID, mustAllianceTarget(t, b)); err != nil {
+		t.Fatalf("join after a lost clear: %v (the guard still names alliance %d)", err, a)
+	}
+	if guard := guardState(t, c, player); guard.AllianceID != b || guard.PendingRequestID != "" {
+		t.Fatalf("guard %+v, want in %d with nothing pending", guard, b)
+	}
+	if has(members(info(t, c, a)), player) || !has(members(info(t, c, b)), player) {
+		t.Fatalf("rosters: a %v, b %v", members(info(t, c, a)), members(info(t, c, b)))
+	}
+}
+
+// A cross-instance reservation whose resolution is lost is settled by the
+// next request that finds it, the same way its deadline would: the alliance
+// answers (Settle, which makes the answer final) and the guard follows it.
+func TestAllianceGuardHealsALostReservationResolution(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	a, b := found(t, c, 3001, "found-a", 102, true), found(t, c, 3001, "found-b", 104, true)
+
+	// Seated in a, the confirmation lost: the guard is pending for a. The
+	// next join (of b) finds the player is a's member — refused, and the
+	// guard now says so.
+	const seated = int64(201)
+	c.seedGuard(t, 3000, seated)
+	c.lose(MethodResolveGuard, 1)
+	if _, err := c.client().Join(ctx, "join-a-201", seated, homeSID, mustAllianceTarget(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.client().Join(ctx, "join-b-201", seated, homeSID, mustAllianceTarget(t, b))
+	requireRejected(t, "joining b while a member of a", err, apperrors.ErrAllianceMembership)
+	if guard := guardState(t, c, seated); guard.AllianceID != a || guard.PendingRequestID != "" {
+		t.Fatalf("seated player's guard %+v, want confirmed in %d", guard, a)
+	}
+
+	// Reserved for a, and the admission never reached a. Before the deadline
+	// the admission may still be on its way: a join of b is refused and the
+	// reservation stands (a race between two approvals is not turned into an
+	// expiry). After it, the next join (of b) settles the request with a
+	// (alliance_expired), releases the guard and joins b; the admission
+	// arriving late is refused.
+	const lost, request = int64(202), "approve-lost"
+	c.seedGuard(t, 3000, lost)
+	if _, err := c.client().ReserveGuard(ctx, request, mustGuardTarget(t, lost), a, c.now.Add(c.rules.ReservationTTL).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.client().Join(ctx, "join-b-202-early", lost, homeSID, mustAllianceTarget(t, b))
+	requireRejected(t, "joining b while the reservation for a is open", err, apperrors.ErrAllianceMembership)
+	if guard := guardState(t, c, lost); guard.PendingRequestID != request {
+		t.Fatalf("an open reservation was cut short: guard %+v", guard)
+	}
+	c.now = c.now.Add(c.rules.ReservationTTL)
+	if _, err := c.client().Join(ctx, "join-b-202", lost, homeSID, mustAllianceTarget(t, b)); err != nil {
+		t.Fatalf("join after a lost admission: %v", err)
+	}
+	if guard := guardState(t, c, lost); guard.AllianceID != b || guard.PendingRequestID != "" {
+		t.Fatalf("guard %+v, want in %d", guard, b)
+	}
+	_, err = c.client().Join(ctx, request, lost, homeSID, mustAllianceTarget(t, a))
+	requireRejected(t, "the late admission", err, apperrors.ErrAllianceExpired)
+	if has(members(info(t, c, a)), lost) {
+		t.Fatal("the late admission seated the player in a")
+	}
+}
+
+// AllianceMember is remote=managed with snapshots=none: nothing reads a
+// guard's snapshot (game servers mirror only the alliance; the guard's owner
+// loads, transfers and answers operator reads from its DAO), so its commits
+// carry the guard document and no Remote snapshot — no
+// _remote_entity_snapshots document, no L2 entry, no broadcast. The alliance
+// still publishes its own.
+func TestAllianceGuardCommitsCarryNoRemoteSnapshot(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	c.instances[3000].remote.capture = true
+	allianceID := found(t, c, 3000, "found-a", 100, true)
+	if _, err := c.client().Join(ctx, "join-201", 201, homeSID, mustAllianceTarget(t, allianceID)); err != nil {
+		t.Fatal(err)
+	}
+	var guards, alliances int
+	for _, commit := range c.instances[3000].remote.built() {
+		switch commit.Kind {
+		case alliance_member.EntityKindAllianceMember:
+			guards++
+			if len(commit.Mutations) == 0 || len(commit.Snapshots) != 0 {
+				t.Errorf("guard commit of %d: %d mutations, %d snapshots; want the document and no snapshot", commit.EntityID, len(commit.Mutations), len(commit.Snapshots))
+			}
+		case alliance.EntityKindAlliance:
+			alliances++
+			if len(commit.Snapshots) == 0 {
+				t.Errorf("alliance commit of %d carries no snapshot; game servers read the alliance through its mirror", commit.EntityID)
+			}
+		}
+	}
+	if guards == 0 || alliances == 0 {
+		t.Fatalf("built %d guard and %d alliance commits, want both", guards, alliances)
+	}
+}
+
+// Joins and leaves of the same players race on two instances while a third
+// of the direct finishing calls (ResolveGuard / ClearGuard) are lost, so the
+// guards are healed by whichever request finds them held — concurrently, from
+// both instances. Whatever the interleaving: a player is in at most one
+// roster, and a player in a roster has a guard that holds that alliance
+// (joined, or still reserved for it) — stale-occupied guards are allowed,
+// stale-empty ones never.
+func TestAllianceGuardHealingNeverLeavesASeatedPlayerUnguarded(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	alliances := []int64{
+		found(t, c, 3000, "found-a", 100, true), found(t, c, 3001, "found-b", 102, true),
+		found(t, c, 3000, "found-c", 104, true), found(t, c, 3001, "found-d", 106, true),
+	}
+	c.mu.Lock()
+	c.dropEvery[MethodResolveGuard], c.dropEvery[MethodClearGuard] = 3, 3
+	c.mu.Unlock()
+	const players, workers, rounds = 16, 2, 6
+	for i := 0; i < players; i++ {
+		c.seedGuard(t, int32(3000+i%2), int64(300+i))
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < players; i++ {
+		player := int64(300 + i)
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				for r := 0; r < rounds; r++ {
+					target := mustAllianceTarget(t, alliances[(int(player)+w+r)%len(alliances)])
+					if _, err := c.client().Join(ctx, fmt.Sprintf("join-%d-%d-%d", player, w, r), player, homeSID, target); err == nil {
+						_, _ = c.client().Leave(ctx, fmt.Sprintf("leave-%d-%d-%d", player, w, r), player, homeSID, target)
+					}
+				}
+				// End seated somewhere, maybe: one more join each.
+				_, _ = c.client().Join(ctx, fmt.Sprintf("join-%d-%d-last", player, w), player, homeSID, mustAllianceTarget(t, alliances[w]))
+			}(w)
+		}
+	}
+	wg.Wait()
+	c.mu.Lock()
+	c.dropEvery = map[string]int{}
+	c.mu.Unlock()
+	seated := 0
+	for i := 0; i < players; i++ {
+		player := int64(300 + i)
+		var in []int64
+		for _, allianceID := range alliances {
+			if has(members(info(t, c, allianceID)), player) {
+				in = append(in, allianceID)
+			}
+		}
+		if len(in) > 1 {
+			t.Fatalf("player %d is a member of %v", player, in)
+		}
+		guard := guardState(t, c, player)
+		if len(in) == 1 {
+			seated++
+			if guard.AllianceID != in[0] && guard.PendingAllianceID != in[0] {
+				t.Fatalf("STALE-EMPTY: player %d is in %d but the guard holds %+v", player, in[0], guard)
+			}
+		}
+	}
+	if seated == 0 {
+		t.Fatal("no player ended seated: the test exercised nothing")
+	}
+}

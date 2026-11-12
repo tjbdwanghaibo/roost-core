@@ -1,0 +1,6 @@
+package player
+
+func init() {
+	// 名字排在 profile 之后：初始等级写好后，再在同一笔建档事务里建立对应的基础与最终属性。
+	OnFirstEnter("profile.attribute", func(owner *Player, _ int64) error { return owner.AttributeComp().Refresh() })
+}

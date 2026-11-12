@@ -1,0 +1,53 @@
+package alliance
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"{{MODULE}}/game/rehome"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+type homeDirectory struct {
+	rehome.Directory
+	answer svcaccount.RoleBinding
+	err    error
+}
+
+func (d *homeDirectory) Binding(context.Context, int64) (svcaccount.RoleBinding, error) {
+	return d.answer, d.err
+}
+func homeRegistry(t *testing.T) (*app.Registry, *homeDirectory) {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	r := app.NewRegistry(cfg)
+	d := &homeDirectory{answer: svcaccount.RoleBinding{PlayerID: 10, ServingServerID: 1002}}
+	if err := r.Register(rehome.DirectoryCapability, d); err != nil {
+		t.Fatal(err)
+	}
+	return r, d
+}
+func TestWithAllianceRehomeUsesCurrentBinding(t *testing.T) {
+	r, d := homeRegistry(t)
+	sid, moving, err := Binding(context.Background(), r, 10, 1000)
+	if err != nil || moving || sid != 1002 {
+		t.Fatalf("%d %v %v", sid, moving, err)
+	}
+	d.answer.Transfer = &svcaccount.RoleTransfer{ID: "move", To: 1003}
+	sid, moving, err = Binding(context.Background(), r, 10, 1000)
+	if err != nil || !moving || sid != 1002 {
+		t.Fatalf("moving %d %v %v", sid, moving, err)
+	}
+}
+func TestWithAllianceRehomeUnknownDoesNotFallBack(t *testing.T) {
+	r, d := homeRegistry(t)
+	d.err = errors.New("account unavailable")
+	if _, _, err := Binding(context.Background(), r, 10, 1000); err == nil {
+		t.Fatal("unknown binding treated as local")
+	}
+}

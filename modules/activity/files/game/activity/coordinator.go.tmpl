@@ -1,0 +1,22 @@
+package activity
+
+import (
+	"fmt"
+
+	coordinator "github.com/tjbdwanghaibo/roost-core/service/activity"
+)
+
+// CoordinatorKey 把生命周期中的一个阶段映射到现有跨服汇聚服务的稳定窗口。
+// 生命周期与汇聚窗口是两件事：业务先冻结预期服务器名单，OpenActivity，再逐服 NotifyPhase；
+// 收完 OwedDispatches 并持久应用结果后才 AckDispatch / Complete。这里不自动开窗口或假定到齐。
+// 不需要跨服汇聚的活动完全不需要部署 activity coordinator。
+func CoordinatorKey(token Token) (coordinator.Key, error) {
+	if token.Definition < 1 || token.Definition > MaxDefinitions || token.Owner <= 0 || token.Generation <= 0 || token.Cycle <= 0 || token.Phase < Initializing || token.Phase > Ended {
+		return coordinator.Key{}, ErrRule
+	}
+	if token.Scope != "world" && token.Scope != "alliance" && token.Scope != "player" {
+		return coordinator.Key{}, ErrRule
+	}
+	key := coordinator.Key{GroupID: fmt.Sprintf("%s-%d", token.Scope, token.Owner), ActivityID: fmt.Sprintf("%d-%d-%d", token.Definition, token.Generation, token.Cycle), Phase: coordinator.Phase(fmt.Sprintf("phase-%d", token.Phase))}
+	return key, key.Validate()
+}

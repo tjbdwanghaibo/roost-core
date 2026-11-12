@@ -1,0 +1,62 @@
+package player
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+func shopRejectConfig(t *testing.T, row schema.ShopGoods, reason string) {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	dir := t.TempDir()
+	entries, err := os.ReadDir("../../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == "_manifest.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../../configs/data", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := json.Marshal([]schema.ShopGoods{row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shop_goods.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("invalid shop %s accepted or wrong error: %v", reason, err)
+	}
+}
+func TestShopConfigRejectsNonpositivePrice(t *testing.T) {
+	shopRejectConfig(t, schema.ShopGoods{ID: 1, ItemID: 1001, ItemCount: 1, Price: 0}, "price")
+}
+func TestShopConfigRejectsUnknownLimit(t *testing.T) {
+	shopRejectConfig(t, schema.ShopGoods{ID: 1, ItemID: 1001, ItemCount: 1, Price: 10, Limit: 7}, "limit")
+}
+func TestShopConfigRejectsUnknownItem(t *testing.T) {
+	shopRejectConfig(t, schema.ShopGoods{ID: 1, ItemID: 9223372036854775807, ItemCount: 1, Price: 10}, "item_id")
+}

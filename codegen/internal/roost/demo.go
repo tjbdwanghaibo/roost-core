@@ -129,8 +129,7 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 		return err
 	}
 	// The game process reads the platform service's grant records out of the
-	// same Redis that service writes them to (game/purchase, and the drain in
-	// internal/service/<game>/purchase_drain.go). It is the only cross-process
+	// same Redis that service writes them to (the purchase module). It is the only cross-process
 	// handover in the demo that is not a bus call, and it is one because the
 	// delivering side has to make it durable before it may answer "delivered".
 	game := m.Services[gameService]
@@ -138,7 +137,7 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 		game.Mods = append(game.Mods, "redis")
 		m.Services[gameService] = game
 	}
-	// The guild is the alliance service's (demo_alliance.go): every alliance
+	// The alliance is the alliance service's (demo_alliance.go): every alliance
 	// and every player's membership guard is owned and written by that
 	// service, and the game reads them through the Remote mirror the
 	// remote_entity Mod also serves. The game has remote_entity for the one
@@ -148,7 +147,7 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 	// §14). The alliance kinds are foreign to it (service=alliance), so its
 	// Remote runtime refuses to claim or write them
 	// (entity.ErrRemoteKindNotOwned): the alliance RPC stays the only path to
-	// a guild write (decision S of the alliance plan), held by the framework's
+	// a alliance write (decision S of the alliance plan), held by the framework's
 	// guard rather than by the game lacking the runtime. A caller who narrowed
 	// -mods still gets it: the Team cannot be written without it. uses_rpcs:
 	// [alliance] is added once the rpc exists (demoGameUsesAlliance).
@@ -453,10 +452,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		// 档案（名字、等级、经验）是 profile 模块的：ProfileComponent 与 PlayerDao.Profile / ProfilePrivate 在最后的模块步骤
 		// 里装进来（demoModuleSteps）。下面两个文件是 demo 自己挂在那个组件上的东西——公会副本与副本领奖账本，不属于档案，
 		// 状态字段也在 demo 自己的 PlayerDao 里。它们与后面引用 ProfileComp() 的 handler 一样，等模块装好之后才一起编译。
-		{write: "game/entities/player/guild_membership.go", why: "the player's own copy of their guild membership (PlayerDao.GuildID): read for advisory pre-checks, written with the player's transaction"},
 		{write: "game/entities/player/dungeon_ledger.go", why: "the exactly-once ledger for dungeon clear rewards and the per-season clear count, pruned on the write path"},
 		{write: "game/entities/player/entity.go", why: "EntityCategoryPlayer: the kind's lock rank, decided before the first document is persisted"},
-		{write: "game/effects/level_up.go", why: "the level-up effect: topic, payload, and the Emit onto the current transaction"},
 		{add: &AddOptions{Kind: "component", Name: "Stats", Entity: "World"}, why: "World's one job: server-wide counters"},
 		{add: &AddOptions{Kind: "dao", Name: "World", Entity: "World"}, why: "persistence for the counters"},
 		{write: "db/def/world.go", why: "PlayersEntered and MatchesFormed"},
@@ -479,7 +476,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/dungeon_run.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/scene_position.go", why: "one code for out of bounds / taken / not on a map: a client that learns which points are occupied has everyone's positions"},
 		{write: "internal/errors/dungeon_claim_window.go", why: "a reward refused for being too old has to be a named refusal, not a quiet zero"},
-		{write: "internal/errors/purchase_grant.go", why: "a grant with no order id or no payment moment cannot be made exactly-once"},
 		{write: "internal/errors/player_elsewhere.go", why: "a login that lands on a server the player is not bound to is refused by name, not served from a second copy of their Entity"},
 		{write: "internal/errors/login_timeout.go", why: "a login whose claim or cold load outlived its budget is answered by name and retried, not held on the connection"},
 		{write: "game/entities/player/equipment_component_test.go", why: "the nested write path both ways: a change two levels down reaches storage, a piece that came off stops reaching it"},
@@ -529,8 +525,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/gift/gift.go", why: "the game's side of the gift: state, id, mail text"},
 		{write: "game/gift/gift_test.go", why: "complete session identity keeps gifts on distinct logins apart while preserving retries"},
 		// 建在模块带来的组件上的 Nest handler 没有 `roost add handler` 骨架步骤，直接写文件：AddItem、赠礼三步、邮件领取、
-		// 充值发货、公会的 StartGuildOp / GuildDebit / GuildCredit 锁 Bag 组件（bag 模块），AddExp、ClaimDungeon、PlayerTeam、
-		// 公会的 ShowGuild / PlayerGuild 锁 Profile 组件（profile 模块）。组件在最后的模块步骤才落盘，而 `roost add handler`
+		// 充值发货、公会的 StartAllianceOp / AllianceDebit / AllianceCredit 锁 Bag 组件（bag 模块），AddExp、ClaimDungeon、PlayerTeam、
+		// 公会的 ShowAlliance / PlayerAlliance 锁 Profile 组件（profile 模块）。组件在最后的模块步骤才落盘，而 `roost add handler`
 		// 要求组件文件已经在盘上；它只写一个随即被 write 覆盖的骨架，不登记别的东西，所以去掉它不影响生成结果，
 		// 这些文件也就不用挪到模块之后——模块那一步跑生成器时，全部 handler 都已经在盘上。
 		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},
@@ -614,13 +610,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "ActivityStanding", Group: "game", Handler: "player"}, why: "where this player stands in the current window"},
 		{write: "protocol/def/activity_standing.go", why: "the coordinator's aggregation and this server's own settlement flag, kept apart"},
 		{write: "game/controllers/player/activity_standing.go", why: "two sources, deliberately not merged: complete is not paid"},
-		{write: "game/purchase/purchase.go", why: "what the game process and the platform process both have to agree on about a paid order: catalogue, key layout, grant record, claim window"},
-		{write: "game/handler/grant_purchase.go", why: "a paid order becomes items, the order id in the same WAL record as the grant: the third instance of one shape — authoritative moment in, identity recorded in the same transaction, admission and pruning the same predicate"},
-		{write: "game/handler/grant_purchase_test.go", why: "the replay a client cannot produce: the same order drained twice grants once, and a grant past its window is refused rather than repeated"},
-		{write: "internal/errors/guild_missing.go", why: "\"you are in no guild\" and \"that guild was never founded\" are different things to a player"},
-		{write: "internal/errors/guild_busy.go", why: "the alliance service did not execute the request (no instance ready, a guild being moved): retryable, not an internal error"},
-		{write: "internal/errors/guild_moved.go", why: "the redirect to a guild's owner did not reach it either: an operator is moving it; retryable"},
-		{write: "internal/errors/guild_pending.go", why: "no answer in time: the write may have happened, and the same request id is answered from the receipt"},
 		{write: "game/controllers/player/enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running; a login without a server_id claim, or bound to another server, is refused as player_elsewhere before anything loads"},
 		{add: &AddOptions{Kind: "entity", Name: "SceneActor"}, why: "a player's part on a partitioned scene's map: the entity the cell's process holds for it, handed over to the next cell's process with it (prototype, scene.partition)"},
 		{add: &AddOptions{Kind: "dao", Name: "SceneActor", Entity: "SceneActor"}, why: "its cell state in a generated DAO: the setters record the undo, so a beat or handler that rolls back restores it (maintainer decision D8 = A)"},
@@ -640,27 +629,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "protocol/def/attack_target.go", why: "a target in, the attack's sequence out; the verdict and the HP come later (D7 = A)"},
 		{write: "game/controllers/player/attack_target.go", why: "one fixed-damage attack, applied once by the target's own cell however often it is retried"},
 		{write: "protocol/def/attack_result.go", why: "the verdict pushed to the attacker: applied, duplicate, rejected with why, or unknown; the damage and the target's HP after it"},
-		{add: &AddOptions{Kind: "entity", Name: "Team"}, why: "a partitioned scene's team (prototype, maintainer decision 2026-11-04 item 4 = A): invite / accept / leave / disband, no battle room; its members are on different Bases, so the roster is remote-managed, owned by the game service and shared between its processes"},
-		{write: "db/def/team.go", why: "the roster: leader, members with their Base's sid, invitations with their expiry, and a version every Base's copy is compared by"},
-		{write: "game/entities/team/entity.go", why: "remote=managed, service=<game> and EntityCategoryRemote: [Team, Player] takes the distributed lock before the player's; the alliance service refuses it"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "Team", Service: gameService}, why: "a new team's aggregate is created before its first transaction can lock it"},
-		{write: "game/entities/team/roster_component.go", why: "found / invite / accept / leave / disband under the team's lock; the size limit and the invitation's expiry come in as parameters from scene.partition.team"},
-		{write: "game/entities/team/roster_component_test.go", why: "the team's rules on its roster: only the leader invites and disbands, invitations expire, the size limit holds at accept, a repeated accept changes nothing, the lead passes to the smallest id left, the last one out disbands, a failed transaction rolls the version back"},
-		{write: "internal/errors/team.go", why: "what the team endpoints refuse is coded: already in a team, no such team, not the leader, not invited, full, busy"},
 		{write: "game/handler/team_group.go", why: "the roster as the Base's copy (cellworld.Group): each member's Player, SceneActor and Base sid"},
-		{add: &AddOptions{Kind: "handler", Name: "TeamInvite", Entity: "Team", Component: "Roster"}, why: "the leader invites; a player without a team founds one in the same transaction"},
-		{write: "game/handler/team_invite.go", why: "found and invite under the team's lock, the founder's own copy written with it"},
-		{add: &AddOptions{Kind: "handler", Name: "TeamAccept", Entity: "Team", Component: "Roster"}, why: "an invited player joins"},
-		{write: "game/handler/team_accept.go", why: "the roster and the joiner's copy in one transaction; the other members' Bases are told after the commit"},
-		{add: &AddOptions{Kind: "handler", Name: "TeamLeave", Entity: "Team", Component: "Roster"}, why: "a member leaves; a leader's lead passes on"},
-		{write: "game/handler/team_leave.go", why: "the roster and the leaver's copy in one transaction; the rest are told"},
-		{add: &AddOptions{Kind: "handler", Name: "TeamDisband", Entity: "Team", Component: "Roster"}, why: "the leader disbands"},
-		{write: "game/handler/team_disband.go", why: "the other members' copies are on other processes: a notice clears them, a reread catches a lost one"},
-		{add: &AddOptions{Kind: "handler", Name: "TeamSync", Entity: "Team", Component: "Roster"}, why: "a Base rereads a member's roster from the team"},
 		{write: "game/handler/team_sync.go", why: "after a restart (the copy's version is 0) and every resync_every, so a lost change notice is caught"},
-		{write: "game/handler/player_team.go", why: "\"which team am I in\" costs a local lock: the player's own copy, written by the team transactions"},
-		{write: "protocol/def/team.go", why: "invite, accept, leave, disband, info behind one roster answer; teammates' positions come from the team panel, not from here"},
-		{write: "game/controllers/player/team.go", why: "a persistent team id for a new team, then one [Team, Player] transaction per call; scene_not_partitioned on an ordinary scene"},
 		{add: &AddOptions{Kind: "entity", Name: "TerrainChunk", ID: 11}, why: "an edited 64m terrain chunk (editable terrain plan P1): only chunks a player changed have one, overlaying the base pack; its id comes from the chunk's coordinates"},
 		{write: "db/def/terrain_chunk.go", why: "base revision, version, 4096 heights and 4096 materials (both per-index deltas; schema 2: materials became a uint16 list; schema 3: the bounded applied-edit list is gone, store key 5 retired; schema 4: the lots of the buildings standing on the chunk, persisted, never synced), numeric store keys"},
 		{write: "game/entities/terrain_chunk/entity.go", why: "kind 11 at the World rank, sync=true in the terrain namespace; the chunk key <-> entity id mapping (unique = key id + 1)"},
@@ -728,6 +698,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "cmd/terrainpack/main_test.go", why: "the default flat pack (16 x 16 chunks, revision 2, every step walkable, dig a lake and fill it back), the generated shape equal to the old default, explicit overrides, regional water levels and safe CLI ranges"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
+		{write: "game/handler/purchase_balance.go", why: "a read-only bag snapshot for the demo purchase response; the module owns durable delivery"},
 		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},
 		{write: "game/controllers/player/finish_dungeon_test.go", why: "a clear counts once on the board, through the real endpoint, the leaderboard module's submit and the rank store on real Redis: a replay after more than the rank ring's 8 later clears, concurrent replays and a refilled failed submit; what the endpoint hands the rank service on every settlement (the season's clear count as a snapshot: max, no request id, on a replay too, never a zero, and a failed submit does not fail the settlement; no external dependency); and a clear contributes to the activity only from the call that paid it: a replay after the 300-second window rolls scores nothing in the new window, and a contribution that failed at payment is not refilled (no external dependency)"},
 		{write: "protocol/def/scene_ready.go", why: "the client says its state decoder is installed; until then its session is held and receives no frames"},
@@ -763,7 +734,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
 		{write: "internal/service/game/service_shutdown_test.go", why: "Shutdown closes the scene under the App's stop context, so stopping the reload is bounded by shutdown.total_timeout; a fail-stop or graceful Shutdown disconnects every served player first"},
 		{write: "internal/service/game/syncbus_config_test.go", why: "the generated syncbus section is the transport the wiring Mod actually starts on, with no unread-config warnings"},
-		{write: "internal/service/game/level_up_mail.go", why: "the consumer: kitdataengine.SubscribeEffects (durable + Mongo inbox from the dataengine Mod's declaration) → the mailbox module's SendTo keyed by EffectID"},
+		{write: "internal/service/game/effect_settings.go", why: "activity reads the DataEngine effect settings; profile reward mail is owned by the mailbox module"},
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
 		{write: "internal/service/game/battle_test.go", why: "the room's start grace and lifetime, asserted against the real lockstep room with a recording push lane"},
 		{write: "internal/service/game/battle.go", why: "the lockstep rooms: one goroutine owns each room, the player TCP push is its broadcast lane, the matchmaker opens one per match"},
@@ -790,22 +761,19 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/flags_test.go", why: "启动即表里的值、reload 跟着变、表里删掉的开关消失、缺表时拒绝发布"},
 		{write: "internal/service/game/flags.go", why: "the table is the source and the store is rebuilt from it on every reload; also the one place that says what may be hot-patched"},
 		{write: "internal/service/game/playerowner.go", why: "serve only the players bound to this sid (server_id from account, and the current binding for background work), a local resident table behind the write gate, the rehome module's Residency with the table of players moved out, and idle unload as plain memory management"},
-		{write: "internal/service/game/rehome_checks.go", why: "the demo's own checks before a player may change servers (the rehome module's registration points): a guild or team member is refused, and so is every player of a server running the partitioned scene — the state those hold about a player's server is not moved with him yet"},
-		{write: "internal/service/game/rehome_checks_test.go", why: "换服前的公会 / 队伍检查撑到交出实体：标记之后的请求在写闸门被拒，标记之前准入的请求先执行完，再复核、再向联盟服务问权威的成员关系；检查之后才入会、入会应答迟到、通知迟到都中止（RV-20261111-BM-05）"},
+		{write: "internal/service/game/rehome_checks.go", why: "the demo's own checks before a player may change servers (the rehome module's registration points): the demo partitioned scene refuses rehome; team and alliance are module-owned"},
+		{write: "internal/service/game/rehome_checks_test.go", why: "demo 仅验证分区场景换服限制；队伍互斥与联盟路由修正由模块验收"},
 		{write: "internal/service/game/playerowner_test.go", why: "Serve 的三种结果、只有通过绑定校验才有驻留记录、卸载进行中不准入、登录等卸载结束、闲置卸载与使用的界定"},
 		{write: "internal/service/game/gift_saga_budget_test.go", why: "退款（debit 的补偿）的重试窗口覆盖发送方 sid 的一次崩溃重启：startup_wait + ttl + 拉起余量，按生成的 singleton 配置核对"},
 		{write: "internal/service/game/gift_route_test.go", why: "赠礼与公会的玩家步骤按 sid 确切路由：定义只路由写 Player 的步骤；属主核对——本服的离线发送方照常执行，绑定别的服的退回协调器并指明其 sid、不在本进程接入，没有 sid 的拒收，卸载中的在本服重试"},
 		{write: "internal/service/game/activity_test.go", why: "结算榜只升不降：两条贡献回复乱序时旧的累计分不能覆盖新的（真实 Redis）；贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里；expected 集合等于 App 单实例锁 Live 返回的活 sid、为空时只有自己、查询失败不开窗，取不到 Live 能力时 activity 拒绝启动；activity.game_sids 含重复 sid、超出 int32 或超过一次 Live 的上限时按键名拒绝启动"},
 		{write: "internal/service/game/gift_recipient_test.go", why: "收件人检查读 Player DAO 自己的库和集合，与 dataengine.database 无关；从未进过游戏的收件人仍是业务拒绝"},
 		{write: "internal/service/game/activity.go", why: "the World's timer driver wired by hand (business clock, Nest, start before the World loads), the window loop (expected servers from the App singleton lock's Live query), the phase effect consumer and the settlement: mail → record → ack"},
-		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
-		{write: "internal/service/platform/collaborators.go", why: "a platform service that verifies a demo channel, resolves the player and records a durable grant instead of pretending it can reach an Entity"},
-		{write: "internal/service/platform/purchase_delivery_test.go", why: "the first durable grant survives retries, lost replies and catalog changes"},
 		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and its activity group comes from the groups file the coordinator reads too"},
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
 		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
-	return append(append(steps, demoAllianceSteps(gameService)...), demoModuleSteps()...)
+	return append(append(steps, demoModuleSteps()...), demoAllianceSteps(gameService)...)
 }
 
 // demoModuleSteps 是 demo 经业务模块装进来的功能。排在全部 demo 步骤之后：模块的协议号从
@@ -819,7 +787,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // （落点已被占用时安装器拒绝安装）。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome", "attribute", "equipment", "login", "portal", "servertime"}, why: "login is the login module (the handshake authenticator that hands enter:<ticket> and session:<player_id>:<token> to account, the account collaborators, cmd/accountctl); portal is the HTTP front door on the account process (login, server list, enter ticket); servertime is the server clock a client reads; enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding"},
+		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome", "attribute", "equipment", "gm", "purchase", "team", "alliance", "login", "portal", "servertime"}, why: "login is the login module (the handshake authenticator that hands enter:<ticket> and session:<player_id>:<token> to account, the account collaborators, cmd/accountctl); portal is the HTTP front door on the account process (login, server list, enter ticket); servertime is the server clock a client reads; enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding; gm supplies audited feature commands, while the demo keeps its Player + World experience transaction"},
+		{write: "game/alliance/rules.go", why: "demo alliance currency is gold item 9001"},
+		{write: "game/purchase/products.go", why: "the purchase module's project-owned catalogue: demo item packs plus the default coin product"},
+		{write: "game/purchase/demo_provider.go", why: "the demo-only provider's channel and deterministic order identity"},
+		{write: "internal/service/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
+		{write: "internal/service/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
 		{write: "game/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的四个业务文件。协议多几个字段，
 		// 两个要装载 Player 的端点交给 player controller——EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
@@ -845,12 +818,9 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "configs/table/equipment_item.csv", why: "the demo equipment rules; transaction and attribute linkage belong to the modules"},
 		// demo 自己的两个文件：充值订单的领取账本（给模块的 BagComponent 加方法；邮件的领取账本是 mailbox 模块的），
 		// 以及背包变化经提交观察者同步给本人的断言。
-		{write: "game/entities/player/claim_ledgers.go", why: "the paid-order claim ledger: the demo's own method on the module's Bag component, so a claim and its items stay one transaction"},
 		{write: "internal/service/game/bag_sync_test.go", why: "the module's Bag component never calls PublishSyncDirty: on a Nest built with the scene's commit observer a grant and a discard still reach the owner's client, a refused grant sends nothing, and a bystander never sees the bag"},
-		// 档案是 profile 模块：组件、状态（PlayerDao.Profile 别人可见、ProfilePrivate 只给本人）、改名协议、CheckAddExp、
-		// 名片 handler ProfileCard 都是模块的。demo 只覆盖模块留给工程的升级钩子：升一级之后属性跟着涨、
-		// 发 player.level_up 这个 effect（奖励邮件由它的消费者发），都与经验、等级在同一笔事务里。
-		{write: "game/entities/player/profile_levelup.go", why: "the module's project-owned level-up hook with the demo's two consequences of a level: the attribute base layer follows it, and the player.level_up effect rides on the same transaction (the reward mail is its consumer's)"},
+		// 档案、属性成长、升级邮件由模块联动；demo 只提供在升级事务里读取的奖励规则。
+		{write: "game/entities/player/mailbox_profile_rules.go", why: "the mailbox/profile module owns reward effects; the demo chooses its hot-patchable attachment at upgrade time"},
 		// 邮件是 mailbox 模块：列表与领取两条协议、领取账本（PlayerDao.MailboxLedger）、附件的种类与编码、
 		// 发件入口 SendTo 都是模块的，demo 不带自己的 ListMail / ClaimMail / 领取账本，也不覆盖模块的任何文件。
 		// demo 的发件方（升级奖励、GM 补偿、活动结算、送礼的送达）import game/mailbox。它依赖的 wallet 跟着装进来
@@ -859,7 +829,7 @@ func demoModuleSteps() []demoScaffoldStep {
 		//
 		// 换服是 rehome 模块：申请协议、驱动器、档里的换服记录、与 enter 的联动（进入前检查、到达）都是模块的，
 		// demo 不覆盖它的任何文件。demo 这一侧的接线在自己的文件里：驻留表实现模块的 Residency 并发布
-		// （playerowner.go、service.go），saga 步骤按当前绑定准入（gift_saga.go、alliance_saga.go），
+		// （playerowner.go、service.go），saga 步骤按当前绑定准入（gift_saga.go、game/alliance/runtime），
 		// 登录在装载玩家之前跑进入前检查（game/controllers/player/enter_game.go），GM 命令 gm.player.rehome，
 		// 以及 demo 自己的换服前检查（rehome_checks.go）。
 		//

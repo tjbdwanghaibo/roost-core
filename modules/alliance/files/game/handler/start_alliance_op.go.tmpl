@@ -1,0 +1,68 @@
+package handler
+
+import (
+	"fmt"
+	"time"
+
+	"{{MODULE}}/game/alliance"
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// handlerStartAllianceOp starts one of the alliance sagas (found, donate, claim
+// reward) from inside the player's Nest transaction, the way StartGift starts
+// the gift saga: it changes nothing on the Player, checks under the lock that
+// the coins the saga's debit will take are there, and emits the saga start
+// intent into the same WAL record; the Data Engine outbox delivers it to the
+// coordinator, which commands the steps (game/alliance/runtime/saga.go).
+//
+// The coin check is advisory — the coins can still be spent before the debit
+// step runs; then the debit refuses with the same bag_short and the saga
+// fails with nothing to compensate. The business key comes from the endpoint
+// (op, player, session, frame sequence), so a retried frame folds into the
+// same saga.
+//
+//roost:nest rollback=undo durability=strict
+func handlerStartAllianceOp(target player.IBagEntity, op string, state []byte, coins int32, businessKey string) (string, error) {
+	if coins > 0 {
+		if have := target.BagComp().Count(alliance.CoinItemID); have < int64(coins) {
+			return "", errcode.Wrap(apperrors.ErrBagShort, nil, "item_id", alliance.CoinItemID, "have", have, "want", coins)
+		}
+	}
+	var start saga.StartRequest
+	switch op {
+	case alliance.OpFound:
+		start = saga.StartRequest{Type: alliancefound.Type, DefinitionVersion: alliancefound.Version}
+	case alliance.OpDonate:
+		start = saga.StartRequest{Type: alliancedonate.Type, DefinitionVersion: alliancedonate.Version}
+	case alliance.OpReward:
+		start = saga.StartRequest{Type: alliancereward.Type, DefinitionVersion: alliancereward.Version}
+	default:
+		return "", fmt.Errorf("alliance saga: unknown operation %q", op)
+	}
+	// The Player steps (debit / grant and their compensations) are routed to
+	// the player's bound sid: the route is read from the state the endpoint
+	// encoded (alliance.Encode refuses a state without one), so the saga's
+	// address and the payload the steps check can never disagree.
+	decoded, err := alliance.Decode(state)
+	if err != nil {
+		return "", err
+	}
+	if decoded.SID <= 0 {
+		return "", fmt.Errorf("alliance saga: player %d names no sid; the Player steps cannot be routed", decoded.PlayerID)
+	}
+	start.Route = saga.SidRoute(decoded.SID)
+	start.BusinessKey = businessKey
+	start.Data = state
+	start.DeadlineAt = time.Now().Add(alliance.Deadline) //glsvet:system-clock a saga deadline is the coordinator's system time
+	if err := saga.EmitStart(start); err != nil {
+		return "", err
+	}
+	return businessKey, nil
+}

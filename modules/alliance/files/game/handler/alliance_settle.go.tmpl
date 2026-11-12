@@ -1,0 +1,26 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+)
+
+// handlerAllianceSettle answers what became of requestID for playerID on this
+// alliance (AllianceRosterComponent.Settle): the receipt (Found: the request has one),
+// and whether the player holds a seat under requestID now. decide makes the
+// answer final — a request never decided is recorded as alliance_expired — and
+// is set once the guard's reservation is past its deadline or for a membership
+// (the service's healGuard); before the deadline nothing is written, so a
+// cross-instance join still in flight is not cut short.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceSettle(target alliance.IAllianceRosterEntity, requestID string, playerID int64, decide bool, retentionSeconds int64, nowUnix int64) (alliancerule.ReceiptAnswer, error) {
+	roster := target.AllianceRosterComp()
+	outcome, decided, seated, err := roster.Settle(requestID, playerID, decide, nowUnix, time.Duration(retentionSeconds)*time.Second)
+	if err != nil {
+		return alliancerule.ReceiptAnswer{}, err
+	}
+	return alliancerule.ReceiptAnswer{Found: decided, Receipt: outcome.Receipt, Seated: seated}, nil
+}

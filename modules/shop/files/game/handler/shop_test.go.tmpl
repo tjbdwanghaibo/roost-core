@@ -29,7 +29,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// 场景用自己的商品目录，数字都写死在这里：工程改了 shop_goods.go 里的样例，这些用例不该变红；
+// 场景用自己的商品目录，数字都写死在这里：工程改了 shop_goods.csv 里的样例，这些用例不该变红；
 // 被测规则改错了，这些用例要变红。
 const (
 	shopTestPotion   = 1  // 不限购：10 金币 1 个道具 1001
@@ -98,14 +98,14 @@ func (c *shopCommitter) Commit(context.Context, dataengine.CommitRecord) error {
 	return nil
 }
 
-// shopTestLoadItems 把用例要用到的道具装成进程当前的道具表，测试结束时原样换回。背包按道具表判断
+// shopTestLoadTables 装载测试自己的道具与商品表，测试结束时原样换回。背包按道具表判断
 // 道具号存不存在、单种上限是多少（game/entities/player/bag_items.go），没有装载过配置的进程里
 // 任何道具都放不进背包。用例自己带表，不用工程的 configs/table/item.csv：那张表归工程所有。
 // 表里的道具都不单独限制（max_stack 为 0），按背包的硬上限 999999 算。
 //
-// 表按生成代码的名字与键类型登记（item、int64），只登记这一张。装载会发布两处进程级的东西
+// 表按生成代码的名字与键类型登记。装载会发布两处进程级的东西
 // （缺省 Store 与新请求钉住的配置快照），两处都换回，这张表才不会漏给本包后面的用例。
-func shopTestLoadItems(t *testing.T) {
+func shopTestLoadTables(t *testing.T, goods map[int64]playerentity.ShopGoods) {
 	t.Helper()
 	// 目录里的道具 1001～1010，加上把背包摆满用的 5001～5198。
 	var rows []schema.Item
@@ -128,6 +128,22 @@ func shopTestLoadItems(t *testing.T) {
 		Name: configdata.Name("item"), File: "item.json",
 		Key: func(row schema.Item) int64 { return row.ID },
 	}); err != nil {
+		t.Fatal(err)
+	}
+	var products []schema.ShopGoods
+	for id, row := range goods {
+		row.ID = id
+		products = append(products, row)
+	}
+	raw, err = json.Marshal(products)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shop_goods.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// 业务拒绝场景故意装载畸形行，省去字段约束；正式装载器的表规则另有场景验证。
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.ShopGoods]{Name: "shop_goods", File: "shop_goods.json", Key: func(row schema.ShopGoods) int64 { return row.ID }}); err != nil {
 		t.Fatal(err)
 	}
 	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
@@ -157,8 +173,7 @@ func newShopFixture(t *testing.T, coins int64) *shopFixture {
 	RegisterShopBuyNestHandlers()
 	RegisterWalletGrantNestHandlers()
 	RegisterBagGrantNestHandlers()
-	t.Cleanup(playerentity.SetShopGoodsForTest(shopTestGoods()))
-	shopTestLoadItems(t)
+	shopTestLoadTables(t, shopTestGoods())
 	f := &shopFixture{committer: &shopCommitter{}}
 	f.now.Store(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli())
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
@@ -375,7 +390,7 @@ func TestShopUnknownOffShelfOrMalformedGoodsAreRefused(t *testing.T) {
 	malformed[103] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 0, Price: 10}
 	malformed[104] = playerentity.ShopGoods{ItemID: 1001, ItemCount: -1, Price: 10}
 	malformed[105] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 1, Price: 10, Limit: playerentity.ShopLimitKind(7), LimitCount: 5}
-	t.Cleanup(playerentity.SetShopGoodsForTest(malformed))
+	shopTestLoadTables(t, malformed)
 	for goodsID := int64(101); goodsID <= 105; goodsID++ {
 		f.wantRefused(t, fmt.Sprintf("malformed goods %d", goodsID), apperrors.ErrShopGoodsInvalid, "k1", goodsID, 1)
 	}
@@ -601,7 +616,7 @@ func TestShopResendWithTheSameKeyChargesOnceAndRepeatsTheFirstAnswer(t *testing.
 	ticket := offShelf[shopTestTicket]
 	ticket.Off = true
 	offShelf[shopTestTicket] = ticket
-	t.Cleanup(playerentity.SetShopGoodsForTest(offShelf))
+	shopTestLoadTables(t, offShelf)
 	if resent := f.mustBuy(t, "k1", shopTestTicket, 2); !reflect.DeepEqual(resent, first) {
 		t.Fatalf("resend on the next day = %+v, want the first answer %+v", resent, first)
 	}
@@ -679,7 +694,7 @@ func TestShopStaleCountsAreDroppedOnTheNextSuccessfulPurchase(t *testing.T) {
 	badge := changed[shopTestBadge]
 	badge.Limit = playerentity.ShopLimitDaily
 	changed[shopTestBadge] = badge
-	t.Cleanup(playerentity.SetShopGoodsForTest(changed))
+	shopTestLoadTables(t, changed)
 
 	f.wantRefused(t, "the removed daily goods", apperrors.ErrShopGoodsInvalid, "k6", shopTestGem, 1)
 	f.wantRefused(t, "the removed lifetime goods", apperrors.ErrShopGoodsInvalid, "k6", shopTestTitle, 1)

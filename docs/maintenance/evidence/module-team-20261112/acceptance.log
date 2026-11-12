@@ -1,0 +1,16 @@
+=== RUN   TestModuleTeamGenerated
+    module_team_test.go:40: team: pass=25 skip=0 ok=true
+    module_team_test.go:46: rehome: pass=40 skip=0 ok=true
+    module_team_test.go:46: team: pass=25 skip=0 ok=true
+    module_team_test.go:46: team+rehome: pass=2 skip=0 ok=true
+    module_team_test.go:52: caught mutation in game/entities/team/roster.go: deadline accepted:
+    module_team_test.go:53: caught mutation in game/entities/team/roster.go: ninth member accepted:
+    module_team_test.go:54: caught mutation in game/entities/team/roster.go: 65th invitation accepted:
+    module_team_test.go:55: caught mutation in game/entities/team/roster.go: leader handoff=
+    module_team_test.go:56: caught mutation in game/entities/team/roster.go: empty team ID reused:
+    module_team_test.go:57: caught mutation in game/entities/player/team_component.go: joined second team:
+    module_team_test.go:58: caught mutation in game/entities/player/team_rehome.go: team allowed rehome:
+    module_team_test.go:59: caught mutation in game/entities/player/team_rehome.go: moving player joined:
+--- PASS: TestModuleTeamGenerated (46.71s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	47.379s

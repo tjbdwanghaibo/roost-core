@@ -1,0 +1,138 @@
+// Package activity 是宿主无关的活动状态机。所有修改都在所属实体的 Nest 锁和事务里调用；
+// 阶段钩子只能改同事务 DAO 或登记可靠 effect，不能在快 worker 等待 I/O。
+package activity
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+)
+
+type Phase int32
+
+const (
+	Initializing Phase = iota + 1
+	Warmup
+	Open
+	Settling
+	Ended
+	MaxDefinitions = 128
+	AdvanceBudget  = 32
+)
+
+var (
+	ErrRule     = errors.New("activity: invalid rule")
+	ErrStale    = errors.New("activity: stale instance or flow")
+	ErrClosed   = errors.New("activity: phase is not open")
+	ErrDenied   = errors.New("activity: unlock condition is not satisfied")
+	ErrCapacity = errors.New("activity: participation capacity reached")
+)
+
+// Token 必须完整带回。Scope/Owner 隔离宿主，Generation/Cycle 隔离重新激活和期次，
+// Phase/FlowVersion 隔离迟到阶段回执和业务流程回执。客户端输入不能作为解锁凭据。
+type Token struct {
+	Definition  int32
+	Scope       string
+	Owner       int64
+	Generation  int64
+	Cycle       int64
+	Phase       Phase
+	FlowVersion int64
+}
+
+// Snapshot 不带内部规则或其他玩家的参与事实，可映射为业务 PB。
+type Snapshot struct {
+	Token            Token
+	Version          int64
+	Logic            string // 仅服务端协作使用，不进个人 PB。
+	Start            int64
+	OpenAt           int64
+	CloseAt          int64
+	Pending          bool
+	Flow             string
+	FlowDue          int64
+	CompletedThrough int64
+}
+
+// Context 的 Owner 是当前权威实体，业务可断言为自己的 Player/Alliance/ActivityWorld。
+// Snapshot 是值拷贝。回调不重入同一个活动引擎；外部工作以 Key(action) 作为可靠幂等键。
+type Context struct {
+	Owner    entity.IThreadSafeEntity
+	Snapshot Snapshot
+	Now      int64
+}
+
+func (c Context) Key(action string) string {
+	t := c.Snapshot.Token
+	return fmt.Sprintf("activity/%s/%d/%d/%d/%d/%d/%d/%s", t.Scope, t.Owner, t.Definition, t.Generation, t.Cycle, t.Phase, t.FlowVersion, action)
+}
+
+type Flow struct {
+	Name string
+	Due  int64
+}
+
+// Hooks 在进程启动时登记。Enter 返回 pending 只允许初始化/结算阶段；之后由 Complete 确认。
+// 缺省无钩子的活动是纯阶段活动。非空 Logic 未注册会拒绝激活/推进，不能默默跳过业务。
+type Hooks struct {
+	Eligible func(entity.IThreadSafeEntity, string) bool
+	Enter    func(Context) (pending bool, err error)
+	Flow     func(Context) (Flow, error)
+	// Resume 在锁外 I/O 段继续 pending 工作；成功后再经 Complete 提交完成事实。
+	// 可能重试/迁移后重入，所有外部写必须使用稳定键，不从实时排行榜重算已冻结的奖励。
+	Resume func(context.Context, *app.Registry, Snapshot) (bool, error)
+}
+
+var hookRegistry = struct {
+	sync.RWMutex
+	values map[string]Hooks
+}{values: map[string]Hooks{}}
+
+func Register(name string, hooks Hooks) {
+	if name == "" {
+		panic("activity: empty logic name")
+	}
+	hookRegistry.Lock()
+	defer hookRegistry.Unlock()
+	if _, exists := hookRegistry.values[name]; exists {
+		panic("activity: duplicate logic " + name)
+	}
+	hookRegistry.values[name] = hooks
+}
+
+func hooksFor(name string) (Hooks, error) {
+	if name == "" {
+		return Hooks{}, nil
+	}
+	hookRegistry.RLock()
+	defer hookRegistry.RUnlock()
+	h, ok := hookRegistry.values[name]
+	if !ok {
+		return Hooks{}, fmt.Errorf("%w: logic %q is not registered", ErrRule, name)
+	}
+	return h, nil
+}
+
+type Definition = schema.Activity
+
+// Host 是单次调用的适配器，不保存在组件字段中；事务状态全部在 Book。
+type Host struct {
+	Owner entity.IThreadSafeEntity
+	Scope string
+	Book  *db.ActivityBook
+}
+
+func (h Host) token(id int32, r *db.ActivityRecord) Token {
+	return Token{id, h.Scope, h.Owner.ID(), r.GetGeneration(), r.GetCycle(), Phase(r.GetPhase()), r.GetFlowVersion()}
+}
+
+func (h Host) snapshot(id int32, r *db.ActivityRecord, rule frozenRule) Snapshot {
+	return Snapshot{Token: h.token(id, r), Version: rule.Version, Logic: rule.Logic, Start: r.GetStart(), OpenAt: r.GetOpenAt(), CloseAt: r.GetCloseAt(), Pending: r.GetPending(), Flow: r.GetFlow(), FlowDue: r.GetFlowDue(), CompletedThrough: r.GetCompletedThrough()}
+}

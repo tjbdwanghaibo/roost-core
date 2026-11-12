@@ -1,0 +1,363 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"testing"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+	game "{{MODULE}}/game/matchmaking"
+	player "{{MODULE}}/game/entities/player"
+	room "{{MODULE}}/game/entities/room"
+	sender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+)
+
+func registerMatchmaking(engine *nest.NestMgr) {
+	registerTeamTestHandler(engine, handlerNameMatchState, invokeMatchState, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
+	registerTeamTestHandler(engine, handlerNameMatchBegin, invokeMatchBegin, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	registerTeamTestHandler(engine, handlerNameMatchUpdate, invokeMatchUpdate, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	registerTeamTestHandler(engine, handlerNameMatchClear, invokeMatchClear, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	for _, register := range []func(*nest.NestMgr) error{RegisterMatchTeamBeginNestHandlersOn, RegisterMatchReleaseNestHandlersOn, RegisterMatchroomOpenNestHandlersOn, RegisterMatchRoomClosedNestHandlersOn, RegisterRoomJoinNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterRoomCloseNestHandlersOn} {
+		if err := register(engine); err != nil {
+			panic(err)
+		}
+	}
+}
+
+type matchFixture struct {
+	*teamFixture
+	runtime *game.Runtime
+	store   svcmatch.Store
+	roomID  int64
+	opens   int
+	matchID string
+	members []int64
+}
+
+func newMatchFixture(t *testing.T, registrations ...func(*nest.NestMgr)) *matchFixture {
+	t.Helper()
+	f := &matchFixture{teamFixture: newTeamFixture(t, append([]func(*nest.NestMgr){registerMatchmaking}, registrations...)...)}
+	room.RegisterEntity()
+	id, err := entity.BuildEntityID(92001, room.EntityKindRoom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: room.EntityKindRoom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.values[id] = value
+	f.roomID = id
+	store, err := svcmatch.NewMemoryStore(svcmatch.Config{Now: func() time.Time { return time.UnixMilli(f.now.Load()) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.store = store
+	f.use(t, store)
+	return f
+}
+func (f *matchFixture) use(t *testing.T, matcher svcmatch.Matchmaker) {
+	t.Helper()
+	r, err := game.NewRuntime(f.engine, matcher, f, 1, func(id int64) bool { return f.values[f.playerID(id)] != nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.runtime = r
+}
+func (f *matchFixture) Open(ctx context.Context, key string, members []int64) (int64, error) {
+	if f.matchID != "" && (key != f.matchID || !slices.Equal(members, f.members)) {
+		return 0, fmt.Errorf("fixture only reserves one room")
+	}
+	f.matchID = key
+	f.members = slices.Clone(members)
+	f.opens++
+	err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(ctx, f.roomID, key, members)
+	return entity.GetUniqueIDFromEntityID(f.roomID), err
+}
+func (f *matchFixture) enqueue(t *testing.T, id int64, team bool) player.MatchSnapshot {
+	t.Helper()
+	s, err := f.runtime.Enqueue(context.Background(), id, 1, team)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func (f *matchFixture) status(t *testing.T, id int64) player.MatchSnapshot {
+	t.Helper()
+	s, err := f.runtime.Status(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func TestMatchmakingSoloCreatesReservedRoomAndReturnsBothResults(t *testing.T) {
+	f := newMatchFixture(t)
+	f.enqueue(t, 101, false)
+	f.enqueue(t, 102, false)
+	if err := f.runtime.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a, b := f.status(t, 101), f.status(t, 102)
+	if a.Phase != player.MatchMatched || b.Phase != player.MatchMatched || a.RoomID != b.RoomID || a.RoomID == 0 {
+		t.Fatalf("results: %+v %+v", a, b)
+	}
+	for _, id := range []int64{101, 102} {
+		if _, err := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.roomID, id, fmt.Sprint(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.roomID, 103, "outsider"); !errors.Is(err, apperrors.ErrRoomNotMember) {
+		t.Fatalf("unmatched player admitted: %v", err)
+	}
+}
+func TestMatchmakingTeamFreezesRosterAndDoesNotSplitIt(t *testing.T) {
+	f := newMatchFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	first := f.enqueue(t, 101, true)
+	if _, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), f.teamID, f.playerID(101), 103); !errors.Is(err, apperrors.ErrTeamBlocked) {
+		t.Fatalf("queued roster changed: %v", err)
+	}
+	f.enqueue(t, 103, false)
+	if err := f.runtime.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.status(t, 101).Phase != player.MatchQueued {
+		t.Fatal("party mixed with solo")
+	}
+	if _, err := f.runtime.Cancel(context.Background(), 102, first.Key); err != nil {
+		t.Fatal(err)
+	}
+	if f.status(t, 101).Phase != player.MatchCancelled || f.status(t, 102).Phase != player.MatchCancelled {
+		t.Fatal("party cancellation not shared")
+	}
+	if err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(102), false); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMatchmakingTwoTeamsMatchAllMembers(t *testing.T) {
+	f := newMatchFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	f.enqueue(t, 101, true)
+	second, _ := entity.BuildEntityID(91002, entity.ResolveEntityID(f.teamID).Kind)
+	if _, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), second, f.playerID(103), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewTeamInviteSender(f.engine).MultiSync_TeamInvite(context.Background(), second, f.playerID(103), 104); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), second, f.playerID(104), 1); err != nil {
+		t.Fatal(err)
+	}
+	f.enqueue(t, 103, true)
+	if err := f.runtime.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.members, []int64{101, 102, 103, 104}) {
+		t.Fatalf("split party: %v", f.members)
+	}
+	for _, id := range f.members {
+		if s := f.status(t, id); s.Phase != player.MatchMatched {
+			t.Fatalf("member %d: %+v", id, s)
+		}
+	}
+}
+func TestMatchmakingCancelBeforeMatchLeavesNoRoom(t *testing.T) {
+	f := newMatchFixture(t)
+	s := f.enqueue(t, 101, false)
+	f.enqueue(t, 102, false)
+	got, err := f.runtime.Cancel(context.Background(), 101, s.Key)
+	if err != nil || got.Phase != player.MatchCancelled {
+		t.Fatalf("cancel: %+v %v", got, err)
+	}
+	if err := f.runtime.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.opens != 0 {
+		t.Fatal("cancelled ticket formed room")
+	}
+	if _, err := f.runtime.Clear(context.Background(), 101, s.Key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.runtime.Enqueue(context.Background(), 101, 1, false); !errors.Is(err, apperrors.ErrMatchmakingStale) {
+		t.Fatalf("old enqueue restarted: %v", err)
+	}
+}
+func TestMatchmakingCancelAfterCommitRecoversOriginalMatch(t *testing.T) {
+	f := newMatchFixture(t)
+	a := f.enqueue(t, 101, false)
+	b := f.enqueue(t, 102, false)
+	q := svcmatch.Queue{Mode: "module-duel", GroupSize: 2, Partition: "sid-1-size-1"}
+	if _, err := f.store.Commit(context.Background(), q, []string{a.TicketID, b.TicketID}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.runtime.Cancel(context.Background(), 101, a.Key)
+	if err != nil || got.Phase != player.MatchMatched {
+		t.Fatalf("cancel lost committed match: %+v %v", got, err)
+	}
+	if f.status(t, 102).RoomID != got.RoomID {
+		t.Fatal("different recovered room")
+	}
+}
+func TestMatchmakingDroppedPlayerPollsSameResultAndReconnects(t *testing.T) {
+	f := newMatchFixture(t)
+	a := f.enqueue(t, 101, false)
+	b := f.enqueue(t, 102, false)
+	q := svcmatch.Queue{Mode: "module-duel", GroupSize: 2, Partition: "sid-1-size-1"}
+	// Commit 已成，模拟进程在本地写结果前中断；重连通过查询恢复，而非依赖那次推送。
+	if _, err := f.store.Commit(context.Background(), q, []string{a.TicketID, b.TicketID}); err != nil {
+		t.Fatal(err)
+	}
+	first := f.status(t, 102)
+	second := f.status(t, 101)
+	if first.RoomID == 0 || first.RoomID != second.RoomID {
+		t.Fatal("lost recovery")
+	}
+	before := f.opens
+	for range 3 {
+		if s := f.status(t, 102); s.RoomID != first.RoomID {
+			t.Fatal("duplicate notification changed room")
+		}
+	}
+	if f.opens != before {
+		t.Fatal("terminal status opened room again")
+	}
+	seat, err := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.roomID, 102, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(context.Background(), f.roomID, 102, seat.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(context.Background(), f.roomID, 102, seat.Epoch, "new"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type lostEnqueue struct{ svcmatch.Matchmaker }
+
+func (s lostEnqueue) Enqueue(ctx context.Context, q svcmatch.Queue, p svcmatch.Subject, key string) (svcmatch.Ticket, error) {
+	if _, err := s.Matchmaker.Enqueue(ctx, q, p, key); err != nil {
+		return svcmatch.Ticket{}, err
+	}
+	return svcmatch.Ticket{}, errors.New("lost enqueue reply")
+}
+func TestMatchmakingLostEnqueueReplyIsFoundWithoutReenqueuing(t *testing.T) {
+	f := newMatchFixture(t)
+	f.use(t, lostEnqueue{f.store})
+	if _, err := f.runtime.Enqueue(context.Background(), 101, 1, false); err == nil {
+		t.Fatal("lost reply not surfaced")
+	}
+	s := f.status(t, 101)
+	if s.Phase != player.MatchQueued || s.TicketID == "" {
+		t.Fatalf("orphan ticket not found: %+v", s)
+	}
+}
+
+type absentEnqueue struct {
+	svcmatch.Matchmaker
+	calls int
+}
+
+func (s *absentEnqueue) Enqueue(context.Context, svcmatch.Queue, svcmatch.Subject, string) (svcmatch.Ticket, error) {
+	s.calls++
+	return svcmatch.Ticket{}, errors.New("request not delivered")
+}
+func TestMatchmakingNeverBoundIntentExpiresWithoutUnsafeRetry(t *testing.T) {
+	f := newMatchFixture(t)
+	store := &absentEnqueue{Matchmaker: f.store}
+	f.use(t, store)
+	if _, err := f.runtime.Enqueue(context.Background(), 101, 1, false); err == nil {
+		t.Fatal("missing error")
+	}
+	f.now.Add(60000)
+	s := f.status(t, 101)
+	if s.Phase != player.MatchExpired || store.calls != 1 {
+		t.Fatalf("unknown enqueue retried: %+v calls=%d", s, store.calls)
+	}
+}
+func TestMatchmakingExpiredMatchHistoryKeepsWriteBarrier(t *testing.T) {
+	f := newMatchFixture(t)
+	a := f.enqueue(t, 101, false)
+	b := f.enqueue(t, 102, false)
+	q := svcmatch.Queue{Mode: "module-duel", GroupSize: 2, Partition: "sid-1-size-1"}
+	if _, err := f.store.Commit(context.Background(), q, []string{a.TicketID, b.TicketID}); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add((11 * time.Minute).Milliseconds())
+	if _, err := f.store.Sweep(context.Background(), q, 64); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.runtime.Status(context.Background(), 101); !errors.Is(err, apperrors.ErrMatchmakingUnknown) {
+		t.Fatalf("missing match treated as cancellation: %v", err)
+	}
+	if _, err := f.runtime.Clear(context.Background(), 101, a.Key); err == nil {
+		t.Fatal("unknown match cleared")
+	}
+}
+func TestMatchmakingPartyBeginRollbackRestoresEveryPlayerAndTeam(t *testing.T) {
+	f := newMatchFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	f.accept(t, 102)
+	f.commit.reject.Store(true)
+	if _, err := f.runtime.Enqueue(context.Background(), 101, 1, true); err == nil {
+		t.Fatal("commit rejection ignored")
+	}
+	f.commit.reject.Store(false)
+	for _, id := range []int64{101, 102} {
+		s, err := f.runtime.State(context.Background(), id)
+		if err != nil || s.Key != "" || s.Sequence != 0 {
+			t.Fatalf("intent leaked: %+v %v", s, err)
+		}
+	}
+	if err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(102), false); err != nil {
+		t.Fatalf("team hold leaked: %v", err)
+	}
+}
+func TestMatchmakingCannotClearLiveRoom(t *testing.T) {
+	f := newMatchFixture(t)
+	f.enqueue(t, 101, false)
+	f.enqueue(t, 102, false)
+	if err := f.runtime.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s := f.status(t, 101)
+	if _, err := f.runtime.Clear(context.Background(), 101, s.Key); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("live room released: %v", err)
+	}
+	seat, err := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.roomID, 101, "host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.NewRoomCloseSender(f.engine).Sync_RoomClose(context.Background(), f.roomID, 101, seat.Epoch, "host"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.runtime.Clear(context.Background(), 101, s.Key); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := f.runtime.Enqueue(context.Background(), 101, 2, false); err != nil || s.Sequence != 2 {
+		t.Fatalf("next queue: %+v %v", s, err)
+	}
+}
+func TestMatchmakingSoloCannotBypassTeamAndForeignKeyCannotCancel(t *testing.T) {
+	f := newMatchFixture(t)
+	f.create(t, 101)
+	if _, err := f.runtime.Enqueue(context.Background(), 101, 1, false); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("team member solo queued: %v", err)
+	}
+	f.enqueue(t, 102, false)
+	if _, err := f.runtime.Cancel(context.Background(), 102, "101:1"); !errors.Is(err, apperrors.ErrMatchmakingStale) {
+		t.Fatalf("foreign key cancelled: %v", err)
+	}
+}

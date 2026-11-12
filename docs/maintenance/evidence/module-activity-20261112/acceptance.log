@@ -1,0 +1,35 @@
+=== RUN   TestModuleActivityGenerated
+    module_activity_test.go:14: generated=<temporary-generated-project>/activityplay
+    module_activity_test.go:19: activity: pass=21 skip=0 ok=true
+    module_activity_test.go:19: activity_world: pass=4 skip=0 ok=true
+    module_activity_test.go:19: activity_alliance: pass=4 skip=0 ok=true
+    module_activity_test.go:25: activity: pass=21 skip=0 ok=true
+    module_activity_test.go:25: activity+enter: pass=1 skip=0 ok=true
+    module_activity_test.go:25: activity+leaderboard: pass=1 skip=0 ok=true
+    module_activity_test.go:25: activity+mailbox: pass=1 skip=0 ok=true
+    module_activity_test.go:25: activity+profile: pass=1 skip=0 ok=true
+    module_activity_test.go:25: activity_world: pass=4 skip=0 ok=true
+    module_activity_test.go:25: activity_alliance: pass=4 skip=0 ok=true
+    module_activity_test.go:68: caught mutation in game/activity/engine.go: deadline admission=
+    module_activity_test.go:69: caught mutation in game/activity/engine.go: initial=
+    module_activity_test.go:70: caught mutation in game/activity/engine.go:
+    module_activity_test.go:71: caught mutation in game/activity/types.go: unbounded or missing catchup
+    module_activity_test.go:72: caught mutation in game/activity/engine.go: anchors
+    module_activity_test.go:73: caught mutation in game/entities/player/activity_timers.go: timer swallowed
+    module_activity_test.go:74: caught mutation in game/activity/rules.go: DST day=
+    module_activity_test.go:75: caught mutation in game/activity/mailbox.go:
+    module_activity_test.go:76: caught mutation in internal/rpc/activity_alliance/service.go: route accepted foreign owner
+--- PASS: TestModuleActivityGenerated (79.17s)
+=== RUN   TestModuleExistingServiceExtensionKeepsOwnership
+--- PASS: TestModuleExistingServiceExtensionKeepsOwnership (0.00s)
+=== RUN   TestModuleActivityMinimal
+    module_activity_test.go:86: activity: pass=21 skip=0 ok=true
+--- PASS: TestModuleActivityMinimal (15.60s)
+=== RUN   TestModuleActivityServiceRollback
+--- PASS: TestModuleActivityServiceRollback (14.54s)
+=== RUN   TestModuleCatalogEmbedsEveryTemplateAndValidates
+--- PASS: TestModuleCatalogEmbedsEveryTemplateAndValidates (0.06s)
+=== RUN   TestModuleWithValidationNamesWhatIsWrong
+--- PASS: TestModuleWithValidationNamesWhatIsWrong (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	110.046s

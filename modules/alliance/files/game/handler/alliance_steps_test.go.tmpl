@@ -1,0 +1,197 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/game/alliance"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+// pipelinedRecorder is a committer for durability=pipelined handlers (the
+// alliance sagas' native steps): every record is durable at once.
+type pipelinedRecorder struct {
+	mu      sync.Mutex
+	records []dataengine.CommitRecord
+}
+
+type durableTicket uint64
+
+func (t durableTicket) LSN() uint64 { return uint64(t) }
+func (durableTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (durableTicket) Err() error { return nil }
+
+func (c *pipelinedRecorder) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+
+func (c *pipelinedRecorder) Enqueue(ctx context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	if err := c.Commit(ctx, record); err != nil {
+		return nil, err
+	}
+	return durableTicket(c.DurableLSN()), nil
+}
+
+func (c *pipelinedRecorder) DurableLSN() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return uint64(len(c.records))
+}
+
+// newAllianceStepHarness is one Player on a real Nest whose committer takes
+// pipelined records, with the project's item table loaded.
+func newAllianceStepHarness(t *testing.T) (*player.Player, nest.Client) {
+	t.Helper()
+	player.RegisterEntity()
+	RegisterBagGrantNestHandlers()
+	RegisterAllianceDebitNestHandlers()
+	RegisterAllianceCreditNestHandlers()
+	previous, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(previousConfig) })
+	rows := []schema.Item{{ID: alliance.CoinItemID, Name: "alliance currency"}, {ID: 1002, Name: "reward", MaxStack: 99}}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err = os.WriteFile(filepath.Join(dir, "item.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err = configdata.RegisterTable(registry, configdata.TableDef[int64, schema.Item]{Name: "item", File: "item.json", Key: func(row schema.Item) int64 { return row.ID }}); err != nil {
+		t.Fatal(err)
+	}
+	store := configdata.NewStore(registry, dir)
+	if _, err = store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id, err := entity.BuildEntityID(4343, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	value := built.(*player.Player)
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(allianceStepGetter{value: value}),
+		nest.NestOptionWithTransactionCommitter(&pipelinedRecorder{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return value, engine
+}
+
+func allianceCommand(t *testing.T, key string, attempt uint32, phase saga.Phase, topic string) saga.Command {
+	t.Helper()
+	payload, err := alliance.Encode(alliance.State{PlayerID: 4343, SID: 1000, Coins: 100, Name: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	return saga.Command{
+		ID: key + "/" + string(rune('0'+attempt)), IdempotencyKey: key, SagaID: "alliance-saga", SagaType: alliancefound.Type,
+		DefinitionVersion: alliancefound.Version, BusinessKey: "alliance-found:4343", StepName: "debit", Phase: phase,
+		Attempt: attempt, Topic: topic, Payload: payload, DeadlineAt: now.Add(time.Hour), CreatedAt: now,
+	}
+}
+
+// The alliance sagas' native Bag steps: the fee is taken once per operation
+// however often its command is delivered (the receipt in PlayerDao.SagaReceipts
+// replays), the refund — the debit's compensation, a different operation —
+// puts it back, and a grant into a full stack is a refusal the coordinator
+// compensates, with the Bag untouched.
+func TestAllianceNativeStepsTakeEffectOncePerOperation(t *testing.T) {
+	subject, client := newAllianceStepHarness(t)
+	ctx := context.Background()
+	if _, err := syncsender.NewBagGrantSender(client).Sync_BagGrant(ctx, subject.ID(), alliance.CoinItemID, 150); err != nil {
+		t.Fatal(err)
+	}
+	debit := func(command saga.Command) saga.StepOutcome {
+		t.Helper()
+		outcome, err := saga.RunNativeStep(ctx, command, 0, func(ctx context.Context, step saga.NativeStep) error {
+			_, err := syncsender.NewAllianceDebitSender(client).Sync_AllianceDebit(ctx, subject.ID(), alliance.CoinItemID, 100, step)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("debit %s: %v", command.ID, err)
+		}
+		return outcome
+	}
+	first := debit(allianceCommand(t, "fee-1", 1, saga.PhaseForward, alliancefound.TopicDebit))
+	if first.Kind != saga.StepExecuted || !first.Completion.Success || subject.BagComp().Count(alliance.CoinItemID) != 50 {
+		t.Fatalf("first debit = %+v, coins %d; want executed, 50 left", first, subject.BagComp().Count(alliance.CoinItemID))
+	}
+	again := debit(allianceCommand(t, "fee-1", 2, saga.PhaseForward, alliancefound.TopicDebit))
+	if again.Kind != saga.StepReplayed || subject.BagComp().Count(alliance.CoinItemID) != 50 {
+		t.Fatalf("redelivered debit = %+v, coins %d; want the receipt replayed and 50 left", again, subject.BagComp().Count(alliance.CoinItemID))
+	}
+	refund, err := saga.RunNativeStep(ctx, allianceCommand(t, "fee-1-refund", 1, saga.PhaseCompensate, alliancefound.TopicDebitCompensation), 0,
+		func(ctx context.Context, step saga.NativeStep) error {
+			_, err := syncsender.NewAllianceCreditSender(client).Sync_AllianceCredit(ctx, subject.ID(), alliance.CoinItemID, 100, step)
+			return err
+		})
+	if err != nil || refund.Kind != saga.StepExecuted || !refund.Completion.Success || subject.BagComp().Count(alliance.CoinItemID) != 150 {
+		t.Fatalf("refund = %+v, %v, coins %d; want the fee back (150)", refund, err, subject.BagComp().Count(alliance.CoinItemID))
+	}
+
+	const manaPotion = int64(1002)
+	if _, err := syncsender.NewBagGrantSender(client).Sync_BagGrant(ctx, subject.ID(), manaPotion, 99); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := saga.RunNativeStep(ctx, allianceCommand(t, "reward-1", 1, saga.PhaseForward, alliancefound.TopicDebit), 0,
+		func(ctx context.Context, step saga.NativeStep) error {
+			_, err := syncsender.NewAllianceCreditSender(client).Sync_AllianceCredit(ctx, subject.ID(), manaPotion, 5, step)
+			return err
+		})
+	if err != nil || grant.Kind != saga.StepExecuted || grant.Completion.Success || grant.Completion.Retryable || subject.BagComp().Count(manaPotion) != 99 {
+		t.Fatalf("grant into a full stack = %+v, %v, potions %d; want a non-retryable refusal and the stack unchanged", grant, err, subject.BagComp().Count(manaPotion))
+	}
+}
+
+type allianceStepGetter struct{ value entity.IThreadSafeEntity }
+
+func (g allianceStepGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if g.value.ID() != id {
+		return nil, fmt.Errorf("missing %d", id)
+	}
+	return g.value, nil
+}
+func (g allianceStepGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}

@@ -1,0 +1,6 @@
+--- FAIL: TestTrackedGoFilesAreGofmtClean (1.01s)
+    gofmt_gate_test.go:64: 1 .go file(s) are not gofmt-clean; run gofmt -w on them:
+          codegen/internal/roost/demo_test.go
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	10.852s
+FAIL

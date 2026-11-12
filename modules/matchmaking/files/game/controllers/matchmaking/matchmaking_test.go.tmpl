@@ -1,0 +1,35 @@
+package matchmaking
+
+import (
+	"testing"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+func TestMatchmakingEndpointRequiresIdentityAndRequest(t *testing.T) {
+	c := &Controller{}
+	if _, err := c.HandleMatchEnqueue(nil, &pb.MatchEnqueueRequest{}); err == nil {
+		t.Fatal("anonymous queue accepted")
+	}
+	if _, err := c.HandleMatchStatus(&playeraccess.Context{PlayerID: 1}, nil); err == nil {
+		t.Fatal("missing request accepted")
+	}
+	if _, err := FromRegistry(nil); err == nil {
+		t.Fatal("nil registry accepted")
+	}
+}
+
+func TestMatchmakingControllerCanRegisterBeforeModuleStart(t *testing.T) {
+	c, err := FromRegistry(app.NewRegistry(viper.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := c.HandleMatchStatus(&playeraccess.Context{PlayerID: 1}, &pb.MatchStatusRequest{})
+	if err != nil || response.Code == 0 {
+		t.Fatalf("unstarted runtime did not reject request: %+v %v", response, err)
+	}
+}

@@ -1,0 +1,15 @@
+package alliance
+
+import (
+	"context"
+
+	"{{MODULE}}/game/rehome"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 联动只替换归属查询；查询必须在 Player 的 Nest 事务之前完成，不能在快池等待 account。
+func init() { bindingResolver = rehomeBinding }
+func rehomeBinding(ctx context.Context, registry *app.Registry, playerID int64, _ int32) (int32, bool, error) {
+	return rehome.Binding(ctx, registry, playerID)
+}

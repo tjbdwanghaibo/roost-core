@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"{{MODULE}}/game/partition"
 	player "{{MODULE}}/game/entities/player"
 	scene_actor "{{MODULE}}/game/entities/scene_actor"
 	team "{{MODULE}}/game/entities/team"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 )
@@ -11,8 +13,8 @@ import (
 // teamGroup 把 Team 的成员表换成 Base 缓存的那份（cellworld.Group）：每名成员的 Player、在分区场景里的 SceneActor
 // （ID 跨格不变）与 Base 的 sid。组队 handler 都在 [Team, Player] 事务里用它：写自己的缓存（Node.SetGroup）、通知别的
 // 成员的 Base（Node.NotifyGroup）。
-func teamGroup(info team.Info) cellworld.Group {
-	g := cellworld.Group{ID: info.TeamID, Ver: info.Ver}
+func teamGroup(info team.Snapshot) cellworld.Group {
+	g := cellworld.Group{ID: info.TeamID, Ver: uint64(info.Revision)}
 	for _, unique := range info.Members {
 		playerID, err := entity.BuildEntityID(unique, player.EntityKindPlayer)
 		if err != nil {
@@ -22,7 +24,7 @@ func teamGroup(info team.Info) cellworld.Group {
 		if err != nil {
 			continue
 		}
-		g.Members = append(g.Members, cellworld.GroupMember{Player: playerID, Actor: actorID, SID: info.Seats[unique]})
+		g.Members = append(g.Members, cellworld.GroupMember{Player: playerID, Actor: actorID, SID: info.SIDs[unique]})
 	}
 	return g
 }
@@ -35,4 +37,24 @@ func teamSeat(g cellworld.Group, playerEntity int64) []cellworld.GroupMember {
 		}
 	}
 	return nil
+}
+
+// 社交权威归 team 模块；分区场景只通过登记点维护组关系投影，不复制建队/入队/离队实现。
+func init() {
+	player.OnTeamChanged("partition", func(owner *player.Player, change player.TeamChange) error {
+		node := partition.Node()
+		if node == nil {
+			return nil
+		}
+		after := teamGroup(change.After)
+		if owner.TeamComp().TeamID() == change.After.TeamID && len(teamSeat(after, owner.ID())) != 0 {
+			node.SetGroup(owner, after)
+		} else {
+			node.SetGroup(owner, cellworld.Group{})
+		}
+		if !change.Refresh {
+			node.NotifyGroup(after, teamGroup(change.Before).Members)
+		}
+		return nil
+	})
 }

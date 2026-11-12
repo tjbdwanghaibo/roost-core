@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrPurchaseInvalid  = errcode.Define({{ID:errcode:purchase_invalid}}, "purchase_invalid", "invalid paid grant")
+	ErrPurchaseSequence = errcode.Define({{ID:errcode:purchase_sequence}}, "purchase_sequence", "an earlier paid grant is still pending")
+	ErrPurchaseReward   = errcode.Define({{ID:errcode:purchase_reward}}, "purchase_reward", "reward kind is not supported")
+)

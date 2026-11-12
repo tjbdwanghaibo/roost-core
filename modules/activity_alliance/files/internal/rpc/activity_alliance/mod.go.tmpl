@@ -1,0 +1,93 @@
+package activity_alliance
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
+	"{{MODULE}}/game/activity"
+	host "{{MODULE}}/game/entities/alliance"
+)
+
+type Mod struct {
+	service  *Service
+	registry *app.Registry
+	driver   *activity.Driver
+}
+
+func NewMod(service *Service) *Mod { return &Mod{service: service} }
+
+func (m *Mod) Name() app.ModName { return CapabilityName }
+
+func (m *Mod) DependsOn() []app.ModName {
+	return []app.ModName{mods.ModNats, mods.ModNest, mods.ModRemoteEntity, mods.ModConfigData}
+}
+
+func (m *Mod) OptionalDependsOn() []app.ModName {
+	return []app.ModName{mods.ModRemoteEntityPreload}
+}
+
+func (m *Mod) Init(*viper.Viper) error {
+	if m.service == nil {
+		return fmt.Errorf("activity_alliance: nil service")
+	}
+	return nil
+}
+
+func (m *Mod) Provide(r *app.Registry) error {
+	m.registry = r
+	return mods.RegisterAll(r, OwnerCapabilities(m.service)...)
+}
+
+func (m *Mod) Start() error {
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(m.registry.Config(), &identity); err != nil {
+		return err
+	}
+	remote, ok := app.Lookup[entity.IRemoteEntityManager](m.registry, mods.ModRemoteEntity)
+	if !ok {
+		return fmt.Errorf("activity_alliance: remote manager missing")
+	}
+	owned, ok := remote.(entity.RemoteOwnedEntityLister)
+	if !ok {
+		return fmt.Errorf("activity_alliance: owned entity listing missing")
+	}
+	client, ok := app.Lookup[nest.Client](m.registry, mods.ModNest)
+	if !ok {
+		return fmt.Errorf("activity_alliance: Nest missing")
+	}
+	transport, ok := app.Lookup[bus.IBus](m.registry, mods.ModBus)
+	if !ok {
+		return fmt.Errorf("activity_alliance: bus missing")
+	}
+	m.service.client = client
+	m.service.owners = remote
+	m.service.sid = identity.Sid
+
+	if err := RegisterHandlers(transport, m.service); err != nil {
+		return err
+	}
+	m.driver = activity.StartDriver(owned, host.EntityKindAlliance, func(ctx context.Context, id int64) error {
+		views, err := m.service.Pulse(ctx, id, "", 0)
+		if err != nil {
+			return err
+		}
+		return activity.ResumePending(ctx, m.registry, views, func(ctx context.Context, token activity.Token) error { return m.service.Complete(ctx, id, token) })
+	})
+	return nil
+}
+
+func (m *Mod) Stop() { _ = m.StopWithContext(context.Background()) }
+
+func (m *Mod) StopWithContext(ctx context.Context) error {
+	if m.driver == nil {
+		return nil
+	}
+	return m.driver.Stop(ctx)
+}

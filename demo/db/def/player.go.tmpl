@@ -1,6 +1,6 @@
 package dbdef
 
-//roost:dao coll=player db=main schema=3
+//roost:dao coll=player db=main schema=4
 type PlayerDao struct {
 	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
 	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
@@ -57,36 +57,6 @@ type PlayerDao struct {
 	// see game/leaderboard for why the rank service's request ring cannot be the
 	// ledger for this.
 	DungeonClears map[int64]int64 `dao:"persist,map=fast" store:"dungeon_clears"`
-	// PurchaseClaims is the same ledger for paid orders (the ledger for mail
-	// attachments is the mailbox module's PlayerDao.MailboxLedger): order id -> the
-	// moment after which that grant can no longer be claimed (payment time
-	// plus game/purchase.ClaimRetentionSeconds). The platform service runs in
-	// another process and records a grant there; this is what makes the game
-	// side of that handover exactly-once, because the id lands in the same
-	// WAL record as the items.
-	//
-	// 当前 schema 为 3；框架只加载同版本文档，不自动转换历史数据。
-	PurchaseClaims map[string]int64 `dao:"persist,map=fast" store:"purchase_claims"`
-	// GuildID is the guild this player is shown in, or 0 — the player's own
-	// copy of their membership, not the authority.
-	//
-	// Membership has one authority: the alliance's roster, owned and written
-	// by the alliance service (decision 1 of the alliance plan,
-	// docs/maintenance/FEATURE-2026-11-04-alliance-service.md in roost-core).
-	// This copy is written in the player's own transaction after the player's
-	// join / leave / founding succeeded, by the alliance service's membership
-	// notices while the player is online
-	// (internal/service/{{GAME_SERVICE}}/alliance_notice.go), and at login
-	// hidden when the guild's mirror no longer has the player, or — when it
-	// shows none — set from the alliance service's Membership answer (a join
-	// approved while the player was offline). It is persisted
-	// because nothing else on the game side knows the player's guild: the
-	// membership guards are not mirrored to game servers (AllianceMember
-	// declares snapshots=none). It may drift from the roster (a lost notice);
-	// the game's guild endpoints use it only for advisory pre-checks and the
-	// alliance service decides every write on its roster. Replicated (sync)
-	// so nearby players see the guild.
-	GuildID int64 `dao:"persist,sync" store:"guild_id"`
 	// SagaReceipts is where the gift saga's native steps (debit and its
 	// refund) keep their receipts: operation (saga.Command.IdempotencyKey) ->
 	// the framework's encoding of saga.StepReceipt. The step writes it in the
@@ -160,10 +130,6 @@ type PlayerDao struct {
 	CellPanelSentAt  int64  `dao:"nopersist,nosync" store:"cell_panel_sent_at"`
 	CellPanelSince   int64  `dao:"nopersist,nosync" store:"cell_panel_since"`
 	CellPanelUnknown bool   `dao:"nopersist,nosync" store:"cell_panel_unknown"`
-	// TeamID 是分区场景里这名玩家所在的队伍（Team 实体 ID，0 = 不在队伍里），是 Team 成员表里一个事实的本人副本：入队、
-	// 离队、解散都在同一笔 [Team, Player] 事务里写它（与 GuildID 同理）。别人解散队伍时这里由成员表通知或重读清掉。持久：
-	// Base 重启后靠它知道去重读哪支队伍。
-	TeamID int64 `dao:"persist" store:"team_id"`
 	// TeamVer / TeamMembers 是 Base 缓存的成员表（cellworld.Group）：版本与每名成员的 Player、SceneActor、Base sid。不持久：
 	// 重启后版本为 0，Node 从 Team 实体重读（GroupResync）。CellGroupSentAt / CellGroupSyncAt / CellGroupViewID /
 	// CellGroupViewVer 是队伍面板的计时与组关系视野的版本（cellworld.BaseState）。

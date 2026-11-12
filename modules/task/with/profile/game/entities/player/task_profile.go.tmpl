@@ -1,0 +1,10 @@
+package player
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
+func init() {
+	OnProfileLevelUp("task", func(component *ProfileComponent, from, to int32) error {
+		return component.Owner().TaskComp().Report("profile.level_up", int64(to-from), fctx.NowMilli())
+	})
+}
