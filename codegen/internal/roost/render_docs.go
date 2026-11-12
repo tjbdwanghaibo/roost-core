@@ -347,7 +347,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | time_domains | 否 | 场景时间域（roost add timedomain）：组件类型号、存三个字段的 DAO | sync 重写时间域组件 |
 | modules | 否 | 已安装的业务模块（roost module add）：每个模块拥有的文件、主 DAO 字段与分配到的号 | 归属清单；安装器用它判断“已安装”，分配过的号不再发出 |
 | services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
-| services.<name>.port_block | 是（生成器写） | 端口块号 0～99，各服务不同，一经分配不再改变 | 开发配置的按服务端口由它派生：ops 9100+N、etcd.advertise_addr 9000+N、second-game.sh 的 ops 9200+N / advertise 8900+N；新服务取当前最大块号 + 1，手改 roost.yaml 加服务时不写、由 roost project sync 分配；删除服务不回收 |
+| services.<name>.port_block | 是（生成器写） | 端口块号 0～99，各服务不同，一经分配不再改变 | 开发配置的按服务端口由它派生：ops 9100+N、etcd.advertise_addr 9000+N、web.addr 8080+N（带 web Mod 的服务）、second-game.sh 的 ops 9200+N / advertise 8900+N；新服务取当前最大块号 + 1，手改 roost.yaml 加服务时不写、由 roost project sync 分配；删除服务不回收 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
 
 ## 3. project

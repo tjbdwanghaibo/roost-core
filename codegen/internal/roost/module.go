@@ -176,7 +176,9 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 		} else {
 			fmt.Fprintf(stdout, "module %s: will install\n", item.Name)
 		}
-		if item.Runtime != nil {
+		if item.Runtime != nil && item.Runtime.Framework != "" {
+			fmt.Fprintf(stdout, "  runtime:   %s.%s in the process of the hosted %s service (after its Mods start, before service Init; stopped in reverse)\n", item.Runtime.Package, item.Runtime.Start, item.Runtime.Framework)
+		} else if item.Runtime != nil {
 			fmt.Fprintf(stdout, "  runtime:   %s.%s (before service Init; stop after service Shutdown)\n", item.Runtime.Package, item.Runtime.Start)
 		}
 		for _, state := range item.State {

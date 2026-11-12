@@ -19,23 +19,28 @@ import (
 // 按服务区分的端口只从块号派生（portsOf），规则只在这里：
 //
 //	ops.addr                    9100 + N   （9100–9199）
+//	web.addr                    8080 + N   （8080–8179；只有带 web Mod 的服务有这一段）
 //	etcd.advertise_addr         9000 + N   （9000–9099）
 //	second-game.sh 的 ops       9200 + N   （9200–9299，第二个 game 进程）
 //	second-game.sh 的 advertise 8900 + N   （8900–8999）
 //
-// 块号上限 99，四段端口互不重叠；改用块号之前 second-game 用 +10，第 11 个服务的端口就会撞上。玩家 TCP（7000，第二个
-// game 7001）与 web（8080）只有一个服务持有，不按服务派生。生产示例每个服务一个容器，统一 9100 / CHANGE_ME:9000。
+// 块号上限 99，五段端口互不重叠；改用块号之前 second-game 用 +10，第 11 个服务的端口就会撞上。玩家 TCP（7000，第二个
+// game 7001）只有一个服务持有，不按服务派生。web 原先也按“只有一个服务持有”固定 8080；模块可以把登录入口装在托管的
+// account 进程上（runtime.framework）之后，业务服务与托管服务可能同时带 web Mod，所以它也按块号派生——块号 0 的服务
+// （新建工程里按名字排第一的业务服务）仍是 8080。doctor 的端口块告警（portBlockWarnings）不查 web：早先生成的工程里
+// 块号不是 0 的服务写的是 8080，不为此告警；两个服务真的撞了端口由 config-across-services 的监听冲突检查报。
+// 生产示例每个服务一个容器，统一 9100 / CHANGE_ME:9000 / CHANGE_ME:8080。
 const maxPortBlock = 99
 
 // servicePorts 是一个服务在开发机上的按服务端口。
 type servicePorts struct {
 	Block                      int
-	Ops, Advertise             int
+	Ops, Advertise, Web        int
 	SecondOps, SecondAdvertise int
 }
 
 func portsFor(block int) servicePorts {
-	return servicePorts{Block: block, Ops: 9100 + block, Advertise: 9000 + block, SecondOps: 9200 + block, SecondAdvertise: 8900 + block}
+	return servicePorts{Block: block, Ops: 9100 + block, Advertise: 9000 + block, Web: 8080 + block, SecondOps: 9200 + block, SecondAdvertise: 8900 + block}
 }
 
 // portsOf 是 service 的端口：块号取 roost.yaml 记录的值；内存里新加、还没写进 roost.yaml 的服务按 assignPortBlocks 的

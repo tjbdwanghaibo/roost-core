@@ -142,11 +142,12 @@ func %[2]s(ctx context.Context, svc *Service, request webroute.RawRequest) (%[2]
 `, snake, pascal)
 }
 
-func printWebRouteNext(stdout io.Writer, module, service, route string) {
+// port 是这个服务的开发 web 端口（8080 + 端口块号，port_blocks.go）：roost add mod 写进开发配置的就是它。
+func printWebRouteNext(stdout io.Writer, module, service, route string, port int) {
 	fmt.Fprintf(stdout, "next: in internal/service/%s Init, serve the routes:\n", service)
 	fmt.Fprintln(stdout, `      if err := kitweb.RegisterRoutes(registry, &web.Service{}); err != nil { return err }`)
 	fmt.Fprintf(stdout, "      (imports: kitweb \"github.com/tjbdwanghaibo/roost-core/wiring/web\" and \"%s/%s\")\n", module, webRouteDir)
-	fmt.Fprintf(stdout, "then: go run . %s and curl http://127.0.0.1:8080/%s (web.addr in configs/service/config.%s.yaml)\n", service, route, service)
+	fmt.Fprintf(stdout, "then: go run . %s and curl http://127.0.0.1:%d/%s (web.addr in configs/service/config.%s.yaml)\n", service, port, route, service)
 }
 
 // checkWebRouteServing 是 doctor 的 webroute:serve 项（只读，WARN 不让 doctor 失败）：service/web 里有生成的路由

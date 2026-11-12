@@ -331,13 +331,18 @@ func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error 
 			problems = append(problems, fmt.Sprintf("feature %q is off: add it to features in roost.yaml and run roost project sync", feature))
 		}
 	}
-	resolved, err := resolveMods(effectiveServiceMods(manifest, service))
+	// needs.mods 对的是模块入口所在的服务：缺省是业务服务；runtime.framework 写了托管服务时是托管它的那个服务。
+	modsService, err := moduleModsService(manifest, service, spec)
+	if err != nil {
+		return fmt.Errorf("module %s cannot be installed yet: %w", spec.Name, err)
+	}
+	resolved, err := resolveMods(effectiveServiceMods(manifest, modsService))
 	if err != nil {
 		return err
 	}
 	for _, mod := range spec.Needs.Mods {
 		if !contains(resolved, mod) && !contains(manifest.SharedMods, mod) && !moduleCanAddMod(mod) {
-			problems = append(problems, fmt.Sprintf("service %s has no %s mod: roost add mod %s -service %s", service, mod, mod, service))
+			problems = append(problems, fmt.Sprintf("service %s has no %s mod: roost add mod %s -service %s", modsService, mod, mod, modsService))
 		}
 	}
 	for _, used := range spec.Needs.Uses {
@@ -357,8 +362,10 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 	if contains(spec.Needs.Features, "attribute") && !hasFeature(manifest, "attribute") {
 		commands = append(commands, "enable features.attribute in roost.yaml; roost project sync")
 	}
-	for _, mod := range moduleMissingMods(manifest, service, spec) {
-		commands = append(commands, "roost add mod "+mod+" -service "+service)
+	if modsService, err := moduleModsService(manifest, service, spec); err == nil {
+		for _, mod := range moduleMissingMods(manifest, service, spec) {
+			commands = append(commands, "roost add mod "+mod+" -service "+modsService)
+		}
 	}
 	if len(spec.State) > 0 && !newEntity {
 		if source, err := locateDaoStruct(root, spec.Entity+"Dao"); err == nil && source == nil {
@@ -389,7 +396,20 @@ func moduleCanAddMod(name string) bool {
 	return name == "heartbeat" || name == "directory" || name == "web"
 }
 
+// moduleModsService 是清单的 needs.mods 所指的服务：模块的入口在哪个服务的进程里启动，Mod 就得在哪个服务上。
+// 没有 runtime.framework 的模块是它装进的业务服务；有的是托管那个框架服务的服务（工程没有托管它时返回错误）。
+func moduleModsService(manifest Manifest, service string, spec ModuleSpec) (string, error) {
+	if spec.Runtime == nil || spec.Runtime.Framework == "" {
+		return service, nil
+	}
+	return frameworkHostService(manifest, spec.Runtime.Framework)
+}
+
 func moduleMissingMods(manifest Manifest, service string, spec ModuleSpec) []string {
+	service, err := moduleModsService(manifest, service, spec)
+	if err != nil {
+		return nil // checkModuleNeeds 会报告。
+	}
 	resolved, err := resolveMods(effectiveServiceMods(manifest, service))
 	if err != nil {
 		return nil // checkModuleNeeds 会报告配置错误。
@@ -562,11 +582,22 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || modulePlanHasTimers(plan)}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || modulePlanHasTimers(plan) || modulePlanHasHostedRuntime(plan)}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true
 	return plan, nil
+}
+
+// modulePlanHasHostedRuntime 报告这次要装的模块里有没有入口落在托管服务上的（runtime.framework）：
+// 那个服务多了一个 Mod，它的停机预算（shutdown.total_timeout、部署的宽限期）要在同一次安装里刷新。
+func modulePlanHasHostedRuntime(plan ModulePlan) bool {
+	for _, item := range plan.Modules {
+		if item.Status == moduleStatusInstall && item.Runtime != nil && item.Runtime.Framework != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureModulePrerequisites 经已有的 roost add 补齐模块要求的框架骨架；已经有的不动。
@@ -587,9 +618,15 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 			return err
 		}
 	}
-	for _, mod := range moduleMissingMods(manifest, service, spec) {
-		if _, err := Add(root, AddOptions{Kind: "mod", Name: mod, Service: service, Warnings: warnings}); err != nil {
-			return fmt.Errorf("roost add mod %s -service %s: %w", mod, service, err)
+	if missing := moduleMissingMods(manifest, service, spec); len(missing) > 0 {
+		modsService, err := moduleModsService(manifest, service, spec)
+		if err != nil {
+			return err
+		}
+		for _, mod := range missing {
+			if _, err := Add(root, AddOptions{Kind: "mod", Name: mod, Service: modsService, Warnings: warnings}); err != nil {
+				return fmt.Errorf("roost add mod %s -service %s: %w", mod, modsService, err)
+			}
 		}
 	}
 	if len(spec.State) > 0 && !newEntity {

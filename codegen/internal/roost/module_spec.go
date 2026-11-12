@@ -72,11 +72,18 @@ type ModuleSpec struct {
 	Digest string `yaml:"-" json:"digest"`
 }
 
-// ModuleRuntime 声明模块在业务服务中的启动入口。函数返回 stop（可为 nil）与 error；
+// ModuleRuntime 声明模块的服务级启动入口。函数返回 stop（可为 nil）与 error；
 // 返回 error 时仍可同时返回 stop，App 的失败停机路径会调用它。
 type ModuleRuntime struct {
 	Package string `yaml:"package" json:"package"` // 工程内 import 路径，如 game/skillbook
 	Start   string `yaml:"start" json:"start"`     // func(*app.Registry) (func(context.Context) error, error)
+	// Framework 不写时入口在模块装进的业务服务上启动（生成的 modules_gen.go，业务 Init 之前）。
+	// 写一个托管框架服务的种类（roost.yaml 里 services.<名字>.framework 的取值，例如 account）时，入口改在
+	// 托管那个框架服务的进程里启动：bootstrap 在它的 Mod 列表末尾加一个 wiring/modulehost 的 Mod，
+	// 在全部 Mod 启动之后、Service.Init 之前调入口，停机按反序。这时清单的 needs.mods 是对那个托管服务的要求
+	// （例如登录入口要 account 进程带 web Mod），不是对业务服务的。模块的文件仍按落点写进工程，
+	// 安装记录的 service 仍是业务服务。
+	Framework string `yaml:"framework,omitempty" json:"framework,omitempty"`
 }
 
 // ModuleNeeds 是模块对工程的前提。heartbeat 可经正式 add mod 代办，其余缺项给出接入命令。
@@ -623,6 +630,11 @@ func validateModuleRuntime(runtime *ModuleRuntime) error {
 	}
 	if !modulePascalPattern.MatchString(runtime.Start) {
 		return fmt.Errorf("runtime.start %q must name an exported Go function", runtime.Start)
+	}
+	if runtime.Framework != "" {
+		if _, known := frameworkCatalog[runtime.Framework]; !known {
+			return fmt.Errorf("runtime.framework %q is not a framework service; known: %s", runtime.Framework, strings.Join(frameworkServiceNames(), ", "))
+		}
 	}
 	return nil
 }

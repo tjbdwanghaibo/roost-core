@@ -435,6 +435,13 @@ func renderBootstrap(m Manifest) string {
 	if contains(allMods, "directory") {
 		imports["github.com/tjbdwanghaibo/roost-core/service/directory"] = "directory"
 	}
+	// 入口落在托管服务上的模块（runtime.framework）：wiring/modulehost 的 Mod 与各模块的入口包。
+	for _, name := range services {
+		for _, module := range hostedModuleRuntimes(m, name) {
+			imports[moduleHostWiring] = "kitmodulehost"
+			imports[m.Project.Module+"/"+m.Modules[module].Runtime.Package] = module + "Module"
+		}
+	}
 	if len(m.Timers) > 0 {
 		imports[entityTimerWiring] = "kitentitytimer"
 		for _, name := range sortedTimerEntities(m) {
@@ -559,7 +566,17 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 		for _, call := range spec.ModChain {
 			fmt.Fprintf(&chain, ".%s", strings.Replace(call, "(", "(service"+safeIdent(name)+".", 1))
 		}
-		return append(out, fmt.Sprintf("svc%s.NewMod(%s)%s", spec.Package, strings.Join(args, ", "), chain.String()))
+		out = append(out, fmt.Sprintf("svc%s.NewMod(%s)%s", spec.Package, strings.Join(args, ", "), chain.String()))
+		// 装在这个托管服务上的模块（runtime.framework）：排在 owner Mod 之后的最后一个 Mod，在全部 Mod 启动之后、
+		// Service.Init 之前按依赖顺序调模块的入口（wiring/modulehost）。托管服务的固定装配到上一行为止，不因此改变。
+		if hosted := hostedModuleRuntimes(m, name); len(hosted) > 0 {
+			var modules strings.Builder
+			for _, module := range hosted {
+				fmt.Fprintf(&modules, ", kitmodulehost.Module{Name: %q, Start: %sModule.%s}", module, module, m.Modules[module].Runtime.Start)
+			}
+			out = append(out, fmt.Sprintf("kitmodulehost.NewMod(%q, domain%s.CapabilityName%s)", name, spec.Package, modules.String()))
+		}
+		return out
 	}
 	used := append([]string(nil), m.Services[name].Uses...)
 	sort.Strings(used)
@@ -847,8 +864,13 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 // 生产示例每个服务一个容器，保持 9100 / CHANGE_ME:9000。
 func localizeDevConfig(m Manifest, service, text string) string {
 	text = opsAddrLine.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", opsPort(m, service)))
+	text = webAddrLine.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", portsOf(m, service).Web))
 	return advertiseAddrLine.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", advertisePort(m, service)))
 }
+
+// webAddrLine 匹配生成的 web.addr 行（声明的 example 127.0.0.1:8080）。能带 web Mod 的不止一个服务
+// （业务服务的 webroute、托管 account 上的登录入口），所以它的开发端口也按端口块派生：8080 + 块号。
+var webAddrLine = regexp.MustCompile(`(?m)^(  addr: )127\.0\.0\.1:8080$`)
 
 // advertiseAddrLine 匹配生成的 etcd.advertise_addr 行（声明的 example 127.0.0.1:9000）。
 var advertiseAddrLine = regexp.MustCompile(`(?m)^(  advertise_addr: )127\.0\.0\.1:9000$`)

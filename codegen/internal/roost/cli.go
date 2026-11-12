@@ -357,7 +357,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if args[0] == "webroute" {
 		if manifest, err := LoadManifest(root); err == nil {
 			if service, err := webRouteService(manifest, *service); err == nil {
-				printWebRouteNext(stdout, manifest.Project.Module, service, toSnake(args[1]))
+				printWebRouteNext(stdout, manifest.Project.Module, service, toSnake(args[1]), portsOf(manifest, service).Web)
 			}
 		}
 	}
