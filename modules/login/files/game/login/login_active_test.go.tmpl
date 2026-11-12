@@ -163,7 +163,16 @@ func TestLoginSessionActiveIsBounded(t *testing.T) {
 	for i := 0; i < 256; i++ {
 		notifier.SessionActive(nil, gateway.Principal{PlayerID: int64(i + 1), SessionID: "held"}, true)
 	}
-	notifier.SessionActive(nil, gateway.Principal{PlayerID: 999, SessionID: "over"}, true)
+	over := make(chan struct{})
+	go func() {
+		notifier.SessionActive(nil, gateway.Principal{PlayerID: 999, SessionID: "over"}, true)
+		close(over)
+	}()
+	select {
+	case <-over:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SessionActive waited for a free slot; over the bound it must drop the notice and return")
+	}
 	close(release)
 	notifier.Wait()
 	events := log.events()

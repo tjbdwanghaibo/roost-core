@@ -192,6 +192,26 @@ func TestLoginAccountctlListsTheRegisteredServers(t *testing.T) {
 	if servers := list(); len(servers) != 3 || servers[1].Status != svcaccount.ServerMaintenance {
 		t.Fatalf("after changing server 1000's status: %+v", servers)
 	}
+	// account 给的是 nil 的清单：照样打印 []，脚本按数组读；account 出错：命令失败，什么都不打印。
+	var out bytes.Buffer
+	if err := run(context.Background(), loginCtlListing{}, []string{"list-servers"}, &out); err != nil || strings.TrimSpace(out.String()) != "[]" {
+		t.Fatalf("a nil list printed %q, %v; want []", out.String(), err)
+	}
+	out.Reset()
+	away := errors.New("redis: connection refused")
+	if err := run(context.Background(), loginCtlListing{err: away}, []string{"list-servers"}, &out); !errors.Is(err, away) || out.Len() != 0 {
+		t.Fatalf("a failed list: err %v, printed %q; want the error and no output", err, out.String())
+	}
+}
+
+// loginCtlListing 是只答 ListServers 的 account 替身：清单是 nil，或者出错。
+type loginCtlListing struct {
+	serverRecords
+	err error
+}
+
+func (listing loginCtlListing) ListServers(context.Context) ([]svcaccount.GameServer, error) {
+	return nil, listing.err
 }
 
 // 连接旗标是与 deploy/dev/run.sh 的约定：脚本在全部服务起来之后按 config.account.yaml 里的 Redis 与键前缀

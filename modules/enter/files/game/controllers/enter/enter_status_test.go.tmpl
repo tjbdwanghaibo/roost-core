@@ -78,9 +78,9 @@ func statusBuilt(built bool, err error, asked *int) func(context.Context) (bool,
 func TestEnterStatusPushesNeedCreateToTheActivatedSession(t *testing.T) {
 	asked := 0
 	recorder := &statusRecorder{}
-	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-1", statusBuilt(false, nil, &asked), time.Hour)
-	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-2", statusBuilt(true, nil, &asked), time.Hour)
-	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer}, "s-3", statusBuilt(false, nil, &asked), time.Hour)
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-1", statusBuilt(false, nil, &asked), 0)
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-2", statusBuilt(true, nil, &asked), 0)
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer}, "s-3", statusBuilt(false, nil, &asked), 0)
 	if want := []string{"push:s-1", "push:s-2", "push:s-3"}; !reflect.DeepEqual(recorder.events, want) {
 		t.Fatalf("events = %v, want %v", recorder.events, want)
 	}
@@ -94,7 +94,7 @@ func TestEnterStatusPushesNeedCreateToTheActivatedSession(t *testing.T) {
 	}
 	// 推送不成只是少了一次告知，不报错也不断开。
 	recorder = &statusRecorder{pushErr: errors.New("queue is full")}
-	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-4", statusBuilt(false, nil, &asked), time.Hour)
+	announce(context.Background(), nil, recorder, gameenter.Entering{PlayerID: statusPlayer, Claims: statusTicket}, "s-4", statusBuilt(false, nil, &asked), 0)
 	if want := []string{"push:s-4"}; !reflect.DeepEqual(recorder.events, want) {
 		t.Fatalf("after a failed push: events = %v, want %v", recorder.events, want)
 	}
@@ -127,10 +127,18 @@ func TestEnterStatusRefusalIsPushedThenThePlayerIsDisconnected(t *testing.T) {
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
 	recorder = &statusRecorder{}
-	started = time.Now()
-	announce(ended, nil, recorder, entering, "s-3", statusBuilt(false, nil, &asked), time.Hour)
-	if want := []string{"push:s-3", "close"}; !reflect.DeepEqual(recorder.events, want) || time.Since(started) > 5*time.Second {
-		t.Fatalf("with an ended context: events = %v after %v, want %v at once", recorder.events, time.Since(started), want)
+	returned := make(chan struct{})
+	go func() {
+		announce(ended, nil, recorder, entering, "s-3", statusBuilt(false, nil, &asked), time.Hour)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("announce kept waiting for the frame after its context had ended")
+	}
+	if want := []string{"push:s-3", "close"}; !reflect.DeepEqual(recorder.events, want) {
+		t.Fatalf("with an ended context: events = %v, want %v", recorder.events, want)
 	}
 	if asked != 0 {
 		t.Fatalf("the record of a refused player was read %d times", asked)

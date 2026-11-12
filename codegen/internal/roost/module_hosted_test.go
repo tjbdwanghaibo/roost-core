@@ -92,6 +92,10 @@ func TestHostedModuleRuntimesBelongToTheHostNotTheBusinessService(t *testing.T) 
 	if !hasModuleRuntime(m, "game") {
 		t.Fatal("skillbook's runtime on the business service was lost")
 	}
+	// 业务服务自己的入口走 modules_gen.go，不能又被当成“托管在它上面”再启动一遍。
+	if got := hostedModuleRuntimes(m, "game"); got != nil {
+		t.Fatalf("the business service's own runtime is also listed as hosted on it: %v", got)
+	}
 	// 依赖装在别的业务服务上：拒绝。
 	m.Modules["login"] = InstalledModule{Service: "other"}
 	if _, err := moduleRuntimeOrder(m, "account"); err == nil || !strings.Contains(err.Error(), "module login is not installed for service game") {

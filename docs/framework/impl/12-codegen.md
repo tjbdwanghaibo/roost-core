@@ -413,7 +413,7 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 | [render_deploy.go](../../../codegen/internal/roost/render_deploy.go) | 函数/方法或内部实现；见源码 |
 | [render_dev_run.go](../../../codegen/internal/roost/render_dev_run.go) | 函数/方法或内部实现；见源码 |
 | [render_docs.go](../../../codegen/internal/roost/render_docs.go) | 函数/方法或内部实现；见源码 |
-| [render_player_tcp.go](../../../codegen/internal/roost/render_player_tcp.go) | `Config`、`Authenticator`、`RegistryBound`、`AuthenticatorFunc`、`Mod`、`Runtime`、`SessionClosed`、`Server` |
+| [render_player_tcp.go](../../../codegen/internal/roost/render_player_tcp.go) | `Config`、`Authenticator`、`RegistryBound`、`SessionObserver`、`AuthenticatorFunc`、`Mod`、`Runtime`、`SessionClosed`、`Server` |
 | [render_workflow_docs.go](../../../codegen/internal/roost/render_workflow_docs.go) | 函数/方法或内部实现；见源码 |
 | [saga_effect_doctor.go](../../../codegen/internal/roost/saga_effect_doctor.go) | 函数/方法或内部实现；见源码（doctor 的 `saga-steps:` / `effect-consumer:`，§2D） |
 | [self_sync.go](../../../codegen/internal/roost/self_sync.go) | 函数/方法或内部实现；见源码（`access.player.self_sync` 的接线渲染与 generate / doctor 前置检查；默认 packer 由 entity 生成器 `-self-sync Player` 写出） |

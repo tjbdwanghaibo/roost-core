@@ -199,6 +199,13 @@ roost add rpc guild -service game
 
 **接 account 的玩家接入（别名合服，D15）**：应用的 `auth.go` 骨架默认拒绝，注释写明接 account 时的写法：经 `svcaccount.Accounts.ValidateSession` 校验票据，用返回的 `role.ServingServerID`（承载服：角色自己的服，或它已并入的那个服）填 `svcaccount.ServerIDClaim`，`role.ServerID`（原服，供显示）填 `svcaccount.OriginServerIDClaim`；按 `role.ServerID` 路由会把合服后原服的每个角色拒绝成 `player_elsewhere`；用到单个角色换服时再把 `role.BindEpoch` 填进 `svcaccount.BindEpochClaim`、换服在途时把 `svcaccount.TransferClaimValue(*role.Transfer)` 填进 `svcaccount.TransferClaim`（完整示例是 game-demo 的 `internal/access/player/tcp/auth.go`）。`access.player` 指向、且 `uses: account` 的服务，生成的 bootstrap 在 account 的 ClientMod 之后多装一个 `svcaccount.NewServingGuardMod()`：进程启动时问 account 本服是否已并入另一服，已并入就拒绝启动（DataEngine Mod 排在它之后，WAL 与 outbox 都还没打开）；它计入生成的 `shutdown.total_timeout`（多一个 3s 保底）。工程带 `cmd/sidmerge`（game-demo）时，`roost project doctor` 多一项只读的 `merge-readiness`（OK / WARN，不让 doctor 失败）：运行 `go run ./cmd/sidmerge checklist`，概括按 sid 分库（合服时要搬）的逻辑库与两侧部署必须同一位置的逻辑库（每个逻辑库都在内：按 sid 分库的库里不按 sid 的 DAO 同样要同址）、按 sid 寻址的持久总线用法、需要业务语义的合并项数；WAL / outbox / saga / 冲突只能在停服窗口里由 `sidmerge migrate -dry-run` 检查（[PLAYER-MIGRATION §6](../../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)）。
 
+**认证器的两个可选接口**（生成的 `internal/access/player/tcp/server_gen.go`）：
+
+- `RegistryBound`——`BindRegistry(registry)`。传输 Mod 在 `Provide` 里、监听开始之前调；独立 Gate 部署下 Game Ingress 的 Mod 对 `options.Authenticator` 同样调。认证器在这里取 account 的客户端。
+- `SessionObserver`——`SessionActive(registry, principal, complete)`。它认证过的会话**激活之后**被通知一次：嵌入 TCP 是鉴权 ACK 写出、会话登记、自身视图登记之后，`principal` 是握手时的那一个（带 claims，`complete` 为 true）；独立 Gate 是 Game Ingress 的 `OnActive`（`options` 原有的回调与自身视图之后），只有绑定里的玩家号与会话号（`complete` 为 false——激活回调不带 Principal）。它在握手协程 / Ingress 控制协程里执行，只记事实、立即返回，不能否决会话；panic 被拦住。
+
+没实现这两个接口的认证器，接线与没有它们时相同。登录模块用 `SessionObserver` 在握手之后告诉客户端“要不要先新建”（[modules/login](../../modules/login/README.md)）。回归是生成进工程的 `TestSessionObserverHearsEveryActivatedSession`（真实 TCP 监听，加进程内驱动 Ingress 的回调；没有经真实的 Gate / NATS）。
+
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
 `--nest-handler`。`add protocol --handler <域>` 之后跑过 `roost generate`，协议生成器会先写一个“未实现”占位
 （`Handle<Protocol>` 只返回 `fmt.Errorf("Handle<Protocol>: not implemented")`）；add endpoint 认出**仍未改动**的占位并在同一次
@@ -451,7 +458,7 @@ roost module verify               # 模块自带场景 + build / vet / id check 
    - **联动文件**：模块可以带与另一个模块的联动（`modules/<name>/with/<另一个模块>/`）。这次装的模块与已装的或同一次装的模块凑成一对、而这一对有联动时，全部模块写完之后把联动文件写进工程，归属记在拥有它的模块的 `modules.<name>.with.<另一个模块>` 下；`plan` / `add` 输出 `glue <模块> with <另一个模块>`，`--json` 里是 `glue` 数组。落点已有内容不同的文件时拒绝（`already exists and is not this glue file`）。两个都早已装好的不补。`verify` 把联动自带的场景单独列一项 `<模块>+<另一个模块>`。
 4. **号**：实体号、协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
 5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段、文件、目标 service、requires 与可选 runtime。
-6. **生成**：运行全部生成器（暂存区里生成，成功才提交）。有 runtime 的模块生成 `internal/service/<service>/modules_gen.go`，bootstrap 用 `NewWithModules()`；不覆盖业务 Service.Init/Shutdown。模块按依赖先启动、业务先停止再反向停模块，启动失败同样清理、停机失败保留依赖。声明和边界见 [服务级启动与停机](../../modules/README.md#服务级启动与停机)。
+6. **生成**：运行全部生成器（暂存区里生成，成功才提交）。有 runtime 的模块生成 `internal/service/<service>/modules_gen.go`，bootstrap 用 `NewWithModules()`；不覆盖业务 Service.Init/Shutdown。清单写了 `runtime.framework: <框架服务种类>`（登录入口 portal 写的是 `account`）时入口改在**托管那个框架服务的进程**里启动：不生成业务服务的 `modules_gen.go`，bootstrap 在那个托管服务的 Mod 列表末尾加 `kitmodulehost.NewMod("<服务>", <owner 能力名>, kitmodulehost.Module{Name, Start}…)`（`wiring/modulehost`：全部 Mod 启动之后、`Service.Init` 之前按依赖顺序调入口，停机反序）；清单的 `needs.mods` 这时是对那个托管服务的要求（`roost add mod web -service account`），`plan` 的 `runtime:` 行写明入口在哪个进程；工程里没有、或不止一个服务托管那个框架服务时拒绝。模块按依赖先启动、业务先停止再反向停模块，启动失败同样清理、停机失败保留依赖。声明和边界见 [服务级启动与停机](../../modules/README.md#服务级启动与停机)。
 
 第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复到第 2 步之前。重复执行 `add` 没有变化。没有卸载命令。
 
@@ -981,7 +988,7 @@ curl http://127.0.0.1:8080/shop_price  # web.addr，见 configs/service/config.g
 | 键 | 缺省 | 约束 / 说明 |
 | --- | --- | --- |
 | `web.enabled` | `true` | false 时路由照常登记但不监听 |
-| `web.addr` | `127.0.0.1:8080` | 生产环境绑非回环地址必须同时写 `web.allow_public_addr: true`（与 ops 相同） |
+| `web.addr` | `127.0.0.1:8080` | 生产环境绑非回环地址必须同时写 `web.allow_public_addr: true`（与 ops 相同）。生成的开发配置按端口块派生：`8080 + services.<name>.port_block`（能带 web Mod 的不止一个服务——业务服务的 webroute、托管 account 上的登录入口；新建工程里 game 模板的 account 是 8081）。doctor 的端口块告警不查它，两个服务真的撞了端口由监听冲突检查报 |
 | `web.read_header_timeout` | `5s` | ≥ 100ms，且不得大于 `web.read_timeout`（否则永远不先到期） |
 | `web.read_timeout` | `15s` | ≥ 100ms，读完整个请求 |
 | `web.write_timeout` | `15s` | ≥ 100ms，从读完请求头到写完响应，含业务处理时间 |

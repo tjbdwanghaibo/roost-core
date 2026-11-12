@@ -118,7 +118,21 @@ versionstore 写结果未知仍需调用方保留不确定状态，不能假设�
 
 account 的身份验证、玩家号分配、名字校验由接入方提供，不能用默认信任身份或进程内计数器替代。一个账号一区服一角色由 slot insert-only/建角计划约束；每个 slot 与角色都带建角身份（计划 ID / `CreationID`），缺计划的 slot、缺 `CreationID` 的角色不被推断，分别以 `ErrConflict` / `ErrNotResolvable` 拒绝并交线下处理；账号 ID 只用转义渠道后的形态（`Identity.AccountID`）。SelectRole 的 accountID 属可信服务边界，外部请求必须先绑定已认证身份。
 
-`Accounts.RoleOnServer(accountID, serverID)` 只读地返回账号在某个服上的角色（登录入口用它让换了设备的客户端认回自己的角色，模块 portal）：按 slot 读，带承载服与在途的换服；没有角色、建角计划还没发布、换服在目标服的占位都答 `ErrRoleMissing`，slot 与角色对不上答 `ErrConflict`；以绑定服为准，并入别的服的角色要用原服号问。没有“列出账号的全部角色”——存储是键值的，区服清单由登录入口的配置给出。
+`Accounts.RoleOnServer(accountID, serverID)` 只读地返回账号在某个服上的角色（登录入口用它让换了设备的客户端认回自己的角色，模块 portal）：按 slot 读，带承载服与在途的换服；没有角色、建角计划还没发布、换服在目标服的占位都答 `ErrRoleMissing`，slot 与角色对不上答 `ErrConflict`；以绑定服为准，并入别的服的角色要用原服号问。没有“列出账号的全部角色”——存储是键值的；登录入口对 `ListServers` 给出的每个服各问一次。
+
+`Accounts.ListServers()` 只读地返回登记过的全部区服（按服号升序，至多 `MaxServers` = 256 个）。存储是键值的、不能枚举，所以 `UpsertServer` / `MergeServer` 在写服务器记录之前先把服号记进一条索引（Servers 存储里保留的键 0，内存与 Redis 相同）：索引先写、记录后写，中途停下只会留下一个没有记录的服号，读清单时跳过；索引满了之后登记新的服号答 `ErrRangeInvalid`，已在索引里的服照常更新。有索引之前登记的服不在清单里，重新 `UpsertServer`（或 `MergeServer`）一次即补上。客户端连哪里不是 account 的数据，见模块 portal 的区服目录。
+
+**票据统一由 account 签发和校验**（维护者 2026-11-12）。同一把 `account.session_secret`、三个互不相通的域，都是无状态的 HMAC-SHA256，至多 `MaxTicketBytes` = 1024 字节，任何一种无效（格式、签名、过期、拿别的域的票据冒充）都答同一个 `ErrSessionInvalid`：
+
+| 票据 | 签发 | 校验 | 有效期 |
+| --- | --- | --- | --- |
+| 账号票据 `at1.…` | `IssueAccountTicket(accountID)`（`Login` 之后） | `ValidateAccountTicket(ticket)` → 账号 | `account.ticket_ttl`，缺省 10 分钟 |
+| 进服票据 `et1.…`（绑定账号与服） | `IssueEnterTicket(accountID, serverID)` | `EnterServer(ticket)` → `ServerEntry{Role, Created}` | `account.session_ttl` |
+| 角色会话令牌 | `SelectRole` | `ValidateSession` | `account.session_ttl` |
+
+校验账号票据与凭票进服时都会再读一次账号：封号对已经发出去的这两种票据立即生效。`PeekEnterTicket` 只读出进服票据写着的服号、不验证，给认证器核对 account 的回答用。
+
+**account 映射的是账号 id ↔ 角色 id，不带名字**（同上）。`EnterServer(ticket)` 验进服票据，返回账号在那个服上的角色；没有映射就新建——分配玩家号、占住这个账号在这个服的名额——`Created` 为 true。它不接触角色名：建角判定表多一种“无名计划”（slot 的建角计划里名字为空，不走名字目录的两阶段占用），应答丢失后的重试凭 slot 里的计划续完；带名字的 `CreateRole` 遇到无名计划答 `ErrRoleLimit`，运维的 `ResolvePendingCreation` 不释放它（它没有可以被别人占走的东西，总能做完）。新映射只在状态是 open、没有并入别的服的服上建；已有映射的在任何状态下都能进。角色名与玩家数据由游戏服建（模块 enter 的 `EnterCreate`）。`CreateRole(accountID, serverID, name)` / `SelectRole` 这条带名字的老路保留，game-demo 与配方在用。
 
 **account 的别名合服**（DESIGN-TODO D15，维护者 2026-10-20 决定）：`GameServer.MergedInto` 非 0 表示该服已并入另一服。角色的 `ServerID` 是原服（建角时写定、slot 按它，合服不改写它；只有下一段的单个角色换服会改），返回给调用方的 `Role` / `Session` 另带只读的 `ServingServerID`（承载服），由 account 内唯一的解析点 `servingServer` 填入：没有合服时等于原服，已并入时是 `MergedInto`。记录永远只有一跳（`MergeServer` 拍平：并入时把原来并入来源服的服一并改指新的承载服，目标服自己不能已并入）；解析遇到承载服缺失报 `ErrServerInvalid`、遇到第二跳报 `ErrServerMergeCycle`，角色登录失败而不猜一个服。存储里的角色记录不带 `ServingServerID`。消费者一律按承载服路由与驻留：Gate 的 `AccountAuthenticator` 用它填 `Principal.ServerID`，嵌入 TCP 的认证器写进 `ServerIDClaim`，原服在 `OriginServerIDClaim`（显示规则由业务决定）。已并入的服 `CreateRole` 一律 `ErrServerClosed`（与状态无关）；`UpsertServer` 不碰合服字段。`MergeServer` / `UnmergeServer` 是 `Admin` 上的本地方法（不上总线，game-demo 经 `cmd/accountctl merge-server / unmerge-server / show-server` 调用），备注必填、写进服务器记录；每条记录按版本条件写，跨记录不是原子的：写入顺序保证中途停下不会出现两跳，结束时复核，并发合服造成的两跳报 `ErrServerMergeCycle` 并给出修复命令。`Accounts.GetServer` 是只读的总线方法：装配了 account、承载玩家的 game 进程启动时经 `wiring/account.ServingGuardMod` 用它确认本服没有被并入（已并入则拒绝启动，DataEngine Mod 排在它之后）。跟着 sid 走的数据与运维步骤见 [PLAYER-MIGRATION §6](../PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)（[service/account/merge.go](../../../service/account/merge.go)、`merge_test.go`）。
 

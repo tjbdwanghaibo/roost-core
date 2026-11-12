@@ -52,15 +52,24 @@ func (component *EnterComponent) Init(nowUnixMilli int64) (gameenter.InitResult,
 	if state.GetInitialized() {
 		return component.entered(), nil
 	}
-	if err := component.firstEnter(nowUnixMilli); err != nil {
-		return gameenter.InitResult{}, err
-	}
-	if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {
+	if err := component.grant(nowUnixMilli); err != nil {
 		return gameenter.InitResult{}, err
 	}
 	state.SetInitialized(true)
 	state.SetFirstAt(nowUnixMilli)
 	return gameenter.InitResult{First: true, FirstAtUnixMilli: nowUnixMilli}, nil
+}
+
+// grant 是首次初始化的发放：工程自己的 firstEnter，然后是别的功能登记的钩子（OnFirstEnter）。
+// Init 与 Create 都经它，所以两条路上发的东西一样；“只发一次”由调用方在同一笔事务里置的标记保证。
+func (component *EnterComponent) grant(nowUnixMilli int64) error {
+	if err := component.firstEnter(nowUnixMilli); err != nil {
+		return err
+	}
+	if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Existing 在“先新建”的会话的进入里调用：只进入已经建成的玩家。没建成（有档而首次初始化没做过——
@@ -93,7 +102,7 @@ func (component *EnterComponent) Built() bool {
 
 // Create 是新建请求（EnterCreate）的事务：把这名玩家建成。已经建成的返回 enter_created，不写任何字段。
 //
-// 顺序：事务内的新建钩子（OnCreate：名字写进档案）→ firstEnter 与首次初始化钩子（OnFirstEnter：初始发放）→
+// 顺序：事务内的新建钩子（OnCreate：名字写进档案）→ 首次初始化的发放（grant：firstEnter 与 OnFirstEnter 的钩子）→
 // 记下“建成了”。任何一步返回错误整笔回滚，玩家仍是没建成，下一次新建请求从头再做，所以初始发放恰好发一次。
 // 新建钩子排在发放之前：名字被拒时不必先发再撤。
 func (component *EnterComponent) Create(name string, nowUnixMilli int64) error {
@@ -103,10 +112,7 @@ func (component *EnterComponent) Create(name string, nowUnixMilli int64) error {
 	if err := runCreate(component.owner, name, nowUnixMilli); err != nil {
 		return err
 	}
-	if err := component.firstEnter(nowUnixMilli); err != nil {
-		return err
-	}
-	if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {
+	if err := component.grant(nowUnixMilli); err != nil {
 		return err
 	}
 	state := component.owner.Dao().GetEnter()

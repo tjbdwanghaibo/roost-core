@@ -17,8 +17,12 @@ POST /portal/login    {channel, open_id, credential}   -> 账号票据
 POST /portal/servers  {account_ticket}                  -> 区服清单（地址、负载、本账号有没有角色）+ 推荐的服
 POST /portal/enter    {account_ticket, server_id}       -> 握手票据 enter:<进服票据> + 该连的地址
 连那个地址（Gate，或直连的 game），握手帧出示握手票据    -> 认证器问 account：这个账号在这个服上是哪一名玩家，没有就新建映射
-发 EnterGame                                             -> game 加载或创建这名玩家的数据
+（game 推送 EnterStatus）                                -> 本服能不能进、要不要先新建（只是告知）
+要新建：发 EnterCreate{name}                             -> game 建成这名玩家：建档、起名、初始发放
+发 EnterGame                                             -> 进入
 ```
+
+握手之后的三步属于 [login](../login/README.md#与-enter-一起装) 与 enter 两个模块（装了 enter 才有）；没装 enter 的工程握手之后走自己的进入流程。
 
 四个角色各管什么：
 
@@ -26,8 +30,8 @@ POST /portal/enter    {account_ticket, server_id}       -> 握手票据 enter:<�
 | --- | --- | --- |
 | account（游戏的账号服，全局、无状态、可水平扩展） | 渠道身份 → 账号；**账号 id ↔ 角色 id** 的映射（一个账号在一个服上一名玩家）；全部票据的签发与校验；区服记录 | 托管的 `service/account`，状态在 Redis |
 | manifest（清单） | 登录之后给清单与推荐（要问 account 才知道是新号还是旧号）、选定之后换进服票据与连接地址；无状态的 HTTP | 本模块，缺省与 account 同进程 |
-| gate | 握手：把进服票据交给 account，得到玩家号与归属 | login 模块的认证器（嵌入 TCP 时在 game 进程里，独立 Gate 时在 Gate 上） |
-| game | 进入时新建或加载玩家数据；角色名这类显示数据与规则 | enter 模块的 `EnterGame`，以及 profile / naming 等 |
+| gate | 握手：把进服票据交给 account，得到玩家号与归属；握手成功与否只看 account，不等 game | login 模块的认证器（嵌入 TCP 时在 game 进程里，独立 Gate 时在 Gate 上） |
+| game | 会话激活之后告诉客户端要不要先新建；新建（建档、**角色名**、初始发放）与进入各是一个请求 | enter 模块的 `EnterStatus` / `EnterCreate` / `EnterGame`，名字规则来自 profile / naming |
 
 入口是很薄的一层：HTTP 入参检查、调 account、区服目录与推荐规则。它不认证任何人（身份由 account 向渠道确认），**不持有任何密钥**（票据由 account 签发与校验），不建角、不选角，也不知道玩家号。它只守一件事：**账号只取自 account 校验过的账号票据**，绝不取自请求。
 
@@ -69,7 +73,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter \
 # {"ok":true,"ticket":"enter:et1.…","server_id":1000,"serving_server_id":1000,"expires_at":…,"addr":"127.0.0.1:7000","addr_source":"directory"}
 
 read -rsp "ticket: " ROOST_PLAYER_TOKEN; export ROOST_PLAYER_TOKEN; echo
-go run ./cmd/playerprobe -addr 127.0.0.1:7000      # 只验证握手；之后的 EnterGame 由客户端发
+go run ./cmd/playerprobe -addr 127.0.0.1:7000      # 只验证握手；之后的 EnterStatus / EnterCreate / EnterGame 要客户端（或 Robot）收发
 ```
 
 ## 端点
@@ -232,7 +236,7 @@ portal:
 | `game/portal/portal_registry.go` | 动态注册表 |
 | `game/portal/portal_config.go` | `portal.servers` 的声明与启动时的检查 |
 | `internal/errors/portal.go` | 入口自己的业务码 |
-| `game/portal/portal_enter_test.go` | 只在装了 enter 时有：整条链路的场景 |
+| `game/portal/portal_enter_test.go` | 只在装了 enter 时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |
 
 握手票据由 `game/login` 的 `EnterTicket` 拼，入口不另写一遍格式。
 
@@ -244,6 +248,6 @@ portal:
 - **一条坏记录会挡住清单**：某个服上本账号的 slot 与角色对不上（`560113`）或合服别名两跳时，整个请求失败。
 - **进程内的注册表是每个副本一张**，见“动态目录”。静态配置没有这个问题。
 - **新号被送去非 open 的服**时拿得到进服票据，握手才被拒，而握手失败客户端拿不到原因。客户端要看清单里的 `status`。
-- **账号 ↔ 玩家号的映射在握手时才建**：拿了进服票据而没有去握手的新号，在 account 里没有角色，清单里仍是 `role: null`。
+- **账号 ↔ 玩家号的映射在握手时才建**：拿了进服票据而没有去握手的新号，在 account 里没有角色，清单里仍是 `role: null`。反过来，握手过而没有在游戏服新建的账号，清单里已经有 `role`（“老号”），推荐规则把那个服当作他玩过的服；游戏服那边仍告知要新建。清单里的 `role` 说的是 account 的映射，不是游戏服的玩家数据。
 - 入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`：自己手写 bootstrap 的工程要照着加。
-- 场景是离线的：真实的 `account.Service`（内存存储）、真实的路由引擎与登录模块的认证器，没有经真实的监听端口、总线、Redis 与 TCP；改成 account 进程监听之后还没有做过真实进程的演练。
+- 场景是离线的：真实的 `account.Service`（内存存储）、真实的路由引擎与登录模块的认证器，与 enter 的联动里游戏服的档是内存替身；没有经真实的监听端口、总线、Redis 与 TCP。入口改成 account 进程监听、进入改成“先新建再进入”之后还**没有做过真实进程的演练**。

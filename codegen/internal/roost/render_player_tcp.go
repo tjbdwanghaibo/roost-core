@@ -584,6 +584,14 @@ func (auth observingAuthenticator) SessionActive(registry *app.Registry,principa
  auth.seen<-observedSession{registry:registry,principal:principal,complete:complete}
 }
 
+// recordingHandshake 是原有握手钩子（自身视图）的替身；observedConnection 是只答 Principal 的连接。
+type recordingHandshake struct{ calls []string; fail error }
+func (hooks *recordingHandshake) BeforeACK(context.Context,gateway.ConnectionSession,string)error{hooks.calls=append(hooks.calls,"before");return nil}
+func (hooks *recordingHandshake) AfterACK(context.Context,gateway.ConnectionSession)error{hooks.calls=append(hooks.calls,"after");return hooks.fail}
+func (hooks *recordingHandshake) Closed(gateway.ConnectionSession){hooks.calls=append(hooks.calls,"closed")}
+type observedConnection struct{ gateway.ConnectionSession; principal gateway.Principal }
+func (conn observedConnection) Principal()gateway.Principal{return conn.principal}
+
 // 认证器实现 SessionObserver 时，它认证过的会话激活之后被通知一次：嵌入 TCP 在鉴权 ACK 写出、会话登记之后，
 // 带握手时的 Principal（complete）；独立 Gate 接在 options.OnActive 之后，只有绑定里的玩家号与会话号。
 // 原有的激活回调拒绝时不通知；通知里 panic 不影响会话；认证器没实现这个接口时接线不变。
@@ -640,6 +648,18 @@ func TestSessionObserverHearsEveryActivatedSession(t *testing.T){
  if err:=options.OnActive(gateway.Binding{PlayerID:13,SessionID:"refused"},5);!errors.Is(err,refused){t.Fatalf("a refused activation = %%v, want the callback's error",err)}
  quiet("a refused activation")
  if err:=bare.OnActive(gateway.Binding{PlayerID:14,SessionID:"panics"},6);err!=nil{t.Fatalf("a panicking notice failed the activation: %%v",err)}
+ // 握手钩子的组合：原有的钩子（自身视图）先执行，BeforeACK / Closed 原样转给它；它的 AfterACK 失败就不通知。
+ inner:=&recordingHandshake{}
+ hooks:=observeHandshake(registry,auth,inner)
+ conn:=observedConnection{principal:gateway.Principal{PlayerID:21,SessionID:"composed"}}
+ if err:=hooks.BeforeACK(context.Background(),conn,"ticket");err!=nil{t.Fatal(err)}
+ if err:=hooks.AfterACK(context.Background(),conn);err!=nil{t.Fatal(err)}
+ if got=next("composed hooks");got.principal.PlayerID!=21||!got.complete{t.Fatalf("composed notice = %%+v",got)}
+ hooks.Closed(conn)
+ if want:=[]string{"before","after","closed"};!slices.Equal(inner.calls,want){t.Fatalf("the original hooks saw %%v, want %%v",inner.calls,want)}
+ inner.fail=refused
+ if err:=hooks.AfterACK(context.Background(),conn);!errors.Is(err,refused){t.Fatalf("a failed original AfterACK = %%v, want its error",err)}
+ quiet("a failed original AfterACK")
  // 没实现接口的认证器：接线与没有这个接口时相同。
  plain:=AuthenticatorFunc(func(context.Context,string,net.Addr)(gateway.Principal,error){return gateway.Principal{},nil})
  if hooks:=observeHandshake(registry,plain,nil);hooks!=nil{t.Fatalf("handshake hooks for a plain authenticator = %%v, want none",hooks)}

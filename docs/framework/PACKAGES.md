@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开179个包目录的职责映射</summary>
+<summary>展开180个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -174,6 +174,7 @@
 | [wiring/manager](../../wiring/manager) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/match](../../wiring/match) | [次核心：Service 领域能力](impl/09-services.md) | 3 | 2 |
 | [wiring/mods](../../wiring/mods) | [次核心：Wiring 装配](impl/13-wiring.md) | 6 | 5 |
+| [wiring/modulehost](../../wiring/modulehost) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/mongo](../../wiring/mongo) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 4 |
 | [wiring/nats](../../wiring/nats) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 12 |
 | [wiring/nest](../../wiring/nest) | [次核心：Wiring 装配](impl/13-wiring.md) | 2 | 10 |

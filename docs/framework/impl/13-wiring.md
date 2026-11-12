@@ -47,6 +47,7 @@ Service 与基础设施 Mod 共用这些生命周期规则。领域 Server/run �
 | [statslog](../../../wiring/statslog) | [framework/statslog](../../../framework/statslog) | 配置、指标、Nest/Entity 的采样依赖 |
 | [web](../../../wiring/web) | [infra/network/webroute](../../../infra/network/webroute)、[httpserver](../../../infra/network/httpserver) | 业务 HTTP 路由（`roost add webroute`）的监听：`web.*` 声明（生产非回环地址要 `web.allow_public_addr`；超时与请求体上限交给 httpserver，缺省即 `httpserver.DefaultConfig`）；Init 建 Engine 并装路由指标中间件 `observeRoutes`（`web.request.total` / `web.request.duration`，按路由模板）；Start 只 bind，路由只在 Service.Init 里经 `RegisterRoutes` 登记，service.started 冻结路由表并开始 Serve，service.stopping 时 `Shutdown`；不做鉴权 |
 | [mods](../../../wiring/mods) | 各具体模块 | Mod/capability 名称与共享配置声明 |
+| [modulehost](../../../wiring/modulehost) | 业务模块的服务级入口（`modules/<name>` 清单的 `runtime`） | 让写了 `runtime.framework` 的模块入口跑在托管框架服务的进程里：生成的 bootstrap 把它加在 owner Mod 之后，全部 Mod 启动之后、`Service.Init` 之前按给定顺序调入口，停机反序；部分启动失败与停机失败的收尾与业务服务的 `modules_gen.go` 相同。第一个使用者是登录入口 portal（跑在 account 的进程里） |
 
 Ops 的 HTTP handler、监听与 drain 由 runtime Server 持有；Wiring 使用同一个 Handler，不复制路由。StatsLog 的 provider、窗口、周期和文件由 runtime Logger 持有；采样时查询已装配的 Nest/Entity，避免 Provide 的先后次序让统计永久漏掉模块。
 
