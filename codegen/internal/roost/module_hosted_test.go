@@ -187,8 +187,8 @@ func TestHostedModuleNeedsItsModsOnTheHost(t *testing.T) {
 	}
 	// 不代办的 Mod 缺在托管服务上：点名托管服务。
 	saga := spec
-	saga.Needs = ModuleNeeds{Mods: []string{"saga"}}
-	if err := checkModuleNeeds(manifest, "game", saga); err == nil || !strings.Contains(err.Error(), "service account has no saga mod: roost add mod saga -service account") {
+	saga.Needs = ModuleNeeds{Mods: []string{"manager"}}
+	if err := checkModuleNeeds(manifest, "game", saga); err == nil || !strings.Contains(err.Error(), "service account has no manager mod: roost add mod manager -service account") {
 		t.Fatalf("a mod the installer does not add, missing on the host: %v", err)
 	}
 	delete(withGameWeb.Services, "account")
@@ -215,7 +215,9 @@ func TestDevWebPortFollowsThePortBlock(t *testing.T) {
 	if ports := portsOf(m, "account"); ports.Web != 8081 || ports.Ops != 9101 {
 		t.Fatalf("ports of account = %+v", ports)
 	}
-	if got := productionizeConfig(section); !strings.Contains(got, "  addr: CHANGE_ME:8080\n") {
+	// The production example keeps web on loopback: a non-loopback host is refused in production
+	// unless web.allow_public_addr is set, and the generated example has to pass production validation.
+	if got := productionizeConfig(section); !strings.Contains(got, "  addr: 127.0.0.1:8080\n") || strings.Contains(got, "CHANGE_ME:8080") {
 		t.Fatalf("the production example's web address:\n%s", got)
 	}
 	var hint bytes.Buffer

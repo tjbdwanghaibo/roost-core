@@ -33,9 +33,10 @@ import (
 func init() {
 	gameenter.OnEntering("rehome", admitOnEnter)
 	gameenter.OnEntered("rehome", arriveOnEnter)
-	// 进入游戏这条消息不受换服的写闸门约束：上面的进入前检查会给客户端带码的回答
+	// 进入游戏与新建这两条消息不受换服的写闸门约束：它们都先跑上面的进入前检查，由它给客户端带码的回答
 	// （rehome_moving / rehome_elsewhere），闸门先把连接关掉的话客户端就不知道原因了。
 	gamerehome.ExemptFromGate(msgid.MsgEnterGame)
+	gamerehome.ExemptFromGate(msgid.MsgEnterCreate)
 }
 
 func admitOnEnter(ctx context.Context, registry *app.Registry, entering gameenter.Entering) error {

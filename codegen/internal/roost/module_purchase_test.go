@@ -20,7 +20,7 @@ func TestModulePurchaseScenariosAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("combined: %v %+v", err, report)
 	}
-	want = map[string]int{"purchase": 21, "wallet": 14, "bag": 17, "enter": 14, "purchase+bag": 4, "purchase+enter": 2}
+	want = map[string]int{"purchase": 21, "wallet": 14, "bag": 17, "enter": 29, "purchase+bag": 4, "purchase+enter": 2}
 	checkPurchaseRows(t, report, want)
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "enter", "bag", "purchase")

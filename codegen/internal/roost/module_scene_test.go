@@ -66,7 +66,7 @@ func TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify scene glues: %v %+v", err, report)
 	}
-	want := map[string]int{"scene": 26, "chat": 10, "scene+chat": 5, "scene+profile": 2, "scene+attribute": 2, "scene+equipment": 2}
+	want := map[string]int{"scene": 26, "chat": 10, "scene+chat": 5, "chat+enter": 2, "scene+profile": 2, "scene+attribute": 2, "scene+equipment": 2}
 	if len(report.Modules) != len(want) {
 		t.Fatalf("unexpected glues %+v", report.Modules)
 	}

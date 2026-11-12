@@ -112,19 +112,19 @@ func TestModuleNeedsWebIsAPrerequisiteTheInstallerRuns(t *testing.T) {
 	}
 
 	// 不在代办名单里的 Mod：拒绝并给出命令，不出现在前置命令里。
-	other := ModuleSpec{Name: "sagas", Needs: ModuleNeeds{Mods: []string{"saga"}}}
-	if err := checkModuleNeeds(manifest, "game", other); err == nil || !strings.Contains(err.Error(), "roost add mod saga -service game") {
-		t.Fatalf("a module that needs the saga mod: %v", err)
+	other := ModuleSpec{Name: "managed", Needs: ModuleNeeds{Mods: []string{"manager"}}}
+	if err := checkModuleNeeds(manifest, "game", other); err == nil || !strings.Contains(err.Error(), "roost add mod manager -service game") {
+		t.Fatalf("a module that needs the manager mod: %v", err)
 	}
 	if got := moduleMissingMods(manifest, "game", other); len(got) != 0 {
 		t.Fatalf("the installer would add %v on its own", got)
 	}
-	for _, name := range []string{"heartbeat", "directory", "web"} {
+	for _, name := range []string{"configdata", "heartbeat", "directory", "remote_entity", "remote_mirror", "saga", "web"} {
 		if !moduleCanAddMod(name) {
 			t.Fatalf("the installer no longer adds the %s mod", name)
 		}
 	}
-	for _, name := range []string{"saga", "nats", "mongo", "redis", ""} {
+	for _, name := range []string{"manager", "nats", "mongo", "redis", "nest", "dataengine", ""} {
 		if moduleCanAddMod(name) {
 			t.Fatalf("the installer adds the %q mod on its own", name)
 		}

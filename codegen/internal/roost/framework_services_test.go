@@ -425,7 +425,7 @@ func TestFrameworkCollaboratorsImportOnlyWhatTheyUse(t *testing.T) {
 //     servicemetrics.NewMetricsReporter("<服务名>")；
 //   - 注释说明怎么关：返回 nil，或配置 service_metrics.enabled: false。
 
-var metricsCollaborator = regexp.MustCompile(`func Metrics\(\) servicemetrics\.Reporter \{\s*return ([^\n}]*)\}`)
+var metricsCollaborator = regexp.MustCompile(`func Metrics\(\) servicemetrics\.Reporter\s+\{\s*return ([^\n}]*)\}`)
 
 func TestGeneratedServicesReportIntoTheMetricsRegistryByDefault(t *testing.T) {
 	t.Parallel()

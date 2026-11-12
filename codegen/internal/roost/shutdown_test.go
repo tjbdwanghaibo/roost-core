@@ -169,8 +169,8 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 	if counts["game"] != 27 || !declares["game"].dataengine || !declares["game"].playerTCP || declares["game"].mirror {
 		t.Fatalf("game registers %d Mods (declaring: %+v), want 27 with dataengine and the player TCP Mod, without the read-only mirror", counts["game"], declares["game"])
 	}
-	// 30s + 10s + 3s x 25 + 5s + 3s singleton release; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s.
-	pinned := map[string][2]int{"game": {123, 128}, "account": {23, 28}}
+	// 30s + 10s + 3s x 25 + 5s + 3s singleton release; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s; account also hosts the login entry (web + the module host Mod): 3s x 8 + 5s.
+	pinned := map[string][2]int{"game": {123, 128}, "account": {29, 34}}
 	for service, mods := range counts {
 		total, grace := expectedShutdown(mods, declares[service])
 		if want, ok := pinned[service]; ok && (want[0] != total || want[1] != grace) {
@@ -359,7 +359,7 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 
 // roost doctor reports a config the generator no longer maintains when its
 // window no longer fits: one the platform would cut short (a framework
-// service still on the old 60s default, now generated with a 28s grace
+// service still on the old 60s default, now generated with a 34s grace
 // period), and one too short for its Mods (the game service on 60s).
 func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
 	t.Parallel()
@@ -385,10 +385,10 @@ func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
 		body := regexp.MustCompile(`total_timeout: \d+s\n`).ReplaceAllString(readProjectFile(t, target, rel), "total_timeout: 60s\n")
 		writeProjectFile(t, target, rel, body)
 	}
-	// Before a sync the deployment templates still carry 28s for account:
+	// Before a sync the deployment templates still carry 34s for account:
 	// a process the platform would SIGKILL while the App is still stopping it.
 	items := status()
-	if item := items["shutdown:account"]; item.Status != StatusFail || !strings.Contains(item.Detail, "deploy/k8s/base/account.yaml grace period 28s < total_timeout 60s + 5s") {
+	if item := items["shutdown:account"]; item.Status != StatusFail || !strings.Contains(item.Detail, "deploy/k8s/base/account.yaml grace period 34s < total_timeout 60s + 5s") {
 		t.Errorf("account on 60s before sync: %s %s", item.Status, item.Detail)
 	}
 	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 27 Mods (40s declared + 3s x 25 + 3s singleton release = 118s)") || !strings.Contains(item.Detail, "Set it to 123s") {
@@ -827,7 +827,7 @@ func TestDoctorJudgesANonPositiveTotalAsTheAppsFallback(t *testing.T) {
 				setShutdownTotal(t, root, rel, total)
 			}
 			// The templates follow the App's 30s + 5s (RR-66 复核); without the
-			// sync the FAIL for the old 28s grace period would come first.
+			// sync the FAIL for the old 34s grace period would come first.
 			syncProject(t, root)
 			item := shutdownStatus(t, root)["shutdown:account"]
 			if item.Status != StatusOK {

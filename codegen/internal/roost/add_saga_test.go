@@ -72,7 +72,8 @@ func runGeneratedGo(t *testing.T, root string, args ...string) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", goName), args...)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GOWORK=off")
+	// -mod=mod: a freshly generated project may not have its go.sum resolved yet (the demo defers that to the caller).
+	cmd.Env = generatedProjectGoEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go %s in the generated project: %v\n%s", strings.Join(args, " "), err, output)

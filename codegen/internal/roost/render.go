@@ -923,12 +923,19 @@ var advertiseAddrLine = regexp.MustCompile(`(?m)^(  advertise_addr: )127\.0\.0\.
 // declaration puts above it.
 var opsAddrLine = regexp.MustCompile(`(?m)^(  addr: )(?:127\.0\.0\.1|CHANGE_ME):9100$`)
 
+// prodWebAddrLine matches the web.addr line after the blanket host replacement (8080 is the web Mod's port).
+var prodWebAddrLine = regexp.MustCompile(`(?m)^(  addr: )CHANGE_ME:8080$`)
+
 // streamReplicasLine matches a line whose key is exactly replicas with value 1.
 var streamReplicasLine = regexp.MustCompile(`(?m)^([ \t]*)replicas: 1$`)
 
 func productionizeConfig(value string) string {
 	value = strings.ReplaceAll(strings.ReplaceAll(value, "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")
 	value = opsAddrLine.ReplaceAllString(value, "${1}0.0.0.0:9100")
+	// web.addr stays on loopback: the web Mod refuses a non-loopback address in production unless
+	// web.allow_public_addr is set (it does no authentication), so a CHANGE_ME host would make the
+	// generated example fail production validation. Exposing it is the operator's explicit choice.
+	value = prodWebAddrLine.ReplaceAllString(value, "${1}127.0.0.1:8080")
 	// 只改独占一行的 replicas: 1（syncbus / effects / saga 的流副本数）。
 	// remote_entity.snapshot_l2_tombstone_wait_replicas 是 L2 墓碑 WAIT 的副本数，不是流副本，不能跟着变成 3。
 	value = streamReplicasLine.ReplaceAllString(value, "${1}replicas: 3")

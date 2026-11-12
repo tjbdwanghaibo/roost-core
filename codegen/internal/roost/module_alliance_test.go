@@ -59,7 +59,7 @@ func TestModuleAllianceGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("combined: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"alliance": 49, "bag": 17, "team": 27, "rehome": 40, "enter": 14, "alliance+enter": 2, "alliance+rehome": 2, "rehome+enter": 5, "team+rehome": 2})
+	checkTaskModuleRows(t, report, map[string]int{"alliance": 49, "bag": 17, "team": 27, "rehome": 40, "enter": 29, "alliance+enter": 2, "alliance+rehome": 2, "rehome+enter": 5, "team+rehome": 2})
 	m, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)

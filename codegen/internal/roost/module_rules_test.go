@@ -12,13 +12,13 @@ func TestModuleClientRulesAndShopTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rules: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"rules": 10, "enter": 14})
+	checkTaskModuleRows(t, report, map[string]int{"rules": 10, "enter": 29})
 	roost("module", "add", "shop", "stamina")
 	report, err = VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
 		t.Fatalf("combined: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"rules": 10, "enter": 14, "shop": 20, "stamina": 25, "wallet": 14, "bag": 17, "shop+rules": 2, "stamina+rules": 2})
+	checkTaskModuleRows(t, report, map[string]int{"rules": 10, "enter": 29, "shop": 20, "stamina": 25, "wallet": 14, "bag": 17, "shop+rules": 2, "stamina+rules": 2})
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "stamina", "shop", "rules")
 	if moduleProjectDigest(t, root) != before {

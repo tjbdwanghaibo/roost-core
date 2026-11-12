@@ -23,7 +23,11 @@ func Players() svcplatform.PlayerResolver {
 }
 func Deliver() svcplatform.Deliverer     { return &paymentDelivery{} }
 func Pending() svcplatform.PendingOrders { return nil }
-func Metrics() servicemetrics.Reporter   { return servicemetrics.NewMetricsReporter("platform") }
+
+// Metrics reports what the service accepted and refused into the process's metrics registry, served as
+// service_* series on the ops /metrics endpoint. Turn it off with service_metrics.enabled: false in config,
+// or by returning nil here; nil never fails an operation.
+func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("platform") }
 
 type paymentDelivery struct{ queue purchase.Queue }
 

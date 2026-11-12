@@ -19,7 +19,7 @@ func TestModuleTaskEventsPeriodsAndMutations(t *testing.T) {
 		t.Fatalf("combined: %v %+v", err, report)
 	}
 	checkTaskModuleRows(t, report, map[string]int{
-		"task": 29, "wallet": 14, "checkin": 8, "shop": 20, "bag": 17, "stamina": 25, "profile": 20, "enter": 14, "profile+enter": 4, "dungeon": 19, "leaderboard": 20,
+		"task": 29, "wallet": 14, "checkin": 8, "shop": 20, "bag": 17, "stamina": 25, "profile": 20, "enter": 29, "profile+enter": 4, "enter+profile": 3, "dungeon": 19, "leaderboard": 20,
 		"rules": 10, "shop+rules": 2, "stamina+rules": 2, "task+wallet": 6, "task+checkin": 3, "task+shop": 3, "task+stamina": 3, "task+profile": 2, "task+dungeon": 2, "task+bag": 3, "task+leaderboard": 3, "dungeon+leaderboard": 3,
 	})
 	before := moduleProjectDigest(t, root)

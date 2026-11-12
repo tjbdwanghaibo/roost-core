@@ -119,7 +119,7 @@
 
 本模块的 `with/`：
 
-- `rehome` + `enter`（`with/enter/game/controllers/rehome/rehome_enter.go`）：登记 enter 的进入前检查（`Admit`：正在换服答 `rehome_moving`，绑定在别的服答 `rehome_elsewhere`，判断不了不放行；源服重启后在这里把停在半路的换服接着做完）与进入之后的钩子（`Arrive`：到达与意图对账，失败只记日志、不让登录失败）；并把进入游戏那条消息（`EnterGame`）登记为不受写闸门约束。enter 的新建角色消息 `EnterCreate` 也会跑同一组进入前检查，但没有登记豁免：迁出表里的玩家在缺省写闸门下发它，连接先被闸门关掉，拿不到带码的回答。
+- `rehome` + `enter`（`with/enter/game/controllers/rehome/rehome_enter.go`）：登记 enter 的进入前检查（`Admit`：正在换服答 `rehome_moving`，绑定在别的服答 `rehome_elsewhere`，判断不了不放行；源服重启后在这里把停在半路的换服接着做完）与进入之后的钩子（`Arrive`：到达与意图对账，失败只记日志、不让登录失败）；并把进入游戏那条消息（`EnterGame`）登记为不受写闸门约束。enter 的新建角色消息 `EnterCreate` 也会跑同一组进入前检查，所以联动给 `EnterGame` 与 `EnterCreate` 两条消息都登记了写闸门豁免：迁出表里的玩家发它们，拿到的是进入前检查的带码回答，连接不会先被闸门关掉。
 - `rehome` + `gm`（`with/gm/game/gm/rehome.go`）：运维命令 `gm.player.rehome`，payload `{player_id, to, note}`，调 `Move`；返回 `accepted` 只表示已受理，最终状态看 account 的角色记录。
 
 别的模块的 `with/rehome`：

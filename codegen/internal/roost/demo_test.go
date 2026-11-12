@@ -1032,13 +1032,13 @@ func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "internal", "service", "game")); !os.IsNotExist(err) {
 		t.Fatalf("internal/service/game exists in a project whose game service is arena (err=%v)", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(target, "internal", "service", "arena", "level_up_mail.go"))
+	raw, err := os.ReadFile(filepath.Join(target, "internal", "service", "arena", "gift_saga.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"package " + defaultServicePackage("arena"), `"arena-level-up-mail"`} {
+	for _, want := range []string{"package " + defaultServicePackage("arena"), `"arena-gift"`} {
 		if !strings.Contains(string(raw), want) {
-			t.Errorf("level_up_mail.go lacks %q:\n%s", want, raw)
+			t.Errorf("gift_saga.go lacks %q:\n%s", want, raw)
 		}
 	}
 	if strings.Contains(string(raw), demoGameServicePlaceholder) || strings.Contains(string(raw), demoGameServicePackagePlaceholder) {

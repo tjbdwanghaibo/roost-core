@@ -12,8 +12,8 @@ func TestModuleProfileMailScenariosAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verification: %v %+v", err, report)
 	}
-	want := map[string]int{"mailbox": 32, "profile": 20, "wallet": 14, "mailbox+profile": 10, "enter": 14, "profile+enter": 4, "mailbox+enter": 5}
-	if len(report.Modules) != 7 {
+	want := map[string]int{"mailbox": 32, "profile": 20, "wallet": 14, "mailbox+profile": 10, "enter": 29, "enter+profile": 3, "profile+enter": 4, "mailbox+enter": 5}
+	if len(report.Modules) != len(want) {
 		t.Fatalf("rows=%+v", report.Modules)
 	}
 	for _, row := range report.Modules {
