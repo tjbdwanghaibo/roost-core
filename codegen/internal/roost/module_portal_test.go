@@ -48,7 +48,7 @@ func TestModulePortalInstallsTheWebModTheLoginCommandAndItsHints(t *testing.T) {
 		"module login: installed", "module portal: installed",
 		"  file:      cmd/accountctl/main.go\n",
 		"  todo:      打开玩家 TCP 监听：roost config enable player-tcp",
-		"  todo:      登记区服：account 与它的 Redis 起来之后执行 go run ./cmd/accountctl upsert-server -sid <game 进程的 sid>",
+		"go run ./cmd/accountctl upsert-server -sid <game 进程的 sid>\n",
 		"  todo:      登录入口随 game 进程监听 web.addr",
 	} {
 		if !strings.Contains(out, want) {
@@ -107,7 +107,7 @@ func TestModulePortalInstallsTheWebModTheLoginCommandAndItsHints(t *testing.T) {
 		}
 		counts[module.Name] = module.Passed
 	}
-	if counts["login"] != 21 || counts["portal"] != 13 || counts["portal+enter"] != 2 || counts["login+enter"] != 2 || counts["enter"] != 14 {
+	if counts["login"] != 22 || counts["portal"] != 13 || counts["portal+enter"] != 2 || counts["login+enter"] != 2 || counts["enter"] != 14 {
 		t.Fatalf("scenario counts = %v", counts)
 	}
 	before := moduleProjectDigest(t, root)

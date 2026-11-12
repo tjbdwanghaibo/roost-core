@@ -17,6 +17,9 @@
 // 所以本机开发不用带任何参数；别的环境照那个环境的配置填。前缀填错不会报错——只是写进了另一套部署
 // （或谁也不读）的键里，登记之后用 show-server 与一次真实的建角确认。
 //
+// 旗标的名字与 roost-core demo 的同名命令相同：生成的 deploy/dev/run.sh 发现工程里有 cmd/accountctl 时，
+// 在全部服务起来之后用它们登记本机的服（upsert-server -sid $SID）。改旗标名字会让那一步失败。
+//
 // 合服、单个角色换服的人工兜底不在这里（需要时照 roost-core demo 的 cmd/accountctl 加
 // merge-server / unmerge-server / show-role / transfer-role）。
 package main
@@ -43,15 +46,45 @@ const usage = "usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-
 	"upsert-server -sid N [-name NAME] [-status open|maintenance|full|closed] [-region R] | show-server -sid N"
 
 func main() {
-	redisAddr := flag.String("redis", "127.0.0.1:6379", "account 服务的 Redis（config.account.yaml 的 redis.addr）")
-	redisPassword := flag.String("redis-password", "", "Redis 口令（redis.password）")
-	redisDB := flag.Int("redis-db", 0, "Redis 库号（redis.db）")
-	// 单机客户端连 Cluster 只够得着那个节点负责的槽，别的键会得到 MOVED。
-	redisCluster := flag.String("redis-cluster", "", "Redis Cluster 种子地址，逗号分隔（redis.cluster_addrs）；写了就不用 -redis 与 -redis-db")
-	prefix := flag.String("prefix", "roost:{{PROJECT}}:account", "config.account.yaml 的 account.key_prefix：与运行中的 account 服务靠它共用同一份存储")
-	flag.Parse()
-	if flag.NArg() < 1 {
+	target, command, err := parseConnection(os.Args[1:])
+	if err != nil {
+		fail(err)
+	}
+	if len(command) == 0 {
 		fail(errors.New(usage))
+	}
+	service, closeStore, err := openService(target.redis, target.prefix)
+	if err != nil {
+		fail(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = run(ctx, service, command, os.Stdout)
+	cancel()
+	closeStore()
+	if err != nil {
+		fail(err)
+	}
+}
+
+// connection 是命令行开头那几个旗标说的事：account 的 Redis 在哪里、它的键前缀是什么。
+type connection struct {
+	redis  *fredis.Config
+	prefix string
+}
+
+// parseConnection 读子命令之前的连接旗标，返回连接参数与剩下的参数（子命令和它自己的旗标）。
+// 旗标的名字是与 deploy/dev/run.sh 的约定（见文件头），不认识的旗标是错误。
+func parseConnection(args []string) (connection, []string, error) {
+	flags := flag.NewFlagSet("accountctl", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	redisAddr := flags.String("redis", "127.0.0.1:6379", "account 服务的 Redis（config.account.yaml 的 redis.addr）")
+	redisPassword := flags.String("redis-password", "", "Redis 口令（redis.password）")
+	redisDB := flags.Int("redis-db", 0, "Redis 库号（redis.db）")
+	// 单机客户端连 Cluster 只够得着那个节点负责的槽，别的键会得到 MOVED。
+	redisCluster := flags.String("redis-cluster", "", "Redis Cluster 种子地址，逗号分隔（redis.cluster_addrs）；写了就不用 -redis 与 -redis-db")
+	prefix := flags.String("prefix", "roost:{{PROJECT}}:account", "config.account.yaml 的 account.key_prefix：与运行中的 account 服务靠它共用同一份存储")
+	if err := flags.Parse(args); err != nil {
+		return connection{}, nil, fmt.Errorf("%w\n%s", err, usage)
 	}
 	cfg := fredis.DefaultConfig(*redisAddr)
 	cfg.Password = *redisPassword
@@ -61,17 +94,7 @@ func main() {
 			cfg.ClusterAddrs = append(cfg.ClusterAddrs, addr)
 		}
 	}
-	service, closeStore, err := openService(cfg, *prefix)
-	if err != nil {
-		fail(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err = run(ctx, service, flag.Args(), os.Stdout)
-	cancel()
-	closeStore()
-	if err != nil {
-		fail(err)
-	}
+	return connection{redis: cfg, prefix: *prefix}, flags.Args(), nil
 }
 
 // serverRecords 是两个子命令用到的 account 接口；*svcaccount.Service 满足它。UpsertServer 不在总线接口

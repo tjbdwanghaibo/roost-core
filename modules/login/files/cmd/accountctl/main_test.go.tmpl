@@ -119,20 +119,24 @@ func TestLoginAccountctlRegistersAServerSoRolesCanBeCreated(t *testing.T) {
 // 参数不对的命令返回错误、什么也不写、什么也不打印：没有 -sid、服号不是正数、状态不认识、命令不认识。
 func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 	service := loginCtlAccount(t)
-	for label, args := range map[string][]string{
-		"no command":              {},
-		"an unknown command":      {"merge-server", "-from", "1001", "-into", "1000"},
-		"upsert without -sid":     {"upsert-server", "-name", "nameless"},
-		"upsert with sid zero":    {"upsert-server", "-sid", "0"},
-		"upsert with a bad sid":   {"upsert-server", "-sid", "-1000"},
-		"upsert with a bad state": {"upsert-server", "-sid", "1000", "-status", "opened"},
-		"upsert with a bad flag":  {"upsert-server", "-sid", "1000", "-open"},
-		"show without -sid":       {"show-server"},
-		"show with a bad flag":    {"show-server", "-id", "1000"},
+	for label, test := range map[string]struct {
+		args []string
+		// want 是错误里必须出现的话：拒绝要出自这个命令自己的检查，说得出哪里不对。
+		want string
+	}{
+		"no command":              {nil, "usage: accountctl"},
+		"an unknown command":      {[]string{"merge-server", "-from", "1001", "-into", "1000"}, `unknown command "merge-server"`},
+		"upsert without -sid":     {[]string{"upsert-server", "-name", "nameless"}, "-sid is required"},
+		"upsert with sid zero":    {[]string{"upsert-server", "-sid", "0"}, "-sid is required"},
+		"upsert with a bad sid":   {[]string{"upsert-server", "-sid", "-1000"}, "-sid is required"},
+		"upsert with a bad state": {[]string{"upsert-server", "-sid", "1000", "-status", "opened"}, `invalid -status "opened"`},
+		"upsert with a bad flag":  {[]string{"upsert-server", "-sid", "1000", "-open"}, "upsert-server: flag provided but not defined"},
+		"show without -sid":       {[]string{"show-server"}, "-sid is required"},
+		"show with a bad flag":    {[]string{"show-server", "-id", "1000"}, "show-server: flag provided but not defined"},
 	} {
-		_, printed, err := loginCtlRun(t, service, args...)
-		if err == nil {
-			t.Fatalf("%s: accountctl %s succeeded", label, strings.Join(args, " "))
+		_, printed, err := loginCtlRun(t, service, test.args...)
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("%s: accountctl %s: err = %v, want it to say %q", label, strings.Join(test.args, " "), err, test.want)
 		}
 		if printed != "" {
 			t.Fatalf("%s: a refused command printed %q", label, printed)
@@ -141,6 +145,56 @@ func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 	for _, sid := range []int32{1000, 1001} {
 		if _, err := service.GetServer(context.Background(), sid); !errors.Is(err, svcaccount.ErrServerInvalid) {
 			t.Fatalf("a refused command registered server %d: %v", sid, err)
+		}
+	}
+}
+
+// 连接旗标是与 deploy/dev/run.sh 的约定：脚本在全部服务起来之后按 config.account.yaml 里的 Redis 与键前缀
+// 调 accountctl 登记本机的服。这里用脚本实际传的两种写法（单机、Cluster）来读，名字改了这一条就红。
+// 什么都不带时的缺省值就是生成的开发配置里的值。
+func TestLoginAccountctlReadsTheConnectionFlagsTheDevScriptPasses(t *testing.T) {
+	single, command, err := parseConnection([]string{
+		"-redis", "10.0.0.5:6380", "-redis-password", "s3cret", "-redis-db", "3", "-prefix", "roost:mygame:account",
+		"upsert-server", "-sid", "1000",
+	})
+	if err != nil {
+		t.Fatalf("the single-node form the dev script passes: %v", err)
+	}
+	if single.redis.Addr != "10.0.0.5:6380" || single.redis.Password != "s3cret" || single.redis.DB != 3 || len(single.redis.ClusterAddrs) != 0 || single.prefix != "roost:mygame:account" {
+		t.Fatalf("connection = %+v with prefix %q", single.redis, single.prefix)
+	}
+	if strings.Join(command, " ") != "upsert-server -sid 1000" {
+		t.Fatalf("the command after the connection flags = %q, want it left untouched for the sub-command", command)
+	}
+	cluster, command, err := parseConnection([]string{
+		"-redis-cluster", "10.0.0.1:7000, 10.0.0.2:7000,", "-redis-password", "", "-prefix", "roost:{mygame}:account",
+		"upsert-server", "-sid", "1001",
+	})
+	if err != nil {
+		t.Fatalf("the cluster form the dev script passes: %v", err)
+	}
+	if strings.Join(cluster.redis.ClusterAddrs, "|") != "10.0.0.1:7000|10.0.0.2:7000" || cluster.redis.Password != "" || cluster.prefix != "roost:{mygame}:account" {
+		t.Fatalf("cluster connection = %+v with prefix %q", cluster.redis, cluster.prefix)
+	}
+	if strings.Join(command, " ") != "upsert-server -sid 1001" {
+		t.Fatalf("the command after the cluster flags = %q", command)
+	}
+	// 不带任何旗标：生成的开发配置里的值。
+	defaults, command, err := parseConnection([]string{"show-server", "-sid", "1000"})
+	if err != nil || defaults.redis.Addr != "127.0.0.1:6379" || defaults.redis.DB != 0 || defaults.redis.Password != "" ||
+		len(defaults.redis.ClusterAddrs) != 0 || defaults.prefix != "roost:{{PROJECT}}:account" || len(command) != 3 {
+		t.Fatalf("defaults = %+v, prefix %q, command %q, err %v", defaults.redis, defaults.prefix, command, err)
+	}
+	if _, command, err := parseConnection(nil); err != nil || len(command) != 0 {
+		t.Fatalf("no arguments: command %q, err %v; main reports the usage", command, err)
+	}
+	// 不认识的连接旗标、写错类型的库号是错误，并带着用法。
+	for _, args := range [][]string{
+		{"-redis-addr", "10.0.0.5:6379", "upsert-server", "-sid", "1000"},
+		{"-redis-db", "three", "upsert-server", "-sid", "1000"},
+	} {
+		if _, _, err := parseConnection(args); err == nil || !strings.Contains(err.Error(), "usage: accountctl") {
+			t.Fatalf("accountctl %s: err = %v, want a flag error with the usage", strings.Join(args, " "), err)
 		}
 	}
 }
