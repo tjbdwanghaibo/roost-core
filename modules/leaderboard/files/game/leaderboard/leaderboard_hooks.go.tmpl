@@ -1,0 +1,56 @@
+package leaderboard
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"slices"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// Submission 只表示 rank 已答复本次提交成功，不表示分数增加或结算首次发生。
+// 重复提交同一快照也会触发；不能据此发放需要恰好一次的结算奖励。
+type Submission struct {
+	Board           svcrank.Board
+	PlayerID, Total int64
+	Standing        Standing
+}
+type SubmittedHook func(context.Context, *app.Registry, Submission) error
+
+var submittedMu sync.RWMutex
+var submittedHooks = map[string]SubmittedHook{}
+
+// OnSubmitted 只在 init 登记。它在事务外执行，可以提交另一条 Nest 消息，不能直接操作 Entity。
+// 回调失败只记 Warn：rank 已提交，不能用回调错误伪装成 rank 没提交；修复/重试由消费者负责。
+func OnSubmitted(name string, hook SubmittedHook) {
+	if name == "" || hook == nil {
+		panic("leaderboard: hook needs name and function")
+	}
+	submittedMu.Lock()
+	defer submittedMu.Unlock()
+	if _, exists := submittedHooks[name]; exists {
+		panic(fmt.Sprintf("leaderboard: duplicate hook %q", name))
+	}
+	submittedHooks[name] = hook
+}
+func runSubmitted(ctx context.Context, registry *app.Registry, event Submission) {
+	submittedMu.RLock()
+	names := make([]string, 0, len(submittedHooks))
+	for name := range submittedHooks {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	hooks := make([]SubmittedHook, len(names))
+	for i, name := range names {
+		hooks[i] = submittedHooks[name]
+	}
+	submittedMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(ctx, registry, event); err != nil {
+			slog.WarnContext(ctx, "leaderboard submit hook failed", "hook", names[i], "player_id", event.PlayerID, "error", err)
+		}
+	}
+}

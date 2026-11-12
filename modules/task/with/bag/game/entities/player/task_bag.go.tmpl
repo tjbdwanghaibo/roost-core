@@ -1,0 +1,18 @@
+package player
+
+import apperrors "{{MODULE}}/internal/errors"
+
+func init() {
+	RegisterTaskReward("item", TaskRewardHandler{
+		Validate: func(reward TaskReward) error {
+			if reward.ID <= 0 {
+				return apperrors.ErrTaskUnknown
+			}
+			return nil
+		},
+		Grant: func(owner *Player, reward TaskReward) error {
+			_, err := owner.BagComp().Add(reward.ID, reward.Count)
+			return err
+		},
+	})
+}

@@ -1,0 +1,10 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerTaskReport 只给服务端用；独立消息不自带去重，事务内事件直接调 TaskComp().Report。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTaskReport(target player.ITaskEntity, event string, n int64, nowUnixMilli int64) error {
+	return target.TaskComp().Report(event, n, nowUnixMilli)
+}

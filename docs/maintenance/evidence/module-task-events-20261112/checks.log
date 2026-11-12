@@ -1,0 +1,8 @@
+root
+ok  	github.com/tjbdwanghaibo/roost-core	13.266s
+
+catalog
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.386s
+
+docs
+checked 310 files, 0 broken

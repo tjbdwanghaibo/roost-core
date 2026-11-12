@@ -1,0 +1,62 @@
+package handler
+
+import (
+	"context"
+	"sync"
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+var taskStaminaOnce sync.Once
+var taskStaminaHandler = nest.NewHandlerName("taskStaminaTest")
+
+func taskSpendStamina(f *taskFixture, n int64) error {
+	taskStaminaOnce.Do(func() {
+		nest.MustRegisterHandlerWithMeta(taskStaminaHandler, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+			return es[0].(*player.Player).StaminaComp().Spend(args[0].(int64), fctx.NowMilli())
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	_, err := f.engine.Request(context.Background(), taskStaminaHandler, f.player.ID(), nest.NewParams(n))
+	return err
+}
+func TestWithTaskStaminaCountsConsumedPoints(t *testing.T) {
+	f := newTaskFixture(t)
+	row := taskRow(10, "stamina.spent", "daily")
+	row.Target = 100
+	taskRows(t, row)
+	if err := taskSpendStamina(f, 4); err != nil {
+		t.Fatal(err)
+	}
+	if f.facts(t).progress[10] != 4 {
+		t.Fatal("wrong stamina progress")
+	}
+}
+func TestWithTaskStaminaRefusalWritesNoTask(t *testing.T) {
+	f := newTaskFixture(t)
+	taskRows(t, taskRow(10, "stamina.spent", "daily"))
+	if err := taskSpendStamina(f, 1000); err == nil {
+		t.Fatal("overspend accepted")
+	}
+	f.want(t, "refusal", taskFacts{})
+}
+func TestWithTaskStaminaRollsBackTogether(t *testing.T) {
+	f := newTaskFixture(t)
+	taskRows(t, taskRow(10, "stamina.spent", "daily"))
+	f.committer.reject.Store(true)
+	if err := taskSpendStamina(f, 1); err == nil {
+		t.Fatal("rejected spend accepted")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rollback", taskFacts{})
+	if err := taskSpendStamina(f, 1); err != nil {
+		t.Fatal(err)
+	}
+	if f.facts(t).progress[10] != 1 {
+		t.Fatal("retry counted wrong")
+	}
+}

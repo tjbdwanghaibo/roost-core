@@ -41,6 +41,8 @@
 
 ### R2. purchase（充值发货）
 
+维护者补充（2026-11-12）：购买不默认用 Saga。普通金币购买走单 Player Nest 事务；充值到账走平台订单与补发游标。只有涉及多个独立提交方、确需失败补偿的复杂交易才使用 Saga；本地多实体事务能覆盖的也不引入 Saga。
+
 已完成（提交 `cc0d7855`）：实现与定向验收完成：基础 21 条、bag 4 条、enter 2 条；新工程 72 PASS / 0 SKIP，13 个变异、两轮 race 与独立 Redis Lua 通过。demo 改用模块、删除无界旧账本；[验收与恢复前提](evidence/module-purchase-20261112/README.md)。全模块正反序和 §6 联合验收仍留到最后。
 
 - **要解决的**：付费订单“恰好一次发货”。现在在 game-demo 的 `game/purchase/` 与 `internal/service/game/purchase_drain.go`，订单账本挂在 demo 的 `claim_ledgers.go`。
@@ -57,6 +59,8 @@
 
 ### R4. 登记点补齐
 
+实现与定向验收完成（本批提交后补号）：消费、购买、体力、副本与排行登记点已有 task 实际使用者；实体内钩子与业务同事务，使用冻结业务时间。排行提交后的任务是单独的尽力投递，不承担恰好一次结算。[R4/R5 证据](evidence/module-task-events-20261112/README.md)。
+
 每个登记点都要有真实使用者（R5 的 task 就是）：
 
 - wallet 的“消费成功”：要能区分 `Apply` 命中去重回执与首次生效，只有首次生效才触发。
@@ -64,6 +68,8 @@
 - 写法照 checkin 的 `OnCheckinClaimed`：提供方留登记函数，接入方带一个自己的联动文件在 `init` 里登记；事务内的钩子不能做 I/O。
 
 ### R5. task 扩成核心系统
+
+实现与定向验收完成（本批提交后补号）：事件、每日/每周/永久、前置链、金币/道具奖励与配置表；基础 29 条（原 18 条保留），八组 task 联动 25 条，组合 215 PASS / 0 SKIP、15 个变异与两轮 race 通过。完整矩阵和真实依赖按 §2/§6 留到最终批次。维护者补充的新角色默认 1 级已通过 profile + enter 的正式首次建档事务实现，失败回滚、不触发升级钩子；attribute 同事务派生初始属性。[使用说明](../../modules/task/README.md)、[默认等级](../../modules/profile/README.md)。
 
 维护者：“task 是一个比较核心的系统，很多业务需求可以加到 task 中去。”方案见[业务模块方案 §18](FEATURE-2026-11-10-business-modules.md) 末尾，按这个先后做：
 

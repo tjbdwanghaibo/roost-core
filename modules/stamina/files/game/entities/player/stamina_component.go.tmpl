@@ -115,6 +115,9 @@ func (component *StaminaComponent) Spend(n, nowUnixMilli int64) (int64, error) {
 		return 0, apperrors.ErrStaminaShort
 	}
 	component.write(rules.Max, value, value-n, settledAt, nowUnixMilli)
+	if err := runStaminaSpent(component.owner, n, nowUnixMilli); err != nil {
+		return 0, err
+	}
 	return value - n, nil
 }
 

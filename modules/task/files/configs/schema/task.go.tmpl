@@ -1,0 +1,18 @@
+package schema
+
+// Task 定义每日、每周与永久任务。ID、Period、Previous 发布后固定，停用用 Disabled；不要复用号。
+// 永久任务下架仍保留领奖事实。业务目录只接受 1..4096；越界行不可推进/领奖，热更增删也不会无限增大记录。
+// Previous 表示必须领过前置奖励；前置只能是同周期或永久任务，循环、缺失前置按无效任务拒绝。
+//
+//roost:table name=task key=ID
+type Task struct {
+	ID          int64  `csv:"id" json:"id" required:"true" unique:"true" min:"1"`
+	Event       string `csv:"event" json:"event" required:"true"`
+	Period      string `csv:"period" json:"period" required:"true" enum:"daily|weekly|permanent"`
+	Target      int64  `csv:"target" json:"target" min:"1"`
+	Previous    int64  `csv:"previous" json:"previous" min:"0"`
+	RewardKind  string `csv:"reward_kind" json:"reward_kind" required:"true"`
+	RewardID    int64  `csv:"reward_id" json:"reward_id" min:"0"`
+	RewardCount int64  `csv:"reward_count" json:"reward_count" min:"1"`
+	Disabled    bool   `csv:"disabled" json:"disabled"`
+}

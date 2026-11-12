@@ -1,0 +1,60 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/protocol/pb"
+)
+
+func taskBuy(f *taskFixture, key string, count int64) error {
+	RegisterShopBuyNestHandlers()
+	_, err := sender.NewShopBuySender(f.engine).Sync_ShopBuy(context.Background(), f.player.ID(), &pb.ShopBuyRequest{Key: key, GoodsID: 1, Count: count})
+	return err
+}
+func TestWithTaskShopReportsBoughtQuantityOnce(t *testing.T) {
+	f := newTaskFixture(t)
+	row := taskRow(10, "shop.bought", "daily")
+	row.Target = 10
+	taskRows(t, row)
+	taskCoins(t, f, 100)
+	if err := taskBuy(f, "buy", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := taskBuy(f, "buy", 3); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.facts(t); got.progress[10] != 3 || got.coins != 70 || got.commits != 2 {
+		t.Fatalf("purchase=%v", got)
+	}
+}
+func TestWithTaskShopRefusalDoesNotAdvance(t *testing.T) {
+	f := newTaskFixture(t)
+	taskRows(t, taskRow(10, "shop.bought", "daily"))
+	if err := taskBuy(f, "buy", 1); err == nil {
+		t.Fatal("unfunded purchase accepted")
+	}
+	f.want(t, "refusal", taskFacts{})
+}
+func TestWithTaskShopCommitFailureRevertsProgressAndGoods(t *testing.T) {
+	f := newTaskFixture(t)
+	taskRows(t, taskRow(10, "shop.bought", "daily"))
+	taskCoins(t, f, 100)
+	before := f.facts(t)
+	f.committer.reject.Store(true)
+	if err := taskBuy(f, "buy", 1); err == nil {
+		t.Fatal("rejected purchase accepted")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rollback", before)
+	if count := taskHeld(t, f, 1001); count != 0 {
+		t.Fatal("item survived rollback")
+	}
+	if err := taskBuy(f, "buy", 1); err != nil {
+		t.Fatal(err)
+	}
+	if f.facts(t).progress[10] != 1 {
+		t.Fatal("retry counted wrong")
+	}
+}

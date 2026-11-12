@@ -1,5 +1,9 @@
 # Purchase 充值发货
 
+购买不默认使用 Saga。本模块的充值回调沿用 platform 订单 + Redis 待发队列 + Player 发货游标；单个 Player 内的资产、到账游标在一笔 Nest 事务里提交。普通金币购买用 shop，一笔 Player 事务完成扣费、发货、限购和回执。
+
+只有需要协调多个独立提交方（如跨服卖家、共享库存与买家的扣款/交付，并要在失败时补偿）的交易才采用 Saga；判断依据是一致性边界，不是购买名称或代码复杂度。同一个服务里能够用本地多实体 Nest 事务完成的交易，也不必引入 Saga。
+
 从空的 `-template game` 工程执行 `roost module add purchase`，安装 wallet、platform 接线、发货组件和 `PurchaseCollect` 协议；`roost module add bag enter` 再安装道具发货与入场补发联动。基础 21 条场景，bag 联动 4 条、enter 联动 2 条。渠道尚未接入时拒绝回调，不能把零配置运行当作已接入支付渠道。
 
 ## 发货与清理

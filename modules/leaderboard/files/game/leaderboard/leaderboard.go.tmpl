@@ -159,5 +159,7 @@ func SubmitSeason(ctx context.Context, registry *app.Registry, season, playerID,
 	if err != nil {
 		return Standing{}, fmt.Errorf("leaderboard submit: player %d total %d season %d: %w", playerID, total, season, err)
 	}
-	return StandingOf(entry, true), nil
+	standing := StandingOf(entry, true)
+	runSubmitted(ctx, registry, Submission{Board: board, PlayerID: playerID, Total: total, Standing: standing})
+	return standing, nil
 }

@@ -1,61 +1,98 @@
 package player
 
-// 这个文件是每日任务的任务表，归工程所有：有哪些任务、各自要做几次、领奖给多少金币都写在这里。
-// TaskComponent 的 Advance 与 Claim 只经 taskDefinition 查表，表里没有的任务号一律拒绝（task_unknown）。
-//
-// 模块不带配置表，所以缺省是下面这张写死的 Go 表，带三条样例。项目接上自己的任务表之后改两处：
-//
-//  1. 删掉 taskCatalog 与样例任务号，把 taskDefinition 改成读生成的访问器，例如：
-//
-//     row, ok := generated.TaskByID(taskID)   // configs/generated，由 roost add table task 与 roost generate 产出
-//     if !ok {
-//     	return TaskDefinition{}, false
-//     }
-//     definition := TaskDefinition{Target: row.Target, Reward: row.Reward}
-//     return definition, definition.usable()
-//
-//     生成的访问器读的是钉在本次请求上的配置快照，同一个 handler 里两次读不会因为热更而不一致。
-//  2. task_catalog_test.go 里逐条检查样例表的那一条用例换成检查自己的表（或删掉，改由配置校验保证）。
-//
-// 任务表的大小就是 PlayerDao.Task 的大小上限：进度只存表里有的任务，整份随同步下发、整份落库，
-// 所以每日任务保持在几十条以内。
-//
-// 当天改表的后果（热更也一样）：下调目标次数，已有进度达到新目标的任务立即可领；上调目标次数，
-// 已完成未领的变回未完成、已领的不会再领一次；删掉一条任务，它当天的进度留到下一次清零，期间不能推进也不能领。
+import (
+	"sync/atomic"
 
-// 样例任务号。服务端别的功能在自己的 Nest handler 里推进任务时用这些名字，不要写数字。
-const (
-	// TaskDailyCheckin：当日签到一次。
-	TaskDailyCheckin int64 = 1
-	// TaskDailySpend：当日消费三次。
-	TaskDailySpend int64 = 2
-	// TaskDailyBattle：当日完成十场战斗。
-	TaskDailyBattle int64 = 3
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 )
 
-// TaskDefinition 是一条每日任务的定义。
-type TaskDefinition struct {
-	// Target 是当日要做满的次数，必须为正。
-	Target int64
-	// Reward 是完成后领取的金币数，必须为正。
-	Reward int64
+const (
+	TaskDailyCheckin    int64 = 1
+	TaskDailySpend      int64 = 2
+	TaskDailyBattle     int64 = 3
+	TaskMaxID           int64 = 4096
+	TaskPeriodDaily           = "daily"
+	TaskPeriodWeekly          = "weekly"
+	TaskPeriodPermanent       = "permanent"
+)
+
+// TaskDefinition 直接使用任务配置行。同一条 Nest 消息读取同一份配置快照。
+type TaskDefinition = schema.Task
+
+func taskRowUsable(row TaskDefinition) bool {
+	if row.Disabled || row.ID < 1 || row.ID > TaskMaxID || row.Target <= 0 || row.Event == "" || row.Previous < 0 || row.Previous > TaskMaxID {
+		return false
+	}
+	switch row.Period {
+	case TaskPeriodDaily, TaskPeriodWeekly, TaskPeriodPermanent:
+	default:
+		return false
+	}
+	return validateTaskReward(TaskReward{Kind: row.RewardKind, ID: row.RewardID, Count: row.RewardCount}) == nil
 }
 
-// usable 报告这条定义能不能用。目标次数不为正的任务不用做就能领、奖励不为正的任务领不到东西，
-// 两种都是填表错误，按“没有这条任务”处理，不让它们变成每天白送或每天报错。
-func (definition TaskDefinition) usable() bool {
-	return definition.Target > 0 && definition.Reward > 0
+// taskIndex 随不可变配置表建立一次；请求只查事件索引，不在每次消费时扫描全表、重走前置链。
+// 旧请求仍持有自己的表快照。热更期间两个快照交错时最多重建索引，不混用任务定义。
+type taskIndex struct {
+	table       *configdata.Table[int64, schema.Task]
+	definitions map[int64]TaskDefinition
+	events      map[string][]TaskDefinition
 }
 
-// taskCatalog 是缺省的任务表：任务号 -> 定义。只读，运行期不要改它。
-var taskCatalog = map[int64]TaskDefinition{
-	TaskDailyCheckin: {Target: 1, Reward: 20},
-	TaskDailySpend:   {Target: 3, Reward: 30},
-	TaskDailyBattle:  {Target: 10, Reward: 100},
+var currentTaskIndex atomic.Pointer[taskIndex]
+
+func taskDefinitions() *taskIndex {
+	table := generated.TaskTable()
+	if cached := currentTaskIndex.Load(); cached != nil && cached.table == table {
+		return cached
+	}
+	index := &taskIndex{table: table, definitions: map[int64]TaskDefinition{}, events: map[string][]TaskDefinition{}}
+	rows := map[int64]TaskDefinition{}
+	for _, row := range table.Rows() {
+		rows[row.ID] = row
+	}
+	// visiting/valid/invalid 标记既发现环，也让每个前置只校验一次。
+	const (
+		visiting = 1
+		valid    = 2
+		invalid  = 3
+	)
+	states := map[int64]int{}
+	var validate func(int64) bool
+	validate = func(id int64) bool {
+		if state := states[id]; state != 0 {
+			return state == valid
+		}
+		row, exists := rows[id]
+		if !exists || !taskRowUsable(row) {
+			states[id] = invalid
+			return false
+		}
+		states[id] = visiting
+		if row.Previous != 0 {
+			previous := rows[row.Previous]
+			if (previous.Period != row.Period && previous.Period != TaskPeriodPermanent) || !validate(row.Previous) {
+				states[id] = invalid
+				return false
+			}
+		}
+		states[id] = valid
+		index.definitions[id] = row
+		return true
+	}
+	for _, row := range table.Rows() {
+		if validate(row.ID) {
+			index.events[row.Event] = append(index.events[row.Event], row)
+		}
+	}
+	currentTaskIndex.Store(index)
+	return index
 }
 
-// taskDefinition 查一条任务的定义；任务号不在表里、或那一行填错了（见 usable）时返回 false。
-func taskDefinition(taskID int64) (TaskDefinition, bool) {
-	definition, ok := taskCatalog[taskID]
-	return definition, ok && definition.usable()
+func taskDefinition(id int64) (TaskDefinition, bool) {
+	row, ok := taskDefinitions().definitions[id]
+	return row, ok
 }

@@ -23,3 +23,9 @@ with:
       packages: [./game/handler]
       run: ^TestWithAttributeEquipment
       pass: 8
+  enter:
+    summary: 首次建档按初始1级建立基础和最终属性，与建档一起提交回滚
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithAttributeEnter
+      pass: 2

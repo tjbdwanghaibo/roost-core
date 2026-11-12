@@ -1,0 +1,42 @@
+=== RUN   TestModuleTaskEventsPeriodsAndMutations
+    module_task_test.go:15: task: pass=29 skip=0 ok=true
+    module_task_test.go:15: task+wallet: pass=6 skip=0 ok=true
+    module_task_test.go:15: wallet: pass=14 skip=0 ok=true
+    module_task_test.go:21: bag: pass=17 skip=0 ok=true
+    module_task_test.go:21: checkin: pass=8 skip=0 ok=true
+    module_task_test.go:21: dungeon: pass=19 skip=0 ok=true
+    module_task_test.go:21: dungeon+leaderboard: pass=3 skip=0 ok=true
+    module_task_test.go:21: enter: pass=14 skip=0 ok=true
+    module_task_test.go:21: leaderboard: pass=20 skip=0 ok=true
+    module_task_test.go:21: profile: pass=20 skip=0 ok=true
+    module_task_test.go:21: profile+enter: pass=4 skip=0 ok=true
+    module_task_test.go:21: shop: pass=17 skip=0 ok=true
+    module_task_test.go:21: stamina: pass=25 skip=0 ok=true
+    module_task_test.go:21: task: pass=29 skip=0 ok=true
+    module_task_test.go:21: task+bag: pass=3 skip=0 ok=true
+    module_task_test.go:21: task+checkin: pass=3 skip=0 ok=true
+    module_task_test.go:21: task+dungeon: pass=2 skip=0 ok=true
+    module_task_test.go:21: task+leaderboard: pass=3 skip=0 ok=true
+    module_task_test.go:21: task+profile: pass=2 skip=0 ok=true
+    module_task_test.go:21: task+shop: pass=3 skip=0 ok=true
+    module_task_test.go:21: task+stamina: pass=3 skip=0 ok=true
+    module_task_test.go:21: task+wallet: pass=6 skip=0 ok=true
+    module_task_test.go:21: wallet: pass=14 skip=0 ok=true
+    module_task_test.go:30: caught mutation in game/entities/player/wallet_component.go: spend facts=
+    module_task_test.go:31: caught mutation in game/entities/player/task_wallet.go: spend facts=
+    module_task_test.go:32: caught mutation in game/entities/player/task_shop.go: purchase=
+    module_task_test.go:33: caught mutation in game/entities/player/task_stamina.go: wrong stamina progress
+    module_task_test.go:34: caught mutation in game/entities/player/task_profile.go: level=
+    module_task_test.go:35: caught mutation in game/entities/player/dungeon_component.go: dungeon=
+    module_task_test.go:36: caught mutation in game/entities/player/task_component.go: progress =
+    module_task_test.go:37: caught mutation in game/entities/player/task_component.go: locked=
+    module_task_test.go:38: caught mutation in game/entities/player/task_component.go: progress =
+    module_task_test.go:39: caught mutation in game/entities/player/task_component.go: retired replay=
+    module_task_test.go:40: caught mutation in game/entities/player/task_rewards.go: reward=
+    module_task_test.go:41: caught mutation in game/entities/player/task_bag.go: item=
+    module_task_test.go:42: caught mutation in game/entities/player/task_catalog.go: events=
+    module_task_test.go:43: caught mutation in game/entities/player/wallet_component.go: frozen day=
+    module_task_test.go:44: caught mutation in game/entities/player/wallet_component.go: hook failure accepted
+--- PASS: TestModuleTaskEventsPeriodsAndMutations (123.25s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	123.815s

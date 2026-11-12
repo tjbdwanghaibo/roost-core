@@ -196,3 +196,9 @@ GM 基础 9 条、每组联动 4 条；新 game 合计 161 PASS / 0 SKIP，8 个
 mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件与起止等级到 effect；一次连升一封，消费者以 EffectID 发件，App 负责排空。demo 改用同一联动，只留奖励规则，双实体经验路径不变；奖励热更现在在升级时取快照，非法奖励回滚升级。
 
 联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race、demo 定向升级/经验场景与服务/Robot 编译通过；提交 `7f91c18f`。原始错误断言与修正、真实依赖边界见[证据](evidence/module-profile-mail-20261112/README.md)。全量与真实联合验收按最终批次；后续继续 R4～R11、§5、§6。
+
+## 附录：R4/R5 事件与任务（2026-11-12）
+
+实现 wallet/shop/stamina/dungeon/leaderboard 命名登记点，task 事件推进、配置表、每日/每周/永久、前置链、道具奖励与八组联动。实体钩子使用冻结时间、与业务一起回滚；排行通知是尽力推进。默认任务不变、原 18 条场景保留，进度与领取记录按固定 ID 空间有界。新角色在首次进入事务中默认 1 级、不触发升级奖励，attribute 同事务派生；普通购买不默认使用 Saga。
+
+最小 49、组合 215 PASS / 0 SKIP，15 个变异与两轮定向 race 通过；profile 新 enter 依赖影响的邮件/GM/attribute/equipment 组合复验通过（邮件 99、GM 199）。根包、清单与文档检查通过。失败过程、CBM 补证与真实依赖边界见[报告](evidence/module-task-events-20261112/README.md)。全矩阵、全 demo、全仓与 §6 联合验收仍延后；后续 R6～R11、§5、§6，guild 先出方案、worldstats 不做。

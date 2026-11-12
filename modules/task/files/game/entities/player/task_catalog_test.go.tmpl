@@ -1,45 +1,100 @@
 package player
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
 
-// 任务表里的每一条都要能用：目标次数与奖励为正。工程改了任务表之后这条用例替它把关；
-// 任务表换成配置表之后，把这里换成检查自己的表（或删掉，改由配置校验保证）。
+	generated "{{MODULE}}/configs/generated"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
 func TestTaskCatalogEntriesAreUsable(t *testing.T) {
-	if len(taskCatalog) == 0 {
-		t.Fatal("the task catalog is empty")
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
 	}
-	for taskID := range taskCatalog {
-		if taskID <= 0 {
-			t.Errorf("task %d: the task id must be positive", taskID)
-		}
-		if _, ok := taskDefinition(taskID); !ok {
-			t.Errorf("task %d: target and reward must be positive, got %+v", taskID, taskCatalog[taskID])
+	if _, err := configdata.NewStore(registry, "../../../configs/data").Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(generated.TaskTable().Rows()) == 0 {
+		t.Fatal("empty task table")
+	}
+	for _, row := range generated.TaskTable().Rows() {
+		if _, ok := taskDefinition(row.ID); !ok {
+			t.Fatalf("invalid row: %+v", row)
 		}
 	}
 }
 
-// 填错的行按“没有这条任务”处理：目标次数不为正的任务不用做就能领，奖励不为正的任务领不到东西。
 func TestTaskCatalogRefusesUnusableEntries(t *testing.T) {
-	const zeroTarget, negativeTarget, zeroReward, negativeReward, fine = 9001, 9002, 9003, 9004, 9005
-	taskCatalog[zeroTarget] = TaskDefinition{Target: 0, Reward: 5}
-	taskCatalog[negativeTarget] = TaskDefinition{Target: -1, Reward: 5}
-	taskCatalog[zeroReward] = TaskDefinition{Target: 2, Reward: 0}
-	taskCatalog[negativeReward] = TaskDefinition{Target: 2, Reward: -5}
-	taskCatalog[fine] = TaskDefinition{Target: 2, Reward: 5}
-	t.Cleanup(func() {
-		for _, taskID := range []int64{zeroTarget, negativeTarget, zeroReward, negativeReward, fine} {
-			delete(taskCatalog, taskID)
-		}
-	})
-	for _, taskID := range []int64{zeroTarget, negativeTarget, zeroReward, negativeReward} {
-		if definition, ok := taskDefinition(taskID); ok {
-			t.Errorf("task %d: an unusable entry %+v was accepted", taskID, definition)
+	row := TaskDefinition{ID: 10, Event: "battle", Period: "daily", Target: 2, RewardKind: "coins", RewardCount: 5}
+	if !taskRowUsable(row) {
+		t.Fatal("valid row refused")
+	}
+	invalid := []TaskDefinition{row, row, row, row, row, row, row, row}
+	invalid[0].Target = 0
+	invalid[1].Target = -1
+	invalid[2].RewardCount = 0
+	invalid[3].RewardCount = -1
+	invalid[4].ID = 4097
+	invalid[5].Period = "hourly"
+	invalid[6].RewardKind = "missing"
+	invalid[7].RewardID = 1
+	for _, bad := range invalid {
+		if taskRowUsable(bad) {
+			t.Fatalf("invalid row accepted: %+v", bad)
 		}
 	}
-	if definition, ok := taskDefinition(fine); !ok || definition.Target != 2 || definition.Reward != 5 {
-		t.Errorf("a usable entry was refused or changed: %+v, %v", definition, ok)
-	}
-	if _, ok := taskDefinition(9999); ok {
-		t.Error("a task id that is not in the catalog was accepted")
+}
+
+func TestTaskConfigRejectsInvalidPeriodsAndNonpositiveTargets(t *testing.T) {
+	header := "id,event,period,target,previous,reward_kind,reward_id,reward_count,disabled\n"
+	for _, sample := range []struct{ row, field string }{
+		{"10,win,hourly,2,0,coins,0,7,false\n", "period"},
+		{"10,win,daily,0,0,coins,0,7,false\n", "target"},
+	} {
+		rows, err := generated.ConvertTaskCSV(strings.NewReader(header + sample.row))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		entries, err := os.ReadDir("../../../configs/data")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == "_manifest.json" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join("../../../configs/data", entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		raw, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "task.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		registry := configdata.NewRegistry()
+		if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err == nil || !strings.Contains(err.Error(), sample.field) {
+			t.Fatalf("invalid %s config accepted or wrong rejection: %v", sample.field, err)
+		}
 	}
 }

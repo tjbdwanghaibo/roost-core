@@ -197,6 +197,9 @@ func (component *ShopComponent) Buy(key string, goodsID, count, nowUnixMilli int
 	receipt.SetBought(result.Bought)
 	receipt.SetSeq(seq)
 	ledger.SetReceiptsKey(key, receipt)
+	if err := runShopBought(component.owner, goodsID, count, result, nowUnixMilli); err != nil {
+		return ShopResult{}, err
+	}
 	return result, nil
 }
 

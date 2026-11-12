@@ -1,0 +1,40 @@
+package task
+
+import (
+	"context"
+	"fmt"
+
+	generated "{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/leaderboard"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// 只适合“成功提交过榜单”这类可重复计数的任务；它是独立事务、尽力通知。
+// 结算次数/通关奖励必须使用结算模块自己的首次提交钩子，例如 dungeon.claimed。
+func init() {
+	leaderboard.OnSubmitted("task", func(ctx context.Context, registry *app.Registry, event leaderboard.Submission) error {
+		configured := false
+		for _, row := range generated.TaskTable().Rows() {
+			if row.Event == "leaderboard.submitted" && !row.Disabled {
+				configured = true
+				break
+			}
+		}
+		if !configured {
+			return nil
+		}
+		controller, err := FromRegistry(registry)
+		if err != nil {
+			return err
+		}
+		id, err := entity.BuildEntityID(event.PlayerID, player.EntityKindPlayer)
+		if err != nil {
+			return fmt.Errorf("task leaderboard player: %w", err)
+		}
+		return sender.NewTaskReportSender(controller.NestClient()).Sync_TaskReport(ctx, id, "leaderboard.submitted", 1)
+	})
+}

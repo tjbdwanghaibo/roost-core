@@ -1,0 +1,48 @@
+package player
+
+import (
+	"fmt"
+	"slices"
+	"sync"
+)
+
+// ShopBoughtHook 在购买首次生效；回执重放、拒绝不执行。
+// 钩子在 Player 锁内、同一笔 Nest 事务中执行，只改同一实体，不能做 I/O。
+// 任一钩子失败，调用方必须把错误返回给 Nest，让原业务与钩子的全部写入一起回滚。
+type ShopBoughtHook func(owner *Player, goodsID, count int64, result ShopResult, nowUnixMilli int64) error
+
+var shopHooksMu sync.RWMutex
+var shopHooks = map[string]ShopBoughtHook{}
+
+// OnShopBought 只在 init 登记。名字用于确定执行顺序，空名、nil、重名直接 panic。
+func OnShopBought(name string, hook ShopBoughtHook) {
+	if name == "" || hook == nil {
+		panic("shop: hook needs name and function")
+	}
+	shopHooksMu.Lock()
+	defer shopHooksMu.Unlock()
+	if _, exists := shopHooks[name]; exists {
+		panic(fmt.Sprintf("shop: duplicate hook %q", name))
+	}
+	shopHooks[name] = hook
+}
+
+func runShopBought(owner *Player, goodsID, count int64, result ShopResult, nowUnixMilli int64) error {
+	shopHooksMu.RLock()
+	names := make([]string, 0, len(shopHooks))
+	for name := range shopHooks {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	hooks := make([]ShopBoughtHook, len(names))
+	for i, name := range names {
+		hooks[i] = shopHooks[name]
+	}
+	shopHooksMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, goodsID, count, result, nowUnixMilli); err != nil {
+			return fmt.Errorf("shop: hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

@@ -1,0 +1,68 @@
+package handler
+
+import (
+	"math"
+	"testing"
+)
+
+func taskItem(f *taskFixture, t *testing.T, id, count int64) {
+	t.Helper()
+	row := taskRow(10, "win", "daily")
+	row.RewardKind = "item"
+	row.RewardID = id
+	row.RewardCount = count
+	taskRows(t, row)
+	f.mustAdvance(t, 10, 2, 2)
+}
+func TestWithTaskBagGrantsItemOnlyOnce(t *testing.T) {
+	f := newTaskFixture(t)
+	taskItem(f, t, 1001, 2)
+	result, err := f.claim(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RewardKind != "item" || result.RewardID != 1001 || result.Reward != 2 || result.Balance != 0 {
+		t.Fatalf("reward=%+v", result)
+	}
+	if _, err := f.claim(10); err == nil {
+		t.Fatal("second claim accepted")
+	}
+	if n := taskHeld(t, f, 1001); n != 2 {
+		t.Fatalf("item=%d", n)
+	}
+}
+func TestWithTaskBagFullInventoryDoesNotClaim(t *testing.T) {
+	f := newTaskFixture(t)
+	taskItem(f, t, 1001, math.MaxInt64)
+	if _, err := f.claim(10); err == nil {
+		t.Fatal("oversized reward accepted")
+	}
+	if f.facts(t).claimed[10] {
+		t.Fatal("failed grant marked claimed")
+	}
+}
+func TestWithTaskBagCommitFailureCanRetry(t *testing.T) {
+	f := newTaskFixture(t)
+	taskItem(f, t, 1001, 2)
+	before := f.facts(t)
+	f.committer.reject.Store(true)
+	if _, err := f.claim(10); err == nil {
+		t.Fatal("rejected item accepted")
+	}
+	f.committer.reject.Store(false)
+	f.want(t, "rollback", before)
+	if n := taskHeld(t, f, 1001); n != 0 {
+		t.Fatal("item survived rollback")
+	}
+	if _, err := f.claim(10); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// worker 里只读，断言留在测试 goroutine，避免 FailNow 让 RunLocal 永远等不到返回。
+func taskHeld(t *testing.T, f *taskFixture, id int64) int64 {
+	t.Helper()
+	var count int64
+	f.locked(t, func() { count, _ = f.player.Dao().GetBag().GetItems(id) })
+	return count
+}
