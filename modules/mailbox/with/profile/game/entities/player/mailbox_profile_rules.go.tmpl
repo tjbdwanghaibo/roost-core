@@ -1,0 +1,10 @@
+package player
+
+import "{{MODULE}}/game/mailbox"
+
+// MailboxProfileReward 是工程自己的规则。默认不发奖；连升 from+1…to 只调用一次，返回整封邮件的总奖励。
+// 只在启动前设置此函数；运行中的热更使用函数内部线程安全的规则查询，不能并发改写函数变量。
+// 奖励在升级事务内快照，不能在这里调用其他服务。返回非法附件会使升级一起回滚。
+var MailboxProfileReward = func(from, to int32) mailbox.Attachment {
+	return mailbox.Attachment{}
+}

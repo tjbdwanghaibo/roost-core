@@ -275,7 +275,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | --- | --- | --- | --- | --- |
 | 登录与凭据 | 经 account 校验的会话凭据握手，登录端点加载或创建 Player | `internal/access/player/tcp/auth.go`、account 的 collaborators | 参考实现（demo）。demo 渠道凭据不能用于生产 | [auth.go](../../demo/WALKTHROUGH.md#authgo两种凭据)、[collaborators](../../demo/WALKTHROUGH.md#account-的-collaborators) |
 | 背包、经验与升级 | 一条玩家写请求从协议到 Nest 到 DAO 的完整链路 | `game/handler/`、`game/controllers/player/` | 参考实现（demo） | [链路](../../demo/WALKTHROUGH.md#链路) |
-| 升级发奖励邮件 | effect 与状态变更同一条 WAL 记录，消费者调 mail | `effects.EmitPlayerLevelUp` 与 game 的消费者 | 参考实现（demo） | [事件链](../../demo/WALKTHROUGH.md#事件链升级--奖励邮件事务性-outbox) |
+| 升级发奖励邮件 | effect 与状态变更同一条 WAL 记录，消费者调 mail | mailbox 与 profile 联动，`MailboxProfileReward` 在升级事务中冻结奖励，模块消费并以 EffectID 发件 | 现成模块；缺省不发奖，工程定义连升总奖励 | [事件链](../../demo/WALKTHROUGH.md#事件链升级--奖励邮件事务性-outbox) |
 | 邮件列表与领附件 | 客户端这一半：列表、领取到背包 | 端点 + mail 访问器 | 参考实现（demo） | [邮件](../../demo/WALKTHROUGH.md#邮件列表与领附件客户端这一半) |
 | 匹配组队 | game 调 match 成局 | `game/matchmaking` | 参考实现（demo） | [组队](../../demo/WALKTHROUGH.md#跨服务game--match-组队) |
 | 聊天 | game 调 chat 发布、推送与读取；demo 用的就是 chat 业务模块，只在登录时加在线名单并发公告 | `roost module add chat`（demo 生成时已装） | 现成模块 | [聊天](../../demo/WALKTHROUGH.md#跨服务game--chat-聊天) |

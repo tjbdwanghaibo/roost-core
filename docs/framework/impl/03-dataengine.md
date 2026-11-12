@@ -79,7 +79,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | --- | --- |
 | saga 启动中继 `SubscribeNestStarts`（`saga.start`，`framework/saga/nest_start_consumer.go`） | `Workers` 可并发、注释写明不保证回调顺序；`StartSaga` 按 saga 身份幂等、写按版本 CAS |
 | 通用订阅 `wiring/dataengine.SubscribeEffects` 与生成器骨架（`roost add effect`） | 共享 durable、`MaxAckPending` 缺省 256 并发在途、失败重投；Mongo inbox 按 EffectID 去重；框架从未承诺 effect 全局顺序（[NEST_TRANSACTION_WAL](../NEST_TRANSACTION_WAL.md) 只承诺至少一次与 `Effect.ID` 去重） |
-| game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 每条 effect 独立发一封邮件、按 EffectID 幂等；同一玩家的 effect 同实体，仍按 WAL 顺序 |
+| mailbox/profile 模块 `mailbox.profile_reward` → 升级邮件 | 每条 effect 独立发一封邮件、按 EffectID 幂等；同一玩家的 effect 同实体，仍按 WAL 顺序 |
 | game-demo `activity.phase_due` → `NotifyPhaseDue`（`activity.go`） | 只由 World 实体发出（同实体有序）；inbox 去重，`NotifyPhase` 按 game sid 幂等，迟到 / 重投答“已报告” |
 | game-demo alliance 服务 | 2026-11-05 晚起不产生、不消费任何 effect（[联盟服务方案 §2.5B](../../maintenance/FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)）：成员通知、预约期限、跨实例宣战的对方一侧都由服务层在写答复之后直接做 |
 | game 侧收联盟通知（`internal/service/game/alliance_notice.go`） | 走总线消息，不是 effect；尽力而为、容忍乱序 |
@@ -101,7 +101,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 | 消费者 | Key | 依据 |
 | --- | --- | --- |
-| game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 玩家 ID | 每条独立发一封邮件、`RequestID` = EffectID 幂等；同一玩家仍按到达顺序 |
+| mailbox/profile 模块 `mailbox.profile_reward` → 升级邮件 | 玩家 ID | 每条独立发一封邮件、`RequestID` = EffectID 幂等；同一玩家仍按到达顺序 |
 | `roost add effect` 生成的骨架 | 业务传给 `Emit<Topic>(key, …)` 的 key | 骨架注释与 `roost help effect` 写明“同 Key 有序、不同 Key 并发、无 Key 不排序、跨副本不保证” |
 
 不经 `SubscribeEffects`、不受影响的：saga 启动中继 `SubscribeNestStarts`（自己的 `Workers`，本来就不保证顺序）；game-demo `activity.phase_due`（`nestwal.SubscribeJetStreamEffects` 直接订阅，仍在回调里逐条）。没有发现依赖跨实体顺序的消费者。

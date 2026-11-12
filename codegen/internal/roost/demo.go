@@ -453,7 +453,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/player/guild_membership.go", why: "the player's own copy of their guild membership (PlayerDao.GuildID): read for advisory pre-checks, written with the player's transaction"},
 		{write: "game/entities/player/dungeon_ledger.go", why: "the exactly-once ledger for dungeon clear rewards and the per-season clear count, pruned on the write path"},
 		{write: "game/entities/player/entity.go", why: "EntityCategoryPlayer: the kind's lock rank, decided before the first document is persisted"},
-		{write: "game/effects/level_up.go", why: "the level-up effect: topic, payload, and the Emit onto the current transaction"},
 		{add: &AddOptions{Kind: "component", Name: "Stats", Entity: "World"}, why: "World's one job: server-wide counters"},
 		{add: &AddOptions{Kind: "dao", Name: "World", Entity: "World"}, why: "persistence for the counters"},
 		{write: "db/def/world.go", why: "PlayersEntered and MatchesFormed"},
@@ -759,7 +758,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
 		{write: "internal/service/game/service_shutdown_test.go", why: "Shutdown closes the scene under the App's stop context, so stopping the reload is bounded by shutdown.total_timeout; a fail-stop or graceful Shutdown disconnects every served player first"},
 		{write: "internal/service/game/syncbus_config_test.go", why: "the generated syncbus section is the transport the wiring Mod actually starts on, with no unread-config warnings"},
-		{write: "internal/service/game/level_up_mail.go", why: "the consumer: kitdataengine.SubscribeEffects (durable + Mongo inbox from the dataengine Mod's declaration) → the mailbox module's SendTo keyed by EffectID"},
+		{write: "internal/service/game/effect_settings.go", why: "activity reads the DataEngine effect settings; profile reward mail is owned by the mailbox module"},
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
 		{write: "internal/service/game/battle_test.go", why: "the room's start grace and lifetime, asserted against the real lockstep room with a recording push lane"},
 		{write: "internal/service/game/battle.go", why: "the lockstep rooms: one goroutine owns each room, the player TCP push is its broadcast lane, the matchmaker opens one per match"},
@@ -842,10 +841,8 @@ func demoModuleSteps() []demoScaffoldStep {
 		// demo 自己的两个文件：充值订单的领取账本（给模块的 BagComponent 加方法；邮件的领取账本是 mailbox 模块的），
 		// 以及背包变化经提交观察者同步给本人的断言。
 		{write: "internal/service/game/bag_sync_test.go", why: "the module's Bag component never calls PublishSyncDirty: on a Nest built with the scene's commit observer a grant and a discard still reach the owner's client, a refused grant sends nothing, and a bystander never sees the bag"},
-		// 档案是 profile 模块：组件、状态（PlayerDao.Profile 别人可见、ProfilePrivate 只给本人）、改名协议、CheckAddExp、
-		// 名片 handler ProfileCard 都是模块的。demo 只覆盖模块留给工程的升级钩子：升一级之后属性跟着涨、
-		// 发 player.level_up 这个 effect（奖励邮件由它的消费者发），都与经验、等级在同一笔事务里。
-		{write: "game/entities/player/profile_levelup.go", why: "the module's project-owned level-up hook with the demo's two consequences of a level: the attribute base layer follows it, and the player.level_up effect rides on the same transaction (the reward mail is its consumer's)"},
+		// 档案、属性成长、升级邮件由模块联动；demo 只提供在升级事务里读取的奖励规则。
+		{write: "game/entities/player/mailbox_profile_rules.go", why: "the mailbox/profile module owns reward effects; the demo chooses its hot-patchable attachment at upgrade time"},
 		// 邮件是 mailbox 模块：列表与领取两条协议、领取账本（PlayerDao.MailboxLedger）、附件的种类与编码、
 		// 发件入口 SendTo 都是模块的，demo 不带自己的 ListMail / ClaimMail / 领取账本，也不覆盖模块的任何文件。
 		// demo 的发件方（升级奖励、GM 补偿、活动结算、送礼的送达）import game/mailbox。它依赖的 wallet 跟着装进来

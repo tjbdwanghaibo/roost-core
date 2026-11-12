@@ -190,3 +190,9 @@ GM 基础 9 条、每组联动 4 条；新 game 合计 161 PASS / 0 SKIP，8 个
 新需求 R2 实现与定向验收完成，提交 `cc0d7855`。purchase 模块通过平台 HMAC + 工程渠道校验，按玩家 Redis 顺序队列保存奖励快照；只在平台终态无在途投递时进入 Nest，Player 连续游标与奖励同一笔事务，确认后清理待发。默认币、bag/enter 联动，离线订单不设到期；平台投递次数上限不变。demo 删掉独立 drain、不断增长的 PurchaseClaims，schema 4，只保留商品/模拟渠道与展示查询。
 
 基础 21、bag 4、enter 2 条；新工程合计 72 PASS / 0 SKIP，13 个变异与两轮 race 通过；真实独立 Redis 3 条 × 2 轮；demo 定向场景及服务/Robot 编译通过。根包、清单、文档检查通过。初次入口/链接失败与最终边界见[证据](evidence/module-purchase-20261112/README.md)。CBM 本批路径已刷新补证；全量组合及 §6 真实联合验收仍延后。后续继续 R3～R11、§5、§6；guild 先出方案，worldstats 不做。
+
+## 附录：R3 升级奖励邮件联动（2026-11-12）
+
+mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件与起止等级到 effect；一次连升一封，消费者以 EffectID 发件，App 负责排空。demo 改用同一联动，只留奖励规则，双实体经验路径不变；奖励热更现在在升级时取快照，非法奖励回滚升级。
+
+联动 10 条，新工程 76 PASS / 0 SKIP，6 个变异、两轮 race、demo 定向升级/经验场景与服务/Robot 编译通过；实际提交号记在新任务 R3。原始错误断言与修正、真实依赖边界见[证据](evidence/module-profile-mail-20261112/README.md)。全量与真实联合验收按最终批次；后续继续 R4～R11、§5、§6。

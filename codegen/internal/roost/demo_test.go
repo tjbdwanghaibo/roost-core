@@ -458,10 +458,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// 发件方都走模块的 SendTo，附件是模块的编码；升级奖励的幂等键是 EffectID（见下面事件链那一段）。
 	for rel, call := range map[string]string{
-		"internal/service/game/level_up_mail.go": "reward := rewards.LevelUpReward(event.Level)",
-		"internal/service/game/gm.go":            "gamemailbox.Item(payload.ItemID, int64(payload.Count))",
-		"internal/service/game/activity.go":      "gamemailbox.Item(reward.ItemID, int64(reward.Count))",
-		"internal/service/game/gift_saga.go":     "gamemailbox.Item(state.ItemID, int64(state.Count))",
+		"game/gm/mailbox.go":                 "Attachment: payload.Attachment",
+		"internal/service/game/activity.go":  "gamemailbox.Item(reward.ItemID, int64(reward.Count))",
+		"internal/service/game/gift_saga.go": "gamemailbox.Item(state.ItemID, int64(state.Count))",
 	} {
 		if body := read(rel); !strings.Contains(body, "gamemailbox.SendTo(") || !strings.Contains(body, call) || strings.Contains(body, "svcmail.SendRequest{") {
 			t.Errorf("%s does not send through the mailbox module's SendTo with the module's attachment (%s)", rel, call)
@@ -700,18 +699,12 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if server := read("internal/access/player/tcp/server_gen.go"); !strings.Contains(server, "type RegistryBound interface") {
 		t.Errorf("the generated transport lost the RegistryBound hook the demo authenticator relies on")
 	}
-	// The event chain: the profile module's level-up hook (the demo's own
-	// version of the project-owned file) emits on the transaction, the service
-	// consumes with an inbox and sends mail keyed by the effect id.
-	if hook := read("game/entities/player/profile_levelup.go"); !strings.Contains(hook, "effects.EmitPlayerLevelUp(") || strings.Contains(hook, "AttributeComp().LevelUp(") || !strings.Contains(read("game/entities/player/attribute_component.go"), "OnProfileLevelUp(") {
-		t.Errorf("the level-up hook does not raise the attributes and emit the level-up effect:\n%s", hook)
+	// 升级邮件与属性由各自模块注册，消费者属于 mailbox 的模块生命周期。
+	if hook := read("game/entities/player/mailbox_profile.go"); !strings.Contains(hook, "OnProfileLevelUp(") || !strings.Contains(hook, "mailbox.EmitProfileReward(") || !strings.Contains(read("game/entities/player/attribute_component.go"), "OnProfileLevelUp(") {
+		t.Errorf("module profile hooks do not register both attribute and mailbox")
 	}
-	if service := read("internal/service/game/service.go"); !strings.Contains(service, "startLevelUpMailer(") {
-		t.Errorf("game service does not start the effect consumer:\n%s", service)
-	}
-	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID:        envelope.EffectID") ||
-		!strings.Contains(mailer, "errors.Is(err, gamemailbox.ErrLetterInvalid)") {
-		t.Errorf("level-up mailer is not the inbox-backed, idempotent consumer that drops an unsendable reward as poison:\n%s", mailer)
+	if mailer := read("game/mailbox/mailbox_profile.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID: envelope.EffectID") || !strings.Contains(mailer, "errors.Is(err, ErrLetterInvalid)") {
+		t.Errorf("module reward mail consumer lost durable/idempotent handling: %s", mailer)
 	}
 	if endpoint := read("game/controllers/player/add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
 		t.Errorf("add_exp endpoint does not translate errors at the boundary:\n%s", endpoint)

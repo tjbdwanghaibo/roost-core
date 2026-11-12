@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **新增**（modules/mailbox + profile）：升级奖励邮件联动，零配置缺省不发奖；一次连升只产生一份工程定义的总奖励，附件在升级时冻结进同一 WAL effect。模块启动可靠消费者，Mongo inbox + EffectID 发件去重，App 排空订阅；demo 删除自有升级 effect/消费者，只保留奖励规则与热更点。旧 demo 的 player.level_up 不自动兼容，当前 topic 为 mailbox.profile_reward；非法热更奖励现在拒绝并回滚升级，消费时不再重新取奖励。联动 10 条、6 个变异和定向 race 通过；真实联合验收仍待最终批次。
+
 - **新增**（modules/purchase）：付费发货模块，Redis 按玩家分配连续序号并保存不可变奖励，Player 游标与奖励同一笔严格事务；确认后删除待发记录，不保留随历史订单增长的 Player 回执表。默认金币、bag 道具和 enter 补发联动；平台终态且无在途投递才允许发货/清理，退款结清只推进游标。platform 新增可选 CallbackVerifier，强制 HMAC 之后、记单之前执行；模块的工程渠道缺省拒绝。demo 使用模块，Player schema 3 → 4，删除旧 PurchaseClaims 与独立 drain；不兼容旧生成工程/订单格式，不自动转换生产数据。验证及容量/恢复边界见 [模块说明](modules/purchase/README.md)。
 
 - **新增**（modules/gm）：运维命令登记与审计，wallet / bag / profile / mailbox / rehome 按 `with/gm` 接入；复用 ops token，命令要求 operator 与 note，拒绝在 `result.data.code` 返回业务码。demo 的相应命令迁入模块，经验发放仍保留 Player + World 双实体事务。补偿邮件改为显式 `request_id` 与统一 `attachment`，旧平铺奖励参数不再接受。

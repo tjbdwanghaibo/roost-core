@@ -94,7 +94,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 - **状态是模块追加在 `PlayerDao` 末尾的两个顶层字段**：`Profile`（名字、等级——别的玩家也看得到）与 `ProfilePrivate`（等级内经验——只给本人）。
   同步的白名单按顶层字段列，所以“别人看不到经验”就是别人的视图里不列 `ProfilePrivate`（[同步视图](README.md#同步视图谁看见哪些字段)）。存储键是
   `profile` / `profile_private`，里面是数字短键（`profile.1` 名字、`profile.2` 等级、`profile_private.1` 经验）。
-- **demo 只覆盖模块留给工程的一个文件**：升级钩子 `game/entities/player/profile_levelup.go`（见下一节）。
+- **demo 只覆盖模块留给工程的一个文件**：升级邮件的奖励规则 `game/entities/player/mailbox_profile_rules.go`（见下一节）。
 - **demo 自己挂在这个组件上的两样东西不是档案**，各在自己的文件里、状态也在 demo 自己的 `PlayerDao` 字段里：公会副本
   `guild_membership.go`（`GuildID` / `SetGuild`）与副本领奖账本 `dungeon_ledger.go`（`ClaimDungeonRun`、通关计数）。它们仍是
   `ProfileComponent` 的方法：相关 handler 一直经 `IProfileEntity` 这个窄接口拿玩家，另立组件只多一个组件号。
@@ -111,28 +111,24 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 `exp_amount`，100004）。任何一方拒绝时 Player、属性、副本领奖账本、World 与升级效果都不写，也没有新的提交记录；`AddExp` / `RecordExp` 自己再查一次只是兜底，不靠写完再由 `rollback=undo` 撤回。`ClaimDungeon` 先判“已领取”（重放照旧返回 Claimed=false），再校验，最后才写账本。等级按平坦曲线用除余计算，不按奖励数量逐级循环（修前 `amount=MaxInt64` 会一直占住业务 worker）。GM `gm.player.add_exp`、`AddExp` 端点、副本结算 `FinishDungeon` 都经这两个 handler，同一道校验。生成工程回归在 `game/handler/add_exp_test.go`。
 
 ```
-AddExp 端点 → Nest 锁 World、Player → handlerAddExp → ProfileComponent.AddExp（profile 模块）
-  ├─ ProfilePrivate.SetExp / Profile.SetLevel   状态变更
-  ├─ onLevelUp(from, to)                         demo 的 profile_levelup.go 发升级事件
-  │     └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
-  └─ OnProfileLevelUp 的 attribute 登记钩子       属性 Base 层跟着等级涨，仍在同一事务
-        ↓ commit 后由 dataengine 发到 JetStream（<subject_prefix>.player.level_up）
-internal/service/game/level_up_mail.go     kitdataengine.SubscribeEffects：durable + Mongo inbox（每个 EffectID 只处理一次）
-  └─ gamemailbox.SendTo(RequestID = EffectID)  mailbox 模块的发件入口 → mail.Send；mail 服务按 RequestID 去重：第二层幂等
+AddExp → Nest 锁 World、Player → ProfileComponent.AddExp
+  ├─ ProfilePrivate / Profile 状态变更
+  ├─ attribute 的 OnProfileLevelUp 钩子更新属性
+  └─ mailbox 的 OnProfileLevelUp 钩子读取工程奖励规则，冻结一份 ProfileReward
+        ↓ nest.Emit：状态与奖励快照同一条 WAL，回滚则都不发布
+        ↓ 提交后 DataEngine 发布到 <subject_prefix>.mailbox.profile_reward
+mailbox 模块消费者 → Mongo inbox + SendTo(RequestID = EffectID) → mail 服务
 ```
 
-- **升级"这件事"在升级钩子里发出**，与让它成立的状态变更同一笔事务；谁对它做出反应住在别处。“升级了要通知别的功能”是档案模块的
-  职责（它在升级之后调一次钩子，连升多级也只调一次），“通知谁、怎么通知”是工程的：demo 的钩子发 `player.level_up`，payload 里是升级之后的
-  等级。handler 回滚时 effect 一起消失，所以永远不会给一个没落库的升级发奖励；钩子返回错误时经验和等级也一起撤回。从哪条路进
-  `AddExp`（demo 的两实体 AddExp、副本领奖、模块的 `ProfileAddExp`）都走同一个钩子，`TestLevelUpCarriesTheRewardEffectInTheSameCommit` 钉住这一条。
-- **两层幂等**：inbox 收据与业务写入在一个 Mongo 事务里提交，进程重启后重投的 effect 会被认出来；邮件是总线调用
-  不是 Mongo 写入，所以还要靠 `RequestID = EffectID` 让 mail 服务自己去重。
-- **生产者与消费者读同一组配置键**（`dataengine.database` / `dataengine.effects.*`）、用同一组默认值，两边不会对"effect 在哪"
-  产生分歧。
-- 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
-- 订阅只写处理函数：流、主题前缀、回执库与重投退避由框架的 `kitdataengine.SubscribeEffects` 按 DataEngine Mod 的声明组装。
-  载荷解不开、或奖励不是 mailbox 发得出去的附件（`gamemailbox.ErrLetterInvalid`，例如热补丁换上了一个没登记的附件种类）
-  的 effect 标记为毒消息（`kitdataengine.PoisonEffect`）直接丢弃并记 ERROR，不会一直重投；mail 服务调用失败按退避重投。
+- **缺省不发奖**：mailbox 与 profile 同装才有联动，默认奖励是零值。demo 只覆盖 `mailbox_profile_rules.go`，
+  调自己的 `rewards.LevelUpReward`；一次连升多级只生成一封信，demo 的规则是每次送一瓶法力药水。工程可按 from+1…to 计算总奖励。
+- **奖励在升级时确定**：payload 带玩家号、起止等级和附件，消费者不再查奖励表。热更只影响之后的升级；非法附件使整笔升级回滚。
+- **两层幂等**：`SubscribeEffects` 的 Mongo inbox 记录消费；跨服务发件还用稳定 EffectID 去重，覆盖邮件成功但收据/ACK 丢失的窗口。
+  流重放不会再发第二封；mail 服务在同一键重放时保留第一次的信封，不用新的奖励覆盖它。
+- **生命周期归模块和 App**：mailbox 模块启动消费者，订阅登记为 App 输入；App 停机先排空它，再停 Nest/存储。demo 不再自己持有和 Drain 升级邮件订阅。
+- **单一配置来源**：消费者从 `dataengine.database` / `dataengine.effects.*` 取流与回执库。坏载荷标记 poison 并告警；传输故障保留重试。
+- **验收边界**：模块有正式 Nest/生成 DAO 加替身提交器的升级回滚场景，消费重放调用正式 mail.Service 的内存存储；真实 JetStream/Mongo/Redis 联合验收按交接最后统一跑。
+
 
 ## 邮件：列表与领附件（客户端这一半）
 
@@ -155,7 +151,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
   `Held`（到账后这个道具在背包里的数量；金币是余额）。
 - **发件方都走 `gamemailbox.SendTo`**（`game/mailbox/mailbox_send.go`）：给一名玩家发一封信，附件先按领取端的同一个判断校验
   （发不出去的不进邮箱，返回 `ErrLetterInvalid`，重试无用），幂等键必填。demo 的四个发件方只差标题、附件与幂等键：
-  升级奖励（`level_up_mail.go`，键是 EffectID）、GM 补偿（`gm.go`，键是命令的 trace id）、活动结算（`activity.go`，
+  升级奖励（mailbox/profile 联动，键是 EffectID）、GM 补偿（模块联动，键是显式 request_id）、活动结算（`activity.go`，
   键是“活动 id + 玩家 id”）、送礼的送达（`gift_saga.go`，键是 saga 步骤的幂等键）。
 - **领取是恰好一次的**：中间那一步把邮件 id 和奖励放进同一条 WAL 记录（`MailboxComponent.Claim`，账本是 `PlayerDao.MailboxLedger`）。
   三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢了、预留到期、重试用同一个 token 再预留一次。

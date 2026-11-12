@@ -1,0 +1,162 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/mailbox"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+type profileMailGetter map[int64]entity.IThreadSafeEntity
+
+func (g profileMailGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g profileMailGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type profileMailCommitter struct {
+	mu      sync.Mutex
+	reject  bool
+	records []dataengine.CommitRecord
+}
+
+func (c *profileMailCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reject {
+		return errors.New("injected profile mail commit failure")
+	}
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+func (c *profileMailCommitter) snapshot() []dataengine.CommitRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]dataengine.CommitRecord(nil), c.records...)
+}
+func newProfileMailFixture(t *testing.T, rule func(int32, int32) mailbox.Attachment, reject bool) (*player.Player, *syncsender.ProfileAddExpSender, *profileMailCommitter) {
+	t.Helper()
+	original := player.MailboxProfileReward
+	player.MailboxProfileReward = rule
+	t.Cleanup(func() { player.MailboxProfileReward = original })
+	player.RegisterEntity()
+	RegisterProfileAddExpNestHandlers()
+	id, err := entity.BuildEntityID(98771, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committer := &profileMailCommitter{reject: reject}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(profileMailGetter{id: target}), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// LIFO：先停工作池，再恢复工程规则，避免在 handler 运行时更换函数。
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return target.(*player.Player), syncsender.NewProfileAddExpSender(engine), committer
+}
+func profileMailCoins(from, to int32) mailbox.Attachment { return mailbox.Coins(int64(to-from) * 10) }
+func profileMailEvents(t *testing.T, committer *profileMailCommitter) []mailbox.ProfileReward {
+	t.Helper()
+	var events []mailbox.ProfileReward
+	for _, record := range committer.snapshot() {
+		for _, effect := range record.Effects {
+			if effect.Topic != mailbox.TopicProfileReward {
+				continue
+			}
+			var event mailbox.ProfileReward
+			if err := json.Unmarshal(effect.Payload, &event); err != nil {
+				t.Fatal(err)
+			}
+			events = append(events, event)
+		}
+	}
+	return events
+}
+func TestWithMailboxProfileDefaultDoesNotReward(t *testing.T) {
+	target, sender, committer := newProfileMailFixture(t, func(int32, int32) mailbox.Attachment { return mailbox.Attachment{} }, false)
+	if _, err := sender.Sync_ProfileAddExp(context.Background(), target.ID(), 100); err != nil {
+		t.Fatal(err)
+	}
+	if events := profileMailEvents(t, committer); len(events) != 0 {
+		t.Fatalf("default emitted %+v", events)
+	}
+}
+func TestWithMailboxProfileOneUpgradeOneEffect(t *testing.T) {
+	target, sender, committer := newProfileMailFixture(t, profileMailCoins, false)
+	if _, err := sender.Sync_ProfileAddExp(context.Background(), target.ID(), 100); err != nil {
+		t.Fatal(err)
+	}
+	events := profileMailEvents(t, committer)
+	if len(committer.snapshot()) != 1 || len(committer.snapshot()[0].Mutations) == 0 || len(events) != 1 || events[0].PlayerID != 98771 || events[0].From != 0 || events[0].Level != 1 || events[0].Reward != mailbox.Coins(10) {
+		t.Fatalf("events=%+v", events)
+	}
+}
+func TestWithMailboxProfileSeveralLevelsOneCombinedMail(t *testing.T) {
+	target, sender, committer := newProfileMailFixture(t, profileMailCoins, false)
+	if _, err := sender.Sync_ProfileAddExp(context.Background(), target.ID(), 375); err != nil {
+		t.Fatal(err)
+	}
+	events := profileMailEvents(t, committer)
+	if len(events) != 1 || events[0].From != 0 || events[0].Level != 3 || events[0].Reward != mailbox.Coins(30) {
+		t.Fatalf("combined events=%+v", events)
+	}
+}
+func TestWithMailboxProfileCommitFailureDoesNotPublish(t *testing.T) {
+	target, sender, committer := newProfileMailFixture(t, profileMailCoins, true)
+	if _, err := sender.Sync_ProfileAddExp(context.Background(), target.ID(), 100); err == nil {
+		t.Fatal("commit failure hidden")
+	}
+	if len(committer.snapshot()) != 0 {
+		t.Fatal("failed upgrade published an effect")
+	}
+	// 第二次相同业务在回滚后的 0 级上重放，仍只产生 0→1 的奖励。
+	committer.mu.Lock()
+	committer.reject = false
+	committer.mu.Unlock()
+	if _, err := sender.Sync_ProfileAddExp(context.Background(), target.ID(), 100); err != nil {
+		t.Fatal(err)
+	}
+	events := profileMailEvents(t, committer)
+	if len(events) != 1 || events[0].From != 0 || events[0].Level != 1 {
+		t.Fatalf("rollback events=%+v", events)
+	}
+}
+func TestWithMailboxProfileInvalidRewardRollsBackUpgrade(t *testing.T) {
+	target, sender, committer := newProfileMailFixture(t, func(int32, int32) mailbox.Attachment { return mailbox.Coins(-1) }, false)
+	if _, err := sender.Sync_ProfileAddExp(context.Background(), target.ID(), 100); err == nil {
+		t.Fatal("invalid reward accepted")
+	}
+	if len(committer.snapshot()) != 0 {
+		t.Fatal("invalid reward committed")
+	}
+}

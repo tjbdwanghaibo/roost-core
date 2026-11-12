@@ -1,0 +1,151 @@
+package mailbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+type profileMailEnvelopes struct {
+	mu     sync.Mutex
+	values map[string]svcmail.Envelope
+}
+
+func (s *profileMailEnvelopes) Create(_ context.Context, e svcmail.Envelope) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.values[e.ID]; ok {
+		return false, nil
+	}
+	s.values[e.ID] = e
+	return true, nil
+}
+func (s *profileMailEnvelopes) Get(_ context.Context, id string) (svcmail.Envelope, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.values[id]
+	return e, ok, nil
+}
+func (s *profileMailEnvelopes) GetMany(_ context.Context, ids []string) (map[string]svcmail.Envelope, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]svcmail.Envelope{}
+	for _, id := range ids {
+		if e, ok := s.values[id]; ok {
+			out[id] = e
+		}
+	}
+	return out, nil
+}
+func newProfileMailService(t *testing.T) (*svcmail.Service, *profileMailEnvelopes) {
+	t.Helper()
+	store := &profileMailEnvelopes{values: map[string]svcmail.Envelope{}}
+	var next int
+	service, err := svcmail.New(svcmail.Config{
+		Envelopes: store, Mailboxes: versionstore.NewMemoryStore[int64, svcmail.Mailbox](),
+		Sends:     versionstore.NewMemoryStore[string, svcmail.SentRecord](),
+		Now:       func() time.Time { return time.Unix(1800000000, 0) },
+		NewMailID: func() (string, error) { next++; return fmt.Sprintf("mail-%d", next), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, store
+}
+func profileMailEnvelope(t *testing.T) nestwal.EffectEnvelope {
+	t.Helper()
+	raw, err := json.Marshal(ProfileReward{PlayerID: 98771, From: 0, Level: 3, Reward: Coins(30)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nestwal.EffectEnvelope{EffectID: "profile-effect-1", Topic: TopicProfileReward, Payload: raw}
+}
+func TestWithMailboxProfileReplayCreatesOneMail(t *testing.T) {
+	service, store := newProfileMailService(t)
+	envelope := profileMailEnvelope(t)
+	if err := consumeProfileReward(context.Background(), service, envelope); err != nil {
+		t.Fatal(err)
+	}
+	// 使用正式 mail.Service 与内存存储；重放不仅比较请求键，还核对实际信封数与首次冻结的奖励。
+	if err := consumeProfileReward(context.Background(), service, envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.values) != 1 {
+		t.Fatalf("envelopes=%d", len(store.values))
+	}
+	for _, mail := range store.values {
+		reward, err := Decode(mail.Attachment)
+		if err != nil || reward != Coins(30) {
+			t.Fatalf("reward=%+v err=%v", reward, err)
+		}
+	}
+}
+func TestWithMailboxProfileMalformedEffectDoesNotSend(t *testing.T) {
+	sender := &mailboxTestSender{}
+	envelope := profileMailEnvelope(t)
+	envelope.Payload = []byte("broken")
+	if err := consumeProfileReward(context.Background(), sender, envelope); err == nil {
+		t.Fatal("invalid payload accepted")
+	}
+	if len(sender.requests) != 0 {
+		t.Fatal("invalid payload sent mail")
+	}
+}
+func TestWithMailboxProfileMissingIdentityDoesNotSend(t *testing.T) {
+	sender := &mailboxTestSender{}
+	envelope := profileMailEnvelope(t)
+	envelope.EffectID = ""
+	if err := consumeProfileReward(context.Background(), sender, envelope); err == nil {
+		t.Fatal("empty effect identity accepted")
+	}
+	if len(sender.requests) != 0 {
+		t.Fatal("unkeyed mail sent")
+	}
+}
+func TestWithMailboxProfileTransportFailureCanRetry(t *testing.T) {
+	want := errors.New("mail service unavailable")
+	sender := &mailboxTestSender{err: want}
+	envelope := profileMailEnvelope(t)
+	if err := consumeProfileReward(context.Background(), sender, envelope); !errors.Is(err, want) {
+		t.Fatalf("err=%v", err)
+	}
+	sender.err = nil
+	if err := consumeProfileReward(context.Background(), sender, envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.requests) != 2 || sender.requests[0].RequestID != "profile-effect-1" || sender.requests[1].RequestID != "profile-effect-1" {
+		t.Fatalf("requests=%+v", sender.requests)
+	}
+}
+func TestWithMailboxProfileReplayKeepsFirstReward(t *testing.T) {
+	service, store := newProfileMailService(t)
+	envelope := profileMailEnvelope(t)
+	if err := consumeProfileReward(context.Background(), service, envelope); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := json.Marshal(ProfileReward{PlayerID: 98771, From: 0, Level: 3, Reward: Coins(99)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Payload = changed
+	if err := consumeProfileReward(context.Background(), service, envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.values) != 1 {
+		t.Fatalf("envelopes=%d", len(store.values))
+	}
+	for _, mail := range store.values {
+		reward, err := Decode(mail.Attachment)
+		if err != nil || reward != Coins(30) {
+			t.Fatalf("original reward changed: %+v %v", reward, err)
+		}
+	}
+}
