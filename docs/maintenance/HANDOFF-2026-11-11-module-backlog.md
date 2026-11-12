@@ -205,6 +205,6 @@ mailbox + profile 联动已实现：默认不发奖，升级事务冻结附件�
 
 ## 附录：R6 规则数据（2026-11-12）
 
-shop 商品表改为 configdata 配置，删除生产测试替换函数；rules 统一在 Player Nest 锁内读取模块 PB、锁外推送，进入/重连推一次，RulesGet 补取。stamina/shop 自动安装 rules/enter，业务日继续使用 servertime，不改登录线。
+提交 `29fd4f25`。shop 商品表改为 configdata 配置，删除生产测试替换函数；rules 统一在 Player Nest 锁内读取模块 PB、锁外推送，进入/重连推一次，RulesGet 补取。stamina/shop 自动安装 rules/enter，业务日继续使用 servertime，不改登录线。
 
 最小24、组合104 PASS / 0 SKIP，6个变异与两轮 race；任务影响组合232、15个原变异和两轮 race 通过；根包/清单/文档检查通过。未运行的全矩阵、全demo、全仓和真实依赖按最终批次；[证据与当前边界](evidence/module-client-rules-20261112/README.md)。下一项为 R7 team/matchmaking/matchroom；R8～R11、§5、§6 仍待实施，guild先报告方案，worldstats不做。

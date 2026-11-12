@@ -1,6 +1,6 @@
 # R6 商品表与统一客户端规则（2026-11-12）
 
-基线 `aad91b4a`，feat/business-modules，macOS，正式生成工程以 replace 使用本工作树 core。实现提交随后登记；没有改 Nest / DataEngine / Sync 核心、合 main 或发版。
+基线 `aad91b4a`，feat/business-modules，macOS，正式生成工程以 replace 使用本工作树 core。实现提交 `29fd4f25`；没有改 Nest / DataEngine / Sync 核心、合 main 或发版。
 
 ## 当前行为
 
@@ -13,7 +13,7 @@ shop 从配置表读取商品，装载时检查价格/数量、限购类型、�
 - `GOWORK=off go test -count=1 -v -run '^TestModuleClientRulesAndShopTable$|^TestModuleCatalog|^TestModuleWith' ./codegen/internal/roost`：[通过](acceptance.log)。rules+enter 最小 24 条；组合 **104 PASS / 0 SKIP**（rules10、enter14、shop20、stamina25、wallet14、bag17、两组联动各2）。包含真实 Nest + 生成 PB、只读零提交、冷目标拒绝、进入/重连、推送失败后补取、表热更与旧快照独立、默认商品表约束。
 - 同一入口：build/vet、ID、生成物漂移、反向重复安装不变；6 个变异检出（取消快照拷贝、重复消息号放行、体力毫秒变秒、下架商品仍导出、显示价格多1、购买忽略新表价格）；随后三个包 `-race -count=2` 通过。
 - 影响复验 `GOWORK=off go test -count=1 -v -run '^TestModuleTaskEventsPeriodsAndMutations$' ./codegen/internal/roost`：[通过](task-impact.log)。组合 **232 PASS / 0 SKIP**，R4/R5 原15个变异、两轮 race 通过；增加的17条来自 rules10、两联动4、shop表约束3。
-- 根包 [通过](root.log)；shell 语法、diff 空白和文档锚点检查通过。全模块正反序新装、全 demo、全仓与真实 TCP/Gate/存储联合验收仍按交接 §2/§6 留在最终批次。当前传输、提交器使用替身，不当成真实网络或持久验收。
+- 根包 [通过](root.log)；shell 语法、diff 空白和文档锚点检查通过（新增文档暂存后 316 文件、0 断链）。全模块正反序新装、全 demo、全仓与真实 TCP/Gate/存储联合验收仍按交接 §2/§6 留在最终批次。当前传输、提交器使用替身，不当成真实网络或持久验收。
 
 ## 失败记录与 CBM
 
