@@ -9,14 +9,15 @@ import (
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
-	rehomecontroller "{{MODULE}}/game/controllers/rehome"
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
-	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
-	gamerehome "{{MODULE}}/game/rehome"
-	apperrors "{{MODULE}}/internal/errors"
-	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"{{MODULE}}/protocol/msgid"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	apperrors "{{MODULE}}/internal/errors"
+	gamerehome "{{MODULE}}/game/rehome"
+	player "{{MODULE}}/game/entities/player"
+	rehomecontroller "{{MODULE}}/game/controllers/rehome"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -33,11 +34,11 @@ import (
 // rehomeAlliance 站在联盟服务的位置上：只回答 Membership，别的方法没有（没人该调）。
 type rehomeAlliance struct {
 	rpcalliance.Alliance
-	mu     sync.Mutex
-	state  alliancerule.MemberState
-	err    error
-	asked  int
-	onAsk  func()
+	mu    sync.Mutex
+	state alliancerule.MemberState
+	err   error
+	asked int
+	onAsk func()
 }
 
 func (a *rehomeAlliance) Membership(context.Context, int64) (rpcalliance.GuardReply, error) {
@@ -312,7 +313,7 @@ var rehomeTestJoinTeam = nest.NewHandlerName("rehomeTestJoinTeam")
 
 func init() {
 	nest.MustRegisterHandlerWithMeta(rehomeTestJoinTeam, func(targets []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-		targets[0].(*player.Player).Dao().SetTeamID(params[0].(int64))
+		targets[0].(*player.Player).Dao().GetTeam().SetTeamID(params[0].(int64))
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 }

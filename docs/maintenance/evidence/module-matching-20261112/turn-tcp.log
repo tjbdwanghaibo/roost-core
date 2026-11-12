@@ -1,0 +1,8 @@
+=== RUN   TestRecipesCreateBuildableCompositions
+=== RUN   TestRecipesCreateBuildableCompositions/turn-pvp
+    recipe_test.go:97: recipe turn-pvp: 7 integration/auth scenarios, zero skips
+    recipe_test.go:97: recipe turn-pvp: 7 integration/auth scenarios, zero skips
+--- PASS: TestRecipesCreateBuildableCompositions (61.74s)
+    --- PASS: TestRecipesCreateBuildableCompositions/turn-pvp (61.74s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	62.406s

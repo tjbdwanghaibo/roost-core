@@ -1229,7 +1229,7 @@ func run(ctx context.Context) error {
 }
 
 // team 发一个组队请求（invite / accept / leave / disband / info），答复的业务码非 0 时报错。
-func (c *client) team(ctx context.Context, id uint32, payload []byte) (*pb.TeamResponse, error) {
+func (c *client) team(ctx context.Context, id uint32, payload []byte) (*pb.TeamView, error) {
 	resp, err := c.call(ctx, id, payload)
 	if err != nil {
 		return nil, err
@@ -1239,9 +1239,9 @@ func (c *client) team(ctx context.Context, id uint32, payload []byte) (*pb.TeamR
 		return nil, err
 	}
 	if r.Code != 0 {
-		return r, fmt.Errorf("%s team msg %d: code %d %s", c.name, id, r.Code, r.Reason)
+		return nil, fmt.Errorf("%s team msg %d: code %d %s", c.name, id, r.Code, r.Reason)
 	}
-	return r, nil
+	if r.Info == nil { return &pb.TeamView{}, nil }; return r.Info, nil
 }
 
 // actorOf 是客户端手里玩家 playerID 的 SceneActor（本进程没有登记实体种类：按 kind 与 unique 认）。
@@ -1298,6 +1298,7 @@ func teamPanel(ctx context.Context, accountsClient *svcaccount.BusClient, nonce 
 		return fmt.Errorf("p1 already holds p6 before the team: %s", p1.describe())
 	}
 
+	if _,err:=p1.team(ctx,msgid.MsgTeamCreate,must(pb.MarshalTeamCreateRequest(&pb.TeamCreateRequest{})));err!=nil{return err}
 	invited, err := p1.team(ctx, msgid.MsgTeamInvite, must(pb.MarshalTeamInviteRequest(&pb.TeamInviteRequest{Invitee: p6.playerID})))
 	if err != nil {
 		return err
@@ -1431,7 +1432,7 @@ func teamRosterCrossBase(ctx context.Context, p1 *client) error {
 	if after.TeamID != 0 {
 		return fmt.Errorf("after disband: %+v, want no team", after)
 	}
-	step("team_roster_cross_base", map[string]any{"members_after_leave": rest.Members, "disband_ver": disbanded.Ver})
+	step("team_roster_cross_base", map[string]any{"members_after_leave": rest.Members, "team_cleared": disbanded.TeamID == 0})
 	return nil
 }
 

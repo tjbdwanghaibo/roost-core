@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	player "{{MODULE}}/game/entities/player"
-	team "{{MODULE}}/game/entities/team"
-	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	team "{{MODULE}}/game/entities/team"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -109,7 +109,7 @@ func newTeamFixture(t *testing.T, registrations ...func(*nest.NestMgr)) *teamFix
 			t.Fatal(err)
 		}
 	}
-	f.engine.MustRegisterHandlerWithMeta(handlerNamePlayerTeam, invokePlayerTeam, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
+	registerTeamTestHandler(f.engine, handlerNamePlayerTeam, invokePlayerTeam, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityAsync})
 	for _, register := range registrations {
 		register(f.engine)
 	}
@@ -589,4 +589,38 @@ func TestTeamOutsiderCannotReadOrChangeRoster(t *testing.T) {
 		t.Fatalf("outsider invited: %v", err)
 	}
 	f.unchanged(t, before)
+}
+
+var teamHookOnce sync.Once
+var teamHookReject atomic.Bool
+
+func TestTeamProjectionHookFailureRollsBackBothEntities(t *testing.T) {
+	teamHookOnce.Do(func() {
+		player.OnTeamChanged("test-rejection", func(_ *player.Player, _ player.TeamChange) error {
+			if teamHookReject.Load() {
+				return errors.New("projection hook rejected")
+			}
+			return nil
+		})
+	})
+	f := newTeamFixture(t)
+	f.create(t, 101)
+	f.invite(t, 101, 102)
+	before := f.facts(t)
+	teamHookReject.Store(true)
+	t.Cleanup(func() { teamHookReject.Store(false) })
+	_, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1)
+	teamHookReject.Store(false)
+	if err == nil {
+		t.Fatal("projection hook failure ignored")
+	}
+	f.unchanged(t, before)
+}
+
+// NewEngine 会复制包级注册；其他模块场景可能已经登记同一个正式 handler。
+// 未登记时装到当前实例，不清全局表，也不吞掉重复登记以外的错误。
+func registerTeamTestHandler(engine *nest.NestMgr, name nest.HandlerName, invoke nest.BaseHandler, meta nest.HandlerMeta) {
+	if nest.GetHandler(name) == nil {
+		engine.MustRegisterHandlerWithMeta(name, invoke, meta)
+	}
 }

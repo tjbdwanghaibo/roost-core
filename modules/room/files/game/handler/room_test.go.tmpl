@@ -11,13 +11,14 @@ import (
 	"sync/atomic"
 	"testing"
 
+	apperrors "{{MODULE}}/internal/errors"
+	room "{{MODULE}}/game/entities/room"
+	sender "{{MODULE}}/game/handler/syncsender"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	room "{{MODULE}}/game/entities/room"
-	sender "{{MODULE}}/game/handler/syncsender"
-	apperrors "{{MODULE}}/internal/errors"
 )
 
 type roomGetter map[int64]entity.IThreadSafeEntity
@@ -64,7 +65,7 @@ type roomFixture struct {
 	closes      *sender.RoomCloseSender
 }
 
-func newRoomFixture(t *testing.T, capacity int32) *roomFixture {
+func newRoomFixture(t *testing.T, capacity int32, registrations ...func(*nest.NestMgr) error) *roomFixture {
 	t.Helper()
 	room.RegisterEntity()
 	id, err := entity.BuildEntityID(74001, room.EntityKindRoom)
@@ -79,6 +80,11 @@ func newRoomFixture(t *testing.T, capacity int32) *roomFixture {
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(roomGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.commit),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	for _, register := range []func(*nest.NestMgr) error{RegisterRoomOpenNestHandlersOn, RegisterRoomJoinNestHandlersOn, RegisterRoomViewNestHandlersOn, RegisterRoomLeaveNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterRoomCloseNestHandlersOn} {
+		if err := register(f.engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, register := range registrations {
 		if err := register(f.engine); err != nil {
 			t.Fatal(err)
 		}

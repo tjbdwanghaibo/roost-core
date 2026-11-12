@@ -1,0 +1,18 @@
+name: matchroom
+summary: 持久 MatchID 到 Room 的幂等移交，固定匹配名单，同事务校验入房资格
+requires: [room]
+needs:
+  mods: [nest, mongo]
+  features: [entity, dao, nest]
+entity: Room
+component: Matchroom
+state:
+  - field: Matchroom
+    type: MatchroomState
+    store: matchroom
+    dao: persist,nosync
+    comment: 匹配来源与准入名单和 Room 初始化同事务提交。
+verify:
+  packages: [./game/handler, ./game/matchroom]
+  run: ^TestMatchroom
+  pass: 12

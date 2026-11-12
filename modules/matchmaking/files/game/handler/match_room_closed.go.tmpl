@@ -1,0 +1,8 @@
+package handler
+
+import room "{{MODULE}}/game/entities/room"
+
+//roost:nest
+func handlerMatchRoomClosed(target room.IMatchroomEntity, matchID string) bool {
+	return target.MatchroomComp().Closed(matchID)
+}

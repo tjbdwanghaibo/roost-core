@@ -6,6 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/protocol/pb"
+	accessplayer "{{MODULE}}/internal/access/player"
+	playerentity "{{MODULE}}/game/entities/player"
+
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -17,10 +22,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/mail"
 	"github.com/tjbdwanghaibo/roost-core/service/rank"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	playerentity "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/handler"
-	accessplayer "{{MODULE}}/internal/access/player"
-	"{{MODULE}}/protocol/pb"
 )
 
 // 真 TCP、Robot 公共传输、生成 PB 分发、正式 lifecycle/Nest；Account、邮件、排行榜客户端和持久提交用替身。
@@ -48,6 +49,9 @@ type recipeRankClient = rank.Rank
 type recipeNetworkRank struct{ recipeRankClient }
 
 var _ rank.Rank = recipeNetworkRank{}
+
+// 配方专属的替身依赖在协议注册之前装配，不改变生产装配逻辑。
+var recipeExtraRegistry func(*app.Registry) error
 
 type recipeNetwork struct {
 	registry *app.Registry
@@ -79,6 +83,11 @@ func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *rec
 	registry := app.NewRegistry(cfg)
 	for name, value := range map[app.ModName]any{"nest": engine, mods.ModEntityRuntime: access, account.CapabilityName: recipeNetworkAccounts{}, mail.CapabilityName: recipeNetworkMail{}, rank.CapabilityName: recipeNetworkRank{}} {
 		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if recipeExtraRegistry != nil {
+		if err := recipeExtraRegistry(registry); err != nil {
 			t.Fatal(err)
 		}
 	}

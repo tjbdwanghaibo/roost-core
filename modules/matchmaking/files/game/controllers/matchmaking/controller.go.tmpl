@@ -1,0 +1,97 @@
+package matchmaking
+
+import (
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	game "{{MODULE}}/game/matchmaking"
+	player "{{MODULE}}/game/entities/player"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 协议在 Mod.Provide 阶段注册，业务模块在 Service.Init 才启动；请求时再取 Runtime。
+// 启动窗口中的请求明确失败，不在注册阶段要求尚未发布的 capability。
+type Controller struct{ registry *app.Registry }
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("matchmaking: registry required")
+	}
+	return &Controller{registry: registry}, nil
+}
+func authenticated(ctx *playeraccess.Context) error {
+	if ctx == nil || ctx.PlayerID <= 0 {
+		return fmt.Errorf("matchmaking: authenticated player required")
+	}
+	return nil
+}
+func response(s player.MatchSnapshot, err error) *pb.MatchmakingResponse {
+	out := &pb.MatchmakingResponse{Sequence: s.Sequence, Key: s.Key, Phase: s.Phase, RoomID: s.RoomID, MatchID: s.MatchID, Members: s.Members}
+	if err != nil {
+		out.Code, out.Reason = errcode.ClientError(err)
+		if out.Code == errcode.CodeInternal {
+			slog.Error("matchmaking request failed", "err", err)
+		}
+	}
+	return out
+}
+func (c *Controller) HandleMatchEnqueue(ctx *playeraccess.Context, req *pb.MatchEnqueueRequest) (*pb.MatchmakingResponse, error) {
+	if err := authenticated(ctx); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, fmt.Errorf("matchmaking: request required")
+	}
+	runtime, err := game.FromRegistry(c.registry)
+	if err != nil {
+		return response(player.MatchSnapshot{}, err), nil
+	}
+	s, err := runtime.Enqueue(ctx.Context(), ctx.PlayerID, req.Sequence, req.Team)
+	return response(s, err), nil
+}
+func (c *Controller) HandleMatchCancel(ctx *playeraccess.Context, req *pb.MatchCancelRequest) (*pb.MatchmakingResponse, error) {
+	if err := authenticated(ctx); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, fmt.Errorf("matchmaking: request required")
+	}
+	runtime, err := game.FromRegistry(c.registry)
+	if err != nil {
+		return response(player.MatchSnapshot{}, err), nil
+	}
+	s, err := runtime.Cancel(ctx.Context(), ctx.PlayerID, req.Key)
+	return response(s, err), nil
+}
+func (c *Controller) HandleMatchStatus(ctx *playeraccess.Context, req *pb.MatchStatusRequest) (*pb.MatchmakingResponse, error) {
+	if err := authenticated(ctx); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, fmt.Errorf("matchmaking: request required")
+	}
+	runtime, err := game.FromRegistry(c.registry)
+	if err != nil {
+		return response(player.MatchSnapshot{}, err), nil
+	}
+	s, err := runtime.Status(ctx.Context(), ctx.PlayerID)
+	return response(s, err), nil
+}
+func (c *Controller) HandleMatchClear(ctx *playeraccess.Context, req *pb.MatchClearRequest) (*pb.MatchmakingResponse, error) {
+	if err := authenticated(ctx); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, fmt.Errorf("matchmaking: request required")
+	}
+	runtime, err := game.FromRegistry(c.registry)
+	if err != nil {
+		return response(player.MatchSnapshot{}, err), nil
+	}
+	s, err := runtime.Clear(ctx.Context(), ctx.PlayerID, req.Key)
+	return response(s, err), nil
+}

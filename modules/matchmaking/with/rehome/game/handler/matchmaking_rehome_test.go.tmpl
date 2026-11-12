@@ -1,0 +1,32 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+	sender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+func registerMatchmakingRehome(engine *nest.NestMgr) {
+	registerTeamTestHandler(engine, handlerNameRehomePrepare, invokeRehomePrepare, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+}
+func TestWithMatchmakingRehomeBlocksQueuedSolo(t *testing.T) {
+	f := newMatchFixture(t, registerMatchmakingRehome)
+	f.enqueue(t, 101, false)
+	if err := sender.NewRehomePrepareSender(f.engine).Sync_RehomePrepare(context.Background(), f.playerID(101), "moving", 1, 2, true); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("queued player can rehome: %v", err)
+	}
+}
+func TestWithMatchmakingRehomeBlocksQueueDuringMove(t *testing.T) {
+	f := newMatchFixture(t, registerMatchmakingRehome)
+	if err := sender.NewRehomePrepareSender(f.engine).Sync_RehomePrepare(context.Background(), f.playerID(101), "moving", 1, 2, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.runtime.Enqueue(context.Background(), 101, 1, false); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("moving player can queue: %v", err)
+	}
+}

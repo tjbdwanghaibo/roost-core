@@ -5,9 +5,10 @@ import (
 	"math"
 	"slices"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	db "{{MODULE}}/db"
 	apperrors "{{MODULE}}/internal/errors"
+	db "{{MODULE}}/db"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 //roost:component type={{ID:component:Room}}
@@ -92,6 +93,9 @@ func (component *RoomComponent) Join(playerID int64, connection string) (RoomSna
 		return RoomSnapshot{}, apperrors.ErrRoomInvalid
 	}
 	if err := component.checkOpen(); err != nil {
+		return RoomSnapshot{}, err
+	}
+	if err := checkRoomJoining(component.owner, playerID); err != nil {
 		return RoomSnapshot{}, err
 	}
 	dao := component.owner.Dao()

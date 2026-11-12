@@ -47,7 +47,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
   go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$CORE"
   ```
 
-  `-recipe casual` 或 `-recipe turn-pvp` 可直接创建已组合工程（自动采用 game 底座）；模块、Account 接入边界与验收见[配方](../../../../modules/README.md#从配方创建工程)。
+  `-recipe casual` 或 `-recipe turn-pvp` 可直接创建已组合工程（自动采用 game 底座）；turn-pvp 已含本服 matchmaking → matchroom → turn，组队使用 team；模块、Account 接入边界与验收见[配方](../../../../modules/README.md#从配方创建工程)。
 
   `-template game` 带 Player 与 World 两个实体、九个托管框架服务。玩家模块挂在 `Player` 上，要求这个形状；room 自带 Room Entity、DAO 与 lifecycle；skillbook 是服务级只读目录。
 - **已有工程**：`cd` 进去，先读 `roost.yaml`：`modules` 段是已装的模块（每个模块拥有的文件、DAO 字段、号），`services`、`features`、`ids` 是装配现状。再 `"$ROOST" module list`，带 `*` 的是已装的。不要重装、不要覆盖业务改过的文件。

@@ -150,10 +150,6 @@ type PlayerDao struct {
 	CellPanelSentAt  int64  `dao:"nopersist,nosync" store:"cell_panel_sent_at"`
 	CellPanelSince   int64  `dao:"nopersist,nosync" store:"cell_panel_since"`
 	CellPanelUnknown bool   `dao:"nopersist,nosync" store:"cell_panel_unknown"`
-	// TeamID 是分区场景里这名玩家所在的队伍（Team 实体 ID，0 = 不在队伍里），是 Team 成员表里一个事实的本人副本：入队、
-	// 离队、解散都在同一笔 [Team, Player] 事务里写它（与 GuildID 同理）。别人解散队伍时这里由成员表通知或重读清掉。持久：
-	// Base 重启后靠它知道去重读哪支队伍。
-	TeamID int64 `dao:"persist" store:"team_id"`
 	// TeamVer / TeamMembers 是 Base 缓存的成员表（cellworld.Group）：版本与每名成员的 Player、SceneActor、Base sid。不持久：
 	// 重启后版本为 0，Node 从 Team 实体重读（GroupResync）。CellGroupSentAt / CellGroupSyncAt / CellGroupViewID /
 	// CellGroupViewVer 是队伍面板的计时与组关系视野的版本（cellworld.BaseState）。

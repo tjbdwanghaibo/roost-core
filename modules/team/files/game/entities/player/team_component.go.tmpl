@@ -5,8 +5,8 @@ import (
 	"sort"
 	"sync"
 
-	team "{{MODULE}}/game/entities/team"
 	apperrors "{{MODULE}}/internal/errors"
+	team "{{MODULE}}/game/entities/team"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -80,25 +80,29 @@ func (c *TeamComponent) Create(target *team.Team, sid int32) (team.Snapshot, err
 	if err := c.checkJoin(target.ID()); err != nil {
 		return team.Snapshot{}, err
 	}
+	before := target.Info()
 	self := entity.GetUniqueIDFromEntityID(c.owner.ID())
 	if c.TeamID() == target.ID() && target.IsMember(self) {
-		return target.Info(), nil
+		return before, c.changed(before, before, true)
 	}
 	if err := target.Found(self, sid); err != nil {
 		return team.Snapshot{}, err
 	}
 	c.owner.Dao().GetTeam().SetTeamID(target.ID())
-	return target.Info(), nil
+	after := target.Info()
+	return after, c.changed(before, after, false)
 }
 func (c *TeamComponent) Accept(target *team.Team, sid int32, now int64) (team.Snapshot, error) {
 	if err := c.checkJoin(target.ID()); err != nil {
 		return team.Snapshot{}, err
 	}
+	before := target.Info()
 	if err := target.Accept(entity.GetUniqueIDFromEntityID(c.owner.ID()), sid, now); err != nil {
 		return team.Snapshot{}, err
 	}
 	c.owner.Dao().GetTeam().SetTeamID(target.ID())
-	return target.Info(), nil
+	after := target.Info()
+	return after, c.changed(before, after, false)
 }
 func (c *TeamComponent) Invite(target *team.Team, invitee, now int64) (team.Snapshot, error) {
 	if c.TeamID() != target.ID() {
@@ -113,11 +117,12 @@ func (c *TeamComponent) Leave(target *team.Team, disband bool) error {
 	if c.TeamID() != target.ID() {
 		return apperrors.ErrTeamMissing
 	}
+	before := target.Info()
 	self := entity.GetUniqueIDFromEntityID(c.owner.ID())
 	// 解散后的成员引用惰性清除；不能重新加入或换服前跳过这次权威核对。
 	if !target.IsMember(self) {
 		c.owner.Dao().GetTeam().SetTeamID(0)
-		return nil
+		return c.changed(before, target.Info(), true)
 	}
 	var err error
 	if disband {
@@ -129,15 +134,16 @@ func (c *TeamComponent) Leave(target *team.Team, disband bool) error {
 		return err
 	}
 	c.owner.Dao().GetTeam().SetTeamID(0)
-	return nil
+	return c.changed(before, target.Info(), false)
 }
 func (c *TeamComponent) Info(target *team.Team) (team.Snapshot, error) {
 	if c.TeamID() != target.ID() {
 		return team.Snapshot{}, apperrors.ErrTeamMissing
 	}
+	info := target.Info()
 	if !target.IsMember(entity.GetUniqueIDFromEntityID(c.owner.ID())) {
 		c.owner.Dao().GetTeam().SetTeamID(0)
-		return team.Snapshot{}, nil
+		return team.Snapshot{}, c.changed(info, info, true)
 	}
-	return target.Info(), nil
+	return info, c.changed(info, info, true)
 }

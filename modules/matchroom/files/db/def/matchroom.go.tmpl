@@ -1,0 +1,7 @@
+package dbdef
+
+// MatchroomState 的名单不可变；断线、离开不把资格转给其他玩家。
+type MatchroomState struct {
+	MatchID string  `store:"1"`
+	Members []int64 `store:"2"`
+}

@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -177,7 +177,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 		"game/handler/add_item.go", "game/handler/start_gift.go", "game/handler/gift_debit.go", "game/handler/gift_refund.go",
 		"game/handler/purchase_balance.go",
 		"game/handler/start_guild_op.go", "game/handler/guild_debit.go", "game/handler/guild_credit.go",
-		"game/handler/add_exp.go", "game/handler/claim_dungeon.go", "game/handler/player_team.go",
+		"game/handler/add_exp.go", "game/handler/claim_dungeon.go",
 		"game/handler/show_guild.go", "game/handler/player_guild.go",
 	} {
 		if !written[rel] {
@@ -1360,9 +1360,10 @@ func TestGateGeneratedBusinessConsumer(t *testing.T) {
 	}
 	bootstrapTest := `package bootstrap
 import (
- "testing"
- playertcp "example.com/planet/internal/access/player/tcp"
- gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+	"testing"
+
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+	playertcp "example.com/planet/internal/access/player/tcp"
 )
 func TestGeneratedGateTransportSelection(t *testing.T) {
  local := playertcp.NewMod()

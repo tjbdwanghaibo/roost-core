@@ -45,6 +45,9 @@ func (t *Team) Found(id int64, sid int32) error {
 	return nil
 }
 func (t *Team) Invite(leader, invitee, now int64) error {
+	if t.Dao().GetMatchKey() != "" {
+		return apperrors.ErrTeamBlocked
+	}
 	d := t.Dao()
 	if d.GetLeader() == 0 {
 		return apperrors.ErrTeamMissing
@@ -69,6 +72,9 @@ func (t *Team) Invite(leader, invitee, now int64) error {
 	return nil
 }
 func (t *Team) Accept(id int64, sid int32, now int64) error {
+	if t.Dao().GetMatchKey() != "" {
+		return apperrors.ErrTeamBlocked
+	}
 	d := t.Dao()
 	if id <= 0 || sid <= 0 || now < 0 {
 		return apperrors.ErrTeamInvalid
@@ -95,6 +101,9 @@ func (t *Team) Accept(id int64, sid int32, now int64) error {
 	return nil
 }
 func (t *Team) Leave(id int64) error {
+	if t.Dao().GetMatchKey() != "" {
+		return apperrors.ErrTeamBlocked
+	}
 	d := t.Dao()
 	if !t.IsMember(id) {
 		return apperrors.ErrTeamMissing
@@ -120,6 +129,9 @@ func (t *Team) Leave(id int64) error {
 	return nil
 }
 func (t *Team) Disband(leader int64) error {
+	if t.Dao().GetMatchKey() != "" {
+		return apperrors.ErrTeamBlocked
+	}
 	d := t.Dao()
 	if d.GetLeader() == 0 {
 		return apperrors.ErrTeamMissing
@@ -150,4 +162,30 @@ func (t *Team) pruneInvites(now int64) {
 func (t *Team) clearInvites() {
 	d := t.Dao()
 	d.RangeInvites(func(id, _ int64) bool { d.DelInvites(id); return true })
+}
+
+// HoldMatch 冻结匹配使用的权威名单。调用方须在同一事务里写所有 Player 的排队意图。
+func (t *Team) HoldMatch(key string) error {
+	if key == "" {
+		return apperrors.ErrTeamInvalid
+	}
+	current := t.Dao().GetMatchKey()
+	if current != "" && current != key {
+		return apperrors.ErrTeamBlocked
+	}
+	t.Dao().SetMatchKey(key)
+	return nil
+}
+
+// ReleaseMatch 只解除对应意图，迟到的收尾不能解开下一轮的名单。
+func (t *Team) ReleaseMatch(key string) error {
+	current := t.Dao().GetMatchKey()
+	if current == "" {
+		return nil
+	}
+	if current != key {
+		return apperrors.ErrTeamBlocked
+	}
+	t.Dao().SetMatchKey("")
+	return nil
 }

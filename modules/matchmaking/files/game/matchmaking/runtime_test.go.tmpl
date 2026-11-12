@@ -1,0 +1,32 @@
+package matchmaking
+
+import (
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"github.com/vmihailenco/msgpack/v5"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+)
+
+func TestMatchmakingRuntimeRequiresRealCapabilities(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	registry.Register(mods.ModNest, nest.NewEngine())
+	if _, err := buildRuntime(registry); err == nil || err.Error() != "matchmaking: match client unavailable" {
+		t.Fatalf("dependency check: %v", err)
+	}
+	if _, err := FromRegistry(registry); err == nil {
+		t.Fatal("unstarted runtime accepted")
+	}
+	if _, err := NewRuntime(nil, nil, nil, 1, nil); err == nil {
+		t.Fatal("incomplete dependencies accepted")
+	}
+}
+func TestMatchmakingSubjectRejectsRepeatedOrForeignMembers(t *testing.T) {
+	raw, _ := msgpack.Marshal(party{Key: "1:1", Leader: 1, Members: []int64{1, 1}, SID: 1})
+	if _, err := decode(svcmatch.Subject{Kind: "team", ID: 3, Payload: raw}); err == nil {
+		t.Fatal("duplicate party accepted")
+	}
+}

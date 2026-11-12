@@ -1,0 +1,120 @@
+package matchmaking
+
+import (
+	"context"
+	"errors"
+	"slices"
+
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+)
+
+// Step 每池最多读 64 张票；只接收已绑定到所有 Player 的票。取消与 Commit 的最终先后由 match 的原子操作决定。
+func (r *Runtime) Step(ctx context.Context) error {
+	var failures []error
+	for size := 1; size <= 8; size++ {
+		if ctx.Err() != nil {
+			return errors.Join(append(failures, ctx.Err())...)
+		}
+		if err := r.form(ctx, size); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+func (r *Runtime) eligible(ctx context.Context, t svcmatch.Ticket, size int) bool {
+	p, err := decode(t.Subject)
+	if err != nil || p.SID != r.sid || len(p.Members) != size || p.Key != t.RequestID {
+		return false
+	}
+	for _, id := range p.Members {
+		if !r.resident(id) {
+			return false
+		}
+		s, err := r.State(ctx, id)
+		if err != nil || s.Key != p.Key || s.TicketID != t.ID || s.Phase != player.MatchQueued || s.TeamID != p.TeamID || s.SID != p.SID || !slices.Equal(s.Members, p.Members) {
+			return false
+		}
+	}
+	return true
+}
+func (r *Runtime) form(ctx context.Context, size int) error {
+	q := queue(r.sid, size)
+	tickets, err := r.match.Candidates(ctx, q, 64)
+	if err != nil {
+		return err
+	}
+	ready := make([]svcmatch.Ticket, 0, len(tickets))
+	for _, t := range tickets {
+		if r.eligible(ctx, t, size) {
+			ready = append(ready, t)
+		}
+	}
+	var failures []error
+	for i := 0; i+1 < len(ready); i += 2 {
+		result, err := r.match.Commit(ctx, q, []string{ready[i].ID, ready[i+1].ID})
+		if err != nil {
+			if !errors.Is(err, svcmatch.ErrConflict) && !errors.Is(err, svcmatch.ErrTicketMissing) {
+				failures = append(failures, err)
+			}
+			continue
+		}
+		if err := r.accept(ctx, result); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// accept 可以来自 Commit 或客户端补查。先以 MatchID 保留唯一房号，再逐队保存所有成员的结果；
+// 任一提交失败仍可按票补查重试，不能依赖一次在线通知。每个 Player 都能独立查到最后结果。
+func (r *Runtime) accept(ctx context.Context, result svcmatch.Match) error {
+	if result.ID == "" || len(result.Members) != 2 || len(result.TicketIDs) != 2 {
+		return apperrors.ErrMatchmakingInvalid
+	}
+	parties := make([]party, 2)
+	var members []int64
+	for i, value := range result.Members {
+		p, err := decode(value)
+		if err != nil || p.SID != r.sid || result.Queue != queue(r.sid, len(p.Members)) {
+			return apperrors.ErrMatchmakingInvalid
+		}
+		parties[i] = p
+		members = append(members, p.Members...)
+	}
+	slices.Sort(members)
+	if len(slices.Compact(slices.Clone(members))) != len(members) {
+		return apperrors.ErrMatchmakingInvalid
+	}
+	roomID, err := r.rooms.Open(ctx, result.ID, members)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for i, p := range parties {
+		state, err := r.State(ctx, p.Leader)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		// 已清掉的终态不再重放写入；普通流程在成功持久结果之前不能 Clear。
+		if state.Key != p.Key {
+			continue
+		}
+		if state.TicketID != result.TicketIDs[i] || !slices.Equal(state.Members, p.Members) {
+			failures = append(failures, apperrors.ErrMatchmakingStale)
+			continue
+		}
+		state, err = r.update(ctx, state, player.MatchUpdate{Action: "matched", MatchID: result.ID, RoomID: roomID})
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if err := r.release(ctx, state); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}

@@ -94,7 +94,7 @@
 
 ### R7. team + matchmaking + matchroom（一起设计）
 
-部分完成（提交 `f5234510`，2026-11-12）：`team` 基础与 rehome 联动已实现并定向验收，25 + 2 条场景，组合原 rehome 40 条均通过，8 个变异与两轮 race 通过。[证据与边界](evidence/module-team-20261112/README.md)。`matchmaking`、`matchroom`、turn-pvp 接入与 demo 队伍迁移仍未完成。
+已完成（实现与定向验收，2026-11-12）：team27、matchmaking16、matchroom12、room22、rehome40与两组联动各2，组合121 PASS / 0 SKIP；9个变异与两轮 race。turn-pvp 真实 TCP/Robot 7场景通过，demo 队伍迁移定向测试与编译通过。[证据与边界](evidence/module-matching-20261112/README.md)。完整矩阵、真实存储/跨进程和 §5/§6 保留，不以本批替代。
 
 - **team**：队伍实体（game-demo 的 `game/entities/team`）；建队、入队、离队、队长；入队与写玩家档在同一笔 `[Team, Player]` 事务里（rehome 的排空依赖这一点，不能改成两笔）。
 - **matchmaking**：排队、成局，经托管的 match 服务（demo 的 `game/matchmaking`、`internal/service/game/matchmaker.go`）。
@@ -102,7 +102,7 @@
 - **联动**：rehome（在队伍里 / 排队中时拒绝换服，现在只有 demo 的 `rehome_checks.go` 做了）；turn-pvp 配方现在“没有客户端开房 / 匹配入口”，做完后把配方接上。
 - **验收**：单人排队成局进房、组队排队、排队中取消、成局后一方掉线、重复成局通知各有场景。
 
-实施方案（2026-11-12，逐项落地，不代表已完成）：
+采用方案（2026-11-12）：
 
 1. `team` 先提供独立组队能力：保留 Remote managed 的共享 Team 权威，Player 仅持久保存队伍引用；建队 / 入队 / 离队必须同时声明 Team 与 Player。取消 demo 的分区场景前置条件，队伍视野作为后续场景联动；队长离队选最小玩家号接任。邀请有数量和时间界限，队伍号通过持久计数器分配、不复用。安装器代办已有 `remote_entity` Mod，不修改 Nest / DataEngine / Sync。
 2. `matchmaking` 持久保存排队意图，再在锁外调用托管 match 服务。同一意图使用稳定 requestID，未知结果保留意图，取消得到确定终态后再解除排队限制。组队排队冻结权威成员版本，排队期间不可改队；默认按本服分队列（room 由本进程拥有），跨服社交队伍要先明确房间路由，不能直接当作本地房间成员。
@@ -110,7 +110,7 @@
 4. rehome 在同一 Player 事务里拒绝有队伍 / 排队意图的玩家；反向入口也拒绝已记下换服意图的入队 / 排队。turn-pvp 最后接入匹配入口。普通流程不引入 Saga。
 5. 每个模块先跑生成工程定向场景、回滚与重复安装；三者组合后验证成局 / 取消竞态、重复通知、掉线重试和换服互斥。Remote、match、room 的真实存储与跨进程验收仍归 §6，不用内存替身宣称通过。
 
-下一步实现前需处理的现有契约：托管 match 的 `GroupSize` 计数的是 subject / ticket，并不理解一个队伍内的人数；已结束 ticket、match、requestID 记录只有有限保留期，不能当永久幂等账本。组队方案需要把人数与每名成员可查询的结果写清楚；排队意图的未知结果不能靠超过保留期后盲目重新 Enqueue 来证明“原来没有成局”。现有 demo 只保留本进程驻留玩家作候选，复用时不能丢掉房间属主边界。
+实现遵守的现有契约：托管 match 的 `GroupSize` 计数的是 subject / ticket，并不理解一个队伍内的人数；已结束 ticket、match、requestID 记录只有有限保留期，不能当永久幂等账本。组队方案需要把人数与每名成员可查询的结果写清楚；排队意图的未知结果不能靠超过保留期后盲目重新 Enqueue 来证明“原来没有成局”。现有 demo 只保留本进程驻留玩家作候选，复用时不能丢掉房间属主边界。
 
 ### R8. gift（玩家间送礼）
 

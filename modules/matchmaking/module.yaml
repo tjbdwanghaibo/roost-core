@@ -1,0 +1,33 @@
+name: matchmaking
+summary: 本服单人或整队匹配，持久意图、取消竞态与查询恢复；成局移交匹配房
+requires: [team, matchroom]
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode, nest]
+  uses: [match]
+access:
+  transport: tcp
+runtime:
+  package: game/matchmaking
+  start: Start
+entity: Player
+component: Matchmaking
+state:
+  - field: Matchmaking
+    type: MatchmakingState
+    store: matchmaking
+    dao: persist
+    comment: 每人保留当前匹配意图和最后结果；队伍成员同时提交，不把外部请求当事务内操作。
+protocols: [MatchEnqueue, MatchCancel, MatchStatus, MatchClear]
+errcodes: [matchmaking_invalid, matchmaking_busy, matchmaking_stale, matchmaking_unknown]
+verify:
+  packages: [./game/handler, ./game/matchmaking, ./game/controllers/matchmaking]
+  run: ^TestMatchmaking
+  pass: 16
+with:
+  rehome:
+    summary: 排队与换服双向排斥，未知匹配结果继续阻挡换服
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithMatchmakingRehome
+      pass: 2

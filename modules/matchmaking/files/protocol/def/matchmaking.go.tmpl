@@ -1,0 +1,38 @@
+//go:build protocoldef
+
+package protocoldef
+
+// Sequence 使用 MatchStatus 返回的当前值加一；重试原请求仍用原 Sequence。
+type MatchEnqueueRequest struct {
+	Sequence int64 `pb:"1"`
+	Team     bool  `pb:"2"`
+}
+type MatchCancelRequest struct {
+	Key string `pb:"1"`
+}
+type MatchStatusRequest struct{}
+type MatchClearRequest struct {
+	Key string `pb:"1"`
+}
+type MatchmakingResponse struct {
+	Code     int32   `pb:"1"`
+	Reason   string  `pb:"2"`
+	Sequence int64   `pb:"3"`
+	Key      string  `pb:"4"`
+	Phase    string  `pb:"5"`
+	RoomID   int64   `pb:"6"`
+	MatchID  string  `pb:"7"`
+	Members  []int64 `pb:"8"`
+}
+
+//roost:protocol group=game handler=matchmaking
+type MatchmakingProtocol interface {
+	//roost:msg id={{ID:protocol:MatchEnqueue}}
+	MatchEnqueue(MatchEnqueueRequest) MatchmakingResponse
+	//roost:msg id={{ID:protocol:MatchCancel}}
+	MatchCancel(MatchCancelRequest) MatchmakingResponse
+	//roost:msg id={{ID:protocol:MatchStatus}}
+	MatchStatus(MatchStatusRequest) MatchmakingResponse
+	//roost:msg id={{ID:protocol:MatchClear}}
+	MatchClear(MatchClearRequest) MatchmakingResponse
+}

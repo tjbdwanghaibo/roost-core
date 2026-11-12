@@ -7,29 +7,26 @@ import (
 	"sync/atomic"
 	"time"
 
-	db "{{MODULE}}/db"
-	chatctl "{{MODULE}}/game/controllers/chat"
-	purchasecontroller "{{MODULE}}/game/controllers/purchase"
-	alliance "{{MODULE}}/game/entities/alliance"
-	player "{{MODULE}}/game/entities/player"
-	sceneentity "{{MODULE}}/game/entities/scene"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
+	alliance "{{MODULE}}/game/entities/alliance"
+	chatctl "{{MODULE}}/game/controllers/chat"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	player "{{MODULE}}/game/entities/player"
+	purchasecontroller "{{MODULE}}/game/controllers/purchase"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	sceneentity "{{MODULE}}/game/entities/scene"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 	svcsession "github.com/tjbdwanghaibo/roost-core/service/session"
-	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 )
 
 // Controller hosts the player protocol endpoints. It holds what an endpoint
@@ -48,8 +45,7 @@ type Controller struct {
 	alliances       rpcalliance.Alliance
 	allianceMirrors *entity.RemoteMirrorReader[alliance.AllianceMirror]
 	guildSettings   settings.Guild
-	// A partitioned scene's team (game/entities/team): this game service owns it.
-	teams   *lifecycle.TeamLifecycle
+	// 匹配仍由 demo 的锁步战斗使用，社交队伍端点来自 team 模块。
 	matcher svcmatch.Matchmaker
 	// chat is the chat module's controller (game/controllers/chat): the login
 	// announcement and the online set go through it; SendChat / ChatHistory are
@@ -70,9 +66,6 @@ type Controller struct {
 	// Runtime IDs are only for ephemeral objects.
 	serverSID int32
 	ids       *runtimeid.Allocator
-	// teamIDs is the persistent counter a new team's id comes from (another
-	// incarnation of this sid, or another sid, never reuses one).
-	teamIDs fmongo.ICollection
 }
 
 // battleRouter is the slice of the game service's battle manager the
@@ -187,10 +180,6 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	teams, err := lifecycle.TeamFromRegistry(registry)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
 	// The same capabilities internal/service/<game>'s generated Match() and
 	// Chat() accessors return; looked up here directly so this package does
 	// not import the service package.
@@ -235,15 +224,6 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
-	if !ok || mongoClient == nil {
-		return nil, fmt.Errorf("player controller: the team id allocator requires mongo")
-	}
-	// 队伍号序列与 Team 文档在同一个物理库：Team DAO 的 db= 是逻辑库名，经 DataEngine 冻结的映射表换算。
-	databases, err := kitdataengine.Databases(registry)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
 	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -253,12 +233,11 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
-		registry: registry, nestClient: client, players: players, teams: teams,
+		registry: registry, nestClient: client, players: players,
 		alliances: alliances, allianceMirrors: allianceMirrors, guildSettings: guildSettings,
 		matcher: matcher, chat: chat, sessions: sessions,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
-		teamIDs: mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
 		worldID: worldID, sceneID: sceneID,
 	}, nil
 }

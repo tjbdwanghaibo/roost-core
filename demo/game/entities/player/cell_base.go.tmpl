@@ -5,8 +5,9 @@ import (
 	"slices"
 	"time"
 
-	db "{{MODULE}}/db"
 	"{{MODULE}}/game/partition"
+	db "{{MODULE}}/db"
+
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
@@ -86,7 +87,7 @@ func (player *Player) StartBase() error {
 // TeamID is the partitioned scene's team this player is in (0 = none): the
 // player's own copy of one fact of the Team's roster, written in the same
 // [Team, Player] transaction as the roster (game/handler/team_*.go).
-func (player *Player) TeamID() int64 { return player.dao.GetTeamID() }
+func (player *Player) TeamID() int64 { return player.dao.GetTeam().GetTeamID() }
 
 // CellGroup / SetCellGroup make the player a cellworld.GroupPlayer: the
 // Base's copy of its team's roster (maintainer decision 2026-11-04, item 4 =
@@ -95,7 +96,7 @@ func (player *Player) TeamID() int64 { return player.dao.GetTeamID() }
 // after a restart the version is 0 and the Node rereads the Team
 // (NodeConfig.GroupResync). Only under the player's own Nest lock.
 func (player *Player) CellGroup() cellworld.Group {
-	g := cellworld.Group{ID: player.dao.GetTeamID(), Ver: player.dao.GetTeamVer()}
+	g := cellworld.Group{ID: player.dao.GetTeam().GetTeamID(), Ver: player.dao.GetTeamVer()}
 	player.dao.RangeTeamMembers(func(_ int, seat db.TeamSeat) bool {
 		g.Members = append(g.Members, cellworld.GroupMember{Player: seat.GetPlayer(), Actor: seat.GetActor(), SID: seat.GetSID()})
 		return true
@@ -108,7 +109,7 @@ func (player *Player) CellGroup() cellworld.Group {
 // once written into the DAO a slice is not edited in place (the undo holds
 // the old one).
 func (player *Player) SetCellGroup(g cellworld.Group) {
-	player.dao.SetTeamID(g.ID)
+	player.dao.GetTeam().SetTeamID(g.ID)
 	player.dao.SetTeamVer(g.Ver)
 	if slices.Equal(player.CellGroup().Members, g.Members) {
 		return

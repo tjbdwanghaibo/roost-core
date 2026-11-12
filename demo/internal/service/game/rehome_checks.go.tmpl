@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"time"
 
-	player "{{MODULE}}/game/entities/player"
-	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/game/settings"
 	apperrors "{{MODULE}}/internal/errors"
+	gamerehome "{{MODULE}}/game/rehome"
+	player "{{MODULE}}/game/entities/player"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
@@ -57,7 +58,7 @@ func init() {
 	gamerehome.OnApplying("{{GAME_SERVICE}}", refuseRehomeInAPartitionedScene)
 	gamerehome.OnLeaving("{{GAME_SERVICE}}", refuseRehomeOfAGuildMember)
 	player.OnRehomeApplying("{{GAME_SERVICE}}", func(owner *player.Player, _ gamerehome.Move, _ int64) error {
-		return rehomeBlockedBy(owner.Dao().GetGuildID(), owner.Dao().GetTeamID())
+		return rehomeBlockedBy(owner.Dao().GetGuildID(), owner.TeamComp().TeamID())
 	})
 }
 

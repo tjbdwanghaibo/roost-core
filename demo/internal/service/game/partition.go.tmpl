@@ -9,30 +9,31 @@ import (
 	"sync/atomic"
 	"time"
 
-	db "{{MODULE}}/db"
-	monster "{{MODULE}}/game/entities/monster"
-	player "{{MODULE}}/game/entities/player"
-	sceneentity "{{MODULE}}/game/entities/scene"
-	scene_actor "{{MODULE}}/game/entities/scene_actor"
-	handlersender "{{MODULE}}/game/handler/sender"
 	"{{MODULE}}/game/partition"
 	"{{MODULE}}/game/runtimeid"
-	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
+	"{{MODULE}}/protocol/msgid"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
+	db "{{MODULE}}/db"
+	gamescene "{{MODULE}}/game/scene"
+	handlersender "{{MODULE}}/game/handler/sender"
+	monster "{{MODULE}}/game/entities/monster"
 	pb "{{MODULE}}/protocol/pb"
-	"{{MODULE}}/protocol/msgid"
+	player "{{MODULE}}/game/entities/player"
+	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	sceneentity "{{MODULE}}/game/entities/scene"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
 // 分区场景（scene.partition，原型）：本进程在其中的那一份。
@@ -82,9 +83,9 @@ type partitionRuntime struct {
 	// 没有地形时为 nil。
 	relay *terrainRelay
 	// push 是玩家连接的推送（player TCP Runtime.PushPlayer）：攻击结论推给攻击方。没有接入层时为 nil。
-	push    func(ctx context.Context, playerID int64, msgID uint32, message any) error
-	cancel  context.CancelFunc
-	done    chan struct{}
+	push   func(ctx context.Context, playerID int64, msgID uint32, message any) error
+	cancel context.CancelFunc
+	done   chan struct{}
 
 	// 攻击结论（Base 侧，AttackResult 观察点）：诊断与端到端核对用的计数，不是业务状态。
 	attacksApplied, attacksDuplicate, attacksRejected, attacksUnknown atomic.Uint64
@@ -470,7 +471,6 @@ func attackResultPush(r cellworld.AttackResult) *pb.AttackResultPush {
 
 // ---- 端点用的能力（PartitionCapability）----
 
-// TeamRules are scene.partition.team's limits for the team endpoints.
 // TerrainForwarder 是本进程玩家的地形编辑与建筑操作的转发通道（P5，game/controllers/player 的端点用它调
 // terrainmap.Map.RelayBrush 等）；没有地形时为 nil。
 func (rt *partitionRuntime) TerrainForwarder() terrainmap.Forwarder {
@@ -478,10 +478,6 @@ func (rt *partitionRuntime) TerrainForwarder() terrainmap.Forwarder {
 		return nil
 	}
 	return rt.relay
-}
-
-func (rt *partitionRuntime) TeamRules() (int32, time.Duration) {
-	return rt.config.Team.MaxMembers, rt.config.Team.InviteTTL
 }
 
 func partitionPlayer(playerID int64) (int64, error) {

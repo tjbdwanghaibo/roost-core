@@ -25,7 +25,9 @@
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 25 |
 | [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
-| [team](team/README.md) | Remote 共享权威队伍，六个 PB 端点；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 26 |
+| [team](team/README.md) | Remote 共享权威队伍，六个 PB 端点；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 27 |
+| [matchmaking](matchmaking/README.md) | 单人/整队按服分池；持久意图、取消竞态、结果补查、组队冻结 | team、matchroom；托管 match | PlayerDao.Matchmaking | 16 |
+| [matchroom](matchroom/README.md) | MatchID 幂等移交到 Room，固定准入名单、掉线保座 | room、Mongo | RoomDao.Matchroom、持久房号映射 | 12 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
 | [login](login/README.md) | 登录鉴权：玩家 TCP 握手校验 account 签发的会话令牌（`session:<player_id>:<token>`），把承载服 / 原服 / 角色创建时间 / 绑定代数 / 换服标记写进会话；接管鉴权桩与 account 的 collaborators（开发令牌登录 `login.dev_token`、Redis 玩家号计数器；渠道入口 `login_channels.go` 缺省全拒） | 无（要求业务服务 `uses: [account]`；玩家 TCP 接入安装时代办，监听要自己 `roost config enable player-tcp`） | 无 | 19 |
@@ -50,6 +52,7 @@
 
 | 联动 | 做什么 | 场景数 |
 | --- | --- | --- |
+| matchmaking + rehome | 排队与换服双向互斥，未知结果继续保持屏障 | 2 |
 | team + rehome | 在队伍中拒绝换服，换服意图未清除前拒绝建队/入队 | 2 |
 | chat + enter | 玩家进入游戏时加进世界频道的在线名单（`game/chat/chat_enter.go`） | 2 |
 | mailbox + enter | 玩家进入游戏时把属于他的全服邮件合并进邮箱（`game/controllers/mailbox/mailbox_enter.go`）；画像缺省取首次进入的时间，会话带着 account 的角色创建时间与区服时改用它们（读 `gameenter.Entered.Claims`） | 5 |
@@ -119,7 +122,7 @@ modules/<name>/
 
 实体、DAO、lifecycle 都记入归属清单，并在模块安装的回滚边界内。它们不作为先执行、失败后保留的前置命令。实体号与其他号一样按最小空号分配，扫描已有代码与安装记录，已分配号不回收。依赖模块可以通过 `requires` 使用先安装的实体；需要追加状态时仍声明自己的 `entity` / `state` / `component`。
 
-安装器在生成暂存区先同步服务归属，再生成全部接口；bootstrap、相关 shutdown 配置、模块源码和清单失败时一并回退。普通 `roost generate` 的行为不变，手工修改实体归属仍需 `project sync`。第一个使用者是 [room](room/README.md)；scene、monster、dungeon、terrain 同样复用，team / guild 尚未迁移。
+安装器在生成暂存区先同步服务归属，再生成全部接口；bootstrap、相关 shutdown 配置、模块源码和清单失败时一并回退。普通 `roost generate` 的行为不变，手工修改实体归属仍需 `project sync`。第一个使用者是 [room](room/README.md)；scene、monster、dungeon、terrain 同样复用，team 同样支持；alliance 尚未迁移。
 
 ### 服务级启动与停机
 
@@ -250,7 +253,7 @@ roost project new arena -module example.com/studio/arena -recipe turn-pvp
 配方以 `game` 为底，复用同一个模块安装器、自动联动、ID 分配和自身同步；可用 `-services arena` 指定业务服务名。不能与 `-template game-demo` 混用。所有文件在新工程的暂存树里完成，失败不留下半个目标工程。已装模块仍由 `module list / verify` 管理，配方不是第二种可重复安装的模块。
 
 - `casual`：enter、wallet、checkin、task、stamina、shop、bag、mailbox；新玩家 100 金币写在 `recipe_first_enter.go`，由事务内 `OnFirstEnter` 发放。重复进入不再发；提交失败时余额与初始化标记一起回滚。
-- `turn-pvp`：enter、profile、room、turn、leaderboard；可信匹配方通过 `room.Open` 创建房间，两位玩家 Join → Start → End。没有替业务假设胜负规则、排行榜结算或客户端开房授权。
+- `turn-pvp`：enter、profile、room、turn、leaderboard、team、matchroom、matchmaking；客户端 MatchEnqueue → MatchStatus → RoomJoin → TurnStart → TurnEnd。没有替业务假设胜负规则、排行榜结算或客户端开房授权。
 
 两者都提供正式 Account session 认证器，拒绝错误承载服与在途迁移，开启开发 TCP。业务仍要接入 Account 的平台身份验证与持久角色号分配，不能把测试身份当作上线鉴权。生产 TCP 配置仍需显式开启。操作顺序和边界写入新工程的 `RECIPE.md`，规则文件归业务所有，后续 sync 不覆盖。
 

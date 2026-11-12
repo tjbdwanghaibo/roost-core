@@ -19,7 +19,7 @@ errcodes: [team_invalid, team_missing, team_exists, team_not_leader, team_not_in
 verify:
   packages: [./game/handler, ./game/controllers/team]
   run: ^TestTeam
-  pass: 26
+  pass: 27
 with:
   rehome:
     summary: 在队伍中不能换服，换服意图未清除前不能建队或入队

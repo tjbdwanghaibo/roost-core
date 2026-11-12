@@ -219,3 +219,9 @@ CBM 已刷新并核对本批 21 个路径，5 个局部模板缺口逐段补读�
 ## 附录：R7 优先级与 Team 接线修正（2026-11-12）
 
 维护者指定先完成 R7，再 R8 gift、R10 alliance；R9 activity 与 R11 lockstep 留待做。Team Controller 使用不存在的 lifecycle capability 导致启动失败，已补红测并改用正式生成的 TeamFromRegistry；26 + 40 + 2 场景、原变异和 race 通过，证据见 Team 报告。该补测不等于真实存储启动验收。
+
+## 附录：R7 完整链路（2026-11-12）
+
+team + matchmaking + matchroom 实现、turn-pvp 接入和 demo 队伍迁移完成。121 PASS / 0 SKIP、9个变异、两轮 race；配方7个真实TCP/Robot场景与 demo 定向编译通过。未知排队结果保留屏障，整队同事务冻结，MatchID 持久绑定房号且保留名单限制入房；详见[证据与边界](evidence/module-matching-20261112/README.md)。CBM 已刷新、模板缺口源码补证。
+
+按维护者优先级继续 R8 gift、R10 alliance；R9 activity、R11 lockstep 待做。全矩阵、完整 demo、真实存储及跨进程联合验收、§5 后续仍单列，没有改成已完成。

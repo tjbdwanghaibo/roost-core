@@ -827,3 +827,12 @@ demo 换成能跑的版本：
 生成器默认给的是 fail-closed 骨架，demo 故意替换掉它——这也是 `roost config` 启用 TCP 时会检查的那个文件。
 脚手架同时把 `player_access.tcp.enabled` 置为 true（等价于 `roost config enable player-tcp`），
 所以 `roost project doctor -workflow player-tcp` 在刚生成的工程上全绿。
+
+
+## 社交队伍模块
+
+社交队伍现在来自 `team` 模块，普通场景也能使用。先 `TeamCreate`，再 `TeamInvite` / `TeamAccept`；回复成员信息在 `TeamResponse.Info`。默认 8 人、64 个待处理邀请、60 秒邀请期限；规则归生成工程的 Team 业务文件，旧 `scene.partition.team.max_members` / `invite_ttl` 不再使用。
+
+分区场景的队伍面板保留：demo 的 `team_group.go` 通过 `OnTeamChanged` 在同一事务中更新 Player 投影，再由 cellworld 的提交后通知发送；TeamSync 周期重读仍兜底。`scene.partition.team` 只控制 snapshot_every / resync_every。Player 的持久队伍引用统一为 `PlayerDao.Team.TeamID`，不保留旧顶层 TeamID 的兼容读写。无缝场景 drill 已改用新协议，跨 Base 实跑留到 §6。
+
+普通场景的旧 duel/ranked → lockstep battle 匹配保留，和新 `matchmaking` → `matchroom` → `turn` 是不同玩法链路；后者在 turn-pvp 配方使用，不把尚未迁移的锁步战斗冒充为已完成。

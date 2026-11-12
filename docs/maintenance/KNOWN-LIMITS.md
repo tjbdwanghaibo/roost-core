@@ -744,3 +744,10 @@ Nest 的 `TestLifecycleCreateInHandler*` 仍需保留：它们覆盖 handler 内
 ## 新增离散玩法纵切
 
 回合 PvP、合作 Roguelike、异步社交经营分别提供 9、10、9 个场景，进入 pretag，包含公共 Robot 的实际 TCP/PB 接线；合作包含双客户端三关、领奖、重连和授权视图。玩法纵切仍用替身提交器，未逐玩法验证真实持久恢复、跨服或容量；回合超时尚无自动 timer 装配，Roguelike 仅离散闯关。范围与命令见[手册](../framework/SESSION-GENRES.md)。
+
+
+### R7 匹配模块的当前边界
+
+[matchmaking](../../modules/matchmaking/README.md) 已提供本服单排/整队与匹配房移交。match 历史默认保留 10 分钟；已经绑定票但历史消失时不自动解除意图，返回 unknown 等待核对。默认每池候选窗口 64、两支同人数队伍成局，不提供跨服房间路由。匹配房的持久映射不自动清理。离线 + turn-pvp TCP 接线验收不能替代 §6 真实 Redis/Mongo/NATS 联合验收。
+
+room 自动断线订阅、保留策略、重启在线状态重建、广播继续保留为 §5 后续；本轮实现名单准入和已有重连代际的组合。demo 的旧锁步匹配仍单独服务 battle，不在 R7 改造成回合房；R11 延后。

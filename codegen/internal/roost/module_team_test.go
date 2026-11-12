@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"testing"
 )
 
@@ -37,13 +38,13 @@ func TestModuleTeamGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("team: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"team": 26})
+	checkTaskModuleRows(t, report, map[string]int{"team": 27})
 	roost("module", "add", "rehome")
 	report, err = VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
 		t.Fatalf("team/rehome: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"team": 26, "rehome": 40, "team+rehome": 2})
+	checkTaskModuleRows(t, report, map[string]int{"team": 27, "rehome": 40, "team+rehome": 2})
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "rehome", "team")
 	if moduleProjectDigest(t, root) != before {
@@ -59,4 +60,25 @@ func TestModuleTeamGenerated(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/entities/player/team_rehome.go", `owner.Dao().GetRehome().GetPendingID() != ""`, `false && owner.Dao().GetRehome().GetPendingID() != ""`, "./game/handler", "TestWithTeamRehomeRejectsJoiningDuringMove", "moving player joined:")
 	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome", "./game/handler", "./game/controllers/team")
 
+}
+
+// 只验证本次 demo 迁移的队伍、分区投影、换服接线；不提前跑全 demo 验收。
+func TestDemoTeamModuleIntegration(t *testing.T) {
+	root := copyOfNewProject(t, "game-demo")
+	repo, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "go.mod")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = regexp.MustCompile(`(?m)^replace github\.com/tjbdwanghaibo/roost-core\b.*$\n?`).ReplaceAll(raw, nil)
+	raw = append(raw, []byte("\nreplace github.com/tjbdwanghaibo/roost-core => "+strconv.Quote(filepath.ToSlash(repo))+"\n")...)
+	if err := os.WriteFile(path, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGeneratedGo(t, root, "test", "-count=1", "-run", "^TestTeam|^TestWithTeam|^TestCellGroup|^TestRehome|^TestPartition", "./game/handler", "./game/entities/player", "./game/controllers/team", "./game/settings", "./internal/service/game")
+	runGeneratedGo(t, root, "build", "./...")
 }

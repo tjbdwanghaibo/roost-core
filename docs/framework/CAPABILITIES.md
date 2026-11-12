@@ -215,7 +215,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| `roost project new -recipe` | 从 game 底座安装休闲或回合房间组合、正式 session 鉴权和业务规则 | `-recipe casual` / `-recipe turn-pvp` | 新工程支持；身份验证、匹配与胜负仍由业务提供 | [配方](../../modules/README.md#从配方创建工程) |
+| `roost project new -recipe` | 从 game 底座安装休闲或回合房间组合、正式 session 鉴权和业务规则 | `-recipe casual` / `-recipe turn-pvp` | 新工程支持；身份验证与胜负仍由业务提供；turn-pvp 已含本服匹配 | [配方](../../modules/README.md#从配方创建工程) |
 | `roost module list` | 列出内置业务模块；在工程里执行时标出已安装的 | `roost module list [--json]` | 正式。目录以它的输出为准 | [modules](../../modules/README.md) |
 | `roost module plan` | 只预览，不改动工程：依赖的安装顺序、会先执行的 `roost add`、追加的 DAO 字段、分配的号、写入的文件 | `roost module plan <name…> [--json] [--service <svc>]` | 正式。`--json` 与 `add` 同一个结构 | 同上 |
 | `roost module add` | 安装模块（连同依赖）并运行生成器；已安装的不再处理；这次装的模块与已装的模块之间有联动文件（`glue <模块> with <另一个模块>`）时一并写进工程 | `roost module add <name…> [--json] [--service <svc>]` | 正式。落点被业务文件占用时拒绝、不覆盖；失败时模块写过的文件与 `roost.yaml` 恢复；没有卸载，分配过的号与存储键不回收 | 同上 |
@@ -230,7 +230,8 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/skills/*.json` 与 `game/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
-| 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`；六个 PB 端点，安装时代办 Remote | 现成模块；邀请有界，解散后成员引用惰性核对。匹配、视野、真实跨进程验收仍待补 | [team](../../modules/team/README.md) |
+| 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`；六个 PB 端点，安装时代办 Remote | 现成模块；邀请有界，解散后成员引用惰性核对。matchmaking 可组合，demo 通过登记点保留分区队伍视野；真实跨进程验收待补 | [team](../../modules/team/README.md) |
+| 本服匹配与房间移交 | 单人/整队，取消与补查，固定名单房间 | `roost module add matchmaking`，自动安装 matchroom / team / room | 默认两支同人数队伍；历史消失时保留屏障；跨服房间不在本轮 | [matchmaking](../../modules/matchmaking/README.md) |
 | 基础房间 room | 服务端开房；1～64 席、进出、房主交接、重连代际、关闭 | `roost module add room`；`game/room.Open` / `Disconnect` 与生成的 Nest Sender | 现成模块。自带持久实体；客户端读 PB 快照；不含自动断线订阅、广播、匹配移交或回合超时 | [room](../../modules/room/README.md) |
 | 顺序回合 turn | 固定名单、当前行动者、命令序号与重放、持久回合超时 | `roost module add turn`（自动装 room）；`TurnStart / TurnEnd / TurnView` | 现成模块。超时不追帧；无默认胜负/伤害、自动广播或跨机房间接管；25 条离线场景 | [turn](../../modules/turn/README.md) |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |

@@ -4,7 +4,10 @@
 
 ## [Unreleased]
 
-- 业务模块新增 team：共享 Remote 权威队伍，建队/入队/离队与 Player 引用在同一 Nest 事务中提交；邀请有界、队长交接、解散后惰性核对、rehome 双向互斥。安装器可代办 remote_entity Mod；未改三大核心模块。匹配与匹配房仍待 R7 后续。
+- **新增**（modules/matchmaking、matchroom）：本服单排/完整队伍匹配，持久意图、未知结果保护、取消竞态与结果补查；MatchID 持久映射到唯一 RoomID，固定名单准入。turn-pvp 接入客户端匹配至回合链路；不使用 Saga，不改 Nest/DataEngine/Sync。
+- **整理**（modules/team、demo）：Team 生命周期使用正式构造入口；队伍冻结与事务内 OnTeamChanged。demo 社交队伍迁入模块，分区视野保留，Player 引用改为 Team.TeamID，旧 PB/配置不兼容（先 TeamCreate，TeamResponse.Info，规则默认 8 人/60 秒）。真实跨进程验收仍待最终批次。
+
+- 业务模块新增 team：共享 Remote 权威队伍，建队/入队/离队与 Player 引用在同一 Nest 事务中提交；邀请有界、队长交接、解散后惰性核对、rehome 双向互斥。安装器可代办 remote_entity Mod；未改三大核心模块。匹配与匹配房已在本轮 R7 补齐。
 - 需求命名收敛：联盟新模块统一 `alliance`；activity 核心定义为通用时间阶段框架，排行与发奖按需联动（尚待实施）。
 
 - 业务模块：shop 商品目录使用配置表与道具引用校验；新增 rules 统一在 Player Nest 中读取体力/商店 PB 规则，进入或重连后推送，RulesGet 可补取。shop / stamina 自动依赖 rules / enter；不包含热更广播。

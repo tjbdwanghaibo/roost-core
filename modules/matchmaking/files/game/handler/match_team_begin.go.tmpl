@@ -1,0 +1,41 @@
+package handler
+
+import (
+	"slices"
+
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	team "{{MODULE}}/game/entities/team"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerMatchTeamBegin(target team.ITeamEntity, members []player.IMatchmakingEntity, leader, sequence int64, sid int32) (player.MatchSnapshot, error) {
+	t := target.TeamEntity()
+	info := t.Info()
+	ids := make([]int64, 0, len(members))
+	for _, m := range members {
+		ids = append(ids, entity.GetUniqueIDFromEntityID(m.ID()))
+	}
+	slices.Sort(ids)
+	if info.Leader != leader || !slices.Equal(ids, info.Members) {
+		return player.MatchSnapshot{}, apperrors.ErrMatchmakingStale
+	}
+	for _, member := range ids {
+		if info.SIDs[member] != sid {
+			return player.MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
+		}
+	}
+	s, err := player.BeginMatching(members, leader, sequence, t.ID(), sid, clock.UnixMilli())
+	if err != nil {
+		return player.MatchSnapshot{}, err
+	}
+	if !s.Terminal() {
+		if err := t.HoldMatch(s.Key); err != nil {
+			return player.MatchSnapshot{}, err
+		}
+	}
+	return s, nil
+}
