@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **组合 skill**（2026-11-13，维护者要求）：需求先分服务器与客户端，skill 只生成服务器逻辑；业余（默认）与专业两种模式，开始时问一次，专业模式的业务拆分请开发者确认、服务器 / 客户端边界由开发者把控；每个生成的工程带 `docs/DEMO.zh-CN.md`（模块、实体、服务、协议、客户端对接等当前状态）与只追加的 `docs/DEMO-HISTORY.zh-CN.md`；支持在已有工程上持续增改需求（compose §2A）；skill 对使用它的 agent 只读，记忆放在工程的这两份文档里。
+
+- **发版脚本**：pretag 的 `go test` 上限从 30 分钟提到 60 分钟。42 个模块之后 `codegen/internal/roost` 整包在本机要 2024～2151s，v1.45.0 第一次 pretag 在 30 分钟处超时（没有失败的用例，未推送）。
+
 - **修复**（modules，2026-11-13，组合 skill 试用发现）：task 的自带场景与联动场景（wallet / dungeon / bag / shop / checkin）改为装载自己的样例行，工程按 README 换掉 `task.csv`、道具表或商品表后不再变红（修前换表 25 条失败）；删除绑死样例表的 `TaskDailyCheckin` / `TaskDailySpend` / `TaskDailyDungeon` 常量；目录检查跳过 `Disabled` 行。checkin 的测试不再引用被测常量，改奖励规则只需改 README 点名的两条用例。gacha 组件新增不扣费的单抽 `DrawFree` 与结果字段 `Replayed`，回执新增 `Free`（`store:"8"`，免费与付费的请求键互不重放）；保底仍不能关，不要保底按 README 配到上限；场景 24→29。每处修前红、修后绿与变异自检均有记录；`TestModule`、模块门禁脚本、game-demo 生成检查通过。只对新生成的工程生效。
 
 - **组合 skill 试用**（2026-11-13）：一个没有上下文的 agent 只按 `SKILL.md` 与 `compose.md` 做了一个八条需求的休闲服务端（登录建角、钱包、签到、每日任务、手写转盘复用 gacha、改名全服唯一），离线验收通过；“金币排行榜”“离线也能发好友申请”两条按规则 4 停下报告冲突、没有做。它指出的文档问题已改：链接基准的说法、冲突判据（模块场景离线不算冲突）、配方只能加不能减、速查表补上 leaderboard 只升不降与 friends 双边要求在线、doctor 装 login 后剩三项、内嵌 TCP 时 `portal.servers` 填什么、能力清单里过时的“好友 / 任务 / 商城 / 抽卡需手写”两行；`roost add endpoint` 生成的入口注释改成与 dispatch 的实际行为一致。
