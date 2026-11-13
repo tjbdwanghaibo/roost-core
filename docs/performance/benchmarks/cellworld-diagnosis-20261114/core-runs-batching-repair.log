@@ -1,0 +1,223 @@
+### c-base-a1-1
+ 0:08  up 41 days,  8:19, 5 users, load averages: 10.58 7.68 7.14
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:09  up 41 days,  8:20, 5 users, load averages: 14.30 8.92 7.61
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=1%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.140 p99 2.514 max 19.378 n 44997 sum/s 488.561]
+base msgs in 1499/s 31829 KB/s
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 109.5% of one core; views accepted 599581 stale 0 owner changes 12 re-enters 0; witness latency p50 2.12ms p99 42.52ms max 105.20ms (n=200000); mirrors 8821
+cell (0,0) probes: callback[p50 0.005 p99 0.095 max 17.086 n 95459 sum/s 32.748]
+cell (0,0): idle NPCs 0 of 2479 reals, actor beats 49607/s, tier changes idle 0 fast 0
+cell (0,0): reals 2479 ghosts 680 | CPU 109.7% of one core | region beat p50 5.26ms p99 16.14ms max 59.80ms | out 3119 msg/s 8068 KB/s, in 3179 msg/s 862 KB/s | ghost latency p50 0.20ms p99 10.74ms (n=81633) | handoffs 22 (p50 3.62ms p99 8.43ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1339680 delta 177673 gaps 0; coalesced 17 control exhausted 0 max queue age 58.74ms pending 1; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.097 max 15.967 n 98109 sum/s 37.159]
+cell (1,0): idle NPCs 0 of 2533 reals, actor beats 50511/s, tier changes idle 0 fast 0
+cell (1,0): reals 2533 ghosts 620 | CPU 118.6% of one core | region beat p50 6.22ms p99 14.37ms max 35.44ms | out 3336 msg/s 9619 KB/s, in 3266 msg/s 807 KB/s | ghost latency p50 0.22ms p99 10.81ms (n=81530) | handoffs 16 (p50 2.30ms p99 28.87ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1607879 delta 197957 gaps 0; coalesced 194 control exhausted 0 max queue age 55.75ms pending 0; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.095 max 10.660 n 97429 sum/s 35.219]
+cell (0,1): idle NPCs 0 of 2511 reals, actor beats 50055/s, tier changes idle 0 fast 0
+cell (0,1): reals 2511 ghosts 609 | CPU 109.7% of one core | region beat p50 5.95ms p99 16.70ms max 23.76ms | out 2945 msg/s 8942 KB/s, in 3241 msg/s 795 KB/s | ghost latency p50 0.26ms p99 13.06ms (n=81077) | handoffs 20 (p50 2.64ms p99 7.20ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1493845 delta 194433 gaps 0; coalesced 138 control exhausted 0 max queue age 67.20ms pending 0; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.005 p99 0.089 max 6.545 n 96282 sum/s 31.730]
+cell (1,1): idle NPCs 0 of 2477 reals, actor beats 49665/s, tier changes idle 0 fast 0
+cell (1,1): reals 2477 ghosts 648 | CPU 105.8% of one core | region beat p50 5.05ms p99 10.39ms max 25.52ms | out 2996 msg/s 8345 KB/s, in 3202 msg/s 828 KB/s | ghost latency p50 0.23ms p99 10.32ms (n=83017) | handoffs 30 (p50 4.41ms p99 16.50ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1395846 delta 180530 gaps 0; coalesced 3 control exhausted 0 max queue age 39.90ms pending 0; owner errors 0 full 0
+### c-base-a5-1
+ 0:09  up 41 days,  8:20, 5 users, load averages: 14.30 8.92 7.61
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:09  up 41 days,  8:20, 5 users, load averages: 15.60 9.76 7.97
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.179 p99 6.631 max 62.100 n 41869 sum/s 764.825]
+base msgs in 1394/s 31384 KB/s
+witness p99 1376.26ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 135.7% of one core; views accepted 566924 stale 6 owner changes 37 re-enters 0; witness latency p50 32.03ms p99 1376.26ms max 1433.77ms (n=200000); mirrors 9120
+cell (0,0) probes: callback[p50 0.005 p99 0.145 max 35.141 n 73488 sum/s 32.955]
+cell (0,0): idle NPCs 0 of 2473 reals, actor beats 49160/s, tier changes idle 0 fast 0
+cell (0,0): reals 2473 ghosts 671 | CPU 94.5% of one core | region beat p50 6.45ms p99 20.81ms max 46.42ms | out 2145 msg/s 8240 KB/s, in 2445 msg/s 874 KB/s | ghost latency p50 0.41ms p99 20.65ms (n=54737) | handoffs 107 (p50 5.03ms p99 41.16ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1343081 delta 231726 gaps 0; coalesced 142 control exhausted 0 max queue age 58.96ms pending 0; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.149 max 36.378 n 76994 sum/s 38.244]
+cell (1,0): idle NPCs 0 of 2534 reals, actor beats 50248/s, tier changes idle 0 fast 0
+cell (1,0): reals 2534 ghosts 620 | CPU 103.5% of one core | region beat p50 7.95ms p99 32.37ms max 45.10ms | out 2271 msg/s 9851 KB/s, in 2560 msg/s 824 KB/s | ghost latency p50 0.60ms p99 22.22ms (n=53469) | handoffs 107 (p50 3.26ms p99 50.58ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1619703 delta 255682 gaps 0; coalesced 3100 control exhausted 0 max queue age 150.17ms pending 0; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.146 max 65.924 n 74589 sum/s 38.861]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 49836/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 605 | CPU 99.1% of one core | region beat p50 7.15ms p99 22.27ms max 36.10ms | out 2233 msg/s 9255 KB/s, in 2478 msg/s 805 KB/s | ghost latency p50 0.66ms p99 22.78ms (n=52764) | handoffs 100 (p50 3.27ms p99 20.06ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1514251 delta 256642 gaps 0; coalesced 936 control exhausted 0 max queue age 173.40ms pending 0; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.005 p99 0.134 max 21.640 n 73620 sum/s 32.447]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49376/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 652 | CPU 97.0% of one core | region beat p50 7.15ms p99 23.38ms max 34.16ms | out 2069 msg/s 8602 KB/s, in 2444 msg/s 837 KB/s | ghost latency p50 0.41ms p99 20.21ms (n=55714) | handoffs 112 (p50 5.31ms p99 28.79ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1412891 delta 237407 gaps 0; coalesced 356 control exhausted 0 max queue age 81.46ms pending 0; owner errors 0 full 0
+### c-after-a1-1
+ 0:18  up 41 days,  8:29, 5 users, load averages: 13.09 12.62 10.44
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:19  up 41 days,  8:30, 5 users, load averages: 18.20 13.99 11.04
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=1%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.191 p99 2.912 max 45.228 n 44611 sum/s 550.941]
+base msgs in 1487/s 19971 KB/s
+witness p99 66.60ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 98.8% of one core; views accepted 597382 stale 1 owner changes 13 re-enters 0; witness latency p50 3.26ms p99 66.60ms max 132.97ms (n=200000); mirrors 8832
+cell (0,0) probes: callback[p50 0.006 p99 0.143 max 13.410 n 75171 sum/s 34.405]
+cell (0,0): idle NPCs 0 of 2479 reals, actor beats 49507/s, tier changes idle 0 fast 0
+cell (0,0): reals 2479 ghosts 680 | CPU 89.5% of one core | region beat p50 7.35ms p99 21.27ms max 43.48ms | out 2305 msg/s 5489 KB/s, in 2503 msg/s 838 KB/s | ghost latency p50 0.36ms p99 11.94ms (n=61367) | handoffs 22 (p50 5.52ms p99 33.37ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 799575 delta 181004 gaps 0; coalesced 3 control exhausted 0 max queue age 61.31ms pending 0; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.145 max 8.002 n 77315 sum/s 37.269]
+cell (1,0): idle NPCs 0 of 2532 reals, actor beats 50312/s, tier changes idle 0 fast 0
+cell (1,0): reals 2532 ghosts 621 | CPU 93.7% of one core | region beat p50 8.84ms p99 29.07ms max 50.67ms | out 2284 msg/s 6166 KB/s, in 2572 msg/s 784 KB/s | ghost latency p50 0.76ms p99 15.27ms (n=60732) | handoffs 17 (p50 3.33ms p99 21.66ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 885985 delta 198751 gaps 0; coalesced 29 control exhausted 0 max queue age 70.09ms pending 0; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.140 max 46.415 n 74522 sum/s 35.906]
+cell (0,1): idle NPCs 0 of 2511 reals, actor beats 49853/s, tier changes idle 0 fast 0
+cell (0,1): reals 2511 ghosts 609 | CPU 95.1% of one core | region beat p50 7.91ms p99 20.37ms max 49.25ms | out 2690 msg/s 5735 KB/s, in 2479 msg/s 769 KB/s | ghost latency p50 0.32ms p99 11.54ms (n=58125) | handoffs 20 (p50 2.66ms p99 18.65ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 817909 delta 194641 gaps 0; coalesced 1 control exhausted 0 max queue age 61.79ms pending 0; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.006 p99 0.124 max 9.128 n 76402 sum/s 32.751]
+cell (1,1): idle NPCs 0 of 2478 reals, actor beats 49518/s, tier changes idle 0 fast 0
+cell (1,1): reals 2478 ghosts 647 | CPU 92.3% of one core | region beat p50 7.73ms p99 27.39ms max 51.75ms | out 2313 msg/s 5580 KB/s, in 2540 msg/s 806 KB/s | ghost latency p50 0.27ms p99 13.52ms (n=63037) | handoffs 30 (p50 4.54ms p99 84.09ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 816330 delta 179798 gaps 0; coalesced 5 control exhausted 0 max queue age 43.28ms pending 0; owner errors 0 full 0
+### c-after-a5-1
+ 0:19  up 41 days,  8:30, 5 users, load averages: 18.20 13.99 11.04
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:20  up 41 days,  8:30, 5 users, load averages: 24.89 16.13 11.93
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.233 p99 3.883 max 65.199 n 44806 sum/s 740.084]
+base msgs in 1492/s 20879 KB/s
+witness p99 97.93ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 138.8% of one core; views accepted 597472 stale 8 owner changes 42 re-enters 0; witness latency p50 9.04ms p99 97.93ms max 137.90ms (n=200000); mirrors 9135
+cell (0,0) probes: callback[p50 0.005 p99 0.138 max 20.943 n 85977 sum/s 39.794]
+cell (0,0): idle NPCs 0 of 2470 reals, actor beats 49399/s, tier changes idle 0 fast 0
+cell (0,0): reals 2470 ghosts 674 | CPU 99.9% of one core | region beat p50 7.32ms p99 18.67ms max 32.28ms | out 2916 msg/s 5698 KB/s, in 2860 msg/s 893 KB/s | ghost latency p50 0.31ms p99 11.84ms (n=66838) | handoffs 110 (p50 2.38ms p99 31.89ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 801203 delta 230659 gaps 0; coalesced 0 control exhausted 0 max queue age 67.86ms pending 0; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.129 max 29.912 n 95610 sum/s 40.807]
+cell (1,0): idle NPCs 0 of 2535 reals, actor beats 50272/s, tier changes idle 0 fast 0
+cell (1,0): reals 2535 ghosts 619 | CPU 102.8% of one core | region beat p50 9.26ms p99 35.75ms max 54.01ms | out 2687 msg/s 6535 KB/s, in 3180 msg/s 851 KB/s | ghost latency p50 0.30ms p99 16.36ms (n=71724) | handoffs 107 (p50 3.34ms p99 25.36ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 916191 delta 255862 gaps 0; coalesced 38 control exhausted 0 max queue age 65.10ms pending 0; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.124 max 15.854 n 92717 sum/s 38.424]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 50206/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 607 | CPU 97.8% of one core | region beat p50 7.96ms p99 25.35ms max 35.40ms | out 2642 msg/s 6081 KB/s, in 3082 msg/s 831 KB/s | ghost latency p50 0.33ms p99 12.93ms (n=70366) | handoffs 102 (p50 2.60ms p99 48.01ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 843252 delta 254347 gaps 0; coalesced 12 control exhausted 0 max queue age 50.92ms pending 368; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.005 p99 0.124 max 18.379 n 86616 sum/s 36.164]
+cell (1,1): idle NPCs 0 of 2477 reals, actor beats 49603/s, tier changes idle 0 fast 0
+cell (1,1): reals 2477 ghosts 651 | CPU 95.9% of one core | region beat p50 7.80ms p99 22.36ms max 57.21ms | out 2502 msg/s 5797 KB/s, in 2878 msg/s 858 KB/s | ghost latency p50 0.39ms p99 14.13ms (n=68439) | handoffs 112 (p50 3.70ms p99 44.96ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 817115 delta 234741 gaps 0; coalesced 17 control exhausted 0 max queue age 29.36ms pending 0; owner errors 0 full 0
+### c-base-a1-2
+ 0:20  up 41 days,  8:30, 5 users, load averages: 24.89 16.13 11.93
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:20  up 41 days,  8:31, 5 users, load averages: 24.22 16.99 12.44
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=1%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.175 p99 6.130 max 95.038 n 44754 sum/s 826.385]
+base msgs in 1491/s 31697 KB/s
+witness p99 187.34ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 112.7% of one core; views accepted 599397 stale 2 owner changes 12 re-enters 0; witness latency p50 21.66ms p99 187.34ms max 261.49ms (n=200000); mirrors 8822
+cell (0,0) probes: callback[p50 0.005 p99 0.160 max 7.936 n 63849 sum/s 30.288]
+cell (0,0): idle NPCs 0 of 2479 reals, actor beats 49574/s, tier changes idle 0 fast 0
+cell (0,0): reals 2479 ghosts 680 | CPU 96.5% of one core | region beat p50 7.45ms p99 16.60ms max 37.59ms | out 2174 msg/s 8017 KB/s, in 2125 msg/s 822 KB/s | ghost latency p50 0.41ms p99 23.29ms (n=50041) | handoffs 22 (p50 4.27ms p99 20.96ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1338515 delta 178912 gaps 0; coalesced 56 control exhausted 0 max queue age 60.58ms pending 0; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.170 max 36.054 n 72029 sum/s 38.098]
+cell (1,0): idle NPCs 0 of 2533 reals, actor beats 50550/s, tier changes idle 0 fast 0
+cell (1,0): reals 2533 ghosts 620 | CPU 101.2% of one core | region beat p50 9.05ms p99 18.12ms max 37.79ms | out 1981 msg/s 9498 KB/s, in 2395 msg/s 776 KB/s | ghost latency p50 0.83ms p99 21.37ms (n=55430) | handoffs 16 (p50 2.94ms p99 11.35ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1594965 delta 199003 gaps 0; coalesced 563 control exhausted 0 max queue age 67.98ms pending 0; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.165 max 7.416 n 70196 sum/s 35.740]
+cell (0,1): idle NPCs 0 of 2511 reals, actor beats 50054/s, tier changes idle 0 fast 0
+cell (0,1): reals 2511 ghosts 609 | CPU 100.5% of one core | region beat p50 7.97ms p99 17.89ms max 26.88ms | out 2189 msg/s 8910 KB/s, in 2334 msg/s 762 KB/s | ghost latency p50 0.47ms p99 20.31ms (n=53894) | handoffs 20 (p50 2.81ms p99 12.21ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1493042 delta 196479 gaps 0; coalesced 276 control exhausted 0 max queue age 83.86ms pending 0; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.005 p99 0.149 max 21.029 n 65016 sum/s 30.973]
+cell (1,1): idle NPCs 0 of 2477 reals, actor beats 49672/s, tier changes idle 0 fast 0
+cell (1,1): reals 2477 ghosts 648 | CPU 97.5% of one core | region beat p50 7.72ms p99 17.55ms max 24.97ms | out 2179 msg/s 8259 KB/s, in 2162 msg/s 790 KB/s | ghost latency p50 0.32ms p99 24.23ms (n=51798) | handoffs 30 (p50 6.81ms p99 76.11ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1385532 delta 181593 gaps 0; coalesced 14 control exhausted 0 max queue age 56.92ms pending 0; owner errors 0 full 0
+### c-base-a5-2
+ 0:20  up 41 days,  8:31, 5 users, load averages: 24.22 16.99 12.44
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:21  up 41 days,  8:32, 5 users, load averages: 25.07 17.99 12.98
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.209 p99 6.488 max 87.130 n 42307 sum/s 992.245]
+base msgs in 1408/s 31442 KB/s
+witness p99 1745.87ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 143.4% of one core; views accepted 574275 stale 13 owner changes 42 re-enters 0; witness latency p50 1270.38ms p99 1745.87ms max 1765.33ms (n=200000); mirrors 9138
+cell (0,0) probes: callback[p50 0.005 p99 0.158 max 11.486 n 68560 sum/s 32.457]
+cell (0,0): idle NPCs 0 of 2471 reals, actor beats 49274/s, tier changes idle 0 fast 0
+cell (0,0): reals 2471 ghosts 676 | CPU 97.6% of one core | region beat p50 7.56ms p99 18.99ms max 38.28ms | out 2251 msg/s 8182 KB/s, in 2280 msg/s 871 KB/s | ghost latency p50 0.32ms p99 23.64ms (n=49499) | handoffs 110 (p50 2.57ms p99 64.05ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1331282 delta 230430 gaps 0; coalesced 261 control exhausted 0 max queue age 67.27ms pending 335; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.152 max 7.757 n 81672 sum/s 38.073]
+cell (1,0): idle NPCs 0 of 2533 reals, actor beats 50255/s, tier changes idle 0 fast 0
+cell (1,0): reals 2533 ghosts 622 | CPU 102.7% of one core | region beat p50 9.25ms p99 29.43ms max 91.49ms | out 1992 msg/s 9802 KB/s, in 2715 msg/s 830 KB/s | ghost latency p50 0.44ms p99 23.05ms (n=58054) | handoffs 110 (p50 3.23ms p99 31.30ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1611283 delta 258865 gaps 0; coalesced 1143 control exhausted 0 max queue age 75.28ms pending 439; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.144 max 32.643 n 79167 sum/s 37.676]
+cell (0,1): idle NPCs 0 of 2519 reals, actor beats 50167/s, tier changes idle 0 fast 0
+cell (0,1): reals 2519 ghosts 607 | CPU 100.6% of one core | region beat p50 8.20ms p99 22.48ms max 43.63ms | out 2115 msg/s 9214 KB/s, in 2628 msg/s 810 KB/s | ghost latency p50 0.31ms p99 23.94ms (n=57333) | handoffs 99 (p50 3.23ms p99 40.55ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1507339 delta 258375 gaps 0; coalesced 872 control exhausted 0 max queue age 122.13ms pending 702; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.005 p99 0.152 max 5.951 n 68555 sum/s 32.134]
+cell (1,1): idle NPCs 0 of 2477 reals, actor beats 49495/s, tier changes idle 0 fast 0
+cell (1,1): reals 2477 ghosts 651 | CPU 99.3% of one core | region beat p50 7.57ms p99 18.35ms max 47.69ms | out 2321 msg/s 8603 KB/s, in 2275 msg/s 835 KB/s | ghost latency p50 0.33ms p99 22.87ms (n=50562) | handoffs 112 (p50 2.76ms p99 28.10ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1411309 delta 237976 gaps 0; coalesced 94 control exhausted 0 max queue age 62.47ms pending 0; owner errors 0 full 0
+### c-after-a1-2
+ 0:21  up 41 days,  8:32, 5 users, load averages: 25.07 17.99 12.98
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:21  up 41 days,  8:32, 5 users, load averages: 24.58 18.53 13.38
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=1%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.179 p99 2.720 max 118.120 n 43927 sum/s 483.649]
+base msgs in 1463/s 19759 KB/s
+witness p99 200.54ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 92.8% of one core; views accepted 586769 stale 3 owner changes 12 re-enters 0; witness latency p50 3.12ms p99 200.54ms max 322.95ms (n=200000); mirrors 8822
+cell (0,0) probes: callback[p50 0.005 p99 0.148 max 8.942 n 71026 sum/s 33.694]
+cell (0,0): idle NPCs 0 of 2479 reals, actor beats 49128/s, tier changes idle 0 fast 0
+cell (0,0): reals 2479 ghosts 680 | CPU 91.3% of one core | region beat p50 7.07ms p99 33.06ms max 83.04ms | out 2703 msg/s 5521 KB/s, in 2359 msg/s 829 KB/s | ghost latency p50 0.32ms p99 14.38ms (n=57107) | handoffs 22 (p50 2.67ms p99 18.15ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 808154 delta 177068 gaps 0; coalesced 7 control exhausted 0 max queue age 63.66ms pending 116; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.123 max 23.566 n 85527 sum/s 39.070]
+cell (1,0): idle NPCs 0 of 2533 reals, actor beats 50010/s, tier changes idle 0 fast 0
+cell (1,0): reals 2533 ghosts 620 | CPU 91.2% of one core | region beat p50 8.38ms p99 39.23ms max 58.87ms | out 2209 msg/s 6139 KB/s, in 2837 msg/s 791 KB/s | ghost latency p50 0.38ms p99 14.77ms (n=68850) | handoffs 16 (p50 3.28ms p99 33.74ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 888137 delta 197326 gaps 0; coalesced 918 control exhausted 0 max queue age 112.95ms pending 498; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.109 max 40.773 n 83146 sum/s 33.149]
+cell (0,1): idle NPCs 0 of 2511 reals, actor beats 49590/s, tier changes idle 0 fast 0
+cell (0,1): reals 2511 ghosts 609 | CPU 90.4% of one core | region beat p50 7.26ms p99 31.59ms max 63.60ms | out 2390 msg/s 5699 KB/s, in 2755 msg/s 776 KB/s | ghost latency p50 0.19ms p99 13.23ms (n=66743) | handoffs 20 (p50 4.38ms p99 15.52ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 817195 delta 195328 gaps 0; coalesced 334 control exhausted 0 max queue age 68.20ms pending 0; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.006 p99 0.138 max 73.162 n 71886 sum/s 38.335]
+cell (1,1): idle NPCs 0 of 2477 reals, actor beats 49080/s, tier changes idle 0 fast 0
+cell (1,1): reals 2477 ghosts 648 | CPU 87.6% of one core | region beat p50 6.59ms p99 29.80ms max 62.03ms | out 2506 msg/s 5561 KB/s, in 2380 msg/s 795 KB/s | ghost latency p50 0.46ms p99 16.52ms (n=58480) | handoffs 30 (p50 5.85ms p99 29.18ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 815760 delta 180656 gaps 0; coalesced 6 control exhausted 0 max queue age 95.47ms pending 0; owner errors 0 full 0
+### c-after-a5-2
+ 0:21  up 41 days,  8:32, 5 users, load averages: 24.58 18.53 13.38
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+ 0:22  up 41 days,  8:33, 5 users, load averages: 29.94 20.80 14.45
+vm.swapusage: total = 8192.00M  used = 6536.31M  free = 1655.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: callback[p50 0.215 p99 8.431 max 156.620 n 43178 sum/s 924.729]
+base msgs in 1431/s 21221 KB/s
+witness p99 3024.61ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 115.2% of one core; views accepted 573085 stale 11 owner changes 45 re-enters 0; witness latency p50 1093.25ms p99 3024.61ms max 3077.75ms (n=200000); mirrors 9077
+cell (0,0) probes: callback[p50 0.005 p99 0.246 max 70.084 n 53850 sum/s 59.565]
+cell (0,0): idle NPCs 0 of 2472 reals, actor beats 46770/s, tier changes idle 0 fast 0
+cell (0,0): reals 2472 ghosts 670 | CPU 79.2% of one core | region beat p50 8.23ms p99 66.03ms max 124.32ms | out 1567 msg/s 5546 KB/s, in 1778 msg/s 822 KB/s | ghost latency p50 0.78ms p99 54.02ms (n=34178) | handoffs 107 (p50 8.41ms p99 145.38ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 803472 delta 216905 gaps 0; coalesced 2110 control exhausted 0 max queue age 196.57ms pending 1118; owner errors 0 full 0
+cell (1,0) probes: callback[p50 0.005 p99 0.215 max 68.754 n 60725 sum/s 63.779]
+cell (1,0): idle NPCs 0 of 2530 reals, actor beats 47405/s, tier changes idle 0 fast 0
+cell (1,0): reals 2530 ghosts 621 | CPU 82.2% of one core | region beat p50 9.51ms p99 75.96ms max 116.58ms | out 1422 msg/s 6258 KB/s, in 2001 msg/s 776 KB/s | ghost latency p50 1.07ms p99 63.05ms (n=37299) | handoffs 106 (p50 9.54ms p99 178.52ms), rejected 0 aborted 0 retransmits 4 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 902129 delta 237024 gaps 0; coalesced 3511 control exhausted 0 max queue age 185.92ms pending 591; owner errors 0 full 0
+cell (0,1) probes: callback[p50 0.005 p99 0.232 max 68.468 n 57511 sum/s 66.413]
+cell (0,1): idle NPCs 0 of 2521 reals, actor beats 47582/s, tier changes idle 0 fast 0
+cell (0,1): reals 2521 ghosts 605 | CPU 81.9% of one core | region beat p50 8.51ms p99 80.34ms max 118.28ms | out 1596 msg/s 5885 KB/s, in 1894 msg/s 759 KB/s | ghost latency p50 0.92ms p99 61.18ms (n=36068) | handoffs 101 (p50 12.66ms p99 157.45ms), rejected 0 aborted 0 retransmits 1 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 841954 delta 238140 gaps 0; coalesced 2772 control exhausted 0 max queue age 179.28ms pending 522; owner errors 0 full 0
+cell (1,1) probes: callback[p50 0.005 p99 0.217 max 65.750 n 53645 sum/s 56.621]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 46992/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 654 | CPU 80.6% of one core | region beat p50 8.24ms p99 71.21ms max 155.04ms | out 1524 msg/s 5654 KB/s, in 1764 msg/s 787 KB/s | ghost latency p50 0.73ms p99 62.82ms (n=34834) | handoffs 113 (p50 8.68ms p99 155.49ms), rejected 0 aborted 0 retransmits 4 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 819137 delta 223772 gaps 0; coalesced 1935 control exhausted 0 max queue age 164.92ms pending 137; owner errors 0 full 0

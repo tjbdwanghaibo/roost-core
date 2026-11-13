@@ -679,18 +679,19 @@ func (n *Node) receive(data []byte) {
 		return
 	}
 	if m.Kind == kindReplicaReset {
-		n.sentReplica.clearPeer(m.From)
+		n.sentReplica.forget(m.From, m.ReplicaReset)
 		return
 	}
 	messages, err := n.decodeReplica(m)
 	if err != nil {
-		if errors.Is(err, errReplicaGap) {
-			n.stats.replicaGaps.Add(1)
-			n.requestReplicaReset(m.From, time.Now())
-		} else {
+		var gap *replicaGap
+		if !errors.As(err, &gap) {
 			n.stats.decodeErrors.Add(1)
+			return
 		}
-		return
+		// 解得出的部分照常交付；只为解不出的对象与观察者请求重置。
+		n.stats.replicaGaps.Add(1)
+		n.requestReplicaRepair(m.From, gap, time.Now())
 	}
 	for _, decoded := range messages {
 		n.receiveMessage(decoded)

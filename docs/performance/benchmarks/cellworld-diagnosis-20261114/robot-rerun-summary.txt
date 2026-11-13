@@ -1,0 +1,22 @@
+# game sid 1000 (Base + Gate) WARN/ERROR 归类（Robot 复跑，1000 人，2 Cell，9000 NPC）
+ 462 {"level":"WARN","msg":"enter_game: login not announced on the world channel","player_id":N,"err":"nats: request timeout: context deadline exceeded"}
+ 462 {"level":"ERROR","msg":"chat: system announcement failed","request_key":"enter:N:H:2","err":"nats: request timeout: context deadline exceeded"}
+ 456 {"level":"WARN","msg":"enter: hook failed; it runs again on the next enter","hook":"servertime","player_id":N,"err":"tcpSession H: context deadline exceeded"}
+ 456 {"level":"WARN","msg":"enter: hook failed; it runs again on the next enter","hook":"rehome","player_id":N,"err":"rehome: arrive: nest: sync canceled\ncontext deadline exceeded"}
+ 454 {"level":"WARN","msg":"enter: hook failed; it runs again on the next enter","hook":"purchase","player_id":N,"err":"context deadline exceeded"}
+ 454 {"level":"WARN","msg":"enter: hook failed; it runs again on the next enter","hook":"mailbox","player_id":N,"err":"nats: request timeout: context deadline exceeded"}
+ 449 {"level":"WARN","msg":"enter: hook failed; it runs again on the next enter","hook":"alliance","player_id":N,"err":"nest: sync canceled\ncontext deadline exceeded"}
+ 444 {"level":"WARN","msg":"enter_game: player did not join the replicated scene","player_id":N,"err":"scene: enter the partitioned scene N: nest: sync canceled\ncontext deadline exceeded"}
+ 409 {"level":"WARN","msg":"enter_game: world did not record the login","player_id":N,"err":"nest: sync canceled\ncontext deadline exceeded"}
+ 330 {"level":"ERROR","msg":"nats: async error","subject":"roost.cellworld.cwdemo-N.N","err":"nats: slow consumer, messages dropped"}
+ 172 {"level":"WARN","msg":"scene: subscribe","observer":N,"subject":H,"err":"entitysync: session is not open"}
+  21 {"level":"WARN","msg":"entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain","observer":N,"subject":H,"session":N,"attempts":10,"err":"entitysync: session is not open"}
+
+# redis --latency-history（ms: min max avg samples-window）尾部
+0.066 0.158 0.096 16
+0.066 0.158 0.095 17
+0.066 0.158 0.097 18
+0.062 0.158 0.095 19
+0.062 0.1
+# robot failure categories
+ 787 robot action cellworld_walk: cellworld: player N did not reach spread target (N,N)

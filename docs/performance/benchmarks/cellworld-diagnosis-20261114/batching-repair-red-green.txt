@@ -1,0 +1,20 @@
+# 修前（e056d3c0）
+    replication_test.go:367: full objects in the 10 ticks after one lost batch: 256 (last tick 0)
+    replication_test.go:369: one lost batch caused 256 full objects afterwards (last tick 0); its views hold 64
+--- FAIL: TestReplicaLossResetsOnlyWhatItCovers (0.03s)
+    replication_test.go:418: full objects in 4 refresh periods: 1280
+    replication_test.go:420: staggered observers resent 1280 full objects in 4 refresh periods
+--- FAIL: TestNearbyObserversRefreshTogether (0.02s)
+    replication_test.go:444: witness 1 (observer at 6002) breaks the grouping
+--- FAIL: TestWitnessesGroupObserversByArea (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	0.683s
+FAIL
+
+# 修后（62f88d7a）
+    replication_test.go:430: full objects in the 10 ticks after one lost batch: 64 (last tick 0)
+--- PASS: TestReplicaLossResetsOnlyWhatItCovers (0.02s)
+    replication_test.go:481: full objects in 4 refresh periods: 256
+--- PASS: TestNearbyObserversRefreshTogether (0.01s)
+--- PASS: TestWitnessesGroupObserversByArea (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	0.655s

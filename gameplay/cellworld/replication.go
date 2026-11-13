@@ -2,14 +2,19 @@ package cellworld
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // 内部复制与客户端 EntitySync 分离。队列只合并完整状态；发送时比较上次发出的
-// 基线，接收方必须精确匹配 base version。缺口丢弃整批并请求全量，绝不猜差值。
-// 缓存可丢弃、总量有界，不是业务权威。周期全量兜住恢复请求也丢失的情况。
+// 基线，接收方必须精确匹配 base version，绝不猜差值。缺口只拒绝解不出的部分：增量对不上的对象从接收缓存删掉，
+// 引用它的视野这一拍不交付；成员表对不上的观察者不交付、不推进。接收方只请求发送方忘掉这些对象与观察者的基线
+// （replicaReset），不让一次丢包把整个 peer 退回全量。缓存可丢弃、总量有界，不是业务权威。周期全量兜住恢复请求
+// 也丢失的情况。
 type stateDelta struct {
 	ID    int64        `msgpack:"i"`
 	Ver   Version      `msgpack:"v"`
@@ -120,13 +125,37 @@ type replicaCache struct {
 	mu         sync.Mutex
 	states     map[replicaKey]stateBaseline
 	views      map[replicaKey]viewBaseline
-	resetAfter map[int32]time.Time
+	resetAfter map[resetKey]time.Time // 接收方：每个对象 / 观察者上一次请求重置后的静默期
+}
+
+// resetKey 标识接收方请求过重置的一个对象（view=false，kind 是消息种类）或一个观察者的成员表（view=true）。
+type resetKey struct {
+	peer int32
+	view bool
+	kind msgKind
+	id   int64
 }
 
 func (c *replicaCache) init() {
 	c.states = make(map[replicaKey]stateBaseline)
 	c.views = make(map[replicaKey]viewBaseline)
-	c.resetAfter = make(map[int32]time.Time)
+	c.resetAfter = make(map[resetKey]time.Time)
+}
+
+// forget 是发送方收到 replicaReset：只删列出的对象与观察者的基线；nil 时删这个 peer 的全部。
+func (c *replicaCache) forget(peer int32, r *replicaReset) {
+	if r == nil {
+		c.clearPeer(peer)
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, id := range r.States {
+		delete(c.states, replicaKey{peer, r.Kind, id})
+	}
+	for _, observer := range r.Views {
+		delete(c.views, replicaKey{peer, kindWitness, observer})
+	}
 }
 func (c *replicaCache) clearPeer(peer int32) {
 	c.mu.Lock()
@@ -150,6 +179,56 @@ func (c *replicaCache) bound(limit int) {
 }
 
 var errReplicaGap = errors.New("cellworld: internal replica baseline gap")
+
+// replicaGap 是一条消息里解不出来的部分（errors.Is(err, errReplicaGap)）；decodeReplica 同时返回解得出的部分。
+type replicaGap struct {
+	kind   msgKind
+	states []int64 // 增量对不上、或视野引用了却没有基线的对象
+	views  []int64 // 成员表基线对不上的观察者
+}
+
+func (g *replicaGap) Error() string {
+	return fmt.Sprintf("%v: %d objects, %d views", errReplicaGap, len(g.states), len(g.views))
+}
+func (g *replicaGap) Is(target error) bool { return target == errReplicaGap }
+
+// refreshDue 判断一个观察者的成员表是否该发全量：距上次全量满一个 ReplicaRefresh，或越过了它所在区块的刷新相位边界。
+// 相位按观察者位置所在的区块（边长 2R）取：同一块的观察者在 witnesses 里排在一起、合进同一批消息，到点一起发全量，
+// 被强制全量的成员状态在一条消息里只编一次；不同块的相位散开，不挤在同一拍。越过边界的那次可能早于满一个周期，
+// 全量间隔仍不超过 ReplicaRefresh。
+func (n *Node) refreshDue(fullAt, now time.Time, at spatial.Point) bool {
+	refresh := int64(n.cfg.ReplicaRefresh)
+	if !now.Before(fullAt.Add(n.cfg.ReplicaRefresh)) || refresh <= 0 {
+		return true
+	}
+	phase := int64(0)
+	if bx, by, ok := n.refreshBlock(at); ok {
+		h := uint64(bx)*0x9E3779B97F4A7C15 ^ uint64(by)*0xC2B2AE3D27D4EB4F
+		h ^= h >> 29
+		h *= 0xBF58476D1CE4E5B9
+		h ^= h >> 32
+		phase = int64(h % uint64(refresh))
+	}
+	slot := func(t time.Time) int64 { return floorDiv(t.UnixNano()+phase, refresh) }
+	return slot(now) != slot(fullAt)
+}
+
+// refreshBlock 返回位置所在的刷新区块（边长 2 × ViewRadius）；ViewRadius 未设时没有区块。
+func (n *Node) refreshBlock(at spatial.Point) (bx, by int64, ok bool) {
+	size := 2 * n.cfg.ViewRadius
+	if size <= 0 {
+		return 0, 0, false
+	}
+	return floorDiv(at.X, size), floorDiv(at.Y, size), true
+}
+
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
+}
 
 // encodeReplica 只由状态发送线程调用；传输返回错误后清除该 peer 的发送基线。
 func (n *Node) encodeReplica(sid int32, input *wireMsg, now time.Time) *wireMsg {
@@ -198,7 +277,7 @@ func (n *Node) encodeReplica(sid int32, input *wireMsg, now time.Time) *wireMsg 
 			w.Entities = nil
 			w.Added = nil
 			w.Removed = nil
-			full := !ok || old.epoch != w.Epoch || !now.Before(old.fullAt.Add(n.cfg.ReplicaRefresh))
+			full := !ok || old.epoch != w.Epoch || n.refreshDue(old.fullAt, now, w.Self.Pos())
 			w.FullMembership = full
 			if full {
 				for _, id := range ids {
@@ -268,8 +347,10 @@ func diffMembership(old, next []int64) (add, remove []int64) {
 	return
 }
 
-// decodeReplica 在网络回调里只重建值副本；整个批次验证后才推进缓存。
-// 真正业务状态仍由各自 Nest handler 校验版本并提交。
+// decodeReplica 在网络回调里只重建值副本，整条消息验证后才推进缓存；真正业务状态仍由各自 Nest handler 校验版本并提交。
+// 有缺口时返回解得出的部分与 *replicaGap：增量对不上的对象不进缓存（已有的旧基线也删掉，不能被当成当前内容）；
+// 引用了缺失对象的视野不交付，但成员表照常推进（成员表本身解得出，下一份增量成员表仍能接上）；成员表对不上的
+// 观察者不交付、不推进。坏消息（格式或数量越界）整条拒绝，不推进任何缓存。
 func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 	if !input.Replica {
 		return []*wireMsg{input}, nil
@@ -284,8 +365,20 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 	if len(input.Deltas) > n.cfg.ReplicaCacheSize || len(input.Witnesses) > n.cfg.WitnessBatch {
 		return nil, errBadMessage
 	}
+	gap := &replicaGap{kind: input.Kind}
+	reported := map[int64]bool{}
+	missing := func(id int64) {
+		if !reported[id] {
+			reported[id] = true
+			gap.states = append(gap.states, id)
+		}
+	}
 	updates := make(map[replicaKey]stateBaseline, len(input.Deltas))
+	broken := map[int64]bool{}
 	get := func(id int64) (EntityState, bool) {
+		if broken[id] {
+			return EntityState{}, false
+		}
 		key := replicaKey{input.From, input.Kind, id}
 		if v, ok := updates[key]; ok {
 			return v.state, true
@@ -301,8 +394,11 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 		if old.ID == 0 || d.Ver.Newer(old.Ver) {
 			state, ok = d.apply(old)
 		}
-		if !ok {
-			return nil, errReplicaGap
+		if !ok || broken[d.ID] {
+			broken[d.ID] = true
+			delete(updates, key)
+			missing(d.ID)
+			continue
 		}
 		updates[key] = stateBaseline{state: state}
 	}
@@ -314,10 +410,13 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 		m.Ghost = &b
 		b.Updates = nil
 		for _, d := range input.Deltas {
-			state, _ := get(d.ID)
-			b.Updates = append(b.Updates, state)
+			if state, ok := get(d.ID); ok {
+				b.Updates = append(b.Updates, state)
+			}
 		}
-		messages = append(messages, &m)
+		if len(broken) == 0 || len(b.Updates)+len(b.Removes) > 0 {
+			messages = append(messages, &m)
+		}
 	} else {
 		for _, v := range append([]*witnessMsg{input.Witness}, input.Witnesses...) {
 			if v == nil {
@@ -335,21 +434,29 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 				ids = slices.Compact(ids)
 			} else {
 				if !ok || old.epoch != v.Epoch || old.tick != v.BaseTick {
-					return nil, errReplicaGap
+					gap.views = append(gap.views, v.Observer)
+					continue
 				}
 				ids = applyMembership(old.ids, v.Added, v.Removed)
 			}
 			if len(ids) > n.cfg.MaxViewEntities {
 				return nil, errBadMessage
 			}
+			views[key] = viewBaseline{epoch: v.Epoch, tick: v.Tick, ids: ids}
 			w := *v
 			w.Entities = make([]EntityState, 0, len(ids))
+			complete := true
 			for _, id := range ids {
 				s, ok := get(id)
 				if !ok {
-					return nil, errReplicaGap
+					complete = false
+					missing(id)
+					continue
 				}
 				w.Entities = append(w.Entities, s)
+			}
+			if !complete {
+				continue // 不交付缺成员的视野：下一份带上全量的那个对象后再交付
 			}
 			m := *input
 			m.Witness = &w
@@ -357,11 +464,13 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 			m.Replica = false
 			m.Deltas = nil
 			messages = append(messages, &m)
-			views[key] = viewBaseline{epoch: v.Epoch, tick: v.Tick, ids: ids}
 		}
 	}
 	for k, v := range updates {
 		c.states[k] = v
+	}
+	for id := range broken {
+		delete(c.states, replicaKey{input.From, input.Kind, id})
 	}
 	for k, v := range views {
 		c.views[k] = v
@@ -375,6 +484,9 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 		}
 	}
 	c.bound(n.cfg.ReplicaCacheSize)
+	if len(gap.states)+len(gap.views) > 0 {
+		return messages, gap
+	}
 	return messages, nil
 }
 
@@ -401,18 +513,37 @@ func applyMembership(old, added, removed []int64) []int64 {
 	return ids
 }
 
-// 同一丢包缺口可能影响几百份视野；只请求一次修复，避免每份失败包都清掉发送基线形成全量风暴。
-func (n *Node) requestReplicaReset(peer int32, now time.Time) bool {
+// requestReplicaRepair 请求发送方忘掉缺口涉及的对象与观察者的基线。同一个对象 / 观察者每个刷新窗口最多请求一次：
+// 修复到达之前它所在的后续消息还会报同样的缺口，不能每份都发请求；请求本身丢了，窗口过后再报时重发，周期全量兜底。
+// 返回是否发出了请求。
+func (n *Node) requestReplicaRepair(peer int32, gap *replicaGap, now time.Time) bool {
 	c := &n.receivedReplica
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if now.Before(c.resetAfter[peer]) {
-		return false
-	}
 	if len(c.resetAfter) >= n.cfg.ReplicaCacheSize {
 		clear(c.resetAfter)
 	}
-	c.resetAfter[peer] = now.Add(n.cfg.ReplicaRefresh)
-	n.enqueue(job{kind: jobSend, send: outgoing{sid: peer, msg: &wireMsg{Kind: kindReplicaReset}}})
+	due := func(key resetKey) bool {
+		if now.Before(c.resetAfter[key]) {
+			return false
+		}
+		c.resetAfter[key] = now.Add(n.cfg.ReplicaRefresh)
+		return true
+	}
+	req := &replicaReset{Kind: gap.kind}
+	for _, id := range gap.states {
+		if due(resetKey{peer: peer, kind: gap.kind, id: id}) {
+			req.States = append(req.States, id)
+		}
+	}
+	for _, observer := range gap.views {
+		if due(resetKey{peer: peer, view: true, id: observer}) {
+			req.Views = append(req.Views, observer)
+		}
+	}
+	if len(req.States)+len(req.Views) == 0 {
+		return false
+	}
+	n.enqueue(job{kind: jobSend, send: outgoing{sid: peer, msg: &wireMsg{Kind: kindReplicaReset, ReplicaReset: req}}})
 	return true
 }

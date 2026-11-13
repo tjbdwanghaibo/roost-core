@@ -1,6 +1,7 @@
 package cellworld
 
 import (
+	"cmp"
 	"slices"
 	"sort"
 	"time"
@@ -411,7 +412,9 @@ func (v *beatView) get(n *Node, r *Region) (*spatial.BlockIndex, map[int64]Entit
 	return index, states
 }
 
-// witnesses 给本格每个玩家 Real 推一份 witness：半径 R 内的本格记录与 Ghost（含自己），超出上限按距离取最近的。
+// witnesses 给本格每个玩家 Real 推一份 witness：半径 R 内的本格记录与 Ghost（含自己），超出上限按距离取最近的（距离相同
+// 按 ID）。每拍对几百个观察者各查一次，候选与距离用复用的缓冲，每份视野只分配一次结果切片。输出按观察者所在的刷新
+// 区块排序（见下）。
 func (n *Node) witnesses(r *Region, view *beatView, out *[]outgoing) {
 	var observers []localRec
 	for _, l := range r.locals.m {
@@ -426,22 +429,40 @@ func (n *Node) witnesses(r *Region, view *beatView, out *[]outgoing) {
 	if index == nil {
 		return
 	}
-	sort.Slice(observers, func(i, j int) bool { return observers[i].St.ID < observers[j].St.ID })
+	// 按刷新区块排（行优先、蛇形，块内按 ID）：出站按 Base 每 WitnessBatch 份合一条消息，相邻的观察者进同一批，
+	// 视野重叠的对象在一条消息里只编一次，同一块的成员表全量刷新也同相位（refreshDue）。
+	type order struct{ row, col, id int64 }
+	key := func(l localRec) order {
+		bx, by, _ := n.refreshBlock(l.St.Pos())
+		if by%2 != 0 {
+			bx = -bx
+		}
+		return order{row: by, col: bx, id: l.St.ID}
+	}
+	slices.SortFunc(observers, func(a, b localRec) int {
+		ka, kb := key(a), key(b)
+		return cmp.Or(cmp.Compare(ka.row, kb.row), cmp.Compare(ka.col, kb.col), cmp.Compare(ka.id, kb.id))
+	})
+	type near struct{ d2, id int64 }
+	var candidates []int64
+	var inRange []near
 	for _, o := range observers {
 		center := o.St.Pos()
-		var seen []EntityState
-		for _, id := range index.QueryRadius(center, n.cfg.ViewRadius) {
-			s := states[id]
-			if spatial.WithinDistance(center, s.Pos(), n.cfg.ViewRadius) {
-				seen = append(seen, s)
+		candidates = index.AppendRadius(candidates[:0], center, n.cfg.ViewRadius)
+		inRange = inRange[:0]
+		for _, id := range candidates {
+			if p := states[id].Pos(); spatial.WithinDistance(center, p, n.cfg.ViewRadius) {
+				inRange = append(inRange, near{d2: spatial.DistanceSquared(center, p), id: id})
 			}
 		}
 		truncated := false
-		if len(seen) > n.cfg.MaxViewEntities {
-			sort.Slice(seen, func(i, j int) bool {
-				return spatial.DistanceSquared(center, seen[i].Pos()) < spatial.DistanceSquared(center, seen[j].Pos())
-			})
-			seen, truncated = seen[:n.cfg.MaxViewEntities], true
+		if len(inRange) > n.cfg.MaxViewEntities {
+			slices.SortFunc(inRange, func(a, b near) int { return cmp.Or(cmp.Compare(a.d2, b.d2), cmp.Compare(a.id, b.id)) })
+			inRange, truncated = inRange[:n.cfg.MaxViewEntities], true
+		}
+		seen := make([]EntityState, len(inRange))
+		for i, e := range inRange {
+			seen[i] = states[e.id]
 		}
 		*out = append(*out, outgoing{sid: o.St.Base, msg: &wireMsg{Kind: kindWitness, Witness: &witnessMsg{
 			Observer: o.St.ID, Epoch: o.St.Ver.Epoch, Tick: r.tick, Self: o.St, Entities: seen, Truncated: truncated,

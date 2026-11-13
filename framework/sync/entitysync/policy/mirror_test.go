@@ -320,6 +320,33 @@ func TestMirrorTouchOnlyKeepsCurrentLiveVersion(t *testing.T) {
 	}
 }
 
+// 批量续活与逐个 Touch 同语义：只续活当前版本，旧版本、未知、已删除对象报未命中，未命中下标按输入顺序返回。
+func TestMirrorTouchManyMatchesTouch(t *testing.T) {
+	h := newMirrorHarness(t, false)
+	start := time.Unix(1000, 0)
+	ver := MirrorVersion{Epoch: 2, Seq: 3}
+	h.apply(500, ver, mirrorNear, "a", 0, start)
+	h.apply(501, ver, mirrorNear, "b", 0, start)
+	h.apply(502, ver, mirrorNear, "gone", 0, start)
+	h.mirrors.Remove(502, ver, start)
+	h.expectOps("create:500:full:a", "create:501:full:b") // 502 在同一帧里建了又删，客户端看不到
+	items := []MirrorTouch{{ID: 500, Version: ver}, {ID: 501, Version: MirrorVersion{Epoch: 2, Seq: 2}}, {ID: 502, Version: ver}, {ID: 503, Version: ver}}
+	missed := h.mirrors.TouchMany(items, start.Add(900*time.Millisecond), nil)
+	if !slices.Equal(missed, []int{1, 2, 3}) {
+		t.Fatalf("missed %v, want [1 2 3]", missed)
+	}
+	if n := h.mirrors.Expire(start.Add(1500 * time.Millisecond)); n != 1 {
+		t.Fatalf("expired %d, want only the mirror whose stale version did not renew it", n)
+	}
+	if _, _, ok := h.mirrors.Get(500); !ok {
+		t.Fatal("renewed mirror expired")
+	}
+	h.mirrors.Close()
+	if missed := h.mirrors.TouchMany(items[:1], start.Add(time.Second), nil); !slices.Equal(missed, []int{0}) {
+		t.Fatalf("closed mirrors renewed: missed %v", missed)
+	}
+}
+
 // 位置：mirror 走出观察者的视野半径时客户端收到 remove，走回来时重新 create（AOI 按 mirror 的位置判定）。
 func TestMirrorPositionDrivesVisibility(t *testing.T) {
 	h := newMirrorHarness(t, false)

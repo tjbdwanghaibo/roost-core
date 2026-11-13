@@ -483,23 +483,29 @@ func (n *Node) feedMirrors(st *BaseState, w *witnessMsg, now time.Time) {
 	if n.cfg.Mirrors == nil {
 		return
 	}
-	apply := func(s EntityState) {
-		version := policy.MirrorVersion{Epoch: s.Ver.Epoch, Seq: s.Ver.Seq}
-		// 视野 Tick 已在接收侧去重；同一内容的当前可见事实只续活，不标脏。
-		if n.cfg.Mirrors.Touch(s.ID, version, now) {
-			return
+	// 视野 Tick 已在接收侧去重；同一内容的当前可见事实只续活，不标脏。整份视野一次续活（一次加锁），只有未命中的
+	// （新对象、版本变了、已过期）才逐个 Apply。
+	version := func(s EntityState) policy.MirrorVersion {
+		return policy.MirrorVersion{Epoch: s.Ver.Epoch, Seq: s.Ver.Seq}
+	}
+	touches := make([]policy.MirrorTouch, 0, 1+len(w.Entities))
+	from := make([]int, 0, 1+len(w.Entities)) // touches[i] 对应 w.Entities[from[i]]；-1 是 w.Self
+	touches, from = append(touches, policy.MirrorTouch{ID: w.Self.ID, Version: version(w.Self)}), append(from, -1)
+	for i, s := range w.Entities {
+		if s.ID != w.Self.ID {
+			touches, from = append(touches, policy.MirrorTouch{ID: s.ID, Version: version(s)}), append(from, i)
+		}
+	}
+	for _, i := range n.cfg.Mirrors.TouchMany(touches, now, nil) {
+		s := w.Self
+		if from[i] >= 0 {
+			s = w.Entities[from[i]]
 		}
 		namespace, kind := n.cfg.MirrorKind(s)
 		if _, err := n.cfg.Mirrors.Apply(policy.MirrorItem[EntityState]{
-			ID: s.ID, Namespace: namespace, Kind: kind, Version: version, Content: s,
+			ID: s.ID, Namespace: namespace, Kind: kind, Version: touches[i].Version, Content: s,
 		}, now); err != nil {
 			n.stats.mirrorErrors.Add(1)
-		}
-	}
-	apply(w.Self)
-	for _, s := range w.Entities {
-		if s.ID != w.Self.ID {
-			apply(s)
 		}
 	}
 	if _, exists := n.cfg.Interest.ObserverView(n.cfg.Session(st.Actor)); !exists {

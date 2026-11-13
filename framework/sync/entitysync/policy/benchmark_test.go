@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"runtime"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -459,4 +462,69 @@ func BenchmarkAOIWorldSize(b *testing.B) {
 			})
 		}
 	}
+}
+
+// 续活一份 64 个对象的视野（CellWorld Base 每收一份 witness 做一次），9000 个 mirror，GOMAXPROCS 个 goroutine 并行
+// （Nest 快池多个 worker 同时在跑）：逐个 Touch 与整份 TouchMany 对照。
+func BenchmarkMirrorRenewView(b *testing.B) {
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: &streamClient{}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = manager.Close(context.Background()) }()
+	interest, err := NewInterest(InterestConfig{Manager: manager, AOI: AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+	}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer interest.Close()
+	mirrors, err := NewMirrors(MirrorConfig[mirrorContent]{
+		Manager: manager, Interest: interest, TTL: time.Minute,
+		Position: func(c mirrorContent) spatial.Point { return c.At },
+		Snapshot: func(c mirrorContent, _ entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+			return entity.CopyFrozenSyncPayload(7, []byte(c.Label)), nil
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer mirrors.Close()
+	ver, now := MirrorVersion{Epoch: 1, Seq: 1}, time.Now()
+	r := rand.New(rand.NewPCG(1, 2))
+	for id := int64(1); id <= 9000; id++ {
+		at := spatial.Point{X: r.Int64N(1000), Y: r.Int64N(1000)}
+		if _, err := mirrors.Apply(MirrorItem[mirrorContent]{ID: id, Namespace: "n", Kind: 1, Version: ver, Content: mirrorContent{At: at}}, now); err != nil {
+			b.Fatal(err)
+		}
+	}
+	views := make([][]MirrorTouch, 1000)
+	for i := range views {
+		for range 64 {
+			views[i] = append(views[i], MirrorTouch{ID: 1 + r.Int64N(9000), Version: ver})
+		}
+	}
+	b.Run("touch_each", func(b *testing.B) {
+		var next atomic.Int64
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				for _, item := range views[next.Add(1)%int64(len(views))] {
+					if !mirrors.Touch(item.ID, item.Version, now) {
+						b.Error("miss")
+					}
+				}
+			}
+		})
+	})
+	b.Run("touch_many", func(b *testing.B) {
+		var next atomic.Int64
+		b.RunParallel(func(pb *testing.PB) {
+			var missed []int
+			for pb.Next() {
+				if missed = mirrors.TouchMany(views[next.Add(1)%int64(len(views))], now, missed[:0]); len(missed) != 0 {
+					b.Error("miss")
+				}
+			}
+		})
+	})
 }

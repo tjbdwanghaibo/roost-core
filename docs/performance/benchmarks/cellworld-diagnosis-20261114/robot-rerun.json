@@ -1,0 +1,322 @@
+{
+  "requests": {
+    "messages": [
+      {
+        "message_id": 10006,
+        "started": 1000,
+        "sent": 1000,
+        "completed": 1000,
+        "ok": 1000,
+        "rejected": 0,
+        "timeout": 0,
+        "canceled": 0,
+        "errors": 0,
+        "inflight": 0,
+        "p50_ms": 3252.4500958908193,
+        "p95_ms": 3331.275791,
+        "p99_ms": 3331.275791,
+        "max_ms": 3331.275791
+      },
+      {
+        "message_id": 10024,
+        "started": 1000,
+        "sent": 1000,
+        "completed": 1000,
+        "ok": 1000,
+        "rejected": 0,
+        "timeout": 0,
+        "canceled": 0,
+        "errors": 0,
+        "inflight": 0,
+        "p50_ms": 0.22796562799598988,
+        "p95_ms": 3.024574654264383,
+        "p99_ms": 7.160268167597516,
+        "max_ms": 9.908833
+      },
+      {
+        "message_id": 10025,
+        "started": 213,
+        "sent": 213,
+        "completed": 213,
+        "ok": 213,
+        "rejected": 0,
+        "timeout": 0,
+        "canceled": 0,
+        "errors": 0,
+        "inflight": 0,
+        "p50_ms": 0.13592845562551062,
+        "p95_ms": 6.0266544630902406,
+        "p99_ms": 13.089250325906699,
+        "max_ms": 17.273542
+      },
+      {
+        "message_id": 10031,
+        "started": 215071,
+        "sent": 215071,
+        "completed": 215071,
+        "ok": 215071,
+        "rejected": 0,
+        "timeout": 0,
+        "canceled": 0,
+        "errors": 0,
+        "inflight": 0,
+        "p50_ms": 0.24848253451562896,
+        "p95_ms": 56.64547702689058,
+        "p99_ms": 123.02793086550746,
+        "max_ms": 261.017166
+      }
+    ],
+    "slowest": [
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.275791
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.191166
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.181583
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.169542
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.163834
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.156292
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.152917
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3331.0255
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3330.4905
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3330.017833
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3325.019167
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3321.319666
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3314.580541
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3311.191958
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3310.406333
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3304.650083
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3303.804834
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3303.371292
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3303.332583
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3303.193209
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3302.873208
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3302.573583
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3302.531
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3301.744791
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3293.36975
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3292.924292
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3292.694166
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3292.048458
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3290.897667
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3286.535417
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3281.977542
+      },
+      {
+        "message_id": 10006,
+        "outcome": "ok",
+        "duration_ms": 3280.454167
+      }
+    ]
+  },
+  "traffic": {
+    "measured_connections": 1000,
+    "socket_read_bytes": 108067574,
+    "socket_written_bytes": 5059246
+  },
+  "request_ok_per_second": 3883.6082861177147,
+  "config": {
+    "executor": "pool",
+    "rate": 10,
+    "max_concurrent": 1024,
+    "seed": 1,
+    "duration_seconds": 0,
+    "ramp": {
+      "Step": 20,
+      "Interval": 100000000
+    },
+    "transport": "player-tcp"
+  },
+  "environment": {
+    "go_version": "go1.27.3",
+    "os": "darwin",
+    "arch": "arm64",
+    "cpus": 10,
+    "gomaxprocs": 10,
+    "main_module": "example.com/cwdemo",
+    "main_version": "(devel)",
+    "core_version": "v1.46.0",
+    "core_replacement": "/Users/whb/roost/worktrees/cellworld-perf@(devel)"
+  },
+  "robot_resources": {
+    "elapsed_seconds": 55.949548416,
+    "cpu_available": true,
+    "cpu_seconds": 24.27606,
+    "cpu_percent": 43.389197388155736,
+    "process_peak_rss_bytes": 163332096,
+    "sampled_peak_heap_bytes": 75571928,
+    "sampled_peak_goroutines": 3030,
+    "samples": 57
+  },
+  "run_id": "robot-demo-20261113-235308-001",
+  "profile": "demo",
+  "state": "failed",
+  "stop_reason": "threshold",
+  "started_at_ms": 1794585188787,
+  "ended_at_ms": 1794585244736,
+  "count": 1000,
+  "scenario": "cellworld",
+  "stats": {
+    "scheduled": 1000,
+    "dropped_capacity": 0,
+    "dropped_schedule": 0,
+    "launch_failed": 0,
+    "peak_online": 1000,
+    "started": 1000,
+    "online": 0,
+    "success": 213,
+    "failure": 787,
+    "canceled": 0,
+    "failure_rate": 0.787
+  },
+  "thresholds": [
+    {
+      "metric": "error_rate",
+      "max": 0,
+      "actual": 0.787,
+      "violated": true,
+      "samples": 1000
+    },
+    {
+      "metric": "drop_rate",
+      "max": 0,
+      "actual": 0,
+      "violated": false,
+      "samples": 1000
+    },
+    {
+      "metric": "p95",
+      "max": 140,
+      "actual": 52.895119138,
+      "violated": false,
+      "samples": 213
+    }
+  ],
+  "quantiles_ms": {
+    "p50": 51557.125571,
+    "p90": 52754.277709999995,
+    "p95": 52895.119138,
+    "p99": 53021.876423
+  },
+  "error": "threshold violated: error_rate = 0.787 \u003e max 0 (1000 samples)"
+}
