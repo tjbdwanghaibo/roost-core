@@ -57,6 +57,32 @@ CPU 以一个核心为 100%。两档均未达到 Witness P99 ≤ 50ms；丢弃�
 
 同机交替 10 轮 Witness 批次解码微基准（16 个观察者共享 64 个实体，成员集合未变）中，复用不可变成员列表后：87.21 → 46.95µs/op（−46.16%），192.7 → 138.7KiB/op（−28.04%），219 → 53 allocs/op（−75.80%）。这是内部解码优化，不是整个服务器 TPS 提升。
 
+## 千人排查（2026-11-14）
+
+基线 `067c14f7`，分支 `tmp/cellworld-perf`，证据见 [benchmarks/cellworld-diagnosis-20261114](benchmarks/cellworld-diagnosis-20261114/README.md)。核心测量 30s 窗口、5% 运动，带临时分段探针（未提交）。Witness 延迟的口径是 **Cell 发布（`publish` 里打 SentAt，编码之前）到 Base handler 开始**，不含 Cell 区域拍与出站排队。
+
+| 阶段（修复后，nice 0，GOMAXPROCS 缺省，一轮） | p50 / p99 |
+| --- | --- |
+| Cell 区域拍（不在 Witness 口径内） | 4.8～6.3 / 10.3～10.8ms |
+| Cell 出站排队 enqueue → take（不在口径内） | 1.9 / 16.3ms |
+| Cell 编码（encodeReplica + msgpack） / Publish | 0.17 / 2.4ms；≈0 |
+| Cell 发布 → Base 回调入口（含 NATS 与 Base 客户端待处理队列） | 1.2 / 27.0ms |
+| Base 回调内解码（decodeMsg + decodeReplica） | 0.13 / 2.6ms |
+| Base 回调入口 → handleBase 开始（Nest 排队） | 0.28 / 3.9ms |
+| Witness（合计） | 1.8 / 28.8ms |
+
+nats-server 自身 CPU 约 20～30%，服务端待发字节约 0；Cell 编码与 Publish 很小。**主导阶段是 Base 唯一的 NATS 订阅回调**（`Node.receive`，`node.go` 订阅处）：四个 Cell 的全部状态消息在一个 goroutine 里串行 msgpack 解码与重建（约 32～33MB/s、每拍成批到达），回调墙钟占用 46～67%（同一回调的 CPU 只占约 30%，其余是宿主机抢占）。占用超过约 65% 时排队不收敛：同一代码同一配置，Witness P99 有 29ms、47ms，也有 459ms、2037ms（P50 228ms 的那一轮重现了此前 5% 档 P50 450ms 的失败形态）。
+
+成本来源依次是：
+
+1. **周期全量帧**（`replication.go` `encodeReplica`：观察者成员全量刷新时 `forceFull` 把它的全部成员状态发全量）。状态条目里全量占 85%（每 Cell 30s 约 130～164 万全量对 18～26 万增量），1%、5% 两档出站字节几乎相同即由此而来。实验开关（成员全量刷新时不强制成员状态全量，状态仍各自 250ms 刷新全量；**违反现行“整份视野自包含”契约，`TestPeriodicFullWitnessIsSelfContained` 会红，未提交**）下：Cell 出站 8～10 → 3.5～3.9MB/s、全量条目 −74%、Base 回调占用 460 → 292 / 237ms/s，Witness P99 14.4 / 9.8ms（GOMAXPROCS 缺省 / 4）。
+2. **Base 每份视野重复展开**：`decodeReplica` 给每个观察者重建 64 个 `EntityState`，`feedMirrors` 再逐个续活；千人档每秒约 128 万次。续活的锁争用已修（见下）；重复展开本身仍在。
+3. **宿主机**：五个 Go 进程各 GOMAXPROCS=10 跑在 10 核（4P + 6E）上，测量期间 load average 12～19。测试负载约 5.5～6.5 核（4 Cell 共约 4.2 核、Base 1.1～1.7 核、nats-server 0.25 核），加上常驻约 1～1.5 核，已接近饱和；zsh 后台启动还会 nice 5。按 CPU 时间计：Cell 约 21µs / Actor / 拍（其中 Go 调度器空转约四分之一），Base 约 55～66µs / 份 Witness（约 1µs / 视野对象）。本机能复现失败形态，**不能给出千人 50ms 是否达标的结论**；同一代码在本机时过时不过。
+
+已修（行为不变）：Base `feedMirrors` 改用 `Mirrors.TouchMany`（feedMirrors CPU 10.08s → 1.35s / 30s，`BenchmarkMirrorRenewView` 6.65µs → 0.66µs）；Cell `witnesses` 改用 `BlockIndex.AppendRadius` 与复用缓冲（`BenchmarkRegionWitnesses` −49% 时间、−77% 字节、−80% 分配，区域拍 p50 10～13 → 5～6ms）。区域拍 P99 超过 50ms 的样本（此前 63～85ms）在修复后多为 10～40ms，偶发 60～140ms 与宿主机 load 同时出现。
+
+Robot 联合复跑（修复后代码，私有环境，1000 人，20s 测量）：账号 RPC 超时与入场断连**没有复现**，1000 人全部入场；787 人在 30s 分散预热里没走到目标。同时采样：nats-server 无服务端慢消费者、待发约 0、CPU 20～30%；Redis 平均 0.1ms；account CPU 11～16%。Base（game sid 1000，Gate 在同一进程）峰值收 45～60MB/s，客户端侧出现 330 次 `slow consumer, messages dropped`（CellWorld 订阅的待处理上限溢出），随后 1200 次复制缺口 → 基线重置 → 全量风暴（Cell 全量条目 95%）、447 次重入；Base 的 enter 钩子（聊天公告、邮箱 RPC、Nest 同步）约 450 次超过期限，`enter_game` P50 3.25s。此前那一轮 Gate 的 125 次 `account gave no verdict`（ValidateSession 超时）与本轮同类，都是 Base 进程过载；那一轮 Robot 侧 306 次 CreateRole 超时本轮未复现，账号服务、NATS、Redis 本轮实测正常，当时另有生成器测试同机运行，**原因尚未确认**。
+
 ## 复跑入口
 
 ```sh

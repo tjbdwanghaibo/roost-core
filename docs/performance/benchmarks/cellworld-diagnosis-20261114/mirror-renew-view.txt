@@ -1,0 +1,17 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkMirrorRenewView/touch_each-10         	  153874	      6595 ns/op
+BenchmarkMirrorRenewView/touch_each-10         	  182382	      6582 ns/op
+BenchmarkMirrorRenewView/touch_each-10         	  183549	      6964 ns/op
+BenchmarkMirrorRenewView/touch_each-10         	  174987	      7325 ns/op
+BenchmarkMirrorRenewView/touch_each-10         	  184066	      6694 ns/op
+BenchmarkMirrorRenewView/touch_each-10         	  183168	      6592 ns/op
+BenchmarkMirrorRenewView/touch_many-10         	 1879383	       658.9 ns/op
+BenchmarkMirrorRenewView/touch_many-10         	 1813764	       663.9 ns/op
+BenchmarkMirrorRenewView/touch_many-10         	 1813870	       664.6 ns/op
+BenchmarkMirrorRenewView/touch_many-10         	 1646726	       808.9 ns/op
+BenchmarkMirrorRenewView/touch_many-10         	 1854669	       654.6 ns/op
+BenchmarkMirrorRenewView/touch_many-10         	 1817137	       662.5 ns/op
+PASS

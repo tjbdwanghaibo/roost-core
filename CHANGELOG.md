@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- **CellWorld 千人档两处实现开销**（cellworld / sync policy / spatial，2026-11-14，千人容量排查）：行为不变，只减 CPU 与分配。
+  - **Base 续活锁争用**：`feedMirrors` 每份视野逐个 `Mirrors.Touch`（千人档约每秒百万次，Nest 快池多个 worker 抢同一把锁），改为新增的 `policy.Mirrors.TouchMany` 整份一次加锁、只对未命中的逐个 `Apply`。5% 档 Base profile 里 feedMirrors 由 10.08s 降到 1.35s（30s 窗口）；`BenchmarkMirrorRenewView`（9000 个 mirror、64 对象视野、并行）6.65µs → 0.66µs。
+  - **Cell 区域心跳算 witness**：`QueryRadius` 每个观察者建去重 map 再排序、`seen` 逐个追加扩容、截断时 `sort.Slice` 每次比较重算距离；改为新增的 `spatial.BlockIndex.AppendRadius`（复用缓冲，不建 map）、按 (距离, ID) 排序复用的候选、每份视野只分配一次结果。截断时距离相同按 ID 取（原来是不稳定排序的任意次序）。`BenchmarkRegionWitnesses`（250 观察者、3100 对象）8.44ms → 4.27ms（−49%），12.5MiB → 2.8MiB、8733 → 1704 次分配；4 Cell 测量里区域拍 p50 约 10～13ms → 5～6ms。
+  - **未解决**：Witness P99 ≤ 50ms 仍未稳定达标；主因是 Base 单个 NATS 订阅回调串行解码（全量刷新帧占状态条目八成以上）与本机超载，见 docs/performance/CELLWORLD.md。验证：spatial / sync policy / cellworld `-race` 整包，`infra/base`、`framework/sync`、`gameplay` 与根包测试。
+
 - **常驻实体 `lifetime=resident`**（entity / dataengine / codegen，2026-11-13，维护者要求“预加载的实体要能常驻内存”，用已有标记、不加新标记）：
   - **语义**：`//roost:entity ... lifetime=resident [preload_order=<N>]` 隐含 `preload=startup`（同写也可以），起服由本服预加载载入，之后框架不把它移出内存。只从内存卸载（`Destroy(..., deleteFromDB=false)`、`ManagerAccess.Unload`、业务的空闲卸载、不带 force 的运维 `entity.unload`）返回 `entity.ErrEntityResident`，实体不受影响，记 WARN 与 `entity.resident_unload_refused_total{kind}`。
   - **允许离开内存的三处**：换服交出 `HandOffEntity`（写权连同实体交给目标服，到那里载入后常驻；`Release` 时框架立刻载回本服）、删档（`deleteFromDB=true` 准入后的收尾）、运维强制刷新 `entity.unload force=true`（新 `Runtime.RefreshEntity`：卸载后立刻从库重新载入，回答 `reloaded`；常驻实体此刻不在内存时直接载回，用来恢复预加载或载回失败的那一个）。新指标 `dataengine.resident_reload_total{kind,reason,result}`。新增 `entity.WithResidentRelease`（只给这三处用）、`entity.IsEntityKindResident`、`entity.ErrResidentDaoScope`。

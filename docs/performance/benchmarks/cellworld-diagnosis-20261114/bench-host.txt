@@ -1,0 +1,2 @@
+23:49  up 41 days, 8 hrs, 5 users, load averages: 3.48 8.84 8.12
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)

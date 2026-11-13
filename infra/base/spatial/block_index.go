@@ -184,6 +184,43 @@ func (i *BlockIndex) QueryRadius(center Point, radius int64) []int64 {
 	})
 }
 
+// AppendRadius 把 QueryRadius 的候选集追加到 dst（新增部分升序、去重）后返回。不建去重 map、不分配块表，dst 可在
+// 查询之间复用：每拍对几百个观察者各查一次的调用方（CellWorld 区域心跳）用它，避免 QueryRadius 每次的 map 与排序开销。
+// 一致性与 QueryBlocks 相同（逐块读锁，不是快照）。
+func (i *BlockIndex) AppendRadius(dst []int64, center Point, radius int64) []int64 {
+	if i == nil || radius < 0 {
+		return dst
+	}
+	rect, ok := i.ClampRect(Rect{
+		Min: Point{X: SaturatingSub(center.X, radius), Y: SaturatingSub(center.Y, radius)},
+		Max: Point{X: SaturatingAdd(center.X, radius), Y: SaturatingAdd(center.Y, radius)},
+	})
+	if !ok {
+		return dst
+	}
+	start := len(dst)
+	startX := (rect.Min.X - i.bounds.Min.X) / i.blockSize
+	startY := (rect.Min.Y - i.bounds.Min.Y) / i.blockSize
+	endX := (rect.Max.X - 1 - i.bounds.Min.X) / i.blockSize
+	endY := (rect.Max.Y - 1 - i.bounds.Min.Y) / i.blockSize
+	for y := startY; y <= endY; y++ {
+		for x := startX; x <= endX; x++ {
+			block := i.blockAt(y*i.cols + x)
+			if block == nil {
+				continue
+			}
+			block.mu.RLock()
+			for id := range block.ids {
+				dst = append(dst, id)
+			}
+			block.mu.RUnlock()
+		}
+	}
+	// 同一对象可以登记在多个块里（Add 的约定），并集要去重。
+	slices.Sort(dst[start:])
+	return append(dst[:start], slices.Compact(dst[start:])...)
+}
+
 func (i *BlockIndex) QueryBlock(point Point) []int64 {
 	return i.QueryBlockIndex(i.BlockIndex(point))
 }

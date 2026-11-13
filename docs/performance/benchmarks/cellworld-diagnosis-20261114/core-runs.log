@@ -1,0 +1,338 @@
+### r1-a1
+23:30  up 41 days,  7:41, 5 users, load averages: 4.24 4.35 4.88
+vm.swapusage: total = 8192.00M  used = 6552.31M  free = 1639.69M  (encrypted)
+ %CPU COMM
+ 84.7 /usr/libexec/sysmond
+ 40.9 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 30.8 /Library/CorpLink/CorpLink System Extension.app/Contents/MacOS/CorpLinkExtension
+ 18.1 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper
+ 12.5 /Applications/Termius.app/Contents/Frameworks/Termius Helper (GPU).app/Contents/MacOS/Termius Helper (GPU)
+ 11.0 /Users/whb/Library/Application Support/Claude/claude-code/2.1.321/ddbdf2b334e1/claude.app/Contents/MacOS/claude
+ 10.8 /Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)
+moving entities=1%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 1.874 p99 93.980 max 169.200 n 38819 sum/s 9283.686] decode[p50 0.164 p99 2.940 max 105.356 n 38820 sum/s 518.756] dispatch[p50 0.013 p99 0.198 max 5.991 n 38823 sum/s 29.868] callback[p50 0.155 p99 2.877 max 105.850 n 44835 sum/s 549.961] nestWait[p50 0.564 p99 4.688 max 106.083 n 597507 sum/s 17689.061]
+base msgs in 1486/s 31675 KB/s, mirrors errors 0
+witness p99 96.02ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 138.1% of one core; views accepted 593602 stale 2 owner changes 12 re-enters 0; witness latency p50 2.76ms p99 96.02ms max 169.83ms (n=200000); mirrors 8820
+cell (0,0) probes: queue[p50 2.173 p99 21.110 max 63.521 n 140036 sum/s 16610.595] encode[p50 0.216 p99 2.769 max 45.689 n 9185 sum/s 143.399] publish[p50 0.001 p99 0.109 max 4.857 n 9186 sum/s 2.813] msgKB[p50 2.371 p99 138.588 max 145.901 n 9187 sum/s 7303.857] callback[p50 0.006 p99 0.130 max 13.487 n 74097 sum/s 30.593]
+cell (0,0): idle NPCs 0 of 2479 reals, actor beats 49267/s, tier changes idle 0 fast 0
+cell (0,0): reals 2479 ghosts 680 | CPU 118.2% of one core | region beat p50 10.11ms p99 29.10ms max 83.39ms | out 2634 msg/s 7977 KB/s, in 2435 msg/s 831 KB/s | ghost latency p50 0.26ms p99 19.42ms (n=60039) | handoffs 22 (p50 8.44ms p99 42.90ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1336199 delta 181178 gaps 0; coalesced 9 control exhausted 0 max queue age 63.52ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.875 p99 37.075 max 129.956 n 166366 sum/s 28167.333] encode[p50 0.229 p99 3.972 max 56.366 n 10911 sum/s 194.550] publish[p50 0.001 p99 0.153 max 1.984 n 10911 sum/s 3.886] msgKB[p50 2.348 p99 141.014 max 150.745 n 10911 sum/s 8789.761] callback[p50 0.005 p99 0.126 max 14.393 n 83897 sum/s 36.082]
+cell (1,0): idle NPCs 0 of 2533 reals, actor beats 50336/s, tier changes idle 0 fast 0
+cell (1,0): reals 2533 ghosts 619 | CPU 127.6% of one core | region beat p50 14.08ms p99 44.69ms max 73.43ms | out 2375 msg/s 9501 KB/s, in 2745 msg/s 789 KB/s | ghost latency p50 0.34ms p99 25.12ms (n=66974) | handoffs 17 (p50 12.93ms p99 55.52ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1616668 delta 198999 gaps 0; coalesced 2266 control exhausted 0 max queue age 129.96ms pending 0; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.763 p99 24.534 max 87.713 n 155989 sum/s 22914.488] encode[p50 0.254 p99 3.195 max 31.043 n 10026 sum/s 172.727] publish[p50 0.001 p99 0.140 max 14.008 n 10026 sum/s 3.748] msgKB[p50 2.434 p99 141.296 max 151.160 n 10026 sum/s 8237.006] callback[p50 0.005 p99 0.119 max 16.370 n 81946 sum/s 32.953]
+cell (0,1): idle NPCs 0 of 2511 reals, actor beats 49780/s, tier changes idle 0 fast 0
+cell (0,1): reals 2511 ghosts 609 | CPU 123.8% of one core | region beat p50 11.89ms p99 36.31ms max 104.20ms | out 2437 msg/s 8949 KB/s, in 2663 msg/s 773 KB/s | ghost latency p50 0.26ms p99 20.87ms (n=65185) | handoffs 20 (p50 4.35ms p99 37.39ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1530222 delta 197335 gaps 0; coalesced 181 control exhausted 0 max queue age 89.68ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 2.407 p99 22.653 max 88.735 n 145349 sum/s 18545.074] encode[p50 0.256 p99 2.833 max 21.412 n 9411 sum/s 152.996] publish[p50 0.001 p99 0.107 max 2.154 n 9411 sum/s 2.579] msgKB[p50 2.348 p99 143.403 max 149.438 n 9411 sum/s 7630.921] callback[p50 0.006 p99 0.132 max 11.469 n 76989 sum/s 31.281]
+cell (1,1): idle NPCs 0 of 2478 reals, actor beats 49417/s, tier changes idle 0 fast 0
+cell (1,1): reals 2478 ghosts 646 | CPU 117.9% of one core | region beat p50 11.34ms p99 31.86ms max 109.52ms | out 2406 msg/s 8301 KB/s, in 2492 msg/s 797 KB/s | ghost latency p50 0.41ms p99 21.55ms (n=63277) | handoffs 30 (p50 9.75ms p99 61.92ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1428966 delta 184554 gaps 0; coalesced 501 control exhausted 0 max queue age 89.66ms pending 0; owner errors 0 full 0
+### r2-a5
+23:33  up 41 days,  7:44, 5 users, load averages: 4.24 4.68 4.96
+vm.swapusage: total = 8192.00M  used = 6552.31M  free = 1639.69M  (encrypted)
+23:33  up 41 days,  7:44, 5 users, load averages: 9.29 5.90 5.39
+vm.swapusage: total = 8192.00M  used = 6552.31M  free = 1639.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 3.179 p99 64.821 max 87.303 n 39256 sum/s 10795.917] decode[p50 0.178 p99 4.588 max 31.064 n 39257 sum/s 573.273] dispatch[p50 0.013 p99 0.155 max 15.703 n 39258 sum/s 31.608] callback[p50 0.165 p99 4.430 max 31.108 n 45287 sum/s 606.451] nestWait[p50 0.787 p99 7.820 max 38.482 n 603550 sum/s 25663.617] gap[p50 0.001 p99 8.543 max 79.403 n 45312 sum/s 400.782]
+base msgs in 1499/s 32679 KB/s, mirrors errors 0
+witness p99 66.08ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 187.1% of one core; views accepted 599298 stale 10 owner changes 44 re-enters 0; witness latency p50 4.46ms p99 66.08ms max 96.77ms (n=200000); mirrors 9151
+cell (0,0) probes: queue[p50 2.540 p99 20.375 max 37.651 n 140012 sum/s 18113.061] encode[p50 0.254 p99 3.077 max 28.161 n 9179 sum/s 151.820] publish[p50 0.002 p99 0.140 max 3.219 n 9179 sum/s 3.077] msgKB[p50 2.830 p99 136.727 max 141.948 n 9179 sum/s 7450.310] callback[p50 0.006 p99 0.172 max 14.656 n 62641 sum/s 33.867] gap[p50 0.001 p99 7.734 max 26.706 n 62671 sum/s 970.465]
+cell (0,0): idle NPCs 0 of 2469 reals, actor beats 49452/s, tier changes idle 0 fast 0
+cell (0,0): reals 2469 ghosts 676 | CPU 103.3% of one core | region beat p50 11.50ms p99 23.05ms max 43.72ms | out 1980 msg/s 8190 KB/s, in 2058 msg/s 867 KB/s | ghost latency p50 1.01ms p99 22.11ms (n=43372) | handoffs 110 (p50 5.60ms p99 45.70ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1342646 delta 237333 gaps 0; coalesced 13 control exhausted 0 max queue age 73.43ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.692 p99 24.452 max 52.676 n 167647 sum/s 23681.802] encode[p50 0.223 p99 3.320 max 16.104 n 10984 sum/s 172.569] publish[p50 0.002 p99 0.104 max 2.855 n 10984 sum/s 3.657] msgKB[p50 2.631 p99 146.410 max 150.964 n 10984 sum/s 9148.103] callback[p50 0.005 p99 0.149 max 13.655 n 73032 sum/s 34.371] gap[p50 0.001 p99 7.267 max 35.108 n 73051 sum/s 971.827]
+cell (1,0): idle NPCs 0 of 2537 reals, actor beats 50408/s, tier changes idle 0 fast 0
+cell (1,0): reals 2537 ghosts 618 | CPU 111.8% of one core | region beat p50 13.36ms p99 28.90ms max 89.23ms | out 1859 msg/s 9852 KB/s, in 2389 msg/s 822 KB/s | ghost latency p50 2.56ms p99 24.70ms (n=48743) | handoffs 108 (p50 5.15ms p99 53.98ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1639689 delta 262688 gaps 0; coalesced 100 control exhausted 0 max queue age 53.43ms pending 514; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.755 p99 25.486 max 58.724 n 157663 sum/s 22610.024] encode[p50 0.252 p99 3.502 max 20.771 n 10244 sum/s 170.805] publish[p50 0.002 p99 0.121 max 9.579 n 10244 sum/s 3.681] msgKB[p50 3.046 p99 143.104 max 154.679 n 10244 sum/s 8462.100] callback[p50 0.006 p99 0.153 max 11.247 n 70708 sum/s 34.524] gap[p50 0.001 p99 7.144 max 42.280 n 70708 sum/s 970.534]
+cell (0,1): idle NPCs 0 of 2519 reals, actor beats 50216/s, tier changes idle 0 fast 0
+cell (0,1): reals 2519 ghosts 604 | CPU 109.2% of one core | region beat p50 12.50ms p99 28.29ms max 47.55ms | out 1822 msg/s 9184 KB/s, in 2297 msg/s 800 KB/s | ghost latency p50 1.29ms p99 22.47ms (n=47982) | handoffs 102 (p50 5.90ms p99 35.58ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1528036 delta 263851 gaps 0; coalesced 179 control exhausted 0 max queue age 58.72ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 2.914 p99 20.176 max 54.426 n 147151 sum/s 20116.013] encode[p50 0.262 p99 3.209 max 28.051 n 9471 sum/s 160.723] publish[p50 0.002 p99 0.133 max 4.658 n 9471 sum/s 3.299] msgKB[p50 2.804 p99 142.021 max 150.652 n 9471 sum/s 7824.849] callback[p50 0.006 p99 0.163 max 8.446 n 63244 sum/s 31.908] gap[p50 0.001 p99 7.788 max 41.241 n 63254 sum/s 974.026]
+cell (1,1): idle NPCs 0 of 2475 reals, actor beats 49632/s, tier changes idle 0 fast 0
+cell (1,1): reals 2475 ghosts 654 | CPU 112.2% of one core | region beat p50 12.51ms p99 28.23ms max 69.76ms | out 1903 msg/s 8517 KB/s, in 2048 msg/s 828 KB/s | ghost latency p50 1.09ms p99 24.39ms (n=44661) | handoffs 116 (p50 5.79ms p99 44.84ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1427497 delta 244039 gaps 0; coalesced 113 control exhausted 0 max queue age 55.53ms pending 0; owner errors 0 full 0
+### r3-a1-fix1
+23:40  up 41 days,  7:51, 5 users, load averages: 7.26 5.25 5.14
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:41  up 41 days,  7:51, 5 users, load averages: 12.11 6.92 5.76
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=1%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 1.801 p99 68.189 max 129.249 n 39026 sum/s 7136.087] decode[p50 0.138 p99 2.692 max 77.132 n 39027 sum/s 465.168] dispatch[p50 0.013 p99 0.142 max 7.147 n 39028 sum/s 28.739] callback[p50 0.129 p99 2.629 max 77.147 n 45034 sum/s 495.173] nestWait[p50 0.353 p99 4.400 max 101.222 n 601594 sum/s 15031.444] gap[p50 0.001 p99 10.702 max 41.594 n 45055 sum/s 511.915]
+base msgs in 1492/s 31752 KB/s, mirrors errors 0
+witness p99 70.17ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 109.9% of one core; views accepted 597193 stale 0 owner changes 12 re-enters 0; witness latency p50 2.53ms p99 70.17ms max 129.63ms (n=200000); mirrors 8820
+cell (0,0) probes: queue[p50 1.963 p99 26.363 max 121.399 n 140711 sum/s 17472.737] encode[p50 0.183 p99 3.481 max 50.693 n 9181 sum/s 147.247] publish[p50 0.002 p99 0.137 max 11.517 n 9181 sum/s 3.938] msgKB[p50 2.374 p99 138.611 max 145.828 n 9181 sum/s 7304.780] callback[p50 0.006 p99 0.106 max 14.577 n 91141 sum/s 36.004] gap[p50 0.018 p99 5.441 max 71.631 n 91155 sum/s 970.969]
+cell (0,0): idle NPCs 0 of 2479 reals, actor beats 49441/s, tier changes idle 0 fast 0
+cell (0,0): reals 2479 ghosts 680 | CPU 97.3% of one core | region beat p50 5.24ms p99 14.42ms max 49.65ms | out 2620 msg/s 8034 KB/s, in 2991 msg/s 854 KB/s | ghost latency p50 0.25ms p99 11.04ms (n=77282) | handoffs 22 (p50 5.79ms p99 85.41ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1347423 delta 181186 gaps 0; coalesced 235 control exhausted 0 max queue age 155.14ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.446 p99 27.328 max 54.439 n 168175 sum/s 23789.043] encode[p50 0.184 p99 3.109 max 39.681 n 11032 sum/s 167.444] publish[p50 0.002 p99 0.115 max 3.674 n 11032 sum/s 3.622] msgKB[p50 2.348 p99 141.011 max 150.774 n 11032 sum/s 8729.181] callback[p50 0.006 p99 0.099 max 13.027 n 93320 sum/s 36.130] gap[p50 0.011 p99 4.919 max 72.682 n 93320 sum/s 969.186]
+cell (1,0): idle NPCs 0 of 2532 reals, actor beats 50348/s, tier changes idle 0 fast 0
+cell (1,0): reals 2532 ghosts 619 | CPU 102.9% of one core | region beat p50 6.29ms p99 13.83ms max 50.55ms | out 2697 msg/s 9529 KB/s, in 3050 msg/s 799 KB/s | ghost latency p50 0.35ms p99 11.11ms (n=76617) | handoffs 17 (p50 2.23ms p99 15.71ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1617848 delta 201537 gaps 0; coalesced 74 control exhausted 0 max queue age 113.98ms pending 511; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.526 p99 21.931 max 85.125 n 156392 sum/s 20754.291] encode[p50 0.197 p99 3.211 max 49.642 n 9982 sum/s 158.417] publish[p50 0.001 p99 0.133 max 1.801 n 9982 sum/s 3.118] msgKB[p50 2.434 p99 141.493 max 151.150 n 9982 sum/s 8216.890] callback[p50 0.005 p99 0.093 max 13.022 n 91243 sum/s 34.734] gap[p50 0.001 p99 5.700 max 64.135 n 91246 sum/s 970.300]
+cell (0,1): idle NPCs 0 of 2511 reals, actor beats 49838/s, tier changes idle 0 fast 0
+cell (0,1): reals 2511 ghosts 609 | CPU 110.4% of one core | region beat p50 5.61ms p99 22.97ms max 83.78ms | out 3233 msg/s 8935 KB/s, in 2963 msg/s 782 KB/s | ghost latency p50 0.23ms p99 11.16ms (n=74636) | handoffs 20 (p50 2.05ms p99 14.70ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1520562 delta 196810 gaps 0; coalesced 9 control exhausted 0 max queue age 134.00ms pending 35; owner errors 0 full 0
+cell (1,1) probes: queue[p50 2.024 p99 23.461 max 96.111 n 145839 sum/s 17671.768] encode[p50 0.187 p99 3.198 max 37.377 n 9486 sum/s 147.423] publish[p50 0.002 p99 0.099 max 2.712 n 9486 sum/s 2.960] msgKB[p50 2.348 p99 143.086 max 149.224 n 9486 sum/s 7647.398] callback[p50 0.006 p99 0.092 max 30.200 n 92533 sum/s 33.963] gap[p50 0.005 p99 5.869 max 70.745 n 92533 sum/s 970.839]
+cell (1,1): idle NPCs 0 of 2478 reals, actor beats 49529/s, tier changes idle 0 fast 0
+cell (1,1): reals 2478 ghosts 644 | CPU 109.3% of one core | region beat p50 5.19ms p99 13.56ms max 27.26ms | out 2993 msg/s 8357 KB/s, in 3001 msg/s 818 KB/s | ghost latency p50 0.21ms p99 10.23ms (n=78939) | handoffs 30 (p50 3.46ms p99 35.66ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1434558 delta 182214 gaps 0; coalesced 385 control exhausted 0 max queue age 100.23ms pending 0; owner errors 0 full 0
+### r4-a5-fix1
+23:41  up 41 days,  7:51, 5 users, load averages: 12.11 6.92 5.76
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:41  up 41 days,  7:52, 5 users, load averages: 18.45 9.11 6.61
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 9.487 p99 457.671 max 557.103 n 38915 sum/s 62148.274] decode[p50 0.196 p99 4.833 max 108.337 n 38915 sum/s 711.216] dispatch[p50 0.015 p99 0.227 max 12.858 n 38915 sum/s 40.509] callback[p50 0.189 p99 4.719 max 108.353 n 44933 sum/s 753.479] nestWait[p50 0.476 p99 11.160 max 111.575 n 596414 sum/s 26263.513] gap[p50 0.001 p99 5.564 max 32.243 n 44948 sum/s 258.881]
+base msgs in 1486/s 32660 KB/s, mirrors errors 0
+witness p99 459.27ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 158.2% of one core; views accepted 591677 stale 7 owner changes 43 re-enters 0; witness latency p50 10.85ms p99 459.27ms max 557.70ms (n=200000); mirrors 9136
+cell (0,0) probes: queue[p50 2.575 p99 34.915 max 86.232 n 139705 sum/s 20630.199] encode[p50 0.268 p99 3.691 max 45.833 n 9191 sum/s 170.587] publish[p50 0.002 p99 0.131 max 4.371 n 9191 sum/s 3.477] msgKB[p50 2.797 p99 136.810 max 144.611 n 9191 sum/s 7455.054] callback[p50 0.006 p99 0.135 max 17.120 n 83634 sum/s 37.243] gap[p50 0.002 p99 5.939 max 71.714 n 83660 sum/s 968.273]
+cell (0,0): idle NPCs 0 of 2468 reals, actor beats 49151/s, tier changes idle 0 fast 0
+cell (0,0): reals 2468 ghosts 677 | CPU 97.3% of one core | region beat p50 6.19ms p99 21.39ms max 59.54ms | out 2233 msg/s 8147 KB/s, in 2731 msg/s 883 KB/s | ghost latency p50 0.30ms p99 19.49ms (n=64130) | handoffs 112 (p50 2.81ms p99 120.92ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1341634 delta 233289 gaps 0; coalesced 863 control exhausted 0 max queue age 86.23ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 3.204 p99 45.196 max 103.513 n 166526 sum/s 34696.221] encode[p50 0.282 p99 4.850 max 80.966 n 10893 sum/s 228.966] publish[p50 0.002 p99 0.143 max 3.143 n 10894 sum/s 3.926] msgKB[p50 2.632 p99 146.868 max 152.009 n 10895 sum/s 9057.270] callback[p50 0.005 p99 0.135 max 56.317 n 80806 sum/s 44.114] gap[p50 0.001 p99 7.358 max 125.893 n 80853 sum/s 961.412]
+cell (1,0): idle NPCs 0 of 2537 reals, actor beats 49805/s, tier changes idle 0 fast 0
+cell (1,0): reals 2537 ghosts 616 | CPU 117.5% of one core | region beat p50 7.72ms p99 38.83ms max 112.82ms | out 2810 msg/s 9834 KB/s, in 2625 msg/s 827 KB/s | ghost latency p50 0.43ms p99 27.01ms (n=56419) | handoffs 108 (p50 2.78ms p99 84.27ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1642343 delta 258154 gaps 0; coalesced 1832 control exhausted 0 max queue age 103.51ms pending 0; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.777 p99 35.875 max 126.905 n 156122 sum/s 26998.836] encode[p50 0.285 p99 4.138 max 88.264 n 10178 sum/s 205.034] publish[p50 0.002 p99 0.144 max 4.161 n 10178 sum/s 3.845] msgKB[p50 3.040 p99 143.797 max 154.672 n 10178 sum/s 8378.942] callback[p50 0.006 p99 0.126 max 35.211 n 79111 sum/s 36.042] gap[p50 0.001 p99 6.154 max 52.489 n 79111 sum/s 968.416]
+cell (0,1): idle NPCs 0 of 2520 reals, actor beats 49668/s, tier changes idle 0 fast 0
+cell (0,1): reals 2520 ghosts 604 | CPU 105.6% of one core | region beat p50 6.97ms p99 39.35ms max 75.15ms | out 2254 msg/s 9181 KB/s, in 2558 msg/s 807 KB/s | ghost latency p50 0.54ms p99 22.69ms (n=56243) | handoffs 103 (p50 4.55ms p99 38.19ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1534960 delta 262858 gaps 0; coalesced 593 control exhausted 0 max queue age 126.91ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 2.523 p99 35.370 max 113.559 n 145945 sum/s 22768.607] encode[p50 0.275 p99 4.251 max 41.889 n 9435 sum/s 185.055] publish[p50 0.002 p99 0.100 max 8.786 n 9435 sum/s 3.486] msgKB[p50 2.804 p99 141.869 max 150.554 n 9436 sum/s 7848.209] callback[p50 0.006 p99 0.127 max 14.542 n 84079 sum/s 35.884] gap[p50 0.008 p99 6.046 max 62.743 n 84080 sum/s 970.582]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49230/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 653 | CPU 96.6% of one core | region beat p50 6.39ms p99 22.32ms max 105.95ms | out 2086 msg/s 8599 KB/s, in 2713 msg/s 846 KB/s | ghost latency p50 0.34ms p99 21.07ms (n=65274) | handoffs 115 (p50 3.52ms p99 66.25ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1450920 delta 243844 gaps 0; coalesced 924 control exhausted 0 max queue age 114.39ms pending 0; owner errors 0 full 0
+### r5-a5-fix1-nice0
+23:42  up 41 days,  7:53, 5 users, load averages: 11.94 8.58 6.53
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:42  up 41 days,  7:53, 5 users, load averages: 15.23 9.88 7.10
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 226.570 p99 995.121 max 1063.622 n 37704 sum/s 405340.229] decode[p50 0.222 p99 6.122 max 139.659 n 37708 sum/s 862.053] dispatch[p50 0.017 p99 0.339 max 33.386 n 37718 sum/s 48.057] callback[p50 0.220 p99 5.812 max 139.681 n 43487 sum/s 911.905] nestWait[p50 0.735 p99 15.287 max 140.274 n 580056 sum/s 33743.166] gap[p50 0.001 p99 0.494 max 36.571 n 43513 sum/s 87.860]
+base msgs in 1447/s 32049 KB/s, mirrors errors 0
+witness p99 995.70ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 159.6% of one core; views accepted 579531 stale 8 owner changes 40 re-enters 0; witness latency p50 227.88ms p99 995.70ms max 1071.36ms (n=200000); mirrors 9130
+cell (0,0) probes: queue[p50 3.125 p99 61.170 max 176.213 n 137144 sum/s 28768.523] encode[p50 0.297 p99 5.258 max 79.184 n 9016 sum/s 214.230] publish[p50 0.002 p99 0.204 max 42.032 n 9016 sum/s 6.698] msgKB[p50 2.807 p99 136.799 max 145.086 n 9016 sum/s 7467.272] callback[p50 0.006 p99 0.153 max 48.747 n 77136 sum/s 41.008] gap[p50 0.021 p99 6.366 max 57.811 n 77154 sum/s 958.580]
+cell (0,0): idle NPCs 0 of 2471 reals, actor beats 49074/s, tier changes idle 0 fast 0
+cell (0,0): reals 2471 ghosts 673 | CPU 106.7% of one core | region beat p50 7.03ms p99 28.53ms max 36.11ms | out 2467 msg/s 8218 KB/s, in 2552 msg/s 875 KB/s | ghost latency p50 0.26ms p99 24.44ms (n=57895) | handoffs 109 (p50 3.73ms p99 47.91ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1346079 delta 230577 gaps 0; coalesced 3966 control exhausted 0 max queue age 176.21ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 3.878 p99 45.616 max 96.709 n 162120 sum/s 37148.997] encode[p50 0.321 p99 5.132 max 66.413 n 10600 sum/s 256.751] publish[p50 0.002 p99 0.150 max 20.113 n 10600 sum/s 5.758] msgKB[p50 2.658 p99 146.450 max 150.295 n 10600 sum/s 9059.173] callback[p50 0.005 p99 0.135 max 10.284 n 87932 sum/s 42.131] gap[p50 0.001 p99 5.746 max 92.516 n 87933 sum/s 957.257]
+cell (1,0): idle NPCs 0 of 2534 reals, actor beats 49807/s, tier changes idle 0 fast 0
+cell (1,0): reals 2534 ghosts 621 | CPU 116.4% of one core | region beat p50 8.56ms p99 40.15ms max 98.52ms | out 2341 msg/s 9883 KB/s, in 2906 msg/s 834 KB/s | ghost latency p50 0.25ms p99 29.25ms (n=64066) | handoffs 108 (p50 4.75ms p99 94.61ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1638408 delta 256528 gaps 0; coalesced 1126 control exhausted 0 max queue age 96.71ms pending 52; owner errors 0 full 0
+cell (0,1) probes: queue[p50 3.349 p99 43.582 max 160.721 n 152326 sum/s 32988.169] encode[p50 0.310 p99 4.735 max 97.131 n 9878 sum/s 237.320] publish[p50 0.001 p99 0.191 max 14.667 n 9878 sum/s 5.062] msgKB[p50 3.070 p99 143.018 max 154.695 n 9878 sum/s 8277.984] callback[p50 0.006 p99 0.133 max 38.827 n 85815 sum/s 41.885] gap[p50 0.005 p99 5.719 max 61.960 n 85815 sum/s 957.601]
+cell (0,1): idle NPCs 0 of 2519 reals, actor beats 49619/s, tier changes idle 0 fast 0
+cell (0,1): reals 2519 ghosts 605 | CPU 113.0% of one core | region beat p50 8.14ms p99 36.99ms max 75.89ms | out 2310 msg/s 9080 KB/s, in 2825 msg/s 815 KB/s | ghost latency p50 0.24ms p99 24.95ms (n=63438) | handoffs 102 (p50 4.22ms p99 50.14ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1496475 delta 254904 gaps 0; coalesced 2535 control exhausted 0 max queue age 160.72ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 3.343 p99 48.807 max 98.505 n 143201 sum/s 28982.586] encode[p50 0.309 p99 4.956 max 57.579 n 9197 sum/s 221.603] publish[p50 0.002 p99 0.190 max 21.423 n 9197 sum/s 4.546] msgKB[p50 2.793 p99 142.272 max 147.038 n 9197 sum/s 7684.118] callback[p50 0.006 p99 0.140 max 10.933 n 77577 sum/s 36.259] gap[p50 0.017 p99 6.733 max 45.309 n 77577 sum/s 963.245]
+cell (1,1): idle NPCs 0 of 2477 reals, actor beats 49323/s, tier changes idle 0 fast 0
+cell (1,1): reals 2477 ghosts 655 | CPU 109.2% of one core | region beat p50 7.32ms p99 35.52ms max 69.92ms | out 2452 msg/s 8456 KB/s, in 2548 msg/s 837 KB/s | ghost latency p50 0.23ms p99 25.54ms (n=59098) | handoffs 113 (p50 4.30ms p99 94.83ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1396497 delta 239587 gaps 0; coalesced 2391 control exhausted 0 max queue age 98.95ms pending 470; owner errors 0 full 0
+### r6-a5-fix1-nice0-gmp4
+23:42  up 41 days,  7:53, 5 users, load averages: 15.23 9.88 7.10
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:43  up 41 days,  7:54, 5 users, load averages: 12.81 9.96 7.25
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 1.686 p99 42.179 max 104.306 n 39486 sum/s 5904.995] decode[p50 0.141 p99 2.668 max 25.490 n 39486 sum/s 461.996] dispatch[p50 0.012 p99 0.128 max 5.998 n 39489 sum/s 27.432] callback[p50 0.137 p99 2.588 max 25.510 n 45515 sum/s 490.381] nestWait[p50 0.376 p99 7.283 max 33.264 n 600305 sum/s 16962.107] gap[p50 0.001 p99 12.746 max 29.508 n 45516 sum/s 509.007]
+base msgs in 1514/s 32876 KB/s, mirrors errors 0
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 138.4% of one core; views accepted 600045 stale 5 owner changes 42 re-enters 0; witness latency p50 2.37ms p99 47.01ms max 106.08ms (n=200000); mirrors 9142
+cell (0,0) probes: queue[p50 2.117 p99 18.427 max 82.940 n 138391 sum/s 15155.640] encode[p50 0.197 p99 2.542 max 44.527 n 9154 sum/s 132.763] publish[p50 0.002 p99 0.069 max 9.762 n 9154 sum/s 2.770] msgKB[p50 2.836 p99 136.841 max 145.924 n 9154 sum/s 7454.299] callback[p50 0.006 p99 0.126 max 31.663 n 65178 sum/s 31.193] gap[p50 0.001 p99 8.269 max 31.082 n 65178 sum/s 968.485]
+cell (0,0): idle NPCs 0 of 2470 reals, actor beats 49487/s, tier changes idle 0 fast 0
+cell (0,0): reals 2470 ghosts 675 | CPU 79.7% of one core | region beat p50 5.25ms p99 11.31ms max 16.44ms | out 1900 msg/s 8188 KB/s, in 2166 msg/s 869 KB/s | ghost latency p50 0.82ms p99 15.41ms (n=45981) | handoffs 109 (p50 2.79ms p99 11.12ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1334558 delta 233257 gaps 0; coalesced 245 control exhausted 0 max queue age 143.96ms pending 114; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.396 p99 20.512 max 47.837 n 165479 sum/s 22163.452] encode[p50 0.201 p99 2.611 max 15.472 n 10882 sum/s 162.061] publish[p50 0.002 p99 0.073 max 2.057 n 10882 sum/s 2.910] msgKB[p50 2.718 p99 144.732 max 150.148 n 10882 sum/s 9279.673] callback[p50 0.005 p99 0.115 max 10.500 n 72246 sum/s 29.798] gap[p50 0.001 p99 7.852 max 39.519 n 72246 sum/s 969.940]
+cell (1,0): idle NPCs 0 of 2536 reals, actor beats 50470/s, tier changes idle 0 fast 0
+cell (1,0): reals 2536 ghosts 618 | CPU 85.9% of one core | region beat p50 6.39ms p99 15.34ms max 58.77ms | out 1914 msg/s 10083 KB/s, in 2400 msg/s 820 KB/s | ghost latency p50 0.84ms p99 14.11ms (n=48220) | handoffs 107 (p50 3.81ms p99 24.65ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1666176 delta 260161 gaps 0; coalesced 35 control exhausted 0 max queue age 196.51ms pending 373; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.118 p99 18.745 max 45.429 n 153995 sum/s 18080.153] encode[p50 0.184 p99 2.696 max 13.580 n 10133 sum/s 144.548] publish[p50 0.002 p99 0.084 max 1.357 n 10134 sum/s 2.884] msgKB[p50 3.093 p99 142.163 max 152.762 n 10134 sum/s 8425.433] callback[p50 0.006 p99 0.112 max 30.207 n 69589 sum/s 29.672] gap[p50 0.001 p99 8.014 max 39.368 n 69589 sum/s 970.366]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 50155/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 606 | CPU 82.4% of one core | region beat p50 5.76ms p99 11.49ms max 63.25ms | out 1977 msg/s 9216 KB/s, in 2311 msg/s 801 KB/s | ghost latency p50 0.88ms p99 14.84ms (n=47215) | handoffs 101 (p50 3.10ms p99 17.90ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1508448 delta 259199 gaps 0; coalesced 0 control exhausted 0 max queue age 270.62ms pending 378; owner errors 0 full 0
+cell (1,1) probes: queue[p50 1.991 p99 21.688 max 36.186 n 143451 sum/s 16630.479] encode[p50 0.203 p99 3.015 max 11.738 n 9399 sum/s 139.080] publish[p50 0.002 p99 0.084 max 3.679 n 9399 sum/s 2.877] msgKB[p50 2.753 p99 142.357 max 150.549 n 9399 sum/s 7700.122] callback[p50 0.006 p99 0.119 max 8.146 n 64417 sum/s 29.526] gap[p50 0.001 p99 8.358 max 31.299 n 64423 sum/s 969.910]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49639/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 650 | CPU 83.5% of one core | region beat p50 5.41ms p99 12.64ms max 19.63ms | out 1982 msg/s 8457 KB/s, in 2138 msg/s 831 KB/s | ghost latency p50 0.76ms p99 15.09ms (n=46112) | handoffs 113 (p50 3.74ms p99 16.45ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1383014 delta 238829 gaps 0; coalesced 11 control exhausted 0 max queue age 138.61ms pending 0; owner errors 0 full 0
+### b1-A-before-g4
+23:43  up 41 days,  7:54, 5 users, load averages: 11.54 9.84 7.26
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:44  up 41 days,  7:55, 5 users, load averages: 13.02 10.48 7.60
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 2.240 p99 174.096 max 229.604 n 38655 sum/s 14156.371] decode[p50 0.150 p99 2.444 max 126.500 n 38655 sum/s 472.559] dispatch[p50 0.011 p99 0.140 max 22.112 n 38655 sum/s 24.176] callback[p50 0.137 p99 2.364 max 126.524 n 44670 sum/s 498.073] nestWait[p50 0.810 p99 11.649 max 130.761 n 594242 sum/s 26680.263] gap[p50 0.001 p99 10.584 max 64.828 n 44670 sum/s 501.296]
+base msgs in 1487/s 32596 KB/s, mirrors errors 0
+witness p99 176.59ms exceeds 50ms
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 142.8% of one core; views accepted 594238 stale 4 owner changes 42 re-enters 0; witness latency p50 3.32ms p99 176.59ms max 230.90ms (n=200000); mirrors 9145
+cell (0,0) probes: queue[p50 2.509 p99 20.896 max 67.418 n 137250 sum/s 17142.378] encode[p50 0.239 p99 2.786 max 27.828 n 9033 sum/s 144.754] publish[p50 0.001 p99 0.058 max 5.951 n 9033 sum/s 2.274] msgKB[p50 2.793 p99 136.930 max 145.842 n 9033 sum/s 7367.640] callback[p50 0.006 p99 0.139 max 8.540 n 66862 sum/s 29.949] gap[p50 0.029 p99 7.009 max 82.240 n 66879 sum/s 969.789]
+cell (0,0): idle NPCs 0 of 2471 reals, actor beats 49304/s, tier changes idle 0 fast 0
+cell (0,0): reals 2471 ghosts 674 | CPU 99.0% of one core | region beat p50 9.90ms p99 34.06ms max 65.98ms | out 1987 msg/s 8100 KB/s, in 2223 msg/s 866 KB/s | ghost latency p50 0.48ms p99 19.78ms (n=47657) | handoffs 108 (p50 3.86ms p99 87.36ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1317671 delta 230635 gaps 0; coalesced 278 control exhausted 0 max queue age 99.24ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.671 p99 33.329 max 103.558 n 162110 sum/s 25903.599] encode[p50 0.211 p99 2.967 max 96.673 n 10618 sum/s 174.589] publish[p50 0.002 p99 0.074 max 3.137 n 10618 sum/s 2.882] msgKB[p50 2.627 p99 146.683 max 151.319 n 10618 sum/s 9065.754] callback[p50 0.006 p99 0.123 max 32.313 n 76941 sum/s 34.945] gap[p50 0.020 p99 6.118 max 117.854 n 76941 sum/s 964.669]
+cell (1,0): idle NPCs 0 of 2535 reals, actor beats 50114/s, tier changes idle 0 fast 0
+cell (1,0): reals 2535 ghosts 619 | CPU 107.7% of one core | region beat p50 13.46ms p99 62.38ms max 127.30ms | out 1986 msg/s 9876 KB/s, in 2557 msg/s 820 KB/s | ghost latency p50 0.47ms p99 25.84ms (n=53050) | handoffs 107 (p50 3.78ms p99 78.01ms), rejected 0 aborted 0 retransmits 1 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1626516 delta 256585 gaps 0; coalesced 590 control exhausted 0 max queue age 103.56ms pending 6; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.768 p99 26.962 max 189.504 n 153026 sum/s 22910.646] encode[p50 0.259 p99 2.938 max 84.166 n 9887 sum/s 169.355] publish[p50 0.002 p99 0.081 max 6.455 n 9887 sum/s 3.242] msgKB[p50 3.127 p99 142.848 max 152.891 n 9887 sum/s 8415.023] callback[p50 0.006 p99 0.119 max 31.641 n 75246 sum/s 31.873] gap[p50 0.023 p99 6.220 max 68.461 n 75246 sum/s 967.687]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 49971/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 607 | CPU 104.0% of one core | region beat p50 10.92ms p99 44.27ms max 58.84ms | out 2013 msg/s 9213 KB/s, in 2499 msg/s 802 KB/s | ghost latency p50 0.30ms p99 21.08ms (n=52884) | handoffs 101 (p50 2.97ms p99 66.42ms), rejected 0 aborted 0 retransmits 1 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1508125 delta 257578 gaps 0; coalesced 317 control exhausted 0 max queue age 189.50ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 2.584 p99 27.192 max 131.088 n 141984 sum/s 20394.856] encode[p50 0.255 p99 3.103 max 113.658 n 9125 sum/s 159.983] publish[p50 0.001 p99 0.087 max 2.581 n 9125 sum/s 2.587] msgKB[p50 2.788 p99 142.302 max 150.194 n 9125 sum/s 7640.212] callback[p50 0.006 p99 0.128 max 17.563 n 66773 sum/s 29.944] gap[p50 0.008 p99 7.755 max 54.243 n 66776 sum/s 969.524]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49397/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 652 | CPU 102.9% of one core | region beat p50 10.64ms p99 36.04ms max 51.72ms | out 2245 msg/s 8401 KB/s, in 2217 msg/s 830 KB/s | ghost latency p50 0.23ms p99 19.77ms (n=48531) | handoffs 113 (p50 2.22ms p99 79.39ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1372165 delta 236422 gaps 0; coalesced 423 control exhausted 0 max queue age 143.64ms pending 0; owner errors 0 full 0
+### b1-B-fix-g4
+23:44  up 41 days,  7:55, 5 users, load averages: 13.02 10.48 7.60
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:45  up 41 days,  7:55, 5 users, load averages: 18.94 12.04 8.28
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 3.623 p99 2026.801 max 2116.706 n 34858 sum/s 392556.215] decode[p50 0.136 p99 4.392 max 242.135 n 34858 sum/s 635.604] dispatch[p50 0.011 p99 0.197 max 30.123 n 34803 sum/s 35.918] callback[p50 0.129 p99 4.188 max 242.152 n 40874 sum/s 672.549] nestWait[p50 0.554 p99 43.968 max 243.117 n 534121 sum/s 48542.502] gap[p50 0.001 p99 9.117 max 92.446 n 40879 sum/s 326.614]
+base msgs in 1358/s 31119 KB/s, mirrors errors 0
+witness p99 2036.91ms exceeds 50ms
+replica gaps during measurement: 55
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 116.1% of one core; views accepted 534033 stale 8 owner changes 43 re-enters 0; witness latency p50 4.83ms p99 2036.91ms max 2118.37ms (n=200000); mirrors 9177
+cell (0,0) probes: queue[p50 2.149 p99 114.828 max 272.158 n 125789 sum/s 32585.758] encode[p50 0.193 p99 8.022 max 125.952 n 8275 sum/s 227.465] publish[p50 0.002 p99 0.117 max 10.194 n 8275 sum/s 3.702] msgKB[p50 2.812 p99 137.004 max 144.234 n 8275 sum/s 7190.744] callback[p50 0.006 p99 0.134 max 71.330 n 65590 sum/s 50.253] gap[p50 0.014 p99 6.543 max 130.667 n 65595 sum/s 949.455]
+cell (0,0): idle NPCs 0 of 2471 reals, actor beats 45695/s, tier changes idle 0 fast 0
+cell (0,0): reals 2471 ghosts 674 | CPU 77.7% of one core | region beat p50 5.63ms p99 58.14ms max 143.02ms | out 1795 msg/s 7877 KB/s, in 2175 msg/s 795 KB/s | ghost latency p50 0.26ms p99 50.48ms (n=47149) | handoffs 109 (p50 4.96ms p99 285.87ms), rejected 0 aborted 0 retransmits 14 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1299162 delta 210263 gaps 0; coalesced 5692 control exhausted 0 max queue age 272.16ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.728 p99 172.507 max 442.142 n 145932 sum/s 49906.372] encode[p50 0.201 p99 5.691 max 203.089 n 9538 sum/s 266.828] publish[p50 0.002 p99 0.130 max 11.925 n 9538 sum/s 4.847] msgKB[p50 2.632 p99 147.182 max 150.835 n 9538 sum/s 8535.176] callback[p50 0.005 p99 0.131 max 181.150 n 67159 sum/s 71.772] gap[p50 0.001 p99 7.843 max 166.865 n 67159 sum/s 927.957]
+cell (1,0): idle NPCs 0 of 2535 reals, actor beats 45906/s, tier changes idle 0 fast 0
+cell (1,0): reals 2535 ghosts 619 | CPU 84.3% of one core | region beat p50 6.25ms p99 120.41ms max 146.10ms | out 2163 msg/s 9282 KB/s, in 2227 msg/s 758 KB/s | ghost latency p50 0.36ms p99 69.90ms (n=44238) | handoffs 109 (p50 2.63ms p99 283.10ms), rejected 0 aborted 0 retransmits 8 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1544788 delta 223416 gaps 0; coalesced 9952 control exhausted 0 max queue age 442.14ms pending 0; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.615 p99 191.344 max 383.087 n 137093 sum/s 44041.152] encode[p50 0.217 p99 6.491 max 176.214 n 8905 sum/s 253.247] publish[p50 0.002 p99 0.114 max 73.036 n 8905 sum/s 5.421] msgKB[p50 3.102 p99 143.081 max 154.723 n 8905 sum/s 8037.667] callback[p50 0.006 p99 0.134 max 134.782 n 65889 sum/s 48.792] gap[p50 0.001 p99 6.557 max 141.103 n 65898 sum/s 950.683]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 46442/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 606 | CPU 77.9% of one core | region beat p50 5.65ms p99 107.52ms max 159.58ms | out 1763 msg/s 8765 KB/s, in 2184 msg/s 740 KB/s | ghost latency p50 0.62ms p99 58.41ms (n=44632) | handoffs 100 (p50 3.98ms p99 228.11ms), rejected 0 aborted 0 retransmits 5 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1454243 delta 227356 gaps 0; coalesced 10589 control exhausted 0 max queue age 386.25ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 2.254 p99 158.724 max 492.841 n 127600 sum/s 36174.113] encode[p50 0.212 p99 8.233 max 253.256 n 8237 sum/s 229.222] publish[p50 0.002 p99 0.108 max 48.184 n 8237 sum/s 4.733] msgKB[p50 2.802 p99 142.121 max 148.971 n 8237 sum/s 7359.564] callback[p50 0.006 p99 0.127 max 99.480 n 65532 sum/s 45.004] gap[p50 0.001 p99 7.240 max 169.893 n 65532 sum/s 954.511]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 45970/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 652 | CPU 76.7% of one core | region beat p50 5.57ms p99 139.38ms max 230.53ms | out 1776 msg/s 8052 KB/s, in 2171 msg/s 764 KB/s | ghost latency p50 0.34ms p99 46.38ms (n=48149) | handoffs 113 (p50 4.72ms p99 335.17ms), rejected 0 aborted 0 retransmits 16 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1335991 delta 211122 gaps 0; coalesced 10427 control exhausted 0 max queue age 492.84ms pending 0; owner errors 0 full 0
+### b1-D-before-g10
+23:45  up 41 days,  7:55, 5 users, load averages: 18.94 12.04 8.28
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:45  up 41 days,  7:56, 5 users, load averages: 15.36 12.05 8.45
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 2.052 p99 33.214 max 104.263 n 39011 sum/s 5341.473] decode[p50 0.158 p99 2.649 max 30.838 n 39025 sum/s 471.955] dispatch[p50 0.011 p99 0.158 max 6.811 n 39030 sum/s 24.737] callback[p50 0.143 p99 2.547 max 30.867 n 45061 sum/s 497.979] nestWait[p50 0.726 p99 4.464 max 38.611 n 599391 sum/s 19968.148] gap[p50 0.001 p99 10.312 max 46.710 n 45073 sum/s 501.758]
+base msgs in 1499/s 32718 KB/s, mirrors errors 0
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 166.3% of one core; views accepted 598630 stale 9 owner changes 44 re-enters 0; witness latency p50 3.08ms p99 34.02ms max 107.91ms (n=200000); mirrors 9142
+cell (0,0) probes: queue[p50 2.265 p99 19.843 max 39.669 n 138167 sum/s 16486.002] encode[p50 0.217 p99 2.583 max 19.192 n 9061 sum/s 137.268] publish[p50 0.001 p99 0.090 max 5.157 n 9061 sum/s 2.553] msgKB[p50 2.799 p99 136.882 max 141.271 n 9061 sum/s 7403.801] callback[p50 0.006 p99 0.128 max 8.183 n 85348 sum/s 33.755] gap[p50 0.025 p99 6.834 max 53.044 n 85348 sum/s 966.140]
+cell (0,0): idle NPCs 0 of 2470 reals, actor beats 49458/s, tier changes idle 0 fast 0
+cell (0,0): reals 2470 ghosts 674 | CPU 121.2% of one core | region beat p50 10.35ms p99 22.31ms max 38.92ms | out 2927 msg/s 8175 KB/s, in 2838 msg/s 893 KB/s | ghost latency p50 0.24ms p99 15.33ms (n=66282) | handoffs 109 (p50 3.68ms p99 28.08ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1322912 delta 231736 gaps 0; coalesced 9 control exhausted 0 max queue age 44.25ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.718 p99 22.370 max 42.492 n 165044 sum/s 22808.785] encode[p50 0.223 p99 2.635 max 25.008 n 10825 sum/s 162.552] publish[p50 0.001 p99 0.092 max 5.307 n 10825 sum/s 3.068] msgKB[p50 2.644 p99 146.635 max 151.738 n 10825 sum/s 9083.377] callback[p50 0.005 p99 0.110 max 6.405 n 97835 sum/s 36.079] gap[p50 0.021 p99 4.882 max 43.178 n 97850 sum/s 963.152]
+cell (1,0): idle NPCs 0 of 2536 reals, actor beats 50389/s, tier changes idle 0 fast 0
+cell (1,0): reals 2536 ghosts 618 | CPU 128.9% of one core | region beat p50 12.33ms p99 24.75ms max 62.65ms | out 2593 msg/s 9920 KB/s, in 3254 msg/s 850 KB/s | ghost latency p50 0.31ms p99 17.87ms (n=73958) | handoffs 108 (p50 4.48ms p99 33.37ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1628143 delta 258759 gaps 0; coalesced 64 control exhausted 0 max queue age 112.27ms pending 0; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.592 p99 20.330 max 27.709 n 153853 sum/s 20250.194] encode[p50 0.222 p99 2.859 max 10.075 n 9992 sum/s 153.870] publish[p50 0.001 p99 0.075 max 4.241 n 9992 sum/s 2.626] msgKB[p50 3.088 p99 143.011 max 154.679 n 9992 sum/s 8379.507] callback[p50 0.005 p99 0.120 max 6.986 n 95055 sum/s 37.885] gap[p50 0.016 p99 5.091 max 43.989 n 95086 sum/s 961.628]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 50244/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 606 | CPU 124.2% of one core | region beat p50 12.19ms p99 28.78ms max 69.55ms | out 2711 msg/s 9206 KB/s, in 3157 msg/s 830 KB/s | ghost latency p50 0.37ms p99 17.16ms (n=72794) | handoffs 101 (p50 5.25ms p99 34.30ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1499027 delta 258073 gaps 0; coalesced 49 control exhausted 0 max queue age 46.59ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 2.672 p99 17.540 max 65.454 n 142878 sum/s 17970.519] encode[p50 0.238 p99 2.841 max 25.370 n 9217 sum/s 145.860] publish[p50 0.001 p99 0.093 max 2.653 n 9217 sum/s 2.472] msgKB[p50 2.827 p99 141.832 max 150.368 n 9217 sum/s 7772.632] callback[p50 0.005 p99 0.116 max 7.260 n 86775 sum/s 33.220] gap[p50 0.031 p99 5.334 max 46.802 n 86775 sum/s 966.175]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49627/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 651 | CPU 121.0% of one core | region beat p50 10.64ms p99 26.02ms max 57.62ms | out 2669 msg/s 8553 KB/s, in 2882 msg/s 857 KB/s | ghost latency p50 0.26ms p99 17.73ms (n=68714) | handoffs 114 (p50 4.24ms p99 50.15ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1397348 delta 237321 gaps 0; coalesced 0 control exhausted 0 max queue age 66.34ms pending 0; owner errors 0 full 0
+### b1-C-fix-g10
+23:45  up 41 days,  7:56, 5 users, load averages: 15.36 12.05 8.45
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:46  up 41 days,  7:57, 5 users, load averages: 14.70 12.32 8.70
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 1.176 p99 26.997 max 83.199 n 39219 sum/s 3879.837] decode[p50 0.134 p99 2.575 max 70.022 n 39219 sum/s 435.165] dispatch[p50 0.011 p99 0.113 max 33.795 n 39219 sum/s 24.211] callback[p50 0.128 p99 2.499 max 70.042 n 45234 sum/s 460.598] nestWait[p50 0.283 p99 3.899 max 72.699 n 599921 sum/s 11923.091] gap[p50 0.001 p99 12.497 max 32.820 n 45245 sum/s 538.362]
+base msgs in 1507/s 32731 KB/s, mirrors errors 0
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 133.0% of one core; views accepted 599738 stale 7 owner changes 44 re-enters 0; witness latency p50 1.78ms p99 28.75ms max 84.18ms (n=200000); mirrors 9146
+cell (0,0) probes: queue[p50 1.919 p99 16.260 max 26.966 n 138376 sum/s 13544.304] encode[p50 0.173 p99 2.364 max 14.908 n 9120 sum/s 118.443] publish[p50 0.001 p99 0.076 max 1.323 n 9120 sum/s 2.075] msgKB[p50 2.791 p99 136.918 max 145.733 n 9120 sum/s 7321.410] callback[p50 0.005 p99 0.087 max 4.621 n 105978 sum/s 35.080] gap[p50 0.027 p99 4.890 max 29.773 n 105991 sum/s 964.526]
+cell (0,0): idle NPCs 0 of 2470 reals, actor beats 49511/s, tier changes idle 0 fast 0
+cell (0,0): reals 2470 ghosts 674 | CPU 105.1% of one core | region beat p50 4.75ms p99 10.27ms max 15.91ms | out 3549 msg/s 8121 KB/s, in 3525 msg/s 916 KB/s | ghost latency p50 0.27ms p99 8.87ms (n=86882) | handoffs 109 (p50 2.06ms p99 22.73ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 1306607 delta 233702 gaps 0; coalesced 0 control exhausted 0 max queue age 111.78ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.154 p99 21.264 max 41.296 n 165646 sum/s 19827.625] encode[p50 0.171 p99 2.371 max 16.096 n 10865 sum/s 143.151] publish[p50 0.002 p99 0.044 max 2.582 n 10865 sum/s 2.439] msgKB[p50 2.636 p99 146.512 max 150.656 n 10865 sum/s 9132.480] callback[p50 0.005 p99 0.076 max 3.376 n 119384 sum/s 36.012] gap[p50 0.018 p99 4.425 max 30.801 n 119385 sum/s 963.423]
+cell (1,0): idle NPCs 0 of 2536 reals, actor beats 50450/s, tier changes idle 0 fast 0
+cell (1,0): reals 2536 ghosts 618 | CPU 111.6% of one core | region beat p50 6.27ms p99 10.49ms max 28.04ms | out 3202 msg/s 9991 KB/s, in 3971 msg/s 882 KB/s | ghost latency p50 0.30ms p99 9.36ms (n=95402) | handoffs 108 (p50 2.25ms p99 12.36ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 1635744 delta 258233 gaps 0; coalesced 0 control exhausted 0 max queue age 73.91ms pending 0; owner errors 0 full 0
+cell (0,1) probes: queue[p50 2.028 p99 18.319 max 57.104 n 154104 sum/s 17196.233] encode[p50 0.175 p99 2.390 max 23.317 n 10129 sum/s 137.833] publish[p50 0.002 p99 0.052 max 24.316 n 10129 sum/s 3.245] msgKB[p50 3.062 p99 141.488 max 154.542 n 10129 sum/s 8412.478] callback[p50 0.005 p99 0.073 max 9.102 n 116422 sum/s 35.337] gap[p50 0.023 p99 4.315 max 36.644 n 116449 sum/s 964.184]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 50198/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 607 | CPU 110.8% of one core | region beat p50 5.02ms p99 10.77ms max 28.64ms | out 3460 msg/s 9263 KB/s, in 3870 msg/s 862 KB/s | ghost latency p50 0.20ms p99 8.65ms (n=94157) | handoffs 101 (p50 2.82ms p99 13.54ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 1504105 delta 256469 gaps 0; coalesced 0 control exhausted 0 max queue age 57.10ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 1.955 p99 16.699 max 53.554 n 143113 sum/s 14619.470] encode[p50 0.177 p99 2.368 max 22.152 n 9202 sum/s 122.450] publish[p50 0.002 p99 0.046 max 2.533 n 9202 sum/s 2.102] msgKB[p50 2.837 p99 141.491 max 148.978 n 9202 sum/s 7847.023] callback[p50 0.005 p99 0.076 max 8.349 n 106690 sum/s 33.381] gap[p50 0.029 p99 4.788 max 23.079 n 106690 sum/s 965.979]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49658/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 652 | CPU 105.4% of one core | region beat p50 4.90ms p99 10.76ms max 29.14ms | out 3468 msg/s 8663 KB/s, in 3544 msg/s 881 KB/s | ghost latency p50 0.33ms p99 8.10ms (n=88595) | handoffs 114 (p50 2.16ms p99 25.44ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 1411145 delta 238791 gaps 0; coalesced 0 control exhausted 0 max queue age 53.55ms pending 0; owner errors 0 full 0
+### b1-E-nofull-g10
+23:46  up 41 days,  7:57, 5 users, load averages: 14.70 12.32 8.70
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:46  up 41 days,  7:57, 5 users, load averages: 15.54 12.79 9.04
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 0.742 p99 11.679 max 52.945 n 39146 sum/s 2001.990] decode[p50 0.145 p99 1.115 max 23.025 n 39150 sum/s 268.423] dispatch[p50 0.011 p99 0.111 max 5.483 n 39156 sum/s 22.732] callback[p50 0.143 p99 1.096 max 28.510 n 45177 sum/s 292.425] nestWait[p50 0.258 p99 2.944 max 51.993 n 599778 sum/s 7980.806] gap[p50 0.001 p99 16.782 max 33.405 n 45198 sum/s 706.914]
+base msgs in 1505/s 11373 KB/s, mirrors errors 0
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 113.6% of one core; views accepted 599254 stale 5 owner changes 44 re-enters 0; witness latency p50 1.07ms p99 14.41ms max 67.91ms (n=200000); mirrors 9147
+cell (0,0) probes: queue[p50 1.771 p99 6.216 max 14.362 n 138162 sum/s 8833.971] encode[p50 0.174 p99 0.957 max 10.019 n 9062 sum/s 68.922] publish[p50 0.001 p99 0.020 max 1.551 n 9062 sum/s 0.966] msgKB[p50 5.150 p99 48.847 max 103.478 n 9062 sum/s 2665.613] callback[p50 0.005 p99 0.062 max 4.795 n 121200 sum/s 34.626] gap[p50 0.035 p99 4.086 max 43.627 n 121244 sum/s 964.907]
+cell (0,0): idle NPCs 0 of 2471 reals, actor beats 49466/s, tier changes idle 0 fast 0
+cell (0,0): reals 2471 ghosts 674 | CPU 101.9% of one core | region beat p50 4.22ms p99 10.20ms max 16.47ms | out 3841 msg/s 3471 KB/s, in 4034 msg/s 937 KB/s | ghost latency p50 0.25ms p99 6.16ms (n=102210) | handoffs 109 (p50 2.00ms p99 14.58ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 340348 delta 235487 gaps 0; coalesced 0 control exhausted 0 max queue age 14.38ms pending 2; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.218 p99 9.784 max 39.112 n 165352 sum/s 14017.516] encode[p50 0.179 p99 1.141 max 17.759 n 10822 sum/s 93.372] publish[p50 0.001 p99 0.050 max 7.528 n 10822 sum/s 1.518] msgKB[p50 5.037 p99 45.602 max 107.000 n 10822 sum/s 3016.276] callback[p50 0.005 p99 0.059 max 5.102 n 129774 sum/s 35.444] gap[p50 0.023 p99 3.718 max 36.913 n 129796 sum/s 963.507]
+cell (1,0): idle NPCs 0 of 2535 reals, actor beats 50395/s, tier changes idle 0 fast 0
+cell (1,0): reals 2535 ghosts 619 | CPU 109.4% of one core | region beat p50 4.90ms p99 13.29ms max 25.20ms | out 3699 msg/s 3894 KB/s, in 4317 msg/s 891 KB/s | ghost latency p50 0.18ms p99 7.67ms (n=105993) | handoffs 108 (p50 2.45ms p99 16.93ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 369730 delta 263412 gaps 0; coalesced 0 control exhausted 0 max queue age 39.11ms pending 9; owner errors 0 full 0
+cell (0,1) probes: queue[p50 1.758 p99 7.899 max 26.606 n 154103 sum/s 10521.402] encode[p50 0.180 p99 1.000 max 17.484 n 10103 sum/s 80.528] publish[p50 0.001 p99 0.017 max 1.637 n 10103 sum/s 0.865] msgKB[p50 6.162 p99 35.266 max 83.632 n 10103 sum/s 2892.678] callback[p50 0.005 p99 0.057 max 5.820 n 126976 sum/s 34.282] gap[p50 0.022 p99 3.942 max 25.340 n 126979 sum/s 965.006]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 50232/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 607 | CPU 106.3% of one core | region beat p50 4.31ms p99 11.18ms max 45.03ms | out 3989 msg/s 3766 KB/s, in 4220 msg/s 872 KB/s | ghost latency p50 0.17ms p99 5.78ms (n=104842) | handoffs 101 (p50 2.79ms p99 25.27ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 360388 delta 263713 gaps 0; coalesced 0 control exhausted 0 max queue age 33.04ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 1.831 p99 7.929 max 13.720 n 142881 sum/s 9632.542] encode[p50 0.184 p99 1.077 max 5.745 n 9239 sum/s 75.928] publish[p50 0.002 p99 0.020 max 0.697 n 9239 sum/s 0.882] msgKB[p50 6.029 p99 39.745 max 78.396 n 9239 sum/s 2767.426] callback[p50 0.005 p99 0.062 max 9.380 n 121422 sum/s 34.744] gap[p50 0.028 p99 4.223 max 40.468 n 121422 sum/s 964.545]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49589/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 650 | CPU 105.1% of one core | region beat p50 4.18ms p99 10.19ms max 23.35ms | out 3862 msg/s 3597 KB/s, in 4034 msg/s 899 KB/s | ghost latency p50 0.21ms p99 6.17ms (n=103470) | handoffs 114 (p50 2.53ms p99 16.77ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 357635 delta 243457 gaps 0; coalesced 0 control exhausted 0 max queue age 23.72ms pending 0; owner errors 0 full 0
+### b1-F-nofull-g4
+23:46  up 41 days,  7:57, 5 users, load averages: 15.54 12.79 9.04
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+23:47  up 41 days,  7:58, 5 users, load averages: 12.61 12.33 9.02
+vm.swapusage: total = 8192.00M  used = 6544.31M  free = 1647.69M  (encrypted)
+moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+base probes: recvLag[p50 0.638 p99 8.707 max 56.240 n 39078 sum/s 1421.060] decode[p50 0.131 p99 0.564 max 16.512 n 39078 sum/s 216.371] dispatch[p50 0.010 p99 0.088 max 1.452 n 39079 sum/s 19.214] callback[p50 0.134 p99 0.576 max 16.977 n 45097 sum/s 236.565] nestWait[p50 0.246 p99 1.763 max 19.579 n 600003 sum/s 6748.923] gap[p50 0.001 p99 18.881 max 44.759 n 45114 sum/s 763.262]
+base msgs in 1503/s 11424 KB/s, mirrors errors 0
+witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+idle period 0ms, players concentrated in one cell false
+level 2250 NPC/cell, 1000 players, window 30s; base (parent process, incl. Sync mirrors and client decode) CPU 100.7% of one core; views accepted 599677 stale 7 owner changes 44 re-enters 0; witness latency p50 0.94ms p99 9.77ms max 57.23ms (n=200000); mirrors 9139
+cell (0,0) probes: queue[p50 1.512 p99 4.377 max 20.555 n 138157 sum/s 7308.403] encode[p50 0.172 p99 0.607 max 12.198 n 9056 sum/s 59.930] publish[p50 0.002 p99 0.014 max 1.634 n 9056 sum/s 0.809] msgKB[p50 6.391 p99 33.099 max 75.686 n 9056 sum/s 2682.643] callback[p50 0.005 p99 0.052 max 2.030 n 102066 sum/s 28.396] gap[p50 0.037 p99 5.343 max 46.169 n 102082 sum/s 971.264]
+cell (0,0): idle NPCs 0 of 2471 reals, actor beats 49465/s, tier changes idle 0 fast 0
+cell (0,0): reals 2471 ghosts 673 | CPU 76.5% of one core | region beat p50 3.93ms p99 9.75ms max 19.40ms | out 3100 msg/s 3457 KB/s, in 3397 msg/s 905 KB/s | ghost latency p50 0.17ms p99 5.06ms (n=82730) | handoffs 109 (p50 1.35ms p99 17.31ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,0): replica full 343032 delta 237056 gaps 0; coalesced 0 control exhausted 0 max queue age 20.56ms pending 0; owner errors 0 full 0
+cell (1,0) probes: queue[p50 2.055 p99 6.822 max 28.646 n 165453 sum/s 12181.071] encode[p50 0.180 p99 0.796 max 8.830 n 10843 sum/s 82.591] publish[p50 0.001 p99 0.022 max 2.194 n 10843 sum/s 1.028] msgKB[p50 6.241 p99 31.974 max 77.583 n 10843 sum/s 3026.435] callback[p50 0.005 p99 0.048 max 8.678 n 108186 sum/s 30.009] gap[p50 0.037 p99 4.180 max 45.047 n 108186 sum/s 969.545]
+cell (1,0): idle NPCs 0 of 2535 reals, actor beats 50488/s, tier changes idle 0 fast 0
+cell (1,0): reals 2535 ghosts 619 | CPU 82.4% of one core | region beat p50 4.68ms p99 10.61ms max 29.38ms | out 3189 msg/s 3881 KB/s, in 3600 msg/s 859 KB/s | ghost latency p50 0.17ms p99 4.99ms (n=83905) | handoffs 108 (p50 1.87ms p99 8.53ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,0): replica full 371977 delta 265969 gaps 0; coalesced 0 control exhausted 0 max queue age 28.65ms pending 0; owner errors 0 full 0
+cell (0,1) probes: queue[p50 1.724 p99 5.650 max 46.255 n 154104 sum/s 9919.621] encode[p50 0.178 p99 0.823 max 24.384 n 10000 sum/s 74.923] publish[p50 0.002 p99 0.015 max 1.075 n 10000 sum/s 0.870] msgKB[p50 6.306 p99 34.624 max 103.723 n 10000 sum/s 2904.053] callback[p50 0.005 p99 0.046 max 12.692 n 105569 sum/s 29.109] gap[p50 0.037 p99 4.620 max 52.984 n 105569 sum/s 970.397]
+cell (0,1): idle NPCs 0 of 2518 reals, actor beats 50213/s, tier changes idle 0 fast 0
+cell (0,1): reals 2518 ghosts 607 | CPU 80.9% of one core | region beat p50 4.26ms p99 9.02ms max 18.97ms | out 3192 msg/s 3734 KB/s, in 3511 msg/s 841 KB/s | ghost latency p50 0.16ms p99 4.79ms (n=83016) | handoffs 101 (p50 1.43ms p99 9.18ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (0,1): replica full 362115 delta 258667 gaps 0; coalesced 0 control exhausted 0 max queue age 46.25ms pending 0; owner errors 0 full 0
+cell (1,1) probes: queue[p50 1.563 p99 5.471 max 28.617 n 143106 sum/s 8199.061] encode[p50 0.176 p99 0.784 max 19.570 n 9254 sum/s 66.807] publish[p50 0.001 p99 0.014 max 0.702 n 9254 sum/s 0.716] msgKB[p50 6.677 p99 35.601 max 74.257 n 9254 sum/s 2782.150] callback[p50 0.005 p99 0.048 max 6.147 n 101973 sum/s 27.641] gap[p50 0.032 p99 6.206 max 27.518 n 101973 sum/s 972.030]
+cell (1,1): idle NPCs 0 of 2476 reals, actor beats 49628/s, tier changes idle 0 fast 0
+cell (1,1): reals 2476 ghosts 650 | CPU 78.4% of one core | region beat p50 3.97ms p99 7.90ms max 20.76ms | out 3139 msg/s 3577 KB/s, in 3389 msg/s 868 KB/s | ghost latency p50 0.16ms p99 3.94ms (n=83596) | handoffs 114 (p50 1.47ms p99 9.12ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+cell (1,1): replica full 358852 delta 242193 gaps 0; coalesced 0 control exhausted 0 max queue age 28.62ms pending 0; owner errors 0 full 0

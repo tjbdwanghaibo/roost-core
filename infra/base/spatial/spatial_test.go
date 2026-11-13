@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -146,6 +147,32 @@ func TestBlockIndexQueryRadiusReturnsCandidateSuperset(t *testing.T) {
 	// Extreme centers must saturate instead of overflowing into a bogus rect.
 	if ids := index.QueryRadius(Point{X: math.MaxInt64, Y: math.MaxInt64}, math.MaxInt64); len(ids) != 3 {
 		t.Fatalf("saturated query = %v, want all ids", ids)
+	}
+}
+
+// AppendRadius 与 QueryRadius 给出同一候选集（升序去重，含多块登记的对象与越界 / 饱和的中心），并保留 dst 原有前缀。
+func TestBlockIndexAppendRadiusMatchesQueryRadius(t *testing.T) {
+	index, err := NewBlockIndex(Rect{Min: Point{X: -50, Y: -50}, Max: Point{X: 150, Y: 150}}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rand.New(rand.NewPCG(3, 4))
+	for id := int64(1); id <= 400; id++ {
+		index.Add(id, Point{X: -50 + r.Int64N(200), Y: -50 + r.Int64N(200)})
+	}
+	index.Add(7, Point{X: 0, Y: 0}) // 同一 id 登记在两块里
+	prefix := []int64{-1, -2}
+	for range 300 {
+		center := Point{X: -80 + r.Int64N(260), Y: -80 + r.Int64N(260)}
+		radius := r.Int64N(60) - 2
+		want := index.QueryRadius(center, radius)
+		got := index.AppendRadius(slices.Clone(prefix), center, radius)
+		if !slices.Equal(got[:2], prefix) || !slices.Equal(got[2:], want) && len(want)+len(got[2:]) > 0 {
+			t.Fatalf("center %v radius %d: AppendRadius %v, QueryRadius %v", center, radius, got, want)
+		}
+	}
+	if got := index.AppendRadius(nil, Point{X: math.MaxInt64, Y: math.MaxInt64}, math.MaxInt64); !slices.Equal(got, index.QueryRadius(Point{X: math.MaxInt64, Y: math.MaxInt64}, math.MaxInt64)) {
+		t.Fatalf("saturated AppendRadius = %d ids", len(got))
 	}
 }
 

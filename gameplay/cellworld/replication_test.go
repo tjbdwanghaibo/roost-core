@@ -3,9 +3,12 @@ package cellworld
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 func replicaNodes() (*Node, *Node) {
@@ -261,6 +264,30 @@ func BenchmarkWitnessDecode(b *testing.B) {
 		delta.Witness.BaseTick, delta.Witness.Tick = delta.Witness.Tick, delta.Witness.Tick+1
 		for _, v := range delta.Witnesses {
 			v.BaseTick, v.Tick = v.Tick, v.Tick+1
+		}
+	}
+}
+
+// 一个 Cell 的区域心跳算 witness：7500 见方、半径 800、上限 64，250 个玩家 Real 与 2850 个 NPC（容量档单格的规模）。
+func BenchmarkRegionWitnesses(b *testing.B) {
+	rect := spatial.Rect{Max: spatial.Point{X: 7500, Y: 7500}}
+	n := &Node{cfg: NodeConfig{ViewRadius: 800, MaxViewEntities: 64, IndexBlock: 800}, indexBounds: rect}
+	r := NewRegion()
+	rnd := rand.New(rand.NewPCG(5, 6))
+	for i := int64(1); i <= 3100; i++ {
+		st := EntityState{ID: npcID(i), Kind: KindNPC, X: rnd.Int64N(7500), Y: rnd.Int64N(7500), HP: 100, Ver: Version{Epoch: 1, Seq: 1}}
+		if i <= 250 {
+			st.ID, st.Kind, st.Base = actorID(i), KindPlayer, 1
+		}
+		r.locals.m[st.ID] = localRec{St: st, Role: RoleReal}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		var out []outgoing
+		n.witnesses(r, &beatView{}, &out)
+		if len(out) != 250 {
+			b.Fatalf("%d witnesses", len(out))
 		}
 	}
 }

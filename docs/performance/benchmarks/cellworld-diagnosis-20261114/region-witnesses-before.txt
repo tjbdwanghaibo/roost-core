@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkRegionWitnesses-10    	     140	   8419742 ns/op	13092402 B/op	    8733 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkRegionWitnesses-10    	     142	   8392585 ns/op	13092386 B/op	    8733 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkRegionWitnesses-10    	     140	   8470660 ns/op	13092398 B/op	    8733 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkRegionWitnesses-10    	     133	   9581240 ns/op	13092418 B/op	    8733 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkRegionWitnesses-10    	     140	   8464451 ns/op	13092405 B/op	    8733 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkRegionWitnesses-10    	     142	   8340868 ns/op	13092391 B/op	    8733 allocs/op
+PASS
