@@ -180,6 +180,42 @@ func TestToolsReadTheSameDatabaseMapping(t *testing.T) {
 	}
 }
 
+// 运维工具直接读 DAO 文档时要的物理库名（cmd/sidmove players、cmd/schemamigrate）：与 DAOCollection 同一规则——
+// dbscope=sid 的 DAO 加 _<sid>（v1.47.0 起本地实体的 DAO 缺省按服分库，工具只换逻辑库就会读到空库）；sid 取参数，
+// 为 0 时取配置文件的；按服分库而两处都没有 sid 时拒绝。
+func TestToolsResolveTheDAODatabaseLikeTheProcess(t *testing.T) {
+	coredata.DeclareDatabases(coredata.LogicalDatabase{Name: "wiring_main"})
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.game.yaml")
+	if err := os.WriteFile(path, []byte("sid: 1000\ndataengine:\n  databases: {wiring_main: planet_tool}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		dao  DAOStore
+		sid  int32
+		want string
+	}{
+		{scopedDAO{global: true}, 0, "planet_tool"},
+		{scopedDAO{}, 0, "planet_tool_1000"},
+		{scopedDAO{}, 2000, "planet_tool_2000"},
+	} {
+		got, err := DAODatabaseFile(path, c.sid, c.dao, nil)
+		if err != nil || got != c.want {
+			t.Fatalf("DAODatabaseFile(sid %d, %+v) = %q, %v; want %q", c.sid, c.dao, got, err, c.want)
+		}
+	}
+	noSid := filepath.Join(dir, "config.nosid.yaml")
+	if err := os.WriteFile(noSid, []byte("dataengine:\n  databases: {wiring_main: planet_tool}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := DAODatabaseFile(noSid, 0, scopedDAO{}, nil); err == nil {
+		t.Fatalf("a dbscope=sid DAO without any sid must be refused, got %q", got)
+	}
+	if got, err := DAODatabaseFile(noSid, 0, scopedDAO{global: true}, nil); err != nil || got != "planet_tool" {
+		t.Fatalf("a global DAO needs no sid: got %q, %v", got, err)
+	}
+}
+
 // 进程里有声明的逻辑库（生成的 gen_databases.go 在 init 里登记）而自建装配没给 DataEngine 映射表：构造 MongoStore
 // （engine.Assemble 也经它）时就拒绝，不等第一次投影——那时记录已经进了 WAL，只能卡在投影上。给了表照常构造。
 func TestSelfAssembledMongoStoreRequiresAMapWhenDatabasesAreDeclared(t *testing.T) {

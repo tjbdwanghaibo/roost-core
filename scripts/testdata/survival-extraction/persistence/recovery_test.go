@@ -485,5 +485,9 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.Database(h.database).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
+	// add dao --entity 给本地实体写 dbscope=sid（v1.47.0 起）：这些 DAO 的文档在 <库>_<sid>，本用例的存储没有 sid（0）。
+	if e = h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); e != nil {
+		t.Fatal(e)
+	}
 	t.Logf("SIGKILL: %d unprojected strict records; four-player materials, crafting and extraction restored; driver loop delivered one overdue tick after cold load and the next deadline on time; third process retried admission, commands and sealed payouts", barrier.Unprojected)
 }

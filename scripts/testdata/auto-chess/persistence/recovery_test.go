@@ -472,5 +472,9 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.Database(h.database).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
+	// add dao --entity 给本地实体写 dbscope=sid（v1.47.0 起）：这些 DAO 的文档在 <库>_<sid>，本用例的存储没有 sid（0）。
+	if e = h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); e != nil {
+		t.Fatal(e)
+	}
 	t.Logf("SIGKILL: %d unprojected strict records; eight-seat frozen battle restored, driver loop delivered one catch-up stage after cold load and %d later stages at their deadlines (redelivered 0), third process retried all commands and eight rewards", barrier.Unprojected, delivered-1)
 }

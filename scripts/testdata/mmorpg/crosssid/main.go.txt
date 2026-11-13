@@ -64,7 +64,7 @@ var (
 	prefix      = flag.String("prefix", "mmo_world", "bus prefix")
 	endpoints   = flag.String("endpoints", "1000=127.0.0.1:7000,1001=127.0.0.1:7001", "sid=addr list")
 	mongoURI    = flag.String("mongo", "", "Mongo URI")
-	database    = flag.String("db", "mmo_world", "Player DAO database")
+	database    = flag.String("db", "mmo_world", "Player DAO physical database prefix (the Player DAO is dbscope=sid: each player is in <db>_<sid>)")
 	statePath   = flag.String("state", "state.json", "drill state file")
 	from        = flag.String("from", "", "sender name")
 	to          = flag.String("to", "", "recipient name")
@@ -567,7 +567,8 @@ func bags(ctx context.Context) error {
 			var doc struct {
 				Items map[string]int32 `bson:"items"`
 			}
-			if err := client.Database(*database).Collection("player").FindOne(ctx, bson.M{"_id": id}).Decode(&doc); err != nil {
+			// v1.47.0 起 add dao --entity 给本地实体写 dbscope=sid：玩家的文档在他所在服的库 <db>_<sid>。
+			if err := client.Database(fmt.Sprintf("%s_%d", *database, p.SID)).Collection("player").FindOne(ctx, bson.M{"_id": id}).Decode(&doc); err != nil {
 				return err
 			}
 			counts[name] = doc.Items[strconv.FormatInt(itemID, 10)]
