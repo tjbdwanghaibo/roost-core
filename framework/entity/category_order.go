@@ -199,6 +199,7 @@ func ValidateEntityRegistry() error {
 		// 这个组合启动、要到装配 Remote 时才暴露。
 		if entry.builder != nil {
 			problems = append(problems, remoteManagedDaoScopeProblems(entry.builder)...)
+			problems = append(problems, mixedDaoScopeProblems(entry.builder)...)
 		}
 	}
 	if len(problems) == 0 {
@@ -206,6 +207,11 @@ func ValidateEntityRegistry() error {
 	}
 	return fmt.Errorf("entity registry is inconsistent: %w", joinCategoryProblems(problems))
 }
+
+// ErrMixedDaoScope 表示本地实体的某个 DAO 与主 DAO（DaoBuilders[0]）不在同一个库范围（dbscope）。组件 DAO 跟随宿主
+// 实体的范围（维护者 2026-11-13）：一个实体的文档要么全在本服库（sid），要么全在共用库（global）；混用时起服预加载
+// （要求全部 sid）拒绝这个 kind，换服搬档只搬 sid 的那一部分，留在共用库的部分到了新服读不到对的那份。
+var ErrMixedDaoScope = errors.New("entity: every DAO of a local entity must use its primary DAO's dbscope")
 
 // ErrRemoteManagedServerScopedDAO 表示 remote=managed 实体使用了按服选库（dbscope=sid）的 DAO。
 // 托管实体可由任一进程写入、所有权可迁移，而 Remote 提交按提交方 sid 选库、加载按本服 sid 选库，两者不一致会让实体
@@ -226,6 +232,48 @@ func ValidateRemoteManagedDaoScopes(builders []*EntityBuilderParam) error {
 		problems = append(problems, remoteManagedDaoScopeProblems(builder)...)
 	}
 	return errors.Join(problems...)
+}
+
+// mixedDaoScopeProblems 实例化本地 kind 的每个 DAO，返回范围与主 DAO（dao[0]）不同的违规项（ErrMixedDaoScope）。
+// 未实现 DatabaseScopedDao 的 DAO 按 global。托管 kind 不在这里查：它们的规则是全部 global（remoteManagedDaoScopeProblems）。
+func mixedDaoScopeProblems(builder *EntityBuilderParam) []error {
+	if builder == nil || GetEntityKindRemotePolicy(builder.Kind).RemoteManaged() || len(builder.DaoBuilders) < 2 {
+		return nil
+	}
+	scopeOf := func(dao DaoInterface) DatabaseScope {
+		if scoped, ok := dao.(DatabaseScopedDao); ok {
+			return scoped.DbScope()
+		}
+		return DatabaseGlobal
+	}
+	var primary DaoInterface
+	if build := builder.DaoBuilders[0]; build != nil {
+		primary = build()
+	}
+	if primary == nil {
+		return nil
+	}
+	want := scopeOf(primary)
+	var problems []error
+	for i, build := range builder.DaoBuilders[1:] {
+		if build == nil {
+			continue
+		}
+		dao := build()
+		if dao == nil || scopeOf(dao) == want {
+			continue
+		}
+		problems = append(problems, fmt.Errorf("%w: kind=%d dao[%d] %T collection=%q uses dbscope=%s but the primary DAO dao[0] collection=%q uses dbscope=%s; a component DAO follows its host entity's scope (construct it with the host DAO's DbScope)",
+			ErrMixedDaoScope, builder.Kind, i+1, dao, dao.CollName(), databaseScopeName(scopeOf(dao)), primary.CollName(), databaseScopeName(want)))
+	}
+	return problems
+}
+
+func databaseScopeName(scope DatabaseScope) string {
+	if scope == DatabaseServer {
+		return "sid"
+	}
+	return "global"
 }
 
 // remoteManagedDaoScopeProblems 实例化托管 kind 的每个 DAO，返回使用 dbscope=sid 的违规项。

@@ -2,16 +2,25 @@
 
 ## 2026-11-13：本地实体起服预加载与本地实体 DAO 缺省 dbscope=sid（v1.47.0，未发版）
 
-设计见 [guide/02“起服预加载与按服分库”](../framework/guide/02-nest-entity.md#起服预加载与按服分库v1470-起)、实现见 [impl/12 §2H1](../framework/impl/12-codegen.md#2h1-本地实体起服预加载与-dao-缺省-dbscopesidv1470)。
+设计见 [guide/02“起服预加载与按服分库”](../framework/guide/02-nest-entity.md#起服预加载与按服分库v1470-起)、实现见 [impl/12 §2H1](../framework/impl/12-codegen.md#2h1-本地实体起服预加载与-dao-缺省-dbscopesidv1470)。本节按维护者 2026-11-13 的要求分两类：**框架本身的限制**是设计上的边界，要改需要新的框架能力；**遗留问题**是实现、生成物或验收没做到位的地方，按计划修。
 
-- **预加载载入本服库里的全部文档，没有数量上限与时间预算**：每页 1000 条、每批 16 个并发，用进程的基础 context；Mongo 卡住时起服一直等到进程被停。实体数很大时起服时间与内存随之增长，框架不估算、不截断。
+### 框架本身的限制
+
 - **预加载不等于常驻**：框架没有冷热换出；被运维卸载、换服交出、业务空闲卸载的实体之后按需加载，不会再预加载。`EntityLifetimeResident` 仍只是声明。
-- **只按主 DAO 枚举**：kind 的第一个 DAO（`DaoBuilders[0]`）所在集合里有文档的实体才会被列出；只在别的 DAO 里有文档的不列出（新建实体时框架给每个持久 DAO 都写整文档，正常不会出现）。
-- **sid 只在一个服务类型内唯一**：不同服务类型的 sid 可能相同，同一个逻辑库在它们那里会落到同一个 `<库>_<sid>`。所以没写 `service=` 的本地预加载要求只有一个候选服务；两个服务类型共用同一个逻辑库与集合的部署不受支持（预加载会把对方的实体也列出来）。
-- **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`（各服共享的地形数据，维护者本轮只点名 Player / World）。terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid；分区场景（同一张地图跨多个 game 服）下模块地形按服分库是否符合预期**尚未确认**。
-- **`add dao --entity` 的缺省变了**：本地实体的 DAO 骨架写 `dbscope=sid`。各玩法脚本（`scripts/test-{slg,mmorpg,card-rpg,auto-chess,idle-sim}-generated.sh`、`scripts/test-genres-generated.py`）与 genre 参考文档里经它生成的 DAO 随之变化。夹具已按此改了两处——mmorpg 跨服演练按玩家的 sid 读 `<db>_<sid>`，各玩法真实依赖用例（`ROOST_*_REAL`）的收尾多删一个 `<库>_0`（这些用例的存储没有 sid）——本轮都**没有重跑**，是否还有别的直接读库处**尚未确认**。`-template game` 的 Player 缺省没有 DAO，要预加载 Player 先 `add dao Player --entity Player`。
-- **combat 组件的 DAO 仍是 global**：`gameplay/skill/combatcomponent.CombatDao` 没有 `DbScope()`，装了 combat 模块的 Player 一部分文档在 sid 库、一部分在共享库。功能上不受影响（共享库各服同一位置），但这样的 Player 不能声明 `preload=startup`：运行期 `ValidateLocalPreloadKinds` 拒绝、起服失败；生成期只认得生成 DAO 的 `DbScope()`，combat 这类手写 DAO 读不出范围、放过，换服也不搬它的战斗文档（各服本来共用）。要不要让组件 DAO 跟随宿主实体的 dbscope **待维护者决定**。
+- **只按主 DAO 枚举**：kind 的第一个 DAO（`DaoBuilders[0]`）所在集合里有文档的实体才会被列出（新建实体时框架给每个持久 DAO 都写整文档，正常不会只缺主文档）。
+- **sid 只在一个服务类型内唯一**：不同服务类型的 sid 可能相同，同一个逻辑库在它们那里会落到同一个 `<库>_<sid>`。所以没写 `service=` 的本地预加载要求只有一个候选服务；两个服务类型共用同一个逻辑库与集合的部署不受支持。
+- **一个实体的文档在同一个库范围里**：组件 DAO 跟随宿主实体的 dbscope（维护者 2026-11-13）。本地实体的组件 DAO 与主 DAO 范围不同时，生成工程的 `registry.RegisterAll`（`entity.ValidateEntityRegistry`）在起服时拒绝（`entity.ErrMixedDaoScope`）；托管实体照旧全部 global。
 - **存储位置变了、不兼容旧数据**：Player / World 与模块本地实体的文档从共用库搬到 `<库>_<sid>`；线上尚未部署，按规则不做迁移，升级前清空数据（CHANGELOG）。
+
+### 遗留问题（待修）
+
+- **预加载没有数量上限与时间预算**：每页 1000 条、每批 16 个并发，用进程的基础 context；Mongo 卡住时起服一直等到进程被停，实体很多时起服时间与内存随之增长。要加预算与超时。
+- **`-template game` 的 Player 缺省没有 DAO**：要预加载 Player 先 `add dao Player --entity Player`（装任何往 Player 加状态的模块时安装器会建）。生成器应缺省带上 Player 的 DAO。
+- **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`（维护者本轮只点名 Player / World）。terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid；分区场景（同一张地图跨多个 game 服）下地形按服分库是否合适**尚未确认**，要定下来并让 demo 与模块一致。
+- **换服崩溃窗口没有自动清理**：换服提交后、删原服的库之前崩溃，原服重启会把旧档预加载进内存；续做时目标服补搬冲突，旧档留给运维删（见 [rehome 模块 README](../../modules/rehome/README.md)）。
+- **夹具与玩法脚本没有重跑**：`add dao --entity` 的骨架缺省改成 `dbscope=sid`，各玩法脚本（`scripts/test-{slg,mmorpg,card-rpg,auto-chess,idle-sim}-generated.sh`、`scripts/test-genres-generated.py`）与 genre 参考文档里经它生成的 DAO 随之变化；mmorpg 跨服演练改为按玩家的 sid 读 `<db>_<sid>`，各玩法真实依赖用例（`ROOST_*_REAL`）的收尾多删一个 `<库>_0`。合并后的全套与真实依赖用例跑过之前，是否还有别处直接读共用库**尚未确认**。
+
+已修：**combat 与 dungeon 的组件 DAO 原来是 global**（`combatcomponent.CombatDao`、`level.LevelDAO` 没有 `DbScope()`），挂在 sid 实体上时一个实体的文档分在两个库里，不能预加载、换服不搬。2026-11-13 改为跟随宿主：`NewCombatDaoIn` / `NewLevelDAOIn` 带上宿主主 DAO 的 `DbScope()`，提交的写入键带同一个范围，模块模板按此构造；注册校验拒绝范围不一致的组合（上一类第 4 条）。修前 `TestValidateEntityRegistryRejectsALocalKindWhoseDaosMixScopes` 报 `ValidateEntityRegistry accepted local kind 145 whose component DAO is dbscope=global under a dbscope=sid primary DAO`；生成工程里把 combat / dungeon 的 DAO 改回旧构造，`registry.RegisterAll` 报 `kind=1 dao[1] *combatcomponent.CombatDao collection="combat_state" uses dbscope=global but the primary DAO dao[0] collection="player" uses dbscope=sid`（dungeon 同理）。
 
 ## 2026-11-13：game-demo 主视野超限用例在重负载下失败一次（尚未确认）
 

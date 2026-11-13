@@ -13,8 +13,9 @@ type DungeonLevelDAO = level.LevelDAO
 
 const DungeonLevelDAOCollection = level.CollectionName
 
+// 组件 DAO 跟随宿主实体的 dbscope（维护者 2026-11-13）：与 Dungeon 的主 DAO 同库同范围。
 func NewDungeonLevelDAO() *DungeonLevelDAO {
-	return level.NewLevelDAO(0, DungeonDaoDBName)
+	return level.NewLevelDAOIn(0, DungeonDaoDBName, (&DungeonDao{}).DbScope())
 }
 
 var _ entity.DaoInterface = (*DungeonLevelDAO)(nil)

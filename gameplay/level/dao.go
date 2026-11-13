@@ -21,11 +21,21 @@ type LevelDAO struct {
 	persistent bool
 	id         int64
 	db         string
+	scope      dataengine.DatabaseScope
 	tracker    dataengine.Tracker
 	state      State
 }
 
-func NewLevelDAO(id int64, db string) *LevelDAO { return &LevelDAO{id: id, db: db, persistent: true} }
+// NewLevelDAO 构造库范围为 global 的持久关卡 DAO；挂在实体上持久化时用 NewLevelDAOIn，范围跟随宿主实体。
+func NewLevelDAO(id int64, db string) *LevelDAO {
+	return NewLevelDAOIn(id, db, dataengine.DatabaseGlobal)
+}
+
+// NewLevelDAOIn 构造范围为 scope 的持久关卡 DAO。组件 DAO 跟随宿主实体的 dbscope（维护者 2026-11-13）：传宿主主 DAO
+// 的 DbScope()；实体注册校验（entity.ValidateEntityRegistry）拒绝与主 DAO 范围不同的组件 DAO。
+func NewLevelDAOIn(id int64, db string, scope dataengine.DatabaseScope) *LevelDAO {
+	return &LevelDAO{id: id, db: db, scope: scope, persistent: true}
+}
 
 // NewTransientLevelDAO 用于不落库的瞬态 Room；仍参与 Nest 回滚。
 func NewTransientLevelDAO(id int64) *LevelDAO { return &LevelDAO{id: id} }
@@ -33,6 +43,7 @@ func NewTransientLevelDAO(id int64) *LevelDAO { return &LevelDAO{id: id} }
 func (d *LevelDAO) Id() int64                         { return d.id }
 func (d *LevelDAO) SetId(id int64)                    { d.id = id }
 func (d *LevelDAO) DbName() string                    { return d.db }
+func (d *LevelDAO) DbScope() dataengine.DatabaseScope { return d.scope }
 func (d *LevelDAO) CollName() string                  { return CollectionName }
 func (d *LevelDAO) Dirty() entity.IDirty              { return &d.tracker }
 func (d *LevelDAO) CleanDirty()                       { d.tracker.SelfClean() }
@@ -126,7 +137,7 @@ func (d *LevelDAO) PrepareMutation(change nest.PersistChange) (dataengine.Mutati
 	if version == math.MaxUint64 {
 		return dataengine.Mutation{}, ErrBudget
 	}
-	m := dataengine.Mutation{Key: dataengine.DocumentKey{Database: d.db, Resource: CollectionName, ID: d.id}, Kind: dataengine.MutationPut, ExpectedVersion: version, NextVersion: version + 1, Schema: schemaVersion, Codec: "bson-v2", Mask: change.Mask}
+	m := dataengine.Mutation{Key: dataengine.DocumentKey{Database: d.db, Scope: d.scope, Resource: CollectionName, ID: d.id}, Kind: dataengine.MutationPut, ExpectedVersion: version, NextVersion: version + 1, Schema: schemaVersion, Codec: "bson-v2", Mask: change.Mask}
 	if change.Delete {
 		m.Kind = dataengine.MutationDelete
 		return m, nil

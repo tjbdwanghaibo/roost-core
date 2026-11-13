@@ -41,6 +41,7 @@ const (
 type CombatDao struct {
 	id      int64
 	dbName  string
+	scope   dataengine.DatabaseScope
 	coll    string
 	tracker dataengine.Tracker
 
@@ -49,9 +50,17 @@ type CombatDao struct {
 	buffs      *combat.BuffContainer
 }
 
-// NewCombatDao 为实体的存储 ID 构造空 DAO。dbName 是存储服务解析的逻辑库名（生成的工厂默认 "game"）。
+// NewCombatDao 为实体的存储 ID 构造空 DAO，库范围是 global。dbName 是存储服务解析的逻辑库名（生成的工厂默认 "game"）。
+// 挂在实体上持久化时用 NewCombatDaoIn，范围跟随宿主实体。
 func NewCombatDao(id int64, dbName string) *CombatDao {
-	dao := &CombatDao{id: id, dbName: dbName, coll: CollectionName, attributes: combat.NewAttributeSet(), buffs: combat.NewBuffContainer()}
+	return NewCombatDaoIn(id, dbName, dataengine.DatabaseGlobal)
+}
+
+// NewCombatDaoIn 构造范围为 scope 的空 DAO。组件 DAO 跟随宿主实体的 dbscope（维护者 2026-11-13）：传宿主主 DAO 的
+// DbScope()，例如 dbscope=sid 的 Player 上就是 DatabaseServer，战斗状态与玩家的其余文档同在本服库里，起服预加载与
+// 换服搬档才覆盖得到它。实体注册校验（entity.ValidateEntityRegistry）拒绝与主 DAO 范围不同的组件 DAO。
+func NewCombatDaoIn(id int64, dbName string, scope dataengine.DatabaseScope) *CombatDao {
+	dao := &CombatDao{id: id, dbName: dbName, scope: scope, coll: CollectionName, attributes: combat.NewAttributeSet(), buffs: combat.NewBuffContainer()}
 	dao.buffs.LinkAttributes(dao.attributes)
 	return dao
 }
@@ -60,6 +69,7 @@ func NewCombatDao(id int64, dbName string) *CombatDao {
 func (dao *CombatDao) Id() int64                         { return dao.id }
 func (dao *CombatDao) SetId(id int64)                    { dao.id = id }
 func (dao *CombatDao) DbName() string                    { return dao.dbName }
+func (dao *CombatDao) DbScope() dataengine.DatabaseScope { return dao.scope }
 func (dao *CombatDao) CollName() string                  { return dao.coll }
 func (dao *CombatDao) Dirty() entity.IDirty              { return &dao.tracker }
 func (dao *CombatDao) CleanDirty()                       { dao.tracker.SelfClean() }
@@ -128,7 +138,7 @@ func (dao *CombatDao) Migrate(raw []byte, from uint32) ([]byte, error) {
 func (dao *CombatDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
 	version := dao.tracker.Version()
 	mutation := dataengine.Mutation{
-		Key:  dataengine.DocumentKey{Database: dao.DbName(), Resource: dao.CollName(), ID: dao.Id()},
+		Key:  dataengine.DocumentKey{Database: dao.DbName(), Scope: dao.scope, Resource: dao.CollName(), ID: dao.Id()},
 		Kind: dataengine.MutationPatch, ExpectedVersion: version, NextVersion: version + 1,
 		Mask: change.Mask, Schema: combatSchemaVersion, Codec: "bson-v2",
 	}

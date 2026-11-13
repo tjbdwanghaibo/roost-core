@@ -347,11 +347,58 @@ func registerScopedRegistryKind(kind EntityKind, policy RemotePolicy, scope Data
 	})
 }
 
+// registerScopedRegistryKindWith 登记一个两 DAO 的 kind：主 DAO（dao[0]）用 primary，组件 DAO（dao[1]）用 component。
+func registerScopedRegistryKindWith(kind EntityKind, policy RemotePolicy, primary, component DatabaseScope) {
+	MustRegisterEntityKindDefs(EntityKindDef{Kind: kind, Category: EntityCategoryRemote, RemotePolicy: policy})
+	RegisterEntityBuilder(&EntityBuilderParam{
+		Category: EntityCategoryRemote,
+		Kind:     kind,
+		Builder: func(*EntityCreateParam) (IThreadSafeEntity, error) {
+			return nil, errors.New("never built")
+		},
+		DaoBuilders: []DaoBuilderFunc{
+			func() DaoInterface {
+				return &scopedRegistryDao{factoryTestDao: factoryTestDao{coll: "primary"}, scope: primary}
+			},
+			func() DaoInterface {
+				return &scopedRegistryDao{factoryTestDao: factoryTestDao{coll: "scoped"}, scope: component}
+			},
+		},
+	})
+}
+
+// 组件 DAO 跟随宿主实体的 dbscope（维护者 2026-11-13）：本地实体的每个 DAO 必须与主 DAO 同一个范围，否则一个实体
+// 一半在本服库、一半在共用库——不能起服预加载（预加载要求全部 sid），换服搬档也只搬 sid 的那一半。
+// 托管实体不在这条规则里（它们全部 global，由上面的规则管）。
+func TestValidateEntityRegistryRejectsALocalKindWhoseDaosMixScopes(t *testing.T) {
+	isolateEntityRegistry(t)
+	registerScopedRegistryKindWith(145, RemotePolicyNone, DatabaseServer, DatabaseGlobal)
+	registerScopedRegistryKindWith(146, RemotePolicyNone, DatabaseServer, DatabaseServer)
+	registerScopedRegistryKindWith(147, RemotePolicyNone, DatabaseGlobal, DatabaseGlobal)
+
+	err := ValidateEntityRegistry()
+	if err == nil || !errors.Is(err, ErrMixedDaoScope) {
+		t.Fatalf("ValidateEntityRegistry accepted local kind 145 whose component DAO is dbscope=global under a dbscope=sid primary DAO: err=%v", err)
+	}
+	if n := strings.Count(err.Error(), "kind=145 "); n != 1 {
+		t.Fatalf("kind 145 reported %d times, want once: %v", n, err)
+	}
+	if !strings.Contains(err.Error(), "dao[1]") || !strings.Contains(err.Error(), `"scoped"`) {
+		t.Fatalf("the error does not name the DAO that leaves its host's scope: %v", err)
+	}
+	for _, legal := range []string{"kind=146 ", "kind=147 "} {
+		if strings.Contains(err.Error(), legal) {
+			t.Fatalf("legal combination %q reported: %v", legal, err)
+		}
+	}
+}
+
 func TestValidateEntityRegistryRejectsRemoteManagedServerScopedDao(t *testing.T) {
 	isolateEntityRegistry(t)
 	registerScopedRegistryKind(141, RemotePolicyManaged, DatabaseServer)
 	registerScopedRegistryKind(142, RemotePolicyManaged, DatabaseGlobal)
-	registerScopedRegistryKind(144, RemotePolicyNone, DatabaseServer)
+	// 本地 kind 的 DAO 全部 sid 是合法的（组件 DAO 跟随宿主的范围，见下一个测试）。
+	registerScopedRegistryKindWith(144, RemotePolicyNone, DatabaseServer, DatabaseServer)
 
 	err := ValidateEntityRegistry()
 	if err == nil || !strings.Contains(err.Error(), "dbscope=sid") {

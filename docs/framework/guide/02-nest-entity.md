@@ -47,6 +47,8 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 
 **DAO 选 `dbscope=sid` 还是 global**：本地实体的 DAO 默认 `dbscope=sid`（`add dao --entity` 生成的骨架、demo 的 Player / World、模块里的本地实体）——实体归一个服，换服（rehome 模块搬档）与合服（sidmerge）按 sid 库搬它。各服共享、不归某一个服的数据才用 `dbscope=global`：Remote 托管实体（alliance、team 等，按 owner 路由而不是按 sid）、跨服共享的地形数据。按服分库的物理库名加上 `_<sid>` 后不能超过 63 字节（D9 校验，起服时拒绝）。v1.47.0 起存储位置改变，旧数据不迁移（见 CHANGELOG）。
 
+**组件 DAO 跟随宿主实体的范围**（维护者 2026-11-13）：一个本地实体的全部 DAO 与主 DAO 同一个 dbscope，文档要么都在本服库、要么都在共用库。手写的组件 DAO（战斗状态 `combatcomponent.CombatDao`、关卡状态 `level.LevelDAO`）用 `NewCombatDaoIn` / `NewLevelDAOIn` 带上宿主主 DAO 的 `DbScope()` 构造，提交的写入键带同一个范围；生成工程的 `registry.RegisterAll`（`entity.ValidateEntityRegistry`）在起服时拒绝范围不一致的组合（`entity.ErrMixedDaoScope`），否则这个实体不能预加载、换服也只搬走一部分。
+
 ## 3. 事务与回滚
 
 事务会修改且失败应恢复的状态放在 DAO。生成 setter 登记事务本地 PersistChange，回滚由 DAO 快照/undo 统一完成；组件不维护独立 undo 体系。rollback=none 不承诺失败恢复。事务外写持久 setter 被拒绝；只读和临时状态应明确声明 nopersist/nocoll。

@@ -11,7 +11,10 @@ type CombatDAO = combatcomponent.CombatDao
 
 const CombatDAOCollection = combatcomponent.CollectionName
 
-func NewCombatDAO() *CombatDAO { return combatcomponent.NewCombatDao(0, PlayerDaoDBName) }
+// 组件 DAO 跟随宿主实体的 dbscope（维护者 2026-11-13）：与 Player 的主 DAO 同库同范围。
+func NewCombatDAO() *CombatDAO {
+	return combatcomponent.NewCombatDaoIn(0, PlayerDaoDBName, (&PlayerDao{}).DbScope())
+}
 
 var _ entity.DaoInterface = (*CombatDAO)(nil)
 var _ entity.PersistedDaoLoader = (*CombatDAO)(nil)
