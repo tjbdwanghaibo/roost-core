@@ -116,7 +116,7 @@ func (component *Component) planExp(amount int64) (exp int64, gained int32, err 
 // AddExp 发放 amount 点经验，够升级就升（一次可以升多级），返回升了几级。
 // 数额不是正数（profile_exp_invalid）、经验或等级超出存储范围（profile_exp_overflow）时不写任何字段。
 //
-// 升了级就调一次 onLevelUp（profile_levelup.go，归工程所有，升级奖励写在那里）。它与经验、等级在
+// 升了级就调一次 onLevelUp（levelup.go，归工程所有，升级奖励写在那里）。它与经验、等级在
 // 同一笔事务里：它返回错误时这里原样返回，handler 以错误结束，Nest 把已经写下的经验和等级一起撤回。
 // 所以调用方拿到错误后不要吞掉继续提交——那样等级升了、奖励没发。
 //

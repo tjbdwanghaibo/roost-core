@@ -443,11 +443,11 @@ const profileHookChildEnv = "PROFILE_TEST_LEVELUP_HOOK_FAILS"
 
 // profileFailingHook 是测试用的升级钩子：每次都返回错误，错误里带着收到的两个等级，以及它被调用时
 // 档里已经是几级、等级内经验是多少（钩子里读到的应当是升级之后的值）。
-const profileFailingHook = `package player
+const profileFailingHook = `package profile
 
 import "fmt"
 
-func (component *ProfileComponent) onLevelUp(from, to int32) error {
+func (component *Component) onLevelUp(from, to int32) error {
 	return fmt.Errorf("injected level-up failure %d->%d, saw level %d exp %d", from, to, component.Level(), component.Exp())
 }
 `
@@ -467,12 +467,12 @@ func TestProfileLevelUpHookErrorRollsBackLevelAndExp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hookFile := filepath.Join(filepath.Dir(packageDir), "entities", "player", "profile_levelup.go")
+	hookFile := filepath.Join(filepath.Dir(packageDir), "components", "profile", "levelup.go")
 	if _, err := os.Stat(hookFile); err != nil {
 		t.Fatalf("the level-up hook file is not where this test expects it: %v", err)
 	}
 	scratch := t.TempDir()
-	replacement := filepath.Join(scratch, "profile_levelup.go")
+	replacement := filepath.Join(scratch, "levelup.go")
 	if err := os.WriteFile(replacement, []byte(profileFailingHook), 0o644); err != nil {
 		t.Fatal(err)
 	}

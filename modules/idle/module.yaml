@@ -17,6 +17,6 @@ component: Idle
 protocols: [IdleClaim]
 errcodes: [idle_sequence, idle_clock_back, idle_rules]
 verify:
-  packages: [./game/handler, ./game/entities/player]
+  packages: [./game/handler, ./game/components/idle]
   run: ^TestIdle
   pass: 19

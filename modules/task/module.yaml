@@ -16,7 +16,7 @@ component: Task
 protocols: [TaskClaim]
 errcodes: [task_unknown, task_incomplete, task_claimed, task_count_invalid]
 verify:
-  packages: [./game/handler, ./game/entities/player]
+  packages: [./game/handler, ./game/components/task]
   run: ^TestTask
   pass: 29
 with:
