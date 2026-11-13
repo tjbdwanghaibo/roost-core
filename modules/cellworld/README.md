@@ -12,7 +12,7 @@
 - 模块没有预设 Player / Scene / Monster 类型，不会自动替业务创建这些 Entity。也不替业务决定战斗、掉落与玩家复活规则。
 - Cell 必须开启 App singleton。Redis 权威键须持久化、禁止淘汰，不允许在丢失授权记录后靠旧 Mongo 快照直接重建。
 - 所有节点使用相同 world、网格与协议版本。内网 NATS 必须隔离环境并使用连接级认证。旧协议 / schema 不兼容，数据升级由离线迁移负责。
-- `Runtime.Stop` 超时意味着仍未排空，调用方保留 Nest / NATS / Redis 并重试；不得先关连接或释放单实例锁。
+- `Runtime.Stop` 超时意味着 Node 仍未排空：不得先关 Nest / NATS / Redis 或释放单实例锁。`Node.Drain` 本身可以换新 ctx 重试，但 App 不重试 `Service.Shutdown`：生成工程里 Shutdown 把这个错误交给 App，App 照停机流程继续停 Mod（依赖未排空时不停它依赖的更底层 Mod），Mod 没有全部停完就不释放锁，进程随后退出；没排空的入场与交接由授权租约到期后的接管处理。
 
 ## 复用方式
 

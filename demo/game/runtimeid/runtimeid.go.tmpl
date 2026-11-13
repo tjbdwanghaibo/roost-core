@@ -50,24 +50,6 @@ type Allocator struct {
 	sequence atomic.Int64
 }
 
-// NewStartingAt is New whose sequence continues after start instead of 0.
-// A partitioned scene needs it: a monster spawned by one Cell process walks
-// into the next cell and outlives a crash of the process that minted it, so
-// the restarted process must not mint that id again (game service,
-// partition.go, starts from the boot time). An ordinary scene keeps New:
-// its monsters die with the process.
-func NewStartingAt(sid int32, start int64) (*Allocator, error) {
-	allocator, err := New(sid)
-	if err != nil {
-		return nil, err
-	}
-	if start < 0 || start >= MaxSequence {
-		return nil, fmt.Errorf("runtimeid: start %d is outside 0..%d", start, MaxSequence-1)
-	}
-	allocator.sequence.Store(start)
-	return allocator, nil
-}
-
 // New validates the sid at startup rather than at the first spawn: a process
 // whose sid cannot be encoded must fail to start, not fail to spawn its first
 // monster an hour later.

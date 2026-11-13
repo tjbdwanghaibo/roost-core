@@ -10,5 +10,5 @@ verify:
 next:
   - 在服务 InstallNestHandlers 中登记 cellworld.NewHandlers()，NewNode 时传同一份 Handlers。
   - 用 game/cellworldhost.New 装配 Node；业务实现 Actor、RegionHost、BasePlayer 接口，Player 的快照和死亡回执必须为持久 DAO 字段。
-  - 完成实体心跳装配后调用 Runtime.Start；停机先停自身业务准入，再调用 Runtime.Stop，失败时保留 Nest、Redis 与 NATS。
+  - 完成实体心跳装配后调用 Runtime.Start；停机先停自身业务准入，再调用 Runtime.Stop；它返回错误时直接从 Service.Shutdown 返回，不要先关 Nest、Redis 与 NATS。
   - Cell 进程必须开启 singleton.enabled；Redis 必须持久化且禁止淘汰权威键。完整可运行适配见 game-demo 的 game/partition。

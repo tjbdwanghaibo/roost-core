@@ -95,6 +95,7 @@ func New(registry *app.Registry, cfg cellworld.NodeConfig) (*Runtime, error) {
 	return runtime, nil
 }
 
+// Start 只能调用一次；失败时 Node 已退出，Runtime 回到“未启动”：StartSpawns 拒绝、Stop 无事可做。
 func (r *Runtime) Start(ctx context.Context) error {
 	started := false
 	r.startOnce.Do(func() { started = true })
@@ -107,15 +108,19 @@ func (r *Runtime) Start(ctx context.Context) error {
 	select {
 	case <-r.Node.Ready():
 	case <-r.done:
-		return errors.Join(errors.New("cellworldhost: Node stopped before ready"), r.runError)
+		err := errors.Join(errors.New("cellworldhost: Node stopped before ready"), r.runError)
+		r.cancel, r.done = nil, nil
+		return err
 	case <-ctx.Done():
 		cancel()
 		<-r.done
+		r.cancel, r.done = nil, nil
 		return ctx.Err()
 	}
 	if err := app.AddIngress(r.registry, "cellworld", r.Node); err != nil {
 		cancel()
 		<-r.done
+		r.cancel, r.done = nil, nil
 		return err
 	}
 	return nil
@@ -136,7 +141,8 @@ func (r *Runtime) StartSpawns(specs []cellworld.SpawnSpec, onError func(cellworl
 	return nil
 }
 
-// Stop 超时不取消 Node 或释放底层 Mods；调用者应保留依赖并重试。
+// Stop 超时不取消 Node 或释放底层 Mods。Node.Drain 可以换新 ctx 重试；装在 App 的 Service.Shutdown 里时
+// App 不重试 Shutdown，错误交回 App 后按停机流程退出（Mod 没停完不释放单实例锁），未排空的工作由租约到期后接管。
 func (r *Runtime) Stop(ctx context.Context) error {
 	if r == nil {
 		return nil
