@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **删除 `gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn`**（2026-11-13，维护者选 B，KNOWN-LIMITS“跨格笔刷的演练与旧接口”）：v1.43.0 为跨格笔刷按格拆分而加，跨格笔刷 2026-11-10 改为直接拒绝后仓内没有调用方。只按部分计算的入口删除，`Apply` / `BrushChanges` 行为不变；`Footprint`（Base 预扣配额）保留，原拆分用例改为 Footprint 上限用例。仓外调用方改用 `Apply` / `BrushChanges`。
+
 - **嵌套类型字段上的 `persist` / `nopersist` / `sync` / `nosync` 生成期报错**（codegen dao，2026-11-13，KNOWN-LIMITS“嵌套字段的 `persist,nosync` 不生效”）：持久与同步只按 DAO 顶层字段决定，嵌套类型的全部字段随所在顶层字段整体落库、整体编进同步补丁（`sync_proto.go` 给嵌套类型生成同步消息、`template_nested.go` 生成持久路径都不看字段开关）。原来这些开关写在嵌套字段上被接受却不生效：v1.47 字段缺省“既持久又同步”后，嵌套类型里标了 `nosync` 的内部账本照样发给客户端。现在解析期拒绝，报错点名类型与字段，改法是把这部分状态拆进另一个嵌套类型、挂到单独的顶层字段上，在顶层字段写开关；嵌套字段上 `map=...` 与 `dao:"-"` 照常可用。Remote 视图里嵌套字段原来按 `nopersist` 跳过的分支随之删除（嵌套字段一律随所在字段进视图）。
   - **行为变化**：嵌套字段上写了这四个开关的定义重新生成时报错，按报错拆字段。仓内模板、模块、夹具与 `scripts/testdata` 逐个扫过，只有 `codegen/internal/dao/testdata/remoteviews` 的 `Member.Transient`（`nopersist,nosync`）一处，已删除（它原来在 Remote 视图里被跳过、却照样落库与同步）。
   - **先红后绿**：`TestParseRejectsPersistAndSyncOptionsOnNestedFields` 修前 `dao:"nosync" on a nested field was accepted; persistence and sync are per top-level field, so it would not take effect`；变异“放过 nosync”后同一用例变红。验证：`codegen/internal/dao/...` 整包。

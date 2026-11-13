@@ -478,18 +478,14 @@ func TestViewBrushChangesCountsWhatApplyWouldChange(t *testing.T) {
 	if h, m, _ := v.BrushChanges(Brush{Op: BrushPaint, X: corner.X, Y: corner.Y, Radius: 750, Material: 201}, limits); h != 0 || m != 177 {
 		t.Fatalf("a corner paint counts %d heights / %d materials, want 0 / 177 (each sample point once)", h, m)
 	}
-	// 拆成每块一部分（P5 的跨格编辑）：各部分数出的点数合起来就是整笔的，也正是各块的 Footprint（改材质每个覆盖点都变）。
+	// 改材质时每个覆盖点都变：整笔数出的点数正是各块 Footprint 之和。
 	paint := Brush{Op: BrushPaint, X: corner.X, Y: corner.Y, Radius: 750, Material: 201}
-	footprint, sum := paint.Footprint(testMeta), 0
-	for _, key := range paint.Chunks(testMeta) {
-		h, m, err := v.BrushChangesIn(paint, limits, []ChunkKey{key})
-		if err != nil || h != 0 || m != footprint[key] {
-			t.Fatalf("corner paint part %v: %d / %d (%v), want 0 / %d", key, h, m, err, footprint[key])
-		}
-		sum += m
+	sum := 0
+	for _, n := range paint.Footprint(testMeta) {
+		sum += n
 	}
 	if sum != 177 {
-		t.Fatalf("the corner paint's parts count %d materials, want 177", sum)
+		t.Fatalf("the corner paint's footprint adds up to %d, want 177", sum)
 	}
 	if h, m, _ := v.BrushChanges(Brush{Op: BrushRaise, X: inOverlay.X + 3200, Y: inOverlay.Y + 3200, Radius: 500, Strength: 5}, limits); h != 0 || m != 0 {
 		t.Fatalf("raising points at the ceiling counts %d / %d, want nothing", h, m)
@@ -497,10 +493,6 @@ func TestViewBrushChangesCountsWhatApplyWouldChange(t *testing.T) {
 	v.Unload(ChunkKey{0, 1})
 	if _, _, err := v.BrushChanges(Brush{Op: BrushPaint, X: corner.X, Y: corner.Y, Radius: 750, Material: 1}, limits); !errors.Is(err, ErrNotLoaded) {
 		t.Fatalf("a brush over an unloaded chunk: %v, want ErrNotLoaded", err)
-	}
-	// 只数装着的那一块：没装的邻块不在 part 里就不需要。
-	if _, m, err := v.BrushChangesIn(Brush{Op: BrushPaint, X: corner.X, Y: corner.Y, Radius: 750, Material: 1}, limits, []ChunkKey{{1, 1}}); err != nil || m == 0 {
-		t.Fatalf("a part over a loaded chunk next to an unloaded one: %d (%v)", m, err)
 	}
 	if _, _, err := v.BrushChanges(Brush{Op: BrushRaise, X: corner.X, Y: corner.Y, Radius: 750}, limits); !errors.Is(err, ErrInvalidBrush) {
 		t.Fatalf("a raise without strength: %v, want ErrInvalidBrush", err)
