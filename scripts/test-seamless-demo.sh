@@ -89,7 +89,8 @@ cleanup() {
 		mkdir -p "$out/logs"
 		cp -R .dev "$out/logs/dev" 2>/dev/null
 		cp -R log "$out/logs/log" 2>/dev/null
-		mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval 'for (const name of ["cwdemo", "cwdemo_saga", "cwdemo_remote"]) { db.getSiblingDB(name).dropDatabase() }' >/dev/null 2>&1
+		# v1.47 起本地实体（Player、World……）dbscope=sid，文档在 cwdemo_<sid>：按前缀删掉本次的全部库。
+		mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval 'for (const d of db.adminCommand({listDatabases: 1, nameOnly: true}).databases) { if (/^cwdemo(_|$)/.test(d.name)) db.getSiblingDB(d.name).dropDatabase() }' >/dev/null 2>&1
 	fi
 	[[ -n "$etcd_pid" ]] && kill "$etcd_pid" 2>/dev/null && wait "$etcd_pid" 2>/dev/null
 	cd /

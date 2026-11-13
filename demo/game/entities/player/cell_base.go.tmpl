@@ -7,6 +7,7 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/attribute"
 	"{{MODULE}}/game/partition"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
@@ -69,9 +70,13 @@ func (player *Player) CellPanel() cellworld.Panel {
 // 属性在等级、装备或业务 Refresh 后实际变化时，Cell 面板在同一个 Player 事务里更新。
 // 不使用只覆盖升级的钩子，加载阶段的临时重建也不发送面板。
 func init() {
-	OnAttributeChanged("cellworld", func(c *AttributeComponent) error {
+	attribute.OnAttributeChanged("cellworld", func(host attribute.Owner) error {
+		player, ok := host.(*Player)
+		if !ok {
+			return nil // 属性组件也可以挂在别的实体上；只有 Player 有 Cell 面板
+		}
 		if node := partition.Node(); node != nil {
-			return node.UpdatePanel(c.Owner())
+			return node.UpdatePanel(player)
 		}
 		return nil
 	})
