@@ -739,7 +739,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// The load test: the controller can create Players, the EnterGame message
 	// is bound, the transport adapter and the scenario ship, and the command
 	// checks every response code so a coded failure fails the run.
-	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "lifecycle.PlayerFromRegistry(") {
+	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "player.LifecycleFromRegistry(") {
 		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
 	}
 	// Alliances live in the alliance service (FEATURE-2026-11-04-alliance-service
