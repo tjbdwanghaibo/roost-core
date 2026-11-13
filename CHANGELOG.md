@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：LevelComponent 持久模式的真实 Mongo / WAL 进程崩溃恢复**（gameplay/level，2026-11-14，KNOWN-LIMITS“LevelComponent”）：新增 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`（`-tags integration`）：写子进程（正式 DataEngine Runtime + Nest，waves 定义）推进到第二波后拦住投影、再提交一笔只在 WAL 里的击杀，被 SIGKILL；恢复子进程回放 WAL，冷加载出的组件状态与崩溃前最后一笔提交后一致，随后结算并关闭。变异 2 条（恢复时丢 WAL、恢复时丢计时器）均变红。没有行为改动。
+
 - **测试：共享模式两个真实进程交替写同一 Remote 实体**（scripts/testdata/remoteflow，2026-11-14，KNOWN-LIMITS“多写者本地副本”）：新增 `TestGeneratedRemoteSharedEntityTwoWriterProcesses`，两个子进程（sid 1000 / 1001，各自正式装配）经 stdin 命令交替 8 笔写：每笔写后的本地值是此前全部写的累计（写准入先按权威换掉落后的本地副本），Mongo 权威版本 8、终值为各笔之和。变异“不换落后副本”时第三笔写版本冲突、用例红。没有行为改动。
 
 - **测试：常驻实体的刷新与换服中止后的载回补真实副本集用例**（framework/dataengine/engine，2026-11-14，KNOWN-LIMITS“常驻的刷新与载回只有替身存储的用例”）：新增 `TestRealMongoResidentEntityRefreshAndReloadAfterAbortedHandOff`（`-tags integration`），正式 Nest + 文件 WAL + 后台投影 + 真实 Mongo 副本集：运维卸载被拒、人工修库后 `RefreshEntity` 换成库里的状态并接着写、`HandOffEntity` 后另一个写者推进文档、`Release` 立刻载回那个版本（不等第一次访问）并接着写，投影器不 fence。真实 Mongo 用例的装配抽成 `newRealMongoUnloadFixture`，与 `TestRealMongoEntityHandOffThenAnotherWriterThenRelease` 共用。变异 2 条（Release 不载回、Refresh 不载回）均变红。没有行为改动。
