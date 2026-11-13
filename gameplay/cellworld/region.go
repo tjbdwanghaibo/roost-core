@@ -413,7 +413,8 @@ func (v *beatView) get(n *Node, r *Region) (*spatial.BlockIndex, map[int64]Entit
 }
 
 // witnesses 给本格每个玩家 Real 推一份 witness：半径 R 内的本格记录与 Ghost（含自己），超出上限按距离取最近的（距离相同
-// 按 ID）。每拍对几百个观察者各查一次，候选与距离用复用的缓冲，每份视野只分配一次结果切片。
+// 按 ID）。每拍对几百个观察者各查一次，候选与距离用复用的缓冲，每份视野只分配一次结果切片。输出按观察者所在的刷新
+// 区块排序（见下）。
 func (n *Node) witnesses(r *Region, view *beatView, out *[]outgoing) {
 	var observers []localRec
 	for _, l := range r.locals.m {
@@ -428,7 +429,20 @@ func (n *Node) witnesses(r *Region, view *beatView, out *[]outgoing) {
 	if index == nil {
 		return
 	}
-	slices.SortFunc(observers, func(a, b localRec) int { return cmp.Compare(a.St.ID, b.St.ID) })
+	// 按刷新区块排（行优先、蛇形，块内按 ID）：出站按 Base 每 WitnessBatch 份合一条消息，相邻的观察者进同一批，
+	// 视野重叠的对象在一条消息里只编一次，同一块的成员表全量刷新也同相位（refreshDue）。
+	type order struct{ row, col, id int64 }
+	key := func(l localRec) order {
+		bx, by, _ := n.refreshBlock(l.St.Pos())
+		if by%2 != 0 {
+			bx = -bx
+		}
+		return order{row: by, col: bx, id: l.St.ID}
+	}
+	slices.SortFunc(observers, func(a, b localRec) int {
+		ka, kb := key(a), key(b)
+		return cmp.Or(cmp.Compare(ka.row, kb.row), cmp.Compare(ka.col, kb.col), cmp.Compare(ka.id, kb.id))
+	})
 	type near struct{ d2, id int64 }
 	var candidates []int64
 	var inRange []near

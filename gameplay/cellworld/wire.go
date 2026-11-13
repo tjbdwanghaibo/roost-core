@@ -23,7 +23,8 @@ import (
 // v9：持久入场序号、输入携带入场身份、攻击随机 ID、交接去重记录使用剩余时长。
 // v10：全局授权、进程 incarnation 与不可重用的交接身份。
 // v11：内部状态差值、Witness 成员增删、按 Base 合批及基线重置。
-const WireVersion uint8 = 11
+// v12：基线重置只列出解不出的对象与观察者（replicaReset），不再整个 peer 退回全量。
+const WireVersion uint8 = 12
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -383,6 +384,16 @@ type wireMsg struct {
 	GroupSnap    *groupSnap       `msgpack:"gs,omitempty"`
 	GroupNotice  *groupNotice     `msgpack:"gn,omitempty"`
 	Ext          *extMsg          `msgpack:"ex,omitempty"`
+	ReplicaReset *replicaReset    `msgpack:"rr,omitempty"`
+}
+
+// replicaReset 是接收方请求发送方忘掉的那部分基线：States 是 Kind 消息里解不出（增量对不上或缺基线）的对象，
+// Views 是成员表基线对不上的观察者。发送方删掉这些基线，下一次引用时发全量（观察者发全量成员表，连带成员状态全量）。
+// 为 nil 时忘掉这个 peer 的全部基线。
+type replicaReset struct {
+	Kind   msgKind `msgpack:"k"`
+	States []int64 `msgpack:"s,omitempty"`
+	Views  []int64 `msgpack:"v,omitempty"`
 }
 
 var errBadMessage = errors.New("cellworld: malformed message")
