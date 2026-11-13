@@ -49,6 +49,7 @@
 - **需求正好是它**：`roost module add bag`。不连带安装别的模块。客户端要看到背包，还需要玩家 TCP 接入与自身视图（装 `enter` 模块时会代办）。
 - **需求比它多一点**
   - 加道具、改单种上限：只改 `configs/table/item.csv`，再 `roost generate`。
+    换表之后 `roost module verify` 照样通过：本模块与 purchase、gm 联动的场景装载自带的道具行（1001、1002），不读工程的 `configs/data`；只有 `TestBagAcceptsTheItemsOfTheProjectItemTable` 读工程的表，且只断言“表里的都放得进、表外的放不进”。
   - 给道具加属性（品质、售价等）：在 `configs/schema/item.go` 加列，CSV 加同名列，`roost generate` 后用 `generated.ItemByID(id)` 读。
   - 换准入规则（某类道具不进背包、统一上限）：改 `game/components/bag/items.go` 的 `ItemRule`。
   - 改种类上限或硬上限：改 `game/components/bag/bag.go` 的两个常量。
