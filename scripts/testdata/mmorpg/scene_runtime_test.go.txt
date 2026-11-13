@@ -180,8 +180,8 @@ func TestMMORPGTwoScenesTCPTransferRetryAndReconnect(t *testing.T) {
 	seed := nest.NewHandlerName("mmo_private_fields")
 	nest.MustRegisterHandlerWithMeta(seed, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		p := es[0].(*player.Player)
-		p.Dao().SetGold(123)
-		p.Dao().SetExp(987)
+		p.Dao().GetWallet().SetCoins(123)
+		p.Dao().GetProfilePrivate().SetExp(987)
 		p.PublishSyncDirty()
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
@@ -232,10 +232,10 @@ func TestMMORPGTwoScenesTCPTransferRetryAndReconnect(t *testing.T) {
 	clients[0].mu.Lock()
 	own, other := clients[0].documents[players[0].ID()], clients[0].documents[players[1].ID()]
 	clients[0].mu.Unlock()
-	if _, ok := own["gold"]; !ok {
-		t.Fatal("owner did not receive its private gold")
+	if _, ok := own["wallet"]; !ok {
+		t.Fatal("owner did not receive its private wallet")
 	}
-	for _, field := range []string{"gold", "exp", "items"} {
+	for _, field := range []string{"wallet", "profile_private", "bag"} {
 		if _, ok := other[field]; ok {
 			t.Fatalf("spatial view leaked private %s", field)
 		}

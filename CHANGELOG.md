@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **组合 skill**（2026-11-13，维护者要求）：拆需求之前先判断是否真的需要这套专用服务器框架（compose §0C：需要 / 不需要 / 只有一部分需要，结论告诉用户、由用户决定）；只在 Steam 上发行、人数少的联机房间建议 Steam Lobby + Netcode for GameObjects + Steam 传输层，通用方案见 `references/steam-lobby-ngo.md`（优先用原生 Steamworks SDK：Steamworks.NET 一对一绑定、`ISteamMatchmaking`、`ISteamNetworkingSockets`）。
+
+- **修复**（scripts/testdata/mmorpg）：MMORPG 场景夹具仍调 game-demo 已移走的 `SetGold` / `SetExp`，v1.45.0 第二次 pretag 的 `test-mmorpg-scenes` 编译失败（未推送）；改为写 wallet 与 profile 模块的字段，私有字段检查改查 `wallet` / `profile_private` / `bag`。该脚本单独重跑通过。
+
 - **组合 skill**（2026-11-13，维护者要求）：需求先分服务器与客户端，skill 只生成服务器逻辑；业余（默认）与专业两种模式，开始时问一次，专业模式的业务拆分请开发者确认、服务器 / 客户端边界由开发者把控；每个生成的工程带 `docs/DEMO.zh-CN.md`（模块、实体、服务、协议、客户端对接等当前状态）与只追加的 `docs/DEMO-HISTORY.zh-CN.md`；支持在已有工程上持续增改需求（compose §2A）；skill 对使用它的 agent 只读，记忆放在工程的这两份文档里。
 
 - **发版脚本**：pretag 的 `go test` 上限从 30 分钟提到 60 分钟。42 个模块之后 `codegen/internal/roost` 整包在本机要 2024～2151s，v1.45.0 第一次 pretag 在 30 分钟处超时（没有失败的用例，未推送）。
