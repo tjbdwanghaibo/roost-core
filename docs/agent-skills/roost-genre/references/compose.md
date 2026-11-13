@@ -461,7 +461,7 @@ func init() {
 
 下面是不装它时的手写做法，也是它内部的做法。
 
-Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所以客户端登录后的第一条请求必须是一个“进入游戏”端点，由它加载或创建 Player；没有它，场景测试照样全绿（测试里直接造了实体），真实进程里每条玩法请求都会答 `entity_not_found`。`-template game` 已带 `game/lifecycle/player.go`，只差端点：
+Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所以客户端登录后的第一条请求必须是一个“进入游戏”端点，由它加载或创建 Player；没有它，场景测试照样全绿（测试里直接造了实体），真实进程里每条玩法请求都会答 `entity_not_found`。`-template game` 已带 Player 的 `game/entities/player/lifecycle_gen.go`（`player.LifecycleFromRegistry`），只差端点：
 
 ```bash
 "$ROOST" add protocol EnterGame --group game --handler player

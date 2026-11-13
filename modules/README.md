@@ -142,7 +142,7 @@ modules/<name>/
 
 ### 自带实体
 
-`entities: [Room]` 声明模块拥有的实体，`entity: Room` 仍表示组件/追加状态的挂靠目标，两者含义不同。每个自带实体必须有 `files/game/entities/<snake>/entity.go.tmpl` 与 `files/db/def/<snake>.go.tmpl`；实体号用 `{{ID:entity:Room}}`，所属服务用 `{{GAME_SERVICE}}`。安装器复用 `roost add lifecycle` 的实现生成 `game/lifecycle/<snake>.go`，模板不要再带第二份 lifecycle。
+`entities: [Room]` 声明模块拥有的实体，`entity: Room` 仍表示组件/追加状态的挂靠目标，两者含义不同。每个自带实体必须有 `files/game/entities/<snake>/entity.go.tmpl` 与 `files/db/def/<snake>.go.tmpl`；实体号用 `{{ID:entity:Room}}`，所属服务用 `{{GAME_SERVICE}}`。实体包的 `lifecycle_gen.go`（`<包>.LifecycleFromRegistry`）由 `roost generate` 产出（v1.47.0 起），模板不要带 lifecycle 文件，`files` 也不能列 `lifecycle_gen.go`。
 
 实体、DAO、lifecycle 都记入归属清单，并在模块安装的回滚边界内。它们不作为先执行、失败后保留的前置命令。实体号与其他号一样按最小空号分配，扫描已有代码与安装记录，已分配号不回收。依赖模块可以通过 `requires` 使用先安装的实体；需要追加状态时仍声明自己的 `entity` / `state` / `component`。
 
