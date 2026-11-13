@@ -419,7 +419,9 @@ func TestCopyHandedOffEntity(t *testing.T) {
 	if err != nil || report.Listed != 0 {
 		t.Fatalf("preload on the source after the move = %+v, %v; want nothing listed", report, err)
 	}
-	if _, err := newPreloadServer(t, client, 4).runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}); err != nil {
-		t.Fatal(err)
+	// 新服预加载到他。
+	target4 := newPreloadServer(t, client, 4)
+	if report, err := target4.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}); err != nil || report.Loaded != 1 || target4.manager.Get(id) == nil {
+		t.Fatalf("preload on the target after the move = %+v, %v; want the moved entity loaded", report, err)
 	}
 }

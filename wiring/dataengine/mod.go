@@ -497,6 +497,9 @@ func (mod *Mod) HandOffEntity(ctx context.Context, entityID int64) (*EntityHandO
 // EntityCopy 是一次搬档的结果（engine.EntityCopy）。
 type EntityCopy = engine.EntityCopy
 
+// EntityCopyDocument 是一次搬档里的一份文档（engine.EntityCopyDocument）。
+type EntityCopyDocument = engine.EntityCopyDocument
+
 // ErrEntityCopyConflict：目标服的库里已有这个实体的另一个版本，不覆盖时拒绝（engine.ErrEntityCopyConflict）。
 var ErrEntityCopyConflict = engine.ErrEntityCopyConflict
 

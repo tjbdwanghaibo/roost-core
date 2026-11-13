@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 )
 
 // 驱动器的场景全部离线：Directory（account）与 Profile（玩家档上的事务）是按脚本回答的替身，
@@ -181,6 +182,40 @@ type rehomeFixture struct {
 	// background 是受理之后交给后台的部分：用例自己决定什么时候跑。
 	background []func()
 	waits      int
+	// documents 是搬档的替身；documentEvents 为 true 时它也往事件流里记（只有关心搬档顺序的用例打开，
+	// 别的用例的事件流不变）。
+	documents      *rehomeDocuments
+	documentEvents bool
+}
+
+// rehomeDocuments 是搬档的替身：Copy / Drop 依次取脚本里的错误，用完之后成功；成功的 Copy 返回一份文档。
+type rehomeDocuments struct {
+	f        *rehomeFixture
+	copyErrs []error
+	dropErrs []error
+	copies   []string
+	drops    []string
+}
+
+func (d *rehomeDocuments) Copy(_ context.Context, entityID int64, to int32, overwrite bool) (Copied, error) {
+	call := fmt.Sprintf("copy %d to %d overwrite=%v", entityID, to, overwrite)
+	d.copies = append(d.copies, call)
+	if d.f.documentEvents {
+		d.f.events.add("%s", call)
+	}
+	if err := rehomeNext(&d.copyErrs); err != nil {
+		return Copied{}, err
+	}
+	return Copied{EntityID: entityID, From: rehomeSelf, To: to, Documents: []wiringde.EntityCopyDocument{{Database: "main", Collection: "player", Version: 9}}}, nil
+}
+
+func (d *rehomeDocuments) Drop(_ context.Context, copied Copied, sid int32) error {
+	call := fmt.Sprintf("drop %d copied to %d at %d", copied.EntityID, copied.To, sid)
+	d.drops = append(d.drops, call)
+	if d.f.documentEvents {
+		d.f.events.add("%s", call)
+	}
+	return rehomeNext(&d.dropErrs)
 }
 
 // newRehomeFixture 建一个驱动器：本服 1000，玩家 94301 绑定在本服、绑定代数 3、没有换服在途。
@@ -217,8 +252,9 @@ func newRehomeFixture(t *testing.T) *rehomeFixture {
 			return rehomeNext(&f.releaseErrs)
 		}, nil
 	}
+	f.documents = &rehomeDocuments{f: f}
 	driver, err := NewDriver(DriverConfig{
-		Self: rehomeSelf, Directory: f.directory, Residency: f.residency, Profile: f.profile,
+		Self: rehomeSelf, Directory: f.directory, Residency: f.residency, Profile: f.profile, Documents: f.documents,
 		EntityID: func(playerID int64) (int64, error) { return playerID + 7_000_000, nil },
 	})
 	if err != nil {
@@ -267,6 +303,7 @@ func rehomeCode(err error) int32 { return errcode.CodeOf(err) }
 // 断开会话先于交出实体，交出先于提交；提交之后屏障不撤，迁出表答“已迁走，去了 1001”。
 func TestRehomeApplyWalksEveryStepInOrder(t *testing.T) {
 	f := newRehomeFixture(t)
+	f.documentEvents = true
 	var checked, left []Move
 	OnApplying("team", func(_ context.Context, _ *app.Registry, move Move) error {
 		f.events.add("check team")
@@ -306,9 +343,11 @@ func TestRehomeApplyWalksEveryStepInOrder(t *testing.T) {
 		t.Fatalf("%d background parts were started, want 1", len(f.background))
 	}
 	f.runBackground()
-	// 后台：先断开会话并等在途的请求执行完，再在事务里复核一遍检查，然后才是离开钩子；之后交出实体、提交。
+	// 后台：先断开会话并等在途的请求执行完，再在事务里复核一遍检查，然后才是离开钩子；之后交出实体、把他的文档
+	// 复制到目标服的库（account 仍绑在本服，覆盖目标库里的旧副本）、提交；提交之后删掉本服库里的那几份。
 	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1", "leave scene",
-		"close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-1")
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"commit 94301 t-1", "drop 7094301 copied to 1001 at 1000")
 	if len(left) != 1 || left[0] != wantMove {
 		t.Fatalf("the leave hook saw %+v, want %+v", left, wantMove)
 	}
@@ -741,4 +780,88 @@ func TestRehomeBindingAnswersFromTheTableThenTheDirectory(t *testing.T) {
 	}
 	f.expectEvents(t, "binding 94301", "release 7094301")
 	f.expectFree(t)
+}
+
+// 搬档失败（写目标库失败）：确定的“没有换成”——中止、撤屏障，没有提交，也没有可删的副本（复制在一个事务里）。
+func TestRehomeCopyFailureAbortsTheMove(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.documents.copyErrs = []error{errors.New("target database unreachable")}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"abort 94301 t-1", "release 7094301", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
+	f.expectFree(t)
+	if len(f.documents.drops) != 0 {
+		t.Fatalf("a failed copy dropped documents: %v", f.documents.drops)
+	}
+}
+
+// 搬档之后提交被拒（目标服在此期间没了）：转去中止，撤屏障之前删掉写到目标库的副本；本服库里的不动。
+func TestRehomeAbortAfterTheCopyDropsTheTargetCopy(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.directory.commits = []error{errcode.Wrap(svcaccount.ErrServerClosed, errors.New("closed"))}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"commit 94301 t-1", "abort 94301 t-1", "drop 7094301 copied to 1001 at 1001", "release 7094301",
+		"close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
+	f.expectFree(t)
+}
+
+// 删档失败重试到成功：删本服库的那几份失败一次，后台等一轮再删；迁出表照样落定为“已迁走”。
+func TestRehomeDropRetriesUntilItSucceeds(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documents.dropErrs = []error{errors.New("mongo blip")}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.runBackground()
+	if want := []string{"drop 7094301 copied to 1001 at 1000", "drop 7094301 copied to 1001 at 1000"}; !reflect.DeepEqual(f.documents.drops, want) || f.waits != 1 {
+		t.Fatalf("drops = %v after %d waits, want %v after 1", f.documents.drops, f.waits, want)
+	}
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1001 {
+		t.Fatalf("the table says %+v (%v), want departed to 1001", where, tracked)
+	}
+}
+
+// 没有经过本进程搬档就被改绑（离开钩子失败而中止，account 却说这个 ID 已经提交——运维人工提交了）：按已迁走落定，
+// 补交实体，再把本服的文档补搬到他现在的服——不覆盖：那边没有才写，写成了才删本服的；那边已有别的版本时冲突，
+// 本服的不删，留给运维。
+func TestRehomeLateCopyNeverOverwritesTheNewServer(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conflict=%v", conflict), func(t *testing.T) {
+			f := newRehomeFixture(t)
+			f.documentEvents = true
+			OnLeaving("battle", func(context.Context, *app.Registry, Move) error { return errors.New("not now") })
+			f.directory.aborts = []error{fmt.Errorf("%w: transfer t-1 is already committed", svcaccount.ErrTransferStale)}
+			if conflict {
+				f.documents.copyErrs = []error{fmt.Errorf("%w: version 12", ErrCopyConflict)}
+			}
+			if _, err := f.apply(); err != nil {
+				t.Fatal(err)
+			}
+			f.events.take()
+			f.runBackground()
+			want := []string{"close 94301: rehome: the player is changing servers", "recheck t-1",
+				"abort 94301 t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301",
+				"copy 7094301 to 1001 overwrite=false"}
+			if !conflict {
+				want = append(want, "drop 7094301 copied to 1001 at 1000")
+			}
+			f.expectEvents(t, want...)
+			if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1001 {
+				t.Fatalf("the table says %+v (%v), want departed to 1001", where, tracked)
+			}
+		})
+	}
 }
