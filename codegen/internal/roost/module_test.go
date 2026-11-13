@@ -5,7 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"go/ast"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -68,6 +71,116 @@ func TestModuleCatalogEmbedsEveryTemplateAndValidates(t *testing.T) {
 		}
 		if bytes.Contains(body, []byte("example.com/")) {
 			t.Errorf("%s names a concrete module path; use {{MODULE}}", rel)
+		}
+	}
+}
+
+// game/view 的组件接口要列出组件包里 *Component 的全部导出方法（handler、钩子与别的组件经 view 调用它们），
+// 签名用到的结构体也放在 view（组件包里只留同名别名）；view 只引用内建类型、db、protocol、core 的包，
+// 以及两个叶子类型包 game/actor 与 game/gameplay/attribute（见 compose §4D）。
+// viewMethodExemptions 是暂时不进 view 的方法与原因：框架回调、参数是另一个组件或实体的具体类型、
+// 结果类型还在功能包里。新增的导出方法不在 view 里也不在这里时报错。
+func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
+	framework := map[string]bool{"Name": true, "Owner": true, "OnInitFinish": true, "OnDestroy": true}
+	viewMethodExemptions := map[string]map[string]string{
+		"activity":    {"Host": "returns the game/activity Host, which carries the activity runtime"},
+		"actor":       {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
+		"attribute":   {"Container": "exposes the core attribute container to the generated runtime only"},
+		"combat":      {"Core": "core combat component", "Input": "game/combat type", "Ready": "CombatResult not in view", "Cast": "takes the peer *Component", "Step": "takes the peer *Component", "Tick": "takes the peer *Component", "Leave": "takes the peer *Component"},
+		"dungeon":     {"Counts": "game/dungeon logic type", "Claim": "game/dungeon logic type"},
+		"friends":     {"Change": "takes the peer *Component", "Snapshot": "FriendsSnapshot not in view"},
+		"mailbox":     {"Claim": "game/mailbox attachment type"},
+		"matchmaking": {"Snapshot": "MatchSnapshot not in view"},
+		"profile":     {"Card": "ProfileCard not in view"},
+		"rehome":      {"Prepare": "game/rehome type", "Arrive": "game/rehome type"},
+		"stamina":     {"Grant": "result type not in view", "Refill": "result type not in view"},
+		"task":        {"Claim": "TaskClaimResult not in view"},
+		"team":        {"Create": "takes the Team entity", "Accept": "takes the Team entity", "Invite": "takes the Team entity", "Invites": "TeamInvitation not in view", "Leave": "takes the Team entity", "Info": "takes the Team entity"},
+		"terrain":     {"Check": "game/terrain logic type", "Record": "game/terrain logic type"},
+	}
+	placeholder := regexp.MustCompile(`\{\{(?:PROJECT|GAME_SERVICE|ID:[^}]*)\}\}`)
+	parse := func(name string) *ast.File {
+		raw, err := fs.ReadFile(modules.Files, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := strings.ReplaceAll(string(raw), "{{MODULE}}", "example.com/m")
+		file, err := parser.ParseFile(token.NewFileSet(), name, placeholder.ReplaceAllString(src, "1"), parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		return file
+	}
+	views, err := fs.Glob(modules.Files, "*/files/game/view/component_*.go.tmpl")
+	if err != nil || len(views) == 0 {
+		t.Fatalf("no game/view component templates (err=%v)", err)
+	}
+	for _, viewPath := range views {
+		module := strings.SplitN(viewPath, "/", 2)[0]
+		pkg := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(viewPath), "component_"), ".go.tmpl")
+		file := parse(viewPath)
+		for _, imp := range file.Imports {
+			path, _ := strconv.Unquote(imp.Path.Value)
+			allowed := !strings.Contains(path, ".") || strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-core/") ||
+				path == "example.com/m/db" || strings.HasPrefix(path, "example.com/m/protocol/") ||
+				path == "example.com/m/game/actor" || path == "example.com/m/game/gameplay/attribute"
+			if !allowed {
+				t.Errorf("%s imports %s; game/view may only use builtin, db, protocol and core types", viewPath, path)
+			}
+		}
+		listed := map[string]bool{}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				ts := spec.(*ast.TypeSpec)
+				iface, ok := ts.Type.(*ast.InterfaceType)
+				if !ok || strings.HasSuffix(ts.Name.Name, "Holder") {
+					continue
+				}
+				for _, method := range iface.Methods.List {
+					for _, name := range method.Names {
+						listed[name.Name] = true
+					}
+				}
+			}
+		}
+		var sources []string
+		for _, pattern := range []string{module + "/files/game/components/" + pkg + "/*.go.tmpl", module + "/with/*/game/components/" + pkg + "/*.go.tmpl"} {
+			matches, err := fs.Glob(modules.Files, pattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sources = append(sources, matches...)
+		}
+		if len(sources) == 0 {
+			// activity 的共用组件早于 game/components，在功能包 game/activity 里。
+			if sources, err = fs.Glob(modules.Files, module+"/files/game/"+pkg+"/*.go.tmpl"); err != nil || len(sources) == 0 {
+				t.Errorf("%s: no component package game/components/%s (err=%v)", viewPath, pkg, err)
+			}
+		}
+		for _, source := range sources {
+			if strings.HasSuffix(source, "_test.go.tmpl") {
+				continue
+			}
+			for _, decl := range parse(source).Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv == nil || !fn.Name.IsExported() || framework[fn.Name.Name] || listed[fn.Name.Name] {
+					continue
+				}
+				star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+				if !ok {
+					continue
+				}
+				if recv, isIdent := star.X.(*ast.Ident); !isIdent || recv.Name != "Component" {
+					continue
+				}
+				if _, exempt := viewMethodExemptions[pkg][fn.Name.Name]; !exempt {
+					t.Errorf("%s: (*Component).%s is exported but not in the view interface %s", source, fn.Name.Name, viewPath)
+				}
+			}
 		}
 	}
 }

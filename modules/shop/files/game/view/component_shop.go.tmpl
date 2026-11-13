@@ -1,8 +1,22 @@
 package view
 
 // Shop 是 Shop 组件对 game/ 下其它包公开的方法（实现在 game/components/shop，语义见那里）；只在宿主被 Nest 锁住期间调用。
-// 现在是空的：组件的导出方法签名都带组件包自己的类型（view 不 import 组件包），要用时由 handler 走 ShopComp()。
-type Shop interface{}
+type Shop interface {
+	Buy(key string, goodsID, count, nowUnixMilli int64) (ShopResult, error)
+}
 
 // ShopHolder 是“带有 Shop 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type ShopHolder interface{ Shop() Shop }
+
+// ShopResult 是一次成功购买的结果，也是回执里存下来、重发时原样返回的内容。
+type ShopResult struct {
+	// Cost 是这一笔扣的金币，Balance 是扣完之后的余额。
+	Cost    int64
+	Balance int64
+	// ItemID 是发放的道具号，Gained 是这一笔发了几个，Held 是发完之后的持有数量。
+	ItemID int64
+	Gained int64
+	Held   int64
+	// Bought 是这一笔之后该商品在限购周期内已买的份数；不限购的商品为 0。
+	Bought int64
+}

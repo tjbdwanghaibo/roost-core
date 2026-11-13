@@ -1,8 +1,20 @@
 package view
 
 // Gacha 是 Gacha 组件对 game/ 下其它包公开的方法（实现在 game/components/gacha，语义见那里）；只在宿主被 Nest 锁住期间调用。
-// 现在是空的：组件的导出方法签名都带组件包自己的类型（view 不 import 组件包），要用时由 handler 走 GachaComp()。
-type Gacha interface{}
+type Gacha interface {
+	Draw(key string, poolID, count int64) (GachaResult, error)
+	DrawFree(key string, poolID int64) (GachaResult, error)
+}
 
 // GachaHolder 是“带有 Gacha 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type GachaHolder interface{ Gacha() Gacha }
+
+// GachaResult 的 Items 按抽取顺序返回，每项代表一个道具；它和持久回执没有共享切片。
+// Replayed 为真表示这是窗口内同一个请求键的重放：结果取自原回执，这一次什么都没写。
+// 调用方自己的次数规则（每日免费一次）要据此决定是否再记一次，见 DrawFree。
+type GachaResult struct {
+	Cost, Balance int64
+	Items         []int64
+	Misses        int64
+	Replayed      bool
+}
