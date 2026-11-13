@@ -2,6 +2,7 @@ package gm
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -10,8 +11,10 @@ import (
 	"{{MODULE}}/game/handler"
 	rehome "{{MODULE}}/game/rehome"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 )
 
 // 替身只占 account 与交出实体的位置；Prepare/Recheck/Cancel 是真实 Nest 事务。
@@ -64,7 +67,28 @@ func (r *gmMoveResidency) Settle(_ context.Context, _ rehome.Move, outcome rehom
 	return nil
 }
 func (r *gmMoveResidency) Where(int64) (rehome.Whereabouts, bool) { return rehome.Whereabouts{}, false }
-func newRehomeGM(t *testing.T) (*gmFixture, *player.Player, *gmMoveDirectory, *gmMoveResidency) {
+
+// gmMoveEngine 站在 DataEngine Mod 的位置上，只提供驱动器搬档用的 CopyHandedOffEntity / DropEntityCopy：
+// 换服要先把玩家的文档搬到目标服才提交，没有它驱动器会中止。真实的跨库搬档由 framework/dataengine/engine 的用例覆盖。
+type gmMoveEngine struct {
+	mu     sync.Mutex
+	copies []string
+	drops  chan int32
+}
+
+func (e *gmMoveEngine) CopyHandedOffEntity(_ context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.copies = append(e.copies, fmt.Sprintf("%d to %d overwrite=%v", entityID, to, overwrite))
+	return wiringde.EntityCopy{EntityID: entityID, To: to, Documents: []wiringde.EntityCopyDocument{{Database: "main", Collection: "player", Version: 1}}}, nil
+}
+
+func (e *gmMoveEngine) DropEntityCopy(_ context.Context, copied wiringde.EntityCopy, sid int32) (int, error) {
+	e.drops <- sid
+	return len(copied.Documents), nil
+}
+
+func newRehomeGM(t *testing.T) (*gmFixture, *player.Player, *gmMoveDirectory, *gmMoveResidency, *gmMoveEngine) {
 	t.Helper()
 	player.RegisterEntity()
 	handler.RegisterRehomePrepareNestHandlers()
@@ -88,10 +112,14 @@ func newRehomeGM(t *testing.T) (*gmFixture, *player.Player, *gmMoveDirectory, *g
 	if err := f.registry.Register(rehome.ResidencyCapability, rehome.Residency(r)); err != nil {
 		t.Fatal(err)
 	}
-	return f, target.(*player.Player), d, r
+	engine := &gmMoveEngine{drops: make(chan int32, 4)}
+	if err := f.registry.Register(app.ModName("dataengine"), engine); err != nil {
+		t.Fatal(err)
+	}
+	return f, target.(*player.Player), d, r, engine
 }
 func TestWithRehomeGMSuccess(t *testing.T) {
-	f, _, d, r := newRehomeGM(t)
+	f, target, d, r, engine := newRehomeGM(t)
 	result, err := f.execute(CommandRehome, `{"player_id":97001,"to":1001,"note":"move"}`)
 	if err != nil || !result.OK || result.Data["accepted"] != true {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -104,6 +132,21 @@ func TestWithRehomeGMSuccess(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("move did not settle")
 	}
+	// 提交之后删本服库里的那几份：落定之后才做，所以单独等。
+	select {
+	case sid := <-engine.drops:
+		if sid != 1000 {
+			t.Fatalf("dropped the copy at sid %d, want this server 1000", sid)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("this server's documents were not dropped after the commit")
+	}
+	engine.mu.Lock()
+	copies := fmt.Sprint(engine.copies)
+	engine.mu.Unlock()
+	if want := fmt.Sprintf("[%d to 1001 overwrite=true]", target.ID()); copies != want {
+		t.Fatalf("copies=%s want %s", copies, want)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.begins != 1 || d.note != "gm tester: move" || d.binding.ServingServerID != 1001 || f.committer.commits.Load() != 1 {
@@ -111,21 +154,21 @@ func TestWithRehomeGMSuccess(t *testing.T) {
 	}
 }
 func TestWithRehomeGMInvalidWritesNothing(t *testing.T) {
-	f, _, d, _ := newRehomeGM(t)
+	f, _, d, _, _ := newRehomeGM(t)
 	result, err := f.execute(CommandRehome, `{"player_id":97001,"to":0,"note":"bad"}`)
 	if err == nil || result.OK || d.begins != 0 || f.committer.commits.Load() != 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 func TestWithRehomeGMMissingTargetWritesNothing(t *testing.T) {
-	f, _, d, _ := newRehomeGM(t)
+	f, _, d, _, _ := newRehomeGM(t)
 	result, err := f.execute(CommandRehome, `{"player_id":97002,"to":1001,"note":"missing"}`)
 	if err == nil || result.OK || d.begins != 0 || f.committer.commits.Load() != 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 func TestWithRehomeGMCommitFailureRollsBack(t *testing.T) {
-	f, target, d, _ := newRehomeGM(t)
+	f, target, d, _, _ := newRehomeGM(t)
 	f.committer.reject.Store(true)
 	result, err := f.execute(CommandRehome, `{"player_id":97001,"to":1001,"note":"reject"}`)
 	if err == nil || result.OK || d.begins != 0 || f.committer.commits.Load() != 0 {
