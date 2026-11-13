@@ -14,7 +14,7 @@ state:
   - field: Enter
     type: EnterState
     store: enter
-    dao: persist
+    dao: nosync
     comment: Enter 是进入游戏模块的服务端记录（首次初始化做过没有、第一次进入的时间），只落库、不下发。
 component: Enter
 protocols: [EnterGame, EnterCreate, EnterStatus]

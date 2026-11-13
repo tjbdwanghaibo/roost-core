@@ -1,9 +1,9 @@
 package clientsync
 
 import (
+	"{{MODULE}}/db"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"{{MODULE}}/db"
 )
 
 // DecodeFields 将公开的 PB patch 转为机器人按字段名读取的视图。
@@ -55,4 +55,10 @@ func PlayerLevel(fields map[string]any) (level int32, ok bool) {
 func PlayerExp(fields map[string]any) (exp int64, ok bool) {
 	private, ok := fields["profile_private"].(db.SyncProfilePrivateState)
 	return private.Exp, ok
+}
+
+// PlayerCoins 读玩家自己的钱包；没有 wallet 的视图不能按余额零处理。
+func PlayerCoins(fields map[string]any) (coins int64, ok bool) {
+	wallet, ok := fields["wallet"].(db.SyncWalletState)
+	return wallet.Coins, ok
 }

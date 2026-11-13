@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao"
 	"github.com/tjbdwanghaibo/roost-core/modules"
 	"gopkg.in/yaml.v3"
 )
@@ -417,8 +418,12 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 		if !moduleStorePattern.MatchString(field.Store) || !strings.HasPrefix(field.Store, spec.Name) {
 			return fmt.Errorf("state field %s: store key %q must start with %s", field.Field, field.Store, spec.Name)
 		}
-		if !strings.Contains(field.Dao, "persist") {
-			return fmt.Errorf("state field %s: dao %q must state persist / nopersist (and sync / nosync)", field.Field, field.Dao)
+		options, err := dao.ParseFieldOptions(field.Dao)
+		if err != nil {
+			return fmt.Errorf("state field %s: %w", field.Field, err)
+		}
+		if options.Skip {
+			return fmt.Errorf("state field %s: dao - would exclude the module state", field.Field)
 		}
 		if seenFields[field.Field] {
 			return fmt.Errorf("state field %s is listed twice", field.Field)

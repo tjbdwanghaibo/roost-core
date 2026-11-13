@@ -7,7 +7,7 @@ needs:
 entity: Player
 state:
   - {field: Combat, type: CombatState, store: combat, dao: 'persist,sync', comment: 战斗公开投影与双人同意绑定；HP权威在附加CombatDAO。}
-  - {field: CombatPrivate, type: CombatPrivateState, store: combat_private, dao: persist, comment: 单调请求回执与双人完整Host/Runtime边界；不下发。}
+  - {field: CombatPrivate, type: CombatPrivateState, store: combat_private, dao: nosync, comment: 单调请求回执与双人完整Host/Runtime边界；不下发。}
 daos:
   - {field: combatState, type: CombatDAO, tag: combat_state}
 component: Combat

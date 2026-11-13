@@ -108,7 +108,7 @@ func TestANoCollectionDaoWithPersistentFieldsIsRefusedByName(t *testing.T) {
 type GhostDao struct {
 	PosX  int64 `+"`"+`dao:"nopersist,sync" store:"pos_x"`+"`"+`
 	HP    int64 `+"`"+`store:"hp"`+"`"+`
-	Level int32 `+"`"+`dao:"persist" store:"level"`+"`"+`
+	Level int32 `+"`"+`dao:"nosync" store:"level"`+"`"+`
 	Skip  int64 `+"`"+`dao:"-"`+"`"+`
 }
 `)

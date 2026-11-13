@@ -875,7 +875,7 @@ func TestWorldJitterAtBoundarySlowHandoffConclusion(t *testing.T) {
 			if m.Kind == kindOfferReply {
 				return false, false, time.Second
 			}
-			if m.Kind == kindGhost && slices.ContainsFunc(m.Ghost.Updates, func(s EntityState) bool { return s.ID == actorID(1) }) {
+			if m.Kind == kindGhost && (slices.ContainsFunc(m.Ghost.Updates, func(s EntityState) bool { return s.ID == actorID(1) }) || slices.ContainsFunc(m.Deltas, func(d stateDelta) bool { return d.ID == actorID(1) })) {
 				return false, false, time.Second
 			}
 			return false, false, 0

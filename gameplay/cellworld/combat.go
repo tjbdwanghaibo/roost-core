@@ -1,6 +1,7 @@
 package cellworld
 
 import (
+	"crypto/rand"
 	"slices"
 	"time"
 
@@ -43,6 +44,10 @@ func (n *Node) onAttack(r *Region, attacker, target Actor, from int32, req *atta
 		return
 	}
 	as := attacker.CellState()
+	if as.Base != from || as.Entry != req.Entry {
+		result(verdict{Outcome: OutcomeRejected, Reason: ReasonNotOwner})
+		return
+	}
 	from0 := as.Pos()
 	// 伤害值在攻击者所在格定下：攻击者是这里的 Real，面板（攻击）的权威就在这里；转发给目标格的是定好的数值。
 	amount := req.Amount
@@ -54,7 +59,7 @@ func (n *Node) onAttack(r *Region, attacker, target Actor, from int32, req *atta
 	var owner CellID
 	known := false
 	if target != nil {
-		if ts := target.CellState(); ts.Role == RoleReal || ts.Role == RoleFrozen {
+		if ts := target.CellState(); ts.Role == RoleReal || ts.Role == RoleFrozen || ts.Role == RoleDying {
 			targetState, targetRole, known = ts.EntityState, ts.Role, true
 			if ts.Handoff != nil {
 				owner = ts.Handoff.Target
@@ -72,12 +77,16 @@ func (n *Node) onAttack(r *Region, attacker, target Actor, from int32, req *atta
 		result(verdict{Outcome: OutcomeRejected, Reason: ReasonOutOfRange, HP: targetState.HP})
 		return
 	}
-	if target != nil && targetRole == RoleReal {
-		result(n.applyDamage(target, req.Hit, amount, now, fx))
-		return
+	if target != nil && (targetRole == RoleReal || targetRole == RoleDying) {
+		v := n.applyDamage(target, damageReq{Hit: req.Hit, Target: req.Target, Amount: amount, RewardBase: from, Life: targetState.Life}, n.cfg.SID, now, fx)
+		if v.Outcome != OutcomeRetry {
+			result(v)
+			return
+		}
+		owner = n.cell
 	}
 	p := pendingAttack{
-		Base: from, Hit: req.Hit, Target: req.Target, Amount: amount,
+		Base: from, RewardBase: from, Life: targetState.Life, Hit: req.Hit, Target: req.Target, Amount: amount,
 		TargetCell: owner, Deadline: now.Add(n.cfg.AttackDeadline).UnixNano(), NextSend: now.Add(n.cfg.AttackRetry).UnixNano(),
 	}
 	r.attacks.set(req.Hit, p)
@@ -88,15 +97,15 @@ func (n *Node) onAttack(r *Region, attacker, target Actor, from int32, req *atta
 
 // damageTo 把待决伤害发给 TargetCell。
 func (n *Node) damageTo(p pendingAttack) outgoing {
-	return outgoing{sid: n.cfg.Grid.SID(p.TargetCell), msg: &wireMsg{Kind: kindDamage, Damage: &damageReq{Hit: p.Hit, Target: p.Target, Amount: p.Amount}}}
+	return outgoing{sid: n.cfg.Grid.SID(p.TargetCell), msg: &wireMsg{Kind: kindDamage, Damage: &damageReq{Hit: p.Hit, Target: p.Target, Amount: p.Amount, RewardBase: p.RewardBase, Life: p.Life}}}
 }
 
 // onDamage：本格是目标 Real 就结算（去重），否则回“重试”与所知 owner。
 func (n *Node) onDamage(r *Region, target Actor, from int32, req *damageReq, now time.Time, fx *txEffects) {
 	reply := &damageReply{Hit: req.Hit, Target: req.Target}
 	switch {
-	case target != nil && target.CellState().Role == RoleReal:
-		v := n.applyDamage(target, req.Hit, req.Amount, now, fx)
+	case target != nil && (target.CellState().Role == RoleReal || target.CellState().Role == RoleDying):
+		v := n.applyDamage(target, *req, from, now, fx)
 		reply.Outcome, reply.Reason, reply.Duplicate, reply.HP, reply.Damage = v.Outcome, v.Reason, v.Duplicate, v.HP, v.Damage
 	default:
 		reply.Outcome = OutcomeRetry
@@ -148,8 +157,19 @@ type verdict struct {
 // applyDamage 在目标 Real 上结算一次伤害（目标的锁内，改它的 DAO）。命中去重表返回重复；去重窗口内已满时拒绝
 // （不淘汰旧记录，否则迟到的重试会被再结算一次）。扣血之后按目标面板的上限夹（上限只在面板变化时动，这里是守住
 // “当前 HP 不超过上限”这条不变量）。
-func (n *Node) applyDamage(target Actor, hit HitID, amount int32, now time.Time, fx *txEffects) verdict {
+func (n *Node) applyDamage(target Actor, req damageReq, from int32, now time.Time, fx *txEffects) verdict {
 	st := target.CellState()
+	hit, amount := req.Hit, req.Amount
+	if req.Life != st.Life {
+		return verdict{Outcome: OutcomeRejected, Reason: ReasonDead, HP: st.HP}
+	}
+	if st.Role == RoleDying {
+		return verdict{Outcome: OutcomeRetry, HP: st.HP}
+	}
+	if st.Death != nil && st.Death.Hit == hit {
+		return verdict{Outcome: OutcomeApplied, Duplicate: true, HP: 0}
+	}
+
 	nowNano := now.UnixNano()
 	applied := pruneApplied(st.Applied, nowNano, n.cfg.DedupWindow)
 	if slices.ContainsFunc(applied, func(a AppliedHit) bool { return a.Hit == hit }) {
@@ -165,6 +185,15 @@ func (n *Node) applyDamage(target Actor, hit HitID, amount int32, now time.Time,
 	st.HP = max(0, st.HP-amount)
 	st.capHP()
 	st.Applied = append(applied, AppliedHit{Hit: hit, At: nowNano})
+	if st.HP == 0 {
+		// 致死伤害先冻结本生命代次；只有共享 CAS 确认后才报 Applied 和触发观察点。
+		fact := DeathFact{ID: rand.Text(), Target: st.ID, Life: st.Life, Hit: hit, RewardBase: req.RewardBase, ReplySID: from, State: st.EntityState, Damage: amount, At: now.UnixMilli()}
+		st.Death, st.Role = &fact, RoleDying
+		target.SetCellState(st)
+		fx.owners = append(fx.owners, n.ownerWork(st))
+		return verdict{Outcome: OutcomeRetry, HP: 0}
+	}
+	st.Ver.Seq++
 	target.SetCellState(st)
 	if hook := n.cfg.Hooks.DamageApplied; hook != nil {
 		cell, id, hp := n.cell, st.ID, st.HP
@@ -212,6 +241,7 @@ func (n *Node) applyPanel(st *ActorState, p Panel, now time.Time, fx *txEffects)
 		return false
 	}
 	st.Panel = p
+	st.Ver.Seq++
 	st.capHP()
 	if hook := n.cfg.Hooks.PanelApplied; hook != nil {
 		cell, id, hp := n.cell, st.ID, st.HP

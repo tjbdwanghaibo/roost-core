@@ -487,11 +487,11 @@ package dbdef
 type PlayerDao struct {
     Name      string `store:"name"`                              // 无 tag：persist + sync 全开
     Level     int32 `store:"level"`
-    LastLogin int64             `dao:"persist" store:"last_login"`        // 只持久化，不同步给客户端
+    LastLogin int64             `dao:"nosync" store:"last_login"`        // 只持久化，不同步给客户端
     Session   string            `dao:"nopersist,sync" store:"session"` // 只同步，不落库
     Runtime   int64             `dao:"-"`              // 完全排除
     Items     map[int64]int32   `dao:"persist,sync,map=fast" store:"items"`
-    Tags      map[string]string `dao:"persist,map=sharded" store:"tags"`
+    Tags      map[string]string `dao:"nosync,map=sharded" store:"tags"`
     Equips    map[int64]*EquipInfo `store:"equips"`                // 嵌套 struct 自动递归生成
 }
 
@@ -544,14 +544,15 @@ category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 
 
 | 写法 | 持久化 | 客户端同步 | 说明 |
 | --- | --- | --- | --- |
-| 无 tag | 是 | 是 | 安全默认值 |
-| `persist` / `sync` | 按列出的 | 按列出的 | 只开列出的能力，未列出的关闭 |
-| `nopersist,sync` | 否 | 是 | 临时但需同步 |
+| 无 tag / 空 tag | 是 | 是 | 两项分别默认开启 |
+| `persist` / `sync` / `persist,sync` | 是 | 是 | 正向标记不关闭另一项 |
+| `nosync` | 是 | 否 | 只持久；内部账本与私有字段须显式声明 |
+| `nopersist` / `nopersist,sync` | 否 | 是 | 临时但需同步 |
 | `nopersist,nosync` | 否 | 否 | 只参与事务：生成同形 mutator（undo 登记逆操作、state 快照覆盖），不落库、不进 WAL、不同步；组件里事务会改又不该存的状态（派生层、调度索引）放这里 |
 | `-` | 否 | 否 | 完全排除 |
-| `map=small\|fast\|sharded` | 按其它标记 | 按其它标记 | map 存储实现：`small`（默认，`fmap.SmallSafeMap`）、`fast`（`fmap.FastMap`）、`sharded`（`fmap.ShardedSafeMap`）；`fast` / `sharded` 只支持 string 或整数 key |
+| `map=small\|fast\|sharded` | 默认是 | 默认是 | 辅助选项不改变默认能力；`small`（默认，`fmap.SmallSafeMap`）、`fast`（`fmap.FastMap`）、`sharded`（`fmap.ShardedSafeMap`）；`fast` / `sharded` 只支持 string 或整数 key |
 
-**tag 一旦出现就必须表明 persist/sync 意图**：`map=...` 是辅助选项，必须与 persist/sync 意图同写。支持的字段类型：基础类型、slice、map、嵌套 struct（值或指针）；固定长度数组、`chan`、`*map[...]...`、指向非本地命名类型的指针在生成期被拒绝（提示用 `dao:"-"` 排除）。map 容器来自 `github.com/tjbdwanghaibo/roost-core/infra/base/safemap`（生成代码里别名 `fmap`）。
+**只有负向标记关闭能力**：`nosync` / `nopersist` 分别关闭客户端同步 / 持久化，`map=...` 可以单独写。升级旧生成工程时按 [tag 手册](TAGS.zh-CN.md#dao-字段-tag)复核私有与临时字段。支持的字段类型：基础类型、slice、map、嵌套 struct（值或指针）；固定长度数组、`chan`、`*map[...]...`、指向非本地命名类型的指针在生成期被拒绝（提示用 `dao:"-"` 排除）。map 容器来自 `github.com/tjbdwanghaibo/roost-core/infra/base/safemap`（生成代码里别名 `fmap`）。
 
 ### 稳定字段键：必填 `store:"..."` 与持久文档结构体
 
@@ -639,7 +640,7 @@ slice 的 map（`map[K]int64`、`map[K][]byte`）。其余引用形状生成的�
 
 | 写法 | 报错要点 |
 | --- | --- |
-| 只写辅助选项 `dao:"map=fast"` | `does not state persist/sync intent`；按原意图改为 `persist,sync,map=fast` 或 `nopersist,nosync,map=fast` |
+| 矛盾标记 `dao:"persist,nopersist"` / `dao:"sync,nosync"` | 拒绝，不按顺序选择其中一项 |
 | 选项拼写错误 `dao:"persits,sync"` | `dao tag has unknown option "persits"`，并列出合法选项 |
 | 标记与 struct 之间隔了别的声明 | `//roost:dao marker is not attached to a struct` |
 | 分组 `type (...)` 只放一个标记 | `marker binds to multiple structs`；每个 struct 上方各放一个标记 |

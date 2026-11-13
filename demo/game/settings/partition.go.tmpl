@@ -13,7 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// ScenePartition 声明分区场景（gameplay/cellworld 的 Cell + Ghost，原型）：把 game 的场景切成静态网格，每个格由一个
+// ScenePartition 声明分区场景（gameplay/cellworld 的 Cell + Ghost）：把 game 的场景切成静态网格，每个格由一个
 // game 进程（Cell）托管，玩家留在自己 sid 的进程（Base），站在哪个格就由那个格的 Cell 进程上的 SceneActor 代表。
 // 每个 game 进程读同一份；enabled 为 false（缺省）时本进程跑普通场景，其余键不读、不校验，demo 现有行为不变。
 //
@@ -51,22 +51,23 @@ type ScenePartition struct {
 	MonsterTemplate int32 `config:"monster_template" default:"9001" help:"template id the partitioned scene's monsters are drawn with"`
 	// Team 是分区场景的组队与队伍面板（维护者 2026-11-04 第 4 项 = A）。
 	Team PartitionTeam `config:"team"`
-	// Spawns 是按格的刷怪表：每一项一个刷怪点，Cell 进程只刷落在自己格里的点（启动时刷满；原型不补刷，见 FEATURE §10）。
+	// Spawns 是按格的刷怪表：每一项一个刷怪点，Cell 进程对账本格的持久出生槽，跨格不补刷，死亡确认后按 respawn_delay 重生。
 	Spawns map[string]PartitionSpawn `config:"spawns" help:"spawn points of the partitioned scene, by name; each Cell spawns the points inside its own cell when it starts"`
 }
 
 // PartitionSpawn 是一个刷怪点：count 只在 (x, y) 起、沿 X 每隔 spread 一只，速度 (vx, vy)（走到世界边缘反弹）。
 type PartitionSpawn struct {
-	X      int64 `config:"x" help:"first monster, X"`
-	Y      int64 `config:"y" help:"first monster, Y"`
-	Count  int32 `config:"count" default:"1" min:"1" max:"1000" help:"how many monsters"`
-	Spread int64 `config:"spread" default:"20" min:"0" help:"distance between two monsters of the point, along X"`
-	VX     int64 `config:"vx" default:"0" help:"speed along X, units per second"`
-	VY     int64 `config:"vy" default:"0" help:"speed along Y, units per second"`
-	HP     int32 `config:"hp" default:"100" min:"1" help:"each monster's HP"`
+	RespawnDelay time.Duration `config:"respawn_delay" default:"10s" min:"0s" help:"wait after confirmed death before the same birth slot respawns"`
+	X            int64         `config:"x" help:"first monster, X"`
+	Y            int64         `config:"y" help:"first monster, Y"`
+	Count        int32         `config:"count" default:"1" min:"1" max:"1000" help:"how many monsters"`
+	Spread       int64         `config:"spread" default:"20" min:"0" help:"distance between two monsters of the point, along X"`
+	VX           int64         `config:"vx" default:"0" help:"speed along X, units per second"`
+	VY           int64         `config:"vy" default:"0" help:"speed along Y, units per second"`
+	HP           int32         `config:"hp" default:"100" min:"1" help:"each monster's HP"`
 }
 
-// PartitionTeam 仅控制分区场景队伍面板的节奏（组队规则归 team 模块）（原型缺省：demo 级合理值，产品可改）。成员表在 Remote 托管的
+// PartitionTeam 仅控制分区场景队伍面板的节奏（组队规则归 team 模块）（示例缺省值，产品可改）。成员表在 Remote 托管的
 // Team 实体上；每名队员的 Base 每 snapshot_every 把他的位置 / HP 发给其他队员的 Base，3 个周期没更新的队友从面板移除
 // （维护者定的规则，不另设键）；Base 每 resync_every 从 Team 重读一次成员表，兜住丢失的变化通知。
 type PartitionTeam struct {
@@ -126,6 +127,9 @@ func (p ScenePartition) ValidateConfig(bool) error {
 	}
 	if grid != nil {
 		for name, spawn := range p.Spawns {
+			if spawn.RespawnDelay < 0 {
+				bad("spawns.%s: negative respawn delay", name)
+			}
 			last := spatial.Point{X: spawn.X + int64(spawn.Count-1)*spawn.Spread, Y: spawn.Y}
 			if !grid.Bounds().Contains(spawn.Pos()) || !grid.Bounds().Contains(last) {
 				bad("spawns.%s: %v..%v is outside the world %v", name, spawn.Pos(), last, grid.Bounds())

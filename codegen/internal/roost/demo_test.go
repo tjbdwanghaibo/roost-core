@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime cellworld"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -465,7 +465,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if component := read("game/entities/player/mailbox_component.go"); !strings.Contains(component, "ledger.SetClaimsKey(mailID, expiresAtUnix)") || !strings.Contains(component, "gamemailbox.LedgerMayForget(recordedExpiry, nowUnix)") {
 		t.Errorf("the Mailbox component does not keep the claim ledger by the mail's own expiry:\n%s", component)
 	}
-	if dao := read("db/def/player.go"); !strings.Contains(dao, "MailboxLedger MailboxLedger `store:\"mailbox_ledger\" dao:\"persist\"`") || strings.Contains(dao, "MailClaims") ||
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "MailboxLedger MailboxLedger `store:\"mailbox_ledger\" dao:\"nosync\"`") || strings.Contains(dao, "MailClaims") ||
 		!strings.Contains(dao, "Wallet WalletState `store:\"wallet\" dao:\"persist,sync\"`") {
 		t.Errorf("PlayerDao does not carry the mailbox module's ledger and the wallet module's state (or still has the demo's MailClaims):\n%s", dao)
 	}
@@ -567,7 +567,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("the Player DAO has no nested struct field, so the demo never exercises two-level dirty propagation")
 	}
 	// 持久 schema 继续声明，用于加载前的严格版本校验。
-	if def := read("db/def/player.go"); !strings.Contains(def, "schema=4") {
+	if def := read("db/def/player.go"); !strings.Contains(def, "schema=5") {
 		t.Errorf("the Player DAO does not declare a schema version, so stored data cannot be checked")
 	}
 	// Entity sync: the Player is a replicated subject, the scene is the room

@@ -1,0 +1,17 @@
+{
+  "mirror-red": "--- FAIL: TestUnchangedWitnessKeepsMirrorAliveWithoutDirtying (0.00s)\n    lifecycle_test.go:572: live static mirror expired at beat 22\nFAIL\nFAIL\tgithub.com/tjbdwanghaibo/roost-core/gameplay/cellworld\t0.608s\nFAIL\n",
+  "mirror-green": "ok  \tgithub.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy\t1.667s\nok  \tgithub.com/tjbdwanghaibo/roost-core/gameplay/cellworld\t1.689s\n",
+  "ghostpulse-red": "--- FAIL: TestUnchangedGhostPulseIsDeliveredBeforeFullRefresh (0.00s)\n    replication_test.go:170: unchanged heartbeat was lost by delta encoding: [0x4870f9420a00] <nil>\nFAIL\nFAIL\tgithub.com/tjbdwanghaibo/roost-core/gameplay/cellworld\t1.927s\nFAIL\n",
+  "combination-green": "ok  \tgithub.com/tjbdwanghaibo/roost-core/gameplay/cellworld\t32.982s\n",
+  "race-final": "ok  \tgithub.com/tjbdwanghaibo/roost-core/gameplay/cellworld\t158.538s\n",
+  "root-final": "ok  \tgithub.com/tjbdwanghaibo/roost-core\t17.110s\n",
+  "ready-race": "ok  \texample.com/cwready/game/partition\t6.729s\nok  \texample.com/cwready/game/handler\t19.342s\nok  \texample.com/cwready/game/cellworldhost\t8.309s\nok  \texample.com/cwready/cmd/loadtest\t10.599s\nok  \texample.com/cwready/internal/service/realm\t96.164s\n",
+  "ready-module": "ok   module cellworld: 3 passed (want 3), 0 skipped\nok   go build ./...\nok   go vet ./...\nok   roost id check\nok   roost generate --check\n",
+  "ready-id": "IDs are valid\n",
+  "ready-drift": "generated files are up to date\n",
+  "generator-final-targeted": "=== RUN   TestDemoStepsLeaveModuleComponentsToTheModules\n--- PASS: TestDemoStepsLeaveModuleComponentsToTheModules (0.01s)\n=== RUN   TestDemoTemplateFollowsTheGameServiceName\n=== PAUSE TestDemoTemplateFollowsTheGameServiceName\n=== RUN   TestModuleAttributeEquipmentScenariosAndMutations\n    module_attribute_equipment_test.go:42: caught mutation in game/entities/player/profile_component.go: level attributes\n    module_attribute_equipment_test.go:45: caught mutation in game/entities/player/attribute_component.go: gear final\n    module_attribute_equipment_test.go:48: caught mutation in game/entities/player/equipment_component.go: equip result\n    module_attribute_equipment_test.go:51: caught mutation in game/entities/player/equipment_component.go: replacement\n--- PASS: TestModuleAttributeEquipmentScenariosAndMutations (59.55s)\n=== CONT  TestDemoTemplateFollowsTheGameServiceName\n--- PASS: TestDemoTemplateFollowsTheGameServiceName (80.62s)\nPASS\n",
+  "robot-codec-red": "20/20 failed before sending message 10031: pb codec: no marshal for *pb.MoveIntentRequest",
+  "custom-service-red": "internal/bootstrap/generated.go:19:2: found packages realm (activity.go) and game (scene_sync_bytes_test.go) in /private/tmp/roost-cwfinal-20261113/internal/service/realm\n",
+  "scope_note": "Only current CellWorld and DAO-default changes are accepted here; full-repository/release acceptance belongs to the main agent. Latest-version fixture drift was diagnosed; its trial patch was removed.",
+  "related-config-doctor": "TestDoctorReadsBusinessDeclarationsFromTheProcess passed with the new respawn_delay key included (38 business keys)."
+}

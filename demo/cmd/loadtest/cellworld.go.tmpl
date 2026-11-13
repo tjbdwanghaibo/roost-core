@@ -1,0 +1,253 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"sort"
+	"sync"
+	"time"
+
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+)
+
+var cellworldLoad struct {
+	duration      time.Duration
+	active        int
+	speed         int64
+	warmup        time.Duration
+	width, height int64
+	viewRadius    int64
+}
+var cellworldResults struct {
+	sync.Mutex
+	Requests, Failures, Bytes, Frames        uint64
+	VisibleTotal, VisibleSamples, VisibleMax int
+	Latency                                  []float64
+	Began, Ended                             time.Time
+}
+
+func cellworldFlags() {
+	flag.DurationVar(&cellworldLoad.duration, "cellworld-duration", time.Minute, "cellworld walk duration after login")
+	flag.IntVar(&cellworldLoad.active, "cellworld-active", 5, "percentage of moving players; every player still sends 10 requests/s")
+	flag.Int64Var(&cellworldLoad.speed, "cellworld-speed", 300, "move-intent speed in world units/s")
+	flag.DurationVar(&cellworldLoad.warmup, "cellworld-warmup", 0, "walk to a deterministic spread position before measuring")
+	flag.Int64Var(&cellworldLoad.viewRadius, "cellworld-view-radius", 0, "request a client AOI radius after warmup; 0 keeps the server default")
+	flag.Int64Var(&cellworldLoad.width, "cellworld-width", 6000, "spread world width")
+	flag.Int64Var(&cellworldLoad.height, "cellworld-height", 3000, "spread world height")
+}
+
+func registerCellworld(actions *action.Registry, protocols *protocol.Registry) {
+	action.MustRegisterCall[pb.MoveIntentRequest, pb.MoveIntentResponse](actions, protocols, "cellworld_intent", msgid.MsgMoveIntent,
+		action.OnResp(func(_ *robot.Context, r *pb.MoveIntentResponse) error { return coded(r.Code, r.Reason) }))
+	action.MustRegisterCall[pb.SceneViewRequest, pb.SceneViewResponse](actions, protocols, "cellworld_view", msgid.MsgSceneView,
+		action.OnResp(func(_ *robot.Context, r *pb.SceneViewResponse) error {
+			if err := coded(r.Code, r.Reason); err != nil {
+				return err
+			}
+			if r.ViewRadius != cellworldLoad.viewRadius {
+				return fmt.Errorf("cellworld: requested radius %d, got %d", cellworldLoad.viewRadius, r.ViewRadius)
+			}
+			return nil
+		}))
+	actions.MustRegister(action.Func{ActionName: "cellworld_walk", Handle: walkCellworld})
+}
+
+// 真正走账号、玩家 TCP、业务 PB、Nest 与 EntitySync；每个请求等待响应，慢服务器的实际完成速率另行统计。
+// 不补发错过的拍，不把一个慢请求变成短时突发。输入 ACK 延迟与同步收帧活性是两项独立指标。
+func walkCellworld(ctx context.Context, rb *robot.Context, _ any) error {
+	if cellworldLoad.duration <= 0 || cellworldLoad.active < 1 || cellworldLoad.active > 100 || cellworldLoad.speed < 1 || cellworldLoad.warmup < 0 || cellworldLoad.viewRadius < 0 || cellworldLoad.width <= 600 || cellworldLoad.height <= 600 {
+		return errors.New("cellworld: invalid duration, active percentage or speed")
+	}
+	raw, _ := rb.Blackboard.Get("scene_watcher")
+	w, ok := raw.(*sceneWatcher)
+	if !ok {
+		return errors.New("cellworld: scene_watch must run first")
+	}
+	if err := spreadCellworld(ctx, rb, w); err != nil {
+		return err
+	}
+	if cellworldLoad.viewRadius > 0 {
+		if err := rb.Do(ctx, "cellworld_view", map[string]any{"view_radius": cellworldLoad.viewRadius}); err != nil {
+			return err
+		}
+	}
+	w.mu.Lock()
+	initialFrames, initialBytes := w.frames, w.bytes
+	w.mu.Unlock()
+	cellworldResults.Lock()
+	if cellworldResults.Began.IsZero() {
+		cellworldResults.Began = time.Now()
+	}
+	cellworldResults.Unlock()
+	defer func() {
+		w.mu.Lock()
+		frames, bytes := w.frames-initialFrames, w.bytes-initialBytes
+		w.mu.Unlock()
+		cellworldResults.Lock()
+		cellworldResults.Frames += uint64(frames)
+		cellworldResults.Bytes += bytes
+		cellworldResults.Ended = time.Now()
+		cellworldResults.Unlock()
+	}()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	start := time.Now()
+	end := time.NewTimer(cellworldLoad.duration)
+	defer end.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-end.C:
+			w.mu.Lock()
+			err, frames, last := w.failure, w.frames, w.lastFrame
+			w.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			if frames == 0 || int(uint64(rb.PlayerID)%100) < cellworldLoad.active && time.Since(last) > 2*time.Second {
+				return fmt.Errorf("cellworld: replication stalled, frames=%d last=%s", frames, last)
+			}
+			return rb.Do(ctx, "cellworld_intent", map[string]any{"vx": 0, "vy": 0})
+		case <-ticker.C:
+			vx, vy := int64(0), int64(0)
+			if int(uint64(rb.PlayerID)%100) < cellworldLoad.active {
+				// 固定玩家身份与经过的整秒决定方向，可复跑，不依赖全局随机数调用顺序。
+				phase := (uint64(rb.PlayerID) + uint64(time.Since(start)/(2*time.Second))) % 4
+				switch phase {
+				case 0:
+					vx = cellworldLoad.speed
+				case 1:
+					vy = cellworldLoad.speed
+				case 2:
+					vx = -cellworldLoad.speed
+				case 3:
+					vy = -cellworldLoad.speed
+				}
+			}
+			began := time.Now()
+			err := rb.Do(ctx, "cellworld_intent", map[string]any{"vx": vx, "vy": vy})
+			latency := float64(time.Since(began)) / float64(time.Millisecond)
+			w.mu.Lock()
+			visible, failure := len(w.subjects), w.failure
+			w.mu.Unlock()
+			cellworldResults.Lock()
+			cellworldResults.Requests++
+			if err != nil {
+				cellworldResults.Failures++
+			}
+			if len(cellworldResults.Latency) < 100000 {
+				cellworldResults.Latency = append(cellworldResults.Latency, latency)
+			} else {
+				cellworldResults.Latency[(cellworldResults.Requests-1)%100000] = latency
+			}
+			cellworldResults.VisibleTotal += visible
+			cellworldResults.VisibleSamples++
+			cellworldResults.VisibleMax = max(cellworldResults.VisibleMax, visible)
+			cellworldResults.Unlock()
+			if err != nil {
+				return err
+			}
+			if failure != nil {
+				return failure
+			}
+		}
+	}
+}
+
+// 只通过正式移动 PB 与回传位置分散玩家，不修改服务端状态或绕过 Nest。
+// 预热不计入测量窗口；期限结束时仍未到达会明确失败。
+func spreadCellworld(ctx context.Context, rb *robot.Context, w *sceneWatcher) error {
+	if cellworldLoad.warmup == 0 {
+		return nil
+	}
+	seed := uint64(rb.PlayerID) * 11400714819323198485
+	x := 300 + int64(seed%uint64(cellworldLoad.width-600))
+	y := 300 + int64((seed>>32)%uint64(cellworldLoad.height-600))
+	end := time.NewTimer(cellworldLoad.warmup)
+	defer end.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	arrived := false
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-end.C:
+			if !arrived {
+				return fmt.Errorf("cellworld: player %d did not reach spread target (%d,%d)", rb.PlayerID, x, y)
+			}
+			return nil
+		case <-tick.C:
+			w.mu.Lock()
+			var px, py int64
+			found := false
+			for id, document := range w.subjects {
+				if entity.GetUniqueIDFromEntityID(id) == rb.PlayerID {
+					if _, ok := document["pos_x"]; ok {
+						px, py, found = syncInt64(document["pos_x"]), syncInt64(document["pos_y"]), true
+						break
+					}
+				}
+			}
+			failure := w.failure
+			w.mu.Unlock()
+			if failure != nil {
+				return failure
+			}
+			if !found {
+				continue
+			}
+			dx, dy := x-px, y-py
+			arrived = dx >= -20 && dx <= 20 && dy >= -20 && dy <= 20
+			vx, vy := min(cellworldLoad.speed, max(-cellworldLoad.speed, dx*2)), min(cellworldLoad.speed, max(-cellworldLoad.speed, dy*2))
+			if arrived {
+				vx, vy = 0, 0
+			}
+			if err := rb.Do(ctx, "cellworld_intent", map[string]any{"vx": vx, "vy": vy}); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// 延迟样本有界，超过十万条保留最近窗口；报告明确这个窗口，不声称整个长稳的精确分位数。
+func reportCellworld() {
+	cellworldResults.Lock()
+	defer cellworldResults.Unlock()
+	if cellworldResults.Requests == 0 {
+		return
+	}
+	sort.Float64s(cellworldResults.Latency)
+	r := map[string]any{
+		"kind":                   "cellworld",
+		"requests":               cellworldResults.Requests,
+		"request_errors":         cellworldResults.Failures,
+		"received_sync_frames":   cellworldResults.Frames,
+		"received_sync_bytes":    cellworldResults.Bytes,
+		"visible_mean":           float64(cellworldResults.VisibleTotal) / float64(max(1, cellworldResults.VisibleSamples)),
+		"visible_max":            cellworldResults.VisibleMax,
+		"latency_window_samples": len(cellworldResults.Latency),
+		"input_ack_p99_ms":       cellworldResults.Latency[min(len(cellworldResults.Latency)-1, len(cellworldResults.Latency)*99/100)],
+		"duration_seconds":       cellworldLoad.duration.Seconds(),
+		"active_percent":         cellworldLoad.active,
+	}
+	wall := cellworldResults.Ended.Sub(cellworldResults.Began).Seconds()
+	r["measurement_wall_seconds"] = wall
+	r["measurement_started_at_ms"] = cellworldResults.Began.UnixMilli()
+	r["measurement_ended_at_ms"] = cellworldResults.Ended.UnixMilli()
+	if wall > 0 {
+		r["completed_requests_per_second"] = float64(cellworldResults.Requests-cellworldResults.Failures) / wall
+	}
+	r["warmup_seconds"] = cellworldLoad.warmup.Seconds()
+	_ = json.NewEncoder(os.Stdout).Encode(r)
+}

@@ -10,7 +10,7 @@ state:
   - field: Naming
     type: NamingState
     store: naming
-    dao: persist
+    dao: nosync
     comment: Naming 是有界的改名意图、目录凭据与上一笔回执；不向客户端同步目录 token。
 component: Naming
 protocols: [NamingRename]

@@ -7,7 +7,7 @@
 | 形式 | 写在哪里 | 谁读取 | 示例 |
 | --- | --- | --- | --- |
 | 注释标记 | 对应类型、函数或接口方法的声明上方 | 生成器；部分由 ID 检查器读取 | `//roost:nest rollback=undo durability=strict` |
-| Go struct tag | 字段类型后的反引号内 | 对应生成器或运行时编码器 | `dao:"persist" store:"coins"` |
+| Go struct tag | 字段类型后的反引号内 | 对应生成器或运行时编码器 | `dao:"nosync" store:"coins"` |
 | 项目配置 | `roost.yaml`、服务 YAML | 生成流水线、装配与运行时 | feature、扫描目录、Mod、同步模式 |
 
 注释参数用空格分隔，字段 tag 的内部选项用逗号分隔。标记放在目标声明的文档注释中，最稳妥的是紧贴声明；不要隔一个其他声明，也不要给整个 `type (...)` 共用一个类型标记。只改手写输入，再运行 `roost generate`；不能手改 `*_gen.go`。
@@ -52,8 +52,8 @@
 //roost:dao coll=alliances db=main schema=1
 type AllianceDao struct {
     Name     string `store:"name" remoteview:"public,member"`
-    Bonus    int64  `store:"bonus" dao:"persist" remoteview:"member"`
-    Treasury int64  `store:"treasury" dao:"persist"`
+    Bonus    int64  `store:"bonus" dao:"nosync" remoteview:"member"`
+    Treasury int64  `store:"treasury" dao:"nosync"`
     Online   int32  `dao:"nopersist,sync" store:"online"`
     Scratch  int64  `dao:"nopersist,nosync" store:"scratch"`
 }
@@ -78,16 +78,19 @@ type AllianceDao struct {
 | 写法 | 持久 | 客户端 Sync | 说明 |
 | --- | --- | --- | --- |
 | 没有 `dao` tag | 是 | 是 | 必填的 `store` 不改变此缺省 |
+| `dao:""` / `dao:"persist"` / `dao:"sync"` | 是 | 是 | 两项分别默认开启；正向标记不关闭另一项 |
 | `dao:"persist,sync"` | 是 | 是 | 明确两项都开 |
-| `dao:"persist"` | 是 | 否 | 只持久 |
-| `dao:"sync"` / `dao:"nopersist,sync"` | 否 | 是 | 只同步 |
+| `dao:"nosync"` | 是 | 否 | 只持久 |
+| `dao:"nopersist"` / `dao:"nopersist,sync"` | 否 | 是 | 只同步 |
 | `dao:"nopersist,nosync"` | 否 | 否 | 仍生成事务化 mutator、参与回滚 |
 | `dao:"-"` | 否 | 否 | 完全排除，不是“只参与回滚” |
-| `dao:"persist,sync,map=fast"` | 是 | 是 | map 实现选项；`small` 默认，另有 `fast`、`sharded` |
+| `dao:"map=fast"` | 是 | 是 | 辅助选项不改变默认值；`small` 默认，另有 `fast`、`sharded` |
 | `store:"coins,omitempty"` | — | — | 显式持久 / wire 字段名；选项只支持 `omitempty` |
 | `remoteview:"public,member"` | 必须是 | 独立 | 将该字段加入两个服务端只读 Snapshot |
 
-出现 `dao` 就只启用列出的能力；单写 `map=fast` 不合法，`persist,nopersist` 等矛盾组合也拒绝。`store:"-"` 不用于排除 DAO 字段；名字不能以 `_` 开头、不能重复。每个生成字段必须显式声明 `store`，没有 snake_case 回退；DAO 输入不再接受 `bson`。
+`persist` 与 `sync` **各自默认开启**，只有 `nopersist` / `nosync` 才关闭对应能力；`persist,nopersist`、`sync,nosync` 等矛盾组合仍拒绝。`store:"-"` 不用于排除 DAO 字段；名字不能以 `_` 开头、不能重复。每个生成字段必须显式声明 `store`，没有 snake_case 回退；DAO 输入不再接受 `bson`。
+
+升级生成器时复核手写定义：旧规则下的 `dao:"persist"`（只持久）改成 `dao:"nosync"`，旧 `dao:"sync"`（只同步）改成 `dao:"nopersist"`；原来单写 `nopersist` 而两项都不需要的字段改成 `nopersist,nosync`。新规则不按旧版本解释 tag，私有字段必须明确 `nosync`。`module.yaml` 的 `state[].dao` 复用同一解析器与默认值，也必须这样复核。仓内模块清单、模板、夹具与使用示例已按原来的能力范围调整。
 
 ### Remote Snapshot 的生成边界
 

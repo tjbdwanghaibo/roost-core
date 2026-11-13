@@ -405,7 +405,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	// cells once it is down. The SceneActors and monsters it holds go with the
 	// process: the Bases re-enter their players elsewhere or here again.
 	if s.partition != nil {
-		s.partition.stop()
+		if err := s.partition.stop(ctx); err != nil {
+			return err
+		}
 		s.partition = nil
 	}
 	// The scene last among the fan-out paths: closing it stops the

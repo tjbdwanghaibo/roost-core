@@ -448,9 +448,9 @@ func addTimerDaoFields(root string, names timerNames) (string, []byte, []byte, e
 	fields := fmt.Sprintf(`
 	// %[1]s 是 %[2]sComponent 的定时器节点（roost add timer 加入）：节点 ID -> 节点。这份 map 就是全部期限，
 	// 增删改都在触发它的 Nest 事务里经组件写回，随事务提交 / 回滚；没有别的存储。
-	%[1]s map[int64]*%[3]s `+"`store:\"%[4]s\" dao:\"persist,map=fast\"`"+`
+	%[1]s map[int64]*%[3]s `+"`store:\"%[4]s\" dao:\"nosync,map=fast\"`"+`
 	// %[5]s 是分配过的最大节点 ID，持久化：重启后不会把已经交出去的 ID 再分配一次。
-	%[5]s int64 `+"`store:\"%[6]s\" dao:\"persist\"`"+`
+	%[5]s int64 `+"`store:\"%[6]s\" dao:\"nosync\"`"+`
 `, names.MapField, names.CompType, names.Node, names.MapKey, names.SeedField, names.SeedKey)
 	edited := append(append(append([]byte(nil), raw[:closing]...), []byte(fields)...), raw[closing:]...)
 	formatted, err := format.Source(edited)

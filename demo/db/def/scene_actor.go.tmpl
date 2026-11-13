@@ -18,9 +18,18 @@ package dbdef
 //
 //roost:dao nocoll
 type SceneActorDao struct {
-	PosX int64 `dao:"nopersist,nosync" store:"pos_x"`
-	PosY int64 `dao:"nopersist,nosync" store:"pos_y"`
-	HP   int64 `dao:"nopersist,nosync" store:"hp"`
+	// Buff / 冷却的恢复快照：玩家持久，空间代理临时；不传内部账本给客户端。
+	CellSpawnGeneration uint64        `dao:"nopersist,nosync" store:"cell_spawn_generation"`
+	CellLife            uint64        `dao:"nopersist,nosync" store:"cell_life"`
+	CellDeath           *CellDeath    `dao:"nopersist,nosync" store:"cell_death"`
+	CellDeathAcked      bool          `dao:"nopersist,nosync" store:"cell_death_acked"`
+	CellDeathNextAt     int64         `dao:"nopersist,nosync" store:"cell_death_next"`
+	CellRecovery        *CellRecovery `dao:"nopersist,nosync" store:"cell_recovery"`
+	// 共享授权及锁外 I/O 的本地续行身份；经 DAO setter 回滚。
+	CellOwnership *CellOwnership `dao:"nopersist,nosync" store:"cell_ownership"`
+	PosX          int64          `dao:"nopersist,nosync" store:"pos_x"`
+	PosY          int64          `dao:"nopersist,nosync" store:"pos_y"`
+	HP            int64          `dao:"nopersist,nosync" store:"hp"`
 	// CellVX / CellVY 是速度（单位 / 秒）：玩家由 MoveIntent 设定，Cell 每拍积分。
 	CellVX int64 `dao:"nopersist,nosync" store:"cell_vx"`
 	CellVY int64 `dao:"nopersist,nosync" store:"cell_vy"`

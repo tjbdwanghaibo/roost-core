@@ -356,12 +356,12 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 		if item.Status != StatusOK {
 			t.Errorf("%s: %s %s", item.Name, item.Status, item.Detail)
 		}
-		// 工程自己的键共 37 个：game/settings 的 activity.key_prefix、activity.groups_file、platform.key_prefix、
+		// 工程自己的键共 38 个：game/settings 的 activity.key_prefix、activity.groups_file、platform.key_prefix、
 		// platform.payment_secret，联盟 RPC 客户端的 alliance.service_type、alliance.call_timeout；
-		// 分区场景原型 scene.partition.* 的 30 个（game/settings/partition.go；队伍面板的两个键随社交队伍迁入 team 模块而去掉）；
+		// 分区场景 scene.partition.* 的 31 个（含出生槽 respawn_delay）（game/settings/partition.go；队伍面板的两个键随社交队伍迁入 team 模块而去掉）；
 		// 可编辑地形的 scene.terrain.pack 1 个（game/settings/terrain.go）。guild.found_cost 随公会换用 alliance 模块而去掉。
-		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(37 business key(s))") {
-			t.Errorf("config-schema:game = %q; want the 37 keys the project's own code declares beyond the framework's: game/settings (activity.*, platform.*, scene.partition.*, scene.terrain.pack) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
+		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(38 business key(s))") {
+			t.Errorf("config-schema:game = %q; want the 38 keys the project's own code declares beyond the framework's: game/settings (activity.*, platform.*, scene.partition.*, scene.terrain.pack) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
 		}
 	}
 

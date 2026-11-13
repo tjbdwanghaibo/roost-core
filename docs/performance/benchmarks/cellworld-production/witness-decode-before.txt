@@ -1,0 +1,60 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2497	     90742 ns/op	  197322 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2800	     92431 ns/op	  197317 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2630	     96723 ns/op	  197318 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2732	    100202 ns/op	  197318 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2709	     87022 ns/op	  197319 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2814	     86133 ns/op	  197321 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2764	     85881 ns/op	  197321 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2692	     87390 ns/op	  197322 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2812	     85974 ns/op	  197321 B/op	     219 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkWitnessDecode-10    	    2716	     85313 ns/op	  197323 B/op	     219 allocs/op
+PASS

@@ -10,7 +10,7 @@ state:
   - field: Purchase
     type: PurchaseState
     store: purchase
-    dao: persist
+    dao: nosync
     comment: Purchase 的已发货序号与奖励在同一笔事务提交，不保存随订单数增长的本地回执表。
 component: Purchase
 protocols: [PurchaseCollect]

@@ -16,21 +16,21 @@ package dbdef
 //
 //roost:dao coll=alliance db=main
 type AllianceDao struct {
-	Name          string `dao:"persist" store:"name"`
-	LeaderID      int64  `dao:"persist" store:"leader_id"`
-	OpenJoin      bool   `dao:"persist" store:"open_join"`
-	Funds         int64  `dao:"persist" store:"funds"`
-	CreatedAtUnix int64  `dao:"persist" store:"created_at_unix"`
+	Name          string `dao:"nosync" store:"name"`
+	LeaderID      int64  `dao:"nosync" store:"leader_id"`
+	OpenJoin      bool   `dao:"nosync" store:"open_join"`
+	Funds         int64  `dao:"nosync" store:"funds"`
+	CreatedAtUnix int64  `dao:"nosync" store:"created_at_unix"`
 	// Members is player unique id -> their seat.
-	Members map[int64]*AllianceSeat `dao:"persist,map=fast" store:"members"`
+	Members map[int64]*AllianceSeat `dao:"nosync,map=fast" store:"members"`
 	// Applications is player unique id -> the pending application.
-	Applications map[int64]*AllianceApplication `dao:"persist,map=fast" store:"applications"`
+	Applications map[int64]*AllianceApplication `dao:"nosync,map=fast" store:"applications"`
 	// Wars is the alliances this one is at war with: alliance id -> since.
 	// A declaration between two alliances on one service instance writes both
 	// sides in one transaction; across instances the declaring side records
 	// first, with a WarAcks entry, and the enemy's side follows from the
 	// service's AcknowledgeWar call (plan §2.9).
-	Wars map[int64]int64 `dao:"persist,map=fast" store:"wars"`
+	Wars map[int64]int64 `dao:"nosync,map=fast" store:"wars"`
 	// WarAcks is the cross-instance declarations the enemy has not
 	// acknowledged yet: request id -> enemy alliance id. Written in the
 	// declaration's transaction, removed (conditionally, by request id) once
@@ -39,13 +39,13 @@ type AllianceDao struct {
 	// declaration, again with backoff while it runs, and after a restart (the
 	// alliances are preloaded and scanned) — so the enemy's side is recorded
 	// eventually without an effect. Usually empty.
-	WarAcks map[string]int64 `dao:"persist,map=fast" store:"war_acks"`
+	WarAcks map[string]int64 `dao:"nosync,map=fast" store:"war_acks"`
 	// Requests is the request receipts: request id -> what that write did.
 	// A receipt commits in the same transaction as the change it records, so
 	// a redelivered request replays it instead of running again; rejections
 	// are recorded too, so a request once refused stays refused. Pruned after
 	// alliance.receipt_retention, a few per write.
-	Requests map[string]*AllianceReceipt `dao:"persist,map=fast" store:"requests"`
+	Requests map[string]*AllianceReceipt `dao:"nosync,map=fast" store:"requests"`
 }
 
 // AllianceSeat is one member's place in the alliance.

@@ -2,11 +2,12 @@ package player
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
-	"{{MODULE}}/game/partition"
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/partition"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
@@ -65,16 +66,15 @@ func (player *Player) CellPanel() cellworld.Panel {
 	return cellworld.Panel{MaxHP: int32(final.HP), Attack: int32(final.Attack), Power: int32(final.Power)}
 }
 
-// cellPanelChanged hands a changed panel to the partitioned scene, inside the
-// transaction that changed the growth (level-up, equipment): the new panel
-// and its sequence are written into the Player's routing state with it, and
-// the Node sends it to the owner cell after the commit — a rollback takes it
-// back with the level. No request is made from here (the handler must not
-// wait). A process without a partitioned scene does nothing.
-func (player *Player) cellPanelChanged() {
-	if node := partition.Node(); node != nil {
-		_ = node.UpdatePanel(player)
-	}
+// 属性在等级、装备或业务 Refresh 后实际变化时，Cell 面板在同一个 Player 事务里更新。
+// 不使用只覆盖升级的钩子，加载阶段的临时重建也不发送面板。
+func init() {
+	OnAttributeChanged("cellworld", func(c *AttributeComponent) error {
+		if node := partition.Node(); node != nil {
+			return node.UpdatePanel(c.Owner())
+		}
+		return nil
+	})
 }
 
 func (player *Player) StartBase() error {
@@ -127,3 +127,17 @@ var (
 	_ cellworld.BasePlayer  = (*Player)(nil)
 	_ cellworld.GroupPlayer = (*Player)(nil)
 )
+
+// 死亡回执是私有持久字段；与 SettleDeath 的业务奖励共用当前 Player strict 事务。
+func (player *Player) CellDeathReceipt(target int64) uint64 {
+	v, _ := player.dao.GetCellDeathReceipts(target)
+	return v
+}
+func (player *Player) RecordCellDeathReceipt(target int64, life uint64, limit int) error {
+	d := player.dao
+	if _, known := d.GetCellDeathReceipts(target); !known && d.CellDeathReceiptsLen() >= limit {
+		return fmt.Errorf("cellworld: death receipt capacity exhausted")
+	}
+	d.SetCellDeathReceipts(target, life)
+	return nil
+}

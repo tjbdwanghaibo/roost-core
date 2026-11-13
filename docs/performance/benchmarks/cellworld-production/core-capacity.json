@@ -1,0 +1,68 @@
+[
+  {
+    "active_percent": 1,
+    "pass": false,
+    "players": 1000,
+    "npcs": 9000,
+    "cells": 4,
+    "duration_seconds": 60,
+    "base_cpu_percent_one_core": 140.5,
+    "witness_latency_ms": {
+      "p50": 8.64,
+      "p99": 207.12,
+      "max": 333.21
+    },
+    "cell_cpu_percent_one_core": [
+      113.9,
+      119.9,
+      121.1,
+      112.1
+    ],
+    "cell_region_p99_ms": [
+      62.65,
+      75.21,
+      69.28,
+      71.9
+    ],
+    "cell_out_kb_per_second": [
+      7902,
+      9377,
+      8784,
+      8132
+    ],
+    "evidence": "core-capacity-1pct.log"
+  },
+  {
+    "active_percent": 5,
+    "pass": false,
+    "players": 1000,
+    "npcs": 9000,
+    "cells": 4,
+    "duration_seconds": 60,
+    "base_cpu_percent_one_core": 167.6,
+    "witness_latency_ms": {
+      "p50": 449.8,
+      "p99": 1304.7,
+      "max": 1387.59
+    },
+    "cell_cpu_percent_one_core": [
+      116.8,
+      124.9,
+      120.5,
+      118.5
+    ],
+    "cell_region_p99_ms": [
+      66.67,
+      84.4,
+      85.4,
+      73.38
+    ],
+    "cell_out_kb_per_second": [
+      8078,
+      9624,
+      8989,
+      8352
+    ],
+    "evidence": "core-capacity-5pct.log"
+  }
+]

@@ -94,12 +94,12 @@ package def
 
 //roost:dao coll=heroes db=main dbscope=sid
 type HeroDao struct {
-	Name    string                          // 无 tag：persist + sync 全开
-	Level   int32
-	Exp     int64  `dao:"persist"`          // 只持久化，不同步给客户端
-	Cache   int64  `dao:"nopersist,sync"`   // 只同步，不落库
-	Tmp     int    `dao:"-"`                // 完全排除
-	Items   map[int64]int32 `dao:"persist,sync,map=fast"`
+	Name  string          `store:"1"`                // 默认持久并同步
+	Level int32           `store:"2"`
+	Exp   int64           `store:"3" dao:"nosync"`    // 只持久化，不同步给客户端
+	Cache int64           `store:"4" dao:"nopersist"` // 只同步，不落库
+	Tmp   int             `dao:"-"`                  // 完全排除
+	Items map[int64]int32  `store:"5" dao:"map=fast"`  // 辅助选项不改变默认双开
 }
 ```
 

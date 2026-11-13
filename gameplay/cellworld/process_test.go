@@ -54,10 +54,12 @@ type childSpec struct {
 	Row        int32         `json:"row"`
 	Spawn      []EntityState `json:"spawn"`
 	// RandomNPCs > 0 时在本格随机位置生成这么多 NPC（ID 从 IDBase 起），速度 NPCSpeed、方向随机。
-	RandomNPCs int    `json:"npcs"`
-	IDBase     int64  `json:"idbase"`
-	NPCSpeed   int64  `json:"speed"`
-	Seed       uint64 `json:"seed"`
+	MaxView       int    `json:"max_view"`
+	RandomNPCs    int    `json:"npcs"`
+	ActivePercent int    `json:"active_percent"`
+	IDBase        int64  `json:"idbase"`
+	NPCSpeed      int64  `json:"speed"`
+	Seed          uint64 `json:"seed"`
 	// Events 为 true 时逐条输出 Real / 伤害事件（功能用例）；测量时关闭，只输出汇总。
 	Events bool `json:"events"`
 	// Writeback / Lease 覆盖 SceneActor 的回写间隔与租约（毫秒；0 取缺省）。
@@ -111,6 +113,7 @@ type sampler struct {
 	mu   sync.Mutex
 	vals []float64
 	seen int
+	max  float64
 	r    *rand.Rand
 }
 
@@ -122,6 +125,7 @@ func (s *sampler) add(v float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seen++
+	s.max = max(s.max, v)
 	if len(s.vals) < samplerCap {
 		s.vals = append(s.vals, v)
 		return
@@ -133,7 +137,7 @@ func (s *sampler) add(v float64) {
 
 func (s *sampler) reset() {
 	s.mu.Lock()
-	s.vals, s.seen = s.vals[:0], 0
+	s.vals, s.seen, s.max = s.vals[:0], 0, 0
 	s.mu.Unlock()
 }
 
@@ -141,13 +145,14 @@ func (s *sampler) reset() {
 func (s *sampler) quantiles() (p50, p99, mx float64, n int) {
 	s.mu.Lock()
 	vals := slices.Clone(s.vals)
+	mx = s.max
 	s.mu.Unlock()
 	if len(vals) == 0 {
 		return 0, 0, 0, 0
 	}
 	sort.Float64s(vals)
 	at := func(q float64) float64 { return vals[min(len(vals)-1, int(q*float64(len(vals))))] }
-	return at(0.5), at(0.99), vals[len(vals)-1], len(vals)
+	return at(0.5), at(0.99), mx, len(vals)
 }
 
 func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
@@ -271,14 +276,47 @@ func (s *lockStore) Close() error { return s.client.Close() }
 // cellService 是 Cell 进程的 App 服务：Serve 起本格（startProc 同一套接线），stdin EOF 时打印统计并返回（App 停 Mod、
 // 释放单实例锁）。
 type cellService struct {
-	spec childSpec
-	grid *Grid
-	out  *childOut
+	owners      *OwnerRegistry
+	incarnation string
+	lease       app.SingletonLease
+	ownerClient fredis.IRedis
+	spec        childSpec
+	grid        *Grid
+	out         *childOut
 }
 
-func (s *cellService) Name() app.ServiceName          { return "cell" }
-func (s *cellService) Init(*app.Registry) error       { return nil }
-func (s *cellService) Shutdown(context.Context) error { return nil }
+func (s *cellService) Name() app.ServiceName { return "cell" }
+func (s *cellService) Init(reg *app.Registry) error {
+	process, ok := app.Lookup[app.SingletonIncarnation](reg, app.ModSingletonIncarnation)
+	if !ok {
+		return errors.New("missing singleton incarnation")
+	}
+	lease, ok := app.Lookup[app.SingletonLease](reg, app.ModSingletonLease)
+	if !ok {
+		return errors.New("missing singleton lease")
+	}
+	s.lease = lease
+	checker, ok := app.Lookup[app.SingletonIdentityChecker](reg, app.ModSingletonIdentityChecker)
+	if !ok {
+		return errors.New("missing identity checker")
+	}
+	client, err := redisdriver.NewClient(&fredis.Config{Addr: s.spec.Redis, MaxRetries: -1})
+	if err != nil {
+		return err
+	}
+	s.ownerClient = client
+	s.incarnation = process.Token
+	s.owners, err = NewRedisOwnerRegistry(client, "mp", func(ctx context.Context, p OwnerProcess) (bool, error) {
+		return checker.Matches(ctx, "cell", p.SID, p.Incarnation)
+	})
+	return err
+}
+func (s *cellService) Shutdown(context.Context) error {
+	if s.ownerClient != nil {
+		return s.ownerClient.Close()
+	}
+	return nil
+}
 
 func (s *cellService) Serve(ctx context.Context) error {
 	spec, id, out := s.spec, s.out.cell, s.out
@@ -286,7 +324,8 @@ func (s *cellService) Serve(ctx context.Context) error {
 	defer tb.cleanup()
 	ticks, ghosts, handoffs := newSampler(), newSampler(), newSampler()
 	p := startProc(tb, procSpec{sid: s.grid.SID(id), cell: &id, grid: s.grid, transport: NATSTransport(dialNATS(tb, spec.URL)), mod: func(cfg *NodeConfig) {
-		cfg.World, cfg.ViewRadius = "mp", spec.ViewRadius
+		cfg.Owners, cfg.Incarnation, cfg.CheckLease = s.owners, s.incarnation, s.lease.Check
+		cfg.World, cfg.ViewRadius, cfg.MaxViewEntities = "mp", spec.ViewRadius, spec.MaxView
 		if spec.WritebackMS > 0 {
 			cfg.WritebackEvery = time.Duration(spec.WritebackMS) * time.Millisecond
 		}
@@ -335,6 +374,9 @@ func (s *cellService) Serve(ctx context.Context) error {
 			st := EntityState{ID: npcID(spec.IDBase + int64(i)), HP: 100,
 				X: rect.Min.X + r.Int64N(rect.Max.X-rect.Min.X), Y: rect.Min.Y + r.Int64N(rect.Max.Y-rect.Min.Y),
 				VX: int64(float64(spec.NPCSpeed) * math.Cos(angle)), VY: int64(float64(spec.NPCSpeed) * math.Sin(angle))}
+			if spec.ActivePercent > 0 && i%100 >= spec.ActivePercent {
+				st.VX, st.VY = 0, 0
+			}
 			if err := p.node.Spawn(spawnCtx, st); err != nil {
 				return err
 			}
@@ -385,7 +427,7 @@ func runBaseChild(spec childSpec, grid *Grid, out *childOut) int {
 	defer tb.cleanup()
 	var once sync.Once
 	p := startProc(tb, procSpec{sid: worldBaseSID, base: true, grid: grid, transport: NATSTransport(dialNATS(tb, spec.URL)), mod: func(cfg *NodeConfig) {
-		cfg.World, cfg.ViewRadius = "mp", spec.ViewRadius
+		cfg.World, cfg.ViewRadius, cfg.MaxViewEntities = "mp", spec.ViewRadius, spec.MaxView
 		cfg.Hooks.Witness = func(View) { once.Do(func() { out.emit(childEvent{Ev: "witness", ID: actorID(spec.BasePlayer)}) }) }
 	}})
 	defer p.stop()
@@ -403,15 +445,80 @@ func runBaseChild(spec childSpec, grid *Grid, out *childOut) int {
 
 func diffStats(a, b NodeStats) NodeStats {
 	return NodeStats{
-		Ticks: a.Ticks - b.Ticks, MsgsOut: a.MsgsOut - b.MsgsOut, BytesOut: a.BytesOut - b.BytesOut,
-		MsgsIn: a.MsgsIn - b.MsgsIn, BytesIn: a.BytesIn - b.BytesIn, OutboxDrops: a.OutboxDrops - b.OutboxDrops,
-		DispatchErrors: a.DispatchErrors - b.DispatchErrors, DecodeErrors: a.DecodeErrors - b.DecodeErrors,
-		PublishErrors: a.PublishErrors - b.PublishErrors, StaleDrops: a.StaleDrops - b.StaleDrops, Conflicts: a.Conflicts - b.Conflicts,
-		HandoffsStarted: a.HandoffsStarted - b.HandoffsStarted, HandoffsAccepted: a.HandoffsAccepted - b.HandoffsAccepted,
-		HandoffsRejected: a.HandoffsRejected - b.HandoffsRejected, HandoffsAborted: a.HandoffsAborted - b.HandoffsAborted,
-		OfferRetransmits: a.OfferRetransmits - b.OfferRetransmits, LeaseExpired: a.LeaseExpired - b.LeaseExpired,
-		ActorBeats: a.ActorBeats - b.ActorBeats, TierIdle: a.TierIdle - b.TierIdle, TierFast: a.TierFast - b.TierFast,
-		Reals: a.Reals, Ghosts: a.Ghosts, IdleNPCs: a.IdleNPCs,
+		SpawnChecks:        a.SpawnChecks - b.SpawnChecks,
+		SpawnErrors:        a.SpawnErrors - b.SpawnErrors,
+		DeathsCommitted:    a.DeathsCommitted - b.DeathsCommitted,
+		DeathErrors:        a.DeathErrors - b.DeathErrors,
+		ReplicaFull:        a.ReplicaFull - b.ReplicaFull,
+		ReplicaDelta:       a.ReplicaDelta - b.ReplicaDelta,
+		ReplicaGaps:        a.ReplicaGaps - b.ReplicaGaps,
+		StatesCoalesced:    a.StatesCoalesced - b.StatesCoalesced,
+		ControlRetries:     a.ControlRetries - b.ControlRetries,
+		ControlExhausted:   a.ControlExhausted - b.ControlExhausted,
+		QueueAgeMaxNS:      a.QueueAgeMaxNS,
+		OutboundPending:    a.OutboundPending,
+		StateQueued:        a.StateQueued,
+		ControlQueued:      a.ControlQueued,
+		Ticks:              a.Ticks - b.Ticks,
+		MsgsOut:            a.MsgsOut - b.MsgsOut,
+		BytesOut:           a.BytesOut - b.BytesOut,
+		MsgsIn:             a.MsgsIn - b.MsgsIn,
+		BytesIn:            a.BytesIn - b.BytesIn,
+		OutboxDrops:        a.OutboxDrops - b.OutboxDrops,
+		DispatchErrors:     a.DispatchErrors - b.DispatchErrors,
+		DestroyErrors:      a.DestroyErrors - b.DestroyErrors,
+		DecodeErrors:       a.DecodeErrors - b.DecodeErrors,
+		PublishErrors:      a.PublishErrors - b.PublishErrors,
+		StaleDrops:         a.StaleDrops - b.StaleDrops,
+		Conflicts:          a.Conflicts - b.Conflicts,
+		HandoffsStarted:    a.HandoffsStarted - b.HandoffsStarted,
+		HandoffsAccepted:   a.HandoffsAccepted - b.HandoffsAccepted,
+		HandoffsRejected:   a.HandoffsRejected - b.HandoffsRejected,
+		HandoffsAborted:    a.HandoffsAborted - b.HandoffsAborted,
+		OfferRetransmits:   a.OfferRetransmits - b.OfferRetransmits,
+		OffersReceived:     a.OffersReceived - b.OffersReceived,
+		InputsDropped:      a.InputsDropped - b.InputsDropped,
+		DamageForwarded:    a.DamageForwarded - b.DamageForwarded,
+		DamageRetries:      a.DamageRetries - b.DamageRetries,
+		DamageUnknown:      a.DamageUnknown - b.DamageUnknown,
+		LeaseExpired:       a.LeaseExpired - b.LeaseExpired,
+		ViewsAccepted:      a.ViewsAccepted - b.ViewsAccepted,
+		ViewsStale:         a.ViewsStale - b.ViewsStale,
+		OwnerChanges:       a.OwnerChanges - b.OwnerChanges,
+		Reenters:           a.Reenters - b.Reenters,
+		InputsResent:       a.InputsResent - b.InputsResent,
+		EnterRefusals:      a.EnterRefusals - b.EnterRefusals,
+		Lost:               a.Lost - b.Lost,
+		Writebacks:         a.Writebacks - b.Writebacks,
+		MirrorErrors:       a.MirrorErrors - b.MirrorErrors,
+		ActorBeats:         a.ActorBeats - b.ActorBeats,
+		TierIdle:           a.TierIdle - b.TierIdle,
+		TierFast:           a.TierFast - b.TierFast,
+		PeriodErrors:       a.PeriodErrors - b.PeriodErrors,
+		Reals:              a.Reals,
+		Ghosts:             a.Ghosts,
+		IdleNPCs:           a.IdleNPCs,
+		PanelsApplied:      a.PanelsApplied - b.PanelsApplied,
+		PanelsDuplicate:    a.PanelsDuplicate - b.PanelsDuplicate,
+		PanelRetries:       a.PanelRetries - b.PanelRetries,
+		PanelsSent:         a.PanelsSent - b.PanelsSent,
+		PanelUnknown:       a.PanelUnknown - b.PanelUnknown,
+		GroupSnapsSent:     a.GroupSnapsSent - b.GroupSnapsSent,
+		GroupSnapsIn:       a.GroupSnapsIn - b.GroupSnapsIn,
+		GroupNoticesSent:   a.GroupNoticesSent - b.GroupNoticesSent,
+		GroupAdopted:       a.GroupAdopted - b.GroupAdopted,
+		GroupStale:         a.GroupStale - b.GroupStale,
+		GroupResyncs:       a.GroupResyncs - b.GroupResyncs,
+		GroupViewErrors:    a.GroupViewErrors - b.GroupViewErrors,
+		ExtOut:             a.ExtOut - b.ExtOut,
+		ExtIn:              a.ExtIn - b.ExtIn,
+		ExtDrops:           a.ExtDrops - b.ExtDrops,
+		SurfaceBlocks:      a.SurfaceBlocks - b.SurfaceBlocks,
+		OwnershipAttempts:  a.OwnershipAttempts - b.OwnershipAttempts,
+		OwnershipErrors:    a.OwnershipErrors - b.OwnershipErrors,
+		OwnershipConflicts: a.OwnershipConflicts - b.OwnershipConflicts,
+		OwnershipQueueFull: a.OwnershipQueueFull - b.OwnershipQueueFull,
+		OwnershipQueued:    a.OwnershipQueued,
 	}
 }
 
@@ -954,4 +1061,41 @@ func TestBaseProcessGoneSceneActorCleanedUp(t *testing.T) {
 	if leases != 1 {
 		t.Fatalf("lease expirations %d, want 1", leases)
 	}
+}
+
+// 旧进程 SIGSTOP 超过租约，新进程接管；SIGCONT 后旧进程必须 fail-stop，
+// 不能把积压输入、心跳和所有权完成回调作为新的写者结果发布。
+func TestCellProcessPausedWriterCannotResumeAfterTakeover(t *testing.T) {
+	mp := startMPWorld(t, 1, 1, nil)
+	mp.startCells(nil)
+	cell := CellID{0, 0}
+	before := mp.world.enter(1, spatial.Point{X: 5000, Y: 5000})
+	old := mp.procs[cell]
+	if err := old.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = old.cmd.Process.Signal(syscall.SIGCONT) })
+	replacement := startCellProcess(t, mp.cellSpec(cell, nil))
+	mp.procs[cell] = replacement
+	got := mp.world.waitView(1, 15*time.Second, "replacement writer", func(v View) bool { return v.Epoch > before.Epoch })
+	resumedAt := time.Now().UnixNano()
+	if err := old.cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-old.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("old writer did not fail-stop after resume")
+	}
+	if err := old.wait(); err == nil || !strings.Contains(old.stderrText(), app.ErrSingletonLost.Error()) {
+		t.Fatalf("old process did not report lost lease: %v %s", err, old.stderrText())
+	}
+	for _, e := range old.eventsSnapshot() {
+		if e.T >= resumedAt && (e.Ev == "real" || e.Ev == "damage") {
+			t.Fatalf("old writer emitted new business result: %+v", e)
+		}
+	}
+	mp.world.resetViews(1)
+	mp.world.waitView(1, settleWithin, "replacement still serving", func(v View) bool { return v.Epoch == got.Epoch })
+	mp.stopAll()
 }

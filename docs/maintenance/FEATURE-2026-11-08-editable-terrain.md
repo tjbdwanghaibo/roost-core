@@ -259,7 +259,7 @@ type TerrainChunkDao struct {
 
 | 部分 | 位置（生成后路径） | 做法 |
 | --- | --- | --- |
-| DAO | `db/def/terrain_chunk.go` | 按 §3：`BaseRevision` / `Version` / `Heights []uint16` / `Materials []byte` / `Applied []uint64`，store 键 `1`～`5`，`coll=terrain_chunks db=main`。前四个 `persist,sync`，`Applied` 只 `persist`：同步视图的字段资格在 DAO 上一次定下，P2 接 entitysync 时 `Applied` 自然不下发 |
+| DAO | `db/def/terrain_chunk.go` | 按 §3：`BaseRevision` / `Version` / `Heights []uint16` / `Materials []byte` / `Applied []uint64`，store 键 `1`～`5`，`coll=terrain_chunks db=main`。前四个 `persist,sync`，`Applied` 用 `nosync` 只持久：同步视图的字段资格在 DAO 上一次定下，P2 接 entitysync 时 `Applied` 自然不下发 |
 | 实体 | `game/entities/terrain_chunk` | kind 11（不复用已删的 5 / 8），`EntityCategoryWorld`（与 Scene 同档），持久；实体唯一号 = `ChunkKey.ID() + 1`（unique 0 无效，块 (0,0) 的 `ID()` 正是 0；地图每边 ≤ 1024 块，`ID()` < 2^42，远小于 52 位 unique）。ID 确定、可能已有记录，所以只经 lifecycle 的 `GetOrCreate` 建，不直接 `Create` |
 | 组件 | `SurfaceComponent`（type 2011） | `Apply(baseRevision, base, edits)`：Version 0 时用原始块填满 DAO 再改，之后要求记录的 `BaseRevision` 等于当前包；高度只写变了的下标（`SetHeightsAt`），材质有变化时整字段（`SetMaterialsAll`）；每次成功 Version + 1；全部校验在第一次写之前。`Overlay()` / `OverlayOf(dao)` 给视图的副本；`RecordApplied` / `WasApplied` 是 `Applied` 的辅助（满 32 个丢最旧，整字段替换） |
 | 地形服务 | `game/terrainmap`（`Map`） | 持有 `*terrain.Pack`、`*terrain.View`、本进程范围 `Region{Own, Load}`；`Load` 装块、`Edit` 写入口、`ApplyEdit` 是 handler 的业务、`Height` / `Material` / `IsWater` / `Probe` 委托视图 |

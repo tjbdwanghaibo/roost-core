@@ -1,0 +1,56 @@
+package cellworldhost
+
+import (
+	"context"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+)
+
+// 本测试包不注册业务实体，237 专用于 ID 分类验证。
+const cellworldTestKind entity.EntityKind = 237
+
+func init() { entity.MustRegisterEntityKindCategory(cellworldTestKind, entity.EntityCategoryOther) }
+
+func TestCellworldSpawnIdentitySurvivesReorder(t *testing.T) {
+	store := versionstore.NewMemoryStore[int32, cellworld.SpawnCatalog]()
+	first, _ := cellworld.NewSpawnBook(store)
+	a, err := first.Reserve(context.Background(), 1001, []string{"wolf-0", "wolf-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _ := cellworld.NewSpawnBook(store)
+	b, err := second.Reserve(context.Background(), 1001, []string{"wolf-1", "wolf-0", "boss-0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := SpawnID(1001, a["wolf-0"], cellworldTestKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := SpawnID(1001, b["wolf-0"], cellworldTestKind)
+	if err != nil || same != id {
+		t.Fatalf("identity changed: %d %d %v", id, same, err)
+	}
+	other, _ := SpawnID(1002, a["wolf-0"], cellworldTestKind)
+	if other == id {
+		t.Fatal("different home reused id")
+	}
+}
+func TestCellworldSpawnIdentityRejectsOverflow(t *testing.T) {
+	for _, v := range []struct {
+		home int32
+		seq  uint64
+	}{{0, 1}, {65536, 1}, {1, 0}, {1, 50001}} {
+		if _, err := SpawnID(v.home, v.seq, cellworldTestKind); err == nil {
+			t.Fatalf("accepted %+v", v)
+		}
+	}
+}
+func TestCellworldMissingRegistryFailsClosed(t *testing.T) {
+	if _, err := New(nil, cellworld.NodeConfig{}); err == nil {
+		t.Fatal("missing authority accepted")
+	}
+}

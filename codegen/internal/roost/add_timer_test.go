@@ -78,7 +78,7 @@ func TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks(t *testing.T) {
 		t.Fatalf("tick handler:\n%s", tick)
 	}
 	dao := readProjectFile(t, root, "db/def/player.go")
-	if !strings.Contains(dao, "Timers map[int64]*PlayerTimerNode `store:\"timers\" dao:\"persist,map=fast\"`") || !strings.Contains(dao, "TimerSeed int64 `store:\"timer_seed\" dao:\"persist\"`") {
+	if !strings.Contains(dao, "Timers map[int64]*PlayerTimerNode `store:\"timers\" dao:\"nosync,map=fast\"`") || !strings.Contains(dao, "TimerSeed int64 `store:\"timer_seed\" dao:\"nosync\"`") {
 		t.Fatalf("DAO definition:\n%s", dao)
 	}
 	if entityGo := readProjectFile(t, root, "game/entities/player/entity.go"); !strings.Contains(entityGo, "timer *TimerComponent `comp:\"CompTypeTimer\"`") {
@@ -312,14 +312,14 @@ func TestEntityTimerGeneratedProjectEndToEnd(t *testing.T) {
 
 // 业务字段：Buff 状态与周期收益，以及最近一次周期回调收到的 Fire（给用例核对离线补触发的参数）。
 const timerE2EDaoFields = `
-	BuffActive   bool  ` + "`store:\"buff_active\" dao:\"persist\"`" + `
-	BuffExpired  int64 ` + "`store:\"buff_expired\" dao:\"persist\"`" + `
-	IncomeFires  int64 ` + "`store:\"income_fires\" dao:\"persist\"`" + `
-	Gold         int64 ` + "`store:\"gold\" dao:\"persist\"`" + `
-	LastOverdue  bool  ` + "`store:\"last_overdue\" dao:\"persist\"`" + `
-	LastDeadline int64 ` + "`store:\"last_deadline\" dao:\"persist\"`" + `
-	LastNow      int64 ` + "`store:\"last_now\" dao:\"persist\"`" + `
-	LastInterval int64 ` + "`store:\"last_interval\" dao:\"persist\"`"
+	BuffActive   bool  ` + "`store:\"buff_active\" dao:\"nosync\"`" + `
+	BuffExpired  int64 ` + "`store:\"buff_expired\" dao:\"nosync\"`" + `
+	IncomeFires  int64 ` + "`store:\"income_fires\" dao:\"nosync\"`" + `
+	Gold         int64 ` + "`store:\"gold\" dao:\"nosync\"`" + `
+	LastOverdue  bool  ` + "`store:\"last_overdue\" dao:\"nosync\"`" + `
+	LastDeadline int64 ` + "`store:\"last_deadline\" dao:\"nosync\"`" + `
+	LastNow      int64 ` + "`store:\"last_now\" dao:\"nosync\"`" + `
+	LastInterval int64 ` + "`store:\"last_interval\" dao:\"nosync\"`"
 
 const timerE2EHandlers = `package player
 

@@ -61,7 +61,7 @@ for name, fields in {
     p = root / 'db/def' / f'{name}.go'
     typename = ''.join(part.title() for part in name.split('_')) + 'Dao'
     marker = 'type ' + typename + ' struct {'
-    text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"persist"`\n' for field, typ, key in fields))
+    text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"nosync"`\n' for field, typ, key in fields))
     assert 'db=main' in text, p  # 骨架写逻辑库 main；真实模式的唯一物理库由测试夹具的映射给出
     if name == 'alliance_authority':
         # Remote 托管实体由每个进程从同一个库提交 / 加载，DAO 必须是 dbscope=global。

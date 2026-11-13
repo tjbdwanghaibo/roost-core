@@ -1,0 +1,39 @@
+{
+  "project": "Users-whb-roost-worktrees-cellworld-production",
+  "generation": "2026-11-13T13:31:18Z",
+  "checked_paths": 122,
+  "no_recorded_gap": 117,
+  "partial": [
+    {
+      "path": "demo/cmd/loadtest/scene_watch_test.go.tmpl",
+      "detail": [
+        "101-101,101-101,102-102,102-102,104-104,104-104,104-104,104-104,104-104,149-149,149-149,149-149,149-149,182-182,182-182,183-183,183-183,185-185,185-185,185-185,185-185,185-185"
+      ]
+    },
+    {
+      "path": "demo/game/partition/partition_test.go.tmpl",
+      "detail": [
+        "36-38,40-40,40-40,262-263"
+      ]
+    },
+    {
+      "path": "demo/internal/service/game/terrain_partition_test.go.tmpl",
+      "detail": [
+        "45-45,814-814"
+      ]
+    },
+    {
+      "path": "modules/attribute/files/game/entities/player/attribute_component.go.tmpl",
+      "detail": [
+        "16-16,16-16,17-17,17-17"
+      ]
+    },
+    {
+      "path": "modules/cellworld/files/game/cellworldhost/runtime_test.go.tmpl",
+      "detail": [
+        "46-46"
+      ]
+    }
+  ],
+  "source_fallback": "Read all reported ranges with context; generated consumers compiled and affected tests/race passed. No recorded gap is not proof of completeness."
+}

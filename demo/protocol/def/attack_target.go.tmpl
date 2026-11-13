@@ -14,15 +14,16 @@ type AttackTargetRequest struct {
 	Target int64 `pb:"1"`
 }
 
-// AttackTargetResponse says the attack was sent (Code 0) and names it: Seq is
-// this player's attack sequence, the identity the target's cell deduplicates
-// on. The verdict comes later and on its own — applied, refused (not
+// AttackTargetResponse says the attack was sent (Code 0). AttackID identifies
+// the attempt across reconnects and Base restarts; Seq is for display only.
+// The verdict comes later and on its own — applied, refused (not
 // visible, out of range, dead), or unknown when the target's cell did not
 // answer in time — and the HP change arrives with the replicated state.
 type AttackTargetResponse struct {
-	Code   int32  `pb:"1"`
-	Reason string `pb:"2"`
-	Seq    uint64 `pb:"3"`
+	Code     int32  `pb:"1"`
+	Reason   string `pb:"2"`
+	Seq      uint64 `pb:"3"`
+	AttackID string `pb:"4"`
 }
 
 //roost:protocol group=game handler=player

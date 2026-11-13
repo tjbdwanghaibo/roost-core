@@ -18,7 +18,7 @@
 - **登记点 / 钩子**：本模块不提供登记函数。它自己接在别的模块上：在 `actor` 的 `Body.Host` 上登记心跳 `combat.duel`，把 Buff 标签绑定到 `actor.Rooted` / `actor.Silenced`。
 - **状态**
   - `PlayerDao.Combat`（`CombatState`，`db/def/combat.go`，`persist,sync`）：公开投影与同意绑定——`Initialized`、`Ready`、`Opponent`、`Health`、`MaxHealth`、`Shield`、`Alive`、`Rooted`、`Silenced`。下发给本人。
-  - `PlayerDao.CombatPrivate`（`CombatPrivateState`，`persist`，不下发）：最近一次请求的回执（`Sequence`、`Kind`、`Skill`、`Target`、`Reply`）与会话代际 `Epoch`；两人中实体号较小的一方另存整场的 `Runtime` 与 `Host` 检查点。
+  - `PlayerDao.CombatPrivate`（`CombatPrivateState`，`nosync`，不下发）：最近一次请求的回执（`Sequence`、`Kind`、`Skill`、`Target`、`Reply`）与会话代际 `Epoch`；两人中实体号较小的一方另存整场的 `Runtime` 与 `Host` 检查点。
   - 附加 DAO `CombatDAO`（`db/combat.go`，清单的 `daos`，字段 `combatState`）：生命、护盾、Buff 的唯一权威，与 `PlayerDao` 一起加载和提交。
 - **配置**
   - 四个技能文件 `game/skills/combat_strike.json`、`combat_bolt.json`、`combat_stun.json`、`combat_silence.json`，技能号是 `skill.<工程名>.combat.strike` 等。`strike` 立即造成伤害；`bolt` 延迟 4 拍后造成伤害；`stun`、`silence` 给对手加持续 20 拍的状态；四个技能冷却都是 20 拍。

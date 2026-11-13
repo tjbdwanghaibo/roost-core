@@ -38,10 +38,10 @@ type BuildingDao struct {
 	// W、H 是放置时按配置与朝向算出的占地宽（沿 X）与高（沿 Y），单位是 1m 节点；占地 = 节点 [GX, GX+W) × [GY, GY+H)。
 	// 只持久、不同步：它是服务端核对“块上的占地记录”用的那一份（客户端由配置 + 朝向推出同一个值）；配置的宽高改了时
 	// 启动对账按它报 Misconfigured，不改玩家的建筑。
-	W int32 `dao:"persist" store:"5"`
-	H int32 `dao:"persist" store:"6"`
+	W int32 `dao:"nosync" store:"5"`
+	H int32 `dao:"nosync" store:"6"`
 	// Foundation 是整平地基的世界高度（厘米，与 HeightBase 无关，原始地形换版后仍有意义）；-2147483648 表示没有整平。
 	Foundation int32 `dao:"persist,sync" store:"7"`
 	// BaseRevision 是放置时原始地形包的版本。原始地形换版（D13）之后与包不同的建筑由地形服务启动时按规则处置。
-	BaseRevision int64 `dao:"persist" store:"8"`
+	BaseRevision int64 `dao:"nosync" store:"8"`
 }

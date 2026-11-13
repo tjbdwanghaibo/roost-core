@@ -4,11 +4,11 @@ package dbdef
 //
 //roost:dao coll=dungeon db=main
 type DungeonDao struct {
-	OwnerID   int64 `dao:"persist" store:"1"`
-	Season    int64 `dao:"persist" store:"2"`
-	ExpReward int64 `dao:"persist" store:"3"`
+	OwnerID   int64 `dao:"nosync" store:"1"`
+	Season    int64 `dao:"nosync" store:"2"`
+	ExpReward int64 `dao:"nosync" store:"3"`
 	// ResolvedAtUnix 只在Level首次进入终局时记录；不接受客户端时间，不被重放改写。
-	ResolvedAtUnix int64 `dao:"persist" store:"4"`
+	ResolvedAtUnix int64 `dao:"nosync" store:"4"`
 }
 
 // PlayerDungeonState 的Claims最多128条，Clears最多8季；不按数量淘汰仍能领奖的事实。

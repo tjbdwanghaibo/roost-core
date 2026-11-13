@@ -56,6 +56,8 @@
   - 没有持锁时：用协议 handler 的生成 Sender `syncsender.NewAttributeGetSender(client).Sync_AttributeGet(ctx, 完整实体号, &pb.AttributeGetRequest{})`。
 - **只适合借鉴的情形**：怪物、NPC 等非 `Player` 实体的属性不能直接用本模块（组件绑定在 `Player` 上）；值得借鉴的是“持久层只存基础值、派生层加载时重建、来源经登记点汇总、公式只在合计后推导一次”的分层方式。
 
+最终属性变化可在 `init` 登记 `OnAttributeChanged("名称", func(*AttributeComponent) error)`：只在业务刷新确实改变最终值时触发，加载重建和无变化刷新不触发。回调处于同一笔 Nest 事务，按名称排序，只能改已锁定的 Player，不能递归 Refresh、做 I/O 或另开事务；错误交还调用方，让属性及附加修改一起回滚。game-demo 用它把等级、装备等来源引起的面板变化交给 CellWorld。
+
 ## 联动
 
 - `attribute` + `equipment`（`with/equipment/game/entities/player/attribute_equipment.go`）：登记 `OnAttributeGear("equipment", …)`，按已穿戴装备与等级算装备层；并登记 `OnEquipmentChanged("attribute", …)`，穿卸装备的同一笔事务里调 `RefreshGear()`。装备规则已被移除的穿戴物不再提供属性。

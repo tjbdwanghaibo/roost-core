@@ -358,7 +358,7 @@ func TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand(t *testing.T) {
 	if st.X < 10000+grid.Hysteresis() || st.X > limit {
 		t.Fatalf("froze at x=%d, want in [%d, %d]", st.X, 10000+grid.Hysteresis(), limit)
 	}
-	if len(fx.sends) != 1 || fx.sends[0].msg.Kind != kindOffer || !fx.sends[0].msg.Offer.State.Idle {
+	if len(fx.sends) != 0 || len(fx.owners) != 1 || !fx.owners[0].state.Idle {
 		t.Fatalf("offer %+v, want one offer carrying the idle tier", fx.sends)
 	}
 }

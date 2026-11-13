@@ -256,7 +256,7 @@ func TestTheDeclaredStoreTagIsTheStoredKey(t *testing.T) {
 type WalletDao struct {
 	Coins int64  `+"`"+`dao:"persist,sync" store:"gold"`+"`"+`
 	Name  string `+"`"+`dao:"persist,sync" store:"name"`+"`"+`
-	Note  string `+"`"+`dao:"persist" store:"memo,omitempty"`+"`"+`
+	Note  string `+"`"+`dao:"nosync" store:"memo,omitempty"`+"`"+`
 	Bag   *Bag   `+"`"+`dao:"persist,sync" store:"bag"`+"`"+`
 }
 
@@ -302,7 +302,7 @@ func TestInvalidDeclaredStoredKeysFailGeneration(t *testing.T) {
 		{"dash", "A int64 `store:\"-\"`", `dao:"nopersist`},
 		{"option", "A int64 `store:\"a,inline\"`", `option "inline"`},
 		{"duplicate", "A int64 `store:\"gold\"`\n\tGold int64 `store:\"gold\"`", `both store as "gold"`},
-		{"duplicate-transient", "A int64 `store:\"x\" dao:\"nopersist,sync\"`\n\tX int64 `store:\"x\" dao:\"persist\"`", `both store as "x"`},
+		{"duplicate-transient", "A int64 `store:\"x\" dao:\"nopersist,sync\"`\n\tX int64 `store:\"x\" dao:\"nosync\"`", `both store as "x"`},
 		{"reserved-go-name", "SchemaVersion int64", `SchemaVersion`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

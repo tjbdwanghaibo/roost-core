@@ -22,16 +22,16 @@ type WorldDao struct {
 	// nothing about it lives anywhere else. The earliest deadline is not
 	// stored: the framework's timer driver (framework/nest/entitytimer, wired
 	// by hand in the game service) keeps it in memory, per loaded World.
-	Timers map[int64]*TimerNode `dao:"persist,map=fast" store:"timers"`
+	Timers map[int64]*TimerNode `dao:"nosync,map=fast" store:"timers"`
 	// TimerSeed is the highest node id ever minted. Persisted so a restart
 	// does not hand out an id a stored node already has.
-	TimerSeed int64 `dao:"persist" store:"timer_seed"`
+	TimerSeed int64 `dao:"nosync" store:"timer_seed"`
 	// SettledActivities is activity id -> when this server acked its result
 	// dispatch. It is what makes settlement once-per-activity across
 	// restarts, and it is on the World rather than in the coordinator because
 	// the coordinator says "the phase is collected" — what settlement PAYS is
 	// the game's.
-	SettledActivities map[string]int64 `dao:"persist,map=fast" store:"settled_activities"`
+	SettledActivities map[string]int64 `dao:"nosync,map=fast" store:"settled_activities"`
 }
 
 // TimerNode is one stored timer. It is infra/base/timer's Node minus the

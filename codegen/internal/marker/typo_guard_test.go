@@ -102,7 +102,7 @@ var typoCases = []typoCase{
 
 //roost:dao coll=players db=game dbscop=sid
 type PlayerDao struct {
-	Name string ` + "`" + `dao:"persist" store:"name"` + "`" + `
+	Name string ` + "`" + `dao:"nosync" store:"name"` + "`" + `
 }
 `},
 	{kind: "redisdao", file: "hero.go", line: 3, typo: "tll", run: runDao,

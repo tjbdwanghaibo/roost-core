@@ -1,7 +1,11 @@
 package dbdef
 
-//roost:dao coll=player db=main schema=4
+//roost:dao coll=player db=main schema=5
 type PlayerDao struct {
+	// Buff / 冷却的恢复快照：玩家持久，空间代理临时；不传内部账本给客户端。
+	// 奖励与生命代次去重水位必须在同一 strict 事务持久化。
+	CellDeathReceipts map[int64]uint64 `dao:"nosync" store:"cell_death_receipts"`
+	CellRecovery      *CellRecovery    `dao:"nosync" store:"cell_recovery"`
 	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
 	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
 	//
@@ -42,12 +46,12 @@ type PlayerDao struct {
 	// on the map again (the position as the preferred point, the facing as
 	// is). Facing follows the position's rule: it is MapBasic data like the
 	// position. Persisted and not synced: nobody draws them.
-	SavedSceneID int64 `dao:"persist" store:"saved_scene_id"`
-	SavedPosX    int64 `dao:"persist" store:"saved_pos_x"`
-	SavedPosY    int64 `dao:"persist" store:"saved_pos_y"`
-	SavedFacing  int32 `dao:"persist" store:"saved_facing"`
+	SavedSceneID int64 `dao:"nosync" store:"saved_scene_id"`
+	SavedPosX    int64 `dao:"nosync" store:"saved_pos_x"`
+	SavedPosY    int64 `dao:"nosync" store:"saved_pos_y"`
+	SavedFacing  int32 `dao:"nosync" store:"saved_facing"`
 	// 装备与属性层由 equipment / attribute 模块追加；demo 不另建一份状态。
-	DungeonClaims map[string]int64 `dao:"persist,map=fast" store:"dungeon_claims"`
+	DungeonClaims map[string]int64 `dao:"nosync,map=fast" store:"dungeon_claims"`
 	// DungeonClears counts paid dungeon clears per leaderboard season:
 	// season -> clears. It moves in the same claim transaction that records
 	// the run in DungeonClaims, only when that transaction pays, so "paid"
@@ -56,7 +60,7 @@ type PlayerDao struct {
 	// replay of any run resubmits the current count instead of adding one —
 	// see game/leaderboard for why the rank service's request ring cannot be the
 	// ledger for this.
-	DungeonClears map[int64]int64 `dao:"persist,map=fast" store:"dungeon_clears"`
+	DungeonClears map[int64]int64 `dao:"nosync,map=fast" store:"dungeon_clears"`
 	// SagaReceipts is where the gift saga's native steps (debit and its
 	// refund) keep their receipts: operation (saga.Command.IdempotencyKey) ->
 	// the framework's encoding of saga.StepReceipt. The step writes it in the
@@ -66,7 +70,7 @@ type PlayerDao struct {
 	// roost-core SAGA.md 原生步骤执行契约). Persisted, never synced: the client
 	// has no use for it. Old receipts are pruned by the step itself after
 	// saga.receipt_retention.
-	SagaReceipts map[string][]byte `dao:"persist" store:"saga_receipts"`
+	SagaReceipts map[string][]byte `dao:"nosync" store:"saga_receipts"`
 
 	// The Cell* fields are the player's routing state for a partitioned scene
 	// (scene.partition, gameplay/cellworld.BaseState): this process is the
@@ -91,10 +95,8 @@ type PlayerDao struct {
 	CellLostEpoch uint64 `dao:"nopersist,nosync" store:"cell_lost_epoch"`
 	CellLostAt    int64  `dao:"nopersist,nosync" store:"cell_lost_at"`
 	CellShown     bool   `dao:"nopersist,nosync" store:"cell_shown"`
-	// CellEntry is this entry's sequence (cellworld.BaseState.Entry): Enter
-	// and Leave carry it and the Real only takes a Leave of the same entry
-	// (RV-20261106-03). Not persisted: it is taken from the clock at Enter.
-	CellEntry uint64 `dao:"nopersist,nosync" store:"cell_entry"`
+	// CellEntry 是持久入场计数；strict 入场提交后才发消息，重启与机器时钟回拨不复用编号。
+	CellEntry uint64 `dao:"nosync" store:"cell_entry"`
 	// CellHP / CellSnapEpoch / CellSnapSeq are the player's snapshot from the
 	// partitioned scene: the HP its SceneActor last wrote back and that
 	// write-back's version. Persisted — they are what a crashed Cell rebuilds
@@ -106,8 +108,8 @@ type PlayerDao struct {
 	// with SavedSceneID = the partitioned scene, written with each accepted
 	// write-back (the fixed moment, not every witness).
 	CellHP        int64  `dao:"persist,sync" store:"cell_hp"`
-	CellSnapEpoch uint64 `dao:"persist" store:"cell_snap_epoch"`
-	CellSnapSeq   uint64 `dao:"persist" store:"cell_snap_seq"`
+	CellSnapEpoch uint64 `dao:"nosync" store:"cell_snap_epoch"`
+	CellSnapSeq   uint64 `dao:"nosync" store:"cell_snap_seq"`
 	// CellMaxHP / CellAttack / CellPower / CellPanelVer are the battle panel
 	// this Base derived from the player's growth (level, equipment: the Final
 	// attribute layer) for the partitioned scene, and its sequence
@@ -125,8 +127,8 @@ type PlayerDao struct {
 	CellMaxHP        int64  `dao:"persist,sync" store:"cell_max_hp"`
 	CellAttack       int64  `dao:"persist,sync" store:"cell_attack"`
 	CellPower        int64  `dao:"persist,sync" store:"cell_power"`
-	CellPanelVer     uint64 `dao:"persist" store:"cell_panel_ver"`
-	CellPanelAcked   uint64 `dao:"persist" store:"cell_panel_acked"`
+	CellPanelVer     uint64 `dao:"nosync" store:"cell_panel_ver"`
+	CellPanelAcked   uint64 `dao:"nosync" store:"cell_panel_acked"`
 	CellPanelSentAt  int64  `dao:"nopersist,nosync" store:"cell_panel_sent_at"`
 	CellPanelSince   int64  `dao:"nopersist,nosync" store:"cell_panel_since"`
 	CellPanelUnknown bool   `dao:"nopersist,nosync" store:"cell_panel_unknown"`

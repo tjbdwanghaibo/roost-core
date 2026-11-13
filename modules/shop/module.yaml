@@ -15,7 +15,7 @@ state:
   - field: ShopLedger
     type: ShopLedger
     store: shop_ledger
-    dao: persist
+    dao: nosync
     comment: ShopLedger 是商店模块的去重窗口（最近若干次成功购买的结果），只落库、不下发。
 component: Shop
 protocols: [ShopBuy, ShopRules]

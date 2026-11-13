@@ -15,7 +15,7 @@ state:
   - field: WalletLedger
     type: WalletLedger
     store: wallet_ledger
-    dao: persist
+    dao: nosync
     comment: WalletLedger 是货币模块的去重窗口（最近若干次带业务键的加减的结果），只落库、不下发。
 component: Wallet
 protocols: [WalletSpend]

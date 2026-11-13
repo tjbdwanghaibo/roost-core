@@ -11,7 +11,7 @@ state:
   - field: Dungeon
     type: PlayerDungeonState
     store: dungeon
-    dao: persist
+    dao: nosync
     comment: Dungeon 是副本领奖账本和各赛季通关数，拒绝未安全过期的账本溢出。
 protocols: [DungeonView, DungeonClaim]
 errcodes: [dungeon_invalid, dungeon_owner, dungeon_unfinished, dungeon_window, dungeon_full]

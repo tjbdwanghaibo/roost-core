@@ -19,10 +19,11 @@ import (
 //
 //	Apply（新对象）   新建不绑实体的 SubjectSyncState → Register（同 ID 还在退役就排在退役之后）→ Interest.Show
 //	Apply（更新）     版本不新于已接受的丢弃；新的替换内容 → MarkDirty(mask) 或 MarkFullDirty → 位置变了 Interest.Move
+//	Touch            上层确认来源仍存活时续活完全相同的内容版本，不标脏、不重建已删除对象
 //	Remove / Expire   Interest.Hide → Manager.Unregister（订阅者下一帧收到 remove）→ 关闭状态 → 留墓碑
 //
 // 与本地实体在同一个 Manager、同一会话流里，客户端看不出区别（同一 namespace / kind / packer 格式由调用方保证）。
-// 设计见 docs/maintenance/FEATURE-2026-11-03-seamless-world.md §7.2（分支原型）。
+// CellWorld 接线见 gameplay/cellworld/README.md。
 
 // ErrMirrorConfig 表示 MirrorConfig 不合法。
 var ErrMirrorConfig = errors.New("policy: invalid mirror config")
@@ -57,7 +58,7 @@ type MirrorConfig[T any] struct {
 	Snapshot func(T, entity.SyncProfile) (entity.FrozenSyncPayload, error)
 	// Delta 可选：把内容按字段掩码编码成增量。mask 是自上次交付以来各次 Apply 的 Mask 之并。为 nil 时只发全量。
 	Delta func(T, entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error)
-	// TTL：超过它没有 Apply 的 mirror 由 Expire 删除（单份内容可用 MirrorItem.Hold 换成别的保留时间）；墓碑保留
+	// TTL：超过它没有成功 Apply / Touch 的 mirror 由 Expire 删除（单份内容可用 MirrorItem.Hold 换成别的保留时间）；墓碑保留
 	// 2 × max(TTL, 保留时间)。
 	TTL time.Duration
 }
@@ -176,6 +177,22 @@ func (m *Mirrors[T]) Apply(item MirrorItem[T], now time.Time) (MirrorOutcome, er
 	return m.createLocked(item, at, now)
 }
 
+// Touch 续活当前完全相同的版本，返回是否命中。上层须先校验来源和心跳的新鲜度；
+// 旧版本、已删除对象与关闭状态不能续活。它不改内容、位置、Hold，不产生客户端更新。
+// Apply 的重复包仍然丢弃，不能仅凭重放内容延长存活；业务心跳显式使用本入口。
+func (m *Mirrors[T]) Touch(id int64, version MirrorVersion, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entries[id]
+	if m.closed || e == nil || e.version != version {
+		return false
+	}
+	if now.After(e.heardAt) {
+		e.heardAt = now
+	}
+	return true
+}
+
 func (m *Mirrors[T]) createLocked(item MirrorItem[T], at spatial.Point, now time.Time) (MirrorOutcome, error) {
 	e := &mirrorEntry[T]{version: item.Version, at: at, heardAt: now, hold: m.holdOf(item)}
 	content := item.Content
@@ -263,7 +280,7 @@ func (m *Mirrors[T]) Remove(id int64, ver MirrorVersion, now time.Time) bool {
 	return false
 }
 
-// Expire 删除超过保留时间（最近一次被接受的 MirrorItem.Hold，没给时 TTL）没有 Apply 的 mirror，并清理过期墓碑；
+// Expire 删除超过保留时间（最近一次被接受的 MirrorItem.Hold，没给时 TTL）没有成功 Apply / Touch 的 mirror，并清理过期墓碑；
 // 返回删除的 mirror 数。调用方按自己的节拍调用。
 func (m *Mirrors[T]) Expire(now time.Time) int {
 	m.mu.Lock()

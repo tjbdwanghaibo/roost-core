@@ -5,11 +5,11 @@ package dbdef
 //
 //roost:dao coll=room db=main
 type RoomDao struct {
-	Capacity  int32               `dao:"persist" store:"1"`
-	Closed    bool                `dao:"persist" store:"2"`
-	HostID    int64               `dao:"persist" store:"3"`
-	EpochSeed uint64              `dao:"persist" store:"4"`
-	Seats     map[int64]*RoomSeat `dao:"persist,map=fast" store:"5"`
+	Capacity  int32               `dao:"nosync" store:"1"`
+	Closed    bool                `dao:"nosync" store:"2"`
+	HostID    int64               `dao:"nosync" store:"3"`
+	EpochSeed uint64              `dao:"nosync" store:"4"`
+	Seats     map[int64]*RoomSeat `dao:"nosync,map=fast" store:"5"`
 }
 
 // RoomSeat 的代际来自房间的持久 seed：离开后再入也不复用，旧断线通知不能伤及新席位。

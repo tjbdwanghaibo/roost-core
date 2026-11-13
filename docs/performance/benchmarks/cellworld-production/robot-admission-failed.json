@@ -1,0 +1,484 @@
+{
+  "robot": {
+    "state": "failed",
+    "count": 1000,
+    "stats": {
+      "scheduled": 1000,
+      "dropped_capacity": 0,
+      "dropped_schedule": 0,
+      "launch_failed": 0,
+      "peak_online": 148,
+      "started": 1000,
+      "online": 0,
+      "success": 128,
+      "failure": 872,
+      "canceled": 0,
+      "failure_rate": 0.872
+    },
+    "requests": {
+      "messages": [
+        {
+          "message_id": 10006,
+          "started": 128,
+          "sent": 128,
+          "completed": 128,
+          "ok": 128,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 0,
+          "inflight": 0,
+          "p50_ms": 532.4197840203841,
+          "p95_ms": 751.5539759233461,
+          "p99_ms": 776.698167,
+          "max_ms": 776.698167
+        },
+        {
+          "message_id": 10024,
+          "started": 128,
+          "sent": 128,
+          "completed": 128,
+          "ok": 128,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 0,
+          "inflight": 0,
+          "p50_ms": 0.09629514486626854,
+          "p95_ms": 0.4542357939342534,
+          "p99_ms": 1.517932029328215,
+          "max_ms": 1.584209
+        },
+        {
+          "message_id": 10025,
+          "started": 128,
+          "sent": 128,
+          "completed": 128,
+          "ok": 128,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 0,
+          "inflight": 0,
+          "p50_ms": 0.09629514486626854,
+          "p95_ms": 0.2708459626220356,
+          "p99_ms": 0.6988980737202625,
+          "max_ms": 1.146333
+        },
+        {
+          "message_id": 10031,
+          "started": 115097,
+          "sent": 115097,
+          "completed": 115097,
+          "ok": 115097,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 0,
+          "inflight": 0,
+          "p50_ms": 0.1481620166318066,
+          "p95_ms": 1.517932029328215,
+          "p99_ms": 5.529040791825909,
+          "max_ms": 74.916125
+        }
+      ],
+      "slowest": [
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 776.698167
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 773.504459
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 766.773959
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 760.630458
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 747.749084
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 743.549208
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 733.495333
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 726.573917
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 718.837
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 709.7
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 703.569125
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 702.596875
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 692.405041
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 683.0735
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 678.318875
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 675.231709
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 671.445708
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 668.526875
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 668.051875
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 662.220625
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 661.645083
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 656.412833
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 656.366208
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 655.798666
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 655.192625
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 653.30025
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 641.482417
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 640.239
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 634.719625
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 634.451375
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 634.151625
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 633.764916
+        }
+      ]
+    },
+    "traffic": {
+      "measured_connections": 1000,
+      "socket_read_bytes": 43614165,
+      "socket_written_bytes": 1960078
+    },
+    "robot_resources": {
+      "elapsed_seconds": 91.290837333,
+      "cpu_available": true,
+      "cpu_seconds": 17.335323,
+      "cpu_percent": 18.989116001605115,
+      "process_peak_rss_bytes": 62210048,
+      "sampled_peak_heap_bytes": 20244256,
+      "sampled_peak_goroutines": 415,
+      "samples": 93
+    },
+    "environment": {
+      "go_version": "go1.27.3",
+      "os": "darwin",
+      "arch": "arm64",
+      "cpus": 10,
+      "gomaxprocs": 10,
+      "main_module": "example.com/cwdemo",
+      "main_version": "(devel)",
+      "core_version": "v1.45.0",
+      "core_replacement": "/Users/whb/roost/worktrees/cellworld-production@(devel)"
+    }
+  },
+  "cellworld": {
+    "active_percent": 5,
+    "completed_requests_per_second": 1254.2281196463346,
+    "duration_seconds": 60,
+    "input_ack_p99_ms": 4.49875,
+    "kind": "cellworld",
+    "latency_window_samples": 76796,
+    "measurement_ended_at_ms": 1794576238307,
+    "measurement_started_at_ms": 1794576177077,
+    "measurement_wall_seconds": 61.229690833,
+    "received_sync_bytes": 23230509,
+    "received_sync_frames": 175420,
+    "request_errors": 0,
+    "requests": 76796,
+    "visible_max": 53,
+    "visible_mean": 38.498085837804055,
+    "warmup_seconds": 30
+  },
+  "services": {
+    "9100": {
+      "spawned": 0,
+      "reals_before": 0,
+      "reals_after": 0,
+      "delta_including_warmup": {
+        "BytesOut": 28191805,
+        "BytesIn": 1202499753,
+        "MsgsOut": 309703,
+        "MsgsIn": 25234,
+        "ActorBeats": 0,
+        "ViewsAccepted": 194412,
+        "ReplicaGaps": 0,
+        "DecodeErrors": 0,
+        "PublishErrors": 0,
+        "OutboxDrops": 0,
+        "DispatchErrors": 0,
+        "ControlExhausted": 0,
+        "Reenters": 0,
+        "LeaseExpired": 0,
+        "OwnershipErrors": 0,
+        "OwnershipQueueFull": 0,
+        "SpawnErrors": 0,
+        "MirrorErrors": 0
+      },
+      "final_queues": {
+        "OutboundPending": 0,
+        "StateQueued": 0,
+        "ControlQueued": 0,
+        "OwnershipQueued": 0,
+        "QueueAgeMaxNS": 58357916
+      }
+    },
+    "9201": {
+      "spawned": 4500,
+      "reals_before": 4472,
+      "reals_after": 4475,
+      "delta_including_warmup": {
+        "BytesOut": 706973300,
+        "BytesIn": 88236601,
+        "MsgsOut": 90135,
+        "MsgsIn": 239746,
+        "ActorBeats": 8138432,
+        "ViewsAccepted": 0,
+        "ReplicaGaps": 0,
+        "DecodeErrors": 0,
+        "PublishErrors": 0,
+        "OutboxDrops": 0,
+        "DispatchErrors": 0,
+        "ControlExhausted": 0,
+        "Reenters": 0,
+        "LeaseExpired": 0,
+        "OwnershipErrors": 0,
+        "OwnershipQueueFull": 0,
+        "SpawnErrors": 0,
+        "MirrorErrors": 0
+      },
+      "final_queues": {
+        "OutboundPending": 0,
+        "StateQueued": 0,
+        "ControlQueued": 0,
+        "OwnershipQueued": 0,
+        "QueueAgeMaxNS": 462817250
+      }
+    },
+    "9202": {
+      "spawned": 4500,
+      "reals_before": 4528,
+      "reals_after": 4524,
+      "delta_including_warmup": {
+        "BytesOut": 642403565,
+        "BytesIn": 86878354,
+        "MsgsOut": 89438,
+        "MsgsIn": 224417,
+        "ActorBeats": 8147009,
+        "ViewsAccepted": 0,
+        "ReplicaGaps": 0,
+        "DecodeErrors": 0,
+        "PublishErrors": 0,
+        "OutboxDrops": 0,
+        "DispatchErrors": 0,
+        "ControlExhausted": 0,
+        "Reenters": 0,
+        "LeaseExpired": 0,
+        "OwnershipErrors": 0,
+        "OwnershipQueueFull": 0,
+        "SpawnErrors": 0,
+        "MirrorErrors": 0
+      },
+      "final_queues": {
+        "OutboundPending": 0,
+        "StateQueued": 0,
+        "ControlQueued": 0,
+        "OwnershipQueued": 0,
+        "QueueAgeMaxNS": 224577083
+      }
+    }
+  },
+  "resources_in_measurement": {
+    "51599": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 53395456,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51633": {
+      "cpu_percent_one_core": 0.07,
+      "peak_rss_bytes": 44957696,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51679": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 47104000,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51711": {
+      "cpu_percent_one_core": 0.02,
+      "peak_rss_bytes": 40157184,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51745": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 40763392,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51770": {
+      "cpu_percent_one_core": 0.37,
+      "peak_rss_bytes": 47923200,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51797": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 39796736,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51834": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 39403520,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51946": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 39600128,
+      "seconds": 59,
+      "samples": 59
+    },
+    "51999": {
+      "cpu_percent_one_core": 2.08,
+      "peak_rss_bytes": 64520192,
+      "seconds": 59,
+      "samples": 59
+    },
+    "52050": {
+      "cpu_percent_one_core": 116.46,
+      "peak_rss_bytes": 270811136,
+      "seconds": 59,
+      "samples": 59
+    },
+    "game1001": {
+      "cpu_percent_one_core": 265.75,
+      "peak_rss_bytes": 317685760,
+      "seconds": 59,
+      "samples": 59
+    },
+    "game1002": {
+      "cpu_percent_one_core": 266.37,
+      "peak_rss_bytes": 297140224,
+      "seconds": 59,
+      "samples": 59
+    },
+    "game1003": {
+      "cpu_percent_one_core": 2.93,
+      "peak_rss_bytes": 87097344,
+      "seconds": 59,
+      "samples": 59
+    },
+    "game1004": {
+      "cpu_percent_one_core": 2.66,
+      "peak_rss_bytes": 112017408,
+      "seconds": 59,
+      "samples": 59
+    }
+  },
+  "validation_note": "Failed admission: 872/1000 rejected by the default 128-per-IP limit. Only 128 connected clients ran the workload. Not a 1000-player capacity result."
+}

@@ -19,6 +19,8 @@ type AttackResultPush struct {
 	Reason   string `pb:"4"`
 	Damage   int32  `pb:"5"`
 	TargetHP int32  `pb:"6"`
+	// AttackID matches AttackTargetResponse across reconnects and restarts.
+	AttackID string `pb:"7"`
 }
 
 //roost:protocol group=game handler=player

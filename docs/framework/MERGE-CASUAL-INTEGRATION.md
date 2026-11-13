@@ -54,7 +54,7 @@ ROOST_MERGE_CASUAL_KEEP=1 bash scripts/test-merge-casual-generated.sh   # 保留
 
 1. `roost project new merge-casual-practice -module example.com/merge-casual-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add timer --entity Player`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"persist"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"persist"` ``；放入业务包 `game/mergecasual/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/merge_casual.go`；
+3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；放入业务包 `game/mergecasual/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/merge_casual.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> merge-casual`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
