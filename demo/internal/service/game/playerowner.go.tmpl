@@ -58,6 +58,9 @@ type PlayerOwners struct {
 	// 它让测试在“等待者已被唤醒”与“runEviction 返回”之间插入一次登录，钉住“删除记录必须在关闭
 	// done 之前”；进程里没有人设置它，测试在卸载开始之前设置。
 	afterUnloadDone func(playerID int64)
+	// residentKind 回答 Player 这个 kind 是否声明了 lifetime=resident。常驻的玩家不做闲置卸载：框架只拒绝从内存
+	// 卸载常驻实例（ErrEntityResident），卸载却会先让他离开场景，结果是实体留在内存、人已不在场景。
+	residentKind func() bool
 
 	// bound 回答一名玩家当前的绑定（rehome 模块的 Binding：先看迁出表，再问 account）。AdmitBound 对没有
 	// 驻留记录的玩家问它。nil 表示没有权威可问，按“都绑定在本服”处理——只在测试与单进程部署里出现，
@@ -168,6 +171,7 @@ func newPlayerOwners(sid int32, fencer sessionFencer, now func() time.Time) *Pla
 	}
 	return &PlayerOwners{
 		sid: sid, fencer: fencer, now: now, evictWait: evictBudget,
+		residentKind: playerKindIsResident,
 		residents: map[int64]*resident{},
 		emigrants: map[int64]*emigrant{},
 		evictions: map[int64]*eviction{},
@@ -467,13 +471,14 @@ func (owners *PlayerOwners) unloadLoop(ctx context.Context) {
 // unloadIdle 是一轮闲置卸载，单独拆出来，测试可以不等 ticker 直接驱动。
 //
 // 选中的条件：没有连接、IdleUnload 内没被使用、没有在卸载。逐个处理，每个最多等 evictWait；等超时的
-// 卸载在后台继续，这一轮去处理下一个玩家。
+// 卸载在后台继续，这一轮去处理下一个玩家。Player 声明为常驻（lifetime=resident）时一个都不选：在选人这一步
+// 跳过，而不是让卸载先离场景、再被框架拒绝。
 func (owners *PlayerOwners) unloadIdle(ctx context.Context) {
 	owners.mu.Lock()
 	sessions, evictor := owners.fencer, owners.evict
 	now := owners.now()
 	var idle []int64
-	if sessions != nil && evictor != nil {
+	if sessions != nil && evictor != nil && (owners.residentKind == nil || !owners.residentKind()) {
 		for playerID, state := range owners.residents {
 			if _, unloading := owners.evictions[playerID]; !unloading && now.Sub(state.lastUsed) >= IdleUnload {
 				idle = append(idle, playerID)
@@ -750,6 +755,11 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 	if err != nil {
 		return err
 	}
+	// 常驻的玩家只从内存卸载会被框架拒绝（Destroy 返回 ErrEntityResident）；在离开场景之前就拒绝，
+	// 否则拒绝时人已经不在场景里了。
+	if playerKindIsResident() {
+		return fmt.Errorf("player evictor: player %d: %w", playerID, coreentity.ErrEntityResident)
+	}
 	if evictor.scene != nil {
 		evictor.scene.Leave(ctx, subjectID)
 	}
@@ -773,6 +783,11 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 	default:
 		return err
 	}
+}
+
+// playerKindIsResident 报告 Player 这个 kind 是否声明了 lifetime=resident（`//roost:entity lifetime=resident`）。
+func playerKindIsResident() bool {
+	return coreentity.IsEntityKindResident(player.EntityKindPlayer)
 }
 
 var (
