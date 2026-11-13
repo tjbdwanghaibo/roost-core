@@ -117,7 +117,7 @@ func TestWithTerrainMonsterInterruptedDrainRetainsFactsAndRetries(t *testing.T) 
 	if f.access.Manager().Get(id) != nil {
 		t.Fatal("retried drain retained monster")
 	}
-	if _, err := f.controller.runtime.World(2); err == nil {
+	if _, err := f.runtime.World(2); err == nil {
 		t.Fatal("retried drain kept terrain open")
 	}
 }

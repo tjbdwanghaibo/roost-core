@@ -1,0 +1,117 @@
+Scene / Terrain startup acceptance — 2026-11-13
+Baseline: 7c5b7557 + this fix; macOS; GOWORK=off.
+
+scene-startup-red.log
+--- FAIL: TestSceneDefaultRuntimeAndPBEntry (0.00s)
+    scene_test.go:186: scene: runtime is unavailable
+FAIL
+FAIL	example.com/modulefix/world-final/game/controllers/scene	0.559s
+--- FAIL: TestTerrainDefaultPackFeedsSceneAndActorWalker (0.00s)
+    terrain_test.go:384: terrain: runtime unavailable
+FAIL
+FAIL	example.com/modulefix/world-final/game/controllers/terrain	1.108s
+FAIL
+
+
+scene-startup-green.log
+ok  	example.com/modulefix/world-final/game/controllers/scene	1.756s
+ok  	example.com/modulefix/world-final/game/controllers/terrain	8.079s
+
+
+scene-codegen.log
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	114.606s
+
+
+scene-live-start.log
+sh deploy/dev/run.sh start
+building bin/app
+starting account (ready probe http://127.0.0.1:9101/readyz, log .dev/account.log)
+starting activity (ready probe http://127.0.0.1:9102/readyz, log .dev/activity.log)
+starting chat (ready probe http://127.0.0.1:9103/readyz, log .dev/chat.log)
+starting global (ready probe http://127.0.0.1:9104/readyz, log .dev/global.log)
+starting mail (ready probe http://127.0.0.1:9105/readyz, log .dev/mail.log)
+starting match (ready probe http://127.0.0.1:9106/readyz, log .dev/match.log)
+starting platform (ready probe http://127.0.0.1:9107/readyz, log .dev/platform.log)
+starting rank (ready probe http://127.0.0.1:9108/readyz, log .dev/rank.log)
+starting session (ready probe http://127.0.0.1:9109/readyz, log .dev/session.log)
+starting alliance (ready probe http://127.0.0.1:9110/readyz, log .dev/alliance.log)
+starting game (ready probe http://127.0.0.1:9100/readyz, log .dev/game.log)
+registering game server 1000 with the account service
+all services ready; logs in .dev/, stop with: sh deploy/dev/run.sh stop
+
+
+scene-live-probe.log
+PASS login + TCP + EnterCreate + EnterGame player=100001
+PASS SceneChange 0 -> 999999 code=100009 same TCP connection
+PASS SceneChange 0 -> 1 code=0 same TCP connection
+PASS SceneInteract unknown object code=100006 same TCP connection
+PASS SceneChange 1 -> 2 code=0 same TCP connection
+PASS TerrainQuery scene=2 revision=1 heights=4096 same TCP connection
+PASS SceneChange 2 -> 1 code=0 same TCP connection
+PASS SceneChange 1 -> 0 code=0 same TCP connection
+PASS startup + Scene refusal/interaction/transfer + Terrain query; network remained open
+
+scene-verify.json
+{
+  "modules": [
+    {
+      "name": "scene",
+      "want": 28,
+      "passed": 28,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "terrain",
+      "want": 28,
+      "passed": 28,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "terrain+monster",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}
+
+scene-root.log
+ok  	github.com/tjbdwanghaibo/roost-core	10.883s
+
+scene-live-stop.log
+sh deploy/dev/run.sh stop
+stopping game (pid 42111, up to 134s)
+stopping alliance (pid 42071, up to 82s)
+stopping session (pid 42005, up to 28s)
+stopping rank (pid 41980, up to 28s)
+stopping platform (pid 41941, up to 28s)
+stopping match (pid 41883, up to 31s)
+stopping mail (pid 41842, up to 28s)
+stopping global (pid 41817, up to 28s)
+stopping chat (pid 41792, up to 28s)
+stopping activity (pid 41745, up to 31s)
+stopping account (pid 41672, up to 34s)
+
+Documentation anchors: checked 344 files, 0 broken.

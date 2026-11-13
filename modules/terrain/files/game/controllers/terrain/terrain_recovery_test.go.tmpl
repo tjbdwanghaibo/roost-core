@@ -25,7 +25,7 @@ func TestTerrainRecoveryOldCompletionKeepsNewFailure(t *testing.T) {
 	}
 	oldGeneration := world.Failures()
 	world.SiteCommit = publish
-	if err := f.controller.runtime.Refresh(context.Background(), 2); err != nil {
+	if err := f.runtime.Refresh(context.Background(), 2); err != nil {
 		t.Fatal(err)
 	}
 	if world.Failures() != 0 {

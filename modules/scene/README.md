@@ -51,7 +51,7 @@
 
 ## 能力边界
 
-- **生成工程启动接线尚未通过**（2026-11-12）：全新 game 工程安装 scene / alliance / login / portal / enter / gm，启动 game 在 `access.player Provide` 构造 Scene controller 时返回 `scene: runtime is unavailable`；Scene Manager 要到模块 Start 才登记。离线场景不覆盖这个时序。需协调 controller 构造与 runtime 发布时机；按交接“新发现的问题先登记”的范围要求，本轮只登记，未修。复现见[修复验收](../../docs/maintenance/evidence/module-fixes-20261112/README.md)。
+- **启动顺序**：`access.player` 在 Provide 阶段构造控制器，Scene 的 Start 完成开图后才发布 Manager。控制器只保存 Registry 与已提供的 Nest，在处理请求时查 Manager；就绪前请求明确失败，不提前开图、不缓存缺失结果。正式停止顺序仍由 App / modulehost 管理。2026-11-13 已验证真实生成工程启动，见[修复验收 §7](../../docs/maintenance/evidence/module-fixes-20261112/README.md#7-scene--terrain-启动时序修复2026-11-13)。
 
 - **只管本进程**：Scene 是进程内的实体，成员、视野、时间域都是进程内权威。不做跨 game 进程切图、全服同图成员、分布式容量；跨服迁移要另做所有权交接。进程重启后场景要用同样的配置重新 `Open`，在线成员与时间域不恢复。
 - **数量上限**（都写在 `game/scene/scene.go` 与 `service/runtime.go`）：一个进程至多 128 张图（`MaxScenes`）；每张图容量 1～10000；每张图至多 64 个静态区域、256 个静态交互对象；交互对象的半径不超过视距、文本不超过 512 字节；每个观察者视野里至多 128 个实体（`MaxVisible: 128`）；一次 `SceneChange` 至多涉及两张图。
@@ -103,7 +103,8 @@ scene 自己的 `with/`：
 
 ## 验证范围
 
-- `roost module verify scene`：28 条场景（`^TestScene`，包 `./game/controllers/scene`）。每一种业务拒绝都断言“controller 不返回 error、应答带着指定的业务码与原因、状态没变、同一条连接上改对之后重发成功”。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期或已关闭的 `FromID` 答 `scene_stale`、客户端不能开图（`scene_unavailable`）、有人的图不能关、满员答 `scene_full` 且不把人从原图踢掉、停机中的图答 `scene_unavailable`、回调的带码拒绝照样答码并整笔撤销、七个码互不相同且不带码的错误不被当成业务拒绝、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与回调失败回滚、交互按连续序号只生效一次（同号换内容、跳号、0 都答 `scene_sequence` 且不消耗序号）、不能够到别的场景（`scene_not_here`）、没开的场景（`scene_unavailable`）、不存在的对象（`scene_object_unknown`）或远处的对象（`scene_object_far`）、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
+- `roost module verify scene`：28 条场景（`^TestScene`，包 `./game/controllers/scene`）。每一种业务拒绝都断言“controller 不返回 error、应答带着指定的业务码与原因、状态没变、同一控制器上改对之后重发成功”。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期或已关闭的 `FromID` 答 `scene_stale`、客户端不能开图（`scene_unavailable`）、有人的图不能关、满员答 `scene_full` 且不把人从原图踢掉、停机中的图答 `scene_unavailable`、回调的带码拒绝照样答码并整笔撤销、七个码互不相同且不带码的错误不被当成业务拒绝、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与回调失败回滚、交互按连续序号只生效一次（同号换内容、跳号、0 都答 `scene_sequence` 且不消耗序号）、不能够到别的场景（`scene_not_here`）、没开的场景（`scene_unavailable`）、不存在的对象（`scene_object_unknown`）或远处的对象（`scene_object_far`）、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
 - 联动：`with/chat` 5 条，`with/profile` / `with/attribute` / `with/equipment` 各 2 条；combat 模块拥有的 `with/scene` 另有 2 条。各联动都实际解码快照与增量，检查公开值存在、私有值不泄露、本人仍能看到私有值。
-- 这些是离线场景：使用实际的 Controller、生成的 Sender、Nest 多实体事务、DAO、movement、Sync AOI 与时间域；提交器与同步 / 网络传输是受控的内存替身。没有验证真实数据库、跨进程 RPC、TCP 链路或容量性能。
+- 这些是离线场景：使用实际的 Controller、生成的 Sender、Nest 多实体事务、DAO、movement、Sync AOI 与时间域；提交器与同步 / 网络传输是受控的内存替身。这些单测不证明真实存储与网络；另有 2026-11-13 单机真实 Mongo / Redis / NATS / etcd 与 Portal / TCP 演练：拒绝后同连接继续切图、交互拒绝、地形查询与退场通过。未验证跨机、容量与灾难恢复。
+- 场景夹具按正式顺序先构造控制器、后启动 runtime，并检查就绪前的请求明确失败、就绪后同一控制器恢复可用。
 - 仓库侧的安装验收在 `codegen/internal/roost/module_scene_test.go`（安装、重复安装不漂移、拒绝覆盖已有 packer 等）。

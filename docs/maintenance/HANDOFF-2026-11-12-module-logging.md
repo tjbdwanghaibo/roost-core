@@ -93,7 +93,7 @@
 
 本节原列问题已由 `feat/business-modules-fixes` 接手，逐项结果见[修复报告](evidence/module-fixes-20261112/README.md)。业务拒绝码、activity 实体号、联盟管理入口、同件装备换级、邀请入口、战斗结束恢复与 notice 审计均已修复并验收。
 
-保留的明确边界：friends 双边离线变更缺跨服归属证明；Team 离线 / 跨 game 邀请未自动投递；联盟未提供结束战争，因此不开客户端宣战入口。另发现 scene 真实工程启动接线失败，已记入模块 README 与 KNOWN-LIMITS，按修复交接范围未改框架 / 生成器。
+保留的明确边界：friends 双边离线变更缺跨服归属证明；Team 离线 / 跨 game 邀请未自动投递；联盟未提供结束战争，因此不开客户端宣战入口。后续追加的 Scene / Terrain 启动接线问题已于 2026-11-13 在模块控制器修复：构造仅保存 Registry，请求时读取 runtime，真实生成工程启动和同 TCP 连接拒绝后继续请求已通过；未改框架 / 生成器。
 
 ## 7. 接手记录
 

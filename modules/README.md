@@ -90,7 +90,7 @@
 | notice + gm | 运维命令统一登记、操作者 / 备注校验与执行前后审计 | 4 |
 | terrain + monster | 关图清本图怪物；失败保留资源与事实供重试 | 2 |
 
-42 个模块、47 条带验证的联动；场景数与验收见[本轮修复记录](../docs/maintenance/evidence/module-fixes-20261112/README.md)。scene 的真实工程启动仍有接线限制，见其 README。
+42 个模块、47 条带验证的联动；场景数与验收见[本轮修复记录](../docs/maintenance/evidence/module-fixes-20261112/README.md)。Scene / Terrain 控制器的启动时序已修复，并通过单机真实依赖与 TCP 接入验收。
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。再装 `portal`（连带 `login`），客户端就能从渠道身份经 HTTP 登录、拿区服清单与推荐、换进服票据，握手后由游戏服告知要不要先新建，新建（带角色名）之后进入游戏；入口在托管 account 的进程上监听。
 
@@ -156,7 +156,7 @@ runtime:
   start: Start
 ```
 
-工程内入口为 `func Start(*app.Registry) (func(context.Context) error, error)`。返回的停止函数可为 nil；启动失败但已有部分资源时，也要返回对应停止函数。启动入口在全部框架 Mod 启动后、业务 `Service.Init` 前运行，可以发布 Registry 能力。按名称稳定遍历模块，并先启动 `requires` 列出的依赖；业务先停，再按反向顺序停模块。模块不能在启动时依赖业务 `Service.Init` 才发布的能力。
+工程内入口为 `func Start(*app.Registry) (func(context.Context) error, error)`。返回的停止函数可为 nil；启动失败但已有部分资源时，也要返回对应停止函数。启动入口在全部框架 Mod 启动后、业务 `Service.Init` 前运行，可以发布 Registry 能力。按名称稳定遍历模块，并先启动 `requires` 列出的依赖；业务先停，再按反向顺序停模块。模块不能在启动时依赖业务 `Service.Init` 才发布的能力。协议控制器由 `access.player Provide` 提前构造，不能在构造时要求模块 Start 才发布的 runtime；保存 Registry，在请求时查能力，就绪前明确拒绝。模块测试应遵循相同的构造 / 启动顺序。
 
 安装器根据 `roost.yaml` 生成 `internal/service/<service>/modules_gen.go`，bootstrap 用 `NewWithModules()` 构造适配层。它嵌入实际 `*Service`，保留配置声明、Nest 接线等可选接口，**不改业务 `service.go`**。手动绕过 bootstrap 使用 `New()` 不会启动模块；嵌入工程应使用 `NewWithModules()`。`project sync` 与 `generate` 重写适配层，模块业务文件仍归工程。
 

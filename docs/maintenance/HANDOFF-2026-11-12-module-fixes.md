@@ -91,4 +91,4 @@ game-demo 用了 actor / scene / terrain 的一部分（`demo/` 下自己的场�
 
 ## 5. 接手结果
 
-本轮由 `feat/business-modules-fixes` 承接，逐项结果、行为取舍、场景数、变异与真实进程验收见[修复报告](evidence/module-fixes-20261112/README.md)。保留的离线双边好友、离线队伍邀请、停战入口与新发现 Scene 启动接线限制均在报告中明确列出。仅推回本分支，不合并、不发版。
+本轮由 `feat/business-modules-fixes` 承接，逐项结果、行为取舍、场景数、变异与真实进程验收见[修复报告](evidence/module-fixes-20261112/README.md)。保留的离线双边好友、离线队伍邀请、停战入口均在报告中明确列出；后续追加的 Scene / Terrain 启动接线问题已修复并补真实 TCP 验收。仅推回本分支，不合并、不发版。

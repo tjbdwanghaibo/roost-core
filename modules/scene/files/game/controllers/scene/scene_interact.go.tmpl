@@ -5,11 +5,12 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
-	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/pb"
-	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	scenes "{{MODULE}}/game/scene/service"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 )
 
 // HandleSceneInteract 与 HandleSceneChange 同一个规矩：业务拒绝答在应答的 Code / Reason 里、连接保留，
@@ -17,6 +18,10 @@ import (
 func (c *Controller) HandleSceneInteract(ctx *playeraccess.Context, request *pb.SceneInteractRequest) (*pb.SceneInteractResponse, error) {
 	if ctx == nil || request == nil {
 		return nil, fmt.Errorf("scene: invalid interaction")
+	}
+	manager, err := scenes.FromRegistry(c.registry)
+	if err != nil {
+		return nil, err
 	}
 	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
 	if err != nil {
@@ -29,7 +34,7 @@ func (c *Controller) HandleSceneInteract(ctx *playeraccess.Context, request *pb.
 	}
 	var area int64
 	if err == nil {
-		_, area, err = c.manager.IDs(0, request.SceneID)
+		_, area, err = manager.IDs(0, request.SceneID)
 	}
 	if err == nil {
 		result, err = sender.NewSceneInteractSender(c.client).MultiSync_SceneInteract(ctx.Context(), id, area, request.Sequence, request.ObjectID)

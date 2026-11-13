@@ -10,28 +10,32 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
 	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/pb"
 	logic "{{MODULE}}/game/terrain"
 	runtime "{{MODULE}}/game/terrain/service"
+	"{{MODULE}}/protocol/pb"
 )
 
 type Controller struct {
 	registry *app.Registry
-	runtime  *runtime.Runtime
 }
 
 func FromRegistry(registry *app.Registry) (*Controller, error) {
-	r, err := runtime.FromRegistry(registry)
-	if err != nil {
-		return nil, err
+	if registry == nil {
+		return nil, fmt.Errorf("terrain: app registry is required")
 	}
-	return &Controller{registry: registry, runtime: r}, nil
+	// Provide 仅装配协议；Terrain 的 Start 完成加载后才发布 runtime。
+	// 请求时查询能力，既不提前打开地形，也不把启动前的缺失缓存为永久失败。
+	return &Controller{registry: registry}, nil
 }
 func (c *Controller) Registry() *app.Registry { return c.registry }
 func (c *Controller) Execute(ctx context.Context, playerID int64, command logic.Command) (logic.Result, error) {
-	result, err := c.runtime.Execute(ctx, playerID, command)
+	service, err := runtime.FromRegistry(c.registry)
+	if err != nil {
+		return logic.Result{}, err
+	}
+	result, err := service.Execute(ctx, playerID, command)
 	if err == nil {
-		if world, lookupErr := c.runtime.World(command.SceneID); lookupErr == nil {
+		if world, lookupErr := service.World(command.SceneID); lookupErr == nil {
 			result.ProjectionPending = world.Failures() != 0
 		}
 	}
@@ -85,7 +89,12 @@ func (c *Controller) HandleTerrainQuery(ctx *playeraccess.Context, request *pb.T
 	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
 		return nil, fmt.Errorf("terrain: authenticated request required")
 	}
-	state, err := c.runtime.Query(ctx.Context(), ctx.PlayerID, request.SceneID, core.ChunkKey{X: request.X, Y: request.Y})
+	service, err := runtime.FromRegistry(c.registry)
+	if err != nil {
+		code, reason := refusal(ctx, request.SceneID, err)
+		return &pb.TerrainQueryResponse{Code: code, Reason: reason}, nil
+	}
+	state, err := service.Query(ctx.Context(), ctx.PlayerID, request.SceneID, core.ChunkKey{X: request.X, Y: request.Y})
 	if err != nil {
 		code, reason := refusal(ctx, request.SceneID, err)
 		return &pb.TerrainQueryResponse{Code: code, Reason: reason}, nil

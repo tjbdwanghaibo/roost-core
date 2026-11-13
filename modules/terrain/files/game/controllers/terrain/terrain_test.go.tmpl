@@ -28,20 +28,20 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"{{MODULE}}/game/handler"
-	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/pb"
+	db "{{MODULE}}/db"
+	scenecontroller "{{MODULE}}/game/controllers/scene"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	building "{{MODULE}}/game/entities/terrain_building"
 	chunk "{{MODULE}}/game/entities/terrain_chunk"
-	db "{{MODULE}}/db"
-	gamescene "{{MODULE}}/game/scene"
-	logic "{{MODULE}}/game/terrain"
-	player "{{MODULE}}/game/entities/player"
-	runtime "{{MODULE}}/game/terrain/service"
-	scenecontroller "{{MODULE}}/game/controllers/scene"
-	sceneentity "{{MODULE}}/game/entities/scene"
-	scenes "{{MODULE}}/game/scene/service"
+	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	gamescene "{{MODULE}}/game/scene"
+	scenes "{{MODULE}}/game/scene/service"
+	logic "{{MODULE}}/game/terrain"
+	runtime "{{MODULE}}/game/terrain/service"
+	"{{MODULE}}/protocol/pb"
 )
 
 const terrainPlayer int64 = 97101
@@ -72,6 +72,7 @@ func (c *terrainCommit) record() dataengine.CommitRecord {
 type terrainFixture struct {
 	t          *testing.T
 	controller *Controller
+	runtime    *runtime.Runtime
 	access     *entity.ManagerAccess
 	engine     *nest.NestMgr
 	sync       *entitysync.Manager
@@ -129,6 +130,18 @@ func (f *terrainFixture) start() {
 			t.Fatal(err)
 		}
 	}
+	// 协议注册先于 Scene / Terrain 的 Start，不能用提前启动的夹具掩盖接线错误。
+	f.controller, err = FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.change, err = scenecontroller.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.controller.Execute(context.Background(), terrainPlayer, logic.Command{SceneID: 2, Sequence: 1, Op: "build"}); err == nil {
+		t.Fatal("terrain request accepted before runtime started")
+	}
 	if _, err := scenes.Start(f.registry); err != nil {
 		t.Fatal(err)
 	}
@@ -140,11 +153,7 @@ func (f *terrainFixture) start() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.controller, err = FromRegistry(f.registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.change, err = scenecontroller.FromRegistry(f.registry)
+	f.runtime, err = runtime.FromRegistry(f.registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +197,7 @@ func (f *terrainFixture) shutdown() {
 }
 func (f *terrainFixture) world(id int64) *logic.World {
 	f.t.Helper()
-	world, err := f.controller.runtime.World(id)
+	world, err := f.runtime.World(id)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -213,7 +222,7 @@ func (f *terrainFixture) must(command logic.Command) logic.Result {
 }
 func (f *terrainFixture) query(key core.ChunkKey) logic.ChunkState {
 	f.t.Helper()
-	state, err := f.controller.runtime.Query(context.Background(), terrainPlayer, 2, key)
+	state, err := f.runtime.Query(context.Background(), terrainPlayer, 2, key)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -247,7 +256,7 @@ func (f *terrainFixture) open(id int64) {
 		f.t.Fatal(err)
 	}
 	f.t.Cleanup(func() { os.Remove(path) })
-	if _, err := f.controller.runtime.Open(context.Background(), id, path); err != nil {
+	if _, err := f.runtime.Open(context.Background(), id, path); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -497,7 +506,7 @@ func TestTerrainMapCoordinatesHaveIndependentPersistentIDs(t *testing.T) {
 	f.must(brush(1))
 	f.open(3)
 	f.move(terrainPlayer, 2, 3)
-	state, err := f.controller.runtime.Query(context.Background(), terrainPlayer, 3, core.ChunkKey{X: 1, Y: 1})
+	state, err := f.runtime.Query(context.Background(), terrainPlayer, 3, core.ChunkKey{X: 1, Y: 1})
 	if err != nil || state.Heights[0] != 100 {
 		t.Fatalf("maps shared edits: %+v %v", state, err)
 	}
@@ -688,7 +697,7 @@ func TestTerrainColdRestoreKeepsEditsLotsBuildingsAndSequence(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(path)
-		if _, err := f.controller.runtime.Open(context.Background(), 3, path); err == nil {
+		if _, err := f.runtime.Open(context.Background(), 3, path); err == nil {
 			t.Fatal("incomplete footprint opened")
 		}
 		if _, _, err := f.scenes.IDs(0, 3); err == nil {
@@ -796,7 +805,7 @@ func TestTerrainProjectionFailureKeepsFactAndRefreshRepairs(t *testing.T) {
 	f.ledger(1, 1)
 	world.SiteCommit = publish
 	writes := f.commit.writes.Load()
-	if err := f.controller.runtime.Refresh(context.Background(), 2); err != nil {
+	if err := f.runtime.Refresh(context.Background(), 2); err != nil {
 		t.Fatal(err)
 	}
 	if world.Failures() != 0 || f.commit.writes.Load() != writes {
@@ -1014,7 +1023,7 @@ func TestTerrainCorruptPackAndMapBudgetAreRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Remove(path)
-	if _, err := f.controller.runtime.Open(context.Background(), 6, path); !errors.Is(err, logic.ErrFull) {
+	if _, err := f.runtime.Open(context.Background(), 6, path); !errors.Is(err, logic.ErrFull) {
 		t.Fatalf("map capacity=%v", err)
 	}
 }
@@ -1076,7 +1085,7 @@ func TestTerrainStopDrainsOnlyTerrainMaps(t *testing.T) {
 	if _, _, err := f.scenes.IDs(0, 1); err != nil {
 		t.Fatal("terrain stop closed plain scene")
 	}
-	if _, err := f.controller.runtime.World(2); err == nil {
+	if _, err := f.runtime.World(2); err == nil {
 		t.Fatal("drained terrain still open")
 	}
 	f.player(func(p *player.Player) {

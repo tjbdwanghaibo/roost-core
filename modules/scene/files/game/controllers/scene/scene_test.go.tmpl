@@ -21,15 +21,15 @@ import (
 
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
-	"{{MODULE}}/game/handler"
-	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/pb"
-	apperrors "{{MODULE}}/internal/errors"
-	gamescene "{{MODULE}}/game/scene"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	scenes "{{MODULE}}/game/scene/service"
+	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	gamescene "{{MODULE}}/game/scene"
+	scenes "{{MODULE}}/game/scene/service"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 )
 
 type sceneCommit struct{ reject atomic.Bool }
@@ -88,15 +88,22 @@ func newSceneFixture(t *testing.T) *sceneFixture {
 			t.Fatal(err)
 		}
 	}
+	// 与正式 access.player 一致：先构造协议控制器，再启动模块 runtime。
+	f.controller, err = FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.controller.HandleSceneChange(&playeraccess.Context{PlayerID: 1001}, &pb.SceneChangeRequest{ToID: 1}); err == nil {
+		t.Fatal("scene change accepted before runtime started")
+	}
+	if _, err := f.controller.HandleSceneInteract(&playeraccess.Context{PlayerID: 1001}, &pb.SceneInteractRequest{SceneID: 1, Sequence: 1}); err == nil {
+		t.Fatal("scene interaction accepted before runtime started")
+	}
 	_, err = scenes.Start(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.manager, err = scenes.FromRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.controller, err = FromRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +483,7 @@ func init() {
 func sceneObjects() gamescene.Config {
 	c := gamescene.DefaultConfig()
 	c.Regions = []gamescene.Region{{ID: 33, Bounds: spatial.Rect{Min: spatial.Point{X: 40, Y: 40}, Max: spatial.Point{X: 60, Y: 60}}}}
-	c.Objects = []gamescene.Object{{ID:71,Position:c.Spawn,Radius:10,Text:"well"}}
+	c.Objects = []gamescene.Object{{ID: 71, Position: c.Spawn, Radius: 10, Text: "well"}}
 	return c
 }
 func TestSceneRegionEntryAndExitAreDerivedFromPosition(t *testing.T) {

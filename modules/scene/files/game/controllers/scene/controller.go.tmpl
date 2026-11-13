@@ -10,28 +10,29 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
-	"{{MODULE}}/game/playeraccess"
-	"{{MODULE}}/protocol/pb"
 	player "{{MODULE}}/game/entities/player"
-	scenes "{{MODULE}}/game/scene/service"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	scenes "{{MODULE}}/game/scene/service"
+	"{{MODULE}}/protocol/pb"
 )
 
 type Controller struct {
-	manager *scenes.Manager
-	client  nest.Client
+	registry *app.Registry
+	client   nest.Client
 }
 
 func FromRegistry(registry *app.Registry) (*Controller, error) {
-	manager, err := scenes.FromRegistry(registry)
-	if err != nil {
-		return nil, err
+	if registry == nil {
+		return nil, fmt.Errorf("scene: app registry is required")
 	}
 	client, ok := app.Lookup[nest.Client](registry, mods.ModNest)
 	if !ok || client == nil {
 		return nil, fmt.Errorf("scene: Nest is unavailable")
 	}
-	return &Controller{manager: manager, client: client}, nil
+	// access.player 在 Provide 构造控制器；Scene 在 Start 完成开图后才发布 Manager。
+	// 这里只保存注册表，请求到来时读取已发布的能力，不缓存尚未就绪的结果。
+	return &Controller{registry: registry, client: client}, nil
 }
 
 // refusal 把一次失败分成两类。带码的错误是业务拒绝（场景已满、目标未开放、FromID 过期、对象太远、序号跳号，
@@ -49,12 +50,16 @@ func (c *Controller) HandleSceneChange(ctx *playeraccess.Context, request *pb.Sc
 	if ctx == nil || request == nil {
 		return nil, fmt.Errorf("scene: invalid request")
 	}
+	manager, err := scenes.FromRegistry(c.registry)
+	if err != nil {
+		return nil, err
+	}
 	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
 	if err != nil {
 		return nil, err
 	}
 	var result *pb.SceneChangeResponse
-	ids, target, err := c.manager.IDs(request.FromID, request.ToID)
+	ids, target, err := manager.IDs(request.FromID, request.ToID)
 	if err == nil {
 		result, err = sender.NewSceneChangeSender(c.client).MultiGroupSync_SceneChange(ctx.Context(), id, ids, target)
 	}

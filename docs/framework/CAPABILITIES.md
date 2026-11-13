@@ -375,7 +375,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | GM 命令、热更配置 | GM / 运维命令（admin 命令表）；配置表与热更（`configdata.reload`） | game-demo“GM 运维面”；[配置 §5](guide/07-config.md#5-运维重载) |
 | 技能、Buff 与怪物 AI | skill 与 combat + 属性；行为与 actionflow + AI + 移动 + 实体心跳 | game-demo“技能目录”“怪物”“移动”；MMORPG 夹具的战斗与 Buff |
 | 关卡、波次 | level 组件，或房间实体 + 定时器推进 | 合作塔防夹具；`scripts/testdata/level` |
-| 可编辑地形、建造 | terrain 底座 + 多实体事务 + 按命名空间分开计的同步；模块生成工程存在 scene 启动接线限制，见 scene README | game-demo“可编辑地形与建筑” |
+| 可编辑地形、建造 | terrain 底座 + 多实体事务 + 按命名空间分开计的同步；模块生成工程启动、Scene 拒绝后继续请求与 Terrain 查询已做单机真实 TCP 验收，见 scene / terrain README | game-demo“可编辑地形与建筑” |
 | 合服、数据结构变更上线 | 合服（别名合服）；schema 版本 + 离线迁移 | [Player 迁移 §6](PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)；game-demo“schema 迁移与 sid 搬机” |
 | 压测 | Robot；`scripts/perf/` 的同机对照脚本 | game-demo“机器人压测”；[Robot](ROBOT.md) |
 | 好友、任务、成就、商城 | 需手写业务：用 Entity / DAO / Nest 事务与幂等账本，按需加 effect 或 mail | 无专门参考；SLG 手册列了商城等路线的源码入口 |

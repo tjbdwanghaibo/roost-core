@@ -1,0 +1,191 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"gopkg.in/yaml.v3"
+	"net/http"
+	"os"
+	"time"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+var ids = map[string]uint32{}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+func post(url string, v any, out any) {
+	raw, e := json.Marshal(v)
+	must(e)
+	req, e := http.NewRequest("POST", url, bytes.NewReader(raw))
+	must(e)
+	req.Header.Set("Content-Type", "application/json")
+	if url == "http://127.0.0.1:9100/admin/execute" {
+		req.Header.Set("X-Admin-Token", "dev-modulefix-admin")
+	}
+	resp, e := http.DefaultClient.Do(req)
+	must(e)
+	defer resp.Body.Close()
+	must(json.NewDecoder(resp.Body).Decode(out))
+}
+
+type client struct {
+	conn   transport.Conn
+	seq    uint32
+	player int64
+	ticket string
+}
+
+func (c *client) call(name string, raw []byte, e error) []byte {
+	must(e)
+	c.seq++
+	must(c.conn.WritePackets([]*transport.Packet{{MsgID: ids[name], Seq: c.seq, Payload: raw}}))
+	for {
+		p, e := c.conn.ReadPacket()
+		must(e)
+		if p.MsgID == ids[name] && p.Seq == c.seq {
+			return p.Payload
+		}
+	}
+}
+func login(name string) *client {
+	var l struct {
+		OK            bool
+		AccountTicket string `json:"account_ticket"`
+		Code          any
+	}
+	post("http://127.0.0.1:8081/portal/login", map[string]any{"channel": "dev", "open_id": fmt.Sprintf("%s-%d", name, time.Now().UnixNano()), "credential": "dev-modulefix-local"}, &l)
+	if !l.OK {
+		panic(fmt.Sprintf("login refused %v", l.Code))
+	}
+	var en struct {
+		OK           bool
+		Ticket, Addr string
+	}
+	post("http://127.0.0.1:8081/portal/enter", map[string]any{"account_ticket": l.AccountTicket, "server_id": 1000}, &en)
+	if !en.OK {
+		panic("enter refused")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	conn, e := transport.DialPlayerTCP(ctx, transport.Config{Endpoint: en.Addr, DialTimeout: time.Second})
+	must(e)
+	context.AfterFunc(ctx, func() { _ = conn.Close(); cancel() })
+	c := &client{conn: conn, seq: 1, ticket: l.AccountTicket}
+	auth := transport.AuthPacket(en.Ticket)
+	auth.Seq = 1
+	must(conn.WritePackets([]*transport.Packet{auth}))
+	ack, e := conn.ReadPacket()
+	must(e)
+	if ack.MsgID != 0 || len(ack.Payload) != 0 {
+		panic("auth rejected")
+	}
+	for {
+		p, e := conn.ReadPacket()
+		must(e)
+		if p.MsgID == ids["EnterStatus"] {
+			v, e := pb.UnmarshalEnterStatusPush(p.Payload)
+			must(e)
+			if v.Code != 0 || !v.NeedCreate {
+				panic("unexpected enter status")
+			}
+			break
+		}
+	}
+	raw, e := pb.MarshalEnterCreateRequest(&pb.EnterCreateRequest{Name: name})
+	created, e := pb.UnmarshalEnterCreateResponse(c.call("EnterCreate", raw, e))
+	must(e)
+	if created.Code != 0 {
+		panic(created.Reason)
+	}
+	raw, e = pb.MarshalEnterGameRequest(&pb.EnterGameRequest{})
+	entered, e := pb.UnmarshalEnterGameResponse(c.call("EnterGame", raw, e))
+	must(e)
+	if entered.Code != 0 {
+		panic(entered.Reason)
+	}
+	var servers struct {
+		OK      bool
+		Servers []struct {
+			Role struct {
+				PlayerID int64 `json:"player_id"`
+			} `json:"role"`
+		}
+	}
+	post("http://127.0.0.1:8081/portal/servers", map[string]string{"account_ticket": l.AccountTicket}, &servers)
+	for _, s := range servers.Servers {
+		if s.Role.PlayerID != 0 {
+			c.player = s.Role.PlayerID
+			break
+		}
+	}
+	if c.player == 0 {
+		panic("no player id")
+	}
+	fmt.Printf("PASS login + TCP + EnterCreate + EnterGame player=%d\n", c.player)
+	return c
+}
+func main() {
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(1)
+		}
+	}()
+	http.DefaultClient.Timeout = 10 * time.Second
+	raw, e := os.ReadFile("roost.yaml")
+	must(e)
+	var manifest struct {
+		Modules map[string]struct {
+			IDs struct {
+				Protocol map[string]uint32 `yaml:"protocol"`
+			} `yaml:"ids"`
+		} `yaml:"modules"`
+	}
+	must(yaml.Unmarshal(raw, &manifest))
+	for _, m := range manifest.Modules {
+		for k, v := range m.IDs.Protocol {
+			ids[k] = v
+		}
+	}
+	c := login("SceneProbe")
+	defer c.conn.Close()
+	change := func(from, to int64, want int32) {
+		raw, err := pb.MarshalSceneChangeRequest(&pb.SceneChangeRequest{FromID: from, ToID: to})
+		response, err := pb.UnmarshalSceneChangeResponse(c.call("SceneChange", raw, err))
+		must(err)
+		if response.Code != want || (want == 0 && response.SceneID != to) {
+			panic(fmt.Sprintf("SceneChange %d -> %d: %+v, want code %d", from, to, response, want))
+		}
+		fmt.Printf("PASS SceneChange %d -> %d code=%d same TCP connection\n", from, to, response.Code)
+	}
+	unavailable, _ := errcode.ClientError(apperrors.ErrSceneUnavailable)
+	unknown, _ := errcode.ClientError(apperrors.ErrSceneObjectUnknown)
+	change(0, 999999, unavailable)
+	change(0, 1, 0)
+	raw, e = pb.MarshalSceneInteractRequest(&pb.SceneInteractRequest{SceneID: 1, Sequence: 1, ObjectID: 999999})
+	interaction, e := pb.UnmarshalSceneInteractResponse(c.call("SceneInteract", raw, e))
+	must(e)
+	if interaction.Code != unknown {
+		panic(fmt.Sprintf("SceneInteract: %+v, want code %d", interaction, unknown))
+	}
+	fmt.Printf("PASS SceneInteract unknown object code=%d same TCP connection\n", interaction.Code)
+	change(1, 2, 0)
+	raw, e = pb.MarshalTerrainQueryRequest(&pb.TerrainQueryRequest{SceneID: 2, X: 0, Y: 0})
+	terrain, e := pb.UnmarshalTerrainQueryResponse(c.call("TerrainQuery", raw, e))
+	must(e)
+	if terrain.Code != 0 || terrain.Chunk == nil || terrain.Chunk.BaseRevision != 1 || len(terrain.Chunk.Heights) == 0 {
+		panic(fmt.Sprintf("TerrainQuery: %+v", terrain))
+	}
+	fmt.Printf("PASS TerrainQuery scene=2 revision=%d heights=%d same TCP connection\n", terrain.Chunk.BaseRevision, len(terrain.Chunk.Heights))
+	change(2, 1, 0)
+	change(1, 0, 0)
+	fmt.Println("PASS startup + Scene refusal/interaction/transfer + Terrain query; network remained open")
+}

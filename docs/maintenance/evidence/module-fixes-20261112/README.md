@@ -83,17 +83,30 @@
 
 本轮不做性能结论；没有 Linux、跨机、独立 Gate、长时间稳定性、强杀故障矩阵验收。四组生成工程各跳过 1 条未启用的生产 Docker compose 测试；game-demo 有 11 条需要显式环境的真实 Mongo / Redis、Docker 或性能场景跳过，具体名称记在 checks.txt。模块 verify 本身均为零 skip。
 
-## 7. 新发现且按交接未扩大范围修复的问题
+## 7. Scene / Terrain 启动时序修复（2026-11-13）
 
-**Scene 启动依赖时序**：全新 game 工程 `module add scene alliance login portal enter gm`，配置同样真实依赖后 `make dev-run`，其余服务可启动，game 失败：
+初次验收的新 game 工程安装 `scene alliance login portal enter gm`，`make dev-run` 在 game 的 Provide 阶段失败，原证据保留：
 
 ```text
 mod access.player provide: scene: runtime is unavailable
 ```
 
-`modules/scene/files/game/controllers/scene/controller.go.tmpl` 的 FromRegistry 在构造 controller 时要求 Manager；`game/scene/service/runtime.go.tmpl` 的 Start 到启动阶段才登记。生成的 access.player 在 Provide 阶段构造 controller，先于 Start。建议后续统一能力构造 / 发布与启动激活的时序，或者在正式依赖准备完成后构造 controller；不能靠测试夹具提前塞能力掩盖。没有单独声称“最小 scene-only 工程”已复现，实际失败组合如上。
+当时依照交接要求只登记；维护者于 2026-11-13 追加本项后继续修复。根因是控制器构造发生在 `access.player Provide`，Scene Manager / Terrain Runtime 在模块 Start 加载完成后才发布。原夹具先启动 runtime 再构造 controller，未覆盖正式顺序。Terrain 存在相同缺陷。
 
-任务书要求新发现的问题先登记、不扩大本轮修复范围；因此这里只登记到 scene README、KNOWN-LIMITS 和能力表。Scene 的 PB 拒绝离线验收通过，但真实连接上的“不被断开”尚未跑通。后续合并 / 发版应明确评估此启动限制。
+**实施**：两个控制器仅保存 Registry（Scene 还保留 Provide 已提供的 Nest），业务请求通过已加锁的 Registry 读取 runtime；不缓存启动前的缺失，不增加 lazy init、后台重试或另一套生命周期。Start 的依赖检查、加载与发布、停机排空均保持原契约。夹具统一先构造控制器、检查就绪前请求失败，再启动 runtime；后续业务场景复用同一个控制器验证恢复可用。Terrain 的测试直接从 Registry 取 Runtime，不借用 controller 私有字段。场景数不变。
+
+**已执行**：
+
+- 保持修前 controller，先重排两个夹具：`TestSceneDefaultRuntimeAndPBEntry` 报 `scene: runtime is unavailable`，`TestTerrainDefaultPackFeedsSceneAndActorWalker` 报 `terrain: runtime unavailable`；均为运行失败，不是编译失败。
+- 修后生成消费者的 Scene / Terrain 全包 `go test -race -count=1` 通过，包括 Terrain + Monster 联动；fresh codegen 安装、Scene 公开视图联动与 Terrain 验证 / 变异检查通过（114.606s）。
+- 根包 `go test -count=1 .` 通过（10.883s）；文档锚点 344 文件、0 broken。验收服务按正式 dev-stop 逆序退出，任务专用 Mongo / NATS 已关闭。
+- 新工程 `go build ./...`、`go vet ./...`、`roost id check`、`roost generate --check` 通过；`module verify scene terrain --json` 共 58 条（Scene 28、Terrain 28、Terrain + Monster 2），0 SKIP。
+- 新生成 `game` 工程装 `terrain monster alliance login portal enter gm`（包含 Scene），先将 core replace 到本分支，再安装模块。macOS 本地隔离 Mongo 副本集 27030、NATS JetStream 24224，Redis 6379、etcd 2379；11 个服务实际启动并 ready。最初未预设 replace 的试装因已发布 tag 尚无 `wiring/modulehost` 而失败，保留日志；修正本地依赖后另建全新工程验收，未把旧工程当 fresh 结果。
+- Portal 新账号 → TCP 鉴权 → EnterCreate / EnterGame → SceneChange 到未开放图拒绝 → 同连接进入 1 号图 → SceneInteract 不存在对象拒绝 → 同连接切到 2 号地形 → TerrainQuery 返回 revision 1、4096 个高度值 → 返回 1 号图 → 退场，全部通过。没有重新拨号，也没有通过直接构造控制器跳过 bootstrap。
+
+[精简原始结果](scene-startup.txt)，[TCP 探针](scene-probe.go.tmpl)。本地完整产物在 `artifacts/module-fixes-20261112/scene-*`，大日志不提交。复跑：构建本分支 `./codegen/cmd/roost` → `project new -template game --skip-deps` → **先** `go mod edit -replace github.com/tjbdwanghaibo/roost-core=<本分支绝对路径>` → 安装上述模块 → `config enable player-tcp` → 设置本地依赖、`login.dev_token=dev-modulefix-local`、`portal.servers.1000=127.0.0.1:7000` → `make dev-run`。将探针 `{{MODULE}}` 替换为生成工程 module，放到该工程 `.acceptance/main.go`，执行 `GOWORK=off go run ./.acceptance`，最后 `make dev-stop`。不要指向业务数据或打印认证票据。
+
+范围：只验证单机真实启动和上述协议链路，未测试 Linux、跨机、容量、地形编辑的崩溃恢复；本轮未重新跑全仓 35 分钟套件，不沿用上一轮全仓结果冒充本次运行。没有合并或发版。
 
 ## 8. 图谱与源码核对
 
