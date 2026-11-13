@@ -89,9 +89,13 @@ func (s *EquipInfo) loadBSONDoc(doc equipInfoBSONDoc) {
 	s.level = doc.Level
 	s.star = doc.Star
 	srcGems := daoMapDocs(doc.Gems, gemInfoPtrFromBSONDoc)
-	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(srcGems))
-	for key, val := range srcGems {
-		s.gems.Set(key, val)
+	// 存的是 null（嵌套结构体的零值 map 是 nil）就读回 nil：再写一次仍是 null，一次往返文档形状不变。
+	s.gems = nil
+	if srcGems != nil {
+		s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(srcGems))
+		for key, val := range srcGems {
+			s.gems.Set(key, val)
+		}
 	}
 	s.runes = daoSliceDocs(doc.Runes, gemInfoPtrFromBSONDoc)
 	s.core = gemInfoPtrFromBSONDoc(doc.Core)
@@ -155,8 +159,13 @@ func (s EquipInfo) gemsRawMap() map[int32]*GemInfo {
 	return ret
 }
 
+// setGemsRawMap 与 gemsRawMap 互逆：nil 进 nil 出（嵌套结构体的零值 map 是 nil、存成 null），
+// 读回再写不把 null 变成 {}。
 func (s *EquipInfo) setGemsRawMap(src map[int32]*GemInfo) {
-	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(src))
+	s.gems = nil
+	if src != nil {
+		s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(src))
+	}
 	for key, val := range src {
 		s.gems.Set(key, val)
 	}
