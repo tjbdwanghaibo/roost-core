@@ -79,6 +79,8 @@
 
 - **生成工程接缝修复**：属性最终值变化新增同事务 `OnAttributeChanged`，统一接通升级 / 装备 / 显式刷新到 Cell 战斗面板；回调失败一起回滚。Robot 增加正式 CellWorld 移动场景、PB 编解码、完整视野替换 / 删除与有界统计；真实故障演练覆盖死亡奖励去重、重生、面板更新。CellWorld 模块追加到原模块序列末尾，保持已有 ID 分配顺序；修复 `scene_sync_bytes_test` 写死 game 包名导致自定义服务名工程编译失败。
 
+- **CellWorld 并入 v1.47 的适配**（2026-11-13）：`OnAttributeChanged` 在共用属性组件包 `game/components/attribute/changed.go`，钩子收 `attribute.Owner`（属性组件可挂在别的实体上，只关心 Player 的登记方自己判断），game-demo 的 Cell 面板钩子据此只处理 `*Player`；cellworld 模块的 `game/cellworldhost` 是装配库（不是 manager：Node 要在实体心跳装好之后、`Service.Init` 里启动，manager 的 Start 早于它），不需要 view 接口。DAO 缺省“持久且同步”之后补了 v1.47 一侧漏标的私有字段（party-room 夹具的 Matches / Initialized / State / WakeTimer、wallet README 第二宿主的 WalletLedger）。v1.47 起 Player / World 为 `dbscope=sid`，`scripts/test-seamless-demo.sh` 收尾按 `cwdemo` 前缀删全部库（原来会留下 `cwdemo_<sid>`）。
+
 ## [v1.46.0] - 2026-11-13
 
 - **组合 skill**（compose §4E，2026-11-13，维护者要求）：进程内全局逻辑的选法——能重建、不进事务的缓存 / 索引 / 注册表用 manager（`Managers()` 登记、`DependsOn()` 排序）；要和玩家修改一起提交回滚的全服状态挂在 World 上（不落盘的标 `nopersist`），不另建单例实体；很热的状态不放进单个实体。写明启动顺序：Mod（含 manager）先启动、`Service.Init` 才建 World，manager 的 Start 不能用 World；实体按访问加载，没有启动顺序（`LoadPriority` 未被读取、`EntityLifetimeResident` 只是声明）。
