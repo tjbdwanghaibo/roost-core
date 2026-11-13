@@ -823,7 +823,7 @@ func TestTerrainRelayWireFormat(t *testing.T) {
 		body := encodeRelayAnswer(42, 7, answer)
 		inc, id, got, err := decodeRelayAnswer(body)
 		if err != nil || inc != 42 || id != 7 || got.Outcome != answer.Outcome || got.Points != answer.Points || got.LastSeq != answer.LastSeq ||
-			!slices.Equal(got.Chunks, answer.Chunks) || !got.Building.Equal(answer.Building) {
+			!slices.Equal(got.Chunks, answer.Chunks) || !buildingsite.StatesEqual(got.Building, answer.Building) {
 			t.Fatalf("answer %+v came back as %+v (%v)", answer, got, err)
 		}
 		if answer.Outcome == terrainmap.OutcomeRefused {

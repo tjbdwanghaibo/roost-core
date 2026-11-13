@@ -95,7 +95,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
   同步的白名单按顶层字段列，所以“别人看不到经验”就是别人的视图里不列 `ProfilePrivate`（[同步视图](README.md#同步视图谁看见哪些字段)）。存储键是
   `profile` / `profile_private`，里面是数字短键（`profile.1` 名字、`profile.2` 等级、`profile_private.1` 经验）。
 - **demo 只覆盖模块留给工程的一个文件**：升级邮件的奖励规则 `game/components/mailbox/mailbox_profile_rules.go`（见下一节）。
-- **demo 的副本领奖账本** `dungeon_ledger.go`（`ClaimDungeonRun`、通关计数）仍挂在 Profile 上。联盟展示已由 alliance 模块的独立 AllianceComponent 提供，状态是 `PlayerDao.Alliance.ID`。
+- **demo 的副本领奖账本**是 demo 自己的 Player 组件 `DungeonLedger`（`game/components/dungeonledger`，`view.DungeonLedger`：`ClaimDungeonRun`、通关计数；组件号 2103），状态在 demo 的 `PlayerDao.DungeonClaims` / `DungeonClears`；领奖事务 `handlerClaimDungeon` 锁的 `IDungeonClaimEntity` 同时给出它与 Profile。联盟展示已由 alliance 模块的独立 AllianceComponent 提供，状态是 `PlayerDao.Alliance.ID`。
 - **两实体的 `AddExp` 是 demo 的**（Player 加经验、World 记全服累计，见[实体锁档与跨实体事务](#实体锁档与跨实体事务)），它调模块的
   `CheckAddExp` 与 `AddExp`。模块的 `ProfileAddExp` 只动 Player，不记 World 的累计，demo 的入口（端点、GM、副本结算）都不走它。
 - 生成步骤里锁 Profile 组件的 handler（`AddExp`、`ClaimDungeon`）与背包的那些一样，
@@ -709,7 +709,9 @@ World 还有一组持久定时器（`Timer` 组件，类型号 2006），目前�
 
 ```
 game/entities/world/timer_component.go   TimerComponent（持有 entitytimer.Host）+ worldTimerStore（WorldDao.Timers / TimerSeed ↔ entitytimer.Store）
-                                         + TimerDriver（entitytimer.NewDriver，投给 TimerTickHandler）+ 回调 onActivityPhase
+                                         + TimerDriver（entitytimer.NewDriver，投给 TimerTickHandler）+ 回调入口 onActivityPhase（只交给组件）
+                                         + 节点适配 ArmActivityPhase（World 上，只建节点）
+game/components/activityphase/           ActivityPhase 组件（类型号 2102，view.ActivityPhase）：Schedule / Pending / OnDue——关窗的业务
 game/handler/tick_world_timers.go        handlerTickWorldTimers：World 锁内 TimerComp().Tick(业务时间)，rollback=undo durability=strict
 internal/service/game/activity.go        startWorldTimers：SetClock(业务时钟) → Bind(Nest 客户端, 只读实体查找) → Start；Shutdown 里 Stop
 ```
@@ -718,11 +720,12 @@ internal/service/game/activity.go        startWorldTimers：SetClock(业务时�
   DAO 的回滚。重启后从存储重建，停机期间到期的关窗节点在 World 加载后补触发一次（框架不追帧）。
 - **不轮询**：驱动只记“已加载 World 的最早期限”，到了才经 Nest 正式准入投一次 Tick，索引在事务提交后才更新；D11 之前服务里每秒发一次
   `Sync_TickWorldTimers` 的循环已经不需要。
-- **回调不做 I/O**：`onActivityPhase` 只记 `activity.phase_due` effect，提交后由服务里的消费者调协调器；记不上就返回 30s 重试，节点留着。
+- **定时器是实体的基础设施，回调是组件的业务**：同 `roost add timer` 与模块（turn、activity）的分法，定时器组件只登记、Tick、把到期节点交给组件；关窗的规则在 `ActivityPhase` 组件。
+- **回调不做 I/O**：`ActivityPhase.OnDue` 只记 `activity.phase_due` effect，提交后由服务里的消费者调协调器；记不上就返回 30s 重试，节点留着。
 - **为什么在 `Service.Init` 里接、而且在 `EnsureWorld` 之前**：驱动按业务时钟（`time.logic_offset`）记加载时刻和判断“停机期间是否错过”，
   必须在 World 第一次加载之前接上。生成工程由 `wiring/entitytimer` Mod 在 Provide 阶段做这件事；demo 手写，放在 Init 开头，靠的是 World
   只在 `EnsureWorld` 加载、玩家请求在写闸门发布前全被拒绝。停止放在 `Shutdown`：App 先停 Service、再停 Mod，投递中的 Tick 仍有 Nest 可用。
-- **每个进程都武装同一个窗口**：`ScheduleActivityPhase` 按活动 id 幂等，第二次返回已有节点，不会每次重启多一个节点。
+- **每个进程都武装同一个窗口**：`ActivityPhase.Schedule` 按活动 id 幂等，第二次返回已有节点，不会每次重启多一个节点。
 - 测试：`timer_component_test.go`（重启后照样触发、回滚、过期立即补、同期限按优先级再按登记顺序、未知类型告警计数、非法节点只在正常事务里清理）、
   `tick_world_timers_test.go`（handler 名与驱动一致）、game 服务 `TestTheWorldTimersRunOnTheBusinessClock`（驱动投递带业务时间）。
 

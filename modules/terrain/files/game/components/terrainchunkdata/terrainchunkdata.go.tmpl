@@ -1,0 +1,166 @@
+// Package terrainchunkdata 是持久地形块的规则（TerrainChunk 上的组件 TerrainChunkData）：开图时从原始地形包填满、按地图
+// 身份校验、笔刷改点、建筑占位的写入，以及只读快照。数据全部在 TerrainChunkDao 里，回滚统一走 DAO 的生成 setter 逆操作。
+package terrainchunkdata
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+
+	logic "{{MODULE}}/game/terrain"
+	"{{MODULE}}/game/view"
+)
+
+// Owner 是 TerrainChunkData 组件的宿主（TerrainChunk 的接线见 game/entities/terrain_chunk/data_component.go）：view 的
+// TerrainChunkEntity，加上把 DAO 的同步脏位交给订阅主体（PublishSyncDirty，实体一侧）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	view.TerrainChunkEntity
+	PublishSyncDirty()
+}
+
+// Component 是一块持久地形。方法只在本实体的 Nest 锁内调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；TerrainChunk 在 game/entities/terrain_chunk/data_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("terrain_chunk_data component: owner %T does not implement terrainchunkdata.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "terrain_chunk_data" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (c *Component) Owner() Owner { return c.owner }
+
+// OnInitFinish 在新建和冷加载后（DAO 已装好、实体发布之前）校验存档：身份、块坐标、材质与占位的取值、版本与数据形状。
+// 还没开过图（Version 0）的块不查；查不过的存档拒绝加载，不当成新块继续运行。
+func (c *Component) OnInitFinish(*entity.EntityCreateParam, bool) error {
+	d := c.owner.Dao()
+	if d.Id() != c.owner.ID() {
+		return logic.ErrState
+	}
+	if d.GetVersion() == 0 {
+		return nil
+	}
+	id, err := logic.ChunkUnique(d.GetSceneID(), core.ChunkKey{X: d.GetX(), Y: d.GetY()})
+	if err != nil || id != c.owner.UniqueID() {
+		return logic.ErrState
+	}
+	valid := true
+	d.RangeMaterials(func(_ int, v uint16) bool {
+		if v > 255 {
+			valid = false
+		}
+		return valid
+	})
+	d.RangeLots(func(index int32, id int64) bool {
+		if index < 0 || index >= core.ChunkPoints || id <= 0 {
+			valid = false
+		}
+		return valid
+	})
+	if !valid {
+		return logic.ErrState
+	}
+	state := c.State()
+	if state.BaseRevision <= 0 || state.Version < 1 {
+		return logic.ErrState
+	}
+	return (core.Chunk{Heights: state.Heights, Materials: state.Materials}).Validate()
+}
+
+// State 是本块当前的快照（数据是副本）。
+func (c *Component) State() view.TerrainChunkState {
+	d := c.owner.Dao()
+	state := view.TerrainChunkState{Key: core.ChunkKey{X: d.GetX(), Y: d.GetY()}, BaseRevision: d.GetBaseRevision(), Version: d.GetVersion(), Heights: make([]uint16, 0, d.HeightsLen()), Materials: make([]byte, 0, d.MaterialsLen()), Lots: map[int32]int64{}}
+	d.RangeHeights(func(_ int, value uint16) bool { state.Heights = append(state.Heights, value); return true })
+	d.RangeMaterials(func(_ int, value uint16) bool { state.Materials = append(state.Materials, byte(value)); return true })
+	d.RangeLots(func(index int32, id int64) bool { state.Lots[index] = id; return true })
+	return state
+}
+
+// Lot 是本块下标 index 的节点上站着的建筑实体号（0 = 没有）。
+func (c *Component) Lot(index int32) int64 {
+	id, _ := c.owner.Dao().GetLots(index)
+	return id
+}
+
+// Initialize 在开图装载时调用：块 key 属于场景 sceneID（场景实体的唯一号）的地图，原始地形版本 baseRevision，原始数据
+// base（调用方从地形包取的副本）。已开过的块只核对身份与原始版本（换版答 ErrBase，要先显式迁移）；没开过的块用 base 填满。
+func (c *Component) Initialize(sceneID int64, key core.ChunkKey, baseRevision int64, base core.Chunk) error {
+	id, err := logic.ChunkUnique(sceneID, key)
+	if err != nil || id != c.owner.UniqueID() {
+		return logic.ErrState
+	}
+	d := c.owner.Dao()
+	if d.GetVersion() != 0 {
+		if d.GetBaseRevision() != baseRevision {
+			return logic.ErrBase
+		}
+		if d.GetSceneID() != sceneID || d.GetX() != key.X || d.GetY() != key.Y {
+			return logic.ErrState
+		}
+		return nil
+	}
+	d.SetSceneID(sceneID)
+	d.SetX(key.X)
+	d.SetY(key.Y)
+	d.SetBaseRevision(baseRevision)
+	d.SetVersion(1)
+	d.SetHeightsAll(base.Heights)
+	materials := make([]uint16, len(base.Materials))
+	for i, v := range base.Materials {
+		materials[i] = uint16(v)
+	}
+	d.SetMaterialsAll(materials)
+	return nil
+}
+
+// Validate 核对本块属于场景 sceneID 地图上的块 key、基于原始地形版本 baseRevision（换版答 ErrBase），且还能再提交一版。
+func (c *Component) Validate(sceneID int64, key core.ChunkKey, baseRevision int64) error {
+	d := c.owner.Dao()
+	id, err := logic.ChunkUnique(sceneID, key)
+	if err != nil || id != c.owner.UniqueID() || d.GetSceneID() != sceneID || d.GetX() != key.X || d.GetY() != key.Y || d.GetVersion() < 1 {
+		return logic.ErrState
+	}
+	if d.GetBaseRevision() != baseRevision {
+		return logic.ErrBase
+	}
+	if d.GetVersion() == math.MaxInt64 {
+		return logic.ErrState
+	}
+	return nil
+}
+
+// Apply 写入笔刷改动的点，版本加一，并把同步脏位交给订阅主体。
+func (c *Component) Apply(points []core.PointChange) {
+	d := c.owner.Dao()
+	for _, point := range points {
+		d.SetHeightsAt(int(point.Index), point.Height)
+		d.SetMaterialsAt(int(point.Index), uint16(point.Material))
+	}
+	d.SetVersion(d.GetVersion() + 1)
+	c.owner.PublishSyncDirty()
+}
+
+// SetLots 把这些节点记成建筑 id 的占位（id 为 0 时清掉），版本加一，并把同步脏位交给订阅主体。
+func (c *Component) SetLots(indices []int32, id int64) {
+	d := c.owner.Dao()
+	for _, index := range indices {
+		if id == 0 {
+			d.DelLots(index)
+		} else {
+			d.SetLots(index, id)
+		}
+	}
+	d.SetVersion(d.GetVersion() + 1)
+	c.owner.PublishSyncDirty()
+}

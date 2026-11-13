@@ -1,10 +1,11 @@
 package view
 
 // TerrainCellLedger 是 TerrainCellEditor 上 TerrainCellLedger 组件对 game/ 下其它包公开的方法（实现在 game/components/terraincellledger，语义见那里）；只在宿主被 Nest 锁住期间调用。
-// Window / Check 不在这里：序号窗口 SeqWindow / Verdict 带着窗口规则的方法，留在 game/components/terrainledger。
 type TerrainCellLedger interface {
+	Window() TerrainSeqWindow
 	PlayerID() int64
 	LastSeq() int64
+	Check(seq int64) TerrainVerdict
 	Record(seq int64)
 	Buildings() int64
 	AddBuildings(delta int64)

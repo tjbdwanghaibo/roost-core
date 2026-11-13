@@ -342,7 +342,7 @@ func (component *Component) AddLot(l Lot) error {
 	}
 	lots := make([]int64, 0, dao.LotsLen()+1)
 	dao.RangeLots(func(_ int, v int64) bool { lots = append(lots, v); return true })
-	dao.SetLotsAll(append(lots, l.Pack()))
+	dao.SetLotsAll(append(lots, PackLot(l)))
 	dao.SetLotRevision(dao.GetLotRevision() + 1)
 	return nil
 }
@@ -350,7 +350,7 @@ func (component *Component) AddLot(l Lot) error {
 // RemoveLot 从本块去掉一份占地（拆除事务里），返回是否找到；找到时 LotRevision 加一。
 func (component *Component) RemoveLot(l Lot) bool {
 	dao := component.owner.Dao()
-	packed, found := l.Pack(), false
+	packed, found := PackLot(l), false
 	lots := make([]int64, 0, dao.LotsLen())
 	dao.RangeLots(func(_ int, v int64) bool {
 		if v == packed && !found {

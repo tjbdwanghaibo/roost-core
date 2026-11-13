@@ -560,7 +560,7 @@ func TestTheWorldTimersRunOnTheBusinessClock(t *testing.T) {
 	t.Cleanup(func() { subject.TimerComp().OnDestroy(coreentity.DestroyReasonMemoryUnload) })
 	// 已经过了的关窗期限：登记为下一拍到期，提交后驱动立刻看到它。
 	if _, err := corenest.RunIsolatedTransaction(context.Background(), tickCommitter{}, "arm", func() (any, error) {
-		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-business", business.Add(-time.Minute), business); !armed {
+		if _, armed := subject.ActivityPhaseComp().Schedule("race-business", business.Add(-time.Minute), business); !armed {
 			t.Error("the overdue window close was not armed")
 		}
 		return nil, nil

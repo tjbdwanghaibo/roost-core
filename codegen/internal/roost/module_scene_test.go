@@ -33,7 +33,7 @@ func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeated install changed business files")
 	}
-	recipeMutationMustFail(t, root, "game/entities/scene/entity.go", "s.Dao().MembersLen() != 0", "false && s.Dao().MembersLen() != 0", "./game/controllers/scene", "TestSceneOccupiedCloseIsRefused", "occupied map closed")
+	recipeMutationMustFail(t, root, "game/components/scenemembers/scenemembers.go", "c.owner.Dao().MembersLen() != 0", "false && c.owner.Dao().MembersLen() != 0", "./game/controllers/scene", "TestSceneOccupiedCloseIsRefused", "occupied map closed")
 	recipeMutationMustFail(t, root, "game/handler/scene_interact.go", "sequence == state.GetSequence()", "false && sequence == state.GetSequence()", "./game/controllers/scene", "TestSceneInteractionIsOncePerContinuousSequence", "replayed interaction refused")
 }
 
@@ -78,7 +78,7 @@ func TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat(t *testing.T) {
 	mutations := []struct{ path, from, to, test string }{
 		{"game/components/scene/scene_profile.go", `OnSceneFields("profile", "Profile")`, `OnSceneFields("profile", "Profile", "ProfilePrivate")`, "TestWithSceneProfileSnapshotSeparatesPrivateFields"},
 		{"game/components/actor/sync.go", "mask &= view.Fields", "mask &= view.Fields | dataengine.AllFields", "TestWithSceneProfileDeltaSeparatesPrivateFields"},
-		{"game/entities/scene/entity.go", "s.Dao().GetClosed() || s.Dao().GetClosing()", "s.Dao().GetClosed()", "TestSceneStopRetriesRejectedEvacuation"},
+		{"game/components/scenemembers/scenemembers.go", "dao.GetClosed() || dao.GetClosing()", "dao.GetClosed()", "TestSceneStopRetriesRejectedEvacuation"},
 		{"game/controllers/chat/scene_chat.go", "transport.ActiveSessions(recipient) > 0", "true", "TestWithSceneChatSkipsDisconnectedRecipients"},
 	}
 	for _, m := range mutations {

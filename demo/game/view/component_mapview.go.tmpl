@@ -18,6 +18,7 @@ type Map interface {
 	SavedPos() spatial.Point
 	SavedFacing() movement.Facing
 	EnterScene(sceneID int64, space movement.Space, at spatial.Point) (spatial.Point, error)
+	Teleport(ground MapGround, to spatial.Point) error
 	LeaveScene() error
 	WalkTo(path []spatial.Point) (int64, error)
 	Follow(target int64) (int64, error)
@@ -26,3 +27,9 @@ type Map interface {
 
 // MapHolder 是“带有 Map 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
 type MapHolder interface{ Map() Map }
+
+// MapGround 是 Map.Teleport 要的地面：一个点能不能站（在图内、没被挡住、坡度可站）。场景的 gamescene.Terrain 实现它，
+// handler 直接交场景的地面；view 不引用 game/scene，只要这一个方法。
+type MapGround interface {
+	Standable(point spatial.Point) bool
+}

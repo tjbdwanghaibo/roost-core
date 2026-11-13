@@ -1706,8 +1706,8 @@ func TestTerrainBrushRollbackLeavesEveryChunkAndTheView(t *testing.T) {
 				key, state.daoVersion, after[key].daoVersion, state.viewVersion, after[key].viewVersion)
 		}
 	}
-	if got := ledgerOf(t, p, brushPlayer); got != ledger || got.Check(2) != terrainledger.Fresh {
-		t.Fatalf("the ledger after a rolled-back brush: %+v (before %+v); sequence 2 is %v", got, ledger, got.Check(2))
+	if got := ledgerOf(t, p, brushPlayer); got != ledger || terrainledger.CheckSeq(got, 2) != terrainledger.Fresh {
+		t.Fatalf("the ledger after a rolled-back brush: %+v (before %+v); sequence 2 is %v", got, ledger, terrainledger.CheckSeq(got, 2))
 	}
 	result, err := p.m.Brush(p.ctx, brushPlayer, 2, corner)
 	if err != nil || result.Duplicate || len(result.Chunks) != 4 || result.LastSeq != 2 {

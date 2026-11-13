@@ -18,9 +18,10 @@
     - `Query(ctx, playerID, sceneID, key)`：读一块。
     - `Refresh(ctx, id) error`：投影失败后，从 DAO 重新恢复本进程的视图、占位与建筑显示；不产生新的编辑序号。
     - `World(id)`、`Stop(ctx)`；包级的 `Start(registry)`（模块的运行期入口）与 `DefaultPack()`。
-  - 规则与类型（`game/terrain/rules.go`）：`Command{SceneID, Sequence, Op, X, Y, Radius, Strength, Material}`（含 `Validate`、`Digest`、`Footprint`）、`Result`、`ChunkState`、`ChunkUnique` / `SiteUnique`（由场景号与坐标算持久实体号）。
+  - 规则与类型（`game/terrain/rules.go`）：`Command{SceneID, Sequence, Op, X, Y, Radius, Strength, Material}`（`view.TerrainCommand` 的别名；命令规则是函数 `ValidateCommand`、`CommandDigest`、`CommandBrush`、`CommandFootprint`）、`Result`、`ChunkState`、`SiteState`（同样是 `view.TerrainResult` / `TerrainChunkState` / `TerrainSiteState` 的别名）、`ChunkUnique` / `SiteUnique`（由场景号与坐标算持久实体号）。
   - `World`（`game/terrain/world.go`）：一张图的只读底图与提交后的投影；`Blocked(at)`、`Occupied(key, index)`、`Failures()`，并作为场景的 `Ground`、它的 `Walker` 作为场景的 `Surface`。
-  - 组件 `TerrainComponent`（`game/components/terrain/terrain.go`，经 `ITerrainEntity` 的 `TerrainComp()`）：`Check(command, sceneID)`（锁内判重与授权）、`Record(command, result, delta)`（记账本）、`BuildingCount()`、`Sequence()`。
+  - 组件 `TerrainComponent`（`game/components/terrain/terrain.go`，经 `ITerrainEntity` 的 `TerrainComp()`）：`Check(command, sceneID)`（锁内判重与授权）、`Record(command, result, delta)`（记账本）、`BuildingCount()`、`Sequence()`，接口是 `view.Terrain`。
+  - 两个实体的组件：TerrainChunk 的 `TerrainChunkDataComp()`（`game/components/terrainchunkdata`，`view.TerrainChunkData`：开图 `Initialize`、按地图身份 `Validate`、笔刷 `Apply`、占位 `SetLots`、快照 `State`、`Lot`，存档校验在组件的 `OnInitFinish`）；TerrainBuilding 的 `TerrainSiteComp()`（`game/components/terrainsite`，`view.TerrainSite`：`Validate` / `Set` / `Snapshot` / `SceneID`）。实体包（`game/entities/terrain_chunk`、`terrain_building`）只留实体、接线、同步脏位适配 `PublishSyncDirty` 与同步打包器。
   - Nest handler（`game/handler/terrain.go`，都是 `rollback=undo durability=strict`）：`handlerTerrainBrush`（参与的块 + Player）、`handlerTerrainBuild`（参与的块 + 建筑 + Player，放置与拆除共用）、`handlerTerrainQuery`、`handlerTerrainLoad`（开图装载）、`handlerTerrainSite`。经同一个 `sender.NewTerrainSender(client)` 调用。
 - **登记点 / 钩子**：无。模块没有给别的功能留“编辑之后”的钩子。
 - **状态**
@@ -62,7 +63,7 @@
 - **需求正好是它**：`roost module add terrain`，连带装上 scene 与 actor。模块启动后初始化 2 号地形场景，客户端先 `SceneChange{ToID: 2}` 进场，再发编辑协议。新工程不需要额外的地形配置。
 - **需求多一点**
   - 用自己的地形包：在可信的服务端代码里 `runtime.Open(ctx, sceneID, packPath)`（每图至多 2×2 块；要更大先改 `world.go` 里 `OpenWorld` 与 `Occupied` 的 2×2 假设）。
-  - 调编辑距离、笔刷半径、建筑上限、地图数：改 `game/terrain/rules.go` 顶部的常量与 `Command.Validate`。
+  - 调编辑距离、笔刷半径、建筑上限、地图数：改 `game/terrain/rules.go` 顶部的常量与 `ValidateCommand`。
   - 把拒绝分得更细（例如“太远”单独一个码）：在工程里 `roost add errcode` 加自己的码，在 `rules.go` 加一个 `Err…` 指向它，把对应的那处 `return` 换掉；不要改已有六个码的含义。
   - 多种建筑、朝向、建造消耗：在 `TerrainBuildingDao` 加字段（新字段用新的 store 键），在 `handlerTerrainBuild` 的事务里扣资源（同一个 Player 上的 wallet / bag 可以直接调）。
   - 不要改的地方：`ChunkUnique` / `SiteUnique` 的编号方式（它们决定持久实体号）、两个 DAO 已有的 store 键与集合名、“先查锁内 `Lots` 再写、提交后才发布视图”的次序。

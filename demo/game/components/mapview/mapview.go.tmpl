@@ -12,7 +12,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"{{MODULE}}/game/actor"
-	gamescene "{{MODULE}}/game/scene"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
@@ -94,11 +93,12 @@ func (c *Component) EnterScene(sceneID int64, space movement.Space, at spatial.P
 func (c *Component) LeaveScene() error { return c.body.Leave() }
 
 // Teleport 保留 demo 的可信瞬移规则，位置和停止当前移动现在一起随 Nest undo 回滚。
-func (c *Component) Teleport(terrain gamescene.Terrain, to spatial.Point) error {
-	if terrain == nil || !c.InScene() {
+// ground 是场景的地面（handler 交 gamescene.Terrain；这里只用它判断能否站立，见 view.MapGround）。
+func (c *Component) Teleport(ground view.MapGround, to spatial.Point) error {
+	if ground == nil || !c.InScene() {
 		return errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "no terrain or scene")
 	}
-	if !terrain.Standable(to) {
+	if !ground.Standable(to) {
 		from := c.Pos()
 		return errcode.Wrap(apperrors.ErrScenePosition, nil, "from_x", from.X, "from_y", from.Y, "to_x", to.X, "to_y", to.Y)
 	}

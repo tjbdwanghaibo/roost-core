@@ -96,7 +96,7 @@ func TestWorldExperienceOverflowLeavesTheDungeonClaimUnpaid(t *testing.T) {
 	}
 	level := subject.ProfileComp().Level()
 	_, err := syncsender.NewClaimDungeonSender(client).MultiSync_ClaimDungeon(context.Background(), subject.ID(), counters.ID(), "overflow-run", gameprofile.ProfileExpPerLevel, now, clearsSeason)
-	if err == nil || subject.ProfileComp().DungeonRunClaimed("overflow-run") || subject.ProfileComp().DungeonClears(clearsSeason) != 0 || subject.ProfileComp().Level() != level || subject.ProfileComp().Exp() != 0 || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 || len(committer.records) != 0 {
+	if err == nil || subject.DungeonLedgerComp().DungeonRunClaimed("overflow-run") || subject.DungeonLedgerComp().DungeonClears(clearsSeason) != 0 || subject.ProfileComp().Level() != level || subject.ProfileComp().Exp() != 0 || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 || len(committer.records) != 0 {
 		t.Fatalf("world overflow left a claim or reward committed: err=%v", err)
 	}
 }
@@ -156,8 +156,8 @@ func TestExperienceOverflowIsRefusedBeforeAnyWrite(t *testing.T) {
 		if code, _ := errcode.ClientError(handlerErr); code != 100004 {
 			t.Fatalf("%s: code=%d, want exp_amount (100004): %v", name, code, handlerErr)
 		}
-		if subject.ProfileComp().Exp() != 0 || subject.ProfileComp().Level() != level || subject.ProfileComp().DungeonRunClaimed("refused-run") || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 {
-			t.Fatalf("%s wrote before refusing: want level %d, exp=%d level=%d claimed=%v world=%d", name, level, subject.ProfileComp().Exp(), subject.ProfileComp().Level(), subject.ProfileComp().DungeonRunClaimed("refused-run"), counters.StatsComp().Snapshot().ExpGranted)
+		if subject.ProfileComp().Exp() != 0 || subject.ProfileComp().Level() != level || subject.DungeonLedgerComp().DungeonRunClaimed("refused-run") || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 {
+			t.Fatalf("%s wrote before refusing: want level %d, exp=%d level=%d claimed=%v world=%d", name, level, subject.ProfileComp().Exp(), subject.ProfileComp().Level(), subject.DungeonLedgerComp().DungeonRunClaimed("refused-run"), counters.StatsComp().Snapshot().ExpGranted)
 		}
 	}
 }

@@ -5,6 +5,7 @@ needs:
   mods: [nest]
   features: [entity, dao, protocol, errcode]
 entities: [TerrainChunk, TerrainBuilding]
+components: [TerrainChunkData, TerrainSite]
 entity: Player
 component: Terrain
 state:

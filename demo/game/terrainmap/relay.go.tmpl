@@ -238,7 +238,7 @@ func (m *Map) RelayPlace(ctx context.Context, playerID int64, seq uint64, p buil
 	if err != nil {
 		return RelayResult{}, err
 	}
-	keys := lot.Chunks()
+	keys := terrainsurface.LotChunks(lot)
 	sid, cells, err := ownerOfAll(keys, fw)
 	if err != nil {
 		return RelayResult{}, err
@@ -492,7 +492,7 @@ func (m *Map) execBuilding(ctx context.Context, req PartRequest) PartAnswer {
 		if lot, found = m.lotAnchoredAt(req.GX, req.GY); !found {
 			return refusedAnswer(fmt.Errorf("%w: anchor (%d, %d)", ErrNoBuilding, req.GX, req.GY))
 		}
-		keys = lot.Chunks()
+		keys = terrainsurface.LotChunks(lot)
 		if err := m.checkChunks(keys); err != nil {
 			return refusedAnswer(err)
 		}

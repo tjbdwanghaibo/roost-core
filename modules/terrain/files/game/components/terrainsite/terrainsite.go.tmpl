@@ -1,0 +1,99 @@
+// Package terrainsite 是一座建筑的权威记录（TerrainBuilding 上的组件 TerrainSite）：放置 / 拆除前的校验、写入与只读快照。
+// 数据全部在 TerrainBuildingDao 里，回滚统一走 DAO 的生成 setter 逆操作。
+package terrainsite
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+
+	logic "{{MODULE}}/game/terrain"
+	"{{MODULE}}/game/view"
+)
+
+// Owner 是 TerrainSite 组件的宿主（TerrainBuilding 的接线见 game/entities/terrain_building/site_component.go）：view 的
+// TerrainBuildingEntity，加上把 DAO 的同步脏位交给订阅主体（PublishSyncDirty，实体一侧）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	view.TerrainBuildingEntity
+	PublishSyncDirty()
+}
+
+// Component 是一座建筑的记录。方法只在本实体的 Nest 锁内调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；TerrainBuilding 在 game/entities/terrain_building/site_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("terrain_site component: owner %T does not implement terrainsite.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "terrain_site" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (c *Component) Owner() Owner { return c.owner }
+
+// OnInitFinish 在新建和冷加载后（DAO 已装好、实体发布之前）校验存档：身份、锚点对应的实体号、属主与版本。还没放置过
+// （Version 0）的记录不查；查不过的存档拒绝加载。
+func (c *Component) OnInitFinish(*entity.EntityCreateParam, bool) error {
+	d := c.owner.Dao()
+	if d.Id() != c.owner.ID() {
+		return logic.ErrState
+	}
+	if d.GetVersion() == 0 {
+		return nil
+	}
+	id, err := logic.SiteUnique(d.GetSceneID(), d.GetGX(), d.GetGY())
+	if err != nil || id != c.owner.UniqueID() || d.GetOwnerID() <= 0 || d.GetVersion() < 1 {
+		return logic.ErrState
+	}
+	return nil
+}
+
+// Validate 检查建筑命令 command 能否落在这条记录上：锚点对应本实体，放置时这里没有站着的建筑，拆除时站着且属主是 ownerID。
+func (c *Component) Validate(command view.TerrainCommand, ownerID int64) error {
+	id, err := logic.SiteUnique(command.SceneID, int32(command.X/core.SampleSpacing), int32(command.Y/core.SampleSpacing))
+	if err != nil || id != c.owner.UniqueID() {
+		return logic.ErrState
+	}
+	d := c.owner.Dao()
+	if d.GetVersion() == math.MaxInt64 {
+		return logic.ErrState
+	}
+	if command.Op == "build" {
+		if d.GetStanding() {
+			return logic.ErrOccupied
+		}
+	} else if !d.GetStanding() || d.GetOwnerID() != ownerID {
+		return logic.ErrDenied
+	}
+	return nil
+}
+
+// Set 记下建筑命令 command（放置或拆除，调用方已 Validate），版本加一，并把同步脏位交给订阅主体。
+func (c *Component) Set(command view.TerrainCommand, ownerID int64) {
+	d := c.owner.Dao()
+	d.SetSceneID(command.SceneID)
+	d.SetGX(int32(command.X / core.SampleSpacing))
+	d.SetGY(int32(command.Y / core.SampleSpacing))
+	d.SetOwnerID(ownerID)
+	d.SetStanding(command.Op == "build")
+	d.SetVersion(d.GetVersion() + 1)
+	c.owner.PublishSyncDirty()
+}
+
+// SceneID 是建筑所在场景（场景实体的唯一号；没放置过为 0）。
+func (c *Component) SceneID() int64 { return c.owner.Dao().GetSceneID() }
+
+// Snapshot 是建筑当前的快照：锚点（厘米）、是否站着与版本。
+func (c *Component) Snapshot() view.TerrainSiteState {
+	d := c.owner.Dao()
+	return view.TerrainSiteState{X: int64(d.GetGX()) * core.SampleSpacing, Y: int64(d.GetGY()) * core.SampleSpacing, Standing: d.GetStanding(), Version: d.GetVersion()}
+}

@@ -17,7 +17,7 @@ func handlerMonsterSpawn(target monster.IMonsterEntity, area scene.ISceneEntity,
 	if c.Body().Map.InScene() && c.Body().Map.SceneID() != area.ID() {
 		return view.MonsterSnapshot{}, fmt.Errorf("monster: different scene")
 	}
-	if err := a.Admit(target.ID()); err != nil {
+	if err := a.SceneMembersComp().Admit(target.ID()); err != nil {
 		return view.MonsterSnapshot{}, err
 	}
 	at, err := a.Space().Placement(c.SpawnPoint())

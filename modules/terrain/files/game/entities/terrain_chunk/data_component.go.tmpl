@@ -1,0 +1,24 @@
+package terrain_chunk
+
+import (
+	"{{MODULE}}/game/components/terrainchunkdata"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:TerrainChunkData}}
+const CompTypeTerrainChunkData entity.ComponentType = {{ID:component:TerrainChunkData}}
+
+// TerrainChunkDataComponent 是 game/components/terrainchunkdata 的组件在 TerrainChunk 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type TerrainChunkDataComponent = terrainchunkdata.Component
+
+// ITerrainChunkEntity is the narrow lock-safe view for Nest handlers using
+// this component. The generated Entity wire implements the getter.
+type ITerrainChunkEntity interface {
+	entity.IThreadSafeEntity
+	TerrainChunkDataComp() *TerrainChunkDataComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeTerrainChunkData, terrainchunkdata.NewComponent)
+}

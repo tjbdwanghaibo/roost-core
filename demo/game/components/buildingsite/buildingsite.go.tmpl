@@ -10,19 +10,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Placement 是一次放置请求（越过 Nest 边界的值，生成的 Sender 只依赖这里）：建筑配置 ID、修改参数值（个数不多于配置的
-// 槽数，没给的取缺省值，见 Spec.Normalize）、锚点节点（占地左下角的 1m 采样点）、朝向 0～3、是否整平地基。Params 由调用方
-// 交出、之后不再改。
-type Placement struct {
-	ConfigID int32
-	Params   []int32
-	GX, GY   int64
-	Facing   int32
-	Level    bool
-}
+// Placement 是一次放置请求（越过 Nest 边界的值）：view.BuildingPlacement 的别名（纯数据，定义在 game/view）。修改参数值
+// 个数不多于配置的槽数，没给的取缺省值，见 Spec.Normalize。
+type Placement = view.BuildingPlacement
 
-// Lot 是这次放置在配置 spec 上的占地：配置的宽高按朝向转（1、3 时互换）。朝向不合法时 ok 为 false。
-func (p Placement) Lot(spec Spec) (terrainsurface.Lot, bool) { return spec.Lot(p.GX, p.GY, p.Facing) }
+// PlacementLot 是放置 p 在配置 spec 上的占地：配置的宽高按朝向转（1、3 时互换）。朝向不合法时 ok 为 false。
+func PlacementLot(p Placement, spec Spec) (terrainsurface.Lot, bool) { return spec.Lot(p.GX, p.GY, p.Facing) }
 
 // Result 是一次放置 / 拆除 / 改参数（handler BuildingPlace / BuildingRemove / BuildingParams）的结果：Duplicate 表示这个（玩家, 序号）已经应用过、
 // 这次什么都没写；Building 是建筑此刻的状态（拆除后 State 为 0）；Chunks 是占地覆盖的每一块此后的地形版本（整平改了
@@ -50,19 +43,8 @@ type Rebase struct {
 	Misconfigured error
 }
 
-// State 是建筑的一份只读快照（Site 的字段；Params 是副本）。
-type State struct {
-	ID           int64
-	Standing     bool
-	Owner        int64
-	ConfigID     int32
-	Params       []int32
-	Facing       int32
-	Lot          terrainsurface.Lot
-	Foundation   int32 // 整平地基的世界高度（厘米）；Leveled 为 false 时没有意义
-	Leveled      bool
-	BaseRevision int64
-}
+// State 是建筑的一份只读快照：view.BuildingState 的别名（纯数据，定义在 game/view；含切片，比较用 StatesEqual）。
+type State = view.BuildingState
 
 // Owner 是 BuildingSite 组件的宿主（Building 的接线见 game/entities/building/site_component.go）：view 的 BuildingEntity，
 // 加上锚点（Anchor，由实体号算出）与把 DAO 的同步脏位交给订阅主体（PublishSyncDirty）。只在实体被 Nest 锁住期间使用。
@@ -189,8 +171,8 @@ func params(dao *db.BuildingDao) []int32 {
 	return out
 }
 
-// Equal 报告两份快照是否相同（State 含切片，不能用 ==）。
-func (s State) Equal(o State) bool {
+// StatesEqual 报告两份快照是否相同（State 含切片，不能用 ==）。
+func StatesEqual(s, o State) bool {
 	return s.ID == o.ID && s.Standing == o.Standing && s.Owner == o.Owner && s.ConfigID == o.ConfigID &&
 		slices.Equal(s.Params, o.Params) && s.Facing == o.Facing && s.Lot == o.Lot && s.Foundation == o.Foundation &&
 		s.Leveled == o.Leveled && s.BaseRevision == o.BaseRevision

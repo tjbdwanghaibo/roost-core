@@ -34,7 +34,7 @@ func TestSeqWindowAgreesWithTheUnboundedModel(t *testing.T) {
 			default:
 				seq = last + MaxSeqAhead + rng.Int64N(3) // 边界与越界
 			}
-			got := w.Check(seq)
+			got := CheckSeq(w, seq)
 			var want Verdict
 			switch {
 			case seq-last > MaxSeqAhead:
@@ -56,7 +56,7 @@ func TestSeqWindowAgreesWithTheUnboundedModel(t *testing.T) {
 				}
 				applied[seq] = true
 				last = max(last, seq)
-				w = w.Record(seq)
+				w = RecordSeq(w, seq)
 				if w.Last != last {
 					t.Fatalf("round %d step %d: last %d, want %d", round, step, w.Last, last)
 				}
@@ -68,32 +68,32 @@ func TestSeqWindowAgreesWithTheUnboundedModel(t *testing.T) {
 // 边界逐个钉住：窗口两端、第 63 位、整窗移出、从 0 起步、MaxInt64。
 func TestSeqWindowEdges(t *testing.T) {
 	var w SeqWindow
-	if w.Check(1) != Fresh || w.Check(MaxSeqAhead) != Fresh || w.Check(MaxSeqAhead+1) != Ahead {
+	if CheckSeq(w, 1) != Fresh || CheckSeq(w, MaxSeqAhead) != Fresh || CheckSeq(w, MaxSeqAhead+1) != Ahead {
 		t.Fatal("an empty ledger: 1 and MaxSeqAhead are fresh, MaxSeqAhead+1 is ahead")
 	}
-	w = w.Record(1)
+	w = RecordSeq(w, 1)
 	if w != (SeqWindow{Last: 1}) {
 		t.Fatalf("after 1: %+v (no bit for a sequence 0 that never existed)", w)
 	}
-	w = w.Record(100) // 1 落在第 98 位，超出 64 位：整窗移出
+	w = RecordSeq(w, 100) // 1 落在第 98 位，超出 64 位：整窗移出
 	if w != (SeqWindow{Last: 100}) {
 		t.Fatalf("after 1, 100: %+v", w)
 	}
 	// 100 − 1 = 99 > 64：1 已移出窗口，按过期处理；36 在窗口内、没应用过。
-	if w.Check(1) != Stale || w.Check(35) != Stale || w.Check(36) != Fresh || w.Check(99) != Fresh || w.Check(100) != Duplicate {
-		t.Fatalf("after 1, 100: 1 %v, 35 %v, 36 %v, 99 %v, 100 %v", w.Check(1), w.Check(35), w.Check(36), w.Check(99), w.Check(100))
+	if CheckSeq(w, 1) != Stale || CheckSeq(w, 35) != Stale || CheckSeq(w, 36) != Fresh || CheckSeq(w, 99) != Fresh || CheckSeq(w, 100) != Duplicate {
+		t.Fatalf("after 1, 100: 1 %v, 35 %v, 36 %v, 99 %v, 100 %v", CheckSeq(w, 1), CheckSeq(w, 35), CheckSeq(w, 36), CheckSeq(w, 99), CheckSeq(w, 100))
 	}
-	w = w.Record(36) // 第 63 位
-	if w.Bits != 1<<63 || w.Check(36) != Duplicate {
-		t.Fatalf("after 36: %+v, 36 %v", w, w.Check(36))
+	w = RecordSeq(w, 36) // 第 63 位
+	if w.Bits != 1<<63 || CheckSeq(w, 36) != Duplicate {
+		t.Fatalf("after 36: %+v, 36 %v", w, CheckSeq(w, 36))
 	}
-	w = w.Record(101) // 36 移出
-	if w.Check(36) != Stale || w.Check(100) != Duplicate || w.Bits != 1 {
+	w = RecordSeq(w, 101) // 36 移出
+	if CheckSeq(w, 36) != Stale || CheckSeq(w, 100) != Duplicate || w.Bits != 1 {
 		t.Fatalf("after 101: %+v", w)
 	}
-	w = w.Record(math.MaxInt64 - 1) // 测试里直接构造（真实请求受 MaxSeqAhead 限制）
-	w = w.Record(math.MaxInt64)
-	if w.Check(math.MaxInt64) != Duplicate || w.Check(math.MaxInt64-1) != Duplicate || w.Check(math.MaxInt64-2) != Fresh || w.Check(101) != Stale {
+	w = RecordSeq(w, math.MaxInt64 - 1) // 测试里直接构造（真实请求受 MaxSeqAhead 限制）
+	w = RecordSeq(w, math.MaxInt64)
+	if CheckSeq(w, math.MaxInt64) != Duplicate || CheckSeq(w, math.MaxInt64-1) != Duplicate || CheckSeq(w, math.MaxInt64-2) != Fresh || CheckSeq(w, 101) != Stale {
 		t.Fatalf("at MaxInt64: %+v", w)
 	}
 }

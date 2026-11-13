@@ -1,0 +1,114 @@
+// Package activityphase 是 World 上关闭活动窗口的业务：给每个活动窗口武装一个关窗的持久定时节点（按活动 id 幂等），
+// 节点到期时在 World 的同一笔事务里记下 activity.phase_due effect。定时器运行时（持久节点、驱动、逐次重建的调度器）
+// 是 World 的基础设施，在实体包的 game/entities/world/timer_component.go；这里只放武装、查找与到期回调的规则。
+package activityphase
+
+import (
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/effects"
+	"{{MODULE}}/game/view"
+)
+
+// TimerType 是关窗节点的定时器类型号：活动窗口（id 在 Payload 里）到了关闭阶段。类型号是找回回调的依据——存下来的
+// 节点带不了函数，只带一个号，World 的定时器组件按它把节点交回 OnDue。它是持久数据契约，不能改号。
+const TimerType int32 = 1
+
+// retry 是记不上 effect 时节点隔多久再试。
+const retry = 30 * time.Second
+
+// Owner 是 ActivityPhase 组件的宿主（World 的接线见 game/entities/world/activity_phase_component.go）：view 的
+// WorldEntity（定时节点存在 WorldDao.Timers 里），加上实体上建定时节点的适配 ArmActivityPhase（节点挂在 World 的
+// 定时器组件上，见 timer_component.go）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	view.WorldEntity
+	ArmActivityPhase(at time.Time, activityID string) int64
+}
+
+// Component 是 World 关闭活动窗口的规则。它不持有状态：节点全部在 WorldDao.Timers 里，随 DAO 一起回滚。
+// 方法只在 World 的 Nest 锁内调用（handler、定时器回调）。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；World 在 game/entities/world/activity_phase_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("activity_phase component: owner %T does not implement activityphase.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "activity_phase" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *Component) Owner() Owner { return component.owner }
+
+// Schedule arms the close deadline for one activity window, and reports
+// whether this call is the one that armed it.
+//
+// It is idempotent per activity id: every game process that loads this World
+// tries to arm the current window, and a second node for the same window
+// would fire the phase twice. (Firing twice is survivable — NotifyPhase is
+// idempotent per game sid — but a schedule that grows by one node per restart
+// is not.)
+//
+// A deadline that is not after now (the caller's business time) is already
+// due: it is armed for the next tick rather than refused, so a process that
+// starts after the deadline still closes the window.
+func (component *Component) Schedule(activityID string, at time.Time, now time.Time) (int64, bool) {
+	if activityID == "" {
+		return 0, false
+	}
+	if id, armed := component.Pending(activityID); armed {
+		return id, false
+	}
+	if !at.After(now) {
+		at = now
+	}
+	id := component.owner.ArmActivityPhase(at, activityID)
+	return id, id != 0
+}
+
+// Pending reports the node armed for an activity, if any.
+func (component *Component) Pending(activityID string) (int64, bool) {
+	found := int64(0)
+	component.owner.Dao().RangeTimers(func(id int64, stored *db.TimerNode) bool {
+		if stored != nil && stored.GetType() == TimerType && stored.GetPayload() == activityID {
+			found = id
+			return false
+		}
+		return true
+	})
+	return found, found != 0
+}
+
+// OnDue records the phase effect and retires the node; World's timer
+// component hands it every due node of TimerType.
+//
+// The return value is the retry: zero means "done, remove me", and a duration
+// means "come back then". That is how a failed Emit is handled — the node
+// stays and the window is closed late — rather than by logging and losing the
+// only thing that would have closed it. A phase that came due while the
+// process was down (fire.Overdue) is reported the same way: closing a window
+// late is the whole point of firing it after a restart.
+func (component *Component) OnDue(fire entitytimer.Fire) time.Duration {
+	activityID := string(fire.Payload)
+	if activityID == "" {
+		return 0
+	}
+	if err := effects.EmitActivityPhaseDue(activityID); err != nil {
+		slog.Error("world timer: activity phase effect not recorded; retrying",
+			"activity_id", activityID, "retry_in", retry, "err", err)
+		return retry
+	}
+	return 0
+}

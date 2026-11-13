@@ -40,7 +40,7 @@ import (
 // one (game/leaderboard/leaderboard_board.go says why the rank service's request ring cannot be it).
 //
 //roost:nest rollback=undo durability=strict
-func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity, runID string, amount int64, resolvedAtUnix int64, nowUnix int64, season int64) (dungeon.ClaimResult, error) {
+func handlerClaimDungeon(target player.IDungeonClaimEntity, stats world.IStatsEntity, runID string, amount int64, resolvedAtUnix int64, nowUnix int64, season int64) (dungeon.ClaimResult, error) {
 	if runID == "" || season <= 0 {
 		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonRun, nil, "run_id", runID, "season", season)
 	}
@@ -51,18 +51,18 @@ func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity,
 	if dungeon.ClaimWindowClosed(resolvedAtUnix, nowUnix) {
 		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonClaimWindow, nil, "run_id", runID, "resolved_at", resolvedAtUnix, "now", nowUnix)
 	}
-	if target.ProfileComp().DungeonRunClaimed(runID) {
+	if target.DungeonLedgerComp().DungeonRunClaimed(runID) {
 		// Already paid. Not an error: the client asked again for something it
 		// already has, and the honest answer is "nothing happened" — plus the
 		// current count, so the caller can bring the board up to it.
-		return dungeon.ClaimResult{Clears: target.ProfileComp().DungeonClears(season)}, nil
+		return dungeon.ClaimResult{Clears: target.DungeonLedgerComp().DungeonClears(season)}, nil
 	}
 	// 经验范围在写账本之前校验：超限的奖励不留下“已领取”记录，也不靠 undo 撤回账本。
 	if err := checkExpGrant(target, stats, amount); err != nil {
 		return dungeon.ClaimResult{}, err
 	}
-	if !target.ProfileComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
-		return dungeon.ClaimResult{Clears: target.ProfileComp().DungeonClears(season)}, nil
+	if !target.DungeonLedgerComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
+		return dungeon.ClaimResult{Clears: target.DungeonLedgerComp().DungeonClears(season)}, nil
 	}
 	gained, err := target.ProfileComp().AddExp(amount)
 	if err != nil {
@@ -72,6 +72,6 @@ func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity,
 	if err := stats.StatsComp().RecordExp(amount); err != nil {
 		return dungeon.ClaimResult{}, err
 	}
-	clears := target.ProfileComp().CountDungeonClear(season)
+	clears := target.DungeonLedgerComp().CountDungeonClear(season)
 	return dungeon.ClaimResult{Claimed: true, ExpGranted: amount, LevelsGained: gained, Clears: clears}, nil
 }

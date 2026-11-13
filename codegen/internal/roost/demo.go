@@ -452,9 +452,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "db/migrations/player_test.go", why: "plan writes nothing, apply backs up and rewrites, any failed check writes nothing, a live writer stops the run, rollback refuses documents written afterwards; the same flow on real Mongo"},
 		{write: "cmd/schemamigrate/main.go", why: "the operator tool for the migration: plan | apply | verify | rollback against the game's Mongo"},
 		// 档案（名字、等级、经验）是 profile 模块的：ProfileComponent 与 PlayerDao.Profile / ProfilePrivate 在最后的模块步骤
-		// 里装进来（demoModuleSteps）。下面两个文件是 demo 自己挂在那个组件上的东西——公会副本与副本领奖账本，不属于档案，
-		// 状态字段也在 demo 自己的 PlayerDao 里。它们与后面引用 ProfileComp() 的 handler 一样，等模块装好之后才一起编译。
-		{write: "game/components/profile/dungeon_ledger.go", why: "the exactly-once ledger for dungeon clear rewards and the per-season clear count, pruned on the write path"},
+		// 里装进来（demoModuleSteps）。副本领奖账本不属于档案，是 demo 自己的组件 DungeonLedger，状态字段在 demo 自己的
+		// PlayerDao 里；它的接线（领奖事务的 IDungeonClaimEntity 引用 ProfileComponent）与后面引用 ProfileComp() 的 handler
+		// 一样，等模块装好之后才一起编译。
+		{write: "game/components/dungeonledger/dungeonledger.go", why: "the exactly-once ledger for dungeon clear rewards and the per-season clear count, pruned on the write path"},
+		{write: "game/entities/player/dungeon_ledger_component.go", why: "wiring only: the component type, its name on Player (DungeonLedger), the factory registration, and the claim transaction's Player (ledger and profile in one lock); the logic is game/components/dungeonledger/dungeonledger.go"},
+		{write: "game/view/component_dungeonledger.go", why: "the DungeonLedger interface other game packages use and its Holder (view.PlayerEntity embeds it)"},
 		{write: "game/entities/player/entity.go", why: "EntityCategoryPlayer: the kind's lock rank, decided before the first document is persisted"},
 		{add: &AddOptions{Kind: "component", Name: "Stats", Entity: "World"}, why: "World's one job: server-wide counters"},
 		{add: &AddOptions{Kind: "dao", Name: "World", Entity: "World"}, why: "persistence for the counters"},
@@ -606,12 +609,15 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/controllers/player/move_target.go", why: "resolve the scene, start the walk, answer with where it starts"},
 		{write: "game/activity/activity.go", why: "what this game means by a timed server-wide event: window ids derived from the clock, what a point is worth, what settlement pays, and the board the game keeps because the coordinator has no enumeration"},
 		{write: "game/effects/activity_phase.go", why: "the timer's effect: a bus call recorded inside the World's lock and made outside it"},
-		{write: "game/entities/world/timer_component.go", why: "the World's timers, hand-written on the framework's entity timer runtime: persisted in WorldDao, rebuilt per call, fired inside the transaction that removes the node, the earliest deadline indexed by the framework's driver (the demo does not use roost add timer)"},
+		{write: "game/entities/world/timer_component.go", why: "the World's timers, hand-written on the framework's entity timer runtime: persisted in WorldDao, rebuilt per call, fired inside the transaction that removes the node, the earliest deadline indexed by the framework's driver (the demo does not use roost add timer); the callbacks are components' methods, reached through the owner"},
 		{write: "game/entities/world/timer_component_test.go", why: "the part only a test can show: a deadline armed before a restart still fires after one"},
+		{write: "game/components/activityphase/activityphase.go", why: "the business the World's timers carry: arm one close node per activity window (idempotent per id), find it, and on firing record the phase effect inside the World's transaction or ask to be retried"},
+		{write: "game/entities/world/activity_phase_component.go", why: "wiring only: the component type, its name on World (ActivityPhase), the factory registration; the logic is game/components/activityphase/activityphase.go"},
+		{write: "game/view/component_activityphase.go", why: "the ActivityPhase interface other game packages use and its Holder (view.WorldEntity embeds it)"},
 		{add: &AddOptions{Kind: "handler", Name: "TickWorldTimers", Entity: "World", Component: "Timer"}, why: "the driver delivers the tick when the earliest deadline is due; the firing happens under the World's lock"},
 		{write: "game/handler/tick_world_timers.go", why: "one call, and what it returns is how many deadlines are still armed"},
 		{write: "game/handler/tick_world_timers_test.go", why: "the driver delivers by name: the handler Nest registered must be the one the driver was built for"},
-		{add: &AddOptions{Kind: "handler", Name: "ArmActivity", Entity: "World", Component: "Timer"}, why: "every process arms the same window, so arming is idempotent per activity"},
+		{add: &AddOptions{Kind: "handler", Name: "ArmActivity", Entity: "World", Component: "ActivityPhase"}, why: "every process arms the same window, so arming is idempotent per activity"},
 		{write: "game/handler/arm_activity.go", why: "a second node for one window is a heap that grows by one per restart"},
 		{add: &AddOptions{Kind: "handler", Name: "SettleActivity", Entity: "World", Component: "Stats"}, why: "what the coordinator's result PAYS is the game's, recorded once per activity"},
 		{write: "game/handler/settle_activity.go", why: "mail first, record second, ack last — each step safe to repeat"},

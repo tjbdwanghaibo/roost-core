@@ -1,0 +1,12 @@
+package view
+
+// TerrainSite 是 TerrainBuilding 上 TerrainSite 组件对 game/ 下其它包公开的方法（实现在 game/components/terrainsite，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type TerrainSite interface {
+	Validate(command TerrainCommand, ownerID int64) error
+	Set(command TerrainCommand, ownerID int64)
+	SceneID() int64
+	Snapshot() TerrainSiteState
+}
+
+// TerrainSiteHolder 是“带有 TerrainSite 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TerrainSiteHolder interface{ TerrainSite() TerrainSite }

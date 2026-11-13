@@ -15,47 +15,30 @@ const WindowSize = 64
 // 否则一个接近 MaxInt64 的序号会把 LastSeq 推到顶，这个玩家此后再没有可用的新序号。客户端取号见 terrainmap.Map.Brush。
 const MaxSeqAhead = 1 << 20
 
-// Verdict 是账本对一个序号的判断。
-type Verdict uint8
+// Verdict 是账本对一个序号的判断（view.TerrainVerdict 的别名，值定义在 game/view）。
+type Verdict = view.TerrainVerdict
 
 const (
 	// Fresh：没应用过，可以执行（执行成功后 Record）。
-	Fresh Verdict = iota
+	Fresh = view.TerrainVerdictFresh
 	// Duplicate：已经应用过，这次什么都不做。
-	Duplicate
+	Duplicate = view.TerrainVerdictDuplicate
 	// Stale：低于窗口，已无法确定当时是否应用过；一律不执行（宁可不做，不做第二次）。
-	Stale
+	Stale = view.TerrainVerdictStale
 	// Ahead：比 LastSeq 大出 MaxSeqAhead 以上，不执行、不记。
-	Ahead
+	Ahead = view.TerrainVerdictAhead
 )
 
-func (v Verdict) String() string {
-	switch v {
-	case Fresh:
-		return "fresh"
-	case Duplicate:
-		return "duplicate"
-	case Stale:
-		return "stale"
-	case Ahead:
-		return "ahead"
-	}
-	return fmt.Sprintf("verdict(%d)", uint8(v))
-}
-
-// SeqWindow 是账本的值（纯数据，判定规则都在这里，便于单独证明）：Last 是已应用的最大序号（0 = 还没有），Bits 的第
-// i 位表示序号 Last−1−i 已应用。
+// SeqWindow 是账本的值（view.TerrainSeqWindow 的别名，纯数据）：Last 是已应用的最大序号（0 = 还没有），Bits 的第
+// i 位表示序号 Last−1−i 已应用。判定规则是下面两个函数 CheckSeq / RecordSeq，便于单独证明。
 //
-// 不变量：被 Record 过的序号 s 满足 s == Last，或 Last−WindowSize ≤ s < Last 且对应位为 1，或 s < Last−WindowSize。
-// 所以 Check 对 Record 过的序号只会答 Duplicate 或 Stale，不会答 Fresh——同一序号至多执行一次，与窗口外记录是否还在
-// 无关；窗口内没 Record 过的序号答 Fresh（乱序到达的请求照常执行）。
-type SeqWindow struct {
-	Last int64
-	Bits uint64
-}
+// 不变量：被 RecordSeq 过的序号 s 满足 s == Last，或 Last−WindowSize ≤ s < Last 且对应位为 1，或 s < Last−WindowSize。
+// 所以 CheckSeq 对记过的序号只会答 Duplicate 或 Stale，不会答 Fresh——同一序号至多执行一次，与窗口外记录是否还在
+// 无关；窗口内没记过的序号答 Fresh（乱序到达的请求照常执行）。
+type SeqWindow = view.TerrainSeqWindow
 
-// Check 判断序号 seq（须 ≥ 1）。
-func (w SeqWindow) Check(seq int64) Verdict {
+// CheckSeq 判断窗口 w 里的序号 seq（须 ≥ 1）。
+func CheckSeq(w SeqWindow, seq int64) Verdict {
 	switch {
 	case seq > w.Last:
 		if seq-w.Last > MaxSeqAhead {
@@ -72,10 +55,10 @@ func (w SeqWindow) Check(seq int64) Verdict {
 	return Fresh
 }
 
-// Record 返回记下 seq 之后的窗口。seq 必须是 Check 答 Fresh 的序号（调用方保证），否则窗口可能丢掉已有的位。
+// RecordSeq 返回 w 记下 seq 之后的窗口。seq 必须是 CheckSeq 答 Fresh 的序号（调用方保证），否则窗口可能丢掉已有的位。
 // 序号变大时窗口整体左移：原来的 Last 落到第 shift−1 位，移出 64 位的序号从此按过期处理（Go 的移位 ≥ 64 时结果为 0，
 // 恰好是“全部移出”）。
-func (w SeqWindow) Record(seq int64) SeqWindow {
+func RecordSeq(w SeqWindow, seq int64) SeqWindow {
 	if seq > w.Last {
 		shift := uint64(seq - w.Last)
 		bits := w.Bits << shift
@@ -126,12 +109,12 @@ func (component *Component) LastSeq() int64 { return component.owner.Dao().GetLa
 func (component *Component) PlayerID() int64 { return entity.GetUniqueIDFromEntityID(component.owner.ID()) }
 
 // Check 判断序号 seq（须 ≥ 1），只读。
-func (component *Component) Check(seq int64) Verdict { return component.Window().Check(seq) }
+func (component *Component) Check(seq int64) Verdict { return CheckSeq(component.Window(), seq) }
 
 // Record 记下已应用的序号 seq（须是 Check 答 Fresh 的序号）：在改块的同一笔事务里调用，事务回滚时由 setter 的逆操作
 // 一起撤销，所以“改了块”与“记下序号”要么都发生、要么都没发生。
 func (component *Component) Record(seq int64) {
-	next := component.Window().Record(seq)
+	next := RecordSeq(component.Window(), seq)
 	dao := component.owner.Dao()
 	dao.SetLastSeq(next.Last)
 	dao.SetWindow(int64(next.Bits))

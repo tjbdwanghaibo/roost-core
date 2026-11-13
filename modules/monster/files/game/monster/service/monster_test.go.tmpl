@@ -709,7 +709,7 @@ func checkMonsterReplacement(t *testing.T, operation string, replaceScene bool) 
 				return err
 			}
 			checkedArea = made.(*sceneentity.Scene)
-			if err := f.run(checkedArea, func(entity.IThreadSafeEntity) error { return checkedArea.Admit(id) }); err != nil {
+			if err := f.run(checkedArea, func(entity.IThreadSafeEntity) error { return checkedArea.SceneMembersComp().Admit(id) }); err != nil {
 				return err
 			}
 		} else {

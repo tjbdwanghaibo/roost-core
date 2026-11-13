@@ -57,8 +57,9 @@ type Player struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	mapComp *MapComponent       `comp:"CompTypeMap"`
-	dao     *db.PlayerDao     `dao:"player"`
+	mapComp       *MapComponent           `comp:"CompTypeMap"`
+	dungeonLedger *DungeonLedgerComponent `comp:"CompTypeDungeonLedger"`
+	dao           *db.PlayerDao           `dao:"player"`
 }
 
 // PublishSyncDirty hands whatever the generated DAO recorded as sync-dirty to

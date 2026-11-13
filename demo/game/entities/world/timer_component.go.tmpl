@@ -8,8 +8,12 @@
 //
 //   - the DAO fields (WorldDao.Timers / TimerSeed, db/def/world.go) and the
 //     Store adapter below that maps them onto entitytimer.Store;
-//   - the component, holding one entitytimer.Host per World, with the
-//     operations this game needs (arm a window's close, find it, tick);
+//   - the component, holding one entitytimer.Host per World, mapping each
+//     stored timer type to its callback, and ticking;
+//   - the callbacks themselves, which are business and live in a component
+//     package like every other rule (the activity window's close is
+//     game/components/activityphase, its node armed through ArmActivityPhase
+//     below) — the same split `roost add timer` and the modules use;
 //   - the tick handler (game/handler/tick_world_timers.go), whose Nest name is
 //     TimerTickHandler;
 //   - the driver, TimerDriver, which the game service binds to Nest and the
@@ -22,11 +26,10 @@ package world
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
-	"{{MODULE}}/game/effects"
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/activityphase"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
@@ -38,16 +41,13 @@ const CompTypeTimer entity.ComponentType = 2006
 
 // Timer types. The type is what finds the handler again after a restart: a
 // stored node cannot carry a function, so it carries a number that this
-// package maps back to one.
+// package maps back to one. Each type belongs to the component whose callback
+// it reaches (registerTimerHandlers).
 const (
 	// TimerTypeActivityPhase: the activity window whose id is in Payload has
-	// reached its close phase.
-	TimerTypeActivityPhase int32 = 1
+	// reached its close phase (activityphase.TimerType).
+	TimerTypeActivityPhase = activityphase.TimerType
 )
-
-// activityPhaseRetry is how long a phase timer waits before trying again when
-// it could not record its effect.
-const activityPhaseRetry = 30 * time.Second
 
 // TimerTickHandler is the Nest handler the driver delivers a due tick to
 // (handlerTickWorldTimers, game/handler/tick_world_timers.go). The Nest
@@ -93,6 +93,10 @@ var TimerDriver = entitytimer.NewDriver(entitytimer.Config{Name: "world.timer", 
 // default 0), then in the order they were armed (node id). The activity phase
 // arms at 0.
 //
+// The callbacks are not here: each one is a component's exported method
+// (ActivityPhase.OnDue), reached through the owner when the node fires, so
+// this component is only the runtime — register, tick, arm.
+//
 // A stored node whose type has no callback in this build (a type that was
 // removed) is reported once per type when the World loads, and dropped with a
 // warning and timer.unhandled_dropped_total{kind} when it comes due: keeping
@@ -128,9 +132,23 @@ func (component *TimerComponent) Name() string { return "timer" }
 
 func (component *TimerComponent) Owner() *World { return component.owner }
 
-// registerTimerHandlers maps each stored timer type to its callback.
+// registerTimerHandlers maps each stored timer type to its callback. It only
+// binds: the callback looks the owning component up when the node fires, by
+// which time every component of the World is built.
 func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
 	handlers.Register(TimerTypeActivityPhase, component.onActivityPhase)
+}
+
+// onActivityPhase hands a due close-phase node to the ActivityPhase component.
+func (component *TimerComponent) onActivityPhase(fire entitytimer.Fire) time.Duration {
+	return component.owner.ActivityPhaseComp().OnDue(fire)
+}
+
+// ArmActivityPhase is the ActivityPhase component's node adapter
+// (activityphase.Owner): the close-phase node for activityID at the business
+// time at, on this World's timer component.
+func (w *World) ArmActivityPhase(at time.Time, activityID string) int64 {
+	return w.TimerComp().host.NewTimerAt(at, TimerTypeActivityPhase, 0, 0, []byte(activityID))
 }
 
 // OnInitFinish records when this World was loaded and reports its earliest
@@ -147,70 +165,10 @@ func (component *TimerComponent) OnInitFinish(_ *entity.EntityCreateParam, isCre
 // delete, an aborted create).
 func (component *TimerComponent) OnDestroy(entity.EntityDestroyReason) { component.host.OnDestroy() }
 
-// ScheduleActivityPhase arms the close deadline for one activity window, and
-// reports whether this call is the one that armed it.
-//
-// It is idempotent per activity id: every game process that loads this World
-// tries to arm the current window, and a second node for the same window
-// would fire the phase twice. (Firing twice is survivable — NotifyPhase is
-// idempotent per game sid — but a schedule that grows by one node per restart
-// is not.)
-//
-// A deadline that is not after now (the caller's business time) is already
-// due: it is armed for the next tick rather than refused, so a process that
-// starts after the deadline still closes the window.
-func (component *TimerComponent) ScheduleActivityPhase(activityID string, at time.Time, now time.Time) (int64, bool) {
-	if activityID == "" {
-		return 0, false
-	}
-	if id, armed := component.PendingActivityPhase(activityID); armed {
-		return id, false
-	}
-	if !at.After(now) {
-		at = now
-	}
-	id := component.host.NewTimerAt(at, TimerTypeActivityPhase, 0, 0, []byte(activityID))
-	return id, id != 0
-}
-
-// PendingActivityPhase reports the node armed for an activity, if any.
-func (component *TimerComponent) PendingActivityPhase(activityID string) (int64, bool) {
-	found := int64(0)
-	component.owner.Dao().RangeTimers(func(id int64, stored *db.TimerNode) bool {
-		if stored != nil && stored.GetType() == TimerTypeActivityPhase && stored.GetPayload() == activityID {
-			found = id
-			return false
-		}
-		return true
-	})
-	return found, found != 0
-}
-
 // Tick fires everything due at now and returns how many nodes remain. The
 // tick handler calls it with TimerDriver.Now, the business time its Nest
 // message froze; tests pass the instant they want.
 func (component *TimerComponent) Tick(now time.Time) int { return component.host.TickAt(now) }
-
-// onActivityPhase records the phase effect and retires the node.
-//
-// The return value is the retry: zero means "done, remove me", and a duration
-// means "come back then". That is how a failed Emit is handled — the node
-// stays and the window is closed late — rather than by logging and losing the
-// only thing that would have closed it. A phase that came due while the
-// process was down (fire.Overdue) is reported the same way: closing a window
-// late is the whole point of firing it after a restart.
-func (component *TimerComponent) onActivityPhase(fire entitytimer.Fire) time.Duration {
-	activityID := string(fire.Payload)
-	if activityID == "" {
-		return 0
-	}
-	if err := effects.EmitActivityPhaseDue(activityID); err != nil {
-		slog.Error("world timer: activity phase effect not recorded; retrying",
-			"activity_id", activityID, "retry_in", activityPhaseRetry, "err", err)
-		return activityPhaseRetry
-	}
-	return 0
-}
 
 // worldTimerStore maps WorldDao's two timer fields onto entitytimer.Store.
 // Writes go through the generated mutators, so they roll back with the

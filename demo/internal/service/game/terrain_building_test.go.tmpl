@@ -106,7 +106,7 @@ func tower(gx, gy int64) buildingsite.Placement { return buildingsite.Placement{
 
 // sameBuildings 比较两组建筑快照（State 含参数切片，不能用 ==）。
 func sameBuildings(a, b []buildingsite.State) bool {
-	return slices.EqualFunc(a, b, buildingsite.State.Equal)
+	return slices.EqualFunc(a, b, buildingsite.StatesEqual)
 }
 
 // buildingAt 是锚点 (gx, gy) 上建筑实体的状态；没有实体时是零值。
@@ -174,7 +174,7 @@ func checkBuildingRecords(t *testing.T, p *terrainProcess) {
 	owners := map[int64]int64{}
 	for i, b := range standing {
 		for _, o := range standing[i+1:] {
-			if b.Lot.Overlaps(o.Lot) {
+			if terrainsurface.LotsOverlap(b.Lot, o.Lot) {
 				t.Fatalf("buildings %v and %v overlap", b.Lot, o.Lot)
 			}
 		}
@@ -183,7 +183,7 @@ func checkBuildingRecords(t *testing.T, p *terrainProcess) {
 		}
 		byLot[b.Lot] = b
 		owners[b.Owner]++
-		for _, key := range b.Lot.Chunks() {
+		for _, key := range terrainsurface.LotChunks(b.Lot) {
 			if !slices.Contains(chunkLots(t, p, key), b.Lot) {
 				t.Fatalf("chunk %v does not record the lot of building %v", key, b.Lot)
 			}
@@ -198,8 +198,8 @@ func checkBuildingRecords(t *testing.T, p *terrainProcess) {
 		}
 		want := terrainsurface.OccupancyOf(key, lots)
 		for index := int32(0); index < terrain.ChunkPoints; index++ {
-			if p.m.Occupied(key, index) != want.Has(index) {
-				t.Fatalf("chunk %v point %d: walkers see occupied %v, the chunk's lots say %v", key, index, p.m.Occupied(key, index), want.Has(index))
+			if p.m.Occupied(key, index) != terrainsurface.Occupied(&want, index) {
+				t.Fatalf("chunk %v point %d: walkers see occupied %v, the chunk's lots say %v", key, index, p.m.Occupied(key, index), terrainsurface.Occupied(&want, index))
 			}
 		}
 	}
@@ -383,7 +383,7 @@ func TestBuildingPlacementAppliesOncePerSeq(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10))
-	if err != nil || !again.Duplicate || !again.Building.Equal(first.Building) {
+	if err != nil || !again.Duplicate || !buildingsite.StatesEqual(again.Building, first.Building) {
 		t.Fatalf("the same placement again: %+v, %v", again, err)
 	}
 	if _, err := p.m.Brush(p.ctx, buildingOwner, 2, terrain.Brush{Op: terrain.BrushPaint, X: 9000, Y: 9000, Radius: 300, Material: 9}); err != nil {
@@ -480,7 +480,7 @@ func TestWalkersGoAroundBuildings(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, pt := range route.Points {
-			if cell := w.Cell(pt); lot.Contains(cell.X, cell.Y) {
+			if cell := w.Cell(pt); terrainsurface.LotContains(lot, cell.X, cell.Y) {
 				return true
 			}
 		}
@@ -637,7 +637,7 @@ func TestBuildingsAcrossABaseRevision(t *testing.T) {
 	for i := range got {
 		w := want[i]
 		w.BaseRevision = 2
-		if !got[i].Equal(w) {
+		if !buildingsite.StatesEqual(got[i], w) {
 			t.Fatalf("building %d after the revision: %+v, want %+v", i, got[i], w)
 		}
 	}

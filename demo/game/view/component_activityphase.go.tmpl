@@ -1,0 +1,17 @@
+package view
+
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+)
+
+// ActivityPhase 是 World 上 ActivityPhase 组件对 game/ 下其它包公开的方法（实现在 game/components/activityphase，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type ActivityPhase interface {
+	Schedule(activityID string, at time.Time, now time.Time) (int64, bool)
+	Pending(activityID string) (int64, bool)
+	OnDue(fire entitytimer.Fire) time.Duration
+}
+
+// ActivityPhaseHolder 是“带有 ActivityPhase 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type ActivityPhaseHolder interface{ ActivityPhase() ActivityPhase }

@@ -23,7 +23,8 @@
     - `Enter(value, at)` / `Leave(value)` / `QueueMove(value, at)`：把一个实体放进 / 移出 / 移动这张图的视野索引（怪物、地形块、建筑等非玩家实体用 `Enter` 显示）。
     - `Placement(preferred)`：先试给定点，再试出生点，返回一个能站的位置。
     - `RegionsAt(at)`、`Object(id)`（`game/scene/regions.go`）：某点所在的区域号、按号取交互对象。
-  - Scene 实体（`game/entities/scene/entity.go`）：`Admit(id)` / `Depart(id)`（成员账本，必须与对应的 actor 同时持锁；`Admit` 在已关闭 / 正在关闭时返回 `scene_unavailable`，满员返回 `scene_full`）、`Environment()`（交给 actor 的环境）、`TimeDomain()`、`Config()`。
+  - Scene 的成员账本是组件 `SceneMembersComp()`（`game/components/scenemembers`，`view.SceneMembers`）：`Admit(id)` / `Depart(id)`（必须与对应的 actor 同时持锁；`Admit` 在已关闭 / 正在关闭时返回 `scene_unavailable`，满员返回 `scene_full`）、`Close()`、`BeginClosing()`。
+  - Scene 实体（`game/entities/scene/entity.go`）只留运行期对象：`Environment()`（交给 actor 的环境）、`TimeDomain()`、`Config()`、`Space()`，以及成员账本组件用的适配 `Capacity` / `MemberLoaded` / `ForgetMember` / `CloseSpace`（`members_component.go`）。
   - Nest handler（`game/handler/`）：`handlerSceneChange`（`rollback=undo durability=async`，Player 与至多两张 Scene 同一笔事务）、`handlerSceneInteract`（`durability=strict`）、`handlerSceneTime`（改场景时间倍率，只给可信管理逻辑：`sender.NewSceneTimeSender(client).Sync_SceneTime(ctx, sceneEntityID, rate)`）、`handlerSceneClose`、`handlerSceneBeginClosing`、`handlerSceneEvacuate`（后三个由 `Manager` 内部使用）。
 - **登记点**
   - `OnSceneFields(name string, fields ...string)`（`game/components/scene/sync.go`）：登记“附近的人能看到 Player 的哪些顶层字段”。只在 `init` 登记；没登记的字段默认只有本人能看。模块自己登记了 `Actor`（位置与朝向）。

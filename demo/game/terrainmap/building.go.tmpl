@@ -150,7 +150,7 @@ func (t *occupancyTable) publish(key terrain.ChunkKey, rev int64, lots []terrain
 func (t *occupancyTable) occupied(key terrain.ChunkKey, index int32) bool {
 	if slot := t.slot(key); slot != nil {
 		if s := slot.Load(); s != nil {
-			return s.bits.Has(index)
+			return terrainsurface.Occupied(&s.bits, index)
 		}
 	}
 	return false
@@ -267,7 +267,7 @@ func (m *Map) ReplicaLots(key terrain.ChunkKey) (int64, []int64) {
 		if s := slot.Load(); s != nil {
 			packed := make([]int64, len(s.lots))
 			for i, l := range s.lots {
-				packed[i] = l.Pack()
+				packed[i] = terrainsurface.PackLot(l)
 			}
 			return s.rev, packed
 		}
@@ -373,7 +373,7 @@ func (m *Map) Remove(ctx context.Context, playerID int64, seq uint64, gx, gy int
 	if !found {
 		return buildingsite.Result{}, fmt.Errorf("%w: anchor (%d, %d)", ErrNoBuilding, gx, gy)
 	}
-	keys := lot.Chunks()
+	keys := terrainsurface.LotChunks(lot)
 	if err := m.checkChunks(keys); err != nil {
 		return buildingsite.Result{}, err
 	}
@@ -418,7 +418,7 @@ func (m *Map) SetParams(ctx context.Context, playerID int64, seq uint64, gx, gy 
 	if !found {
 		return buildingsite.Result{}, fmt.Errorf("%w: anchor (%d, %d)", ErrNoBuilding, gx, gy)
 	}
-	if err := m.checkChunks(lot.Chunks()); err != nil {
+	if err := m.checkChunks(terrainsurface.LotChunks(lot)); err != nil {
 		return buildingsite.Result{}, err
 	}
 	if rate := m.policy.EditPointsPerSecond; rate > 0 && !m.quota.take(playerID, m.policy.MinEditPoints, rate) {
@@ -468,7 +468,7 @@ func (m *Map) checkPlacement(playerID int64, seq uint64, p buildingsite.Placemen
 	if err != nil {
 		return terrainsurface.Lot{}, nil, err
 	}
-	keys := lot.Chunks()
+	keys := terrainsurface.LotChunks(lot)
 	if err := m.checkChunks(keys); err != nil {
 		return terrainsurface.Lot{}, nil, err
 	}
@@ -491,11 +491,11 @@ func (m *Map) checkPlacementParams(playerID int64, seq uint64, p buildingsite.Pl
 	if spec.MustLevel && !p.Level {
 		return terrainsurface.Lot{}, fmt.Errorf("%w: building config %d must be placed on a levelled foundation", ErrBuild, p.ConfigID)
 	}
-	lot, ok := p.Lot(spec)
+	lot, ok := buildingsite.PlacementLot(p, spec)
 	if !ok {
 		return terrainsurface.Lot{}, fmt.Errorf("%w: config %d facing %d", ErrBuild, p.ConfigID, p.Facing)
 	}
-	if err := lot.Valid(m.meta); err != nil {
+	if err := terrainsurface.ValidLot(lot, m.meta); err != nil {
 		return terrainsurface.Lot{}, fmt.Errorf("%w: %w", ErrBuild, err)
 	}
 	return lot, nil
@@ -517,7 +517,7 @@ func (m *Map) checkChunks(keys []terrain.ChunkKey) error {
 // levelPoints 是整平这份占地在视图当前数据上会改高度的节点数（配额估算，锁外的快照；规则同 levelPlan）。
 func (m *Map) levelPoints(lot terrainsurface.Lot) int {
 	data := map[terrain.ChunkKey]terrain.Chunk{}
-	for _, key := range lot.Chunks() {
+	for _, key := range terrainsurface.LotChunks(lot) {
 		c, _, loaded := m.view.Chunk(key)
 		if !loaded {
 			return 0
@@ -585,7 +585,7 @@ func (m *Map) levelPlan(lot terrainsurface.Lot, data map[terrain.ChunkKey]terrai
 	plan := levelPlan{min: math.MaxUint16}
 	var sum, n int64
 	for key, c := range data {
-		lot.Nodes(key, func(index int32) {
+		terrainsurface.LotNodes(lot, key, func(index int32) {
 			h := c.Heights[index]
 			sum += int64(h)
 			n++
@@ -597,7 +597,7 @@ func (m *Map) levelPlan(lot terrainsurface.Lot, data map[terrain.ChunkKey]terrai
 	}
 	plan.target = uint16((sum + n/2) / n)
 	for key, c := range data {
-		lot.Nodes(key, func(index int32) {
+		terrainsurface.LotNodes(lot, key, func(index int32) {
 			if c.Heights[index] != plan.target {
 				plan.changes++
 			}
@@ -616,7 +616,7 @@ func (m *Map) buildingSurfaces(targets []terrain_chunk.ISurfaceEntity, lot terra
 		ka, kb := a.Owner().Key(), b.Owner().Key()
 		return cmp.Or(cmp.Compare(ka.Y, kb.Y), cmp.Compare(ka.X, kb.X))
 	})
-	want := lot.Chunks()
+	want := terrainsurface.LotChunks(lot)
 	if len(want) != len(surfaces) {
 		return nil, fmt.Errorf("%w: the lot %v covers %d chunks, the transaction holds %d", ErrBuild, lot, len(want), len(surfaces))
 	}
@@ -660,8 +660,8 @@ func (m *Map) groundOf(surfaces []*terrain_chunk.SurfaceComponent, lot terrainsu
 			return groundCheck{}, err
 		}
 		var hit int32 = -1
-		lot.Nodes(key, func(index int32) {
-			if hit < 0 && (occupancy.Has(index) || m.rules != nil && m.rules.Occupied(key, index)) {
+		terrainsurface.LotNodes(lot, key, func(index int32) {
+			if hit < 0 && (terrainsurface.Occupied(&occupancy, index) || m.rules != nil && m.rules.Occupied(key, index)) {
 				hit = index
 			}
 		})
@@ -692,7 +692,7 @@ func (m *Map) checkGround(spec buildingsite.Spec, lot terrainsurface.Lot, level 
 	for key, c := range g.data {
 		water := m.view.WaterLevelOf(key)
 		var wet int32 = -1
-		lot.Nodes(key, func(index int32) {
+		terrainsurface.LotNodes(lot, key, func(index int32) {
 			h := c.Heights[index]
 			if level {
 				h = plan.target
@@ -715,7 +715,7 @@ func (m *Map) level(surfaces []*terrain_chunk.SurfaceComponent, lot terrainsurfa
 		key := surface.Owner().Key()
 		c := g.data[key]
 		var edits []terrainsurface.PointEdit
-		lot.Nodes(key, func(index int32) {
+		terrainsurface.LotNodes(lot, key, func(index int32) {
 			if c.Heights[index] != target {
 				edits = append(edits, terrainsurface.PointEdit{Index: index, Height: target, Material: c.Materials[index]})
 			}
@@ -773,7 +773,7 @@ func (m *Map) applyPlace(targets []terrain_chunk.ISurfaceEntity, site building.I
 	if spec.MustLevel && !p.Level {
 		return buildingsite.Result{}, fmt.Errorf("%w: building config %d must be placed on a levelled foundation", ErrBuild, p.ConfigID)
 	}
-	lot, ok := p.Lot(spec)
+	lot, ok := buildingsite.PlacementLot(p, spec)
 	if !ok {
 		return buildingsite.Result{}, fmt.Errorf("%w: config %d facing %d", ErrBuild, p.ConfigID, p.Facing)
 	}
@@ -992,7 +992,7 @@ func (m *Map) ReconcileBuildings(ctx context.Context) (BuildingStats, error) {
 	slices.SortFunc(lots, func(a, b terrainsurface.Lot) int { return cmp.Or(cmp.Compare(a.GY, b.GY), cmp.Compare(a.GX, b.GX)) })
 	stats.Standing = len(lots)
 	for _, lot := range lots {
-		keys := lot.Chunks()
+		keys := terrainsurface.LotChunks(lot)
 		if err := m.checkChunks(keys); err != nil {
 			stats.Mismatched++
 			slog.Error("terrain: a building's lot covers a chunk this process cannot write or load; left as it is", "lot", lot.String(), "err", err)
@@ -1006,7 +1006,7 @@ func (m *Map) ReconcileBuildings(ctx context.Context) (BuildingStats, error) {
 		if err != nil {
 			return stats, err
 		}
-		verdict, err := m.buildingSender.MultiGroupSync_BuildingRebase(ctx, chunkIDs, site.ID(), lot.Pack())
+		verdict, err := m.buildingSender.MultiGroupSync_BuildingRebase(ctx, chunkIDs, site.ID(), terrainsurface.PackLot(lot))
 		switch {
 		case errors.Is(err, ErrLotMismatch):
 			stats.Mismatched++
@@ -1029,7 +1029,7 @@ func (m *Map) ReconcileBuildings(ctx context.Context) (BuildingStats, error) {
 			slog.Warn("terrain: a building's config no longer matches it (config row removed or footprint changed); it is kept as it is",
 				"lot", lot.String(), "reason", verdict.Misconfigured.Error())
 		}
-		m.reconciled = append(m.reconciled, BuildingCommit{Building: site, Lot: lot, Standing: true, Revision: m.occupancy.revision(lot.Chunks()[0])})
+		m.reconciled = append(m.reconciled, BuildingCommit{Building: site, Lot: lot, Standing: true, Revision: m.occupancy.revision(terrainsurface.LotChunks(lot)[0])})
 	}
 	return stats, nil
 }
@@ -1085,7 +1085,7 @@ func (m *Map) ApplyRebase(targets []terrain_chunk.ISurfaceEntity, site building.
 			verdict.Levelled = true
 			for key, c := range g.data {
 				c = c.Clone()
-				lot.Nodes(key, func(index int32) { c.Heights[index] = target })
+				terrainsurface.LotNodes(lot, key, func(index int32) { c.Heights[index] = target })
 				g.data[key] = c
 			}
 		}

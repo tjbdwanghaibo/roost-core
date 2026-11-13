@@ -563,7 +563,7 @@ func encodeRelayAnswer(inc, id uint64, a terrainmap.PartAnswer) []byte {
 		w.int(int64(s.Facing))
 		lot := int64(0)
 		if s.Lot.W > 0 && s.Lot.H > 0 {
-			lot = s.Lot.Pack()
+			lot = terrainsurface.PackLot(s.Lot)
 		}
 		w.int(lot)
 		w.int(int64(s.Foundation))

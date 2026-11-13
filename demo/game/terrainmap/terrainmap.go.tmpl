@@ -1089,7 +1089,7 @@ func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedge
 		was := before[change.Key]
 		for i, p := range change.Points {
 			// 建筑占地在块的锁里读（块的 Lots，与放置同一把锁）；业务另外的占位经钩子。
-			if occupied.Has(p.Index) || m.rules != nil && m.rules.Occupied(change.Key, p.Index) {
+			if terrainsurface.Occupied(&occupied, p.Index) || m.rules != nil && m.rules.Occupied(change.Key, p.Index) {
 				return terrainsurface.BrushResult{}, fmt.Errorf("%w: chunk %v point %d", ErrOccupied, change.Key, p.Index)
 			}
 			edits[i] = terrainsurface.PointEdit{Index: p.Index, Height: p.Height, Material: p.Material}

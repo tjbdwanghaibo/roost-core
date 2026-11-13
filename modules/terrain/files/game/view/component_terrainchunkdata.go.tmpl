@@ -1,0 +1,18 @@
+package view
+
+import (
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// TerrainChunkData 是 TerrainChunk 上 TerrainChunkData 组件对 game/ 下其它包公开的方法（实现在 game/components/terrainchunkdata，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type TerrainChunkData interface {
+	State() TerrainChunkState
+	Lot(index int32) int64
+	Initialize(sceneID int64, key core.ChunkKey, baseRevision int64, base core.Chunk) error
+	Validate(sceneID int64, key core.ChunkKey, baseRevision int64) error
+	Apply(points []core.PointChange)
+	SetLots(indices []int32, id int64)
+}
+
+// TerrainChunkDataHolder 是“带有 TerrainChunkData 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TerrainChunkDataHolder interface{ TerrainChunkData() TerrainChunkData }

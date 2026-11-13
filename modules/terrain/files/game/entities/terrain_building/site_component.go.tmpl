@@ -1,0 +1,24 @@
+package terrain_building
+
+import (
+	"{{MODULE}}/game/components/terrainsite"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:TerrainSite}}
+const CompTypeTerrainSite entity.ComponentType = {{ID:component:TerrainSite}}
+
+// TerrainSiteComponent 是 game/components/terrainsite 的组件在 TerrainBuilding 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type TerrainSiteComponent = terrainsite.Component
+
+// ITerrainBuildingEntity is the narrow lock-safe view for Nest handlers using
+// this component. The generated Entity wire implements the getter.
+type ITerrainBuildingEntity interface {
+	entity.IThreadSafeEntity
+	TerrainSiteComp() *TerrainSiteComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeTerrainSite, terrainsite.NewComponent)
+}

@@ -45,9 +45,9 @@ func (component *Component) PlayerID() int64 { return entity.GetUniqueIDFromEnti
 // LastSeq 是本格已应用的最大序号（0 = 还没有）。
 func (component *Component) LastSeq() int64 { return component.owner.Dao().GetLastSeq() }
 
-// Check 判断序号 seq（须 ≥ 1），只读：同 SeqWindow.Check，但比 LastSeq 大多少都答 Fresh（超前由 Base 的账本判过）。
+// Check 判断序号 seq（须 ≥ 1），只读：同 terrainledger.CheckSeq，但比 LastSeq 大多少都答 Fresh（超前由 Base 的账本判过）。
 func (component *Component) Check(seq int64) terrainledger.Verdict {
-	if verdict := component.Window().Check(seq); verdict != terrainledger.Ahead {
+	if verdict := terrainledger.CheckSeq(component.Window(), seq); verdict != terrainledger.Ahead {
 		return verdict
 	}
 	return terrainledger.Fresh
@@ -55,7 +55,7 @@ func (component *Component) Check(seq int64) terrainledger.Verdict {
 
 // Record 记下本格已应用的序号 seq（须是 Check 答 Fresh 的序号），在同一笔事务里调用，回滚时一起撤销。
 func (component *Component) Record(seq int64) {
-	next := component.Window().Record(seq)
+	next := terrainledger.RecordSeq(component.Window(), seq)
 	dao := component.owner.Dao()
 	dao.SetLastSeq(next.Last)
 	dao.SetWindow(int64(next.Bits))

@@ -2,14 +2,12 @@ package terrain_building
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 	db "{{MODULE}}/db"
 	gamescene "{{MODULE}}/game/scene"
-	logic "{{MODULE}}/game/terrain"
 )
 
 const EntityKindTerrainBuilding entity.EntityKind = {{ID:entity:TerrainBuilding}}
@@ -17,59 +15,19 @@ const EntityKindTerrainBuilding entity.EntityKind = {{ID:entity:TerrainBuilding}
 //roost:entity id={{ID:entity:TerrainBuilding}} entityKind=EntityKindTerrainBuilding category=entity.EntityCategoryWorld sync=true syncNamespace="terrain-building" subjectPacker=NewTerrainBuildingSyncPacker service={{GAME_SERVICE}}
 type TerrainBuilding struct {
 	*entity.EntityBase
+	entity.ComponentManager
 	entity.DaoManager
-	dao *db.TerrainBuildingDao `dao:"terrain_building"`
-}
-type ITerrainBuildingEntity interface {
-	entity.IThreadSafeEntity
-	BuildingState() *TerrainBuilding
+	site *TerrainSiteComponent    `comp:"CompTypeTerrainSite"`
+	dao  *db.TerrainBuildingDao `dao:"terrain_building"`
 }
 
-func (b *TerrainBuilding) BuildingState() *TerrainBuilding { return b }
-func (b *TerrainBuilding) OnInitFinish(*entity.EntityCreateParam) error {
-	if b.Dao().Id() != b.ID() {
-		return logic.ErrState
-	}
-	d := b.Dao()
-	if d.GetVersion() == 0 {
-		return nil
-	}
-	id, err := logic.SiteUnique(d.GetSceneID(), d.GetGX(), d.GetGY())
-	if err != nil || id != b.UniqueID() || d.GetOwnerID() <= 0 || d.GetVersion() < 1 {
-		return logic.ErrState
-	}
-	return nil
-}
-func (b *TerrainBuilding) Validate(command logic.Command, ownerID int64) error {
-	id, err := logic.SiteUnique(command.SceneID, int32(command.X/100), int32(command.Y/100))
-	if err != nil || id != b.UniqueID() {
-		return logic.ErrState
-	}
-	d := b.Dao()
-	if d.GetVersion() == math.MaxInt64 {
-		return logic.ErrState
-	}
-	if command.Op == "build" {
-		if d.GetStanding() {
-			return logic.ErrOccupied
-		}
-	} else if !d.GetStanding() || d.GetOwnerID() != ownerID {
-		return logic.ErrDenied
-	}
-	return nil
-}
-func (b *TerrainBuilding) Set(command logic.Command, ownerID int64) {
-	d := b.Dao()
-	d.SetSceneID(command.SceneID)
-	d.SetGX(int32(command.X / 100))
-	d.SetGY(int32(command.Y / 100))
-	d.SetOwnerID(ownerID)
-	d.SetStanding(command.Op == "build")
-	d.SetVersion(d.GetVersion() + 1)
+// PublishSyncDirty 把 DAO 这笔事务改的同步脏位交给订阅主体（组件 TerrainSite 的 Owner 方法）。
+func (b *TerrainBuilding) PublishSyncDirty() {
 	if mask := b.TakeEntitySyncChanges(); mask != 0 {
 		b.MarkSyncDirty(mask)
 	}
 }
+
 func NewTerrainBuildingSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
 	owner := value.(*TerrainBuilding)
 	views, err := dataengine.NewSyncViewSet((*db.TerrainBuildingDao)(nil).SyncFields(), entity.NamedSyncView{Profile: gamescene.Public, Fields: []string{"*"}})

@@ -1,0 +1,25 @@
+package view
+
+// DungeonRun 是 Dungeon 实体上 DungeonRun 组件对 game/ 下其它包公开的方法（实现在 game/components/dungeonrun，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type DungeonRun interface {
+	Open(playerID, season, now int64) (DungeonSnapshot, error)
+	Defeated(instance string, epoch uint64, source string, sequence uint64, enemy string, now int64) (DungeonSnapshot, error)
+	View(playerID, now int64) (DungeonSnapshot, error)
+	Reward(playerID int64) (season, amount, resolvedAt int64, err error)
+}
+
+// DungeonRunHolder 是“带有 DungeonRun 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type DungeonRunHolder interface{ DungeonRun() DungeonRun }
+
+// DungeonSnapshot 是一局副本的只读进度（handler 的结果，越过 Nest 边界的值）：关卡实例与代数、修订号、阶段、
+// 当前关卡阶段、击杀数、结果（"success" / "failed"，未终局为空）与首次终局的时刻（秒，未终局为 0）。
+type DungeonSnapshot struct {
+	Instance       string
+	Epoch          uint64
+	Revision       uint64
+	Phase          string
+	Stage          string
+	Kills          int64
+	Result         string
+	ResolvedAtUnix int64
+}
