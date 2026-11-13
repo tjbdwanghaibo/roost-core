@@ -376,6 +376,10 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find, r
 - **位置不每拍落库**（D20 决定 ⑮）：`PosX/PosY/SceneID/Facing` 是 `nopersist,sync`；落库的是 `SavedSceneID/SavedPosX/SavedPosY/SavedFacing`，
   由 `MapBasic` 在离开场景时与在场景里每 10 秒（`actor.SavePeriod`，心跳 `"map.save"`）写一次、场景 / 位置 / 朝向都没变不写；进场景时
   以保存的位置为首选点、恢复保存的朝向。朝向和位置是同一份 MapBasic 数据（维护者 2026-10-22）：只转向也算变过，回滚随 DAO。
+  “离开场景”包括离开本进程：闲置卸载与换服交出（`playerEvictor`）在丢副本 / 交出之前先跑一次 `LeaveScene` 事务
+  （`game/handler/leave_scene.go`），SaveOnLeave 把最后的位置写进落库字段；只有仍在内存里的玩家才跑，不为它装载。
+  断线不离开地图：玩家留在内存里、周期落库照常，重连回到原处；崩溃仍可能丢最后不到 10 秒的走动
+  （`TestLeavingTheProcessSavesTheLastPosition`）。
 - **玩家不占地**（`Walkable` 而不是 `Occupy`）：两个玩家可以站在同一点，于是断线也没有残留占位要回收。占位留给真正会挡路的东西
   （地图里的墙、将来判定为实心的怪）。
 - **落点用 `Place` 向外一圈圈找**：地图每次重建，玩家记住的位置可能不再可用；返回最近的可站点，而不是"某个"可站点。

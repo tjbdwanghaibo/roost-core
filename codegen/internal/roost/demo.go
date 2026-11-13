@@ -595,6 +595,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/enter_scene.go", why: "a remembered position that is no longer usable becomes the nearest free one, not a failed login"},
 		{add: &AddOptions{Kind: "handler", Name: "PlayerPosition", Entity: "Player", Component: "Map"}, why: "a refused move answers with where the player still is; there is no cached copy to read instead"},
 		{write: "game/handler/player_position.go", why: "the read, under the Player's lock"},
+		{write: "game/handler/leave_scene.go", why: "a player leaving this process (idle unload, hand-off) leaves the map first, so SaveOnLeave stores its last position"},
 		{add: &AddOptions{Kind: "handler", Name: "MovePlayer", Entity: "Player", Component: "Map"}, why: "moving holds the Scene and the Player together: the stored position and the ground handed out have to agree"},
 		{write: "game/handler/move_player.go", why: "the two-entity teleport, kept as the reference to the server-driven walk; the terrain check stays in the component that owns the write"},
 		{write: "game/handler/move_target.go", why: "the server-driven walk: the route found once, a MoveTo or Follow started last, the steps taken on the player's heartbeat"},

@@ -1,0 +1,25 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+)
+
+// handlerLeaveScene takes a player off the map in its own transaction:
+// MapBasic.Leave saves the position first (SaveOnLeave: only when the scene,
+// the position or the facing changed since the last save), clears the scene
+// id and, after commit, leaves the AOI space.
+//
+// It is what a player leaving this process goes through — an idle unload, a
+// hand-off to another server (playerEvictor) — so the last steps are in the
+// saved fields before the copy is dropped, instead of whatever the 10-second
+// periodic save (actor.SavePeriod) last wrote. A player that is not on a map
+// has nothing to save: no error.
+//
+//roost:nest rollback=undo durability=async
+func handlerLeaveScene(target player.IMapEntity) error {
+	component := target.MapComp()
+	if !component.InScene() {
+		return nil
+	}
+	return component.LeaveScene()
+}

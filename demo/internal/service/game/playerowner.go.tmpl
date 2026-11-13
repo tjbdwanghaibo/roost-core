@@ -12,9 +12,11 @@ import (
 	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/game/settings"
 	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 )
@@ -713,6 +715,9 @@ func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (
 	if err != nil {
 		return nil, err
 	}
+	if err := evictor.leaveMap(ctx, subjectID); err != nil {
+		return nil, err
+	}
 	if evictor.scene != nil {
 		evictor.scene.Leave(ctx, subjectID)
 	}
@@ -740,6 +745,9 @@ type playerEvictor struct {
 	// handOff is the DataEngine Mod's HandOffEntity, used by DepartPlayer
 	// (a player changing servers). nil: no player can be handed off.
 	handOff entityHandOff
+	// nest runs the LeaveScene transaction that saves a loaded player's last
+	// position before it leaves this process (leaveMap).
+	nest corenest.Client
 }
 
 // entityHandOff is the slice of the DataEngine Mod a hand-off uses.
@@ -759,6 +767,9 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 	// 否则拒绝时人已经不在场景里了。
 	if playerKindIsResident() {
 		return fmt.Errorf("player evictor: player %d: %w", playerID, coreentity.ErrEntityResident)
+	}
+	if err := evictor.leaveMap(ctx, subjectID); err != nil {
+		return err
 	}
 	if evictor.scene != nil {
 		evictor.scene.Leave(ctx, subjectID)
@@ -783,6 +794,24 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 	default:
 		return err
 	}
+}
+
+// leaveMap 让一名仍在本进程内存里的玩家在他自己的事务里离开地图（handler LeaveScene → MapBasic.Leave）：
+// SaveOnLeave 先把最后的位置写进落库字段，再清场景号。离开本进程（闲置卸载、换服交出）都先走它，存档位置
+// 不再只靠 10 秒一次的周期落库。玩家不在内存里时什么都不做——不为了离开地图把他装载进来；不在地图上的玩家
+// handler 直接返回。失败时调用方不继续：卸载保留驻留记录、下一轮再试；换服在“离开”这一步失败、被中止。
+// 会等待（一次 Nest 请求），不能在 Nest 业务 worker 上调用。
+func (evictor playerEvictor) leaveMap(ctx context.Context, subjectID int64) error {
+	if evictor.nest == nil || evictor.manager == nil {
+		return nil
+	}
+	if evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer)) == nil {
+		return nil
+	}
+	if err := syncsender.NewLeaveSceneSender(evictor.nest).Sync_LeaveScene(ctx, subjectID); err != nil {
+		return fmt.Errorf("player evictor: save the position of player %d before it leaves: %w", coreentity.GetUniqueIDFromEntityID(subjectID), err)
+	}
+	return nil
 }
 
 // playerKindIsResident 报告 Player 这个 kind 是否声明了 lifetime=resident（`//roost:entity lifetime=resident`）。
