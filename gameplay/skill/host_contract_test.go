@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -868,5 +870,91 @@ func TestDefaultMemoryHostSupportsItsDeclaredResourceHandles(t *testing.T) {
 	}
 	if mana := host.ResourceForTest(1, "mana"); mana != 90 {
 		t.Fatalf("mana=%d", mana)
+	}
+}
+
+// serialHost 数 Host 调用的并发度：Host 契约第一条是“每个 Host 方法都在 Runtime 持有内部锁时调用、严格串行”，
+// 实现因此不需要自行同步（MemoryHost 就没有锁）。
+type serialHost struct {
+	Host
+	inflight, peak, calls atomic.Int64
+}
+
+func (h *serialHost) enter() func() {
+	h.calls.Add(1)
+	n := h.inflight.Add(1)
+	for peak := h.peak.Load(); n > peak && !h.peak.CompareAndSwap(peak, n); peak = h.peak.Load() {
+	}
+	return func() { h.inflight.Add(-1) }
+}
+
+func (h *serialHost) Advance(tick Tick) (WorldRevision, error) {
+	defer h.enter()()
+	return h.Host.Advance(tick)
+}
+func (h *serialHost) CurrentRevision() WorldRevision {
+	defer h.enter()()
+	return h.Host.CurrentRevision()
+}
+func (h *serialHost) Read(r ReadRequest) (ReadResult, error) {
+	defer h.enter()()
+	return h.Host.Read(r)
+}
+func (h *serialHost) Select(r SelectRequest) (SelectResult, error) {
+	defer h.enter()()
+	return h.Host.Select(r)
+}
+func (h *serialHost) PayCosts(p CostPayment) (CommitReceipt, error) {
+	defer h.enter()()
+	return h.Host.PayCosts(p)
+}
+func (h *serialHost) Apply(c EffectCommand) (EffectResult, error) {
+	defer h.enter()()
+	return h.Host.Apply(c)
+}
+func (h *serialHost) Events(after EventCursor) []RuntimeEvent {
+	defer h.enter()()
+	return h.Host.Events(after)
+}
+func (h *serialHost) ReadState(r StateReadRequest) (StateReadResult, error) {
+	defer h.enter()()
+	return h.Host.ReadState(r)
+}
+func (h *serialHost) ModifyState(c StateMutationCommand) (StateMutationResult, error) {
+	defer h.enter()()
+	return h.Host.ModifyState(c)
+}
+
+// 多个 goroutine 同时对一个 Runtime 施法、推进、读状态增量：Host 调用的并发度始终为 1，MemoryHost（无锁）在 -race 下
+// 不报竞争。这是 Runtime 一侧对 Host 契约“调用严格串行”的保证；“Host 不得重入 Runtime、不得阻塞”是 Host 实现一侧的义务
+// （Runtime 的锁不可重入，重入即死锁），由实现遵守，Runtime 不检测。
+func TestHostCallsStaySerialUnderConcurrentRuntimeCallers(t *testing.T) {
+	flow := `{"flow":"wait","ticks":2,"then":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}},{"flow":"finish"}]}}`
+	program, environment := compileRuntimeJSON(t, asyncSkillJSON("serial", `{"type":"entity"}`, flow))
+	memory := runtimeTestHost(environment)
+	const casters = 8
+	for id := EntityID(3); id <= casters+2; id++ {
+		memory.UpsertEntity(MemoryEntity{ID: id, Alive: true, Health: 100000, MaxHealth: 100000, Resources: map[string]int64{"mana": 100}})
+	}
+	host := &serialHost{Host: memory}
+	runtime := NewRuntime(host, RuntimeOptions{})
+	var wg sync.WaitGroup
+	var started atomic.Int64
+	for caster := EntityID(3); caster <= casters+2; caster++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 40 {
+				if _, err := runtime.Start(program, CastInput{Caster: caster, Target: 2}); err == nil {
+					started.Add(1)
+				}
+				_ = runtime.Advance(runtime.CurrentTick() + 1)
+				_ = runtime.StateDeltas(0, 16)
+			}
+		}()
+	}
+	wg.Wait()
+	if host.peak.Load() != 1 || started.Load() == 0 || host.calls.Load() < 100 {
+		t.Fatalf("host calls: peak concurrency %d (want 1), %d calls, %d casts started", host.peak.Load(), host.calls.Load(), started.Load())
 	}
 }
