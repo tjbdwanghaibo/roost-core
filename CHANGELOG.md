@@ -16,6 +16,38 @@
   - **Cell 区域心跳算 witness**：`QueryRadius` 每个观察者建去重 map 再排序、`seen` 逐个追加扩容、截断时 `sort.Slice` 每次比较重算距离；改为新增的 `spatial.BlockIndex.AppendRadius`（复用缓冲，不建 map）、按 (距离, ID) 排序复用的候选、每份视野只分配一次结果。截断时距离相同按 ID 取（原来是不稳定排序的任意次序）。`BenchmarkRegionWitnesses`（250 观察者、3100 对象）8.44ms → 4.27ms（−49%），12.5MiB → 2.8MiB、8733 → 1704 次分配；4 Cell 测量里区域拍 p50 约 10～13ms → 5～6ms。
   - **未解决**：Witness P99 ≤ 50ms 仍未稳定达标；主因是 Base 单个 NATS 订阅回调串行解码（全量刷新帧占状态条目八成以上）与本机超载，见 docs/performance/CELLWORLD.md。验证：spatial / sync policy / cellworld `-race` 整包，`infra/base`、`framework/sync`、`gameplay` 与根包测试。
 
+- **独立 Gate 慢链路纯追帧页的演练入口**（wiring/gate，2026-11-14，KNOWN-LIMITS 能力表 Lockstep“独立 Gate 慢链路上的纯追帧页”）：新增 `TestRealGateLockstepCatchupOverASlowLinkDrill`（`-tags integration`，要 `LS_DRILL_RATES`、`ROOST_DATAENGINE_IT_TOXIPROXY_URL` 与私有 NATS），与 2026-10-20 夜间补测第 10 项嵌入 TCP 演练同一参数（8 席、50 B 输入、30Hz、下行限速），经真实 Gate + Game Ingress；报服务端追帧结束、客户端回到头部、与“积压 /（链路 − 每秒新帧）”之比、Gate 是否关连接。没有行为改动。
+  - **验证**：私有 NATS + 私有 toxiproxy 上 300 帧冒烟：不限速 368ms 回到头部；256 KB/s 568ms、比值 1.10，连接不断、回到实时后帧流连续。3000 帧、256 / 64 KB/s 的正式测量未做；真实移动网络不在本机范围。
+
+- **自身视图整轮重试放大的演练入口**（wiring/selfsync，2026-11-14，KNOWN-LIMITS“self_sync/TCP/AOI 未测”第 7 条）：新增 `TestSelfSyncResidentBudgetRetryDrill`，只在 `ROOST_SELFSYNC_RETRY_DRILL=1` 时运行。真实嵌入 TCP + 正式装配的 Manager，全量比增量大（`DRILL_FULL_PAD`），预算可压到触发点（`DRILL_BUDGET` / `DRILL_MAX_PAYLOAD`），报 Flush / 重试 / 提交次数、全量与增量帧数和字节、`push_refused{retried|closed}`、丢失会话；断言只有不变式（不关连接、不丢会话、客户端基线不坏）。没有行为改动。
+  - **冒烟观察（已确认，方向待维护者决定）**：预算 16 KiB、全量约 4 KiB 时，20 或 100 个一直在读的玩家 10 秒 200 轮全部 `ErrRetryLater`、0 轮提交，每轮前 3 个会话重收全量、其余会话一帧也收不到；预算 64 KiB / 100 玩家时 60 轮重试 3 轮、每轮字节约为缺省预算的 1.8 倍。即一轮的“重收全量 + 其余帧”超过预算后放大自我维持，不只是“延迟上升”。证据与命令见 impl/04-sync §2C。独立 Gate + self_sync 重档夹具仍没有；重档参数下的测量未做。
+
+- **嵌入 TCP 出站驻留预算的停读演练**（infra/network/gateway，2026-11-14，KNOWN-LIMITS“嵌入 TCP 出站”的“停读客户端 / 更高推送量下是否够用”）：新增 `TestOutboundBudgetDrill`，只在 `ROOST_TCP_BUDGET_DRILL=1` 时运行（测量入口，参数见 [GATEWAY](docs/framework/GATEWAY.md)），报驻留峰值、`budget_exhausted`、溢出 / 写期限关闭与健康连接收到的帧；断言只有不变式（峰值不超预算、计数与推送端一致、健康连接不被关）。没有行为改动，没有加 Gauge（维护者已定）。
+  - **验证**：小规模冒烟（20 健康 + 10 停读、64 KiB 帧、预算压到 4 MiB）峰值 4129776 字节不超预算、拒绝计数一致；变异自检去掉预算的比较后峰值 20321120 字节，用例红。缺省 256 MiB 在 1000 健康 + N 停读、更高推送量下的测量未做。
+
+- **sync-aoi 压测工具逐 tick 采样 Interest 日志积压**（scripts/perf，2026-11-14，KNOWN-LIMITS“Interest 单写者 ⑧”的“运行中的积压没有采样”）：测量循环在每个 tick 的 Flush 之后（计时之外）读 `entitysync.interest.log_backlog`，`server.json` 新增 `log_backlog_per_tick`（样本数、非零 tick 数、条目数分位）；原来只有 `interest_metrics` 里运行末的值。没有框架行为改动。
+  - **验证**：`TestLogBacklogIsSampledFromTheInterestGauge`；变异自检（读错序列、汇总时改动样本顺序）都红；50 玩家 20 tick 的冒烟运行写出 20 个样本。16 视野诊断构建的复跑（测量）未做。
+
+- **匹配补位在真实 Redis 与两个匹配器实例上的用例**（wiring/integration，2026-11-14，KNOWN-LIMITS“匹配补位”）：新增 `TestMatchBackfillWithTwoMatchersOnRedis`（`-tags integration`，单机用 `REDIS_ADDR`、Cluster 用 `ROOST_REVIEW_CLUSTER`）。补位队列里房间票（Score = 空位数）+ 玩家票弹性成局，两个匹配器实例各用自己的连接与 `Store`、按相反票序提交互相重叠的票集合，玩家在匹配期间陆续排队，房间按剩余空位一轮轮挂票；断言每张票至多进一局、每局恰好一张房间票且玩家数不超过 Score、座位最终填满、存储里每张已匹配的票指向它的局。没有行为改动。
+  - **验证**：单机 Redis 与 3 主 Redis Cluster 各 `-race -count=5` 通过（每次 8～17 次匹配器之间的提交冲突）；变异自检把 `Commit` 的“票必须在等待”放宽为“只拒绝已取消”后用例红（`ticket … is in two matches …`）。
+  - **仍未覆盖**：用的是 party-room 夹具 `partymatch.Pass` 同一规则的副本，不经房间的进房 handler；补位吞吐没有测。
+
+- **组同步的慢消费者、独立 Gate 用例与容量基准**（wiring/selfsync、entitysync/policy，2026-11-14，KNOWN-LIMITS“组同步的容量与独立 Gate 用例”）：`TestGroupsOverTCPCloseAStalledMemberOnlyAndTheReconnectGetsTheGroupFull`（停读成员只断自己、同组在读的成员收到每次变化、重连全量是最新值）、`TestGroupsOverGateRecoverAfterEveryRefusedPush`（`-tags integration`，真实 Gate + NATS，6 轮拒收各经一次重连恢复；`newGateSelfHarness` 接上 `harnessGroups`）、`BenchmarkGroupViewFlush`（房间数 × 成员数四档）。两条用例变异“会话释放时不置回未订阅”后都变红（重连后只有 `player/self`、没有 `room/room`）。只加测试，行为不变；容量数据**未测**（等机器空闲）。
+
+- **玩家 TCP 写期限到期关闭连接时区分是哪一个期限**（infra/network/gateway，2026-11-14，KNOWN-LIMITS“独立 Gate 慢链路：先到期的是 write_timeout 还是单帧预算”）：新指标 `player_tcp_write_deadline_total{deadline="write_timeout"|"send_budget"}`，关闭原因的错误文本写明 `write_timeout (5s) ran out` 或 `the frame's send budget ... ran out`，带已写出 / 总字节数；`player_tcp_write_error_total` 口径不变。`TestAWriteCutOffByTheCallerDeadlineBeforeAnyByteIsARefusal` 修前 `player_tcp_write_deadline_total{deadline=write_timeout} grew by 0, want 1`。独立 Gate 慢链路演练上两者的实测分布与纯追帧页的影响**未测**（等机器空闲）。
+
+- **本地实体起服预加载加时间预算与数量上限**（dataengine / wiring，2026-11-13，KNOWN-LIMITS“预加载没有数量上限与时间预算”）：新配置 `dataengine.preload.timeout`（缺省 10m，最小 1s）限整次预加载，到期取消在途的查询与加载；`dataengine.preload.max_entities`（缺省 1000000）限全部 kind 合计载入的实体数。超出时 `Runtime.PreloadLocalEntities` 返回新哨兵 `engine.ErrLocalPreloadBudget`（超时同时满足 `context.DeadlineExceeded`），`dataengine.preload` Mod 让起服失败。API 变化：`PreloadLocalEntities(ctx, kinds, engine.LocalPreloadLimits)` 多一个参数（零值不限）。两个键并入生成器的 dataengine 配置段（`kitconfig_gen.go` 重新生成），不进入起步配置。先红：Mongo 卡住（列 ID 的查询不返回）时修前 `preload with a stuck Mongo did not return in 3s`；`TestPreloadLocalEntitiesGivesUpOnAStuckStoreAtItsTimeout`（枚举卡住与加载卡住两种）与 `TestPreloadLocalEntitiesStopsAtItsEntityLimit` 各自的变异（不设期限、不查上限）变红。验证：`framework/dataengine/engine` 预加载用例 `-race`、`wiring/dataengine` 整包、codegen `TestKitConfigSchemasMatchKitDeclarations` 与配置用例。
+
+- **文档：Lockstep 历史窗口与快照预算的核对表**（guide/04-sync §6，2026-11-13，KNOWN-LIMITS“历史窗口的取值”）：按帧率（30 / 60Hz）× 断线时长（10 / 30 / 60 秒）核对只追帧所需窗口，按快照大小（1 / 4 / 16 MiB）× 链路（随链路放慢 256 / 64 KB/s、独立 Gate）核对钉住期限与发送预算；由缺省值推算，实测格单独标注。结论：60Hz 下缺省窗口 3600 帧不够 60 秒断线（没有余量），16 MiB 快照在 60Hz 下超过缺省钉住期限；只改文档。
+
+- **sync-aoi 压测工具加 `-heartbeat-delivery=batch|dispatch`**（scripts/perf，2026-11-13，KNOWN-LIMITS“心跳模式的投递方式跟驱动缺省走、没有开关”）：心跳模式按开关设驱动的 `Delivery`（空是驱动缺省 `batch`），实际方式记进 `server.json` 的 `heartbeat.delivery`，未知值或全局循环模式下给值在启动校验时报错；说明见 HB-DRIVEN-LOAD 开关表。`TestHeartbeatDeliveryFlagReachesTheDriver` 修前不能编译（没有开关）、变异“不把方式交给驱动”后报 `driver delivery "batch", want "dispatch"`。两种方式的对照测量**未跑**（等机器空闲）。nest-game 夹具不在这次范围。
+
+- **删除 `gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn`**（2026-11-13，维护者选 B，KNOWN-LIMITS“跨格笔刷的演练与旧接口”）：v1.43.0 为跨格笔刷按格拆分而加，跨格笔刷 2026-11-10 改为直接拒绝后仓内没有调用方。只按部分计算的入口删除，`Apply` / `BrushChanges` 行为不变；`Footprint`（Base 预扣配额）保留，原拆分用例改为 Footprint 上限用例。仓外调用方改用 `Apply` / `BrushChanges`。
+
+- **嵌套类型字段上的 `persist` / `nopersist` / `sync` / `nosync` 生成期报错**（codegen dao，2026-11-13，KNOWN-LIMITS“嵌套字段的 `persist,nosync` 不生效”）：持久与同步只按 DAO 顶层字段决定，嵌套类型的全部字段随所在顶层字段整体落库、整体编进同步补丁（`sync_proto.go` 给嵌套类型生成同步消息、`template_nested.go` 生成持久路径都不看字段开关）。原来这些开关写在嵌套字段上被接受却不生效：v1.47 字段缺省“既持久又同步”后，嵌套类型里标了 `nosync` 的内部账本照样发给客户端。现在解析期拒绝，报错点名类型与字段，改法是把这部分状态拆进另一个嵌套类型、挂到单独的顶层字段上，在顶层字段写开关；嵌套字段上 `map=...` 与 `dao:"-"` 照常可用。Remote 视图里嵌套字段原来按 `nopersist` 跳过的分支随之删除（嵌套字段一律随所在字段进视图）。
+  - **行为变化**：嵌套字段上写了这四个开关的定义重新生成时报错，按报错拆字段。仓内模板、模块、夹具与 `scripts/testdata` 逐个扫过，只有 `codegen/internal/dao/testdata/remoteviews` 的 `Member.Transient`（`nopersist,nosync`）一处，已删除（它原来在 Remote 视图里被跳过、却照样落库与同步）。
+  - **先红后绿**：`TestParseRejectsPersistAndSyncOptionsOnNestedFields` 修前 `dao:"nosync" on a nested field was accepted; persistence and sync are per top-level field, so it would not take effect`；变异“放过 nosync”后同一用例变红。验证：`codegen/internal/dao/...` 整包。
+
 - **常驻实体 `lifetime=resident`**（entity / dataengine / codegen，2026-11-13，维护者要求“预加载的实体要能常驻内存”，用已有标记、不加新标记）：
   - **语义**：`//roost:entity ... lifetime=resident [preload_order=<N>]` 隐含 `preload=startup`（同写也可以），起服由本服预加载载入，之后框架不把它移出内存。只从内存卸载（`Destroy(..., deleteFromDB=false)`、`ManagerAccess.Unload`、业务的空闲卸载、不带 force 的运维 `entity.unload`）返回 `entity.ErrEntityResident`，实体不受影响，记 WARN 与 `entity.resident_unload_refused_total{kind}`。
   - **允许离开内存的三处**：换服交出 `HandOffEntity`（写权连同实体交给目标服，到那里载入后常驻；`Release` 时框架立刻载回本服）、删档（`deleteFromDB=true` 准入后的收尾）、运维强制刷新 `entity.unload force=true`（新 `Runtime.RefreshEntity`：卸载后立刻从库重新载入，回答 `reloaded`；常驻实体此刻不在内存时直接载回，用来恢复预加载或载回失败的那一个）。新指标 `dataengine.resident_reload_total{kind,reason,result}`。新增 `entity.WithResidentRelease`（只给这三处用）、`entity.IsEntityKindResident`、`entity.ErrResidentDaoScope`。

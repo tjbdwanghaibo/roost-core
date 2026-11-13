@@ -15,5 +15,4 @@ type Member struct {
 	Name      string           `store:"name"`
 	Scores    []int64          `store:"scores"`
 	Buffs     map[string]int64 `store:"buffs"`
-	Transient string           `dao:"nopersist,nosync" store:"transient"`
 }

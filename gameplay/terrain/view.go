@@ -219,21 +219,11 @@ func (v *View) Chunk(key ChunkKey) (c Chunk, version int64, loaded bool) {
 // 不复制块数据（装入的块不可变，直接读），只读，可以并发调用。参数先经 Validate；覆盖到的块没装着时返回 ErrNotLoaded。
 // 结果是读到时的快照：之后别的编辑提交了，锁内真正应用时改变的点数可能不同。
 func (v *View) BrushChanges(b Brush, limits Limits) (heights, materials int, err error) {
-	return v.BrushChangesIn(b, limits, nil)
-}
-
-// BrushChangesIn 是只数 part 里那几块的 BrushChanges（part 为 nil 时是覆盖到的全部块；口径同 Brush.ApplyIn）。为跨格编辑
-// 拆给各格而加（P5；跨格笔刷 2026-11-10 撤回后 game-demo 没有调用，保留为通用能力）。只有 part 里覆盖到的块需要装着。
-func (v *View) BrushChangesIn(b Brush, limits Limits, part []ChunkKey) (heights, materials int, err error) {
 	if err := b.Validate(v.meta, limits); err != nil {
 		return 0, 0, err
 	}
-	in := partSet(part)
 	chunks := map[ChunkKey]*viewChunk{}
 	for _, key := range b.Chunks(v.meta) {
-		if !in.has(key) {
-			continue
-		}
 		c := v.load(key)
 		if c == nil {
 			return 0, 0, fmt.Errorf("%w: brush needs chunk %v", ErrNotLoaded, key)

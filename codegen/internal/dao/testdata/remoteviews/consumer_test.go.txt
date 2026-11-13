@@ -53,7 +53,6 @@ func setup(t *testing.T) *alliance.Alliance {
 		m.SetName("member")
 		m.SetScores([]int64{7})
 		m.SetBuffs(map[string]int64{"power": 2})
-		m.SetTransient("private")
 		d.SetMembers(1, m)
 		d.SetMembers(2, nil)
 		d.SetProfile(&db.Member{})
@@ -115,9 +114,6 @@ func TestGeneratedFieldViews(t *testing.T) {
 	}
 	if _, ok := reflect.TypeOf(public).FieldByName("Treasury"); ok {
 		t.Fatal("private field exposed")
-	}
-	if _, ok := reflect.TypeOf(member.Members[1]).Elem().FieldByName("Transient"); ok {
-		t.Fatal("nonpersistent nested state exposed")
 	}
 	// 视图改动与 DAO 双向隔离，包括 map、切片、嵌套指针和 map 中的 []byte。
 	public.Tags[0] = "changed"

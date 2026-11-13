@@ -12,6 +12,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -528,3 +529,109 @@ func BenchmarkMirrorRenewView(b *testing.B) {
 		})
 	})
 }
+
+// byteSink 是只数字节的 Transport（基准用）。
+type byteSink struct{ bytes atomic.Int64 }
+
+func (s *byteSink) Push(_ context.Context, _ entitysync.SessionID, raw []byte) error {
+	s.bytes.Add(int64(len(raw)))
+	return nil
+}
+
+// 大联盟互见（KNOWN-LIMITS“AOI 视野的大联盟”）：players 个玩家同在一个共享关系视野里、互相可见（players² 对订阅），
+// 经真实 Manager 的 Flush（ApplySync，政策阶段在 Flush 里）。进场全量先收敛（不计入）；之后每轮 1% 成员变化一次、
+// Flush 一次。报告每轮耗时与字节、收敛后的堆（heap-MB，订阅表与视野登记的常驻内存）与订阅对数。
+// 测量：go test ./framework/sync/entitysync/policy -run '^$' -bench RelationViewAllianceFlush -benchtime 50x -count 3。
+func BenchmarkRelationViewAllianceFlush(b *testing.B) {
+	for _, players := range allianceSizes {
+		b.Run(fmt.Sprintf("players=%d", players), func(b *testing.B) {
+			benchAllianceFlush(b, players)
+		})
+	}
+}
+
+func benchAllianceFlush(b *testing.B, players int) {
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	transport := &byteSink{}
+	// 每个会话要容得下全体成员（缺省每会话 100 个对象）。
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: transport, Limits: frame.Limits{MaxObjects: players + 16}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = manager.Close(context.Background()) })
+	in, err := NewInterest(InterestConfig{Manager: manager, ApplyMode: ApplySync, MaxPlayersPerView: 1 << 20, AOI: AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: 100_000, Y: 100_000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+	}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(in.Close)
+	states := make([]*entity.SubjectSyncState, players)
+	ids := make([]int64, players)
+	for i := range players {
+		id := int64(10_000 + i)
+		ids[i] = id
+		states[i] = subjectState(b, id)
+		if err := manager.Register(states[i]); err != nil {
+			b.Fatal(err)
+		}
+		if err := manager.OpenSession(entitysync.SessionID(id)); err != nil {
+			b.Fatal(err)
+		}
+		// 彼此相距 300（离开半径 150）：空间视野里只有自己，可见全部来自联盟视野。
+		if err := in.Enter(id, id, spatial.Point{X: int64(i%300)*300 + 150, Y: int64(i/300)*300 + 150}, ObserverView{}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	const alliance = ViewID(1)
+	if err := in.DefineRelationView(alliance, entity.SyncProfile{}); err != nil {
+		b.Fatal(err)
+	}
+	if err := in.SetViewMembers(alliance, ids); err != nil {
+		b.Fatal(err)
+	}
+	for _, id := range ids {
+		if err := in.AttachView(id, alliance); err != nil {
+			b.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	// 进场全量：每会话每帧至多 MaxObjects 个对象，要若干次 Flush 才收敛；收敛判据是一次 Flush 不再发出字节。
+	for round := 0; ; round++ {
+		sent := transport.bytes.Load()
+		if err := manager.Flush(ctx); err != nil {
+			b.Fatal(err)
+		}
+		if round > 0 && transport.bytes.Load() == sent {
+			break
+		}
+		if round > 10_000 {
+			b.Fatal("the initial snapshots never converged")
+		}
+	}
+	runtime.GC()
+	var settled runtime.MemStats
+	runtime.ReadMemStats(&settled)
+	transport.bytes.Store(0)
+	b.ReportAllocs()
+	changed := max(players/100, 1)
+	rounds, next := 0, 0
+	for b.Loop() {
+		for range changed {
+			states[next].MarkDirty(1)
+			next = (next + 1) % players
+		}
+		if err := manager.Flush(ctx); err != nil {
+			b.Fatal(err)
+		}
+		rounds++
+	}
+	b.ReportMetric(float64(transport.bytes.Load())/float64(rounds), "bytes/round")
+	b.ReportMetric(float64(int64(settled.HeapAlloc)-int64(before.HeapAlloc))/(1<<20), "heap-MB")
+	b.ReportMetric(float64(players)*float64(players), "pairs")
+}
+
+// allianceSizes 是 BenchmarkRelationViewAllianceFlush 的人数档；冒烟时临时调小。
+var allianceSizes = []int{1000, 2000}

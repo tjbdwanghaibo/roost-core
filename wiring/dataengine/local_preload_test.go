@@ -3,7 +3,9 @@ package dataengine
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -31,5 +33,30 @@ func TestLocalPreloadModOrderingAndInit(t *testing.T) {
 	}
 	if err := empty.Start(); err != nil {
 		t.Fatalf("Start without kinds = %v, want nothing to do", err)
+	}
+}
+
+// 预算来自 dataengine.preload.*，Init 时按声明读一次：缺省 10 分钟、100 万个；写了的照写的；越界在 Init 报错并点名键。
+func TestLocalPreloadModReadsItsBudget(t *testing.T) {
+	mod := NewLocalPreloadMod()
+	if err := mod.Init(viper.New()); err != nil {
+		t.Fatal(err)
+	}
+	if mod.limits != (engine.LocalPreloadLimits{MaxEntities: 1000000, Timeout: 10 * time.Minute}) {
+		t.Fatalf("default budget %+v, want 1000000 entities and 10m", mod.limits)
+	}
+	cfg := viper.New()
+	cfg.Set("dataengine.preload.timeout", "90s")
+	cfg.Set("dataengine.preload.max_entities", 5000)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if mod.limits != (engine.LocalPreloadLimits{MaxEntities: 5000, Timeout: 90 * time.Second}) {
+		t.Fatalf("configured budget %+v, want 5000 entities and 90s", mod.limits)
+	}
+	bad := viper.New()
+	bad.Set("dataengine.preload.max_entities", 0)
+	if err := mod.Init(bad); err == nil || !strings.Contains(err.Error(), "dataengine.preload.max_entities") {
+		t.Fatalf("max_entities 0 = %v, want an error naming the key", err)
 	}
 }

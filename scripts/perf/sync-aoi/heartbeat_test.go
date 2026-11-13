@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -302,4 +303,43 @@ func heartbeatAccountingHolds(l *heartbeatLoad) error {
 		return errors.New("heartbeat mode measured no beats")
 	}
 	return nil
+}
+
+// -heartbeat-delivery 透传到驱动（KNOWN-LIMITS“心跳模式的投递方式没有开关”）：空串是驱动缺省（批量作业），dispatch / batch
+// 按值设定，记进 server.json 的 heartbeat.delivery；未知值与全局循环模式下给值都在校验时拒绝。
+func TestHeartbeatDeliveryFlagReachesTheDriver(t *testing.T) {
+	base := config{Nest: true, Mode: "periodic", ApplyMode: "sync", Players: 2, Entities: 16, Ticks: 10, Hz: 20, Dirty: 50, Padding: 8, Batches: 1,
+		Visible: 32, Block: 150, EnterRadius: 40, LeaveRadius: 40, MoveAmplitude: 48,
+		MoveDriver: moveDriverHeartbeat, MovePeriod: 50 * time.Millisecond, MoveSpeed: 400, Output: "unused", Role: "server"}
+	for _, tc := range []struct {
+		flag string
+		want heartbeat.Delivery
+	}{{"", heartbeat.DefaultDelivery}, {"dispatch", heartbeat.DeliveryDispatch}, {"batch", heartbeat.DeliveryBatch}} {
+		c := base
+		c.HeartbeatDelivery = tc.flag
+		if err := c.validate(); err != nil {
+			t.Fatalf("-heartbeat-delivery=%q: %v", tc.flag, err)
+		}
+		driver, err := newLoadDriver(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		load := &heartbeatLoad{driver: driver, stats: &moveStats{}, c: c}
+		if got := driver.Delivery(); got != tc.want {
+			t.Fatalf("-heartbeat-delivery=%q: driver delivery %q, want %q", tc.flag, got, tc.want)
+		}
+		if got := load.report()["delivery"]; got != string(tc.want) {
+			t.Fatalf("-heartbeat-delivery=%q: report delivery %v, want %q", tc.flag, got, tc.want)
+		}
+	}
+	c := base
+	c.HeartbeatDelivery = "fanout"
+	if err := c.validate(); err == nil {
+		t.Fatal("an unknown delivery was accepted")
+	}
+	c = base
+	c.MoveDriver, c.HeartbeatDelivery = moveDriverLoop, "dispatch"
+	if err := c.validate(); err == nil {
+		t.Fatal("-heartbeat-delivery was accepted with the loop driver, where it does nothing")
+	}
 }

@@ -154,6 +154,52 @@ type HeroDao struct {
 	}
 }
 
+// 嵌套类型的字段没有自己的持久 / 同步开关：持久与同步按 DAO 顶层字段整体决定，嵌套类型的全部字段随之落库、随之下发。
+// 嵌套字段上写 nosync / nopersist 曾被接受却不生效（标了 nosync 的内部账本照样进同步补丁发给客户端），所以在解析期拒绝，
+// 报错点名类型与字段并给出改法；不改开关的 map= 与整字段排除的 "-" 照常可用。
+func TestParseRejectsPersistAndSyncOptionsOnNestedFields(t *testing.T) {
+	for _, tag := range []string{`nosync`, `persist,nosync`, `nopersist,nosync`, `nopersist`, `persist`, `sync`, `persist,sync,map=fast`} {
+		_, err := parseSource(t, `package def
+
+//roost:dao coll=heroes db=game
+type HeroDao struct {
+	Wallet *Wallet `+"`"+`store:"wallet"`+"`"+`
+}
+
+type Wallet struct {
+	Coins  map[int64]int64 `+"`"+`store:"coins"`+"`"+`
+	Ledger map[int64]int64 `+"`"+`dao:"`+tag+`" store:"ledger"`+"`"+`
+}
+`)
+		if err == nil {
+			t.Fatalf("dao:%q on a nested field was accepted; persistence and sync are per top-level field, so it would not take effect", tag)
+		}
+		for _, want := range []string{"nested struct Wallet field Ledger", `dao:"` + tag + `"`, "top-level"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("dao:%q: err=%v, want it to contain %q", tag, err, want)
+			}
+		}
+	}
+	defs, err := parseSource(t, `package def
+
+//roost:dao coll=heroes db=game
+type HeroDao struct {
+	Wallet *Wallet `+"`"+`store:"wallet"`+"`"+`
+}
+
+type Wallet struct {
+	Coins   map[int64]int64 `+"`"+`dao:"map=fast" store:"coins"`+"`"+`
+	Scratch int64           `+"`"+`dao:"-"`+"`"+`
+}
+`)
+	if err != nil {
+		t.Fatalf("map= and - on nested fields must stay accepted: %v", err)
+	}
+	if got := defs.Nested[0].Fields; len(got) != 1 || got[0].Tag.Map != "fast" {
+		t.Fatalf("nested fields=%+v, want only Coins with map=fast", got)
+	}
+}
+
 func TestParseAcceptsExplicitTagIntents(t *testing.T) {
 	defs, err := parseSource(t, `package def
 

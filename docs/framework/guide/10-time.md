@@ -489,7 +489,7 @@ err = combat.DriveBuffs(combatcomponent.BuffDriveConfig{Clock: SkillClock, Now: 
 | `CombatComponent.AttachBeat(BeatConfig)` | 心跳驱动的 `DriveBuffs`：登记一个停止状态的心跳 `"combat"`，有工作时启动，周期取不大于 `Granularity`（缺省 1s）的最长档；每拍一步再调 `OnBeat`（`BuffBeat` = 心跳的拍 + `BuffStep{Tick, Expired}`）；全部清空后停 |
 | `CombatComponent.CurrentTick()` / `SyncBuffDriver()` | 输入侧的 tick（心跳驱动下是 fctx.Now 或域时间经 Clock 换算）；`Periodic` 的答案变了、Remote 回到独占之后调 `SyncBuffDriver` |
 | `CombatComponent.CloseBuffDriver()` / `RuntimeBeat.Close()` | 撤销：心跳驱动撤销登记（`heartbeat.Reg.Close`：立即离开驱动、释放名字），其他驱动收到一次 `Sleep`。`CombatComponent.OnDestroy` 调 `CloseBuffDriver`（组件由别的组件持有时由持有者转调）；持有 `RuntimeBeat` 的组件在自己的 `OnDestroy` 里调 `Close`。换场景（换时间域）时撤掉旧的、在同一宿主上按同名重建，再 `SyncBuffDriver` / `Sync` |
-| `NewRuntimeBeat(runtime, RuntimeBeatConfig)` | 心跳驱动的 `Stepper`（`RuntimeBeat` 嵌入 `*skill.Stepper`，上面的方法都能直接调）：登记一个停止状态的心跳 `"skill"`，周期缺省取不大于 tick 长度的最长档（50ms tick → 50ms）。`Runtime.Pending()`（在途施法、排程任务、衍生物、待重试的停止）时启动，空闲时停 |
+| `NewRuntimeBeat(runtime, RuntimeBeatConfig)` | 心跳驱动的 `Stepper`（`RuntimeBeat` 嵌入 `*skill.Stepper`，上面的方法都能直接调）：登记一个停止状态的心跳 `"skill"`，周期缺省取不大于 tick 长度的最长档（50ms tick → 50ms）。`Runtime.Pending()`（在途施法、排程任务、衍生物、待重试的停止；“在途施法”一项按构造不会单独成立——未结束的施法总有排程任务或推进中的衍生物，保留它只是守卫）时启动，空闲时停 |
 
 - **事务**：心跳驱动下 buff 心跳的启停随事务（施加限时 buff 的 handler 回滚，心跳不启动）；拍在实体锁与事务内，过期、属性投影、派生状态通知随这一拍提交或回滚。不随事务的驱动（定步长循环）在回滚后多醒一步，下一步没有工作就自己睡。技能 Runtime 不在回滚域里（[08-skill §4](08-skill.md#4-事务与战斗边界)）：`Start` / `Input` 放在 handler 的最后一步；之后回滚了，Runtime 里的施法还在、心跳没挂上，调 `RuntimeBeat.Sync` 补上（或等下一次输入：通知是电平式的）。拍里推进的错误交给 `OnError`、不让本拍回滚。
 - **加载**：`OnInitFinish` 按加载出的 buff 通知驱动（心跳驱动下启动心跳），停服期间已经到期的 buff 在驱动的**第一步**清掉（`OnInitFinish` 不在事务里，不能在那里改 DAO）；第一步之前读到的 `ActiveBuffs` 仍含这些记录。恢复出的 Runtime 还有工作时，构造推进器（`NewStepper` / `NewRuntimeBeat`）后调一次 `Sync`。

@@ -42,6 +42,8 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 “房间状态推给房间里的人”在 `access.player.sync_groups` 列出实体包名（如 `party_room`，需要 `self_sync`）：`roost project sync` 在实体包里创建一次业务文件 `sync_group.go`（`SyncGroup`，把视图键改成你的 packer 认识的那个），bootstrap 把它交给 `PlayerSelfSync`。业务在决定成员关系的 handler 里调用 `SyncGroup.Join(房间实体 ID, 玩家 ID)` / `Leave` / `Disband`：在 Nest 事务里调用时推迟到提交之后，回滚就不发生。框架负责：成员断线后保留成员关系、重连的那个同步周期收到房间全量；顶号随新 epoch 重发；房间实体卸载重载后重新登记；`Disband` 后成员收到 remove。业务负责：谁是成员、宽限期满或离开时 `Leave`、房间关闭时 `Disband`（之后再销毁实体）；成员关系不持久，进程重启后在玩家重连的 handler 里再 `Join`。
 
+慢消费者与独立 Gate 的规则与自身视图相同（2026-11-14 起有组同步自己的用例）：停读的成员只断开它自己的连接，同组在读的成员照常收到每次变化，成员关系保留、重连后组视图随新 epoch 全量回来（`TestGroupsOverTCPCloseAStalledMemberOnlyAndTheReconnectGetsTheGroupFull`）；独立 Gate 下这条连接的可靠队列满、组视图的一帧被拒收时连接被关闭，重连后拿回拒收之后的最新值（`TestGroupsOverGateRecoverAfterEveryRefusedPush`，`-tags integration`，要私有 NATS）。房间数 / 成员数的成本基准是 `policy.BenchmarkGroupViewFlush`。
+
 两路同步在同一条连接、同一个推送编号、同一个会话里：一帧可能同时带玩家自己与房间两个对象，客户端按每个更新的命名空间（标记的 `syncNamespace`）与视图键分流，只用一个 `entitysync.Decoder`。不要为房间再建一个 Manager 交给 Nest：Nest 只有一个 EntitySync 观察者，Nest Mod 在启动时报 `ErrEntitySyncObserverConflict`。没开 self_sync、自己开关会话的进程用 `policy.Group`。契约与取舍见 [ENTITY_SYNC](../ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)，完整用法见[派对房间手册 §5](../PARTY-ROOM-INTEGRATION.md#5-房间内同步syncgroup)。
 
 ### 谁看见谁：视野（View，D19）
@@ -342,6 +344,32 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 **观测**：`lockstep.snapshot.total{reason}`、`lockstep.snapshot.bytes.total`、`lockstep.snapshot.failed.total{reason}`，口径见 [OBSERVABILITY](../OBSERVABILITY.md)。恢复进行中（等快照、传快照、快照之后续帧）的会话被 Detach 计 `failed{reason="detached"}`（维护者 2026-10-20 决定）；独立 Gate 下“断开—重连—从头重传”的循环表现为 `failed{detached}` 与 `snapshot.total{out_of_window}` 同步增长（都不分会话）。
 
+### 按帧率、断线时长与快照大小核对窗口与预算
+
+下面两张表由缺省值与上文公式推算（不是新测量），用来在接入时核对配置；括号里注明了有实测的格。记号：帧率 R（每秒 `Tick` 次数，一次 `Tick` 切一帧）、断线时长 D、快照大小 S、玩家下行可用带宽 B（扣掉同一连接上 Sync / PB 的占用）。
+
+**只追帧（`RecoveryCatchup`，或 auto 下缺口在阈值内）**：断线回来时缺的帧必须都还在窗口里，所以窗口至少 `D × R`，再加重连握手与追帧期间新切的帧（取 10 秒余量）。内存按上文“10 席约 1.5MB / 3600 帧”等比例换算（约 0.42 KB / 帧，席位越多越大）。
+
+| R \ D | 10 秒 | 30 秒 | 60 秒 |
+| --- | --- | --- | --- |
+| 30Hz | 300 帧，缺省 3600 够 | 900 帧，缺省够 | 1800 帧，缺省够（缺省窗口在 30Hz 下覆盖 120 秒） |
+| 60Hz | 600 帧，缺省够 | 1800 帧，缺省够 | 3600 帧，**缺省不够**：缺省窗口在 60Hz 下正好 60 秒，没有余量；配 `HistoryRetainFrames` ≥ 4200（70 秒，约 1.8MB / 局）或配快照 |
+
+追帧本身很便宜：积压是 `D × R` 帧的输入（10 席每帧几十到一百多字节），回到头部的时间约为“积压 /（链路速率 − 每秒新帧字节）”（嵌入 TCP 实测比值 1.02～1.03，见下文），60Hz、60 秒、10 席在 256 KB/s 下约 1～2 秒。
+
+**快照恢复（auto 越界或 snapshot 模式）**：一次恢复（取快照 + 传输 + 快照帧之后续帧）必须在 `PinFrames / R` 秒内完成，缺省 `PinFrames` = 窗口 3600，即 30Hz 下 120 秒、60Hz 下 60 秒；超过时 `recovery_expired`、客户端终止。传输速率：随链路放慢的通道（嵌入 TCP、KCP、QUIC）取 `min(BytesPerTick × R, B)`，缺省 64 KiB × R 即 30Hz 约 1.9 MiB/s、60Hz 约 3.75 MiB/s，所以实际由链路决定；独立 Gate 固定 `UnpacedBytesPerTick × R`，缺省 16 KiB × R 即 30Hz 约 480 KiB/s、60Hz 约 960 KiB/s，高于链路时多出的部分要靠沿途缓冲吸收，吸收不了就被 Gate 断开、重连后从头重传。
+
+| 链路 B | S = 1 MiB | S = 4 MiB | S = 16 MiB |
+| --- | --- | --- | --- |
+| 随链路放慢，256 KB/s | 约 4 秒，30 / 60Hz 都在钉住期限内（实测恢复） | 约 16 秒，都在期限内（实测恢复） | 约 66 秒：30Hz 在 120 秒内；**60Hz 超过 60 秒**，要把 `PinFrames` 调到 ≥ 4800（80 秒）或缩小快照 |
+| 随链路放慢，64 KB/s | 约 16 秒（实测恢复） | 约 66 秒（30Hz 实测恢复，服务端 39.8 秒写完、客户端 69 秒回到头部）；**60Hz 超过 60 秒** | 约 4.4 分钟，缺省都超期；这档链路不适合十几 MiB 的快照 |
+| 独立 Gate，256 KB/s（30Hz 缺省发送约 480 KiB/s，高于链路） | 实测恢复（缓冲吸收了约 0.5 MB 超出部分） | **实测每次被断开、从头重传** | 不可行；按下面的建议调低预算 |
+| 独立 Gate，64 KB/s | **实测每次被断开** | 不可行 | 不可行 |
+
+独立 Gate 的取值规则（上文“独立 Gate 上的快照”的配置建议）：让 `UnpacedBytesPerTick × R` 不高于 B 的一半，传输时长约 `S / (UnpacedBytesPerTick × R)` 仍须短于 `PinFrames / R`。例如 30Hz、B = 256 KB/s 时 `UnpacedBytesPerTick` 取 4 KiB（约 120 KiB/s，`ChunkBytes` 同时调到 4 KiB 以下），4 MiB 快照约 34 秒，在 120 秒内；60Hz 同带宽取 2 KiB，4 MiB 也约 34 秒，在 60 秒内。快照传完之后续帧的帧数约等于“取快照 + 传输”秒数 × R，按上面追帧的口径很快追上。
+
+配了快照之后窗口还要覆盖 `max(AutoCatchupMaxFrames, 检查点间隔 K + 取快照延迟对应的帧数 + 余量)`（上文“窗口下限”），这一项与断线时长无关，`NewMatch` 不检查。
+
 ### 越界的处理：按恢复方式区分
 
 起点早于保留窗口的追帧不可能靠追帧补齐。**auto / snapshot 模式**（配了快照来源）下它改走快照，`StartCatchup` / `SpectatorCatchup` / `HandleCommand(OpCatchup)` 返回 nil，只有快照路线最终失败（上表 reason 2～4）才通知客户端终止。**catchup 模式**（没配快照来源时的缺省）下框架给出可判别的失败，客户端表现是“恢复失败、交由业务决定踢出或重开”，不做全量重同步：
@@ -381,7 +409,7 @@ catchup 模式下保留窗口越短越省内存，也越容易让慢追帧失效
 - 独立 Gate（`wiring/gate.Transport`）：两条通道都经 `GameIngress.PushBound` 进 Game 侧有界队列，再经 NATS 交给 Gate 侧队列与 `WritePacket`；`SendReliable` 返回 nil 只表示 Game 本地准入，追帧同样不随链路放慢。慢链路上 Game 侧队列满时准入返回 `ErrReliableBackpressure`（计一次追帧失败，每 Tick 一次），Gate 侧队列满或积压超过 `outbound.max_age`（默认 250ms）时 Gate 关闭连接。要等写出需要 Gate 在 socket 写出后再回执，是协议改动，等有具体游戏使用“Lockstep + 独立 Gate”时再做。game-demo 换成独立 Gate 部署（`accessplayertcp.NewIngressMod`）时没有 `TCPRuntime`，`battleLinks` 让追帧页也只准入。
 - 独立 Gate 上的快照：`gate.Transport` 不实现 `ReliablePacer`，快照按 `UnpacedBytesPerTick`（缺省 16 KiB，30Hz 下约 492 KB/s）固定节流，这个预算就是发送速率。toxiproxy 演练（[2026-10-20 §3](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md#3-独立-gate63-风险-1-实测成立)，30Hz、缺省参数）：1 MiB / 256 KB/s 恢复；1 MiB / 64 KB/s 与 4 MiB / 256 KB/s 每次连接都在同一位置被 Gate 断开、重连后从头再传，三次都没恢复。
   - 是否断开取决于快照大小、每 Tick 预算（乘帧率即发送速率）与链路速度三者，不只看速率：发送快于链路的部分先堆在 Gate 侧 socket 缓冲与沿途缓冲里，堆得下就传完（1 MiB / 256 KB/s 超出约 0.5 MB），堆不下就断开（4 MiB / 256 KB/s 超出约 2 MB）。缓冲能吸收多少随环境变化，这是由两档对比得出的推断，没有单独测量。
-  - 断开发生在 Gate 写 socket 时写期限到期（`player tcp: connection cannot take the frame: writev ...: i/o timeout`，`gate.channel.failure_total{phase="socket",role="gate"}` 每次 +1），不是 `outbound.max_age` 250ms 的积压规则。写期限取 `write_timeout`（缺省 5s）与这一帧剩余发送预算中较早者；实测是哪一个先到期尚未确认。
+  - 断开发生在 Gate 写 socket 时写期限到期（`player tcp: connection cannot take the frame: writev ...: i/o timeout`，`gate.channel.failure_total{phase="socket",role="gate"}` 每次 +1），不是 `outbound.max_age` 250ms 的积压规则。写期限取 `write_timeout`（缺省 5s）与这一帧剩余发送预算中较早者。按代码，缺省配置下 Gate 的 `WritePacket` 总带着不超过 `outbound.send_timeout`（250ms）的单帧预算，比 `write_timeout` 早，所以写出部分字节后断开的是单帧预算（一个字节都没写出的那一帧只被拒绝、不断开）；2026-11-14 起关闭时计 `player_tcp_write_deadline_total{deadline="send_budget"|"write_timeout"}`、错误文本写明是哪一个期限，演练里的实测分布待补。
   - 每次重连从头重传：Gate 断开后 Game 侧 `DetachSession` 清掉恢复状态，新连接是新会话、新传输编号，快照不续传；演练中三次的分块数逐字节相同，每次多发 0.8～1.6 MB。演练时（计数实施前）`lockstep.snapshot.failed.total` 不动，只有 `lockstep.snapshot.total{reason="out_of_window"}` 每次重连 +1；2026-10-20 起每次断开另计 `failed{reason="detached"}`，这个循环在失败指标上可见。
   - 配置建议（按实测）：先估最大快照大小 S 与要支持的最低下行带宽 B（扣掉同一连接上 Sync / PB 的占用）；让 `UnpacedBytesPerTick × 逻辑帧率` 不高于 B（再留余量，例如取一半），预算小于 16 KiB 时把 `ChunkBytes` 一起调小（每批至少一块）；传输时长约 `S / (UnpacedBytesPerTick × 帧率)`，要短于 `PinFrames / 帧率`，期间这名玩家不收实时帧。1 MiB 级快照在链路略低于预算时实测能靠缓冲传完，大快照不能指望缓冲。调大 Gate 的 `write_timeout` / 出站预算没有测过，不作为建议。做不到时用嵌入 TCP / KCP / QUIC（随链路放慢），或等 Gate 写出回执。
 

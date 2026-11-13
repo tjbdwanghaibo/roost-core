@@ -307,3 +307,88 @@ func newRoomID(t testing.TB, unique int64) int64 {
 	}
 	return id
 }
+
+// 组同步自己的慢消费者用例（KNOWN-LIMITS“组同步的容量与独立 Gate 用例”）：组视图与自身视图共用连接与出站规则，停读的
+// 成员只断开它自己——同组在读的成员照常收到每一次记分板变化、连接不受影响；停读成员的成员关系保留（业务没有 Leave），
+// 重连后组视图随新 epoch 的全量回来，是断开之后的最新值。
+func TestGroupsOverTCPCloseAStalledMemberOnlyAndTheReconnectGetsTheGroupFull(t *testing.T) {
+	h, groups := newGroupHarness(t)
+	alice, bob := newWallet(t, 7, 10), newWallet(t, 8, 20)
+	h.access.Manager().Add(alice)
+	h.access.Manager().Add(bob)
+	party := newRoom(t, 902, "round=0")
+	h.access.Manager().Add(party)
+	for _, player := range []int64{7, 8} {
+		if err := groups.Join(party.ID(), player); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b := dial(t, h, 7), dial(t, h, 8)
+	a.ack(t)
+	b.ack(t)
+	waitOnline(t, h, 2)
+	h.flush(t)
+	requireViews(t, a, frame.Full, map[string]string{"player/self": "gold=10", "room/room": "round=0"})
+	requireViews(t, b, frame.Full, map[string]string{"player/self": "gold=20", "room/room": "round=0"})
+
+	// bob 一直在读：记下他收到的最后一块记分板。
+	var bobLast atomic.Value
+	bobDone := make(chan error, 1)
+	go func() {
+		for {
+			packet, err := wire.Read(b.connection, wire.DefaultMaxPayload)
+			if err != nil {
+				bobDone <- err
+				return
+			}
+			decoded, err := b.receiver.Decode(packet.Payload)
+			if err != nil {
+				bobDone <- err
+				return
+			}
+			for _, object := range decoded.Objects {
+				for _, component := range object.Components {
+					if component.Update.Namespace == "room" {
+						bobLast.Store(string(component.Update.Payload.BytesCopy()))
+					}
+				}
+			}
+		}
+	}()
+	_ = b.connection.SetReadDeadline(time.Time{})
+
+	// alice 停读；记分板每次改动带 48KiB 填充，几十帧后她的出站队列（字节上限 2MiB）连同 socket 缓冲一起满。
+	padding := strings.Repeat("x", 48<<10)
+	round := 0
+	board := func() string { return fmt.Sprintf("round=%d;%s", round, padding) }
+	for h.runtime.ActiveSessions(7) > 0 {
+		if round++; round > 4096 {
+			t.Fatalf("a member that stopped reading was never disconnected: %+v last=%v", h.manager.Stats(), h.manager.LastError())
+		}
+		party.setBoard(board())
+		h.flush(t)
+	}
+	waitOnline(t, h, 1)
+	final := board()
+	for deadline := time.Now().Add(5 * time.Second); bobLast.Load() != final; {
+		select {
+		case err := <-bobDone:
+			t.Fatalf("the member who kept reading lost the connection when another member stalled: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the reading member did not get the last board (round %d)", round)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.runtime.ActiveSessions(8) != 1 || !groups.IsMember(party.ID(), 7) || !groups.IsMember(party.ID(), 8) {
+		t.Fatalf("after alice stalled: bob sessions %d, members alice=%v bob=%v; want bob connected and both still members",
+			h.runtime.ActiveSessions(8), groups.IsMember(party.ID(), 7), groups.IsMember(party.ID(), 8))
+	}
+
+	again := dial(t, h, 7)
+	again.ack(t)
+	waitOnline(t, h, 2)
+	h.flush(t)
+	requireViews(t, again, frame.Full, map[string]string{"player/self": "gold=10", "room/room": final})
+}

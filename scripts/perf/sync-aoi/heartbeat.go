@@ -188,9 +188,12 @@ type heartbeatLoad struct {
 // newHeartbeatLoad 给每个实体装移动组件并进场景（加载阶段，不在事务里，立即生效）。Interest 的 Show / Enter 已由
 // 公共初始化做完，loadSpace 的 Enter 不重复登记。
 func newHeartbeatLoad(states []*subject, c config, interest *policy.Interest) (*heartbeatLoad, error) {
+	driver, err := newLoadDriver(c)
+	if err != nil {
+		return nil, err
+	}
 	load := &heartbeatLoad{
-		// 跳拍 Warn 照常限频打到标准错误（进 sample-N.log）；压测结论以计数为准（server.json 的 heartbeat.driver）。
-		driver:   heartbeat.NewDriver(heartbeat.Config{Name: "sync-aoi"}),
+		driver:   driver,
 		registry: actionflow.NewRegistry(),
 		stats:    &moveStats{},
 		c:        c,
@@ -234,6 +237,16 @@ func newHeartbeatLoad(states []*subject, c config, interest *policy.Interest) (*
 		load.movers = append(load.movers, states[index])
 	}
 	return load, nil
+}
+
+// newLoadDriver 按配置建心跳驱动。投递方式按 -heartbeat-delivery（空串是驱动缺省），用来对照批量作业与单目标 Dispatch。
+// 跳拍 Warn 照常限频打到标准错误（进 sample-N.log）；压测结论以计数为准（server.json 的 heartbeat.driver）。
+func newLoadDriver(c config) (*heartbeat.Driver, error) {
+	delivery, err := heartbeat.ParseDelivery(c.HeartbeatDelivery)
+	if err != nil {
+		return nil, err
+	}
+	return heartbeat.NewDriver(heartbeat.Config{Name: "sync-aoi", Delivery: delivery}), nil
 }
 
 // ended 在巡逻的一段结束后发起下一段（runner 回调里调用，延后执行）。被同组新动作取代（取消）时不接；失败计数。
@@ -304,7 +317,7 @@ func (l *heartbeatLoad) report() map[string]any {
 	late := l.stats.late
 	l.stats.mu.Unlock()
 	out := map[string]any{
-		"movers": len(l.movers), "period_ms": milliseconds(l.c.MovePeriod), "speed_cells_per_second": l.c.MoveSpeed,
+		"movers": len(l.movers), "period_ms": milliseconds(l.c.MovePeriod), "speed_cells_per_second": l.c.MoveSpeed, "delivery": string(l.driver.Delivery()),
 		"driver": l.driver.Stats(), "beat_interval_ms": quantiles(intervals), "beat_interval_samples": len(intervals),
 		"beat_interval_over_period_plus_50ms": late, "legs_completed": l.stats.legs.Load(), "action_failures": l.stats.failed.Load(),
 	}

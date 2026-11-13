@@ -319,6 +319,11 @@ func (runtime *Runtime) CurrentTick() Tick {
 // 能力覆盖到期、排队的被动激活与外部事件）、逐 tick 推进的衍生物（施放中与已移交），以及还要按退避重试的待停止衍生物。
 // 为 false 时继续 Advance 不会执行任何技能工作（只推进 Host 的 tick），驱动方可以停下（例如空闲时停心跳）。
 // 冷却本身不是工作：它是“到某个 tick 之前不能再放”的记录，下一次施法前把 Runtime 推进到当时的 tick 即可判定。
+//
+// “活动中的施法”一项是保守保留的守卫：按构造，未结束的施法要么在排程器里有任务，要么拥有逐 tick 推进的衍生物
+// （resolveControl 在没有任务又没结束时报 ErrProgramInvariant），所以合法程序里单靠它判定为有工作的状态不出现
+// （TestEveryActiveCastHasATaskOrASteppedSpawn 逐 tick 核对全部验收夹具），去掉它的变异测不出差别。留着它，是为了
+// 万一这条不变量被将来的改动打破时，驱动方不会在施法未完时停下。
 func (runtime *Runtime) Pending() bool {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

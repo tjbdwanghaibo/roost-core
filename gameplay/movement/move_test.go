@@ -1,6 +1,7 @@
 package movement
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -504,4 +506,50 @@ func BenchmarkMoveAdvance(b *testing.B) {
 			}
 		})
 	}
+}
+
+// BenchmarkMoveBeatAllocations 是一拍移动在 Nest 事务里的分配（KNOWN-LIMITS“移动的每拍分配”）：心跳的一拍在实体锁
+// 与事务里执行，Move 与 MapBasic 在事务里另外登记回滚闭包、提交后记录与 MemFields 的逆操作，这些只在事务里发生，
+// BenchmarkMoveAdvance（事务外）量不到。empty 是同一个空事务的底数，advance 减去它就是移动本身的每拍分配；
+// 来源用 -memprofile 看。测量：go test ./gameplay/movement -run '^$' -bench MoveBeatAllocations -benchmem -count 6。
+func BenchmarkMoveBeatAllocations(b *testing.B) {
+	ctx := context.Background()
+	b.Run("empty", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := nest.RunDetachedTransaction(ctx, nullCommitter{}, "movement.bench", func() (any, error) { return nil, nil }); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("advance", func(b *testing.B) {
+		d := newUnitDriver()
+		e := newMover(b, d, 48, nil, moverOptions{})
+		start := spatial.Point{X: 1000, Y: 1000}
+		if err := e.mb.Enter(7, nopSpace{}, start); err != nil {
+			b.Fatal(err)
+		}
+		var token uint64
+		b.ReportAllocs()
+		i := 0
+		for b.Loop() {
+			if i%2000 == 0 {
+				b.StopTimer()
+				if err := e.mb.SetPos(start); err != nil {
+					b.Fatal(err)
+				}
+				token, _ = e.move.MoveTo([]spatial.Point{{X: 50000, Y: 20000}}, 60)
+				b.StartTimer()
+			}
+			i++
+			if _, err := nest.RunDetachedTransaction(ctx, nullCommitter{}, "movement.bench", func() (any, error) {
+				if r := e.move.Advance(token, 200*time.Millisecond); r.Done() {
+					return nil, fmt.Errorf("beat %d: %s", i, resultText(r))
+				}
+				return nil, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

@@ -110,7 +110,7 @@ func newGateSelfHarness(t *testing.T, configure func(*gateway.Config)) *gateSelf
 	}
 	playerKind(t)
 	h := &gateSelfHarness{access: entity.NewManagerAccess(entity.NewEntityManager()), sends: &sendGate{}}
-	h.self = MustNew(Config{Entities: h.access, Kind: testKind, MessageID: testMessageID})
+	h.self = MustNew(Config{Entities: h.access, Kind: testKind, MessageID: testMessageID, Groups: harnessGroups})
 	mod := wiringnest.NewModWithEntitySync(h.access, h.self.EntitySyncSetup())
 	if err := mod.Init(viper.New()); err != nil {
 		t.Fatal(err)
@@ -443,5 +443,100 @@ func TestSelfSyncOverGateDeliversTheFirstFullWhenSyncRunsInsideActivation(t *tes
 	}
 	if lost := h.manager.Stats().SessionsLost; lost != 0 {
 		t.Fatalf("sessions lost = %d, want 0: the push inside activation found the player without a connection", lost)
+	}
+}
+
+// nextViews 是 next 的按组版本：返回下一个 Sync 推送里每个对象的 “命名空间/视图键” → 内容。
+func (c *gateClientConn) nextViews(t *testing.T, wait time.Duration) (kind frame.Kind, got map[string]string, ok, closed bool) {
+	t.Helper()
+	deadline := time.Now().Add(wait)
+	for {
+		_ = c.connection.SetReadDeadline(deadline)
+		packet, err := wire.Read(c.connection, wire.DefaultMaxPayload)
+		var timeout net.Error
+		switch {
+		case errors.As(err, &timeout) && timeout.Timeout():
+			return 0, nil, false, false
+		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed), err != nil && strings.Contains(err.Error(), "connection reset"):
+			return 0, nil, false, true
+		case err != nil:
+			t.Fatalf("read: %v", err)
+		}
+		if packet.MsgID == fillerMessageID {
+			continue
+		}
+		decoded, err := c.receiver.Decode(packet.Payload)
+		if errors.Is(err, entitysync.ErrStaleFrame) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("frame refused by the client's receiver: %v", err)
+		}
+		got = map[string]string{}
+		for _, object := range decoded.Objects {
+			for _, component := range object.Components {
+				got[component.Update.Namespace+"/"+component.Update.Profile.Key] = string(component.Update.Payload.BytesCopy())
+			}
+		}
+		return decoded.Kind, got, true, false
+	}
+}
+
+// 独立 Gate 下的组同步（KNOWN-LIMITS“组同步的容量与独立 Gate 用例”）：组视图与自身视图经同一条 Gate 连接、同一个
+// 可靠队列。这条连接的队列满了、组视图的增量被拒收时，规则与自身视图相同——连接被关闭，成员关系保留，客户端重连后
+// 两路都随新 epoch 的全量回来，组视图是拒收之后的最新值；连着发生多次也一样。
+func TestGroupsOverGateRecoverAfterEveryRefusedPush(t *testing.T) {
+	groups := MustNewGroups(GroupsConfig{Kind: roomKind, Profile: roomView, MaxMembers: 4})
+	harnessGroups = []*Groups{groups}
+	t.Cleanup(func() { harnessGroups = nil })
+	h := newGateSelfHarness(t, func(cfg *gateway.Config) { cfg.Outbound.QueueEntries = 1 })
+	player := newWallet(t, 7, 0)
+	h.access.Manager().Add(player)
+	party := newRoom(t, 903, "round=0")
+	h.access.Manager().Add(party)
+	if err := groups.Join(party.ID(), 7); err != nil {
+		t.Fatal(err)
+	}
+	c := h.dial(t, 7)
+	waitSelfOnline(t, h.self, 1)
+	if err := h.manager.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if kind, got, ok, _ := c.nextViews(t, 3*time.Second); !ok || kind != frame.Full || got["player/self"] != "gold=0" || got["room/room"] != "round=0" {
+		t.Fatalf("first frame = %v %v (ok=%v), want a Full with gold=0 and round=0", kind, got, ok)
+	}
+	reconnects := 0
+	for round := 1; round <= 6; round++ {
+		h.fillPlayerQueue(t, 7)
+		party.setBoard("round=" + strconv.Itoa(round))
+		_ = h.manager.Flush(context.Background()) // 组视图的这一帧被拒收
+		h.sends.resume()
+		want := "round=" + strconv.Itoa(round)
+		recovered := false
+		for deadline := time.Now().Add(3 * time.Second); !recovered && time.Now().Before(deadline); {
+			kind, got, ok, closed := c.nextViews(t, 100*time.Millisecond)
+			switch {
+			case closed:
+				waitSelfOnline(t, h.self, 0)
+				c = h.dial(t, 7)
+				reconnects++
+				waitSelfOnline(t, h.self, 1)
+			case ok && got["room/room"] == want:
+				if kind != frame.Full || got["player/self"] != "gold=0" {
+					t.Fatalf("round %d: the group came back as %v %v, want the Full of a new session with both views", round, kind, got)
+				}
+				recovered = true
+			}
+			if !recovered {
+				_ = h.manager.Flush(context.Background())
+			}
+		}
+		if !recovered {
+			t.Fatalf("round %d: one refused group push and the member never got the group back (sessions=%d lost=%d online=%d member=%v)",
+				round, h.manager.Stats().Sessions, h.manager.Stats().SessionsLost, h.self.Online(), groups.IsMember(party.ID(), 7))
+		}
+	}
+	if reconnects != 6 {
+		t.Fatalf("recovered through %d reconnects, want 6 (one per refused push)", reconnects)
 	}
 }

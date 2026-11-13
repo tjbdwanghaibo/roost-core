@@ -65,9 +65,12 @@ type config struct {
 	MovePeriod time.Duration `json:"move_period"`
 	MoveSpeed  float64       `json:"move_speed_cells_per_second"`
 	Movers     int           `json:"movers_override"`
-	Role       string        `json:"-"`
-	Address    string        `json:"-"`
-	Output     string        `json:"-"`
+	// HeartbeatDelivery 是心跳模式的投递方式（gameplay/heartbeat 的 batch / dispatch，同配置 heartbeat.delivery）；
+	// 空串取 heartbeat.DefaultDelivery，实际生效的方式记在 server.json 的 heartbeat.delivery。
+	HeartbeatDelivery string `json:"heartbeat_delivery"`
+	Role              string `json:"-"`
+	Address           string `json:"-"`
+	Output            string `json:"-"`
 }
 
 func parseConfig() config {
@@ -105,6 +108,7 @@ func parseConfig() config {
 	// 结果对照时显式加 -move-period=100ms（docs/performance/HB-DRIVEN-LOAD-20261021.md §4）。
 	flag.DurationVar(&c.MovePeriod, "move-period", movement.DefaultMovePeriod, "heartbeat mode: movement heartbeat tier (one of gameplay/heartbeat.Periods); default movement.DefaultMovePeriod (200ms); add -move-period=100ms to compare with runs before 2026-10-22")
 	flag.Float64Var(&c.MoveSpeed, "move-speed", 30, "heartbeat mode: patrol speed in cells per second (keep at least one cell per beat so every beat is a change)")
+	flag.StringVar(&c.HeartbeatDelivery, "heartbeat-delivery", "", "heartbeat mode: how due beats reach Nest, batch (Nest batch jobs, the default) or dispatch (one single-target Nest message per beat); same values as the heartbeat.delivery config")
 	flag.IntVar(&c.Movers, "movers", 0, "heartbeat mode: patrolling entities; 0 derives the count from -dirty so the change rate equals the loop driver's (entities×dirty%×20/s ÷ beats per second)")
 	flag.StringVar(&c.Role, "role", "server", "server or client")
 	flag.StringVar(&c.Address, "address", "", "client connects to this loopback endpoint")
@@ -135,8 +139,14 @@ func (c config) validate() error {
 	if c.SnapshotObjects < 0 || c.SnapshotBytes < 0 || c.SnapshotPerSession < 0 || c.ReconnectTick < 0 || c.ReconnectTick > c.Ticks || c.ReconnectPlayers < 0 || c.ReconnectPlayers > c.Players {
 		return errors.New("invalid recovery workload")
 	}
+	if _, err := heartbeat.ParseDelivery(c.HeartbeatDelivery); err != nil {
+		return err
+	}
 	switch c.MoveDriver {
 	case moveDriverLoop:
+		if c.HeartbeatDelivery != "" {
+			return errors.New("-heartbeat-delivery only applies to -move-driver=heartbeat")
+		}
 	case moveDriverHeartbeat:
 		if !c.Nest {
 			return errors.New("-move-driver=heartbeat needs the formal Nest producer (-nest)")
@@ -655,6 +665,7 @@ func runServer(c config) error {
 	// 同口径（每 tick）：policy 是 Manager 政策阶段的耗时增量（排队模式下 AOI 全在这里），driverInterest 是压测端线程里
 	// interest.Move 与 interest.Apply 的耗时（直接模式下 AOI 在这里；排队模式下只剩 Apply，主要是等 Interest 的锁）。
 	policyPerTick, driverInterest := make([]float64, 0, c.Ticks), make([]float64, 0, c.Ticks)
+	backlog := make([]float64, 0, c.Ticks)
 	policyBefore := manager.Counters().PolicyDuration
 	driverMove = 0
 	var overWork int
@@ -759,6 +770,9 @@ func runServer(c config) error {
 		driverMove = 0
 		flush = append(flush, milliseconds(elapsed))
 		lag = append(lag, milliseconds(begin.Sub(due)))
+		if entries, found := logBacklogGauge(); found {
+			backlog = append(backlog, float64(entries))
+		}
 		if active > 50*time.Millisecond {
 			overWork++
 		}
@@ -846,6 +860,9 @@ func runServer(c config) error {
 	report["flush_failures_before_stop"] = failuresBeforeStop
 	report["move_driver"] = c.MoveDriver
 	report["interest_metrics"] = interestMetrics()
+	if b := backlogReport(backlog); b != nil {
+		report["log_backlog_per_tick"] = b
+	}
 	if moving != nil {
 		report["heartbeat"] = moving.report()
 	}

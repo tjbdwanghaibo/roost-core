@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -25,11 +26,15 @@ type LocalPreloadReport = engine.LocalPreloadReport
 // 执行器发布）。App 在全部 Mod 启动之后才调 Service.Init，所以服务初始化时这些实体已经在内存里。玩家接入等别的 Mod
 // 不等它：预加载期间来的访问与预加载共用同一次冷加载。
 //
-// 失败：kind 不满足规则（不是本地持久实体、有 DAO 不是 dbscope=sid）或枚举失败让启动失败（进程管理拉起重试）；
+// 失败：kind 不满足规则（不是本地持久实体、有 DAO 不是 dbscope=sid）、枚举失败或超出预算让启动失败（进程管理拉起重试）；
 // 单个实体加载失败只记错误日志与指标 dataengine.local_preload_total{result="error"}，留给按需加载。
+//
+// 预算（dataengine.preload.*，Init 时读一次）：timeout 限整次预加载（Mongo 卡住时到期即起服失败，不再一直等到进程被停），
+// max_entities 限全部 kind 合计载入的实体数（实体多到起服时间与内存失控之前失败，提示调大或不再预加载这个 kind）。
 // 生成工程的 bootstrap 给声明了本地 preload 的服务装它（roost project sync），生成前检查 bootstrap 与实体标记一致。
 type LocalPreloadMod struct {
 	kinds    []entity.EntityKind
+	limits   engine.LocalPreloadLimits
 	registry *app.Registry
 	// Report 是最近一次预加载的结果（诊断与测试用）。
 	Report LocalPreloadReport
@@ -46,11 +51,27 @@ func (m *LocalPreloadMod) DependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine, mods.ModNest}
 }
 
-// ConfigSchema：本 Mod 不读配置键（预加载 kind 来自实体标记，经构造参数传入）。
-func (m *LocalPreloadMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(struct{}{}) }
+// localPreloadConfig 是 dataengine.preload.* 的声明（预加载 kind 来自实体标记，经构造参数传入，不是配置）。
+type localPreloadConfig struct {
+	DataEngine struct {
+		Preload struct {
+			Timeout     time.Duration `config:"timeout" default:"10m" min:"1s" help:"起服预加载（preload=startup 的本地实体）整次的期限：到期取消在途的查询与加载、起服失败；Mongo 卡住时不再一直等到进程被停"`
+			MaxEntities int           `config:"max_entities" default:"1000000" min:"1" help:"起服预加载全部 kind 合计最多载入的实体数：超过时起服失败，调大它或不再预加载那个 kind（预加载的实体都留在内存里）"`
+		} `config:"preload"`
+	} `config:"dataengine"`
+}
 
-// Init 在配置阶段把规则强制一次：kind 已登记 builder（生成的实体包在 init 里登记）、本地、持久、每个 DAO 都是 dbscope=sid。
-func (m *LocalPreloadMod) Init(*viper.Viper) error {
+// ConfigSchema 声明 dataengine.preload.timeout 与 dataengine.preload.max_entities。
+func (m *LocalPreloadMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(localPreloadConfig{}) }
+
+// Init 在配置阶段把规则强制一次：kind 已登记 builder（生成的实体包在 init 里登记）、本地、持久、每个 DAO 都是 dbscope=sid；
+// 并读出预算。
+func (m *LocalPreloadMod) Init(cfg *viper.Viper) error {
+	var settings localPreloadConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("dataengine preload mod: %w", err)
+	}
+	m.limits = engine.LocalPreloadLimits{MaxEntities: settings.DataEngine.Preload.MaxEntities, Timeout: settings.DataEngine.Preload.Timeout}
 	if err := engine.ValidateLocalPreloadKinds(m.kinds); err != nil {
 		return fmt.Errorf("dataengine preload mod: %w", err)
 	}
@@ -75,7 +96,7 @@ func (m *LocalPreloadMod) Start() error {
 	if !ok || dataEngine == nil || dataEngine.Runtime() == nil {
 		return fmt.Errorf("dataengine preload mod: required capability %q not found or not started", mods.ModDataEngine)
 	}
-	report, err := dataEngine.Runtime().PreloadLocalEntities(fctx.BaseContext(), m.kinds)
+	report, err := dataEngine.Runtime().PreloadLocalEntities(fctx.BaseContext(), m.kinds, m.limits)
 	m.Report = report
 	for _, kind := range report.Kinds {
 		slog.Info("dataengine preload mod: preloaded a kind", "kind", kind.Kind, "order", kind.Order, "listed", kind.Listed,

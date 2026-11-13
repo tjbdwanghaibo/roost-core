@@ -90,6 +90,8 @@ type AllianceDao struct {
 
 `persist` 与 `sync` **各自默认开启**，只有 `nopersist` / `nosync` 才关闭对应能力；`persist,nopersist`、`sync,nosync` 等矛盾组合仍拒绝。`store:"-"` 不用于排除 DAO 字段；名字不能以 `_` 开头、不能重复。每个生成字段必须显式声明 `store`，没有 snake_case 回退；DAO 输入不再接受 `bson`。
 
+**这些开关只写在 DAO 顶层字段上。** 嵌套类型的全部字段随所在顶层字段整体落库、整体编进同步补丁，嵌套字段没有自己的持久 / 同步；在嵌套字段上写 `persist` / `nopersist` / `sync` / `nosync` 生成期报错（报错点名类型与字段）。v1.47 之前这类写法被接受却不生效，标了 `nosync` 的嵌套字段照样下发给客户端。要让一部分嵌套状态不同步或不落库，把它拆进另一个嵌套类型、挂到单独的顶层字段上，在那个顶层字段写开关。嵌套字段上 `map=...` 与 `dao:"-"` 照常可用。
+
 升级生成器时复核手写定义：旧规则下的 `dao:"persist"`（只持久）改成 `dao:"nosync"`，旧 `dao:"sync"`（只同步）改成 `dao:"nopersist"`；原来单写 `nopersist` 而两项都不需要的字段改成 `nopersist,nosync`。新规则不按旧版本解释 tag，私有字段必须明确 `nosync`。`module.yaml` 的 `state[].dao` 复用同一解析器与默认值，也必须这样复核。仓内模块清单、模板、夹具与使用示例已按原来的能力范围调整。
 
 ### Remote Snapshot 的生成边界

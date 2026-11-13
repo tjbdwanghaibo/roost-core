@@ -522,10 +522,9 @@ func BenchmarkBrushApplyPlayerRadius(b *testing.B) {
 	}
 }
 
-// 跨格编辑拆给各格（P5）：每个格按同一笔刷只算自己的块（ApplyIn / BrushChangesIn），各部分合起来与在全部块上 Apply
-// 逐点相同、互不重叠；每块的改动点数不超过 Footprint（只看几何的上限，Base 按它预扣配额），Footprint 合起来就是覆盖
-// 到的采样点数；part 里没覆盖到的块不贡献、part 外的块不需要数据。
-func TestABrushSplitIntoPartsAddsUpToTheWholeBrush(t *testing.T) {
+// Footprint 是每块改动点数只看几何的上限（分区场景转发编辑的 Base 没装这些块，按它预扣配额）：每块实际改动的点数
+// 不超过它，合起来正是笔刷覆盖到的采样点数，块集合与 Chunks 相同。
+func TestABrushFootprintBoundsEachChunksChanges(t *testing.T) {
 	meta := brushMeta()
 	all := []ChunkKey{}
 	for key := range ChunksIn(meta.Bounds()) {
@@ -547,41 +546,20 @@ func TestABrushSplitIntoPartsAddsUpToTheWholeBrush(t *testing.T) {
 		if len(covered) < 2 {
 			t.Fatalf("%+v covers %v: the case does not straddle chunks", b, covered)
 		}
-		var joined []ChunkChange
 		footprint := b.Footprint(meta)
+		for _, change := range whole {
+			if len(change.Points) > footprint[change.Key] {
+				t.Fatalf("%+v chunk %v: %d changes over its footprint %d", b, change.Key, len(change.Points), footprint[change.Key])
+			}
+		}
 		total := 0
 		for _, key := range covered {
-			// 每一部分只给自己的块的数据（外加一块没覆盖到的，验证它不贡献）。
-			part := []ChunkKey{key, {X: 3, Y: 2}}
-			only := map[ChunkKey]Chunk{key: chunks[key], {X: 3, Y: 2}: chunks[ChunkKey{X: 3, Y: 2}]}
-			got, err := b.ApplyIn(meta, FullRange, only, part)
-			if err != nil {
-				t.Fatalf("%+v part %v: %v", b, key, err)
-			}
-			for _, change := range got {
-				if change.Key != key {
-					t.Fatalf("%+v part %v changed chunk %v", b, key, change.Key)
-				}
-				if len(change.Points) > footprint[key] {
-					t.Fatalf("%+v chunk %v: %d changes over its footprint %d", b, key, len(change.Points), footprint[key])
-				}
-			}
-			joined = append(joined, got...)
 			total += footprint[key]
-		}
-		if !slices.EqualFunc(joined, whole, func(a, c ChunkChange) bool {
-			return a.Key == c.Key && slices.Equal(a.Points, c.Points)
-		}) {
-			t.Fatalf("%+v: the parts add up to %d chunk changes, the whole brush %d", b, len(joined), len(whole))
 		}
 		covers := 0
 		b.covers(meta, func(_, _, _ int64) { covers++ })
 		if total != covers || len(footprint) != len(covered) {
 			t.Fatalf("%+v: footprint %v adds up to %d over %d chunks, the brush covers %d points in %d chunks", b, footprint, total, len(footprint), covers, len(covered))
-		}
-		// 缺自己那一块的数据时照样报 ErrNotLoaded，不给部分结果。
-		if _, err := b.ApplyIn(meta, FullRange, map[ChunkKey]Chunk{}, covered[:1]); !errors.Is(err, ErrNotLoaded) {
-			t.Fatalf("%+v without its part's data: %v, want ErrNotLoaded", b, err)
 		}
 	}
 }

@@ -488,6 +488,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `player_tcp_rate_limited_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
 | `player_tcp_session_closed_callback_panics_total` | Counter | `infra/network/gateway/tcp_runtime.go:IncCounter` |
 | `player_tcp_session_closed_dropped_total` | Counter | `infra/network/gateway/tcp_runtime.go:IncCounter` |
+| `player_tcp_write_deadline_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
 | `player_tcp_write_error_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
 | `remote_entity.commit_conflict_total` | Counter | `remoteentity/mongo_committer.go:IncCounter` |
 | `remote_entity.deferred_outcome_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
@@ -628,6 +629,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `player_tcp_outbound_overflow_total` | 一帧入队会让该连接“排队 + 写协程在途”超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节而被拒的次数（拒绝即关闭连接）；计被拒次数，不是关闭的连接数，并发推送方同时撞到上限时各计一次 |
 | `player_tcp_push_closed_total` | 推送路径因 `errConnectionBroken`（溢出、连接已被写协程关闭但尚未注销）注销并关闭连接的次数；同一连接在注销前收到多次推送会多次计入，写协程关闭后没有推送到达的连接不计 |
 | `player_tcp_write_error_total` | 写 socket 失败次数（写协程、读循环直写、Gate `WritePacket`）：写超时、半帧、reset，以及关闭连接时被打断的那次写；连接已关闭后被拒的写不计 |
+| `player_tcp_write_deadline_total{deadline}` | 上一项里因写期限到期而关闭连接的次数，按到期的期限分（2026-11-14 起）：`write_timeout` 是连接自己的写期限（缺省 5s；嵌入 TCP 的写协程只用它），`send_budget` 是调用方更早的期限——独立 Gate 的 `WritePacket` 传入的单帧发送预算（缺省不超过 `outbound.send_timeout` 250ms），写了部分字节后到期。一个字节都没写出就被调用方期限切断的写不关连接、不计。关闭原因的错误文本同样写明是哪一个期限 |
 
 一个停读连接因溢出被关闭时，`overflow_total`、`push_closed_total`、`write_error_total` 三项通常各至少加一；写协程因 `write_timeout` 关闭的连接只保证 `write_error_total` 加一。见 [GATEWAY §4](GATEWAY.md#嵌入-tcp-的出站)。
 

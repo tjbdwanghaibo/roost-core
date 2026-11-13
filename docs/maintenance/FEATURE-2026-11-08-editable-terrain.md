@@ -1584,7 +1584,7 @@ Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`
 | 控制器 `TestTerrainRelayAnswerCarriesTheCellsOutcome`、`TestTerrainRefusalsMapToTheirCodes` | 一份结论的五种答复与码；`ErrBrushCrossCell` → `terrain_cross_cell` |
 | 无缝演练 (a) 步 | B 上的跨格笔刷答 `terrain_cross_cell`、两块版本与摘要不变、`LastSeq` 不变；B 发起、整份落在 A 格块 (1,0)（B 的 Ghost 带里）的笔刷转发、Applied，再反向改回（记 `b_cross_cell_refused_rtt_ms` 与 `b_forward_to_a_rtt_ms`）。只编译与 vet，真实运行在合入时 |
 
-**待确认**：`Brush.ApplyIn` / `View.BrushChangesIn`（`gameplay/terrain`，本轮未发版的新增）现在没有调用方：A（推荐）保留为通用能力，代价是多两个公开入口与一条测试；B 删除，回到 P5 之前的 `Apply` / `BrushChanges`，以后若恢复拆分再加。
+**待确认**：`Brush.ApplyIn` / `View.BrushChangesIn`（`gameplay/terrain`，本轮未发版的新增）现在没有调用方：A（推荐）保留为通用能力，代价是多两个公开入口与一条测试；B 删除，回到 P5 之前的 `Apply` / `BrushChanges`，以后若恢复拆分再加。**已定（维护者 2026-11-13）：B，已删除。**
 
 ## 31. 客户端岸线与重建调度（T03 / T04 算法层，2026-11-10）
 

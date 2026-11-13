@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1327,6 +1329,17 @@ func residentOf(sessions []*tcpSession) int64 {
 	return total
 }
 
+// labeledCounter 是某个标签取某个值的那一条序列的计数。
+func labeledCounter(name, label, value string) int64 {
+	var total int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name && metric.Labels[label] == value {
+			total += metric.Value
+		}
+	}
+	return total
+}
+
 func counterValue(name string) int64 {
 	var total int64
 	for _, metric := range metrics.Snapshot() {
@@ -1927,29 +1940,48 @@ func TestAWriteCutOffByTheCallerDeadlineBeforeAnyByteIsARefusal(t *testing.T) {
 	callerDeadline := func() (context.Context, context.CancelFunc) {
 		return context.WithTimeout(context.Background(), 10*time.Millisecond)
 	}
+	// deadline 是关闭连接时记下的期限（player_tcp_write_deadline_total 的标签与错误文本，KNOWN-LIMITS“独立 Gate 慢链路：
+	// 先到期的是 write_timeout 还是单帧预算”）：不是期限到期的失败不记。
 	for _, tc := range []struct {
-		name    string
-		written int
-		err     error
-		ctx     func() (context.Context, context.CancelFunc)
-		broken  bool
+		name     string
+		written  int
+		err      error
+		ctx      func() (context.Context, context.CancelFunc)
+		broken   bool
+		deadline string
 	}{
-		{"caller deadline, nothing written", 0, os.ErrDeadlineExceeded, callerDeadline, false},
-		{"write_timeout, nothing written", 0, os.ErrDeadlineExceeded, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, true},
-		{"caller deadline, part of the frame written", 5, os.ErrDeadlineExceeded, callerDeadline, true},
-		{"caller deadline, peer reset", 0, syscall.ECONNRESET, callerDeadline, true},
+		{"caller deadline, nothing written", 0, os.ErrDeadlineExceeded, callerDeadline, false, ""},
+		{"write_timeout, nothing written", 0, os.ErrDeadlineExceeded, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, true, "write_timeout"},
+		{"caller deadline, part of the frame written", 5, os.ErrDeadlineExceeded, callerDeadline, true, "send_budget"},
+		{"caller deadline, peer reset", 0, syscall.ECONNRESET, callerDeadline, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			connection := &scriptedConn{written: tc.written, err: tc.err}
 			current := &tcpSession{connection: connection, writeTimeout: time.Second}
 			ctx, cancel := tc.ctx()
 			defer cancel()
+			before := map[string]int64{}
+			for _, deadline := range []string{"write_timeout", "send_budget"} {
+				before[deadline] = labeledCounter("player_tcp_write_deadline_total", "deadline", deadline)
+			}
 			err := current.writeFrame(ctx, flagServerPush, pushTestMessageID, 1, []byte("payload"))
 			if err == nil {
 				t.Fatal("a failed write reported success")
 			}
 			if got := errors.Is(err, errConnectionBroken); got != tc.broken {
 				t.Fatalf("errConnectionBroken=%v, want %v: %v", got, tc.broken, err)
+			}
+			for _, deadline := range []string{"write_timeout", "send_budget"} {
+				want := int64(0)
+				if deadline == tc.deadline {
+					want = 1
+				}
+				if got := labeledCounter("player_tcp_write_deadline_total", "deadline", deadline) - before[deadline]; got != want {
+					t.Fatalf("player_tcp_write_deadline_total{deadline=%s} grew by %d, want %d: %v", deadline, got, want, err)
+				}
+			}
+			if tc.deadline == "send_budget" && !strings.Contains(err.Error(), "send budget") || tc.deadline == "write_timeout" && !strings.Contains(err.Error(), "write_timeout (1s) ran out") {
+				t.Fatalf("the error does not say which deadline closed the connection: %v", err)
 			}
 			if !tc.broken && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("a push the caller's deadline refused = %v, want context.DeadlineExceeded", err)
@@ -2232,4 +2264,181 @@ func BenchmarkTCPHandshake(b *testing.B) {
 		}
 		_ = connection.Close()
 	}
+}
+
+// TestOutboundBudgetDrill 是全进程出站驻留预算（player_access.tcp.outbound.resident_bytes，缺省 256 MiB）在停读客户端与
+// 更高推送量下的演练（KNOWN-LIMITS“嵌入 TCP 出站”：缺省预算在停读客户端 / 更高推送量下是否够用）。真实回环 TCP：
+// 健康客户端一直读，停读客户端握手后不再读（读缓冲调小，内核替它缓存的字节少）；推送端每秒 DRILL_RATE 轮、每轮给
+// 每个玩家推一帧 DRILL_FRAME_BYTES 字节，持续 DRILL_SECONDS 秒。逐毫秒采样预算的驻留字节取峰值（生产没有驻留 Gauge，
+// 这里在包内直接读），统计因预算被拒的推送、每连接上限溢出关闭、写期限到期关闭与健康连接收到的帧。
+//
+// 只在设置 ROOST_TCP_BUDGET_DRILL=1 时运行（测量，不是回归）；结果写日志，设 DRILL_OUT 时另写一行 JSON 到该文件。
+// 参数：DRILL_HEALTHY（缺省 1000）、DRILL_STALLED（100）、DRILL_FRAME_BYTES（4096）、DRILL_RATE（20）、DRILL_SECONDS（30）、
+// DRILL_BUDGET（字节，0 = 缺省 256 MiB）、DRILL_WRITE_TIMEOUT（缺省 5s，同 player_access.tcp.write_timeout 缺省）。
+// 断言只有不变式：驻留峰值不超过预算、预算拒绝计数与推送端看到的拒绝数一致、健康连接没有被关闭。
+func TestOutboundBudgetDrill(t *testing.T) {
+	if os.Getenv("ROOST_TCP_BUDGET_DRILL") == "" {
+		t.Skip("set ROOST_TCP_BUDGET_DRILL=1 to run the outbound budget drill (a measurement)")
+	}
+	envInt := func(name string, fallback int) int {
+		if raw := os.Getenv(name); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 0 {
+				t.Fatalf("%s = %q is not a non-negative integer", name, raw)
+			}
+			return value
+		}
+		return fallback
+	}
+	healthy, stalled := envInt("DRILL_HEALTHY", 1000), envInt("DRILL_STALLED", 100)
+	frameBytes, rate, seconds := envInt("DRILL_FRAME_BYTES", 4096), envInt("DRILL_RATE", 20), envInt("DRILL_SECONDS", 30)
+	config := DefaultTCPConfig()
+	config.Addr = "127.0.0.1:0"
+	config.MaxConnections = healthy + stalled + 16
+	config.MaxConnectionsPerIP = config.MaxConnections
+	config.MaxHandshakes = min(config.MaxConnections, 1024)
+	if budget := envInt("DRILL_BUDGET", 0); budget > 0 {
+		config.OutboundResidentBytes = int64(budget)
+	}
+	if raw := os.Getenv("DRILL_WRITE_TIMEOUT"); raw != "" {
+		timeout, err := time.ParseDuration(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.WriteTimeout = timeout
+	}
+	server, err := NewTCPServer(config, emptyTCPDispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
+		id, err := strconv.ParseInt(token, 10, 64)
+		if err != nil {
+			return Principal{}, err
+		}
+		return Principal{PlayerID: id, SessionID: token}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	})
+
+	players := healthy + stalled
+	var received atomic.Int64
+	var readers sync.WaitGroup
+	for player := 1; player <= players; player++ {
+		connection := dialAuthenticated(t, server, strconv.Itoa(player))
+		_ = connection.SetReadDeadline(time.Time{})
+		if player > healthy {
+			_ = connection.(*net.TCPConn).SetReadBuffer(4 << 10)
+			continue
+		}
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				frame, release, err := server.readFrame(connection)
+				if err != nil {
+					return
+				}
+				release()
+				if frame.messageID == pushTestMessageID {
+					received.Add(1)
+				}
+			}
+		}()
+	}
+
+	budgetBefore := counterValue("player_tcp_outbound_budget_exhausted_total")
+	overflowBefore := counterValue("player_tcp_outbound_overflow_total")
+	writeTimeoutBefore := labeledCounter("player_tcp_write_deadline_total", "deadline", "write_timeout")
+	var peak atomic.Int64
+	sampling, stopSampling := context.WithCancel(context.Background())
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if resident := server.outbound.resident(); resident > peak.Load() {
+				peak.Store(resident)
+			}
+			select {
+			case <-sampling.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+
+	const pushers = 8
+	payload := make([]byte, frameBytes)
+	var refused, closed, pushed atomic.Int64
+	ctx := context.Background()
+	start := time.Now()
+	for round := 0; round < rate*seconds; round++ {
+		if wait := time.Until(start.Add(time.Duration(round) * time.Second / time.Duration(rate))); wait > 0 {
+			time.Sleep(wait)
+		}
+		var wg sync.WaitGroup
+		for p := range pushers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for player := p + 1; player <= players; player += pushers {
+					err := server.pushPlayerKind(ctx, int64(player), pushTestMessageID, payload, flagSync)
+					switch {
+					case err == nil:
+						pushed.Add(1)
+					case errors.Is(err, ErrResidentBudgetExhausted):
+						refused.Add(1)
+					default:
+						closed.Add(1)
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	elapsed := time.Since(start)
+	stopSampling()
+	<-sampled
+
+	budgetRefusals := counterValue("player_tcp_outbound_budget_exhausted_total") - budgetBefore
+	result := map[string]any{
+		"healthy": healthy, "stalled": stalled, "frame_bytes": frameBytes, "rate_per_second": rate, "seconds": seconds,
+		"elapsed_seconds": elapsed.Seconds(), "budget_bytes": config.OutboundResidentBytes, "write_timeout": config.WriteTimeout.String(),
+		"peak_resident_bytes": peak.Load(), "pushes_accepted": pushed.Load(), "pushes_refused_by_budget": refused.Load(),
+		"pushes_to_closed_or_missing": closed.Load(), "budget_exhausted_total": budgetRefusals,
+		"overflow_closes": counterValue("player_tcp_outbound_overflow_total") - overflowBefore,
+		"write_timeout_closes": labeledCounter("player_tcp_write_deadline_total", "deadline", "write_timeout") - writeTimeoutBefore,
+		"healthy_frames_received": received.Load(),
+	}
+	line, _ := json.Marshal(result)
+	t.Logf("outbound budget drill: %s", line)
+	if out := os.Getenv("DRILL_OUT"); out != "" {
+		file, err := os.OpenFile(out, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = file.Write(append(line, '\n'))
+		_ = file.Close()
+	}
+	if peak.Load() > config.OutboundResidentBytes {
+		t.Fatalf("peak resident %d bytes exceeds the %d-byte budget", peak.Load(), config.OutboundResidentBytes)
+	}
+	if budgetRefusals != refused.Load() {
+		t.Fatalf("player_tcp_outbound_budget_exhausted_total grew by %d, the pushers saw %d budget refusals", budgetRefusals, refused.Load())
+	}
+	server.mu.RLock()
+	for player := 1; player <= healthy; player++ {
+		if len(server.playerSessions[int64(player)]) == 0 {
+			server.mu.RUnlock()
+			t.Fatalf("healthy player %d lost its connection during the drill", player)
+		}
+	}
+	server.mu.RUnlock()
 }

@@ -21,7 +21,7 @@ import (
 //
 //	docker run --rm -p 6379:6379 redis:7
 //	REDIS_ADDR=127.0.0.1:6379 go test -tags integration ./mail/ -run Integration
-func integrationClient(t *testing.T) fredis.IRedis {
+func integrationClient(t testing.TB) fredis.IRedis {
 	t.Helper()
 	addr := os.Getenv("REDIS_ADDR")
 	if addr == "" {
@@ -387,4 +387,109 @@ func TestIntegrationLazyBroadcastOverRedis(t *testing.T) {
 			t.Fatalf("key %s exists = %d, %v", key, n, err)
 		}
 	}
+}
+
+// 全服邮件账本在上界附近的成本（KNOWN-LIMITS“全服邮件账本规模没有压测”）：账本是一个 Redis 键里的整份 JSON，
+// 每次发布 / 撤回整体读写。基准把账本维持在上界 DefaultMaxActiveBroadcasts 条附近：
+//
+//   - publish：每次发布一封、同时让最早的一封按业务时间过期被回收（Publish 的 nowUnix 逐次前进一秒），账本条数不变；
+//   - revoke：撤回一封未撤回的（每封只撤一次，撤完换新一批）；
+//   - snapshot-hinted：读路径的常见情况——版本键没变、进程内缓存命中，每次只读一次版本键（十万级在线登录时的读压力）；
+//   - snapshot-reload：版本变了之后第一次读（每个 mail 进程各一次），整份账本读出并解码。
+//
+// 运行（私有 Redis，键前缀按运行区分、用后清理）：
+//
+//	REDIS_ADDR=127.0.0.1:<port> go test -tags integration ./service/mail -run '^$' -bench BroadcastLedgerAtCapacity -benchtime 2000x -count 3
+//
+// Redis Cluster：REDIS_ADDR 写种子地址列表时同样适用（账本与版本键各在一个节点上）。
+func BenchmarkBroadcastLedgerAtCapacity(b *testing.B) {
+	ctx := context.Background()
+	client := integrationClient(b)
+	newIndex := func(b *testing.B) (BroadcastIndex, int64) {
+		prefix := fmt.Sprintf("mailbench:%d", time.Now().UnixNano())
+		redistest.Cleanup(b, os.Getenv("REDIS_ADDR"), prefix)
+		index, err := NewRedisBroadcastIndex(client, prefix, 0, 0)
+		if err != nil {
+			b.Fatal(err)
+		}
+		// 预先放满：第 k 封在 base+k+1 过期，publish 子项每前进一秒回收一封。
+		base := int64(1_900_000_000)
+		for k := range DefaultMaxActiveBroadcasts {
+			if _, err := index.Publish(ctx, benchBroadcast(k, base, base+int64(k)+1), base, DefaultMaxActiveBroadcasts); err != nil {
+				b.Fatal(err)
+			}
+		}
+		return index, base
+	}
+	b.Run("publish", func(b *testing.B) {
+		index, base := newIndex(b)
+		b.ReportAllocs()
+		i := 0
+		for b.Loop() {
+			now := base + int64(i) + 1 // 第 i 封此刻过期、被回收
+			mail := DefaultMaxActiveBroadcasts + i
+			if _, err := index.Publish(ctx, benchBroadcast(mail, now, now+int64(DefaultMaxActiveBroadcasts)+1), now, DefaultMaxActiveBroadcasts); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	})
+	b.Run("revoke", func(b *testing.B) {
+		index, base := newIndex(b)
+		b.ReportAllocs()
+		i := 0
+		for b.Loop() {
+			if i == DefaultMaxActiveBroadcasts {
+				b.StopTimer()
+				index, base = newIndex(b)
+				i = 0
+				b.StartTimer()
+			}
+			if _, changed, err := index.Revoke(ctx, benchBroadcastID(i), base); err != nil || !changed {
+				b.Fatalf("revoke %d: changed=%v err=%v", i, changed, err)
+			}
+			i++
+		}
+	})
+	b.Run("snapshot-hinted", func(b *testing.B) {
+		index, _ := newIndex(b)
+		if ledger, err := index.Snapshot(ctx); err != nil || len(ledger.Mails) != DefaultMaxActiveBroadcasts {
+			b.Fatalf("warm snapshot: %d mails, %v", len(ledger.Mails), err)
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := index.Snapshot(ctx); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("snapshot-reload", func(b *testing.B) {
+		index, base := newIndex(b)
+		b.ReportAllocs()
+		i := 0
+		for b.Loop() {
+			b.StopTimer()
+			if i == DefaultMaxActiveBroadcasts {
+				index, base = newIndex(b)
+				i = 0
+			}
+			// 撤回一封让账本换版本（版本键随之前进），下一次 Snapshot 的进程内缓存失效、整份读出。
+			if _, changed, err := index.Revoke(ctx, benchBroadcastID(i), base); err != nil || !changed {
+				b.Fatalf("revoke %d: changed=%v err=%v", i, changed, err)
+			}
+			i++
+			b.StartTimer()
+			if ledger, err := index.Snapshot(ctx); err != nil || len(ledger.Mails) != DefaultMaxActiveBroadcasts {
+				b.Fatalf("snapshot after a change: %d mails, %v", len(ledger.Mails), err)
+			}
+		}
+	})
+}
+
+func benchBroadcastID(k int) string { return fmt.Sprintf("bench-broadcast-%06d", k) }
+
+// benchBroadcast 是一封约 150 字节账本记录的广播（账本只记 ID、范围与时间）。
+func benchBroadcast(k int, createdAt, expiresAt int64) Envelope {
+	return Envelope{ID: benchBroadcastID(k), Audience: AudienceBroadcast, Scope: ServerScope(int32(1 + k%4)),
+		Subject: "maintenance compensation", CreatedAtUnix: createdAt, ExpiresAtUnix: expiresAt}
 }

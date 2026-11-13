@@ -248,7 +248,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 - 补位与普通成局的优先级由业务匹配循环决定：本例玩家选“快速加入”才进补位队列，一名玩家同时只排一个队列（两个队列各有一张有效票会被两边各成一局，存储不跨队列检查）。
 - 跨分区不支持：房间票与玩家票要在同一分区，`CommitAcross` 不用于补位。
 - 本例只补主动离开的座位：掉线出局的人仍是房间同步组成员（宽限期满不自动退组），他的座位不补；房间码房间不补；离开者保留座位记录（结算、归还要用），记录数上限 `MaxSeatRecords`（16）。
-- 场景只用内存存储与单进程匹配循环；Redis 存储上的补位、多个匹配器进程没有跑（两个匹配器实例的并发 `Commit` 在同一进程里用 goroutine 模拟）。
+- 场景本身只用内存存储与单进程匹配循环（两个匹配器实例的并发 `Commit` 在同一进程里用 goroutine 模拟）。Redis 存储上的补位由 `wiring/integration` 的 `TestMatchBackfillWithTwoMatchersOnRedis` 单独覆盖：单机 Redis 与 Redis Cluster 上两个匹配器实例各用自己的连接与 `Store`（对存储而言与两个匹配器进程相同：只经 Redis 上的比较并设置相遇），按相反票序提交互相重叠的票集合、房间按剩余空位一轮轮挂票，验每张票至多进一局、每局恰好一张房间票、座位最终填满。它用的是与 `Pass` 同一规则的副本，不经房间的进房 handler；补位吞吐没有测。
 
 ### 7. 结算、归还与销毁
 
@@ -300,7 +300,7 @@ bash scripts/test-party-room-generated.sh
 ### 12. 业务纵切证明什么
 
 - **证明**：公共 CLI 生成的 Player / PartyRoom DAO、实体心跳（真实驱动循环、批量投递）、持久实体定时器、`nopersist,sync` 字段与业务 packer、多实体 Sender 与 Nest 在 18 个组合下的事务、undo 回滚（含心跳启停与定时器）、锁顺序、业务幂等与时间判定；正式 `wiring/nest` Mod + `wiring/selfsync`（自身视图 + 房间同步组，同一个 Manager）经 Nest 提交门把同一份记分板推给全体成员、把 Player 推给本人（正式 `entitysync.Decoder` 解码、按命名空间分流、视图白名单）；`service/match` 与 `service/session` 的正式领域实现（内存存储）在成局、进房、重连、归还里的语义；业务层补位（第 6A 节）在离开后挂票、并发成局只消耗一次房间票、进房 handler 按座位拒绝超员、截止撤票与迟到成局全部拒绝、补位的人进 session 并收到全量里的行为。
-- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；房间销毁只做内存卸载；match / session 用内存存储，不含 Redis 与 RPC；玩家接入层是替身（连接激活 / 关闭直接调 `OnActive` / `OnClosed`，推送进内存客户端），没有经嵌入 TCP / 独立 Gate、慢消费者断开、真实客户端（同一入口的真实 TCP 用例在 `wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection`）；单进程；补位的“两个匹配器实例”是同一进程里的两个 goroutine，没有多进程匹配器、Redis 存储上的补位与补位吞吐；心跳在 `-race` 下的少量房间运行，没有房间数量、心跳负载与推送带宽的容量数据；夹具里的数值是样例。
+- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；房间销毁只做内存卸载；match / session 用内存存储，不含 Redis 与 RPC；玩家接入层是替身（连接激活 / 关闭直接调 `OnActive` / `OnClosed`，推送进内存客户端），没有经嵌入 TCP / 独立 Gate、慢消费者断开、真实客户端（同一入口的真实 TCP 用例在 `wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection`）；单进程；补位的“两个匹配器实例”是同一进程里的两个 goroutine（Redis 存储上两个匹配器实例的补位见 §6A 局限里的 `TestMatchBackfillWithTwoMatchersOnRedis`，不经房间 handler），没有补位吞吐；心跳在 `-race` 下的少量房间运行，没有房间数量、心跳负载与推送带宽的容量数据；夹具里的数值是样例。
 
 ### 13. 真实 WAL / Mongo 崩溃恢复
 

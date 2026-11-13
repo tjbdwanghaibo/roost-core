@@ -528,6 +528,16 @@ func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID
 		return fmt.Errorf("%w: nothing written before the caller's deadline: %w", context.DeadlineExceeded, err)
 	}
 	metrics.IncCounter("player_tcp_write_error_total", nil, 1)
+	// 写期限到期而关闭连接时说清是哪一个期限：write_timeout，还是调用方更早的期限（独立 Gate 的 WritePacket 传入的
+	// 单帧发送预算，缺省不超过 outbound.send_timeout 250ms）。两者都是 i/o timeout，原来日志与指标分不出来。
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		deadline, what := "write_timeout", fmt.Sprintf("write_timeout (%v)", session.writeTimeout)
+		if callerDeadline {
+			deadline, what = "send_budget", "the frame's send budget (the caller's deadline, earlier than write_timeout)"
+		}
+		metrics.IncCounter("player_tcp_write_deadline_total", metrics.Labels{"deadline": deadline}, 1)
+		return fmt.Errorf("%w: %s ran out after %d of %d bytes: %w", errConnectionBroken, what, written, int64(len(header))+int64(len(payload)), err)
+	}
 	return fmt.Errorf("%w: %w", errConnectionBroken, err)
 }
 

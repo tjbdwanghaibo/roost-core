@@ -109,7 +109,7 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - **改材质**：覆盖的点材质改成 `Material`，不看衰减；不动高度。
 - **输出**：`Apply` 返回每块改了值的点（`PointChange{Index, Height, Material}`，下标按升序），值没变的点不出现；`ChunkChange.HeightChanges` 是这块改了高度的点数（上层的整字段守卫按它判断）。
 - **只数不改**：`View.BrushChanges(b, limits)` 返回把 `b` 用在视图当前数据上会改变值的高度点数与材质点数（算法同 `Apply`，每个采样点只算一次，一个点两者都变算 2）。不复制块数据（装入的块不可变）、只读、可并发；覆盖到没装的块报 `ErrNotLoaded`。结果是读到时的快照，上层拿它在事务之前估算改动量（game-demo 的每玩家改动点数配额，[方案 §17](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#17-编辑配额与材质守卫-500-实施结果2026-11-08)）。
-- **拆成几部分（为 P5 跨格编辑而加）**：`ApplyIn(meta, limits, chunks, part)` / `View.BrushChangesIn(b, limits, part)` 只算 `part` 里的块（nil 是全部）。每个采样点的结果只取决于它自己编辑前的值与到中心的距离，所以各部分合起来与整笔 `Apply` 逐点相同（`TestABrushSplitIntoPartsAddsUpToTheWholeBrush`）；只有 part 里覆盖到的块需要数据。维护者 2026-11-10 撤回跨格笔刷（覆盖两个格的笔刷在 Base 上直接拒绝，[方案 §30.10](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)），game-demo 不再按部分调用，这两个入口保留为通用能力。`Footprint(meta)` 是每块被覆盖的采样点数，只看几何：一次笔刷只改一个字段，所以它是这块改动点数的上限，没装这些块的进程（分区场景转发编辑的 Base）按它预扣配额（仍在用）。
+- **每块的改动上限**：`Footprint(meta)` 是每块被覆盖的采样点数，只看几何：一次笔刷只改一个字段，所以它是这块改动点数的上限，没装这些块的进程（分区场景转发编辑的 Base）按它预扣配额（仍在用）。
 
 **金样**：[client/spec/terrain-brush.json](../../client/spec/terrain-brush.json)——`ISqrt` 表、三种衰减的权重表、17 个笔刷（四种操作 × 三种衰减、块边界、四块交点、夹到基岩 / 上限、整平幂等、地图边缘）在 `terrain-golden.pack` 原始块上的结果：每例覆盖的块、每块改了的点数与 SHA-256（逐点 `index u16 LE, height u16 LE, material u8` 按下标升序），点数不超过 40 时列出全部点。`TestClientBrushGolden` 核对；改算法时 `go test ./gameplay/terrain -run TestClientBrushGolden -update`（不重写包）。
 

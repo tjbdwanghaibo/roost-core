@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -847,6 +848,254 @@ func TestMatchFlexibleGroupingOnRedis(t *testing.T) {
 	if across, err := store.CommitAcross(ctx, refs); err != nil || len(across.Members) != 2 {
 		t.Fatalf("a small cross-partition group after the fill wait on Redis = (%+v, %v)", across, err)
 	}
+}
+
+// 补位的业务层写法（PARTY-ROOM-INTEGRATION §6A）在真实 Redis 上、两个匹配器实例并发时的存储保证：
+// 补位队列里一张房间票（Score = 空位数）+ 若干玩家票弹性成局，房间按剩余空位一轮轮挂票；两个匹配器各用自己的连接与 Store 实例
+// （与两个匹配器进程对存储的访问相同：只经 Redis 上的比较并设置相遇），按相反的票序取人、提交互相重叠
+// 的票集合，玩家票在匹配期间陆续排进来。断言：每张房间票、每张玩家票至多进一局；每局恰好一张房间票、
+// 玩家数不超过它的 Score；最后所有座位被填满、存储里每张已匹配的票指向它所在的那一局。
+// 不超员的最终裁决在房间的进房 handler（存储不认识房间票），这里只验存储与匹配循环这一侧。
+// 单机 Redis 用 REDIS_ADDR；Cluster 用 ROOST_REVIEW_CLUSTER（逗号分隔的种子地址），未设置的一侧跳过。
+func TestMatchBackfillWithTwoMatchersOnRedis(t *testing.T) {
+	t.Run("single", func(t *testing.T) {
+		addr := os.Getenv("REDIS_ADDR")
+		if addr == "" {
+			t.Skip("set REDIS_ADDR")
+		}
+		runBackfillWithTwoMatchers(t, addr, func() fredis.IRedis { return client(t) })
+	})
+	t.Run("cluster", func(t *testing.T) {
+		addrs := os.Getenv("ROOST_REVIEW_CLUSTER")
+		if addrs == "" {
+			t.Skip("set ROOST_REVIEW_CLUSTER")
+		}
+		runBackfillWithTwoMatchers(t, addrs, func() fredis.IRedis {
+			cfg := fredis.DefaultConfig("")
+			cfg.ClusterAddrs = strings.Split(addrs, ",")
+			c, err := kitredis.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("connect cluster %s: %v", addrs, err)
+			}
+			t.Cleanup(func() { _ = c.Close() })
+			return c
+		})
+	})
+}
+
+func runBackfillWithTwoMatchers(t *testing.T, cleanupAddrs string, connect func() fredis.IRedis) {
+	const (
+		rooms        = 6
+		seatsPerRoom = 3
+		players      = rooms * seatsPerRoom
+		kindRoom     = match.SubjectKind("party_room")
+		kindPlayer   = match.SubjectKind("player")
+	)
+	keyPrefix := fmt.Sprintf("itest:backfill:%d", time.Now().UnixNano())
+	redistest.Cleanup(t, cleanupAddrs, keyPrefix)
+	queue := match.Queue{Mode: "party-backfill", GroupSize: 8, MinSize: 2, Partition: "p1"}
+	stores := make([]match.Store, 2)
+	for i := range stores {
+		store, err := match.NewRedisStore(connect(), keyPrefix, match.Config{TicketTTL: time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores[i] = store
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// listRoom 是房间宿主的 SyncRoom：按“房间 ID + 轮次”挂出本轮房间票（Score 是此刻的空位数）。
+	listRoom := func(store match.Store, room int64, round, seats int) error {
+		subject := match.Subject{Kind: kindRoom, ID: room, Score: int64(seats)}
+		_, err := store.Enqueue(ctx, queue, subject, fmt.Sprintf("backfill:%d:%d", room, round))
+		return err
+	}
+	for r := 0; r < rooms; r++ {
+		if err := listRoom(stores[r%2], int64(1000+r), 1, seatsPerRoom); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 玩家分批排进来，与两个匹配循环并发。
+	var enqueueErr error
+	var enqueued sync.WaitGroup
+	enqueued.Add(1)
+	go func() {
+		defer enqueued.Done()
+		for p := 0; p < players; p++ {
+			subject := match.Subject{Kind: kindPlayer, ID: int64(p + 1)}
+			if _, err := stores[p%2].Enqueue(ctx, queue, subject, fmt.Sprintf("join:%d:1", subject.ID)); err != nil {
+				enqueueErr = err
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// pass 是补位匹配循环的一轮（与 party-room 夹具 partymatch.Pass 同一规则）：房间票各配最多 Score 张玩家票；
+	// reverse 让第二个匹配器按相反票序取人，与第一个提交部分重叠的票集合。
+	pass := func(store match.Store, reverse bool) ([]match.Match, int, error) {
+		candidates, err := store.Candidates(ctx, queue, match.MaxPageSize)
+		if err != nil {
+			return nil, 0, err
+		}
+		var roomList, playerList []match.Ticket
+		for _, ticket := range candidates {
+			switch ticket.Subject.Kind {
+			case kindRoom:
+				roomList = append(roomList, ticket)
+			case kindPlayer:
+				playerList = append(playerList, ticket)
+			}
+		}
+		if reverse {
+			slices.Reverse(roomList)
+			slices.Reverse(playerList)
+		}
+		var formed []match.Match
+		conflicts := 0
+		for _, room := range roomList {
+			n := min(int(room.Subject.Score), len(playerList), queue.GroupSize-1)
+			if n == 0 {
+				break
+			}
+			ids := []string{room.ID}
+			for _, player := range playerList[:n] {
+				ids = append(ids, player.ID)
+			}
+			playerList = playerList[n:]
+			m, err := store.Commit(ctx, queue, ids)
+			if errors.Is(err, match.ErrConflict) || errors.Is(err, match.ErrTicketMissing) {
+				conflicts++
+				continue
+			}
+			if err != nil {
+				return formed, conflicts, err
+			}
+			formed = append(formed, m)
+		}
+		return formed, conflicts, nil
+	}
+
+	// 弹性队列不等待（FillAfterSeconds 0），一张房间票配上一个玩家就能成局，所以一个房间的座位分几轮填：
+	// 成局后房间宿主（这里由第一个看到这一局的匹配器代办，同一局的重放只算一次）按剩余空位挂下一轮的房间票。
+	var mu sync.Mutex
+	formed := map[string]match.Match{}
+	roomRound := map[int64]int{}
+	roomSeated := map[int64]int{}
+	totalConflicts := 0
+	seatedTotal := func() int {
+		n := 0
+		for _, m := range formed {
+			n += len(m.TicketIDs) - 1
+		}
+		return n
+	}
+	var loops sync.WaitGroup
+	for i, store := range stores {
+		loops.Add(1)
+		go func(store match.Store, reverse bool) {
+			defer loops.Done()
+			for ctx.Err() == nil {
+				ms, conflicts, err := pass(store, reverse)
+				if err != nil {
+					t.Errorf("backfill pass: %v", err)
+					return
+				}
+				type relist struct {
+					room         int64
+					round, seats int
+				}
+				var next []relist
+				mu.Lock()
+				totalConflicts += conflicts
+				for _, m := range ms {
+					if _, seen := formed[m.ID]; seen {
+						continue
+					}
+					formed[m.ID] = m
+					room := m.Members[0].ID
+					roomSeated[room] += len(m.TicketIDs) - 1
+					if roomRound[room] == 0 {
+						roomRound[room] = 1
+					}
+					roomRound[room]++
+					if left := seatsPerRoom - roomSeated[room]; left > 0 {
+						next = append(next, relist{room, roomRound[room], left})
+					}
+				}
+				done := seatedTotal() >= players
+				mu.Unlock()
+				for _, r := range next {
+					if err := listRoom(store, r.room, r.round, r.seats); err != nil {
+						t.Errorf("list room %d round %d: %v", r.room, r.round, err)
+						return
+					}
+				}
+				if done {
+					return
+				}
+			}
+		}(store, i == 1)
+	}
+	enqueued.Wait()
+	loops.Wait()
+	if enqueueErr != nil {
+		t.Fatalf("enqueue a player: %v", enqueueErr)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("matchers did not seat %d players within the deadline: %d matches formed", players, len(formed))
+	}
+
+	ticketMatch := map[string]string{}
+	seated := 0
+	for id, m := range formed {
+		roomCount := 0
+		var score int64
+		for i, ticketID := range m.TicketIDs {
+			if other, dup := ticketMatch[ticketID]; dup {
+				t.Fatalf("ticket %s is in two matches %s and %s", ticketID, other, id)
+			}
+			ticketMatch[ticketID] = id
+			if m.Members[i].Kind == kindRoom {
+				roomCount++
+				score = m.Members[i].Score
+			}
+		}
+		if roomCount != 1 {
+			t.Fatalf("match %s has %d room tickets, want exactly 1: %+v", id, roomCount, m.Members)
+		}
+		if players := int64(len(m.TicketIDs) - 1); players > score {
+			t.Fatalf("match %s seats %d players into a room ticket with %d open seats", id, players, score)
+		}
+		seated += len(m.TicketIDs) - 1
+	}
+	if seated != players {
+		t.Fatalf("%d players seated in %d matches, want %d", seated, len(formed), players)
+	}
+	for room, n := range roomSeated {
+		if n != seatsPerRoom {
+			t.Fatalf("room %d got %d players across its rounds, want %d", room, n, seatsPerRoom)
+		}
+	}
+	for ticketID, matchID := range ticketMatch {
+		m := formed[matchID]
+		var subject match.Subject
+		for i, id := range m.TicketIDs {
+			if id == ticketID {
+				subject = m.Members[i]
+			}
+		}
+		stored, found, err := stores[0].Ticket(ctx, queue, ticketID, subject)
+		if err != nil || !found || stored.State != match.TicketMatched || stored.MatchID != matchID {
+			t.Fatalf("ticket %s in match %s is stored as (%+v, %v, %v)", ticketID, matchID, stored, found, err)
+		}
+	}
+	if left, err := stores[1].Candidates(ctx, queue, match.MaxPageSize); err != nil || len(left) != 0 {
+		t.Fatalf("waiting tickets after every seat was filled = (%d, %v), want none", len(left), err)
+	}
+	t.Logf("%d matches over %d rooms, %d conflicting commits between the two matchers", len(formed), rooms, totalConflicts)
 }
 
 // --- rank ---

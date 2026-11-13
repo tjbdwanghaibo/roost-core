@@ -136,6 +136,10 @@ type DaoTag struct {
 	Sync    bool
 	Skip    bool // dao:"-"
 	Map     string
+	// Switches 是 tag 里写出的 persist / nopersist / sync / nosync 选项（按出现顺序），Written 是 dao tag 原文；
+	// 只用于拒绝写在嵌套类型字段上的开关：那里没有字段级的持久 / 同步，写了也不生效。
+	Switches []string
+	Written  string
 }
 
 func parseDefDir(dir string) (*Definitions, error) {
@@ -189,7 +193,31 @@ func parseDefDir(dir string) (*Definitions, error) {
 	if err := validateReferenceShapes(defs); err != nil {
 		return nil, err
 	}
+	if err := validateNestedFieldSwitches(defs); err != nil {
+		return nil, err
+	}
 	return defs, nil
+}
+
+// validateNestedFieldSwitches 拒绝写在嵌套类型字段上的 persist / nopersist / sync / nosync。
+//
+// 持久与同步只按 DAO 顶层字段决定：顶层字段的脏位决定落库与下发，嵌套类型的全部字段随它整体落库、整体编进同步补丁
+// （嵌套的同步消息与持久路径都不看字段开关）。这些开关写在嵌套字段上曾被接受却不生效——标了 nosync 的内部账本照样
+// 发给客户端——所以在解析期报错，给出改法：把这部分状态拆进另一个嵌套类型，挂到单独的顶层字段上，在顶层字段写开关。
+// 不改开关的 map= 与整字段排除的 "-" 照常可用。
+func validateNestedFieldSwitches(defs *Definitions) error {
+	for _, nested := range defs.Nested {
+		for _, field := range nested.Fields {
+			if len(field.Tag.Switches) == 0 {
+				continue
+			}
+			return fmt.Errorf("nested struct %s field %s: dao:%q is not supported on a nested struct's field: persistence and sync are decided per top-level DAO field, "+
+				"and every field of a nested struct is stored and synced with it; move the field into its own nested struct held by a separate top-level DAO field "+
+				"and write dao:%q on that top-level field (dao:\"-\" and map= stay allowed on nested fields)",
+				nested.Name, field.Name, field.Tag.Written, strings.Join(field.Tag.Switches, ","))
+		}
+	}
+	return nil
 }
 
 // referenceShapeAdvice 是被拒形状统一给出的改法：生成的取值方法对这些写法交出的值要么是值本身、要么是副本、要么是
@@ -692,19 +720,23 @@ func ParseFieldOptions(val string) (DaoTag, error) {
 	}
 
 	parts := strings.Split(val, ",")
-	dt := DaoTag{Persist: true, Sync: true}
+	dt := DaoTag{Persist: true, Sync: true, Written: val}
 	var persist, noPersist, sync, noSync bool
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		switch {
 		case p == "persist":
 			persist = true
+			dt.Switches = append(dt.Switches, p)
 		case p == "nopersist":
 			noPersist = true
+			dt.Switches = append(dt.Switches, p)
 		case p == "sync":
 			sync = true
+			dt.Switches = append(dt.Switches, p)
 		case p == "nosync":
 			noSync = true
+			dt.Switches = append(dt.Switches, p)
 		case p == "map=small" || p == "map=fast" || p == "map=sharded":
 			dt.Map = strings.TrimPrefix(p, "map=")
 		case strings.HasPrefix(p, "map="):
