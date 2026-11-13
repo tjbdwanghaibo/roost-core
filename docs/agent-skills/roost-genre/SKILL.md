@@ -8,6 +8,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 ## 0. 先读这几条
 
 - **任务是“按一段需求定制服务逻辑”或“在已有工程上加功能”时，直接读 [references/compose.md](references/compose.md)**，本文其余部分是按玩法出 demo 的流程与版本细节，不必读完；需要查某项能力时看[能力清单](../../framework/CAPABILITIES.md)。
+- **先判断需不需要这套服务器框架**（按玩法出 demo 时同样适用）：只是平台内小人数联机开房间、局外没有要服务器保存与防作弊的状态时，不建议用 roost。例如只在 Steam 上发行、人数少的联机房间，建议 Steam Lobby + Netcode for GameObjects + Steam 传输层。判断为不需要或只需要一部分时，先告诉用户理由与替代方案，由用户决定（[compose.md §0C](references/compose.md#0c-先判断这个需求真的需要这套服务器框架吗)）。
 - **两种模式，开始时先问一次**：“要用专业模式吗？”默认（不选、没回答、无人可问）是业余模式，skill 自己拆业务、用样例值做完，只在需求与限制冲突时提问；专业模式把业务拆分、数值、复用结论、状态归属一次列出来请开发者确认，服务器 / 客户端的边界由开发者逐个把控，确认后才写代码；两种模式最后都生成工程说明文档（[compose.md §0B](references/compose.md#0b-两种模式业余默认与专业)）。
 - **skill 对使用它的 agent 只读**：不修改本目录下任何文件，也不改 roost-core 的模块模板与框架；发现 skill 有问题告诉用户，由维护者改。**记忆放在工程里**：`docs/DEMO.zh-CN.md`（当前状态）与 `docs/DEMO-HISTORY.zh-CN.md`（逐次变更），后续增改需求先读它们（[compose.md §2A](references/compose.md#2a-后续增加与修改需求)）。
 - **交付物包括一份工程说明文档**：每个生成的工程带 `docs/DEMO.zh-CN.md`，写明需求怎么分到服务器与客户端、用了哪些模块、生成了哪些实体、用了哪些服务、协议与错误码、客户端怎么对接（[compose.md §1“再分端”、§5A](references/compose.md#5a-工程说明文档)）。本 skill 只生成服务器逻辑，客户端部分交付对接说明。
