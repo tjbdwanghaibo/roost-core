@@ -712,7 +712,7 @@ func run(ctx context.Context) error {
 		var before int64
 		if err := waitFor(ctx, 5*time.Second, "p1 holds its own Player", func() (bool, string) {
 			o, ok := p1.ownPlayer()
-			before = asInt(o.fields["exp"])
+			before, _ = clientsync.PlayerExp(o.fields)
 			return ok, p1.describe()
 		}); err != nil {
 			return err
@@ -726,12 +726,13 @@ func run(ctx context.Context) error {
 		}
 		if err := waitFor(ctx, 5*time.Second, "p1 sees its exp change", func() (bool, string) {
 			o, _ := p1.ownPlayer()
-			return asInt(o.fields["exp"]) == before+7, fmt.Sprintf("exp %v want %d", o.fields["exp"], before+7)
+			exp, present := clientsync.PlayerExp(o.fields)
+			return present && exp == before+7, fmt.Sprintf("exp %v want %d", exp, before+7)
 		}); err != nil {
 			return err
 		}
 		if s, ok := p1.self(); ok {
-			if _, carries := s.fields["exp"]; carries {
+			if _, carries := clientsync.PlayerExp(s.fields); carries {
 				return fmt.Errorf("the scene actor's mirror carries exp: %v", s.fields)
 			}
 		}
@@ -836,9 +837,13 @@ func run(ctx context.Context) error {
 	}
 	plans := []hitPlan{
 		// 格 (0,0) 里（从未越过 3000 - H）打格 (1,0) 的怪（3010..3040）。
-		{stand: point{2950, 1500}, target: func() int64 { return pickMonster(p1, func(p point) bool { return p.X >= boundary && p.X < boundary+100 }) }},
+		{stand: point{2950, 1500}, target: func() int64 {
+			return pickMonster(p1, func(p point) bool { return p.X >= boundary && p.X < boundary+100 })
+		}},
 		// 走过 3000 + H 交给格 (1,0) 后打格 (0,0) 的怪（2960..2990）。
-		{stand: point{3070, 1500}, target: func() int64 { return pickMonster(p1, func(p point) bool { return p.X < boundary && p.X > boundary-100 }) }},
+		{stand: point{3070, 1500}, target: func() int64 {
+			return pickMonster(p1, func(p point) bool { return p.X < boundary && p.X > boundary-100 })
+		}},
 	}
 	for i, plan := range plans {
 		if err := p1.walkTo(ctx, plan.stand.X, plan.stand.Y, 100); err != nil {
@@ -854,7 +859,10 @@ func run(ctx context.Context) error {
 		atk := attackOf(p1)
 		statsBefore, _ := gm(ctx, 1000, "gm.scene.partition", nil)
 		forwardedBefore := cellsStat(ctx, "DamageForwarded")
-		const n = 10
+		n := min(int64(10), (startHP-1)/atk)
+		if n < 1 {
+			return fmt.Errorf("attack %d: target starts too weak for nonlethal checks", i)
+		}
 		var firstSeq, lastSeq uint64
 		for k := range n {
 			seq, err := p1.attack(ctx, target)
@@ -890,7 +898,7 @@ func run(ctx context.Context) error {
 		// 第 2 项：每一次攻击的结论都推到攻击方客户端：applied、伤害、目标 HP 逐次下降到客户端同步里看到的值。
 		soft(fmt.Sprintf("attack_results_%d", i), waitFor(ctx, 5*time.Second, "attack results pushed to the attacker", func() (bool, string) {
 			got := p1.resultsFor(firstSeq, lastSeq)
-			if len(got) < n {
+			if int64(len(got)) < n {
 				return false, fmt.Sprintf("%d of %d pushes", len(got), n)
 			}
 			minHP := int32(math.MaxInt32)
@@ -904,9 +912,41 @@ func run(ctx context.Context) error {
 		}))
 		step(fmt.Sprintf("attack_across_%d", i), map[string]any{"target": target, "start_hp": startHP, "end_hp": wantHP, "damage": atk,
 			"pushed_results": len(p1.resultsFor(firstSeq, lastSeq)),
-			"applied": applied, "duplicate": attackStat(statsAfter, "duplicate") - attackStat(statsBefore, "duplicate"),
+			"applied":        applied, "duplicate": attackStat(statsAfter, "duplicate") - attackStat(statsBefore, "duplicate"),
 			"damage_forwarded_by_cells": cellsStat(ctx, "DamageForwarded") - forwardedBefore,
-			"damage_retries_total": cellsStat(ctx, "DamageRetries")})
+			"damage_retries_total":      cellsStat(ctx, "DamageRetries")})
+		if i == 0 {
+			own, _ := p1.ownPlayer()
+			beforeCoins, ok := clientsync.PlayerCoins(own.fields)
+			if !ok {
+				return errors.New("death reward: own wallet is missing")
+			}
+			for remaining := wantHP; remaining > 0; remaining -= atk {
+				if _, err := p1.attack(ctx, target); err != nil {
+					return err
+				}
+				time.Sleep(30 * time.Millisecond)
+			}
+			if err := waitFor(ctx, 8*time.Second, "death reward committed and synced", func() (bool, string) {
+				o, _ := p1.ownPlayer()
+				coins, _ := clientsync.PlayerCoins(o.fields)
+				return coins == beforeCoins+1, fmt.Sprintf("coins %d want %d", coins, beforeCoins+1)
+			}); err != nil {
+				return err
+			}
+			if err := waitFor(ctx, 25*time.Second, "birth slot respawned", func() (bool, string) {
+				o, ok := p1.snapshot()[target]
+				return ok && o.hp() == startHP, fmt.Sprintf("visible=%v hp=%d want=%d", ok, o.hp(), startHP)
+			}); err != nil {
+				return err
+			}
+			o, _ := p1.ownPlayer()
+			coins, _ := clientsync.PlayerCoins(o.fields)
+			if coins != beforeCoins+1 {
+				return fmt.Errorf("death reward repeated: %d", coins)
+			}
+			step("death_reward_respawn", map[string]any{"target": target, "coins_before": beforeCoins, "coins_after": coins, "respawn_hp": startHP})
+		}
 	}
 
 	// 第 3 项 = A：战斗面板的权威在 Cell 的 Real。p1 升一级（AddExp 一级的经验）：Base 在同一笔事务里推出新面板、提交后发给
@@ -918,8 +958,8 @@ func run(ctx context.Context) error {
 			return errors.New("p1 does not see itself")
 		}
 		maxBefore, atkBefore, hpBefore := asInt(self.fields["cell_max_hp"]), attackOf(p1), self.hp()
-		if maxBefore <= 0 || atkBefore != *damage {
-			return fmt.Errorf("before the level-up: cell_max_hp %d cell_attack %d, want a panel with the level-0 attack %d", maxBefore, atkBefore, *damage)
+		if maxBefore <= 0 || atkBefore <= 0 {
+			return fmt.Errorf("before the level-up: cell_max_hp %d cell_attack %d, want a positive level-1 panel", maxBefore, atkBefore)
 		}
 		resp, err := p1.call(ctx, msgid.MsgAddExp, must(pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 100})))
 		if err != nil {
@@ -1092,7 +1132,7 @@ func run(ctx context.Context) error {
 			return false, err.Error()
 		}
 		s, ok := p2.self()
-		return asInt(state["epoch"]) > asInt(before7["epoch"]) && ok && s.hp() == wantHP && s.updated.After(restartedAt),
+		return asInt(state["epoch"]) > asInt(before7["epoch"]) && ok && s.hp() == wantHP && s.updated.After(killedAt),
 			fmt.Sprintf("base %v client hp %d", state, s.hp())
 	}); err != nil {
 		return err
@@ -1241,7 +1281,10 @@ func (c *client) team(ctx context.Context, id uint32, payload []byte) (*pb.TeamV
 	if r.Code != 0 {
 		return nil, fmt.Errorf("%s team msg %d: code %d %s", c.name, id, r.Code, r.Reason)
 	}
-	if r.Info == nil { return &pb.TeamView{}, nil }; return r.Info, nil
+	if r.Info == nil {
+		return &pb.TeamView{}, nil
+	}
+	return r.Info, nil
 }
 
 // actorOf 是客户端手里玩家 playerID 的 SceneActor（本进程没有登记实体种类：按 kind 与 unique 认）。
@@ -1298,7 +1341,9 @@ func teamPanel(ctx context.Context, accountsClient *svcaccount.BusClient, nonce 
 		return fmt.Errorf("p1 already holds p6 before the team: %s", p1.describe())
 	}
 
-	if _,err:=p1.team(ctx,msgid.MsgTeamCreate,must(pb.MarshalTeamCreateRequest(&pb.TeamCreateRequest{})));err!=nil{return err}
+	if _, err := p1.team(ctx, msgid.MsgTeamCreate, must(pb.MarshalTeamCreateRequest(&pb.TeamCreateRequest{}))); err != nil {
+		return err
+	}
 	invited, err := p1.team(ctx, msgid.MsgTeamInvite, must(pb.MarshalTeamInviteRequest(&pb.TeamInviteRequest{Invitee: p6.playerID})))
 	if err != nil {
 		return err
@@ -1504,7 +1549,7 @@ func attackOf(c *client) int64 {
 func (c *client) ownPlayer() (object, bool) {
 	for id, o := range c.snapshot() {
 		if entity.GetEntityKindFromID(id) != kindSceneActor && entity.GetUniqueIDFromEntityID(id) == c.playerID && o.ns == "player" {
-			if _, hasExp := o.fields["exp"]; hasExp {
+			if _, hasExp := clientsync.PlayerExp(o.fields); hasExp {
 				return o, true
 			}
 		}

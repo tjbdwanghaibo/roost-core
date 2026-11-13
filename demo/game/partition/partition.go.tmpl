@@ -2,12 +2,13 @@
 // 装在哪里、SceneActor / Monster 的 DAO 与 cellworld.ActorState 怎么互相映射、Player 的 DAO 与 cellworld.BaseState
 // 怎么互相映射。实体包（scene_actor、monster、player、scene）与 game 服务都引用它，它不引用任何实体包。
 //
-// 原型，不是现行能力：设计与取舍见 roost-core 分支 feat/seamless-world-prototype 的
-// docs/maintenance/FEATURE-2026-11-03-seamless-world.md §10。没有声明 scene.partition.enabled 的进程从不安装 Node，
+// 共享授权、迁移与恢复契约见 core 的 gameplay/cellworld/README.md。
+// 没有声明 scene.partition.enabled 的进程从不安装 Node，
 // 这里的函数也不会被调用，普通场景的行为不变。
 package partition
 
 import (
+	"slices"
 	"sync/atomic"
 
 	db "{{MODULE}}/db"
@@ -44,6 +45,20 @@ type CellMode struct{}
 // CellDao 是 SceneActorDao 与 MonsterDao 共有的那组生成读写器：两个 DAO 用同名字段承载 cellworld.ActorState，
 // 所以一份映射同时服务两种实体。
 type CellDao interface {
+	GetCellSpawnGeneration() uint64
+	SetCellSpawnGeneration(uint64)
+	GetCellLife() uint64
+	SetCellLife(uint64)
+	GetCellDeath() *db.CellDeath
+	SetCellDeath(*db.CellDeath)
+	GetCellDeathAcked() bool
+	SetCellDeathAcked(bool)
+	GetCellDeathNextAt() int64
+	SetCellDeathNextAt(int64)
+	GetCellRecovery() *db.CellRecovery
+	SetCellRecovery(*db.CellRecovery)
+	GetCellOwnership() *db.CellOwnership
+	SetCellOwnership(*db.CellOwnership)
 	GetPosX() int64
 	SetPosX(int64)
 	GetPosY() int64
@@ -97,8 +112,9 @@ type CellDao interface {
 // id 与 kind 来自实体本身，不在 DAO 里。只在实体自己的 Nest 锁内调用。
 func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorState {
 	st := cellworld.ActorState{
+		SpawnGeneration: d.GetCellSpawnGeneration(),
 		EntityState: cellworld.EntityState{
-			ID: id, Kind: kind, Base: d.GetCellBase(),
+			ID: id, Kind: kind, Base: d.GetCellBase(), Life: d.GetCellLife(),
 			X: d.GetPosX(), Y: d.GetPosY(), VX: d.GetCellVX(), VY: d.GetCellVY(),
 			HP:   int32(d.GetHP()),
 			Ver:  cellworld.Version{Epoch: d.GetCellEpoch(), Seq: d.GetCellSeq()},
@@ -107,6 +123,8 @@ func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorSt
 				MaxHP: int32(d.GetCellMaxHP()), Attack: int32(d.GetCellAttack()), Power: int32(d.GetCellPower()), Ver: d.GetCellPanelVer(),
 			},
 		},
+		Recovery: readRecovery(d.GetCellRecovery()),
+		Death:    readDeath(d.GetCellDeath()), DeathAcked: d.GetCellDeathAcked(), DeathNextAt: d.GetCellDeathNextAt(),
 		Role:        cellworld.Role(d.GetCellRole()),
 		LastInput:   d.GetCellLastInput(),
 		RetryAfter:  d.GetCellRetryAfter(),
@@ -116,16 +134,17 @@ func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorSt
 		FracX:       d.GetCellFracX(),
 		FracY:       d.GetCellFracY(),
 	}
+	st.Grant, st.Pending, st.CloseEntry = readOwner(d.GetCellOwnership())
 	if n := d.CellAppliedLen(); n > 0 {
 		st.Applied = make([]cellworld.AppliedHit, 0, n)
 		d.RangeCellApplied(func(_ int, h db.CellHit) bool {
-			st.Applied = append(st.Applied, cellworld.AppliedHit{Hit: cellworld.HitID{Attacker: h.GetAttacker(), Seq: h.GetSeq()}, At: h.GetAt()})
+			st.Applied = append(st.Applied, cellworld.AppliedHit{Hit: cellworld.HitID{Attacker: h.GetAttacker(), Seq: h.GetSeq(), ID: h.GetID()}, At: h.GetAt()})
 			return true
 		})
 	}
 	if h := d.GetCellHandoff(); h != nil {
 		st.Handoff = &cellworld.HandoffState{
-			Target: cellworld.CellID{Col: h.GetCol(), Row: h.GetRow()}, Epoch: h.GetEpoch(),
+			ID: h.GetID(), Target: cellworld.CellID{Col: h.GetCol(), Row: h.GetRow()}, Epoch: h.GetEpoch(),
 			StartedAt: h.GetStartedAt(), LastSent: h.GetLastSent(),
 		}
 	}
@@ -136,6 +155,13 @@ func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorSt
 // 所以心跳或 handler 回滚时格内状态一起还原。去重表与交接进度只在内容变化时整份替换：它们一旦写进 DAO 就不原地改
 // （回滚的逆操作引用旧值）。只在实体自己的 Nest 锁内调用。
 func WriteActor(d CellDao, st cellworld.ActorState) {
+	d.SetCellSpawnGeneration(st.SpawnGeneration)
+	d.SetCellLife(st.Life)
+	writeDeath(d, st.Death)
+	d.SetCellDeathAcked(st.DeathAcked)
+	d.SetCellDeathNextAt(st.DeathNextAt)
+	writeRecovery(d, st.Recovery)
+	writeOwner(d, st)
 	d.SetPosX(st.X)
 	d.SetPosY(st.Y)
 	d.SetHP(int64(st.HP))
@@ -162,6 +188,7 @@ func WriteActor(d CellDao, st cellworld.ActorState) {
 		for i, a := range st.Applied {
 			hits[i].SetAttacker(a.Hit.Attacker)
 			hits[i].SetSeq(a.Hit.Seq)
+			hits[i].SetID(a.Hit.ID)
 			hits[i].SetAt(a.At)
 		}
 		d.SetCellAppliedAll(hits)
@@ -170,6 +197,7 @@ func WriteActor(d CellDao, st cellworld.ActorState) {
 		var h *db.CellHandoff
 		if p := st.Handoff; p != nil {
 			h = &db.CellHandoff{}
+			h.SetID(p.ID)
 			h.SetCol(p.Target.Col)
 			h.SetRow(p.Target.Row)
 			h.SetEpoch(p.Epoch)
@@ -187,7 +215,7 @@ func sameApplied(d CellDao, applied []cellworld.AppliedHit) bool {
 	same := true
 	d.RangeCellApplied(func(i int, h db.CellHit) bool {
 		a := applied[i]
-		same = h.GetAttacker() == a.Hit.Attacker && h.GetSeq() == a.Hit.Seq && h.GetAt() == a.At
+		same = h.GetAttacker() == a.Hit.Attacker && h.GetSeq() == a.Hit.Seq && h.GetID() == a.Hit.ID && h.GetAt() == a.At
 		return same
 	})
 	return same
@@ -198,7 +226,7 @@ func sameHandoff(h *db.CellHandoff, p *cellworld.HandoffState) bool {
 	case h == nil || p == nil:
 		return h == nil && p == nil
 	default:
-		return h.GetCol() == p.Target.Col && h.GetRow() == p.Target.Row && h.GetEpoch() == p.Epoch &&
+		return h.GetID() == p.ID && h.GetCol() == p.Target.Col && h.GetRow() == p.Target.Row && h.GetEpoch() == p.Epoch &&
 			h.GetStartedAt() == p.StartedAt && h.GetLastSent() == p.LastSent
 	}
 }
@@ -214,7 +242,8 @@ func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
 		x, y = d.GetSavedPosX(), d.GetSavedPosY()
 	}
 	return cellworld.BaseState{
-		Actor: d.GetCellActor(), InWorld: d.GetCellInWorld(),
+		Recovery: readRecovery(d.GetCellRecovery()),
+		Actor:    d.GetCellActor(), InWorld: d.GetCellInWorld(),
 		Cell: d.GetCellOwner(), Epoch: d.GetCellEpoch(),
 		X: x, Y: y, HP: int32(d.GetCellHP()),
 		SnapVer:   cellworld.Version{Epoch: d.GetCellSnapEpoch(), Seq: d.GetCellSnapSeq()},
@@ -237,6 +266,7 @@ func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
 // 一次回写）时，同一笔事务里把位置写进持久的 SavedPosX / SavedPosY / SavedSceneID：回写是“固定时机”，witness
 // 不是——实时位置只写不持久的 PosX / PosY。sceneID 是分区场景的 Scene ID。
 func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
+	writeRecovery(d, st.Recovery)
 	snapshot := st.SnapVer != (cellworld.Version{Epoch: d.GetCellSnapEpoch(), Seq: d.GetCellSnapSeq()})
 	d.SetCellActor(st.Actor)
 	d.SetCellInWorld(st.InWorld)
@@ -276,4 +306,150 @@ func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
 		d.SetSavedPosX(st.X)
 		d.SetSavedPosY(st.Y)
 	}
+}
+
+func readOwner(v *db.CellOwnership) (cellworld.OwnerGrant, *cellworld.PendingOwner, bool) {
+	if v == nil {
+		return cellworld.OwnerGrant{}, nil, false
+	}
+	grant := cellworld.OwnerGrant{ID: v.GetID(), Epoch: v.GetEpoch(), Process: cellworld.OwnerProcess{SID: v.GetSID(), Incarnation: v.GetIncarnation()}}
+	var pending *cellworld.PendingOwner
+	if v.GetPendingToken() != "" {
+		pending = &cellworld.PendingOwner{Token: v.GetPendingToken(), Transfer: cellworld.OwnerTransfer{ID: v.GetTransferID(), Target: v.GetTransferTarget(), Epoch: v.GetTransferEpoch()}}
+	}
+	return grant, pending, v.GetCloseEntry()
+}
+
+func writeOwner(d CellDao, st cellworld.ActorState) {
+	old, pending, closed := readOwner(d.GetCellOwnership())
+	samePending := pending == nil && st.Pending == nil || pending != nil && st.Pending != nil && *pending == *st.Pending
+	if old == st.Grant && closed == st.CloseEntry && samePending {
+		return
+	}
+	v := &db.CellOwnership{}
+	v.SetID(st.Grant.ID)
+	v.SetEpoch(st.Grant.Epoch)
+	v.SetSID(st.Grant.Process.SID)
+	v.SetIncarnation(st.Grant.Process.Incarnation)
+	v.SetCloseEntry(st.CloseEntry)
+	if st.Pending != nil {
+		v.SetPendingToken(st.Pending.Token)
+		v.SetTransferID(st.Pending.Transfer.ID)
+		v.SetTransferTarget(st.Pending.Transfer.Target)
+		v.SetTransferEpoch(st.Pending.Transfer.Epoch)
+	}
+	d.SetCellOwnership(v)
+}
+
+func readRecovery(d *db.CellRecovery) cellworld.RecoveryState {
+	if d == nil {
+		return cellworld.RecoveryState{}
+	}
+	s := cellworld.RecoveryState{Revision: d.GetRevision()}
+	d.RangeEffects(func(_ int, e db.CellEffect) bool {
+		s.Effects = append(s.Effects, cellworld.TimedEffect{Key: e.GetKey(), Stacks: e.GetStacks(), Value: e.GetValue(), ExpiresAt: e.GetExpiresAt()})
+		return true
+	})
+	d.RangeCooldowns(func(_ int, c db.CellCooldown) bool {
+		s.Cooldowns = append(s.Cooldowns, cellworld.Cooldown{Key: c.GetKey(), ReadyAt: c.GetReadyAt()})
+		return true
+	})
+	return s
+}
+func writeRecovery(d interface {
+	GetCellRecovery() *db.CellRecovery
+	SetCellRecovery(*db.CellRecovery)
+}, s cellworld.RecoveryState) {
+	old := readRecovery(d.GetCellRecovery())
+	if old.Revision == s.Revision && slices.Equal(old.Effects, s.Effects) && slices.Equal(old.Cooldowns, s.Cooldowns) {
+		return
+	}
+	value := &db.CellRecovery{}
+	value.SetRevision(s.Revision)
+	effects := make([]db.CellEffect, len(s.Effects))
+	for i, e := range s.Effects {
+		effects[i].SetKey(e.Key)
+		effects[i].SetStacks(e.Stacks)
+		effects[i].SetValue(e.Value)
+		effects[i].SetExpiresAt(e.ExpiresAt)
+	}
+	value.SetEffects(effects)
+	cooldowns := make([]db.CellCooldown, len(s.Cooldowns))
+	for i, c := range s.Cooldowns {
+		cooldowns[i].SetKey(c.Key)
+		cooldowns[i].SetReadyAt(c.ReadyAt)
+	}
+	value.SetCooldowns(cooldowns)
+	d.SetCellRecovery(value)
+}
+
+func readDeath(d *db.CellDeath) *cellworld.DeathFact {
+	if d == nil {
+		return nil
+	}
+	v := &cellworld.DeathFact{}
+	v.ID = d.GetID()
+	v.Target = d.GetTarget()
+	v.Life = d.GetLife()
+	v.Hit.Attacker = d.GetAttacker()
+	v.Hit.Seq = d.GetSequence()
+	v.Hit.ID = d.GetHitID()
+	v.RewardBase = d.GetRewardBase()
+	v.ReplySID = d.GetReplySID()
+	v.Damage = d.GetDamage()
+	v.At = d.GetAt()
+	v.State.Kind = cellworld.EntityKind(d.GetKind())
+	v.State.Base = d.GetBase()
+	v.State.X = d.GetX()
+	v.State.Y = d.GetY()
+	v.State.VX = d.GetVX()
+	v.State.VY = d.GetVY()
+	v.State.Ver.Epoch = d.GetEpoch()
+	v.State.Ver.Seq = d.GetStateSeq()
+	v.State.Idle = d.GetIdle()
+	v.State.Panel.MaxHP = d.GetMaxHP()
+	v.State.Panel.Attack = d.GetAttack()
+	v.State.Panel.Power = d.GetPower()
+	v.State.Panel.Ver = d.GetPanelVer()
+	v.State.ID = v.Target
+	v.State.Life = v.Life
+	return v
+}
+
+func writeDeath(d CellDao, v *cellworld.DeathFact) {
+	old := readDeath(d.GetCellDeath())
+	if v == nil {
+		if old != nil {
+			d.SetCellDeath(nil)
+		}
+		return
+	}
+	if old != nil && *old == *v {
+		return
+	}
+	value := &db.CellDeath{}
+	value.SetID(v.ID)
+	value.SetTarget(v.Target)
+	value.SetLife(v.Life)
+	value.SetAttacker(v.Hit.Attacker)
+	value.SetSequence(v.Hit.Seq)
+	value.SetHitID(v.Hit.ID)
+	value.SetRewardBase(v.RewardBase)
+	value.SetReplySID(v.ReplySID)
+	value.SetDamage(v.Damage)
+	value.SetAt(v.At)
+	value.SetKind(int32(v.State.Kind))
+	value.SetBase(v.State.Base)
+	value.SetX(v.State.X)
+	value.SetY(v.State.Y)
+	value.SetVX(v.State.VX)
+	value.SetVY(v.State.VY)
+	value.SetEpoch(v.State.Ver.Epoch)
+	value.SetStateSeq(v.State.Ver.Seq)
+	value.SetIdle(v.State.Idle)
+	value.SetMaxHP(v.State.Panel.MaxHP)
+	value.SetAttack(v.State.Panel.Attack)
+	value.SetPower(v.State.Panel.Power)
+	value.SetPanelVer(v.State.Panel.Ver)
+	d.SetCellDeath(value)
 }

@@ -69,6 +69,7 @@ import (
 const profileName = "demo"
 
 func main() {
+	cellworldFlags()
 	endpoint := flag.String("endpoint", "127.0.0.1:7000", "player TCP address")
 	count := flag.Int("count", 10, "robot population")
 	executor := flag.String("executor", "pool", "pool, looping, or arrival-rate; rates count whole scenarios, not messages")
@@ -139,6 +140,8 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 	actions := action.NewRegistry()
 	scenarios := scenario.NewRegistry()
 	registerCalls(actions, protocols)
+	registerCellworld(actions, protocols)
+	defer reportCellworld()
 	login.registerEnter(actions, protocols)
 	registerOfflineJoin(actions, protocols, ops)
 	registerPushes(protocols)
@@ -1257,6 +1260,10 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalBattleInputRequest(message)
 	case *pb.LeaderboardTopRequest:
 		return pb.MarshalLeaderboardTopRequest(message)
+	case *pb.SceneViewRequest:
+		return pb.MarshalSceneViewRequest(message)
+	case *pb.MoveIntentRequest:
+		return pb.MarshalMoveIntentRequest(message)
 	case *pb.MoveRequest:
 		return pb.MarshalMoveRequest(message)
 	case *pb.MoveTargetRequest:
@@ -1398,6 +1405,18 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.LeaderboardTopResponse:
 		decoded, err := pb.UnmarshalLeaderboardTopResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SceneViewResponse:
+		decoded, err := pb.UnmarshalSceneViewResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.MoveIntentResponse:
+		decoded, err := pb.UnmarshalMoveIntentResponse(data)
 		if err != nil {
 			return err
 		}
@@ -1616,10 +1635,12 @@ func runBattle(ctx context.Context, rb *robot.Context, param any) error {
 // the fields this client has been told about. It is what a real client would
 // feed into its rendering state.
 type sceneWatcher struct {
-	mu       sync.Mutex
-	subjects map[int64]map[string]any
-	frames   int
-	failure  error
+	mu        sync.Mutex
+	subjects  map[int64]map[string]any
+	frames    int
+	bytes     uint64
+	lastFrame time.Time
+	failure   error
 	// decoder is the client end of the stream: a delta names no subject (it
 	// inherits the identity of the baseline the client holds), so frames are
 	// decoded in order, by one decoder per connection.
@@ -1643,7 +1664,16 @@ func (watcher *sceneWatcher) consume(payload []byte) {
 		return
 	}
 	watcher.frames++
+	watcher.bytes += uint64(len(payload))
+	watcher.lastFrame = time.Now()
+	if decoded.Kind == frame.Full {
+		clear(watcher.subjects)
+	}
 	for _, object := range decoded.Objects {
+		if object.Operation == frame.ObjectRemove {
+			delete(watcher.subjects, object.SubjectID)
+			continue
+		}
 		for _, component := range object.Components {
 			update := component.Update
 			payload := update.Payload.BytesCopy()

@@ -1,0 +1,48 @@
+package attribute
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+)
+
+// AttributeChangedHook 在最终属性实际变化后、同一笔业务事务内执行，host 是挂着这个属性组件的实体（Player 或别的宿主）。
+// 只可修改已锁住的同一个实体，不能做外部 I/O；加载时的临时重建不触发；回调不得递归 Refresh。
+// 任一错误须交还 Nest，属性及钩子写入一起回滚。只关心某一类宿主的登记方自己做类型判断，例如 host.(view.PlayerEntity)。
+type AttributeChangedHook func(host Owner) error
+
+var attributeChangedMu sync.RWMutex
+var attributeChangedHooks = map[string]AttributeChangedHook{}
+
+// OnAttributeChanged 仅在启动 init 登记；空名、nil 和重复名直接 panic。执行按名字排序。
+func OnAttributeChanged(name string, hook AttributeChangedHook) {
+	if name == "" || hook == nil {
+		panic("attribute: changed hook needs name and function")
+	}
+	attributeChangedMu.Lock()
+	defer attributeChangedMu.Unlock()
+	if _, ok := attributeChangedHooks[name]; ok {
+		panic(fmt.Sprintf("attribute: duplicate changed hook %q", name))
+	}
+	attributeChangedHooks[name] = hook
+}
+
+func runAttributeChanged(host Owner) error {
+	attributeChangedMu.RLock()
+	names := make([]string, 0, len(attributeChangedHooks))
+	for name := range attributeChangedHooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hooks := make([]AttributeChangedHook, len(names))
+	for i, name := range names {
+		hooks[i] = attributeChangedHooks[name]
+	}
+	attributeChangedMu.RUnlock()
+	for i, h := range hooks {
+		if err := h(host); err != nil {
+			return fmt.Errorf("attribute: changed hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

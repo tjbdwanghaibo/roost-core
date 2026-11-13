@@ -666,11 +666,8 @@ func classifyField(fd *FieldDef, expr ast.Expr) error {
 
 var daoTagRe = regexp.MustCompile(`dao:"([^"]*)"`)
 
-// parseDaoTag interprets the field's dao tag. No tag keeps the safe default
-// (persist and sync both on). A tag that is present must state persist/sync
-// intent explicitly: the historical behavior of zeroing both when the tag
-// only carried auxiliary options (e.g. dao:"map=fast") silently dropped
-// persistence, which is a data-loss trap, so it is a hard error now.
+// persist 与 sync 分别默认开启；只有 nopersist / nosync 才关闭相应能力。
+// 辅助选项（如 map=fast）不改变这两个默认值；显式开关相互矛盾时仍拒绝。
 func parseDaoTag(tag *ast.BasicLit) (DaoTag, error) {
 	if tag == nil {
 		return DaoTag{Persist: true, Sync: true}, nil // default
@@ -682,26 +679,30 @@ func parseDaoTag(tag *ast.BasicLit) (DaoTag, error) {
 		return DaoTag{Persist: true, Sync: true}, nil // no dao tag = default
 	}
 
-	val := m[1]
+	return ParseFieldOptions(m[1])
+}
+
+// ParseFieldOptions 解析 dao 字段选项；模块安装清单复用这里的规则，避免与 Go tag 分歧。
+func ParseFieldOptions(val string) (DaoTag, error) {
 	if val == "-" {
 		return DaoTag{Skip: true}, nil
 	}
 	if strings.TrimSpace(val) == "" {
-		return DaoTag{}, fmt.Errorf("dao tag %q does not state persist/sync intent; add persist/sync (or nopersist,nosync to disable both explicitly)", val)
+		return DaoTag{Persist: true, Sync: true}, nil
 	}
 
 	parts := strings.Split(val, ",")
-	dt := DaoTag{}
-	var noPersist, noSync bool
+	dt := DaoTag{Persist: true, Sync: true}
+	var persist, noPersist, sync, noSync bool
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		switch {
 		case p == "persist":
-			dt.Persist = true
+			persist = true
 		case p == "nopersist":
 			noPersist = true
 		case p == "sync":
-			dt.Sync = true
+			sync = true
 		case p == "nosync":
 			noSync = true
 		case p == "map=small" || p == "map=fast" || p == "map=sharded":
@@ -712,15 +713,13 @@ func parseDaoTag(tag *ast.BasicLit) (DaoTag, error) {
 			return DaoTag{}, fmt.Errorf("dao tag has unknown option %q (valid: persist, nopersist, sync, nosync, map=small|fast|sharded, -)", p)
 		}
 	}
-	if dt.Persist && noPersist {
+	if persist && noPersist {
 		return DaoTag{}, fmt.Errorf("dao tag states both persist and nopersist")
 	}
-	if dt.Sync && noSync {
+	if sync && noSync {
 		return DaoTag{}, fmt.Errorf("dao tag states both sync and nosync")
 	}
-	if !dt.Persist && !noPersist && !dt.Sync && !noSync {
-		return DaoTag{}, fmt.Errorf("dao tag %q does not state persist/sync intent; add persist/sync (or nopersist,nosync to disable both explicitly)", val)
-	}
+	dt.Persist, dt.Sync = !noPersist, !noSync
 	return dt, nil
 }
 

@@ -59,7 +59,7 @@ func TestNestedTypesAreFoundWhateverFileDefinesThem(t *testing.T) {
 func TestDaoWithMoreThan64FieldsIsRefused(t *testing.T) {
 	var fields strings.Builder
 	for i := 0; i < 65; i++ {
-		fmt.Fprintf(&fields, "\tF%d int64 `store:\"f%d\" dao:\"persist\"`\n", i, i)
+		fmt.Fprintf(&fields, "\tF%d int64 `store:\"f%d\" dao:\"nosync\"`\n", i, i)
 	}
 	dir := writeDefFiles(t, map[string]string{"wide.go": "package def\n\n//roost:dao coll=wide db=main\ntype WideDao struct {\n" + fields.String() + "}\n"})
 	_, err := parseDefDir(dir)
@@ -67,7 +67,7 @@ func TestDaoWithMoreThan64FieldsIsRefused(t *testing.T) {
 		t.Fatalf("parse = %v, want a refusal that names the 64-field limit and the nested-struct way out", err)
 	}
 	// 恰好 64 个仍然可以。
-	trimmed := strings.Replace(fields.String(), "\tF64 int64 `store:\"f64\" dao:\"persist\"`\n", "", 1)
+	trimmed := strings.Replace(fields.String(), "\tF64 int64 `store:\"f64\" dao:\"nosync\"`\n", "", 1)
 	dir = writeDefFiles(t, map[string]string{"wide.go": "package def\n\n//roost:dao coll=wide db=main\ntype WideDao struct {\n" + trimmed + "}\n"})
 	if _, err := parseDefDir(dir); err != nil {
 		t.Fatalf("64 fields: %v", err)

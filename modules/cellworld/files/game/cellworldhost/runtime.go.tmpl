@@ -1,0 +1,165 @@
+// Package cellworldhost 是 CellWorld 的正式装配层；Entity、DAO 与奖励规则属于工程自身。
+package cellworldhost
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// Runtime 只管理进程资源，不保存实体业务状态。Start/Stop 由服务生命周期串行调用。
+type Runtime struct {
+	Node        *cellworld.Node
+	Births      *cellworld.SpawnBook
+	registry    *app.Registry
+	cancel      context.CancelFunc
+	done        chan struct{}
+	runError    error
+	spawnCancel context.CancelFunc
+	spawnDone   chan struct{}
+	startOnce   sync.Once
+}
+
+// New 取得正式 Mods 的依赖与 App 的实例身份；缺失即拒绝，不退回内存授权。
+// Handlers 必须已在 Nest 启动前注册。返回后先安装业务适配与心跳，再 Start。
+func New(registry *app.Registry, cfg cellworld.NodeConfig) (*Runtime, error) {
+	if registry == nil {
+		return nil, errors.New("cellworldhost: registry is required")
+	}
+	if cfg.Nest == nil {
+		cfg.Nest, _ = app.Lookup[nest.Client](registry, mods.ModNest)
+	}
+	if cfg.Transport == nil {
+		if client, ok := app.Lookup[fnats.IClient](registry, mods.ModNats); ok && client != nil {
+			cfg.Transport = cellworld.NATSTransport(client)
+		}
+	}
+	if cfg.Destroy == nil {
+		if access, ok := app.Lookup[*entity.ManagerAccess](registry, mods.ModEntityRuntime); ok && access != nil {
+			cfg.Destroy = func(ctx context.Context, e entity.IThreadSafeEntity) error {
+				return access.Destroy(ctx, e, entity.DestroyReasonCommon, false)
+			}
+		}
+	}
+	runtime := &Runtime{registry: registry}
+	if cfg.Cell != nil {
+		var identity app.ServiceIdentity
+		if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+			return nil, err
+		}
+		if identity.Sid != cfg.SID || identity.ServerType == "" {
+			return nil, errors.New("cellworldhost: mismatched service identity")
+		}
+		process, ok := app.Lookup[app.SingletonIncarnation](registry, app.ModSingletonIncarnation)
+		if !ok || process.Sid != cfg.SID || process.Token == "" {
+			return nil, errors.New("cellworldhost: Cell needs App singleton incarnation")
+		}
+		lease, ok := app.Lookup[app.SingletonLease](registry, app.ModSingletonLease)
+		if !ok || lease == nil {
+			return nil, errors.New("cellworldhost: Cell needs local lease guard")
+		}
+		checker, ok := app.Lookup[app.SingletonIdentityChecker](registry, app.ModSingletonIdentityChecker)
+		if !ok || checker == nil {
+			return nil, errors.New("cellworldhost: Cell needs identity checker")
+		}
+		redis, ok := app.Lookup[fredis.IRedis](registry, mods.ModRedis)
+		if !ok || redis == nil {
+			return nil, errors.New("cellworldhost: Cell needs shared Redis")
+		}
+		var err error
+		cfg.Owners, err = cellworld.NewRedisOwnerRegistry(redis, cfg.World, func(ctx context.Context, p cellworld.OwnerProcess) (bool, error) {
+			return checker.Matches(ctx, identity.ServerType, p.SID, p.Incarnation)
+		})
+		if err != nil {
+			return nil, err
+		}
+		runtime.Births, err = cellworld.NewRedisSpawnBook(redis, cfg.World)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Incarnation, cfg.CheckLease = process.Token, lease.Check
+	}
+	node, err := cellworld.NewNode(cfg)
+	if err != nil {
+		return nil, err
+	}
+	runtime.Node = node
+	return runtime, nil
+}
+
+func (r *Runtime) Start(ctx context.Context) error {
+	started := false
+	r.startOnce.Do(func() { started = true })
+	if !started {
+		return errors.New("cellworldhost: runtime already started")
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	r.cancel, r.done = cancel, make(chan struct{})
+	go func() { defer close(r.done); r.runError = r.Node.Run(runCtx) }()
+	select {
+	case <-r.Node.Ready():
+	case <-r.done:
+		return errors.Join(errors.New("cellworldhost: Node stopped before ready"), r.runError)
+	case <-ctx.Done():
+		cancel()
+		<-r.done
+		return ctx.Err()
+	}
+	if err := app.AddIngress(r.registry, "cellworld", r.Node); err != nil {
+		cancel()
+		<-r.done
+		return err
+	}
+	return nil
+}
+
+func (r *Runtime) StartSpawns(specs []cellworld.SpawnSpec, onError func(cellworld.SpawnSpec, error)) error {
+	if r.done == nil || r.spawnDone != nil {
+		return errors.New("cellworldhost: start Node once before spawning")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.spawnCancel, r.spawnDone = cancel, make(chan struct{})
+	go func() {
+		defer close(r.spawnDone)
+		if err := r.Node.RunSpawns(ctx, specs, onError); err != nil && !errors.Is(err, context.Canceled) && onError != nil {
+			onError(cellworld.SpawnSpec{}, err)
+		}
+	}()
+	return nil
+}
+
+// Stop 超时不取消 Node 或释放底层 Mods；调用者应保留依赖并重试。
+func (r *Runtime) Stop(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if r.spawnCancel != nil {
+		r.spawnCancel()
+		select {
+		case <-r.spawnDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if r.done == nil {
+		return nil
+	}
+	if err := r.Node.Drain(ctx); err != nil {
+		return err
+	}
+	r.cancel()
+	select {
+	case <-r.done:
+		return r.runError
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

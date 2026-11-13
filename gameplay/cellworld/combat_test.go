@@ -9,6 +9,26 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
+func TestAttackRequiresCurrentEntryAndBase(t *testing.T) {
+	n := &Node{cfg: NodeConfig{AttackRange: 100, MaxAppliedHits: 128, DedupWindow: time.Second}}
+	a := &plainActor{st: ActorState{EntityState: EntityState{ID: actorID(1), Kind: KindPlayer, Base: 1001}, Role: RoleReal, Entry: 2}}
+	target := &plainActor{st: ActorState{EntityState: EntityState{ID: npcID(1), Kind: KindNPC, HP: 100}, Role: RoleReal}}
+	req := &attackReq{Hit: HitID{Attacker: a.st.ID, Seq: 1, ID: "attempt"}, Entry: 1, Target: target.st.ID, Amount: 10}
+	for _, from := range []int32{1001, 1002} {
+		fx := &txEffects{}
+		n.onAttack(NewRegion(), a, target, from, req, time.Now(), fx)
+		if target.st.HP != 100 || len(fx.sends) != 1 || fx.sends[0].msg.AttackResult.Outcome != OutcomeRejected {
+			t.Fatalf("old entry or foreign Base was accepted: hp=%d sends=%+v", target.st.HP, fx.sends)
+		}
+		req.Entry = 2 // 下一轮只验证 Base 身份。
+	}
+	fx := &txEffects{}
+	n.onAttack(NewRegion(), a, target, 1001, req, time.Now(), fx)
+	if target.st.HP != 90 || len(fx.sends) != 1 || fx.sends[0].msg.AttackResult.Outcome != OutcomeApplied {
+		t.Fatalf("current entry cannot attack: hp=%d sends=%+v", target.st.HP, fx.sends)
+	}
+}
+
 // 跨格伤害在 v2 执行模型下的用例（v1 combat_test 按新模型改写，断言含义不变）：每个 HitID 至多扣一次血；Applied 都真的
 // 结算过；Unknown 可能已结算；去重表随交接带走（在目标实体的 DAO 上）。
 

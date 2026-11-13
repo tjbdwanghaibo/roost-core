@@ -10,7 +10,7 @@ access:
 entity: Player
 state:
   - {field: Gacha, type: GachaState, store: gacha, dao: 'persist,sync', comment: 每个卡池距离上次保底道具的抽数；最多记64池，客户端只读。}
-  - {field: GachaLedger, type: GachaLedger, store: gacha_ledger, dao: persist, comment: 最近64次成功抽卡回执；不占货币去重窗口，不下发。}
+  - {field: GachaLedger, type: GachaLedger, store: gacha_ledger, dao: nosync, comment: 最近64次成功抽卡回执；不占货币去重窗口，不下发。}
 component: Gacha
 protocols: [GachaDraw]
 errcodes: [gacha_key_invalid, gacha_key_conflict, gacha_count_invalid, gacha_pool_invalid, gacha_overflow, gacha_pool_limit]

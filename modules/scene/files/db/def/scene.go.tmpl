@@ -4,10 +4,10 @@ package dbdef
 //
 //roost:dao nocoll
 type SceneDao struct {
-	Members        map[int64]bool `dao:"nopersist,map=fast" store:"1"`
-	Closed         bool           `dao:"nopersist" store:"2"`
+	Members        map[int64]bool `dao:"nopersist,nosync,map=fast" store:"1"`
+	Closed         bool           `dao:"nopersist,nosync" store:"2"`
 	AnchorBusiness int64          `dao:"nopersist,sync" store:"3"`
 	AnchorDomain   int64          `dao:"nopersist,sync" store:"4"`
 	Rate           float64        `dao:"nopersist,sync" store:"5"`
-	Closing        bool           `dao:"nopersist" store:"6"`
+	Closing        bool           `dao:"nopersist,nosync" store:"6"`
 }

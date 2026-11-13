@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,37 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
+
+func TestHandoffDedupUsesReceivingClock(t *testing.T) {
+	grid := worldGrid(t, 2, 1)
+	created := map[int64]*plainActor{}
+	source := plainNode(t, grid, CellID{0, 0}, created)
+	target := plainNode(t, grid, CellID{1, 0}, created)
+	now := time.Unix(1000, 0)
+	hit := HitID{Attacker: actorID(1), Seq: 1}
+	st := ActorState{EntityState: EntityState{ID: npcID(1), Kind: KindNPC, X: 11000, Y: 5000, HP: 90, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal,
+		Applied: []AppliedHit{{Hit: hit, At: now.Add(-time.Second).UnixNano()}}}
+	claimPlain(t, source, &st)
+	fx := &actorEffects{}
+	source.freeze(&st, target.cell, now.UnixNano(), fx)
+	// 两台机器差两分钟；去重有效期不能按对方的绝对时间计算。
+	received := now.Add(2 * time.Minute)
+	r := NewRegion()
+	if err := target.onOffer(r, nil, grid.SID(source.cell), frozenOffer(t, source, st), received, &txEffects{}); err != nil {
+		t.Fatal(err)
+	}
+	a := created[st.ID]
+	resolvePlain(t, target, r, a)
+	result := target.applyDamage(a, damageReq{Hit: hit, Amount: 10, Life: a.st.Life}, 0, received, &txEffects{})
+	if !result.Duplicate || a.st.HP != 90 {
+		t.Fatalf("handoff lost dedup under clock skew: result=%+v hp=%d", result, a.st.HP)
+	}
+	// 有效期仍然有界，不能靠永久保留去重表修复跨机时钟问题。
+	result = target.applyDamage(a, damageReq{Hit: hit, Amount: 10, Life: a.st.Life}, 0, received.Add(target.cfg.DedupWindow+time.Nanosecond), &txEffects{})
+	if result.Duplicate || a.st.HP != 80 {
+		t.Fatalf("dedup did not expire on receiving clock: result=%+v hp=%d", result, a.st.HP)
+	}
+}
 
 // 交接状态机在 v2 执行模型（角色是 Nest 实体、交接以事务为边界）下的细粒度用例：v1 handoff_test 的每一条按新模型改写，
 // 断言含义不变——同一实体同一时刻至多一个 Real、同一 (实体, epoch) 只取得一次、epoch 严格递增（realChecker 在每次
@@ -237,6 +269,7 @@ func TestHandoffConcurrentCrossingBack(t *testing.T) {
 // holdFreezeReport 把含 id 冻结报告的那一批区域报告的投递挡住，直到 release 成立（期限 settleWithin）；其余照常交给引擎。
 // 报告由出站 goroutine 攒批投给 Scene，挡住它就是“报告晚到”。
 type holdFreezeReport struct {
+	pending sync.WaitGroup
 	nest.Client
 	id      int64
 	release func() bool
@@ -253,12 +286,15 @@ func (h *holdFreezeReport) Dispatch(ctx context.Context, handler nest.HandlerNam
 		return h.Client.Dispatch(ctx, handler, id, p, opts...)
 	}
 	h.held.Store(true)
-	for deadline := time.Now().Add(settleWithin); !h.release() && time.Now().Before(deadline); {
-		time.Sleep(time.Millisecond)
-	}
-	err := h.Client.Dispatch(ctx, handler, id, p, opts...)
-	h.passed.Store(true)
-	return err
+	// 延迟这一批报告本身，Dispatch 仍保持只做准入的契约；不把测试延迟扩成整个出站线程阻塞。
+	h.pending.Go(func() {
+		for deadline := time.Now().Add(settleWithin); !h.release() && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		_ = h.Client.Dispatch(ctx, handler, id, p, opts...)
+		h.passed.Store(true)
+	})
+	return nil
 }
 
 // 冻结的报告晚于交接结论到达区域表：角色心跳里冻结、提交后先发 Offer 再把冻结报告交给出站 goroutine 攒批投给 Scene；
@@ -276,6 +312,7 @@ func TestLateFreezeReportDoesNotResurrectTheRecord(t *testing.T) {
 		w := started.Load()
 		return w != nil && w.cells[a].node.Stats().HandoffsAccepted > 0
 	}}
+	t.Cleanup(hold.pending.Wait)
 	spec.cellMod = func(cfg *NodeConfig) {
 		if cfg.SID == 101 {
 			hold.Client, cfg.Nest = cfg.Nest, hold
@@ -330,7 +367,7 @@ func TestEnterIsIdempotentAndRefusesWhenRealElsewhere(t *testing.T) {
 	// 绕过 Base 直接让 B 进入同一个角色：B 有它的存活 Ghost，必须拒绝。
 	before := w.base.node.Stats().EnterRefusals
 	w.base.node.enqueue(job{kind: jobSend, send: outgoing{sid: w.grid.SID(b), msg: &wireMsg{Kind: kindEnter, Enter: &enterReq{
-		State: EntityState{ID: actorID(1), Kind: KindPlayer, X: 10500, Y: 5000, HP: 100}, EpochHint: 5,
+		State: EntityState{ID: actorID(1), Kind: KindPlayer, X: 10500, Y: 5000, HP: 100}, EpochHint: 5, Entry: w.baseState(1).Entry,
 	}}}})
 	waitFor(t, settleWithin, "refusal", func() bool { return w.base.node.Stats().EnterRefusals > before })
 	w.waitBeats(b, 2) // 拒绝之后 B 若仍错误地装入，2 拍内会在区域表里出现（realChecker 也在每次提交后检查）
@@ -387,7 +424,9 @@ func (a *plainActor) OnDestroy(fentity.EntityDestroyReason) {}
 
 // plainNode 是 cell 格的 Node（不运行：只直接调用积分与 handler 逻辑），CreateActor 建 plainActor 并记在 created 里。
 func plainNode(t testing.TB, grid *Grid, cell CellID, created map[int64]*plainActor) *Node {
-	n := &Node{cfg: NodeConfig{Grid: grid, Cell: &cell, ViewRadius: worldViewRadius}.withDefaults(), cell: cell, hostsCell: true}
+	n := &Node{cfg: NodeConfig{SID: grid.SID(cell), Grid: grid, Cell: &cell, ViewRadius: worldViewRadius}.withDefaults(), cell: cell, hostsCell: true}
+	retire := attachTestOwners(t, grid, &n.cfg)
+	t.Cleanup(retire)
 	n.rect = grid.Rect(cell)
 	n.cfg.CreateActor = func(id int64, kind EntityKind) (Actor, error) {
 		a := &plainActor{EntityBase: fentity.NewEntityBase(id, fentity.EntityCategoryOther, true, kindTActor)}
@@ -408,19 +447,20 @@ func TestHandoffCarriesTheSubUnitRemainder(t *testing.T) {
 	now := time.Now()
 	const start = 10090
 	st := ActorState{EntityState: EntityState{ID: npcID(50), Kind: KindNPC, X: start, Y: 5000, VX: 7, VY: 3, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	claimPlain(t, na, &st)
 	var ms int64
 	var fx actorEffects
 	for st.Role == RoleReal {
 		fx = na.stepActor(&st, now, 37*time.Millisecond)
 		ms += 37
 	}
-	if st.Role != RoleFrozen || len(fx.sends) != 1 || fx.sends[0].msg.Kind != kindOffer {
+	if st.Role != RoleFrozen || len(fx.sends) != 0 || len(fx.owners) != 1 {
 		t.Fatalf("crossing the freeze line: %v, sends %+v", st.Role, fx.sends)
 	}
 	if st.FracX == 0 || st.FracY == 0 {
 		t.Fatalf("froze with remainder (%d, %d); pick a case that leaves one on both axes", st.FracX, st.FracY)
 	}
-	raw, err := encodeMsg(fx.sends[0].msg)
+	raw, err := encodeMsg(&wireMsg{Kind: kindOffer, Offer: frozenOffer(t, na, st)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,16 +474,24 @@ func TestHandoffCarriesTheSubUnitRemainder(t *testing.T) {
 
 	// 被拒：同一 epoch 恢复为 Real，零头不动。
 	frozen := &plainActor{EntityBase: fentity.NewEntityBase(st.ID, fentity.EntityCategoryOther, true, kindTActor), st: st}
-	na.onOfferReply(NewRegion(), frozen, grid.SID(b), &handoffReply{ID: st.ID, Epoch: st.Handoff.Epoch, Accepted: false}, now, &txEffects{})
+	if _, err := na.cfg.Owners.reject(context.Background(), st.ID, st.Grant, na.ownerTransfer(st), nb.ownerProcess()); err != nil {
+		t.Fatal(err)
+	}
+	resolvePlain(t, na, NewRegion(), frozen)
 	if frozen.st.Role != RoleReal || frozen.st.FracX != st.FracX || frozen.st.FracY != st.FracY {
 		t.Fatalf("after a refused offer: %v remainder (%d, %d), want real with (%d, %d)", frozen.st.Role, frozen.st.FracX, frozen.st.FracY, st.FracX, st.FracY)
 	}
 
+	// 被拒的交接永久终结；下一次交接使用新身份和更大的 epoch。
+	na.freeze(&frozen.st, b, now.UnixNano(), &actorEffects{})
+	m.Offer = frozenOffer(t, na, frozen.st)
 	// 接受：目标格装入，接着积分。
-	if err := nb.onOffer(NewRegion(), nil, grid.SID(a), m.Offer, now, &txEffects{}); err != nil {
+	targetRegion := NewRegion()
+	if err := nb.onOffer(targetRegion, nil, grid.SID(a), m.Offer, now, &txEffects{}); err != nil {
 		t.Fatal(err)
 	}
 	moved := created[st.ID]
+	resolvePlain(t, nb, targetRegion, moved)
 	if moved == nil || moved.st.Role != RoleReal || moved.st.FracX != st.FracX || moved.st.FracY != st.FracY {
 		t.Fatalf("installed on (1,0): %+v, want real with remainder (%d, %d)", moved, st.FracX, st.FracY)
 	}
@@ -460,7 +508,7 @@ func TestHandoffCarriesTheSubUnitRemainder(t *testing.T) {
 
 	// 坏零头（不在 (-1000, 1000) 里）当作 0。
 	bad := *m.Offer
-	bad.State.ID, bad.State.Ver.Epoch, bad.FracX, bad.FracY = npcID(51), 2, 1000, -1500
+	bad.State.ID, bad.FracX, bad.FracY = npcID(51), 1000, -1500
 	if err := nb.onOffer(NewRegion(), nil, grid.SID(a), &bad, now, &txEffects{}); err != nil {
 		t.Fatal(err)
 	}
@@ -475,6 +523,7 @@ func TestHandoffCarriesTheSubUnitRemainder(t *testing.T) {
 		t.Fatal(err)
 	}
 	entered := created[actorID(52)]
+	resolvePlain(t, na, r, entered)
 	if entered == nil || entered.st.Role != RoleReal || entered.st.FracX != 0 || entered.st.FracY != 0 {
 		t.Fatalf("entered: %+v, want real with no remainder", entered)
 	}
@@ -488,5 +537,36 @@ func TestHandoffCarriesTheSubUnitRemainder(t *testing.T) {
 	}
 	if entered.st.FracX != 300 || entered.st.X != 3000 {
 		t.Fatalf("an idempotent enter changed the position to %d %+d", entered.st.X, entered.st.FracX)
+	}
+}
+
+func claimPlain(t testing.TB, n *Node, st *ActorState) {
+	t.Helper()
+	record, err := n.cfg.Owners.claim(context.Background(), ownerClaim{Actor: st.ID, Kind: st.Kind, Base: st.Base, Entry: st.Entry, Process: n.ownerProcess(), Token: fmt.Sprintf("plain-%d", st.ID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Grant = record.Grant
+	st.Life = record.Life
+	st.Ver.Epoch = record.Grant.Epoch
+}
+func frozenOffer(t testing.TB, n *Node, st ActorState) *handoffOffer {
+	t.Helper()
+	record, err := n.executeOwner(context.Background(), n.ownerWork(st))
+	if err != nil || record.Phase != ownerFrozen {
+		t.Fatalf("begin: %+v %v", record, err)
+	}
+	return n.offerTo(&st).msg.Offer
+}
+func resolvePlain(t testing.TB, n *Node, r *Region, a *plainActor) {
+	t.Helper()
+	w := n.ownerWork(a.st)
+	record, err := n.executeOwner(context.Background(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene := &testScene{EntityBase: fentity.NewEntityBase(-1, fentity.EntityCategoryWorld, true, kindTScene), region: r}
+	if _, err := n.handleOwnerResult([]fentity.IThreadSafeEntity{scene, a}, []any{ownerResult{work: w, record: record}}); err != nil {
+		t.Fatal(err)
 	}
 }

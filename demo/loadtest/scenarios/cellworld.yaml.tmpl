@@ -1,0 +1,12 @@
+# Requires scene.partition.enabled. Use -max-p95 above cellworld-duration + login budget.
+# Example: -scenario cellworld -count 1000 -cellworld-duration 15m -max-p95 960 -ramp-step 20 -ramp-interval 100ms
+# Capacity: -cellworld-warmup 30s -cellworld-view-radius 150; server must host the configured NPC population.
+scenarios:
+  - name: cellworld
+    node:
+      sequence:
+        - action: connect
+        - action: enter_game
+        - action: scene_watch
+        - action: scene_ready
+        - action: cellworld_walk

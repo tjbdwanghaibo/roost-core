@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+                 │ /tmp/roost-cellworld-bench-before-final.txt │ /tmp/roost-cellworld-bench-after-final.txt │
+                 │                   sec/op                    │       sec/op        vs base                │
+WitnessDecode-10                                  87.21µ ± 11%          46.95µ ± 3%  -46.16% (p=0.000 n=10)
+
+                 │ /tmp/roost-cellworld-bench-before-final.txt │ /tmp/roost-cellworld-bench-after-final.txt │
+                 │                    B/op                     │        B/op         vs base                │
+WitnessDecode-10                                  192.7Ki ± 0%         138.7Ki ± 0%  -28.04% (p=0.000 n=10)
+
+                 │ /tmp/roost-cellworld-bench-before-final.txt │ /tmp/roost-cellworld-bench-after-final.txt │
+                 │                  allocs/op                  │     allocs/op       vs base                │
+WitnessDecode-10                                   219.00 ± 0%           53.00 ± 0%  -75.80% (p=0.000 n=10)

@@ -1,0 +1,490 @@
+{
+  "robot": {
+    "state": "failed",
+    "count": 1000,
+    "stats": {
+      "scheduled": 1000,
+      "dropped_capacity": 0,
+      "dropped_schedule": 0,
+      "launch_failed": 0,
+      "peak_online": 1000,
+      "started": 1000,
+      "online": 0,
+      "success": 81,
+      "failure": 919,
+      "canceled": 0,
+      "failure_rate": 0.919
+    },
+    "requests": {
+      "messages": [
+        {
+          "message_id": 10006,
+          "started": 661,
+          "sent": 661,
+          "completed": 661,
+          "ok": 536,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 125,
+          "inflight": 0,
+          "p50_ms": 1373.8700693932021,
+          "p95_ms": 2737.522174809207,
+          "p99_ms": 2983.8991705420362,
+          "max_ms": 3026.857709
+        },
+        {
+          "message_id": 10024,
+          "started": 536,
+          "sent": 536,
+          "completed": 536,
+          "ok": 536,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 0,
+          "inflight": 0,
+          "p50_ms": 0.24848253451562896,
+          "p95_ms": 4.653683016434566,
+          "p99_ms": 11.016960126173469,
+          "max_ms": 27.768375
+        },
+        {
+          "message_id": 10025,
+          "started": 81,
+          "sent": 81,
+          "completed": 81,
+          "ok": 81,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 0,
+          "inflight": 0,
+          "p50_ms": 0.16149659812866918,
+          "p95_ms": 1.803455044044852,
+          "p99_ms": 6.838333,
+          "max_ms": 6.838333
+        },
+        {
+          "message_id": 10031,
+          "started": 203242,
+          "sent": 203242,
+          "completed": 203242,
+          "ok": 203242,
+          "rejected": 0,
+          "timeout": 0,
+          "canceled": 0,
+          "errors": 0,
+          "inflight": 0,
+          "p50_ms": 0.4542357939342534,
+          "p95_ms": 87.15608789031151,
+          "p99_ms": 159.32473828082726,
+          "max_ms": 312.141542
+        }
+      ],
+      "slowest": [
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 3026.857709
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 3014.815542
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 3013.668625
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 3004.284958
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2995.897208
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2991.189166
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2953.691166
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2932.124625
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2879.784417
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2857.802917
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2740.386417
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2736.598125
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2728.660041
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2728.216
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2724.090916
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2692.043208
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2683.444208
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2662.093083
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2656.627792
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2651.947458
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2641.700833
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2639.416041
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2633.20225
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2629.23975
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2614.905583
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2583.292375
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2582.851417
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2574.726
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2569.497209
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2567.3785
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2566.373125
+        },
+        {
+          "message_id": 10006,
+          "outcome": "ok",
+          "duration_ms": 2561.245709
+        }
+      ]
+    },
+    "traffic": {
+      "measured_connections": 1000,
+      "socket_read_bytes": 76673263,
+      "socket_written_bytes": 5146726
+    },
+    "robot_resources": {
+      "elapsed_seconds": 100.577831041,
+      "cpu_available": true,
+      "cpu_seconds": 23.505609,
+      "cpu_percent": 23.370566611660244,
+      "process_peak_rss_bytes": 138690560,
+      "sampled_peak_heap_bytes": 65745768,
+      "sampled_peak_goroutines": 3030,
+      "samples": 102
+    },
+    "environment": {
+      "go_version": "go1.27.3",
+      "os": "darwin",
+      "arch": "arm64",
+      "cpus": 10,
+      "gomaxprocs": 10,
+      "main_module": "example.com/cwdemo",
+      "main_version": "(devel)",
+      "core_version": "v1.45.0",
+      "core_replacement": "/Users/whb/roost/worktrees/cellworld-production@(devel)"
+    }
+  },
+  "cellworld": {
+    "active_percent": 5,
+    "completed_requests_per_second": 688.8867616383067,
+    "duration_seconds": 60,
+    "input_ack_p99_ms": 89.343125,
+    "kind": "cellworld",
+    "latency_window_samples": 48582,
+    "measurement_ended_at_ms": 1794576585642,
+    "measurement_started_at_ms": 1794576515119,
+    "measurement_wall_seconds": 70.522475834,
+    "received_sync_bytes": 11936351,
+    "received_sync_frames": 83321,
+    "request_errors": 0,
+    "requests": 48582,
+    "visible_max": 54,
+    "visible_mean": 38.892038203449836,
+    "warmup_seconds": 30
+  },
+  "services": {
+    "9100": {
+      "spawned": 0,
+      "reals_before": 0,
+      "reals_after": 0,
+      "delta_including_warmup": {
+        "BytesOut": 27809238,
+        "BytesIn": 1167525321,
+        "MsgsOut": 304508,
+        "MsgsIn": 28761,
+        "ActorBeats": 0,
+        "ViewsAccepted": 99215,
+        "ReplicaGaps": 2,
+        "DecodeErrors": 0,
+        "PublishErrors": 0,
+        "OutboxDrops": 0,
+        "DispatchErrors": 0,
+        "ControlExhausted": 0,
+        "Reenters": 334,
+        "LeaseExpired": 0,
+        "OwnershipErrors": 0,
+        "OwnershipQueueFull": 0,
+        "SpawnErrors": 0,
+        "MirrorErrors": 0
+      },
+      "final_queues": {
+        "OutboundPending": 0,
+        "StateQueued": 0,
+        "ControlQueued": 0,
+        "OwnershipQueued": 0,
+        "QueueAgeMaxNS": 67263208
+      }
+    },
+    "9201": {
+      "spawned": 4500,
+      "reals_before": 4460,
+      "reals_after": 4486,
+      "delta_including_warmup": {
+        "BytesOut": 520730334,
+        "BytesIn": 75425733,
+        "MsgsOut": 117126,
+        "MsgsIn": 197350,
+        "ActorBeats": 8451864,
+        "ViewsAccepted": 0,
+        "ReplicaGaps": 0,
+        "DecodeErrors": 0,
+        "PublishErrors": 0,
+        "OutboxDrops": 0,
+        "DispatchErrors": 0,
+        "ControlExhausted": 0,
+        "Reenters": 0,
+        "LeaseExpired": 15,
+        "OwnershipErrors": 0,
+        "OwnershipQueueFull": 0,
+        "SpawnErrors": 0,
+        "MirrorErrors": 0
+      },
+      "final_queues": {
+        "OutboundPending": 0,
+        "StateQueued": 0,
+        "ControlQueued": 0,
+        "OwnershipQueued": 0,
+        "QueueAgeMaxNS": 1349309792
+      }
+    },
+    "9202": {
+      "spawned": 4500,
+      "reals_before": 4539,
+      "reals_after": 4514,
+      "delta_including_warmup": {
+        "BytesOut": 777872195,
+        "BytesIn": 83506060,
+        "MsgsOut": 86464,
+        "MsgsIn": 282131,
+        "ActorBeats": 8403169,
+        "ViewsAccepted": 0,
+        "ReplicaGaps": 0,
+        "DecodeErrors": 0,
+        "PublishErrors": 0,
+        "OutboxDrops": 0,
+        "DispatchErrors": 0,
+        "ControlExhausted": 0,
+        "Reenters": 0,
+        "LeaseExpired": 12,
+        "OwnershipErrors": 0,
+        "OwnershipQueueFull": 0,
+        "SpawnErrors": 0,
+        "MirrorErrors": 0
+      },
+      "final_queues": {
+        "OutboundPending": 1,
+        "StateQueued": 0,
+        "ControlQueued": 0,
+        "OwnershipQueued": 0,
+        "QueueAgeMaxNS": 975853333
+      }
+    }
+  },
+  "resources_in_measurement": {
+    "account": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 75448320,
+      "seconds": 69,
+      "samples": 68
+    },
+    "activity": {
+      "cpu_percent_one_core": 0.07,
+      "peak_rss_bytes": 44859392,
+      "seconds": 69,
+      "samples": 68
+    },
+    "chat": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 108216320,
+      "seconds": 69,
+      "samples": 68
+    },
+    "global": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 39993344,
+      "seconds": 69,
+      "samples": 68
+    },
+    "mail": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 43384832,
+      "seconds": 69,
+      "samples": 68
+    },
+    "match": {
+      "cpu_percent_one_core": 0.39,
+      "peak_rss_bytes": 48300032,
+      "seconds": 69,
+      "samples": 68
+    },
+    "platform": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 39878656,
+      "seconds": 69,
+      "samples": 68
+    },
+    "rank": {
+      "cpu_percent_one_core": 0.01,
+      "peak_rss_bytes": 39878656,
+      "seconds": 69,
+      "samples": 68
+    },
+    "session": {
+      "cpu_percent_one_core": 0.0,
+      "peak_rss_bytes": 40140800,
+      "seconds": 69,
+      "samples": 68
+    },
+    "alliance": {
+      "cpu_percent_one_core": 2.19,
+      "peak_rss_bytes": 64749568,
+      "seconds": 69,
+      "samples": 68
+    },
+    "game": {
+      "cpu_percent_one_core": 79.62,
+      "peak_rss_bytes": 476233728,
+      "seconds": 69,
+      "samples": 68
+    },
+    "game1001": {
+      "cpu_percent_one_core": 226.29,
+      "peak_rss_bytes": 388972544,
+      "seconds": 69,
+      "samples": 68
+    },
+    "game1002": {
+      "cpu_percent_one_core": 243.32,
+      "peak_rss_bytes": 366346240,
+      "seconds": 69,
+      "samples": 68
+    },
+    "game1003": {
+      "cpu_percent_one_core": 2.96,
+      "peak_rss_bytes": 78282752,
+      "seconds": 69,
+      "samples": 68
+    },
+    "game1004": {
+      "cpu_percent_one_core": 2.58,
+      "peak_rss_bytes": 112656384,
+      "seconds": 69,
+      "samples": 68
+    }
+  },
+  "failure_categories": {
+    "account RPC timeout": 306,
+    "enter_game session closed": 125,
+    "connect session closed": 33,
+    "spread warmup timeout": 455
+  },
+  "validation_note": "FAILED. 1000 attempted, 81 completed; 919 failed during admission or 30s spread warmup. The measurement aggregate is from survivors, not 1000-player steady capacity."
+}

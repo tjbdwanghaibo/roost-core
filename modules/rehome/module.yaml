@@ -13,7 +13,7 @@ state:
   - field: Rehome
     type: RehomeState
     store: rehome
-    dao: persist
+    dao: nosync
     comment: Rehome 是换服模块的服务端记录（进行中的换服意图、最近一次到达的换服、上次换服的时间与次数），只落库、不下发。
 component: Rehome
 protocols: [RehomeApply]

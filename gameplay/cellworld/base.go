@@ -2,6 +2,7 @@ package cellworld
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,14 +15,15 @@ import (
 )
 
 // Base 侧：Player 留在自己的 sid（BaseApp），只跟随玩家当前所在的格——转发输入与攻击、接收 witness 喂给客户端、
-// 收下 SceneActor 的回写。玩家的路由状态（BaseState）存在 Player 实体上（nopersist 字段；HP、位置与快照版本由 game
-// 映射到持久字段），看门狗与续租是 Player 的心跳（BaseBeat），不再是 v1 里带锁的玩家表。
+// 收下 SceneActor 的回写。路由字段在 Player 的 nopersist DAO 中；入场计数、面板、HP 与快照位置 / 版本必须持久化。
+// 看门狗与续租是 Player 的心跳（BaseBeat），不另建带锁的玩家表。
 
 // ErrNotInWorld 表示玩家没有进入分区 Scene（未 Enter 或已 Leave）。
 var ErrNotInWorld = errors.New("cellworld: player is not in the partitioned scene")
 
 // BaseState 是 Player 上的分区 Scene 路由状态。时间都是系统时间 UnixNano。
 type BaseState struct {
+	Recovery RecoveryState `msgpack:"rc"`
 	// Actor 是玩家的 SceneActor ID（跨格不变）；InWorld 表示已 Enter、未 Leave。
 	Actor   int64 `msgpack:"a"`
 	InWorld bool  `msgpack:"w"`
@@ -40,9 +42,8 @@ type BaseState struct {
 	VX        int64  `msgpack:"vx"`
 	VY        int64  `msgpack:"vy"`
 	AttackSeq uint64 `msgpack:"as"`
-	// Entry 是这次入场的序号（RV-20261106-03）：每次 Enter 编一个新的，Enter / Leave 都带它，Real 只接受同一次入场的
-	// Leave。看门狗重进、交接放弃后补回仍是同一次入场，序号不变。不持久也要跨 Base 重启唯一：取 Enter 时的系统时间
-	// （UnixNano），同一进程里至少比上一次大 1；前提是系统时钟不回拨到上一次入场之前。
+	// Entry 是持久化的入场计数，每次 Enter 加一。接入方必须把它映射到持久 DAO 字段。
+	// Enter 使用 strict 提交，编号落入持久 WAL 后才发消息；看门狗重试不换号，不依赖机器时钟。
 	Entry uint64 `msgpack:"en"`
 	// 看门狗：最近一次 witness、Enter、续租的时间；Enter 被拒时的 owner 提示；交接放弃（Lost）的 epoch 与时间。
 	LastViewAt  int64  `msgpack:"lv"`
@@ -84,6 +85,9 @@ type BasePlayer interface {
 	SetBaseState(BaseState)
 	StartBase() error
 	CellPanel() Panel
+	// 只在死亡结算 handler 中访问账本，常规心跳不读写整张回执表。
+	CellDeathReceipt(target int64) uint64
+	RecordCellDeathReceipt(target int64, life uint64, limit int) error
 }
 
 // View 是 Base 接受的一份 witness（观察点用）。
@@ -147,7 +151,7 @@ type baseCmd struct {
 
 // Enter 让 Player（playerEntity）以 SceneActor actor 在 pos 进入分区 Scene。Player 已有快照（之前回写过）时 hp 被快照覆盖。
 func (n *Node) Enter(ctx context.Context, playerEntity, actor int64, pos spatial.Point, hp int32) error {
-	_, err := n.cfg.Nest.Request(ctx, hBaseCmd, playerEntity, nest.Params{baseCmd{kind: cmdEnter, actor: actor, pos: pos, hp: hp}})
+	_, err := n.cfg.Nest.Request(ctx, hBaseEnter, playerEntity, nest.Params{baseCmd{kind: cmdEnter, actor: actor, pos: pos, hp: hp}})
 	return err
 }
 
@@ -183,6 +187,9 @@ func (n *Node) RefreshPanel(ctx context.Context, playerEntity int64) error {
 // 新面板与序号写进 BaseState（经 SetBaseState：事务回滚即撤销），提交之后发给当前 owner 格；不在世界里时只记下，
 // Enter 带它。不发同步请求、不等结论：结论由 Base 心跳、owner 通知、witness 收拢，丢了按 LeasePeriod 重发。
 func (n *Node) UpdatePanel(p BasePlayer) error {
+	if err := n.guardTransaction(); err != nil {
+		return err
+	}
 	st := p.BaseState()
 	fx := &txEffects{}
 	n.panelChanged(&st, p.CellPanel(), time.Now(), fx)
@@ -258,9 +265,12 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		}
 		// 重新进入（离开后再进、Base 重启后进）：保留快照与序号。回写过的玩家以 Player 的快照 HP 为准。
 		prev := st
+		if prev.Entry == ^uint64(0) {
+			return nil, errors.New("cellworld: entry sequence exhausted")
+		}
 		st = BaseState{Actor: cmd.actor, InWorld: true, X: cmd.pos.X, Y: cmd.pos.Y, HP: cmd.hp,
 			SnapVer: prev.SnapVer, IntentSeq: prev.IntentSeq, AttackSeq: prev.AttackSeq, LostEpoch: prev.LostEpoch, Panel: prev.Panel, PanelAcked: prev.PanelAcked,
-			Entry: max(prev.Entry+1, uint64(now.UnixNano()))}
+			Entry: prev.Entry + 1, Recovery: prev.Recovery.At(now)}
 		if prev.SnapVer != (Version{}) {
 			st.HP = prev.HP
 		}
@@ -286,8 +296,9 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 			return nil, ErrNotInWorld
 		}
 		st.AttackSeq++
-		hit := HitID{Attacker: st.Actor, Seq: st.AttackSeq}
-		fx.send(st.Cell, &wireMsg{Kind: kindAttack, Attack: &attackReq{Hit: hit, Target: cmd.target, Amount: cmd.amount}})
+		// Seq 用于展示，不承担跨重启唯一性；随机 ID 也覆盖回滚后重试和 Player 卸载重载。
+		hit := HitID{Attacker: st.Actor, Seq: st.AttackSeq, ID: rand.Text()}
+		fx.send(st.Cell, &wireMsg{Kind: kindAttack, Attack: &attackReq{Hit: hit, Entry: st.Entry, Target: cmd.target, Amount: cmd.amount}})
 		ret = hit
 	case cmdPanel:
 		n.panelChanged(&st, p.CellPanel(), now, fx)
@@ -298,7 +309,10 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		if st.Cell != 0 {
 			fx.send(st.Cell, &wireMsg{Kind: kindLeave, Leave: &leaveReq{ID: st.Actor, Entry: st.Entry}})
 		}
-		n.unshow(&st, now)
+		leaving := st
+		fx.hooks = append(fx.hooks, func() { n.unshow(&leaving, now) })
+		st.Shown = false
+		st.GroupViewID, st.GroupViewVer = 0, 0
 		st.InWorld, st.Cell = false, 0
 	}
 	p.SetBaseState(st)
@@ -309,7 +323,8 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 func (n *Node) enterMsg(st *BaseState, sid int32, hint uint64, now time.Time, fx *txEffects) {
 	st.LastEnterAt = now.UnixNano()
 	fx.send(sid, &wireMsg{Kind: kindEnter, Enter: &enterReq{
-		State: EntityState{ID: st.Actor, Kind: KindPlayer, X: st.X, Y: st.Y, HP: st.HP, Panel: st.Panel}, EpochHint: hint, LastInput: 0,
+		Recovery: st.Recovery,
+		State:    EntityState{ID: st.Actor, Kind: KindPlayer, X: st.X, Y: st.Y, HP: st.HP, Panel: st.Panel}, EpochHint: hint, LastInput: 0,
 		Entry: st.Entry,
 	}})
 }
@@ -328,7 +343,7 @@ func (n *Node) takePanel(st *BaseState, values Panel, now time.Time) bool {
 
 func (n *Node) inputMsg(st *BaseState, now time.Time) *wireMsg {
 	st.LastLeaseAt = now.UnixNano()
-	return &wireMsg{Kind: kindInput, Input: &inputReq{ID: st.Actor, Seq: st.IntentSeq, VX: st.VX, VY: st.VY}}
+	return &wireMsg{Kind: kindInput, Input: &inputReq{ID: st.Actor, Entry: st.Entry, Seq: st.IntentSeq, VX: st.VX, VY: st.VY}}
 }
 
 // ---- 入站：发给 Player 的消息 ----
@@ -387,6 +402,10 @@ func (n *Node) handleBase(es []fentity.IThreadSafeEntity, params []any, _ ...nes
 		s := m.Writeback.State
 		if s.ID == st.Actor && s.Ver.Newer(st.SnapVer) {
 			// 只接受更新的快照：同一版本重复到达、旧格迟到的回写都不再写。
+			if err := m.Writeback.Recovery.Validate(); err != nil {
+				return nil, err
+			}
+			st.Recovery = m.Writeback.Recovery.Clone().At(now)
 			st.SnapVer = s.Ver
 			st.HP = s.HP
 			if st.InWorld {
@@ -445,7 +464,12 @@ func (n *Node) onWitness(st *BaseState, from int32, sentAt int64, w *witnessMsg,
 	st.X, st.Y = w.Self.X, w.Self.Y
 	st.LastViewAt = now.UnixNano()
 	n.stats.viewsAccepted.Add(1)
-	n.feedMirrors(st, w, now)
+	// Mirror / Interest 不参与 DAO 回滚，只应用已经提交的视野副本。
+	if n.cfg.Mirrors != nil {
+		st.Shown = true
+		snapshot := *st
+		fx.hooks = append(fx.hooks, func() { n.feedMirrors(&snapshot, w, now) })
+	}
 	if hook := n.cfg.Hooks.Witness; hook != nil {
 		view := View{Player: w.Observer, Cell: from, Epoch: w.Epoch, Tick: w.Tick, Self: w.Self, Entities: w.Entities,
 			Truncated: w.Truncated, At: now, SentAt: time.Unix(0, sentAt)}
@@ -454,15 +478,20 @@ func (n *Node) onWitness(st *BaseState, from int32, sentAt int64, w *witnessMsg,
 }
 
 // feedMirrors 把 witness 里的对象交给 Sync（Base 进程的 Manager），第一次时让玩家以自己的 SceneActor mirror 进入
-// Interest。mirror 不是事务状态（按版本幂等，没有回滚），所以在 handler 里直接调用；这里之后没有会失败的步骤。
+// Interest。mirror 不是事务状态（按版本幂等，没有回滚），只在提交后调用。登记失败由下一份视野重试。
 func (n *Node) feedMirrors(st *BaseState, w *witnessMsg, now time.Time) {
 	if n.cfg.Mirrors == nil {
 		return
 	}
 	apply := func(s EntityState) {
+		version := policy.MirrorVersion{Epoch: s.Ver.Epoch, Seq: s.Ver.Seq}
+		// 视野 Tick 已在接收侧去重；同一内容的当前可见事实只续活，不标脏。
+		if n.cfg.Mirrors.Touch(s.ID, version, now) {
+			return
+		}
 		namespace, kind := n.cfg.MirrorKind(s)
 		if _, err := n.cfg.Mirrors.Apply(policy.MirrorItem[EntityState]{
-			ID: s.ID, Namespace: namespace, Kind: kind, Version: policy.MirrorVersion{Epoch: s.Ver.Epoch, Seq: s.Ver.Seq}, Content: s,
+			ID: s.ID, Namespace: namespace, Kind: kind, Version: version, Content: s,
 		}, now); err != nil {
 			n.stats.mirrorErrors.Add(1)
 		}
@@ -473,7 +502,7 @@ func (n *Node) feedMirrors(st *BaseState, w *witnessMsg, now time.Time) {
 			apply(s)
 		}
 	}
-	if !st.Shown {
+	if _, exists := n.cfg.Interest.ObserverView(n.cfg.Session(st.Actor)); !exists {
 		if err := n.cfg.Interest.Enter(n.cfg.Session(st.Actor), st.Actor, w.Self.Pos(), n.cfg.View); err != nil {
 			slog.Debug("cellworld: player not entered into interest", "actor", st.Actor, "err", err)
 			return
@@ -514,6 +543,9 @@ func (n *Node) unshow(st *BaseState, now time.Time) {
 // SceneActor。重进的 epoch 提示比已知的大，目标格已有 Real 时幂等返回，有存活 Ghost 时拒绝并提示 owner。
 // 有 owner 时每 LeasePeriod 重发一次最新意图，兼作 SceneActor 的租约续期。
 func (n *Node) BaseBeat(p BasePlayer, now time.Time) error {
+	if err := n.guardTransaction(); err != nil {
+		return err
+	}
 	st := p.BaseState()
 	if !st.InWorld {
 		return nil

@@ -1,0 +1,21 @@
+2026/11/13 20:40:38 INFO nats: connected url=nats://127.0.0.1:48222
+2026/11/13 20:40:38 INFO bus: subscribed subject=cwdemo.srv.0
+2026/11/13 20:40:38 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.0
+2026/11/13 20:40:38 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.all
+2026/11/13 20:40:38 INFO bus: subscribed subject=cwdemo.srv.all
+STEP enter ok {"monsters_near_p1":[2323461583537177617,2323461583537178641,2323461583537179665,2323479175723222033],"move_refused":"scene_partitioned","p1":100007,"p1_at":{"X":2900,"Y":1500},"p1_hp":100,"p2":100008,"p3":100009}
+STEP own_state ok {"exp_after":7,"exp_before":0}
+STEP straight ok {"creates_p2":2,"nearby_removed":0,"owner_changes":2,"self_gap_ms":53}
+STEP jitter ok {"owner_changes":8,"self_gap_ms":480}
+STEP diagonal ok {"self_gap_ms":50}
+STEP attack_across_0 ok {"applied":8,"damage":12,"damage_forwarded_by_cells":8,"damage_retries_total":0,"duplicate":0,"end_hp":4,"pushed_results":8,"start_hp":100,"target":2323479175723222033}
+STEP death_reward_respawn ok {"coins_after":1,"coins_before":0,"respawn_hp":100,"target":2323479175723222033}
+STEP attack_across_1 ok {"applied":8,"damage":12,"damage_forwarded_by_cells":8,"damage_retries_total":1,"duplicate":0,"end_hp":4,"pushed_results":8,"start_hp":100,"target":2323461583537178641}
+STEP panel_level_up ok {"base_panel":{"actor":102407205,"attack":14,"attack_seq":17,"enter_age_ms":32403,"enter_hint":0,"epoch":14,"hp":100,"in_world":true,"intent_seq":23,"lease_age_ms":0,"lost_epoch":0,"max_hp":120,"owner_sid":1002,"panel_acked":2,"panel_unknown":false,"panel_ver":2,"power":40,"shown":true,"snapshot_epoch":13,"snapshot_seq":394,"view_age_ms":0,"x":3078,"y":1501},"cell_attack_after":14,"cell_attack_before":12,"cell_hp":100,"cell_max_hp_after":120,"cell_max_hp_before":110,"hit_damage":14,"hit_target":2323479175723222033,"target_hp":[100,86]}
+STEP monster_cross ok {"creates_on_p2":1,"from_sid":1002,"handoffs_accepted_cell_a":8,"handoffs_accepted_cell_b":7,"walker":2323461583537180689}
+STEP cell_crash ok {"base_reenters":6,"cell_b_monsters_respawned":3,"epoch_after":3,"epoch_before":2,"owner_after":1002,"p2_hp_after":72,"p2_hp_before":72,"restart_seconds":6.8090354170000005}
+STEP base_restart ok {"entered_at":{"X":1176,"Y":1500},"p5":100010,"saved":{"X":1176,"Y":1500},"spawn":{"X":2900,"Y":1500}}
+STEP team_panel ok {"apart":2486,"p1":100007,"p1_sees_p6":{"_id":102411301,"cell_attack":12,"cell_hp":100,"cell_max_hp":110,"cell_power":35,"pos_x":5429,"pos_y":1500},"p6":100011,"panel_after_ms":51,"removed_after_kill_ms":2946,"removed_after_leave_ms":83,"restored_after_restart":true,"restored_members":[100007,100011],"team":4611686018427388949}
+STEP team_roster_cross_base ok {"members_after_leave":[100007],"team_cleared":true}
+STEP ordinary_scene ok {"move":"ok","move_intent":"scene_not_partitioned","p4":100012}
+seamlessdrill: all steps passed

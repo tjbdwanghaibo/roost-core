@@ -1049,27 +1049,23 @@ func TestSingletonSurvivesAStoreOutageOnlyUntilTheLastChanceBeat(t *testing.T) {
 	}
 }
 
-// #6：进程卡住、窗口按时间已过，但恢复后（asked 在恢复之后）的那次 Renew Applied → 继续持有。
-func TestSingletonAnAppliedRenewalAfterAStallKeepsTheLock(t *testing.T) {
+// 租约窗口已经过去的进程不能通过一次新续期恢复旧写权。
+func TestSingletonExpiredWindowCannotBeRevived(t *testing.T) {
 	h := newSingletonHarness(t, nil, nil)
 	result := h.start()
 	h.awaitServed(t, result)
-	validUntil := h.status(t).validUntil
 	h.awaitWaiting(t, result, true)
-	h.clock.Advance(testSingletonTTL - time.Second) // 节拍晚了 11s 才触发：窗口按时间已经过了
-	h.awaitWaiting(t, result, true)
-	now := h.clock.Now()
-	if !now.After(validUntil.Add(-testSingletonGuard)) {
-		t.Fatalf("test setup: %v is not past the window", now)
-	}
-	if status := h.status(t); status.state != singletonHeld || !status.validUntil.Equal(now.Add(testSingletonTTL)) {
-		t.Fatalf("status after the post-stall renewal = %+v, want held until %v", status, now.Add(testSingletonTTL))
-	}
-	if err := h.runtimeFailure(t).Err(); err != nil {
-		t.Fatalf("runtime failure after an applied renewal: %v", err)
-	}
-	if err := h.stop(t, result); err != nil {
-		t.Fatalf("run: %v", err)
+	// 模拟在途续期已经延长 Redis 的键，但本地尚未确认：恢复后 CAS 仍会成功。
+	h.store.set(testSingletonKey, string(h.store.value(testSingletonKey)), 0)
+	h.clock.Advance(testSingletonTTL + time.Second)
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrSingletonLost) {
+			t.Fatalf("run = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Errorf("expired writer remained live: %+v", h.status(t))
+		_ = h.stop(t, result)
 	}
 }
 
@@ -1096,43 +1092,23 @@ func TestSingletonWindowStartsWhenTheRenewalWasAsked(t *testing.T) {
 	}
 }
 
-// #7b：迟到的 Applied 不作数：回复在 asked + ttl − guard 之后才到 → 不进入 Held，立即再续一次，以那次为准。
+// 在途 Applied 到达时旧窗口已经过期，也不能再续一次复活。
 func TestSingletonALateAppliedRenewalDoesNotCount(t *testing.T) {
 	h := newSingletonHarness(t, nil, nil)
 	result := h.start()
 	h.awaitServed(t, result)
-	before := h.status(t)
 	h.awaitWaiting(t, result, true)
 	var calls atomic.Int32
-	var statusAtRetry atomic.Pointer[singletonStatus]
 	h.store.setOnCAS(func(call fakeCASCall, apply func() (bool, []byte)) (bool, []byte, error) {
-		if calls.Add(1) == 1 { // SIGSTOP：Redis 处理了，回复在 SIGCONT 之后才读到
-			applied, current := apply()
-			h.clock.Advance(testSingletonTTL + time.Second)
-			return applied, current, nil
-		}
-		status := h.app.singleton.snapshot()
-		statusAtRetry.Store(&status)
-		h.store.set(testSingletonKey, testOtherHolder, 0) // 停的期间键过期、被新进程拿走
+		calls.Add(1)
 		applied, current := apply()
+		h.clock.Advance(testSingletonTTL + time.Second)
 		return applied, current, nil
 	})
 	h.clock.AdvanceToNext(t)
 	err := awaitRunResult(t, result)
-	if !errors.Is(err, ErrSingletonLost) || !errors.Is(err, ErrSingletonNotHeld) {
-		t.Fatalf("run error = %v, want Lost by NotHeld on the immediate retry", err)
-	}
-	got := h.store.calls()
-	if len(got) < 3 {
-		t.Fatalf("CAS calls = %d, want the late renewal and an immediate retry", len(got))
-	}
-	late, retry := got[len(got)-2], got[len(got)-1]
-	if !retry.at.Equal(late.at.Add(testSingletonTTL + time.Second)) {
-		t.Fatalf("retry asked at %v, want immediately after the late reply (%v)", retry.at, late.at.Add(testSingletonTTL+time.Second))
-	}
-	status := statusAtRetry.Load()
-	if status == nil || status.state == singletonHeld || !status.validUntil.Equal(before.validUntil) {
-		t.Fatalf("status when retrying = %+v, want not held and the window unchanged (%v)", status, before.validUntil)
+	if !errors.Is(err, ErrSingletonLost) || calls.Load() != 1 {
+		t.Fatalf("late renewal: err=%v calls=%d", err, calls.Load())
 	}
 }
 

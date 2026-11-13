@@ -5,7 +5,7 @@ package def
 //
 //roost:dao coll=varieties db=game
 type VarietyDao struct {
-	PersistOnly int64 `dao:"persist" store:"persist_only"`
+	PersistOnly int64 `dao:"nosync" store:"persist_only"`
 	SyncOnly    int64 `dao:"nopersist,sync" store:"sync_only"`
 	Neither     int64 `dao:"nopersist,nosync" store:"neither"`
 	// Pending is transaction-only state in a map: no storage, no sync, but it

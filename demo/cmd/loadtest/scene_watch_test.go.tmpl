@@ -20,6 +20,7 @@ import (
 	"{{MODULE}}/game/clientsync"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
 )
 
 // 规则文件中的同步字段必须与当前 DAO 的线字段一致；模块迁移不能让 Robot 永远等待旧字段。
@@ -135,6 +136,27 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 // 的第二帧会被当作重复帧丢掉）。
 var syncEpochs atomic.Uint32
 
+func TestSceneWatcherReplacesFullViewsAndAppliesRemoves(t *testing.T) {
+	w := &sceneWatcher{subjects: make(map[int64]map[string]any)}
+	w.consume(syncFrame(t, 42, &db.SyncPlayerDao{}))
+	w.consume(syncFrame(t, 43, &db.SyncPlayerDao{}))
+	if w.failure != nil || len(w.subjects) != 1 || w.subjects[43] == nil {
+		t.Fatalf("full view retained an old subject: %v, %v", w.subjects, w.failure)
+	}
+	raw, err := frame.Encode(frame.Frame{
+		SnapshotMeta: frame.SnapshotMeta{StreamID: 1, Epoch: syncEpochs.Load(), Tick: 2, SchemaVersion: 1},
+		Kind:         frame.Delta, BaseTick: 1,
+		Objects: []frame.ObjectDelta{{Operation: frame.ObjectRemove, Ref: frame.ObjectRef{ID: 1, Generation: 1}}},
+	}, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.consume(raw)
+	if w.failure != nil || len(w.subjects) != 0 {
+		t.Fatalf("remove retained a subject: %v, %v", w.subjects, w.failure)
+	}
+}
+
 // syncFrame 编出一帧：一个 subject 的完整更新，字段取 document。
 func syncFrame(t *testing.T, subjectID int64, document *db.SyncPlayerDao) []byte {
 	t.Helper()
@@ -209,5 +231,29 @@ func TestSceneAliveFailsWhenTheServerStopsReplicating(t *testing.T) {
 		case !live && (err == nil || !strings.Contains(err.Error(), "stopped replicating")):
 			t.Fatalf("帧不再到达，scene_alive 应当失败并说明复制已停：%v", err)
 		}
+	}
+}
+
+// 注册 action 并不代表通用 PB codec 已接线；使用生成器的真实编码/解码验证两个方向。
+func TestCellworldRobotMoveCodec(t *testing.T) {
+	request := &pb.MoveIntentRequest{VX: -123, VY: 45}
+	raw, err := (pbCodec{}).Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := pb.UnmarshalMoveIntentRequest(raw)
+	if err != nil || decoded.VX != request.VX || decoded.VY != request.VY {
+		t.Fatalf("move request = %+v, %v", decoded, err)
+	}
+	raw, err = pb.MarshalMoveIntentResponse(&pb.MoveIntentResponse{Code: 7, Reason: "unavailable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response pb.MoveIntentResponse
+	if err := (pbCodec{}).Unmarshal(raw, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 7 || response.Reason != "unavailable" {
+		t.Fatalf("move response = %+v", response)
 	}
 }

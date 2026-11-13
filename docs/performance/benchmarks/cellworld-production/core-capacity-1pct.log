@@ -1,0 +1,28 @@
+=== RUN   TestCellWorldMeasure
+=== RUN   TestCellWorldMeasure/2250
+    measure_test.go:81: moving entities=1%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+2026/11/13 21:18:55 INFO nats: connected url=nats://127.0.0.1:64225
+2026/11/13 21:18:55 INFO nats: connected url=nats://127.0.0.1:64225
+    measure_test.go:145: witness p99 207.12ms exceeds 50ms
+    measure_test.go:151: witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+    measure_test.go:152: idle period 0ms, players concentrated in one cell false
+    measure_test.go:153: level 2250 NPC/cell, 1000 players, window 1m0s; base (parent process, incl. Sync mirrors and client decode) CPU 140.5% of one core; views accepted 1146272 stale 2 owner changes 14 re-enters 0; witness latency p50 8.64ms p99 207.12ms max 333.21ms (n=200000); mirrors 8799
+    measure_test.go:167: cell (0,0): idle NPCs 0 of 2477 reals, actor beats 48788/s, tier changes idle 0 fast 0
+    measure_test.go:169: cell (0,0): reals 2477 ghosts 685 | CPU 113.9% of one core | region beat p50 14.61ms p99 62.65ms max 135.99ms | out 1746 msg/s 7902 KB/s, in 1600 msg/s 787 KB/s | ghost latency p50 1.08ms p99 44.51ms (n=68490) | handoffs 37 (p50 16.39ms p99 180.72ms), rejected 0 aborted 0 retransmits 3 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:174: cell (0,0): replica full 2651552 delta 349878 gaps 0; coalesced 2340 control exhausted 0 max queue age 175.76ms pending 58; owner errors 0 full 0
+    measure_test.go:167: cell (1,0): idle NPCs 0 of 2529 reals, actor beats 49828/s, tier changes idle 0 fast 0
+    measure_test.go:169: cell (1,0): reals 2529 ghosts 622 | CPU 119.9% of one core | region beat p50 17.12ms p99 75.21ms max 149.10ms | out 1467 msg/s 9377 KB/s, in 1892 msg/s 747 KB/s | ghost latency p50 1.36ms p99 51.33ms (n=80629) | handoffs 30 (p50 12.19ms p99 85.15ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:174: cell (1,0): replica full 3171377 delta 384423 gaps 0; coalesced 5510 control exhausted 0 max queue age 235.33ms pending 5; owner errors 0 full 0
+    measure_test.go:167: cell (0,1): idle NPCs 0 of 2512 reals, actor beats 49354/s, tier changes idle 0 fast 0
+    measure_test.go:169: cell (0,1): reals 2512 ghosts 612 | CPU 121.1% of one core | region beat p50 16.92ms p99 69.28ms max 145.20ms | out 1599 msg/s 8784 KB/s, in 1833 msg/s 733 KB/s | ghost latency p50 1.22ms p99 50.23ms (n=77090) | handoffs 34 (p50 6.96ms p99 106.71ms), rejected 0 aborted 0 retransmits 1 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:174: cell (0,1): replica full 2960824 delta 381883 gaps 0; coalesced 5073 control exhausted 0 max queue age 156.81ms pending 0; owner errors 0 full 0
+    measure_test.go:167: cell (1,1): idle NPCs 0 of 2482 reals, actor beats 48735/s, tier changes idle 0 fast 0
+    measure_test.go:169: cell (1,1): reals 2482 ghosts 649 | CPU 112.1% of one core | region beat p50 14.96ms p99 71.90ms max 124.97ms | out 1582 msg/s 8132 KB/s, in 1631 msg/s 755 KB/s | ghost latency p50 0.74ms p99 44.13ms (n=71321) | handoffs 41 (p50 7.96ms p99 225.03ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:174: cell (1,1): replica full 2746154 delta 348001 gaps 0; coalesced 2948 control exhausted 0 max queue age 153.56ms pending 349; owner errors 0 full 0
+2026/11/13 21:20:01 INFO nats: disconnected err=<nil>
+2026/11/13 21:20:01 INFO nats: connection closed
+2026/11/13 21:20:01 INFO nats: disconnected err=<nil>
+2026/11/13 21:20:01 INFO nats: connection closed
+--- FAIL: TestCellWorldMeasure (66.75s)
+    --- FAIL: TestCellWorldMeasure/2250 (66.75s)
+FAIL

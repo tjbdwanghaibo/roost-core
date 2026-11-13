@@ -6,6 +6,7 @@ import (
 	"{{MODULE}}/game/terrainmap"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 )
 
 // scenePartition is the slice of the game service's partitioned scene
@@ -16,7 +17,7 @@ type scenePartition interface {
 	// MoveIntent forwards a velocity to the cell that owns the player now.
 	MoveIntent(ctx context.Context, playerID, vx, vy int64) error
 	// AttackTarget sends one fixed-damage attack and returns its sequence.
-	AttackTarget(ctx context.Context, playerID, target int64) (uint64, error)
+	AttackTarget(ctx context.Context, playerID, target int64) (cellworld.HitID, error)
 	// TerrainForwarder is how the player's terrain edits and building operations
 	// reach the cells that write their chunks (editable terrain P5); nil
 	// without terrain.

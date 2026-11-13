@@ -113,7 +113,7 @@ func addSagaReceiptsField(root, daoName string) (string, []byte, []byte, error) 
 	// SagaReceipts 是 saga 原生步骤的回执（roost add saga -native 加入）：操作实例（Command.IdempotencyKey）→ 框架编码的
 	// saga.StepReceipt。只在实体的 Nest 锁内经 SagaStepReceipts（saga_receipts.go）读写，随步骤的事务提交 / 回滚；不同步给客户端，
 	// 过了 saga.receipt_retention 的由原生步骤顺手剪掉。
-	SagaReceipts map[string][]byte ` + "`store:\"saga_receipts\" dao:\"persist\"`" + `
+	SagaReceipts map[string][]byte ` + "`store:\"saga_receipts\" dao:\"nosync\"`" + `
 `
 		edited := append(append(append([]byte(nil), raw[:closing]...), []byte(field)...), raw[closing:]...)
 		formatted, err := format.Source(edited)

@@ -20,7 +20,10 @@ import (
 // 只结束同一次入场的角色。v7：扩展消息（kindExt：按命名空间交给 NodeConfig.Ext 的处理器，内容由处理器自己编码；
 // 第一个用户是可编辑地形的边界块副本，gameplay/terrain 的 Replicator）。v8：交接 Offer 带位置不足 1 单位的零头
 // （FracX / FracY，千分位，积分按千分位整数累计）。
-const WireVersion uint8 = 8
+// v9：持久入场序号、输入携带入场身份、攻击随机 ID、交接去重记录使用剩余时长。
+// v10：全局授权、进程 incarnation 与不可重用的交接身份。
+// v11：内部状态差值、Witness 成员增删、按 Base 合批及基线重置。
+const WireVersion uint8 = 11
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -32,6 +35,8 @@ const (
 
 // EntityState 是空间代理的完整状态：Ghost 更新、交接与视野都传它。非持久；Cell 崩溃即丢失。
 type EntityState struct {
+	// Life 在首次取得写权时分配，普通交接和崩溃恢复不变；用于跨重生结算去重。
+	Life uint64     `msgpack:"lf"`
 	ID   int64      `msgpack:"i"`
 	Kind EntityKind `msgpack:"k"`
 	// Base 是玩家所属 BaseApp 的 sid（NPC 为 0），Cell 把视野与 owner 变化发给它。
@@ -80,16 +85,24 @@ func (s *EntityState) capHP() {
 // Pos 返回位置。
 func (s EntityState) Pos() spatial.Point { return spatial.Point{X: s.X, Y: s.Y} }
 
-// HitID 唯一标识一次伤害：攻击者 ID + 攻击者在 Base 上的单调攻击序号。结算方按它去重。
+// HitID 唯一标识一次伤害。ID 是随机令牌，Seq 只用于展示；不能用可能在重启后归零的 Seq 去重。
 type HitID struct {
 	Attacker int64  `msgpack:"a"`
 	Seq      uint64 `msgpack:"s"`
+	ID       string `msgpack:"i"`
 }
 
 // AppliedHit 是目标 Real 上已结算伤害的去重记录，随交接带走（存在 SceneActor / Monster 的 DAO 里）。
 type AppliedHit struct {
 	Hit HitID `msgpack:"h"`
 	At  int64 `msgpack:"t"` // 结算时的系统时间（UnixNano），用于去重窗口过期
+}
+
+// transferredHit 只传剩余有效期；接收方在自己的时钟上重建 At，不比较跨机 UnixNano。
+// 网络耗时不扣除，因此保守延长去重窗口；MaxAppliedHits 仍限制内存占用。
+type transferredHit struct {
+	Hit       HitID `msgpack:"h"`
+	Remaining int64 `msgpack:"r"`
 }
 
 // DamageOutcome 是一次伤害请求的结论。
@@ -155,6 +168,9 @@ const (
 	kindGroupSnap
 	kindGroupNotice
 	kindExt
+	kindReplicaReset
+	kindDeath
+	kindDeathAck
 )
 
 // ghostBatch：Real 的 owner 每拍发给一个邻格的 Ghost 更新（完整状态）与删除。
@@ -171,10 +187,14 @@ type ghostRemove struct {
 // handoffOffer：旧格把 Real 交给新格。State.Ver.Epoch 是新 epoch；重传发同一份内容。Combat 是角色的其余战斗字段
 // （去重表、已应用输入序号），整份随交接带走。
 type handoffOffer struct {
-	State     EntityState  `msgpack:"s"`
-	From      CellID       `msgpack:"f"`
-	LastInput uint64       `msgpack:"in,omitempty"`
-	Applied   []AppliedHit `msgpack:"a,omitempty"`
+	SpawnGeneration uint64           `msgpack:"sg,omitempty"`
+	Recovery        RecoveryState    `msgpack:"rc"`
+	Grant           OwnerGrant       `msgpack:"og"`
+	Transfer        OwnerTransfer    `msgpack:"ot"`
+	State           EntityState      `msgpack:"s"`
+	From            CellID           `msgpack:"f"`
+	LastInput       uint64           `msgpack:"in,omitempty"`
+	Applied         []transferredHit `msgpack:"a,omitempty"`
 	// Entry 是玩家这次入场的序号（ActorState.Entry），随交接带走：新格的 Real 才认得同一次入场的 Leave。NPC 为 0。
 	Entry uint64 `msgpack:"en,omitempty"`
 	// FracX / FracY 是位置不足 1 单位的零头（ActorState.FracX / FracY，千分位），随交接带走：目标格接着累加，跨格不丢位移。
@@ -189,9 +209,11 @@ type handoffReply struct {
 }
 
 type damageReq struct {
-	Hit    HitID `msgpack:"h"`
-	Target int64 `msgpack:"t"`
-	Amount int32 `msgpack:"n"`
+	RewardBase int32  `msgpack:"b"`
+	Life       uint64 `msgpack:"lf"`
+	Hit        HitID  `msgpack:"h"`
+	Target     int64  `msgpack:"t"`
+	Amount     int32  `msgpack:"n"`
 }
 
 type damageReply struct {
@@ -209,9 +231,10 @@ type damageReply struct {
 // enterReq：Base 让玩家进入（首次、Cell 崩溃后重进、交接放弃后补回）。State 是 Player 的最近快照（位置、HP），
 // 新格按它建 SceneActor。
 type enterReq struct {
-	State     EntityState `msgpack:"s"`
-	EpochHint uint64      `msgpack:"e"`
-	LastInput uint64      `msgpack:"in,omitempty"`
+	Recovery  RecoveryState `msgpack:"rc"`
+	State     EntityState   `msgpack:"s"`
+	EpochHint uint64        `msgpack:"e"`
+	LastInput uint64        `msgpack:"in,omitempty"`
 	// Entry 是 Base 给这次入场编的序号（BaseState.Entry）：看门狗重进、交接放弃后补回都带同一个序号，再次 Enter 才换新的。
 	Entry uint64 `msgpack:"en"`
 }
@@ -226,16 +249,18 @@ type leaveReq struct {
 // inputReq 是移动意图，同时是 Base 对 SceneActor 的租约续期：Base 每 LeasePeriod 重发一次最新意图（序号不变），
 // SceneActor 收到任何一条都续租，只有序号前进的才改速度。
 type inputReq struct {
-	ID  int64  `msgpack:"i"`
-	Seq uint64 `msgpack:"q"`
-	VX  int64  `msgpack:"vx"`
-	VY  int64  `msgpack:"vy"`
+	ID    int64  `msgpack:"i"`
+	Entry uint64 `msgpack:"en"`
+	Seq   uint64 `msgpack:"q"`
+	VX    int64  `msgpack:"vx"`
+	VY    int64  `msgpack:"vy"`
 }
 
 type attackReq struct {
-	Hit    HitID `msgpack:"h"`
-	Target int64 `msgpack:"t"`
-	Amount int32 `msgpack:"n"`
+	Hit    HitID  `msgpack:"h"`
+	Entry  uint64 `msgpack:"en"`
+	Target int64  `msgpack:"t"`
+	Amount int32  `msgpack:"n"`
 }
 
 type ownerNotice struct {
@@ -249,19 +274,24 @@ type ownerNotice struct {
 // witnessMsg 是 Cell 给玩家 Base 的视野：半径 R 内的本格 Real / Frozen 与邻格 Ghost（含自己）。每个对象带它在 Cell
 // 上的版本 (epoch, seq)，Base 据此喂 Sync mirror（policy.Mirrors）：交接时旧格、新格的 witness 交错到达，按对象版本取新的。
 type witnessMsg struct {
-	Observer  int64         `msgpack:"o"`
-	Epoch     uint64        `msgpack:"e"`
-	Tick      uint64        `msgpack:"t"`
-	LastInput uint64        `msgpack:"in,omitempty"`
-	Self      EntityState   `msgpack:"s"`
-	Entities  []EntityState `msgpack:"v,omitempty"`
-	Truncated bool          `msgpack:"tr,omitempty"`
+	FullMembership bool          `msgpack:"fm,omitempty"`
+	BaseTick       uint64        `msgpack:"bt,omitempty"`
+	Added          []int64       `msgpack:"add,omitempty"`
+	Removed        []int64       `msgpack:"rm,omitempty"`
+	Observer       int64         `msgpack:"o"`
+	Epoch          uint64        `msgpack:"e"`
+	Tick           uint64        `msgpack:"t"`
+	LastInput      uint64        `msgpack:"in,omitempty"`
+	Self           EntityState   `msgpack:"s"`
+	Entities       []EntityState `msgpack:"v,omitempty"`
+	Truncated      bool          `msgpack:"tr,omitempty"`
 }
 
 // writebackMsg 是 SceneActor 回写 Player 的快照（HP、位置与面板）。Ver 是 SceneActor 当时的版本，
 // 跨交接、跨重建单调；Base 只接受比 Player 上已存版本新的快照（幂等）。
 type writebackMsg struct {
-	State EntityState `msgpack:"s"`
+	Recovery RecoveryState `msgpack:"rc"`
+	State    EntityState   `msgpack:"s"`
 }
 
 type attackResultMsg struct {
@@ -323,10 +353,15 @@ type enterRefused struct {
 
 // wireMsg 是唯一的线上外壳。From 是发送进程的 sid；SentAt 是发送方系统时间（UnixNano），只用于测量。
 type wireMsg struct {
-	V      uint8   `msgpack:"ver"`
-	Kind   msgKind `msgpack:"k"`
-	From   int32   `msgpack:"f"`
-	SentAt int64   `msgpack:"t,omitempty"`
+	Death     *DeathFact    `msgpack:"df,omitempty"`
+	DeathAck  *deathAck     `msgpack:"da,omitempty"`
+	Replica   bool          `msgpack:"rp,omitempty"`
+	Deltas    []stateDelta  `msgpack:"ds,omitempty"`
+	Witnesses []*witnessMsg `msgpack:"vs,omitempty"`
+	V         uint8         `msgpack:"ver"`
+	Kind      msgKind       `msgpack:"k"`
+	From      int32         `msgpack:"f"`
+	SentAt    int64         `msgpack:"t,omitempty"`
 
 	Ghost        *ghostBatch      `msgpack:"g,omitempty"`
 	Offer        *handoffOffer    `msgpack:"of,omitempty"`
@@ -368,6 +403,12 @@ func decodeMsg(data []byte) (*wireMsg, error) {
 	}
 	var present bool
 	switch m.Kind {
+	case kindReplicaReset:
+		present = true
+	case kindDeath:
+		present = m.Death != nil
+	case kindDeathAck:
+		present = m.DeathAck != nil
 	case kindGhost:
 		present = m.Ghost != nil
 	case kindOffer:

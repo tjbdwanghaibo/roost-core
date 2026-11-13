@@ -25,8 +25,9 @@ import (
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
 	controller "{{MODULE}}/game/controllers/attribute"
-	gameattr "{{MODULE}}/game/gameplay/attribute"
 	playerentity "{{MODULE}}/game/entities/player"
+	attributecomp "{{MODULE}}/game/components/attribute"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
 	gameprofile "{{MODULE}}/game/components/profile"
 	sender "{{MODULE}}/game/handler/syncsender"
 )
@@ -156,8 +157,17 @@ func (f *attributeFixture) exp(amount int64) (int32, error) {
 }
 
 var attributeRejectHook atomic.Bool
+var attributeChangedReject atomic.Bool
+var attributeChangedCalls atomic.Int64
 
 func init() {
+	attributecomp.OnAttributeChanged("zz_attribute_changed_test", func(attributecomp.Owner) error {
+		attributeChangedCalls.Add(1)
+		if attributeChangedReject.Load() {
+			return errors.New("attribute changed hook rejected")
+		}
+		return nil
+	})
 	gameprofile.OnProfileLevelUp("zz_attribute_test", func(_ view.PlayerEntity, _, _ int32) error {
 		if attributeRejectHook.Load() {
 			return errors.New("attribute hook rejected")
@@ -173,13 +183,26 @@ func TestAttributeNewPlayerDerivesWithoutPersisting(t *testing.T) {
 	}
 }
 func TestAttributeLevelUpGrowsBaseAndFinal(t *testing.T) {
+	before := attributeChangedCalls.Load()
 	f := newAttributeFixture(t)
+	if attributeChangedCalls.Load() != before {
+		t.Fatal("loading temporary layers notified a business change")
+	}
 	if n, err := f.exp(100); err != nil || n != 1 {
 		t.Fatalf("exp %d %v", n, err)
 	}
 	r := f.get(t)
 	if r.HP != 110 || r.Attack != 12 || r.Power != 35 {
 		t.Fatalf("level attributes %+v", r)
+	}
+	if attributeChangedCalls.Load() != before+1 {
+		t.Fatal("level-up did not notify exactly one attribute change")
+	}
+	if err := f.action(f.player.AttributeComp().Refresh); err != nil {
+		t.Fatal(err)
+	}
+	if attributeChangedCalls.Load() != before+1 {
+		t.Fatal("unchanged refresh notified a change")
 	}
 }
 func TestAttributeMultipleLevelsGrowOnce(t *testing.T) {
@@ -272,6 +295,15 @@ func TestAttributeNamedHookFailureRollsBackProfileAndAttributes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, f.snapshot(t)) {
 		t.Fatal("attribute hook leaked")
+	}
+	attributeRejectHook.Store(false)
+	attributeChangedReject.Store(true)
+	t.Cleanup(func() { attributeChangedReject.Store(false) })
+	if _, err := f.exp(100); err == nil {
+		t.Fatal("attribute changed hook failure was swallowed")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("attribute changed hook failure leaked profile or attributes")
 	}
 }
 func TestAttributeInvalidBaseFailsWithoutChangingProfile(t *testing.T) {

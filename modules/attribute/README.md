@@ -63,6 +63,8 @@
   - 本模块的场景 `TestAttributeSecondHost*` 就是这样把同一个组件挂到测试里的第二个实体（没有档案组件、等级由宿主给）上，验证派生、刷新、成长、拒绝、回滚与两个宿主互不影响。
 - **只适合借鉴的情形**：需要 buff、百分比加成或战斗中临时属性时，不要在它上面改；值得借鉴的是“持久层只存基础值、派生层加载时重建、来源经登记点汇总、公式只在合计后推导一次”的分层方式。
 
+最终属性变化可在 `init` 登记 `attribute.OnAttributeChanged("名称", func(host attribute.Owner) error)`（`game/components/attribute/changed.go`；host 是挂着属性组件的实体，只关心 Player 时自己判断 `host.(view.PlayerEntity)`）：只在业务刷新确实改变最终值时触发，加载重建和无变化刷新不触发。回调处于同一笔 Nest 事务，按名称排序，只能改已锁定的 Player，不能递归 Refresh、做 I/O 或另开事务；错误交还调用方，让属性及附加修改一起回滚。game-demo 用它把等级、装备等来源引起的面板变化交给 CellWorld。
+
 ## 联动
 
 - `attribute` + `equipment`（`with/equipment/game/components/attribute/attribute_equipment.go`）：登记 `OnAttributeGear("equipment", …)`，按已穿戴装备与等级算装备层；并登记 `OnEquipmentChanged("attribute", …)`，穿卸装备的同一笔事务里调 `RefreshGear()`。装备规则已被移除的穿戴物不再提供属性。

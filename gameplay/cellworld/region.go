@@ -55,6 +55,7 @@ type localRec struct {
 	Role      Role
 	Handoff   *HandoffState
 	GhostedTo []CellID
+	GhostAt   int64 // 上次发 Ghost 的本地时间；静止内容仍在 TTL 内续活。
 	// QuietSince：NPC 从什么时候起附近没有玩家（0 = 有人在附近或还没判断）；TierAsked：上次向它请求换档的时间。见 tier.go。
 	QuietSince, TierAsked int64
 }
@@ -78,6 +79,8 @@ type tombstone struct {
 
 type pendingAttack struct {
 	Base       int32
+	RewardBase int32
+	Life       uint64
 	Hit        HitID
 	Target     int64
 	Amount     int32
@@ -166,7 +169,9 @@ func (n *Node) applyReports(r *Region, reports []ActorReport, now time.Time, out
 				continue
 			}
 			if !rep.Removed && !rep.State.Ver.Newer(prev.St.Ver) && rep.Role == prev.Role {
-				continue
+				if rep.State != prev.St || rep.Role != RoleReal || nowNano-prev.GhostAt < int64(n.cfg.Period) {
+					continue
+				}
 			}
 		}
 		if rep.Removed {
@@ -189,7 +194,7 @@ func (n *Node) applyReports(r *Region, reports []ActorReport, now time.Time, out
 			}
 			continue
 		}
-		rec := localRec{St: rep.State, Role: rep.Role, Handoff: rep.Handoff, GhostedTo: prev.GhostedTo, QuietSince: prev.QuietSince, TierAsked: prev.TierAsked}
+		rec := localRec{St: rep.State, Role: rep.Role, Handoff: rep.Handoff, GhostedTo: prev.GhostedTo, QuietSince: prev.QuietSince, TierAsked: prev.TierAsked, GhostAt: nowNano}
 		if !known {
 			// 新装的 Real：第一次发 Ghost 时对全部邻格里不再需要的发删除，清掉旧 owner 留在它们那里的镜像。
 			rec.GhostedTo = n.cfg.Grid.Neighbors(n.cell)
@@ -283,7 +288,12 @@ func (n *Node) applyGhostBatch(r *Region, from int32, b *ghostBatch, now time.Ti
 			continue
 		}
 		if g, ok := r.ghosts.get(s.ID); ok && !s.Ver.Newer(g.St.Ver) {
-			n.stats.staleDrops.Add(1)
+			if s == g.St && fromCell == g.Owner {
+				g.HeardAt = nowNano
+				r.ghosts.set(s.ID, g)
+			} else {
+				n.stats.staleDrops.Add(1)
+			}
 			continue
 		}
 		r.tombs.del(s.ID)
@@ -456,29 +466,11 @@ func (r *Region) lookup(id int64, self CellID) (EntityState, Role, CellID, bool)
 	return EntityState{}, RoleNone, CellID{}, false
 }
 
-// nextEpoch 返回本格为新 Real（进入 / 生成）取的 epoch：比本格见过的一切都大，且不小于 hint。
-func (r *Region) nextEpoch(id int64, hint uint64) uint64 {
-	next := max(hint, 1)
-	if s, ok := r.seen.get(id); ok {
-		next = max(next, s.Epoch+1)
-	}
-	if l, ok := r.locals.get(id); ok {
-		next = max(next, l.St.Ver.Epoch+1)
-	}
-	if g, ok := r.ghosts.get(id); ok {
-		next = max(next, g.St.Ver.Epoch+1)
-	}
-	if t, ok := r.tombs.get(id); ok {
-		next = max(next, t.Ver.Epoch+1)
-	}
-	return next
-}
-
-// activeCount 是本格 Real + Frozen 的记录数（容量判断）。
+// activeCount 同时计算 Real、Frozen 与等待共享授权的 Pending，预留中的实体也占容量。
 func (r *Region) activeCount() int {
 	count := 0
 	for _, l := range r.locals.m {
-		if l.Role == RoleReal || l.Role == RoleFrozen {
+		if l.Role == RoleReal || l.Role == RoleFrozen || l.Role == RolePending || l.Role == RoleDying {
 			count++
 		}
 	}

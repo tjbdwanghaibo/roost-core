@@ -13,7 +13,7 @@
   - `game/cdkey/cdkey.go`：`Normalize(code)`（去两侧空白、转大写、校验字符）、`Intent`（一次兑换的冻结内容）及其方法 `ClaimKey(playerID)`（directory 占用键）、`RequestID(playerID)`（发件幂等键）。
 - **登记点 / 钩子**：无。
 - **状态**
-  - `PlayerDao.Cdkey`（类型 `CdkeyLedger`，`db/def/cdkey.go`）：`Receipts` 是“码 → `CdkeyReceipt`”的 map。每条记录冻结首次受理时的 `Mode`、`Coins`、`Subject`、`Body`、`ExpiresInSeconds`，以及 `MailID`（非空表示发件已确认）。标记为 `persist`：只落库，不下发给客户端。
+  - `PlayerDao.Cdkey`（类型 `CdkeyLedger`，`db/def/cdkey.go`）：`Receipts` 是“码 → `CdkeyReceipt`”的 map。每条记录冻结首次受理时的 `Mode`、`Coins`、`Subject`、`Body`、`ExpiresInSeconds`，以及 `MailID`（非空表示发件已确认）。标记为 `nosync`：只落库，不下发给客户端。
   - 全服占用记录在框架的 directory 服务里（共享 Redis），键是 `cdkey:once:<码>` 或 `cdkey:player:<玩家号>:<码>`。
 - **配置**
   - 配置表：列定义 `configs/schema/cdkey.go`（`Cdkey{Code, Mode, Coins, Subject, Body, ExpiresInSeconds, StartsAtUnix, EndsAtUnix}`），数据 `configs/table/cdkey.csv`。自带两行示例：`WELCOME`（`player`，100 金币）与 `ONE-GIFT`（`once`，500 金币），邮件有效期都是 604800 秒。

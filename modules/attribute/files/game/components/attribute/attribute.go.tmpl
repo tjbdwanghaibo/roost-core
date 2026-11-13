@@ -178,6 +178,9 @@ func (c *Component) refresh(persist bool, base *gameattr.Combat) error {
 	c.owner.AttributeFinal().RangeValues(func(k int32, v int64) bool { old[k] = v; return true })
 	if !reflect.DeepEqual(old, finalValues) {
 		c.owner.AttributeFinal().SetValues(finalValues)
+		if persist {
+			return runAttributeChanged(c.owner)
+		}
 	}
 	return nil
 }

@@ -107,3 +107,25 @@ func TestSingletonIncarnationIsTheHeldLocksIdentity(t *testing.T) {
 		}
 	})
 }
+
+func TestSingletonLocalGuardExpiresBeforeRenewalRuns(t *testing.T) {
+	clock := newFakeClock()
+	failure := NewRuntimeFailure()
+	lock := &singletonLock{clock: clock, failure: failure, settings: singletonConfig{TTL: testSingletonTTL}}
+	lock.hold(clock.Now())
+	if err := lock.Check(); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(testSingletonTTL)
+	if err := lock.Check(); !errors.Is(err, ErrSingletonLost) {
+		t.Fatalf("expired guard = %v", err)
+	}
+	// 一个已经在途的续期不能覆盖 Lost，后续所有入口看到相同终局。
+	lock.hold(clock.Now())
+	if err := lock.Check(); !errors.Is(err, ErrSingletonLost) {
+		t.Fatalf("revived guard = %v", err)
+	}
+	if !errors.Is(failure.Err(), ErrSingletonLost) {
+		t.Fatalf("failure = %v", failure.Err())
+	}
+}

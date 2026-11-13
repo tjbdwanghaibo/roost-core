@@ -9,42 +9,41 @@ import (
 	"sync/atomic"
 	"time"
 
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/cellworldhost"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	handlersender "{{MODULE}}/game/handler/sender"
 	"{{MODULE}}/game/partition"
-	"{{MODULE}}/game/runtimeid"
+	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
-	"{{MODULE}}/protocol/msgid"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
-	db "{{MODULE}}/db"
-	gamescene "{{MODULE}}/game/scene"
-	handlersender "{{MODULE}}/game/handler/sender"
-	monster "{{MODULE}}/game/entities/monster"
+	"{{MODULE}}/protocol/msgid"
 	pb "{{MODULE}}/protocol/pb"
-	player "{{MODULE}}/game/entities/player"
-	scene_actor "{{MODULE}}/game/entities/scene_actor"
-	sceneentity "{{MODULE}}/game/entities/scene"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// 分区场景（scene.partition，原型）：本进程在其中的那一份。
+// 分区场景（scene.partition）：本进程的 Base / Cell 装配，复用 cellworldhost 的生命周期。
 //
 // 每个 game 进程读同一份 scene.partition。sid 是 owners 之一的进程是那个格的 **Cell**：本进程的 Scene 实体持有
 // 格的区域表（cellworld.Region），刷本格的怪，站在本格的玩家由这里的 SceneActor 代表；每个进程都是自己玩家的
 // **Base**：Player 不迁移，玩家的路由状态在 Player 上，Cell 发来的视野（witness）喂给场景桥的 Sync mirror，
 // 客户端照旧从本进程这一条连接收帧。两边都在同一个 cellworld.Node 上，Node 把 NATS 上的消息投成 Nest 请求，
 // 状态全在实体上（Scene / SceneActor / Monster / Player），这里不持有任何格内状态、也没有带锁的进程级表
-// （维护者 2026-11-03 的约束）。设计与实测见 roost-core 分支 feat/seamless-world-prototype 的
-// docs/maintenance/FEATURE-2026-11-03-seamless-world.md §10。
+// （区域事实仍由 Scene 的 Nest 事务持有）。当前契约与验收见 core 的 gameplay/cellworld/README.md。
 //
 // 进程级的保证（同一 sid 只有一个进程、失锁即停）是 App 单实例锁给的（singleton.enabled），这里不另做。
 
@@ -67,14 +66,16 @@ const partitionBlockSize = 200
 const _ = uint(gamescene.DefaultMaxLeaveRadius-settings.PartitionMaxBaseLeaveRadius) + uint(settings.PartitionMaxBaseLeaveRadius-gamescene.DefaultMaxLeaveRadius)
 
 type partitionRuntime struct {
-	config settings.ScenePartition
-	grid   *cellworld.Grid
-	node   *cellworld.Node
-	sid    int32
-	cell   *cellworld.CellID
-	scene  *sceneentity.Scene
-	bridge *Scene
-	access *coreentity.ManagerAccess
+	spawnBook *cellworld.SpawnBook
+	host      *cellworldhost.Runtime
+	config    settings.ScenePartition
+	grid      *cellworld.Grid
+	node      *cellworld.Node
+	sid       int32
+	cell      *cellworld.CellID
+	scene     *sceneentity.Scene
+	bridge    *Scene
+	access    *coreentity.ManagerAccess
 
 	mirrors *policy.Mirrors[cellworld.EntityState]
 	// terrain 是可编辑地形的副本端点（terrain_partition.go：Ghost 带推送、邻格玩家可见）；没有地形时为 nil。
@@ -83,9 +84,7 @@ type partitionRuntime struct {
 	// 没有地形时为 nil。
 	relay *terrainRelay
 	// push 是玩家连接的推送（player TCP Runtime.PushPlayer）：攻击结论推给攻击方。没有接入层时为 nil。
-	push   func(ctx context.Context, playerID int64, msgID uint32, message any) error
-	cancel context.CancelFunc
-	done   chan struct{}
+	push func(ctx context.Context, playerID int64, msgID uint32, message any) error
 
 	// 攻击结论（Base 侧，AttackResult 观察点）：诊断与端到端核对用的计数，不是业务状态。
 	attacksApplied, attacksDuplicate, attacksRejected, attacksUnknown atomic.Uint64
@@ -164,9 +163,10 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 			return id
 		},
 		Mirrors: rt.mirrors, Interest: bridge.interest,
-		Session:    coreentity.GetUniqueIDFromEntityID,
-		MirrorKind: partitionMirrorKind,
-		Hooks:      cellworld.Hooks{AttackResult: rt.attackResult, PanelResult: rt.panelResult},
+		Session:     coreentity.GetUniqueIDFromEntityID,
+		MirrorKind:  partitionMirrorKind,
+		Hooks:       cellworld.Hooks{AttackResult: rt.attackResult, PanelResult: rt.panelResult},
+		SettleDeath: settlePartitionDeath,
 		// 队伍面板（第 4 项 = A）：每名队员的 Base 每 snapshot_every 把他的 SceneActor 状态发给其他队员的 Base，收到的进
 		// 同一个 mirror、3 个周期没更新过期；每名玩家一个组关系视野（成员是其他队员的 SceneActor）。成员表的权威是 Team
 		// 实体：缓存版本为 0 时与每 resync_every 投一笔 [Team, Player] 重读（只做准入，不等）。
@@ -216,45 +216,33 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	if m := terrainmap.Active(); m != nil && rt.cell != nil {
 		cfg.Surface = partitionSurface(m, grid)
 	}
-	node, err := cellworld.NewNode(cfg)
+	host, err := cellworldhost.New(registry, cfg)
 	if err != nil {
 		rt.mirrors.Close()
 		return nil, fmt.Errorf("partition: %w", err)
 	}
+	rt.host, rt.spawnBook = host, host.Births
+	node := host.Node
 	rt.node = node
 	partition.Install(node, area.ID())
 	if rt.cell != nil {
 		if err := area.HostCell(node.Config().Period); err != nil {
-			rt.stop()
+			_ = rt.stop(context.Background())
 			return nil, fmt.Errorf("partition: %w", err)
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rt.cancel, rt.done = cancel, make(chan struct{})
-	go func() {
-		defer close(rt.done)
-		if err := node.Run(ctx); err != nil {
-			slog.Error("partition: node stopped", "err", err)
-		}
-	}()
-	select {
-	case <-node.Ready():
-	case <-rt.done:
+	ctx := context.Background()
+	if err := host.Start(ctx); err != nil {
 		partition.Uninstall(node)
-		return nil, errors.New("partition: node did not start")
+		rt.mirrors.Close()
+		return nil, err
 	}
 	if rt.terrain != nil {
 		rt.terrain.start()
 	}
-	// 别的进程经传输发来的消息（Enter、攻击、交接、witness、队伍快照与成员通知）是本进程的外部输入：登记给 App，停机第一步
-	// 关掉收件并等在途的回调（App 生命周期方案），之后 Service.Shutdown 才停 Node 的出站（stop）、Nest 才停。
-	if err := app.AddIngress(registry, "partition.cellworld", node); err != nil {
-		rt.stop()
-		return nil, fmt.Errorf("partition: %w", err)
-	}
 	if rt.cell != nil {
 		if err := rt.spawnMonsters(ctx); err != nil {
-			rt.stop()
+			_ = rt.stop(context.Background())
 			return nil, err
 		}
 	}
@@ -270,16 +258,15 @@ func (s *Service) InstallNestHandlers(engine corenest.HandlerRegistrar) error {
 }
 
 // stop takes the Node down: no more messages are taken or sent. The entities go with the process (ephemeral).
-func (rt *partitionRuntime) stop() {
+func (rt *partitionRuntime) stop(ctx context.Context) error {
 	if rt == nil {
-		return
+		return nil
 	}
 	// 跨格编辑先停（在途的执行要 Nest），地形副本再停：它们经 Node 发消息、往场景的 Manager 登记副本。
 	rt.relay.stop()
 	rt.terrain.stop()
-	if rt.cancel != nil {
-		rt.cancel()
-		<-rt.done
+	if err := rt.host.Stop(ctx); err != nil {
+		return err
 	}
 	if rt.node != nil {
 		partition.Uninstall(rt.node)
@@ -287,6 +274,7 @@ func (rt *partitionRuntime) stop() {
 	if rt.mirrors != nil {
 		rt.mirrors.Close()
 	}
+	return nil
 }
 
 // createActor 在 Node 的 handler 里新建 SceneActor（玩家）或 Monster（NPC）：EntityManager.Create 在 handler 内即
@@ -312,14 +300,10 @@ func (rt *partitionRuntime) createActor(id int64, kind cellworld.EntityKind) (ce
 	return actor, nil
 }
 
-// spawnMonsters 刷满本格的刷怪点（按格的刷怪表：只刷落在本格里的点与只）。Monster ID 的序号从启动时刻起算：
-// 一只从本格走到邻格的怪活得比本进程长，重启后的本进程不能再发出它的 ID（runtimeid.NewStartingAt）。原型不补刷：
-// 死了的怪留在原地（HP 0），被交接走的不回原格补（FEATURE §10 缺口）。
+// spawnMonsters 从持久出生目录取得稳定 ID，运行有界巡检。Slot 占额不随执行 Cell 改变。
 func (rt *partitionRuntime) spawnMonsters(ctx context.Context) error {
-	start := (time.Now().Unix() - partitionEpoch) << 6
-	ids, err := runtimeid.NewStartingAt(rt.sid, max(start, 0))
-	if err != nil {
-		return fmt.Errorf("partition: %w", err)
+	if rt.spawnBook == nil {
+		return errors.New("partition: spawn book is required")
 	}
 	rect := rt.grid.Rect(*rt.cell)
 	names := make([]string, 0, len(rt.config.Spawns))
@@ -327,6 +311,8 @@ func (rt *partitionRuntime) spawnMonsters(ctx context.Context) error {
 		names = append(names, name)
 	}
 	slices.Sort(names)
+	specs := make([]cellworld.SpawnSpec, 0)
+	keys := make([]string, 0)
 	for _, name := range names {
 		point := rt.config.Spawns[name]
 		for i := range point.Count {
@@ -334,26 +320,37 @@ func (rt *partitionRuntime) spawnMonsters(ctx context.Context) error {
 			if !rect.Contains(at) {
 				continue
 			}
-			unique, err := ids.Next()
-			if err != nil {
-				return fmt.Errorf("partition: %w", err)
-			}
-			id, err := coreentity.BuildEntityID(unique, monster.EntityKindMonster)
-			if err != nil {
-				return fmt.Errorf("partition: %w", err)
-			}
-			if err := rt.node.Spawn(ctx, cellworld.EntityState{ID: id, X: at.X, Y: at.Y, VX: point.VX, VY: point.VY, HP: point.HP}); err != nil {
-				return fmt.Errorf("partition: spawn %s #%d: %w", name, i, err)
-			}
-			rt.spawned.Add(1)
+			key := fmt.Sprintf("%s-%d", name, i)
+			keys = append(keys, key)
+			specs = append(specs, cellworld.SpawnSpec{Key: key, Home: rt.sid, RespawnDelay: point.RespawnDelay, State: cellworld.EntityState{Kind: cellworld.KindNPC, X: at.X, Y: at.Y, VX: point.VX, VY: point.VY, HP: point.HP}})
 		}
 	}
-	slog.Info("partition: monsters spawned in this cell", "cell", rt.cell, "count", rt.spawned.Load())
+	ids, err := rt.spawnBook.Reserve(ctx, rt.sid, keys)
+	if err != nil {
+		return err
+	}
+	if rt.sid <= 0 || rt.sid > 65535 {
+		return errors.New("partition: spawn SID exceeds 16 bits")
+	}
+	for i := range specs {
+		id, err := cellworldhost.SpawnID(rt.sid, ids[specs[i].Key], monster.EntityKindMonster)
+		if err != nil {
+			return err
+		}
+		specs[i].State.ID = id
+		if err := rt.node.ReconcileSpawn(ctx, specs[i]); err != nil {
+			return err
+		}
+	}
+	rt.spawned.Store(int64(len(specs)))
+	if err := rt.host.StartSpawns(specs, func(spec cellworld.SpawnSpec, err error) {
+		slog.Warn("partition: spawn reconciliation failed", "slot", spec.Key, "err", err)
+	}); err != nil {
+		return err
+	}
+	slog.Info("partition: birth slots registered", "cell", rt.cell, "count", len(specs))
 	return nil
 }
-
-// partitionEpoch 是 Monster ID 序号起点的时间原点（2026-01-01 UTC）：每秒 64 个序号，34 位序号够用约 8 年。
-const partitionEpoch = 1767225600
 
 // partitionMirrorKind 给出 mirror 在帧上的命名空间与 kind：玩家的 SceneActor 是 player（D2 = A：客户端不变），
 // NPC 是 monster。
@@ -420,7 +417,7 @@ func (rt *partitionRuntime) attackResult(r cellworld.AttackResult) {
 	default:
 		rt.attacksRejected.Add(1)
 	}
-	slog.Debug("partition: attack concluded", "attacker", r.Hit.Attacker, "seq", r.Hit.Seq, "target", r.Target,
+	slog.Debug("partition: attack concluded", "attacker", r.Hit.Attacker, "attack_id", r.Hit.ID, "seq", r.Hit.Seq, "target", r.Target,
 		"outcome", r.Outcome.String(), "reason", r.Reason, "duplicate", r.Duplicate, "hp", r.HP)
 	if rt.push == nil {
 		return
@@ -451,7 +448,7 @@ func (rt *partitionRuntime) panelResult(r cellworld.PanelResult) {
 // attackResultPush 把 cellworld 的结论翻成客户端的 AttackResultPush。伤害是目标格真正结算的值（攻击者面板的攻击，
 // 第 3 项 = A；没有面板时是 scene.partition.attack_damage）。
 func attackResultPush(r cellworld.AttackResult) *pb.AttackResultPush {
-	out := &pb.AttackResultPush{Seq: r.Hit.Seq, Target: r.Target, TargetHP: r.HP}
+	out := &pb.AttackResultPush{Seq: r.Hit.Seq, AttackID: r.Hit.ID, Target: r.Target, TargetHP: r.HP}
 	switch {
 	case r.Outcome == cellworld.OutcomeApplied && r.Duplicate:
 		out.Outcome = "duplicate"
@@ -495,19 +492,19 @@ func (rt *partitionRuntime) MoveIntent(ctx context.Context, playerID, vx, vy int
 
 // AttackTarget sends one attack and returns its sequence. The damage is the attacker's panel attack on its Real
 // (item 3 = A); scene.partition.attack_damage is the default for an attacker without a panel.
-func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target int64) (uint64, error) {
+func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target int64) (cellworld.HitID, error) {
 	entityID, err := partitionPlayer(playerID)
 	if err != nil {
-		return 0, err
+		return cellworld.HitID{}, err
 	}
 	if target == 0 {
-		return 0, apperrors.ErrPartitionNotEntered
+		return cellworld.HitID{}, apperrors.ErrPartitionNotEntered
 	}
 	hit, err := rt.node.Attack(ctx, entityID, target, rt.config.AttackDamage)
 	if err != nil {
-		return 0, err
+		return cellworld.HitID{}, err
 	}
-	return hit.Seq, nil
+	return hit, nil
 }
 
 // enter 让玩家以自己的 SceneActor 进入分区场景（场景桥的 Join 在会话开好之后调）。已经在里面（重连）时不动：
@@ -612,4 +609,18 @@ func ageMillis(at int64) int64 {
 		return 0
 	}
 	return time.Since(time.Unix(0, at)).Milliseconds()
+}
+
+// demo 的掉落规则：每次 NPC 死亡奖励击杀者 1 金币。重复事实由 Node 的持久 Life 回执挡住，
+// 钱包加值与回执在同一笔 Player strict 事务提交，不依赖有限窗口的钱包请求账本。
+func settlePartitionDeath(base cellworld.BasePlayer, fact cellworld.DeathFact) error {
+	if fact.State.Kind != cellworld.KindNPC {
+		return nil
+	}
+	p, ok := base.(*player.Player)
+	if !ok {
+		return errors.New("partition: death recipient is not a Player")
+	}
+	_, err := p.WalletComp().Add(1)
+	return err
 }

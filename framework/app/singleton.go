@@ -24,7 +24,8 @@ import (
 // 只处理同一 sid 崩溃重启时短暂出现两个进程这一种场景：旧进程卡住（SIGSTOP、长 GC、调试器）、
 // 新进程已被拉起。App 在 NewRegistry 之后、第一个 Mod Init 之前获取锁（别人持有就等待），
 // 持有期间由一个 goroutine 按固定节拍续期，失锁即经 RuntimeFailure fail-stop；全部 Mod 停完
-// 才释放。模块不感知锁、不各自检查：Nest 由 OnFail 回调统一围栏，活性查询走 SingletonLiveness。
+// 才释放。Nest 由 OnFail 回调统一围栏；需要跨进程接管的模块另用 SingletonLease
+// 在本地入口、提交、出站检查有效窗口，活性查询走 SingletonLiveness。
 //
 // core 只定义后端接口与状态机，不 import Redis 驱动；Redis 实现在 wiring/redis（kitredis.SingletonStore）。
 
@@ -244,7 +245,8 @@ type singletonStatus struct {
 //
 // 单写者：获取、续期及其结论都在同一个 goroutine 里顺序执行（启动阶段是 run 的 goroutine，
 // 之后是续期 goroutine，二者不重叠），不存在旧回复作用到新状态上的交错，也就不需要世代号。
-// mu 只保护 status 字段，供健康检查等读者并发读取；持 mu 时不做 I/O。
+// mu 保护 status，业务的 SingletonLease.Check 也可以将它置为 Lost；该终态不可恢复。
+// 持 mu 时不做 I/O，也不调用 RuntimeFailure 的回调。
 type singletonLock struct {
 	settings singletonConfig
 	store    SingletonStore
@@ -278,12 +280,8 @@ type casReply struct {
 	replied time.Time
 }
 
-// cas 发起一次 CompareAndSet(key, expected, value, ttl)。单次超时等于 renew_interval，持有期间
-// 还不越过 validUntil：固定节拍下，前一拍的报错可能很快回来（结论仍在窗口内），下一拍于是在
-// [validUntil−guard, validUntil) 里才发起，若再给它一整个 renew_interval，超时结论最晚落在
-// validUntil−guard+2×renew_interval，可能晚于键过期。截到 validUntil，Unknown→Lost 就一定不晚于
-// validUntil 判定。asked 已不早于 validUntil（卡住后恢复）时不截：那次续期 Applied 仍证明键一直是
-// 自己的，报错则按窗口末尾判 Lost。启动获取时 validUntil 为零值，不受影响。
+// cas 发起一次 CompareAndSet，持锁时请求超时不能越过旧窗口；
+// renewLoop 在请求前后核验窗口，迟到 Applied 不延长业务写入许可。
 func (l *singletonLock) cas(ctx context.Context, expected []byte) casReply {
 	asked := l.clock.Now()
 	timeout := l.settings.RenewInterval
@@ -305,14 +303,18 @@ func (l *singletonLock) timely(reply casReply) bool {
 
 func (l *singletonLock) hold(asked time.Time) {
 	l.mu.Lock()
-	l.status = singletonStatus{state: singletonHeld, validUntil: asked.Add(l.settings.TTL)}
+	if l.status.state != singletonLost {
+		l.status = singletonStatus{state: singletonHeld, validUntil: asked.Add(l.settings.TTL)}
+	}
 	l.mu.Unlock()
 }
 
 func (l *singletonLock) markUnknown(cause error) {
 	l.mu.Lock()
-	l.status.state = singletonUnknown
-	l.status.err = cause
+	if l.status.state != singletonLost {
+		l.status.state = singletonUnknown
+		l.status.err = cause
+	}
 	l.mu.Unlock()
 }
 
@@ -420,27 +422,25 @@ func (l *singletonLock) startRenewal() {
 	go l.renewLoop(ctx, asked.Add(l.settings.RenewInterval))
 }
 
-// renewLoop 是持有期间唯一的写者。调度按固定节拍：节拍点是上一次 Applied 的 asked + k × renew_interval，
-// 单次超时等于 renew_interval，超时或报错就在下一个节拍点重试、不额外再睡一个间隔。最后一个结论落在
-// validUntil−guard 之前的节拍之后，下一拍在 validUntil−guard+renew_interval ≤ validUntil 之前发起，
-// 它的单次超时又截到 validUntil（见 cas），所以 Lost 一定不晚于 validUntil 判定。
-//
-// 结论：
-//   - 及时 Applied → Held，validUntil = asked + ttl。
-//   - 迟到 Applied → 不作数（Unknown），立即再续一次，以那次的结论为准。
-//   - Applied=false → NotHeld → Lost。
-//   - 报错 / 超时 → Unknown；已到 validUntil − guard 则 Lost。只看时间不够：卡住后恢复的进程窗口按时间
-//     已过，但键可能仍是自己的，所以“窗口末尾”只在续期失败时才判 Lost，恢复后那次续期 Applied 就照常继续。
-//
-// 停止（ctx 取消）时在途调用的结果不做判断，直接退出。
+// renewLoop 按固定节拍续期。有效窗口结束前，未知结论可以重试；
+// 窗口结束后永久失锁，不能靠一次成功续期复活旧写者。业务的本地 Check
+// 使用同一窗口，覆盖 SIGCONT 后业务比续期 goroutine 更早运行的情况。
 func (l *singletonLock) renewLoop(ctx context.Context, next time.Time) {
 	defer close(l.renewalDone)
 	for {
 		if !l.waitUntil(next, ctx.Done(), nil) {
 			return
 		}
+		if l.Check() != nil {
+			return
+		}
 		reply := l.cas(ctx, l.value)
 		if ctx.Err() != nil {
+			return
+		}
+		// 旧窗口结束之后才读到的 Applied 不能复活这个进程。
+		// 即使 Redis 已延长键，也只保留到它自然过期，业务必须停止。
+		if l.Check() != nil {
 			return
 		}
 		switch {
@@ -472,10 +472,18 @@ func (l *singletonLock) renewLoop(ctx context.Context, next time.Time) {
 // lose 进入吸收态 Lost 并 fail-stop。RuntimeFailure 先执行 OnFail 回调（Nest 围栏）再唤醒 run。
 func (l *singletonLock) lose(cause error, holder []byte) {
 	l.mu.Lock()
+	if l.status.state == singletonLost {
+		l.mu.Unlock()
+		return
+	}
 	l.status.state = singletonLost
 	l.status.holder = holder
 	l.status.err = cause
 	l.mu.Unlock()
+	l.reportLost(cause, holder)
+}
+
+func (l *singletonLock) reportLost(cause error, holder []byte) {
 	slog.Error("singleton lock lost; fail-stop", "key", l.key, "holder", string(holder), "err", cause)
 	l.failure.Fail(fmt.Errorf("%w: %w", ErrSingletonLost, cause))
 }
@@ -636,6 +644,10 @@ func (a *App) openSingleton(serverType ServiceName) (*singletonLock, error) {
 		return nil, err
 	}
 	if err := a.registry.Register(ModSingletonIdentityChecker, SingletonIdentityChecker(singletonLiveness{store: store, prefix: settings.KeyPrefix})); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	if err := a.registry.Register(ModSingletonLease, SingletonLease(lock)); err != nil {
 		_ = store.Close()
 		return nil, err
 	}

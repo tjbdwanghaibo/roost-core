@@ -12,7 +12,7 @@ state:
   - field: Friends
     type: FriendsState
     store: friends
-    dao: persist
+    dao: nosync
     comment: Friends 保存有界的双向好友、收到的申请与单向黑名单；仅经本人查询返回。
 component: Friends
 protocols: [FriendsChange, FriendsList]
