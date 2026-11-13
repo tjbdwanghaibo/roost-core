@@ -360,7 +360,7 @@ scene:
   客户端、小编辑是增量、玩家走远订阅跟着走、推送全丢由续期补齐、旧消息倒序重放不回退、重启补齐、D13 撤回、单格入口改别的格的块仍拒绝。
   真实多进程（真实 NATS / Mongo / Redis，kill -9 格进程）：仓库的 `ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`
   （[演练证据](../docs/maintenance/evidence/terrain-partition-drill-20261110/README.md)）。
-- **升级**：CellWorld 内网格式 v11，旧消息明确拒绝；PlayerDao schema 5，先停旧进程并按当前 schema 重建或离线迁移，不能新旧节点混跑。
+- **升级**：CellWorld 内网格式 v12，旧消息明确拒绝；PlayerDao schema 5，先停旧进程并按当前 schema 重建或离线迁移，不能新旧节点混跑。
 
 ### 移动与寻路（P3）
 
