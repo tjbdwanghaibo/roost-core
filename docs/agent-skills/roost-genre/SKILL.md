@@ -56,10 +56,10 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 - Go 版本按 roost-core `go.mod`（`go` / `toolchain` 两行）；全程 `GOWORK=off`。生成物声明的最低 core 看目标检出 `codegen/internal/roost/manifest.go` 的 `minimumVersions.Core`（随功能版提高），联网方式 `project new` 解析不到比它更早的版本。
 - `CORE` = roost-core 源码目录，二选一：
   - **A. 本机检出**（推荐，已实测）：`CORE=<roost-core 检出路径>`，切到目标版本的 tag / main。
-  - **B. module cache**：`CORE=$(go env GOMODCACHE)/github.com/tjbdwanghaibo/roost-core@vX.Y.Z`。夹具随模块发布（`scripts/testdata/` 在模块包里）。仓库是私有模块，首次下载需要本机 git 凭据与 `GOPRIVATE=github.com/tjbdwanghaibo/*`（本机未设，B 的下载步骤未实测；从已有缓存目录构建 CLI 已实测可行，replace 指向缓存目录未实测）。
+  - **B. 从 GitHub 取发布版**（仓库公开，2026-11-13 在 v1.45.0 实测）：`CORE=$(go mod download -json github.com/tjbdwanghaibo/roost-core@vX.Y.Z | python3 -c 'import json,sys;print(json.load(sys.stdin)["Dir"])')`，得到模块缓存里的只读源码（含 `docs/`、`modules/`、`scripts/testdata/`）。CLI 用 `go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@vX.Y.Z`。放进别的项目用的入口 skill 见仓库根目录的 [claude-skill/](../../../claude-skill/README.md)。
 - 依赖两种写法：
   - **离线 / 跟检出**：`project new ... --skip-deps`，然后 `go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE`（与仓库脚本相同；下面的命令都用这种）。
-  - **联网 / 跟发布版**：去掉 `--skip-deps`、不加 replace，由 `project new` 解析已发布版本；CLI 用同一版本（`go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@vX.Y.Z`，见 `roost help project`）。本 skill 未实测这条。
+  - **联网 / 跟发布版**：去掉 `--skip-deps`、不加 replace，`project new … -roost-core-version vX.Y.Z` 解析已发布版本；CLI 用同一版本（`go install …/codegen/cmd/roost@vX.Y.Z`）。2026-11-13 在 v1.45.0 实测：`-template game` 新工程装 wallet、checkin 后 `module verify` 全部通过。
 
 ### 3.2 公共前置命令（每篇 reference 的命令都接在它后面，用 bash 执行）
 

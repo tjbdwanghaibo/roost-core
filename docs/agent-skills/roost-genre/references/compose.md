@@ -158,6 +158,8 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 
 ## 2. 工程
 
+下面的命令按“本地检出”写。没有检出、从 GitHub 取发布版时（经仓库根目录 [claude-skill/](../../../../claude-skill/README.md) 的入口 skill 使用），CLI 用 `go install …/codegen/cmd/roost@$V`，`project new` 去掉 `--skip-deps`、加 `-roost-core-version "$V"`，不做 `replace`；对照表见入口 skill 第 4 节。
+
 ```bash
 set -euo pipefail
 export GOWORK=off
