@@ -1,25 +1,19 @@
 package player
 
 import (
-	"fmt"
-	"math"
-
 	db "{{MODULE}}/db"
-	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/game/components/wallet"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 //roost:component type={{ID:component:Wallet}}
 const CompTypeWallet entity.ComponentType = {{ID:component:Wallet}}
 
-// WalletComponent 是玩家货币的业务逻辑。它不保存事务会改的状态：余额在 PlayerDao.Wallet、
-// 回执在 PlayerDao.WalletLedger 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
-type WalletComponent struct {
-	entity.ComponentBase
-	owner *Player
-}
+// WalletComponent 是共用货币组件 wallet.Component 的类型别名，只为 Player 的生成接线命名。
+// 货币业务（Apply / Add / Balance）全部在 game/components/wallet；这里只把 Player 的 DAO 字段交给它，
+// 并把扣款接到 Player 的消费钩子（wallet_hooks.go）。余额在 PlayerDao.Wallet、回执在 PlayerDao.WalletLedger。
+type WalletComponent = wallet.Component
 
 // IWalletEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
 // 别的模块在自己的 handler 里要动货币时，目标接口里嵌入它即可（两个组件在同一个实体上，同一笔事务）。
@@ -29,127 +23,25 @@ type IWalletEntity interface {
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeWallet, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		typed, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("wallet component: owner %T is not *Player", owner)
-		}
-		return &WalletComponent{owner: typed}, nil
-	})
+	entity.RegisterComponentFactory(CompTypeWallet, wallet.NewComponent)
 }
 
-func (component *WalletComponent) Name() string { return "wallet" }
+// WalletReceiptWindow 是去重窗口的大小，见 wallet.ReceiptWindow。
+const WalletReceiptWindow = wallet.ReceiptWindow
 
-// Owner 只在实体存活且被 Nest 锁住期间可用。
-func (component *WalletComponent) Owner() *Player { return component.owner }
-
-// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
-
-// WalletReceiptWindow 是去重窗口的大小：保留最近这么多次带业务键的加减的结果。
-const WalletReceiptWindow = 128
-
-// Apply 按业务键 key 给余额加 delta（负数为扣），用于调用方没有别的办法判断“这一次做过没有”的请求，
-// 例如客户端带请求号的消费。同一个 key 在窗口内重复调用返回第一次的结果，不再改余额；delta 不同则拒绝。
-// 余额不足、溢出时不写任何字段。
-//
-// 去重只在窗口内成立：之后又发生了 WalletReceiptWindow 次带业务键的加减，这个 key 的回执就被淘汰，
-// 再用它会当成新的一次执行。所以它只防短期重发；要长期“只发一次”的发放（签到、任务奖励、订单到账）
-// 由调用方在自己的状态里记下这个事实，并改用 Add——事实与余额在同一笔事务里提交或回滚。
-//
-// key 会成为落库文档里的字段名，所以只收 1 到 WalletKeyMaxLen 个字节、由 ASCII 字母、数字与 - _ : 组成的键
-// （UUID、十六进制串、“会话号:序号”都在内）。别的键在写入之前就拒绝：带空字节的编码不了，
-// 带 . 或以 $ 开头的在存储里有特殊含义，不限长的键能把账本撑大。
-func (component *WalletComponent) Apply(key string, delta int64) (int64, error) {
-	if !walletKeyValid(key) || delta == 0 {
-		return 0, apperrors.ErrWalletInvalid
-	}
-	ledger := component.owner.Dao().GetWalletLedger()
-	if receipt, ok := ledger.GetReceipts(key); ok {
-		if receipt.GetDelta() != delta {
-			return 0, apperrors.ErrWalletConflict
-		}
-		return receipt.GetBalance(), nil
-	}
-	balance, err := component.Add(delta)
-	if err != nil {
-		return 0, err
-	}
-	if ledger.ReceiptsLen() >= WalletReceiptWindow {
-		ledger.DelReceiptsKey(oldestWalletReceipt(ledger))
-	}
-	seq := ledger.GetNextSeq() + 1
-	ledger.SetNextSeq(seq)
-	receipt := &db.WalletReceipt{}
-	receipt.SetDelta(delta)
-	receipt.SetBalance(balance)
-	receipt.SetSeq(seq)
-	ledger.SetReceiptsKey(key, receipt)
-	return balance, nil
-}
-
-// WalletKeyMaxLen 是业务键的最大字节数。
-const WalletKeyMaxLen = 64
-
-func walletKeyValid(key string) bool {
-	if key == "" || len(key) > WalletKeyMaxLen {
-		return false
-	}
-	for i := 0; i < len(key); i++ {
-		c := key[i]
-		switch {
-		case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '-', c == '_', c == ':':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// Add 给余额加 delta（负数为扣），不留回执。给自己记着“这一次做过没有”的调用方用：
-// 先在自己的状态里判重，再在同一笔事务里调它。余额不足、溢出时不写任何字段。
-// delta 可以是任何 int64：扣到负数的一律是余额不足（含 math.MinInt64），加过上限的一律是溢出，
-// 调用方不需要自己先收窄范围。
-func (component *WalletComponent) Add(delta int64) (int64, error) {
-	if delta == 0 {
-		return 0, apperrors.ErrWalletInvalid
-	}
-	wallet := component.owner.Dao().GetWallet()
-	coins := wallet.GetCoins()
-	// 不足用加法判断，不用“coins < -delta”：delta 为 math.MinInt64 时取负还是它自己，那个比较恒为假，
-	// 余额会被写成负数。coins 非负、delta 为负时 coins+delta 不会溢出；coins 已经是负数（不是本组件
-	// 写得出来的）时任何扣款都按不足拒绝。
-	if delta < 0 && (coins < 0 || coins+delta < 0) {
-		return 0, apperrors.ErrWalletShort
-	}
-	if delta > 0 && coins > math.MaxInt64-delta {
-		return 0, apperrors.ErrWalletOverflow
-	}
-	wallet.SetCoins(coins + delta)
-	if delta < 0 {
-		if err := runWalletSpent(component.owner, -delta, fctx.NowMilli()); err != nil {
-			return 0, err
-		}
-	}
-	return coins + delta, nil
-}
-
-// oldestWalletReceipt 返回序号最小的回执的业务键。窗口不大，逐个比较即可。
-func oldestWalletReceipt(ledger *db.WalletLedger) string {
-	var oldestKey string
-	var oldestSeq int64
-	ledger.RangeReceipts(func(key string, receipt *db.WalletReceipt) bool {
-		if oldestKey == "" || receipt.GetSeq() < oldestSeq {
-			oldestKey, oldestSeq = key, receipt.GetSeq()
-		}
-		return true
-	})
-	return oldestKey
-}
-
-// Balance 返回当前余额。
-func (component *WalletComponent) Balance() int64 {
-	return component.owner.Dao().GetWallet().GetCoins()
-}
+// WalletKeyMaxLen 是业务键的最大字节数，见 wallet.KeyMaxLen。
+const WalletKeyMaxLen = wallet.KeyMaxLen
 
 // ErrWalletAmount 是“金额必须为正”的拒绝。
-func ErrWalletAmount() error { return apperrors.ErrWalletInvalid }
+func ErrWalletAmount() error { return wallet.ErrAmount() }
+
+// 下面三个方法实现 wallet.Owner 与可选的消费回调；只在 Player 被 Nest 锁住期间调用。
+
+func (e *Player) WalletState() *db.WalletState   { return e.Dao().GetWallet() }
+func (e *Player) WalletLedger() *db.WalletLedger { return e.Dao().GetWalletLedger() }
+
+// WalletSpent 在扣款首次生效时执行 OnWalletSpent 登记的钩子（同一笔事务，失败整笔回滚）。
+func (e *Player) WalletSpent(amount, nowUnixMilli int64) error {
+	return runWalletSpent(e, amount, nowUnixMilli)
+}
+

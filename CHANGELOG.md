@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **modules：bag / wallet / attribute 改成多实体共用的组件**（2026-11-13，维护者要求）：组件逻辑移到共用包 `game/components/{bag,wallet,attribute}/`（包名 bag / wallet / attribute），经宿主接口 `bag.Owner`（`BagState()`）、`wallet.Owner`（`WalletState()` / `WalletLedger()`，可选 `WalletSpent`）、`attribute.Owner`（三层 `AttributeValues` + `AttributeLevel()`，可选 `CollectAttributeGear()`）拿宿主 DAO 里的状态，工厂 `NewComponent`；`game/entities/player/*_component.go` 只留组件号、类型别名、工厂登记与 Owner 方法，照 activity 的写法。对 Player 的协议、错误码、组件号、DAO 字段与 store 键、`WalletComp()` / `BagComp()` / `AttributeComp()` 的方法、`OnWalletSpent` / `OnAttributeGear` / 档案升级钩子不变；`WalletReceiptWindow`、`WalletKeyMaxLen`、`ErrWalletAmount`、`BagMaxKinds`、`BagMaxStack`、`Gear` 在 Player 包里再导出。变化：背包规则文件从 `game/entities/player/bag_items.go` 移到 `game/components/bag/items.go`（函数改名 `ItemRule`，Player 包保留 `bagItemRule` 给 gacha）；三个组件的 `Owner()` 返回宿主接口而不是 `*Player`；属性溢出日志的键由 `player_id` 改为 `entity_id` + `entity_kind`。每个模块新增 3 条场景（`Test{Wallet,Bag,Attribute}SecondHost*`），把同一个组件挂到测试里的第二个实体上验证加减 / 拒绝 / 回滚与两个宿主互不影响，修前三个模块各 3 条红（工厂拒绝非 `*Player` 宿主）；场景数 wallet 14→17、bag 17→20、attribute 17→20。README 的“复用方式”写明怎样挂到别的实体，KNOWN-LIMITS 的“模块绑定具体的实体名”一条按此改写。只对新生成的工程生效。
+
 - **组合 skill**（compose §5A，2026-11-13，维护者要求）：生成的工程根目录还要带 `AGENTS.md`（需求一律先用 roost-genre、记忆在 DEMO 两份文档、skill 只读、版本以 go.mod 为准、工程约定与验证命令）、只含 `@AGENTS.md` 的 `CLAUDE.md`，以及入口 skill 的副本（`.claude/skills/roost-genre/`，用 Codex 时再放 `.agents/skills/`），之后在该工程里提的需求自动走 skill；已有 `AGENTS.md` 时只补“需求怎么做”一节。入口版本 2026-11-13.3。
 
 - **组合 skill**（compose §0D，2026-11-13，维护者指出战斗判断有误）：有战斗时先分五档再判断——回合 / 异步、MMO 级服务器权威实时战斗、帧同步对战都支持；动作 / 射击级不支持、大规模同屏状态同步暂缓，作为冲突提出。写明 `combat` 模块只是双人 PvP、`monster` 不战斗、`dungeon` 不判定击杀，MMO 级多人战斗与打怪按 MMORPG 参考与 `gameplay/skill` 手写；设计上用前摇、预警、锁定或范围判定吸收没有延迟补偿的影响。实时战斗本身不再算 §0C“不用 roost”的信号。

@@ -18,7 +18,7 @@ errcodes: [bag_item_invalid, bag_count_invalid, bag_short, bag_stack_full, bag_k
 verify:
   packages: [./game/handler]
   run: ^TestBag
-  pass: 17
+  pass: 20
 with:
   gm:
     summary: 经 GM 审计入口调用本模块正式事务或服务入口

@@ -1,0 +1,183 @@
+package attribute
+
+import (
+	"fmt"
+	"log/slog"
+	"math"
+	"reflect"
+
+	db "{{MODULE}}/db"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
+)
+
+// Owner 是属性组件的宿主：任何实体只要在自己的 DAO 里放三层 AttributeValues（基础层持久化，装备层与最终层
+// 不持久、加载后重建），并给出“没有基础记录时按哪个等级派生”，就能挂这个组件（Player 的接线见
+// game/entities/player/attribute_component.go）。组件不认具体实体类型，也不缓存可变 profile：事务事实只在 DAO。
+type Owner interface {
+	entity.IThreadSafeEntity
+	// AttributeBase / AttributeGear / AttributeFinal 返回宿主 DAO 里的三层。
+	AttributeBase() *db.AttributeValues
+	AttributeGear() *db.AttributeValues
+	AttributeFinal() *db.AttributeValues
+	// AttributeLevel 是宿主当前等级：基础层没有记录时按它派生（gameattr.ForLevel）。
+	AttributeLevel() int32
+}
+
+// gearOwner 是宿主可选的装备层来源：只读同一实体，返回错误时刷新失败、调用它的事务整笔回滚。
+// Player 用它汇总 OnAttributeGear 登记的来源；没有它的宿主装备层为空。
+type gearOwner interface {
+	CollectAttributeGear() (*gameattr.Combat, error)
+}
+
+// Gear 是装备层在 Container 里的选择器。
+var Gear = coreattr.Selector{Layer: "gear"}
+
+// Component 是各宿主共用的属性组件。实体包里的 AttributeComponent 是它的类型别名，只为生成接线命名。
+// 不要在组件里加锁：除 OnInitFinish（实体装载时）外，所有方法都在宿主实体的 Nest 事务里调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 直接用作各实体的组件工厂；DAO 在实体构造时先于组件装好。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("attribute component: owner %T does not implement attribute.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "attribute" }
+
+// Owner 返回宿主，只在实体存活且被 Nest 锁住期间可用。
+func (c *Component) Owner() Owner { return c.owner }
+
+// OnInitFinish 只重建 nopersist 层，不因读取新档或旧档而写持久状态。
+func (c *Component) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
+	return c.refresh(false, c.baseAt(c.owner.AttributeLevel()))
+}
+func (c *Component) baseAt(level int32) *gameattr.Combat {
+	if c.owner.AttributeBase().ValuesLen() == 0 {
+		return gameattr.ForLevel(level)
+	}
+	p := &gameattr.Combat{}
+	values := map[coreattr.AttrID]coreattr.AttrValue{}
+	c.owner.AttributeBase().RangeValues(func(k int32, v int64) bool { values[coreattr.AttrID(k)] = coreattr.AttrValue(v); return true })
+	p.LoadValues(values)
+	return p
+}
+
+// Final 返回副本；调用方先取得宿主的执行权，副本可以在锁释放后供战斗计算使用。
+func (c *Component) Final() (*gameattr.Combat, bool) {
+	if c.owner.AttributeFinal().ValuesLen() == 0 {
+		return nil, false
+	}
+	p := &gameattr.Combat{}
+	v := map[coreattr.AttrID]coreattr.AttrValue{}
+	c.owner.AttributeFinal().RangeValues(func(k int32, n int64) bool { v[coreattr.AttrID(k)] = coreattr.AttrValue(n); return true })
+	p.LoadValues(v)
+	return p, true
+}
+
+// Container 的三层均为副本，外部 Apply/Live 不会改动实体，正式写入须经 Refresh/LevelUp。
+func (c *Component) Container() *coreattr.Container {
+	out := coreattr.NewContainer()
+	out.Install(coreattr.Base, c.baseAt(c.owner.AttributeLevel()))
+	g := &gameattr.Combat{}
+	v := map[coreattr.AttrID]coreattr.AttrValue{}
+	c.owner.AttributeGear().RangeValues(func(k int32, n int64) bool { v[coreattr.AttrID(k)] = coreattr.AttrValue(n); return true })
+	g.LoadValues(v)
+	out.Install(Gear, g)
+	if f, ok := c.Final(); ok {
+		out.Install(coreattr.Final, f)
+	}
+	return out
+}
+
+// Refresh 在已锁住的 Nest 事务中重算全部层，初次将默认基础值记入持久层；配置热更不主动扫描在线宿主。
+func (c *Component) Refresh() error {
+	return c.refresh(true, c.baseAt(c.owner.AttributeLevel()))
+}
+func (c *Component) RefreshGear() error { return c.Refresh() }
+
+// LevelUp 在宿主等级已经升高 levels 级之后调用一次（Player 由 profile 登记点调用），不逐级循环；
+// 原有基础层的自定义加成会保留。
+func (c *Component) LevelUp(levels int32) error {
+	if levels <= 0 {
+		return nil
+	}
+	p := c.baseAt(c.owner.AttributeLevel() - levels)
+	if !Safe(p) || p.HP > math.MaxInt64/4-int64(levels)*10 || p.Attack > math.MaxInt64/4-int64(levels)*2 {
+		c.warnOverflow()
+		return apperrors.ErrAttributeOverflow
+	}
+	p.LevelUp(levels)
+	return c.refresh(true, p)
+}
+
+// warnOverflow 记录溢出拒绝。这是异常拒绝，不是成功事实；即使事务随后回滚也需要保留诊断。
+func (c *Component) warnOverflow() {
+	id := c.owner.ID()
+	slog.Warn("attribute: overflow rejected", "entity_id", entity.GetUniqueIDFromEntityID(id), "entity_kind", entity.GetEntityKindFromID(id), "code", apperrors.ErrAttributeOverflow.Code())
+}
+
+// Safe 报告 p 的直接属性是否在组件允许的范围内（非负、不超过 MaxInt64/4，相加不会溢出）。
+func Safe(p *gameattr.Combat) bool {
+	return p != nil && p.HP >= 0 && p.Attack >= 0 && p.HP <= math.MaxInt64/4 && p.Attack <= math.MaxInt64/4
+}
+func values(p *gameattr.Combat) map[int32]int64 {
+	out := map[int32]int64{}
+	values := map[coreattr.AttrID]coreattr.AttrValue{}
+	p.ExportValues(values)
+	for id, v := range values {
+		if v != 0 {
+			out[int32(id)] = int64(v)
+		}
+	}
+	return out
+}
+func (c *Component) gear() (*gameattr.Combat, error) {
+	if owner, ok := c.owner.(gearOwner); ok {
+		return owner.CollectAttributeGear()
+	}
+	out := &gameattr.Combat{}
+	out.Update()
+	return out, nil
+}
+func (c *Component) refresh(persist bool, base *gameattr.Combat) error {
+	gear, err := c.gear()
+	if err != nil {
+		return err
+	}
+	if !Safe(base) || !Safe(gear) || base.HP > math.MaxInt64/4-gear.HP || base.Attack > math.MaxInt64/4-gear.Attack {
+		c.warnOverflow()
+		return apperrors.ErrAttributeOverflow
+	}
+	// 经正式 Container.Apply 写直接属性并由生成的 profile 仅推导一次 Power；不把各层派生值相加。
+	container := coreattr.NewContainer()
+	container.Install(coreattr.Final, &gameattr.Combat{})
+	container.Apply(coreattr.Final, map[coreattr.AttrID]coreattr.AttrValue{gameattr.AttrHP: coreattr.AttrValue(base.HP + gear.HP), gameattr.AttrAttack: coreattr.AttrValue(base.Attack + gear.Attack)})
+	final := container.Snapshot(coreattr.Final).Profile.(*gameattr.Combat)
+	baseValues, gearValues, finalValues := values(base), values(gear), values(final)
+	old := map[int32]int64{}
+	c.owner.AttributeBase().RangeValues(func(k int32, v int64) bool { old[k] = v; return true })
+	if persist && !reflect.DeepEqual(old, baseValues) {
+		c.owner.AttributeBase().SetValues(baseValues)
+	}
+	old = map[int32]int64{}
+	c.owner.AttributeGear().RangeValues(func(k int32, v int64) bool { old[k] = v; return true })
+	if !reflect.DeepEqual(old, gearValues) {
+		c.owner.AttributeGear().SetValues(gearValues)
+	}
+	old = map[int32]int64{}
+	c.owner.AttributeFinal().RangeValues(func(k int32, v int64) bool { old[k] = v; return true })
+	if !reflect.DeepEqual(old, finalValues) {
+		c.owner.AttributeFinal().SetValues(finalValues)
+	}
+	return nil
+}

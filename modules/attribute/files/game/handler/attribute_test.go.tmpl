@@ -19,6 +19,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 
+	db "{{MODULE}}/db"
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
@@ -67,7 +68,7 @@ type attributeFixture struct {
 	committer *attributeCommitter
 }
 
-func newAttributeFixture(t *testing.T) *attributeFixture {
+func newAttributeFixture(t *testing.T, others ...entity.IThreadSafeEntity) *attributeFixture {
 	t.Helper()
 	playerentity.RegisterEntity()
 	RegisterAttributeGetNestHandlers()
@@ -82,7 +83,11 @@ func newAttributeFixture(t *testing.T) *attributeFixture {
 		t.Fatal(err)
 	}
 	f.player = e.(*playerentity.Player)
-	f.engine = nest.NewEngine(nest.NestOptionWithGetter(attributeGetter{id: e}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	getter := attributeGetter{id: e}
+	for _, other := range others {
+		getter[other.ID()] = other
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("attributeTestAction"), func(_ []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
 		return nil, p[0].(func() error)()
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
@@ -103,7 +108,12 @@ func (f *attributeFixture) local(t *testing.T, fn func()) {
 	}
 }
 func (f *attributeFixture) action(fn func() error) error {
-	_, err := f.engine.Request(context.Background(), nest.NewHandlerName("attributeTestAction"), f.player.ID(), nest.NewParams(fn))
+	return f.actionOn(f.player.ID(), fn)
+}
+
+// actionOn 在锁住 id 那个实体的一笔 Nest 事务里执行 fn；fn 返回错误时整笔回滚。
+func (f *attributeFixture) actionOn(id int64, fn func() error) error {
+	_, err := f.engine.Request(context.Background(), nest.NewHandlerName("attributeTestAction"), id, nest.NewParams(fn))
 	return err
 }
 func (f *attributeFixture) write(t *testing.T, fn func()) {
@@ -367,5 +377,215 @@ func TestAttributeReloadRebuildsDerivedLayersWithoutBaseWrite(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, f.snapshot(t).Base) {
 		t.Fatal("reload persisted")
+	}
+}
+
+// ---- 同一个组件挂在第二个实体上 ----
+
+// attributeTower 是只在测试里存在的第二个宿主（比如一座有等级的防御塔）：不是 Player，没有档案组件，
+// 实体 kind 是测试自己的。它用的组件就是 Player 那一份：经 Player 的组件号登记的工厂创建（工厂是
+// attribute.NewComponent），真实宿主照 README 的“复用方式”另申请自己的组件号、登记同一个工厂。测试工程里
+// 没有第二个带属性字段的生成 DAO，所以它借一份独立的 PlayerDao 实例当自己的存储；真实宿主在自己的 DAO 里加
+// AttributeBase / AttributeGear / AttributeFinal 三个字段。等级与装备层来源由宿主自己给。
+type attributeTower struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao       *db.PlayerDao
+	attribute *playerentity.AttributeComponent
+	level     int32
+	gear      *gameattr.Combat
+	gearErr   error
+}
+
+// attributeTowerKind 是测试宿主的实体 kind，取 kind 段的末尾，避开工程与模块分配的号。
+const attributeTowerKind entity.EntityKind = 252
+
+// attributeTowerLevel 是新建的塔的等级：没有持久基础层时按它派生。
+const attributeTowerLevel = 5
+
+var registerAttributeTower sync.Once
+
+func (w *attributeTower) Base() *entity.EntityBase                        { return w.EntityBase }
+func (w *attributeTower) AttributeComp() *playerentity.AttributeComponent { return w.attribute }
+func (w *attributeTower) AttributeBase() *db.AttributeValues              { return w.dao.GetAttributeBase() }
+func (w *attributeTower) AttributeGear() *db.AttributeValues              { return w.dao.GetAttributeGear() }
+func (w *attributeTower) AttributeFinal() *db.AttributeValues             { return w.dao.GetAttributeFinal() }
+func (w *attributeTower) AttributeLevel() int32                           { return w.level }
+
+// CollectAttributeGear 是宿主可选的装备层来源；返回错误时刷新失败，调用它的事务整笔回滚。
+func (w *attributeTower) CollectAttributeGear() (*gameattr.Combat, error) {
+	if w.gearErr != nil {
+		return nil, w.gearErr
+	}
+	out := &gameattr.Combat{}
+	if w.gear != nil {
+		out.SetHP(w.gear.HP)
+		out.SetAttack(w.gear.Attack)
+	}
+	out.Update()
+	return out, nil
+}
+
+func newAttributeTower(t *testing.T, unique int64) *attributeTower {
+	t.Helper()
+	playerentity.RegisterEntity()
+	registerAttributeTower.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: entity.EntityCategoryOther,
+			Kind:     attributeTowerKind,
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				if err := param.NormalizeID(attributeTowerKind); err != nil {
+					return nil, err
+				}
+				w := &attributeTower{ComponentManager: entity.NewComponentManager(), DaoManager: entity.NewDaoManager(), dao: db.NewPlayerDao(), level: attributeTowerLevel}
+				w.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)
+				w.dao.SetId(param.StorageID())
+				w.DaoManager.Set(db.PlayerDaoCollection, w.dao)
+				comp, err := entity.CreateComponent(playerentity.CompTypeAttribute, w, param)
+				if err != nil {
+					return nil, err
+				}
+				w.attribute = comp.(*playerentity.AttributeComponent)
+				w.ComponentManager.Set(playerentity.CompTypeAttribute, w.attribute)
+				if err := w.ComponentManager.InitAll(param, param.IsCreate); err != nil {
+					return nil, err
+				}
+				return w, nil
+			},
+			DaoBuilders: []entity.DaoBuilderFunc{func() entity.DaoInterface { return db.NewPlayerDao() }},
+			Lifetime:    entity.EntityLifetimePersistedHotCold,
+		})
+	})
+	id, err := entity.BuildEntityID(unique, attributeTowerKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: attributeTowerKind})
+	if err != nil {
+		t.Fatalf("the attribute component does not attach to a second entity: %v", err)
+	}
+	return built.(*attributeTower)
+}
+
+// towerSnapshot 在业务 worker 上持塔的锁读三层属性。
+func (f *attributeFixture) towerSnapshot(t *testing.T, tower *attributeTower) attributeSnapshot {
+	t.Helper()
+	out := attributeSnapshot{Base: map[int32]int64{}, Gear: map[int32]int64{}, Final: map[int32]int64{}, Level: tower.level}
+	if err := f.engine.RunLocal(context.Background(), func() {
+		tower.GetMutex().Lock()
+		defer tower.GetMutex().Unlock()
+		tower.dao.GetAttributeBase().RangeValues(func(k int32, v int64) bool { out.Base[k] = v; return true })
+		tower.dao.GetAttributeGear().RangeValues(func(k int32, v int64) bool { out.Gear[k] = v; return true })
+		tower.dao.GetAttributeFinal().RangeValues(func(k int32, v int64) bool { out.Final[k] = v; return true })
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// attributeFinal 把 HP / Attack / Power 写成最终层的样子，便于整份比较。
+func attributeFinal(hp, attack, power int64) map[int32]int64 {
+	return map[int32]int64{int32(gameattr.AttrHP): hp, int32(gameattr.AttrAttack): attack, int32(gameattr.AttrPower): power}
+}
+
+// 同一个组件挂在第二个实体上：建好时按宿主等级派生、不写持久层；Refresh 记下基础层并带上宿主的装备层；
+// LevelUp 在已有基础层上成长一次。玩家的属性一直不动。
+func TestAttributeSecondHostDerivesRefreshesAndLevelsUp(t *testing.T) {
+	tower := newAttributeTower(t, 74001)
+	f := newAttributeFixture(t, tower)
+	player := f.snapshot(t)
+	s := f.towerSnapshot(t, tower)
+	if len(s.Base) != 0 || !reflect.DeepEqual(s.Final, attributeFinal(150, 20, 55)) {
+		t.Fatalf("a new level-5 tower: %+v", s)
+	}
+	tower.gear = &gameattr.Combat{Attack: 5}
+	if err := f.actionOn(tower.ID(), tower.AttributeComp().Refresh); err != nil {
+		t.Fatal(err)
+	}
+	s = f.towerSnapshot(t, tower)
+	if len(s.Base) != 3 || !reflect.DeepEqual(s.Final, attributeFinal(150, 25, 65)) {
+		t.Fatalf("after Refresh with 5 attack of gear: %+v", s)
+	}
+	if err := f.actionOn(tower.ID(), func() error { return tower.AttributeComp().LevelUp(2) }); err != nil {
+		t.Fatal(err)
+	}
+	s = f.towerSnapshot(t, tower)
+	if s.Base[int32(gameattr.AttrHP)] != 170 || !reflect.DeepEqual(s.Final, attributeFinal(170, 29, 75)) {
+		t.Fatalf("after LevelUp(2): %+v", s)
+	}
+	if !reflect.DeepEqual(player, f.snapshot(t)) {
+		t.Fatal("the player's attributes changed with the tower")
+	}
+}
+
+// 第二个宿主上的拒绝与回滚：提交被拒、装备层来源出错时三层都回到事务之前；基础层已经大到会溢出时
+// LevelUp 是 attribute_overflow，什么都不写。
+func TestAttributeSecondHostRollsBackAndRefusesOverflow(t *testing.T) {
+	tower := newAttributeTower(t, 74002)
+	f := newAttributeFixture(t, tower)
+	if err := f.actionOn(tower.ID(), tower.AttributeComp().Refresh); err != nil {
+		t.Fatal(err)
+	}
+	before := f.towerSnapshot(t, tower)
+	f.committer.reject.Store(true)
+	if err := f.actionOn(tower.ID(), func() error { return tower.AttributeComp().LevelUp(1) }); err == nil {
+		t.Fatal("a tower LevelUp under a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	if !reflect.DeepEqual(before, f.towerSnapshot(t, tower)) {
+		t.Fatalf("the rejected commit leaked: %+v", f.towerSnapshot(t, tower))
+	}
+	tower.gearErr = errors.New("gear source failed")
+	if err := f.actionOn(tower.ID(), func() error { return tower.AttributeComp().LevelUp(1) }); err == nil {
+		t.Fatal("a tower LevelUp with a failing gear source reported success")
+	}
+	tower.gearErr = nil
+	if !reflect.DeepEqual(before, f.towerSnapshot(t, tower)) {
+		t.Fatalf("the failing gear source leaked: %+v", f.towerSnapshot(t, tower))
+	}
+	if err := f.actionOn(tower.ID(), func() error {
+		tower.dao.GetAttributeBase().SetValues(map[int32]int64{int32(gameattr.AttrHP): math.MaxInt64})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	huge := f.towerSnapshot(t, tower)
+	if err := f.actionOn(tower.ID(), func() error { return tower.AttributeComp().LevelUp(1) }); !errors.Is(err, apperrors.ErrAttributeOverflow) {
+		t.Fatalf("tower LevelUp over an overflowing base: err = %v, want attribute_overflow", err)
+	}
+	if !reflect.DeepEqual(huge, f.towerSnapshot(t, tower)) {
+		t.Fatal("the refused LevelUp wrote")
+	}
+}
+
+// 玩家与塔各有一份属性：玩家升级不动塔，塔记下基础层再成长三级也不动玩家。
+func TestAttributeSecondHostAndPlayerKeepSeparateState(t *testing.T) {
+	tower := newAttributeTower(t, 74003)
+	f := newAttributeFixture(t, tower)
+	towerBefore := f.towerSnapshot(t, tower)
+	if _, err := f.exp(100); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.get(t); r.HP != 110 || r.Attack != 12 || r.Power != 35 {
+		t.Fatalf("player after a level: %+v", r)
+	}
+	if !reflect.DeepEqual(towerBefore, f.towerSnapshot(t, tower)) {
+		t.Fatal("the tower changed with the player")
+	}
+	playerBefore := f.snapshot(t)
+	if err := f.actionOn(tower.ID(), func() error {
+		if err := tower.AttributeComp().Refresh(); err != nil {
+			return err
+		}
+		return tower.AttributeComp().LevelUp(3)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.towerSnapshot(t, tower); !reflect.DeepEqual(s.Final, attributeFinal(180, 26, 70)) {
+		t.Fatalf("tower after LevelUp(3): %+v", s)
+	}
+	if !reflect.DeepEqual(playerBefore, f.snapshot(t)) {
+		t.Fatal("the player changed with the tower")
 	}
 }

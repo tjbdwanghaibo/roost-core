@@ -1,9 +1,10 @@
-package player
+package bag
 
 import generated "{{MODULE}}/configs/generated"
 
 // 这个文件归工程所有，是背包的规则入口：哪些道具能进背包、每种道具单种最多放多少。
-// BagComponent.Add 在写入前调用 bagItemRule；Remove 不调用：已经在背包里的道具即使后来从表里删掉，
+// 规则对挂这个组件的所有宿主（Player 和以后接上的别的实体）一样生效。
+// Component.Add 在写入前调用 ItemRule；Remove 不调用：已经在背包里的道具即使后来从表里删掉，
 // 也要能扣、能丢。
 //
 // 缺省实现读道具表：列在 configs/schema/item.go，数据在 configs/table/item.csv，roost generate 把它
@@ -18,9 +19,9 @@ import generated "{{MODULE}}/configs/generated"
 // game/handler/bag_test.go 的 bagTestLoadItems。
 //
 // 要换规则（某些道具不进背包、某一类道具统一一个上限、道具表换了名字）就改这个函数：返回 ok=false 的道具
-// 不能放入；maxStack 不为正表示不单独限制。不管这里返回多少，组件都会把上限钳到不超过 BagMaxStack，
-// 数量相加不溢出靠它；种类数上限 BagMaxKinds 也照常生效。
-func bagItemRule(itemID int64) (maxStack int64, ok bool) {
+// 不能放入；maxStack 不为正表示不单独限制。不管这里返回多少，组件都会把上限钳到不超过 MaxStack，
+// 数量相加不溢出靠它；种类数上限 MaxKinds 也照常生效。
+func ItemRule(itemID int64) (maxStack int64, ok bool) {
 	item, ok := generated.ItemByID(itemID)
 	if !ok {
 		return 0, false

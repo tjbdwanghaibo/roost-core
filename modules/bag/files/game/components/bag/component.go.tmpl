@@ -1,0 +1,126 @@
+package bag
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// Owner 是背包组件的宿主：任何实体只要在自己的 DAO 里放一份 BagState，并经这个方法交给组件，
+// 就能挂这个组件（Player 的接线见 game/entities/player/bag_component.go）。组件不认具体实体类型，
+// 也不另存一份会回滚的状态：道具在宿主 DAO 里，经生成的 setter 修改，所以回滚只有 DAO 一处；
+// 不要在这里登记 undo。
+type Owner interface {
+	entity.IThreadSafeEntity
+	// BagState 返回宿主 DAO 里的背包（同步给谁由宿主 DAO 字段的 dao 标签决定）。
+	BagState() *db.BagState
+}
+
+// Component 是各宿主共用的背包组件。实体包里的 BagComponent 是它的类型别名，只为生成接线命名。
+// 不要在组件里加锁：Nest 锁住宿主实体之后才进入业务 handler，所有方法都在那笔事务里调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 直接用作各实体的组件工厂；DAO 在实体构造时先于组件装好。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("bag component: owner %T does not implement bag.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "bag" }
+
+// Owner 返回宿主，只在实体存活且被 Nest 锁住期间可用。
+func (component *Component) Owner() Owner { return component.owner }
+
+const (
+	// MaxKinds 是背包里不同道具种类数的上限。背包整份随同步下发、整份落库，种类数必须有界。
+	// 到上限后只拒绝新种类；已有的种类照常加减，扣到 0 腾出的位置可以再放新种类。
+	MaxKinds = 200
+	// MaxStack 是单种道具数量的硬上限：每种道具自己的上限（道具表的 max_stack，规则在 items.go）
+	// 不会超过它，没有单独上限的道具就按它算。它远小于 int64 的范围，所以数量相加不会溢出。
+	MaxStack = 999999
+)
+
+// Add 往背包里放 count 个 itemID，返回放入后的数量。
+//
+// 拒绝时不写任何字段：数量不为正（bag_count_invalid）、道具号不合法（bag_item_invalid，规则在
+// items.go，缺省是“道具表里有这一行”）、放入后超过这种道具的单种上限（bag_stack_full，
+// 不做“能放多少放多少”）、背包里没有这种道具且种类数已到上限（bag_kinds_full）。
+//
+// 单种上限是道具自己的（ItemRule 返回的 maxStack），不为正或超过 MaxStack 时按 MaxStack 算。
+// 上限后来调小、持有量已经超过新上限时，放入一律被拒，持有的不动。
+//
+// 错误带着道具号、数量、持有量这些上下文（errcode.Wrap）：只进服务端日志，不进给客户端的回包；
+// 调用方照常用 errors.Is 判断是哪一种拒绝。
+//
+// 它不判重：同一次发放调用两次就发两次。“这一次发过没有”由调用方记在自己的状态里，
+// 并在同一笔事务里调它（事实与道具一起提交或回滚）。
+func (component *Component) Add(itemID, count int64) (int64, error) {
+	if count <= 0 {
+		return 0, errcode.Wrap(apperrors.ErrBagCountInvalid, nil, "item_id", itemID, "count", count)
+	}
+	maxStack, ok := ItemRule(itemID)
+	if !ok {
+		return 0, errcode.Wrap(apperrors.ErrBagItemInvalid, nil, "item_id", itemID)
+	}
+	if maxStack <= 0 || maxStack > MaxStack {
+		maxStack = MaxStack
+	}
+	bag := component.owner.BagState()
+	current, held := bag.GetItems(itemID)
+	// 用减法比较：current + count 在 count 接近 int64 上限时会溢出成负数，绕过上限。
+	// current 已经超过 maxStack（上限后来调小了）时右边为负，任何正的 count 都被拒。
+	if count > maxStack-current {
+		return 0, errcode.Wrap(apperrors.ErrBagStackFull, nil, "item_id", itemID, "have", current, "add", count, "max_stack", maxStack)
+	}
+	if !held && bag.ItemsLen() >= MaxKinds {
+		return 0, errcode.Wrap(apperrors.ErrBagKindsFull, nil, "item_id", itemID, "kinds", bag.ItemsLen())
+	}
+	bag.SetItemsKey(itemID, current+count)
+	return current + count, nil
+}
+
+// Remove 从背包里拿走 count 个 itemID，返回剩下的数量。数量不为正（bag_count_invalid）或
+// 持有不足（bag_short）时拒绝，不写任何字段；不做“有多少扣多少”。
+//
+// 剩 0 时删掉这个键，不留数量为 0 的条目：种类数按键的个数算，留着会白占一个种类的位置。
+// 这里不查道具号是否合法：没有这种道具自然是不足；有而道具后来从表里删掉了，也要能扣掉。
+func (component *Component) Remove(itemID, count int64) (int64, error) {
+	if count <= 0 {
+		return 0, errcode.Wrap(apperrors.ErrBagCountInvalid, nil, "item_id", itemID, "count", count)
+	}
+	bag := component.owner.BagState()
+	current, _ := bag.GetItems(itemID)
+	if current < count {
+		return 0, errcode.Wrap(apperrors.ErrBagShort, nil, "item_id", itemID, "have", current, "want", count)
+	}
+	left := current - count
+	if left == 0 {
+		bag.DelItemsKey(itemID)
+	} else {
+		bag.SetItemsKey(itemID, left)
+	}
+	return left, nil
+}
+
+// Count 返回 itemID 的持有数量，没有时为 0。
+func (component *Component) Count(itemID int64) int64 {
+	count, _ := component.owner.BagState().GetItems(itemID)
+	return count
+}
+
+// Has 报告背包里是否至少有 count 个 itemID。它与 Remove 的判断一致：返回 true 时紧接着的
+// Remove(itemID, count) 一定成功，所以 count 不为正时返回 false。要一次扣多种道具的调用方
+// 先逐个 Has、全部满足再逐个 Remove；中途出错就让 handler 返回错误，Nest 会回滚已经扣掉的。
+func (component *Component) Has(itemID, count int64) bool {
+	return count > 0 && component.Count(itemID) >= count
+}
