@@ -117,7 +117,8 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
 
 features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节的 Mod 表。
 
-起步形态（`-template`）：`game` 是第一个业务服务加 nest 运行时、Player 与 World 两个实体，**缺省不托管任何框架服务**
+起步形态（`-template`）：`game` 是第一个业务服务加 nest 运行时、Player 与 World 两个实体（Player 带主 DAO `db/def/player.go`，
+预加载与往 Player 加状态不用先 `roost add dao Player --entity Player`；再跑这条命令只报已有、不改文件），**缺省不托管任何框架服务**
 （维护者 2026-11-13：只生成用到的服务）——`roost module add` 装的模块用到哪个托管服务就在那次安装里声明哪个，
 `-recipe` 也只带它的模块用到的；`-framework all` 让它一开始就托管全部九个（account、activity、chat、global、mail、
 match、platform、rank、session），`-framework rank,chat` 只托管列出的几个。`-framework` 只对 `-template game`

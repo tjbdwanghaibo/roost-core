@@ -444,7 +444,7 @@ func demoActivityKeys(root, gameService string) error {
 
 func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 	steps := []demoScaffoldStep{
-		{add: &AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}, why: "persistence for the Player's components"},
+		// Player 的主 DAO 由 -template game 缺省带上（scaffoldGameTemplate），这里只覆盖字段定义。
 		{write: "db/restore_test.go", why: "current schema restores; mismatched schemas leave DAO unchanged"},
 		{write: "db/def/player.go", why: "the persistent fields the generated mutators are built from"},
 		{write: "db/migrations/player.go", why: "the offline schema 1 -> current step (flat weapon_id becomes an equipment slot) and its check through the generated RestorePersisted"},

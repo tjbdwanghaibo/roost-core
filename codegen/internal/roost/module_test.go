@@ -721,7 +721,7 @@ func TestModulesInstallOntoAGeneratedProjectAndVerify(t *testing.T) {
 	if plan.Applied || len(plan.Modules) != 2 || plan.Modules[0].Name != "wallet" || plan.Modules[1].Name != "checkin" {
 		t.Fatalf("plan = %+v, want wallet (the dependency) then checkin, not applied", plan)
 	}
-	if strings.Join(plan.Prerequisites, "; ") != "roost add dao Player --entity Player; roost add access player --service game" {
+	if strings.Join(plan.Prerequisites, "; ") != "roost add access player --service game" {
 		t.Fatalf("prerequisites = %v", plan.Prerequisites)
 	}
 	seen := map[string]map[int64]string{}

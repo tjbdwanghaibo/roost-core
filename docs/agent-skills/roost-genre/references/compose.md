@@ -347,10 +347,9 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 借鉴的是做法，不是复制粘贴它的代码再改名：状态、协议、错误码都是你自己的，文件名带你的功能名。样板模块里与你的需求无关的部分不要带过来。找不到形状接近的模块时，回到第 0A 节的做法逐条对照，并在报告里写明“没有可借鉴的模块”。
 
-**一个模块都没装时**，先补上模块安装会替你做的两件事，否则后面的步骤没有 `PlayerDao`、`add endpoint` 与 `add transport tcp` 也会被拒绝：
+**一个模块都没装时**，先补上模块安装会替你做的玩家接入，否则 `add endpoint` 与 `add transport tcp` 会被拒绝（`-template game` 缺省已带 Player 的主 DAO `PlayerDao`；再跑一次 `add dao Player --entity Player` 只报“已有”、不改文件）：
 
 ```bash
-"$ROOST" add dao Player --entity Player
 "$ROOST" add access player --service game
 ```
 

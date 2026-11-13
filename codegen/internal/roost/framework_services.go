@@ -549,14 +549,17 @@ func applyGameTemplate(m *Manifest, gameService string, frameworks []string) err
 
 // scaffoldGameTemplate adds what the game template owns beyond the manifest:
 // the Player and World entities (their lifecycle_gen.go comes from roost
-// generate), the World singleton accessor in the World's own package, and a
+// generate), the Player's main DAO, the World singleton accessor in the World's own package, and a
 // game Service that ensures the World exists before serving.
 // Everything it writes is business-owned and written once.
 func scaffoldGameTemplate(root string, m Manifest, gameService string) ([]string, error) {
 	var created []string
+	// Player 缺省带主 DAO（维护者规则：预加载按主 DAO 枚举，往 Player 加状态的模块也要它），
+	// 业务不用先 roost add dao Player --entity Player；World 的 DAO 仍按需添加。
 	for _, step := range []AddOptions{
 		{Kind: "entity", Name: "Player"},
 		{Kind: "entity", Name: "World"},
+		{Kind: "dao", Name: "Player", Entity: "Player"},
 	} {
 		files, err := Add(root, step)
 		if err != nil {
