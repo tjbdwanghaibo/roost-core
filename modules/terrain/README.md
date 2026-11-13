@@ -20,7 +20,7 @@
     - `World(id)`、`Stop(ctx)`；包级的 `Start(registry)`（模块的运行期入口）与 `DefaultPack()`。
   - 规则与类型（`game/terrain/rules.go`）：`Command{SceneID, Sequence, Op, X, Y, Radius, Strength, Material}`（含 `Validate`、`Digest`、`Footprint`）、`Result`、`ChunkState`、`ChunkUnique` / `SiteUnique`（由场景号与坐标算持久实体号）。
   - `World`（`game/terrain/world.go`）：一张图的只读底图与提交后的投影；`Blocked(at)`、`Occupied(key, index)`、`Failures()`，并作为场景的 `Ground`、它的 `Walker` 作为场景的 `Surface`。
-  - 组件 `TerrainComponent`（`game/entities/player/terrain_component.go`，经 `ITerrainEntity` 的 `TerrainComp()`）：`Check(command, sceneID)`（锁内判重与授权）、`Record(command, result, delta)`（记账本）、`BuildingCount()`、`Sequence()`。
+  - 组件 `TerrainComponent`（`game/components/terrain/terrain.go`，经 `ITerrainEntity` 的 `TerrainComp()`）：`Check(command, sceneID)`（锁内判重与授权）、`Record(command, result, delta)`（记账本）、`BuildingCount()`、`Sequence()`。
   - Nest handler（`game/handler/terrain.go`，都是 `rollback=undo durability=strict`）：`handlerTerrainBrush`（参与的块 + Player）、`handlerTerrainBuild`（参与的块 + 建筑 + Player，放置与拆除共用）、`handlerTerrainQuery`、`handlerTerrainLoad`（开图装载）、`handlerTerrainSite`。经同一个 `sender.NewTerrainSender(client)` 调用。
 - **登记点 / 钩子**：无。模块没有给别的功能留“编辑之后”的钩子。
 - **状态**

@@ -17,6 +17,28 @@
   - **先红后绿**：新功能修前不存在，红证据是变异自检（去掉分批、吞掉枚举错误、列出墓碑、不查交出屏障、忽略 overwrite、无条件删除、放过 global DAO、存储不按 sid 选库、复制到错的 sid、生成器不查 DAO 范围 / 不发 `LoadPriority` / 不核对 bootstrap / 放过多候选服务、rehome 不搬档 / 中止不删目标副本 / 补搬覆盖 / 冲突时删源档，各自让对应测试变红）。demo 赠礼：把收件人种在 Player 现在所在的 `<库>_1000` 后，原代码 `TestDeliverFindsTheRecipientInThePlayerDaoDatabase` 报 `deliver refused a recipient who has entered the game: "recipient has never entered the game"`。
   - **验证**（本地）：engine 受影响用例 `-race`、真实 Mongo 副本集上的 `TestRealMongoLocalPreloadAndCopyAcrossServers`（`-tags integration`，2500 文档分 3 页、两服隔离、跨库搬档）、codegen / wiring 受影响用例、`-template game` 探针工程（预加载两类实体 + rehome + enter）`module verify` 全部 ok、生成的 game-demo 里赠礼与 sidmove 用例。全仓 `go test ./...`、`TestDemo*` 全量、模块门禁脚本与各玩法脚本**没有跑**（玩法夹具已按 sid 库调整，见 KNOWN-LIMITS）。
 
+- **变更（codegen + modules + game-demo）：game/view 接口包与 Player 组件拆分**（2026-11-13，维护者决定，见 `docs/maintenance/PLAN-2026-11-13-v147-layout-preload.md` §6）。只对新生成的工程生效；用旧版本生成的工程不迁移、不兼容（未上线）。
+  - **新包 `game/view/`**，只放接口：模块带来 `component_<功能>.go`（组件对外的方法接口 `<X>` 与只有一个访问器的 `<X>Holder`，如 `ProfileHolder{ Profile() Profile }`），实体生成器写 `entity_<实体>.go`（`<E>Entity` 嵌入 `entity.IThreadSafeEntity`、非冷 DAO getter 与实体挂载组件的 Holder）。view 只依赖 framework、db、protocol 与 `game/actor`、`game/gameplay/attribute` 两个叶子类型包。依赖方向：组件包、钩子、联动与 game/login → view；实体包 → 组件包，并实现 view。
+  - **实体生成器**：`game/entities/` 下的实体包，每个在 view 里有 `<X>Holder` 的非冷组件在 `<实体>_gen_wire.go` 生成访问器 `func (e *Player) Profile() view.Profile`（原来的 `ProfileComp()` 照旧返回具体类型给 handler）；全量扫描（`game` 或 `game/entities`）时删掉不再对应实体的 `entity_*.go`。`project generate` 的生成前缀加上 `game/view/`。
+  - **组件拆分**：actor alliance attribute bag cdkey checkin combat dungeon equipment friends gacha idle mailbox matchmaking naming profile purchase rehome rules scene shop stamina task team terrain wallet 与 enter 的组件逻辑都在 `game/components/<功能>/<功能>.go`（另有 hooks.go / rules.go / grant.go 等），宿主接口 `Owner` 只列用得到的 DAO 与 Holder；要把宿主交给钩子的组件 `type Owner = view.PlayerEntity`。`game/entities/player/<功能>_component.go` 只留组件号、类型别名、`I<X>Entity`、工厂登记与 Owner 方法；rules 的 `rules.go` 只留 `IRulesEntity` / `RulesSnapshot`。
+  - 旧 → 新路径：
+
+    | 旧 | 新 |
+    | --- | --- |
+    | `game/entities/player/<功能>_component.go` 的组件逻辑 | `game/components/<功能>/<功能>.go` |
+    | `game/entities/player/<功能>_hooks.go` / `_rules.go` / `_changed.go` …… | `game/components/<功能>/hooks.go` / `rules.go` / `changed.go` …… |
+    | `game/entities/player/enter_first.go`、`enter_hooks.go` | `game/login/enter_first.go`、`enter_hooks.go`（`gamelogin.OnFirstEnter` / `OnCreate` / `GrantFirstEnter`） |
+    | `game/entities/player/profile_levelup.go`（工程自有） | `game/components/profile/levelup.go` |
+    | `game/profile/rename.go` | `game/components/profile/rename.go` |
+    | `with/<依赖>/game/entities/player/<联动>.go` | 登记方的组件包 `with/<依赖>/game/components/<功能>/` 或 `with/<依赖>/game/login/`（首次进入的联动） |
+    | `game/lifecycle/monster_spawn.go` | 删除，monster 用 `lifecycle_gen.go` 的 `CreateWith` |
+    | 配方 casual `game/entities/player/recipe_first_enter.go` | `game/login/recipe_first_enter.go` |
+
+  - **签名变化**：所有 Player 钩子收 `view.PlayerEntity` 而不是 `*Player` / 具体组件（`OnProfileLevelUp`、`OnEquipmentChanged`、`OnWalletSpent`、`OnStaminaSpent`、`OnShopBought`、`OnCheckinClaimed`、`OnDungeonClaimed`、`OnFirstEnter`、`OnCreate`、`OnActor`、`OnAttributeGear`、`OnRegion`、`OnSceneInteract`、`OnTeamJoining`、`OnTeamChanged`、`OnMatchmakingStarting`、`OnRehomeApplying` / `OnRehomeArrived`、`RegisterPlayerRules` 的提供方），登记点从 Player 包移到发出钩子的组件包；跨组件调用经 view 访问器（`host.Wallet().Add`，不再 `Owner().WalletComp()`）；在组件类型上声明方法的联动改为函数（如 `scene.InteractObject`、`rules.Snapshot`、`attribute.CollectPlayerGear`）。matchmaking 的 `BeginMatching` / `UpdateMatching` 收 `[]*matchmaking.Component`，Player 包提供 `MatchmakingComps` 给 handler；activity 的 `PlayerCreatedAt` 是 `func(view.PlayerEntity) int64`。
+  - 生成工程的 core 下限 `minimumVersions.Core` v1.45.0 → v1.46.0：v1.46.0 发版后下限没跟上，`versions.core` 缺省取最新，装完模块后 `project sync` 会把 go.mod 从 v1.45.0 升到 v1.46.0，于是 `TestModulePortalInstallsOnTheHostedAccountService` 与 `TestModuleAddDeclaresTheFrameworkServicesItUses` 的“sync 不漂移”断言失败（与目录重整、预加载无关）。
+  - 留在 Player 包的：activity 的 `activity_timers.go`（方法挂在工程的计时器组件上），game-demo 的 `map_component.go` / `cell_base.go`（与 cell 路由耦合，`map` 不能作包名）、`saga_receipts.go`、`sync_packer.go`；wallet / attribute 在 Player 包的再导出保留。
+  - 回归：`TestRunGeneratesViewEntityAndAccessors`（实体生成器写 `entity_player.go`、访问器、冷组件不生成、全量扫描删旧文件；关掉生成时红）；各模块场景与门禁按原数量。
+
 - **变更（codegen + modules + game-demo）：生成工程目录重整**（2026-11-13，维护者决定，见 `docs/maintenance/PLAN-2026-11-13-v147-layout-preload.md` §1、§2）。只对新生成的工程生效；用旧版本生成的工程不迁移、不兼容（未上线）。
   - 新目录：`services/<服务>/` 放托管框架服务的手写代码（只有工程托管的服务才有）；`game/login/` 合并登录链（票据校验、进入 / 新建登记点、新建时的角色名校验）；`game/components/<功能>/<功能>.go` 放组件逻辑（宿主接口 Owner）；`game/entities/<实体>/` 只剩实体本体、`_gen` 文件（含 `lifecycle_gen.go`）与每个组件的薄接线；`game/managers/managers.go` 是 manager 登记点（新工程为空列表）；`internal/service/game` 仍是 game 服务的生成接线。
   - 旧 → 新路径：
@@ -37,7 +59,7 @@
     | game-demo `game/lifecycle/scene_singleton.go` | `game/entities/scene/singleton.go`（`scene.EnsureWorldScene`） |
 
   - 对外可见的变化：lifecycle 的入口改为 `<实体包>.LifecycleFromRegistry(registry)` / `NewLifecycle(access)`（一个包里多个实体时带实体名，如 `PlayerLifecycleFromRegistry`），错误为 `ErrNotFound`（或 `Err<实体>NotFound`）；**`roost add lifecycle` 删除**，调用时报错并指出新入口；`roost add endpoint --lifecycle` 改为只要求实体存在；模块清单不再有 `access.lifecycle`、`files` 里不能带 `lifecycle_gen.go`；协议生成器的 `-handlers` 改为单个文件、`-handler-bootstrap` 删除；模块 `runtime.package` 可以在 `services/<服务>/` 下，此时必须写 `runtime.framework` 且服务对得上；login 与 enter 的联动改由 `internal/access/player/tcp` 的 `init` 调 `gamelogin.RegisterEnterChecks()` 登记、`Announce` 经 `RegisterEnterAnnounce` 注入（合包后 game/login 直接 import controllers 会成环）；profile 加 `HasRenamer` / `SwapRenamer`。doctor 的 entity-owner 检查增加一项：别的服务用了归属 kind 的 lifecycle 入口即报（原来由 `add lifecycle` 选服务时拒绝）。
-  - 组件拆分只完成 enter（以及基线里的 bag / wallet / attribute）；其余模块组件仍在 Player 包，原因（档案升级等钩子签名带 `*ProfileComponent` / `*Player`，联动文件在 Player 包里给组件类型加方法）与待定方向见 `docs/maintenance/PLAN-2026-11-13-v147-layout-preload.md` §5。
+  - 组件拆分：见上一条“game/view 与组件拆分”。
   - 回归：`roost generate` 后的 lifecycle、managers 登记点、`services/` 下的 runtime 包各有一条先红后绿的用例；doctor 的 lifecycle 归属检查一条（含两处变异自检）；recipe casual 的三处变异目标随文件移动改到 `game/components/enter/enter.go` 与 `game/entities/player/enter_component.go`。
 
 - **modules：bag / wallet / attribute 改成多实体共用的组件**（2026-11-13，维护者要求）：组件逻辑移到共用包 `game/components/{bag,wallet,attribute}/`（包名 bag / wallet / attribute），经宿主接口 `bag.Owner`（`BagState()`）、`wallet.Owner`（`WalletState()` / `WalletLedger()`，可选 `WalletSpent`）、`attribute.Owner`（三层 `AttributeValues` + `AttributeLevel()`，可选 `CollectAttributeGear()`）拿宿主 DAO 里的状态，工厂 `NewComponent`；`game/entities/player/*_component.go` 只留组件号、类型别名、工厂登记与 Owner 方法，照 activity 的写法。对 Player 的协议、错误码、组件号、DAO 字段与 store 键、`WalletComp()` / `BagComp()` / `AttributeComp()` 的方法、`OnWalletSpent` / `OnAttributeGear` / 档案升级钩子不变；`WalletReceiptWindow`、`WalletKeyMaxLen`、`ErrWalletAmount`、`BagMaxKinds`、`BagMaxStack`、`Gear` 在 Player 包里再导出。变化：背包规则文件从 `game/entities/player/bag_items.go` 移到 `game/components/bag/items.go`（函数改名 `ItemRule`，Player 包保留 `bagItemRule` 给 gacha）；三个组件的 `Owner()` 返回宿主接口而不是 `*Player`；属性溢出日志的键由 `player_id` 改为 `entity_id` + `entity_kind`。每个模块新增 3 条场景（`Test{Wallet,Bag,Attribute}SecondHost*`），把同一个组件挂到测试里的第二个实体上验证加减 / 拒绝 / 回滚与两个宿主互不影响，修前三个模块各 3 条红（工厂拒绝非 `*Player` 宿主）；场景数 wallet 14→17、bag 17→20、attribute 17→20。README 的“复用方式”写明怎样挂到别的实体，KNOWN-LIMITS 的“模块绑定具体的实体名”一条按此改写。只对新生成的工程生效。

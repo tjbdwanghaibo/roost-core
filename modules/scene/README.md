@@ -27,8 +27,8 @@
   - Nest handler（`game/handler/`）：`handlerSceneChange`（`rollback=undo durability=async`，Player 与至多两张 Scene 同一笔事务）、`handlerSceneInteract`（`durability=strict`）、`handlerSceneTime`（改场景时间倍率，只给可信管理逻辑：`sender.NewSceneTimeSender(client).Sync_SceneTime(ctx, sceneEntityID, rate)`）、`handlerSceneClose`、`handlerSceneBeginClosing`、`handlerSceneEvacuate`（后三个由 `Manager` 内部使用）。
 - **登记点**
   - `OnSceneFields(name string, fields ...string)`（`game/components/scene/sync.go`）：登记“附近的人能看到 Player 的哪些顶层字段”。只在 `init` 登记；没登记的字段默认只有本人能看。模块自己登记了 `Actor`（位置与朝向）。
-  - `OnRegion(name, handler func(*Player, gamescene.RegionEvent) error)`（`game/components/scene/hooks.go`）：玩家进入 / 离开一个静态区域时调用。区域由服务端按玩家已验证的位置计算，在位置变化的**同一笔 Nest 事务**里触发；返回错误会撤销这一拍的位置与区域列表。
-  - `OnSceneInteract(name, handler func(*Player, gamescene.Object) error)`（同文件）：`SceneInteract` 的场景、距离与序号都通过之后触发一次，同一笔事务。
+  - `OnRegion(name, handler func(view.PlayerEntity, gamescene.RegionEvent) error)`（`game/components/scene/hooks.go`）：玩家进入 / 离开一个静态区域时调用。区域由服务端按玩家已验证的位置计算，在位置变化的**同一笔 Nest 事务**里触发；返回错误会撤销这一拍的位置与区域列表。
+  - `OnSceneInteract(name, handler func(view.PlayerEntity, gamescene.Object) error)`（同文件）：`SceneInteract` 的场景、距离与序号都通过之后触发一次，同一笔事务。
   - 以上两类回调只能改已经持锁的实体，不能发 RPC、不能加载或锁别的实体；只在 `init` 登记，空名、nil、重名 panic；按名字排序执行。
   - 回调要拒绝玩家的这次进入 / 交互（等级不够、任务没接）时返回**带业务码的错误**（工程 `internal/errors` 里 `errcode.Define` 的值）：端点把它的码填进应答、连接保留。返回不带码的错误会被当成内部错误，这名玩家的连接被关掉。
   - `Manager.RegisterDrainer(kind entity.EntityKind, run func(context.Context, *sceneentity.Scene) error)`：别的模块登记“关这张图之前怎么把我这一类实体清走”。回调在 Nest 与管理器锁之外执行，必须按传入的 Scene 实例清理、失败时保留可重试的状态。每种实体 kind 只能登记一个，不能给 Player 登记。monster 模块启动时登记了自己。

@@ -41,12 +41,12 @@
 | --- | --- | --- | --- | --- |
 | `OnEntering(name, Check)` 进入前检查 | `game/login/enter.go` | 加载或创建 Player 之前；`EnterGame`、`EnterCreate`、`Announce` 用的是同一组 | 不在，只读 | 第一个拒绝就停下，端点把它的码答给客户端；不加载、不创建、不跑钩子。拒绝要返回带码错误 |
 | `OnEntered(name, Hook)` 进入钩子 | `game/login/enter.go` | 首次初始化提交之后，每次进入都调 | 不在 | 只记一条 Warn，不让登录失败，下一次进入再调 |
-| `player.OnFirstEnter(name, FirstEnterHook)` 首次初始化钩子 | `game/login/enter_hooks.go` | 新玩家建成的那一笔事务里（两条路都经过它） | 在，同一把 Player 锁 | 整笔回滚，下次再做；只能改当前玩家的 DAO，不能调服务、发消息 |
-| `firstEnter` | `game/entities/player/enter_first.go` | 同上，排在 `OnFirstEnter` 的钩子之前 | 在 | 同上。这个文件归工程，初始发放写在这里 |
+| `gamelogin.OnFirstEnter(name, FirstEnterHook)` 首次初始化钩子 | `game/login/enter_hooks.go` | 新玩家建成的那一笔事务里（两条路都经过它） | 在，同一把 Player 锁 | 整笔回滚，下次再做；只能改当前玩家的 DAO，不能调服务、发消息 |
+| `firstEnter` | `game/login/enter_first.go` | 同上，排在 `OnFirstEnter` 的钩子之前 | 在 | 同上。这个文件归工程，初始发放写在这里 |
 | `RequireCreateFirst(name, rule)` | `game/login/enter_create.go` | 每次判断会话走哪条路 | 不在 | 全工程只能登记一条，第二次登记 panic |
 | `OnCreating(name, CreateCheck)` 新建前检查 | `game/login/enter_create.go` | `EnterCreate` 里，进入前检查之后、建档之前 | 不在，只读 | 带码拒绝，什么都没写。名字的格式规则放这里 |
 | `OnCreatePrepare(name, CreateStep)` 新建步骤 | `game/login/enter_create.go` | 空档建好之后、新建事务之前 | 不在 | 这一次新建到此为止，玩家仍是没建成；必须可以重复执行。全服唯一占名放这里 |
-| `player.OnCreate(name, CreateHook)` 新建钩子 | `game/login/enter_hooks.go` | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里 |
+| `gamelogin.OnCreate(name, CreateHook)` 新建钩子 | `game/login/enter_hooks.go` | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里 |
 
 检查与钩子拿到的 `Entering.Claims` / `Entered.Claims` / `Creating.Claims` 是会话的 claims，可以为 nil，与会话共用同一个 map，约定只读。`Entered` 还带 `First` 与 `FirstAtUnixMilli`（首次初始化提交时的业务时间，之后每次进入都是同一个值，可以当注册时间用）。
 
@@ -56,7 +56,7 @@
 
 ### 配置
 
-没有配置表，也没有配置键。留给工程改的业务文件是 `game/entities/player/enter_first.go`（缺省什么都不发）。
+没有配置表，也没有配置键。留给工程改的业务文件是 `game/login/enter_first.go`（缺省什么都不发）。
 
 ### 错误码（`internal/errors/enter.go`）
 
@@ -90,12 +90,12 @@
 ## 复用方式
 
 - **需求正好是它：** `roost module add enter`。没有依赖；安装时一并打开玩家 TCP 接入与自身视图。要让真实客户端连上，再装 `login`（或自己实现 `auth.go`）并执行 `roost config enable player-tcp`。
-- **新玩家要发初始资源：** 改 `game/entities/player/enter_first.go` 的 `firstEnter`，直接调同一实体上别的组件，例如 `component.owner.WalletComp().Add(100)`。用不留回执的入口，“只发一次”由标记保证。模块之间的联动不改这个文件，在自己的文件里登记 `player.OnFirstEnter("名字", func(owner *Player, nowUnixMilli int64) error {...})`。
+- **新玩家要发初始资源：** 改 `game/login/enter_first.go` 的 `firstEnter`，直接调同一实体上别的组件，例如 `host.Wallet().Add(100)`。用不留回执的入口，“只发一次”由标记保证。模块之间的联动不改这个文件，在自己的文件里登记 `gamelogin.OnFirstEnter("名字", func(owner view.PlayerEntity, nowUnixMilli int64) error {...})`。
 - **别的功能要在玩家进入后顺带做事**（上线登记、拉离线数据、推一帧）：在自己的包的 `init` 里调 `gamelogin.OnEntered("名字", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {...})`。
 - **要在进入之前挡住某些玩家**（封停、维护白名单、不归本服）：`gamelogin.OnEntering("名字", func(ctx context.Context, registry *app.Registry, entering gamelogin.Entering) error {...})`，拒绝时返回 `errcode.Define` 出来的带码错误。
-- **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档用 `player.OnCreate`。
+- **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档用 `gamelogin.OnCreate`。
 - **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers/enter` 的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
-- **不要改的文件：** `game/login/enter.go`、`game/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/entities/player/enter_component.go` 里标记与发放同一笔事务的写法。
+- **不要改的文件：** `game/login/enter.go`、`game/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/components/enter/enter.go` 里标记与发放同一笔事务的写法。
 - **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
 
 ## 联动

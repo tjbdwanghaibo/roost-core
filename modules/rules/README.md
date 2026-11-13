@@ -13,7 +13,7 @@
   - Nest handler `handlerRulesRead`（`game/handler/rules_read.go`）：只读，没有写入与落库；生成的 Sender 是 `sender.NewRulesReadSender(client).Sync_RulesRead(ctx, playerEntityID)`。
   - `Player.RulesSnapshot() (*pb.RulesNowPush, error)`（`game/entities/player/rules.go`）：在 Player 锁内调用，按登记名排序依次读各提供方。
 - **登记点**（`game/entities/player/rules.go`）
-  - `RegisterPlayerRules(name string, read RuleProvider)`，`RuleProvider` 是 `func(*Player) (*pb.RulePart, error)`。各功能在自己的 `with/rules` 文件的 `init` 里登记；运行期不增删。空名、nil、重名在启动时 panic。
+  - `RegisterPlayerRules(name string, read RuleProvider)`，`RuleProvider` 是 `func(view.PlayerEntity) (*pb.RulePart, error)`。各功能在自己的 `with/rules` 文件的 `init` 里登记；运行期不增删。空名、nil、重名在启动时 panic。
   - 提供方在 Player 已被 Nest 锁住时被调用（`handlerRulesRead` 这一条消息里），只读、不做 I/O，用自己的生成 PB 编码器产出 `Payload`。它可以读同一个 Player 上的别的组件（体力规则随等级变化时就是这样读的）。
   - 进入钩子：模块在 `init` 里登记了 `gamelogin.OnEntered("rules", …)`，玩家每次成功进入游戏（含重连）调一次 `PushNow`。
 - **状态**：无。不新增持久字段，也不启动独立服务。
@@ -36,7 +36,7 @@
 - **需求正好是它**：`roost module add rules`，连带装上 enter。单独装时没有提供方，快照是空的。shop、stamina 依赖它，装它们时自动装上并登记各自的规则。
 - **需求多一点——让自己的功能也下发规则**：
   1. 在功能自己的协议定义里声明一条只有推送形状的消息（照 `StaminaRules` / `ShopRules` 的写法，`handler=rules`），拿到一个消息号与 PB 编码器。
-  2. 在 `game/entities/player/` 下加一个文件，`init` 里调 `RegisterPlayerRules("<功能名>", func(owner *Player) (*pb.RulePart, error) { … })`，返回 `&pb.RulePart{MessageID: msgid.Msg<你的消息>, Payload: payload}`。
+  2. 在功能自己的组件包（`game/components/<功能>/`）里加一个文件，`init` 里调 `gamerules.RegisterPlayerRules("<功能名>", func(owner view.PlayerEntity) (*pb.RulePart, error) { … })`，返回 `&pb.RulePart{MessageID: msgid.Msg<你的消息>, Payload: payload}`。
   3. 不要改 `protocol/def/rules.go`、`controller.go` 与 `rules.go`：新增功能不需要改公共快照类型。
 - **服务端别处要主动推一次**（例如升级后规则变了）：`rules.PushNow(ctx, registry, playerID)`，在 Nest 事务之外调用；返回的错误记日志即可。
 - **客户端处理**：`RulesNowPush.Parts` 收到后整份替换；按 `MessageID` 分派到对应的解码器，不认识的 `MessageID` 忽略；内层 `Payload` 是本地解码用的数据，不要当成一条业务请求再发给服务器。示例：

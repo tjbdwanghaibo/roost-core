@@ -454,7 +454,7 @@ func (component *ProfileComponent) onLevelUp(from, to int32) error {
 
 // 升级钩子返回错误时，这一次发放写下的经验和等级都回滚，发经验的请求以钩子的错误结束。
 //
-// 钩子是业务文件里的一个普通方法（game/entities/player/profile_levelup.go），生产代码里没有给测试留
+// 钩子是业务文件里的一个普通方法（game/components/profile/levelup.go），生产代码里没有给测试留
 // 替换它的口子。所以这条用例用 go 的 -overlay 把那个文件换成一个总是返回错误的版本，重新编译本包的
 // 测试并只跑这一条：外层进程负责换文件和起子进程，子进程（带着 profileHookChildEnv）跑真正的场景。
 // 工程把钩子改成发奖励之后这条仍然成立：被换掉的是整个文件。钩子的签名改了，这里的替身要跟着改。

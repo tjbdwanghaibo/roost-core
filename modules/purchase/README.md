@@ -19,7 +19,7 @@
 
 **登记点**
 
-- `player.RegisterPurchaseReward(kind, PurchaseReward{Validate, Grant})`（`game/entities/player/purchase_component.go`）：登记一种奖励怎么发。`Validate` 与 `Grant` 都在发货的那笔 Player 事务里执行，不能做 I/O；返回错误则这一笔不发、游标不动。只在 `init` 里登记，种类重名直接 panic。内置 `coins`（经 wallet 的 `Add` 加金币）。
+- `purchase.RegisterPurchaseReward(kind, PurchaseReward{Validate, Grant})`（`game/components/purchase/purchase.go`）：登记一种奖励怎么发。`Validate` 与 `Grant` 都在发货的那笔 Player 事务里执行，不能做 I/O；返回错误则这一笔不发、游标不动。只在 `init` 里登记，种类重名直接 panic。内置 `coins`（经 wallet 的 `Add` 加金币）。
 
 **留给工程的文件**
 

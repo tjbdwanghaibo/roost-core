@@ -15,7 +15,7 @@
 
 ### 服务端入口
 
-- 组件 `IdleComp()`（`game/entities/player/idle_component.go`）：`Claim(sequence, nowUnixMilli int64) (IdleResult, error)`，只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest。`IdleResult{Reward, Balance, SettledAt, Sequence, Capped}`。
+- 组件 `IdleComp()`（`game/components/idle/idle.go`）：`Claim(sequence, nowUnixMilli int64) (IdleResult, error)`，只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest。`IdleResult{Reward, Balance, SettledAt, Sequence, Capped}`。
 - 结算函数 `idleAccrue(last, now, rules)`（同文件）：不逐秒循环，按整周期数一次算出。
 - Nest handler `handlerIdleClaim`（`game/handler/idle_claim.go`，`rollback=undo durability=strict`），`nowUnixMilli` 由 Nest 填这条消息冻结的业务时间；端点 `HandleIdleClaim`（`game/controllers/idle/idle_claim.go`）直接分发到它。
 
@@ -57,7 +57,7 @@
 - **需求正好是它：** `roost module add idle`，连带装上 wallet。
 - **需求比它多一点：**
   - 改速率与上限、按玩家等级给不同规则：改 `game/components/idle/rules.go` 的 `idleRules()`（它是组件的方法，可以读同一个 Player 上别的组件）。规则必须满足周期、每周期金币、金额上限为正，时间上限不小于一个周期，否则每次领取都答 `idle_rules`。
-  - 发别的资源：改 `idle_component.go` 的 `Claim` 里 `WalletComp().Add(reward)` 那一步，保持与游标、序号、回执在同一笔事务里。
+  - 发别的资源：改 `game/components/idle/idle.go` 的 `Claim` 里 `WalletComp().Add(reward)` 那一步，保持与游标、序号、回执在同一笔事务里。
   - 想在进入游戏时自动结算一次：自己写一个 Nest handler 调 `IdleComp().Claim`，注意序号由服务端决定时要与客户端的序号约定一致。
 - **别的业务代码要用它：** 在自己的 Nest handler 里（目标实体实现 `player.IIdleEntity`）调 `target.IdleComp().Claim(sequence, nowUnixMilli)`，`nowUnixMilli` 用 Nest 填的冻结时间。只读当前游标与序号读 `PlayerDao.Idle`。
 - **不要改的：** `Claim` 里“当前序号重放 → 序号检查 → 结算 → 同事务写游标与回执”的顺序，以及 `idleAccrue` 里先比较上限再做乘法的写法（防溢出）。

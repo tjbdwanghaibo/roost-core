@@ -18,13 +18,13 @@ name, err := c.Rename(ctx, playerID, requestKey, name) // 只能在 Nest 事务�
 
 **Nest handler**（`game/handler/naming_begin.go`、`naming_step.go`，都是 `rollback=undo durability=strict`，由 `Rename` 经生成的 Sender 调用）
 
-- `NamingBegin(operation, name)`：受理一次改名（校验名字与请求键、记下意图），返回 `player.NamingTicket`。
+- `NamingBegin(operation, name)`：受理一次改名（校验名字与请求键、记下意图），返回 `naming.NamingTicket`。
 - `NamingStep(seq, operation, action, key, token)`：推进一步。`action` 1 = 记下目录凭据，2 = 目录已提交、把名字写进档案，3 = 旧名已释放、完成，4 = 占名被明确拒绝、撤掉意图，5 = 凭据被明确判为失效、退回重新占名。
 
 **登记点 / 守卫**
 
 - 模块没有给别的功能的登记点。
-- 它给 `Player` 加了 `CheckProfileRenameRequest()`（`game/entities/player/naming_component.go`）：profile 的本地改名 handler `ProfileRename` 看到它就拒绝并答 `naming_required`，所以旧的本地 Sender 绕不过目录。
+- 它给 `Player` 加了 `CheckProfileRenameRequest()`（`game/components/naming/naming.go`）：profile 的本地改名 handler `ProfileRename` 看到它就拒绝并答 `naming_required`，所以旧的本地 Sender 绕不过目录。
 
 **状态**：`PlayerDao.Naming`（`db/def/naming.go` 的 `NamingState`），只落库、不下发。字段：`Seq`（改名代际，只增）、`Operation`（在途或最近一次完成的请求键）、`Target`、`Phase`（0 无在途、1 已受理、2 已记凭据、3 已写档案待清旧名）、`ClaimKey` / `ClaimToken`（目录凭据）、`CurrentKey` / `CurrentOwner`（当前名字在目录里的键与属主）、`OldKey` / `OldOwner`（待释放的旧名）。至多一笔在途加一笔最近的回执。显示名本身仍在 profile 的 `PlayerDao.Profile.Name`。
 

@@ -781,7 +781,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
   场景、已付订单、公会、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
   后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
-  `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/entities/player/enter_first.go`。
+  `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/login/enter_first.go`。
   之后照样执行进入钩子（`gamelogin.RunEntered`，带着会话的 claims）：聊天上线与拉全服邮件是 chat、mailbox 各自与 enter 的联动登记的，
   不写在 demo 的进入流程里。
 - **登录有预算**：传输层给每个请求 `player_access.tcp.dispatch_timeout`（与 `nest.request_timeout` 对齐）；

@@ -444,7 +444,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		}
 	}
 	for _, owned := range []string{"    mailbox:\n", "    wallet:\n", "- PlayerDao.MailboxLedger", "- PlayerDao.Wallet", "MailboxList:", "MailboxClaim:", "WalletSpend:",
-		"mailbox_attachment:", "- game/mailbox/mailbox_send.go", "- game/controllers/mailbox/mailbox_enter.go", "- game/mailbox/mailbox_item.go", "- game/entities/player/mailbox_item.go"} {
+		"mailbox_attachment:", "- game/mailbox/mailbox_send.go", "- game/controllers/mailbox/mailbox_enter.go", "- game/mailbox/mailbox_item.go", "- game/components/mailbox/mailbox_item.go"} {
 		if !strings.Contains(manifestText, owned) {
 			t.Errorf("roost.yaml does not record %q under the mailbox / wallet modules", owned)
 		}

@@ -5,7 +5,7 @@ import "fmt"
 // 这个文件是 mailbox 与 bag 两个模块的联动：两个都装着时才有。
 //
 // 它登记“道具”这个附件种类：Amount 个 ID 号道具，领取时进背包。这里只有种类的名字、校验与给发件方用的
-// 构造函数；发放方式（BagComp().Add）登记在 game/entities/player/mailbox_item.go，两个文件一起写进工程。
+// 构造函数；发放方式（BagComp().Add）登记在 game/components/mailbox/mailbox_item.go，两个文件一起写进工程。
 // 没有这份联动的工程里 "item" 没登记，道具附件与任何不认识的种类一样被拒绝、邮件保持未领。
 
 // TypeItem 是道具附件。线上格式 {"type":"item","id":1001,"amount":3}。

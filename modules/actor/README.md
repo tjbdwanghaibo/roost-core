@@ -9,7 +9,7 @@
   - `ActorStop`（`actor_stop.go`）：停止移动，应答带当前坐标。端点 `HandleActorStop`。
   - 没有“进入空间”的协议：把玩家放进某个空间是上层（`scene` 模块或工程自己的房间代码）的事。
 - **服务端入口**
-  - 取身体：`target.ActorComp().Body()`（`game/entities/player/actor_component.go`），窄接口 `IActorEntity`。另有 `ActorComp().SavedPosition()` 读上次存档的空间号、坐标与朝向，`player.MapBasic()`、`player.MoveComponent()` 取底层移动组件。
+  - 取身体：`target.ActorComp().Body()`（`game/components/actor/actor.go`），窄接口 `IActorEntity`。另有 `ActorComp().SavedPosition()` 读上次存档的空间号、坐标与朝向，`player.MapBasic()`、`player.MoveComponent()` 取底层移动组件。
   - `ActorComp().MoveRefusal(err)`：把 `Body.Walk` / `Follow` 的正常拒绝换成带业务码的错误（见“错误码”），在同一把实体锁内、紧接着失败的那次调用使用；别的错误原样返回。`handlerActorMove` 用的就是它，工程自己写的移动协议同样调它。
   - `Body` 的方法（`game/actor/body.go`，都必须在所属实体的锁内调用）：
     - `Enter(env Environment, at spatial.Point, facing movement.Facing) error`：放进一个空间。重复进入同一个空间保留现有站位；从别的空间切过来时先 `Leave`，同一笔事务。
@@ -23,7 +23,7 @@
   - `actor.Get(id)`：按实体号取已加载的实体（跟随目标用），由运行期入口 `actor.Start(registry)`（`game/actor/runtime.go`）接通。
   - Nest handler `handlerActorMove`、`handlerActorStop`（`game/handler/`，`durability=async`）。
 - **登记点 / 钩子**
-  - `OnActor(name string, factory func(*Player) actor.Hooks)`（`game/components/actor/hooks.go`）：登记进入、离开、每拍之后三个回调（`actor.Hooks{Enter, Leave, AfterTick}`）。回调在当前实体锁和事务内执行，返回错误会撤销本次变更；回调里不能发 RPC、取别的实体锁或开 goroutine。只在 `init` 登记，多个按名字排序，重名 panic。
+  - `OnActor(name string, factory func(view.PlayerEntity) actor.Hooks)`（`game/components/actor/hooks.go`）：登记进入、离开、每拍之后三个回调（`actor.Hooks{Enter, Leave, AfterTick}`）。回调在当前实体锁和事务内执行，返回错误会撤销本次变更；回调里不能发 RPC、取别的实体锁或开 goroutine。只在 `init` 登记，多个按名字排序，重名 panic。
   - `OnActorSyncFields(name string, profile entity.SyncProfile, fields ...string)`（`game/components/actor/sync.go`）：给一个非本人的同步视图登记明确的字段白名单（例如“附近玩家能看到哪些 `PlayerDao` 字段”）。不能登记本人视图，不能用 `*`。只在 `init` 登记。
   - `NewActorPlayerSyncPacker`：`Player` 唯一的同步打包工厂（清单的 `sync_packer`）。本人视图包含 `PlayerDao` 全部可同步字段；其他视图只含登记过的字段。
 - **状态**

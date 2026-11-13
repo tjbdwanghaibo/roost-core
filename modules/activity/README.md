@@ -126,14 +126,14 @@
 
 ## 业务接入示例
 
-例如升级到 20 级后解锁个人活动，在工程自己的文件（例如 `game/entities/player/activity_growth.go`）里登记：
+例如升级到 20 级后解锁个人活动，在工程自己的文件（例如 `game/activity/activity_growth.go`；宿主经 `game/view` 的小接口拿别的组件，不 import 实体包）里登记：
 
 ```go
 func init() {
     activity.Register("growth20", activity.Hooks{
         Eligible: func(owner entity.IThreadSafeEntity, event string) bool {
-            p := owner.(*Player)
-            return event == "profile.level_up" && p.Dao().GetProfile().GetLevel() >= 20
+            p, ok := owner.(view.ProfileHolder)
+            return ok && event == "profile.level_up" && p.Profile().Level() >= 20
         },
         Enter: func(c activity.Context) (bool, error) {
             // 只改本次 Nest 已锁住实体的 DAO，或登记可靠 effect。

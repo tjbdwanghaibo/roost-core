@@ -15,7 +15,7 @@
 
 - **发件** `mailbox.SendTo(ctx, mailer, Letter)`（`game/mailbox/mailbox_send.go`）：给一名玩家发一封邮件，返回 mail 服务产生的信封。`Letter{To, Subject, Body, Attachment, ExpiresInSeconds, RequestID}`；`RequestID` 是幂等键，必填；`ExpiresInSeconds` 为 0 用 `DefaultExpiresInSeconds`（7 天）。`mailer` 是 mail 服务的客户端（`app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)`）。
 - **附件**（`game/mailbox/mailbox.go`）：`Attachment{Type, ID, Amount}`，线上格式是 JSON，例如 `{"type":"coins","amount":100}`。`Coins(amount)` 构造金币附件；`Encode` / `Decode` / `Validate` 是发件、列表、领取共用的同一个判断。
-- **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo durability=strict`，不对客户端开放）调组件 `MailboxComp().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（`game/entities/player/mailbox_component.go`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
+- **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo durability=strict`，不对客户端开放）调组件 `MailboxComp().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（`game/components/mailbox/mailbox.go`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
 - **端点** `HandleMailboxList` / `HandleMailboxClaim` 在 `game/controllers/mailbox`。
 - **运行时** `mailbox.Start(registry)`（`game/mailbox/mailbox_runtime.go`，清单 `runtime.start`）：启动联动登记的消费者；只装 mailbox 时没有消费者。
 
@@ -32,7 +32,7 @@
 ### 登记点
 
 - `mailbox.RegisterType(kind, Validator)`（`game/mailbox/mailbox.go`）：登记一种附件的名字与校验。校验必须是纯函数，不能读配置表。
-- `player.RegisterMailboxGrant(kind, MailboxGrant{Grant, Held})`（`game/components/mailbox/grant.go`）：登记这种附件怎么发到玩家身上。`Grant` 在领取的那笔事务、Player 锁内执行，只能经同一个 Player 的 DAO 或组件改状态，不能做事务外的事；`Held` 只读，返回当前持有量。
+- `mailbox.RegisterMailboxGrant(kind, MailboxGrant{Grant, Held})`（`game/components/mailbox/grant.go`）：登记这种附件怎么发到玩家身上。`Grant` 在领取的那笔事务、Player 锁内执行，只能经同一个 Player 的 DAO 或组件改状态，不能做事务外的事；`Held` 只读，返回当前持有量。
 - 两处都只在 `init` 里登记，空名、nil、重名 panic；给没有登记过校验的种类登记发放方式也 panic。只登记了校验的种类解得出来、列表里看得见，但不可领。
 
 ### 状态

@@ -297,9 +297,9 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
   - `cannot be installed yet`：缺 Mod 或 feature，错误里给了要执行的命令。托管服务不在此列：安装器自己声明；只有工程里已经有一个同名的业务服务时报 `is taken by a business service`，这是冲突，告诉用户，不要改名绕过。
 - **联动文件**：输出里的 `glue <模块> with <另一个模块>` 是两个模块之间的接线（例如 chat 在玩家进入游戏时把他加进在线名单、签到成功推进每日任务），两个模块都装着时安装器自动写，不论先装哪个；`plan --json` 的 `glue` 数组列出会写的文件。它们归工程所有，规则直接在文件里改。`module verify` 把它们的场景单独列一行 `<模块>+<另一个模块>`。
 - 模块自带的客户端协议（如 wallet 的 `WalletSpend`：客户端发起的消费）是样例入口。需求里没有对应的客户端操作时，告诉用户它存在，由用户决定保留还是删掉这条协议与端点。
-- 装完之后模块文件就是业务代码：要改规则直接改（例如 `game/entities/player/checkin_component.go` 里的奖励），改完再 `module verify`。改了行为就同步改模块自带的测试，不要删测试。
+- 装完之后模块文件就是业务代码：要改规则直接改（例如 `game/components/checkin/checkin.go` 里的奖励），改完再 `module verify`。改了行为就同步改模块自带的测试，不要删测试。
 
-- **扩展已装的模块**（第 1 步结论是“装了再扩展”的）：只动两类地方——模块留给工程的业务文件（README 的“复用方式”列出，例如商品目录、推荐规则、渠道入口、首次发放），和它的登记点（进入钩子、升级钩子、附件种类、规则登记……）。要在别的功能里用它的数据或动作，调它 README 写的入口（同一个实体上直接调组件方法，例如 `component.owner.WalletComp().Add(delta)`）。它别的文件不要改；确实要改规则时改完同步改它自带的测试，再 `module verify`。
+- **扩展已装的模块**（第 1 步结论是“装了再扩展”的）：只动两类地方——模块留给工程的业务文件（README 的“复用方式”列出，例如商品目录、推荐规则、渠道入口、首次发放），和它的登记点（进入钩子、升级钩子、附件种类、规则登记……）。要在别的功能里用它的数据或动作，调它 README 写的入口（同一个实体上直接调组件方法，例如 `component.owner.Wallet().Add(delta)`）。它别的文件不要改；确实要改规则时改完同步改它自带的测试，再 `module verify`。
 
 ## 3A. 登录与进入
 
@@ -377,7 +377,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
    - 同步与否按这个顶层字段决定：标了 `sync` 的字段才会下发，`persist` 只落库。既有可见状态又有服务端账本就写两个字段、两个结构体。不要在嵌套结构体的字段上写 `dao` 标签。标了 `sync` 还要打开自身视图客户端才收得到，见第 4A 步。
    - 只能加在末尾（同步的字段号按定义顺序排）；不要改已有字段的 `store` 键。
 2. **组件**：`"$ROOST" add component <Feature> --entity Player`，在生成的 `game/entities/player/<feature>_component.go` 里写业务方法。状态只经生成的 setter 改（`component.owner.Dao().GetTask().SetProgress(…)`）；组件不保存事务会改的状态、不加锁。同一个实体上的别的组件（模块的或自己写的）都用 `component.owner.<Other>Comp()` 直接调，在同一把锁、同一笔事务里。要动货币就调同一个实体上的货币组件，同一笔事务。两个入口按“谁来保证只做一次”选：
-   - **你的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `component.owner.WalletComp().Add(delta)`，不留回执。周期性发放（每日、每局、每个订单）都用这个。
+   - **你的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `component.owner.Wallet().Add(delta)`，不留回执。周期性发放（每日、每局、每个订单）都用这个。
    - **没有别的事实可判**（客户端带请求号的消费）：`WalletComp().Apply(key, delta)`，同一个 key 在去重窗口内重复调用只生效一次。窗口只留最近 128 次带业务键的加减，是短期防重发，不是永久账本：不要拿按天、按局递增的键去用它。
 3. **错误码**：`"$ROOST" add errcode <feature>_<reason>`（每个一条，一码一个文件），生成在 `internal/errors/`，把说明文字（生成时是 `TODO`）改掉。模块是一个功能一个文件，两种布局都可以。业务拒绝就从组件 / handler 里返回这些带码的错误，生成的端点会把它转成回包的 `Code` / `Reason`；不用在 controller 里自己拼响应。
 4. **协议**：`"$ROOST" add protocol <Feature><Action> --group game --handler <feature>`，在 `protocol/def/<feature>_<action>.go` 里给 Request / Response 加字段（Response 保留 `Code`、`Reason`）。
@@ -444,7 +444,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 ## 4B. 进入游戏：建档与首次初始化
 
-**装 `enter` 模块即可**（`"$ROOST" module add enter`）：它带 `EnterGame` 端点和首次初始化，新玩家的初始发放写进它的 `game/entities/player/enter_first.go`（例如 `component.owner.WalletComp().Add(100)`）。手写的功能要在玩家进入时顺带做事（上线登记、拉离线期间的数据），不要改进入端点：在自己的包里写
+**装 `enter` 模块即可**（`"$ROOST" module add enter`）：它带 `EnterGame` 端点和首次初始化，新玩家的初始发放写进它的 `game/login/enter_first.go`（例如 `host.Wallet().Add(100)`）。手写的功能要在玩家进入时顺带做事（上线登记、拉离线期间的数据），不要改进入端点：在自己的包里写
 
 ```go
 func init() {
@@ -455,7 +455,7 @@ func init() {
 }
 ```
 
-（`gamelogin` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `player.OnFirstEnter` 登记事务内钩子（配方已使用）。
+（`gamelogin` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `gamelogin.OnFirstEnter` 登记事务内钩子（配方已使用）。
 
 **enter 有两条路**。会话是用进服票据握手的（第 3A 步的链路，装了 `login` 时）：玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`；建档、名字、首次初始化、“建成了”的标记在同一笔事务里。别的会话：`EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码，初始发放只写一处。要在“新建”这一步加自己的检查或写入，用 enter 的登记点（`OnCreating`、`OnCreatePrepare`、实体包的 `OnCreate`，见它的 README），不要改它的端点。
 

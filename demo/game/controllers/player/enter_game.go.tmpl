@@ -136,7 +136,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	// login: "done or not" is a fact on the Player (PlayerDao.Enter), so a
 	// Player created by a login that crashed before this point is initialized
 	// by the next one, and a repeated login does nothing. The new player's
-	// grants are written in game/entities/player/enter_first.go.
+	// grants are written in game/login/enter_first.go.
 	//
 	// “先新建”的会话发的是 EnterExisting：建成了就是一次进入（经新建请求建成之后的第一次进入报 First=true），
 	// 有档而没建成（上次新建到一半）答 enter_need_create，什么都不写。

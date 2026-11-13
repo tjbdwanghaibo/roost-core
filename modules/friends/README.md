@@ -6,7 +6,7 @@
 
 ### 客户端协议（`protocol/def/friends_change.go`、`friends_list.go`）
 
-- `FriendsChange`（请求 / 应答）：`FriendsChangeRequest{PeerID, Action}`，应答只有 `Code` / `Reason`。操作者取自已认证的会话，不能伪造。`Action` 的取值（常量在 `game/entities/player/friends_component.go`）：
+- `FriendsChange`（请求 / 应答）：`FriendsChangeRequest{PeerID, Action}`，应答只有 `Code` / `Reason`。操作者取自已认证的会话，不能伪造。`Action` 的取值（常量在 `game/components/friends/friends.go`）：
 
   | 值 | 常量 | 做什么 | 对方要不要在线 |
   | --- | --- | --- | --- |
@@ -25,7 +25,7 @@
 
 - `syncsender.NewFriendsChangeSender(nestClient).MultiSync_FriendsChange(ctx, actorEntityID, peerEntityID, action)`：多实体 Nest 调用，参数是两个完整的 Player EntityID，六种动作都接受。调用者必须自己确认两名玩家的档都归本进程写。
 - `syncsender.NewFriendsOwnSender(nestClient).Sync_FriendsOwn(ctx, actorEntityID, peerEntityID, action)`：只锁操作者一人的单实体调用，只接受 `FriendsUnblock` 与 `FriendsReject`（别的动作答 `friends_invalid`）；对方的档不参与。
-- `syncsender.NewFriendsListSender(nestClient).Sync_FriendsList(ctx, entityID)`：返回 `player.FriendsSnapshot{Peers, Incoming, Blocked}`（排序后的值拷贝）。
+- `syncsender.NewFriendsListSender(nestClient).Sync_FriendsList(ctx, entityID)`：返回 `friends.FriendsSnapshot{Peers, Incoming, Blocked}`（排序后的值拷贝）。
 - 组件 `FriendsComp()`：`Change(peer *FriendsComponent, action int32) error` 只能在同时锁住双方的事务里调；`ChangeOwnSide(peerEntityID int64, action int32) error` 只改本人的名单（取消拉黑、拒绝申请），只需要本人的锁；`Snapshot()` 只能在本人的实体锁内读。
 - Nest handler（`game/handler/friends_change.go`、`friends_own.go`、`friends_list.go`）：`handlerFriendsChange`（两个 Player，`rollback=undo durability=strict`）、`handlerFriendsOwn`（一个 Player，同样的事务选项）、`handlerFriendsList`（只读）。
 - 端点 `HandleFriendsChange` / `HandleFriendsList` 在 `game/controllers/friends`。
@@ -40,7 +40,7 @@
 
 ### 配置
 
-没有配置表与配置键。名单上限是 `friends_component.go` 里的常量 `FriendsLimit`（64）。
+没有配置表与配置键。名单上限是 `game/components/friends/friends.go` 里的常量 `FriendsLimit`（64）。
 
 ### 错误码（`internal/errors/friends.go`）
 
@@ -63,7 +63,7 @@
 
 - **需求正好是它**（单服、小规模、在线互加）：`roost module add friends`，不连带别的模块。
 - **需求比它多一点：**
-  - 改名单上限：改 `game/entities/player/friends_component.go` 的 `FriendsLimit`。
+  - 改名单上限：改 `game/components/friends/friends.go` 的 `FriendsLimit`。
   - 名单里要带名字、等级：`FriendsList` 只给玩家号，客户端按玩家号另取；或者在端点里对每个玩家号查自己的展示数据再拼进应答。
   - 关系变化要通知对方：在 `HandleFriendsChange` 事务成功之后自己推送（模块没有推送协议）。
   - 允许离线双边动作：把 `game/controllers/friends/friends_change.go` 的 `change` 里那段会话检查换成自己的归属证明（例如按 account 的绑定确认对方归本服）；`Change` 本身不关心对方在不在线。不要直接删掉检查——它是唯一拦着“往别的进程的玩家档里写”的东西。

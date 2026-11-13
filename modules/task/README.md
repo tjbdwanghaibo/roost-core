@@ -7,7 +7,7 @@
 - **客户端协议**（`protocol/def/task_claim.go`）
   - `TaskClaim`：请求 `TaskClaimRequest{TaskID}`，应答 `TaskClaimResponse{Code, Reason, TaskID, Reward, Balance, RewardKind, RewardID}`。领取一个已完成任务的奖励：每日 / 每周任务在周期内一次，永久任务终身一次。`Reward` 是到账数量，`RewardKind` / `RewardID` 说明是哪种资产，`Balance` 是领完之后的金币余额（非金币奖励不改变它）。目标取认证会话的玩家。
   - 没有推进任务的客户端协议，也没有推送：进度经 `PlayerDao.Task` 的自身视图同步下去。
-- **服务端入口**（组件 `TaskComponent`，`game/entities/player/task_component.go`，经 `ITaskEntity` 的 `TaskComp()` 取得）
+- **服务端入口**（组件 `TaskComponent`，`game/components/task/task.go`，经 `ITaskEntity` 的 `TaskComp()` 取得）
   - `Report(event string, n, nowUnixMilli int64) error`：按事件推进。所有 `Event` 等于 `event`、并且当时已解锁的任务各加 `n`，封顶在目标；没有匹配的任务时什么都不写。**事务内联动用这个**。
   - `Advance(taskID, n, nowUnixMilli int64) (int64, error)`：直接按任务号推进，返回推进后的进度。任务未解锁答 `task_incomplete`，拒绝前不写。
   - `Claim(taskID, nowUnixMilli int64) (TaskClaimResult, error)`：`TaskClaim` 协议用的那一个，发奖并记下“领过了”。
@@ -68,7 +68,7 @@
     然后在任务表里加一行 `event` 为 `battle.won` 的任务。错误必须原样返回给 Nest，不能吞掉后提交半笔业务。
   - 自己的功能有“首次生效”钩子、又不想直接依赖 task：照 `with/shop` 的写法，在一个单独的文件里 `init` 登记对方的钩子并在里面调 `Report`。
   - 加一种奖励资产：`init` 里 `RegisterTaskReward("<种类>", TaskRewardHandler{Validate: …, Grant: …})`，照 `with/bag` 的 `task_bag.go`。
-  - 不要改 `task_component.go` 里周期与解锁的判断、`TaskState` 的 store 键、错误码码值；不要给业务代码留“测试用替换任务表”的开关（场景经真实的配置装载换表）。
+  - 不要改 `game/components/task/task.go` 里周期与解锁的判断、`TaskState` 的 store 键、错误码码值；不要给业务代码留“测试用替换任务表”的开关（场景经真实的配置装载换表）。
 - **别的模块要用它的数据或动作**
   - 同一个 Player 的事务里：目标接口嵌入 `player.ITaskEntity`，调 `TaskComp().Report(event, n, nowUnixMilli)`。
   - 不在这名玩家的事务里（房间结算给每名玩家记一场、GM）：`sender.NewTaskReportSender(client).Sync_TaskReport(ctx, playerEntityID, event, n)`；自己保证只发一次。
