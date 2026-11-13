@@ -1,5 +1,9 @@
 # 当前已知限制与验证边界
 
+## 2026-11-13：game-demo 主视野超限用例在重负载下失败一次（尚未确认）
+
+- `TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164`（game-demo 的 `internal/service/game/scene_view_scale_test.go`）在全仓 `go test ./...` 的 `TestClientSDKAgainstGeneratedPlayerTCP`（生成 game-demo 并跑它的测试）里失败一次，原文 `scene_view_scale_test.go:138: over the limit: 0 sessions lost, 0 waiting, 0 ever deferred (want 0, 0 and the crowd overflowing)`；当时同机并行跑着模块门禁与 17 个玩法纵切脚本。之后单独重跑 `TestClientSDKAgainstGeneratedPlayerTCP` 通过、生成的 game-demo 里该用例 `-count=5` 通过、独立生成的 game-demo `go test ./...` 通过。发生在“生成工程只带用到的托管服务”那一轮（2026-11-13），但那一轮的 game-demo 生成物除 `docs/ROOST_YAML.zh-CN.md` 一段说明外与改动前逐字相同，判断与该改动无关；“超限从未延后”在什么时序下出现没有定位，用例断言没有放宽。
+
 ## 2026-11-12：活动模块的驱动与验收边界
 
 [activity](../../modules/activity/README.md) 共用同一个 activity.Component 与 ActivityBook，分别挂在 Player、ActivityWorld、Alliance 上；实体包只有类型别名及宿主适配。个人活动复用 entitytimer；全服/联盟保留 Remote 不挂本地持久定时器的限制，权威服务每秒最多扫描一页 128 个宿主、8 个并发调用。扫描积压会延后推进，业务操作仍按冻结期限拒绝过期请求，不把扫描周期当准点保证。个人离线默认加载/进入时惰性恢复，需要离线准点结算时由业务提供可靠后台驱动。

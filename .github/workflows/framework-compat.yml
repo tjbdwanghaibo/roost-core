@@ -64,9 +64,10 @@ jobs:
           if [ "$SCENARIO" = full ]; then
             mods=configdata,etcd,redis,mongo,nats,syncbus,remote_entity,dataengine,nest,saga
             services=game,gate
-            # The game template hosts all nine framework services and wires
-            # game to them, so the full scenario compiles kit/service too.
-            template_args=(-template game)
+            # -framework all: the game template hosts all nine framework
+            # services and wires game to them (it hosts none by default since
+            # 2026-11-13), so the full scenario compiles kit/service too.
+            template_args=(-template game -framework all)
           fi
           # 只有 source-head 要 --skip-deps：它编译的是 checkout，产物的 import
           # 可能还没进任何发布。minimum / released 要的恰恰相反——让依赖真的

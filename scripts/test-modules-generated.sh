@@ -165,6 +165,8 @@ grep -q 'glue mailbox with bag: written' "$review_root/add-all.log"
 # rehome（单个玩家换服）：enter 已在，进入前检查 / 到达 / 意图对账的联动随它写进工程。
 "$roost" module add rehome > "$review_root/add-rehome.log"
 grep -q 'glue rehome with enter: written' "$review_root/add-rehome.log"
+# rehome 用 account（needs.uses）：工程还没有，安装器在这一步声明；之后 login 接管的是这一步生成的 account 拒绝桩。
+grep -q 'framework service account: declared' "$review_root/add-rehome.log"
 # servertime（服务器时间）：不挂实体；enter 已在，进入时推送的联动随它写进工程。
 "$roost" module add servertime > "$review_root/add-servertime.log"
 grep -q 'glue servertime with enter: written' "$review_root/add-servertime.log"
@@ -172,7 +174,6 @@ grep -q 'glue servertime with enter: written' "$review_root/add-servertime.log"
 # enter 已在，进入前检查的联动随它写进工程。之后 doctor 不再把这两处当成未实现。
 "$roost" module add login > "$review_root/add-login.log"
 grep -q 'glue login with enter: written' "$review_root/add-login.log"
-grep -q 'framework service account: declared' "$review_root/add-login.log"
 "$roost" project doctor -workflow player-tcp > "$review_root/doctor-harbor.log" 2>&1 || true
 grep -q '^OK    collaborators:account' "$review_root/doctor-harbor.log"
 grep -q '^OK    workflow:tcp-auth' "$review_root/doctor-harbor.log"

@@ -1750,13 +1750,13 @@ func TestAddSagaRejectsDuplicateSteps(t *testing.T) {
 	}
 }
 
-// -template 把“第一个声明的业务服务”接到九个托管框架服务上；-services 的书写
-// 顺序因此有含义，不能先排序再取第一个。
+// -template 把“第一个声明的业务服务”接到托管框架服务上（-framework all：缺省一个都不托管）；
+// -services 的书写顺序因此有含义，不能先排序再取第一个。
 func TestProjectNewTemplateWiresFirstDeclaredService(t *testing.T) {
 	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	var out bytes.Buffer
-	if err := Run([]string{"project", "new", "planet", "-module", "example.com/planet", "-out", target, "-services", "world,game", "-template", "game", "--skip-deps"}, &out, &out); err != nil {
+	if err := Run([]string{"project", "new", "planet", "-module", "example.com/planet", "-out", target, "-services", "world,game", "-template", "game", "-framework", "all", "--skip-deps"}, &out, &out); err != nil {
 		t.Fatalf("project new: %v\n%s", err, out.String())
 	}
 	manifest, err := LoadManifest(target)

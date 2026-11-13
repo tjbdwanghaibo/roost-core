@@ -30,7 +30,8 @@ template_args=()
 if [[ "$scenario" == full ]]; then
   mods=configdata,etcd,redis,mongo,nats,syncbus,remote_entity,dataengine,nest,saga
   services=game,gate
-  template_args=(-template game)
+  # -framework all：与 framework-compat 的 full 场景相同，托管全部九个框架服务（-template game 缺省一个都不托管）。
+  template_args=(-template game -framework all)
 fi
 
 echo "source-head-check: generating planet ($scenario) against this working tree"
