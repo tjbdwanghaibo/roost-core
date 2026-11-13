@@ -88,3 +88,12 @@ world / scene 单例进实体包；组件拆分完成 enter（`game/components/e
    （alliance、activity_world 等）的手写文件仍在 `internal/service/<服务>/`（§1 只要求托管框架服务进 services/）。
 4. **跑在非归属服务的 lifecycle**：原 `roost add lifecycle --service` 在生成期拒绝；现在每个实体包都有 lifecycle_gen.go，改由 doctor 的
    entity-owner 检查别的服务的用法（按 import + 函数名的源码文本查，共用代码 game/ 下看不出由谁调用，不在检查内）。
+
+## 6. 维护者 11-13：用 game/view 打断循环引用
+剩余组件拆不出 Player（钩子用具体组件类型、跨组件 `Owner().XComp()`、联动在组件类型上声明方法）与 enter_first / enter_hooks 进不了 game/login
+（login → player 的反向引用）——维护者定：game 下新建 `game/view/`，接口定义都放这里。组件、login、钩子与联动只依赖 view；实体实现 view。
+钩子签名改为 view 类型，跨组件调用经返回 view 接口的访问器；全部模块组件拆进 game/components，enter_first / enter_hooks 进 game/login。
+文件组织（维护者 11-13 补充）：entity 与 component 的接口都在 `game/view/` 一个包里，按前缀分文件——实体 `view/entity_<实体>.go`（如 `entity_player.go`），
+组件 `view/component_<功能>.go`（如 `component_profile.go`）；模块模板同名（`files/game/view/component_<功能>.go.tmpl`，自带实体的再加 `entity_<实体>.go.tmpl`）。
+组合（维护者 11-13 补充）：view 内部组合——`component_<功能>.go` 定义组件接口与“带有这个组件”的小接口（只含返回组件接口的访问器），
+`entity_<实体>.go` 的实体接口嵌入 `entity.IThreadSafeEntity` 与它挂的各组件小接口；组件、钩子、联动只依赖用得到的最小接口。

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **文档：KNOWN-LIMITS 全文整理**（2026-11-13，维护者要求“把框架本身的限制和目前遗留的问题区分开”）：分“框架本身的限制”（设计边界或取舍，要改需要新的框架能力或有意不做）、“遗留问题”（实现、生成物、模块、demo 或验收没做到位，含“尚未确认”的怀疑）与“已修复的历史”（每条一行结论）三部分，前两部分按领域分小节，原来按日期的审查小节拆开归类；已修复条目的原文移到 [evidence/known-limits-history-20261113](docs/maintenance/evidence/known-limits-history-20261113/README.md)，被引用的旧锚点保留。只改文档，不改事实与状态。
+
 - **组件 DAO 跟随宿主实体的 dbscope**（framework / gameplay / modules，2026-11-13，维护者选“Follow the host”）：本地实体的每个 DAO 必须与主 DAO 同一个库范围，`entity.ValidateEntityRegistry` 起服时拒绝不一致的组合（新哨兵 `entity.ErrMixedDaoScope`，托管实体照旧全部 global）。`combatcomponent.NewCombatDaoIn`、`level.NewLevelDAOIn` 带范围构造，`DbScope()` 与提交写入键的范围一致；combat、dungeon 模块按宿主（Player / Dungeon）主 DAO 的 `DbScope()` 构造。修前装 combat / dungeon 的实体一半文档在 `<库>_<sid>`、一半在共用库，不能预加载、换服不搬。先红：`TestValidateEntityRegistryRejectsALocalKindWhoseDaosMixScopes`（修前接受）、`TestCombatDaoFollowsItsHostsDatabaseScope` / `TestLevelDAOFollowsItsHostsDatabaseScope`（修前没有带范围的构造）；变异：去掉写入键的范围 → combat 用例报写入键范围 0；生成工程里把两个模块的 DAO 改回旧构造 → `registry.RegisterAll` 报 `ErrMixedDaoScope`。验证：`framework/entity`、`gameplay/skill/combatcomponent`、`gameplay/level` 整包，装 combat + dungeon 的 `-template game` 工程 `module verify` 通过。KNOWN-LIMITS 的预加载一节按“框架本身的限制 / 遗留问题”分开写。
 
 - **本地 Nest 实体起服预加载与本地实体 DAO 缺省 dbscope=sid**（dataengine / codegen / modules，2026-11-13，维护者决定，计划 [PLAN-2026-11-13-v147-layout-preload](docs/maintenance/PLAN-2026-11-13-v147-layout-preload.md) §3～4）：
