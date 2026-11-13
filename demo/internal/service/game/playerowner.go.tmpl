@@ -395,15 +395,16 @@ func (owners *PlayerOwners) AdmitMessage(playerID int64, messageID uint32) error
 	return owners.Admit(playerID)
 }
 
-// Resident 只读地回答“这个玩家此刻在本进程服务吗”：有驻留记录，并且副本没有在卸载。
-// 不算使用、不建记录；给只决定要不要处理别人放进共享队列的工作的调用方用（matchmaker）。
+// Resident 只读地回答“这个玩家此刻在本进程服务吗”：有驻留记录，不在迁出表里（离开中、已迁走），并且副本没有在卸载。
+// 不算使用、不建记录；给只决定要不要处理别人放进共享队列的工作的调用方用（matchmaker）。离开中的玩家
+// 驻留记录还在（交出实体之前本进程仍是他的写者），但不能再被撮合进本进程的一局。
 func (owners *PlayerOwners) Resident(playerID int64) bool {
 	if owners == nil {
 		return true
 	}
 	owners.mu.Lock()
 	defer owners.mu.Unlock()
-	if owners.residents[playerID] == nil {
+	if owners.residents[playerID] == nil || owners.emigrants[playerID] != nil {
 		return false
 	}
 	_, unloading := owners.evictions[playerID]

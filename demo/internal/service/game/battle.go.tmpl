@@ -329,6 +329,24 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 	return nil
 }
 
+// Seated reports the open room this player has a seat in, if any. A room's
+// seats are fixed when it opens, so reading them under the manager's lock is
+// enough. The rehome checks use it: a player cannot leave this process while
+// a room here is waiting for their inputs.
+func (manager *battleManager) Seated(playerID int64) (string, bool) {
+	if manager == nil {
+		return "", false
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for id, room := range manager.rooms {
+		if _, seated := room.seats[playerID]; seated {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // run is the room's single owner. Everything that touches the lockstep room
 // happens here: commands from endpoints, and one Tick per interval.
 func (manager *battleManager) run(managed *battleRoom, room *lockstep.Match) {
