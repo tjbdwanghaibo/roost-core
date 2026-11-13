@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **组合 skill 试用**（2026-11-13）：一个没有上下文的 agent 只按 `SKILL.md` 与 `compose.md` 做了一个八条需求的休闲服务端（登录建角、钱包、签到、每日任务、手写转盘复用 gacha、改名全服唯一），离线验收通过；“金币排行榜”“离线也能发好友申请”两条按规则 4 停下报告冲突、没有做。它指出的文档问题已改：链接基准的说法、冲突判据（模块场景离线不算冲突）、配方只能加不能减、速查表补上 leaderboard 只升不降与 friends 双边要求在线、doctor 装 login 后剩三项、内嵌 TCP 时 `portal.servers` 填什么、能力清单里过时的“好友 / 任务 / 商城 / 抽卡需手写”两行；`roost add endpoint` 生成的入口注释改成与 dispatch 的实际行为一致。
+
 - **完整测试**（2026-11-13，修复分支 `633d5098` 并入主线之后，本机 macOS）：全仓 `go test ./...` 165 个包全部通过；`scripts/test-modules-generated.sh` 通过（42 个模块、47 组联动）；新生成的 game-demo build / vet / `roost id check` / `roost generate --check` 通过，自己的 `go test ./...` 62 个包通过，`roost module verify` 通过；codegen 的 `TestDemo|TestModule|TestRecipe` 通过、零 SKIP（1831s）；文档锚点 344 个文件无断链。
 
 - **修复**（modules，2026-11-13）：Scene / Terrain 控制器在 Provide 阶段不再提前要求 Start 才发布的 runtime，改为请求时从 Registry 读取；不改变开图、持久化与退出生命周期。夹具按正式构造 / 启动顺序执行，修前双模块失败、修后 race 与新生成工程检查通过；真实依赖下 11 个服务启动、Portal / TCP 业务拒绝后同连接继续切图和地形查询通过，见[验收 §7](docs/maintenance/evidence/module-fixes-20261112/README.md#7-scene--terrain-启动时序修复2026-11-13)。

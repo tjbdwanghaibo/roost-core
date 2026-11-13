@@ -451,7 +451,8 @@ import (
  %q
 )
 // Handle%s 是手写接入层：可在调用前做校验和授权，不要在此持有 Entity 锁。
-// 业务拒绝应构造带错误码的响应；直接返回 error 会由接入层按分发失败处理。
+// dispatch 已把 handler 返回的业务错误转成回包的 Code / Reason；在这里自己做的校验
+// 拒绝也构造带错误码的响应返回，直接返回 error 会由接入层按分发失败处理。
 //roost:endpoint nest=%s
 func (controller *Controller) Handle%s(ctx *playeraccess.Context, req *pb.%sRequest) (*pb.%sResponse, error) {
  return controller.dispatch%s(ctx, req)

@@ -2,7 +2,7 @@
 
 适用：用户给的是一段需求描述（“做一个有货币、签到和每日任务的服务”），不是“照某类玩法出一个 demo”；或者要在已有的 roost 工程上继续加功能。照某类玩法出 demo 用各玩法的 reference。
 
-链接相对 roost-core 根目录。命令以目标检出为准：`roost module` 在 v1.43.0 之后的 main 上才有（v1.43.0 及更早的 tag 没有），更早的 tag 没有这条路，只能手写（第 4 步）。
+Markdown 链接相对本文件所在目录；反引号里写的路径（`modules/<name>/README.md` 等）相对 roost-core 根目录。命令以目标检出为准：`roost module` 在 v1.43.0 之后的 main 上才有（v1.43.0 及更早的 tag 没有），更早的 tag 没有这条路，只能手写（第 4 步）。
 
 ## 0. 四条规则（总边界，每一步都受它们约束）
 
@@ -64,7 +64,7 @@
 
 - 需求要的量、频率、一致性超出模块或框架写明的范围（例如要“永久防重”，而货币的去重窗口只留最近 128 次）；
 - 需求要的行为模块明确不做（例如要全服唯一的名字，而档案模块不查重）；
-- 需求依赖的能力只有离线验证、只有原型，或者写明“尚未确认”；
+- 需求依赖的能力在能力清单“状态”列或已知限制里明确标成只有原型、只有设计、只有离线验证，或者写明“尚未确认”（例如换服）。模块场景都是离线跑的这件事不算冲突，统一写进第 6 步的“验收到哪一步”；
 - 两条需求各自可行、放在一起互相矛盾。
 
 有冲突就**停下来报告，等用户选**，报告里每个冲突写四样：
@@ -99,7 +99,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
   go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$CORE"
   ```
 
-  `-recipe casual` 或 `-recipe turn-pvp` 可直接创建已组合工程（自动采用 game 底座），两者都已带登录链路（login、portal、servertime）与开发配置：casual 是首次发放、签到、任务、体力、商店、背包、邮件；turn-pvp 是档案、本服匹配（matchmaking → matchroom）、房间与回合，组队用 team。模块名单与验收见[配方](../../../../modules/README.md#从配方创建工程)。需求与某个配方大体重合时从配方起步，再按第 1 步的结论增减。
+  `-recipe casual` 或 `-recipe turn-pvp` 可直接创建已组合工程（自动采用 game 底座），两者都已带登录链路（login、portal、servertime）与开发配置：casual 是首次发放、签到、任务、体力、商店、背包、邮件；turn-pvp 是档案、本服匹配（matchmaking → matchroom）、房间与回合，组队用 team。模块名单与验收见[配方](../../../../modules/README.md#从配方创建工程)。需求覆盖配方的全部模块时才从配方起步，再按第 1 步的结论往上加；模块不能卸载，配方多出来的模块装了就去不掉，这时改用 `-template game` 加 `module add`。
 
   `-template game` 带 Player 与 World 两个实体、九个托管框架服务。玩家模块挂在 `Player` 上，要求这个形状；room 自带 Room Entity、DAO 与 lifecycle；skillbook 是服务级只读目录；alliance 会新增一个独立的联盟服务与三个跨域 Saga。
 - **已有工程**：`cd` 进去，先读 `roost.yaml`：`modules` 段是已装的模块（每个模块拥有的文件、DAO 字段、号），`services`、`features`、`ids` 是装配现状。再 `"$ROOST" module list`，带 `*` 的是已装的。不要重装已装的模块；已装模块的文件是业务代码，可能已经被改过，以工程里的为准。
@@ -132,8 +132,8 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 | 邮件 | `mailbox` | wallet | 列表、领取附件、发件入口、全服邮件 |
 | 聊天 | `chat` | — | 世界频道、私聊、历史、系统公告 |
 | 公告、跑马灯 | `notice` | chat | 可信服务端入口与 GM 命令 |
-| 好友 | `friends` | — | 申请、同意、删除、黑名单（同服） |
-| 排行榜 | `leaderboard` | — | 前 N 名与自己的名次、提交入口 |
+| 好友 | `friends` | — | 申请、同意、删除、黑名单（同服）；申请、同意、删除、拉黑要求双方都在本进程在线 |
+| 排行榜 | `leaderboard` | — | 前 N 名与自己的名次、提交入口；分数只升不降，会下降的分数（余额、天梯分）不能用 |
 | 队伍 | `team` | — | 建队、邀请、入队、离队、队长交接 |
 | 匹配 | `matchmaking` | team、matchroom | 本服单人或整队匹配，成局移交房间 |
 | 匹配房间 | `matchroom` | room | MatchID 到房间的幂等移交、固定名单 |
@@ -187,7 +187,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 客户端的顺序：`POST /portal/login`（渠道、open_id、凭据 → 账号票据）→ `POST /portal/servers`（清单与推荐的服）→ `POST /portal/enter`（进服票据与地址）→ 用 `enter:<进服票据>` 握手 → 服务器推 `EnterStatus{need_create}` → 需要新建就发 `EnterCreate{name}` → `EnterGame`。推送只是告知，没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。
 
-- 开发时要在托管 account 的服务的开发配置里写 `login.dev_token`（必须以 `dev-` 开头，只写在开发配置里）与 `portal.servers`（服号 → 客户端连得到的地址）；`-recipe` 与 `-template game-demo` 的工程已经写好，`-template game` 加模块的要自己写（安装输出的 `todo:` 行逐条照做）。区服要登记：`make dev-run` 起完服务后自动登记本机的服，别的环境用模块带的 `cmd/accountctl upsert-server`。
+- 开发时要在托管 account 的服务的开发配置里写 `login.dev_token`（必须以 `dev-` 开头，只写在开发配置里）与 `portal.servers`（服号 → 客户端连得到的地址：有独立 Gate 填 Gate 的地址；没有时填 game 的 `player_access.tcp.addr`，把 `0.0.0.0` 换成客户端连得到的主机）；`-recipe` 与 `-template game-demo` 的工程已经写好，`-template game` 加模块的要自己写（安装输出的 `todo:` 行逐条照做）。区服要登记：`make dev-run` 起完服务后自动登记本机的服，别的环境用模块带的 `cmd/accountctl upsert-server`。
 - 新玩家的初始发放写在 enter 的首次初始化里（第 4B 步），与“建成了”的标记同一笔事务；不要写在登录入口或握手里。
 - 不经登录入口、由自己的入口调 account 的 `CreateRole` / `SelectRole` 拿 `session:<player_id>:<token>` 握手的老路仍然可用：这样的会话 `EnterGame` 是“加载或创建”，不要求先新建。
 - 上线前要做而模块不替你做的：渠道验签、入口前面的 TLS 与限流、生产配置里的地址。这些写进第 6 步报告的“没做的”。
@@ -367,7 +367,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 - `module verify` 全部 `ok`、退出码 0。它已经包含 `go build`、`go vet`、`roost id check`、`roost generate --check`。
 - 手写功能的场景数自己核对：`-run` 写错或用例被跳过时 `go test` 照样报 `ok`。
-- `project doctor` 在 `-template game` 的新工程上必然退出 1：account / chat / platform / session 四个托管服务的 collaborators 是拒绝桩，上线前由项目实现。除这四项外不应有 FAIL。
+- `project doctor` 在 `-template game` 的新工程上必然退出 1：托管服务的 collaborators 是拒绝桩，上线前由项目实现。没装 login 时是 account / chat / platform / session 四项；装了 login 后 account 由它接管，剩 chat / platform / session 三项。除这些外不应有 FAIL。
 - 这一档是离线验收：替身提交器，没有 Mongo / NATS / Redis，没有真实客户端。要真起进程见 [SKILL §4](../SKILL.md)。
 
 ## 6. 向用户报告

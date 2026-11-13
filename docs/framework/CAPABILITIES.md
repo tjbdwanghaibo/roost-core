@@ -347,7 +347,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 玩家背包 | 现成模块 bag（`roost module add bag`）：堆叠背包、道具表、丢弃协议、服务端发放 | 模块 bag；装备栏照 game-demo“装备栏”扩 |
 | 名字、等级、经验 | 现成模块 profile（`roost module add profile`）：改名、发经验、升级钩子 | 模块 profile；game-demo“背包、经验与升级” |
 | 幂等扣发（重试不重复扣费、不重复发奖） | 实体上的持久业务事实（序号账本、领奖事实）+ 回复错误判别 | 卡牌 RPG、SLG 夹具；三类离散玩法的命令序号 |
-| 抽卡保底 | 配置表（按值捕获）+ 幂等序号账本，同一事务里改保底计数与发卡；规则需手写业务 | 卡牌 RPG 夹具 |
+| 抽卡保底 | 现成模块 gacha（`roost module add gacha`，连同 wallet、bag）：权重、保底、单抽与十连、请求键防重；规则不同时按它的 README 改 | [抽卡模块](../../modules/gacha/README.md)；卡牌 RPG 夹具 |
 | 离线收益、建造 / 行军倒计时 | 实体持久定时器（离线只补一次）+ 按区间惰性结算 | 放置模拟夹具；SLG 夹具的建造、行军与离线收益 |
 | 每日签到 | 现成模块 checkin（`roost module add checkin`，连同 wallet） | 模块 checkin |
 | 任务、成就与前置链 | 现成模块 task：事件、配置表、每日/每周/永久与资产奖励 | [任务模块](../../modules/task/README.md) |
@@ -378,5 +378,5 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 可编辑地形、建造 | terrain 底座 + 多实体事务 + 按命名空间分开计的同步；模块生成工程启动、Scene 拒绝后继续请求与 Terrain 查询已做单机真实 TCP 验收，见 scene / terrain README | game-demo“可编辑地形与建筑” |
 | 合服、数据结构变更上线 | 合服（别名合服）；schema 版本 + 离线迁移 | [Player 迁移 §6](PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)；game-demo“schema 迁移与 sid 搬机” |
 | 压测 | Robot；`scripts/perf/` 的同机对照脚本 | game-demo“机器人压测”；[Robot](ROBOT.md) |
-| 好友、任务、成就、商城 | 需手写业务：用 Entity / DAO / Nest 事务与幂等账本，按需加 effect 或 mail | 无专门参考；SLG 手册列了商城等路线的源码入口 |
+| 好友、黑名单 | 现成模块 friends（`roost module add friends`）：同服申请、同意、删除、黑名单；双边动作要求双方在本进程在线，没有离线申请与跨服好友 | [好友模块](../../modules/friends/README.md) |
 | 无缝大世界、FPS、状态同步的 MOBA / RTS | 不支持：无缝大世界只有 cellworld 原型，FPS 不建议，状态同步的 MOBA / RTS 暂缓 | 见“明确没有 / 不适合的”及其出处 |
