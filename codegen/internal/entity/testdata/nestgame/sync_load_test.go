@@ -44,13 +44,16 @@ type syncLoadReport struct {
 	VisibleMin, VisibleMax                              int
 	ValuesVerified, LatencyPassed                       bool
 	PlannedToClient, ChangedToClient, CommittedToClient latencyResult
+	// SelfOnline / SelfStranded 是自身视图在负载结束时的在线连接数与滞留玩家数（selfsync.Online / Stranded；
+	// 场景 Sync 下为 0）。独立 Gate 下没有嵌入 TCP 的出站计数，滞留玩家数从这里看。
+	SelfOnline, SelfStranded int `json:",omitempty"`
 }
 
 // syncGameLoad 是 Sync 负载的两种形态，客户端解码、终值核对与延迟口径相同：
 //   - 场景（ROOST_NEST_GAME_SYNC=1）：全部 Unit 登记在一个 Manager，Interest/AOI 决定每个玩家订阅谁（最多 49 个加自己）。
 //     独立 Gate 下会话 ID 是 Game Ingress 的 receiver（gatewiring.Transport）；嵌入 TCP 下会话 ID 就是玩家 ID，
 //     传输是 selfsync.PushPlayerFrame（与 game-demo 场景 sceneLane 同一条，见 embedded_load_test.go）。
-//   - 自身视图（ROOST_NEST_GAME_SELF_SYNC=1，只在嵌入 TCP 下）：玩家 Unit 由 wiring/selfsync 的 SelfView 登记，
+//   - 自身视图（ROOST_NEST_GAME_SELF_SYNC=1，嵌入 TCP 或独立 Gate）：玩家 Unit 由 wiring/selfsync 的 SelfView 登记，
 //     每个玩家只订阅自己；没有 Interest，NPC Unit 不启用 Sync。
 type syncGameLoad struct {
 	units    []*Unit
@@ -127,6 +130,13 @@ func newSelfSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, access *enti
 	load.selfSync, err = selfsync.New(selfsync.Config{Entities: access, Kind: kindUnit, MessageID: 502})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.Frontend == "gate" {
+		// 独立 Gate：与生成的 IngressMod.WithSelfSync 相同，一帧的上限取 Game Ingress 的 MaxPayloadBytes，
+		// 在 Manager 创建之前交给 selfsync（gateFrontend 用的就是 gateway.DefaultConfig()）。
+		if err := load.selfSync.LimitFrameBytes(gateway.DefaultConfig().MaxPayloadBytes); err != nil {
+			t.Fatal(err)
+		}
 	}
 	setup := load.selfSync.EntitySyncSetup()
 	config := setup.Config
@@ -372,6 +382,9 @@ func (load *syncGameLoad) finish(t *testing.T, network loadFrontend) *syncLoadRe
 		mode = "self:" + mode
 	}
 	report := &syncLoadReport{Mode: mode, Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: math.MaxInt}
+	if load.self {
+		report.SelfOnline, report.SelfStranded = load.selfSync.Online(), load.selfSync.Stranded()
+	}
 	for index := range load.clients {
 		client := &load.clients[index]
 		client.mu.Lock()

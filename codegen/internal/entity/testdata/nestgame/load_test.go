@@ -24,7 +24,8 @@ type gameConfig struct {
 	Entities, Players, MessageTargets, MessagesPerPlayer, HeartbeatHz, DirtyPercent, Workers, IOWorkers, Queue int
 	Duration                                                                                                   time.Duration
 	// Frontend 是普通业务的入口：direct（ticker 直接投递 Nest）、gate（ROOST_NEST_GAME_GATE=1）、
-	// embedded（ROOST_NEST_GAME_EMBEDDED=1）。SceneSync / SelfSync 对应 ROOST_NEST_GAME_SYNC / _SELF_SYNC。
+	// embedded（ROOST_NEST_GAME_EMBEDDED=1）。SceneSync / SelfSync 对应 ROOST_NEST_GAME_SYNC / _SELF_SYNC
+	// （两者都可以叠在 gate 或 embedded 上，互斥）。
 	Frontend            string
 	SceneSync, SelfSync bool
 	// HeartbeatDriver 是心跳的驱动（ROOST_NEST_GAME_HEARTBEAT_DRIVER，见 heartbeat_driver_test.go）：ticker（缺省，
@@ -323,8 +324,8 @@ func TestNestGameLoad(t *testing.T) {
 	switch {
 	case c.SceneSync && c.Frontend == "direct":
 		t.Fatal("Sync mixed load requires real Gate or embedded TCP")
-	case c.SelfSync && c.Frontend != "embedded":
-		t.Fatal("self_sync load runs over embedded TCP only (ROOST_NEST_GAME_EMBEDDED=1)")
+	case c.SelfSync && c.Frontend == "direct":
+		t.Fatal("self_sync load needs a player connection: embedded TCP (ROOST_NEST_GAME_EMBEDDED=1) or the independent Gate (ROOST_NEST_GAME_GATE=1)")
 	case c.SelfSync && c.SceneSync:
 		// 一个 SubjectSyncState 只能登记在一个 Manager（entitysync.ErrSubjectRegisteredElsewhere）；生产同样不支持
 		// 场景与自身视图同时覆盖玩家实体（PLAYER-ACCESS §7）。
