@@ -110,6 +110,14 @@ Robot 联合复跑（修复后代码，私有环境，1000 人，20s 测量）�
 ROOST_CELLWORLD_PERF=1 ROOST_CELLWORLD_PERF_COUNT=1000 ROOST_CELLWORLD_PERF_NPCS=2250 \
   ROOST_CELLWORLD_PERF_ACTIVE=5 ROOST_CELLWORLD_PERF_SECONDS=60 \
   GOWORK=off go test ./gameplay/cellworld -run '^TestCellWorldMeasure$' -count=1 -timeout 5m -v
+# 游戏尺度分区视野（T09）的成本对照：同机交替跑 demo 尺度（缺省）与游戏尺度（12800 的格、view_radius 6800、
+# ghost_band 7000、hysteresis 200、主视野 128），比较 witness 可见数、每格 Real / Ghost 与 CPU；地形副本订阅的块数
+# 看无缝演练（ROOST_SEAMLESS_TERRAIN=1）里 gm.scene.partition 的 terrain 栏
+for scale in demo game demo game; do
+  ROOST_CELLWORLD_PERF=1 ROOST_CELLWORLD_PERF_SCALE=$scale ROOST_CELLWORLD_PERF_COUNT=1000 ROOST_CELLWORLD_PERF_NPCS=2250 \
+    ROOST_CELLWORLD_PERF_ACTIVE=5 ROOST_CELLWORLD_PERF_SECONDS=60 \
+    GOWORK=off go test ./gameplay/cellworld -run '^TestCellWorldMeasure$' -count=1 -timeout 5m -v
+done
 # 真实生成工程：先导出脚本要求的私有 Mongo / Redis / NATS 地址
 ROOST_SEAMLESS_OUT=/absolute/evidence ROOST_SEAMLESS_ROBOTS=20 \
   ROOST_SEAMLESS_ROBOT_SECONDS=10 bash scripts/test-seamless-demo.sh
