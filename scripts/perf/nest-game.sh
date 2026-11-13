@@ -10,6 +10,10 @@
 # 每个 Unit 一个登记，周期 1s / ROOST_NEST_GAME_HZ，必须是心跳档位：1、2、5、10、20Hz）。
 # heartbeat 驱动的投递方式：ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch（Nest 批量作业）| dispatch（每拍单目标 Dispatch），
 # 空跟驱动缺省（batch）；ticker 驱动下给值直接报错。生效方式进结果的 Beats.Delivery。
+# Block AOI（只对 ROOST_NEST_GAME_SYNC=1）：ROOST_NEST_GAME_LAYOUT=spread（缺省，网格间距 30）| concentrated（全部挤进约
+# 一个 AOI 块，观察者集中）；ROOST_NEST_GAME_OBSERVED_BLOCKS=N（0..64，缺省 0）玩家 Unit 每次改值经 QueueSpatial 额外覆盖右侧
+# N 个块，压块覆盖的额外扇出。首错定位：结果的 Messages/Heartbeats.FirstErrorAt 与 ClientFirstFailure.At 按墙钟比先后，
+# 值不收敛时日志列出缺少 / 多出的对象及其在 Manager 里是否已订阅。
 set -euo pipefail
 # 复用同一正式生成流程，仅验证手写空间组件，不启动负载或外部服务。
 test_pattern='^TestNestGameLoad$'

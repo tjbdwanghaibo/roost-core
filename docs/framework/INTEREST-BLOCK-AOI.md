@@ -134,4 +134,6 @@ ROOST_NEST_GAME_RACE=1 bash scripts/perf/nest-game.sh --check-spatial
 
 2026-10-09已按1000玩家、10000实体、每玩家10消息/s跑两档各15分钟。1Hz/1%通过，业务/HB完成P99=17.50/12.18ms、Sync提交到客户端P99=20.06ms，零拒绝；10Hz/5%在802.919秒先Gate准入耗尽、805.465秒Nest队列满，最终EOF/值不一致，失败。详情及原始证据见[验收记录](../performance/GATE-AOI.md)。本轮客户端仍与Game同进程，负载使用QueueMove，未压额外observedBlocks扇出；手写SpatialComponent另有正式Nest功能回归。后续定位首错，隔离客户端，并补边界密集移动、观察者集中/分散和覆盖扇出，不能宣称重档瓶颈已关闭。
 
+2026-11-14：`scripts/perf/nest-game.sh` 补了三项开关（只对 `ROOST_NEST_GAME_SYNC=1`）：`ROOST_NEST_GAME_LAYOUT=concentrated`（观察者集中在约一个块内）、`ROOST_NEST_GAME_OBSERVED_BLOCKS=N`（玩家 Unit 每次改值经 `QueueSpatial` 额外覆盖 N 个块，压覆盖扇出；核对改用 `Interest.Seen` 的全部来源）与首错定位（各层第一个错误带墙钟时刻；值不收敛时列出缺少 / 多出的对象及其是否已在 Manager 订阅）。短测（嵌入 TCP，400 实体 / 100 玩家 / 3s / 改值 50%）：`spread`、`concentrated` 通过；`OBSERVED_BLOCKS=4` 三次都在同一处不收敛——客户端 93 缺对象 102152，而 Manager 里它已订阅给该会话（根因尚未确认，见 KNOWN-LIMITS 对应条目）。独立客户端进程未做；重档复验等机器空闲。
+
 比较相同队列容量、输入与布局。保留历史4096失败数据，新默认65536单独标注。记录事实排队时间、块锁等待、observer计算、Nest最老等待、handler/HB及Sync到客户端P99、拒绝/内存和NATS出站。仍按P99≤50ms验收，保留最大值及>50ms数量；65536只是突发缓冲，不能将扩大队列当作吞吐提高。
