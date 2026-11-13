@@ -26,6 +26,8 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
+// v1.45.0：业务模块与登录链路——生成物用 wiring/modulehost（模块托管在 account 等框架服务上）、gateway 的
+// GameDependencies.OnActivated 与新签名的 SessionActive(registry, principal)，以及 account 的进服票据与区服清单；旧 core 缺这些 API。
 // v1.44.0：saga 路由步骤（Step.Routed、StartRequest.Route、saga.SidRoute、kitsaga.WithSidRoute），生成的 EmitStart / Start
 // 多 route 参数；saga WireVersion 4，旧 core 缺这些 API、线格式不兼容。
 // v1.43.0：实体同步帧协议 2 / subject 信封 v3（增量不带身份、有状态 Decoder）与 DAO 增量不带 entity_id，
@@ -50,7 +52,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.44.0",
+	Core: "v1.45.0",
 }
 
 type Manifest struct {

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.45.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.45.0 的生成物用 `wiring/modulehost`、gateway 的 `GameDependencies.OnActivated` 与新签名的 `SessionActive(registry, principal)`、account 的进服票据与区服清单；按惯例在 tag 推上去之后单独一笔。
+
 ## [v1.45.0] - 2026-11-13
 
 - **组合 skill**（2026-11-13，维护者要求）：拆需求之前先判断是否真的需要这套专用服务器框架（compose §0C：需要 / 不需要 / 只有一部分需要，结论告诉用户、由用户决定）；只在 Steam 上发行、人数少的联机房间建议 Steam Lobby + Netcode for GameObjects + Steam 传输层，通用方案见 `references/steam-lobby-ngo.md`（优先用原生 Steamworks SDK：Steamworks.NET 一对一绑定、`ISteamMatchmaking`、`ISteamNetworkingSockets`）。
