@@ -11,7 +11,9 @@ mkdir -p .claude/skills/roost-genre
 curl -fsSL https://raw.githubusercontent.com/tjbdwanghaibo/roost-core/main/claude-skill/roost-genre/SKILL.md -o .claude/skills/roost-genre/SKILL.md
 ```
 
-想对所有项目生效，就放到 `~/.claude/skills/roost-genre/SKILL.md`。入口文件本身与版本无关：用哪个 roost-core 版本由它在运行时决定（已有工程跟工程的 `go.mod`，新工程用最新发布版，用户可以指定）。
+想对所有项目生效，就放到 `~/.claude/skills/roost-genre/SKILL.md`。
+
+**更新**：入口文件每次使用时会先检查两样——自己有没有新版（与 GitHub 上 main 的这份比较）、roost-core 有没有新的发布版——有新版就告诉你并给出更新办法，不会自己改文件，也不会未经同意升级你的服务端工程。手动更新入口文件就是重新执行上面的下载命令。入口文件本身与版本无关：用哪个 roost-core 版本由它在运行时决定（已有工程跟工程的 `go.mod`，新工程用最新发布版，用户可以指定）。
 
 前置：Go 1.27 及以上，能访问 GitHub 与 Go 模块代理。
 

@@ -9,6 +9,28 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 
 前置：Go 1.27 及以上，能访问 GitHub 与 Go 模块代理。全程 `GOWORK=off`。命令用 bash 执行。
 
+入口版本：2026-11-13.2
+
+## 0. 每次使用先检查更新
+
+每次开始用这个 skill（一次对话只查一次），在做任何别的事之前查两样，结果用一两句话告诉用户。查不了（没有网络、GitHub 不通）就说一句“未能检查更新”，用现有版本继续，不要因此停下。
+
+**① 入口文件有没有新版**：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tjbdwanghaibo/roost-core/main/claude-skill/roost-genre/SKILL.md -o "${TMPDIR:-/tmp}/roost-genre-entry.md"
+```
+
+把它与本文件比较（忽略行尾差异）。不同时告诉用户：入口文件有新版、本文件与新版的“入口版本”各是多少、主要改了什么（只读新版，概括差异）。**不要自己改本文件**：给出更新办法，请用户决定——项目文档（`AGENTS.md`、`CLAUDE.md` 或技能维护说明）写了更新命令的，照它给；没写的，更新办法是用上面下载的新版整份覆盖本文件。用户明确同意后可以执行那条更新命令，但不手改内容。用户没表态之前，按本文件现有的步骤继续。
+
+**② roost-core 有没有新的发布版**：用第 1 步的命令取最新版 `latest`。
+
+- 新工程：直接用最新版，不用问。
+- 已有服务端工程，且它 `go.mod` 里的版本比最新版旧：告诉用户新版本号，并读新版的发布说明（`go mod download` 取到新版后看 `docs/release/<新版本>-NOTES.md`，没有这份文件就看 `CHANGELOG.md` 里对应的一节），用两三句话说明与本工程有关的变化，问用户要不要升级。**用户同意之前不升级**，继续用工程现在的版本。
+- 用户同意升级：先 `roost project upgrade --root . --dry-run -core <新版本>` 看会改哪些文件并告诉用户，再执行不带 `--dry-run` 的那条；CLI 也换成新版本（第 3 步）。已装的业务模块不会随升级自动更新，发布说明里提到的模块改动要按模块的 README 手工对照。升级后重跑全部验收（正文 compose §5 与以前每轮的场景），把“从哪个版本升到哪个版本、改了什么、验收结果”记进 `docs/DEMO-HISTORY.zh-CN.md`。
+
+两项的检查结果（有没有新版、用户怎么选的）写进这一轮的 `docs/DEMO-HISTORY.zh-CN.md`。
+
 ## 1. 定版本
 
 - 当前目录已经是 roost 工程（有 `roost.yaml`）：用它 `go.mod` 里 `github.com/tjbdwanghaibo/roost-core` 的版本，不要擅自升级。
@@ -59,4 +81,4 @@ ROOST="$WORK/bin/roost"
 
 - **skill 只读**：不修改本文件，不修改 `$CORE` 下的任何文件（模块缓存本身也是只读的，不要改权限去写）。发现正文写错、写漏或照做走不通，告诉用户：哪份文档哪一节、原文、实际情况、你怎么绕过的，建议用户到 roost-core 仓库提 issue；绕过的办法只记进工程的 `docs/DEMO-HISTORY.zh-CN.md`。
 - **记忆在工程里**：`docs/DEMO.zh-CN.md`（当前状态）与 `docs/DEMO-HISTORY.zh-CN.md`（逐次变更）。后续增改需求先读它们（正文 compose §2A）。
-- **版本一致**：同一个工程的 CLI、正文与依赖必须是同一个 `$V`。要升级 roost-core 时先问用户，升级后重跑全部验收并记进历史。
+- **版本一致**：同一个工程的 CLI、正文与依赖必须是同一个 `$V`。要升级 roost-core 时按第 0 步先问用户，升级后重跑全部验收并记进历史。

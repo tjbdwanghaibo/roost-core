@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **组合 skill 入口**（claude-skill/，2026-11-13，维护者要求）：每次使用先检查更新——入口文件与 GitHub main 上的比较，有新版就告诉用户并给更新办法（不自己改文件，用户同意后才执行项目写明的更新命令）；roost-core 有新发布版时，新工程直接用、已有工程读发布说明后问用户，同意后按 `roost project upgrade --dry-run` → 升级 → 重跑全部验收 → 记进 DEMO-HISTORY。入口文件加“入口版本”行。
+
 - **新增**（claude-skill/）：在自己的项目里使用组合 skill 的入口。`claude-skill/roost-genre/SKILL.md` 放进项目的 `.claude/skills/`，运行时从 GitHub 取 roost-core 的指定发布版（已有工程跟 `go.mod`，新工程用最新版）：`go mod download` 得到只读的正文与模块说明，`go install …/codegen/cmd/roost@版本` 得到 CLI，工程直接依赖发布版、不用 replace。2026-11-13 在 v1.45.0 实测：取版本、取正文、装 CLI、`-template game` 新工程装 wallet / checkin、`module verify` 全部通过。SKILL.md §3.1 里“私有模块、未实测”的过期说法一并更正。
 
 - **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.45.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.45.0 的生成物用 `wiring/modulehost`、gateway 的 `GameDependencies.OnActivated` 与新签名的 `SessionActive(registry, principal)`、account 的进服票据与区服清单；按惯例在 tag 推上去之后单独一笔。
