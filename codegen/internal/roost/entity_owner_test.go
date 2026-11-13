@@ -241,3 +241,89 @@ func regexpLocalKindInRemoteOwners(source string) bool {
 	table, _, _ = strings.Cut(table, "}")
 	return strings.Contains(table, "EntityKindShard")
 }
+
+// 本地实体的 preload=startup（维护者 2026-11-13）：工程里唯一带 nest 与 dataengine 的业务服务装本地预加载 Mod，
+// bootstrap 与实体标记不一致时 generate 要求 project sync；有两个候选服务而实体没写 service= 时生成前拒绝
+// （不同服务类型的进程可以共用一个 sid、读同一个 <库>_<sid>）。add dao --entity 的骨架是 dbscope=sid。
+func TestLocalPreloadAssemblesThePreloadModInTheHostingService(t *testing.T) {
+	t.Parallel()
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
+		Services: []string{"game", "alliance"}, Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Features: []string{"entity", "dao", "nest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, options := range []AddOptions{
+		{Kind: "entity", Name: "Hero"},
+		{Kind: "dao", Name: "Hero", Entity: "Hero"},
+	} {
+		if _, err := Add(root, options); err != nil {
+			t.Fatalf("add %s: %v", options.Kind, err)
+		}
+	}
+	if dao := readProjectFile(t, root, "db/def/hero.go"); !strings.Contains(dao, "//roost:dao coll=hero db=main dbscope=sid\n") {
+		t.Fatalf("an entity's DAO skeleton must be dbscope=sid:\n%s", dao)
+	}
+	path := filepath.Join(root, "game", "entities", "hero", "entity.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := func(marker string) {
+		t.Helper()
+		marked := strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryOther"+marker, 1)
+		if err := os.WriteFile(path, []byte(marked), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mark(" preload=startup preload_order=2")
+	err = Generate(root, GenerateOptions{Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "several services could load it (alliance, game)") {
+		t.Fatalf("a local preload with two candidate services and no service= = %v; want it refused naming both", err)
+	}
+
+	mark(" preload=startup preload_order=2 service=game")
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), "roost project sync") {
+		t.Fatalf("generate with a stale bootstrap must ask for project sync, got %v", err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("project sync: %v\n%s", err, out.String())
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("generate after sync: %v", err)
+	}
+	bootstrap := readProjectFile(t, root, "internal/bootstrap/generated.go")
+	alliance, game, found := strings.Cut(bootstrap, `app.ServiceName("game")`)
+	if !found || !strings.Contains(game, `kitdataengine.NewLocalPreloadMod(registry.LocalPreloadKinds("game")...)`) || strings.Contains(alliance, "NewLocalPreloadMod") {
+		t.Fatalf("only game may assemble the local preload Mod:\n%s", bootstrap)
+	}
+	if wire := readProjectFile(t, root, "game/entities/hero/hero_gen_wire.go"); !strings.Contains(wire, "LoadPriority: 2,") {
+		t.Fatalf("preload_order must become LoadPriority:\n%s", wire)
+	}
+	if preload := readProjectFile(t, root, "internal/registry/preload_gen.go"); !strings.Contains(preload, `hero.EntityKindHero: "game",`) {
+		t.Fatalf("preload_gen.go must list Hero owned by game:\n%s", preload)
+	}
+
+	mark(" service=game")
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), "local preload entities") {
+		t.Fatalf("dropping preload=startup without a sync must ask for project sync, got %v", err)
+	}
+	if testing.Short() {
+		return
+	}
+	mark(" preload=startup preload_order=2 service=game")
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	useLocalRoostCore(t, root)
+	for _, action := range []string{"build", "vet"} {
+		check := exec.Command("go", action, "./...")
+		check.Dir = root
+		check.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("go %s with a local preload: %v\n%s", action, err, output)
+		}
+	}
+}

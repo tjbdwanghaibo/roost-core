@@ -42,6 +42,8 @@ type DriverConfig struct {
 	Profile   Profile
 	// EntityID 把玩家号换成他的 Player 的完整 Entity ID。
 	EntityID func(playerID int64) (int64, error)
+	// Documents 搬他的文档（本服库 → 目标服库）；nil 时经 Registry 里的 DataEngine Mod（RegistryDocuments）。
+	Documents Documents
 }
 
 // 一步的时间预算。受理之后的步骤在后台执行，用的是自己的预算，不是申请那条请求的。
@@ -76,12 +78,14 @@ const (
 //	  复核        Profile.Recheck：事务内的换服前检查再跑一遍
 //	  离开钩子    登记的 OnLeaving：这时读到的事实不会再被他自己的请求改掉
 //	  交出        Residency.Depart：交出实体，屏障保持
+//	  搬档        Documents.Copy(overwrite)：他的 dbscope=sid 文档从本服库复制到目标服库
 //	  提交        Directory.Commit：account 改绑到目标服
-//	  落定        Residency.Settle(Committed)：迁出表记“已迁走”
+//	  落定        Residency.Settle(Committed)：迁出表记“已迁走”；Documents.Drop 删掉本服库里的那几份
 //
 // 受理之后每一步失败的去向：
 //
-//   - 安静不下来（在途的请求在预算内没有执行完）、复核不过、离开钩子失败、交出失败（实体被占用、超时）：
+//   - 安静不下来（在途的请求在预算内没有执行完）、复核不过、离开钩子失败、交出失败（实体被占用、超时）、
+//     搬档失败（写目标库失败；复制在一个 Mongo 事务里，失败时目标库没有半份）：
 //     Directory.Abort，然后 Settle(Aborted)（撤屏障与标记、
 //     断开仍连着的会话）、清意图。玩家留在本服，可以再申请。
 //   - Commit 明确说没有改绑（这个 ID 已被运维中止）：同上。
@@ -92,13 +96,15 @@ const (
 //   - 进程在受理之后崩溃：迁出表没了，account 上换服仍在途。重启后这名玩家再来进入本服时，
 //     Admit 发现“在途、源服是本服、表里没有”，从离开钩子起把后台部分重做一遍（Resume）。
 //
-// 提交之前实体已经交出：从交出成立到提交之间没有任何进程能写这名玩家；提交之后只有目标服能写。
+// 提交之前实体已经交出、文档已经搬到目标库：从交出成立到提交之间没有任何进程能写这名玩家；提交之后只有目标服能写。
+// 中止时（撤屏障之前）删掉这次写到目标库的副本。
 type Driver struct {
 	registry  *app.Registry
 	self      int32
 	directory Directory
 	residency Residency
 	profile   Profile
+	documents Documents
 	entityID  func(playerID int64) (int64, error)
 
 	// 下面几项给测试替换：换服 ID 的来源、后台部分怎么起、结果未知时两次重发之间怎么等、应答的宽限。
@@ -116,9 +122,13 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	case config.Directory == nil || config.Residency == nil || config.Profile == nil || config.EntityID == nil:
 		return nil, errors.New("rehome driver: directory, residency, profile and entity id are required")
 	}
+	documents := config.Documents
+	if documents == nil {
+		documents = RegistryDocuments(config.Registry)
+	}
 	driver := &Driver{
 		registry: config.Registry, self: config.Self, directory: config.Directory,
-		residency: config.Residency, profile: config.Profile, entityID: config.EntityID,
+		residency: config.Residency, profile: config.Profile, documents: documents, entityID: config.EntityID,
 		spawn: func(run func()) { go run() },
 		wait: func(attempt int) {
 			pause := time.Second << min(attempt, 5)
@@ -212,7 +222,7 @@ func (d *Driver) Apply(ctx context.Context, request Request) (Ticket, error) {
 		// 这时不能只撤标记了事——本服不该再为他服务，按“已迁走”落定。
 		if bound(begun) && judge(move, d.self, begun) == standingGone {
 			move.To = begun.ServingServerID
-			d.spawn(func() { d.settle(move, Committed) })
+			d.spawn(func() { d.settleGone(move, nil) })
 			return Ticket{}, Elsewhere(playerID, move.To)
 		}
 	}
@@ -271,7 +281,7 @@ func (d *Driver) beginUnknown(ctx context.Context, move Move, beginErr error) er
 		return errcode.Wrap(errcode.ErrRetryable, beginErr, "player_id", move.PlayerID)
 	case standingGone:
 		move.To = binding.ServingServerID
-		d.spawn(func() { d.settle(move, Committed) })
+		d.spawn(func() { d.settleGone(move, nil) })
 		return Elsewhere(move.PlayerID, move.To)
 	}
 	slog.Error("rehome: the outcome of begin is unknown and so is the abort; asking until the account service answers",
@@ -328,8 +338,18 @@ func (d *Driver) carry(move Move) {
 		d.abandon(move, Aborted, "the source server could not hand the player off")
 		return
 	}
+	// 搬档：account 仍把他绑在本服（换服在途），只有本服写过他——目标库里别的版本是旧副本，覆盖。复制在一个 Mongo
+	// 事务里，失败时目标库没有这次的半份，中止即可。
+	copying, cancel := context.WithTimeout(context.Background(), departBudget)
+	copied, err := d.documents.Copy(copying, move.EntityID, move.To, true)
+	cancel()
+	if err != nil {
+		slog.Warn("rehome: the player's documents were not copied to the target server; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "to", move.To, "err", err)
+		d.abandon(move, Aborted, "the player's documents could not be copied to the target server")
+		return
+	}
 	verdict, binding := d.conclude(move, true, "")
-	d.finish(move, verdict, binding, Aborted)
+	d.finishCopied(move, verdict, binding, Aborted, &copied)
 }
 
 // abandon 把一次换服中止到底：向 account 要到结论为止，再按结论落定。stays 是玩家留在本服时用哪种结论
@@ -339,17 +359,25 @@ func (d *Driver) abandon(move Move, stays Outcome, reason string) {
 	d.finish(move, verdict, binding, stays)
 }
 
+// finish 是没有搬过档的 finishCopied。
+func (d *Driver) finish(move Move, verdict standing, binding svcaccount.RoleBinding, stays Outcome) {
+	d.finishCopied(move, verdict, binding, stays, nil)
+}
+
 // finish 按 conclude 的结论落定：
 //
 //   - 他归别的服：按已提交落定——屏障保持（没交出过的补交），迁出表记下他现在的服，意图不动
 //     （它跟着档走，由目标服到达时清）。不论这一次是提交成的，还是之后又换去了第三个服。
 //   - 这一次没有成、他仍在本服：按 stays 落定（撤屏障与标记），清意图。
 //   - 他换走之后又换回了本服：撤掉旧屏障与记录（Kept：不动他的连接），清掉这一次留下的意图。
-func (d *Driver) finish(move Move, verdict standing, binding svcaccount.RoleBinding, stays Outcome) {
+//
+// 搬档（copied 非 nil 表示这一次已经把文档复制到了 copied.To）：归别的服时删掉本服库里的那几份（settleGone）；
+// 没有成、他仍在本服时，撤屏障之前删掉写到目标库的副本；换走又换回时本服库里已经是目标服搬回来的新版本，不动。
+func (d *Driver) finishCopied(move Move, verdict standing, binding svcaccount.RoleBinding, stays Outcome, copied *Copied) {
 	switch verdict {
 	case standingGone:
 		move.To = binding.ServingServerID
-		d.settle(move, Committed)
+		d.settleGone(move, copied)
 		slog.Info("rehome: the player is bound to another server; this process keeps its fence", "player_id", move.PlayerID,
 			"transfer_id", move.ID, "from", move.From, "to", move.To, "bind_epoch", binding.BindEpoch)
 	case standingReturned:
@@ -358,9 +386,58 @@ func (d *Driver) finish(move Move, verdict standing, binding svcaccount.RoleBind
 		slog.Info("rehome: the player moved away and back before this transfer was settled here; this process serves him again",
 			"player_id", move.PlayerID, "transfer_id", move.ID, "bind_epoch", binding.BindEpoch)
 	default:
+		if copied != nil {
+			d.dropDocuments(move, *copied, copied.To, "the copy on the target server of a transfer that did not happen")
+		}
 		d.settle(move, stays)
 		d.cancelIntent(move)
 		slog.Warn("rehome: the transfer did not rebind the player; he stays on this server", "player_id", move.PlayerID, "transfer_id", move.ID)
+	}
+}
+
+// settleGone 把“他归别的服（move.To）”落定：迁出表记已迁走、屏障保持（没交出过的补交），然后处理本服库里他的文档。
+// copied 是这一次搬过的档：删掉本服库里的那几份。没搬过（运维在别处提交、本进程没走到搬档）时先把本服的文档复制到
+// 他现在的服——那里没有才写；已有别的版本说明那边已经有他的数据（或新建了他），不覆盖、也不删本服的，记错误留给运维。
+// 只在后台调用。
+func (d *Driver) settleGone(move Move, copied *Copied) {
+	d.settle(move, Committed)
+	if copied == nil {
+		for attempt := 0; ; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), departBudget)
+			late, err := d.documents.Copy(ctx, move.EntityID, move.To, false)
+			cancel()
+			if err == nil {
+				copied = &late
+				break
+			}
+			if errors.Is(err, ErrCopyConflict) {
+				slog.Error("rehome: the player is bound to another server that already holds a different version of his documents; "+
+					"this server's copy is kept for an operator to reconcile", "player_id", move.PlayerID, "transfer_id", move.ID, "to", move.To, "err", err)
+				return
+			}
+			slog.Warn("rehome: copying the documents of a player bound elsewhere failed; retrying", "player_id", move.PlayerID, "transfer_id", move.ID,
+				"to", move.To, "attempt", attempt+1, "err", err)
+			d.wait(attempt)
+		}
+	}
+	d.dropDocuments(move, *copied, d.self, "this server's documents of a player bound elsewhere")
+}
+
+// dropDocuments 删掉 sid 库里 copied 记下的文档，直到成功（版本条件下删不到不算失败）。只在后台、屏障保持时调用。
+func (d *Driver) dropDocuments(move Move, copied Copied, sid int32, what string) {
+	if len(copied.Documents) == 0 {
+		return
+	}
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), callBudget)
+		err := d.documents.Drop(ctx, copied, sid)
+		cancel()
+		if err == nil {
+			return
+		}
+		slog.Warn("rehome: dropping documents failed; retrying", "what", what, "player_id", move.PlayerID, "transfer_id", move.ID,
+			"sid", sid, "attempt", attempt+1, "err", err)
+		d.wait(attempt)
 	}
 }
 

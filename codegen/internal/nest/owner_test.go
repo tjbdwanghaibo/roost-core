@@ -173,27 +173,47 @@ func TestRouteAndPreloadKindsComeFromTheOwnershipScan(t *testing.T) {
 	}
 }
 
-// preload=startup 只能写在 remote=managed 且声明了 service= 的实体上：预加载的范围是“持久所有权记录的 owner 是本 sid
-// 的实体”，只有归属某个服务的 Remote 托管 kind 有。取值只有 startup。
-func TestPreloadIsRefusedOutsideAnOwnedRemoteEntity(t *testing.T) {
+// preload= / preload_order= 的写法（维护者 2026-11-13 放开到本地实体）：Remote 托管实体的预加载要有 service=（范围是
+// “持久所有权记录的 owner 是本 sid 的实体”）、不分批；本地实体可以写，preload_order= 只跟 preload=startup 一起、
+// 取 0～1000 的整数；不落库的实体没有可预加载的东西。取值只有 startup。
+func TestPreloadMarkerRules(t *testing.T) {
+	const owned = "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance"
 	for name, tc := range map[string]struct{ guild, player, want string }{
-		"local entity without service": {
-			guild:  "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance",
-			player: "category=entity.EntityCategoryPlayer preload=startup",
-			want:   "preload=startup needs remote=managed and service=",
-		},
-		"local entity with service": {
-			guild:  "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance",
-			player: "category=entity.EntityCategoryPlayer service=game preload=startup",
-			want:   "preload=startup needs remote=managed and service=",
-		},
 		"remote entity without service": {
 			guild: "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed preload=startup",
-			want:  "preload=startup needs remote=managed and service=",
+			want:  "preload=startup on a remote=managed entity needs service=<name>",
 		},
 		"unknown policy": {
-			guild: "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance preload=lazy",
+			guild: owned + " preload=lazy",
 			want:  `preload="lazy" is not a preload policy`,
+		},
+		"order on a remote entity": {
+			guild: owned + " preload=startup preload_order=1",
+			want:  "preload_order= applies to local entities",
+		},
+		"order without preload": {
+			guild: owned, player: "category=entity.EntityCategoryPlayer preload_order=1",
+			want: "preload_order= needs preload=startup",
+		},
+		"order not a number": {
+			guild: owned, player: "category=entity.EntityCategoryPlayer preload=startup preload_order=first",
+			want: `preload_order="first" is not an integer from 0 to 1000`,
+		},
+		"negative order": {
+			guild: owned, player: "category=entity.EntityCategoryPlayer preload=startup preload_order=-1",
+			want: `preload_order="-1" is not an integer from 0 to 1000`,
+		},
+		"order too large": {
+			guild: owned, player: "category=entity.EntityCategoryPlayer preload=startup preload_order=1001",
+			want: `preload_order="1001" is not an integer from 0 to 1000`,
+		},
+		"local entity that is not stored": {
+			guild: owned, player: "category=entity.EntityCategoryPlayer noPersist=true preload=startup",
+			want: "on an entity that is not stored",
+		},
+		"local ephemeral lifetime": {
+			guild: owned, player: "category=entity.EntityCategoryPlayer lifetime=ephemeral preload=startup",
+			want: "on an entity that is not stored",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -210,5 +230,35 @@ func TestPreloadIsRefusedOutsideAnOwnedRemoteEntity(t *testing.T) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// 本地实体的 preload=startup（维护者 2026-11-13）：internal/registry/preload_gen.go 列出 kind 与归属服务（没写 service=
+// 为 ""），LocalPreloadKinds(service) 给归属 service 的加上没有归属的；去掉标记后文件删除。preload_order 不在这里
+// （实体生成器写进 LoadPriority）。
+func TestLocalPreloadKindsAreGenerated(t *testing.T) {
+	root := ownedProject(t, "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance")
+	playerFile := filepath.Join(root, "game", "entities", "player", "entity.go")
+	original := readOwned(t, root, "game/entities/player/entity.go")
+	raw := strings.Replace(original, "category=entity.EntityCategoryPlayer", "category=entity.EntityCategoryPlayer preload=startup preload_order=2", 1)
+	if err := os.WriteFile(playerFile, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", filepath.Join(root, "game")}, io.Discard); err != nil {
+		t.Fatalf("nest with a local preload: %v", err)
+	}
+	preload := readOwned(t, root, "internal/registry/preload_gen.go")
+	if !strings.Contains(preload, `player.EntityKindPlayer: "",`) || !strings.Contains(preload, "func LocalPreloadKinds(service string) []entity.EntityKind") ||
+		strings.Contains(preload, "EntityKindGuild") {
+		t.Fatalf("preload_gen.go must list Player (no owner) and only Player:\n%s", preload)
+	}
+	if err := os.WriteFile(playerFile, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", filepath.Join(root, "game")}, io.Discard); err != nil {
+		t.Fatalf("nest without the local preload: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "internal", "registry", "preload_gen.go")); !os.IsNotExist(err) {
+		t.Fatalf("preload_gen.go must be removed when no local entity preloads: %v", err)
 	}
 }

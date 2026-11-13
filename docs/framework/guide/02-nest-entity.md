@@ -30,6 +30,23 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 
 新建的持久实体本身就落库（维护者 2026-10-30）：创建它的持久事务提交时框架为它的每个持久 DAO 写整文档（本事务没改的 DAO 写零值 / 初值），新建后一个字段都不改也一样。handler 内 `Create` / `GetOrCreate` 由 handler 的事务捕获，回滚则不落库、撤销发布；Nest 之外的 `Create` / `GetOrCreate` 由 DataEngine 补一笔 strict 事务、提交后才返回（会等 WAL，不能在业务 worker 上调）；memory 快路径 handler 不能新建持久实体（`nest.ErrMemoryTransactionPersistentWrite`）。业务不需要为此手工 `MarkPersist(dao, AllFields)`。**失败的新建不留持久写**：builder、组件 Init、`OnInitFinish` 已经用新实体的 DAO 登记了修改、随后返回错误（或构建成功、发布撞上同 ID 返回 `entity.ErrEntityExists`）时，这些登记从当前事务撤销，业务可以处理掉 `Create` 的错误继续执行，事务照常提交其余修改；失败前 builder 还写了别的实体、`Emit`、`AddReceipt` 等不能逐项撤销的持久内容时，`Create` 的错误同时带 `nest.ErrFailedCreateLeftEffects`，事务在 handler 结束时整条回滚（业务吞掉错误也一样，按下表第 15 行处理）。冷加载时缺文档的 DAO（上线后新增的）按初值补上、由下一笔持久提交写出。原因与边界见 [DataEngine §4](03-dataengine.md#4-冷加载与-schema)。
 
+### 起服预加载与按服分库（v1.47.0 起）
+
+本地实体默认在第一次访问时冷加载。要在起服时就把本服的某类实体全部载入（例如每个玩家都在线挂机的放置类、开服就要能被遍历的房间），在实体注解上写 `preload=startup`，可选 `preload_order=<N>`：
+
+```go
+//roost:entity id=12 name=Hero preload=startup preload_order=2
+```
+
+- **时机**：生成器给持有这个实体的服务装 `kitdataengine.NewLocalPreloadMod(registry.LocalPreloadKinds("<服务>")...)`（Mod 名 `dataengine.preload`，依赖 DataEngine 与 Nest）。它在 DataEngine 回放完 WAL、Nest 启动之后、`Service.Init` 之前执行，所以 `Service.Init` 与第一条请求看到的是已载入的实体。它与 ManagerMod 没有依赖关系，manager 的 Start 不能假定预加载已完成。
+- **范围**：只枚举本服的库。kind 的主 DAO（`DaoBuilders[0]`）所在集合，物理库是 `<库>_<sid>`，按 `_id` 升序、每页 1000 条、只取 `_deleted` 不为 true 的文档，然后经与按需加载相同的冷加载路径（`EntityManager` 的共享冷加载、Nest 业务池发布）载入，每批最多 16 个并发。
+- **顺序**：`preload_order` 小的先载入；同一个值的 kind 一起并发载入；下一批等上一批全部结束（成功或记失败）才开始。不写时为 0。它就是 `EntityBuilderParam.LoadPriority`，取值 0～1000。
+- **失败**：枚举失败（库不可达、kind 不满足下面的条件）让起服失败。单个实体加载失败只记日志与计数、留给按需加载，不阻止起服；枚举之后被删掉、文档已不在的不算失败。结果写在 `LocalPreloadMod.Report`（每个 kind 的 Listed / Loaded / Deleted / Missing / Failed），指标 `dataengine.local_preload_total{kind,result=ok|deleted|missing|error}`。
+- **条件**（生成期拒绝、运行期 `ValidateLocalPreloadKinds` 再查一次）：实体会持久化（不是 `nopersist`，lifetime 不是 ephemeral / runtime_rebuild）；它的**每个** DAO 都是 `dbscope=sid`——`dbscope=global` 的库各服共用，“本服的实体”无从界定，预加载会把别的服的实体也载进来；不是 `remote=managed`（Remote 托管实体的预加载是 `NewRemotePreloadMod`，按所有权记录而不是按库枚举，见 [Remote Entity 与 Mirror §1](05-remote-mirror.md#1-边界与角色)）。没写 `service=` 时，工程里有 Nest 与 DataEngine 的业务服务必须恰好一个，否则要写 `service=` 指明。
+- **预加载不等于常驻**：框架没有按冷热自动换出实体，`EntityLifetimeResident` 仍只是声明。预加载的实体同样会因运维 `entity.unload`、换服交出（HandOffEntity）、业务自己的空闲卸载被卸载，之后按需重新加载；框架不会在卸载后重新预加载。要常驻就不要卸载它。
+
+**DAO 选 `dbscope=sid` 还是 global**：本地实体的 DAO 默认 `dbscope=sid`（`add dao --entity` 生成的骨架、demo 的 Player / World、模块里的本地实体）——实体归一个服，换服（rehome 模块搬档）与合服（sidmerge）按 sid 库搬它。各服共享、不归某一个服的数据才用 `dbscope=global`：Remote 托管实体（alliance、team 等，按 owner 路由而不是按 sid）、跨服共享的地形数据。按服分库的物理库名加上 `_<sid>` 后不能超过 63 字节（D9 校验，起服时拒绝）。v1.47.0 起存储位置改变，旧数据不迁移（见 CHANGELOG）。
+
 ## 3. 事务与回滚
 
 事务会修改且失败应恢复的状态放在 DAO。生成 setter 登记事务本地 PersistChange，回滚由 DAO 快照/undo 统一完成；组件不维护独立 undo 体系。rollback=none 不承诺失败恢复。事务外写持久 setter 被拒绝；只读和临时状态应明确声明 nopersist/nocoll。

@@ -15,6 +15,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
@@ -30,21 +31,60 @@ type Owned struct {
 	Service string
 	// Remote 表示 remote=managed。
 	Remote bool
-	// Preload 表示 preload=startup：归属服务起服时加载 owner 是本 sid 的这个 kind 的全部实体并登记路由
-	// （联盟服务方案 §2.7“起服预加载”）。只能写在 remote=managed 且声明了 service= 的实体上。
+	// Preload 表示 preload=startup。Remote 托管 kind（必须同时声明 service=）：归属服务起服时加载 owner 是本 sid 的
+	// 全部实体并登记路由（联盟服务方案 §2.7“起服预加载”）。本地 kind（维护者 2026-11-13）：加载本服库（dbscope=sid）
+	// 里这个 kind 的全部未删除实体，由 wiring/dataengine.LocalPreloadMod 执行（见 LocalPreloads）。
 	Preload bool
+	// Order 是本地预加载的批次（preload_order=<N>，缺省 0，越小越先）；只对本地 preload=startup 的实体有意义。
+	Order int
+	// NoPersist 表示 noPersist=true。
+	NoPersist bool
 	// Dir 是实体包目录（绝对路径）。
 	Dir string
 	// Position 是标记所在的 file:line，用于报错。
 	Position string
 }
 
-// PreloadStartup 是 preload= 唯一的取值：归属服务起服时预加载。
+// PreloadStartup 是 preload= 唯一的取值：起服预加载。
 const PreloadStartup = "startup"
+
+// MaxPreloadOrder 是 preload_order= 的上限（取值 0～MaxPreloadOrder）。
+const MaxPreloadOrder = 1000
 
 // Scan 读 gameDir/entities/*/ 下全部实体标记，返回声明了 service= 的实体，按 Dir、Entity 排序。
 // 这是生成工程放实体的唯一位置（roost add entity、id 检查与 remote 宿主检查读同一处）。
 func Scan(gameDir string) ([]Owned, error) {
+	all, err := scanAll(gameDir)
+	if err != nil {
+		return nil, err
+	}
+	var out []Owned
+	for _, item := range all {
+		if item.Service != "" {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+// LocalPreloads 返回声明了 preload=startup 的本地（非 remote=managed）实体，按 Dir、Entity 排序；Service 是它的
+// service=，没写时为 ""（由哪个服务预加载在工程层按 roost.yaml 决定，见 roost 的 localPreloadServices）。
+func LocalPreloads(gameDir string) ([]Owned, error) {
+	all, err := scanAll(gameDir)
+	if err != nil {
+		return nil, err
+	}
+	var out []Owned
+	for _, item := range all {
+		if item.Preload && !item.Remote {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+// scanAll 返回声明了 service= 或 preload= 的实体。
+func scanAll(gameDir string) ([]Owned, error) {
 	paths, err := filepath.Glob(filepath.Join(gameDir, "entities", "*", "*.go"))
 	if err != nil {
 		return nil, err
@@ -110,20 +150,29 @@ func scanFile(path string) ([]Owned, error) {
 			// preload= 是实体类型的显式策略（维护者 2026-11-04：“没有规则就不加载，需要 entity 显示加规则”）。只有一个取值；
 			// 预加载的范围是“所有权记录的 owner 是本 sid 的实体”，所以只对归属某个服务的 Remote 托管 kind 有意义。
 			preload, hasPreload := params["preload"]
+			noPersist := strings.EqualFold(strings.TrimSpace(params["noPersist"]), "true")
+			order, err := preloadOrder(where, params, hasPreload, remote)
+			if err != nil {
+				return nil, err
+			}
 			if hasPreload {
+				lifetime := strings.ToLower(strings.TrimSpace(params["lifetime"]))
 				switch {
 				case strings.TrimSpace(preload) != PreloadStartup:
 					return nil, fmt.Errorf("%s: //roost:entity preload=%q is not a preload policy; the only one is preload=%s (omit it to load on demand)", where, preload, PreloadStartup)
-				case !remote || !declared:
-					return nil, fmt.Errorf("%s: //roost:entity preload=%s needs remote=managed and service=<name>: the owning service preloads "+
-						"the entities whose durable Remote owner is its sid, and only a Remote managed kind owned by a service has one", where, PreloadStartup)
+				case remote && !declared:
+					return nil, fmt.Errorf("%s: //roost:entity preload=%s on a remote=managed entity needs service=<name>: the owning service preloads "+
+						"the entities whose durable Remote owner is its sid", where, PreloadStartup)
+				case !remote && (noPersist || lifetime == "ephemeral" || lifetime == "runtime_rebuild" || lifetime == "runtime-rebuild" || lifetime == "rebuild"):
+					return nil, fmt.Errorf("%s: //roost:entity preload=%s on an entity that is not stored (noPersist=true or an ephemeral / runtime_rebuild lifetime): "+
+						"a local preload loads this server's stored documents, and this entity has none", where, PreloadStartup)
 				}
 			}
-			if !declared {
+			if !declared && !hasPreload {
 				continue
 			}
 			service = strings.TrimSpace(service)
-			if !validServiceName(service) {
+			if declared && !validServiceName(service) {
 				return nil, fmt.Errorf("%s: //roost:entity service=%q is not a service name (lower snake case, as in roost.yaml services)", where, service)
 			}
 			// 与 entity 生成器同一条附着规则：结构体在标记下面两行以内。
@@ -139,17 +188,39 @@ func scanFile(path string) ([]Owned, error) {
 				kind = "EntityKind" + entityName
 			}
 			out = append(out, Owned{
-				Entity:   entityName,
-				Kind:     kind,
-				Service:  service,
-				Remote:   remote,
-				Preload:  hasPreload,
-				Dir:      filepath.Dir(path),
-				Position: where,
+				Entity:    entityName,
+				Kind:      kind,
+				Service:   service,
+				Remote:    remote,
+				Preload:   hasPreload,
+				Order:     order,
+				NoPersist: noPersist,
+				Dir:       filepath.Dir(path),
+				Position:  where,
 			})
 		}
 	}
 	return out, nil
+}
+
+// preloadOrder 读 preload_order=：只能和本地实体上的 preload=startup 一起写，取值 0～MaxPreloadOrder 的整数。
+func preloadOrder(where string, params map[string]string, hasPreload, remote bool) (int, error) {
+	raw, has := params["preload_order"]
+	if !has {
+		return 0, nil
+	}
+	switch {
+	case !hasPreload:
+		return 0, fmt.Errorf("%s: //roost:entity preload_order= needs preload=%s: it orders the startup preload, and this entity is loaded on demand", where, PreloadStartup)
+	case remote:
+		return 0, fmt.Errorf("%s: //roost:entity preload_order= applies to local entities; a remote=managed kind is preloaded by its owning service "+
+			"from the ownership records in one pass, with no order", where)
+	}
+	order, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || order < 0 || order > MaxPreloadOrder {
+		return 0, fmt.Errorf("%s: //roost:entity preload_order=%q is not an integer from 0 to %d (smaller loads first; kinds with the same order load together)", where, raw, MaxPreloadOrder)
+	}
+	return order, nil
 }
 
 // validServiceName 与 roost.yaml 的服务名同一形状：小写字母开头，小写字母、数字、下划线。

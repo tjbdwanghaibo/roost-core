@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -33,8 +34,8 @@ import (
 // DataEngine，这里发布的是两个只记事件的替身。没有 NATS / Redis / Mongo：跨进程的那一跳、真实的交出实体
 // 都不在这一档里。
 //
-// 两个服（1000、1001）各有一个 Registry，共用同一个 account 与同一个 Nest（同一份玩家档）：
-// 这正是换服的前提——各服把玩家的档放在同一个库里。
+// 两个服（1000、1001）各有一个 Registry，共用同一个 account 与同一个 Nest（同一份玩家档）。真实部署里玩家的档在
+// 各服自己的库（dbscope=sid），源服交出实体之后把它搬到目标服的库（驱动器的搬档，这里由 DataEngine 的替身记事件）。
 
 const (
 	rehomeSourceSID int32 = 1000
@@ -95,13 +96,24 @@ func (t rehomeTransport) CloseSessions(playerID int64, reason error) int {
 	return 1
 }
 
-// rehomeEngine 站在 DataEngine Mod 的位置上：LocalResidency 只用它的 HandOffEntity。
-// 返回的句柄没有接到任何 Runtime 上，Release 什么都不做——真实的屏障不在这一档里。
+// rehomeEngine 站在 DataEngine Mod 的位置上：LocalResidency 用它的 HandOffEntity，驱动器用它的搬档
+// （CopyHandedOffEntity / DropEntityCopy）。返回的句柄没有接到任何 Runtime 上，Release 什么都不做——真实的屏障与
+// 真实的库不在这一档里（搬档本身由 framework/dataengine/engine 的用例覆盖）。
 type rehomeEngine struct{ events *rehomeServerEvents }
 
 func (e rehomeEngine) HandOffEntity(_ context.Context, entityID int64) (*wiringde.EntityHandOff, error) {
 	e.events.add(fmt.Sprintf("handoff %d", entityID))
 	return &wiringde.EntityHandOff{EntityID: entityID}, nil
+}
+
+func (e rehomeEngine) CopyHandedOffEntity(_ context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error) {
+	e.events.add(fmt.Sprintf("copy %d to %d overwrite=%v", entityID, to, overwrite))
+	return wiringde.EntityCopy{EntityID: entityID, To: to, Documents: []wiringde.EntityCopyDocument{{Database: "main", Collection: "player", Version: 1}}}, nil
+}
+
+func (e rehomeEngine) DropEntityCopy(_ context.Context, copied wiringde.EntityCopy, sid int32) (int, error) {
+	e.events.add(fmt.Sprintf("drop %d at %d", copied.EntityID, sid))
+	return len(copied.Documents), nil
 }
 
 // rehomeServer 是一个服的进程：它的 Registry、协议的 Controller、记下的外部动作。
@@ -298,10 +310,12 @@ func TestRehomeApplyEndpointMovesThePlayerToTheOtherServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 断开两次：安静下来时一次，交出实体之前再一次（其间握手进来的连接）。
+	// 断开两次：安静下来时一次，交出实体之前再一次（其间握手进来的连接）。交出之后把档搬到 1001 的库，提交之后
+	// 删掉本服库里的那几份。
 	closed := fmt.Sprintf("close %d: rehome: the player is changing servers", w.playerID)
-	want := []string{closed, closed, fmt.Sprintf("handoff %d", entityID)}
-	if got := source.events.snapshot(); len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	want := []string{closed, closed, fmt.Sprintf("handoff %d", entityID), fmt.Sprintf("copy %d to 1001 overwrite=true", entityID),
+		fmt.Sprintf("drop %d at 1000", entityID)}
+	if got := source.events.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("on the source: %v, want %v", got, want)
 	}
 	if pendingID, pendingTo, lastAt, count := w.intent(); pendingID != response.TransferID || pendingTo != 1001 || lastAt != 0 || count != 0 {

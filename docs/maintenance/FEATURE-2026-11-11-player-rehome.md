@@ -10,6 +10,7 @@
 - 会话令牌不含服；`ValidateSession` 每次读当前 Role。认证器把承载服写进会话 claim（`ServerIDClaim`），claim 是认证那一刻的快照。
 - game 侧只做静态比较：demo 的 `PlayerOwners.Serve / AdmitBound`（`demo/internal/service/game/playerowner.go.tmpl`）比较 claim 或 saga 载荷里的 sid 与本进程的 sid；`admitBound`（`gift_saga.go.tmpl`、`alliance_saga.go.tmpl`）以**载荷**里的 sid 为绑定。
 - Player 文档 `db=main`、没有 `dbscope=sid`：各服把 `main` 映射到同一物理库时，**换服不用搬数据**，只交接写权。saga 回执、实体定时器都在玩家文档里，随文档走。
+  - **已过时（v1.47.0，维护者 2026-11-13）**：本地实体的 DAO 缺省改为 `dbscope=sid`，Player 的文档在 `<库>_<sid>`。换服在交出之后把文档复制到目标服的库、提交后删源库，现行说明见 [rehome README“搬档”](../../modules/rehome/README.md) 与 KNOWN-LIMITS“单个玩家换服”。
 - 卸载：`Runtime.UnloadEntity`（`framework/dataengine/engine/entity_unload.go`）立屏障 → 等投影 → 卸载 → **返回时撤屏障**。单 mutation 快路的幂等只靠 `_last_tx`（`mongo_store.go` 的 `classifyNoMatch`），“投影成功 → 确认 checkpoint”不是原子的。
 - “同一玩家至多一个写者”现在等于“同一 sid 至多一个进程”（App 单实例锁）加“只在绑定的 sid 上服务”；兜底是投影的版本 CAS，冲突时进程 fail-stop。
 

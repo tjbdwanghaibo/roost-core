@@ -267,3 +267,62 @@ func TestMirrorOfASnapshotlessKindIsRefused(t *testing.T) {
 		t.Fatalf("no mirror: %v", err)
 	}
 }
+
+// 本地实体写了 preload=startup（维护者 2026-11-13：“local 就是 dbscope=sid”）：预加载的是本服库里这个 kind 的文档，
+// 有 dbscope=global 的 DAO 时生成期拒绝；全是 dbscope=sid 时生成，preload_order 写进 EntityBuilderParam.LoadPriority。
+// DAO 的作用域读不出来（没有 DbScope 方法）时不在生成期判，留给运行期 LocalPreloadMod 的 Init。
+func TestLocalPreloadNeedsServerScopedDaos(t *testing.T) {
+	const daoSid = "package db\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/dataengine\"\n\ntype PlayerDao struct{}\n\nfunc (d *PlayerDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseServer }\n"
+	const daoGlobal = "package db\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/dataengine\"\n\ntype PlayerDao struct{}\n\nfunc (d *PlayerDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseGlobal }\n"
+	entitySource := func(marker string) string {
+		return "package player\n\nimport (\n\t\"example.com/game/db\"\n\t\"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n)\n\nconst EntityKindPlayer entity.EntityKind = 5\n\n" +
+			"//roost:entity entityKind=EntityKindPlayer" + marker + "\ntype Player struct {\n\t*entity.EntityBase\n\tentity.DaoManager\n\tdao *db.PlayerDao `dao:\"player\"`\n}\n"
+	}
+	for _, tc := range []struct {
+		name, dao, marker string
+		reject            bool
+		loadPriority      string
+	}{
+		{"global dao with preload", daoGlobal, " preload=startup", true, ""},
+		{"global dao without preload", daoGlobal, "", false, ""},
+		{"sid dao with preload and order", daoSid, " preload=startup preload_order=3", false, "LoadPriority: 3,"},
+		{"sid dao with preload", daoSid, " preload=startup", false, ""},
+		{"unknown scope with preload", "package db\n\ntype PlayerDao struct{}\n", " preload=startup", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			files := map[string]string{
+				"go.mod":                         "module example.com/game\n\ngo 1.27.0\n",
+				"db/gen_player_dao.go":           tc.dao,
+				"game/entities/player/player.go": entitySource(tc.marker),
+			}
+			for name, content := range files {
+				path := filepath.Join(root, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := Run([]string{"-dir", filepath.Join(root, "game")}, io.Discard)
+			wire := filepath.Join(root, "game", "entities", "player", "player_gen_wire.go")
+			raw, statErr := os.ReadFile(wire)
+			if tc.reject {
+				if err == nil || !strings.Contains(err.Error(), "preload=startup") || !strings.Contains(err.Error(), "dbscope=global") || !strings.Contains(err.Error(), "dbscope=sid") {
+					t.Fatalf("a local preload over a dbscope=global DAO = %v, want it refused naming both scopes", err)
+				}
+				if statErr == nil {
+					t.Fatal("a refused generation still wrote the wire file")
+				}
+				return
+			}
+			if err != nil || statErr != nil {
+				t.Fatalf("legal combination: %v / %v", err, statErr)
+			}
+			if got := strings.Contains(string(raw), "LoadPriority:"); got != (tc.loadPriority != "") || (tc.loadPriority != "" && !strings.Contains(string(raw), tc.loadPriority)) {
+				t.Fatalf("wire file LoadPriority: want %q\n%s", tc.loadPriority, raw)
+			}
+		})
+	}
+}

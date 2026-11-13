@@ -39,7 +39,10 @@ const (
 	ModDataEngine app.ModName = "dataengine"
 	// ModDataEngineDatabases 是 DataEngine Mod 启动时冻结的逻辑库 → 物理库表（*dataengine.DatabaseMap）。
 	// 业务代码要直接打开 DAO 所在的 Mongo 库时经它取物理名，不要把 DAO 的 db= 常量当库名。
-	ModDataEngineDatabases     app.ModName = "dataengine.databases"
+	ModDataEngineDatabases app.ModName = "dataengine.databases"
+	// ModDataEnginePreload 是本地实体起服预加载 Mod（wiring/dataengine.LocalPreloadMod）：排在 DataEngine 与 Nest 之后，
+	// 在 Service.Init 之前把 preload=startup 的本地 kind 在本服库里的实体加载进内存。
+	ModDataEnginePreload       app.ModName = "dataengine.preload"
 	ModRemoteEntity            app.ModName = "remote_entity"
 	ModRemoteEntityAtomicStore app.ModName = "remote_entity.atomic_store"
 	// ModRemoteMirror 是只读快照能力（entity.RemoteSnapshotReadOnly，Mirror 第 5 步）：只读服务由

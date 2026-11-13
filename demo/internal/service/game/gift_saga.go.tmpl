@@ -14,11 +14,13 @@ import (
 	giftitem "{{MODULE}}/saga/gift_item"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -130,8 +132,7 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps,
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	players := kitdataengine.DAOCollection(mongoClient, databases, db.NewPlayerDao(), 0)
-	steps := giftSteps{nest: nestClient, mailer: mailer, players: players, owners: owners}
+	steps := giftSteps{nest: nestClient, mailer: mailer, recipients: recipientPlayers(mongoClient, databases, owners.sid, owners.bound), owners: owners}
 	steps.register(runtime)
 	if err := runtime.Start(ctx); err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
@@ -179,9 +180,9 @@ type playerOwnership interface {
 type giftSteps struct {
 	nest   corenest.Client
 	mailer svcmail.Mail
-	// players is the Player DAO's physical collection (kitdataengine.DAOCollection),
-	// where deliver looks the recipient up.
-	players fmongo.ICollection
+	// recipients opens the Player DAO's physical collection where a player's
+	// document is (recipientPlayers), for deliver's recipient check.
+	recipients func(ctx context.Context, playerID int64) (fmongo.ICollection, error)
 	// owners is who may touch which player. nil means a single-process
 	// deployment, where every player is this process's.
 	owners playerOwnership
@@ -318,15 +319,36 @@ func (steps giftSteps) refund(ctx context.Context, step saga.NativeStep) error {
 	return err
 }
 
+// recipientPlayers 回答“某名玩家的 Player 文档在哪个集合”：Player 的 DAO 是 dbscope=sid（v1.47.0 起），
+// 每个 game sid 一个物理库 `<物理库>_<sid>`，所以先问他当前绑定的 sid（bound：rehome 模块的 Binding，先看迁出表、
+// 再问 account），再按 kitdataengine.DAOCollection 打开那个服的集合。换服途中也对：提交之前他仍绑在源服、文档在
+// 源库；提交之前文档已复制到目标库，提交之后绑在目标服、文档在目标库（rehome 的搬档顺序）。account 里没有这个
+// 角色时返回 svcaccount.ErrRoleMissing（调用方按“从未进过游戏”拒绝）。bound 为 nil（单进程部署、测试）时
+// 按“都绑定在本服”。
+func recipientPlayers(client fmongo.IMongo, databases *coredata.DatabaseMap, self int32,
+	bound func(ctx context.Context, playerID int64) (int32, bool, error),
+) func(ctx context.Context, playerID int64) (fmongo.ICollection, error) {
+	return func(ctx context.Context, playerID int64) (fmongo.ICollection, error) {
+		sid := self
+		if bound != nil {
+			var err error
+			if sid, _, err = bound(ctx, playerID); err != nil {
+				return nil, fmt.Errorf("gift: binding of recipient %d: %w", playerID, err)
+			}
+		}
+		return kitdataengine.DAOCollection(client, databases, db.NewPlayerDao(), sid), nil
+	}
+}
+
 // deliver mails the item to the recipient. A recipient who has never
 // entered the game has no Player document and is refused — the case that
 // makes the coordinator compensate the debit. The mail service's own coded
 // refusals (mailbox full) do the same.
 //
 // Where the Player document is: the Player DAO's collection in the physical
-// database its logical db= (`//roost:dao coll=player db=main` in
-// db/def/player.go) maps to through dataengine.databases — resolved once in
-// startGiftSaga with kitdataengine.DAOCollection. NOT `dataengine.database`
+// database its logical db= (`//roost:dao coll=player db=main dbscope=sid` in
+// db/def/player.go) maps to through dataengine.databases, on the recipient's
+// game sid — see recipientPlayers. NOT `dataengine.database`
 // (the Data Engine's own collections), and NOT db.PlayerDaoDBName used as a
 // database name: that is the logical name, and a deployment that maps it
 // elsewhere would make every gift compensate as "recipient has never entered
@@ -336,10 +358,17 @@ func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.
 	if err != nil {
 		return refuse(err.Error()), nil
 	}
+	players, err := steps.recipients(ctx, state.To)
+	if errors.Is(err, svcaccount.ErrRoleMissing) {
+		return refuse(giftRecipientNotFound), nil
+	}
+	if err != nil {
+		return saga.Completion{}, err
+	}
 	var recipient struct {
 		ID int64 `bson:"_id"`
 	}
-	if err := steps.players.FindOne(ctx, bson.M{"_id": entityID}, &recipient); err != nil {
+	if err := players.FindOne(ctx, bson.M{"_id": entityID}, &recipient); err != nil {
 		if errors.Is(err, fmongo.ErrNotFound) {
 			return refuse(giftRecipientNotFound), nil
 		}

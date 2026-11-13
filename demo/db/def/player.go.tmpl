@@ -1,6 +1,6 @@
 package dbdef
 
-//roost:dao coll=player db=main schema=4
+//roost:dao coll=player db=main dbscope=sid schema=4
 type PlayerDao struct {
 	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
 	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。

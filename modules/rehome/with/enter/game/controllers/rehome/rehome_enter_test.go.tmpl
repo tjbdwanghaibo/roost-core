@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -247,8 +248,9 @@ func TestWithRehomeEnterResumesATransferAfterTheSourceRestarted(t *testing.T) {
 	if binding := w.binding(); binding.ServerID != 1001 || binding.BindEpoch != 1 || binding.Transfer != nil {
 		t.Fatalf("account binding = %+v, want server 1001 at epoch 1", binding)
 	}
-	if events := restarted.events.snapshot(); len(events) != 3 {
-		t.Fatalf("on the restarted source: %v, want the sessions closed and the entity handed off", events)
+	if events := restarted.events.snapshot(); len(events) != 5 || !strings.HasPrefix(events[2], "handoff ") ||
+		!strings.HasPrefix(events[3], "copy ") || !strings.HasSuffix(events[3], " to 1001 overwrite=true") || !strings.HasSuffix(events[4], " at 1000") {
+		t.Fatalf("on the restarted source: %v, want the sessions closed, the entity handed off, its documents copied to 1001 and dropped here", events)
 	}
 	if err := w.enter(restarted, withRehomeClaims(w.binding()), &loads); !errors.Is(err, apperrors.ErrRehomeElsewhere) {
 		t.Fatalf("entering the old server afterwards: err = %v, want rehome_elsewhere", err)

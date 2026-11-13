@@ -93,6 +93,63 @@ func preloadKindsOption(service string) string {
 // 路由 rpc 的 owner Mod 经 OptionalDependsOn 排在它之后，预加载完成前不在总线上接请求。
 const preloadModCall = "kitremoteentity.NewRemotePreloadMod()"
 
+// localPreloadModCall 是起服预加载本地实体的服务 bootstrap 里装的那一项（wiring/dataengine.LocalPreloadMod）。
+func localPreloadModCall(service string) string {
+	return fmt.Sprintf("kitdataengine.NewLocalPreloadMod(registry.LocalPreloadKinds(%q)...)", service)
+}
+
+// localPreloadServices 决定哪些服务起服预加载本地实体（//roost:entity preload=startup，非 remote=managed）：
+//
+//   - 写了 service= 的实体由那个服务预加载；它要有 nest 与 dataengine（加载经 DataEngine、发布经 Nest）。
+//   - 没写 service= 的实体由工程里唯一一个带 nest 与 dataengine 的业务服务预加载（-template game 只有 game）。
+//     有几个这样的服务时说不清由谁加载：同一种服务类型内 sid 唯一，不同服务类型的进程可以用同一个 sid、读同一个
+//     <库>_<sid>，让每个都加载会把别的服务的实体读进来——要求在实体标记上写 service=<name>。
+//
+// 规则不满足时返回错误（生成前检查报出，文件与行来自扫描）。
+func localPreloadServices(root string, m Manifest, preloads []entityowner.Owned) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(preloads) == 0 {
+		return out, nil
+	}
+	hosts := func(service string) bool {
+		if _, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
+			return false
+		}
+		mods, err := resolveMods(effectiveServiceMods(m, service))
+		return err == nil && contains(mods, "nest") && contains(mods, "dataengine")
+	}
+	var candidates []string
+	for _, service := range sortedServiceNames(m) {
+		if hosts(service) {
+			candidates = append(candidates, service)
+		}
+	}
+	for _, item := range preloads {
+		where := relativeOwnerPosition(root, item)
+		if item.Service != "" {
+			if _, declared := m.Services[item.Service]; !declared {
+				return nil, fmt.Errorf("%s: entity %s declares service=%s, but roost.yaml has no such service", where, item.Entity, item.Service)
+			}
+			if !hosts(item.Service) {
+				return nil, fmt.Errorf("%s: entity %s is preload=startup and declares service=%s, but that service lacks nest or dataengine, which the startup preload "+
+					"loads through; run: roost add mod dataengine -service %s (and nest)", where, item.Entity, item.Service, item.Service)
+			}
+			out[item.Service] = true
+			continue
+		}
+		switch len(candidates) {
+		case 1:
+			out[candidates[0]] = true
+		case 0:
+			return nil, fmt.Errorf("%s: entity %s is preload=startup, but no business service has both nest and dataengine to load it at startup", where, item.Entity)
+		default:
+			return nil, fmt.Errorf("%s: entity %s is preload=startup, but several services could load it (%s): services of different types may share a sid and so the "+
+				"same <db>_<sid> database; declare which one with service=<name> on the //roost:entity marker", where, item.Entity, strings.Join(candidates, ", "))
+		}
+	}
+	return out, nil
+}
+
 // routeAndPreloadServices 返回拥有 Remote 托管 kind 的服务与其中有预加载 kind 的服务。
 func routeAndPreloadServices(owned []entityowner.Owned) (route, preload map[string]bool) {
 	route, preload = map[string]bool{}, map[string]bool{}
@@ -110,6 +167,10 @@ func routeAndPreloadServices(owned []entityowner.Owned) (route, preload map[stri
 
 // withEntityOwners 记下拥有 kind 的服务（渲染 bootstrap 用）。扫描失败时不记：生成前检查会报同一个错误。
 func (m Manifest) withEntityOwners(root string) Manifest {
+	m.localPreloadServices = nil
+	if preloads, err := entityowner.LocalPreloads(filepath.Join(root, "game")); err == nil {
+		m.localPreloadServices, _ = localPreloadServices(root, m, preloads)
+	}
 	owned, err := projectEntityOwners(root)
 	m.ownedRemote = false
 	m.routeServices, m.preloadServices = nil, nil
@@ -141,12 +202,26 @@ func checkEntityOwnersBeforeGenerate(root string, m Manifest) error {
 	if err := checkRouteRPCOwners(root, m, owned); err != nil {
 		return err
 	}
+	localItems, err := entityowner.LocalPreloads(filepath.Join(root, "game"))
+	if err != nil {
+		return fmt.Errorf("scan local preload entities: %w", err)
+	}
+	localPreloads, err := localPreloadServices(root, m, localItems)
+	if err != nil {
+		return err
+	}
 	raw, err := os.ReadFile(filepath.Join(root, "internal", "bootstrap", "generated.go"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
+	}
+	for _, service := range sortedServiceNames(m) {
+		if localPreloads[service] != strings.Contains(string(raw), localPreloadModCall(service)) {
+			return fmt.Errorf("local preload entities (//roost:entity preload=startup) changed and internal/bootstrap/generated.go does not match for service %s "+
+				"(want kitdataengine.NewLocalPreloadMod: %v); run: roost project sync (then roost generate)", service, localPreloads[service])
+		}
 	}
 	owners := map[string]bool{}
 	for _, service := range entityowner.Services(owned) {

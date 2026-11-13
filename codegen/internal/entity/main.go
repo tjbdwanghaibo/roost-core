@@ -147,6 +147,9 @@ func run(args []string, stdout io.Writer) error {
 			if err := validateRemoteDaoScopes(*ent, dir); err != nil {
 				return err
 			}
+			if err := validateLocalPreloadDaoScopes(*ent, dir); err != nil {
+				return err
+			}
 			if err := resolveNoCollectionDaos(ent, dir); err != nil {
 				return err
 			}

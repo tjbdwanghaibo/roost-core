@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -41,6 +42,13 @@ type EntityDef struct {
 	// _remote_entity_snapshots document, no L2 entry, no interest broadcast),
 	// and nothing can read it as a //roost:mirror or a RemoteViewRef.
 	NoSnapshots bool
+	// Preload: preload=startup. On a local entity (no remote=managed) the
+	// startup preload loads this server's documents of the kind
+	// (wiring/dataengine.LocalPreloadMod); every DAO must then be dbscope=sid.
+	Preload bool
+	// PreloadOrder is preload_order=<N> (0 when absent), written to
+	// EntityBuilderParam.LoadPriority: smaller batches load first.
+	PreloadOrder int
 }
 
 // ImportDef is an imported package referenced by generated code.
@@ -247,6 +255,14 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 						if pool == "long" {
 							ent.BusinessPool = "entity.BusinessPoolLong"
 						}
+					}
+					_, ent.Preload = m.params["preload"]
+					if raw, ok := m.params["preload_order"]; ok {
+						order, err := strconv.Atoi(strings.TrimSpace(raw))
+						if err != nil || order < 0 {
+							return nil, fmt.Errorf("%s:%d: //roost:entity preload_order=%q is not a non-negative integer", filePath, m.line, raw)
+						}
+						ent.PreloadOrder = order
 					}
 					ent.NoPersist = parseBoolParam(m.params["noPersist"])
 					ent.Lifetime = parseLifetimeParam(m.params["lifetime"], ent.NoPersist, ent.RemotePolicy)

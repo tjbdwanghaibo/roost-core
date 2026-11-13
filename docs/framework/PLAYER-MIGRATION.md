@@ -38,7 +38,7 @@ game-demo 的 `cmd/sidmove`（只读，不搬数据、不切路由、不起停�
 go run ./cmd/sidmove wal-drained -dir data/wal/dataengine/1000
 # 第 4 步：单实例锁现在被谁持有（不打印锁值里的令牌）
 go run ./cmd/sidmove singleton -redis 127.0.0.1:6379 -key roost:<project>:singleton:game:1000
-# 第 6 步：停旧进程后记一份，新进程写入前比较（Player 所在物理库按 -config 的 dataengine.databases 换算，-db 可直接指定）
+# 第 6 步：停旧进程后记一份，新进程写入前比较（Player 所在物理库按 -config 的 dataengine.databases 换算，Player 是 dbscope=sid，再加 _<sid>（-sid 缺省取配置的 sid）；-db 可直接指定完整库名）
 go run ./cmd/sidmove players -mongo "$URI" -config configs/service/config.game.yaml -ids 2001,2002 -out before.json
 go run ./cmd/sidmove players -mongo "$URI" -config configs/service/config.game.yaml -ids 2001,2002 -compare before.json
 ```
@@ -97,12 +97,12 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 | 1 公告、停准入 | A、B 的 account 状态改 maintenance（`accountctl upsert-server -status maintenance`），接入层停止接受新连接 | — |
 | 2 停服 | A、B 的 game 进程正常停机（SIGTERM，等进程退出）；之前先按清单的 `bus` 项处理发往 A 的持久消息（可靠总线的死信、JetStream RPC 的实例 durable） | 进程退出；`sidmove singleton` 两把锁都已释放 |
 | 3 前置检查 | `go run ./cmd/sidmerge migrate -from A -into B [-from-config …] [-into-config …] -dry-run`：两侧 WAL 已排空（且配置的库名映射与该进程最后一次运行记下的相同）、每个非按 sid 的逻辑库两侧在同一 Mongo 的同一物理库、A 的 outbox 为空或两侧共用控制库、saga 全部终态、按 sid 分库的 `_id` 冲突扫描；持久总线清单要人工确认（`confirm`） | 报告 `ready: true`，`confirm` 项已逐条确认。WAL 不在本机时在那台机器跑 `sidmove wal-drained`，通过后加 `-from-wal-checked` / `-into-wal-checked` |
-| 4 抽样快照 | `sidmove players -ids <A 的抽样玩家> -out before.json` | — |
+| 4 抽样快照 | `sidmove players -sid A -ids <A 的抽样玩家> -out before.json`（v1.47.0 起 Player 的 DAO 是 `dbscope=sid`，读 A 的库） | — |
 | 5 迁移按 sid 独占的数据 | `go run ./cmd/sidmerge migrate -from A -into B -manifest merge-A.json`：A 的 `<物理名A>_<A>` 逐集合原样拷进 B 的 `<物理名B>_<B>`（两侧各按自己的 `dataengine.databases` 换算），带 `_version` / `_schema` / `_last_tx` 与墓碑字段；冲突整体停止、不覆盖不跳过；重跑幂等。没有 `dbscope=sid` DAO 的工程这一步什么也不写；game-demo 唯一的 `dbscope=sid` DAO 是分区场景的地形格账本 `TerrainCellEditor`（逻辑库 main 因此是混合库），不开分区时它没有文档，这一步同样不写 | 报告 `copied` / `already_present`；清单文件保存好（回退要用）。源库保留为只读归档，确认无误后由运维手动删除 |
 | 6 业务语义合并 | 业务脚本（§6.3） | 业务自己的核对 |
 | 7 account 记录 | `accountctl merge-server -from A -into B -note "<窗口、工单>"`（先 `-dry-run` 看会改哪些记录）：A 写 `MergedInto = B`、`closed`；原来并入 A 的服一并改指 B（拍平） | `accountctl show-server -sid A`：`merged_into: B`；`show-server -sid B` 的 `merged_from` 含 A |
 | 8 部署层 | 服务器列表显示“A（已并入 B）”并给出 B 的接入地址；嵌入 TCP 部署把 A 的接入域名 / 端口指到 B；独立 Gate 不需要配置 | — |
-| 9 启动 B | 启动 game(B)，开放登录前 `sidmove players -compare before.json`（Player 等共享库文档未变），按清单核对迁入文档 | `/readyz` 200；比较通过 |
+| 9 启动 B | 启动 game(B)，开放登录前 `sidmove players -sid B -ids <同一批玩家> -compare before.json`（Player 已随第 5 步原样拷进 B 的库，文档未变），按清单核对迁入文档 | `/readyz` 200；比较通过 |
 | 10 开放登录 | B 的状态改回 open。之后不再部署 game(A) | A 的角色登录到 B；`CreateRole` 在 A 上被拒（`server … is merged into B`） |
 
 **误启动 A**：装配了 account 的 game 进程启动时由 `ServingGuardMod`（[wiring/account](../../wiring/account/serving_guard.go)）向 account 查本服记录，`MergedInto != 0` 拒绝启动并点名承载服；它排在 DataEngine Mod 之前（DataEngine 把它列为可选依赖），所以 WAL 与 outbox 都还没打开。account 一直查不到时在 30 秒内重试，仍查不到也拒绝启动（无法证明没被并入就不写数据）。本服还没在 account 登记时放行。
@@ -142,7 +142,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 把一个角色从它绑定的服改绑到另一个服（方案 [FEATURE-2026-11-11-player-rehome](../maintenance/FEATURE-2026-11-11-player-rehome.md)，其中第 6 节的决定按推荐项先实施、待维护者确认）。本节是 **account 一侧**的现行契约：绑定、换服状态、四个接口、运维工具（[service/account/transfer.go](../../service/account/transfer.go)、`transfer_test.go`）。
 
-游戏侧由业务模块 [rehome](../../modules/README.md) 接上（2026-11-11）：源服打“离开中”标记（从此在写闸门拒绝这名玩家新的请求）→ 记意图 → account 发起 → 断开会话并等在途的请求执行完 → 复核检查、离开钩子 → DataEngine“交出实体”（之后拒写）→ account 提交 → 目标服首次进入时到达；提交 / 中止的结论按 account 带回的**当前绑定**判定（承载服、绑定代数、在途的换服），不按单个错误码——应答丢失之后重发得到的 stale 或“中止成功”不说明那个 ID 当年提交了没有；每一步失败的去向与崩溃恢复见[换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)。game-demo 已装上它：`PlayerOwners` 实现驻留与迁出表，saga 步骤按当前绑定准入，登录先过进入前检查，GM 命令 `gm.player.rehome`。**只有离线验证**（替身提交器、替身的交出实体）：真实的交出实体、两个 game 进程加 account 的演练、每个阶段后 kill -9 都没有做。
+游戏侧由业务模块 [rehome](../../modules/README.md) 接上（2026-11-11）：源服打“离开中”标记（从此在写闸门拒绝这名玩家新的请求）→ 记意图 → account 发起 → 断开会话并等在途的请求执行完 → 复核检查、离开钩子 → DataEngine“交出实体”（之后拒写）→ 搬档（v1.47.0 起 Player 的 DAO 是 `dbscope=sid`：把他的文档从源服的库复制到目标服的库）→ account 提交 → 删源服库里的那几份 → 目标服首次进入时到达；提交 / 中止的结论按 account 带回的**当前绑定**判定（承载服、绑定代数、在途的换服），不按单个错误码——应答丢失之后重发得到的 stale 或“中止成功”不说明那个 ID 当年提交了没有；每一步失败的去向与崩溃恢复见[换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)。game-demo 已装上它：`PlayerOwners` 实现驻留与迁出表，saga 步骤按当前绑定准入，登录先过进入前检查，GM 命令 `gm.player.rehome`。**只有离线验证**（替身提交器、替身的交出实体）：真实的交出实体、两个 game 进程加 account 的演练、每个阶段后 kill -9 都没有做。
 
 ### 7.1 模型
 

@@ -46,6 +46,9 @@ type FindOption struct {
 	Limit     int64
 	Skip      int64
 	BatchSize int32
+	// Projection 只取文档的部分字段（例如 bson.M{"_id": 1}）；nil 取整文档。只用于减少读出的字节，
+	// 调用方不得依赖“没投影的字段一定不在结果里”（测试替身 mongotest 不实现投影，照常返回整文档）。
+	Projection any
 }
 
 // FindOneAndUpdateOption configures FindOneAndUpdate operations.

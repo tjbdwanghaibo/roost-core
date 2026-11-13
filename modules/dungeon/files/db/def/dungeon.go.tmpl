@@ -2,7 +2,7 @@ package dbdef
 
 // DungeonDao 是一次不复用ID的单人副本。规则版本由独立LevelDAO保存的DefinitionHash绑定。
 //
-//roost:dao coll=dungeon db=main
+//roost:dao coll=dungeon db=main dbscope=sid
 type DungeonDao struct {
 	OwnerID   int64 `dao:"persist" store:"1"`
 	Season    int64 `dao:"persist" store:"2"`

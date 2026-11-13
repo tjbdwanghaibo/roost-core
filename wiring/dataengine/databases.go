@@ -63,6 +63,36 @@ func LoadDatabaseMapFile(path string, sid int32, resolver coredata.DatabaseResol
 	return LoadDatabaseMap(cfg, resolver)
 }
 
+// DAODatabaseFile 给直接读 DAO 文档的运维工具（cmd/sidmove players、cmd/schemamigrate）算出 dao 文档所在的
+// 物理库名：读服务配置文件（与 LoadDatabaseMapFile 同一条规则），逻辑库换成物理库，dbscope=sid 的 DAO 再加 _<sid>
+// （与 DAOCollection、DataEngine 投影同一规则；v1.47.0 起本地实体的 DAO 缺省按服分库）。sid 不为 0 时覆盖文件里的
+// sid；DAO 按服分库而两处都没有 sid 时返回错误。
+func DAODatabaseFile(path string, sid int32, dao DAOStore, resolver coredata.DatabaseResolver) (string, error) {
+	cfg, _, err := app.LoadConfigFile(path)
+	if err != nil {
+		return "", fmt.Errorf("dataengine databases: read %s: %w", path, err)
+	}
+	if sid != 0 {
+		cfg.Set("sid", sid)
+	}
+	var keys databasesKeys
+	if err := app.LoadConfig(cfg, &keys); err != nil {
+		return "", fmt.Errorf("dataengine databases: %w", err)
+	}
+	databases, err := NewDatabaseMap(keys.Databases, keys.Sid, resolver)
+	if err != nil {
+		return "", err
+	}
+	physical := databases.Physical(dao.DbName())
+	if coredata.ResolveDatabaseScope(dao) != coredata.DatabaseServer {
+		return physical, nil
+	}
+	if keys.Sid <= 0 {
+		return "", fmt.Errorf("dataengine databases: %s/%s is dbscope=sid (one database per server) and %s names no sid; pass the sid", dao.DbName(), dao.CollName(), path)
+	}
+	return fmt.Sprintf("%s_%d", physical, keys.Sid), nil // 与 mongo 驱动的 DatabaseForSid 同一命名
+}
+
 // DAOStore 是 DAO 在 Mongo 里的位置：DbName 是逻辑库（db=），CollName 是集合；按 sid 分库的 DAO 另有 DbScope。
 // 生成的 DAO 都满足它（new 一个零值 DAO 即可，例如 db.NewPlayerDao()）。
 type DAOStore interface {

@@ -207,6 +207,66 @@ type entityHandOff interface {
 	HandOffEntity(ctx context.Context, entityID int64) (*wiringde.EntityHandOff, error)
 }
 
+// Copied 是一次搬档的结果（wiring/dataengine 的 EntityCopy）：源服库里这名玩家的每份 dbscope=sid 文档、复制到哪个服。
+type Copied = wiringde.EntityCopy
+
+// ErrCopyConflict：目标服的库里已有这名玩家的另一个版本，不覆盖时拒绝（wiring/dataengine 的 ErrEntityCopyConflict）。
+var ErrCopyConflict = wiringde.ErrEntityCopyConflict
+
+// Documents 是换服的搬档（维护者 2026-11-13：本地实体的 DAO 缺省 dbscope=sid，物理库 <库>_<sid> 每个服一个；
+// 玩家换到别的服，他的文档要从本服的库搬到目标服的库，目标服才能加载他）。两个动作都只在本进程已经交出这名玩家的
+// 实体（Residency.Depart 成功、屏障保持）时可做，都可以原样重做；Driver 决定什么时候做哪一个：
+//
+//   - 交出之后、提交之前：Copy(overwrite=true) 复制到目标服。account 仍把他绑在本服，只有本服写过他，
+//     目标库里别的版本只能是以前留下的旧副本，整文档覆盖。失败即中止。
+//   - 提交之后：Drop(复制结果, 本服) 删掉本服库里的那些文档（版本仍是复制时的才删）：本服不再预加载他，按 ID
+//     也加载不到他。没复制过就被改绑的（运维在别处提交）先 Copy(overwrite=false)：目标库里没有才写，已有别的
+//     版本是冲突，本服的文档留着、记错误，由运维处理。
+//   - 中止之后（撤屏障之前）：Drop(复制结果, 目标服) 删掉这次写到目标库的副本（目标服没写过才删）。
+//
+// 只搬 dbscope=sid 的 DAO；global 的 DAO 各服共用、不动（没有 sid DAO 时两个动作什么都不做）。两侧物理库名按本进程的
+// dataengine.databases 换算，前提是两个服把同一个逻辑库映射到同一个 Mongo 上的同一个前缀。
+type Documents interface {
+	Copy(ctx context.Context, entityID int64, to int32, overwrite bool) (Copied, error)
+	Drop(ctx context.Context, copied Copied, sid int32) error
+}
+
+// documentMover 是 DataEngine Mod 上搬档的入口（wiring/dataengine 的 Mod）。
+type documentMover interface {
+	CopyHandedOffEntity(ctx context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error)
+	DropEntityCopy(ctx context.Context, copied wiringde.EntityCopy, sid int32) (int, error)
+}
+
+// RegistryDocuments 返回经 Registry 里 DataEngine Mod 搬档的 Documents（每次用到时才取：DataEngine 在协议绑定之后才发布）。
+func RegistryDocuments(registry *app.Registry) Documents { return registryDocuments{registry: registry} }
+
+type registryDocuments struct{ registry *app.Registry }
+
+func (r registryDocuments) mover() (documentMover, error) {
+	engine, ok := app.Lookup[documentMover](r.registry, mods.ModDataEngine)
+	if !ok || engine == nil {
+		return nil, fmt.Errorf("rehome: capability %q not found; the player's documents cannot be moved without the dataengine mod", mods.ModDataEngine)
+	}
+	return engine, nil
+}
+
+func (r registryDocuments) Copy(ctx context.Context, entityID int64, to int32, overwrite bool) (Copied, error) {
+	engine, err := r.mover()
+	if err != nil {
+		return Copied{}, err
+	}
+	return engine.CopyHandedOffEntity(ctx, entityID, to, overwrite)
+}
+
+func (r registryDocuments) Drop(ctx context.Context, copied Copied, sid int32) error {
+	engine, err := r.mover()
+	if err != nil {
+		return err
+	}
+	_, err = engine.DropEntityCopy(ctx, copied, sid)
+	return err
+}
+
 // LocalResidency 是 Residency 的缺省实现，给没有自己的驻留表的工程用：
 //
 //   - 写闸门：它自己就是接入边界的写闸门（AdmitMessage），第一次用到时发布（publishGate）：表里的玩家

@@ -413,5 +413,9 @@ func TestMMORPGRealPersistenceAcrossProcesses(t *testing.T) {
 		if err := h.mongo.Database(h.database).Drop(ctx); err != nil {
 			t.Fatal(err)
 		}
+		// add dao --entity 给本地实体写 dbscope=sid（v1.47.0 起）：这些 DAO 的文档在 <库>_<sid>，本用例的存储没有 sid（0）。
+		if err := h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

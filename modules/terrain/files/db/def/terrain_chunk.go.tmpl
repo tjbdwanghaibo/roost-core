@@ -2,7 +2,7 @@ package dbdef
 
 // TerrainChunkDao 的Lots是占地串行化权威；View只是已提交的行走投影。
 //
-//roost:dao coll=terrain_chunk db=main
+//roost:dao coll=terrain_chunk db=main dbscope=sid
 type TerrainChunkDao struct {
 	SceneID      int64           `dao:"persist,sync" store:"1"`
 	X            int32           `dao:"persist,sync" store:"2"`

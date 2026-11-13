@@ -30,21 +30,23 @@ import (
 func main() {
 	uri := flag.String("mongo", "mongodb://127.0.0.1:27017/?replicaSet=rs0", "the Mongo the game process writes Player documents to (mongo.uri in config.game.yaml)")
 	config := flag.String("config", "configs/service/config.{{GAME_SERVICE}}.yaml", "the game service config: its dataengine.databases maps the Player DAO's logical db= to the Mongo database")
-	database := flag.String("db", "", "physical database of the Player collection; empty resolves it from -config")
+	sid := flag.Int("sid", 0, "the game sid whose database holds the Player documents (the Player DAO is dbscope=sid; 0 keeps the config's sid)")
+	database := flag.String("db", "", "physical database of the Player collection; empty resolves it from -config and -sid")
 	collection := flag.String("coll", db.PlayerDaoCollection, "the Player collection")
 	backup := flag.String("backup", db.PlayerDaoCollection+"_schema1_backup", "collection that keeps each rewritten document as it was, for rollback")
 	timeout := flag.Duration("timeout", 30*time.Minute, "upper bound for the whole run")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fail("usage: schemamigrate [-mongo uri] [-config file] [-db name] [-coll name] [-backup name] plan|apply|verify|rollback")
+		fail("usage: schemamigrate [-mongo uri] [-config file] [-sid n] [-db name] [-coll name] [-backup name] plan|apply|verify|rollback")
 	}
 	if *database == "" {
-		// 与 game 进程同一条规则：Player DAO 的 db= 是逻辑库名，物理库按服务配置的 dataengine.databases 换算。
-		databases, err := kitdataengine.LoadDatabaseMapFile(*config, 0, nil)
+		// 与 game 进程同一条规则：Player DAO 的 db= 是逻辑库名，物理库按服务配置的 dataengine.databases 换算；
+		// Player 的 DAO 是 dbscope=sid（v1.47.0 起），再加 _<sid>，一次迁移一个服的库。
+		physical, err := kitdataengine.DAODatabaseFile(*config, int32(*sid), db.NewPlayerDao(), nil)
 		if err != nil {
 			fail("database mapping: %v", err)
 		}
-		*database = databases.Physical(db.PlayerDaoDBName)
+		*database = physical
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

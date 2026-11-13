@@ -494,6 +494,36 @@ func (mod *Mod) HandOffEntity(ctx context.Context, entityID int64) (*EntityHandO
 	return runtime.HandOffEntity(ctx, entityID)
 }
 
+// EntityCopy 是一次搬档的结果（engine.EntityCopy）。
+type EntityCopy = engine.EntityCopy
+
+// EntityCopyDocument 是一次搬档里的一份文档（engine.EntityCopyDocument）。
+type EntityCopyDocument = engine.EntityCopyDocument
+
+// ErrEntityCopyConflict：目标服的库里已有这个实体的另一个版本，不覆盖时拒绝（engine.ErrEntityCopyConflict）。
+var ErrEntityCopyConflict = engine.ErrEntityCopyConflict
+
+// CopyHandedOffEntity 把本进程已交出（HandOffEntity 成立、未 Release）的实体的 dbscope=sid 文档复制到 sid=to 的库
+// （engine.Runtime.CopyHandedOffEntity，换服的搬档）。overwrite 只在“account 仍绑在本服、换服在途”时用。
+// 会等待，只能在 io 池或独立 goroutine 调用。
+func (mod *Mod) CopyHandedOffEntity(ctx context.Context, entityID int64, to int32, overwrite bool) (EntityCopy, error) {
+	runtime := mod.Runtime()
+	if runtime == nil {
+		return EntityCopy{}, errors.New("dataengine mod: not provided")
+	}
+	return runtime.CopyHandedOffEntity(ctx, entityID, to, overwrite)
+}
+
+// DropEntityCopy 按复制结果删掉 sid 库里的那些文档（版本仍是复制时的才删；engine.Runtime.DropEntityCopy）。
+// 要求实体仍处于交出状态。会等待，只能在 io 池或独立 goroutine 调用。
+func (mod *Mod) DropEntityCopy(ctx context.Context, copied EntityCopy, sid int32) (int, error) {
+	runtime := mod.Runtime()
+	if runtime == nil {
+		return 0, errors.New("dataengine mod: not provided")
+	}
+	return runtime.DropEntityCopy(ctx, copied, sid)
+}
+
 func (mod *Mod) Repository() *engine.EntityRepository {
 	runtime := mod.Runtime()
 	if runtime == nil {

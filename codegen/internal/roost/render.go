@@ -594,6 +594,10 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 	if m.preloadServices[name] && contains(mods, "remote_entity") {
 		out = append(out, preloadModCall)
 	}
+	// 有本地 preload=startup kind：本地预加载 Mod 排在 DataEngine、Nest 之后，Service.Init 之前跑完。
+	if m.localPreloadServices[name] && contains(mods, "dataengine") && contains(mods, "nest") {
+		out = append(out, localPreloadModCall(name))
+	}
 	if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
 		args := make([]string, 0, len(spec.ModArgs))
 		for _, arg := range spec.ModArgs {

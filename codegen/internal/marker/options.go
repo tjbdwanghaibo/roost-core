@@ -61,7 +61,7 @@ var (
 	}
 	Entity = Spec{
 		Kind: "entity",
-		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker", "service", "preload", "snapshots"},
+		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker", "service", "preload", "preload_order", "snapshots"},
 		// Renamed: the value is the wire namespace every update
 		// of the subject carries, and "topic" suggested a bus that does not exist.
 		Renamed: map[string]string{"syncTopic": "syncNamespace"},

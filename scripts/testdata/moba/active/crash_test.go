@@ -218,5 +218,9 @@ func TestMOBARealActiveRoundCrashRecovery(t *testing.T) {
 	if err := h.mongo.Database(h.database).Drop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// add dao --entity 给本地实体写 dbscope=sid（v1.47.0 起）：这些 DAO 的文档在 <库>_<sid>，本用例的存储没有 sid（0）。
+	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Log(fmt.Sprintf("SIGKILL recovery: WAL backlog=%d, frame 20 -> 40, epoch 1 -> 2, 10 original Player sids retained", barrier.Unacked))
 }

@@ -3,7 +3,7 @@ package dbdef
 // RoomDao 只存房间事实；客户端经带成员检查的 PB 查询读快照，不直接订阅整份 DAO。
 // Closed 是终态；空房第一次等待成员与最后一名成员离开后的空房是不同的状态。
 //
-//roost:dao coll=room db=main
+//roost:dao coll=room db=main dbscope=sid
 type RoomDao struct {
 	Capacity  int32               `dao:"persist" store:"1"`
 	Closed    bool                `dao:"persist" store:"2"`

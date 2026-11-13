@@ -1,5 +1,18 @@
 # 当前已知限制与验证边界
 
+## 2026-11-13：本地实体起服预加载与本地实体 DAO 缺省 dbscope=sid（v1.47.0，未发版）
+
+设计见 [guide/02“起服预加载与按服分库”](../framework/guide/02-nest-entity.md#起服预加载与按服分库v1470-起)、实现见 [impl/12 §2H1](../framework/impl/12-codegen.md#2h1-本地实体起服预加载与-dao-缺省-dbscopesidv1470)。
+
+- **预加载载入本服库里的全部文档，没有数量上限与时间预算**：每页 1000 条、每批 16 个并发，用进程的基础 context；Mongo 卡住时起服一直等到进程被停。实体数很大时起服时间与内存随之增长，框架不估算、不截断。
+- **预加载不等于常驻**：框架没有冷热换出；被运维卸载、换服交出、业务空闲卸载的实体之后按需加载，不会再预加载。`EntityLifetimeResident` 仍只是声明。
+- **只按主 DAO 枚举**：kind 的第一个 DAO（`DaoBuilders[0]`）所在集合里有文档的实体才会被列出；只在别的 DAO 里有文档的不列出（新建实体时框架给每个持久 DAO 都写整文档，正常不会出现）。
+- **sid 只在一个服务类型内唯一**：不同服务类型的 sid 可能相同，同一个逻辑库在它们那里会落到同一个 `<库>_<sid>`。所以没写 `service=` 的本地预加载要求只有一个候选服务；两个服务类型共用同一个逻辑库与集合的部署不受支持（预加载会把对方的实体也列出来）。
+- **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`（各服共享的地形数据，维护者本轮只点名 Player / World）。terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid；分区场景（同一张地图跨多个 game 服）下模块地形按服分库是否符合预期**尚未确认**。
+- **`add dao --entity` 的缺省变了**：本地实体的 DAO 骨架写 `dbscope=sid`。各玩法脚本（`scripts/test-{slg,mmorpg,card-rpg,auto-chess,idle-sim}-generated.sh`、`scripts/test-genres-generated.py`）与 genre 参考文档里经它生成的 DAO 随之变化。夹具已按此改了两处——mmorpg 跨服演练按玩家的 sid 读 `<db>_<sid>`，各玩法真实依赖用例（`ROOST_*_REAL`）的收尾多删一个 `<库>_0`（这些用例的存储没有 sid）——本轮都**没有重跑**，是否还有别的直接读库处**尚未确认**。`-template game` 的 Player 缺省没有 DAO，要预加载 Player 先 `add dao Player --entity Player`。
+- **combat 组件的 DAO 仍是 global**：`gameplay/skill/combatcomponent.CombatDao` 没有 `DbScope()`，装了 combat 模块的 Player 一部分文档在 sid 库、一部分在共享库。功能上不受影响（共享库各服同一位置），但这样的 Player 不能声明 `preload=startup`：运行期 `ValidateLocalPreloadKinds` 拒绝、起服失败；生成期只认得生成 DAO 的 `DbScope()`，combat 这类手写 DAO 读不出范围、放过，换服也不搬它的战斗文档（各服本来共用）。要不要让组件 DAO 跟随宿主实体的 dbscope **待维护者决定**。
+- **存储位置变了、不兼容旧数据**：Player / World 与模块本地实体的文档从共用库搬到 `<库>_<sid>`；线上尚未部署，按规则不做迁移，升级前清空数据（CHANGELOG）。
+
 ## 2026-11-13：game-demo 主视野超限用例在重负载下失败一次（尚未确认）
 
 - `TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164`（game-demo 的 `internal/service/game/scene_view_scale_test.go`）在全仓 `go test ./...` 的 `TestClientSDKAgainstGeneratedPlayerTCP`（生成 game-demo 并跑它的测试）里失败一次，原文 `scene_view_scale_test.go:138: over the limit: 0 sessions lost, 0 waiting, 0 ever deferred (want 0, 0 and the crowd overflowing)`；当时同机并行跑着模块门禁与 17 个玩法纵切脚本。之后单独重跑 `TestClientSDKAgainstGeneratedPlayerTCP` 通过、生成的 game-demo 里该用例 `-count=5` 通过、独立生成的 game-demo `go test ./...` 通过。发生在“生成工程只带用到的托管服务”那一轮（2026-11-13），但那一轮的 game-demo 生成物除 `docs/ROOST_YAML.zh-CN.md` 一段说明外与改动前逐字相同，判断与该改动无关；“超限从未延后”在什么时序下出现没有定位，用例断言没有放宽。
@@ -669,7 +682,14 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
   - 排空的预算是 30 秒（一条请求的分发期限缺省 3 秒）；等不到就中止换服。受理到断开之间有 500 毫秒宽限，这期间他别的连接上的请求会被闸门关掉连接。
 - **结论按当前绑定判定**（RV-20261111-BM-04）：驱动器不再从 Commit / Abort 的错误码推断某个换服 ID 的历史。account 的绑定对不上时（承载服是本服而绑定代数恰好比发起时大 1）不下结论、按退避一直重问，屏障与迁出记录保持。运维用 `accountctl` 把玩家换走时源服若正卡在“发起结果未知”，源服会按“已迁走”落定并补交实体。
 - **game-demo 换服前的业务边界**：队伍通过双向事务内准入阻止成员换服，本服开着分区场景时仍拒绝。联盟成员可以换服，R10 已按入盟批次与旧 SID 条件刷新 HomeSID，进入时对账；它是尽力通知地址，不是 account 的线性一致副本。匹配票据、进行中的副本与对战、名下建筑与地形账本仍未被完整检查；全服邮件的服范围未随换服自动迁移。
-- **物理库不同的服之间换服会在目标服新建空档**：靠规则文件的可去列表把关，没有框架检查。费用没有实现（模块不依赖货币，规则文件里写了做法）。
+- **搬档（v1.47.0）的前提与窗口**：Player 等本地实体的 DAO 改为 `dbscope=sid` 之后，换服在交出之后把玩家实体的 sid 文档复制到目标服的库、提交后删源库（[模块 README“搬档”](../../modules/rehome/README.md)）。
+  - 前提：两个服把同一个逻辑库映射到同一个 Mongo、同一个前缀；不满足时目标服读不到搬过去的档、新建空档。靠规则文件的可去列表把关，没有框架检查。
+  - 只搬玩家实体自己的 sid DAO；他在别的独立实体里的数据不搬。
+  - 提交之后、删源库之前源服崩溃：源库留一份旧档，源服重启时被预加载进内存（接不到他的请求，但实体自己的定时逻辑仍可能写这份旧档）；他再来登录源服续做时补搬不覆盖目标服已写过的版本，源库这份记 Error 留给运维删。没有后台清扫。
+  - 搬档之后、中止删目标副本之前崩溃：目标库留一份旧副本；下一次换去那个服时被覆盖（提交前的复制用 overwrite）。
+  - 运维在模块之外用 `accountctl` 提交、源服又没有续做时，目标服没有他的档（新建空档）；续做时才补搬。
+  - 只有离线场景与框架侧（单测 + 真实副本集集成）验证，模块经真实 DataEngine 走到搬档、两个真实 game 进程的演练都没有做。
+- 费用没有实现（模块不依赖货币，规则文件里写了做法）。
 
 ### 单个角色换服（account 一侧）
 
@@ -684,7 +704,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **收尾是尽力而为的后半段**：结果已定、slot 没收尾时，另一头的名额仍按已占用回答（`ErrRoleLimit`），直到重发的 Commit / Abort、这个角色的下一次 `SelectRole` 或 `Begin` 补完；`SelectRole` 里补不完只记 Warn 与 `role_transfer.settle_failed`，不挡登录。
 - **没有人认的占位靠入口撤，没有后台清扫**（RV-20261111-BM-01 已修）：Begin / Commit 停在占位写入这一步时换服被中止，占位可能在中止收尾之后才落地。Begin 占完位会再读一次角色并撤掉自己留下的；进程在那之前退出的，由之后的入口撤——这个 ID 重发的 Abort、这个角色的 `SelectRole`、下一次受理的 Begin、Commit 补占位时、账号在那个服的 `CreateRole`。没有人再碰那个名额时占位一直在（不挡任何人，但 `show-role` 看不到它，只能直接读 slot）；`Admin.ResolvePendingCreation` 对它仍答 `ErrNotResolvable`、不撤。被拒绝的 Begin（例如重发一个已中止的 ID）不撤。代价：最近一次了结是中止的角色，每次 `SelectRole` 多读一次目标服的 slot，直到它下一次换服。判定规则（slot 在角色的绑定服上、或角色在途的换服就是它才作数；先读 slot 再读角色）依赖“占位只在角色写下 `Transfer` 之后才建”与“`LastTransfer` 被覆盖之前上一次的收尾已经做完”这两条写入顺序；改这两处要一起看 `releaseStrayHold`。
 - **建角服不再可得**：`OriginServerIDClaim` 在换服之后是当前绑定服；业务要按“最初的服”做显示或归属，得自己在玩家数据里记。
-- **物理库不同的服**：account 不知道两个服是否共用玩家数据的物理库；独立 Gate 转交给 game 的绑定不带 claims（两个新 claim 只在认证器那一侧可见）。
+- **物理库不同的服**：account 不知道两个服是否把玩家数据映射到同一个 Mongo 与前缀（v1.47.0 起搬档由 rehome 模块做，前提见上一节）；独立 Gate 转交给 game 的绑定不带 claims（两个新 claim 只在认证器那一侧可见）。
 - **验证边界**：单元用例在 Memory 与本机隔离的单机 Redis 上都跑（含注入失败的存储、并发的提交 / 中止、用 channel 固定的“占位写入之前 / 之后 × 中止 / 提交”交错与占位应答丢失），`wiring/integration` 有一条真实 Redis 用例；Redis Cluster 没有跑；没有真实进程（两个 game sid + account）的演练，那是游戏侧接上之后的事。
 
 ## 平台与外部验证
