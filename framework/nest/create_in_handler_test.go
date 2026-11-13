@@ -3,9 +3,16 @@
 package nest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
+	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -385,75 +392,74 @@ func TestCreateOutsideTransactionUnchanged(t *testing.T) {
 	}
 }
 
-var errGeneratedShapeNotFound = errors.New("created_in_scope lifecycle: Entity not found")
-
-// generatedShapeLifecycle 与 codegen/internal/roost/add_workflow.go 生成的 <Entity>Lifecycle 的
-// Get / Create / GetOrCreate 逐行同形（持有 *entity.ManagerAccess，按 UniqueID 创建）。
-type generatedShapeLifecycle struct {
-	access *entity.ManagerAccess
+// newGeneratedLifecycle 是生成工程 lifecycle_gen.go 的同一份 Lifecycle[T]（测试副本见 entitylifecycle_copy_test.go）。
+func newGeneratedLifecycle(t testing.TB, access *entity.ManagerAccess) *Lifecycle[*rollbackTestEntity] {
+	t.Helper()
+	lifecycle, err := New[*rollbackTestEntity](access, createdInScopeKind, "created_in_scope", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lifecycle
 }
 
-func (lifecycle *generatedShapeLifecycle) Get(ctx context.Context, uniqueID int64) (*rollbackTestEntity, error) {
-	fullID, err := entity.BuildEntityID(uniqueID, createdInScopeKind)
-	if err != nil {
-		return nil, err
+// 测试副本与 wiring/entitylifecycle 的 Lifecycle[T] 逐条同形（此前手写的 generatedShapeLifecycle 与生成物
+// 没有同步守卫，已漂移：缺删档错误码与 ErrEntityAggregateNotFound 分支）。比对除 FromRegistry 外的每个顶层类型
+// 与函数声明，打印时去掉注释；两边多一条、少一条或任何一条不同都红。
+func TestEntityLifecycleTestCopyMatchesWiring(t *testing.T) {
+	want := lifecycleDeclarations(t, filepath.Join("..", "..", "wiring", "entitylifecycle", "lifecycle.go"), "FromRegistry")
+	got := lifecycleDeclarations(t, "entitylifecycle_copy_test.go")
+	for name, decl := range want {
+		if got[name] != decl {
+			t.Errorf("%s differs from wiring/entitylifecycle:\n--- wiring\n%s\n--- copy\n%s", name, decl, got[name])
+		}
 	}
-	value, err := lifecycle.access.Get(ctx, fullID, entity.MustEntityCategoryOfKind(createdInScopeKind))
-	if err != nil {
-		return nil, err
+	for name := range got {
+		if _, ok := want[name]; !ok {
+			t.Errorf("the test copy declares %s, which wiring/entitylifecycle does not", name)
+		}
 	}
-	if value == nil {
-		return nil, errGeneratedShapeNotFound
-	}
-	typed, ok := value.(*rollbackTestEntity)
-	if !ok {
-		return nil, fmt.Errorf("created_in_scope lifecycle: Entity %d has type %T", fullID, value)
-	}
-	return typed, nil
 }
 
-func (lifecycle *generatedShapeLifecycle) Create(ctx context.Context, uniqueID int64) (*rollbackTestEntity, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	value, err := lifecycle.access.Create(&entity.EntityCreateParam{
-		IsCreate: true,
-		UniqueID: uniqueID,
-		Kind:     createdInScopeKind,
-		Category: entity.MustEntityCategoryOfKind(createdInScopeKind),
-	})
+// lifecycleDeclarations 返回文件里每个顶层类型 / 函数 / 方法声明（不含注释）的打印结果，键是名字（方法带接收者类型）。
+func lifecycleDeclarations(t *testing.T, path string, skip ...string) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
-		return nil, err
+		t.Fatal(err)
 	}
-	typed, ok := value.(*rollbackTestEntity)
-	if !ok {
-		return nil, fmt.Errorf("created_in_scope lifecycle: created Entity has type %T", value)
+	declarations := map[string]string{}
+	print := func(name string, node any) {
+		if slices.Contains(skip, name) {
+			return
+		}
+		var out bytes.Buffer
+		if err := printer.Fprint(&out, fset, node); err != nil {
+			t.Fatal(err)
+		}
+		declarations[name] = out.String()
 	}
-	return typed, nil
-}
-
-func (lifecycle *generatedShapeLifecycle) GetOrCreate(ctx context.Context, uniqueID int64) (*rollbackTestEntity, bool, error) {
-	for attempt := 1; ; attempt++ {
-		value, err := lifecycle.Get(ctx, uniqueID)
-		if err == nil {
-			return value, false, nil
+	for _, decl := range file.Decls {
+		switch decl := decl.(type) {
+		case *ast.FuncDecl:
+			name := decl.Name.Name
+			if decl.Recv != nil {
+				name = "Lifecycle." + name
+			}
+			print(name, decl)
+		case *ast.GenDecl:
+			if decl.Tok != token.IMPORT {
+				for _, spec := range decl.Specs {
+					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+						print(typeSpec.Name.Name, typeSpec)
+					} else {
+						print(fmt.Sprintf("%s@%d", decl.Tok, fset.Position(spec.Pos()).Line), spec)
+					}
+				}
+			}
 		}
-		if !errors.Is(err, errGeneratedShapeNotFound) {
-			return nil, false, err
-		}
-		value, err = lifecycle.Create(ctx, uniqueID)
-		if errors.Is(err, entity.ErrEntityExists) {
-			value, err = lifecycle.Get(ctx, uniqueID)
-			return value, false, err
-		}
-		if errors.Is(err, entity.ErrEntityRemoved) && attempt < 3 {
-			continue
-		}
-		return value, err == nil, err
 	}
+	return declarations
 }
 
 // lifecycleEntries 是 handler 内新建实体的两个生成入口。
@@ -461,10 +467,12 @@ var lifecycleEntries = []string{"lifecycle_create", "lifecycle_get_or_create"}
 
 // createViaLifecycle 与 createAndPublish 相同，只是用生成 Lifecycle 创建。
 func (f *createInScopeFixture) createViaLifecycle(entry string, unique int64, value int) (*rollbackTestEntity, error) {
-	lifecycle := &generatedShapeLifecycle{access: f.access}
+	lifecycle, err := New[*rollbackTestEntity](f.access, createdInScopeKind, "created_in_scope", nil)
+	if err != nil {
+		return nil, err
+	}
 	ctx := nestBaseContext()
 	var created *rollbackTestEntity
-	var err error
 	switch entry {
 	case "lifecycle_create":
 		created, err = lifecycle.Create(ctx, unique)
@@ -581,7 +589,7 @@ func TestLifecycleCreateInHandlerRevokedWhenHandlerFails(t *testing.T) {
 			if got := drainSubjects(t, f.frames); len(got) != 0 {
 				t.Fatalf("revoked entity was replicated: %v", got)
 			}
-			if _, err := (&generatedShapeLifecycle{access: f.access}).Create(context.Background(), unique+1); err != nil {
+			if _, err := newGeneratedLifecycle(t, f.access).Create(context.Background(), unique+1); err != nil {
 				t.Fatalf("id of a revoked entity cannot be reused: %v", err)
 			}
 		})
@@ -631,7 +639,7 @@ func TestLifecycleCreateInHandlerRevokedWhenStrictCommitRejected(t *testing.T) {
 // Nest 之外：生成 Lifecycle 的 Create / GetOrCreate 立即发布、立即可同步（登录 / 创角端点的现状）。
 func TestLifecycleCreateOutsideNestUnchanged(t *testing.T) {
 	f := newCreateInScopeFixture(t, 9830, nil)
-	lifecycle := &generatedShapeLifecycle{access: f.access}
+	lifecycle := newGeneratedLifecycle(t, f.access)
 	viaCreate, err := lifecycle.Create(context.Background(), 9831)
 	if err != nil {
 		t.Fatal(err)
@@ -668,7 +676,7 @@ func TestLifecycleGetOrCreateRetriesWhileRevokeFinishes(t *testing.T) {
 	manager := entity.NewEntityManager()
 	ids := addPilots(t, manager, 9950, 1)
 	access := entity.NewManagerAccess(manager)
-	lifecycle := &generatedShapeLifecycle{access: access}
+	lifecycle := newGeneratedLifecycle(t, access)
 	const unique = 9955
 	inWindow := make(chan struct{})
 	bRetried := make(chan struct{})

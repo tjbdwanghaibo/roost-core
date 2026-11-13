@@ -12,7 +12,6 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -103,7 +102,8 @@ func (lifecycle *Lifecycle[T]) CreateWith(ctx context.Context, uniqueID int64, p
 	return typed, nil
 }
 
-// GetOrCreate 返回已有的实体，存储里没有记录时新建（第二个返回值为 true）。删过档的实体（只剩墓碑）不再新建：
+// GetOrCreate 返回已有的实体，存储里没有记录时新建（第二个返回值为 true）。“没有记录”按加载器契约的
+// entity.ErrAuthorityEntityNotFound 判断（DataEngine 的 ErrEntityAggregateNotFound 满足它），与 Nest 冷加载同一口径。删过档的实体（只剩墓碑）不再新建：
 // 它的号不能再用，返回带 errcode.ErrEntityDeleted（客户端码 entity_deleted）的错误。
 // entity.ErrEntityRemoved 表示同号的上一个实例还在移除途中（事务内撤销的新建或 Destroy），是暂时的，
 // 有限次重试后才返回。Nest handler 内部框架把这个窗口报成 nest.ErrCreatedEntityLockConflict，自己决定整条消息回滚重入。
@@ -118,7 +118,7 @@ func (lifecycle *Lifecycle[T]) GetOrCreateWith(ctx context.Context, uniqueID int
 		if err == nil {
 			return value, false, nil
 		}
-		if !errors.Is(err, engine.ErrEntityAggregateNotFound) && !errors.Is(err, lifecycle.notFound) {
+		if !errors.Is(err, entity.ErrAuthorityEntityNotFound) && !errors.Is(err, lifecycle.notFound) {
 			return value, false, err
 		}
 		value, err = lifecycle.CreateWith(ctx, uniqueID, param)
