@@ -210,7 +210,7 @@ ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（�
 
 端点在模块自己的 controller 域 `game/controllers/chat/`，协议号在安装时从 `roost.yaml` 的 `ids` 段分配（记在 `modules.chat`）。
 
-- `internal/service/chat/collaborators.go`（模块替换了生成的拒绝桩）：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（没有队伍；
+- `services/chat/collaborators.go`（模块替换了生成的拒绝桩）：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（没有队伍；
   公会群聊没接，接时成员来源是 alliance 服务的 Mirror 与成员变化通知），system 频道只读；`Bodies()` 注册唯一的 `text` 类型，校验函数与端点共用（端点先校验，免一次总线往返）；
   `System()` 无条件 `GrantSystem()`——这是对部署的陈述：chat 只经内网 NATS 可达，没有端点转发 PublishSystem。总线对不可信一方可达的部署要换成查调用者身份。
 - **推送是捷径，序号是依据**：每条投递都带 `Seq`，错过推送的客户端用 `ChatHistory(after_seq)` 补读——机器人脚本就是这么写的
@@ -232,7 +232,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
                    └─ 清了：MultiSync_AddExp(Player, World, 100) —— 与 AddExp 端点同一笔两实体事务，够升一级，于是又走一遍升级 → 奖励邮件
 ```
 
-- `internal/service/session/collaborators.go`：`Release()` 是 session 服务对每个附着资源恰好调一次的钩子；demo 的副本不占外部资源，所以是一行日志 + nil。
+- `services/session/collaborators.go`：`Release()` 是 session 服务对每个附着资源恰好调一次的钩子；demo 的副本不占外部资源，所以是一行日志 + nil。
   真实游戏在这里释放实例 / 座位，返回 error 会让服务保留待释放并在下次 Enter / sweep 重试。
 - 第二局要等第一局结束：一个 owner 一个活 run 是服务的契约，重复 Enter 得到 `ErrAlreadyRunning` 的 coded 响应，不是第二个 run。
 - **发奖是恰好一次的**：`ClaimDungeon` 事务把 run id 与经验、World 计数放进同一条 WAL 记录（`game/handler/claim_dungeon.go`），
@@ -843,7 +843,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 
 第一步也可以用登录模块的开发渠道：`{"channel":"dev","open_id":"bob","credential":"dev-local"}`。拿到的 `ticket` 就是握手帧里出示的
 票据；之后的 `EnterStatus` / `EnterCreate` / `EnterGame` 要一条真的连接，用 `go run ./cmd/loadtest -login portal -count 2`。
-这三步在工程自带的开发配置上有离线场景（`game/portal/dev_walkthrough_test.go`：入口的 `Start` 读那份配置文件，两个渠道各走一遍，
+这三步在工程自带的开发配置上有离线场景（`services/account/portal/dev_walkthrough_test.go`：入口的 `Start` 读那份配置文件，两个渠道各走一遍，
 拿到的票据握手成功）；2026-11-12 起真实进程后用 curl 走过这三步（记录在仓库 CHANGELOG）。
 
 ### 握手：两种票据
@@ -891,7 +891,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 ### account 这一侧与 accountctl
 
 - 协作者是登录模块的：开发登录（渠道 `dev`，凭据是 `login.dev_token`）、玩家号（account 的 Redis 里 `<account.key_prefix>:player_id` 的
-  `INCR` 计数器，从 100001 起）、名字规则、指标。demo 只覆盖模块留给工程的渠道入口 `internal/service/account/login_channels.go`：
+  `INCR` 计数器，从 100001 起）、名字规则、指标。demo 只覆盖模块留给工程的渠道入口 `services/account/login_channels.go`：
   `demo` 渠道，凭据必须是 `demo:<open_id>`，其它渠道一律拒绝，返回的是它确认过的身份而不是提交上来的那份。
   **这不是身份校验**——任何人都能以任何账号登录——上线前换成对平台的真实调用。它不看配置，哪份配置下都开着；装了 portal 之后
   够得着入口的人都能用它，入口缺省只听 `127.0.0.1`。

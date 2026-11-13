@@ -199,7 +199,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	//     (ServerIDClaim — boundSID above, checked by Serve) and, for a role
 	//     whose origin server was merged into this one, of the origin too
 	//     (OriginServerIDClaim). Without LazyBroadcast configured
-	//     (internal/service/mail/collaborators.go Broadcast()) it is a no-op.
+	//     (services/mail/collaborators.go Broadcast()) it is a no-op.
 	//     A game with alliance-wide broadcasts adds mail.GuildScope(alliance) in that
 	//     function and pulls again when a membership notice says the player
 	//     joined or left.

@@ -402,7 +402,7 @@ DependsOn 拓扑排序。nest 和 saga 会自动补唯一的 dataengine 持久�
 
 services.<name>.framework 把该进程声明为一个托管的框架服务（roost-core service/：account、chat、
 mail、match、session、activity、global、platform、rank 九个之一）：没有业务 Service，进程就是该服务的
-Server 加它的 owner Mod，redis 与 nats 自动补齐（match、activity 按 key 路由，另补 etcd）；Mod 需要的协作者写在 internal/service/<name>/collaborators.go（只生成一次，
+Server 加它的 owner Mod，redis 与 nats 自动补齐（match、activity 按 key 路由，另补 etcd）；Mod 需要的协作者写在 services/<name>/collaborators.go（只生成一次，
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配
 对应 ClientMod（并补 nats），并在 internal/service/<name>/framework_clients_gen.go 生成类型化
 访问器。roost project new … -template game 缺省不托管任何框架服务：roost module add 装的模块用到哪个

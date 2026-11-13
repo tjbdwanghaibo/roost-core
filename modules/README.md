@@ -76,7 +76,7 @@
 | shop + rules / stamina + rules | 统一导出商品目录 / 体力规则，保持快照独立 | 各 2 |
 | profile + enter | 初次建档 1 级；不触发升级奖励，重进/冷加载不重置 | 4 |
 | attribute + enter | 按初始等级建立基础/最终属性，同事务回滚 | 2 |
-| portal + enter | 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手 → 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入，以及入口给的地址与进入时认的是同一个承载服（只有测试 `game/portal/portal_enter_test.go`，不加运行时代码） | 2 |
+| portal + enter | 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手 → 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入，以及入口给的地址与进入时认的是同一个承载服（只有测试 `services/account/portal/portal_enter_test.go`，不加运行时代码） | 2 |
 | login + enter | 进入前检查：会话记的承载服不是本服（或没有记）答 `login_elsewhere`，不加载也不创建 Player；用进服票据握手的会话先新建再进入（`EnterGame` 不代建，没建成答 `enter_need_create`）；会话激活之后推 `EnterStatus`，本服不该服务的会话推完断开（`game/login/login_enter.go`） | 6 |
 | enter + profile | 角色名的规则在游戏服：新建请求（`EnterCreate`）的名字按档案模块的名字规则校验，不合规在建档之前被拒；没装 naming 时在新建的那笔事务里写进档案，装了 naming 时经它的唯一命名入口占名（`game/profile/enter_profile.go`） | 3 |
 | servertime + enter | 玩家每次进入游戏时把服务器此刻的业务时间推给他（`game/controllers/servertime/servertime_enter.go`）；推送不成只记日志，不让登录失败 | 3 |
@@ -168,7 +168,7 @@ App 在 Init 失败后调用 Shutdown，适配层只清理已经启动（包括�
 
 ```yaml
 runtime:
-  package: game/portal
+  package: services/account/portal
   start: Start
   framework: account         # roost.yaml 里 services.<名字>.framework 的取值
 ```

@@ -6,23 +6,23 @@ needs:
   mods: [web]
   features: [errcode]
 runtime:
-  package: game/portal
+  package: services/account/portal
   start: Start
   framework: account
 errcodes: [portal_request_invalid]
 next:
   - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter；请求与响应见 roost-core 的 modules/portal/README.md"
-  - "区服的连接地址：在 config.account.yaml 写 portal.servers（服号 -> 客户端连得到的地址 host:port，通常是 Gate）；不写时清单照常列出 account 登记过的服，只是没有地址。要动态的地址（上报、服务发现）改 game/portal/portal_rules.go 的 newDirectory"
-  - "推荐规则（导量）在 game/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服"
+  - "区服的连接地址：在 config.account.yaml 写 portal.servers（服号 -> 客户端连得到的地址 host:port，通常是 Gate）；不写时清单照常列出 account 登记过的服，只是没有地址。要动态的地址（上报、服务发现）改 services/account/portal/portal_rules.go 的 newDirectory"
+  - "推荐规则（导量）在 services/account/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服"
   - "上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr"
 verify:
-  packages: [./game/portal]
+  packages: [./services/account/portal]
   run: ^TestPortal
   pass: 12
 with:
   enter:
     summary: 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（登录模块的认证器，account 按账号解析或新建玩家号）→ 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入游戏，以及入口给的地址与进入时认的是同一个承载服；只有测试，不加运行时代码
     verify:
-      packages: [./game/portal]
+      packages: [./services/account/portal]
       run: ^TestWithPortalEnter
       pass: 2

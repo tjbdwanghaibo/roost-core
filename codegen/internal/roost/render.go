@@ -143,7 +143,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 			// A hosted framework service has no business Service; its
 			// process is the roost-service Server plus the collaborators the
 			// owner Mod needs, which are the project's to write.
-			if err := addGo("internal/service/"+name+"/collaborators.go", renderFrameworkCollaborators(m, name), false); err != nil {
+			if err := addGo(m.serviceDir(name)+"/collaborators.go", renderFrameworkCollaborators(m, name), false); err != nil {
 				return nil, err
 			}
 			add("configs/service/config."+name+".yaml", renderServiceConfig(m, name, false), false)
@@ -393,7 +393,7 @@ func renderBootstrap(m Manifest) string {
 	}
 	services := sortedServiceNames(m)
 	for _, name := range services {
-		imports[m.Project.Module+"/internal/service/"+name] = "service" + safeIdent(name)
+		imports[m.Project.Module+"/"+m.serviceDir(name)] = "service" + safeIdent(name)
 		if spec, ok := frameworkCatalog[m.Services[name].Framework]; ok {
 			imports[frameworkServiceModule+"/"+spec.ImportPath()] = "svc" + spec.Package
 			imports[frameworkDomainModule+"/"+spec.ImportPath()] = "domain" + spec.Package

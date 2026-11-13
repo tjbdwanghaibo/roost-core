@@ -642,14 +642,23 @@ func validateModuleNext(hints []string) error {
 	return nil
 }
 
-var moduleRuntimePackagePattern = regexp.MustCompile(`^game/[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$`)
+// 入口包在 game/ 下（业务服务进程里启动），或在托管框架服务的 services/<服务>/ 下（v1.47.0 起，须写 runtime.framework）。
+var moduleRuntimePackagePattern = regexp.MustCompile(`^(game|services/[a-z][a-z0-9_]*)/[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$`)
 
 func validateModuleRuntime(runtime *ModuleRuntime) error {
 	if runtime == nil {
 		return nil
 	}
 	if !moduleRuntimePackagePattern.MatchString(runtime.Package) {
-		return fmt.Errorf("runtime.package %q must be a project-local game package", runtime.Package)
+		return fmt.Errorf("runtime.package %q must be a project-local game package (or services/<framework>/... with runtime.framework)", runtime.Package)
+	}
+	if rest, ok := strings.CutPrefix(runtime.Package, frameworkServicesDir); ok {
+		if runtime.Framework == "" {
+			return fmt.Errorf("runtime.package %q is under services/: name the hosted service in runtime.framework", runtime.Package)
+		}
+		if !strings.HasPrefix(rest, runtime.Framework+"/") {
+			return fmt.Errorf("runtime.package %q runs in the %s framework service, so it must be under %s%s/", runtime.Package, runtime.Framework, frameworkServicesDir, runtime.Framework)
+		}
 	}
 	if !modulePascalPattern.MatchString(runtime.Start) {
 		return fmt.Errorf("runtime.start %q must name an exported Go function", runtime.Start)

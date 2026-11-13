@@ -1133,13 +1133,13 @@ func stubComesFromNewFrameworkService(manifest Manifest, rel string, added []str
 	if _, ok := frameworkCollaboratorsStub(manifest, rel); !ok {
 		return false
 	}
-	name := strings.TrimSuffix(strings.TrimPrefix(rel, "internal/service/"), "/collaborators.go")
+	name := strings.TrimSuffix(strings.TrimPrefix(rel, frameworkServicesDir), "/collaborators.go")
 	return contains(added, name)
 }
 
-// frameworkCollaboratorsStub：托管框架服务的 internal/service/<name>/collaborators.go（默认拒绝一切）。
+// frameworkCollaboratorsStub：托管框架服务的 services/<name>/collaborators.go（默认拒绝一切）。
 func frameworkCollaboratorsStub(manifest Manifest, rel string) (string, bool) {
-	const prefix, suffix = "internal/service/", "/collaborators.go"
+	const prefix, suffix = frameworkServicesDir, "/collaborators.go"
 	if !strings.HasPrefix(rel, prefix) || !strings.HasSuffix(rel, suffix) {
 		return "", false
 	}

@@ -8,9 +8,9 @@ needs:
 access:
   transport: tcp
 protocols: [ChatSend, ChatHistory, ChatMessage]
-replaces: [internal/service/chat/collaborators.go]
+replaces: [services/chat/collaborators.go]
 verify:
-  packages: [./game/chat, ./game/controllers/chat, ./internal/service/chat]
+  packages: [./game/chat, ./game/controllers/chat, ./services/chat]
   run: ^TestChat
   pass: 10
 with:

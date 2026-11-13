@@ -29,7 +29,20 @@ func defaultServicePackage(name string) string {
 	return pkg
 }
 
-// servicePackage 是生成 internal/service/<name>/ 下文件时用的包名。
+// frameworkServicesDir 是托管框架服务手写文件（collaborators、登录渠道、HTTP 入口……）的目录（v1.47.0 起；此前与业务服务
+// 一样在 internal/service/<name>/）。托管服务没有生成的接线，只有工程自己写的协作者，所以放在工程顶层的 services/<name>/，
+// 只有用到的服务才有目录；game 服务的生成接线仍在 internal/service/<name>。
+const frameworkServicesDir = "services/"
+
+// serviceDir 是服务 name 的包目录（相对工程根，不带结尾斜杠）：托管框架服务在 services/<name>，业务服务在 internal/service/<name>。
+func (m Manifest) serviceDir(name string) string {
+	if m.isFrameworkService(name) {
+		return frameworkServicesDir + name
+	}
+	return "internal/service/" + name
+}
+
+// servicePackage 是生成服务目录（serviceDir）下文件时用的包名。
 func (m Manifest) servicePackage(name string) string {
 	if pkg, ok := m.servicePackages[name]; ok {
 		return pkg
@@ -42,7 +55,7 @@ func (m Manifest) servicePackage(name string) string {
 func (m Manifest) withServicePackages(root string) Manifest {
 	packages := make(map[string]string, len(m.Services))
 	for name := range m.Services {
-		if pkg, ok := existingServicePackage(filepath.Join(root, "internal", "service", name)); ok {
+		if pkg, ok := existingServicePackage(filepath.Join(root, filepath.FromSlash(m.serviceDir(name)))); ok {
 			packages[name] = pkg
 		}
 	}

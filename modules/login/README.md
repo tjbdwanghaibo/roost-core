@@ -55,7 +55,7 @@ login.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry,
 
 `Admit(self int32, playerID int64, claims map[string]string) error`：会话记的承载服就是本进程的 `sid` 返回 nil；是别的服、或者没有记，返回 `login_elsewhere`（带 `owner_sid`）。只读、不问任何服务。换服在途的角色这里不拒，那是 rehome 模块的事。
 
-### account 这一侧（`internal/service/account/`）
+### account 这一侧（`services/account/`）
 
 | 文件 | 内容 |
 | --- | --- |
@@ -94,7 +94,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 - **告知是尽力而为。** 同时至多 256 条会话、超过的丢弃、每条会话的全部告知合计至多 5 秒、进程退出不等。
 - **玩家号计数器与 account 的数据同生共死。** Redis 被清、或者换了 `account.key_prefix` 却没搬数据，会从头再数、发出重复的号。Redis 出错时不发号（建角失败可以重试）。
 - **`accountctl` 的前缀填错不会报错**，只是写进了没人读的键里；登记之后用 `list-servers` 与一次真实的握手确认。合服、换服的人工兜底不在这个最小命令里。
-- **装不上的情形：** 模块接管 `internal/access/player/tcp/auth.go` 与 `internal/service/account/collaborators.go`，只在它们仍是没改过的生成内容时替换，业务改过任何一个就拒绝安装、工程不变（全有或全无）；工程里已经有自己的 `cmd/accountctl/main.go` 时也装不上。
+- **装不上的情形：** 模块接管 `internal/access/player/tcp/auth.go` 与 `services/account/collaborators.go`，只在它们仍是没改过的生成内容时替换，业务改过任何一个就拒绝安装、工程不变（全有或全无）；工程里已经有自己的 `cmd/accountctl/main.go` 时也装不上。
 - **独立 Gate 部署只做过一次单机真实进程演练**（account、走 Game Ingress 的 game、Gate 三个进程，真实 NATS / Redis / Mongo / etcd）。生成器不生成 Gate 进程，接法是：
   - Game：`bootstrap.NewWithOptions(bootstrap.Options{GameIngress: &options})`，`options.Authenticator = accessplayertcp.NewAuthenticator()`（模块 `auth.go` 的 `NewAuthenticator`，claims 与会话激活后的告知都靠它），`options.RegisterDiscovery = true`，再给 `options.Ready` 与 `options.AdvertiseAddr`；配置里 `player_access.tcp.enabled: false`。
   - Gate：工程自己加一个服务，Mod 是 NATS、`kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration())`、account 的 `NewClientMod()`、`gatewiring.NewGateMod(options)`。不带认证器时用 `wiring/gate` 缺省的 `AccountAuthenticator`，它认 `enter:` 与 `session:` 两种票据。
@@ -118,7 +118,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
   2. 开发登录（只在开发配置里）：在 `configs/service/config.account.yaml` 末尾加 `login:` 下的 `dev_token: dev-随便什么`。
   3. 登记区服：account 里要有状态是 open 的服，新号才进得去，登录入口的清单才不是空的；服号就是 game 进程的 `sid`。本机用 `make dev-run`（`deploy/dev/run.sh start`）起全部服务时脚本会自动登记；别的环境在 account 与它的 Redis 起来之后执行一次 `go run ./cmd/accountctl upsert-server -sid <sid>`。
   4. 给客户端一个登录入口：`roost module add portal`（HTTP 的登录、清单与推荐、进服三个端点），或者由工程自己的入口代客户端调 account 的 `Login` → `IssueEnterTicket`（或 `CreateRole` → `SelectRole`）。
-  5. 上线前接渠道：在 `internal/service/account/login_channels.go` 的 `verifyChannel` 里按 `identity.Channel` 分支接平台验签。必须守住三条：验不过返回包着 `svcaccount.ErrIdentityDenied` 的错误；问不到渠道返回包着 `svcaccount.ErrVerifierUnavailable` 的错误；返回渠道确认的 `OpenID`，不是客户端提交的那个。
+  5. 上线前接渠道：在 `services/account/login_channels.go` 的 `verifyChannel` 里按 `identity.Channel` 分支接平台验签。必须守住三条：验不过返回包着 `svcaccount.ErrIdentityDenied` 的错误；问不到渠道返回包着 `svcaccount.ErrVerifierUnavailable` 的错误；返回渠道确认的 `OpenID`，不是客户端提交的那个。
 - **需求比它多一点：**
   - 多记会话事实：改 `game/login/login.go` 的 `Claims`。
   - 把区服编进玩家号：改 `login_player_id.go` 的 `Allocate`。有玩家之后不要调小 `firstPlayerID`。
@@ -157,7 +157,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 
 ## 验证范围
 
-`roost module verify` 跑 32 条场景（`^TestLogin`：`game/login` 20 条、`internal/access/player/tcp` 2 条、`internal/service/account` 6 条、`cmd/accountctl` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）。全部是离线的：
+`roost module verify` 跑 32 条场景（`^TestLogin`：`game/login` 20 条、`internal/access/player/tcp` 2 条、`services/account` 6 条、`cmd/accountctl` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）。全部是离线的：
 
 - 认证器的场景用真实的 `account.Service` 加内存存储：两种票据的通过与拒绝、过期、伪造、合服后的承载服、换服在途、并发握手只建一个映射、“拒绝”与“判断不了”的区分。
 - 告知的场景验证后台执行、上限与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。

@@ -4,7 +4,7 @@
 
 ## 能力
 
-**客户端协议**：没有 Nest / PB 协议，只有三个 HTTP 端点（`game/portal/portal.go`；都是 `POST`、JSON；字段与响应的细节见后面的“端点”一节）。
+**客户端协议**：没有 Nest / PB 协议，只有三个 HTTP 端点（`services/account/portal/portal.go`；都是 `POST`、JSON；字段与响应的细节见后面的“端点”一节）。
 
 | 端点 | 请求 | 响应 | 做什么 |
 | --- | --- | --- | --- |
@@ -12,17 +12,17 @@
 | `POST /portal/servers` | `{account_ticket}` | `{ok, recommended_server_id, servers[]}` | 区服清单：每个服的名字、状态、是否并入别的服、地址、负载、标签、本账号在那里有没有角色；外加推荐的服 |
 | `POST /portal/enter` | `{account_ticket, server_id}` | `{ok, ticket, server_id, serving_server_id, expires_at, addr, addr_source}` | 向 account 要一张进服票据（`IssueEnterTicket`），连同承载服的地址交给客户端；`ticket` 是握手时原样出示的 `enter:<进服票据>` |
 
-**服务端入口**（`game/portal`）
+**服务端入口**（`services/account/portal`）
 
 - `portal.Start(registry) (stop func(context.Context) error, err error)`：模块的启动入口（清单的 `runtime`）。读配置、取本进程的 account 服务与 web Mod、让规则文件选区服目录、登记三条路由。任何一样不对进程不启动。
 - `portal.New(Options{Accounts, Directory, Recommend}) (*Portal, error)` 与 `(*Portal).RegisterRoutes(reg)`：自己装配（把 manifest 拆成独立服务、测试）时用。
 - 区服目录的构件：`NewStaticDirectory(addrs)`、`NewRegistry(now)`（带过期的注册表，方法 `Announce` / `Withdraw` / `Entries` / `Len`）、`Overlay(directories...)`、`DirectoryFunc`。
 
-**扩展点**（都在归工程所有的 `game/portal/portal_rules.go`）
+**扩展点**（都在归工程所有的 `services/account/portal/portal_rules.go`）
 
 - `newDirectory(registry, configured) (Directory, stop, error)`：入口启动时调一次，决定用哪个**区服目录**（每个服该连哪个地址、多忙）。缺省直接用配置 `portal.servers` 的静态目录。要动态的地址（上报、服务发现、运维登记）改这里，见“区服目录”与“动态目录”。
 - `recommend(servers []ServerChoice) int32`：**推荐规则**（导量），每次 `/portal/servers` 调一次。见“推荐规则”。
-- `Directory` 接口（`game/portal/portal_directory.go`）：`Entries(ctx) ([]Entry, error)`，工程可以自己实现。
+- `Directory` 接口（`services/account/portal/portal_directory.go`）：`Entries(ctx) ([]Entry, error)`，工程可以自己实现。
 
 **状态**：无。入口不存任何东西，也不持有任何密钥；票据全部由 account 签发与校验。动态注册表是进程内的内存表。
 
@@ -34,7 +34,7 @@
 
 **错误码**（`internal/errors/portal.go`）：入口自己的只有 `portal_request_invalid`——必填字段没填、字段超过长度上限、服号不是正数；这样的请求没有去问 account。其余的拒绝是 account 的码原样带回：`560111` 票据无效、`560102` 渠道拒绝凭据或账号被封、`560103` 账号不存在、`560104` 服没登记。
 
-**日志**：登录与签发进服票据确认，记录账号、区服；渠道拒绝记 Info。角色尚未分配，因此此处使用 account_id，不造 player_id；内部失败只记录错误码，防止渠道错误携带凭据。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/portal/portal.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：登录与签发进服票据确认，记录账号、区服；渠道拒绝记 Info。角色尚未分配，因此此处使用 account_id，不造 player_id；内部失败只记录错误码，防止渠道错误携带凭据。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `services/account/portal/portal.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -72,7 +72,7 @@ roost module verify
 
 - 区服地址要动态（扩缩容、上报负载）：改 `portal_rules.go` 的 `newDirectory`，见“动态目录”的三种接法。
 - 导量（按负载、标签、渠道分流）：改 `portal_rules.go` 的 `recommend`，规则数据也放在那个文件里。
-- 登录渠道：不在这里，在 login 模块留给工程的 `internal/service/account/login_channels.go`。
+- 登录渠道：不在这里，在 login 模块留给工程的 `services/account/login_channels.go`。
 - 限流、TLS：放在反向代理上。
 - 清单要缓存或分页：把 manifest 拆成独立服务（见下），在自己的服务里包一层。
 - 不要改的文件：`portal.go`（端点与“账号只取自票据”的检查）、`portal_directory.go`、`portal_registry.go`、`portal_config.go`。
@@ -97,12 +97,12 @@ roost module verify
 
 ## 联动
 
-- `portal` + `enter`（`with/enter/game/portal/portal_enter_test.go`）：**只有测试，不加运行时代码**。整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（login 的认证器）→ 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入；以及入口给的地址与进入时认的是同一个承载服。
+- `portal` + `enter`（`with/enter/services/account/portal/portal_enter_test.go`）：**只有测试，不加运行时代码**。整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（login 的认证器）→ 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入；以及入口给的地址与进入时认的是同一个承载服。
 - 别的模块没有 `with/portal`。握手之后的三步（`EnterStatus` / `EnterCreate` / `EnterGame`）属于 `login` + `enter` 的联动；没装 enter 的工程握手之后走自己的进入流程。
 
 ## 验证范围
 
-- `roost module verify portal`：12 条场景（`game/portal`）；与 `enter` 的联动 2 条。
+- `roost module verify portal`：12 条场景（`services/account/portal`）；与 `enter` 的联动 2 条。
 - 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）与 login 模块的认证器；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
 - 覆盖：从渠道身份走到一条认证过的握手、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、注册表的过期 / 上限 / 并发、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；独立 Gate 另做过一次单机演练（见 login 模块 README 的“边界”）。
@@ -174,7 +174,7 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 
 | 请求字段 | 上限 | 说明 |
 | --- | --- | --- |
-| `channel` | 32 字节 | 渠道。开发登录是 `dev`；其余是工程在 `internal/service/account/login_channels.go` 接的 |
+| `channel` | 32 字节 | 渠道。开发登录是 `dev`；其余是工程在 `services/account/login_channels.go` 接的 |
 | `open_id` | 128 字节 | 渠道里的用户标识。只是提示：账号以渠道确认的身份为准——拿自己的凭据配上别人的 `open_id`，得到的仍是自己的账号 |
 | `credential` | 8 KiB | 交给渠道校验的凭据（开发登录是 `login.dev_token` 的值）。不记日志、不回显 |
 
@@ -236,7 +236,7 @@ type Directory interface {
 - 入口每个要地址的请求都问一次目录，所以实现要快：读内存，或者自己带缓存；要并发安全。
 - 返回错误 = “现在问不到”，入口答 500。
 - 不成样子的条目与重复的服号（留第一个）由入口丢掉并记一条 Warn，那个服在清单里就是没有地址；坏数据不会让请求失败，也不会被带给客户端。至多认 256 个条目。
-- 用哪个目录在 `game/portal/portal_rules.go` 的 `newDirectory` 里选，**那个文件归工程所有**。
+- 用哪个目录在 `services/account/portal/portal_rules.go` 的 `newDirectory` 里选，**那个文件归工程所有**。
 
 缺省是静态目录：配置 `portal.servers`（`NewStaticDirectory`）。静态数据写错（地址不成样子、服号不是正数、超过 256 条）在启动时就报错。
 
@@ -263,7 +263,7 @@ directory := portal.Overlay(configured, dynamic)                                
 
 ## 推荐规则
 
-`game/portal/portal_rules.go` 的 `recommend`，输入是清单（`ServerChoice`：每个服的状态、是否并入别的服、地址、负载、标签、本账号有没有角色与最近登录时间），输出推荐的服号。缺省规则：
+`services/account/portal/portal_rules.go` 的 `recommend`，输入是清单（`ServerChoice`：每个服的状态、是否并入别的服、地址、负载、标签、本账号有没有角色与最近登录时间），输出推荐的服号。缺省规则：
 
 - **老号**（至少在一个服有角色）：推荐最近登录过的那个角色所在的服；登录时间相同取服号大的。不看那个服现在的状态与负载。
 - **新号**：在状态是 `open`、没有并入别的服的服里推荐服号最大的（最新开的）；有地址的服优先于没有地址的。
@@ -303,10 +303,10 @@ portal:
 
 | 文件 | 内容 |
 | --- | --- |
-| `game/portal/portal.go` | 启动入口 `Start`（清单的 `runtime`，在托管 account 的进程里启动）、三个端点、请求与响应的形状 |
-| `game/portal/portal_rules.go` | **归工程所有**：用哪个区服目录（`newDirectory`）、推荐规则（`recommend`） |
-| `game/portal/portal_directory.go` | 区服目录的接口、静态目录、`Overlay` |
-| `game/portal/portal_registry.go` | 动态注册表 |
-| `game/portal/portal_config.go` | `portal.servers` 的声明与启动时的检查 |
+| `services/account/portal/portal.go` | 启动入口 `Start`（清单的 `runtime`，在托管 account 的进程里启动）、三个端点、请求与响应的形状 |
+| `services/account/portal/portal_rules.go` | **归工程所有**：用哪个区服目录（`newDirectory`）、推荐规则（`recommend`） |
+| `services/account/portal/portal_directory.go` | 区服目录的接口、静态目录、`Overlay` |
+| `services/account/portal/portal_registry.go` | 动态注册表 |
+| `services/account/portal/portal_config.go` | `portal.servers` 的声明与启动时的检查 |
 | `internal/errors/portal.go` | 入口自己的业务码 |
-| `game/portal/portal_enter_test.go` | 只在装了 enter 时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |
+| `services/account/portal/portal_enter_test.go` | 只在装了 enter 时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |

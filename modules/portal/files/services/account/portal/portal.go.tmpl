@@ -169,7 +169,7 @@ var _ webroute.Module = (*Portal)(nil)
 
 // loginRequest 是 POST /portal/login 的请求体。
 type loginRequest struct {
-	// Channel 是登录渠道：开发登录是 "dev"，其余是工程在 internal/service/account/login_channels.go 接的渠道。
+	// Channel 是登录渠道：开发登录是 "dev"，其余是工程在 services/account/login_channels.go 接的渠道。
 	Channel string `json:"channel"`
 	// OpenID 是渠道里的用户标识。它只是提示：账号以渠道确认的身份为准（account 的 Login）。
 	OpenID string `json:"open_id"`

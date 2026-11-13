@@ -767,7 +767,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/activity.go", why: "the World's timer driver wired by hand (business clock, Nest, start before the World loads), the window loop (expected servers from the App singleton lock's Live query), the phase effect consumer and the settlement: mail → record → ack"},
 		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and its activity group comes from the groups file the coordinator reads too"},
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
-		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
+		{write: "services/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
 	return append(append(steps, demoModuleSteps()...), demoAllianceSteps(gameService)...)
 }
@@ -787,8 +787,8 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "game/alliance/rules.go", why: "demo alliance currency is gold item 9001"},
 		{write: "game/purchase/products.go", why: "the purchase module's project-owned catalogue: demo item packs plus the default coin product"},
 		{write: "game/purchase/demo_provider.go", why: "the demo-only provider's channel and deterministic order identity"},
-		{write: "internal/service/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
-		{write: "internal/service/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
+		{write: "services/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
+		{write: "services/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
 		{write: "game/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的四个业务文件。协议多几个字段，
 		// 两个要装载 Player 的端点交给 player controller——EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
@@ -834,13 +834,13 @@ func demoModuleSteps() []demoScaffoldStep {
 		// demo 只动模块留给工程的地方：渠道入口 login_channels.go 换成 demo 渠道（机器人、演练脚本与 WALKTHROUGH 用它登录），
 		// accountctl 经模块的 registerCommand 多登记四个命令（另一个文件，模块的 main.go 不动）。
 		// 登录入口是 portal 模块（挂在托管 account 的进程上），服务器时间是 servertime 模块，demo 都不覆盖。
-		{write: "internal/service/account/login_channels.go", why: "the login module's project-owned channel entry with the demo channel: credential demo:<open_id>, which the robots, the drills and the walkthrough log in with; every other channel is refused"},
-		{write: "internal/service/account/login_channels_test.go", why: "the demo channel on the real account service: the matching credential logs in (session token and enter ticket both), anything else is identity_denied and leaves no account, and the development channel still answers to login.dev_token only"},
+		{write: "services/account/login_channels.go", why: "the login module's project-owned channel entry with the demo channel: credential demo:<open_id>, which the robots, the drills and the walkthrough log in with; every other channel is refused"},
+		{write: "services/account/login_channels_test.go", why: "the demo channel on the real account service: the matching credential logs in (session token and enter ticket both), anything else is identity_denied and leaves no account, and the development channel still answers to login.dev_token only"},
 		{write: "internal/access/player/tcp/login_claims_test.go", why: "the login module's authenticator read back by the demo's own reader: the bound sid BoundServerID reads, the broadcast profile of the mailbox enter hook, the bind epoch and a transfer in flight; and what the demo's former authenticator refused is still refused"},
 		{write: "cmd/accountctl/operator.go", why: "the demo's operator commands registered beside the login module's own: record or undo a server merge (merge-server / unmerge-server), and the manual fallback for moving one role to another server (show-role, transfer-role begin / commit / abort)"},
 		{write: "cmd/accountctl/operator_test.go", why: "transfer-role begin / commit / abort on the real account service over memory stores: begin presents the binding it read, commit records the operator's note, an incomplete command writes nothing; the four commands are reachable through the module's dispatch"},
 		{write: "cmd/loadtest/portal_login_test.go", why: "the robot's -login portal credential path against the real front door handlers: three HTTP calls end in an enter ticket the handshake takes, a returning robot learns its player id from the server list, and an unregistered server, a refused login or an unreachable front door yield no handshake frame"},
-		{write: "game/portal/dev_walkthrough_test.go", why: "the walkthrough's three calls on the project's own dev config: the front door's Start on configs/service/config.account.yaml, the demo channel and the development channel, an enter ticket with this machine's game address, and the handshake that takes it"},
+		{write: "services/account/portal/dev_walkthrough_test.go", why: "the walkthrough's three calls on the project's own dev config: the front door's Start on configs/service/config.account.yaml, the demo channel and the development channel, an enter ticket with this machine's game address, and the handshake that takes it"},
 		{run: demoLoginDevConfig, why: "the account service's DEV config gets the development login token and the address of this machine's game server, so the walkthrough's three curl calls end with an enter ticket and where to connect; the production example gets neither"},
 	}
 }
@@ -887,7 +887,7 @@ func demoLoginDevConfig(root, gameService string) error {
 		body += "\n"
 	}
 	if !strings.Contains("\n"+body, "\nlogin:\n") {
-		body += "# Development login (the login module, internal/service/account/login_dev.go): channel \"dev\" with this\n" +
+		body += "# Development login (the login module, services/account/login_dev.go): channel \"dev\" with this\n" +
 			"# token as the credential. DEV ONLY: a production config that sets it stops the account process at start.\n" +
 			"# The demo channel (login_channels.go, credential demo:<open_id>) does not read it.\n" +
 			"login:\n  dev_token: " + demoDevLoginToken + "\n"
@@ -895,7 +895,7 @@ func demoLoginDevConfig(root, gameService string) error {
 	if !strings.Contains("\n"+body, "\nportal:\n") {
 		body += "# The front door's server directory (the portal module): server id -> the address a client connects to.\n" +
 			"# This machine's game server; a deployment lists its Gate addresses here or plugs in a dynamic directory\n" +
-			"# (game/portal/portal_rules.go).\n" +
+			"# (services/account/portal/portal_rules.go).\n" +
 			fmt.Sprintf("portal:\n  servers:\n    \"%d\": 127.0.0.1:%s\n", game.Sid, port)
 	}
 	if body == string(raw) {

@@ -73,7 +73,7 @@ var frameworkCatalog = map[string]frameworkServiceSpec{
 // service that cannot verify identities must not issue sessions.
 func Verifier() account.IdentityVerifier {
 	return account.VerifierFunc(func(context.Context, account.Identity) (account.Verified, error) {
-		return account.Verified{}, errors.New("account: identity verifier is not configured; implement Verifier() in internal/service/%[1]s/collaborators.go")
+		return account.Verified{}, errors.New("account: identity verifier is not configured; implement Verifier() in services/%[1]s/collaborators.go")
 	})
 }
 
@@ -81,7 +81,7 @@ func Verifier() account.IdentityVerifier {
 // globally unique and come from a source this project chooses.
 func Allocator() account.PlayerIDAllocator {
 	return account.AllocatorFunc(func(context.Context, int32) (int64, error) {
-		return 0, errors.New("account: player id allocator is not configured; implement Allocator() in internal/service/%[1]s/collaborators.go")
+		return 0, errors.New("account: player id allocator is not configured; implement Allocator() in services/%[1]s/collaborators.go")
 	})
 }
 
@@ -152,14 +152,14 @@ func Broadcast() mail.Deliverer { return nil }
 // reaches production.
 func Verify() platform.Verifier {
 	return platform.VerifierFunc(func(context.Context, platform.Credential) (platform.Verified, error) {
-		return platform.Verified{}, errors.New("platform: callback verifier is not configured; implement Verify() in internal/service/%[1]s/collaborators.go")
+		return platform.Verified{}, errors.New("platform: callback verifier is not configured; implement Verify() in services/%[1]s/collaborators.go")
 	})
 }
 
 // Players resolves a channel account to this server's player id.
 func Players() platform.PlayerResolver {
 	return platform.PlayerResolverFunc(func(context.Context, platform.Verified) (int64, error) {
-		return 0, errors.New("platform: player resolver is not configured; implement Players() in internal/service/%[1]s/collaborators.go")
+		return 0, errors.New("platform: player resolver is not configured; implement Players() in services/%[1]s/collaborators.go")
 	})
 }
 
@@ -169,7 +169,7 @@ func Players() platform.PlayerResolver {
 // report looks identical to one that never ran.
 func Deliver() platform.Deliverer {
 	return platform.DelivererFunc(func(context.Context, platform.Order) error {
-		return errors.New("platform: deliverer is not configured; implement Deliver() in internal/service/%[1]s/collaborators.go")
+		return errors.New("platform: deliverer is not configured; implement Deliver() in services/%[1]s/collaborators.go")
 	})
 }
 
@@ -228,7 +228,7 @@ func Pending() platform.PendingOrders { return nil }
 // refuses, so a run cannot look released while the instance is still held.
 func Release() session.Releaser {
 	return session.ReleaserFunc(func(context.Context, session.Run, session.Resource) error {
-		return errors.New("session: releaser is not configured; implement Release() in internal/service/%[1]s/collaborators.go")
+		return errors.New("session: releaser is not configured; implement Release() in services/%[1]s/collaborators.go")
 	})
 }
 `,
@@ -242,10 +242,10 @@ func Release() session.Releaser {
 func Policy() chat.ChannelPolicy {
 	return chat.PolicyFuncs{
 		Publish: func(context.Context, chat.Sender, chat.Channel) error {
-			return errors.New("chat: publish policy is not configured; implement Policy() in internal/service/%[1]s/collaborators.go")
+			return errors.New("chat: publish policy is not configured; implement Policy() in services/%[1]s/collaborators.go")
 		},
 		Read: func(context.Context, chat.Sender, chat.Channel) error {
-			return errors.New("chat: read policy is not configured; implement Policy() in internal/service/%[1]s/collaborators.go")
+			return errors.New("chat: read policy is not configured; implement Policy() in services/%[1]s/collaborators.go")
 		},
 	}
 }
@@ -725,7 +725,7 @@ func renderFrameworkServicesGuide(m Manifest) string {
 		if spec.Package == "mail" {
 			required += ", mail.send_ttl"
 		}
-		fmt.Fprintf(&b, "| `%s` | %s | configs/service/config.%s.yaml | %s | internal/service/%s/collaborators.go |\n", name, spec.Package, name, required, name)
+		fmt.Fprintf(&b, "| `%s` | %s | configs/service/config.%s.yaml | %s | services/%s/collaborators.go |\n", name, spec.Package, name, required, name)
 	}
 	b.WriteString("\n## 协作者：默认全部拒绝\n\n")
 	b.WriteString("owner Mod 需要的协作者——身份校验、玩家 id 分配、名字规则、广播投递、频道策略、系统鉴权、匹配分组——是业务决定，生成器只生成一次、不再改写，\n")

@@ -296,7 +296,7 @@ func checkFrameworkCollaborators(root string, manifest Manifest) []CheckItem {
 		if !manifest.isFrameworkService(name) {
 			continue
 		}
-		rel := "internal/service/" + name + "/collaborators.go"
+		rel := manifest.serviceDir(name) + "/collaborators.go"
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusFail, Detail: rel + " is missing; run make sync"})
@@ -371,7 +371,7 @@ func PrintNextStep(root, requestedWorkflow string, stdout io.Writer) error {
 	for _, item := range checkFrameworkCollaborators(root, manifest) {
 		if item.Status == StatusFail {
 			service := strings.TrimPrefix(item.Name, "collaborators:")
-			fmt.Fprintf(stdout, "next: implement the collaborators of %s in internal/service/%s/collaborators.go\n", service, service)
+			fmt.Fprintf(stdout, "next: implement the collaborators of %s in %s/collaborators.go\n", service, frameworkServicesDir+service)
 			fmt.Fprintf(stdout, "why: %s\n", item.Detail)
 		}
 	}

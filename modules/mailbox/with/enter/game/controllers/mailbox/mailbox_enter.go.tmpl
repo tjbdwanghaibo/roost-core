@@ -16,7 +16,7 @@ import (
 //
 // 玩家进入游戏时把属于他的全服邮件（AudienceBroadcast）合并进邮箱：mail 服务记下这名玩家的画像，
 // 把离线期间发出、他该收到的全服邮件恰好合并一次；之后 List 与 Summary 按同一份画像补齐。
-// 没有配置 LazyBroadcast 的工程（internal/service/mail/collaborators.go 的 Broadcast() 返回 nil）
+// 没有配置 LazyBroadcast 的工程（services/mail/collaborators.go 的 Broadcast() 返回 nil）
 // 这一步只是问一次汇总，什么都不合并。
 //
 // 这是进入钩子（见 game/enter）：失败只记日志、不让登录失败，下一次进入或下一次 List 会补上。
