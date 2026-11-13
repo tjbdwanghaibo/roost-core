@@ -43,7 +43,22 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 - **顺序**：`preload_order` 小的先载入；同一个值的 kind 一起并发载入；下一批等上一批全部结束（成功或记失败）才开始。不写时为 0。它就是 `EntityBuilderParam.LoadPriority`，取值 0～1000。
 - **失败**：枚举失败（库不可达、kind 不满足下面的条件）让起服失败。单个实体加载失败只记日志与计数、留给按需加载，不阻止起服；枚举之后被删掉、文档已不在的不算失败。结果写在 `LocalPreloadMod.Report`（每个 kind 的 Listed / Loaded / Deleted / Missing / Failed），指标 `dataengine.local_preload_total{kind,result=ok|deleted|missing|error}`。
 - **条件**（生成期拒绝、运行期 `ValidateLocalPreloadKinds` 再查一次）：实体会持久化（不是 `nopersist`，lifetime 不是 ephemeral / runtime_rebuild）；它的**每个** DAO 都是 `dbscope=sid`——`dbscope=global` 的库各服共用，“本服的实体”无从界定，预加载会把别的服的实体也载进来；不是 `remote=managed`（Remote 托管实体的预加载是 `NewRemotePreloadMod`，按所有权记录而不是按库枚举，见 [Remote Entity 与 Mirror §1](05-remote-mirror.md#1-边界与角色)）。没写 `service=` 时，工程里有 Nest 与 DataEngine 的业务服务必须恰好一个，否则要写 `service=` 指明。
-- **预加载不等于常驻**：框架没有按冷热自动换出实体，`EntityLifetimeResident` 仍只是声明。预加载的实体同样会因运维 `entity.unload`、换服交出（HandOffEntity）、业务自己的空闲卸载被卸载，之后按需重新加载；框架不会在卸载后重新预加载。要常驻就不要卸载它。
+- **预加载不等于常驻**：只写 `preload=startup` 的实体起服时载入，之后与按需加载的实体一样，会因运维 `entity.unload`、换服交出（HandOffEntity）、业务自己的空闲卸载被卸载，之后按需重新加载；框架没有按冷热自动换出，也不会在卸载后重新预加载。要一直留在内存里，用下面的 `lifetime=resident`。
+
+**常驻实体（`lifetime=resident`，维护者 2026-11-13）**：起服载入、之后框架不把它移出内存。
+
+```go
+//roost:entity id=12 name=Hero lifetime=resident preload_order=2
+```
+
+- **隐含预加载**：`lifetime=resident` 就是 `preload=startup` 加“不卸载”。两者同写也可以；`preload_order` 照常排批次。上面的时机、范围、顺序、失败语义与条件全部照用。
+- **只用于本地持久实体**：与 `remote=managed`、`noPersist=true` 同写在生成期拒绝；运行期注册时 `ValidateEntityPolicy` 同样拒绝（起服失败）。每个 DAO 都必须是 `dbscope=sid`：生成期拒绝 `dbscope=global` 的 DAO，运行期 `ValidateEntityRegistry` 拒绝（`entity.ErrResidentDaoScope`）。
+- **不卸载**：唯一把实例移出内存的入口是 `EntityManager.Destroy`，规则在那里强制一次。只从内存卸载（`deleteFromDB=false`）的调用对常驻实例返回 `entity.ErrEntityResident`，实体不受影响——业务的空闲卸载（lifecycle `Destroy(..., false)`）、`ManagerAccess.Unload`、不带 force 的运维 `entity.unload` 都是这样。拒绝记 WARN 与 `entity.resident_unload_refused_total{kind}`。
+- **强制刷新**：库里的文档被人工修过、要内存跟上时，运维 `entity.unload {..., force: true}`（`Runtime.RefreshEntity`）：同一套屏障、排空、卸载，然后立刻从库重新载入，回答 `reloaded: true`，实体不离开内存。重新载入失败时实体不在内存（下一次访问冷加载），命令返回错误并记 ERROR 与 `dataengine.resident_reload_total{reason=refresh,result=error}`。不提供“让常驻实体真正离开内存”的入口：要它不常驻，改 lifetime。
+- **换服交出**：允许。`HandOffEntity` 把写权连同实体交给目标服，本服卸载它（屏障保持期间被读回的只读实例同样卸载）；到了目标服，第一次访问（进入）载入后常驻，目标服重启后由它的预加载载入。交出被解除（`Release`：换服中止，或他换回本服）时框架立刻把它载回本服内存，不等第一次访问（`dataengine.resident_reload_total{reason=handoff_release}`）。
+- **删档**：`Destroy(..., deleteFromDB=true)` 不受常驻约束，删档准入之后框架把它移出内存；墓碑不会被预加载。
+- **卸载后重载（unload_resync）**：常驻实体只会经上面三处有意离开内存。强制刷新后有 Sync 订阅者时，订阅者的重载与刷新的重新载入走同一次共享冷加载，得到同一个新实例；新实例同样是常驻的，再卸载照样被拒绝。
+- **意外离开内存**：不另做自动重载。除事务内新建被撤销（从未提交过）之外，所有移出内存的路径都经 `EntityManager.Destroy`，没带框架许可的一律拒绝，所以“漏拦”只可能来自带许可的三处，它们各自处理（交出、删档本来就该离开；刷新立刻载回）。框架的许可（`entity.WithResidentRelease`）只给这三处用，业务代码不要用它绕过常驻。
 
 **DAO 选 `dbscope=sid` 还是 global**：本地实体的 DAO 默认 `dbscope=sid`（`add dao --entity` 生成的骨架、demo 的 Player / World、模块里的本地实体）——实体归一个服，换服（rehome 模块搬档）与合服（sidmerge）按 sid 库搬它。各服共享、不归某一个服的数据才用 `dbscope=global`：Remote 托管实体（alliance、team 等，按 owner 路由而不是按 sid）、跨服共享的地形数据。按服分库的物理库名加上 `_<sid>` 后不能超过 63 字节（D9 校验，起服时拒绝）。v1.47.0 起存储位置改变，旧数据不迁移（见 CHANGELOG）。
 
