@@ -124,7 +124,12 @@ func (s *overLimitScene) flush(t *testing.T, times int) {
 	t.Helper()
 	for range times {
 		if s.mode == ApplyAsync {
-			// 异步模式的命令在应用线程上执行：Drain 等它们执行并结算。
+			// 异步模式的命令在应用线程上执行：先把已登记的事实全部应用（与 flushInterest 相同），再由 Drain 结算。
+			// 应用线程在第一条事实到达时就走第一步，可能只取走前半段（用例还在逐个 Show）；若前半段先结算、
+			// Manager 按它暂缓，后半段之后才可见，收紧会按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，
+			// 要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，见 interest_over_limit.go）。用例要测的是
+			// 同一批事实的收敛，不是分批到达，所以结算之前先应用完。
+			stepApplier(t, s.interest)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err := s.manager.Drain(ctx)
 			cancel()

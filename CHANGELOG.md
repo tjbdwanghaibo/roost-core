@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：`TestInterestShrinksAFullSessionToTheNearest/async` 偶发失败已定位为用例的时序假设**（framework/sync/entitysync/policy，2026-11-14）：异步模式的应用线程在第一条事实到达时就走第一步，可能只取走用例还在逐个 `Show` 的前半段；前半段先结算、Manager 按它暂缓，收紧时按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，行为不变）。用例的 `flush` 在结算前先把已登记的事实全部应用（`stepApplier`，与 `flushInterest` 相同）。修前 CPU 满载（10 核上 16 个 `yes`）下 `-race -count=500` 定向失败 36 次；修后 8 个 `yes` 500 次、16 个 `yes` 1000 次、8 个 `yes` + `GOMAXPROCS=2` 500 次全部通过。没有框架行为改动。
+
 - **CellWorld witness 按区块合批、对齐全量刷新相位；复制缺口按对象 / 观察者修复**（cellworld，2026-11-14）：
   - **升级要求**：内部线上格式 v11 → v12（新增 `replicaReset` 请求体），不兼容旧节点，先停旧再起新。
   - **合批与相位**：Cell 按观察者所在的刷新区块（边长 2 × ViewRadius）排序后按 Base 合批；成员表全量刷新除了满一个 `ReplicaRefresh`，也在区块相位边界触发（同块观察者同拍刷新，强制全量的成员在一条消息里只编一次）。全量间隔仍不超过 `ReplicaRefresh`，整份视野自包含不变。
