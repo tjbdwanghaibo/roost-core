@@ -1,11 +1,11 @@
 package room
 
 import (
-	roomentity "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 
-func roomInfo(roomID int64, snapshot roomentity.RoomSnapshot) *pb.RoomInfo {
+func roomInfo(roomID int64, snapshot view.RoomSnapshot) *pb.RoomInfo {
 	out := &pb.RoomInfo{RoomID: roomID, Capacity: snapshot.Capacity, HostID: snapshot.HostID, Epoch: snapshot.Epoch}
 	for _, seat := range snapshot.Seats {
 		out.Seats = append(out.Seats, pb.RoomSeat{PlayerID: seat.PlayerID, Slot: seat.Slot, Connected: seat.Connected})

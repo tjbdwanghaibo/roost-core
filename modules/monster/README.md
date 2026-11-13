@@ -57,7 +57,7 @@
 - **需求多一点**：
   - 改缺省怪或不要它：改 `game/monster/rules.go` 的 `DefaultSpec`，或改 `runtime.go` 的 `Start` 里那一次 `Spawn`。
   - 多种怪、多个刷怪点：在自己的启动代码或玩法逻辑里多次调 `Spawn`，每次给不同的 `Spec`。
-  - 改选目标的规则：改 `rules.go` 的 `Nearest`。改巡逻路线：改 `monster_actor_component.go` 的 `Decide`。
+  - 改选目标的规则：改 `rules.go` 的 `Nearest`。改巡逻路线：改 `game/components/monsteractor/monsteractor.go` 的 `Decide`。
   - 不要把跨拍的状态存进 `game/monster/brain.go` 里每拍新建的 AI / actionflow 对象：它们不支持 Nest 回滚，跨拍事实只放 DAO 与 actor 的 `Body`。
 - **别的代码要用它**：
   - 打怪：`manager.Damage(ctx, monsterEntityID, lifeSeq, amount)`，`lifeSeq` 取自先前读到的快照（`MonsterInspect` 的应答或同步下来的 `Vitals.LifeSeq`）。

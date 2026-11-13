@@ -1,0 +1,154 @@
+package terrainledger
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// WindowSize 是 LastSeq 下面记得住的序号个数（位图宽度）：序号在 [LastSeq−WindowSize, LastSeq] 里的请求能确定是否已
+// 应用；更小的序号答过期（Stale），不再执行。64 足够容纳正常的乱序（客户端顺序发、少量重试与断线重发）。
+const WindowSize = 64
+
+// MaxSeqAhead 是一次请求的序号最多比 LastSeq 大多少。更大的序号（客户端的计数器坏了、用了时间戳之类）答 Ahead、不执行：
+// 否则一个接近 MaxInt64 的序号会把 LastSeq 推到顶，这个玩家此后再没有可用的新序号。客户端取号见 terrainmap.Map.Brush。
+const MaxSeqAhead = 1 << 20
+
+// Verdict 是账本对一个序号的判断。
+type Verdict uint8
+
+const (
+	// Fresh：没应用过，可以执行（执行成功后 Record）。
+	Fresh Verdict = iota
+	// Duplicate：已经应用过，这次什么都不做。
+	Duplicate
+	// Stale：低于窗口，已无法确定当时是否应用过；一律不执行（宁可不做，不做第二次）。
+	Stale
+	// Ahead：比 LastSeq 大出 MaxSeqAhead 以上，不执行、不记。
+	Ahead
+)
+
+func (v Verdict) String() string {
+	switch v {
+	case Fresh:
+		return "fresh"
+	case Duplicate:
+		return "duplicate"
+	case Stale:
+		return "stale"
+	case Ahead:
+		return "ahead"
+	}
+	return fmt.Sprintf("verdict(%d)", uint8(v))
+}
+
+// SeqWindow 是账本的值（纯数据，判定规则都在这里，便于单独证明）：Last 是已应用的最大序号（0 = 还没有），Bits 的第
+// i 位表示序号 Last−1−i 已应用。
+//
+// 不变量：被 Record 过的序号 s 满足 s == Last，或 Last−WindowSize ≤ s < Last 且对应位为 1，或 s < Last−WindowSize。
+// 所以 Check 对 Record 过的序号只会答 Duplicate 或 Stale，不会答 Fresh——同一序号至多执行一次，与窗口外记录是否还在
+// 无关；窗口内没 Record 过的序号答 Fresh（乱序到达的请求照常执行）。
+type SeqWindow struct {
+	Last int64
+	Bits uint64
+}
+
+// Check 判断序号 seq（须 ≥ 1）。
+func (w SeqWindow) Check(seq int64) Verdict {
+	switch {
+	case seq > w.Last:
+		if seq-w.Last > MaxSeqAhead {
+			return Ahead
+		}
+		return Fresh
+	case seq == w.Last:
+		return Duplicate
+	case w.Last-seq > WindowSize:
+		return Stale
+	case w.Bits&(1<<(w.Last-seq-1)) != 0:
+		return Duplicate
+	}
+	return Fresh
+}
+
+// Record 返回记下 seq 之后的窗口。seq 必须是 Check 答 Fresh 的序号（调用方保证），否则窗口可能丢掉已有的位。
+// 序号变大时窗口整体左移：原来的 Last 落到第 shift−1 位，移出 64 位的序号从此按过期处理（Go 的移位 ≥ 64 时结果为 0，
+// 恰好是“全部移出”）。
+func (w SeqWindow) Record(seq int64) SeqWindow {
+	if seq > w.Last {
+		shift := uint64(seq - w.Last)
+		bits := w.Bits << shift
+		if w.Last > 0 {
+			bits |= 1 << (shift - 1)
+		}
+		return SeqWindow{Last: seq, Bits: bits}
+	}
+	w.Bits |= 1 << (w.Last - seq - 1)
+	return w
+}
+
+// Owner 是 TerrainLedger 组件的宿主（TerrainEditor 的接线见 game/entities/terrain_editor/ledger_component.go）：view 的 TerrainEditorEntity。
+// 只在实体被 Nest 锁住期间使用。
+type Owner = view.TerrainEditorEntity
+
+// Component 是一个玩家的编辑账本，数据全部在 TerrainEditorDao（回滚统一走 DAO 的生成 setter 逆操作，组件不持有
+// 需要回滚的内存状态）。方法只在本实体的 Nest 锁内调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；TerrainEditor 在 game/entities/terrain_editor/ledger_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("terrainledger component: owner %T does not implement terrainledger.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "terrain_editor_ledger" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *Component) Owner() Owner { return component.owner }
+
+// Window 是账本当前的值。
+func (component *Component) Window() SeqWindow {
+	dao := component.owner.Dao()
+	return SeqWindow{Last: dao.GetLastSeq(), Bits: uint64(dao.GetWindow())}
+}
+
+// LastSeq 是已应用的最大序号（0 = 还没有）。
+func (component *Component) LastSeq() int64 { return component.owner.Dao().GetLastSeq() }
+
+// PlayerID 是账本所属的玩家。
+func (component *Component) PlayerID() int64 { return entity.GetUniqueIDFromEntityID(component.owner.ID()) }
+
+// Check 判断序号 seq（须 ≥ 1），只读。
+func (component *Component) Check(seq int64) Verdict { return component.Window().Check(seq) }
+
+// Record 记下已应用的序号 seq（须是 Check 答 Fresh 的序号）：在改块的同一笔事务里调用，事务回滚时由 setter 的逆操作
+// 一起撤销，所以“改了块”与“记下序号”要么都发生、要么都没发生。
+func (component *Component) Record(seq int64) {
+	next := component.Window().Record(seq)
+	dao := component.owner.Dao()
+	dao.SetLastSeq(next.Last)
+	dao.SetWindow(int64(next.Bits))
+}
+
+// Issue 是分区场景里 Base 给一次编辑“发号”的结果（handler TerrainEditIssue，可编辑地形 P5）：Again 表示这个序号以前已经
+// 发出过（这次是客户端的重试：照样再转发给那个格，由格的账本判断是否已执行）；LastSeq 是此后的最大序号。
+type Issue struct {
+	Again   bool
+	LastSeq int64
+}
+
+// Buildings 是这个玩家现在站着的建筑数（可编辑地形 P4）。
+func (component *Component) Buildings() int64 { return component.owner.Dao().GetBuildings() }
+
+// AddBuildings 在放置（+1）/ 拆除（−1）的同一笔事务里改建筑数：事务回滚时由 setter 的逆操作一起撤销。
+func (component *Component) AddBuildings(delta int64) {
+	dao := component.owner.Dao()
+	dao.SetBuildings(dao.GetBuildings() + delta)
+}

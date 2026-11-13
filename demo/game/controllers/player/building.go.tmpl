@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	building "{{MODULE}}/game/entities/building"
+	"{{MODULE}}/game/components/buildingsite"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/game/terrainmap"
 	apperrors "{{MODULE}}/internal/errors"
@@ -29,12 +29,12 @@ func (controller *Controller) HandleBuilding(context *playeraccess.Context, requ
 		return controller.relayBuilding(context, request, m, fw), nil
 	}
 	var (
-		result building.Result
+		result buildingsite.Result
 		err    error
 	)
 	switch request.Op {
 	case 1:
-		result, err = m.Place(context.Context(), context.PlayerID, request.Seq, building.Placement{
+		result, err = m.Place(context.Context(), context.PlayerID, request.Seq, buildingsite.Placement{
 			ConfigID: request.ConfigID, Params: request.Params, GX: request.GX, GY: request.GY, Facing: request.Facing, Level: request.Level,
 		})
 	case 2:
@@ -68,7 +68,7 @@ func (controller *Controller) relayBuilding(context *playeraccess.Context, reque
 	)
 	switch request.Op {
 	case 1:
-		result, err = m.RelayPlace(context.Context(), context.PlayerID, request.Seq, building.Placement{
+		result, err = m.RelayPlace(context.Context(), context.PlayerID, request.Seq, buildingsite.Placement{
 			ConfigID: request.ConfigID, Params: request.Params, GX: request.GX, GY: request.GY, Facing: request.Facing, Level: request.Level,
 		}, fw)
 	case 2:

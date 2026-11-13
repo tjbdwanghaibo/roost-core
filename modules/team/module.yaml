@@ -6,6 +6,7 @@ needs:
 access:
   transport: tcp
 entities: [Team]
+components: [TeamRoster]
 entity: Player
 component: Team
 state:

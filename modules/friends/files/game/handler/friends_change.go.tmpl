@@ -6,5 +6,5 @@ import player "{{MODULE}}/game/entities/player"
 //
 //roost:nest rollback=undo durability=strict
 func handlerFriendsChange(actor player.IFriendsEntity, peer player.IFriendsEntity, action int32) error {
-	return actor.FriendsComp().Change(peer.FriendsComp(), action)
+	return actor.FriendsComp().Change(peer, action)
 }

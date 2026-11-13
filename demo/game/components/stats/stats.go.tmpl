@@ -1,0 +1,113 @@
+package stats
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"math"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// Owner 是 Stats 组件的宿主（World 的接线见 game/entities/world/stats_component.go）：view 的 WorldEntity。
+// 只在实体被 Nest 锁住期间使用。
+type Owner = view.WorldEntity
+
+// Component owns World gameplay logic. Persistent or replicated state should
+// be changed through generated DAO methods so dirty tracking remains correct.
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；World 在 game/entities/world/stats_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("stats component: owner %T does not implement stats.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "stats" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *Component) Owner() Owner { return component.owner }
+
+// Add business methods below. Do not add mutexes here: Nest enters business
+// handlers only after locking the owning Entity.
+
+// Stats 是 view.StatsSnapshot（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type Stats = view.StatsSnapshot
+
+// RecordActivitySettled records that this server has paid out one activity's
+// settlement, and reports whether this call is the one that recorded it.
+//
+// It is on the World because settlement is server-wide: the coordinator says
+// "the phase is collected", and what that PAYS is this game's, decided once
+// per activity however many times the result dispatch is redelivered. The
+// mails themselves are idempotent per (activity, player) too — this record is
+// what stops the whole board being read and mailed again, not what makes the
+// payout exactly-once.
+func (component *Component) RecordActivitySettled(activityID string, nowUnix int64) bool {
+	if activityID == "" {
+		return false
+	}
+	dao := component.owner.Dao()
+	if _, settled := dao.GetSettledActivities(activityID); settled {
+		return false
+	}
+	dao.SetSettledActivities(activityID, nowUnix)
+	return true
+}
+
+// ActivitySettled reports whether an activity's settlement has been paid.
+func (component *Component) ActivitySettled(activityID string) bool {
+	_, settled := component.owner.Dao().GetSettledActivities(activityID)
+	return settled
+}
+
+// RecordEnter counts one login.
+func (component *Component) RecordEnter() {
+	dao := component.owner.Dao()
+	dao.SetPlayersEntered(dao.GetPlayersEntered() + 1)
+}
+
+// RecordMatch counts one formed match.
+func (component *Component) RecordMatch() {
+	dao := component.owner.Dao()
+	dao.SetMatchesFormed(dao.GetMatchesFormed() + 1)
+}
+
+// CheckRecordExp reports, without writing, whether RecordExp(amount) would be
+// accepted: the server-wide total is an int64 and must not wrap. Handlers
+// call it before their first DAO write, next to the profile module's
+// ProfileComponent.CheckAddExp (game/handler/add_exp.go checkExpGrant).
+func (component *Component) CheckRecordExp(amount int64) error {
+	current := component.owner.Dao().GetExpGranted()
+	if amount <= 0 || current < 0 || amount > math.MaxInt64-current {
+		return errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "world_exp", current)
+	}
+	return nil
+}
+
+// RecordExp adds to the server-wide experience total. It is called from
+// AddExp, which holds the Player and the World at once — the reason the two
+// kinds have distinct lock ranks. It checks the range again and writes
+// nothing on refusal; the handlers have already called CheckRecordExp before
+// touching the Player, so this check is only the last line, not the plan.
+func (component *Component) RecordExp(amount int64) error {
+	if err := component.CheckRecordExp(amount); err != nil {
+		return err
+	}
+	dao := component.owner.Dao()
+	dao.SetExpGranted(dao.GetExpGranted() + amount)
+	return nil
+}
+
+// Snapshot reads the counters under the lock.
+func (component *Component) Snapshot() Stats {
+	dao := component.owner.Dao()
+	return Stats{PlayersEntered: dao.GetPlayersEntered(), MatchesFormed: dao.GetMatchesFormed(), ExpGranted: dao.GetExpGranted()}
+}

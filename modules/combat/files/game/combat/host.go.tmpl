@@ -2,6 +2,7 @@
 package combat
 
 import (
+	"{{MODULE}}/game/view"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -25,12 +26,8 @@ type Participant interface {
 	Core() *combatcomponent.CombatComponent
 	Input() Input
 }
-type Input struct {
-	ID                int64
-	SceneID           int64
-	X, Y              int64
-	MaxHealth, Attack int64
-}
+// Input 是 view.CombatInput（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type Input = view.CombatInput
 type hostEvent struct {
 	Event skill.RuntimeEvent
 	Tags  []skill.GameplayTagHandle

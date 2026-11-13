@@ -5,6 +5,7 @@ type Profile interface {
 	Rename(name string) (string, error)
 	CheckAddExp(amount int64) error
 	AddExp(amount int64) (int32, error)
+	Card() ProfileCard
 	DisplayName() string
 	Level() int32
 	Exp() int64
@@ -12,3 +13,9 @@ type Profile interface {
 
 // ProfileHolder 是“带有 Profile 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type ProfileHolder interface{ Profile() Profile }
+
+// ProfileCard 是档案里别的玩家也可以看的那一半的一份拷贝：名字与等级。它是值，离开实体锁之后可以继续用。
+type ProfileCard struct {
+	Name  string
+	Level int32
+}

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"{{MODULE}}/game/components/terrainsurface"
+	"{{MODULE}}/game/components/terrainledger"
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
@@ -17,7 +19,7 @@ import (
 // 写入改动、Version + 1，返回新 Version。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chunk.PointEdit) (int64, error) {
+func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrainsurface.PointEdit) (int64, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return 0, terrainmap.ErrDisabled
@@ -30,10 +32,10 @@ func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chu
 // 判重、算笔刷、逐块写、序号记进账本（terrainmap.Map.ApplyBrush）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	m := terrainmap.Active()
 	if m == nil {
-		return terrain_chunk.BrushResult{}, terrainmap.ErrDisabled
+		return terrainsurface.BrushResult{}, terrainmap.ErrDisabled
 	}
 	return m.ApplyBrush(targets, editor, seq, brush)
 }
@@ -44,10 +46,10 @@ func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 // （TerrainCellEditor）；判重、算笔刷、写块、记序号同 TerrainBrush（terrainmap.Map.ApplyBrushPart）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+func handlerTerrainBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	m := terrainmap.Active()
 	if m == nil {
-		return terrain_chunk.BrushResult{}, terrainmap.ErrDisabled
+		return terrainsurface.BrushResult{}, terrainmap.ErrDisabled
 	}
 	return m.ApplyBrushPart(targets, editor, seq, brush)
 }
@@ -57,7 +59,7 @@ func handlerTerrainBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terr
 // 记下之后才转发，所以 LastSeq 查询答的序号覆盖每一个可能已在某个格执行了的编辑。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainEditIssue(editor terrain_editor.ILedgerEntity, seq int64) (terrain_editor.Issue, error) {
+func handlerTerrainEditIssue(editor terrain_editor.ILedgerEntity, seq int64) (terrainledger.Issue, error) {
 	return terrainmap.ApplyIssue(editor, seq)
 }
 

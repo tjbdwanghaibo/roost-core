@@ -2,22 +2,23 @@ package handler
 
 import (
 	"fmt"
+	"{{MODULE}}/game/view"
 	monster "{{MODULE}}/game/entities/monster"
 	scene "{{MODULE}}/game/entities/scene"
 )
 
 //roost:nest rollback=undo durability=async
-func handlerMonsterDamage(target monster.IMonsterEntity, area scene.ISceneEntity, expected monster.Target, expectedLife uint64, amount int64, nowUnixMilli int64) (monster.Snapshot, error) {
+func handlerMonsterDamage(target monster.IMonsterEntity, area scene.ISceneEntity, expected monster.Target, expectedLife uint64, amount int64, nowUnixMilli int64) (view.MonsterSnapshot, error) {
 	if err := expected.Check(target, area); err != nil {
-		return monster.Snapshot{}, err
+		return view.MonsterSnapshot{}, err
 	}
 	c := target.MonsterActorComp()
 	if c.Body().Map.SceneID() != area.ID() {
-		return monster.Snapshot{}, fmt.Errorf("monster: different scene")
+		return view.MonsterSnapshot{}, fmt.Errorf("monster: different scene")
 	}
 	_, err := c.Damage(expectedLife, amount, nowUnixMilli)
 	if err != nil {
-		return monster.Snapshot{}, err
+		return view.MonsterSnapshot{}, err
 	}
 	return c.Snapshot(), nil
 }

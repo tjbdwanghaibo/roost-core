@@ -1,0 +1,29 @@
+package view
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"{{MODULE}}/game/actor"
+)
+
+// MonsterActor 是 Monster 上 MonsterActor 组件对 game/ 下其它包公开的方法（实现在 game/components/monsteractor，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type MonsterActor interface {
+	Body() *actor.Body
+	Spawn(env actor.Environment, at spatial.Point, now int64) error
+	Damage(expectedLife uint64, amount, now int64) (bool, error)
+	Retire() error
+	Decide(expectedLife uint64) error
+	Snapshot() MonsterSnapshot
+	SpawnPoint() spatial.Point
+}
+
+// MonsterActorHolder 是“带有 MonsterActor 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type MonsterActorHolder interface{ MonsterActor() MonsterActor }
+
+type MonsterSnapshot struct {
+	ID       int64
+	LifeSeq  uint64
+	HP       int64
+	Template int32
+	SceneID  int64
+	X, Y     int64
+}

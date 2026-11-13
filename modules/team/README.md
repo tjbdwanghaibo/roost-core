@@ -16,7 +16,7 @@
   - 操作人与所在服的 sid 都来自认证会话和本服务配置，客户端不能指定。
 - **服务端入口**
   - 组件 `TeamComponent`（`game/components/team/team.go`，经 `ITeamEntity` 的 `TeamComp()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
-  - Team 实体（`game/entities/team/entity.go` 与 `roster.go`）：`Info() Snapshot`（`Snapshot{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
+  - Team 实体（`game/entities/team/entity.go`）上的成员表组件 TeamRoster（`game/components/teamroster/teamroster.go`，经 `TeamRosterComp()` 或 `view.TeamEntity` 的 `TeamRoster()` 取得）：`Info() view.TeamSnapshot`（`{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
   - Nest handler（`game/handler/`）：`handlerPlayerTeam`（只读本人的队伍号：`sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`）、`handlerTeamCreate`、`handlerTeamInvite`、`handlerTeamAccept`、`handlerTeamLeave`、`handlerTeamInfo`（后五个都是 `[Team, Player]` 两个实体的事务，`rollback=undo durability=strict`，例如 `sender.NewTeamCreateSender(client).MultiSync_TeamCreate(ctx, teamEntityID, playerEntityID, sid)`）。
   - Controller（`game/controllers/team/`）：七个 `HandleTeam…` 端点；`FromRegistry` 里的建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
 - **登记点**（都在 `game/entities/player/`，只在 `init` 登记，空名、nil、重名 panic，按名字排序执行）
@@ -25,7 +25,7 @@
 - **状态**（`db/def/team.go`）
   - `TeamDao`（集合 `team`，主库）：`Leader`、`Members`（玩家号 → 所在服 sid）、`Invites`（玩家号 → 过期时刻）、`MatchKey`、`Revision`。只落库。
   - `PlayerDao.Team`（`TeamState{TeamID, Invited}`）：只落库、不同步。客户端查自己的队伍用 `TeamInfo`，查邀请用 `TeamInvites`；`Invited` 只用于发现，不是接受邀请的权威。
-- **配置**：没有配置表。规则是 `game/entities/team/roster.go` 里的三个常量，归工程所有：`MaxMembers = 8`、`MaxInvites = 64`、`InviteMillis = 60000`（邀请 60 秒有效）。
+- **配置**：没有配置表。规则是 `game/components/teamroster/teamroster.go` 里的三个常量，归工程所有：`MaxMembers = 8`、`MaxInvites = 64`、`InviteMillis = 60000`（邀请 60 秒有效）。
 - **错误码**（`internal/errors/team.go`）：`team_invalid`、`team_missing`（不在这支队伍 / 队伍不存在）、`team_exists`（已经在别的队伍）、`team_not_leader`、`team_not_invited`（没被邀请或邀请已过期）、`team_full`、`team_invites_full`、`team_blocked`（队伍正在匹配中被冻结、与换服互斥等）。
 
 **日志**：建队、邀请、加入、离开 / 解散确认；返回快照时记录队长、版本和成员，错误补 player_id。离队 Sender 不返回新队长，因此不另查快照伪称本次交接结果。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/team/team.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -47,14 +47,14 @@
 
 - **需求正好是它**：`roost module add team`。新工程通常先装 enter（要鉴权再装 login），通过 `EnterGame` 建好 Player 后再请求这些端点。流程：`TeamCreate` → 队长 `TeamInvite` → 被邀请方接收 `TeamInvited` 或查询 `TeamInvites` → `TeamAccept`；其他成员操作前先 `TeamInfo`。
 - **需求多一点**
-  - 改人数、邀请数、邀请时长：改 `game/entities/team/roster.go` 顶部的三个常量。
+  - 改人数、邀请数、邀请时长：改 `game/components/teamroster/teamroster.go` 顶部的三个常量。
   - 加入队条件（等级、冷却、正在副本里不能入队）：`init` 里登记 `OnTeamJoining`。
   - 名单变了要更新别的东西（队友视野分组、缓存）：`init` 里登记 `OnTeamChanged`；通知用提交后的机制发，不在回调里做 I/O。
-  - 加踢人 / 转让队长：照 `roster.go` 里 `Leave` 的写法加方法（记得推进 `Revision`、检查 `MatchKey`），再加协议与 `[Team, Player]` 的 handler。被踢的人的引用同样只能惰性清除。
+  - 加踢人 / 转让队长：照 `game/components/teamroster/teamroster.go` 里 `Leave` 的写法加方法（记得推进 `Revision`、检查 `MatchKey`），再加协议与 `[Team, Player]` 的 handler。被踢的人的引用同样只能惰性清除。
   - 不要改 `TeamDao` 的 store 键与集合名、`EntityCategoryRemote` 的实体类别（它保证锁序先于 Player）、建队时“先取号建空实体、再进事务”的次序。
 - **别的模块 / 业务代码要用它**
   - 读某名玩家的队伍号（事务外）：`id, err := sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`。
-  - 在自己的事务里要整队名单：handler 的目标里声明 `team.ITeamEntity`，调 `target.TeamEntity().Info()`，名单与各成员的 sid 都在返回的 `Snapshot` 里。
+  - 在自己的事务里要整队名单：handler 的目标里声明 `team.ITeamEntity`，调 `target.TeamEntity().TeamRoster().Info()`，名单与各成员的 sid 都在返回的 `view.TeamSnapshot` 里。
   - 要在一段时间内冻结名单（排队、进副本）：同一笔事务里调 `HoldMatch(key)`，结束后用同一个 `key` 调 `ReleaseMatch(key)`；冻结期间邀请、入队、离队、解散都答 `team_blocked`。
 - **不适合直接用的情形**：只在单个进程内存在、不需要落库的临时小队（那用 room 更轻）；上百人的团队或公会（用 alliance）；需要实时名单推送的队伍界面（要自己加通知）。值得借鉴的是“共享权威只有一份成员表，玩家只存引用，引用惰性核对”的做法，以及用准入钩子让两个模块互相挡住对方（见 rehome 联动）。
 

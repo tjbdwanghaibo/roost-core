@@ -5,6 +5,7 @@ import (
 
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/view"
 )
 
 //roost:component type={{ID:component:WorldActivity}}
@@ -19,6 +20,10 @@ type IWorldActivityEntity interface {
 	WorldActivityComp() *WorldActivityComponent
 	Dao() *db.ActivityWorldDao
 }
+
+// Activity 是 ActivityWorld 的活动组件在 game/view 里的名字（view.ActivityHolder）：活动的钩子与联动只认它。
+// 组件类型名按实体区分（WorldActivity），生成器按这个手写访问器把 ActivityHolder 嵌进 view.ActivityWorldEntity。
+func (e *ActivityWorld) Activity() view.Activity { return e.WorldActivityComp() }
 
 func init() {
 	entity.RegisterComponentFactory(CompTypeWorldActivity, activity.NewComponent)

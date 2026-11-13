@@ -1,0 +1,28 @@
+package view
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"{{MODULE}}/game/actor"
+)
+
+// Map 是 Player 上 Map 组件对 game/ 下其它包公开的方法（实现在 game/components/mapview，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Map interface {
+	CellBaseBeat() *heartbeat.Reg
+	Body() *actor.Body
+	Pos() spatial.Point
+	Facing() movement.Facing
+	SceneID() int64
+	InScene() bool
+	SavedPos() spatial.Point
+	SavedFacing() movement.Facing
+	EnterScene(sceneID int64, space movement.Space, at spatial.Point) (spatial.Point, error)
+	LeaveScene() error
+	WalkTo(path []spatial.Point) (int64, error)
+	Follow(target int64) (int64, error)
+	Walking() bool
+}
+
+// MapHolder 是“带有 Map 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type MapHolder interface{ Map() Map }

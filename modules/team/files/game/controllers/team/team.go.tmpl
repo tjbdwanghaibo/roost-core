@@ -8,6 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
@@ -21,7 +22,7 @@ func teamPlayerID(ctx *playeraccess.Context) (int64, error) {
 	}
 	return entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
 }
-func teamResponse(ctx *playeraccess.Context, info teamentity.Snapshot, err error) *pb.TeamResponse {
+func teamResponse(ctx *playeraccess.Context, info view.TeamSnapshot, err error) *pb.TeamResponse {
 	response := &pb.TeamResponse{}
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
@@ -46,7 +47,7 @@ func (c *Controller) HandleTeamCreate(ctx *playeraccess.Context, req *pb.TeamCre
 	}
 	current, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
 	if err != nil {
-		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
 	}
 	if current != 0 {
 		return c.HandleTeamInfo(ctx, &pb.TeamInfoRequest{})
@@ -56,7 +57,7 @@ func (c *Controller) HandleTeamCreate(ctx *playeraccess.Context, req *pb.TeamCre
 	}
 	id, err := c.create(ctx.Context())
 	if err != nil {
-		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
 	}
 	info, err := sender.NewTeamCreateSender(c.nestClient).MultiSync_TeamCreate(ctx.Context(), id, self, c.sid)
 	if err == nil {
@@ -73,21 +74,21 @@ func (c *Controller) HandleTeamInvite(ctx *playeraccess.Context, req *pb.TeamInv
 		return nil, err
 	}
 	if req.Invitee <= 0 || uint64(req.Invitee) >= entity.StaticUniqueIDBase {
-		return teamResponse(ctx, teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
+		return teamResponse(ctx, view.TeamSnapshot{}, apperrors.ErrTeamInvalid), nil
 	}
 	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
 	if err != nil {
-		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
 	}
 	if id == 0 {
-		return teamResponse(ctx, teamentity.Snapshot{}, apperrors.ErrTeamMissing), nil
+		return teamResponse(ctx, view.TeamSnapshot{}, apperrors.ErrTeamMissing), nil
 	}
 	invitation, err := sender.NewTeamInviteSender(c.nestClient).MultiSync_TeamInvite(ctx.Context(), id, self, req.Invitee)
 	if err == nil {
 		slog.InfoContext(ctx.Context(), "team: invite completed", "player_id", ctx.PlayerID, "team_id", invitation.TeamID, "invitee", invitation.Invitee, "expire_at", invitation.ExpireAt, "leader", invitation.Leader, "revision", invitation.Revision, "members", invitation.Members)
 		c.announceInvite(ctx.Context(), invitation)
 	}
-	return teamResponse(ctx, invitation.Snapshot, err), nil
+	return teamResponse(ctx, invitation.TeamSnapshot, err), nil
 }
 func (c *Controller) HandleTeamAccept(ctx *playeraccess.Context, req *pb.TeamAcceptRequest) (*pb.TeamResponse, error) {
 	if req == nil {
@@ -98,7 +99,7 @@ func (c *Controller) HandleTeamAccept(ctx *playeraccess.Context, req *pb.TeamAcc
 		return nil, err
 	}
 	if !entity.MatchEntityID(req.TeamID, teamentity.EntityKindTeam) {
-		return teamResponse(ctx, teamentity.Snapshot{}, apperrors.ErrTeamInvalid), nil
+		return teamResponse(ctx, view.TeamSnapshot{}, apperrors.ErrTeamInvalid), nil
 	}
 	info, err := sender.NewTeamAcceptSender(c.nestClient).MultiSync_TeamAccept(ctx.Context(), req.TeamID, self, c.sid)
 	if err == nil {
@@ -116,7 +117,7 @@ func (c *Controller) HandleTeamInfo(ctx *playeraccess.Context, req *pb.TeamInfoR
 	}
 	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
 	if err != nil || id == 0 {
-		return teamResponse(ctx, teamentity.Snapshot{}, err), nil
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
 	}
 	info, err := sender.NewTeamInfoSender(c.nestClient).MultiSync_TeamInfo(ctx.Context(), id, self)
 	return teamResponse(ctx, info, err), nil
@@ -145,5 +146,5 @@ func (c *Controller) leave(ctx *playeraccess.Context, disband bool) (*pb.TeamRes
 			slog.InfoContext(ctx.Context(), "team: leave completed", "player_id", ctx.PlayerID, "team_id", id, "disband", disband)
 		}
 	}
-	return teamResponse(ctx, teamentity.Snapshot{}, err), nil
+	return teamResponse(ctx, view.TeamSnapshot{}, err), nil
 }

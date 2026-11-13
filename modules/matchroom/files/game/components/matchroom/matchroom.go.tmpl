@@ -1,0 +1,88 @@
+package matchroom
+
+import (
+	"{{MODULE}}/game/components/room"
+	"{{MODULE}}/game/view"
+	"fmt"
+	"slices"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// Owner 是 Matchroom 组件的宿主（Room 的接线见 game/entities/room/matchroom_component.go）：view 的 RoomEntity。
+// 只在实体被 Nest 锁住期间使用。
+type Owner = view.RoomEntity
+
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Room 在 game/entities/room/matchroom_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("matchroom component: owner %T does not implement matchroom.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func init() {
+	room.OnRoomJoining("matchroom", func(r Owner, id int64) error {
+		state := r.Dao().GetMatchroom()
+		if state.GetMatchID() != "" && !slices.Contains(matchMembers(r), id) {
+			return apperrors.ErrRoomNotMember
+		}
+		return nil
+	})
+}
+func (c *Component) Name() string { return "matchroom" }
+
+// Open 的全部输入只来自可信匹配结果。普通房不能在有人进入后改造成匹配房；同键名单变化也拒绝。
+func (c *Component) Open(matchID string, members []int64) error {
+	if matchID == "" || len(matchID) > 128 || len(members) < 2 || len(members) > int(room.MaxSeats) {
+		return apperrors.ErrRoomInvalid
+	}
+	ids := slices.Clone(members)
+	slices.Sort(ids)
+	for i, id := range ids {
+		if id <= 0 || (i > 0 && ids[i-1] == id) {
+			return apperrors.ErrRoomInvalid
+		}
+	}
+	d := c.owner.Dao()
+	state := d.GetMatchroom()
+	if state.GetMatchID() != "" {
+		if state.GetMatchID() != matchID || !slices.Equal(matchMembers(c.owner), ids) {
+			return apperrors.ErrRoomInvalid
+		}
+		// 重复通知可以确认已关闭的同一局，但绝不重新开房、重置席位或代际。
+		if d.GetClosed() {
+			return nil
+		}
+		return c.owner.Room().Open(int32(len(ids)))
+	}
+	if d.GetCapacity() != 0 {
+		return apperrors.ErrRoomInvalid
+	}
+	if err := c.owner.Room().Open(int32(len(ids))); err != nil {
+		return err
+	}
+	state.SetMatchID(matchID)
+	state.SetMembers(ids)
+	return nil
+}
+
+func matchMembers(owner Owner) []int64 {
+	state := owner.Dao().GetMatchroom()
+	ids := make([]int64, 0, state.MembersLen())
+	state.RangeMembers(func(_ int, id int64) bool { ids = append(ids, id); return true })
+	return ids
+}
+
+// Closed 仅供可信流程核对前一局已终结，不向玩家泄露未加入的房间数据。
+func (c *Component) Closed(matchID string) bool {
+	return matchID != "" && c.owner.Dao().GetMatchroom().GetMatchID() == matchID && c.owner.Dao().GetClosed()
+}

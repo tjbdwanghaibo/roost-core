@@ -2,8 +2,40 @@ package view
 
 // Matchmaking 是 Matchmaking 组件对 game/ 下其它包公开的方法（实现在 game/components/matchmaking，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Matchmaking interface {
+	Snapshot() MatchSnapshot
 	Clear(key string) error
 }
 
 // MatchmakingHolder 是“带有 Matchmaking 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type MatchmakingHolder interface{ Matchmaking() Matchmaking }
+
+// MatchSnapshot 是锁外 I/O 用的独立值；不是另一份可写权威。
+type MatchSnapshot struct {
+	Sequence int64
+	Key      string
+	Leader   int64
+	TeamID   int64
+	Members  []int64
+	SID      int32
+	Phase    string
+	TicketID string
+	MatchID  string
+	RoomID   int64
+	Deadline int64
+}
+
+// 匹配阶段（MatchSnapshot.Phase 的取值）。
+const (
+	MatchPreparing   = "preparing"
+	MatchDispatching = "dispatching"
+	MatchQueued      = "queued"
+	MatchCancelling  = "cancelling"
+	MatchMatched     = "matched"
+	MatchCancelled   = "cancelled"
+	MatchExpired     = "expired"
+)
+
+// Terminal 表示这一轮匹配已经结束（成交、取消或过期）。
+func (s MatchSnapshot) Terminal() bool {
+	return s.Phase == MatchMatched || s.Phase == MatchCancelled || s.Phase == MatchExpired
+}

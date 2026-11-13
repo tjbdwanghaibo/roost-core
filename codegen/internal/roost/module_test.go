@@ -82,21 +82,18 @@ func TestModuleCatalogEmbedsEveryTemplateAndValidates(t *testing.T) {
 // 结果类型还在功能包里。新增的导出方法不在 view 里也不在这里时报错。
 func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 	framework := map[string]bool{"Name": true, "Owner": true, "OnInitFinish": true, "OnDestroy": true}
+	// 豁免只留真正不能进 view 的：返回 core 运行时对象（只给生成的运行时或 handler 用）、要同一组件的另一个实例
+	// （读对方组件内部），或参数是带规则方法的功能包类型。其余导出方法的参数、结果都已是 view 里的类型。
 	viewMethodExemptions := map[string]map[string]string{
-		"activity":    {"Host": "returns the game/activity Host, which carries the activity runtime"},
-		"actor":       {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
-		"attribute":   {"Container": "exposes the core attribute container to the generated runtime only"},
-		"combat":      {"Core": "core combat component", "Input": "game/combat type", "Ready": "CombatResult not in view", "Cast": "takes the peer *Component", "Step": "takes the peer *Component", "Tick": "takes the peer *Component", "Leave": "takes the peer *Component"},
-		"dungeon":     {"Counts": "game/dungeon logic type", "Claim": "game/dungeon logic type"},
-		"friends":     {"Change": "takes the peer *Component", "Snapshot": "FriendsSnapshot not in view"},
-		"mailbox":     {"Claim": "game/mailbox attachment type"},
-		"matchmaking": {"Snapshot": "MatchSnapshot not in view"},
-		"profile":     {"Card": "ProfileCard not in view"},
-		"rehome":      {"Prepare": "game/rehome type", "Arrive": "game/rehome type"},
-		"stamina":     {"Grant": "result type not in view", "Refill": "result type not in view"},
-		"task":        {"Claim": "TaskClaimResult not in view"},
-		"team":        {"Create": "takes the Team entity", "Accept": "takes the Team entity", "Invite": "takes the Team entity", "Invites": "TeamInvitation not in view", "Leave": "takes the Team entity", "Info": "takes the Team entity"},
-		"terrain":     {"Check": "game/terrain logic type", "Record": "game/terrain logic type"},
+		"activity":  {"Host": "returns the game/activity Host, which carries the activity runtime"},
+		"actor":     {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
+		"attribute": {"Container": "exposes the core attribute container to the generated runtime only"},
+		"combat": {
+			"Core": "returns the core combat component (skill runtime), not a view value",
+			"Cast": "takes the peer *Component: reads the other combatant's core state", "Step": "takes the peer *Component: reads the other combatant's core state",
+			"Tick": "takes the peer *Component: reads the other combatant's core state", "Leave": "takes the peer *Component: reads the other combatant's core state",
+		},
+		"terrain": {"Check": "takes game/terrain Command, which carries the rule methods (Validate / Footprint / Brush)", "Record": "takes game/terrain Command, which carries the rule methods (Validate / Footprint / Brush)"},
 	}
 	placeholder := regexp.MustCompile(`\{\{(?:PROJECT|GAME_SERVICE|ID:[^}]*)\}\}`)
 	parse := func(name string) *ast.File {
@@ -182,6 +179,38 @@ func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// 每个实体（不只 Player）的组件逻辑都在 game/components/<包>，实体包只留接线：实体包里不能声明组件结构体
+// （`type <X>Component struct`，接线里的是 `type <X>Component = <包>.Component` 别名），也不能给组件类型写方法。
+// 生成的定时器组件不是模板，不在扫描范围里。
+func TestModuleEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
+	componentStruct := regexp.MustCompile(`(?m)^type (\w+Component) struct\b`)
+	componentMethod := regexp.MustCompile(`(?m)^func \(\w+ \*(\w+Component)\) `)
+	timerComponent := regexp.MustCompile(`^\{\{TIMER_COMPONENT\}\}Component$`)
+	var checked int
+	err := fs.WalkDir(modules.Files, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(name, ".go.tmpl") || !strings.Contains(name, "/game/entities/") {
+			return err
+		}
+		raw, err := fs.ReadFile(modules.Files, name)
+		if err != nil {
+			return err
+		}
+		checked++
+		for _, m := range componentStruct.FindAllStringSubmatch(string(raw), -1) {
+			t.Errorf("%s declares the component struct %s in the entity package; move it to game/components/<package> and leave an alias", name, m[1])
+		}
+		for _, m := range componentMethod.FindAllStringSubmatch(string(raw), -1) {
+			if !timerComponent.MatchString(m[1]) {
+				t.Errorf("%s declares a method on %s in the entity package; component logic belongs to game/components/<package>", name, m[1])
+			}
+		}
+		return nil
+	})
+	if err != nil || checked == 0 {
+		t.Fatalf("walk module templates: %v (checked %d files)", err, checked)
 	}
 }
 

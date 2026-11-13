@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	roomentity "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/view"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	roomlogic "{{MODULE}}/game/room"
@@ -24,7 +24,7 @@ func (controller *Controller) HandleRoomView(ctx *playeraccess.Context, req *pb.
 		id, err = roomlogic.EntityID(req.RoomID)
 	}
 	if err == nil {
-		var result roomentity.RoomSnapshot
+		var result view.RoomSnapshot
 		result, err = syncsender.NewRoomViewSender(controller.nestClient).Sync_RoomView(ctx.Context(), id, ctx.PlayerID, connection)
 		if err == nil {
 			response.Info = roomInfo(req.RoomID, result)

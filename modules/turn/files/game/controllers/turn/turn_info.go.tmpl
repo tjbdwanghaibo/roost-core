@@ -1,10 +1,10 @@
 package turn
 
 import (
-	room "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 
-func turnInfo(value room.TurnSnapshot) *pb.TurnInfo {
+func turnInfo(value view.TurnSnapshot) *pb.TurnInfo {
 	return &pb.TurnInfo{Status: value.Status, Round: value.Round, ActorID: value.ActorID, Deadline: value.Deadline, MaxTurns: value.MaxTurns, TurnMillis: value.TurnMillis, Timeouts: value.Timeouts, Sequence: value.Sequence, Players: value.Players}
 }

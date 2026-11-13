@@ -1,0 +1,31 @@
+package view
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// MonsterActor 是 Monster 上 MonsterActor 组件对 game/ 下其它包公开的方法（实现在 game/components/monsteractor，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type MonsterActor interface {
+	CellBeat() *heartbeat.Reg
+	MapBasic() *movement.MapBasic
+	Move() *movement.Move
+	Spawn(sceneID int64, space movement.Space, at spatial.Point, walkable func(spatial.Point) bool) error
+	SetRooted(rooted bool, seconds int64)
+	CombatBeat() *heartbeat.Reg
+	CombatBeats() int64
+	Rooted() bool
+	Moving() bool
+	InScene() bool
+	Pos() spatial.Point
+	Behavior() *actionflow.Behavior
+	Brain() *ai.Controller
+	States() *state.Set
+}
+
+// MonsterActorHolder 是“带有 MonsterActor 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type MonsterActorHolder interface{ MonsterActor() MonsterActor }

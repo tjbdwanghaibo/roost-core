@@ -4,7 +4,16 @@ package view
 type Task interface {
 	Report(event string, n, nowUnixMilli int64) error
 	Advance(taskID, n, nowUnixMilli int64) (int64, error)
+	Claim(taskID, nowUnixMilli int64) (TaskClaimResult, error)
 }
 
 // TaskHolder 是“带有 Task 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type TaskHolder interface{ Task() Task }
+
+// TaskClaimResult 带奖励的种类、号、数量；Balance 是金币余额，非金币奖励不改变它。
+type TaskClaimResult struct {
+	Reward     int64
+	RewardKind string
+	RewardID   int64
+	Balance    int64
+}

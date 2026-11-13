@@ -25,11 +25,11 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 **Nest handler**（`game/handler/room_*.go`，写入的都是 `rollback=undo durability=strict`）：`RoomOpen`、`RoomJoin`、`RoomView`、`RoomReconnect`、`RoomDisconnect`、`RoomLeave`、`RoomClose`。事务之外用生成的 `syncsender`（例如 `syncsender.NewRoomJoinSender(client).Sync_RoomJoin(ctx, id, playerID, connection)`）；`RoomComp()` 的方法（`Open`、`Join`、`Reconnect`、`Disconnect`、`Leave`、`Close`、`View`）只能在持有 Room 锁的事务里调用。
 
-**登记点**：`room.OnRoomJoining(name, func(*Room, playerID int64) error)`（`game/entities/room/room_join_checks.go`）。在 `Join` 的事务里、检查房间已开之后、占座之前执行；返回错误即拒绝入房。不能做 I/O。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。`matchroom` 用它校验名单。
+**登记点**：`room.OnRoomJoining(name, func(room.Owner, playerID int64) error)`（`game/components/room/join_checks.go`，`room.Owner` 即 `view.RoomEntity`）。在 `Join` 的事务里、检查房间已开之后、占座之前执行；返回错误即拒绝入房。不能做 I/O。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。`matchroom` 用它校验名单。
 
 **状态**：模块自带实体 `Room`（`game/entities/room/entity.go`，类别是 World）与 `RoomDao`（`db/def/room.go`，集合 `room`）：`Capacity`、`Closed`、`HostID`、`EpochSeed`、`Seats`（玩家号 → `RoomSeat{Slot, Epoch, Connected, Connection}`）。只落库，不同步；成员经 `RoomView` 读 PB 快照。连接标识不出现在任何对外的快照里。
 
-**配置**：无。容量上限是代码常量 `MaxSeats = 64`（`game/entities/room/room_component.go`）。
+**配置**：无。容量上限是代码常量 `MaxSeats = 64`（`game/components/room/room.go`）。
 
 **错误码**（`internal/errors/room.go`）：`room_invalid`（参数或操作不合法）、`room_unopened`（还没初始化）、`room_closed`、`room_full`、`room_not_member`、`room_stale_epoch`（代际或连接对不上）、`room_not_host`。
 
@@ -55,7 +55,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
   - 房内玩法状态：给 `Room` 加自己的组件与状态（像 `matchroom`、`turn` 那样声明 `entity: Room`），在自己的 handler 里与席位一起提交。
   - 断线处理：在接入层的连接关闭回调里调 `room.Disconnect`；踢人与超时用自己的定时器加 `RoomLeave` 的服务端等价逻辑。
   - 房号：自己写分配器，或者装 `matchroom` 用它的 `_room_id_sequence`。
-  - 不要改 `room_component.go` 里代际与连接的 CAS 检查。
+  - 不要改 `game/components/room/room.go` 里代际与连接的 CAS 检查。
 - **别的代码要用它**：开房 `room.Open(ctx, registry, uniqueID, capacity)`；读成员快照用 `syncsender.NewRoomViewSender(client).Sync_RoomView(ctx, id, playerID, connection)`（要那名成员当前的连接标识）；在自己的 Room handler 里直接用 `target.RoomComp()`。
 - **只适合借鉴的情形**：大规模场景（用 scene 与视野模块）、需要观战或不占座旁观、需要跨进程迁移的房间。值得借鉴的是“席位代际 + 连接标识”的重连 CAS，以及断线事件带代际、迟到的旧事件伤不到新连接。
 

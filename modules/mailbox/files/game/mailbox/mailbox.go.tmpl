@@ -13,6 +13,7 @@
 package mailbox
 
 import (
+	"{{MODULE}}/game/view"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -20,24 +21,14 @@ import (
 	"sync"
 )
 
-// Type 是附件的种类，也是线上格式里 "type" 的值，发布后不要改名。
-type Type string
+// Type 是 view.MailboxAttachmentType（定义在 game/view，附件 MailboxAttachment 的字段要它）；种类常量留在这里。
+type Type = view.MailboxAttachmentType
 
 // TypeCoins 是货币附件：Amount 个金币，经货币模块到账。它是内置的种类，ID 必须为 0。
 const TypeCoins Type = "coins"
 
-// Attachment 是一封邮件的附件：一种奖励，写成（种类，号，数量）。
-//
-// 线上格式是 JSON 对象，例如金币 {"type":"coins","amount":100}、道具 {"type":"item","id":1001,"amount":3}。
-// 三个字段对所有种类都是同一个意思，新种类不往这里加字段：一份奖励说不成“哪一种的第几号、多少个”的，
-// 不属于邮件附件，由它自己的功能发放。
-type Attachment struct {
-	Type Type `json:"type"`
-	// ID 是这个种类内部的号（道具号……）。没有号的种类（金币）必须为 0，为 0 时不写进字节。
-	ID int64 `json:"id,omitempty"`
-	// Amount 是数量，任何种类都必须为正。
-	Amount int64 `json:"amount,omitempty"`
-}
+// Attachment 是 view.MailboxAttachment（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type Attachment = view.MailboxAttachment
 
 // Coins 是 amount 个金币的附件，给发件方用：mailbox.SendTo(ctx, mailer, mailbox.Letter{..., Attachment: mailbox.Coins(100)})。
 func Coins(amount int64) Attachment { return Attachment{Type: TypeCoins, Amount: amount} }
@@ -138,13 +129,8 @@ func Decode(raw []byte) (Attachment, error) {
 	return attachment, nil
 }
 
-// ClaimResult 是发放事务的结果。Claimed 为 false 表示重复到达：这封邮件已经到过账，这一次什么也没改。
-// Held 是玩家此刻持有多少这份附件说的东西（金币是余额，道具是这个道具号的数量），两种情况下都填，
-// 所以客户端拿到的回答是同一组数字。
-type ClaimResult struct {
-	Claimed bool
-	Held    int64
-}
+// ClaimResult 是 view.MailboxClaimResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type ClaimResult = view.MailboxClaimResult
 
 // ClaimWindowClosed 报告：过期时刻为 expiresAtUnix 的邮件，在 nowUnix 是否已经不能首次发放。
 // 它是发放入口（MailboxComponent.Claim）的准入判断，边界与 mail 服务自己的一致

@@ -1,0 +1,24 @@
+package view
+
+// Stats 是 World 上 Stats 组件对 game/ 下其它包公开的方法（实现在 game/components/stats，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Stats interface {
+	RecordActivitySettled(activityID string, nowUnix int64) bool
+	ActivitySettled(activityID string) bool
+	RecordEnter()
+	RecordMatch()
+	CheckRecordExp(amount int64) error
+	RecordExp(amount int64) error
+	Snapshot() StatsSnapshot
+}
+
+// StatsHolder 是“带有 Stats 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type StatsHolder interface{ Stats() Stats }
+
+// StatsSnapshot is the World's counters as a handler result. It crosses the Nest
+// boundary as a value, so the endpoint that reads it never touches the World
+// outside its lock.
+type StatsSnapshot struct {
+	PlayersEntered int64
+	MatchesFormed  int64
+	ExpGranted     int64
+}

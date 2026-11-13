@@ -29,11 +29,11 @@ type TerrainChunkDao struct {
 	// Materials 是 4096 个材质编号（0～255）。与 Heights 相同，小改动按下标写，同步与持久化都按下标增量；单块改动
 	// 超过 1000 点时用 SetMaterialsAll（D11，维护者 2026-11-08：客户端下行预算低于 50KB/s，整字段每次约 4.1KB 超预算）。
 	Materials []uint16 `dao:"persist,sync" store:"4"`
-	// Lots 是站在本块上的建筑的占地（可编辑地形 P4）：每项是一座建筑的整个占地矩形（terrain_chunk.Lot 的打包值：锚点
+	// Lots 是站在本块上的建筑的占地（可编辑地形 P4）：每项是一座建筑的整个占地矩形（terrainsurface.Lot 的打包值：锚点
 	// 节点与宽高），占地跨几块就在每一块上各记一份。建筑实体（BuildingDao）是建筑本身，这里是“这块地上哪些节点被占着”的
 	// 权威记录：放置 / 拆除与建筑实体在同一笔 Nest 事务里写，所以两边一致；它在块的锁里，放置、拆除与笔刷编辑都锁这一块，
 	// 占位检查就在锁里读它（并发放置不会重叠，笔刷不会改到建筑脚下）。Version 0 的块（没改过地形）也可以有 Lots：只记占地，
-	// 不动高度。只持久、不同步（客户端看建筑实体）。至多 terrain_chunk.MaxLots 项。
+	// 不动高度。只持久、不同步（客户端看建筑实体）。至多 terrainsurface.MaxLots 项。
 	Lots []int64 `dao:"nosync" store:"6"`
 	// LotRevision 是 Lots 的修订号：每次改 Lots 加一。提交后回调可能乱序到达，进程内发布给行走判定的占位表只接受更大的
 	// 修订号（terrainmap 的占位表）。

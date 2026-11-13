@@ -5,6 +5,7 @@ import (
 
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/view"
 )
 
 //roost:component type={{ID:component:AllianceActivity}}
@@ -18,6 +19,10 @@ type IAllianceActivityEntity interface {
 	entity.IThreadSafeEntity
 	AllianceActivityComp() *AllianceActivityComponent
 }
+
+// Activity 是 Alliance 的活动组件在 game/view 里的名字（view.ActivityHolder）：活动的钩子与联动只认它。
+// 组件类型名按实体区分（AllianceActivity），生成器按这个手写访问器把 ActivityHolder 嵌进 view.AllianceEntity。
+func (e *Alliance) Activity() view.Activity { return e.AllianceActivityComp() }
 
 func init() {
 	entity.RegisterComponentFactory(CompTypeAllianceActivity, activity.NewComponent)

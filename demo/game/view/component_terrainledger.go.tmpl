@@ -1,0 +1,14 @@
+package view
+
+// TerrainLedger 是 TerrainEditor 上 TerrainLedger 组件对 game/ 下其它包公开的方法（实现在 game/components/terrainledger，语义见那里）；只在宿主被 Nest 锁住期间调用。
+// Window / Check 不在这里：序号窗口 SeqWindow / Verdict 带着窗口规则的方法，留在 game/components/terrainledger。
+type TerrainLedger interface {
+	LastSeq() int64
+	PlayerID() int64
+	Record(seq int64)
+	Buildings() int64
+	AddBuildings(delta int64)
+}
+
+// TerrainLedgerHolder 是“带有 TerrainLedger 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TerrainLedgerHolder interface{ TerrainLedger() TerrainLedger }

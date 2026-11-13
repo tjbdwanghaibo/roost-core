@@ -1,246 +1,30 @@
 package monster
 
 import (
-	"fmt"
+	"{{MODULE}}/game/components/monsteractor"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	"math"
-	"time"
-	"{{MODULE}}/game/actor"
-	rules "{{MODULE}}/game/monster"
 )
 
 //roost:component type={{ID:component:MonsterActor}}
 const CompTypeMonsterActor entity.ComponentType = {{ID:component:MonsterActor}}
 
-// CreateParams 由Manager在实体可见之前提供，只含不可变规则及已提交空间的感知/投递能力。
-type CreateParams struct {
-	Spec    rules.Spec
-	Sense   func(spatial.Point, int64) []rules.Candidate
-	Respawn func(int64)
-}
-type MonsterActorComponent struct {
-	entity.ComponentBase
-	owner   *Monster
-	body    *actor.Body
-	params  CreateParams
-	respawn *heartbeat.Reg
-}
+// MonsterActorComponent 是 game/components/monsteractor 的组件在 Monster 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type MonsterActorComponent = monsteractor.Component
+
+// CreateParams 是 Monster 的创建参数（定义在组件包，Manager 在实体可见之前提供）。
+type CreateParams = monsteractor.CreateParams
+
+// MapBasic / MoveComponent 是场景与移动框架要的实体方法，取自 MonsterActor 组件的 Body。
+func (m *Monster) MapBasic() *movement.MapBasic  { return m.MonsterActorComp().Body().Map }
+func (m *Monster) MoveComponent() *movement.Move { return m.MonsterActorComp().Body().Move }
+
 type IMonsterEntity interface {
 	entity.IThreadSafeEntity
 	MonsterActorComp() *MonsterActorComponent
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeMonsterActor, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		p, ok := owner.(*Monster)
-		if !ok {
-			return nil, fmt.Errorf("monster: owner %T", owner)
-		}
-		return &MonsterActorComponent{owner: p}, nil
-	})
+	entity.RegisterComponentFactory(CompTypeMonsterActor, monsteractor.NewComponent)
 }
-func (c *MonsterActorComponent) Name() string      { return "monster_actor" }
-func (c *MonsterActorComponent) Body() *actor.Body { return c.body }
-func (c *MonsterActorComponent) OnInitFinish(param *entity.EntityCreateParam, _ bool) error {
-	if param == nil {
-		return fmt.Errorf("monster: create params required")
-	}
-	params, ok := param.Param.(CreateParams)
-	if !ok {
-		return fmt.Errorf("monster: use service.Spawn")
-	}
-	if err := params.Spec.Validate(); err != nil {
-		return err
-	}
-	c.params = params
-	var err error
-	c.body, err = actor.New(c.owner, actor.Config{Fields: monsterFields{c.owner}, Hooks: actor.Hooks{AfterTick: c.tick}})
-	if err != nil {
-		return err
-	}
-	c.respawn, err = c.body.Host.Register("monster.respawn", time.Second, c.respawnTick)
-	if err != nil {
-		c.body.Close()
-		return err
-	}
-	return nil
-}
-func (c *MonsterActorComponent) OnDestroy(entity.EntityDestroyReason) {
-	if c.body != nil {
-		c.body.Close()
-	}
-}
-func (m *Monster) MapBasic() *movement.MapBasic  { return m.MonsterActorComp().body.Map }
-func (m *Monster) MoveComponent() *movement.Move { return m.MonsterActorComp().body.Move }
-
-// Spawn 由Monster+Scene同一事务调用。已经存活则幂等；失败后隐藏尸体的重刷心跳仍在，下一拍重试。
-func (c *MonsterActorComponent) Spawn(env actor.Environment, at spatial.Point, now int64) error {
-	dao := c.owner.Dao()
-	v, b := dao.GetVitals(), dao.GetBrain()
-	if b.GetRetired() {
-		return fmt.Errorf("monster: retired")
-	}
-	if v.GetHP() > 0 {
-		return nil
-	}
-	if v.GetLifeSeq() > 0 && now < b.GetRespawnAt() {
-		return fmt.Errorf("monster: respawn not due")
-	}
-	if v.GetLifeSeq() >= math.MaxInt64 {
-		return fmt.Errorf("monster: life sequence exhausted")
-	}
-	if err := c.body.Enter(env, at, 0); err != nil {
-		return err
-	}
-	v.SetTemplate(c.params.Spec.Template)
-	v.SetHP(c.params.Spec.HP)
-	v.SetLifeSeq(v.GetLifeSeq() + 1)
-	b.SetHomeX(at.X)
-	b.SetHomeY(at.Y)
-	b.SetTarget(0)
-	b.SetCorner(0)
-	b.SetRespawnAt(0)
-	c.respawn.Stop()
-	return nil
-}
-
-// Damage 必须与Scene同时持锁；amount由可信战斗规则算出，expectedLife拒绝上一命的迟到攻击。
-// 返回 true 表示死亡；死亡隐藏但保留Scene成员槽位，退休时才Depart。重复同命攻击由combat自己的账本判重。
-func (c *MonsterActorComponent) Damage(expectedLife uint64, amount, now int64) (bool, error) {
-	v, b := c.owner.Dao().GetVitals(), c.owner.Dao().GetBrain()
-	if amount <= 0 || expectedLife != v.GetLifeSeq() || v.GetHP() <= 0 || b.GetRetired() {
-		return false, fmt.Errorf("monster: invalid damage or stale life")
-	}
-	if amount < v.GetHP() {
-		v.SetHP(v.GetHP() - amount)
-		return false, nil
-	}
-	if now > math.MaxInt64-c.params.Spec.RespawnDelay.Milliseconds() {
-		return false, fmt.Errorf("monster: respawn time overflow")
-	}
-	if err := c.body.Leave(); err != nil {
-		return false, err
-	}
-	v.SetHP(0)
-	b.SetTarget(0)
-	b.SetRespawnAt(now + c.params.Spec.RespawnDelay.Milliseconds())
-	if err := c.respawn.Start(); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// Retire 不再重生；服务端随后在事务外从正式实体Manager移除。
-func (c *MonsterActorComponent) Retire() error {
-	if err := c.body.Leave(); err != nil {
-		return err
-	}
-	c.owner.Dao().GetBrain().SetRetired(true)
-	c.respawn.Stop()
-	return nil
-}
-func (c *MonsterActorComponent) respawnTick(beat heartbeat.Beat) error {
-	v, b := c.owner.Dao().GetVitals(), c.owner.Dao().GetBrain()
-	if b.GetRetired() || v.GetHP() > 0 {
-		c.respawn.Stop()
-		return nil
-	}
-	if beat.Now.UnixMilli() >= b.GetRespawnAt() && c.params.Respawn != nil {
-		id := c.owner.ID()
-		nest.AfterCommit(func() { c.params.Respawn(id) })
-	}
-	return nil
-}
-func (c *MonsterActorComponent) tick(body *actor.Body, beat heartbeat.Beat) error {
-	if c.owner.Dao().GetVitals().GetHP() <= 0 || !body.CanMove() {
-		return nil
-	}
-	life := c.owner.Dao().GetVitals().GetLifeSeq()
-	return rules.Decide(c.owner, beat.Now, func() error { return c.Decide(life) })
-}
-
-// Decide 是持锁的单拍动作入口；LifeSeq检查也适用于未来排队的AI命令。
-func (c *MonsterActorComponent) Decide(expectedLife uint64) error {
-	v, b := c.owner.Dao().GetVitals(), c.owner.Dao().GetBrain()
-	if v.GetLifeSeq() != expectedLife || v.GetHP() <= 0 || b.GetRetired() {
-		return fmt.Errorf("monster: stale life")
-	}
-	if !c.body.CanMove() {
-		return nil
-	}
-	var candidates []rules.Candidate
-	if c.params.Sense != nil {
-		candidates = c.params.Sense(c.body.Position(), c.params.Spec.SenseRadius)
-	}
-	target := rules.Nearest(c.body.Position(), c.params.Spec.SenseRadius, candidates)
-	if target != 0 {
-		if b.GetTarget() == target && c.body.Move.Moving() {
-			return nil
-		}
-		if err := c.body.Follow(target, c.params.Spec.Speed, 2); err != nil {
-			return err
-		}
-		b.SetTarget(target)
-		return nil
-	}
-	if b.GetTarget() != 0 {
-		c.body.Stop()
-		b.SetTarget(0)
-	}
-	if c.body.Move.Moving() {
-		return nil
-	}
-	half := c.params.Spec.PatrolHalf
-	home := spatial.Point{X: b.GetHomeX(), Y: b.GetHomeY()}
-	corners := []spatial.Point{{X: spatial.SaturatingAdd(home.X, half), Y: spatial.SaturatingAdd(home.Y, half)}, {X: spatial.SaturatingSub(home.X, half), Y: spatial.SaturatingAdd(home.Y, half)}, {X: spatial.SaturatingSub(home.X, half), Y: spatial.SaturatingSub(home.Y, half)}, {X: spatial.SaturatingAdd(home.X, half), Y: spatial.SaturatingSub(home.Y, half)}}
-	index := b.GetCorner() % 4
-	if index < 0 {
-		return fmt.Errorf("monster: invalid patrol cursor")
-	}
-	at := corners[index]
-	// 一次只规划一个角点；移动失败原样交给Nest撤销，不能在这里吞掉已经修改Body的错误。
-	if err := c.body.Walk([]spatial.Point{at}, c.params.Spec.Speed); err != nil {
-		return err
-	}
-	b.SetCorner((index + 1) % 4)
-	return nil
-}
-
-type Snapshot struct {
-	ID       int64
-	LifeSeq  uint64
-	HP       int64
-	Template int32
-	SceneID  int64
-	X, Y     int64
-}
-
-func (c *MonsterActorComponent) Snapshot() Snapshot {
-	v := c.owner.Dao().GetVitals()
-	p := c.body.Position()
-	return Snapshot{ID: c.owner.ID(), LifeSeq: v.GetLifeSeq(), HP: v.GetHP(), Template: v.GetTemplate(), SceneID: c.body.Map.SceneID(), X: p.X, Y: p.Y}
-}
-
-type monsterFields struct{ owner *Monster }
-
-func (f monsterFields) SceneID() int64     { return f.owner.Dao().GetActor().GetSceneID() }
-func (f monsterFields) SetSceneID(v int64) { f.owner.Dao().GetActor().SetSceneID(v) }
-func (f monsterFields) Pos() spatial.Point {
-	a := f.owner.Dao().GetActor()
-	return spatial.Point{X: a.GetX(), Y: a.GetY()}
-}
-func (f monsterFields) SetPos(v spatial.Point) {
-	a := f.owner.Dao().GetActor()
-	a.SetX(v.X)
-	a.SetY(v.Y)
-}
-func (f monsterFields) Facing() movement.Facing {
-	return movement.Facing(f.owner.Dao().GetActor().GetFacing())
-}
-func (f monsterFields) SetFacing(v movement.Facing) { f.owner.Dao().GetActor().SetFacing(int32(v)) }
-
-func (c *MonsterActorComponent) SpawnPoint() spatial.Point { return c.params.Spec.At }

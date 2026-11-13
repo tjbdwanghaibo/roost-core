@@ -1,0 +1,78 @@
+package monsterbody
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// Owner 是 MonsterBody 组件的宿主（Monster 的接线见 game/entities/monster/body_component.go）：view 的 MonsterEntity，
+// 加上把 DAO 的同步脏位交给订阅主体（PublishSyncDirty）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	view.MonsterEntity
+	PublishSyncDirty()
+}
+
+// Component is where a monster is and how much of it is left. It is the
+// Player's MapComponent with fewer questions: the same rule applies, which is
+// that the position is read and written here and nowhere else.
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Monster 在 game/entities/monster/body_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("monsterbody component: owner %T does not implement monsterbody.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "body" }
+
+func (component *Component) Owner() Owner { return component.owner }
+
+func (component *Component) Pos() spatial.Point {
+	dao := component.owner.Dao()
+	return spatial.Point{X: dao.GetPosX(), Y: dao.GetPosY()}
+}
+
+func (component *Component) Template() int32 { return component.owner.Dao().GetTemplate() }
+
+func (component *Component) HP() int64 { return component.owner.Dao().GetHP() }
+
+func (component *Component) Alive() bool { return component.HP() > 0 }
+
+// Place sets the monster up where the spawner decided. It is the one write
+// that happens before anybody can see the monster, so it is also the only one
+// that sets the template.
+func (component *Component) Place(template int32, hp int64, at spatial.Point) {
+	dao := component.owner.Dao()
+	dao.SetTemplate(template)
+	dao.SetHP(hp)
+	dao.SetPosX(at.X)
+	dao.SetPosY(at.Y)
+	component.owner.PublishSyncDirty()
+}
+
+// Damage takes hp off and reports whether this blow killed it. The caller
+// decides what a death means — the monster does not remove itself, because
+// what has to happen (tell the AOI, tell the room, queue a respawn) is the
+// scene's business and not a component's.
+func (component *Component) Damage(amount int64) bool {
+	if amount <= 0 || !component.Alive() {
+		return false
+	}
+	dao := component.owner.Dao()
+	remaining := dao.GetHP() - amount
+	if remaining < 0 {
+		remaining = 0
+	}
+	dao.SetHP(remaining)
+	component.owner.PublishSyncDirty()
+	return remaining == 0
+}

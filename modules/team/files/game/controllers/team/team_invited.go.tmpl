@@ -10,11 +10,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
-	teamentity "{{MODULE}}/game/entities/team"
 )
 
 // inviteTransport 是告知被邀请人用到的玩家 TCP Runtime 的两个方法。写成接口、能力按名字取，
@@ -33,7 +33,7 @@ const playerTCPCapability app.ModName = "access.player.tcp"
 //
 // 这一步只是告知，不是邀请的一部分：传输没装配、记录没记上（记满、玩家还没建档）、推送失败都只记日志，
 // 邀请（Team 上的权威记录）不受影响，调用方的应答也不变。
-func (c *Controller) announceInvite(ctx context.Context, invitation teamentity.Invitation) {
+func (c *Controller) announceInvite(ctx context.Context, invitation view.TeamInvitation) {
 	if invitation.ExpireAt == 0 || c.registry == nil {
 		return
 	}

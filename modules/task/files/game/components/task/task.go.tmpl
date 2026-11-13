@@ -35,13 +35,8 @@ func (component *Component) Name() string { return "task" }
 // Owner 只在实体存活且被 Nest 锁住期间可用。
 func (component *Component) Owner() Owner { return component.owner }
 
-// TaskClaimResult 带奖励的种类、号、数量；Balance 是金币余额，非金币奖励不改变它。
-type TaskClaimResult struct {
-	Reward     int64
-	RewardKind string
-	RewardID   int64
-	Balance    int64
-}
+// TaskClaimResult 是 view.TaskClaimResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type TaskClaimResult = view.TaskClaimResult
 
 // taskProgress 是每日与两个嵌套周期 DAO 都具备的访问器。写入全部经过生成的 setter。
 type taskProgress interface {

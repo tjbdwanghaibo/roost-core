@@ -1,10 +1,13 @@
 package handler
 
-import team "{{MODULE}}/game/entities/team"
+import (
+	"{{MODULE}}/game/view"
+	team "{{MODULE}}/game/entities/team"
+)
 
 // handlerTeamInvitation 只读共享 Team 当前权威；Remote 准备在 I/O 池，实体读取在 Nest 锁内。
 //
 //roost:nest durability=memory
-func handlerTeamInvitation(target team.ITeamEntity, invitee int64, nowUnixMilli int64) team.Invitation {
-	return target.TeamEntity().PendingInvitation(invitee, nowUnixMilli)
+func handlerTeamInvitation(target team.ITeamEntity, invitee int64, nowUnixMilli int64) view.TeamInvitation {
+	return target.TeamEntity().TeamRoster().PendingInvitation(invitee, nowUnixMilli)
 }

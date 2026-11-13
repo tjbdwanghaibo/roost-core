@@ -86,7 +86,7 @@
   - 改成员上限、奖励、冷却：改联盟服务配置的 `alliance.*` 键，不改代码。
   - 再加一个只改联盟的客户端入口（例如补上结束战争之后的宣战）：新增协议与端点，照 `alliance_manage.go` 的 `manageAlliance` 写——用 `alliance.RequestID` 生成请求号、`controller.boundSID` 核对归属、调 `controller.alliances` 上对应的 RPC 方法、用 `allianceRefusal` / `allianceReply` 组应答；权限判断留在联盟服务的 handler 里，端点不读镜像判断角色。
   - 改“谁能看申请人列表”：改 `HandleAllianceRoster` 里那一处筛选（缺省只给镜像里的盟主）。
-  - 改“盟主什么时候能退”：改 `game/entities/alliance/roster_component.go` 的 `CheckRemoval` 与 `Remove`（缺省：还有别的成员时拒绝；只剩自己时退出即解散）。
+  - 改“盟主什么时候能退”：改 `game/components/allianceroster/allianceroster.go` 的 `CheckRemoval` 与 `Remove`（缺省：还有别的成员时拒绝；只剩自己时退出即解散）。
   - 改名字规则：改 `game/alliancerule/alliancerule.go` 的 `ValidateName`（端点与联盟服务用同一个函数）。
   - 自有玩家驻留表：实现 `PlayerBinding` 并发布 `PlayerBindingCapability`。
   - 不建议改：`internal/rpc/alliance/` 下的守卫预约与对账（`guard.go`、`membership.go`）、请求回执（`alliancerule.Execute`）、所有权迁移（`transfer.go`）。

@@ -1,12 +1,15 @@
 package handler
 
-import world "{{MODULE}}/game/entities/world"
+import (
+	world "{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/view"
+)
 
 // handlerWorldStats is a read: the result value leaves the lock, the World
 // does not. A read handler still runs under the lock, so it sees one
 // consistent pair of counters.
 //
 //roost:nest
-func handlerWorldStats(target world.IStatsEntity) (world.Stats, error) {
+func handlerWorldStats(target world.IStatsEntity) (view.StatsSnapshot, error) {
 	return target.StatsComp().Snapshot(), nil
 }

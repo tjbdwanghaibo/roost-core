@@ -24,8 +24,8 @@ func handlerMatchRelease(target team.ITeamEntity, members []player.IMatchmakingE
 		ids = append(ids, entity.GetUniqueIDFromEntityID(member.ID()))
 	}
 	slices.Sort(ids)
-	if !slices.Equal(ids, target.TeamEntity().Info().Members) {
+	if !slices.Equal(ids, target.TeamEntity().TeamRoster().Info().Members) {
 		return apperrors.ErrMatchmakingStale
 	}
-	return target.TeamEntity().ReleaseMatch(key)
+	return target.TeamEntity().TeamRoster().ReleaseMatch(key)
 }

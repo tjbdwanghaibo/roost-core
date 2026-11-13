@@ -1,0 +1,17 @@
+package team
+
+import (
+	"{{MODULE}}/game/components/teamroster"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:TeamRoster}}
+const CompTypeTeamRoster entity.ComponentType = {{ID:component:TeamRoster}}
+
+// TeamRosterComponent 是 game/components/teamroster 的组件在 Team 上的名字（生成接线用它）；成员表规则在那个包里。
+type TeamRosterComponent = teamroster.Component
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeTeamRoster, teamroster.NewComponent)
+}

@@ -1,0 +1,36 @@
+package view
+
+// TeamRoster 是 Team 上 TeamRoster 组件对 game/ 下其它包公开的方法（实现在 game/components/teamroster，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type TeamRoster interface {
+	InviteExpiry(invitee int64) int64
+	PendingInvitation(invitee, now int64) TeamInvitation
+	Info() TeamSnapshot
+	IsMember(id int64) bool
+	Found(id int64, sid int32) error
+	Invite(leader, invitee, now int64) error
+	Accept(id int64, sid int32, now int64) error
+	Leave(id int64) error
+	Disband(leader int64) error
+	HoldMatch(key string) error
+	ReleaseMatch(key string) error
+}
+
+// TeamRosterHolder 是“带有 TeamRoster 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TeamRosterHolder interface{ TeamRoster() TeamRoster }
+
+// TeamSnapshot 是锁内读取后交给网络层的值拷贝；成员号是玩家 unique ID。
+type TeamSnapshot struct {
+	TeamID   int64
+	Leader   int64
+	Revision int64
+	Members  []int64
+	SIDs     map[int64]int32
+}
+
+// TeamInvitation 是一次邀请成交之后交给端点的事实：队伍快照，加上被邀请人与这份邀请的过期时刻（业务时间，Unix 毫秒）。
+// ExpireAt 为 0 表示这次没有产生邀请（对方已经是成员）。
+type TeamInvitation struct {
+	TeamSnapshot
+	Invitee  int64
+	ExpireAt int64
+}

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/components/terrainsurface"
 	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -115,7 +115,7 @@ func (bridge *Scene) attachBuildings(m *terrainmap.Map) *buildingSync {
 }
 
 // lotCentre 是占地中心的世界坐标（厘米）：节点 n 在 n × SampleSpacing。
-func lotCentre(lot terrain_chunk.Lot) spatial.Point {
+func lotCentre(lot terrainsurface.Lot) spatial.Point {
 	return spatial.Point{
 		X: (lot.GX*2 + int64(lot.W) - 1) * terrain.SampleSpacing / 2,
 		Y: (lot.GY*2 + int64(lot.H) - 1) * terrain.SampleSpacing / 2,

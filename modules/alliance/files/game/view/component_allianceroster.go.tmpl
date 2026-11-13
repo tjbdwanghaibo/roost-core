@@ -1,0 +1,88 @@
+package view
+
+import (
+	"time"
+	db "{{MODULE}}/db"
+)
+
+// AllianceRoster 是 Alliance 上 AllianceRoster 组件对 game/ 下其它包公开的方法（实现在 game/components/allianceroster，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type AllianceRoster interface {
+	AllianceID() int64
+	Execute(requestID string, nowUnix int64, retention time.Duration, apply func() (int64, error)) (AllianceOutcome, error)
+	Receipt(requestID string) (AllianceReceipt, bool)
+	Settle(requestID string, playerID int64, decide bool, nowUnix int64, retention time.Duration) (outcome AllianceOutcome, decided, seated bool, err error)
+	Founded() bool
+	Seat(playerID int64) (*db.AllianceSeat, bool)
+	Disbanded() bool
+	Found(name string, leaderID int64, homeSID int32, openJoin bool, joinRequestID string, nowUnix int64) error
+	Apply(playerID int64, homeSID int32, nowUnix int64) error
+	Reject(actorID, applicantID int64) error
+	AdmissionHome(actorID, playerID int64, callerSID int32, viaApplication bool, maxMembers int) (int32, error)
+	Admit(playerID int64, homeSID int32, joinRequestID string, nowUnix int64)
+	CheckRemoval(actorID, targetID int64) error
+	Remove(targetID int64) (string, int32)
+	Transfer(actorID, newLeaderID int64) error
+	Donate(actorID, amount int64) error
+	CheckWar(enemyID int64) error
+	DeclareWar(actorID, enemyID int64) error
+	RecordWar(enemyID, nowUnix int64)
+	AwaitWarAck(requestID string, enemyID int64)
+	WarAckPending(requestID string) bool
+	EndWarAck(requestID string) bool
+	WarAcks() []AllianceWarAck
+	View(version int64) AllianceView
+	CurrentVersion() int64
+}
+
+// AllianceRosterHolder 是“带有 AllianceRoster 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type AllianceRosterHolder interface{ AllianceRoster() AllianceRoster }
+
+// AllianceReceipt is what one request did. Code 0 is success, otherwise the business
+// rejection's code. Version is the entity state version the write produced
+// (the version the Remote commit assigns: admission base + 1); show the
+// write's result from it and read mirrors no older than it. Subject is the
+// request's result id: the alliance founded, the player admitted, the new
+// leader.
+type AllianceReceipt struct {
+	Code    int32
+	Version int64
+	Subject int64
+	AtUnix  int64
+}
+
+// AllianceOutcome is a write's answer: its receipt, and whether it was replayed from
+// an earlier delivery of the same request id rather than executed now.
+type AllianceOutcome struct {
+	AllianceReceipt
+	Replayed bool
+}
+
+// AllianceMemberView is one member as a write answers it.
+type AllianceMemberView struct {
+	PlayerID     int64
+	Role         int32
+	Contribution int64
+}
+
+// AllianceView is the alliance as a write or Info answers it — and as the game
+// builds it from the alliance mirror (AllianceMirror.AllianceView), so the game shows
+// a write's result from the reply and reads the mirror afterwards with
+// Monotonic(after = Version).
+type AllianceView struct {
+	AllianceID int64
+	Name       string
+	LeaderID   int64
+	OpenJoin   bool
+	Funds      int64
+	Members    []AllianceMemberView
+	Applicants []int64
+	Wars       []int64
+	Version    int64
+}
+
+// AllianceWarAck is a cross-instance war declared under RequestID that EnemyID has
+// not acknowledged yet (AllianceDao.WarAcks).
+type AllianceWarAck struct {
+	RequestID string
+	EnemyID   int64
+}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"log/slog"
-	room "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/view"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	roomlogic "{{MODULE}}/game/room"
@@ -23,7 +23,7 @@ func (controller *Controller) HandleTurnView(ctx *playeraccess.Context, req *pb.
 		id, err = roomlogic.EntityID(req.RoomID)
 	}
 	if err == nil {
-		var result room.TurnSnapshot
+		var result view.TurnSnapshot
 		result, err = syncsender.NewTurnViewSender(controller.nestClient).Sync_TurnView(ctx.Context(), id, ctx.PlayerID, req.Epoch, connection)
 		if err == nil {
 			response.Info = turnInfo(result)

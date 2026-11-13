@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/components/buildingsite"
 	generated "{{MODULE}}/configs/generated"
 	db "{{MODULE}}/db"
 	building "{{MODULE}}/game/entities/building"
@@ -227,7 +228,7 @@ func (client *terrainClient) heldBuildings() []int64 {
 }
 
 // buildingMatches 报告客户端的这座建筑是否正是服务端实体此刻的同步字段（ConfigID、Params、属主、锚点、朝向、地基、站着）。
-func buildingMatches(got *db.SyncBuildingDao, want building.State) bool {
+func buildingMatches(got *db.SyncBuildingDao, want buildingsite.State) bool {
 	if got == nil || !want.Standing {
 		return false
 	}
@@ -287,7 +288,7 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 	client := h.join(t, buildingViewer, home)
 
 	// 主视野里的一座 hall，只给第一个参数，第二个取缺省；远处一座 tower，在主视野外。
-	hallAt := building.Placement{ConfigID: 2, GX: 110, GY: 100, Facing: 1, Params: []int32{3}}
+	hallAt := buildingsite.Placement{ConfigID: 2, GX: 110, GY: 100, Facing: 1, Params: []int32{3}}
 	placed, err := m.Place(h.ctx, buildingBuilder, 1, hallAt)
 	if err != nil {
 		t.Fatal(err)
@@ -295,12 +296,12 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 	if !slices.Equal(placed.Building.Params, []int32{3, 0}) || placed.Building.Lot.W != 6 || placed.Building.Lot.H != 8 || lotCentre(placed.Building.Lot) != home {
 		t.Fatalf("the placed hall: %+v", placed.Building)
 	}
-	far, err := m.Place(h.ctx, buildingBuilder, 2, building.Placement{ConfigID: 3, GX: 450, GY: 450})
+	far, err := m.Place(h.ctx, buildingBuilder, 2, buildingsite.Placement{ConfigID: 3, GX: 450, GY: 450})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hallID, farID := placed.Building.ID, far.Building.ID
-	state := func(id int64) building.State {
+	state := func(id int64) buildingsite.State {
 		t.Helper()
 		gx, gy := building.AnchorOf(id)
 		return buildingAt(t, h.process, gx, gy)
@@ -367,7 +368,7 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.flushUntil(t, "the removal on the viewer's client", func() bool { return len(client.heldBuildings()) == 0 })
-	hut, err := m.Place(h.ctx, buildingBuilder, 6, building.Placement{ConfigID: 1, GX: 110, GY: 100, Params: []int32{6}})
+	hut, err := m.Place(h.ctx, buildingBuilder, 6, buildingsite.Placement{ConfigID: 1, GX: 110, GY: 100, Params: []int32{6}})
 	if err != nil || hut.Building.ID != hallID {
 		t.Fatalf("a hut on the hall's anchor: %+v, %v", hut, err)
 	}
@@ -380,7 +381,7 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 	if _, err := m.Remove(h.ctx, buildingBuilder, 7, 110, 100); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Place(h.ctx, buildingBuilder, 8, building.Placement{ConfigID: 3, GX: 110, GY: 100}); err != nil {
+	if _, err := m.Place(h.ctx, buildingBuilder, 8, buildingsite.Placement{ConfigID: 3, GX: 110, GY: 100}); err != nil {
 		t.Fatal(err)
 	}
 	h.flushUntil(t, "the tower placed again before the hut's remove went out", func() bool {
@@ -407,7 +408,7 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 func TestABuildingPlacedAgainBeforeItsRemoveWentOut(t *testing.T) {
 	h := startBuildingSyncHarnessWith(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{}, gamescene.TerrainView().MaxVisible, false)
 	m := h.process.m
-	placed, err := m.Place(h.ctx, buildingBuilder, 1, building.Placement{ConfigID: 1, GX: 110, GY: 100})
+	placed, err := m.Place(h.ctx, buildingBuilder, 1, buildingsite.Placement{ConfigID: 1, GX: 110, GY: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +419,7 @@ func TestABuildingPlacedAgainBeforeItsRemoveWentOut(t *testing.T) {
 	if _, err := m.Remove(h.ctx, buildingBuilder, 2, 110, 100); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Place(h.ctx, buildingBuilder, 3, building.Placement{ConfigID: 3, GX: 110, GY: 100}); err != nil {
+	if _, err := m.Place(h.ctx, buildingBuilder, 3, buildingsite.Placement{ConfigID: 3, GX: 110, GY: 100}); err != nil {
 		t.Fatal(err)
 	}
 	h.flushUntil(t, "the tower placed again on the client", func() bool {
@@ -480,7 +481,7 @@ func TestBuildingsTakeMainViewPlacesLikeAnyoneElse(t *testing.T) {
 	m := h.process.m
 	towers := [][2]int64{{100, 100}, {117, 100}, {100, 117}, {117, 117}}
 	for i, at := range towers {
-		if _, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), building.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
+		if _, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), buildingsite.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -540,7 +541,7 @@ func TestBuildingsTakeMainViewPlacesLikeAnyoneElse(t *testing.T) {
 		return len(client.heldIn("monster")) == mainView && len(client.heldIn(building.SyncNamespaceBuilding)) == 0
 	})
 	for i, at := range towers[:2] {
-		if _, err := m.Place(h.ctx, buildingBuilder, uint64(7+i), building.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
+		if _, err := m.Place(h.ctx, buildingBuilder, uint64(7+i), buildingsite.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -576,7 +577,7 @@ func TestManyBuildingsDegradeWithTheCrowd(t *testing.T) {
 	h := startBuildingSyncHarnessWith(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{}, 0, true)
 	m := h.process.m
 	for i, at := range [][2]int64{{100, 100}, {117, 100}, {100, 117}, {117, 117}} {
-		if _, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), building.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
+		if _, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), buildingsite.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -635,12 +636,12 @@ func TestBuildingsAtTheTerrainMainViewScale(t *testing.T) {
 	viewer := h.join(t, buildingViewer, spatial.Point{X: 5000, Y: 5000})
 	cases := []struct {
 		name      string
-		placement building.Placement
+		placement buildingsite.Placement
 	}{
-		{"hut 4×4", building.Placement{ConfigID: 1, GX: 100, GY: 100}},
-		{"tower 3×3", building.Placement{ConfigID: 3, GX: 180, GY: 100}},
-		{"hall 8×6", building.Placement{ConfigID: 2, GX: 260, GY: 100}},
-		{"keep 12×12", building.Placement{ConfigID: 4, GX: 340, GY: 100, Level: true}},
+		{"hut 4×4", buildingsite.Placement{ConfigID: 1, GX: 100, GY: 100}},
+		{"tower 3×3", buildingsite.Placement{ConfigID: 3, GX: 180, GY: 100}},
+		{"hall 8×6", buildingsite.Placement{ConfigID: 2, GX: 260, GY: 100}},
+		{"keep 12×12", buildingsite.Placement{ConfigID: 4, GX: 340, GY: 100, Level: true}},
 	}
 	for i, c := range cases {
 		placed, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), c.placement)
@@ -662,7 +663,7 @@ func TestBuildingsAtTheTerrainMainViewScale(t *testing.T) {
 	// 31m 与 33.4m：另一个玩家（31m）、一只怪与一座 tower（占地中心，都约 31.4m）在看的人正东，另一只怪在 33.4m 上。
 	home := spatial.Point{X: 10000, Y: 30000}
 	h.walk(t, buildingViewer, home)
-	tower, err := m.Place(h.ctx, buildingBuilder, 10, building.Placement{ConfigID: 3, GX: 130, GY: 304})
+	tower, err := m.Place(h.ctx, buildingBuilder, 10, buildingsite.Placement{ConfigID: 3, GX: 130, GY: 304})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +728,7 @@ func TestBuildingSyncAfterARestart(t *testing.T) {
 	store := &memoryChunkStore{}
 	h := startBuildingSyncHarness(t, pack, store)
 	m := h.process.m
-	for i, p := range []building.Placement{
+	for i, p := range []buildingsite.Placement{
 		// 三座彼此相距 70m 以上（开地形场景的主视野离开半径 35.2m，方案 §29）：站在一座上只看得见这一座。
 		{ConfigID: 2, GX: 110, GY: 100, Facing: 1, Params: []int32{3, 4}},
 		{ConfigID: 4, GX: 200, GY: 90, Level: true},
@@ -783,7 +784,7 @@ func TestBuildingSyncAfterARestart(t *testing.T) {
 func TestBuildingSyncTakesTheLatestRevision(t *testing.T) {
 	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
 	m, sync := h.process.m, h.buildingSync()
-	if _, err := m.Place(h.ctx, buildingBuilder, 1, building.Placement{ConfigID: 1, GX: 110, GY: 100}); err != nil {
+	if _, err := m.Place(h.ctx, buildingBuilder, 1, buildingsite.Placement{ConfigID: 1, GX: 110, GY: 100}); err != nil {
 		t.Fatal(err)
 	}
 	id, err := building.EntityID(110, 100)
@@ -843,7 +844,7 @@ func TestBuildingParamsChangeOncePerSeqByTheOwner(t *testing.T) {
 		{"four values for three slots", buildingOwner, 3, 10, 10, []int32{1, 1, 1, 1}, terrainmap.ErrBuildingParams},
 		{"a value above its max", buildingOwner, 3, 10, 10, []int32{5}, terrainmap.ErrBuildingParams},
 		{"a value below its min", buildingOwner, 3, 10, 10, []int32{0}, terrainmap.ErrBuildingParams},
-		{"more values than any building has", buildingOwner, 3, 10, 10, make([]int32, building.MaxParams+1), terrainmap.ErrBuildingParams},
+		{"more values than any building has", buildingOwner, 3, 10, 10, make([]int32, buildingsite.MaxParams+1), terrainmap.ErrBuildingParams},
 		{"no building on the anchor", buildingOwner, 3, 30, 30, []int32{2}, terrainmap.ErrNoBuilding},
 		{"a node that is not the anchor", buildingOwner, 3, 11, 10, []int32{2}, terrainmap.ErrNoBuilding},
 	} {
@@ -960,7 +961,7 @@ func TestBuildingConfigRulesAndReloads(t *testing.T) {
 		t.Fatalf("the project's building config: %v", err)
 	}
 	defer stop()
-	catalog, err := building.CatalogOf(good.Current())
+	catalog, err := buildingsite.CatalogOf(good.Current())
 	if err != nil || len(catalog) != 4 || len(catalog[3].Params) != 3 || len(catalog[4].Params) != 0 || !catalog[4].MustLevel {
 		t.Fatalf("the project's catalog: %+v, %v", catalog, err)
 	}
@@ -978,7 +979,7 @@ func TestBuildingConfigRulesAndReloads(t *testing.T) {
 	} {
 		dir := copyConfig(t)
 		edit(t, dir, bad.file, bad.change)
-		if _, err := guardBuildingConfig(loadConfigDir(t, dir)); !errors.Is(err, building.ErrCatalog) {
+		if _, err := guardBuildingConfig(loadConfigDir(t, dir)); !errors.Is(err, buildingsite.ErrCatalog) {
 			t.Fatalf("start with %s: %v, want ErrCatalog", bad.name, err)
 		}
 	}
@@ -1027,7 +1028,7 @@ func TestBuildingConfigRulesAndReloads(t *testing.T) {
 	if _, err := good.ReloadWithReason(context.Background(), "test: add a config and a slot"); err != nil {
 		t.Fatalf("a compatible reload: %v", err)
 	}
-	catalog, err = building.CatalogOf(good.Current())
+	catalog, err = buildingsite.CatalogOf(good.Current())
 	if err != nil || len(catalog) != 5 || len(catalog[1].Params) != 2 || catalog[1].Params[0].Max != 15 {
 		t.Fatalf("after the compatible reload: %+v, %v", catalog, err)
 	}

@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	building "{{MODULE}}/game/entities/building"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/components/buildingsite"
+	"{{MODULE}}/game/components/terrainsurface"
 	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -469,8 +469,8 @@ func encodeRelayRequest(inc, id uint64, req terrainmap.PartRequest) ([]byte, err
 		w.byte(b.Material)
 	case terrainmap.PartPlace:
 		p := req.Placement
-		if len(p.Params) > building.MaxParams {
-			return nil, fmt.Errorf("%d parameters, at most %d", len(p.Params), building.MaxParams)
+		if len(p.Params) > buildingsite.MaxParams {
+			return nil, fmt.Errorf("%d parameters, at most %d", len(p.Params), buildingsite.MaxParams)
 		}
 		w.int(int64(p.ConfigID))
 		w.ints(p.Params)
@@ -482,8 +482,8 @@ func encodeRelayRequest(inc, id uint64, req terrainmap.PartRequest) ([]byte, err
 		w.int(req.GX)
 		w.int(req.GY)
 	case terrainmap.PartParams:
-		if len(req.Params) > building.MaxParams {
-			return nil, fmt.Errorf("%d parameters, at most %d", len(req.Params), building.MaxParams)
+		if len(req.Params) > buildingsite.MaxParams {
+			return nil, fmt.Errorf("%d parameters, at most %d", len(req.Params), buildingsite.MaxParams)
 		}
 		w.int(req.GX)
 		w.int(req.GY)
@@ -512,7 +512,7 @@ func decodeRelayRequest(body []byte) (inc, id uint64, req terrainmap.PartRequest
 		req.Brush.Material = r.byte()
 	case terrainmap.PartPlace:
 		req.Placement.ConfigID = r.int32()
-		req.Placement.Params = r.ints(building.MaxParams)
+		req.Placement.Params = r.ints(buildingsite.MaxParams)
 		req.Placement.GX, req.Placement.GY = r.int(), r.int()
 		req.Placement.Facing = r.int32()
 		req.Placement.Level = r.bool()
@@ -520,7 +520,7 @@ func decodeRelayRequest(body []byte) (inc, id uint64, req terrainmap.PartRequest
 		req.GX, req.GY = r.int(), r.int()
 	case terrainmap.PartParams:
 		req.GX, req.GY = r.int(), r.int()
-		req.Params = r.ints(building.MaxParams)
+		req.Params = r.ints(buildingsite.MaxParams)
 	default:
 		r.fail()
 	}
@@ -607,7 +607,7 @@ func decodeRelayAnswer(body []byte) (inc, id uint64, a terrainmap.PartAnswer, er
 	}
 	for range chunks {
 		x, y, version := r.int32(), r.int32(), r.int()
-		a.Chunks = append(a.Chunks, terrain_chunk.ChunkVersion{Key: terrain.ChunkKey{X: x, Y: y}, Version: version})
+		a.Chunks = append(a.Chunks, terrainsurface.ChunkVersion{Key: terrain.ChunkKey{X: x, Y: y}, Version: version})
 	}
 	if r.bool() {
 		s := &a.Building
@@ -615,10 +615,10 @@ func decodeRelayAnswer(body []byte) (inc, id uint64, a terrainmap.PartAnswer, er
 		s.Standing = r.bool()
 		s.Owner = r.int()
 		s.ConfigID = r.int32()
-		s.Params = r.ints(building.MaxParams)
+		s.Params = r.ints(buildingsite.MaxParams)
 		s.Facing = r.int32()
 		if lot := r.int(); lot != 0 {
-			if s.Lot, err = terrain_chunk.UnpackLot(lot); err != nil {
+			if s.Lot, err = terrainsurface.UnpackLot(lot); err != nil {
 				r.fail()
 			}
 		}

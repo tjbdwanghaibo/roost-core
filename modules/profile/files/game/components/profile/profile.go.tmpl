@@ -146,11 +146,8 @@ func (component *Component) AddExp(amount int64) (int32, error) {
 	return gained, nil
 }
 
-// ProfileCard 是档案里别的玩家也可以看的那一半的一份拷贝：名字与等级。它是值，离开实体锁之后可以继续用。
-type ProfileCard struct {
-	Name  string
-	Level int32
-}
+// ProfileCard 是 view.ProfileCard（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type ProfileCard = view.ProfileCard
 
 // Card 读出名片。服务端别的功能要按玩家号读别人的名字或等级（匹配按等级计分、榜单与好友列表显示名字）时，
 // 经 handler ProfileCard（game/handler/profile_card.go）在那名玩家的锁内调它。

@@ -18,6 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	room "{{MODULE}}/game/entities/room"
 	sender "{{MODULE}}/game/handler/syncsender"
@@ -113,7 +114,7 @@ func newRoomFixture(t *testing.T, capacity int32, registrations ...func(*nest.Ne
 	}
 	return f
 }
-func (f *roomFixture) join(t *testing.T, playerID int64) room.RoomSnapshot {
+func (f *roomFixture) join(t *testing.T, playerID int64) view.RoomSnapshot {
 	t.Helper()
 	value, err := f.joins.Sync_RoomJoin(context.Background(), f.id, playerID, fmt.Sprintf("connection-%d", playerID))
 	if err != nil {
@@ -121,7 +122,7 @@ func (f *roomFixture) join(t *testing.T, playerID int64) room.RoomSnapshot {
 	}
 	return value
 }
-func (f *roomFixture) view(t *testing.T, playerID int64, connection ...string) room.RoomSnapshot {
+func (f *roomFixture) view(t *testing.T, playerID int64, connection ...string) view.RoomSnapshot {
 	t.Helper()
 	key := fmt.Sprintf("connection-%d", playerID)
 	if len(connection) > 0 {
@@ -203,7 +204,7 @@ func TestRoomJoinHasStableSeatsHostAndReplay(t *testing.T) {
 	if a.Epoch != 1 || b.Epoch != 2 || replay.Epoch != 1 || replay.HostID != 101 || replay.Capacity != 4 {
 		t.Fatalf("%+v %+v %+v", a, b, replay)
 	}
-	if want := []room.SeatSnapshot{{PlayerID: 101, Slot: 1, Connected: true}, {PlayerID: 102, Slot: 2, Connected: true}}; !reflect.DeepEqual(replay.Seats, want) {
+	if want := []view.RoomSeatSnapshot{{PlayerID: 101, Slot: 1, Connected: true}, {PlayerID: 102, Slot: 2, Connected: true}}; !reflect.DeepEqual(replay.Seats, want) {
 		t.Fatalf("seats=%+v", replay.Seats)
 	}
 }

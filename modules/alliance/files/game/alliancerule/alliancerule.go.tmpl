@@ -19,6 +19,7 @@
 package alliancerule
 
 import (
+	"{{MODULE}}/game/view"
 	"errors"
 	"strings"
 	"time"
@@ -97,34 +98,27 @@ func Rejection(code int32) error {
 	return errcode.Remote(code, "", "alliance: recorded rejection")
 }
 
-// Receipt is what one request did. Code 0 is success, otherwise the business
-// rejection's code. Version is the entity state version the write produced
-// (the version the Remote commit assigns: admission base + 1); show the
-// write's result from it and read mirrors no older than it. Subject is the
-// request's result id: the alliance founded, the player admitted, the new
-// leader.
-type Receipt struct {
-	Code    int32
-	Version int64
-	Subject int64
-	AtUnix  int64
-}
+// Receipt 是 view.AllianceReceipt（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type Receipt = view.AllianceReceipt
 
-// Outcome is a write's answer: its receipt, and whether it was replayed from
-// an earlier delivery of the same request id rather than executed now.
-type Outcome struct {
-	Receipt
-	Replayed bool
-}
+// Outcome 是 view.AllianceOutcome（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type Outcome = view.AllianceOutcome
 
-// Err is the outcome as an error: nil for success, the recorded rejection
-// otherwise.
-func (o Outcome) Err() error {
+// OutcomeErr is the outcome as an error: nil for success, the recorded
+// rejection otherwise. Outcome is plain data in game/view (view.AllianceOutcome),
+// so the rejection lookup, which needs this package's error list, is here.
+func OutcomeErr(o Outcome) error {
 	if o.Code == 0 {
 		return nil
 	}
 	return Rejection(o.Code)
 }
+
+// Err is the answer's outcome as an error (OutcomeErr).
+func (a Answer) Err() error { return OutcomeErr(a.Outcome) }
+
+// Err is the answer's outcome as an error (OutcomeErr).
+func (a GuardAnswer) Err() error { return OutcomeErr(a.Outcome) }
 
 // ReceiptStore is where an entity keeps its receipts: its DAO's Requests map,
 // adapted by the entity's component.
@@ -163,7 +157,7 @@ func Execute(store ReceiptStore, requestID string, baseVersion, nowUnix int64, r
 		return Outcome{}, errors.New("alliancerule: request id is required")
 	}
 	if receipt, ok := store.Receipt(requestID); ok {
-		return Outcome{Receipt: receipt, Replayed: true}, nil
+		return Outcome{AllianceReceipt: receipt, Replayed: true}, nil
 	}
 	subject, err := apply()
 	var code int32
@@ -176,7 +170,7 @@ func Execute(store ReceiptStore, requestID string, baseVersion, nowUnix int64, r
 	receipt := Receipt{Code: code, Version: baseVersion + 1, Subject: subject, AtUnix: nowUnix}
 	store.PutReceipt(requestID, receipt)
 	prune(store, requestID, nowUnix-int64(retention/time.Second))
-	return Outcome{Receipt: receipt}, nil
+	return Outcome{AllianceReceipt: receipt}, nil
 }
 
 // prune removes at most maxPrunePerCommit receipts older than cutoff, never
@@ -194,57 +188,14 @@ func prune(store ReceiptStore, keep string, cutoff int64) {
 	}
 }
 
-// MemberView is one member as a write answers it.
-type MemberView struct {
-	PlayerID     int64
-	Role         int32
-	Contribution int64
-}
+// MemberView 是 view.AllianceMemberView（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type MemberView = view.AllianceMemberView
 
-// View is the alliance as a write or Info answers it — and as the game
-// builds it from the alliance mirror (AllianceMirror.View), so the game shows
-// a write's result from the reply and reads the mirror afterwards with
-// Monotonic(after = Version).
-type View struct {
-	AllianceID int64
-	Name       string
-	LeaderID   int64
-	OpenJoin   bool
-	Funds      int64
-	Members    []MemberView
-	Applicants []int64
-	Wars       []int64
-	Version    int64
-}
+// View 是 view.AllianceView（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type View = view.AllianceView
 
-// MemberState is a player's guard as the service answers it.
-type MemberState struct {
-	PlayerID            int64
-	AllianceID          int64
-	JoinRequestID       string
-	PendingAllianceID   int64
-	PendingRequestID    string
-	PendingDeadlineUnix int64
-	LeftAtUnix          int64
-	// RewardPeriod is the last reward period the player claimed (0: none).
-	RewardPeriod int64
-	Version      int64
-}
-
-// Holder is what holds the guard, if anything: the pending reservation
-// (pending=true: alliance PendingAllianceID, request PendingRequestID) or the
-// membership (alliance AllianceID, request JoinRequestID). A pending
-// reservation is reported first: it is the newer of the two.
-func (state MemberState) Holder() (allianceID int64, requestID string, pending, held bool) {
-	switch {
-	case state.PendingRequestID != "":
-		return state.PendingAllianceID, state.PendingRequestID, true, true
-	case state.AllianceID != 0:
-		return state.AllianceID, state.JoinRequestID, false, true
-	default:
-		return 0, "", false, false
-	}
-}
+// MemberState 是 view.AllianceMemberState（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type MemberState = view.AllianceMemberState
 
 // Answer is an alliance write's answer: the outcome and the alliance after it.
 //
@@ -283,12 +234,8 @@ type MemberChange struct {
 	Change   string
 }
 
-// WarAck is a cross-instance war declared under RequestID that EnemyID has
-// not acknowledged yet (AllianceDao.WarAcks).
-type WarAck struct {
-	RequestID string
-	EnemyID   int64
-}
+// WarAck 是 view.AllianceWarAck（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type WarAck = view.AllianceWarAck
 
 // GuardAnswer is a guard write's answer: the outcome (for writes with a
 // receipt) and the guard after it. Held is GuardHeld for a reservation.

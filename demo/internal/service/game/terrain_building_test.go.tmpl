@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/components/buildingsite"
+	"{{MODULE}}/game/components/terrainsurface"
+	"{{MODULE}}/game/components/terrainledger"
 	db "{{MODULE}}/db"
 	building "{{MODULE}}/game/entities/building"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
@@ -95,19 +98,19 @@ func buildingProcess(t *testing.T, pack string, store *memoryChunkStore, edit fu
 }
 
 // hut、hall、tower 是 demo 配置表（configs/table/building.csv）的 1、2、3 号建筑：4 × 4、8 × 6、3 × 3。
-func hut(gx, gy int64) building.Placement { return building.Placement{ConfigID: 1, GX: gx, GY: gy} }
-func hall(gx, gy int64, level bool) building.Placement {
-	return building.Placement{ConfigID: 2, GX: gx, GY: gy, Level: level}
+func hut(gx, gy int64) buildingsite.Placement { return buildingsite.Placement{ConfigID: 1, GX: gx, GY: gy} }
+func hall(gx, gy int64, level bool) buildingsite.Placement {
+	return buildingsite.Placement{ConfigID: 2, GX: gx, GY: gy, Level: level}
 }
-func tower(gx, gy int64) building.Placement { return building.Placement{ConfigID: 3, GX: gx, GY: gy} }
+func tower(gx, gy int64) buildingsite.Placement { return buildingsite.Placement{ConfigID: 3, GX: gx, GY: gy} }
 
 // sameBuildings 比较两组建筑快照（State 含参数切片，不能用 ==）。
-func sameBuildings(a, b []building.State) bool {
-	return slices.EqualFunc(a, b, building.State.Equal)
+func sameBuildings(a, b []buildingsite.State) bool {
+	return slices.EqualFunc(a, b, buildingsite.State.Equal)
 }
 
 // buildingAt 是锚点 (gx, gy) 上建筑实体的状态；没有实体时是零值。
-func buildingAt(t *testing.T, p *terrainProcess, gx, gy int64) building.State {
+func buildingAt(t *testing.T, p *terrainProcess, gx, gy int64) buildingsite.State {
 	t.Helper()
 	id, err := building.EntityID(gx, gy)
 	if err != nil {
@@ -116,17 +119,17 @@ func buildingAt(t *testing.T, p *terrainProcess, gx, gy int64) building.State {
 	if e, _ := p.entities.Get(id).(*building.Building); e != nil {
 		return e.SiteComp().State()
 	}
-	return building.State{}
+	return buildingsite.State{}
 }
 
 // chunkLots 是块实体 DAO 里记的占地（没有实体时 nil）。
-func chunkLots(t *testing.T, p *terrainProcess, key terrain.ChunkKey) []terrain_chunk.Lot {
+func chunkLots(t *testing.T, p *terrainProcess, key terrain.ChunkKey) []terrainsurface.Lot {
 	t.Helper()
 	e, _ := p.entities.Get(mustChunkID(t, key)).(*terrain_chunk.TerrainChunk)
 	if e == nil {
 		return nil
 	}
-	lots, err := terrain_chunk.LotsOf(e.Dao())
+	lots, err := terrainsurface.LotsOf(e.Dao())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +137,8 @@ func chunkLots(t *testing.T, p *terrainProcess, key terrain.ChunkKey) []terrain_
 }
 
 // buildingsOf 是本进程全部站着的建筑。
-func buildingsOf(p *terrainProcess) []building.State {
-	var out []building.State
+func buildingsOf(p *terrainProcess) []buildingsite.State {
+	var out []buildingsite.State
 	p.entities.Range(func(e entity.IThreadSafeEntity) bool {
 		if b, ok := e.(*building.Building); ok && b != nil {
 			if s := b.SiteComp().State(); s.Standing {
@@ -144,7 +147,7 @@ func buildingsOf(p *terrainProcess) []building.State {
 		}
 		return true
 	})
-	slices.SortFunc(out, func(a, b building.State) int { return int(a.ID - b.ID) })
+	slices.SortFunc(out, func(a, b buildingsite.State) int { return int(a.ID - b.ID) })
 	return out
 }
 
@@ -167,7 +170,7 @@ func ledgerBuildings(t *testing.T, p *terrainProcess, player int64) int64 {
 func checkBuildingRecords(t *testing.T, p *terrainProcess) {
 	t.Helper()
 	standing := buildingsOf(p)
-	byLot := map[terrain_chunk.Lot]building.State{}
+	byLot := map[terrainsurface.Lot]buildingsite.State{}
 	owners := map[int64]int64{}
 	for i, b := range standing {
 		for _, o := range standing[i+1:] {
@@ -193,7 +196,7 @@ func checkBuildingRecords(t *testing.T, p *terrainProcess) {
 				t.Fatalf("chunk %v records the lot %v and no building stands on it", key, l)
 			}
 		}
-		want := terrain_chunk.OccupancyOf(key, lots)
+		want := terrainsurface.OccupancyOf(key, lots)
 		for index := int32(0); index < terrain.ChunkPoints; index++ {
 			if p.m.Occupied(key, index) != want.Has(index) {
 				t.Fatalf("chunk %v point %d: walkers see occupied %v, the chunk's lots say %v", key, index, p.m.Occupied(key, index), want.Has(index))
@@ -210,16 +213,16 @@ func checkBuildingRecords(t *testing.T, p *terrainProcess) {
 // buildingSnapshot 是会被放置 / 拆除写到的全部状态：每块（DAO、视图），全部建筑实体，两个玩家的账本与提交数。
 type buildingSnapshot struct {
 	chunks    map[terrain.ChunkKey]chunkState
-	lots      map[terrain.ChunkKey][]terrain_chunk.Lot
-	buildings []building.State
-	ledgers   [2]terrain_editor.SeqWindow
+	lots      map[terrain.ChunkKey][]terrainsurface.Lot
+	buildings []buildingsite.State
+	ledgers   [2]terrainledger.SeqWindow
 	counts    [2]int64
 	commits   int64
 }
 
 func snapshotBuildings(t *testing.T, p *terrainProcess) buildingSnapshot {
 	t.Helper()
-	s := buildingSnapshot{chunks: allStates(t, p), lots: map[terrain.ChunkKey][]terrain_chunk.Lot{}, commits: p.committer.commits.Load()}
+	s := buildingSnapshot{chunks: allStates(t, p), lots: map[terrain.ChunkKey][]terrainsurface.Lot{}, commits: p.committer.commits.Load()}
 	for _, key := range p.m.Keys() {
 		s.lots[key] = chunkLots(t, p, key)
 	}
@@ -229,7 +232,7 @@ func snapshotBuildings(t *testing.T, p *terrainProcess) buildingSnapshot {
 		}
 		return true
 	})
-	slices.SortFunc(s.buildings, func(a, b building.State) int { return int(a.ID - b.ID) })
+	slices.SortFunc(s.buildings, func(a, b buildingsite.State) int { return int(a.ID - b.ID) })
 	for i, player := range []int64{buildingOwner, buildingOther} {
 		s.ledgers[i], s.counts[i] = ledgerOf(t, p, player), ledgerBuildings(t, p, player)
 	}
@@ -246,8 +249,8 @@ func (s buildingSnapshot) equal(o buildingSnapshot) bool {
 		}
 	}
 	// 拒绝之前可以建出（冷加载）空的建筑实体：只比较站着的。
-	standing := func(states []building.State) []building.State {
-		return slices.DeleteFunc(slices.Clone(states), func(b building.State) bool { return !b.Standing })
+	standing := func(states []buildingsite.State) []buildingsite.State {
+		return slices.DeleteFunc(slices.Clone(states), func(b buildingsite.State) bool { return !b.Standing })
 	}
 	return sameBuildings(standing(s.buildings), standing(o.buildings))
 }
@@ -291,7 +294,7 @@ func TestBuildingPlacementChecks(t *testing.T) {
 		t.Fatalf("a hut on flat ground: %+v, %v", placed, err)
 	}
 	if got := buildingAt(t, p, 10, 10); got.Owner != buildingOwner || got.ConfigID != 1 || !slices.Equal(got.Params, []int32{0}) ||
-		got.Lot != (terrain_chunk.Lot{GX: 10, GY: 10, W: 4, H: 4}) || got.BaseRevision != 1 {
+		got.Lot != (terrainsurface.Lot{GX: 10, GY: 10, W: 4, H: 4}) || got.BaseRevision != 1 {
 		t.Fatalf("the hut's record: %+v", got)
 	}
 	if v, _ := p.m.View().Version(terrain.ChunkKey{}); v != 0 {
@@ -301,7 +304,7 @@ func TestBuildingPlacementChecks(t *testing.T) {
 
 	for _, c := range []struct {
 		name string
-		p    building.Placement
+		p    buildingsite.Placement
 		want error
 	}{
 		{"the same lot", hut(10, 10), terrainmap.ErrOccupied},
@@ -310,14 +313,14 @@ func TestBuildingPlacementChecks(t *testing.T) {
 		{"under the regional water level", hut(140, 80), terrainmap.ErrUnderwater},
 		{"a hall across a 70cm slope, not levelled", hall(70, 10, false), terrainmap.ErrSlope},
 		{"a hall across a 7m slope, levelled", hall(70, 70, true), terrainmap.ErrSlope},
-		{"an unknown config", building.Placement{ConfigID: 9, GX: 30, GY: 30}, terrainmap.ErrBuildingConfig},
-		{"config 0", building.Placement{GX: 30, GY: 30}, terrainmap.ErrBuildingConfig},
-		{"more values than the hut's one slot", building.Placement{ConfigID: 1, GX: 30, GY: 30, Params: []int32{1, 1}}, terrainmap.ErrBuildingParams},
-		{"a value above its slot's max", building.Placement{ConfigID: 1, GX: 30, GY: 30, Params: []int32{8}}, terrainmap.ErrBuildingParams},
-		{"a value below its slot's min", building.Placement{ConfigID: 3, GX: 30, GY: 30, Params: []int32{0}}, terrainmap.ErrBuildingParams},
-		{"the third slot out of range", building.Placement{ConfigID: 3, GX: 30, GY: 30, Params: []int32{2, 1, 8}}, terrainmap.ErrBuildingParams},
-		{"a keep that must be levelled, not levelled", building.Placement{ConfigID: 4, GX: 30, GY: 30}, terrainmap.ErrBuild},
-		{"a bad facing", building.Placement{ConfigID: 1, GX: 30, GY: 30, Facing: 4}, terrainmap.ErrBuild},
+		{"an unknown config", buildingsite.Placement{ConfigID: 9, GX: 30, GY: 30}, terrainmap.ErrBuildingConfig},
+		{"config 0", buildingsite.Placement{GX: 30, GY: 30}, terrainmap.ErrBuildingConfig},
+		{"more values than the hut's one slot", buildingsite.Placement{ConfigID: 1, GX: 30, GY: 30, Params: []int32{1, 1}}, terrainmap.ErrBuildingParams},
+		{"a value above its slot's max", buildingsite.Placement{ConfigID: 1, GX: 30, GY: 30, Params: []int32{8}}, terrainmap.ErrBuildingParams},
+		{"a value below its slot's min", buildingsite.Placement{ConfigID: 3, GX: 30, GY: 30, Params: []int32{0}}, terrainmap.ErrBuildingParams},
+		{"the third slot out of range", buildingsite.Placement{ConfigID: 3, GX: 30, GY: 30, Params: []int32{2, 1, 8}}, terrainmap.ErrBuildingParams},
+		{"a keep that must be levelled, not levelled", buildingsite.Placement{ConfigID: 4, GX: 30, GY: 30}, terrainmap.ErrBuild},
+		{"a bad facing", buildingsite.Placement{ConfigID: 1, GX: 30, GY: 30, Facing: 4}, terrainmap.ErrBuild},
 		{"off the map's edge", hut(190, 10), terrainmap.ErrBuild},
 		{"a negative anchor", hut(-1, 10), terrainmap.ErrBuild},
 	} {
@@ -339,7 +342,7 @@ func TestBuildingPlacementChecks(t *testing.T) {
 	if err != nil || !levelled.Building.Leveled || levelled.Building.Foundation != 50010 {
 		t.Fatalf("a levelled hall across two chunks: %+v, %v", levelled, err)
 	}
-	if want := []terrain_chunk.ChunkVersion{{Key: terrain.ChunkKey{X: 0, Y: 0}, Version: 1}, {Key: terrain.ChunkKey{X: 1, Y: 0}, Version: 1}}; !slices.Equal(levelled.Chunks, want) {
+	if want := []terrainsurface.ChunkVersion{{Key: terrain.ChunkKey{X: 0, Y: 0}, Version: 1}, {Key: terrain.ChunkKey{X: 1, Y: 0}, Version: 1}}; !slices.Equal(levelled.Chunks, want) {
 		t.Fatalf("chunk versions %v, want %v", levelled.Chunks, want)
 	}
 	for gy := int64(20); gy < 26; gy++ {
@@ -391,7 +394,7 @@ func TestBuildingPlacementAppliesOncePerSeq(t *testing.T) {
 		t.Fatalf("a placement on the brush's sequence: %+v, %v", r, err)
 	}
 	var seqErr *terrainmap.SeqError
-	if _, err := p.m.Place(p.ctx, buildingOwner, 2+terrain_editor.MaxSeqAhead+1, hut(30, 30)); !errors.As(err, &seqErr) || seqErr.Verdict != terrain_editor.Ahead {
+	if _, err := p.m.Place(p.ctx, buildingOwner, 2+terrainledger.MaxSeqAhead+1, hut(30, 30)); !errors.As(err, &seqErr) || seqErr.Verdict != terrainledger.Ahead {
 		t.Fatalf("a sequence too far ahead: %v", err)
 	}
 	if !before.equal(snapshotBuildings(t, p)) {
@@ -467,7 +470,7 @@ func TestBrushUnderABuildingIsRefused(t *testing.T) {
 // 行走与寻路绕开建筑：Walker.Occupied 读提交后发布的占位表；拆除后又能走。
 func TestWalkersGoAroundBuildings(t *testing.T) {
 	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, nil)
-	lot := terrain_chunk.Lot{GX: 20, GY: 20, W: 8, H: 6}
+	lot := terrainsurface.Lot{GX: 20, GY: 20, W: 8, H: 6}
 	from, to := spatial.Point{X: 1500, Y: 2200}, spatial.Point{X: 3300, Y: 2200}
 	through := func() bool {
 		t.Helper()
@@ -566,7 +569,7 @@ func TestBuildingsSurviveARestart(t *testing.T) {
 	store := &memoryChunkStore{}
 	limit := func(policy *terrainmap.Policy) { policy.MaxBuildings = 3 }
 	p := buildingProcess(t, pack, store, limit)
-	for i, place := range []building.Placement{hut(10, 10), hall(60, 20, true), tower(63, 63)} {
+	for i, place := range []buildingsite.Placement{hut(10, 10), hall(60, 20, true), tower(63, 63)} {
 		if _, err := p.m.Place(p.ctx, buildingOwner, uint64(i+1), place); err != nil {
 			t.Fatalf("placement %d: %v", i, err)
 		}
@@ -610,7 +613,7 @@ func TestBuildingsAcrossABaseRevision(t *testing.T) {
 	dir := t.TempDir()
 	store := &memoryChunkStore{}
 	p := buildingProcess(t, buildingPack(t, dir, 1), store, nil)
-	for i, place := range []building.Placement{hut(10, 10), hall(60, 20, true), hut(10, 80)} {
+	for i, place := range []buildingsite.Placement{hut(10, 10), hall(60, 20, true), hut(10, 80)} {
 		if _, err := p.m.Place(p.ctx, buildingOwner, uint64(i+1), place); err != nil {
 			t.Fatalf("placement %d: %v", i, err)
 		}
@@ -680,7 +683,7 @@ func TestBuildingReconcileReportsAMismatch(t *testing.T) {
 	if want := (terrainmap.BuildingStats{Standing: 1, Mismatched: 1}); q.buildingStats != want {
 		t.Fatalf("reconcile: %+v, want %+v", q.buildingStats, want)
 	}
-	if !slices.Equal(chunkLots(t, q, terrain.ChunkKey{}), []terrain_chunk.Lot{{GX: 10, GY: 10, W: 4, H: 4}}) {
+	if !slices.Equal(chunkLots(t, q, terrain.ChunkKey{}), []terrainsurface.Lot{{GX: 10, GY: 10, W: 4, H: 4}}) {
 		t.Fatal("the mismatch was changed")
 	}
 	key, index := terrain.PointIndex(1100, 1100)
@@ -766,7 +769,7 @@ func TestBuildingRestartRealMongo(t *testing.T) {
 		t.Fatalf("reconcile after the restart: %+v", second.buildingStats)
 	}
 	if standing := second.m.ReconciledBuildings(); len(standing) != 1 || standing[0].Building == nil ||
-		standing[0].Building.Dao().GetConfigID() != 2 || standing[0].Lot != (terrain_chunk.Lot{GX: 60, GY: 20, W: 8, H: 6}) {
+		standing[0].Building.Dao().GetConfigID() != 2 || standing[0].Lot != (terrainsurface.Lot{GX: 60, GY: 20, W: 8, H: 6}) {
 		t.Fatalf("the reconciled buildings after the restart: %+v", standing)
 	} else if got := standing[0].Building.SiteComp().State().Params; !slices.Equal(got, []int32{5, 9}) {
 		t.Fatalf("the hall's parameters after the restart: %v, want [5 9]", got)

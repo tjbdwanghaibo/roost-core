@@ -22,5 +22,5 @@ func handlerAllianceSettle(target alliance.IAllianceRosterEntity, requestID stri
 	if err != nil {
 		return alliancerule.ReceiptAnswer{}, err
 	}
-	return alliancerule.ReceiptAnswer{Found: decided, Receipt: outcome.Receipt, Seated: seated}, nil
+	return alliancerule.ReceiptAnswer{Found: decided, Receipt: outcome.AllianceReceipt, Seated: seated}, nil
 }

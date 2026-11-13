@@ -30,34 +30,20 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 	return &Component{owner: owner}, nil
 }
 
+// 匹配阶段的取值定义在 game/view（MatchSnapshot.Terminal 要用），这里留同名常量。
 const (
-	MatchPreparing   = "preparing"
-	MatchDispatching = "dispatching"
-	MatchQueued      = "queued"
-	MatchCancelling  = "cancelling"
-	MatchMatched     = "matched"
-	MatchCancelled   = "cancelled"
-	MatchExpired     = "expired"
+	MatchPreparing = view.MatchPreparing
+	MatchDispatching = view.MatchDispatching
+	MatchQueued = view.MatchQueued
+	MatchCancelling = view.MatchCancelling
+	MatchMatched = view.MatchMatched
+	MatchCancelled = view.MatchCancelled
+	MatchExpired = view.MatchExpired
 )
 
-// MatchSnapshot 是锁外 I/O 用的独立值；不是另一份可写权威。
-type MatchSnapshot struct {
-	Sequence int64
-	Key      string
-	Leader   int64
-	TeamID   int64
-	Members  []int64
-	SID      int32
-	Phase    string
-	TicketID string
-	MatchID  string
-	RoomID   int64
-	Deadline int64
-}
+// MatchSnapshot 是 view.MatchSnapshot（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type MatchSnapshot = view.MatchSnapshot
 
-func (s MatchSnapshot) Terminal() bool {
-	return s.Phase == MatchMatched || s.Phase == MatchCancelled || s.Phase == MatchExpired
-}
 func (c *Component) Name() string { return "matchmaking" }
 func (c *Component) Snapshot() MatchSnapshot {
 	d := c.owner.Dao().GetMatchmaking()

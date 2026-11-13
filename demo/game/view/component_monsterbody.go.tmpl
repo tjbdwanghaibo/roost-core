@@ -1,0 +1,18 @@
+package view
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// MonsterBody 是 Monster 上 MonsterBody 组件对 game/ 下其它包公开的方法（实现在 game/components/monsterbody，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type MonsterBody interface {
+	Pos() spatial.Point
+	Template() int32
+	HP() int64
+	Alive() bool
+	Place(template int32, hp int64, at spatial.Point)
+	Damage(amount int64) bool
+}
+
+// MonsterBodyHolder 是“带有 MonsterBody 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type MonsterBodyHolder interface{ MonsterBody() MonsterBody }

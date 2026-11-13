@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/components/terrainledger"
 	db "{{MODULE}}/db"
 	building "{{MODULE}}/game/entities/building"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
@@ -1102,7 +1103,7 @@ func sameStates(a, b map[terrain.ChunkKey]chunkState) bool {
 var editorPlayers = []int64{brushPlayer, brushPlayer + 1}
 
 // ledgerOf 是玩家编辑账本的当前值；没有账本实体（从没编辑过）时是零值。
-func ledgerOf(t *testing.T, p *terrainProcess, player int64) terrain_editor.SeqWindow {
+func ledgerOf(t *testing.T, p *terrainProcess, player int64) terrainledger.SeqWindow {
 	t.Helper()
 	id, err := terrain_editor.EntityID(player)
 	if err != nil {
@@ -1111,7 +1112,7 @@ func ledgerOf(t *testing.T, p *terrainProcess, player int64) terrain_editor.SeqW
 	if e, _ := p.entities.Get(id).(*terrain_editor.TerrainEditor); e != nil {
 		return e.LedgerComp().Window()
 	}
-	return terrain_editor.SeqWindow{}
+	return terrainledger.SeqWindow{}
 }
 
 // expectBrushes 是在原始块上依次应用笔刷（纯函数，限值同 DefaultPolicy）后每块的期望数据。
@@ -1212,10 +1213,10 @@ func TestTerrainBrushRepeatsAndReordersApplyOnce(t *testing.T) {
 		t.Fatalf("commits %d, commit failures %d", commits, p.m.CommitFailures())
 	}
 	// 序号记在玩家的账本里（与改块同一笔事务）：最大 3，下面 1、2 都已应用；另一个玩家有自己的账本。
-	if got := ledgerOf(t, p, brushPlayer); got != (terrain_editor.SeqWindow{Last: 3, Bits: 0b11}) {
+	if got := ledgerOf(t, p, brushPlayer); got != (terrainledger.SeqWindow{Last: 3, Bits: 0b11}) {
 		t.Fatalf("ledger of player %d: %+v, want last 3 with 2 and 1 applied", brushPlayer, got)
 	}
-	if got := ledgerOf(t, p, brushPlayer+1); got != (terrain_editor.SeqWindow{Last: 1}) {
+	if got := ledgerOf(t, p, brushPlayer+1); got != (terrainledger.SeqWindow{Last: 1}) {
 		t.Fatalf("ledger of player %d: %+v, want last 1", brushPlayer+1, got)
 	}
 
@@ -1376,7 +1377,7 @@ func TestTerrainBrushRequestsThatSharedATruncatedIDBothApply(t *testing.T) {
 	}
 	viewMatches(t, p.m, expectBrushes(t, p.m, writeTerrainPack(t, t.TempDir(), 1), raise, paint))
 	for _, player := range []int64{p1, p2} {
-		if got := ledgerOf(t, p, player); got != (terrain_editor.SeqWindow{Last: 1}) {
+		if got := ledgerOf(t, p, player); got != (terrainledger.SeqWindow{Last: 1}) {
 			t.Fatalf("ledger of player %d: %+v", player, got)
 		}
 	}
@@ -1426,7 +1427,7 @@ func TestTerrainBrushRefusalsWriteNothing(t *testing.T) {
 	}{
 		{"sequence 0", nil, 0, ok, terrainmap.ErrBrush},
 		{"sequence over 2^63-1", nil, math.MaxInt64 + 1, ok, terrainmap.ErrBrush},
-		{"sequence too far ahead of the ledger", nil, 1 + terrain_editor.MaxSeqAhead + 1, ok, terrainmap.ErrSeqAhead},
+		{"sequence too far ahead of the ledger", nil, 1 + terrainledger.MaxSeqAhead + 1, ok, terrainmap.ErrSeqAhead},
 		{"no op", nil, 10, terrain.Brush{X: 3200, Y: 3200, Radius: 500}, terrain.ErrInvalidBrush},
 		{"radius over 16m", nil, 11, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 1601}, terrainmap.ErrBrush},
 		{"strength over 5m", nil, 12, terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 51}, terrainmap.ErrBrush},
@@ -1671,7 +1672,7 @@ func TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum(t *testing.T) {
 		t.Fatalf("a building under the brush: %v, want ErrOccupied", err)
 	}
 	rules.occupied = false
-	if _, err := p.m.Brush(p.ctx, brushPlayer, 2+terrain_editor.MaxSeqAhead, raise); !errors.Is(err, terrainmap.ErrSeqAhead) {
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 2+terrainledger.MaxSeqAhead, raise); !errors.Is(err, terrainmap.ErrSeqAhead) {
 		t.Fatalf("a sequence far ahead: %v, want ErrSeqAhead", err)
 	}
 	if !sameStates(before, allStates(t, p)) {
@@ -1705,7 +1706,7 @@ func TestTerrainBrushRollbackLeavesEveryChunkAndTheView(t *testing.T) {
 				key, state.daoVersion, after[key].daoVersion, state.viewVersion, after[key].viewVersion)
 		}
 	}
-	if got := ledgerOf(t, p, brushPlayer); got != ledger || got.Check(2) != terrain_editor.Fresh {
+	if got := ledgerOf(t, p, brushPlayer); got != ledger || got.Check(2) != terrainledger.Fresh {
 		t.Fatalf("the ledger after a rolled-back brush: %+v (before %+v); sequence 2 is %v", got, ledger, got.Check(2))
 	}
 	result, err := p.m.Brush(p.ctx, brushPlayer, 2, corner)

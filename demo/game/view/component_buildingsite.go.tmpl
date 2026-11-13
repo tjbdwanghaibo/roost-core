@@ -1,0 +1,14 @@
+package view
+
+// BuildingSite 是 Building 上 BuildingSite 组件对 game/ 下其它包公开的方法（实现在 game/components/buildingsite，语义见那里）；只在宿主被 Nest 锁住期间调用。
+// State / Place 不在这里：快照与放置带着地块 terrainsurface.Lot（有地块规则的方法），留在 game/components/buildingsite。
+type BuildingSite interface {
+	Standing() bool
+	SetParams(values []int32)
+	Rebase(baseRevision int64)
+	AnchorRecorded() bool
+	Clear()
+}
+
+// BuildingSiteHolder 是“带有 BuildingSite 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type BuildingSiteHolder interface{ BuildingSite() BuildingSite }

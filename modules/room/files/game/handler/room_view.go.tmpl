@@ -1,10 +1,13 @@
 package handler
 
-import room "{{MODULE}}/game/entities/room"
+import (
+	"{{MODULE}}/game/view"
+	room "{{MODULE}}/game/entities/room"
+)
 
 // handlerRoomView 在 Room 的 Nest 锁内只读成员快照，不执行持久化。
 //
 //roost:nest durability=memory
-func handlerRoomView(target room.IRoomEntity, playerID int64, connection string) (room.RoomSnapshot, error) {
+func handlerRoomView(target room.IRoomEntity, playerID int64, connection string) (view.RoomSnapshot, error) {
 	return target.RoomComp().View(playerID, connection)
 }

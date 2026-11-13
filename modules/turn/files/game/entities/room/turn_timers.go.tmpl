@@ -2,7 +2,6 @@ package room
 
 import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
-	"math"
 	"time"
 )
 
@@ -14,28 +13,15 @@ func (component *{{TIMER_COMPONENT}}Component) registerTurnTimers(handlers *enti
 	handlers.Register(TurnDeadline, component.onTurnDeadline)
 }
 func (component *{{TIMER_COMPONENT}}Component) onTurnDeadline(fire entitytimer.Fire) time.Duration {
-	return component.Owner().TurnComp().onDeadline(fire)
+	return component.Owner().TurnComp().OnDeadline(fire)
 }
 
-func (component *TurnComponent) onDeadline(fire entitytimer.Fire) time.Duration {
-	state := component.owner.Dao().GetTurn()
-	// 节点 ID 与期限共同校验。主动结束已经换过节点，旧投递不会消费下一回合。
-	if state.GetStatus() != TurnRunning || fire.ID != state.GetTimerID() || fire.Deadline.UnixMilli() != state.GetDeadline() {
-		return 0
-	}
-	state.SetTimeouts(state.GetTimeouts() + 1)
-	component.advance()
-	if state.GetStatus() != TurnRunning {
-		return 0
-	}
-	now := fire.Now.UnixMilli()
-	if now > math.MaxInt64-state.GetTurnMillis() {
-		state.SetStatus(TurnFinished)
-		state.SetDeadline(0)
-		state.SetTimerID(0)
-		return 0
-	}
-	state.SetDeadline(now + state.GetTurnMillis())
-	// 回调续期从实际触发时刻起算，错过的若干回合不会集中执行。
-	return time.Duration(state.GetTurnMillis()) * time.Millisecond
+// ArmTurnDeadline 是 turn 组件（game/components/turn）回合期限的定时节点适配：节点挂在 Room 的定时组件上。
+func (r *Room) ArmTurnDeadline(at time.Time) int64 {
+	return r.{{TIMER_COMPONENT}}Comp().New{{TIMER_COMPONENT}}At(at, TurnDeadline, 0, 0, nil)
+}
+
+// CancelTurnDeadline 删掉回合期限节点 id（ArmTurnDeadline 建的）。
+func (r *Room) CancelTurnDeadline(id int64) {
+	r.{{TIMER_COMPONENT}}Comp().Remove{{TIMER_COMPONENT}}(id)
 }

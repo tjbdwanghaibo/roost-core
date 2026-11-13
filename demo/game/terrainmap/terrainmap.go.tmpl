@@ -37,6 +37,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"{{MODULE}}/game/components/terrainsurface"
+	"{{MODULE}}/game/components/terrainledger"
 	db "{{MODULE}}/db"
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
@@ -64,7 +66,7 @@ var (
 	// ErrStale：编辑序号低于玩家账本的窗口（LastSeq − 64 以下）：已无法确定它当时是否应用过，这次不执行、不写。
 	// 错误值是 *SeqError（带 LastSeq）。
 	ErrStale = errors.New("terrain: edit sequence is older than the ledger window")
-	// ErrSeqAhead：编辑序号比玩家账本的 LastSeq 大出 terrain_editor.MaxSeqAhead 以上（客户端的计数器坏了）：不执行、
+	// ErrSeqAhead：编辑序号比玩家账本的 LastSeq 大出 terrainledger.MaxSeqAhead 以上（客户端的计数器坏了）：不执行、
 	// 不写。错误值是 *SeqError（带 LastSeq）。
 	ErrSeqAhead = errors.New("terrain: edit sequence is too far ahead of the ledger")
 )
@@ -75,7 +77,7 @@ type SeqError struct {
 	PlayerID int64
 	Seq      int64
 	LastSeq  int64
-	Verdict  terrain_editor.Verdict
+	Verdict  terrainledger.Verdict
 }
 
 func (e *SeqError) Error() string {
@@ -84,7 +86,7 @@ func (e *SeqError) Error() string {
 
 // Is 让 errors.Is(err, ErrStale) / errors.Is(err, ErrSeqAhead) 按判定成立。
 func (e *SeqError) Is(target error) bool {
-	return target == ErrStale && e.Verdict == terrain_editor.Stale || target == ErrSeqAhead && e.Verdict == terrain_editor.Ahead
+	return target == ErrStale && e.Verdict == terrainledger.Stale || target == ErrSeqAhead && e.Verdict == terrainledger.Ahead
 }
 
 // loadWorkers 是启动时并行 LoadBase 的 goroutine 数。实测 1w 地图装满一个格（2304 块）单线程约 120ms、8 路约 29ms
@@ -119,18 +121,18 @@ type CellEditors interface {
 
 // Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender：handler 文件 game/handler/terrain_edit.go 里的 handler）。
 type Editor interface {
-	Sync_TerrainEdit(ctx context.Context, id int64, edits []terrain_chunk.PointEdit) (int64, error)
-	MultiGroupSync_TerrainBrush(ctx context.Context, targets []int64, editor int64, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error)
-	MultiGroupSync_TerrainBrushPart(ctx context.Context, targets []int64, editor int64, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error)
+	Sync_TerrainEdit(ctx context.Context, id int64, edits []terrainsurface.PointEdit) (int64, error)
+	MultiGroupSync_TerrainBrush(ctx context.Context, targets []int64, editor int64, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error)
+	MultiGroupSync_TerrainBrushPart(ctx context.Context, targets []int64, editor int64, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error)
 	Sync_TerrainDiscard(ctx context.Context, id int64, staleRevision int64, currentRevision int64) (bool, error)
 	Sync_TerrainEditSeq(ctx context.Context, editor int64) (int64, error)
-	Sync_TerrainEditIssue(ctx context.Context, editor int64, seq int64) (terrain_editor.Issue, error)
+	Sync_TerrainEditIssue(ctx context.Context, editor int64, seq int64) (terrainledger.Issue, error)
 }
 
 // seqLedger 是事务里判重的编辑账本：不分区时是玩家的 TerrainEditor（判重与面向客户端的序号是同一份），分区场景的格上是
 // 玩家在本格的 TerrainCellEditor（P5：判 Base 转发来的编辑，不判超前）。只在账本实体的 Nest 锁内调用。
 type seqLedger interface {
-	Check(seq int64) terrain_editor.Verdict
+	Check(seq int64) terrainledger.Verdict
 	Record(seq int64)
 	LastSeq() int64
 	PlayerID() int64
@@ -142,7 +144,7 @@ type seqLedger interface {
 // 测试与运维入口可以用 SetPolicy 换一份。
 type Policy struct {
 	// MaxRadius 是玩家笔刷的最大半径（世界单位）：1600（16m）。此时一次最多覆盖 4 块、单块最多约 800 点：改高度低于
-	// 整字段守卫（terrain_chunk.HeightsGuard 1000），改材质超过 500 点时走材质守卫（MaterialsGuard）整字段写。
+	// 整字段守卫（terrainsurface.HeightsGuard 1000），改材质超过 500 点时走材质守卫（MaterialsGuard）整字段写。
 	MaxRadius int64
 	// MaxChunks 是一次编辑最多覆盖的块数：4（一笔多块事务的目标组上限）。
 	MaxChunks int
@@ -532,12 +534,12 @@ type Record struct {
 	edited  bool  // Version ≥ 1
 	err     error // 记录解不开（schema 不符、损坏）
 	// lots、lotRevision 是站在这块上的建筑占地（P4）。
-	lots        []terrain_chunk.Lot
+	lots        []terrainsurface.Lot
 	lotRevision int64
 }
 
 // Lots 是记录里站在这块上的建筑占地。
-func (r Record) Lots() []terrain_chunk.Lot { return r.lots }
+func (r Record) Lots() []terrainsurface.Lot { return r.lots }
 
 // Overlay 是记录的数据；Edited 为 false（Version 0 的空实体）时为零值。
 func (r Record) Overlay() (terrain.Overlay, bool) { return r.overlay, r.edited }
@@ -609,11 +611,11 @@ func decodeRecord(doc coredata.RawDocument) Record {
 	if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
 		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
 	}
-	overlay, edited, err := terrain_chunk.OverlayOf(dao)
+	overlay, edited, err := terrainsurface.OverlayOf(dao)
 	if err != nil {
 		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
 	}
-	lots, err := terrain_chunk.LotsOf(dao)
+	lots, err := terrainsurface.LotsOf(dao)
 	if err != nil {
 		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
 	}
@@ -629,7 +631,7 @@ func (m *Map) Edit(ctx context.Context, edits []SampleEdit) (map[terrain.ChunkKe
 	if m == nil {
 		return nil, ErrDisabled
 	}
-	byChunk := map[terrain.ChunkKey][]terrain_chunk.PointEdit{}
+	byChunk := map[terrain.ChunkKey][]terrainsurface.PointEdit{}
 	for _, edit := range edits {
 		key, index := terrain.PointIndex(edit.GX*terrain.SampleSpacing, edit.GY*terrain.SampleSpacing)
 		if !m.meta.Contains(key) {
@@ -641,7 +643,7 @@ func (m *Map) Edit(ctx context.Context, edits []SampleEdit) (map[terrain.ChunkKe
 		if cause := m.unloadableErr(key); cause != nil {
 			return nil, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
 		}
-		byChunk[key] = append(byChunk[key], terrain_chunk.PointEdit{Index: int32(index), Height: edit.Height, Material: edit.Material})
+		byChunk[key] = append(byChunk[key], terrainsurface.PointEdit{Index: int32(index), Height: edit.Height, Material: edit.Material})
 	}
 	keys := slices.SortedFunc(maps.Keys(byChunk), func(a, b terrain.ChunkKey) int {
 		return cmp.Or(cmp.Compare(a.Y, b.Y), cmp.Compare(a.X, b.X))
@@ -670,7 +672,7 @@ func (m *Map) Edit(ctx context.Context, edits []SampleEdit) (map[terrain.ChunkKe
 //
 // Version 0（第一次改这块）时从视图取原始块（必须装着、且是原始块）作初值。改动写进 DAO 后由 afterCommit 登记
 // 提交后装视图：提交被接受才 SetOverlay 给视图；事务回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图不变。
-func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chunk.PointEdit) (int64, error) {
+func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrainsurface.PointEdit) (int64, error) {
 	surface := target.SurfaceComp()
 	key := surface.Owner().Key()
 	if !m.Owns(key) {
@@ -691,7 +693,7 @@ func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chu
 	if err != nil {
 		return 0, err
 	}
-	m.afterCommit(surface.Owner())
+	m.afterCommit(chunkOf(surface))
 	return version, nil
 }
 
@@ -815,7 +817,7 @@ func (m *Map) discard(ctx context.Context, key terrain.ChunkKey, staleRevision i
 //   - 判重在玩家的编辑账本（game/entities/terrain_editor）里、与改块同一笔事务：账本记已应用的最大序号 LastSeq 与它
 //     下面 64 个序号的应用位图。seq > LastSeq 是新编辑；[LastSeq−64, LastSeq] 里应用过的答 Duplicate、没应用过的照常
 //     执行（乱序到达）；更小的答 ErrStale（已无法确定当时是否应用过，宁可不做）；比 LastSeq 大出
-//     terrain_editor.MaxSeqAhead 以上答 ErrSeqAhead。后两者是 *SeqError，带 LastSeq。
+//     terrainledger.MaxSeqAhead 以上答 ErrSeqAhead。后两者是 *SeqError，带 LastSeq。
 //   - 同一（玩家, 序号）至多执行一次，不依赖窗口外的记录还在：窗口只决定答 Duplicate 还是 ErrStale，不会让旧请求再执行。
 //     账本持久、重启后原样读回；事务回滚时序号一起撤销（同一序号重试会执行）；拒绝的请求不记序号。
 //
@@ -845,47 +847,47 @@ func (m *Map) discard(ctx context.Context, key terrain.ChunkKey, staleRevision i
 // 编辑的玩家留下 LastSeq 0 的空账本。事务结果未知（WAL 超时等）时调用方用同一序号重试：已提交则得到 Duplicate，没提交
 // 则这次生效（重试须在之后的新编辑把它挤出窗口之前，否则答 ErrStale——不会执行第二次，但也确认不了第一次）；刚做完
 // 一次透支的大编辑时，重试要等配额补满（ErrRateLimited 之后退避再试）。
-func (m *Map) Brush(ctx context.Context, playerID int64, seq uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+func (m *Map) Brush(ctx context.Context, playerID int64, seq uint64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	if m == nil {
-		return terrain_chunk.BrushResult{}, ErrDisabled
+		return terrainsurface.BrushResult{}, ErrDisabled
 	}
 	keys, err := m.checkBrush(playerID, seq, brush)
 	if err != nil {
-		return terrain_chunk.BrushResult{}, err
+		return terrainsurface.BrushResult{}, err
 	}
 	refund := func() {}
 	if rate := m.policy.EditPointsPerSecond; rate > 0 {
 		points, err := m.editPoints(brush)
 		if err != nil {
-			return terrain_chunk.BrushResult{}, err
+			return terrainsurface.BrushResult{}, err
 		}
 		if !m.quota.take(playerID, points, rate) {
-			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: player %d: the edit changes %d points", ErrRateLimited, playerID, points)
+			return terrainsurface.BrushResult{}, fmt.Errorf("%w: player %d: the edit changes %d points", ErrRateLimited, playerID, points)
 		}
 		refund = func() { m.quota.refund(playerID, points-m.policy.MinEditPoints, rate) }
 	}
 	if m.rules != nil {
 		if err := m.rules.AllowEdit(ctx, playerID, brush, keys); err != nil {
 			refund()
-			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrDenied, err)
+			return terrainsurface.BrushResult{}, fmt.Errorf("%w: %w", ErrDenied, err)
 		}
 	}
 	ledger, err := m.ledgerFor(ctx, playerID)
 	if err != nil {
 		refund()
-		return terrain_chunk.BrushResult{}, err
+		return terrainsurface.BrushResult{}, err
 	}
 	ids := make([]int64, 0, len(keys))
 	for _, key := range keys {
 		unique, err := terrain_chunk.UniqueID(key)
 		if err != nil {
 			refund()
-			return terrain_chunk.BrushResult{}, err
+			return terrainsurface.BrushResult{}, err
 		}
 		chunk, _, err := m.chunks.GetOrCreate(ctx, unique)
 		if err != nil {
 			refund()
-			return terrain_chunk.BrushResult{}, fmt.Errorf("terrain: chunk %v: %w", key, err)
+			return terrainsurface.BrushResult{}, fmt.Errorf("terrain: chunk %v: %w", key, err)
 		}
 		ids = append(ids, chunk.ID())
 	}
@@ -894,7 +896,7 @@ func (m *Map) Brush(ctx context.Context, playerID int64, seq uint64, brush terra
 		if refusedBeforeWriting(err) {
 			refund()
 		}
-		return terrain_chunk.BrushResult{}, fmt.Errorf("terrain: brush: %w", err)
+		return terrainsurface.BrushResult{}, fmt.Errorf("terrain: brush: %w", err)
 	}
 	if result.Duplicate {
 		refund()
@@ -1011,21 +1013,21 @@ func (m *Map) checkBrushParams(playerID int64, seq uint64, brush terrain.Brush) 
 //     编辑已经“执行过”，重放应答 Duplicate），提交后逐块装视图并通知同步（afterCommit）。
 //
 // 1～3 的拒绝在第一次写之前；4 之后不会失败。事务回滚（提交被拒）时块与账本都由 setter 的逆操作还原，提交后回调不执行。
-func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
 }
 
 // ApplyBrushPart 是 handler TerrainBrushPart 的业务（分区场景的格执行 Base 转发来的笔刷，P5；名字沿用拆分设计，维护者
 // 2026-11-10 撤回跨格笔刷之后格执行整笔）：同 ApplyBrush，账本是玩家在本格的 TerrainCellEditor，目标组同样是笔刷覆盖到的
 // 全部块、都归本进程写。
-func (m *Map) ApplyBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+func (m *Map) ApplyBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
 }
 
 // applyBrush 是 ApplyBrush / ApplyBrushPart 的共同部分（步骤见 ApplyBrush）。
-func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedger, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedger, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	if seq < 1 {
-		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
+		return terrainsurface.BrushResult{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
 	}
 	surfaces := make([]*terrain_chunk.SurfaceComponent, len(targets))
 	for i, target := range targets {
@@ -1035,62 +1037,62 @@ func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedge
 		ka, kb := a.Owner().Key(), b.Owner().Key()
 		return cmp.Or(cmp.Compare(ka.Y, kb.Y), cmp.Compare(ka.X, kb.X))
 	})
-	versions := func() []terrain_chunk.ChunkVersion {
-		out := make([]terrain_chunk.ChunkVersion, len(surfaces))
+	versions := func() []terrainsurface.ChunkVersion {
+		out := make([]terrainsurface.ChunkVersion, len(surfaces))
 		for i, surface := range surfaces {
-			out[i] = terrain_chunk.ChunkVersion{Key: surface.Owner().Key(), Version: surface.Version()}
+			out[i] = terrainsurface.ChunkVersion{Key: surface.Owner().Key(), Version: surface.Version()}
 		}
 		return out
 	}
 	switch verdict := ledger.Check(seq); verdict {
-	case terrain_editor.Duplicate:
-		return terrain_chunk.BrushResult{Duplicate: true, Chunks: versions(), LastSeq: ledger.LastSeq()}, nil
-	case terrain_editor.Stale, terrain_editor.Ahead:
-		return terrain_chunk.BrushResult{}, &SeqError{PlayerID: ledger.PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
+	case terrainledger.Duplicate:
+		return terrainsurface.BrushResult{Duplicate: true, Chunks: versions(), LastSeq: ledger.LastSeq()}, nil
+	case terrainledger.Stale, terrainledger.Ahead:
+		return terrainsurface.BrushResult{}, &SeqError{PlayerID: ledger.PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
 	}
 	want := brush.Chunks(m.meta)
 	if len(want) == 0 || len(want) != len(surfaces) {
-		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the brush covers %d chunks, the transaction holds %d", ErrBrush, len(want), len(surfaces))
+		return terrainsurface.BrushResult{}, fmt.Errorf("%w: the brush covers %d chunks, the transaction holds %d", ErrBrush, len(want), len(surfaces))
 	}
 	before := make(map[terrain.ChunkKey]terrain.Chunk, len(surfaces))
 	fresh := make(map[terrain.ChunkKey]bool, len(surfaces))
-	occupancy := make(map[terrain.ChunkKey]terrain_chunk.Occupancy, len(surfaces))
+	occupancy := make(map[terrain.ChunkKey]terrainsurface.Occupancy, len(surfaces))
 	for i, surface := range surfaces {
 		key := surface.Owner().Key()
 		if key != want[i] {
-			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the transaction holds chunk %v, the brush covers %v", ErrBrush, key, want[i])
+			return terrainsurface.BrushResult{}, fmt.Errorf("%w: the transaction holds chunk %v, the brush covers %v", ErrBrush, key, want[i])
 		}
 		if !m.Owns(key) {
-			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
+			return terrainsurface.BrushResult{}, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
 		}
 		if cause := m.unloadableErr(key); cause != nil {
-			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
+			return terrainsurface.BrushResult{}, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
 		}
 		data, fromRecord, err := m.baseFor(surface)
 		if err != nil {
-			return terrain_chunk.BrushResult{}, err
+			return terrainsurface.BrushResult{}, err
 		}
 		if occupancy[key], err = surface.Occupancy(); err != nil {
-			return terrain_chunk.BrushResult{}, err
+			return terrainsurface.BrushResult{}, err
 		}
 		before[key], fresh[key] = data, !fromRecord
 	}
 	changes, err := brush.Apply(m.meta, m.policy.Limits, before)
 	if err != nil {
-		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrBrush, err)
+		return terrainsurface.BrushResult{}, fmt.Errorf("%w: %w", ErrBrush, err)
 	}
-	byKey := make(map[terrain.ChunkKey][]terrain_chunk.PointEdit, len(changes))
+	byKey := make(map[terrain.ChunkKey][]terrainsurface.PointEdit, len(changes))
 	points := 0
 	for _, change := range changes {
-		edits := make([]terrain_chunk.PointEdit, len(change.Points))
+		edits := make([]terrainsurface.PointEdit, len(change.Points))
 		occupied := occupancy[change.Key]
 		was := before[change.Key]
 		for i, p := range change.Points {
 			// 建筑占地在块的锁里读（块的 Lots，与放置同一把锁）；业务另外的占位经钩子。
 			if occupied.Has(p.Index) || m.rules != nil && m.rules.Occupied(change.Key, p.Index) {
-				return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v point %d", ErrOccupied, change.Key, p.Index)
+				return terrainsurface.BrushResult{}, fmt.Errorf("%w: chunk %v point %d", ErrOccupied, change.Key, p.Index)
 			}
-			edits[i] = terrain_chunk.PointEdit{Index: p.Index, Height: p.Height, Material: p.Material}
+			edits[i] = terrainsurface.PointEdit{Index: p.Index, Height: p.Height, Material: p.Material}
 			// 实际改动的点数（口径同配额：高度、材质各算一次）：分区场景的 Base 按它多退预扣的配额。
 			if p.Height != was.Heights[p.Index] {
 				points++
@@ -1111,13 +1113,13 @@ func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedge
 			}
 			if _, err := surface.Apply(m.meta.BaseRevision, base, edits); err != nil {
 				// Apply 的校验与上面相同，这里不会失败；万一失败，返回错误让整笔事务回滚。
-				return terrain_chunk.BrushResult{}, err
+				return terrainsurface.BrushResult{}, err
 			}
-			m.afterCommit(surface.Owner())
+			m.afterCommit(chunkOf(surface))
 		}
 	}
 	ledger.Record(seq)
-	return terrain_chunk.BrushResult{Chunks: versions(), LastSeq: ledger.LastSeq(), Points: points}, nil
+	return terrainsurface.BrushResult{Chunks: versions(), LastSeq: ledger.LastSeq(), Points: points}, nil
 }
 
 // pointQuota 是每个玩家的改动点数令牌桶：每秒补 rate 个、最多攒 rate 个，满桶时可以透支一次（见 Brush 的“配额”）。
@@ -1228,3 +1230,9 @@ func Install(m *Map) { active.Store(m) }
 
 // Active 返回本进程当前的 Map；没有地形时为 nil。
 func Active() *Map { return active.Load() }
+
+// chunkOf 是块面组件所在的块实体。组件包（game/components/terrainsurface）的宿主是接口、不依赖实体包；地形同步按块实体
+// 登记 subject（SetCommitted），所以提交后的通知在这里换回实体——宿主只会是 TerrainChunk（组件只挂在它上面）。
+func chunkOf(surface *terrain_chunk.SurfaceComponent) *terrain_chunk.TerrainChunk {
+	return surface.Owner().(*terrain_chunk.TerrainChunk)
+}

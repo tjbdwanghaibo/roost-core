@@ -10,6 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	roomcomponent "{{MODULE}}/game/components/room"
 	roomentity "{{MODULE}}/game/entities/room"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
@@ -34,7 +35,7 @@ func Open(ctx context.Context, registry *app.Registry, uniqueID int64, capacity 
 	if err != nil {
 		return err
 	}
-	if capacity < 1 || capacity > roomentity.MaxSeats {
+	if capacity < 1 || capacity > roomcomponent.MaxSeats {
 		return apperrors.ErrRoomInvalid
 	}
 	if registry == nil {
