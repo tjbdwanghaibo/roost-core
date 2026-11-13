@@ -1174,6 +1174,9 @@ func (n *Node) onEnter(r *Region, a Actor, from int32, req *enterReq, now time.T
 				// 新入场先提高共享入场高水位，再接管现有状态；期间暂停写入，不从旧快照覆盖位置 / HP。
 				prev := cs
 				cs.Entry = req.Entry
+				// CloseEntry 属于上一次入场（死亡玩家的 Leave 只打标记、等收尾）；新入场接管后不能沿用，
+				// 否则认领成功会立刻按新 Entry 退役并关闭这次入场。
+				cs.CloseEntry = false
 				cs.Role = RolePending
 				cs.Pending = &PendingOwner{Token: rand.Text()}
 				n.applyPanel(&cs, st.Panel, now, fx)

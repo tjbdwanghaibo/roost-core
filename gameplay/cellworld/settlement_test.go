@@ -8,6 +8,8 @@ import (
 	"net"
 	"os/exec"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -290,5 +292,110 @@ func TestDyingOwnerConflictRetiresOnlyTheMatchingLocalGrant(t *testing.T) {
 	_, err := n.handleOwnerResult([]fentity.IThreadSafeEntity{scene, a}, []any{ownerResult{work: n.ownerWork(st), err: ErrOwnerConflict}})
 	if err != nil || a.st.Role != RoleDying {
 		t.Fatalf("stale completion changed new instance: %v %v", a.st.Role, err)
+	}
+}
+
+// 已确认回执的尸体只是静止对象：不再每拍读共享记录、不推进内容版本、不重发伤害结论。
+// 之后 Leave 要求关闭时，才做一次收尾并退役授权。
+func TestAcknowledgedCorpseIsStaticUntilClosed(t *testing.T) {
+	c, a := newDeadPlayerCell(t, actorID(79), true)
+	now := time.Now()
+	ver := a.st.Ver
+	for i := range 3 {
+		st := a.st
+		fx := c.n.stepActor(&st, now.Add(time.Duration(i)*c.n.cfg.DeathRetry*2), c.n.cfg.Period)
+		a.st = st
+		for _, w := range fx.owners {
+			if w.kind == ownerDeathWork {
+				t.Fatalf("beat %d re-ran death settlement for an acknowledged corpse", i)
+			}
+		}
+	}
+	row := c.record()
+	for range 2 {
+		fx := &txEffects{}
+		c.n.completeDeath(c.r, a, a.st, row, now, fx)
+		for _, s := range fx.sends {
+			if s.msg.Kind == kindDamageReply || s.msg.Kind == kindDeath {
+				t.Fatalf("repeated completion sent %v", s.msg.Kind)
+			}
+		}
+	}
+	if a.st.Ver != ver || a.st.Role != RoleReal {
+		t.Fatalf("static corpse version %+v -> %+v role %v", ver, a.st.Ver, a.st.Role)
+	}
+	c.n.onLeave(c.r, a, &leaveReq{ID: a.st.ID, Entry: a.st.Entry}, now, &txEffects{})
+	st := a.st
+	fx := c.n.stepActor(&st, now.Add(time.Hour), c.n.cfg.Period)
+	a.st = st
+	if len(fx.owners) != 1 || fx.owners[0].kind != ownerDeathWork {
+		t.Fatalf("closing corpse did not finish: %+v", fx.owners)
+	}
+	if err := c.run(a, fx.owners[0]); err != nil || a.st.Role != RoleGone {
+		t.Fatalf("finish: %v role %v", err, a.st.Role)
+	}
+	if err := c.step(a); err != nil {
+		t.Fatal(err)
+	}
+	if row := c.record(); row.Phase != ownerClosed || row.ClosedEntry != 1 {
+		t.Fatalf("corpse not retired: %+v", row)
+	}
+}
+
+// 多进程端到端：kindDeath 被重复投递、确认被延迟（Cell 按 DeathRetry 与扫描多次重发），
+// 获奖 Player 的 SettleDeath 只提交一次，回执是目标的生命代次。
+func TestDuplicateDeathDeliverySettlesRewardOnce(t *testing.T) {
+	spec, lb := loopbackSpec(t, 2, 1)
+	var mu sync.Mutex
+	settled := map[int64]int{}
+	receipts := map[int64]uint64{}
+	var deliveries atomic.Int64
+	spec.baseMod = func(cfg *NodeConfig) {
+		cfg.SettleDeath = func(p BasePlayer, f DeathFact) error {
+			receipt := p.CellDeathReceipt(f.Target) // 同一事务里先写回执，再发奖
+			count := func() { mu.Lock(); settled[f.Target]++; receipts[f.Target] = receipt; mu.Unlock() }
+			if !nest.AfterCommit(count) {
+				count()
+			}
+			return nil
+		}
+	}
+	lb.setFault(func(_ string, m *wireMsg) (bool, bool, time.Duration) {
+		switch m.Kind {
+		case kindDeath:
+			deliveries.Add(1)
+			return false, true, 0
+		case kindDeathAck:
+			return false, false, 1200 * time.Millisecond
+		}
+		return false, false, 0
+	})
+	w := startWorld(t, spec)
+	target := npcID(812)
+	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10300, Y: 5000, HP: 5})
+	w.enter(1, spatial.Point{X: 9700, Y: 5000})
+	w.waitKnown(CellID{0, 0}, target)
+	hit := w.attack(1, target, 7)
+	if got := w.waitResults(1, settleWithin); len(got) != 1 || got[0].Outcome != OutcomeApplied || got[0].Hit != hit {
+		t.Fatalf("result=%+v", got)
+	}
+	ctx, cancel := w.ctx()
+	defer cancel()
+	r := w.cells[CellID{1, 0}].node.cfg.Owners
+	var life uint64
+	eventually(t, settleWithin, "death ack", func() (bool, string) {
+		row, found, err := r.store.Get(ctx, target)
+		life = row.Value.Death.Life
+		return err == nil && found && row.Value.Death.Hit == hit && row.Value.DeathAcked, "pending death"
+	})
+	time.Sleep(4 * w.cells[CellID{1, 0}].node.cfg.DeathRetry) // 确认后仍在途的重复投递
+	if deliveries.Load() < 2 {
+		t.Fatalf("fixture delivered kindDeath %d times; duplicates not exercised", deliveries.Load())
+	}
+	mu.Lock()
+	n, receipt := settled[target], receipts[target]
+	mu.Unlock()
+	if n != 1 || receipt != life {
+		t.Fatalf("reward settled %d times over %d deliveries, receipt %d want life %d", n, deliveries.Load(), receipt, life)
 	}
 }

@@ -92,7 +92,23 @@ func (n *Node) ReconcileSpawn(ctx context.Context, spec SpawnSpec) error {
 		return err
 	}
 	if row.Birth.Waiting {
-		return nil
+		// 死亡已确认但记录未关闭：owner 是本进程或仍活着时由它的实例退役；owner 已死（确认后、退役前崩溃）
+		// 时代为关闭，随后按绝对复活时间推进下一代。活性未知返回错误，下一轮重试。
+		if row.Phase == ownerClosed || row.Grant.Process == n.ownerProcess() {
+			return nil
+		}
+		if _, err := n.cfg.Owners.closeAbandoned(ctx, spec.State.ID); err != nil {
+			if errors.Is(err, ErrOwnerConflict) {
+				return nil
+			}
+			return err
+		}
+		if row, err = n.cfg.Owners.prepareSpawn(ctx, spec, time.Now()); err != nil {
+			return err
+		}
+		if row.Birth.Waiting {
+			return nil
+		}
 	}
 	if row.Phase != ownerClosed {
 		if row.Grant.Process == n.ownerProcess() {

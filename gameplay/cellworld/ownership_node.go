@@ -221,6 +221,18 @@ func (n *Node) handleOwnerResult(es []fentity.IThreadSafeEntity, params []any, _
 			if st.Kind == KindPlayer && st.Base != 0 {
 				fx.send(st.Base, &wireMsg{Kind: kindEnterRefused, EnterRefused: &enterRefused{ID: st.ID, Hint: record.Grant.Process.SID}})
 			}
+			if w.kind == ownerClaimWork && st.Grant.Epoch != 0 {
+				// 本实例已持有授权（同进程现存 Real 的重新入场被拒，例如死亡回执未确认）：它在转 Pending 时已停写，
+				// 必须按自己的 Grant 退役后再销毁，否则共享记录永远指向一个不存在的本进程实例。
+				// 退役是 Grant CAS：期间授权若被别人接手（本进程被判死），冲突结论只删本地实例，不碰新写者。
+				prev := st
+				st.Role, st.Pending = RoleGone, nil
+				st.Ver.Seq++
+				n.setState(a, prev, st)
+				n.applyReports(r, []ActorReport{{State: st.EntityState, Role: RoleGone, Removed: true, Tomb: true}}, now, &fx.sends)
+				fx.owners = append(fx.owners, n.ownerWork(st))
+				break
+			}
 			// 未取得授权的临时实例不能退役别人的 Grant。
 			st.Role, st.Pending, st.Grant = RoleGone, nil, OwnerGrant{}
 			a.SetCellState(st)

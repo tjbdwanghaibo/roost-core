@@ -246,7 +246,10 @@ func (n *Node) completeDeath(r *Region, a Actor, st ActorState, row OwnerRecord,
 	st.Role = RoleReal
 	st.HP = 0
 	st.DeathNextAt = now.Add(n.cfg.DeathRetry).UnixNano()
-	st.Ver.Seq++
+	if wasPending {
+		// 只有 Dying → 已提交死亡这一步改变对外内容（HP 0）；之后的重复确认不推进内容版本。
+		st.Ver.Seq++
+	}
 	if row.DeathAcked && (st.Kind == KindNPC || st.CloseEntry) {
 		st.Role = RoleGone
 		a.SetCellState(st)
@@ -260,7 +263,8 @@ func (n *Node) completeDeath(r *Region, a Actor, st ActorState, row OwnerRecord,
 			fx.send(row.Death.RewardBase, &wireMsg{Kind: kindDeath, Death: &row.Death})
 		}
 	}
-	if row.Death.ReplySID != 0 {
+	// 伤害结论只在事实首次确认时回复；回复丢失时攻击方重发的同一 Hit 命中 Death.Hit，答重复的 Applied。
+	if wasPending && row.Death.ReplySID != 0 {
 		fx.send(row.Death.ReplySID, &wireMsg{Kind: kindDamageReply, DamageReply: &damageReply{Hit: row.Death.Hit, Target: st.ID, Outcome: OutcomeApplied, HP: 0, Damage: row.Death.Damage}})
 	}
 	if wasPending {
