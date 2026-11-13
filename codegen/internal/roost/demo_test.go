@@ -353,13 +353,13 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// demo 的业务调用模块组件；充值与邮件的去重状态分别由 purchase / mailbox 模块维护。
 	for rel, call := range map[string]string{
-		"game/handler/add_item.go":                    "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/gift_debit.go":                  "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/gift_refund.go":                 "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/alliance_debit.go":              "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/alliance_credit.go":             "target.BagComp().Add(itemID, int64(count))",
-		"game/components/equipment/equipment.go": "c.owner.Bag().Remove(itemID, 1)",
-		"game/components/purchase/purchase_item.go":       "owner.BagComp().Add",
+		"game/handler/add_item.go":                  "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/gift_debit.go":                "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/gift_refund.go":               "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/alliance_debit.go":            "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/alliance_credit.go":           "target.BagComp().Add(itemID, int64(count))",
+		"game/components/equipment/equipment.go":    "c.owner.Bag().Remove(itemID, 1)",
+		"game/components/purchase/purchase_item.go": "owner.Bag().Add",
 	} {
 		if body := read(rel); !strings.Contains(body, call) {
 			t.Errorf("%s does not go through the bag module's component (%s):\n%s", rel, call, body)
@@ -473,7 +473,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("PlayerDao does not carry the mailbox module's ledger and the wallet module's state (or still has the demo's MailClaims):\n%s", dao)
 	}
 	// 道具附件靠 mailbox 与 bag 的联动进背包：demo 的奖励邮件带的都是道具。
-	if glue := read("game/components/mailbox/mailbox_item.go"); !strings.Contains(glue, "RegisterMailboxGrant(gamemailbox.TypeItem") || !strings.Contains(glue, "owner.BagComp().Add(attachment.ID, attachment.Amount)") {
+	if glue := read("game/components/mailbox/mailbox_item.go"); !strings.Contains(glue, "RegisterMailboxGrant(gamemailbox.TypeItem") || !strings.Contains(glue, "owner.Bag().Add(attachment.ID, attachment.Amount)") {
 		t.Errorf("the mailbox+bag glue was not written into the demo:\n%s", glue)
 	}
 	// 发件方都走模块的 SendTo，附件是模块的编码；升级奖励的幂等键是 EffectID（见下面事件链那一段）。
@@ -491,7 +491,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// 进入游戏时拉全服邮件是 mailbox 与 enter 的联动（进入钩子），画像读登录端点带过去的会话 claims；
 	// demo 的进入流程里不再手写 PullBroadcasts，player controller 也不再持有 mail 客户端。
-	if glue := read("game/controllers/mailbox/mailbox_enter.go"); !strings.Contains(glue, `gameenter.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
+	if glue := read("game/controllers/mailbox/mailbox_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
 		t.Errorf("the mailbox+enter glue was not written into the demo:\n%s", glue)
 	}
 	if login := read("game/controllers/player/enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "claims := context.Session.Principal().Claims") || !strings.Contains(login, "InitResult: entered, Claims: claims,") {
@@ -779,10 +779,10 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("the create endpoint does not hand over to the demo's own flow:\n%s", create)
 	}
 	if create := read("game/controllers/player/enter_create.go"); !strings.Contains(create, "controller.boundHere(context, \"enter_create\")") ||
-		!strings.Contains(create, "gameenter.Create(") || !strings.Contains(create, "owners.Serve(loginCtx, context.PlayerID, boundSID)") {
+		!strings.Contains(create, "gamelogin.Create(") || !strings.Contains(create, "owners.Serve(loginCtx, context.PlayerID, boundSID)") {
 		t.Errorf("the demo's EnterCreate does not check the binding, take the player into service and run the module's Create:\n%s", create)
 	}
-	if status := read("game/controllers/enter/enter_status.go"); !strings.Contains(status, "func Announce(") || !strings.Contains(status, "gameenter.Assess(") {
+	if status := read("game/controllers/enter/enter_status.go"); !strings.Contains(status, "func Announce(") || !strings.Contains(status, "gamelogin.Assess(") {
 		t.Errorf("enter_status.go is not the enter module's notice:\n%s", status)
 	}
 	if gate := read("internal/service/game/playerowner.go"); !strings.Contains(gate, "messageID == msgid.MsgEnterGame || messageID == msgid.MsgEnterCreate") {
@@ -794,18 +794,18 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// rehome 与 enter 都装着：联动登记了进入前检查与到达。demo 的进入流程在把玩家接入服务（Serve）、装载实体之前
 	// 跑检查，并把拒绝里的目标服带进应答。
-	check, serve := strings.Index(flow, "gameenter.RunEntering("), strings.Index(flow, "owners.Serve(")
+	check, serve := strings.Index(flow, "gamelogin.RunEntering("), strings.Index(flow, "owners.Serve(")
 	if check < 0 || serve < 0 || check > serve || !strings.Contains(flow, "gamerehome.OwnerSID(err)") {
 		t.Errorf("the demo's enter flow does not run the checks before entering ahead of taking the player into service:\n%s", flow)
 	}
-	if glue := read("game/controllers/rehome/rehome_enter.go"); !strings.Contains(glue, `gameenter.OnEntering("rehome"`) || !strings.Contains(glue, `gameenter.OnEntered("rehome"`) {
+	if glue := read("game/controllers/rehome/rehome_enter.go"); !strings.Contains(glue, `gamelogin.OnEntering("rehome"`) || !strings.Contains(glue, `gamelogin.OnEntered("rehome"`) {
 		t.Errorf("the rehome+enter glue was not written into the demo:\n%s", glue)
 	}
 	// enter 与 chat 都装着：chat 的联动文件登记了进入钩子，demo 的进入流程执行钩子而不是自己加在线名单。
-	if !strings.Contains(flow, "gameenter.RunEntered(") || strings.Contains(flow, "Presence().Add(") {
+	if !strings.Contains(flow, "gamelogin.RunEntered(") || strings.Contains(flow, "Presence().Add(") {
 		t.Errorf("the demo's enter flow does not go through the enter hooks:\n%s", flow)
 	}
-	if glue := read("game/chat/chat_enter.go"); !strings.Contains(glue, `gameenter.OnEntered("chat"`) {
+	if glue := read("game/chat/chat_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("chat"`) {
 		t.Errorf("the chat+enter glue was not written into the demo:\n%s", glue)
 	}
 	// 排行榜是 leaderboard 模块装进来的：demo 不带自己的 game/ranking 与 RankTop；模块的逻辑文件原样，
@@ -837,7 +837,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if component := read("game/components/profile/profile.go"); !strings.Contains(component, "func (component *Component) CheckAddExp(") ||
 		strings.Contains(component, "effects.") || strings.Contains(component, "AttributeComp()") || strings.Contains(component, "AllianceID") || strings.Contains(component, "Dungeon") {
-		t.Errorf("game/entities/player/profile_component.go is not the module's own component file:\n%s", component)
+		t.Errorf("game/components/profile/profile.go is not the module's own component file:\n%s", component)
 	}
 	if dao := read("db/def/player.go"); !strings.Contains(dao, "Profile ProfileState `store:\"profile\" dao:\"persist,sync\"`") ||
 		!strings.Contains(dao, "ProfilePrivate ProfilePrivateState `store:\"profile_private\" dao:\"persist,sync\"`") ||
@@ -850,7 +850,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if alliance := read("game/components/alliance/alliance.go"); !strings.Contains(alliance, "func (c *Component) SetAlliance(") {
 		t.Errorf("the alliance copy is not provided by its module:\n%s", alliance)
 	}
-	if ledger := read("game/components/profile/dungeon_ledger.go"); !strings.Contains(ledger, "func (component *ProfileComponent) ClaimDungeonRun(") {
+	if ledger := read("game/components/profile/dungeon_ledger.go"); !strings.Contains(ledger, "func (component *Component) ClaimDungeonRun(") {
 		t.Errorf("the dungeon claim ledger is not in the demo's own file:\n%s", ledger)
 	}
 	if queue := read("game/controllers/player/join_queue.go"); !strings.Contains(queue, "Sync_ProfileCard(") {

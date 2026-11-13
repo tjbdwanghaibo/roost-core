@@ -30,7 +30,7 @@ func TestModuleCombatScenariosAndMutations(t *testing.T) {
 		"StepBuffsToTick(int64(tick))", "StepBuffsToTick(int64(tick)-1)",
 		"./game/handler", "TestCombatBuffExpiresThroughFormalDriver", "expired stun still gates")
 	recipeMutationMustFail(t, root, "game/components/combat/combat_scene.go",
-		`OnSceneFields("combat", "Combat")`, `_ = OnSceneFields`,
+		`gamescene.OnSceneFields("combat", "Combat")`, `_ = gamescene.OnSceneFields`,
 		"./game/controllers/scene", "TestWithCombatSceneSnapshotPublishesOnlyProjection", "combat public projection missing")
 	roost("generate", "--check")
 	before = moduleProjectDigest(t, root)

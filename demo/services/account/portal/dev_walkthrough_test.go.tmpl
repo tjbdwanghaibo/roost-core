@@ -28,7 +28,7 @@ import (
 // 用例名不以 TestPortal 开头——那个前缀是模块自己的验收口径。
 func TestDevConfigWalksTheThreeCallsToAnEnterTicket(t *testing.T) {
 	cfg := viper.New()
-	cfg.SetConfigFile(filepath.Join("..", "..", "configs", "service", "config.account.yaml"))
+	cfg.SetConfigFile(filepath.Join("..", "..", "..", "configs", "service", "config.account.yaml"))
 	if err := cfg.ReadInConfig(); err != nil {
 		t.Fatalf("read the account service's dev config: %v", err)
 	}
