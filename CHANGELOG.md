@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.46.0] - 2026-11-13
+
 - **组合 skill**（compose §4E，2026-11-13，维护者要求）：进程内全局逻辑的选法——能重建、不进事务的缓存 / 索引 / 注册表用 manager（`Managers()` 登记、`DependsOn()` 排序）；要和玩家修改一起提交回滚的全服状态挂在 World 上（不落盘的标 `nopersist`），不另建单例实体；很热的状态不放进单个实体。写明启动顺序：Mod（含 manager）先启动、`Service.Init` 才建 World，manager 的 Start 不能用 World；实体按访问加载，没有启动顺序（`LoadPriority` 未被读取、`EntityLifetimeResident` 只是声明）。
 
 - **组合 skill**（compose §4D，2026-11-13，维护者要求）：多个实体需要同一份逻辑时做共用组件——共用包 + 宿主接口（可选接口区分宿主能力）、状态类型共用但每个实体在自己的 DAO 里各存一份、每个实体只写薄接线（自己的组件号、类型别名、注册同一个工厂）、跨实体协作仍走多实体 handler / Remote / Saga；样板是 activity 模块与 `gameplay/level`。
