@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **组合 skill**（compose §4D，2026-11-13，维护者要求）：多个实体需要同一份逻辑时做共用组件——共用包 + 宿主接口（可选接口区分宿主能力）、状态类型共用但每个实体在自己的 DAO 里各存一份、每个实体只写薄接线（自己的组件号、类型别名、注册同一个工厂）、跨实体协作仍走多实体 handler / Remote / Saga；样板是 activity 模块与 `gameplay/level`。
+
 - **组合 skill**（compose §5A，2026-11-13，维护者要求）：生成的工程根目录还要带 `AGENTS.md`（需求一律先用 roost-genre、记忆在 DEMO 两份文档、skill 只读、版本以 go.mod 为准、工程约定与验证命令）、只含 `@AGENTS.md` 的 `CLAUDE.md`，以及入口 skill 的副本（`.claude/skills/roost-genre/`，用 Codex 时再放 `.agents/skills/`），之后在该工程里提的需求自动走 skill；已有 `AGENTS.md` 时只补“需求怎么做”一节。入口版本 2026-11-13.3。
 
 - **组合 skill**（compose §0D，2026-11-13，维护者指出战斗判断有误）：有战斗时先分五档再判断——回合 / 异步、MMO 级服务器权威实时战斗、帧同步对战都支持；动作 / 射击级不支持、大规模同屏状态同步暂缓，作为冲突提出。写明 `combat` 模块只是双人 PvP、`monster` 不战斗、`dungeon` 不判定击杀，MMO 级多人战斗与打怪按 MMORPG 参考与 `gameplay/skill` 手写；设计上用前摇、预警、锁定或范围判定吸收没有延迟补偿的影响。实时战斗本身不再算 §0C“不用 roost”的信号。
