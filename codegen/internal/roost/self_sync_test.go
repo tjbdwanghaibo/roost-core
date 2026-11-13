@@ -197,7 +197,7 @@ func TestSelfSyncCheckNamesTheFix(t *testing.T) {
 	}
 }
 
-// 按新手流程（project new → add access / entity / component / dao / handler / protocol / endpoint / lifecycle /
+// 按新手流程（project new → add access / entity / component / dao / handler / protocol / endpoint /
 // transport）搭一个工程，只打开 self_sync、给 DAO 字段标 sync（不改标记、不写 packer），然后在工程里跑一条
 // 经生成接线的真实 TCP 用例；再换成业务自己的 packer 跑一遍，最后切回默认 packer。用例走的是：
 // 生成的 bootstrap 变量、生成的 Nest Mod（NewModWithEntitySync）、生成的 player 接入与 TCP Mod（WithSelfSync），
@@ -265,7 +265,6 @@ func TestSelfSyncGeneratedProjectOverRealTCP(t *testing.T) {
 		{"add", "handler", "AddGold", "--entity", "Player", "--component", "Wallet"},
 		{"add", "protocol", "AddGold", "--group", "game", "--handler", "player"},
 		{"add", "protocol", "EnterGame", "--group", "game", "--handler", "player"},
-		{"add", "lifecycle", "Player", "--service", "game"},
 		{"add", "transport", "tcp"},
 	} {
 		roost(append(args, "--root", root)...)

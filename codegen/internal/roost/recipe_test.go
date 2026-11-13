@@ -117,12 +117,12 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 				t.Fatalf("recipe %s verify: %v", name, err)
 			}
 			if name == "casual" {
-				recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {", "if err := error(nil); err != nil {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "initial coins = 0")
-				recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if state.GetInitialized() {", "if false && state.GetInitialized() {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "repeat =")
+				recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "return runFirstEnter(e, nowUnixMilli)", "return nil", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "initial coins = 0")
+				recipeMutationMustFail(t, target, "game/components/enter/enter.go", "if state.GetInitialized() {", "if false && state.GetInitialized() {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "repeat =")
 				// 登录链路的三条：进服票据握手的会话不再被当成“先新建”、换服在途的角色被放进来、已经建成的玩家能再新建一次（首次发放会再发）。
 				recipeMutationMustFail(t, target, "game/login/login_enter.go", `return claims[EnterTicketClaim] == "1"`, "return false", "./internal/access/player/tcp", "TestRecipeTCPEnterTicketCreatesFirstThenEnters", "EnterStatus for a new account")
 				recipeMutationMustFail(t, target, "internal/access/player/tcp/recipe_entering.go", "if !moving {", "if !moving || true {", "./internal/access/player/tcp", "TestRecipeEnteringRefusesARoleInTransfer", "want login_elsewhere")
-				recipeMutationMustFail(t, target, "game/entities/player/enter_component.go", "if component.Built() {", "if false && component.Built() {", "./internal/access/player/tcp", "TestRecipeTCPFirstGrantPaysForAShopPurchase", "want enter_created")
+				recipeMutationMustFail(t, target, "game/components/enter/enter.go", "if component.Built() {", "if false && component.Built() {", "./internal/access/player/tcp", "TestRecipeTCPFirstGrantPaysForAShopPurchase", "want enter_created")
 			}
 			if name == "turn-pvp" {
 				recipeMutationMustFail(t, target, "game/login/enter_profile.go", "owner.ProfileComp().Rename(name)", "owner.ProfileComp().Rename(\"Wrong\")", "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "created profile name")

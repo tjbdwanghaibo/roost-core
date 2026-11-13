@@ -861,7 +861,7 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 	t.Parallel()
 	// 桩要在安装之前就在：工程一开始就托管 chat（-framework chat）。
 	root, roost, try := moduleProjectWith(t, "parlor", nil, []string{"chat"})
-	stub := filepath.Join(root, "internal", "service", "chat", "collaborators.go")
+	stub := filepath.Join(root, "services", "chat", "collaborators.go")
 	original, err := os.ReadFile(stub)
 	if err != nil {
 		t.Fatal(err)

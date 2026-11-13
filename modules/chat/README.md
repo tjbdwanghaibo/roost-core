@@ -56,7 +56,7 @@
 
 ## 联动
 
-- `chat` + `enter`（`with/enter/game/chat/chat_enter.go`）：经 `gameenter.OnEntered("chat", …)` 在玩家进入游戏时把他加进本进程的世界频道在线名单。不发登录公告。
+- `chat` + `enter`（`with/enter/game/chat/chat_enter.go`）：经 `gamelogin.OnEntered("chat", …)` 在玩家进入游戏时把他加进本进程的世界频道在线名单。不发登录公告。
 - `scene` + `chat`（在 `scene/with/chat`）：经 `OnLocalChannel("nearby", …)` 登记附近聊天，在 Nest 里取同场景收件人快照后在锁外推送，没有历史。
 - 以 `requires` 依赖它的模块：`notice`（公告与跑马灯经 `AnnounceWorld` 发出）。
 

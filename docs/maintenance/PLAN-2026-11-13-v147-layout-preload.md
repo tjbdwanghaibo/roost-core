@@ -63,3 +63,28 @@ game/controllers、game/handler  不变
 - v1.47 这一批（目录重整、共用组件、managers 目录、协议注册并入接入层、lifecycle/playeraccess、本地预加载）都要核对并同步
   core 自己的 demo/（game-demo 参考源码）与测试：codegen 测试（TestDemo*、TestModule*、TestRecipe*、路径断言、变异目标路径）、
   scripts/testdata 各玩法夹具、scripts/test-*-generated.sh、模块门禁计数、demo/WALKTHROUGH 与 README、skill 文档里的路径。
+
+## 5. 实施记录：目录重整线未完成项（2026-11-13，tmp/v147-layout）
+
+已完成：§1 的 services/、game/login（票据校验 + 原 game/enter + enter×profile 联动）、game/managers、协议登记并入接入层、
+playeraccess 进 core（`infra/network/playeraccess`）、lifecycle 生成（core `wiring/entitylifecycle` + 每个实体包 `lifecycle_gen.go`）、
+world / scene 单例进实体包；组件拆分完成 enter（`game/components/enter`）与基线的 bag / wallet / attribute（文件已改名 `<x>.go`）。
+
+未完成，需要维护者定方向：
+
+1. **其余模块组件（profile checkin task gacha naming mailbox equipment shop ……）仍在 Player 包。** 拆不动的原因：
+   - 钩子签名带具体类型：`OnProfileLevelUp(func(c *ProfileComponent, from, to int32))`、`OnEquipmentChanged` 等，登记方（attribute、activity、
+     mailbox、task、game-demo）在回调里调 `c.Owner().XComp()`，拿的是 `*Player` 上的别的组件；组件进共用包后 Owner 是接口，回调拿不到别的组件。
+   - 联动文件（`with/`）与 game-demo 在 Player 包里给组件类型加方法（例如 activity 的 timers、demo 的 dungeon ledger、profile 测试改写
+     `onLevelUp`）；组件类型变成外部包类型的别名后，这些方法不能再声明在 Player 包里。
+   - 工程自有文件 `profile_levelup.go` 是 `func (component *ProfileComponent) onLevelUp`，同样受上一条限制。
+   - 可选方向：A（推荐）钩子改为收宿主 `*Player`（或宿主接口）而不是组件，联动方法改成 Player 包里的函数，组件逐个按 bag 的样板拆；
+     代价是改所有登记方与 demo，模块场景数不变但联动文件都要重写。B 保留组件类型的钩子，在共用包里用 Owner 的可选接口做类型断言拿别的组件；
+     改动小，但每个跨组件调用都多一层断言，读起来绕。
+2. **`enter_first.go` / `enter_hooks.go` 留在 Player 包**（§2 决定 2 要求进 game/login）：`OnFirstEnter` / `OnCreate` 的钩子收 `*Player`，
+   登记方在 Player 包里；放进 game/login 后 Player 包要 import game/login，而 game/login 已 import Player，成环。现状是 enter 的组件逻辑在
+   `game/components/enter`、进入流程在 `game/login`，Player 包只留首次发放与新建钩子的登记点。若按 1 的 A 把钩子改成收宿主接口，可以一并搬走。
+3. **`game/profile/rename.go`（名字规则登记点）、`game/chat`、`game/equipment`、`game/leaderboard`、`game/mailbox` 未动**；非框架的业务服务
+   （alliance、activity_world 等）的手写文件仍在 `internal/service/<服务>/`（§1 只要求托管框架服务进 services/）。
+4. **跑在非归属服务的 lifecycle**：原 `roost add lifecycle --service` 在生成期拒绝；现在每个实体包都有 lifecycle_gen.go，改由 doctor 的
+   entity-owner 检查别的服务的用法（按 import + 函数名的源码文本查，共用代码 game/ 下看不出由谁调用，不在检查内）。

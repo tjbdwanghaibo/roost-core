@@ -134,9 +134,9 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 
 本模块的 `with/`：
 
-- `with/enter`（`game/login/login_enter.go`）接三件事：
-  1. 进入前检查 `gameenter.OnEntering("login", …)`：调 `Admit`，承载服不是本进程的 `sid`（或没有记）答 `login_elsewhere`，不加载也不创建 Player。与 rehome 一起装时两条检查按名字顺序执行，`login` 在前。
-  2. `gameenter.RequireCreateFirst("login", EnterTicketSession)`：用进服票据握手的会话“先新建、再进入”——`EnterGame` 不代建，没建成答 `enter_need_create`；客户端发 `EnterCreate{name}` 建成之后再发 `EnterGame`。用会话令牌握手的会话照旧由 `EnterGame` 加载或创建。
+- `with/enter` 接三件事，函数在 `game/login/login_enter.go`（`RegisterEnterChecks`，只登记一次），登记在 `internal/access/player/tcp/login_enter.go` 的 `init` 里；推 `EnterStatus` 的 `Announce` 由 `game/controllers/enter/login_announce.go` 的 `init` 经 `RegisterEnterAnnounce` 交给 `game/login`（v1.47 起 game/login 与原 game/enter 合包，直接 import controllers 会成环）：
+  1. 进入前检查 `OnEntering("login", …)`：调 `Admit`，承载服不是本进程的 `sid`（或没有记）答 `login_elsewhere`，不加载也不创建 Player。与 rehome 一起装时两条检查按名字顺序执行，`login` 在前。
+  2. `RequireCreateFirst("login", EnterTicketSession)`：用进服票据握手的会话“先新建、再进入”——`EnterGame` 不代建，没建成答 `enter_need_create`；客户端发 `EnterCreate{name}` 建成之后再发 `EnterGame`。用会话令牌握手的会话照旧由 `EnterGame` 加载或创建。
   3. `OnSessionActive("enter", …)`：会话激活后调 enter 模块的 `Announce`，推 `EnterStatus{code, reason, need_create}`；本服不该服务的会话推完断开。
 
   客户端的完整顺序（新号）：

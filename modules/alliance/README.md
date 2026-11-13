@@ -99,7 +99,7 @@
 
 ## 联动
 
-- `alliance` + `enter`（`with/enter/game/controllers/alliance/enter.go`）：经 `gameenter.OnEntered("alliance", …)` 在每次进入或重连后调 `RefreshMembership`；失败只记日志，留待下次进入。
+- `alliance` + `enter`（`with/enter/game/controllers/alliance/enter.go`）：经 `gamelogin.OnEntered("alliance", …)` 在每次进入或重连后调 `RefreshMembership`；失败只记日志，留待下次进入。
 - `alliance` + `rehome`（`with/rehome/game/alliance/rehome.go`）：把归属查询换成 `rehome.Binding`，Saga 的 `Player` 步骤进 Nest 之前先核对玩家当前在哪个 game 实例——换服中则等待，已换服则改投，结果未知不放行。
 - `activity_alliance` 以 `requires` 依赖它，在 `Alliance` 实体上追加活动状态与组件。
 - 别的模块没有 `with/alliance`。

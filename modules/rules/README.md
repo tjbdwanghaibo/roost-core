@@ -15,7 +15,7 @@
 - **登记点**（`game/entities/player/rules.go`）
   - `RegisterPlayerRules(name string, read RuleProvider)`，`RuleProvider` 是 `func(*Player) (*pb.RulePart, error)`。各功能在自己的 `with/rules` 文件的 `init` 里登记；运行期不增删。空名、nil、重名在启动时 panic。
   - 提供方在 Player 已被 Nest 锁住时被调用（`handlerRulesRead` 这一条消息里），只读、不做 I/O，用自己的生成 PB 编码器产出 `Payload`。它可以读同一个 Player 上的别的组件（体力规则随等级变化时就是这样读的）。
-  - 进入钩子：模块在 `init` 里登记了 `gameenter.OnEntered("rules", …)`，玩家每次成功进入游戏（含重连）调一次 `PushNow`。
+  - 进入钩子：模块在 `init` 里登记了 `gamelogin.OnEntered("rules", …)`，玩家每次成功进入游戏（含重连）调一次 `PushNow`。
 - **状态**：无。不新增持久字段，也不启动独立服务。
 - **配置**：无。
 - **错误码**：无自己的业务码。
@@ -63,7 +63,7 @@ for _, part := range snapshot.Parts {
 
 - `shop/with/rules`：登记名 `shop`，导出未下架的商品（`ShopRulesPush`，按商品号升序）。2 条场景。
 - `stamina/with/rules`：登记名 `stamina`，导出上限、硬顶、恢复周期与每日可购次数（`StaminaRulesPush`）。2 条场景。
-- rules 自己没有 `with/` 目录。它对 enter 的使用（`gameenter.OnEntered`）写在主体文件里，因为 enter 是它的依赖。
+- rules 自己没有 `with/` 目录。它对 enter 的使用（`gamelogin.OnEntered`）写在主体文件里，因为 enter 是它的依赖。
 
 ## 验证范围
 

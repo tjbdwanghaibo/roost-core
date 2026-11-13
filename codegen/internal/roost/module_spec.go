@@ -652,6 +652,11 @@ func validateModuleRuntime(runtime *ModuleRuntime) error {
 	if !moduleRuntimePackagePattern.MatchString(runtime.Package) {
 		return fmt.Errorf("runtime.package %q must be a project-local game package (or services/<framework>/... with runtime.framework)", runtime.Package)
 	}
+	if runtime.Framework != "" {
+		if _, known := frameworkCatalog[runtime.Framework]; !known {
+			return fmt.Errorf("runtime.framework %q is not a framework service; known: %s", runtime.Framework, strings.Join(frameworkServiceNames(), ", "))
+		}
+	}
 	if rest, ok := strings.CutPrefix(runtime.Package, frameworkServicesDir); ok {
 		if runtime.Framework == "" {
 			return fmt.Errorf("runtime.package %q is under services/: name the hosted service in runtime.framework", runtime.Package)
@@ -662,11 +667,6 @@ func validateModuleRuntime(runtime *ModuleRuntime) error {
 	}
 	if !modulePascalPattern.MatchString(runtime.Start) {
 		return fmt.Errorf("runtime.start %q must name an exported Go function", runtime.Start)
-	}
-	if runtime.Framework != "" {
-		if _, known := frameworkCatalog[runtime.Framework]; !known {
-			return fmt.Errorf("runtime.framework %q is not a framework service; known: %s", runtime.Framework, strings.Join(frameworkServiceNames(), ", "))
-		}
 	}
 	return nil
 }

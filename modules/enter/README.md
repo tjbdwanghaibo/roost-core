@@ -91,10 +91,10 @@
 
 - **需求正好是它：** `roost module add enter`。没有依赖；安装时一并打开玩家 TCP 接入与自身视图。要让真实客户端连上，再装 `login`（或自己实现 `auth.go`）并执行 `roost config enable player-tcp`。
 - **新玩家要发初始资源：** 改 `game/entities/player/enter_first.go` 的 `firstEnter`，直接调同一实体上别的组件，例如 `component.owner.WalletComp().Add(100)`。用不留回执的入口，“只发一次”由标记保证。模块之间的联动不改这个文件，在自己的文件里登记 `player.OnFirstEnter("名字", func(owner *Player, nowUnixMilli int64) error {...})`。
-- **别的功能要在玩家进入后顺带做事**（上线登记、拉离线数据、推一帧）：在自己的包的 `init` 里调 `gameenter.OnEntered("名字", func(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {...})`。
-- **要在进入之前挡住某些玩家**（封停、维护白名单、不归本服）：`gameenter.OnEntering("名字", func(ctx context.Context, registry *app.Registry, entering gameenter.Entering) error {...})`，拒绝时返回 `errcode.Define` 出来的带码错误。
-- **要让某类会话先起名再进入：** `gameenter.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gameenter.OnCreating`，要先有档的事务外步骤用 `gameenter.OnCreatePrepare`，写进档用 `player.OnCreate`。
-- **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers/enter` 的 `Announce(ctx, registry, gameenter.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
+- **别的功能要在玩家进入后顺带做事**（上线登记、拉离线数据、推一帧）：在自己的包的 `init` 里调 `gamelogin.OnEntered("名字", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {...})`。
+- **要在进入之前挡住某些玩家**（封停、维护白名单、不归本服）：`gamelogin.OnEntering("名字", func(ctx context.Context, registry *app.Registry, entering gamelogin.Entering) error {...})`，拒绝时返回 `errcode.Define` 出来的带码错误。
+- **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档用 `player.OnCreate`。
+- **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers/enter` 的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
 - **不要改的文件：** `game/login/enter.go`、`game/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/entities/player/enter_component.go` 里标记与发放同一笔事务的写法。
 - **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
 

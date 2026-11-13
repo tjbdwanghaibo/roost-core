@@ -448,14 +448,14 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 ```go
 func init() {
-	gameenter.OnEntered("<功能名>", func(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+	gamelogin.OnEntered("<功能名>", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 		// entered.PlayerID、entered.First（这次是否首次进入）、entered.FirstAtUnixMilli（首次进入的时间）
 		return nil
 	})
 }
 ```
 
-（`gameenter` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `player.OnFirstEnter` 登记事务内钩子（配方已使用）。
+（`gamelogin` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `player.OnFirstEnter` 登记事务内钩子（配方已使用）。
 
 **enter 有两条路**。会话是用进服票据握手的（第 3A 步的链路，装了 `login` 时）：玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`；建档、名字、首次初始化、“建成了”的标记在同一笔事务里。别的会话：`EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码，初始发放只写一处。要在“新建”这一步加自己的检查或写入，用 enter 的登记点（`OnCreating`、`OnCreatePrepare`、实体包的 `OnCreate`，见它的 README），不要改它的端点。
 

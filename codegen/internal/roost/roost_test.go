@@ -544,7 +544,6 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		{Kind: "dao", Name: "Player", Entity: "Player"},
 		{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Profile"},
 		{Kind: "protocol", Name: "RenamePlayer", Group: "game", Handler: "player"},
-		{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"},
 		{Kind: "endpoint", Name: "RenamePlayer", Handler: "player", Protocol: "RenamePlayer", NestHandler: "RenamePlayer"},
 	}
 	for _, step := range steps {
@@ -595,6 +594,10 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 				t.Fatal(writeErr)
 			}
 		}
+	}
+	// v1.47.0：lifecycle 由 roost generate 生成到实体包（lifecycle_gen.go），add lifecycle 删掉了，报错指向新入口。
+	if _, err := Add(root, AddOptions{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"}); err == nil || !strings.Contains(err.Error(), "player.LifecycleFromRegistry(registry)") {
+		t.Fatalf("add lifecycle after its removal: %v", err)
 	}
 	// 首次真实请求前玩家必须先有 Entity：没有“登录时 lifecycle.GetOrCreate”这一步，Nest 冷加载会回
 	// entity_not_found。first-business 必须把这一步列为未完成，并给出可执行的命令（DESIGN-TODO D7）。

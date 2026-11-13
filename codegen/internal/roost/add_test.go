@@ -29,25 +29,8 @@ func TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "entity", Name: "Guild"}); err != nil {
 		t.Fatal(err)
 	}
-	// The lifecycle scaffold used to reference the per-entity category
-	// constant the entity scaffold minted. That constant is gone, so anything
-	// still naming it would leave the project unbuildable.
-	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
-		t.Fatal(err)
-	}
-	lifecyclePaths, err := Add(root, AddOptions{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range lifecyclePaths {
-		raw, err := os.ReadFile(filepath.Join(root, path))
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(raw), "EntityCategoryPlayer") {
-			t.Errorf("%s still names the removed per-entity category constant:\n%s", path, raw)
-		}
-	}
+	// v1.47.0 起 lifecycle 不再由 add lifecycle 写脚手架，而是 generate 生成 lifecycle_gen.go（只用 EntityKind 常量），
+	// 原来这里查“脚手架引用已删除的分类常量”的一段随之删除。
 
 	for _, name := range []string{"player", "guild"} {
 		raw, err := os.ReadFile(filepath.Join(root, "game", "entities", name, "entity.go"))
@@ -506,6 +489,9 @@ func declareRemoteGuild(t *testing.T, root, extra string) {
 	if err := os.WriteFile(path, []byte(remote), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// 生成的 lifecycle_gen.go 用 core 的 wiring/entitylifecycle（v1.47.0 新增）：sync 的依赖整理指向本仓，
+	// 不去取已发布的 core。
+	useLocalRoostCore(t, root)
 	var out bytes.Buffer
 	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("project sync: %v\n%s", err, out.String())

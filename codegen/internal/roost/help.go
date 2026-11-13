@@ -124,7 +124,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--native、--consumer、--group、--id；saga 用 --steps 按执行顺序列步骤、--native 选出业务是 Nest 事务的步骤（见 roost help saga）；effect 用 --consumer 选消费服务（见 roost help effect）；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
@@ -190,7 +190,7 @@ value, created, err := players.GetOrCreate(ctx, playerID)`,
 		Name: "endpoint", Aliases: []string{"protocol-endpoint", "protocol-to-nest"},
 		Summary:       "把 typed 玩家协议映射到生成的 Nest Sender",
 		Usage:         `roost add endpoint <name> --handler <controller-domain> [--protocol <name>] [--nest-handler <name> | --lifecycle <entity>]`,
-		Configuration: `要求 access.player、已有 protocol 和 Nest handler。第一个 Nest 参数是由 context.PlayerID 定位的 Entity；其余命名参数按名称映射到 Request 字段，或直接传当前协议的 PB 请求指针。无业务返回值 / 唯一 PB 响应的 endpoint 分为手写 Handle 方法与自动转交 *_endpoint_gen.go，//roost:endpoint nest=<Handler> 记录对应关系，generate 持续更新转交、保留手写授权。领域结果转换仍由业务维护；业务时间由服务器决定、不从请求取：参数名 nowUnix / nowUnixMilli（int64）不在 Sync_ 的参数里，由生成的 Nest 分发包装在 handler 执行时填这条消息冻结的业务时间（fctx.Now，含 time.logic_offset）。controller 从 Registry 注入 nest.Client，不直接访问 EntityManager。--lifecycle <entity> 生成登录边界：不走 Nest，改为对 context.PlayerID 调 lifecycle <Entity>FromRegistry(...).GetOrCreate，要求已有 roost add lifecycle 与 controller 的 Registry()；首登前的玩法请求会收到 errcode.CodeEntityNotFound（entity_not_found）。roost generate 为还没有 endpoint 的协议写的“未实现”占位（Handle<Protocol> 只返回 not implemented）在未改动时由 add endpoint 直接替换；改过的文件不覆盖，报错说明删掉或改名后重跑。`,
+		Configuration: `要求 access.player、已有 protocol 和 Nest handler。第一个 Nest 参数是由 context.PlayerID 定位的 Entity；其余命名参数按名称映射到 Request 字段，或直接传当前协议的 PB 请求指针。无业务返回值 / 唯一 PB 响应的 endpoint 分为手写 Handle 方法与自动转交 *_endpoint_gen.go，//roost:endpoint nest=<Handler> 记录对应关系，generate 持续更新转交、保留手写授权。领域结果转换仍由业务维护；业务时间由服务器决定、不从请求取：参数名 nowUnix / nowUnixMilli（int64）不在 Sync_ 的参数里，由生成的 Nest 分发包装在 handler 执行时填这条消息冻结的业务时间（fctx.Now，含 time.logic_offset）。controller 从 Registry 注入 nest.Client，不直接访问 EntityManager。--lifecycle <entity> 生成登录边界：不走 Nest，改为对 context.PlayerID 调实体包的 LifecycleFromRegistry(...).GetOrCreate（lifecycle_gen.go 由 roost generate 生成），要求 controller 的 Registry()；首登前的玩法请求会收到 errcode.CodeEntityNotFound（entity_not_found）。roost generate 为还没有 endpoint 的协议写的“未实现”占位（Handle<Protocol> 只返回 not implemented）在未改动时由 add endpoint 直接替换；改过的文件不覆盖，报错说明删掉或改名后重跑。`,
 		Example: `roost add endpoint RenamePlayer --handler player
 roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-handler Equip
 roost add endpoint EnterGame --handler player --lifecycle Player`,

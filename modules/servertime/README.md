@@ -48,7 +48,7 @@
 
 ## 联动
 
-- `servertime/with/enter`：登记 `gameenter.OnEntered("servertime", …)`，玩家每次进入游戏（含重连）调一次 `PushNow`。推送在进入钩子里、端点答复之前交给连接，客户端一般先收到它、后收到 `EnterGame` 的应答，但不要依赖这个先后。推送不成只由 enter 记一条日志，不让登录失败。3 条场景。
+- `servertime/with/enter`：登记 `gamelogin.OnEntered("servertime", …)`，玩家每次进入游戏（含重连）调一次 `PushNow`。推送在进入钩子里、端点答复之前交给连接，客户端一般先收到它、后收到 `EnterGame` 的应答，但不要依赖这个先后。推送不成只由 enter 记一条日志，不让登录失败。3 条场景。
 - 别的模块没有 `with/servertime`。checkin、task、stamina、shop 的状态注释里都要求客户端用它下发的 `Day` 判过期，但它们不 import 这个模块。
 
 ## 验证范围

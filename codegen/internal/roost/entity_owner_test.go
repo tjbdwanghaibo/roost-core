@@ -2,6 +2,7 @@ package roost
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -66,7 +67,7 @@ func TestGenerateRejectsAnEntityOwnedByAnUndeclaredService(t *testing.T) {
 }
 
 // 声明归属后：只有归属服务的 bootstrap 装归属 handler 的 Mod；bootstrap 还没刷新时 generate 拒绝并给出命令；
-// add lifecycle 缺省落到归属服务、拒绝别的服务；doctor 指出别的服务用了归属 kind 的 Sender。工程能编译。
+// doctor 指出别的服务用了归属 kind 的 lifecycle 或 Sender。工程能编译。
 func TestEntityOwnerScopesHandlersLifecycleAndDoctor(t *testing.T) {
 	t.Parallel()
 	root := ownedEntityProject(t)
@@ -76,6 +77,9 @@ func TestEntityOwnerScopesHandlersLifecycleAndDoctor(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "roost project sync") {
 		t.Fatalf("generate with a stale bootstrap must ask for project sync, got %v", err)
 	}
+	// 生成的 lifecycle_gen.go 用 core 的 wiring/entitylifecycle（v1.47.0 新增）：sync 的依赖整理指向本仓，
+	// 不去取已发布的 core。
+	useLocalRoostCore(t, root)
 	var out bytes.Buffer
 	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("project sync: %v\n%s", err, out.String())
@@ -95,16 +99,28 @@ func TestEntityOwnerScopesHandlersLifecycleAndDoctor(t *testing.T) {
 		t.Fatalf("an owned kind's handler must not be registered in every process:\n%s", aggregate)
 	}
 
-	if _, err := Add(root, AddOptions{Kind: "lifecycle", Name: "Guild", Service: "game"}); err == nil || !strings.Contains(err.Error(), "service=alliance") {
-		t.Fatalf("lifecycle in a non-owning service must be refused, got %v", err)
-	}
-	if _, err := Add(root, AddOptions{Kind: "lifecycle", Name: "Guild"}); err != nil {
-		t.Fatalf("lifecycle must default to the owning service: %v", err)
-	}
-
 	m, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// v1.47.0：lifecycle 由 generate 生成到实体包（lifecycle_gen.go），不再经 add lifecycle 选服务；别的服务
+	// 用归属 kind 的 lifecycle（本进程没有它的 handler，建出来也没人能写）改由 doctor 的 entity-owner 指出。
+	// 归属服务自己用不算。
+	lifeUse := "package %s\n\nimport (\n\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n\tguild \"example.com/planet/game/entities/guild\"\n)\n\nfunc guildLife(registry *app.Registry) { _, _ = guild.LifecycleFromRegistry(registry) }\n"
+	for _, service := range []string{"alliance", "game"} {
+		if err := os.WriteFile(filepath.Join(root, "internal", "service", service, "guild_life.go"), []byte(fmt.Sprintf(lifeUse, service)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items := checkEntityOwnerUse(root, m)
+	if len(items) != 1 || items[0].Status != StatusFail || !strings.Contains(items[0].Detail, "internal/service/game/guild_life.go") ||
+		!strings.Contains(items[0].Detail, "LifecycleFromRegistry") || strings.Contains(items[0].Detail, "internal/service/alliance/") {
+		t.Fatalf("entity-owner after game uses the Guild lifecycle = %+v; want one FAIL naming only the game file", items)
+	}
+	for _, service := range []string{"alliance", "game"} {
+		if err := os.Remove(filepath.Join(root, "internal", "service", service, "guild_life.go")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if items := checkEntityOwnerUse(root, m); len(items) != 1 || items[0].Status != StatusOK {
 		t.Fatalf("entity-owner before a cross-service sender use = %+v; want one OK", items)
@@ -113,7 +129,7 @@ func TestEntityOwnerScopesHandlersLifecycleAndDoctor(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "internal", "service", "game", "guild_caller.go"), []byte(caller), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	items := checkEntityOwnerUse(root, m)
+	items = checkEntityOwnerUse(root, m)
 	if len(items) != 1 || items[0].Status != StatusFail || !strings.Contains(items[0].Detail, "internal/service/game/guild_caller.go") || !strings.Contains(items[0].Detail, "alliance") {
 		t.Fatalf("entity-owner after game uses the Guild sender = %+v; want one FAIL naming the file and the owner", items)
 	}
@@ -170,6 +186,9 @@ func TestOwnedRemoteKindIsForeignToEveryOtherRemoteEntityService(t *testing.T) {
 	if err := os.WriteFile(shard, []byte(strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryOther service=alliance", 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// 生成的 lifecycle_gen.go 用 core 的 wiring/entitylifecycle（v1.47.0 新增）：sync 的依赖整理指向本仓，
+	// 不去取已发布的 core。
+	useLocalRoostCore(t, root)
 	var out bytes.Buffer
 	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("project sync: %v\n%s", err, out.String())
