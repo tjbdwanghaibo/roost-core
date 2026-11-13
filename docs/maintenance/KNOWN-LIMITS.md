@@ -375,7 +375,6 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **view 接口只收签名里用内建类型与 db 类型的方法**：签名用到组件包自己类型的方法不进 view（view 不能反向 import 组件包，否则回到循环引用）。cdkey、checkin、gacha、idle、naming、purchase、shop 七个组件的接口因此是空的 `interface{}`，handler 仍经实体上的 `XComp()` 拿具体类型调用。view 另外 import 了 `game/actor` 与 `game/gameplay/attribute` 两个只放类型的叶子包。
 - **冷组件没有 view 访问器**：冷组件的字段可能是 nil，装进接口后不等于 nil，所以生成器不给它生成 `func (e *Player) X() view.X`；跨组件调用冷组件要经实体的具体类型。
-- **过期的 `entity_<实体>.go` 只在全量扫描时删除**：只生成某一个实体包时不清理别的实体留下的 `entity_*.go`。
 
 #### 业务 HTTP 路由与配置检查
 
@@ -634,6 +633,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 - **只拆了 Player 上的组件**：room、team、alliance 等其他实体上的组件这一轮没有搬进 `game/components/`；game-demo 的 `map_component.go`、`cell_base.go` 与 cell 路由耦合（`map` 也不能作包名），activity 的 `activity_timers.go` 挂在工程的定时器组件上，这几处仍在 `game/entities/player`。
 - **team 组件依赖具体的 Team 实体**：`game/components/team` import 了 `game/entities/team`，因为建队、接受、邀请要跨实体操作 `*team.Team`。没有形成循环，以后可改成经 `view.TeamEntity`。
+- **过期的 `entity_<实体>.go` 只在全量生成时删除**：删掉一个实体后只单独生成别的实体包，`game/view/` 里那个实体的接口文件不会被清掉，要全量生成一次。生成器可以改成每次都按现存实体清理。
 
 #### 业务模块（roost module）
 
