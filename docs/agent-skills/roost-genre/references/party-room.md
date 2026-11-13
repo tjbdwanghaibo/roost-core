@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | 排队、成局 | `service/match`：`Enqueue`（同 requestID 重放同一张票）→ `Candidates` → `Grouping` → `Commit`（同一票集合并发只成一局）。**弹性人数队列**（v1.34.0 起）：`Queue{GroupSize: 8, MinSize: 2, FillAfterSeconds: 20}`，凑满 8 人立即开，不满时最早一张票等满 20 秒（业务时钟）后 2～7 人也开；存储按同一规则（`Queue.FormableSize`）拒绝过早的不满员局（`ErrGroupNotReady`，550110）；逻辑队列人数段写 `2-8@20s`（`match.sweep_queues` 条目如 `party:2-8@20s:eu`）；`FirstComeGrouping` 用于弹性队列时要给 `NowUnix`；预判“候选够不够一局”用 `queue.MinGroupSize()` | PARTY §2、§6；guide/09-services.md §4“match 的弹性人数成局” |
 | 玩家在哪个房间 | `service/session` Run：`Enter`（RequestID 必填、全局唯一）+ `Attach` 房间资源；重连 `Current`；`Finish` / `Leave` 经业务 `Releaser` 归还座位 | PARTY §2、§6；guide/09-services.md §1A |
-| 房间权威状态（名单 `Roster`、规则快照、阶段、房主、座位、种子、回执、补位事实 `Backfill`） | PartyRoom 实体 DAO `State`（persist）+ `WakeTimer`，World 锁档 | PARTY §2 |
+| 房间权威状态（名单 `Roster`、规则快照、阶段、房主、座位、种子、回执、补位事实 `Backfill`） | PartyRoom 实体 DAO `State`（`nosync`，只落库）+ `WakeTimer`，World 锁档 | PARTY §2 |
 | 公开记分板 | DAO `Board`（`nopersist,sync`）+ 业务 packer 只开放 `Board` 一个视图（`RoomSyncProfile`） | PARTY §2、§5 |
 | 回合推进、出星、断线宽限 | `roost add heartbeat --entity PartyRoom`（100ms 档），回调在实体锁与事务内 `Advance(beat.Now)` | PARTY §4；guide/10-time.md §4A |
 | 开局硬期限 | `roost add timer --entity PartyRoom`，开局登记、结算即删 | PARTY §4；guide/10-time.md §4 |

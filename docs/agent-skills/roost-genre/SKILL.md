@@ -20,7 +20,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 - 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：各篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文的 Markdown 链接相对本文件所在目录，反引号里写的路径相对 roost-core 根目录；读手册时以本机检出或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
 - **`game` 模板只出框架骨架，各类型玩法来自夹具或业务代码**。已有 `game-demo` 是内置的完整参考应用；不要虚构 `project new -template slg` 一类不存在的模板。现成的业务单元另有业务模块（`roost module add`，清单以 `roost module list` 为准，见 [references/compose.md](references/compose.md)）；13 类玩法还不是模块，不能用它安装。
 - 夹具里的数值（金币、时长、上限）都是样例；玩法规则缺少默认实现不算框架缺陷（KNOWN-LIMITS“游戏接入验收”首段）。
-- 生成 demo 前先确认目标 roost 版本。本 skill 随 tag 发布，命令按同一检出的脚本写：**v1.40.0 起** `dao_add` 写必填的 `store` 键（更早的 tag 写 `bson`）；**v1.35.0 起**每篇在最终 `roost generate` 前多一步公共 Robot 安装（`scripts/testdata/robot-common/install.py`），九类状态玩法的场景数因此各 +1（MOBA 改为扩展 KCP 用例，仍 28 条）。目标是更早的 tag 时，读该 tag 检出里的本 skill 与脚本，不把这里的命令套上去。各篇最早可用版本：card-rpg、mmorpg、merge-casual 三个夹具 **v1.33.1 起可用**（2026-10-31 在 v1.33.1 检出实测 16 / 13 / 15 条 PASS），**最低版本 v1.33.1**：v1.33.0 上仍编译失败（见 §7）。实时派对房间（`party-room`）**v1.33.2 起有纵切（12 条）；弹性成局与组同步正式入口 v1.34.0 起（13 条）；业务层补位 v1.34.1 起（18 条，2026-10-31 在对应代码实测通过）**。三档夹具与命令不同，references/party-room.md 的命令序列是当前检出的 19 条版（18 条业务 + 1 条 Robot）；v1.33.1 及更早没有这条纵切。
+- 生成 demo 前先确认目标 roost 版本。本 skill 随 tag 发布，命令按同一检出的脚本写：**v1.47.0 起** DAO 字段默认持久并同步，`dao_add` 缺省改为 `nosync`（更早的 tag 缺省 `persist`，当时就是只落库）；**v1.40.0 起** `dao_add` 写必填的 `store` 键（更早的 tag 写 `bson`）；**v1.35.0 起**每篇在最终 `roost generate` 前多一步公共 Robot 安装（`scripts/testdata/robot-common/install.py`），九类状态玩法的场景数因此各 +1（MOBA 改为扩展 KCP 用例，仍 28 条）。目标是更早的 tag 时，读该 tag 检出里的本 skill 与脚本，不把这里的命令套上去。各篇最早可用版本：card-rpg、mmorpg、merge-casual 三个夹具 **v1.33.1 起可用**（2026-10-31 在 v1.33.1 检出实测 16 / 13 / 15 条 PASS），**最低版本 v1.33.1**：v1.33.0 上仍编译失败（见 §7）。实时派对房间（`party-room`）**v1.33.2 起有纵切（12 条）；弹性成局与组同步正式入口 v1.34.0 起（13 条）；业务层补位 v1.34.1 起（18 条，2026-10-31 在对应代码实测通过）**。三档夹具与命令不同，references/party-room.md 的命令序列是当前检出的 19 条版（18 条业务 + 1 条 Robot）；v1.33.1 及更早没有这条纵切。
 - 业务时间（v1.33.2 起全部十个夹具一致，guide/10-time.md §1A）：Nest handler 的最后一个参数是约定名 `nowUnixMilli`，由生成的分发包装从 fctx 填本条消息冻结的业务时间，**Sender 签名里没有时间、调用方不传 `now`**；测试拨时钟用 `clock.SetSource`（与驱动 `SetClock` 接同一个原子时钟，`t.Cleanup` 恢复）。v1.33.1 上 auto-chess / card-rpg / idle-sim / merge-casual / mmorpg / survival-extraction / tower-defense 七个夹具的 handler 仍收调用方传入的 `now int64`（Sender 带时间参数），按旧版手册写的调用代码升级后要去掉这个参数（CHANGELOG v1.33.2“变更”）。
 
 ## 1. 适用场景
@@ -75,10 +75,10 @@ NAME=mygame; MOD=example.com/mygame       # 工程名与自定 Go module
 mkdir -p "$WORK"
 (cd "$CORE" && go build -o "$WORK/roost" ./codegen/cmd/roost)   # CLI 与 CORE 同版本
 ROOST="$WORK/roost"; DIR="$WORK/$NAME"
-# dao_add <实体类型名> <文件> "字段 类型 store键 [dao标签]" ...：在 `type <X>Dao struct {` 后插入字段，标签缺省 persist
+# dao_add <实体类型名> <文件> "字段 类型 store键 [dao标签]" ...：在 `type <X>Dao struct {` 后插入字段，标签缺省 nosync（只落库）
 dao_add() {
   local t=$1 f=$2 ins="" n ty k tag s; shift 2
-  for s in "$@"; do read -r n ty k tag <<<"$s"; ins+=$'\t'"$n $ty \`store:\"$k\" dao:\"${tag:-persist}\"\`"$'\n'; done
+  for s in "$@"; do read -r n ty k tag <<<"$s"; ins+=$'\t'"$n $ty \`store:\"$k\" dao:\"${tag:-nosync}\"\`"$'\n'; done
   T="$t" INS="$ins" perl -0pi -e 's/(type $ENV{T}Dao struct \{\n)/$1$ENV{INS}/ or die "no $ENV{T}Dao in $ARGV\n"' "$f"
 }
 # world <entity.go...>：多人争用的对象放进 World 锁档（锁序低于 Player）
@@ -93,7 +93,7 @@ go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$CORE"
 
 要点：
 - `-template game` 只有 game 一个业务服务，带 Player 与 World 两个实体，缺省不托管任何框架服务；`roost module add` 装的模块用到哪个托管服务（account / chat / mail / match / rank……）就在那次安装里声明哪个。要一开始就托管，加 `-framework rank,chat` 或 `-framework all`（九个全部：account / activity / chat / global / mail / match / platform / rank / session）（`roost help project`）。各纵切夹具不经生成的访问器调用托管服务（用到的服务包在测试里直接构造），所以不需要 `-framework`。
-- 三个 helper 代替仓库脚本里的 python 片段：DAO 字段与实体注解是**业务文件**，只改它们（`dao_add` 每项第四个词是 dao 标签，缺省 `persist`；派对房间的 `Board` 写 `nopersist,sync`、`Coins` 写 `persist,sync`）；组件、访问器、Sender 由 `roost generate` 生成，不手改生成文件（SLG-INTEGRATION §3.1 第 3～4 步）。
+- 三个 helper 代替仓库脚本里的 python 片段：DAO 字段与实体注解是**业务文件**，只改它们（`dao_add` 每项第四个词是 dao 标签，缺省 `nosync`：v1.47.0 起 DAO 字段默认既落库又同步，只写 `persist` 也会发给客户端，所以 helper 缺省写 `nosync` 让账本、回执、种子这类字段只落库，要给客户端看的字段显式写 `persist,sync` 或 `nopersist,sync`；派对房间的 `Board` 写 `nopersist,sync`、`Coins` 写 `persist,sync`）；组件、访问器、Sender 由 `roost generate` 生成，不手改生成文件（SLG-INTEGRATION §3.1 第 3～4 步）。
 - 用 `-practice` 原名（如 `MOD=example.com/slg-practice`）时 `fix_mod` 是空操作；自定 module 名必须做。只替换 import 路径，夹具里 `"moba-practice"` 这类普通字符串不动。
 
 ### 3.3 按玩法 add / 填字段 / 拷夹具
@@ -172,7 +172,7 @@ v1.35.0 起（v1.36.0 补齐闭环与 SyncProbe）13 类网络验收已覆盖既
 | 类型 | 结论 | 原因（出处） |
 | --- | --- | --- |
 | FPS / 动作射击 | 不建议 | 现有心跳调度最短 50ms（guide/10-time.md §4A），不提供更高频的该心跳档位；这不是 Sync 发送上限，on_change 在 handler 提交、确认与解锁后汇总唤醒（guide/04-sync.md §3）。高频动作玩法还缺专门验收；无延迟补偿 / 命中回溯、无通用客户端预测（physicsroom 的 Unity 预测只针对物理闯关，KNOWN-LIMITS“UGC 物理闯关”）；接入层只有 TCP（§5 #10） |
-| 无缝开放世界（多进程分区） | 需框架先补 | Player 静态 sid、无动态跨进程迁移与无缝边界，Interest 按进程（MMORPG-INTEGRATION §6）；现有只能“同进程多地图 + 按 sid 分服” |
+| 无缝开放世界（多进程分区） | 固定分区可做，容量未达标 | v1.47.0 起有 `cellworld` 模块（`modules/cellworld/README.md`，契约见 `gameplay/cellworld/README.md`）：固定网格、一个进程一个 Cell，Player 留在 Base 进程，场景角色与怪物由所在 Cell 执行，跨格移动、跨 Cell 攻击、死亡奖励与出生槽都有正式路径。不支持动态拆格、一个进程多个 Cell、跨多个 Cell 的原子战斗结算；千人 / 50ms 状态同步目标在本机没有通过（`docs/performance/CELLWORLD.md`），Linux / 跨机 / 生产 Redis HA 没有实跑。用户要做时如实说明容量结论，按 game-demo 的 `game/partition` 接线，并把容量验收写进说明文档的限制 |
 | MOBA 状态同步 / RTS | 暂缓 | 阵营视野挂接几十个、必须 ApplyAsync 并按自身密度压测（guide/04-sync.md §2 选型表）；无纵切、无容量数据。帧同步 MOBA 走 moba-lockstep |
 
 用户坚持做这些类型时：如实说明缺口与出处，提议先做框架设计讨论，不要用现有零件拼一个“能跑”的假 demo。
