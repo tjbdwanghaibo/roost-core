@@ -105,9 +105,9 @@
 
 ## 验证范围
 
-`roost module verify` 跑 32 条场景（`^TestMailbox`：`game/handler` 14 条、`game/mailbox` 10 条、`game/controllers/mailbox` 8 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
+`roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/mailbox` 10 条、`game/controllers/mailbox` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
 
-场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。没有跑过的：经 NATS 的 mail 客户端、Redis 存储、超时与重投、Nest 调用因等结果超时返回错误而事务其实已提交的那条路径（重试会在账本上认出来，但没有用例）。
+场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。Nest 调用因等结果超时返回错误而事务其实已提交的那条路径有端点场景（`TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce`：这一次答错误码并归还预留，重试在账本上认出这封邮件、不发第二笔、补上确认）。没有跑过的：经 NATS 的 mail 客户端、Redis 存储、mail 服务一侧的超时与重投。
 
 ## 与 profile 的升级奖励联动
 

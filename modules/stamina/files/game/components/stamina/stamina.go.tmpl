@@ -169,7 +169,11 @@ type StaminaRefillResult = view.StaminaRefillResult
 // 请求不带业务键：紧接着重发的请求不会重复扣钱（第一次成功之后体力已满，第二次得到 stamina_full）；
 // 两次之间又消耗过体力的重发，会被当成新的一次购买。
 func (component *Component) Refill(nowUnixMilli int64) (StaminaRefillResult, error) {
-	rules := component.staminaRules()
+	return component.refill(nowUnixMilli, component.staminaRules(), component.staminaRefillPrice)
+}
+
+// refill 是 Refill 的本体，规则与价格由调用方给：组件包的测试用它覆盖规则文件造不出的价格（免费、负数）。
+func (component *Component) refill(nowUnixMilli int64, rules StaminaRules, price func(nth int32) int64) (StaminaRefillResult, error) {
 	state := component.owner.Dao().GetStamina()
 	value, _ := staminaSettle(state.GetValue(), state.GetSettledAt(), nowUnixMilli, rules.Max, rules.RegenMillis)
 	if value >= rules.Max {
@@ -184,7 +188,7 @@ func (component *Component) Refill(nowUnixMilli int64) (StaminaRefillResult, err
 		return StaminaRefillResult{}, apperrors.ErrStaminaRefillLimit
 	}
 	wallet := component.owner.Wallet()
-	cost, balance := staminaRefillCost(component.staminaRefillPrice(count+1)), wallet.Balance()
+	cost, balance := staminaRefillCost(price(count+1)), wallet.Balance()
 	if cost > 0 {
 		// 先扣钱：它是最后一个可能拒绝的步骤，被拒时体力这边还一个字段都没写。
 		// 免费的那一次不调货币组件（它拒绝 0 金额的加减）。

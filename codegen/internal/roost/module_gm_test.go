@@ -18,7 +18,7 @@ func TestModuleGMScenariosAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("combined: %v %+v", err, report)
 	}
-	want := map[string]int{"gm": 9, "wallet": 17, "bag": 20, "profile": 20, "mailbox": 32, "rehome": 44, "mailbox+bag": 9, "mailbox+profile": 10, "wallet+gm": 4, "bag+gm": 4, "profile+gm": 4, "mailbox+gm": 4, "rehome+gm": 4, "enter": 29, "enter+profile": 3, "profile+enter": 4, "mailbox+enter": 5, "rehome+enter": 5}
+	want := map[string]int{"gm": 9, "wallet": 17, "bag": 20, "profile": 20, "mailbox": 33, "rehome": 44, "mailbox+bag": 9, "mailbox+profile": 10, "wallet+gm": 4, "bag+gm": 4, "profile+gm": 4, "mailbox+gm": 4, "rehome+gm": 4, "enter": 29, "enter+profile": 3, "profile+enter": 4, "mailbox+enter": 5, "rehome+enter": 5}
 	if len(report.Modules) != len(want) {
 		t.Fatalf("rows: %+v", report.Modules)
 	}

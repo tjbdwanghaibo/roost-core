@@ -1,11 +1,20 @@
 package stamina
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"math"
 	"testing"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/view"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// 这里直接测三个纯函数：结算公式 staminaSettle、发放的截断 staminaGrantable、购买的扣费 staminaRefillCost。
+// 这里直接测三个纯函数（另有一条用替身宿主测免费补满，见文件末尾）：结算公式 staminaSettle、发放的截断 staminaGrantable、购买的扣费 staminaRefillCost。
 // 极端的数与改过的规则（不为正的恢复周期、接近 int64 上限的时刻、调高或调低的上限、存着的体力比硬顶还高、
 // 不为正的价格）经 Nest 场景造不出来：场景用的是规则文件里的缺省值。经真实事务的场景在 game/handler/stamina_test.go。
 // 用例里的 100、300000、999 是写死的上限、周期与硬顶，不引用规则文件。
@@ -125,3 +134,90 @@ func TestStaminaRefillCostIsNeverNegative(t *testing.T) {
 		}
 	}
 }
+
+// 免费的一次补满（价格为 0，例如每天第一次免费）：补到上限、次数照记，但不调货币组件——它拒绝 0 金额的加减，
+// 调了整次补满就失败。第二次按规则收钱。规则文件的缺省价格没有免费档，经 Nest 的场景造不出来，这里用组件的
+// refill 直接给价格，宿主是只实现 Dao / Wallet 的替身（真实的 PlayerDao，记账的钱包），每一步在一笔
+// 替身提交器的 Nest 事务里（DAO 的 setter 只能在事务里调）。
+func TestStaminaFreeRefillFillsWithoutTouchingTheWallet(t *testing.T) {
+	const start = int64(1_800_000_000_000)
+	owner := &staminaTestOwner{dao: db.NewPlayerDao(), wallet: &staminaTestWallet{balance: 500}}
+	owner.dao.SetId(94001) // 持久变更要有文档键
+	component := &Component{owner: owner}
+	rules := StaminaRules{Max: 100, HardCap: 999, RegenMillis: 300_000, RefillDailyLimit: 3}
+	firstFree := func(nth int32) int64 {
+		if nth == 1 {
+			return 0
+		}
+		return 50 * int64(nth)
+	}
+	inTransaction := func(step func() error) {
+		t.Helper()
+		if _, err := nest.RunIsolatedTransaction(context.Background(), staminaTestCommitter{}, "stamina_free_refill_test", func() (any, error) { return nil, step() }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spendTo := func(value, at int64) {
+		inTransaction(func() error {
+			owner.dao.GetStamina().SetValue(value)
+			owner.dao.GetStamina().SetSettledAt(at)
+			return nil
+		})
+	}
+	refill := func(now int64) (result StaminaRefillResult) {
+		inTransaction(func() (err error) {
+			result, err = component.refill(now, rules, firstFree)
+			return err
+		})
+		return result
+	}
+	spendTo(40, start)
+	if result := refill(start + 1000); result != (StaminaRefillResult{Value: 100, Cost: 0, Balance: 500, Count: 1}) || len(owner.wallet.adds) != 0 {
+		t.Fatalf("free refill = %+v, wallet calls %v; want value 100, cost 0, balance 500, count 1 and no wallet call", result, owner.wallet.adds)
+	}
+	state := owner.dao.GetStamina()
+	if state.GetValue() != 100 || state.GetSettledAt() != 0 || state.GetRefillCount() != 1 || state.GetRefillDay() == 0 {
+		t.Fatalf("after the free refill the state is value %d, settledAt %d, day %d, count %d", state.GetValue(), state.GetSettledAt(), state.GetRefillDay(), state.GetRefillCount())
+	}
+	// 同一业务日的第二次：按规则收 100。
+	spendTo(40, start+2000)
+	if result := refill(start + 3000); result != (StaminaRefillResult{Value: 100, Cost: 100, Balance: 400, Count: 2}) || len(owner.wallet.adds) != 1 || owner.wallet.adds[0] != -100 {
+		t.Fatalf("second refill = %+v, wallet calls %v; want cost 100, balance 400, count 2 and one -100", result, owner.wallet.adds)
+	}
+}
+
+// staminaTestCommitter 是替身提交器：不落盘，一律接受。
+type staminaTestCommitter struct{}
+
+func (staminaTestCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+// staminaTestOwner 只实现组件用到的 Dao 与 Wallet；别的方法来自嵌入的 nil 接口，调到就 panic。
+type staminaTestOwner struct {
+	view.PlayerEntity
+	dao    *db.PlayerDao
+	wallet *staminaTestWallet
+}
+
+func (owner *staminaTestOwner) Dao() *db.PlayerDao  { return owner.dao }
+func (owner *staminaTestOwner) Wallet() view.Wallet { return owner.wallet }
+
+// staminaTestWallet 照货币组件的规则拒绝 0 金额与透支，并记下每次 Add。
+type staminaTestWallet struct {
+	balance int64
+	adds    []int64
+}
+
+func (wallet *staminaTestWallet) Apply(string, int64) (int64, error) {
+	return wallet.balance, errors.New("stamina test wallet: Apply is not used by stamina")
+}
+
+func (wallet *staminaTestWallet) Add(delta int64) (int64, error) {
+	wallet.adds = append(wallet.adds, delta)
+	if delta == 0 || wallet.balance+delta < 0 {
+		return wallet.balance, fmt.Errorf("stamina test wallet: refused %d with balance %d", delta, wallet.balance)
+	}
+	wallet.balance += delta
+	return wallet.balance, nil
+}
+
+func (wallet *staminaTestWallet) Balance() int64 { return wallet.balance }

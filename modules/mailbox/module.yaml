@@ -22,7 +22,7 @@ errcodes: [mailbox_invalid, mailbox_attachment]
 verify:
   packages: [./game/handler, ./game/mailbox, ./game/controllers/mailbox]
   run: ^TestMailbox
-  pass: 32
+  pass: 33
 with:
   enter:
     summary: 玩家进入游戏时把属于他的全服邮件合并进邮箱（PullBroadcasts）；画像缺省取首次进入的时间，会话带着 account 的角色创建时间与区服时改用它们

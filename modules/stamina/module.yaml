@@ -18,7 +18,7 @@ errcodes: [stamina_invalid, stamina_short, stamina_full, stamina_refill_limit]
 verify:
   packages: [./game/handler, ./game/components/stamina]
   run: ^TestStamina
-  pass: 25
+  pass: 26
 with:
   rules:
     summary: 在 Player 锁内导出本模块规则到统一规则快照
