@@ -39,6 +39,10 @@
 
 **结论（2026-11-10 追加，已证实；已修复，随 v1.43.0 发布）**：不是主视野的结算时机，也不是 `preserveDirty`（它只用于周期类型）。根因在 on_change 冻结：`SubjectSyncState.FreezeSyncViews` 在冻结槽已有内容或同一 subject 的捕获在途时一律升成全量（Resync），在途捕获提交后这份冻结也不释放。用例里判重、什么都不写的第二次 `SetParams` 落在后台复制循环推送第一次改动、尚未提交版本的窗口里时，留下一份过时冻结，第二次改动因“已有冻结”升成全量；落在第一次改动的冻结尚未被取走时，第一次改动升成全量（§27.3 末条记的现象）。在 Flush 推送与提交之间加 30ms 诊断延时可稳定复现原文，诊断日志点名了“在途”与“已有冻结”两步。修法：冻结不再因忙升全量，过时的增量由已有的基线校验拒绝复用、在锁内按新基线重新捕获；同代际的过时冻结随提交释放。entitysync 层有确定性的红绿回归（Push 钩子，不靠计时），game-demo 用例收紧为两次改参数都必须是增量。复现、前后对照与变异见[证据](../entitysync-resync-flake-20261110/README.md)、CHANGELOG `[Unreleased]`。
 
+**频率原因（2026-11-13 从 KNOWN-LIMITS“同步：尚未确认的偶发与疑点”移入）**：
+
+- **建筑进主视野后偶发频率变高的原因**（根因已修复，见本节上一段）：建筑进主视野之后频率变高的具体原因尚未确认（只影响时序窗口的宽窄，不影响根因结论）。
+
 ## 2026-11-09：类型调度框架与 demo 生产接线已实现：原两项去重问题
 
 当时待实施的原两项去重问题（T01 / T02）已修复，客户端岸线的 C# 算法层已实现（Unity 表现未做），均随 v1.43.0 发布，见[地形进度总表](../../TERRAIN-STATUS.md)。
@@ -172,3 +176,28 @@ RV-20261107-01 已修复（未发版，见 CHANGELOG `[Unreleased]`）：原结�
 ## 2026-10-31：房间内同步与 self_sync 同进程
 
 - **房间内同步与 self_sync 同进程：已确认并提供正式入口**（2026-10-31，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-room-sync-groups.md)）。结论：①业务自建 Manager 经 `NestOptionWithEntitySync` 交给带 self_sync 的 Nest Mod 会被静默覆盖——已修，`Provide` 返回 `ErrEntitySyncObserverConflict`；②`policy.Group` 挂到 self_sync 的 Manager 上线格式能共存（同一会话、按命名空间分流），但会话归自身视图，登录前 `Join` 被拒、重连后组订阅静默缺失——由 `policy.GroupView` + `wiring/selfsync.Groups` + `access.player.sync_groups` 取代（[ENTITY_SYNC](../../../framework/ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)）。
+
+## 2026-11-05～06：联盟 Join 的 Mongo 命令数与 effect outbox workers 缺省
+
+2026-11-13 从 KNOWN-LIMITS“Remote：遗留”的“单实例分散 `Join` 的目标 1000 次/秒”条下移出的两个子条目（已完成的改动与已定的缺省；“到不了 1000/s”仍留在原条）：
+
+- **每次 `Join` 的 Mongo 命令数：联盟去掉可靠 effect 与守卫快照后少约 7 条**（维护者 2026-11-05，[方案 §2.5A](../../FEATURE-2026-11-04-alliance-service.md#25a-守卫是名单的缓存惰性自愈2026-11-05)；同机修前 `86658aa3` / 修后交替 3 轮，profiler，[基准页](../../../performance/benchmarks/alliance-join-1000-20261105/README.md#effect-持久性与守卫自愈2026-11-05-晚)）：不计 outbox 后台轮询，同实例新玩家 `Join` 27.2～27.3 → 20.2、`Leave` 23.0～23.1 → 16.2～16.3、守卫已存在 `Join` 23.0～23.1 → 16.2～16.3，跨实例 `Join` 50.8～51.8 → 40.1～40.2、`Leave` 32.8～35.3 → 26.9～27.9；少掉的是 effect outbox、消费方 inbox 与守卫快照。重试版吞吐 128 并发新玩家 `Join` 229～270 → 272～353、256 并发 197～246 → 259～299 次/秒（区间部分交叠，本机负载噪声内方向确定、幅度不精确）。仍到不了 1000/s。
+- effect outbox `dataengine.outbox.workers` 缺省已由 2 改为 8（维护者 2026-11-05 决定 B，2026-11-06 定为正式缺省 8，不再是试用值）。修后代码配 2 个 worker 时压测结束 outbox 积压 1.5～1.9 千条、配 8 个时不到 100 条，`Join` 吞吐在本机噪声内看不出差别。
+
+## 2026-10-29：旧 Saga 路径的容量数字
+
+2026-11-13 从 KNOWN-LIMITS“能力与验证边界”表与“待补测”移出：测的是已删除的旧协调器与旧夹具（`298e4396` 删除 `performance_real_integration_test.go` 等），对正式实现不再适用。
+
+| 项 | 当前结论 | 后续入口 |
+| --- | --- | --- |
+| Saga补偿容量 | **旧 Redis / 旧原生路径的数字，第 4 批之后不再适用（正式实现的数字见上文 [Saga](../../KNOWN-LIMITS.md#saga) 的“正式实现的性能”条）**。Mongo 步骤路径 v1.29 各 10 分钟：正向 20/s P99 0.62s、全补偿 10/s P99 0.61s（服务端口径 0.59 / 0.58s），十个分钟段无增长趋势，核对通过。2026-10-20 夜间更高档位（10 分钟）：正向 30/s 完成率 28.4/s、P99 141.7s、17302 笔以补偿 / 失败结束，全补偿 15/s 完成率 14.0/s、P50 单调增长到 49.5s、866 笔 failed——两档都饱和（outbox / lease 排空、存储与发布零失败）。单进程上限在正向 20～30/s、全补偿 10～15/s 之间 | 中间档位（25、12）；真实步骤、混合负载与生产存储另测 |
+| Saga 原生步骤容量（单进程） | **旧 Redis / 旧原生路径的数字，第 4 批之后不再适用（正式实现的数字见上文 [Saga](../../KNOWN-LIMITS.md#saga) 的“正式实现的性能”条）**。2026-10-20 夜间 15 分钟：正向 8/s（两次）与全补偿 5/s 都 0 笔终态不对、核对通过；服务端 P50 559 / 549ms、713ms（P50 < 1s 成立），**P99 0.92～3.9s**，有分钟级尖峰（各段 Mongo 命令最大值同时到 750～900ms，接近投影器容量时积压放大）；两次正向 8/s 的 P99 差 4 倍。原先 guide/06 §5、生成的 `sagaCapacitySummary` / `steps.go` 注释与 `roost help saga` 里的“P99 0.8 / 1.2 s”来自 2 分钟单样本，15 分钟样本上不成立；2026-10-21 维护者批准，这几处与 CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK 已改为 15 分钟口径（P50 < 1s、P99 0.9～3.9s、WAL 放快盘、Mongo 步骤上限区间）；限制与维护者决定见上文 [Saga](../../KNOWN-LIMITS.md#saga) | [SAGA-CHECKPOINT](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-CHECKPOINT-20261018.md) 复跑入口；P99 尖峰的 Mongo 侧原因 |
+
+5. **Saga Mongo 步骤中间档位（历史，随旧协调器关闭）**：以下数字测的是已删除的旧协调器与旧压测夹具 `TestRealSagaPerformance`（saga JetStream 切换第 4 批 `298e4396` 删除），对正式实现不再适用，也不能用当前代码复跑；正式实现（含 Mongo 步骤）的容量由 `scripts/perf/saga-js-scan.sh` 测，见上文 [Saga](../../KNOWN-LIMITS.md#saga) 的“正式实现的性能”条。原记录：20 / 10 稳定、30 / 15 饱和，25 / 12 未测；2026-10-22 重跑（[NIGHT-20261022](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261022.md)）：正向 30/s 仍饱和（另有 3 笔 ManualRequired，夜间 0，尚未逐个核对），全补偿 15/s 这次稳定（14.96/s、0 笔终态不对、P99 3.0s），15/s 是边界档、两晚环境不同，需要多样本；旧夹具 `TestRealSagaPerformance` 当时限制单次 ≤10 分钟。10-23 修复原子认领 + 显式两个消费 worker 后，正向 30/s × 10 分钟全成功；旧串行容量不覆盖新配置，全补偿的新配置仍待验证。
+
+## 2026-10-22：历史压测两项待补测（Sync P99 增量来源、Remote 80TPS 夜间 p99）
+
+2026-11-13 从 KNOWN-LIMITS“待补测（历史压测遗留）”第 2、3 项移出；两项里仍未确认的部分记在 KNOWN-LIMITS“能力与验证边界”的“重档总体”“Remote容量”两行。
+
+2. **Sync 提交→客户端 P99 +0.6～1.1ms 的来源**：A-B-A-B 判断为代码带来，但没有单变量对照，具体提交尚未确认。2026-10-22 发版候选对 v1.29.0 的 A-B-A-B（[NIGHT-20261022](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261022.md)）：发版候选反而低 2.4～2.7ms（两对一致），所以至少相对 v1.29.0 没有这类增加；相对 v1.27.0 的那段增加的来源仍未确认。
+3. **Remote 80TPS 夜间 p99 偏高**：2026-10-21 同机对照（各 1 次）v1.27.0 / HEAD p99 同为 263ms，倾向环境条件；夜间共享 Mongo 主节点变慢的原因尚未确认。2026-10-22 发版候选复测（[NIGHT-20261022](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261022.md)） p99 287ms、共享 Mongo 慢操作 0，与“环境条件”一致。
