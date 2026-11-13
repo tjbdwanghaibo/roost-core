@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"example.com/planet/game/clientsync"
+	gameprofile "example.com/planet/game/components/profile"
 	playerentity "example.com/planet/game/entities/player"
 	worldentity "example.com/planet/game/entities/world"
 	generated "example.com/planet/loadtest/protocol"
@@ -206,7 +207,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	}()
 	initial := wait(robot.SyncFull)
 	confirm(initial)
-	base := initial.exp + int64(initial.level)*playerentity.ProfileExpPerLevel
+	base := initial.exp + int64(initial.level)*gameprofile.ProfileExpPerLevel
 	var completed int64
 	send := func() {
 		t.Helper()
@@ -233,7 +234,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 		}
 		v := wait(robot.SyncDelta)
 		completed++
-		if v.exp+int64(v.level)*playerentity.ProfileExpPerLevel != base+completed {
+		if v.exp+int64(v.level)*gameprofile.ProfileExpPerLevel != base+completed {
 			t.Fatal("client state differs from acknowledged changes")
 		}
 		confirm(v)
@@ -330,7 +331,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	probe.CancelConnection(connection)
 	connect()
 	recovered := wait(robot.SyncFull)
-	if recovered.exp+int64(recovered.level)*playerentity.ProfileExpPerLevel != base+completed {
+	if recovered.exp+int64(recovered.level)*gameprofile.ProfileExpPerLevel != base+completed {
 		t.Fatal("reconnect did not recover authoritative state")
 	}
 	confirm(recovered)

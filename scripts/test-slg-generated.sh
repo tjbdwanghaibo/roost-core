@@ -64,8 +64,10 @@ for name, fields in {
     text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"persist"`\n' for field, typ, key in fields))
     assert 'db=main' in text, p  # 骨架写逻辑库 main；真实模式的唯一物理库由测试夹具的映射给出
     if name == 'alliance_authority':
-        # Remote 托管实体由每个进程从同一个库提交 / 加载，DAO 必须是 dbscope=global。
-        text = text.replace('db=main', 'db=main dbscope=global')
+        # Remote 托管实体由每个进程从同一个库提交 / 加载，DAO 必须是 dbscope=global；
+        # 骨架缺省写 dbscope=sid（v1.47.0 起），这里替换掉它而不是再追加一个。
+        assert 'dbscope=sid' in text, p
+        text = text.replace('dbscope=sid', 'dbscope=global')
     p.write_text(text)
 # 地块是被许多玩家争用的世界对象，锁序低于 Player；联盟权威是 Remote 托管实体。
 p = root / 'game/entities/tile/entity.go'
