@@ -152,7 +152,6 @@ roost add component inventory --entity player
 roost add mod nest -service game
 roost add handler use_item --entity player --component inventory
 roost add endpoint use_item --handler inventory
-roost add lifecycle player --service game
 roost add endpoint enter_game --handler player --lifecycle player
 roost add skill fireball
 roost add table monster
@@ -189,11 +188,11 @@ roost add rpc guild -service game
 
 | 命令 | 必需参数 | 生成/修改 | 下一步 |
 | --- | --- | --- | --- |
-| `add access player` | 多 Service 时 `--service` | roost.yaml、playeraccess、access Mod、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
+| `add access player` | 多 Service 时 `--service` | roost.yaml、access Mod（internal/access/player，派发层用 core 的 infra/network/playeraccess）、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
 | `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
-| `add lifecycle <entity>` | 多 Entity 时 `--entity` | `game/lifecycle/<entity>.go` | 登录/创角边界从 Registry 构造 |
+| （生成）实体 lifecycle | 无 | `game/entities/<entity>/lifecycle_gen.go`（`roost generate`；v1.47.0 起不再有 `add lifecycle`） | 登录/创角边界从 Registry 构造（`<entity>.LifecycleFromRegistry`） |
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
-| `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与 `add lifecycle` | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
+| `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与该实体 | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
 | `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog 与 catalog_test.go（`go test ./game/skills/` 编译全部定义，doctor `skills:catalog` 运行它） | 配置 CompileEnvironment 与 Host；服务 Init 调 CompileAll |
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
@@ -231,7 +230,7 @@ Nest 冷加载在 Data Engine 里找不到 Entity，回复带稳定码 `errcode.
 EnterGame 都回复 `errcode.CodeEntityDeleted = 3`（`entity_deleted`），`GetOrCreate` 不重建（DESIGN-TODO D10）。
 生成 lifecycle 的 `Create` 不读存储：只给 id-gen 发的新 ID 用，复用删过档的 ID 会在投影时版本冲突、进程 fail-stop。controller 需要 `Registry()`：新生成的 controller（`add endpoint`
 与 protocol 生成器两处骨架）都带；早先生成的 controller 归业务、不改写，缺少时 add 报错并说明要补的方法。
-`roost project doctor --workflow first-business` 的 `workflow:login` 检查是否有 controller 导入 `game/lifecycle`
+`roost project doctor --workflow first-business` 的 `workflow:login` 检查是否有 controller 导入实体包（`game/entities/<e>`，lifecycle_gen.go 在那里）
 并调用 `GetOrCreate`。完整顺序与编辑点见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md`，边界契约见 `docs/PROTOCOL_TO_NEST.zh-CN.md`，可运行 TCP 接入与帧协议见
 `docs/PLAYER_ACCESS_TCP.zh-CN.md`。
@@ -786,7 +785,7 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@latest \
   -def ./protocol/def \
   -proto ./protocol/proto -pb ./protocol/pb \
   -msgid ./protocol/msgid -bind ./protocol/player_bind \
-  -handlers ./game/protocol_handlers \
+  -handlers ./internal/access/player/protocols_gen.go \
   -manifest ./protocol/protocol_manifest.json
 ```
 

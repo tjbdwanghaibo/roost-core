@@ -307,7 +307,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 | 角色 | 管什么 | 现成的 |
 | --- | --- | --- |
-| account（托管的框架服务，全局、无状态） | 渠道身份 → 账号；账号在每个服上的玩家号；签发与校验全部票据 | 框架自带；渠道验签在工程的 `internal/service/account/login_channels.go` 接 |
+| account（托管的框架服务，全局、无状态） | 渠道身份 → 账号；账号在每个服上的玩家号；签发与校验全部票据 | 框架自带；渠道验签在工程的 `services/account/login_channels.go` 接 |
 | 登录入口（HTTP，挂在 account 的进程上） | 登录、区服清单与推荐、换进服票据与该连的地址 | 模块 `portal` |
 | Gate / 玩家 TCP | 握手时把票据交给 account 校验，没有映射就新建 | 模块 `login` |
 | game | 告诉客户端要不要先新建；新建（角色名在这里起）；进入 | 模块 `enter`（装了 `profile` 时名字进档案） |
@@ -455,7 +455,7 @@ func init() {
 }
 ```
 
-（`gameenter` 是 `<module>/game/enter`。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `player.OnFirstEnter` 登记事务内钩子（配方已使用）。
+（`gameenter` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `player.OnFirstEnter` 登记事务内钩子（配方已使用）。
 
 **enter 有两条路**。会话是用进服票据握手的（第 3A 步的链路，装了 `login` 时）：玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`；建档、名字、首次初始化、“建成了”的标记在同一笔事务里。别的会话：`EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码，初始发放只写一处。要在“新建”这一步加自己的检查或写入，用 enter 的登记点（`OnCreating`、`OnCreatePrepare`、实体包的 `OnCreate`，见它的 README），不要改它的端点。
 
@@ -478,7 +478,7 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 
 两个及以上实体需要同样的逻辑（玩家背包与公会仓库、玩家与全服各有一份活动进度、玩家与怪物都有属性），**做成共用组件，不给每个实体复制一份**。样板是 `modules/activity`（同一个组件挂在 Player、全服 World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
 
-1. **共用逻辑放进独立的包**（如 `game/<功能>/`）：组件只放逻辑，通过宿主接口拿状态，不写死某个实体类型。
+1. **共用逻辑放进独立的包** `game/components/<功能>/`，主文件与包同名（`game/components/<功能>/<功能>.go`；样板是 `modules/bag`、`modules/wallet`、`modules/attribute`）：组件只放逻辑，通过宿主接口拿状态，不写死某个实体类型。
 
    ```go
    // Owner 是共用组件的宿主：每个实体只提供自己 DAO 里的那份状态与归属。
@@ -503,7 +503,7 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 
 | 需求 | 放哪里 | 依据 |
 | --- | --- | --- |
-| 缓存、索引、路由表、场景注册表、从配置或别的数据推导出来、丢了能重建的东西 | **manager**：实现 `app.IManager`（Start / Stop），登记在 `internal/service/<服务>/managers.go` 的 `Managers()` | 不进 Nest 事务，自己加锁，可以并发读；按 `DependsOn()` 的依赖顺序启动、反序停止；改动不随事务回滚 |
+| 缓存、索引、路由表、场景注册表、从配置或别的数据推导出来、丢了能重建的东西 | **manager**：实现 `app.IManager`（Start / Stop），登记在 `game/managers/managers.go` 的 `Managers()`（game 服务；v1.47.0 之前的工程在 `internal/service/<服务>/managers.go`） | 不进 Nest 事务，自己加锁，可以并发读；按 `DependsOn()` 的依赖顺序启动、反序停止；改动不随事务回滚 |
 | 全服状态，要和玩家的修改在同一笔事务里成败（全服限量、全服计数、拍卖库存） | **World 上加组件**：`"$ROOST" add component <Feature> --entity World`，状态放在 World 的 DAO 里 | 走 Nest 的锁与事务，失败一起回滚；World 每个进程唯一（ID 是 sid）、`Service.Init` 里已确保存在，不用自己处理创建顺序 |
 | 同上，但不需要落盘 | 同上，DAO 字段标 `dao:"nopersist"` | 只在内存，进程结束就没了 |
 | 很热：几乎每个玩家请求都要写 | **先不要放进单个实体** | 一个实体同一时刻只有一笔事务拿得到锁，全服的写都排在这把锁上。能按 key 拆就拆成多个实体（第 4 步“独立实体”），或者 manager 里攒着、定时批量提交，作为限制写进说明文档 |
@@ -513,7 +513,7 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 **启动顺序（写代码前要知道）**：
 
 - 全部 Mod 先启动（含 Nest 与 ManagerMod，manager 在这一步按依赖顺序 Start），之后才执行 `Service.Init`，World 在那里建出或载入。所以 **manager 的 Start 里不能用 World**，要用就在第一次请求时再取。
-- 其余实体都是第一次访问时才加载或创建，**框架没有实体的启动顺序**：`EntityBuilderParam.LoadPriority` 目前没有被读取，`EntityLifetimeResident` 也只是声明，不会在启动时把实体建出来。几个单例必须在启动时按先后存在时，只能在 `Service.Init` 里照 `EnsureWorld` 的写法按顺序手写，并在报告里说明。
+- 其余实体都是第一次访问时才加载或创建，**框架没有实体的启动顺序**：`EntityBuilderParam.LoadPriority` 目前没有被读取，`EntityLifetimeResident` 也只是声明，不会在启动时把实体建出来。几个单例必须在启动时按先后存在时，只能在 `Service.Init` 里照 `EnsureWorld`（`game/entities/world/singleton.go`）的写法按顺序手写，并在报告里说明。
 
 ## 4C. 日志
 
@@ -586,6 +586,14 @@ go test -mod=mod ./...                                            # 其余生成
 - 记忆：`docs/DEMO.zh-CN.md` 是当前状态，`docs/DEMO-HISTORY.zh-CN.md` 是逐次变更（只追加）。动手前先读这两份。
 - skill 只读：不改 `.claude/skills/`、`.agents/skills/` 下的文件，也不改 Go 模块缓存里的 roost-core。发现 skill 有问题告诉用户。
 - roost-core 的版本以 `go.mod` 为准，未经用户同意不升级。
+
+## 目录
+
+- `game/entities/<实体>/`：实体本体、生成文件（`*_gen_wire.go`、`lifecycle_gen.go`）与每个组件一个薄接线文件（组件号、类型别名、注册工厂、实现 Owner）。
+- `game/components/<功能>/<功能>.go`：组件逻辑（经 Owner 宿主接口拿状态），模块之间的联动也放在对应功能的包里。
+- `game/login/`：登录链（票据校验、进入游戏的登记点、“先新建”、新建时的角色名校验）。
+- `game/managers/managers.go`：进程内 manager 的登记点；`game/handler/`：Nest handler；`game/controllers/<功能>/`：协议入口。
+- `services/<托管服务>/`：托管框架服务的手写代码（collaborators、登录渠道、`services/account/portal/` 登录入口）；`internal/` 是生成的框架接线（`internal/access/player/protocols_gen.go` 是协议登记）。
 
 ## 工程约定
 

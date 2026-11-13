@@ -47,7 +47,7 @@
 | 多实体事务与锁序 | 一条消息锁多个实体，一起提交或一起回滚（转账、交易、组队领奖） | handler 开头写多个 Entity 参数，或 `target=` / `targets=`；锁档用 marker 的 `category=`（`entity.EntityCategoryWorld`、`PlayerScoped`、`Player`、`Other`） | 正式。只能访问已声明的目标，按锁档与 ID 顺序取锁；handler 内同步 Nest 请求被拒 | [Nest 与实体 §2](guide/02-nest-entity.md#2-锁与实体)、[demo 锁档](../../demo/WALKTHROUGH.md#实体锁档与跨实体事务) |
 | 查询后续行（Await） | handler 里发起外部查询，结果回来后在实体锁下继续；查询后才知道的新目标重新准入 | `framework/nest` 的 Await 与 `WithResumeTargets` | 正式 | [三池与 Await](NEST-AWAIT.md) |
 | 三池调度 | short / long 两个业务池加 io 池，按实体 kind 分流长短业务 | entity marker 的 `businessPool=short` 或 `long`；容量键 `nest.short.queue_capacity` | 正式。short 池内不得阻塞等待 | [三池与 Await](NEST-AWAIT.md#三种执行资源) |
-| 实体生命周期 | 登录加载、首次创建、销毁、删档 | `roost add lifecycle <Entity> --service <svc>`（生成 Get / Create / GetOrCreate / Destroy）；登录端点 `roost add endpoint <name> --handler <domain> --lifecycle <Entity>` | 正式。删档后同一 ID 不可重建；直接 Create 必须用新发的 ID | [Nest 与实体 §2](guide/02-nest-entity.md#2-锁与实体)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#删档后同-id-重建d10) |
+| 实体生命周期 | 登录加载、首次创建、销毁、删档 | `roost generate` 在每个实体包产出 `lifecycle_gen.go`（`<entity>.LifecycleFromRegistry`；Get / Create / GetOrCreate / Destroy，实现是 core 的 `wiring/entitylifecycle`）；登录端点 `roost add endpoint <name> --handler <domain> --lifecycle <Entity>` | 正式。删档后同一 ID 不可重建；直接 Create 必须用新发的 ID | [Nest 与实体 §2](guide/02-nest-entity.md#2-锁与实体)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#删档后同-id-重建d10) |
 | 冷加载 | 访问不在内存的实体时由 io 池从库加载，上线后新增的 DAO 按初值补空 | 自动；不在 getter 里做 I/O | 正式。旧 schema 与未来 schema 都拒绝加载 | [DataEngine §4](guide/03-dataengine.md#4-冷加载与-schema)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#新建实体落库与缺失-dao-补空r15维护者-2026-10-30) |
 | 实体归属服务 | 声明某类实体只由一个服务写，别的服务经 RPC 写 | marker `//roost:entity service=<服务名>`，改后先 `roost project sync` 再 `roost generate` | 正式。未声明时任何带 Nest 的服务都能写 | [项目生成器 §6.w](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#6w-实体归属服务roostentity-service) |
 | 单实体运维 | 踢下线、把一个实体从内存卸载后按库重载 | ops 命令 `entity.kick`、`entity.unload` | 正式。不是改档入口；运行期不得直接改权威集合 | [DataEngine 单实体运维](guide/03-dataengine.md#单实体运维命令d16) |
@@ -187,7 +187,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | `roost add entity` | Entity 骨架并分配 kind | `roost add entity <name>` | 正式 | 同上 |
 | `roost add component` | Component 骨架并接入 Entity | `roost add component <name> --entity <owner>` | 正式 | 同上 |
 | `roost add handler` | Nest handler 骨架 | `roost add handler <name> --entity <E> --component <C>` | 正式 | 同上 |
-| `roost add lifecycle` | 实体的加载、创建、销毁边界 | `roost add lifecycle <Entity> --service <svc>` | 正式 | 同上 |
+| 实体 lifecycle（生成） | 实体的加载、创建、销毁边界 | `roost generate` → `game/entities/<e>/lifecycle_gen.go`（v1.47.0 起不再有 `roost add lifecycle`） | 正式 | 同上 |
 | `roost add endpoint` | 协议到 Nest Sender 的映射 | `roost add endpoint <name> --handler <domain>` | 正式 | 同上 |
 | `roost add skill` | 技能 JSON 骨架与编译目录 | `roost add skill <name>` | 正式 | 同上 |
 | `roost add table` | 配置表 schema 骨架（`configs/schema/<name>.go`） | `roost add table <name>` | 正式 | 同上 |
@@ -279,7 +279,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| 登录与凭据 | 登录入口（HTTP 三步）→ 进服票据握手 → 服务器告知 → 先新建（带角色名）→ 进入；会话令牌握手的老路仍是登录端点加载或创建 Player | login / portal / servertime 模块；demo 自己的是渠道入口 `internal/service/account/login_channels.go`、`game/controllers/player/enter_game.go` 与 `enter_create.go`（归属、驻留表、登录预算） | 参考实现（demo），登录链路本身是现成模块。demo 渠道凭据不能用于生产；新链路只有离线场景，没有做过真实进程的实跑；连错服有两个码 | [登录](../../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入) |
+| 登录与凭据 | 登录入口（HTTP 三步）→ 进服票据握手 → 服务器告知 → 先新建（带角色名）→ 进入；会话令牌握手的老路仍是登录端点加载或创建 Player | login / portal / servertime 模块；demo 自己的是渠道入口 `services/account/login_channels.go`、`game/controllers/player/enter_game.go` 与 `enter_create.go`（归属、驻留表、登录预算） | 参考实现（demo），登录链路本身是现成模块。demo 渠道凭据不能用于生产；新链路只有离线场景，没有做过真实进程的实跑；连错服有两个码 | [登录](../../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入) |
 | 背包、经验与升级 | 一条玩家写请求从协议到 Nest 到 DAO 的完整链路 | `game/handler/`、`game/controllers/player/` | 参考实现（demo） | [链路](../../demo/WALKTHROUGH.md#链路) |
 | 升级发奖励邮件 | effect 与状态变更同一条 WAL 记录，消费者调 mail | mailbox 与 profile 联动，`MailboxProfileReward` 在升级事务中冻结奖励，模块消费并以 EffectID 发件 | 现成模块；缺省不发奖，工程定义连升总奖励 | [事件链](../../demo/WALKTHROUGH.md#事件链升级--奖励邮件事务性-outbox) |
 | 邮件列表与领附件 | 客户端这一半：列表、领取到背包 | 端点 + mail 访问器 | 参考实现（demo） | [邮件](../../demo/WALKTHROUGH.md#邮件列表与领附件客户端这一半) |

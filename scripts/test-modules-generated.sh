@@ -143,7 +143,7 @@ grep -q 'framework service mail: declared' "$review_root/add-batch2.log" && grep
 # 自带 Room 在已有业务工程上增量安装；其 Entity / DAO / lifecycle 与 owner 接线一次完成。
 commit_all batch2
 "$roost" module add room > "$review_root/add-room.log"
-[[ -f game/entities/room/entity.go && -f db/def/room.go && -f game/lifecycle/room.go ]]
+[[ -f game/entities/room/entity.go && -f db/def/room.go && -f game/entities/room/lifecycle_gen.go ]]
 expect_verify wallet=17 checkin=8 chat=10 enter=29 chat+enter=2 enter+profile=3 profile=20 bag=20 leaderboard=21 mailbox=32 mailbox+enter=5 mailbox+bag=9 mailbox+profile=10 room=22 profile+enter=4
 
 # A3: reuse the room installed above, and wire its persistent deadline atomically.

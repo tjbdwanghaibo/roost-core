@@ -45,7 +45,6 @@ roost add handler RenamePlayer --entity Player --component Profile
 roost add protocol RenamePlayer --group game --handler player
 # 编辑 DAO、Component、handler 与 Request 后
 roost add endpoint RenamePlayer --handler player
-roost add lifecycle Player --service game
 # 登录边界：客户端第一条请求先 EnterGame，保证玩家 Entity 已存在
 roost add protocol EnterGame --group game --handler player
 roost add endpoint EnterGame --handler player --lifecycle Player
@@ -60,7 +59,7 @@ go test ./...
 
 为什么要 EnterGame：Nest handler 只处理已存在的 Entity。从未登录过的玩家直接发 RenamePlayer，Nest 冷加载在
 Data Engine 里找不到他，客户端收到稳定码 `entity_not_found`（`errcode.CodeEntityNotFound = 2`），服务端不记
-ERROR。`--lifecycle Player` 生成的 endpoint 对 `context.PlayerID` 调 `lifecycle.PlayerFromRegistry(...).GetOrCreate`：
+ERROR。`--lifecycle Player` 生成的 endpoint 对 `context.PlayerID` 调 `player.LifecycleFromRegistry(...).GetOrCreate`（实体包里生成的 lifecycle_gen.go）：
 权威里确认不存在才创建，数据库 / 解码 / 超时错误照常返回，不当成“不存在”。已删档（DAO 文档只剩墓碑）的玩家
 这个 ID 不可再用：玩法请求与 EnterGame 都收到 `entity_deleted`（`errcode.CodeEntityDeleted = 3`），GetOrCreate 不会重建
 （维护者 2026-10-17 决定，DESIGN-TODO D10）。客户端收到 `entity_not_found` 时重新走 EnterGame 再重试即可；收到

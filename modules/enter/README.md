@@ -6,7 +6,7 @@
 
 ### 两条进入的路
 
-一条会话走哪条路由它的 claims（认证器在握手时写进会话的键值）决定，判断只有一处：`game/enter/enter_create.go` 的 `CreateFirst(claims)`。
+一条会话走哪条路由它的 claims（认证器在握手时写进会话的键值）决定，判断只有一处：`game/login/enter_create.go` 的 `CreateFirst(claims)`。
 
 | 路 | 什么时候走 | `EnterGame` 做什么 | 新玩家的档在哪里建成 |
 | --- | --- | --- | --- |
@@ -24,14 +24,14 @@
 ### 服务端入口
 
 - `game/controllers/enter` 的 `HandleEnterGame`、`HandleEnterCreate`：两个协议的端点。
-- `game/enter/enter.go` 的 `Enter(ctx, registry, entering, load)`：一次进入的骨架，顺序是进入前检查 → `load` → 进入钩子。工程改写进入端点时把自己的加载与初始化包成 `load` 交给它。
-- `game/enter/enter_create.go` 的 `EnterSession(ctx, registry, entering, Loads{LoadOrCreate, Existing})`：端点实际调的入口，按 `CreateFirst` 选一种 `load` 再走 `Enter`。
-- `game/enter/enter_create.go` 的 `Create(ctx, registry, creating, CreateSteps{Ensure, Commit})`：一次新建的骨架，六步见下面“一致性”。
-- `game/enter/enter_create.go` 的 `Assess(ctx, registry, entering, built)`：算出该告诉客户端什么（`Status{Code, Reason, NeedCreate}`），不推送、不断开。
+- `game/login/enter.go` 的 `Enter(ctx, registry, entering, load)`：一次进入的骨架，顺序是进入前检查 → `load` → 进入钩子。工程改写进入端点时把自己的加载与初始化包成 `load` 交给它。
+- `game/login/enter_create.go` 的 `EnterSession(ctx, registry, entering, Loads{LoadOrCreate, Existing})`：端点实际调的入口，按 `CreateFirst` 选一种 `load` 再走 `Enter`。
+- `game/login/enter_create.go` 的 `Create(ctx, registry, creating, CreateSteps{Ensure, Commit})`：一次新建的骨架，六步见下面“一致性”。
+- `game/login/enter_create.go` 的 `Assess(ctx, registry, entering, built)`：算出该告诉客户端什么（`Status{Code, Reason, NeedCreate}`），不推送、不断开。
 - `game/controllers/enter/enter_status.go` 的 `Announce(ctx, registry, entering, sessionID)`：调 `Assess`，把结果作为 `EnterStatus` 推给这条会话；进入前检查拒绝时推完等 `StatusCloseDelay`（300 毫秒）再断开这名玩家在本进程的全部会话。
-- 不经 `Enter` 的工程可以自己调 `RunEntering`、`RunEntered`、`RunCreating`、`RunCreatePrepare`（都在 `game/enter`）。
+- 不经 `Enter` 的工程可以自己调 `RunEntering`、`RunEntered`、`RunCreating`、`RunCreatePrepare`（都在 `game/login`）。
 - Nest handler（`game/handler/enter_*.go`，都不对客户端开放）：`handlerEnterInit`（加载或创建那条路的首次初始化）、`handlerEnterExisting`（只进入已建成的）、`handlerEnterCreate`（新建事务）、`handlerEnterBuilt`（只读，问“建成了没有”）。前三个是 `rollback=undo durability=strict`。
-- 组件 `EnterComp()`（`game/entities/player/enter_component.go`）：`Init(nowUnixMilli)`、`Existing()`、`Create(name, nowUnixMilli)`、`Built()`，只能在持有 Player 锁的 Nest 事务里调。
+- 组件 `EnterComp()`（逻辑在 `game/components/enter/enter.go`，Player 的薄接线在 `game/entities/player/enter_component.go`）：`Init(nowUnixMilli)`、`Existing()`、`Create(name, nowUnixMilli)`、`Built()`，只能在持有 Player 锁的 Nest 事务里调。
 
 ### 登记点
 
@@ -39,13 +39,13 @@
 
 | 登记点 | 所在文件 | 什么时候被调 | 在不在事务里 | 失败的后果 |
 | --- | --- | --- | --- | --- |
-| `OnEntering(name, Check)` 进入前检查 | `game/enter/enter.go` | 加载或创建 Player 之前；`EnterGame`、`EnterCreate`、`Announce` 用的是同一组 | 不在，只读 | 第一个拒绝就停下，端点把它的码答给客户端；不加载、不创建、不跑钩子。拒绝要返回带码错误 |
-| `OnEntered(name, Hook)` 进入钩子 | `game/enter/enter.go` | 首次初始化提交之后，每次进入都调 | 不在 | 只记一条 Warn，不让登录失败，下一次进入再调 |
+| `OnEntering(name, Check)` 进入前检查 | `game/login/enter.go` | 加载或创建 Player 之前；`EnterGame`、`EnterCreate`、`Announce` 用的是同一组 | 不在，只读 | 第一个拒绝就停下，端点把它的码答给客户端；不加载、不创建、不跑钩子。拒绝要返回带码错误 |
+| `OnEntered(name, Hook)` 进入钩子 | `game/login/enter.go` | 首次初始化提交之后，每次进入都调 | 不在 | 只记一条 Warn，不让登录失败，下一次进入再调 |
 | `player.OnFirstEnter(name, FirstEnterHook)` 首次初始化钩子 | `game/entities/player/enter_hooks.go` | 新玩家建成的那一笔事务里（两条路都经过它） | 在，同一把 Player 锁 | 整笔回滚，下次再做；只能改当前玩家的 DAO，不能调服务、发消息 |
 | `firstEnter` | `game/entities/player/enter_first.go` | 同上，排在 `OnFirstEnter` 的钩子之前 | 在 | 同上。这个文件归工程，初始发放写在这里 |
-| `RequireCreateFirst(name, rule)` | `game/enter/enter_create.go` | 每次判断会话走哪条路 | 不在 | 全工程只能登记一条，第二次登记 panic |
-| `OnCreating(name, CreateCheck)` 新建前检查 | `game/enter/enter_create.go` | `EnterCreate` 里，进入前检查之后、建档之前 | 不在，只读 | 带码拒绝，什么都没写。名字的格式规则放这里 |
-| `OnCreatePrepare(name, CreateStep)` 新建步骤 | `game/enter/enter_create.go` | 空档建好之后、新建事务之前 | 不在 | 这一次新建到此为止，玩家仍是没建成；必须可以重复执行。全服唯一占名放这里 |
+| `RequireCreateFirst(name, rule)` | `game/login/enter_create.go` | 每次判断会话走哪条路 | 不在 | 全工程只能登记一条，第二次登记 panic |
+| `OnCreating(name, CreateCheck)` 新建前检查 | `game/login/enter_create.go` | `EnterCreate` 里，进入前检查之后、建档之前 | 不在，只读 | 带码拒绝，什么都没写。名字的格式规则放这里 |
+| `OnCreatePrepare(name, CreateStep)` 新建步骤 | `game/login/enter_create.go` | 空档建好之后、新建事务之前 | 不在 | 这一次新建到此为止，玩家仍是没建成；必须可以重复执行。全服唯一占名放这里 |
 | `player.OnCreate(name, CreateHook)` 新建钩子 | `game/entities/player/enter_hooks.go` | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里 |
 
 检查与钩子拿到的 `Entering.Claims` / `Entered.Claims` / `Creating.Claims` 是会话的 claims，可以为 nil，与会话共用同一个 map，约定只读。`Entered` 还带 `First` 与 `FirstAtUnixMilli`（首次初始化提交时的业务时间，之后每次进入都是同一个值，可以当注册时间用）。
@@ -95,7 +95,7 @@
 - **要在进入之前挡住某些玩家**（封停、维护白名单、不归本服）：`gameenter.OnEntering("名字", func(ctx context.Context, registry *app.Registry, entering gameenter.Entering) error {...})`，拒绝时返回 `errcode.Define` 出来的带码错误。
 - **要让某类会话先起名再进入：** `gameenter.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gameenter.OnCreating`，要先有档的事务外步骤用 `gameenter.OnCreatePrepare`，写进档用 `player.OnCreate`。
 - **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers/enter` 的 `Announce(ctx, registry, gameenter.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
-- **不要改的文件：** `game/enter/enter.go`、`game/enter/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/entities/player/enter_component.go` 里标记与发放同一笔事务的写法。
+- **不要改的文件：** `game/login/enter.go`、`game/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/entities/player/enter_component.go` 里标记与发放同一笔事务的写法。
 - **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
 
 ## 联动
@@ -125,6 +125,6 @@
 `roost module verify` 跑 29 条场景（`^TestEnter`，四个包），与 profile 的联动另 3 条（`^TestWithEnterProfile`）。全部是离线的：
 
 - 新建与进入的事务（`game/handler`）用真实的 Nest 加替身提交器（不落盘，可以拒绝提交来验证回滚），覆盖首次初始化、重复进入、提交被拒后补做、新建恰好一次、并发新建、名字钩子拒绝什么都不写。
-- 骨架与登记点（`game/enter`、`game/entities/player`）是纯函数级的场景。
+- 骨架与登记点（`game/login`、`game/entities/player`）是纯函数级的场景。
 - `EnterStatus`（`game/controllers/enter`）用玩家传输的替身，验证推送内容、拒绝后断开、判断不了时不推。
 - 模块自己的场景没有覆盖端点 `HandleEnterGame` / `HandleEnterCreate` 经真实 TCP 的串接；这一段在两个配方的 TCP 场景与一次单机真实进程登录里验证过（见 KNOWN-LIMITS），不等同多实例故障恢复验证。没有经真实持久层的场景。

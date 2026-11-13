@@ -495,7 +495,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 - **场景自己的 1Hz 心跳决定缺额**（D20 P5）：`"scene.spawn"` 在场景的锁里问 `Refresh.Due(beat.Now)`，事务**提交之后**
   （`nest.AfterCommit`）把这一批交给 spawner；原来服务 goroutine 每秒一次的 ticker 删掉了。
-- **建实体在服务 goroutine，按四步、按这个顺序**（`internal/service/<game>/spawner.go`）：① 取 id、`lifecycle.Create`（组件建好、AI 还没有策略，什么都不跑）；
+- **建实体在服务 goroutine，按四步、按这个顺序**（`internal/service/<game>/spawner.go`）：① 取 id、`monster.Lifecycle` 的 `Create`（组件建好、AI 还没有策略，什么都不跑）；
   ② 放身体（模板、血量、位置——任何人看见之前的唯一一次写，所以不会在 (0,0) 被复制）；③ `ShowSubject`（先登记复制主体、再进 AOI，否则观察者会订到 Manager 没有的主体）；
   ④ Nest 事务 `handlerSpawnMonster`（场景 + 怪物）：进场景的移动（`MapBasic.Enter`）并开始巡逻——提交后它的心跳才开始，第一步一定在它可见之后。
   全部成功才 `Spawned`；任何一步失败按逆序撤销（Hide、Destroy），下一拍的 `Due` 里重新出现。
