@@ -34,7 +34,7 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 行为：鉴权 ACK 之后登记连接，下一个 tick 开会话、绑定 player→自己（`policy.Direct`，视图 `self`），第一帧全量，之后提交的变化是增量；实体还不在内存时等它出现；断线重连、同一玩家的新连接都从全量开始，全部连接断开后关会话、注销 subject。生命周期全部在 core 的 [`policy.SelfView`](../../../framework/sync/entitysync/policy/self_view.go)：回调只记事实，Flush 的政策阶段一次对齐，所以登录、断线、顶号与 Flush 的交错不需要业务处理。多人视图（附近的人、队友）仍用下面的 Interest。
 
-慢消费者：**跟不上就断开**。一帧被活着的连接拒收时，传输（`wiring/selfsync.PushPlayerFrame`）关闭这名玩家的全部连接、Manager 关会话，客户端重连从全量开始；SelfView 不在原连接上重开。整个进程的出站驻留预算耗尽是例外：不是谁慢，整轮重试、保留脏状态，连接与会话都不动。自建 Manager、会话 ID 就是玩家 ID 的场景（如 game-demo 的场景）用同一个函数做 Transport。规则与理由见 [impl/04-sync §2C](../impl/04-sync.md#2c-自身视图selfview的生命周期)、[GATEWAY §4](../GATEWAY.md#慢消费者跟不上就断开)。
+慢消费者：**跟不上就断开**。一帧被活着的连接拒收时，传输（`wiring/selfsync.PushPlayerFrame`）关闭这名玩家的全部连接、Manager 关会话，客户端重连从全量开始；SelfView 不在原连接上重开。整个进程的出站驻留预算耗尽是例外：不是谁慢，本轮没交付到的内容保留脏状态、下一轮从被拒的会话开始重试（已交付到的照常提交），连接与会话都不动。自建 Manager、会话 ID 就是玩家 ID 的场景（如 game-demo 的场景）用同一个函数做 Transport。规则与理由见 [impl/04-sync §2C](../impl/04-sync.md#2c-自身视图selfview的生命周期)、[GATEWAY §4](../GATEWAY.md#慢消费者跟不上就断开)。
 
 两条由框架强制、业务不用对齐的规则：一帧的上限取接入层上限（嵌入 TCP 的 `player_access.tcp.max_payload_bytes`、独立 Gate 下 Game Ingress 的载荷上限），在 Manager 创建前定下，所以超过接入层上限的帧不会推出去；一个 `SubjectSyncState` 只能登记在一个 Manager，第二个 Manager 登记时得到 `entitysync.ErrSubjectRegisteredElsewhere`（点名已登记它的 Manager），所以工程里另有自建 Manager 登记 Player 时不能同时打开 self_sync；房间这类按组推送的实体用下一节的 `sync_groups` 装到同一个 Manager 上。
 
@@ -204,7 +204,7 @@ sync:
 
 ## 4. 背压与恢复
 
-状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。两种玩家接入都是有界异步出站：嵌入 TCP 的 `PushSync*` / `PushLockstep*` 只进入该连接的出站队列，独立 Gate 走 Game 有序出站口；读得太慢的客户端被关闭，不会拖住同一次 Flush / Tick 里排在它后面的会话；整个进程的出站驻留预算（独立 Gate 下 Game Ingress 与嵌入 TCP 各一个）耗尽时推送被拒、不关连接，Sync 整轮重试（[GATEWAY §4 嵌入 TCP 的出站](../GATEWAY.md#嵌入-tcp-的出站)）。Manager 因编码失败（持有对象超过 `MaxObjects`、单实体超过帧上限）关掉玩家的会话时没有连接拒收任何东西，框架同样断开该玩家（`selfsync.DisconnectLostPlayer`，计 `player.sync.session_lost_disconnect.total{reason}`；维护者 2026-10-22 决定 A），客户端重连、从全量开始；原因持续时会反复重连，不做额外的防风暴（[KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)）。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
+状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。两种玩家接入都是有界异步出站：嵌入 TCP 的 `PushSync*` / `PushLockstep*` 只进入该连接的出站队列，独立 Gate 走 Game 有序出站口；读得太慢的客户端被关闭，不会拖住同一次 Flush / Tick 里排在它后面的会话；整个进程的出站驻留预算（独立 Gate 下 Game Ingress 与嵌入 TCP 各一个）耗尽时推送被拒、不关连接，Sync 下一轮从被拒的会话开始重试没交付到的内容（[GATEWAY §4 嵌入 TCP 的出站](../GATEWAY.md#嵌入-tcp-的出站)）。Manager 因编码失败（持有对象超过 `MaxObjects`、单实体超过帧上限）关掉玩家的会话时没有连接拒收任何东西，框架同样断开该玩家（`selfsync.DisconnectLostPlayer`，计 `player.sync.session_lost_disconnect.total{reason}`；维护者 2026-10-22 决定 A），客户端重连、从全量开始；原因持续时会反复重连，不做额外的防风暴（[KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)）。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
 
 ### 停机排空（Drain）卡住时看什么
 

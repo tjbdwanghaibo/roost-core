@@ -101,6 +101,13 @@
 
 - **测试：`TestInterestShrinksAFullSessionToTheNearest/async` 偶发失败已定位为用例的时序假设**（framework/sync/entitysync/policy，2026-11-14）：异步模式的应用线程在第一条事实到达时就走第一步，可能只取走用例还在逐个 `Show` 的前半段；前半段先结算、Manager 按它暂缓，收紧时按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，行为不变）。用例的 `flush` 在结算前先把已登记的事实全部应用（`stepApplier`，与 `flushInterest` 相同）。修前 CPU 满载（10 核上 16 个 `yes`）下 `-race -count=500` 定向失败 36 次；修后 8 个 `yes` 500 次、16 个 `yes` 1000 次、8 个 `yes` + `GOMAXPROCS=2` 500 次全部通过。没有框架行为改动。
 
+- **Entity Sync：传输 `ErrRetryLater` 不再整轮作废，下一轮从被拒的会话开始**（framework/sync/entitysync，2026-11-14，KNOWN-LIMITS 自身视图第 4 条、自身视图整轮重试放大演练的冒烟观察）：
+  - **行为变化**：传输对某个会话返回 `ErrRetryLater`（进程驻留预算耗尽、接入层未就绪等）时，本轮从这个会话起仍不再推送，但只作废“被拒及其后未尝试的会话本轮内容里出现的 subject”（保留脏状态、下一轮重新捕获），已经交付给每个拿到它内容的会话的 subject 照常提交；收到被作废 subject 内容的会话下一轮改收它的全量（原来是本轮全部准入会话的全部内容）。下一轮没有冷创建计费的会话从被拒的会话开始按 ID 轮转（原来每轮从最小 ID 开始，2026-09-27 接受的 C29 语义随之改变）。Flush 仍返回包了 `ErrRetryLater` 的错误；传输接口与线格式不变。
+  - **原因**：整轮作废时，一轮的“已准入会话重收的全量 + 其余帧”超过预算后放大自我维持：每轮在同一位置被拒、前几个会话每轮重收全量且版本从不提交、后面的会话一帧也收不到。
+  - **先红后绿**：`TestRetryLaterUnderAResidentBudgetStillCommitsEverySession`（20 会话、一轮放得下 3 个全量）修前 12 轮全部重试、没有一个会话的内容提交过，修后第 7 轮起每轮提交；`TestRetryLaterStartsTheNextTickAtTheRefusedSession`（12 会话、每轮只接 3 帧）修前会话 4～12 一帧也收不到，修后间隔不超过 ⌈N/k⌉ + 1 轮；两条都按客户端基线逐帧核对增量。变异 5 条（改回整轮作废、去掉轮转、只作废被拒会话、不为收到被作废内容的会话改发全量、不把被作废的 subject 放回 pending）都红。
+  - **演练**（`TestSelfSyncResidentBudgetRetryDrill`，100 玩家、全量约 4 KiB、20Hz、10 秒，同机修前 / 修后）：预算 16 KiB 提交 0 → 167 / 200 轮、每个已提交轮字节 2544914 → 5507（缺省预算 5076）；64 KiB 提交 31 → 197 / 200、432907 → 5122；20 玩家 16 KiB 0 → 194 / 200。
+  - **剩余代价**：共享 subject（AOI 里被很多人看到的对象）只要有一个订阅者本轮没轮到，这一轮它的捕获就作废，已收到它的会话下一轮改收它的全量。验证：entitysync / policy / wiring/selfsync `-race`，entitysync 的下游包与 `GOWORK=off go build ./...`。
+
 - **CellWorld witness 按区块合批、对齐全量刷新相位；复制缺口按对象 / 观察者修复**（cellworld，2026-11-14）：
   - **升级要求**：内部线上格式 v11 → v12（新增 `replicaReset` 请求体），不兼容旧节点，先停旧再起新。
   - **合批与相位**：Cell 按观察者所在的刷新区块（边长 2 × ViewRadius）排序后按 Base 合批；成员表全量刷新除了满一个 `ReplicaRefresh`，也在区块相位边界触发（同块观察者同拍刷新，强制全量的成员在一条消息里只编一次）。全量间隔仍不超过 `ReplicaRefresh`，整份视野自包含不变。

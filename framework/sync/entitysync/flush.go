@@ -108,8 +108,9 @@ type flushSession struct {
 // 步骤：政策阶段（applyPolicies）→ 取 pending → 逐 subject 捕获并分给会话（prepareSubscribersLocked、
 // PrepareViews）→ 逐会话编码交付（pushSessionFrames）→ 提交内容版本、忘掉退役完成的 subject。
 //
-// ErrRetryLater 会中止本轮内容提交并保留脏状态；已准入的会话时钟和引用继续有效，
-// 相关订阅在下次用全量恢复基线。其他交付错误只关闭失败会话。
+// ErrRetryLater（或 ctx 结束）让本轮从被拒的会话起不再推送：没有交付给全部拿到内容的会话的 subject 作废捕获、
+// 保留脏状态，其余照常提交（withholdUndelivered）；已准入的会话时钟和引用继续有效，收到被作废内容的订阅在下次
+// 用全量恢复基线；下一轮从被拒的会话开始轮转（rotateAfterRetry）。其他交付错误只关闭失败会话。
 // flushGate 串行化整个过程，避免同一内容同时参与两次捕获。
 func (m *Manager) Flush(ctx context.Context) error { return m.flush(ctx, false) }
 
@@ -161,6 +162,7 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 	}
 
 	prepared := make([]*entity.PreparedSubjectSync, 0, len(ids))
+	preparedIDs := make([]int64, 0, len(ids)) // 与 prepared 一一对应的 subject ID
 	// 常见单 profile 用一块连续存储；每会话仅持有捕获项指针。
 	captures := make([]capturedUpdate, 0, len(ids))
 	work := m.flushWork
@@ -173,6 +175,7 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 	var retry []deferredSubject
 	var failures []error
 	type cadenceSettlement struct {
+		id      int64
 		cadence *subjectCadence
 		state   *entity.SubjectSyncState
 	}
@@ -251,8 +254,9 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "prepared", SubjectID: id, Version: item.Version(), BaseVersion: item.BaseVersion(), CommitLSN: item.CommitLSN()})
 				}
 				prepared = append(prepared, item)
+				preparedIDs = append(preparedIDs, id)
 				if !waiting && subj.cadence != nil {
-					cadenceSettlements = append(cadenceSettlements, cadenceSettlement{subj.cadence, state})
+					cadenceSettlements = append(cadenceSettlements, cadenceSettlement{id, subj.cadence, state})
 				}
 				if dirty {
 					m.dirtyCaptured.Add(1)
@@ -318,6 +322,7 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 		sessionIDs = append(sessionIDs, sid)
 	}
 	slices.Sort(sessionIDs)
+	sessionIDs = rotateAfterRetry(sessionIDs, m.retryFrom)
 	m.scheduleSends(work, time.Now())
 	m.scheduleSnapshots(work, plan)
 	sessionIDs = plan.admissionOrder(sessionIDs)
@@ -328,7 +333,7 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 	// 保留帧时钟，放弃内容捕获，并让已交付的存活订阅重建全量基线。
 	retryCaptured := func(cause error) {
 		abortAll(prepared, cause)
-		m.requireSnapshotsAfterRetry(admittedSessions, work)
+		m.requireSnapshotsAfterRetry(admittedSessions, work, nil)
 		for _, id := range ids {
 			m.markPending(id)
 		}
@@ -336,7 +341,9 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 			m.markReset(sid) // 已交付的会话复核时不再欠，自然丢掉。
 		}
 	}
-	for _, sid := range sessionIDs {
+	var admissionErr error
+	var withheld map[int64]bool
+	for i, sid := range sessionIDs {
 		batch := work[sid]
 		if batch.session == nil || m.session(sid) != batch.session {
 			continue
@@ -346,12 +353,20 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 			admittedSessions = append(admittedSessions, sid)
 		}
 		if retryErr != nil {
-			retryCaptured(retryErr)
-			return fmt.Errorf("sync admission session %d: %w", sid, retryErr)
+			// 传输此刻接不下（或 ctx 结束）：从这个会话起本轮都不再推送。只作废没能交付给全部订阅者的 subject，
+			// 其余照常提交；下一轮从被拒的会话开始。
+			admissionErr = fmt.Errorf("sync admission session %d: %w", sid, retryErr)
+			m.retryFrom = sid
+			withheld = m.withholdUndelivered(sessionIDs[i:], admittedSessions, work, emptyFulls)
+			prepared, preparedIDs = abortWithheld(prepared, preparedIDs, withheld, retryErr)
+			break
 		}
 	}
+	if admissionErr == nil {
+		m.retryFrom = 0
+	}
 
-	// 内容提交：只有未触发整体重试才提交捕获；清理退役 subject 并重排暂缓项。
+	// 内容提交：提交已交付给全部订阅者的 subject 的捕获；清理退役 subject 并重排暂缓项。
 	if len(prepared) > 0 {
 		batch, err := entity.ReservePreparedSubjectSyncBatch(prepared)
 		if err != nil {
@@ -363,7 +378,13 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 		}
 	}
 	for _, settle := range cadenceSettlements {
-		settle.cadence.settled(settle.state, m.cadenceTime())
+		if !withheld[settle.id] {
+			settle.cadence.settled(settle.state, m.cadenceTime())
+		}
+	}
+	if withheld != nil {
+		// 被作废的 subject 保留脏状态与等待状态，下一轮重新捕获；不算本轮处理完。
+		ids = slices.DeleteFunc(slices.Clone(ids), func(id int64) bool { return withheld[id] })
 	}
 	for _, id := range ids {
 		subj := m.subject(id)
@@ -379,7 +400,63 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 		}
 	}
 	m.settleDeferrals(ids, retry)
+	if admissionErr != nil {
+		failures = append(failures, admissionErr)
+	}
 	return errors.Join(failures...)
+}
+
+// rotateAfterRetry 让上一轮被拒（ErrRetryLater）之后的这一轮从被拒的会话开始按 ID 轮转：sessionIDs 已升序，
+// 返回从第一个不小于 from 的 ID 开始、绕回开头的顺序；from 为 0（上一轮没有被拒）时原样返回。
+// 冷创建计费的会话仍由 admissionOrder 按计划排在最前（它们有自己的游标），这里只决定其余会话的先后。
+func rotateAfterRetry(sessionIDs []SessionID, from SessionID) []SessionID {
+	if from == 0 || len(sessionIDs) < 2 {
+		return sessionIDs
+	}
+	start, _ := slices.BinarySearch(sessionIDs, from)
+	if start == 0 || start == len(sessionIDs) {
+		return sessionIDs
+	}
+	rotated := make([]SessionID, 0, len(sessionIDs))
+	rotated = append(rotated, sessionIDs[start:]...)
+	return append(rotated, sessionIDs[:start]...)
+}
+
+// withholdUndelivered 处理本轮在 unreached[0] 处被传输拒收（ErrRetryLater）或 ctx 结束：unreached 是被拒的会话
+// 及其后本轮没有尝试的会话。它们本轮内容里的 subject 没有交付给全部订阅者，返回这些 subject（不提交、保留脏状态，
+// 下一轮重新捕获）；其余 subject 已交付给每个拿到它内容的会话，照常提交。
+//
+// 已经收到被作废 subject 内容的会话（被拒会话已准入的前几帧、之前完整交付的会话）手里的版本不会提交，
+// 这些订阅改为下一轮收全量（requireSnapshotsAfterRetry）；没收到的会话订阅不动，下一轮的增量仍从它们持有的基线算起。
+// 被拒及之后的会话欠的空全量重新登记。调用方在提交之前调用，flushGate 内。
+func (m *Manager) withholdUndelivered(unreached, admitted []SessionID, work map[SessionID]*flushSession, emptyFulls map[SessionID]bool) map[int64]bool {
+	withheld := make(map[int64]bool)
+	for _, sid := range unreached {
+		for _, settle := range work[sid].settlements {
+			withheld[settle.subj.id] = true
+		}
+		if emptyFulls[sid] {
+			m.markReset(sid)
+		}
+	}
+	m.requireSnapshotsAfterRetry(admitted, work, withheld)
+	for id := range withheld {
+		m.markPending(id)
+	}
+	return withheld
+}
+
+// abortWithheld 中止被作废 subject 的捕获，返回剩下要提交的捕获（与 ids 一一对应）。
+func abortWithheld(prepared []*entity.PreparedSubjectSync, ids []int64, withheld map[int64]bool, cause error) ([]*entity.PreparedSubjectSync, []int64) {
+	kept, keptIDs := prepared[:0], ids[:0]
+	for i, item := range prepared {
+		if withheld[ids[i]] {
+			_ = item.AbortWithError(cause)
+			continue
+		}
+		kept, keptIDs = append(kept, item), append(keptIDs, ids[i])
+	}
+	return kept, keptIDs
 }
 
 // prepareSubscribersLocked 为本轮整理 subject 的订阅者，返回本 tick 要跳过的会话（无则 nil）：
@@ -436,7 +513,7 @@ func (m *Manager) deferUnselectedSnapshotsLocked(subj *subject, held map[Session
 
 // pushSessionFrames 编码一个会话本轮的内容并逐帧交付：每帧准入后立即采纳该帧的会话时钟与引用表，
 // 全部帧成功（且会话状态未被替换）后结算订阅。delivered 表示至少一帧已准入。retryErr 非 nil 表示
-// 整轮需要重试（ErrRetryLater 或 ctx 结束），由调用方作废捕获；其他编码或交付错误只关闭本会话，
+// 本轮要停下重试（ErrRetryLater 或 ctx 结束），由调用方作废没交付到的捕获（withholdUndelivered）；其他编码或交付错误只关闭本会话，
 // 经 SessionLost 交出带分类的原因（SessionLoss：推送拒收 / 编码失败的几类）。
 func (m *Manager) pushSessionFrames(ctx context.Context, sid SessionID, batch *flushSession) (delivered bool, retryErr error) {
 	sess := batch.session
@@ -597,12 +674,12 @@ func releaseInFlight(work map[SessionID]*flushSession) {
 	}
 }
 
-// requireSnapshotsAfterRetry 为已收到本轮内容的会话重新建立全量基线。
-// remove 仍按原意结算；已交付的会话时钟和引用表不在这里回滚。
-func (m *Manager) requireSnapshotsAfterRetry(admittedSessions []SessionID, work map[SessionID]*flushSession) {
+// requireSnapshotsAfterRetry 为已收到本轮内容、但内容捕获被作废的会话重新建立全量基线：only 为 nil 时作废的是
+// 本轮全部捕获，否则只处理 only 里的 subject。remove 仍按原意结算；已交付的会话时钟和引用表不在这里回滚。
+func (m *Manager) requireSnapshotsAfterRetry(admittedSessions []SessionID, work map[SessionID]*flushSession, only map[int64]bool) {
 	for _, admitted := range admittedSessions {
 		for _, settle := range work[admitted].settlements {
-			if settle.remove {
+			if settle.remove || only != nil && !only[settle.subj.id] {
 				continue
 			}
 			settle.subj.mu.Lock()

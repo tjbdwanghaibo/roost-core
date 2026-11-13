@@ -58,9 +58,11 @@ entitysync.ManagerConfig{
 - 捕获按会话聚合成帧（快照 = ObjectCreate，或已持有对象则 ObjectUpdate 带 Full；delta = ObjectUpdate；离开 = ObjectRemove），
   每会话在**副本**上编码、逐帧 `Transport.Push`；每一帧成功即采纳它对应的时钟与 ObjectRef 表，全部帧成功后结算订阅（→ 在线 @version / 删除）。
   同一 tick 先处理 remove 再分配新对象，避免满容量时合法替换被 subject ID 顺序误拒。
-- 调用方 context 取消时整轮中止并保留重试，不视为会话故障。传输失败分两类：`ErrRetryLater`（整体不可用）→ 全部 prepared abort、全部重新 pending、无人受罚；已准入帧不能撤销，
-  本 tick 有帧准入的会话保留其时钟，受影响且仍订阅的内容下次改发 Full 恢复基线；其他 → 该会话 `loseSession`
-  （关闭、遍历 subject 删订阅、`SessionLost` 回调政策）。
+- 调用方 context 取消时本轮中止并保留重试，不视为会话故障。传输失败分两类：`ErrRetryLater`（此刻接不下，如进程驻留预算耗尽）→
+  从被拒的会话起本轮不再推送，被拒及其后未尝试的会话本轮内容里的 subject abort、重新 pending，其余 subject 照常提交，无人受罚；
+  下一轮从被拒的会话开始轮转（2026-11-14 起；原先整轮 abort、每轮从最小 ID 开始，预算持续不够时前几个会话每轮重收全量、
+  后面的会话饿死）。已准入帧不能撤销，本 tick 有帧准入的会话保留其时钟，收到了被 abort 的 subject 且仍订阅的内容下次改发 Full
+  恢复基线；其他 → 该会话 `loseSession`（关闭、遍历 subject 删订阅、`SessionLost` 回调政策）。
 - 所有会话处理完后整批 `Commit`（普通捕获的脏位按代际清，即时独立快照保留脏位）；退役且无订阅者的 subject 被遗忘。
 
 ## 订阅
