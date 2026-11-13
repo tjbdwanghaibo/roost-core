@@ -17,9 +17,10 @@ type SessionID = nettransport.SessionID
 // for one session; the manager never splits a frame across calls and never
 // batches sessions together, so a failure is exactly one session's failure.
 //
-// Return ErrRetryLater (wrapped or bare) when the transport itself is
-// unavailable and the whole tick should be tried again; return anything else
-// to have the session closed and its subscriptions dropped.
+// Return ErrRetryLater (wrapped or bare) when the transport itself cannot
+// take frames now and what was not delivered should be tried again next tick
+// (see ErrRetryLater); return anything else to have the session closed and
+// its subscriptions dropped.
 // Push 返回 nil 即表示这一帧已准入，返回错误表示这一帧未准入。
 // 后续 Push 的失败不会撤销此前成功的帧；Manager 保留已交付帧的会话时钟，
 // 并在部分成功后重试时用全量内容恢复受影响订阅的基线。
