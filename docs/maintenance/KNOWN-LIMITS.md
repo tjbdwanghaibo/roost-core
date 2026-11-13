@@ -401,9 +401,12 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。
 
-- **签名里的结构体要定义在 view 里**（维护者 2026-11-13：组件对外的方法都应在 view 下）：view 不能反向 import 组件包，所以方法参数 / 结果用到的结构体定义在 `game/view/component_<功能>.go`，名字带功能前缀（`view.ShopResult`、`view.PurchaseGrant`），组件包与功能包留同名别名。搬进 view 的类型只能带用内建、db 与其他 view 类型的方法；要用工程错误码或别的包的方法改成功能包里的函数（如 `purchase.ValidateGrant`）。名字在全部模块的 view 文件里必须唯一，靠前缀约定，没有工具检查。
+- **签名里的结构体要定义在 view 里**（维护者 2026-11-13：组件对外的方法都应在 view 下）：view 不能反向 import 组件包，所以方法参数 / 结果用到的结构体定义在 `game/view/component_<功能>.go`，名字带功能前缀（`view.ShopResult`、`view.PurchaseGrant`），组件包与功能包留同名别名。搬进 view 的类型只能带用内建、db 与其他 view 类型的方法；要用工程错误码或别的包的方法改成功能包里的函数（如 `purchase.ValidateGrant`）。名字在全部模块与 game-demo 的 view 文件里必须唯一（`TestModuleViewNamesAreUniqueAcrossModules`、`TestDemoViewNamesDoNotCollideWithItsModules` 检查）。
 - **view 是一个包**：import 它就带上所有 view 文件的依赖（db、`game/actor` 及其玩法包、`game/gameplay/attribute`）。`actor.Body` 是带行为的运行时类型、`gameattr.Combat` 由 `roost add attribute` 生成在固定目录，两者没有搬进 view。
 - **冷组件没有 view 访问器**：冷组件的字段可能是 nil，装进接口后不等于 nil，所以生成器不给它生成 `func (e *Player) X() view.X`；跨组件调用冷组件要经实体的具体类型。
+- **view 豁免只剩两类**（`TestModuleViewInterfacesListTheComponentMethods` 的豁免表，2026-11-14）：返回 core 运行时对象的方法（activity `Host`、actor `SavedPosition`、attribute `Container`、combat `Core`），以及参数是对方 `*Component`、要读对方战斗核心的 combat `Cast` / `Step` / `Tick` / `Leave`。
+- **实体包只留接线**：实体包保留框架接口的实现（`cellworld.Actor` / `BasePlayer` 等）、运行时对象、定时器与同步适配、packer、mirror 与 replica；生成的定时器组件的方法只能声明在实体包，回调只把节点交给组件方法（`on…` 回调必须一行）。守卫测试（`TestModuleEntityPackagesHoldOnlyComponentWiring`、`TestDemoEntityPackagesHoldOnlyComponentWiring`）按 `Set…` / `Del…` 调用识别实体方法改状态，换个名字的写入认不出。
+- **handler 的实体参数用实体包的 `I<X>Entity`**：handler 生成器从实体包的 `I<X>Entity` 推断参数，不能直接写 `view.<E>Entity`；要用 view 时让 `I<X>Entity` 嵌入它（friends 的写法）。
 
 #### 业务 HTTP 路由与配置检查
 
@@ -699,13 +702,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **`-template game` 的 Player 缺省没有 DAO**：要预加载 Player 先 `add dao Player --entity Player`（装任何往 Player 加状态的模块时安装器会建）。生成器应缺省带上 Player 的 DAO。
 - **开发配置里两个带 DataEngine 的服务同 sid、同工作目录会争同一个 WAL 目录**（2026-11-04 发现，game-demo 加 alliance 服务时）：开发配置不写 `dataengine.wal.dir` 时取 `data/wal/dataengine/<sid>`，不含服务名；`deploy/dev/run.sh` 用同一个 `SID` 起全部服务，第二个进程会因 WAL 目录锁退出。game-demo 的 alliance 开发配置显式写了 `data/wal/alliance` 绕开（一个工作目录只能起一个 alliance 进程）；生成器的缺省目录是否要带服务名尚未决定。
 - **嵌套类型里的 nil map 往返后文档形状变化**（2026-10-30，尚未确认是否需要处理）：修 DAO map 切片值副本（`cdf5ae07`）时观察到，嵌套 struct 的 map 字段为 nil 时持久化存成 `null`，读回后再存一次变成 `{}`（嵌套 `set<Field>RawMap(nil)` 总会新建空 map），把夹具放在 `GemInfo` 上时 `TestThePersistDocumentHasOneShapeAndRoundTrips` 因此报 “restore changed the document”；夹具改放 `Envelope` 避开，代码未改。语义上两者都是空 map，读取结果相同；影响限于文档形状不稳定（一次往返多一次无实际变化的写、按 `null` 查询的外部脚本查不到）。DAO 顶层 map 是否同样如此、是否有别的读者依赖 `null`，尚未核对。
-
-#### 组件包与 game/view：遗留
-
-- **只拆了 Player 上的组件**：room、team、alliance 等其他实体上的组件这一轮没有搬进 `game/components/`；game-demo 的 `map_component.go`、`cell_base.go` 与 cell 路由耦合（`map` 也不能作包名），activity 的 `activity_timers.go` 挂在工程的定时器组件上，这几处仍在 `game/entities/player`。
-- **其余组件还有不在 view 里的导出方法**（`TestModuleViewInterfacesListTheComponentMethods` 的豁免表逐项写了原因）：参数是别的 `*Component` 或别的实体（combat Cast / Step / Tick / Leave，friends Change，team Create / Accept / Invite / Leave / Info）；参数或结果类型还在功能包 / 逻辑包（dungeon Counts / Claim，terrain Check / Record，rehome Prepare / Arrive，mailbox Claim，combat Input）；结果类型还在组件包、搬过去没有障碍（combat Ready、friends Snapshot、matchmaking Snapshot、profile Card、stamina Grant / Refill、task Claim、team Invites），与 2026-11-13 补七个组件是同一种改法；core / 运行时类型（actor SavedPosition、attribute Container、combat Core、activity Host）。
-- **team 组件依赖具体的 Team 实体**：`game/components/team` import 了 `game/entities/team`，因为建队、接受、邀请要跨实体操作 `*team.Team`。没有形成循环，以后可改成经 `view.TeamEntity`。
-- **过期的 `entity_<实体>.go` 只在全量生成时删除**：删掉一个实体后只单独生成别的实体包，`game/view/` 里那个实体的接口文件不会被清掉，要全量生成一次。生成器可以改成每次都按现存实体清理。
 
 #### 业务模块（roost module）
 
