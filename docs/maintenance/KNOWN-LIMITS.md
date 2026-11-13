@@ -128,7 +128,11 @@
 
 设计见 [guide/02“起服预加载与按服分库”](../framework/guide/02-nest-entity.md#起服预加载与按服分库v1470-起)、实现见 [impl/12 §2H1](../framework/impl/12-codegen.md#2h1-本地实体起服预加载与-dao-缺省-dbscopesidv1470)。没做到位的部分见[起服预加载与按服分库：遗留](#起服预加载与按服分库遗留)。
 
-- **预加载不等于常驻**：框架没有冷热换出；被运维卸载、换服交出、业务空闲卸载的实体之后按需加载，不会再预加载。`EntityLifetimeResident` 仍只是声明。
+- **预加载不等于常驻，常驻要显式声明**：只写 `preload=startup` 的实体被运维卸载、换服交出、业务空闲卸载之后按需加载，不会再预加载。要一直留在内存用 `lifetime=resident`（v1.47.0 起，隐含 `preload=startup`）：除换服交出、删档收尾与运维强制刷新三处框架许可外，所有移出内存的路径都返回 `entity.ErrEntityResident`。
+- **常驻实体的内存没有上限**：占用随本服库里该类实体的文档数增长，框架不估算、不截断。
+- **常驻实体加载失败不自动重试**：起服预加载时单个常驻实体失败、换服中止（Release）后载回失败，它就不在内存，直到被访问或运维 `entity.unload {..., force:true}` 载回；两处都记 ERROR 与 `dataengine.resident_reload_total{result=error}`。
+- **换服后到首次进入之间不在目标服内存**：写权随交出到了目标服，第一次进入时载入后常驻；目标服重启后由它的预加载载入。
+- **常驻许可靠约定**：`entity.WithResidentRelease` 是导出的，只给框架那三处用；业务代码不能用它绕过常驻。常驻实体不要写空闲卸载（会拿到 `ErrEntityResident`）。
 - **只按主 DAO 枚举**：kind 的第一个 DAO（`DaoBuilders[0]`）所在集合里有文档的实体才会被列出（新建实体时框架给每个持久 DAO 都写整文档，正常不会只缺主文档）。
 - **sid 只在一个服务类型内唯一**：不同服务类型的 sid 可能相同，同一个逻辑库在它们那里会落到同一个 `<库>_<sid>`。所以没写 `service=` 的本地预加载要求只有一个候选服务；两个服务类型共用同一个逻辑库与集合的部署不受支持。
 - **一个实体的文档在同一个库范围里**：组件 DAO 跟随宿主实体的 dbscope（维护者 2026-11-13）。本地实体的组件 DAO 与主 DAO 范围不同时，生成工程的 `registry.RegisterAll`（`entity.ValidateEntityRegistry`）在起服时拒绝（`entity.ErrMixedDaoScope`）；托管实体照旧全部 global。
@@ -548,6 +552,8 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **预加载没有数量上限与时间预算**：每页 1000 条、每批 16 个并发，用进程的基础 context；Mongo 卡住时起服一直等到进程被停，实体很多时起服时间与内存随之增长。要加预算与超时。
 - **换服崩溃窗口没有自动清理**：换服提交后、删原服的库之前崩溃，原服重启会把旧档预加载进内存；续做时目标服补搬冲突，旧档留给运维删（见 [rehome 模块 README](../../modules/rehome/README.md)）。与 rehome 的“搬档”是同一个窗口，见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
 - **夹具与玩法脚本没有重跑**：`add dao --entity` 的骨架缺省改成 `dbscope=sid`，各玩法脚本（`scripts/test-{slg,mmorpg,card-rpg,auto-chess,idle-sim}-generated.sh`、`scripts/test-genres-generated.py`）与 genre 参考文档里经它生成的 DAO 随之变化；mmorpg 跨服演练改为按玩家的 sid 读 `<db>_<sid>`，各玩法真实依赖用例（`ROOST_*_REAL`）的收尾多删一个 `<库>_0`。合并后的全套与真实依赖用例跑过之前，是否还有别处直接读共用库**尚未确认**。
+- **game-demo 的空闲卸载不认识常驻**：`PlayerOwners` 的清扫如果遇到标了 `lifetime=resident` 的 Player，每轮记 WARN，且卸载前已让玩家离开场景，结果是实体留在内存、人已不在场景。demo 的 Player 缺省不是常驻，未改；要常驻 Player 时清扫要先跳过常驻实体。
+- **常驻的刷新与载回只有替身存储的用例**：强制刷新、换服中止后的载回用 mongotest 验证，没有真实 Mongo 副本集用例；真实 DataEngine 下 rehome 走到常驻实体的交出与载回未演练。
 
 #### Remote：遗留
 
