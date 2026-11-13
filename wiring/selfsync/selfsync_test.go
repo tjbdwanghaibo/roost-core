@@ -5,6 +5,7 @@ package selfsync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -979,4 +980,167 @@ func TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused(t *testing.T) {
 	if got := labeledCounter(SessionLostDisconnectMetric, "reason", string(entitysync.SessionLossPushRefused)); got != pushDisconnectsBefore {
 		t.Fatalf("a refused push was counted as a session-lost disconnect: %d → %d", pushDisconnectsBefore, got)
 	}
+}
+
+// TestSelfSyncResidentBudgetRetryDrill 测进程出站驻留预算压到触发点时自身视图的整轮重试放大（KNOWN-LIMITS
+// “self_sync/TCP/AOI 未测”第 7 条，规则见 impl/04-sync §2C 与第 4 条限制）：预算耗尽时这一轮整轮重试，已准入的会话
+// 下一轮改收全量（requireSnapshotsAfterRetry），全量比增量大时重试会自我放大。真实嵌入 TCP + 正式装配的 Manager：
+// DRILL_PLAYERS 个玩家一直读，每个 tick（DRILL_HZ）全部玩家改一次金币；增量只带 "gold=N"，全量另带 DRILL_FULL_PAD 字节
+// （代表全量远大于增量的业务）；DRILL_BUDGET 是 player_access.tcp.outbound.resident_bytes（0 = 缺省 256 MiB），
+// DRILL_MAX_PAYLOAD 是 max_payload_bytes（0 = 缺省；预算压到一个最大帧以下时要一起压小）。
+// 跑 DRILL_SECONDS 秒，报 Flush 次数、其中 ErrRetryLater 的次数、客户端收到的全量 / 增量帧数与字节、
+// push_refused{retried|closed} 与 budget_exhausted 增量、丢失的会话。拿同一组参数、预算取缺省与压到触发点各跑一次，
+// 两次“每个已提交 tick 的字节”之比就是放大。
+//
+// 只在设置 ROOST_SELFSYNC_RETRY_DRILL=1 时运行（测量，不是回归）；设 DRILL_OUT 时另写一行 JSON。
+// 断言只有不变式：预算耗尽不丢会话、不关连接（closed 不增长）。
+func TestSelfSyncResidentBudgetRetryDrill(t *testing.T) {
+	if os.Getenv("ROOST_SELFSYNC_RETRY_DRILL") == "" {
+		t.Skip("set ROOST_SELFSYNC_RETRY_DRILL=1 to run the self-view retry amplification drill (a measurement)")
+	}
+	envInt := func(name string, fallback int) int {
+		if raw := os.Getenv(name); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 0 {
+				t.Fatalf("%s = %q is not a non-negative integer", name, raw)
+			}
+			return value
+		}
+		return fallback
+	}
+	players, fullPad := envInt("DRILL_PLAYERS", 500), envInt("DRILL_FULL_PAD", 4096)
+	hz, seconds, budget := envInt("DRILL_HZ", 20), envInt("DRILL_SECONDS", 20), envInt("DRILL_BUDGET", 0)
+	if players == 0 || hz == 0 || seconds == 0 {
+		t.Fatal("DRILL_PLAYERS, DRILL_HZ and DRILL_SECONDS must be positive")
+	}
+	// 预算不得小于一个最大帧（max_payload_bytes + 16）：压小预算时用 DRILL_MAX_PAYLOAD 同步压小载荷上限。
+	h := newHarnessWithTCP(t, uint32(envInt("DRILL_MAX_PAYLOAD", 0)), nil, func(config *gateway.TCPConfig) {
+		config.MaxConnections = players + 16
+		config.MaxConnectionsPerIP = config.MaxConnections
+		config.MaxHandshakes = min(config.MaxConnections, 1024)
+		if budget > 0 {
+			config.OutboundResidentBytes = int64(budget)
+		}
+	})
+
+	wallets := make([]*wallet, players)
+	for i := range wallets {
+		wallets[i] = newDrillWallet(t, int64(i+1), fullPad)
+		h.access.Manager().Add(wallets[i])
+	}
+	var fulls, deltas, fullBytes, deltaBytes, decodeErrors atomic.Int64
+	var readers sync.WaitGroup
+	for i := range wallets {
+		c := dial(t, h, int64(i+1))
+		c.ack(t)
+		_ = c.connection.SetReadDeadline(time.Time{})
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				packet, err := wire.Read(c.connection, wire.DefaultMaxPayload)
+				if err != nil {
+					return
+				}
+				if packet.MsgID != testMessageID {
+					continue
+				}
+				decoded, err := c.receiver.Decode(packet.Payload)
+				if err != nil {
+					decodeErrors.Add(1)
+					continue
+				}
+				if decoded.Kind == frame.Full {
+					fulls.Add(1)
+					fullBytes.Add(int64(len(packet.Payload)))
+				} else {
+					deltas.Add(1)
+					deltaBytes.Add(int64(len(packet.Payload)))
+				}
+			}
+		}()
+	}
+	waitOnline(t, h, players)
+
+	retriedBefore, closedBefore := counterValue(SyncPushRefusedMetric, "retried"), counterValue(SyncPushRefusedMetric, "closed")
+	exhaustedBefore := counterValue("player_tcp_outbound_budget_exhausted_total", "")
+	lostBefore := h.manager.Stats().SessionsLost
+	ctx := context.Background()
+	period := time.Second / time.Duration(hz)
+	var flushes, retries, committed, gold int
+	var longest time.Duration
+	start := time.Now()
+	for tick := 0; tick < hz*seconds; tick++ {
+		if wait := time.Until(start.Add(time.Duration(tick) * period)); wait > 0 {
+			time.Sleep(wait)
+		}
+		gold++
+		for _, w := range wallets {
+			w.setGold(int64(gold))
+		}
+		began := time.Now()
+		err := h.manager.Flush(ctx)
+		longest = max(longest, time.Since(began))
+		flushes++
+		switch {
+		case err == nil:
+			committed++
+		case errors.Is(err, entitysync.ErrRetryLater):
+			retries++
+		default:
+			t.Fatalf("flush %d: %v", tick, err)
+		}
+	}
+	elapsed := time.Since(start)
+	time.Sleep(200 * time.Millisecond) // 让最后一轮写完再读计数
+	result := map[string]any{
+		"players": players, "full_pad": fullPad, "hz": hz, "seconds": seconds, "elapsed_seconds": elapsed.Seconds(),
+		"budget_bytes": budget, "flushes": flushes, "flush_retries": retries, "flushes_committed": committed,
+		"longest_flush_ms": float64(longest) / float64(time.Millisecond),
+		"full_frames": fulls.Load(), "delta_frames": deltas.Load(), "full_bytes": fullBytes.Load(), "delta_bytes": deltaBytes.Load(),
+		"bytes_per_committed_flush": float64(fullBytes.Load()+deltaBytes.Load()) / float64(max(committed, 1)),
+		"push_refused_retried": counterValue(SyncPushRefusedMetric, "retried") - retriedBefore,
+		"push_refused_closed":  counterValue(SyncPushRefusedMetric, "closed") - closedBefore,
+		"budget_exhausted":     counterValue("player_tcp_outbound_budget_exhausted_total", "") - exhaustedBefore,
+		"sessions_lost":        h.manager.Stats().SessionsLost - lostBefore,
+		"decode_errors":        decodeErrors.Load(),
+	}
+	line, _ := json.Marshal(result)
+	t.Logf("self-view retry drill: %s", line)
+	if out := os.Getenv("DRILL_OUT"); out != "" {
+		file, err := os.OpenFile(out, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = file.Write(append(line, '\n'))
+		_ = file.Close()
+	}
+	if result["push_refused_closed"].(int64) != 0 || result["sessions_lost"].(uint64) != 0 || decodeErrors.Load() != 0 {
+		t.Fatalf("an exhausted process budget closed connections, lost sessions or broke a client's baseline: %s", line)
+	}
+}
+
+// newDrillWallet 与 newWallet 相同，但全量比增量大：全量载荷另带 fullPad 字节，增量只有 "gold=N"。
+func newDrillWallet(t testing.TB, playerID int64, fullPad int) *wallet {
+	t.Helper()
+	id, err := entity.BuildEntityID(playerID, testKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &wallet{EntityBase: entity.NewEntityBase(id, entity.EntityCategoryPlayer, false, testKind)}
+	pack := func(profile entity.SyncProfile, pad int) (entity.FrozenSyncPayload, error) {
+		if profile.Normalize().Key != policy.SelfProfile.Key {
+			return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+		}
+		payload := append([]byte("gold="+strconv.FormatInt(w.gold.Load(), 10)), make([]byte, pad)...)
+		return entity.TakeFrozenSyncPayload(1, payload), nil
+	}
+	w.SetSyncState(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
+		Enabled: true, SubjectID: id, Namespace: "player", SubjectKind: uint32(testKind),
+		Packer: entity.SubjectSyncPackFunc{
+			Snapshot: func(p entity.SyncProfile) (entity.FrozenSyncPayload, error) { return pack(p, fullPad) },
+			Delta:    func(p entity.SyncProfile, _ uint64) (entity.FrozenSyncPayload, error) { return pack(p, 0) },
+		},
+	}))
+	return w
 }
