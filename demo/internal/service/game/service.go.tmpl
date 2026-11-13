@@ -1,13 +1,14 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	playerentity "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 
 	world "{{MODULE}}/game/entities/world"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
@@ -91,7 +92,7 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopHeartbeat = stopHeartbeat
-	value, err := lifecycle.EnsureWorld(context.Background(), registry)
+	value, err := world.EnsureWorld(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
@@ -125,7 +126,7 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	area, err := lifecycle.EnsureWorldScene(context.Background(), registry, world)
+	area, err := sceneentity.EnsureWorldScene(context.Background(), registry, world)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
@@ -214,7 +215,7 @@ func (s *Service) Init(registry *app.Registry) error {
 	// 闲置卸载丢副本用的东西，在发布之前装上：丢一个玩家就是先让他离开场景、再移出实体管理器，所以
 	// 场景在上面先建好。卸载只是本地内存管理，不交出任何东西；之后在本进程重新装载时，DataEngine 的
 	// 冷加载会先等这个实体在途的投影。
-	players, err := lifecycle.PlayerFromRegistry(registry)
+	players, err := playerentity.LifecycleFromRegistry(registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: player lifecycle for eviction: %w", err)
 	}

@@ -1,4 +1,4 @@
-// Package enter 是“玩家进入游戏”这件事留给别的功能的登记点，以及进入端点与首次初始化之间传的结果。
+// 进入游戏（v1.47.0 起与登录票据校验同在 game/login；原 game/enter）是“玩家进入游戏”这件事留给别的功能的登记点，以及进入端点与首次初始化之间传的结果。
 //
 // 为什么要有登记点：进入游戏之后要顺带做的事属于各个功能自己（聊天把玩家加进在线名单、
 // 邮件把离线期间的全服邮件合并进邮箱……），进入端点不该认识它们。功能在自己的包里用 init 登记一个钩子，
@@ -12,10 +12,13 @@
 // “先新建、再进入”的那条路（新建请求 EnterCreate、它的登记点、会话激活后的告知）在 enter_create.go。
 // 没有人登记 RequireCreateFirst 的工程用不到它：EnterGame 照旧加载或创建。
 //
-// 这个包不 import 任何 controller 或实体包，所以谁都可以 import 它而不成环。
-package enter
+// 本包不被实体包 import（实体包接进入组件只用 game/components/enter），所以它可以 import 实体包；
+// 它不 import 任何 controller，所以 controller 可以 import 它而不成环。
+
+package login
 
 import (
+	"{{MODULE}}/game/components/enter"
 	"context"
 	"fmt"
 	"log/slog"
@@ -25,14 +28,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
-// InitResult 是首次初始化（Nest handler EnterInit）的结果。
-type InitResult struct {
-	// First 为 true 表示这一次进入执行了首次初始化（新玩家）。
-	First bool
-	// FirstAtUnixMilli 是这名玩家首次初始化提交时的业务时间。首次与之后的每次进入都填同一个值，
-	// 所以它可以当作“注册时间”用（例如全服邮件的“注册早于发送才收得到”）。
-	FirstAtUnixMilli int64
-}
+// InitResult 是首次初始化（Nest handler EnterInit）的结果，定义在进入组件的包里（game/components/enter）。
+type InitResult = enter.InitResult
 
 // Entered 是一次成功的进入：Player 已经加载或创建，首次初始化已经提交。
 type Entered struct {

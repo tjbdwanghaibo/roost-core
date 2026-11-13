@@ -87,6 +87,8 @@ type Manifest struct {
 	// directory already uses, filled by withServicePackages when rendering
 	// into an existing project. Not part of roost.yaml.
 	servicePackages map[string]string
+	// gameManagers 是 manager 列表放在 game/managers/managers.go 的业务服务（withServicePackages 按磁盘与清单算出，见 gameManagersService）。
+	gameManagers string
 
 	// ownerServices 是至少拥有一个 kind 的服务（//roost:entity service=），由 withEntityOwners 从工程源码读出，
 	// 渲染 bootstrap 时给这些服务装归属 handler 的 Mod。Not part of roost.yaml.

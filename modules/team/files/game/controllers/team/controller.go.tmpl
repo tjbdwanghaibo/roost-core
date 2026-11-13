@@ -1,6 +1,7 @@
 package team
 
 import (
+	teamentity "{{MODULE}}/game/entities/team"
 	"context"
 	"fmt"
 
@@ -11,8 +12,6 @@ import (
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
-
-	"{{MODULE}}/game/lifecycle"
 	db "{{MODULE}}/db"
 )
 
@@ -32,7 +31,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || client == nil {
 		return nil, fmt.Errorf("team: nest unavailable")
 	}
-	teams, err := lifecycle.TeamFromRegistry(registry)
+	teams, err := teamentity.LifecycleFromRegistry(registry)
 	if err != nil {
 		return nil, fmt.Errorf("team: lifecycle: %w", err)
 	}

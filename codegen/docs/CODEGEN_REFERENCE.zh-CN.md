@@ -152,7 +152,6 @@ roost add component inventory --entity player
 roost add mod nest -service game
 roost add handler use_item --entity player --component inventory
 roost add endpoint use_item --handler inventory
-roost add lifecycle player --service game
 roost add endpoint enter_game --handler player --lifecycle player
 roost add skill fireball
 roost add table monster
@@ -189,11 +188,11 @@ roost add rpc guild -service game
 
 | 命令 | 必需参数 | 生成/修改 | 下一步 |
 | --- | --- | --- | --- |
-| `add access player` | 多 Service 时 `--service` | roost.yaml、playeraccess、access Mod、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
+| `add access player` | 多 Service 时 `--service` | roost.yaml、access Mod（internal/access/player，派发层用 core 的 infra/network/playeraccess）、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
 | `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
-| `add lifecycle <entity>` | 多 Entity 时 `--entity` | `game/lifecycle/<entity>.go` | 登录/创角边界从 Registry 构造 |
+| （生成）实体 lifecycle | 无 | `game/entities/<entity>/lifecycle_gen.go`（`roost generate`；v1.47.0 起不再有 `add lifecycle`） | 登录/创角边界从 Registry 构造（`<entity>.LifecycleFromRegistry`） |
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
-| `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与 `add lifecycle` | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
+| `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与该实体 | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
 | `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog 与 catalog_test.go（`go test ./game/skills/` 编译全部定义，doctor `skills:catalog` 运行它） | 配置 CompileEnvironment 与 Host；服务 Init 调 CompileAll |
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
@@ -231,7 +230,7 @@ Nest 冷加载在 Data Engine 里找不到 Entity，回复带稳定码 `errcode.
 EnterGame 都回复 `errcode.CodeEntityDeleted = 3`（`entity_deleted`），`GetOrCreate` 不重建（DESIGN-TODO D10）。
 生成 lifecycle 的 `Create` 不读存储：只给 id-gen 发的新 ID 用，复用删过档的 ID 会在投影时版本冲突、进程 fail-stop。controller 需要 `Registry()`：新生成的 controller（`add endpoint`
 与 protocol 生成器两处骨架）都带；早先生成的 controller 归业务、不改写，缺少时 add 报错并说明要补的方法。
-`roost project doctor --workflow first-business` 的 `workflow:login` 检查是否有 controller 导入 `game/lifecycle`
+`roost project doctor --workflow first-business` 的 `workflow:login` 检查是否有 controller 导入实体包（`game/entities/<e>`，lifecycle_gen.go 在那里）
 并调用 `GetOrCreate`。完整顺序与编辑点见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md`，边界契约见 `docs/PROTOCOL_TO_NEST.zh-CN.md`，可运行 TCP 接入与帧协议见
 `docs/PLAYER_ACCESS_TCP.zh-CN.md`。
@@ -452,7 +451,7 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 
 安装的步骤与契约：
 
-1. **前置骨架**：实体没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程没有玩家接入时执行 `roost add access player --service <service>`；模块清单的 `access` 另可要求 `roost add lifecycle <Entity>` 与 `roost add transport tcp`，heartbeat / directory / web 也可由安装器代办；清单的 `next` 是安装后提示，`plan` / `add` 逐条列出（`todo:`），安装器不执行。它们各自是完整的工程状态，后面失败时不回退；`plan` 逐条列出。`access.player.self_sync` 则在模块文件全部就位后开启，随模块安装回滚，避免中间状态尚无显式 packer 时错误校验附加 DAO。
+1. **前置骨架**：实体没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程没有玩家接入时执行 `roost add access player --service <service>`；模块清单的 `access` 另可要求 `roost add transport tcp`（v1.47.0 起实体的 lifecycle 由 `roost generate` 生成，清单不再有 `lifecycle`），heartbeat / directory / web 也可由安装器代办；清单的 `next` 是安装后提示，`plan` / `add` 逐条列出（`todo:`），安装器不执行。它们各自是完整的工程状态，后面失败时不回退；`plan` 逐条列出。`access.player.self_sync` 则在模块文件全部就位后开启，随模块安装回滚，避免中间状态尚无显式 packer 时错误校验附加 DAO。
    - **托管框架服务**：模块的 `needs.uses` 与 `runtime.framework` 用到、工程还没有的托管服务（`-template game` 缺省一个都不带），在模块事务里声明 `services.<name>.framework: <name>` 并加进业务服务的 `uses`（`runtime.framework` 的托管服务这次才声明时，清单 `needs.mods` 里可代办的 Mod 直接写进它的 `mods`）；业务服务的配置补上 ClientMod 要的段（match、activity 要 etcd），新服务的配置、部署与协作者文件由第 6 步的 project sync 生成；随 `roost.yaml` 一起回滚。同名的已经是业务服务时拒绝安装。`plan` / `add` 输出 `framework service <name>: will declare` / `declared`。
 2. **状态**：模块的状态字段追加到实体主 DAO 的**末尾**，类型是模块自带的嵌套结构体。追加在末尾是因为同步的 PB 字段号按定义顺序排。同名字段已按同样的类型与标签存在时跳过；类型或标签不同、存储键已被占用时拒绝。
 3. **组件与文件**：模板先渲染进工程，再追加状态、接组件；`daos` 追加独立 DAO 聚合声明，`sync_packer` 接明确的同步工厂，已有业务工厂时拒绝覆盖；自带实体最后补 lifecycle。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `internal/service/<name>/collaborators.go`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
@@ -786,7 +785,7 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@latest \
   -def ./protocol/def \
   -proto ./protocol/proto -pb ./protocol/pb \
   -msgid ./protocol/msgid -bind ./protocol/player_bind \
-  -handlers ./game/protocol_handlers \
+  -handlers ./internal/access/player/protocols_gen.go \
   -manifest ./protocol/protocol_manifest.json
 ```
 

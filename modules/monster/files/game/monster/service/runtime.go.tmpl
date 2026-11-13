@@ -15,7 +15,6 @@ import (
 	monster "{{MODULE}}/game/entities/monster"
 	scene "{{MODULE}}/game/entities/scene"
 	sender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	rules "{{MODULE}}/game/monster"
 	sceneservice "{{MODULE}}/game/scene/service"
 )
@@ -35,7 +34,7 @@ type record struct {
 
 // Manager的表只记录生命周期槽位，不复制HP、位置、目标或在途AI状态；业务事实只在实体DAO。
 type Manager struct {
-	lives           *lifecycle.MonsterLifecycle
+	lives           *monster.Lifecycle
 	operations      sync.Mutex
 	records         map[int64]record
 	access          *entity.ManagerAccess
@@ -101,7 +100,7 @@ func newManager(access *entity.ManagerAccess, client nest.Client, scenes *scenes
 	if access == nil || client == nil || scenes == nil || sid <= 0 || sid > 65535 {
 		return nil, fmt.Errorf("monster: invalid runtime or sid")
 	}
-	lives, err := lifecycle.NewMonsterLifecycle(access)
+	lives, err := monster.NewLifecycle(access)
 	if err != nil {
 		return nil, err
 	}

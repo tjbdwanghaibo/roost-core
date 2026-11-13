@@ -1,12 +1,12 @@
 package alliance
 
 import (
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	allianceentity "{{MODULE}}/game/entities/alliance"
 	"context"
 	"fmt"
 
 	db "{{MODULE}}/db"
-	"{{MODULE}}/game/lifecycle"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -62,11 +62,11 @@ func (s *Service) BindRegistry(registry *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("alliance service: %w", err)
 	}
-	alliances, err := lifecycle.AllianceFromRegistry(registry)
+	alliances, err := allianceentity.LifecycleFromRegistry(registry)
 	if err != nil {
 		return err
 	}
-	members, err := lifecycle.AllianceMemberFromRegistry(registry)
+	members, err := alliance_member.LifecycleFromRegistry(registry)
 	if err != nil {
 		return err
 	}
@@ -97,8 +97,8 @@ func (s *Service) BindRegistry(registry *app.Registry) error {
 
 // lifecycleEntities is Entities over the generated lifecycles.
 type lifecycleEntities struct {
-	alliances *lifecycle.AllianceLifecycle
-	members   *lifecycle.AllianceMemberLifecycle
+	alliances *allianceentity.Lifecycle
+	members   *alliance_member.Lifecycle
 }
 
 func (e lifecycleEntities) EnsureAlliance(ctx context.Context, allianceID int64) error {

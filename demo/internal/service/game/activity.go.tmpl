@@ -14,7 +14,6 @@ import (
 	"{{MODULE}}/game/flags"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	world "{{MODULE}}/game/entities/world"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	gamemailbox "{{MODULE}}/game/mailbox"
 	"{{MODULE}}/game/settings"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -138,7 +137,7 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if err != nil {
 		return nil, nil, fmt.Errorf("activity: %w", err)
 	}
-	worldID, err := lifecycle.WorldID(registry)
+	worldID, err := world.WorldID(registry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("activity: %w", err)
 	}

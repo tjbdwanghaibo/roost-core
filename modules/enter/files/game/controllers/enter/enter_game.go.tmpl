@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -19,7 +18,7 @@ import (
 // HandleEnterGame 是登录边界：保证已认证的玩家在任何玩法请求到达 Nest 之前有一个 Player。
 // Nest handler 的目标必须是已存在的实体，新玩家没有，所以在它之前发来的玩法请求答 entity_not_found。
 //
-// 顺序由 gameenter.Enter 保证（经 gameenter.EnterSession 调它）：
+// 顺序由 gamelogin.Enter 保证（经 gamelogin.EnterSession 调它）：
 //
 //	进入前检查  别的功能登记的检查（game/enter 的 OnEntering：单个玩家换服的“正在换服”“已经绑定到别的服”……）。
 //	            任何一条拒绝，这一次进入到此为止：不加载也不创建 Player、不跑首次初始化、不跑进入钩子，
@@ -33,25 +32,25 @@ import (
 //	进入钩子    别的功能登记的钩子（game/enter 的 OnEntered：聊天上线、拉全服邮件……）。钩子失败只记日志，不让登录失败。
 //
 // 检查与钩子拿到的 claims 是会话的 claims（Entering.Claims / Entered.Claims）。工程改写这个端点时，
-// 把自己的加载与初始化包成 load 交给 gameenter.Enter；不经 Enter 的写法见它的注释。
+// 把自己的加载与初始化包成 load 交给 gamelogin.Enter；不经 Enter 的写法见它的注释。
 //
-// “先新建”的会话（gameenter.CreateFirst：login 模块装着时，用进服票据握手的会话）由 gameenter.EnterSession 把 load 换成 enterExisting：
+// “先新建”的会话（gamelogin.CreateFirst：login 模块装着时，用进服票据握手的会话）由 gamelogin.EnterSession 把 load 换成 enterExisting：
 // 只进入已经建成的玩家，没建成答 enter_need_create，不创建档、不做首次初始化——那是新建请求
 // （HandleEnterCreate）的事，角色名的规则也在那里。别的会话仍是 loadAndInit，与没有这条路时相同。
 func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
 	}
-	entering := gameenter.Entering{PlayerID: context.PlayerID}
+	entering := gamelogin.Entering{PlayerID: context.PlayerID}
 	if context.Session != nil {
 		// 认证器写进会话的 claims 原样带给检查与钩子：这里不解释它们，哪个键是什么意思由写它的认证器与读它的一方约定。
 		entering.Claims = context.Session.Principal().Claims
 	}
-	entered, err := gameenter.EnterSession(context.Context(), controller.registry, entering, gameenter.Loads{
-		LoadOrCreate: func(ctx stdcontext.Context) (gameenter.InitResult, error) {
+	entered, err := gamelogin.EnterSession(context.Context(), controller.registry, entering, gamelogin.Loads{
+		LoadOrCreate: func(ctx stdcontext.Context) (gamelogin.InitResult, error) {
 			return controller.loadAndInit(ctx, context.PlayerID)
 		},
-		Existing: func(ctx stdcontext.Context) (gameenter.InitResult, error) {
+		Existing: func(ctx stdcontext.Context) (gamelogin.InitResult, error) {
 			return controller.enterExisting(ctx, context.PlayerID)
 		},
 	})
@@ -67,17 +66,17 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 }
 
 // loadAndInit 加载或创建 Player，然后提交首次初始化。
-func (controller *Controller) loadAndInit(ctx stdcontext.Context, playerID int64) (gameenter.InitResult, error) {
-	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+func (controller *Controller) loadAndInit(ctx stdcontext.Context, playerID int64) (gamelogin.InitResult, error) {
+	entities, err := player.LifecycleFromRegistry(controller.registry)
 	if err != nil {
-		return gameenter.InitResult{}, err
+		return gamelogin.InitResult{}, err
 	}
 	if _, _, err := entities.GetOrCreate(ctx, playerID); err != nil {
-		return gameenter.InitResult{}, err
+		return gamelogin.InitResult{}, err
 	}
 	entityID, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
 	if err != nil {
-		return gameenter.InitResult{}, err
+		return gamelogin.InitResult{}, err
 	}
 	result, err := syncsender.NewEnterInitSender(controller.nestClient).Sync_EnterInit(ctx, entityID)
 	if err == nil && result.First {
@@ -89,13 +88,13 @@ func (controller *Controller) loadAndInit(ctx stdcontext.Context, playerID int64
 // enterExisting 是“先新建”的会话的 load：只进入已经建成的玩家。没有档直接答 enter_need_create（不创建）；
 // 有档就在它的锁内问一次（EnterExisting）：没建成同样答 enter_need_create，建成了就是一次进入。
 // 删过档的玩家与 loadAndInit 一样得到 entity_deleted。
-func (controller *Controller) enterExisting(ctx stdcontext.Context, playerID int64) (gameenter.InitResult, error) {
+func (controller *Controller) enterExisting(ctx stdcontext.Context, playerID int64) (gamelogin.InitResult, error) {
 	entityID, found, err := controller.find(ctx, playerID)
 	if err != nil {
-		return gameenter.InitResult{}, err
+		return gamelogin.InitResult{}, err
 	}
 	if !found {
-		return gameenter.InitResult{}, gameenter.ErrNeedCreate
+		return gamelogin.InitResult{}, gamelogin.ErrNeedCreate
 	}
 	return syncsender.NewEnterExistingSender(controller.nestClient).Sync_EnterExisting(ctx, entityID)
 }

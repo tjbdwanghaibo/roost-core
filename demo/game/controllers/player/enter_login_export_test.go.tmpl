@@ -1,7 +1,7 @@
 package player
 
 import (
-	lifecycle "{{MODULE}}/game/lifecycle"
+	playerentity "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
@@ -17,7 +17,7 @@ type LoginOwners = playerOwners
 // NewLoginControllerForTest 建一个只够跑 EnterGame / EnterCreate 的 Controller：Registry、Nest 客户端、Player 的
 // lifecycle 与驻留表。登录在装载之后顺带做的事（世界计数、进场景、补单、公会、公告）取不到各自的依赖，
 // 按端点自己的约定只记日志、不让登录失败。
-func NewLoginControllerForTest(registry *app.Registry, nestClient corenest.Client, players *lifecycle.PlayerLifecycle, owners LoginOwners) *Controller {
+func NewLoginControllerForTest(registry *app.Registry, nestClient corenest.Client, players *playerentity.Lifecycle, owners LoginOwners) *Controller {
 	controller := &Controller{registry: registry, nestClient: nestClient, players: players}
 	controller.owners.Store(&owners)
 	return controller

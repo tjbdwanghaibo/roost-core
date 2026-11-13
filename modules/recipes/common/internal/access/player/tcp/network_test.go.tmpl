@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	gameenter "{{MODULE}}/game/enter"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
 	gamelogin "{{MODULE}}/game/login"
@@ -423,7 +422,7 @@ func TestRecipeEnteringRefusesARoleInTransfer(t *testing.T) {
 		"an unreadable transfer": {account.TransferClaim: "garbage"},
 		"an empty transfer mark": {account.TransferClaim: ""},
 	} {
-		err := refuseTransferOnEnter(context.Background(), registry, gameenter.Entering{PlayerID: 42, Claims: claims})
+		err := refuseTransferOnEnter(context.Background(), registry, gamelogin.Entering{PlayerID: 42, Claims: claims})
 		if code, _ := errcode.ClientError(err); err == nil || code != apperrors.ErrLoginElsewhere.Code() {
 			t.Fatalf("%s: entering = %v, want login_elsewhere", label, err)
 		}
@@ -433,7 +432,7 @@ func TestRecipeEnteringRefusesARoleInTransfer(t *testing.T) {
 		"a settled role":       {account.ServerIDClaim: "1000", account.BindEpochClaim: "3"},
 		"another key's value":  {account.OriginServerIDClaim: "1001:move-1"},
 	} {
-		if err := refuseTransferOnEnter(context.Background(), registry, gameenter.Entering{PlayerID: 42, Claims: claims}); err != nil {
+		if err := refuseTransferOnEnter(context.Background(), registry, gamelogin.Entering{PlayerID: 42, Claims: claims}); err != nil {
 			t.Fatalf("%s: entering was refused: %v", label, err)
 		}
 	}
@@ -444,14 +443,14 @@ func TestRecipeEnteringRefusesARoleInTransfer(t *testing.T) {
 	served := app.NewRegistry(cfg)
 	moving[account.ServerIDClaim] = "1000"
 	touched := 0
-	_, err := gameenter.Enter(context.Background(), served, gameenter.Entering{PlayerID: 42, Claims: moving}, func(context.Context) (gameenter.InitResult, error) {
+	_, err := gamelogin.Enter(context.Background(), served, gamelogin.Entering{PlayerID: 42, Claims: moving}, func(context.Context) (gamelogin.InitResult, error) {
 		touched++
-		return gameenter.InitResult{}, nil
+		return gamelogin.InitResult{}, nil
 	})
 	if code, _ := errcode.ClientError(err); code != apperrors.ErrLoginElsewhere.Code() || touched != 0 {
 		t.Fatalf("EnterGame of a role in transfer: err %v, load called %d times; want login_elsewhere and no load", err, touched)
 	}
-	err = gameenter.Create(context.Background(), served, gameenter.Creating{PlayerID: 42, Name: "Mover", Claims: moving}, gameenter.CreateSteps{
+	err = gamelogin.Create(context.Background(), served, gamelogin.Creating{PlayerID: 42, Name: "Mover", Claims: moving}, gamelogin.CreateSteps{
 		Ensure: func(context.Context) error { touched++; return nil },
 		Commit: func(context.Context, string) error { touched++; return nil },
 	})
@@ -459,9 +458,9 @@ func TestRecipeEnteringRefusesARoleInTransfer(t *testing.T) {
 		t.Fatalf("EnterCreate of a role in transfer: err %v, record touched %d times; want login_elsewhere and nothing touched", err, touched)
 	}
 	delete(moving, account.TransferClaim)
-	if _, err := gameenter.Enter(context.Background(), served, gameenter.Entering{PlayerID: 42, Claims: moving}, func(context.Context) (gameenter.InitResult, error) {
+	if _, err := gamelogin.Enter(context.Background(), served, gamelogin.Entering{PlayerID: 42, Claims: moving}, func(context.Context) (gamelogin.InitResult, error) {
 		touched++
-		return gameenter.InitResult{}, nil
+		return gamelogin.InitResult{}, nil
 	}); err != nil || touched != 1 {
 		t.Fatalf("a settled role of this server: err %v, load called %d times; want it let in", err, touched)
 	}

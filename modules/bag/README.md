@@ -7,7 +7,7 @@
 - **客户端协议**
   - `BagDiscard`（`protocol/def/bag_discard.go`）：玩家丢弃自己的道具。请求带 `ItemID`、`Count`，应答带 `ItemID` 与丢弃后的剩余数量 `Left`。端点是 `game/controllers/bag/bag_discard.go` 的 `HandleBagDiscard`，目标玩家取自认证会话，不取请求字段。
   - 没有“查询背包”的协议：背包随同步下发给本人（见“状态”）。
-- **服务端入口**（逻辑在 `game/components/bag/component.go`，Player 的接线在 `game/entities/player/bag_component.go`；都要求调用方已经在 Nest 里持有这名 `Player` 的锁）
+- **服务端入口**（逻辑在 `game/components/bag/bag.go`，Player 的接线在 `game/entities/player/bag_component.go`；都要求调用方已经在 Nest 里持有这名 `Player` 的锁）
   - `BagComp().Add(itemID, count int64) (int64, error)`：放入，返回放入后的数量。
   - `BagComp().Remove(itemID, count int64) (int64, error)`：扣除，返回剩余数量；扣到 0 时删掉这个键。
   - `BagComp().Count(itemID int64) int64`：持有数量，没有时为 0。
@@ -21,7 +21,7 @@
   - `PlayerDao.Bag`（类型 `BagState`，`db/def/bag.go`），字段 `Items` 是“道具号 → 数量”的 map，只存数量为正的道具。标记为 `persist,sync`：落库，并随同步下发给玩家本人。
 - **配置**
   - 道具表：列定义在 `configs/schema/item.go`（`Item{ID, Name, MaxStack}`），数据在 `configs/table/item.csv`，自带三行：`1001` 药水（单种上限 99）、`1002` 体力券（999）、`1003` 新手礼包（`max_stack` 为 0，表示不单独限制）。`roost generate` 生成访问器 `generated.ItemByID`。
-  - 两个代码常量在 `game/components/bag/component.go`：`bag.MaxKinds = 200`、`bag.MaxStack = 999999`；Player 包里以 `BagMaxKinds`、`BagMaxStack` 的名字再导出一次。
+  - 两个代码常量在 `game/components/bag/bag.go`：`bag.MaxKinds = 200`、`bag.MaxStack = 999999`；Player 包里以 `BagMaxKinds`、`BagMaxStack` 的名字再导出一次。
 - **错误码**（`internal/errors/bag.go`）
   - `bag_item_invalid`：道具号不在规则允许的范围内（缺省是“道具表里没有这一行”）。
   - `bag_count_invalid`：数量不为正。
@@ -51,7 +51,7 @@
   - 加道具、改单种上限：只改 `configs/table/item.csv`，再 `roost generate`。
   - 给道具加属性（品质、售价等）：在 `configs/schema/item.go` 加列，CSV 加同名列，`roost generate` 后用 `generated.ItemByID(id)` 读。
   - 换准入规则（某类道具不进背包、统一上限）：改 `game/components/bag/items.go` 的 `ItemRule`。
-  - 改种类上限或硬上限：改 `game/components/bag/component.go` 的两个常量。
+  - 改种类上限或硬上限：改 `game/components/bag/bag.go` 的两个常量。
   - 道具号发布后不要挪给别的道具用：玩家背包里记的是道具号。
 - **别的模块 / 业务代码要用它**
   - 已经持有 `Player` 锁（在自己的 Nest handler 里）：目标接口嵌入 `player.IBagEntity`，调 `target.BagComp().Add(itemID, count)` 或 `Remove`，错误原样返回给 Nest。一次扣多种道具时先逐个 `Has`，全部满足再逐个 `Remove`。

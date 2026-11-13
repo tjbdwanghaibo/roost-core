@@ -29,7 +29,20 @@ func defaultServicePackage(name string) string {
 	return pkg
 }
 
-// servicePackage 是生成 internal/service/<name>/ 下文件时用的包名。
+// frameworkServicesDir 是托管框架服务手写文件（collaborators、登录渠道、HTTP 入口……）的目录（v1.47.0 起；此前与业务服务
+// 一样在 internal/service/<name>/）。托管服务没有生成的接线，只有工程自己写的协作者，所以放在工程顶层的 services/<name>/，
+// 只有用到的服务才有目录；game 服务的生成接线仍在 internal/service/<name>。
+const frameworkServicesDir = "services/"
+
+// serviceDir 是服务 name 的包目录（相对工程根，不带结尾斜杠）：托管框架服务在 services/<name>，业务服务在 internal/service/<name>。
+func (m Manifest) serviceDir(name string) string {
+	if m.isFrameworkService(name) {
+		return frameworkServicesDir + name
+	}
+	return "internal/service/" + name
+}
+
+// servicePackage 是生成服务目录（serviceDir）下文件时用的包名。
 func (m Manifest) servicePackage(name string) string {
 	if pkg, ok := m.servicePackages[name]; ok {
 		return pkg
@@ -42,12 +55,39 @@ func (m Manifest) servicePackage(name string) string {
 func (m Manifest) withServicePackages(root string) Manifest {
 	packages := make(map[string]string, len(m.Services))
 	for name := range m.Services {
-		if pkg, ok := existingServicePackage(filepath.Join(root, "internal", "service", name)); ok {
+		if pkg, ok := existingServicePackage(filepath.Join(root, filepath.FromSlash(m.serviceDir(name)))); ok {
 			packages[name] = pkg
 		}
 	}
 	m.servicePackages = packages
+	m.gameManagers = gameManagersService(root, m)
 	return m
+}
+
+// gameManagersPath 是 game 服务的 manager 登记点（v1.47.0 起；此前在 internal/service/<game>/managers.go）。
+const gameManagersPath = "game/managers/managers.go"
+
+// gameManagersService 返回 manager 列表放在 game/managers 的业务服务：game/ 目录树所属的那个服务——玩家接入层所在的服务，
+// 没有接入层时是唯一一个跑 Nest 的业务服务——且它装了 manager Mod。该服务目录里已经有 managers.go（v1.47.0 之前生成的工程）
+// 时沿用旧位置，不改写业务文件。返回空串时各服务都用 internal/service/<name>/managers.go。
+func gameManagersService(root string, m Manifest) string {
+	service := m.Access["player"].Service
+	if service == "" {
+		var err error
+		if service, err = nestService(m, "", "", ""); err != nil {
+			return ""
+		}
+	}
+	if _, ok := m.Services[service]; !ok || m.isFrameworkService(service) {
+		return ""
+	}
+	if mods, err := resolveMods(effectiveServiceMods(m, service)); err != nil || !contains(mods, "manager") {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(root, "internal", "service", service, "managers.go")); err == nil {
+		return ""
+	}
+	return service
 }
 
 // existingServicePackage 返回目录里非测试 Go 文件的包名：先看业务文件（不带生成头），没有业务文件时

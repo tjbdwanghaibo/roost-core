@@ -1,6 +1,7 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	"context"
 	"errors"
 	"fmt"
@@ -18,7 +19,6 @@ import (
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
 	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
@@ -823,7 +823,7 @@ func TestTerrainGameScaleLoadMeasure(t *testing.T) {
 // lifecycleChunks 是进程的 TerrainChunk lifecycle（startTerrainSync 经 registry 取的同一个，地形同步启动用）。
 func lifecycleChunks(t *testing.T, p *terrainProcess) terrainmap.Chunks {
 	t.Helper()
-	chunks, err := lifecycle.NewTerrainChunkLifecycle(entity.NewManagerAccess(p.entities))
+	chunks, err := terrain_chunk.NewLifecycle(entity.NewManagerAccess(p.entities))
 	if err != nil {
 		t.Fatal(err)
 	}

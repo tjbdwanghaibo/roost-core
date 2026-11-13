@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开180个包目录的职责映射</summary>
+<summary>展开182个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -113,6 +113,7 @@
 | [infra/network/httpserver](../../infra/network/httpserver) | [观测、安全与运维](impl/11-observability.md) | 1 | 4 |
 | [infra/network/nats](../../infra/network/nats) | [其他包与公共基础设施](impl/14-foundation.md) | 7 | 3 |
 | [infra/network/nats/driver](../../infra/network/nats/driver) | [其他包与公共基础设施](impl/14-foundation.md) | 6 | 15 |
+| [infra/network/playeraccess](../../infra/network/playeraccess) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 1 | 1 |
 | [infra/network/ownerroute](../../infra/network/ownerroute) | [Remote Entity 与 Mirror](impl/05-remote-mirror.md) | 2 | 3 |
 | [infra/network/servicerpc](../../infra/network/servicerpc) | [次核心：Service 领域能力](impl/09-services.md) | 3 | 3 |
 | [infra/network/webroute](../../infra/network/webroute) | [观测、安全与运维](impl/11-observability.md) | 1 | 5 |
@@ -162,6 +163,7 @@
 | [wiring/configdata](../../wiring/configdata) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 3 |
 | [wiring/dataengine](../../wiring/dataengine) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 13 |
 | [wiring/directory](../../wiring/directory) | [次核心：Service 领域能力](impl/09-services.md) | 1 | 1 |
+| [wiring/entitylifecycle](../../wiring/entitylifecycle) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 0 |
 | [wiring/entitytimer](../../wiring/entitytimer) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/etcd](../../wiring/etcd) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 0 |
 | [wiring/examples/split](../../wiring/examples/split) | [次核心：Service 领域能力](impl/09-services.md) | 4 | 4 |

@@ -1,0 +1,58 @@
+package scene
+
+import (
+	"context"
+	"fmt"
+
+	gamescene "{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// WorldSceneUniqueID is the demo's one map. A game with many maps mints an id
+// per map instead; nothing below assumes there is only one except this
+// constant.
+const WorldSceneUniqueID int64 = 1
+
+// EnsureWorldScene creates or loads the scene this process runs, built on
+// config (its map: WorldSceneConfig, or the editable terrain's map —
+// gamescene.TerrainConfig). It is called once in the game service's Init,
+// before anything can put a player on a map: a scene is built from
+// configuration (`noPersist`), so "load" here means "build it again", and the
+// id is what makes it the same scene to everyone who names it.
+func EnsureWorldScene(ctx context.Context, registry *app.Registry, config gamescene.Config) (*Scene, error) {
+	lifecycle, err := LifecycleFromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	return GetOrCreateOn(ctx, lifecycle, WorldSceneUniqueID, config)
+}
+
+// GetOrCreateOn is the generated GetOrCreate with the map carried along: the
+// lifecycle creates an Entity with config as its creation parameter, and a
+// Scene's map is fixed when it is built (OnInitFinish reads gamescene.Config
+// from the parameter). A scene that already exists on another map is an
+// error, not a silent mismatch between the map the service believes in and
+// the one the walks are checked against.
+func GetOrCreateOn(ctx context.Context, lifecycle *Lifecycle, uniqueID int64, config gamescene.Config) (*Scene, error) {
+	value, _, err := lifecycle.GetOrCreateWith(ctx, uniqueID, config)
+	if err != nil {
+		return nil, fmt.Errorf("scene: ensure singleton: %w", err)
+	}
+	config = config.Normalize()
+	want := spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}
+	terrain := value.Terrain()
+	if terrain == nil {
+		return nil, fmt.Errorf("scene: singleton %d is being destroyed", uniqueID)
+	}
+	if got := terrain.Bounds(); got != want {
+		return nil, fmt.Errorf("scene: singleton %d already exists on the map %v, not %v", uniqueID, got, want)
+	}
+	return value, nil
+}
+
+// WorldSceneConfig is the map of a scene without editable terrain (and of a
+// partitioned scene's Scene Entity): the default field. With a terrain map
+// the ordinary scene is built on gamescene.TerrainConfig instead; the spawn
+// point is the same on both.
+func WorldSceneConfig() gamescene.Config { return gamescene.DefaultConfig() }

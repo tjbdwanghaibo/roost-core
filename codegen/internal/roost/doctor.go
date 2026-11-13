@@ -296,7 +296,7 @@ func checkFrameworkCollaborators(root string, manifest Manifest) []CheckItem {
 		if !manifest.isFrameworkService(name) {
 			continue
 		}
-		rel := "internal/service/" + name + "/collaborators.go"
+		rel := manifest.serviceDir(name) + "/collaborators.go"
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusFail, Detail: rel + " is missing; run make sync"})
@@ -371,7 +371,7 @@ func PrintNextStep(root, requestedWorkflow string, stdout io.Writer) error {
 	for _, item := range checkFrameworkCollaborators(root, manifest) {
 		if item.Status == StatusFail {
 			service := strings.TrimPrefix(item.Name, "collaborators:")
-			fmt.Fprintf(stdout, "next: implement the collaborators of %s in internal/service/%s/collaborators.go\n", service, service)
+			fmt.Fprintf(stdout, "next: implement the collaborators of %s in %s/collaborators.go\n", service, frameworkServicesDir+service)
 			fmt.Fprintf(stdout, "why: %s\n", item.Detail)
 		}
 	}
@@ -457,7 +457,7 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 		{"nest-handler", "game/handler/*.go", "//roost:nest", "a Nest business handler exists", "roost add handler RenamePlayer --entity " + names.entity + " --component " + names.component + exampleNameNote},
 		{"protocol", "protocol/def/*.go", "handler=", "a protocol is assigned to a controller", "roost add protocol " + names.protocol + " --group " + names.group + " --handler " + names.domain + names.protocolNote},
 		{"endpoint", "game/controllers/*/*.go", "generated Sender", "a protocol endpoint calls a generated Sender", "roost add endpoint " + names.endpoint + " --handler " + names.endpointDomain + names.endpointNote},
-		{"lifecycle", "game/lifecycle/*.go", "FromRegistry", "an explicit Entity lifecycle boundary exists", "roost add lifecycle " + names.entity},
+		{"lifecycle", "game/entities/*/lifecycle_gen.go", "LifecycleFromRegistry", "an explicit Entity lifecycle boundary exists (generated per entity package)", "roost generate"},
 	}
 	for _, check := range checks {
 		found, err := anyFileContains(root, check.pattern, check.needle)
@@ -503,7 +503,7 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 	}
 	add("login", loginOK, "a login endpoint creates or loads the player's Entity (lifecycle GetOrCreate)",
 		"roost add protocol EnterGame --group "+names.group+" --handler "+names.domain+", then roost add endpoint EnterGame --handler "+names.domain+" --lifecycle "+names.lifecycle)
-	bootstrapOK, err := anyFileContains(root, "game/protocol_bootstrap/*.go", "RegisterPlayerProtocols")
+	bootstrapOK, err := anyFileContains(root, "internal/access/player/protocols_gen.go", "RegisterPlayerProtocols")
 	if err != nil {
 		return nil, err
 	}
@@ -553,22 +553,8 @@ func firstBusinessNames(root string, manifest Manifest) (workflowNames, error) {
 			names.component = toPascal(strings.TrimSuffix(filepath.Base(components[0]), "_component.go"))
 		}
 	}
-	// 登录用的 lifecycle：有这个 Entity 的就用它，否则用已有的第一个，都没有时与 Entity 同名（还要先 add lifecycle）。
+	// 登录用的 lifecycle：每个实体包都有生成的 lifecycle_gen.go，用 Entity 自己的。
 	names.lifecycle = names.entity
-	lifecycles, err := filepath.Glob(filepath.Join(root, "game", "lifecycle", "*.go"))
-	if err != nil {
-		return names, err
-	}
-	var existing []string
-	for _, path := range lifecycles {
-		base := strings.TrimSuffix(filepath.Base(path), ".go")
-		if !strings.HasSuffix(base, "_gen") && !strings.HasSuffix(base, "_test") && !strings.HasSuffix(base, "_singleton") {
-			existing = append(existing, base)
-		}
-	}
-	if len(existing) > 0 && !slices.Contains(existing, toSnake(names.entity)) {
-		names.lifecycle = toPascal(existing[0])
-	}
 	// 协议文件（protocol/def/<snake>.go）与它声明的 controller 域。
 	protocolPaths, err := filepath.Glob(filepath.Join(root, "protocol", "def", "*.go"))
 	if err != nil {
@@ -845,14 +831,14 @@ func workflowHandlerProtocolMatch(root, name string) (bool, error) {
 	return false, nil
 }
 
-// anyLoginEndpoint 报告是否有 controller 文件导入工程的 game/lifecycle 并调用某个 GetOrCreate：
+// anyLoginEndpoint 报告是否有 controller 文件导入工程的实体包（game/entities/<e>，lifecycle_gen.go 在那里）并调用某个 GetOrCreate：
 // 这就是“登录时保证 Entity 存在”的那一步（roost add endpoint --lifecycle 生成的，或业务手写的）。
 func anyLoginEndpoint(root string, manifest Manifest) (bool, error) {
 	paths, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*", "*.go"))
 	if err != nil {
 		return false, err
 	}
-	lifecycleImport := strconv.Quote(manifest.Project.Module + "/game/lifecycle")
+	entitiesImport := manifest.Project.Module + "/game/entities/"
 	for _, path := range paths {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -863,7 +849,8 @@ func anyLoginEndpoint(root string, manifest Manifest) (bool, error) {
 		}
 		imported := false
 		for _, spec := range file.Imports {
-			imported = imported || spec.Path.Value == lifecycleImport
+			path, _ := strconv.Unquote(spec.Path.Value)
+			imported = imported || strings.HasPrefix(path, entitiesImport)
 		}
 		if !imported {
 			continue

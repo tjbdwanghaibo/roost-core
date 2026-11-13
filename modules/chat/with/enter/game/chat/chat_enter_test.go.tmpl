@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 )
 
 // 进入游戏的钩子把玩家加进进程的在线名单；重复进入不出错，名单里仍只有一份。
@@ -16,7 +16,7 @@ func TestWithChatEnterJoinsTheWorldChannel(t *testing.T) {
 		t.Fatal("the player is online before entering")
 	}
 	for i := 0; i < 2; i++ {
-		if err := joinWorldOnEnter(context.Background(), nil, gameenter.Entered{PlayerID: playerID}); err != nil {
+		if err := joinWorldOnEnter(context.Background(), nil, gamelogin.Entered{PlayerID: playerID}); err != nil {
 			t.Fatalf("enter %d: %v", i+1, err)
 		}
 	}
@@ -36,7 +36,7 @@ func TestWithChatEnterIsRegisteredAsAnEnterHook(t *testing.T) {
 	const playerID = 94102
 	DefaultPresence().Remove(playerID)
 	t.Cleanup(func() { DefaultPresence().Remove(playerID) })
-	gameenter.RunEntered(context.Background(), nil, gameenter.Entered{PlayerID: playerID})
+	gamelogin.RunEntered(context.Background(), nil, gamelogin.Entered{PlayerID: playerID})
 	if !DefaultPresence().Holds(playerID) {
 		t.Fatal("RunEntered did not put the player online: the chat hook is not registered")
 	}

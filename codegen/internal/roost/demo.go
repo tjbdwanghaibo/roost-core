@@ -490,13 +490,11 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/clientsync/decode.go", why: "typed DAO Protobuf patches for client and robot views"},
 		{write: "game/entities/player/sync_packer.go", why: "the client-facing half of sync=true: who serializes a subject, by profile and by dirty mask"},
 		{add: &AddOptions{Kind: "entity", Name: "Scene"}, why: "the map is an Entity: an id, a lifecycle the framework drives, addressable by GM and by another process later"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "Scene", Service: gameService}, why: "the create/load boundary for scenes"},
 		{add: &AddOptions{Kind: "dao", Name: "Scene", Entity: "Scene"}, why: "the scene's replicated state: its time domain, //roost:dao nocoll, all nopersist,sync"},
 		{add: &AddOptions{Kind: "entity", Name: "Monster"}, why: "the scene spawns things that are seen but do not see; the pipeline must not have a special case for them"},
 		{add: &AddOptions{Kind: "component", Name: "Body", Entity: "Monster"}, why: "where a monster is and how much of it is left"},
 		{add: &AddOptions{Kind: "component", Name: "Actor", Entity: "Monster"}, why: "what makes a monster act: movement, AI and the state gate, on its own heartbeat"},
 		{add: &AddOptions{Kind: "dao", Name: "Monster", Entity: "Monster"}, why: "a DAO with no collection (//roost:dao nocoll) whose every field is nopersist,sync: nothing to store, everything to replicate"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "Monster", Service: gameService}, why: "the spawner's create/destroy boundary"},
 		{write: "db/def/monster.go", why: "template, position and hp — //roost:dao nocoll, all nopersist,sync: a position still lives in a DAO, and no Mongo collection is invented for it"},
 		{write: "game/entities/monster/entity.go", why: "ephemeral, replicated, rebuilt by the spawner on every start"},
 		{write: "game/entities/monster/body_component.go", why: "the same position rule as the Player: read and written here, nowhere else"},
@@ -515,7 +513,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/scene/entity.go", why: "the map as an Entity: rebuilt from configuration, exporting its systems by interface, deciding its population on its own 1Hz heartbeat and owning its time domain"},
 		{write: "db/def/scene.go", why: "the time domain's three numbers, nopersist,sync: a dungeon's 2x dies with the process and the client extrapolates from them"},
 		{write: "game/entities/scene/sync_packer.go", why: "the scene's own subject, seen by every member through the scene view"},
-		{write: "game/lifecycle/scene_singleton.go", why: "the one map this process runs, built from configuration before anyone can stand on it"},
+		{write: "game/entities/scene/singleton.go", why: "the one map this process runs, built from configuration before anyone can stand on it"},
 		{write: "game/settings/settings.go", why: "the config keys the game service's own code reads (activity.*, platform.*, sid), declared like a Mod's and read with app.LoadConfig: the App checks them at start and doctor knows them (maintainer decision)"},
 		{write: "game/dungeon/dungeon.go", why: "what a clear is worth and why paying for one exactly once needs a claim ledger, not the request's own flag"},
 		{write: "game/dungeon/dungeon_test.go", why: "the claim window as a table test, shipped with the project"},
@@ -639,14 +637,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/terrain_chunk/sync_packer.go", why: "one view with every synced field (the applied list is not one): per-index height and material deltas from the change tree, whole fields past the guards, a full snapshot on entering view"},
 		{write: "game/entities/terrain_chunk/replica.go", why: "another cell's edited chunk as a read-only replica for this process's clients (partitioned scene, P3): the same id, namespace, kind and sync encoding as the entity, per-index deltas worked out from the changed points, no DAO and no transaction"},
 		{write: "game/entities/terrain_chunk/replica_test.go", why: "a delta packed before and a snapshot packed after an update in one capture still bring every subscriber to the latest; the whole field past the guard; versions only move forward"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "TerrainChunk", Service: gameService}, why: "a chunk's first edit creates its (empty) entity with GetOrCreate before the edit transaction can lock it; its id is deterministic, so never a bare Create"},
 		{write: "game/entities/terrain_chunk/surface_component.go", why: "apply point edits inside the chunk's transaction: the first edit fills the chunk from the base data, more than 1000 changed heights (or materials) go out as the whole field, materials are a byte in the terrain and a uint16 in the DAO (out of range refused), every commit bumps the version, every check before the first write; resetting a record built on an old base pack (its building lots kept); the building lots under the chunk's lock"},
 		{write: "game/entities/terrain_chunk/lots.go", why: "a building's lot: a node rectangle packed into one int64, the chunks it covers, its nodes in a chunk, and the occupancy bitmap a chunk's lots make, worked out per call"},
 		{write: "game/entities/terrain_chunk/surface_component_test.go", why: "the first edit starts from the base data, a record on another base revision is refused, a refused or rolled-back edit leaves the DAO as it was, the whole-field guards end where point writes end and sync the whole field, heights and materials share the change budget, a material outside a byte is refused, a discard resets only a stale record"},
 		{add: &AddOptions{Kind: "entity", Name: "TerrainEditor", ID: 12}, why: "a player's terrain edit ledger (T01/T02): an edit is (player id, edit sequence), the ledger keeps the highest applied sequence and a 64-bit window below it, locked with the chunks in the brush transaction"},
 		{write: "db/def/terrain_editor.go", why: "the last applied sequence and the 64-bit window as two int64s (all 64 bits kept, nothing truncated) and the player's standing building count (schema 2), persisted, never synced"},
 		{write: "game/entities/terrain_editor/entity.go", why: "kind 12 at the PlayerScoped rank (after the chunks); its id is the player's unique id, so only GetOrCreate"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "TerrainEditor", Service: gameService}, why: "a player's first edit creates the (empty) ledger with GetOrCreate before the brush transaction can lock it"},
 		{write: "game/entities/terrain_editor/ledger_component.go", why: "the window rule in one pure value: newer is fresh, inside the window applied is a duplicate and unapplied is fresh, older is stale, far ahead is refused; recorded in the brush transaction"},
 		{write: "game/entities/terrain_editor/ledger_component_test.go", why: "the window against an unbounded model over random streams (a sequence is never fresh twice), its edges, all 64 bits through the DAO, a rolled-back record undone"},
 		{write: "configs/schema/building.go", why: "a prefab building as config data (plan §27): the client's model, the footprint, the placement rules (slope, cut, must level); the footprint of an existing id never changes in a reload"},
@@ -658,12 +654,10 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/building/entity.go", why: "kind 13 at the World rank (locked with the chunks it covers, before the player's ledger), sync=true in the building namespace; the anchor node <-> entity id mapping, so only GetOrCreate"},
 		{write: "game/entities/building/sync_packer.go", why: "one view with every synced field, whole fields by MarshalSync like the player's and the monster's"},
 		{write: "game/entities/building/spec.go", why: "the building and building_param tables joined into specs with the cross-row rules checked once; parameters filled with defaults and range-checked; a reload may not drop an id or change its footprint"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "Building", Service: gameService}, why: "a placement creates the (vacant) building at its anchor with GetOrCreate before the transaction can lock it"},
 		{write: "game/entities/building/site_component.go", why: "a placement (config id, parameters, anchor, facing, level) and the building's state; place, change parameters, clear and rebase inside the transaction, each write handed to the subject"},
 		{add: &AddOptions{Kind: "entity", Name: "TerrainCellEditor", ID: 14}, why: "a player's edit ledger on one cell of a partitioned scene (editable terrain P5): a cross-cell edit runs a part on each cell that writes its chunks, and each cell keeps (player id, edit sequence) for its own part in the same transaction as its chunks, so a resent or retried part writes once"},
 		{write: "db/def/terrain_cell_editor.go", why: "the same last sequence, 64-bit window and building count as the player's ledger, dbscope=sid so each cell process writes its own database, persisted, never synced"},
 		{write: "game/entities/terrain_cell_editor/entity.go", why: "kind 14 at the PlayerScoped rank (after the chunks and the building); its id is the player's unique id, so only GetOrCreate"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "TerrainCellEditor", Service: gameService}, why: "a player's first part on a cell creates the (empty) cell ledger with GetOrCreate before the part's transaction can lock it"},
 		{write: "game/entities/terrain_cell_editor/ledger_component.go", why: "the player's window rule without the far-ahead refusal (the player's base checked it; a player who edited elsewhere for long arrives far ahead), recorded in the part's transaction"},
 		{write: "game/entities/terrain_cell_editor/ledger_component_test.go", why: "a far-ahead sequence is fresh on a cell, duplicates and the window as on the player's ledger, all fields through the DAO, a rolled-back record undone"},
 		{write: "game/settings/terrain.go", why: "scene.terrain.pack declared once (empty = no terrain), and with a partitioned scene the cell side checked to be a multiple of the 6400 chunk side at load"},
@@ -773,7 +767,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/activity.go", why: "the World's timer driver wired by hand (business clock, Nest, start before the World loads), the window loop (expected servers from the App singleton lock's Live query), the phase effect consumer and the settlement: mail → record → ack"},
 		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and its activity group comes from the groups file the coordinator reads too"},
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
-		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
+		{write: "services/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
 	return append(append(steps, demoModuleSteps()...), demoAllianceSteps(gameService)...)
 }
@@ -793,8 +787,8 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "game/alliance/rules.go", why: "demo alliance currency is gold item 9001"},
 		{write: "game/purchase/products.go", why: "the purchase module's project-owned catalogue: demo item packs plus the default coin product"},
 		{write: "game/purchase/demo_provider.go", why: "the demo-only provider's channel and deterministic order identity"},
-		{write: "internal/service/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
-		{write: "internal/service/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
+		{write: "services/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
+		{write: "services/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
 		{write: "game/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的四个业务文件。协议多几个字段，
 		// 两个要装载 Player 的端点交给 player controller——EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
@@ -840,13 +834,13 @@ func demoModuleSteps() []demoScaffoldStep {
 		// demo 只动模块留给工程的地方：渠道入口 login_channels.go 换成 demo 渠道（机器人、演练脚本与 WALKTHROUGH 用它登录），
 		// accountctl 经模块的 registerCommand 多登记四个命令（另一个文件，模块的 main.go 不动）。
 		// 登录入口是 portal 模块（挂在托管 account 的进程上），服务器时间是 servertime 模块，demo 都不覆盖。
-		{write: "internal/service/account/login_channels.go", why: "the login module's project-owned channel entry with the demo channel: credential demo:<open_id>, which the robots, the drills and the walkthrough log in with; every other channel is refused"},
-		{write: "internal/service/account/login_channels_test.go", why: "the demo channel on the real account service: the matching credential logs in (session token and enter ticket both), anything else is identity_denied and leaves no account, and the development channel still answers to login.dev_token only"},
+		{write: "services/account/login_channels.go", why: "the login module's project-owned channel entry with the demo channel: credential demo:<open_id>, which the robots, the drills and the walkthrough log in with; every other channel is refused"},
+		{write: "services/account/login_channels_test.go", why: "the demo channel on the real account service: the matching credential logs in (session token and enter ticket both), anything else is identity_denied and leaves no account, and the development channel still answers to login.dev_token only"},
 		{write: "internal/access/player/tcp/login_claims_test.go", why: "the login module's authenticator read back by the demo's own reader: the bound sid BoundServerID reads, the broadcast profile of the mailbox enter hook, the bind epoch and a transfer in flight; and what the demo's former authenticator refused is still refused"},
 		{write: "cmd/accountctl/operator.go", why: "the demo's operator commands registered beside the login module's own: record or undo a server merge (merge-server / unmerge-server), and the manual fallback for moving one role to another server (show-role, transfer-role begin / commit / abort)"},
 		{write: "cmd/accountctl/operator_test.go", why: "transfer-role begin / commit / abort on the real account service over memory stores: begin presents the binding it read, commit records the operator's note, an incomplete command writes nothing; the four commands are reachable through the module's dispatch"},
 		{write: "cmd/loadtest/portal_login_test.go", why: "the robot's -login portal credential path against the real front door handlers: three HTTP calls end in an enter ticket the handshake takes, a returning robot learns its player id from the server list, and an unregistered server, a refused login or an unreachable front door yield no handshake frame"},
-		{write: "game/portal/dev_walkthrough_test.go", why: "the walkthrough's three calls on the project's own dev config: the front door's Start on configs/service/config.account.yaml, the demo channel and the development channel, an enter ticket with this machine's game address, and the handshake that takes it"},
+		{write: "services/account/portal/dev_walkthrough_test.go", why: "the walkthrough's three calls on the project's own dev config: the front door's Start on configs/service/config.account.yaml, the demo channel and the development channel, an enter ticket with this machine's game address, and the handshake that takes it"},
 		{run: demoLoginDevConfig, why: "the account service's DEV config gets the development login token and the address of this machine's game server, so the walkthrough's three curl calls end with an enter ticket and where to connect; the production example gets neither"},
 	}
 }
@@ -893,7 +887,7 @@ func demoLoginDevConfig(root, gameService string) error {
 		body += "\n"
 	}
 	if !strings.Contains("\n"+body, "\nlogin:\n") {
-		body += "# Development login (the login module, internal/service/account/login_dev.go): channel \"dev\" with this\n" +
+		body += "# Development login (the login module, services/account/login_dev.go): channel \"dev\" with this\n" +
 			"# token as the credential. DEV ONLY: a production config that sets it stops the account process at start.\n" +
 			"# The demo channel (login_channels.go, credential demo:<open_id>) does not read it.\n" +
 			"login:\n  dev_token: " + demoDevLoginToken + "\n"
@@ -901,7 +895,7 @@ func demoLoginDevConfig(root, gameService string) error {
 	if !strings.Contains("\n"+body, "\nportal:\n") {
 		body += "# The front door's server directory (the portal module): server id -> the address a client connects to.\n" +
 			"# This machine's game server; a deployment lists its Gate addresses here or plugs in a dynamic directory\n" +
-			"# (game/portal/portal_rules.go).\n" +
+			"# (services/account/portal/portal_rules.go).\n" +
 			fmt.Sprintf("portal:\n  servers:\n    \"%d\": 127.0.0.1:%s\n", game.Sid, port)
 	}
 	if body == string(raw) {

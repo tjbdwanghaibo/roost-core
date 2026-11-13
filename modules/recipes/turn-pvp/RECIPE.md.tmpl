@@ -9,7 +9,7 @@
 登录链路是 login 与 portal 两个模块的（细节见 roost-core 的 `modules/login/README.md`、`modules/portal/README.md`）：
 
 - 握手的认证器（`internal/access/player/tcp/auth.go` 与 `game/login`）和 account 的协作者由 login 模块写下：票据全部由 account
-  签发与校验，玩家号是 account 的 Redis 里的计数器。渠道验签在 `internal/service/account/login_channels.go` 接，缺省一个渠道都没接；
+  签发与校验，玩家号是 account 的 Redis 里的计数器。渠道验签在 `services/account/login_channels.go` 接，缺省一个渠道都没接；
   认证保持 fail-closed，没有接受任意身份的测试密码。
 - 新建配方时已在开发配置 `configs/service/config.account.yaml` 写入 `login.dev_token: dev-recipe-local` 和
   `portal.servers`（地址取本工程业务服务的 SID / TCP 端口）。登录使用渠道 `dev`、自选 `open_id`、凭据 `dev-recipe-local`。

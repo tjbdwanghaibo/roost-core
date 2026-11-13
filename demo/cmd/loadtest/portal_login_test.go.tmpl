@@ -8,8 +8,8 @@ import (
 	"time"
 
 	gamelogin "{{MODULE}}/game/login"
-	"{{MODULE}}/game/portal"
-	accountcollaborators "{{MODULE}}/internal/service/account"
+	"{{MODULE}}/services/account/portal"
+	accountcollaborators "{{MODULE}}/services/account"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
@@ -158,3 +158,6 @@ func TestPortalLoginFailsWithoutATicket(t *testing.T) {
 		t.Fatalf("a banned account: packet %v, err %v", packet, err)
 	}
 }
+
+// v1.47.0：登录对进入的检查不再随 game/login 的 init 打开（见 RegisterEnterChecks），本测试包照旧要它们。
+func init() { gamelogin.RegisterEnterChecks() }

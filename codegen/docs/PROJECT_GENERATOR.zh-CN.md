@@ -142,6 +142,7 @@ match、platform、rank、session），`-framework rank,chat` 只托管列出的
       Dockerfile
       internal/bootstrap/generated.go
       internal/service/game/service.go      # package game
+      game/managers/managers.go             # game 服务的 manager 登记点（空列表）
       configs/service/
       configs/schema/
       configs/generated/
@@ -156,6 +157,18 @@ match、platform、rank、session），`-framework rank,chat` 只托管列出的
 是 Go 关键字时加后缀 `service`。已有工程沿用目录里现有的包名（以业务文件 service.go / managers.go /
 collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟随它，不改写业务文件；早先生成的
 `package Game` 工程因此保持大写、仍可编译，想改成小写时手工改该目录全部文件的 package 子句即可。
+
+目录（v1.47.0 起，只对新生成的工程）：
+
+| 目录 | 内容 |
+| --- | --- |
+| `internal/service/<业务服务>/` | 业务服务（game 等）的 service.go 与生成接线（modules_gen.go、framework_clients_gen.go） |
+| `services/<托管服务>/` | 托管框架服务的手写代码：collaborators.go、account 的登录渠道（login_*）、platform 的充值渠道；HTTP 登录入口在 `services/account/portal/`。只有用到的服务才有目录 |
+| `game/managers/` | game 服务的 manager 登记点 `Managers()`（新工程是空列表）；别的业务服务仍是 `internal/service/<name>/managers.go` |
+| `game/login/` | 登录链：票据校验与认证器（login 模块）、进入游戏的登记点与“先新建”（enter 模块）、新建时的角色名校验（enter×profile） |
+| `game/components/<功能>/` | 可被多个实体共用的组件逻辑（Owner 宿主接口，工厂 `NewComponent`），文件名与包名同名（`bag/bag.go`） |
+| `game/entities/<实体>/` | 实体本体、生成文件（`*_gen_wire.go`、`lifecycle_gen.go`）与每个组件的薄接线 |
+| `internal/access/player/` | 玩家接入层：mod_gen.go 与 protocols_gen.go（各功能 controller 接口、注册函数、总入口与推送编码器）；派发层是 core 的 `infra/network/playeraccess` |
 
 ## 4. roost.yaml
 
@@ -481,7 +494,7 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 一个 kind 只该由一个服务写时（例如联盟服务独占 `Alliance`），在实体标记上写 `service=alliance`，然后
 `roost project sync && roost generate`。生成器只在 alliance 的 bootstrap 装 `registry.NewOwnedNestHandlersMod("alliance")`，
 锁住这个 kind 的 handler 只注册在 alliance 进程的 Nest 引擎上；别的服务要写它，经 alliance 的 rpc（`roost add rpc -service alliance`）。
-`roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 项报告别的服务的代码（`internal/service/<name>/`、它拥有的
+doctor 的 `entity-owner` 项报告别的服务的代码（`internal/service/<name>/`、它拥有的
 `internal/rpc/<rpc>/`、玩家接入代码）构造了这个 kind 的 Sender。没写 `service=` 的 kind 保持原行为，任何带 Nest 的服务都注册、都能写。
 标记写法与拒绝规则见 [TAGS](TAGS.zh-CN.md)；实现见 [impl/12 §2G](../../docs/framework/impl/12-codegen.md#2g-实体归属服务service)。
 

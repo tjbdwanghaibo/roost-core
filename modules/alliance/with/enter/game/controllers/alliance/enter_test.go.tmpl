@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 )
 
 func TestWithAllianceEnterRefreshesOnReconnect(t *testing.T) {
 	c, r, n := refreshFixture(t, 0)
-	gameenter.RunEntered(context.Background(), c.registry, gameenter.Entered{PlayerID: 10})
-	gameenter.RunEntered(context.Background(), c.registry, gameenter.Entered{PlayerID: 10})
+	gamelogin.RunEntered(context.Background(), c.registry, gamelogin.Entered{PlayerID: 10})
+	gamelogin.RunEntered(context.Background(), c.registry, gamelogin.Entered{PlayerID: 10})
 	if n.shown != 7 || n.writes != 1 || r.reads != 2 {
 		t.Fatalf("shown=%d writes=%d reads=%d", n.shown, n.writes, r.reads)
 	}
@@ -18,7 +18,7 @@ func TestWithAllianceEnterRefreshesOnReconnect(t *testing.T) {
 func TestWithAllianceEnterFailureKeepsExistingCopy(t *testing.T) {
 	c, r, n := refreshFixture(t, 7)
 	r.err = context.DeadlineExceeded
-	gameenter.RunEntered(context.Background(), c.registry, gameenter.Entered{PlayerID: 10})
+	gamelogin.RunEntered(context.Background(), c.registry, gamelogin.Entered{PlayerID: 10})
 	if n.shown != 7 || n.writes != 0 || r.reads != 1 {
 		t.Fatal("failed refresh changed player")
 	}

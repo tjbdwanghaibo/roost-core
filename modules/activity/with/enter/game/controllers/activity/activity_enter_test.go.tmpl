@@ -23,7 +23,8 @@ import (
 	"{{MODULE}}/game/activity"
 	"{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
-	gameenter "{{MODULE}}/game/enter"
+
+	gamelogin "{{MODULE}}/game/login"
 	generated "{{MODULE}}/configs/generated"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 )
@@ -105,7 +106,7 @@ func enterHookRows(t *testing.T, rows ...activity.Definition) {
 	}
 }
 
-// 真正经过 gameenter.RunEntered 登记的进入钩子：正式 Nest、生成的 Sender 与 handler。
+// 真正经过 gamelogin.RunEntered 登记的进入钩子：正式 Nest、生成的 Sender 与 handler。
 // 钩子拿到的是会话里的玩家号（不是完整实体号），必须自己换成 Player 的实体号才能定位到宿主；
 // 定位不到时“每次进入对账并继续 pending”整条路都不生效。
 func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *testing.T) {
@@ -143,9 +144,9 @@ func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *
 	}
 
 	enterHookResumed.Store(0)
-	entered := gameenter.Entered{PlayerID: playerID, InitResult: gameenter.InitResult{FirstAtUnixMilli: now}}
+	entered := gamelogin.Entered{PlayerID: playerID, InitResult: gamelogin.InitResult{FirstAtUnixMilli: now}}
 	// 只看本模块的钩子：同一个测试进程里可能还登记着别的功能的进入钩子，这个 registry 没有它们要的能力。
-	if failed := gameenter.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
+	if failed := gamelogin.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
 		t.Fatalf("the activity enter hook failed (failed hooks: %v)", failed)
 	}
 	if got := enterHookResumed.Load(); got != 1 {
@@ -160,7 +161,7 @@ func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *
 	}
 	// 重连再进入一次：已确认的期次不再 Resume，时间线不变。
 	start := views[0].Start
-	if failed := gameenter.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
+	if failed := gamelogin.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
 		t.Fatalf("the activity enter hook failed on reconnect (failed hooks: %v)", failed)
 	}
 	views, err = syncsender.NewActivityEventSender(engine).Sync_ActivityEvent(context.Background(), entityID, "", 0)

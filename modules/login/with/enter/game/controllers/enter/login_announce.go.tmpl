@@ -1,0 +1,9 @@
+package enter
+
+import gamelogin "{{MODULE}}/game/login"
+
+// 这个文件是 login 与 enter 两个模块的联动：两个都装着时才有。会话激活之后把结论推给客户端（EnterStatus）的入口
+// 在本包（Announce），登录的激活钩子在 game/login；game/login 不 import controller 包（会成环），所以由这里交过去。
+func init() {
+	gamelogin.RegisterEnterAnnounce(Announce)
+}

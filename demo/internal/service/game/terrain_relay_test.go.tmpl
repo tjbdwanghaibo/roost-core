@@ -15,7 +15,6 @@ import (
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
-	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/terrainmap"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -223,7 +222,7 @@ func (w *relayWorld) start(t *testing.T, sid int32, opts relayOptions) *relayPro
 		p.m.SetPolicy(policy)
 		w.ledgers.restore(t, sid, p)
 		if _, hosts := grid.CellOf(sid); hosts {
-			cells, err := lifecycle.NewTerrainCellEditorLifecycle(entity.NewManagerAccess(p.entities))
+			cells, err := terrain_cell_editor.NewLifecycle(entity.NewManagerAccess(p.entities))
 			if err != nil {
 				t.Fatal(err)
 			}

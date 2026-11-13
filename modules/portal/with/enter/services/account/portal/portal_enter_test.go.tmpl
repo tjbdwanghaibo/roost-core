@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	gameenter "{{MODULE}}/game/enter"
 	gamelogin "{{MODULE}}/game/login"
 	apperrors "{{MODULE}}/internal/errors"
 
@@ -23,7 +22,7 @@ import (
 // 之后这条路是通的，而且每一段用的是工程里真实的那一份代码。
 //
 // account 是真实的服务（内存存储），请求经真实的路由引擎进入口，握手经登录模块的认证器，告知的结论、
-// 新建与进入经 enter 模块的骨架（gameenter.Assess / Create / EnterSession，检查与“先新建”的规则是登录模块
+// 新建与进入经 enter 模块的骨架（gamelogin.Assess / Create / EnterSession，检查与“先新建”的规则是登录模块
 // 登记的那两条）。游戏服的档是内存替身；没有经真实的 TCP、总线、存储与 Nest。
 
 // withPortalGameRegistry 是一个 game 进程的 Registry：只有配置里的 sid。
@@ -61,23 +60,23 @@ func newWithPortalGame(sid int) *withPortalGame {
 	return &withPortalGame{registry: withPortalGameRegistry(sid), players: map[int64]*withPortalRecord{}}
 }
 
-func withPortalEntering(principal gateway.Principal) gameenter.Entering {
-	return gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
+func withPortalEntering(principal gateway.Principal) gamelogin.Entering {
+	return gamelogin.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
 }
 
 // status 是会话激活之后这个服会告诉客户端的话（EnterStatus 的内容）。
-func (game *withPortalGame) status(principal gateway.Principal) (gameenter.Status, bool, error) {
-	return gameenter.Assess(context.Background(), game.registry, withPortalEntering(principal), func(context.Context) (bool, error) {
+func (game *withPortalGame) status(principal gateway.Principal) (gamelogin.Status, bool, error) {
+	return gamelogin.Assess(context.Background(), game.registry, withPortalEntering(principal), func(context.Context) (bool, error) {
 		record := game.players[principal.PlayerID]
 		return record != nil && record.built, nil
 	})
 }
 
-// enter 照进入端点那样走一遍 gameenter.EnterSession。
-func (game *withPortalGame) enter(principal gateway.Principal) (gameenter.Entered, error) {
+// enter 照进入端点那样走一遍 gamelogin.EnterSession。
+func (game *withPortalGame) enter(principal gateway.Principal) (gamelogin.Entered, error) {
 	playerID := principal.PlayerID
-	return gameenter.EnterSession(context.Background(), game.registry, withPortalEntering(principal), gameenter.Loads{
-		LoadOrCreate: func(context.Context) (gameenter.InitResult, error) {
+	return gamelogin.EnterSession(context.Background(), game.registry, withPortalEntering(principal), gamelogin.Loads{
+		LoadOrCreate: func(context.Context) (gamelogin.InitResult, error) {
 			record := game.players[playerID]
 			if record == nil {
 				record = &withPortalRecord{}
@@ -85,29 +84,29 @@ func (game *withPortalGame) enter(principal gateway.Principal) (gameenter.Entere
 			}
 			if !record.built {
 				record.built, record.grants = true, record.grants+1
-				return gameenter.InitResult{First: true}, nil
+				return gamelogin.InitResult{First: true}, nil
 			}
 			first := record.fresh
 			record.fresh = false
-			return gameenter.InitResult{First: first}, nil
+			return gamelogin.InitResult{First: first}, nil
 		},
-		Existing: func(context.Context) (gameenter.InitResult, error) {
+		Existing: func(context.Context) (gamelogin.InitResult, error) {
 			record := game.players[playerID]
 			if record == nil || !record.built {
-				return gameenter.InitResult{}, gameenter.ErrNeedCreate
+				return gamelogin.InitResult{}, gamelogin.ErrNeedCreate
 			}
 			first := record.fresh
 			record.fresh = false
-			return gameenter.InitResult{First: first}, nil
+			return gamelogin.InitResult{First: first}, nil
 		},
 	})
 }
 
-// create 照新建端点那样走一遍 gameenter.Create。
+// create 照新建端点那样走一遍 gamelogin.Create。
 func (game *withPortalGame) create(principal gateway.Principal, name string) error {
 	playerID := principal.PlayerID
-	creating := gameenter.Creating{PlayerID: playerID, Name: name, Claims: principal.Claims}
-	return gameenter.Create(context.Background(), game.registry, creating, gameenter.CreateSteps{
+	creating := gamelogin.Creating{PlayerID: playerID, Name: name, Claims: principal.Claims}
+	return gamelogin.Create(context.Background(), game.registry, creating, gamelogin.CreateSteps{
 		Ensure: func(context.Context) error {
 			if game.players[playerID] == nil {
 				game.players[playerID] = &withPortalRecord{}
@@ -159,7 +158,7 @@ func TestWithPortalEnterWalksFromLoginIntoTheGame(t *testing.T) {
 	}
 
 	status, refused, err := game.status(principal)
-	if err != nil || refused || status != (gameenter.Status{NeedCreate: true}) {
+	if err != nil || refused || status != (gamelogin.Status{NeedCreate: true}) {
 		t.Fatalf("the game server tells a new account %+v (refused=%v, err=%v), want need_create", status, refused, err)
 	}
 	if _, err := game.enter(principal); !errors.Is(err, apperrors.ErrEnterNeedCreate) || len(game.players) != 0 {
@@ -194,7 +193,7 @@ func TestWithPortalEnterWalksFromLoginIntoTheGame(t *testing.T) {
 	if again.PlayerID != playerID || again.Claims[svcaccount.NewRoleClaim] != "" {
 		t.Fatalf("the second handshake = %+v, want the same player and no new-role mark", again)
 	}
-	if status, refused, err = game.status(again); err != nil || refused || status != (gameenter.Status{}) {
+	if status, refused, err = game.status(again); err != nil || refused || status != (gamelogin.Status{}) {
 		t.Fatalf("the game server tells a built player %+v (refused=%v, err=%v), want enter directly", status, refused, err)
 	}
 	if in, err = game.enter(again); err != nil || in.First || in.PlayerID != playerID {
@@ -242,7 +241,7 @@ func TestWithPortalEnterPointsTheClientAtTheServingServer(t *testing.T) {
 	principal := withPortalHandshake(t, w, merged.text("ticket"))
 	// 合服把 1001 的档并进了 1000 的库：承载服 1000 认得这名玩家。
 	wrong.players[first.PlayerID] = serving.players[first.PlayerID]
-	if status, refused, err = wrong.status(principal); err != nil || refused || status != (gameenter.Status{}) {
+	if status, refused, err = wrong.status(principal); err != nil || refused || status != (gamelogin.Status{}) {
 		t.Fatalf("server 1000 tells the merged role %+v (refused=%v, err=%v); want enter directly", status, refused, err)
 	}
 	in, err := wrong.enter(principal)
@@ -253,3 +252,6 @@ func TestWithPortalEnterPointsTheClientAtTheServingServer(t *testing.T) {
 		t.Fatalf("the merged-away server 1001 tells the role %+v (refused=%v, err=%v); want login_elsewhere", status, refused, err)
 	}
 }
+
+// v1.47.0：登录对进入的检查不再随 game/login 的 init 打开（见 RegisterEnterChecks），本测试包照旧要它们。
+func init() { gamelogin.RegisterEnterChecks() }

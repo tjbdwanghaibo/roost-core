@@ -1,10 +1,8 @@
 package player
 
 import (
-	"fmt"
-
-	gameenter "{{MODULE}}/game/enter"
-	apperrors "{{MODULE}}/internal/errors"
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/enter"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -12,12 +10,10 @@ import (
 //roost:component type={{ID:component:Enter}}
 const CompTypeEnter entity.ComponentType = {{ID:component:Enter}}
 
-// EnterComponent 是进入游戏时的初始化逻辑。它不保存事务会改的状态：做过没有记在 PlayerDao.Enter 里，
-// 经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
-type EnterComponent struct {
-	entity.ComponentBase
-	owner *Player
-}
+// EnterComponent 是进入组件 enter.Component 的类型别名，只为 Player 的生成接线命名。
+// 初始化逻辑（Init / Existing / Create / Built）在 game/components/enter；这里只把 PlayerDao.Enter 与 Player 上的
+// 钩子（enter_first.go 的 firstEnter、enter_hooks.go 的 OnFirstEnter / OnCreate）交给它。
+type EnterComponent = enter.Component
 
 // IEnterEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
 type IEnterEntity interface {
@@ -26,98 +22,20 @@ type IEnterEntity interface {
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeEnter, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		typed, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("enter component: owner %T is not *Player", owner)
-		}
-		return &EnterComponent{owner: typed}, nil
-	})
+	entity.RegisterComponentFactory(CompTypeEnter, enter.NewComponent)
 }
 
-func (component *EnterComponent) Name() string { return "enter" }
+// EnterState 实现 enter.Owner：只在 Player 被 Nest 锁住期间调用。
+func (e *Player) EnterState() *db.EnterState { return e.Dao().GetEnter() }
 
-// Owner 只在实体存活且被 Nest 锁住期间可用。
-func (component *EnterComponent) Owner() *Player { return component.owner }
-
-// Init 在“加载或创建”的进入里调用（EnterGame 的缺省那条路，每次进入都调）。首次初始化还没做过就执行
-// firstEnter 并记下来，结果的 First 为 true；做过了就是一次普通的进入（entered）。
-// 两种情况都带上首次初始化的时间（这名玩家的“注册时间”）。
-//
-// 不按“这次是不是新建的档”判断：建档与初始化是两步，中间进程崩了，这名玩家的档已经在、
-// 初始化却没做。所以事实记在档里（PlayerDao.Enter.Initialized），每次进入都问一遍，
-// 初始发放与这个标记在同一笔事务里：要么都提交，要么都回滚、下次进入再做。
-func (component *EnterComponent) Init(nowUnixMilli int64) (gameenter.InitResult, error) {
-	state := component.owner.Dao().GetEnter()
-	if state.GetInitialized() {
-		return component.entered(), nil
-	}
-	if err := component.grant(nowUnixMilli); err != nil {
-		return gameenter.InitResult{}, err
-	}
-	state.SetInitialized(true)
-	state.SetFirstAt(nowUnixMilli)
-	return gameenter.InitResult{First: true, FirstAtUnixMilli: nowUnixMilli}, nil
-}
-
-// grant 是首次初始化的发放：工程自己的 firstEnter，然后是别的功能登记的钩子（OnFirstEnter）。
-// Init 与 Create 都经它，所以两条路上发的东西一样；“只发一次”由调用方在同一笔事务里置的标记保证。
-func (component *EnterComponent) grant(nowUnixMilli int64) error {
-	if err := component.firstEnter(nowUnixMilli); err != nil {
+// GrantFirstEnter 实现 enter.FirstEnterGranter：工程的 firstEnter，然后是别的功能登记的钩子（OnFirstEnter）。
+// Init 与 Create 都经它，所以两条路上发的东西一样；“只发一次”由组件在同一笔事务里置的标记保证。
+func (e *Player) GrantFirstEnter(nowUnixMilli int64) error {
+	if err := e.firstEnter(nowUnixMilli); err != nil {
 		return err
 	}
-	if err := runFirstEnter(component.owner, nowUnixMilli); err != nil {
-		return err
-	}
-	return nil
+	return runFirstEnter(e, nowUnixMilli)
 }
 
-// Existing 在“先新建”的会话的进入里调用：只进入已经建成的玩家。没建成（有档而首次初始化没做过——
-// 上次新建到一半）返回 enter_need_create，不写任何字段；它与 Init 的区别只在这一句：这里不代建。
-func (component *EnterComponent) Existing() (gameenter.InitResult, error) {
-	if !component.Built() {
-		return gameenter.InitResult{}, apperrors.ErrEnterNeedCreate
-	}
-	return component.entered(), nil
-}
-
-// entered 是已经建成的玩家的一次进入。经新建请求建成之后的第一次进入报 First=true 并清掉 Fresh，
-// 所以依赖 First 的进入钩子在两条路上看到的一样：新玩家的第一次进入是 First，之后都不是。
-// 清标记与这次进入的应答在同一笔事务里；应答丢了、客户端重发时 First 已经是 false——与“加载或创建”那条路
-// 重发 EnterGame 的结果相同。
-func (component *EnterComponent) entered() gameenter.InitResult {
-	state := component.owner.Dao().GetEnter()
-	result := gameenter.InitResult{FirstAtUnixMilli: state.GetFirstAt()}
-	if state.GetFresh() {
-		state.SetFresh(false)
-		result.First = true
-	}
-	return result
-}
-
-// Built 报告这名玩家建成了没有：首次初始化提交过。只读。
-func (component *EnterComponent) Built() bool {
-	return component.owner.Dao().GetEnter().GetInitialized()
-}
-
-// Create 是新建请求（EnterCreate）的事务：把这名玩家建成。已经建成的返回 enter_created，不写任何字段。
-//
-// 顺序：事务内的新建钩子（OnCreate：名字写进档案）→ 首次初始化的发放（grant：firstEnter 与 OnFirstEnter 的钩子）→
-// 记下“建成了”。任何一步返回错误整笔回滚，玩家仍是没建成，下一次新建请求从头再做，所以初始发放恰好发一次。
-// 新建钩子排在发放之前：名字被拒时不必先发再撤。
-func (component *EnterComponent) Create(name string, nowUnixMilli int64) error {
-	if component.Built() {
-		return apperrors.ErrEnterCreated
-	}
-	if err := runCreate(component.owner, name, nowUnixMilli); err != nil {
-		return err
-	}
-	if err := component.grant(nowUnixMilli); err != nil {
-		return err
-	}
-	state := component.owner.Dao().GetEnter()
-	state.SetInitialized(true)
-	state.SetFirstAt(nowUnixMilli)
-	state.SetFresh(true)
-	return nil
-}
+// RunCreateHooks 实现 enter.CreateHooks：新建事务内的钩子（OnCreate）。
+func (e *Player) RunCreateHooks(name string, nowUnixMilli int64) error { return runCreate(e, name, nowUnixMilli) }

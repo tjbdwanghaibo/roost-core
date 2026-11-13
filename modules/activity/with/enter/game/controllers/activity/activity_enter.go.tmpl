@@ -8,14 +8,15 @@ import (
 
 	"{{MODULE}}/game/activity"
 	"{{MODULE}}/game/entities/player"
-	gameenter "{{MODULE}}/game/enter"
+
+	gamelogin "{{MODULE}}/game/login"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 )
 
 // 进入回调失败只会记日志；下一次进入/操作仍按持久时间线恢复，不假装离线准点结算。
 // entered.PlayerID 是会话里的玩家号；Nest 的目标是完整实体号，先换算再发，否则定位不到 Player。
 func init() {
-	gameenter.OnEntered("activity", func(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+	gamelogin.OnEntered("activity", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 		c, err := FromRegistry(registry)
 		if err != nil {
 			return err

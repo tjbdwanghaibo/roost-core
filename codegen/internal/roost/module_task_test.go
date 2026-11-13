@@ -27,7 +27,7 @@ func TestModuleTaskEventsPeriodsAndMutations(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeat install changed files")
 	}
-	recipeMutationMustFail(t, root, "game/components/wallet/component.go", "return receipt.GetBalance(), nil", "return component.Add(delta)", "./game/handler", "TestWithTaskWalletOnlyCountsFreshSpend", "spend facts=")
+	recipeMutationMustFail(t, root, "game/components/wallet/wallet.go", "return receipt.GetBalance(), nil", "return component.Add(delta)", "./game/handler", "TestWithTaskWalletOnlyCountsFreshSpend", "spend facts=")
 	recipeMutationMustFail(t, root, "game/entities/player/task_wallet.go", "Report(\"wallet.spent\", 1, now)", "Report(\"wallet.spent\", 2, now)", "./game/handler", "TestWithTaskWalletOnlyCountsFreshSpend", "spend facts=")
 	recipeMutationMustFail(t, root, "game/entities/player/task_shop.go", "Report(\"shop.bought\", count, now)", "Report(\"shop.bought\", 1, now)", "./game/handler", "TestWithTaskShopReportsBoughtQuantityOnce", "purchase=")
 	recipeMutationMustFail(t, root, "game/entities/player/task_stamina.go", "Report(\"stamina.spent\", amount, now)", "Report(\"stamina.spent\", 1, now)", "./game/handler", "TestWithTaskStaminaCountsConsumedPoints", "wrong stamina progress")
@@ -40,8 +40,8 @@ func TestModuleTaskEventsPeriodsAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/entities/player/task_rewards.go", "owner.WalletComp().Add(reward.Count)", "owner.WalletComp().Add(reward.Count+1)", "./game/handler", "TestTaskRewardResponseNamesItsAsset", "reward=")
 	recipeMutationMustFail(t, root, "game/entities/player/task_bag.go", "owner.BagComp().Add(reward.ID, reward.Count)", "owner.BagComp().Add(reward.ID, reward.Count+1)", "./game/handler", "TestWithTaskBagGrantsItemOnlyOnce", "item=")
 	recipeMutationMustFail(t, root, "game/entities/player/task_catalog.go", "index.events[row.Event] = append(index.events[row.Event], row)", "index.events[\"win\"] = append(index.events[\"win\"], row)", "./game/handler", "TestTaskReportAdvancesOnlyMatchingEvents", "events=")
-	recipeMutationMustFail(t, root, "game/components/wallet/component.go", "fctx.NowMilli()", "fctx.NowMilli()+1", "./game/handler", "TestWithTaskWalletUsesTheTransactionsFrozenDay", "frozen day=")
-	recipeMutationMustFail(t, root, "game/components/wallet/component.go", "if err := spent.WalletSpent(-delta, fctx.NowMilli()); err != nil {", "if err := spent.WalletSpent(-delta, fctx.NowMilli()); false && err != nil {", "./game/handler", "TestWithTaskWalletHookFailureRollsBackBusinessAndProgress", "hook failure accepted")
+	recipeMutationMustFail(t, root, "game/components/wallet/wallet.go", "fctx.NowMilli()", "fctx.NowMilli()+1", "./game/handler", "TestWithTaskWalletUsesTheTransactionsFrozenDay", "frozen day=")
+	recipeMutationMustFail(t, root, "game/components/wallet/wallet.go", "if err := spent.WalletSpent(-delta, fctx.NowMilli()); err != nil {", "if err := spent.WalletSpent(-delta, fctx.NowMilli()); false && err != nil {", "./game/handler", "TestWithTaskWalletHookFailureRollsBackBusinessAndProgress", "hook failure accepted")
 	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTask|^TestWithTask", "./game/handler", "./game/entities/player", "./game/controllers/task")
 }
 func checkTaskModuleRows(t *testing.T, report ModuleVerifyReport, want map[string]int) {

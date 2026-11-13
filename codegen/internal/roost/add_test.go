@@ -29,25 +29,8 @@ func TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "entity", Name: "Guild"}); err != nil {
 		t.Fatal(err)
 	}
-	// The lifecycle scaffold used to reference the per-entity category
-	// constant the entity scaffold minted. That constant is gone, so anything
-	// still naming it would leave the project unbuildable.
-	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
-		t.Fatal(err)
-	}
-	lifecyclePaths, err := Add(root, AddOptions{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range lifecyclePaths {
-		raw, err := os.ReadFile(filepath.Join(root, path))
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(raw), "EntityCategoryPlayer") {
-			t.Errorf("%s still names the removed per-entity category constant:\n%s", path, raw)
-		}
-	}
+	// v1.47.0 起 lifecycle 不再由 add lifecycle 写脚手架，而是 generate 生成 lifecycle_gen.go（只用 EntityKind 常量），
+	// 原来这里查“脚手架引用已删除的分类常量”的一段随之删除。
 
 	for _, name := range []string{"player", "guild"} {
 		raw, err := os.ReadFile(filepath.Join(root, "game", "entities", name, "entity.go"))
@@ -395,10 +378,7 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 		t.Fatal("business overwritten")
 	}
 	run("build", "./...")
-	if err := os.WriteFile(filepath.Join(root, "game/playeraccess/manual_reply_test.go"), []byte(manualReplyTest), 0600); err != nil {
-		t.Fatal(err)
-	}
-	run("test", "./game/playeraccess", "-run", "^TestManualReplyDoesNotEncodeAgain$", "-count=1")
+	// 手动回包不再编码一次的断言随 playeraccess 搬进了 core（infra/network/playeraccess 的单元测试）。
 	if err := Generate(root, GenerateOptions{Check: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -414,27 +394,6 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-const manualReplyTest = `package playeraccess
-import (
- "context"
- "testing"
- "github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
-)
-type responseSession struct { replies int }
-func (*responseSession) Principal() gateway.Principal { return gateway.Principal{PlayerID:1,SessionID:"test"} }
-func (s *responseSession) Reply(context.Context,any) error {s.replies++;return nil}
-func (*responseSession) Close(error) error {return nil}
-func TestManualReplyDoesNotEncodeAgain(t *testing.T) {
- registry:=NewProtocolRegistry()
- type reply struct{}
- encoded:=0
- if err:=RegisterProtocol[int,*reply](registry,1,2,func([]byte)(int,error){return 0,nil},func(*reply)([]byte,error){encoded++;return nil,nil},func(ctx *Context,_ int)(*reply,error){return nil,ctx.Session.Reply(ctx.Context(),&Response{MessageID:2,Sequence:ctx.Seq})});err!=nil {t.Fatal(err)}
- session:=&responseSession{}
- response,err:=registry.Dispatch(context.Background(),session,1,7,nil)
- if err!=nil || response!=nil || encoded!=0 || session.replies!=1 {t.Fatalf("response=%v err=%v encoded=%d replies=%d",response,err,encoded,session.replies)}
-}
-`
 
 // add rpc -entity-service（联盟服务方案 §2.3 / §2.10 第 4 项）：写方法带 RequestID，Result 按 RequestID 查回执，
 // 接收端有自己的处理预算，答复分成成功 / 业务拒绝 / 未执行可重试 / 结果未知；owner Mod 依赖 nest，
@@ -530,6 +489,9 @@ func declareRemoteGuild(t *testing.T, root, extra string) {
 	if err := os.WriteFile(path, []byte(remote), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// 生成的 lifecycle_gen.go 用 core 的 wiring/entitylifecycle（v1.47.0 新增）：sync 的依赖整理指向本仓，
+	// 不去取已发布的 core。
+	useLocalRoostCore(t, root)
 	var out bytes.Buffer
 	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("project sync: %v\n%s", err, out.String())

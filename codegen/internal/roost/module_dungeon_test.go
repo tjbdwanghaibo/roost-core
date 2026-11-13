@@ -25,7 +25,7 @@ func TestModuleDungeonInstallAndVerify(t *testing.T) {
 			t.Fatalf("missing dependency %s", name)
 		}
 	}
-	for _, path := range []string{"db/dungeon_level.go", "game/entities/dungeon/dungeon_gen_wire.go", "game/lifecycle/dungeon.go", "game/controllers/dungeon/controller.go", "game/handler/syncsender/dungeon_nest_gen.go", "protocol/pb/protocol.pb.go"} {
+	for _, path := range []string{"db/dungeon_level.go", "game/entities/dungeon/dungeon_gen_wire.go", "game/entities/dungeon/lifecycle_gen.go", "game/controllers/dungeon/controller.go", "game/handler/syncsender/dungeon_nest_gen.go", "protocol/pb/protocol.pb.go"} {
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			t.Fatalf("missing generated integration %s: %v", path, err)
 		}

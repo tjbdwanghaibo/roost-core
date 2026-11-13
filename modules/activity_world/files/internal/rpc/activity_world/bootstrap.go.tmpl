@@ -1,18 +1,18 @@
 package activity_world
 
 import (
+	activityworldentity "{{MODULE}}/game/entities/activity_world"
 	"context"
 	"fmt"
 	"time"
 
 	generated "{{MODULE}}/configs/generated"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
 )
 
 // bootstrap 只在指定的初始宿主建档，随后由 Remote 授权记录保证唯一写者。
 func (m *Mod) bootstrap(sid int32) error {
-	life, err := lifecycle.ActivityWorldFromRegistry(m.registry)
+	life, err := activityworldentity.LifecycleFromRegistry(m.registry)
 	if err != nil {
 		return err
 	}

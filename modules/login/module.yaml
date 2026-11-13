@@ -10,16 +10,16 @@ access:
 errcodes: [login_elsewhere]
 replaces:
   - internal/access/player/tcp/auth.go
-  - internal/service/account/collaborators.go
+  - services/account/collaborators.go
 next:
   - "打开玩家 TCP 监听：roost config enable player-tcp（鉴权已经不是拒绝桩；生产示例配置仍是关的）"
   - "开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录"
   - "登记区服：没有状态是 open 的服，新号进不了任何服、入口的清单也是空的。make dev-run 起完全部服务后会自动登记本机的服；别的环境在 account 与它的 Redis 起来之后执行 go run ./cmd/accountctl upsert-server -sid <{{GAME_SERVICE}} 进程的 sid>（list-servers 看已登记的）"
   - "客户端的登录入口：没装 portal 模块的话 roost module add portal（HTTP 的登录 / 清单与推荐 / 进服，握手用 enter:<进服票据>），或者由工程自己的入口代客户端调 account"
   - "装了 enter 模块时，用进服票据握手的会话要先发 EnterCreate（带角色名）再发 EnterGame；握手之后服务器会推 EnterStatus 告诉客户端要不要新建（只是告知，以两个请求的应答为准）"
-  - "上线前在 internal/service/account/login_channels.go 接渠道验签；缺省一个渠道都没接"
+  - "上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接"
 verify:
-  packages: [./game/login, ./internal/access/player/tcp, ./internal/service/account, ./cmd/accountctl]
+  packages: [./game/login, ./internal/access/player/tcp, ./services/account, ./cmd/accountctl]
   run: ^TestLogin
   pass: 32
 with:

@@ -123,24 +123,34 @@ func TestValidateDefinitionsEnforcesIDAndEnumInvariants(t *testing.T) {
 	}
 }
 
-func TestBootstrapRequiresHandlerImportBaseWhenControllersExist(t *testing.T) {
+func TestRegistrationRequiresModulePathWhenControllersExist(t *testing.T) {
 	defDir := filepath.Join(t.TempDir(), "protocol", "def")
 	writeProtocolTestFile(t, filepath.Join(defDir, "game.go"), testProtocolDef)
 	defs, err := parseDefDir(defDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := generateProtocolBootstrap(defs, ""); err == nil || !strings.Contains(err.Error(), "handler import base is required for controller domains ping") {
-		t.Fatalf("bootstrap without handler import base = %v", err)
+	defs.ModulePath = ""
+	if _, err := generateProtocolRegistration(defs, "player"); err == nil || !strings.Contains(err.Error(), "module path is required for controller domains ping") {
+		t.Fatalf("registration without module path = %v", err)
 	}
-	if _, err := generateProtocolBootstrap(defs, "example.com/game/internal/handlers"); err != nil {
-		t.Fatalf("bootstrap with handler import base = %v", err)
+	defs.ModulePath = "example.com/game"
+	content, err := generateProtocolRegistration(defs, "player")
+	if err != nil {
+		t.Fatalf("registration with module path = %v", err)
 	}
-	// 没有控制器域时不需要 import base。
+	for _, want := range []string{"package player", "type PingController interface", "func RegisterPingPlayerProtocolsWith(", "func RegisterPlayerProtocols(", `pingcontroller "example.com/game/game/controllers/ping"`, `"` + PlayerAccessImport + `"`} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("registration lacks %q:\n%s", want, content)
+		}
+	}
+	// 没有控制器域时不需要 module path。
 	for i := range defs.Messages {
 		defs.Messages[i].Handler = ""
 	}
-	if _, err := generateProtocolBootstrap(defs, ""); err != nil {
-		t.Fatalf("bootstrap without controller domains = %v", err)
+	defs.Pushes = nil
+	defs.ModulePath = ""
+	if _, err := generateProtocolRegistration(defs, "player"); err != nil {
+		t.Fatalf("registration without controller domains = %v", err)
 	}
 }

@@ -3,8 +3,7 @@ package chat
 import (
 	"context"
 
-	gameenter "{{MODULE}}/game/enter"
-
+	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
@@ -17,10 +16,10 @@ import (
 // 登录公告（“某某进入了世界”）不在这里发：发不发、说什么是工程的决定。要发就在进入端点里
 // 调 chat controller 的 AnnounceWorld，幂等键用会话号加帧序号，重试的登录帧只公告一次。
 func init() {
-	gameenter.OnEntered("chat", joinWorldOnEnter)
+	gamelogin.OnEntered("chat", joinWorldOnEnter)
 }
 
-func joinWorldOnEnter(_ context.Context, _ *app.Registry, entered gameenter.Entered) error {
+func joinWorldOnEnter(_ context.Context, _ *app.Registry, entered gamelogin.Entered) error {
 	DefaultPresence().Add(entered.PlayerID)
 	return nil
 }

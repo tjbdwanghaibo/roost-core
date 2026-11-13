@@ -164,7 +164,6 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		paths := []string{
 			"roost.yaml",
-			"game/playeraccess/runtime_gen.go",
 			"internal/access/player/mod_gen.go",
 		}
 		// nest 带入 dataengine / mongo / nats：与 add mod 一样给服务配置补上这些 Mod 的配置段（以及带 DataEngine
@@ -429,7 +428,9 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		path = "game/handler/" + snake + ".go"
 		body = fmt.Sprintf("package handler\n\nimport %s %q\n\n//roost:nest rollback=undo durability=strict\nfunc handler%s(target %s.I%sEntity) error {\n\t// TODO: validate input and call target.%sComp().<BusinessMethod>().\n\treturn nil\n}\n", entityName, m.Project.Module+"/game/entities/"+entityName, pascal, entityName, toPascal(componentName), toPascal(componentName))
 	case "lifecycle":
-		return addEntityLifecycle(root, m, o)
+		// v1.47.0 起每个实体包由 roost generate 产出 lifecycle_gen.go（core 泛型 wiring/entitylifecycle 的具名入口），
+		// 不再有一次性脚手架。
+		return nil, fmt.Errorf("roost add lifecycle was removed in v1.47.0: every entity package gets lifecycle_gen.go from roost generate; call %s.LifecycleFromRegistry(registry)", toSnake(firstNonEmpty(o.Entity, o.Name)))
 	case "endpoint":
 		return addProtocolEndpoint(root, m, o)
 	case "table":

@@ -309,10 +309,10 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("game/login/login.go is not the login module's ticket rules:\n%s", rules)
 	}
 	// demo 只覆盖登录模块留给工程的渠道入口：demo 渠道，凭据 demo:<open_id>。开发登录、玩家号计数器是模块的。
-	if channels := read("internal/service/account/login_channels.go"); !strings.Contains(channels, `DemoChannel svcaccount.Channel = "demo"`) || !strings.Contains(channels, `demoCredentialPrefix = "demo:"`) {
+	if channels := read("services/account/login_channels.go"); !strings.Contains(channels, `DemoChannel svcaccount.Channel = "demo"`) || !strings.Contains(channels, `demoCredentialPrefix = "demo:"`) {
 		t.Errorf("login_channels.go is not the demo channel:\n%s", channels)
 	}
-	for _, rel := range []string{"internal/service/account/login_dev.go", "internal/service/account/login_player_id.go", "game/portal/portal.go", "game/servertime/servertime.go", "game/login/login_enter.go"} {
+	for _, rel := range []string{"services/account/login_dev.go", "services/account/login_player_id.go", "services/account/portal/portal.go", "game/servertime/servertime.go", "game/login/login_enter.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("%s is missing: the login, portal and servertime modules are not installed: %v", rel, err)
 		}
@@ -329,7 +329,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// 背包是 bag 模块装进来的（demoModuleSteps），demo 自己不带一份：共用组件、Player 的接线、PlayerDao.Bag、
 	// 错误码与道具表的落点都记在 roost.yaml 的 modules.bag 下。组件只经生成的 mutator 改状态；道具号与单种上限的
 	// 规则在模块的 game/components/bag/items.go 里，读生成的道具表访问器——demo 只换了道具表的列与行，没有覆盖这个规则文件。
-	if bag := read("game/components/bag/component.go"); !strings.Contains(bag, "bag.SetItemsKey(") || !strings.Contains(bag, "ItemRule(itemID)") || strings.Contains(bag, "PublishSyncDirty") {
+	if bag := read("game/components/bag/bag.go"); !strings.Contains(bag, "bag.SetItemsKey(") || !strings.Contains(bag, "ItemRule(itemID)") || strings.Contains(bag, "PublishSyncDirty") {
 		t.Errorf("the bag component is not the bag module's:\n%s", bag)
 	}
 	if wiring := read("game/entities/player/bag_component.go"); !strings.Contains(wiring, "type BagComponent = bag.Component") {
@@ -339,7 +339,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("the bag's item rule does not read the item table:\n%s", rule)
 	}
 	manifestText := read("roost.yaml")
-	for _, owned := range []string{"    bag:\n", "- PlayerDao.Bag", "- game/entities/player/bag_component.go", "- game/components/bag/component.go", "- game/components/bag/items.go",
+	for _, owned := range []string{"    bag:\n", "- PlayerDao.Bag", "- game/entities/player/bag_component.go", "- game/components/bag/bag.go", "- game/components/bag/items.go",
 		"- configs/schema/item.go", "- configs/table/item.csv", "- internal/errors/bag.go", "bag_stack_full:", "BagDiscard:"} {
 		if !strings.Contains(manifestText, owned) {
 			t.Errorf("roost.yaml does not record %q under the bag module", owned)
@@ -410,14 +410,14 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("%s collaborators still read as unconfigured to doctor:\n%s", service, collaborators)
 		}
 	}
-	if chatCollaborators := read("internal/service/chat/collaborators.go"); !strings.Contains(chatCollaborators, "chat.GrantSystem()") || !strings.Contains(chatCollaborators, "gamechat.TypeText") {
+	if chatCollaborators := read("services/chat/collaborators.go"); !strings.Contains(chatCollaborators, "chat.GrantSystem()") || !strings.Contains(chatCollaborators, "gamechat.TypeText") {
 		t.Errorf("chat collaborators do not grant the system path and register the text type:\n%s", chatCollaborators)
 	}
 	// 聊天是 chat 模块装进来的（demoModuleSteps），demo 自己不带一份。
 	for _, rel := range []string{"game/chat/chat.go", "protocol/def/chat_send.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
 		"game/controllers/chat/chat_send.go", "game/controllers/chat/chat_history.go", "game/controllers/chat/chat_push.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "game/rewards/rewards_test.go",
-		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
+		"services/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
 		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook/skillbook_catalog.go",
 		"internal/service/game/gm.go",
@@ -449,7 +449,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("roost.yaml does not record %q under the mailbox / wallet modules", owned)
 		}
 	}
-	if bind := read("game/protocol_handlers/mailbox/protocol_gen.go"); !strings.Contains(bind, "HandleMailboxList") || !strings.Contains(bind, "HandleMailboxClaim") {
+	if bind := read("internal/access/player/protocols_gen.go"); !strings.Contains(bind, "HandleMailboxList") || !strings.Contains(bind, "HandleMailboxClaim") {
 		t.Errorf("the mailbox protocols are not bound to the mailbox controller:\n%s", bind)
 	}
 	// The grant in the middle carries its own identity: the mail id is
@@ -709,10 +709,10 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("prometheus.yml does not scrape the chat process on its assigned port")
 	}
 	// account 的协作者是 login 模块的：玩家号计数器经 RegistryBound 拿 account 进程的 Redis。
-	if collaborators := read("internal/service/account/collaborators.go"); !strings.Contains(collaborators, "&playerIDCounter{}") || strings.Contains(collaborators, "is not configured; implement") {
+	if collaborators := read("services/account/collaborators.go"); !strings.Contains(collaborators, "&playerIDCounter{}") || strings.Contains(collaborators, "is not configured; implement") {
 		t.Errorf("account collaborators are still the refusing defaults:\n%s", collaborators)
 	}
-	if counter := read("internal/service/account/login_player_id.go"); !strings.Contains(counter, "wiringaccount.RegistryBound") {
+	if counter := read("services/account/login_player_id.go"); !strings.Contains(counter, "wiringaccount.RegistryBound") {
 		t.Errorf("the player id counter does not bind to the account process's registry:\n%s", counter)
 	}
 	// The authenticator validates tickets through the account client it is
@@ -739,7 +739,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// The load test: the controller can create Players, the EnterGame message
 	// is bound, the transport adapter and the scenario ship, and the command
 	// checks every response code so a coded failure fails the run.
-	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "lifecycle.PlayerFromRegistry(") {
+	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "player.LifecycleFromRegistry(") {
 		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
 	}
 	// Alliances live in the alliance service (FEATURE-2026-11-04-alliance-service
@@ -767,7 +767,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		}
 	}
 	// EnterGame 的协议与初始化标记来自 enter 模块：端点绑在 enter 域上，demo 用自己的进入流程覆盖模块的 controller。
-	if bind := read("game/protocol_handlers/enter/protocol_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
+	if bind := read("internal/access/player/protocols_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
 		t.Errorf("EnterGame is not bound to the enter controller:\n%s", bind)
 	}
 	if enter := read("game/controllers/enter/enter_game.go"); !strings.Contains(enter, "player.EnterGame(context, request)") {
@@ -821,7 +821,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if logic := read("game/leaderboard/leaderboard.go"); !strings.Contains(logic, "func SubmitSeason(") || strings.Contains(logic, `"clears"`) {
 		t.Errorf("game/leaderboard/leaderboard.go is not the module's own logic file:\n%s", logic)
 	}
-	if bind := read("game/protocol_handlers/leaderboard/protocol_gen.go"); !strings.Contains(bind, "HandleLeaderboardTop") || !strings.Contains(bind, "HandleLeaderboardMe") {
+	if bind := read("internal/access/player/protocols_gen.go"); !strings.Contains(bind, "HandleLeaderboardTop") || !strings.Contains(bind, "HandleLeaderboardMe") {
 		t.Errorf("the leaderboard protocols are not bound to the leaderboard controller:\n%s", bind)
 	}
 	if finish := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(finish, "gameleaderboard.SubmitSeason(") || strings.Contains(finish, "svcrank") {
@@ -881,7 +881,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("match config does not sweep the duel queue:\n%s", config)
 	}
 	for _, name := range []string{"HandleJoinQueue", "HandlePollMatch", "HandleWorldStats"} {
-		if bind := read("game/protocol_handlers/player/protocol_gen.go"); !strings.Contains(bind, name) {
+		if bind := read("internal/access/player/protocols_gen.go"); !strings.Contains(bind, name) {
 			t.Errorf("%s is not bound to the controller", name)
 		}
 	}
@@ -895,7 +895,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if matchmaker := read("internal/service/game/matchmaker.go"); !strings.Contains(matchmaker, "transport.PushPlayer(") || !strings.Contains(matchmaker, "msgid.MsgMatchFound") {
 		t.Errorf("matchmaker does not push MatchFound:\n%s", matchmaker)
 	}
-	if bootstrap := read("game/protocol_bootstrap/protocol_gen.go"); !strings.Contains(bootstrap, "RegisterMatchFoundEncoder(") {
+	if bootstrap := read("internal/access/player/protocols_gen.go"); !strings.Contains(bootstrap, "RegisterMatchFoundEncoder(") {
 		t.Errorf("the push encoder is not registered by the generated bootstrap:\n%s", bootstrap)
 	}
 	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: wait_push") || !strings.Contains(spec, "msg: 10100") {

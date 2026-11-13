@@ -18,7 +18,7 @@
 | [wallet](wallet/README.md) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 17 |
 | [checkin](checkin/README.md) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后执行别的功能登记的钩子（`OnCheckinClaimed`，同一笔事务） | wallet | `PlayerDao.Checkin`（同步） | 8 |
 | [chat](chat/README.md) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）、向在线玩家的推送（`ChatMessage`）、按序号翻历史（`ChatHistory`）、给服务端用的系统公告（`AnnounceWorld`）；经托管的 chat 服务存储，替换它默认拒绝一切的 collaborators。game-demo 用的就是它 | 无（要求业务服务 `uses: [chat]` 与玩家 TCP 接入，后者安装时代办） | 无 | 10 |
-| [enter](enter/README.md) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放可写在 `game/entities/player/enter_first.go`，模块联动可用 `player.OnFirstEnter` 登记同一事务内的发放；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`；钩子拿到 `Entered{PlayerID, First, FirstAtUnixMilli, Claims}`，`Claims` 是会话的 claims，可为 nil）；安装时打开玩家 TCP 接入与自身视图；别的功能登记的进入前检查（`OnEntering`，能否决登录）在加载 Player 之前执行；进入的骨架是 `gameenter.Enter`（检查 → 加载与首次初始化 → 钩子）；另一条路“先新建、再进入”只对被登记为“先新建”的会话生效（`gameenter.RequireCreateFirst`，login 的联动登记的是用进服票据握手的会话）：`EnterGame` 不代建、没建成答 `enter_need_create`，新建请求 `EnterCreate{name}` 一笔事务里起名、初始发放、建成，名字规则的登记点 `OnCreating` / `OnCreatePrepare` / `player.OnCreate`，会话激活后的告知 `EnterStatus{code, need_create}`（`game/controllers/enter` 的 `Announce`）；没有人登记时 `EnterGame` 与原来相同 | 无 | `PlayerDao.Enter`（只落库） | 29 |
+| [enter](enter/README.md) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放可写在 `game/entities/player/enter_first.go`，模块联动可用 `player.OnFirstEnter` 登记同一事务内的发放；之后执行别的功能登记的进入钩子（`game/login` 的 `OnEntered`；钩子拿到 `Entered{PlayerID, First, FirstAtUnixMilli, Claims}`，`Claims` 是会话的 claims，可为 nil）；安装时打开玩家 TCP 接入与自身视图；别的功能登记的进入前检查（`OnEntering`，能否决登录）在加载 Player 之前执行；进入的骨架是 `gameenter.Enter`（检查 → 加载与首次初始化 → 钩子）；另一条路“先新建、再进入”只对被登记为“先新建”的会话生效（`gameenter.RequireCreateFirst`，login 的联动登记的是用进服票据握手的会话）：`EnterGame` 不代建、没建成答 `enter_need_create`，新建请求 `EnterCreate{name}` 一笔事务里起名、初始发放、建成，名字规则的登记点 `OnCreating` / `OnCreatePrepare` / `player.OnCreate`，会话激活后的告知 `EnterStatus{code, need_create}`（`game/controllers/enter` 的 `Announce`）；没有人登记时 `EnterGame` 与原来相同 | 无 | `PlayerDao.Enter`（只落库） | 29 |
 | [profile](profile/README.md) | 玩家档案（首次建档 1 级）：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）与只检查不执行的 `CheckAddExp`；给服务端按玩家号读的名片 handler `ProfileCard`（名字、等级）；工程升级钩子写在 `game/entities/player/profile_levelup.go`，模块扩展用 `OnProfileLevelUp` 按名字登记。game-demo 用的就是它 | enter | `PlayerDao.Profile`（同步，名字与等级，别的玩家也可以看）、`PlayerDao.ProfilePrivate`（同步，经验，只给本人） | 20 |
 | [bag](bag/README.md) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种硬上限 999999）；自带道具表 `configs/schema/item.go` 与 `configs/table/item.csv`（哪些道具存在、每种的单种上限；加道具只改 CSV 再 `roost generate`）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；规则入口 `game/components/bag/items.go`（缺省读道具表）。game-demo 用的就是它 | 无（要求 `config` 特性，`-template game` 缺省已开） | `PlayerDao.Bag`（同步） | 20 |
 | [leaderboard](leaderboard/README.md) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 21 |
@@ -76,9 +76,9 @@
 | shop + rules / stamina + rules | 统一导出商品目录 / 体力规则，保持快照独立 | 各 2 |
 | profile + enter | 初次建档 1 级；不触发升级奖励，重进/冷加载不重置 | 4 |
 | attribute + enter | 按初始等级建立基础/最终属性，同事务回滚 | 2 |
-| portal + enter | 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手 → 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入，以及入口给的地址与进入时认的是同一个承载服（只有测试 `game/portal/portal_enter_test.go`，不加运行时代码） | 2 |
+| portal + enter | 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手 → 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入，以及入口给的地址与进入时认的是同一个承载服（只有测试 `services/account/portal/portal_enter_test.go`，不加运行时代码） | 2 |
 | login + enter | 进入前检查：会话记的承载服不是本服（或没有记）答 `login_elsewhere`，不加载也不创建 Player；用进服票据握手的会话先新建再进入（`EnterGame` 不代建，没建成答 `enter_need_create`）；会话激活之后推 `EnterStatus`，本服不该服务的会话推完断开（`game/login/login_enter.go`） | 6 |
-| enter + profile | 角色名的规则在游戏服：新建请求（`EnterCreate`）的名字按档案模块的名字规则校验，不合规在建档之前被拒；没装 naming 时在新建的那笔事务里写进档案，装了 naming 时经它的唯一命名入口占名（`game/profile/enter_profile.go`） | 3 |
+| enter + profile | 角色名的规则在游戏服：新建请求（`EnterCreate`）的名字按档案模块的名字规则校验，不合规在建档之前被拒；没装 naming 时在新建的那笔事务里写进档案，装了 naming 时经它的唯一命名入口占名（`game/login/enter_profile.go`） | 3 |
 | servertime + enter | 玩家每次进入游戏时把服务器此刻的业务时间推给他（`game/controllers/servertime/servertime_enter.go`）；推送不成只记日志，不让登录失败 | 3 |
 | rehome + enter | 进入前检查（正在换服答 `rehome_moving`，绑定在别的服答 `rehome_elsewhere` 并给出目标服；源服重启后在这里把停在半路的换服接着做完）；进入之后做到达与意图对账（`game/controllers/rehome/rehome_enter.go`） | 5 |
 | attribute + equipment | 穿卸同事务重算装备层与最终属性，加载时重建 | 8 |
@@ -168,7 +168,7 @@ App 在 Init 失败后调用 Shutdown，适配层只清理已经启动（包括�
 
 ```yaml
 runtime:
-  package: game/portal
+  package: services/account/portal
   start: Start
   framework: account         # roost.yaml 里 services.<名字>.framework 的取值
 ```
@@ -207,7 +207,6 @@ errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字
 access:                      # 要求的玩家接入形态，由安装器代办（见下）
   transport: tcp             # 没有玩家 TCP 接入就先 roost add transport tcp
   self_sync: true            # 打开 access.player.self_sync：标了 sync 的字段推给玩家本人
-  lifecycle: true            # Entity 没有 lifecycle 就先 roost add lifecycle <Entity>
 replaces: []                 # 要接管的生成桩（见下），必须也在 files/ 里
 next:                        # 安装后提示：安装器不代办、要工程自己做的事；plan / add 在这次要装的模块下列出
   - "roost config enable player-tcp"
@@ -258,7 +257,8 @@ verify:
 - **号不写死**：协议号、错误码、组件号一律用 `{{ID:...}}`。
 - **模块可以带配置表**：把 `configs/schema/<表>.go` 与 `configs/table/<表>.csv` 当普通模板放进 `files/`，清单 `needs.features` 加 `config`；表的登记、CSV 转换与 `generated.<表>ByID` 访问器由 `roost generate` 产出，不需要安装器另做什么。表名全库唯一；工程已有同名的表时落点被占用，装不了。读配置表的模块，场景测试带自己的表（只登记自己那张，写到临时目录），装载后把缺省 Store 与 `fctx.RuntimeConfig()` 一起换回（照 `modules/bag` 的测试）；依赖它的模块的测试同样要先装表。
 - **文件名带模块名**：`db/def/<module>.go`、`internal/errors/<module>.go`、`game/handler/<module>_<handler>.go`、`protocol/def/<module>_<protocol>.go`、`game/controllers/<module>/`。协议与 Nest handler 一个一个文件（`roost generate` 按文件名找它们）。
-- **会被多个实体共用的组件**（2026-11-13 起 bag、wallet、attribute 是样板）：逻辑放共用包 `game/components/<module>/`，组件经宿主接口 `Owner`（`entity.IThreadSafeEntity` + 返回本实体 DAO 里那份状态的方法）拿状态，宿主能力不同处用可选接口区分，工厂 `NewComponent(value any, *entity.EntityCreateParam)`；`game/entities/player/<module>_component.go` 只留薄接线——自己的组件号、`type XxxComponent = <module>.Component` 类型别名、`RegisterComponentFactory(..., <module>.NewComponent)` 与 Owner 方法。Player 上的钩子与登记点留在实体包，由 Owner 的可选方法接进组件。场景里用测试内的第二个实体证明能挂上去（`Test<Module>SecondHost*`）。
+- **会被多个实体共用的组件**（2026-11-13 起 bag、wallet、attribute、enter 是样板）：逻辑放共用包 `game/components/<module>/`，主文件与包同名（`bag/bag.go`），组件经宿主接口 `Owner`（`entity.IThreadSafeEntity` + 返回本实体 DAO 里那份状态的方法）拿状态，宿主能力不同处用可选接口区分，工厂 `NewComponent(value any, *entity.EntityCreateParam)`；`game/entities/player/<module>_component.go` 只留薄接线——自己的组件号、`type XxxComponent = <module>.Component` 类型别名、`RegisterComponentFactory(..., <module>.NewComponent)` 与 Owner 方法。Player 上的钩子与登记点留在实体包，由 Owner 的可选方法接进组件。场景里用测试内的第二个实体证明能挂上去（`Test<Module>SecondHost*`）。
+- **托管框架服务的手写文件**（v1.47.0 起）：collaborators、渠道等放 `services/<服务>/`（如 `services/account/`、`services/chat/`），HTTP 入口放 `services/account/portal/`；`runtime.package` 在 `services/<服务>/` 下时必须写 `runtime.framework: <服务>`。
 - **自己的 controller 域**：`//roost:protocol ... handler=<module>`，不往别的模块的 controller 里加方法。
 - **跨模块协作**：依赖的模块（`requires`）的组件在同一个实体上时，在自己的组件里直接调用它（同一把实体锁、同一笔事务，见 checkin 调 wallet）；不在同一个实体上时用多实体 Nest handler。不依赖对方、只是“对方也装着时顺带做一件事”，用联动文件接到对方的登记点上（见上）。不用进程级全局变量保存业务状态。
 - **测试只断言自己的事实**：同一个 DAO 上还有别的模块的字段。例如断言“我的字段同步、我的账本不同步”，不要断言“同步字段恰好是这几个”。测试替身（getter、提交器）自己带一份，不借用别的模块的测试文件——那些文件归工程所有，可能被改。

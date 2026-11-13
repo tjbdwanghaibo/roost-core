@@ -3,13 +3,12 @@ package alliance
 import (
 	"context"
 
-	gameenter "{{MODULE}}/game/enter"
-
+	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
-func init() { gameenter.OnEntered("alliance", refreshOnEnter) }
-func refreshOnEnter(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+func init() { gamelogin.OnEntered("alliance", refreshOnEnter) }
+func refreshOnEnter(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 	controller, err := FromRegistry(registry)
 	if err != nil {
 		return err

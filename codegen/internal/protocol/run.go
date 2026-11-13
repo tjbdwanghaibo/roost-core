@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/project"
@@ -16,11 +15,14 @@ import (
 // import-path suffixes its generated code refers to. `roost generate` and the
 // project templates refer to these instead of repeating the literals.
 const (
-	DefaultDefDir            = "./protocol/def"
-	DefaultBindDir           = "./protocol/player_bind"
-	DefaultHandlerDir        = "./game/protocol_handlers"
-	PlayerAccessImportSuffix = "/game/playeraccess"
-	PBImportSuffix           = "/protocol/pb"
+	DefaultDefDir  = "./protocol/def"
+	DefaultBindDir = "./protocol/player_bind"
+	// DefaultHandlerFile 是玩家接入层的协议登记文件（controller 接口、各功能注册、总入口与推送编码器），
+	// 包名取所在目录名。`roost generate` 在启用 access.player 时传它；单独跑 protocol 生成器时缺省不写。
+	DefaultHandlerFile = "./internal/access/player/protocols_gen.go"
+	// PlayerAccessImport 是协议派发层的 import 路径（2026-11-13 起是 core 的框架包，不再生成进工程）。
+	PlayerAccessImport = "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	PBImportSuffix     = "/protocol/pb"
 )
 
 func Run(args []string, stdout io.Writer) error {
@@ -31,9 +33,8 @@ func Run(args []string, stdout io.Writer) error {
 	pbDir := flags.String("pb", "./protocol/pb", "generated pb go directory")
 	msgIDDir := flags.String("msgid", "./protocol/msgid", "generated msg id directory")
 	bindDir := flags.String("bind", DefaultBindDir, "generated playeraccess binding directory")
-	handlerDir := flags.String("handlers", DefaultHandlerDir, "generated player protocol handler directory")
+	handlerFile := flags.String("handlers", "", "generated player protocol registration file (controller interfaces, per-feature and aggregate registration), e.g. "+DefaultHandlerFile)
 	controllerDir := flags.String("controllers", "", "create missing application-owned controller scaffolds")
-	handlerBootstrap := flags.String("handler-bootstrap", "", "generated aggregate player protocol registration file")
 	robotProtocolFile := flags.String("robot-protocol", "./loadtest/protocol/registry_gen.go", "generated robot protocol registry path")
 	manifestFile := flags.String("manifest", "./protocol/protocol_manifest.json", "generated protocol manifest path")
 	csharpFile := flags.String("csharp", "", "optional generated C# message id file; PB classes use protoc on the generated proto")
@@ -79,36 +80,15 @@ func Run(args []string, stdout io.Writer) error {
 			bind:     *bindDir,
 			robot:    *robotProtocolFile,
 			manifest: *manifestFile,
-			handlers: *handlerDir,
-		}
-		if *handlerBootstrap == "" {
-			if err := retireProtocolOutputs(outputs, stdout); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(stdout, "no protocol structs found in %s\n", *defDir)
-			return nil
-		}
-		projectInfo, err := project.Discover(*defDir)
-		if err != nil {
-			return fmt.Errorf("discover target module: %w", err)
-		}
-		defs.ModulePath = projectInfo.ModulePath
-		defs.GoPackage = defs.ModulePath + "/protocol/pb;pb"
-		content, err := generateProtocolBootstrap(defs, "")
-		if err != nil {
-			return err
 		}
 		if err := retireProtocolOutputs(outputs, stdout); err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(*handlerBootstrap), 0o755); err != nil {
+		// 没有协议时登记文件照样写（空的总入口），接入层 Mod 仍能编译。
+		if err := writeProtocolRegistration(*handlerFile, defs, *force, stdout); err != nil {
 			return err
 		}
-		changed, err := writeIfChanged(*handlerBootstrap, content, *force)
-		if err != nil {
-			return err
-		}
-		printChange(stdout, *handlerBootstrap, changed)
+		_, _ = fmt.Fprintf(stdout, "no protocol structs found in %s\n", *defDir)
 		return nil
 	}
 	projectInfo, err := project.Discover(*defDir)
@@ -129,9 +109,6 @@ func Run(args []string, stdout io.Writer) error {
 	}
 	if *robotProtocolFile != "" {
 		dirs = append(dirs, filepath.Dir(*robotProtocolFile))
-	}
-	if *handlerBootstrap != "" {
-		dirs = append(dirs, filepath.Dir(*handlerBootstrap))
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -176,62 +153,32 @@ func Run(args []string, stdout io.Writer) error {
 		}
 		printChange(stdout, item.path, changed)
 	}
-	if *handlerDir == "" {
-		if *handlerBootstrap == "" {
-			return nil
-		}
-		content, err := generateProtocolBootstrap(defs, "")
-		if err != nil {
-			return err
-		}
-		changed, err := writeIfChanged(*handlerBootstrap, content, *force)
-		if err != nil {
-			return err
-		}
-		printChange(stdout, *handlerBootstrap, changed)
-		return nil
-	}
 	if *controllerDir != "" {
 		if err := generateControllers(*controllerDir, defs, stdout); err != nil {
 			return err
 		}
 	}
-	files, err := generateProtocolHandlerFiles(defs)
+	return writeProtocolRegistration(*handlerFile, defs, *force, stdout)
+}
+
+// writeProtocolRegistration 写接入层的协议登记文件；path 为空时不写（工程没有玩家接入层）。
+func writeProtocolRegistration(path string, defs *Definitions, force bool, stdout io.Writer) error {
+	if path == "" {
+		return nil
+	}
+	content, err := generateProtocolRegistration(defs, filepath.Base(filepath.Dir(path)))
 	if err != nil {
 		return err
 	}
-	paths := make([]string, 0, len(files))
-	for rel := range files {
-		paths = append(paths, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
-	sort.Strings(paths)
-	for _, rel := range paths {
-		path := filepath.Join(*handlerDir, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-		changed, err := writeIfChanged(path, files[rel], *force)
-		if err != nil {
-			return err
-		}
-		printChange(stdout, path, changed)
+	changed, err := writeIfChanged(path, content, force)
+	if err != nil {
+		return err
 	}
-	if *handlerBootstrap != "" {
-		handlerImport, err := projectInfo.ImportPath(*handlerDir)
-		if err != nil {
-			return fmt.Errorf("resolve protocol handler import: %w", err)
-		}
-		content, err := generateProtocolBootstrap(defs, handlerImport)
-		if err != nil {
-			return err
-		}
-		changed, err := writeIfChanged(*handlerBootstrap, content, *force)
-		if err != nil {
-			return err
-		}
-		printChange(stdout, *handlerBootstrap, changed)
-	}
-	return retireProtocolHandlers(*handlerDir, files, stdout)
+	printChange(stdout, path, changed)
+	return nil
 }
 
 func printChange(w io.Writer, path string, changed bool) {

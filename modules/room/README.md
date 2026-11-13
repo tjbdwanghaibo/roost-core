@@ -49,7 +49,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 ## 复用方式
 
-- **需求正好是它**：`roost module add room`。安装器分配实体号、组件号、消息号与错误码，生成 `game/lifecycle/room.go`，补玩家 TCP 骨架。没有依赖。
+- **需求正好是它**：`roost module add room`。安装器分配实体号、组件号、消息号与错误码，实体包的 `lifecycle_gen.go` 由 roost generate 产出，补玩家 TCP 骨架。没有依赖。
 - **需求多一点**：
   - 入房条件（邀请码、名单、等级）：登记 `OnRoomJoining`。
   - 房内玩法状态：给 `Room` 加自己的组件与状态（像 `matchroom`、`turn` 那样声明 `entity: Room`），在自己的 handler 里与席位一起提交。

@@ -15,9 +15,9 @@ state:
 component: Purchase
 protocols: [PurchaseCollect]
 errcodes: [purchase_invalid, purchase_sequence, purchase_reward]
-replaces: [internal/service/platform/collaborators.go]
+replaces: [services/platform/collaborators.go]
 verify:
-  packages: [./game/handler, ./game/purchase, ./game/controllers/purchase, ./internal/service/platform]
+  packages: [./game/handler, ./game/purchase, ./game/controllers/purchase, ./services/platform]
   run: ^TestPurchase
   pass: 21
 with:

@@ -1,6 +1,7 @@
 package player
 
 import (
+	worldentity "{{MODULE}}/game/entities/world"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	purchasecontroller "{{MODULE}}/game/controllers/purchase"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
 
@@ -35,7 +35,7 @@ import (
 type Controller struct {
 	registry   *app.Registry
 	nestClient corenest.Client
-	players    *lifecycle.PlayerLifecycle
+	players    *player.Lifecycle
 	// 匹配仍由 demo 的锁步战斗使用，社交队伍端点来自 team 模块。
 	matcher svcmatch.Matchmaker
 	// chat is the chat module's controller (game/controllers/chat): the login
@@ -148,7 +148,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || client == nil {
 		return nil, fmt.Errorf("player controller: nest client is unavailable")
 	}
-	players, err := lifecycle.PlayerFromRegistry(registry)
+	players, err := player.LifecycleFromRegistry(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
@@ -196,11 +196,11 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	worldID, err := lifecycle.WorldID(registry)
+	worldID, err := worldentity.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	sceneID, err := entity.BuildEntityID(lifecycle.WorldSceneUniqueID, sceneentity.EntityKindScene)
+	sceneID, err := entity.BuildEntityID(sceneentity.WorldSceneUniqueID, sceneentity.EntityKindScene)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
@@ -221,7 +221,7 @@ func (controller *Controller) NestClient() corenest.Client {
 }
 
 // Players is the create/load boundary for Player Entities.
-func (controller *Controller) Players() *lifecycle.PlayerLifecycle {
+func (controller *Controller) Players() *player.Lifecycle {
 	if controller == nil {
 		return nil
 	}

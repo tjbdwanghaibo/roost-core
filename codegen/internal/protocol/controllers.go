@@ -200,7 +200,7 @@ import (
 func (controller *Controller) %s(ctx *playeraccess.Context, req *pb.%s) %s {
  return %sfmt.Errorf(%q)
 }
-`, packageName, defs.ModulePath+PlayerAccessImportSuffix, defs.ModulePath+PBImportSuffix, name, name, msg.Req, result, ret, name+": not implemented")
+`, packageName, PlayerAccessImport, defs.ModulePath+PBImportSuffix, name, name, msg.Req, result, ret, name+": not implemented")
 		}
 		var names []string
 		for name := range files {

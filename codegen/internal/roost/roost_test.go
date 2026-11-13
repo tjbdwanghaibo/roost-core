@@ -544,7 +544,6 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		{Kind: "dao", Name: "Player", Entity: "Player"},
 		{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Profile"},
 		{Kind: "protocol", Name: "RenamePlayer", Group: "game", Handler: "player"},
-		{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"},
 		{Kind: "endpoint", Name: "RenamePlayer", Handler: "player", Protocol: "RenamePlayer", NestHandler: "RenamePlayer"},
 	}
 	for _, step := range steps {
@@ -596,6 +595,10 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			}
 		}
 	}
+	// v1.47.0：lifecycle 由 roost generate 生成到实体包（lifecycle_gen.go），add lifecycle 删掉了，报错指向新入口。
+	if _, err := Add(root, AddOptions{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"}); err == nil || !strings.Contains(err.Error(), "player.LifecycleFromRegistry(registry)") {
+		t.Fatalf("add lifecycle after its removal: %v", err)
+	}
 	// 首次真实请求前玩家必须先有 Entity：没有“登录时 lifecycle.GetOrCreate”这一步，Nest 冷加载会回
 	// entity_not_found。first-business 必须把这一步列为未完成，并给出可执行的命令（DESIGN-TODO D7）。
 	manifest, err := LoadManifest(root)
@@ -642,16 +645,15 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 	checks := map[string][]string{
 		"roost.yaml":                                            {"access:", "player:", "service: game", "- nest"},
-		"game/playeraccess/runtime_gen.go":                      {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
-		"internal/access/player/mod_gen.go":                     {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
-		"game/protocol_bootstrap/protocol_gen.go":               {"RegisterPlayerPlayerProtocols"},
+		"internal/access/player/mod_gen.go":                     {`"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"`, "if err := RegisterPlayerProtocols(protocols, registry); err != nil", "registry.Register(Name, mod.runtime)"},
+		"internal/access/player/protocols_gen.go":               {"package player", "type PlayerController interface", "func RegisterPlayerPlayerProtocols(", "func RegisterPlayerProtocols("},
 		"game/controllers/player/controller.go":                 {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
-		"game/controllers/player/enter_game.go":                 {"lifecycle.PlayerFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
+		"game/controllers/player/enter_game.go":                 {"player.LifecycleFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
 		"game/controllers/player/rename_player_endpoint_gen.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
-		"game/lifecycle/player.go": {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer", "errors.Is(err, entity.ErrEntityRemoved) && attempt < 3",
-			// D10 方案 B（只守 GetOrCreate）：删过档的 ID 不再创建，Get 给稳定码 entity_deleted。
-			"func deletedPlayerError(err error) error", "errcode.Wrap(errcode.ErrEntityDeleted, err)", "return nil, deletedPlayerError(err)"},
-		"protocol/player_bind/bind_gen.go": {"RegisterRenamePlayer"},
+		// lifecycle 的实现（GetOrCreate 不重建删过档的实体、给 entity_deleted 稳定码）在 core 的 wiring/entitylifecycle；
+		// 实体包里只有生成的具名入口。
+		"game/entities/player/lifecycle_gen.go": {"type Lifecycle = entitylifecycle.Lifecycle[*Player]", "func LifecycleFromRegistry(registry *app.Registry) (*Lifecycle, error)", "EntityKindPlayer"},
+		"protocol/player_bind/bind_gen.go":      {"RegisterRenamePlayer"},
 	}
 	for path, fragments := range checks {
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
@@ -663,6 +665,12 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			if !strings.Contains(string(raw), fragment) {
 				t.Errorf("%s missing %q:\n%s", path, fragment, raw)
 			}
+		}
+	}
+	// v1.47.0 目录重整：派发层是 core 的框架包，协议登记并进接入层，这些旧目录不再生成。
+	for _, retired := range []string{"game/playeraccess", "game/protocol_handlers", "game/protocol_bootstrap", "game/lifecycle"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(retired))); !os.IsNotExist(err) {
+			t.Errorf("%s is still generated (stat err %v)", retired, err)
 		}
 	}
 	// A duplicate endpoint must be rejected before any companion controller is

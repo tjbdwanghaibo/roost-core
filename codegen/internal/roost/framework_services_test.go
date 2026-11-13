@@ -109,7 +109,7 @@ func TestProjectNewGameTemplateHostsOnlyTheFrameworksAskedFor(t *testing.T) {
 	if names := sortedServiceNames(manifest); strings.Join(names, ",") != "game" || len(manifest.Services["game"].Uses) != 0 {
 		t.Fatalf("-template game declares services %v, game uses %v; want game alone", names, manifest.Services["game"].Uses)
 	}
-	for _, rel := range []string{"internal/service/chat", "configs/service/config.account.yaml", "internal/service/game/framework_clients_gen.go", "docs/SERVICES.zh-CN.md"} {
+	for _, rel := range []string{"services/chat", "configs/service/config.account.yaml", "internal/service/game/framework_clients_gen.go", "docs/SERVICES.zh-CN.md"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); !os.IsNotExist(err) {
 			t.Fatalf("-template game wrote %s (%v)", rel, err)
 		}
@@ -124,7 +124,7 @@ func TestProjectNewGameTemplateHostsOnlyTheFrameworksAskedFor(t *testing.T) {
 	if names := sortedServiceNames(manifest); strings.Join(names, ",") != "chat,game,rank" || strings.Join(manifest.Services["game"].Uses, ",") != "chat,rank" {
 		t.Fatalf("-framework rank,chat declares %v, game uses %v", names, manifest.Services["game"].Uses)
 	}
-	for _, rel := range []string{"configs/service/config.rank.yaml", "internal/service/chat/collaborators.go"} {
+	for _, rel := range []string{"configs/service/config.rank.yaml", "services/chat/collaborators.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("-framework rank,chat did not write %s: %v", rel, err)
 		}
@@ -192,15 +192,15 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		"internal/service/mail/collaborators.go", "internal/service/account/collaborators.go",
-		"internal/service/match/collaborators.go", "internal/service/chat/collaborators.go",
+		"services/mail/collaborators.go", "services/account/collaborators.go",
+		"services/match/collaborators.go", "services/chat/collaborators.go",
 	} {
 		file, ok := plan[path]
 		if !ok || file.Owned {
 			t.Errorf("%s must exist and be business-owned (owned=%v present=%v)", path, file.Owned, ok)
 		}
 	}
-	if _, ok := plan["internal/service/mail/service.go"]; ok {
+	if _, ok := plan["services/mail/service.go"]; ok {
 		t.Error("a hosted service must not get a business service.go")
 	}
 	clients, ok := plan["internal/service/game/framework_clients_gen.go"]
@@ -259,17 +259,23 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new project: %v (created %v)", err, result.Created)
 	}
+	// game/managers/managers.go 只在服务装了 manager Mod 时生成（缺省 Mod 列表带它）；这里只给了 configdata，
+	// 登记点的位置由 TestGameServiceManagersLiveInGameManagers 验证。
 	for _, rel := range []string{
 		"game/entities/player/entity.go", "game/entities/world/entity.go",
-		"game/lifecycle/player.go", "game/lifecycle/world.go", "game/lifecycle/world_singleton.go",
+		"game/entities/player/lifecycle_gen.go", "game/entities/world/lifecycle_gen.go", "game/entities/world/singleton.go",
 		"internal/service/game/service.go",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("%s missing: %v", rel, err)
 		}
 	}
+	// v1.47.0：lifecycle 由 roost generate 生成到各实体包，不再有 game/lifecycle。
+	if _, err := os.Stat(filepath.Join(root, "game", "lifecycle")); !os.IsNotExist(err) {
+		t.Errorf("game/lifecycle still exists: %v", err)
+	}
 	service, _ := os.ReadFile(filepath.Join(root, "internal", "service", "game", "service.go"))
-	if !strings.Contains(string(service), "lifecycle.EnsureWorld(") {
+	if !strings.Contains(string(service), "world.EnsureWorld(") {
 		t.Errorf("the template game Service does not ensure its World:\n%s", service)
 	}
 	m, err := LoadManifest(root)
@@ -279,30 +285,35 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 	if resolved, _ := resolveMods(m.Services["game"].Mods); !contains(resolved, "nest") {
 		t.Errorf("template game service lacks the nest runtime: %v", m.Services["game"].Mods)
 	}
-	// Both lifecycles in one package: no redeclared top-level identifier.
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, filepath.Join(root, "game", "lifecycle"), nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]string{}
-	for _, pkg := range pkgs {
-		for file, f := range pkg.Files {
-			for _, decl := range f.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil {
-					continue
+	// 每个实体包有自己的 lifecycle：world 包里生成的 lifecycle 与手写的单例不能重名。
+	for dir, wants := range map[string][]string{
+		"player": {"NewLifecycle", "LifecycleFromRegistry"},
+		"world":  {"NewLifecycle", "LifecycleFromRegistry", "EnsureWorld"},
+	} {
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, filepath.Join(root, "game", "entities", dir), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]string{}
+		for _, pkg := range pkgs {
+			for file, f := range pkg.Files {
+				for _, decl := range f.Decls {
+					fn, ok := decl.(*ast.FuncDecl)
+					if !ok || fn.Recv != nil {
+						continue
+					}
+					if prev, dup := seen[fn.Name.Name]; dup {
+						t.Errorf("%s is declared in both %s and %s", fn.Name.Name, prev, file)
+					}
+					seen[fn.Name.Name] = file
 				}
-				if prev, dup := seen[fn.Name.Name]; dup {
-					t.Errorf("%s is declared in both %s and %s", fn.Name.Name, prev, file)
-				}
-				seen[fn.Name.Name] = file
 			}
 		}
-	}
-	for _, want := range []string{"PlayerFromRegistry", "WorldFromRegistry", "EnsureWorld"} {
-		if _, ok := seen[want]; !ok {
-			t.Errorf("lifecycle package lacks %s", want)
+		for _, want := range wants {
+			if _, ok := seen[want]; !ok {
+				t.Errorf("game/entities/%s lacks %s", dir, want)
+			}
 		}
 	}
 }
@@ -336,7 +347,7 @@ func TestDoctorReportsUnimplementedCollaborators(t *testing.T) {
 	if failing["collaborators:mail"] {
 		t.Error("mail is reported although a nil Broadcast is a valid, fail-closed choice")
 	}
-	path := filepath.Join(root, "internal", "service", "chat", "collaborators.go")
+	path := filepath.Join(root, "services", "chat", "collaborators.go")
 	raw, _ := os.ReadFile(path)
 	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), "is not configured", "is refused by project policy")), 0o644); err != nil {
 		t.Fatal(err)
@@ -536,7 +547,7 @@ func TestGeneratedServicesReportIntoTheMetricsRegistryByDefault(t *testing.T) {
 		if !m.isFrameworkService(name) {
 			continue
 		}
-		rel := "internal/service/" + name + "/collaborators.go"
+		rel := m.serviceDir(name) + "/collaborators.go"
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			t.Fatal(err)
@@ -565,10 +576,20 @@ func TestGeneratedServicesReportIntoTheMetricsRegistryByDefault(t *testing.T) {
 	}
 }
 
-// servicePackages 读出 internal/service/<name>/ 下每个非测试 .go 文件的 package 子句。
+// serviceSourceDir 是服务手写代码的目录：v1.47.0 起托管框架服务在 services/<name>/，业务服务仍在 internal/service/<name>/。
+func serviceSourceDir(t *testing.T, root, service string) string {
+	t.Helper()
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, filepath.FromSlash(m.serviceDir(service)))
+}
+
+// servicePackages 读出服务目录（serviceSourceDir）下每个非测试 .go 文件的 package 子句。
 func servicePackages(t *testing.T, root, service string) map[string]string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(root, "internal", "service", service, "*.go"))
+	paths, err := filepath.Glob(filepath.Join(serviceSourceDir(t, root, service), "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +605,7 @@ func servicePackages(t *testing.T, root, service string) map[string]string {
 		out[filepath.Base(path)] = file.Name.Name
 	}
 	if len(out) == 0 {
-		t.Fatalf("internal/service/%s has no Go files", service)
+		t.Fatalf("service %s has no Go files", service)
 	}
 	return out
 }
@@ -611,7 +632,7 @@ func TestServicePackageNamesAreLowercaseAndFollowAnExistingProject(t *testing.T)
 	upper := map[string]string{"game": "Game", "account": "Account"}
 	business := map[string][]byte{}
 	for service, pkg := range upper {
-		paths, _ := filepath.Glob(filepath.Join(target, "internal", "service", service, "*.go"))
+		paths, _ := filepath.Glob(filepath.Join(serviceSourceDir(t, target, service), "*.go"))
 		for _, path := range paths {
 			raw, err := os.ReadFile(path)
 			if err != nil {
@@ -659,9 +680,9 @@ func TestMailBroadcastSkeletonDescribesTheWholeAudience(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, ok := plan["internal/service/mail/collaborators.go"]
+	file, ok := plan["services/mail/collaborators.go"]
 	if !ok {
-		t.Fatal("internal/service/mail/collaborators.go missing")
+		t.Fatal("services/mail/collaborators.go missing")
 	}
 	body := string(file.Body)
 	if strings.Contains(body, "online player") {

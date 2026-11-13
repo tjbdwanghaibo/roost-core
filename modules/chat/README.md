@@ -19,7 +19,7 @@
   - 不在任何实体上挂字段。消息保存在 chat 服务里；在线名单 `Presence` 是进程内存。
 - **配置**
   - 没有配置表与配置键。规则是 `game/chat/chat.go` 里的常量：`MaxTextBytes = 256`、`WorldChannelTarget = 1`、`TypeText`（唯一的消息类型）、`SystemActor = "game"`。
-  - `internal/service/chat/collaborators.go`：chat 进程向工程要的协作者（`Policy`、`Bodies`、`System`、`Rules`、`Metrics`）。安装时它取代生成的拒绝桩，之后归工程所有。
+  - `services/chat/collaborators.go`：chat 进程向工程要的协作者（`Policy`、`Bodies`、`System`、`Rules`、`Metrics`）。安装时它取代生成的拒绝桩，之后归工程所有。
 - **错误码**
   - 模块自己不定义错误码。拒绝时应答的 `Code` / `Reason` 来自框架 `service/chat` 的错误（例如 `ErrMessageInvalid`、`ErrChannelInvalid`、`ErrNotPermitted`、`ErrRequestInvalid`）经 `errcode.ClientError` 的映射。
 
@@ -36,7 +36,7 @@
 - **在线名单按进程计**：玩家进入游戏（装了 `enter` 时）、发过言或翻过历史后加入；最后一条连接关闭、或推送时发现没有会话时移除。多个 game 进程不互相扇出：一个进程上的玩家发言，只推给同一进程名单里的人，别的进程的玩家要靠历史补读。
 - **不经过 Nest**：世界与私聊的发送不取任何实体锁，也不改任何实体。
 - **系统消息入口无条件授予**（`collaborators.go` 的 `System`）：前提是 chat 服务只经内部总线可达。总线能被不可信一方够着的部署，必须把它换成对调用方身份的检查。
-- **前提**：业务服务在 `roost.yaml` 里要有 `uses: [chat]`，并且有玩家 TCP 接入（安装时代办）；运行时需要 chat 服务进程。工程已经改过 `internal/service/chat/collaborators.go` 时装不了（安装器只替换没改过的生成桩）。不依赖别的模块。
+- **前提**：业务服务在 `roost.yaml` 里要有 `uses: [chat]`，并且有玩家 TCP 接入（安装时代办）；运行时需要 chat 服务进程。工程已经改过 `services/chat/collaborators.go` 时装不了（安装器只替换没改过的生成桩）。不依赖别的模块。
 - **已知限制**：见 `docs/maintenance/KNOWN-LIMITS.md` 的“chat 模块的边界”一条（连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订等）。
 
 ## 复用方式
@@ -56,12 +56,12 @@
 
 ## 联动
 
-- `chat` + `enter`（`with/enter/game/chat/chat_enter.go`）：经 `gameenter.OnEntered("chat", …)` 在玩家进入游戏时把他加进本进程的世界频道在线名单。不发登录公告。
+- `chat` + `enter`（`with/enter/game/chat/chat_enter.go`）：经 `gamelogin.OnEntered("chat", …)` 在玩家进入游戏时把他加进本进程的世界频道在线名单。不发登录公告。
 - `scene` + `chat`（在 `scene/with/chat`）：经 `OnLocalChannel("nearby", …)` 登记附近聊天，在 Nest 里取同场景收件人快照后在锁外推送，没有历史。
 - 以 `requires` 依赖它的模块：`notice`（公告与跑马灯经 `AnnounceWorld` 发出）。
 
 ## 验证范围
 
-- `roost module verify chat`：10 个场景（`./game/chat`、`./game/controllers/chat`、`./internal/service/chat`，`^TestChat`）；与 `enter` 的联动另有 2 个场景（`./game/chat`，`^TestWithChatEnter`）。
+- `roost module verify chat`：10 个场景（`./game/chat`、`./game/controllers/chat`、`./services/chat`，`^TestChat`）；与 `enter` 的联动另有 2 个场景（`./game/chat`，`^TestWithChatEnter`）。
 - 场景是离线的，覆盖：文本校验、`ChannelOf` 的寻址、`Allow` 的放行与拒绝、在线名单的增删、最后一条连接关闭后移出名单（玩家传输用替身 `chatSessions`）、本地频道先校验再分发且没有历史、collaborators 执行同一套政策并授予系统入口。
 - 没有验证：`HandleChatSend` 经 chat 服务发布世界或私聊消息、`HandleChatHistory` 读回、`AnnounceWorld`、`deliver` 的实际推送——这几条路径在模块场景里没有用例；真实 chat 进程、NATS 总线与 TCP 推送也没有在模块场景里跑过。

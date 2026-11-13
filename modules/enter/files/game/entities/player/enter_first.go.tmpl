@@ -4,13 +4,13 @@ package player
 //
 // 这个文件归工程所有，初始发放就写在这里。同一个实体上别的组件直接调，例如：
 //
-//	if _, err := component.owner.WalletComp().Add(100); err != nil { // 装了 wallet 模块时：送 100 金币
+//	if _, err := e.WalletComp().Add(100); err != nil { // 装了 wallet 模块时：送 100 金币
 //		return err
 //	}
 //
 // 用不留回执的入口（wallet 的 Add）：只发一次由 Init 的标记保证。返回错误时整笔事务回滚，
 // 这名玩家下次进入会再执行一遍，所以这里不要做事务之外的事（发消息、调别的服务）。
-func (component *EnterComponent) firstEnter(nowUnixMilli int64) error {
+func (e *Player) firstEnter(nowUnixMilli int64) error {
 	_ = nowUnixMilli
 	return nil
 }

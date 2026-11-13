@@ -42,7 +42,7 @@ func TestModuleAttributeEquipmentScenariosAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/entities/player/profile_component.go",
 		"if err := runProfileLevelUp(component, from, from+gained); err != nil {", "if err := error(nil); err != nil {",
 		"./game/handler", "TestAttributeLevelUpGrowsBaseAndFinal", "level attributes")
-	recipeMutationMustFail(t, root, "game/components/attribute/component.go",
+	recipeMutationMustFail(t, root, "game/components/attribute/attribute.go",
 		"coreattr.AttrValue(base.Attack + gear.Attack)", "coreattr.AttrValue(base.Attack)",
 		"./game/handler", "TestWithAttributeEquipmentEquipRefreshesFinal", "gear final")
 	recipeMutationMustFail(t, root, "game/entities/player/equipment_component.go",

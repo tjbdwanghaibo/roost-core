@@ -2,6 +2,8 @@ package roost
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -102,5 +104,53 @@ func TestServiceManagersHookMatchesServicePackageClause(t *testing.T) {
 		if !strings.Contains(managers, "func Managers() []app.IManager") {
 			t.Fatalf("%s: hook does not expose Managers()", name)
 		}
+	}
+}
+
+// v1.47.0：game 服务（玩家接入所在、或唯一跑 Nest 的业务服务）的 manager 登记点在 game/managers/managers.go，
+// bootstrap 调 gamemanagers.Managers()；别的服务仍是 internal/service/<name>/managers.go。服务目录里已经有旧的
+// managers.go 时沿用它，不改写业务文件。
+func TestGameServiceManagersLiveInGameManagers(t *testing.T) {
+	root := t.TempDir()
+	manifest := DefaultManifest("planet", "example.com/planet",
+		[]string{"game", "gate"}, []string{"manager"}, []string{"nest"})
+	game := manifest.Services["game"]
+	game.Mods = append(game.Mods, "nest")
+	manifest.Services["game"] = game
+	m := manifest.withServicePackages(root)
+	plan, err := renderProject(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, ok := plan["game/managers/managers.go"]
+	if !ok {
+		t.Fatalf("game/managers/managers.go is not generated")
+	}
+	for _, want := range []string{"package managers", "func Managers() []app.IManager", "DependsOn", "Start 时 World 还不存在", "什么时候用"} {
+		if !strings.Contains(string(file.Body), want) {
+			t.Errorf("game/managers/managers.go lacks %q:\n%s", want, file.Body)
+		}
+	}
+	if _, ok := plan["internal/service/game/managers.go"]; ok {
+		t.Errorf("the game service still gets internal/service/game/managers.go")
+	}
+	if _, ok := plan["internal/service/gate/managers.go"]; !ok {
+		t.Errorf("another service lost its internal/service/gate/managers.go")
+	}
+	bootstrap := renderBootstrap(m)
+	for _, want := range []string{`gamemanagers "example.com/planet/game/managers"`, "kitmanager.NewManagerMod(gamemanagers.Managers()...)", "kitmanager.NewManagerMod(serviceGate.Managers()...)"} {
+		if !strings.Contains(bootstrap, want) {
+			t.Errorf("bootstrap lacks %q", want)
+		}
+	}
+	// 旧工程：服务目录里已有 managers.go 时沿用。
+	if err := os.MkdirAll(filepath.Join(root, "internal", "service", "game"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "service", "game", "managers.go"), []byte("package game\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.withServicePackages(root).gameManagers; got != "" {
+		t.Errorf("an existing internal/service/game/managers.go must keep the old location, gameManagers = %q", got)
 	}
 }

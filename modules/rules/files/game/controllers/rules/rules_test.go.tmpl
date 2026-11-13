@@ -9,10 +9,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	player "{{MODULE}}/game/entities/player"
 	handlers "{{MODULE}}/game/handler"
-	"{{MODULE}}/game/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 
@@ -171,7 +171,7 @@ func TestRulesPushUsesTheSameSnapshotAndCorrectPlayer(t *testing.T) {
 func TestRulesEntryAndReconnectEachPushOneSnapshot(t *testing.T) {
 	f := newRulesFixture(t)
 	for i := 0; i < 2; i++ {
-		failed := gameenter.RunEntered(context.Background(), f.registry, gameenter.Entered{PlayerID: 96501})
+		failed := gamelogin.RunEntered(context.Background(), f.registry, gamelogin.Entered{PlayerID: 96501})
 		if slices.Contains(failed, "rules") {
 			t.Fatalf("rules enter failed=%v", failed)
 		}
@@ -193,7 +193,7 @@ func TestRulesPushFailureCanBeRecoveredByQuery(t *testing.T) {
 	if err := PushNow(context.Background(), f.registry, 96501); !errors.Is(err, refused) {
 		t.Fatalf("push failure=%v", err)
 	}
-	failed := gameenter.RunEntered(context.Background(), f.registry, gameenter.Entered{PlayerID: 96501})
+	failed := gamelogin.RunEntered(context.Background(), f.registry, gamelogin.Entered{PlayerID: 96501})
 	if !slices.Contains(failed, "rules") {
 		t.Fatalf("rules hook hid failure=%v", failed)
 	}

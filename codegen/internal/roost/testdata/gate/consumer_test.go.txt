@@ -5,7 +5,7 @@ import (
 	"context"
 	"example.com/planet/game/handler"
 	syncsender "example.com/planet/game/handler/syncsender"
-	"example.com/planet/game/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	accessplayer "example.com/planet/internal/access/player"
 	playertcp "example.com/planet/internal/access/player/tcp"
 	"example.com/planet/protocol/msgid"

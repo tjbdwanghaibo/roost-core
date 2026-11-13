@@ -7,10 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 
@@ -53,7 +52,7 @@ var errStatusRefused = errors.New("enter: this server does not serve the player;
 //
 // 它只是告知：不写任何状态，推送不成只记日志；客户端没收到就直接发 EnterGame，结论以那个请求为准。
 // 调用方要在后台执行它并自己限量（它要读档，不能放在握手协程里），ctx 带上期限。
-func Announce(ctx context.Context, registry *app.Registry, entering gameenter.Entering, sessionID string) {
+func Announce(ctx context.Context, registry *app.Registry, entering gamelogin.Entering, sessionID string) {
 	controller, err := FromRegistry(registry)
 	if err != nil {
 		slog.Warn("enter: status not announced", "player_id", entering.PlayerID, "err", err)
@@ -70,9 +69,9 @@ func Announce(ctx context.Context, registry *app.Registry, entering gameenter.En
 }
 
 // announce 是 Announce 去掉“从 registry 取东西”之后的部分，测试直接调它。
-func announce(ctx context.Context, registry *app.Registry, transport statusTransport, entering gameenter.Entering, sessionID string,
+func announce(ctx context.Context, registry *app.Registry, transport statusTransport, entering gamelogin.Entering, sessionID string,
 	built func(context.Context) (bool, error), closeDelay time.Duration) {
-	status, refused, err := gameenter.Assess(ctx, registry, entering, built)
+	status, refused, err := gamelogin.Assess(ctx, registry, entering, built)
 	if err != nil {
 		slog.Warn("enter: status not announced; the client finds out from EnterGame", "player_id", entering.PlayerID, "err", err)
 		return
@@ -109,12 +108,12 @@ func (controller *Controller) built(ctx context.Context, playerID int64) (bool, 
 // find 加载玩家的档，不创建。found 为 false 表示持久层确认没有这个实体；别的错误（数据库、解码、超时、
 // 删过档）原样返回，不当成“没有”。
 func (controller *Controller) find(ctx context.Context, playerID int64) (entityID int64, found bool, err error) {
-	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	entities, err := player.LifecycleFromRegistry(controller.registry)
 	if err != nil {
 		return 0, false, err
 	}
 	if _, err := entities.Get(ctx, playerID); err != nil {
-		if errors.Is(err, lifecycle.ErrPlayerNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+		if errors.Is(err, player.ErrNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
 			return 0, false, nil
 		}
 		return 0, false, err

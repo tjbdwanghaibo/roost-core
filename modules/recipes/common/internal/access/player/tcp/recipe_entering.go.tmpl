@@ -3,7 +3,7 @@ package tcp
 import (
 	"context"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -25,10 +25,10 @@ import (
 // 两条都在加载或创建 Player 之前执行，EnterGame、EnterCreate 与会话激活后的告知（EnterStatus）用的是同一组检查。
 // 以后装 rehome 模块时删掉这个文件：检查按名字顺序执行，这一条排在 rehome 之前，会抢先拒绝它要接着做完的换服。
 func init() {
-	gameenter.OnEntering("recipe_transfer", refuseTransferOnEnter)
+	gamelogin.OnEntering("recipe_transfer", refuseTransferOnEnter)
 }
 
-func refuseTransferOnEnter(_ context.Context, _ *app.Registry, entering gameenter.Entering) error {
+func refuseTransferOnEnter(_ context.Context, _ *app.Registry, entering gamelogin.Entering) error {
 	value, moving := entering.Claims[svcaccount.TransferClaim]
 	if !moving {
 		return nil

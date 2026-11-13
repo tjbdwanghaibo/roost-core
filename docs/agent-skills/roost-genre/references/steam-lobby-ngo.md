@@ -102,7 +102,7 @@ NGO 没有内置的房主迁移：房主退出或掉线，这一局就结束了�
 
 局内照上面的方案，局外的持久状态放进 roost 工程（按 compose.md 正常生成）。分工与对接：
 
-- **登录**：客户端用 `ISteamUser::GetAuthTicketForWebApi` 取认证票据，交给 roost 的登录入口；roost 工程在 account 的渠道验签（`internal/service/account/login_channels.go`）里调 Steam 的 Web API 校验票据，拿到 SteamID 作为 open_id。渠道验签要项目自己写（compose §3A）。
+- **登录**：客户端用 `ISteamUser::GetAuthTicketForWebApi` 取认证票据，交给 roost 的登录入口；roost 工程在 account 的渠道验签（`services/account/login_channels.go`）里调 Steam 的 Web API 校验票据，拿到 SteamID 作为 open_id。渠道验签要项目自己写（compose §3A）。
 - **局内结果上报**：只有房主知道结果，而房主可以作弊。要可信的结算就不能只信房主：可以让每个成员各自上报、服务器比对；或者只发放“作弊也无所谓”的奖励。这个取舍要写进说明文档，并问开发者。
 - **两边的号**：Lobby、NGO 用 SteamID；roost 用自己的账号号与玩家号。对应关系由 account 维护，客户端不传玩家号。
 

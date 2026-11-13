@@ -3,6 +3,7 @@ package roost
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -20,7 +21,7 @@ import (
 //   - 归属服务的 bootstrap 装 registry.NewOwnedNestHandlersMod("<service>")（internal/registry/ownership_gen.go，
 //     nest 生成器写）：锁住归属 kind 的 handler 只注册在这个服务的引擎上。bootstrap 由 project sync 渲染、
 //     ownership_gen.go 由 generate 写，两者从同一次扫描得到；改了 service= 而没 sync 时 generate 拒绝。
-//   - add lifecycle 缺省落到归属服务，拒绝别的服务。
+//   - 实体包生成的 lifecycle（lifecycle_gen.go）只该由归属服务用：doctor 的 entity-owner 指出别的服务的用法。
 //   - doctor 的 entity-owner 检查：别的服务的代码构造了归属 kind 的 Sender（写必须经归属服务的 rpc）。
 //   - //roost:rpc route 只能用在拥有 Remote 托管 kind 的服务的 rpc 上（checkRouteRPCOwners）；preload=startup 的
 //     写法在 entityowner 扫描时校验。
@@ -326,7 +327,8 @@ var ownedWrapperPattern = regexp.MustCompile(`// Register\w+NestHandlersOn 在�
 
 // checkEntityOwnerUse 是 doctor 的 entity-owner 检查：没有 kind 声明归属时不出项。归属 kind 的 handler 只在归属服务
 // 注册，别的服务构造它的 Sender 发出的消息在本进程得到“handler 未注册”——写要经归属服务的 rpc。按源码文本查
-// New<X>Sender 的使用：服务目录（internal/service/<name>/）、服务拥有的 rpc 包与玩家接入代码按服务归属，
+// New<X>Sender 与实体包 lifecycle 入口的使用：服务目录（internal/service/<name>/、services/<name>/）、服务拥有的
+// rpc 包与玩家接入代码按服务归属，
 // 共用代码（game/ 下的 handler、组件）看不出由谁调用，不在检查之内。
 func checkEntityOwnerUse(root string, m Manifest) []CheckItem {
 	owned, err := projectEntityOwners(root)
@@ -357,6 +359,25 @@ func checkEntityOwnerUse(root string, m Manifest) []CheckItem {
 	if err != nil {
 		return []CheckItem{{Name: "entity-owner", Status: StatusFail, Detail: err.Error()}}
 	}
+	// 归属 kind 的 lifecycle（v1.47.0 起由 generate 生成在实体包的 lifecycle_gen.go）：别的服务按包导入、调
+	// [<E>]LifecycleFromRegistry / New[<E>]Lifecycle 建出来的实体，本进程没有它的 handler，同样只能经归属服务。
+	type lifecycleUse struct {
+		importPath, defaultName, owner string
+		call                           string // 正则片段：包限定符之后的函数名
+	}
+	var lifecycles []lifecycleUse
+	for _, item := range owned {
+		dir, err := filepath.Rel(root, item.Dir)
+		if err != nil || strings.HasPrefix(dir, "..") {
+			continue
+		}
+		dir = filepath.ToSlash(dir)
+		entityName := regexp.QuoteMeta(item.Entity)
+		lifecycles = append(lifecycles, lifecycleUse{
+			importPath: m.Project.Module + "/" + dir, defaultName: path.Base(dir), owner: item.Service,
+			call: `(?:(?:` + entityName + `)?LifecycleFromRegistry|New(?:` + entityName + `)?Lifecycle)\b`,
+		})
+	}
 	var problems []string
 	for rel, source := range sources {
 		user := codeService(m, rel)
@@ -366,6 +387,22 @@ func checkEntityOwnerUse(root string, m Manifest) []CheckItem {
 		for constructor, owner := range senders {
 			if owner != user && regexp.MustCompile(`\b`+constructor+`\b`).MatchString(source) {
 				problems = append(problems, fmt.Sprintf("%s (service %s) uses %s, but its kind belongs to service %s; write through %s's rpc", rel, user, constructor, owner, owner))
+			}
+		}
+		for _, use := range lifecycles {
+			if use.owner == user {
+				continue
+			}
+			imported := regexp.MustCompile(`(?m)^\s*(?:import\s+)?(\w+\s+)?"` + regexp.QuoteMeta(use.importPath) + `"`).FindStringSubmatch(source)
+			if imported == nil {
+				continue
+			}
+			name := strings.TrimSpace(imported[1])
+			if name == "" {
+				name = use.defaultName
+			}
+			if call := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\.` + use.call).FindString(source); call != "" {
+				problems = append(problems, fmt.Sprintf("%s (service %s) uses %s, but its kind belongs to service %s; create and write it through %s's rpc", rel, user, call, use.owner, use.owner))
 			}
 		}
 	}
@@ -383,10 +420,17 @@ func senderStem(path string) string {
 	return toPascal(base)
 }
 
-// codeService 返回一段源码所属的服务：internal/service/<name>/、服务拥有的 internal/rpc/<rpc>/、玩家接入代码
+// codeService 返回一段源码所属的服务：internal/service/<name>/、services/<name>/、服务拥有的 internal/rpc/<rpc>/、玩家接入代码
 // （internal/access/player/、game/controllers/ 归 access.player.service）。其余为 ""。
 func codeService(m Manifest, rel string) string {
 	if rest, ok := strings.CutPrefix(rel, "internal/service/"); ok {
+		name, _, _ := strings.Cut(rest, "/")
+		if _, declared := m.Services[name]; declared {
+			return name
+		}
+		return ""
+	}
+	if rest, ok := strings.CutPrefix(rel, frameworkServicesDir); ok {
 		name, _, _ := strings.Cut(rest, "/")
 		if _, declared := m.Services[name]; declared {
 			return name

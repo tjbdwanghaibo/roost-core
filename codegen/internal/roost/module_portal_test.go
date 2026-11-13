@@ -39,8 +39,8 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 		t.Fatalf("the plan adds the web mod with a prerequisite command: %v", plan.Prerequisites)
 	}
 	portal := plan.Modules[1]
-	if portal.Runtime == nil || portal.Runtime.Package != "game/portal" || portal.Runtime.Start != "Start" || portal.Runtime.Framework != "account" {
-		t.Fatalf("portal runtime = %+v, want game/portal.Start on the hosted account service", portal.Runtime)
+	if portal.Runtime == nil || portal.Runtime.Package != "services/account/portal" || portal.Runtime.Start != "Start" || portal.Runtime.Framework != "account" {
+		t.Fatalf("portal runtime = %+v, want services/account/portal.Start on the hosted account service", portal.Runtime)
 	}
 	if len(portal.Next) == 0 || !strings.Contains(strings.Join(portal.Next, "\n"), "configs/service/config.account.yaml") ||
 		strings.Contains(strings.Join(portal.Next, "\n"), "{{") {
@@ -54,7 +54,7 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 	for _, want := range []string{
 		"framework service account: declared (services.account.framework: account, added to services.game.uses",
 		"module login: installed", "module portal: installed",
-		"  runtime:   game/portal.Start in the process of the hosted account service",
+		"  runtime:   services/account/portal.Start in the process of the hosted account service",
 		"  file:      cmd/accountctl/main.go\n",
 		"  todo:      打开玩家 TCP 监听：roost config enable player-tcp",
 		"go run ./cmd/accountctl upsert-server -sid <game 进程的 sid>",
@@ -91,7 +91,7 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 	}
 	bootstrap := read("internal/bootstrap/generated.go")
 	const hosted = `kitmodulehost.NewMod("account", domainaccount.CapabilityName, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`
-	if !strings.Contains(bootstrap, hosted) || !strings.Contains(bootstrap, `portalModule "example.com/studio/frontdoor/game/portal"`) ||
+	if !strings.Contains(bootstrap, hosted) || !strings.Contains(bootstrap, `portalModule "example.com/studio/frontdoor/services/account/portal"`) ||
 		strings.Contains(bootstrap, "NewWithModules") {
 		t.Fatalf("the bootstrap does not start the portal on the account service (or wraps the business service):\n%s", bootstrap)
 	}

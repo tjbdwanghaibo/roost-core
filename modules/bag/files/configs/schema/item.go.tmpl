@@ -21,7 +21,7 @@ type Item struct {
 	// Name 给策划与运营看，服务端不用它做判断。
 	Name string `csv:"name" json:"name" title:"Name" required:"true"`
 	// MaxStack 是这种道具在背包里的单种上限。0 表示不单独限制，按背包的硬上限算，
-	// 填得比硬上限大也按硬上限算；硬上限是 game/components/bag/component.go 的 MaxStack。
+	// 填得比硬上限大也按硬上限算；硬上限是 game/components/bag/bag.go 的 MaxStack。
 	// 调小之后，持有量已经超过新上限的玩家不会被扣，只是不能再放入。
 	MaxStack int64 `csv:"max_stack" json:"max_stack" title:"MaxStack" min:"0"`
 }

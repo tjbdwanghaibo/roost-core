@@ -21,7 +21,6 @@ import (
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -160,15 +159,15 @@ func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta
 	if err := p.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
-	chunks, err := lifecycle.NewTerrainChunkLifecycle(access)
+	chunks, err := terrain_chunk.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}
-	editors, err := lifecycle.NewTerrainEditorLifecycle(access)
+	editors, err := terrain_editor.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildings, err := lifecycle.NewBuildingLifecycle(access)
+	buildings, err := building.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,15 +789,15 @@ func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IM
 	if err := p.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
-	chunks, err := lifecycle.NewTerrainChunkLifecycle(access)
+	chunks, err := terrain_chunk.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}
-	editors, err := lifecycle.NewTerrainEditorLifecycle(access)
+	editors, err := terrain_editor.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildings, err := lifecycle.NewBuildingLifecycle(access)
+	buildings, err := building.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}

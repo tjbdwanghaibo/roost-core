@@ -113,7 +113,7 @@ return nil, err // 已手动回包，不能再返回一个响应对象。
 
 Controller 可能并发执行，不是每个玩家一个 Actor，不要在 Controller 字段里无保护地存可变玩家状态。Nest handler 则按声明的目标实体保护业务执行；长短业务池都不能同步等待另一条业务消息，也不能等待 I/O。适用的无回滚 memory handler 可用 [Await](NEST-AWAIT.md) 拆分锁外查询与恢复；本篇的 undo 事务 handler 不能直接套用 Await。
 
-接入层生成目录是 `game/playeraccess`（包名 `playeraccess`，2026-10-14 起；此前叫 `game/playeraccess`，只改名、行为不变，升级步骤见 CHANGELOG）。维护应以生成器和 demo 模板为源，避免直接修改随后会被覆盖的生成文件。
+协议派发层是 core 的框架包 `infra/network/playeraccess`（v1.47.0 起；此前生成在工程的 `game/playeraccess`），协议登记（各功能 controller 接口、注册函数、总入口与推送编码器）生成在接入层的 `internal/access/player/protocols_gen.go`（此前是 `game/protocol_handlers/<功能>/` 与 `game/protocol_bootstrap/`）。维护应以生成器和 demo 模板为源，避免直接修改随后会被覆盖的生成文件。
 
 ## 7. 玩家看自己的状态（self_sync）
 

@@ -81,7 +81,6 @@ go.mod/go.sum；全部成功后才提交，后置步骤失败不会留下半生�
 先按 FIRST_BUSINESS.zh-CN.md 给 DAO、Component、handler 和 Request 添加业务字段，再执行：
 
     roost add endpoint RenamePlayer --handler player
-    roost add lifecycle Player --service {{SERVICE}}
     make generate
     roost project doctor --workflow first-business
 
@@ -91,9 +90,11 @@ go.mod/go.sum；全部成功后才提交，后置步骤失败不会留下半生�
 - game/entities：Entity 定义与 Component 组合；
 - db/def：DAO 定义；
 - game/handler：Nest handler 业务逻辑；
-- internal/service/{{SERVICE}}：服务接入、业务生命周期与 managers.go（该服务启动的内存单例）。
+- internal/service/{{SERVICE}}：服务接入与业务生命周期；game 服务的 manager 登记点在 game/managers/managers.go（该服务启动的内存单例）。
 
-目录约定只有四条：game/ 放玩法与实体；internal/ 放框架接线（bootstrap、registry、access、service）；
+目录约定：game/ 放玩法与实体（game/entities/<实体> 是本体、生成文件与组件的薄接线；game/components/<功能> 是组件逻辑；
+game/login 是登录链；game/managers 是 manager 登记点）；internal/ 放框架接线（bootstrap、registry、access、service）；
+services/<托管服务>/ 放托管框架服务的手写代码（collaborators、登录渠道、HTTP 登录入口），只有用到的服务才有目录；
 每类定义放在自己的顶层 <kind>/def；configs/ 放配置。静态注册统一汇总在
 internal/registry/generated.go（含 nest_gen.go），由 //roost:register 标记驱动，不再有 game/bootstrap。
 
@@ -403,7 +404,7 @@ DependsOn 拓扑排序。nest 和 saga 会自动补唯一的 dataengine 持久�
 
 services.<name>.framework 把该进程声明为一个托管的框架服务（roost-core service/：account、chat、
 mail、match、session、activity、global、platform、rank 九个之一）：没有业务 Service，进程就是该服务的
-Server 加它的 owner Mod，redis 与 nats 自动补齐（match、activity 按 key 路由，另补 etcd）；Mod 需要的协作者写在 internal/service/<name>/collaborators.go（只生成一次，
+Server 加它的 owner Mod，redis 与 nats 自动补齐（match、activity 按 key 路由，另补 etcd）；Mod 需要的协作者写在 services/<name>/collaborators.go（只生成一次，
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配
 对应 ClientMod（并补 nats），并在 internal/service/<name>/framework_clients_gen.go 生成类型化
 访问器。roost project new … -template game 缺省不托管任何框架服务：roost module add 装的模块用到哪个

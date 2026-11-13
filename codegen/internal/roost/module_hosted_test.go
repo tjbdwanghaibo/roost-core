@@ -15,17 +15,25 @@ func hostedFixture(t *testing.T) Manifest {
 	m := gameTemplateManifest(t)
 	m.Modules = map[string]InstalledModule{
 		"login":  {Service: "game"},
-		"portal": {Service: "game", Requires: []string{"login"}, Runtime: &ModuleRuntime{Package: "game/portal", Start: "Start", Framework: "account"}},
+		"portal": {Service: "game", Requires: []string{"login"}, Runtime: &ModuleRuntime{Package: "services/account/portal", Start: "Start", Framework: "account"}},
 	}
 	return m
 }
 
 // runtime.framework 只能是一个框架服务的种类；工程里必须恰好有一个服务托管它。
 func TestModuleRuntimeFrameworkNamesAHostedService(t *testing.T) {
-	if err := validateModuleRuntime(&ModuleRuntime{Package: "game/portal", Start: "Start", Framework: "account"}); err != nil {
+	if err := validateModuleRuntime(&ModuleRuntime{Package: "services/account/portal", Start: "Start", Framework: "account"}); err != nil {
 		t.Fatalf("a runtime on the hosted account service: %v", err)
 	}
-	if err := validateModuleRuntime(&ModuleRuntime{Package: "game/portal", Start: "Start", Framework: "game"}); err == nil || !strings.Contains(err.Error(), `runtime.framework "game" is not a framework service`) {
+	// v1.47.0：托管服务的手写代码在 services/<服务>/。入口包在那里时必须写 runtime.framework，且服务对得上；
+	// 没写 framework 的入口仍只能在 game/ 下（业务服务进程里启动）。
+	if err := validateModuleRuntime(&ModuleRuntime{Package: "services/account/portal", Start: "Start"}); err == nil || !strings.Contains(err.Error(), "runtime.framework") {
+		t.Fatalf("a services/ runtime without runtime.framework: %v", err)
+	}
+	if err := validateModuleRuntime(&ModuleRuntime{Package: "services/chat/portal", Start: "Start", Framework: "account"}); err == nil || !strings.Contains(err.Error(), "services/account/") {
+		t.Fatalf("a services/ runtime under another framework service: %v", err)
+	}
+	if err := validateModuleRuntime(&ModuleRuntime{Package: "services/account/portal", Start: "Start", Framework: "game"}); err == nil || !strings.Contains(err.Error(), `runtime.framework "game" is not a framework service`) {
 		t.Fatalf("a runtime on something that is not a framework service: %v", err)
 	}
 	m := hostedFixture(t)
@@ -116,7 +124,7 @@ func TestBootstrapStartsHostedModulesAfterTheOwnerMod(t *testing.T) {
 	const hosted = `kitmodulehost.NewMod("account", domainaccount.CapabilityName, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`
 	for _, want := range []string{
 		`kitmodulehost "github.com/tjbdwanghaibo/roost-core/wiring/modulehost"`,
-		`portalModule "example.com/planet/game/portal"`,
+		`portalModule "example.com/planet/services/account/portal"`,
 		owner + ",\n\t\t" + hosted + ")\n",
 		`a.RegisterServer(app.ServiceName("game"), serviceGame.New()`,
 	} {
@@ -154,7 +162,7 @@ func TestBootstrapStartsHostedModulesAfterTheOwnerMod(t *testing.T) {
 func TestHostedModuleNeedsItsModsOnTheHost(t *testing.T) {
 	manifest := gameTemplateManifest(t)
 	root := t.TempDir()
-	spec := ModuleSpec{Name: "portal", Needs: ModuleNeeds{Mods: []string{"web"}}, Runtime: &ModuleRuntime{Package: "game/portal", Start: "Start", Framework: "account"}}
+	spec := ModuleSpec{Name: "portal", Needs: ModuleNeeds{Mods: []string{"web"}}, Runtime: &ModuleRuntime{Package: "services/account/portal", Start: "Start", Framework: "account"}}
 	if service, err := moduleModsService(manifest, "game", spec); err != nil || service != "account" {
 		t.Fatalf("the service a hosted module needs its mods on = %q, %v", service, err)
 	}
@@ -230,13 +238,13 @@ func TestDevWebPortFollowsThePortBlock(t *testing.T) {
 // plan / add 的输出写明入口在哪个进程里启动。
 func TestModulePlanSaysWhereAHostedRuntimeStarts(t *testing.T) {
 	plan := ModulePlan{Service: "game", Prerequisites: []string{}, Glue: []ModuleGlueItem{}, Modules: []ModulePlanItem{
-		{Name: "portal", Status: moduleStatusInstall, Runtime: &ModuleRuntime{Package: "game/portal", Start: "Start", Framework: "account"}},
+		{Name: "portal", Status: moduleStatusInstall, Runtime: &ModuleRuntime{Package: "services/account/portal", Start: "Start", Framework: "account"}},
 		{Name: "skillbook", Status: moduleStatusInstall, Runtime: &ModuleRuntime{Package: "game/skillbook", Start: "Start"}},
 	}}
 	var out bytes.Buffer
 	printModulePlan(&out, plan)
 	for _, want := range []string{
-		"  runtime:   game/portal.Start in the process of the hosted account service (after its Mods start, before service Init; stopped in reverse)\n",
+		"  runtime:   services/account/portal.Start in the process of the hosted account service (after its Mods start, before service Init; stopped in reverse)\n",
 		"  runtime:   game/skillbook.Start (before service Init; stop after service Shutdown)\n",
 	} {
 		if !strings.Contains(out.String(), want) {

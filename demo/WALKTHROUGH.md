@@ -164,7 +164,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
   时原样答那个码；两种情况都 `CancelClaim` 归还预留，邮件保持未领、不会卡在"held"直到租约到期。
 - **登录时拉全服邮件是进入钩子**：mailbox 与 enter 两个模块的联动（`game/controllers/mailbox/mailbox_enter.go`）在进入游戏时调
   `PullBroadcasts`，demo 的进入流程里不再手写。画像规则是模块的 `BroadcastProfileOnEnter`：demo 的登录端点把会话的 claims
-  带给进入钩子（`gameenter.Entered.Claims`），规则从里面读认证器写下的三个键——注册时间取 account 的角色创建时间
+  带给进入钩子（`gamelogin.Entered.Claims`），规则从里面读认证器写下的三个键——注册时间取 account 的角色创建时间
   （`RoleCreatedAtClaim`），范围是承载服（`ServerIDClaim`），别名合服后原服不同的角色另带原服（`OriginServerIDClaim`）。
   `internal/access/player/tcp/login_claims_test.go` 用真实的认证器（登录模块的）产出 Principal、交给这个函数读，钉住两边的键对得上。
 - **金币**：装 mailbox 连带装进了 wallet 模块（`PlayerDao.Wallet` 是同步字段、`WalletLedger` 与 `MailboxLedger` 只落库、协议 `WalletSpend`）。
@@ -210,7 +210,7 @@ ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（�
 
 端点在模块自己的 controller 域 `game/controllers/chat/`，协议号在安装时从 `roost.yaml` 的 `ids` 段分配（记在 `modules.chat`）。
 
-- `internal/service/chat/collaborators.go`（模块替换了生成的拒绝桩）：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（没有队伍；
+- `services/chat/collaborators.go`（模块替换了生成的拒绝桩）：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（没有队伍；
   公会群聊没接，接时成员来源是 alliance 服务的 Mirror 与成员变化通知），system 频道只读；`Bodies()` 注册唯一的 `text` 类型，校验函数与端点共用（端点先校验，免一次总线往返）；
   `System()` 无条件 `GrantSystem()`——这是对部署的陈述：chat 只经内网 NATS 可达，没有端点转发 PublishSystem。总线对不可信一方可达的部署要换成查调用者身份。
 - **推送是捷径，序号是依据**：每条投递都带 `Seq`，错过推送的客户端用 `ChatHistory(after_seq)` 补读——机器人脚本就是这么写的
@@ -232,7 +232,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
                    └─ 清了：MultiSync_AddExp(Player, World, 100) —— 与 AddExp 端点同一笔两实体事务，够升一级，于是又走一遍升级 → 奖励邮件
 ```
 
-- `internal/service/session/collaborators.go`：`Release()` 是 session 服务对每个附着资源恰好调一次的钩子；demo 的副本不占外部资源，所以是一行日志 + nil。
+- `services/session/collaborators.go`：`Release()` 是 session 服务对每个附着资源恰好调一次的钩子；demo 的副本不占外部资源，所以是一行日志 + nil。
   真实游戏在这里释放实例 / 座位，返回 error 会让服务保留待释放并在下次 Enter / sweep 重试。
 - 第二局要等第一局结束：一个 owner 一个活 run 是服务的契约，重复 Enter 得到 `ErrAlreadyRunning` 的 coded 响应，不是第二个 run。
 - **发奖是恰好一次的**：`ClaimDungeon` 事务把 run id 与经验、World 计数放进同一条 WAL 记录（`game/handler/claim_dungeon.go`），
@@ -495,7 +495,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 - **场景自己的 1Hz 心跳决定缺额**（D20 P5）：`"scene.spawn"` 在场景的锁里问 `Refresh.Due(beat.Now)`，事务**提交之后**
   （`nest.AfterCommit`）把这一批交给 spawner；原来服务 goroutine 每秒一次的 ticker 删掉了。
-- **建实体在服务 goroutine，按四步、按这个顺序**（`internal/service/<game>/spawner.go`）：① 取 id、`lifecycle.Create`（组件建好、AI 还没有策略，什么都不跑）；
+- **建实体在服务 goroutine，按四步、按这个顺序**（`internal/service/<game>/spawner.go`）：① 取 id、`monster.Lifecycle` 的 `Create`（组件建好、AI 还没有策略，什么都不跑）；
   ② 放身体（模板、血量、位置——任何人看见之前的唯一一次写，所以不会在 (0,0) 被复制）；③ `ShowSubject`（先登记复制主体、再进 AOI，否则观察者会订到 Manager 没有的主体）；
   ④ Nest 事务 `handlerSpawnMonster`（场景 + 怪物）：进场景的移动（`MapBasic.Enter`）并开始巡逻——提交后它的心跳才开始，第一步一定在它可见之后。
   全部成功才 `Spawned`；任何一步失败按逆序撤销（Hide、Destroy），下一拍的 `Due` 里重新出现。
@@ -539,7 +539,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 demo 在模块之上接的线：
 
 - **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
-- **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gameenter.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gameenter.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
+- **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gamelogin.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gamelogin.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
 - **saga 步骤按当前绑定准入**（`gift_saga.go` 与 `game/alliance/runtime`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
 - **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：只保留尚不能交接 SceneActor 的分区场景限制，非法分区配置也拒绝迁服。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。matchmaking 同装时会保护排队意图；尚未接入的副本、对战与建筑仍须由工程提供迁移规则。
 - **联盟消费者启动**（`internal/service/game/alliance.go`）：Service.Init 先创建 PlayerOwners，再发布模块 PlayerBinding 适配并启动联盟 runtime。demo 在 manifest 关闭该 runtime 的自动接线，业务逻辑仍全部来自模块。App 先排空 Saga ingress，再关闭业务服务。
@@ -782,7 +782,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   场景、已付订单、公会、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
   后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
   `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/entities/player/enter_first.go`。
-  之后照样执行进入钩子（`gameenter.RunEntered`，带着会话的 claims）：聊天上线与拉全服邮件是 chat、mailbox 各自与 enter 的联动登记的，
+  之后照样执行进入钩子（`gamelogin.RunEntered`，带着会话的 claims）：聊天上线与拉全服邮件是 chat、mailbox 各自与 enter 的联动登记的，
   不写在 demo 的进入流程里。
 - **登录有预算**：传输层给每个请求 `player_access.tcp.dispatch_timeout`（与 `nest.request_timeout` 对齐）；
   EnterGame 的归属 Claim + GetOrCreate 另用 `player_access.tcp.login_timeout`（默认 2s，不大于 dispatch）。冷加载要等该玩家已准入
@@ -843,7 +843,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 
 第一步也可以用登录模块的开发渠道：`{"channel":"dev","open_id":"bob","credential":"dev-local"}`。拿到的 `ticket` 就是握手帧里出示的
 票据；之后的 `EnterStatus` / `EnterCreate` / `EnterGame` 要一条真的连接，用 `go run ./cmd/loadtest -login portal -count 2`。
-这三步在工程自带的开发配置上有离线场景（`game/portal/dev_walkthrough_test.go`：入口的 `Start` 读那份配置文件，两个渠道各走一遍，
+这三步在工程自带的开发配置上有离线场景（`services/account/portal/dev_walkthrough_test.go`：入口的 `Start` 读那份配置文件，两个渠道各走一遍，
 拿到的票据握手成功）；2026-11-12 起真实进程后用 curl 走过这三步（记录在仓库 CHANGELOG）。
 
 ### 握手：两种票据
@@ -868,9 +868,9 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 
 1. **归属（`boundHere`）**：会话记的承载服不是本进程的 sid 答 `player_elsewhere` 并带 `owner_sid`，没有记答 `player_elsewhere`（`owner_sid=0`）。
    在任何别的检查之前，不问驻留表、不装载。两个端点相同。
-2. **进入前检查**（`gameenter.RunEntering`）：rehome 模块的“正在换服 / 已经换走”，以及登录模块与 enter 的联动（与第 1 步是同一个比较）。
+2. **进入前检查**（`gamelogin.RunEntering`）：rehome 模块的“正在换服 / 已经换走”，以及登录模块与 enter 的联动（与第 1 步是同一个比较）。
 3. **接入服务**：驻留表 `Serve`，在登录预算内（`player_access.tcp.login_timeout`）等上一份副本的卸载、复核迁出表。
-4. **装载**，按会话走两条路之一，判断只调模块的 `gameenter.CreateFirst`（规则是登录模块与 enter 的联动登记的：进服票据握手的会话）：
+4. **装载**，按会话走两条路之一，判断只调模块的 `gamelogin.CreateFirst`（规则是登录模块与 enter 的联动登记的：进服票据握手的会话）：
    - 会话令牌握手的会话：`EnterGame` 加载或创建并做首次初始化——与接入登录模块之前相同，机器人的缺省方式与演练脚本不用改。
    - 进服票据握手的会话：`EnterGame` 只装载、不创建。没有档、或者有档而没建成，答 `enter_need_create`，什么都不写；客户端发
      `EnterCreate{name}`：名字先过档案模块的规则（enter 与 profile 的联动，不合规在建档之前被拒），然后建档，名字、首次初始化与
@@ -891,7 +891,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 ### account 这一侧与 accountctl
 
 - 协作者是登录模块的：开发登录（渠道 `dev`，凭据是 `login.dev_token`）、玩家号（account 的 Redis 里 `<account.key_prefix>:player_id` 的
-  `INCR` 计数器，从 100001 起）、名字规则、指标。demo 只覆盖模块留给工程的渠道入口 `internal/service/account/login_channels.go`：
+  `INCR` 计数器，从 100001 起）、名字规则、指标。demo 只覆盖模块留给工程的渠道入口 `services/account/login_channels.go`：
   `demo` 渠道，凭据必须是 `demo:<open_id>`，其它渠道一律拒绝，返回的是它确认过的身份而不是提交上来的那份。
   **这不是身份校验**——任何人都能以任何账号登录——上线前换成对平台的真实调用。它不看配置，哪份配置下都开着；装了 portal 之后
   够得着入口的人都能用它，入口缺省只听 `127.0.0.1`。

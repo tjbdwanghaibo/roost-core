@@ -12,8 +12,7 @@ import (
 	runentity "{{MODULE}}/game/entities/dungeon"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -50,7 +49,7 @@ func (controller *Controller) Open(ctx context.Context, uniqueID, playerID, seas
 	if playerID <= 0 || season <= 0 {
 		return logic.Snapshot{}, fmt.Errorf("dungeon: player and season must be positive")
 	}
-	runs, err := lifecycle.DungeonFromRegistry(controller.registry)
+	runs, err := runentity.LifecycleFromRegistry(controller.registry)
 	if err != nil {
 		return logic.Snapshot{}, err
 	}
