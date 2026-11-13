@@ -65,5 +65,7 @@ func TestSLGAllianceRemoteDelivery(t *testing.T) {
 	check(t, e)
 	defer mongo.Close(ctx)
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_DB")).Drop(ctx))
+	// dbscope=sid 的 DAO（v1.47.0 起缺省）落在 <库>_<sid>，本用例的存储没有 sid（0）。
+	check(t, mongo.DatabaseForSid(os.Getenv("ROOST_SLG_DB"), 0).Drop(ctx))
 	t.Log("Remote generated authority 2000 -> 2001: marker and route epochs advance, old writer rejected while alive, cold state identical before continuation; contribution replay and both Player crash-recovery deliveries remain in the same workflow")
 }
