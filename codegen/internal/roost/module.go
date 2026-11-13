@@ -266,10 +266,17 @@ type ModuleCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// 模块的 verify.pass 是场景数：一个顶层测试是一个场景，t.Run 的子测试是同一场景的几种情形、不另算；
+// 跳过在任何一层都算（零跳过的要求覆盖子测试）。go test -v 的顶层结果行从第一列开始，子测试逐层缩进。
 var (
-	modulePassLine = regexp.MustCompile(`(?m)^\s*--- PASS: `)
+	modulePassLine = regexp.MustCompile(`(?m)^--- PASS: `)
 	moduleSkipLine = regexp.MustCompile(`(?m)^\s*--- SKIP: `)
 )
+
+// countModuleScenarios 数 go test -v 输出里通过的顶层场景与任意一层的跳过。
+func countModuleScenarios(output []byte) (passed, skipped int) {
+	return len(modulePassLine.FindAllIndex(output, -1)), len(moduleSkipLine.FindAllIndex(output, -1))
+}
 
 // VerifyModules 跑已装模块（names 为空 = 全部）自带的场景，要求通过数恰好等于清单里的数、零跳过，
 // 再跑工程级检查。通过数与跳过数都核对：-run 写错或用例被跳过时 go test 照样报 ok。
@@ -322,9 +329,8 @@ func VerifyModules(ctx context.Context, root string, names []string, stderr io.W
 			output, runErr := runModuleTool(ctx, root, "go", args...)
 			result := ModuleVerifyResult{
 				Name: scenario.name, Want: scenario.verify.Pass,
-				Passed:  len(modulePassLine.FindAllIndex(output, -1)),
-				Skipped: len(moduleSkipLine.FindAllIndex(output, -1)),
 			}
+			result.Passed, result.Skipped = countModuleScenarios(output)
 			result.OK = runErr == nil && result.Passed == result.Want && result.Skipped == 0
 			if !result.OK {
 				report.OK = false

@@ -425,6 +425,33 @@ verify: {packages: [./game/handler], run: ^TestDemo, pass: 1}
 `
 
 // 清单与模板必须对得上：模板用到的号要声明，声明的号要用到；状态字段名与存储键带模块名。
+// verify.pass 数的是场景（顶层测试）：子测试是同一个场景的几种情形，不另算；跳过的子测试照样算跳过
+// （零跳过的要求覆盖到每一层）。go test -v 的顶层结果行从第一列开始，子测试的每层缩进 4 个空格。
+func TestModuleVerifyCountsTopLevelScenariosOnly(t *testing.T) {
+	output := []byte(`=== RUN   TestRehomeA
+--- PASS: TestRehomeA (0.00s)
+=== RUN   TestRehomeB
+=== RUN   TestRehomeB/conflict=false
+=== RUN   TestRehomeB/conflict=true
+=== RUN   TestRehomeB/conflict=true/nested
+--- PASS: TestRehomeB (0.01s)
+    --- PASS: TestRehomeB/conflict=false (0.00s)
+    --- PASS: TestRehomeB/conflict=true (0.00s)
+        --- PASS: TestRehomeB/conflict=true/nested (0.00s)
+=== RUN   TestRehomeC
+=== RUN   TestRehomeC/case
+--- PASS: TestRehomeC (0.00s)
+    --- SKIP: TestRehomeC/case (0.00s)
+        rehome_test.go:12: not here
+PASS
+ok  	example/game/rehome	1.234s
+`)
+	passed, skipped := countModuleScenarios(output)
+	if passed != 3 || skipped != 1 {
+		t.Fatalf("counted %d passed and %d skipped, want 3 top-level scenarios and 1 skipped subtest", passed, skipped)
+	}
+}
+
 func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 	good := map[string]string{
 		"game/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n",
