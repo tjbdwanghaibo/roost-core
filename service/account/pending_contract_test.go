@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,11 +17,35 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
+// isolatedRedisAddr 是契约测试用的真实 Redis：ROOST_REVIEW_CLUSTER（逗号分隔的 Redis Cluster 节点，只由
+// wiring/scripts/integration/redis-cluster-suites.sh 设置）优先，否则 ROOST_REVIEW3_BACKEND=redis 时的
+// ROOST_REVIEW_REDIS（单机）；都没有时为空，走 Memory。
 func isolatedRedisAddr() string {
+	if cluster := os.Getenv("ROOST_REVIEW_CLUSTER"); cluster != "" {
+		return cluster
+	}
 	if os.Getenv("ROOST_REVIEW3_BACKEND") != "redis" {
 		return ""
 	}
 	return os.Getenv("ROOST_REVIEW_REDIS")
+}
+
+// redisBackend：契约测试是否跑在真实 Redis（单机或 Cluster）上。
+func redisBackend() bool { return isolatedRedisAddr() != "" }
+
+// newAccountTestRedis 按地址建客户端：含逗号的是 Cluster 节点列表。
+func newAccountTestRedis(t *testing.T, addrs string) fredis.IRedis {
+	t.Helper()
+	config := fredis.DefaultConfig(addrs)
+	if strings.Contains(addrs, ",") {
+		config.ClusterAddrs = strings.Split(addrs, ",")
+	}
+	client, err := driver.NewClient(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return client
 }
 
 // pendingContractService is newService, optionally over the isolated Redis.
@@ -30,11 +55,7 @@ func pendingContractService(t *testing.T, mutate ...func(*Config)) (*Service, *c
 	if addr == "" {
 		return newService(t, mutate...)
 	}
-	client, err := driver.NewClient(fredis.DefaultConfig(addr))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { client.Close() })
+	client := newAccountTestRedis(t, addr)
 	prefix := redistest.Prefix(t, addr, "revn06:account")
 	stores, err := NewRedisStores(client, prefix, time.Second)
 	if err != nil {
@@ -258,7 +279,7 @@ func TestAFailedReleaseOnTheSameNamePathIsCounted(t *testing.T) {
 }
 
 func pendingClaimTTL() time.Duration {
-	if os.Getenv("ROOST_REVIEW3_BACKEND") == "redis" {
+	if redisBackend() {
 		return time.Second
 	}
 	return DefaultClaimTTL
@@ -269,7 +290,7 @@ func pendingClaimTTL() time.Duration {
 // the key absent (a condition, not a fixed sleep).
 func lapseNameClaim(t *testing.T, cfg Config, clock *clock, name string) {
 	t.Helper()
-	if os.Getenv("ROOST_REVIEW3_BACKEND") != "redis" {
+	if !redisBackend() {
 		clock.advance(time.Minute)
 		return
 	}

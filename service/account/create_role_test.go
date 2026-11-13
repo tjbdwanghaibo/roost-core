@@ -15,8 +15,6 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/security"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
@@ -520,18 +518,14 @@ func TestBeforeWriteFailuresRemainRetryable(t *testing.T) {
 
 func createRoleService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config) {
 	t.Helper()
-	if os.Getenv("ROOST_REVIEW3_BACKEND") != "redis" {
-		return newService(t, mutate...)
-	}
-	addr := os.Getenv("ROOST_REVIEW_REDIS")
-	if addr == "" {
+	if os.Getenv("ROOST_REVIEW3_BACKEND") == "redis" && os.Getenv("ROOST_REVIEW_REDIS") == "" && os.Getenv("ROOST_REVIEW_CLUSTER") == "" {
 		t.Fatal("Redis backend requires ROOST_REVIEW_REDIS")
 	}
-	client, err := driver.NewClient(fredis.DefaultConfig(addr))
-	if err != nil {
-		t.Fatal(err)
+	addr := isolatedRedisAddr()
+	if addr == "" {
+		return newService(t, mutate...)
 	}
-	t.Cleanup(func() { client.Close() })
+	client := newAccountTestRedis(t, addr)
 	stores, err := NewRedisStores(client, redistest.Prefix(t, addr, "account-review3"), time.Minute)
 	if err != nil {
 		t.Fatal(err)
