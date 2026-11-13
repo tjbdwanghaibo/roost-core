@@ -2413,8 +2413,8 @@ func TestOutboundBudgetDrill(t *testing.T) {
 		"elapsed_seconds": elapsed.Seconds(), "budget_bytes": config.OutboundResidentBytes, "write_timeout": config.WriteTimeout.String(),
 		"peak_resident_bytes": peak.Load(), "pushes_accepted": pushed.Load(), "pushes_refused_by_budget": refused.Load(),
 		"pushes_to_closed_or_missing": closed.Load(), "budget_exhausted_total": budgetRefusals,
-		"overflow_closes": counterValue("player_tcp_outbound_overflow_total") - overflowBefore,
-		"write_timeout_closes": labeledCounter("player_tcp_write_deadline_total", "deadline", "write_timeout") - writeTimeoutBefore,
+		"overflow_closes":         counterValue("player_tcp_outbound_overflow_total") - overflowBefore,
+		"write_timeout_closes":    labeledCounter("player_tcp_write_deadline_total", "deadline", "write_timeout") - writeTimeoutBefore,
 		"healthy_frames_received": received.Load(),
 	}
 	line, _ := json.Marshal(result)

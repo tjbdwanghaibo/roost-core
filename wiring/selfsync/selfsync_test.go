@@ -1097,13 +1097,13 @@ func TestSelfSyncResidentBudgetRetryDrill(t *testing.T) {
 		"players": players, "full_pad": fullPad, "hz": hz, "seconds": seconds, "elapsed_seconds": elapsed.Seconds(),
 		"budget_bytes": budget, "flushes": flushes, "flush_retries": retries, "flushes_committed": committed,
 		"longest_flush_ms": float64(longest) / float64(time.Millisecond),
-		"full_frames": fulls.Load(), "delta_frames": deltas.Load(), "full_bytes": fullBytes.Load(), "delta_bytes": deltaBytes.Load(),
+		"full_frames":      fulls.Load(), "delta_frames": deltas.Load(), "full_bytes": fullBytes.Load(), "delta_bytes": deltaBytes.Load(),
 		"bytes_per_committed_flush": float64(fullBytes.Load()+deltaBytes.Load()) / float64(max(committed, 1)),
-		"push_refused_retried": counterValue(SyncPushRefusedMetric, "retried") - retriedBefore,
-		"push_refused_closed":  counterValue(SyncPushRefusedMetric, "closed") - closedBefore,
-		"budget_exhausted":     counterValue("player_tcp_outbound_budget_exhausted_total", "") - exhaustedBefore,
-		"sessions_lost":        h.manager.Stats().SessionsLost - lostBefore,
-		"decode_errors":        decodeErrors.Load(),
+		"push_refused_retried":      counterValue(SyncPushRefusedMetric, "retried") - retriedBefore,
+		"push_refused_closed":       counterValue(SyncPushRefusedMetric, "closed") - closedBefore,
+		"budget_exhausted":          counterValue("player_tcp_outbound_budget_exhausted_total", "") - exhaustedBefore,
+		"sessions_lost":             h.manager.Stats().SessionsLost - lostBefore,
+		"decode_errors":             decodeErrors.Load(),
 	}
 	line, _ := json.Marshal(result)
 	t.Logf("self-view retry drill: %s", line)
