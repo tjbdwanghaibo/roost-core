@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **修复：handler 里新建未声明的 Remote 托管实体被本地投影写成普通文档**（framework/nest，2026-11-14，KNOWN-LIMITS“Remote 托管 kind 的‘新建不改字段’”的 in_handler 用例发现）：消息声明了另一个 Remote 实体（所以带 Remote 批次）时，handler 里新建一个没声明的 Remote 托管实体，`CaptureEntities` 只看“消息带不带批次”，新实体的 DAO 没被批次认领，由本地投影以 `{_version,_last_tx,_schema,value}` 写进 `remote_*` 集合，没有 Remote 信封与所有权，回复成功。现在判据是“本消息的批次包含这个实体”（`remoteBatchCovers`，与 Remote 删除准入同一处），不在批次里时返回 `nest.ErrDurableRemoteWriteUnsupported`、撤销发布、整条事务回滚（与 `Cast` 拒绝未声明 Remote 目标同一结论，契约见 REMOTE_ENTITY“handler 内只能持久写本消息声明的 Remote 托管实体”）。**行为变化**：原来能“成功”的这种写法现在失败；Remote 托管实体要由以它为声明目标的消息写，或在 Nest 之外新建。
+  - **先红后绿**：nest `TestCreateInHandlerRefusesARemoteEntityTheMessageDidNotDeclare` 修前新建返回 nil（两种子用例都红）；变异 3 条（判据恒假、恒真、去掉捕获失败记录）均变红。真实依赖 `scripts/test-remote-generated.sh`（共享隔离 Mongo / Redis / NATS）修前 `in_handler` 红、修后全套 `^TestGeneratedRemote` 通过。验证：nest、remoteentity、dataengine、entity `-race` 整包。
+
 - **测试：`TestInterestShrinksAFullSessionToTheNearest/async` 偶发失败已定位为用例的时序假设**（framework/sync/entitysync/policy，2026-11-14）：异步模式的应用线程在第一条事实到达时就走第一步，可能只取走用例还在逐个 `Show` 的前半段；前半段先结算、Manager 按它暂缓，收紧时按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，行为不变）。用例的 `flush` 在结算前先把已登记的事实全部应用（`stepApplier`，与 `flushInterest` 相同）。修前 CPU 满载（10 核上 16 个 `yes`）下 `-race -count=500` 定向失败 36 次；修后 8 个 `yes` 500 次、16 个 `yes` 1000 次、8 个 `yes` + `GOMAXPROCS=2` 500 次全部通过。没有框架行为改动。
 
 - **CellWorld witness 按区块合批、对齐全量刷新相位；复制缺口按对象 / 观察者修复**（cellworld，2026-11-14）：
