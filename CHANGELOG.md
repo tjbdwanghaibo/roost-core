@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+- **game-demo 与客户端的遗留收口**（demo / client / cellworld 测量，2026-11-14，第 3 批）：
+  - **行为变化（demo，玩家离开本进程）**：闲置卸载与换服交出（`playerEvictor`）对仍在内存里的玩家先跑新 handler `LeaveScene`（`game/handler/leave_scene.go`，`MapBasic.Leave` 的 SaveOnLeave），最后的位置写进落库字段，不再只靠 10 秒一次的周期落库；这次保存失败时卸载保留驻留记录、换服在“离开”这一步中止。断线不离开地图。回归 `TestLeavingTheProcessSavesTheLastPosition`（关掉保存时 `saved position is {0 0}, want the last one {560 500}`）。
+  - **行为变化（demo，换服交出）**：开了地形时玩家的编辑账本 `TerrainEditor`（全局库）与 Player 一起 `HandOffEntity`、一起撤屏障。修前源服内存里留着旧账本，玩家换回来后按旧版本写回，投影版本冲突致命（验收 agent 在真实 Mongo 上复现：`fatal projection version conflict: main/terrain_editors/… expected=4 next=5 stored=6`）。回归 `TestTerrainEditLedgerRealMongo` 的换进程子用例（真实 Mongo）。
+  - **行为变化（demo，换服前检查）**：坐在本进程某一局 lockstep 对战里的玩家申请换服与离开时都答 `rehome_refused`（`battleManager.Seated`）；`PlayerOwners.Resident` 不再认迁出表里的玩家，离开中的玩家不会被本进程撮合进新的一局。匹配票据与副本 run 不拦（理由见 `rehome_checks.go`）。
+  - **行为变化（demo）**：`Player.PublishSyncDirty` 改取客户端同步掩码（生成的 `TakeEntitySyncChanges`，与提交观察者同一份），模块写入（背包）发过之后不再随下一次 `PublishSyncDirty` 重发；服务间同步的掩码不再被它取走。闲置清扫认 `lifetime=resident`：Player 声明为常驻时不卸载、不离场景（`EvictPlayer` 在离场之前答 `ErrEntityResident`）。
+  - **新增（client/unity）**：`RoostSceneTime`，场景时间域的 Unity 适配（每帧经 `SceneTimeDomain` 推进场景时间，给出 `NowNanos` / `DeltaSeconds`）；.NET 测试工程链接正式源码跑 `TestUnitySceneTime`。Unity Editor / Player 未实跑。
+  - **测试**：`flushOverCrowd` 等到 Interest 日志也清空（负载下政策阶段预算停止时旧条件误判稳定）；转发编辑用例按客户端规则重发到有结论（负载下 300ms 期限答 Unknown 是正确行为）；为地形 P5 三项未杀死的变异各补用例并全部变红；`TestCellWorldMeasure` 加 `ROOST_CELLWORLD_PERF_SCALE=game`（游戏尺度分区视野的成本对照入口，测量未跑）。
+  - **生成物**：已生成的 game-demo 工程需重新生成（新增 `game/handler/leave_scene.go`，`playerowner.go`、`rehome_checks.go`、`battle.go`、`terrain.go`、`service.go`、Player 的 `entity.go` 有改动）。
+
 - **测试：`TestInterestShrinksAFullSessionToTheNearest/async` 偶发失败已定位为用例的时序假设**（framework/sync/entitysync/policy，2026-11-14）：异步模式的应用线程在第一条事实到达时就走第一步，可能只取走用例还在逐个 `Show` 的前半段；前半段先结算、Manager 按它暂缓，收紧时按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，行为不变）。用例的 `flush` 在结算前先把已登记的事实全部应用（`stepApplier`，与 `flushInterest` 相同）。修前 CPU 满载（10 核上 16 个 `yes`）下 `-race -count=500` 定向失败 36 次；修后 8 个 `yes` 500 次、16 个 `yes` 1000 次、8 个 `yes` + `GOMAXPROCS=2` 500 次全部通过。没有框架行为改动。
 
 - **CellWorld witness 按区块合批、对齐全量刷新相位；复制缺口按对象 / 观察者修复**（cellworld，2026-11-14）：
