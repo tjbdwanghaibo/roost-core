@@ -332,7 +332,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 无观察者暂停 AI | 只有设计 | 设计稿保留，未实施 | [AI 方案](../maintenance/FEATURE-2026-10-22-ai-idle-without-observers.md) |
 | 匹配的存储原生补位、房间跨机接管 | 没有 | 补位只有业务层写法；房间没有跨机接管 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo)、[派对房间 §8](PARTY-ROOM-INTEGRATION.md#8-框架没有什么) |
 | 运行期直接改 Mongo 权威文档、框架级改档与整档恢复 | 不支持 | 加载着的实体以内存为权威；在线改档写业务 GM handler，整档恢复走离线流程 | [DataEngine §3](guide/03-dataengine.md#3-投影与幂等)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#运行期改档与单实体运维d16) |
-| 名字规则（长度、敏感词、全服唯一策略） | 需手写业务 | 属于业务规则；全服唯一可用 directory 的两阶段占名 | [Service §4](guide/09-services.md#4-关键业务边界) |
+| 名字的敏感词过滤、改名收费与次数限制 | 需手写业务 | 模块 naming 只做长度与字符检查、全服唯一的两阶段占名与改名状态机；敏感词、收费、限次属于工程 | [naming 模块](../../modules/naming/README.md) |
 | 物理：网格烘焙、运行期刚体增删、公开碰撞事件、物理跨机接管 | 没有 | UGC 物理只有有限基础几何与轨迹描述 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#ugc-物理闯关) |
 | 跨机 HA、断电、真实 Unity / Godot / Unreal 全矩阵 | 未验收 | 本机集群与 loopback 不证明这些 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#平台与外部验证)、[外部验证](../maintenance/EXTERNAL-VERIFICATION.md) |
 | Windows 服务端 | 不保证 | 非框架保证平台，只保证编译与 CLI 兼容 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#平台与外部验证) |
