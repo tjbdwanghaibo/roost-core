@@ -7,7 +7,7 @@
 | [framework](../framework/README.md) | 当前架构、模块契约；guide 面向使用，impl 面向维护；十种玩法手册包含接入与验收边界；[能力清单](../framework/CAPABILITIES.md)按需求条目索引全部能力 |
 | [performance](../performance/README.md) | 每类负载最新有效基线与必要样本；被替代的报告固定到 Git 历史 |
 | [maintenance](README.md) | 维护、发布、升级与故障处置 |
-| [KNOWN-LIMITS](KNOWN-LIMITS.md) | 当前能力限制、未验证范围与尚未确认问题 |
+| [KNOWN-LIMITS](KNOWN-LIMITS.md) | 分“框架本身的限制”（设计边界、有意不做）与“遗留问题”（未做到位、未验收、尚未确认）两部分；已修复条目只留一行结论，2026-11-13 整理时移出的原文在 [evidence/known-limits-history-20261113](evidence/known-limits-history-20261113/README.md) |
 | [DESIGN-TODO](DESIGN-TODO.md) | 尚待选择或排期的优化候选 |
 | [EXTERNAL-VERIFICATION](EXTERNAL-VERIFICATION.md) | 外部依赖与跨环境验证入口 |
 | [CORE-REVIEW](CORE-REVIEW.md)、[Linux 验收续报](LINUX-FUNCTIONAL-20261102.md)、[v1.38～v1.40 功能复核](FEATURE-REVIEW-20261102.md)、[evidence](evidence/) | 2026-11 起的核心审查与 Linux / 功能复核报告及其精简证据；仍有效的限制以 KNOWN-LIMITS 为准 |
