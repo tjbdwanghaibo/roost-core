@@ -19,7 +19,7 @@ component: Enter
 protocols: [EnterGame, EnterCreate, EnterStatus]
 errcodes: [enter_need_create, enter_created, enter_name_long]
 verify:
-  packages: [./game/handler, ./game/login, ./game/entities/player, ./game/controllers/enter]
+  packages: [./game/handler, ./game/login, ./game/controllers/enter]
   run: ^TestEnter
   pass: 29
 with:

@@ -1,0 +1,35 @@
+package idle
+
+import (
+	"errors"
+	"math"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func TestIdleRewardCapDropsFractionalTime(t *testing.T) {
+	reward, at, capped, err := idleAccrue(1000, 8500, IdleRules{PeriodMillis: 1000, CoinsPerPeriod: 3, OfflineCapMillis: 100000, RewardCap: 10})
+	if err != nil || reward != 10 || at != 8500 || !capped {
+		t.Fatalf("amount cap %d %d %v %v", reward, at, capped, err)
+	}
+}
+func TestIdleHugeTimeAndRateDoNotOverflow(t *testing.T) {
+	reward, at, capped, err := idleAccrue(1, math.MaxInt64, IdleRules{PeriodMillis: 1, CoinsPerPeriod: math.MaxInt64, OfflineCapMillis: math.MaxInt64, RewardCap: 100})
+	if err != nil || reward != 100 || at != math.MaxInt64 || !capped {
+		t.Fatalf("overflow %d %d %v %v", reward, at, capped, err)
+	}
+}
+func TestIdleInvalidRulesFailBeforeArithmetic(t *testing.T) {
+	for _, r := range []IdleRules{{}, {PeriodMillis: 1, CoinsPerPeriod: 1, OfflineCapMillis: 1}, {PeriodMillis: 2, CoinsPerPeriod: 1, OfflineCapMillis: 1, RewardCap: 1}, {PeriodMillis: 1, CoinsPerPeriod: -1, OfflineCapMillis: 1, RewardCap: 1}} {
+		if _, _, _, err := idleAccrue(1, 100, r); !errors.Is(err, apperrors.ErrIdleRules) {
+			t.Fatalf("invalid rules %+v: %v", r, err)
+		}
+	}
+}
+func TestIdleExactCapResetsTheOrigin(t *testing.T) {
+	reward, at, capped, err := idleAccrue(1000, 4500, IdleRules{PeriodMillis: 1000, CoinsPerPeriod: 1, OfflineCapMillis: 3500, RewardCap: 100})
+	if err != nil || reward != 3 || at != 4500 || !capped {
+		t.Fatalf("exact cap %d %d %v %v", reward, at, capped, err)
+	}
+}

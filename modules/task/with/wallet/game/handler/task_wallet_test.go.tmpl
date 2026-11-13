@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"sync/atomic"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	player "{{MODULE}}/game/entities/player"
+	gamewallet "{{MODULE}}/game/components/wallet"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -90,7 +92,7 @@ func TestWithTaskWalletGrantsDoNotCountAsSpending(t *testing.T) {
 var taskWalletRejectHook atomic.Bool
 
 func init() {
-	player.OnWalletSpent("zz_task_wallet_test", func(*player.Player, int64, int64) error {
+	gamewallet.OnWalletSpent("zz_task_wallet_test", func(view.PlayerEntity, int64, int64) error {
 		if taskWalletRejectHook.Load() {
 			return errors.New("injected wallet hook failure")
 		}

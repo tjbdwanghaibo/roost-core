@@ -25,16 +25,5 @@ func init() {
 	entity.RegisterComponentFactory(CompTypeBag, bag.NewComponent)
 }
 
-const (
-	// BagMaxKinds 是不同道具种类数的上限，见 bag.MaxKinds。
-	BagMaxKinds = bag.MaxKinds
-	// BagMaxStack 是单种道具数量的硬上限，见 bag.MaxStack。
-	BagMaxStack = bag.MaxStack
-)
-
-// bagItemRule 是道具规则（game/components/bag/items.go 的 ItemRule）在 Player 包里的名字：
-// 同一实体上的别的组件（例如 gacha 的容量预检）按与 Add 相同的规则判断，不另写一份。
-func bagItemRule(itemID int64) (maxStack int64, ok bool) { return bag.ItemRule(itemID) }
-
 // BagState 实现 bag.Owner：只在 Player 被 Nest 锁住期间调用。
 func (e *Player) BagState() *db.BagState { return e.Dao().GetBag() }

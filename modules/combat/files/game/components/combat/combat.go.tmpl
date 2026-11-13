@@ -1,0 +1,466 @@
+package combat
+
+import (
+	"{{MODULE}}/game/view"
+	db "{{MODULE}}/db"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+	corecombat "github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	"{{MODULE}}/game/actor"
+	apperrors "{{MODULE}}/internal/errors"
+	gamecombat "{{MODULE}}/game/combat"
+)
+
+const CombatRange int64 = 5000
+const CombatRuntimeMaxBytes = 512 << 10
+
+var CombatClock = skill.TickClock{Length: 50 * time.Millisecond}
+
+// Owner 是 Combat 组件的宿主（Player 的接线见 game/entities/player/combat_component.go）：只列组件用得到的
+// DAO 与别的组件（view 的小接口）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+	CombatDAO() *db.CombatDAO
+	view.ActorHolder
+	view.AttributeHolder
+}
+
+// Component 的可变权威均在DAO。core和beat只是装配接线，Runtime每次从完整边界恢复，失败时丢弃局部实例。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+	core  *combatcomponent.CombatComponent
+	beat  *heartbeat.Reg
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/combat_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("combat component: owner %T does not implement combat.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "combat" }
+
+func (c *Component) Owner() Owner { return c.owner }
+
+func (c *Component) ID() int64 { return c.owner.ID() }
+
+// Core 只供持锁可信业务读；会话中的HP/Buff写入只能走本模块Host，绕过会被下一拍哈希边界拒绝。
+func (c *Component) Core() *combatcomponent.CombatComponent { return c.core }
+
+func (c *Component) Input() gamecombat.Input {
+	p, ok := c.owner.Attribute().Final()
+	if !ok {
+		return gamecombat.Input{ID: c.ID()}
+	}
+	b := c.owner.Actor().Body()
+	pos := b.Position()
+	return gamecombat.Input{ID: c.ID(), SceneID: b.Map.SceneID(), X: pos.X, Y: pos.Y, MaxHealth: p.HP, Attack: p.Attack}
+}
+
+func (c *Component) OnInitFinish(param *entity.EntityCreateParam, created bool) error {
+	c.core = combatcomponent.NewCombatComponent(c.owner.CombatDAO())
+	if err := c.core.DriveBuffs(combatcomponent.BuffDriveConfig{Clock: CombatClock, Now: fctx.Now, Name: "combat.duel"}); err != nil {
+		return err
+	}
+	body := c.owner.Actor().Body()
+	if err := c.core.BindStates(body.States, combatcomponent.StateBinding{State: actor.Rooted, Tags: []corecombat.Tag{"root"}}, combatcomponent.StateBinding{State: actor.Silenced, Tags: []corecombat.Tag{"root", "silence"}}); err != nil {
+		return err
+	}
+	var err error
+	c.beat, err = body.Host.Register("combat.duel", 200*time.Millisecond, func(heartbeat.Beat) error {
+		peer := c.owner.Dao().GetCombat().GetOpponent()
+		epoch := c.owner.Dao().GetCombatPrivate().GetEpoch()
+		if peer == 0 || c.ID() > peer {
+			c.beat.Stop()
+			return nil
+		}
+		nest.AfterCommit(func() { gamecombat.Queue(c.ID(), peer, epoch) })
+		return nil
+	}, heartbeat.WithDurability(nest.DurabilityStrict))
+	if err != nil {
+		return err
+	}
+	if err = c.core.OnInitFinish(param, created); err != nil {
+		return err
+	}
+	if peer := c.owner.Dao().GetCombat().GetOpponent(); peer > c.ID() {
+		return c.beat.Start()
+	}
+	return nil
+}
+
+func (c *Component) OnDestroy(reason entity.EntityDestroyReason) {
+	if c.beat != nil {
+		c.beat.Close()
+	}
+	if c.core != nil {
+		c.core.OnDestroy(reason)
+	}
+}
+
+// CombatResult 是成交时的公开快照；重复sequence返回同一结果，不用当前HP覆盖旧回执。
+type CombatResult struct {
+	Sequence           int64
+	CastID             uint64
+	Health, PeerHealth int64
+	Alive, PeerAlive   bool
+	Pending            bool
+	Ended              bool
+}
+
+func (c *Component) result(peer *Component, seq int64, cast uint64, pending bool) CombatResult {
+	v := c.core.Combatant()
+	r := CombatResult{Sequence: seq, CastID: cast, Health: v.Health, Alive: v.Alive, Pending: pending}
+	if peer != nil {
+		v = peer.core.Combatant()
+		r.PeerHealth = v.Health
+		r.PeerAlive = v.Alive
+		r.Ended = c.owner.Dao().GetCombat().GetOpponent() == 0
+	}
+	return r
+}
+
+func (c *Component) replay(seq int64, kind, skillID string, target int64) (CombatResult, bool, error) {
+	d := c.owner.Dao().GetCombatPrivate()
+	if seq <= 0 {
+		return CombatResult{}, false, apperrors.ErrCombatSequence
+	}
+	if seq == d.GetSequence() {
+		if d.GetKind() != kind || d.GetSkill() != skillID || d.GetTarget() != target {
+			return CombatResult{}, false, apperrors.ErrCombatConflict
+		}
+		var r CombatResult
+		if err := json.Unmarshal(d.GetReplyAll(), &r); err != nil {
+			return r, false, apperrors.ErrCombatBoundary
+		}
+		return r, true, nil
+	}
+	if d.GetSequence() == math.MaxInt64 || seq != d.GetSequence()+1 {
+		return CombatResult{}, false, apperrors.ErrCombatSequence
+	}
+	return CombatResult{}, false, nil
+}
+
+func (c *Component) receipt(r CombatResult, kind, skillID string, target int64) {
+	raw, _ := json.Marshal(r)
+	d := c.owner.Dao().GetCombatPrivate()
+	d.SetSequence(r.Sequence)
+	d.SetKind(kind)
+	d.SetSkill(skillID)
+	d.SetTarget(target)
+	d.SetReply(raw)
+}
+
+func (c *Component) project() {
+	s := c.owner.Dao().GetCombat()
+	v := c.core.Combatant()
+	s.SetHealth(v.Health)
+	s.SetMaxHealth(v.MaxHealth)
+	s.SetShield(v.Shield)
+	s.SetAlive(v.Alive)
+	body := c.owner.Actor().Body()
+	s.SetRooted(body.States.Has(actor.Rooted))
+	s.SetSilenced(body.States.Has(actor.Silenced))
+}
+
+// Ready 是双人同意的入口。新档第一次同意时初始化HP；不借重复同意复活或补血。
+func (c *Component) Ready(seq int64, ready bool) (CombatResult, error) {
+	key := strconv.FormatBool(ready)
+	if r, ok, err := c.replay(seq, "ready", key, 0); ok || err != nil {
+		return r, err
+	}
+	s := c.owner.Dao().GetCombat()
+	if s.GetOpponent() != 0 {
+		return CombatResult{}, apperrors.ErrCombatBusy
+	}
+	if ready && !s.GetInitialized() {
+		input := c.Input()
+		if input.MaxHealth <= 0 {
+			return CombatResult{}, apperrors.ErrCombatInvalid
+		}
+		c.core.InitCombatant(corecombat.Combatant{Alive: true, Health: input.MaxHealth, MaxHealth: input.MaxHealth})
+		c.core.SetAttributeBase(2, input.Attack)
+		c.core.SetAttributeBase(3, 60)
+		s.SetInitialized(true)
+	}
+	if ready && !c.core.Combatant().Alive {
+		return CombatResult{}, apperrors.ErrCombatDead
+	}
+	s.SetReady(ready)
+	c.project()
+	r := c.result(nil, seq, 0, false)
+	c.receipt(r, "ready", key, 0)
+	return r, nil
+}
+
+func (c *Component) checkPeer(peer *Component) error {
+	if peer == nil || peer.ID() == c.ID() {
+		return apperrors.ErrCombatInvalid
+	}
+	a, b := c.Input(), peer.Input()
+	if a.SceneID <= 0 || a.SceneID != b.SceneID {
+		return apperrors.ErrCombatScene
+	}
+	dx, dy := combatDistance(a.X, b.X), combatDistance(a.Y, b.Y)
+	if dx > uint64(CombatRange) || dy > uint64(CombatRange) || dx*dx+dy*dy > uint64(CombatRange*CombatRange) {
+		return apperrors.ErrCombatRange
+	}
+	return nil
+}
+
+func canonicalCombat(a, b *Component) (*Component, *Component) {
+	if a.ID() < b.ID() {
+		return a, b
+	}
+	return b, a
+}
+
+// Cast 声明固定两名参与者、双方已同意且同场景同距离；会话中不能更换或插入第三人。
+func (c *Component) Cast(peer *Component, seq int64, skillID string, now time.Time) (CombatResult, error) {
+	if peer == nil {
+		return CombatResult{}, apperrors.ErrCombatInvalid
+	}
+	if r, ok, err := c.replay(seq, "cast", skillID, peer.ID()); ok || err != nil {
+		return r, err
+	}
+	if err := c.checkPeer(peer); err != nil {
+		return CombatResult{}, err
+	}
+	a, b := c.owner.Dao().GetCombat(), peer.owner.Dao().GetCombat()
+	if !a.GetReady() || !b.GetReady() {
+		return CombatResult{}, apperrors.ErrCombatConsent
+	}
+	if !c.core.Combatant().Alive || !peer.core.Combatant().Alive {
+		return CombatResult{}, apperrors.ErrCombatDead
+	}
+	if !c.owner.Actor().Body().CanCast() {
+		return CombatResult{}, apperrors.ErrCombatSilenced
+	}
+	program, err := gamecombat.Program(skillID)
+	if err != nil {
+		return CombatResult{}, fmt.Errorf("%w: %v", apperrors.ErrCombatSkill, err)
+	}
+
+	// 准入检查通过后，才在当前事务中绑定固定参与者。
+	owner, _ := canonicalCombat(c, peer)
+	private := owner.owner.Dao().GetCombatPrivate()
+	if a.GetOpponent() == 0 && b.GetOpponent() == 0 {
+		if private.GetEpoch() == math.MaxUint64 {
+			return CombatResult{}, apperrors.ErrCombatBoundary
+		}
+		a.SetOpponent(peer.ID())
+		b.SetOpponent(c.ID())
+		private.SetEpoch(private.GetEpoch() + 1)
+		private.SetRuntime(nil)
+		private.SetHost(nil)
+	} else if a.GetOpponent() != peer.ID() || b.GetOpponent() != c.ID() {
+		return CombatResult{}, apperrors.ErrCombatBusy
+	}
+
+	// 运行时在当前事务恢复；失败由Nest撤销绑定和战斗权威。
+	cast, pending, err := c.run(peer, program, now)
+	if err != nil {
+		return CombatResult{}, err
+	}
+	r := c.result(peer, seq, uint64(cast), pending)
+	c.receipt(r, "cast", skillID, peer.ID())
+	return r, nil
+}
+
+// Step 是正式Runtime/Host推进，时刻只由服务端冻结时钟提供；客户端不能加速技能或延长控制。
+func (c *Component) Step(peer *Component, seq int64, now time.Time) (CombatResult, error) {
+	if peer == nil {
+		return CombatResult{}, apperrors.ErrCombatInvalid
+	}
+	if r, ok, err := c.replay(seq, "step", "", peer.ID()); ok || err != nil {
+		return r, err
+	}
+	if !c.paired(peer) {
+		return CombatResult{}, apperrors.ErrCombatBusy
+	}
+	_, pending, err := c.run(peer, nil, now)
+	if err != nil {
+		return CombatResult{}, err
+	}
+	r := c.result(peer, seq, 0, pending)
+	c.receipt(r, "step", "", peer.ID())
+	return r, nil
+}
+
+func (c *Component) paired(peer *Component) bool {
+	return peer != nil && c.owner.Dao().GetCombat().GetOpponent() == peer.ID() && peer.owner.Dao().GetCombat().GetOpponent() == c.ID()
+}
+
+// Tick 的epoch阻止上一场战斗排队的心跳推进新会话。离场后排队消息为幂等空操作。
+func (c *Component) Tick(peer *Component, epoch uint64, now time.Time) error {
+	if peer == nil {
+		return nil
+	}
+	owner, _ := canonicalCombat(c, peer)
+	if !c.paired(peer) || owner.owner.Dao().GetCombatPrivate().GetEpoch() != epoch {
+		return nil
+	}
+	_, _, err := c.run(peer, nil, now)
+	return err
+}
+
+// Leave 是投降/结束：双方恢复本场确认的满生命、清除护盾与控制，冷却随本场丢弃。
+// 同意位清零，必须重新同意才能开下一场；死亡后也可经此入口结束，不能靠重复 Ready 在战斗中回血。
+func (c *Component) Leave(peer *Component, seq int64) (CombatResult, error) {
+	if peer == nil {
+		return CombatResult{}, apperrors.ErrCombatInvalid
+	}
+	if r, ok, err := c.replay(seq, "leave", "", peer.ID()); ok || err != nil {
+		return r, err
+	}
+	if !c.paired(peer) {
+		return CombatResult{}, apperrors.ErrCombatBusy
+	}
+	c.end(peer)
+	r := c.result(peer, seq, 0, false)
+	c.receipt(r, "leave", "", peer.ID())
+	return r, nil
+}
+
+func (c *Component) run(peer *Component, program *skill.Program, now time.Time) (skill.CastID, bool, error) {
+	// 检查：离场由服务器结束整场，避免只报错而永久保留busy绑定。
+	a, b := c.Input(), peer.Input()
+	if a.SceneID <= 0 || a.SceneID != b.SceneID {
+		c.end(peer)
+		return 0, false, nil
+	}
+
+	// 恢复：先核Host的权威字节边界，再核Runtime的revision/authority。
+	owner, other := canonicalCombat(c, peer)
+	d := owner.owner.Dao().GetCombatPrivate()
+	h, err := gamecombat.NewHost(d.GetHostAll(), []gamecombat.Participant{owner, other}, gamecombat.Environment())
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %v", apperrors.ErrCombatBoundary, err)
+	}
+	resolver, err := gamecombat.Resolver()
+	if err != nil {
+		return 0, false, err
+	}
+	opts := skill.RuntimeOptions{
+		MaxActiveCasts:       4,
+		MaxAbilities:         32,
+		CompletedCastLimit:   16,
+		MaxQueuedTasks:       32,
+		MaxOwnedSpawns:       1,
+		MaxStopPendingSpawns: 1,
+		RootEventLimit:       128,
+		CheckpointMaxBytes:   CombatRuntimeMaxBytes,
+		CheckpointMaxRecords: 4096,
+	}
+	var runtime *skill.Runtime
+	raw := d.GetRuntimeAll()
+	if len(raw) == 0 {
+		runtime = skill.NewRuntime(h, opts)
+	} else {
+		if len(raw) > CombatRuntimeMaxBytes {
+			return 0, false, apperrors.ErrCombatBoundary
+		}
+		var checkpoint skill.RuntimeCheckpoint
+		if err = json.Unmarshal(raw, &checkpoint); err != nil {
+			return 0, false, apperrors.ErrCombatBoundary
+		}
+		runtime, err = skill.RestoreRuntime(h, opts, checkpoint, resolver)
+		if err != nil {
+			return 0, false, fmt.Errorf("%w: %v", apperrors.ErrCombatBoundary, err)
+		}
+	}
+
+	// 推进：采用服务端时刻，拍内保留旧输入，不能回拨或混用世界。
+	if CombatClock.TickAt(now) < runtime.CurrentTick() {
+		return 0, false, fmt.Errorf("%w: %v", apperrors.ErrCombatSkill, skill.ErrReverseAdvance)
+	}
+	if program != nil && CombatClock.TickAt(now) == runtime.CurrentTick() && h.InputsChanged() {
+		return 0, false, fmt.Errorf("%w: changed inputs wait for next tick", apperrors.ErrCombatSkill)
+	}
+	stepper, err := skill.NewStepper(runtime, skill.StepperConfig{Clock: CombatClock, Now: func() time.Time { return now }, Name: "combat.duel"})
+	if err != nil {
+		return 0, false, err
+	}
+	var cast skill.CastID
+	if program != nil {
+		cast, err = stepper.Start(program, skill.CastInput{Caster: skill.EntityID(c.ID()), Target: skill.EntityID(peer.ID())})
+	} else {
+		err = stepper.CatchUp()
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %v", apperrors.ErrCombatSkill, err)
+	}
+
+	// 保存：checkpoint、Host和两个CombatDAO在同一个Nest边界确认。
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		return 0, false, err
+	}
+	raw, err = json.Marshal(checkpoint)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(raw) > CombatRuntimeMaxBytes {
+		return 0, false, apperrors.ErrCombatBoundary
+	}
+	host, err := h.Save()
+	if err != nil {
+		return 0, false, err
+	}
+	d.SetRuntime(raw)
+	d.SetHost(host)
+	pending := runtime.Pending() || owner.core.BuffsPending() || other.core.BuffsPending()
+	if pending {
+		if err = owner.beat.Start(); err != nil {
+			return 0, false, err
+		}
+	} else {
+		owner.beat.Stop()
+	}
+	owner.project()
+	other.project()
+	return cast, pending, nil
+}
+
+func combatDistance(a, b int64) uint64 {
+	if a >= b {
+		return uint64(a) - uint64(b)
+	}
+	return uint64(b) - uint64(a)
+}
+
+// end 由投降或服务器检测离场触发，控制与延迟任务随同一事务消失，不保留永久busy绑定。
+func (c *Component) end(peer *Component) {
+	owner, _ := canonicalCombat(c, peer)
+	d := owner.owner.Dao().GetCombatPrivate()
+	d.SetRuntime(nil)
+	d.SetHost(nil)
+	for _, p := range []*Component{c, peer} {
+		p.owner.Dao().GetCombat().SetOpponent(0)
+		p.owner.Dao().GetCombat().SetReady(false)
+		for _, buff := range p.core.ActiveBuffs() {
+			p.core.RemoveBuff(buff.Instance)
+		}
+		vitals := p.core.Combatant()
+		vitals.Health, vitals.Shield, vitals.Alive = vitals.MaxHealth, 0, true
+		p.core.InitCombatant(vitals)
+		p.beat.Stop()
+		p.project()
+	}
+}

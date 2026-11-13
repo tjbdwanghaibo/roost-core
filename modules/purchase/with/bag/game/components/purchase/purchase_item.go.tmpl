@@ -1,0 +1,22 @@
+package purchase
+
+import (
+	"{{MODULE}}/game/view"
+	"{{MODULE}}/game/purchase"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func init() {
+	RegisterPurchaseReward("item", PurchaseReward{
+		Validate: func(reward purchase.Reward) error {
+			if reward.ID <= 0 {
+				return apperrors.ErrPurchaseInvalid
+			}
+			return nil
+		},
+		Grant: func(owner view.PlayerEntity, reward purchase.Reward) error {
+			_, err := owner.Bag().Add(reward.ID, reward.Count)
+			return err
+		},
+	})
+}

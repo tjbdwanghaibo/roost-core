@@ -178,7 +178,7 @@ func (m *Manager) Spawn(ctx context.Context, sceneID int64, spec rules.Spec) (in
 	if err != nil {
 		return 0, err
 	}
-	mob, err := m.lives.CreateMonster(ctx, unique, monster.CreateParams{Spec: spec,
+	mob, err := m.lives.CreateWith(ctx, unique, monster.CreateParams{Spec: spec,
 		Sense: func(at spatial.Point, radius int64) []rules.Candidate {
 			seen := area.Space().Sense(at, radius)
 			out := make([]rules.Candidate, len(seen))

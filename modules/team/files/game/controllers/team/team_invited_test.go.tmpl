@@ -13,6 +13,7 @@ import (
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 	player "{{MODULE}}/game/entities/player"
+	gameteam "{{MODULE}}/game/components/team"
 	teamentity "{{MODULE}}/game/entities/team"
 )
 
@@ -64,7 +65,7 @@ func TestTeamEndpointInvitationQueryChecksAuthority(t *testing.T) {
 			if id != self {
 				t.Fatalf("wrong observer: %d", id)
 			}
-			return []player.TeamInvitation{{TeamID: first, Inviter: 101, ExpireAt: 60000}, {TeamID: second, Inviter: 103, ExpireAt: 60000}}, nil
+			return []gameteam.TeamInvitation{{TeamID: first, Inviter: 101, ExpireAt: 60000}, {TeamID: second, Inviter: 103, ExpireAt: 60000}}, nil
 		case "handlerTeamInvitation":
 			checked++
 			if id == first {

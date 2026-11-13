@@ -6,6 +6,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"log/slog"
 	player "{{MODULE}}/game/entities/player"
+	gamefriends "{{MODULE}}/game/components/friends"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
@@ -18,7 +19,7 @@ func (c *Controller) HandleFriendsList(ctx *playeraccess.Context, req *pb.Friend
 	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
 	out := &pb.FriendsListResponse{}
 	if err == nil {
-		var s player.FriendsSnapshot
+		var s gamefriends.FriendsSnapshot
 		s, err = syncsender.NewFriendsListSender(c.nestClient).Sync_FriendsList(ctx.Context(), id)
 		out.Peers, out.Incoming, out.Blocked = s.Peers, s.Incoming, s.Blocked
 	}

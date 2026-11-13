@@ -36,7 +36,7 @@ TCP (player access)
   都在自己的 Nest handler 里调 `target.BagComp().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`
   要求组件文件已经在盘上，而组件在最后的模块步骤才落盘，所以生成步骤里这些 handler 没有骨架步骤，文件直接写出、留在原处
   （骨架本来也会被立刻覆盖）；模块那一步跑生成器时全部 handler 都已经在盘上。邮件附件进背包不在其中：那是 mailbox 模块与
-  bag 模块的联动（`game/entities/player/mailbox_item.go`，见下文[邮件](#邮件列表与领附件客户端这一半)）。
+  bag 模块的联动（`game/components/mailbox/mailbox_item.go`，见下文[邮件](#邮件列表与领附件客户端这一半)）。
 - **领取账本不是背包的职责**：付费发货来自 [purchase 模块](../modules/purchase/README.md)，Redis 按玩家保存待发快照，
   Player 的 `Purchase.Applied` 连续游标与奖励在同一笔事务提交；确认后清理待发，旧序号不能再发一次。demo 不保留不断增长的
   `PurchaseClaims`。商品表与模拟渠道是 demo 的规则，真实渠道仍需工程接入；模块与 enter 联动补发离线订单。
@@ -94,7 +94,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 - **状态是模块追加在 `PlayerDao` 末尾的两个顶层字段**：`Profile`（名字、等级——别的玩家也看得到）与 `ProfilePrivate`（等级内经验——只给本人）。
   同步的白名单按顶层字段列，所以“别人看不到经验”就是别人的视图里不列 `ProfilePrivate`（[同步视图](README.md#同步视图谁看见哪些字段)）。存储键是
   `profile` / `profile_private`，里面是数字短键（`profile.1` 名字、`profile.2` 等级、`profile_private.1` 经验）。
-- **demo 只覆盖模块留给工程的一个文件**：升级邮件的奖励规则 `game/entities/player/mailbox_profile_rules.go`（见下一节）。
+- **demo 只覆盖模块留给工程的一个文件**：升级邮件的奖励规则 `game/components/mailbox/mailbox_profile_rules.go`（见下一节）。
 - **demo 的副本领奖账本** `dungeon_ledger.go`（`ClaimDungeonRun`、通关计数）仍挂在 Profile 上。联盟展示已由 alliance 模块的独立 AllianceComponent 提供，状态是 `PlayerDao.Alliance.ID`。
 - **两实体的 `AddExp` 是 demo 的**（Player 加经验、World 记全服累计，见[实体锁档与跨实体事务](#实体锁档与跨实体事务)），它调模块的
   `CheckAddExp` 与 `AddExp`。模块的 `ProfileAddExp` 只动 Player，不记 World 的累计，demo 的入口（端点、GM、副本结算）都不走它。
@@ -144,7 +144,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
 
 - **附件是（种类，号，数量）**：线上格式 `{"type":"item","id":1002,"amount":1}`，金币是 `{"type":"coins","amount":100}`
   （`game/mailbox/mailbox.go`）。种类是登记点：金币内置，经 wallet 模块到账；道具（`item`）由 mailbox 与 bag 的联动登记
-  （`game/mailbox/mailbox_item.go` 登记校验，`game/entities/player/mailbox_item.go` 登记发放：`BagComp().Add`，与领取账本同一笔事务）。
+  （`game/mailbox/mailbox_item.go` 登记校验，`game/components/mailbox/mailbox_item.go` 登记发放：`BagComp().Add`，与领取账本同一笔事务）。
   demo 发的奖励邮件带的都是道具。回包与列表用同样的字段说附件：`AttachmentType` / `AttachmentID` / `Amount`，领取回包另有
   `Held`（到账后这个道具在背包里的数量；金币是余额）。
 - **发件方都走 `gamemailbox.SendTo`**（`game/mailbox/mailbox_send.go`）：给一名玩家发一封信，附件先按领取端的同一个判断校验
@@ -781,7 +781,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
   场景、已付订单、公会、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
   后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
-  `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/entities/player/enter_first.go`。
+  `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/login/enter_first.go`。
   之后照样执行进入钩子（`gamelogin.RunEntered`，带着会话的 claims）：聊天上线与拉全服邮件是 chat、mailbox 各自与 enter 的联动登记的，
   不写在 demo 的进入流程里。
 - **登录有预算**：传输层给每个请求 `player_access.tcp.dispatch_timeout`（与 `nest.request_timeout` 对齐）；

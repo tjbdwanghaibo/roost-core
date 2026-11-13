@@ -30,7 +30,7 @@
     - 联盟服务实例之间用的：`Establish`、`ReserveGuard`、`ResolveGuard`、`ClearGuard`、`AcknowledgeWar`、`Settle`；game 进程不需要调。
     - 目标号构造：`AllianceTarget(allianceID)`、`GuardTarget(playerID)`（`internal/rpc/alliance/service.go`）。
   - game 侧 `Controller`（`game/controllers/alliance/controller.go`，经 `FromRegistry` 取得）：除十三个 `Handle…` 端点外，公开方法 `RefreshMembership(ctx, playerID) error`（`refresh.go`）在进入或重连后对账玩家的展示副本与通知地址。
-  - `Player` 组件（`game/entities/player/alliance_component.go`）：`AllianceComp().AllianceID()`、`SetAlliance(id)`，窄接口 `IAllianceEntity`。
+  - `Player` 组件（`game/components/alliance/alliance.go`）：`AllianceComp().AllianceID()`、`SetAlliance(id)`，窄接口 `IAllianceEntity`。
   - game 侧 Nest handler（`game/handler/`）：`handlerPlayerAlliance`（读展示副本）、`handlerShowAlliance`（改展示副本，`replaces` 非零时只替换指定的旧联盟）、`handlerStartAllianceOp`（在 `Player` 事务里启动 Saga）、`handlerAllianceDebit` / `handlerAllianceCredit`（Saga 的背包扣除与放入步骤）。
   - `game/alliance` 包：`Answer(err)`（把 RPC 错误映射成客户端码）、`Binding(ctx, registry, playerID, sid)`（查玩家当前归属的 game 实例）、`BusinessKey` / `RequestID`（幂等键格式）、`State` 及 `Encode` / `Decode`（Saga 载荷）、常量 `Deadline`（Saga 期限 10 分钟）。
   - `game/alliance/runtime` 包：运行期入口 `Start(registry)`（启动 Saga 步骤消费者与成员通知处理），`AdmitPlayerStep`（Saga 原生步骤进 Nest 之前的归属准入，可供自定义消费者复用）。

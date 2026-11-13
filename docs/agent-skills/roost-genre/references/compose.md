@@ -297,9 +297,9 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
   - `cannot be installed yet`：缺 Mod 或 feature，错误里给了要执行的命令。托管服务不在此列：安装器自己声明；只有工程里已经有一个同名的业务服务时报 `is taken by a business service`，这是冲突，告诉用户，不要改名绕过。
 - **联动文件**：输出里的 `glue <模块> with <另一个模块>` 是两个模块之间的接线（例如 chat 在玩家进入游戏时把他加进在线名单、签到成功推进每日任务），两个模块都装着时安装器自动写，不论先装哪个；`plan --json` 的 `glue` 数组列出会写的文件。它们归工程所有，规则直接在文件里改。`module verify` 把它们的场景单独列一行 `<模块>+<另一个模块>`。
 - 模块自带的客户端协议（如 wallet 的 `WalletSpend`：客户端发起的消费）是样例入口。需求里没有对应的客户端操作时，告诉用户它存在，由用户决定保留还是删掉这条协议与端点。
-- 装完之后模块文件就是业务代码：要改规则直接改（例如 `game/entities/player/checkin_component.go` 里的奖励），改完再 `module verify`。改了行为就同步改模块自带的测试，不要删测试。
+- 装完之后模块文件就是业务代码：要改规则直接改（例如 `game/components/checkin/checkin.go` 里的奖励），改完再 `module verify`。改了行为就同步改模块自带的测试，不要删测试。
 
-- **扩展已装的模块**（第 1 步结论是“装了再扩展”的）：只动两类地方——模块留给工程的业务文件（README 的“复用方式”列出，例如商品目录、推荐规则、渠道入口、首次发放），和它的登记点（进入钩子、升级钩子、附件种类、规则登记……）。要在别的功能里用它的数据或动作，调它 README 写的入口（同一个实体上直接调组件方法，例如 `component.owner.WalletComp().Add(delta)`）。它别的文件不要改；确实要改规则时改完同步改它自带的测试，再 `module verify`。
+- **扩展已装的模块**（第 1 步结论是“装了再扩展”的）：只动两类地方——模块留给工程的业务文件（README 的“复用方式”列出，例如商品目录、推荐规则、渠道入口、首次发放），和它的登记点（进入钩子、升级钩子、附件种类、规则登记……）。要在别的功能里用它的数据或动作，调它 README 写的入口（同一个实体上直接调组件方法，例如 `component.owner.Wallet().Add(delta)`）。它别的文件不要改；确实要改规则时改完同步改它自带的测试，再 `module verify`。
 
 ## 3A. 登录与进入
 
@@ -377,7 +377,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
    - 同步与否按这个顶层字段决定：标了 `sync` 的字段才会下发，`persist` 只落库。既有可见状态又有服务端账本就写两个字段、两个结构体。不要在嵌套结构体的字段上写 `dao` 标签。标了 `sync` 还要打开自身视图客户端才收得到，见第 4A 步。
    - 只能加在末尾（同步的字段号按定义顺序排）；不要改已有字段的 `store` 键。
 2. **组件**：`"$ROOST" add component <Feature> --entity Player`，在生成的 `game/entities/player/<feature>_component.go` 里写业务方法。状态只经生成的 setter 改（`component.owner.Dao().GetTask().SetProgress(…)`）；组件不保存事务会改的状态、不加锁。同一个实体上的别的组件（模块的或自己写的）都用 `component.owner.<Other>Comp()` 直接调，在同一把锁、同一笔事务里。要动货币就调同一个实体上的货币组件，同一笔事务。两个入口按“谁来保证只做一次”选：
-   - **你的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `component.owner.WalletComp().Add(delta)`，不留回执。周期性发放（每日、每局、每个订单）都用这个。
+   - **你的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `component.owner.Wallet().Add(delta)`，不留回执。周期性发放（每日、每局、每个订单）都用这个。
    - **没有别的事实可判**（客户端带请求号的消费）：`WalletComp().Apply(key, delta)`，同一个 key 在去重窗口内重复调用只生效一次。窗口只留最近 128 次带业务键的加减，是短期防重发，不是永久账本：不要拿按天、按局递增的键去用它。
 3. **错误码**：`"$ROOST" add errcode <feature>_<reason>`（每个一条，一码一个文件），生成在 `internal/errors/`，把说明文字（生成时是 `TODO`）改掉。模块是一个功能一个文件，两种布局都可以。业务拒绝就从组件 / handler 里返回这些带码的错误，生成的端点会把它转成回包的 `Code` / `Reason`；不用在 controller 里自己拼响应。
 4. **协议**：`"$ROOST" add protocol <Feature><Action> --group game --handler <feature>`，在 `protocol/def/<feature>_<action>.go` 里给 Request / Response 加字段（Response 保留 `Code`、`Reason`）。
@@ -444,7 +444,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 ## 4B. 进入游戏：建档与首次初始化
 
-**装 `enter` 模块即可**（`"$ROOST" module add enter`）：它带 `EnterGame` 端点和首次初始化，新玩家的初始发放写进它的 `game/entities/player/enter_first.go`（例如 `component.owner.WalletComp().Add(100)`）。手写的功能要在玩家进入时顺带做事（上线登记、拉离线期间的数据），不要改进入端点：在自己的包里写
+**装 `enter` 模块即可**（`"$ROOST" module add enter`）：它带 `EnterGame` 端点和首次初始化，新玩家的初始发放写进它的 `game/login/enter_first.go`（例如 `host.Wallet().Add(100)`）。手写的功能要在玩家进入时顺带做事（上线登记、拉离线期间的数据），不要改进入端点：在自己的包里写
 
 ```go
 func init() {
@@ -455,7 +455,7 @@ func init() {
 }
 ```
 
-（`gamelogin` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `player.OnFirstEnter` 登记事务内钩子（配方已使用）。
+（`gamelogin` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `gamelogin.OnFirstEnter` 登记事务内钩子（配方已使用）。
 
 **enter 有两条路**。会话是用进服票据握手的（第 3A 步的链路，装了 `login` 时）：玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`；建档、名字、首次初始化、“建成了”的标记在同一笔事务里。别的会话：`EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码，初始发放只写一处。要在“新建”这一步加自己的检查或写入，用 enter 的登记点（`OnCreating`、`OnCreatePrepare`、实体包的 `OnCreate`，见它的 README），不要改它的端点。
 
@@ -474,26 +474,48 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 
 **新玩家的初始发放**（送金币、满体力）不要按“这次是不是新建的”判断：建档后、发放前进程崩了，这个玩家就永远拿不到。做法是：发放写成一个不对客户端开放的 Nest handler，“发过没有”记在自己的状态里（一个只落库的布尔字段），每次进入游戏在 `GetOrCreate` 之后都经生成的 Sender 调一次它，已发过就什么都不做。入口里这段手写串接没有离线测法（场景测试只到 Nest handler），在报告里列为未测。
 
-## 4D. 多个实体共用一份逻辑
+## 4D. 组件的写法：组件包 + game/view（v1.47.0 起）
 
-两个及以上实体需要同样的逻辑（玩家背包与公会仓库、玩家与全服各有一份活动进度、玩家与怪物都有属性），**做成共用组件，不给每个实体复制一份**。样板是 `modules/activity`（同一个组件挂在 Player、全服 World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
+**每个组件都写在自己的包里，不写进实体包**；实体包只剩实体本体、`_gen` 文件与每个组件一个薄接线文件。包之间靠 `game/view` 里的接口相连，避免循环引用。样板：只挂在 Player 上的组件看 `modules/profile`、`modules/task`；多个实体共用的组件看 `modules/bag`、`modules/wallet`、`modules/attribute`、`modules/activity`（同一个组件挂在 Player、World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
 
-1. **共用逻辑放进独立的包** `game/components/<功能>/`，主文件与包同名（`game/components/<功能>/<功能>.go`；样板是 `modules/bag`、`modules/wallet`、`modules/attribute`）：组件只放逻辑，通过宿主接口拿状态，不写死某个实体类型。
+**依赖方向**（谁 import 谁）：
+
+```
+game/view                 ← 只放接口；只依赖 framework、db、协议类型（以及只有类型的 game/actor、game/gameplay/attribute）
+game/components/<功能>    → game/view（以及它联动的别的组件包）
+game/login、钩子、联动    → game/view、组件包
+game/entities/<实体>      → 组件包、game/login（实体实现 view 的接口）
+game/handler、controllers → 实体包、组件包
+```
+
+组件包、`game/login` 与联动永远不 import 实体包。
+
+1. **组件包** `game/components/<功能>/<功能>.go`：`Component` 类型、宿主接口 `Owner`、工厂 `NewComponent(value any, *entity.EntityCreateParam)`（把 `value` 断言成 `Owner`，断言失败返回错误）。`Owner` 只列组件用得到的东西：
 
    ```go
-   // Owner 是共用组件的宿主：每个实体只提供自己 DAO 里的那份状态与归属。
+   // 只挂在 Player 上、要读写玩家 DAO、要用钱包：
    type Owner interface {
        entity.IThreadSafeEntity
-       <功能>State() *db.<功能>State   // 本实体 DAO 里的嵌套状态
-       <功能>Scope() string            // 归属标识，日志与区分用
+       Dao() *db.PlayerDao
+       view.WalletHolder
+   }
+   // 组件要把整个宿主交给钩子时（升级钩子、签到钩子）：
+   type Owner = view.PlayerEntity
+   // 多个实体共用：只要本实体 DAO 里的那份状态，不写死实体类型
+   type Owner interface {
+       entity.IThreadSafeEntity
+       <功能>State() *db.<功能>State
    }
    ```
 
-   宿主能力不同的地方用可选接口区分（例如只有 Player 有持久定时器，就定义 `deadlineOwner`，组件里用类型断言判断），不要在组件里按实体类型写分支。工厂签名 `NewComponent(value any, *entity.EntityCreateParam)`，把 `value` 断言成 `Owner`，断言失败返回错误。
-2. **状态类型共用，每个实体各存一份**：同一个嵌套结构体放进各自的 DAO，各有自己的 `store` 键，各自落盘、各自回滚。不存在跨实体共享的可变状态，不用进程级变量。
-3. **每个实体一个很薄的接线文件**：自己的组件号（`//roost:component type=<号>`，每个实体单独申请）、类型别名（`type <功能>Component = <功能>.Component`）、`entity.RegisterComponentFactory(<组件号>, <功能>.NewComponent)`、实现 Owner 的方法。
-4. **事务边界不变**：每次调用都在宿主实体自己的 Nest 事务里。两个实体之间搬东西（玩家存进公会仓库）仍走多实体 handler、Remote 或 Saga（第 0A 节），不能因为组件相同就跨实体直接改状态。
-5. **测试**：每个宿主至少一条场景；另加一条证明两个宿主的状态互不影响。
+   宿主能力不同的地方用可选接口区分（例如只有 Player 有持久定时器，就定义 `deadlineOwner`，组件里用类型断言判断），不要在组件里按实体类型写分支。
+2. **game/view**：模块（或工程）给每个组件写 `game/view/component_<功能>.go`，里面两样东西——组件对外的接口 `<功能>`（导出方法里签名只用内建类型、db 类型的那些），以及“带有这个组件”的小接口 `<功能>Holder`（只有访问器 `<功能>() <功能>`）。实体接口 `game/view/entity_<实体>.go` 由 `roost generate` 生成：`<实体>Entity` 嵌入 `entity.IThreadSafeEntity`、实体的 DAO getter 与它挂载的各组件的 `<功能>Holder`；生成器同时在实体上生成访问器 `func (e *Player) <功能>() view.<功能>`。原来的 `<功能>Comp()` 照旧返回具体类型，给 handler 用。
+3. **跨组件调用写访问器**：`host.Wallet().Add(n)`、`c.owner.Bag().Remove(id, 1)`，不写 `Owner().WalletComp()`。组件、钩子与联动只收用得到的最小接口：只要背包的收 `view.BagHolder`，要整个玩家的才收 `view.PlayerEntity`。
+4. **钩子**：登记表放在发出事件的组件包里（`profile.OnProfileLevelUp`、`checkin.OnCheckinClaimed`），钩子收宿主 `func(host view.PlayerEntity, ...) error`；进入相关的 `OnFirstEnter` / `OnCreate` 与工程的首次发放 `enter_first.go` 在 `game/login`。别的功能的联动文件放在**登记方自己的包**里（task 的签到联动在 `game/components/task/task_checkin.go`），进入钩子的联动放在 `game/login/<功能>_enter.go`。不要在别的包里给组件类型声明方法：改成函数，或改成经 view 接口登记的回调。
+5. **每个实体一个很薄的接线文件** `game/entities/<实体>/<功能>_component.go`：自己的组件号（`//roost:component type=<号>`，每个实体单独申请）、类型别名（`type <功能>Component = <功能>.Component`）、handler 用的窄实体接口 `I<功能>Entity`、`entity.RegisterComponentFactory(<组件号>, <功能>.NewComponent)`、实现 `Owner` 的方法（例如 `func (e *Player) BagState() *db.BagState`）。
+6. **共用组件的状态类型共用，每个实体各存一份**：同一个嵌套结构体放进各自的 DAO，各有自己的 `store` 键，各自落盘、各自回滚。不存在跨实体共享的可变状态，不用进程级变量。
+7. **事务边界不变**：每次调用都在宿主实体自己的 Nest 事务里。两个实体之间搬东西（玩家存进公会仓库）仍走多实体 handler、Remote 或 Saga（第 0A 节），不能因为组件相同就跨实体直接改状态。
+8. **测试**：每个宿主至少一条场景；共用组件另加一条证明两个宿主的状态互不影响。组件包里的测试不能 import 实体包（会成环），要实体的测试放在 `game/handler` 或实体包。
 
 已装的模块要挂到第二个实体时，先看它 README 的“复用方式”：写明支持挂到别的实体的，照它的接线说明做；只支持 Player 的，按上面的写法借鉴（第 1 步结论是“借鉴”），不改模块原有的 Player 接线，也不复制模块代码另起一份。
 

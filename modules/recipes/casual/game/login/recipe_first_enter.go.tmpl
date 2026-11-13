@@ -1,0 +1,15 @@
+package login
+
+import (
+	"{{MODULE}}/game/view"
+)
+
+// InitialCoins 是休闲配方的新手发放规则，业务可直接修改此文件。
+const InitialCoins int64 = 100
+
+func init() {
+	OnFirstEnter("casual", func(owner view.PlayerEntity, _ int64) error {
+		_, err := owner.Wallet().Add(InitialCoins)
+		return err
+	})
+}

@@ -1,24 +1,16 @@
 package player
 
 import (
-	"fmt"
-	"time"
-
-	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/game/components/task"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
 //roost:component type={{ID:component:Task}}
 const CompTypeTask entity.ComponentType = {{ID:component:Task}}
 
-// TaskComponent 是任务的业务逻辑。它不保存事务会改的状态：周期记录在 PlayerDao.Task 里，
-// 经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
-type TaskComponent struct {
-	entity.ComponentBase
-	owner *Player
-}
+// TaskComponent 是 game/components/task 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type TaskComponent = task.Component
 
 // ITaskEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
 // 别的功能在自己的 handler 里要推进任务时，目标接口里嵌入它即可（同一个实体、同一笔事务）。
@@ -28,157 +20,5 @@ type ITaskEntity interface {
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeTask, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		typed, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("task component: owner %T is not *Player", owner)
-		}
-		return &TaskComponent{owner: typed}, nil
-	})
-}
-
-func (component *TaskComponent) Name() string { return "task" }
-
-// Owner 只在实体存活且被 Nest 锁住期间可用。
-func (component *TaskComponent) Owner() *Player { return component.owner }
-
-// TaskClaimResult 带奖励的种类、号、数量；Balance 是金币余额，非金币奖励不改变它。
-type TaskClaimResult struct {
-	Reward     int64
-	RewardKind string
-	RewardID   int64
-	Balance    int64
-}
-
-// taskProgress 是每日与两个嵌套周期 DAO 都具备的访问器。写入全部经过生成的 setter。
-type taskProgress interface {
-	GetDay() int64
-	SetDay(int64)
-	GetProgress(int64) (int64, bool)
-	SetProgressKey(int64, int64)
-	SetProgress(map[int64]int64)
-	GetClaimed(int64) (bool, bool)
-	SetClaimedKey(int64, bool)
-	SetClaimed(map[int64]bool)
-}
-
-func (component *TaskComponent) period(kind string) taskProgress {
-	state := component.owner.Dao().GetTask()
-	switch kind {
-	case TaskPeriodWeekly:
-		return state.GetWeekly()
-	case TaskPeriodPermanent:
-		return state.GetPermanent()
-	default:
-		return state
-	}
-}
-
-func taskPeriodDay(kind string, now int64) int64 {
-	if kind == TaskPeriodPermanent {
-		return 0
-	}
-	day := int64(clock.BusinessDay(time.UnixMilli(now)))
-	if kind != TaskPeriodWeekly {
-		return day
-	}
-	// 先取业务日，再算该日所在周的周一；不能拿 YYYYMMDD / 7 当周号。
-	date := time.Date(int(day/10000), time.Month(day/100%100), int(day%100), 0, 0, 0, 0, time.UTC)
-	monday := date.AddDate(0, 0, -(int(date.Weekday())+6)%7)
-	return int64(monday.Year()*10000 + int(monday.Month())*100 + monday.Day())
-}
-
-func (component *TaskComponent) unlocked(definition TaskDefinition, now int64) bool {
-	if definition.Previous == 0 {
-		return true
-	}
-	previous, ok := taskDefinition(definition.Previous)
-	if !ok {
-		return false
-	}
-	state := component.period(previous.Period)
-	claimed, _ := state.GetClaimed(previous.ID)
-	return taskPeriodDay(previous.Period, now) <= state.GetDay() && claimed
-}
-
-// Report 按事件推进所有已解锁的任务。次数由服务端提供；无匹配任务时零写入。
-// 它不判重：事件提供方必须在首次业务生效时调用，与业务在同一笔 Player 事务里提交。
-// 一次事件只推进当时已解锁的任务，不把同一个事件沿前置链重复消费。
-func (component *TaskComponent) Report(event string, n, nowUnixMilli int64) error {
-	if n <= 0 {
-		return apperrors.ErrTaskCountInvalid
-	}
-	for _, definition := range taskDefinitions().events[event] {
-		if !component.unlocked(definition, nowUnixMilli) {
-			continue
-		}
-		component.advance(definition, n, nowUnixMilli)
-	}
-
-	return nil
-}
-
-// Advance 是直接按任务号推进的服务端入口。未解锁任务返回 task_incomplete，拒绝前不写。
-// nowUnixMilli 来自 Nest 的冻结业务时间，不采信客户端时间。回拨不清零；进度封顶在目标。
-func (component *TaskComponent) Advance(taskID, n, nowUnixMilli int64) (int64, error) {
-	definition, ok := taskDefinition(taskID)
-	if !ok {
-		return 0, apperrors.ErrTaskUnknown
-	}
-	if n <= 0 {
-		return 0, apperrors.ErrTaskCountInvalid
-	}
-	if !component.unlocked(definition, nowUnixMilli) {
-		return 0, apperrors.ErrTaskIncomplete
-	}
-	return component.advance(definition, n, nowUnixMilli), nil
-}
-
-func (component *TaskComponent) advance(definition TaskDefinition, n, now int64) int64 {
-	state := component.period(definition.Period)
-	day := taskPeriodDay(definition.Period, now)
-	if day > state.GetDay() {
-		state.SetDay(day)
-		state.SetProgress(nil)
-		state.SetClaimed(nil)
-	}
-	progress, _ := state.GetProgress(definition.ID)
-	if progress >= definition.Target {
-		return progress
-	}
-	if n >= definition.Target-progress {
-		progress = definition.Target
-	} else {
-		progress += n
-	}
-	state.SetProgressKey(definition.ID, progress)
-	return progress
-}
-
-// Claim 发奖与领奖事实在同一笔 Nest 事务；奖励失败必须原样交还 Nest。
-// 不补领过期周期，也不在拒绝路径顺便清零。永久任务下架重上不清除领奖事实。
-func (component *TaskComponent) Claim(taskID, nowUnixMilli int64) (TaskClaimResult, error) {
-	definition, ok := taskDefinition(taskID)
-	if !ok {
-		return TaskClaimResult{}, apperrors.ErrTaskUnknown
-	}
-	state := component.period(definition.Period)
-	if taskPeriodDay(definition.Period, nowUnixMilli) > state.GetDay() {
-		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
-	}
-	if claimed, _ := state.GetClaimed(taskID); claimed {
-		return TaskClaimResult{}, apperrors.ErrTaskClaimed
-	}
-	if !component.unlocked(definition, nowUnixMilli) {
-		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
-	}
-	if progress, _ := state.GetProgress(taskID); progress < definition.Target {
-		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
-	}
-	reward := TaskReward{Kind: definition.RewardKind, ID: definition.RewardID, Count: definition.RewardCount}
-	if err := grantTaskReward(component.owner, reward); err != nil {
-		return TaskClaimResult{}, err
-	}
-	state.SetClaimedKey(taskID, true)
-	return TaskClaimResult{Reward: reward.Count, RewardKind: reward.Kind, RewardID: reward.ID, Balance: component.owner.WalletComp().Balance()}, nil
+	entity.RegisterComponentFactory(CompTypeTask, task.NewComponent)
 }

@@ -11,7 +11,7 @@
   - `CombatLeave`（`combat_leave.go`）：请求带 `Sequence`、`PeerID`。投降并结束会话。
   - 端点在 `game/controllers/combat/`：`HandleCombatReady`、`HandleCombatCast`、`HandleCombatStep`、`HandleCombatLeave`。操作者取自认证会话，时刻由服务端提供。
 - **服务端入口**
-  - 组件方法（`game/entities/player/combat_component.go`，要求已持有双方的锁）：`CombatComp().Ready(seq, ready)`、`Cast(peer, seq, skillID, now)`、`Step(peer, seq, now)`、`Leave(peer, seq)`、`Tick(peer, epoch, now)`；前四个返回 `CombatResult`，`Tick` 只返回错误。`Core()` 返回框架的战斗组件供持锁的可信业务只读；`Input()` 返回下一拍的外部输入（场景号、坐标、最大生命、攻击）。窄接口 `ICombatEntity`。
+  - 组件方法（`game/components/combat/combat.go`，要求已持有双方的锁）：`CombatComp().Ready(seq, ready)`、`Cast(peer, seq, skillID, now)`、`Step(peer, seq, now)`、`Leave(peer, seq)`、`Tick(peer, epoch, now)`；前四个返回 `CombatResult`，`Tick` 只返回错误。`Core()` 返回框架的战斗组件供持锁的可信业务只读；`Input()` 返回下一拍的外部输入（场景号、坐标、最大生命、攻击）。窄接口 `ICombatEntity`。
   - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerCombatReady`（单实体）、`handlerCombatCast` / `handlerCombatStep` / `handlerCombatLeave`（双实体，生成的 Sender 是 `MultiSync_CombatCast` 等）、`handlerCombatTick`（双实体，仅供本服的后台驱动调用，没有协议）。
   - 运行期入口 `combat.Start(registry)`（`game/combat/runtime.go`），以及 `combat.Queue(owner, peer, epoch)`、`combat.Program(id)`、`combat.Resolver()`、`combat.Environment()`、`combat.FailedDeliveries()`。
   - `combat.NewHost(...)`、`Host`、`Participant`、`Input`（`game/combat/host.go`）：把技能运行时限制在本次事务已锁住的两名参与者之内的宿主。
@@ -22,7 +22,7 @@
   - 附加 DAO `CombatDAO`（`db/combat.go`，清单的 `daos`，字段 `combatState`）：生命、护盾、Buff 的唯一权威，与 `PlayerDao` 一起加载和提交。
 - **配置**
   - 四个技能文件 `game/skills/combat_strike.json`、`combat_bolt.json`、`combat_stun.json`、`combat_silence.json`，技能号是 `skill.<工程名>.combat.strike` 等。`strike` 立即造成伤害；`bolt` 延迟 4 拍后造成伤害；`stun`、`silence` 给对手加持续 20 拍的状态；四个技能冷却都是 20 拍。
-  - 常量在 `combat_component.go`：`CombatRange = 5000`（施法准入距离）、`CombatClock`（1 拍 = 50 毫秒）、`CombatRuntimeMaxBytes`（运行时检查点上限 512 KiB）；`game/combat/host.go` 的 `MaxHostBytes`（宿主检查点上限 256 KiB）。
+  - 常量在 `game/components/combat/combat.go`：`CombatRange = 5000`（施法准入距离）、`CombatClock`（1 拍 = 50 毫秒）、`CombatRuntimeMaxBytes`（运行时检查点上限 512 KiB）；`game/combat/host.go` 的 `MaxHostBytes`（宿主检查点上限 256 KiB）。
 - **错误码**（`internal/errors/combat.go`）
   - `combat_invalid`：请求非法（对手是自己、没有属性等）。
   - `combat_sequence`：序号不是“上一个加 1”也不是“最近一次的原样重试”。
@@ -62,8 +62,8 @@
 - **需求正好是它**：`roost module add combat`，连带安装 `actor`、`attribute`、`skillbook`（`attribute` 又带上 `profile`）。要让玩家能站进同一个空间，一般还要装 `scene`。
 - **需求比它多一点**
   - 改技能数值或加技能：改或新增 `game/skills/` 下的 JSON（技能由 `skillbook` 在服务启动时编译）。新技能用到的状态要在技能编译环境里登记，写法见本模块的 `with/skillbook` 联动文件。
-  - 改施法距离、拍长：改 `combat_component.go` 的 `CombatRange`、`CombatClock`。
-  - 加胜负判定与奖励：在 `combat_component.go` 的 `run` 之后（`Cast` / `Step` / `Tick` 拿到结果处）检查 `Alive`，调用 `end` 并在同一笔事务里写自己的结算状态。
+  - 改施法距离、拍长：改 `game/components/combat/combat.go` 的 `CombatRange`、`CombatClock`。
+  - 加胜负判定与奖励：在 `game/components/combat/combat.go` 的 `run` 之后（`Cast` / `Step` / `Tick` 拿到结果处）检查 `Alive`，调用 `end` 并在同一笔事务里写自己的结算状态。
 
   - `game/combat/host.go` 的检查点格式与哈希校验不要改。
 - **别的模块 / 业务代码要用它**
@@ -74,7 +74,7 @@
 ## 联动
 
 - `combat` + `skillbook`（`with/skillbook/game/skillbook/combat_environment.go`）：经 `OnCompileEnvironment("combat", …)` 往技能编译环境里登记 `stun`、`silence` 两个状态；另有 1 条正式目录、摘要校验、眩晕与到期释放的联动场景。
-- `combat` + `scene`（`with/scene/game/entities/player/combat_scene.go`）：经 `OnSceneFields("combat", "Combat")` 只把公开投影 `Combat` 开放给附近玩家，`CombatPrivate` 不公开。
+- `combat` + `scene`（`with/scene/game/components/combat/combat_scene.go`）：经 `OnSceneFields("combat", "Combat")` 只把公开投影 `Combat` 开放给附近玩家，`CombatPrivate` 不公开。
 - `combat` + `equipment`（`with/equipment/`，只有场景测试）：验证真实换装只在下一拍进入战斗世界、换装提交被拒时保持原权威。
 - 别的模块没有 `with/combat`。
 

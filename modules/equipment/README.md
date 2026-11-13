@@ -13,7 +13,7 @@
 
 ### 服务端入口
 
-- 组件 `EquipmentComp()`（`game/entities/player/equipment_component.go`），只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
+- 组件 `EquipmentComp()`（`game/components/equipment/equipment.go`），只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
   - `Equip(itemID int64, level int32) (slot int32, replaced int64, err error)`：内部从背包扣一件新的、把旧的退回背包。可信的服务端代码可以传 1～10000 的等级。槽里已经是同一道具、只是等级不同时不动背包，只改等级并执行变化钩子，`replaced` 为 0。
   - `Unequip(slot int32) (itemID int64, found bool, err error)`：内部把道具退回背包后清槽。
   - `Worn(slot) (itemID, level, ok)` 与 `RangeWorn(fn)`：只读。
@@ -22,7 +22,7 @@
 
 ### 登记点
 
-`player.OnEquipmentChanged(name, EquipmentChangedHook)`（`game/entities/player/equipment_hooks.go`）：每次穿上或卸下成功修改之后执行，签名 `func(component *EquipmentComponent) error`。它在同一笔 Nest 事务、同一把 Player 锁内，只能改同一个 Player、不能做外部 I/O；返回错误让穿戴、背包与全部钩子的写入一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
+`equipment.OnEquipmentChanged(name, EquipmentChangedHook)`（`game/components/equipment/hooks.go`）：每次穿上或卸下成功修改之后执行，签名 `func(host view.PlayerEntity) error`（要别的组件经 `host.Attribute()` 这类 view 访问器）。它在同一笔 Nest 事务、同一把 Player 锁内，只能改同一个 Player、不能做外部 I/O；返回错误让穿戴、背包与全部钩子的写入一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
 
 ### 状态
 
@@ -59,7 +59,7 @@
 - **需求比它多一点：**
   - 加装备、改槽位与加成：改 `configs/table/equipment_item.csv`，道具本身要先在 bag 的 `item` 表里。
   - 加槽位名字：在 `game/equipment/equipment.go` 加常量（上限 `MaxSlots`）。
-  - 穿卸之后要重算别的东西（战力、外观）：登记 `player.OnEquipmentChanged`，不要改 `Equip` / `Unequip` 的顺序。
+  - 穿卸之后要重算别的东西（战力、外观）：登记 `equipment.OnEquipmentChanged`，不要改 `Equip` / `Unequip` 的顺序。
   - 做强化：自己写一个 Nest handler 调 `EquipmentComp().Equip(itemID, 新等级)`；对已经穿着的这件只改等级、不动背包。强化的消耗（材料、金币）由这个 handler 在同一笔事务里自己扣。
 - **别的业务代码要读 / 改穿戴：** 在自己的 Nest handler 里（目标实体实现 `player.IEquipmentEntity`）调 `target.EquipmentComp().Worn(slot)`、`RangeWorn(fn)`、`Equip(itemID, level)`、`Unequip(slot)`。调用方不要再自己扣、退背包。
 - **只适合借鉴的情形：** 每件装备各不相同（随机属性、可交易的唯一实例）时不适合直接用。值得借鉴的是“穿戴事实与背包变化在一笔事务里、先扣后退”的写法。

@@ -26,6 +26,8 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
+// v1.46.0：随 v1.46.0 发版后提高（project sync 的 versions.core 缺省 latest：下限低于已发布的最新版时，
+// 装完模块再 sync 会把 go.mod 的 core 升上去，安装后的工程与 sync 结果不一致）。
 // v1.45.0：业务模块与登录链路——生成物用 wiring/modulehost（模块托管在 account 等框架服务上）、gateway 的
 // GameDependencies.OnActivated 与新签名的 SessionActive(registry, principal)，以及 account 的进服票据与区服清单；旧 core 缺这些 API。
 // v1.44.0：saga 路由步骤（Step.Routed、StartRequest.Route、saga.SidRoute、kitsaga.WithSidRoute），生成的 EmitStart / Start
@@ -52,7 +54,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.45.0",
+	Core: "v1.46.0",
 }
 
 type Manifest struct {

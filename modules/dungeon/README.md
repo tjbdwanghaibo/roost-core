@@ -22,7 +22,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 - `Open` 的 `uniqueID` 必须由工程的全局 ID 分配器给出、永不复用；换所有者或赛季答 `dungeon_invalid`。
 - `Defeated(ctx, uniqueID, instance, epoch, source, sequence, enemy)`：`enemy` 只认关卡规则里出现过的敌人种类（`logic.KnownEnemy`，缺省规则是 `"minion"` 与 `"boss"`），别的名字答 `dungeon_invalid`、不写、不占事件序号；每个 `source` 的 `sequence` 单调递增。
 - Nest handler（`game/handler/dungeon.go`、`dungeon_counts.go`，都不直接对客户端开放）：`handlerDungeonOpen`、`handlerDungeonDefeated`、`handlerDungeonView`、`handlerDungeonClaim`（同时锁 `Dungeon` 与 `Player` 两个实体）、`handlerDungeonCounts`（只读 Player 的通关计数，显式声明 `durability=memory`）。
-- 组件 `DungeonComp()`（`game/entities/player/dungeon_component.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
+- 组件 `DungeonComp()`（`game/components/dungeon/dungeon.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
 
 ### 关卡规则（`game/dungeon/rules.go`，归工程）
 
@@ -30,7 +30,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 ### 登记点
 
-`player.OnDungeonClaimed(name, DungeonClaimedHook)`（`game/entities/player/dungeon_hooks.go`）：副本**首次**领奖成功时执行，重复领取不执行。钩子签名 `func(owner *Player, runID, season, nowUnixMilli int64) error`，在 Player 锁内、领奖的同一笔 Nest 事务里，只能改同一个 Player、不能做 I/O；返回错误让奖励、账本、计数一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
+`dungeon.OnDungeonClaimed(name, DungeonClaimedHook)`（`game/components/dungeon/hooks.go`）：副本**首次**领奖成功时执行，重复领取不执行。钩子签名 `func(owner view.PlayerEntity, runID, season, nowUnixMilli int64) error`，在 Player 锁内、领奖的同一笔 Nest 事务里，只能改同一个 Player、不能做 I/O；返回错误让奖励、账本、计数一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
 
 ### 状态
 
@@ -72,7 +72,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 - **需求比它多一点：**
   - 换关卡流程、时限、奖励数额、窗口与上限：改 `game/dungeon/rules.go`。改了 `Program()` 的定义要考虑已有存档。
   - 加一种敌人：只改 `game/dungeon/rules.go`——在关卡定义里加一条用 `enemyIs("新名字")` 的触发器（它被击败时做什么），`Defeated` 就接受这个名字；`run.go` 不用动。改了定义同样要考虑已有存档。
-  - 首次通关要顺带推进任务、成就：登记 `player.OnDungeonClaimed`，不要改 `dungeon_component.go` 的判断顺序。
+  - 首次通关要顺带推进任务、成就：登记 `dungeon.OnDungeonClaimed`，不要改 `game/components/dungeon/dungeon.go` 的判断顺序。
   - 奖励想发别的东西：在 `DungeonComponent.Claim` 里把 `ProfileComp().AddExp` 换成同一实体上别的组件的入口，保持“先检查、后写、账本同事务”。
 - **别的业务代码要开局 / 上报战斗结果：** `dungeon.FromRegistry(registry)` 取 `Controller`，调 `Open` 与 `Defeated`；每次都要检查错误。读某赛季通关数用 `DungeonCountsSender` 的 `Sync_DungeonCounts(ctx, playerEntityID, season)`。
 - **只适合借鉴的情形：** 多人副本、实时战斗在副本进程内结算、客户端权威的单机关卡都不适合直接用。值得借鉴的是“关卡结果是持久事实，领奖事务只读它，不信请求里的结果”与“有界账本 + 过了窗口再宽限才清理”。

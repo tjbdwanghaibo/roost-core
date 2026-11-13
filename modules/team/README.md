@@ -15,13 +15,13 @@
   - `TeamInvited`：邀请提交后，向本进程在线的被邀请人推送 `{TeamID, Inviter, ExpireAtUnixMilli}`，先记有界收件记录；推送失败不撤销权威邀请。
   - 操作人与所在服的 sid 都来自认证会话和本服务配置，客户端不能指定。
 - **服务端入口**
-  - 组件 `TeamComponent`（`game/entities/player/team_component.go`，经 `ITeamEntity` 的 `TeamComp()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
+  - 组件 `TeamComponent`（`game/components/team/team.go`，经 `ITeamEntity` 的 `TeamComp()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
   - Team 实体（`game/entities/team/entity.go` 与 `roster.go`）：`Info() Snapshot`（`Snapshot{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
   - Nest handler（`game/handler/`）：`handlerPlayerTeam`（只读本人的队伍号：`sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`）、`handlerTeamCreate`、`handlerTeamInvite`、`handlerTeamAccept`、`handlerTeamLeave`、`handlerTeamInfo`（后五个都是 `[Team, Player]` 两个实体的事务，`rollback=undo durability=strict`，例如 `sender.NewTeamCreateSender(client).MultiSync_TeamCreate(ctx, teamEntityID, playerEntityID, sid)`）。
   - Controller（`game/controllers/team/`）：七个 `HandleTeam…` 端点；`FromRegistry` 里的建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
 - **登记点**（都在 `game/entities/player/`，只在 `init` 登记，空名、nil、重名 panic，按名字排序执行）
-  - `OnTeamJoining(name, check func(*Player) error)`（`team_component.go`）：建队与入队的事务内准入检查。返回错误就拒绝这次入队。回调不能做 I/O。
-  - `OnTeamChanged(name, hook func(*Player, TeamChange) error)`（`team_changed.go`）：队伍关系变化时调用，`TeamChange{Before, After, Refresh}`；`Refresh` 为真表示只是当前玩家核对了一次（`TeamInfo` 等），不是名单变了。在同一笔事务里，回调出错整笔回滚；回调里不能做 I/O，要发通知得用提交后的机制。
+  - `OnTeamJoining(name, check func(view.PlayerEntity) error)`（`game/components/team/team.go`）：建队与入队的事务内准入检查。返回错误就拒绝这次入队。回调不能做 I/O。
+  - `OnTeamChanged(name, hook func(view.PlayerEntity, TeamChange) error)`（`game/components/team/changed.go`）：队伍关系变化时调用，`TeamChange{Before, After, Refresh}`；`Refresh` 为真表示只是当前玩家核对了一次（`TeamInfo` 等），不是名单变了。在同一笔事务里，回调出错整笔回滚；回调里不能做 I/O，要发通知得用提交后的机制。
 - **状态**（`db/def/team.go`）
   - `TeamDao`（集合 `team`，主库）：`Leader`、`Members`（玩家号 → 所在服 sid）、`Invites`（玩家号 → 过期时刻）、`MatchKey`、`Revision`。只落库。
   - `PlayerDao.Team`（`TeamState{TeamID, Invited}`）：只落库、不同步。客户端查自己的队伍用 `TeamInfo`，查邀请用 `TeamInvites`；`Invited` 只用于发现，不是接受邀请的权威。

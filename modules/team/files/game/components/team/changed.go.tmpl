@@ -1,0 +1,52 @@
+package team
+
+import (
+	"{{MODULE}}/game/view"
+	"sort"
+	"sync"
+
+	team "{{MODULE}}/game/entities/team"
+)
+
+// TeamChange 交给工程的组关系投影。通知必须由 Guard 的提交后入口发送，回调本身不得 I/O。
+// Refresh 只刷新当前玩家，避免周期核对时向全队重发通知。Before 用于给离队/解散成员发清理通知。
+type TeamChange struct {
+	Before, After team.Snapshot
+	Refresh       bool
+}
+
+var teamChanged = struct {
+	sync.RWMutex
+	hooks map[string]func(view.PlayerEntity, TeamChange) error
+}{hooks: map[string]func(view.PlayerEntity, TeamChange) error{}}
+
+func OnTeamChanged(name string, hook func(view.PlayerEntity, TeamChange) error) {
+	if name == "" || hook == nil {
+		panic("team: invalid changed hook")
+	}
+	teamChanged.Lock()
+	defer teamChanged.Unlock()
+	if teamChanged.hooks[name] != nil {
+		panic("team: duplicate changed hook " + name)
+	}
+	teamChanged.hooks[name] = hook
+}
+func (c *Component) changed(before, after team.Snapshot, refresh bool) error {
+	teamChanged.RLock()
+	names := make([]string, 0, len(teamChanged.hooks))
+	for n := range teamChanged.hooks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	hooks := make([]func(view.PlayerEntity, TeamChange) error, 0, len(names))
+	for _, n := range names {
+		hooks = append(hooks, teamChanged.hooks[n])
+	}
+	teamChanged.RUnlock()
+	for _, hook := range hooks {
+		if err := hook(c.owner, TeamChange{Before: before, After: after, Refresh: refresh}); err != nil {
+			return err
+		}
+	}
+	return nil
+}

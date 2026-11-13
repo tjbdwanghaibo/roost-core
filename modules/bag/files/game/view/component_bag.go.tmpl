@@ -1,0 +1,12 @@
+package view
+
+// Bag 是背包组件对 game/ 下其它包公开的方法（实现在 game/components/bag，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Bag interface {
+	Add(itemID, count int64) (int64, error)
+	Remove(itemID, count int64) (int64, error)
+	Count(itemID int64) int64
+	Has(itemID, count int64) bool
+}
+
+// BagHolder 是“带有背包”的小接口：只要背包的组件、钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
+type BagHolder interface{ Bag() Bag }

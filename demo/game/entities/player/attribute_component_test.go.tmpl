@@ -1,6 +1,7 @@
 package player
 
 import (
+	gameprofile "{{MODULE}}/game/components/profile"
 	"context"
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -225,7 +226,7 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 			start := gameattr.ForLevel(level)
 
 			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "level_up_then_fail", func() (any, error) {
-				if _, err := subject.ProfileComp().AddExp(ProfileExpPerLevel); err != nil {
+				if _, err := subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel); err != nil {
 					return nil, err
 				}
 				if tc.failAfter {
@@ -256,7 +257,7 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 			// DOES commit must store the numbers of the level it reached, not one
 			// level-up on top of a rolled-back one.
 			if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
-				return subject.ProfileComp().AddExp(ProfileExpPerLevel)
+				return subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel)
 			}); err != nil {
 				t.Fatalf("the retry failed: %v", err)
 			}
@@ -375,7 +376,7 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 				startFinal := attrFinalOf(subject)
 
 				err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, failure.committer, func(p *Player) error {
-					if _, err := p.ProfileComp().AddExp(ProfileExpPerLevel); err != nil {
+					if _, err := p.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel); err != nil {
 						return err
 					}
 					if _, err := p.BagComp().Remove(ironSword, 1); err != nil {
@@ -413,7 +414,7 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 				}
 
 				if err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, attributeCommitter{}, func(p *Player) error {
-					_, err := p.ProfileComp().AddExp(ProfileExpPerLevel)
+					_, err := p.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel)
 					return err
 				}); err != nil {
 					t.Fatalf("the retry failed: %v", err)
@@ -455,7 +456,7 @@ func TestNonPersistentAttributeLayersStayOutOfTheWAL(t *testing.T) {
 	}
 	worn, _ := subject.AttributeComp().Final()
 	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "level_up", func() (any, error) {
-		return subject.ProfileComp().AddExp(ProfileExpPerLevel)
+		return subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel)
 	}); err != nil {
 		t.Fatalf("level up: %v", err)
 	}
@@ -634,7 +635,7 @@ func TestCellPanelIsTheFinalLayer(t *testing.T) {
 	check("built")
 	before := subject.CellPanel()
 	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
-		return subject.ProfileComp().AddExp(ProfileExpPerLevel)
+		return subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel)
 	}); err != nil {
 		t.Fatal(err)
 	}

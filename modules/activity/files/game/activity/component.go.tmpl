@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"{{MODULE}}/game/view"
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -50,6 +51,10 @@ func (c *Component) Name() string { return "activity" }
 func (c *Component) Host() Host {
 	return Host{Owner: c.owner, Scope: c.owner.ActivityScope(), Book: c.owner.ActivityBook()}
 }
+
+// PlayerCreatedAt 由别的功能（装了 enter 时是 game/login/activity_enter.go）在 init 里设置：Player 的创建时间锚点。
+// 没设置时 Player 的 ActivityCreatedAt 返回 0（按首次活动时间算）。经 view 收宿主，game/activity 不引用实体包。
+var PlayerCreatedAt func(view.PlayerEntity) int64
 
 func (c *Component) Reconcile(event string, createdAt int64) error {
 	if createdAt == 0 {

@@ -1,0 +1,8 @@
+package view
+
+// Checkin 是 Checkin 组件对 game/ 下其它包公开的方法（实现在 game/components/checkin，语义见那里）；只在宿主被 Nest 锁住期间调用。
+// 现在是空的：组件的导出方法签名都带组件包自己的类型（view 不 import 组件包），要用时由 handler 走 CheckinComp()。
+type Checkin interface{}
+
+// CheckinHolder 是“带有 Checkin 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+type CheckinHolder interface{ Checkin() Checkin }

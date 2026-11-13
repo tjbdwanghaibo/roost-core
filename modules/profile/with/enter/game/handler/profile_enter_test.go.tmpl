@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"context"
 	"sync/atomic"
 	"testing"
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
+	gameprofile "{{MODULE}}/game/components/profile"
 	sender "{{MODULE}}/game/handler/syncsender"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -15,7 +17,7 @@ import (
 var profileEnterLevelUps atomic.Int64
 
 func init() {
-	player.OnProfileLevelUp("zz_profile_enter_test", func(*player.ProfileComponent, int32, int32) error {
+	gameprofile.OnProfileLevelUp("zz_profile_enter_test", func(view.PlayerEntity, int32, int32) error {
 		profileEnterLevelUps.Add(1)
 		return nil
 	})

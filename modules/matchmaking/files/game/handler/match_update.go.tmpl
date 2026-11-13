@@ -1,8 +1,11 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import (
+	player "{{MODULE}}/game/entities/player"
+	gamematchmaking "{{MODULE}}/game/components/matchmaking"
+)
 
 //roost:nest rollback=undo durability=strict
-func handlerMatchUpdate(members []player.IMatchmakingEntity, change player.MatchUpdate) (player.MatchSnapshot, error) {
-	return player.UpdateMatching(members, change)
+func handlerMatchUpdate(members []player.IMatchmakingEntity, change gamematchmaking.MatchUpdate) (gamematchmaking.MatchSnapshot, error) {
+	return gamematchmaking.UpdateMatching(player.MatchmakingComps(members), change)
 }

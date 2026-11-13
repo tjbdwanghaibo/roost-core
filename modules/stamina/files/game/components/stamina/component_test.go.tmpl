@@ -1,0 +1,127 @@
+package stamina
+
+import (
+	"math"
+	"testing"
+)
+
+// 这里直接测三个纯函数：结算公式 staminaSettle、发放的截断 staminaGrantable、购买的扣费 staminaRefillCost。
+// 极端的数与改过的规则（不为正的恢复周期、接近 int64 上限的时刻、调高或调低的上限、存着的体力比硬顶还高、
+// 不为正的价格）经 Nest 场景造不出来：场景用的是规则文件里的缺省值。经真实事务的场景在 game/handler/stamina_test.go。
+// 用例里的 100、300000、999 是写死的上限、周期与硬顶，不引用规则文件。
+
+type staminaSettleCase struct {
+	what              string
+	value, settledAt  int64
+	now               int64
+	wantValue, wantAt int64
+}
+
+func runStaminaSettleCases(t *testing.T, max, period int64, cases []staminaSettleCase) {
+	t.Helper()
+	for _, c := range cases {
+		value, at := staminaSettle(c.value, c.settledAt, c.now, max, period)
+		if value != c.wantValue || at != c.wantAt {
+			t.Errorf("%s: settle(%d, %d, now=%d) = (%d, %d), want (%d, %d)", c.what, c.value, c.settledAt, c.now, value, at, c.wantValue, c.wantAt)
+		}
+	}
+}
+
+func TestStaminaSettleBoundaries(t *testing.T) {
+	const start = int64(1_800_000_000_000)
+	cases := []staminaSettleCase{
+		{what: "no time passed", value: 70, settledAt: start, now: start, wantValue: 70, wantAt: start},
+		{what: "one millisecond before the first point", value: 70, settledAt: start, now: start + 299_999, wantValue: 70, wantAt: start},
+		{what: "exactly one period", value: 70, settledAt: start, now: start + 300_000, wantValue: 71, wantAt: start + 300_000},
+		{what: "one period and a remainder", value: 70, settledAt: start, now: start + 300_001, wantValue: 71, wantAt: start + 300_000},
+		{what: "one millisecond before the last point", value: 70, settledAt: start, now: start + 30*300_000 - 1, wantValue: 99, wantAt: start + 29*300_000},
+		{what: "exactly full: the clock stops", value: 70, settledAt: start, now: start + 30*300_000, wantValue: 100, wantAt: 0},
+		{what: "long past full: no more than the cap", value: 70, settledAt: start, now: start + 31*300_000 + 5, wantValue: 100, wantAt: 0},
+		{what: "already at the cap: the clock is cleared", value: 100, settledAt: start, now: start + 300_000, wantValue: 100, wantAt: 0},
+		{what: "above the cap: kept, not pulled back", value: 150, settledAt: 0, now: start, wantValue: 150, wantAt: 0},
+		{what: "clock turned back: nothing lost, start kept", value: 70, settledAt: start, now: start - 3_600_000, wantValue: 70, wantAt: start},
+		{what: "never written: full", value: 0, settledAt: 0, now: start, wantValue: 100, wantAt: 0},
+	}
+	runStaminaSettleCases(t, 100, 300_000, cases)
+	// 规则调高了上限（100 → 120）：原来已满、时钟停着的直接到新上限；还在恢复的照常按周期走。
+	raised := []staminaSettleCase{
+		{what: "was full, the cap was raised", value: 100, settledAt: 0, now: start, wantValue: 120, wantAt: 0},
+		{what: "was regenerating, the cap was raised", value: 99, settledAt: start, now: start + 2*300_000, wantValue: 101, wantAt: start + 2*300_000},
+	}
+	runStaminaSettleCases(t, 120, 300_000, raised)
+	// 规则调低了上限（100 → 80）：超出新上限的不扣，只是不再恢复。
+	lowered := []staminaSettleCase{
+		{what: "above the lowered cap", value: 95, settledAt: start, now: start + 300_000, wantValue: 95, wantAt: 0},
+	}
+	runStaminaSettleCases(t, 80, 300_000, lowered)
+}
+
+// 恢复周期不为正表示不自然恢复：不恢复、不除以 0、起点不动。
+func TestStaminaSettleWithoutRegen(t *testing.T) {
+	const start = int64(1_800_000_000_000)
+	for _, period := range []int64{0, -1, math.MinInt64} {
+		cases := []staminaSettleCase{
+			{what: "below the cap", value: 70, settledAt: start, now: start + 86_400_000, wantValue: 70, wantAt: start},
+			{what: "never written", value: 0, settledAt: 0, now: start, wantValue: 0, wantAt: 0},
+			{what: "at the cap", value: 100, settledAt: start, now: start + 1, wantValue: 100, wantAt: 0},
+		}
+		runStaminaSettleCases(t, 100, period, cases)
+	}
+}
+
+// 时刻与上限取到 int64 的边上也不溢出：恢复的点数先和“离上限还差多少”比较，再相加。
+func TestStaminaSettleExtremeTimesDoNotOverflow(t *testing.T) {
+	cases := []staminaSettleCase{
+		{what: "the last representable millisecond", value: 0, settledAt: 0, now: math.MaxInt64, wantValue: 100, wantAt: 0},
+		{what: "one point short of full at the end of time", value: 1, settledAt: math.MaxInt64 - 98*300_000, now: math.MaxInt64, wantValue: 99, wantAt: math.MaxInt64},
+	}
+	runStaminaSettleCases(t, 100, 300_000, cases)
+	// 上限本身极大、周期为 1 毫秒：点数接近 int64 上限，value + points 不能先加再比。
+	huge := []staminaSettleCase{
+		{what: "huge cap, not full yet", value: math.MaxInt64 - 10, settledAt: 0, now: 9, wantValue: math.MaxInt64 - 1, wantAt: 9},
+		{what: "huge cap, full", value: math.MaxInt64 - 10, settledAt: 0, now: math.MaxInt64, wantValue: math.MaxInt64, wantAt: 0},
+	}
+	runStaminaSettleCases(t, math.MaxInt64, 1, huge)
+}
+
+// 发放实际能加多少：加到硬顶为止；已在硬顶以上（规则调低了硬顶）时是 0，不是负数。
+func TestStaminaGrantableStopsAtTheHardCap(t *testing.T) {
+	type grantCase struct {
+		value, n, want int64
+	}
+	cases := []grantCase{
+		{value: 100, n: 50, want: 50},
+		{value: 100, n: 899, want: 899},
+		{value: 100, n: 900, want: 899},
+		{value: 998, n: 5, want: 1},
+		{value: 999, n: 1, want: 0},
+		{value: 1200, n: 1, want: 0},
+		{value: 0, n: math.MaxInt64, want: 999},
+		{value: 998, n: math.MaxInt64, want: 1},
+	}
+	for _, c := range cases {
+		if got := staminaGrantable(c.value, c.n, 999); got != c.want {
+			t.Errorf("grantable(value=%d, n=%d) = %d, want %d", c.value, c.n, got, c.want)
+		}
+	}
+}
+
+// 价格不为正就是免费：扣 0，不会因为规则表里填了负数而倒找钱。
+func TestStaminaRefillCostIsNeverNegative(t *testing.T) {
+	type costCase struct {
+		price, want int64
+	}
+	cases := []costCase{
+		{price: 50, want: 50},
+		{price: 1, want: 1},
+		{price: 0, want: 0},
+		{price: -1, want: 0},
+		{price: math.MinInt64, want: 0},
+		{price: math.MaxInt64, want: math.MaxInt64},
+	}
+	for _, c := range cases {
+		if got := staminaRefillCost(c.price); got != c.want {
+			t.Errorf("cost(price=%d) = %d, want %d", c.price, got, c.want)
+		}
+	}
+}

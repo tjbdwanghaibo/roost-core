@@ -93,7 +93,9 @@ go.mod/go.sum；全部成功后才提交，后置步骤失败不会留下半生�
 - internal/service/{{SERVICE}}：服务接入与业务生命周期；game 服务的 manager 登记点在 game/managers/managers.go（该服务启动的内存单例）。
 
 目录约定：game/ 放玩法与实体（game/entities/<实体> 是本体、生成文件与组件的薄接线；game/components/<功能> 是组件逻辑；
-game/login 是登录链；game/managers 是 manager 登记点）；internal/ 放框架接线（bootstrap、registry、access、service）；
+game/view 只放接口：component_<功能>.go 是组件接口与 <功能>Holder，entity_<实体>.go 由 roost generate 生成，
+组件包、game/login 与联动只依赖 view，实体包依赖组件包并实现 view 的接口；
+game/login 是登录链（含进入钩子与首次发放 enter_first.go）；game/managers 是 manager 登记点）；internal/ 放框架接线（bootstrap、registry、access、service）；
 services/<托管服务>/ 放托管框架服务的手写代码（collaborators、登录渠道、HTTP 登录入口），只有用到的服务才有目录；
 每类定义放在自己的顶层 <kind>/def；configs/ 放配置。静态注册统一汇总在
 internal/registry/generated.go（含 nest_gen.go），由 //roost:register 标记驱动，不再有 game/bootstrap。

@@ -18,6 +18,7 @@ import (
 	"{{MODULE}}/configs/schema"
 	controller "{{MODULE}}/game/controllers/gacha"
 	playerentity "{{MODULE}}/game/entities/player"
+	gamegacha "{{MODULE}}/game/components/gacha"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
@@ -450,14 +451,14 @@ func (f *gachaFixture) write(t *testing.T, fn func()) {
 }
 
 // component 在一笔事务里调组件入口：free 为真走 DrawFree（单抽、不扣费），否则走 Draw。
-func (f *gachaFixture) component(key string, pool, count int64, free bool) (playerentity.GachaResult, error) {
+func (f *gachaFixture) component(key string, pool, count int64, free bool) (gamegacha.GachaResult, error) {
 	result, err := f.engine.Request(context.Background(), nest.NewHandlerName("gachaTestComponent"), f.player.ID(), nest.NewParams(key, pool, count, free))
 	if err != nil {
-		return playerentity.GachaResult{}, err
+		return gamegacha.GachaResult{}, err
 	}
-	return result.(playerentity.GachaResult), nil
+	return result.(gamegacha.GachaResult), nil
 }
-func (f *gachaFixture) mustFree(t *testing.T, key string, pool int64) playerentity.GachaResult {
+func (f *gachaFixture) mustFree(t *testing.T, key string, pool int64) gamegacha.GachaResult {
 	t.Helper()
 	r, err := f.component(key, pool, 1, true)
 	if err != nil {

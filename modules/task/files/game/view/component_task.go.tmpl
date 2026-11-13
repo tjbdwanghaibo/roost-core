@@ -1,0 +1,10 @@
+package view
+
+// Task 是 Task 组件对 game/ 下其它包公开的方法（实现在 game/components/task，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Task interface {
+	Report(event string, n, nowUnixMilli int64) error
+	Advance(taskID, n, nowUnixMilli int64) (int64, error)
+}
+
+// TaskHolder 是“带有 Task 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+type TaskHolder interface{ Task() Task }

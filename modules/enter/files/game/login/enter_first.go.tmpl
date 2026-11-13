@@ -1,0 +1,31 @@
+package login
+
+import (
+	"{{MODULE}}/game/view"
+)
+
+// firstEnter 是新玩家的初始化：这名玩家第一次进入游戏时执行一次，与“做过了”的标记同一笔事务。
+//
+// 这个文件归工程所有，初始发放就写在这里。同一个实体上别的组件直接调，例如：
+//
+//	if _, err := host.Wallet().Add(100); err != nil { // 装了 wallet 模块时：送 100 金币
+//		return err
+//	}
+//
+// 用不留回执的入口（wallet 的 Add）：只发一次由 Init 的标记保证。返回错误时整笔事务回滚，
+// 这名玩家下次进入会再执行一遍，所以这里不要做事务之外的事（发消息、调别的服务）。
+func firstEnter(host view.PlayerEntity, nowUnixMilli int64) error {
+	_ = host
+	_ = nowUnixMilli
+	return nil
+}
+
+// GrantFirstEnter 是首次初始化的发放：工程自己的 firstEnter，然后是别的功能登记的钩子（OnFirstEnter）。
+// Player 的 enter 接线（game/entities/player/enter_component.go）经它实现 enter.FirstEnterGranter；
+// Init 与 Create 都经它，所以两条路上发的东西一样。
+func GrantFirstEnter(host view.PlayerEntity, nowUnixMilli int64) error {
+	if err := firstEnter(host, nowUnixMilli); err != nil {
+		return err
+	}
+	return RunFirstEnter(host, nowUnixMilli)
+}

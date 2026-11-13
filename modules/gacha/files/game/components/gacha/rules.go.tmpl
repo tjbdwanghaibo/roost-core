@@ -1,0 +1,52 @@
+package gacha
+
+import (
+	"math"
+	"sort"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// gachaRules 在一条请求的配置快照里捕获全部规则，不在十连途中换代。普通抽样由服务器生成；
+// 客户端只给池号和次数，不能提供随机种子/权重。本模块不提供付费渠道或可验证随机承诺。
+func gachaRules(poolID int64) (schema.GachaPool, []schema.GachaDrop, int64, error) {
+	pool, ok := generated.GachaPoolByID(poolID)
+	if !ok || pool.Off || pool.Price <= 0 || pool.PityAfter < 1 || pool.PityAfter > 1000000 || pool.PityItemID <= 0 {
+		return pool, nil, 0, apperrors.ErrGachaPoolInvalid
+	}
+	drops := []schema.GachaDrop{}
+	var total int64
+	var hasPity bool
+	for _, row := range generated.GachaDropTable().Rows() {
+		if row.PoolID != poolID {
+			continue
+		}
+		if _, ok := generated.ItemByID(row.ItemID); !ok || row.Weight < 0 || row.Weight > math.MaxInt64-total {
+			return pool, nil, 0, apperrors.ErrGachaPoolInvalid
+		}
+		drops = append(drops, row)
+		total += row.Weight
+		hasPity = hasPity || row.ItemID == pool.PityItemID
+		if len(drops) > 256 {
+			return pool, nil, 0, apperrors.ErrGachaPoolInvalid
+		}
+	}
+	if !hasPity || total <= 0 {
+		return pool, nil, 0, apperrors.ErrGachaPoolInvalid
+	}
+	sort.Slice(drops, func(i, j int) bool { return drops[i].ID < drops[j].ID })
+	return pool, drops, total, nil
+}
+
+// gachaPick 把 [0,total) 上的均匀整数映射到半开权重区间，零权重永远不会随机命中。
+func gachaPick(drops []schema.GachaDrop, roll int64) int64 {
+	for _, row := range drops {
+		if roll < row.Weight {
+			return row.ItemID
+		}
+		roll -= row.Weight
+	}
+	panic("gacha: roll outside validated weights")
+}

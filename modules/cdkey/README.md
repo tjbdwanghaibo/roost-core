@@ -9,7 +9,7 @@
 - **服务端入口**
   - `Controller.Redeem(ctx, playerID int64, code string) (gamecdkey.Intent, error)`（`game/controllers/cdkey/controller.go`）：客户端与可信服务端共用的协调入口，`playerID` 是原始玩家号。只能在实体事务之外调用（它要做跨进程调用）。经 `cdkey.FromRegistry(registry)` 取得 `Controller`。
   - Nest handler `handlerCdkeyPrepare`、`handlerCdkeyComplete`（`game/handler/cdkey.go`，都是 `durability=strict`）：只操作玩家账本，不发 RPC。一般不直接调用，由 `Redeem` 驱动。
-  - 组件方法 `CdkeyComp().Prepare(raw string, nowUnixMilli int64)`、`CdkeyComp().Complete(code, mailID string)`（`game/entities/player/cdkey_component.go`），窄接口 `ICdkeyEntity`。
+  - 组件方法 `CdkeyComp().Prepare(raw string, nowUnixMilli int64)`、`CdkeyComp().Complete(code, mailID string)`（`game/components/cdkey/cdkey.go`），窄接口 `ICdkeyEntity`。
   - `game/cdkey/cdkey.go`：`Normalize(code)`（去两侧空白、转大写、校验字符）、`Intent`（一次兑换的冻结内容）及其方法 `ClaimKey(playerID)`（directory 占用键）、`RequestID(playerID)`（发件幂等键）。
 - **登记点 / 钩子**：无。
 - **状态**
@@ -46,7 +46,7 @@
 - **需求比它多一点**
   - 加码、改有效期：改 `configs/table/cdkey.csv`。
   - 奖励改成道具或多种附件：改 `controller.go` 里 `Redeem` 组装 `mailbox.Letter` 的那一行（现在是 `mailbox.Coins(intent.Coins)`），并相应扩展 `configs/schema/cdkey.go`、`db/def/cdkey.go` 的 `CdkeyReceipt` 与 `game/cdkey/cdkey.go` 的 `Intent`（奖励必须在 `Prepare` 时冻结进账本）。
-  - 加渠道、等级等兑换条件：在 `cdkey_component.go` 的 `Prepare` 里、写入账本之前加检查。
+  - 加渠道、等级等兑换条件：在 `game/components/cdkey/cdkey.go` 的 `Prepare` 里、写入账本之前加检查。
   - 不要改 `ClaimKey` 与 `RequestID` 的格式：它们是已发行码的永久身份，改了会让旧码被当成新请求。
 - **别的模块 / 业务代码要用它**
   - 代玩家兑换（GM、活动）：`controller, _ := cdkey.FromRegistry(registry)`，然后 `controller.Redeem(ctx, playerID, code)`；必须在实体事务之外调用。

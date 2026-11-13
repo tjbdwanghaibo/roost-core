@@ -14,12 +14,12 @@
 
 ### 服务端入口
 
-- 组件 `GachaComp()`（`game/entities/player/gacha_component.go`），两个入口都只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
+- 组件 `GachaComp()`（`game/components/gacha/gacha.go`），两个入口都只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
   - `Draw(key string, poolID, count int64) (GachaResult, error)`：扣金币的单抽 / 十连，`GachaDraw` 协议用的就是它。
   - `DrawFree(key string, poolID int64) (GachaResult, error)`：**不扣费的单抽**。掉落、保底、背包检查、回执与 `Draw` 是同一段代码、同一个请求键窗口，只是不调货币组件：`Cost` 为 0，`Balance` 是当时的余额，不触发 wallet 的消费钩子；池的 `Price` 对它不起作用。没有对应的客户端协议：免费的次数规则（每日一次、活动送几次）属于工程，由工程自己的 handler 调它（见“复用方式”）。
   - `GachaResult{Cost, Balance, Items, Misses, Replayed}`。`Replayed` 为真表示这是窗口内同一个请求键的重放：结果取自原回执，这一次什么都没写。
 - Nest handler `handlerGachaDraw`（`game/handler/gacha_draw.go`，`rollback=undo durability=strict`）；端点 `HandleGachaDraw`（`game/controllers/gacha/gacha_draw.go`）直接分发到它。
-- 规则函数在 `game/entities/player/gacha_rules.go`：`gachaRules(poolID)` 在一条请求里读一次配置快照并校验，`gachaPick(drops, roll)` 把一个均匀整数映射到权重区间。
+- 规则函数在 `game/components/gacha/rules.go`：`gachaRules(poolID)` 在一条请求里读一次配置快照并校验，`gachaPick(drops, roll)` 把一个均匀整数映射到权重区间。
 
 ### 登记点
 
@@ -69,7 +69,7 @@
 - **需求正好是它：** `roost module add gacha`，连带装上 wallet 与 bag。
 - **需求比它多一点：**
   - 加池、改价格与概率：改 `configs/table/gacha_pool.csv` 与 `gacha_drop.csv`。保底道具必须也出现在该池的掉落表里（权重可以是 0），道具号必须在 bag 的 `item` 表里，否则这个池整体答 `gacha_pool_invalid`。
-  - 改保底规则（软保底、概率递增）：改 `gacha_component.go` 里 `Draw` 的抽样循环与 `gacha_rules.go`。
+  - 改保底规则（软保底、概率递增）：改 `game/components/gacha/gacha.go` 里 `Draw` 的抽样循环与 `rules.go`。
   - 换扣的货币、改单次抽数：改 `Draw`。不要去掉“重放判断先于配置查询”和“抽样之前检查背包空间”这两处顺序。
   - 改回执窗口、池数上限：`GachaReceiptWindow`、`GachaMaxPools`。
   - **不要保底**（转盘、普通奖池）：`pity_after` 填上限 `1000000`，`pity_item_id` 填这个池里一个普通道具（例如权重最大的那一项）。保底计数走不到上限；万一走到，给的也只是那件普通道具。场景 `TestGachaPityAtTheUpperBoundIsNeverForced` 就是这种配法。

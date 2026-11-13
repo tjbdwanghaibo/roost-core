@@ -1,0 +1,37 @@
+package alliance
+
+import (
+	db "{{MODULE}}/db"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// Owner 是 Alliance 组件的宿主（Player 的接线见 game/entities/player/alliance_component.go）：只列组件用得到的
+// DAO 与别的组件（view 的小接口）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/alliance_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("alliance component: owner %T does not implement alliance.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (*Component) Name() string        { return "alliance" }
+func (c *Component) AllianceID() int64 { return c.owner.Dao().GetAlliance().GetID() }
+
+// SetAlliance 只在 Player Nest 事务中调用；副本不参与联盟权限判定。
+func (c *Component) SetAlliance(id int64) {
+	c.owner.Dao().GetAlliance().SetID(id)
+}

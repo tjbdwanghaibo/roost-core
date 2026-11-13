@@ -1,0 +1,62 @@
+package login
+
+import (
+	"{{MODULE}}/game/view"
+	"errors"
+	"reflect"
+	"testing"
+)
+
+func isolateFirstEnterHooks(t *testing.T) {
+	t.Helper()
+	firstEnterMu.Lock()
+	saved := firstEnterHooks
+	firstEnterHooks = map[string]FirstEnterHook{}
+	firstEnterMu.Unlock()
+	t.Cleanup(func() { firstEnterMu.Lock(); firstEnterHooks = saved; firstEnterMu.Unlock() })
+}
+
+func TestEnterFirstHooksRunInNameOrder(t *testing.T) {
+	isolateFirstEnterHooks(t)
+	var got []string
+	owner := &fakeHost{}
+	for _, name := range []string{"z-last", "a-first"} {
+		OnFirstEnter(name, func(p view.PlayerEntity, now int64) error {
+			if p != owner || now != 123 {
+				t.Fatalf("hook lost owner or frozen time: %p %d", p, now)
+			}
+			got = append(got, name)
+			return nil
+		})
+	}
+	if err := RunFirstEnter(owner, 123); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"a-first", "z-last"}) {
+		t.Fatalf("order = %v", got)
+	}
+}
+
+func TestEnterFirstHookFailureStopsTheRemainingHooks(t *testing.T) {
+	isolateFirstEnterHooks(t)
+	refusal := errors.New("grant refused")
+	OnFirstEnter("a", func(view.PlayerEntity, int64) error { return refusal })
+	OnFirstEnter("b", func(view.PlayerEntity, int64) error { t.Fatal("called after a refusal"); return nil })
+	if err := RunFirstEnter(&fakeHost{}, 123); !errors.Is(err, refusal) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEnterFirstHookDuplicateRegistrationIsRejected(t *testing.T) {
+	isolateFirstEnterHooks(t)
+	OnFirstEnter("reward", func(view.PlayerEntity, int64) error { return nil })
+	defer func() {
+		if recover() == nil {
+			t.Fatal("duplicate registration accepted")
+		}
+	}()
+	OnFirstEnter("reward", func(view.PlayerEntity, int64) error { return nil })
+}
+
+// fakeHost 只用来比较钩子拿到的是不是同一个宿主：方法一个都不实现，钩子里调用会 panic。
+type fakeHost struct{ view.PlayerEntity }

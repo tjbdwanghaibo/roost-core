@@ -70,7 +70,7 @@ game/controllers、game/handler  不变
 playeraccess 进 core（`infra/network/playeraccess`）、lifecycle 生成（core `wiring/entitylifecycle` + 每个实体包 `lifecycle_gen.go`）、
 world / scene 单例进实体包；组件拆分完成 enter（`game/components/enter`）与基线的 bag / wallet / attribute（文件已改名 `<x>.go`）。
 
-未完成，需要维护者定方向：
+未完成，需要维护者定方向（1、2 已按 §6 的 game/view 完成，见 §6“实施记录”）：
 
 1. **其余模块组件（profile checkin task gacha naming mailbox equipment shop ……）仍在 Player 包。** 拆不动的原因：
    - 钩子签名带具体类型：`OnProfileLevelUp(func(c *ProfileComponent, from, to int32))`、`OnEquipmentChanged` 等，登记方（attribute、activity、
@@ -97,3 +97,14 @@ world / scene 单例进实体包；组件拆分完成 enter（`game/components/e
 组件 `view/component_<功能>.go`（如 `component_profile.go`）；模块模板同名（`files/game/view/component_<功能>.go.tmpl`，自带实体的再加 `entity_<实体>.go.tmpl`）。
 组合（维护者 11-13 补充）：view 内部组合——`component_<功能>.go` 定义组件接口与“带有这个组件”的小接口（只含返回组件接口的访问器），
 `entity_<实体>.go` 的实体接口嵌入 `entity.IThreadSafeEntity` 与它挂的各组件小接口；组件、钩子、联动只依赖用得到的最小接口。
+
+实施记录（tmp/v147-layout，2026-11-13）：
+- 全部 Player 组件拆进 `game/components/<功能>/`（25 个模块 + enter），每个模块带 `game/view/component_<功能>.go`（组件接口 + `<X>Holder`）；
+  Player 包只剩实体本体、`_gen` 文件与每个组件一个薄接线（组件号、类型别名、`I<X>Entity`、工厂登记、Owner 方法）。
+- 实体接口 `game/view/entity_<实体>.go` 与实体上的 view 访问器（`func (e *Player) Profile() view.Profile`）由**实体生成器**写，不由安装器追加：
+  生成器本来就按实体的 `//roost:component` 知道挂了哪些组件，按 view 里现有的 Holder 生成，`generate --check` 会发现漂移，
+  卸 / 装模块后重新生成即可，安装器不必维护一份“哪些 Holder 嵌进哪个实体”的状态。冷组件不生成访问器（字段可能为 nil）。
+- 钩子签名改收 `view.PlayerEntity`（或更小的 Holder），登记点在发出钩子的组件包；`enter_first.go` / `enter_hooks.go` 进 `game/login`。
+  联动文件（`with/`）进登记方的组件包或 `game/login`；在组件类型上声明方法的联动改成函数。
+- 留在 Player 包、没有拆的：activity 的 `activity_timers.go`（方法挂在工程的计时器组件上）；game-demo 的 `map_component.go` / `cell_base.go`
+  （与 cell 路由耦合，包名 `map` 不能用）、`saga_receipts.go`、`sync_packer.go`（实体宿主本身的职责）。

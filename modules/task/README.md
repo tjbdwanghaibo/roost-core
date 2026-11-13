@@ -7,7 +7,7 @@
 - **客户端协议**（`protocol/def/task_claim.go`）
   - `TaskClaim`：请求 `TaskClaimRequest{TaskID}`，应答 `TaskClaimResponse{Code, Reason, TaskID, Reward, Balance, RewardKind, RewardID}`。领取一个已完成任务的奖励：每日 / 每周任务在周期内一次，永久任务终身一次。`Reward` 是到账数量，`RewardKind` / `RewardID` 说明是哪种资产，`Balance` 是领完之后的金币余额（非金币奖励不改变它）。目标取认证会话的玩家。
   - 没有推进任务的客户端协议，也没有推送：进度经 `PlayerDao.Task` 的自身视图同步下去。
-- **服务端入口**（组件 `TaskComponent`，`game/entities/player/task_component.go`，经 `ITaskEntity` 的 `TaskComp()` 取得）
+- **服务端入口**（组件 `TaskComponent`，`game/components/task/task.go`，经 `ITaskEntity` 的 `TaskComp()` 取得）
   - `Report(event string, n, nowUnixMilli int64) error`：按事件推进。所有 `Event` 等于 `event`、并且当时已解锁的任务各加 `n`，封顶在目标；没有匹配的任务时什么都不写。**事务内联动用这个**。
   - `Advance(taskID, n, nowUnixMilli int64) (int64, error)`：直接按任务号推进，返回推进后的进度。任务未解锁答 `task_incomplete`，拒绝前不写。
   - `Claim(taskID, nowUnixMilli int64) (TaskClaimResult, error)`：`TaskClaim` 协议用的那一个，发奖并记下“领过了”。
@@ -17,13 +17,13 @@
     - `handlerTaskReport`（`task_report.go`）：只给服务端用，不在这名玩家事务里的调用方发 `sender.NewTaskReportSender(client).Sync_TaskReport(ctx, playerEntityID, event, n)`。
     - `handlerTaskAdvance`（`task_advance.go`）：同上，按任务号：`sender.NewTaskAdvanceSender(client).Sync_TaskAdvance(ctx, playerEntityID, taskID, n)`。
 - **登记点**
-  - 奖励种类（`game/entities/player/task_rewards.go`）：`RegisterTaskReward(kind string, handler TaskRewardHandler)`，`TaskRewardHandler{Validate, Grant}`。`Validate` 在建任务目录时校验一行奖励是否合法，`Grant` 在领奖的同一笔事务、Player 锁内发放，只改同一个 Player、不做 I/O。只在 `init` 登记；不完整或重名 panic。内置 `coins`（`RewardID` 必须为 0，经 `WalletComp().Add` 发放）；装了 bag 时多一个 `item`（`RewardID` 是道具号）。
+  - 奖励种类（`game/components/task/rewards.go`）：`RegisterTaskReward(kind string, handler TaskRewardHandler)`，`TaskRewardHandler{Validate, Grant}`。`Validate` 在建任务目录时校验一行奖励是否合法，`Grant` 在领奖的同一笔事务、Player 锁内发放，只改同一个 Player、不做 I/O。只在 `init` 登记；不完整或重名 panic。内置 `coins`（`RewardID` 必须为 0，经 `WalletComp().Add` 发放）；装了 bag 时多一个 `item`（`RewardID` 是道具号）。
   - 事件没有登记表：事件名就是任务表 `event` 列里的字符串，任何功能调 `Report("自己的事件名", n, now)` 即可。
 - **状态**（`db/def/task.go`）：`PlayerDao.Task`（`TaskState{Day, Progress, Claimed, Weekly, Permanent}`，后两个是 `TaskPeriodState{Day, Progress, Claimed}`），落库并同步，玩家本人可见。`Day` 是每日记录所属的业务日（YYYYMMDD），`Weekly.Day` 是每周记录所属那一周的周一（YYYYMMDD），`Permanent.Day` 恒为 0。
 - **配置**
   - 配置表 `task`：结构在 `configs/schema/task.go`（`Task{ID, Event, Period, Target, Previous, RewardKind, RewardID, RewardCount, Disabled}`），数据在 `configs/table/task.csv`。`Period` 取 `daily` / `weekly` / `permanent`；`Target` 是目标次数；`Previous` 是前置任务号（0 表示没有）；`Disabled` 是停用。
   - 缺省三行每日任务：1 号签到 1 次（`checkin.claimed`）奖 20 金币；2 号消费 3 次（`wallet.spent`）奖 30 金币；3 号副本领奖 10 次（`dungeon.claimed`）奖 100 金币。
-  - 任务目录与校验在 `game/entities/player/task_catalog.go`：常量 `TaskMaxID = 4096`，`TaskPeriodDaily` / `TaskPeriodWeekly` / `TaskPeriodPermanent`。
+  - 任务目录与校验在 `game/components/task/catalog.go`：常量 `TaskMaxID = 4096`，`TaskPeriodDaily` / `TaskPeriodWeekly` / `TaskPeriodPermanent`。
 - **错误码**（`internal/errors/task.go`）：`task_unknown`（任务号不存在、停用或这一行不合法）、`task_incomplete`（本周期没做完、未解锁、或周期已过）、`task_claimed`（本周期已领过）、`task_count_invalid`（推进次数不为正）。发奖被拒时透出奖励方的码（如 `wallet_overflow`、背包满）。
 
 ### 任务规则（属于“能力”，逐条对应代码）
@@ -68,7 +68,7 @@
     然后在任务表里加一行 `event` 为 `battle.won` 的任务。错误必须原样返回给 Nest，不能吞掉后提交半笔业务。
   - 自己的功能有“首次生效”钩子、又不想直接依赖 task：照 `with/shop` 的写法，在一个单独的文件里 `init` 登记对方的钩子并在里面调 `Report`。
   - 加一种奖励资产：`init` 里 `RegisterTaskReward("<种类>", TaskRewardHandler{Validate: …, Grant: …})`，照 `with/bag` 的 `task_bag.go`。
-  - 不要改 `task_component.go` 里周期与解锁的判断、`TaskState` 的 store 键、错误码码值；不要给业务代码留“测试用替换任务表”的开关（场景经真实的配置装载换表）。
+  - 不要改 `game/components/task/task.go` 里周期与解锁的判断、`TaskState` 的 store 键、错误码码值；不要给业务代码留“测试用替换任务表”的开关（场景经真实的配置装载换表）。
 - **别的模块要用它的数据或动作**
   - 同一个 Player 的事务里：目标接口嵌入 `player.ITaskEntity`，调 `TaskComp().Report(event, n, nowUnixMilli)`。
   - 不在这名玩家的事务里（房间结算给每名玩家记一场、GM）：`sender.NewTaskReportSender(client).Sync_TaskReport(ctx, playerEntityID, event, n)`；自己保证只发一次。

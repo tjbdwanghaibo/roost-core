@@ -115,7 +115,7 @@ func generatorsFor(m Manifest, force bool) []generator {
 			}
 			return protocol.Run(forceArg(args, force), w)
 		}},
-		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/"}, Run: func(root string, w io.Writer) error {
+		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/", "game/view/"}, Run: func(root string, w io.Writer) error {
 			args := []string{"-dir", under(root, "game")}
 			if selfSyncEnabled(m) {
 				// access.player.self_sync：Player 缺省 sync=true，没写 subjectPacker= 时生成默认 packer。

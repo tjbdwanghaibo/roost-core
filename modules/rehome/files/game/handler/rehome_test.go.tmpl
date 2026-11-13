@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	playerentity "{{MODULE}}/game/entities/player"
+	rehomecomp "{{MODULE}}/game/components/rehome"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamerehome "{{MODULE}}/game/rehome"
 	apperrors "{{MODULE}}/internal/errors"
@@ -36,7 +38,7 @@ var (
 )
 
 func init() {
-	playerentity.OnRehomeApplying("rehome_test", func(owner *playerentity.Player, move gamerehome.Move, _ int64) error {
+	rehomecomp.OnRehomeApplying("rehome_test", func(owner view.PlayerEntity, move gamerehome.Move, _ int64) error {
 		if owner.UniqueID() != rehomeTestPlayer {
 			return nil
 		}
@@ -47,7 +49,7 @@ func init() {
 		}
 		return nil
 	})
-	playerentity.OnRehomeArrived("rehome_test", func(owner *playerentity.Player, arrival gamerehome.Arrival, _ int64) error {
+	rehomecomp.OnRehomeArrived("rehome_test", func(owner view.PlayerEntity, arrival gamerehome.Arrival, _ int64) error {
 		if owner.UniqueID() != rehomeTestPlayer {
 			return nil
 		}

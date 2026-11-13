@@ -14,9 +14,9 @@ import (
 // 事务之内的一半在实体包里（game/entities/player 的 OnRehomeApplying / OnRehomeArrived，拿到 Player 本身）。
 // 一个功能两半都需要时两处都登记。
 //
-//	换服前检查   OnApplying（这里）    + player.OnRehomeApplying   返回错误即拒绝，什么都没有改
+//	换服前检查   OnApplying（这里）    + rehomecomp.OnRehomeApplying   返回错误即拒绝，什么都没有改
 //	离开时       OnLeaving（这里）                                   返回错误即中止这一次换服
-//	到达后       OnArrived（这里）     + player.OnRehomeArrived    事务内的一半恰好一次；这里的一半失败只记日志
+//	到达后       OnArrived（这里）     + rehomecomp.OnRehomeArrived    事务内的一半恰好一次；这里的一半失败只记日志
 //
 // 登记只在 init 里做（装了对应模块时由它的联动文件登记），之后只读；重名、空名、nil 是写错了，直接 panic。
 // 同一个登记点里的多个函数按名字顺序执行。
@@ -27,7 +27,7 @@ import (
 //     否则拿到 rehome_refused；
 //   - 只读：它回答“能不能”，不改任何状态（检查之后别的检查、规则、account 仍可能拒绝）；
 //   - 给要问别的服务或进程内状态的检查用（在队伍里、在排队、在副本里）。只看这名玩家自己的档的检查
-//     登记在实体包（player.OnRehomeApplying），它与记意图在同一笔事务里。
+//     登记在组件包（game/components/rehome 的 rehomecomp.OnRehomeApplying），它与记意图在同一笔事务里。
 type Check func(ctx context.Context, registry *app.Registry, move Move) error
 
 // LeaveHook 是离开时要做的事：换服已经在 account 登记（被受理），这名玩家已经安静下来——会话断开了，
@@ -45,7 +45,7 @@ type LeaveHook func(ctx context.Context, registry *app.Registry, move Move) erro
 // ArrivedHook 是到达之后顺带做的事，在事务之外、进入游戏的请求上下文里执行。
 //
 //   - 不是恰好一次：它在到达的事务提交之后调用，失败只记一条 Warn、不重试，进程在两者之间崩溃就不会再调。
-//     必须做到的事登记在实体包（player.OnRehomeArrived），与到达同一笔事务、恰好一次；
+//     必须做到的事登记在组件包（game/components/rehome 的 rehomecomp.OnRehomeArrived），与到达同一笔事务、恰好一次；
 //   - 要快：它占用登录请求的时间预算。
 type ArrivedHook func(ctx context.Context, registry *app.Registry, arrival Arrival) error
 

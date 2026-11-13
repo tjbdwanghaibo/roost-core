@@ -1,0 +1,97 @@
+package login
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"sort"
+	"sync"
+)
+
+// FirstEnterHook 在 EnterInit 的同一笔 Nest 事务、同一把 Player 锁内执行。
+// 只修改当前玩家的 DAO，不调用服务、不发消息；返回错误让发放和初始化标记一起回滚。
+// 重试只在上次未提交时再次执行；已经初始化的玩家永远不会再次执行。
+type FirstEnterHook func(owner view.PlayerEntity, nowUnixMilli int64) error
+
+var (
+	firstEnterMu    sync.RWMutex
+	firstEnterHooks = map[string]FirstEnterHook{}
+)
+
+// OnFirstEnter 登记事务内的首次初始化钩子，name 用功能自己的名字（模块名）。
+func OnFirstEnter(name string, hook FirstEnterHook) {
+	if name == "" || hook == nil {
+		panic("enter: OnFirstEnter needs a name and a hook")
+	}
+	firstEnterMu.Lock()
+	defer firstEnterMu.Unlock()
+	if _, taken := firstEnterHooks[name]; taken {
+		panic(fmt.Sprintf("enter: hook %q is registered twice", name))
+	}
+	firstEnterHooks[name] = hook
+}
+
+// runFirstEnter 按名字顺序执行钩子；第一个错误原样返回，交给事务回滚。
+func RunFirstEnter(owner view.PlayerEntity, nowUnixMilli int64) error {
+	firstEnterMu.RLock()
+	names := make([]string, 0, len(firstEnterHooks))
+	for name := range firstEnterHooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hooks := make([]FirstEnterHook, len(names))
+	for i, name := range names {
+		hooks[i] = firstEnterHooks[name]
+	}
+	firstEnterMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, nowUnixMilli); err != nil {
+			return fmt.Errorf("enter: hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}
+
+// CreateHook 在新建请求（EnterCreate）的同一笔 Nest 事务、同一把 Player 锁内执行，排在首次初始化之前。
+// name 是客户端给的名字，原样。约定与 FirstEnterHook 相同：只修改当前玩家的 DAO，不调用服务、不发消息；
+// 返回错误让整笔新建回滚（带码错误的码回给客户端）。它只在新建请求里执行——在 EnterGame 里直接建成的玩家
+// （“加载或创建”那条路）不经过它，那条路上没有名字。
+type CreateHook func(owner view.PlayerEntity, name string, nowUnixMilli int64) error
+
+var (
+	createHooksMu    sync.RWMutex
+	createHooks = map[string]CreateHook{}
+)
+
+// OnCreate 登记事务内的新建钩子，name 用功能自己的名字（模块名）。只在 init 里调用。
+func OnCreate(name string, hook CreateHook) {
+	if name == "" || hook == nil {
+		panic("enter: OnCreate needs a name and a hook")
+	}
+	createHooksMu.Lock()
+	defer createHooksMu.Unlock()
+	if _, taken := createHooks[name]; taken {
+		panic(fmt.Sprintf("enter: create hook %q is registered twice", name))
+	}
+	createHooks[name] = hook
+}
+
+// runCreate 按名字顺序执行钩子；第一个错误原样返回（errors.Is 与 errcode 的码都还在），交给事务回滚。
+func RunCreateHooks(owner view.PlayerEntity, name string, nowUnixMilli int64) error {
+	createHooksMu.RLock()
+	names := make([]string, 0, len(createHooks))
+	for hookName := range createHooks {
+		names = append(names, hookName)
+	}
+	sort.Strings(names)
+	hooks := make([]CreateHook, len(names))
+	for i, hookName := range names {
+		hooks[i] = createHooks[hookName]
+	}
+	createHooksMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, name, nowUnixMilli); err != nil {
+			return fmt.Errorf("enter: create hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

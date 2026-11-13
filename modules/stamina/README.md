@@ -8,7 +8,7 @@
   - `StaminaRefill`（`protocol/def/stamina_refill.go`）：请求 `StaminaRefillRequest{}` 没有字段，应答 `StaminaRefillResponse{Code, Reason, Value, Cost, Balance, RefillCount}`。花金币把体力补到上限；价格由服务端按当日第几次购买决定，客户端不传价格与时间。
   - `StaminaRules`（`protocol/def/stamina_rules.go`）：只有推送形状 `StaminaRulesPush{Max, HardCap, RegenMillis, RefillDailyLimit}`，不单独发送，作为 rules 模块规则快照里的一项下发。
   - 没有“消耗体力”的客户端协议：消耗由服务端别的功能在自己的事务里调。
-- **服务端入口**（组件 `StaminaComponent`，`game/entities/player/stamina_component.go`，经 `IStaminaEntity` 的 `StaminaComp()` 取得）
+- **服务端入口**（组件 `StaminaComponent`，`game/components/stamina/stamina.go`，经 `IStaminaEntity` 的 `StaminaComp()` 取得）
   - `Current(nowUnixMilli int64) int64`：这一刻的体力，只读，不写任何字段。
   - `Spend(n, nowUnixMilli int64) (int64, error)`：扣 `n` 点，返回扣完的体力。不够就拒绝，不做“有多少扣多少”。
   - `Grant(n, nowUnixMilli int64) (StaminaGrantResult, error)`：发 `n` 点，可以超过上限直到硬顶，超出硬顶的部分截掉；`StaminaGrantResult{Granted, Value}` 里的 `Granted` 是实际加上的点数。
@@ -16,10 +16,10 @@
   - `nowUnixMilli` 一律传所在 Nest handler 最后一个参数（这条消息冻结的业务时间），不传 `time.Now()`，也不传客户端给的时间。
   - Nest handler `handlerStaminaGrant`（`game/handler/stamina_grant.go`）：服务端发放，没有协议与端点；不在这名玩家事务里的调用方用 `sender.NewStaminaGrantSender(client).Sync_StaminaGrant(ctx, playerEntityID, amount)`。
   - Nest handler `handlerStaminaRefill`（`game/handler/stamina_refill.go`）：协议对应的 handler。
-- **登记点**（`game/entities/player/stamina_hooks.go`）
-  - `OnStaminaSpent(name, hook)`，`hook` 是 `StaminaSpentHook func(owner *Player, amount, nowUnixMilli int64) error`。每次成功的 `Spend` 执行一次；在 Player 锁内、同一笔 Nest 事务里，只改同一个 Player，不做 I/O。只在 `init` 登记；空名、nil、重名 panic。`Grant` 与 `Refill` 不触发它。
+- **登记点**（`game/components/stamina/hooks.go`）
+  - `OnStaminaSpent(name, hook)`，`hook` 是 `StaminaSpentHook func(owner view.PlayerEntity, amount, nowUnixMilli int64) error`。每次成功的 `Spend` 执行一次；在 Player 锁内、同一笔 Nest 事务里，只改同一个 Player，不做 I/O。只在 `init` 登记；空名、nil、重名 panic。`Grant` 与 `Refill` 不触发它。
 - **状态**（`db/def/stamina.go`）：`PlayerDao.Stamina`（`StaminaState{Value, SettledAt, RefillDay, RefillCount}`），落库并同步，玩家本人可见。从没有过体力写入的玩家是零值，按公式就是满体力，不用初始化。
-- **配置**：没有配置表。规则写在留给工程的 `game/entities/player/stamina_rules.go`：`staminaRules()` 返回 `StaminaRules{Max, HardCap, RegenMillis, RefillDailyLimit}`，缺省上限 100、硬顶 999、每 5 分钟恢复 1 点、每业务日能买 3 次补满；`staminaRefillPrice(nth)` 返回当日第 `nth` 次补满的金币价格，缺省 50、100、150。
+- **配置**：没有配置表。规则写在留给工程的 `game/components/stamina/rules.go`：`staminaRules()` 返回 `StaminaRules{Max, HardCap, RegenMillis, RefillDailyLimit}`，缺省上限 100、硬顶 999、每 5 分钟恢复 1 点、每业务日能买 3 次补满；`staminaRefillPrice(nth)` 返回当日第 `nth` 次补满的金币价格，缺省 50、100、150。
 - **错误码**（`internal/errors/stamina.go`）：`stamina_invalid`（点数不为正）、`stamina_short`（体力不够）、`stamina_full`（已满，不能买补满）、`stamina_refill_limit`（今天的购买次数用完）。补满时金币不够透出货币模块的 `wallet_short`。
 
 **日志**：付费补满确认，记录花费、次数、体力和余额；Spend 不记录。服务端 Grant 的实际截断数量仍由调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/stamina/stamina_refill.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -42,9 +42,9 @@
 
 - **需求正好是它**：`roost module add stamina`，连带装上 wallet、rules、enter。
 - **需求多一点**：
-  - 改数值、接配置表、让上限随等级成长：只改 `game/entities/player/stamina_rules.go` 里两个函数的函数体（文件头注释有接配置表与读 profile 等级的写法）。客户端要用同一份上限与恢复周期。
+  - 改数值、接配置表、让上限随等级成长：只改 `game/components/stamina/rules.go` 里两个函数的函数体（文件头注释有接配置表与读 profile 等级的写法）。客户端要用同一份上限与恢复周期。
   - 消耗体力时顺带做事（任务计数等）：在自己的文件里 `init` 登记 `OnStaminaSpent`。
-  - 不要改 `stamina_component.go` 里的 `staminaSettle` 与 `write`：客户端推算公式与它是同一份；也不要改 `StaminaState` 的 store 键与错误码码值。
+  - 不要改 `game/components/stamina/stamina.go` 里的 `staminaSettle` 与 `write`：客户端推算公式与它是同一份；也不要改 `StaminaState` 的 store 键与错误码码值。
 - **别的功能要扣 / 发体力**：
   - 在这名玩家的 handler 里：目标接口嵌入 `player.IStaminaEntity`，先做完自己的检查，再 `_, err := target.StaminaComp().Spend(cost, nowUnixMilli)`，再写自己的状态；任何一步返回错误整笔回滚。
   - 发体力且有“发过没有”的事实要记（邮件附件、订单、任务奖励）：在自己的 handler 里先判自己的状态，再调 `target.StaminaComp().Grant(n, nowUnixMilli)`，并处理 `Granted` 小于 `n` 的情况。

@@ -1,6 +1,9 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import (
+	player "{{MODULE}}/game/entities/player"
+	gamestamina "{{MODULE}}/game/components/stamina"
+)
 
 // handlerStaminaGrant 是服务端发放体力（奖励、GM、别的服务触发），不对客户端开放：没有协议与端点，
 // 由服务端代码经生成的 Sender 调用。返回实际加上的点数与发放后的体力；超出硬顶的部分被截掉
@@ -11,6 +14,6 @@ import player "{{MODULE}}/game/entities/player"
 // 事实与体力在同一笔事务里提交或回滚。
 //
 //roost:nest rollback=undo durability=strict
-func handlerStaminaGrant(target player.IStaminaEntity, amount int64, nowUnixMilli int64) (player.StaminaGrantResult, error) {
+func handlerStaminaGrant(target player.IStaminaEntity, amount int64, nowUnixMilli int64) (gamestamina.StaminaGrantResult, error) {
 	return target.StaminaComp().Grant(amount, nowUnixMilli)
 }

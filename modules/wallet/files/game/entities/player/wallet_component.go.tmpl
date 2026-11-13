@@ -42,6 +42,6 @@ func (e *Player) WalletLedger() *db.WalletLedger { return e.Dao().GetWalletLedge
 
 // WalletSpent 在扣款首次生效时执行 OnWalletSpent 登记的钩子（同一笔事务，失败整笔回滚）。
 func (e *Player) WalletSpent(amount, nowUnixMilli int64) error {
-	return runWalletSpent(e, amount, nowUnixMilli)
+	return wallet.RunWalletSpent(e, amount, nowUnixMilli)
 }
 

@@ -16,7 +16,7 @@ component: Stamina
 protocols: [StaminaRefill, StaminaRules]
 errcodes: [stamina_invalid, stamina_short, stamina_full, stamina_refill_limit]
 verify:
-  packages: [./game/handler, ./game/entities/player]
+  packages: [./game/handler, ./game/components/stamina]
   run: ^TestStamina
   pass: 25
 with:

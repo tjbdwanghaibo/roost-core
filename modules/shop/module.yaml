@@ -21,7 +21,7 @@ component: Shop
 protocols: [ShopBuy, ShopRules]
 errcodes: [shop_key_invalid, shop_key_conflict, shop_count_invalid, shop_goods_invalid, shop_overflow, shop_limit]
 verify:
-  packages: [./game/handler, ./game/entities/player]
+  packages: [./game/handler, ./game/components/shop]
   run: ^TestShop
   pass: 20
 with:

@@ -1,94 +1,22 @@
 package player
 
 import (
-	"fmt"
-	"math"
-
-	logic "{{MODULE}}/game/dungeon"
-	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/game/components/dungeon"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 //roost:component type={{ID:component:Dungeon}}
 const CompTypeDungeon entity.ComponentType = {{ID:component:Dungeon}}
 
-type DungeonComponent struct {
-	entity.ComponentBase
-	owner *Player
-}
+// DungeonComponent 是 game/components/dungeon 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type DungeonComponent = dungeon.Component
+
 type IDungeonRewardEntity interface {
 	entity.IThreadSafeEntity
 	DungeonComp() *DungeonComponent
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeDungeon, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		p, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("dungeon: owner %T is not Player", owner)
-		}
-		return &DungeonComponent{owner: p}, nil
-	})
-}
-func (*DungeonComponent) Name() string              { return "dungeon" }
-func (component *DungeonComponent) PlayerID() int64 { return component.owner.UniqueID() }
-func (component *DungeonComponent) Counts(season int64) logic.ClaimResult {
-	state := component.owner.Dao().GetDungeon()
-	clears, _ := state.GetClears(season)
-	return logic.ClaimResult{Season: season, Clears: clears, TotalClears: state.GetTotalClears()}
-}
-
-// Claim 在同一笔事务里记账、发经验、计数；拒绝与重复不写。只清理窗关闭再过10分钟的旧记录。
-// 数量上限不淘汰有效事实；8个赛季满额后拒绝第9季首次发奖，运营需制定归档规则后显式迁移。
-func (component *DungeonComponent) Claim(runID, season, amount, resolvedAt, now int64) (logic.ClaimResult, error) {
-	if runID <= 0 || season <= 0 || amount <= 0 {
-		return logic.ClaimResult{}, apperrors.ErrDungeonInvalid
-	}
-	if logic.ClaimWindowClosed(resolvedAt, now) {
-		return logic.ClaimResult{}, apperrors.ErrDungeonWindow
-	}
-	state := component.owner.Dao().GetDungeon()
-	if _, ok := state.GetClaims(runID); ok {
-		return component.Counts(season), nil
-	}
-	stale := []int64{}
-	state.RangeClaims(func(id, at int64) bool {
-		if logic.LedgerMayForget(at, now) {
-			stale = append(stale, id)
-		}
-		return true
-	})
-	if state.ClaimsLen()-len(stale) >= logic.MaxClaims {
-		return logic.ClaimResult{}, apperrors.ErrDungeonFull
-	}
-	clears, exists := state.GetClears(season)
-	if !exists && state.ClearsLen() >= logic.MaxSeasons {
-		return logic.ClaimResult{}, apperrors.ErrDungeonFull
-	}
-	if clears == math.MaxInt64 || state.GetTotalClears() == math.MaxInt64 {
-		return logic.ClaimResult{}, apperrors.ErrDungeonFull
-	}
-	if err := component.owner.ProfileComp().CheckAddExp(amount); err != nil {
-		return logic.ClaimResult{}, err
-	}
-	for _, id := range stale {
-		state.DelClaimsKey(id)
-	}
-	state.SetClaimsKey(runID, resolvedAt)
-	gained, err := component.owner.ProfileComp().AddExp(amount)
-	if err != nil {
-		return logic.ClaimResult{}, err
-	}
-	state.SetClearsKey(season, clears+1)
-	state.SetTotalClears(state.GetTotalClears() + 1)
-	result := component.Counts(season)
-	result.Claimed = true
-	result.ExpGranted = amount
-	result.LevelsGained = gained
-	if err := runDungeonClaimed(component.owner, runID, season, fctx.NowMilli()); err != nil {
-		return logic.ClaimResult{}, err
-	}
-	return result, nil
+	entity.RegisterComponentFactory(CompTypeDungeon, dungeon.NewComponent)
 }

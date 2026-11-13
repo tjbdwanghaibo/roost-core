@@ -1,0 +1,171 @@
+package profile
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"math"
+	"strings"
+	"unicode/utf8"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// Owner 是 Profile 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+// Component 是玩家档案（名字、等级、经验）的业务逻辑。它不保存事务会改的状态：
+// 名字与等级在 PlayerDao.Profile 里（别的玩家也可以看的那一半），经验在 PlayerDao.ProfilePrivate 里
+// （只给本人的那一半），都经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/profile_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("profile component: owner %T does not implement profile.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+// Name 是框架要的组件名，不是玩家的名字；玩家的名字见 DisplayName。
+func (component *Component) Name() string { return "profile" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *Component) Owner() Owner { return component.owner }
+
+// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+// ProfileNameMaxRunes 是名字的长度上限，按字符（rune）数而不是字节数：一个汉字算一个。
+const ProfileNameMaxRunes = 16
+
+// ProfileExpPerLevel 是每升一级需要的经验。曲线是平的：每一级都要这么多。
+// 要换成按等级查表的曲线时改 planExp，并保持“不按升级数逐级循环”（见那里的说明）。
+const ProfileExpPerLevel int64 = 100
+
+// NormalizeProfileName 只校验并返回去掉首尾空白的名字，不写实体，也不执行 I/O。
+// 拒绝且不写任何字段的情况：不是合法 UTF-8（profile_name_invalid）、去掉首尾空白后为空
+// （profile_name_empty）、去掉首尾空白后超过 ProfileNameMaxRunes 个字符（profile_name_long）。
+//
+// 编码要单独查：数字符时一个坏字节算一个字符，不查的话 16 个以内的坏字节序列会通过另外两条检查存进档里，
+// 之后同步给客户端的就是一段解不出来的名字。
+// 全服唯一性由 naming 正式入口保证；敏感词、次数与花费仍是工程自己的受理规则。
+func NormalizeProfileName(name string) (string, error) {
+	if !utf8.ValidString(name) {
+		return "", apperrors.ErrProfileNameInvalid
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", apperrors.ErrProfileNameEmpty
+	}
+	if utf8.RuneCountInString(name) > ProfileNameMaxRunes {
+		return "", apperrors.ErrProfileNameLong
+	}
+	return name, nil
+}
+
+// Rename 是可信 Nest 事务内的字段原语。装有 naming 时，业务改名必须调用 naming 协调器；
+// 它只在目录 Commit 成功后调用这里，直接改 DAO 或直接调用本方法均不属于唯一命名入口。
+func (component *Component) Rename(name string) (string, error) {
+	name, err := NormalizeProfileName(name)
+	if err != nil {
+		return "", err
+	}
+	component.owner.Dao().GetProfile().SetName(name)
+	return name, nil
+}
+
+// CheckAddExp 只检查不执行：AddExp(amount) 会不会被接受，不写任何字段。被拒绝时返回的业务码与 AddExp 相同。
+//
+// 给在同一笔事务里还要写别的字段或别的实体的 handler 用：先把每一方都问一遍，都通过了再开始写。
+// 这样超出范围的发放在任何写入之前被拒绝，不用写完再靠回滚撤回——调用方吞掉错误继续提交时也不会留下半截状态。
+// 它只回答经验与等级放不放得下；升级钩子（onLevelUp）会不会失败不在这里预演。
+func (component *Component) CheckAddExp(amount int64) error {
+	_, _, err := component.planExp(amount)
+	return err
+}
+
+// planExp 只读地算出发放 amount 之后的等级内经验与升级数，不写任何字段。
+//
+// 经验是 int64、等级是 int32：先确认加法不溢出、升级后的等级仍在 int32 内，再按平的曲线除余。
+// 不按升级数逐级循环：一次大额发放若逐级减，会按数额大小占住业务 worker。
+// 已存的经验或等级为负说明存档已坏，一并拒绝，不在坏值上继续累加。
+func (component *Component) planExp(amount int64) (exp int64, gained int32, err error) {
+	if amount <= 0 {
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpInvalid, nil, "amount", amount)
+	}
+	dao := component.owner.Dao()
+	currentExp, currentLevel := dao.GetProfilePrivate().GetExp(), dao.GetProfile().GetLevel()
+	// 拒绝时带上数额与当时的经验、等级：业务码回给调用方，这三个数留给日志，排查“为什么这次发放被拒”不用再去读档。
+	if currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
+	}
+	total := currentExp + amount
+	levels := total / ProfileExpPerLevel
+	if levels > int64(math.MaxInt32)-int64(currentLevel) {
+		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
+	}
+	return total % ProfileExpPerLevel, int32(levels), nil
+}
+
+// AddExp 发放 amount 点经验，够升级就升（一次可以升多级），返回升了几级。
+// 数额不是正数（profile_exp_invalid）、经验或等级超出存储范围（profile_exp_overflow）时不写任何字段。
+//
+// 升了级就调一次 onLevelUp（levelup.go，归工程所有，升级奖励写在那里）。它与经验、等级在
+// 同一笔事务里：它返回错误时这里原样返回，handler 以错误结束，Nest 把已经写下的经验和等级一起撤回。
+// 所以调用方拿到错误后不要吞掉继续提交——那样等级升了、奖励没发。
+//
+// 这个方法不判重：同一次发放调两次就加两次。“这一局、这个任务发过没有”由调用方记在自己的状态里，
+// 先判重再调它，事实与经验在同一笔事务里提交或回滚。
+func (component *Component) AddExp(amount int64) (int32, error) {
+	exp, gained, err := component.planExp(amount)
+	if err != nil {
+		return 0, err
+	}
+	dao := component.owner.Dao()
+	dao.GetProfilePrivate().SetExp(exp)
+	if gained == 0 {
+		// 没升级的发放只动 ProfilePrivate：别的玩家的视图里没有它，不会为这次发放收到一条增量。
+		return 0, nil
+	}
+	profile := dao.GetProfile()
+	from := profile.GetLevel()
+	profile.SetLevel(from + gained)
+	if err := component.onLevelUp(from, from+gained); err != nil {
+		return 0, err
+	}
+	// 工程钩子先执行，再按登记名执行模块钩子；任一个失败都交给同一笔 Nest 事务回滚。
+	if err := runProfileLevelUp(component.owner, from, from+gained); err != nil {
+		return 0, err
+	}
+	return gained, nil
+}
+
+// ProfileCard 是档案里别的玩家也可以看的那一半的一份拷贝：名字与等级。它是值，离开实体锁之后可以继续用。
+type ProfileCard struct {
+	Name  string
+	Level int32
+}
+
+// Card 读出名片。服务端别的功能要按玩家号读别人的名字或等级（匹配按等级计分、榜单与好友列表显示名字）时，
+// 经 handler ProfileCard（game/handler/profile_card.go）在那名玩家的锁内调它。
+func (component *Component) Card() ProfileCard {
+	profile := component.owner.Dao().GetProfile()
+	return ProfileCard{Name: profile.GetName(), Level: profile.GetLevel()}
+}
+
+// DisplayName、Level、Exp 给已经持有实体锁的调用方读当前值。
+func (component *Component) DisplayName() string {
+	return component.owner.Dao().GetProfile().GetName()
+}
+func (component *Component) Level() int32 {
+	return component.owner.Dao().GetProfile().GetLevel()
+}
+func (component *Component) Exp() int64 {
+	return component.owner.Dao().GetProfilePrivate().GetExp()
+}

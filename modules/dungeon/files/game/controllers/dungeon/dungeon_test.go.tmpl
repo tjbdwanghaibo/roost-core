@@ -672,7 +672,7 @@ func TestDungeonMutationsDetectDuplicateAndWindowRegression(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []struct{ path, before, after, test, marker string }{
-		{"entities/player/dungeon_component.go", "if _, ok := state.GetClaims(runID); ok {", "if _, ok := state.GetClaims(runID); ok && false {", "TestDungeonClaimDuplicateGrantsExactlyOnce", "duplicate reward escaped"},
+		{"components/dungeon/dungeon.go", "if _, ok := state.GetClaims(runID); ok {", "if _, ok := state.GetClaims(runID); ok && false {", "TestDungeonClaimDuplicateGrantsExactlyOnce", "duplicate reward escaped"},
 		{"dungeon/rules.go", "return now-resolvedAt > ClaimWindowSeconds", "return now-resolvedAt > ClaimWindowSeconds+1", "TestDungeonClaimWindowUsesFrozenAuthorityAndInclusiveBoundary", "expired claim accepted"},
 	}
 	for _, c := range cases {

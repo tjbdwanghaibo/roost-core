@@ -1,8 +1,0 @@
-package player
-
-// 业务登记的 Eligible 在已更新等级的同一 Player 事务里读取真值；不是传一个客户端等级。
-func init() {
-	OnProfileLevelUp("activity", func(c *ProfileComponent, from, to int32) error {
-		return c.Owner().ActivityComp().Reconcile("profile.level_up", 0)
-	})
-}

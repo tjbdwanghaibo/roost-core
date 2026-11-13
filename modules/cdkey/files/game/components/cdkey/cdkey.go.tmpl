@@ -1,0 +1,98 @@
+package cdkey
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	generated "{{MODULE}}/configs/generated"
+	db "{{MODULE}}/db"
+	gamecdkey "{{MODULE}}/game/cdkey"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// Owner 是 Cdkey 组件的宿主（Player 的接线见 game/entities/player/cdkey_component.go）：只列组件用得到的
+// DAO 与别的组件（view 的小接口）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+// Component 只在 Nest 持有 Player 锁时访问账本，所有事务状态都交给 DAO 管理。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/cdkey_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("cdkey component: owner %T does not implement cdkey.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (*Component) Name() string { return "cdkey" }
+
+func cdkeyIntent(code string, receipt *db.CdkeyReceipt) gamecdkey.Intent {
+	return gamecdkey.Intent{
+		Code: code, Mode: receipt.GetMode(), Coins: receipt.GetCoins(),
+		Subject: receipt.GetSubject(), Body: receipt.GetBody(),
+		ExpiresInSeconds: receipt.GetExpiresInSeconds(), MailID: receipt.GetMailID(),
+	}
+}
+
+// Prepare 在严格持久事务里先记意图，再允许外部占码/发件。重复先读原事实，配置下架或满额也不妨碍恢复，零写入。
+// 账本不按最近N条淘汰；否则永久兑换码会再次变成新请求。待恢复意图也占一个槽位。
+func (component *Component) Prepare(raw string, nowUnixMilli int64) (gamecdkey.Intent, error) {
+	code, ok := gamecdkey.Normalize(raw)
+	if !ok {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
+	}
+	ledger := component.owner.Dao().GetCdkey()
+	if old, exists := ledger.GetReceipts(code); exists {
+		return cdkeyIntent(code, old), nil
+	}
+	if ledger.ReceiptsLen() >= gamecdkey.MaxReceipts {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyFull
+	}
+	row, ok := generated.CdkeyByCode(code)
+	now := nowUnixMilli / 1000
+	if !ok || (row.Mode != "player" && row.Mode != "once") || row.Coins <= 0 {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
+	}
+	if strings.TrimSpace(row.Subject) == "" || len(row.Subject) > 128 || len(row.Body) > 4096 ||
+		row.ExpiresInSeconds <= 0 || row.ExpiresInSeconds > 365*24*60*60 {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
+	}
+	if row.StartsAtUnix < 0 || row.EndsAtUnix < 0 ||
+		(row.EndsAtUnix != 0 && row.EndsAtUnix <= row.StartsAtUnix) ||
+		now < row.StartsAtUnix || (row.EndsAtUnix != 0 && now >= row.EndsAtUnix) {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
+	}
+	receipt := &db.CdkeyReceipt{}
+	receipt.SetMode(row.Mode)
+	receipt.SetCoins(row.Coins)
+	receipt.SetSubject(row.Subject)
+	receipt.SetBody(row.Body)
+	receipt.SetExpiresInSeconds(row.ExpiresInSeconds)
+	ledger.SetReceiptsKey(code, receipt)
+	return cdkeyIntent(code, receipt), nil
+}
+
+// Complete 只接受已受理的码；mailID 来自 mail 服务，客户端不能提交它。重复确认不再写。
+func (component *Component) Complete(code, mailID string) (gamecdkey.Intent, error) {
+	receipt, ok := component.owner.Dao().GetCdkey().GetReceipts(code)
+	if !ok || mailID == "" {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
+	}
+	if old := receipt.GetMailID(); old != "" {
+		if old != mailID {
+			return gamecdkey.Intent{}, fmt.Errorf("cdkey: mail id changed for %s", code)
+		}
+		return cdkeyIntent(code, receipt), nil
+	}
+	receipt.SetMailID(mailID)
+	return cdkeyIntent(code, receipt), nil
+}

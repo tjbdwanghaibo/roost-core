@@ -20,7 +20,7 @@
   - `ForLevel(level)` 是缺省基础值：`HP = 100 + level*10`，`Attack = 10 + level*2`。
   - `(*Combat).LevelUp(levels)`：每级 `HP +10`、`Attack +2`。
 - **登记点 / 钩子**
-  - `OnAttributeGear(name string, hook AttributeGearHook)`（`game/entities/player/attribute_gear.go`，Player 经可选的 `CollectAttributeGear()` 把它们交给组件）：登记一个装备层来源。钩子签名 `func(*Player) (*gameattr.Combat, error)`，在 `Refresh` 里、持有 `Player` 锁时调用，只能读同一个 `Player`。多个来源按名字排序后把 `HP`、`Attack` 相加。返回错误会让这次刷新以及所在事务失败。只在 `init` 登记；重名、空名、`nil` 直接 panic。
+  - `OnAttributeGear(name string, hook AttributeGearHook)`（`game/components/attribute/gear.go`，Player 经可选的 `CollectAttributeGear()` 把它们交给组件）：登记一个装备层来源。钩子签名 `func(view.PlayerEntity) (*gameattr.Combat, error)`，在 `Refresh` 里、持有 `Player` 锁时调用，只能读同一个 `Player`。多个来源按名字排序后把 `HP`、`Attack` 相加。返回错误会让这次刷新以及所在事务失败。只在 `init` 登记；重名、空名、`nil` 直接 panic。
   - 本模块自己接在 `profile` 模块的登记点上：`OnProfileLevelUp("attribute", …)`，升级时调 `LevelUp(to - from)`，与经验、等级在同一笔事务里。
 - **状态**（都在 `PlayerDao` 上，类型 `AttributeValues`，`db/def/attribute.go`，内容是“属性号 → 值”的 map，值为 0 的属性不存）
   - `AttributeBase`：`persist,sync`，基础属性，落库并下发给本人。没有记录时按档案等级用 `ForLevel` 派生。
@@ -51,7 +51,7 @@
 - **需求正好是它**：`roost module add attribute`，连带安装 `profile`。
 - **需求比它多一点**
   - 改成长数值、缺省值或战力公式：改 `game/gameplay/attribute/combat.go`（`ForLevel`、`LevelUp`、`_Power`）。
-  - 加属性（防御、暴击等）：在 `Combat` 结构里加带 `attr` 标签的字段，`roost generate`；`game/components/attribute/attribute.go` 的 `refresh` 与 `attribute_gear.go` 的 `attributeGear` 里目前只合并 `HP` 与 `Attack`，新属性要在这两处补上合并与溢出检查，协议 `AttributeGet` 的应答也要加字段。
+  - 加属性（防御、暴击等）：在 `Combat` 结构里加带 `attr` 标签的字段，`roost generate`；`game/components/attribute/attribute.go` 的 `refresh` 与 `game/components/attribute/gear.go` 的 `attributeGear` 里目前只合并 `HP` 与 `Attack`，新属性要在这两处补上合并与溢出检查，协议 `AttributeGet` 的应答也要加字段。
   - 加一个属性来源（坐骑、称号、公会科技）：在自己的包的 `init` 里调 `OnAttributeGear("<来源名>", 钩子)`，并在来源变化的事务里调 `AttributeComp().RefreshGear()`。不要直接写 `AttributeGear` 或 `AttributeFinal` 字段。
 - **别的模块 / 业务代码要用它**
   - 取玩家当前属性做计算：在持有 `Player` 锁的 handler 里 `p, ok := target.AttributeComp().Final()`，拿到的是副本。
@@ -65,8 +65,8 @@
 
 ## 联动
 
-- `attribute` + `equipment`（`with/equipment/game/entities/player/attribute_equipment.go`）：登记 `OnAttributeGear("equipment", …)`，按已穿戴装备与等级算装备层；并登记 `OnEquipmentChanged("attribute", …)`，穿卸装备的同一笔事务里调 `RefreshGear()`。装备规则已被移除的穿戴物不再提供属性。
-- `attribute` + `enter`（`with/enter/game/entities/player/attribute_enter.go`）：登记 `OnFirstEnter("profile.attribute", …)`，首次建档时调 `Refresh()`，按初始等级建立基础层与最终层，与建档一起提交或回滚。
+- `attribute` + `equipment`（`with/equipment/game/components/attribute/attribute_equipment.go`）：登记 `OnAttributeGear("equipment", …)`，按已穿戴装备与等级算装备层；并登记 `OnEquipmentChanged("attribute", …)`，穿卸装备的同一笔事务里调 `RefreshGear()`。装备规则已被移除的穿戴物不再提供属性。
+- `attribute` + `enter`（`with/enter/game/login/attribute_enter.go`）：登记 `OnFirstEnter("profile.attribute", …)`，首次建档时调 `Refresh()`，按初始等级建立基础层与最终层，与建档一起提交或回滚。
 - `scene` + `attribute`（在 `scene/with/attribute`）：把 `AttributeFinal` 登记为对附近玩家公开的字段，基础层与装备层仍只有本人（或无人）可见。
 - 以 `requires` 依赖它的模块：`combat`（开战时从 `Final()` 取最大生命与攻击）。
 

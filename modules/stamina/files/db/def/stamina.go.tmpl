@@ -13,7 +13,7 @@ package dbdef
 //	     当前体力 = min(上限, Value + n)
 //	     还没满时，距下一点还有 恢复周期 - (now - SettledAt) % 恢复周期 毫秒
 //
-// 上限与恢复周期是 game/entities/player/stamina_rules.go 里的规则，不在这份状态里：客户端要用同一份数。
+// 上限与恢复周期是 game/components/stamina/rules.go 里的规则，不在这份状态里：客户端要用同一份数。
 //
 // 从没有过体力写入的玩家是零值（Value 0、SettledAt 0），按公式就是满体力：新玩家不用初始化。
 type StaminaState struct {

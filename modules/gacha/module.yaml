@@ -15,6 +15,6 @@ component: Gacha
 protocols: [GachaDraw]
 errcodes: [gacha_key_invalid, gacha_key_conflict, gacha_count_invalid, gacha_pool_invalid, gacha_overflow, gacha_pool_limit]
 verify:
-  packages: [./game/handler, ./game/entities/player]
+  packages: [./game/handler, ./game/components/gacha]
   run: ^TestGacha
   pass: 29

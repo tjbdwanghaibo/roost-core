@@ -1,0 +1,72 @@
+package rules
+
+import (
+	"{{MODULE}}/game/view"
+	"errors"
+	"reflect"
+	"testing"
+
+	"{{MODULE}}/protocol/pb"
+)
+
+func rulesEmptyRegistry(t *testing.T) {
+	t.Helper()
+	playerRuleProviders.Lock()
+	saved := playerRuleProviders.entries
+	playerRuleProviders.entries = nil
+	playerRuleProviders.Unlock()
+	t.Cleanup(func() { playerRuleProviders.Lock(); playerRuleProviders.entries = saved; playerRuleProviders.Unlock() })
+}
+func TestRulesReadersAreOrderedAndSnapshotsOwnTheirBytes(t *testing.T) {
+	rulesEmptyRegistry(t)
+	owner := &fakeHost{}
+	empty, err := Snapshot(owner)
+	if err != nil || len(empty.Parts) != 0 {
+		t.Fatalf("empty rules=%v %v", empty, err)
+	}
+	data := []byte{1, 2}
+	RegisterPlayerRules("z", func(view.PlayerEntity) (*pb.RulePart, error) { return &pb.RulePart{MessageID: 32, Payload: data}, nil })
+	RegisterPlayerRules("a", func(view.PlayerEntity) (*pb.RulePart, error) { return &pb.RulePart{MessageID: 31, Payload: []byte{3}}, nil })
+	got, err := Snapshot(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[0] = 9
+	if len(got.Parts) != 2 || got.Parts[0].MessageID != 31 || got.Parts[1].MessageID != 32 || !reflect.DeepEqual(got.Parts[1].Payload, []byte{1, 2}) {
+		t.Fatalf("ordered owned snapshot=%v", got)
+	}
+}
+func TestRulesBadRegistrationsFailAtStartup(t *testing.T) {
+	rulesEmptyRegistry(t)
+	read := func(view.PlayerEntity) (*pb.RulePart, error) { return &pb.RulePart{MessageID: 1}, nil }
+	RegisterPlayerRules("one", read)
+	for _, attempt := range []func(){func() { RegisterPlayerRules(" ", read) }, func() { RegisterPlayerRules("nil", nil) }, func() { RegisterPlayerRules("one", read) }} {
+		panicked := false
+		func() { defer func() { panicked = recover() != nil }(); attempt() }()
+		if !panicked {
+			t.Fatal("invalid rules registration accepted")
+		}
+	}
+}
+func TestRulesDuplicateMessageIDRejectsTheWholeSnapshot(t *testing.T) {
+	rulesEmptyRegistry(t)
+	read := func(view.PlayerEntity) (*pb.RulePart, error) { return &pb.RulePart{MessageID: 1}, nil }
+	RegisterPlayerRules("one", read)
+	RegisterPlayerRules("two", read)
+	got, err := Snapshot(&fakeHost{})
+	if err == nil || got != nil {
+		t.Fatalf("duplicate rules accepted: %v %v", got, err)
+	}
+}
+func TestRulesProviderErrorKeepsItsCause(t *testing.T) {
+	rulesEmptyRegistry(t)
+	refused := errors.New("invalid rules")
+	RegisterPlayerRules("fail", func(view.PlayerEntity) (*pb.RulePart, error) { return nil, refused })
+	got, err := Snapshot(&fakeHost{})
+	if got != nil || !errors.Is(err, refused) {
+		t.Fatalf("rules failure=%v %v", got, err)
+	}
+}
+
+// fakeHost 只占一个宿主的位置：这些规则读取函数不调用它的方法。
+type fakeHost struct{ view.PlayerEntity }

@@ -17,6 +17,7 @@ import (
 
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
+	gameprofile "{{MODULE}}/game/components/profile"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -442,18 +443,18 @@ const profileHookChildEnv = "PROFILE_TEST_LEVELUP_HOOK_FAILS"
 
 // profileFailingHook 是测试用的升级钩子：每次都返回错误，错误里带着收到的两个等级，以及它被调用时
 // 档里已经是几级、等级内经验是多少（钩子里读到的应当是升级之后的值）。
-const profileFailingHook = `package player
+const profileFailingHook = `package profile
 
 import "fmt"
 
-func (component *ProfileComponent) onLevelUp(from, to int32) error {
+func (component *Component) onLevelUp(from, to int32) error {
 	return fmt.Errorf("injected level-up failure %d->%d, saw level %d exp %d", from, to, component.Level(), component.Exp())
 }
 `
 
 // 升级钩子返回错误时，这一次发放写下的经验和等级都回滚，发经验的请求以钩子的错误结束。
 //
-// 钩子是业务文件里的一个普通方法（game/entities/player/profile_levelup.go），生产代码里没有给测试留
+// 钩子是业务文件里的一个普通方法（game/components/profile/levelup.go），生产代码里没有给测试留
 // 替换它的口子。所以这条用例用 go 的 -overlay 把那个文件换成一个总是返回错误的版本，重新编译本包的
 // 测试并只跑这一条：外层进程负责换文件和起子进程，子进程（带着 profileHookChildEnv）跑真正的场景。
 // 工程把钩子改成发奖励之后这条仍然成立：被换掉的是整个文件。钩子的签名改了，这里的替身要跟着改。
@@ -466,12 +467,12 @@ func TestProfileLevelUpHookErrorRollsBackLevelAndExp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hookFile := filepath.Join(filepath.Dir(packageDir), "entities", "player", "profile_levelup.go")
+	hookFile := filepath.Join(filepath.Dir(packageDir), "components", "profile", "levelup.go")
 	if _, err := os.Stat(hookFile); err != nil {
 		t.Fatalf("the level-up hook file is not where this test expects it: %v", err)
 	}
 	scratch := t.TempDir()
-	replacement := filepath.Join(scratch, "profile_levelup.go")
+	replacement := filepath.Join(scratch, "levelup.go")
 	if err := os.WriteFile(replacement, []byte(profileFailingHook), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +605,7 @@ func TestProfileCheckAddExpAnswersLikeAddExpAndWritesNothing(t *testing.T) {
 func TestProfileCardCarriesNameAndLevel(t *testing.T) {
 	f := newProfileFixture(t)
 	card, err := f.cards.Sync_ProfileCard(context.Background(), f.player.ID())
-	if err != nil || card != (playerentity.ProfileCard{}) {
+	if err != nil || card != (gameprofile.ProfileCard{}) {
 		t.Fatalf("an uninitialized DAO's card = %+v err=%v, want no name and level 0", card, err)
 	}
 	if _, err := f.rename(" Alice "); err != nil {
@@ -613,7 +614,7 @@ func TestProfileCardCarriesNameAndLevel(t *testing.T) {
 	f.mustAddExp(t, 275, 2)
 	before := f.facts(t)
 	card, err = f.cards.Sync_ProfileCard(context.Background(), f.player.ID())
-	if err != nil || card != (playerentity.ProfileCard{Name: "Alice", Level: 2}) {
+	if err != nil || card != (gameprofile.ProfileCard{Name: "Alice", Level: 2}) {
 		t.Fatalf("card = %+v err=%v, want Alice at level 2", card, err)
 	}
 	if after := f.facts(t); after != before {

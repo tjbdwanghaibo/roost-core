@@ -1,0 +1,206 @@
+package team
+
+import (
+	"{{MODULE}}/game/view"
+	"cmp"
+	"fmt"
+	"slices"
+	"sort"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/db"
+	apperrors "{{MODULE}}/internal/errors"
+	team "{{MODULE}}/game/entities/team"
+)
+
+// Owner 是 Team 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/team_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("team component: owner %T does not implement team.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string  { return "team" }
+func (c *Component) TeamID() int64 { return c.owner.Dao().GetTeam().GetTeamID() }
+
+// OnTeamJoining 登记事务内准入检查；只在初始化时注册，回调不得 I/O。rehome 等模块在这里挡住新入队。
+var teamChecks = struct {
+	sync.RWMutex
+	hooks map[string]func(view.PlayerEntity) error
+}{hooks: map[string]func(view.PlayerEntity) error{}}
+
+func OnTeamJoining(name string, check func(view.PlayerEntity) error) {
+	if name == "" || check == nil {
+		panic("team: joining check needs name and function")
+	}
+	teamChecks.Lock()
+	defer teamChecks.Unlock()
+	if teamChecks.hooks[name] != nil {
+		panic("team: duplicate joining check " + name)
+	}
+	teamChecks.hooks[name] = check
+}
+func (c *Component) checkJoin(id int64) error {
+	if current := c.TeamID(); current != 0 && current != id {
+		return apperrors.ErrTeamExists
+	}
+	teamChecks.RLock()
+	names := make([]string, 0, len(teamChecks.hooks))
+	for name := range teamChecks.hooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	checks := make([]func(view.PlayerEntity) error, 0, len(names))
+	for _, name := range names {
+		checks = append(checks, teamChecks.hooks[name])
+	}
+	teamChecks.RUnlock()
+	for _, check := range checks {
+		if err := check(c.owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Create / Accept 同时修改 Team 与 Player，调用者必须声明两者；提交失败由 DAO 一起回滚。
+func (c *Component) Create(target *team.Team, sid int32) (team.Snapshot, error) {
+	if err := c.checkJoin(target.ID()); err != nil {
+		return team.Snapshot{}, err
+	}
+	before := target.Info()
+	self := entity.GetUniqueIDFromEntityID(c.owner.ID())
+	if c.TeamID() == target.ID() && target.IsMember(self) {
+		return before, c.changed(before, before, true)
+	}
+	if err := target.Found(self, sid); err != nil {
+		return team.Snapshot{}, err
+	}
+	c.owner.Dao().GetTeam().SetTeamID(target.ID())
+	after := target.Info()
+	return after, c.changed(before, after, false)
+}
+func (c *Component) Accept(target *team.Team, sid int32, now int64) (team.Snapshot, error) {
+	if err := c.checkJoin(target.ID()); err != nil {
+		return team.Snapshot{}, err
+	}
+	before := target.Info()
+	if err := target.Accept(entity.GetUniqueIDFromEntityID(c.owner.ID()), sid, now); err != nil {
+		return team.Snapshot{}, err
+	}
+	c.owner.Dao().GetTeam().SetTeamID(target.ID())
+	// 这份邀请已经用掉，收件记录随入队一起清。没有记录时不动：重复接受仍是零写入。
+	if _, noted := c.owner.Dao().GetTeam().GetInvited(target.ID()); noted {
+		c.owner.Dao().GetTeam().DelInvitedKey(target.ID())
+	}
+	after := target.Info()
+	return after, c.changed(before, after, false)
+}
+
+// Invite 由队长发出邀请；返回的 Invitation 带着被邀请人与过期时刻，端点据此在提交之后告知被邀请人。
+func (c *Component) Invite(target *team.Team, invitee, now int64) (team.Invitation, error) {
+	if c.TeamID() != target.ID() {
+		return team.Invitation{}, apperrors.ErrTeamMissing
+	}
+	if err := target.Invite(entity.GetUniqueIDFromEntityID(c.owner.ID()), invitee, now); err != nil {
+		return team.Invitation{}, err
+	}
+	return team.Invitation{Snapshot: target.Info(), Invitee: invitee, ExpireAt: target.InviteExpiry(invitee)}, nil
+}
+
+// TeamInvitation 是被邀请人看到的一份邀请：哪支队伍（完整实体号，TeamAccept 要的就是它）、谁邀请的、什么时候过期。
+type TeamInvitation struct {
+	TeamID   int64
+	Inviter  int64
+	ExpireAt int64
+}
+
+// NoteInvite 把一份收到的邀请记进本人的收件记录，只锁本人。它只是给本人查询用的提示：邀请成立与否看 Team 上的权威记录，
+// 所以这里不查队伍。先清掉已过期的记录；同一支队伍的新邀请覆盖旧的；记满（team.MaxInvites 条）时不记，返回 false。
+// 已经过期的邀请、不是队伍的实体号同样不记。
+func (c *Component) NoteInvite(teamID, inviter, expireAt, now int64) bool {
+	if !entity.MatchEntityID(teamID, team.EntityKindTeam) || inviter <= 0 || now >= expireAt {
+		return false
+	}
+	notes := c.owner.Dao().GetTeam()
+	var expired []int64
+	notes.RangeInvited(func(id int64, note *db.TeamInvite) bool {
+		if note == nil || now >= note.GetExpireAt() {
+			expired = append(expired, id)
+		}
+		return true
+	})
+	for _, id := range expired {
+		notes.DelInvitedKey(id)
+	}
+	if previous, ok := notes.GetInvited(teamID); ok && previous != nil && previous.GetExpireAt() >= expireAt {
+		return true
+	}
+	if _, renewed := notes.GetInvited(teamID); !renewed && notes.InvitedLen() >= team.MaxInvites {
+		return false
+	}
+	note := &db.TeamInvite{}
+	note.SetInviter(inviter)
+	note.SetExpireAt(expireAt)
+	notes.SetInvitedKey(teamID, note)
+	return true
+}
+
+// Invites 列出本人收到的、此刻还没过期的邀请，按队伍号升序；恰好到期那一刻就算过期，与队伍一侧的判断相同。只读。
+func (c *Component) Invites(now int64) []TeamInvitation {
+	var out []TeamInvitation
+	c.owner.Dao().GetTeam().RangeInvited(func(id int64, note *db.TeamInvite) bool {
+		if note != nil && now < note.GetExpireAt() {
+			out = append(out, TeamInvitation{TeamID: id, Inviter: note.GetInviter(), ExpireAt: note.GetExpireAt()})
+		}
+		return true
+	})
+	slices.SortFunc(out, func(a, b TeamInvitation) int { return cmp.Compare(a.TeamID, b.TeamID) })
+	return out
+}
+func (c *Component) Leave(target *team.Team, disband bool) error {
+	if c.TeamID() != target.ID() {
+		return apperrors.ErrTeamMissing
+	}
+	before := target.Info()
+	self := entity.GetUniqueIDFromEntityID(c.owner.ID())
+	// 解散后的成员引用惰性清除；不能重新加入或换服前跳过这次权威核对。
+	if !target.IsMember(self) {
+		c.owner.Dao().GetTeam().SetTeamID(0)
+		return c.changed(before, target.Info(), true)
+	}
+	var err error
+	if disband {
+		err = target.Disband(self)
+	} else {
+		err = target.Leave(self)
+	}
+	if err != nil {
+		return err
+	}
+	c.owner.Dao().GetTeam().SetTeamID(0)
+	return c.changed(before, target.Info(), false)
+}
+func (c *Component) Info(target *team.Team) (team.Snapshot, error) {
+	if c.TeamID() != target.ID() {
+		return team.Snapshot{}, apperrors.ErrTeamMissing
+	}
+	info := target.Info()
+	if !target.IsMember(entity.GetUniqueIDFromEntityID(c.owner.ID())) {
+		c.owner.Dao().GetTeam().SetTeamID(0)
+		return team.Snapshot{}, c.changed(info, info, true)
+	}
+	return info, c.changed(info, info, true)
+}

@@ -13,8 +13,8 @@
   - 窄实体接口 `IWalletEntity`：别的功能的 handler 把它嵌进自己的目标接口，就能在同一笔事务里调 `WalletComp()`。
   - Nest handler `handlerWalletGrant`（`game/handler/wallet_grant.go`）：服务端发放，不对客户端开放。不在这名玩家的事务里的调用方经生成的 Sender 调：`sender.NewWalletGrantSender(client).Sync_WalletGrant(ctx, playerEntityID, key, amount)`，`amount` 必须为正，内部走 `Apply`。
   - Nest handler `handlerWalletSpend`（`game/handler/wallet_spend.go`）：`WalletSpend` 协议对应的 handler，内部是 `Apply(request.Key, -request.Amount)`。
-- **登记点**（`game/entities/player/wallet_hooks.go`）
-  - `OnWalletSpent(name, hook)`，`hook` 的类型是 `WalletSpentHook func(owner *Player, amount, nowUnixMilli int64) error`。每一次成功的扣款（`Add` 的负数、`Apply` 第一次生效的负数）执行一次，`amount` 是扣掉的正数；`Apply` 命中回执的重放不执行，发放不执行。
+- **登记点**（`game/components/wallet/hooks.go`）
+  - `OnWalletSpent(name, hook)`，`hook` 的类型是 `WalletSpentHook func(owner view.PlayerEntity, amount, nowUnixMilli int64) error`。每一次成功的扣款（`Add` 的负数、`Apply` 第一次生效的负数）执行一次，`amount` 是扣掉的正数；`Apply` 命中回执的重放不执行，发放不执行。
   - 钩子在 Player 锁内、与扣款同一笔 Nest 事务里执行，按名字排序依次调用，只能改同一个 Player，不能做 I/O。只在 `init` 里登记；空名、nil、重名直接 panic。
 - **状态**（`db/def/wallet.go`）
   - `PlayerDao.Wallet`（`WalletState{Coins}`）：落库并同步，玩家本人可见。

@@ -1,0 +1,15 @@
+package view
+
+import gameattr "{{MODULE}}/game/gameplay/attribute"
+
+// Attribute 是属性组件对 game/ 下其它包公开的方法（实现在 game/components/attribute，语义见那里）；只在宿主被 Nest 锁住期间调用。
+// gameattr 是工程生成的属性运行时（只有类型与计算，不依赖实体或组件包），view 可以引用。
+type Attribute interface {
+	Final() (*gameattr.Combat, bool)
+	Refresh() error
+	RefreshGear() error
+	LevelUp(levels int32) error
+}
+
+// AttributeHolder 是“带有属性”的小接口：只要属性的组件、钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
+type AttributeHolder interface{ Attribute() Attribute }

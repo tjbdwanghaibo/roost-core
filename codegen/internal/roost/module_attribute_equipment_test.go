@@ -24,7 +24,7 @@ func TestModuleAttributeEquipmentScenariosAndMutations(t *testing.T) {
 	if err := os.WriteFile(path, []byte(attributeEquipmentGeneratedScenarios), 0600); err != nil {
 		t.Fatal(err)
 	}
-	hookPath := filepath.Join(root, "game/entities/player/profile_levelup.go")
+	hookPath := filepath.Join(root, "game/components/profile/levelup.go")
 	hook, err := os.ReadFile(hookPath)
 	if err != nil {
 		t.Fatal(err)
@@ -39,17 +39,17 @@ func TestModuleAttributeEquipmentScenariosAndMutations(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	recipeMutationMustFail(t, root, "game/entities/player/profile_component.go",
-		"if err := runProfileLevelUp(component, from, from+gained); err != nil {", "if err := error(nil); err != nil {",
+	recipeMutationMustFail(t, root, "game/components/profile/profile.go",
+		"if err := runProfileLevelUp(component.owner, from, from+gained); err != nil {", "if err := error(nil); err != nil {",
 		"./game/handler", "TestAttributeLevelUpGrowsBaseAndFinal", "level attributes")
 	recipeMutationMustFail(t, root, "game/components/attribute/attribute.go",
 		"coreattr.AttrValue(base.Attack + gear.Attack)", "coreattr.AttrValue(base.Attack)",
 		"./game/handler", "TestWithAttributeEquipmentEquipRefreshesFinal", "gear final")
-	recipeMutationMustFail(t, root, "game/entities/player/equipment_component.go",
-		"c.owner.BagComp().Remove(itemID, 1)", "c.owner.BagComp().Remove(itemID, 2)",
+	recipeMutationMustFail(t, root, "game/components/equipment/equipment.go",
+		"c.owner.Bag().Remove(itemID, 1)", "c.owner.Bag().Remove(itemID, 2)",
 		"./game/handler", "TestEquipmentEquipConsumesOne", "equip result")
-	recipeMutationMustFail(t, root, "game/entities/player/equipment_component.go",
-		"c.owner.BagComp().Add(previous, 1)", "c.owner.BagComp().Add(previous, 2)",
+	recipeMutationMustFail(t, root, "game/components/equipment/equipment.go",
+		"c.owner.Bag().Add(previous, 1)", "c.owner.Bag().Add(previous, 2)",
 		"./game/handler", "TestEquipmentReplacementReturnsOldItem", "replacement")
 	roost("generate", "--check")
 	before = moduleProjectDigest(t, root)
@@ -83,9 +83,9 @@ func verifyAttributeEquipment(t *testing.T, root string, names []string, want ma
 	}
 }
 
-const attributeEquipmentOriginalHook = `package player
+const attributeEquipmentOriginalHook = `package profile
 import apperrors "example.com/studio/attributeequipment/internal/errors"
-func(c *ProfileComponent)onLevelUp(from,to int32)error{
+func(c *Component)onLevelUp(from,to int32)error{
  c.Owner().Dao().GetProfile().SetName("original")
  if from==1{return apperrors.ErrProfileNameEmpty}
  return nil
@@ -99,12 +99,13 @@ import(
  "sync/atomic"
  "testing"
  generated "example.com/studio/attributeequipment/configs/generated"
- player "example.com/studio/attributeequipment/game/entities/player"
+ gameprofile "example.com/studio/attributeequipment/game/components/profile"
+ "example.com/studio/attributeequipment/game/view"
  "github.com/tjbdwanghaibo/roost-core/framework/configdata"
 )
 var originalHookCalls atomic.Int64
-func init(){player.OnProfileLevelUp("aaa_original_test",func(c *player.ProfileComponent,from,to int32)error{
- if c.DisplayName()!="original"{return errors.New("named hook ran before original")}
+func init(){gameprofile.OnProfileLevelUp("aaa_original_test",func(host view.PlayerEntity,from,to int32)error{
+ if host.Profile().DisplayName()!="original"{return errors.New("named hook ran before original")}
  originalHookCalls.Add(1);return nil
 })}
 func TestGeneratedAttributeEquipmentDefaults(t *testing.T){

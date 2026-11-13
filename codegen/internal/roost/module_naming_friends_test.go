@@ -53,10 +53,10 @@ func TestModuleNamingFriendsInstallVerifyAndMutations(t *testing.T) {
 	}
 	// 先证明每个变异仍能编译，再要求对应业务断言失败；编译失败不算杀死变异。
 	mutations := []struct{ path, from, to, pkg, test string }{
-		{"game/entities/player/friends_component.go", "b.SetPeersKey(aid, true)", "// injected: omit the peer's friendship", "./game/handler", "TestFriendsAcceptWritesBothAndClearsCrossedApplications"},
+		{"game/components/friends/friends.go", "b.SetPeersKey(aid, true)", "// injected: omit the peer's friendship", "./game/handler", "TestFriendsAcceptWritesBothAndClearsCrossedApplications"},
 		{"game/controllers/naming/naming_rename.go", "t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 2, t.ClaimKey, t.ClaimToken)\n\t\tif err != nil {\n\t\t\treturn \"\", err", "t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 2, t.ClaimKey, t.ClaimToken)\n\t\tif err != nil {\n\t\t\t_ = c.names.Release(ctx, claim.Key, claim.Owner)\n\t\t\treturn \"\", err", "./game/controllers/naming", "TestNamingProfileReplyLostNeverReleasesCurrentName"},
 		{"game/handler/profile_rename.go", "}); ok {", "}); false && ok {", "./game/controllers/naming", "TestNamingOldSenderCannotBypassDirectory"},
-		{"game/entities/player/naming_component.go", `fmt.Sprintf("naming:%d:%d", c.owner.ID(), s.GetSeq())`, `fmt.Sprintf("naming:%d", c.owner.ID())`, "./game/controllers/naming", "TestNamingLateCleanupCannotDeleteReusedName"},
+		{"game/components/naming/naming.go", `fmt.Sprintf("naming:%d:%d", c.owner.ID(), s.GetSeq())`, `fmt.Sprintf("naming:%d", c.owner.ID())`, "./game/controllers/naming", "TestNamingLateCleanupCannotDeleteReusedName"},
 	}
 	for _, m := range mutations {
 		path := filepath.Join(root, m.path)

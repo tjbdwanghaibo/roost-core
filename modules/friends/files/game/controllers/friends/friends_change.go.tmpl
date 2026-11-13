@@ -12,6 +12,7 @@ import (
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
+	gamefriends "{{MODULE}}/game/components/friends"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 )
 
@@ -46,7 +47,7 @@ func (c *Controller) change(ctx *playeraccess.Context, req *pb.FriendsChangeRequ
 		return err
 	}
 	switch req.Action {
-	case player.FriendsReject, player.FriendsUnblock:
+	case gamefriends.FriendsReject, gamefriends.FriendsUnblock:
 		return syncsender.NewFriendsOwnSender(c.nestClient).Sync_FriendsOwn(ctx.Context(), actor, peer, req.Action)
 	}
 	// ActiveSessions 来自本进程的已认证 TCP 会话，不信任客户端声称的 sid。

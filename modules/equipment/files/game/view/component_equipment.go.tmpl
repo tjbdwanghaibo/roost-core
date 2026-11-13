@@ -1,0 +1,12 @@
+package view
+
+// Equipment 是 Equipment 组件对 game/ 下其它包公开的方法（实现在 game/components/equipment，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Equipment interface {
+	Worn(slot int32) (int64, int32, bool)
+	RangeWorn(fn func(int32, int64, int32) bool)
+	Equip(itemID int64, level int32) (slot int32, replaced int64, err error)
+	Unequip(slot int32) (itemID int64, found bool, err error)
+}
+
+// EquipmentHolder 是“带有 Equipment 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+type EquipmentHolder interface{ Equipment() Equipment }

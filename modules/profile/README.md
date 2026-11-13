@@ -12,19 +12,19 @@
 **服务端入口**
 
 - 发经验：handler `ProfileAddExp(amount)`（`game/handler/profile_add_exp.go`，`rollback=undo durability=strict`），事务之外用 `syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, playerEntityID, amount)`，返回这一次升了几级。没有协议与端点，不对客户端开放。
-- 读名片：handler `ProfileCard`（`game/handler/profile_card.go`，只读），用 `syncsender.NewProfileCardSender(client)` 按玩家的 Entity ID 调，返回 `player.ProfileCard{Name, Level}`。它是值，离开实体锁之后可以继续用。
+- 读名片：handler `ProfileCard`（`game/handler/profile_card.go`，只读），用 `syncsender.NewProfileCardSender(client)` 按玩家的 Entity ID 调，返回 `profile.ProfileCard{Name, Level}`。它是值，离开实体锁之后可以继续用。
 - 在自己的 Player handler 里直接用组件（目标接口嵌入 `player.IProfileEntity`）：
   - `ProfileComp().AddExp(amount) (gained int32, err error)`：发经验，够就升级。
   - `ProfileComp().CheckAddExp(amount) error`：只检查不执行，回答与 `AddExp` 相同的业务码，不写任何字段。多方写入的事务先用它把每一方问一遍。
   - `ProfileComp().Rename(name)`：事务内写名字的原语（做名字校验，不查重）。
   - `ProfileComp().Card()`、`DisplayName()`、`Level()`、`Exp()`：读当前值。
-- `player.NormalizeProfileName(name) (string, error)`：只做名字校验并返回去掉首尾空白的名字，不写实体。别的功能要按同一套规则校验名字时用它。
+- `profile.NormalizeProfileName(name) (string, error)`：只做名字校验并返回去掉首尾空白的名字，不写实体。别的功能要按同一套规则校验名字时用它。
 - 事务之外的改名入口：`profile.Rename(ctx, registry, playerID, name) (name string, handled bool, err error)`（`game/profile/rename.go`）。没有人登记改名器时 `handled` 为 false、什么都没做；装了 `naming` 时转给它。
 
 **登记点 / 钩子**
 
-- 工程钩子 `onLevelUp(from, to)`（`game/entities/player/profile_levelup.go`，**归工程所有**）：升级之后调一次，升级奖励写在这里。
-- 模块钩子 `player.OnProfileLevelUp(name, func(component *ProfileComponent, from, to int32) error)`（`profile_hooks.go`）：别的模块按名字登记，在工程钩子成功之后按名字顺序执行。
+- 工程钩子 `onLevelUp(from, to)`（`game/components/profile/levelup.go`，**归工程所有**）：升级之后调一次，升级奖励写在这里。
+- 模块钩子 `profile.OnProfileLevelUp(name, func(host view.PlayerEntity, from, to int32) error)`（`game/components/profile/hooks.go`）：别的模块按名字登记，在工程钩子成功之后按名字顺序执行。
 - 两种钩子都在发经验的那笔 Player 事务里：只能改同一个 Player，不能做外部 I/O；任何一个返回错误，经验、等级与全部钩子的写入一起回滚。一次发放连升多级也只调一次，参数是起止等级。
 - `profile.RegisterRenamer(fn)`（`game/profile/rename.go`）：登记事务之外的正式改名入口，全进程只能登记一个（`naming` 用它）。
 - 改名 handler 会看 `Player` 有没有 `CheckProfileRenameRequest() error` 方法，有就先问它（`naming` 用它拒绝本地改名）。
@@ -34,7 +34,7 @@
 - `PlayerDao.Profile`（`ProfileState{Name, Level}`）：别的玩家也可以看的那一半。给别的玩家做视图时，字段白名单里列它。
 - `PlayerDao.ProfilePrivate`（`ProfilePrivateState{Exp}`）：只给本人的那一半。`Exp` 是当前等级内的经验，不是累计经验。
 
-**配置**：没有配置表与配置键。规则是代码常量（`game/entities/player/profile_component.go`）：`ProfileNameMaxRunes = 16`、`ProfileExpPerLevel = 100`。
+**配置**：没有配置表与配置键。规则是代码常量（`game/components/profile/profile.go`）：`ProfileNameMaxRunes = 16`、`ProfileExpPerLevel = 100`。
 
 **错误码**（`internal/errors/profile.go`）：`profile_name_empty`（去掉首尾空白后为空）、`profile_name_long`（超过 16 个字符）、`profile_name_invalid`（不是合法 UTF-8）、`profile_exp_invalid`（数额不是正数）、`profile_exp_overflow`（经验或等级超出存储范围，或存档里的值已坏）。
 
@@ -56,11 +56,11 @@
 
 - **需求正好是它**：`roost module add profile`，连带装上 `enter`。
 - **需求多一点**：
-  - 升级奖励：改 `game/entities/player/profile_levelup.go` 的 `onLevelUp`（例如装了 wallet 时 `component.owner.WalletComp().Add(int64(to-from) * 50)`）。
-  - 换经验曲线、加等级上限：改 `profile_component.go` 的 `planExp`，保持“不按升级数逐级循环”。
+  - 升级奖励：改 `game/components/profile/levelup.go` 的 `onLevelUp`（例如装了 wallet 时 `component.owner.Wallet().Add(int64(to-from) * 50)`）。
+  - 换经验曲线、加等级上限：改 `game/components/profile/profile.go` 的 `planExp`，保持“不按升级数逐级循环”。
   - 改名字规则：改 `NormalizeProfileName`（`naming` 与新建角色的名字检查都经它）。
   - 加档案字段：别人能看的加在 `ProfileState`，只给本人的加在 `ProfilePrivateState`。
-  - 别的模块要在升级时做事：在自己的文件里 `OnProfileLevelUp("<模块名>", …)`，不要改 `profile_hooks.go`。
+  - 别的模块要在升级时做事：在自己的文件里 `OnProfileLevelUp("<模块名>", …)`，不要改 `game/components/profile/hooks.go`。
 - **别的代码要用它**：
   - 发经验（事务之外）：`syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, playerEntityID, amount)`。
   - 发经验（在自己的 Player handler 里）：先 `target.ProfileComp().CheckAddExp(amount)`，都通过了再 `AddExp(amount)`。
@@ -72,7 +72,7 @@
 
 本模块的 `with/`：
 
-- `profile` + `enter`（`with/enter/game/entities/player/profile_enter.go`）：登记 enter 的首次建档钩子，把等级设为 1，与“已建档”标记同一笔事务；不调升级钩子，重进与冷加载不重置。
+- `profile` + `enter`（`with/enter/game/login/profile_enter.go`）：登记 enter 的首次建档钩子，把等级设为 1，与“已建档”标记同一笔事务；不调升级钩子，重进与冷加载不重置。
 - `profile` + `gm`（`with/gm/game/gm/profile.go`）：运维命令 `gm.player.add_exp`，payload `{player_id, amount, note}`，经 `ProfileAddExp` 的 Sender 发经验；不判重、不自动重试。
 
 别的模块的 `with/profile`：

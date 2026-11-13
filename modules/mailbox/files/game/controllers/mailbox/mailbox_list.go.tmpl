@@ -3,8 +3,7 @@ package mailbox
 import (
 	"fmt"
 	"log/slog"
-
-	player "{{MODULE}}/game/entities/player"
+	mailboxcomp "{{MODULE}}/game/components/mailbox"
 	gamemailbox "{{MODULE}}/game/mailbox"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
@@ -39,7 +38,7 @@ func (controller *Controller) HandleMailboxList(context *playeraccess.Context, r
 		// 解得出来但没有发放方式的附件仍然填种类、号、数量：客户端可以照样展示它是什么。
 		if attachment, decodeErr := gamemailbox.Decode(item.Envelope.Attachment); decodeErr == nil {
 			entry.AttachmentType, entry.AttachmentID, entry.Amount = string(attachment.Type), attachment.ID, attachment.Amount
-			entry.Claimable = item.Claimable && player.MailboxGrantable(attachment.Type)
+			entry.Claimable = item.Claimable && mailboxcomp.MailboxGrantable(attachment.Type)
 		}
 		response.Mails = append(response.Mails, entry)
 	}

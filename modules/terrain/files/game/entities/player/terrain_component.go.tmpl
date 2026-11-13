@@ -1,80 +1,22 @@
 package player
 
 import (
-	"encoding/json"
-	"fmt"
+	"{{MODULE}}/game/components/terrain"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"math"
-	logic "{{MODULE}}/game/terrain"
 )
 
 //roost:component type={{ID:component:Terrain}}
 const CompTypeTerrain entity.ComponentType = {{ID:component:Terrain}}
 
-type TerrainComponent struct {
-	entity.ComponentBase
-	owner *Player
-}
+// TerrainComponent 是 game/components/terrain 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type TerrainComponent = terrain.Component
+
 type ITerrainEntity interface {
 	IActorEntity
 	TerrainComp() *TerrainComponent
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeTerrain, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		p, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("terrain: owner %T", owner)
-		}
-		return &TerrainComponent{owner: p}, nil
-	})
+	entity.RegisterComponentFactory(CompTypeTerrain, terrain.NewComponent)
 }
-func (*TerrainComponent) Name() string { return "terrain" }
-
-// Check在Player锁内判重与授权。场景/距离不因重发跳过，异payload永远不能冒领旧应答。
-func (c *TerrainComponent) Check(command logic.Command, sceneID int64) (logic.Result, bool, error) {
-	body := c.owner.ActorComp().Body()
-	if body.Map.SceneID() != sceneID || !logic.WithinReach(body.Position(), command.Point()) {
-		return logic.Result{}, false, logic.ErrDenied
-	}
-	state := c.owner.Dao().GetTerrainLedger()
-	seq := state.GetSequence()
-	if command.Sequence == seq {
-		if state.GetDigest() != command.Digest() {
-			return logic.Result{}, false, logic.ErrSequence
-		}
-		var result logic.Result
-		if err := json.Unmarshal(state.GetReplyAll(), &result); err != nil {
-			return result, false, err
-		}
-		result.Duplicate = true
-		return result, true, nil
-	}
-	if seq == math.MaxInt64 || command.Sequence != seq+1 {
-		return logic.Result{}, false, logic.ErrSequence
-	}
-	return logic.Result{}, false, nil
-}
-func (c *TerrainComponent) BuildingCount() int32 {
-	return c.owner.Dao().GetTerrainLedger().GetBuildings()
-}
-func (c *TerrainComponent) Record(command logic.Command, result logic.Result, delta int32) error {
-	state := c.owner.Dao().GetTerrainLedger()
-	next := state.GetBuildings() + delta
-	if next < 0 || next > logic.MaxBuildings {
-		return logic.ErrFull
-	}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		return err
-	}
-	state.SetSequence(command.Sequence)
-	state.SetDigest(command.Digest())
-	state.SetReply(raw)
-	if delta != 0 {
-		state.SetBuildings(next)
-	}
-	return nil
-}
-
-func (c *TerrainComponent) Sequence() int64 { return c.owner.Dao().GetTerrainLedger().GetSequence() }

@@ -1,10 +1,13 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import (
+	player "{{MODULE}}/game/entities/player"
+	gameteam "{{MODULE}}/game/components/team"
+)
 
 // handlerTeamInvites 只读本人收到的、还没过期的邀请。
 //
 //roost:nest
-func handlerTeamInvites(member player.ITeamEntity, nowUnixMilli int64) []player.TeamInvitation {
+func handlerTeamInvites(member player.ITeamEntity, nowUnixMilli int64) []gameteam.TeamInvitation {
 	return member.TeamComp().Invites(nowUnixMilli)
 }

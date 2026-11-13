@@ -1,0 +1,8 @@
+package combat
+
+import (
+	gamescene "{{MODULE}}/game/components/scene"
+)
+
+// 场景旁观者只看到公开战斗投影，不看到对手同意之外的私有施法checkpoint/回执。
+func init() { gamescene.OnSceneFields("combat", "Combat") }

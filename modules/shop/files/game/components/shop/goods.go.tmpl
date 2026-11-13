@@ -1,0 +1,24 @@
+package shop
+
+import (
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+)
+
+// ShopLimitKind 与配置表的 limit 列保持同一种值类型。
+type ShopLimitKind = int32
+
+const (
+	ShopLimitNone     ShopLimitKind = 0
+	ShopLimitDaily    ShopLimitKind = 1
+	ShopLimitLifetime ShopLimitKind = 2
+)
+
+// ShopGoods 直接使用配置行；购买与导出读取同一份请求快照。
+type ShopGoods = schema.ShopGoods
+
+// shopGoodsByID 不缓存可变的 Go map。generated 访问器读取当前 Nest 请求钉住的配置快照。
+// 临时停售用 Off，以保留限购计数；删除行或改变限购类型会在下次成功购买时清理旧计数。
+func shopGoodsByID(goodsID int64) (ShopGoods, bool) {
+	return generated.ShopGoodsByID(goodsID)
+}

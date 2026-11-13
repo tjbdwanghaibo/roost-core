@@ -1,0 +1,142 @@
+package naming
+
+import (
+	gameprofile "{{MODULE}}/game/components/profile"
+	"{{MODULE}}/game/view"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"math"
+	"strings"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// Owner 是 Naming 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/naming_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("naming component: owner %T does not implement naming.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "naming" }
+
+
+// NamingTicket 是锁外可持有的快照，目录 RPC 只能拿快照，不能拿 Player。
+type NamingTicket struct {
+	Seq                                           int64
+	Operation, Target                             string
+	Phase                                         int32
+	ClaimKey, ClaimToken, Owner, OldKey, OldOwner string
+}
+
+func (c *Component) Ticket() NamingTicket {
+	s := c.owner.Dao().GetNaming()
+	return NamingTicket{Seq: s.GetSeq(), Operation: s.GetOperation(), Target: s.GetTarget(), Phase: s.GetPhase(), ClaimKey: s.GetClaimKey(), ClaimToken: s.GetClaimToken(), Owner: fmt.Sprintf("naming:%d:%d", c.owner.ID(), s.GetSeq()), OldKey: s.GetOldKey(), OldOwner: s.GetOldOwner()}
+}
+
+// Begin 持久受理请求，串行化同一玩家；重试同一 key/目标继续原操作，不同目标一律拒绝。
+func (c *Component) Begin(operation, name string) (NamingTicket, error) {
+	name, err := gameprofile.NormalizeProfileName(name)
+	if err != nil {
+		return NamingTicket{}, err
+	}
+	if len(operation) == 0 || len(operation) > 64 || strings.TrimSpace(operation) != operation {
+		return NamingTicket{}, apperrors.ErrNamingInvalid
+	}
+	s := c.owner.Dao().GetNaming()
+	if s.GetOperation() == operation {
+		if s.GetTarget() != name {
+			return NamingTicket{}, apperrors.ErrNamingInvalid
+		}
+		return c.Ticket(), nil
+	}
+	if s.GetPhase() != 0 {
+		return NamingTicket{}, apperrors.ErrNamingBusy
+	}
+	if s.GetSeq() == math.MaxInt64 {
+		return NamingTicket{}, apperrors.ErrNamingInvalid
+	}
+	// 完全相同的显示名作为新的已完成回执，不重新占名，也不释放当前 claim。
+	if s.GetCurrentKey() != "" && c.owner.Profile().DisplayName() == name {
+		s.SetOperation(operation)
+		s.SetTarget(name)
+		return c.Ticket(), nil
+	}
+	s.SetSeq(s.GetSeq() + 1)
+	s.SetOperation(operation)
+	s.SetTarget(name)
+	s.SetPhase(1)
+	s.SetClaimKey("")
+	s.SetClaimToken("")
+	s.SetOldKey(s.GetCurrentKey())
+	s.SetOldOwner(s.GetCurrentOwner())
+	return c.Ticket(), nil
+}
+
+// Step 的每个动作都是一笔 strict Nest 事务。旧 Seq/操作不能完成或清除新操作。
+// 1=记录claim；2=目录已提交后写名字；3=旧名已释放后完成；4=Reserve明确拒绝且尚未记claim时中止；
+// 5=目录明确证明token已失效，回到意图阶段重新占名。结果未知时禁止动作4/5。
+func (c *Component) Step(seq int64, operation string, action int32, key, token string) (NamingTicket, error) {
+	s := c.owner.Dao().GetNaming()
+	if s.GetSeq() != seq || s.GetOperation() != operation {
+		return NamingTicket{}, apperrors.ErrNamingBusy
+	}
+	switch action {
+	case 1:
+		if s.GetPhase() == 1 {
+			if key == "" || token == "" {
+				return NamingTicket{}, apperrors.ErrNamingInvalid
+			}
+			s.SetClaimKey(key)
+			s.SetClaimToken(token)
+			s.SetPhase(2)
+		}
+		if s.GetPhase() == 2 && (s.GetClaimKey() != key || s.GetClaimToken() != token) {
+			return NamingTicket{}, apperrors.ErrNamingBusy
+		}
+	case 2:
+		if s.GetPhase() == 2 {
+			if s.GetClaimKey() != key || s.GetClaimToken() != token {
+				return NamingTicket{}, apperrors.ErrNamingBusy
+			}
+			if _, err := c.owner.Profile().Rename(s.GetTarget()); err != nil {
+				return NamingTicket{}, err
+			}
+			s.SetCurrentKey(key)
+			s.SetCurrentOwner(c.Ticket().Owner)
+			s.SetPhase(3)
+		}
+	case 3:
+		if s.GetPhase() == 3 {
+			s.SetPhase(0)
+			s.SetOldKey("")
+			s.SetOldOwner("")
+		}
+	case 5:
+		if s.GetPhase() == 2 && s.GetClaimKey() == key && s.GetClaimToken() == token {
+			s.SetPhase(1)
+			s.SetClaimKey("")
+			s.SetClaimToken("")
+		}
+	case 4:
+		if s.GetPhase() == 1 {
+			s.SetPhase(0)
+			s.SetOperation("")
+			s.SetTarget("")
+			s.SetOldKey("")
+			s.SetOldOwner("")
+		}
+	default:
+		return NamingTicket{}, apperrors.ErrNamingInvalid
+	}
+	return c.Ticket(), nil
+}

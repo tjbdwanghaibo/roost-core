@@ -1,0 +1,91 @@
+package checkin
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// Owner 是 Checkin 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+// Component 是每日签到的业务逻辑。它不保存事务会改的状态：进度在 PlayerDao.Checkin 里，
+// 经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/checkin_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("checkin component: owner %T does not implement checkin.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "checkin" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *Component) Owner() Owner { return component.owner }
+
+// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+const (
+	// CheckinBaseReward 是第 1 天的奖励；连续第 n 天给 n 倍，封顶 CheckinStreakCap 倍。
+	CheckinBaseReward = 10
+	CheckinStreakCap  = 7
+)
+
+// CheckinResult 是一次签到的结果。
+type CheckinResult struct {
+	Streak  int32
+	Reward  int64
+	Balance int64
+}
+
+// Claim 领今天的签到奖励。nowUnixMilli 是这条消息冻结的业务时间。
+//
+// “今天”是业务日（clock.BusinessDay：业务时区与每日重置时刻由部署配置决定，缺省 UTC 零点）。
+// 同一个业务日第二次领返回 checkin_done，不写任何字段。“领过没有”记在签到自己的进度里（LastDay），
+// 所以发奖用货币组件的 Add、不占货币的去重窗口；进度与余额在同一笔事务里，任何一步被拒绝都一起回滚。
+//
+// 签到成功之后执行别的功能登记的钩子（checkin_hooks.go 的 OnCheckinClaimed），同一笔事务：
+// 钩子返回错误时这一次签到整笔回滚。
+func (component *Component) Claim(nowUnixMilli int64) (CheckinResult, error) {
+	now := time.UnixMilli(nowUnixMilli)
+	today := int64(clock.BusinessDay(now))
+	state := component.owner.Dao().GetCheckin()
+	if state.GetLastDay() >= today {
+		return CheckinResult{}, apperrors.ErrCheckinDone
+	}
+	// 昨天 = 今天这个业务日起点之前的那一刻所在的业务日；不按固定 24 小时推（夏令时那天不是 24 小时）。
+	yesterday := int64(clock.BusinessDay(clock.DayStart(now).Add(-time.Nanosecond)))
+	streak := int32(1)
+	if state.GetLastDay() == yesterday {
+		streak = state.GetStreak() + 1
+	}
+	multiplier := int64(streak)
+	if multiplier > CheckinStreakCap {
+		multiplier = CheckinStreakCap
+	}
+	reward := CheckinBaseReward * multiplier
+	balance, err := component.owner.Wallet().Add(reward)
+	if err != nil {
+		return CheckinResult{}, err
+	}
+	state.SetLastDay(today)
+	state.SetStreak(streak)
+	state.SetTotal(state.GetTotal() + 1)
+	result := CheckinResult{Streak: streak, Reward: reward, Balance: balance}
+	if err := runCheckinClaimed(component.owner, result, nowUnixMilli); err != nil {
+		return CheckinResult{}, err
+	}
+	return result, nil
+}

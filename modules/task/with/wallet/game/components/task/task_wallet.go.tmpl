@@ -1,0 +1,11 @@
+package task
+
+import (
+	"{{MODULE}}/game/view"
+	gamewallet "{{MODULE}}/game/components/wallet"
+)
+
+// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
+func init() {
+	gamewallet.OnWalletSpent("task", func(owner view.PlayerEntity, _ int64, now int64) error { return owner.Task().Report("wallet.spent", 1, now) })
+}

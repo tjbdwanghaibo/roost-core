@@ -30,7 +30,7 @@
 1. 客户端经登录入口登录、拿区服清单、换进服票据，用 `enter:<进服票据>` 完成 TCP 握手。
 2. 服务器推 `EnterStatus`：`need_create` 为 true 就先发 `EnterCreate{name}`（本配方没装档案模块，名字没有规则、也不保存），
    再发 `EnterGame`；为 false 直接发 `EnterGame`。推送只是告知：一两秒没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。
-   `game/entities/player/recipe_first_enter.go` 登记首次 100 金币：在新建的那一笔事务里发，与“建成了”的标记一起提交或回滚；
+   `game/login/recipe_first_enter.go` 登记首次 100 金币：在新建的那一笔事务里发，与“建成了”的标记一起提交或回滚；
    再发新建（`enter_created`）与重复进入都不会再发。进入时服务器把业务时间推给客户端（`ServertimeNow`），也可以用 `ServertimeSync` 拉。
    不经登录入口、由自己的入口调 account 的 CreateRole / SelectRole 拿 `session:<player_id>:<token>` 握手的会话照旧：
    `EnterGame` 加载或创建玩家并完成首次初始化，发放规则与只发一次的保证相同。

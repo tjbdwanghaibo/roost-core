@@ -2011,7 +2011,6 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		"HANDLER ?=",
 		"new-handler:",
 		"new-access:",
-		"new-lifecycle:",
 		"new-endpoint:",
 		"new-skill:",
 		"glsvet:",
@@ -2020,6 +2019,10 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		if !strings.Contains(makefile, want) {
 			t.Errorf("generated Makefile missing %q:\n%s", want, makefile)
 		}
+	}
+	// v1.47.0：lifecycle 由 roost generate 生成，Makefile 不再有 new-lifecycle。
+	if strings.Contains(makefile, "new-lifecycle:") {
+		t.Errorf("generated Makefile still has new-lifecycle:\n%s", makefile)
 	}
 	ci := string(plan[".github/workflows/ci.yml"].Body)
 	if strings.Contains(ci, "make deps-update") || strings.Contains(ci, "go get -u") {

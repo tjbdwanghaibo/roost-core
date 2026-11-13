@@ -11,12 +11,12 @@
 - `MatchStatus{}`：查询并推进。它不只是读：每次调用都会把停在半路的步骤接着做（补发 Enqueue、补绑票、补开房、补写结果）。
 - `MatchClear{Key}`：清掉已经结束的那次排队（`cancelled` / `expired` / `matched`），之后才能排下一次。`matched` 要等房间关闭之后才清得掉。
 
-`Phase` 的取值在 `game/entities/player/matchmaking_component.go`：`preparing`、`dispatching`、`queued`、`cancelling`、`matched`、`cancelled`、`expired`；空串表示没有排队。`Key` 是 `"<队长玩家号>:<Sequence>"`。
+`Phase` 的取值在 `game/components/matchmaking/matchmaking.go`：`preparing`、`dispatching`、`queued`、`cancelling`、`matched`、`cancelled`、`expired`；空串表示没有排队。`Key` 是 `"<队长玩家号>:<Sequence>"`。
 
 **服务端入口**（`game/matchmaking/runtime.go`，都在 Nest 事务之外调用，会等待 match 服务与 Nest）
 
 - `matchmaking.FromRegistry(registry) (*Runtime, error)`：取模块启动时发布的运行时（能力名 `matchmaking.runtime`）。
-- `(*Runtime).Enqueue(ctx, playerID, sequence, asTeam)`、`Cancel(ctx, playerID, key)`、`Status(ctx, playerID)`、`Clear(ctx, playerID, key)`：四个协议各自对应的入口，返回 `player.MatchSnapshot`。
+- `(*Runtime).Enqueue(ctx, playerID, sequence, asTeam)`、`Cancel(ctx, playerID, key)`、`Status(ctx, playerID)`、`Clear(ctx, playerID, key)`：四个协议各自对应的入口，返回 `matchmaking.MatchSnapshot`。
 - `(*Runtime).State(ctx, playerID)`：只读这名玩家当前的匹配快照，不推进。
 - `(*Runtime).Step(ctx)`：做一轮配对。模块的 `Start` 每 500 毫秒调一次，单轮上限 5 秒。
 - `NewRuntime(client, match, rooms, sid, resident)`：显式装配与离线验收用。
@@ -25,7 +25,7 @@
 
 **登记点**
 
-- `player.OnMatchmakingStarting(name, func(*Player) error)`（`matchmaking_component.go`）：开始排队前的检查。在记排队意图的那笔 Player 事务里、对组里每名成员各执行一次；返回错误即拒绝，整组什么都不写。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。
+- `matchmaking.OnMatchmakingStarting(name, func(view.PlayerEntity) error)`（`game/components/matchmaking/matchmaking.go`）：开始排队前的检查。在记排队意图的那笔 Player 事务里、对组里每名成员各执行一次；返回错误即拒绝，整组什么都不写。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。
 - 模块自己登记了 team 的 `OnTeamJoining("matchmaking", …)`：排队中（`Phase` 非空）的玩家不能建队或入队。
 
 **状态**：`PlayerDao.Matchmaking`（`db/def/matchmaking.go` 的 `MatchmakingState`），只落库、不下发给客户端。每人只保留当前意图与最后结果（`Sequence`、`Key`、`Leader`、`TeamID`、`Members`、`SID`、`Phase`、`TicketID`、`MatchID`、`RoomID`、`Deadline`）；`Sequence` 只增不清零。队伍一侧的名单冻结记在 team 模块的 `Team.MatchKey`。
@@ -61,9 +61,9 @@
 - **需求正好是它**：`roost module add matchmaking`，连带装上 `team`、`matchroom`、`room`，并接入托管 match 的客户端与模块的后台循环。客户端先完成 `EnterGame` 再排队。
 - **需求多一点**：
   - 改配对规则（按人数以外的条件分池、一局几支队伍）：改 `game/matchmaking/matcher.go` 的 `Step` / `form` / `eligible` 与 `runtime.go` 的 `queue`。注意 match 服务的 `GroupSize` 在这里数的是队伍数，不是玩家数。
-  - 加“什么时候不许排队”：登记 `player.OnMatchmakingStarting`。
+  - 加“什么时候不许排队”：登记 `matchmaking.OnMatchmakingStarting`。
   - 成局后要做别的事（通知、初始化玩法）：改 `matcher.go` 的 `accept`，在结果写进成员之后做；它可能被重复调用，要按 `MatchID` 幂等。
-  - 不要改 `matchmaking_component.go` 里 `UpdateMatching` 的阶段转换与 `handler/match_*.go` 的事务边界，恢复逻辑依赖它们。
+  - 不要改 `game/components/matchmaking/matchmaking.go` 里 `UpdateMatching` 的阶段转换与 `handler/match_*.go` 的事务边界，恢复逻辑依赖它们。
 - **别的代码要用它**：
   - 读一名玩家的匹配状态：`matchmaking.FromRegistry(registry)` 之后 `runtime.State(ctx, playerID)`；已经持有 Player 锁时直接 `p.Dao().GetMatchmaking().GetPhase()`（空串即没有排队）。
   - 服务端替玩家发起 / 取消：`runtime.Enqueue(ctx, playerID, sequence, asTeam)`、`runtime.Cancel(ctx, playerID, key)`。
@@ -71,7 +71,7 @@
 
 ## 联动
 
-- `matchmaking` + `rehome`（`with/rehome/game/entities/player/matchmaking_rehome.go`）：有匹配状态（`Phase` 非空）时拒绝换服；档里有换服意图时拒绝排队。两条检查都在各自的 Player 事务里。
+- `matchmaking` + `rehome`（`with/rehome/game/components/matchmaking/matchmaking_rehome.go`）：有匹配状态（`Phase` 非空）时拒绝换服；档里有换服意图时拒绝排队。两条检查都在各自的 Player 事务里。
 - 队伍相关的限制由 `team` + `rehome` 的联动负责，不在这里。
 - 本模块是 `matchroom` 的调用方、`room` 的 `OnRoomJoining` 的间接使用者（经 `matchroom`）。
 
