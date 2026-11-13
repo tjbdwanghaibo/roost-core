@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -175,7 +176,7 @@ func TestPreloadLocalEntitiesRunsBatchesInLoadPriorityOrder(t *testing.T) {
 	server.loaded.slow[preloadFirstKind] = 5 * time.Millisecond
 
 	// 调用方给出的顺序故意与批次相反。
-	report, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadSecondKind, preloadFirstKind})
+	report, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadSecondKind, preloadFirstKind}, LocalPreloadLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +214,7 @@ func TestPreloadLocalEntitiesSkipsABadDocument(t *testing.T) {
 	bad := seedPreload(t, client, 3, preloadFirstKind, "preload_first", 300, 1, bson.M{"_schema": uint32(9)})
 	seedPreload(t, client, 3, preloadFirstKind, "preload_first", 400, 2, bson.M{"_deleted": true})
 
-	report, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadFirstKind})
+	report, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{})
 	if err != nil {
 		t.Fatalf("a bad document failed the whole preload: %v", err)
 	}
@@ -245,12 +246,74 @@ func TestPreloadLocalEntitiesFailsWhenEnumerationFails(t *testing.T) {
 		return []int64{1}, 0, nil
 	})
 	loads := 0
-	report, err := preloadLocalTargets(context.Background(), lister, func(context.Context, int64) error { loads++; return nil }, targets)
+	report, err := preloadLocalTargets(context.Background(), lister, func(context.Context, int64) error { loads++; return nil }, targets, LocalPreloadLimits{})
 	if !errors.Is(err, broken) {
 		t.Fatalf("preload with a failing enumeration = %v, want the enumeration error", err)
 	}
 	if loads != 1 || len(report.Kinds) != 2 || report.Kinds[0].Loaded != 1 {
 		t.Fatalf("report = %+v (loads %d), want the first batch done and the failure reported", report, loads)
+	}
+}
+
+// 预算（KNOWN-LIMITS“预加载没有数量上限与时间预算”）：Mongo 卡住时列 ID 的查询不返回，修前起服一直等到进程被停
+// （进程的基础 context 没有期限）；现在整次预加载按 Timeout 取消在途的查询与加载、返回 ErrLocalPreloadBudget。
+func TestPreloadLocalEntitiesGivesUpOnAStuckStoreAtItsTimeout(t *testing.T) {
+	ensurePreloadKinds()
+	targets, err := resolveLocalPreloadTargets([]entity.EntityKind{preloadFirstKind, preloadSecondKind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stuckAt := range []string{"enumeration", "load"} {
+		lister := listerFunc(func(ctx context.Context, _ coredata.DocumentKey, after int64, _ int) ([]int64, int64, error) {
+			if stuckAt == "enumeration" {
+				<-ctx.Done()
+				return nil, 0, ctx.Err()
+			}
+			return []int64{1, 2, 3}, 0, nil
+		})
+		load := func(ctx context.Context, _ int64) error {
+			<-ctx.Done() // 冷加载卡在 Mongo 上，只在期限到期时返回
+			return ctx.Err()
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, err := preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{Timeout: 100 * time.Millisecond})
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if !errors.Is(err, ErrLocalPreloadBudget) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("stuck at %s: preload = %v, want ErrLocalPreloadBudget and DeadlineExceeded", stuckAt, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("stuck at %s: preload did not give up within 5s of a 100ms timeout", stuckAt)
+		}
+	}
+}
+
+// 数量上限按全部 kind 合计：正好到上限的不报错；再多一个时那一个不加载、返回 ErrLocalPreloadBudget，已完成的部分留在报告里。
+func TestPreloadLocalEntitiesStopsAtItsEntityLimit(t *testing.T) {
+	ensurePreloadKinds()
+	targets, err := resolveLocalPreloadTargets([]entity.EntityKind{preloadFirstKind, preloadSecondKind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lister := listerFunc(func(_ context.Context, key coredata.DocumentKey, _ int64, _ int) ([]int64, int64, error) {
+		return []int64{1, 2, 3}, 0, nil // 每个 kind 3 个
+	})
+	var loads atomic.Int64
+	load := func(context.Context, int64) error { loads.Add(1); return nil }
+	report, err := preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{MaxEntities: 6})
+	if err != nil || report.Loaded != 6 {
+		t.Fatalf("exactly at the limit: report %+v, err %v; want 6 loaded and no error", report, err)
+	}
+	loads.Store(0)
+	report, err = preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{MaxEntities: 5})
+	if !errors.Is(err, ErrLocalPreloadBudget) || !strings.Contains(err.Error(), "dataengine.preload.max_entities") {
+		t.Fatalf("one over the limit: err %v, want ErrLocalPreloadBudget naming dataengine.preload.max_entities", err)
+	}
+	if loads.Load() != 5 || report.Listed != 5 || report.Loaded != 5 {
+		t.Fatalf("one over the limit: %d loads, report %+v; want the first 5 loaded and the 6th not", loads.Load(), report)
 	}
 }
 
@@ -291,7 +354,7 @@ func TestPreloadLocalEntitiesLoadsOnlyThisServersDatabase(t *testing.T) {
 	ofFour := seedPreload(t, client, 4, preloadFirstKind, "preload_first", 700, 2, nil)
 
 	for _, server := range []*preloadServer{three, four} {
-		if _, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadFirstKind}); err != nil {
+		if _, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -323,7 +386,7 @@ func TestPreloadLocalEntitiesRefusesKindsOutsideTheRule(t *testing.T) {
 		{preloadRemoteKind, "Remote kind"},
 		{entity.EntityKind(219), "no registered entity builder"},
 	} {
-		_, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadFirstKind, tc.kind})
+		_, err := server.runtime.PreloadLocalEntities(context.Background(), []entity.EntityKind{preloadFirstKind, tc.kind}, LocalPreloadLimits{})
 		if !errors.Is(err, ErrLocalPreloadKind) || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("preload of kind %d = %v, want ErrLocalPreloadKind mentioning %q", tc.kind, err, tc.want)
 		}
@@ -415,13 +478,13 @@ func TestCopyHandedOffEntity(t *testing.T) {
 		t.Fatal("a target document written after the copy was dropped")
 	}
 	// 源库没了之后，这个实体在源服按 ID 加载不到，也不再被预加载。
-	report, err := source.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind})
+	report, err := source.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{})
 	if err != nil || report.Listed != 0 {
 		t.Fatalf("preload on the source after the move = %+v, %v; want nothing listed", report, err)
 	}
 	// 新服预加载到他。
 	target4 := newPreloadServer(t, client, 4)
-	if report, err := target4.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}); err != nil || report.Loaded != 1 || target4.manager.Get(id) == nil {
+	if report, err := target4.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{}); err != nil || report.Loaded != 1 || target4.manager.Get(id) == nil {
 		t.Fatalf("preload on the target after the move = %+v, %v; want the moved entity loaded", report, err)
 	}
 }

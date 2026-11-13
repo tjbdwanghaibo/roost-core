@@ -145,6 +145,8 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "nest.pipelined.allowlist", Kind: "strings", Help: "允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写", Starter: true, Example: "[]"},
 		{Name: "nest.pipelined.async_workers", Kind: "int", Min: "0", Help: "异步完成池的 worker 数（0 取缺省 4）。异步完成只给本进程声明 durability=pipelined 的 saga 原生步骤 handler 用，\n没有这类 handler 时不建完成池、本项不起作用", Starter: true, Example: "8"},
 		{Name: "nest.pipelined.async_queue_capacity", Kind: "int", Min: "0", Help: "完成队列容量（0 取缺省 8192）；队列满时该事务降级为在派发 worker 上等 WAL，计 nest.pipelined.async_total{result=\"degraded\"}", Starter: true, Example: "4096"},
+		{Name: "dataengine.preload.timeout", Kind: "duration", Default: "10m", Min: "1s", Help: "起服预加载（preload=startup 的本地实体）整次的期限：到期取消在途的查询与加载、起服失败；Mongo 卡住时不再一直等到进程被停"},
+		{Name: "dataengine.preload.max_entities", Kind: "int", Default: "1000000", Min: "1", Help: "起服预加载全部 kind 合计最多载入的实体数：超过时起服失败，调大它或不再预加载那个 kind（预加载的实体都留在内存里）"},
 	}},
 	"directory": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},

@@ -68,14 +68,14 @@ func TestRealMongoLocalPreloadAndCopyAcrossServers(t *testing.T) {
 	ofThree, ofFour := seed(3, 1000, 2500), seed(4, 9000, 3)
 
 	// 列 ID：分页（2500 跨三页）、只读本服库。
-	report, err := three.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind})
+	report, err := three.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{})
 	if err != nil || report.Listed != 2500 || report.Loaded != 2500 {
 		t.Fatalf("sid 3 preload = %+v, %v; want its 2500 entities", report, err)
 	}
 	if four.manager.Get(ofThree[0]) != nil || three.manager.Get(ofFour[0]) != nil {
 		t.Fatal("an entity of one server was loaded by the other")
 	}
-	if report, err := four.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}); err != nil || report.Loaded != 3 {
+	if report, err := four.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{}); err != nil || report.Loaded != 3 {
 		t.Fatalf("sid 4 preload = %+v, %v; want its 3 entities", report, err)
 	}
 
@@ -102,7 +102,7 @@ func TestRealMongoLocalPreloadAndCopyAcrossServers(t *testing.T) {
 	if value, err := restarted4.access.Get(ctx, moved, entity.EntityCategoryNone); err != nil || value == nil {
 		t.Fatalf("sid 4 loading the moved entity = %v, %v", value, err)
 	}
-	if report, err := server(3).runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}); err != nil || report.Listed != 2499 {
+	if report, err := server(3).runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{}); err != nil || report.Listed != 2499 {
 		t.Fatalf("sid 3 preload after the move = %+v, %v; want 2499", report, err)
 	}
 }

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **本地实体起服预加载加时间预算与数量上限**（dataengine / wiring，2026-11-13，KNOWN-LIMITS“预加载没有数量上限与时间预算”）：新配置 `dataengine.preload.timeout`（缺省 10m，最小 1s）限整次预加载，到期取消在途的查询与加载；`dataengine.preload.max_entities`（缺省 1000000）限全部 kind 合计载入的实体数。超出时 `Runtime.PreloadLocalEntities` 返回新哨兵 `engine.ErrLocalPreloadBudget`（超时同时满足 `context.DeadlineExceeded`），`dataengine.preload` Mod 让起服失败。API 变化：`PreloadLocalEntities(ctx, kinds, engine.LocalPreloadLimits)` 多一个参数（零值不限）。两个键并入生成器的 dataengine 配置段（`kitconfig_gen.go` 重新生成），不进入起步配置。先红：Mongo 卡住（列 ID 的查询不返回）时修前 `preload with a stuck Mongo did not return in 3s`；`TestPreloadLocalEntitiesGivesUpOnAStuckStoreAtItsTimeout`（枚举卡住与加载卡住两种）与 `TestPreloadLocalEntitiesStopsAtItsEntityLimit` 各自的变异（不设期限、不查上限）变红。验证：`framework/dataengine/engine` 预加载用例 `-race`、`wiring/dataengine` 整包、codegen `TestKitConfigSchemasMatchKitDeclarations` 与配置用例。
+
 - **文档：Lockstep 历史窗口与快照预算的核对表**（guide/04-sync §6，2026-11-13，KNOWN-LIMITS“历史窗口的取值”）：按帧率（30 / 60Hz）× 断线时长（10 / 30 / 60 秒）核对只追帧所需窗口，按快照大小（1 / 4 / 16 MiB）× 链路（随链路放慢 256 / 64 KB/s、独立 Gate）核对钉住期限与发送预算；由缺省值推算，实测格单独标注。结论：60Hz 下缺省窗口 3600 帧不够 60 秒断线（没有余量），16 MiB 快照在 60Hz 下超过缺省钉住期限；只改文档。
 
 - **sync-aoi 压测工具加 `-heartbeat-delivery=batch|dispatch`**（scripts/perf，2026-11-13，KNOWN-LIMITS“心跳模式的投递方式跟驱动缺省走、没有开关”）：心跳模式按开关设驱动的 `Delivery`（空是驱动缺省 `batch`），实际方式记进 `server.json` 的 `heartbeat.delivery`，未知值或全局循环模式下给值在启动校验时报错；说明见 HB-DRIVEN-LOAD 开关表。`TestHeartbeatDeliveryFlagReachesTheDriver` 修前不能编译（没有开关）、变异“不把方式交给驱动”后报 `driver delivery "batch", want "dispatch"`。两种方式的对照测量**未跑**（等机器空闲）。nest-game 夹具不在这次范围。

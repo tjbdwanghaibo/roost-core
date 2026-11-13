@@ -64,8 +64,9 @@ func groups() map[string][]app.ConfigSchema {
 		"remote_entity": {kitremoteentity.NewRemoteEntityMod(0).ConfigSchema(), kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
 		// remote_mirror：只读进程只装 Mirror Mod（catalog Mod，与 remote_entity 互斥）。
 		"remote_mirror": {kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
-		"dataengine":    {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
-		"saga":          {kitsaga.NewMod().ConfigSchema()},
+		// dataengine 段同时写本地预加载的预算（dataengine.preload.*，装在声明了本地 preload=startup 的服务上）。
+		"dataengine": {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema(), kitdataengine.NewLocalPreloadMod().ConfigSchema()},
+		"saga":       {kitsaga.NewMod().ConfigSchema()},
 		// heartbeat：roost add heartbeat / behavior 装在实体所在服务（catalog Mod，依赖 nest）；NewMod 的参数只在 Init 用。
 		"heartbeat": {kitheartbeat.NewMod(nil, nil).ConfigSchema()},
 		"web":       {kitweb.NewMod().ConfigSchema()},

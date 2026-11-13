@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -30,6 +31,9 @@ import (
 //
 // 失败语义与 Remote 预加载（remoteentity.Manager.PreloadOwnedEntities）一致：
 //   - 规则不满足、枚举（列 ID 的查询）失败：返回错误，调用方让启动失败，由进程管理拉起重试；
+//   - 超出预算（LocalPreloadLimits：要载入的实体数超过 MaxEntities，或整次预加载超过 Timeout——例如 Mongo 卡住）：
+//     返回 ErrLocalPreloadBudget，调用方让启动失败。原来没有预算时，Mongo 卡住会让起服一直等到进程被停，实体多时
+//     起服时间与内存随之增长而没有上限；预算由 wiring 的 dataengine.preload.* 配置给出；
 //   - 单个实体加载失败：记错误日志与指标，跳过它，留给按需冷加载（到时同样报错并答给调用方）——不让一个坏文档挡住整个服；
 //   - 删过档（全部 DAO 只剩墓碑）与枚举之后被删掉的：确定的状态，不是失败，分别计入 Deleted / Missing。
 //
@@ -46,6 +50,18 @@ const (
 	// metricLocalPreload 计每个实体的预加载结果（标签 kind、result：ok / deleted / missing / error）。
 	metricLocalPreload = "dataengine.local_preload_total"
 )
+
+// ErrLocalPreloadBudget 是预加载超出预算：要载入的实体数超过 LocalPreloadLimits.MaxEntities，或整次预加载超过
+// LocalPreloadLimits.Timeout（同时满足 errors.Is(err, context.DeadlineExceeded)）。
+var ErrLocalPreloadBudget = errors.New("dataengine preload: over budget")
+
+// LocalPreloadLimits 是一次本地预加载的预算；零值表示不限。
+type LocalPreloadLimits struct {
+	// MaxEntities 是全部 kind 合计最多载入的实体数（按枚举到的未删除文档计）；超过时不再加载，返回 ErrLocalPreloadBudget。
+	MaxEntities int
+	// Timeout 是整次预加载（枚举加加载）的期限；到期时取消在途的查询与加载，返回 ErrLocalPreloadBudget。
+	Timeout time.Duration
+}
 
 // ErrLocalPreloadKind 是预加载的 kind 不满足规则（不是本地持久实体、DAO 不是 dbscope=sid、没有登记 builder）。
 var ErrLocalPreloadKind = errors.New("dataengine preload: kind cannot be preloaded locally")
@@ -196,8 +212,8 @@ func (store *MongoStore) ListEntityIDs(ctx context.Context, key coredata.Documen
 }
 
 // PreloadLocalEntities 是本地实体的起服预加载（见本文件开头）：按批次把 kinds 在本服库里的全部未删除实体经实体运行时
-// 加载进内存。kinds 不满足规则或枚举失败时返回错误（报告里是已完成的部分），单个实体失败只计入报告。
-func (runtime *Runtime) PreloadLocalEntities(ctx context.Context, kinds []entity.EntityKind) (LocalPreloadReport, error) {
+// 加载进内存。kinds 不满足规则、枚举失败或超出 limits 时返回错误（报告里是已完成的部分），单个实体失败只计入报告。
+func (runtime *Runtime) PreloadLocalEntities(ctx context.Context, kinds []entity.EntityKind, limits LocalPreloadLimits) (LocalPreloadReport, error) {
 	var report LocalPreloadReport
 	if len(kinds) == 0 {
 		return report, nil
@@ -223,7 +239,7 @@ func (runtime *Runtime) PreloadLocalEntities(ctx context.Context, kinds []entity
 		}
 		return err
 	}
-	return preloadLocalTargets(ctx, runtime.Store, load, targets)
+	return preloadLocalTargets(ctx, runtime.Store, load, targets, limits)
 }
 
 // entityIDLister 是预加载需要的存储能力（MongoStore.ListEntityIDs），测试替换它。
@@ -232,10 +248,16 @@ type entityIDLister interface {
 }
 
 // preloadLocalTargets 按 order 分批执行：同一批的 kind 依次枚举、加载并发（共用一个上限），批末等全部加载结束。
-func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, targets []localPreloadTarget) (LocalPreloadReport, error) {
+// limits.Timeout 限整次执行（经 ctx 取消在途的查询与加载），limits.MaxEntities 限全部批次合计枚举到的实体数。
+func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, targets []localPreloadTarget, limits LocalPreloadLimits) (LocalPreloadReport, error) {
 	var report LocalPreloadReport
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if limits.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, limits.Timeout)
+		defer cancel()
 	}
 	for start := 0; start < len(targets); {
 		end := start + 1
@@ -243,12 +265,24 @@ func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(c
 			end++
 		}
 		batch := targets[start:end]
-		counts, err := preloadLocalBatch(ctx, lister, load, batch)
+		remaining := -1
+		if limits.MaxEntities > 0 {
+			remaining = limits.MaxEntities - report.Listed
+		}
+		counts, err := preloadLocalBatch(ctx, lister, load, batch, remaining)
 		for i, target := range batch {
 			report.Kinds = append(report.Kinds, LocalPreloadKindReport{Kind: target.kind, Order: target.order, LocalPreloadCounts: counts[i]})
 			report.add(counts[i])
 		}
+		if err == nil && ctx.Err() != nil {
+			// 加载都在期限到期时被取消、各自按失败计入：整次仍按超时失败，不能当作“全部尝试过”。
+			err = ctx.Err()
+		}
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) && limits.Timeout > 0 {
+				err = fmt.Errorf("%w: preloading did not finish within %v (dataengine.preload.timeout); %d of the listed entities loaded: %w",
+					ErrLocalPreloadBudget, limits.Timeout, report.Loaded, err)
+			}
 			return report, err
 		}
 		start = end
@@ -256,8 +290,9 @@ func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(c
 	return report, nil
 }
 
-// preloadLocalBatch 加载一批 kind；返回每个 kind 的计数（与 batch 同序）。枚举失败时等已发出的加载结束再返回错误。
-func preloadLocalBatch(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, batch []localPreloadTarget) ([]LocalPreloadCounts, error) {
+// preloadLocalBatch 加载一批 kind；返回每个 kind 的计数（与 batch 同序）。remaining 是这一批还能枚举的实体数（负数不限），
+// 超过时不再加载、返回 ErrLocalPreloadBudget。枚举失败或超出预算时等已发出的加载结束再返回错误。
+func preloadLocalBatch(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, batch []localPreloadTarget, remaining int) ([]LocalPreloadCounts, error) {
 	counts := make([]LocalPreloadCounts, len(batch))
 	var (
 		mu  sync.Mutex
@@ -278,6 +313,12 @@ func preloadLocalBatch(ctx context.Context, lister entityIDLister, load func(con
 				return counts, fmt.Errorf("dataengine preload: enumerate kind %d in %s/%s: %w", target.kind, target.key.Database, target.key.Resource, err)
 			}
 			for _, id := range ids {
+				if remaining == 0 {
+					wg.Wait()
+					return counts, fmt.Errorf("%w: kind %d in %s/%s takes the preload past its limit of entities (dataengine.preload.max_entities); "+
+						"raise the limit or stop preloading this kind (preload=startup)", ErrLocalPreloadBudget, target.kind, target.key.Database, target.key.Resource)
+				}
+				remaining--
 				record(index, func(c *LocalPreloadCounts) { c.Listed++ })
 				select {
 				case sem <- struct{}{}:
