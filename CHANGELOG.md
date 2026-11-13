@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **嵌入 TCP 出站驻留预算的停读演练**（infra/network/gateway，2026-11-14，KNOWN-LIMITS“嵌入 TCP 出站”的“停读客户端 / 更高推送量下是否够用”）：新增 `TestOutboundBudgetDrill`，只在 `ROOST_TCP_BUDGET_DRILL=1` 时运行（测量入口，参数见 [GATEWAY](docs/framework/GATEWAY.md)），报驻留峰值、`budget_exhausted`、溢出 / 写期限关闭与健康连接收到的帧；断言只有不变式（峰值不超预算、计数与推送端一致、健康连接不被关）。没有行为改动，没有加 Gauge（维护者已定）。
+  - **验证**：小规模冒烟（20 健康 + 10 停读、64 KiB 帧、预算压到 4 MiB）峰值 4129776 字节不超预算、拒绝计数一致；变异自检去掉预算的比较后峰值 20321120 字节，用例红。缺省 256 MiB 在 1000 健康 + N 停读、更高推送量下的测量未做。
+
 - **sync-aoi 压测工具逐 tick 采样 Interest 日志积压**（scripts/perf，2026-11-14，KNOWN-LIMITS“Interest 单写者 ⑧”的“运行中的积压没有采样”）：测量循环在每个 tick 的 Flush 之后（计时之外）读 `entitysync.interest.log_backlog`，`server.json` 新增 `log_backlog_per_tick`（样本数、非零 tick 数、条目数分位）；原来只有 `interest_metrics` 里运行末的值。没有框架行为改动。
   - **验证**：`TestLogBacklogIsSampledFromTheInterestGauge`；变异自检（读错序列、汇总时改动样本顺序）都红；50 玩家 20 tick 的冒烟运行写出 20 个样本。16 视野诊断构建的复跑（测量）未做。
 
