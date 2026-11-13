@@ -300,6 +300,10 @@ func TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL(t *testing.T) {
 	if err := h.mongo.Database(h.database).Drop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// add dao --entity 给本地实体写 dbscope=sid（v1.47.0 起）：这些 DAO 的文档在 <库>_<sid>，本用例的存储没有 sid（0）。
+	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Log(fmt.Sprintf("SIGKILL snapshot recovery: %d unprojected strict records (%d after setup + %d frames); cold load epoch 1 -> 2; seats %d (from frame 1) and %d (from frame %d) restored from committed checkpoint %d via one fetch (%d bytes), continued to head %d with %d page frames; metric deltas %v",
 		barrier.Unprojected, barrier.Setup, barrier.Frames, lostSeat, staleSeat, staleAt+1, barrier.Frames, snapshotBytes, len(final.Frames), lanes.pageFrames.Load(), got))
 }
