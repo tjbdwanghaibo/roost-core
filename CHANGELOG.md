@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **文档：Lockstep 历史窗口与快照预算的核对表**（guide/04-sync §6，2026-11-13，KNOWN-LIMITS“历史窗口的取值”）：按帧率（30 / 60Hz）× 断线时长（10 / 30 / 60 秒）核对只追帧所需窗口，按快照大小（1 / 4 / 16 MiB）× 链路（随链路放慢 256 / 64 KB/s、独立 Gate）核对钉住期限与发送预算；由缺省值推算，实测格单独标注。结论：60Hz 下缺省窗口 3600 帧不够 60 秒断线（没有余量），16 MiB 快照在 60Hz 下超过缺省钉住期限；只改文档。
+
 - **sync-aoi 压测工具加 `-heartbeat-delivery=batch|dispatch`**（scripts/perf，2026-11-13，KNOWN-LIMITS“心跳模式的投递方式跟驱动缺省走、没有开关”）：心跳模式按开关设驱动的 `Delivery`（空是驱动缺省 `batch`），实际方式记进 `server.json` 的 `heartbeat.delivery`，未知值或全局循环模式下给值在启动校验时报错；说明见 HB-DRIVEN-LOAD 开关表。`TestHeartbeatDeliveryFlagReachesTheDriver` 修前不能编译（没有开关）、变异“不把方式交给驱动”后报 `driver delivery "batch", want "dispatch"`。两种方式的对照测量**未跑**（等机器空闲）。nest-game 夹具不在这次范围。
 
 - **删除 `gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn`**（2026-11-13，维护者选 B，KNOWN-LIMITS“跨格笔刷的演练与旧接口”）：v1.43.0 为跨格笔刷按格拆分而加，跨格笔刷 2026-11-10 改为直接拒绝后仓内没有调用方。只按部分计算的入口删除，`Apply` / `BrushChanges` 行为不变；`Footprint`（Base 预扣配额）保留，原拆分用例改为 Footprint 上限用例。仓外调用方改用 `Apply` / `BrushChanges`。

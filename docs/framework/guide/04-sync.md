@@ -342,6 +342,32 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 **观测**：`lockstep.snapshot.total{reason}`、`lockstep.snapshot.bytes.total`、`lockstep.snapshot.failed.total{reason}`，口径见 [OBSERVABILITY](../OBSERVABILITY.md)。恢复进行中（等快照、传快照、快照之后续帧）的会话被 Detach 计 `failed{reason="detached"}`（维护者 2026-10-20 决定）；独立 Gate 下“断开—重连—从头重传”的循环表现为 `failed{detached}` 与 `snapshot.total{out_of_window}` 同步增长（都不分会话）。
 
+### 按帧率、断线时长与快照大小核对窗口与预算
+
+下面两张表由缺省值与上文公式推算（不是新测量），用来在接入时核对配置；括号里注明了有实测的格。记号：帧率 R（每秒 `Tick` 次数，一次 `Tick` 切一帧）、断线时长 D、快照大小 S、玩家下行可用带宽 B（扣掉同一连接上 Sync / PB 的占用）。
+
+**只追帧（`RecoveryCatchup`，或 auto 下缺口在阈值内）**：断线回来时缺的帧必须都还在窗口里，所以窗口至少 `D × R`，再加重连握手与追帧期间新切的帧（取 10 秒余量）。内存按上文“10 席约 1.5MB / 3600 帧”等比例换算（约 0.42 KB / 帧，席位越多越大）。
+
+| R \ D | 10 秒 | 30 秒 | 60 秒 |
+| --- | --- | --- | --- |
+| 30Hz | 300 帧，缺省 3600 够 | 900 帧，缺省够 | 1800 帧，缺省够（缺省窗口在 30Hz 下覆盖 120 秒） |
+| 60Hz | 600 帧，缺省够 | 1800 帧，缺省够 | 3600 帧，**缺省不够**：缺省窗口在 60Hz 下正好 60 秒，没有余量；配 `HistoryRetainFrames` ≥ 4200（70 秒，约 1.8MB / 局）或配快照 |
+
+追帧本身很便宜：积压是 `D × R` 帧的输入（10 席每帧几十到一百多字节），回到头部的时间约为“积压 /（链路速率 − 每秒新帧字节）”（嵌入 TCP 实测比值 1.02～1.03，见下文），60Hz、60 秒、10 席在 256 KB/s 下约 1～2 秒。
+
+**快照恢复（auto 越界或 snapshot 模式）**：一次恢复（取快照 + 传输 + 快照帧之后续帧）必须在 `PinFrames / R` 秒内完成，缺省 `PinFrames` = 窗口 3600，即 30Hz 下 120 秒、60Hz 下 60 秒；超过时 `recovery_expired`、客户端终止。传输速率：随链路放慢的通道（嵌入 TCP、KCP、QUIC）取 `min(BytesPerTick × R, B)`，缺省 64 KiB × R 即 30Hz 约 1.9 MiB/s、60Hz 约 3.75 MiB/s，所以实际由链路决定；独立 Gate 固定 `UnpacedBytesPerTick × R`，缺省 16 KiB × R 即 30Hz 约 480 KiB/s、60Hz 约 960 KiB/s，高于链路时多出的部分要靠沿途缓冲吸收，吸收不了就被 Gate 断开、重连后从头重传。
+
+| 链路 B | S = 1 MiB | S = 4 MiB | S = 16 MiB |
+| --- | --- | --- | --- |
+| 随链路放慢，256 KB/s | 约 4 秒，30 / 60Hz 都在钉住期限内（实测恢复） | 约 16 秒，都在期限内（实测恢复） | 约 66 秒：30Hz 在 120 秒内；**60Hz 超过 60 秒**，要把 `PinFrames` 调到 ≥ 4800（80 秒）或缩小快照 |
+| 随链路放慢，64 KB/s | 约 16 秒（实测恢复） | 约 66 秒（30Hz 实测恢复，服务端 39.8 秒写完、客户端 69 秒回到头部）；**60Hz 超过 60 秒** | 约 4.4 分钟，缺省都超期；这档链路不适合十几 MiB 的快照 |
+| 独立 Gate，256 KB/s（30Hz 缺省发送约 480 KiB/s，高于链路） | 实测恢复（缓冲吸收了约 0.5 MB 超出部分） | **实测每次被断开、从头重传** | 不可行；按下面的建议调低预算 |
+| 独立 Gate，64 KB/s | **实测每次被断开** | 不可行 | 不可行 |
+
+独立 Gate 的取值规则（上文“独立 Gate 上的快照”的配置建议）：让 `UnpacedBytesPerTick × R` 不高于 B 的一半，传输时长约 `S / (UnpacedBytesPerTick × R)` 仍须短于 `PinFrames / R`。例如 30Hz、B = 256 KB/s 时 `UnpacedBytesPerTick` 取 4 KiB（约 120 KiB/s，`ChunkBytes` 同时调到 4 KiB 以下），4 MiB 快照约 34 秒，在 120 秒内；60Hz 同带宽取 2 KiB，4 MiB 也约 34 秒，在 60 秒内。快照传完之后续帧的帧数约等于“取快照 + 传输”秒数 × R，按上面追帧的口径很快追上。
+
+配了快照之后窗口还要覆盖 `max(AutoCatchupMaxFrames, 检查点间隔 K + 取快照延迟对应的帧数 + 余量)`（上文“窗口下限”），这一项与断线时长无关，`NewMatch` 不检查。
+
 ### 越界的处理：按恢复方式区分
 
 起点早于保留窗口的追帧不可能靠追帧补齐。**auto / snapshot 模式**（配了快照来源）下它改走快照，`StartCatchup` / `SpectatorCatchup` / `HandleCommand(OpCatchup)` 返回 nil，只有快照路线最终失败（上表 reason 2～4）才通知客户端终止。**catchup 模式**（没配快照来源时的缺省）下框架给出可判别的失败，客户端表现是“恢复失败、交由业务决定踢出或重开”，不做全量重同步：
