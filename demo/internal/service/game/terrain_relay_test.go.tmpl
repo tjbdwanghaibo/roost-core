@@ -779,10 +779,16 @@ func TestTerrainPartitionGhostBandSeesNeighbourBuildings(t *testing.T) {
 		t.Fatal("before the building the neighbour's walkers cannot step there; the test would prove nothing")
 	}
 	terrainmap.Install(a.process.m)
+	// 占地提交之后拥有者立即推送（SetLotsCommitted → Replicator.Changed），不等订阅每秒续期时的补齐：小屋不整平地面，
+	// 块本身没变，这次推送只能来自占地的提交通知。只看“到了没有”抓不到它（续期 1s 内照样补齐），所以数拥有者的推送。
+	pushedBefore := a.pt.rep.Stats().PushedOut
 	if _, err := a.process.m.Place(context.Background(), relayPlayer, 1, hut(250, 20)); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the neighbour's ghost band takes the building's lot", func() bool { return b.process.m.Occupied(relayLeft, index) })
+	if pushed := a.pt.rep.Stats().PushedOut - pushedBefore; pushed == 0 {
+		t.Fatalf("the lot reached the neighbour without a push after the commit (only the renewal filled it in): %+v", a.pt.rep.Stats())
+	}
 	if walkable(b) || walkable(a) {
 		t.Fatal("a walker steps into the building")
 	}
@@ -806,6 +812,119 @@ func TestTerrainPartitionGhostBandSeesNeighbourBuildings(t *testing.T) {
 	waitFor(t, "the neighbour's ghost band takes the removal", func() bool { return !b.process.m.Occupied(relayLeft, index) })
 	if !walkable(b) {
 		t.Fatal("after the removal the neighbour's walkers still cannot step there")
+	}
+}
+
+// relayEndpoint 是只有收发两头的 terrainRelay（不接 Map）：sent 收下它发出的每条消息，exec 是它执行请求的方式。
+type relayEndpoint struct {
+	relay *terrainRelay
+	sent  chan relaySent
+}
+
+type relaySent struct {
+	to   int32
+	body []byte
+}
+
+func newRelayEndpoint(t *testing.T, self int32, exec func(context.Context, terrainmap.PartRequest) terrainmap.PartAnswer, deadline time.Duration) *relayEndpoint {
+	t.Helper()
+	e := &relayEndpoint{sent: make(chan relaySent, 64)}
+	relay, err := newTerrainRelay(relayConfig{
+		Self: self, OwnerOf: func(terrain.ChunkKey) (int32, bool) { return 0, false },
+		Send: func(to int32, body []byte) bool {
+			select {
+			case e.sent <- relaySent{to: to, body: append([]byte(nil), body...)}:
+			default:
+			}
+			return true
+		},
+		Exec: exec, ResendEvery: time.Hour, Deadline: deadline,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.stop)
+	e.relay = relay
+	return e
+}
+
+func (e *relayEndpoint) next(t *testing.T, what string) relaySent {
+	t.Helper()
+	select {
+	case m := <-e.sent:
+		return m
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s: nothing was sent", what)
+		return relaySent{}
+	}
+}
+
+// 格对同一身份的请求在执行期间只执行一次：执行中又收到的重发（Base 每 ResendEvery 重发一次）忽略，执行完答一次。
+// 只靠格的账本兜底时，重发会在第一次还没提交时再起一笔事务（账本串行判重让它答 Duplicate，块不会写两次，但 Exec
+// 跑了两次、占两份并发名额）；这里数 Exec 的次数。
+func TestTerrainRelayRunsARequestOnceWhileItIsRunning(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	started := make(chan struct{}, 4)
+	cell := newRelayEndpoint(t, partitionSidB, func(context.Context, terrainmap.PartRequest) terrainmap.PartAnswer {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		return terrainmap.PartAnswer{Outcome: terrainmap.OutcomeApplied, LastSeq: 1}
+	}, time.Second)
+	body, err := encodeRelayRequest(77, 1, terrainmap.PartRequest{Op: terrainmap.PartBrush, PlayerID: relayPlayer, Seq: 1,
+		Brush: cellBrush(relayRight, terrain.BrushRaise, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell.relay.deliver(partitionSidA, body)
+	<-started
+	for range 3 {
+		cell.relay.deliver(partitionSidA, body) // Base 的重发，第一次还在执行
+	}
+	close(release)
+	answer := cell.next(t, "the answer")
+	if answer.to != partitionSidA {
+		t.Fatalf("the answer went to %d", answer.to)
+	}
+	cell.relay.stop()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the cell ran one request %d times while it was running", got)
+	}
+	if got := cell.relay.inFlightRepeats.Load(); got != 3 {
+		t.Fatalf("%d repeats counted as in flight, want 3", got)
+	}
+}
+
+// Base 只认这一次启动发出的请求的答复：重启后序号从 1 重新数，格还在为上一次启动的同一序号答复（缓存的结论、迟到的
+// 重发），那条答复带的是旧的 incarnation，必须丢掉，不能当成新请求的结论。
+func TestTerrainRelayIgnoresAnAnswerFromAnEarlierIncarnation(t *testing.T) {
+	base := newRelayEndpoint(t, partitionSidC, func(context.Context, terrainmap.PartRequest) terrainmap.PartAnswer {
+		t.Error("the base executed a request")
+		return terrainmap.PartAnswer{}
+	}, 2*time.Second)
+	req := terrainmap.PartRequest{Op: terrainmap.PartBrush, PlayerID: relayPlayer, Seq: 9, Brush: cellBrush(relayRight, terrain.BrushRaise, 0)}
+	answered := make(chan terrainmap.PartAnswer, 1)
+	go func() { answered <- base.relay.Forward(context.Background(), partitionSidB, req) }()
+	sent := base.next(t, "the request")
+	inc, id, _, err := decodeRelayRequest(sent.body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 上一次启动（另一个 incarnation）同一序号的答复：Refused。
+	stale := terrainmap.PartAnswer{Outcome: terrainmap.OutcomeRefused, Refusal: terrainmap.ErrDenied}
+	base.relay.deliver(partitionSidB, encodeRelayAnswer(inc^0xffff, id, stale))
+	select {
+	case got := <-answered:
+		t.Fatalf("the base took an answer meant for an earlier incarnation: %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if base.relay.strayAnswers.Load() != 1 {
+		t.Fatalf("stray answers %d, want 1", base.relay.strayAnswers.Load())
+	}
+	base.relay.deliver(partitionSidB, encodeRelayAnswer(inc, id, terrainmap.PartAnswer{Outcome: terrainmap.OutcomeApplied, LastSeq: 9}))
+	if got := <-answered; got.Outcome != terrainmap.OutcomeApplied {
+		t.Fatalf("the base's own answer: %+v", got)
 	}
 }
 

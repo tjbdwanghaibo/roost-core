@@ -13,7 +13,7 @@
 
 ## 变异
 
-在生成的 game-demo 上逐项只改一处、跑相关用例、还原（原始输出的第一条失败见 [mutations.txt](mutations.txt)）。22 项：19 项红，3 项未杀死。
+在生成的 game-demo 上逐项只改一处、跑相关用例、还原（原始输出的第一条失败见 [mutations.txt](mutations.txt)）。22 项：19 项红，3 项未杀死；2026-11-14 为这 3 项各补一条用例，全部变红（[mutations-20261114.txt](mutations-20261114.txt)）。
 
 | 变异 | 结果 | 红在哪条承诺上 |
 | --- | --- | --- |
@@ -36,9 +36,9 @@
 | 开地形的分区场景仍用 demo 尺度视野 | 红 | 主视野不是 `TerrainView` / 32m 块 |
 | 设置不查 `view_radius` | 红 | `view_radius` 400 被接受 |
 | `ErrPending` 不映射业务码 | 红 | 答 internal |
-| 不在占地提交后立即推送 | **未杀死** | 订阅每秒续期按修订号补齐，用例 5s 的等待里照样到；立即推送只缩短延迟 |
-| 格不做在途去重 | **未杀死** | 同一身份并发执行由账本串行判重兜底 |
-| 不核对答复的 incarnation | **未杀死** | 没有构造“Base 重启后新序号撞上旧答复”的用例 |
+| 不在占地提交后立即推送 | 红（2026-11-14 补） | 拥有者没有推送（`PushedOut` 不增），占位只由续期补齐（`TestTerrainPartitionGhostBandSeesNeighbourBuildings` 数推送） |
+| 格不做在途去重 | 红（2026-11-14 补） | 执行中的三次重发各执行一次（`TestTerrainRelayRunsARequestOnceWhileItIsRunning`：4 次） |
+| 不核对答复的 incarnation | 红（2026-11-14 补） | 旧 incarnation 同一序号的答复被当成新请求的结论（`TestTerrainRelayIgnoresAnAnswerFromAnEarlierIncarnation`） |
 
 ## 验证（合入 main `70623709` 之后）
 
