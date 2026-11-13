@@ -706,8 +706,9 @@ func (owners *PlayerOwners) Where(playerID int64) (gamerehome.Whereabouts, bool)
 
 var _ gamerehome.Residency = (*PlayerOwners)(nil)
 
-// DepartPlayer 是 demo 对“把这名玩家交出去”的回答（residentDeparter）：离开场景（退订观察者、注销同步对象，
-// 与登出同一条路径），再让 DataEngine 交出实体。场景先走：仍有订阅者时，卸载之后框架会为订阅者把实体读回内存。
+// DepartPlayer 是 demo 对“把这名玩家交出去”的回答（residentDeparter）：离开地图（存位置）、离开场景（退订观察者、
+// 注销同步对象，与登出同一条路径），再让 DataEngine 交出 Player 与只由他所在进程写的实体（playerScoped：地形编辑账本）。
+// 场景先走：仍有订阅者时，卸载之后框架会为订阅者把实体读回内存。返回的 release 撤掉全部屏障。
 func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (func(context.Context) error, error) {
 	if evictor.handOff == nil {
 		return nil, fmt.Errorf("player evictor: the dataengine hand-off is not assembled")
@@ -726,7 +727,33 @@ func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (
 	if err != nil {
 		return nil, err
 	}
-	return handed.Release, nil
+	releases := []func(context.Context) error{handed.Release}
+	release := func(ctx context.Context) error {
+		var errs []error
+		for _, undo := range releases {
+			if err := undo(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	// 只由这名玩家所在的进程写的别的实体（地形编辑账本）随他一起交出：否则本进程内存里留着旧副本，他换回来时
+	// 按旧的版本写回，投影版本冲突致命。任何一个交不出就撤掉已经立的屏障，整次交出失败（换服被中止）。
+	for _, scoped := range evictor.playerScoped {
+		id, err := scoped(playerID)
+		if err == nil {
+			var more *kitdataengine.EntityHandOff
+			if more, err = evictor.handOff.HandOffEntity(ctx, id); err == nil {
+				releases = append(releases, more.Release)
+				continue
+			}
+		}
+		if undo := release(ctx); undo != nil {
+			slog.Warn("player evictor: a hand-off that failed half way could not lift its barriers", "player_id", playerID, "err", undo)
+		}
+		return nil, fmt.Errorf("player evictor: hand off what player %d writes: %w", playerID, err)
+	}
+	return release, nil
 }
 
 // playerEvictor is the demo's answer to "drop this process's copy of a
@@ -749,6 +776,10 @@ type playerEvictor struct {
 	// nest runs the LeaveScene transaction that saves a loaded player's last
 	// position before it leaves this process (leaveMap).
 	nest corenest.Client
+	// playerScoped lists the other entities only this player's process writes
+	// and that therefore leave with the player (the terrain edit ledger,
+	// terrainEditorOf). nil: the player is the only one.
+	playerScoped []func(playerID int64) (int64, error)
 }
 
 // entityHandOff is the slice of the DataEngine Mod a hand-off uses.
