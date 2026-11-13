@@ -369,6 +369,14 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
   - **生成依赖没发布的包**：portal 的接线用 `wiring/modulehost`，已发布的 core（v1.44.0）里没有，所以 `-template game-demo` 现在要 `--skip-deps` 加本地 `replace` 才生成得出来；demo 的模块那一步因此与配方一样不在安装时跑 `go mod tidy`。下一次发版之后要把最低 core 版本提到那一版（打 tag 之后单独提交）。
   - **accountctl 的两处缺省变了**：`upsert-server` 的 `-sid` 必填（原来缺省 1000）、`-region` 缺省为空（原来是 `demo`）。仓库里的脚本都带 `-sid`。
 
+#### 组件包与 game/view（v1.47.0）
+
+组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。
+
+- **view 接口只收签名里用内建类型与 db 类型的方法**：签名用到组件包自己类型的方法不进 view（view 不能反向 import 组件包，否则回到循环引用）。cdkey、checkin、gacha、idle、naming、purchase、shop 七个组件的接口因此是空的 `interface{}`，handler 仍经实体上的 `XComp()` 拿具体类型调用。view 另外 import 了 `game/actor` 与 `game/gameplay/attribute` 两个只放类型的叶子包。
+- **冷组件没有 view 访问器**：冷组件的字段可能是 nil，装进接口后不等于 nil，所以生成器不给它生成 `func (e *Player) X() view.X`；跨组件调用冷组件要经实体的具体类型。
+- **过期的 `entity_<实体>.go` 只在全量扫描时删除**：只生成某一个实体包时不清理别的实体留下的 `entity_*.go`。
+
 #### 业务 HTTP 路由与配置检查
 
 **业务 HTTP 路由（`wiring/web`）**：
@@ -621,6 +629,11 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **开发配置里两个带 DataEngine 的服务同 sid、同工作目录会争同一个 WAL 目录**（2026-11-04 发现，game-demo 加 alliance 服务时）：开发配置不写 `dataengine.wal.dir` 时取 `data/wal/dataengine/<sid>`，不含服务名；`deploy/dev/run.sh` 用同一个 `SID` 起全部服务，第二个进程会因 WAL 目录锁退出。game-demo 的 alliance 开发配置显式写了 `data/wal/alliance` 绕开（一个工作目录只能起一个 alliance 进程）；生成器的缺省目录是否要带服务名尚未决定。
 - **嵌套类型里的 nil map 往返后文档形状变化**（2026-10-30，尚未确认是否需要处理）：修 DAO map 切片值副本（`cdf5ae07`）时观察到，嵌套 struct 的 map 字段为 nil 时持久化存成 `null`，读回后再存一次变成 `{}`（嵌套 `set<Field>RawMap(nil)` 总会新建空 map），把夹具放在 `GemInfo` 上时 `TestThePersistDocumentHasOneShapeAndRoundTrips` 因此报 “restore changed the document”；夹具改放 `Envelope` 避开，代码未改。语义上两者都是空 map，读取结果相同；影响限于文档形状不稳定（一次往返多一次无实际变化的写、按 `null` 查询的外部脚本查不到）。DAO 顶层 map 是否同样如此、是否有别的读者依赖 `null`，尚未核对。
 - **端到端用的是内存权威**：`scripts/test-heartbeat-generated.sh` 以不落库 committer 代替 DataEngine，只覆盖新建实体（不覆盖卸载重载后重新登记、Remote 托管实体、真实 WAL / Mongo）；脚本不在 `go test ./...` 里；2026-10-31 起由 `scripts/pretag.sh` 每次发版跑（维护者决定纳入），平时改心跳 / 行为 / 时间域生成器时手工运行。
+
+#### 组件包与 game/view：遗留
+
+- **只拆了 Player 上的组件**：room、team、alliance 等其他实体上的组件这一轮没有搬进 `game/components/`；game-demo 的 `map_component.go`、`cell_base.go` 与 cell 路由耦合（`map` 也不能作包名），activity 的 `activity_timers.go` 挂在工程的定时器组件上，这几处仍在 `game/entities/player`。
+- **team 组件依赖具体的 Team 实体**：`game/components/team` import 了 `game/entities/team`，因为建队、接受、邀请要跨实体操作 `*team.Team`。没有形成循环，以后可改成经 `view.TeamEntity`。
 
 #### 业务模块（roost module）
 
