@@ -2,6 +2,7 @@ package skill
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -180,5 +181,64 @@ func TestRuntimePendingFollowsCastsAndTasks(t *testing.T) {
 	}
 	if runtime.Pending() || runtime.CurrentTick() != 3 {
 		t.Fatalf("after the cast finished: pending %v tick %d (a cooldown is not work)", runtime.Pending(), runtime.CurrentTick())
+	}
+}
+
+// Pending 里“活动中的施法”一项是保守保留的守卫（KNOWN-LIMITS“Pending 的活动施法一项没有强制点证据”）：按构造，未结束的
+// 施法要么在排程器里有任务（resolveControl 的 flowContinue 在 pendingTasks 为 0 又没结束时报 ErrProgramInvariant；
+// 策略等待、前摇、后摇都排了任务），要么拥有逐 tick 推进的衍生物，所以单靠“活动施法”判定为有工作的状态在合法程序里不出现。
+// 这里把全部验收夹具逐 tick 推进（含需要松开的），每一步核对这一点：一旦出现“只有活动施法、没有任务也没有推进中的衍生物”，
+// 说明这一项不再多余（去掉它的驱动会在施法未完时停下），本用例变红。
+func TestEveryActiveCastHasATaskOrASteppedSpawn(t *testing.T) {
+	observedActive := 0 // 用例不能是空转：要真的在施法未结束时核对过
+	check := func(t *testing.T, runtime *Runtime, at string) {
+		t.Helper()
+		runtime.mutex.Lock()
+		active, tasks, stepped := runtime.activeCastCount, runtime.scheduler.Len(), runtime.spawns.count(spawnSteppedPartitions...)
+		runtime.mutex.Unlock()
+		if active > 0 {
+			observedActive++
+		}
+		if active > 0 && tasks == 0 && stepped == 0 {
+			t.Fatalf("%s: %d active casts with no scheduled task and no stepped spawn; Pending relies on the active-cast term here", at, active)
+		}
+	}
+	for _, test := range discoveredFixtureCases(t) {
+		if test.passive {
+			continue
+		}
+		t.Run(test.name, func(t *testing.T) {
+			environment := DefaultCompileEnvironment()
+			program, diagnostics := Compile(mustParseFixture(t, test.name), environment)
+			requireNoErrors(t, diagnostics)
+			runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{MatchSeed: fixedTestSeed(23)})
+			castID, err := runtime.Activate(program, test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(t, runtime, "after Activate")
+			releaseAt := Tick(-1)
+			if test.release && len(test.advanceTicks) > 0 {
+				releaseAt = test.advanceTicks[len(test.advanceTicks)-1]
+			}
+			for tick := Tick(1); tick <= 200 && runtime.Pending(); tick++ {
+				if err := runtime.Advance(tick); err != nil {
+					t.Fatal(err)
+				}
+				check(t, runtime, fmt.Sprintf("tick %d", tick))
+				if tick == releaseAt {
+					if err := runtime.Release(castID); err != nil {
+						t.Fatal(err)
+					}
+					check(t, runtime, fmt.Sprintf("release at tick %d", tick))
+				}
+			}
+			if runtime.Pending() {
+				t.Fatalf("still pending after 200 ticks")
+			}
+		})
+	}
+	if observedActive < 20 {
+		t.Fatalf("only %d checks saw an active cast; the fixtures no longer exercise unfinished casts", observedActive)
 	}
 }
