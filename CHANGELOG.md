@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.45.0] - 2026-11-13
+
 - **组合 skill**（2026-11-13，维护者要求）：拆需求之前先判断是否真的需要这套专用服务器框架（compose §0C：需要 / 不需要 / 只有一部分需要，结论告诉用户、由用户决定）；只在 Steam 上发行、人数少的联机房间建议 Steam Lobby + Netcode for GameObjects + Steam 传输层，通用方案见 `references/steam-lobby-ngo.md`（优先用原生 Steamworks SDK：Steamworks.NET 一对一绑定、`ISteamMatchmaking`、`ISteamNetworkingSockets`）。
 
 - **修复**（scripts/testdata/mmorpg）：MMORPG 场景夹具仍调 game-demo 已移走的 `SetGold` / `SetExp`，v1.45.0 第二次 pretag 的 `test-mmorpg-scenes` 编译失败（未推送）；改为写 wallet 与 profile 模块的字段，私有字段检查改查 `wallet` / `profile_private` / `bag`。该脚本单独重跑通过。
