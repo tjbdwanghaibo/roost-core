@@ -49,7 +49,7 @@ func TestModuleGachaIdleScenariosAndMutations(t *testing.T) {
 		"./game/handler", "TestGachaSingleChargesAndGrants", "single result")
 	recipeMutationMustFail(t, root, "game/components/gacha/rules.go",
 		"if roll < row.Weight {", "if roll <= row.Weight {",
-		"./game/entities/player", "TestGachaWeightsUseExactHalfOpenIntervals", "roll 2")
+		"./game/components/gacha", "TestGachaWeightsUseExactHalfOpenIntervals", "roll 2")
 	recipeMutationMustFail(t, root, "game/components/idle/idle.go",
 		"if capped {", "if false && capped {",
 		"./game/handler", "TestIdleOfflineCapDropsOldOverflow", "cap")

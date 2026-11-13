@@ -30,5 +30,5 @@ func TestModuleClientRulesAndShopTable(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/components/shop/shop_client_rules.go", "if row.Off {", "if false && row.Off {", "./game/handler", "TestWithShopRulesExportsSortedVisibleGoods", "visible goods=")
 	recipeMutationMustFail(t, root, "game/components/shop/shop_client_rules.go", "Price: row.Price", "Price: row.Price+1", "./game/handler", "TestWithShopRulesExportsSortedVisibleGoods", "shop rule=")
 	recipeMutationMustFail(t, root, "game/components/shop/goods.go", "return generated.ShopGoodsByID(goodsID)", "row,ok:=generated.ShopGoodsByID(goodsID);row.Price=10;return row,ok", "./game/handler", "TestWithShopRulesReadsNewTableAndKeepsOldSnapshot", "purchase diverged")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestRules|^TestShop|^TestWithShopRules|^TestWithStaminaRules", "./game/entities/player", "./game/handler", "./game/controllers/rules")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestRules|^TestShop|^TestWithShopRules|^TestWithStaminaRules", "./game/components/rules", "./game/components/shop", "./game/handler", "./game/controllers/rules")
 }

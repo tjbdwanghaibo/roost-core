@@ -42,7 +42,7 @@ func TestModuleTaskEventsPeriodsAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/components/task/catalog.go", "index.events[row.Event] = append(index.events[row.Event], row)", "index.events[\"win\"] = append(index.events[\"win\"], row)", "./game/handler", "TestTaskReportAdvancesOnlyMatchingEvents", "events=")
 	recipeMutationMustFail(t, root, "game/components/wallet/wallet.go", "fctx.NowMilli()", "fctx.NowMilli()+1", "./game/handler", "TestWithTaskWalletUsesTheTransactionsFrozenDay", "frozen day=")
 	recipeMutationMustFail(t, root, "game/components/wallet/wallet.go", "if err := spent.WalletSpent(-delta, fctx.NowMilli()); err != nil {", "if err := spent.WalletSpent(-delta, fctx.NowMilli()); false && err != nil {", "./game/handler", "TestWithTaskWalletHookFailureRollsBackBusinessAndProgress", "hook failure accepted")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTask|^TestWithTask", "./game/handler", "./game/entities/player", "./game/controllers/task")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTask|^TestWithTask", "./game/handler", "./game/components/task", "./game/controllers/task")
 }
 func checkTaskModuleRows(t *testing.T, report ModuleVerifyReport, want map[string]int) {
 	t.Helper()

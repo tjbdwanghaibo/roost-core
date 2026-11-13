@@ -84,7 +84,7 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 				t.Fatalf("%s: the front door is not hosted on the account service: %+v", name, manifest.Modules["portal"])
 			}
 			checkRecipeLoginDevelopmentConfig(t, target)
-			for _, args := range [][]string{{"test", "-json", "-count=1", "./..."}, {"test", "-json", "-race", "-count=1", "-run", "^TestRecipe|^TestEnter", "./game/handler", "./game/entities/player", "./internal/access/player/tcp"}, {"build", "./..."}, {"vet", "./..."}} {
+			for _, args := range [][]string{{"test", "-json", "-count=1", "./..."}, {"test", "-json", "-race", "-count=1", "-run", "^TestRecipe|^TestEnter", "./game/handler", "./game/login", "./internal/access/player/tcp"}, {"build", "./..."}, {"vet", "./..."}} {
 				cmd := exec.Command("go", args...)
 				cmd.Dir, cmd.Env = target, generatedProjectGoEnv()
 				output, err := cmd.CombinedOutput()
