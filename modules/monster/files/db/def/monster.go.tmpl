@@ -2,7 +2,7 @@ package dbdef
 
 // MonsterDao 不落库；进程启动从规则重建，客户端只接收位置与生命事实。
 //
-//roost:dao coll=monster db=main
+//roost:dao coll=monster db=main dbscope=sid
 type MonsterDao struct {
 	Actor  ActorState    `dao:"nopersist,sync" store:"1"`
 	Vitals MonsterVitals `dao:"nopersist,sync" store:"2"`

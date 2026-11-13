@@ -385,6 +385,10 @@ func register{{.Entity.Name}}Entity() {
 			},
 {{- end}}
 			NoPersist: {{.Entity.NoPersist}},
+{{- if .Entity.PreloadOrder}}
+			// preload_order: the batch of the startup preload (smaller loads first).
+			LoadPriority: {{.Entity.PreloadOrder}},
+{{- end}}
 {{- if .Entity.BusinessPool}}
             BusinessPool: {{.Entity.BusinessPool}},
 {{- end}}

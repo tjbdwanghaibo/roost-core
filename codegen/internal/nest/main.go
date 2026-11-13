@@ -214,6 +214,15 @@ func run(args []string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "generated: %s\n", ownershipFile)
 			totalGenerated++
 		}
+		preloadFile := filepath.Join(registryDir, "preload_gen.go")
+		changed, err = generateLocalPreload(absDir, moduleRoot, modulePath, preloadFile, *force)
+		if err != nil {
+			return fmt.Errorf("generate local preload %s: %w", preloadFile, err)
+		}
+		if changed {
+			fmt.Fprintf(stdout, "generated: %s\n", preloadFile)
+			totalGenerated++
+		}
 	}
 	removed, err := retireNestOrphans(absDir, expected, stdout)
 	if err != nil {

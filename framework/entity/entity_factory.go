@@ -21,10 +21,13 @@ type EntityBuilderParam struct {
 	Kind         EntityKind        // 具体实体定义
 	Builder      EntityBuilderFunc // 实体构造函数（生成的 NewXxx）
 	DaoBuilders  []DaoBuilderFunc  // DAO 工厂，实体的每个 DAO 一个
-	LoadPriority int               // 越小越先加载
-	NoPersist    bool              // 不自动持久化
-	RemotePolicy RemotePolicy      // 显式的跨服策略
-	Lifetime     EntityLifetime    // 内存 / 持久化生命周期策略
+	// LoadPriority 是本地实体起服预加载的批次（生成自 //roost:entity preload=startup preload_order=<N>，缺省 0）：
+	// engine.Runtime.PreloadLocalEntities 按它从小到大分批，同一批并发加载，前一批全部完成才开始下一批。
+	// 没有声明 preload=startup 的 kind 不预加载，这个值不被读取。
+	LoadPriority int
+	NoPersist    bool           // 不自动持久化
+	RemotePolicy RemotePolicy   // 显式的跨服策略
+	Lifetime     EntityLifetime // 内存 / 持久化生命周期策略
 	Sync         EntitySyncBuilderParam
 }
 

@@ -73,6 +73,9 @@ func (c *collection) Find(ctx context.Context, filter any, results any, opts ...
 		if opt.BatchSize > 0 {
 			findOpts.SetBatchSize(opt.BatchSize)
 		}
+		if opt.Projection != nil {
+			findOpts.SetProjection(opt.Projection)
+		}
 	}
 	cursor, err := c.coll.Find(ctx, filter, findOpts)
 	if err != nil {
@@ -98,6 +101,9 @@ func (c *collection) StreamFind(ctx context.Context, filter any, consume func([]
 		}
 		if opt.BatchSize > 0 {
 			findOpts.SetBatchSize(opt.BatchSize)
+		}
+		if opt.Projection != nil {
+			findOpts.SetProjection(opt.Projection)
 		}
 	}
 	cursor, err := c.coll.Find(ctx, filter, findOpts)

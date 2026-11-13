@@ -347,6 +347,14 @@ func (p *Projector) entityHandOffHeld(id int64, token uint64) bool {
 	return held && current == token
 }
 
+// entityHandedOff 报告实体 id 此刻是否由本进程交出（屏障保持中）。
+func (p *Projector) entityHandedOff(id int64) bool {
+	p.heldMu.RLock()
+	defer p.heldMu.RUnlock()
+	_, held := p.handedOffEntities[id]
+	return held
+}
+
 // checkHandedOffEntitiesLocked 在 reserve 的 heldMu 临界区内拒绝写到已交出实体的新记录。排在卸载屏障的检查之后：
 // 交出、Release 进行中的实体两张表里都有，先拿到的是可重试的 ErrEntityUnloading。
 func (p *Projector) checkHandedOffEntitiesLocked(record coredata.CommitRecord) error {

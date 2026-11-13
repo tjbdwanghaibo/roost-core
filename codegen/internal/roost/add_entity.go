@@ -72,7 +72,8 @@ func addEntityDAO(root string, manifest Manifest, options AddOptions) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	daoBody, err := format.Source([]byte(renderDAODefinition(daoSnake, daoType)))
+	// 本地实体的 DAO 按服分库（dbscope=sid）；Remote 托管实体的 DAO 各服共用（remote=managed 要求 dbscope=global）。
+	daoBody, err := format.Source([]byte(renderDAODefinition(daoSnake, daoType, !remoteManagedEntitySource(raw))))
 	if err != nil {
 		return nil, fmt.Errorf("format DAO scaffold: %w", err)
 	}
@@ -369,10 +370,31 @@ func (component *%sComponent) Owner() *%s { return component.owner }
 // dataengine.databases（生成配置写 main: <daoDatabaseName(工程名)>，新工程开箱的物理库名与工程名派生的规则一致）。
 const defaultDAODatabase = "main"
 
+// remoteManagedEntitySource 报告实体源码的 //roost:entity 标记是不是 remote=managed。
+func remoteManagedEntitySource(raw []byte) bool {
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "//roost:entity ") && strings.Contains(" "+line+" ", " remote=managed ") {
+			return true
+		}
+	}
+	return false
+}
+
 // renderDAODefinition 写 DAO 定义骨架。db= 是逻辑库名（物理库名在配置 dataengine.databases 里），文档 _id 是
 // 完整 EntityID（roost id entity 换算），两点都写进骨架注释，免得运维按逻辑名或玩家 ID 去 Mongo 里找。
-func renderDAODefinition(collection, typeName string) string {
-	return fmt.Sprintf("package dbdef\n\n// %s is stored in collection %q of the logical database %q (db=, the\n// constant db.%sDBName). The Mongo database it lands in is deployment\n// configuration: dataengine.databases maps %s to a physical database (the\n// generated config maps it to one named after the project).\n// Each document's _id is the full EntityID, not the bare player id: convert\n// with `roost id entity --unique <player-id> --entity <Entity>` and back with\n// `roost id entity <_id>`.\n//\n//roost:dao coll=%s db=%s\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `store:\"name\" dao:\"persist,sync\"`\n\t// store:\"...\" is the required stable field key; missing or duplicate keys fail generation.\n\t// Write it on every generated field: renaming the Go field then keeps the\n\t// stored data, as long as the store key stays.\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", typeName, collection, defaultDAODatabase, typeName, defaultDAODatabase, collection, defaultDAODatabase, typeName)
+//
+// serverScoped 为 true 时写 dbscope=sid（维护者 2026-11-13：“local 就是 dbscope=sid”）：挂在本地 Nest 实体上的 DAO
+// （add dao --entity、模块自带的本地实体、-template game-demo 的 Player / World）按服分库，物理库 <库>_<sid>，
+// 每个服一个；起服预加载（preload=startup）与按 ID 冷加载都只看本服库。dbscope=global 只留给 Remote 托管等各服
+// 共用的实体（remote=managed 要求它）。不挂实体的独立 DAO（add dao 不带 --entity）不知道给谁用，不写，取缺省 global。
+func renderDAODefinition(collection, typeName string, serverScoped bool) string {
+	scope, note := "", ""
+	if serverScoped {
+		scope = " dbscope=sid"
+		note = "// dbscope=sid: one database per server, <physical>_<sid>; this server's\n// entities are the documents in its own database. Use dbscope=global only for\n// an entity every server shares (remote=managed requires it).\n"
+	}
+	return fmt.Sprintf("package dbdef\n\n// %s is stored in collection %q of the logical database %q (db=, the\n// constant db.%sDBName). The Mongo database it lands in is deployment\n// configuration: dataengine.databases maps %s to a physical database (the\n// generated config maps it to one named after the project).\n%s// Each document's _id is the full EntityID, not the bare player id: convert\n// with `roost id entity --unique <player-id> --entity <Entity>` and back with\n// `roost id entity <_id>`.\n//\n//roost:dao coll=%s db=%s%s\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `store:\"name\" dao:\"persist,sync\"`\n\t// store:\"...\" is the required stable field key; missing or duplicate keys fail generation.\n\t// Write it on every generated field: renaming the Go field then keeps the\n\t// stored data, as long as the store key stays.\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", typeName, collection, defaultDAODatabase, typeName, defaultDAODatabase, note, collection, defaultDAODatabase, scope, typeName)
 }
 
 // daoDatabaseName 是按工程名派生的 Mongo 物理库名（生成配置的 {project_db}：dataengine.database 与

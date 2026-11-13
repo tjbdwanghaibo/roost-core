@@ -164,7 +164,7 @@ func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "//roost:dao coll=player db=main\n") {
+	if !strings.Contains(string(raw), "//roost:dao coll=player db=main dbscope=sid\n") {
 		t.Fatalf("DAO skeleton does not use the logical database main:\n%s", raw)
 	}
 	config, err := os.ReadFile(filepath.Join(target, "configs", "service", "config.game.yaml"))

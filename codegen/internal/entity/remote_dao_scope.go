@@ -38,6 +38,33 @@ func validateRemoteDaoScopes(ent EntityDef, dir string) error {
 	return nil
 }
 
+// validateLocalPreloadDaoScopes 拒绝本地实体（不是 remote=managed）写了 preload=startup 却有 dbscope=global 的 DAO
+// （维护者 2026-11-13：“local 就是 dbscope=sid”）。本地预加载加载的是“本服库里这个 kind 的文档”：物理库 <库>_<sid>
+// 本身就按服区分，所以每个 DAO 都必须按服选库；global 的库是各服共用的，按它枚举会把别的服的实体加载进来。
+// 与 validateRemoteDaoScopes 一样读 DAO 包的源码判定；读不到（模块外、DbScope 不是直接返回常量）时不在这里判，
+// 由运行期 wiring/dataengine.LocalPreloadMod 的 Init（engine.ValidateLocalPreloadKinds）兜底。
+func validateLocalPreloadDaoScopes(ent EntityDef, dir string) error {
+	if !ent.Preload || ent.RemotePolicy == "entity.RemotePolicyManaged" {
+		return nil
+	}
+	for _, dao := range ent.Daos {
+		pkgDir, typeName := daoSourceDir(ent, dir, dao.TypeName)
+		if pkgDir == "" {
+			continue
+		}
+		scope, file, err := declaredDaoScope(pkgDir, typeName)
+		if err != nil {
+			return fmt.Errorf("entity %s: inspect DAO %s scope: %w", ent.Name, dao.TypeName, err)
+		}
+		if scope == "global" {
+			return fmt.Errorf("entity %s: preload=startup loads this server's stored %s entities, but DAO field %s (%s, %s) uses dbscope=global, a database every server shares; "+
+				"a local entity's DAOs are dbscope=sid (//roost:dao ... dbscope=sid, one database per server), so change the DAO to dbscope=sid and regenerate, or drop preload=startup",
+				ent.Name, ent.Name, dao.FieldName, dao.TypeName, file)
+		}
+	}
+	return nil
+}
+
 // daoSourceDir 返回 DAO 类型所在包的目录与不带包限定的类型名：同包类型就是实体目录；
 // 带限定的类型按实体的 import 映射到模块内目录，模块外返回空目录（生成期无法读取源码）。
 func daoSourceDir(ent EntityDef, dir, daoType string) (string, string) {
@@ -86,12 +113,22 @@ func moduleDirForImport(start, importPath string) string {
 // serverScopedDaoFile 在 pkgDir 的非测试源码中查找 typeName 的 DbScope 方法；
 // 方法直接返回 DatabaseServer 时返回所在文件名，否则返回空串。
 func serverScopedDaoFile(pkgDir, typeName string) (string, error) {
+	scope, file, err := declaredDaoScope(pkgDir, typeName)
+	if err != nil || scope != "sid" {
+		return "", err
+	}
+	return file, nil
+}
+
+// declaredDaoScope 读 pkgDir 里 typeName 的 DbScope 方法：直接返回 DatabaseServer 为 "sid"、DatabaseGlobal 为 "global"，
+// 并给出所在文件名；找不到方法或不是直接返回常量时 scope 为 ""（判断不了）。
+func declaredDaoScope(pkgDir, typeName string) (scope, file string, err error) {
 	entries, err := os.ReadDir(pkgDir)
 	if os.IsNotExist(err) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	fset := token.NewFileSet()
 	for _, entry := range entries {
@@ -101,7 +138,7 @@ func serverScopedDaoFile(pkgDir, typeName string) (string, error) {
 		}
 		f, err := parser.ParseFile(fset, filepath.Join(pkgDir, name), nil, parser.SkipObjectResolution)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -111,28 +148,32 @@ func serverScopedDaoFile(pkgDir, typeName string) (string, error) {
 			if receiverTypeName(fn.Recv.List[0].Type) != typeName {
 				continue
 			}
-			if returnsDatabaseServer(fn.Body) {
-				return name, nil
+			switch returnedScope(fn.Body) {
+			case "DatabaseServer":
+				return "sid", name, nil
+			case "DatabaseGlobal":
+				return "global", name, nil
 			}
-			return "", nil
+			return "", "", nil
 		}
 	}
-	return "", nil
+	return "", "", nil
 }
 
-func returnsDatabaseServer(body *ast.BlockStmt) bool {
+// returnedScope 返回 DbScope 方法体直接返回的常量名（DatabaseServer / DatabaseGlobal），不是这种写法时为 ""。
+func returnedScope(body *ast.BlockStmt) string {
 	if len(body.List) != 1 {
-		return false
+		return ""
 	}
 	ret, ok := body.List[0].(*ast.ReturnStmt)
 	if !ok || len(ret.Results) != 1 {
-		return false
+		return ""
 	}
 	switch value := ret.Results[0].(type) {
 	case *ast.SelectorExpr:
-		return value.Sel.Name == "DatabaseServer"
+		return value.Sel.Name
 	case *ast.Ident:
-		return value.Name == "DatabaseServer"
+		return value.Name
 	}
-	return false
+	return ""
 }

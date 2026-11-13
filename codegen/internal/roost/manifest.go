@@ -99,6 +99,9 @@ type Manifest struct {
 	// （联盟服务方案 §2.7）。Not part of roost.yaml.
 	routeServices   map[string]bool
 	preloadServices map[string]bool
+	// localPreloadServices 是起服预加载本地实体（//roost:entity preload=startup，非 remote）的服务：bootstrap 给它们装
+	// kitdataengine.NewLocalPreloadMod(registry.LocalPreloadKinds("<service>")...)。Not part of roost.yaml.
+	localPreloadServices map[string]bool
 }
 
 type ProjectSpec struct {
