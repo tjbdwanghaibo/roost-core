@@ -249,10 +249,8 @@ func (g *remoteViewGenerator) ensureNested(name string) (string, error) {
 	var fields []remoteViewField
 	var shape strings.Builder
 	fmt.Fprintf(&shape, "%s{", name)
+	// 嵌套类型的字段没有自己的持久开关（解析期拒绝），全部随所在顶层字段落库，视图照搬全部字段。
 	for _, f := range nested.Fields {
-		if !f.Tag.Persist {
-			continue
-		}
 		vf, err := g.field(f, "s", "")
 		if err != nil {
 			return "", err

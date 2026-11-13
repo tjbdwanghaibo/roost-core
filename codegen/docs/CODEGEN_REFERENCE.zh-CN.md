@@ -551,7 +551,7 @@ category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 
 | `-` | 否 | 否 | 完全排除 |
 | `map=small\|fast\|sharded` | 默认是 | 默认是 | 辅助选项不改变默认能力；`small`（默认，`fmap.SmallSafeMap`）、`fast`（`fmap.FastMap`）、`sharded`（`fmap.ShardedSafeMap`）；`fast` / `sharded` 只支持 string 或整数 key |
 
-**只有负向标记关闭能力**：`nosync` / `nopersist` 分别关闭客户端同步 / 持久化，`map=...` 可以单独写。升级旧生成工程时按 [tag 手册](TAGS.zh-CN.md#dao-字段-tag)复核私有与临时字段。支持的字段类型：基础类型、slice、map、嵌套 struct（值或指针）；固定长度数组、`chan`、`*map[...]...`、指向非本地命名类型的指针在生成期被拒绝（提示用 `dao:"-"` 排除）。map 容器来自 `github.com/tjbdwanghaibo/roost-core/infra/base/safemap`（生成代码里别名 `fmap`）。
+**只有负向标记关闭能力**：`nosync` / `nopersist` 分别关闭客户端同步 / 持久化，`map=...` 可以单独写。这些开关只按 DAO 顶层字段决定：嵌套类型的字段随所在顶层字段整体落库与同步，在嵌套字段上写 `persist` / `nopersist` / `sync` / `nosync` 生成期报错，要不同步的部分拆进另一个顶层字段（嵌套字段上 `map=...`、`dao:"-"` 照常可用）。升级旧生成工程时按 [tag 手册](TAGS.zh-CN.md#dao-字段-tag)复核私有与临时字段。支持的字段类型：基础类型、slice、map、嵌套 struct（值或指针）；固定长度数组、`chan`、`*map[...]...`、指向非本地命名类型的指针在生成期被拒绝（提示用 `dao:"-"` 排除）。map 容器来自 `github.com/tjbdwanghaibo/roost-core/infra/base/safemap`（生成代码里别名 `fmap`）。
 
 ### 稳定字段键：必填 `store:"..."` 与持久文档结构体
 
