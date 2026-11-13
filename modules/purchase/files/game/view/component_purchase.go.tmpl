@@ -1,8 +1,42 @@
 package view
 
 // Purchase 是 Purchase 组件对 game/ 下其它包公开的方法（实现在 game/components/purchase，语义见那里）；只在宿主被 Nest 锁住期间调用。
-// 现在是空的：组件的导出方法签名都带组件包自己的类型（view 不 import 组件包），要用时由 handler 走 PurchaseComp()。
-type Purchase interface{}
+type Purchase interface {
+	Apply(grant PurchaseGrant) (PurchaseReceipt, error)
+}
 
 // PurchaseHolder 是“带有 Purchase 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type PurchaseHolder interface{ Purchase() Purchase }
+
+// PurchaseGrantReward 与邮件附件采用相同的种类/号/数量表达。注册的发放方式决定如何入账。
+type PurchaseGrantReward struct {
+	Kind  string `json:"type"`
+	ID    int64  `json:"id,omitempty"`
+	Count int64  `json:"amount"`
+}
+
+// PurchaseGrant 是第一次持久投递时确定的快照。商品改价、下架不修改已存在的快照。
+// Sequence 由队列分配，业务不得自行造号；队列删除后计数器也不能重置。完整性检查见 game/purchase 的 ValidateGrant。
+type PurchaseGrant struct {
+	Sequence uint64 `json:"-"`
+	// Settled 仅由消费者根据 platform 不可重开的 settled 终态设置；退款/人工结清只推进游标、不再发奖。
+	Settled   bool                `json:"-"`
+	OrderID   string              `json:"order_id"`
+	PlayerID  int64               `json:"player_id"`
+	ProductID string              `json:"product_id"`
+	Digest    string              `json:"digest"`
+	Reward    PurchaseGrantReward `json:"reward"`
+}
+
+// PurchaseReceipt 是这笔已发货的不可变结果。重放仍答同一订单/序号/奖励，不返回会随其他操作改变的当前余额。
+type PurchaseReceipt struct {
+	Settled  bool
+	OrderID  string
+	Sequence uint64
+	Reward   PurchaseGrantReward
+}
+
+// Receipt 是这份快照发货之后的回执。
+func (g PurchaseGrant) Receipt() PurchaseReceipt {
+	return PurchaseReceipt{OrderID: g.OrderID, Sequence: g.Sequence, Reward: g.Reward, Settled: g.Settled}
+}

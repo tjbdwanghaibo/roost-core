@@ -61,7 +61,7 @@ func RegisterPurchaseReward(kind string, reward PurchaseReward) {
 // Apply 只接受权威队列读出的快照。连续游标与奖励一起提交，原样重放不写任何 DAO。
 // 即使旧队列消息已被外部取出、迟到到达，低序号也不能再发奖励；不靠过期时间或有限订单号窗口猜测。
 func (c *Component) Apply(grant purchase.Grant) (purchase.Receipt, error) {
-	if err := grant.Validate(); err != nil {
+	if err := purchase.ValidateGrant(grant); err != nil {
 		return purchase.Receipt{}, err
 	}
 	if grant.PlayerID != c.owner.UniqueID() {

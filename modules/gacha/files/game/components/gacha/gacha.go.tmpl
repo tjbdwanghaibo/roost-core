@@ -45,15 +45,8 @@ func (component *Component) Owner() Owner { return component.owner }
 const GachaReceiptWindow = 64
 const GachaMaxPools = 64
 
-// GachaResult 的 Items 按抽取顺序返回，每项代表一个道具；它和持久回执没有共享切片。
-// Replayed 为真表示这是窗口内同一个请求键的重放：结果取自原回执，这一次什么都没写。
-// 调用方自己的次数规则（每日免费一次）要据此决定是否再记一次，见 DrawFree。
-type GachaResult struct {
-	Cost, Balance int64
-	Items         []int64
-	Misses        int64
-	Replayed      bool
-}
+// GachaResult 是 view.GachaResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type GachaResult = view.GachaResult
 
 func gachaKeyValid(key string) bool {
 	if len(key) < 1 || len(key) > 64 {

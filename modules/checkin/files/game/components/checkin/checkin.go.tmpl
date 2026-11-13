@@ -43,12 +43,8 @@ const (
 	CheckinStreakCap  = 7
 )
 
-// CheckinResult 是一次签到的结果。
-type CheckinResult struct {
-	Streak  int32
-	Reward  int64
-	Balance int64
-}
+// CheckinResult 是 view.CheckinResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type CheckinResult = view.CheckinResult
 
 // Claim 领今天的签到奖励。nowUnixMilli 是这条消息冻结的业务时间。
 //

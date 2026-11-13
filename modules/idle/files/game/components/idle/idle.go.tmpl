@@ -38,11 +38,8 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 func (component *Component) Name() string   { return "idle" }
 func (component *Component) Owner() Owner { return component.owner }
 
-// IdleResult 是最后一次成功领取的回包。首次领取只初始化起点，Reward 为0。
-type IdleResult struct {
-	Reward, Balance, SettledAt, Sequence int64
-	Capped                               bool
-}
+// IdleResult 是 view.IdleResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type IdleResult = view.IdleResult
 
 // Claim 在同一笔事务发金币并前移结算游标，提交拒绝或钱包溢出时连序号一同回滚。
 // 当前序号重试即使跨天也不再结算；更旧序号和跳号都拒绝。账本永远只存一条。

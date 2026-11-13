@@ -30,13 +30,8 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 func (c *Component) Name() string { return "naming" }
 
 
-// NamingTicket 是锁外可持有的快照，目录 RPC 只能拿快照，不能拿 Player。
-type NamingTicket struct {
-	Seq                                           int64
-	Operation, Target                             string
-	Phase                                         int32
-	ClaimKey, ClaimToken, Owner, OldKey, OldOwner string
-}
+// NamingTicket 是 view.NamingTicket（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type NamingTicket = view.NamingTicket
 
 func (c *Component) Ticket() NamingTicket {
 	s := c.owner.Dao().GetNaming()

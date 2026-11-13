@@ -2,21 +2,15 @@
 package cdkey
 
 import (
-	"fmt"
 	"strings"
+
+	"{{MODULE}}/game/view"
 )
 
 const MaxReceipts = 128
 
-type Intent struct {
-	Code             string
-	Mode             string
-	Coins            int64
-	Subject          string
-	Body             string
-	ExpiresInSeconds int64
-	MailID           string
-}
+// Intent 是一次兑换的持久意图，见 view.CdkeyIntent（结构体与它的两个键在 game/view，这里留同名别名）。
+type Intent = view.CdkeyIntent
 
 // Normalize 限定安全的持久 map 键；统一大写，避免客户端大小写制造第二份事实。
 func Normalize(code string) (string, bool) {
@@ -32,15 +26,3 @@ func Normalize(code string) (string, bool) {
 	return code, true
 }
 
-// ClaimKey 对同一码永久稳定。所有 game sid 必须使用同一 directory 命名空间，不能释放这些键。
-func (intent Intent) ClaimKey(playerID int64) string {
-	if intent.Mode == "once" {
-		return "cdkey:once:" + intent.Code
-	}
-	return fmt.Sprintf("cdkey:player:%d:%s", playerID, intent.Code)
-}
-
-// RequestID 同一玩家同一码永不改变；即使发件超时或进程重启，mail 服务仍恢复同一封邮件。
-func (intent Intent) RequestID(playerID int64) string {
-	return fmt.Sprintf("cdkey:reward:%d:%s", playerID, intent.Code)
-}

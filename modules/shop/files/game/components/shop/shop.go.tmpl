@@ -64,18 +64,8 @@ func shopKeyValid(key string) bool {
 	return true
 }
 
-// ShopResult 是一次成功购买的结果，也是回执里存下来、重发时原样返回的内容。
-type ShopResult struct {
-	// Cost 是这一笔扣的金币，Balance 是扣完之后的余额。
-	Cost    int64
-	Balance int64
-	// ItemID 是发放的道具号，Gained 是这一笔发了几个，Held 是发完之后的持有数量。
-	ItemID int64
-	Gained int64
-	Held   int64
-	// Bought 是这一笔之后该商品在限购周期内已买的份数；不限购的商品为 0。
-	Bought int64
-}
+// ShopResult 是 view.ShopResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type ShopResult = view.ShopResult
 
 // Buy 用金币买 count 份 goodsID。key 是客户端为这一次购买生成的请求键，nowUnixMilli 是这条消息冻结的业务时间。
 //

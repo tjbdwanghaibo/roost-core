@@ -124,7 +124,7 @@ func (q *RedisQueue) Pending(ctx context.Context, playerID int64, limit int) ([]
 	return decodeGrants(result)
 }
 func (q *RedisQueue) Ack(ctx context.Context, grant Grant) error {
-	if err := grant.Validate(); err != nil {
+	if err := ValidateGrant(grant); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(grant)
@@ -164,7 +164,7 @@ func decodeGrants(result any) ([]Grant, error) {
 			return nil, err
 		}
 		grant.Sequence = n
-		if err := grant.Validate(); err != nil {
+		if err := ValidateGrant(grant); err != nil {
 			return nil, err
 		}
 		grants = append(grants, grant)
