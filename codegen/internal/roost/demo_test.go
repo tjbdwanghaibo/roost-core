@@ -406,7 +406,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// (account's verifier once said "channel %q is not configured" and read as
 	// a stub).
 	for _, service := range []string{"account", "activity", "chat", "global", "mail", "match", "platform", "rank", "session"} {
-		if collaborators := read("internal/service/" + service + "/collaborators.go"); strings.Contains(collaborators, collaboratorUnconfiguredMarker) {
+		if collaborators := read("services/" + service + "/collaborators.go"); strings.Contains(collaborators, collaboratorUnconfiguredMarker) {
 			t.Errorf("%s collaborators still read as unconfigured to doctor:\n%s", service, collaborators)
 		}
 	}

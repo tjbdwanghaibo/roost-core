@@ -609,7 +609,7 @@ func TestMonsterDestroyRejectsAReplacementEntityInstance(t *testing.T) {
 	if err := f.manager.lives.Destroy(context.Background(), old, entity.DestroyReasonCommon, false); err != nil {
 		t.Fatal(err)
 	}
-	replacement, err := f.manager.lives.CreateMonster(context.Background(), unique, monster.CreateParams{Spec: rules.DefaultSpec()})
+	replacement, err := f.manager.lives.CreateWith(context.Background(), unique, monster.CreateParams{Spec: rules.DefaultSpec()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +719,7 @@ func checkMonsterReplacement(t *testing.T, operation string, replaceScene bool) 
 			if err := f.manager.lives.Destroy(ctx, original, entity.DestroyReasonCommon, false); err != nil {
 				return err
 			}
-			made, err := f.manager.lives.CreateMonster(ctx, unique, monster.CreateParams{Spec: rules.DefaultSpec()})
+			made, err := f.manager.lives.CreateWith(ctx, unique, monster.CreateParams{Spec: rules.DefaultSpec()})
 			if err != nil {
 				return err
 			}

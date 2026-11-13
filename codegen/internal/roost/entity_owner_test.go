@@ -306,6 +306,8 @@ func TestLocalPreloadAssemblesThePreloadModInTheHostingService(t *testing.T) {
 	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), "roost project sync") {
 		t.Fatalf("generate with a stale bootstrap must ask for project sync, got %v", err)
 	}
+	// 生成的 lifecycle_gen.go 用 core 的 wiring/entitylifecycle（v1.47.0 新增）：sync 的依赖整理指向本仓。
+	useLocalRoostCore(t, root)
 	var out bytes.Buffer
 	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("project sync: %v\n%s", err, out.String())
