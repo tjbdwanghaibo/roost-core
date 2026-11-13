@@ -415,8 +415,8 @@ func TestModulesInstallOntoAGeneratedProjectAndVerify(t *testing.T) {
 	for _, result := range report.Modules {
 		passed[result.Name] = result.Passed
 	}
-	if passed["wallet"] != 14 || passed["checkin"] != 8 {
-		t.Fatalf("passed scenarios = %v, want wallet 14 and checkin 8", passed)
+	if passed["wallet"] != 17 || passed["checkin"] != 8 {
+		t.Fatalf("passed scenarios = %v, want wallet 17 and checkin 8", passed)
 	}
 	if moduleProjectDigest(t, root) != installedDigest {
 		t.Fatal("roost module verify changed the project")
