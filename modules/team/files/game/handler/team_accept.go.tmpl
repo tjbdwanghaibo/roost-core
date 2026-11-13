@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	player "{{MODULE}}/game/entities/player"
 	team "{{MODULE}}/game/entities/team"
 )
@@ -8,6 +9,6 @@ import (
 // handlerTeamAccept 的 Team 权限由准备阶段取得，业务阶段统一锁住 Team 与 Player。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTeamAccept(target team.ITeamEntity, member player.ITeamEntity, sid int32, nowUnixMilli int64) (team.Snapshot, error) {
+func handlerTeamAccept(target team.ITeamEntity, member player.ITeamEntity, sid int32, nowUnixMilli int64) (view.TeamSnapshot, error) {
 	return member.TeamComp().Accept(target.TeamEntity(), sid, nowUnixMilli)
 }

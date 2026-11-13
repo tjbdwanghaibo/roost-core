@@ -5,20 +5,20 @@ import (
 	"errors"
 	"testing"
 
+	"{{MODULE}}/game/components/terrainledger"
 	db "{{MODULE}}/db"
-	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// 玩家在本格的账本（P5）：规则同 terrain_editor.SeqWindow，只是不答 Ahead——玩家在别的格编辑了很久之后第一次来到本格，
+// 玩家在本格的账本（P5）：规则同 terrainledger.SeqWindow，只是不答 Ahead——玩家在别的格编辑了很久之后第一次来到本格，
 // 序号比本格的 LastSeq 大很多是正常的（超前由 Base 的账本判过）。窗口内的重复照样答 Duplicate，窗口外答 Stale。
 func TestCellLedgerNeverRefusesAFarAheadSequence(t *testing.T) {
 	e := newTestCellEditor(t, 7)
-	far := int64(terrain_editor.MaxSeqAhead) * 3
+	far := int64(terrainledger.MaxSeqAhead) * 3
 	for _, seq := range []int64{far, far + 1} {
 		if err := in(e, func(l *LedgerComponent) error {
-			if v := l.Check(seq); v != terrain_editor.Fresh {
+			if v := l.Check(seq); v != terrainledger.Fresh {
 				t.Fatalf("seq %d on last %d: %v, want fresh", seq, l.LastSeq(), v)
 			}
 			l.Record(seq)
@@ -28,13 +28,13 @@ func TestCellLedgerNeverRefusesAFarAheadSequence(t *testing.T) {
 		}
 	}
 	l := e.LedgerComp()
-	if l.Check(far) != terrain_editor.Duplicate || l.Check(far+1) != terrain_editor.Duplicate {
+	if l.Check(far) != terrainledger.Duplicate || l.Check(far+1) != terrainledger.Duplicate {
 		t.Fatalf("recorded sequences are not duplicates: %+v", l.Window())
 	}
-	if l.Check(far-terrain_editor.WindowSize-1) != terrain_editor.Stale {
-		t.Fatalf("a sequence below the window: %v", l.Check(far-terrain_editor.WindowSize-1))
+	if l.Check(far-terrainledger.WindowSize-1) != terrainledger.Stale {
+		t.Fatalf("a sequence below the window: %v", l.Check(far-terrainledger.WindowSize-1))
 	}
-	if l.Check(far+1+terrain_editor.MaxSeqAhead*2) != terrain_editor.Fresh {
+	if l.Check(far+1+terrainledger.MaxSeqAhead*2) != terrainledger.Fresh {
 		t.Fatal("a far-ahead sequence is refused on the cell")
 	}
 	if e.PlayerID() != 7 || l.PlayerID() != 7 {
@@ -65,7 +65,7 @@ func TestCellLedgerPersistsAndRollsBack(t *testing.T) {
 	if err := in(e, func(l *LedgerComponent) error { l.Record(66); l.AddBuildings(1); return rollback }); !errors.Is(err, rollback) {
 		t.Fatalf("rolled-back record: %v", err)
 	}
-	if l := e.LedgerComp(); l.Check(66) != terrain_editor.Fresh || l.LastSeq() != 65 || l.Buildings() != 1 {
+	if l := e.LedgerComp(); l.Check(66) != terrainledger.Fresh || l.LastSeq() != 65 || l.Buildings() != 1 {
 		t.Fatalf("after a rolled-back record: last %d buildings %d, 66 %v", l.LastSeq(), l.Buildings(), l.Check(66))
 	}
 	for _, bad := range []int64{0, -1, int64(entity.UniqueIDMask) + 1} {

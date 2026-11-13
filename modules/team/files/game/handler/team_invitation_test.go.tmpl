@@ -6,8 +6,9 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 
+	"{{MODULE}}/game/components/teamroster"
+	"{{MODULE}}/game/view"
 	sender "{{MODULE}}/game/handler/syncsender"
-	team "{{MODULE}}/game/entities/team"
 )
 
 func TestTeamInvitationQueryHidesRevokedOrUnavailableTeams(t *testing.T) {
@@ -16,14 +17,14 @@ func TestTeamInvitationQueryHidesRevokedOrUnavailableTeams(t *testing.T) {
 	})
 	f.create(t, 101)
 	f.invite(t, 101, 102)
-	lookup := func() team.Invitation {
+	lookup := func() view.TeamInvitation {
 		out, err := sender.NewTeamInvitationSender(f.engine).Sync_TeamInvitation(context.Background(), f.teamID, 102)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return out
 	}
-	if got := lookup(); got.ExpireAt != f.now.Load()+team.InviteMillis || got.Invitee != 102 {
+	if got := lookup(); got.ExpireAt != f.now.Load()+teamroster.InviteMillis || got.Invitee != 102 {
 		t.Fatalf("valid invitation: %+v", got)
 	}
 	for id := int64(103); id <= 109; id++ {
@@ -39,7 +40,7 @@ func TestTeamInvitationQueryHidesRevokedOrUnavailableTeams(t *testing.T) {
 	if got := lookup(); got.ExpireAt == 0 {
 		t.Fatal("available seat did not restore invitation")
 	}
-	f.now.Add(team.InviteMillis)
+	f.now.Add(teamroster.InviteMillis)
 	if got := lookup(); got.ExpireAt != 0 {
 		t.Fatalf("expired invite: %+v", got)
 	}
@@ -54,7 +55,7 @@ func TestTeamInvitationQueryHidesRevokedOrUnavailableTeams(t *testing.T) {
 
 func TestTeamLateInviteNoticeDoesNotShortenRenewal(t *testing.T) {
 	f := newTeamFixture(t)
-	expiry := f.now.Load() + team.InviteMillis
+	expiry := f.now.Load() + teamroster.InviteMillis
 	f.note(t, 102, f.teamID, 101, expiry+1000)
 	before := f.facts(t)
 	f.note(t, 102, f.teamID, 103, expiry)

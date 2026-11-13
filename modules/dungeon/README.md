@@ -22,7 +22,8 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 - `Open` 的 `uniqueID` 必须由工程的全局 ID 分配器给出、永不复用；换所有者或赛季答 `dungeon_invalid`。
 - `Defeated(ctx, uniqueID, instance, epoch, source, sequence, enemy)`：`enemy` 只认关卡规则里出现过的敌人种类（`logic.KnownEnemy`，缺省规则是 `"minion"` 与 `"boss"`），别的名字答 `dungeon_invalid`、不写、不占事件序号；每个 `source` 的 `sequence` 单调递增。
 - Nest handler（`game/handler/dungeon.go`、`dungeon_counts.go`，都不直接对客户端开放）：`handlerDungeonOpen`、`handlerDungeonDefeated`、`handlerDungeonView`、`handlerDungeonClaim`（同时锁 `Dungeon` 与 `Player` 两个实体）、`handlerDungeonCounts`（只读 Player 的通关计数，显式声明 `durability=memory`）。
-- 组件 `DungeonComp()`（`game/components/dungeon/dungeon.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
+- 组件 `DungeonComp()`（Player 上，`game/components/dungeon/dungeon.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
+- 组件 `DungeonRunComp()`（Dungeon 实体上，`game/components/dungeonrun/dungeonrun.go`，`view.DungeonRun`）：`Open`、`Defeated`、`View`、`Reward`，结果是 `view.DungeonSnapshot`（`logic.Snapshot` 是它的别名）；两份 DAO 的存档校验在组件的 `OnInitFinish`。
 
 ### 关卡规则（`game/dungeon/rules.go`，归工程）
 
@@ -34,7 +35,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 ### 状态
 
-- `Dungeon` 实体（`game/entities/dungeon/entity.go`）带两个持久 DAO：`DungeonDao`（`db/def/dungeon.go`：`OwnerID`、`Season`、`ExpReward`、`ResolvedAtUnix`）与 `DungeonLevelDAO`（`db/dungeon_level.go`，是 `level.LevelDAO` 的别名，保存关卡状态机）。都不下发。
+- `Dungeon` 实体（`game/entities/dungeon/entity.go`，规则在组件 `DungeonRun`）带两个持久 DAO：`DungeonDao`（`db/def/dungeon.go`：`OwnerID`、`Season`、`ExpReward`、`ResolvedAtUnix`）与 `DungeonLevelDAO`（`db/dungeon_level.go`，是 `level.LevelDAO` 的别名，保存关卡状态机）。都不下发。
 - `PlayerDao.Dungeon`（类型 `PlayerDungeonState`）：`Claims`（已领的局 → 结算时刻）、`Clears`（赛季 → 通关数）、`TotalClears`。只落库、不下发；客户端从 `DungeonClaim` 的应答里看到计数。
 
 ### 配置

@@ -223,7 +223,7 @@ func (r *Runtime) loadBuildings(ctx context.Context, world *logic.World, states 
 				return nil, errors.New("terrain: lot refers to removed building")
 			}
 			command := logic.Command{SceneID: world.ID, X: snapshot.X, Y: snapshot.Y}
-			for key, indices := range command.Footprint() {
+			for key, indices := range logic.CommandFootprint(command) {
 				found := false
 				for _, s := range states {
 					if s.Key != key {
@@ -259,17 +259,17 @@ func (r *Runtime) Execute(ctx context.Context, playerID int64, command logic.Com
 	if err != nil {
 		return logic.Result{}, err
 	}
-	if err := command.Validate(world.Meta()); err != nil {
+	if err := logic.ValidateCommand(command, world.Meta()); err != nil {
 		return logic.Result{}, err
 	}
 	playerFull, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
 	if err != nil {
 		return logic.Result{}, err
 	}
-	keys := command.Brush().Chunks(world.Meta())
+	keys := logic.CommandBrush(command).Chunks(world.Meta())
 	if command.Op == "build" || command.Op == "remove" {
 		keys = nil
-		for key := range command.Footprint() {
+		for key := range logic.CommandFootprint(command) {
 			keys = append(keys, key)
 		}
 	}

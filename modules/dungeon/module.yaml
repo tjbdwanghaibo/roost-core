@@ -5,6 +5,7 @@ needs:
   mods: [nest]
   features: [protocol, entity, dao, errcode]
 entities: [Dungeon]
+components: [DungeonRun]
 entity: Player
 component: Dungeon
 state:

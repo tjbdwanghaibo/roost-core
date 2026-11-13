@@ -99,7 +99,7 @@
 
 报名、分组、比赛是 `Flow`，例如 `Open + registration`，不扩充阶段枚举。`MoveFlow(token, Flow{Name, Due}, now)` 修改流程；`Due=0` 表示等可信事件，非零表示同阶段内的持久期限，到期调用 `Hooks.Flow`。回调返回下一流程及期限。阶段改变会清除旧流程；流程版本、阶段、期次、激活代际一起隔离迟到事件。流程名至多 64 字节，只能在 `Warmup` 与 `Open` 阶段修改。
 
-`activity.Component` 通过 `activity.Owner` 取得宿主的 `ActivityBook()` 和 `ActivityScope()`，不判断具体实体类型。宿主可提供 `ActivityCreatedAt()` 返回持久创建事实；只有 `Player` 实现 `SetActivityDeadline()`，把统一计算的期限接到实体定时器；Remote 宿主把期限存在 `NextDue`，由权威服务扫描。
+`activity.Component` 通过 `activity.Owner` 取得宿主的 `ActivityBook()` 和 `ActivityScope()`，不判断具体实体类型。宿主可提供 `ActivityCreatedAt()` 返回持久创建事实；只有 `Player` 实现建 / 删唤醒节点的适配 `ArmActivityDeadline()` / `CancelActivityDeadline()`（期限与节点号的记账在组件的 `Rearm`，到期回调是组件的 `OnDeadline`），把统一计算的期限接到实体定时器；Remote 宿主把期限存在 `NextDue`，由权威服务扫描。
 
 `定义 + 范围 + 宿主 + 代际 + 期次` 是一期的身份；`Token` 还包含阶段和流程版本。宿主号是逻辑实体号，不是当前进程的 SID。
 

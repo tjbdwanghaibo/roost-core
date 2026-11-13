@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"log/slog"
-	room "{{MODULE}}/game/entities/room"
+	turncomponent "{{MODULE}}/game/components/turn"
+	"{{MODULE}}/game/view"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	roomlogic "{{MODULE}}/game/room"
@@ -23,7 +24,7 @@ func (controller *Controller) HandleTurnEnd(ctx *playeraccess.Context, req *pb.T
 		id, err = roomlogic.EntityID(req.RoomID)
 	}
 	if err == nil {
-		var result room.TurnSnapshot
+		var result view.TurnSnapshot
 		result, err = syncsender.NewTurnEndSender(controller.nestClient).Sync_TurnEnd(ctx.Context(), id, ctx.PlayerID, req.Epoch, connection, req.Round, req.Sequence)
 		if err == nil {
 			response.Info = turnInfo(result)
@@ -35,7 +36,7 @@ func (controller *Controller) HandleTurnEnd(ctx *playeraccess.Context, req *pb.T
 			slog.ErrorContext(ctx.Context(), "turn end failed", "room_id", req.RoomID, "player_id", ctx.PlayerID, "err", err)
 		}
 	}
-	if err == nil && response.Info != nil && response.Info.Status == int32(room.TurnFinished) {
+	if err == nil && response.Info != nil && response.Info.Status == int32(turncomponent.TurnFinished) {
 		slog.InfoContext(ctx.Context(), "turn: game finished", "player_id", ctx.PlayerID, "room_id", req.RoomID, "round", response.Info.Round, "status", response.Info.Status)
 	}
 	return response, nil

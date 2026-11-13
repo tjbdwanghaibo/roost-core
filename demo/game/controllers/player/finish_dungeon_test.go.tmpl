@@ -324,7 +324,7 @@ func TestDungeonClearSubmitsTheSeasonCountAsASnapshot(t *testing.T) {
 	expectOne("first clear", 1)
 	finish("run-2")
 	expectOne("second clear", 2)
-	if got := harness.subject.ProfileComp().DungeonClears(season); got != 2 {
+	if got := harness.subject.DungeonLedgerComp().DungeonClears(season); got != 2 {
 		t.Fatalf("the Player counts %d clears this season, want 2", got)
 	}
 
@@ -346,7 +346,7 @@ func TestDungeonClearSubmitsTheSeasonCountAsASnapshot(t *testing.T) {
 		t.Fatalf("replay of run-3 granted %d exp again", replay.ExpGranted)
 	}
 	expectOne("replay after the failed submit", 3)
-	if got := harness.subject.ProfileComp().DungeonClears(season); got != 3 {
+	if got := harness.subject.DungeonLedgerComp().DungeonClears(season); got != 3 {
 		t.Fatalf("the Player counts %d clears this season, want 3", got)
 	}
 

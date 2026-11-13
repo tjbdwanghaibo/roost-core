@@ -38,9 +38,11 @@ import (
 	"fmt"
 	"slices"
 
+	"{{MODULE}}/game/components/buildingsite"
+	"{{MODULE}}/game/components/terrainsurface"
+	"{{MODULE}}/game/components/terrainledger"
 	building "{{MODULE}}/game/entities/building"
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
@@ -77,7 +79,7 @@ type PartRequest struct {
 	// Brush 是 PartBrush 的笔刷。
 	Brush terrain.Brush
 	// Placement 是 PartPlace 的放置。
-	Placement building.Placement
+	Placement buildingsite.Placement
 	// GX、GY 是 PartRemove / PartParams 的锚点，Params 是 PartParams 的参数。
 	GX, GY int64
 	Params []int32
@@ -117,13 +119,13 @@ type PartAnswer struct {
 	// Refusal 是 OutcomeRefused 的原因：本包的哨兵错误之一（跨进程时按 RefusalCode / RefusalErr 换码），errors.Is 可判。
 	Refusal error
 	// Chunks 是这一部分锁住的每一块此后的版本（Applied / Duplicate）。
-	Chunks []terrain_chunk.ChunkVersion
+	Chunks []terrainsurface.ChunkVersion
 	// Points 是 Applied 时实际改动的点数（笔刷：高度、材质各算一次；放置：整平改的节点数），Base 按它多退预扣的配额。
 	Points int
 	// LastSeq 是格的账本此后的 LastSeq（诊断用；面向客户端的是 Base 账本的 LastSeq）。
 	LastSeq int64
 	// Building 是建筑操作之后建筑的状态（Applied / Duplicate）。
-	Building building.State
+	Building buildingsite.State
 }
 
 // Forwarder 是 Base 转发子请求的通道（分区场景的接线实现它）。
@@ -225,7 +227,7 @@ func (m *Map) RelayBrush(ctx context.Context, playerID int64, seq uint64, brush 
 // RelayPlace 是分区场景的 Base 上玩家放置一座建筑：校验配置、参数、朝向、占地在图里（同 Place 的事务前检查，不看块归属）
 // → 占地覆盖的块必须归同一个格（ErrBuildCrossCell）→ 预扣 MinEditPoints + 占地面积（整平时）→ 权限钩子 → 发号 → 转发给
 // 那个格 → 按结论退配额。错误与结论同 RelayBrush。
-func (m *Map) RelayPlace(ctx context.Context, playerID int64, seq uint64, p building.Placement, fw Forwarder) (RelayResult, error) {
+func (m *Map) RelayPlace(ctx context.Context, playerID int64, seq uint64, p buildingsite.Placement, fw Forwarder) (RelayResult, error) {
 	if m == nil {
 		return RelayResult{}, ErrDisabled
 	}
@@ -236,7 +238,7 @@ func (m *Map) RelayPlace(ctx context.Context, playerID int64, seq uint64, p buil
 	if err != nil {
 		return RelayResult{}, err
 	}
-	keys := lot.Chunks()
+	keys := terrainsurface.LotChunks(lot)
 	sid, cells, err := ownerOfAll(keys, fw)
 	if err != nil {
 		return RelayResult{}, err
@@ -280,8 +282,8 @@ func (m *Map) RelayRemove(ctx context.Context, playerID int64, seq uint64, gx, g
 }
 
 func (m *Map) RelayParams(ctx context.Context, playerID int64, seq uint64, gx, gy int64, params []int32, fw Forwarder) (RelayResult, error) {
-	if len(params) > building.MaxParams {
-		return RelayResult{}, fmt.Errorf("%w: %d values, at most %d", ErrBuildingParams, len(params), building.MaxParams)
+	if len(params) > buildingsite.MaxParams {
+		return RelayResult{}, fmt.Errorf("%w: %d values, at most %d", ErrBuildingParams, len(params), buildingsite.MaxParams)
 	}
 	return m.relayAnchored(ctx, PartRequest{Op: PartParams, PlayerID: playerID, Seq: int64(seq), GX: gx, GY: gy, Params: slices.Clone(params)}, seq, fw)
 }
@@ -344,14 +346,14 @@ func (m *Map) issueAndForward(ctx context.Context, playerID, seq int64, part Rel
 }
 
 // issue 是 Base 的发号：玩家面向客户端的账本（TerrainEditor）第一次用时建出，一笔 strict 事务（handler TerrainEditIssue）。
-func (m *Map) issue(ctx context.Context, playerID, seq int64) (terrain_editor.Issue, error) {
+func (m *Map) issue(ctx context.Context, playerID, seq int64) (terrainledger.Issue, error) {
 	ledger, err := m.ledgerFor(ctx, playerID)
 	if err != nil {
-		return terrain_editor.Issue{}, err
+		return terrainledger.Issue{}, err
 	}
 	issue, err := m.editor.Sync_TerrainEditIssue(ctx, ledger, seq)
 	if err != nil {
-		return terrain_editor.Issue{}, fmt.Errorf("terrain: player %d edit ledger: %w", playerID, err)
+		return terrainledger.Issue{}, fmt.Errorf("terrain: player %d edit ledger: %w", playerID, err)
 	}
 	return issue, nil
 }
@@ -359,19 +361,19 @@ func (m *Map) issue(ctx context.Context, playerID, seq int64) (terrain_editor.Is
 // ApplyIssue 是 handler TerrainEditIssue 的业务（分区场景的 Base，转发之前）：在玩家面向客户端的账本里判序号——Stale /
 // Ahead 答 *SeqError（什么都不写）；Duplicate 答 Again（这个序号发过：客户端的重试，照样再转发）；Fresh 记下。账本的锁内、
 // rollback=undo 事务里运行，只读写内存。
-func ApplyIssue(editor terrain_editor.ILedgerEntity, seq int64) (terrain_editor.Issue, error) {
+func ApplyIssue(editor terrain_editor.ILedgerEntity, seq int64) (terrainledger.Issue, error) {
 	if seq < 1 {
-		return terrain_editor.Issue{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
+		return terrainledger.Issue{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
 	}
 	ledger := editor.LedgerComp()
 	switch verdict := ledger.Check(seq); verdict {
-	case terrain_editor.Duplicate:
-		return terrain_editor.Issue{Again: true, LastSeq: ledger.LastSeq()}, nil
-	case terrain_editor.Stale, terrain_editor.Ahead:
-		return terrain_editor.Issue{}, &SeqError{PlayerID: ledger.PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
+	case terrainledger.Duplicate:
+		return terrainledger.Issue{Again: true, LastSeq: ledger.LastSeq()}, nil
+	case terrainledger.Stale, terrainledger.Ahead:
+		return terrainledger.Issue{}, &SeqError{PlayerID: ledger.PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
 	}
 	ledger.Record(seq)
-	return terrain_editor.Issue{LastSeq: ledger.LastSeq()}, nil
+	return terrainledger.Issue{LastSeq: ledger.LastSeq()}, nil
 }
 
 // quotaCharge 是一次预扣：settle 按实际用掉的点数退回多扣的部分（至多退到 0）。
@@ -470,7 +472,7 @@ func (m *Map) execBrush(ctx context.Context, req PartRequest) PartAnswer {
 
 func (m *Map) execBuilding(ctx context.Context, req PartRequest) PartAnswer {
 	var (
-		lot  terrain_chunk.Lot
+		lot  terrainsurface.Lot
 		keys []terrain.ChunkKey
 	)
 	switch req.Op {
@@ -490,7 +492,7 @@ func (m *Map) execBuilding(ctx context.Context, req PartRequest) PartAnswer {
 		if lot, found = m.lotAnchoredAt(req.GX, req.GY); !found {
 			return refusedAnswer(fmt.Errorf("%w: anchor (%d, %d)", ErrNoBuilding, req.GX, req.GY))
 		}
-		keys = lot.Chunks()
+		keys = terrainsurface.LotChunks(lot)
 		if err := m.checkChunks(keys); err != nil {
 			return refusedAnswer(err)
 		}
@@ -503,7 +505,7 @@ func (m *Map) execBuilding(ctx context.Context, req PartRequest) PartAnswer {
 	if err != nil {
 		return answerOf(err, false)
 	}
-	var result building.Result
+	var result buildingsite.Result
 	switch req.Op {
 	case PartParams:
 		result, err = m.buildingSender.MultiSync_BuildingParamsPart(ctx, site.ID(), ledger, req.Seq, slices.Clone(req.Params))

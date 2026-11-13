@@ -1,0 +1,24 @@
+package world
+
+import (
+	"{{MODULE}}/game/components/activityphase"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type=2102
+const CompTypeActivityPhase entity.ComponentType = 2102
+
+// ActivityPhaseComponent 是 game/components/activityphase 的组件在 World 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type ActivityPhaseComponent = activityphase.Component
+
+// IActivityPhaseEntity is the narrow lock-safe view for Nest handlers using
+// this component. The generated Entity wire implements the getter.
+type IActivityPhaseEntity interface {
+	entity.IThreadSafeEntity
+	ActivityPhaseComp() *ActivityPhaseComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeActivityPhase, activityphase.NewComponent)
+}

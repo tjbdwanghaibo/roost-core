@@ -1,0 +1,32 @@
+package scene
+
+import (
+	"{{MODULE}}/game/components/scenemembers"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:SceneMembers}}
+const CompTypeSceneMembers entity.ComponentType = {{ID:component:SceneMembers}}
+
+// SceneMembersComponent 是 game/components/scenemembers 的组件在 Scene 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type SceneMembersComponent = scenemembers.Component
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeSceneMembers, scenemembers.NewComponent)
+}
+
+// Capacity / MemberLoaded / ForgetMember / CloseSpace 是 SceneMembers 组件的 Owner 方法：场景运行期对象（配置、AOI 空间、
+// 成员实体查找）属于实体本身，组件经它们用到。
+
+// Capacity 是这张图的人数上限（地图配置）。
+func (s *Scene) Capacity() int { return s.config.Capacity }
+
+// MemberLoaded 报告成员实体 id 是否还在内存里；开图入口没给查找函数时一律当作在。
+func (s *Scene) MemberLoaded(id int64) bool { return s.loaded == nil || s.loaded(id) != nil }
+
+// ForgetMember 让 AOI 空间忘掉成员 id。
+func (s *Scene) ForgetMember(id int64) { _ = s.space.Forget(id) }
+
+// CloseSpace 关闭 AOI 空间。
+func (s *Scene) CloseSpace() { s.space.Close() }

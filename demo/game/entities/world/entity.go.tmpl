@@ -19,7 +19,8 @@ type World struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	stats *StatsComponent `comp:"CompTypeStats"`
-	timer *TimerComponent `comp:"CompTypeTimer"`
-	dao   *db.WorldDao    `dao:"world"`
+	stats         *StatsComponent         `comp:"CompTypeStats"`
+	activityPhase *ActivityPhaseComponent `comp:"CompTypeActivityPhase"`
+	timer         *TimerComponent         `comp:"CompTypeTimer"`
+	dao           *db.WorldDao            `dao:"world"`
 }

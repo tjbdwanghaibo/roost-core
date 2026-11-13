@@ -35,15 +35,15 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 func (*Component) Name() string { return "terrain" }
 
 // Check在Player锁内判重与授权。场景/距离不因重发跳过，异payload永远不能冒领旧应答。
-func (c *Component) Check(command logic.Command, sceneID int64) (logic.Result, bool, error) {
+func (c *Component) Check(command view.TerrainCommand, sceneID int64) (view.TerrainResult, bool, error) {
 	body := c.owner.Actor().Body()
-	if body.Map.SceneID() != sceneID || !logic.WithinReach(body.Position(), command.Point()) {
+	if body.Map.SceneID() != sceneID || !logic.WithinReach(body.Position(), logic.CommandPoint(command)) {
 		return logic.Result{}, false, logic.ErrDenied
 	}
 	state := c.owner.Dao().GetTerrainLedger()
 	seq := state.GetSequence()
 	if command.Sequence == seq {
-		if state.GetDigest() != command.Digest() {
+		if state.GetDigest() != logic.CommandDigest(command) {
 			return logic.Result{}, false, logic.ErrSequence
 		}
 		var result logic.Result
@@ -61,7 +61,7 @@ func (c *Component) Check(command logic.Command, sceneID int64) (logic.Result, b
 func (c *Component) BuildingCount() int32 {
 	return c.owner.Dao().GetTerrainLedger().GetBuildings()
 }
-func (c *Component) Record(command logic.Command, result logic.Result, delta int32) error {
+func (c *Component) Record(command view.TerrainCommand, result view.TerrainResult, delta int32) error {
 	state := c.owner.Dao().GetTerrainLedger()
 	next := state.GetBuildings() + delta
 	if next < 0 || next > logic.MaxBuildings {
@@ -72,7 +72,7 @@ func (c *Component) Record(command logic.Command, result logic.Result, delta int
 		return err
 	}
 	state.SetSequence(command.Sequence)
-	state.SetDigest(command.Digest())
+	state.SetDigest(logic.CommandDigest(command))
 	state.SetReply(raw)
 	if delta != 0 {
 		state.SetBuildings(next)

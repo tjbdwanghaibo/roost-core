@@ -755,11 +755,11 @@ func TestSceneStopPreservesDependentMembersForRetry(t *testing.T) {
 	f := newSceneFixture(t)
 	area := f.area(1)
 	other := f.open(2, gamescene.DefaultConfig())
-	_, err := f.engine.Request(context.Background(), sceneTestArea, area.ID(), nest.NewParams(func(s *sceneentity.Scene) error { return s.Admit(other.ID()) }))
+	_, err := f.engine.Request(context.Background(), sceneTestArea, area.ID(), nest.NewParams(func(s *sceneentity.Scene) error { return s.SceneMembersComp().Admit(other.ID()) }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.engine.Request(context.Background(), sceneTestArea, other.ID(), nest.NewParams(func(s *sceneentity.Scene) error { return s.Admit(other.ID()) }))
+	_, err = f.engine.Request(context.Background(), sceneTestArea, other.ID(), nest.NewParams(func(s *sceneentity.Scene) error { return s.SceneMembersComp().Admit(other.ID()) }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -771,7 +771,7 @@ func TestSceneStopPreservesDependentMembersForRetry(t *testing.T) {
 		t.Fatal("occupied scene destroyed")
 	}
 	for _, s := range []*sceneentity.Scene{area, other} {
-		_, err = f.engine.Request(context.Background(), sceneTestArea, s.ID(), nest.NewParams(func(s *sceneentity.Scene) error { s.Depart(other.ID()); return nil }))
+		_, err = f.engine.Request(context.Background(), sceneTestArea, s.ID(), nest.NewParams(func(s *sceneentity.Scene) error { s.SceneMembersComp().Depart(other.ID()); return nil }))
 		if err != nil {
 			t.Fatal(err)
 		}

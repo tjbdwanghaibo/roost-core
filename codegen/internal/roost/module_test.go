@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/format"
 	"go/parser"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,29 +80,111 @@ func TestModuleCatalogEmbedsEveryTemplateAndValidates(t *testing.T) {
 // game/view 的组件接口要列出组件包里 *Component 的全部导出方法（handler、钩子与别的组件经 view 调用它们），
 // 签名用到的结构体也放在 view（组件包里只留同名别名）；view 只引用内建类型、db、protocol、core 的包，
 // 以及两个叶子类型包 game/actor 与 game/gameplay/attribute（见 compose §4D）。
-// viewMethodExemptions 是暂时不进 view 的方法与原因：框架回调、参数是另一个组件或实体的具体类型、
-// 结果类型还在功能包里。新增的导出方法不在 view 里也不在这里时报错。
+// viewMethodExemptions 是不进 view 的方法与原因，只有两种：返回 core 运行时对象、参数是同一组件的另一个实例。
+// 新增的导出方法不在 view 里也不在这里时报错；豁免表里的方法已经进了 view 或已经不存在时也报错（表不留陈项）。
 func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
-	framework := map[string]bool{"Name": true, "Owner": true, "OnInitFinish": true, "OnDestroy": true}
 	viewMethodExemptions := map[string]map[string]string{
-		"activity":    {"Host": "returns the game/activity Host, which carries the activity runtime"},
-		"actor":       {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
-		"attribute":   {"Container": "exposes the core attribute container to the generated runtime only"},
-		"combat":      {"Core": "core combat component", "Input": "game/combat type", "Ready": "CombatResult not in view", "Cast": "takes the peer *Component", "Step": "takes the peer *Component", "Tick": "takes the peer *Component", "Leave": "takes the peer *Component"},
-		"dungeon":     {"Counts": "game/dungeon logic type", "Claim": "game/dungeon logic type"},
-		"friends":     {"Change": "takes the peer *Component", "Snapshot": "FriendsSnapshot not in view"},
-		"mailbox":     {"Claim": "game/mailbox attachment type"},
-		"matchmaking": {"Snapshot": "MatchSnapshot not in view"},
-		"profile":     {"Card": "ProfileCard not in view"},
-		"rehome":      {"Prepare": "game/rehome type", "Arrive": "game/rehome type"},
-		"stamina":     {"Grant": "result type not in view", "Refill": "result type not in view"},
-		"task":        {"Claim": "TaskClaimResult not in view"},
-		"team":        {"Create": "takes the Team entity", "Accept": "takes the Team entity", "Invite": "takes the Team entity", "Invites": "TeamInvitation not in view", "Leave": "takes the Team entity", "Info": "takes the Team entity"},
-		"terrain":     {"Check": "game/terrain logic type", "Record": "game/terrain logic type"},
+		"activity":  {"Host": "returns the game/activity Host, which carries the activity runtime"},
+		"actor":     {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
+		"attribute": {"Container": "exposes the core attribute container to the generated runtime only"},
+		"combat": {
+			"Core": "returns the core combat component (skill runtime), not a view value",
+			"Cast": "takes the peer *Component: reads the other combatant's core state", "Step": "takes the peer *Component: reads the other combatant's core state",
+			"Tick": "takes the peer *Component: reads the other combatant's core state", "Leave": "takes the peer *Component: reads the other combatant's core state",
+		},
 	}
-	placeholder := regexp.MustCompile(`\{\{(?:PROJECT|GAME_SERVICE|ID:[^}]*)\}\}`)
+	views, err := fs.Glob(modules.Files, "*/files/game/view/component_*.go.tmpl")
+	if err != nil || len(views) == 0 {
+		t.Fatalf("no game/view component templates (err=%v)", err)
+	}
+	checkComponentViews(t, modules.Files, views, func(viewPath, pkg string) []string {
+		module := strings.SplitN(viewPath, "/", 2)[0]
+		var sources []string
+		for _, pattern := range []string{module + "/files/game/components/" + pkg + "/*.go.tmpl", module + "/with/*/game/components/" + pkg + "/*.go.tmpl"} {
+			matches, err := fs.Glob(modules.Files, pattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sources = append(sources, matches...)
+		}
+		if len(sources) == 0 {
+			// activity 的共用组件早于 game/components，在功能包 game/activity 里。
+			sources, _ = fs.Glob(modules.Files, module+"/files/game/"+pkg+"/*.go.tmpl")
+		}
+		return sources
+	}, viewMethodExemptions)
+}
+
+// game/view 是一个包：一个工程装的全部模块的 view 文件放在一起编译，所以任意两个模块的 view 文件不能声明同名的
+// 类型 / 常量 / 变量 / 函数（以功能名作前缀是约定，这里是检查）。同时装不了的模块（带同一个实体，或 conflicts）也一样查，
+// 不放宽：名字唯一比判断哪些组合能共存简单。
+func TestModuleViewNamesAreUniqueAcrossModules(t *testing.T) {
+	views, err := fs.Glob(modules.Files, "*/files/game/view/*.go.tmpl")
+	if err != nil || len(views) == 0 {
+		t.Fatalf("no game/view templates (err=%v)", err)
+	}
+	checkViewNamesUnique(t, modules.Files, views, nil)
+}
+
+// checkViewNamesUnique 报告 paths（fsys 里的 game/view 模板）之间重名的包级声明；known 是另一组已知的名字 → 所在文件
+// （demo 用它对照它装的模块），同名也报。
+func checkViewNamesUnique(t *testing.T, fsys fs.FS, paths []string, known map[string]string) {
+	t.Helper()
+	placeholder := regexp.MustCompile(`\{\{(?:PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|ID:[^}]*)\}\}`)
+	seen := map[string]string{}
+	for name, where := range known {
+		seen[name] = where
+	}
+	for _, path := range paths {
+		raw, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := strings.ReplaceAll(string(raw), "{{MODULE}}", "example.com/m")
+		file, err := parser.ParseFile(token.NewFileSet(), path, placeholder.ReplaceAllString(src, "1"), parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		declare := func(name string) {
+			if name == "_" {
+				return
+			}
+			if other, dup := seen[name]; dup && other != path {
+				t.Errorf("game/view name %s is declared by both %s and %s; prefix it with the feature name", name, other, path)
+				return
+			}
+			seen[name] = path
+		}
+		for _, decl := range file.Decls {
+			switch decl := decl.(type) {
+			case *ast.FuncDecl:
+				if decl.Recv == nil {
+					declare(decl.Name.Name)
+				}
+			case *ast.GenDecl:
+				for _, spec := range decl.Specs {
+					switch spec := spec.(type) {
+					case *ast.TypeSpec:
+						declare(spec.Name.Name)
+					case *ast.ValueSpec:
+						for _, name := range spec.Names {
+							declare(name.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// checkComponentViews 是组件接口守卫的共同部分（模块模板与 game-demo 各用一次）：views 是 game/view/component_<包>.go
+// 模板，sourcesOf 给出每个 view 文件对应的组件包源文件；规则见 TestModuleViewInterfacesListTheComponentMethods。
+func checkComponentViews(t *testing.T, fsys fs.FS, views []string, sourcesOf func(viewPath, pkg string) []string, exemptions map[string]map[string]string) {
+	t.Helper()
+	framework := map[string]bool{"Name": true, "Owner": true, "OnInitFinish": true, "OnDestroy": true}
+	placeholder := regexp.MustCompile(`\{\{(?:PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|ID:[^}]*)\}\}`)
 	parse := func(name string) *ast.File {
-		raw, err := fs.ReadFile(modules.Files, name)
+		raw, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,12 +195,8 @@ func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 		}
 		return file
 	}
-	views, err := fs.Glob(modules.Files, "*/files/game/view/component_*.go.tmpl")
-	if err != nil || len(views) == 0 {
-		t.Fatalf("no game/view component templates (err=%v)", err)
-	}
+	used := map[string]map[string]bool{}
 	for _, viewPath := range views {
-		module := strings.SplitN(viewPath, "/", 2)[0]
 		pkg := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(viewPath), "component_"), ".go.tmpl")
 		file := parse(viewPath)
 		for _, imp := range file.Imports {
@@ -147,19 +227,9 @@ func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 				}
 			}
 		}
-		var sources []string
-		for _, pattern := range []string{module + "/files/game/components/" + pkg + "/*.go.tmpl", module + "/with/*/game/components/" + pkg + "/*.go.tmpl"} {
-			matches, err := fs.Glob(modules.Files, pattern)
-			if err != nil {
-				t.Fatal(err)
-			}
-			sources = append(sources, matches...)
-		}
+		sources := sourcesOf(viewPath, pkg)
 		if len(sources) == 0 {
-			// activity 的共用组件早于 game/components，在功能包 game/activity 里。
-			if sources, err = fs.Glob(modules.Files, module+"/files/game/"+pkg+"/*.go.tmpl"); err != nil || len(sources) == 0 {
-				t.Errorf("%s: no component package game/components/%s (err=%v)", viewPath, pkg, err)
-			}
+			t.Errorf("%s: no component package game/components/%s", viewPath, pkg)
 		}
 		for _, source := range sources {
 			if strings.HasSuffix(source, "_test.go.tmpl") {
@@ -177,11 +247,161 @@ func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 				if recv, isIdent := star.X.(*ast.Ident); !isIdent || recv.Name != "Component" {
 					continue
 				}
-				if _, exempt := viewMethodExemptions[pkg][fn.Name.Name]; !exempt {
+				if _, exempt := exemptions[pkg][fn.Name.Name]; !exempt {
 					t.Errorf("%s: (*Component).%s is exported but not in the view interface %s", source, fn.Name.Name, viewPath)
+					continue
 				}
+				if used[pkg] == nil {
+					used[pkg] = map[string]bool{}
+				}
+				used[pkg][fn.Name.Name] = true
 			}
 		}
+	}
+	for pkg, methods := range exemptions {
+		for method := range methods {
+			if !used[pkg][method] {
+				t.Errorf("exemption %s.%s is stale: the method is in the view interface or no longer exported by game/components/%s", pkg, method, pkg)
+			}
+		}
+	}
+}
+
+// 每个实体（不只 Player）的组件逻辑都在 game/components/<包>，实体包只留接线：实体包里不能声明组件结构体
+// （`type <X>Component struct`，接线里的是 `type <X>Component = <包>.Component` 别名），也不能给组件类型写方法。
+// 生成的定时器组件不是模板，不在扫描范围里；模块往定时器组件上登记回调的方法（`{{TIMER_COMPONENT}}Component`）不算。
+func TestModuleEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
+	timerComponent := regexp.MustCompile(`^\{\{TIMER_COMPONENT\}\}Component$`)
+	checkEntityPackagesHoldOnlyWiring(t, modules.Files, func(_, component string) bool { return timerComponent.MatchString(component) })
+	checkEntityMethodsLeaveStateToComponents(t, modules.Files, nil)
+}
+
+// checkEntityMethodsLeaveStateToComponents 查实体包里实体类型自己的方法：每个 //roost:entity 结构体都嵌入
+// entity.ComponentManager（实体上的业务规则写成组件），实体类型的方法不调用 Set… / Del…（改 DAO 状态的是组件）。
+// allowed 是例外与原因（键是 “模板路径 类型.方法”）：框架接口的实现（cellworld.Actor / BasePlayer）、定时节点的适配、
+// 实体自己的运行期对象（时间域、格心跳）。例外里的方法不再写状态或已删除时报陈项。
+func checkEntityMethodsLeaveStateToComponents(t *testing.T, fsys fs.FS, allowed map[string]string) {
+	t.Helper()
+	placeholder := regexp.MustCompile(`\{\{(?:PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|ID:[^}]*)\}\}`)
+	writes := regexp.MustCompile(`^(Set|Del)[A-Z]`)
+	used := map[string]bool{}
+	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(name, ".go.tmpl") || strings.HasSuffix(name, "_test.go.tmpl") || !strings.Contains(name, "game/entities/") {
+			return err
+		}
+		raw, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return err
+		}
+		src := strings.ReplaceAll(strings.ReplaceAll(string(raw), "{{MODULE}}", "example.com/m"), "{{TIMER_COMPONENT}}", "Timer")
+		file, err := parser.ParseFile(token.NewFileSet(), name, placeholder.ReplaceAllString(src, "1"), parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", name, err)
+		}
+		for _, decl := range file.Decls {
+			switch decl := decl.(type) {
+			case *ast.GenDecl:
+				// //roost:entity 是指令注释，CommentGroup.Text() 不含它，按原始注释行找。
+				if decl.Tok != token.TYPE || decl.Doc == nil || !slices.ContainsFunc(decl.Doc.List, func(c *ast.Comment) bool { return strings.HasPrefix(c.Text, "//roost:entity ") }) {
+					continue
+				}
+				for _, spec := range decl.Specs {
+					st, ok := spec.(*ast.TypeSpec).Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					managed := false
+					for _, field := range st.Fields.List {
+						if sel, ok := field.Type.(*ast.SelectorExpr); ok && len(field.Names) == 0 && sel.Sel.Name == "ComponentManager" {
+							managed = true
+						}
+					}
+					if !managed {
+						t.Errorf("%s: entity %s does not embed entity.ComponentManager; its business rules belong to components (game/components/<package>)", name, spec.(*ast.TypeSpec).Name.Name)
+					}
+				}
+			case *ast.FuncDecl:
+				if decl.Recv == nil || decl.Body == nil {
+					continue
+				}
+				star, ok := decl.Recv.List[0].Type.(*ast.StarExpr)
+				if !ok {
+					continue
+				}
+				recv, ok := star.X.(*ast.Ident)
+				if !ok || strings.HasSuffix(recv.Name, "Component") || strings.HasPrefix(recv.Name, "{{") {
+					continue
+				}
+				writer := false
+				ast.Inspect(decl.Body, func(n ast.Node) bool {
+					if call, ok := n.(*ast.CallExpr); ok {
+						if sel, ok := call.Fun.(*ast.SelectorExpr); ok && writes.MatchString(sel.Sel.Name) {
+							writer = true
+						}
+					}
+					return !writer
+				})
+				if !writer {
+					continue
+				}
+				key := name + " " + recv.Name + "." + decl.Name.Name
+				if _, ok := allowed[key]; ok {
+					used[key] = true
+					continue
+				}
+				t.Errorf("%s: (*%s).%s changes state in the entity package; write it as a component method (game/components/<package>) or, for a framework interface / timer adapter, list it with its reason", name, recv.Name, decl.Name.Name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range allowed {
+		if !used[key] {
+			t.Errorf("allowed entity method %q is stale: it no longer changes state or no longer exists", key)
+		}
+	}
+}
+
+// checkEntityPackagesHoldOnlyWiring 是实体包守卫的共同部分（模块模板与 game-demo 各用一次）：fsys 里 game/entities/ 下的
+// 模板不能声明组件结构体、不能给组件类型写方法；timer(file, component) 为 true 的是实体的定时器组件（框架定时器运行时的
+// 宿主，属于实体基础设施）。
+func checkEntityPackagesHoldOnlyWiring(t *testing.T, fsys fs.FS, timer func(file, component string) bool) {
+	t.Helper()
+	componentStruct := regexp.MustCompile(`(?m)^type (\S+Component) struct\b`)
+	componentMethod := regexp.MustCompile(`(?m)^func \(\w+ \*(\S+Component)\) `)
+	timerCallback := regexp.MustCompile(`^func \(\w+ \*\S+Component\) (on\w*)\([^)]*\)[^{\n]*\{((?s:.*?))\n\}`)
+	var checked int
+	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(name, ".go.tmpl") || !strings.Contains(name, "game/entities/") {
+			return err
+		}
+		raw, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return err
+		}
+		checked++
+		for _, m := range componentStruct.FindAllStringSubmatch(string(raw), -1) {
+			if !timer(name, m[1]) {
+				t.Errorf("%s declares the component struct %s in the entity package; move it to game/components/<package> and leave an alias", name, m[1])
+			}
+		}
+		for _, m := range componentMethod.FindAllStringSubmatchIndex(string(raw), -1) {
+			component := string(raw[m[2]:m[3]])
+			if !timer(name, component) {
+				t.Errorf("%s declares a method on %s in the entity package; component logic belongs to game/components/<package>", name, component)
+				continue
+			}
+			// 定时器组件上的回调（on…）只把到期节点交给组件的导出方法（turn 的 OnDeadline），业务不写在这里。
+			if method := timerCallback.FindSubmatch(raw[m[0]:]); method != nil && strings.Count(strings.TrimSpace(string(method[2])), "\n") != 0 {
+				t.Errorf("%s: the timer callback (*%s).%s does more than hand the node to a component method; the business belongs to game/components/<package>", name, component, method[1])
+			}
+		}
+		return nil
+	})
+	if err != nil || checked == 0 {
+		t.Fatalf("walk entity templates: %v (checked %d files)", err, checked)
 	}
 }
 

@@ -23,26 +23,30 @@ func handlerTerrainLoad(targets []chunk.ITerrainChunkEntity, world *logic.World)
 	}
 	keys := world.Keys()
 	for i, target := range targets {
-		if err := target.ChunkState().Initialize(world, keys[i]); err != nil {
+		base, err := world.Base(keys[i])
+		if err != nil {
+			return nil, err
+		}
+		if err := target.TerrainChunkDataComp().Initialize(world.ID, keys[i], world.Meta().BaseRevision, base); err != nil {
 			return nil, err
 		}
 	}
 	out := make([]logic.ChunkState, len(targets))
 	for i, target := range targets {
-		out[i] = target.ChunkState().State()
+		out[i] = target.TerrainChunkDataComp().State()
 	}
 	return out, nil
 }
 
-func terrainTargets(targets []chunk.ITerrainChunkEntity, world *logic.World, keys []core.ChunkKey) (map[core.ChunkKey]*chunk.TerrainChunk, error) {
+func terrainTargets(targets []chunk.ITerrainChunkEntity, world *logic.World, keys []core.ChunkKey) (map[core.ChunkKey]*chunk.TerrainChunkDataComponent, error) {
 	if world == nil || len(targets) < 1 || len(targets) > 4 || len(targets) != len(keys) {
 		return nil, logic.ErrState
 	}
-	out := map[core.ChunkKey]*chunk.TerrainChunk{}
+	out := map[core.ChunkKey]*chunk.TerrainChunkDataComponent{}
 	for _, target := range targets {
-		value := target.ChunkState()
+		value := target.TerrainChunkDataComp()
 		state := value.State()
-		if err := value.Validate(world, state.Key); err != nil {
+		if err := value.Validate(world.ID, state.Key, world.Meta().BaseRevision); err != nil {
 			return nil, err
 		}
 		if out[state.Key] != nil {
@@ -57,7 +61,7 @@ func terrainTargets(targets []chunk.ITerrainChunkEntity, world *logic.World, key
 	}
 	return out, nil
 }
-func terrainPublish(world *logic.World, targets map[core.ChunkKey]*chunk.TerrainChunk) error {
+func terrainPublish(world *logic.World, targets map[core.ChunkKey]*chunk.TerrainChunkDataComponent) error {
 	snapshots := make([]logic.ChunkState, 0, len(targets))
 	for _, target := range targets {
 		snapshots = append(snapshots, target.State())
@@ -84,7 +88,7 @@ func handlerTerrainBrush(targets []chunk.ITerrainChunkEntity, target player.ITer
 	if world == nil || command.SceneID != world.ID {
 		return logic.Result{}, logic.ErrState
 	}
-	if err := command.Validate(world.Meta()); err != nil {
+	if err := logic.ValidateCommand(command, world.Meta()); err != nil {
 		return logic.Result{}, err
 	}
 	result, duplicate, err := target.TerrainComp().Check(command, world.SceneID)
@@ -94,8 +98,8 @@ func handlerTerrainBrush(targets []chunk.ITerrainChunkEntity, target player.ITer
 	if command.Op == "build" || command.Op == "remove" {
 		return logic.Result{}, logic.ErrState
 	}
-	brush := command.Brush()
-	if logic.DistanceToSpawn(world, command.Point(), command.Radius) {
+	brush := logic.CommandBrush(command)
+	if logic.DistanceToSpawn(world, logic.CommandPoint(command), command.Radius) {
 		return logic.Result{}, logic.ErrSite
 	}
 	chunks, err := terrainTargets(targets, world, brush.Chunks(world.Meta()))
@@ -113,7 +117,7 @@ func handlerTerrainBrush(targets []chunk.ITerrainChunkEntity, target player.ITer
 	}
 	for _, change := range changes {
 		for _, point := range change.Points {
-			if id, _ := chunks[change.Key].Dao().GetLots(point.Index); id != 0 {
+			if chunks[change.Key].Lot(point.Index) != 0 {
 				return result, logic.ErrOccupied
 			}
 		}
@@ -136,18 +140,18 @@ func handlerTerrainBuild(targets []chunk.ITerrainChunkEntity, site building.ITer
 	if world == nil || command.SceneID != world.ID || command.Op != "build" && command.Op != "remove" {
 		return logic.Result{}, logic.ErrState
 	}
-	if err := command.Validate(world.Meta()); err != nil {
+	if err := logic.ValidateCommand(command, world.Meta()); err != nil {
 		return logic.Result{}, err
 	}
 	result, duplicate, err := target.TerrainComp().Check(command, world.SceneID)
 	if err != nil || duplicate {
 		return result, err
 	}
-	value := site.BuildingState()
+	value := site.TerrainSiteComp()
 	if err := value.Validate(command, target.UniqueID()); err != nil {
 		return result, err
 	}
-	footprint := command.Footprint()
+	footprint := logic.CommandFootprint(command)
 	if command.Op == "build" {
 		for key, indices := range footprint {
 			spawnKey := core.ChunkOf(world.Spawn.X, world.Spawn.Y)
@@ -219,7 +223,7 @@ func handlerTerrainBuild(targets []chunk.ITerrainChunkEntity, site building.ITer
 	if err := target.TerrainComp().Record(command, result, delta); err != nil {
 		return result, err
 	}
-	snapshot := logic.SiteState{X: command.X, Y: command.Y, Standing: result.Standing, Version: value.Dao().GetVersion()}
+	snapshot := value.Snapshot()
 	if !nest.AfterCommit(func() {
 		if err := world.PublishSite(site, snapshot); err != nil {
 			world.MarkFailure()
@@ -237,8 +241,8 @@ func handlerTerrainQuery(value chunk.ITerrainChunkEntity, target player.ITerrain
 	if world == nil || target.ActorComp().Body().Map.SceneID() != world.SceneID {
 		return logic.ChunkState{}, logic.ErrDenied
 	}
-	state := value.ChunkState().State()
-	if err := value.ChunkState().Validate(world, state.Key); err != nil {
+	state := value.TerrainChunkDataComp().State()
+	if err := value.TerrainChunkDataComp().Validate(world.ID, state.Key, world.Meta().BaseRevision); err != nil {
 		return state, err
 	}
 	state.LastSequence = target.TerrainComp().Sequence()
@@ -247,9 +251,9 @@ func handlerTerrainQuery(value chunk.ITerrainChunkEntity, target player.ITerrain
 
 //roost:nest rollback=undo durability=strict
 func handlerTerrainSite(site building.ITerrainBuildingEntity, world *logic.World) (logic.SiteState, error) {
-	d := site.BuildingState().Dao()
-	if world == nil || d.GetSceneID() != world.ID {
+	value := site.TerrainSiteComp()
+	if world == nil || value.SceneID() != world.ID {
 		return logic.SiteState{}, logic.ErrState
 	}
-	return logic.SiteState{X: int64(d.GetGX()) * core.SampleSpacing, Y: int64(d.GetGY()) * core.SampleSpacing, Standing: d.GetStanding(), Version: d.GetVersion()}, nil
+	return value.Snapshot(), nil
 }

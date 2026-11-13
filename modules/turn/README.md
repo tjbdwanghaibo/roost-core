@@ -10,7 +10,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
   - `TurnView`：请求 `TurnViewRequest{RoomID, Epoch}`。读当前状态。
   - `TurnInfo` 里：`Status` 取 0 等待开局、1 进行中、2 已结束；`ActorID` 是当前行动者；`Deadline` 是服务器业务时间的绝对期限（Unix 毫秒）；`Timeouts` 是累计超时次数；`Sequence` 是**请求者**最后成功的命令号；`Players` 是开局的固定名单。
   - 操作人与连接身份都取自认证上下文；`Epoch` 是玩家在 room 里拿到的房间代际。没有推送协议。
-- **服务端入口**（组件 `TurnComponent`，`game/entities/room/turn_component.go`，经 `ITurnEntity` 的 `TurnComp()` 取得；所有方法只在 Nest 持有 Room 锁时调用）
+- **服务端入口**（组件 `TurnComponent`，业务在 `game/components/turn/turn.go`，Room 上的接线是 `game/entities/room/turn_component.go`，经 `ITurnEntity` 的 `TurnComp()` 或 `view.RoomEntity` 的 `Turn()` 取得；所有方法只在 Nest 持有 Room 锁时调用）
   - `Start(playerID, epoch, connection, turnMillis, maxTurns) (TurnSnapshot, error)`
   - `CheckEnd(playerID, epoch, connection, round, sequence) (replay bool, err error)`：只检查、不推进。`replay` 为真表示这是最后一条成功命令的重发，**不能再执行游戏动作**。
   - `End(playerID, epoch, connection, round, sequence) (TurnSnapshot, error)`：内部先 `CheckEnd`，再记回执、换定时器、推进一回合。
@@ -19,9 +19,9 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
   - Controller（`game/controllers/turn/`）：`HandleTurnStart`、`HandleTurnEnd`、`HandleTurnView`。
 - **登记点 / 钩子**
   - 模块没有“回合开始 / 结束 / 对局结束”的业务钩子。接游戏动作的方式是自己写 handler 组合 `CheckEnd` 与 `End`（见“复用方式”）。
-  - 定时器回调（`game/entities/room/turn_timers.go`）：类型常量 `TurnDeadline`；`registerTurnTimers(handlers)` 由安装器追加到 Room 的定时器登记函数里，到期时在 Room 的 Nest 事务中调 `onDeadline`。超时计数、下一回合与定时器续期在同一笔事务里提交。
+  - 定时器回调（`game/entities/room/turn_timers.go`）：类型常量 `TurnDeadline`；`registerTurnTimers(handlers)` 由安装器追加到 Room 的定时器登记函数里，到期时在 Room 的 Nest 事务中调组件的 `OnDeadline`；建 / 删期限节点是 Room 上的适配方法 `ArmTurnDeadline` / `CancelTurnDeadline`（同一文件）。超时计数、下一回合与定时器续期在同一笔事务里提交。
 - **状态**（`db/def/turn.go`）：`RoomDao.Turn`（`TurnState{Status, Round, Active, MaxTurns, TurnMillis, Deadline, TimerID, Players, Timeouts}`，`Players` 的每项是 `TurnPlayer{PlayerID, Sequence, LastRound}`），只落库不同步；加上 Room 实体定时器里的一个持久节点。客户端只能经 `TurnView` 等应答看到。
-- **配置**：没有配置表。规则范围写在 `turn_component.go` 的 `Start` 里：每回合 1000～3600000 毫秒（1 秒～1 小时），总回合数 1～10000；工程可以收窄。
+- **配置**：没有配置表。规则范围写在 `game/components/turn/turn.go` 的 `Start` 里：每回合 1000～3600000 毫秒（1 秒～1 小时），总回合数 1～10000；工程可以收窄。
 - **错误码**（`internal/errors/turn.go`）：`turn_invalid`（规则越界、重试时换了规则、不足两人）、`turn_not_running`、`turn_not_actor`（不是当前行动者、回合号不对、不在名单里）、`turn_sequence`（跳号、旧号、同序号配了不同回合）、`turn_expired`（已到期限，等定时器推进）。成员与连接校验透出 room 的 `room_stale_epoch`、`room_not_host` 等。
 
 **日志**：开局、对局结束确认；每回合推进 / timer 超时回调不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/turn/turn_end.go`, `game/controllers/turn/turn_start.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -58,8 +58,8 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 
   玩法状态放在 Room 上自己的 DAO 字段里。跨实体的奖励要显式把对应实体声明进事务，不能在快池的 worker 里同步等另一个 Nest 请求。需要推送时从已提交的事实接提交后的动作，不在锁内做网络 I/O。
 - **其它调整**
-  - 收窄回合时长与回合数：改 `turn_component.go` 里 `Start` 的范围判断。
-  - 超时要做别的事（扣分、托管）：改 `turn_timers.go` 的 `onDeadline`，仍在同一笔事务里。
+  - 收窄回合时长与回合数：改 `game/components/turn/turn.go` 里 `Start` 的范围判断。
+  - 超时要做别的事（扣分、托管）：改 `game/components/turn/turn.go` 的 `OnDeadline`，仍在同一笔事务里。
   - 不要改：`TurnDeadline` 的类型号（它与持久节点是数据契约，由安装器分配并记在 `roost.yaml` 的 `timers.room.types`）、`TurnState` 的 store 键、`onDeadline` 里“节点号与期限都对得上才处理”的校验。
 - **别的模块 / 业务代码要用它**：在 Room 的 handler 里嵌入 `room.ITurnEntity`，用 `TurnComp().View(…)` 读快照；事务外用 `syncsender.NewTurnViewSender(client).Sync_TurnView(ctx, roomEntityID, playerID, epoch, connection)`。
 - **不适合直接用的情形**：实时或帧同步玩法、所有人同时提交的回合（如自走棋的准备阶段）、名单会变的回合制、需要观战推送的对局。值得借鉴的是：“每人一个连续命令号 + 最后一条可重放”的回执；用“节点号 + 期限”双重校验让旧的定时器投递不会消费新回合；先 `CheckEnd` 再改玩法、最后 `End` 的三段式。

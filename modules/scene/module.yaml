@@ -7,6 +7,7 @@ needs:
 access: {transport: tcp, self_sync: true}
 entity: Player
 entities: [Scene]
+components: [SceneMembers]
 sync_packer: NewActorPlayerSyncPacker
 state:
   - {field: SceneRuntime, type: SceneRuntimeState, store: scene_runtime, dao: 'nopersist,nosync', comment: 当前区域集合，只在场景运行期使用。}

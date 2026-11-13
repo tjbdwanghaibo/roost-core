@@ -114,15 +114,8 @@ func (c *Component) OnDestroy(reason entity.EntityDestroyReason) {
 	}
 }
 
-// CombatResult 是成交时的公开快照；重复sequence返回同一结果，不用当前HP覆盖旧回执。
-type CombatResult struct {
-	Sequence           int64
-	CastID             uint64
-	Health, PeerHealth int64
-	Alive, PeerAlive   bool
-	Pending            bool
-	Ended              bool
-}
+// CombatResult 是 view.CombatResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type CombatResult = view.CombatResult
 
 func (c *Component) result(peer *Component, seq int64, cast uint64, pending bool) CombatResult {
 	v := c.core.Combatant()

@@ -1,12 +1,43 @@
-package profile
+// Package dungeonledger 是 demo 自己的副本领奖账本与每赛季通关计数（不属于 profile 模块）：Player 上的组件
+// DungeonLedger，状态在 demo 自己的 PlayerDao.DungeonClaims / DungeonClears 里。领奖事务 handlerClaimDungeon
+// 在同一笔 Player 事务里既记账（这里）又发经验（profile 模块的组件），所以“已领”与“发了经验”一起成败。
+package dungeonledger
 
-import "{{MODULE}}/game/dungeon"
+import (
+	"fmt"
 
-// 这个文件是 demo 自己的，不属于 profile 模块：副本通关奖励的领奖账本与每赛季的通关计数。
-//
-// 方法挂在 ProfileComponent 上（组件本身是 profile 模块装进来的，同一个包里可以给它加方法），因为领奖事务
-// handlerClaimDungeon 在同一个窄接口 IProfileEntity 上既记账又发经验；另立一个组件只会让那一笔事务多一个 getter。
-// 状态在 demo 自己的 PlayerDao.DungeonClaims / DungeonClears 里，不在模块的 Profile 里。
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/dungeon"
+)
+
+// Owner 是 DungeonLedger 组件的宿主（Player 的接线见 game/entities/player/dungeon_ledger_component.go）：只用到
+// 玩家 DAO。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+// Component 是一名玩家的副本领奖账本与通关计数；数据全部在 PlayerDao（回滚统一走 DAO 的生成 setter 逆操作）。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/dungeon_ledger_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("dungeon_ledger component: owner %T does not implement dungeonledger.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "dungeon_ledger" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *Component) Owner() Owner { return component.owner }
 
 // ClaimDungeonRun records runID as paid and reports whether this call is the
 // one that recorded it. A second call for the same run returns false and
@@ -30,7 +61,7 @@ import "{{MODULE}}/game/dungeon"
 // resolution time — it simply expires a little later, never sooner, so no
 // such record can start paying again.
 func (component *Component) ClaimDungeonRun(runID string, resolvedAtUnix, nowUnix int64) bool {
-	dao := component.Owner().Dao()
+	dao := component.owner.Dao()
 	if _, claimed := dao.GetDungeonClaims(runID); claimed {
 		return false
 	}
@@ -58,7 +89,7 @@ func (component *Component) ClaimDungeonRun(runID string, resolvedAtUnix, nowUni
 // replay of any run — however many clears later — harmless there. Unlike the
 // claim ledger it is never pruned: one entry per season the player cleared in.
 func (component *Component) CountDungeonClear(season int64) int64 {
-	dao := component.Owner().Dao()
+	dao := component.owner.Dao()
 	current, _ := dao.GetDungeonClears(season)
 	dao.SetDungeonClears(season, current+1)
 	return current + 1
@@ -67,7 +98,7 @@ func (component *Component) CountDungeonClear(season int64) int64 {
 // DungeonClears is the player's count of paid clears in season. A read for
 // callers holding the lock.
 func (component *Component) DungeonClears(season int64) int64 {
-	current, _ := component.Owner().Dao().GetDungeonClears(season)
+	current, _ := component.owner.Dao().GetDungeonClears(season)
 	return current
 }
 
@@ -75,6 +106,6 @@ func (component *Component) DungeonClears(season int64) int64 {
 // read for callers holding the lock; the claim itself must go through
 // ClaimDungeonRun, inside the transaction that pays.
 func (component *Component) DungeonRunClaimed(runID string) bool {
-	_, claimed := component.Owner().Dao().GetDungeonClaims(runID)
+	_, claimed := component.owner.Dao().GetDungeonClaims(runID)
 	return claimed
 }

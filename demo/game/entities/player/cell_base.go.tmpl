@@ -4,14 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	db "{{MODULE}}/db"
-	"{{MODULE}}/game/components/attribute"
 	"{{MODULE}}/game/partition"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
 // In a partitioned scene (scene.partition, gameplay/cellworld) the player does
@@ -23,27 +20,6 @@ import (
 // fields (game/partition ReadBase / WriteBase) so a handler or beat that
 // rolls back restores it. The watchdog and the lease renewal are this
 // player's own beat, "cell.base" (Node.BaseBeat).
-
-// registerCellBase registers the routing beat when this process runs a
-// partitioned scene; it is started by the Node when the player enters it.
-func (component *MapComponent) registerCellBase() error {
-	node := partition.Node()
-	if node == nil {
-		return nil
-	}
-	owner := component.owner
-	reg, err := component.host.Register("cell.base", node.Config().WatchPeriod, func(heartbeat.Beat) error {
-		if n := partition.Node(); n != nil {
-			return n.BaseBeat(owner, time.Now())
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	component.cellBase = reg
-	return nil
-}
 
 // BaseState / SetBaseState / StartBase make the player a cellworld.BasePlayer.
 // Only under the player's own Nest lock.
@@ -67,26 +43,11 @@ func (player *Player) CellPanel() cellworld.Panel {
 	return cellworld.Panel{MaxHP: int32(final.HP), Attack: int32(final.Attack), Power: int32(final.Power)}
 }
 
-// 属性在等级、装备或业务 Refresh 后实际变化时，Cell 面板在同一个 Player 事务里更新。
-// 不使用只覆盖升级的钩子，加载阶段的临时重建也不发送面板。
-func init() {
-	attribute.OnAttributeChanged("cellworld", func(host attribute.Owner) error {
-		player, ok := host.(*Player)
-		if !ok {
-			return nil // 属性组件也可以挂在别的实体上；只有 Player 有 Cell 面板
-		}
-		if node := partition.Node(); node != nil {
-			return node.UpdatePanel(player)
-		}
-		return nil
-	})
-}
-
 func (player *Player) StartBase() error {
-	if player.mapComp.cellBase == nil {
+	if player.MapComp().CellBaseBeat() == nil {
 		return errors.New("player: this process runs no partitioned scene")
 	}
-	return player.mapComp.cellBase.Start()
+	return player.MapComp().CellBaseBeat().Start()
 }
 
 // TeamID is the partitioned scene's team this player is in (0 = none): the

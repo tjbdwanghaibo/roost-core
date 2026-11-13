@@ -22,6 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/game/actor"
 	"{{MODULE}}/game/handler"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
@@ -138,8 +139,8 @@ func (f *monsterFixture) must(m *monster.Monster, fn func(*monster.Monster) erro
 		f.t.Fatal(err)
 	}
 }
-func (f *monsterFixture) snapshot(m *monster.Monster) monster.Snapshot {
-	var out monster.Snapshot
+func (f *monsterFixture) snapshot(m *monster.Monster) view.MonsterSnapshot {
+	var out view.MonsterSnapshot
 	f.must(m, func(m *monster.Monster) error { out = m.MonsterActorComp().Snapshot(); return nil })
 	return out
 }
@@ -683,7 +684,7 @@ func checkMonsterReplacement(t *testing.T, operation string, replaceScene bool) 
 	}
 	var checked *monster.Monster
 	var checkedArea *sceneentity.Scene
-	var before monster.Snapshot
+	var before view.MonsterSnapshot
 	var memberBefore bool
 	name := "handlerMonster" + operation
 	if operation == "Respawn" {
@@ -708,7 +709,7 @@ func checkMonsterReplacement(t *testing.T, operation string, replaceScene bool) 
 				return err
 			}
 			checkedArea = made.(*sceneentity.Scene)
-			if err := f.run(checkedArea, func(entity.IThreadSafeEntity) error { return checkedArea.Admit(id) }); err != nil {
+			if err := f.run(checkedArea, func(entity.IThreadSafeEntity) error { return checkedArea.SceneMembersComp().Admit(id) }); err != nil {
 				return err
 			}
 		} else {

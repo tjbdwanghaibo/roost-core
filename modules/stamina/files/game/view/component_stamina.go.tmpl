@@ -4,7 +4,28 @@ package view
 type Stamina interface {
 	Current(nowUnixMilli int64) int64
 	Spend(n, nowUnixMilli int64) (int64, error)
+	Grant(n, nowUnixMilli int64) (StaminaGrantResult, error)
+	Refill(nowUnixMilli int64) (StaminaRefillResult, error)
 }
 
 // StaminaHolder 是“带有 Stamina 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type StaminaHolder interface{ Stamina() Stamina }
+
+// StaminaGrantResult 是一次发放的结果。
+type StaminaGrantResult struct {
+	// Granted 是实际加上的点数；被硬顶截掉一部分时小于请求的点数，已在硬顶时为 0。
+	Granted int64
+	// Value 是发放之后的体力。
+	Value int64
+}
+
+// StaminaRefillResult 是一次购买补满的结果。
+type StaminaRefillResult struct {
+	// Value 是补满之后的体力（就是上限）。
+	Value int64
+	// Cost 是这一次花掉的金币；Balance 是花完之后的余额。
+	Cost    int64
+	Balance int64
+	// Count 是今天（业务日）已经买了几次，含这一次。
+	Count int32
+}

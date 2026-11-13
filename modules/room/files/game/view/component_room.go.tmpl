@@ -1,0 +1,36 @@
+package view
+
+import (
+	db "{{MODULE}}/db"
+)
+
+// Room 是 Room 上 Room 组件对 game/ 下其它包公开的方法（实现在 game/components/room，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Room interface {
+	Open(capacity int32) error
+	Join(playerID int64, connection string) (RoomSnapshot, error)
+	Reconnect(playerID int64, expectedEpoch uint64, connection string) (RoomSnapshot, error)
+	Member(playerID int64, epoch uint64) (*db.RoomSeat, error)
+	Disconnect(playerID int64, epoch uint64) bool
+	Leave(playerID int64, epoch uint64, connection string) error
+	Close(playerID int64, epoch uint64, connection string) error
+	View(playerID int64, connection string) (RoomSnapshot, error)
+	Snapshot(playerID int64) RoomSnapshot
+}
+
+// RoomHolder 是“带有 Room 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type RoomHolder interface{ Room() Room }
+
+// RoomSnapshot 是脱离实体的值快照，可以在解锁后编码；Epoch 只返回给当前玩家的当前连接；连接 nonce 永不进入公开快照。
+type RoomSnapshot struct {
+	Capacity int32
+	HostID   int64
+	Closed   bool
+	Epoch    uint64
+	Seats    []RoomSeatSnapshot
+}
+
+type RoomSeatSnapshot struct {
+	PlayerID  int64
+	Slot      int32
+	Connected bool
+}

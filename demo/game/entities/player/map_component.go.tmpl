@@ -1,171 +1,33 @@
 package player
 
 import (
-	"fmt"
-	"math"
+	"{{MODULE}}/game/components/mapview"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	"{{MODULE}}/game/actor"
-	gamescene "{{MODULE}}/game/scene"
-	apperrors "{{MODULE}}/internal/errors"
 )
 
 //roost:component type=2004
 const CompTypeMap entity.ComponentType = 2004
 
-// MapComponent 是 demo 的业务适配：位置字段、协议和 cellworld Base 留在这里，
-// 实际移动、回滚和移动心跳由 actor 模块的同一份 Body 实现。它不再构造第二份 Move/MapBasic。
-// 所有方法在 Player 的 Nest 锁内调用，返回错误必须交给 Nest，不能吞错提交半次移动。
-type MapComponent struct {
-	entity.ComponentBase
-	owner    *Player
-	body     *actor.Body
-	host     *heartbeat.Host // 与 Body 共用；cell.base 是独立业务注册，不推进普通移动。
-	cellBase *heartbeat.Reg
-}
+// MapComponent 是 game/components/mapview 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type MapComponent = mapview.Component
 
 type IMapEntity interface {
 	entity.IThreadSafeEntity
 	MapComp() *MapComponent
 }
 
-func init() {
-	entity.RegisterComponentFactory(CompTypeMap, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		player, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("map component: owner %T is not *Player", owner)
-		}
-		return &MapComponent{owner: player}, nil
-	})
-}
-func (c *MapComponent) Name() string      { return "map" }
-func (c *MapComponent) Owner() *Player    { return c.owner }
-func (c *MapComponent) Body() *actor.Body { return c.body }
-
-func (c *MapComponent) OnInitFinish(*entity.EntityCreateParam, bool) error {
-	// demo 寻路最多访问4096节点，不能因共用默认256点预算而缩短既有有效路线。
-	body, err := actor.New(c.owner, actor.Config{Fields: playerFields{c.owner}, Save: c.save, MaxPathPoints: 4096, Surface: actor.Surface})
-	if err != nil {
-		return err
-	}
-	c.body, c.host = body, body.Host
-	if err := c.registerCellBase(); err != nil {
-		body.Close()
-		return err
-	}
-	return nil
-}
-func (c *MapComponent) OnDestroy(entity.EntityDestroyReason) {
-	if c.body != nil {
-		c.body.Close()
-	}
-}
-func (p *Player) MapBasic() *movement.MapBasic  { return p.mapComp.body.Map }
-func (p *Player) MoveComponent() *movement.Move { return p.mapComp.body.Move }
-func (c *MapComponent) Pos() spatial.Point      { return c.body.Position() }
-func (c *MapComponent) Facing() movement.Facing { return c.body.Map.Facing() }
-func (c *MapComponent) SceneID() int64          { return c.body.Map.SceneID() }
-func (c *MapComponent) InScene() bool           { return c.body.Map.InScene() }
-func (c *MapComponent) SavedPos() spatial.Point {
-	d := c.owner.Dao()
-	return spatial.Point{X: d.GetSavedPosX(), Y: d.GetSavedPosY()}
-}
-func (c *MapComponent) SavedFacing() movement.Facing {
-	return movement.Facing(c.owner.Dao().GetSavedFacing())
-}
-
-// EnterScene 仍接受 Scene 已验证的放置点；Space 是 demo bridge 的位移接线，
-// SceneReady/Join/分区视图继续由 bridge 管理，不让共享 Body 再建第二个观察者入口。
-func (c *MapComponent) EnterScene(sceneID int64, space movement.Space, at spatial.Point) (spatial.Point, error) {
-	if sceneID == 0 {
-		return spatial.Point{}, errcode.Wrap(apperrors.ErrScenePosition, nil, "scene_id", sceneID)
-	}
-	if err := c.body.Enter(actor.Environment{ID: sceneID, Space: space, Ground: actor.Ground{}, Surface: actor.Surface(), Time: actor.WorldTime()}, at, c.SavedFacing()); err != nil {
-		return spatial.Point{}, err
-	}
-	return c.Pos(), nil
-}
-func (c *MapComponent) LeaveScene() error { return c.body.Leave() }
-
-// Teleport 保留 demo 的可信瞬移规则，位置和停止当前移动现在一起随 Nest undo 回滚。
-func (c *MapComponent) Teleport(terrain gamescene.Terrain, to spatial.Point) error {
-	if terrain == nil || !c.InScene() {
-		return errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "no terrain or scene")
-	}
-	if !terrain.Standable(to) {
-		from := c.Pos()
-		return errcode.Wrap(apperrors.ErrScenePosition, nil, "from_x", from.X, "from_y", from.Y, "to_x", to.X, "to_y", to.Y)
-	}
-	if err := c.body.Map.SetPos(to); err != nil {
-		return err
-	}
-	c.body.Stop()
-	return nil
-}
-
-// WalkTo / Follow 返回真实 movement 令牌。线上 ActionID 是本次移动的不透明编号，
-// 0代表未启动；令牌不持久化。转换溢出返回错误，整个调用必须由 Nest 回滚。
-func (c *MapComponent) WalkTo(path []spatial.Point) (int64, error) {
-	if !c.InScene() {
-		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in a scene")
-	}
-	if err := c.body.Walk(path, actor.PlayerSpeed); err != nil {
-		return 0, err
-	}
-	return c.moveToken()
-}
-func (c *MapComponent) Follow(target int64) (int64, error) {
-	if !c.InScene() {
-		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in a scene")
-	}
-	if err := c.body.Follow(target, actor.PlayerSpeed, actor.FollowKeep); err != nil {
-		return 0, err
-	}
-	return c.moveToken()
-}
-func (c *MapComponent) moveToken() (int64, error) {
-	token := c.body.Move.Token()
-	if token > math.MaxInt64 {
-		return 0, fmt.Errorf("map: movement token exceeds wire range")
-	}
-	return int64(token), nil
-}
-func (c *MapComponent) Walking() bool { return c.body.Move.Moving() }
-func (c *MapComponent) save(sceneID int64, at spatial.Point, facing movement.Facing) error {
-	d := c.owner.Dao()
-	d.SetSavedSceneID(sceneID)
-	d.SetSavedPosX(at.X)
-	d.SetSavedPosY(at.Y)
-	d.SetSavedFacing(int32(facing))
-	return nil
-}
-
-// playerFields 保留 demo 的 DAO/公开视图字段词汇；Body 只通过 movement.Fields 写它们。
-type playerFields struct{ owner *Player }
-
-func (f playerFields) SceneID() int64     { return f.owner.Dao().GetSceneID() }
-func (f playerFields) SetSceneID(v int64) { f.owner.Dao().SetSceneID(v); f.owner.PublishSyncDirty() }
-func (f playerFields) Pos() spatial.Point {
-	d := f.owner.Dao()
-	return spatial.Point{X: d.GetPosX(), Y: d.GetPosY()}
-}
-func (f playerFields) SetPos(v spatial.Point) {
-	d := f.owner.Dao()
-	d.SetPosX(v.X)
-	d.SetPosY(v.Y)
-	f.owner.PublishSyncDirty()
-}
-func (f playerFields) Facing() movement.Facing { return movement.Facing(f.owner.Dao().GetFacing()) }
-func (f playerFields) SetFacing(v movement.Facing) {
-	f.owner.Dao().SetFacing(int32(v))
-	f.owner.PublishSyncDirty()
-}
+// MapBasic and MoveComponent make the Player a movement.MapOwner and a
+// movement.MoveOwner: the walk parts are the Map component's actor Body.
+func (p *Player) MapBasic() *movement.MapBasic  { return p.MapComp().Body().Map }
+func (p *Player) MoveComponent() *movement.Move { return p.MapComp().Body().Move }
 
 var (
 	_ movement.MapOwner  = (*Player)(nil)
 	_ movement.MoveOwner = (*Player)(nil)
 )
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeMap, mapview.NewComponent)
+}

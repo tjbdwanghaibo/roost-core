@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 
+	roomcomponent "{{MODULE}}/game/components/room"
 	db "{{MODULE}}/db"
 	roomentity "{{MODULE}}/game/entities/room"
 	sender "{{MODULE}}/game/handler/syncsender"
@@ -105,7 +106,7 @@ func FromRegistry(registry *app.Registry) (*Rooms, error) {
 
 // Open 幂等恢复“保留房号成功、创建实体/初始化失败”；返回成功前名单和容量必须已提交。
 func (r *Rooms) Open(ctx context.Context, matchID string, members []int64) (int64, error) {
-	if r == nil || r.bind == nil || r.open == nil || matchID == "" || len(matchID) > 128 || len(members) < 2 || len(members) > int(roomentity.MaxSeats) {
+	if r == nil || r.bind == nil || r.open == nil || matchID == "" || len(matchID) > 128 || len(members) < 2 || len(members) > int(roomcomponent.MaxSeats) {
 		return 0, fmt.Errorf("matchroom: invalid handoff")
 	}
 	ids := slices.Clone(members)

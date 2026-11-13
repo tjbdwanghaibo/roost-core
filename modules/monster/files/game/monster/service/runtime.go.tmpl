@@ -12,6 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"log/slog"
 	"sync"
+	"{{MODULE}}/game/view"
 	monster "{{MODULE}}/game/entities/monster"
 	scene "{{MODULE}}/game/entities/scene"
 	sender "{{MODULE}}/game/handler/syncsender"
@@ -205,17 +206,17 @@ func (m *Manager) Spawn(ctx context.Context, sceneID int64, spec rules.Spec) (in
 }
 
 // Damage的生命代际来自此前读取的快照，旧生命上的迟到结算被组件拒绝。
-func (m *Manager) Damage(ctx context.Context, id int64, life uint64, amount int64) (monster.Snapshot, error) {
+func (m *Manager) Damage(ctx context.Context, id int64, life uint64, amount int64) (view.MonsterSnapshot, error) {
 	ctx, done, err := m.admit(ctx)
 	if err != nil {
-		return monster.Snapshot{}, err
+		return view.MonsterSnapshot{}, err
 	}
 	defer done()
 	m.operations.Lock()
 	defer m.operations.Unlock()
 	r, ok := m.records[id]
 	if !ok {
-		return monster.Snapshot{}, fmt.Errorf("monster: unknown id")
+		return view.MonsterSnapshot{}, fmt.Errorf("monster: unknown id")
 	}
 	state, err := sender.NewMonsterDamageSender(m.client).MultiSync_MonsterDamage(ctx, id, r.areaID, r.target, life, amount)
 	// 组件拒绝已死亡生命的重复伤害；只有本次确认死亡才记录，不记录普通命中。

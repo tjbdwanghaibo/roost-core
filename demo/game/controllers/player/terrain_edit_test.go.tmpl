@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
-	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
+	"{{MODULE}}/game/components/terrainsurface"
+	"{{MODULE}}/game/components/terrainledger"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/game/terrainmap"
 	apperrors "{{MODULE}}/internal/errors"
@@ -87,8 +87,8 @@ func TestTerrainRefusalsMapToTheirCodes(t *testing.T) {
 		{terrainmap.ErrOccupied, apperrors.ErrTerrainOccupied},
 		{terrainmap.ErrStale, apperrors.ErrTerrainSeq},
 		{terrainmap.ErrSeqAhead, apperrors.ErrTerrainSeq},
-		{&terrainmap.SeqError{Seq: 3, LastSeq: 900, Verdict: terrain_editor.Stale}, apperrors.ErrTerrainSeq},
-		{&terrainmap.SeqError{Seq: 9_000_000, LastSeq: 900, Verdict: terrain_editor.Ahead}, apperrors.ErrTerrainSeq},
+		{&terrainmap.SeqError{Seq: 3, LastSeq: 900, Verdict: terrainledger.Stale}, apperrors.ErrTerrainSeq},
+		{&terrainmap.SeqError{Seq: 9_000_000, LastSeq: 900, Verdict: terrainledger.Ahead}, apperrors.ErrTerrainSeq},
 		{terrainmap.ErrPending, apperrors.ErrTerrainPending},
 		{terrainmap.ErrBrushCrossCell, apperrors.ErrTerrainCrossCell},
 	} {
@@ -108,7 +108,7 @@ func TestTerrainRefusalsMapToTheirCodes(t *testing.T) {
 func TestTerrainSeqRefusalCarriesTheLastSeq(t *testing.T) {
 	access := &playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgTerrainEdit, Seq: 1}
 	request := &pb.TerrainEditRequest{Seq: 3}
-	stale := fmt.Errorf("terrain: brush: %w", &terrainmap.SeqError{PlayerID: 7, Seq: 3, LastSeq: 900, Verdict: terrain_editor.Stale})
+	stale := fmt.Errorf("terrain: brush: %w", &terrainmap.SeqError{PlayerID: 7, Seq: 3, LastSeq: 900, Verdict: terrainledger.Stale})
 	if r := terrainRefusal(access, request, stale); r.Code != codeOf(apperrors.ErrTerrainSeq) || r.LastSeq != 900 {
 		t.Fatalf("a stale sequence: %+v, want terrain_seq with LastSeq 900", r)
 	}
@@ -125,7 +125,7 @@ func TestTerrainRelayAnswerCarriesTheCellsOutcome(t *testing.T) {
 	left, right := terrain.ChunkKey{X: 3}, terrain.ChunkKey{X: 4}
 	chunks := []terrain.ChunkKey{left, right}
 	applied := terrainmap.RelayPart{SID: 101, Chunks: chunks, Answer: terrainmap.PartAnswer{
-		Outcome: terrainmap.OutcomeApplied, Chunks: []terrain_chunk.ChunkVersion{{Key: left, Version: 5}, {Key: right, Version: 2}}}}
+		Outcome: terrainmap.OutcomeApplied, Chunks: []terrainsurface.ChunkVersion{{Key: left, Version: 5}, {Key: right, Version: 2}}}}
 	duplicate := applied
 	duplicate.Answer.Outcome = terrainmap.OutcomeDuplicate
 	refused := terrainmap.RelayPart{SID: 101, Chunks: chunks, Answer: terrainmap.PartAnswer{

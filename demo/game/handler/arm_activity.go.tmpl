@@ -16,7 +16,7 @@ import (
 // restarts ten times leaves ten nodes, all firing the same phase.
 //
 //roost:nest rollback=undo durability=strict
-func handlerArmActivity(target world.ITimerEntity, activityID string, closeAtUnix int64, nowUnix int64) (bool, error) {
-	_, armed := target.TimerComp().ScheduleActivityPhase(activityID, time.Unix(closeAtUnix, 0), time.Unix(nowUnix, 0))
+func handlerArmActivity(target world.IActivityPhaseEntity, activityID string, closeAtUnix int64, nowUnix int64) (bool, error) {
+	_, armed := target.ActivityPhaseComp().Schedule(activityID, time.Unix(closeAtUnix, 0), time.Unix(nowUnix, 0))
 	return armed, nil
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/db"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -44,7 +45,8 @@ const (
 	FriendsReject  int32 = 6
 )
 
-type FriendsSnapshot struct{ Peers, Incoming, Blocked []int64 }
+// FriendsSnapshot 是 view.FriendsSnapshot（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type FriendsSnapshot = view.FriendsSnapshot
 
 // ChangeOwnSide 是只改操作者自己名单的两种动作：取消拉黑、拒绝申请。只需要锁住本人，对方的档不参与，
 // 所以对方不在线、不在本进程都能做。peerID 是对方的完整 EntityID。别的动作要同时改对方的名单，走 Change。
@@ -79,14 +81,14 @@ func forgetFriend(list *db.FriendsState, id int64) {
 	}
 }
 
-// Change 只可在同时锁住双方的 Nest 事务内调用；先检查全部容量和权限，再写双方 DAO。
+// Change 只可在同时锁住双方的 Nest 事务内调用（peer 是对方的 Player，只用它的 ID 与 DAO）；先检查全部容量和权限，再写双方 DAO。
 // ID 保存的是完整 EntityID，客户端快照转回玩家号。跨服实体不允许拿镜像替代。
-func (c *Component) Change(peer *Component, action int32) error {
-	if peer == nil || c.owner.ID() == peer.owner.ID() {
+func (c *Component) Change(peer view.PlayerEntity, action int32) error {
+	if peer == nil || c.owner.ID() == peer.ID() {
 		return apperrors.ErrFriendsInvalid
 	}
-	a, b := c.owner.Dao().GetFriends(), peer.owner.Dao().GetFriends()
-	aid, bid := c.owner.ID(), peer.owner.ID()
+	a, b := c.owner.Dao().GetFriends(), peer.Dao().GetFriends()
+	aid, bid := c.owner.ID(), peer.ID()
 	_, af := a.GetPeers(bid)
 	_, bf := b.GetPeers(aid)
 	_, ab := a.GetBlocked(bid)

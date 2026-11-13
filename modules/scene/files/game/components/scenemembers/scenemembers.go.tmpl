@@ -1,0 +1,106 @@
+// Package scenemembers 是场景的成员账本（Scene 上的组件 SceneMembers）：谁在这张图里、准入（容量、关闭中）、离开、
+// 停机排空与关闭。账本在 SceneDao.Members 里，随事务回滚；场景的运行期对象（AOI 空间、时间域、配置）属于实体本身，
+// 在 game/entities/scene，组件经 Owner 的几个适配方法用到它们。
+package scenemembers
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// Owner 是 SceneMembers 组件的宿主（Scene 的接线见 game/entities/scene/members_component.go）：view 的 SceneEntity，加上
+// 场景运行期对象的适配（实体一侧）：容量 Capacity、成员实体是否还在内存 MemberLoaded、从 AOI 空间忘掉一个成员
+// ForgetMember、关闭 AOI 空间 CloseSpace。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	view.SceneEntity
+	Capacity() int
+	MemberLoaded(id int64) bool
+	ForgetMember(id int64)
+	CloseSpace()
+}
+
+// Component 是一张场景的成员账本。方法只在本场景的 Nest 锁内调用，Admit / Depart 要与相关 actor 同时持锁。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Scene 在 game/entities/scene/members_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("scene_members component: owner %T does not implement scenemembers.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "scene_members" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (c *Component) Owner() Owner { return c.owner }
+
+// Admit / Depart 必须与相关 actor 同时持锁。关闭检查、容量与成员变更同一事务，不留 Enter/Close 竞态。
+// 重复 Admit 同一个成员不报错；满员前先清掉已不在内存里的成员。
+func (c *Component) Admit(id int64) error {
+	dao := c.owner.Dao()
+	if dao.GetClosed() || dao.GetClosing() {
+		return apperrors.ErrSceneUnavailable
+	}
+	if _, found := dao.GetMembers(id); found {
+		return nil
+	}
+	c.purgeMissing()
+	if dao.MembersLen() >= c.owner.Capacity() {
+		return apperrors.ErrSceneFull
+	}
+	dao.SetMembers(id, true)
+	return nil
+}
+
+// Depart 把 id 从成员账本里去掉。
+func (c *Component) Depart(id int64) { c.owner.Dao().DelMembers(id) }
+
+// Close 关闭已经排空的场景：还有成员时拒绝；AOI 空间在提交后关闭（不在事务里时立即关闭）。
+func (c *Component) Close() error {
+	c.purgeMissing()
+	if c.owner.Dao().MembersLen() != 0 {
+		return fmt.Errorf("scene: still has members")
+	}
+	c.owner.Dao().SetClosed(true)
+	if !nest.AfterCommit(c.owner.CloseSpace) {
+		c.owner.CloseSpace()
+	}
+	return nil
+}
+
+// BeginClosing 先关准入再排空，停机中的重试不会接进新的玩家；返回此刻的成员。
+func (c *Component) BeginClosing() []int64 {
+	c.owner.Dao().SetClosing(true)
+	c.purgeMissing()
+	var ids []int64
+	c.owner.Dao().RangeMembers(func(id int64, _ bool) bool { ids = append(ids, id); return true })
+	return ids
+}
+
+// purgeMissing 去掉已不在内存里的成员（卸载或删档后不会再 Depart 的），提交后让 AOI 空间也忘掉它们。
+func (c *Component) purgeMissing() {
+	var missing []int64
+	c.owner.Dao().RangeMembers(func(id int64, _ bool) bool {
+		if !c.owner.MemberLoaded(id) {
+			missing = append(missing, id)
+		}
+		return true
+	})
+	for _, id := range missing {
+		c.owner.Dao().DelMembers(id)
+		forget := func() { c.owner.ForgetMember(id) }
+		if !nest.AfterCommit(forget) {
+			forget()
+		}
+	}
+}

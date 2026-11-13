@@ -7,7 +7,6 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	gameteam "{{MODULE}}/game/components/team"
 	scene_actor "{{MODULE}}/game/entities/scene_actor"
-	team "{{MODULE}}/game/entities/team"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
@@ -16,7 +15,7 @@ import (
 // teamGroup 把 Team 的成员表换成 Base 缓存的那份（cellworld.Group）：每名成员的 Player、在分区场景里的 SceneActor
 // （ID 跨格不变）与 Base 的 sid。组队 handler 都在 [Team, Player] 事务里用它：写自己的缓存（Node.SetGroup）、通知别的
 // 成员的 Base（Node.NotifyGroup）。
-func teamGroup(info team.Snapshot) cellworld.Group {
+func teamGroup(info view.TeamSnapshot) cellworld.Group {
 	g := cellworld.Group{ID: info.TeamID, Ver: uint64(info.Revision)}
 	for _, unique := range info.Members {
 		playerID, err := entity.BuildEntityID(unique, player.EntityKindPlayer)

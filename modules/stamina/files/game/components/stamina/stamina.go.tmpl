@@ -113,13 +113,8 @@ func (component *Component) Spend(n, nowUnixMilli int64) (int64, error) {
 	return value - n, nil
 }
 
-// StaminaGrantResult 是一次发放的结果。
-type StaminaGrantResult struct {
-	// Granted 是实际加上的点数；被硬顶截掉一部分时小于请求的点数，已在硬顶时为 0。
-	Granted int64
-	// Value 是发放之后的体力。
-	Value int64
-}
+// StaminaGrantResult 是 view.StaminaGrantResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type StaminaGrantResult = view.StaminaGrantResult
 
 // Grant 发 n 点体力（奖励、道具、GM）。发放可以超过上限，直到硬顶（StaminaRules.HardCap）为止；
 // 超出硬顶的部分截掉，不拒绝——发体力常常是一笔更大的奖励里的一项（升级、通关、领邮件），
@@ -157,16 +152,8 @@ func staminaGrantable(value, n, hardCap int64) int64 {
 	return n
 }
 
-// StaminaRefillResult 是一次购买补满的结果。
-type StaminaRefillResult struct {
-	// Value 是补满之后的体力（就是上限）。
-	Value int64
-	// Cost 是这一次花掉的金币；Balance 是花完之后的余额。
-	Cost    int64
-	Balance int64
-	// Count 是今天（业务日）已经买了几次，含这一次。
-	Count int32
-}
+// StaminaRefillResult 是 view.StaminaRefillResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type StaminaRefillResult = view.StaminaRefillResult
 
 // Refill 花金币把体力补到上限。nowUnixMilli 是这条消息冻结的业务时间。
 //

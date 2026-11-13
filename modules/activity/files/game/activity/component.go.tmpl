@@ -3,8 +3,10 @@ package activity
 import (
 	"{{MODULE}}/game/view"
 	"fmt"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
 	"{{MODULE}}/db"
@@ -23,10 +25,12 @@ type createdOwner interface {
 	ActivityCreatedAt() int64
 }
 
-// deadlineOwner 把同一活动期限接到宿主的唤醒方式；实现必须与当前 DAO 同事务。
-// Player 使用 entitytimer。Remote 没有此接口，由权威服务扫描持久 NextDue。
+// deadlineOwner 是有持久定时器的宿主（Player 使用 entitytimer）：建 / 删唤醒节点的适配，节点挂在宿主的定时器组件上，
+// 与当前 DAO 同事务。期限与节点号的记账（ActivityBook 的 NextDue / TimerID）在组件里（Rearm）。Remote 宿主没有此接口，
+// 期限只存在持久 NextDue 里，由权威服务扫描。
 type deadlineOwner interface {
-	SetActivityDeadline(int64) error
+	ArmActivityDeadline(at time.Time) int64
+	CancelActivityDeadline(id int64)
 }
 
 // Component 是三种宿主共用的组件实现。实体包中的类型别名仅供模块安装器接线，
@@ -79,9 +83,43 @@ func (c *Component) Rearm() error {
 	if err != nil {
 		return err
 	}
-	if owner, ok := c.owner.(deadlineOwner); ok {
-		return owner.SetActivityDeadline(due)
+	book := host.Book
+	owner, ok := c.owner.(deadlineOwner)
+	if !ok {
+		book.SetNextDue(due)
+		return nil
 	}
-	host.Book.SetNextDue(due)
+	if due == book.GetNextDue() && (due == 0 || book.GetTimerID() != 0) {
+		return nil
+	}
+	book.SetNextDue(due)
+	if book.GetTimerID() != 0 {
+		owner.CancelActivityDeadline(book.GetTimerID())
+		book.SetTimerID(0)
+	}
+	if due == 0 {
+		return nil
+	}
+	id := owner.ArmActivityDeadline(time.UnixMilli(due))
+	if id == 0 {
+		return fmt.Errorf("activity: failed to arm deadline")
+	}
+	book.SetTimerID(id)
 	return nil
+}
+
+// OnDeadline 是宿主定时器上活动唤醒节点的回调（Player 的定时器组件把到期的节点交给它）：不是当前节点（已被重新武装
+// 替换）的直接收掉；否则推进到触发时刻并重新武装下一个期限。entitytimer 的回调没有 error 返回值；panic 由正式 Nest
+// 回滚整笔事务，包含节点删除和业务修改。不能吞错后返回 0，否则失败的初始化/结算会永久丢失唤醒。本边界有生成工程回滚用例。
+func (c *Component) OnDeadline(fire entitytimer.Fire) time.Duration {
+	if c.owner.ActivityBook().GetTimerID() != fire.ID {
+		return 0
+	}
+	if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {
+		panic(fmt.Errorf("activity timer: %w", err))
+	}
+	if err := c.Rearm(); err != nil {
+		panic(fmt.Errorf("activity timer: %w", err))
+	}
+	return 0
 }

@@ -1,0 +1,54 @@
+package view
+
+import (
+	"time"
+)
+
+// AllianceGuard 是 AllianceMember 上 AllianceGuard 组件对 game/ 下其它包公开的方法（实现在 game/components/allianceguard，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type AllianceGuard interface {
+	PlayerID() int64
+	Execute(requestID string, nowUnix int64, retention time.Duration, apply func() (int64, error)) (AllianceOutcome, error)
+	Receipt(requestID string) (AllianceReceipt, bool)
+	CheckFree(requestID string, nowUnix int64, cooldown time.Duration) error
+	HeldAgainst(requestID string) bool
+	Reserve(allianceID int64, requestID string, deadlineUnix int64)
+	Join(allianceID int64, requestID string)
+	Resolve(requestID string, allianceID int64, joined bool) bool
+	Clear(allianceID int64, joinRequestID string, nowUnix int64) bool
+	ClaimReward(requestID string, period int64) (int64, error)
+	ReleaseReward(requestID string) bool
+	State(version int64) AllianceMemberState
+	CurrentVersion() int64
+}
+
+// AllianceGuardHolder 是“带有 AllianceGuard 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type AllianceGuardHolder interface{ AllianceGuard() AllianceGuard }
+
+// AllianceMemberState is a player's guard as the service answers it.
+type AllianceMemberState struct {
+	PlayerID            int64
+	AllianceID          int64
+	JoinRequestID       string
+	PendingAllianceID   int64
+	PendingRequestID    string
+	PendingDeadlineUnix int64
+	LeftAtUnix          int64
+	// RewardPeriod is the last reward period the player claimed (0: none).
+	RewardPeriod int64
+	Version      int64
+}
+
+// Holder is what holds the guard, if anything: the pending reservation
+// (pending=true: alliance PendingAllianceID, request PendingRequestID) or the
+// membership (alliance AllianceID, request JoinRequestID). A pending
+// reservation is reported first: it is the newer of the two.
+func (state AllianceMemberState) Holder() (allianceID int64, requestID string, pending, held bool) {
+	switch {
+	case state.PendingRequestID != "":
+		return state.PendingAllianceID, state.PendingRequestID, true, true
+	case state.AllianceID != 0:
+		return state.AllianceID, state.JoinRequestID, false, true
+	default:
+		return 0, "", false, false
+	}
+}

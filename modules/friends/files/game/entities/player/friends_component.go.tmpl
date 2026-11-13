@@ -2,6 +2,7 @@ package player
 
 import (
 	"{{MODULE}}/game/components/friends"
+	"{{MODULE}}/game/view"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -12,8 +13,9 @@ const CompTypeFriends entity.ComponentType = {{ID:component:Friends}}
 // FriendsComponent 是 game/components/friends 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
 type FriendsComponent = friends.Component
 
+// IFriendsEntity 带着整个 view.PlayerEntity：Change 要对方的 Player（只用 ID 与 DAO）。
 type IFriendsEntity interface {
-	entity.IThreadSafeEntity
+	view.PlayerEntity
 	FriendsComp() *FriendsComponent
 }
 

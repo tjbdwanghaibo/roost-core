@@ -3,8 +3,21 @@ package view
 // Team 是 Team 组件对 game/ 下其它包公开的方法（实现在 game/components/team，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Team interface {
 	TeamID() int64
+	Create(target TeamEntity, sid int32) (TeamSnapshot, error)
+	Accept(target TeamEntity, sid int32, now int64) (TeamSnapshot, error)
+	Invite(target TeamEntity, invitee, now int64) (TeamInvitation, error)
 	NoteInvite(teamID, inviter, expireAt, now int64) bool
+	Invites(now int64) []TeamInvite
+	Leave(target TeamEntity, disband bool) error
+	Info(target TeamEntity) (TeamSnapshot, error)
 }
 
 // TeamHolder 是“带有 Team 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type TeamHolder interface{ Team() Team }
+
+// TeamInvite 是被邀请人看到的一份邀请：哪支队伍（完整实体号，TeamAccept 要的就是它）、谁邀请的、什么时候过期。
+type TeamInvite struct {
+	TeamID   int64
+	Inviter  int64
+	ExpireAt int64
+}

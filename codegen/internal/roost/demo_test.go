@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,10 +18,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
+	"github.com/tjbdwanghaibo/roost-core/demo"
+	"github.com/tjbdwanghaibo/roost-core/modules"
 	"gopkg.in/yaml.v3"
 )
 
@@ -181,6 +185,121 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 			t.Errorf("no step writes %s", rel)
 		}
 	}
+}
+
+// game-demo 的组件与 view 按模块模板的同一条规则查（TestModuleViewInterfacesListTheComponentMethods）：demo 的每个
+// game/view/component_<包>.go 列出 game/components/<包> 里 *Component 的全部导出方法；demo 往模块的组件包里加的文件
+// （game/components/<包>/ 下没有 demo 自己的 view 文件）按带来那个组件的模块的 view 文件查。豁免只有 core 运行时对象。
+func TestDemoViewInterfacesListTheComponentMethods(t *testing.T) {
+	exemptions := map[string]map[string]string{}
+	merged := fstest.MapFS{}
+	put := func(src fs.FS, from, to string) {
+		raw, err := fs.ReadFile(src, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged[to] = &fstest.MapFile{Data: raw}
+	}
+	sources, err := fs.Glob(demo.Files, "game/components/*/*.go.tmpl")
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no demo component templates (err=%v)", err)
+	}
+	for _, source := range sources {
+		put(demo.Files, source, source)
+	}
+	views, err := fs.Glob(demo.Files, "game/view/component_*.go.tmpl")
+	if err != nil || len(views) == 0 {
+		t.Fatalf("no demo game/view component templates (err=%v)", err)
+	}
+	for _, view := range views {
+		put(demo.Files, view, view)
+	}
+	for _, source := range sources {
+		pkg := strings.Split(source, "/")[2]
+		view := "game/view/component_" + pkg + ".go.tmpl"
+		if _, ok := merged[view]; ok {
+			continue
+		}
+		owners, err := fs.Glob(modules.Files, "*/files/"+view)
+		if err != nil || len(owners) != 1 {
+			t.Fatalf("demo adds %s to game/components/%s, which has no view file of its own and %d module view files (err=%v)", source, pkg, len(owners), err)
+		}
+		put(modules.Files, owners[0], view)
+		views = append(views, view)
+	}
+	checkComponentViews(t, merged, views, func(_, pkg string) []string {
+		matches, err := fs.Glob(merged, "game/components/"+pkg+"/*.go.tmpl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return matches
+	}, exemptions)
+}
+
+// game-demo 自己的 view 文件与它装的模块（连同 requires）的 view 文件放在同一个 game/view 包里，名字不能重。
+func TestDemoViewNamesDoNotCollideWithItsModules(t *testing.T) {
+	catalog, err := loadModuleCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := map[string]bool{}
+	var add func(string)
+	add = func(name string) {
+		if installed[name] {
+			return
+		}
+		installed[name] = true
+		for _, required := range catalog[name].Requires {
+			add(required)
+		}
+	}
+	for _, step := range demoScaffoldSteps("game") {
+		for _, name := range step.modules {
+			add(name)
+		}
+	}
+	merged := fstest.MapFS{}
+	var paths []string
+	for name := range installed {
+		views, err := fs.Glob(modules.Files, name+"/files/game/view/*.go.tmpl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, view := range views {
+			raw, _ := fs.ReadFile(modules.Files, view)
+			merged[view] = &fstest.MapFile{Data: raw}
+			paths = append(paths, view)
+		}
+	}
+	demoViews, err := fs.Glob(demo.Files, "game/view/*.go.tmpl")
+	if err != nil || len(demoViews) == 0 {
+		t.Fatalf("no demo game/view templates (err=%v)", err)
+	}
+	for _, view := range demoViews {
+		raw, _ := fs.ReadFile(demo.Files, view)
+		merged["demo/"+view] = &fstest.MapFile{Data: raw}
+		paths = append(paths, "demo/"+view)
+	}
+	sort.Strings(paths)
+	checkViewNamesUnique(t, merged, paths, nil)
+}
+
+// game-demo 的实体包同模块模板一样只留接线（TestModuleEntityPackagesHoldOnlyComponentWiring）。World 的定时器组件是手写的
+// 框架定时器运行时宿主（等同 roost add timer 生成的定时器组件，属于实体基础设施），它的业务回调在组件包里。
+func TestDemoEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
+	checkEntityPackagesHoldOnlyWiring(t, demo.Files, func(file, component string) bool {
+		return file == "game/entities/world/timer_component.go.tmpl" && component == "TimerComponent"
+	})
+	cellworldActor := "implements cellworld.Actor: the framework's cell runtime calls it to store / pace the actor"
+	cellworldBase := "implements cellworld.BasePlayer: the framework's base side calls it inside the player's transaction"
+	checkEntityMethodsLeaveStateToComponents(t, demo.Files, map[string]string{
+		"game/entities/scene/entity.go.tmpl Scene.OnInitFinish":                "builds the scene's runtime objects (time domain, world clock and ground for the actors) from the create parameters",
+		"game/entities/scene/entity.go.tmpl Scene.SetTimeRate":                 "the scene's own time domain (a runtime object of the entity) writes its anchor into SceneDao",
+		"game/entities/scene_actor/entity.go.tmpl SceneActor.SetCellPeriod":    cellworldActor,
+		"game/entities/monster/cell.go.tmpl Monster.SetCellPeriod":             cellworldActor,
+		"game/entities/player/cell_base.go.tmpl Player.SetCellGroup":           cellworldBase,
+		"game/entities/player/cell_base.go.tmpl Player.RecordCellDeathReceipt": cellworldBase,
+	})
 }
 
 // 邮件由 mailbox 模块带来（连同它依赖的 wallet；模块在同一步里装、顺序由上一条用例钉住）。demo 不再有自己的邮件协议、
@@ -850,7 +969,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if alliance := read("game/components/alliance/alliance.go"); !strings.Contains(alliance, "func (c *Component) SetAlliance(") {
 		t.Errorf("the alliance copy is not provided by its module:\n%s", alliance)
 	}
-	if ledger := read("game/components/profile/dungeon_ledger.go"); !strings.Contains(ledger, "func (component *Component) ClaimDungeonRun(") {
+	if ledger := read("game/components/dungeonledger/dungeonledger.go"); !strings.Contains(ledger, "func (component *Component) ClaimDungeonRun(") {
 		t.Errorf("the dungeon claim ledger is not in the demo's own file:\n%s", ledger)
 	}
 	if queue := read("game/controllers/player/join_queue.go"); !strings.Contains(queue, "Sync_ProfileCard(") {

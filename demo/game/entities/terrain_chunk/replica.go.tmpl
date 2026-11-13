@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"{{MODULE}}/game/components/terrainsurface"
 	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -167,7 +168,7 @@ func (r *Replica) pack(profile entity.SyncProfile, delta bool) (entity.FrozenSyn
 		patch.Materials = r.materialsDelta()
 	} else {
 		patch.Heights = &db.SyncTerrainChunkDaoHeightsField{Value: append([]uint16(nil), r.heights...)}
-		patch.Materials = &db.SyncTerrainChunkDaoMaterialsField{Value: widen(r.materials)}
+		patch.Materials = &db.SyncTerrainChunkDaoMaterialsField{Value: terrainsurface.Widen(r.materials)}
 	}
 	r.mu.Unlock()
 	raw, err := db.MarshalSyncTerrainChunkDao(patch)
@@ -188,7 +189,7 @@ func (r *Replica) heightsDelta() *db.SyncTerrainChunkDaoHeightsField {
 	switch {
 	case len(updates) == 0:
 		return nil
-	case len(updates) > HeightsGuard:
+	case len(updates) > terrainsurface.HeightsGuard:
 		return &db.SyncTerrainChunkDaoHeightsField{Value: append([]uint16(nil), r.heights...)}
 	}
 	return &db.SyncTerrainChunkDaoHeightsField{Delta: true, Length: uint64(len(r.heights)), Updates: updates}
@@ -204,8 +205,8 @@ func (r *Replica) materialsDelta() *db.SyncTerrainChunkDaoMaterialsField {
 	switch {
 	case len(updates) == 0:
 		return nil
-	case len(updates) > MaterialsGuard:
-		return &db.SyncTerrainChunkDaoMaterialsField{Value: widen(r.materials)}
+	case len(updates) > terrainsurface.MaterialsGuard:
+		return &db.SyncTerrainChunkDaoMaterialsField{Value: terrainsurface.Widen(r.materials)}
 	}
 	return &db.SyncTerrainChunkDaoMaterialsField{Delta: true, Length: uint64(len(r.materials)), Updates: updates}
 }

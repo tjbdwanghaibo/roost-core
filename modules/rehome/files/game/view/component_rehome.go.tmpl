@@ -2,6 +2,8 @@ package view
 
 // Rehome 是 Rehome 组件对 game/ 下其它包公开的方法（实现在 game/components/rehome，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Rehome interface {
+	Prepare(move RehomeMove, nowUnixMilli int64) error
+	Arrive(sid int32, nowUnixMilli int64) (RehomeArriveResult, error)
 	Cancel(id string) bool
 	LastAt() int64
 	Count() int32
@@ -9,3 +11,40 @@ type Rehome interface {
 
 // RehomeHolder 是“带有 Rehome 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type RehomeHolder interface{ Rehome() Rehome }
+
+// RehomeMove 是一次换服在各个步骤之间传的事实。
+type RehomeMove struct {
+	PlayerID int64
+	// EntityID 是这名玩家的 Player 的完整 Entity ID：交出实体按它认。
+	EntityID int64
+	// ID 是换服 ID；From 是源服（本进程的 sid），To 是目标服。
+	ID   string
+	From int32
+	To   int32
+	// Epoch 是发起时 account 上的绑定代数：提交之后是 Epoch+1，这名玩家以后再换回本服时至少是 Epoch+2。
+	Epoch uint64
+	// Operator 同 Request.Operator。
+	Operator bool
+}
+
+// RehomeArriveResult 是 Nest handler RehomeArrive 的结果：进入之后看一眼档里的换服意图，该到达的到达。
+type RehomeArriveResult struct {
+	// Arrived 为 true 表示这一次调用做了到达（档里的意图指向本服，而且这个换服 ID 还没到达过）。
+	Arrived bool
+	Arrival RehomeArrival
+	// StaleID 非空表示档里留着一份指向别的服（StaleTo）的意图：这名玩家此刻在本服，那一次换服没有成。
+	// 调用方向 account 确认之后用 RehomeCancel 清掉。
+	StaleID string
+	StaleTo int32
+}
+
+// RehomeArrival 是一次到达：这名玩家换服之后第一次在目标服进入游戏。
+type RehomeArrival struct {
+	PlayerID int64
+	// ID 是这次换服的 ID；From 是源服，To 是目标服（做到达的这个进程的 sid）。
+	ID   string
+	From int32
+	To   int32
+	// Count 是算上这一次，这名玩家换过几次服。
+	Count int32
+}

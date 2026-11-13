@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/components/terrainsurface"
 	player "{{MODULE}}/game/entities/player"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	gamescene "{{MODULE}}/game/scene"
@@ -113,7 +114,7 @@ type partitionProc struct {
 	pt        *partitionTerrain
 	net       *partitionNet
 	stopped   bool
-	lastBrush terrain_chunk.BrushResult
+	lastBrush terrainsurface.BrushResult
 }
 
 func startPartitionProc(t *testing.T, net *partitionNet, grid *cellworld.Grid, sid int32, pack string, store *memoryChunkStore) *partitionProc {

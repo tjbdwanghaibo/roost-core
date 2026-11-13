@@ -1,0 +1,52 @@
+package view
+
+import "fmt"
+
+// TerrainLedger 是 TerrainEditor 上 TerrainLedger 组件对 game/ 下其它包公开的方法（实现在 game/components/terrainledger，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type TerrainLedger interface {
+	Window() TerrainSeqWindow
+	LastSeq() int64
+	PlayerID() int64
+	Check(seq int64) TerrainVerdict
+	Record(seq int64)
+	Buildings() int64
+	AddBuildings(delta int64)
+}
+
+// TerrainLedgerHolder 是“带有 TerrainLedger 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TerrainLedgerHolder interface{ TerrainLedger() TerrainLedger }
+
+// TerrainSeqWindow 是玩家编辑账本的值（纯数据）：Last 是已应用的最大序号（0 = 还没有），Bits 的第 i 位表示序号
+// Last−1−i 已应用。窗口规则（判断、记下）是 game/components/terrainledger 的 CheckSeq / RecordSeq，那里的别名是 SeqWindow。
+type TerrainSeqWindow struct {
+	Last int64
+	Bits uint64
+}
+
+// TerrainVerdict 是账本对一个序号的判断（terrainledger.CheckSeq 的结果，那里的别名是 Verdict）。
+type TerrainVerdict uint8
+
+const (
+	// TerrainVerdictFresh：没应用过，可以执行（执行成功后记下）。
+	TerrainVerdictFresh TerrainVerdict = iota
+	// TerrainVerdictDuplicate：已经应用过，这次什么都不做。
+	TerrainVerdictDuplicate
+	// TerrainVerdictStale：低于窗口，已无法确定当时是否应用过；一律不执行。
+	TerrainVerdictStale
+	// TerrainVerdictAhead：比 LastSeq 大出太多（terrainledger.MaxSeqAhead），不执行、不记。
+	TerrainVerdictAhead
+)
+
+func (v TerrainVerdict) String() string {
+	switch v {
+	case TerrainVerdictFresh:
+		return "fresh"
+	case TerrainVerdictDuplicate:
+		return "duplicate"
+	case TerrainVerdictStale:
+		return "stale"
+	case TerrainVerdictAhead:
+		return "ahead"
+	}
+	return fmt.Sprintf("verdict(%d)", uint8(v))
+}

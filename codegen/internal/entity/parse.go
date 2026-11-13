@@ -36,6 +36,9 @@ type EntityDef struct {
 	SourceFile      string
 	Imports         []ImportDef
 	ExistingMethods map[string]bool
+	// ViewMethods：实体包里手写的、无参且返回 game/view 一个类型的方法（方法名 → view 类型名）。
+	// 共用组件的接线文件用它声明 view 访问器（例如 func (e *Alliance) Activity() view.Activity），实体接口据此嵌入对应的 Holder。
+	ViewMethods map[string]string
 	// ViewAccessors / ViewImport：game/view 的访问器（view.go 的 applyViewAccessors 填写）。
 	ViewAccessors []ViewAccessor
 	ViewImport    string
@@ -120,6 +123,7 @@ func parsePackage(dir string) (packageDefs, string, error) {
 	}
 	var files []parsedFile
 	methods := make(map[string]map[string]bool)
+	viewMethods := make(map[string]map[string]string)
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
@@ -149,6 +153,14 @@ func parsePackage(dir string) (packageDefs, string, error) {
 			pkg = f.Name.Name
 		}
 
+		for recv, names := range collectViewMethods(f) {
+			if viewMethods[recv] == nil {
+				viewMethods[recv] = make(map[string]string)
+			}
+			for name, typ := range names {
+				viewMethods[recv][name] = typ
+			}
+		}
 		for recv, names := range collectMethods(f) {
 			if methods[recv] == nil {
 				methods[recv] = make(map[string]bool)
@@ -170,6 +182,9 @@ func parsePackage(dir string) (packageDefs, string, error) {
 		ents, err := extractEntities(fset, file.ast, file.content, file.path, file.imports, methods)
 		if err != nil {
 			return packageDefs{}, "", err
+		}
+		for i := range ents {
+			ents[i].ViewMethods = viewMethods[ents[i].Name]
 		}
 		entities = append(entities, ents...)
 		mirs, err := extractMirrors(fset, file.ast, file.path, file.imports)
@@ -410,6 +425,36 @@ func collectMethods(f *ast.File) map[string]map[string]bool {
 		methods[recv][fn.Name.Name] = true
 	}
 	return methods
+}
+
+// collectViewMethods 找出无参、只返回 view.<类型> 的方法（view 包按导入名 view 识别）。
+func collectViewMethods(f *ast.File) map[string]map[string]string {
+	out := make(map[string]map[string]string)
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 || fn.Name == nil || !fn.Name.IsExported() {
+			continue
+		}
+		if fn.Type.Params != nil && len(fn.Type.Params.List) > 0 || fn.Type.Results == nil || len(fn.Type.Results.List) != 1 || len(fn.Type.Results.List[0].Names) > 1 {
+			continue
+		}
+		sel, ok := fn.Type.Results.List[0].Type.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "view" {
+			continue
+		}
+		recv := receiverTypeName(fn.Recv.List[0].Type)
+		if recv == "" {
+			continue
+		}
+		if out[recv] == nil {
+			out[recv] = make(map[string]string)
+		}
+		out[recv][fn.Name.Name] = sel.Sel.Name
+	}
+	return out
 }
 
 func receiverTypeName(expr ast.Expr) string {

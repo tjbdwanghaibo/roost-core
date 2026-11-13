@@ -1,4 +1,4 @@
-package building
+package buildingsite
 
 import (
 	"cmp"
@@ -7,8 +7,8 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"{{MODULE}}/game/components/terrainsurface"
 	generated "{{MODULE}}/configs/generated"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 )
 
@@ -56,15 +56,15 @@ type Spec struct {
 }
 
 // Lot 是锚点 (gx, gy)、朝向 facing 时的占地：宽高按朝向转（1、3 时互换）。朝向不在 0～3 时 ok 为 false。
-func (s Spec) Lot(gx, gy int64, facing int32) (terrain_chunk.Lot, bool) {
+func (s Spec) Lot(gx, gy int64, facing int32) (terrainsurface.Lot, bool) {
 	if facing < 0 || facing > 3 {
-		return terrain_chunk.Lot{}, false
+		return terrainsurface.Lot{}, false
 	}
 	w, h := s.W, s.H
 	if facing%2 == 1 {
 		w, h = h, w
 	}
-	return terrain_chunk.Lot{GX: gx, GY: gy, W: w, H: h}, true
+	return terrainsurface.Lot{GX: gx, GY: gy, W: w, H: h}, true
 }
 
 // Normalize 是一次放置 / 改参数请求里的参数在这种建筑上的值：个数不能多于槽数，没给的槽（从末尾起）取缺省值，每个值都在
@@ -113,8 +113,8 @@ func CatalogOf(snapshot *configdata.Snapshot) (Catalog, error) {
 	}
 	var problems []error
 	for _, row := range rows.Rows() {
-		if row.W > terrain_chunk.MaxLotSide || row.H > terrain_chunk.MaxLotSide {
-			problems = append(problems, fmt.Errorf("building %d (%s): %d × %d does not fit a %d-node chunk side", row.ID, row.Name, row.W, row.H, terrain_chunk.MaxLotSide))
+		if row.W > terrainsurface.MaxLotSide || row.H > terrainsurface.MaxLotSide {
+			problems = append(problems, fmt.Errorf("building %d (%s): %d × %d does not fit a %d-node chunk side", row.ID, row.Name, row.W, row.H, terrainsurface.MaxLotSide))
 		}
 		catalog[row.ID] = Spec{ConfigID: row.ID, Name: row.Name, Model: row.Model, W: row.W, H: row.H,
 			MaxRise: row.MaxRise, MaxCut: row.MaxCut, MustLevel: row.MustLevel}

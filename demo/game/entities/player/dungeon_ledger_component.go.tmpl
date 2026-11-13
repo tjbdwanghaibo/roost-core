@@ -1,0 +1,24 @@
+package player
+
+import (
+	"{{MODULE}}/game/components/dungeonledger"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type=2103
+const CompTypeDungeonLedger entity.ComponentType = 2103
+
+// DungeonLedgerComponent 是 game/components/dungeonledger 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type DungeonLedgerComponent = dungeonledger.Component
+
+// IDungeonClaimEntity 是领奖事务 handlerClaimDungeon 锁住的 Player：同一笔事务里记账（DungeonLedger）又发经验（Profile）。
+type IDungeonClaimEntity interface {
+	entity.IThreadSafeEntity
+	ProfileComp() *ProfileComponent
+	DungeonLedgerComp() *DungeonLedgerComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeDungeonLedger, dungeonledger.NewComponent)
+}

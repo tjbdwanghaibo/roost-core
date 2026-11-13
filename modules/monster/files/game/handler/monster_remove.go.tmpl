@@ -18,6 +18,6 @@ func handlerMonsterRemove(target monster.IMonsterEntity, area scene.ISceneEntity
 	if err := c.Retire(); err != nil {
 		return err
 	}
-	area.Scene().Depart(target.ID())
+	area.Scene().SceneMembersComp().Depart(target.ID())
 	return nil
 }

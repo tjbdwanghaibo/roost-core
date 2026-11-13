@@ -39,7 +39,7 @@ func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEn
 	}
 	if toID == fromID {
 		if to != nil {
-			if err := to.Admit(target.ID()); err != nil {
+			if err := to.SceneMembersComp().Admit(target.ID()); err != nil {
 				return nil, err
 			}
 			nest.AfterCommit(func() { to.Space().Interest.Resubscribe(target.UniqueID()) })
@@ -48,7 +48,7 @@ func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEn
 		return &pb.SceneChangeResponse{SceneID: rawSceneID(to), X: at.X, Y: at.Y}, nil
 	}
 	if to != nil {
-		if err := to.Admit(target.ID()); err != nil {
+		if err := to.SceneMembersComp().Admit(target.ID()); err != nil {
 			return nil, err
 		}
 	}
@@ -56,7 +56,7 @@ func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEn
 		if err := body.Leave(); err != nil {
 			return nil, err
 		}
-		from.Depart(target.ID())
+		from.SceneMembersComp().Depart(target.ID())
 	}
 	if to == nil {
 		return &pb.SceneChangeResponse{}, nil

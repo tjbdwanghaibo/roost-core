@@ -478,7 +478,7 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 
 ## 4D. 组件的写法：组件包 + game/view（v1.47.0 起）
 
-**每个组件都写在自己的包里，不写进实体包**；实体包只剩实体本体、`_gen` 文件与每个组件一个薄接线文件。包之间靠 `game/view` 里的接口相连，避免循环引用。样板：只挂在 Player 上的组件看 `modules/profile`、`modules/task`；多个实体共用的组件看 `modules/bag`、`modules/wallet`、`modules/attribute`、`modules/activity`（同一个组件挂在 Player、World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
+**每个实体的每个组件都写在自己的包里，不写进实体包**（Player 与别的实体一样，模块自带的实体也一样：dungeon 的 Dungeon 是 `game/components/dungeonrun`，terrain 的 TerrainChunk / TerrainBuilding 是 `terrainchunkdata` / `terrainsite`，scene 的 Scene 成员账本是 `scenemembers`）；实体包只剩实体本体、`_gen` 文件、每个组件一个薄接线文件，以及只属于实体本身的东西（实体号与坐标换算、同步打包器、镜像、实体对框架接口的实现如 `cellworld.Actor` / `movement.MapOwner`、生成的定时器组件与它的登记）。实体上的业务规则也写成组件，不写成实体方法：模块自带实体的组件在 `module.yaml` 的 `components:` 申请组件号，字段写在实体模板里（`modules/team` 的 Team 与 `game/components/teamroster`）。包之间靠 `game/view` 里的接口相连，避免循环引用。样板：只挂在 Player 上的组件看 `modules/profile`、`modules/task`；别的实体看 `modules/alliance`（Alliance 的 `allianceroster`、AllianceMember 的 `allianceguard`）、`modules/room` / `turn` / `matchroom`（同一个 Room 上三个组件）、`modules/team`（Team 的 `teamroster`）；多个实体共用的组件看 `modules/bag`、`modules/wallet`、`modules/attribute`、`modules/activity`（同一个组件挂在 Player、World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
 
 **依赖方向**（谁 import 谁）：
 
@@ -490,7 +490,7 @@ game/entities/<实体>      → 组件包、game/login（实体实现 view 的�
 game/handler、controllers → 实体包、组件包
 ```
 
-组件包、`game/login` 与联动永远不 import 实体包。
+组件包、`game/login` 与联动永远不 import 实体包；组件包可以 import 别的组件包（同一实体上依赖另一个组件的规则：`turn`、`matchroom` 用 `room` 的席位检查与容量，`team` 用 `teamroster` 的上限）。要实体类型号这类常量时在组件包里按同一个号再声明一次（`{{ID:entity:Team}}`），不为它 import 实体包。
 
 1. **组件包** `game/components/<功能>/<功能>.go`：`Component` 类型、宿主接口 `Owner`、工厂 `NewComponent(value any, *entity.EntityCreateParam)`（把 `value` 断言成 `Owner`，断言失败返回错误）。`Owner` 只列组件用得到的东西：
 
@@ -511,13 +511,19 @@ game/handler、controllers → 实体包、组件包
    ```
 
    宿主能力不同的地方用可选接口区分（例如只有 Player 有持久定时器，就定义 `deadlineOwner`，组件里用类型断言判断），不要在组件里按实体类型写分支。
-2. **game/view**：模块（或工程）给每个组件写 `game/view/component_<功能>.go`，里面两样东西——组件对外的接口 `<功能>`（组件包里 `*Component` 的导出方法都列进来，handler、钩子与别的组件经它调用；框架回调 `OnInitFinish` / `OnDestroy` 不列），签名用到的参数 / 结果结构体（以功能名作前缀，如 `ShopResult`、`CdkeyIntent`、`PurchaseGrant`，只含内建类型、db 与别的 view 类型，不引用组件包、功能包或实体包；组件包或功能包里留同名别名，如 `type ShopResult = view.ShopResult`，原来的写法不变；类型上的方法要用工程错误码或别的包时改成功能包里的函数，如 `purchase.ValidateGrant`），以及“带有这个组件”的小接口 `<功能>Holder`（只有访问器 `<功能>() <功能>`）。实体接口 `game/view/entity_<实体>.go` 由 `roost generate` 生成：`<实体>Entity` 嵌入 `entity.IThreadSafeEntity`、实体的 DAO getter 与它挂载的各组件的 `<功能>Holder`；生成器同时在实体上生成访问器 `func (e *Player) <功能>() view.<功能>`。原来的 `<功能>Comp()` 照旧返回具体类型，给 handler 用。
+
+   组件还要实体上的别的方法时，`Owner` 写成嵌入 `view.<实体>Entity` 再加那几个方法：Remote 实体的状态版本 `EntityVersion() int64`（`allianceroster`）、把同步脏位交给订阅主体的 `PublishSyncDirty()`、由实体号算出的坐标（地形块的 `Key()`）、框架要的实体接口（`cellworld.Actor`）。挂在生成的定时器组件上的定时器：定时器组件（`roost add timer` 生成，或 game-demo World 手写的同样一份）是实体的基础设施，它的方法（登记、回调入口）留在实体包，回调入口只有一句——把到期节点交给组件的导出方法（`turn` 的 `OnDeadline`、`activity` 的 `OnDeadline`、demo `activityphase` 的 `OnDue`）；建 / 删定时节点写成实体上的适配方法交给 `Owner`，只建 / 删节点（`ArmTurnDeadline` / `CancelTurnDeadline`、`ArmActivityDeadline` / `CancelActivityDeadline`、`ArmActivityPhase`），期限与节点号的记账写在组件里（`activity` 的 `Rearm`）。
+2. **game/view**：模块（或工程）给每个组件写 `game/view/component_<功能>.go`，里面两样东西——组件对外的接口 `<功能>`（组件包里 `*Component` 的导出方法都列进来，handler、钩子与别的组件经它调用；框架回调 `OnInitFinish` / `OnDestroy` 不列），签名用到的参数 / 结果结构体（以功能名作前缀，如 `ShopResult`、`CdkeyIntent`、`PurchaseGrant`，只含内建类型、db 与别的 view 类型，不引用组件包、功能包或实体包；组件包或功能包里留同名别名，如 `type ShopResult = view.ShopResult`，原来的写法不变；类型上的方法要用工程错误码或别的包时改成功能包里的函数，如 `purchase.ValidateGrant`），以及“带有这个组件”的小接口 `<功能>Holder`（只有访问器 `<功能>() <功能>`）。实体接口 `game/view/entity_<实体>.go` 由 `roost generate` 生成：`<实体>Entity` 嵌入 `entity.IThreadSafeEntity`、实体的 DAO getter 与它挂载的各组件的 `<功能>Holder`；生成器同时在实体上生成访问器 `func (e *Player) <功能>() view.<功能>`。原来的 `<功能>Comp()` 照旧返回具体类型，给 handler 用。组件类型名与 view 里的名字不同时（共用组件在各实体上的组件名不同，如 `AllianceActivity`；或组件名太泛，如地形编辑账本的 `Ledger`），在接线文件里手写访问器 `func (e *Alliance) Activity() view.Activity { return e.AllianceActivityComp() }`，生成器按它把 `ActivityHolder` 嵌进 `view.AllianceEntity`。不能进 view 的只有两种，列在守卫用例的豁免表里并写明原因：返回 core 运行时对象（`combat` 的 `Core`、`activity` 的 `Host`、`actor` 的 `SavedPosition`、`attribute` 的 `Container`）、要同一组件的另一个实例（`combat` 的 `Cast` / `Step` / `Tick` / `Leave` 读对方组件的战斗内核）。别的都进 view：
+   - 签名里的类型带规则方法时，类型以纯数据进 view，规则改成功能包（或组件包）里的函数，原来的名字留别名：`terrain` 的 `Command` → `view.TerrainCommand`，规则是 `terrain.ValidateCommand` / `CommandDigest` / `CommandBrush` / `CommandFootprint`；demo 的地块 `Lot` → `view.TerrainLot`（`terrainsurface.ValidLot` / `PackLot` / `LotChunks` / `LotNodes` / `LotsOverlap`）、编辑序号窗口 `SeqWindow` → `view.TerrainSeqWindow`（`terrainledger.CheckSeq` / `RecordSeq`）、建筑的 `Placement` / `State` → `view.BuildingPlacement` / `BuildingState`（`buildingsite.PlacementLot` / `StatesEqual`）。只做格式化的 `String()` 可以留在 view 类型上。
+   - 参数是功能包的运行期对象时，在 view 里写只含用到的方法的小接口（demo `Map.Teleport` 收 `view.MapGround{ Standable(spatial.Point) bool }`，handler 照旧交场景的 `gamescene.Terrain`），或改成纯数据参数（`terrainchunkdata` 的 `Initialize(sceneID, key, baseRevision, base)` 不再收 `*terrain.World`，handler 先取 `world.Base(key)`）。
+   - 要对方实体时收对方的 view 接口（`friends` 的 `Change(peer view.PlayerEntity, ...)`、`team` 的 `Create(target view.TeamEntity, ...)`）。
 3. **跨组件调用写访问器**：`host.Wallet().Add(n)`、`c.owner.Bag().Remove(id, 1)`，不写 `Owner().WalletComp()`。组件、钩子与联动只收用得到的最小接口：只要背包的收 `view.BagHolder`，要整个玩家的才收 `view.PlayerEntity`。
 4. **钩子**：登记表放在发出事件的组件包里（`profile.OnProfileLevelUp`、`checkin.OnCheckinClaimed`），钩子收宿主 `func(host view.PlayerEntity, ...) error`；进入相关的 `OnFirstEnter` / `OnCreate` 与工程的首次发放 `enter_first.go` 在 `game/login`。别的功能的联动文件放在**登记方自己的包**里（task 的签到联动在 `game/components/task/task_checkin.go`），进入钩子的联动放在 `game/login/<功能>_enter.go`。不要在别的包里给组件类型声明方法：改成函数，或改成经 view 接口登记的回调。
 5. **每个实体一个很薄的接线文件** `game/entities/<实体>/<功能>_component.go`：自己的组件号（`//roost:component type=<号>`，每个实体单独申请）、类型别名（`type <功能>Component = <功能>.Component`）、handler 用的窄实体接口 `I<功能>Entity`、`entity.RegisterComponentFactory(<组件号>, <功能>.NewComponent)`、实现 `Owner` 的方法（例如 `func (e *Player) BagState() *db.BagState`）。
 6. **共用组件的状态类型共用，每个实体各存一份**：同一个嵌套结构体放进各自的 DAO，各有自己的 `store` 键，各自落盘、各自回滚。不存在跨实体共享的可变状态，不用进程级变量。
 7. **事务边界不变**：每次调用都在宿主实体自己的 Nest 事务里。两个实体之间搬东西（玩家存进公会仓库）仍走多实体 handler、Remote 或 Saga（第 0A 节），不能因为组件相同就跨实体直接改状态。
-8. **测试**：每个宿主至少一条场景；共用组件另加一条证明两个宿主的状态互不影响。组件包里的测试不能 import 实体包（会成环），要实体的测试放在 `game/handler` 或实体包。
+8. **守卫**（`codegen/internal/roost`，模块模板与 game-demo 各一套）：`TestModuleViewInterfacesListTheComponentMethods` / `TestDemoViewInterfacesListTheComponentMethods` 查组件的导出方法都在 view 接口里、view 只引用允许的包、豁免表没有陈项（demo 往模块组件包里加的方法按模块的 view 文件查）；`TestModuleEntityPackagesHoldOnlyComponentWiring` / `TestDemoEntityPackagesHoldOnlyComponentWiring` 查实体包不声明组件结构体与组件方法、定时器回调只交给组件、每个实体嵌入 `entity.ComponentManager`、实体类型自己的方法不调用 `Set…` / `Del…` 改状态（例外只有框架接口的实现与实体自己的运行期对象：demo 的 `cellworld.Actor` / `BasePlayer` 实现、场景时间域，列在用例里写明原因）。
+9. **测试**：每个宿主至少一条场景；共用组件另加一条证明两个宿主的状态互不影响。组件包里的测试不能 import 实体包（会成环），要实体的测试放在 `game/handler` 或实体包。
 
 已装的模块要挂到第二个实体时，先看它 README 的“复用方式”：写明支持挂到别的实体的，照它的接线说明做；只支持 Player 的，按上面的写法借鉴（第 1 步结论是“借鉴”），不改模块原有的 Player 接线，也不复制模块代码另起一份。
 

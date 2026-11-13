@@ -1,0 +1,12 @@
+package view
+
+// DungeonLedger 是 Player 上 DungeonLedger 组件对 game/ 下其它包公开的方法（实现在 game/components/dungeonledger，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type DungeonLedger interface {
+	ClaimDungeonRun(runID string, resolvedAtUnix, nowUnix int64) bool
+	CountDungeonClear(season int64) int64
+	DungeonClears(season int64) int64
+	DungeonRunClaimed(runID string) bool
+}
+
+// DungeonLedgerHolder 是“带有 DungeonLedger 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type DungeonLedgerHolder interface{ DungeonLedger() DungeonLedger }

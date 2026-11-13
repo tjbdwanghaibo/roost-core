@@ -90,7 +90,7 @@ func TestArmingADeadlineWritesIt(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 
 	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
-		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-1800000000", now.Add(time.Minute), now); !armed {
+		if _, armed := subject.ActivityPhaseComp().Schedule("race-1800000000", now.Add(time.Minute), now); !armed {
 			t.Error("the first arm reported that it changed nothing")
 		}
 		return nil, nil
@@ -111,7 +111,7 @@ func TestArmingADeadlineWritesIt(t *testing.T) {
 	// that loads this World tries to arm the window it computed from the
 	// clock, and they all compute the same one.
 	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm_again", func() (any, error) {
-		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-1800000000", now.Add(time.Minute), now); armed {
+		if _, armed := subject.ActivityPhaseComp().Schedule("race-1800000000", now.Add(time.Minute), now); armed {
 			t.Error("arming the same window twice armed a second deadline")
 		}
 		return nil, nil
@@ -131,14 +131,14 @@ func TestADeadlineSurvivesARestartAndFires(t *testing.T) {
 	const activityID = "race-1800000000"
 
 	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
-		first.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+		first.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now)
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("arm: %v", err)
 	}
 
 	restarted := restartWorld(t, first)
-	if _, armed := restarted.TimerComp().PendingActivityPhase(activityID); !armed {
+	if _, armed := restarted.ActivityPhaseComp().Pending(activityID); !armed {
 		t.Fatal("the restarted World has no deadline; a stored node was not rebuilt into the heap")
 	}
 
@@ -202,7 +202,7 @@ func TestTheTimerHeapRollsBackWithTheTransaction(t *testing.T) {
 		t.Run("arm/"+tc.name, func(t *testing.T) {
 			subject := newWorld(t)
 			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "arm_then_fail", func() (any, error) {
-				subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+				subject.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now)
 				if tc.failAfter {
 					return nil, errors.New("a later step of the same handler failed")
 				}
@@ -214,12 +214,12 @@ func TestTheTimerHeapRollsBackWithTheTransaction(t *testing.T) {
 			if got := subject.Dao().TimersLen(); got != 0 {
 				t.Fatalf("the DAO kept %d timer nodes after the rollback", got)
 			}
-			if id, armed := subject.TimerComp().PendingActivityPhase(activityID); armed {
+			if id, armed := subject.ActivityPhaseComp().Pending(activityID); armed {
 				t.Fatalf("rolled back, but the heap still holds node %d: every later arm is refused as a repeat and the stored World has no deadline", id)
 			}
 			committer := &worldCommitter{}
 			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
-				if _, armed := subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now); !armed {
+				if _, armed := subject.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now); !armed {
 					t.Error("the arm after a rolled-back one was refused as a repeat")
 				}
 				return nil, nil
@@ -233,7 +233,7 @@ func TestTheTimerHeapRollsBackWithTheTransaction(t *testing.T) {
 		t.Run("tick/"+tc.name, func(t *testing.T) {
 			subject := newWorld(t)
 			if _, err := nest.RunIsolatedTransaction(context.Background(), &worldCommitter{}, "arm", func() (any, error) {
-				subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+				subject.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now)
 				return nil, nil
 			}); err != nil {
 				t.Fatalf("arm: %v", err)
@@ -251,7 +251,7 @@ func TestTheTimerHeapRollsBackWithTheTransaction(t *testing.T) {
 			if got := subject.Dao().TimersLen(); got != 1 {
 				t.Fatalf("the DAO holds %d timer nodes after the rolled-back tick, want the deadline back", got)
 			}
-			if _, armed := subject.TimerComp().PendingActivityPhase(activityID); !armed {
+			if _, armed := subject.ActivityPhaseComp().Pending(activityID); !armed {
 				t.Fatal("the rolled-back tick took the deadline out of the heap: its effect was rolled back too, so nothing reports the phase until a restart")
 			}
 			committer := &worldCommitter{}
@@ -293,7 +293,7 @@ func TestAnOverdueDeadlineIsArmedAndFires(t *testing.T) {
 			var id int64
 			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm_late", func() (any, error) {
 				var armed bool
-				id, armed = subject.TimerComp().ScheduleActivityPhase(activityID, tc.at, now)
+				id, armed = subject.ActivityPhaseComp().Schedule(activityID, tc.at, now)
 				if !armed {
 					t.Error("the overdue deadline was refused")
 				}
@@ -302,9 +302,9 @@ func TestAnOverdueDeadlineIsArmedAndFires(t *testing.T) {
 				t.Fatalf("arm: %v", err)
 			}
 			if id == 0 {
-				t.Error("ScheduleActivityPhase reported armed with node id 0")
+				t.Error("Schedule reported armed with node id 0")
 			}
-			if _, armed := subject.TimerComp().PendingActivityPhase(activityID); !armed {
+			if _, armed := subject.ActivityPhaseComp().Pending(activityID); !armed {
 				t.Fatal("reported armed, but no node is pending: the window this deadline closes is never reported")
 			}
 			if got := subject.Dao().TimersLen(); got != 1 {
@@ -352,7 +352,7 @@ func TestTimerRollbackIsTheDaoRollback(t *testing.T) {
 			t.Run("arm/"+policy.name+"/"+failure.name, func(t *testing.T) {
 				subject := newWorld(t)
 				err := runWorldHandler(t, subject, meta, failure.committer, func(w *World) error {
-					w.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+					w.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now)
 					if failure.failAfter {
 						return errors.New("a later step of the same handler failed")
 					}
@@ -364,7 +364,7 @@ func TestTimerRollbackIsTheDaoRollback(t *testing.T) {
 				if got := subject.Dao().TimersLen(); got != 0 {
 					t.Fatalf("the DAO kept %d timer nodes after the rollback", got)
 				}
-				if id, armed := subject.TimerComp().PendingActivityPhase(activityID); armed {
+				if id, armed := subject.ActivityPhaseComp().Pending(activityID); armed {
 					t.Fatalf("rolled back, but node %d is still pending", id)
 				}
 				// Nothing is due: a tick after the rolled-back arm fires nothing.
@@ -373,7 +373,7 @@ func TestTimerRollbackIsTheDaoRollback(t *testing.T) {
 				}
 				committer := &worldCommitter{}
 				if err := runWorldHandler(t, subject, meta, committer, func(w *World) error {
-					if _, armed := w.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now); !armed {
+					if _, armed := w.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now); !armed {
 						return errors.New("the arm after a rolled-back one was refused as a repeat")
 					}
 					return nil
@@ -387,7 +387,7 @@ func TestTimerRollbackIsTheDaoRollback(t *testing.T) {
 			t.Run("tick/"+policy.name+"/"+failure.name, func(t *testing.T) {
 				subject := newWorld(t)
 				if err := runWorldHandler(t, subject, meta, &worldCommitter{}, func(w *World) error {
-					w.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+					w.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now)
 					return nil
 				}); err != nil {
 					t.Fatalf("arm: %v", err)
@@ -405,7 +405,7 @@ func TestTimerRollbackIsTheDaoRollback(t *testing.T) {
 				if got := subject.Dao().TimersLen(); got != 1 {
 					t.Fatalf("the DAO holds %d timer nodes after the rolled-back tick, want the deadline back", got)
 				}
-				if _, armed := subject.TimerComp().PendingActivityPhase(activityID); !armed {
+				if _, armed := subject.ActivityPhaseComp().Pending(activityID); !armed {
 					t.Fatal("the rolled-back tick took the deadline away")
 				}
 				committer := &worldCommitter{}
@@ -434,7 +434,7 @@ func TestTimerBookkeepingStaysOutOfTheCommitRecord(t *testing.T) {
 	now := testNow
 	for _, activityID := range []string{"race-a", "race-b"} {
 		if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
-			subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+			subject.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now)
 			return nil, nil
 		}); err != nil {
 			t.Fatalf("arm %s: %v", activityID, err)
@@ -518,7 +518,7 @@ func TestDeadlinesDueAtTheSameMomentFireInArmOrder(t *testing.T) {
 	for i := range 8 {
 		activityID := "race-" + string(rune('a'+i))
 		if _, err := nest.RunIsolatedTransaction(context.Background(), &worldCommitter{}, "arm", func() (any, error) {
-			subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+			subject.ActivityPhaseComp().Schedule(activityID, now.Add(time.Minute), now)
 			return nil, nil
 		}); err != nil {
 			t.Fatalf("arm %s: %v", activityID, err)

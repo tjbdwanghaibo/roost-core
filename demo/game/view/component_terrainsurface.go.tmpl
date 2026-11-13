@@ -1,0 +1,71 @@
+package view
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// TerrainSurface 是 TerrainChunk 上 TerrainSurface 组件对 game/ 下其它包公开的方法（实现在 game/components/terrainsurface，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type TerrainSurface interface {
+	Version() int64
+	BaseRevision() int64
+	Apply(baseRevision int64, base terrain.Chunk, edits []TerrainPointEdit) (int64, error)
+	Data() (terrain.Chunk, bool, error)
+	Discard(staleRevision, currentRevision int64) bool
+	Overlay() (overlay terrain.Overlay, ok bool, err error)
+	Lots() ([]TerrainLot, error)
+	LotRevision() int64
+	Occupancy() (TerrainOccupancy, error)
+	AddLot(l TerrainLot) error
+	RemoveLot(l TerrainLot) bool
+}
+
+// TerrainSurfaceHolder 是“带有 TerrainSurface 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TerrainSurfaceHolder interface{ TerrainSurface() TerrainSurface }
+
+// TerrainBrushResult 是一次笔刷编辑（handler TerrainBrush）的结果：本次锁住的每一块提交后的版本（没有改到的块是原版本，
+// Version 0 表示仍是原始块），以及玩家编辑账本此后的 LastSeq（已应用的最大编辑序号，客户端据此续号）。
+//
+// Duplicate 表示这个（玩家, 序号）已经应用过：这次什么都没写，Chunks 是各块当前的版本——重复请求得到明确的“已应用”，
+// 而不是再改一次。序号低于账本窗口（过期）或大出太多时不是结果而是错误（terrainmap.ErrStale / ErrSeqAhead），这时
+// 只有 LastSeq 有意义。判重见 game/entities/terrain_editor。
+//
+// Points 是这次实际改动的点数（高度、材质各算一次，口径同配额；Duplicate 时为 0）：分区场景里转发编辑的 Base 按事前的
+// 几何上限预扣配额，格答回这个数后多退（可编辑地形 P5）。
+type TerrainBrushResult struct {
+	Duplicate bool
+	Chunks    []TerrainChunkVersion
+	LastSeq   int64
+	Points    int
+}
+
+// TerrainChunkVersion 是一块与它的版本。
+type TerrainChunkVersion struct {
+	Key     terrain.ChunkKey
+	Version int64
+}
+
+// TerrainPointEdit 是对块内一个采样点的改动：Index 是块内下标（行优先，j·64 + i），Height 是高度原始值（1 = 10cm），
+// Material 是材质编号。它是改块 handler 的参数（越过 Nest 边界的值），放在实体包里，生成的 Sender 只依赖这里。
+type TerrainPointEdit struct {
+	Index    int32
+	Height   uint16
+	Material byte
+}
+
+// TerrainLot 是一座建筑的占地（纯数据）：1m 节点（世界采样点）的矩形 [GX, GX+W) × [GY, GY+H)，(GX, GY) 是锚点（左下角
+// 节点）。地块规则（是否合法、打包进 DAO、覆盖哪些块与节点、是否重叠）是 game/components/terrainsurface 的函数
+// （ValidLot、PackLot、LotChunks、LotNodes、LotsOverlap 等），那里的别名是 Lot。
+type TerrainLot struct {
+	GX, GY int64
+	W, H   int32
+}
+
+func (l TerrainLot) String() string {
+	return fmt.Sprintf("[%d,%d)×[%d,%d)", l.GX, l.GX+int64(l.W), l.GY, l.GY+int64(l.H))
+}
+
+// TerrainOccupancy 是一块的占位：块内 4096 个节点各一位（第 index 位 = 下标 index 的节点被占着）。由一块的占地现算
+// （terrainsurface.OccupancyOf），查询用 terrainsurface.Occupied；那里的别名是 Occupancy。
+type TerrainOccupancy [terrain.ChunkPoints / 64]uint64

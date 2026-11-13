@@ -2,9 +2,34 @@ package view
 
 // Mailbox 是 Mailbox 组件对 game/ 下其它包公开的方法（实现在 game/components/mailbox，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Mailbox interface {
+	Claim(mailID string, attachment MailboxAttachment, expiresAtUnix, nowUnix int64) (MailboxClaimResult, error)
 	Claimed(mailID string) bool
 	LedgerSize() int
 }
 
 // MailboxHolder 是“带有 Mailbox 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type MailboxHolder interface{ Mailbox() Mailbox }
+
+// MailboxAttachment 是一封邮件的附件：一种奖励，写成（种类，号，数量）。
+//
+// 线上格式是 JSON 对象，例如金币 {"type":"coins","amount":100}、道具 {"type":"item","id":1001,"amount":3}。
+// 三个字段对所有种类都是同一个意思，新种类不往这里加字段：一份奖励说不成“哪一种的第几号、多少个”的，
+// 不属于邮件附件，由它自己的功能发放。
+type MailboxAttachment struct {
+	Type MailboxAttachmentType `json:"type"`
+	// ID 是这个种类内部的号（道具号……）。没有号的种类（金币）必须为 0，为 0 时不写进字节。
+	ID int64 `json:"id,omitempty"`
+	// Amount 是数量，任何种类都必须为正。
+	Amount int64 `json:"amount,omitempty"`
+}
+
+// MailboxClaimResult 是发放事务的结果。Claimed 为 false 表示重复到达：这封邮件已经到过账，这一次什么也没改。
+// Held 是玩家此刻持有多少这份附件说的东西（金币是余额，道具是这个道具号的数量），两种情况下都填，
+// 所以客户端拿到的回答是同一组数字。
+type MailboxClaimResult struct {
+	Claimed bool
+	Held    int64
+}
+
+// MailboxAttachmentType 是附件的种类，也是线上格式里 "type" 的值，发布后不要改名。
+type MailboxAttachmentType string

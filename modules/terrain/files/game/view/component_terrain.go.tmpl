@@ -1,10 +1,59 @@
 package view
 
+import (
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
 // Terrain 是 Terrain 组件对 game/ 下其它包公开的方法（实现在 game/components/terrain，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Terrain interface {
+	Check(command TerrainCommand, sceneID int64) (TerrainResult, bool, error)
 	BuildingCount() int32
+	Record(command TerrainCommand, result TerrainResult, delta int32) error
 	Sequence() int64
 }
 
 // TerrainHolder 是“带有 Terrain 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type TerrainHolder interface{ Terrain() Terrain }
+
+// TerrainCommand 是一条地形编辑命令（纯数据，只由 controller 规范化；客户端不给块ID、owner或地形数组）：场景、玩家的
+// 连续编辑序号、操作（raise / lower / paint / build / remove）、作用点（厘米）、笔刷半径、强度与材质。命令规则（摘要、
+// 合规检查、笔刷、建筑占位）是 game/terrain 的函数 CommandDigest / ValidateCommand / CommandBrush / CommandFootprint，
+// 那里的别名是 Command。
+type TerrainCommand struct {
+	SceneID  int64
+	Sequence int64
+	Op       string
+	X, Y     int64
+	Radius   int64
+	Strength uint16
+	Material byte
+}
+
+// TerrainResult 是一条编辑命令的结果（game/terrain 里的别名是 Result）：序号、是否重发、改动的点数、建筑与它是否站着；
+// ProjectionPending 表示权威已提交但进程内投影待刷新。它也是玩家账本里保存的应答（同序号重发原样答回）。
+type TerrainResult struct {
+	ProjectionPending bool
+	Sequence          int64
+	Duplicate         bool
+	Changed           int32
+	BuildingID        int64
+	Standing          bool
+}
+
+// TerrainChunkState 是一块地形的只读快照（game/terrain 里的别名是 ChunkState）：块坐标、原始地形版本与提交版本、高度、
+// 材质与占位（节点下标 → 建筑实体号）；LastSequence 只在查询应答里填玩家账本的序号。
+type TerrainChunkState struct {
+	LastSequence          int64
+	Key                   core.ChunkKey
+	BaseRevision, Version int64
+	Heights               []uint16
+	Materials             []byte
+	Lots                  map[int32]int64
+}
+
+// TerrainSiteState 是一座建筑的只读快照（game/terrain 里的别名是 SiteState）：锚点（厘米）、是否站着与版本。
+type TerrainSiteState struct {
+	X, Y     int64
+	Standing bool
+	Version  int64
+}

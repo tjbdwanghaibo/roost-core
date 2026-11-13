@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"{{MODULE}}/game/components/terrainsurface"
 	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -99,7 +100,7 @@ func TestReplicaDeltasBringEverySubscriberToTheLatest(t *testing.T) {
 
 	// 守卫：一次改了 1001 个高度点，增量是整字段。
 	if err := r.Set(replicaOverlay(4, func(c terrain.Chunk) {
-		for i := range HeightsGuard + 1 {
+		for i := range terrainsurface.HeightsGuard + 1 {
 			c.Heights[i] = 9000
 		}
 		c.Heights[10], c.Heights[20], c.Materials[30] = 9000, 9000, 200

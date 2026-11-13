@@ -123,7 +123,7 @@ func (s *Service) foundHere(ctx context.Context, requestID string, callerID int6
 	if err == nil && answer.Replayed {
 		// Another delivery of the request decided it between the read above
 		// and this transaction.
-		reply, err := s.foundReplay(ctx, requestID, callerID, callerSID, answer.Receipt, name, openJoin)
+		reply, err := s.foundReplay(ctx, requestID, callerID, callerSID, answer.AllianceReceipt, name, openJoin)
 		return reply, true, minted, err
 	}
 	if err == nil {
@@ -172,7 +172,7 @@ func (s *Service) foundInTwoSteps(ctx context.Context, requestID string, callerI
 // that stopped before creating it (Establish founds it now).
 func (s *Service) foundReplay(ctx context.Context, requestID string, callerID int64, callerSID int32, receipt alliancerule.Receipt, name string, openJoin bool) (Reply, error) {
 	if receipt.Code != 0 {
-		return s.reply(alliancerule.Answer{Outcome: alliancerule.Outcome{Receipt: receipt, Replayed: true}}, nil)
+		return s.reply(alliancerule.Answer{Outcome: alliancerule.Outcome{AllianceReceipt: receipt, Replayed: true}}, nil)
 	}
 	return s.establish(ctx, requestID, callerID, callerSID, receipt.Subject, name, openJoin)
 }
@@ -311,7 +311,7 @@ func (s *Service) admit(ctx context.Context, requestID string, actorID int64, ca
 			// is not final, and a reservation that did happen is settled at its
 			// deadline. Either way this alliance has decided nothing.
 			if alliancerule.IsRejection(err) {
-				answer = alliancerule.Answer{Outcome: alliancerule.Outcome{Receipt: alliancerule.Receipt{Code: errcode.CodeOf(err)}}}
+				answer = alliancerule.Answer{Outcome: alliancerule.Outcome{AllianceReceipt: alliancerule.Receipt{Code: errcode.CodeOf(err)}}}
 			} else {
 				peerErr = err
 			}

@@ -1,0 +1,30 @@
+package view
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+	"time"
+)
+
+// Turn 是 Room 上 Turn 组件对 game/ 下其它包公开的方法（实现在 game/components/turn，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Turn interface {
+	Start(playerID int64, epoch uint64, connection string, turnMillis, maxTurns int64) (TurnSnapshot, error)
+	End(playerID int64, epoch uint64, connection string, round, sequence int64) (TurnSnapshot, error)
+	CheckEnd(playerID int64, epoch uint64, connection string, round, sequence int64) (replay bool, err error)
+	View(playerID int64, epoch uint64, connection string) (TurnSnapshot, error)
+	OnDeadline(fire entitytimer.Fire) time.Duration
+}
+
+// TurnHolder 是“带有 Turn 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TurnHolder interface{ Turn() Turn }
+
+type TurnSnapshot struct {
+	Status     int32
+	Round      int64
+	ActorID    int64
+	Deadline   int64
+	MaxTurns   int64
+	TurnMillis int64
+	Timeouts   int64
+	Sequence   int64
+	Players    []int64
+}

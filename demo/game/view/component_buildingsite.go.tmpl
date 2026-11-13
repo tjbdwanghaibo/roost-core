@@ -1,0 +1,41 @@
+package view
+
+// BuildingSite 是 Building 上 BuildingSite 组件对 game/ 下其它包公开的方法（实现在 game/components/buildingsite，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type BuildingSite interface {
+	State() BuildingState
+	Standing() bool
+	Place(owner int64, p BuildingPlacement, params []int32, lot TerrainLot, foundation int32, leveled bool, baseRevision int64) error
+	SetParams(values []int32)
+	Rebase(baseRevision int64)
+	AnchorRecorded() bool
+	Clear()
+}
+
+// BuildingSiteHolder 是“带有 BuildingSite 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type BuildingSiteHolder interface{ BuildingSite() BuildingSite }
+
+// BuildingPlacement 是一次放置请求（越过 Nest 边界的值，生成的 Sender 只依赖 view）：建筑配置 ID、修改参数值（个数不多于
+// 配置的槽数，没给的取缺省值）、锚点节点（占地左下角的 1m 采样点）、朝向 0～3、是否整平地基。Params 由调用方交出、之后
+// 不再改。占地由 buildingsite.PlacementLot 按配置算出；buildingsite 里的别名是 Placement。
+type BuildingPlacement struct {
+	ConfigID int32
+	Params   []int32
+	GX, GY   int64
+	Facing   int32
+	Level    bool
+}
+
+// BuildingState 是建筑的一份只读快照（Site 的字段；Params 是副本）；buildingsite 里的别名是 State，比较用
+// buildingsite.StatesEqual（含切片，不能用 ==）。
+type BuildingState struct {
+	ID           int64
+	Standing     bool
+	Owner        int64
+	ConfigID     int32
+	Params       []int32
+	Facing       int32
+	Lot          TerrainLot
+	Foundation   int32 // 整平地基的世界高度（厘米）；Leveled 为 false 时没有意义
+	Leveled      bool
+	BaseRevision int64
+}

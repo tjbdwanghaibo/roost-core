@@ -16,7 +16,8 @@ type Team struct {
 	*entity.RemoteEntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	dao *db.TeamDao `dao:"team"`
+	dao    *db.TeamDao          `dao:"team"`
+	roster *TeamRosterComponent `comp:"CompTypeTeamRoster"`
 }
 
 // ITeamEntity 让生成的 Nest sender 声明 Team ID 与 Remote 访问，不能把实体指针当普通业务参数传入。

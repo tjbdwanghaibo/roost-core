@@ -8,10 +8,10 @@ import (
 // OnRoomJoining 在初始化时登记准入检查。回调位于 Room 事务内，不得 I/O；matchroom 用它校验名单。
 var roomJoinChecks = struct {
 	sync.RWMutex
-	hooks map[string]func(*Room, int64) error
-}{hooks: map[string]func(*Room, int64) error{}}
+	hooks map[string]func(Owner, int64) error
+}{hooks: map[string]func(Owner, int64) error{}}
 
-func OnRoomJoining(name string, check func(*Room, int64) error) {
+func OnRoomJoining(name string, check func(Owner, int64) error) {
 	if name == "" || check == nil {
 		panic("room: joining check needs name and function")
 	}
@@ -22,14 +22,14 @@ func OnRoomJoining(name string, check func(*Room, int64) error) {
 	}
 	roomJoinChecks.hooks[name] = check
 }
-func checkRoomJoining(owner *Room, id int64) error {
+func checkRoomJoining(owner Owner, id int64) error {
 	roomJoinChecks.RLock()
 	names := make([]string, 0, len(roomJoinChecks.hooks))
 	for name := range roomJoinChecks.hooks {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	checks := make([]func(*Room, int64) error, 0, len(names))
+	checks := make([]func(Owner, int64) error, 0, len(names))
 	for _, name := range names {
 		checks = append(checks, roomJoinChecks.hooks[name])
 	}

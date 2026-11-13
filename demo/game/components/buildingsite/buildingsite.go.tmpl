@@ -1,0 +1,179 @@
+package buildingsite
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"slices"
+
+	"{{MODULE}}/game/components/terrainsurface"
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// Placement 是一次放置请求（越过 Nest 边界的值）：view.BuildingPlacement 的别名（纯数据，定义在 game/view）。修改参数值
+// 个数不多于配置的槽数，没给的取缺省值，见 Spec.Normalize。
+type Placement = view.BuildingPlacement
+
+// PlacementLot 是放置 p 在配置 spec 上的占地：配置的宽高按朝向转（1、3 时互换）。朝向不合法时 ok 为 false。
+func PlacementLot(p Placement, spec Spec) (terrainsurface.Lot, bool) { return spec.Lot(p.GX, p.GY, p.Facing) }
+
+// Result 是一次放置 / 拆除 / 改参数（handler BuildingPlace / BuildingRemove / BuildingParams）的结果：Duplicate 表示这个（玩家, 序号）已经应用过、
+// 这次什么都没写；Building 是建筑此刻的状态（拆除后 State 为 0）；Chunks 是占地覆盖的每一块此后的地形版本（整平改了
+// 地形的块版本加一；改参数不碰块，为空）；LastSeq 是玩家编辑账本此后的 LastSeq。
+//
+// Points 是放置时整平改了高度的节点数（不整平、拆除、改参数为 0）：分区场景里转发放置的 Base 按占地面积预扣配额，格答回
+// 这个数后多退（可编辑地形 P5）。
+type Result struct {
+	Duplicate bool
+	Building  State
+	Chunks    []terrainsurface.ChunkVersion
+	LastSeq   int64
+	Points    int
+}
+
+// Rebase 是一次换版对账（handler BuildingRebase）的结论：Rebased 表示建筑原来基于另一版原始地形（From），这次按当前版本
+// 处置了；Levelled 表示在新地形上重新整平了地基；Unfit 非 nil 表示处置之后不合规（在水下、高差超限），建筑仍保留；
+// Misconfigured 非 nil 表示建筑的配置 ID 在当前配置里没有了、或按配置与朝向推出的占地与存下的占地不同（配置改了宽高），
+// 建筑仍保留、什么都不改（每次启动都查，与原始地形是否换版无关）。
+type Rebase struct {
+	Rebased       bool
+	From          int64
+	Levelled      bool
+	Unfit         error
+	Misconfigured error
+}
+
+// State 是建筑的一份只读快照：view.BuildingState 的别名（纯数据，定义在 game/view；含切片，比较用 StatesEqual）。
+type State = view.BuildingState
+
+// Owner 是 BuildingSite 组件的宿主（Building 的接线见 game/entities/building/site_component.go）：view 的 BuildingEntity，
+// 加上锚点（Anchor，由实体号算出）与把 DAO 的同步脏位交给订阅主体（PublishSyncDirty）。只在实体被 Nest 锁住期间使用。
+type Owner interface {
+	view.BuildingEntity
+	Anchor() (gx, gy int64)
+	PublishSyncDirty()
+}
+
+// Component 是一座建筑的数据，全部在 BuildingDao（回滚统一走 DAO，组件不持有需要回滚的内存状态）。方法只在本实体的
+// Nest 锁内调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Building 在 game/entities/building/site_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("buildingsite component: owner %T does not implement buildingsite.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "building_site" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *Component) Owner() Owner { return component.owner }
+
+// noFoundation 是 BuildingDao.Foundation 里“没有整平”的值。
+const noFoundation = -1 << 31
+
+// State 是建筑当前的快照。
+func (component *Component) State() State {
+	b := component.Owner()
+	dao := b.Dao()
+	gx, gy := b.Anchor()
+	s := State{
+		ID: b.ID(), Standing: dao.GetState() == 1, Owner: dao.GetOwner(), ConfigID: dao.GetConfigID(), Params: params(dao),
+		Facing: dao.GetFacing(),
+		Lot: terrainsurface.Lot{GX: gx, GY: gy, W: dao.GetW(), H: dao.GetH()}, BaseRevision: dao.GetBaseRevision(),
+	}
+	if f := dao.GetFoundation(); f != noFoundation {
+		s.Foundation, s.Leveled = f, true
+	}
+	return s
+}
+
+// Standing 报告这里是否站着一座建筑。
+func (component *Component) Standing() bool { return component.owner.Dao().GetState() == 1 }
+
+// Place 记下一座新建筑（放置事务里，调用方已完成全部校验）。params 是按配置补齐、校验过的参数值；foundation 是整平
+// 地基的世界高度（厘米），leveled 为 false 时不整平。锚点由实体 ID 决定，lot 的锚点必须与它相同。
+func (component *Component) Place(owner int64, p Placement, params []int32, lot terrainsurface.Lot, foundation int32, leveled bool, baseRevision int64) error {
+	gx, gy := component.owner.Anchor()
+	if lot.GX != gx || lot.GY != gy {
+		return fmt.Errorf("building %d: anchor (%d, %d) is not the lot's %v", component.owner.ID(), gx, gy, lot)
+	}
+	if !leveled {
+		foundation = noFoundation
+	}
+	dao := component.owner.Dao()
+	dao.SetState(1)
+	dao.SetOwner(owner)
+	dao.SetConfigID(p.ConfigID)
+	dao.SetParamsAll(slices.Clone(params))
+	dao.SetFacing(p.Facing)
+	dao.SetGX(int32(gx))
+	dao.SetGY(int32(gy))
+	dao.SetW(lot.W)
+	dao.SetH(lot.H)
+	dao.SetFoundation(foundation)
+	dao.SetBaseRevision(baseRevision)
+	component.owner.PublishSyncDirty()
+	return nil
+}
+
+// SetParams 改修改参数值（改参数事务里，调用方已按配置校验过）：只写 Params，不碰占地；值与现在相同时不写。
+func (component *Component) SetParams(values []int32) {
+	dao := component.owner.Dao()
+	if slices.Equal(params(dao), values) {
+		return
+	}
+	dao.SetParamsAll(slices.Clone(values))
+	component.owner.PublishSyncDirty()
+}
+
+// Rebase 记下建筑已按新的原始地形版本处置（原始地形换版后的对账，见 terrainmap 的建筑对账）。
+func (component *Component) Rebase(baseRevision int64) {
+	component.owner.Dao().SetBaseRevision(baseRevision)
+}
+
+// AnchorRecorded 报告 DAO 里的锚点（GX / GY）是否等于实体 ID 推出的锚点（对账核对；两者总在放置事务里一起写）。
+func (component *Component) AnchorRecorded() bool {
+	gx, gy := component.owner.Anchor()
+	dao := component.owner.Dao()
+	return int64(dao.GetGX()) == gx && int64(dao.GetGY()) == gy
+}
+
+// Clear 拆除：State 置 0、字段清空（不删档，同一锚点之后可以再放）。
+func (component *Component) Clear() {
+	dao := component.owner.Dao()
+	dao.SetState(0)
+	dao.SetOwner(0)
+	dao.SetConfigID(0)
+	dao.SetParamsAll(nil)
+	dao.SetFacing(0)
+	dao.SetGX(0)
+	dao.SetGY(0)
+	dao.SetW(0)
+	dao.SetH(0)
+	dao.SetFoundation(0)
+	dao.SetBaseRevision(0)
+	component.owner.PublishSyncDirty()
+}
+
+// params 是 DAO 里参数值的副本。
+func params(dao *db.BuildingDao) []int32 {
+	out := make([]int32, dao.ParamsLen())
+	for i := range out {
+		out[i], _ = dao.GetParams(i)
+	}
+	return out
+}
+
+// StatesEqual 报告两份快照是否相同（State 含切片，不能用 ==）。
+func StatesEqual(s, o State) bool {
+	return s.ID == o.ID && s.Standing == o.Standing && s.Owner == o.Owner && s.ConfigID == o.ConfigID &&
+		slices.Equal(s.Params, o.Params) && s.Facing == o.Facing && s.Lot == o.Lot && s.Foundation == o.Foundation &&
+		s.Leveled == o.Leveled && s.BaseRevision == o.BaseRevision
+}

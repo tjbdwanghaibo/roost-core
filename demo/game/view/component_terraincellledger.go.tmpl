@@ -1,0 +1,15 @@
+package view
+
+// TerrainCellLedger 是 TerrainCellEditor 上 TerrainCellLedger 组件对 game/ 下其它包公开的方法（实现在 game/components/terraincellledger，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type TerrainCellLedger interface {
+	Window() TerrainSeqWindow
+	PlayerID() int64
+	LastSeq() int64
+	Check(seq int64) TerrainVerdict
+	Record(seq int64)
+	Buildings() int64
+	AddBuildings(delta int64)
+}
+
+// TerrainCellLedgerHolder 是“带有 TerrainCellLedger 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type TerrainCellLedgerHolder interface{ TerrainCellLedger() TerrainCellLedger }

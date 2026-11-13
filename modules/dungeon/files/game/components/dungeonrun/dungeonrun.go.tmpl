@@ -1,0 +1,182 @@
+package dungeonrun
+
+import (
+	"fmt"
+	"strconv"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
+
+	logic "{{MODULE}}/game/dungeon"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+var program = sync.OnceValues(logic.Program)
+
+// Owner 是 DungeonRun 组件的宿主（Dungeon 的接线见 game/entities/dungeon/run_component.go）：view 的 DungeonEntity，
+// 组件用到它的两个 DAO（DungeonDao 与关卡状态机的 DungeonLevelDAO）。只在实体被 Nest 锁住期间使用。
+type Owner = view.DungeonEntity
+
+// Component 是一局副本的规则：开局、可信战斗事实推进、查看与领奖依据。状态全部在两个 DAO 里（回滚统一走 DAO 的
+// 生成 setter 逆操作，组件不持有需要回滚的内存状态）。方法只在本实体的 Nest 锁内调用。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Dungeon 在 game/entities/dungeon/run_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("dungeon_run component: owner %T does not implement dungeonrun.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (run *Component) Name() string { return "dungeon_run" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (run *Component) Owner() Owner { return run.owner }
+
+func (run *Component) machine() (*level.LevelComponent, error) {
+	p, err := program()
+	if err != nil {
+		return nil, err
+	}
+	return level.NewLevelComponent(run.owner.LevelDAO(), p)
+}
+
+// OnInitFinish 在新建和冷加载后（两份 DAO 已装好、实体发布之前）验证两份DAO身份与定义，缺失一半存档不能当成新关卡继续运行。
+func (run *Component) OnInitFinish(*entity.EntityCreateParam, bool) error {
+	if run.owner.Dao().Id() != run.owner.ID() || run.owner.LevelDAO().Id() != run.owner.ID() {
+		return fmt.Errorf("dungeon: aggregate identity mismatch")
+	}
+	machine, err := run.machine()
+	if err != nil {
+		return err
+	}
+	s := machine.Snapshot()
+	if run.owner.Dao().GetOwnerID() == 0 {
+		if s.Instance != "" || run.owner.Dao().GetSeason() != 0 || run.owner.Dao().GetExpReward() != 0 || run.owner.Dao().GetResolvedAtUnix() != 0 {
+			return fmt.Errorf("dungeon: incomplete unopened aggregate")
+		}
+		return nil
+	}
+	if s.Instance != run.instance() || s.Epoch != 1 || run.owner.Dao().GetOwnerID() <= 0 || run.owner.Dao().GetSeason() <= 0 || run.owner.Dao().GetExpReward() <= 0 {
+		return fmt.Errorf("dungeon: aggregate state mismatch")
+	}
+	if (s.Phase == level.Finishing) != (run.owner.Dao().GetResolvedAtUnix() > 0) {
+		return fmt.Errorf("dungeon: terminal timestamp mismatch")
+	}
+	return nil
+}
+func (run *Component) instance() string { return "dungeon-" + strconv.FormatInt(run.owner.ID(), 10) }
+
+// Open 同ID重试只读；owner/season不同是冲突，ID不可重用于第二局。
+func (run *Component) Open(playerID, season, now int64) (view.DungeonSnapshot, error) {
+	if playerID <= 0 || season <= 0 || now <= 0 {
+		return view.DungeonSnapshot{}, apperrors.ErrDungeonInvalid
+	}
+	if run.owner.Dao().GetOwnerID() != 0 {
+		if run.owner.Dao().GetOwnerID() != playerID || run.owner.Dao().GetSeason() != season {
+			return view.DungeonSnapshot{}, apperrors.ErrDungeonInvalid
+		}
+		return run.snapshot()
+	}
+	machine, err := run.machine()
+	if err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	if err := machine.Initialize(run.instance(), 1, now); err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	if err := machine.Start(now); err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	run.owner.Dao().SetOwnerID(playerID)
+	run.owner.Dao().SetSeason(season)
+	run.owner.Dao().SetExpReward(logic.ClearExp)
+	return run.snapshot()
+}
+
+func (run *Component) snapshot() (view.DungeonSnapshot, error) {
+	machine, err := run.machine()
+	if err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	projected := machine.Project()
+	result := view.DungeonSnapshot{Instance: projected.Instance, Epoch: projected.Epoch, Revision: projected.Revision, Phase: string(projected.Phase), Result: projected.Result, ResolvedAtUnix: run.owner.Dao().GetResolvedAtUnix(), Kills: projected.Variables["global/kills"].Int}
+	for _, stage := range projected.Stages {
+		if stage.ID != "deadline" {
+			result.Stage = stage.ID
+		}
+	}
+	return result, nil
+}
+func (run *Component) resolve(machine *level.LevelComponent, now int64) {
+	if machine.Snapshot().Phase == level.Finishing && run.owner.Dao().GetResolvedAtUnix() == 0 {
+		run.owner.Dao().SetResolvedAtUnix(now / 1000)
+	}
+}
+
+// Defeated 只接受可信战斗来源，源序号与内容摘要由level校验；错误必须交回Nest撤回整笔推进。
+func (run *Component) Defeated(instance string, epoch uint64, source string, sequence uint64, enemy string, now int64) (view.DungeonSnapshot, error) {
+	machine, err := run.machine()
+	if err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	if instance != run.instance() || epoch != 1 {
+		return view.DungeonSnapshot{}, level.ErrStale
+	}
+	// 认识哪些敌人只由规则文件决定（logic.KnownEnemy 读关卡定义），这里不另写一份名单。
+	if !logic.KnownEnemy(enemy) {
+		return view.DungeonSnapshot{}, apperrors.ErrDungeonInvalid
+	}
+	before := machine.Snapshot().Phase
+	if err := machine.Advance(now); err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	// 超时这笔要提交失败终局，不让随后不再可接收的事件错误把超时撤回。
+	if before == level.Running && machine.Snapshot().Phase == level.Finishing {
+		run.resolve(machine, now)
+		return run.snapshot()
+	}
+	if err := machine.Handle(level.Event{Instance: instance, Epoch: epoch, Source: source, Sequence: sequence, Kind: logic.EventEnemyDefeated, Fields: map[string]level.Value{logic.FieldEnemy: level.String(enemy)}}, now); err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	run.resolve(machine, now)
+	return run.snapshot()
+}
+
+func (run *Component) View(playerID, now int64) (view.DungeonSnapshot, error) {
+	if playerID <= 0 || run.owner.Dao().GetOwnerID() != playerID {
+		return view.DungeonSnapshot{}, apperrors.ErrDungeonOwner
+	}
+	machine, err := run.machine()
+	if err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	if err := machine.Advance(now); err != nil {
+		return view.DungeonSnapshot{}, err
+	}
+	run.resolve(machine, now)
+	return run.snapshot()
+}
+
+// Reward 只在同时锁住Dungeon和Player的领奖事务里调用，奖励依据持久关卡结果而不是请求中的success。
+func (run *Component) Reward(playerID int64) (season, amount, resolvedAt int64, err error) {
+	if run.owner.Dao().GetOwnerID() != playerID {
+		return 0, 0, 0, apperrors.ErrDungeonOwner
+	}
+	machine, err := run.machine()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	s := machine.Snapshot()
+	if s.Phase != level.Finishing || s.Result != "success" {
+		return 0, 0, 0, apperrors.ErrDungeonUnfinished
+	}
+	return run.owner.Dao().GetSeason(), run.owner.Dao().GetExpReward(), run.owner.Dao().GetResolvedAtUnix(), nil
+}

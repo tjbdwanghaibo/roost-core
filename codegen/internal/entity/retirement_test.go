@@ -201,3 +201,72 @@ type Player struct {
 		t.Errorf("hand-written view file removed: %v", err)
 	}
 }
+
+// 只生成一个实体包时（roost generate 按改动的包跑、或 go:generate）也要删掉已经没有实体的 view 实体文件；
+// 共用组件的接线文件手写返回 view 类型的访问器时，实体接口嵌入对应的 Holder。
+func TestRunRetiresStaleViewEntitiesOnAPartialScanAndEmbedsHandWrittenAccessors(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module example.com/g\n\ngo 1.24\n")
+	write("game/view/component_activity.go", "package view\n\ntype Activity interface{ Rearm() error }\n\ntype ActivityHolder interface{ Activity() Activity }\n")
+	entityFile := func(name, extra string) string {
+		return `package ` + strings.ToLower(name) + `
+
+import (
+	db "example.com/g/db"
+	"example.com/g/game/view"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+const EntityKind` + name + ` = 1
+
+const CompType` + name + `Activity entity.ComponentType = 1
+
+type ` + name + `ActivityComponent struct{ entity.ComponentBase }
+
+//roost:entity entityKind=EntityKind` + name + `
+type ` + name + ` struct {
+	*entity.EntityBase
+	dao      *db.` + name + `Dao ` + "`dao:\"x\"`" + `
+	activity *` + name + `ActivityComponent ` + "`comp:\"CompType" + name + "Activity\"`" + `
+}
+` + extra
+	}
+	write("game/entities/guild/guild.go", entityFile("Guild", "\nfunc (e *Guild) Activity() view.Activity { return nil }\n"))
+	write("game/entities/clan/clan.go", entityFile("Clan", ""))
+	if err := run([]string{"-dir", filepath.Join(root, "game", "entities")}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	guild, err := os.ReadFile(filepath.Join(root, "game", "view", "entity_guild.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(guild), "ActivityHolder") {
+		t.Errorf("the hand-written view accessor did not embed ActivityHolder:\n%s", guild)
+	}
+	if clan, _ := os.ReadFile(filepath.Join(root, "game", "view", "entity_clan.go")); strings.Contains(string(clan), "ActivityHolder") {
+		t.Errorf("an entity without the accessor embeds ActivityHolder:\n%s", clan)
+	}
+	// 删掉 Clan 后只生成 guild 包：entity_clan.go 也要删，entity_guild.go 留着。
+	if err := os.RemoveAll(filepath.Join(root, "game", "entities", "clan")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"-dir", filepath.Join(root, "game", "entities", "guild")}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "game", "view", "entity_clan.go")); !os.IsNotExist(err) {
+		t.Errorf("a partial scan left the removed entity's view file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "game", "view", "entity_guild.go")); err != nil {
+		t.Errorf("a partial scan removed a live entity's view file: %v", err)
+	}
+}

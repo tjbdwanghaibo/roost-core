@@ -18,6 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	db "{{MODULE}}/db"
 	room "{{MODULE}}/game/entities/room"
@@ -116,7 +117,7 @@ func (f *turnFixture) join(t *testing.T, playerID int64) {
 		t.Fatal(err)
 	}
 }
-func (f *turnFixture) start(t *testing.T, maxTurns int64) room.TurnSnapshot {
+func (f *turnFixture) start(t *testing.T, maxTurns int64) view.TurnSnapshot {
 	t.Helper()
 	v, err := f.starts.Sync_TurnStart(context.Background(), f.id, 101, 1, "c101", 1000, maxTurns)
 	if err != nil {
@@ -124,7 +125,7 @@ func (f *turnFixture) start(t *testing.T, maxTurns int64) room.TurnSnapshot {
 	}
 	return v
 }
-func (f *turnFixture) end(t *testing.T, playerID, round, sequence int64) room.TurnSnapshot {
+func (f *turnFixture) end(t *testing.T, playerID, round, sequence int64) view.TurnSnapshot {
 	t.Helper()
 	v, err := f.ends.Sync_TurnEnd(context.Background(), f.id, playerID, uint64(playerID-100), fmt.Sprintf("c%d", playerID), round, sequence)
 	if err != nil {
@@ -132,7 +133,7 @@ func (f *turnFixture) end(t *testing.T, playerID, round, sequence int64) room.Tu
 	}
 	return v
 }
-func (f *turnFixture) view(t *testing.T) room.TurnSnapshot {
+func (f *turnFixture) view(t *testing.T) view.TurnSnapshot {
 	t.Helper()
 	v, err := f.views.Sync_TurnView(context.Background(), f.id, 101, 1, "c101")
 	if err != nil {

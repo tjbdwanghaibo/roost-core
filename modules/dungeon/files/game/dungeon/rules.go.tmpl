@@ -2,6 +2,7 @@
 package dungeon
 
 import (
+	"{{MODULE}}/game/view"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
@@ -26,25 +27,11 @@ func LedgerMayForget(resolvedAt, now int64) bool {
 	return now >= LedgerPruneGraceSeconds && now-LedgerPruneGraceSeconds >= resolvedAt && ClaimWindowClosed(resolvedAt, now-LedgerPruneGraceSeconds)
 }
 
-type Snapshot struct {
-	Instance       string
-	Epoch          uint64
-	Revision       uint64
-	Phase          string
-	Stage          string
-	Kills          int64
-	Result         string
-	ResolvedAtUnix int64
-}
-type ClaimResult struct {
-	Claimed      bool
-	ExpGranted   int64
-	LevelsGained int32
-	Season       int64
-	Clears       int64
-	TotalClears  int64
-	BoardPending bool
-}
+// Snapshot 是 view.DungeonSnapshot（结构体定义在 game/view，这里留同名别名，handler 与 controller 的写法不变）。
+type Snapshot = view.DungeonSnapshot
+
+// ClaimResult 是 view.DungeonClaimResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
+type ClaimResult = view.DungeonClaimResult
 
 // 可信战斗事实的事件名与其中表示敌人种类的字段名；definition 的触发器和 run.go 发出的事件都用这两个名字。
 const (

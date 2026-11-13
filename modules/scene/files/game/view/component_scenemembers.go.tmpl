@@ -1,0 +1,12 @@
+package view
+
+// SceneMembers 是 Scene 上 SceneMembers 组件对 game/ 下其它包公开的方法（实现在 game/components/scenemembers，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type SceneMembers interface {
+	Admit(id int64) error
+	Depart(id int64)
+	Close() error
+	BeginClosing() []int64
+}
+
+// SceneMembersHolder 是“带有 SceneMembers 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type SceneMembersHolder interface{ SceneMembers() SceneMembers }

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/components/terrainsurface"
 	db "{{MODULE}}/db"
 	"{{MODULE}}/game/clientsync"
  "{{MODULE}}/game/handler"
@@ -118,7 +119,7 @@ func startTerrainSubjects(t *testing.T, scene *Scene, p *terrainProcess) {
 }
 
 // brush 是一个玩家的一次编辑，必须成功。
-func (h *terrainSyncHarness) brush(t *testing.T, playerID int64, requestID uint64, b terrain.Brush) terrain_chunk.BrushResult {
+func (h *terrainSyncHarness) brush(t *testing.T, playerID int64, requestID uint64, b terrain.Brush) terrainsurface.BrushResult {
 	t.Helper()
 	result, err := h.process.m.Brush(h.ctx, playerID, requestID, b)
 	if err != nil {
@@ -545,7 +546,7 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 	// 材质守卫 500 点（维护者 2026-11-08）：r=12m 改材质（约 450 点）仍按下标；玩家上限 r=16m（约 800 点，在一块内）
 	// 走整字段，约 4.1KB（按下标时约 5.3～6.4KB）。
 	step(12, terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 1200, Material: 34}, func(u terrainUpdate) {
-		if !u.materials || !u.materialsDelta || u.materialUpdates < 400 || u.materialUpdates > terrain_chunk.MaterialsGuard || u.heightUpdates != 0 {
+		if !u.materials || !u.materialsDelta || u.materialUpdates < 400 || u.materialUpdates > terrainsurface.MaterialsGuard || u.heightUpdates != 0 {
 			t.Fatalf("an r=12m paint went out as %+v, want per-index materials under the guard", u)
 		}
 	})

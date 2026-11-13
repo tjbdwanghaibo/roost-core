@@ -1,0 +1,53 @@
+package mapview
+
+import (
+	"time"
+
+	"{{MODULE}}/game/components/attribute"
+	"{{MODULE}}/game/partition"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+)
+
+// 分区场景（scene.partition，gameplay/cellworld）里玩家不在进程间移动：本进程是它的 Base，它在地图上的那一份是所在格的
+// SceneActor。Base 一侧的路由心跳（"cell.base"，Node.BaseBeat）与面板更新在这里；cellworld.BasePlayer 的实体方法在
+// game/entities/player/cell_base.go。
+
+// registerCellBase registers the routing beat when this process runs a
+// partitioned scene; it is started by the Node when the player enters it.
+func (component *Component) registerCellBase() error {
+	node := partition.Node()
+	if node == nil {
+		return nil
+	}
+	owner := component.owner
+	reg, err := component.host.Register("cell.base", node.Config().WatchPeriod, func(heartbeat.Beat) error {
+		if n := partition.Node(); n != nil {
+			return n.BaseBeat(owner, time.Now())
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	component.cellBase = reg
+	return nil
+}
+
+// 属性在等级、装备或业务 Refresh 后实际变化时，Cell 面板在同一个 Player 事务里更新。
+// 不使用只覆盖升级的钩子，加载阶段的临时重建也不发送面板。
+func init() {
+	attribute.OnAttributeChanged("cellworld", func(host attribute.Owner) error {
+		player, ok := host.(Owner)
+		if !ok {
+			return nil // 属性组件也可以挂在别的实体上；只有 Player 有 Cell 面板
+		}
+		if node := partition.Node(); node != nil {
+			return node.UpdatePanel(player)
+		}
+		return nil
+	})
+}
+
+// CellBaseBeat 是 cell.base 心跳的登记（本进程不跑分区场景时为 nil）；Player 的 StartBase 用它。
+func (c *Component) CellBaseBeat() *heartbeat.Reg { return c.cellBase }

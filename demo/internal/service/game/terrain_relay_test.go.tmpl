@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/components/buildingsite"
+	"{{MODULE}}/game/components/terrainsurface"
+	"{{MODULE}}/game/components/terrainledger"
 	db "{{MODULE}}/db"
-	building "{{MODULE}}/game/entities/building"
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
-	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/terrainmap"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -278,7 +278,7 @@ func (p *relayProc) version(t *testing.T, key terrain.ChunkKey) int64 {
 }
 
 // cellLedger 是玩家在本格的账本（没有实体时零值）。
-func (p *relayProc) cellLedger(t *testing.T) terrain_editor.SeqWindow {
+func (p *relayProc) cellLedger(t *testing.T) terrainledger.SeqWindow {
 	t.Helper()
 	id, err := terrain_cell_editor.EntityID(relayPlayer)
 	if err != nil {
@@ -287,7 +287,7 @@ func (p *relayProc) cellLedger(t *testing.T) terrain_editor.SeqWindow {
 	if e, _ := p.process.entities.Get(id).(*terrain_cell_editor.TerrainCellEditor); e != nil {
 		return e.LedgerComp().Window()
 	}
-	return terrain_editor.SeqWindow{}
+	return terrainledger.SeqWindow{}
 }
 
 var (
@@ -526,7 +526,7 @@ func TestTerrainRelayDuplicatedAndLateMessagesWriteOnce(t *testing.T) {
 		}
 	}
 	before := []int64{a.version(t, relayLeft), b.version(t, relayRight)}
-	ledgers := []terrain_editor.SeqWindow{a.cellLedger(t), b.cellLedger(t)}
+	ledgers := []terrainledger.SeqWindow{a.cellLedger(t), b.cellLedger(t)}
 	if before[0] != 3 || before[1] != 3 {
 		t.Fatalf("versions %v after three brushes on each cell", before)
 	}
@@ -537,7 +537,7 @@ func TestTerrainRelayDuplicatedAndLateMessagesWriteOnce(t *testing.T) {
 	if after := []int64{a.version(t, relayLeft), b.version(t, relayRight)}; !slices.Equal(after, before) {
 		t.Fatalf("a replay wrote again: versions %v, before %v", after, before)
 	}
-	if got := []terrain_editor.SeqWindow{a.cellLedger(t), b.cellLedger(t)}; !slices.Equal(got, ledgers) {
+	if got := []terrainledger.SeqWindow{a.cellLedger(t), b.cellLedger(t)}; !slices.Equal(got, ledgers) {
 		t.Fatalf("a replay changed the cell ledgers: %v, before %v", got, ledgers)
 	}
 	waitFor(t, "late answers are ignored", func() bool { return c.relay.strayAnswers.Load() > 0 })
@@ -761,7 +761,7 @@ func TestTerrainPartitionGhostBandSeesNeighbourBuildings(t *testing.T) {
 	if walkable(b) || walkable(a) {
 		t.Fatal("a walker steps into the building")
 	}
-	if lots := b.process.m.LotsAt(relayLeft); len(lots) != 1 || lots[0] != (terrain_chunk.Lot{GX: 250, GY: 20, W: 4, H: 4}) {
+	if lots := b.process.m.LotsAt(relayLeft); len(lots) != 1 || lots[0] != (terrainsurface.Lot{GX: 250, GY: 20, W: 4, H: 4}) {
 		t.Fatalf("the neighbour's lots %v", lots)
 	}
 	if b.pt.rep.Stats().LotsApplied == 0 {
@@ -788,7 +788,7 @@ func TestTerrainPartitionGhostBandSeesNeighbourBuildings(t *testing.T) {
 func TestTerrainRelayWireFormat(t *testing.T) {
 	requests := []terrainmap.PartRequest{
 		{Op: terrainmap.PartBrush, PlayerID: 7, Seq: 1 << 40, Brush: terrain.Brush{Op: terrain.BrushFlatten, X: -5, Y: 123456789, Radius: 1600, Falloff: terrain.FalloffLinear, Strength: 50, Target: 16383, Material: 255}},
-		{Op: terrainmap.PartPlace, PlayerID: 8, Seq: 2, Placement: building.Placement{ConfigID: 2, Params: []int32{3, -1}, GX: 70, GY: 80, Facing: 3, Level: true}},
+		{Op: terrainmap.PartPlace, PlayerID: 8, Seq: 2, Placement: buildingsite.Placement{ConfigID: 2, Params: []int32{3, -1}, GX: 70, GY: 80, Facing: 3, Level: true}},
 		{Op: terrainmap.PartRemove, PlayerID: 9, Seq: 3, GX: 1, GY: 2},
 		{Op: terrainmap.PartParams, PlayerID: 9, Seq: 4, GX: 1, GY: 2, Params: []int32{1, 2, 3}},
 	}
@@ -812,9 +812,9 @@ func TestTerrainRelayWireFormat(t *testing.T) {
 		}
 	}
 	answers := []terrainmap.PartAnswer{
-		{Outcome: terrainmap.OutcomeApplied, Points: 812, LastSeq: 9, Chunks: []terrain_chunk.ChunkVersion{{Key: terrain.ChunkKey{X: 3, Y: 0}, Version: 4}}},
-		{Outcome: terrainmap.OutcomeDuplicate, LastSeq: 9, Building: building.State{ID: 99, Standing: true, Owner: 7, ConfigID: 2, Params: []int32{1}, Facing: 1,
-			Lot: terrain_chunk.Lot{GX: 70, GY: 80, W: 6, H: 8}, Foundation: -300, Leveled: true, BaseRevision: 2}},
+		{Outcome: terrainmap.OutcomeApplied, Points: 812, LastSeq: 9, Chunks: []terrainsurface.ChunkVersion{{Key: terrain.ChunkKey{X: 3, Y: 0}, Version: 4}}},
+		{Outcome: terrainmap.OutcomeDuplicate, LastSeq: 9, Building: buildingsite.State{ID: 99, Standing: true, Owner: 7, ConfigID: 2, Params: []int32{1}, Facing: 1,
+			Lot: terrainsurface.Lot{GX: 70, GY: 80, W: 6, H: 8}, Foundation: -300, Leveled: true, BaseRevision: 2}},
 		{Outcome: terrainmap.OutcomeRefused, Refusal: terrainmap.ErrOccupied},
 		{Outcome: terrainmap.OutcomeRefused, Refusal: errors.New("a disk on fire")},
 		{Outcome: terrainmap.OutcomeUnknown, Refusal: errors.New("wal timeout")},
@@ -823,7 +823,7 @@ func TestTerrainRelayWireFormat(t *testing.T) {
 		body := encodeRelayAnswer(42, 7, answer)
 		inc, id, got, err := decodeRelayAnswer(body)
 		if err != nil || inc != 42 || id != 7 || got.Outcome != answer.Outcome || got.Points != answer.Points || got.LastSeq != answer.LastSeq ||
-			!slices.Equal(got.Chunks, answer.Chunks) || !got.Building.Equal(answer.Building) {
+			!slices.Equal(got.Chunks, answer.Chunks) || !buildingsite.StatesEqual(got.Building, answer.Building) {
 			t.Fatalf("answer %+v came back as %+v (%v)", answer, got, err)
 		}
 		if answer.Outcome == terrainmap.OutcomeRefused {

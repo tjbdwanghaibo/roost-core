@@ -3,7 +3,27 @@ package view
 // Combat 是 Combat 组件对 game/ 下其它包公开的方法（实现在 game/components/combat，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Combat interface {
 	ID() int64
+	Input() CombatInput
+	Ready(seq int64, ready bool) (CombatResult, error)
 }
 
 // CombatHolder 是“带有 Combat 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
 type CombatHolder interface{ Combat() Combat }
+
+// CombatResult 是成交时的公开快照；重复sequence返回同一结果，不用当前HP覆盖旧回执。
+type CombatResult struct {
+	Sequence           int64
+	CastID             uint64
+	Health, PeerHealth int64
+	Alive, PeerAlive   bool
+	Pending            bool
+	Ended              bool
+}
+
+// CombatInput 是参战者的下一拍输入（外部移动 / 成长产生，不直接改 CombatDAO）：game/combat 的 Input 是它的别名。
+type CombatInput struct {
+	ID                int64
+	SceneID           int64
+	X, Y              int64
+	MaxHealth, Attack int64
+}

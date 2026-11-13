@@ -145,7 +145,7 @@ func TestTheClearCountMovesOnlyWhenARunIsPaid(t *testing.T) {
 	if _, err := claim("stale-run", now-dungeon.ClaimWindowSeconds-1, clearsSeason); err == nil {
 		t.Fatal("a run past its claim window was accepted")
 	}
-	if got := subject.ProfileComp().DungeonClears(clearsSeason); got != 10 {
+	if got := subject.DungeonLedgerComp().DungeonClears(clearsSeason); got != 10 {
 		t.Fatalf("after a refused claim the count is %d, want 10", got)
 	}
 	if _, err := claim("seasonless-run", now, 0); err == nil {
@@ -160,7 +160,7 @@ func TestTheClearCountMovesOnlyWhenARunIsPaid(t *testing.T) {
 	if replay, err := claim("run-2", now, clearsSeason+1); err != nil || replay.Claimed || replay.Clears != 1 {
 		t.Fatalf("replaying last season's run in the new season = %+v err=%v, want unpaid with the new season's count 1", replay, err)
 	}
-	if got := subject.ProfileComp().DungeonClears(clearsSeason); got != 10 {
+	if got := subject.DungeonLedgerComp().DungeonClears(clearsSeason); got != 10 {
 		t.Fatalf("the previous season's count moved to %d", got)
 	}
 
@@ -198,7 +198,7 @@ func TestAPrunedRunIsRefusedInsteadOfPaidAgain(t *testing.T) {
 	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "new-run", dungeon.ClearExp, later, clearsSeason); err != nil {
 		t.Fatalf("the second run's claim: %v", err)
 	}
-	if subject.ProfileComp().DungeonRunClaimed("old-run") {
+	if subject.DungeonLedgerComp().DungeonRunClaimed("old-run") {
 		t.Fatal("the old run's record was not pruned; this test is no longer about what it says it is")
 	}
 

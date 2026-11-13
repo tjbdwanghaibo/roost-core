@@ -1,9 +1,16 @@
 package view
 
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+)
+
 // Activity 是活动组件对 game/ 下其它包公开的方法（实现在 game/activity，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Activity interface {
 	Reconcile(event string, createdAt int64) error
 	Rearm() error
+	OnDeadline(fire entitytimer.Fire) time.Duration
 }
 
 // ActivityHolder 是“带有活动组件”的小接口：只要活动的钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
