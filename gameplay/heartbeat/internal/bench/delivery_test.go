@@ -40,6 +40,18 @@ import (
 // 登记（移动）；另有一路业务消息
 // HB_BIZ_RATE 条/秒（缺省 5000）随机打到全部实体（单目标 Dispatch），测它从发出到 handler 开始执行的延迟。
 // 回调只做少量内存计算（按经过时间推进位置并在边界反弹）。
+//
+// 补测开关（2026-11-14，KNOWN-LIMITS“批量作业参数的未测部分”③与“热点实体下的冲突转单目标率”）：
+//
+//	HB_CB_US     每拍回调另外占用 worker 的微秒数（忙等，缺省 0）：真实移动回调约 5～20µs（含事务收尾），用它近似；
+//	             只是 CPU 占用，不写 DAO、不进 WAL
+//	HB_BIZ_US    每条业务消息另外占用 worker 的微秒数（忙等，缺省 0）：业务消息越长，与心跳同 ID 冲突越多
+//	HB_HOT       热点实体数（缺省 0）：取有心跳登记的前 HB_HOT 个实体
+//	HB_HOT_SHARE 业务消息打到热点实体上的比例（0～1，缺省 0）：其余照旧在全部实体里随机。热点实体上业务消息与心跳
+//	             同 ID 冲突多，c 模式下转单目标的次数计 c_converted_per_s，占批量投递的比例计 c_converted_per_beat
+//
+// 组大小 / 时间片（framework/nest 的 tryBatchGroup / tryBatchSlice）是编译期常数，测更小的组或时间片按 §3G 的做法
+// 在临时工作树里改常数后跑本用例。
 
 const (
 	hbKind      entity.EntityKind = 201
@@ -216,6 +228,10 @@ type deliveryConfig struct {
 	Batch     int     `json:"batch"`
 	Carriers  int     `json:"carriers"`
 	BizRate   int     `json:"biz_rate"`
+	CallbackU int     `json:"callback_us"`
+	BizU      int     `json:"biz_us"`
+	Hot       int     `json:"hot"`
+	HotShare  float64 `json:"hot_share"`
 	WarmS     float64 `json:"warm_s"`
 	MeasureS  float64 `json:"measure_s"`
 	Gomaxproc int     `json:"gomaxprocs"`
@@ -230,6 +246,7 @@ type deliveryRun struct {
 	measuring atomic.Bool
 	mgr       *nest.NestMgr
 	entities  []*hbEntity
+	hot       []*hbEntity // HB_HOT 个热点实体（有心跳登记）
 	regs      []*hbReg
 	carriers  []int64
 	shards    []*driverShard
@@ -283,6 +300,9 @@ func (r *deliveryRun) beat(e *hbEntity, reg *hbReg) {
 	if e.y < 0 || e.y > 1000 {
 		e.vy = -e.vy
 	}
+	if r.cfg.CallbackU > 0 {
+		spinFor(time.Duration(r.cfg.CallbackU) * time.Microsecond)
+	}
 	x := e.work | 1
 	for range 32 {
 		x ^= x << 13
@@ -333,6 +353,9 @@ func (r *deliveryRun) biz(e *hbEntity, sent int64) {
 		r.bizLatency.add(int(e.UniqueID()), now-sent)
 	}
 	e.work += uint64(now)
+	if r.cfg.BizU > 0 {
+		spinFor(time.Duration(r.cfg.BizU) * time.Microsecond)
+	}
 }
 
 // deliver 把一格到期的登记按模式投出去。
@@ -477,6 +500,9 @@ func (r *deliveryRun) bizLoop(stop <-chan struct{}, done *sync.WaitGroup) {
 			x ^= x >> 7
 			x ^= x << 17
 			e := r.entities[x%uint64(len(r.entities))]
+			if len(r.hot) > 0 && float64(x>>40)/float64(1<<24) < r.cfg.HotShare {
+				e = r.hot[(x>>8)%uint64(len(r.hot))]
+			}
 			if err := r.mgr.Dispatch(ctx, bizHandler, e.ID(), nest.Params{r.now()}); err != nil {
 				if r.measuring.Load() {
 					r.bizFail.add(0, 1)
@@ -549,6 +575,10 @@ func TestDeliveryRun(t *testing.T) {
 		Batch:     envInt(t, "HB_BATCH", 64),
 		Carriers:  envInt(t, "HB_CARRIERS", 64),
 		BizRate:   envInt(t, "HB_BIZ_RATE", 5000),
+		CallbackU: envInt(t, "HB_CB_US", 0),
+		BizU:      envInt(t, "HB_BIZ_US", 0),
+		Hot:       envInt(t, "HB_HOT", 0),
+		HotShare:  envFloat(t, "HB_HOT_SHARE", 0),
 		WarmS:     envFloat(t, "HB_WARM_S", 3),
 		MeasureS:  envFloat(t, "HB_MEASURE_S", 15),
 		Gomaxproc: runtime.GOMAXPROCS(0),
@@ -618,6 +648,14 @@ func TestDeliveryRun(t *testing.T) {
 		}
 	}
 
+	if cfg.Hot < 0 || cfg.Hot > len(r.regs) || cfg.HotShare < 0 || cfg.HotShare > 1 || (cfg.Hot == 0) != (cfg.HotShare == 0) || cfg.CallbackU < 0 || cfg.BizU < 0 {
+		t.Fatalf("HB_HOT %d must be within the %d entities with a heartbeat and set together with HB_HOT_SHARE %v (0..1); HB_CB_US %d and HB_BIZ_US %d must not be negative",
+			cfg.Hot, len(r.regs), cfg.HotShare, cfg.CallbackU, cfg.BizU)
+	}
+	for _, reg := range r.regs[:cfg.Hot] {
+		r.hot = append(r.hot, reg.ent)
+	}
+
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, s := range r.shards {
@@ -684,6 +722,9 @@ func TestDeliveryRun(t *testing.T) {
 	out["y_trylock_fail_total"] = r.tryFail.sum()
 	out["c_handed_back_total"] = r.handedBack.sum()
 	out["c_converted_per_s"] = float64(converted1-converted0) / sec
+	if beats := r.beats.sum(); beats > 0 {
+		out["c_converted_per_beat"] = float64(converted1-converted0) / float64(beats)
+	}
 	out["interval_samples"] = nIv
 	out["interval_ms"] = map[string]float64{"p50": iv[0], "p99": iv[1], "p999": iv[2], "max": iv[3]}
 	out["absdev_ms"] = map[string]float64{"p50": dv[0], "p99": dv[1], "p999": dv[2]}
@@ -709,5 +750,11 @@ func TestDeliveryRun(t *testing.T) {
 		}
 		_, _ = f.Write(append(line, '\n'))
 		_ = f.Close()
+	}
+}
+
+// spinFor 忙等 d：近似回调占用 worker 的 CPU 时间（不让出 worker，与真实回调一样）。
+func spinFor(d time.Duration) {
+	for start := time.Now(); time.Since(start) < d; {
 	}
 }
