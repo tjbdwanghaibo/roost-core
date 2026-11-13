@@ -111,6 +111,7 @@ internal static partial class Program
         TestGameClientNetworkDisposal();
         TestReconnectFailureLimit();
         TestSceneTimeDomain();
+        TestUnitySceneTime();
         TestNetworkExperience();
         await TestHeartbeatCapacity();
         await TestUnitySyncAdapter();
