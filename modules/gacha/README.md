@@ -19,7 +19,7 @@
   - `DrawFree(key string, poolID int64) (GachaResult, error)`：**不扣费的单抽**。掉落、保底、背包检查、回执与 `Draw` 是同一段代码、同一个请求键窗口，只是不调货币组件：`Cost` 为 0，`Balance` 是当时的余额，不触发 wallet 的消费钩子；池的 `Price` 对它不起作用。没有对应的客户端协议：免费的次数规则（每日一次、活动送几次）属于工程，由工程自己的 handler 调它（见“复用方式”）。
   - `GachaResult{Cost, Balance, Items, Misses, Replayed}`。`Replayed` 为真表示这是窗口内同一个请求键的重放：结果取自原回执，这一次什么都没写。
 - Nest handler `handlerGachaDraw`（`game/handler/gacha_draw.go`，`rollback=undo durability=strict`）；端点 `HandleGachaDraw`（`game/controllers/gacha/gacha_draw.go`）直接分发到它。
-- 规则函数在 `game/entities/player/gacha_rules.go`：`gachaRules(poolID)` 在一条请求里读一次配置快照并校验，`gachaPick(drops, roll)` 把一个均匀整数映射到权重区间。
+- 规则函数在 `game/components/gacha/rules.go`：`gachaRules(poolID)` 在一条请求里读一次配置快照并校验，`gachaPick(drops, roll)` 把一个均匀整数映射到权重区间。
 
 ### 登记点
 

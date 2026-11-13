@@ -23,8 +23,8 @@
   - `actor.Get(id)`：按实体号取已加载的实体（跟随目标用），由运行期入口 `actor.Start(registry)`（`game/actor/runtime.go`）接通。
   - Nest handler `handlerActorMove`、`handlerActorStop`（`game/handler/`，`durability=async`）。
 - **登记点 / 钩子**
-  - `OnActor(name string, factory func(*Player) actor.Hooks)`（`game/entities/player/actor_hooks.go`）：登记进入、离开、每拍之后三个回调（`actor.Hooks{Enter, Leave, AfterTick}`）。回调在当前实体锁和事务内执行，返回错误会撤销本次变更；回调里不能发 RPC、取别的实体锁或开 goroutine。只在 `init` 登记，多个按名字排序，重名 panic。
-  - `OnActorSyncFields(name string, profile entity.SyncProfile, fields ...string)`（`game/entities/player/actor_sync.go`）：给一个非本人的同步视图登记明确的字段白名单（例如“附近玩家能看到哪些 `PlayerDao` 字段”）。不能登记本人视图，不能用 `*`。只在 `init` 登记。
+  - `OnActor(name string, factory func(*Player) actor.Hooks)`（`game/components/actor/hooks.go`）：登记进入、离开、每拍之后三个回调（`actor.Hooks{Enter, Leave, AfterTick}`）。回调在当前实体锁和事务内执行，返回错误会撤销本次变更；回调里不能发 RPC、取别的实体锁或开 goroutine。只在 `init` 登记，多个按名字排序，重名 panic。
+  - `OnActorSyncFields(name string, profile entity.SyncProfile, fields ...string)`（`game/components/actor/sync.go`）：给一个非本人的同步视图登记明确的字段白名单（例如“附近玩家能看到哪些 `PlayerDao` 字段”）。不能登记本人视图，不能用 `*`。只在 `init` 登记。
   - `NewActorPlayerSyncPacker`：`Player` 唯一的同步打包工厂（清单的 `sync_packer`）。本人视图包含 `PlayerDao` 全部可同步字段；其他视图只含登记过的字段。
 - **状态**
   - `PlayerDao.Actor`（`ActorState`：`SceneID`、`X`、`Y`、`Facing`，`db/def/actor.go`）：当前站位，`nopersist,sync`，只同步不落库。

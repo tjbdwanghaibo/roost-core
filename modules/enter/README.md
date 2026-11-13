@@ -41,12 +41,12 @@
 | --- | --- | --- | --- | --- |
 | `OnEntering(name, Check)` 进入前检查 | `game/login/enter.go` | 加载或创建 Player 之前；`EnterGame`、`EnterCreate`、`Announce` 用的是同一组 | 不在，只读 | 第一个拒绝就停下，端点把它的码答给客户端；不加载、不创建、不跑钩子。拒绝要返回带码错误 |
 | `OnEntered(name, Hook)` 进入钩子 | `game/login/enter.go` | 首次初始化提交之后，每次进入都调 | 不在 | 只记一条 Warn，不让登录失败，下一次进入再调 |
-| `player.OnFirstEnter(name, FirstEnterHook)` 首次初始化钩子 | `game/entities/player/enter_hooks.go` | 新玩家建成的那一笔事务里（两条路都经过它） | 在，同一把 Player 锁 | 整笔回滚，下次再做；只能改当前玩家的 DAO，不能调服务、发消息 |
+| `player.OnFirstEnter(name, FirstEnterHook)` 首次初始化钩子 | `game/login/enter_hooks.go` | 新玩家建成的那一笔事务里（两条路都经过它） | 在，同一把 Player 锁 | 整笔回滚，下次再做；只能改当前玩家的 DAO，不能调服务、发消息 |
 | `firstEnter` | `game/entities/player/enter_first.go` | 同上，排在 `OnFirstEnter` 的钩子之前 | 在 | 同上。这个文件归工程，初始发放写在这里 |
 | `RequireCreateFirst(name, rule)` | `game/login/enter_create.go` | 每次判断会话走哪条路 | 不在 | 全工程只能登记一条，第二次登记 panic |
 | `OnCreating(name, CreateCheck)` 新建前检查 | `game/login/enter_create.go` | `EnterCreate` 里，进入前检查之后、建档之前 | 不在，只读 | 带码拒绝，什么都没写。名字的格式规则放这里 |
 | `OnCreatePrepare(name, CreateStep)` 新建步骤 | `game/login/enter_create.go` | 空档建好之后、新建事务之前 | 不在 | 这一次新建到此为止，玩家仍是没建成；必须可以重复执行。全服唯一占名放这里 |
-| `player.OnCreate(name, CreateHook)` 新建钩子 | `game/entities/player/enter_hooks.go` | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里 |
+| `player.OnCreate(name, CreateHook)` 新建钩子 | `game/login/enter_hooks.go` | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里 |
 
 检查与钩子拿到的 `Entering.Claims` / `Entered.Claims` / `Creating.Claims` 是会话的 claims，可以为 nil，与会话共用同一个 map，约定只读。`Entered` 还带 `First` 与 `FirstAtUnixMilli`（首次初始化提交时的业务时间，之后每次进入都是同一个值，可以当注册时间用）。
 

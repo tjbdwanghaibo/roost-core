@@ -25,3 +25,8 @@ func init() {
 // MapBasic / MoveComponent 让 Player 满足 gameplay/movement 的宿主接口（移动走 actor 组件的 Body）。
 func (e *Player) MapBasic() *movement.MapBasic  { return e.ActorComp().Body().Map }
 func (e *Player) MoveComponent() *movement.Move { return e.ActorComp().Body().Move }
+
+// NewActorPlayerSyncPacker 是 Player 实体注解 subjectPacker= 指向的名字（必须在实体包里）；实现在 game/components/actor。
+func NewActorPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	return actor.NewActorPlayerSyncPacker(value)
+}

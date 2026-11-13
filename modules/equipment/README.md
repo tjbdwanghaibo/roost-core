@@ -22,7 +22,7 @@
 
 ### 登记点
 
-`player.OnEquipmentChanged(name, EquipmentChangedHook)`（`game/entities/player/equipment_hooks.go`）：每次穿上或卸下成功修改之后执行，签名 `func(component *EquipmentComponent) error`。它在同一笔 Nest 事务、同一把 Player 锁内，只能改同一个 Player、不能做外部 I/O；返回错误让穿戴、背包与全部钩子的写入一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
+`player.OnEquipmentChanged(name, EquipmentChangedHook)`（`game/components/equipment/hooks.go`）：每次穿上或卸下成功修改之后执行，签名 `func(component *EquipmentComponent) error`。它在同一笔 Nest 事务、同一把 Player 锁内，只能改同一个 Player、不能做外部 I/O；返回错误让穿戴、背包与全部钩子的写入一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
 
 ### 状态
 

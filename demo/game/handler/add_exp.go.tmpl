@@ -49,5 +49,7 @@ func checkExpGrant(target player.IProfileEntity, stats world.IStatsEntity, amoun
 // 生成的 setter 改 DAO；“何时把 DAO 的脏位交给主体”是 demo 自己的约定（Player.PublishSyncDirty），所以由 demo 的
 // handler 在发放之后做。升了级时属性组件已经交过一次，这里取到的是空掩码，不会多发一条增量。
 func publishExpGrant(target player.IProfileEntity) {
-	target.ProfileComp().Owner().PublishSyncDirty()
+	if owner, ok := target.(*player.Player); ok {
+		owner.PublishSyncDirty()
+	}
 }

@@ -12,7 +12,7 @@
   - `ICheckinEntity`：窄实体接口，别的 handler 的目标参数嵌入它即可调用组件。
   - Nest handler `handlerCheckinClaim`（`game/handler/checkin_claim.go`，`durability=strict`）：协议背后的事务；时间参数 `nowUnixMilli` 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
 - **登记点 / 钩子**
-  - `OnCheckinClaimed(name string, hook CheckinClaimedHook)`（`game/entities/player/checkin_hooks.go`）：签到成功后执行。钩子签名是 `func(owner *Player, result CheckinResult, nowUnixMilli int64) error`。
+  - `OnCheckinClaimed(name string, hook CheckinClaimedHook)`（`game/components/checkin/hooks.go`）：签到成功后执行。钩子签名是 `func(owner *Player, result CheckinResult, nowUnixMilli int64) error`。
   - 钩子在 `Claim` 的同一笔事务里、`Player` 的实体锁内执行；只能改这名 `Player` 的状态，不能发消息或调别的服务。
   - 钩子返回错误会让这一次签到整笔回滚（奖励、进度、此前钩子写的内容都撤销），玩家之后可以再签。
   - 只在 `init` 里登记；多个钩子按名字排序执行；重名、空名、`nil` 直接 panic。

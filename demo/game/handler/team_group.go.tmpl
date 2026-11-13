@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/game/partition"
 	player "{{MODULE}}/game/entities/player"
 	gameteam "{{MODULE}}/game/components/team"
@@ -42,7 +44,12 @@ func teamSeat(g cellworld.Group, playerEntity int64) []cellworld.GroupMember {
 
 // 社交权威归 team 模块；分区场景只通过登记点维护组关系投影，不复制建队/入队/离队实现。
 func init() {
-	gameteam.OnTeamChanged("partition", func(owner *player.Player, change gameteam.TeamChange) error {
+	gameteam.OnTeamChanged("partition", func(host view.PlayerEntity, change gameteam.TeamChange) error {
+		// 分区场景的组投影要 Player 的 cell 基础状态（cellworld.GroupPlayer），这只有 demo 的 Player 有。
+		owner, ok := host.(*player.Player)
+		if !ok {
+			return fmt.Errorf("team group: host %T is not *player.Player", host)
+		}
 		node := partition.Node()
 		if node == nil {
 			return nil

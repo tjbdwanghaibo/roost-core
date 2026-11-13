@@ -20,7 +20,7 @@
   - `ForLevel(level)` 是缺省基础值：`HP = 100 + level*10`，`Attack = 10 + level*2`。
   - `(*Combat).LevelUp(levels)`：每级 `HP +10`、`Attack +2`。
 - **登记点 / 钩子**
-  - `OnAttributeGear(name string, hook AttributeGearHook)`（`game/entities/player/attribute_gear.go`，Player 经可选的 `CollectAttributeGear()` 把它们交给组件）：登记一个装备层来源。钩子签名 `func(*Player) (*gameattr.Combat, error)`，在 `Refresh` 里、持有 `Player` 锁时调用，只能读同一个 `Player`。多个来源按名字排序后把 `HP`、`Attack` 相加。返回错误会让这次刷新以及所在事务失败。只在 `init` 登记；重名、空名、`nil` 直接 panic。
+  - `OnAttributeGear(name string, hook AttributeGearHook)`（`game/components/attribute/gear.go`，Player 经可选的 `CollectAttributeGear()` 把它们交给组件）：登记一个装备层来源。钩子签名 `func(*Player) (*gameattr.Combat, error)`，在 `Refresh` 里、持有 `Player` 锁时调用，只能读同一个 `Player`。多个来源按名字排序后把 `HP`、`Attack` 相加。返回错误会让这次刷新以及所在事务失败。只在 `init` 登记；重名、空名、`nil` 直接 panic。
   - 本模块自己接在 `profile` 模块的登记点上：`OnProfileLevelUp("attribute", …)`，升级时调 `LevelUp(to - from)`，与经验、等级在同一笔事务里。
 - **状态**（都在 `PlayerDao` 上，类型 `AttributeValues`，`db/def/attribute.go`，内容是“属性号 → 值”的 map，值为 0 的属性不存）
   - `AttributeBase`：`persist,sync`，基础属性，落库并下发给本人。没有记录时按档案等级用 `ForLevel` 派生。
@@ -65,7 +65,7 @@
 
 ## 联动
 
-- `attribute` + `equipment`（`with/equipment/game/entities/player/attribute_equipment.go`）：登记 `OnAttributeGear("equipment", …)`，按已穿戴装备与等级算装备层；并登记 `OnEquipmentChanged("attribute", …)`，穿卸装备的同一笔事务里调 `RefreshGear()`。装备规则已被移除的穿戴物不再提供属性。
+- `attribute` + `equipment`（`with/equipment/game/components/attribute/attribute_equipment.go`）：登记 `OnAttributeGear("equipment", …)`，按已穿戴装备与等级算装备层；并登记 `OnEquipmentChanged("attribute", …)`，穿卸装备的同一笔事务里调 `RefreshGear()`。装备规则已被移除的穿戴物不再提供属性。
 - `attribute` + `enter`（`with/enter/game/entities/player/attribute_enter.go`）：登记 `OnFirstEnter("profile.attribute", …)`，首次建档时调 `Refresh()`，按初始等级建立基础层与最终层，与建档一起提交或回滚。
 - `scene` + `attribute`（在 `scene/with/attribute`）：把 `AttributeFinal` 登记为对附近玩家公开的字段，基础层与装备层仍只有本人（或无人）可见。
 - 以 `requires` 依赖它的模块：`combat`（开战时从 `Final()` 取最大生命与攻击）。

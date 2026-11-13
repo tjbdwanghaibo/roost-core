@@ -23,7 +23,7 @@
 
 **登记点 / 钩子**
 
-- 工程钩子 `onLevelUp(from, to)`（`game/entities/player/profile_levelup.go`，**归工程所有**）：升级之后调一次，升级奖励写在这里。
+- 工程钩子 `onLevelUp(from, to)`（`game/components/profile/levelup.go`，**归工程所有**）：升级之后调一次，升级奖励写在这里。
 - 模块钩子 `player.OnProfileLevelUp(name, func(component *ProfileComponent, from, to int32) error)`（`profile_hooks.go`）：别的模块按名字登记，在工程钩子成功之后按名字顺序执行。
 - 两种钩子都在发经验的那笔 Player 事务里：只能改同一个 Player，不能做外部 I/O；任何一个返回错误，经验、等级与全部钩子的写入一起回滚。一次发放连升多级也只调一次，参数是起止等级。
 - `profile.RegisterRenamer(fn)`（`game/profile/rename.go`）：登记事务之外的正式改名入口，全进程只能登记一个（`naming` 用它）。
@@ -56,7 +56,7 @@
 
 - **需求正好是它**：`roost module add profile`，连带装上 `enter`。
 - **需求多一点**：
-  - 升级奖励：改 `game/entities/player/profile_levelup.go` 的 `onLevelUp`（例如装了 wallet 时 `component.owner.WalletComp().Add(int64(to-from) * 50)`）。
+  - 升级奖励：改 `game/components/profile/levelup.go` 的 `onLevelUp`（例如装了 wallet 时 `component.owner.WalletComp().Add(int64(to-from) * 50)`）。
   - 换经验曲线、加等级上限：改 `profile_component.go` 的 `planExp`，保持“不按升级数逐级循环”。
   - 改名字规则：改 `NormalizeProfileName`（`naming` 与新建角色的名字检查都经它）。
   - 加档案字段：别人能看的加在 `ProfileState`，只给本人的加在 `ProfilePrivateState`。
@@ -72,7 +72,7 @@
 
 本模块的 `with/`：
 
-- `profile` + `enter`（`with/enter/game/entities/player/profile_enter.go`）：登记 enter 的首次建档钩子，把等级设为 1，与“已建档”标记同一笔事务；不调升级钩子，重进与冷加载不重置。
+- `profile` + `enter`（`with/enter/game/login/profile_enter.go`）：登记 enter 的首次建档钩子，把等级设为 1，与“已建档”标记同一笔事务；不调升级钩子，重进与冷加载不重置。
 - `profile` + `gm`（`with/gm/game/gm/profile.go`）：运维命令 `gm.player.add_exp`，payload `{player_id, amount, note}`，经 `ProfileAddExp` 的 Sender 发经验；不判重、不自动重试。
 
 别的模块的 `with/profile`：

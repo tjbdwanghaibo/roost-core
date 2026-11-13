@@ -8,8 +8,8 @@
 - **服务端入口**
   - 组件 `ShopComponent`（`game/entities/player/shop_component.go`），经 `IShopEntity` 的 `ShopComp()` 取得：`Buy(key string, goodsID, count, nowUnixMilli int64) (ShopResult, error)`。`ShopResult{Cost, Balance, ItemID, Gained, Held, Bought}` 就是回包与回执里存的内容。
   - Nest handler `handlerShopBuy`（`game/handler/shop_buy.go`）：协议对应的 handler；生成的 Sender 是 `sender.NewShopBuySender(client).Sync_ShopBuy(ctx, playerEntityID, &pb.ShopBuyRequest{…})`。
-  - `shopGoodsByID(goodsID)`（`game/entities/player/shop_goods.go`）：读当前 Nest 请求钉住的配置快照里的一行商品。
-- **登记点**（`game/entities/player/shop_hooks.go`）
+  - `shopGoodsByID(goodsID)`（`game/components/shop/goods.go`）：读当前 Nest 请求钉住的配置快照里的一行商品。
+- **登记点**（`game/components/shop/hooks.go`）
   - `OnShopBought(name, hook)`，`hook` 是 `ShopBoughtHook func(owner *Player, goodsID, count int64, result ShopResult, nowUnixMilli int64) error`。购买第一次生效时执行一次；回执重放与被拒绝的购买不执行。在 Player 锁内、同一笔 Nest 事务里，只改同一个 Player，不做 I/O。只在 `init` 登记；空名、nil、重名 panic。
 - **状态**（`db/def/shop.go`）
   - `PlayerDao.Shop`（`ShopState{Day, Daily, Lifetime}`）：限购计数，落库并同步，玩家本人可见。只给有限购的商品记数。

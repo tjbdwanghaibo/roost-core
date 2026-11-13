@@ -1,6 +1,7 @@
 package scene
 
 import (
+	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"slices"
@@ -22,7 +23,7 @@ import (
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
 	player "{{MODULE}}/game/entities/player"
-	gamescene "{{MODULE}}/game/components/scene"
+	scenecomp "{{MODULE}}/game/components/scene"
 	gameactor "{{MODULE}}/game/components/actor"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/handler"
@@ -465,7 +466,7 @@ var sceneRegionReject atomic.Bool
 var sceneRegionCoded atomic.Bool
 
 func init() {
-	gamescene.OnRegion("scene_test", func(_ *player.Player, event gamescene.RegionEvent) error {
+	scenecomp.OnRegion("scene_test", func(_ view.PlayerEntity, event gamescene.RegionEvent) error {
 		if event.ID == 33 && sceneRegionCoded.Load() {
 			return apperrors.ErrSceneObjectFar
 		}
@@ -474,7 +475,7 @@ func init() {
 		}
 		return nil
 	})
-	gamescene.OnSceneInteract("scene_test", func(p *player.Player, object gamescene.Object) error {
+	scenecomp.OnSceneInteract("scene_test", func(p view.PlayerEntity, object gamescene.Object) error {
 		if object.ID == 71 {
 			s := p.Dao().GetActorSaved()
 			s.SetFacing(s.GetFacing() + 1)
@@ -671,7 +672,7 @@ func TestSceneSensingOnlySeesCommittedPositions(t *testing.T) {
 var sceneStopReject atomic.Bool
 
 func init() {
-	gameactor.OnActor("scene.stop_test", func(*player.Player) actor.Hooks {
+	gameactor.OnActor("scene.stop_test", func(view.PlayerEntity) actor.Hooks {
 		return actor.Hooks{Leave: func(*actor.Body) error {
 			if sceneStopReject.Load() {
 				return errors.New("reject evacuation")

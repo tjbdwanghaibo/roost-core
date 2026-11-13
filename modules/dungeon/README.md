@@ -30,7 +30,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 ### 登记点
 
-`player.OnDungeonClaimed(name, DungeonClaimedHook)`（`game/entities/player/dungeon_hooks.go`）：副本**首次**领奖成功时执行，重复领取不执行。钩子签名 `func(owner *Player, runID, season, nowUnixMilli int64) error`，在 Player 锁内、领奖的同一笔 Nest 事务里，只能改同一个 Player、不能做 I/O；返回错误让奖励、账本、计数一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
+`player.OnDungeonClaimed(name, DungeonClaimedHook)`（`game/components/dungeon/hooks.go`）：副本**首次**领奖成功时执行，重复领取不执行。钩子签名 `func(owner *Player, runID, season, nowUnixMilli int64) error`，在 Player 锁内、领奖的同一笔 Nest 事务里，只能改同一个 Player、不能做 I/O；返回错误让奖励、账本、计数一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
 
 ### 状态
 

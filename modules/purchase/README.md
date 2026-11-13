@@ -68,7 +68,7 @@
 
 ## 联动
 
-- `purchase` + `bag`（`with/bag/game/entities/player/purchase_item.go`）：登记奖励种类 `item`，道具在发货游标的同一笔事务里进背包；背包拒绝（未知道具、放不下）时游标不动。
+- `purchase` + `bag`（`with/bag/game/components/purchase/purchase_item.go`）：登记奖励种类 `item`，道具在发货游标的同一笔事务里进背包；背包拒绝（未知道具、放不下）时游标不动。
 - `purchase` + `enter`（`with/enter/game/controllers/purchase/purchase_enter.go`）：登记 enter 的进入之后钩子，每次进入游戏补领一批；失败只由 enter 记日志，不阻断登录，玩家可以再发 `PurchaseCollect`。
 - 别的模块没有 `with/purchase`。
 

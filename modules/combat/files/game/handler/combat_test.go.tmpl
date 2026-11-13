@@ -29,7 +29,7 @@ import (
 	gamecombat "{{MODULE}}/game/combat"
 	controller "{{MODULE}}/game/controllers/combat"
 	player "{{MODULE}}/game/entities/player"
-	gamecombat "{{MODULE}}/game/components/combat"
+	combatcomp "{{MODULE}}/game/components/combat"
 	gameattr "{{MODULE}}/game/gameplay/attribute"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gameheartbeat "{{MODULE}}/game/heartbeat"
@@ -550,7 +550,7 @@ func TestCombatExternalBuffWriteRejectsWorldRestore(t *testing.T) {
 	f.pair(t)
 	f.mustCast(t, 0, 1, 2, "strike")
 	f.must(t, func() error {
-		f.players[1].CombatComp().Core().ApplyBuff(corecombat.BuffSpec{ID: 99, Tags: []corecombat.Tag{"root"}, DurationTicks: 10}, int64(gamecombat.CombatClock.TickAt(time.UnixMilli(f.now.Load()))), f.players[0].ID())
+		f.players[1].CombatComp().Core().ApplyBuff(corecombat.BuffSpec{ID: 99, Tags: []corecombat.Tag{"root"}, DurationTicks: 10}, int64(combatcomp.CombatClock.TickAt(time.UnixMilli(f.now.Load()))), f.players[0].ID())
 		return nil
 	})
 	f.now.Add(50)

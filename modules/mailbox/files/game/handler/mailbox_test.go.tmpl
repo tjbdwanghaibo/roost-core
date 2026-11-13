@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +12,7 @@ import (
 
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
-	gamemailbox "{{MODULE}}/game/components/mailbox"
+	mailboxcomp "{{MODULE}}/game/components/mailbox"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamemailbox "{{MODULE}}/game/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
@@ -64,10 +65,10 @@ func init() {
 		}
 		return nil
 	})
-	gamemailbox.RegisterMailboxGrant(mailboxTestChest, gamemailbox.MailboxGrant{
-		Grant: func(owner *playerentity.Player, attachment gamemailbox.Attachment) (int64, error) {
+	mailboxcomp.RegisterMailboxGrant(mailboxTestChest, mailboxcomp.MailboxGrant{
+		Grant: func(owner view.PlayerEntity, attachment gamemailbox.Attachment) (int64, error) {
 			mailboxTestChestGrants.Add(1)
-			balance, err := owner.WalletComp().Add(attachment.Amount * attachment.ID)
+			balance, err := owner.Wallet().Add(attachment.Amount * attachment.ID)
 			if err != nil {
 				return 0, err
 			}
@@ -76,9 +77,9 @@ func init() {
 			}
 			return balance + mailboxTestChestHeldOffset, nil
 		},
-		Held: func(owner *playerentity.Player, _ gamemailbox.Attachment) int64 {
+		Held: func(owner view.PlayerEntity, _ gamemailbox.Attachment) int64 {
 			mailboxTestChestHeldReads.Add(1)
-			return owner.WalletComp().Balance() + mailboxTestChestHeldOffset
+			return owner.Wallet().Balance() + mailboxTestChestHeldOffset
 		},
 	})
 }
@@ -637,9 +638,9 @@ func TestMailboxRegisteredTypeIsGrantedOnceInTheClaimTransaction(t *testing.T) {
 // 发放方式的登记是程序结构的一部分：空名、缺 Grant 或 Held、重名、种类没在 game/mailbox 登记过，
 // 都直接 panic，而且不改变已经登记的东西。
 func TestMailboxRegisterGrantRefusesBadRegistrations(t *testing.T) {
-	grant := gamemailbox.MailboxGrant{
-		Grant: func(*playerentity.Player, gamemailbox.Attachment) (int64, error) { return 777, nil },
-		Held:  func(*playerentity.Player, gamemailbox.Attachment) int64 { return 777 },
+	grant := mailboxcomp.MailboxGrant{
+		Grant: func(view.PlayerEntity, gamemailbox.Attachment) (int64, error) { return 777, nil },
+		Held:  func(view.PlayerEntity, gamemailbox.Attachment) int64 { return 777 },
 	}
 	panics := func(register func()) (panicked bool) {
 		defer func() { panicked = recover() != nil }()
@@ -647,25 +648,25 @@ func TestMailboxRegisterGrantRefusesBadRegistrations(t *testing.T) {
 		return false
 	}
 	for name, register := range map[string]func(){
-		"empty name": func() { gamemailbox.RegisterMailboxGrant("", grant) },
+		"empty name": func() { mailboxcomp.RegisterMailboxGrant("", grant) },
 		"no Grant": func() {
-			gamemailbox.RegisterMailboxGrant(mailboxTestVoucher, gamemailbox.MailboxGrant{Held: grant.Held})
+			mailboxcomp.RegisterMailboxGrant(mailboxTestVoucher, mailboxcomp.MailboxGrant{Held: grant.Held})
 		},
 		"no Held": func() {
-			gamemailbox.RegisterMailboxGrant(mailboxTestVoucher, gamemailbox.MailboxGrant{Grant: grant.Grant})
+			mailboxcomp.RegisterMailboxGrant(mailboxTestVoucher, mailboxcomp.MailboxGrant{Grant: grant.Grant})
 		},
-		"a type game/mailbox does not know": func() { gamemailbox.RegisterMailboxGrant("gem", grant) },
-		"the built-in coins again":          func() { gamemailbox.RegisterMailboxGrant(gamemailbox.TypeCoins, grant) },
-		"a registered grant once again":     func() { gamemailbox.RegisterMailboxGrant(mailboxTestChest, grant) },
+		"a type game/mailbox does not know": func() { mailboxcomp.RegisterMailboxGrant("gem", grant) },
+		"the built-in coins again":          func() { mailboxcomp.RegisterMailboxGrant(gamemailbox.TypeCoins, grant) },
+		"a registered grant once again":     func() { mailboxcomp.RegisterMailboxGrant(mailboxTestChest, grant) },
 	} {
 		if !panics(register) {
 			t.Errorf("%s: RegisterMailboxGrant did not panic", name)
 		}
 	}
-	if !gamemailbox.MailboxGrantable(gamemailbox.TypeCoins) || !gamemailbox.MailboxGrantable(mailboxTestChest) {
+	if !mailboxcomp.MailboxGrantable(gamemailbox.TypeCoins) || !mailboxcomp.MailboxGrantable(mailboxTestChest) {
 		t.Fatal("a registered grant is not reported grantable")
 	}
-	if gamemailbox.MailboxGrantable(mailboxTestVoucher) || gamemailbox.MailboxGrantable("gem") || gamemailbox.MailboxGrantable("") {
+	if mailboxcomp.MailboxGrantable(mailboxTestVoucher) || mailboxcomp.MailboxGrantable("gem") || mailboxcomp.MailboxGrantable("") {
 		t.Fatal("a refused registration was recorded")
 	}
 	// 重名的登记没有顶掉内置的金币：金币邮件仍然经货币组件到账。

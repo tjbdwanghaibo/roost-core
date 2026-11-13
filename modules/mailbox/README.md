@@ -32,7 +32,7 @@
 ### 登记点
 
 - `mailbox.RegisterType(kind, Validator)`（`game/mailbox/mailbox.go`）：登记一种附件的名字与校验。校验必须是纯函数，不能读配置表。
-- `player.RegisterMailboxGrant(kind, MailboxGrant{Grant, Held})`（`game/entities/player/mailbox_grant.go`）：登记这种附件怎么发到玩家身上。`Grant` 在领取的那笔事务、Player 锁内执行，只能经同一个 Player 的 DAO 或组件改状态，不能做事务外的事；`Held` 只读，返回当前持有量。
+- `player.RegisterMailboxGrant(kind, MailboxGrant{Grant, Held})`（`game/components/mailbox/grant.go`）：登记这种附件怎么发到玩家身上。`Grant` 在领取的那笔事务、Player 锁内执行，只能经同一个 Player 的 DAO 或组件改状态，不能做事务外的事；`Held` 只读，返回当前持有量。
 - 两处都只在 `init` 里登记，空名、nil、重名 panic；给没有登记过校验的种类登记发放方式也 panic。只登记了校验的种类解得出来、列表里看得见，但不可领。
 
 ### 状态
@@ -111,7 +111,7 @@
 
 ## 与 profile 的升级奖励联动
 
-`roost module add mailbox profile` 安装升级钩子（`OnProfileLevelUp("mailbox", …)`）、可靠 effect 的生产与消费、模块启动接线，不用手写服务初始化。奖励规则归工程：`game/entities/player/mailbox_profile_rules.go` 中的 `MailboxProfileReward(from, to)`，缺省返回零值——不发奖，也不发 effect。这个函数变量只在启动前设置；热更时在函数内部读线程安全的规则源，不并发改写变量。
+`roost module add mailbox profile` 安装升级钩子（`OnProfileLevelUp("mailbox", …)`）、可靠 effect 的生产与消费、模块启动接线，不用手写服务初始化。奖励规则归工程：`game/components/mailbox/mailbox_profile_rules.go` 中的 `MailboxProfileReward(from, to)`，缺省返回零值——不发奖，也不发 effect。这个函数变量只在启动前设置；热更时在函数内部读线程安全的规则源，不并发改写变量。
 
 一次经验发放从 `from` 升到 `to`，**只调用规则一次、生成一封邮件**，奖励覆盖 `from+1…to`。例如每升一级送 10 币，返回 `mailbox.Coins(int64(to-from)*10)`；装了 bag 也可以返回 `mailbox.Item(id, count)`。不要逐级发邮件，不要在规则里做 I/O。非法附件会把错误返回给 Nest，升级、属性成长与奖励 effect 一起回滚。
 

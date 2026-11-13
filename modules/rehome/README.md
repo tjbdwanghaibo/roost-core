@@ -31,7 +31,7 @@
 
 **登记点**（三个时机；有的分事务内与事务外两半，一个功能两半都需要时两处都登记。都只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行）
 
-| 时机 | 事务之外（`game/rehome/rehome_hooks.go`） | 事务之内（`game/entities/player/rehome_hooks.go`） |
+| 时机 | 事务之外（`game/rehome/rehome_hooks.go`） | 事务之内（`game/components/rehome/hooks.go`） |
 | --- | --- | --- |
 | 换服前检查 | `rehome.OnApplying(name, func(ctx, registry, move) error)`：记意图、向 account 发起之前执行。可以问别的服务或进程内状态。返回错误即拒绝，什么都没写 | `player.OnRehomeApplying(name, func(owner *Player, move, nowUnixMilli) error)`：与记意图同一笔 Player 事务。只看这名玩家自己的档。当成只读来写 |
 | 离开时 | `rehome.OnLeaving(name, func(ctx, registry, move) error)`：已受理、玩家已经安静下来（会话已断、先前的请求都执行完、新请求进不来）、实体还没交出。在这里向别的服务问关于他的权威事实，或把他从进程内的东西里拿出来。返回错误即中止这一次换服。可能被重复调用 | 无 |

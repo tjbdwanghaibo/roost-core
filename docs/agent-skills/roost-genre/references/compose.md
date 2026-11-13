@@ -474,26 +474,48 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 
 **新玩家的初始发放**（送金币、满体力）不要按“这次是不是新建的”判断：建档后、发放前进程崩了，这个玩家就永远拿不到。做法是：发放写成一个不对客户端开放的 Nest handler，“发过没有”记在自己的状态里（一个只落库的布尔字段），每次进入游戏在 `GetOrCreate` 之后都经生成的 Sender 调一次它，已发过就什么都不做。入口里这段手写串接没有离线测法（场景测试只到 Nest handler），在报告里列为未测。
 
-## 4D. 多个实体共用一份逻辑
+## 4D. 组件的写法：组件包 + game/view（v1.47.0 起）
 
-两个及以上实体需要同样的逻辑（玩家背包与公会仓库、玩家与全服各有一份活动进度、玩家与怪物都有属性），**做成共用组件，不给每个实体复制一份**。样板是 `modules/activity`（同一个组件挂在 Player、全服 World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
+**每个组件都写在自己的包里，不写进实体包**；实体包只剩实体本体、`_gen` 文件与每个组件一个薄接线文件。包之间靠 `game/view` 里的接口相连，避免循环引用。样板：只挂在 Player 上的组件看 `modules/profile`、`modules/task`；多个实体共用的组件看 `modules/bag`、`modules/wallet`、`modules/attribute`、`modules/activity`（同一个组件挂在 Player、World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
 
-1. **共用逻辑放进独立的包** `game/components/<功能>/`，主文件与包同名（`game/components/<功能>/<功能>.go`；样板是 `modules/bag`、`modules/wallet`、`modules/attribute`）：组件只放逻辑，通过宿主接口拿状态，不写死某个实体类型。
+**依赖方向**（谁 import 谁）：
+
+```
+game/view                 ← 只放接口；只依赖 framework、db、协议类型（以及只有类型的 game/actor、game/gameplay/attribute）
+game/components/<功能>    → game/view（以及它联动的别的组件包）
+game/login、钩子、联动    → game/view、组件包
+game/entities/<实体>      → 组件包、game/login（实体实现 view 的接口）
+game/handler、controllers → 实体包、组件包
+```
+
+组件包、`game/login` 与联动永远不 import 实体包。
+
+1. **组件包** `game/components/<功能>/<功能>.go`：`Component` 类型、宿主接口 `Owner`、工厂 `NewComponent(value any, *entity.EntityCreateParam)`（把 `value` 断言成 `Owner`，断言失败返回错误）。`Owner` 只列组件用得到的东西：
 
    ```go
-   // Owner 是共用组件的宿主：每个实体只提供自己 DAO 里的那份状态与归属。
+   // 只挂在 Player 上、要读写玩家 DAO、要用钱包：
    type Owner interface {
        entity.IThreadSafeEntity
-       <功能>State() *db.<功能>State   // 本实体 DAO 里的嵌套状态
-       <功能>Scope() string            // 归属标识，日志与区分用
+       Dao() *db.PlayerDao
+       view.WalletHolder
+   }
+   // 组件要把整个宿主交给钩子时（升级钩子、签到钩子）：
+   type Owner = view.PlayerEntity
+   // 多个实体共用：只要本实体 DAO 里的那份状态，不写死实体类型
+   type Owner interface {
+       entity.IThreadSafeEntity
+       <功能>State() *db.<功能>State
    }
    ```
 
-   宿主能力不同的地方用可选接口区分（例如只有 Player 有持久定时器，就定义 `deadlineOwner`，组件里用类型断言判断），不要在组件里按实体类型写分支。工厂签名 `NewComponent(value any, *entity.EntityCreateParam)`，把 `value` 断言成 `Owner`，断言失败返回错误。
-2. **状态类型共用，每个实体各存一份**：同一个嵌套结构体放进各自的 DAO，各有自己的 `store` 键，各自落盘、各自回滚。不存在跨实体共享的可变状态，不用进程级变量。
-3. **每个实体一个很薄的接线文件**：自己的组件号（`//roost:component type=<号>`，每个实体单独申请）、类型别名（`type <功能>Component = <功能>.Component`）、`entity.RegisterComponentFactory(<组件号>, <功能>.NewComponent)`、实现 Owner 的方法。
-4. **事务边界不变**：每次调用都在宿主实体自己的 Nest 事务里。两个实体之间搬东西（玩家存进公会仓库）仍走多实体 handler、Remote 或 Saga（第 0A 节），不能因为组件相同就跨实体直接改状态。
-5. **测试**：每个宿主至少一条场景；另加一条证明两个宿主的状态互不影响。
+   宿主能力不同的地方用可选接口区分（例如只有 Player 有持久定时器，就定义 `deadlineOwner`，组件里用类型断言判断），不要在组件里按实体类型写分支。
+2. **game/view**：模块（或工程）给每个组件写 `game/view/component_<功能>.go`，里面两样东西——组件对外的接口 `<功能>`（导出方法里签名只用内建类型、db 类型的那些），以及“带有这个组件”的小接口 `<功能>Holder`（只有访问器 `<功能>() <功能>`）。实体接口 `game/view/entity_<实体>.go` 由 `roost generate` 生成：`<实体>Entity` 嵌入 `entity.IThreadSafeEntity`、实体的 DAO getter 与它挂载的各组件的 `<功能>Holder`；生成器同时在实体上生成访问器 `func (e *Player) <功能>() view.<功能>`。原来的 `<功能>Comp()` 照旧返回具体类型，给 handler 用。
+3. **跨组件调用写访问器**：`host.Wallet().Add(n)`、`c.owner.Bag().Remove(id, 1)`，不写 `Owner().WalletComp()`。组件、钩子与联动只收用得到的最小接口：只要背包的收 `view.BagHolder`，要整个玩家的才收 `view.PlayerEntity`。
+4. **钩子**：登记表放在发出事件的组件包里（`profile.OnProfileLevelUp`、`checkin.OnCheckinClaimed`），钩子收宿主 `func(host view.PlayerEntity, ...) error`；进入相关的 `OnFirstEnter` / `OnCreate` 与工程的首次发放 `enter_first.go` 在 `game/login`。别的功能的联动文件放在**登记方自己的包**里（task 的签到联动在 `game/components/task/task_checkin.go`），进入钩子的联动放在 `game/login/<功能>_enter.go`。不要在别的包里给组件类型声明方法：改成函数，或改成经 view 接口登记的回调。
+5. **每个实体一个很薄的接线文件** `game/entities/<实体>/<功能>_component.go`：自己的组件号（`//roost:component type=<号>`，每个实体单独申请）、类型别名（`type <功能>Component = <功能>.Component`）、handler 用的窄实体接口 `I<功能>Entity`、`entity.RegisterComponentFactory(<组件号>, <功能>.NewComponent)`、实现 `Owner` 的方法（例如 `func (e *Player) BagState() *db.BagState`）。
+6. **共用组件的状态类型共用，每个实体各存一份**：同一个嵌套结构体放进各自的 DAO，各有自己的 `store` 键，各自落盘、各自回滚。不存在跨实体共享的可变状态，不用进程级变量。
+7. **事务边界不变**：每次调用都在宿主实体自己的 Nest 事务里。两个实体之间搬东西（玩家存进公会仓库）仍走多实体 handler、Remote 或 Saga（第 0A 节），不能因为组件相同就跨实体直接改状态。
+8. **测试**：每个宿主至少一条场景；共用组件另加一条证明两个宿主的状态互不影响。组件包里的测试不能 import 实体包（会成环），要实体的测试放在 `game/handler` 或实体包。
 
 已装的模块要挂到第二个实体时，先看它 README 的“复用方式”：写明支持挂到别的实体的，照它的接线说明做；只支持 Player 的，按上面的写法借鉴（第 1 步结论是“借鉴”），不改模块原有的 Player 接线，也不复制模块代码另起一份。
 

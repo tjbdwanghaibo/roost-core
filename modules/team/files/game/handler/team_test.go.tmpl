@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"bytes"
 	"context"
 	"errors"
@@ -599,7 +600,7 @@ var teamHookReject atomic.Bool
 
 func TestTeamProjectionHookFailureRollsBackBothEntities(t *testing.T) {
 	teamHookOnce.Do(func() {
-		gameteam.OnTeamChanged("test-rejection", func(_ *player.Player, _ gameteam.TeamChange) error {
+		gameteam.OnTeamChanged("test-rejection", func(_ view.PlayerEntity, _ gameteam.TeamChange) error {
 			if teamHookReject.Load() {
 				return errors.New("projection hook rejected")
 			}

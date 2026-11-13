@@ -17,13 +17,13 @@
     - `handlerTaskReport`（`task_report.go`）：只给服务端用，不在这名玩家事务里的调用方发 `sender.NewTaskReportSender(client).Sync_TaskReport(ctx, playerEntityID, event, n)`。
     - `handlerTaskAdvance`（`task_advance.go`）：同上，按任务号：`sender.NewTaskAdvanceSender(client).Sync_TaskAdvance(ctx, playerEntityID, taskID, n)`。
 - **登记点**
-  - 奖励种类（`game/entities/player/task_rewards.go`）：`RegisterTaskReward(kind string, handler TaskRewardHandler)`，`TaskRewardHandler{Validate, Grant}`。`Validate` 在建任务目录时校验一行奖励是否合法，`Grant` 在领奖的同一笔事务、Player 锁内发放，只改同一个 Player、不做 I/O。只在 `init` 登记；不完整或重名 panic。内置 `coins`（`RewardID` 必须为 0，经 `WalletComp().Add` 发放）；装了 bag 时多一个 `item`（`RewardID` 是道具号）。
+  - 奖励种类（`game/components/task/rewards.go`）：`RegisterTaskReward(kind string, handler TaskRewardHandler)`，`TaskRewardHandler{Validate, Grant}`。`Validate` 在建任务目录时校验一行奖励是否合法，`Grant` 在领奖的同一笔事务、Player 锁内发放，只改同一个 Player、不做 I/O。只在 `init` 登记；不完整或重名 panic。内置 `coins`（`RewardID` 必须为 0，经 `WalletComp().Add` 发放）；装了 bag 时多一个 `item`（`RewardID` 是道具号）。
   - 事件没有登记表：事件名就是任务表 `event` 列里的字符串，任何功能调 `Report("自己的事件名", n, now)` 即可。
 - **状态**（`db/def/task.go`）：`PlayerDao.Task`（`TaskState{Day, Progress, Claimed, Weekly, Permanent}`，后两个是 `TaskPeriodState{Day, Progress, Claimed}`），落库并同步，玩家本人可见。`Day` 是每日记录所属的业务日（YYYYMMDD），`Weekly.Day` 是每周记录所属那一周的周一（YYYYMMDD），`Permanent.Day` 恒为 0。
 - **配置**
   - 配置表 `task`：结构在 `configs/schema/task.go`（`Task{ID, Event, Period, Target, Previous, RewardKind, RewardID, RewardCount, Disabled}`），数据在 `configs/table/task.csv`。`Period` 取 `daily` / `weekly` / `permanent`；`Target` 是目标次数；`Previous` 是前置任务号（0 表示没有）；`Disabled` 是停用。
   - 缺省三行每日任务：1 号签到 1 次（`checkin.claimed`）奖 20 金币；2 号消费 3 次（`wallet.spent`）奖 30 金币；3 号副本领奖 10 次（`dungeon.claimed`）奖 100 金币。
-  - 任务目录与校验在 `game/entities/player/task_catalog.go`：常量 `TaskMaxID = 4096`，`TaskPeriodDaily` / `TaskPeriodWeekly` / `TaskPeriodPermanent`。
+  - 任务目录与校验在 `game/components/task/catalog.go`：常量 `TaskMaxID = 4096`，`TaskPeriodDaily` / `TaskPeriodWeekly` / `TaskPeriodPermanent`。
 - **错误码**（`internal/errors/task.go`）：`task_unknown`（任务号不存在、停用或这一行不合法）、`task_incomplete`（本周期没做完、未解锁、或周期已过）、`task_claimed`（本周期已领过）、`task_count_invalid`（推进次数不为正）。发奖被拒时透出奖励方的码（如 `wallet_overflow`、背包满）。
 
 ### 任务规则（属于“能力”，逐条对应代码）

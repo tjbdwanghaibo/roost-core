@@ -71,7 +71,7 @@
 
 ## 联动
 
-- `matchmaking` + `rehome`（`with/rehome/game/entities/player/matchmaking_rehome.go`）：有匹配状态（`Phase` 非空）时拒绝换服；档里有换服意图时拒绝排队。两条检查都在各自的 Player 事务里。
+- `matchmaking` + `rehome`（`with/rehome/game/components/matchmaking/matchmaking_rehome.go`）：有匹配状态（`Phase` 非空）时拒绝换服；档里有换服意图时拒绝排队。两条检查都在各自的 Player 事务里。
 - 队伍相关的限制由 `team` + `rehome` 的联动负责，不在这里。
 - 本模块是 `matchroom` 的调用方、`room` 的 `OnRoomJoining` 的间接使用者（经 `matchroom`）。
 
