@@ -7,4 +7,7 @@
 - `mirror-renew-view.txt`：`BenchmarkMirrorRenewView` 逐个 Touch 与 TouchMany 对照（6 轮）。
 - `robot-rerun.json` / `robot-rerun-summary.txt` / `robot-rerun-nats-monitor.txt`：`scripts/test-seamless-demo.sh` 容量档 1000 Robot（20s 测量）复跑，私有 mirror-local 环境（偏移 26000），每 0.5s 采 nats-server `/varz`、`/connz?sort=pending` 与 Redis `--latency-history`。代码是本分支修复后的版本。
 
+- `core-runs-batching-repair.log` / `batching-repair-summary.md`：witness 按区块合批、对齐刷新相位与按缺口修复（`62f88d7a`）前后同机交替各 2 轮（1% / 5%），`before` = e056d3c0，`after` = 62f88d7a；两边都只加了 Base 接收回调占用探针。测量期间宿主机另有压 CPU 的任务，load average 10～30，见每轮的 uptime。
+- `batching-repair-red-green.txt`：三条新回归在 e056d3c0 上的失败输出与修后通过输出。
+
 pprof（CPU / allocs，Cell 与 Base 各进程）与完整日志没有入库，留在排查会话的临时目录。

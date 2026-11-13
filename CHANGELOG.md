@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+- **CellWorld witness 按区块合批、对齐全量刷新相位；复制缺口按对象 / 观察者修复**（cellworld，2026-11-14）：
+  - **升级要求**：内部线上格式 v11 → v12（新增 `replicaReset` 请求体），不兼容旧节点，先停旧再起新。
+  - **合批与相位**：Cell 按观察者所在的刷新区块（边长 2 × ViewRadius）排序后按 Base 合批；成员表全量刷新除了满一个 `ReplicaRefresh`，也在区块相位边界触发（同块观察者同拍刷新，强制全量的成员在一条消息里只编一次）。全量间隔仍不超过 `ReplicaRefresh`，整份视野自包含不变。
+  - **按缺口修复**：有缺口的消息只拒绝解不出的部分——增量对不上的对象删出接收缓存、引用它的视野不交付（成员表照常推进），成员表对不上的观察者不交付；其余视野照常交付。接收方只请求发送方忘掉这些对象与观察者的基线，同一对象 / 观察者每个刷新窗口最多请求一次（原来是整个 peer 清空基线、全部退回全量，Robot 复跑里丢包 → 缺口 → 全量风暴反复）。
+  - **先红后绿**：`TestReplicaLossResetsOnlyWhatItCovers` 修前丢一批后 256 个全量（这一批成员 64）、修后 64；`TestNearbyObserversRefreshTogether` 修前 4 个刷新周期 1280 个全量、修后 256；`TestWitnessesGroupObserversByArea` 修前按 ID 交错。变异 9 条（整 peer 重置、保留坏基线、不完整视野不推进 / 照常交付、去掉相位、按 ID 排序、忘基线不含观察者、去掉请求限频）全部变红。
+  - **测量**（4 Cell，1000 + 9000，同机交替各 2 轮）：全量条目 / s 约 195k → 111k（−43%），Cell 出站 34～35 → 22～23.5MB/s（−34%）；Base 回调占用与 Witness P99 随宿主机负载波动，未据此宣称达标。见 docs/performance/CELLWORLD.md。验证：cellworld `-race` 整包。
+
 - **CellWorld 千人档两处实现开销**（cellworld / sync policy / spatial，2026-11-14，千人容量排查）：行为不变，只减 CPU 与分配。
   - **Base 续活锁争用**：`feedMirrors` 每份视野逐个 `Mirrors.Touch`（千人档约每秒百万次，Nest 快池多个 worker 抢同一把锁），改为新增的 `policy.Mirrors.TouchMany` 整份一次加锁、只对未命中的逐个 `Apply`。5% 档 Base profile 里 feedMirrors 由 10.08s 降到 1.35s（30s 窗口）；`BenchmarkMirrorRenewView`（9000 个 mirror、64 对象视野、并行）6.65µs → 0.66µs。
   - **Cell 区域心跳算 witness**：`QueryRadius` 每个观察者建去重 map 再排序、`seen` 逐个追加扩容、截断时 `sort.Slice` 每次比较重算距离；改为新增的 `spatial.BlockIndex.AppendRadius`（复用缓冲，不建 map）、按 (距离, ID) 排序复用的候选、每份视野只分配一次结果。截断时距离相同按 ID 取（原来是不稳定排序的任意次序）。`BenchmarkRegionWitnesses`（250 观察者、3100 对象）8.44ms → 4.27ms（−49%），12.5MiB → 2.8MiB、8733 → 1704 次分配；4 Cell 测量里区域拍 p50 约 10～13ms → 5～6ms。
