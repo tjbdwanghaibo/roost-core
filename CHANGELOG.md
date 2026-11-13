@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+- **生成器与模块的遗留一批**（codegen / modules，2026-11-14）：
+  - **`roost module verify` 只数顶层场景**（#92）：`verify.pass` 定为顶层测试数，`t.Run` 的子测试不另算；任何一层的 `--- SKIP` 仍算跳过。唯一用子测试的 rehome 由 46 改为 44。
+  - **`-template game` 缺省带 Player 的主 DAO**（#58）：新工程有 `db/def/player.go` 的 `PlayerDao`，模块安装不再列这条前置；照旧再跑 `roost add dao Player --entity Player` 只报已有、不改文件（同一 DAO 已接在该实体上时）。
+  - **嵌套类型的 nil map 往返不再改形状**（#60）：`null` 读回仍是 nil、再写仍是 `null`（原先变成 `{}`）。只改嵌套结构体的读回，顶层 map 本来就稳定。
+  - **模块场景补用例 / 去掉对工程配置表的依赖**：stamina 免费补满（#78，25 → 26）、mailbox 等结果超时而已提交的领取（#83，32 → 33）；purchase+bag、bag+gm 的场景装载自带道具行，工程换表后不变红（#104）。
+  - **Nest 生命周期用例与生成物同步**（#199）：handler 内新建的生命周期用例改用 `wiring/entitylifecycle.Lifecycle[T]` 的逐条同形测试副本，`TestEntityLifecycleTestCopyMatchesWiring` 守卫两边一致；`GetOrCreate` 的“没有记录”改按加载器契约的 `entity.ErrAuthorityEntityNotFound` 判断（DataEngine 下行为不变）。
+  - **金样**：`client/spec/dao-collections.json` 跟上 578fa31f 起增量不带实体 ID（`dao-golden-runtime.sh` 的 `TestTrackedSyncChanges`）。
+  - **nest-game 压测夹具**：`ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch|dispatch`（#15）；独立 Gate 可叠 `SELF_SYNC=1`（#45）；场景 Sync 的 `ROOST_NEST_GAME_LAYOUT=concentrated`、`ROOST_NEST_GAME_OBSERVED_BLOCKS=N` 与首错定位（#178）。`OBSERVED_BLOCKS=4` 的短测在同一处不收敛（Manager 已订阅、客户端缺一个全量），根因尚未确认。对照测量等机器空闲。
+
 - **测试：`TestInterestShrinksAFullSessionToTheNearest/async` 偶发失败已定位为用例的时序假设**（framework/sync/entitysync/policy，2026-11-14）：异步模式的应用线程在第一条事实到达时就走第一步，可能只取走用例还在逐个 `Show` 的前半段；前半段先结算、Manager 按它暂缓，收紧时按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，行为不变）。用例的 `flush` 在结算前先把已登记的事实全部应用（`stepApplier`，与 `flushInterest` 相同）。修前 CPU 满载（10 核上 16 个 `yes`）下 `-race -count=500` 定向失败 36 次；修后 8 个 `yes` 500 次、16 个 `yes` 1000 次、8 个 `yes` + `GOMAXPROCS=2` 500 次全部通过。没有框架行为改动。
 
 - **CellWorld witness 按区块合批、对齐全量刷新相位；复制缺口按对象 / 观察者修复**（cellworld，2026-11-14）：
