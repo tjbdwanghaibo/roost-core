@@ -579,3 +579,142 @@ func TestUnchangedWitnessKeepsMirrorAliveWithoutDirtying(t *testing.T) {
 		t.Fatalf("silent mirror did not expire: %d", got)
 	}
 }
+
+// deadPlayerCell 在单格里放一个已死亡的玩家 Real（入场 1、持有共享授权），返回驱动授权 I/O 的工具。
+// 授权 I/O 由测试逐步执行（executeOwner → handleOwnerResult），不经后台 worker，便于逐步断言共享记录。
+type deadPlayerCell struct {
+	t       *testing.T
+	n       *Node
+	r       *Region
+	scene   *testScene
+	created map[int64]*plainActor
+	pos     spatial.Point
+	fact    DeathFact
+}
+
+func newDeadPlayerCell(t *testing.T, id int64, acked bool) (*deadPlayerCell, *plainActor) {
+	t.Helper()
+	ctx := context.Background()
+	grid := worldGrid(t, 1, 1)
+	c := &deadPlayerCell{t: t, created: map[int64]*plainActor{}, r: NewRegion()}
+	c.n = plainNode(t, grid, CellID{}, c.created)
+	c.n.controls = make(chan queuedSend, 64)
+	c.n.network.init()
+	c.scene = &testScene{EntityBase: fentity.NewEntityBase(-1, fentity.EntityCategoryWorld, true, kindTScene), region: c.r}
+	c.pos = spatial.Point{X: c.n.rect.Min.X + 10, Y: c.n.rect.Min.Y + 10}
+	st := ActorState{EntityState: EntityState{ID: id, Kind: KindPlayer, Base: worldBaseSID, X: c.pos.X, Y: c.pos.Y}, Role: RoleReal, Entry: 1}
+	claimPlain(t, c.n, &st)
+	c.fact = deathFor(OwnerRecord{Actor: st.ID, Life: st.Life})
+	c.fact.ReplySID = c.n.cfg.SID
+	if _, err := c.n.cfg.Owners.recordDeath(ctx, st.Grant, c.fact); err != nil {
+		t.Fatal(err)
+	}
+	if acked {
+		c.ack()
+	}
+	st.Death, st.DeathAcked = &c.fact, acked
+	st.LeaseUntil = time.Now().Add(time.Hour).UnixNano()
+	return c, &plainActor{EntityBase: fentity.NewEntityBase(st.ID, fentity.EntityCategoryOther, true, kindTActor), st: st}
+}
+
+func (c *deadPlayerCell) ack() {
+	c.t.Helper()
+	if _, err := c.n.cfg.Owners.ackDeath(context.Background(), c.fact.Target, c.fact.ID, worldBaseSID); err != nil {
+		c.t.Fatal(err)
+	}
+}
+
+// step 执行实例当前的一笔授权 I/O 并把结论投回 Nest handler。
+func (c *deadPlayerCell) step(a *plainActor) error {
+	c.t.Helper()
+	return c.run(a, c.n.ownerWork(a.st))
+}
+
+// run 执行指定的一笔授权 I/O（心跳产生的死亡确认等）并投回 handler。
+func (c *deadPlayerCell) run(a *plainActor, w ownerWork) error {
+	c.t.Helper()
+	rec, err := c.n.executeOwner(context.Background(), w)
+	if _, herr := c.n.handleOwnerResult([]fentity.IThreadSafeEntity{c.scene, a}, []any{ownerResult{work: w, record: rec, err: err}}); herr != nil {
+		c.t.Fatal(herr)
+	}
+	return err
+}
+
+func (c *deadPlayerCell) enter(a *plainActor, entry uint64) *plainActor {
+	c.t.Helper()
+	var actor Actor
+	if a != nil {
+		actor = a
+	}
+	req := &enterReq{State: EntityState{ID: c.fact.Target, Kind: KindPlayer, X: c.pos.X, Y: c.pos.Y}, Entry: entry}
+	if err := c.n.onEnter(c.r, actor, worldBaseSID, req, time.Now(), &txEffects{}); err != nil {
+		c.t.Fatal(err)
+	}
+	if a != nil {
+		return a
+	}
+	return c.created[c.fact.Target]
+}
+
+func (c *deadPlayerCell) record() OwnerRecord {
+	c.t.Helper()
+	row, _, err := c.n.cfg.Owners.store.Get(context.Background(), c.fact.Target)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return row.Value
+}
+
+// 死亡回执未确认时玩家重新入场：同进程现存 Real 的认领被拒，必须退役它自己持有的授权再销毁；
+// 否则共享记录永远指向一个已不存在的本进程实例，确认之后同进程的每次入场都被拒。
+func TestDeadPlayerReentryBeforeAckRetiresItsOwnGrant(t *testing.T) {
+	c, a := newDeadPlayerCell(t, actorID(77), false)
+	held := a.st.Grant
+	a = c.enter(a, 2)
+	if err := c.step(a); !errors.Is(err, ErrOwnerConflict) {
+		t.Fatalf("re-entry before ack: %v", err)
+	}
+	if a.st.Role != RoleGone {
+		t.Fatalf("refused re-entry left role %v", a.st.Role)
+	}
+	if a.st.Role == RoleGone && a.st.Grant == held {
+		if err := c.step(a); err != nil { // 退役自己的授权
+			t.Fatal(err)
+		}
+	}
+	if row := c.record(); row.Phase != ownerClosed || row.Grant != held {
+		t.Fatalf("destroyed Real left its grant %q in phase %v (grant now %+v)", held.ID, row.Phase, row.Grant)
+	}
+	c.ack()
+	fresh := c.enter(nil, 3)
+	if err := c.step(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.st.Role != RoleReal || fresh.st.Entry != 3 || fresh.st.Death == nil || fresh.st.HP != 0 {
+		t.Fatalf("entry after ack: role=%v entry=%d death=%v hp=%d", fresh.st.Role, fresh.st.Entry, fresh.st.Death != nil, fresh.st.HP)
+	}
+}
+
+// 死亡玩家 Leave(e) 只给内存中的 Real 打上 CloseEntry；随后的 Enter(e+1) 复用这个 Real 时，
+// 关闭标记属于旧入场，不能把新入场在共享记录里关掉。
+func TestDeadPlayerReloginDoesNotCloseTheNewEntry(t *testing.T) {
+	c, a := newDeadPlayerCell(t, actorID(78), true)
+	c.n.onLeave(c.r, a, &leaveReq{ID: a.st.ID, Entry: 1}, time.Now(), &txEffects{})
+	if !a.st.CloseEntry {
+		t.Fatal("leave of a dead player did not request close")
+	}
+	a = c.enter(a, 2)
+	if err := c.step(a); err != nil {
+		t.Fatal(err)
+	}
+	if a.st.Role == RoleGone {
+		_ = c.step(a) // 旧实现：退役并关闭新入场
+	}
+	row := c.record()
+	if a.st.Role != RoleReal || a.st.Entry != 2 || row.Phase != ownerActive || row.ClosedEntry >= 2 {
+		t.Fatalf("relogin: role=%v entry=%d record phase=%v entry=%d closed=%d", a.st.Role, a.st.Entry, row.Phase, row.Entry, row.ClosedEntry)
+	}
+	if _, err := c.n.cfg.Owners.claim(context.Background(), ownerClaim{Actor: a.st.ID, Kind: KindPlayer, Base: worldBaseSID, Entry: 2, Process: c.n.ownerProcess(), Token: a.st.Grant.ID}); err != nil {
+		t.Fatalf("watchdog retry of the same entry: %v", err)
+	}
+}

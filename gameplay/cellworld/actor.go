@@ -136,7 +136,9 @@ func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) a
 			if st.Kind == KindPlayer && nowNano > st.LeaseUntil {
 				st.CloseEntry = true
 			}
-			if nowNano >= st.DeathNextAt {
+			// 回执已确认的尸体是静止对象：只在仍需等确认、或要关闭入场 / 移除 NPC 时再读共享记录。
+			finishing := !st.DeathAcked || st.Kind == KindNPC || st.CloseEntry
+			if finishing && nowNano >= st.DeathNextAt {
 				st.DeathNextAt = now.Add(n.cfg.DeathRetry).UnixNano()
 				fx.owners = append(fx.owners, ownerWork{kind: ownerDeathWork, state: *st})
 			}

@@ -3,6 +3,7 @@ package cellworld
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -114,4 +115,68 @@ func TestReconcileSpawnDoesNotDuplicateMigratedNPC(t *testing.T) {
 		}
 	}
 	w.assertSingleReal(slot.State.ID, CellID{1, 0})
+}
+
+// 死亡已确认、Grant 退役之前 owner 崩溃：记录停在 active + Waiting。出生巡检必须在核实旧进程已死后关闭它，
+// 让槽按复活时间推进下一代，而不是永远等一个不存在的退役。
+func TestSpawnSlotRespawnsAfterOwnerCrashBeforeRetire(t *testing.T) {
+	spec, _ := loopbackSpec(t, 1, 1)
+	w := startWorld(t, spec)
+	home := w.cells[CellID{0, 0}].node
+	r := home.cfg.Owners
+	ctx, cancel := w.ctx()
+	defer cancel()
+	slot := SpawnSpec{Key: "crash-0", Home: home.cfg.SID, State: EntityState{ID: npcID(961), Kind: KindNPC, X: 5000, Y: 5000, HP: 10}}
+	reserved, err := r.prepareSpawn(ctx, slot, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashed := OwnerProcess{SID: home.cfg.SID, Incarnation: "crashed-incarnation"} // 不在存活集合里
+	row, err := r.claim(ctx, ownerClaim{Actor: slot.State.ID, Kind: KindNPC, Generation: reserved.Birth.Generation, Process: crashed, Token: "before-crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact := deathFor(row)
+	fact.At = time.Now().UnixMilli()
+	if _, err = r.recordDeath(ctx, row.Grant, fact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.ackDeath(ctx, row.Actor, fact.ID, worldBaseSID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, settleWithin, "slot respawned", func() (bool, string) {
+		if err := home.ReconcileSpawn(ctx, slot); err != nil {
+			return false, err.Error()
+		}
+		cur, _, err := r.store.Get(ctx, slot.State.ID)
+		s, ok := w.roleOf(CellID{0, 0}, slot.State.ID)
+		return err == nil && cur.Value.Birth.Generation == 2 && ok && s.Role == "real",
+			fmt.Sprintf("gen=%d waiting=%v phase=%v role=%q", cur.Value.Birth.Generation, cur.Value.Birth.Waiting, cur.Value.Phase, s.Role)
+	})
+	w.assertSingleReal(slot.State.ID, CellID{0, 0})
+}
+
+// 活的 owner 尚未退役时，巡检不能替它关闭记录：只有核实旧进程已死才代为收尾。
+func TestSpawnSweepDoesNotCloseALiveOwnersAcknowledgedDeath(t *testing.T) {
+	ctx := context.Background()
+	r, _ := registryForTest(t, func(context.Context, OwnerProcess) (bool, error) { return true, nil })
+	spec := SpawnSpec{Key: "live-0", Home: 101, State: EntityState{ID: npcID(962), Kind: KindNPC, HP: 5}}
+	reserved, _ := r.prepareSpawn(ctx, spec, time.Now())
+	row, err := r.claim(ctx, ownerClaim{Actor: spec.State.ID, Kind: KindNPC, Generation: reserved.Birth.Generation, Process: OwnerProcess{102, "alive"}, Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact := deathFor(row)
+	if _, err = r.recordDeath(ctx, row.Grant, fact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.ackDeath(ctx, row.Actor, fact.ID, worldBaseSID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.closeAbandoned(ctx, spec.State.ID); !errors.Is(err, ErrOwnerConflict) {
+		t.Fatalf("closed a live owner's record: %v", err)
+	}
+	if cur, _, _ := r.store.Get(ctx, spec.State.ID); cur.Value.Phase != ownerActive {
+		t.Fatalf("phase %v", cur.Value.Phase)
+	}
 }

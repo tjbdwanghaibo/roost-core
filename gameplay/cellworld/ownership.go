@@ -281,6 +281,53 @@ func (r *OwnerRegistry) retireEntry(ctx context.Context, actor int64, grant Owne
 	})
 }
 
+// closeAbandoned 代替已死的 owner 关闭一条死亡已确认的 NPC 记录：owner 在死亡确认之后、退役之前崩溃时，
+// 没有本地实例能再按 Grant 退役，出生槽会永远停在 Waiting。与 claim 相同，活性在 CAS 外查询，
+// CAS 内核对整份记录未变；owner 活着返回 ErrOwnerConflict，活性未知返回查询错误，均不关闭。
+func (r *OwnerRegistry) closeAbandoned(ctx context.Context, actor int64) (OwnerRecord, error) {
+	for range versionstore.DefaultMaxAttempts {
+		if err := ctx.Err(); err != nil {
+			return OwnerRecord{}, err
+		}
+		before, found, err := r.store.Get(ctx, actor)
+		if err != nil {
+			return OwnerRecord{}, err
+		}
+		old := before.Value
+		if !found {
+			return OwnerRecord{}, ErrOwnerConflict
+		}
+		if !old.valid(actor) {
+			return OwnerRecord{}, versionstore.ErrMalformedRecord
+		}
+		if old.Phase == ownerClosed {
+			return old, nil
+		}
+		if old.Kind != KindNPC || old.Death.ID == "" || !old.DeathAcked {
+			return old, ErrOwnerConflict
+		}
+		live, err := r.alive(ctx, old.Grant.Process)
+		if err != nil {
+			return OwnerRecord{}, err
+		}
+		if live {
+			return old, ErrOwnerConflict
+		}
+		result, _, err := r.store.Update(ctx, actor, func(current OwnerRecord, exists bool) (OwnerRecord, bool, error) {
+			if !exists || current != old {
+				return current, false, errOwnerObservedChanged
+			}
+			current.Phase = ownerClosed
+			return current, true, nil
+		})
+		if errors.Is(err, errOwnerObservedChanged) {
+			continue
+		}
+		return result.Value, err
+	}
+	return OwnerRecord{}, versionstore.ErrConflict
+}
+
 func (r *OwnerRegistry) update(ctx context.Context, actor int64, change func(OwnerRecord) (OwnerRecord, bool, error)) (OwnerRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return OwnerRecord{}, err
