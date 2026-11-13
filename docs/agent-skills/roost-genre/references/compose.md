@@ -513,7 +513,10 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 **启动顺序（写代码前要知道）**：
 
 - 全部 Mod 先启动（含 Nest 与 ManagerMod，manager 在这一步按依赖顺序 Start），之后才执行 `Service.Init`，World 在那里建出或载入。所以 **manager 的 Start 里不能用 World**，要用就在第一次请求时再取。
-- 其余实体都是第一次访问时才加载或创建，**框架没有实体的启动顺序**：`EntityBuilderParam.LoadPriority` 目前没有被读取，`EntityLifetimeResident` 也只是声明，不会在启动时把实体建出来。几个单例必须在启动时按先后存在时，只能在 `Service.Init` 里照 `EnsureWorld` 的写法按顺序手写，并在报告里说明。
+- 其余实体默认第一次访问时才加载或创建。要在起服时把**本服已有的**某类实体全部载入，在实体注解上写 `preload=startup`；几类之间有先后时加 `preload_order=<N>`（0～1000，小的先载入，同值的一起并发，下一批等上一批结束）。生成器给持有它的服务装预加载 Mod，它在全部框架 Mod 之后、`Service.Init` 之前跑完，所以 `Service.Init` 与第一条请求能直接用这些实体；manager 的 Start 不能假定预加载已完成。单个实体加载失败只记日志、留给按需加载，枚举失败让起服失败。规则与边界见 [Nest 与实体“起服预加载与按服分库”](../../../framework/guide/02-nest-entity.md#起服预加载与按服分库v1470-起)。
+- 预加载只**载入已存在的文档**，不创建实体：开服就必须存在的单例照旧在 `Service.Init` 里照 `EnsureWorld` 的写法按顺序 `GetOrCreate`，并在报告里说明。预加载也不等于常驻：框架不会自动换出实体，但运维卸载、换服、业务的空闲卸载之后它按需重新加载，不会再预加载；`EntityLifetimeResident` 仍只是声明。
+- **DAO 的 `dbscope` 怎么选**：归某一个服的本地实体（玩家、World、房间、地块）用 `dbscope=sid`（`add dao --entity` 的缺省），数据在 `<库>_<sid>`，换服与合服按 sid 库搬它；预加载要求实体的每个 DAO 都是 `dbscope=sid`（global 库各服共用，分不出“本服的实体”）。各服共享、不归某个服的数据才用 `dbscope=global`：Remote 托管实体（联盟、队伍）、跨服共享的配置性数据。拿不准时按 sid，并在报告里写明这类数据换服 / 合服时怎么搬。
+- 需求要求“开服就载入”而实体的 DAO 必须是 global（例如要跨服共享），二者冲突：不要把 DAO 改成 sid 也不要手写枚举，按规则 4 向用户说明，选其一。
 
 ## 4C. 日志
 

@@ -269,7 +269,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
     框架把声明 pipelined 的原生步骤自动加进 Nest 的 pipelined 白名单并只为它们打开异步完成，等 WAL 不占 Nest short 池的 worker，
     配置里不用写 `nest.pipelined.*`（见 [Saga 契约](../docs/framework/SAGA.md)「原生步骤的提交方式」）。
   - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
-    收件人查的是 Player DAO 所在的物理库和集合：DAO 标记的 `db=main` 是逻辑库名，启动时经 `kitdataengine.DAOCollection` 按 `dataengine.databases` 换成物理库（生成配置为 `main: planet`），不是 `dataengine.database`（它只给原生步骤的 inbox 用），也不能把 `db.PlayerDaoDBName` 直接当库名。
+    收件人查的是 Player DAO 所在的物理库和集合：DAO 标记的 `db=main dbscope=sid` 里 `main` 是逻辑库名，按 `dataengine.databases` 换成物理库（生成配置为 `main: planet`），再按收件人当前绑定的 sid（rehome 的 `Binding`：迁出表，再问 account）加 `_<sid>`，经 `kitdataengine.DAOCollection` 打开（`gift_saga.go` 的 `recipientPlayers`）；不是 `dataengine.database`（它只给原生步骤的 inbox 用），也不能把 `db.PlayerDaoDBName` 直接当库名。
     所以登记为 `Steps.Mongo`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，
     见 [Saga 契约](../docs/framework/SAGA.md)），但它只管写进 handler 那笔 Mongo 事务的东西；邮件是 bus 调用，不在事务里，
     被 fence 中止的尝试可能已经发出邮件，所以 mail 服务自己的幂等仍是**必需**的（Send 按 RequestID 去重，RequestID 就是命令的
@@ -530,11 +530,11 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 搬机搬的是 sid，玩家与 sid 的绑定不变（单个玩家换到另一个 sid 是下一节）：旧进程正常停机（断开玩家、WAL 全部投影、释放单实例锁），新机器上同一 sid 的进程用空 WAL 目录接管。`cmd/sidmove` 只做步骤之间的检查：`wal-drained`（旧 WAL 已全部确认，进程还在跑就拒绝）、`singleton`（锁现在被谁持有）、`players`（停旧进程后与新进程写入前的玩家文档是否一致）。步骤、所用能力与本机演练见[参考流程](../docs/framework/PLAYER-MIGRATION.md)。
 
-把一个服并入另一个服（别名合服）用 `cmd/sidmerge` 与 `cmd/accountctl merge-server`：角色身份不变，account 记录“A 并入 B”后会话的承载服是 B，认证器按承载服写 `server_id`、原服写 `origin_server_id`；`sidmerge` 做合服前的检查（两侧 WAL、共享库同处、outbox、saga 终态、持久总线清单）并搬按 sid 分库的数据（game-demo 的 DAO 都在共享库，不用搬）；装配了 account 的 game 进程启动时自检，本服已被并入就拒绝启动。步骤与回退见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)。
+把一个服并入另一个服（别名合服）用 `cmd/sidmerge` 与 `cmd/accountctl merge-server`：角色身份不变，account 记录“A 并入 B”后会话的承载服是 B，认证器按承载服写 `server_id`、原服写 `origin_server_id`；`sidmerge` 做合服前的检查（两侧 WAL、共享库同处、outbox、saga 终态、持久总线清单）并搬按 sid 分库的数据（game-demo 的 Player、World 与地形格编辑器是 `dbscope=sid`，随 `<库>_<A>` 拷进 B 的库；地形块、建筑与地形编辑器在共享库，不用搬）；装配了 account 的 game 进程启动时自检，本服已被并入就拒绝启动。步骤与回退见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)。
 
 ## 把一名玩家换到另一个服（rehome 模块）
 
-单个玩家换服是 `rehome` 模块（`roost module add rehome`，demo 的模块列表里最后一个）：协议 `RehomeApply`（玩家自己申请，受规则文件 `game/rehome/rehome_rules.go` 的可去列表与 7 天冷却约束）与服务端入口（GM 命令 `gm.player.rehome {player_id, to, note}`，不受规则约束）走同一个驱动器。顺序是：源服打“离开中”标记（从此他新的请求在写闸门被拒）→ 换服前检查 → Player 上记意图 → account `BeginRoleTransfer` →（答复客户端“已受理”）→ 断开会话并等标记之前准入的请求执行完 → 事务里把检查再跑一遍 → 离开钩子 → 离开场景、DataEngine 交出实体（屏障保持）→ account `CommitRoleTransfer` → 目标服首次进入时到达（清意图、冷却起算）。提交 / 中止的结论按 account 带回的当前绑定判定，不按错误码（应答丢失之后重发得到的 stale 不等于“没提交”）。换服不搬数据：Player 的档在共享库 `main`，只交接写权。每一步失败的去向见 `game/rehome/rehome_driver.go` 的注释；account 一侧的契约见[参考流程 §7](../docs/framework/PLAYER-MIGRATION.md)。客户端在被受理之后只认一个信号：连接断开，然后重新选角，角色所在的服变了就是换成了。
+单个玩家换服是 `rehome` 模块（`roost module add rehome`，demo 的模块列表里最后一个）：协议 `RehomeApply`（玩家自己申请，受规则文件 `game/rehome/rehome_rules.go` 的可去列表与 7 天冷却约束）与服务端入口（GM 命令 `gm.player.rehome {player_id, to, note}`，不受规则约束）走同一个驱动器。顺序是：源服打“离开中”标记（从此他新的请求在写闸门被拒）→ 换服前检查 → Player 上记意图 → account `BeginRoleTransfer` →（答复客户端“已受理”）→ 断开会话并等标记之前准入的请求执行完 → 事务里把检查再跑一遍 → 离开钩子 → 离开场景、DataEngine 交出实体（屏障保持）→ account `CommitRoleTransfer` → 目标服首次进入时到达（清意图、冷却起算）。提交 / 中止的结论按 account 带回的当前绑定判定，不按错误码（应答丢失之后重发得到的 stale 不等于“没提交”）。Player 的 DAO 是 `dbscope=sid`（v1.47.0 起，档在 `<库>_<sid>`）：交出实体之后先把他的文档复制到目标服的库、再提交，提交后删源服库里的那几份（rehome README“搬档”）。每一步失败的去向见 `game/rehome/rehome_driver.go` 的注释；account 一侧的契约见[参考流程 §7](../docs/framework/PLAYER-MIGRATION.md)。客户端在被受理之后只认一个信号：连接断开，然后重新选角，角色所在的服变了就是换成了。
 
 demo 在模块之上接的线：
 
