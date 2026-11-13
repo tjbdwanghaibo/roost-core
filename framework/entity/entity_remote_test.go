@@ -483,3 +483,31 @@ func TestRemoteSnapshotAcceptsVersionAndPreservesImmutableData(t *testing.T) {
 		t.Fatalf("snapshot source = %v, want cache", snapshot.Source)
 	}
 }
+
+// lifetime=resident 的实体起服时由本服的预加载载入（按服分库枚举），所以它的每个 DAO 都必须是 dbscope=sid：
+// global 库各服共用，“本服的常驻实体”无从界定。注册校验与生成器同一条规则。
+func TestValidateEntityRegistryRejectsAResidentKindWithAGlobalDao(t *testing.T) {
+	isolateEntityRegistry(t)
+	register := func(kind EntityKind, scope DatabaseScope) {
+		MustRegisterEntityKindDefs(EntityKindDef{Kind: kind, Category: EntityCategoryRemote})
+		RegisterEntityBuilder(&EntityBuilderParam{
+			Category: EntityCategoryRemote,
+			Kind:     kind,
+			Lifetime: EntityLifetimeResident,
+			Builder:  func(*EntityCreateParam) (IThreadSafeEntity, error) { return nil, errors.New("never built") },
+			DaoBuilders: []DaoBuilderFunc{func() DaoInterface {
+				return &scopedRegistryDao{factoryTestDao: factoryTestDao{coll: "resident"}, scope: scope}
+			}},
+		})
+	}
+	register(148, DatabaseGlobal)
+	register(149, DatabaseServer)
+
+	err := ValidateEntityRegistry()
+	if !errors.Is(err, ErrResidentDaoScope) || !strings.Contains(err.Error(), "kind=148 ") {
+		t.Fatalf("ValidateEntityRegistry accepted lifetime=resident kind 148 whose DAO is dbscope=global: err=%v", err)
+	}
+	if strings.Contains(err.Error(), "kind=149 ") {
+		t.Fatalf("legal resident kind 149 (dbscope=sid) reported: %v", err)
+	}
+}

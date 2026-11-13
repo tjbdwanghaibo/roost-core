@@ -660,3 +660,50 @@ func TestEntityRangeContract(t *testing.T) {
 		t.Run(name, func(t *testing.T) { rangecontract.Check(t, subject) })
 	}
 }
+
+// lifetime=resident（维护者 2026-11-13）：常驻实体加载之后框架不把它移出内存。只把它从内存卸载的路径
+// （ManagerAccess.Unload、Destroy(deleteFromDB=false)，业务的空闲卸载与运维卸载都经它们）拒绝，实体仍在；删档
+// （deleteFromDB=true）照常。
+func TestResidentEntityStaysInMemory(t *testing.T) {
+	mgr := NewEntityManager()
+	access := NewManagerAccess(mgr)
+	ctx := context.Background()
+	add := func(id int64) *mgrTestEntity {
+		e := newMgrTestEntity(id, testEntityCategoryPlayer)
+		e.Base().SetLifetime(EntityLifetimeResident)
+		mgr.Add(e)
+		return e
+	}
+
+	if _, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
+		return DeleteAdmissionImmediate, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := add(9101)
+	if err := access.Unload(ctx, e); !errors.Is(err, ErrEntityResident) || mgr.Get(9101) == nil {
+		t.Fatalf("ManagerAccess.Unload on a lifetime=resident entity = %v, loaded afterwards: %v; want it refused and the entity still loaded", err, mgr.Get(9101) != nil)
+	}
+	if err := mgr.Destroy(ctx, e, DestroyReasonCommon, false); !errors.Is(err, ErrEntityResident) || mgr.Get(9101) == nil {
+		t.Fatalf("Destroy(deleteFromDB=false) on a lifetime=resident entity = %v, loaded afterwards: %v; want it refused and the entity still loaded", err, mgr.Get(9101) != nil)
+	}
+	if err := mgr.Destroy(ctx, e, DestroyReasonMemoryUnload, false); err == nil || mgr.Get(9101) == nil {
+		t.Fatalf("a memory unload of a lifetime=resident entity = %v; want it refused", err)
+	}
+	// 框架有意移出它的路径（换服交出、删档收尾、运维强制刷新）带许可。
+	released := add(9103)
+	if err := access.Unload(WithResidentRelease(ctx), released); err != nil || mgr.Get(9103) != nil {
+		t.Fatalf("an unload with the framework's resident release = %v, loaded afterwards: %v; want it unloaded", err, mgr.Get(9103) != nil)
+	}
+	// 删档不受常驻约束：实体本身没有了。
+	if err := mgr.Destroy(ctx, e, DestroyReasonCommon, true); err != nil || mgr.Get(9101) != nil {
+		t.Fatalf("deleting a lifetime=resident entity = %v, loaded afterwards: %v; want it deleted", err, mgr.Get(9101) != nil)
+	}
+	// 不是常驻的实体照旧可以卸载。
+	plain := newMgrTestEntity(9102, testEntityCategoryPlayer)
+	mgr.Add(plain)
+	if err := access.Unload(ctx, plain); err != nil || mgr.Get(9102) != nil {
+		t.Fatalf("unloading a hot/cold entity = %v; want it unloaded", err)
+	}
+}

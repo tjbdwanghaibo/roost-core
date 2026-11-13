@@ -83,6 +83,33 @@ func TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission(t *testing
 	}
 }
 
+// 删档不受 lifetime=resident 约束：事务准入之后框架把实体移出内存（只从内存移出的那一步带常驻许可），不 fence。
+func TestDataEngineDeleteFinalizesAResidentEntity(t *testing.T) {
+	manager := entity.NewEntityManager()
+	value := newDeleteTestEntity(705)
+	value.Base().SetLifetime(entity.EntityLifetimeResident)
+	manager.Add(value)
+	var fatal error
+	runtime := &Runtime{Projector: &Projector{}, access: entity.NewManagerAccess(manager), onFatal: func(err error) { fatal = err }}
+	unregister, err := runtime.access.RegisterDeleteAdmitter(runtime.admitEntityDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unregister()
+	_, err = corenest.RunIsolatedTransaction(context.Background(), &deleteRecordingCommitter{}, "delete-resident", func() (any, error) {
+		return nil, manager.Destroy(context.Background(), value, 1, true)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.Get(705) != nil || !value.IsRemoved() {
+		t.Fatalf("deleting a resident entity did not remove it from memory: managed=%v removed=%t", manager.Get(705) != nil, value.IsRemoved())
+	}
+	if fatal != nil {
+		t.Fatalf("deleting a resident entity fenced the runtime: %v", fatal)
+	}
+}
+
 func TestDataEngineDeleteRollbackLeavesEntityLive(t *testing.T) {
 	manager := entity.NewEntityManager()
 	value := newDeleteTestEntity(702)

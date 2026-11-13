@@ -881,3 +881,32 @@ func TestEntityHandOffWithSubscribersReloadsButKeepsRefusingWrites(t *testing.T)
 		t.Fatalf("stored after the write that followed Release = %v", doc)
 	}
 }
+
+// lifetime=resident 的玩家换服：交出照常（写权连同实体一起交给目标服，到了那里加载后常驻），交出期间不在本进程常驻；
+// Release（换服中止、或他换回本服）之后本进程重新拥有他，框架立刻把他载回内存，不等第一次访问。
+func TestResidentEntityIsHandedOffAndReloadedOnRelease(t *testing.T) {
+	f := newUnloadFixtureOfKind(t, 9231, unloadResidentKind)
+	got := receiveHandOff(t, f.handOffAsync(5*time.Second))
+	if got.err != nil || got.handOff == nil || !got.handOff.Resident || !got.handOff.Unloaded {
+		t.Fatalf("HandOffEntity on a lifetime=resident entity = %+v, %v; want it handed off and unloaded", got.handOff, got.err)
+	}
+	if f.manager.Get(f.id) != nil {
+		t.Fatal("the resident entity is still in memory after the hand-off")
+	}
+	if err := f.levelUpRequest(); !refusedAsHandedOff(err) {
+		t.Fatalf("write after the hand-off = %v, want ErrEntityHandedOff", err)
+	}
+	// 被拒的写入冷加载回来的实例：Release 先卸载它（它可能落后于库），再按常驻载回。
+	if err := got.handOff.Release(f.ctx); err != nil {
+		t.Fatalf("Release = %v", err)
+	}
+	if f.manager.Get(f.id) == nil {
+		t.Fatal("after Release the resident entity is not back in memory")
+	}
+	if stats := f.projector.Stats(); stats.HandedOffEntities != 0 || stats.UnloadingEntities != 0 {
+		t.Fatalf("barriers after Release = %+v", stats)
+	}
+	if err := f.levelUpRequest(); err != nil {
+		t.Fatalf("write after Release: %v", err)
+	}
+}

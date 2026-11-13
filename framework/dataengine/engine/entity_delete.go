@@ -86,7 +86,8 @@ func (runtime *Runtime) deferEntityDelete(tx *corenest.RollbackTx, value entity.
 		}
 	}
 	tx.AfterAdmission(func() {
-		if err := runtime.access.Destroy(context.Background(), value, reason, false); err != nil {
+		// 删除已准入：实体本身没有了，lifetime=resident 的实例同样移出内存。
+		if err := runtime.access.Destroy(entity.WithResidentRelease(context.Background()), value, reason, false); err != nil {
 			runtime.fail(fmt.Errorf("dataengine delete: finalize in-memory entity %d: %w", value.ID(), err))
 		}
 	})

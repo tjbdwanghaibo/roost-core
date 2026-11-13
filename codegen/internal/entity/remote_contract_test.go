@@ -288,6 +288,9 @@ func TestLocalPreloadNeedsServerScopedDaos(t *testing.T) {
 		{"sid dao with preload and order", daoSid, " preload=startup preload_order=3", false, "LoadPriority: 3,"},
 		{"sid dao with preload", daoSid, " preload=startup", false, ""},
 		{"unknown scope with preload", "package db\n\ntype PlayerDao struct{}\n", " preload=startup", false, ""},
+		// lifetime=resident 隐含 preload=startup（维护者 2026-11-13）：同一条 DAO 范围规则。
+		{"global dao with resident", daoGlobal, " lifetime=resident", true, ""},
+		{"sid dao with resident and order", daoSid, " lifetime=resident preload_order=2", false, "LoadPriority: 2,"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -324,5 +327,21 @@ func TestLocalPreloadNeedsServerScopedDaos(t *testing.T) {
 				t.Fatalf("wire file LoadPriority: want %q\n%s", tc.loadPriority, raw)
 			}
 		})
+	}
+}
+
+// lifetime=resident 只用于本地持久实体：与 remote=managed、noPersist=true 同写在生成期拒绝（运行期注册时
+// ValidateEntityPolicy 也拒绝，那时已是起服失败）。
+func TestResidentLifetimeMarkerConflicts(t *testing.T) {
+	for _, params := range []map[string]string{
+		{"lifetime": "resident", "remote": "managed"},
+		{"lifetime": "resident", "noPersist": "true"},
+	} {
+		if err := validateMarkerValues(params); err == nil || !strings.Contains(err.Error(), "lifetime=resident applies to a local stored entity") {
+			t.Errorf("%v: err = %v, want the resident conflict refused", params, err)
+		}
+	}
+	if err := validateMarkerValues(map[string]string{"lifetime": "resident"}); err != nil {
+		t.Fatal(err)
 	}
 }

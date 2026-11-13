@@ -200,6 +200,7 @@ func ValidateEntityRegistry() error {
 		if entry.builder != nil {
 			problems = append(problems, remoteManagedDaoScopeProblems(entry.builder)...)
 			problems = append(problems, mixedDaoScopeProblems(entry.builder)...)
+			problems = append(problems, residentDaoScopeProblems(entry.builder)...)
 		}
 	}
 	if len(problems) == 0 {

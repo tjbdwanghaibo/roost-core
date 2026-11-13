@@ -222,6 +222,10 @@ func (handOff *EntityHandOff) Release(ctx context.Context) error {
 		return fmt.Errorf("dataengine hand-off release: the hand-off is still in force: %w", err)
 	}
 	drop()
+	// lifetime=resident：本进程重新拥有它，按常驻立刻载回内存（失败只记 ERROR 与指标，下一次访问照常冷加载）。
+	if entity.IsEntityKindResident(entity.GetEntityKindFromID(id)) {
+		_ = runtime.reloadEntity(ctx, id, "handoff_release")
+	}
 	return nil
 }
 
@@ -260,7 +264,8 @@ func (runtime *Runtime) unloadResident(ctx, local context.Context, id int64) (un
 		if current == nil || !current.AutoPersist() {
 			return
 		}
-		unloadErr = unloadOnce(ctx, runtime.access, current)
+		// 交出把写权连同实体交给别的服：lifetime=resident 的实例同样卸载（framework/entity/resident.go）。
+		unloadErr = unloadOnce(entity.WithResidentRelease(ctx), runtime.access, current)
 		unloaded = current.IsRemoved()
 		resident = !unloaded
 	})

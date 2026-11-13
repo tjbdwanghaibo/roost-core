@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -56,6 +57,8 @@ type EntityUnloadResult struct {
 	Unloaded bool
 	// Drained：屏障登记时该实体在途、本命令等到投影完成的事务数。
 	Drained int
+	// Reloaded：RefreshEntity 卸载之后已把实体从库重新载入内存（新实例）。
+	Reloaded bool
 }
 
 // UnloadEntity 排空实体 id（完整 Entity ID）的在途投影后把它从本进程内存卸载，期间拒绝写到它的事务（见本文件开头）。
@@ -63,7 +66,52 @@ type EntityUnloadResult struct {
 // fctx.ErrBlockingInBusinessWorker，不做任何事。ctx 的截止时间约束取实体锁与等待投影，到期返回
 // ErrEntityUnloadBusy / ErrEntityUnloadTimeout。两者都是确定的“没有卸载”，不包裹 ctx 的错误：admin 审计按
 // context.DeadlineExceeded 把结果记成 unknown，而这里结果是已知的。
+//
+// lifetime=resident 的实体（framework/entity/resident.go）不卸载：返回包着 entity.ErrEntityResident 的错误，屏障都不立，
+// 实体不受影响。要刷新它的内存用 RefreshEntity。
 func (runtime *Runtime) UnloadEntity(ctx context.Context, id int64) (result EntityUnloadResult, err error) {
+	return runtime.unloadEntity(ctx, id, false)
+}
+
+// RefreshEntity 是强制刷新：与 UnloadEntity 同一套屏障、排空、卸载（lifetime=resident 的实体也卸载），然后立刻从库把
+// 实体重新载入内存（Reloaded，新实例）。给“库里的文档被人工修过、要内存跟上”这种运维场景用；常驻实体只能这样刷新，
+// 不会因此离开内存。重新载入失败时实体不在内存（下一次访问照常冷加载），返回错误并记 ERROR 与
+// dataengine.resident_reload_total{result=error}。会等待，只能在业务池之外调用。
+func (runtime *Runtime) RefreshEntity(ctx context.Context, id int64) (result EntityUnloadResult, err error) {
+	result, err = runtime.unloadEntity(ctx, id, true)
+	if err != nil || !result.Resident {
+		return result, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := runtime.reloadEntity(ctx, id, "refresh"); err != nil {
+		return result, fmt.Errorf("dataengine refresh: entity %d was unloaded but not reloaded: %w", id, err)
+	}
+	result.Reloaded = true
+	return result, nil
+}
+
+// reloadEntity 把实体 id 从库载入内存（共享冷加载，与按需加载同一路径），记 dataengine.resident_reload_total。reason
+// 只进指标与日志：refresh（RefreshEntity）/ handoff_release（常驻实体的交出被解除）。
+func (runtime *Runtime) reloadEntity(ctx context.Context, id int64, reason string) error {
+	kind := strconv.Itoa(int(entity.GetEntityKindFromID(id)))
+	_, err := runtime.access.Get(ctx, id, entity.EntityCategoryNone)
+	if err == nil && !runtime.access.IsLoaded(id) {
+		err = errors.New("the entity has no stored document")
+	}
+	if err != nil {
+		metrics.IncCounter("dataengine.resident_reload_total", metrics.Labels{"kind": kind, "reason": reason, "result": "error"}, 1)
+		slog.Error("dataengine: reloading an entity into memory failed; it is loaded on its next access", "entity", id, "reason", reason, "err", err)
+		return err
+	}
+	metrics.IncCounter("dataengine.resident_reload_total", metrics.Labels{"kind": kind, "reason": reason, "result": "ok"}, 1)
+	slog.Info("dataengine: entity reloaded into memory", "entity", id, "reason", reason)
+	return nil
+}
+
+// unloadEntity 是 UnloadEntity / RefreshEntity 的实现；allowResident 为 true 时 lifetime=resident 的实例也卸载。
+func (runtime *Runtime) unloadEntity(ctx context.Context, id int64, allowResident bool) (result EntityUnloadResult, err error) {
 	result.EntityID = id
 	if err := fctx.BlockingError("dataengine.UnloadEntity"); err != nil {
 		return result, err
@@ -85,6 +133,12 @@ func (runtime *Runtime) UnloadEntity(ctx context.Context, id int64) (result Enti
 		return result, nil
 	}
 	result.Resident = true
+	if resident.Base().Lifetime() == entity.EntityLifetimeResident {
+		if !allowResident {
+			return result, fmt.Errorf("dataengine unload: entity %d: %w", id, entity.ErrEntityResident)
+		}
+		ctx = entity.WithResidentRelease(ctx)
+	}
 	// 第 1、3 步需要实体锁，交给 Nest 的业务池（Projector 绑定的 RunLocal）；未装配 Nest 时就地执行。
 	local := entity.WithLocalExecutor(ctx, runtime.Projector.localRun())
 
@@ -189,6 +243,8 @@ func unloadOnce(ctx context.Context, access *entity.ManagerAccess, value entity.
 
 func unloadOutcome(result EntityUnloadResult, err error) string {
 	switch {
+	case errors.Is(err, entity.ErrEntityResident):
+		return "resident"
 	case err == nil && !result.Resident:
 		return "not_resident"
 	case err == nil:

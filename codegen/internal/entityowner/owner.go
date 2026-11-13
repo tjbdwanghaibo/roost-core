@@ -151,6 +151,17 @@ func scanFile(path string) ([]Owned, error) {
 			// 预加载的范围是“所有权记录的 owner 是本 sid 的实体”，所以只对归属某个服务的 Remote 托管 kind 有意义。
 			preload, hasPreload := params["preload"]
 			noPersist := strings.EqualFold(strings.TrimSpace(params["noPersist"]), "true")
+			// lifetime=resident（维护者 2026-11-13）：常驻实体起服时由本服的预加载载入、之后框架不卸载它，只用于本地持久实体；
+			// 它隐含 preload=startup（同写也可以），preload_order 照常排批次。
+			if strings.EqualFold(strings.TrimSpace(params["lifetime"]), "resident") {
+				if remote || noPersist {
+					return nil, fmt.Errorf("%s: //roost:entity lifetime=resident applies to a local stored entity (no remote=managed, no noPersist=true): "+
+						"it is preloaded from this server's database at startup and then stays in memory", where)
+				}
+				if !hasPreload {
+					preload, hasPreload = PreloadStartup, true
+				}
+			}
 			order, err := preloadOrder(where, params, hasPreload, remote)
 			if err != nil {
 				return nil, err

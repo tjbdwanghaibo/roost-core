@@ -257,6 +257,10 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 						}
 					}
 					_, ent.Preload = m.params["preload"]
+					// lifetime=resident 隐含 preload=startup（常驻实体起服时由本服的预加载载入），同一条 DAO 范围规则。
+					if strings.EqualFold(strings.TrimSpace(m.params["lifetime"]), "resident") {
+						ent.Preload = true
+					}
 					if raw, ok := m.params["preload_order"]; ok {
 						order, err := strconv.Atoi(strings.TrimSpace(raw))
 						if err != nil || order < 0 {
@@ -344,6 +348,10 @@ func validateMarkerValues(params map[string]string) error {
 	}
 	if v, ok := params["lifetime"]; ok && !validLifetimeParam(v) {
 		return fmt.Errorf(`lifetime=%q is not one of ephemeral|runtime_rebuild|persisted_hot_cold|resident|remote_managed`, v)
+	}
+	if strings.EqualFold(strings.TrimSpace(params["lifetime"]), "resident") &&
+		(parseRemoteParam(params["remote"]) == "entity.RemotePolicyManaged" || parseBoolParam(params["noPersist"])) {
+		return errors.New("lifetime=resident applies to a local stored entity (no remote=managed, no noPersist=true): it is preloaded from this server's database at startup and then stays in memory")
 	}
 	for _, key := range []string{"noPersist", "sync"} {
 		if v, ok := params[key]; ok && !validBoolParam(v) {

@@ -57,9 +57,9 @@ func validateLocalPreloadDaoScopes(ent EntityDef, dir string) error {
 			return fmt.Errorf("entity %s: inspect DAO %s scope: %w", ent.Name, dao.TypeName, err)
 		}
 		if scope == "global" {
-			return fmt.Errorf("entity %s: preload=startup loads this server's stored %s entities, but DAO field %s (%s, %s) uses dbscope=global, a database every server shares; "+
+			return fmt.Errorf("entity %s: %spreload=startup loads this server's stored %s entities, but DAO field %s (%s, %s) uses dbscope=global, a database every server shares; "+
 				"a local entity's DAOs are dbscope=sid (//roost:dao ... dbscope=sid, one database per server), so change the DAO to dbscope=sid and regenerate, or drop preload=startup",
-				ent.Name, ent.Name, dao.FieldName, dao.TypeName, file)
+				ent.Name, residentNote(ent), ent.Name, dao.FieldName, dao.TypeName, file)
 		}
 	}
 	return nil
@@ -174,6 +174,14 @@ func returnedScope(body *ast.BlockStmt) string {
 		return value.Sel.Name
 	case *ast.Ident:
 		return value.Name
+	}
+	return ""
+}
+
+// residentNote 在 lifetime=resident 的实体上说明预加载从哪来（它隐含 preload=startup）。
+func residentNote(ent EntityDef) string {
+	if ent.Lifetime == "entity.EntityLifetimeResident" {
+		return "lifetime=resident implies "
 	}
 	return ""
 }

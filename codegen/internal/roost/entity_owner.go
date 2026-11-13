@@ -132,7 +132,7 @@ func localPreloadServices(root string, m Manifest, preloads []entityowner.Owned)
 				return nil, fmt.Errorf("%s: entity %s declares service=%s, but roost.yaml has no such service", where, item.Entity, item.Service)
 			}
 			if !hosts(item.Service) {
-				return nil, fmt.Errorf("%s: entity %s is preload=startup and declares service=%s, but that service lacks nest or dataengine, which the startup preload "+
+				return nil, fmt.Errorf("%s: entity %s is preloaded at startup (preload=startup or lifetime=resident) and declares service=%s, but that service lacks nest or dataengine, which the startup preload "+
 					"loads through; run: roost add mod dataengine -service %s (and nest)", where, item.Entity, item.Service, item.Service)
 			}
 			out[item.Service] = true
@@ -142,9 +142,9 @@ func localPreloadServices(root string, m Manifest, preloads []entityowner.Owned)
 		case 1:
 			out[candidates[0]] = true
 		case 0:
-			return nil, fmt.Errorf("%s: entity %s is preload=startup, but no business service has both nest and dataengine to load it at startup", where, item.Entity)
+			return nil, fmt.Errorf("%s: entity %s is preloaded at startup (preload=startup or lifetime=resident), but no business service has both nest and dataengine to load it at startup", where, item.Entity)
 		default:
-			return nil, fmt.Errorf("%s: entity %s is preload=startup, but several services could load it (%s): services of different types may share a sid and so the "+
+			return nil, fmt.Errorf("%s: entity %s is preloaded at startup (preload=startup or lifetime=resident), but several services could load it (%s): services of different types may share a sid and so the "+
 				"same <db>_<sid> database; declare which one with service=<name> on the //roost:entity marker", where, item.Entity, strings.Join(candidates, ", "))
 		}
 	}
@@ -220,7 +220,7 @@ func checkEntityOwnersBeforeGenerate(root string, m Manifest) error {
 	}
 	for _, service := range sortedServiceNames(m) {
 		if localPreloads[service] != strings.Contains(string(raw), localPreloadModCall(service)) {
-			return fmt.Errorf("local preload entities (//roost:entity preload=startup) changed and internal/bootstrap/generated.go does not match for service %s "+
+			return fmt.Errorf("local preload entities (//roost:entity preload=startup or lifetime=resident) changed and internal/bootstrap/generated.go does not match for service %s "+
 				"(want kitdataengine.NewLocalPreloadMod: %v); run: roost project sync (then roost generate)", service, localPreloads[service])
 		}
 	}

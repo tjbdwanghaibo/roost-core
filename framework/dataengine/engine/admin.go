@@ -29,6 +29,9 @@ type UnloadCommand struct {
 	Kind     uint8  `json:"kind,omitempty"`
 	Timeout  string `json:"timeout,omitempty"`
 	Reason   string `json:"reason,omitempty"`
+	// Force 只对 lifetime=resident 的实体有意义：强制刷新（Runtime.RefreshEntity，卸载后立刻从库重新载入）。
+	// 常驻实体不写 force 时命令被拒绝（entity.ErrEntityResident）；别的实体忽略它，照常卸载。
+	Force bool `json:"force,omitempty"`
 }
 
 // RegisterAdminCommands 把实体运维命令注册到 reg（传 app.Lookup(app.ModAdmin) 拿到的实例）。runtime 返回当前的
@@ -41,6 +44,8 @@ type UnloadCommand struct {
 //     所有权在迁移或隔离）、投影超时、不是持久化实体都明确失败，实体不受影响。
 //     玩家在线、仍有 Sync 订阅时，卸载后框架会立刻为订阅者从库重载（nest.unload_resync）；要让实体真正离开内存，先
 //     entity.kick。
+//     lifetime=resident 的实体不卸载：不写 force 时明确失败（entity.ErrEntityResident）；force=true 是强制刷新
+//     （Runtime.RefreshEntity）：卸载后立刻从库重新载入，回答 reloaded=true，实体不离开内存。
 //
 // 命令经 ops 的 /admin/execute 调用，鉴权与审计由 admin 注册表与 ops 统一完成，这里不另设审批（维护者 2026-10-20 决定）。
 func RegisterAdminCommands(reg *admin.Registry, runtime func() *Runtime) error {
@@ -54,7 +59,8 @@ func RegisterAdminCommands(reg *admin.Registry, runtime func() *Runtime) error {
 		Name: AdminCommandEntityUnload,
 		Description: "unload one entity from this process's memory after its admitted transactions are projected: " +
 			"{entity_id | player_id + kind?, timeout?, reason?}. Writes to it are refused (retryable) meanwhile; the next access cold-loads it. " +
-			"Answers resident, unloaded and drained; a busy entity or a projection that does not finish within timeout fails and leaves the entity as it was",
+			"Answers resident, unloaded and drained; a busy entity or a projection that does not finish within timeout fails and leaves the entity as it was. " +
+			"A lifetime=resident entity is not unloaded: without force the command fails; force=true refreshes it (unload, then reload from the store at once; answers reloaded)",
 		Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
 			payload, err := admin.DecodePayload[UnloadCommand](cmd)
 			if err != nil {
@@ -80,12 +86,16 @@ func RegisterAdminCommands(reg *admin.Registry, runtime func() *Runtime) error {
 			}
 			bounded, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			unloaded, err := current.UnloadEntity(bounded, id)
+			unload := current.UnloadEntity
+			if payload.Force && entity.IsEntityKindResident(entity.GetEntityKindFromID(id)) {
+				unload = current.RefreshEntity
+			}
+			unloaded, err := unload(bounded, id)
 			slog.Info("entity.unload", "entity", id, "resident", unloaded.Resident, "unloaded", unloaded.Unloaded, "drained", unloaded.Drained,
-				"reason", payload.Reason, "trace_id", cmd.TraceID, "operator", cmd.Operator, "err", err)
+				"reloaded", unloaded.Reloaded, "force", payload.Force, "reason", payload.Reason, "trace_id", cmd.TraceID, "operator", cmd.Operator, "err", err)
 			result := admin.Result{Data: map[string]any{
 				"entity_id": id, "kind": uint8(entity.GetEntityKindFromID(id)),
-				"resident": unloaded.Resident, "unloaded": unloaded.Unloaded, "drained": unloaded.Drained,
+				"resident": unloaded.Resident, "unloaded": unloaded.Unloaded, "drained": unloaded.Drained, "reloaded": unloaded.Reloaded,
 			}}
 			if err != nil {
 				return result, err

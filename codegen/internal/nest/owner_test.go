@@ -215,6 +215,15 @@ func TestPreloadMarkerRules(t *testing.T) {
 			guild: owned, player: "category=entity.EntityCategoryPlayer lifetime=ephemeral preload=startup",
 			want: "on an entity that is not stored",
 		},
+		// lifetime=resident（维护者 2026-11-13）：常驻实体起服时由本服的预加载载入，只用于本地持久实体。
+		"resident remote entity": {
+			guild: owned + " lifetime=resident",
+			want:  "lifetime=resident applies to a local stored entity",
+		},
+		"resident entity that is not stored": {
+			guild: owned, player: "category=entity.EntityCategoryPlayer noPersist=true lifetime=resident",
+			want: "lifetime=resident applies to a local stored entity",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := ownedProject(t, tc.guild)
@@ -260,5 +269,26 @@ func TestLocalPreloadKindsAreGenerated(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "internal", "registry", "preload_gen.go")); !os.IsNotExist(err) {
 		t.Fatalf("preload_gen.go must be removed when no local entity preloads: %v", err)
+	}
+}
+
+// lifetime=resident 隐含 preload=startup：只写 lifetime=resident（可带 preload_order）也进 preload_gen.go；
+// 两者同写也可以。
+func TestResidentLifetimeImpliesStartupPreload(t *testing.T) {
+	for _, marker := range []string{"lifetime=resident preload_order=3", "lifetime=resident preload=startup"} {
+		t.Run(marker, func(t *testing.T) {
+			root := ownedProject(t, "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance")
+			playerFile := filepath.Join(root, "game", "entities", "player", "entity.go")
+			raw := strings.Replace(readOwned(t, root, "game/entities/player/entity.go"), "category=entity.EntityCategoryPlayer", "category=entity.EntityCategoryPlayer "+marker, 1)
+			if err := os.WriteFile(playerFile, []byte(raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := Run([]string{"-dir", filepath.Join(root, "game")}, io.Discard); err != nil {
+				t.Fatalf("nest with %s: %v", marker, err)
+			}
+			if preload := readOwned(t, root, "internal/registry/preload_gen.go"); !strings.Contains(preload, `player.EntityKindPlayer: "",`) {
+				t.Fatalf("a lifetime=resident Player must be preloaded at startup:\n%s", preload)
+			}
+		})
 	}
 }

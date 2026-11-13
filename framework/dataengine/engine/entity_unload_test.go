@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -26,6 +28,8 @@ import (
 const (
 	unloadTestKind       entity.EntityKind = 230
 	unloadRemoteTestKind entity.EntityKind = 231
+	// unloadResidentKind 与 unloadTestKind 同一个 DAO 与实体类型，lifetime=resident。
+	unloadResidentKind   entity.EntityKind = 224
 	unloadTestCollection                   = "unload_heroes"
 )
 
@@ -84,6 +88,17 @@ func ensureUnloadKinds() {
 			},
 		})
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: 1, Kind: unloadResidentKind, Lifetime: entity.EntityLifetimeResident,
+			DaoBuilders: []entity.DaoBuilderFunc{func() entity.DaoInterface { return &unloadHeroDAO{} }},
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				hero := &unloadHero{EntityBase: entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind), persist: true}
+				if dao, ok := param.Dao[unloadTestCollection].(*unloadHeroDAO); ok {
+					hero.level, hero.version = dao.level, dao.version
+				}
+				return hero, nil
+			},
+		})
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
 			Category: 1, Kind: unloadRemoteTestKind, RemotePolicy: entity.RemotePolicyManaged, Lifetime: entity.EntityLifetimeRemoteManaged,
 			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
 				return &unloadRemoteHero{RemoteEntityBase: entity.NewRemoteEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)}, nil
@@ -111,8 +126,14 @@ type unloadFixture struct {
 // newUnloadFixture：库里 level=1、_version=4；实体已经冷加载进内存（经正式共享加载与 EntityRepository）。
 func newUnloadFixture(t *testing.T, uniqueID int64) *unloadFixture {
 	t.Helper()
+	return newUnloadFixtureOfKind(t, uniqueID, unloadTestKind)
+}
+
+// newUnloadFixtureOfKind 同 newUnloadFixture，实体的 kind 是 kind（unloadTestKind 或 unloadResidentKind）。
+func newUnloadFixtureOfKind(t *testing.T, uniqueID int64, kind entity.EntityKind) *unloadFixture {
+	t.Helper()
 	ensureUnloadKinds()
-	id, err := entity.BuildEntityID(uniqueID, unloadTestKind)
+	id, err := entity.BuildEntityID(uniqueID, kind)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,5 +751,62 @@ func TestEntityUnloadWithoutAuthorityRetractsSubscribers(t *testing.T) {
 	}
 	if stats := f.access.UnloadResyncStats(); stats.Retracted != 1 || stats.Failures != 0 {
 		t.Fatalf("missing authority was retried instead of retracted at once: %+v", stats)
+	}
+}
+
+// lifetime=resident 的实体不被运维卸载：entity.unload 拒绝（entity.ErrEntityResident），实体与屏障都不受影响、照常可写。
+// force=true 是强制刷新：卸载后立刻从库重新载入，实体不离开内存（新实例、状态就是库里的）。
+func TestResidentEntityUnloadIsRefusedAndForceRefreshesIt(t *testing.T) {
+	f := newUnloadFixtureOfKind(t, 9131, unloadResidentKind)
+	if err := f.levelUpRequest(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.projector.Flush(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := f.manager.Get(f.id)
+	got := receiveUnload(t, f.unloadAsync(time.Second))
+	if !errors.Is(got.err, entity.ErrEntityResident) || f.manager.Get(f.id) != before {
+		t.Fatalf("UnloadEntity on a lifetime=resident entity = %+v, %v; still the same instance: %v; want entity.ErrEntityResident and the entity untouched",
+			got.result, got.err, f.manager.Get(f.id) == before)
+	}
+	if stats := f.projector.Stats(); stats.UnloadingEntities != 0 {
+		t.Fatalf("a refused unload left its barrier: %+v", stats)
+	}
+	if err := f.levelUpRequest(); err != nil {
+		t.Fatalf("write after the refused unload: %v", err)
+	}
+	if err := f.projector.Flush(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := admin.NewRegistry()
+	if err := RegisterAdminCommands(reg, func() *Runtime { return f.runtime }); err != nil {
+		t.Fatal(err)
+	}
+	payload := func(force bool) []byte {
+		raw, _ := json.Marshal(map[string]any{"entity_id": f.id, "force": force})
+		return raw
+	}
+	if _, err := reg.Execute(f.ctx, admin.Command{Name: AdminCommandEntityUnload, Payload: payload(false)}); !errors.Is(err, entity.ErrEntityResident) {
+		t.Fatalf("entity.unload without force on a resident entity = %v, want entity.ErrEntityResident", err)
+	}
+	result, err := reg.Execute(f.ctx, admin.Command{Name: AdminCommandEntityUnload, Payload: payload(true)})
+	if err != nil {
+		t.Fatalf("entity.unload force=true = %v", err)
+	}
+	after := f.manager.Get(f.id)
+	if after == nil || after == before || result.Data["reloaded"] != true {
+		t.Fatalf("entity.unload force=true: loaded=%v new instance=%v data=%v; want the entity reloaded from the store", after != nil, after != before, result.Data)
+	}
+	if level, version, ok := f.heroState(); !ok || level != 3 || version != 6 {
+		t.Fatalf("refreshed instance: level=%d version=%d loaded=%v, want the stored 3/6", level, version, ok)
+	}
+	if err := f.levelUpRequest(); err != nil {
+		t.Fatalf("write after the refresh: %v", err)
+	}
+	// 重新载入的实例同样是常驻的：再卸载仍被拒绝。
+	if got := receiveUnload(t, f.unloadAsync(time.Second)); !errors.Is(got.err, entity.ErrEntityResident) || f.manager.Get(f.id) != after {
+		t.Fatalf("UnloadEntity on the refreshed instance = %v; want entity.ErrEntityResident and the instance kept", got.err)
 	}
 }

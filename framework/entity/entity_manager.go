@@ -245,6 +245,11 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// lifetime=resident 的实例不只从内存卸载（resident.go）；删档与框架带许可的路径照常。
+	if err := refuseResidentUnload(ctx, e, reason, deleteFromDB); err != nil {
+		flog.Warn("entity manager: refused to unload a resident entity", "id", e.ID(), "kind", e.GetEntityKind(), "reason", reason)
+		return err
+	}
 	mu, err := m.lockManaged(ctx, e)
 	if err != nil {
 		return err
