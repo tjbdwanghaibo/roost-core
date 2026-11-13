@@ -315,12 +315,12 @@ func (f *terrainFixture) editMutationKeys(site bool) map[dataengine.DocumentKey]
 		}
 		unique, _ := logic.ChunkUnique(2, key)
 		id, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
-		want[dataengine.DocumentKey{Database: db.TerrainChunkDaoDBName, Resource: db.TerrainChunkDaoCollection, ID: id}] = true
+		want[dataengine.DocumentKey{Database: db.TerrainChunkDaoDBName, Scope: dataengine.ResolveDatabaseScope(db.NewTerrainChunkDao()), Resource: db.TerrainChunkDaoCollection, ID: id}] = true
 	}
 	if site {
 		unique, _ := logic.SiteUnique(2, 63, 63)
 		id, _ := entity.BuildEntityID(unique, building.EntityKindTerrainBuilding)
-		want[dataengine.DocumentKey{Database: db.TerrainBuildingDaoDBName, Resource: db.TerrainBuildingDaoCollection, ID: id}] = true
+		want[dataengine.DocumentKey{Database: db.TerrainBuildingDaoDBName, Scope: dataengine.ResolveDatabaseScope(db.NewTerrainBuildingDao()), Resource: db.TerrainBuildingDaoCollection, ID: id}] = true
 	}
 	return want
 }

@@ -153,7 +153,6 @@ func TestAddTimerRefusesWhatItCannotSupport(t *testing.T) {
 		{Kind: "mod", Name: "remote_entity", Service: "game", Warnings: io.Discard},
 		{Kind: "entity", Name: "Npc"},
 		{Kind: "entity", Name: "Guild"},
-		{Kind: "dao", Name: "Guild", Entity: "Guild"},
 		{Kind: "entity", Name: "Monster"},
 		{Kind: "dao", Name: "Monster", Entity: "Monster"},
 		{Kind: "entity", Name: "Hero"},
@@ -180,6 +179,14 @@ func TestAddTimerRefusesWhatItCannotSupport(t *testing.T) {
 	}
 	editFile("game/entities/guild/entity.go", "category=entity.EntityCategoryOther", "category=entity.EntityCategoryRemote remote=managed")
 	editFile("game/entities/guild/entity.go", "*entity.EntityBase", "*entity.RemoteEntityBase")
+	// DAO 在实体改成 remote=managed 之后加：add dao --entity 对 Remote 托管实体写 global（v1.47.0 起本地实体缺省
+	// dbscope=sid；先加 DAO 再改成托管，DAO 留着 sid，generate 会按 ValidateRemoteManagedDaoScopes 的规则拒绝）。
+	if _, err := Add(root, AddOptions{Kind: "dao", Name: "Guild", Entity: "Guild"}); err != nil {
+		t.Fatalf("add dao Guild: %v", err)
+	}
+	if dao := readProjectFile(t, root, "db/def/guild.go"); strings.Contains(dao, "dbscope=sid") {
+		t.Fatalf("the DAO skeleton of a remote=managed entity must stay dbscope=global:\n%s", dao)
+	}
 	editFile("game/entities/monster/entity.go", "category=entity.EntityCategoryOther", "category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral")
 	snapshot, err := snapshotGenerated(root)
 	if err != nil {
