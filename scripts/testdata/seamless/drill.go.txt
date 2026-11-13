@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"MMO_MODULE/game/clientsync"
+	gameattr "MMO_MODULE/game/gameplay/attribute"
 	"MMO_MODULE/loadtest/playertcp"
 	"MMO_MODULE/protocol/msgid"
 	"MMO_MODULE/protocol/pb"
@@ -958,8 +959,19 @@ func run(ctx context.Context) error {
 			return errors.New("p1 does not see itself")
 		}
 		maxBefore, atkBefore, hpBefore := asInt(self.fields["cell_max_hp"]), attackOf(p1), self.hp()
-		if maxBefore <= 0 || atkBefore <= 0 {
-			return fmt.Errorf("before the level-up: cell_max_hp %d cell_attack %d, want a positive level-1 panel", maxBefore, atkBefore)
+		// 面板等于属性模块按当前等级给的缺省值（p1 没有装备）：新角色从 1 级开始（profile 的建档，2026-11-12 起），
+		// 所以不是 0 级的 attack_damage。按同步下来的等级算期望值，而不是只要求为正。
+		ownBefore, ok := p1.ownPlayer()
+		if !ok {
+			return errors.New("p1 does not hold its own Player")
+		}
+		level, ok := clientsync.PlayerLevel(ownBefore.fields)
+		if !ok {
+			return fmt.Errorf("p1's own Player view has no profile level (fields %v)", ownBefore.fields)
+		}
+		wantBefore, wantAfter := gameattr.ForLevel(level), gameattr.ForLevel(level+1)
+		if maxBefore != wantBefore.HP || atkBefore != wantBefore.Attack {
+			return fmt.Errorf("before the level-up: cell_max_hp %d cell_attack %d at level %d, want the level-%d panel %d / %d", maxBefore, atkBefore, level, level, wantBefore.HP, wantBefore.Attack)
 		}
 		resp, err := p1.call(ctx, msgid.MsgAddExp, must(pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 100})))
 		if err != nil {
@@ -972,7 +984,7 @@ func run(ctx context.Context) error {
 		if err := waitFor(ctx, 5*time.Second, "p1's scene actor shows the new panel", func() (bool, string) {
 			s, _ := p1.self()
 			maxAfter, atkAfter = asInt(s.fields["cell_max_hp"]), attackOf(p1)
-			return maxAfter > maxBefore && atkAfter > atkBefore, fmt.Sprintf("cell_max_hp %d cell_attack %d", maxAfter, atkAfter)
+			return maxAfter == wantAfter.HP && atkAfter == wantAfter.Attack, fmt.Sprintf("cell_max_hp %d cell_attack %d, want %d / %d", maxAfter, atkAfter, wantAfter.HP, wantAfter.Attack)
 		}); err != nil {
 			return err
 		}
