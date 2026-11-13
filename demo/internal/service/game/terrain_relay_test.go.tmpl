@@ -269,6 +269,25 @@ func (p *relayProc) brush(seq uint64, b terrain.Brush) (terrainmap.RelayResult, 
 	return p.process.m.RelayBrush(context.Background(), relayPlayer, seq, b, p.relay)
 }
 
+// brushConcluded 照客户端的规则把一次转发笔刷做到有结论：答 Unknown（期限内没拿到格的答复，负载下 300ms 的期限会到）
+// 就用同一个序号重发——Base 的账本答 Again、再转发，格的账本按（玩家, 序号）去重，执行过答 Duplicate、没执行这次执行。
+// 返回最后一次的结果与一共发了几次；最多 20 次，仍没有结论就失败。
+func (p *relayProc) brushConcluded(t *testing.T, seq uint64, b terrain.Brush) (terrainmap.RelayResult, int) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		result, err := p.brush(seq, b)
+		if err != nil {
+			t.Fatalf("brush %d (attempt %d) refused before forwarding: %v", seq, attempt, err)
+		}
+		if result.Part.Answer.Outcome != terrainmap.OutcomeUnknown {
+			return result, attempt
+		}
+		if attempt == 20 {
+			t.Fatalf("brush %d: still no conclusion after %d attempts: %+v", seq, attempt, result)
+		}
+	}
+}
+
 // version 是本进程写的一块的 DAO 版本（没有实体时 0）。
 func (p *relayProc) version(t *testing.T, key terrain.ChunkKey) int64 {
 	t.Helper()
@@ -318,17 +337,21 @@ func TestTerrainRelayForwardsABrushToTheCellThatWritesIt(t *testing.T) {
 	if keys := raise.Chunks(c.process.m.Meta()); len(keys) != 1 || keys[0] != relayRight {
 		t.Fatalf("the brush covers %v, want only %v", keys, relayRight)
 	}
-	result, err := c.brush(1, raise)
-	if err != nil || result.Err() != nil {
-		t.Fatalf("forwarded brush: %+v %v %v", result, err, result.Err())
+	// 负载下格的答复可能晚于 Base 的期限（Unknown）：按客户端的规则用同一个序号重发到有结论。只发一次时必须是
+	// Applied、Base 账本发的是新号；重发过时 Base 账本答 Again，格答 Applied（第一次没执行到）或 Duplicate（执行过）——
+	// 两种都只执行一次，下面块版本 1、格账本 1 照样成立。
+	result, attempts := c.brushConcluded(t, 1, raise)
+	if result.Err() != nil {
+		t.Fatalf("forwarded brush: %+v %v", result, result.Err())
 	}
-	if result.Part.SID != partitionSidB || result.Part.Answer.Outcome != terrainmap.OutcomeApplied {
-		t.Fatalf("forwarded brush went to %d with %v, want cell %d applied", result.Part.SID, result.Part.Answer.Outcome, partitionSidB)
+	outcome := result.Part.Answer.Outcome
+	if result.Part.SID != partitionSidB || !(outcome == terrainmap.OutcomeApplied || attempts > 1 && outcome == terrainmap.OutcomeDuplicate) {
+		t.Fatalf("forwarded brush went to %d with %v after %d attempts, want cell %d applied", result.Part.SID, outcome, attempts, partitionSidB)
 	}
-	if result.Again || result.LastSeq != 1 {
-		t.Fatalf("base ledger: again %v last %d", result.Again, result.LastSeq)
+	if result.Again != (attempts > 1) || result.LastSeq != 1 {
+		t.Fatalf("base ledger after %d attempts: again %v last %d", attempts, result.Again, result.LastSeq)
 	}
-	if answer := result.Part.Answer; answer.Points <= 0 || len(answer.Chunks) != 1 || answer.Chunks[0].Version != 1 {
+	if answer := result.Part.Answer; outcome == terrainmap.OutcomeApplied && answer.Points <= 0 || len(answer.Chunks) != 1 || answer.Chunks[0].Version != 1 {
 		t.Fatalf("the cell's answer: %+v", answer)
 	}
 	want := expectBrushes(t, b.process.m, w.pack, raise)
@@ -340,25 +363,27 @@ func TestTerrainRelayForwardsABrushToTheCellThatWritesIt(t *testing.T) {
 		t.Fatalf("the other cell took part: %d requests, ledger %+v", a.relay.requestsIn.Load(), a.cellLedger(t))
 	}
 	// 玩家在格 101 上：落在邻格的笔刷整份走网络。
+	// 经网络的请求数不是恒为 1：期限内没拿到答复时 Base 每 10ms 按同一身份重发（格去重）。这里断言它确实走了网络，
+	// 执行次数由下面的块版本与格账本断言。
 	sentBefore := a.relay.requestsOut.Load()
-	result, err = a.brush(2, cellBrush(relayRight, terrain.BrushLower, 0))
-	if err != nil || result.Err() != nil || result.Part.SID != partitionSidB {
-		t.Fatalf("from a cell into the neighbour: %+v %v %v", result, err, result.Err())
+	result, _ = a.brushConcluded(t, 2, cellBrush(relayRight, terrain.BrushLower, 0))
+	if result.Err() != nil || result.Part.SID != partitionSidB {
+		t.Fatalf("from a cell into the neighbour: %+v %v", result, result.Err())
 	}
-	if sent := a.relay.requestsOut.Load() - sentBefore; sent != 1 {
-		t.Fatalf("%d requests went over the net, want the one to the neighbour", sent)
+	if sent := a.relay.requestsOut.Load() - sentBefore; sent < 1 {
+		t.Fatalf("%d requests went over the net, want the brush sent to the neighbour", sent)
 	}
 	// 落在本格的笔刷直接执行。
 	sentBefore = a.relay.requestsOut.Load()
-	result, err = a.brush(3, cellBrush(relayLeft, terrain.BrushRaise, 0))
+	result, err := a.brush(3, cellBrush(relayLeft, terrain.BrushRaise, 0))
 	if err != nil || result.Err() != nil || result.Part.SID != partitionSidA {
 		t.Fatalf("from a cell into itself: %+v %v %v", result, err, result.Err())
 	}
 	if sent := a.relay.requestsOut.Load() - sentBefore; sent != 0 {
 		t.Fatalf("%d requests went over the net for the cell's own ground", sent)
 	}
-	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 2 {
-		t.Fatalf("versions %d %d", a.version(t, relayLeft), b.version(t, relayRight))
+	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 2 || b.cellLedger(t).Last != 2 {
+		t.Fatalf("versions %d %d, cell %d ledger %+v (each brush applied exactly once)", a.version(t, relayLeft), b.version(t, relayRight), b.sid, b.cellLedger(t))
 	}
 }
 
