@@ -2,6 +2,8 @@
 set -euo pipefail
 
 # Build an isolated demo from this checkout. Existing demo deployments are untouched.
+# ROOST_SYNC_SCHEDULE=on_change measures the production wiring (Nest commit observer, on_change scene with the
+# per-kind schedules); the default periodic keeps the historical constructor. Alternate both on one machine to compare.
 readonly repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly label="${ROOST_PERF_LABEL:-business-$(date +%Y%m%d-%H%M%S)}"
 [[ "$label" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid ROOST_PERF_LABEL' >&2; exit 2; }
@@ -21,7 +23,7 @@ export GOMAXPROCS="${ROOST_PERF_CPU:-0}"
  go env GOOS GOARCH GOWORK
  git -C "$repo_dir" rev-parse HEAD
  git -C "$repo_dir" status --short
- printf 'GOMAXPROCS=%s repeats=%s ticks=%s hz=%s case=%s\n' "$GOMAXPROCS" "$repeats" "${ROOST_SYNC_TICKS:-200}" "${ROOST_SYNC_HZ:-20}" "${ROOST_SYNC_CASE:-all}"
+ printf 'GOMAXPROCS=%s repeats=%s ticks=%s hz=%s case=%s schedule=%s\n' "$GOMAXPROCS" "$repeats" "${ROOST_SYNC_TICKS:-200}" "${ROOST_SYNC_HZ:-20}" "${ROOST_SYNC_CASE:-all}" "${ROOST_SYNC_SCHEDULE:-periodic}"
  printf 'custom_players=%s custom_dirty_percent=%s custom_layout=%s\n' "${ROOST_SYNC_PLAYERS:-64}" "${ROOST_SYNC_DIRTY_PERCENT:-10}" "${ROOST_SYNC_LAYOUT:-hotspot}"
 } > "$output_dir/env.txt"
 (cd "$repo_dir" && go build -o "$scratch/roost" ./codegen/cmd/roost)
