@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **完整测试**（2026-11-13，修复分支 `633d5098` 并入主线之后，本机 macOS）：全仓 `go test ./...` 165 个包全部通过；`scripts/test-modules-generated.sh` 通过（42 个模块、47 组联动）；新生成的 game-demo build / vet / `roost id check` / `roost generate --check` 通过，自己的 `go test ./...` 62 个包通过，`roost module verify` 通过；codegen 的 `TestDemo|TestModule|TestRecipe` 通过、零 SKIP（1831s）；文档锚点 344 个文件无断链。
+
 - **修复**（modules，2026-11-13）：Scene / Terrain 控制器在 Provide 阶段不再提前要求 Start 才发布的 runtime，改为请求时从 Registry 读取；不改变开图、持久化与退出生命周期。夹具按正式构造 / 启动顺序执行，修前双模块失败、修后 race 与新生成工程检查通过；真实依赖下 11 个服务启动、Portal / TCP 业务拒绝后同连接继续切图和地形查询通过，见[验收 §7](docs/maintenance/evidence/module-fixes-20261112/README.md#7-scene--terrain-启动时序修复2026-11-13)。
 
 - **修复与补齐**（modules，2026-11-12）：收敛模块交接草稿，业务拒绝使用稳定错误码；修复 activity 进入实体号、联盟创建活动毫秒换算、装备同件换等级、地形恢复 ABA；补齐联盟管理协议、组队邀请查询/推送、战斗结束恢复与 Skillbook 联动；好友离线单边操作与双边归属边界、Notice 的 GM 审计、只读声明、独立客户端接线、场景数及文档同步整理。验收、原问题变异证据和未覆盖边界见[本轮报告](docs/maintenance/evidence/module-fixes-20261112/README.md)。不改核心框架执行契约。
