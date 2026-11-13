@@ -48,7 +48,7 @@ func TestModuleAllianceGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("alliance: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"bag": 17, "alliance": 55})
+	checkTaskModuleRows(t, report, map[string]int{"bag": 20, "alliance": 55})
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "alliance", "--service", "game")
 	if before != moduleProjectDigest(t, root) {
@@ -59,7 +59,7 @@ func TestModuleAllianceGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("combined: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"alliance": 55, "bag": 17, "team": 35, "rehome": 40, "enter": 29, "alliance+enter": 2, "alliance+rehome": 2, "rehome+enter": 5, "team+rehome": 2})
+	checkTaskModuleRows(t, report, map[string]int{"alliance": 55, "bag": 20, "team": 35, "rehome": 40, "enter": 29, "alliance+enter": 2, "alliance+rehome": 2, "rehome+enter": 5, "team+rehome": 2})
 	m, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)

@@ -15,8 +15,8 @@ TCP (player access)
   → game/handler/syncsender/…Sync_AddItem     Sender（从 handler 参数与返回值生成）
   → Nest 锁住 Player
   → game/handler/add_item.go                  handlerAddItem（本目录）：int32 的协议数量在这里转成模块的 int64
-  → BagComponent.Add                          bag 模块：数量为正 → 道具规则 → 单种上限 → 种类数上限 → 只走生成的 mutator
-      ↳ bag_items.go 的 bagItemRule            bag 模块留给工程的规则文件；缺省读道具表，demo 没有改它
+  → BagComponent.Add                          bag 模块的共用组件（game/components/bag）：数量为正 → 道具规则 → 单种上限 → 种类数上限 → 只走生成的 mutator
+      ↳ items.go 的 ItemRule                   bag 模块留给工程的规则文件（game/components/bag/items.go）；缺省读道具表，demo 没有改它
       ↳ configs/generated.ItemByID             生成的表访问器，读的是钉在本次请求上的配置快照
       ↳ internal/errors.ErrBag*                bag 模块的错误码（internal/errors/bag.go），号在安装时从清单的 errcode 号段分配
   → PlayerDao.Bag 的 SetItemsKey / DelItemsKey 生成的嵌套 map mutator，带 dirty / undo / patch
@@ -24,13 +24,13 @@ TCP (player access)
 ```
 
 **背包是 [bag 业务模块](../modules/README.md)，不是 demo 自己的代码**：`-template game-demo` 生成时由 `roost module add bag`
-装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。模块带来组件
-`BagComponent`（`Add` / `Remove` / `Count` / `Has`）、状态 `PlayerDao.Bag`（嵌套结构体，存储键 `bag`）、道具表
+装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。模块带来共用组件
+`game/components/bag`（`Add` / `Remove` / `Count` / `Has`，Player 上的名字是 `BagComponent`，接线在 `game/entities/player/bag_component.go`）、状态 `PlayerDao.Bag`（嵌套结构体，存储键 `bag`）、道具表
 （`configs/schema/item.go` 与 `configs/table/item.csv`）、五个错误码、丢弃协议 `BagDiscard` 与服务端发放 handler `BagGrant`，
-以及它自己的 17 条场景（`roost module verify`）。demo 在它之上做的：
+以及它自己的 20 条场景（`roost module verify`）。demo 在它之上做的：
 
 - **只换道具表的数据**：模块装好之后覆盖 `configs/schema/item.go` 与 `configs/table/item.csv`——多 `attack` / `hp` 两列
-  （属性系统给穿着的装备算加成），行是 demo 的五种道具。背包规则文件 `game/entities/player/bag_items.go` 是模块的缺省实现：
+  （属性系统给穿着的装备算加成），行是 demo 的五种道具。背包规则文件 `game/components/bag/items.go` 是模块的缺省实现：
   表里有这一行道具号就合法，`max_stack` 是单种上限（0 表示不单独限制，按硬上限 999999）。加道具、改上限只改 CSV。
 - **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放，
   都在自己的 Nest handler 里调 `target.BagComp().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`

@@ -19,8 +19,9 @@ type IPlayerEntity interface{ entity.IThreadSafeEntity }
 // IPlayerFullEntity is for a handler that needs several components at once —
 // equipping touches the bag, the equipment and the attribute container, and
 // they have to move in one transaction. The Bag component is the bag
-// module's (bag_component.go, installed by `roost module add bag`, which also
-// appends its field to the Player struct below).
+// module's (the shared component in game/components/bag, wired to the Player
+// by bag_component.go; installed by `roost module add bag`, which also appends
+// its field to the Player struct below).
 type IPlayerFullEntity interface {
 	entity.IThreadSafeEntity
 	BagComp() *BagComponent

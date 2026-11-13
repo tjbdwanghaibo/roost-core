@@ -99,7 +99,7 @@ func (c *shopCommitter) Commit(context.Context, dataengine.CommitRecord) error {
 }
 
 // shopTestLoadTables 装载测试自己的道具与商品表，测试结束时原样换回。背包按道具表判断
-// 道具号存不存在、单种上限是多少（game/entities/player/bag_items.go），没有装载过配置的进程里
+// 道具号存不存在、单种上限是多少（game/components/bag/items.go），没有装载过配置的进程里
 // 任何道具都放不进背包。用例自己带表，不用工程的 configs/table/item.csv：那张表归工程所有。
 // 表里的道具都不单独限制（max_stack 为 0），按背包的硬上限 999999 算。
 //

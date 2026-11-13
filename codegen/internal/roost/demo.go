@@ -814,7 +814,7 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "game/leaderboard/leaderboard_board_test.go", why: "the demo's board rules pinned with literal numbers, in place of the module's test of its default board"},
 		// 背包是 bag 模块：组件（Add / Remove / Count / Has）、PlayerDao.Bag、道具表、丢弃协议、服务端发放 handler、
 		// 错误码都来自模块，demo 不带自己的背包。demo 只换数据：道具表多两列（attack / hp，属性系统按它给穿着的装备算加成），
-		// 行是 demo 的四种道具。背包的规则文件 bag_items.go 用模块的缺省实现（读这张表），不覆盖。
+		// 行是 demo 的四种道具。背包的规则文件 game/components/bag/items.go 用模块的缺省实现（读这张表），不覆盖。
 		{write: "configs/schema/item.go", why: "the bag module's item table with the demo's two extra columns: what a worn item adds to attack and hp"},
 		{write: "configs/table/item.csv", why: "the demo's rows: two potions, a sword, the gold coin; converted to configs/data/item.json by generate"},
 		{write: "configs/table/equipment_item.csv", why: "the demo equipment rules; transaction and attribute linkage belong to the modules"},

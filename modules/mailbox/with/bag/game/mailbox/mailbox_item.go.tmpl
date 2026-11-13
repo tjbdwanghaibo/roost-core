@@ -24,7 +24,7 @@ func init() {
 // validateItem 是道具附件的校验：道具号必须为正（数量为正由 Validate 统一判断）。
 //
 // 这里只挡“肯定不是道具”的号。道具号在不在道具表里、这么多放不放得进背包，是背包在发放时的判断
-// （game/entities/player/bag_items.go 与 BagComponent.Add）：校验函数必须是纯函数，不读配置表，
+// （game/components/bag/items.go 与 bag.Component.Add）：校验函数必须是纯函数，不读配置表，
 // 也不能把背包的上限在这里再写一份。所以发件方要自己保证道具号存在、数量不超过单种上限——
 // 否则这封邮件每次领取都被背包拒绝（bag_item_invalid / bag_stack_full），一直留在邮箱里直到过期。
 func validateItem(attachment Attachment) error {

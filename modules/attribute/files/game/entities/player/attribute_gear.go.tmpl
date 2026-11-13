@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"{{MODULE}}/game/components/attribute"
 	gameattr "{{MODULE}}/game/gameplay/attribute"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -45,7 +46,7 @@ func attributeGear(owner *Player) (*gameattr.Combat, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !attributeSafe(p) || out.HP > math.MaxInt64/4-p.HP || out.Attack > math.MaxInt64/4-p.Attack {
+		if !attribute.Safe(p) || out.HP > math.MaxInt64/4-p.HP || out.Attack > math.MaxInt64/4-p.Attack {
 			return nil, apperrors.ErrAttributeOverflow
 		}
 		out.SetHP(out.HP + p.HP)

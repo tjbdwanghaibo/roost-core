@@ -326,17 +326,20 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("%s carries the development login or the dev server directory:\n%s", rel, production)
 		}
 	}
-	// 背包是 bag 模块装进来的（demoModuleSteps），demo 自己不带一份：组件、PlayerDao.Bag、错误码与道具表的
-	// 落点都记在 roost.yaml 的 modules.bag 下。组件只经生成的 mutator 改状态；道具号与单种上限的规则在
-	// 模块的 bag_items.go 里，读生成的道具表访问器——demo 只换了道具表的列与行，没有覆盖这个规则文件。
-	if bag := read("game/entities/player/bag_component.go"); !strings.Contains(bag, "bag.SetItemsKey(") || !strings.Contains(bag, "bagItemRule(itemID)") || strings.Contains(bag, "PublishSyncDirty") {
+	// 背包是 bag 模块装进来的（demoModuleSteps），demo 自己不带一份：共用组件、Player 的接线、PlayerDao.Bag、
+	// 错误码与道具表的落点都记在 roost.yaml 的 modules.bag 下。组件只经生成的 mutator 改状态；道具号与单种上限的
+	// 规则在模块的 game/components/bag/items.go 里，读生成的道具表访问器——demo 只换了道具表的列与行，没有覆盖这个规则文件。
+	if bag := read("game/components/bag/component.go"); !strings.Contains(bag, "bag.SetItemsKey(") || !strings.Contains(bag, "ItemRule(itemID)") || strings.Contains(bag, "PublishSyncDirty") {
 		t.Errorf("the bag component is not the bag module's:\n%s", bag)
 	}
-	if rule := read("game/entities/player/bag_items.go"); !strings.Contains(rule, "generated.ItemByID(itemID)") {
+	if wiring := read("game/entities/player/bag_component.go"); !strings.Contains(wiring, "type BagComponent = bag.Component") {
+		t.Errorf("the Player's bag wiring is not the bag module's:\n%s", wiring)
+	}
+	if rule := read("game/components/bag/items.go"); !strings.Contains(rule, "generated.ItemByID(itemID)") {
 		t.Errorf("the bag's item rule does not read the item table:\n%s", rule)
 	}
 	manifestText := read("roost.yaml")
-	for _, owned := range []string{"    bag:\n", "- PlayerDao.Bag", "- game/entities/player/bag_component.go", "- game/entities/player/bag_items.go",
+	for _, owned := range []string{"    bag:\n", "- PlayerDao.Bag", "- game/entities/player/bag_component.go", "- game/components/bag/component.go", "- game/components/bag/items.go",
 		"- configs/schema/item.go", "- configs/table/item.csv", "- internal/errors/bag.go", "bag_stack_full:", "BagDiscard:"} {
 		if !strings.Contains(manifestText, owned) {
 			t.Errorf("roost.yaml does not record %q under the bag module", owned)

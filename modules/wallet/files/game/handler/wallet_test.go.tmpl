@@ -61,7 +61,7 @@ type walletFixture struct {
 	committer *walletCommitter
 }
 
-func newWalletFixture(t *testing.T) *walletFixture {
+func newWalletFixture(t *testing.T, others ...entity.IThreadSafeEntity) *walletFixture {
 	t.Helper()
 	playerentity.RegisterEntity()
 	RegisterWalletSpendNestHandlers()
@@ -76,7 +76,11 @@ func newWalletFixture(t *testing.T) *walletFixture {
 		t.Fatal(err)
 	}
 	f.player = built.(*playerentity.Player)
-	f.engine = nest.NewEngine(nest.NestOptionWithGetter(walletGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+	getter := walletGetter{id: built}
+	for _, other := range others {
+		getter[other.ID()] = other
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(f.committer),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
@@ -150,7 +154,7 @@ func (f *walletFixture) call(op, key string, delta int64, swallow bool) (int64, 
 				balance, err = component.Apply(params[1].(string), params[2].(int64))
 			case "store":
 				// 直接改存着的余额，不经组件：只用来摆出组件自己写不出来的状态。
-				component.Owner().Dao().GetWallet().SetCoins(params[2].(int64))
+				es[0].(*playerentity.Player).Dao().GetWallet().SetCoins(params[2].(int64))
 				balance = params[2].(int64)
 			default:
 				return nil, fmt.Errorf("unknown op %v", params[0])
@@ -477,4 +481,204 @@ func TestWalletNegativeBalanceRefusesEveryDebit(t *testing.T) {
 		t.Fatalf("Add(-30) once the balance is back above zero: balance=%d err=%v, want 0", balance, err)
 	}
 	f.expectWallet(t, "after the balance recovered", 0, 0)
+}
+
+// ---- 同一个组件挂在第二个实体上 ----
+
+// walletVault 是只在测试里存在的第二个宿主（比如公会金库）：不是 Player，实体 kind 是测试自己的。
+// 它用的组件就是 Player 那一份：经 Player 的组件号登记的工厂创建（工厂是 wallet.NewComponent），
+// 真实宿主照 README 的“复用方式”另申请自己的组件号、登记同一个工厂。测试工程里没有第二个带货币字段的
+// 生成 DAO，所以它借一份独立的 PlayerDao 实例当自己的存储；真实宿主在自己的 DAO 里加
+// WalletState / WalletLedger 两个字段。它还实现可选的消费回调，用来验证回调失败时整笔回滚。
+type walletVault struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao       *db.PlayerDao
+	wallet    *playerentity.WalletComponent
+	spent     []int64
+	spentFail bool
+}
+
+// walletVaultKind 是测试宿主的实体 kind，取 kind 段的末尾，避开工程与模块分配的号。
+const walletVaultKind entity.EntityKind = 250
+
+var registerWalletVault sync.Once
+
+func (v *walletVault) Base() *entity.EntityBase                  { return v.EntityBase }
+func (v *walletVault) WalletComp() *playerentity.WalletComponent { return v.wallet }
+func (v *walletVault) WalletState() *db.WalletState             { return v.dao.GetWallet() }
+func (v *walletVault) WalletLedger() *db.WalletLedger           { return v.dao.GetWalletLedger() }
+
+// WalletSpent 是宿主可选的消费回调：在同一笔事务里、扣款写入之后调用，返回错误时整笔回滚。
+func (v *walletVault) WalletSpent(amount, _ int64) error {
+	if v.spentFail {
+		return errors.New("vault refuses the spend")
+	}
+	v.spent = append(v.spent, amount)
+	return nil
+}
+
+func newWalletVault(t *testing.T, unique int64) *walletVault {
+	t.Helper()
+	playerentity.RegisterEntity()
+	registerWalletVault.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: entity.EntityCategoryOther,
+			Kind:     walletVaultKind,
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				if err := param.NormalizeID(walletVaultKind); err != nil {
+					return nil, err
+				}
+				v := &walletVault{ComponentManager: entity.NewComponentManager(), DaoManager: entity.NewDaoManager(), dao: db.NewPlayerDao()}
+				v.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)
+				v.dao.SetId(param.StorageID())
+				v.DaoManager.Set(db.PlayerDaoCollection, v.dao)
+				comp, err := entity.CreateComponent(playerentity.CompTypeWallet, v, param)
+				if err != nil {
+					return nil, err
+				}
+				v.wallet = comp.(*playerentity.WalletComponent)
+				v.ComponentManager.Set(playerentity.CompTypeWallet, v.wallet)
+				if err := v.ComponentManager.InitAll(param, param.IsCreate); err != nil {
+					return nil, err
+				}
+				return v, nil
+			},
+			DaoBuilders: []entity.DaoBuilderFunc{func() entity.DaoInterface { return db.NewPlayerDao() }},
+			Lifetime:    entity.EntityLifetimePersistedHotCold,
+		})
+	})
+	id, err := entity.BuildEntityID(unique, walletVaultKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: walletVaultKind})
+	if err != nil {
+		t.Fatalf("the wallet component does not attach to a second entity: %v", err)
+	}
+	return built.(*walletVault)
+}
+
+// vaultCall 在一笔真实的 Nest 事务里调金库上的组件；拒绝不吞，交给 Nest 回滚。
+var walletVaultCallHandler = nest.NewHandlerName("walletTestVaultCall")
+
+var registerWalletVaultCall sync.Once
+
+func (f *walletFixture) vaultCall(vault *walletVault, op, key string, delta int64) (int64, error) {
+	registerWalletVaultCall.Do(func() {
+		nest.MustRegisterHandlerWithMeta(walletVaultCallHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+			component := es[0].(*walletVault).WalletComp()
+			switch params[0].(string) {
+			case "add":
+				return component.Add(params[2].(int64))
+			case "apply":
+				return component.Apply(params[1].(string), params[2].(int64))
+			}
+			return nil, fmt.Errorf("unknown op %v", params[0])
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	ret, err := f.engine.Request(context.Background(), walletVaultCallHandler, vault.ID(), nest.NewParams(op, key, delta))
+	if err != nil {
+		return 0, err
+	}
+	return ret.(int64), nil
+}
+
+// vaultState 在业务 worker 上持金库的锁读余额、回执数与已回调的消费。
+func (f *walletFixture) vaultState(t *testing.T, vault *walletVault) (coins int64, receipts int, spent []int64) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		vault.GetMutex().Lock()
+		defer vault.GetMutex().Unlock()
+		coins = vault.WalletState().GetCoins()
+		receipts = vault.WalletLedger().ReceiptsLen()
+		spent = append([]int64(nil), vault.spent...)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return coins, receipts, spent
+}
+
+func (f *walletFixture) expectVault(t *testing.T, vault *walletVault, what string, wantCoins int64, wantReceipts int, wantSpent []int64) {
+	t.Helper()
+	coins, receipts, spent := f.vaultState(t, vault)
+	if coins != wantCoins || receipts != wantReceipts || fmt.Sprint(spent) != fmt.Sprint(wantSpent) {
+		t.Fatalf("%s: vault coins=%d receipts=%d spent=%v, want %d, %d, %v", what, coins, receipts, spent, wantCoins, wantReceipts, wantSpent)
+	}
+}
+
+// 同一个组件挂在第二个实体上：加减、按业务键去重、不足 / 冲突 / 溢出的拒绝与 Player 上一样，
+// 拒绝时什么都不写；宿主的消费回调只在扣款首次生效时调用。玩家的钱包一直不动。
+func TestWalletSecondHostAddsSpendsAndRefuses(t *testing.T) {
+	vault := newWalletVault(t, 72001)
+	f := newWalletFixture(t, vault)
+	if balance, err := f.vaultCall(vault, "add", "", 100); err != nil || balance != 100 {
+		t.Fatalf("vault Add(100): balance=%d err=%v", balance, err)
+	}
+	for i := 0; i < 2; i++ {
+		if balance, err := f.vaultCall(vault, "apply", "upkeep-1", -30); err != nil || balance != 70 {
+			t.Fatalf("vault Apply attempt %d: balance=%d err=%v, want 70", i, balance, err)
+		}
+	}
+	f.expectVault(t, vault, "after the deduplicated debit", 70, 1, []int64{30})
+	if _, err := f.vaultCall(vault, "apply", "upkeep-1", -31); !errors.Is(err, apperrors.ErrWalletConflict) {
+		t.Fatalf("vault Apply with another amount: err = %v, want wallet_conflict", err)
+	}
+	if _, err := f.vaultCall(vault, "add", "", -71); !errors.Is(err, apperrors.ErrWalletShort) {
+		t.Fatalf("vault Add(-71): err = %v, want wallet_short", err)
+	}
+	if _, err := f.vaultCall(vault, "add", "", math.MinInt64); !errors.Is(err, apperrors.ErrWalletShort) {
+		t.Fatalf("vault Add(MinInt64): err = %v, want wallet_short", err)
+	}
+	if _, err := f.vaultCall(vault, "add", "", math.MaxInt64); !errors.Is(err, apperrors.ErrWalletOverflow) {
+		t.Fatalf("vault Add(MaxInt64): err = %v, want wallet_overflow", err)
+	}
+	if _, err := f.vaultCall(vault, "apply", "bad.key", 5); !errors.Is(err, apperrors.ErrWalletInvalid) {
+		t.Fatalf("vault Apply with a key that cannot be stored: err = %v, want wallet_invalid", err)
+	}
+	f.expectVault(t, vault, "after the refusals", 70, 1, []int64{30})
+	f.expectWallet(t, "the player's wallet while the vault changed", 0, 0)
+}
+
+// 第二个宿主上的回滚：提交被拒、宿主的消费回调失败，余额与回执都回到事务之前，同一个业务键可以再用。
+func TestWalletSecondHostRollsBack(t *testing.T) {
+	vault := newWalletVault(t, 72002)
+	f := newWalletFixture(t, vault)
+	if _, err := f.vaultCall(vault, "apply", "seed", 100); err != nil {
+		t.Fatal(err)
+	}
+	f.committer.reject.Store(true)
+	if _, err := f.vaultCall(vault, "apply", "k1", -30); err == nil {
+		t.Fatal("vault Apply under a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	// spent 是测试自己在内存里的记录，不随事务回滚：回调在提交之前执行，被拒的那一次也记了一笔。
+	f.expectVault(t, vault, "after the rejected commit", 100, 1, []int64{30})
+	vault.spentFail = true
+	if _, err := f.vaultCall(vault, "apply", "k1", -30); err == nil {
+		t.Fatal("vault Apply with a failing spend callback reported success")
+	}
+	vault.spentFail = false
+	f.expectVault(t, vault, "after the failed callback", 100, 1, []int64{30})
+	if balance, err := f.vaultCall(vault, "apply", "k1", -30); err != nil || balance != 70 {
+		t.Fatalf("vault Apply under the same key after the rollbacks: balance=%d err=%v, want 70", balance, err)
+	}
+	f.expectVault(t, vault, "after the retried debit", 70, 2, []int64{30, 30})
+	f.expectWallet(t, "the player's wallet", 0, 0)
+}
+
+// 玩家与金库各有一份状态：同一个业务键在两边各生效一次，互不去重，余额各算各的。
+func TestWalletSecondHostAndPlayerKeepSeparateState(t *testing.T) {
+	vault := newWalletVault(t, 72003)
+	f := newWalletFixture(t, vault)
+	f.grant(t, "shared-key", 40)
+	if balance, err := f.vaultCall(vault, "apply", "shared-key", 500); err != nil || balance != 500 {
+		t.Fatalf("vault Apply under the player's key: balance=%d err=%v, want 500", balance, err)
+	}
+	if balance, err := f.spend("spend-1", 15); err != nil || balance != 25 {
+		t.Fatalf("player spend: balance=%d err=%v, want 25", balance, err)
+	}
+	f.expectWallet(t, "the player's wallet", 25, 2)
+	f.expectVault(t, vault, "the vault", 500, 1, nil)
 }

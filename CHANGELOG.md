@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **modules：bag / wallet / attribute 改成多实体共用的组件**（2026-11-13，维护者要求）：组件逻辑移到共用包 `game/components/{bag,wallet,attribute}/`（包名 bag / wallet / attribute），经宿主接口 `bag.Owner`（`BagState()`）、`wallet.Owner`（`WalletState()` / `WalletLedger()`，可选 `WalletSpent`）、`attribute.Owner`（三层 `AttributeValues` + `AttributeLevel()`，可选 `CollectAttributeGear()`）拿宿主 DAO 里的状态，工厂 `NewComponent`；`game/entities/player/*_component.go` 只留组件号、类型别名、工厂登记与 Owner 方法，照 activity 的写法。对 Player 的协议、错误码、组件号、DAO 字段与 store 键、`WalletComp()` / `BagComp()` / `AttributeComp()` 的方法、`OnWalletSpent` / `OnAttributeGear` / 档案升级钩子不变；`WalletReceiptWindow`、`WalletKeyMaxLen`、`ErrWalletAmount`、`BagMaxKinds`、`BagMaxStack`、`Gear` 在 Player 包里再导出。变化：背包规则文件从 `game/entities/player/bag_items.go` 移到 `game/components/bag/items.go`（函数改名 `ItemRule`，Player 包保留 `bagItemRule` 给 gacha）；三个组件的 `Owner()` 返回宿主接口而不是 `*Player`；属性溢出日志的键由 `player_id` 改为 `entity_id` + `entity_kind`。每个模块新增 3 条场景（`Test{Wallet,Bag,Attribute}SecondHost*`），把同一个组件挂到测试里的第二个实体上验证加减 / 拒绝 / 回滚与两个宿主互不影响，修前三个模块各 3 条红（工厂拒绝非 `*Player` 宿主）；场景数 wallet 14→17、bag 17→20、attribute 17→20。README 的“复用方式”写明怎样挂到别的实体，KNOWN-LIMITS 的“模块绑定具体的实体名”一条按此改写。只对新生成的工程生效。
+
 - **组合 skill**（compose §4E，2026-11-13，维护者要求）：进程内全局逻辑的选法——能重建、不进事务的缓存 / 索引 / 注册表用 manager（`Managers()` 登记、`DependsOn()` 排序）；要和玩家修改一起提交回滚的全服状态挂在 World 上（不落盘的标 `nopersist`），不另建单例实体；很热的状态不放进单个实体。写明启动顺序：Mod（含 manager）先启动、`Service.Init` 才建 World，manager 的 Start 不能用 World；实体按访问加载，没有启动顺序（`LoadPriority` 未被读取、`EntityLifetimeResident` 只是声明）。
 
 - **组合 skill**（compose §4D，2026-11-13，维护者要求）：多个实体需要同一份逻辑时做共用组件——共用包 + 宿主接口（可选接口区分宿主能力）、状态类型共用但每个实体在自己的 DAO 里各存一份、每个实体只写薄接线（自己的组件号、类型别名、注册同一个工厂）、跨实体协作仍走多实体 handler / Remote / Saga；样板是 activity 模块与 `gameplay/level`。

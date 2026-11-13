@@ -23,7 +23,7 @@ errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_overflow]
 verify:
   packages: [./game/handler]
   run: ^TestWallet
-  pass: 14
+  pass: 17
 with:
   gm:
     summary: 经 GM 审计入口调用本模块正式事务或服务入口

@@ -16,9 +16,9 @@ func TestModuleAttributeEquipmentScenariosAndMutations(t *testing.T) {
 		t.Fatal("plan wrote project")
 	}
 	roost("module", "add", "attribute")
-	verifyAttributeEquipment(t, root, []string{"attribute"}, map[string]int{"attribute": 17, "attribute+enter": 2})
+	verifyAttributeEquipment(t, root, []string{"attribute"}, map[string]int{"attribute": 20, "attribute+enter": 2})
 	roost("module", "add", "equipment")
-	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 17, "equipment": 18, "attribute+equipment": 8, "attribute+enter": 2})
+	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 20, "equipment": 18, "attribute+equipment": 8, "attribute+enter": 2})
 	// 真实默认 CSV 与工程原有升级钩子的顺序都在独立生成工程验证，不把 fixture 的 JSON 当默认数据。
 	path := filepath.Join(root, "game/handler/attribute_equipment_generated_test.go")
 	if err := os.WriteFile(path, []byte(attributeEquipmentGeneratedScenarios), 0600); err != nil {
@@ -42,7 +42,7 @@ func TestModuleAttributeEquipmentScenariosAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/entities/player/profile_component.go",
 		"if err := runProfileLevelUp(component, from, from+gained); err != nil {", "if err := error(nil); err != nil {",
 		"./game/handler", "TestAttributeLevelUpGrowsBaseAndFinal", "level attributes")
-	recipeMutationMustFail(t, root, "game/entities/player/attribute_component.go",
+	recipeMutationMustFail(t, root, "game/components/attribute/component.go",
 		"coreattr.AttrValue(base.Attack + gear.Attack)", "coreattr.AttrValue(base.Attack)",
 		"./game/handler", "TestWithAttributeEquipmentEquipRefreshesFinal", "gear final")
 	recipeMutationMustFail(t, root, "game/entities/player/equipment_component.go",
@@ -64,7 +64,7 @@ func TestModuleEquipmentInstallsIndependentlyAndAddsAttributeLater(t *testing.T)
 	roost("module", "add", "equipment")
 	verifyAttributeEquipment(t, root, []string{"equipment"}, map[string]int{"equipment": 18})
 	roost("module", "add", "attribute")
-	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 17, "equipment": 18, "attribute+equipment": 8, "attribute+enter": 2})
+	verifyAttributeEquipment(t, root, []string{"attribute", "equipment"}, map[string]int{"attribute": 20, "equipment": 18, "attribute+equipment": 8, "attribute+enter": 2})
 }
 
 func verifyAttributeEquipment(t *testing.T, root string, names []string, want map[string]int) {
