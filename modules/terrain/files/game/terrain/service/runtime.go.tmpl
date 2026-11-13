@@ -16,8 +16,6 @@ import (
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-
-	"{{MODULE}}/game/lifecycle"
 	building "{{MODULE}}/game/entities/terrain_building"
 	chunk "{{MODULE}}/game/entities/terrain_chunk"
 	gamescene "{{MODULE}}/game/scene"
@@ -118,7 +116,7 @@ func (r *Runtime) Open(ctx context.Context, id int64, path string) (*logic.World
 	if err != nil {
 		return nil, err
 	}
-	chunks, err := lifecycle.TerrainChunkFromRegistry(r.registry)
+	chunks, err := chunk.LifecycleFromRegistry(r.registry)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +187,7 @@ type restoredSite struct {
 
 func (r *Runtime) loadBuildings(ctx context.Context, world *logic.World, states []logic.ChunkState) ([]restoredSite, error) {
 	var restored []restoredSite
-	sites, err := lifecycle.TerrainBuildingFromRegistry(r.registry)
+	sites, err := building.LifecycleFromRegistry(r.registry)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +291,7 @@ func (r *Runtime) Execute(ctx context.Context, playerID int64, command logic.Com
 	if command.Op != "build" && command.Op != "remove" {
 		return r.sender.MultiGroupSync_TerrainBrush(ctx, ids, playerFull, world, command)
 	}
-	sites, err := lifecycle.TerrainBuildingFromRegistry(r.registry)
+	sites, err := building.LifecycleFromRegistry(r.registry)
 	if err != nil {
 		return logic.Result{}, err
 	}
@@ -397,7 +395,7 @@ func (r *Runtime) Refresh(ctx context.Context, id int64) error {
 	if area == nil {
 		return logic.ErrDenied
 	}
-	chunks, err := lifecycle.TerrainChunkFromRegistry(r.registry)
+	chunks, err := chunk.LifecycleFromRegistry(r.registry)
 	if err != nil {
 		return err
 	}

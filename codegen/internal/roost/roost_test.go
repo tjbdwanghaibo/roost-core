@@ -642,9 +642,8 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 	checks := map[string][]string{
 		"roost.yaml":                                            {"access:", "player:", "service: game", "- nest"},
-		"game/playeraccess/runtime_gen.go":                      {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
-		"internal/access/player/mod_gen.go":                     {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
-		"game/protocol_bootstrap/protocol_gen.go":               {"RegisterPlayerPlayerProtocols"},
+		"internal/access/player/mod_gen.go":                     {`"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"`, "if err := RegisterPlayerProtocols(protocols, registry); err != nil", "registry.Register(Name, mod.runtime)"},
+		"internal/access/player/protocols_gen.go":               {"package player", "type PlayerController interface", "func RegisterPlayerPlayerProtocols(", "func RegisterPlayerProtocols("},
 		"game/controllers/player/controller.go":                 {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
 		"game/controllers/player/enter_game.go":                 {"lifecycle.PlayerFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
 		"game/controllers/player/rename_player_endpoint_gen.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
@@ -663,6 +662,12 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			if !strings.Contains(string(raw), fragment) {
 				t.Errorf("%s missing %q:\n%s", path, fragment, raw)
 			}
+		}
+	}
+	// v1.47.0 目录重整：派发层是 core 的框架包，协议登记并进接入层，这些旧目录不再生成。
+	for _, retired := range []string{"game/playeraccess", "game/protocol_handlers", "game/protocol_bootstrap"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(retired))); !os.IsNotExist(err) {
+			t.Errorf("%s is still generated (stat err %v)", retired, err)
 		}
 	}
 	// A duplicate endpoint must be rejected before any companion controller is

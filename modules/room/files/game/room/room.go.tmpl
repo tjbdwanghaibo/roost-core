@@ -12,7 +12,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	roomentity "{{MODULE}}/game/entities/room"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
@@ -45,7 +44,7 @@ func Open(ctx context.Context, registry *app.Registry, uniqueID int64, capacity 
 	if !ok || client == nil {
 		return fmt.Errorf("room: nest client is unavailable")
 	}
-	rooms, err := lifecycle.RoomFromRegistry(registry)
+	rooms, err := roomentity.LifecycleFromRegistry(registry)
 	if err != nil {
 		return err
 	}

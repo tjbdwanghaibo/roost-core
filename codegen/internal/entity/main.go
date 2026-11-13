@@ -216,6 +216,9 @@ func run(args []string, stdout io.Writer) error {
 			if err := retireEntityOrphans(dir, siblings, mirrorNames(mirrors), stdout); err != nil {
 				return err
 			}
+			if err := writeLifecycle(dir, pkg, entities, *force, stdout); err != nil {
+				return err
+			}
 		}
 	}
 	if *selfSync != "" && !selfSyncFound {
@@ -362,6 +365,33 @@ func retireEntityFile(path string) (bool, error) {
 		return false, nil
 	}
 	return true, os.Remove(path)
+}
+
+// writeLifecycle 给有实体的包写 lifecycle_gen.go，没有实体（只剩只读 DTO）的包删掉旧的。
+func writeLifecycle(dir, pkg string, entities []EntityDef, force bool, stdout io.Writer) error {
+	if len(entities) == 0 {
+		path := filepath.Join(dir, lifecycleFile)
+		removed, err := retireLifecycle(dir)
+		if err != nil {
+			return fmt.Errorf("retire entity output %s: %w", path, err)
+		}
+		if removed {
+			fmt.Fprintf(stdout, "removed orphan: %s\n", path)
+		}
+		return nil
+	}
+	sorted := append([]EntityDef(nil), entities...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	path, changed, err := generateLifecycle(dir, pkg, sorted, force)
+	if err != nil {
+		return err
+	}
+	if changed {
+		fmt.Fprintf(stdout, "generated: %s\n", path)
+	} else {
+		fmt.Fprintf(stdout, "unchanged: %s\n", path)
+	}
+	return nil
 }
 
 func retireEntityOrphans(dir string, siblings, mirrors []string, stdout io.Writer) error {

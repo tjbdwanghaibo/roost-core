@@ -1,6 +1,7 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	worldentity "{{MODULE}}/game/entities/world"
 	"context"
 	"errors"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/matchmaking"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"{{MODULE}}/protocol/msgid"
@@ -44,7 +44,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 	if !ok || nestClient == nil {
 		return nil, errors.New("matchmaker: nest client is unavailable")
 	}
-	worldID, err := lifecycle.WorldID(registry)
+	worldID, err := worldentity.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("matchmaker: %w", err)
 	}

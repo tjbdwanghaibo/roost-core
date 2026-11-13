@@ -3,7 +3,6 @@ package roost
 import (
 	"bytes"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/codegen/internal/entityowner"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"go/ast"
 	"go/format"
@@ -15,214 +14,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-func addEntityLifecycle(root string, manifest Manifest, options AddOptions) ([]string, error) {
-	entityName, _, err := resolveEntitySource(root, firstNonEmpty(options.Entity, options.Name))
-	if err != nil {
-		return nil, err
-	}
-	service := lifecycleService(manifest, options.Service)
-	// 声明了归属服务的实体（//roost:entity service=）：lifecycle 只在归属服务里用，缺省落到它，别的服务拒绝。
-	owned, err := projectEntityOwners(root)
-	if err != nil {
-		return nil, err
-	}
-	if owner := entityowner.ServiceOf(owned, entityName); owner != "" {
-		if requested := toSnake(options.Service); requested != "" && requested != owner {
-			return nil, fmt.Errorf("entity %s declares service=%s; its lifecycle belongs to that service, not %s", toPascal(entityName), owner, requested)
-		}
-		service = owner
-	}
-	serviceSpec, serviceExists := manifest.Services[service]
-	if !serviceExists {
-		if strings.TrimSpace(options.Service) != "" {
-			return nil, fmt.Errorf("unknown service %q", toSnake(options.Service))
-		}
-		return nil, fmt.Errorf("Entity lifecycle requires --service when no owning Service can be inferred")
-	}
-	resolvedMods, resolveErr := resolveMods(serviceSpec.Mods)
-	if resolveErr != nil {
-		return nil, resolveErr
-	}
-	if !contains(resolvedMods, "nest") {
-		return nil, fmt.Errorf("Entity lifecycle requires the instance Entity runtime published by Nest; run: roost add mod nest -service %s", service)
-	}
-	persistenceAlias := "engine"
-	persistenceImport := "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
-	path := filepath.Join(root, "game", "lifecycle", entityName+".go")
-	if _, err := os.Stat(path); err == nil {
-		return nil, fmt.Errorf("%s already exists", relativeSlash(root, path))
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-	body := fmt.Sprintf(`package lifecycle
-
-import (
-	"context"
-	"errors"
-	"fmt"
-
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	{{PERSISTENCE_IMPORT}}
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	%s %q
-)
-
-var Err%sNotFound = errors.New("%s lifecycle: Entity not found")
-
-// %s owns the explicit create/load/destroy boundary for %s.
-// Request handlers should use generated Nest senders for ordinary reads and
-// writes; this type is for authentication/role creation and administration.
-type %s struct {
-	access *entity.ManagerAccess
-}
-
-func New%s(access *entity.ManagerAccess) (*%s, error) {
-	if access == nil || access.Manager() == nil {
-		return nil, fmt.Errorf("%s lifecycle: Entity access is required")
-	}
-	return &%s{access: access}, nil
-}
-
-// FromRegistry is the normal application entry point. Nest publishes the
-// instance-scoped ManagerAccess as entity.runtime, so lifecycle code never
-// depends on package globals or reaches into a Service implementation.
-func FromRegistry(registry *app.Registry) (*%s, error) {
-	if registry == nil {
-		return nil, fmt.Errorf("%s lifecycle: app registry is required")
-	}
-	access, ok := app.Lookup[*entity.ManagerAccess](registry, mods.ModEntityRuntime)
-	if !ok || access == nil {
-		return nil, fmt.Errorf("%s lifecycle: Entity runtime is unavailable")
-	}
-	return New%s(access)
-}
-
-func (lifecycle *%s) Get(ctx context.Context, uniqueID int64) (*%s.%s, error) {
-	fullID, err := entity.BuildEntityID(uniqueID, %s.EntityKind%s)
-	if err != nil {
-		return nil, err
-	}
-	value, err := lifecycle.access.Get(ctx, fullID, entity.MustEntityCategoryOfKind(%s.EntityKind%s))
-	if err != nil {
-		return nil, deletedError(err)
-	}
-	if value == nil {
-		return nil, Err%sNotFound
-	}
-	typed, ok := value.(*%s.%s)
-	if !ok {
-		return nil, fmt.Errorf("%s lifecycle: Entity %%d has type %%T", fullID, value)
-	}
-	return typed, nil
-}
-
-func (lifecycle *%s) Create(ctx context.Context, uniqueID int64) (*%s.%s, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	// Create does not read the store: uniqueID must be a fresh id from the id
-	// generator, never the id of a deleted Entity (its tombstone makes the
-	// first write a projection conflict that fences the process). Use
-	// GetOrCreate when the id may already have a record.
-	value, err := lifecycle.access.Create(&entity.EntityCreateParam{
-		IsCreate: true,
-		UniqueID: uniqueID,
-		Kind:     %s.EntityKind%s,
-		Category: entity.MustEntityCategoryOfKind(%s.EntityKind%s),
-	})
-	if err != nil {
-		return nil, err
-	}
-	typed, ok := value.(*%s.%s)
-	if !ok {
-		return nil, fmt.Errorf("%s lifecycle: created Entity has type %%T", value)
-	}
-	return typed, nil
-}
-
-// GetOrCreate returns the existing Entity or creates it when persistence has
-// no record. An Entity that was deleted (only tombstones left) is NOT
-// created again: its id cannot be used again, and GetOrCreate returns an
-// error carrying errcode.ErrEntityDeleted (client code entity_deleted).
-// entity.ErrEntityRemoved means the previous instance with this ID
-// is still finishing its removal (a revoked in-transaction create or a
-// Destroy); it is transient, so the lookup is retried a bounded number of
-// times before the error is returned. Inside a Nest handler the framework
-// reports that window as nest.ErrCreatedEntityLockConflict instead and
-// decides itself whether the whole message is rolled back and re-admitted.
-func (lifecycle *%s) GetOrCreate(ctx context.Context, uniqueID int64) (*%s.%s, bool, error) {
-	for attempt := 1; ; attempt++ {
-		value, err := lifecycle.Get(ctx, uniqueID)
-		if err == nil {
-			return value, false, nil
-		}
-		if !errors.Is(err, {{PERSISTENCE_NOT_FOUND}}) && !errors.Is(err, Err%sNotFound) {
-			return nil, false, err
-		}
-		value, err = lifecycle.Create(ctx, uniqueID)
-		if errors.Is(err, entity.ErrEntityExists) {
-			value, err = lifecycle.Get(ctx, uniqueID)
-			return value, false, err
-		}
-		if errors.Is(err, entity.ErrEntityRemoved) && attempt < 3 {
-			continue
-		}
-		return value, err == nil, err
-	}
-}
-
-func (lifecycle *%s) Destroy(ctx context.Context, value *%s.%s, reason entity.EntityDestroyReason, deletePersisted bool) error {
-	if value == nil {
-		return Err%sNotFound
-	}
-	return lifecycle.access.Destroy(ctx, value, reason, deletePersisted)
-}
-
-// deletedError gives a deleted Entity its stable client code
-// (errcode.ErrEntityDeleted); the cause stays on the chain for errors.Is.
-func deletedError(err error) error {
-	if errors.Is(err, entity.ErrAuthorityEntityDeleted) {
-		var coded *errcode.IntError
-		if !errors.As(err, &coded) {
-			return errcode.Wrap(errcode.ErrEntityDeleted, err)
-		}
-	}
-	return err
-}
-`, entityName, manifest.Project.Module+"/game/entities/"+entityName,
-		toPascal(entityName), entityName, toPascal(entityName)+"Lifecycle", toPascal(entityName), toPascal(entityName)+"Lifecycle",
-		toPascal(entityName)+"Lifecycle", toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName)+"Lifecycle",
-		toPascal(entityName)+"Lifecycle", entityName, entityName, toPascal(entityName)+"Lifecycle",
-		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), entityName, toPascal(entityName), entityName, toPascal(entityName),
-		toPascal(entityName), entityName, toPascal(entityName), entityName,
-		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), entityName, toPascal(entityName), entityName, toPascal(entityName), entityName, toPascal(entityName), entityName,
-		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), toPascal(entityName),
-		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), toPascal(entityName))
-	body = strings.ReplaceAll(body, "{{PERSISTENCE_IMPORT}}", persistenceAlias+" \""+persistenceImport+"\"")
-	// One lifecycle file per Entity, all in package lifecycle: the registry
-	// entry point carries the Entity's name, or the second Entity's file
-	// redeclares FromRegistry and the package stops compiling (found when the
-	// game template added World next to Player).
-	body = strings.Replace(body, "// FromRegistry is the normal application entry point.", "// "+toPascal(entityName)+"FromRegistry is the normal application entry point.", 1)
-	body = strings.Replace(body, "func FromRegistry(registry *app.Registry)", "func "+toPascal(entityName)+"FromRegistry(registry *app.Registry)", 1)
-	// 同理，删档错误的辅助函数也带 Entity 名（deletedPlayerError），同包多个 lifecycle 文件不重名。
-	body = strings.ReplaceAll(body, "deletedError", "deleted"+toPascal(entityName)+"Error")
-	body = strings.ReplaceAll(body, "{{PERSISTENCE_NOT_FOUND}}", persistenceAlias+".ErrEntityAggregateNotFound")
-	formatted, err := format.Source([]byte(body))
-	if err != nil {
-		return nil, fmt.Errorf("format lifecycle scaffold: %w\n%s", err, body)
-	}
-	if err := commitSyncChanges([]syncChange{{rel: relativeSlash(root, path), path: path, body: formatted}}); err != nil {
-		return nil, err
-	}
-	return []string{relativeSlash(root, path)}, nil
-}
 
 func lifecycleService(manifest Manifest, requested string) string {
 	requested = toSnake(requested)
@@ -412,7 +203,7 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 }
 `, domain,
 		target.alias, target.importPath,
-		manifest.Project.Module+protocol.PlayerAccessImportSuffix,
+		protocol.PlayerAccessImport,
 		nestSnake, manifest.Project.Module+"/game/handler/syncsender",
 		manifest.Project.Module+protocol.PBImportSuffix,
 		protocolType, protocolType, protocolType, protocolType, protocolSnake,
@@ -457,7 +248,7 @@ import (
 func (controller *Controller) Handle%s(ctx *playeraccess.Context, req *pb.%sRequest) (*pb.%sResponse, error) {
  return controller.dispatch%s(ctx, req)
 }
-`, domain, manifest.Project.Module+protocol.PlayerAccessImportSuffix, manifest.Project.Module+protocol.PBImportSuffix,
+`, domain, protocol.PlayerAccessImport, manifest.Project.Module+protocol.PBImportSuffix,
 				protocolType, nestType, protocolType, protocolType, protocolType, protocolType)))
 			if err != nil {
 				return nil, err
@@ -494,10 +285,10 @@ func addLifecycleEndpoint(root string, manifest Manifest, options AddOptions, do
 		}
 		return nil, err
 	}
-	lifecyclePath := filepath.Join(root, "game", "lifecycle", entitySnake+".go")
-	if _, err := os.Stat(lifecyclePath); err != nil {
+	// lifecycle 是实体包里生成的 lifecycle_gen.go（v1.47.0 起）：实体在就有。
+	if _, err := os.Stat(filepath.Join(root, "game", "entities", entitySnake, "entity.go")); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("lifecycle %q does not exist; run: roost add lifecycle %s", entitySnake, toPascal(entitySnake))
+			return nil, fmt.Errorf("entity %q does not exist; run: roost add entity %s", entitySnake, toPascal(entitySnake))
 		}
 		return nil, err
 	}
@@ -536,7 +327,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	lifecycle %q
+	%s %q
 	playeraccess %q
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	%q
@@ -559,7 +350,7 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("%s endpoint: context and request are required")
 	}
-	entities, err := lifecycle.%sFromRegistry(controller.Registry())
+	entities, err := %s.LifecycleFromRegistry(controller.Registry())
 	if err == nil {
 		_, _, err = entities.GetOrCreate(context.Context(), context.PlayerID)
 	}
@@ -573,12 +364,12 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 	return &pb.%sResponse{}, nil
 }
 `, domain,
-		manifest.Project.Module+"/game/lifecycle",
-		manifest.Project.Module+protocol.PlayerAccessImportSuffix,
+		entitySnake, manifest.Project.Module+"/game/entities/"+entitySnake,
+		protocol.PlayerAccessImport,
 		manifest.Project.Module+protocol.PBImportSuffix,
 		protocolType, entityType,
 		protocolType, protocolType, protocolType, protocolSnake,
-		entityType, protocolSnake, protocolType, protocolType)
+		entitySnake, protocolSnake, protocolType, protocolType)
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
 		return nil, fmt.Errorf("format login endpoint scaffold: %w\n%s", err, body)

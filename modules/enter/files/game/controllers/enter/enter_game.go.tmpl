@@ -8,8 +8,7 @@ import (
 	gameenter "{{MODULE}}/game/enter"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -68,7 +67,7 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 
 // loadAndInit 加载或创建 Player，然后提交首次初始化。
 func (controller *Controller) loadAndInit(ctx stdcontext.Context, playerID int64) (gameenter.InitResult, error) {
-	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	entities, err := player.LifecycleFromRegistry(controller.registry)
 	if err != nil {
 		return gameenter.InitResult{}, err
 	}

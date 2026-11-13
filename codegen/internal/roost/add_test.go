@@ -395,10 +395,7 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 		t.Fatal("business overwritten")
 	}
 	run("build", "./...")
-	if err := os.WriteFile(filepath.Join(root, "game/playeraccess/manual_reply_test.go"), []byte(manualReplyTest), 0600); err != nil {
-		t.Fatal(err)
-	}
-	run("test", "./game/playeraccess", "-run", "^TestManualReplyDoesNotEncodeAgain$", "-count=1")
+	// 手动回包不再编码一次的断言随 playeraccess 搬进了 core（infra/network/playeraccess 的单元测试）。
 	if err := Generate(root, GenerateOptions{Check: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -414,27 +411,6 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-const manualReplyTest = `package playeraccess
-import (
- "context"
- "testing"
- "github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
-)
-type responseSession struct { replies int }
-func (*responseSession) Principal() gateway.Principal { return gateway.Principal{PlayerID:1,SessionID:"test"} }
-func (s *responseSession) Reply(context.Context,any) error {s.replies++;return nil}
-func (*responseSession) Close(error) error {return nil}
-func TestManualReplyDoesNotEncodeAgain(t *testing.T) {
- registry:=NewProtocolRegistry()
- type reply struct{}
- encoded:=0
- if err:=RegisterProtocol[int,*reply](registry,1,2,func([]byte)(int,error){return 0,nil},func(*reply)([]byte,error){encoded++;return nil,nil},func(ctx *Context,_ int)(*reply,error){return nil,ctx.Session.Reply(ctx.Context(),&Response{MessageID:2,Sequence:ctx.Seq})});err!=nil {t.Fatal(err)}
- session:=&responseSession{}
- response,err:=registry.Dispatch(context.Background(),session,1,7,nil)
- if err!=nil || response!=nil || encoded!=0 || session.replies!=1 {t.Fatalf("response=%v err=%v encoded=%d replies=%d",response,err,encoded,session.replies)}
-}
-`
 
 // add rpc -entity-service（联盟服务方案 §2.3 / §2.10 第 4 项）：写方法带 RequestID，Result 按 RequestID 查回执，
 // 接收端有自己的处理预算，答复分成成功 / 业务拒绝 / 未执行可重试 / 结果未知；owner Mod 依赖 nest，

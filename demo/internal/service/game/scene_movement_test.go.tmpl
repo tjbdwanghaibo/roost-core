@@ -25,7 +25,6 @@ import (
 	"{{MODULE}}/game/flags"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/runtimeid"
 	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/protocol/pb"
@@ -147,15 +146,15 @@ func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	})
 
 	// The scene, as EnsureWorldScene builds it, wired as Init wires it.
-	scenes, err := lifecycle.NewSceneLifecycle(access)
+	scenes, err := sceneentity.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var area *sceneentity.Scene
 	if config == gamescene.DefaultConfig() {
-		area, _, err = scenes.GetOrCreate(ctx, lifecycle.WorldSceneUniqueID)
+		area, _, err = scenes.GetOrCreate(ctx, sceneentity.WorldSceneUniqueID)
 	} else {
-		area, err = scenes.GetOrCreateOn(ctx, lifecycle.WorldSceneUniqueID, config)
+		area, err = sceneentity.GetOrCreateOn(ctx, scenes, sceneentity.WorldSceneUniqueID, config)
 	}
 	if err != nil {
 		t.Fatalf("scene: %v", err)
@@ -527,7 +526,7 @@ func loadSpawnData(t *testing.T) {
 // startTestSpawner is startSpawner over the harness.
 func (w *moveWorld) startTestSpawner() *spawner {
 	w.t.Helper()
-	lives, err := lifecycle.NewMonsterLifecycle(entity.NewManagerAccess(w.entities))
+	lives, err := monster.NewLifecycle(entity.NewManagerAccess(w.entities))
 	if err != nil {
 		w.t.Fatal(err)
 	}

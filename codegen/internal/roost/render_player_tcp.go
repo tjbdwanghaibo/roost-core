@@ -516,7 +516,7 @@ var _ app.Mod = (*IngressMod)(nil)
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModStopperWithContext = (*Mod)(nil)
 var _ app.ModStopBudgetProvider = (*Mod)(nil)
-`, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAccessImportSuffix)
+`, manifest.Project.Module+"/internal/access/player", protocol.PlayerAccessImport)
 }
 
 func renderPlayerTCPServerTests(manifest Manifest) string {
@@ -863,5 +863,5 @@ func dialAuthenticated(t *testing.T,server *gateway.TCPServer,token string)net.C
  if ack.MsgID!=0 || ack.Seq!=1 || len(ack.Payload)!=0{t.Fatalf("unexpected auth ACK: %%+v",ack)}
  return conn
 }
-`, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAccessImportSuffix)
+`, manifest.Project.Module+"/internal/access/player", protocol.PlayerAccessImport)
 }

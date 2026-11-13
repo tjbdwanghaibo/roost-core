@@ -12,9 +12,8 @@ import (
 	playerctl "{{MODULE}}/game/controllers/player"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	gamelogin "{{MODULE}}/game/login"
-	playeraccess "{{MODULE}}/game/playeraccess"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	_ "{{MODULE}}/game/profile" // enter 与 profile 的联动：新建请求的名字规则，名字在新建的那笔事务里进档案
 	apperrors "{{MODULE}}/internal/errors"
 	accountcollaborators "{{MODULE}}/internal/service/account"
@@ -154,7 +153,7 @@ type loginScenario struct {
 	accounts   *svcaccount.Service
 	registry   *app.Registry
 	controller *playerctl.Controller
-	players    *lifecycle.PlayerLifecycle
+	players    *playerentity.Lifecycle
 	owners     *scenarioOwners
 	transport  *scenarioTransport
 	committer  *scenarioCommitter
@@ -209,7 +208,7 @@ func newLoginScenario(t *testing.T) *loginScenario {
 	if _, err := access.ConfigureLoader(scenarioStore{}); err != nil {
 		t.Fatal(err)
 	}
-	s.players, err = lifecycle.NewPlayerLifecycle(access)
+	s.players, err = playerentity.NewLifecycle(access)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +306,7 @@ func (s *loginScenario) loaded(playerID int64) bool {
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, lifecycle.ErrPlayerNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+	if errors.Is(err, playerentity.ErrNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
 		return false
 	}
 	s.t.Fatalf("load player %d: %v", playerID, err)

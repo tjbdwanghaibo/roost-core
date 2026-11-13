@@ -8,8 +8,7 @@ import (
 	gameenter "{{MODULE}}/game/enter"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -50,7 +49,7 @@ func (controller *Controller) HandleEnterCreate(context *playeraccess.Context, r
 
 // ensure 保证玩家的档在：只在持久层确认这个实体不存在时才创建。
 func (controller *Controller) ensure(ctx stdcontext.Context, playerID int64) error {
-	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	entities, err := player.LifecycleFromRegistry(controller.registry)
 	if err != nil {
 		return err
 	}

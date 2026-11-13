@@ -1,6 +1,7 @@
 package player
 
 import (
+	sceneentity "{{MODULE}}/game/entities/scene"
 	stdcontext "context"
 	"errors"
 	"fmt"
@@ -10,8 +11,7 @@ import (
 	gameenter "{{MODULE}}/game/enter"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
-	playeraccess "{{MODULE}}/game/playeraccess"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	gamerehome "{{MODULE}}/game/rehome"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -113,7 +113,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	)
 	if createFirst {
 		subject, err = controller.Players().Get(loginCtx, context.PlayerID)
-		if errors.Is(err, lifecycle.ErrPlayerNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+		if errors.Is(err, player.ErrNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
 			err = gameenter.ErrNeedCreate
 		}
 	} else {
@@ -166,7 +166,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	// In a partitioned scene (scene.partition) this process is the player's
 	// Base and the map is the cells': there is no local ground to stand on,
 	// and Join enters the player through the cell its snapshot position is in.
-	spawn := lifecycle.WorldSceneConfig().Spawn
+	spawn := sceneentity.WorldSceneConfig().Spawn
 	var at spatial.Point
 	if controller.Partition() == nil {
 		at, err = syncsender.NewEnterSceneSender(controller.NestClient()).MultiSync_EnterScene(context.Context(), subject.ID(), controller.WorldSceneID(), spawn.X, spawn.Y)

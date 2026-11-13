@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"{{MODULE}}/protocol/msgid"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/game/settings"
 	player "{{MODULE}}/game/entities/player"
@@ -731,7 +730,7 @@ func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (
 // exactly what the next load must read. Evicting is forgetting, not deleting.
 type playerEvictor struct {
 	scene   *Scene
-	players *lifecycle.PlayerLifecycle
+	players *player.Lifecycle
 	manager *coreentity.EntityManager
 	// handOff is the DataEngine Mod's HandOffEntity, used by DepartPlayer
 	// (a player changing servers). nil: no player can be handed off.

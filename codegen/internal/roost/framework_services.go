@@ -548,16 +548,15 @@ func applyGameTemplate(m *Manifest, gameService string, frameworks []string) err
 }
 
 // scaffoldGameTemplate adds what the game template owns beyond the manifest:
-// the Player and World entities with their lifecycles, the World singleton
-// accessor, and a game Service that ensures the World exists before serving.
+// the Player and World entities (their lifecycle_gen.go comes from roost
+// generate), the World singleton accessor in the World's own package, and a
+// game Service that ensures the World exists before serving.
 // Everything it writes is business-owned and written once.
 func scaffoldGameTemplate(root string, m Manifest, gameService string) ([]string, error) {
 	var created []string
 	for _, step := range []AddOptions{
 		{Kind: "entity", Name: "Player"},
 		{Kind: "entity", Name: "World"},
-		{Kind: "lifecycle", Name: "Player", Service: gameService},
-		{Kind: "lifecycle", Name: "World", Service: gameService},
 	} {
 		files, err := Add(root, step)
 		if err != nil {
@@ -566,7 +565,7 @@ func scaffoldGameTemplate(root string, m Manifest, gameService string) ([]string
 		created = append(created, files...)
 	}
 	for rel, body := range map[string]string{
-		"game/lifecycle/world_singleton.go":               renderWorldSingleton(m),
+		worldSingletonPath: renderWorldSingleton(),
 		"internal/service/" + gameService + "/service.go": renderGameTemplateService(m, gameService),
 	} {
 		formatted, err := format.Source([]byte(body))
@@ -584,6 +583,9 @@ func scaffoldGameTemplate(root string, m Manifest, gameService string) ([]string
 	return created, nil
 }
 
+// worldSingletonPath 是 World 单例的访问入口（v1.47.0 起在 World 自己的包里；此前是 game/lifecycle/world_singleton.go）。
+const worldSingletonPath = "game/entities/world/singleton.go"
+
 // renderWorldSingleton is the one-World-per-server accessor. The World is an
 // ordinary Nest entity whose unique id IS the server's sid, created on the
 // first start of that server and loaded on every later one; "singleton" is a
@@ -594,14 +596,13 @@ func scaffoldGameTemplate(root string, m Manifest, gameService string) ([]string
 // document as two entities, each with its own version counter, and the second
 // commit is a `fatal projection version conflict` that takes a process down
 // (GAME_DEMO_TEMPLATE §9.11).
-func renderWorldSingleton(m Manifest) string {
-	return fmt.Sprintf(`package lifecycle
+func renderWorldSingleton() string {
+	return `package world
 
 import (
 	"context"
 	"fmt"
 
-	world %q
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -617,10 +618,10 @@ func WorldUniqueID(registry *app.Registry) (int64, error) {
 	// sid 经 App 的声明读（app.ServiceIdentity）：生成的代码不直接读 viper。
 	var identity app.ServiceIdentity
 	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
-		return 0, fmt.Errorf("world: %%w", err)
+		return 0, fmt.Errorf("world: %w", err)
 	}
 	if identity.Sid <= 0 {
-		return 0, fmt.Errorf("world: sid is %%d; a World belongs to a server and needs its id", identity.Sid)
+		return 0, fmt.Errorf("world: sid is %d; a World belongs to a server and needs its id", identity.Sid)
 	}
 	return int64(identity.Sid), nil
 }
@@ -631,9 +632,9 @@ func WorldID(registry *app.Registry) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	id, err := entity.BuildEntityID(unique, world.EntityKindWorld)
+	id, err := entity.BuildEntityID(unique, EntityKindWorld)
 	if err != nil {
-		return 0, fmt.Errorf("world: build entity id: %%w", err)
+		return 0, fmt.Errorf("world: build entity id: %w", err)
 	}
 	return id, nil
 }
@@ -641,8 +642,8 @@ func WorldID(registry *app.Registry) (int64, error) {
 // EnsureWorld returns this server's World, creating it on the first start
 // and loading it on every later one. The game Service calls it from Init, so
 // the World exists before any request is served.
-func EnsureWorld(ctx context.Context, registry *app.Registry) (*world.World, error) {
-	lifecycle, err := WorldFromRegistry(registry)
+func EnsureWorld(ctx context.Context, registry *app.Registry) (*World, error) {
+	lifecycle, err := LifecycleFromRegistry(registry)
 	if err != nil {
 		return nil, err
 	}
@@ -652,11 +653,11 @@ func EnsureWorld(ctx context.Context, registry *app.Registry) (*world.World, err
 	}
 	value, _, err := lifecycle.GetOrCreate(ctx, unique)
 	if err != nil {
-		return nil, fmt.Errorf("world: ensure singleton: %%w", err)
+		return nil, fmt.Errorf("world: ensure singleton: %w", err)
 	}
 	return value, nil
 }
-`, m.Project.Module+"/game/entities/world")
+`
 }
 
 // renderGameTemplateService is the template's business Service: the plain
@@ -669,7 +670,6 @@ import (
 	"fmt"
 
 	world %q
-	lifecycle %q
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
@@ -686,7 +686,7 @@ func (*Service) Name() app.ServiceName { return app.ServiceName(%q) }
 // before any request is served; a game server without its World does not
 // start.
 func (s *Service) Init(registry *app.Registry) error {
-	value, err := lifecycle.EnsureWorld(context.Background(), registry)
+	value, err := world.EnsureWorld(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("%s: %%w", err)
 	}
@@ -701,7 +701,7 @@ func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 func (*Service) Shutdown(context.Context) error  { return nil }
 
 var _ app.Service = (*Service)(nil)
-`, m.servicePackage(name), m.Project.Module+"/game/entities/world", m.Project.Module+"/game/lifecycle", name, name, name)
+`, m.servicePackage(name), m.Project.Module+"/game/entities/world", name, name, name)
 }
 
 // renderFrameworkServicesGuide documents the hosted framework services of this

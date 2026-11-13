@@ -47,7 +47,34 @@ func (m Manifest) withServicePackages(root string) Manifest {
 		}
 	}
 	m.servicePackages = packages
+	m.gameManagers = gameManagersService(root, m)
 	return m
+}
+
+// gameManagersPath 是 game 服务的 manager 登记点（v1.47.0 起；此前在 internal/service/<game>/managers.go）。
+const gameManagersPath = "game/managers/managers.go"
+
+// gameManagersService 返回 manager 列表放在 game/managers 的业务服务：game/ 目录树所属的那个服务——玩家接入层所在的服务，
+// 没有接入层时是唯一一个跑 Nest 的业务服务——且它装了 manager Mod。该服务目录里已经有 managers.go（v1.47.0 之前生成的工程）
+// 时沿用旧位置，不改写业务文件。返回空串时各服务都用 internal/service/<name>/managers.go。
+func gameManagersService(root string, m Manifest) string {
+	service := m.Access["player"].Service
+	if service == "" {
+		var err error
+		if service, err = nestService(m, "", "", ""); err != nil {
+			return ""
+		}
+	}
+	if _, ok := m.Services[service]; !ok || m.isFrameworkService(service) {
+		return ""
+	}
+	if mods, err := resolveMods(effectiveServiceMods(m, service)); err != nil || !contains(mods, "manager") {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(root, "internal", "service", service, "managers.go")); err == nil {
+		return ""
+	}
+	return service
 }
 
 // existingServicePackage 返回目录里非测试 Go 文件的包名：先看业务文件（不带生成头），没有业务文件时

@@ -81,7 +81,6 @@ go.mod/go.sum；全部成功后才提交，后置步骤失败不会留下半生�
 先按 FIRST_BUSINESS.zh-CN.md 给 DAO、Component、handler 和 Request 添加业务字段，再执行：
 
     roost add endpoint RenamePlayer --handler player
-    roost add lifecycle Player --service {{SERVICE}}
     make generate
     roost project doctor --workflow first-business
 

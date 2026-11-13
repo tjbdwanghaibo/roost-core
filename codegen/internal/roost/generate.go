@@ -107,12 +107,11 @@ func generatorsFor(m Manifest, force bool) []generator {
 			if _, enabled := m.Access["player"]; enabled {
 				args = append(args,
 					"-bind", under(root, protocol.DefaultBindDir),
-					"-handlers", under(root, protocol.DefaultHandlerDir),
+					"-handlers", under(root, protocol.DefaultHandlerFile),
 					"-controllers", under(root, "game/controllers"),
-					"-handler-bootstrap", under(root, "game/protocol_bootstrap/protocol_gen.go"),
 				)
 			} else {
-				args = append(args, "-bind", "", "-handlers", "", "-handler-bootstrap", "")
+				args = append(args, "-bind", "", "-handlers", "")
 			}
 			return protocol.Run(forceArg(args, force), w)
 		}},

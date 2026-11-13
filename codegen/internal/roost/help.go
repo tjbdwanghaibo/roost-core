@@ -39,7 +39,6 @@ roost add handler RenamePlayer --entity Player --component Profile
 roost add protocol RenamePlayer --group game --handler player
 # 编辑 Request 字段和 handler 参数后：
 roost add endpoint RenamePlayer --handler player
-roost add lifecycle Player --service game
 roost generate
 roost project doctor --workflow first-business
 # 每完成一步都可重新运行：roost project next
@@ -70,7 +69,7 @@ roost project next [--workflow first-business|player-tcp]
 roost project doctor --workflow first-business
 roost project upgrade [--root dir] [--dry-run] [--skip-deps] [-core version]
 make project-upgrade`,
-		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：只有第一个业务 Service，带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/lifecycle/world_singleton.go 的 EnsureWorld，Service.Init 里确保存在）。它缺省不托管任何框架服务：roost module add 装的模块用到哪个（chat、rank、mail、account……）就在同一个安装事务里声明哪个（services.<name>.framework 并加进业务 Service 的 uses），-recipe 也只带它的模块用到的。-framework 让 -template game 一开始就托管指定的框架服务：all 是 account、activity、chat、global、mail、match、platform、rank、session 九个全部，或逗号分隔列出其中几个；每个作为独立子命令托管，第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器。托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现（接管它的模块会替换掉）。-framework 只对 -template game（含 -recipe）有效。-template game-demo 托管全部九个框架服务（demo 都在用），并在 game 之上再生成一套可运行的完整游戏 demo：登录、背包与经验、升级发奖励邮件、匹配、聊天、副本、送礼 saga、地图与服务端权威同步、lockstep 战斗、GM 运维面和机器人压测（逐项说明见本仓 demo/WALKTHROUGH.md）；最小的写入链路是 Player 的 Profile / Bag 组件与 PlayerDao 持久化字段、一个 //roost:nest rollback=undo durability=strict 的加道具事务和 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
+		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：只有第一个业务 Service，带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/entities/world/singleton.go 的 EnsureWorld，Service.Init 里确保存在；每个实体包的 lifecycle_gen.go 由 roost generate 产出）。它缺省不托管任何框架服务：roost module add 装的模块用到哪个（chat、rank、mail、account……）就在同一个安装事务里声明哪个（services.<name>.framework 并加进业务 Service 的 uses），-recipe 也只带它的模块用到的。-framework 让 -template game 一开始就托管指定的框架服务：all 是 account、activity、chat、global、mail、match、platform、rank、session 九个全部，或逗号分隔列出其中几个；每个作为独立子命令托管，第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器。托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现（接管它的模块会替换掉）。-framework 只对 -template game（含 -recipe）有效。-template game-demo 托管全部九个框架服务（demo 都在用），并在 game 之上再生成一套可运行的完整游戏 demo：登录、背包与经验、升级发奖励邮件、匹配、聊天、副本、送礼 saga、地图与服务端权威同步、lockstep 战斗、GM 运维面和机器人压测（逐项说明见本仓 demo/WALKTHROUGH.md）；最小的写入链路是 Player 的 Profile / Bag 组件与 PlayerDao 持久化字段、一个 //roost:nest rollback=undo durability=strict 的加道具事务和 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
 		Example: `roost project new planet -module example.com/planet -services game,gate
 cd planet
 roost project next
@@ -135,7 +134,6 @@ roost add handler rename_player --entity player --component profile
 roost add access player --service game
 roost add protocol rename_player -group game --handler player
 roost add endpoint rename_player --handler player
-roost add lifecycle player
 roost add skill fireball
 roost add timer --entity player
 roost add saga gift -service game -steps debit,credit -native debit,credit -entity player -component wallet
@@ -182,11 +180,11 @@ roost project doctor --workflow player-tcp
 	},
 	{
 		Name: "lifecycle", Aliases: []string{"entity-lifecycle"},
-		Summary:       "生成 Entity 登录加载、首次创建和销毁边界",
-		Usage:         `roost add lifecycle <entity> [--entity <entity>] [--service <service>]`,
-		Configuration: `生成 Get/Create/GetOrCreate/Destroy 和 <Entity>FromRegistry（每个 Entity 一个，同包不重名）。它通过实例级 entity.runtime 与 Data Engine loader 工作；普通玩法读写仍走 Nest Sender。GetOrCreate 只把确切的未找到视为可创建，不吞数据库或解码错误。`,
-		Example: `roost add lifecycle Player --service game
-# 应用初始化：lifecycle.PlayerFromRegistry(registry)`,
+		Summary:       "Entity 登录加载、首次创建和销毁边界（roost generate 在每个实体包产出 lifecycle_gen.go）",
+		Usage:         `roost generate   # game/entities/<entity>/lifecycle_gen.go`,
+		Configuration: `v1.47.0 起不再有 roost add lifecycle：实现是 core 的泛型 wiring/entitylifecycle，每个实体包由 roost generate 产出 lifecycle_gen.go，给出 Lifecycle、NewLifecycle、LifecycleFromRegistry 与 ErrNotFound（一个包里有几个实体时带实体名，如 PlayerLifecycleFromRegistry）。Get/Create/GetOrCreate/Destroy 通过实例级 entity.runtime 与 Data Engine loader 工作；普通玩法读写仍走 Nest Sender。GetOrCreate 只把确切的未找到视为可创建，不吞数据库或解码错误；删过档的实体不再新建。World 单例的 EnsureWorld / WorldUniqueID 在 game/entities/world/singleton.go。`,
+		Example: `players, err := player.LifecycleFromRegistry(registry)
+value, created, err := players.GetOrCreate(ctx, playerID)`,
 	},
 	{
 		Name: "endpoint", Aliases: []string{"protocol-endpoint", "protocol-to-nest"},
@@ -320,7 +318,7 @@ func handlerTransfer(from IPlayerEntity, to IPlayerEntity, itemID int64) error {
 	{
 		Name: "protocol", Aliases: []string{"proto", "protobuf"},
 		Summary:       "生成 Proto、PB Go、消息 ID、binding、handler、robot registry 和 manifest",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@latest -def ./protocol/def -proto ./protocol/proto -pb ./protocol/pb -msgid ./protocol/msgid -bind ./protocol/player_bind -handlers ./game/protocol_handlers`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@latest -def ./protocol/def -proto ./protocol/proto -pb ./protocol/pb -msgid ./protocol/msgid -bind ./protocol/player_bind -handlers ./internal/access/player/protocols_gen.go`,
 		Configuration: `文件使用 //roost:proto package=<proto-package> go_package=<go-import;alias>；接口使用 //roost:protocol group=<group> handler=<name>；方法使用 //roost:msg id=<id>。支持 request/response、client push、server notify 和反向 proto 导入。`,
 		Example: `//roost:protocol group=game handler=player
 type GameProtocol interface {

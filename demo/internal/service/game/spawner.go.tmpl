@@ -15,7 +15,6 @@ import (
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -69,7 +68,7 @@ import (
 type spawner struct {
 	area   *sceneentity.Scene
 	bridge *Scene
-	lives  *lifecycle.MonsterLifecycle
+	lives  *monster.Lifecycle
 	ids    *runtimeid.Allocator
 	nest   corenest.Client
 
@@ -89,7 +88,7 @@ type spawner struct {
 }
 
 func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity.Scene, bridge *Scene) (func(), *spawner, error) {
-	lives, err := lifecycle.MonsterFromRegistry(registry)
+	lives, err := monster.LifecycleFromRegistry(registry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("spawner: %w", err)
 	}
@@ -106,7 +105,7 @@ func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity
 	return stop, instance, nil
 }
 
-func newSpawner(area *sceneentity.Scene, bridge *Scene, lives *lifecycle.MonsterLifecycle, ids *runtimeid.Allocator, client corenest.Client, business clock.Business) *spawner {
+func newSpawner(area *sceneentity.Scene, bridge *Scene, lives *monster.Lifecycle, ids *runtimeid.Allocator, client corenest.Client, business clock.Business) *spawner {
 	return &spawner{
 		area: area, bridge: bridge, lives: lives, ids: ids, nest: client, business: business,
 		work:     make(chan []gamescene.SpawnRequest, 1),

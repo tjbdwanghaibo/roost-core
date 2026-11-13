@@ -421,9 +421,6 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 	if spec.Access.SelfSync && !access.SelfSync && !options.SkipSelfSync {
 		commands = append(commands, "enable access.player.self_sync after module declarations; sync in the same installation transaction")
 	}
-	if spec.Access.Lifecycle && !newEntity && !moduleLifecycleExists(root, spec.Entity) {
-		commands = append(commands, fmt.Sprintf("roost add lifecycle %s --service %s", spec.Entity, service))
-	}
 	return commands
 }
 
@@ -477,12 +474,6 @@ func moduleNextHints(manifest Manifest, service string, spec ModuleSpec) []strin
 		hints = append(hints, vars.apply(strings.TrimSpace(hint)))
 	}
 	return hints
-}
-
-// moduleLifecycleExists 报告实体的 lifecycle 文件是否已在（roost add lifecycle 的产物）。
-func moduleLifecycleExists(root, entityName string) bool {
-	_, err := os.Stat(filepath.Join(root, "game", "lifecycle", toSnake(entityName)+".go"))
-	return err == nil
 }
 
 // AddModules 安装 names（连同依赖）。返回执行后的计划；Applied 为 true。
@@ -722,11 +713,6 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 			}
 		}
 	}
-	if spec.Access.Lifecycle && !newEntity && !moduleLifecycleExists(root, spec.Entity) {
-		if _, err := Add(root, AddOptions{Kind: "lifecycle", Name: spec.Entity, Service: service, Warnings: warnings}); err != nil {
-			return fmt.Errorf("roost add lifecycle %s --service %s: %w", spec.Entity, service, err)
-		}
-	}
 	needsAccess := len(spec.Protocols) > 0 || spec.Access.Transport != "" || spec.Access.SelfSync
 	if !needsAccess {
 		return nil
@@ -781,7 +767,7 @@ func moduleTouchedFiles(root string, spec ModuleSpec, newEntity bool) ([]string,
 	return paths, nil
 }
 
-// writeModule 先写模板，再追加字段、接组件，最后补自带实体的 lifecycle。所有写入都在外层回滚边界内。
+// writeModule 先写模板，再追加字段、接组件。所有写入都在外层回滚边界内。
 func writeModule(root string, manifest Manifest, service string, item ModulePlanItem) (InstalledModule, error) {
 	spec := item.spec
 	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: spec.ownedFiles(), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...)}
@@ -846,11 +832,6 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 			return InstalledModule{}, err
 		}
 		record.DAOs = moduleDAONames(spec)
-	}
-	for _, name := range spec.Entities {
-		if _, err := addEntityLifecycle(root, manifest, AddOptions{Name: name, Service: spec.entityService(name, service)}); err != nil {
-			return InstalledModule{}, err
-		}
 	}
 	return record, nil
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen"
 )
 
-// 编排器不重复各生成器的默认路径字面量（"./db/def"、"./protocol/player_bind"、"/game/playeraccess" ……），
+// 编排器不重复各生成器的默认路径字面量（"./db/def"、"./protocol/player_bind"、"./internal/access/player/protocols_gen.go" ……），
 // 只引用生成器导出的常量：否则生成器改了默认值，它自己照常工作，却与 `roost generate` 静默不一致。
 func TestOrchestratorDoesNotRepeatGeneratorDefaultPaths(t *testing.T) {
 	shared := map[string]string{
@@ -25,8 +25,8 @@ func TestOrchestratorDoesNotRepeatGeneratorDefaultPaths(t *testing.T) {
 		codeerr.DefaultOutFile:            "codeerr.DefaultOutFile",
 		protocol.DefaultDefDir:            "protocol.DefaultDefDir",
 		protocol.DefaultBindDir:           "protocol.DefaultBindDir",
-		protocol.DefaultHandlerDir:        "protocol.DefaultHandlerDir",
-		protocol.PlayerAccessImportSuffix: "protocol.PlayerAccessImportSuffix",
+		protocol.DefaultHandlerFile:       "protocol.DefaultHandlerFile",
+		protocol.PlayerAccessImport:       "protocol.PlayerAccessImport",
 		protocol.PBImportSuffix:           "protocol.PBImportSuffix",
 		tablegen.DefaultMetaDir:           "tablegen.DefaultMetaDir",
 	}

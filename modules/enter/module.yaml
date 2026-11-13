@@ -8,7 +8,6 @@ needs:
 access:
   transport: tcp
   self_sync: true
-  lifecycle: true
 entity: Player
 state:
   - field: Enter

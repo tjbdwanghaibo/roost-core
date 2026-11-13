@@ -96,9 +96,6 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		return nil, err
 	}
 	if _, enabled := m.Access["player"]; enabled {
-		if err := addGo("game/playeraccess/runtime_gen.go", renderPlayerAccessRuntime(), true); err != nil {
-			return nil, err
-		}
 		if err := addGo("internal/access/player/mod_gen.go", renderPlayerAccessMod(m), true); err != nil {
 			return nil, err
 		}
@@ -172,7 +169,11 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		}
 		serviceMods, _ := resolveMods(effectiveServiceMods(m, name))
 		if contains(serviceMods, "manager") {
-			if err := addGo("internal/service/"+name+"/managers.go", renderServiceManagers(m.servicePackage(name)), false); err != nil {
+			if name == m.gameManagers {
+				if err := addGo(gameManagersPath, renderGameManagers(), false); err != nil {
+					return nil, err
+				}
+			} else if err := addGo("internal/service/"+name+"/managers.go", renderServiceManagers(m.servicePackage(name)), false); err != nil {
 				return nil, err
 			}
 		}
@@ -410,6 +411,9 @@ func renderBootstrap(m Manifest) string {
 		}
 	}
 	imports[m.Project.Module+"/internal/registry"] = "registry"
+	if m.gameManagers != "" {
+		imports[m.Project.Module+"/game/managers"] = "gamemanagers"
+	}
 	if selfSyncEnabled(m) {
 		imports[selfSyncImport] = "selfsync"
 		imports[m.Project.Module+"/game/entities/"+selfSyncEntity] = selfSyncEntity
@@ -668,6 +672,9 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 			// Unreachable via Validate, which rejects manager in shared_mods.
 			return "kitmanager.NewManagerMod()"
 		}
+		if service == m.gameManagers {
+			return "kitmanager.NewManagerMod(gamemanagers.Managers()...)"
+		}
 		return "kitmanager.NewManagerMod(service" + safeIdent(service) + ".Managers()...)"
 	case "dataengine":
 		options := []string{"kitdataengine.WithEntityAccess(EntityAccess)"}
@@ -762,6 +769,37 @@ func Managers() []app.IManager {
 	}
 }
 `, pkg)
+}
+
+// renderGameManagers 是 game 服务的 manager 登记点（v1.47.0 起在 game/managers，业务文件，只创建一次）。
+// 新建工程是空列表；注释讲清 manager 是什么、什么时候用、DependsOn 的作用，以及 Start 时 World 还不存在。
+func renderGameManagers() string {
+	return `package managers
+
+import "github.com/tjbdwanghaibo/roost-core/framework/app"
+
+// Managers 返回 game 服务进程要启动的 manager（生成的 bootstrap 把它交给 ManagerMod）。
+//
+// manager 是什么：进程级的单例逻辑，有 Start / Stop 生命周期、自己不持久化任何状态——场景登记表、
+// 路由表、只读缓存、定时扫描这类。它不是 Entity：要落库、要随玩家或世界一起回滚的状态放进实体的 DAO，
+// 由 Nest handler 改。
+//
+// 什么时候用：一份数据或一个后台循环在整个进程里只有一份，又不属于任何一个实体时。只属于一个玩家或
+// 一个世界的东西写成组件；跨进程共享的东西用托管服务或 Remote 实体，不要用 manager。
+//
+// DependsOn：manager 可以实现 app.ManagerDependencyProvider（DependsOn() []string，返回别的 manager 的 Name()），
+// ManagerMod 按依赖先后启动、反序停止；没有依赖关系的按这里列出的顺序。这个列表是登记顺序，不是启动顺序。
+// 起服之后不能再登记，所以这里是唯一的登记点。
+//
+// Start 时 World 还不存在：ManagerMod 与 Nest 等 Mod 一起在 Service.Init 之前启动，而 World 在 game Service 的
+// Init 里才经 world.EnsureWorld 创建或加载。Start 里不要找 World、不要假设任何实体已加载；需要 World 的
+// 工作放到第一次用到时，或由 Service.Init 之后的业务入口触发。
+func Managers() []app.IManager {
+	return []app.IManager{
+		// mymgr.Mgr,
+	}
+}
+`
 }
 
 // App 单实例锁（app.Singleton，见 framework/app/singleton.go）的生成规则。
@@ -1226,7 +1264,7 @@ LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
 LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs dev-run dev-stop dev-status dev-smoke clean
-.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-table new-dao new-timer new-webroute new-errcode new-saga new-effect new-rpc
+.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-endpoint new-skill new-table new-dao new-timer new-webroute new-errcode new-saga new-effect new-rpc
 
 help:
 	$(ROOST) help-make
@@ -1298,8 +1336,6 @@ new-component:
 	$(ROOST) add component $(NAME) $(if $(ENTITY),--entity $(ENTITY),)
 new-handler:
 	$(ROOST) add handler $(NAME) --entity $(ENTITY) --component $(COMPONENT)
-new-lifecycle:
-	$(ROOST) add lifecycle $(NAME) $(if $(ENTITY),--entity $(ENTITY),) -service $(SERVICE)
 new-endpoint:
 	$(ROOST) add endpoint $(NAME) --handler $(HANDLER) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(NEST_HANDLER),--nest-handler $(NEST_HANDLER),) $(if $(LIFECYCLE),--lifecycle $(LIFECYCLE),)
 new-skill:

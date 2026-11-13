@@ -11,8 +11,6 @@ import (
 	db "{{MODULE}}/db"
 	roomentity "{{MODULE}}/game/entities/room"
 	sender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/lifecycle"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -43,7 +41,7 @@ func FromRegistry(registry *app.Registry) (*Rooms, error) {
 	if !ok || client == nil {
 		return nil, fmt.Errorf("matchroom: nest unavailable")
 	}
-	lifecycle, err := lifecycle.RoomFromRegistry(registry)
+	lifecycle, err := roomentity.LifecycleFromRegistry(registry)
 	if err != nil {
 		return nil, err
 	}

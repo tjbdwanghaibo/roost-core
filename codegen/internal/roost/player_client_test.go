@@ -301,7 +301,7 @@ import (
  "sync/atomic"
  "github.com/tjbdwanghaibo/roost-core/robot"
  accessplayer "example.com/planet/internal/access/player"
- "example.com/planet/game/playeraccess"
+ "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
  "example.com/planet/protocol/pb"
 )
 func TestClientSDKRealGeneratedTCP(t *testing.T) {
@@ -541,7 +541,7 @@ import (
  "github.com/tjbdwanghaibo/roost-core/client/wire"
  "github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
  "github.com/spf13/viper"
- "example.com/planet/game/playeraccess"
+ "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
  accessplayer "example.com/planet/internal/access/player"
 )
 // 仅Provide测试的依赖：不模拟Nest执行，任何实际调用应失败。

@@ -10,7 +10,6 @@ import (
 	gameenter "{{MODULE}}/game/enter"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 
@@ -109,12 +108,12 @@ func (controller *Controller) built(ctx context.Context, playerID int64) (bool, 
 // find 加载玩家的档，不创建。found 为 false 表示持久层确认没有这个实体；别的错误（数据库、解码、超时、
 // 删过档）原样返回，不当成“没有”。
 func (controller *Controller) find(ctx context.Context, playerID int64) (entityID int64, found bool, err error) {
-	entities, err := lifecycle.PlayerFromRegistry(controller.registry)
+	entities, err := player.LifecycleFromRegistry(controller.registry)
 	if err != nil {
 		return 0, false, err
 	}
 	if _, err := entities.Get(ctx, playerID); err != nil {
-		if errors.Is(err, lifecycle.ErrPlayerNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+		if errors.Is(err, player.ErrNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
 			return 0, false, nil
 		}
 		return 0, false, err

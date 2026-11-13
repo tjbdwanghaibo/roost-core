@@ -4,7 +4,7 @@ requires: [actor]
 needs:
   mods: [nest, heartbeat]
   features: [entity, dao, protocol, errcode]
-access: {transport: tcp, self_sync: true, lifecycle: true}
+access: {transport: tcp, self_sync: true}
 entity: Player
 entities: [Scene]
 sync_packer: NewActorPlayerSyncPacker

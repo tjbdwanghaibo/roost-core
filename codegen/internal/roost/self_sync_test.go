@@ -361,7 +361,7 @@ func (controller *Controller) Registry() *app.Registry { return controller.regis
 
 import (
 	"example.com/planet/game/lifecycle"
-	"example.com/planet/game/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"example.com/planet/protocol/pb"
 )
 
