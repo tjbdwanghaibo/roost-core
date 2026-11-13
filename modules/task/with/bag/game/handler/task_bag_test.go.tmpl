@@ -3,7 +3,14 @@ package handler
 import (
 	"math"
 	"testing"
+
+	"{{MODULE}}/configs/schema"
 )
+
+// 场景用到的道具自己带（盖在工程道具表的同号行上），工程改 configs/table/item.csv 不影响这组场景。
+func init() {
+	taskTestTables["item"] = []schema.Item{{ID: 1001, Name: "task-test-item", MaxStack: 99}}
+}
 
 func taskItem(f *taskFixture, t *testing.T, id, count int64) {
 	t.Helper()

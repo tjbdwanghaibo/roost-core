@@ -20,7 +20,7 @@ func TestModuleGachaIdleScenariosAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v %+v", err, report)
 	}
-	want := map[string]int{"gacha": 24, "idle": 19}
+	want := map[string]int{"gacha": 29, "idle": 19}
 	if len(report.Modules) != 2 {
 		t.Fatalf("verification rows: %+v", report.Modules)
 	}

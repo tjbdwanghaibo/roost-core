@@ -597,6 +597,8 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **前置骨架不回退**：安装会先执行缺失的 `roost add dao` / `roost add access player`；之后模块安装失败时这两步的结果保留（它们是完整的工程状态）。
 - **嵌套字段的 `persist,nosync` 不生效（尚未确认是缺陷还是既定形状）**：在嵌套类型的字段上写 `dao:"persist,nosync"`，生成器接受，但这个字段照样出现在同步补丁的 PB 里（2026-11-10 在临时生成工程上实测）。`nopersist,nosync` 的嵌套字段另有既有用例（`codegen/internal/dao/testdata/remoteviews`），两者的语义没有逐项核对。现行规则：同步与否按 DAO 顶层字段决定，要让一部分状态不同步就放进另一个顶层字段的嵌套类型里。下一步：读 `codegen/internal/dao/sync_proto.go` 与 `template_nested.go` 里嵌套字段对 `Tag.Sync` / `Tag.Persist` 的处理，确认是该拒绝还是该生效。
 
+- **模块自带场景读工程配置表（尚未确认）**：2026-11-13 组合 skill 试用发现，task 的自带场景读工程 `configs/data`，工程按 README 换表后 24 条变红；task 与它的联动已改为装载自带样例行，checkin 的测试不再引用被测常量。同类读工程配置的还有 shop（`shop_config_test`）、activity、activity_alliance 的场景，以及 purchase+bag、bag+gm 的联动；它们在工程换表后会不会红没有逐个确认。确认办法：新生成工程装上该模块，按它 README 的“复用方式”换表，跑 `roost module verify`。
+
 ### 业务 HTTP 路由与配置检查
 
 **业务 HTTP 路由（`wiring/web`）**：

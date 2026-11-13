@@ -19,4 +19,5 @@ type GachaReceipt struct {
 	Items   []int64 `store:"5"`
 	Misses  int64   `store:"6"`
 	Seq     int64   `store:"7"`
+	Free    bool    `store:"8"` // DrawFree 的回执；同一个键不能在免费与付费之间互相重放
 }

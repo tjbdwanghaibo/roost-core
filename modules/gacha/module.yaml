@@ -17,4 +17,4 @@ errcodes: [gacha_key_invalid, gacha_key_conflict, gacha_count_invalid, gacha_poo
 verify:
   packages: [./game/handler, ./game/entities/player]
   run: ^TestGacha
-  pass: 24
+  pass: 29

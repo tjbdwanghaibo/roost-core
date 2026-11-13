@@ -4,9 +4,16 @@ import (
 	"context"
 	"testing"
 
+	"{{MODULE}}/configs/schema"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/protocol/pb"
 )
+
+// 场景用到的商品自己带（盖在工程商品表的同号行上）：1 号商品每份 1 个 1001、10 金币、不限购。
+// 1001 这件道具由 task_bag_test.go 带上——shop 依赖 bag，装了 shop 就一定有那组联动。
+func init() {
+	taskTestTables["shop_goods"] = []schema.ShopGoods{{ID: 1, ItemID: 1001, ItemCount: 1, Price: 10}}
+}
 
 func taskBuy(f *taskFixture, key string, count int64) error {
 	RegisterShopBuyNestHandlers()

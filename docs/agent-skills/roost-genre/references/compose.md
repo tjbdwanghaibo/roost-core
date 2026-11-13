@@ -125,7 +125,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 | 任务 | `task` | wallet | 事件推进；每日 / 每周 / 永久、前置链；配置表与奖励 |
 | 体力 | `stamina` | wallet、rules | 惰性恢复、消耗、花金币补满 |
 | 商店 | `shop` | wallet、bag、rules | 金币买道具、限购、请求键防重 |
-| 抽卡 | `gacha` | wallet、bag | 权重与保底、单抽与十连 |
+| 抽卡 | `gacha` | wallet、bag | 权重与保底、单抽与十连；组件有不扣费的单抽 `DrawFree`（每日免费这类次数规则写在工程里）；保底不能关，不要保底按 README 配到上限 |
 | 离线收益 | `idle` | wallet | 按间隔惰性结算、时间与金额双上限 |
 | 兑换码 | `cdkey` | mailbox | 一码一次或一人一次 |
 | 充值发货 | `purchase` | wallet | platform 记单、顺序发货、恰好一次 |

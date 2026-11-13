@@ -2,14 +2,18 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
@@ -24,14 +28,97 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// 样例任务表里的数在这里写死，不引用被测代码的常量与任务表：表改错了这些用例要变红。
-// 工程把任务表换成自己的之后，按自己的表改这几个数。
+// 场景用模块自带的样例任务表（taskSampleRows，与模块缺省的 configs/table/task.csv 同样三行），写到临时目录装载，
+// 不读工程的 configs/table/task.csv：工程换表、停用行、加行都不影响这些场景。数字在这里写死，
+// 不引用被测代码的常量；工程表本身是否可用由 game/entities/player 的 TestTaskCatalogEntriesAreUsable 检查。
 const (
-	taskTestCheckin = 1 // 做 1 次，奖 20
-	taskTestSpend   = 2 // 做 3 次，奖 30
-	taskTestBattle  = 3 // 做 10 次，奖 100
+	taskTestCheckin = 1 // checkin.claimed，做 1 次，奖 20
+	taskTestSpend   = 2 // wallet.spent，做 3 次，奖 30
+	taskTestDungeon = 3 // dungeon.claimed，做 10 次，奖 100
 	taskTestUnknown = 999
 )
+
+func taskSampleRows() []schema.Task {
+	return []schema.Task{
+		{ID: taskTestCheckin, Event: "checkin.claimed", Period: "daily", Target: 1, RewardKind: "coins", RewardCount: 20},
+		{ID: taskTestSpend, Event: "wallet.spent", Period: "daily", Target: 3, RewardKind: "coins", RewardCount: 30},
+		{ID: taskTestDungeon, Event: "dungeon.claimed", Period: "daily", Target: 10, RewardKind: "coins", RewardCount: 100},
+	}
+}
+
+// taskTestTables 是联动场景自带的别的表的行（表名 → 行的切片），只在联动测试文件的 init 里登记（with/bag 的道具、
+// with/shop 的商品）。装载时按 id 盖到工程那张表的同号行上，工程其余的行保留：同时装着的别的模块的钩子
+// 与跨表引用照常可用，场景用到的那几行又不随工程改表而变。
+var taskTestTables = map[string]any{}
+
+// taskRows 用 rows 作为整张任务表装载，经实际生成的登记、校验与请求快照，不给业务代码留测试开关。
+// 工程 configs/data 里别的表原样带上（联动里的 bag / shop 等仍能读到各自的规则），再盖上 taskTestTables 的行。
+// 缺省 Store 与 RuntimeConfig 由 newTaskFixture 在用例结束时换回。
+func taskRows(t *testing.T, rows ...schema.Task) {
+	t.Helper()
+	dir := t.TempDir()
+	tables := map[string][]map[string]json.RawMessage{}
+	entries, err := os.ReadDir("../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".json" || name == "_manifest.json" || name == "task.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../configs/data", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var table []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &table); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		tables[name[:len(name)-len(".json")]] = table
+	}
+	own := map[string]any{"task": rows}
+	for name, extra := range taskTestTables {
+		own[name] = extra
+	}
+	for name, data := range own {
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var replacements []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &replacements); err != nil {
+			t.Fatal(err)
+		}
+		merged := []map[string]json.RawMessage{}
+		taken := map[string]bool{}
+		for _, row := range replacements {
+			taken[string(row["id"])] = true
+		}
+		for _, row := range tables[name] {
+			if !taken[string(row["id"])] {
+				merged = append(merged, row)
+			}
+		}
+		tables[name] = append(merged, replacements...)
+	}
+	for name, table := range tables {
+		raw, err := json.Marshal(table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
 type taskGetter map[int64]entity.IThreadSafeEntity
@@ -87,13 +174,7 @@ func newTaskFixture(t *testing.T) *taskFixture {
 	t.Helper()
 	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
 	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
-	registry := configdata.NewRegistry()
-	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := configdata.NewStore(registry, "../../configs/data").Load(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	taskRows(t, taskSampleRows()...)
 	RegisterTaskReportNestHandlers()
 	playerentity.RegisterEntity()
 	RegisterTaskClaimNestHandlers()
@@ -232,9 +313,9 @@ func TestTaskAdvanceAccumulatesAndCapsAtTheTarget(t *testing.T) {
 	f.want(t, "after two of three", taskFacts{day: 20261110, progress: map[int64]int64{2: 2}, commits: 1})
 	// 多推进的部分不算：进度封顶在目标次数 3。
 	f.mustAdvance(t, taskTestSpend, 5, 3)
-	f.mustAdvance(t, taskTestBattle, 4, 4)
+	f.mustAdvance(t, taskTestDungeon, 4, 4)
 	// 一次推进的次数再大也只是封顶，不会溢出成负数绕过去。
-	f.mustAdvance(t, taskTestBattle, math.MaxInt64, 10)
+	f.mustAdvance(t, taskTestDungeon, math.MaxInt64, 10)
 	f.want(t, "after capping", taskFacts{day: 20261110, progress: map[int64]int64{2: 3, 3: 10}, commits: 4})
 }
 
@@ -310,7 +391,7 @@ func TestTaskClaimUnfinishedWritesNothing(t *testing.T) {
 	if _, err := f.claim(taskTestSpend); !errors.Is(err, apperrors.ErrTaskIncomplete) {
 		t.Fatalf("err = %v, want task_incomplete", err)
 	}
-	if _, err := f.claim(taskTestBattle); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+	if _, err := f.claim(taskTestDungeon); !errors.Is(err, apperrors.ErrTaskIncomplete) {
 		t.Fatalf("err = %v, want task_incomplete", err)
 	}
 	f.want(t, "claim one short of the target", taskFacts{day: 20261110, progress: map[int64]int64{1: 1, 2: 2}, commits: 2})
@@ -353,7 +434,7 @@ func TestTaskNewDayClearsProgressAndClaimsBeforeAdvancing(t *testing.T) {
 	f.mustAdvance(t, taskTestCheckin, 1, 1)
 	f.mustClaim(t, taskTestCheckin, 20, 20)
 	f.mustAdvance(t, taskTestSpend, 2, 2)
-	f.mustAdvance(t, taskTestBattle, 4, 4)
+	f.mustAdvance(t, taskTestDungeon, 4, 4)
 	f.want(t, "end of day one", taskFacts{day: 20261110, progress: map[int64]int64{1: 1, 2: 2, 3: 4}, claimed: map[int64]bool{1: true}, coins: 20, commits: 4})
 
 	f.pass(time.Millisecond) // 下一个业务日的第一毫秒
@@ -416,12 +497,12 @@ func TestTaskRejectedCommitRollsBackProgressClaimsAndCoins(t *testing.T) {
 	// 跨天后的第一次推进连同清零一起回滚：记录整份退回昨天的样子。
 	f.pass(24 * time.Hour)
 	f.committer.reject.Store(true)
-	if _, err := f.advance(taskTestBattle, 1); err == nil {
+	if _, err := f.advance(taskTestDungeon, 1); err == nil {
 		t.Fatal("a rejected commit reported success")
 	}
 	f.committer.reject.Store(false)
 	f.want(t, "rolled-back day rollover", dayOne)
-	f.mustAdvance(t, taskTestBattle, 1, 1)
+	f.mustAdvance(t, taskTestDungeon, 1, 1)
 	f.want(t, "day rollover after the rollback", taskFacts{day: 20261111, progress: map[int64]int64{3: 1}, coins: 50, commits: 6})
 }
 
@@ -471,8 +552,8 @@ func TestTaskRecordStaysBoundedOverManyDays(t *testing.T) {
 	for day := 1; day <= days; day++ {
 		f.mustAdvance(t, taskTestCheckin, 1, 1)
 		f.mustAdvance(t, taskTestSpend, 3, 3)
-		f.mustAdvance(t, taskTestBattle, 10, 10)
-		for _, taskID := range []int64{taskTestCheckin, taskTestSpend, taskTestBattle} {
+		f.mustAdvance(t, taskTestDungeon, 10, 10)
+		for _, taskID := range []int64{taskTestCheckin, taskTestSpend, taskTestDungeon} {
 			if _, err := f.claim(taskID); err != nil {
 				t.Fatalf("day %d task %d: %v", day, taskID, err)
 			}
@@ -505,7 +586,7 @@ func TestTaskComponentRefusesBeforeWritingAnything(t *testing.T) {
 	f.mustAdvance(t, taskTestCheckin, 1, 1)
 	f.mustClaim(t, taskTestCheckin, 20, 20)
 	f.mustAdvance(t, taskTestSpend, 3, 3)
-	f.mustAdvance(t, taskTestBattle, 4, 4)
+	f.mustAdvance(t, taskTestDungeon, 4, 4)
 	// 把余额填到再也放不下 30 金币：做完的任务 2 领奖会被货币模块拒绝。
 	if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "fill", math.MaxInt64-40); err != nil {
 		t.Fatal(err)
@@ -524,13 +605,13 @@ func TestTaskComponentRefusesBeforeWritingAnything(t *testing.T) {
 		if _, err := tasks.Advance(taskTestUnknown, 1, tomorrow); !errors.Is(err, apperrors.ErrTaskUnknown) {
 			t.Errorf("advance an unknown task: err = %v", err)
 		}
-		if _, err := tasks.Advance(taskTestBattle, 0, tomorrow); !errors.Is(err, apperrors.ErrTaskCountInvalid) {
+		if _, err := tasks.Advance(taskTestDungeon, 0, tomorrow); !errors.Is(err, apperrors.ErrTaskCountInvalid) {
 			t.Errorf("advance by zero: err = %v", err)
 		}
 		if _, err := tasks.Claim(taskTestUnknown, now); !errors.Is(err, apperrors.ErrTaskUnknown) {
 			t.Errorf("claim an unknown task: err = %v", err)
 		}
-		if _, err := tasks.Claim(taskTestBattle, now); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+		if _, err := tasks.Claim(taskTestDungeon, now); !errors.Is(err, apperrors.ErrTaskIncomplete) {
 			t.Errorf("claim an unfinished task: err = %v", err)
 		}
 		if _, err := tasks.Claim(taskTestCheckin, now); !errors.Is(err, apperrors.ErrTaskClaimed) {

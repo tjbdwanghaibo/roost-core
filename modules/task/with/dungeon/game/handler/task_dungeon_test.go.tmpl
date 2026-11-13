@@ -33,7 +33,7 @@ func TestWithTaskDungeonReplayDoesNotCountAgain(t *testing.T) {
 	if err := taskDungeonClaim(f); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.facts(t); got.progress[3] != 1 || got.day != 20261110 || got.commits != 1 {
+	if got := f.facts(t); got.progress[taskTestDungeon] != 1 || got.day != 20261110 || got.commits != 1 {
 		t.Fatalf("dungeon=%v", got)
 	}
 }
@@ -48,7 +48,7 @@ func TestWithTaskDungeonRollbackCanRetry(t *testing.T) {
 	if err := taskDungeonClaim(f); err != nil {
 		t.Fatal(err)
 	}
-	if f.facts(t).progress[3] != 1 {
+	if f.facts(t).progress[taskTestDungeon] != 1 {
 		t.Fatal("retry not counted once")
 	}
 }

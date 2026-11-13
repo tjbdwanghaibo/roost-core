@@ -2,58 +2,17 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/configs/schema"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
-// 测试自己的任务表通过实际生成的 CSV/JSON 校验与请求快照装载，不给业务代码留测试开关。
-func taskRows(t *testing.T, rows ...schema.Task) {
-	t.Helper()
-	dir := t.TempDir()
-	// 同时拷贝已安装的表，确保联动里的 bag / shop 仍能读取各自规则。
-	entries, err := os.ReadDir("../../configs/data")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == "_manifest.json" {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join("../../configs/data", entry.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	raw, err := json.Marshal(rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "task.json"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	registry := configdata.NewRegistry()
-	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
 func taskRow(id int64, event, period string) schema.Task {
 	return schema.Task{ID: id, Event: event, Period: period, Target: 2, RewardKind: "coins", RewardCount: 7}
 }
@@ -231,8 +190,8 @@ func TestTaskStateIDBoundSurvivesTableChurn(t *testing.T) {
 }
 func TestTaskRewardResponseNamesItsAsset(t *testing.T) {
 	f := newTaskFixture(t)
-	f.mustAdvance(t, 1, 1, 1)
-	response, err := f.claim(1)
+	f.mustAdvance(t, taskTestCheckin, 1, 1)
+	response, err := f.claim(taskTestCheckin)
 	if err != nil {
 		t.Fatal(err)
 	}

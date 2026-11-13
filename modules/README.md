@@ -51,7 +51,7 @@
 | [naming](naming/README.md) | Directory 两阶段占名、未知结果恢复；接管 ProfileRename 的唯一名字流程 | profile（代办 directory Mod） | Naming | 15 |
 | [cdkey](cdkey/README.md) | 一码一次或一人一次；配置表、持久兑换意图、以稳定键发邮件 | mailbox（代办 directory Mod） | Cdkey 的有限意图/回执 | 12 |
 | [notice](notice/README.md) | 可信公告与跑马灯入口，经 chat 的 AnnounceWorld；不默认定时播放 | chat | 无 | 8 |
-| [gacha](gacha/README.md) | 配置概率/保底、十连；扣钱、发卡和请求去重同事务 | wallet、bag | Gacha / GachaLedger | 24 |
+| [gacha](gacha/README.md) | 配置概率/保底、十连；扣钱、发卡和请求去重同事务；不扣费的单抽入口（免费次数规则归工程） | wallet、bag | Gacha / GachaLedger | 29 |
 | [friends](friends/README.md) | 好友、申请与黑名单；双边动作在本进程事务中，拒绝申请/取消拉黑可离线 | 无 | Friends | 18 |
 | [idle](idle/README.md) | 惰性离线收益、时长上限、回拨处理与序号重放 | wallet | Idle | 19 |
 

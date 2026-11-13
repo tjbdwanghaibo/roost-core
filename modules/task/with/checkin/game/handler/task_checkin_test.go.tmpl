@@ -11,54 +11,60 @@ import (
 	"{{MODULE}}/protocol/pb"
 )
 
-// newWithTaskCheckinFixture 是每日任务的 fixture 再接上签到的 handler：两个模块都装着时才有这个文件。
-// 签到的 handler 在起 Nest 之前登记。
-func newWithTaskCheckinFixture(t *testing.T) (*taskFixture, func() error) {
+// newWithTaskCheckinFixture 是任务的 fixture 再接上签到的 handler：两个模块都装着时才有这个文件。
+// 签到的 handler 在起 Nest 之前登记。返回的签到函数给出签到应答：签到发多少金币是签到模块的规则，
+// 这里只拿应答里的 Reward 记账，不写死它——工程改签到奖励不影响这组联动场景。
+// 任务一侧用 task 自带的样例任务表（taskTestCheckin：签到 1 次，奖 20）。
+func newWithTaskCheckinFixture(t *testing.T) (*taskFixture, func() (*pb.CheckinClaimResponse, error)) {
 	t.Helper()
 	RegisterCheckinClaimNestHandlers()
 	f := newTaskFixture(t)
 	claims := sender.NewCheckinClaimSender(f.engine)
-	return f, func() error {
-		_, err := claims.Sync_CheckinClaim(context.Background(), f.player.ID(), &pb.CheckinClaimRequest{})
-		return err
+	return f, func() (*pb.CheckinClaimResponse, error) {
+		return claims.Sync_CheckinClaim(context.Background(), f.player.ID(), &pb.CheckinClaimRequest{})
 	}
 }
 
 // 今天签到成功，“签到一次”这条每日任务就完成了，可以领奖；被拒绝的第二次签到不再推进；
-// 第二天签到时任务先清零再推进，又可以做一遍。金币数：签到第 1 天 10、任务奖 20、第 2 天签到 20。
+// 第二天签到时任务先清零再推进，又可以做一遍。
 func TestWithTaskCheckinAdvancesTheDailyTask(t *testing.T) {
 	f, checkin := newWithTaskCheckinFixture(t)
 	today := f.facts(t).day
-	if err := checkin(); err != nil {
+	first, err := checkin()
+	if err != nil {
 		t.Fatal(err)
 	}
+	coins := first.Reward
 	facts := f.facts(t)
-	if facts.progress[taskTestCheckin] != 1 || len(facts.progress) != 1 || facts.coins != 10 || facts.commits != 1 {
-		t.Fatalf("after the check-in: %v, want task 1 at 1/1, 10 coins, one commit", facts)
+	if facts.progress[taskTestCheckin] != 1 || len(facts.progress) != 1 || facts.coins != coins || facts.commits != 1 {
+		t.Fatalf("after the check-in: %v, want task %d at 1/1, %d coins, one commit", facts, taskTestCheckin, coins)
 	}
 	if facts.day <= today {
 		t.Fatalf("the task record was not moved to today: day=%d", facts.day)
 	}
 	today = facts.day
-	f.mustClaim(t, taskTestCheckin, 20, 30)
+	coins += 20
+	f.mustClaim(t, taskTestCheckin, 20, coins)
 
 	f.pass(3 * time.Hour)
-	if err := checkin(); !errors.Is(err, apperrors.ErrCheckinDone) {
+	if _, err := checkin(); !errors.Is(err, apperrors.ErrCheckinDone) {
 		t.Fatalf("second check-in: err = %v, want checkin_done", err)
 	}
-	if facts := f.facts(t); facts.progress[taskTestCheckin] != 1 || !facts.claimed[taskTestCheckin] || facts.coins != 30 || facts.commits != 2 {
+	if facts := f.facts(t); facts.progress[taskTestCheckin] != 1 || !facts.claimed[taskTestCheckin] || facts.coins != coins || facts.commits != 2 {
 		t.Fatalf("a refused check-in changed the task record: %v", facts)
 	}
 
 	f.pass(24 * time.Hour)
-	if err := checkin(); err != nil {
+	second, err := checkin()
+	if err != nil {
 		t.Fatal(err)
 	}
+	coins += second.Reward
 	facts = f.facts(t)
-	if facts.day != today+1 || facts.progress[taskTestCheckin] != 1 || len(facts.claimed) != 0 || facts.coins != 50 {
-		t.Fatalf("day 2: %v, want day %d, task 1 at 1/1 and unclaimed, 50 coins", facts, today+1)
+	if facts.day != today+1 || facts.progress[taskTestCheckin] != 1 || len(facts.claimed) != 0 || facts.coins != coins {
+		t.Fatalf("day 2: %v, want day %d, task %d at 1/1 and unclaimed, %d coins", facts, today+1, taskTestCheckin, coins)
 	}
-	f.mustClaim(t, taskTestCheckin, 20, 70)
+	f.mustClaim(t, taskTestCheckin, 20, coins+20)
 }
 
 // 签到的提交被拒：签到与任务进度一起回滚，没有“任务算了、签到没成”的中间状态；之后重签两边都成。
@@ -66,7 +72,7 @@ func TestWithTaskCheckinRollsBackTogether(t *testing.T) {
 	f, checkin := newWithTaskCheckinFixture(t)
 	before := f.facts(t)
 	f.committer.reject.Store(true)
-	if err := checkin(); err == nil {
+	if _, err := checkin(); err == nil {
 		t.Fatal("a rejected commit reported success")
 	}
 	f.want(t, "after the rejected check-in", before)
@@ -74,20 +80,22 @@ func TestWithTaskCheckinRollsBackTogether(t *testing.T) {
 		t.Fatalf("claiming the task after the rolled-back check-in: err = %v, want task_incomplete", err)
 	}
 	f.committer.reject.Store(false)
-	if err := checkin(); err != nil {
+	response, err := checkin()
+	if err != nil {
 		t.Fatal(err)
 	}
-	f.mustClaim(t, taskTestCheckin, 20, 30)
+	f.mustClaim(t, taskTestCheckin, 20, response.Balance+20)
 }
 
 // 任务已经做完（别处推进过）再签到：签到照常成功，任务进度不再变。
 func TestWithTaskCheckinOnAFinishedTaskStillChecksIn(t *testing.T) {
 	f, checkin := newWithTaskCheckinFixture(t)
 	f.mustAdvance(t, taskTestCheckin, 1, 1)
-	if err := checkin(); err != nil {
+	response, err := checkin()
+	if err != nil {
 		t.Fatalf("check-in with the task already finished: %v", err)
 	}
-	if facts := f.facts(t); facts.progress[taskTestCheckin] != 1 || facts.coins != 10 {
-		t.Fatalf("after the check-in: %v, want task 1 still at 1/1 and 10 coins", facts)
+	if facts := f.facts(t); facts.progress[taskTestCheckin] != 1 || facts.coins != response.Balance {
+		t.Fatalf("after the check-in: %v, want task %d still at 1/1 and %d coins", facts, taskTestCheckin, response.Balance)
 	}
 }

@@ -9,13 +9,9 @@ import (
 	generated "{{MODULE}}/configs/generated"
 )
 
-// TaskDaily* 是缺省任务表（configs/table/task.csv）里三行每日任务的任务号，名字跟着那一行的事件：
-// 1 是 checkin.claimed（签到一次），2 是 wallet.spent（消费三次），3 是 dungeon.claimed（副本领奖十次）。
-// 工程改了任务表就跟着改或删掉它们；任务的周期、目标与奖励以表为准，不以这里为准。
+// 任务号、事件、目标与奖励都只在任务表（configs/table/task.csv）里，代码里不给某一行起名字：
+// 工程换表之后不留下指向不存在的行的常量。这里只有与表无关的上限与周期名。
 const (
-	TaskDailyCheckin    int64 = 1
-	TaskDailySpend      int64 = 2
-	TaskDailyDungeon    int64 = 3
 	TaskMaxID           int64 = 4096
 	TaskPeriodDaily           = "daily"
 	TaskPeriodWeekly          = "weekly"

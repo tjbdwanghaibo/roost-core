@@ -56,7 +56,7 @@
 
 - **需求正好是它**：`roost module add task`，连带装上 wallet 与“消费计数”联动。再装 checkin、shop、stamina、profile、dungeon、bag、leaderboard 中的任意一个，对应的联动文件自动写入。
 - **需求多一点**
-  - 加任务、改目标与奖励：只改 `configs/table/task.csv`，再运行 `roost generate`；运行期沿用 configdata 的请求快照与热更。
+  - 加任务、改目标与奖励、整张换掉：只改 `configs/table/task.csv`，再运行 `roost generate`；运行期沿用 configdata 的请求快照与热更。模块自带的场景（含联动场景）用自己带的样例表（`game/handler/task_test.go` 的 `taskSampleRows`，与缺省的三行相同），写到临时目录装载，换表不用改它们；只有 `TestTaskCatalogEntriesAreUsable` 检查工程自己的表：每一行没停用的任务都必须可用（ID、事件、周期、奖励合法，前置存在且可用），停用行跳过。代码里没有指向表中某一行的常量。
   - 让自己的功能驱动任务：在自己的、已经锁住 Player 的 Nest handler 里，事实第一次生效之后调：
 
     ```go
@@ -99,4 +99,5 @@ task 自己的 `with/`（八组，都是“另一个模块也装着时才有”�
 - `roost module verify task`：29 条场景（`^TestTask`，包 `./game/handler` 26 条、`./game/entities/player` 3 条）。覆盖：推进累加与封顶、已完成 / 已领不再写、拒绝零写入、领奖入账、同日二次领取、未完成 / 未知任务、货币拒绝时不领、新一天先清再记、昨天完成今天不能领、提交被拒整体回滚、时钟回拨、业务日随配置、记录有界、同步；事件只推进匹配的任务、周任务只在业务周一换周、周回拨不重开、永久任务跨天与下架后仍记得领过、链要等前置领奖且不复用事件、坏链零写入、周期重置与奖励回滚、ID 上界经得起表反复增删、应答写明资产、未登记的奖励不产生进度；目录可用性与配置装载校验。
 - 八组联动共 25 条（见上表）。
 - 全部是离线场景：真实的 Nest 引擎、生成的 DAO / Sender、真实的配置装载；提交器是不落盘的替身，排行榜联动里的 Rank 是替身。没有经过真实 TCP、WAL、Mongo、NATS 或跨进程。
+- 场景装载的是自带的样例任务表，不读工程的 `configs/table/task.csv`；`with/bag`、`with/shop` 的场景还自带用到的那一件道具（1001）与那一件商品（1 号），盖在工程表的同号行上，工程别的表原样带上（同时装着的别的模块的钩子照常读得到）。工程改任务表、道具表、商品表不影响这些场景；工程表本身由 `roost generate` 时的表校验、`TestTaskCatalogEntriesAreUsable`（任务）与 bag 的 `TestBagAcceptsTheItemsOfTheProjectItemTable`（道具）检查。
 - 仓库侧的组合验收入口是 `codegen/internal/roost` 里的 `TestModuleTaskEventsPeriodsAndMutations`。

@@ -22,6 +22,12 @@ import (
 
 const checkinDay = 24 * time.Hour
 
+// 奖励规则的数字只写死在两条用例里（样例规则：连续第 n 天发 10 × min(n, 7) 金币）：
+// TestCheckinFirstClaimPaysTheBaseReward 与 TestCheckinConsecutiveDaysGrowTheStreakAndReward。
+// 工程改了 checkin_component.go 的奖励规则，就按自己的规则改这两条；其余用例只断言签到自己的事实
+// （同日拒绝零写入、断签从第 1 天算、回滚、钩子），拿应答里的 Reward / Balance 比对，不随奖励数额变。
+// 不引用 checkin_component.go 的常量：常量改错了，引用它的断言照样通过。
+
 // 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
 type checkinGetter map[int64]entity.IThreadSafeEntity
 
@@ -126,52 +132,49 @@ func (f *checkinFixture) snapshot(t *testing.T) (streak, total int32, coins int6
 func TestCheckinFirstClaimPaysTheBaseReward(t *testing.T) {
 	f := newCheckinFixture(t)
 	response := f.mustClaim(t)
-	if response.Streak != 1 || response.Reward != playerentity.CheckinBaseReward || response.Balance != playerentity.CheckinBaseReward {
-		t.Fatalf("response = %+v", response)
+	if response.Streak != 1 || response.Reward != 10 || response.Balance != 10 {
+		t.Fatalf("response = %+v, want streak 1, reward 10, balance 10", response)
 	}
 }
 
 func TestCheckinSecondClaimOnTheSameDayWritesNothing(t *testing.T) {
 	f := newCheckinFixture(t)
-	f.mustClaim(t)
+	first := f.mustClaim(t)
 	f.now.Add(int64(3 * time.Hour / time.Millisecond)) // 同一个 UTC 日
 	if _, err := f.claim(); !errors.Is(err, apperrors.ErrCheckinDone) {
 		t.Fatalf("err = %v, want checkin_done", err)
 	}
-	if streak, total, coins := f.snapshot(t); streak != 1 || total != 1 || coins != playerentity.CheckinBaseReward {
-		t.Fatalf("refusal wrote: streak=%d total=%d coins=%d", streak, total, coins)
+	if streak, total, coins := f.snapshot(t); streak != 1 || total != 1 || coins != first.Balance {
+		t.Fatalf("refusal wrote: streak=%d total=%d coins=%d (balance after the first claim %d)", streak, total, coins, first.Balance)
 	}
 }
 
 func TestCheckinConsecutiveDaysGrowTheStreakAndReward(t *testing.T) {
 	f := newCheckinFixture(t)
-	f.mustClaim(t)
-	f.now.Add(int64(checkinDay / time.Millisecond))
-	second := f.mustClaim(t)
-	if second.Streak != 2 || second.Reward != 2*playerentity.CheckinBaseReward || second.Balance != 3*playerentity.CheckinBaseReward {
-		t.Fatalf("second day = %+v", second)
-	}
-	// 连续天数超过封顶后奖励不再增长。
-	for day := 3; day <= playerentity.CheckinStreakCap+1; day++ {
-		f.now.Add(int64(checkinDay / time.Millisecond))
-		f.mustClaim(t)
-	}
-	f.now.Add(int64(checkinDay / time.Millisecond))
-	capped := f.mustClaim(t)
-	if capped.Streak != playerentity.CheckinStreakCap+2 || capped.Reward != playerentity.CheckinStreakCap*playerentity.CheckinBaseReward {
-		t.Fatalf("capped day = %+v", capped)
+	// 样例规则逐天写死：第 1～7 天 10、20……70，第 8 天起封顶 70。
+	balance := int64(0)
+	for day, want := range []int64{10, 20, 30, 40, 50, 60, 70, 70, 70} {
+		if day > 0 {
+			f.now.Add(int64(checkinDay / time.Millisecond))
+		}
+		balance += want
+		response := f.mustClaim(t)
+		if response.Streak != int32(day+1) || response.Reward != want || response.Balance != balance {
+			t.Fatalf("day %d = %+v, want streak %d, reward %d, balance %d", day+1, response, day+1, want, balance)
+		}
 	}
 }
 
 func TestCheckinMissedDayResetsTheStreak(t *testing.T) {
 	f := newCheckinFixture(t)
-	f.mustClaim(t)
+	first := f.mustClaim(t)
 	f.now.Add(int64(checkinDay / time.Millisecond))
 	f.mustClaim(t)
 	f.now.Add(int64(2 * checkinDay / time.Millisecond)) // 断签一天
+	// 断签之后从第 1 天算：连续天数回到 1，奖励与第一次签到相同。
 	response := f.mustClaim(t)
-	if response.Streak != 1 || response.Reward != playerentity.CheckinBaseReward {
-		t.Fatalf("after a missed day = %+v", response)
+	if response.Streak != 1 || response.Reward != first.Reward {
+		t.Fatalf("after a missed day = %+v, want streak 1 and the first-day reward %d", response, first.Reward)
 	}
 	if _, total, _ := f.snapshot(t); total != 3 {
 		t.Fatalf("total = %d, want 3", total)
@@ -189,8 +192,8 @@ func TestCheckinRejectedCommitRollsBackProgressAndCoins(t *testing.T) {
 	if streak, total, coins := f.snapshot(t); streak != 0 || total != 0 || coins != 0 {
 		t.Fatalf("rollback left streak=%d total=%d coins=%d", streak, total, coins)
 	}
-	if response := f.mustClaim(t); response.Streak != 1 || response.Balance != playerentity.CheckinBaseReward {
-		t.Fatalf("claim after rollback = %+v", response)
+	if response := f.mustClaim(t); response.Streak != 1 || response.Balance != response.Reward {
+		t.Fatalf("claim after rollback = %+v, want streak 1 and the reward as the whole balance", response)
 	}
 }
 
@@ -259,11 +262,11 @@ func useCheckinProbe(t *testing.T) {
 func TestCheckinClaimedHookRunsOncePerSuccessfulClaim(t *testing.T) {
 	f := newCheckinFixture(t)
 	useCheckinProbe(t)
-	f.mustClaim(t)
+	first := f.mustClaim(t)
 	if calls := checkinProbe.calls.Load(); calls != 1 {
 		t.Fatalf("the hook ran %d times for one claim", calls)
 	}
-	if checkinProbe.streak.Load() != 1 || checkinProbe.reward.Load() != 10 || checkinProbe.at.Load() != f.now.Load() {
+	if checkinProbe.streak.Load() != 1 || checkinProbe.reward.Load() != first.Reward || checkinProbe.at.Load() != f.now.Load() {
 		t.Fatalf("the hook saw streak=%d reward=%d at=%d", checkinProbe.streak.Load(), checkinProbe.reward.Load(), checkinProbe.at.Load())
 	}
 	if _, err := f.claim(); !errors.Is(err, apperrors.ErrCheckinDone) {
@@ -273,8 +276,8 @@ func TestCheckinClaimedHookRunsOncePerSuccessfulClaim(t *testing.T) {
 		t.Fatalf("a refused claim ran the hook: %d calls", calls)
 	}
 	f.now.Add(int64(checkinDay / time.Millisecond))
-	f.mustClaim(t)
-	if checkinProbe.calls.Load() != 2 || checkinProbe.streak.Load() != 2 || checkinProbe.reward.Load() != 20 {
+	second := f.mustClaim(t)
+	if checkinProbe.calls.Load() != 2 || checkinProbe.streak.Load() != 2 || checkinProbe.reward.Load() != second.Reward {
 		t.Fatalf("day 2: calls=%d streak=%d reward=%d", checkinProbe.calls.Load(), checkinProbe.streak.Load(), checkinProbe.reward.Load())
 	}
 }
@@ -292,7 +295,7 @@ func TestCheckinClaimedHookFailureRollsBackTheClaim(t *testing.T) {
 	}
 	checkinProbe.fail.Store(false)
 	response := f.mustClaim(t)
-	if response.Streak != 1 || response.Reward != 10 || response.Balance != 10 {
-		t.Fatalf("claim after the hook recovered = %+v", response)
+	if response.Streak != 1 || response.Balance != response.Reward {
+		t.Fatalf("claim after the hook recovered = %+v, want streak 1 and the reward as the whole balance", response)
 	}
 }

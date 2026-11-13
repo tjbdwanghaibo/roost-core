@@ -14,6 +14,9 @@ import (
 	generated "{{MODULE}}/configs/generated"
 )
 
+// 工程自己的任务表（configs/table/task.csv 经 roost generate 转成的 configs/data/task.json）装载之后，
+// 每一行没有停用的任务都可用（能推进、能领）。停用行（Disabled）本身合法、只是不可用，跳过；不断言表里有哪几行：
+// 那张表归工程所有。其余场景用模块自带的样例表，不读这张表。
 func TestTaskCatalogEntriesAreUsable(t *testing.T) {
 	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
 	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
@@ -28,15 +31,11 @@ func TestTaskCatalogEntriesAreUsable(t *testing.T) {
 		t.Fatal("empty task table")
 	}
 	for _, row := range generated.TaskTable().Rows() {
-		if _, ok := taskDefinition(row.ID); !ok {
-			t.Fatalf("invalid row: %+v", row)
+		if row.Disabled {
+			continue
 		}
-	}
-	// 命名常量指的是缺省任务表里的那三行：名字要与那一行的事件对得上（3 号是副本领奖，不是“战斗”）。
-	for id, event := range map[int64]string{TaskDailyCheckin: "checkin.claimed", TaskDailySpend: "wallet.spent", TaskDailyDungeon: "dungeon.claimed"} {
-		row, ok := taskDefinition(id)
-		if !ok || row.Event != event || row.Period != TaskPeriodDaily {
-			t.Fatalf("task %d = %+v (found %v), want the daily %q task", id, row, ok, event)
+		if _, ok := taskDefinition(row.ID); !ok {
+			t.Fatalf("task %d in configs/table/task.csv is not usable (bad id, event, period, reward, or an unusable predecessor): %+v", row.ID, row)
 		}
 	}
 }

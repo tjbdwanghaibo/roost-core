@@ -39,7 +39,7 @@ func TestWithTaskWalletOnlyCountsFreshSpend(t *testing.T) {
 		t.Fatal(err)
 	}
 	facts := f.facts(t)
-	if facts.progress[2] != 1 || facts.coins != 90 || facts.commits != 2 {
+	if facts.progress[taskTestSpend] != 1 || facts.coins != 90 || facts.commits != 2 {
 		t.Fatalf("spend facts=%v", facts)
 	}
 }
@@ -58,7 +58,7 @@ func TestWithTaskWalletRefusalsDoNotCount(t *testing.T) {
 	if err := taskSpend(t, f, "one", 2); !errors.Is(err, apperrors.ErrWalletConflict) {
 		t.Fatal(err)
 	}
-	if f.facts(t).progress[2] != 1 {
+	if f.facts(t).progress[taskTestSpend] != 1 {
 		t.Fatal("conflict counted")
 	}
 }
@@ -75,7 +75,7 @@ func TestWithTaskWalletRejectedCommitRollsBackBoth(t *testing.T) {
 	if err := taskSpend(t, f, "one", 5); err != nil {
 		t.Fatal(err)
 	}
-	if f.facts(t).progress[2] != 1 {
+	if f.facts(t).progress[taskTestSpend] != 1 {
 		t.Fatal("retry did not count exactly once")
 	}
 }
@@ -111,7 +111,7 @@ func TestWithTaskWalletHookFailureRollsBackBusinessAndProgress(t *testing.T) {
 	if err := taskSpend(t, f, "one", 10); err != nil {
 		t.Fatal(err)
 	}
-	if facts := f.facts(t); facts.progress[2] != 1 || facts.coins != 90 {
+	if facts := f.facts(t); facts.progress[taskTestSpend] != 1 || facts.coins != 90 {
 		t.Fatalf("retry=%v", facts)
 	}
 }
@@ -123,7 +123,7 @@ func TestWithTaskWalletUsesTheTransactionsFrozenDay(t *testing.T) {
 	if _, err := f.engine.Request(context.Background(), taskWalletFrozenHandler, f.player.ID(), nest.NewParams(func() { f.pass(time.Millisecond) })); err != nil {
 		t.Fatal(err)
 	}
-	if facts := f.facts(t); facts.day != 20261110 || facts.progress[2] != 1 || facts.coins != 90 {
+	if facts := f.facts(t); facts.day != 20261110 || facts.progress[taskTestSpend] != 1 || facts.coins != 90 {
 		t.Fatalf("frozen day=%v", facts)
 	}
 }
