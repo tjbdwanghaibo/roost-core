@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：共享模式两个真实进程交替写同一 Remote 实体**（scripts/testdata/remoteflow，2026-11-14，KNOWN-LIMITS“多写者本地副本”）：新增 `TestGeneratedRemoteSharedEntityTwoWriterProcesses`，两个子进程（sid 1000 / 1001，各自正式装配）经 stdin 命令交替 8 笔写：每笔写后的本地值是此前全部写的累计（写准入先按权威换掉落后的本地副本），Mongo 权威版本 8、终值为各笔之和。变异“不换落后副本”时第三笔写版本冲突、用例红。没有行为改动。
+
 - **测试：常驻实体的刷新与换服中止后的载回补真实副本集用例**（framework/dataengine/engine，2026-11-14，KNOWN-LIMITS“常驻的刷新与载回只有替身存储的用例”）：新增 `TestRealMongoResidentEntityRefreshAndReloadAfterAbortedHandOff`（`-tags integration`），正式 Nest + 文件 WAL + 后台投影 + 真实 Mongo 副本集：运维卸载被拒、人工修库后 `RefreshEntity` 换成库里的状态并接着写、`HandOffEntity` 后另一个写者推进文档、`Release` 立刻载回那个版本（不等第一次访问）并接着写，投影器不 fence。真实 Mongo 用例的装配抽成 `newRealMongoUnloadFixture`，与 `TestRealMongoEntityHandOffThenAnotherWriterThenRelease` 共用。变异 2 条（Release 不载回、Refresh 不载回）均变红。没有行为改动。
 
 - **修复：handler 里新建未声明的 Remote 托管实体被本地投影写成普通文档**（framework/nest，2026-11-14，KNOWN-LIMITS“Remote 托管 kind 的‘新建不改字段’”的 in_handler 用例发现）：消息声明了另一个 Remote 实体（所以带 Remote 批次）时，handler 里新建一个没声明的 Remote 托管实体，`CaptureEntities` 只看“消息带不带批次”，新实体的 DAO 没被批次认领，由本地投影以 `{_version,_last_tx,_schema,value}` 写进 `remote_*` 集合，没有 Remote 信封与所有权，回复成功。现在判据是“本消息的批次包含这个实体”（`remoteBatchCovers`，与 Remote 删除准入同一处），不在批次里时返回 `nest.ErrDurableRemoteWriteUnsupported`、撤销发布、整条事务回滚（与 `Cast` 拒绝未声明 Remote 目标同一结论，契约见 REMOTE_ENTITY“handler 内只能持久写本消息声明的 Remote 托管实体”）。**行为变化**：原来能“成功”的这种写法现在失败；Remote 托管实体要由以它为声明目标的消息写，或在 Nest 之外新建。
