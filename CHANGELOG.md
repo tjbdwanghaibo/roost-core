@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **sync-aoi 压测工具加 `-heartbeat-delivery=batch|dispatch`**（scripts/perf，2026-11-13，KNOWN-LIMITS“心跳模式的投递方式跟驱动缺省走、没有开关”）：心跳模式按开关设驱动的 `Delivery`（空是驱动缺省 `batch`），实际方式记进 `server.json` 的 `heartbeat.delivery`，未知值或全局循环模式下给值在启动校验时报错；说明见 HB-DRIVEN-LOAD 开关表。`TestHeartbeatDeliveryFlagReachesTheDriver` 修前不能编译（没有开关）、变异“不把方式交给驱动”后报 `driver delivery "batch", want "dispatch"`。两种方式的对照测量**未跑**（等机器空闲）。nest-game 夹具不在这次范围。
+
 - **删除 `gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn`**（2026-11-13，维护者选 B，KNOWN-LIMITS“跨格笔刷的演练与旧接口”）：v1.43.0 为跨格笔刷按格拆分而加，跨格笔刷 2026-11-10 改为直接拒绝后仓内没有调用方。只按部分计算的入口删除，`Apply` / `BrushChanges` 行为不变；`Footprint`（Base 预扣配额）保留，原拆分用例改为 Footprint 上限用例。仓外调用方改用 `Apply` / `BrushChanges`。
 
 - **嵌套类型字段上的 `persist` / `nopersist` / `sync` / `nosync` 生成期报错**（codegen dao，2026-11-13，KNOWN-LIMITS“嵌套字段的 `persist,nosync` 不生效”）：持久与同步只按 DAO 顶层字段决定，嵌套类型的全部字段随所在顶层字段整体落库、整体编进同步补丁（`sync_proto.go` 给嵌套类型生成同步消息、`template_nested.go` 生成持久路径都不看字段开关）。原来这些开关写在嵌套字段上被接受却不生效：v1.47 字段缺省“既持久又同步”后，嵌套类型里标了 `nosync` 的内部账本照样发给客户端。现在解析期拒绝，报错点名类型与字段，改法是把这部分状态拆进另一个嵌套类型、挂到单独的顶层字段上，在顶层字段写开关；嵌套字段上 `map=...` 与 `dao:"-"` 照常可用。Remote 视图里嵌套字段原来按 `nopersist` 跳过的分支随之删除（嵌套字段一律随所在字段进视图）。
