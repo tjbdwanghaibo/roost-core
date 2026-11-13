@@ -1,0 +1,9 @@
+package tcp
+
+import gamelogin "{{MODULE}}/game/login"
+
+// 这个文件是 login 与 enter 两个模块的联动：两个都装着时才有。登录对进入的检查（承载服必须是本服、进服票据的会话先新建、
+// 会话激活后告知）在运行的进程里由这里打开：玩家 TCP 接入包只在真正跑玩家连接的进程里，各功能的场景测试不 import 它。
+func init() {
+	gamelogin.RegisterEnterChecks()
+}

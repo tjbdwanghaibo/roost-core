@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	gameenter "{{MODULE}}/game/enter"
-
+	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
@@ -21,7 +20,7 @@ import (
 //
 // 这是进入钩子（见 game/enter）：失败只记日志、不让登录失败，下一次进入或下一次 List 会补上。
 func init() {
-	gameenter.OnEntered("mailbox", func(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+	gamelogin.OnEntered("mailbox", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 		mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
 		if !ok || mailer == nil {
 			return fmt.Errorf("mailbox: capability %q not found; list mail under services.<service>.uses in roost.yaml", svcmail.CapabilityName)
@@ -35,7 +34,7 @@ type broadcastPuller interface {
 	PullBroadcasts(ctx context.Context, playerID int64, profile svcmail.BroadcastProfile) (svcmail.Summary, error)
 }
 
-func pullBroadcastsOnEnter(ctx context.Context, mailer broadcastPuller, entered gameenter.Entered) error {
+func pullBroadcastsOnEnter(ctx context.Context, mailer broadcastPuller, entered gamelogin.Entered) error {
 	profile, ok := BroadcastProfileOnEnter(entered)
 	if !ok {
 		return fmt.Errorf("mailbox: player %d has neither a role creation time nor a first-enter time; server-wide mail not pulled", entered.PlayerID)
@@ -47,7 +46,7 @@ func pullBroadcastsOnEnter(ctx context.Context, mailer broadcastPuller, entered 
 // BroadcastProfileOnEnter 是这名玩家收全服邮件用的画像。这个函数归工程所有，规则在这里改。
 //
 // 缺省规则只读两样东西：enter 模块记在档里的首次进入时间，以及这次进入的会话带的 claims
-// （gameenter.Entered.Claims，认证器写的）。claims 里认的是 account 服务的三个键；工程不用 account 服务、
+// （gamelogin.Entered.Claims，认证器写的）。claims 里认的是 account 服务的三个键；工程不用 account 服务、
 // 或者认证器没写它们时，三个键都不在，规则退回最简单的那一种——注册时间取首次进入、范围只有“所有玩家”。
 //
 //   - 注册时间：会话带着角色创建时间（svcaccount.RoleCreatedAtClaim，Unix 秒）就用它，否则用首次进入游戏的时间。
@@ -62,7 +61,7 @@ func pullBroadcastsOnEnter(ctx context.Context, mailer broadcastPuller, entered 
 //
 // 导出是为了让认证器那一侧的测试能用钩子真正使用的这个函数核对自己写的 claims：认证器归工程所有、可以被改写，
 // 键或格式对不上时全服邮件会悄悄按缺省规则拉取，而两边各自的测试都还是绿的。
-func BroadcastProfileOnEnter(entered gameenter.Entered) (svcmail.BroadcastProfile, bool) {
+func BroadcastProfileOnEnter(entered gamelogin.Entered) (svcmail.BroadcastProfile, bool) {
 	registeredAt := entered.FirstAtUnixMilli / 1000
 	if createdAt, ok := positiveClaim(entered.Claims, svcaccount.RoleCreatedAtClaim, 64); ok {
 		registeredAt = createdAt

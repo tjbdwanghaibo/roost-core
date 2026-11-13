@@ -7,7 +7,7 @@
 - **客户端协议**
   - `AttributeGet`（`protocol/def/attribute_get.go`）：读自己的最终属性。请求没有字段；应答带 `HP`、`Attack`、`Power`。端点是 `game/controllers/attribute/attribute_get.go` 的 `HandleAttributeGet`，目标玩家取自认证会话。
   - 属性变化也随同步下发（见“状态”）。
-- **服务端入口**（逻辑在 `game/components/attribute/component.go`，Player 的接线在 `game/entities/player/attribute_component.go`；都要求调用方已持有这名 `Player` 的锁）
+- **服务端入口**（逻辑在 `game/components/attribute/attribute.go`，Player 的接线在 `game/entities/player/attribute_component.go`；都要求调用方已持有这名 `Player` 的锁）
   - `AttributeComp().Final() (*gameattr.Combat, bool)`：最终属性的副本；最终层为空时第二个返回值为 `false`。副本可以在释放锁之后继续用于计算。
   - `AttributeComp().Container() *coreattr.Container`：基础、装备（选择器 `attribute.Gear`，Player 包里再导出为 `Gear`）、最终三层的副本；对副本的修改不影响实体。
   - `AttributeComp().Refresh() error`：在 Nest 事务里重算全部三层；玩家还没有持久基础记录时，这一次把缺省基础值写进持久层。`RefreshGear()` 是它的别名，供装备变化时调用。
@@ -30,7 +30,7 @@
 - **错误码**（`internal/errors/attribute.go`）
   - `attribute_overflow`：属性为负，或超过支持的范围（单项上限是 `math.MaxInt64/4`）。
 
-**日志**：溢出拒绝记 Warn 并带 `entity_id`（唯一号）与 `entity_kind`；它是异常诊断，允许在组件发现拒绝时记录，不是事务成功事实。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/components/attribute/component.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：溢出拒绝记 Warn 并带 `entity_id`（唯一号）与 `entity_kind`；它是异常诊断，允许在组件发现拒绝时记录，不是事务成功事实。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/components/attribute/attribute.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -51,7 +51,7 @@
 - **需求正好是它**：`roost module add attribute`，连带安装 `profile`。
 - **需求比它多一点**
   - 改成长数值、缺省值或战力公式：改 `game/gameplay/attribute/combat.go`（`ForLevel`、`LevelUp`、`_Power`）。
-  - 加属性（防御、暴击等）：在 `Combat` 结构里加带 `attr` 标签的字段，`roost generate`；`game/components/attribute/component.go` 的 `refresh` 与 `attribute_gear.go` 的 `attributeGear` 里目前只合并 `HP` 与 `Attack`，新属性要在这两处补上合并与溢出检查，协议 `AttributeGet` 的应答也要加字段。
+  - 加属性（防御、暴击等）：在 `Combat` 结构里加带 `attr` 标签的字段，`roost generate`；`game/components/attribute/attribute.go` 的 `refresh` 与 `attribute_gear.go` 的 `attributeGear` 里目前只合并 `HP` 与 `Attack`，新属性要在这两处补上合并与溢出检查，协议 `AttributeGet` 的应答也要加字段。
   - 加一个属性来源（坐骑、称号、公会科技）：在自己的包的 `init` 里调 `OnAttributeGear("<来源名>", 钩子)`，并在来源变化的事务里调 `AttributeComp().RefreshGear()`。不要直接写 `AttributeGear` 或 `AttributeFinal` 字段。
 - **别的模块 / 业务代码要用它**
   - 取玩家当前属性做计算：在持有 `Player` 锁的 handler 里 `p, ok := target.AttributeComp().Final()`，拿到的是副本。

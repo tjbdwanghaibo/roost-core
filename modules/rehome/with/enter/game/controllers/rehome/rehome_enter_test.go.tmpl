@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	gamerehome "{{MODULE}}/game/rehome"
 	apperrors "{{MODULE}}/internal/errors"
@@ -43,12 +43,12 @@ func withRehomeClaims(binding svcaccount.RoleBinding) map[string]string {
 	return claims
 }
 
-// enter 照进入端点那样走一遍 gameenter.Enter，load 只计数。
+// enter 照进入端点那样走一遍 gamelogin.Enter，load 只计数。
 func (w *rehomeWorld) enter(server *rehomeServer, claims map[string]string, loads *int) error {
-	_, err := gameenter.Enter(context.Background(), server.registry, gameenter.Entering{PlayerID: w.playerID, Claims: claims},
-		func(context.Context) (gameenter.InitResult, error) {
+	_, err := gamelogin.Enter(context.Background(), server.registry, gamelogin.Entering{PlayerID: w.playerID, Claims: claims},
+		func(context.Context) (gamelogin.InitResult, error) {
 			*loads++
-			return gameenter.InitResult{}, nil
+			return gamelogin.InitResult{}, nil
 		})
 	return err
 }

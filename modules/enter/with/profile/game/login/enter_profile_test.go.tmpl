@@ -1,6 +1,9 @@
-package profile
+package login
 
 import (
+	"github.com/spf13/viper"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	gameprofile "{{MODULE}}/game/profile"
 	"context"
 	"errors"
 	"fmt"
@@ -8,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	gameenter "{{MODULE}}/game/enter"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
@@ -20,7 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// 联动的场景：新建请求的骨架是真实的（gameenter.Create，登记表里是本文件 init 登记的那三项），
+// 联动的场景：新建请求的骨架是真实的（Create，登记表里是本文件 init 登记的那三项），
 // 新建的那笔事务也是真实的（Nest handler EnterCreate，替身提交器）。
 
 type enterProfileGetter map[int64]entity.IThreadSafeEntity
@@ -48,7 +50,7 @@ type enterProfileCommitter struct{}
 
 func (enterProfileCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
-// enterProfileFixture 是一名还没有建成的玩家与一个 Nest；create 照新建端点那样走一遍 gameenter.Create。
+// enterProfileFixture 是一名还没有建成的玩家与一个 Nest；create 照新建端点那样走一遍 Create。
 type enterProfileFixture struct {
 	engine  *nest.NestMgr
 	player  *playerentity.Player
@@ -82,7 +84,11 @@ func newEnterProfileFixture(t *testing.T) *enterProfileFixture {
 }
 
 func (f *enterProfileFixture) create(name string) error {
-	return gameenter.Create(context.Background(), app.NewRegistry(nil), gameenter.Creating{PlayerID: 94301, Name: name}, gameenter.CreateSteps{
+	// 会话照握手那样带着承载服（本服 1）：装了 login 时，本包同时登记了它的进入前检查（承载服必须是本服）。
+	cfg := viper.New()
+	cfg.Set("sid", 1)
+	claims := map[string]string{svcaccount.ServerIDClaim: "1"}
+	return Create(context.Background(), app.NewRegistry(cfg), Creating{PlayerID: 94301, Name: name, Claims: claims}, CreateSteps{
 		Ensure: func(context.Context) error { f.ensured++; return nil },
 		Commit: func(ctx context.Context, name string) error {
 			return sender.NewEnterCreateSender(f.engine).Sync_EnterCreate(ctx, f.player.ID(), name)
@@ -106,9 +112,8 @@ func (f *enterProfileFixture) state(t *testing.T) (name string, built bool) {
 // 没装唯一命名入口时（rename 为 nil），名字的规则就是档案模块的规则：不合规的名字在建档之前被拒、带着档案的码、
 // 什么都没写；合规的名字去掉首尾空白后在新建的那笔事务里写进档案。
 func TestWithEnterProfileCreateNameFollowsTheProfileRules(t *testing.T) {
-	saved := rename
-	rename = nil
-	t.Cleanup(func() { rename = saved })
+	saved := gameprofile.SwapRenamer(nil)
+	t.Cleanup(func() { gameprofile.SwapRenamer(saved) })
 	f := newEnterProfileFixture(t)
 	refusals := []struct {
 		name string
@@ -145,9 +150,8 @@ func TestWithEnterProfileCreateNameFollowsTheProfileRules(t *testing.T) {
 // 事务里的那一次写入自己也按规则校验：绕过新建前检查直接发新建事务（别的服务端代码调 Sender）时，
 // 不合规的名字让整笔事务回滚，玩家没有建成。
 func TestWithEnterProfileTheCreateTransactionRefusesABadNameItself(t *testing.T) {
-	saved := rename
-	rename = nil
-	t.Cleanup(func() { rename = saved })
+	saved := gameprofile.SwapRenamer(nil)
+	t.Cleanup(func() { gameprofile.SwapRenamer(saved) })
 	f := newEnterProfileFixture(t)
 	creates := sender.NewEnterCreateSender(f.engine)
 	if err := creates.Sync_EnterCreate(context.Background(), f.player.ID(), strings.Repeat("x", 17)); !errors.Is(err, apperrors.ErrProfileNameLong) {
@@ -167,11 +171,11 @@ func TestWithEnterProfileTheCreateTransactionRefusesABadNameItself(t *testing.T)
 // 装了唯一命名入口时（naming 模块登记的 Renamer），名字只经它写：新建在建档之后、事务之前调它；
 // 它拒绝（名字被占）时没有新建事务，玩家仍是没建成；它成功之后新建事务不再自己写名字。
 func TestWithEnterProfileCreateGoesThroughTheUniqueNameEntryWhenThereIsOne(t *testing.T) {
-	saved := rename
-	t.Cleanup(func() { rename = saved })
+	saved := gameprofile.SwapRenamer(nil)
+	t.Cleanup(func() { gameprofile.SwapRenamer(saved) })
 	taken := errors.New("naming: the name is taken")
 	var asked []string
-	rename = func(_ context.Context, registry *app.Registry, playerID int64, name string) (string, error) {
+	gameprofile.SwapRenamer(func(_ context.Context, registry *app.Registry, playerID int64, name string) (string, error) {
 		if registry == nil || playerID != 94301 {
 			t.Errorf("the renamer got registry %v, player %d", registry, playerID)
 		}
@@ -180,7 +184,7 @@ func TestWithEnterProfileCreateGoesThroughTheUniqueNameEntryWhenThereIsOne(t *te
 			return "", taken
 		}
 		return name, nil
-	}
+	})
 	f := newEnterProfileFixture(t)
 	// 格式规则仍然先于它：不合规的名字到不了命名入口。
 	if err := f.create(""); !errors.Is(err, apperrors.ErrProfileNameEmpty) || len(asked) != 0 {

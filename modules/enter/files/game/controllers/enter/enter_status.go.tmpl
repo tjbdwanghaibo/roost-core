@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/protocol/msgid"
@@ -52,7 +52,7 @@ var errStatusRefused = errors.New("enter: this server does not serve the player;
 //
 // 它只是告知：不写任何状态，推送不成只记日志；客户端没收到就直接发 EnterGame，结论以那个请求为准。
 // 调用方要在后台执行它并自己限量（它要读档，不能放在握手协程里），ctx 带上期限。
-func Announce(ctx context.Context, registry *app.Registry, entering gameenter.Entering, sessionID string) {
+func Announce(ctx context.Context, registry *app.Registry, entering gamelogin.Entering, sessionID string) {
 	controller, err := FromRegistry(registry)
 	if err != nil {
 		slog.Warn("enter: status not announced", "player_id", entering.PlayerID, "err", err)
@@ -69,9 +69,9 @@ func Announce(ctx context.Context, registry *app.Registry, entering gameenter.En
 }
 
 // announce 是 Announce 去掉“从 registry 取东西”之后的部分，测试直接调它。
-func announce(ctx context.Context, registry *app.Registry, transport statusTransport, entering gameenter.Entering, sessionID string,
+func announce(ctx context.Context, registry *app.Registry, transport statusTransport, entering gamelogin.Entering, sessionID string,
 	built func(context.Context) (bool, error), closeDelay time.Duration) {
-	status, refused, err := gameenter.Assess(ctx, registry, entering, built)
+	status, refused, err := gamelogin.Assess(ctx, registry, entering, built)
 	if err != nil {
 		slog.Warn("enter: status not announced; the client finds out from EnterGame", "player_id", entering.PlayerID, "err", err)
 		return

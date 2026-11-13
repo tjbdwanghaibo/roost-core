@@ -5,8 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	gameenter "{{MODULE}}/game/enter"
-
+	gamelogin "{{MODULE}}/game/login"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
@@ -29,7 +28,7 @@ func (p *withEnterPuller) PullBroadcasts(_ context.Context, playerID int64, prof
 // 范围只有“所有玩家”；老玩家再进入用的是同一个注册时间。
 func TestWithMailboxEnterPullsBroadcastsWithTheFirstEnterTime(t *testing.T) {
 	puller := &withEnterPuller{}
-	entered := gameenter.Entered{PlayerID: 94201, InitResult: gameenter.InitResult{First: false, FirstAtUnixMilli: 1_700_000_123_999}}
+	entered := gamelogin.Entered{PlayerID: 94201, InitResult: gamelogin.InitResult{First: false, FirstAtUnixMilli: 1_700_000_123_999}}
 	if err := pullBroadcastsOnEnter(context.Background(), puller, entered); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +49,7 @@ func TestWithMailboxEnterPullsBroadcastsWithTheFirstEnterTime(t *testing.T) {
 // 注册时间未知时不拉取：不能把玩家当成老玩家，把建号之前的补偿发给他。
 func TestWithMailboxEnterDoesNotPullWithoutAFirstEnterTime(t *testing.T) {
 	puller := &withEnterPuller{}
-	if err := pullBroadcastsOnEnter(context.Background(), puller, gameenter.Entered{PlayerID: 94202}); err == nil {
+	if err := pullBroadcastsOnEnter(context.Background(), puller, gamelogin.Entered{PlayerID: 94202}); err == nil {
 		t.Fatal("a pull without a registration time reported success")
 	}
 	if puller.calls != 0 {
@@ -62,7 +61,7 @@ func TestWithMailboxEnterDoesNotPullWithoutAFirstEnterTime(t *testing.T) {
 func TestWithMailboxEnterReportsAFailedPull(t *testing.T) {
 	away := errors.New("mail service is away")
 	puller := &withEnterPuller{err: away}
-	entered := gameenter.Entered{PlayerID: 94203, InitResult: gameenter.InitResult{FirstAtUnixMilli: 1_700_000_000_000}}
+	entered := gamelogin.Entered{PlayerID: 94203, InitResult: gamelogin.InitResult{FirstAtUnixMilli: 1_700_000_000_000}}
 	if err := pullBroadcastsOnEnter(context.Background(), puller, entered); !errors.Is(err, away) {
 		t.Fatalf("err = %v, want the mail service's error", err)
 	}
@@ -77,8 +76,8 @@ func TestWithMailboxEnterTakesRegistrationAndServerScopesFromTheSessionClaims(t 
 		t.Fatal("the account claim keys changed: authenticators already write the old ones")
 	}
 	puller := &withEnterPuller{}
-	entered := gameenter.Entered{
-		PlayerID: 94204, InitResult: gameenter.InitResult{FirstAtUnixMilli: 1_700_000_500_000},
+	entered := gamelogin.Entered{
+		PlayerID: 94204, InitResult: gamelogin.InitResult{FirstAtUnixMilli: 1_700_000_500_000},
 		Claims: map[string]string{"role_created_at": "1700000000", "server_id": "1300", "origin_server_id": "1300", "channel": "ios"},
 	}
 	if err := pullBroadcastsOnEnter(context.Background(), puller, entered); err != nil {
@@ -113,7 +112,7 @@ func TestWithMailboxEnterTakesRegistrationAndServerScopesFromTheSessionClaims(t 
 		t.Fatalf("a session without a serving server gave %+v (%v), want the role creation time and no scopes", unscoped, ok)
 	}
 	// 档里还没有首次进入的时间（工程自己改写的进入流程没有带）也不妨碍：角色创建时间就是注册时间。
-	entered.InitResult = gameenter.InitResult{}
+	entered.InitResult = gamelogin.InitResult{}
 	if profile, ok := BroadcastProfileOnEnter(entered); !ok || profile.RegisteredAtUnix != 1_700_000_000 {
 		t.Fatalf("without a first-enter time the profile = %+v (%v), want the role creation time", profile, ok)
 	}
@@ -122,7 +121,7 @@ func TestWithMailboxEnterTakesRegistrationAndServerScopesFromTheSessionClaims(t 
 // 读不了的 claim 按没写处理，不让进入钩子失败，也不把玩家当成老玩家：注册时间退回首次进入的时间
 // （不早于建角，只会少收），区服读不了就不带区服范围。两个时间都没有才不拉取。
 func TestWithMailboxEnterTreatsUnreadableClaimsAsAbsent(t *testing.T) {
-	first := gameenter.InitResult{FirstAtUnixMilli: 1_700_000_500_000}
+	first := gamelogin.InitResult{FirstAtUnixMilli: 1_700_000_500_000}
 	for name, claims := range map[string]map[string]string{
 		"not numbers":      {"role_created_at": "yesterday", "server_id": "s1300", "origin_server_id": "x"},
 		"zero":             {"role_created_at": "0", "server_id": "0", "origin_server_id": "0"},
@@ -130,22 +129,22 @@ func TestWithMailboxEnterTreatsUnreadableClaimsAsAbsent(t *testing.T) {
 		"empty":            {"role_created_at": "", "server_id": "", "origin_server_id": ""},
 		"sid beyond int32": {"role_created_at": "9223372036854775808", "server_id": "2147483648", "origin_server_id": "1301"},
 	} {
-		profile, ok := BroadcastProfileOnEnter(gameenter.Entered{PlayerID: 94205, InitResult: first, Claims: claims})
+		profile, ok := BroadcastProfileOnEnter(gamelogin.Entered{PlayerID: 94205, InitResult: first, Claims: claims})
 		if !ok || profile.RegisteredAtUnix != 1_700_000_500 || len(profile.Scopes) != 0 {
 			t.Errorf("%s: profile = %+v (%v), want the first-enter time 1700000500 and no scopes", name, profile, ok)
 		}
-		if _, ok := BroadcastProfileOnEnter(gameenter.Entered{PlayerID: 94205, Claims: claims}); ok {
+		if _, ok := BroadcastProfileOnEnter(gamelogin.Entered{PlayerID: 94205, Claims: claims}); ok {
 			t.Errorf("%s: a profile was built with no registration time at all", name)
 		}
 	}
 	// 原服读不了、承载服读得了：只带承载服。
-	profile, ok := BroadcastProfileOnEnter(gameenter.Entered{PlayerID: 94205, InitResult: first, Claims: map[string]string{"server_id": "1300", "origin_server_id": "old"}})
+	profile, ok := BroadcastProfileOnEnter(gamelogin.Entered{PlayerID: 94205, InitResult: first, Claims: map[string]string{"server_id": "1300", "origin_server_id": "old"}})
 	if !ok || len(profile.Scopes) != 1 || profile.Scopes[0] != svcmail.ServerScope(1300) {
 		t.Fatalf("profile = %+v (%v), want only the serving server's scope", profile, ok)
 	}
 	// 不拉取时钩子报错（调用方只记日志），mail 服务没有被调到。
 	puller := &withEnterPuller{}
-	if err := pullBroadcastsOnEnter(context.Background(), puller, gameenter.Entered{PlayerID: 94205, Claims: map[string]string{"role_created_at": "0"}}); err == nil || puller.calls != 0 {
+	if err := pullBroadcastsOnEnter(context.Background(), puller, gamelogin.Entered{PlayerID: 94205, Claims: map[string]string{"role_created_at": "0"}}); err == nil || puller.calls != 0 {
 		t.Fatalf("err = %v after %d pulls, want a refusal before any pull", err, puller.calls)
 	}
 }

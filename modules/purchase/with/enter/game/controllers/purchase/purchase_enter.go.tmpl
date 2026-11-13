@@ -3,7 +3,7 @@ package purchase
 import (
 	"context"
 
-	"{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	"{{MODULE}}/game/purchase"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -11,7 +11,7 @@ import (
 
 // 进入钩子在初始化事务之后、实体锁外执行。失败由 enter 记日志；玩家可用 PurchaseCollect 再领，不阻断进入。
 func init() {
-	enter.OnEntered("purchase", func(ctx context.Context, registry *app.Registry, entered enter.Entered) error {
+	gamelogin.OnEntered("purchase", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 		controller, err := FromRegistry(registry)
 		if err != nil {
 			return err
@@ -24,7 +24,7 @@ type purchaseCollector interface {
 	Collect(context.Context, int64) ([]purchase.Receipt, error)
 }
 
-func collectOnEnter(ctx context.Context, collector purchaseCollector, entered enter.Entered) error {
+func collectOnEnter(ctx context.Context, collector purchaseCollector, entered gamelogin.Entered) error {
 	_, err := collector.Collect(ctx, entered.PlayerID)
 	return err
 }

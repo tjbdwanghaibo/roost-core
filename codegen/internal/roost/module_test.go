@@ -499,7 +499,7 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("a failed install left changes behind")
 	}
-	for _, rel := range []string{"configs/service/config.rank.yaml", "internal/service/rank/collaborators.go"} {
+	for _, rel := range []string{"configs/service/config.rank.yaml", "services/rank/collaborators.go"} {
 		if exists(rel) {
 			t.Fatalf("a failed install left %s", rel)
 		}
@@ -519,7 +519,7 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	if rank.Framework != "rank" || rank.PortBlock == nil || *rank.PortBlock != 1 || strings.Join(manifest.Services["game"].Uses, ",") != "rank" {
 		t.Fatalf("after leaderboard: rank %+v, game uses %v", rank, manifest.Services["game"].Uses)
 	}
-	for _, rel := range []string{"configs/service/config.rank.yaml", "configs/service/config.rank.prod.example.yaml", "internal/service/rank/collaborators.go", "docs/SERVICES.zh-CN.md"} {
+	for _, rel := range []string{"configs/service/config.rank.yaml", "configs/service/config.rank.prod.example.yaml", "services/rank/collaborators.go", "docs/SERVICES.zh-CN.md"} {
 		if !exists(rel) {
 			t.Fatalf("installing leaderboard did not write %s", rel)
 		}
@@ -875,7 +875,7 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := moduleProjectDigest(t, root)
-	if out, err := try("module", "add", "chat"); err == nil || !strings.Contains(err.Error(), "internal/service/chat/collaborators.go has been edited since it was generated") {
+	if out, err := try("module", "add", "chat"); err == nil || !strings.Contains(err.Error(), "services/chat/collaborators.go has been edited since it was generated") {
 		t.Fatalf("an edited stub: err = %v\n%s", err, out)
 	}
 	if moduleProjectDigest(t, root) != before {
@@ -890,7 +890,7 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 	if err := json.Unmarshal([]byte(roost("module", "plan", "chat", "--json")), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Modules) != 1 || strings.Join(plan.Modules[0].Replaces, ",") != "internal/service/chat/collaborators.go" {
+	if len(plan.Modules) != 1 || strings.Join(plan.Modules[0].Replaces, ",") != "services/chat/collaborators.go" {
 		t.Fatalf("plan does not say which stub it replaces: %+v", plan.Modules)
 	}
 	roost("module", "add", "chat")
@@ -923,7 +923,7 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 	t.Parallel()
 	// account 的桩要在安装之前就在：工程一开始就托管 account（-framework account）。
 	root, roost, try := moduleProjectWith(t, "gatehouse", nil, []string{"account"})
-	const authRel, collaboratorsRel = "internal/access/player/tcp/auth.go", "internal/service/account/collaborators.go"
+	const authRel, collaboratorsRel = "internal/access/player/tcp/auth.go", "services/account/collaborators.go"
 	authPath := filepath.Join(root, filepath.FromSlash(authRel))
 	collaboratorsPath := filepath.Join(root, filepath.FromSlash(collaboratorsRel))
 	planned := func() ModulePlan {
@@ -1069,9 +1069,9 @@ func TestModuleStubKindsRecogniseOnlyUntouchedGeneratedStubs(t *testing.T) {
 		return out
 	}
 	stubs := map[string]string{
-		"internal/service/chat/collaborators.go":    renderFrameworkCollaborators(manifest, "chat"),
-		"internal/service/account/collaborators.go": renderFrameworkCollaborators(manifest, "account"),
-		"internal/access/player/tcp/auth.go":        renderPlayerTCPAuthenticator(),
+		"services/chat/collaborators.go":     renderFrameworkCollaborators(manifest, "chat"),
+		"services/account/collaborators.go":  renderFrameworkCollaborators(manifest, "account"),
+		"internal/access/player/tcp/auth.go": renderPlayerTCPAuthenticator(),
 	}
 	for rel, stub := range stubs {
 		for name, body := range map[string][]byte{"as rendered": []byte(stub), "as formatted": formatted(stub)} {
@@ -1098,10 +1098,10 @@ func TestModuleStubKindsRecogniseOnlyUntouchedGeneratedStubs(t *testing.T) {
 		}
 	}
 	// 一种桩的内容不能冒充另一种。
-	if pristine, _ := isUntouchedGeneratedStub(manifest, "internal/service/chat/collaborators.go", authStub); pristine {
+	if pristine, _ := isUntouchedGeneratedStub(manifest, "services/chat/collaborators.go", authStub); pristine {
 		t.Error("the authenticator stub passed as chat's collaborators stub")
 	}
-	if pristine, _ := isUntouchedGeneratedStub(manifest, "internal/access/player/tcp/auth.go", formatted(stubs["internal/service/chat/collaborators.go"])); pristine {
+	if pristine, _ := isUntouchedGeneratedStub(manifest, "internal/access/player/tcp/auth.go", formatted(stubs["services/chat/collaborators.go"])); pristine {
 		t.Error("chat's collaborators stub passed as the authenticator stub")
 	}
 	// “现在还没有、但待执行的前置命令会生成”的桩只有鉴权桩一种，并且只在那条命令确实待执行时才算。
@@ -1112,7 +1112,7 @@ func TestModuleStubKindsRecogniseOnlyUntouchedGeneratedStubs(t *testing.T) {
 	if stubComesFromPrerequisite(manifest, "internal/access/player/tcp/auth.go", map[string]bool{"roost add access player --service game": true}) {
 		t.Error("the authenticator stub is expected although roost add transport tcp is not pending")
 	}
-	if stubComesFromPrerequisite(manifest, "internal/service/chat/collaborators.go", pending) || stubComesFromPrerequisite(manifest, "game/handler/auth.go", pending) {
+	if stubComesFromPrerequisite(manifest, "services/chat/collaborators.go", pending) || stubComesFromPrerequisite(manifest, "game/handler/auth.go", pending) {
 		t.Error("a file no prerequisite creates is expected from one")
 	}
 	// 生成的鉴权桩确实是 doctor 说的“还是拒绝骨架”，否则接管它就没有意义。
@@ -1224,7 +1224,7 @@ func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
 		t.Fatalf("add did not report the glue:\n%s", out)
 	}
 	body, err := os.ReadFile(glue)
-	if err != nil || !bytes.Contains(body, []byte(`"example.com/studio/lobby/game/enter"`)) || bytes.Contains(body, []byte("{{")) {
+	if err != nil || !bytes.Contains(body, []byte(`"example.com/studio/lobby/game/login"`)) || bytes.Contains(body, []byte("{{")) {
 		t.Fatalf("the glue file is missing or not rendered (err=%v):\n%s", err, body)
 	}
 	manifest, err := LoadManifest(root)

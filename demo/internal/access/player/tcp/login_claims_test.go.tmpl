@@ -7,7 +7,7 @@ import (
 
 	controllermailbox "{{MODULE}}/game/controllers/mailbox"
 	controllerplayer "{{MODULE}}/game/controllers/player"
-	gameenter "{{MODULE}}/game/enter"
+
 	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
@@ -80,9 +80,9 @@ func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
 		t.Fatalf("the login endpoint read (%d, %v) from the authenticator's claims %v, want the role's server 1300", sid, bound, principal.Claims)
 	}
 	// 全服邮件拉取的画像：本服范围 + 角色建立时间，都从认证器写的 claims 读。读的一方是 mailbox 模块与 enter
-	// 模块的联动（进入钩子），登录端点把会话的 claims 原样带给它（gameenter.Entered.Claims）；这里用它真正使用的
+	// 模块的联动（进入钩子），登录端点把会话的 claims 原样带给它（gamelogin.Entered.Claims）；这里用它真正使用的
 	// BroadcastProfileOnEnter 去读。档里的首次进入时间故意给一个更晚的值：读到它说明角色建立时间的键没对上。
-	entered := gameenter.Entered{PlayerID: principal.PlayerID, InitResult: gameenter.InitResult{FirstAtUnixMilli: 1_700_000_999_000}, Claims: principal.Claims}
+	entered := gamelogin.Entered{PlayerID: principal.PlayerID, InitResult: gamelogin.InitResult{FirstAtUnixMilli: 1_700_000_999_000}, Claims: principal.Claims}
 	profile, ok := controllermailbox.BroadcastProfileOnEnter(entered)
 	if !ok || profile.RegisteredAtUnix != 1_700_000_000 || len(profile.Scopes) != 1 || profile.Scopes[0] != svcmail.ServerScope(1300) {
 		t.Fatalf("the mailbox enter hook built the broadcast profile %+v (%v) from %v, want server 1300 registered at 1700000000", profile, ok, principal.Claims)
@@ -100,7 +100,7 @@ func TestAMergedRolesPrincipalCarriesTheServingServer(t *testing.T) {
 		t.Fatalf("OriginServerIDClaim = %q, want the origin 1301", origin)
 	}
 	// 全服邮件：承载服的范围之外，合服前发给原服的也属于这个角色。
-	profile, ok := controllermailbox.BroadcastProfileOnEnter(gameenter.Entered{PlayerID: principal.PlayerID, Claims: principal.Claims})
+	profile, ok := controllermailbox.BroadcastProfileOnEnter(gamelogin.Entered{PlayerID: principal.PlayerID, Claims: principal.Claims})
 	if !ok || profile.RegisteredAtUnix != 1_700_000_000 || len(profile.Scopes) != 2 || profile.Scopes[0] != svcmail.ServerScope(1300) || profile.Scopes[1] != svcmail.ServerScope(1301) {
 		t.Fatalf("broadcast profile of a merged role = %+v (%v), want the scopes of 1300 and 1301", profile, ok)
 	}

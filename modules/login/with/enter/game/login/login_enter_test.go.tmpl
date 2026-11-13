@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	gameenter "{{MODULE}}/game/enter"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/spf13/viper"
@@ -13,7 +12,7 @@ import (
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
-// 联动的场景经 game/enter 的登记表执行（gameenter.Enter），所以证明的是“接上了”：
+// 联动的场景经 game/enter 的登记表执行（Enter），所以证明的是“接上了”：
 // 认证器写的 claims 原样交给进入流程，被拒绝的进入没有加载任何东西。
 
 // withLoginRegistry 是一个 game 进程的 Registry：只有配置里的 sid（0 表示不写）。
@@ -25,12 +24,12 @@ func withLoginRegistry(sid int) *app.Registry {
 	return app.NewRegistry(cfg)
 }
 
-// withLoginEnter 照进入端点那样走一遍 gameenter.Enter，load 只计数。
-func withLoginEnter(registry *app.Registry, claims map[string]string, loads *int) (gameenter.Entered, error) {
-	return gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: 100_001, Claims: claims},
-		func(context.Context) (gameenter.InitResult, error) {
+// withLoginEnter 照进入端点那样走一遍 Enter，load 只计数。
+func withLoginEnter(registry *app.Registry, claims map[string]string, loads *int) (Entered, error) {
+	return Enter(context.Background(), registry, Entering{PlayerID: 100_001, Claims: claims},
+		func(context.Context) (InitResult, error) {
 			*loads++
-			return gameenter.InitResult{First: true}, nil
+			return InitResult{First: true}, nil
 		})
 }
 
@@ -107,9 +106,9 @@ type withLoginRecord struct {
 
 type withLoginRecords struct{ players map[int64]*withLoginRecord }
 
-func (records *withLoginRecords) loads(playerID int64) gameenter.Loads {
-	return gameenter.Loads{
-		LoadOrCreate: func(context.Context) (gameenter.InitResult, error) {
+func (records *withLoginRecords) loads(playerID int64) Loads {
+	return Loads{
+		LoadOrCreate: func(context.Context) (InitResult, error) {
 			record := records.players[playerID]
 			if record == nil {
 				record = &withLoginRecord{}
@@ -117,26 +116,26 @@ func (records *withLoginRecords) loads(playerID int64) gameenter.Loads {
 			}
 			if !record.built {
 				record.built, record.grants = true, record.grants+1
-				return gameenter.InitResult{First: true}, nil
+				return InitResult{First: true}, nil
 			}
 			first := record.fresh
 			record.fresh = false
-			return gameenter.InitResult{First: first}, nil
+			return InitResult{First: first}, nil
 		},
-		Existing: func(context.Context) (gameenter.InitResult, error) {
+		Existing: func(context.Context) (InitResult, error) {
 			record := records.players[playerID]
 			if record == nil || !record.built {
-				return gameenter.InitResult{}, gameenter.ErrNeedCreate
+				return InitResult{}, ErrNeedCreate
 			}
 			first := record.fresh
 			record.fresh = false
-			return gameenter.InitResult{First: first}, nil
+			return InitResult{First: first}, nil
 		},
 	}
 }
 
-func (records *withLoginRecords) steps(playerID int64) gameenter.CreateSteps {
-	return gameenter.CreateSteps{
+func (records *withLoginRecords) steps(playerID int64) CreateSteps {
+	return CreateSteps{
 		Ensure: func(context.Context) error {
 			if records.players[playerID] == nil {
 				records.players[playerID] = &withLoginRecord{}
@@ -163,7 +162,7 @@ func (records *withLoginRecords) built(playerID int64) func(context.Context) (bo
 
 // withLoginAnnounced 换掉推 EnterStatus 的入口，记下告知被叫到时拿的会话；结束时换回去。
 type withLoginAnnounced struct {
-	entering  gameenter.Entering
+	entering  Entering
 	sessionID string
 	calls     int
 }
@@ -172,7 +171,7 @@ func withLoginAnnounce(t *testing.T) *withLoginAnnounced {
 	t.Helper()
 	seen := &withLoginAnnounced{}
 	saved := enterAnnounce
-	enterAnnounce = func(_ context.Context, _ *app.Registry, entering gameenter.Entering, sessionID string) {
+	enterAnnounce = func(_ context.Context, _ *app.Registry, entering Entering, sessionID string) {
 		seen.entering, seen.sessionID = entering, sessionID
 		seen.calls++
 	}
@@ -201,19 +200,19 @@ func TestWithLoginEnterANewAccountIsToldToCreateThenCreatesAndEnters(t *testing.
 		t.Fatalf("the status notice got %+v for session %q (%d calls), want this session and its claims once", announced.entering, announced.sessionID, announced.calls)
 	}
 	entering := announced.entering
-	status, refused, err := gameenter.Assess(context.Background(), registry, entering, records.built(100_001))
-	if err != nil || refused || status != (gameenter.Status{NeedCreate: true}) {
+	status, refused, err := Assess(context.Background(), registry, entering, records.built(100_001))
+	if err != nil || refused || status != (Status{NeedCreate: true}) {
 		t.Fatalf("status for a new account = %+v refused=%v err=%v, want need_create", status, refused, err)
 	}
 	// 推送丢了也一样：直接进入得到 enter_need_create，游戏服什么都没建。
-	if _, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001)); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+	if _, err := EnterSession(context.Background(), registry, entering, records.loads(100_001)); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
 		t.Fatalf("entering before creating: err = %v, want enter_need_create", err)
 	}
 	if len(records.players) != 0 {
 		t.Fatalf("a refused enter created a record: %v", records.players)
 	}
-	creating := gameenter.Creating{PlayerID: entering.PlayerID, Name: "Alice", Claims: entering.Claims}
-	if err := gameenter.Create(context.Background(), registry, creating, records.steps(100_001)); err != nil {
+	creating := Creating{PlayerID: entering.PlayerID, Name: "Alice", Claims: entering.Claims}
+	if err := Create(context.Background(), registry, creating, records.steps(100_001)); err != nil {
 		t.Fatal(err)
 	}
 	if record := records.players[100_001]; record == nil || !record.built || record.name != "Alice" || record.grants != 1 {
@@ -223,11 +222,11 @@ func TestWithLoginEnterANewAccountIsToldToCreateThenCreatesAndEnters(t *testing.
 	if role, err := w.service.RoleOnServer(context.Background(), "store:alice", 1000); err != nil || role.PlayerID != 100_001 || role.Name != "" {
 		t.Fatalf("account holds %+v, %v; want the mapping without a name", role, err)
 	}
-	entered, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001))
+	entered, err := EnterSession(context.Background(), registry, entering, records.loads(100_001))
 	if err != nil || !entered.First || entered.PlayerID != 100_001 {
 		t.Fatalf("the first enter after create: %+v, %v; want first", entered, err)
 	}
-	if err := gameenter.Create(context.Background(), registry, creating, records.steps(100_001)); !errors.Is(err, apperrors.ErrEnterCreated) {
+	if err := Create(context.Background(), registry, creating, records.steps(100_001)); !errors.Is(err, apperrors.ErrEnterCreated) {
 		t.Fatalf("creating again: err = %v, want enter_created", err)
 	}
 	// 重连：同一张票据，不再是新映射；告知的结论是直接进入，进入不再是首次。
@@ -238,11 +237,11 @@ func TestWithLoginEnterANewAccountIsToldToCreateThenCreatesAndEnters(t *testing.
 	if _, isNew := again.Claims[svcaccount.NewRoleClaim]; isNew {
 		t.Fatal("the reconnect is marked as a new mapping")
 	}
-	status, refused, err = gameenter.Assess(context.Background(), registry, gameenter.Entering{PlayerID: again.PlayerID, Claims: again.Claims}, records.built(100_001))
-	if err != nil || refused || status != (gameenter.Status{}) {
+	status, refused, err = Assess(context.Background(), registry, Entering{PlayerID: again.PlayerID, Claims: again.Claims}, records.built(100_001))
+	if err != nil || refused || status != (Status{}) {
 		t.Fatalf("status on reconnect = %+v refused=%v err=%v, want enter directly", status, refused, err)
 	}
-	if entered, err = gameenter.EnterSession(context.Background(), registry, gameenter.Entering{PlayerID: again.PlayerID, Claims: again.Claims}, records.loads(100_001)); err != nil || entered.First {
+	if entered, err = EnterSession(context.Background(), registry, Entering{PlayerID: again.PlayerID, Claims: again.Claims}, records.loads(100_001)); err != nil || entered.First {
 		t.Fatalf("enter on reconnect: %+v, %v; want not first", entered, err)
 	}
 	if records.players[100_001].grants != 1 {
@@ -270,21 +269,21 @@ func TestWithLoginEnterAMappedAccountWithoutPlayerDataStillCreates(t *testing.T)
 	if _, isNew := principal.Claims[svcaccount.NewRoleClaim]; isNew {
 		t.Fatal("the second handshake is marked as a new mapping; the scenario needs an old one")
 	}
-	entering := gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
-	status, refused, err := gameenter.Assess(context.Background(), registry, entering, records.built(100_001))
+	entering := Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
+	status, refused, err := Assess(context.Background(), registry, entering, records.built(100_001))
 	if err != nil || refused || !status.NeedCreate {
 		t.Fatalf("status = %+v refused=%v err=%v, want need_create although the mapping is old", status, refused, err)
 	}
-	if _, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001)); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+	if _, err := EnterSession(context.Background(), registry, entering, records.loads(100_001)); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
 		t.Fatalf("entering: err = %v, want enter_need_create", err)
 	}
 	if record := records.players[100_001]; record.built || record.grants != 0 {
 		t.Fatalf("a refused enter changed the record: %+v", record)
 	}
-	if err := gameenter.Create(context.Background(), registry, gameenter.Creating{PlayerID: 100_001, Name: "Alice", Claims: principal.Claims}, records.steps(100_001)); err != nil {
+	if err := Create(context.Background(), registry, Creating{PlayerID: 100_001, Name: "Alice", Claims: principal.Claims}, records.steps(100_001)); err != nil {
 		t.Fatal(err)
 	}
-	if entered, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(100_001)); err != nil || !entered.First {
+	if entered, err := EnterSession(context.Background(), registry, entering, records.loads(100_001)); err != nil || !entered.First {
 		t.Fatalf("enter after create: %+v, %v", entered, err)
 	}
 }
@@ -300,16 +299,16 @@ func TestWithLoginEnterSessionTokenSessionsKeepLoadOrCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if EnterTicketSession(principal.Claims) || gameenter.CreateFirst(principal.Claims) {
+	if EnterTicketSession(principal.Claims) || CreateFirst(principal.Claims) {
 		t.Fatalf("a session-token session is treated as create-first: %v", principal.Claims)
 	}
-	entering := gameenter.Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
+	entering := Entering{PlayerID: principal.PlayerID, Claims: principal.Claims}
 	asked := 0
-	status, refused, err := gameenter.Assess(context.Background(), registry, entering, func(context.Context) (bool, error) { asked++; return false, nil })
-	if err != nil || refused || status != (gameenter.Status{}) || asked != 0 {
+	status, refused, err := Assess(context.Background(), registry, entering, func(context.Context) (bool, error) { asked++; return false, nil })
+	if err != nil || refused || status != (Status{}) || asked != 0 {
 		t.Fatalf("status = %+v refused=%v err=%v, record read %d times; want enter directly without reading the record", status, refused, err, asked)
 	}
-	entered, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(principal.PlayerID))
+	entered, err := EnterSession(context.Background(), registry, entering, records.loads(principal.PlayerID))
 	if err != nil || !entered.First || !records.players[principal.PlayerID].built {
 		t.Fatalf("EnterGame of a new player on a session-token session: %+v, %v; want it built by the enter", entered, err)
 	}
@@ -338,18 +337,21 @@ func TestWithLoginEnterARoleOfAnotherServerIsToldToLeave(t *testing.T) {
 	}
 	entering := announced.entering
 	asked := 0
-	status, refused, err := gameenter.Assess(context.Background(), registry, entering, func(context.Context) (bool, error) { asked++; return false, nil })
+	status, refused, err := Assess(context.Background(), registry, entering, func(context.Context) (bool, error) { asked++; return false, nil })
 	if err != nil || !refused || status.Code != apperrors.ErrLoginElsewhere.Code() || status.NeedCreate || asked != 0 {
 		t.Fatalf("status = %+v refused=%v err=%v asked=%d; want login_elsewhere, refused, the record not read", status, refused, err, asked)
 	}
-	if _, err := gameenter.EnterSession(context.Background(), registry, entering, records.loads(principal.PlayerID)); !errors.Is(err, apperrors.ErrLoginElsewhere) {
+	if _, err := EnterSession(context.Background(), registry, entering, records.loads(principal.PlayerID)); !errors.Is(err, apperrors.ErrLoginElsewhere) {
 		t.Fatalf("entering: err = %v, want login_elsewhere", err)
 	}
-	creating := gameenter.Creating{PlayerID: principal.PlayerID, Name: "Alice", Claims: entering.Claims}
-	if err := gameenter.Create(context.Background(), registry, creating, records.steps(principal.PlayerID)); !errors.Is(err, apperrors.ErrLoginElsewhere) {
+	creating := Creating{PlayerID: principal.PlayerID, Name: "Alice", Claims: entering.Claims}
+	if err := Create(context.Background(), registry, creating, records.steps(principal.PlayerID)); !errors.Is(err, apperrors.ErrLoginElsewhere) {
 		t.Fatalf("creating: err = %v, want login_elsewhere", err)
 	}
 	if len(records.players) != 0 {
 		t.Fatalf("this server built a record for a role it does not serve: %v", records.players)
 	}
 }
+
+// v1.47.0：登录对进入的检查不再随 game/login 的 init 打开（见 RegisterEnterChecks），本测试包照旧要它们。
+func init() { RegisterEnterChecks() }

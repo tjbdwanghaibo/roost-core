@@ -645,12 +645,12 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		"internal/access/player/mod_gen.go":                     {`"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"`, "if err := RegisterPlayerProtocols(protocols, registry); err != nil", "registry.Register(Name, mod.runtime)"},
 		"internal/access/player/protocols_gen.go":               {"package player", "type PlayerController interface", "func RegisterPlayerPlayerProtocols(", "func RegisterPlayerProtocols("},
 		"game/controllers/player/controller.go":                 {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
-		"game/controllers/player/enter_game.go":                 {"lifecycle.PlayerFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
+		"game/controllers/player/enter_game.go":                 {"player.LifecycleFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
 		"game/controllers/player/rename_player_endpoint_gen.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
-		"game/lifecycle/player.go": {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer", "errors.Is(err, entity.ErrEntityRemoved) && attempt < 3",
-			// D10 方案 B（只守 GetOrCreate）：删过档的 ID 不再创建，Get 给稳定码 entity_deleted。
-			"func deletedPlayerError(err error) error", "errcode.Wrap(errcode.ErrEntityDeleted, err)", "return nil, deletedPlayerError(err)"},
-		"protocol/player_bind/bind_gen.go": {"RegisterRenamePlayer"},
+		// lifecycle 的实现（GetOrCreate 不重建删过档的实体、给 entity_deleted 稳定码）在 core 的 wiring/entitylifecycle；
+		// 实体包里只有生成的具名入口。
+		"game/entities/player/lifecycle_gen.go": {"type Lifecycle = entitylifecycle.Lifecycle[*Player]", "func LifecycleFromRegistry(registry *app.Registry) (*Lifecycle, error)", "EntityKindPlayer"},
+		"protocol/player_bind/bind_gen.go":      {"RegisterRenamePlayer"},
 	}
 	for path, fragments := range checks {
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
@@ -665,7 +665,7 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		}
 	}
 	// v1.47.0 目录重整：派发层是 core 的框架包，协议登记并进接入层，这些旧目录不再生成。
-	for _, retired := range []string{"game/playeraccess", "game/protocol_handlers", "game/protocol_bootstrap"} {
+	for _, retired := range []string{"game/playeraccess", "game/protocol_handlers", "game/protocol_bootstrap", "game/lifecycle"} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(retired))); !os.IsNotExist(err) {
 			t.Errorf("%s is still generated (stat err %v)", retired, err)
 		}

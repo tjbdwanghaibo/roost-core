@@ -33,7 +33,7 @@ func TestModuleRuntimeFrameworkNamesAHostedService(t *testing.T) {
 	if err := validateModuleRuntime(&ModuleRuntime{Package: "services/chat/portal", Start: "Start", Framework: "account"}); err == nil || !strings.Contains(err.Error(), "services/account/") {
 		t.Fatalf("a services/ runtime under another framework service: %v", err)
 	}
-	if err := validateModuleRuntime(&ModuleRuntime{Package: "game/portal", Start: "Start", Framework: "game"}); err == nil || !strings.Contains(err.Error(), `runtime.framework "game" is not a framework service`) {
+	if err := validateModuleRuntime(&ModuleRuntime{Package: "services/account/portal", Start: "Start", Framework: "game"}); err == nil || !strings.Contains(err.Error(), `runtime.framework "game" is not a framework service`) {
 		t.Fatalf("a runtime on something that is not a framework service: %v", err)
 	}
 	m := hostedFixture(t)

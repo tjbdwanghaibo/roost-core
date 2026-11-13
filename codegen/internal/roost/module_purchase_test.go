@@ -36,11 +36,11 @@ func TestModulePurchaseScenariosAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/purchase/queue.go", "product.AmountMinor != order.AmountMinor", "false", "./game/purchase", "TestPurchaseMismatchedMoneyDoesNotQueue", "calls=")
 	recipeMutationMustFail(t, root, "game/controllers/purchase/controller.go", "if len(order.PendingAttempts) != 0 {", "if false && len(order.PendingAttempts) != 0 {", "./game/controllers/purchase", "TestPurchaseCollectionWaitsForInFlightDelivery", "in-flight delivery accepted")
 	recipeMutationMustFail(t, root, "game/entities/player/purchase_item.go", "owner.BagComp().Add(reward.ID, reward.Count)", "owner.BagComp().Add(reward.ID, reward.Count+1)", "./game/handler", "TestWithPurchaseBagGrantAndReplay", "count=")
-	recipeMutationMustFail(t, root, "internal/service/platform/purchase_channels.go", "return svcplatform.ErrSignatureInvalid", "_ = svcplatform.ErrSignatureInvalid; return nil", "./internal/service/platform", "TestPurchaseChannelDefaultsToDeny", "default channel admitted")
+	recipeMutationMustFail(t, root, "services/platform/purchase_channels.go", "return svcplatform.ErrSignatureInvalid", "_ = svcplatform.ErrSignatureInvalid; return nil", "./services/platform", "TestPurchaseChannelDefaultsToDeny", "default channel admitted")
 	recipeMutationMustFail(t, root, "game/controllers/purchase/controller.go", "default:\n\t\t\treturn receipts, svcplatform.ErrDeliveryHeld", "default:", "./game/controllers/purchase", "TestPurchaseCollectionWaitsForNonterminalOrder", "nonterminal order was granted")
 	recipeMutationMustFail(t, root, "game/controllers/purchase/controller.go", "order.OrderID != grant.OrderID", "false", "./game/controllers/purchase", "TestPurchaseCollectionRejectsWrongOrder", "different order was granted")
 	recipeMutationMustFail(t, root, "game/purchase/purchase.go", "grant.Digest != order.PayloadDigest", "false", "./game/purchase", "TestPurchaseExistingOrderRejectsChangedPayment", "changed payment err=")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestPurchase|^TestWithPurchase", "./game/handler", "./game/purchase", "./game/controllers/purchase", "./internal/service/platform")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestPurchase|^TestWithPurchase", "./game/handler", "./game/purchase", "./game/controllers/purchase", "./services/platform")
 }
 
 func checkPurchaseRows(t *testing.T, report ModuleVerifyReport, want map[string]int) {

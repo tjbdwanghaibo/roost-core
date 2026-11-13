@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
@@ -31,7 +31,7 @@ import (
 // safe to race: two logins of the same new player both end holding the one
 // Entity, and only one of them sees Created.
 //
-// 两条路，由会话决定走哪一条，判断是 enter 模块的（gameenter.CreateFirst，登记规则的是 login 与 enter 的联动：
+// 两条路，由会话决定走哪一条，判断是 enter 模块的（gamelogin.CreateFirst，登记规则的是 login 与 enter 的联动：
 // 用进服票据握手的会话）：
 //
 //   - 缺省（会话令牌握手的会话——机器人与演练脚本的老路）：下面的“加载或创建”，与没有登录模块时相同。
@@ -57,7 +57,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	// rehome 与 enter 的联动登记），所以别的功能以后登记的检查同样在这里生效——登录模块与 enter 的联动也登记了一条
 	// （承载服不是本服答 login_elsewhere），它与 boundHere 是同一个比较，所以这个端点走不到它的拒绝；会话激活后的
 	// 告知（EnterStatus）不经这个端点，连错服的会话在那里得到的是 login_elsewhere。
-	if err := gameenter.RunEntering(context.Context(), controller.registry, gameenter.Entering{
+	if err := gamelogin.RunEntering(context.Context(), controller.registry, gamelogin.Entering{
 		PlayerID: context.PlayerID, Claims: claims,
 	}); err != nil {
 		code, reason := errcode.ClientError(err)
@@ -105,7 +105,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	}
 	// “先新建”的会话只装载、不创建：持久层确认没有这名玩家就答 enter_need_create。别的错误（数据库、解码、
 	// 超时、删过档）与另一条路一样原样处理，不当成“没有”。
-	createFirst := gameenter.CreateFirst(claims)
+	createFirst := gamelogin.CreateFirst(claims)
 	var (
 		subject *player.Player
 		created bool
@@ -114,7 +114,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	if createFirst {
 		subject, err = controller.Players().Get(loginCtx, context.PlayerID)
 		if errors.Is(err, player.ErrNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
-			err = gameenter.ErrNeedCreate
+			err = gamelogin.ErrNeedCreate
 		}
 	} else {
 		subject, created, err = controller.Players().GetOrCreate(loginCtx, context.PlayerID)
@@ -140,7 +140,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	//
 	// “先新建”的会话发的是 EnterExisting：建成了就是一次进入（经新建请求建成之后的第一次进入报 First=true），
 	// 有档而没建成（上次新建到一半）答 enter_need_create，什么都不写。
-	var entered gameenter.InitResult
+	var entered gamelogin.InitResult
 	if createFirst {
 		entered, err = syncsender.NewEnterExistingSender(controller.NestClient()).Sync_EnterExisting(context.Context(), subject.ID())
 	} else {
@@ -203,7 +203,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	//     A game with alliance-wide broadcasts adds mail.GuildScope(alliance) in that
 	//     function and pulls again when a membership notice says the player
 	//     joined or left.
-	gameenter.RunEntered(context.Context(), controller.registry, gameenter.Entered{
+	gamelogin.RunEntered(context.Context(), controller.registry, gamelogin.Entered{
 		PlayerID: context.PlayerID, InitResult: entered, Claims: claims,
 	})
 	// The login announcement stays the demo's own decision: the game says so on

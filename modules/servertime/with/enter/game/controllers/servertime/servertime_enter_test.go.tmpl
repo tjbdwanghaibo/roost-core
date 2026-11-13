@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 
@@ -33,12 +33,12 @@ func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
 		t.Fatalf("register the transport: %v", err)
 	}
 	loaded := false
-	entered, err := gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: 95101}, func(context.Context) (gameenter.InitResult, error) {
+	entered, err := gamelogin.Enter(context.Background(), registry, gamelogin.Entering{PlayerID: 95101}, func(context.Context) (gamelogin.InitResult, error) {
 		loaded = true
 		if len(transport.calls) != 0 {
 			t.Fatalf("the time was pushed before the player was loaded")
 		}
-		return gameenter.InitResult{First: true, FirstAtUnixMilli: now}, nil
+		return gamelogin.InitResult{First: true, FirstAtUnixMilli: now}, nil
 	})
 	if err != nil || !loaded || entered.PlayerID != 95101 {
 		t.Fatalf("enter: entered %+v loaded %v err %v", entered, loaded, err)
@@ -66,7 +66,7 @@ func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
 
 	// 重连后再进入一次：时钟已经过了重置时刻，推的是新的一天，不是上一次的那一份。
 	now = 1794286800000
-	if failed := gameenter.RunEntered(context.Background(), registry, gameenter.Entered{PlayerID: 95101}); servertimeEnterFailed(failed) {
+	if failed := gamelogin.RunEntered(context.Background(), registry, gamelogin.Entered{PlayerID: 95101}); servertimeEnterFailed(failed) {
 		t.Fatalf("the servertime hook failed on the second enter: %v", failed)
 	}
 	if len(transport.calls) != 2 {
@@ -87,14 +87,14 @@ func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
 func TestWithServertimeEnterWithoutATransportStillEnters(t *testing.T) {
 	now := int64(1794299415250)
 	servertimeStage(t, "UTC", "00:00", &now)
-	if err := pushOnEnter(context.Background(), nil, gameenter.Entered{PlayerID: 95102}); err == nil {
+	if err := pushOnEnter(context.Background(), nil, gamelogin.Entered{PlayerID: 95102}); err == nil {
 		t.Fatal("the hook reported success with no transport to push through")
 	}
-	if failed := gameenter.RunEntered(context.Background(), nil, gameenter.Entered{PlayerID: 95102}); !servertimeEnterFailed(failed) {
+	if failed := gamelogin.RunEntered(context.Background(), nil, gamelogin.Entered{PlayerID: 95102}); !servertimeEnterFailed(failed) {
 		t.Fatalf("failed hooks = %v, want servertime among them", failed)
 	}
-	entered, err := gameenter.Enter(context.Background(), nil, gameenter.Entering{PlayerID: 95102}, func(context.Context) (gameenter.InitResult, error) {
-		return gameenter.InitResult{FirstAtUnixMilli: 1_700_000_000_000}, nil
+	entered, err := gamelogin.Enter(context.Background(), nil, gamelogin.Entering{PlayerID: 95102}, func(context.Context) (gamelogin.InitResult, error) {
+		return gamelogin.InitResult{FirstAtUnixMilli: 1_700_000_000_000}, nil
 	})
 	if err != nil || entered.PlayerID != 95102 || entered.FirstAtUnixMilli != 1_700_000_000_000 {
 		t.Fatalf("enter without a transport: entered %+v err %v, want a successful enter", entered, err)
@@ -110,11 +110,11 @@ func TestWithServertimeEnterPushFailureStillEnters(t *testing.T) {
 	if err := registry.Register(playerTCPCapability, &servertimePushed{fail: refused}); err != nil {
 		t.Fatalf("register the transport: %v", err)
 	}
-	if err := pushOnEnter(context.Background(), registry, gameenter.Entered{PlayerID: 95103}); !errors.Is(err, refused) {
+	if err := pushOnEnter(context.Background(), registry, gamelogin.Entered{PlayerID: 95103}); !errors.Is(err, refused) {
 		t.Fatalf("hook error = %v, want the transport's own error", err)
 	}
-	entered, err := gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: 95103}, func(context.Context) (gameenter.InitResult, error) {
-		return gameenter.InitResult{First: true, FirstAtUnixMilli: now}, nil
+	entered, err := gamelogin.Enter(context.Background(), registry, gamelogin.Entering{PlayerID: 95103}, func(context.Context) (gamelogin.InitResult, error) {
+		return gamelogin.InitResult{First: true, FirstAtUnixMilli: now}, nil
 	})
 	if err != nil || entered.PlayerID != 95103 || !entered.First {
 		t.Fatalf("enter with a refusing transport: entered %+v err %v, want a successful enter", entered, err)

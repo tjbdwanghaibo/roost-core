@@ -360,14 +360,14 @@ func (controller *Controller) Registry() *app.Registry { return controller.regis
 	write("game/controllers/player/enter_game.go", `package player
 
 import (
-	"example.com/planet/game/lifecycle"
+	playerentity "example.com/planet/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"example.com/planet/protocol/pb"
 )
 
 // HandleEnterGame 首登创建、之后加载玩家实体。
 func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
-	players, err := lifecycle.PlayerFromRegistry(controller.Registry())
+	players, err := playerentity.LifecycleFromRegistry(controller.Registry())
 	if err != nil {
 		return nil, err
 	}

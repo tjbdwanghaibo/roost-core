@@ -19,13 +19,13 @@ component: Enter
 protocols: [EnterGame, EnterCreate, EnterStatus]
 errcodes: [enter_need_create, enter_created, enter_name_long]
 verify:
-  packages: [./game/handler, ./game/enter, ./game/entities/player, ./game/controllers/enter]
+  packages: [./game/handler, ./game/login, ./game/entities/player, ./game/controllers/enter]
   run: ^TestEnter
   pass: 29
 with:
   profile:
     summary: 角色名的规则在游戏服：新建请求（EnterCreate）的名字按档案模块的名字规则校验（不合规在建档之前被拒），没装 naming 时在新建的那笔事务里写进档案，装了 naming 时经它的唯一命名入口占名
     verify:
-      packages: [./game/profile]
+      packages: [./game/login]
       run: ^TestWithEnterProfile
       pass: 3

@@ -3,7 +3,7 @@ package rehome
 import (
 	"context"
 
-	gameenter "{{MODULE}}/game/enter"
+	gamelogin "{{MODULE}}/game/login"
 	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/protocol/msgid"
 
@@ -13,7 +13,7 @@ import (
 // 这个文件是 rehome 与 enter 两个模块的联动：两个都装着时才有。它把换服接到进入游戏的两个登记点上，
 // 判断与写入都在 game/rehome 的 Driver 里（Admit、Arrive），这里只是接线。
 //
-// 进入前检查（gameenter.OnEntering）——在加载或创建 Player 之前：
+// 进入前检查（gamelogin.OnEntering）——在加载或创建 Player 之前：
 //
 //   - 这名玩家正在换服（本进程的迁出表、会话的 claims 或 account 这么说）：rehome_moving，不让进入。
 //   - 他绑定在别的服：rehome_elsewhere，不让进入。没有这一条，换走的玩家拿着旧连接或连错了服，
@@ -21,25 +21,25 @@ import (
 //   - 判断不了（account 问不到）：不放行，客户端重试。
 //   - 顺带：account 上换服在途、源服是本服、本进程却不知道（受理之后重启过），在这里把它接着做完。
 //
-// 进入钩子（gameenter.OnEntered）——进入成功之后：
+// 进入钩子（gamelogin.OnEntered）——进入成功之后：
 //
 //   - 到达：档里的换服意图指向本服时，这是换服之后第一次进入，做到达（恰好一次）。
 //   - 对账：档里留着指向别的服的意图时，向 account 确认它没有成，清掉。
 //
 // 钩子失败只记日志、不让登录失败：到达与对账下一次进入都会重做。
 //
-// 自己改写进入端点、不经 gameenter.Enter 的工程，在加载 Player 之前调 DriverFromRegistry(registry) 的 Admit、
-// 进入成功之后调它的 Arrive，或者直接调 gameenter.RunEntering / RunEntered。
+// 自己改写进入端点、不经 gamelogin.Enter 的工程，在加载 Player 之前调 DriverFromRegistry(registry) 的 Admit、
+// 进入成功之后调它的 Arrive，或者直接调 gamelogin.RunEntering / RunEntered。
 func init() {
-	gameenter.OnEntering("rehome", admitOnEnter)
-	gameenter.OnEntered("rehome", arriveOnEnter)
+	gamelogin.OnEntering("rehome", admitOnEnter)
+	gamelogin.OnEntered("rehome", arriveOnEnter)
 	// 进入游戏与新建这两条消息不受换服的写闸门约束：它们都先跑上面的进入前检查，由它给客户端带码的回答
 	// （rehome_moving / rehome_elsewhere），闸门先把连接关掉的话客户端就不知道原因了。
 	gamerehome.ExemptFromGate(msgid.MsgEnterGame)
 	gamerehome.ExemptFromGate(msgid.MsgEnterCreate)
 }
 
-func admitOnEnter(ctx context.Context, registry *app.Registry, entering gameenter.Entering) error {
+func admitOnEnter(ctx context.Context, registry *app.Registry, entering gamelogin.Entering) error {
 	driver, err := DriverFromRegistry(registry)
 	if err != nil {
 		return err
@@ -47,7 +47,7 @@ func admitOnEnter(ctx context.Context, registry *app.Registry, entering gameente
 	return driver.Admit(ctx, entering.PlayerID, entering.Claims)
 }
 
-func arriveOnEnter(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+func arriveOnEnter(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 	driver, err := DriverFromRegistry(registry)
 	if err != nil {
 		return err

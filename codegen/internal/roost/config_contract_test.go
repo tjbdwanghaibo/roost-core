@@ -308,7 +308,7 @@ func TestGeneratedProjectConfigGuardCatchesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited = strings.Replace(string(raw), "\tworldID, err := lifecycle.WorldID(registry)\n", "\t_ = registry.Config().GetString(\"gm.secret_knob\")\n\tworldID, err := lifecycle.WorldID(registry)\n", 1)
+	edited = strings.Replace(string(raw), "\tworldID, err := worldentity.WorldID(registry)\n", "\t_ = registry.Config().GetString(\"gm.secret_knob\")\n\tworldID, err := lifecycle.WorldID(registry)\n", 1)
 	if edited == string(raw) {
 		t.Fatal("gm.go changed shape; update this test")
 	}

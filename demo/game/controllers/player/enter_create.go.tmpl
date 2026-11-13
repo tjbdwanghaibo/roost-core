@@ -7,7 +7,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	gameenter "{{MODULE}}/game/enter"
+
+	gamelogin "{{MODULE}}/game/login"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
@@ -18,7 +19,7 @@ import (
 // 它的域是 enter 模块的）。用进服票据握手的会话（登录入口那条路）在本服还没建成时，EnterGame 答 enter_need_create，
 // 客户端发它把玩家建成：建档、名字、首次初始化。建成之后不是一次进入——客户端接着发 EnterGame。
 //
-// 顺序、每一步被拒时留下了什么、重复与并发的结论都是模块的（gameenter.Create）：进入前检查 → 新建前检查
+// 顺序、每一步被拒时留下了什么、重复与并发的结论都是模块的（gamelogin.Create）：进入前检查 → 新建前检查
 // （名字规则：enter 与 profile 的联动）→ Ensure → 新建步骤 → Commit。demo 只给出两个档操作，并且守住自己的规矩——
 // 一个 Player 只在承载他的服上、被驻留表接入服务之后才装载：
 //
@@ -37,8 +38,8 @@ func (controller *Controller) EnterCreate(context *playeraccess.Context, request
 	if refusal != nil {
 		return &pb.EnterCreateResponse{Code: refusal.code, Reason: refusal.reason}, nil
 	}
-	creating := gameenter.Creating{PlayerID: context.PlayerID, Name: request.Name, Claims: context.Session.Principal().Claims}
-	err := gameenter.Create(context.Context(), controller.registry, creating, gameenter.CreateSteps{
+	creating := gamelogin.Creating{PlayerID: context.PlayerID, Name: request.Name, Claims: context.Session.Principal().Claims}
+	err := gamelogin.Create(context.Context(), controller.registry, creating, gamelogin.CreateSteps{
 		Ensure: func(ctx stdcontext.Context) error {
 			loginCtx, cancelLogin := controller.loginContext(ctx)
 			defer cancelLogin()

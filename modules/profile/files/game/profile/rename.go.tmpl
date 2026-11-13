@@ -27,3 +27,14 @@ func Rename(ctx context.Context, r *app.Registry, id int64, name string) (string
 	value, err := rename(ctx, r, id, name)
 	return value, true, err
 }
+
+// HasRenamer 报告有没有登记事务之外的改名入口（装了 naming 时有）。没有时名字直接在事务里写进档案。
+func HasRenamer() bool { return rename != nil }
+
+// SwapRenamer 换掉已登记的改名入口并返回原来的（可以是 nil）。给场景测试临时换掉或去掉它用；
+// 业务代码用 RegisterRenamer。
+func SwapRenamer(fn Renamer) Renamer {
+	previous := rename
+	rename = fn
+	return previous
+}

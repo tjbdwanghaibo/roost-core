@@ -109,7 +109,7 @@ func TestProjectNewGameTemplateHostsOnlyTheFrameworksAskedFor(t *testing.T) {
 	if names := sortedServiceNames(manifest); strings.Join(names, ",") != "game" || len(manifest.Services["game"].Uses) != 0 {
 		t.Fatalf("-template game declares services %v, game uses %v; want game alone", names, manifest.Services["game"].Uses)
 	}
-	for _, rel := range []string{"internal/service/chat", "configs/service/config.account.yaml", "internal/service/game/framework_clients_gen.go", "docs/SERVICES.zh-CN.md"} {
+	for _, rel := range []string{"services/chat", "configs/service/config.account.yaml", "internal/service/game/framework_clients_gen.go", "docs/SERVICES.zh-CN.md"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); !os.IsNotExist(err) {
 			t.Fatalf("-template game wrote %s (%v)", rel, err)
 		}
@@ -124,7 +124,7 @@ func TestProjectNewGameTemplateHostsOnlyTheFrameworksAskedFor(t *testing.T) {
 	if names := sortedServiceNames(manifest); strings.Join(names, ",") != "chat,game,rank" || strings.Join(manifest.Services["game"].Uses, ",") != "chat,rank" {
 		t.Fatalf("-framework rank,chat declares %v, game uses %v", names, manifest.Services["game"].Uses)
 	}
-	for _, rel := range []string{"configs/service/config.rank.yaml", "internal/service/chat/collaborators.go"} {
+	for _, rel := range []string{"configs/service/config.rank.yaml", "services/chat/collaborators.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("-framework rank,chat did not write %s: %v", rel, err)
 		}
@@ -192,15 +192,15 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		"internal/service/mail/collaborators.go", "internal/service/account/collaborators.go",
-		"internal/service/match/collaborators.go", "internal/service/chat/collaborators.go",
+		"services/mail/collaborators.go", "services/account/collaborators.go",
+		"services/match/collaborators.go", "services/chat/collaborators.go",
 	} {
 		file, ok := plan[path]
 		if !ok || file.Owned {
 			t.Errorf("%s must exist and be business-owned (owned=%v present=%v)", path, file.Owned, ok)
 		}
 	}
-	if _, ok := plan["internal/service/mail/service.go"]; ok {
+	if _, ok := plan["services/mail/service.go"]; ok {
 		t.Error("a hosted service must not get a business service.go")
 	}
 	clients, ok := plan["internal/service/game/framework_clients_gen.go"]
@@ -261,7 +261,7 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 	}
 	for _, rel := range []string{
 		"game/entities/player/entity.go", "game/entities/world/entity.go",
-		"game/lifecycle/player.go", "game/lifecycle/world.go", "game/lifecycle/world_singleton.go",
+		"game/entities/player/lifecycle_gen.go", "game/entities/world/lifecycle_gen.go", "game/entities/world/singleton.go", "game/managers/managers.go",
 		"internal/service/game/service.go",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
@@ -659,9 +659,9 @@ func TestMailBroadcastSkeletonDescribesTheWholeAudience(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, ok := plan["internal/service/mail/collaborators.go"]
+	file, ok := plan["services/mail/collaborators.go"]
 	if !ok {
-		t.Fatal("internal/service/mail/collaborators.go missing")
+		t.Fatal("services/mail/collaborators.go missing")
 	}
 	body := string(file.Body)
 	if strings.Contains(body, "online player") {

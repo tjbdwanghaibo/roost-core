@@ -3,8 +3,7 @@ package servertime
 import (
 	"context"
 
-	gameenter "{{MODULE}}/game/enter"
-
+	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
@@ -19,9 +18,9 @@ import (
 // 不让登录失败。那一次客户端没收到时间，按协议注释里的约定自己发 ServertimeSync——推送不是唯一的途径。
 // 服务进程重启（业务时间偏移 time.logic_offset 只在那时才会变）断开了连接的客户端重连、重新进入，也是经这里拿到新的时间。
 func init() {
-	gameenter.OnEntered("servertime", pushOnEnter)
+	gamelogin.OnEntered("servertime", pushOnEnter)
 }
 
-func pushOnEnter(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+func pushOnEnter(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 	return PushNow(ctx, registry, entered.PlayerID)
 }
