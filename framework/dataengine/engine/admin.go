@@ -45,7 +45,8 @@ type UnloadCommand struct {
 //     玩家在线、仍有 Sync 订阅时，卸载后框架会立刻为订阅者从库重载（nest.unload_resync）；要让实体真正离开内存，先
 //     entity.kick。
 //     lifetime=resident 的实体不卸载：不写 force 时明确失败（entity.ErrEntityResident）；force=true 是强制刷新
-//     （Runtime.RefreshEntity）：卸载后立刻从库重新载入，回答 reloaded=true，实体不离开内存。
+//     （Runtime.RefreshEntity）：卸载后立刻从库重新载入，回答 reloaded=true，实体不离开内存；常驻实体此刻不在内存时
+//     直接载回（运维恢复常驻的入口）。
 //
 // 命令经 ops 的 /admin/execute 调用，鉴权与审计由 admin 注册表与 ops 统一完成，这里不另设审批（维护者 2026-10-20 决定）。
 func RegisterAdminCommands(reg *admin.Registry, runtime func() *Runtime) error {

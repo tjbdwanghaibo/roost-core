@@ -809,4 +809,15 @@ func TestResidentEntityUnloadIsRefusedAndForceRefreshesIt(t *testing.T) {
 	if got := receiveUnload(t, f.unloadAsync(time.Second)); !errors.Is(got.err, entity.ErrEntityResident) || f.manager.Get(f.id) != after {
 		t.Fatalf("UnloadEntity on the refreshed instance = %v; want entity.ErrEntityResident and the instance kept", got.err)
 	}
+	// 常驻实体不在内存里（例如起服预加载时这一个失败了）：force=true 把它载回来。
+	if err := f.projector.Flush(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.access.Unload(entity.WithResidentRelease(f.ctx), after); err != nil || f.manager.Get(f.id) != nil {
+		t.Fatalf("set-up unload: %v", err)
+	}
+	result, err = reg.Execute(f.ctx, admin.Command{Name: AdminCommandEntityUnload, Payload: payload(true)})
+	if err != nil || f.manager.Get(f.id) == nil || result.Data["reloaded"] != true {
+		t.Fatalf("entity.unload force=true on a resident entity that is not loaded = %v, %v; loaded=%v; want it loaded", result.Data, err, f.manager.Get(f.id) != nil)
+	}
 }

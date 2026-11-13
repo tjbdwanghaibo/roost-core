@@ -54,7 +54,7 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 - **隐含预加载**：`lifetime=resident` 就是 `preload=startup` 加“不卸载”。两者同写也可以；`preload_order` 照常排批次。上面的时机、范围、顺序、失败语义与条件全部照用。
 - **只用于本地持久实体**：与 `remote=managed`、`noPersist=true` 同写在生成期拒绝；运行期注册时 `ValidateEntityPolicy` 同样拒绝（起服失败）。每个 DAO 都必须是 `dbscope=sid`：生成期拒绝 `dbscope=global` 的 DAO，运行期 `ValidateEntityRegistry` 拒绝（`entity.ErrResidentDaoScope`）。
 - **不卸载**：唯一把实例移出内存的入口是 `EntityManager.Destroy`，规则在那里强制一次。只从内存卸载（`deleteFromDB=false`）的调用对常驻实例返回 `entity.ErrEntityResident`，实体不受影响——业务的空闲卸载（lifecycle `Destroy(..., false)`）、`ManagerAccess.Unload`、不带 force 的运维 `entity.unload` 都是这样。拒绝记 WARN 与 `entity.resident_unload_refused_total{kind}`。
-- **强制刷新**：库里的文档被人工修过、要内存跟上时，运维 `entity.unload {..., force: true}`（`Runtime.RefreshEntity`）：同一套屏障、排空、卸载，然后立刻从库重新载入，回答 `reloaded: true`，实体不离开内存。重新载入失败时实体不在内存（下一次访问冷加载），命令返回错误并记 ERROR 与 `dataengine.resident_reload_total{reason=refresh,result=error}`。不提供“让常驻实体真正离开内存”的入口：要它不常驻，改 lifetime。
+- **强制刷新**：库里的文档被人工修过、要内存跟上时，运维 `entity.unload {..., force: true}`（`Runtime.RefreshEntity`）：同一套屏障、排空、卸载，然后立刻从库重新载入，回答 `reloaded: true`，实体不离开内存。重新载入失败时实体不在内存（下一次访问冷加载），命令返回错误并记 ERROR 与 `dataengine.resident_reload_total{reason=refresh,result=error}`。常驻实体此刻不在内存里（起服预加载时它这一个失败了、交出解除时载回失败）时，`force: true` 直接把它载回来，这是运维恢复常驻的入口（本进程已交出它时拒绝，`ErrEntityHandedOff`）。不提供“让常驻实体真正离开内存”的入口：要它不常驻，改 lifetime。
 - **换服交出**：允许。`HandOffEntity` 把写权连同实体交给目标服，本服卸载它（屏障保持期间被读回的只读实例同样卸载）；到了目标服，第一次访问（进入）载入后常驻，目标服重启后由它的预加载载入。交出被解除（`Release`：换服中止，或他换回本服）时框架立刻把它载回本服内存，不等第一次访问（`dataengine.resident_reload_total{reason=handoff_release}`）。
 - **删档**：`Destroy(..., deleteFromDB=true)` 不受常驻约束，删档准入之后框架把它移出内存；墓碑不会被预加载。
 - **卸载后重载（unload_resync）**：常驻实体只会经上面三处有意离开内存。强制刷新后有 Sync 订阅者时，订阅者的重载与刷新的重新载入走同一次共享冷加载，得到同一个新实例；新实例同样是常驻的，再卸载照样被拒绝。

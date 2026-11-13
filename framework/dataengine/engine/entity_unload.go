@@ -77,13 +77,24 @@ func (runtime *Runtime) UnloadEntity(ctx context.Context, id int64) (result Enti
 // 实体重新载入内存（Reloaded，新实例）。给“库里的文档被人工修过、要内存跟上”这种运维场景用；常驻实体只能这样刷新，
 // 不会因此离开内存。重新载入失败时实体不在内存（下一次访问照常冷加载），返回错误并记 ERROR 与
 // dataengine.resident_reload_total{result=error}。会等待，只能在业务池之外调用。
+//
+// lifetime=resident 的实体此刻不在内存里（起服预加载时它这一个失败了、交出解除时载回失败）时，RefreshEntity 直接把它载
+// 回来——这是运维恢复常驻的入口；本进程已交出它（换服在途或已换走）时不载，返回 ErrEntityHandedOff。
 func (runtime *Runtime) RefreshEntity(ctx context.Context, id int64) (result EntityUnloadResult, err error) {
 	result, err = runtime.unloadEntity(ctx, id, true)
-	if err != nil || !result.Resident {
+	if err != nil {
 		return result, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if !result.Resident {
+		if !entity.IsEntityKindResident(entity.GetEntityKindFromID(id)) {
+			return result, nil
+		}
+		if runtime.Projector.entityHandedOff(id) {
+			return result, fmt.Errorf("dataengine refresh: entity %d: %w", id, ErrEntityHandedOff)
+		}
 	}
 	if err := runtime.reloadEntity(ctx, id, "refresh"); err != nil {
 		return result, fmt.Errorf("dataengine refresh: entity %d was unloaded but not reloaded: %w", id, err)
