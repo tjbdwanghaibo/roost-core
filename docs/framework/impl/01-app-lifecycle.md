@@ -53,6 +53,7 @@
 | [runtime_failure.go](../../../framework/app/runtime_failure.go) | `RuntimeFailure` |
 | [service.go](../../../framework/app/service.go) | `Service` |
 | [singleton.go](../../../framework/app/singleton.go) | `SingletonStore`、`SingletonOpener`、`SingletonLiveness`、`SingletonIncarnation` |
+| [singleton_identity.go](../../../framework/app/singleton_identity.go) | `SingletonIdentityChecker`、`SingletonLease`、`ModSingletonLease`（v1.47.0） |
 | [startup.go](../../../framework/app/startup.go) | 函数/方法或内部实现；见源码 |
 
 ### app/buildinfo

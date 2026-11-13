@@ -16,7 +16,7 @@
 | --- | --- | --- | --- |
 | 排队与成局 | `service/match` 的 Store | `Enqueue`（同一 requestID 重放返回同一张票、一人一张有效票）→ `Candidates` → `Grouping` → `Commit`（同一票集合并发提交只成一局）；本例是弹性人数队列 `Queue{GroupSize: 8, MinSize: 2, FillAfterSeconds: 20}`：凑满 8 人立即开，不满时最早一张票等满 20 秒（业务时钟）后 2～7 人也开，存储按同一规则拒绝过早的不满员局（`ErrGroupNotReady`） | 已开局房间的中途补位是业务层写法（第 6A 节），框架没有补位 API |
 | 玩家在哪个房间 | `service/session` 的 Run | 每名成员一个 Run（`Enter`，请求 ID 必填且全局唯一）+ `Attach` 房间资源；重连用 `Current` 找回房间；`Finish` / `Leave` 触发业务 `Releaser` 归还座位 | 一名玩家同时只有一个有效 Run；Run 的期限按秒，`TTL` 要长于一局 |
-| 房间：名单、规则快照、阶段、房主、座位（分数、犯规、出局、连接代、最后一条输入回执、领奖 / 归还标记）、回合时刻、种子 | PartyRoom 实体 DAO 的 `State`（persist） | `roost add entity PartyRoom` + `add dao`；锁档 World，领奖时与 Player 同一事务 | 整段业务 JSON，严格解码；种子与星星出现时刻只在这里 |
+| 房间：名单、规则快照、阶段、房主、座位（分数、犯规、出局、连接代、最后一条输入回执、领奖 / 归还标记）、回合时刻、种子 | PartyRoom 实体 DAO 的 `State`（`nosync`，只落库） | `roost add entity PartyRoom` + `add dao`；锁档 World，领奖时与 Player 同一事务 | 整段业务 JSON，严格解码；种子与星星出现时刻只在这里 |
 | 公开记分板 | PartyRoom DAO 的 `Board`（`nopersist,sync`） | 每次写 `State` 时由 `SaveRoom` 一起算出；业务 packer 只开放 `Board` 一个视图 | 不落库，冷加载后由下一拍重算 |
 | 回合推进、星星出现、断线宽限 | PartyRoom 的实体心跳 | `roost add heartbeat --entity PartyRoom`，100ms 档，回调在实体锁与事务内按 `Beat.Now` 推进 | 心跳不持久；判定只看时间戳，不按“第几拍” |
 | 开局硬期限 | PartyRoom 的持久实体定时器 | `roost add timer --entity PartyRoom`；开局登记、结算即删 | 心跳没在跑（冷加载、驱动停摆）时由它兜底结算 |

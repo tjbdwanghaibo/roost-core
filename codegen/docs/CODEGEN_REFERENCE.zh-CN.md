@@ -340,7 +340,7 @@ DAO 里，到点由驱动投递一次 Tick，在实体的 Nest 锁与事务内�
 | 文件 | 归属 | 内容 |
 | --- | --- | --- |
 | `roost.yaml` `timers.<entity>` | 声明 | `component`（缺省 timer）、`id`（组件类型号，ids.component 段内分配）、`service`（运行该实体 Nest 的服务）、`dao`（节点所在 DAO） |
-| `db/def/<entity>.go`（实体 DAO 定义） | 业务（add 时加字段） | `<Component>s map[int64]*<Entity><Component>Node`（persist,map=fast）与 `<Component>Seed int64`（persist）；同名同类型已存在时不改 |
+| `db/def/<entity>.go`（实体 DAO 定义） | 业务（add 时加字段） | `<Component>s map[int64]*<Entity><Component>Node`（`nosync,map=fast`）与 `<Component>Seed int64`（`nosync`），只落库不同步；同名同类型已存在时不改 |
 | `game/entities/<entity>/entity.go` | 业务（add 时加字段） | 组件字段 `<component> *<Component>Component`（tag `comp:"CompType<Component>"`）；已有时不改 |
 | `db/def/<entity>_<component>_node_gen.go` | 生成（sync 重写） | 节点类型（期限按毫秒） |
 | `game/entities/<entity>/<component>_component_gen.go` | 生成（sync 重写） | `//roost:component`、`<Component>Component`（`New<Component>` / `New<Component>WithPriority` / `New<Component>At` / `Change<Component>` / `Remove<Component>` / `<Component>(id)` / `<Component>s()` / `Tick`）、`I<Component>Entity`、DAO 适配、`<Component>Driver` 与 `<Component>TickHandler` |

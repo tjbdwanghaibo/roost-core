@@ -33,6 +33,17 @@ RuntimeFailure 是进程级不能继续安全写入的信号；失败回调包�
 
 不可用可能在 T 之后将近一个 `renew_interval` 才开始，所以**从断开开始算，对任意相位都扛得住的时长比上面再短一个 `renew_interval`**：缺省配置下连接被拒时 9～12s、丢包时 6～9s，不是 `ttl − guard`。Redis 后端还要再减去驱动的恢复延迟：go-redis 连接池连续 `PoolSize` 次拨号失败后不再拨号、直接返回上次的错误，由后台每秒探测一次，锁客户端（`PoolSize` 2）断开两拍后就进入这个状态，Redis 恢复后续期最多还会失败约 1s。依赖“Redis 短断开不停服”的用例或运维预案按这个时长留余量；这只会让失锁提前，不会让两个进程同时持锁。回归：`TestSingletonSurvivesAStoreOutageOnlyUntilTheLastChanceBeat`（singleton_test.go）。
 
+### 有效窗口过期后不可复活（v1.47.0 起）
+
+单实例锁的本地有效窗口是上一次及时续期的发起时刻加 `ttl`。窗口一过，进程**永久失锁并 fail-stop**，之后即使续期 Applied（Redis 的键仍是自己的）也不恢复。原来“卡住后恢复、续期成功就继续持有”的行为取消了。这对所有开了 singleton 的服务都生效：进程被 SIGSTOP、长 GC、调试器断点或虚拟机暂停超过 `ttl`（缺省 15s）后恢复，就会停下，由编排重启。
+
+- 续期 goroutine 在每次 CAS 之前和之后都核对一次窗口，迟到的 Applied 不延长写入许可。
+- 需要跨进程接管的模块（cellworld）经 `app.Lookup` 取 `ModSingletonLease` 能力（`SingletonLease`），在业务准入、提交、出站前调 `Check()`。它只看本地时钟、不访问 Redis，覆盖进程恢复后业务 goroutine 比续期 goroutine 先被调度的情况。
+- `Check()` 发现窗口已过时会把锁置为 Lost，并**在调用方的 goroutine 上同步**执行 RuntimeFailure 的 OnFail 回调（包括 Nest 围栏）。所以新加的 OnFail 回调不能依赖“由续期 goroutine 调用”，也不能去拿业务入口正持有的锁。
+- “检查之后、真正写入之前”仍有一个空档，单靠本地时钟消除不了；跨进程写入的最终防线是存储侧的条件写（cellworld 用授权记录的 CAS）。
+
+回归：`TestSingletonExpiredWindowCannotBeRevived`、`TestSingletonALateAppliedRenewalDoesNotCount`（singleton_test.go）、`TestSingletonLocalGuardExpiresBeforeRenewalRuns`（singleton_identity_test.go）。
+
 ## 4. 三步停机
 
 发起关闭 → 在调用方 context 内等待真实排空 → 排空后释放资源。发起关闭幂等；等待超时返回 context 错误，对象与底层资源保留供继续等待。不能把关闭 channel 当成所有回调退出，也不能因等待超时提前释放单实例锁。

@@ -339,7 +339,7 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 
 **wallet（货币）**
 
-- 状态：`Wallet WalletState`（`persist,sync`：余额）、`WalletLedger WalletLedger`（`persist`：幂等回执）。
+- 状态：`Wallet WalletState`（`persist,sync`：余额）、`WalletLedger WalletLedger`（`nosync`：幂等回执，只落库）。
 - 组件 `Wallet`：`Credit(key, amount)`、`Debit(key, amount)`，溢出检查、余额不足返回 `wallet_short`；同一个 `key` 重复调用返回第一次的结果，金额不同则拒绝。回执账本有上限，满了拒绝新写、不淘汰旧回执（与现有夹具的账本语义一致，见 `scripts/testdata/tower-defense/match.go.txt`）。
 - 能力：`Init` 里向 Registry 发布 `wallet` 能力（接口放在 `game/wallet`），供别的模块在自己的多实体 handler 里调用组件方法。
 - 协议：查询余额、消费各一条；handler `//roost:nest rollback=undo durability=strict`。
