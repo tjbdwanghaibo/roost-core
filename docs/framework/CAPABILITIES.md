@@ -150,7 +150,7 @@
 
 ## 领域服务
 
-都在 `service/` 下，接线在 `wiring/<领域>`。前九个是**托管框架服务**：在 `roost.yaml` 写 `services.<name>.framework: <服务>` 声明一个进程托管它，业务服务写 `services.<svc>.uses: [<服务>]`，`roost project sync` 后在 `internal/service/<svc>/framework_clients_gen.go` 得到类型化访问器；`roost project new -template game` 一次生成全部九个。协作者（身份校验、投递、频道策略等）在 `internal/service/<name>/collaborators.go`，默认全部拒绝，要项目自己实现。存储多数在 Redis，不走玩家 DAO 的 WAL。
+都在 `service/` 下，接线在 `wiring/<领域>`。前九个是**托管框架服务**：在 `roost.yaml` 写 `services.<name>.framework: <服务>` 声明一个进程托管它，业务服务写 `services.<svc>.uses: [<服务>]`，`roost project sync` 后在 `internal/service/<svc>/framework_clients_gen.go` 得到类型化访问器；`roost project new -template game` 缺省一个都不托管，`roost module add` 装的模块用到哪个就在那次安装里声明哪个（`module plan` 列出），要一开始就托管用 `-framework all`（全部九个）或 `-framework rank,chat`；`-template game-demo` 托管全部九个。协作者（身份校验、投递、频道策略等）在 `internal/service/<name>/collaborators.go`，默认全部拒绝，要项目自己实现。存储多数在 Redis，不走玩家 DAO 的 WAL。
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
@@ -172,7 +172,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| `roost project new` | 创建完整工程 | `roost project new <name> -module <go-module>`，可加 `-services`、`-mods`、`-features`、`-template game` 或 `-template game-demo` | 正式。`-module` 必填；没有按玩法的模板 | [项目生成器 §3](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#3-创建项目) |
+| `roost project new` | 创建完整工程 | `roost project new <name> -module <go-module>`，可加 `-services`、`-mods`、`-features`、`-template game`（可配 `-framework all` 或若干托管服务）或 `-template game-demo` | 正式。`-module` 必填；没有按玩法的模板 | [项目生成器 §3](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#3-创建项目) |
 | `roost project sync` / `diff` | 按 `roost.yaml` 同步受控文件；预览差异 | `roost project sync`、`roost project diff` | 正式。失败回滚已写文件 | [命令参考 §1.2](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#12-同步预览和诊断) |
 | `roost project doctor` | 诊断工程：配置键、跨服务一致性、漏接的消费者与协作者 | `roost project doctor`，可加 `--workflow first-business` 或 `--workflow player-tcp` | 正式 | [项目生成器 §13](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级) |
 | `roost project next` | 按工程真实文件算进度，只给当前一步 | `roost project next` | 正式。不替业务决定字段 | [新手练习册](../../codegen/docs/BEGINNER_WORKBOOK.zh-CN.md) |

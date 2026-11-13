@@ -216,7 +216,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
   `-recipe casual` 或 `-recipe turn-pvp` 可直接创建已组合工程（自动采用 game 底座），两者都已带登录链路（login、portal、servertime）与开发配置：casual 是首次发放、签到、任务、体力、商店、背包、邮件；turn-pvp 是档案、本服匹配（matchmaking → matchroom）、房间与回合，组队用 team。模块名单与验收见[配方](../../../../modules/README.md#从配方创建工程)。需求覆盖配方的全部模块时才从配方起步，再按第 1 步的结论往上加；模块不能卸载，配方多出来的模块装了就去不掉，这时改用 `-template game` 加 `module add`。
 
-  `-template game` 带 Player 与 World 两个实体、九个托管框架服务。玩家模块挂在 `Player` 上，要求这个形状；room 自带 Room Entity、DAO 与 lifecycle；skillbook 是服务级只读目录；alliance 会新增一个独立的联盟服务与三个跨域 Saga。
+  `-template game` 带 Player 与 World 两个实体，缺省只有 game 一个业务服务、不托管任何框架服务：装的模块用到哪个托管服务（chat / leaderboard 的 rank / mailbox 的 mail / login 与 portal 的 account……），安装器就在那一次安装里声明哪个，所以工程只带用得到的服务；配方同样只带它的模块用到的（casual：account、mail；turn-pvp：account、match、rank）。手写功能要直接调某个托管服务（没有对应模块）时加 `-framework rank,chat`（或 `-framework all` 要全部九个），已有工程见 `roost help services`。玩家模块挂在 `Player` 上，要求这个形状；room 自带 Room Entity、DAO 与 lifecycle；skillbook 是服务级只读目录；alliance 会新增一个独立的联盟服务与三个跨域 Saga。
 - **已有工程**：`cd` 进去，先读 `roost.yaml`：`modules` 段是已装的模块（每个模块拥有的文件、DAO 字段、号），`services`、`features`、`ids` 是装配现状。再 `"$ROOST" module list`，带 `*` 的是已装的。不要重装已装的模块；已装模块的文件是业务代码，可能已经被改过，以工程里的为准。
 
 ## 2A. 后续增加与修改需求
@@ -291,10 +291,10 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 "$ROOST" module verify                      # 每个模块的场景数 + build / vet / id check / generate --check
 ```
 
-- `plan` 的 JSON：`modules[].status` 为 `install`（将安装）、`installed`（已装）、`installed_other_version`（已装的是另一版，安装器不动它）；`prerequisites` 是会先执行的 `roost add`；`ids`、`state`、`files` 是将分配的号、追加的 DAO 字段、写入的文件；可选 `runtime` 是自动接入服务启动与停机的入口，安装后连同目标 service、requires 记进 roost.yaml，不用改业务 Service；见 [服务级接线](../../../../modules/README.md#服务级启动与停机)。
+- `plan` 的 JSON：`modules[].status` 为 `install`（将安装）、`installed`（已装）、`installed_other_version`（已装的是另一版，安装器不动它）；`prerequisites` 是会先执行的 `roost add`；`framework_services` 是这次会新声明的托管框架服务（模块用到、工程还没有的；随安装一起写进 roost.yaml 与业务服务的 `uses`，配置、部署与协作者文件一并生成，安装失败整体撤销）；`ids`、`state`、`files` 是将分配的号、追加的 DAO 字段、写入的文件；可选 `runtime` 是自动接入服务启动与停机的入口，安装后连同目标 service、requires 记进 roost.yaml，不用改业务 Service；见 [服务级接线](../../../../modules/README.md#服务级启动与停机)。
 - `add` 报错时按错误文字处理，不要绕过：
   - `already exists and is not this module's file`：落点被业务文件占着。读那个文件，告诉用户，由用户决定保留自己的实现还是让位。
-  - `cannot be installed yet`：缺 Mod、feature 或托管服务，错误里给了要执行的命令。
+  - `cannot be installed yet`：缺 Mod 或 feature，错误里给了要执行的命令。托管服务不在此列：安装器自己声明；只有工程里已经有一个同名的业务服务时报 `is taken by a business service`，这是冲突，告诉用户，不要改名绕过。
 - **联动文件**：输出里的 `glue <模块> with <另一个模块>` 是两个模块之间的接线（例如 chat 在玩家进入游戏时把他加进在线名单、签到成功推进每日任务），两个模块都装着时安装器自动写，不论先装哪个；`plan --json` 的 `glue` 数组列出会写的文件。它们归工程所有，规则直接在文件里改。`module verify` 把它们的场景单独列一行 `<模块>+<另一个模块>`。
 - 模块自带的客户端协议（如 wallet 的 `WalletSpend`：客户端发起的消费）是样例入口。需求里没有对应的客户端操作时，告诉用户它存在，由用户决定保留还是删掉这条协议与端点。
 - 装完之后模块文件就是业务代码：要改规则直接改（例如 `game/entities/player/checkin_component.go` 里的奖励），改完再 `module verify`。改了行为就同步改模块自带的测试，不要删测试。
@@ -499,7 +499,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 - `module verify` 全部 `ok`、退出码 0。它已经包含 `go build`、`go vet`、`roost id check`、`roost generate --check`。
 - 手写功能的场景数自己核对：`-run` 写错或用例被跳过时 `go test` 照样报 `ok`。
-- `project doctor` 在 `-template game` 的新工程上必然退出 1：托管服务的 collaborators 是拒绝桩，上线前由项目实现。没装 login 时是 account / chat / platform / session 四项；装了 login 后 account 由它接管，剩 chat / platform / session 三项。除这些外不应有 FAIL。
+- `project doctor` 在 `-template game` 的新工程上退出 0：缺省不托管任何框架服务，就没有协作者拒绝桩。装模块时声明的托管服务里，chat、account（login）、platform（purchase）的协作者由对应模块接管，mail、rank、match 没有拒绝桩；`-framework` 显式带上、又没有模块接管的 account / chat / platform / session 会各报一项 `collaborators:<服务>` FAIL（生成的拒绝桩，上线前由项目实现）。除这些外不应有 FAIL。
 - 这一档是离线验收：替身提交器，没有 Mongo / NATS / Redis，没有真实客户端。要真起进程见 [SKILL §4](../SKILL.md)。
 
 ## 5A. 工程说明文档
@@ -579,7 +579,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 ## 7. 边界
 
-- 模块清单以 `roost module list` 为准；实体和依赖归属见各自清单，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`（`-template game` 都已有）。模块之间只自动接上 `with` 声明的联动；其余要自己写：升级奖励（`OnProfileLevelUp`）、新玩家初始发放（`enter_first.go`）、自定义任务事件（调 `TaskComp().Report`，指定任务仍可 `Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `StaminaComp().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是完整的模块组合，它们的做法可以参考，剩余玩法要手写进工程。
+- 模块清单以 `roost module list` 为准；实体和依赖归属见各自清单，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`，工程还没有时安装器在同一次安装里声明并接上（`module plan` 的 `framework_services` 列出）；同名的已经是业务服务时拒绝安装。模块之间只自动接上 `with` 声明的联动；其余要自己写：升级奖励（`OnProfileLevelUp`）、新玩家初始发放（`enter_first.go`）、自定义任务事件（调 `TaskComp().Report`，指定任务仍可 `Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `StaminaComp().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是完整的模块组合，它们的做法可以参考，剩余玩法要手写进工程。
 - 没有卸载；分配过的号与存储键不回收。已装模块不会随 roost-core 升级自动更新。
 - 模块已支持 `runtime` 服务 Init / Shutdown 接线；按实体分配持久定时器类型已由 turn 使用；模块自带压测步骤仍未提供。
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。

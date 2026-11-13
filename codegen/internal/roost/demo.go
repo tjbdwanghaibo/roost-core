@@ -125,7 +125,9 @@ func writeDemoActorBody(root, gameService string) error {
 // All are on by default; a caller who narrowed -features would otherwise get
 // a project that cannot build.
 func applyDemoTemplate(m *Manifest, gameService string) error {
-	if err := applyGameTemplate(m, gameService); err != nil {
+	// demo 调用了全部九个托管框架服务（账号、聊天、邮件、匹配、活动、路由、支付、排行、会话），
+	// 所以显式托管全部；-template game 缺省一个都不带。
+	if err := applyGameTemplate(m, gameService, frameworkServiceNames()); err != nil {
 		return err
 	}
 	// The game process reads the platform service's grant records out of the

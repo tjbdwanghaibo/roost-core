@@ -27,9 +27,14 @@ type NewOptions struct {
 	Mods     []string
 	Features []string
 	Versions VersionSpec
-	// Template is an opt-in starting shape. "game" hosts the nine framework
-	// services and wires the first business service to them.
+	// Template is an opt-in starting shape. "game" is the first business
+	// service with the Nest runtime and the Player / World entities; it hosts
+	// no framework service unless Frameworks names some (module installs
+	// declare the ones a module uses). "game-demo" hosts all nine.
 	Template string
+	// Frameworks are the framework services -template game hosts from the
+	// start (parseFrameworkSelection: none, "all", or a list).
+	Frameworks []string
 	// Recipe installs a named business composition on the game template.
 	Recipe string
 }
@@ -74,10 +79,16 @@ func NewProjectContext(ctx context.Context, options NewOptions) (SyncResult, str
 	}
 	manifest := DefaultManifest(options.Name, options.Module, options.Services, options.Mods, options.Features)
 	mergeVersions(&manifest.Versions, options.Versions)
+	if len(options.Frameworks) > 0 && strings.TrimSpace(options.Template) != "game" {
+		if strings.TrimSpace(options.Template) == demoTemplateName {
+			return SyncResult{}, "", fmt.Errorf("-framework applies to -template game; -template %s always hosts all nine framework services", demoTemplateName)
+		}
+		return SyncResult{}, "", errors.New("-framework applies to -template game (or -recipe); without a template, declare services.<name>.framework in roost.yaml (roost help services)")
+	}
 	switch strings.TrimSpace(options.Template) {
 	case "":
 	case "game":
-		if err := applyGameTemplate(&manifest, templateGameService(options)); err != nil {
+		if err := applyGameTemplate(&manifest, templateGameService(options), options.Frameworks); err != nil {
 			return SyncResult{}, "", err
 		}
 	case demoTemplateName:

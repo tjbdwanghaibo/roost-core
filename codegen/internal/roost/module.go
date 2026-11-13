@@ -162,6 +162,13 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 	for _, command := range plan.Prerequisites {
 		fmt.Fprintf(stdout, "prerequisite (%s run): %s\n", verb, command)
 	}
+	declareVerb := "will declare"
+	if plan.Applied {
+		declareVerb = "declared"
+	}
+	for _, name := range plan.FrameworkServices {
+		fmt.Fprintf(stdout, "framework service %s: %s (services.%s.framework: %s, added to services.%s.uses; its config, deployment and collaborators come with the install)\n", name, declareVerb, name, name, plan.Service)
+	}
 	for _, item := range plan.Modules {
 		switch item.Status {
 		case moduleStatusInstalled:

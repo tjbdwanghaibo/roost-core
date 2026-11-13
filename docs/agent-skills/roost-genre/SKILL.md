@@ -90,7 +90,7 @@ go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$CORE"
 ```
 
 要点：
-- `-template game` 托管 account / chat / mail / match / session / activity / global / platform / rank 九个框架服务，带 Player 与 World 两个实体（`roost help project`）。
+- `-template game` 只有 game 一个业务服务，带 Player 与 World 两个实体，缺省不托管任何框架服务；`roost module add` 装的模块用到哪个托管服务（account / chat / mail / match / rank……）就在那次安装里声明哪个。要一开始就托管，加 `-framework rank,chat` 或 `-framework all`（九个全部：account / activity / chat / global / mail / match / platform / rank / session）（`roost help project`）。各纵切夹具不经生成的访问器调用托管服务（用到的服务包在测试里直接构造），所以不需要 `-framework`。
 - 三个 helper 代替仓库脚本里的 python 片段：DAO 字段与实体注解是**业务文件**，只改它们（`dao_add` 每项第四个词是 dao 标签，缺省 `persist`；派对房间的 `Board` 写 `nopersist,sync`、`Coins` 写 `persist,sync`）；组件、访问器、Sender 由 `roost generate` 生成，不手改生成文件（SLG-INTEGRATION §3.1 第 3～4 步）。
 - 用 `-practice` 原名（如 `MOD=example.com/slg-practice`）时 `fix_mod` 是空操作；自定 module 名必须做。只替换 import 路径，夹具里 `"moba-practice"` 这类普通字符串不动。
 
@@ -108,12 +108,12 @@ go build -mod=mod ./...    # 分两行：`a && b` 里 a 失败时 set -e 不退�
 go vet -mod=mod ./...
 "$ROOST" id check            # 期望输出 IDs are valid
 "$ROOST" generate --check    # 期望输出 generated files are up to date
-"$ROOST" project doctor || true   # 新 game 工程必然退出 1，看输出里的 FAIL 行，见下
+"$ROOST" project doctor || true   # 看输出里的 FAIL 行，见下
 ```
 
 - 计数和 skip 都要核对：`-run` 写错或用例被跳过时 `go test` 照样 `ok`（各纵切脚本的注释）。
-- `project doctor` 在新的 `-template game` 工程上**必然退出 1**：account / chat / platform / session 四个 `collaborators` 仍是生成的拒绝桩（“is not configured”），上线前必须实现（`internal/service/<name>/collaborators.go`、生成工程 `docs/SERVICES.zh-CN.md`）。demo 验收只要求除这 4 项外没有 FAIL（2026-10-31 在 v1.33.0、v1.33.1、v1.33.2 检出与 main `24a9dbc3` 实测，FAIL 恰为 `collaborators:account / chat / platform / session`）。`-template game-demo` 工程（MMORPG §3.1）collaborators 已实现，doctor 退出 0。
-- 以上整段 §3.2 + reference 命令 + 本节（从本文 bash 块原样抽出拼脚本）2026-10-31 在 v1.33.2 检出（`e4ec6260`）上对全部篇目连跑，自定 module：SLG 6、SLG 进阶 6 + 2、MOBA 28、MMORPG game-demo 1、MMORPG 纵切 13、卡牌 16、塔防 10、生存撤离 12、自走棋 12、放置 12、合成 15、派对房间 12 条 PASS，全部 0 SKIP，build / vet / `id check` / `generate --check` 通过；`-template game` 工程 doctor 恰为 4 项 collaborators FAIL，`-template game-demo` 工程 doctor 退出 0、无 FAIL。v1.33.1 上的较早一轮：SLG / 卡牌 / MMORPG / 合成四篇通过。2026-10-31 在 main `24a9dbc3`（v1.34.0 之后、未发版）上复测：派对房间（18 条版命令，自定 module `example.com/myparty`）18 条 PASS、0 SKIP，SLG（`example.com/myslg`）6 条 PASS、0 SKIP，两者 build / vet / `id check` / `generate --check` 通过、doctor 恰为 4 项 collaborators FAIL；其余篇目在这个提交上未复测。
+- `project doctor` 在新的 `-template game` 工程上退出 0、没有 FAIL（2026-11-13 起缺省不托管框架服务，就没有协作者拒绝桩）。用 `-framework` 带上 account / chat / platform / session 而没有模块接管时，各报一项 `collaborators:<服务>` FAIL：生成的拒绝桩（“is not configured”），上线前必须实现（`internal/service/<name>/collaborators.go`、生成工程 `docs/SERVICES.zh-CN.md`）；那时验收只要求除这几项外没有 FAIL。`-template game-demo` 工程（MMORPG §3.1）collaborators 已实现，doctor 退出 0。（2026-11-13 之前的版本 `-template game` 托管全部九个，doctor 恰为 `collaborators:account / chat / platform / session` 4 项 FAIL，2026-10-31 在 v1.33.0～v1.33.2 与 main `24a9dbc3` 实测。）
+- 以上整段 §3.2 + reference 命令 + 本节（从本文 bash 块原样抽出拼脚本）2026-10-31 在 v1.33.2 检出（`e4ec6260`）上对全部篇目连跑，自定 module：SLG 6、SLG 进阶 6 + 2、MOBA 28、MMORPG game-demo 1、MMORPG 纵切 13、卡牌 16、塔防 10、生存撤离 12、自走棋 12、放置 12、合成 15、派对房间 12 条 PASS，全部 0 SKIP，build / vet / `id check` / `generate --check` 通过；`-template game` 工程 doctor 恰为 4 项 collaborators FAIL（当时的模板托管全部九个服务），`-template game-demo` 工程 doctor 退出 0、无 FAIL。v1.33.1 上的较早一轮：SLG / 卡牌 / MMORPG / 合成四篇通过。2026-10-31 在 main `24a9dbc3`（v1.34.0 之后、未发版）上复测：派对房间（18 条版命令，自定 module `example.com/myparty`）18 条 PASS、0 SKIP，SLG（`example.com/myslg`）6 条 PASS、0 SKIP，两者 build / vet / `id check` / `generate --check` 通过、doctor 恰为 4 项 collaborators FAIL（同上，当时的模板）；其余篇目在这个提交上未复测。
 
 ### 3.5 一键方式（有检出时最快）
 
@@ -189,7 +189,7 @@ v1.35.0 起（v1.36.0 补齐闭环与 SyncProbe）13 类网络验收已覆盖既
 | 多实体事务锁序 | 争用对象（Tile、Room、Match、Raid…）改 `EntityCategoryWorld`，Player 保持 Other（取值即锁序，`framework/entity/category_order.go`） |
 | 夹具 import 写死 `example.com/<genre>-practice` | §3.2 `fix_mod`；或直接用 `-practice` 原名 |
 | `--skip-deps` 后不加 replace | `generate` 里的 `go mod tidy` 会去解析可能未发布的版本；先 `go mod edit -replace` 再 add / generate |
-| `project doctor` 退出 1 | §3.4：4 个 collaborators 拒绝桩是预期 |
+| `project doctor` 退出 1 | §3.4：只有 `-framework` 带上、没有模块接管的托管服务的 collaborators 拒绝桩是预期；新的 `-template game` 工程应退出 0 |
 | 只在 v1.33.0 及更早：`roost help project` 说 game-demo 只生成“一条写入链路”、`roost add saga` 提示“约 1200 sagas/s” | v1.33.1 已修正文案（help project 如实列出完整 demo，最小写入链路作为其中一项；help saga 改为正式实现约 1050 sagas/s，macOS 单机、Linux / 跨机未测）。旧版本以 `demo/README.md` 与 KNOWN-LIMITS“Saga”为准 |
 | 去掉 `timers` 条目后生成部分不自动删除 | 手工删，见 KNOWN-LIMITS“按实体的持久定时器（D11）” |
 

@@ -50,7 +50,7 @@
 - **地址可以是空的**：零配置时清单与进服结果里 `addr` 为空、`addr_source` 是 `none`，票据照发。
 - **动态目录只有机制**：上报从哪里来（Gate / game 经总线、服务发现、运维登记）没有接；进程内的注册表是每个副本一张。静态配置没有这个问题。
 - **`portal.servers` 不在 App 的配置声明里**：`--print-config` 不打印、`--check-config` 与 `roost config check` 不检查，写错了要等进程启动到入口这一步才报错退出。
-- **前提**：依赖 `login`（握手时把票据交给 account 的认证器；`/portal/enter` 的握手票据由 `game/login` 的 `EnterTicket` 拼）；托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
+- **前提**：依赖 `login`（握手时把票据交给 account 的认证器；`/portal/enter` 的握手票据由 `game/login` 的 `EnterTicket` 拼）；托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
 - **已知限制**：[KNOWN-LIMITS“portal 的边界”](../../docs/maintenance/KNOWN-LIMITS.md)，以及同一处的“login 的边界”“game-demo 接入登录链路的边界”（demo 渠道经入口对外、生成依赖没发布的 `wiring/modulehost`）。
 
 ## 复用方式
@@ -63,7 +63,7 @@ roost module add portal enter     # enter 不是依赖；两个都装着时多�
 roost module verify
 ```
 
-装它时 [login](../login/README.md) 跟着装；account 服务没有 web Mod 时安装器先补上（`roost add mod web -service <托管 account 的服务>`，连同 `web.*` 配置段，开发端口是 8080 + 那个服务的端口块号）。零配置就能启动、登录、拿清单、换进服票据，只是没有连接地址。要走通整条链路还要做（`roost module plan / add` 的输出里列着，`todo:` 行）：
+装它时 [login](../login/README.md) 跟着装；account 服务没有 web Mod 时安装器先补上（`roost add mod web -service <托管 account 的服务>`，连同 `web.*` 配置段，开发端口是 8080 + 那个服务的端口块号）；工程还没有 account 时（`-template game` 缺省不托管框架服务）安装器声明它，web 直接写进声明，配置生成时就带 `web.*` 段。零配置就能启动、登录、拿清单、换进服票据，只是没有连接地址。要走通整条链路还要做（`roost module plan / add` 的输出里列着，`todo:` 行）：
 
 1. login 的那几步（[login 的“安装之后还要做的”](../login/README.md#复用方式)）：打开玩家 TCP 监听、写开发令牌、登记区服。
 2. 给区服配地址：在托管 account 的服务的配置里写 `portal.servers`，或者接上动态目录。
@@ -133,7 +133,7 @@ POST /portal/enter    {account_ticket, server_id}       -> 握手票据 enter:<�
 
 ### 本机走一遍
 
-各服务与依赖起来之后；入口在 account 进程的 `web.addr` 上，新建的 game 模板工程是 `127.0.0.1:8081`；`dev-local` 是 `config.account.yaml` 里 `login.dev_token` 的值：
+各服务与依赖起来之后；入口在 account 进程的 `web.addr` 上，开发端口是 8080 + account 的端口块号（`roost.yaml` 的 `services.account.port_block`）：新建的 game 模板工程直接装 portal、以及两个配方里 account 是第一个托管服务，块号 1，即 `127.0.0.1:8081`；`dev-local` 是 `config.account.yaml` 里 `login.dev_token` 的值：
 
 ```sh
 go run ./cmd/accountctl upsert-server -sid 1000        # make dev-run 会自动做这一步

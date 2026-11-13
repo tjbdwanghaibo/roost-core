@@ -117,6 +117,14 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
 
 features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节的 Mod 表。
 
+起步形态（`-template`）：`game` 是第一个业务服务加 nest 运行时、Player 与 World 两个实体，**缺省不托管任何框架服务**
+（维护者 2026-11-13：只生成用到的服务）——`roost module add` 装的模块用到哪个托管服务就在那次安装里声明哪个，
+`-recipe` 也只带它的模块用到的；`-framework all` 让它一开始就托管全部九个（account、activity、chat、global、mail、
+match、platform、rank、session），`-framework rank,chat` 只托管列出的几个。`-framework` 只对 `-template game`
+（含 `-recipe`）有效。`game-demo` 固定托管全部九个（demo 都在用），再带完整的参考业务。
+
+    roost project new planet -module github.com/acme/planet -template game -framework rank,chat
+
 默认无需传版本参数，生成项目会跟随最新版本。若要提高某个模块的最低版本，可传明确版本；它不得低于 codegen 的兼容下限：
 
     roost project new planet \
@@ -301,7 +309,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 **按服务区分的端口：端口块**（维护者 2026-10-19 决定）。开发配置集的服务在同一台机器上一起运行（`deploy/dev/run.sh`），每个服务要有自己的 ops 端口与 `etcd.advertise_addr`。每个服务在 `roost.yaml` 里有一个端口块号 `services.<name>.port_block`（0～99），由生成器分配并写入，**一经分配不再改变**：
 
 - 新建工程：按“业务服务在前、托管框架服务在后，各自按名字排序”依次分配 0、1、2……（game-demo：game 0，account 1，activity 2 … session 9）；
-- 之后新增的服务（`add service`、命令或模板带进来的托管服务）取“当前最大块号 + 1”，几个同时新增时按上面的顺序；已有服务的块号与端口不受影响；
+- 之后新增的服务（`add service`、命令或模板带进来的托管服务、`module add` 按模块需要声明的托管服务）取“当前最大块号 + 1”，几个同时新增时按上面的顺序；已有服务的块号与端口不受影响；
 - 手改 `roost.yaml` 加服务时不写块号：其他命令报错并给出下一个空闲块号，`roost project sync` 自动分配并写回；
 - 删除服务不回收块号；只有删掉的恰好是最大块号时，下一个新服务会拿到同一个号（删服务时一并删掉它的配置文件）。
 - 块号重复或超出 0～99 时加载失败。

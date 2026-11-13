@@ -95,9 +95,14 @@ expect_verify wallet=14
 grep -q 'module wallet: already installed' "$review_root/add-checkin.log"
 grep -q 'module checkin: installed' "$review_root/add-checkin.log"
 expect_verify wallet=14 checkin=8
-# 5. 再叠一个接管生成桩的模块：chat 替换 chat 托管服务的拒绝桩，doctor 不再把它当成未实现。
+# 5. 再叠一个用托管服务、又接管它的生成桩的模块：-template game 不带 chat，安装器在这次安装里声明它；
+#    chat 模块的协作者替换 chat 托管服务的拒绝桩，doctor 不再把它当成未实现。
+! grep -q '^    chat:' roost.yaml
 commit_all checkin
 "$roost" module add chat > "$review_root/add-chat.log"
+grep -q 'framework service chat: declared' "$review_root/add-chat.log"
+grep -q '^        framework: chat' roost.yaml
+[[ -f configs/service/config.chat.yaml ]]
 grep -q 'replaces the untouched generated stub' "$review_root/add-chat.log"
 grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-chat.log"
 expect_verify wallet=14 checkin=8 chat=10
@@ -117,8 +122,8 @@ expect_verify wallet=14 checkin=8 chat=10 enter=29 chat+enter=2
 go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review_root/test-all.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    self-sync' "$review_root/doctor.log"
-# 除三个仍是拒绝桩的托管服务外没有别的 FAIL。
-[[ "$(grep -c '^FAIL' "$review_root/doctor.log")" == 3 ]] || { grep '^FAIL' "$review_root/doctor.log"; echo "unexpected doctor failures" >&2; exit 1; }
+# 工程只托管模块用到的服务（这里只有 chat，协作者已由模块接管）：没有任何 FAIL。
+[[ "$(grep -c '^FAIL' "$review_root/doctor.log")" == 0 ]] || { grep '^FAIL' "$review_root/doctor.log"; echo "unexpected doctor failures" >&2; exit 1; }
 # 7. 在已有四个模块的工程上再叠第二批：profile、bag、leaderboard（托管 rank）、mailbox（托管 mail，依赖已装的 wallet）。
 commit_all enter
 "$roost" module add profile bag leaderboard mailbox > "$review_root/add-batch2.log"
@@ -132,7 +137,8 @@ expect_verify wallet=14 checkin=8 chat=10 enter=29 chat+enter=2 enter+profile=3 
 go test -mod=mod ./... > "$review_root/test-all-batch2.log" 2>&1 || { tail -30 "$review_root/test-all-batch2.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK    collaborators:rank' "$review_root/doctor.log"
-[[ "$(grep -c '^FAIL' "$review_root/doctor.log")" == 3 ]] || { grep '^FAIL' "$review_root/doctor.log"; echo "unexpected doctor failures" >&2; exit 1; }
+grep -q 'framework service mail: declared' "$review_root/add-batch2.log" && grep -q 'framework service rank: declared' "$review_root/add-batch2.log"
+[[ "$(grep -c '^FAIL' "$review_root/doctor.log")" == 0 ]] || { grep '^FAIL' "$review_root/doctor.log"; echo "unexpected doctor failures" >&2; exit 1; }
 
 # 自带 Room 在已有业务工程上增量安装；其 Entity / DAO / lifecycle 与 owner 接线一次完成。
 commit_all batch2
@@ -166,6 +172,7 @@ grep -q 'glue servertime with enter: written' "$review_root/add-servertime.log"
 # enter 已在，进入前检查的联动随它写进工程。之后 doctor 不再把这两处当成未实现。
 "$roost" module add login > "$review_root/add-login.log"
 grep -q 'glue login with enter: written' "$review_root/add-login.log"
+grep -q 'framework service account: declared' "$review_root/add-login.log"
 "$roost" project doctor -workflow player-tcp > "$review_root/doctor-harbor.log" 2>&1 || true
 grep -q '^OK    collaborators:account' "$review_root/doctor-harbor.log"
 grep -q '^OK    workflow:tcp-auth' "$review_root/doctor-harbor.log"

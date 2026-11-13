@@ -260,12 +260,19 @@ func TestModuleIDAllocatorNeverHandsOutAUsedID(t *testing.T) {
 // moduleProject 建一个 -template game 的工程，依赖指向本仓库工作树。
 func moduleProject(t *testing.T, name string) (root string, roost func(args ...string) string, try func(args ...string) (string, error)) {
 	t.Helper()
+	return moduleProjectWith(t, name, nil, nil)
+}
+
+// moduleProjectWith 是 moduleProject，业务服务的 Mod 由 mods 指定（nil 是 project new 的缺省生产基础 Mod），
+// frameworks 是一开始就托管的框架服务（-framework；nil 是缺省的一个都不托管）。
+func moduleProjectWith(t *testing.T, name string, mods, frameworks []string) (root string, roost func(args ...string) string, try func(args ...string) (string, error)) {
+	t.Helper()
 	repo, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
 	root = filepath.Join(t.TempDir(), name)
-	if _, _, err := NewProject(NewOptions{Name: name, Module: "example.com/studio/" + name, Out: root, Template: "game"}); err != nil {
+	if _, _, err := NewProject(NewOptions{Name: name, Module: "example.com/studio/" + name, Out: root, Mods: mods, Template: "game", Frameworks: frameworks}); err != nil {
 		t.Fatal(err)
 	}
 	modPath := filepath.Join(root, "go.mod")
@@ -430,6 +437,143 @@ func TestModulesInstallOntoAGeneratedProjectAndVerify(t *testing.T) {
 		t.Fatal("the installer touched a file the project had edited")
 	}
 	_ = try
+}
+
+// 装模块时补上它用到的托管框架服务（维护者 2026-11-13）：-template game 不带任何托管服务，
+// leaderboard（needs.uses: [rank]）在同一个安装事务里声明 rank、加进 game 的 uses，配置 / 协作者 / 部署随之生成；
+// plan 列出会新增的服务且不改工程；安装失败时 roost.yaml 与新服务的文件全部撤销；
+// 再装 matchmaking（match 按亲和键路由）给 game 的配置补上 etcd 段（工程用 -mods configdata,nest 起步，
+// 缺省的生产基础 Mod 本来就带 etcd）；同名的业务服务照旧报错。
+func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project and runs go build / vet / test in it")
+	}
+	t.Parallel()
+	root, roost, try := moduleProjectWith(t, "ladder", []string{"configdata", "nest"}, nil)
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := sortedServiceNames(manifest); strings.Join(names, ",") != "game" {
+		t.Fatalf("the game template declares %v; want game alone", names)
+	}
+	exists := func(rel string) bool {
+		_, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+		return err == nil
+	}
+	read := func(rel string) string {
+		t.Helper()
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	// 玩家接入先由业务建好：下面的失败要落在模块事务里，而不是被保留的前置命令里。
+	roost("add", "access", "player", "--service", "game")
+
+	before := moduleProjectDigest(t, root)
+	var plan ModulePlan
+	if err := json.Unmarshal([]byte(roost("module", "plan", "leaderboard", "--json")), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("roost module plan changed the project")
+	}
+	if strings.Join(plan.FrameworkServices, ",") != "rank" {
+		t.Fatalf("plan framework services = %v, want rank", plan.FrameworkServices)
+	}
+	if text := roost("module", "plan", "leaderboard"); !strings.Contains(text, "framework service rank: will declare (services.rank.framework: rank, added to services.game.uses") {
+		t.Fatalf("the plan does not say it declares rank:\n%s", text)
+	}
+
+	// 生成失败（工程里有一个写坏的 Nest handler）：rank 的声明与它的文件一起撤销。
+	broken := filepath.Join(root, "game", "handler", "zz_broken.go")
+	if err := os.WriteFile(broken, []byte("package handler\n\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken() error { return nil }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before = moduleProjectDigest(t, root)
+	if out, err := try("module", "add", "leaderboard"); err == nil || !strings.Contains(err.Error(), "generate after installing modules") {
+		t.Fatalf("install with a broken handler in the project: err = %v\n%s", err, out)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("a failed install left changes behind")
+	}
+	for _, rel := range []string{"configs/service/config.rank.yaml", "internal/service/rank/collaborators.go"} {
+		if exists(rel) {
+			t.Fatalf("a failed install left %s", rel)
+		}
+	}
+	if err := os.Remove(broken); err != nil {
+		t.Fatal(err)
+	}
+
+	out := roost("module", "add", "leaderboard")
+	if !strings.Contains(out, "framework service rank: declared") {
+		t.Fatalf("module add did not report the declared service:\n%s", out)
+	}
+	if manifest, err = LoadManifest(root); err != nil {
+		t.Fatal(err)
+	}
+	rank := manifest.Services["rank"]
+	if rank.Framework != "rank" || rank.PortBlock == nil || *rank.PortBlock != 1 || strings.Join(manifest.Services["game"].Uses, ",") != "rank" {
+		t.Fatalf("after leaderboard: rank %+v, game uses %v", rank, manifest.Services["game"].Uses)
+	}
+	for _, rel := range []string{"configs/service/config.rank.yaml", "configs/service/config.rank.prod.example.yaml", "internal/service/rank/collaborators.go", "docs/SERVICES.zh-CN.md"} {
+		if !exists(rel) {
+			t.Fatalf("installing leaderboard did not write %s", rel)
+		}
+	}
+	if clients := read("internal/service/game/framework_clients_gen.go"); !strings.Contains(clients, "func Rank(r *app.Registry) (svcrank.Rank, error)") {
+		t.Fatalf("game has no Rank accessor:\n%s", clients)
+	}
+	if config := read("configs/service/config.rank.yaml"); !strings.Contains(config, "addr: 127.0.0.1:9101") {
+		t.Fatalf("rank's development ops port is not 9100 + its port block:\n%s", config)
+	}
+	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
+		if config := read(rel); strings.Contains(config, "\netcd:\n") {
+			t.Fatalf("rank does not route by key; %s gained an etcd section:\n%s", rel, config)
+		}
+	}
+
+	// match 按亲和键路由：game 的 ClientMod 要 etcd，game 的配置补上这一段。
+	out = roost("module", "add", "matchmaking")
+	if !strings.Contains(out, "framework service match: declared") {
+		t.Fatalf("module add matchmaking did not declare match:\n%s", out)
+	}
+	if manifest, err = LoadManifest(root); err != nil {
+		t.Fatal(err)
+	}
+	if match := manifest.Services["match"]; match.Framework != "match" || match.PortBlock == nil || *match.PortBlock != 2 || strings.Join(manifest.Services["game"].Uses, ",") != "match,rank" {
+		t.Fatalf("after matchmaking: match %+v, game uses %v", match, manifest.Services["game"].Uses)
+	}
+	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
+		if config := read(rel); !strings.Contains(config, "\netcd:\n") {
+			t.Fatalf("%s has no etcd section for the match client:\n%s", rel, config)
+		}
+	}
+	report, err := VerifyModules(context.Background(), root, nil, nil)
+	if err != nil {
+		t.Fatalf("verify: %v\n%+v", err, report)
+	}
+	installed := moduleProjectDigest(t, root)
+	roost("project", "sync")
+	if moduleProjectDigest(t, root) != installed {
+		t.Fatal("project sync after the install changed the project")
+	}
+	if doctor, _ := try("project", "doctor"); strings.Contains(doctor, "FAIL  collaborators:") {
+		t.Fatalf("doctor reports collaborators of the declared services as unimplemented:\n%s", doctor)
+	}
+
+	// 名字被业务服务占着：不把业务进程改成托管进程。
+	roost("add", "service", "chat")
+	before = moduleProjectDigest(t, root)
+	if out, err := try("module", "add", "chat"); err == nil || !strings.Contains(err.Error(), `service name "chat" is taken by a business service`) {
+		t.Fatalf("a module that uses chat over a business service named chat: err = %v\n%s", err, out)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("a refused install changed the project")
+	}
 }
 
 // 不是全新工程也能装：已有业务字段和组件的工程上，模块的字段追加在业务字段之后；
@@ -715,7 +859,8 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 		t.Skip("generates a project and runs go build / vet / test in it")
 	}
 	t.Parallel()
-	root, roost, try := moduleProject(t, "parlor")
+	// 桩要在安装之前就在：工程一开始就托管 chat（-framework chat）。
+	root, roost, try := moduleProjectWith(t, "parlor", nil, []string{"chat"})
 	stub := filepath.Join(root, "internal", "service", "chat", "collaborators.go")
 	original, err := os.ReadFile(stub)
 	if err != nil {
@@ -776,7 +921,8 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 		t.Skip("generates a project and runs go build / vet / test in it")
 	}
 	t.Parallel()
-	root, roost, try := moduleProject(t, "gatehouse")
+	// account 的桩要在安装之前就在：工程一开始就托管 account（-framework account）。
+	root, roost, try := moduleProjectWith(t, "gatehouse", nil, []string{"account"})
 	const authRel, collaboratorsRel = "internal/access/player/tcp/auth.go", "internal/service/account/collaborators.go"
 	authPath := filepath.Join(root, filepath.FromSlash(authRel))
 	collaboratorsPath := filepath.Join(root, filepath.FromSlash(collaboratorsRel))

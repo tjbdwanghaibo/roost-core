@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,10 +13,11 @@ import (
 	"testing"
 )
 
+// gameTemplateManifest 是 -template game -framework all 的清单（game-demo 的形状）：九个托管服务全在。
 func gameTemplateManifest(t *testing.T) Manifest {
 	t.Helper()
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
-	if err := applyGameTemplate(&m, "game"); err != nil {
+	if err := applyGameTemplate(&m, "game", frameworkServiceNames()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Validate(); err != nil {
@@ -24,9 +26,9 @@ func gameTemplateManifest(t *testing.T) Manifest {
 	return m
 }
 
-// The game template hosts every catalogued framework service as its own process
+// -framework all hosts every catalogued framework service as its own process
 // and wires the business service to all of them.
-func TestGameTemplateHostsEveryFrameworkServiceAndWiresTheGame(t *testing.T) {
+func TestGameTemplateWithAllFrameworksHostsEveryServiceAndWiresTheGame(t *testing.T) {
 	m := gameTemplateManifest(t)
 	for _, name := range []string{"account", "activity", "mail", "match", "chat", "global", "platform", "rank", "session"} {
 		if m.Services[name].Framework != name {
@@ -39,8 +41,104 @@ func TestGameTemplateHostsEveryFrameworkServiceAndWiresTheGame(t *testing.T) {
 	if !m.usesFrameworkServices() {
 		t.Fatal("the template does not register as using roost-service")
 	}
-	if err := applyGameTemplate(&m, "nope"); err == nil {
+	if err := applyGameTemplate(&m, "nope", nil); err == nil {
 		t.Fatal("a template applied to an undeclared service was accepted")
+	}
+}
+
+// -template game 缺省只有业务服务（维护者 2026-11-13：只生成用到的服务）：不托管任何框架服务、uses 为空，
+// 仍带 nest；-framework 列出的才托管。名字被业务服务占着时报错。
+func TestGameTemplateHostsNoFrameworkServiceByDefault(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
+	if err := applyGameTemplate(&m, "game", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if names := sortedServiceNames(m); strings.Join(names, ",") != "game" || len(m.Services["game"].Uses) != 0 || m.usesFrameworkServices() {
+		t.Fatalf("default game template: services %v, game uses %v", names, m.Services["game"].Uses)
+	}
+	if !contains(m.Services["game"].Mods, "nest") {
+		t.Fatalf("the game service lost the Nest runtime: %v", m.Services["game"].Mods)
+	}
+	some := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
+	if err := applyGameTemplate(&some, "game", []string{"rank", "chat"}); err != nil {
+		t.Fatal(err)
+	}
+	if names := sortedServiceNames(some); strings.Join(names, ",") != "chat,game,rank" || strings.Join(some.Services["game"].Uses, ",") != "chat,rank" {
+		t.Fatalf("-framework chat,rank: services %v, game uses %v", names, some.Services["game"].Uses)
+	}
+	taken := DefaultManifest("planet", "example.com/planet", []string{"game", "chat"}, []string{"configdata"}, nil)
+	if err := applyGameTemplate(&taken, "game", []string{"chat"}); err == nil || !strings.Contains(err.Error(), `service name "chat" is taken by a business service`) {
+		t.Fatalf("a framework service over a business service of the same name: %v", err)
+	}
+	for raw, want := range map[string]string{"": "", "all": strings.Join(frameworkServiceNames(), ","), " rank, chat ,rank": "chat,rank"} {
+		got, err := parseFrameworkSelection(raw)
+		if err != nil || strings.Join(got, ",") != want {
+			t.Fatalf("parseFrameworkSelection(%q) = %v, %v; want %q", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"ledger", "all,chat"} {
+		if _, err := parseFrameworkSelection(raw); err == nil {
+			t.Fatalf("parseFrameworkSelection(%q) accepted", raw)
+		}
+	}
+}
+
+// 整条命令：project new -template game 的 roost.yaml 只有 game；-framework 列出的才进工程，
+// 只对 -template game 有效（game-demo 固定全部九个，没有模板时要手写 roost.yaml）。
+func TestProjectNewGameTemplateHostsOnlyTheFrameworksAskedFor(t *testing.T) {
+	newProject := func(args ...string) (string, error) {
+		target := filepath.Join(t.TempDir(), "planet")
+		var out strings.Builder
+		err := Run(append([]string{"project", "new", "planet", "-module", "example.com/planet", "-out", target, "-skip-deps"}, args...), &out, &out)
+		if err != nil {
+			return target, fmt.Errorf("%w\n%s", err, out.String())
+		}
+		return target, nil
+	}
+	target, err := newProject("-template", "game")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := LoadManifest(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := sortedServiceNames(manifest); strings.Join(names, ",") != "game" || len(manifest.Services["game"].Uses) != 0 {
+		t.Fatalf("-template game declares services %v, game uses %v; want game alone", names, manifest.Services["game"].Uses)
+	}
+	for _, rel := range []string{"internal/service/chat", "configs/service/config.account.yaml", "internal/service/game/framework_clients_gen.go", "docs/SERVICES.zh-CN.md"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Fatalf("-template game wrote %s (%v)", rel, err)
+		}
+	}
+	target, err = newProject("-template", "game", "-framework", "rank,chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest, err = LoadManifest(target); err != nil {
+		t.Fatal(err)
+	}
+	if names := sortedServiceNames(manifest); strings.Join(names, ",") != "chat,game,rank" || strings.Join(manifest.Services["game"].Uses, ",") != "chat,rank" {
+		t.Fatalf("-framework rank,chat declares %v, game uses %v", names, manifest.Services["game"].Uses)
+	}
+	for _, rel := range []string{"configs/service/config.rank.yaml", "internal/service/chat/collaborators.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("-framework rank,chat did not write %s: %v", rel, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-template", "game", "-framework", "ledger"},
+		{"-template", "game-demo", "-framework", "chat"},
+		{"-framework", "chat"},
+	} {
+		if target, err := newProject(args...); err == nil {
+			t.Fatalf("project new %v accepted", args)
+		} else if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+			t.Fatalf("project new %v failed but left %s behind", args, target)
+		}
 	}
 }
 
@@ -164,8 +262,7 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 	for _, rel := range []string{
 		"game/entities/player/entity.go", "game/entities/world/entity.go",
 		"game/lifecycle/player.go", "game/lifecycle/world.go", "game/lifecycle/world_singleton.go",
-		"internal/service/game/service.go", "internal/service/game/framework_clients_gen.go",
-		"internal/service/mail/collaborators.go",
+		"internal/service/game/service.go",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("%s missing: %v", rel, err)
@@ -215,7 +312,7 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 func TestDoctorReportsUnimplementedCollaborators(t *testing.T) {
 	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Template: "game"})
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Template: "game", Frameworks: frameworkServiceNames()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +596,7 @@ func TestServicePackageNamesAreLowercaseAndFollowAnExistingProject(t *testing.T)
 	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
-		Mods: []string{"configdata"}, Template: "game"}); err != nil {
+		Mods: []string{"configdata"}, Template: "game", Frameworks: []string{"account", "mail"}}); err != nil {
 		t.Fatal(err)
 	}
 	for service, want := range map[string]string{"game": "game", "account": "account", "mail": "mail"} {

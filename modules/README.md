@@ -109,6 +109,8 @@ roost module verify                # 模块自带场景 + build / vet / id check
 
 agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `add` 输出同一个结构，`applied` 区分是否已执行。
 
+`-template game` 缺省不托管任何框架服务（维护者 2026-11-13：只生成用到的服务）。模块的 `needs.uses` 与 `runtime.framework` 用到、工程还没有的托管服务，安装器在同一个安装事务里声明 `services.<name>.framework: <name>`、加进业务服务的 `uses`，它的配置、部署、协作者文件随安装最后的 project sync 生成，业务服务的配置补上 ClientMod 要的段（match、activity 要 etcd）；安装失败整体撤销。`plan` 输出 `framework service <name>: will declare`（JSON 的 `framework_services`）。入口在托管服务上的模块要的可代办 Mod（portal 的 `web`）直接写进这次新声明的服务。同名的已经是业务服务时拒绝安装。
+
 标了同步的状态要打开玩家自身视图客户端才收得到。装 `enter` 模块时安装器会代办（`roost add transport tcp`、`access.player.self_sync: true`、`roost project sync`）；不装它就自己做，步骤见 skill 的[按需求组合 §4A](../docs/agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)。
 
 安装之后直接改工程里的文件（例如在 `game/entities/player/checkin_component.go` 里改奖励规则），改完再跑 `roost module verify`。模块库里没有的需求用 `roost add entity / component / dao / handler / protocol / endpoint` 手写，可以照着已装模块的文件写。
@@ -171,7 +173,7 @@ runtime:
   framework: account         # roost.yaml 里 services.<名字>.framework 的取值
 ```
 
-这时安装器不动业务服务的 `modules_gen.go`：bootstrap 在托管那个框架服务的 Mod 列表末尾加一个 `wiring/modulehost` 的 Mod（`kitmodulehost.NewMod("account", …, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`），在全部 Mod 启动之后、`Service.Init` 之前调入口，停机按反序。清单的 `needs.mods` 这时是对那个托管服务的要求（portal 的 `web` 加在 account 上，开发端口取 8080 + 它的端口块号），不是对业务服务的；模块的文件仍按落点写进工程，安装记录的 `service` 仍是业务服务。工程里没有托管那个框架服务的服务时拒绝安装。自己手写 bootstrap 的工程要照着加这一个 Mod。
+这时安装器不动业务服务的 `modules_gen.go`：bootstrap 在托管那个框架服务的 Mod 列表末尾加一个 `wiring/modulehost` 的 Mod（`kitmodulehost.NewMod("account", …, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`），在全部 Mod 启动之后、`Service.Init` 之前调入口，停机按反序。清单的 `needs.mods` 这时是对那个托管服务的要求（portal 的 `web` 加在 account 上，开发端口取 8080 + 它的端口块号），不是对业务服务的；模块的文件仍按落点写进工程，安装记录的 `service` 仍是业务服务。工程里没有托管那个框架服务的服务时，安装器在同一次安装里声明它（名字与种类相同，带上 `needs.mods` 里可代办的 Mod）；名字被业务服务占着时拒绝安装。自己手写 bootstrap 的工程要照着加这一个 Mod。
 
 模块的玩家侧只安装到一个业务服务，依赖属于同一服务；模块也可声明自己独占的新业务服务（如 alliance）。跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
@@ -185,7 +187,7 @@ conflicts: []                # 不能同装的模块
 needs:
   mods: [nest]               # 业务服务必须有的 Mod（写了 runtime.framework 时：托管那个框架服务的服务必须有的）
   features: [protocol, entity, dao, errcode]
-  uses: []                   # 业务服务必须 uses 的托管框架服务（rank、mail……）
+  uses: []                   # 业务服务必须 uses 的托管框架服务（rank、mail……）；工程没有时安装器声明并接上
   uses_rpcs: []               # 模块新增的业务 RPC，安装器接到目标业务服务
 entity: Player               # 状态与组件挂在哪个实体上
 entities: []                 # 自带实体名字；与挂靠既有实体分开，见上文
@@ -291,7 +293,7 @@ roost project new mygame -module example.com/studio/mygame -recipe casual
 roost project new arena -module example.com/studio/arena -recipe turn-pvp
 ```
 
-配方以 `game` 为底，复用同一个模块安装器、自动联动、ID 分配和自身同步；可用 `-services arena` 指定业务服务名。不能与 `-template game-demo` 混用。所有文件在新工程的暂存树里完成，失败不留下半个目标工程。已装模块仍由 `module list / verify` 管理，配方不是第二种可重复安装的模块。
+配方以 `game` 为底，复用同一个模块安装器、自动联动、ID 分配和自身同步；可用 `-services arena` 指定业务服务名。不能与 `-template game-demo` 混用。托管框架服务只带模块用到的：casual 是 account（login、portal）与 mail（mailbox），turn-pvp 是 account、match（matchmaking）与 rank（leaderboard）；要别的加 `-framework`。所有文件在新工程的暂存树里完成，失败不留下半个目标工程。已装模块仍由 `module list / verify` 管理，配方不是第二种可重复安装的模块。
 
 - `casual`：enter、wallet、checkin、task、stamina、shop、bag、mailbox、login、portal、servertime；新玩家 100 金币写在 `recipe_first_enter.go`，由事务内 `OnFirstEnter` 发放。重复进入不再发；提交失败时余额与初始化标记一起回滚。
 - `turn-pvp`：enter、profile、room、turn、leaderboard、team、matchroom、matchmaking、login、portal、servertime；客户端 MatchEnqueue → MatchStatus → RoomJoin → TurnStart → TurnEnd。没有替业务假设胜负规则、排行榜结算或客户端开房授权。

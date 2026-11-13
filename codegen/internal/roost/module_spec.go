@@ -96,7 +96,8 @@ type ModuleRuntime struct {
 type ModuleNeeds struct {
 	Mods     []string `yaml:"mods" json:"mods,omitempty"`
 	Features []string `yaml:"features" json:"features,omitempty"`
-	// Uses 是业务服务必须 uses 的托管框架服务（如 rank、mail）。
+	// Uses 是业务服务必须 uses 的托管框架服务（如 rank、mail）。工程还没有的由安装器在模块事务里声明
+	// （planModuleFrameworkServices）；同名的是业务服务时安装被拒绝。
 	Uses     []string `yaml:"uses" json:"uses,omitempty"`
 	UsesRPCs []string `yaml:"uses_rpcs" json:"uses_rpcs,omitempty"`
 }

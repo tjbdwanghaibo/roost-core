@@ -37,8 +37,11 @@ type ModulePlan struct {
 	// Service 是模块装进的业务服务（运行 Nest 的那个）。
 	Service string `json:"service"`
 	// Prerequisites 是安装前要先执行的 roost add 命令（plan 只列出，add 会执行）。
-	Prerequisites []string         `json:"prerequisites"`
-	Modules       []ModulePlanItem `json:"modules"`
+	Prerequisites []string `json:"prerequisites"`
+	// FrameworkServices 是这次会新声明的托管框架服务（模块的 needs.uses / runtime.framework 用到、工程还没有的）：
+	// 在模块事务里写进 roost.yaml、加进业务服务的 uses，配置、部署与协作者文件随安装最后的 project sync 生成。
+	FrameworkServices []string         `json:"framework_services"`
+	Modules           []ModulePlanItem `json:"modules"`
 	// Glue 是这次要写的联动文件：两个模块都装着（其中至少一个是这次装的）时，把一方接到另一方的登记点上。
 	Glue []ModuleGlueItem `json:"glue"`
 	// Applied 为 true 表示这份计划已经执行（roost module add 的输出）。
@@ -136,11 +139,12 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	if err != nil {
 		return ModulePlan{}, err
 	}
+	before := manifest
 	manifest, err = planModuleServices(root, manifest, service, order)
 	if err != nil {
 		return ModulePlan{}, err
 	}
-	plan := ModulePlan{Service: service, Prerequisites: []string{}, Modules: []ModulePlanItem{}, Glue: []ModuleGlueItem{}}
+	plan := ModulePlan{Service: service, Prerequisites: []string{}, FrameworkServices: newFrameworkServices(before, manifest), Modules: []ModulePlanItem{}, Glue: []ModuleGlueItem{}}
 	allocator, err := newModuleIDAllocator(root, manifest)
 	if err != nil {
 		return ModulePlan{}, err
@@ -280,8 +284,8 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 				return ModulePlan{}, fmt.Errorf("module %s: %s already exists and is not this module's file; the installer does not overwrite business files (rename or remove it, or keep your own implementation and do not install %s)", spec.Name, rel, spec.Name)
 			} else if !os.IsNotExist(err) {
 				return ModulePlan{}, err
-			} else if contains(spec.Replaces, rel) && stubComesFromPrerequisite(manifest, rel, pending) {
-				// 文件现在还没有，但这次安装的前置命令会先把桩生成出来、模块再替换它：计划里照样写明。
+			} else if contains(spec.Replaces, rel) && (stubComesFromPrerequisite(manifest, rel, pending) || stubComesFromNewFrameworkService(manifest, rel, plan.FrameworkServices)) {
+				// 文件现在还没有，但这次安装的前置命令（或这次新声明的托管服务）会生成这个桩、模块替换它：计划里照样写明。
 				item.Replaces = append(item.Replaces, rel)
 			}
 		}
@@ -531,8 +535,13 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 	if err != nil {
 		return ModulePlan{}, err
 	}
+	// 这次新声明的托管服务：业务服务因此多了 ClientMod（nats，match / activity 另有 etcd），它的配置要补上这些段。
+	addedFrameworks := newFrameworkServices(beforeServices, manifest)
 	// 2～3. 模块自己的写入。先把会动到的文件全部记下来，失败时原样恢复。
 	touched := []string{ManifestName}
+	if len(addedFrameworks) > 0 {
+		touched = append(touched, moduleServiceConfig(plan.Service), "configs/service/config."+plan.Service+".prod.example.yaml", kubernetesSecretExampleRel(plan.Service))
+	}
 	for _, item := range plan.Modules {
 		if item.Status != moduleStatusInstall {
 			continue
@@ -577,6 +586,11 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 	}
 	if manifest.Modules == nil {
 		manifest.Modules = map[string]InstalledModule{}
+	}
+	if len(addedFrameworks) > 0 {
+		if _, err := appendModConfigSections(root, beforeServices, manifest, plan.Service, options.Stderr); err != nil {
+			return fail(fmt.Errorf("framework services %s: %w", strings.Join(addedFrameworks, ", "), err))
+		}
 	}
 	for _, item := range plan.Modules {
 		if item.Status != moduleStatusInstall {
@@ -650,7 +664,7 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || modulePlanHasTimers(plan) || modulePlanHasHostedRuntime(plan) || modulePlanHasServices(plan)}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || len(addedFrameworks) > 0 || modulePlanHasTimers(plan) || modulePlanHasHostedRuntime(plan) || modulePlanHasServices(plan)}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true
@@ -1130,6 +1144,16 @@ func stubComesFromPrerequisite(manifest Manifest, rel string, pending map[string
 		}
 	}
 	return false
+}
+
+// stubComesFromNewFrameworkService 报告 rel 是不是这次安装新声明的托管服务的协作者桩：没有模块替换时，
+// 安装最后的 project sync 会生成它；模块带着自己的一份时写的是模块的，桩不再出现。
+func stubComesFromNewFrameworkService(manifest Manifest, rel string, added []string) bool {
+	if _, ok := frameworkCollaboratorsStub(manifest, rel); !ok {
+		return false
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(rel, "internal/service/"), "/collaborators.go")
+	return contains(added, name)
 }
 
 // frameworkCollaboratorsStub：托管框架服务的 internal/service/<name>/collaborators.go（默认拒绝一切）。

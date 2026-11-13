@@ -463,24 +463,81 @@ func %[1]s(r *app.Registry) (svc%[2]s.%[4]s, error) {
 	return b.String()
 }
 
+// frameworkSelectionAll 是 `-framework all`：托管全部九个框架服务（原先 -template game 的缺省）。
+const frameworkSelectionAll = "all"
+
+// parseFrameworkSelection 解析 `roost project new -framework`：空串是一个都不托管（-template game 的缺省，
+// 模块安装时按需补上）；all 是目录里的全部；其余是逗号分隔的服务名，按名字排序、去重，未知的名字报错。
+func parseFrameworkSelection(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	if raw == frameworkSelectionAll {
+		return frameworkServiceNames(), nil
+	}
+	var names []string
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		if name == frameworkSelectionAll {
+			return nil, fmt.Errorf("-framework all cannot be combined with other names")
+		}
+		if _, ok := frameworkCatalog[name]; !ok {
+			return nil, fmt.Errorf("unknown framework service %q in -framework; known: %s, or all", name, strings.Join(frameworkServiceNames(), ", "))
+		}
+		names = append(names, name)
+	}
+	return uniqueSorted(names), nil
+}
+
+// declareFrameworkService 把名为 name 的托管框架服务（种类同名）声明进 m，并加进业务服务 business 的 uses。
+// 已经托管着的照旧复用；同名的是业务服务时报错（不能把业务代码的进程改成托管进程）。返回这次是否新声明。
+// -template game 与模块安装器（需要的托管服务按需补上）共用这一条规则。
+func declareFrameworkService(m *Manifest, business, name string) (bool, error) {
+	if _, ok := frameworkCatalog[name]; !ok {
+		return false, fmt.Errorf("unknown framework service %q; known: %s", name, strings.Join(frameworkServiceNames(), ", "))
+	}
+	service, ok := m.Services[business]
+	if !ok {
+		return false, fmt.Errorf("service %q is not declared", business)
+	}
+	added := false
+	if existing, taken := m.Services[name]; taken {
+		if strings.TrimSpace(existing.Framework) == "" {
+			return false, fmt.Errorf("service name %q is taken by a business service, so the %s framework service cannot be hosted under it", name, name)
+		}
+	} else {
+		m.Services[name] = ServiceSpec{Framework: name}
+		added = true
+	}
+	if !contains(service.Uses, name) {
+		service.Uses = append(append([]string(nil), service.Uses...), name)
+		sort.Strings(service.Uses)
+	}
+	m.Services[business] = service
+	return added, nil
+}
+
 // applyGameTemplate turns a fresh manifest into the game template: the
-// business service calls all nine framework services, each hosted as its own
-// process. It is opt-in (`roost project new … -template game`).
-func applyGameTemplate(m *Manifest, gameService string) error {
+// business service with the Nest runtime (Player and World are Nest entities)
+// and, hosted as their own processes and wired to it, the framework services
+// in frameworks — none by default (`roost project new … -template game`):
+// `roost module add` declares the ones a module uses. game-demo passes all of
+// them, because the demo calls every one.
+func applyGameTemplate(m *Manifest, gameService string, frameworks []string) error {
 	service, ok := m.Services[gameService]
 	if !ok {
 		return fmt.Errorf("template game: service %q is not declared", gameService)
 	}
-	for _, name := range frameworkServiceNames() {
-		if existing, taken := m.Services[name]; taken && strings.TrimSpace(existing.Framework) == "" {
-			return fmt.Errorf("template game: service name %q is taken by a business service", name)
-		}
-		m.Services[name] = ServiceSpec{Framework: name}
-		if !contains(service.Uses, name) {
-			service.Uses = append(service.Uses, name)
+	for _, name := range frameworks {
+		if _, err := declareFrameworkService(m, gameService, name); err != nil {
+			return fmt.Errorf("template game: %w", err)
 		}
 	}
-	sort.Strings(service.Uses)
+	service = m.Services[gameService]
 	// Player and World are Nest entities, so the game process runs the Nest
 	// runtime (which brings the dataengine, Mongo and NATS).
 	if resolved, err := resolveMods(service.Mods); err == nil && !contains(resolved, "nest") {
@@ -690,7 +747,12 @@ func renderFrameworkServicesGuide(m Manifest) string {
 			spec := frameworkCatalog[m.Services[target].Framework]
 			fmt.Fprintf(&b, "- `%s(registry)` → `%s.%s`（%s.CapabilityName）\n", safeIdent(target), spec.Package, spec.Interface, spec.Package)
 		}
-		fmt.Fprintf(&b, "\n在 Service.Init 里取一次并保存：\n\n    svc, err := %s.Mail(registry)\n\n访问器在 capability 不存在时返回错误：说明对应进程没起、或者总线不通。\n\n", m.servicePackage(name))
+		// 示例用 mail（用到时），否则用第一个：只托管模块用到的服务时，工程里不一定有 Mail 访问器。
+		example := used[0]
+		if contains(used, "mail") {
+			example = "mail"
+		}
+		fmt.Fprintf(&b, "\n在 Service.Init 里取一次并保存：\n\n    svc, err := %s.%s(registry)\n\n访问器在 capability 不存在时返回错误：说明对应进程没起、或者总线不通。\n\n", m.servicePackage(name), safeIdent(example))
 	}
 	b.WriteString("## 本地运行顺序\n\n")
 	b.WriteString("    docker compose -f deploy/dev/docker-compose.yaml up -d\n    go build -o bin/app .\n")

@@ -406,8 +406,9 @@ mail、match、session、activity、global、platform、rank 九个之一）：�
 Server 加它的 owner Mod，redis 与 nats 自动补齐（match、activity 按 key 路由，另补 etcd）；Mod 需要的协作者写在 internal/service/<name>/collaborators.go（只生成一次，
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配
 对应 ClientMod（并补 nats），并在 internal/service/<name>/framework_clients_gen.go 生成类型化
-访问器。roost project new … -template game 一次生成这九个托管服务并把第一个业务 Service
-接上它们；已有工程按需接入一个（例如排行）见 roost help framework-services；-template game-demo 在此之上再带一套可运行的完整游戏 demo（登录、背包与经验、奖励邮件、匹配、聊天、副本、送礼 saga、地图同步、lockstep 战斗、GM 运维面和机器人压测；最小写入链路是 Player 的 Profile / Bag 组件与 DAO、一个 Nest 加道具事务、player TCP 接入与协议端点），这些都是业务文件，生成后由你维护。托管服务是 roost-core 的包，版本跟随 versions.core。
+访问器。roost project new … -template game 缺省不托管任何框架服务：roost module add 装的模块用到哪个
+就在安装事务里声明哪个并接到业务 Service；-framework all（或 -framework rank,chat）让它一开始就托管全部九个
+（或其中几个）；手动接入一个（例如排行）见 roost help framework-services；-template game-demo 托管全部九个，并在此之上再带一套可运行的完整游戏 demo（登录、背包与经验、奖励邮件、匹配、聊天、副本、送礼 saga、地图同步、lockstep 战斗、GM 运维面和机器人压测；最小写入链路是 Player 的 Profile / Bag 组件与 DAO、一个 Nest 加道具事务、player TCP 接入与协议端点），这些都是业务文件，生成后由你维护。托管服务是 roost-core 的包，版本跟随 versions.core。
 
 access.player.service 指定玩家协议接入层安装到哪个 Service。当前仅支持 player；它要求 protocol
 feature，并要求目标 Service 有 nest Mod。access.player.transports 是显式启用的客户端传输列表；当前

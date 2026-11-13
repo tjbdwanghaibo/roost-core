@@ -27,13 +27,16 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 	if len(plan.Modules) != 2 || plan.Modules[0].Name != "login" || plan.Modules[1].Name != "portal" {
 		t.Fatalf("plan installs %+v, want login then portal", plan.Modules)
 	}
-	for _, command := range []string{"roost add transport tcp", "roost add mod web -service account"} {
-		if !contains(plan.Prerequisites, command) {
-			t.Fatalf("plan prerequisites %v do not list %q", plan.Prerequisites, command)
-		}
+	if !contains(plan.Prerequisites, "roost add transport tcp") {
+		t.Fatalf("plan prerequisites %v do not list roost add transport tcp", plan.Prerequisites)
 	}
-	if contains(plan.Prerequisites, "roost add mod web -service game") {
-		t.Fatalf("the plan adds the web mod to the business service: %v", plan.Prerequisites)
+	// -template game 不带 account：login（needs.uses）与 portal（runtime.framework）用到它，安装器在模块事务里声明，
+	// portal 要的 web 直接写进新声明的 account（前置命令在事务之前执行，那时 account 还不存在）。
+	if strings.Join(plan.FrameworkServices, ",") != "account" {
+		t.Fatalf("plan framework services = %v, want account", plan.FrameworkServices)
+	}
+	if contains(plan.Prerequisites, "roost add mod web -service game") || contains(plan.Prerequisites, "roost add mod web -service account") {
+		t.Fatalf("the plan adds the web mod with a prerequisite command: %v", plan.Prerequisites)
 	}
 	portal := plan.Modules[1]
 	if portal.Runtime == nil || portal.Runtime.Package != "game/portal" || portal.Runtime.Start != "Start" || portal.Runtime.Framework != "account" {
@@ -49,7 +52,7 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 
 	out := roost("module", "add", "portal")
 	for _, want := range []string{
-		"prerequisite (did run): roost add mod web -service account",
+		"framework service account: declared (services.account.framework: account, added to services.game.uses",
 		"module login: installed", "module portal: installed",
 		"  runtime:   game/portal.Start in the process of the hosted account service",
 		"  file:      cmd/accountctl/main.go\n",
@@ -79,7 +82,7 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 		}
 		return string(body)
 	}
-	// web.* 配置段由 roost add mod 写进 account 的配置：开发配置绑回环地址，端口是 8080 + account 的端口块号。
+	// account 是带着 web 声明的，它的配置生成时就有 web.* 段：开发配置绑回环地址，端口是 8080 + account 的端口块号（1）。
 	if config := read("configs/service/config.account.yaml"); !strings.Contains(config, "\nweb:\n") || !strings.Contains(config, "addr: 127.0.0.1:8081") {
 		t.Fatalf("config.account.yaml has no web section on 127.0.0.1:8081:\n%s", config)
 	}
