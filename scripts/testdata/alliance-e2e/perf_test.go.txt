@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 
 	"example.com/planet/protocol/msgid"
 	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 )
 
 func perfOnly(t *testing.T) {
@@ -183,14 +185,14 @@ func TestAllianceE2EMirrorRevalidation(t *testing.T) {
 			games, _ := s.fullStack(procOptions{keys: [][3]string{{"remote_entity", "cached_max_staleness", staleness}}})
 			leader := s.login(games[0], s.prefix+"-leader")
 			leader.addGold(1000)
-			status := leader.waitOp("found", leader.startOp("found", &pb.FoundGuildRequest{Name: "mirror guild", OpenJoin: true}), time.Minute)
+			status := leader.waitOp("found", leader.startOp("found", &pb.FoundAllianceRequest{Name: "mirror guild", OpenJoin: true}), time.Minute)
 			if status.Status != "completed" {
 				t.Fatalf("found: %+v", status)
 			}
 			var readers []*player
 			for i := 0; i < 20; i++ {
 				p := s.login(games[0], fmt.Sprintf("%s-r%d", s.prefix, i))
-				join := call(p, msgid.MsgJoinGuild, &pb.JoinGuildRequest{GuildID: status.GuildID}, pb.MarshalJoinGuildRequest, pb.UnmarshalGuildResponse)
+				join := call(p, msgid.MsgJoinAlliance, &pb.JoinAllianceRequest{AllianceID: status.AllianceID}, pb.MarshalJoinAllianceRequest, pb.UnmarshalAllianceResponse)
 				if join.Code != 0 {
 					t.Fatalf("join: %+v", join)
 				}
@@ -216,7 +218,7 @@ func TestAllianceE2EMirrorRevalidation(t *testing.T) {
 						mu.Lock()
 						lat = append(lat, time.Since(st))
 						mu.Unlock()
-						if resp.Code != 0 || resp.GuildID != status.GuildID {
+						if resp.Code != 0 || resp.AllianceID != status.AllianceID {
 							t.Errorf("guild_info: %+v", resp)
 							return
 						}
@@ -320,4 +322,123 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[0]))
 		return err
 	})
+}
+
+// TestAllianceE2EJoinRetryableSources（KNOWN-LIMITS“写额度改 512 后 256 并发仍有大量‘可重试’，来源尚未确认”）：写额度
+// remote_entity.max_concurrent_writes 放到 512，一个实例、256 个联盟，256 个 worker 各往自己的联盟里不停加新玩家
+// （不重试），每轮 ALLIANCE_E2E_RETRY_SECONDS（缺省 15）秒、共 3 轮；“可重试”答复按错误文本归到产生它的答复点
+// （wiring/remoteentity RPCWriteAnswer 的六类、路由层、alliance 模块的守卫 / 所有权读取、no responders），逐轮打 PERF 行。
+// 只记录分布，不设通过门槛（来源定位用）。ALLIANCE_E2E_RETRY_WRITES 改写额度（对照用）。
+func TestAllianceE2EJoinRetryableSources(t *testing.T) {
+	perfOnly(t)
+	writes := "512"
+	if v, err := strconv.Atoi(os.Getenv("ALLIANCE_E2E_RETRY_WRITES")); err == nil && v > 0 {
+		writes = strconv.Itoa(v) // 对照：缺省额度 128 时同一负载应出现“写额度满”的可重试，证明归类不是空转
+	}
+	s := newSuite(t, 30*time.Minute)
+	s.start("alliance-3000", "alliance", 3000, procOptions{keys: [][3]string{
+		{"alliance", "max_members", "500"},
+		{"remote_entity", "max_concurrent_writes", writes},
+	}})
+	t.Logf("PERF retry-sources remote_entity.max_concurrent_writes=%s", writes)
+	client := s.client(nil, 60*time.Second)
+	const workers = 256
+	ids := make([]int64, workers)
+	var foundWG sync.WaitGroup
+	errs := make(chan error, workers)
+	sem := make(chan struct{}, 16)
+	for w := range workers {
+		foundWG.Add(1)
+		go func() {
+			defer foundWG.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			leader := int64(7_000_000 + w)
+			for attempt := 0; ; attempt++ {
+				reply, err := client.Found(s.ctx, fmt.Sprintf("found-%d", leader), leader, 1000, fmt.Sprintf("r-%d", leader), true)
+				if err == nil {
+					ids[w] = reply.Alliance.AllianceID
+					return
+				}
+				if servicerpc.Classify(err) != servicerpc.OutcomeRetryable || attempt > 50 {
+					errs <- fmt.Errorf("found %d: %w", leader, err)
+					return
+				}
+				time.Sleep(30 * time.Millisecond)
+			}
+		}()
+	}
+	foundWG.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	seconds := 15
+	if v, err := strconv.Atoi(os.Getenv("ALLIANCE_E2E_RETRY_SECONDS")); err == nil && v > 0 {
+		seconds = v
+	}
+	digits := regexp.MustCompile(`[0-9]+`)
+	reason := func(err error) string {
+		text := err.Error()
+		for _, known := range []string{
+			"overloaded", "queue full", "queue is full", "reloading", "owner transition", "version conflict", "fenced",
+			"no responders", "ownership manager is not ready", "ask alliance", "heal the guard", "read the owner",
+		} {
+			if strings.Contains(text, known) {
+				return known
+			}
+		}
+		text = digits.ReplaceAllString(text, "N")
+		if len(text) > 120 {
+			text = text[:120]
+		}
+		return "other: " + text
+	}
+	var next int64 = 8_000_000
+	for round := 1; round <= 3; round++ {
+		var mu sync.Mutex
+		outcomes := map[servicerpc.Outcome]int{}
+		reasons := map[string]int{}
+		samples := map[string]string{}
+		deadline := time.Now().Add(time.Duration(seconds) * time.Second)
+		start := time.Now()
+		var wg sync.WaitGroup
+		for w := range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for time.Now().Before(deadline) {
+					mu.Lock()
+					next++
+					player := next
+					mu.Unlock()
+					_, err := client.Join(s.ctx, fmt.Sprint("retry-src-", player), player, 1000, target(t, ids[w]))
+					outcome := servicerpc.Classify(err)
+					mu.Lock()
+					outcomes[outcome]++
+					if outcome == servicerpc.OutcomeRetryable || outcome == servicerpc.OutcomeUnknown {
+						key := outcome.String() + " / " + reason(err)
+						reasons[key]++
+						if _, ok := samples[key]; !ok {
+							samples[key] = err.Error()
+						}
+					}
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+		elapsed := time.Since(start)
+		t.Logf("PERF retry-sources round=%d conc=%d seconds=%.1f ok=%d (%.1f/s) rejected=%d retryable=%d unknown=%d",
+			round, workers, elapsed.Seconds(), outcomes[servicerpc.OutcomeOK], float64(outcomes[servicerpc.OutcomeOK])/elapsed.Seconds(),
+			outcomes[servicerpc.OutcomeRejected], outcomes[servicerpc.OutcomeRetryable], outcomes[servicerpc.OutcomeUnknown])
+		keys := make([]string, 0, len(reasons))
+		for key := range reasons {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return reasons[keys[i]] > reasons[keys[j]] })
+		for _, key := range keys {
+			t.Logf("PERF retry-sources round=%d %6d  %s   e.g. %s", round, reasons[key], key, samples[key])
+		}
+	}
 }
