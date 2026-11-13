@@ -4,7 +4,10 @@
 package policy
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -247,4 +250,77 @@ func removed(frames []selfFrame) bool {
 		}
 	}
 	return false
+}
+
+// 组同步的容量（KNOWN-LIMITS“组同步的容量与独立 Gate 用例”）：rooms 个组、每组 members 个在线成员，每轮每个组实体
+// 变化一次，一次 Flush 把增量推给全部成员（传输层丢弃字节，只量政策 + 打包 + 编码）。报告每轮耗时、每轮字节与每个
+// 成员每轮的字节；房间数 / 成员数各取几档，看成本随哪一个增长。测量待机器空闲时跑（-bench GroupView -benchtime 200x）。
+func BenchmarkGroupViewFlush(b *testing.B) {
+	for _, shape := range []struct{ rooms, members int }{{100, 4}, {1000, 4}, {100, 50}, {10, 500}} {
+		b.Run(fmt.Sprintf("rooms=%d/members=%d", shape.rooms, shape.members), func(b *testing.B) {
+			mem := &memory{}
+			var self atomic.Pointer[SelfView]
+			var sent atomic.Int64
+			manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+				Transport: entitysync.TransportFunc(func(_ context.Context, _ entitysync.SessionID, raw []byte) error {
+					sent.Add(int64(len(raw)))
+					return nil
+				}),
+				SessionLost: func(session entitysync.SessionID, cause error) {
+					if current := self.Load(); current != nil {
+						current.SessionLost(session, cause)
+					}
+				},
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			view, err := NewSelfView(SelfViewConfig{Manager: manager, Subject: selfSubject, Lookup: mem.lookup})
+			if err != nil {
+				b.Fatal(err)
+			}
+			self.Store(view)
+			groups, err := NewGroupView(GroupViewConfig{Manager: manager, Profile: roomProfile, Lookup: mem.lookup})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() {
+				_ = manager.Close(context.Background())
+				groups.Close()
+				view.Close()
+			})
+			rooms := make([]*entity.SubjectSyncState, shape.rooms)
+			for r := range rooms {
+				rooms[r] = subjectState(b, groupRoom+int64(r))
+				mem.put(rooms[r])
+				for m := range shape.members {
+					player := int64(r*shape.members + m + 1)
+					subject, _ := selfSubject(player)
+					mem.put(subjectState(b, subject))
+					if err := groups.Join(groupRoom+int64(r), player); err != nil {
+						b.Fatal(err)
+					}
+					view.Activate(player, "c1")
+				}
+			}
+			ctx := context.Background()
+			if err := manager.Flush(ctx); err != nil { // 进场全量不计入
+				b.Fatal(err)
+			}
+			sent.Store(0)
+			b.ReportAllocs()
+			rounds := 0
+			for b.Loop() {
+				for _, room := range rooms {
+					room.MarkDirty(1)
+				}
+				if err := manager.Flush(ctx); err != nil {
+					b.Fatal(err)
+				}
+				rounds++
+			}
+			b.ReportMetric(float64(sent.Load())/float64(rounds), "bytes/round")
+			b.ReportMetric(float64(sent.Load())/float64(rounds)/float64(shape.rooms*shape.members), "bytes/member-round")
+		})
+	}
 }

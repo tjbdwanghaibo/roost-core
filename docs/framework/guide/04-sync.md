@@ -42,6 +42,8 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 “房间状态推给房间里的人”在 `access.player.sync_groups` 列出实体包名（如 `party_room`，需要 `self_sync`）：`roost project sync` 在实体包里创建一次业务文件 `sync_group.go`（`SyncGroup`，把视图键改成你的 packer 认识的那个），bootstrap 把它交给 `PlayerSelfSync`。业务在决定成员关系的 handler 里调用 `SyncGroup.Join(房间实体 ID, 玩家 ID)` / `Leave` / `Disband`：在 Nest 事务里调用时推迟到提交之后，回滚就不发生。框架负责：成员断线后保留成员关系、重连的那个同步周期收到房间全量；顶号随新 epoch 重发；房间实体卸载重载后重新登记；`Disband` 后成员收到 remove。业务负责：谁是成员、宽限期满或离开时 `Leave`、房间关闭时 `Disband`（之后再销毁实体）；成员关系不持久，进程重启后在玩家重连的 handler 里再 `Join`。
 
+慢消费者与独立 Gate 的规则与自身视图相同（2026-11-14 起有组同步自己的用例）：停读的成员只断开它自己的连接，同组在读的成员照常收到每次变化，成员关系保留、重连后组视图随新 epoch 全量回来（`TestGroupsOverTCPCloseAStalledMemberOnlyAndTheReconnectGetsTheGroupFull`）；独立 Gate 下这条连接的可靠队列满、组视图的一帧被拒收时连接被关闭，重连后拿回拒收之后的最新值（`TestGroupsOverGateRecoverAfterEveryRefusedPush`，`-tags integration`，要私有 NATS）。房间数 / 成员数的成本基准是 `policy.BenchmarkGroupViewFlush`。
+
 两路同步在同一条连接、同一个推送编号、同一个会话里：一帧可能同时带玩家自己与房间两个对象，客户端按每个更新的命名空间（标记的 `syncNamespace`）与视图键分流，只用一个 `entitysync.Decoder`。不要为房间再建一个 Manager 交给 Nest：Nest 只有一个 EntitySync 观察者，Nest Mod 在启动时报 `ErrEntitySyncObserverConflict`。没开 self_sync、自己开关会话的进程用 `policy.Group`。契约与取舍见 [ENTITY_SYNC](../ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)，完整用法见[派对房间手册 §5](../PARTY-ROOM-INTEGRATION.md#5-房间内同步syncgroup)。
 
 ### 谁看见谁：视野（View，D19）

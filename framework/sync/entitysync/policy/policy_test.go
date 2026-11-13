@@ -46,7 +46,7 @@ func newManager(t *testing.T) *entitysync.Manager {
 	return manager
 }
 
-func subjectState(t *testing.T, id int64) *entity.SubjectSyncState {
+func subjectState(t testing.TB, id int64) *entity.SubjectSyncState {
 	t.Helper()
 	return entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
 		Enabled: true, SubjectID: id, Namespace: "test",
