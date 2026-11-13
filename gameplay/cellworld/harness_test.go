@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -159,6 +161,7 @@ func (s *testScene) CellRegion() *Region                   { return s.region }
 func (s *testScene) OnDestroy(fentity.EntityDestroyReason) { s.host.OnDestroy() }
 
 type testPlayer struct {
+	deathReceipts undoCell[map[int64]uint64]
 	*fentity.EntityBase
 	dao   *undoCell[BaseState]
 	group *undoCell[Group] // 队伍面板：Player 上缓存的成员表（game 里是 PlayerDao 的字段）
@@ -219,9 +222,10 @@ type testProc struct {
 	mirrors  *policy.Mirrors[EntityState]
 	client   *clientModel
 
-	cancel  context.CancelFunc
-	done    chan struct{}
-	stopped bool
+	cancel         context.CancelFunc
+	done           chan struct{}
+	stopped        bool
+	retireIdentity func()
 	// baseBeats：本进程执行过的 cell.base 心跳数（各玩家合计）：Base 侧“过几拍”的尺子。
 	baseBeats atomic.Uint64
 }
@@ -259,7 +263,11 @@ func startProc(t testing.TB, spec procSpec) *testProc {
 			t.Fatal(err)
 		}
 	}
-	p.engine = nest.NewEngine(nest.NestOptionWithGetter(p.access), nest.NestOptionWithTransactionCommitter(nullCommitter{}))
+	opts := []nest.NestOption{nest.NestOptionWithGetter(p.access), nest.NestOptionWithTransactionCommitter(nullCommitter{})}
+	if os.Getenv("ROOST_CELLWORLD_PERF") == "1" {
+		opts = append(opts, nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 65536}, nest.WorkerPoolConfig{Workers: 4, QueueCap: 4096}, nest.WorkerPoolConfig{Workers: 8, QueueCap: 16}))
+	}
+	p.engine = nest.NewEngine(opts...)
 	cfg := NodeConfig{
 		World: "w", SID: spec.sid, Grid: spec.grid, Transport: spec.transport, Nest: p.engine,
 		Destroy: func(ctx context.Context, e fentity.IThreadSafeEntity) error {
@@ -291,6 +299,7 @@ func startProc(t testing.TB, spec procSpec) *testProc {
 			return "actor", uint32(kindTActor)
 		}
 	}
+	p.retireIdentity = attachTestOwners(t, spec.grid, &cfg)
 	if spec.mod != nil {
 		spec.mod(&cfg)
 	}
@@ -392,6 +401,9 @@ func (p *testProc) stop() {
 	<-p.done
 	_ = p.driver.Stop(context.Background())
 	_ = p.engine.Shutdown(context.Background())
+	if p.retireIdentity != nil {
+		p.retireIdentity()
+	}
 	if p.sync != nil {
 		p.mirrors.Close()
 		p.interest.Close()
@@ -569,4 +581,19 @@ func (rc *realChecker) forget(cell CellID) {
 	for _, h := range rc.holders {
 		delete(h, cell)
 	}
+}
+
+func (p *testPlayer) CellDeathReceipt(target int64) uint64 { return p.deathReceipts.v[target] }
+func (p *testPlayer) RecordCellDeathReceipt(target int64, life uint64, limit int) error {
+	old := p.deathReceipts.v
+	if _, known := old[target]; !known && len(old) >= limit {
+		return fmt.Errorf("death receipts full")
+	}
+	next := maps.Clone(old)
+	if next == nil {
+		next = map[int64]uint64{}
+	}
+	next[target] = life
+	p.deathReceipts.set(next)
+	return nil
 }

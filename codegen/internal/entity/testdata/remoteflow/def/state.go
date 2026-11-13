@@ -15,7 +15,7 @@ type ItemsDao struct {
 //
 //roost:dao coll=remote_guilds db=roost_remote_generated_placeholder dbscope=global
 type GuildDao struct {
-	Name    string `dao:"persist" store:"name"`
-	Members int64  `dao:"persist" store:"members"`
-	Motto   string `dao:"persist" store:"motto"`
+	Name    string `dao:"nosync" store:"name"`
+	Members int64  `dao:"nosync" store:"members"`
+	Motto   string `dao:"nosync" store:"motto"`
 }

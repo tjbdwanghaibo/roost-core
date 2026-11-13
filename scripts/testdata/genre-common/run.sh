@@ -31,7 +31,7 @@ python3 - "$repo_root" "$genre" "$module" "$first_command" <<'PY'
 from pathlib import Path
 import sys
 repo, genre, module, first = sys.argv[1:]
-for filename, typename, fields in [('player','Player','Coins int64 `store:"coins" dao:"persist,sync"`'),('game_room','GameRoom','State string `store:"state" dao:"persist"`')]:
+for filename, typename, fields in [('player','Player','Coins int64 `store:"coins" dao:"persist,sync"`'),('game_room','GameRoom','State string `store:"state" dao:"nosync"`')]:
     p=Path('db/def')/(filename+'.go'); text=p.read_text();marker='type '+typename+'Dao struct {'
     assert marker in text
     p.write_text(text.replace(marker,marker+'\n'+fields+'\n'))

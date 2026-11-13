@@ -49,7 +49,7 @@ type AdReceipt struct {
 }
 
 // 账本不淘汰。固定容量只用于教学，满后拒绝新写，旧命令仍可查询原回执。
-// Key 是服务端私有 HMAC 密钥，View 明确排除它及广告证明；DAO State 只有 persist，不标 sync。
+// Key 是服务端私有 HMAC 密钥，View 明确排除它及广告证明；DAO State 标 nosync（只落库，不下发）。
 type State struct {
 	Schema                                            int
 	Rules                                             Rules

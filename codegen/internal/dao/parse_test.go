@@ -11,6 +11,27 @@ import (
 	"testing"
 )
 
+// 两个能力分别默认开启，辅助选项和另一项的开关都不能把它隐式关闭。
+func TestDaoCapabilitiesDefaultOnIndependently(t *testing.T) {
+	for _, tc := range []struct {
+		option        string
+		persist, sync bool
+		mapMode       string
+	}{
+		{"", true, true, ""}, {"persist", true, true, ""}, {"sync", true, true, ""},
+		{"persist,sync", true, true, ""}, {"nosync", true, false, ""}, {"nopersist", false, true, ""},
+		{"persist,nosync", true, false, ""}, {"nopersist,sync", false, true, ""},
+		{"nopersist,nosync", false, false, ""}, {"map=fast", true, true, "fast"},
+		{"nosync,map=sharded", true, false, "sharded"}, {"nopersist,map=small", false, true, "small"},
+	} {
+		tag := &ast.BasicLit{Kind: token.STRING, Value: "`dao:\"" + tc.option + "\"`"}
+		got, err := parseDaoTag(tag)
+		if err != nil || got.Persist != tc.persist || got.Sync != tc.sync || got.Map != tc.mapMode {
+			t.Errorf("dao %q = %+v, %v; want persist=%v sync=%v map=%q", tc.option, got, err, tc.persist, tc.sync, tc.mapMode)
+		}
+	}
+}
+
 func TestParseDefDir(t *testing.T) {
 	dir, err := filepath.Abs("./testdata/def")
 	if err != nil {
@@ -568,7 +589,7 @@ func assertStructFieldsUnexported(t *testing.T, filename, typeName string) {
 func TestDatabaseMarkerIsALogicalNameAndGeneratesOneConstantPerDatabase(t *testing.T) {
 	for _, bad := range []string{"Game", "card-rpg", "admin", "9lives"} {
 		dir := t.TempDir()
-		source := "package def\n\n//roost:dao coll=heroes db=" + bad + "\ntype HeroDao struct {\n\tName string `dao:\"persist\"`\n}\n"
+		source := "package def\n\n//roost:dao coll=heroes db=" + bad + "\ntype HeroDao struct {\n\tName string `dao:\"nosync\"`\n}\n"
 		if err := os.WriteFile(filepath.Join(dir, "hero.go"), []byte(source), 0o600); err != nil {
 			t.Fatal(err)
 		}

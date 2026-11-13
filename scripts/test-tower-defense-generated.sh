@@ -51,7 +51,7 @@ for name, fields in {
     p = root / 'db/def' / f'{name}.go'
     typename = ''.join(part.title() for part in name.split('_')) + 'Dao'
     marker = 'type ' + typename + ' struct {'
-    text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"persist"`\n' for field, typ, key in fields))
+    text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"nosync"`\n' for field, typ, key in fields))
     assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
     p.write_text(text)
 # TowerRoom 与 Player 在同一事务里领奖；把 TowerRoom 放在 World 锁档（低于 Player），多实体锁序固定。

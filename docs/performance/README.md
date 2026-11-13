@@ -12,6 +12,7 @@
 | 客户端解码 / Unity / 弱网 | [当前验证](CLIENT-20261101.md)：native 与 Mono/IL2CPP 的可见集容量、TCP 故障，非 WAN/设备容量 |
 | Nest 调度开销 | [dispatch](NEST-DISPATCH-BENCHMARK.md)（handler 10–500µs 对照）；[最新完成顺序基准](benchmarks/nest-completion-order-all-20261029/README.md) |
 | 心跳、普通消息与 Entity 混合负载 | [心跳驱动](HB-DRIVEN-LOAD-20261021.md)、[批量投递](NEST-BATCH-HEARTBEAT-20261021.md)；[调度结构取舍](HB-STRUCTURES-20261021.md)保留为现行参数依据 |
+| CellWorld 固定分区 | [本轮验收](CELLWORLD.md)：写授权、故障恢复、生成工程与 Robot；核心 Witness 和客户端 ACK 分开统计 |
 | Gate + AOI 同步延迟 | [完整链路](GATE-AOI.md)、[Interest 单写应用](INTEREST-SINGLE-WRITER-20261022.md)；periodic、on_change、ApplySync、ApplyAsync 分开比较 |
 | DataEngine 投影能力 | [按实体并行投影](PROJECTOR-ENTITY-PARALLEL-20261027.md)，区分普通记录、回执、effect 与本机/云 Mongo |
 | Saga 正式 JetStream 实现 | [本机验收](SAGA-JETSTREAM-AUTHORITY-20261029.md)：原生正向 c128 约 1047–1053 笔/s；[云 Mongo 复核](SAGA-CLOUD-C128-REPRO-20261029.md)：吞吐与投影追平必须同时看，不能只报接纳 TPS |

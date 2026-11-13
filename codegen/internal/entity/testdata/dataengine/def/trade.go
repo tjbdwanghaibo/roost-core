@@ -2,7 +2,7 @@ package def
 
 //roost:dao coll=trade_wallets db=roost_generated_it_placeholder dbscope=global
 type WalletDao struct {
-	Payload   string `dao:"persist" store:"payload"`
+	Payload   string `dao:"nosync" store:"payload"`
 	X         int64  `dao:"nopersist,sync" store:"x"`
 	Y         int64  `dao:"nopersist,sync" store:"y"`
 	Changed   int64  `dao:"nopersist,sync" store:"changed"`
@@ -12,7 +12,7 @@ type WalletDao struct {
 
 //roost:dao coll=trade_inventories db=roost_generated_it_placeholder dbscope=global
 type InventoryDao struct {
-	Payload   string `dao:"persist" store:"payload"`
+	Payload   string `dao:"nosync" store:"payload"`
 	Items     int64  `dao:"persist,sync" store:"items"`
 	Transfers int64  `dao:"persist,sync" store:"transfers"`
 }

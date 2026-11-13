@@ -16,7 +16,10 @@ type ExtHandler func(from int32, body []byte)
 // 只做非阻塞入队：出站队列满时丢弃并计数（OutboxDrops），返回 false。body 入队后归 Node，调用方不得再修改。
 // space 不合法时返回 false、不发。任何 goroutine 可调用，包括 Nest 的提交后回调。
 func (n *Node) SendExt(sid int32, space string, body []byte) bool {
-	if sid == 0 || !validWorld(space) {
+	n.lifecycle.Lock()
+	defer n.lifecycle.Unlock()
+	stopping := n.lifecycle.stopping
+	if stopping || sid == 0 || !validWorld(space) {
 		return false
 	}
 	ok := n.enqueue(job{kind: jobSend, send: outgoing{sid: sid, msg: &wireMsg{Kind: kindExt, Ext: &extMsg{Space: space, Body: body}}}})

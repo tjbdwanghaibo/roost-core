@@ -1,0 +1,17 @@
+package cellworldhost
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// SpawnID 把持久目录的序号放在静态 ID 半区的专用段；与普通运行时从 1 起的计数器隔离。
+// 业务必须保留该段，不能在别的 ID 分配器重复使用。Kind 使用正式生成的 EntityKind。
+func SpawnID(home int32, sequence uint64, kind entity.EntityKind) (int64, error) {
+	if home <= 0 || home > 65535 || sequence == 0 || sequence > 50000 {
+		return 0, fmt.Errorf("cellworldhost: invalid birth identity %d/%d", home, sequence)
+	}
+	unique := int64(entity.StaticUniqueIDBase) | int64(home)<<34 | int64(1)<<33 | int64(sequence)
+	return entity.BuildEntityID(unique, kind)
+}

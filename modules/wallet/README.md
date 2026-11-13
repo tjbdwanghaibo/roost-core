@@ -46,7 +46,7 @@
   - 客户端带请求键、自己没有别的判重手段：`target.WalletComp().Apply(key, delta)`。
   - 不在这名玩家的事务里（别的实体的结算、后台任务）：`sender.NewWalletGrantSender(client).Sync_WalletGrant(ctx, playerEntityID, key, amount)`。
 - **挂到别的实体上**（公会金库、活动奖池等；不新增模块，在工程里写一个接线文件即可）：
-  1. 在那个实体的 DAO（`db/def/<实体>.go`）里加两个字段，store 键自己起、发布后不改：`Wallet WalletState \`store:"wallet" dao:"persist,sync"\`` 与 `WalletLedger WalletLedger \`store:"wallet_ledger" dao:"persist"\``。同步与否按那个实体给谁看决定。
+  1. 在那个实体的 DAO（`db/def/<实体>.go`）里加两个字段，store 键自己起、发布后不改：`Wallet WalletState \`store:"wallet" dao:"persist,sync"\`` 与 `WalletLedger WalletLedger \`store:"wallet_ledger" dao:"nosync"\``（回执是服务端账本，不下发）。同步与否按那个实体给谁看决定。
   2. 在实体包里写接线文件（照 `game/entities/player/wallet_component.go`）：`//roost:component type=<号>` 标出自己的组件号常量，号用 `roost id next component`（或 `roost add component` 分配）在工程的组件号段里申请，不复用 Player 的号；`type XxxWalletComponent = wallet.Component`；`init` 里 `entity.RegisterComponentFactory(<号>, wallet.NewComponent)`；实现 `WalletState()`、`WalletLedger()` 两个方法，返回自己 DAO 里的那两份。要在扣款时做事就再实现可选的 `WalletSpent(amount, nowUnixMilli int64) error`（同一笔事务，返回错误整笔回滚）。
   3. 实体结构体里加组件字段（`wallet *XxxWalletComponent \`comp:"<常量名>"\``），`roost generate` 生成 `XxxWalletComp()` 访问器；自己的 Nest handler 经它调 `Add` / `Apply` / `Balance`。
   - 本模块的场景 `TestWalletSecondHost*` 就是这样把同一个组件挂到测试里的第二个实体上，验证加减、拒绝、回滚与两个宿主互不影响。

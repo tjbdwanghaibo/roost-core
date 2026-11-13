@@ -212,19 +212,29 @@ func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 	if _, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML, good)); err != nil {
 		t.Fatalf("a consistent module: %v", err)
 	}
+	// 清单中的 dao 选项与字段 tag 使用同一规则：缺省双开，只用负向标记关闭。
+	for _, option := range []string{"", "persist", "sync", "nosync", "nopersist", "nopersist,nosync", "map=fast"} {
+		yaml := strings.Replace(moduleFixtureYAML, `dao: "persist,sync"`, `dao: "`+option+`"`, 1)
+		if _, err := loadModuleCatalogFS(moduleFixtureFS(yaml, good)); err != nil {
+			t.Errorf("dao option %q: %v", option, err)
+		}
+	}
 	for name, test := range map[string]struct {
 		yaml  string
 		files map[string]string
 		want  string
 	}{
-		"undeclared id": {moduleFixtureYAML, map[string]string{"game/x.go": "{{ID:component:Demo}} {{ID:errcode:demo_bad}} {{ID:protocol:DemoPing}}"}, "uses {{ID:protocol:DemoPing}} but module.yaml does not declare it"},
-		"unused id":     {moduleFixtureYAML, map[string]string{"game/x.go": "{{ID:component:Demo}}"}, `declares errcode "demo_bad" but no template uses`},
-		"field prefix":  {strings.Replace(moduleFixtureYAML, "field: DemoState", "field: State", 1), good, `state field "State" must be PascalCase and start with Demo`},
-		"store prefix":  {strings.Replace(moduleFixtureYAML, "store: demo", "store: state", 1), good, `store key "state" must start with demo`},
-		"no intent":     {strings.Replace(moduleFixtureYAML, `dao: "persist,sync"`, `dao: "map=fast"`, 1), good, "must state persist / nopersist"},
-		"unknown key":   {moduleFixtureYAML + "surprise: 1\n", good, "field surprise not found"},
-		"name mismatch": {strings.Replace(moduleFixtureYAML, "name: demo", "name: other", 1), good, "the directory is the name"},
-		"no files":      {moduleFixtureYAML, nil, "files/ is empty"},
+		"undeclared id":       {moduleFixtureYAML, map[string]string{"game/x.go": "{{ID:component:Demo}} {{ID:errcode:demo_bad}} {{ID:protocol:DemoPing}}"}, "uses {{ID:protocol:DemoPing}} but module.yaml does not declare it"},
+		"unused id":           {moduleFixtureYAML, map[string]string{"game/x.go": "{{ID:component:Demo}}"}, `declares errcode "demo_bad" but no template uses`},
+		"field prefix":        {strings.Replace(moduleFixtureYAML, "field: DemoState", "field: State", 1), good, `state field "State" must be PascalCase and start with Demo`},
+		"store prefix":        {strings.Replace(moduleFixtureYAML, "store: demo", "store: state", 1), good, `store key "state" must start with demo`},
+		"unknown dao option":  {strings.Replace(moduleFixtureYAML, `dao: "persist,sync"`, `dao: "persits,sync"`, 1), good, "unknown option"},
+		"conflicting persist": {strings.Replace(moduleFixtureYAML, `dao: "persist,sync"`, `dao: "persist,nopersist"`, 1), good, "both persist and nopersist"},
+		"conflicting sync":    {strings.Replace(moduleFixtureYAML, `dao: "persist,sync"`, `dao: "sync,nosync"`, 1), good, "both sync and nosync"},
+		"excluded state":      {strings.Replace(moduleFixtureYAML, `dao: "persist,sync"`, `dao: "-"`, 1), good, "would exclude the module state"},
+		"unknown key":         {moduleFixtureYAML + "surprise: 1\n", good, "field surprise not found"},
+		"name mismatch":       {strings.Replace(moduleFixtureYAML, "name: demo", "name: other", 1), good, "the directory is the name"},
+		"no files":            {moduleFixtureYAML, nil, "files/ is empty"},
 		// next（安装后提示）：每条是非空的一行、不带 {{ID:...}}，条数与长度有上限；写错键名照样按未知键拒绝。
 		"empty hint":     {moduleFixtureYAML + "next: [\"roost config enable player-tcp\", \"  \"]\n", good, "next[1] is empty"},
 		"multiline hint": {moduleFixtureYAML + "next: [\"first line\\nsecond line\"]\n", good, "next[0] spans several lines"},
@@ -291,7 +301,7 @@ func TestAppendDaoFieldsAppendsAtTheEndAndIsIdempotent(t *testing.T) {
 	root := writeDaoDefinition(t, definition)
 	fields := []daoFieldSpec{
 		{Name: "Wallet", Type: "WalletState", Store: "wallet", Dao: "persist,sync", Comment: "Wallet 是余额。"},
-		{Name: "WalletLedger", Type: "WalletLedger", Store: "wallet_ledger", Dao: "persist"},
+		{Name: "WalletLedger", Type: "WalletLedger", Store: "wallet_ledger", Dao: "nosync"},
 	}
 	source, err := locateDaoStruct(root, "PlayerDao")
 	if err != nil || source == nil {
@@ -302,7 +312,7 @@ func TestAppendDaoFieldsAppendsAtTheEndAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(updated)
-	name, wallet, ledger := strings.Index(text, "Name string"), strings.Index(text, "Wallet WalletState `store:\"wallet\" dao:\"persist,sync\"`"), strings.Index(text, "WalletLedger WalletLedger `store:\"wallet_ledger\" dao:\"persist\"`")
+	name, wallet, ledger := strings.Index(text, "Name string"), strings.Index(text, "Wallet WalletState `store:\"wallet\" dao:\"persist,sync\"`"), strings.Index(text, "WalletLedger WalletLedger `store:\"wallet_ledger\" dao:\"nosync\"`")
 	if name < 0 || wallet < name || ledger < wallet {
 		t.Fatalf("fields are not appended in order after the existing ones:\n%s", text)
 	}
@@ -325,7 +335,7 @@ func TestAppendDaoFieldsAppendsAtTheEndAndIsIdempotent(t *testing.T) {
 	if _, err := again.appendFields(root, []daoFieldSpec{{Name: "Wallet", Type: "int64", Store: "wallet", Dao: "persist,sync"}}); err == nil || !strings.Contains(err.Error(), "PlayerDao.Wallet already exists as WalletState") {
 		t.Fatalf("same name, another type: %v", err)
 	}
-	if _, err := again.appendFields(root, []daoFieldSpec{{Name: "Purse", Type: "PurseState", Store: "wallet", Dao: "persist"}}); err == nil || !strings.Contains(err.Error(), `store key "wallet" is already used by PlayerDao.Wallet`) {
+	if _, err := again.appendFields(root, []daoFieldSpec{{Name: "Purse", Type: "PurseState", Store: "wallet", Dao: "nosync"}}); err == nil || !strings.Contains(err.Error(), `store key "wallet" is already used by PlayerDao.Wallet`) {
 		t.Fatalf("store key taken: %v", err)
 	}
 	if missing, err := locateDaoStruct(root, "GuildDao"); err != nil || missing != nil {
@@ -932,7 +942,7 @@ func TestTenModuleStructsUnderOneDAO(t *testing.T) {
 		types.WriteString("\ntype " + name + "State struct {\n\tLevel int32 `store:\"1\"`\n\tItems map[int32]int64 `store:\"2\"`\n\tSlots map[int32]*ModSlot `store:\"3\"`\n}\n")
 		intent := "persist,sync"
 		if i%2 == 1 {
-			intent = "persist"
+			intent = "nosync"
 		}
 		fields = append(fields, daoFieldSpec{Name: name, Type: name + "State", Store: strings.ToLower(name), Dao: intent})
 	}

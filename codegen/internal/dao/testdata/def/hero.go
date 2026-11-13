@@ -5,7 +5,7 @@ type HeroDao struct {
 	Name    string               `store:"name"`
 	Level   int32                `store:"level"`
 	Exp     int64                `store:"exp"`
-	LoginAt int64                `dao:"persist" store:"login_at"`
+	LoginAt int64                `dao:"nosync" store:"login_at"`
 	Tmp     int                  `dao:"-"`
 	Items   map[int64]int32      `store:"items"`
 	Friends []int64              `store:"friends"`

@@ -9,7 +9,7 @@ import (
 )
 
 // RoomSyncProfile 是房间成员看房间的唯一视图：只含 Board（公开记分板）。State（种子、星星出现时刻、票号、回执）
-// 不标 sync，任何视图都拿不到。
+// 标 nosync（只落库），任何视图都拿不到。
 var RoomSyncProfile = entity.SyncProfile{Key: "room"}
 
 const roomBoardCodec uint16 = 2

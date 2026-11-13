@@ -28,7 +28,7 @@ func (controller *Controller) HandleAttackTarget(context *playeraccess.Context, 
 		code, reason := errcode.ClientError(apperrors.ErrSceneNotPartitioned)
 		return &pb.AttackTargetResponse{Code: code, Reason: reason}, nil
 	}
-	seq, err := partition.AttackTarget(context.Context(), context.PlayerID, request.Target)
+	hit, err := partition.AttackTarget(context.Context(), context.PlayerID, request.Target)
 	if err != nil {
 		if errors.Is(err, cellworld.ErrNotInWorld) {
 			err = apperrors.ErrPartitionNotEntered
@@ -39,5 +39,5 @@ func (controller *Controller) HandleAttackTarget(context *playeraccess.Context, 
 		}
 		return &pb.AttackTargetResponse{Code: code, Reason: reason}, nil
 	}
-	return &pb.AttackTargetResponse{Seq: seq}, nil
+	return &pb.AttackTargetResponse{Seq: hit.Seq, AttackID: hit.ID}, nil
 }

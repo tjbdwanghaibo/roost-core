@@ -14,9 +14,9 @@ package dbdef
 //roost:dao coll=alliance_member db=main
 type AllianceMemberDao struct {
 	// AllianceID is the alliance the player is in, 0 for none.
-	AllianceID int64 `dao:"persist" store:"alliance_id"`
+	AllianceID int64 `dao:"nosync" store:"alliance_id"`
 	// JoinRequestID is the request that made the current membership.
-	JoinRequestID string `dao:"persist" store:"join_request_id"`
+	JoinRequestID string `dao:"nosync" store:"join_request_id"`
 	// PendingAllianceID / PendingRequestID / PendingDeadlineUnix are an
 	// outstanding reservation: alliance PendingAllianceID is admitting the
 	// player under request PendingRequestID. Until it is confirmed or
@@ -24,20 +24,20 @@ type AllianceMemberDao struct {
 	// in the reserving instance's process, not stored) — or when the next
 	// request finds the guard held — the guard asks the alliance what became
 	// of the request; it never releases on the clock alone.
-	PendingAllianceID   int64  `dao:"persist" store:"pending_alliance_id"`
-	PendingRequestID    string `dao:"persist" store:"pending_request_id"`
-	PendingDeadlineUnix int64  `dao:"persist" store:"pending_deadline_unix"`
+	PendingAllianceID   int64  `dao:"nosync" store:"pending_alliance_id"`
+	PendingRequestID    string `dao:"nosync" store:"pending_request_id"`
+	PendingDeadlineUnix int64  `dao:"nosync" store:"pending_deadline_unix"`
 	// LeftAtUnix is when the player last left or was removed (rejoin cooldown).
-	LeftAtUnix int64 `dao:"persist" store:"left_at_unix"`
+	LeftAtUnix int64 `dao:"nosync" store:"left_at_unix"`
 	// RewardPeriod is the last reward period (alliance.reward_period on the
 	// business clock) whose alliance reward the player claimed, and
 	// RewardRequestID the claim that took it — the reward saga's compensation
 	// releases only that claim (ReleaseReward).
-	RewardPeriod    int64  `dao:"persist" store:"reward_period"`
-	RewardRequestID string `dao:"persist" store:"reward_request_id"`
+	RewardPeriod    int64  `dao:"nosync" store:"reward_period"`
+	RewardRequestID string `dao:"nosync" store:"reward_request_id"`
 	// Requests is the receipts of the writes that target this player
 	// directly (founding an alliance), same rules as AllianceDao.Requests.
-	Requests map[string]*AllianceMemberReceipt `dao:"persist,map=fast" store:"requests"`
+	Requests map[string]*AllianceMemberReceipt `dao:"nosync,map=fast" store:"requests"`
 }
 
 // AllianceMemberReceipt is AllianceReceipt for the guard.

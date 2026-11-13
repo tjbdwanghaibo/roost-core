@@ -36,3 +36,28 @@ func (s singletonLiveness) Matches(ctx context.Context, serverType string, sid i
 	}
 	return string(token) == incarnation, nil
 }
+
+// SingletonLease 在本地检查本次进程的有效写入窗口，不访问 Redis。
+// 租约到期或已失锁会永久触发 fail-stop；业务准入、提交和出站都可以检查，
+// 不能依赖续期 goroutine 比长暂停后的业务 goroutine 更早获得调度。
+type SingletonLease interface{ Check() error }
+
+const ModSingletonLease ModName = "singleton_lease"
+
+func (l *singletonLock) Check() error {
+	l.mu.Lock()
+	if l.status.state == singletonLost {
+		cause := l.status.err
+		l.mu.Unlock()
+		return fmt.Errorf("%w: %v", ErrSingletonLost, cause)
+	}
+	if l.status.validUntil.IsZero() || !l.clock.Now().Before(l.status.validUntil) {
+		cause := errors.New("local singleton validity window expired")
+		l.status.state, l.status.err = singletonLost, cause
+		l.mu.Unlock()
+		l.reportLost(cause, nil)
+		return ErrSingletonLost
+	}
+	l.mu.Unlock()
+	return nil
+}

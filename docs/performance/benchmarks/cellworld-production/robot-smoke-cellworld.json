@@ -1,0 +1,16 @@
+{
+  "active_percent": 5,
+  "completed_requests_per_second": 194.8423639073595,
+  "duration_seconds": 10,
+  "input_ack_p99_ms": 10.481542,
+  "kind": "cellworld",
+  "latency_window_samples": 1999,
+  "measurement_wall_seconds": 10.259575792,
+  "received_sync_bytes": 38668,
+  "received_sync_frames": 273,
+  "request_errors": 0,
+  "requests": 1999,
+  "visible_max": 25,
+  "visible_mean": 24.777888944472235,
+  "warmup_seconds": 0
+}

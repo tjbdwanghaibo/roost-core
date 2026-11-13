@@ -23,6 +23,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // 分区场景的地形副本（terrain_partition.go，可编辑地形方案 P3）：两个格进程与一个只做 Base 的进程，各自有正式的
@@ -108,8 +109,8 @@ type partitionProc struct {
 	process   *terrainProcess
 	transport *accessplayertcp.Runtime
 	addr      string
-	scene   *Scene
-	pt      *partitionTerrain
+	scene     *Scene
+	pt        *partitionTerrain
 	net       *partitionNet
 	stopped   bool
 	lastBrush terrain_chunk.BrushResult
@@ -586,12 +587,12 @@ type walkNPC struct {
 	reg  *heartbeat.Reg
 }
 
-func (a *walkNPC) Base() *entity.EntityBase                 { return a.EntityBase }
-func (a *walkNPC) CellState() cellworld.ActorState          { return a.dao.v }
-func (a *walkNPC) SetCellState(st cellworld.ActorState)     { a.dao.set(st) }
-func (a *walkNPC) StartCell() error                         { return a.reg.Start() }
-func (a *walkNPC) SetCellPeriod(d time.Duration) error      { return a.reg.SetPeriod(d) }
-func (a *walkNPC) OnDestroy(entity.EntityDestroyReason)     { a.host.OnDestroy() }
+func (a *walkNPC) Base() *entity.EntityBase             { return a.EntityBase }
+func (a *walkNPC) CellState() cellworld.ActorState      { return a.dao.v }
+func (a *walkNPC) SetCellState(st cellworld.ActorState) { a.dao.set(st) }
+func (a *walkNPC) StartCell() error                     { return a.reg.Start() }
+func (a *walkNPC) SetCellPeriod(d time.Duration) error  { return a.reg.SetPeriod(d) }
+func (a *walkNPC) OnDestroy(entity.EntityDestroyReason) { a.host.OnDestroy() }
 
 func buildWalkNPC(p *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
 	cell, ok := p.Param.(*walkCell)
@@ -632,7 +633,7 @@ type walkCell struct {
 	done     chan struct{}
 }
 
-func startWalkCell(t *testing.T, grid *cellworld.Grid, transport cellworld.Transport, sid int32, m *terrainmap.Map) *walkCell {
+func startWalkCell(t *testing.T, grid *cellworld.Grid, transport cellworld.Transport, sid int32, m *terrainmap.Map, owners *cellworld.OwnerRegistry) *walkCell {
 	t.Helper()
 	cellID, ok := grid.CellOf(sid)
 	if !ok {
@@ -653,6 +654,7 @@ func startWalkCell(t *testing.T, grid *cellworld.Grid, transport cellworld.Trans
 		t.Fatal(err)
 	}
 	node, err := cellworld.NewNode(cellworld.NodeConfig{
+		Owners: owners, CheckLease: func() error { return nil }, Incarnation: fmt.Sprintf("walk-%d", sid),
 		World: "walk", SID: sid, Grid: grid, Transport: transport, Nest: c.engine, Handlers: handlers,
 		Destroy: func(ctx context.Context, e entity.IThreadSafeEntity) error {
 			return c.manager.Destroy(ctx, e, entity.DestroyReasonCommon, false)
@@ -818,8 +820,12 @@ func TestTerrainPartitionWalkAcrossCellsFollowsTheEdits(t *testing.T) {
 	a := startPartitionProc(t, net, grid, partitionSidA, pack, store)
 	b := startPartitionProc(t, net, grid, partitionSidB, pack, store)
 	transport := &walkTransport{}
-	cellA := startWalkCell(t, grid, transport, partitionSidA, a.process.m)
-	cellB := startWalkCell(t, grid, transport, partitionSidB, b.process.m)
+	owners, err := cellworld.NewOwnerRegistry(versionstore.NewMemoryStore[int64, cellworld.OwnerRecord](), func(context.Context, cellworld.OwnerProcess) (bool, error) { return true, nil }, versionstore.NewMemoryStore[uint32, cellworld.DeathBucket]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cellA := startWalkCell(t, grid, transport, partitionSidA, a.process.m, owners)
+	cellB := startWalkCell(t, grid, transport, partitionSidB, b.process.m, owners)
 	edge := terrain.ChunkKey{X: 2}
 
 	step := terrain.Brush{Op: terrain.BrushRaise, X: 13300, Y: 3000, Radius: 300, Falloff: terrain.FalloffConstant, Strength: 50}

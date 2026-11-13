@@ -3,12 +3,16 @@ package partition_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"reflect"
 	"testing"
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/partition"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
@@ -25,15 +29,25 @@ type nullCommitter struct{}
 func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
 
 func sampleState(id int64, kind cellworld.EntityKind, seq uint64) cellworld.ActorState {
-	return cellworld.ActorState{
-		EntityState: cellworld.EntityState{ID: id, Kind: kind, Base: 1000, X: 2990, Y: 1500, VX: 120, VY: -30, HP: 70,
+	st := cellworld.ActorState{
+		EntityState: cellworld.EntityState{ID: id, Kind: kind, Base: 1000, Life: 17, X: 2990, Y: 1500, VX: 120, VY: -30, HP: 70,
 			Ver: cellworld.Version{Epoch: 3, Seq: seq}, Idle: kind == cellworld.KindNPC,
 			Panel: cellworld.Panel{MaxHP: 120, Attack: 14, Power: 40, Ver: seq}},
-		Role: cellworld.RoleFrozen, LastInput: 9,
-		Applied:    []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1}, At: 100}, {Hit: cellworld.HitID{Attacker: 78, Seq: 4}, At: 200}},
-		Handoff:    &cellworld.HandoffState{Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
+		Recovery: cellworld.RecoveryState{Revision: 5, Effects: []cellworld.TimedEffect{{Key: "attack", Stacks: 2, Value: 7, ExpiresAt: 2000000000000}}, Cooldowns: []cellworld.Cooldown{{Key: "dash", ReadyAt: 2000000000001}}},
+		Role:     cellworld.RoleFrozen, LastInput: 9,
+		Grant:   cellworld.OwnerGrant{ID: "owner", Epoch: 2, Process: cellworld.OwnerProcess{SID: 101, Incarnation: "startup"}},
+		Pending: &cellworld.PendingOwner{Token: "operation", Transfer: cellworld.OwnerTransfer{ID: "transfer", Target: 102, Epoch: 3}}, CloseEntry: true,
+		Applied:    []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1, ID: "first"}, At: 100}, {Hit: cellworld.HitID{Attacker: 78, Seq: 4, ID: "second"}, At: 200}},
+		Handoff:    &cellworld.HandoffState{ID: "transfer", Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
 		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7, Entry: 8, FracX: 640, FracY: -250,
 	}
+	st.SpawnGeneration = 4
+	deathState := st.EntityState
+	deathState.HP = 0
+	st.Death = &cellworld.DeathFact{ID: "death", Target: id, Life: 17, Hit: cellworld.HitID{Attacker: 77, Seq: 3, ID: "hit"}, RewardBase: 1000, ReplySID: 101, Damage: 70, At: 1700000000000, State: deathState}
+	st.DeathNextAt = 41
+	st.DeathAcked = true
+	return st
 }
 
 // The mapping is the whole state: what goes in comes out, for both entities' DAOs.
@@ -55,6 +69,9 @@ func TestCellStateRoundTripsThroughBothDAOs(t *testing.T) {
 			// What is read is a copy: changing it does not change the DAO (cellworld's value semantics).
 			got := partition.ReadActor(tc.dao, 42, tc.kind)
 			got.Applied[0].At, got.Handoff.Epoch = 999, 999
+			got.Pending.Token = "changed"
+			got.Recovery.Effects[0].Stacks = 99
+			got.Recovery.Cooldowns[0].ReadyAt = 99
 			if again := partition.ReadActor(tc.dao, 42, tc.kind); !reflect.DeepEqual(again, want) {
 				t.Fatalf("a read copy reached the DAO: %+v", again)
 			}
@@ -136,8 +153,16 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 	if dao.GetSavedPosX() != 3010 {
 		t.Fatalf("a witness after the write-back moved the stored position to %d", dao.GetSavedPosX())
 	}
+	// 经正式持久编码再水合，不能只检查当前进程里 getter 仍能读到 Entry。
+	reloaded := db.NewPlayerDao()
+	reloaded.SetId(id)
+	if err := reloaded.RestorePersisted(dao.MarshalPersist(dataengine.AllFields), db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := partition.ReadBase(reloaded, sceneID).Entry; got != st.Entry {
+		t.Fatalf("persisted entry = %d, want %d", got, st.Entry)
+	}
 }
-
 
 // Base 重启后 Player 从库里重新装载：实时位置（PosX / PosY，不持久）是零、不在世界里。进场位置取持久的快照位置
 // （SavedPosX / SavedPosY，只有记在这个分区场景之下才算），不是 spawn（维护者 2026-11-03 追加第 1 项）。
@@ -207,4 +232,81 @@ func TestPendingPanelRollsBackWithTheTransaction(t *testing.T) {
 	if dao.GetCellPanelVer() != 1 || dao.GetCellMaxHP() != 110 {
 		t.Fatalf("stored panel ver %d max hp %d, want 1 and 110", dao.GetCellPanelVer(), dao.GetCellMaxHP())
 	}
+}
+
+// 真实文件 WAL：恢复快照、奖励与死亡去重回执一起提交，确认后才发回执；Mongo 尚未投影也能从 WAL 恢复。
+func TestCellDeathRewardAndRecoverySurviveFileWAL(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	wal, err := nestwal.Open(nestwal.DefaultOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := engine.NewProjector(wal, unusedProjection{}, engine.ProjectorOptions{ManualReplay: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer projector.Close(ctx)
+	defer wal.Close(ctx)
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(871, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao := db.NewPlayerDao()
+	dao.SetId(id)
+	acknowledged := false
+	_, err = nest.RunIsolatedTransaction(ctx, projector, "cellworld_death", func() (any, error) {
+		dao.SetCellDeathReceipts(781, 9)
+		dao.GetWallet().SetCoins(17)
+		partition.WriteBase(dao, cellworld.BaseState{Entry: 3, HP: 0, Recovery: cellworld.RecoveryState{Revision: 1, Effects: []cellworld.TimedEffect{{Key: "shield", Stacks: 2, Value: 7, ExpiresAt: 2000000000000}}, Cooldowns: []cellworld.Cooldown{{Key: "dash", ReadyAt: 2000000000001}}}}, 123)
+		nest.CurrentRollbackTx().AfterCommit(func() { acknowledged = wal.Stats().Appended == 1 && wal.Stats().Syncs > 0 })
+		return nil, nil
+	})
+	if err != nil || !acknowledged {
+		t.Fatalf("commit=%v acknowledged=%v", err, acknowledged)
+	}
+	if err := projector.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := nestwal.Open(nestwal.DefaultOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close(ctx)
+	records := 0
+	err = reopened.Replay(ctx, func(_ nest.CommitFence, record nest.CommitRecord) error {
+		records++
+		if record.Durability != dataengine.DurabilityStrict || len(record.Mutations) != 1 {
+			return fmt.Errorf("unexpected commit: %+v", record)
+		}
+		mutation := record.Mutations[0]
+		if mutation.Kind != dataengine.MutationPut {
+			return fmt.Errorf("first write is not a full image")
+		}
+		restored := db.NewPlayerDao()
+		restored.SetId(id)
+		if err := restored.RestorePersisted(mutation.Data, mutation.Schema, mutation.NextVersion); err != nil {
+			return err
+		}
+		life, ok := restored.GetCellDeathReceipts(781)
+		recovered := partition.ReadBase(restored, 123)
+		if !ok || life != 9 || restored.GetWallet().GetCoins() != 17 || recovered.Entry != 3 || len(recovered.Recovery.Effects) != 1 || len(recovered.Recovery.Cooldowns) != 1 {
+			return fmt.Errorf("incomplete recovered death transaction")
+		}
+		return nil
+	})
+	if err != nil || records != 1 {
+		t.Fatalf("replay records=%d err=%v", records, err)
+	}
+}
+
+// 本用例特意停在 WAL 恢复边界，不能将它记成 Mongo 落库验收。
+type unusedProjection struct{}
+
+func (unusedProjection) Project(context.Context, dataengine.CommitRecord) error {
+	return errors.New("projection was not requested")
 }

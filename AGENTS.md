@@ -4,6 +4,8 @@
 
 DAO / 嵌套类型的每个生成字段必须显式声明稳定 `store` 键（推荐数字短键）；`dao:"-"` 排除字段例外，nocoll / nopersist 仍需声明。定义不写 `bson`，它仅由生成物用于编码。变更 store 必须检查生成期 WARN，并按 [tag 手册](codegen/docs/TAGS.zh-CN.md) 处理 schema / 数据 / 字符串字段消费者；不得为绕过告警删除生成基线或隐式重编号。
 
+DAO 字段的 `persist` 和 `sync` 分别默认开启，写 `map=...` 或只写一个正向标记不会关闭另一项。私有字段显式 `nosync`，临时字段显式 `nopersist`，两项都不需要时用 `nopersist,nosync`；只写 `persist` 不表示私有。旧定义升级时按 tag 手册逐项复核，不能让内部账本意外进入客户端同步。
+
 业务代码修改应补必要中文契约注释、按影响范围测试、更新对应现行文档。文档补丁不得混入行为重构。不等待GitHub CI，不能把未运行检查记成通过。
 
 ## 游戏接入 skill

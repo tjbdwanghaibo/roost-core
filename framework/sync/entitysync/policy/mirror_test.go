@@ -283,6 +283,43 @@ func TestMirrorExpiresObjectsNotHeardFrom(t *testing.T) {
 	}
 }
 
+func TestMirrorTouchOnlyKeepsCurrentLiveVersion(t *testing.T) {
+	h := newMirrorHarness(t, false)
+	start := time.Unix(1000, 0)
+	ver := MirrorVersion{Epoch: 2, Seq: 3}
+	h.apply(500, ver, mirrorNear, "same", 0, start)
+	h.expectOps("create:500:full:same")
+	if !h.mirrors.Touch(500, ver, start.Add(900*time.Millisecond)) {
+		t.Fatal("matching live version did not renew")
+	}
+	h.mirrors.Touch(500, ver, start) // 迟到的时间戳不能缩短已确认的存活窗口。
+	if n := h.mirrors.Expire(start.Add(1500 * time.Millisecond)); n != 0 {
+		t.Fatalf("renewed mirror expired: %d", n)
+	}
+	h.expectOps()
+	for _, stale := range []MirrorVersion{{Epoch: 1, Seq: 99}, {Epoch: 2, Seq: 2}, {Epoch: 2, Seq: 4}} {
+		if h.mirrors.Touch(500, stale, start.Add(1800*time.Millisecond)) {
+			t.Fatalf("different version renewed: %v", stale)
+		}
+	}
+	if n := h.mirrors.Expire(start.Add(2 * time.Second)); n != 1 {
+		t.Fatalf("silent mirror did not expire: %d", n)
+	}
+	if h.mirrors.Touch(500, ver, start.Add(3*time.Second)) {
+		t.Fatal("heartbeat recreated expired mirror")
+	}
+	h.apply(501, ver, mirrorNear, "removed", 0, start)
+	h.mirrors.Remove(501, ver, start)
+	if h.mirrors.Touch(501, ver, start.Add(time.Second)) {
+		t.Fatal("heartbeat recreated removed mirror")
+	}
+	h.apply(502, ver, mirrorNear, "closed", 0, start)
+	h.mirrors.Close()
+	if h.mirrors.Touch(502, ver, start.Add(time.Second)) {
+		t.Fatal("closed mirror renewed")
+	}
+}
+
 // 位置：mirror 走出观察者的视野半径时客户端收到 remove，走回来时重新 create（AOI 按 mirror 的位置判定）。
 func TestMirrorPositionDrivesVisibility(t *testing.T) {
 	h := newMirrorHarness(t, false)

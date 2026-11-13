@@ -84,7 +84,7 @@ needs:
 entity: Player                      # 状态与组件挂在哪个实体上
 state:                              # 追加到该实体主 DAO 末尾的字段
   - {field: Wallet,       type: WalletState,  store: wallet,        dao: "persist,sync"}
-  - {field: WalletLedger, type: WalletLedger, store: wallet_ledger, dao: "persist"}
+  - {field: WalletLedger, type: WalletLedger, store: wallet_ledger, dao: "nosync"}
 component: Wallet                   # 挂在 entity 上的组件；组件号安装时分配
 protocols: [WalletSpend]            # 模板里 {{ID:protocol:<name>}} 的名字；号安装时分配
 errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_overflow]
@@ -109,7 +109,7 @@ verify: {packages: [./game/handler], run: '^TestWallet', pass: 8}
 
 - 模块自带一个嵌套类型文件（`db/def/<module>.go`）。安装时只往实体主 DAO 的**末尾**追加一到两行字段，字段名带模块名，存储键显式声明。
 - **为什么是嵌套结构体**：嵌套结构体的子字段变化已按路径打成同步补丁并按路径增量落库（[DAO 同步](../framework/DAO-SYNC-PROTOBUF.md)、[递归增量持久化](../framework/DATAENGINE-INCREMENTAL-PERSISTENCE.md)），不需要改框架；默认的自身视图打包照常工作；玩家仍是一份文档。
-- **同步与否按顶层字段决定**：`dao:"persist"` 只落库，`dao:"persist,sync"` 落库并下发。视图白名单（本人 / 附近 / 远处）也按顶层字段（`framework/entity/sync_view.go`）。所以既有客户端可见状态、又有服务端账本的模块，拆成两个结构体。嵌套类型内部的字段只声明存储键、没有单独的同步声明（推断：依据 demo 的 `Equipment` 写法与 `codegen/internal/dao/parse.go` 对嵌套类型的解析，未逐分支验证）。
+- **同步与否按顶层字段决定**：`dao:"nosync"` 只落库，`dao:"persist,sync"` 落库并下发。视图白名单（本人 / 附近 / 远处）也按顶层字段（`framework/entity/sync_view.go`）。所以既有客户端可见状态、又有服务端账本的模块，拆成两个结构体。嵌套类型内部的字段只声明存储键、没有单独的同步声明（推断：依据 demo 的 `Equipment` 写法与 `codegen/internal/dao/parse.go` 对嵌套类型的解析，未逐分支验证）。
 - **追加在末尾**：同步的 PB 字段号按定义顺序排，插在中间会让后面的字段号移位。
 - **字段数上限**：同步脏位是 64 位掩码，每个顶层字段占一位（`codegen/internal/dao/template_dao.go` 的 `1 << iota`），一个 DAO 最多 64 个顶层字段（推断，没有实际生成第 65 个验证）。每个模块只占一到两位。
 - **共用的预算**：一个 DAO 的全部模块共用一份文档、一个 schema 版本和一份变化记录预算（每 DAO 4096 个变化节点，超出后收敛为整体替换）。
@@ -250,7 +250,7 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 
 | 核对 | 做法 | 本文的预期 |
 | --- | --- | --- |
-| 嵌套结构体的同步粒度 | 主 DAO 加 `A AState` 标 `persist,sync`、`B BLedger` 标 `persist`；改 `A` 的一个子字段、改 `B` 的一个子字段，看生成的 `MarshalSyncChanges` 与默认自身视图打包的输出 | 只有 `A` 的那个子字段进同步补丁；`B` 的变化不下发；两者都按路径进持久变化 |
+| 嵌套结构体的同步粒度 | 主 DAO 加 `A AState` 标 `persist,sync`、`B BLedger` 标 `nosync`；改 `A` 的一个子字段、改 `B` 的一个子字段，看生成的 `MarshalSyncChanges` 与默认自身视图打包的输出 | 只有 `A` 的那个子字段进同步补丁；`B` 的变化不下发；两者都按路径进持久变化 |
 | 嵌套类型内部能否单独声明不同步 | 给嵌套类型的字段写 `dao:"nosync"` 一类标签，看生成器是否接受、是否生效 | 不支持（所以才要求拆成两个结构体）。如果支持，第 2.4 节改为“可以用一个结构体” |
 | 顶层字段数上限 | 生成一个有 65 个顶层字段的 DAO | 生成或编译失败。把实际的报错文本记下来；报错不清楚时，在 `codegen/internal/dao` 的解析阶段加一条明确的拒绝（这是生成器改动，可以做） |
 
@@ -503,7 +503,7 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 
 | 核对 | 结果 |
 | --- | --- |
-| 嵌套结构体的同步粒度 | 符合预期。`dao:"persist,sync"` 的结构体进同步字段表，`dao:"persist"` 的不进；改子字段时同步补丁是子字段补丁（不是整体替换），持久补丁按路径。回归 `TestTenModuleStructsUnderOneDAO`、模块 wallet 的 `TestWalletOnlyTheVisibleStateIsSynced` |
+| 嵌套结构体的同步粒度 | 符合预期。`dao:"persist,sync"` 的结构体进同步字段表，`dao:"nosync"` 的不进；改子字段时同步补丁是子字段补丁（不是整体替换），持久补丁按路径。回归 `TestTenModuleStructsUnderOneDAO`、模块 wallet 的 `TestWalletOnlyTheVisibleStateIsSynced` |
 | 嵌套类型内部能否单独声明不同步 | 不能按 `persist,nosync` 用：写在嵌套字段上生成器接受，但这个字段照样出现在同步补丁的 PB 里（在临时工程上实测）。`nopersist,nosync` 的嵌套字段另有既有用例（`codegen/internal/dao/testdata/remoteviews`），语义没有逐项核对。所以维持第 2.4 节的规则：同步与否按顶层字段决定，要拆就拆成两个结构体。这条登记在 KNOWN-LIMITS“尚未确认” |
 | 顶层字段数上限 | 属实，且报错不清楚：65 个字段时生成成功、生成物编译失败（`constant overflows uint64`）。已改为解析阶段拒绝并说明（`TestDaoWithMoreThan64FieldsIsRefused`） |
 

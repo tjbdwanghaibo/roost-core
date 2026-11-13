@@ -1,6 +1,7 @@
 package cellworld
 
 import (
+	"crypto/rand"
 	"time"
 
 	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -19,6 +20,10 @@ const (
 	RoleFrozen Role = 2
 	// RoleGone：已交出（或放弃、离场），实体等待销毁；什么都不做。
 	RoleGone Role = 3
+	// RolePending 已预留容量，正在锁外确认授权；不移动、不受伤、不出现在视野里。
+	RolePending Role = 4
+	// Dying 已停止模拟，等持久死亡事实；未确认前不对外报告结算成功。
+	RoleDying Role = 5
 )
 
 func (r Role) String() string {
@@ -29,12 +34,17 @@ func (r Role) String() string {
 		return "frozen"
 	case RoleGone:
 		return "gone"
+	case RolePending:
+		return "pending"
+	case RoleDying:
+		return "dying"
 	}
 	return "none"
 }
 
 // HandoffState 是冻结中的交接：目标格、epoch、开始与上次发送的系统时间（UnixNano）。
 type HandoffState struct {
+	ID        string `msgpack:"id"`
 	Target    CellID `msgpack:"t"`
 	Epoch     uint64 `msgpack:"e"`
 	StartedAt int64  `msgpack:"s"`
@@ -45,7 +55,16 @@ type HandoffState struct {
 // 它整份存在 SceneActor / Monster 的 DAO 里（nopersist），事务内改、回滚即还原，交接时整份带走（Offer）。
 // 值语义：Handoff 与 Applied 一旦写进 DAO 就不再原地修改，改动一律换新的指针 / 切片（DAO 的回滚前像可能引用旧的）。
 type ActorState struct {
+	SpawnGeneration uint64 `msgpack:"sg,omitempty"`
 	EntityState
+	Recovery    RecoveryState `msgpack:"rc"`
+	Death       *DeathFact    `msgpack:"df,omitempty"`
+	DeathAcked  bool          `msgpack:"da,omitempty"`
+	DeathNextAt int64         `msgpack:"dt,omitempty"`
+	// Grant 是已取得的共享写授权；Pending 只在等待初次入场 / 接受交接时非空。
+	Grant      OwnerGrant    `msgpack:"og"`
+	Pending    *PendingOwner `msgpack:"op,omitempty"`
+	CloseEntry bool          `msgpack:"ce,omitempty"`
 	Role       Role          `msgpack:"r"`
 	LastInput  uint64        `msgpack:"in,omitempty"`
 	Applied    []AppliedHit  `msgpack:"a,omitempty"`
@@ -82,9 +101,10 @@ type Actor interface {
 
 // actorEffects 是一拍 / 一个 handler 对一个角色产生的、要在提交之后做的事。
 type actorEffects struct {
-	sends   []outgoing
-	report  *ActorReport
-	destroy bool
+	hooks  []func()
+	sends  []outgoing
+	report *ActorReport
+	owners []ownerWork
 }
 
 // ActorReport 是角色在提交之后告诉所在格区域（Region，Scene 实体上）的事实：最新状态与身份。角色的心跳不能锁 Scene
@@ -105,7 +125,24 @@ func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) a
 	var fx actorEffects
 	nowNano := now.UnixNano()
 	switch st.Role {
+	case RolePending, RoleGone, RoleDying:
+		fx.owners = append(fx.owners, n.ownerWork(*st))
+		return fx
 	case RoleReal:
+		beforeState, beforeRecovery := st.EntityState, st.Recovery.Revision
+		beforeEffects, beforeCooldowns := len(st.Recovery.Effects), len(st.Recovery.Cooldowns)
+		st.Recovery = st.Recovery.At(now)
+		if st.Death != nil {
+			if st.Kind == KindPlayer && nowNano > st.LeaseUntil {
+				st.CloseEntry = true
+			}
+			if nowNano >= st.DeathNextAt {
+				st.DeathNextAt = now.Add(n.cfg.DeathRetry).UnixNano()
+				fx.owners = append(fx.owners, ownerWork{kind: ownerDeathWork, state: *st})
+			}
+			fx.report = &ActorReport{State: st.EntityState, Role: st.Role}
+			return fx
+		}
 		if st.Kind == KindPlayer && st.LeaseUntil != 0 && nowNano > st.LeaseUntil {
 			// Base 消失（进程崩溃或网络隔离）：不再等它，离场。最后一份状态回写给 Base（它若还在会收下）。
 			n.leave(st, &fx, nowNano)
@@ -115,10 +152,13 @@ func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) a
 		if n.advance(st, nowNano, elapsed, &fx) {
 			return fx
 		}
-		st.Ver.Seq++
+		// 心跳与内容版本不是一个时钟；静止对象只续活，不触发客户端全量重打包。
+		if st.EntityState != beforeState || st.Recovery.Revision != beforeRecovery || len(st.Recovery.Effects) != beforeEffects || len(st.Recovery.Cooldowns) != beforeCooldowns {
+			st.Ver.Seq++
+		}
 		if st.Kind == KindPlayer && st.Base != 0 && nowNano >= st.WritebackAt {
 			st.WritebackAt = nowNano + int64(n.cfg.WritebackEvery)
-			fx.sends = append(fx.sends, outgoing{sid: st.Base, msg: &wireMsg{Kind: kindWriteback, Writeback: &writebackMsg{State: st.EntityState}}})
+			fx.sends = append(fx.sends, outgoing{sid: st.Base, msg: &wireMsg{Kind: kindWriteback, Writeback: &writebackMsg{State: st.EntityState, Recovery: st.Recovery}}})
 		}
 	case RoleFrozen:
 		p := st.Handoff
@@ -129,10 +169,11 @@ func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) a
 				fx.sends = append(fx.sends, outgoing{sid: st.Base, msg: &wireMsg{Kind: kindLost, Lost: &lostNotice{State: st.EntityState}}})
 			}
 			st.Role, st.Handoff = RoleGone, nil
-			fx.destroy = true
+			fx.owners = append(fx.owners, n.ownerWork(*st))
 			fx.report = &ActorReport{State: st.EntityState, Role: RoleGone, Removed: true, Tomb: true, Handoff: p}
 			if n.cfg.Hooks.HandoffAborted != nil {
-				n.cfg.Hooks.HandoffAborted(n.cell, st.ID, p.Epoch)
+				id, epoch := st.ID, p.Epoch
+				fx.hooks = append(fx.hooks, func() { n.cfg.Hooks.HandoffAborted(n.cell, id, epoch) })
 			}
 			return fx
 		}
@@ -142,7 +183,7 @@ func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) a
 			next.LastSent = nowNano
 			st.Handoff = &next
 			n.stats.offerRetransmits.Add(1)
-			fx.sends = append(fx.sends, n.offerTo(st))
+			fx.owners = append(fx.owners, n.ownerWork(*st))
 		}
 		return fx
 	default:
@@ -157,29 +198,50 @@ func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) a
 func (n *Node) freeze(st *ActorState, target CellID, nowNano int64, fx *actorEffects) {
 	st.Ver = Version{Epoch: st.Ver.Epoch + 1, Seq: st.Ver.Seq + 1}
 	st.Role = RoleFrozen
-	st.Handoff = &HandoffState{Target: target, Epoch: st.Ver.Epoch, StartedAt: nowNano, LastSent: nowNano}
+	st.Handoff = &HandoffState{ID: rand.Text(), Target: target, Epoch: st.Ver.Epoch, StartedAt: nowNano, LastSent: nowNano}
 	st.Applied = pruneApplied(st.Applied, nowNano, n.cfg.DedupWindow)
 	n.stats.handoffsStarted.Add(1)
-	fx.sends = append(fx.sends, n.offerTo(st))
+	fx.owners = append(fx.owners, n.ownerWork(*st))
 	h := *st.Handoff
 	fx.report = &ActorReport{State: st.EntityState, Role: RoleFrozen, Handoff: &h}
 }
 
 func (n *Node) offerTo(st *ActorState) outgoing {
 	return outgoing{sid: n.cfg.Grid.SID(st.Handoff.Target), msg: &wireMsg{Kind: kindOffer, Offer: &handoffOffer{
-		State: st.EntityState, From: n.cell, LastInput: st.LastInput, Applied: append([]AppliedHit(nil), st.Applied...), Entry: st.Entry,
-		FracX: st.FracX, FracY: st.FracY,
+		State: st.EntityState, From: n.cell, Grant: st.Grant, Transfer: n.ownerTransfer(*st), LastInput: st.LastInput, Applied: transferApplied(st.Applied, st.Handoff.LastSent, n.cfg.DedupWindow), Entry: st.Entry,
+		FracX: st.FracX, FracY: st.FracY, Recovery: st.Recovery, SpawnGeneration: st.SpawnGeneration,
 	}}}
+}
+
+func transferApplied(applied []AppliedHit, now int64, window time.Duration) []transferredHit {
+	out := make([]transferredHit, 0, len(applied))
+	for _, a := range applied {
+		remaining := int64(window) - max(0, now-a.At)
+		if remaining > 0 {
+			out = append(out, transferredHit{Hit: a.Hit, Remaining: remaining})
+		}
+	}
+	return out
+}
+
+func restoreApplied(applied []transferredHit, now int64, window time.Duration) []AppliedHit {
+	out := make([]AppliedHit, 0, len(applied))
+	for _, a := range applied {
+		if a.Remaining > 0 {
+			out = append(out, AppliedHit{Hit: a.Hit, At: now - int64(window) + min(a.Remaining, int64(window))})
+		}
+	}
+	return out
 }
 
 // leave 让 Real 离场（Base 的 Leave、租约到期）：最后一份状态回写给 Base，邻格的 Ghost 随删除消息消失。
 func (n *Node) leave(st *ActorState, fx *actorEffects, nowNano int64) {
 	if st.Kind == KindPlayer && st.Base != 0 {
-		fx.sends = append(fx.sends, outgoing{sid: st.Base, msg: &wireMsg{Kind: kindWriteback, Writeback: &writebackMsg{State: st.EntityState}}})
+		fx.sends = append(fx.sends, outgoing{sid: st.Base, msg: &wireMsg{Kind: kindWriteback, Writeback: &writebackMsg{State: st.EntityState, Recovery: st.Recovery}}})
 	}
 	st.Ver.Seq++
 	st.Role = RoleGone
-	fx.destroy = true
+	fx.owners = append(fx.owners, n.ownerWork(*st))
 	fx.report = &ActorReport{State: st.EntityState, Role: RoleGone, Removed: true, Tomb: true}
 }
 

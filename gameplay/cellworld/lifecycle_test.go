@@ -18,6 +18,89 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
+// 入场身份必须来自持久计数；测试替身只省掉与此无关的心跳启动。
+type entryPlayer struct{ *testPlayer }
+
+func (*entryPlayer) StartBase() error { return nil }
+
+func TestEntryAdvancesPersistedCounterWithoutWallClock(t *testing.T) {
+	p := &entryPlayer{testPlayer: &testPlayer{dao: &undoCell[BaseState]{v: BaseState{Entry: 7}}}}
+	n := &Node{cfg: NodeConfig{Grid: worldGrid(t, 1, 1)}, out: make(chan job, 4)}
+	_, err := n.handleBaseCmd([]fentity.IThreadSafeEntity{p}, []any{baseCmd{kind: cmdEnter, actor: actorID(1), pos: spatial.Point{X: 100, Y: 100}, hp: 100}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.BaseState().Entry; got != 8 {
+		t.Fatalf("entry = %d, want persisted counter 8 independent of the wall clock", got)
+	}
+}
+
+func TestAttackIdentitySurvivesResetSequence(t *testing.T) {
+	state := BaseState{Actor: actorID(1), InWorld: true, Cell: 101, Entry: 1}
+	attack := func() HitID {
+		p := &entryPlayer{testPlayer: &testPlayer{dao: &undoCell[BaseState]{v: state}}}
+		n := &Node{out: make(chan job, 1)}
+		got, err := n.handleBaseCmd([]fentity.IThreadSafeEntity{p}, []any{baseCmd{kind: cmdAttack, target: npcID(1), amount: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.(HitID)
+	}
+	if first, second := attack(), attack(); first == second {
+		t.Fatalf("recreated Base reused attack identity: %+v", first)
+	}
+}
+
+func TestOldInputCannotRenewOrMoveANewEntry(t *testing.T) {
+	n := &Node{cfg: NodeConfig{LeaseTimeout: time.Second, MaxSpeed: 2000}}
+	st := ActorState{EntityState: EntityState{ID: actorID(1), Kind: KindPlayer, Base: 1001}, Role: RoleReal, Entry: 2, LeaseUntil: 100, LastInput: 0}
+	a := &plainActor{EntityBase: fentity.NewEntityBase(st.ID, fentity.EntityCategoryOther, true, kindTActor), st: st}
+	old := BaseState{Actor: st.ID, Entry: 1, IntentSeq: 100, VX: 20}
+	m := n.inputMsg(&old, time.Now())
+	m.From = st.Base
+	if _, err := n.handleInput([]fentity.IThreadSafeEntity{a}, []any{m}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a.st, st) {
+		t.Fatalf("old entry's input changed new actor: %+v", a.st)
+	}
+	current := old
+	current.Entry = st.Entry
+	m = n.inputMsg(&current, time.Now())
+	m.From = st.Base
+	if _, err := n.handleInput([]fentity.IThreadSafeEntity{a}, []any{m}); err != nil {
+		t.Fatal(err)
+	}
+	if a.st.VX != 20 || a.st.LastInput != 100 || a.st.LeaseUntil <= st.LeaseUntil {
+		t.Fatalf("current entry input was not applied: %+v", a.st)
+	}
+}
+
+func TestOldEnterCannotRenewOrRebindAReal(t *testing.T) {
+	n := plainNode(t, worldGrid(t, 1, 1), CellID{0, 0}, map[int64]*plainActor{})
+	st := ActorState{EntityState: EntityState{ID: actorID(1), Kind: KindPlayer, Base: 1001}, Role: RoleReal, Entry: 2, LeaseUntil: 100}
+	claimPlain(t, n, &st)
+	a := &plainActor{EntityBase: fentity.NewEntityBase(st.ID, fentity.EntityCategoryOther, true, kindTActor), st: st}
+	for _, req := range []struct {
+		from  int32
+		entry uint64
+	}{{1001, 1}, {1002, 3}} {
+		if err := n.onEnter(NewRegion(), a, req.from, &enterReq{State: st.EntityState, Entry: req.entry}, time.Now(), &txEffects{}); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(a.st, st) {
+			t.Fatalf("stale or foreign Enter changed Real: %+v", a.st)
+		}
+	}
+	if err := n.onEnter(NewRegion(), a, st.Base, &enterReq{State: st.EntityState, Entry: 3}, time.Now(), &txEffects{}); err != nil {
+		t.Fatal(err)
+	}
+	resolvePlain(t, n, NewRegion(), a)
+	if a.st.Entry != 3 || a.st.LeaseUntil <= st.LeaseUntil {
+		t.Fatalf("current Base cannot enter: %+v", a.st)
+	}
+}
+
 // v2 新增的生命周期：Cell 崩溃后玩家重进按 Player 快照重建；Base 消失后 SceneActor 按租约离场；回写按版本幂等；
 // 交接事务回滚不移交。
 
@@ -347,6 +430,8 @@ func TestHandlersBindToExactlyOneNode(t *testing.T) {
 		Destroy: func(context.Context, fentity.IThreadSafeEntity) error { return nil },
 		Cell:    &CellID{}, Scene: mustID(t, 1, kindTScene), ViewRadius: 50,
 		CreateActor: func(int64, EntityKind) (Actor, error) { return nil, errors.New("unused") }}
+	retire := attachTestOwners(t, grid, &cfg)
+	defer retire()
 	if _, err := NewNode(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -448,5 +533,49 @@ func TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight(t *testing.T) 
 	}
 	if err := p.node.CloseIngress(context.Background()); err != nil {
 		t.Fatalf("a second CloseIngress = %v, want nil (idempotent)", err)
+	}
+}
+
+func TestUncommittedWitnessDoesNotPublishMirrors(t *testing.T) {
+	spec, _ := loopbackSpec(t, 1, 1)
+	w := startWorld(t, spec)
+	n := w.base.node
+	actor := actorID(7881)
+	st := BaseState{Actor: actor, InWorld: true, Cell: w.cells[CellID{0, 0}].sid, Epoch: 1}
+	view := &witnessMsg{Observer: actor, Epoch: 1, Self: EntityState{ID: actor, Kind: KindPlayer, X: 5000, Y: 5000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}}
+	_, err := nest.RunDetachedTransaction(context.Background(), nullCommitter{}, "rejected witness", func() (any, error) {
+		fx := &txEffects{}
+		n.onWitness(&st, st.Cell, 0, view, time.Now(), fx)
+		n.registerCommit(fx)
+		return nil, errors.New("reject before commit")
+	})
+	if err == nil {
+		t.Fatal("expected rollback")
+	}
+	if _, _, ok := n.cfg.Mirrors.Get(actor); ok {
+		t.Fatal("uncommitted witness escaped through mirror")
+	}
+}
+
+// 静止内容不推进版本，但每份已接受的视野仍证明对象存活，不能在 TTL 后被反复删除重建。
+func TestUnchangedWitnessKeepsMirrorAliveWithoutDirtying(t *testing.T) {
+	spec, _ := loopbackSpec(t, 1, 1)
+	w := startWorld(t, spec)
+	n := w.base.node
+	actor := actorID(7882)
+	st := BaseState{Actor: actor, InWorld: true, Cell: w.cells[CellID{}].sid, Epoch: 1}
+	view := &witnessMsg{Observer: actor, Epoch: 1, Self: EntityState{ID: actor, Kind: KindPlayer, X: 5000, Y: 5000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}}
+	start := time.Now()
+	for i := range 100 {
+		n.feedMirrors(&st, view, start.Add(time.Duration(i)*50*time.Millisecond))
+		if _, _, ok := n.cfg.Mirrors.Get(actor); !ok {
+			t.Fatalf("live static mirror expired at beat %d", i)
+		}
+	}
+	if stats := n.cfg.Mirrors.Stats(); stats.Created != 1 || stats.Updated != 0 || stats.Expired != 0 {
+		t.Fatalf("static witness dirtied or recreated mirror: %+v", stats)
+	}
+	if got := n.cfg.Mirrors.Expire(start.Add(7 * time.Second)); got != 1 {
+		t.Fatalf("silent mirror did not expire: %d", got)
 	}
 }

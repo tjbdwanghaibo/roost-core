@@ -21,6 +21,15 @@ package dbdef
 //
 //roost:dao nocoll
 type MonsterDao struct {
+	// Buff / 冷却的恢复快照：玩家持久，空间代理临时；不传内部账本给客户端。
+	CellSpawnGeneration uint64        `dao:"nopersist,nosync" store:"cell_spawn_generation"`
+	CellLife            uint64        `dao:"nopersist,nosync" store:"cell_life"`
+	CellDeath           *CellDeath    `dao:"nopersist,nosync" store:"cell_death"`
+	CellDeathAcked      bool          `dao:"nopersist,nosync" store:"cell_death_acked"`
+	CellDeathNextAt     int64         `dao:"nopersist,nosync" store:"cell_death_next"`
+	CellRecovery        *CellRecovery `dao:"nopersist,nosync" store:"cell_recovery"`
+	// 共享授权及锁外 I/O 的本地续行身份；经 DAO setter 回滚。
+	CellOwnership *CellOwnership `dao:"nopersist,nosync" store:"cell_ownership"`
 	// Template is which row of the spawn table this monster came from; a
 	// client needs it to know what to draw.
 	Template int32 `dao:"nopersist,sync" store:"template"`
@@ -78,14 +87,73 @@ type MonsterDao struct {
 type CellHit struct {
 	Attacker int64  `store:"attacker"`
 	Seq      uint64 `store:"seq"`
+	ID       string `store:"id"`
 	At       int64  `store:"at"`
 }
 
 // CellHandoff 是冻结中的交接（cellworld.HandoffState）。时间是系统时间 UnixNano。
 type CellHandoff struct {
+	ID        string `store:"id"`
 	Col       int32  `store:"col"`
 	Row       int32  `store:"row"`
 	Epoch     uint64 `store:"epoch"`
 	StartedAt int64  `store:"started_at"`
 	LastSent  int64  `store:"last_sent"`
+}
+
+// CellOwnership 对应 cellworld 的授权与待确认操作，不传给客户端。
+type CellOwnership struct {
+	ID             string `store:"id"`
+	Epoch          uint64 `store:"epoch"`
+	SID            int32  `store:"sid"`
+	Incarnation    string `store:"incarnation"`
+	CloseEntry     bool   `store:"closed"`
+	PendingToken   string `store:"pending"`
+	TransferID     string `store:"transfer"`
+	TransferTarget int32  `store:"target"`
+	TransferEpoch  uint64 `store:"transfer_epoch"`
+}
+
+// CellRecovery 是限时状态的可恢复表示；绝对 UTC 毫秒截止在停机期间照常流逝。
+type CellRecovery struct {
+	Revision  uint64         `store:"v"`
+	Effects   []CellEffect   `store:"e"`
+	Cooldowns []CellCooldown `store:"c"`
+}
+type CellEffect struct {
+	Key       string `store:"k"`
+	Stacks    int32  `store:"s"`
+	Value     int64  `store:"v"`
+	ExpiresAt int64  `store:"e"`
+}
+type CellCooldown struct {
+	Key     string `store:"k"`
+	ReadyAt int64  `store:"r"`
+}
+
+// CellDeath 是尚在完成持久死亡 / 奖励确认的临时代理状态。权威事实在共享 OwnerRegistry。
+type CellDeath struct {
+	ID         string `store:"1"`
+	Target     int64  `store:"2"`
+	Life       uint64 `store:"3"`
+	Attacker   int64  `store:"4"`
+	Sequence   uint64 `store:"5"`
+	HitID      string `store:"6"`
+	RewardBase int32  `store:"7"`
+	ReplySID   int32  `store:"8"`
+	Damage     int32  `store:"9"`
+	At         int64  `store:"10"`
+	Kind       int32  `store:"11"`
+	Base       int32  `store:"12"`
+	X          int64  `store:"13"`
+	Y          int64  `store:"14"`
+	VX         int64  `store:"15"`
+	VY         int64  `store:"16"`
+	Epoch      uint64 `store:"17"`
+	StateSeq   uint64 `store:"18"`
+	Idle       bool   `store:"19"`
+	MaxHP      int32  `store:"20"`
+	Attack     int32  `store:"21"`
+	Power      int32  `store:"22"`
+	PanelVer   uint64 `store:"23"`
 }

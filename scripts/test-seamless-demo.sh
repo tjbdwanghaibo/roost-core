@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 分区场景（scene.partition，原型，分支 feat/seamless-world-prototype）在生成 game-demo 上的多进程端到端演练。
+# CellWorld: generated game-demo acceptance with private dependencies and real clients.
 #
 # 生成工程（-template game-demo，当前检出），十一个 demo 进程（九个托管服务、alliance 与 sid 1000 的 game）之外再起四个 game：
 #   sid 1000：分区场景的 Base（不托管格），p1、p2 的连接在这里；
@@ -22,7 +22,18 @@
 # 1002（格 B）、1004（只做 Base），不起普通场景 sid 1003、不跑它的机器人。不设（缺省）时是原来的演练，行为不变。
 # ROOST_SEAMLESS_PROJECT_HOOK：生成工程之后、编译之前在工程目录里执行的一条 shell 命令（变异验证用：例如删掉装地面
 # 钩子的那一行，确认演练会变红）。
+# Optional Robot load after the fault drill: ROOST_SEAMLESS_ROBOTS=1000,
+# ROOST_SEAMLESS_ROBOT_SECONDS=900, ROOST_SEAMLESS_ROBOT_ACTIVE=5.
+# ROOST_SEAMLESS_ROBOT_ONLY=1 skips the fault drill; useful for isolated capacity measurements.
+# ROOST_SEAMLESS_CAPACITY=1 installs 9000 NPCs and enables a 30s Robot spread warmup; requires ROBOT_ONLY=1.
 set -euo pipefail
+# Portable in-place sed: macOS and Linux use different -i spellings.
+edit_file() {
+ local target="${@: -1}"
+ local temporary="$target.edit-tmp"
+ sed "${@:1:$#-1}" "$target" >"$temporary"
+ mv "$temporary" "$target"
+}
 : "${ROOST_DATAENGINE_IT_MONGO_URI:?private Mongo replica-set URI required}"
 : "${ROOST_DATAENGINE_IT_NATS_URL:?private NATS required}"
 : "${ROOST_DATAENGINE_IT_REDIS_ADDR:?private Redis required}"
@@ -36,6 +47,12 @@ mkdir -p "$out"
 export GOWORK=off
 nats_url="${ROOST_DATAENGINE_IT_NATS_URL%%,*}"
 terrain="${ROOST_SEAMLESS_TERRAIN:-0}"
+capacity="${ROOST_SEAMLESS_CAPACITY:-0}"
+world="cwdemo-$$"
+if [[ "$capacity" == 1 && ( "$terrain" == 1 || "${ROOST_SEAMLESS_ROBOT_ONLY:-0}" != 1 ) ]]; then
+ echo "capacity mode requires ROBOT_ONLY=1 and no terrain drill" >&2
+ exit 2
+fi
 extra_sids="1001 1002 1003 1004"
 [[ "$terrain" == 1 ]] && extra_sids="1001 1002 1004"
 
@@ -48,8 +65,13 @@ for port in 7000 7001 7002 7003 7004 9000 9010 9100 9101 9102 9103 9104 9105 910
 done
 
 etcd_pid=""
+sampler_pid=""
 cleanup() {
 	set +e
+	if [[ -n "$sampler_pid" ]]; then
+		kill "$sampler_pid" 2>/dev/null
+		wait "$sampler_pid" 2>/dev/null
+	fi
 	if [[ "${ROOST_SEAMLESS_KEEP:-0}" == 1 ]]; then
 		echo "seamless: ROOST_SEAMLESS_KEEP=1, everything left running in $work_dir (etcd pid $etcd_pid); stop by hand" >&2
 		return
@@ -67,7 +89,8 @@ cleanup() {
 		mkdir -p "$out/logs"
 		cp -R .dev "$out/logs/dev" 2>/dev/null
 		cp -R log "$out/logs/log" 2>/dev/null
-		mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval 'for (const name of ["cwdemo", "cwdemo_saga", "cwdemo_remote"]) { db.getSiblingDB(name).dropDatabase() }' >/dev/null 2>&1
+		# v1.47 起本地实体（Player、World……）dbscope=sid，文档在 cwdemo_<sid>：按前缀删掉本次的全部库。
+		mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval 'for (const d of db.adminCommand({listDatabases: 1, nameOnly: true}).databases) { if (/^cwdemo(_|$)/.test(d.name)) db.getSiblingDB(d.name).dropDatabase() }' >/dev/null 2>&1
 	fi
 	[[ -n "$etcd_pid" ]] && kill "$etcd_pid" 2>/dev/null && wait "$etcd_pid" 2>/dev/null
 	cd /
@@ -87,7 +110,7 @@ cd "$repo_dir"
 go run ./codegen/cmd/roost project new cwdemo -module example.com/cwdemo -out "$project" -template game-demo --skip-deps >"$out/generate.log" 2>&1
 cd "$project"
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_dir"
-go mod tidy >/dev/null 2>&1 || true
+go mod tidy >"$out/tidy.log" 2>&1
 if [[ -n "${ROOST_SEAMLESS_PROJECT_HOOK:-}" ]]; then
 	echo "seamless: project hook: $ROOST_SEAMLESS_PROJECT_HOOK"
 	sh -c "$ROOST_SEAMLESS_PROJECT_HOOK"
@@ -103,7 +126,7 @@ go build -mod=mod -o "$work_dir/drill" "$work_dir/drillsrc/drill.go" "$work_dir/
 # 全部配置指向私有依赖；JetStream 流缩到 64MB；单实例锁缩短（kill -9 后的重启只等 ttl）。
 for f in configs/service/config.*.yaml; do
 	case "$f" in *.prod.example.yaml) continue ;; esac
-	sed -i '' \
+	edit_file \
 		-e "s#mongodb://127.0.0.1:27017/?replicaSet=rs0#$ROOST_DATAENGINE_IT_MONGO_URI#" \
 		-e "s#nats://127.0.0.1:4222#$nats_url#" \
 		-e "s#^  addr: 127.0.0.1:6379#  addr: $ROOST_DATAENGINE_IT_REDIS_ADDR#" \
@@ -112,7 +135,7 @@ for f in configs/service/config.*.yaml; do
 		-e 's#^  ttl: 15s#  ttl: 6s#' -e 's#^  renew_interval: 3s#  renew_interval: 1s#' \
 		-e 's#^  guard: 5s#  guard: 2s#' -e 's#^  startup_wait: 30s#  startup_wait: 10s#' "$f"
 done
-sed -i '' -E 's#game_sids: \[[0-9, ]*\]#game_sids: [1000, 1001, 1002, 1003, 1004]#' configs/activity_groups.yaml
+edit_file -E 's#game_sids: \[[0-9, ]*\]#game_sids: [1000, 1001, 1002, 1003, 1004]#' configs/activity_groups.yaml
 grep -q 'game_sids: \[1000, 1001, 1002, 1003, 1004\]' configs/activity_groups.yaml
 
 cp configs/service/config.game.yaml "$work_dir/config.game.ordinary.yaml"
@@ -177,6 +200,39 @@ scene:
       walker: {x: 1500, y: 1700, count: 1, vx: 150}
 YAML
 fi
+if [[ "$capacity" == 1 ]]; then
+ # Two 3000-square Cells, 90 rows of 100 NPCs. The active percentage applies to each row.
+ active="${ROOST_SEAMLESS_ROBOT_ACTIVE:-5}"
+ [[ "$active" -ge 1 && "$active" -le 100 ]] || { echo "active percentage must be in 1..100" >&2; exit 2; }
+ # Replace the drill's spawn section rather than adding duplicate YAML keys.
+ python3 - "$active" "${ROOST_SEAMLESS_ROBOTS:-0}" <<'PYCONFIG'
+from pathlib import Path
+import sys
+active=int(sys.argv[1])
+robots=int(sys.argv[2])
+if not 1<=robots<=10000: raise SystemExit('capacity robots must be in 1..10000')
+p=Path('configs/service/config.game.yaml')
+s=p.read_text()
+# All robots originate on this machine. Keep production admission defaults unchanged.
+s=s.replace('    max_connections_per_ip: 128',f'    max_connections_per_ip: {max(128,robots)}',1)
+start=s.index('    spawns:',s.index('  partition:'))
+s=s[:start].replace('    idle_period: 1s','    idle_period: 0s')+'    spawns:\n'
+for row in range(90):
+ # A coprime stride distributes exactly active/100 moving NPCs over both Cells.
+ moving=[(col*37+row*17)%100<active for col in range(100)]
+ start=0
+ while start<100:
+  end=start+1
+  while end<100 and moving[end]==moving[start]: end+=1
+  vx=(150 if row%2==0 else -150) if moving[start] else 0
+  s+=f'      load_{row:03d}_{start:03d}: {{x: {30+60*start}, y: {16+33*row}, count: {end-start}, spread: 60, vx: {vx}}}\n'
+  start=end
+p.write_text(s)
+PYCONFIG
+fi
+
+# Each run has its own durable ownership/birth namespace; restarts inside this run keep it.
+edit_file -e "s/^    world: cwdemo$/    world: $world/" configs/service/config.game.yaml
 
 derive() { # sid ops client advertise source
 	sed -e "s/^\(  *\)sid: .*/\1sid: $1/" -e "s/^sid: .*/sid: $1/" \
@@ -239,6 +295,7 @@ if [[ "$terrain" == 1 ]]; then
 	drill_mode=(-terrain)
 	endpoints=1000=127.0.0.1:7000,1001=127.0.0.1:7001,1002=127.0.0.1:7002,1004=127.0.0.1:7004
 fi
+if [[ "${ROOST_SEAMLESS_ROBOT_ONLY:-0}" != 1 ]]; then
 set +e
 "$work_dir/drill" ${drill_mode[@]+"${drill_mode[@]}"} -account-nats "$nats_url" -prefix cwdemo \
 	-endpoints "$endpoints" \
@@ -261,7 +318,7 @@ if [[ "$terrain" == 1 ]]; then
 	echo "seamless: all terrain steps passed; evidence in $out"
 	exit 0
 fi
-for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up monster_cross cell_crash base_restart team_panel team_roster_cross_base ordinary_scene; do
+for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up death_reward_respawn monster_cross cell_crash base_restart team_panel team_roster_cross_base ordinary_scene; do
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 done
 # 普通场景不回归：demo 自己的机器人（cmd/loadtest，完整链路）在没有分区配置的 sid 1003 上跑一轮。
@@ -274,5 +331,59 @@ if ! go run -mod=mod ./cmd/loadtest -endpoint 127.0.0.1:7003 -server-id 1003 -co
 	echo "seamless: the demo robots failed on the ordinary scene (sid 1003); see $out/loadtest-1003.log" >&2
 	tail -20 "$out/loadtest-1003.log" >&2
 	exit 1
+fi
+fi
+robots="${ROOST_SEAMLESS_ROBOTS:-0}"
+if [[ "$robots" -gt 0 ]]; then
+ seconds="${ROOST_SEAMLESS_ROBOT_SECONDS:-60}"
+ active="${ROOST_SEAMLESS_ROBOT_ACTIVE:-5}"
+ warmup=0s
+ radius=0
+ if [[ "$capacity" == 1 ]]; then warmup=30s; radius=150; fi
+ # Keep compilation outside the measurement. The two snapshots include actor counts and cumulative failures.
+ go build -mod=mod -o "$work_dir/loadtest" ./cmd/loadtest
+ snapshot() {
+  local phase="$1"
+  for port in 9100 9201 9202; do
+   curl -fsS --max-time 10 -H 'Content-Type: application/json' -H 'X-Admin-Token: dev-gm-token' \
+    -d '{"name":"gm.scene.partition"}' "http://127.0.0.1:$port/admin/execute" >"$out/partition-$port-$phase.json"
+   curl -fsS --max-time 10 "http://127.0.0.1:$port/metrics" >"$out/metrics-$port-$phase.txt"
+  done
+  python3 - "$out" "$phase" <<'PYSNAPSHOT'
+import json,sys
+from pathlib import Path
+for port in (9100,9201,9202):
+ p=Path(sys.argv[1])/f'partition-{port}-{sys.argv[2]}.json'
+ value=json.loads(p.read_text())
+ if not value.get('ok') or 'node' not in value.get('data',{}):
+  raise SystemExit(f'invalid partition snapshot: {p}')
+PYSNAPSHOT
+ }
+ snapshot before
+ python3 - "$out" <<'PYPIDS'
+import json,sys
+from pathlib import Path
+mapping={p.read_text().strip():p.stem for p in Path('.dev').glob('*.pid')}
+(Path(sys.argv[1])/'service-pids.json').write_text(json.dumps(mapping,indent=2)+'\n')
+PYPIDS
+ pids="$(cat .dev/*.pid | awk 'BEGIN{ORS=""} {if(NR>1)printf ","; printf "%s",$1}')"
+ (while :; do date +%s; ps -p "$pids" -o pid=,time=,rss=; sleep 1; done) >"$out/resources.txt" 2>&1 &
+ sampler_pid=$!
+ set +e
+ "$work_dir/loadtest" -scenario cellworld -endpoint 127.0.0.1:7000 -server-id 1000 \
+  -count "$robots" -account-nats "$nats_url" -nats-prefix cwdemo -ramp-step 20 -ramp-interval 100ms \
+  -cellworld-duration "${seconds}s" -cellworld-active "$active" -cellworld-warmup "$warmup" -cellworld-view-radius "$radius" -max-p95 "$((seconds + 120))" \
+  -report "$out/robot.json" >"$out/robot.log" 2>&1
+ robot_status=$?
+ set -e
+ kill "$sampler_pid" 2>/dev/null || true
+ wait "$sampler_pid" 2>/dev/null || true
+ sampler_pid=""
+ snapshot after
+ if [[ "$robot_status" != 0 ]]; then
+  echo "seamless: cellworld robots failed; see $out/robot.log" >&2
+  tail -10 "$out/robot.log" >&2
+  exit "$robot_status"
+ fi
 fi
 echo "seamless: all steps passed; evidence in $out"

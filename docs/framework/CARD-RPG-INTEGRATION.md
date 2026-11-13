@@ -51,7 +51,7 @@ ROOST_CARD_RPG_KEEP=1 bash scripts/test-card-rpg-generated.sh   # 保留生成�
 
 1. `roost project new card-rpg-practice -module example.com/card-rpg-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity CardRun`、`roost add dao CardRun --entity CardRun`、`roost add timer --entity CardRun`、`roost add attribute HeroStats`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"persist"` ``，在 `db/def/card_run.go` 加 `State` 与 ``TurnTimer int64 `store:"turn_timer" dao:"persist"` ``；把 `game/entities/card_run/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（Run 与 Player 一起锁，放在更低的锁档，锁序固定）；放入业务包 `game/cardrpg/`、属性声明 `game/gameplay/attribute/hero_stats.go`、定时回调 `game/entities/card_run/timer_handlers.go` 与 handler `game/handler/card_rpg.go`；
+3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"nosync"` ``，在 `db/def/card_run.go` 加 `State` 与 ``TurnTimer int64 `store:"turn_timer" dao:"nosync"` ``；把 `game/entities/card_run/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（Run 与 Player 一起锁，放在更低的锁档，锁序固定）；放入业务包 `game/cardrpg/`、属性声明 `game/gameplay/attribute/hero_stats.go`、定时回调 `game/entities/card_run/timer_handlers.go` 与 handler `game/handler/card_rpg.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> card-rpg`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器、属性代码和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 

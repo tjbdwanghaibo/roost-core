@@ -16,7 +16,7 @@ state:
   - field: Matchmaking
     type: MatchmakingState
     store: matchmaking
-    dao: persist
+    dao: nosync
     comment: 每人保留当前匹配意图和最后结果；队伍成员同时提交，不把外部请求当事务内操作。
 protocols: [MatchEnqueue, MatchCancel, MatchStatus, MatchClear]
 errcodes: [matchmaking_invalid, matchmaking_busy, matchmaking_stale, matchmaking_unknown]

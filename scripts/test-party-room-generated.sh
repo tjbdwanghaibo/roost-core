@@ -51,9 +51,9 @@ import sys
 root = Path(sys.argv[1])
 for name, fields in {
     # Coins 标 sync：自身视图（self_sync 的默认 packer）把它推给玩家本人，与房间组同步共用连接。
-    'player': [('Coins', 'int64', 'coins', 'persist,sync'), ('Matches', 'int64', 'matches', 'persist'), ('Initialized', 'bool', 'initialized', 'persist')],
+    'player': [('Coins', 'int64', 'coins', 'persist,sync'), ('Matches', 'int64', 'matches', 'nosync'), ('Initialized', 'bool', 'initialized', 'nosync')],
     # State 是房间的持久事实（含种子与回执，不同步）；Board 是公开记分板，不落库、经 SyncGroup 同步给房间全体成员。
-    'party_room': [('State', 'string', 'state', 'persist'), ('WakeTimer', 'int64', 'wake_timer', 'persist'), ('Board', 'string', 'board', 'nopersist,sync')],
+    'party_room': [('State', 'string', 'state', 'nosync'), ('WakeTimer', 'int64', 'wake_timer', 'nosync'), ('Board', 'string', 'board', 'nopersist,sync')],
 }.items():
     p = root / 'db/def' / f'{name}.go'
     typename = ''.join(part.title() for part in name.split('_')) + 'Dao'

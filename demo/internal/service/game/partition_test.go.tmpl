@@ -67,7 +67,7 @@ func TestPartitionIsOffByDefault(t *testing.T) {
 // target's cell actually dealt (the attacker's panel attack, item 3 = A) and the target's HP after it, a retry the target's cell had already applied as a duplicate (no damage this
 // time), a refusal with its reason, and "unknown" — the target's cell did not answer, so no HP is claimed.
 func TestAttackResultPushNamesTheVerdict(t *testing.T) {
-	hit := cellworld.HitID{Attacker: 1, Seq: 9}
+	hit := cellworld.HitID{Attacker: 1, Seq: 9, ID: "attack-identity"}
 	for _, tc := range []struct {
 		in   cellworld.AttackResult
 		want string
@@ -81,7 +81,7 @@ func TestAttackResultPushNamesTheVerdict(t *testing.T) {
 		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeUnknown, HP: 70}, "unknown", 0, 0, ""},
 	} {
 		got := attackResultPush(tc.in)
-		if got.Seq != 9 || got.Target != 5 || got.Outcome != tc.want || got.Damage != tc.dmg || got.TargetHP != tc.hp || got.Reason != tc.why {
+		if got.Seq != 9 || got.AttackID != hit.ID || got.Target != 5 || got.Outcome != tc.want || got.Damage != tc.dmg || got.TargetHP != tc.hp || got.Reason != tc.why {
 			t.Errorf("%+v → %+v, want outcome %s damage %d hp %d reason %q", tc.in, got, tc.want, tc.dmg, tc.hp, tc.why)
 		}
 	}

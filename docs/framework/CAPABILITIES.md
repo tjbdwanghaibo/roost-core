@@ -144,7 +144,7 @@
 | state | 实体的状态位（定身、缴械、无敌等），按来源计数，可作门控 | `roost add behavior --entity <Entity> --state` 生成 `states.go` 的目录声明；Set / Gate 接线由业务写；包 `gameplay/state` | 正式。不是状态机 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#行为控制d21)、[demo 怪物](../../demo/WALKTHROUGH.md#怪物巡逻定身与状态门控d21) |
 | timedomain | 场景 / 房间级的时间域 | `roost add timedomain --entity <Scene>`；包 `gameplay/timedomain` | 正式 | [时间 §4D](guide/10-time.md#4d-场景时间域变速) |
 | level | 配置驱动的关卡组件：多阶段、事件 / 条件 / 动作、变量作用域 | 包 `gameplay/level`；手写装配（没有 add 命令），可运行消费者见 `scripts/testdata/level` 与 `scripts/test-level-generated.sh` | 正式。有预算上限、没有容量承诺；示例动作是能力替身，不提供完整闯关或永久奖励 | [LevelComponent](LEVEL-COMPONENT.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#通用-levelcomponent-首版边界) |
-| cellworld | 分区场景：静态方格分区，每格一个进程（Cell + Ghost），Player 不迁移 | 包 `gameplay/cellworld`；game-demo 配置 `scene.partition.enabled: true`（缺省关闭） | 原型。不是承诺的正式能力；Cell 主题没有按主题鉴权，按内网互信部署 | [包 README](../../gameplay/cellworld/README.md)、[无缝大世界方案](../maintenance/FEATURE-2026-11-03-seamless-world.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |
+| cellworld | 固定网格分区，Cell / Ghost 与 Base Player 分工；共享写授权、故障恢复、死亡结算与稳定出生槽 | 包 `gameplay/cellworld`，`roost module add cellworld` 装配 Runtime；game-demo 配置 `scene.partition.enabled: true` | 固定拓扑能力已实现，单进程单 Cell、可信内网。千人容量的 50ms 指标尚未通过；Linux / 跨机 / Redis HA 未验收 | [包 README](../../gameplay/cellworld/README.md)、[正式模块](../../modules/cellworld/README.md)、[验收报告](../performance/CELLWORLD.md) |
 | terrain | 可编辑地形底座：2.5D 高度场的块坐标、地形包读写、视图与整数定点查询、笔刷、行走判定 | 包 `gameplay/terrain`（纯逻辑，不依赖 Nest / DataEngine）；块实体、编辑事务、同步与建筑在 game-demo | 正式（底座，在 `[Unreleased]`）。不支持洞穴与流体模拟；真实依赖崩溃演练、Unity、跨机与容量验收后置 | [包 README](../../gameplay/terrain/README.md)、[地形进度](../maintenance/TERRAIN-STATUS.md) |
 | physics | 固定步长的原生物理模拟与已提交结果交接 | 包 `gameplay/physics`、`infra/physics/physx`；构建加 `-tags physx` | 正式（可选后端）。模拟器是物理状态的唯一权威，提交失败后停止而不回滚；平台与容量边界见文档 | [Chunk 与物理](CHUNK-PHYSICS.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#ugc-物理闯关) |
 
@@ -307,7 +307,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 实体锁档与跨实体事务 | 锁档怎样定、多实体事务怎样写 | 实体 marker 的 category | 参考实现（demo） | [锁档](../../demo/WALKTHROUGH.md#实体锁档与跨实体事务) |
 | schema 迁移与 sid 搬机 | 离线迁移示例与搬机检查工具 | `cmd/schemamigrate`、`cmd/sidmove` | 参考实现（demo） | [持久 schema](../../demo/WALKTHROUGH.md#持久-schema)、[搬 sid](../../demo/WALKTHROUGH.md#把一个-sid-搬到另一台机器) |
 | 可编辑地形与建筑 | 地形包、玩家笔刷编辑与同步、高度场上的行走与寻路、水位、建筑是普通同步实体 | `game/terrainmap/`、`game/entities/terrain_chunk/`、`game/entities/building/`、`cmd/terrainpack`（缺省关闭） | 参考实现（demo）。在 `[Unreleased]`；真实依赖、Unity、跨机验收后置 | [可编辑地形](../../demo/README.md#可编辑地形p1)、[水与建筑](../../demo/README.md#水与建筑p4)、[地形进度](../maintenance/TERRAIN-STATUS.md) |
-| 分区场景 | cellworld 接进场景，多进程分格 | 配置 `scene.partition`（缺省关闭）；演练 `scripts/test-seamless-demo.sh` | 原型 | [分区场景](../../demo/README.md#分区场景原型分支-featseamless-world-prototype) |
+| 分区场景 | cellworld 接进场景，多进程分格 | 配置 `scene.partition`（缺省关闭）；演练 `scripts/test-seamless-demo.sh` | 固定拓扑，容量见验收报告 | [分区场景](../../demo/README.md#分区场景cellworld) |
 
 ## 明确没有 / 不适合的
 

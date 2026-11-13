@@ -2,6 +2,7 @@ package cellworld
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"slices"
@@ -26,6 +27,16 @@ type NodeConfig struct {
 	// World 是主题命名空间，只允许字母、数字、'-'、'_'；SID 是本进程 sid（收件主题按它区分）。
 	World string
 	SID   int32
+	// Cell 必须使用共享授权记录和 App 单实例锁的本次启动令牌；Base-only 不需要。
+	Owners      *OwnerRegistry
+	Incarnation string
+	// CheckLease 是 App SingletonLease.Check；只检查本地窗口，不做 I/O。
+	// Cell 必填。过期后这个 Node 不再执行、提交或发出旧写者的业务结果。
+	CheckLease func() error
+	// OwnershipWorkers / OwnershipQueue / OwnershipTimeout 只用于入场、交接、退出的存储 I/O。
+	// 普通心跳、移动和伤害不经过这个池。零值为 8 / 1024 / 2s。
+	OwnershipWorkers, OwnershipQueue int
+	OwnershipTimeout                 time.Duration
 	// Grid 是静态分区，所有进程一致。
 	Grid      *Grid
 	Transport Transport
@@ -88,7 +99,7 @@ type NodeConfig struct {
 	PlayerEntity func(actorID int64) int64
 	// WatchPeriod：Base 心跳（看门狗 + 续租）周期，必须是 heartbeat 档位；零值 100ms。
 	WatchPeriod time.Duration
-	// SilenceTimeout：玩家多久没收到 witness 就按最后位置重新进入；零值 1s。LostGrace：收到交接放弃后等多久再重进；零值 500ms。
+	// SilenceTimeout：多久没收到 witness 就按最后位置发入场查询（新建仍须确认共享授权）；零值 1s。LostGrace：收到交接放弃后等多久再重进；零值 500ms。
 	SilenceTimeout, LostGrace time.Duration
 	// LeasePeriod：Base 向 owner 格续租（重发最新输入）的间隔，也是待确认面板的重发间隔；零值 500ms。
 	LeasePeriod time.Duration
@@ -130,6 +141,23 @@ type NodeConfig struct {
 
 	// OutboxSize：出站队列容量（提交后的发送、报告、销毁）；满了丢弃并计数。零值 65536。
 	OutboxSize int
+	// 网络控制消息与完整状态独立排队；销毁 I/O 不与网络或本地 Nest 报告串行。
+	// ControlQueue / DestroyWorkers / DestroyQueue 零值为 4096 / 4 / 1024。
+	ControlQueue, DestroyWorkers, DestroyQueue int
+	// 传输明确报错时最多尝试 3 次，每次间隔 20ms；不替代协议级重传。
+	PublishAttempts int
+	PublishRetry    time.Duration
+	// 内部增量缓存两端各最多 ReplicaCacheSize 项，默认 131072；每 250ms 全量修复。
+	// WitnessBatch 按同一 Base 合批，默认 16 名观察者；只按完整对象/视野分包。
+	ReplicaCacheSize, WitnessBatch int
+	// SettleDeath 只在获奖 Player 的 strict handler 内调用；允许 nil（记死亡回执但不发奖）。
+	// 接入方在此修改同一个 Player 的奖励 DAO，不能做 I/O 或另开事务。
+	SettleDeath                 func(BasePlayer, DeathFact) error
+	MaxDeathReceipts            int
+	DeathRetry, DeathScanPeriod time.Duration
+	ReplicaRefresh              time.Duration
+	// MaxWireBytes 是单条消息硬上限；超限拒绝，不按字节截断。默认 512KiB。
+	MaxWireBytes int
 	// ReportBatch：一次投给 Scene 的角色报告上限；零值 512。
 	ReportBatch int
 	Hooks       Hooks
@@ -211,11 +239,35 @@ func (cfg NodeConfig) withDefaults() NodeConfig {
 	setDur(&cfg.GroupHold, 3*cfg.GroupEvery)
 	setDur(&cfg.GroupResyncEvery, 10*time.Second)
 	setInt(&cfg.OutboxSize, 65536)
+	setInt(&cfg.ReplicaCacheSize, 131072)
+	setInt(&cfg.MaxDeathReceipts, 20000)
+	setDur(&cfg.DeathRetry, 500*time.Millisecond)
+	setDur(&cfg.DeathScanPeriod, 100*time.Millisecond)
+	setInt(&cfg.WitnessBatch, 16)
+	setDur(&cfg.ReplicaRefresh, 250*time.Millisecond)
+	setInt(&cfg.MaxWireBytes, 512*1024)
+	setInt(&cfg.ControlQueue, 4096)
+	setInt(&cfg.DestroyWorkers, 4)
+	setInt(&cfg.DestroyQueue, 1024)
+	setInt(&cfg.PublishAttempts, 3)
+	setDur(&cfg.PublishRetry, 20*time.Millisecond)
 	setInt(&cfg.ReportBatch, 512)
+	setInt(&cfg.OwnershipWorkers, 8)
+	setInt(&cfg.OwnershipQueue, 1024)
+	setDur(&cfg.OwnershipTimeout, 2*time.Second)
 	return cfg
 }
 
 func (cfg NodeConfig) validate() error {
+	if cfg.MaxDeathReceipts < 1 || cfg.DeathRetry <= 0 || cfg.DeathScanPeriod <= 0 {
+		return fmt.Errorf("%w: invalid death settlement limits", ErrNodeConfig)
+	}
+	if cfg.ReplicaCacheSize < cfg.MaxViewEntities || cfg.WitnessBatch < 1 || cfg.WitnessBatch > 256 || cfg.ReplicaRefresh <= 0 || cfg.MaxWireBytes < 1024 {
+		return fmt.Errorf("%w: invalid replication bounds", ErrNodeConfig)
+	}
+	if cfg.ControlQueue < 1 || cfg.DestroyWorkers < 1 || cfg.DestroyQueue < 1 || cfg.PublishAttempts < 1 || cfg.PublishAttempts > 16 || cfg.PublishRetry <= 0 {
+		return fmt.Errorf("%w: invalid outbound limits", ErrNodeConfig)
+	}
 	bad := func(format string, args ...any) error {
 		return fmt.Errorf("%w: "+format, append([]any{ErrNodeConfig}, args...)...)
 	}
@@ -238,6 +290,10 @@ func (cfg NodeConfig) validate() error {
 		switch {
 		case !cfg.Grid.Contains(*cfg.Cell) || cfg.Grid.SID(*cfg.Cell) != cfg.SID:
 			return bad("cell %v is not mapped to sid %d", *cfg.Cell, cfg.SID)
+		case cfg.Owners == nil || cfg.Incarnation == "" || cfg.CheckLease == nil:
+			return bad("a cell needs shared ownership, process incarnation and local lease guard")
+		case cfg.OwnershipWorkers < 1 || cfg.OwnershipQueue < 1 || cfg.OwnershipTimeout <= 0:
+			return bad("invalid ownership I/O limits")
 		case cfg.Scene == 0 || cfg.CreateActor == nil:
 			return bad("a cell needs its scene entity and CreateActor")
 		case !slices.Contains(heartbeat.Periods[:], cfg.Period):
@@ -294,23 +350,37 @@ func (cfg NodeConfig) validate() error {
 	return nil
 }
 
-// Node 是一个进程的 cellworld 端点：把传输上的消息投成 Nest 请求，把 Nest 事务提交后要做的事（发送、给区域的报告、
-// 销毁实体）排进出站队列，由一个出站 goroutine 执行。Node 自己没有锁、不持有任何格内状态：区域表在 Scene 实体上
-// （Region），角色状态在 SceneActor / Monster 的 DAO 上，玩家的路由状态在 Player 上（BaseState）。
-//
-// 出站队列是唯一的进程级结构：有界 channel，单消费者；Nest handler 的提交后回调只做非阻塞投递（满了丢弃并计数：
-// 协议靠重传与下一拍的全量容忍丢失）。提交后回调里不能再 Dispatch（Nest 拒绝 handler 上下文里的异步投递），
-// 所以“提交后再投一个 Nest 请求”（给区域的报告、隐式完成交接）也经它转发。
+// Node 连接 Cell / Base 的 Nest 事务、传输和收尾。玩法状态在 Scene 的 Region、
+// Actor / Player 的 DAO 上；Node 仅持有有界队列与生命周期记录。
+// 控制消息、完整状态、本地 Nest 报告、销毁和所有权 I/O 各自执行，提交回调只做准入。
 type Node struct {
-	cfg         NodeConfig
-	cell        CellID
-	hostsCell   bool
-	rect        spatial.Rect
-	indexBounds spatial.Rect
-	out         chan job
-	ready       chan struct{}
-	running     atomic.Bool
-	lastExpire  atomic.Int64
+	cfg             NodeConfig
+	cell            CellID
+	hostsCell       bool
+	rect            spatial.Rect
+	indexBounds     spatial.Rect
+	out             chan job
+	network         networkQueue
+	sentReplica     replicaCache
+	receivedReplica replicaCache
+	controls        chan queuedSend
+	destroyQueue    chan job
+	destroyMu       sync.Mutex
+	destroyBusy     map[fentity.IThreadSafeEntity]bool
+	outputPending   atomic.Int64
+	lifecycle       struct {
+		sync.Mutex
+		stopping     bool
+		transactions map[*nest.RollbackTx]bool
+	}
+	deathAcks    chan receivedDeathAck
+	deathPending atomic.Int64
+	ownerQueue   chan ownerWork
+	ownerMu      sync.Mutex
+	ownerBusy    map[int64]bool
+	ready        chan struct{}
+	running      atomic.Bool
+	lastExpire   atomic.Int64
 	// ingress 是收件的准入门（CloseIngress）：closed 之后回调直接丢弃；busy 是正在执行的回调数，closed 且归零时关 idle。
 	ingress struct {
 		sync.Mutex
@@ -330,6 +400,12 @@ func NewNode(cfg NodeConfig) (*Node, error) {
 		return nil, err
 	}
 	n := &Node{cfg: cfg, out: make(chan job, cfg.OutboxSize), ready: make(chan struct{}), handlers: cfg.Handlers}
+	n.network.init()
+	n.sentReplica.init()
+	n.receivedReplica.init()
+	n.controls = make(chan queuedSend, cfg.ControlQueue)
+	n.destroyQueue = make(chan job, cfg.DestroyQueue)
+	n.destroyBusy = make(map[fentity.IThreadSafeEntity]bool)
 	if n.handlers == nil {
 		n.handlers = NewHandlers()
 	}
@@ -337,6 +413,9 @@ func NewNode(cfg NodeConfig) (*Node, error) {
 		return nil, err
 	}
 	if cfg.Cell != nil {
+		n.ownerQueue = make(chan ownerWork, cfg.OwnershipQueue)
+		n.deathAcks = make(chan receivedDeathAck, cfg.OwnershipQueue)
+		n.ownerBusy = make(map[int64]bool)
 		n.cell, n.hostsCell = *cfg.Cell, true
 		n.rect = cfg.Grid.Rect(n.cell)
 		n.indexBounds = expand(n.rect, cfg.Grid.GhostBand())
@@ -374,8 +453,21 @@ func (n *Node) Run(ctx context.Context) error {
 	if stopReceiving != nil {
 		defer func() { _ = stopReceiving() }()
 	}
+	var workers sync.WaitGroup
+	if n.hostsCell {
+		workers.Go(func() { n.runDeaths(ctx) })
+		for range n.cfg.OwnershipWorkers {
+			workers.Go(func() { n.runOwners(ctx) })
+		}
+	}
+	workers.Go(func() { n.runControls(ctx) })
+	workers.Go(func() { n.runStates(ctx) })
+	for range n.cfg.DestroyWorkers {
+		workers.Go(func() { n.runDestroys(ctx) })
+	}
 	close(n.ready)
 	n.pump(ctx)
+	workers.Wait()
 	return nil
 }
 
@@ -408,17 +500,25 @@ type outgoing struct {
 }
 
 func (n *Node) enqueue(j job) bool {
+	if j.kind == jobSend {
+		return n.enqueueSend(j.send)
+	}
+	if j.kind == jobDestroy {
+		return n.enqueueDestroy(j)
+	}
+	n.outputPending.Add(1)
 	select {
 	case n.out <- j:
 		return true
 	default:
+		n.outputPending.Add(-1)
 		n.stats.outboxDrops.Add(1)
 		return false
 	}
 }
 
-// pump 是出站 goroutine：发送、转发报告（攒批投给 Scene）、跟进投递、销毁。队列空或攒满一批时把报告投出去，
-// 所以报告延迟是“队列里排在它前面的工作”，不是固定的节拍。
+// pump 只处理本地报告、Nest 准入与快速回调；网络和实体销毁各自运行，不能阻塞这里。
+// 队列空或攒满 ReportBatch 就把报告投给 Scene，不等待固定节拍。
 func (n *Node) pump(ctx context.Context) {
 	var reports []ActorReport
 	flush := func() {
@@ -427,6 +527,7 @@ func (n *Node) pump(ctx context.Context) {
 		}
 		batch := reports
 		reports = nil
+		defer n.outputPending.Add(-int64(len(batch)))
 		if err := n.cfg.Nest.Dispatch(ctx, hReports, n.cfg.Scene, nest.Params{batch}); err != nil {
 			n.stats.dispatchErrors.Add(1)
 		}
@@ -440,8 +541,6 @@ func (n *Node) pump(ctx context.Context) {
 		}
 		for {
 			switch j.kind {
-			case jobSend:
-				n.publish(j.send)
 			case jobReport:
 				reports = append(reports, j.report)
 				if len(reports) >= n.cfg.ReportBatch {
@@ -451,12 +550,11 @@ func (n *Node) pump(ctx context.Context) {
 				if err := n.dispatch(ctx, j.handler, j.ids, j.params); err != nil {
 					n.stats.dispatchErrors.Add(1)
 				}
-			case jobDestroy:
-				if err := n.cfg.Destroy(ctx, j.entity); err != nil {
-					n.stats.destroyErrors.Add(1)
-				}
 			case jobCall:
 				j.call(ctx)
+			}
+			if j.kind != jobReport {
+				n.outputPending.Add(-1)
 			}
 			select {
 			case j = <-n.out:
@@ -469,21 +567,42 @@ func (n *Node) pump(ctx context.Context) {
 	}
 }
 
-func (n *Node) publish(o outgoing) {
+func (n *Node) publish(o outgoing) error {
+	if err := n.checkLease(); err != nil {
+		return err
+	}
 	o.msg.From = n.cfg.SID
 	if o.msg.SentAt == 0 {
 		o.msg.SentAt = time.Now().UnixNano()
 	}
-	data, err := encodeMsg(o.msg)
+	encoded := n.encodeReplica(o.sid, o.msg, time.Now())
+	data, err := encodeMsg(encoded)
+	if err == nil && len(data) > n.cfg.MaxWireBytes {
+		n.sentReplica.clearPeer(o.sid)
+		if o.msg.Kind == kindWitness && len(o.msg.Witnesses) > 0 {
+			// 按完整观察者包拆分；不截断实体或不透明字节。
+			views := append([]*witnessMsg{o.msg.Witness}, o.msg.Witnesses...)
+			mid := len(views) / 2
+			first, second := *o.msg, *o.msg
+			first.Witness, first.Witnesses = views[0], views[1:mid]
+			second.Witness, second.Witnesses = views[mid], views[mid+1:]
+			return errors.Join(n.publish(outgoing{sid: o.sid, msg: &first}), n.publish(outgoing{sid: o.sid, msg: &second}))
+		}
+		err = fmt.Errorf("cellworld: message has %d bytes, limit %d", len(data), n.cfg.MaxWireBytes)
+	}
 	if err == nil {
 		err = n.cfg.Transport.Publish(Subject(n.cfg.World, o.sid), data)
 	}
 	if err != nil {
 		n.stats.publishErrors.Add(1)
-		return
+		if o.msg.Kind == kindGhost || o.msg.Kind == kindWitness {
+			n.sentReplica.clearPeer(o.sid)
+		}
+		return err
 	}
 	n.stats.msgsOut.Add(1)
 	n.stats.bytesOut.Add(uint64(len(data)))
+	return nil
 }
 
 // commit 在当前事务提交之后执行 fn；不在事务里时立即执行。
@@ -500,6 +619,7 @@ type txEffects struct {
 	follows  []job
 	reports  []ActorReport
 	hooks    []func()
+	owners   []ownerWork
 }
 
 func (fx *txEffects) send(sid int32, m *wireMsg) {
@@ -508,12 +628,21 @@ func (fx *txEffects) send(sid int32, m *wireMsg) {
 
 // registerCommit 把 fx 交给当前事务的提交后回调：先调观察点（先于发送，跨进程观察到的顺序与因果一致），再排出站。
 func (n *Node) registerCommit(fx *txEffects) {
-	if len(fx.sends)+len(fx.destroys)+len(fx.follows)+len(fx.reports)+len(fx.hooks) == 0 {
+	if err := n.guardTransaction(); err != nil {
+		return
+	}
+	if len(fx.sends)+len(fx.destroys)+len(fx.follows)+len(fx.reports)+len(fx.hooks)+len(fx.owners) == 0 {
 		return
 	}
 	commit(func() {
+		if n.checkLease() != nil {
+			return
+		}
 		for _, h := range fx.hooks {
 			h()
+		}
+		for _, work := range fx.owners {
+			n.enqueueOwner(work)
 		}
 		for _, s := range fx.sends {
 			n.enqueue(job{kind: jobSend, send: s})
@@ -540,9 +669,53 @@ func (n *Node) receive(data []byte) {
 	defer n.admitted()
 	n.stats.msgsIn.Add(1)
 	n.stats.bytesIn.Add(uint64(len(data)))
+	if len(data) > n.cfg.MaxWireBytes {
+		n.stats.decodeErrors.Add(1)
+		return
+	}
 	m, err := decodeMsg(data)
 	if err != nil {
 		n.stats.decodeErrors.Add(1)
+		return
+	}
+	if m.Kind == kindReplicaReset {
+		n.sentReplica.clearPeer(m.From)
+		return
+	}
+	messages, err := n.decodeReplica(m)
+	if err != nil {
+		if errors.Is(err, errReplicaGap) {
+			n.stats.replicaGaps.Add(1)
+			n.requestReplicaReset(m.From, time.Now())
+		} else {
+			n.stats.decodeErrors.Add(1)
+		}
+		return
+	}
+	for _, decoded := range messages {
+		n.receiveMessage(decoded)
+	}
+}
+
+func (n *Node) receiveMessage(m *wireMsg) {
+	if m.Kind == kindDeathAck {
+		if n.hostsCell {
+			n.deathPending.Add(1)
+			select {
+			case n.deathAcks <- receivedDeathAck{from: m.From, ack: *m.DeathAck}:
+			default:
+				n.deathPending.Add(-1)
+				n.stats.deathErrors.Add(1)
+			}
+		}
+		return
+	}
+	if m.Kind == kindDeath {
+		if n.cfg.PlayerEntity != nil {
+			if err := n.dispatch(context.Background(), hDeath, []int64{n.cfg.PlayerEntity(m.Death.Hit.Attacker)}, nest.Params{m}); err != nil {
+				n.stats.dispatchErrors.Add(1)
+			}
+		}
 		return
 	}
 	ctx := context.Background()
@@ -644,16 +817,19 @@ func messageActor(m *wireMsg) int64 {
 // ---- Nest handler ----
 
 var (
-	hReports = nest.NewHandlerName("cellworld_reports")
-	hRegion  = nest.NewHandlerName("cellworld_region")
-	hActor   = nest.NewHandlerName("cellworld_actor")
-	hInput   = nest.NewHandlerName("cellworld_input")
-	hAttack  = nest.NewHandlerName("cellworld_attack")
-	hImplied = nest.NewHandlerName("cellworld_implied")
-	hSpawn   = nest.NewHandlerName("cellworld_spawn")
-	hBase    = nest.NewHandlerName("cellworld_base")
-	hBaseCmd = nest.NewHandlerName("cellworld_base_cmd")
-	hInspect = nest.NewHandlerName("cellworld_inspect")
+	hReports     = nest.NewHandlerName("cellworld_reports")
+	hRegion      = nest.NewHandlerName("cellworld_region")
+	hActor       = nest.NewHandlerName("cellworld_actor")
+	hInput       = nest.NewHandlerName("cellworld_input")
+	hAttack      = nest.NewHandlerName("cellworld_attack")
+	hImplied     = nest.NewHandlerName("cellworld_implied")
+	hSpawn       = nest.NewHandlerName("cellworld_spawn")
+	hBase        = nest.NewHandlerName("cellworld_base")
+	hBaseCmd     = nest.NewHandlerName("cellworld_base_cmd")
+	hBaseEnter   = nest.NewHandlerName("cellworld_base_enter")
+	hInspect     = nest.NewHandlerName("cellworld_inspect")
+	hOwnerResult = nest.NewHandlerName("cellworld_owner_result")
+	hDeath       = nest.NewHandlerName("cellworld_death")
 )
 
 // Handlers 是 Node 在 Nest 引擎上的 handler 名单，可以在 Node 建出来之前注册：正式进程里服务经 wiring/nest 的
@@ -678,10 +854,10 @@ func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
 		name nest.HandlerName
 		run  func(*Node, []fentity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error)
 	}{
-		{hReports, (*Node).handleReports}, {hRegion, (*Node).handleRegion}, {hActor, (*Node).handleActor},
+		{hDeath, (*Node).handleDeath}, {hReports, (*Node).handleReports}, {hRegion, (*Node).handleRegion}, {hActor, (*Node).handleActor},
 		{hInput, (*Node).handleInput}, {hAttack, (*Node).handleAttack}, {hImplied, (*Node).handleImplied},
-		{hSpawn, (*Node).handleSpawn}, {hInspect, (*Node).handleInspect}, {hTier, (*Node).handleTier},
-		{hBase, (*Node).handleBase}, {hBaseCmd, (*Node).handleBaseCmd},
+		{hOwnerResult, (*Node).handleOwnerResult}, {hSpawn, (*Node).handleSpawn}, {hInspect, (*Node).handleInspect}, {hTier, (*Node).handleTier},
+		{hBase, (*Node).handleBase}, {hBaseCmd, (*Node).handleBaseCmd}, {hBaseEnter, (*Node).handleBaseCmd},
 	} {
 		run := entry.run
 		handler := func(es []fentity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (any, error) {
@@ -689,9 +865,16 @@ func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
 			if n == nil {
 				return nil, errHandlersUnbound
 			}
+			if err := n.guardTransaction(); err != nil {
+				return nil, err
+			}
 			return run(n, es, params, opts...)
 		}
-		if err := engine.RegisterHandlerWithMeta(entry.name, handler, meta); err != nil {
+		entryMeta := meta
+		if entry.name == hBaseEnter || entry.name == hDeath {
+			entryMeta.Durability = nest.DurabilityStrict
+		}
+		if err := engine.RegisterHandlerWithMeta(entry.name, handler, entryMeta); err != nil {
 			return fmt.Errorf("cellworld: register %s: %w", entry.name.String(), err)
 		}
 	}
@@ -807,7 +990,9 @@ func (n *Node) handleActor(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 	case kindEnter:
 		err = n.onEnter(r, a, m.From, m.Enter, now, fx)
 	case kindLeave:
-		n.onLeave(r, a, m.Leave, now, fx)
+		if a != nil && m.From == a.CellState().Base {
+			n.onLeave(r, a, m.Leave, now, fx)
+		}
 	case kindPanel:
 		n.onPanel(r, a, m.From, m.Panel, now, fx)
 	}
@@ -840,7 +1025,7 @@ func (n *Node) handleInput(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 		return nil, nil
 	}
 	st := a.CellState()
-	if st.Role != RoleReal {
+	if st.Role != RoleReal || m.From != st.Base || m.Input.Entry != st.Entry {
 		// 非 Real 时丢弃：Base 从新 owner 的 witness 里看到输入序号落后会重发最新意图。
 		n.stats.inputsDropped.Add(1)
 		return nil, nil
@@ -848,7 +1033,11 @@ func (n *Node) handleInput(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 	st.LeaseUntil = time.Now().Add(n.cfg.LeaseTimeout).UnixNano()
 	if m.Input.Seq > st.LastInput {
 		clampSpeed := func(v int64) int64 { return max(-n.cfg.MaxSpeed, min(n.cfg.MaxSpeed, v)) }
-		st.VX, st.VY = clampSpeed(m.Input.VX), clampSpeed(m.Input.VY)
+		vx, vy := clampSpeed(m.Input.VX), clampSpeed(m.Input.VY)
+		if st.VX != vx || st.VY != vy {
+			st.VX, st.VY = vx, vy
+			st.Ver.Seq++
+		}
 		st.LastInput = m.Input.Seq
 	}
 	a.SetCellState(st)
@@ -857,84 +1046,56 @@ func (n *Node) handleInput(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 
 // ---- 交接 ----
 
-// onOffer 是目标格的决定，见 §5.3 / §7.4。接受时在本事务里新建（或复用本格仍冻结着的旧实例）角色实体并写成 Real，
-// seen 也在本事务里登记；提交之后才回“已接受”。返回错误即回滚、不回复（旧格重传）。
+// onOffer 只在 Nest 中预留 Pending 实例。接受授权在锁外做 CAS，完成后回到 Nest 激活；
+// 预留事务失败就回滚、不发授权请求，源端按原交接身份重传。
 func (n *Node) onOffer(r *Region, a Actor, from int32, o *handoffOffer, now time.Time, fx *txEffects) error {
+	if err := o.Recovery.Validate(); err != nil {
+		return err
+	}
 	n.stats.offersReceived.Add(1)
 	st := o.State
-	epoch := st.Ver.Epoch
-	nowNano := now.UnixNano()
-	reply := func(accepted bool) {
-		fx.send(from, &wireMsg{Kind: kindOfferReply, OfferReply: &handoffReply{ID: st.ID, Epoch: epoch, Accepted: accepted}})
-	}
-	if st.ID == 0 || epoch == 0 {
+	if st.ID == 0 || o.Grant.Process.SID != from || o.Transfer.Target != n.cfg.SID || o.Transfer.ID == "" || o.Transfer.Epoch != st.Ver.Epoch || o.Transfer.Epoch <= o.Grant.Epoch {
 		return nil
 	}
-	reuse := false
 	if a != nil {
 		cs := a.CellState()
-		switch {
-		case cs.Role == RoleGone:
-			// 本格的旧实例已交出、正等销毁：同 ID 的新实例要等它销毁完才能建。不回复，旧格按 OfferRetry 重传。
-			if cs.Ver.Epoch >= epoch {
-				reply(true)
-			}
-			return nil
-		case cs.Role == RoleFrozen && cs.Handoff != nil && epoch > cs.Handoff.Epoch:
-			// 实体已经从目标格再交接回本格：只有接受过本格 epoch 的目标才能发出更大的 epoch——隐式完成后复用这个实例。
-			n.handoffConcluded(cs, true, now, fx)
-			reuse = true
-		case (cs.Role == RoleReal || cs.Role == RoleFrozen) && cs.Ver.Epoch >= epoch:
-			reply(true)
+		if cs.Role == RolePending && cs.Pending != nil && cs.Pending.Transfer == o.Transfer {
+			fx.owners = append(fx.owners, n.ownerWork(cs))
 			return nil
 		}
-	}
-	if s, ok := r.seen.get(st.ID); ok && !reuse {
-		switch {
-		case s.Epoch > epoch:
-			reply(true)
-			return nil
-		case s.Epoch == epoch:
-			reply(s.Accepted)
+		if cs.Role == RoleGone {
 			return nil
 		}
-	}
-	if g, ok := r.ghosts.get(st.ID); ok && g.St.Ver.Epoch >= epoch {
-		// 本地只有同 epoch 的 Ghost 而没有 seen 记录：按协议不可达；保守拒绝并记下，不冒险装出第二个 Real。
-		r.seen.set(st.ID, seenEpoch{Epoch: epoch, Accepted: false, At: nowNano})
-		reply(false)
+		if cs.Ver.Epoch >= st.Ver.Epoch {
+			fx.send(from, &wireMsg{Kind: kindOfferReply, OfferReply: &handoffReply{ID: st.ID, Epoch: st.Ver.Epoch, Accepted: true}})
+			return nil
+		}
+		// 旧实例先完成自己的退役，新的交接由源端重传；不在旧 I/O 未收尾时复用同 ID。
 		return nil
 	}
-	target, inWorld := n.cfg.Grid.CellAt(st.Pos())
-	if !inWorld || target != n.cell || (!reuse && r.activeCount() >= n.cfg.MaxReals) {
-		r.seen.set(st.ID, seenEpoch{Epoch: epoch, Accepted: false, At: nowNano})
-		reply(false)
+	target, inside := n.cfg.Grid.CellAt(st.Pos())
+	if !inside || target != n.cell || r.activeCount() >= n.cfg.MaxReals {
+		fx.owners = append(fx.owners, ownerWork{kind: ownerRejectWork, state: ActorState{EntityState: st, Grant: o.Grant}, transfer: o.Transfer})
 		return nil
 	}
-	created := false
-	if a == nil {
-		var err error
-		if a, err = n.cfg.CreateActor(st.ID, st.Kind); err != nil {
-			return fmt.Errorf("cellworld: install %d at epoch %d: %w", st.ID, epoch, err)
-		}
-		created = true
+	var err error
+	a, err = n.cfg.CreateActor(st.ID, st.Kind)
+	if err != nil {
+		return err
 	}
-	n.install(r, a, ActorState{EntityState: st, Role: RoleReal, LastInput: o.LastInput, Applied: o.Applied, Entry: o.Entry,
-		FracX: validFrac(o.FracX), FracY: validFrac(o.FracY)}, now, fx)
-	if created {
-		if err := a.StartCell(); err != nil {
-			return fmt.Errorf("cellworld: start %d: %w", st.ID, err)
-		}
-	}
-	reply(true)
-	return nil
+	next := ActorState{EntityState: st, Role: RolePending, Grant: o.Grant, Pending: &PendingOwner{Token: o.Transfer.ID, Transfer: o.Transfer},
+		SpawnGeneration: o.SpawnGeneration, Recovery: o.Recovery.Clone().At(now), LastInput: o.LastInput, Applied: restoreApplied(o.Applied, now.UnixNano(), n.cfg.DedupWindow), Entry: o.Entry, FracX: validFrac(o.FracX), FracY: validFrac(o.FracY)}
+	n.setState(a, a.CellState(), next)
+	r.locals.set(st.ID, localRec{St: st, Role: RolePending})
+	fx.owners = append(fx.owners, n.ownerWork(next))
+	return a.StartCell()
 }
 
 // install 把 a 写成本格的 Real（epoch = st.Ver.Epoch），登记 seen 与区域索引；玩家的话通知 Base（提交后）。档位按
 // st.Idle（交接带来的；新建的实体还没启动心跳时 SetCellPeriod 只记下档位，StartCell 按它启动）。
 func (n *Node) install(r *Region, a Actor, st ActorState, now time.Time, fx *txEffects) {
 	nowNano := now.UnixNano()
-	st.Role, st.Handoff, st.RetryAfter = RoleReal, nil, 0
+	st.Role, st.Handoff, st.RetryAfter, st.Pending = RoleReal, nil, 0, nil
 	st.capHP() // Enter 的快照 HP 可能高于面板上限（交接带来的状态本来就夹过）
 	if st.Kind == KindPlayer {
 		st.LeaseUntil = nowNano + int64(n.cfg.LeaseTimeout)
@@ -960,35 +1121,17 @@ func (n *Node) realChanged(id int64, epoch uint64, acquired bool, fx *txEffects)
 }
 
 // onOfferReply 只处理与本格当前冻结 epoch、目标都一致的回复；其余（重复、迟到、过期）丢弃。
-func (n *Node) onOfferReply(r *Region, a Actor, from int32, rep *handoffReply, now time.Time, fx *txEffects) {
+func (n *Node) onOfferReply(_ *Region, a Actor, from int32, rep *handoffReply, _ time.Time, fx *txEffects) {
 	if a == nil {
+		return
+	}
+	st := a.CellState()
+	if st.Role != RoleFrozen || st.Handoff == nil || st.Handoff.Epoch != rep.Epoch || n.cfg.Grid.SID(st.Handoff.Target) != from {
 		n.stats.staleDrops.Add(1)
 		return
 	}
-	cs := a.CellState()
-	if cs.Role != RoleFrozen || cs.Handoff == nil || cs.Handoff.Epoch != rep.Epoch || n.cfg.Grid.SID(cs.Handoff.Target) != from {
-		n.stats.staleDrops.Add(1)
-		return
-	}
-	if rep.Accepted {
-		n.handoffConcluded(cs, true, now, fx)
-		p := cs.Handoff
-		prev := cs
-		cs.Role, cs.Handoff = RoleGone, nil
-		n.setState(a, prev, cs)
-		fx.destroys = append(fx.destroys, a)
-		n.applyReports(r, []ActorReport{{State: cs.EntityState, Role: RoleGone, Removed: true, Handoff: p}}, now, &fx.sends)
-		return
-	}
-	// 被拒：目标承诺以后不接受这个 epoch（seen 记录），本格以该 epoch 恢复为 Real，退避后用下一个 epoch 再试。
-	n.handoffConcluded(cs, false, now, fx)
-	prev := cs
-	cs.Role, cs.Handoff = RoleReal, nil
-	cs.RetryAfter = now.Add(n.cfg.RejectBackoff).UnixNano()
-	n.setState(a, prev, cs) // 慢档的 NPC 回到慢档
-	n.stats.handoffsRejected.Add(1)
-	n.realChanged(cs.ID, cs.Ver.Epoch, true, fx)
-	n.applyReports(r, []ActorReport{{State: cs.EntityState, Role: RoleReal}}, now, &fx.sends)
+	// 回复与 Ghost 只是催查信号。不能根据目标的进程内 seen 表恢复写入。
+	fx.owners = append(fx.owners, n.ownerWork(st))
 }
 
 func (n *Node) handoffConcluded(cs ActorState, accepted bool, now time.Time, fx *txEffects) {
@@ -1006,26 +1149,47 @@ func (n *Node) handoffConcluded(cs ActorState, accepted bool, now time.Time, fx 
 // onEnter：Base 让玩家进入。本格已是 Real 时幂等返回 owner；本格知道 Real 在别处（Frozen 或存活 Ghost）时拒绝并提示
 // owner，避免造出第二个 Real。接受时按 Base 带来的 Player 快照（位置、HP）新建 SceneActor。
 func (n *Node) onEnter(r *Region, a Actor, from int32, req *enterReq, now time.Time, fx *txEffects) error {
+	if err := req.Recovery.Validate(); err != nil {
+		return err
+	}
 	st := req.State
 	refuse := func(hint int32) {
 		fx.send(from, &wireMsg{Kind: kindEnterRefused, EnterRefused: &enterRefused{ID: st.ID, Hint: hint}})
 	}
-	if st.ID == 0 {
+	if st.ID == 0 || req.Entry == 0 || from <= 0 {
 		return nil
 	}
 	if a != nil {
 		cs := a.CellState()
 		switch cs.Role {
 		case RoleReal:
+			if from != cs.Base || req.Entry < cs.Entry {
+				n.stats.staleDrops.Add(1)
+				return nil
+			}
 			// 幂等重进（Base 重启、看门狗误判）：Real 留着，Base 带来的面板更新就应用（与面板命令同一条规则）。
 			// 入场序号只前进：Base 重启后的新一次入场接管这个 Real（之后它的 Leave 能删），迟到的旧 Enter 不把序号改回去
 			// （否则上一次入场迟到的 Leave 又能删它，RV-20261106-03）。
-			cs.Entry = max(cs.Entry, req.Entry)
-			cs.Base = from
+			if req.Entry > cs.Entry {
+				// 新入场先提高共享入场高水位，再接管现有状态；期间暂停写入，不从旧快照覆盖位置 / HP。
+				prev := cs
+				cs.Entry = req.Entry
+				cs.Role = RolePending
+				cs.Pending = &PendingOwner{Token: rand.Text()}
+				n.applyPanel(&cs, st.Panel, now, fx)
+				n.setState(a, prev, cs)
+				r.locals.set(cs.ID, localRec{St: cs.EntityState, Role: RolePending})
+				n.realChanged(cs.ID, cs.Ver.Epoch, false, fx)
+				fx.owners = append(fx.owners, n.ownerWork(cs))
+				return nil
+			}
 			cs.LeaseUntil = now.Add(n.cfg.LeaseTimeout).UnixNano()
 			n.applyPanel(&cs, st.Panel, now, fx)
 			a.SetCellState(cs)
 			fx.send(from, &wireMsg{Kind: kindOwner, Owner: &ownerNotice{ID: st.ID, Epoch: cs.Ver.Epoch, LastInput: cs.LastInput, PanelVer: cs.Panel.Ver}})
+			return nil
+		case RolePending:
+			fx.owners = append(fx.owners, n.ownerWork(cs))
 			return nil
 		case RoleFrozen:
 			refuse(n.cfg.Grid.SID(cs.Handoff.Target))
@@ -1054,8 +1218,12 @@ func (n *Node) onEnter(r *Region, a Actor, from int32, req *enterReq, now time.T
 	}
 	st.Kind, st.Base = KindPlayer, from
 	st.VX, st.VY = 0, 0
-	st.Ver = Version{Epoch: r.nextEpoch(st.ID, req.EpochHint), Seq: 1}
-	n.install(r, created, ActorState{EntityState: st, LastInput: req.LastInput, Entry: req.Entry}, now, fx)
+	st.Ver = Version{Epoch: req.EpochHint, Seq: 1}
+	next := ActorState{EntityState: st, Role: RolePending, Grant: OwnerGrant{ID: rand.Text(), Process: n.ownerProcess()}, Pending: &PendingOwner{}, LastInput: req.LastInput, Entry: req.Entry, Recovery: req.Recovery.Clone().At(now)}
+	next.Pending.Token = next.Grant.ID
+	created.SetCellState(next)
+	r.locals.set(st.ID, localRec{St: st, Role: RolePending})
+	fx.owners = append(fx.owners, n.ownerWork(next))
 	return created.StartCell()
 }
 
@@ -1066,24 +1234,37 @@ func (n *Node) onLeave(r *Region, a Actor, req *leaveReq, now time.Time, fx *txE
 		return
 	}
 	cs := a.CellState()
-	if cs.Role != RoleReal {
+	if cs.Death != nil && cs.Entry == req.Entry {
+		cs.CloseEntry = true
+		a.SetCellState(cs)
+		return
+	}
+	if cs.Role != RoleReal && cs.Role != RolePending {
 		return
 	}
 	if cs.Entry != req.Entry {
 		n.stats.staleDrops.Add(1)
 		return
 	}
+	if cs.Role == RolePending {
+		// 已准入的授权 I/O 不能按取消猜测未执行。保留待决身份，确认后只退役，不激活。
+		cs.CloseEntry = true
+		a.SetCellState(cs)
+		fx.owners = append(fx.owners, n.ownerWork(cs))
+		return
+	}
 	var afx actorEffects
+	cs.CloseEntry = true
 	n.leave(&cs, &afx, now.UnixNano())
 	a.SetCellState(cs)
 	n.realChanged(cs.ID, cs.Ver.Epoch, false, fx)
 	fx.sends = append(fx.sends, afx.sends...)
-	fx.destroys = append(fx.destroys, a)
+	fx.owners = append(fx.owners, afx.owners...)
 	n.applyReports(r, []ActorReport{*afx.report}, now, &fx.sends)
 }
 
-// Spawn 在本格生成一个 NPC Real（epoch 取本格所知的下一个）：一个 Scene + NPC 的 Nest 事务，NPC 实体经 CreateActor 在
-// 事务里新建。位置必须在本格内、ID 非零且本格没有这个实体。
+// Spawn 在本格预留一个 NPC Pending：位置须在本格、ID 非零且尚未占用。返回 nil 只表示预留已提交，
+// 授权确认后通过 Hooks.RealChanged 通知激活，epoch 由共享记录分配。
 func (n *Node) Spawn(ctx context.Context, st EntityState) error {
 	if !n.hostsCell {
 		return errors.New("cellworld: node hosts no cell")
@@ -1092,7 +1273,7 @@ func (n *Node) Spawn(ctx context.Context, st EntityState) error {
 		return fmt.Errorf("cellworld: spawn %d at %v outside cell %v", st.ID, st.Pos(), n.cell)
 	}
 	// 已在本进程时 handler 看到它并拒绝；不在时 handler 拿到 nil、在事务里新建。
-	_, err := n.cfg.Nest.RequestMulti(ctx, hSpawn, []int64{n.cfg.Scene, st.ID}, nest.Params{st})
+	_, err := n.cfg.Nest.RequestMulti(ctx, hSpawn, []int64{n.cfg.Scene, st.ID}, nest.Params{spawnRequest{State: st}})
 	return err
 }
 
@@ -1101,8 +1282,12 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 	if err != nil {
 		return nil, err
 	}
-	st := params[0].(EntityState)
-	if actorOf(es, st.ID) != nil {
+	request := params[0].(spawnRequest)
+	st := request.State
+	if a := actorOf(es, st.ID); a != nil {
+		if request.Generation > 0 && a.CellState().SpawnGeneration == request.Generation {
+			return nil, nil
+		}
 		return nil, errors.New("cellworld: spawn: already exists")
 	}
 	a, err := n.cfg.CreateActor(st.ID, KindNPC)
@@ -1110,10 +1295,15 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 		return nil, err
 	}
 	st.Kind, st.Base, st.Idle = KindNPC, 0, false // 新生成的 NPC 先快档，区域按附近有没有玩家再降
-	st.Ver = Version{Epoch: r.nextEpoch(st.ID, 0), Seq: 1}
-	fx := &txEffects{}
-	now := time.Now()
-	n.install(r, a, ActorState{EntityState: st}, now, fx)
+	if r.activeCount() >= n.cfg.MaxReals {
+		return nil, errors.New("cellworld: spawn capacity exceeded")
+	}
+	st.Ver = Version{Seq: 1}
+	next := ActorState{SpawnGeneration: request.Generation, EntityState: st, Role: RolePending, Grant: OwnerGrant{ID: rand.Text(), Process: n.ownerProcess()}, Pending: &PendingOwner{}}
+	next.Pending.Token = next.Grant.ID
+	a.SetCellState(next)
+	r.locals.set(st.ID, localRec{St: st, Role: RolePending})
+	fx := &txEffects{owners: []ownerWork{n.ownerWork(next)}}
 	if err := a.StartCell(); err != nil {
 		return nil, err
 	}
@@ -1127,21 +1317,22 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 // elapsed 是距上一拍的实际经过时间（heartbeat.Beat.Elapsed：首拍从启动起算，已按上限夹过）：位置按它积分，不按回调
 // 次数——驱动变慢、跳拍时角色照样按设定速度走完这段时间（docs/framework/impl/10-time.md“不以回调次数推算经过时间”）。
 func (n *Node) ActorBeat(a Actor, now time.Time, elapsed time.Duration) error {
+	if err := n.guardTransaction(); err != nil {
+		return err
+	}
+
 	n.stats.actorBeats.Add(1)
 	st := a.CellState()
-	if st.Role == RoleNone || st.Role == RoleGone {
+	if st.Role == RoleNone {
 		return nil
 	}
 	before := st.Role
 	prev := st
 	afx := n.stepActor(&st, now, elapsed)
 	n.setState(a, prev, st)
-	fx := &txEffects{sends: afx.sends}
+	fx := &txEffects{sends: afx.sends, owners: afx.owners, hooks: afx.hooks}
 	if afx.report != nil {
 		fx.reports = append(fx.reports, *afx.report)
-	}
-	if afx.destroy {
-		fx.destroys = append(fx.destroys, a)
 	}
 	if before == RoleReal && st.Role != RoleReal {
 		n.realChanged(st.ID, before.epochOf(st), false, fx)
@@ -1160,6 +1351,9 @@ func (r Role) epochOf(st ActorState) uint64 {
 
 // RegionBeat 是 Scene 的 scene.cell 心跳回调：过期、伤害重试、NPC 档位、witness，结果在提交后发出。
 func (n *Node) RegionBeat(host RegionHost, now time.Time) error {
+	if err := n.guardTransaction(); err != nil {
+		return err
+	}
 	start := time.Now()
 	r := host.CellRegion()
 	if r == nil {

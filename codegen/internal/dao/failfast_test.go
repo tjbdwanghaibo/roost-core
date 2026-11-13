@@ -130,17 +130,15 @@ type HeroDao struct {
 }
 
 func TestParseRejectsDaoTagTraps(t *testing.T) {
-	// Regression set: these used to be silent data-loss traps — an unrelated
-	// option zeroed persist/sync, unknown options and map modes were ignored.
+	// 拼写错误和矛盾开关不能退回默认值；空 tag / 只有 map 选项遵循默认双开。
 	cases := []struct {
 		tag  string
 		want string
 	}{
-		{"`dao:\"map=fast\"`", "does not state persist/sync intent"},
 		{"`dao:\"persits,sync\"`", "unknown option"},
 		{"`dao:\"persist,sync,map=huge\"`", "unknown map mode"},
 		{"`dao:\"persist,nopersist\"`", "both persist and nopersist"},
-		{"`dao:\"\"`", "does not state persist/sync intent"},
+		{"`dao:\"sync,nosync\"`", "both sync and nosync"},
 	}
 	for _, tc := range cases {
 		_, err := parseSource(t, `package def
@@ -161,7 +159,7 @@ func TestParseAcceptsExplicitTagIntents(t *testing.T) {
 
 //roost:dao coll=heroes db=game
 type HeroDao struct {
-	A int64            `+"`"+`dao:"persist" store:"a"`+"`"+`
+	A int64            `+"`"+`dao:"nosync" store:"a"`+"`"+`
 	B int64            `+"`"+`dao:"nopersist,sync" store:"b"`+"`"+`
 	C map[int64]int32  `+"`"+`dao:"persist,sync,map=fast" store:"c"`+"`"+`
 	D int64            `+"`"+`dao:"-"`+"`"+`

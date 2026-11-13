@@ -10,7 +10,7 @@ state:
   - field: Cdkey
     type: CdkeyLedger
     store: cdkey
-    dao: persist
+    dao: nosync
     comment: Cdkey 是兑换意图与回执，至多128条，不淘汰已成功记录。
 component: Cdkey
 protocols: [CdkeyRedeem]
