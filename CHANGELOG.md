@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **sync-aoi 压测工具逐 tick 采样 Interest 日志积压**（scripts/perf，2026-11-14，KNOWN-LIMITS“Interest 单写者 ⑧”的“运行中的积压没有采样”）：测量循环在每个 tick 的 Flush 之后（计时之外）读 `entitysync.interest.log_backlog`，`server.json` 新增 `log_backlog_per_tick`（样本数、非零 tick 数、条目数分位）；原来只有 `interest_metrics` 里运行末的值。没有框架行为改动。
+  - **验证**：`TestLogBacklogIsSampledFromTheInterestGauge`；变异自检（读错序列、汇总时改动样本顺序）都红；50 玩家 20 tick 的冒烟运行写出 20 个样本。16 视野诊断构建的复跑（测量）未做。
+
 - **匹配补位在真实 Redis 与两个匹配器实例上的用例**（wiring/integration，2026-11-14，KNOWN-LIMITS“匹配补位”）：新增 `TestMatchBackfillWithTwoMatchersOnRedis`（`-tags integration`，单机用 `REDIS_ADDR`、Cluster 用 `ROOST_REVIEW_CLUSTER`）。补位队列里房间票（Score = 空位数）+ 玩家票弹性成局，两个匹配器实例各用自己的连接与 `Store`、按相反票序提交互相重叠的票集合，玩家在匹配期间陆续排队，房间按剩余空位一轮轮挂票；断言每张票至多进一局、每局恰好一张房间票且玩家数不超过 Score、座位最终填满、存储里每张已匹配的票指向它的局。没有行为改动。
   - **验证**：单机 Redis 与 3 主 Redis Cluster 各 `-race -count=5` 通过（每次 8～17 次匹配器之间的提交冲突）；变异自检把 `Commit` 的“票必须在等待”放宽为“只拒绝已取消”后用例红（`ticket … is in two matches …`）。
   - **仍未覆盖**：用的是 party-room 夹具 `partymatch.Pass` 同一规则的副本，不经房间的进房 handler；补位吞吐没有测。

@@ -665,6 +665,7 @@ func runServer(c config) error {
 	// 同口径（每 tick）：policy 是 Manager 政策阶段的耗时增量（排队模式下 AOI 全在这里），driverInterest 是压测端线程里
 	// interest.Move 与 interest.Apply 的耗时（直接模式下 AOI 在这里；排队模式下只剩 Apply，主要是等 Interest 的锁）。
 	policyPerTick, driverInterest := make([]float64, 0, c.Ticks), make([]float64, 0, c.Ticks)
+	backlog := make([]float64, 0, c.Ticks)
 	policyBefore := manager.Counters().PolicyDuration
 	driverMove = 0
 	var overWork int
@@ -769,6 +770,9 @@ func runServer(c config) error {
 		driverMove = 0
 		flush = append(flush, milliseconds(elapsed))
 		lag = append(lag, milliseconds(begin.Sub(due)))
+		if entries, found := logBacklogGauge(); found {
+			backlog = append(backlog, float64(entries))
+		}
 		if active > 50*time.Millisecond {
 			overWork++
 		}
@@ -856,6 +860,9 @@ func runServer(c config) error {
 	report["flush_failures_before_stop"] = failuresBeforeStop
 	report["move_driver"] = c.MoveDriver
 	report["interest_metrics"] = interestMetrics()
+	if b := backlogReport(backlog); b != nil {
+		report["log_backlog_per_tick"] = b
+	}
 	if moving != nil {
 		report["heartbeat"] = moving.report()
 	}
