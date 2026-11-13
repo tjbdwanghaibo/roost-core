@@ -122,6 +122,11 @@
 
 - **App 停机关输入后的边界**（2026-11-04，[方案](FEATURE-2026-11-04-app-lifecycle.md) 第 6 节，契约见 [guide/01 §4.1](../framework/guide/01-app-lifecycle.md#41-停机第一步关外部输入)）：① **集群里退订兴趣的传播窗口**：退掉一个订阅之后，集群其他节点要过一小段时间才撤掉转发兴趣，这段时间经别的节点发来的请求到达本节点时本地订阅已经没了、被服务端丢掉，调用方等到超时（结果未知）。真实依赖 `TestRealWithdrawRpcAnswersEveryRequestDefinitely` 设 `ROOST_WITHDRAW_SPLIT_NODES=1`（服务端与调用方连不同节点）10 次里 5 次丢 1～4 个请求，同节点 10 次 0 次；game-demo 两个 alliance 实例运行中停，`4947c62a` 时 22 次里 1 次、关输入之后 15 次里 2 次出现超时（方案 §8，样本区分不了两者）。任何订阅退掉都有这个窗口（Bus 停止、进程退出同样），关输入没有新增它，只是把它挪到停机第一步；曾试过让实例主题留到 Bus 停止、期间答可重试，窗口移到 Bus 停止时的直接退订与连接关闭，冒烟里超时反而更多，已撤回。调用方照 `Classify` 把超时当结果未知、用同一 RequestID 查结果或重发。② **启动步骤进行中发生的 fail-stop**（失锁等 `RuntimeFailure`）要等这一步返回才被看到：`startupFailure` 只在步骤之间查。③ **按依赖序停的输入不在第一步**：玩家 TCP / 网关连接（方案 D3）由各自的 Mod 按依赖逆序停，它们排在依赖之上，在途答完才停依赖；`Service.Shutdown` 期间玩家仍连着。④ **不自动登记的输入**：业务在 `Service.Init` 里直接用 `IJetStream.Subscribe` 建的消费者（不经 `SubscribeEffects` / `Steps`，如 game-demo 的活动阶段消费者）、自己开的 HTTP / TCP 监听，不受这条保证，要实现 `app.IngressCloser` 或调 `app.AddIngress`，否则由业务的 `Shutdown` 负责。⑤ **排空和后续停机共用 `shutdown.total_timeout`**（方案 D1）：一条执行很久的运维命令或慢 handler 会吃掉后面 Mod 的停机时间；第一步没排空时 App 不再停 Mod、保留锁，进程按停机未完成退出。⑥ **`startup.timeout` 到期只关输入、不等那一步**（方案 D2）：卡住的步骤仍在跑，依赖与锁照旧保留到进程退出。⑦ 模块消息走核心 NATS、不持久：第一步之后到达的消息丢弃或进死信，与进程退出后到达的消息相同，靠业务原有的重投 / 登录补齐。
 
+#### 单实例锁的有效窗口（v1.47.0）
+
+- **窗口过期即 fail-stop，不再复活**：开了 singleton 的进程被 SIGSTOP、长 GC、调试器或虚拟机暂停超过 `ttl`（缺省 15s）后恢复，一律停下由编排重启，即使 Redis 的键仍是自己的（原来续期 Applied 就继续持有）。契约见 [guide/01“有效窗口过期后不可复活”](../framework/guide/01-app-lifecycle.md)。
+- **`SingletonLease.Check()` 只看本地时钟**：“检查之后、写入之前”的空档消除不了，跨进程写入的最终防线是存储侧的条件写。`Check()` 判定过期时在调用方的 goroutine 上同步执行 OnFail 回调（含 Nest 围栏），新加的 OnFail 回调不能依赖调用它的 goroutine。
+
 ### DataEngine、Remote 与 Saga
 
 #### 起服预加载与按服分库（v1.47.0）
@@ -336,6 +341,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **Saga / Remote / Skill 的 doctor 检查**：`remote-runtime` 在带 Nest 的服务部分缺 `remote_entity` 时只 WARN（实体由哪个服务写静态上看不出）；技能目录由生成的 `catalog_test.go` 与 doctor `skills:catalog` 检查，服务 Init 里调 `CompileAll` 归业务。
 - **configdata 重载内容未变也递增版本**（维护者 2026-10-18 决定 B）：照常发布、递增版本，回答 / 日志 / 指标标明 `changed=false`（`configdata.reload.total{result="unchanged"}`）；理由是监听者依赖每次重载都执行（如开关表用重载恢复表值）。版本号不是内容版本，内容是否变化看 `changed` / `hash`。
 - **文档提交号门禁**（`TestDocumentedCommitsAreReachableFromHEAD`）：浅克隆（CI 默认 depth=1）整条跳过，只在本地完整检出与 release 工作流（fetch-depth: 0）生效；纯数字短 SHA 与不带反引号的提交号不检查；只查“在 HEAD 历史里”，不查是不是文档所说的改动。分支上的文档引用本分支提交时 rebase 后会红：引用本轮改动优先写测试名 / CHANGELOG 条目，或合入后改成 main 上的提交号。
+- **DAO 字段默认持久且同步**（v1.47.0，维护者 2026-11-13 确认）：无 tag、空 tag、单写 `persist` / `sync` 或只写 `map=` 都是既落库又同步，只有 `nosync` / `nopersist` 关掉对应一项，规则见 [tag 手册](../../codegen/docs/TAGS.zh-CN.md#dao-字段-tag)。不保留旧解释：旧工程里原来“只落库”的 `persist` 重新生成后会同步给客户端，生成器只对持久键变化告警、不对“字段新开了同步”告警，升级要人工把服务端字段改成 `nosync`。
 - 嵌套 nil map 的文档形状、开发配置的 WAL 目录、`-template game` 的 Player DAO 见[生成器与工具：遗留](#生成器与工具遗留)。
 
 #### 生成器接入心跳、行为与时间域
@@ -373,7 +379,8 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。
 
-- **view 接口只收签名里用内建类型与 db 类型的方法**：签名用到组件包自己类型的方法不进 view（view 不能反向 import 组件包，否则回到循环引用）。cdkey、checkin、gacha、idle、naming、purchase、shop 七个组件的接口因此是空的 `interface{}`，handler 仍经实体上的 `XComp()` 拿具体类型调用。view 另外 import 了 `game/actor` 与 `game/gameplay/attribute` 两个只放类型的叶子包。
+- **签名里的结构体要定义在 view 里**（维护者 2026-11-13：组件对外的方法都应在 view 下）：view 不能反向 import 组件包，所以方法参数 / 结果用到的结构体定义在 `game/view/component_<功能>.go`，名字带功能前缀（`view.ShopResult`、`view.PurchaseGrant`），组件包与功能包留同名别名。搬进 view 的类型只能带用内建、db 与其他 view 类型的方法；要用工程错误码或别的包的方法改成功能包里的函数（如 `purchase.ValidateGrant`）。名字在全部模块的 view 文件里必须唯一，靠前缀约定，没有工具检查。
+- **view 是一个包**：import 它就带上所有 view 文件的依赖（db、`game/actor` 及其玩法包、`game/gameplay/attribute`）。`actor.Body` 是带行为的运行时类型、`gameattr.Combat` 由 `roost add attribute` 生成在固定目录，两者没有搬进 view。
 - **冷组件没有 view 访问器**：冷组件的字段可能是 nil，装进接口后不等于 nil，所以生成器不给它生成 `func (e *Player) X() view.X`；跨组件调用冷组件要经实体的具体类型。
 
 #### 业务 HTTP 路由与配置检查
@@ -473,14 +480,24 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 **地形确认来源（就绪标记，2026-11-10）**：可编辑地形 §31.7 ③ 按维护者定的 A 实施（[方案 §31.9](FEATURE-2026-11-08-editable-terrain.md#319-确认来源就绪标记317-③-a2026-11-10)；已合入 main，随 v1.43.0 发布）：地形视野里每一块都下发 TerrainChunk 对象，没改过的块是 Version 0 的就绪标记，C# `TerrainChunkSync` 据此 `Confirm` / `Unconfirm`。留下的边界：① 可确认的显示半径约 100m（一块就绪要 8 个邻块都已确认，地形视野 200m、视点每 8m 上报）；要更远需放大地形视野，300m 约 69 块，超过地形 64 的上限，要连同 `terrainMaxVisible` 与会话上限一起改——**待维护者确认**是否需要；② 进场时视野里 29～37 块按地形快照预算每 Flush 4 个，约 8～10 次 Flush（约 0.4～0.5s）后才全部可确认，期间显示原有网格或空洞。③④⑤ 见[地形 / 无缝世界：遗留](#地形--无缝世界遗留)。
 
-#### 无缝大世界原型的部署要求
+#### CellWorld 固定分区（v1.47.0）
 
-- **无缝大世界原型（2026-11-04 合入 main，[方案](FEATURE-2026-11-03-seamless-world.md) §14）**：`gameplay/cellworld` 与 game-demo 的分区场景（`scene.partition`，缺省关闭）是原型，不是承诺的正式能力。Cell 主题没有按主题的鉴权（连上 NATS 的进程都能往 Cell 发 Enter / 攻击）、结算方不复核攻击距离（信任攻击者所在格已按视野检查）：两者都只防内部进程出错或被冒充，按内网互信降为部署要求（维护者 2026-11-05：内网互信，不做按主题的 ACL）：NATS 只在内网可达，开连接级账号（`nats.username` / `password`），防止别的环境误连（方案 §6.3 第 8 条）。（原型的其余待办与待维护者决定的 Team 归属见[地形 / 无缝世界：遗留](#地形--无缝世界遗留)）
+契约见 [CellWorld](../../gameplay/cellworld/README.md)，进程装配见 [cellworld 模块](../../modules/cellworld/README.md)。共享授权、租约失效停止、NPC 出生账本、死亡结算、恢复快照、内部增量与正式模块已实现；下面是设计边界。
+
+- **固定拓扑**：固定网格、一个进程一个 Cell；不提供动态拆格、一个进程多个 Cell、跨多个 Cell 的原子战斗结算。所有节点用相同的 world、网格与协议版本；旧协议 / schema 不兼容，升级走离线迁移。
+- **内网互信**（维护者 2026-11-05）：Cell 主题没有按主题的鉴权，结算方不复核攻击距离（信任攻击者所在格已按视野检查）；NATS 只在内网可达并开连接级账号（`nats.username` / `password`）。
+- **权威记录在 Redis**：授权记录与出生目录在 Redis，不在 DataEngine，`dbscope` 与 `preload` 管不到它们；Redis 必须持久化且禁止淘汰权威键，授权 / 死亡记录丢失不能靠旧 Mongo 快照在线恢复。键只按 `world` 区分，两套环境共用一个 Redis 时 world 名不能重复。
+- **租约与存储之间没有原子性**：已失去 App 租约但还没停下的进程，持有匹配的授权时仍可能赢一次 CAS；单实例锁本地窗口一过就 fail-stop（见 [guide/01“有效窗口过期后不可复活”](../framework/guide/01-app-lifecycle.md)），对所有开了 singleton 的服务生效。
+- **死亡与复活**：玩家没有复活 API（Life 不前进，死亡事实留在记录上）；被击杀的玩家要等击杀者所在 Base 确认死亡回执才能重新进入，那个 Base 一直不确认（例如回执表满）就一直进不来，期间 Base 每次看门狗重试都要建一次实例、认领一次、再销毁。业务要发奖必须配 `SettleDeath`，nil 只记回执。
+- **回写不是硬 RPO**：位置 / HP / Buff / 冷却随周期回写恢复，资产由 strict 死亡回执单独保证。
+- **停机窗口内的属性变化被拒**：Node 进入 stopping 后，开了分区的进程上升级、穿装这类会刷新战斗面板的事务返回 `ErrNodeStopping` 并回滚。
+- **装配顺序由服务自己保证**：`cellworldhost` 不是 manager 也不是 World 组件（Node 要在实体心跳装好之后启动），服务自己在 Init 之后 `Runtime.Start`、在关掉自己的准入之后 `Runtime.Stop`，框架不检查顺序。`Runtime.Stop` 超时时 App 不重试 `Service.Shutdown`，进程按停机流程退出，没排空的入场与交接由租约到期后的接管处理。
+- **属性变化钩子收 `attribute.Owner`**：`OnAttributeChanged` 不限定实体类型，要 Player 的登记方自己判断宿主类型。
 
 #### cellworld 的位置零头与入场序号
 
 - **位置零头**（2026-11-10 按千分位累计零头之后，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-10cellworld-按经过时间积分的子步截断已证实维护者-2026-11-10-选定按千分位整数累计零头已修复未发版)）：每个子步仍在千分位上截断，丢不到 1 千分位（400/s、50ms 档平均约十万分之二点五）；游泳进出速度不同的地面格时缩放剩下的位移，再截断一次千分位。各情形的零头规则见 [cellworld README“位置零头”](../../gameplay/cellworld/README.md)，修复记录见 [证据](evidence/cellworld-subunit-20261110/README.md)、CHANGELOG `[Unreleased]`。
-- **入场序号**（RV-20261106-03 修复后，原有、未变的边界，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-06-续审cellworld-生命周期与编码)）：发给冻结中旧格的 Leave 不处理、离场后才到的旧 Enter 会重建无人续租的角色，均由租约兜底；入场序号取 Enter 时系统时间，跨 Base 重启唯一性依赖时钟不回拨。
+- **入场序号**（RV-20261106-03 修复后，原有、未变的边界，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-06-续审cellworld-生命周期与编码)）：发给冻结中旧格的 Leave 不处理、离场后才到的旧 Enter 会重建无人续租的角色，均由租约兜底；入场序号由 Player 的持久计数（`CellEntry`，`nosync`）在 strict 事务里分配，恢复边界见 CellWorld README。
 
 ### 玩法组件与物理房间
 
@@ -632,6 +649,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 #### 组件包与 game/view：遗留
 
 - **只拆了 Player 上的组件**：room、team、alliance 等其他实体上的组件这一轮没有搬进 `game/components/`；game-demo 的 `map_component.go`、`cell_base.go` 与 cell 路由耦合（`map` 也不能作包名），activity 的 `activity_timers.go` 挂在工程的定时器组件上，这几处仍在 `game/entities/player`。
+- **其余组件还有不在 view 里的导出方法**（`TestModuleViewInterfacesListTheComponentMethods` 的豁免表逐项写了原因）：参数是别的 `*Component` 或别的实体（combat Cast / Step / Tick / Leave，friends Change，team Create / Accept / Invite / Leave / Info）；参数或结果类型还在功能包 / 逻辑包（dungeon Counts / Claim，terrain Check / Record，rehome Prepare / Arrive，mailbox Claim，combat Input）；结果类型还在组件包、搬过去没有障碍（combat Ready、friends Snapshot、matchmaking Snapshot、profile Card、stamina Grant / Refill、task Claim、team Invites），与 2026-11-13 补七个组件是同一种改法；core / 运行时类型（actor SavedPosition、attribute Container、combat Core、activity Host）。
 - **team 组件依赖具体的 Team 实体**：`game/components/team` import 了 `game/entities/team`，因为建队、接受、邀请要跨实体操作 `*team.Team`。没有形成循环，以后可改成经 `view.TeamEntity`。
 - **过期的 `entity_<实体>.go` 只在全量生成时删除**：删掉一个实体后只单独生成别的实体包，`game/view/` 里那个实体的接口文件不会被清掉，要全量生成一次。生成器可以改成每次都按现存实体清理。
 
@@ -642,7 +660,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
 - **gm 联动边界**：直接加减币 / 道具 / 经验不自动重试，超时不等于未生效；可重试的补偿使用稳定 `request_id` 的邮件。操作者字段是 token 持有人自报的审计信息，不是独立账号认证。只读 Nest 验收收件人后才调 mail，发件 RPC 不在实体锁内；换服返回 accepted 表示已受理。模块与 Nest 的离线验收不替代真实 ops HTTP / 跨进程 mail / 真实 DataEngine 交出实体，统一验收仍待本轮结束。
-- **业务模块目录**（包括 gm、login、portal、servertime、purchase、rules、team，边界见下面各自的条目）：现行清单、固定场景数与联动以 [modules/README](../../modules/README.md) 和各 `module.yaml` 为准。新增场景线与六个补充模块面向新工程，不兼容旧生成工程/存储形状。game-demo 的属性/装备已换模块，移动共用 actor Body；cellworld、LOD/队伍视图、SceneReady、玩法刷怪、副本与地形适配仍在 demo，不能宣称全面迁移。13 类玩法尚未改成模块组合；casual / turn-pvp 仍需业务提供平台身份验证、角色号分配或可信匹配/胜负规则。
+- **业务模块目录**（包括 gm、login、portal、servertime、purchase、rules、team，边界见下面各自的条目）：现行清单、固定场景数与联动以 [modules/README](../../modules/README.md) 和各 `module.yaml` 为准。新增场景线与六个补充模块面向新工程，不兼容旧生成工程/存储形状。game-demo 的属性/装备已换模块，移动共用 actor Body；CellWorld 进程装配已进入正式 cellworld 模块，它的业务 Entity 适配、LOD/队伍视图、SceneReady、玩法刷怪、副本与地形适配仍在 demo，不能宣称全面迁移。13 类玩法尚未改成模块组合；casual / turn-pvp 仍需业务提供平台身份验证、角色号分配或可信匹配/胜负规则。
 - **场景模块的边界**：scene / monster / terrain 是单进程所有权，没有跨进程切图或分布式容量。Scene / Terrain 的控制器构造不再要求 Start 后发布的 runtime；2026-11-13 已完成单机真实依赖的生成工程启动与 TCP 验收，未改框架生命周期。combat 仅固定双人会话，墙钟 50ms 拍，不跟随 scene 倍速；退出 / 会话结束恢复生命，死亡本身不自动结束会话。friends 仅拒绝申请 / 取消拉黑支持对方离线，双边动作仍需双方本进程在线以证明写归属。维护者已于 2026-11-13 确认该边界，归属不明时拒绝双边修改。notice 的 GM 命令仅装 gm 时登记；本身不默认调度。naming / cdkey 的共享占名依赖 Directory。详见[本轮修复验收](evidence/module-fixes-20261112/README.md)。
 - **chat 模块的边界**：在线名单是每进程的内存集合，多个 game 进程不互相扇出世界频道的推送（要么各推各的在线玩家，要么改为订阅 chat 的流）；连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订；系统消息入口无条件授予（前提是 chat 只经内部总线可达，见 collaborators 的注释）；没有群组频道。基础 10 条场景覆盖频道规则、消息体校验、在线名单和本地频道登记；scene 联动增加 5 条附近聊天场景，Nest 锁内只取收件人快照，实际发送在锁外，没有附近历史或离线投递。game-demo 使用同一 chat 模块。
 - **模块安装绑定 Player 与工程形状**：模块的 `entity:` 是名为 `Player` 的实体，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）；实体叫别的名字的工程装不了。2026-11-13 起 bag、wallet、attribute 的组件逻辑放在共用包 `game/components/<x>/`，经宿主接口（`bag.Owner`、`wallet.Owner`、`attribute.Owner`）拿状态，可以由工程手写一个接线文件挂到别的实体上（各模块 README 的“复用方式”，模块场景 `Test{Bag,Wallet,Attribute}SecondHost*` 在测试里的第二个实体上验证）；但安装器只接 Player，协议、自带 handler、钩子与联动不随组件到别的实体，第二个实体的状态字段、组件号与入口由工程自己加。activity 早已是同样的写法；其余模块（例如 checkin）的组件仍直接写死 `*Player`。
@@ -767,7 +785,10 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **变异未杀死的三项**（如实记录）：去掉“占地提交后立即推送”（订阅每秒续期按修订号补齐，5s 的等待里照样到）、去掉格的在途去重（账本去重兜底）、去掉答复的 incarnation 核对（没有构造“Base 重启后序号撞上旧答复”的用例）。
 - **地形确认来源 ③④⑤**：③ 原始地形包里坏了的块（服务端装不进视图）、分区场景里拥有者装不进的块没有标记，客户端永远不确认（后者每次订阅续期都会再问一次）；④ C# 接入层只用构造的说法核对时序，没有用真实 entitysync 帧驱动 `EntityViews` → `TerrainChunkSync`，Unity 未跑；⑤ 没有在真实依赖（mirror-local）与无缝演练上跑过（合入时跑）。证据见 [evidence/terrain-confirm-source-20261110](evidence/terrain-confirm-source-20261110/README.md)。
 - **2026-11-09：地形首批参数实施边界**：默认编辑配额与桶容量已降至 270，terrainpack 默认 HeightBase 已设为 −100 米（−10000 厘米）；不重写既有资源。按类型同步现已完成框架与 demo 接线。本条写下时“圆滑岸线只完成决策，原地形去重两项问题及 P3～P6 未完成”，此后的状态（2026-11-11 按 CHANGELOG v1.43.0 段核对）：去重两项 T01 / T02 已修复；P3（Ghost 副本、移动与寻路、跨格移动）、P4（区域水位、建筑）、P5（转发编辑、分区场景的建筑）的代码与岸线 / 重建调度的 C# 算法层都已合入 main 并随 v1.43.0 发布；仍未完成的是 P5 的规模与降级验收（T09）、P6 可选物理（T10）、Unity 表现，以及真实 Mongo / WAL 崩溃演练、跨机与长稳验收。当前清单见 [地形进度总表](TERRAIN-STATUS.md)。功能测试、修正记录与预期跳过见 [实施状态](TERRAIN-DECISIONS-20261109.md)；未新增压测，历史 270 档临时数据不代替容量验收。
-- **无缝大世界原型**：上线前必须解决的其余项见方案 §6.3；其余原型简化与待产品规则见方案 §6.3、§8.4、§9.6、§10.4、§11.10、§12.2、§13.6（刷怪账本 E5、面板变化不回血、邀请不推送、队伍面板只在分区场景里等）。待维护者决定：Team 归 game 服务（`service=game`、共享模式，game 因此保留 `remote_entity`）还是像联盟一样归一个实体服务独占（方案 §14.3、§14.6）。
+- **CellWorld 容量与环境验收**：1000 玩家 / 10000 Actor 的 Witness P99 ≤ 50ms 与正式 Robot 千人联合容量都没有通过（[验收记录](../performance/CELLWORLD.md)），不能以功能回归通过宣布千人容量已验收；Linux / 跨机 / 生产 Redis HA 没有实跑。
+- **CellWorld 模块的验收范围**：`roost module verify cellworld` 只有 3 条装配用例（出生号、越界、缺 Registry），`New` 的 Cell 分支、`Start` / `Stop` 不在里面；业务 Entity（Player、SceneActor、Monster）的适配只在 game-demo，`-template game` 装上模块后没有可跑的分区场景。`Runtime.Start` 失败后回到未启动（2026-11-13 修）没有专门的回归用例。
+- **CellWorld 出生号与运行期号共用 shard 位**：`SpawnID` 是 `Static | home<<34 | 1<<33 | seq`，runtimeid / monster 模块是 `Static | sid<<34 | seq`，两者只靠运行期序号不到 2^33 区分（尚未确认是否需要拆开）。
+- **无缝世界的其余产品规则**：方案 §8.4、§9.6、§10.4、§11.10、§12.2、§13.6 列的原型简化（面板变化不回血、邀请不推送、队伍面板只在分区场景里等）仍按原样。待维护者决定：Team 归 game 服务（`service=game`、共享模式，game 因此保留 `remote_entity`）还是像联盟一样归一个实体服务独占（方案 §14.3、§14.6）。
 - **cellworld 的 Linux 原始失败样本**：审查时的 Linux 原始失败样本未在本机复现，若收尾真的卡住会超时并带诊断失败，不会被掩盖。
 - **cellworld 真实时钟用例**：仍按墙钟、负载更高时可能误报的只剩协议自己的墙钟期限（HandoffAbort 3s、租约 1s、GhostTTL），各处注释写明。证据见 [cellworld 真实时钟用例整治](evidence/cellworld-clock-cleanup-20261110/README.md)。
 

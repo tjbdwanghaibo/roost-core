@@ -4,6 +4,8 @@
 
 Markdown 链接相对本文件所在目录；反引号里写的路径（`modules/<name>/README.md` 等）相对 roost-core 根目录。命令以目标检出为准：`roost module` 在 v1.43.0 之后的 main 上才有（v1.43.0 及更早的 tag 没有），更早的 tag 没有这条路，只能手写（第 4 步）。
 
+固定分区的大世界（多个进程各管一块地图、玩家跨格移动与战斗）装 `cellworld` 模块（[模块说明](../../../../modules/cellworld/README.md)，v1.47.0 起）：它只装配进程，业务的 Player / 场景角色 / 怪物适配照 game-demo 的 `game/partition` 写；千人容量与 50ms 同步目标在本机没有通过，Linux / 跨机要在目标环境实跑，这两点写进说明文档的限制。
+
 ## 0. 四条规则（总边界，每一步都受它们约束）
 
 1. **遵循框架的核心编程思路**（第 0A 节）。业务怎么改状态、怎么落盘、怎么让客户端看到，框架已经定了做法；不另起一套。
@@ -374,7 +376,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
    	Task TaskState `store:"task" dao:"persist,sync"`
    ```
 
-   - 同步与否按这个顶层字段决定：标了 `sync` 的字段才会下发，`persist` 只落库。既有可见状态又有服务端账本就写两个字段、两个结构体。不要在嵌套结构体的字段上写 `dao` 标签。标了 `sync` 还要打开自身视图客户端才收得到，见第 4A 步。
+   - 同步与否按这个顶层字段决定：v1.47.0 起字段默认既落库又同步，`nosync` 只落库（账本、回执、种子这类服务端字段一律写它），`nopersist` 只同步；单写 `persist` 或 `sync` 不会关掉另一项。既有可见状态又有服务端账本就写两个字段、两个结构体。不要在嵌套结构体的字段上写 `dao` 标签。标了 `sync` 还要打开自身视图客户端才收得到，见第 4A 步。
    - 只能加在末尾（同步的字段号按定义顺序排）；不要改已有字段的 `store` 键。
 2. **组件**：`"$ROOST" add component <Feature> --entity Player`，在生成的 `game/entities/player/<feature>_component.go` 里写业务方法。状态只经生成的 setter 改（`component.owner.Dao().GetTask().SetProgress(…)`）；组件不保存事务会改的状态、不加锁。同一个实体上的别的组件（模块的或自己写的）都用 `component.owner.<Other>Comp()` 直接调，在同一把锁、同一笔事务里。要动货币就调同一个实体上的货币组件，同一笔事务。两个入口按“谁来保证只做一次”选：
    - **你的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `component.owner.Wallet().Add(delta)`，不留回执。周期性发放（每日、每局、每个订单）都用这个。
@@ -527,7 +529,7 @@ game/handler、controllers → 实体包、组件包
 | --- | --- | --- |
 | 缓存、索引、路由表、场景注册表、从配置或别的数据推导出来、丢了能重建的东西 | **manager**：实现 `app.IManager`（Start / Stop），登记在 `game/managers/managers.go` 的 `Managers()`（game 服务；v1.47.0 之前的工程在 `internal/service/<服务>/managers.go`） | 不进 Nest 事务，自己加锁，可以并发读；按 `DependsOn()` 的依赖顺序启动、反序停止；改动不随事务回滚 |
 | 全服状态，要和玩家的修改在同一笔事务里成败（全服限量、全服计数、拍卖库存） | **World 上加组件**：`"$ROOST" add component <Feature> --entity World`，状态放在 World 的 DAO 里 | 走 Nest 的锁与事务，失败一起回滚；World 每个进程唯一（ID 是 sid）、`Service.Init` 里已确保存在，不用自己处理创建顺序 |
-| 同上，但不需要落盘 | 同上，DAO 字段标 `dao:"nopersist"` | 只在内存，进程结束就没了 |
+| 同上，但不需要落盘 | 同上，DAO 字段标 `dao:"nopersist,nosync"` | 只在内存，进程结束就没了 |
 | 很热：几乎每个玩家请求都要写 | **先不要放进单个实体** | 一个实体同一时刻只有一笔事务拿得到锁，全服的写都排在这把锁上。能按 key 拆就拆成多个实体（第 4 步“独立实体”），或者 manager 里攒着、定时批量提交，作为限制写进说明文档 |
 
 **不另建“全服单例实体”**：新的单例实体要自己解决 ID 怎么定、多个进程共用一个数据库时会不会写成两份、在哪里创建与以什么顺序创建，而 World 已经解决了这些。确实需要独立的单例实体（例如锁序等级与 World 不同）时，按规则 4 先向用户说明理由。
