@@ -68,9 +68,13 @@ type Player struct {
 //
 // Two things worth knowing before copying this:
 //
-//   - TakeSyncDirty CONSUMES the mask. In this demo the client is the only
-//     consumer; a project that also mirrors the Entity to another process has
-//     a second reader and must not let one of them steal the other's mask.
+//   - It takes the client-sync mask, the same one the scene's Nest commit
+//     observer takes (the generated TakeEntitySyncChanges reads
+//     TakeEntitySyncDirty; TerrainChunk / Building do the same). A field
+//     written by code that never calls this — a module's component, the bag —
+//     is consumed by the observer's take, so the next PublishSyncDirty (a step,
+//     a level-up) does not send it again. The server-to-server mask
+//     (TakeSyncDirty) is left alone for a project that also mirrors the Entity.
 //   - Called inside a Nest transaction, the mark joins that transaction's
 //     sync entry (the scene's Nest commit observer tracks the mutation): it
 //     is published when the commit is admitted, merged with the observer's
@@ -81,7 +85,7 @@ func (player *Player) PublishSyncDirty() {
 	if player == nil {
 		return
 	}
-	if mask := player.Dao().DirtyTracker().TakeSyncDirty(); mask != 0 {
+	if mask := player.TakeEntitySyncChanges(); mask != 0 {
 		player.MarkSyncDirty(mask)
 	}
 }

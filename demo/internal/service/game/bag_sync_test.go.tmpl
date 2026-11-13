@@ -35,7 +35,9 @@ import (
 //     (the module deletes the key at zero; no zero-count entry is left behind);
 //   - a refused grant (rolled back) sends nothing;
 //   - another player in view never receives the bag: it is in none of the
-//     views others get (game/entities/player/sync_packer.go).
+//     views others get (game/entities/player/sync_packer.go);
+//   - a later change made by the demo's own code (experience, which calls
+//     Player.PublishSyncDirty) does not send the unchanged bag again.
 //
 // The scene tests in scene_test.go build a bare Nest without the observer;
 // there only an explicit PublishSyncDirty marks a subject, so they are not
@@ -63,14 +65,16 @@ func TestBagChangesReplicateToTheOwnerThroughTheCommitObserver(t *testing.T) {
 	)
 	owner := newScenePlayer(t, ownerID)
 	nearby := newScenePlayer(t, nearbyID)
+	counters := newSceneWorld(t)
 
 	// The service's order: Nest binds the observer when it is built, the
 	// scene attaches its manager to it afterwards.
 	var observer sceneSyncObserver
 	handler.RegisterAddItemNestHandlers()
 	handler.RegisterBagDiscardNestHandlers()
+	handler.RegisterAddExpNestHandlers()
 	engine := nest.NewEngine(
-		nest.NestOptionWithGetter(sceneGetter{owner.ID(): owner, nearby.ID(): nearby}),
+		nest.NestOptionWithGetter(sceneGetter{owner.ID(): owner, nearby.ID(): nearby, counters.ID(): counters}),
 		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
 		nest.NestOptionWithEntitySync(&observer),
@@ -135,6 +139,17 @@ func TestBagChangesReplicateToTheOwnerThroughTheCommitObserver(t *testing.T) {
 	}
 	if toNearby {
 		t.Fatal("a player nearby received the owner's bag")
+	}
+
+	// The demo's own writes mark the subject through Player.PublishSyncDirty (AddExp
+	// calls it). It takes the same client mask the observer takes, so a bag the
+	// observer already sent is not sent to the owner again with the next level-up
+	// or step.
+	if gained, err := syncsender.NewAddExpSender(engine).MultiSync_AddExp(ctx, owner.ID(), counters.ID(), 250); err != nil || gained == 0 {
+		t.Fatalf("add exp: gained=%d err=%v", gained, err)
+	}
+	if items, toOwner, _ = bagSeen(); toOwner {
+		t.Fatalf("gaining experience sent the unchanged bag to the owner again: bag=%v", items)
 	}
 
 	// A refused grant is rolled back and replicates nothing.
