@@ -1,6 +1,6 @@
 package e2e
 
-// 机器人场景 guild_offline_join（方案 §2.5B 决定 D：离线时入会，再登录看到公会）在真实进程上跑一遍：全栈（九个托管服务 +
+// 机器人场景 alliance_offline_join（方案 §2.5B 决定 D：离线时入会，再登录看到公会）在真实进程上跑一遍：全栈（九个托管服务 +
 // alliance 两实例 + game 两进程），生成工程自己的 cmd/loadtest 连 game 1000 的玩家 TCP 与 ops。场景里每个机器人以自己的身份
 // 经建盟 Saga 建一个开放公会，再以第二个身份登录一次后断开；运维步骤 gm.player.join_guild 只在 game 已没有该身份的会话时
 // 才入会（否则答 joined=false，场景重试），所以“离线”由这一步保证，不靠等待；之后该身份再登录，“我的公会”（不带公会号）
@@ -23,7 +23,7 @@ func TestAllianceE2ERobotOfflineJoin(t *testing.T) {
 	cmd := exec.CommandContext(s.ctx, loadtest,
 		"-endpoint", games[0].client, "-server-id", "1000", "-game-ops", games[0].ops,
 		"-account-nats", s.natsURL, "-nats-prefix", s.prefix,
-		"-scenarios", filepath.Join(s.root, "loadtest", "scenarios"), "-scenario", "guild_offline_join",
+		"-scenarios", filepath.Join(s.root, "loadtest", "scenarios"), "-scenario", "alliance_offline_join",
 		"-count", "4", "-report", report)
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
@@ -36,10 +36,10 @@ func TestAllianceE2ERobotOfflineJoin(t *testing.T) {
 				failed = append(failed, line)
 			}
 		}
-		t.Fatalf("robots (guild_offline_join, 4) failed after %v: %v\n%s", time.Since(start).Round(time.Millisecond), err, strings.Join(failed, "\n"))
+		t.Fatalf("robots (alliance_offline_join, 4) failed after %v: %v\n%s", time.Since(start).Round(time.Millisecond), err, strings.Join(failed, "\n"))
 	}
 	if _, err := os.Stat(report); err != nil {
 		t.Fatalf("no robot report: %v", err)
 	}
-	t.Logf("ROBOT guild_offline_join: 4 robots passed in %v (report %s)", time.Since(start).Round(time.Millisecond), report)
+	t.Logf("ROBOT alliance_offline_join: 4 robots passed in %v (report %s)", time.Since(start).Round(time.Millisecond), report)
 }

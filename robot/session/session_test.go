@@ -105,13 +105,20 @@ func TestCallReturnsWhenTheWriteBlocksPastItsContext(t *testing.T) {
 	conn.mu.Unlock()
 	defer close(release)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	// 期限在写已经开始并卡住之后才到：原来用 50ms 的 WithTimeout，重负载下 Call 的 goroutine 可能在期限之后才被调度，
+	// 发送前的 ctx.Err() 检查直接返回（没开始写、不关连接——那是正确行为），最后一条断言就会误报“transport open”。
+	ctx := newManualDeadline()
 	done := make(chan error, 1)
 	go func() {
 		_, err := s.Call(ctx, msgEcho, msgEcho, &echoMsg{Text: "ping"})
 		done <- err
 	}()
+	select {
+	case <-conn.writeEnter:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Call never started writing")
+	}
+	ctx.expire()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.DeadlineExceeded) {
@@ -132,6 +139,50 @@ func TestCallReturnsWhenTheWriteBlocksPastItsContext(t *testing.T) {
 		t.Fatal("timed-out write left transport open; repeated calls can accumulate blocked writers")
 	}
 
+}
+
+// manualDeadline 是由用例决定何时到期的 ctx：到期后 Done 关闭、Err 为 context.DeadlineExceeded，与真实超时同形。
+type manualDeadline struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newManualDeadline() *manualDeadline {
+	return &manualDeadline{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *manualDeadline) Done() <-chan struct{} { return c.done }
+
+func (c *manualDeadline) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (c *manualDeadline) expire() { c.once.Do(func() { close(c.done) }) }
+
+// 期限在 Call 开始写之前就已经到了：不写、不留等待者，连接保持打开（没有半帧，可以继续复用）。
+func TestCallPastItsDeadlineBeforeWritingLeavesTheTransportOpen(t *testing.T) {
+	s, conn := newScriptedSession(t)
+	ctx := newManualDeadline()
+	ctx.expire()
+	if _, err := s.Call(ctx, msgEcho, msgEcho, &echoMsg{Text: "ping"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Call past its deadline = %v, want context.DeadlineExceeded", err)
+	}
+	select {
+	case <-conn.writeEnter:
+		t.Fatal("Call wrote although its deadline had passed")
+	default:
+	}
+	select {
+	case <-conn.closed:
+		t.Fatal("Call closed the transport although it never started writing")
+	default:
+	}
 }
 
 // 超时之后才到的应答（seq 非 0、已无等待者）丢弃，不当成推送：传输层约定只有 seq 0 是推送，

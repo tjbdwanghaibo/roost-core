@@ -148,6 +148,10 @@ func TestMOBARealSettlementAcrossProcesses(t *testing.T) {
 		if err := client.Database(database).Drop(ctx); err != nil {
 			t.Fatal(err)
 		}
+		// dbscope=sid 的 DAO（add dao --entity，v1.47.0 起）落在 <库>_<sid>，本用例的存储没有 sid（0）。
+		if err := client.DatabaseForSid(database, 0).Drop(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -175,16 +175,16 @@ func (p *player) addGold(count int32) int32 {
 // gold 读道具 9001 的数量：加 1 再减去这 1（加道具是唯一不改别的状态的正式读法）。调用方自己记着多出来的 1。
 func (p *player) gold() int32 { return p.addGold(1) - 1 }
 
-func (p *player) guildInfo(guildID, minVersion int64) *pb.GuildResponse {
-	return call(p, msgid.MsgGuildInfo, &pb.GuildInfoRequest{GuildID: guildID, MinVersion: minVersion}, pb.MarshalGuildInfoRequest, pb.UnmarshalGuildResponse)
+func (p *player) guildInfo(guildID, minVersion int64) *pb.AllianceResponse {
+	return call(p, msgid.MsgAllianceInfo, &pb.AllianceInfoRequest{AllianceID: guildID, MinVersion: minVersion}, pb.MarshalAllianceInfoRequest, pb.UnmarshalAllianceResponse)
 }
 
 // opStatus 轮询公会 Saga 到终态，返回最后一次状态。
-func (p *player) waitOp(op, key string, limit time.Duration) *pb.GuildOpStatusResponse {
+func (p *player) waitOp(op, key string, limit time.Duration) *pb.AllianceOpStatusResponse {
 	deadline := time.Now().Add(limit)
-	var last *pb.GuildOpStatusResponse
+	var last *pb.AllianceOpStatusResponse
 	for time.Now().Before(deadline) {
-		last = call(p, msgid.MsgGuildOpStatus, &pb.GuildOpStatusRequest{Op: op, SagaKey: key}, pb.MarshalGuildOpStatusRequest, pb.UnmarshalGuildOpStatusResponse)
+		last = call(p, msgid.MsgAllianceOpStatus, &pb.AllianceOpStatusRequest{Op: op, SagaKey: key}, pb.MarshalAllianceOpStatusRequest, pb.UnmarshalAllianceOpStatusResponse)
 		switch last.Status {
 		case "completed", "compensated", "failed", "manual_required":
 			return last
@@ -195,17 +195,17 @@ func (p *player) waitOp(op, key string, limit time.Duration) *pb.GuildOpStatusRe
 	return nil
 }
 
-func (p *player) opStep(op, key string) *pb.GuildOpStatusResponse {
-	return call(p, msgid.MsgGuildOpStatus, &pb.GuildOpStatusRequest{Op: op, SagaKey: key}, pb.MarshalGuildOpStatusRequest, pb.UnmarshalGuildOpStatusResponse)
+func (p *player) opStep(op, key string) *pb.AllianceOpStatusResponse {
+	return call(p, msgid.MsgAllianceOpStatus, &pb.AllianceOpStatusRequest{Op: op, SagaKey: key}, pb.MarshalAllianceOpStatusRequest, pb.UnmarshalAllianceOpStatusResponse)
 }
 
 func (p *player) startOp(op string, request any) string {
-	var resp *pb.GuildResponse
+	var resp *pb.AllianceResponse
 	switch r := request.(type) {
-	case *pb.FoundGuildRequest:
-		resp = call(p, msgid.MsgFoundGuild, r, pb.MarshalFoundGuildRequest, pb.UnmarshalGuildResponse)
-	case *pb.DonateGuildRequest:
-		resp = call(p, msgid.MsgDonateGuild, r, pb.MarshalDonateGuildRequest, pb.UnmarshalGuildResponse)
+	case *pb.FoundAllianceRequest:
+		resp = call(p, msgid.MsgFoundAlliance, r, pb.MarshalFoundAllianceRequest, pb.UnmarshalAllianceResponse)
+	case *pb.DonateAllianceRequest:
+		resp = call(p, msgid.MsgDonateAlliance, r, pb.MarshalDonateAllianceRequest, pb.UnmarshalAllianceResponse)
 	}
 	if resp.Code != 0 || resp.SagaKey == "" {
 		p.t.Fatalf("player %d %s_guild: %+v", p.id, op, resp)
@@ -303,37 +303,37 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 	a := s.login(games[0], s.prefix+"-a")
 	b := s.login(games[1], s.prefix+"-b")
 	a.addGold(1000)
-	key := a.startOp("found", &pb.FoundGuildRequest{Name: "e2e guild", OpenJoin: true})
+	key := a.startOp("found", &pb.FoundAllianceRequest{Name: "e2e guild", OpenJoin: true})
 	status := a.waitOp("found", key, time.Minute)
-	if status.Status != "completed" || status.GuildID == 0 {
+	if status.Status != "completed" || status.AllianceID == 0 {
 		t.Fatalf("found saga: %+v", status)
 	}
-	guildID := status.GuildID
+	guildID := status.AllianceID
 	if got := a.gold(); got != 1000-cost {
 		t.Fatalf("A gold after founding: %d, want %d", got, 1000-cost)
 	}
-	join := call(b, msgid.MsgJoinGuild, &pb.JoinGuildRequest{GuildID: guildID}, pb.MarshalJoinGuildRequest, pb.UnmarshalGuildResponse)
+	join := call(b, msgid.MsgJoinAlliance, &pb.JoinAllianceRequest{AllianceID: guildID}, pb.MarshalJoinAllianceRequest, pb.UnmarshalAllianceResponse)
 	if join.Code != 0 || join.Members != 2 || join.ServedBySID == 0 {
 		t.Fatalf("B join from game 1001: %+v", join)
 	}
 	readB := b.guildInfo(guildID, join.Version)
 	readA := a.guildInfo(0, join.Version)
-	if readB.Code != 0 || readB.Members != 2 || readA.Code != 0 || readA.GuildID != guildID || readA.Members != 2 {
+	if readB.Code != 0 || readB.Members != 2 || readA.Code != 0 || readA.AllianceID != guildID || readA.Members != 2 {
 		t.Fatalf("read your write: B (game 1001) %+v; A (game 1000) %+v; want both to see 2 members at version >= %d", readB, readA, join.Version)
 	}
 	t.Logf("GAMES guild %d founded on game 1000 (owner alliance %d), B joined from game 1001 at version %d; both read 2 members (versions %d / %d)",
 		guildID, join.ServedBySID, join.Version, readA.Version, readB.Version)
-	var notice *pb.GuildNoticePush
+	var notice *pb.AllianceNoticePush
 	deadline := time.After(10 * time.Second)
 	for notice == nil {
 		select {
 		case packet := <-a.pushes:
-			if packet.MsgID == msgid.MsgGuildNotice {
-				n, err := pb.UnmarshalGuildNoticePush(packet.Payload)
+			if packet.MsgID == msgid.MsgAllianceNotice {
+				n, err := pb.UnmarshalAllianceNoticePush(packet.Payload)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if n.GuildID == guildID {
+				if n.AllianceID == guildID {
 					notice = n
 				}
 			}
@@ -355,7 +355,7 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 	e = s.login(games[1], s.prefix+"-e")
-	if mine := e.guildInfo(0, 0); mine.Code != 0 || mine.GuildID != guildID {
+	if mine := e.guildInfo(0, 0); mine.Code != 0 || mine.AllianceID != guildID {
 		t.Fatalf("E after logging in again: my guild %+v, want guild %d (looked up at login)", mine, guildID)
 	}
 	t.Logf("GAMES E joined guild %d while offline and sees it after logging in again", guildID)
@@ -363,7 +363,7 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 	// ② 捐献只扣一次、只加一次。
 	b.addGold(500)
 	before, _ := s.funds(guildID)
-	key = b.startOp("donate", &pb.DonateGuildRequest{Amount: 50})
+	key = b.startOp("donate", &pb.DonateAllianceRequest{Amount: 50})
 	if status := b.waitOp("donate", key, time.Minute); status.Status != "completed" {
 		t.Fatalf("donate saga: %+v", status)
 	}
@@ -386,7 +386,7 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 			_, err := client.Join(s.ctx, fmt.Sprintf("rpc-join-%d", c.id), c.id, 1000, target(t, guildID))
 			joined <- err
 		}()
-		resp := call(c, msgid.MsgFoundGuild, &pb.FoundGuildRequest{Name: "second guild", OpenJoin: true}, pb.MarshalFoundGuildRequest, pb.UnmarshalGuildResponse)
+		resp := call(c, msgid.MsgFoundAlliance, &pb.FoundAllianceRequest{Name: "second guild", OpenJoin: true}, pb.MarshalFoundAllianceRequest, pb.UnmarshalAllianceResponse)
 		joinErr := <-joined
 		path, wantGold := "endpoint-refused", int32(500)
 		if resp.SagaKey != "" {
@@ -395,7 +395,7 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 			case "completed":
 				path, wantGold = "found-first", 500-cost
 				if joinErr == nil {
-					t.Fatalf("C %d founded guild %d and also joined guild %d", c.id, status.GuildID, guildID)
+					t.Fatalf("C %d founded guild %d and also joined guild %d", c.id, status.AllianceID, guildID)
 				}
 			case "compensated", "failed":
 				path = "refunded"
@@ -423,7 +423,7 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 	owner := s.ownerOf(guildID, alliances)
 	before, _ = s.funds(guildID)
 	s.signal(owner, syscall.SIGSTOP)
-	key = b.startOp("donate", &pb.DonateGuildRequest{Amount: 30})
+	key = b.startOp("donate", &pb.DonateAllianceRequest{Amount: 30})
 	s.eventually("the debit step completes while the guild side is frozen", 30*time.Second, func() (bool, string) {
 		st := b.opStep("donate", key)
 		return st.Step >= 1, fmt.Sprintf("%+v", st)
@@ -450,7 +450,7 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 	for _, p := range alliances {
 		s.signal(p, syscall.SIGSTOP)
 	}
-	key = d.startOp("found", &pb.FoundGuildRequest{Name: "frozen guild", OpenJoin: true})
+	key = d.startOp("found", &pb.FoundAllianceRequest{Name: "frozen guild", OpenJoin: true})
 	s.eventually("the found debit completes while both alliance instances are frozen", 30*time.Second, func() (bool, string) {
 		st := d.opStep("found", key)
 		return st.Step >= 1, fmt.Sprintf("%+v", st)
@@ -466,7 +466,7 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 		s.waitReady(p, 2*time.Minute)
 	}
 	status = d.waitOp("found", key, 3*time.Minute)
-	if status.Status != "completed" || status.GuildID == 0 {
+	if status.Status != "completed" || status.AllianceID == 0 {
 		t.Fatalf("found across kill -9 of both alliance instances: %+v", status)
 	}
 	if got := d.gold(); got != 500-cost {
@@ -476,5 +476,5 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 	if led != 1 {
 		t.Fatalf("alliances led by D: %d (%v), want exactly 1", led, where)
 	}
-	t.Logf("GAMES found across kill -9 of both frozen alliance instances: guild %d, one alliance led by D, gold -%d once", status.GuildID, cost)
+	t.Logf("GAMES found across kill -9 of both frozen alliance instances: guild %d, one alliance led by D, gold -%d once", status.AllianceID, cost)
 }
