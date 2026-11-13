@@ -20,15 +20,15 @@ import (
 // 只引用生成器导出的常量：否则生成器改了默认值，它自己照常工作，却与 `roost generate` 静默不一致。
 func TestOrchestratorDoesNotRepeatGeneratorDefaultPaths(t *testing.T) {
 	shared := map[string]string{
-		dao.DefaultDefDir:                 "dao.DefaultDefDir",
-		dao.DefaultOutDir:                 "dao.DefaultOutDir",
-		codeerr.DefaultOutFile:            "codeerr.DefaultOutFile",
-		protocol.DefaultDefDir:            "protocol.DefaultDefDir",
-		protocol.DefaultBindDir:           "protocol.DefaultBindDir",
-		protocol.DefaultHandlerFile:       "protocol.DefaultHandlerFile",
-		protocol.PlayerAccessImport:       "protocol.PlayerAccessImport",
-		protocol.PBImportSuffix:           "protocol.PBImportSuffix",
-		tablegen.DefaultMetaDir:           "tablegen.DefaultMetaDir",
+		dao.DefaultDefDir:           "dao.DefaultDefDir",
+		dao.DefaultOutDir:           "dao.DefaultOutDir",
+		codeerr.DefaultOutFile:      "codeerr.DefaultOutFile",
+		protocol.DefaultDefDir:      "protocol.DefaultDefDir",
+		protocol.DefaultBindDir:     "protocol.DefaultBindDir",
+		protocol.DefaultHandlerFile: "protocol.DefaultHandlerFile",
+		protocol.PlayerAccessImport: "protocol.PlayerAccessImport",
+		protocol.PBImportSuffix:     "protocol.PBImportSuffix",
+		tablegen.DefaultMetaDir:     "tablegen.DefaultMetaDir",
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {
