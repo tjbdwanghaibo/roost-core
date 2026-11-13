@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试夹具：SLG 联盟 Remote 交接先退出共享再转移**（scripts/testdata/slg，2026-11-14）：`TestSLGAllianceRemoteDelivery` 在共享模式下直接 `TransferRemoteOwnership`，期望旧 owner 写入被拒；按 REMOTE_ENTITY“多写者：本地副本与权威”，共享模式下每个进程都能写，转移不撤销其他写者，2026-11-04 起 `Fenced` 的旧实例由写准入从权威重载后照常写，所以 20/20 失败（`old owner kept writing after transfer`）。夹具改为先 `LeaveRemoteSharedMode` 回到独占、再转给 2001（独占转移把旧实例 fence），断言改为退出共享与转移后都独占、代际前进。只改夹具，没有框架行为改动。修后私有隔离环境 `ROOST_SLG_REAL=1 scripts/test-slg-generated.sh` 全部通过；旧夹具同环境复现红。
+
 - **测试：LevelComponent 持久模式的真实 Mongo / WAL 进程崩溃恢复**（gameplay/level，2026-11-14，KNOWN-LIMITS“LevelComponent”）：新增 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`（`-tags integration`）：写子进程（正式 DataEngine Runtime + Nest，waves 定义）推进到第二波后拦住投影、再提交一笔只在 WAL 里的击杀，被 SIGKILL；恢复子进程回放 WAL，冷加载出的组件状态与崩溃前最后一笔提交后一致，随后结算并关闭。变异 2 条（恢复时丢 WAL、恢复时丢计时器）均变红。没有行为改动。
 
 - **测试：共享模式两个真实进程交替写同一 Remote 实体**（scripts/testdata/remoteflow，2026-11-14，KNOWN-LIMITS“多写者本地副本”）：新增 `TestGeneratedRemoteSharedEntityTwoWriterProcesses`，两个子进程（sid 1000 / 1001，各自正式装配）经 stdin 命令交替 8 笔写：每笔写后的本地值是此前全部写的累计（写准入先按权威换掉落后的本地副本），Mongo 权威版本 8、终值为各笔之和。变异“不换落后副本”时第三笔写版本冲突、用例红。没有行为改动。
