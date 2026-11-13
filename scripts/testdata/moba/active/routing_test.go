@@ -463,5 +463,9 @@ func TestMOBARealCrossSIDHostRouting(t *testing.T) {
 	if err := h.mongo.Database(h.database).Drop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// add dao --entity 给本地实体写 dbscope=sid（v1.47.0 起）：这些 DAO 的文档在 <库>_<sid>，本用例的存储没有 sid（0）。
+	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Log(fmt.Sprintf("NATS 5-process drill: 10 members, host 2000 -> 2001, epoch 1 -> 2, 2 rewards before origin crash; 10 receipts exactly once, all acknowledged"))
 }

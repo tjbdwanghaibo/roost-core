@@ -225,6 +225,8 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	check(t, e)
 	defer mongo.Close(context.Background())
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_DB")).Drop(context.Background()))
+	// dbscope=sid 的 Player DAO（add dao --entity，v1.47.0 起）落在 <库>_<sid>，本用例的存储没有 sid（0）。
+	check(t, mongo.DatabaseForSid(os.Getenv("ROOST_SLG_DB"), 0).Drop(context.Background()))
 	t.Log("same activity workflow: both static homes credit generated Player DAO; three unprojected strict WAL records (create, initialize, reward) per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
 }
 func deliverPlayers(t *testing.T, prefix string, key activity.Key) {

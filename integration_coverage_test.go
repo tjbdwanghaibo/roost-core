@@ -533,6 +533,7 @@ var generatedRealDependencyEntries = []struct {
 }{
 	{"codegen/internal/entity/testdata/dataengine", "scripts/test-dataengine-generated.sh", "^TestGeneratedDataEngine"},
 	{"codegen/internal/entity/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
+	{"scripts/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
 	{"modules/alliance/files/internal/service/alliance/admin_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances$"},
 	{"modules/purchase/files/game/purchase/queue_integration_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseRedis"},
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
@@ -559,6 +560,7 @@ var generatedRealDependencyElsewhere = []struct {
 	{"TestAllianceE2EShortPerf", "scripts/test-alliance-e2e.sh", "TestAllianceE2EShortPerf", "联盟服务阶段 5 短测：ALLIANCE_E2E_PERF=1 时由 scripts/test-alliance-e2e.sh 跑（单轮 ≤ 30 分钟），性能入口"},
 	{"TestAllianceE2EMirrorRevalidation", "scripts/test-alliance-e2e.sh", "TestAllianceE2EMirrorRevalidation", "联盟服务阶段 5 短测：ALLIANCE_E2E_PERF=1 时由 scripts/test-alliance-e2e.sh 跑（单轮 ≤ 30 分钟），性能入口"},
 	{"TestAllianceE2ERPCConcurrency", "scripts/test-alliance-e2e.sh", "TestAllianceE2ERPCConcurrency", "总线 RPC 接收端派发前后对照：ALLIANCE_E2E_PERF=1 时由 scripts/test-alliance-e2e.sh 跑（单轮约 2 分钟），性能入口"},
+	{"TestAllianceE2EJoinRetryableSources", "scripts/test-alliance-e2e.sh", "TestAllianceE2EJoinRetryableSources", "写额度 512、256 并发 Join 的“可重试”按答复点归类：ALLIANCE_E2E_PERF=1 时由 scripts/test-alliance-e2e.sh 跑（3 轮各 15 秒，约 3 分钟加生成与起服），来源定位入口"},
 	{"TestAllianceE2EWarScanStartup", "scripts/test-alliance-e2e.sh", "TestAllianceE2EWarScanStartup", "联盟起服宣战补发扫描随联盟数的代价：ALLIANCE_E2E_PERF=1 时由 scripts/test-alliance-e2e.sh 跑（每档 ≤ 30 分钟），性能入口"},
 	{"TestAllianceReportWindowFollowsTheCoordinatorReservationTTL", "scripts/test-slg-generated.sh", "'^TestAllianceReportWindowFollowsTheCoordinatorReservationTTL$'", "缺省模式就跑，不需要真实依赖：内存版本存储 + 只记次数的协调器替身，补报截止跟随协调器的 ReservationTTL（零值按 DefaultReservationTTL）；夹具与真实依赖用例同包，所以登记在这张表"},
 	{"TestAllianceReceiverBudgetRejectsLateSuccess", "scripts/test-slg-generated.sh", "'^TestAllianceReceiverBudgetRejectsLateSuccess$'", "缺省模式就跑，不需要真实依赖：bus.NewRPCContext 以不带期限的基础 context 模拟 dispatchRpc，接收端预算到期后按 ctx 等待的回调结束、迟到的成功不回复、期限内成功照常回复、非正预算拒绝；夹具与真实依赖用例同包，所以登记在这张表"},

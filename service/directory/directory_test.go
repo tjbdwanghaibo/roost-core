@@ -745,3 +745,32 @@ func TestDirectoryRequiresConditionalDelete(t *testing.T) {
 		t.Fatal("constructor accepted a store that loses identity deletion capability")
 	}
 }
+
+// 预留的有效期不比调用方给的 TTL 短：到期时刻按整秒存（ExpiresAtUnix），原来向下取整，在 x.9 秒预留、TTL 1 秒时
+// 到 (x+1).0 秒就算过期——实际只有 0.1 秒（account 契约测试在真实 Redis 上把 ClaimTTL 设成 1 秒，跨秒时建角报
+// “reservation lapsed”）。向上取整后实际有效期落在 [TTL, TTL+1s)。
+func TestAReservationLastsAtLeastItsTTL(t *testing.T) {
+	dir, c := newDirectory(t)
+	ctx := context.Background()
+	c.advance(900 * time.Millisecond) // x.9 秒
+	claim, err := dir.Reserve(ctx, "Brief", "player:1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.advance(200 * time.Millisecond) // 只过了 0.2 秒，跨过了一个整秒
+	if _, err := dir.Commit(ctx, claim); err != nil {
+		t.Fatalf("commit 0.2s into a 1s reservation: %v", err)
+	}
+	// 过期的一侧照旧：到期之后另一个 owner 可以取得同一个 key。
+	other, err := dir.Reserve(ctx, "Later", "player:1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.advance(2 * time.Second)
+	if _, err := dir.Reserve(ctx, "Later", "player:2", time.Second); err != nil {
+		t.Fatalf("a reservation 2s past its 1s TTL still blocks another owner: %v", err)
+	}
+	if _, err := dir.Commit(ctx, other); !errors.Is(err, ErrClaimNotFound) && !errors.Is(err, ErrClaimStale) {
+		t.Fatalf("committing a lapsed and re-taken reservation = %v, want a refusal", err)
+	}
+}

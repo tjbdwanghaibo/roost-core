@@ -14,6 +14,8 @@
 #   - TestAllianceE2EShortPerf                 只在 ALLIANCE_E2E_PERF=1 时跑：续期量、预加载 1k / 10k、路由 RPC 延迟；
 #   - TestAllianceE2EMirrorRevalidation        只在 ALLIANCE_E2E_PERF=1 时跑：cached_max_staleness 30s / 5s 的 Mirror 回源量。
 #   - TestAllianceE2ERPCConcurrency            只在 ALLIANCE_E2E_PERF=1 时跑：一个实例上 Found / Info / Join 的吞吐随并发与顺序键的变化（约 2 分钟）。
+#   - TestAllianceE2EJoinRetryableSources      只在 ALLIANCE_E2E_PERF=1 时跑：写额度 512、256 并发新玩家 Join（不重试）的“可重试”按答复点归类，
+#                                              3 轮各 ALLIANCE_E2E_RETRY_SECONDS（缺省 15）秒。
 #   - TestAllianceE2EWarScanStartup            只在 ALLIANCE_E2E_PERF=1 时跑：起服宣战补发扫描（ScanWars）随联盟数的代价，
 #                                              ALLIANCE_E2E_WARSCAN_COUNTS（缺省 1000,10000）、ALLIANCE_E2E_WARSCAN_PENDING（千分比，缺省 10）。
 # 依赖：scripts/mirror-local.sh 起的私有环境（需要 toxiproxy；会断开它的 redis 代理，不要指向共享隔离环境），
