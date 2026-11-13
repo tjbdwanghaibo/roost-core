@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **独立 Gate 慢链路纯追帧页的演练入口**（wiring/gate，2026-11-14，KNOWN-LIMITS 能力表 Lockstep“独立 Gate 慢链路上的纯追帧页”）：新增 `TestRealGateLockstepCatchupOverASlowLinkDrill`（`-tags integration`，要 `LS_DRILL_RATES`、`ROOST_DATAENGINE_IT_TOXIPROXY_URL` 与私有 NATS），与 2026-10-20 夜间补测第 10 项嵌入 TCP 演练同一参数（8 席、50 B 输入、30Hz、下行限速），经真实 Gate + Game Ingress；报服务端追帧结束、客户端回到头部、与“积压 /（链路 − 每秒新帧）”之比、Gate 是否关连接。没有行为改动。
+  - **验证**：私有 NATS + 私有 toxiproxy 上 300 帧冒烟：不限速 368ms 回到头部；256 KB/s 568ms、比值 1.10，连接不断、回到实时后帧流连续。3000 帧、256 / 64 KB/s 的正式测量未做；真实移动网络不在本机范围。
+
 - **自身视图整轮重试放大的演练入口**（wiring/selfsync，2026-11-14，KNOWN-LIMITS“self_sync/TCP/AOI 未测”第 7 条）：新增 `TestSelfSyncResidentBudgetRetryDrill`，只在 `ROOST_SELFSYNC_RETRY_DRILL=1` 时运行。真实嵌入 TCP + 正式装配的 Manager，全量比增量大（`DRILL_FULL_PAD`），预算可压到触发点（`DRILL_BUDGET` / `DRILL_MAX_PAYLOAD`），报 Flush / 重试 / 提交次数、全量与增量帧数和字节、`push_refused{retried|closed}`、丢失会话；断言只有不变式（不关连接、不丢会话、客户端基线不坏）。没有行为改动。
   - **冒烟观察（已确认，方向待维护者决定）**：预算 16 KiB、全量约 4 KiB 时，20 或 100 个一直在读的玩家 10 秒 200 轮全部 `ErrRetryLater`、0 轮提交，每轮前 3 个会话重收全量、其余会话一帧也收不到；预算 64 KiB / 100 玩家时 60 轮重试 3 轮、每轮字节约为缺省预算的 1.8 倍。即一轮的“重收全量 + 其余帧”超过预算后放大自我维持，不只是“延迟上升”。证据与命令见 impl/04-sync §2C。独立 Gate + self_sync 重档夹具仍没有；重档参数下的测量未做。
 
