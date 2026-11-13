@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：独占模式 Remote 心跳在转移时的真实 Mongo 故障注入**（gameplay/movement，2026-11-14，KNOWN-LIMITS“独占模式 Remote 心跳的真实依赖故障注入”）：新增 `TestRealRemoteExclusiveTransferDuringAMongoFault`（`-tags integration`，要 toxiproxy）。旧 owner 的 Mongo 经本用例自建的代理直连主节点，三种故障时刻：转移前断开（确定未改、旧 owner 照常推进）、CAS 发出时断开（结果未知，旧实例冻结在 Recovering、零推进，恢复后解冻）、CAS 生效而回程超时（新 owner 立刻能写，旧实例冻结、恢复后被 fence）；都断言新 owner 拥有之后旧 owner 零推进。`realRemoteManagers` 抽出按 sid 换 Mongo 客户端与配置的 `realRemoteManagersWith`。变异“结果未知按未改处理”变红。独占模式不经 Redis，只注入 Mongo 故障。没有行为改动。
+
 - **测试夹具：SLG 联盟 Remote 交接先退出共享再转移**（scripts/testdata/slg，2026-11-14）：`TestSLGAllianceRemoteDelivery` 在共享模式下直接 `TransferRemoteOwnership`，期望旧 owner 写入被拒；按 REMOTE_ENTITY“多写者：本地副本与权威”，共享模式下每个进程都能写，转移不撤销其他写者，2026-11-04 起 `Fenced` 的旧实例由写准入从权威重载后照常写，所以 20/20 失败（`old owner kept writing after transfer`）。夹具改为先 `LeaveRemoteSharedMode` 回到独占、再转给 2001（独占转移把旧实例 fence），断言改为退出共享与转移后都独占、代际前进。只改夹具，没有框架行为改动。修后私有隔离环境 `ROOST_SLG_REAL=1 scripts/test-slg-generated.sh` 全部通过；旧夹具同环境复现红。
 
 - **测试：LevelComponent 持久模式的真实 Mongo / WAL 进程崩溃恢复**（gameplay/level，2026-11-14，KNOWN-LIMITS“LevelComponent”）：新增 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`（`-tags integration`）：写子进程（正式 DataEngine Runtime + Nest，waves 定义）推进到第二波后拦住投影、再提交一笔只在 WAL 里的击杀，被 SIGKILL；恢复子进程回放 WAL，冷加载出的组件状态与崩溃前最后一笔提交后一致，随后结算并关闭。变异 2 条（恢复时丢 WAL、恢复时丢计时器）均变红。没有行为改动。
