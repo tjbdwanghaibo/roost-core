@@ -558,3 +558,31 @@ func TestAMapOfByteSlicesNeverSharesItsBytesWithTheCaller(t *testing.T) {
 		nestedUnchanged(t, envelope, "changing the slice RangeMarks handed out")
 	})
 }
+
+// 嵌套类型里的 nil map 往返（KNOWN-LIMITS“嵌套类型里的 nil map 往返后文档形状变化”）：嵌套 struct 的零值 map 字段是 nil，
+// 持久化写成 null；RestorePersisted 读回后 set<Field>RawMap(nil) 新建空 map，再写一次就成了 {}——同一个值一次往返文档形状变化，
+// 多一次无实际变化的写，按 null 查的外部脚本查不到。顶层 map 由构造函数建空 map，从一开始就是 {}，没有这个问题。
+// 期望：一次往返后文档与原文档逐字相同（无论统一成 null 还是 {}）。
+func TestANilNestedMapKeepsItsShapeAcrossARoundTrip(t *testing.T) {
+	hero := newHero()
+	hero.setEquipsRawMap(map[int64]*EquipInfo{1: {level: 5, star: 2}}) // gems 保持 nil
+	raw, err := hero.marshalCommitState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := NewHeroDao()
+	if err := restored.RestorePersisted(raw, HeroDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	again, err := restored.marshalCommitState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, again) {
+		t.Fatalf("a nil nested map changed shape across one round trip:\nbefore %s\nafter  %s", bson.Raw(raw).Lookup("equips"), bson.Raw(again).Lookup("equips"))
+	}
+	// 顶层 map 对照：构造函数建空 map，写出就是 {}，往返不变。
+	if items := bson.Raw(raw).Lookup("items"); items.Type != bson.TypeEmbeddedDocument {
+		t.Fatalf("top-level nil-free map stored as %s, want an empty document", items.Type)
+	}
+}

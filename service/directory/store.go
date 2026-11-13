@@ -138,7 +138,7 @@ func (s *store) Reserve(ctx context.Context, raw string, owner Owner, ttl time.D
 		}
 		next := Entry{
 			Key: key, Raw: strings.TrimSpace(raw), Owner: owner, State: StateReserved,
-			Token: token, ExpiresAtUnix: expiresAt.Unix(), ReservedAtUnix: now.Unix(),
+			Token: token, ExpiresAtUnix: unixCeil(expiresAt), ReservedAtUnix: now.Unix(),
 		}
 		claim = Claim{Key: key, Owner: owner, Token: token, ExpiresAt: expiresAt}
 		return next, true, nil
@@ -303,3 +303,13 @@ func (s *store) Release(ctx context.Context, raw string, owner Owner) error {
 }
 
 var _ Directory = (*store)(nil)
+
+// unixCeil 是到期时刻存成整秒时的取整：向上取整，预留的实际有效期落在 [TTL, TTL+1s)，不会比调用方给的 TTL 短
+// （向下取整时，在 x.9 秒预留、TTL 1 秒的预留到 (x+1).0 秒就算过期，实际只有 0.1 秒）。
+func unixCeil(t time.Time) int64 {
+	seconds := t.Unix()
+	if t.Nanosecond() > 0 {
+		seconds++
+	}
+	return seconds
+}

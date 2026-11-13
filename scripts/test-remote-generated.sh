@@ -18,6 +18,8 @@ export GOWORK=off
 export ROOST_REMOTE_FAULT_SCRIPT="$repo_dir/scripts/remote-fault.sh"
 mkdir -p "$work_dir/def"
 cp "$repo_dir/codegen/internal/entity/testdata/remoteflow/"*.go "$work_dir/"
+# 仓库级补充用例（scripts/testdata/remoteflow，与上面的夹具同包）：Remote 托管 kind 新建不改字段的端到端。
+cp "$repo_dir/scripts/testdata/remoteflow/"*_test.go "$work_dir/"
 database="roost_remote_generated_${$}_$(date +%s)"
 sed "s/roost_remote_generated_placeholder/$database/g" "$repo_dir/codegen/internal/entity/testdata/remoteflow/def/state.go" > "$work_dir/def/state.go"
 cat > "$work_dir/go.mod" <<MOD
