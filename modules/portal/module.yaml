@@ -11,7 +11,7 @@ runtime:
   framework: account
 errcodes: [portal_request_invalid]
 next:
-  - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发配置的端口是 8080 + account 的端口块号，新建的 game 模板工程是 127.0.0.1:8081）：POST /portal/login、/portal/servers、/portal/enter；请求与响应见 roost-core 的 modules/portal/README.md"
+  - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter；请求与响应见 roost-core 的 modules/portal/README.md"
   - "区服的连接地址：在 config.account.yaml 写 portal.servers（服号 -> 客户端连得到的地址 host:port，通常是 Gate）；不写时清单照常列出 account 登记过的服，只是没有地址。要动态的地址（上报、服务发现）改 game/portal/portal_rules.go 的 newDirectory"
   - "推荐规则（导量）在 game/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服"
   - "上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr"
