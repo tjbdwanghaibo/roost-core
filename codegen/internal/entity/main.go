@@ -247,10 +247,26 @@ func run(args []string, stdout io.Writer) error {
 			}
 		}
 	}
-	// 只有扫的是整个 game/entities 时才知道全部实体，才删多余的 view 实体文件。
-	if viewDir := viewDirOfFullScan(scanDir); *output == "" && viewDir != "" {
-		if err := retireViewEntities(viewDir, viewKeep[viewDir], stdout); err != nil {
-			return err
+	// 删掉不再对应任何实体的 view 实体文件：全量扫描时以本次生成的为准；只扫一部分实体包时
+	// 按 game/entities/*/ 里仍有的 //roost:entity 标记判断（本次生成的也算在内）。
+	if *output == "" {
+		if viewDir := viewDirOfFullScan(scanDir); viewDir != "" {
+			if err := retireViewEntities(viewDir, viewKeep[viewDir], stdout); err != nil {
+				return err
+			}
+		} else {
+			for viewDir, keep := range viewKeep {
+				live, err := liveViewEntityFiles(viewDir)
+				if err != nil {
+					return err
+				}
+				for name := range keep {
+					live[name] = true
+				}
+				if err := retireViewEntities(viewDir, live, stdout); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if *selfSync != "" && !selfSyncFound {

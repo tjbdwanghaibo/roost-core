@@ -9,6 +9,8 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -133,6 +135,13 @@ func applyViewAccessors(ent *EntityDef, target viewTarget) []string {
 			ent.ViewAccessors = append(ent.ViewAccessors, ViewAccessor{Name: holder[0], Type: "view." + holder[1], Field: comp.FieldName})
 		}
 	}
+	// 共用组件在别的实体上的组件号名字与 view 的 Holder 不同名（例如 Alliance 上的 AllianceActivity 是 activity 组件）：
+	// 接线文件手写返回 view 类型的访问器，这里按方法签名嵌入对应的 Holder。
+	for holderName, holder := range target.holders {
+		if ent.ViewMethods[holder[0]] == holder[1] && !slices.Contains(embedded, holderName) {
+			embedded = append(embedded, holderName)
+		}
+	}
 	if len(ent.ViewAccessors) > 0 {
 		ent.ViewImport = target.Import
 	}
@@ -153,6 +162,32 @@ func viewDirOfFullScan(scanDir string) string {
 		return ""
 	}
 	return filepath.Join(game, "view")
+}
+
+// entityTypeRe 找 //roost:entity 标记后面紧跟（隔一行注释以内）的结构体名。
+var entityTypeRe = regexp.MustCompile(`(?m)^//roost:entity[^\n]*\n(?://[^\n]*\n)?type (\w+) struct`)
+
+// liveViewEntityFiles 扫 <模块>/game/entities/*/ 下手写文件里的 //roost:entity，返回仍存在的实体对应的 entity_<snake>.go。
+// 只读标记，不解析整个包：每次生成都能便宜地确认哪些实体还在（不再要求整个 game/entities 一起扫描）。
+func liveViewEntityFiles(viewDir string) (map[string]bool, error) {
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(viewDir), "entities", "*", "*.go"))
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") || isGeneratedWireFile(filepath.Base(path)) {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range entityTypeRe.FindAllSubmatch(raw, -1) {
+			live[viewEntityFile(string(match[1]))] = true
+		}
+	}
+	return live, nil
 }
 
 // viewEntityFile 是实体接口文件名：game/view/entity_<snake>.go。
