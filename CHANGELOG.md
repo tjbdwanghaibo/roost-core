@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **玩家 TCP 写期限到期关闭连接时区分是哪一个期限**（infra/network/gateway，2026-11-14，KNOWN-LIMITS“独立 Gate 慢链路：先到期的是 write_timeout 还是单帧预算”）：新指标 `player_tcp_write_deadline_total{deadline="write_timeout"|"send_budget"}`，关闭原因的错误文本写明 `write_timeout (5s) ran out` 或 `the frame's send budget ... ran out`，带已写出 / 总字节数；`player_tcp_write_error_total` 口径不变。`TestAWriteCutOffByTheCallerDeadlineBeforeAnyByteIsARefusal` 修前 `player_tcp_write_deadline_total{deadline=write_timeout} grew by 0, want 1`。独立 Gate 慢链路演练上两者的实测分布与纯追帧页的影响**未测**（等机器空闲）。
+
 - **本地实体起服预加载加时间预算与数量上限**（dataengine / wiring，2026-11-13，KNOWN-LIMITS“预加载没有数量上限与时间预算”）：新配置 `dataengine.preload.timeout`（缺省 10m，最小 1s）限整次预加载，到期取消在途的查询与加载；`dataengine.preload.max_entities`（缺省 1000000）限全部 kind 合计载入的实体数。超出时 `Runtime.PreloadLocalEntities` 返回新哨兵 `engine.ErrLocalPreloadBudget`（超时同时满足 `context.DeadlineExceeded`），`dataengine.preload` Mod 让起服失败。API 变化：`PreloadLocalEntities(ctx, kinds, engine.LocalPreloadLimits)` 多一个参数（零值不限）。两个键并入生成器的 dataengine 配置段（`kitconfig_gen.go` 重新生成），不进入起步配置。先红：Mongo 卡住（列 ID 的查询不返回）时修前 `preload with a stuck Mongo did not return in 3s`；`TestPreloadLocalEntitiesGivesUpOnAStuckStoreAtItsTimeout`（枚举卡住与加载卡住两种）与 `TestPreloadLocalEntitiesStopsAtItsEntityLimit` 各自的变异（不设期限、不查上限）变红。验证：`framework/dataengine/engine` 预加载用例 `-race`、`wiring/dataengine` 整包、codegen `TestKitConfigSchemasMatchKitDeclarations` 与配置用例。
 
 - **文档：Lockstep 历史窗口与快照预算的核对表**（guide/04-sync §6，2026-11-13，KNOWN-LIMITS“历史窗口的取值”）：按帧率（30 / 60Hz）× 断线时长（10 / 30 / 60 秒）核对只追帧所需窗口，按快照大小（1 / 4 / 16 MiB）× 链路（随链路放慢 256 / 64 KB/s、独立 Gate）核对钉住期限与发送预算；由缺省值推算，实测格单独标注。结论：60Hz 下缺省窗口 3600 帧不够 60 秒断线（没有余量），16 MiB 快照在 60Hz 下超过缺省钉住期限；只改文档。

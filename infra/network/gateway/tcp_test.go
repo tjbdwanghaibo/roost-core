@@ -1327,6 +1327,17 @@ func residentOf(sessions []*tcpSession) int64 {
 	return total
 }
 
+// labeledCounter 是某个标签取某个值的那一条序列的计数。
+func labeledCounter(name, label, value string) int64 {
+	var total int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name && metric.Labels[label] == value {
+			total += metric.Value
+		}
+	}
+	return total
+}
+
 func counterValue(name string) int64 {
 	var total int64
 	for _, metric := range metrics.Snapshot() {
@@ -1927,29 +1938,48 @@ func TestAWriteCutOffByTheCallerDeadlineBeforeAnyByteIsARefusal(t *testing.T) {
 	callerDeadline := func() (context.Context, context.CancelFunc) {
 		return context.WithTimeout(context.Background(), 10*time.Millisecond)
 	}
+	// deadline 是关闭连接时记下的期限（player_tcp_write_deadline_total 的标签与错误文本，KNOWN-LIMITS“独立 Gate 慢链路：
+	// 先到期的是 write_timeout 还是单帧预算”）：不是期限到期的失败不记。
 	for _, tc := range []struct {
-		name    string
-		written int
-		err     error
-		ctx     func() (context.Context, context.CancelFunc)
-		broken  bool
+		name     string
+		written  int
+		err      error
+		ctx      func() (context.Context, context.CancelFunc)
+		broken   bool
+		deadline string
 	}{
-		{"caller deadline, nothing written", 0, os.ErrDeadlineExceeded, callerDeadline, false},
-		{"write_timeout, nothing written", 0, os.ErrDeadlineExceeded, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, true},
-		{"caller deadline, part of the frame written", 5, os.ErrDeadlineExceeded, callerDeadline, true},
-		{"caller deadline, peer reset", 0, syscall.ECONNRESET, callerDeadline, true},
+		{"caller deadline, nothing written", 0, os.ErrDeadlineExceeded, callerDeadline, false, ""},
+		{"write_timeout, nothing written", 0, os.ErrDeadlineExceeded, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, true, "write_timeout"},
+		{"caller deadline, part of the frame written", 5, os.ErrDeadlineExceeded, callerDeadline, true, "send_budget"},
+		{"caller deadline, peer reset", 0, syscall.ECONNRESET, callerDeadline, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			connection := &scriptedConn{written: tc.written, err: tc.err}
 			current := &tcpSession{connection: connection, writeTimeout: time.Second}
 			ctx, cancel := tc.ctx()
 			defer cancel()
+			before := map[string]int64{}
+			for _, deadline := range []string{"write_timeout", "send_budget"} {
+				before[deadline] = labeledCounter("player_tcp_write_deadline_total", "deadline", deadline)
+			}
 			err := current.writeFrame(ctx, flagServerPush, pushTestMessageID, 1, []byte("payload"))
 			if err == nil {
 				t.Fatal("a failed write reported success")
 			}
 			if got := errors.Is(err, errConnectionBroken); got != tc.broken {
 				t.Fatalf("errConnectionBroken=%v, want %v: %v", got, tc.broken, err)
+			}
+			for _, deadline := range []string{"write_timeout", "send_budget"} {
+				want := int64(0)
+				if deadline == tc.deadline {
+					want = 1
+				}
+				if got := labeledCounter("player_tcp_write_deadline_total", "deadline", deadline) - before[deadline]; got != want {
+					t.Fatalf("player_tcp_write_deadline_total{deadline=%s} grew by %d, want %d: %v", deadline, got, want, err)
+				}
+			}
+			if tc.deadline == "send_budget" && !strings.Contains(err.Error(), "send budget") || tc.deadline == "write_timeout" && !strings.Contains(err.Error(), "write_timeout (1s) ran out") {
+				t.Fatalf("the error does not say which deadline closed the connection: %v", err)
 			}
 			if !tc.broken && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("a push the caller's deadline refused = %v, want context.DeadlineExceeded", err)
