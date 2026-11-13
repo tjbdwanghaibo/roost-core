@@ -13,8 +13,9 @@ import (
 	"log/slog"
 	"strings"
 	player "{{MODULE}}/game/entities/player"
+	gamenaming "{{MODULE}}/game/components/naming"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	profile "{{MODULE}}/game/profile"
+	profile "{{MODULE}}/game/components/profile"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
@@ -24,18 +25,18 @@ type Controller struct {
 	profile namingProfile
 }
 type namingProfile interface {
-	Begin(context.Context, int64, string, string) (player.NamingTicket, error)
-	Step(context.Context, int64, int64, string, int32, string, string) (player.NamingTicket, error)
+	Begin(context.Context, int64, string, string) (gamenaming.NamingTicket, error)
+	Step(context.Context, int64, int64, string, int32, string, string) (gamenaming.NamingTicket, error)
 }
 type nestProfile struct {
 	begin *syncsender.NamingBeginSender
 	step  *syncsender.NamingStepSender
 }
 
-func (p nestProfile) Begin(ctx context.Context, id int64, op, name string) (player.NamingTicket, error) {
+func (p nestProfile) Begin(ctx context.Context, id int64, op, name string) (gamenaming.NamingTicket, error) {
 	return p.begin.Sync_NamingBegin(ctx, id, op, name)
 }
-func (p nestProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (player.NamingTicket, error) {
+func (p nestProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (gamenaming.NamingTicket, error) {
 	return p.step.Sync_NamingStep(ctx, id, seq, op, action, key, token)
 }
 func FromRegistry(r *app.Registry) (*Controller, error) {

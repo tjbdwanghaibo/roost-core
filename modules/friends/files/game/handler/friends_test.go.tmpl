@@ -15,6 +15,7 @@ import (
 
 	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
+	gamefriends "{{MODULE}}/game/components/friends"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 )
 
@@ -114,7 +115,7 @@ func newFriendsFixture(t *testing.T, n int) *friendsFixture {
 func (f *friendsFixture) change(a, b int, action int32) error {
 	return f.changes.MultiSync_FriendsChange(context.Background(), f.players[a].ID(), f.players[b].ID(), action)
 }
-func (f *friendsFixture) list(t *testing.T, i int) player.FriendsSnapshot {
+func (f *friendsFixture) list(t *testing.T, i int) gamefriends.FriendsSnapshot {
 	t.Helper()
 	v, e := f.lists.Sync_FriendsList(context.Background(), f.players[i].ID())
 	if e != nil {
@@ -130,8 +131,8 @@ func (f *friendsFixture) must(t *testing.T, a, b int, action int32) {
 }
 func TestFriendsApplyIsIdempotent(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	f.must(t, 0, 1, player.FriendsApply)
-	f.must(t, 0, 1, player.FriendsApply)
+	f.must(t, 0, 1, gamefriends.FriendsApply)
+	f.must(t, 0, 1, gamefriends.FriendsApply)
 	a, b := f.list(t, 0), f.list(t, 1)
 	if len(a.Incoming) != 0 || len(b.Incoming) != 1 || b.Incoming[0] != 98000 || f.commit.commits.Load() != 1 {
 		t.Fatalf("a=%+v b=%+v commits=%d", a, b, f.commit.commits.Load())
@@ -139,11 +140,11 @@ func TestFriendsApplyIsIdempotent(t *testing.T) {
 }
 func TestFriendsAcceptWritesBothAndClearsCrossedApplications(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	f.must(t, 0, 1, player.FriendsApply)
-	f.must(t, 1, 0, player.FriendsApply)
-	f.must(t, 1, 0, player.FriendsAccept)
+	f.must(t, 0, 1, gamefriends.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsAccept)
 	before := f.commit.commits.Load()
-	f.must(t, 0, 1, player.FriendsAccept)
+	f.must(t, 0, 1, gamefriends.FriendsAccept)
 	a, b := f.list(t, 0), f.list(t, 1)
 	if len(a.Peers) != 1 || a.Peers[0] != 98001 || len(b.Peers) != 1 || b.Peers[0] != 98000 || len(a.Incoming) != 0 || len(b.Incoming) != 0 || f.commit.commits.Load() != before {
 		t.Fatalf("a=%+v b=%+v", a, b)
@@ -151,7 +152,7 @@ func TestFriendsAcceptWritesBothAndClearsCrossedApplications(t *testing.T) {
 }
 func TestFriendsAcceptRequiresAnApplication(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	if e := f.change(0, 1, player.FriendsAccept); !errors.Is(e, apperrors.ErrFriendsApplicationMissing) {
+	if e := f.change(0, 1, gamefriends.FriendsAccept); !errors.Is(e, apperrors.ErrFriendsApplicationMissing) {
 		t.Fatal(e)
 	}
 	if f.commit.commits.Load() != 0 {
@@ -160,21 +161,21 @@ func TestFriendsAcceptRequiresAnApplication(t *testing.T) {
 }
 func TestFriendsRemoveIsSymmetric(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	f.must(t, 0, 1, player.FriendsApply)
-	f.must(t, 1, 0, player.FriendsAccept)
-	f.must(t, 0, 1, player.FriendsRemove)
+	f.must(t, 0, 1, gamefriends.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsAccept)
+	f.must(t, 0, 1, gamefriends.FriendsRemove)
 	if len(f.list(t, 0).Peers) != 0 || len(f.list(t, 1).Peers) != 0 {
 		t.Fatal("one-sided removal")
 	}
 }
 func TestFriendsBlockRemovesFriendshipAndDeniesEitherDirection(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	f.must(t, 0, 1, player.FriendsApply)
-	f.must(t, 1, 0, player.FriendsAccept)
-	f.must(t, 0, 1, player.FriendsBlock)
+	f.must(t, 0, 1, gamefriends.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsAccept)
+	f.must(t, 0, 1, gamefriends.FriendsBlock)
 	before := f.commit.commits.Load()
 	for _, pair := range [][2]int{{0, 1}, {1, 0}} {
-		if e := f.change(pair[0], pair[1], player.FriendsApply); !errors.Is(e, apperrors.ErrFriendsBlocked) {
+		if e := f.change(pair[0], pair[1], gamefriends.FriendsApply); !errors.Is(e, apperrors.ErrFriendsBlocked) {
 			t.Fatal(e)
 		}
 	}
@@ -185,21 +186,21 @@ func TestFriendsBlockRemovesFriendshipAndDeniesEitherDirection(t *testing.T) {
 }
 func TestFriendsUnblockDoesNotRestoreFriendship(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	f.must(t, 0, 1, player.FriendsBlock)
-	f.must(t, 0, 1, player.FriendsUnblock)
+	f.must(t, 0, 1, gamefriends.FriendsBlock)
+	f.must(t, 0, 1, gamefriends.FriendsUnblock)
 	if len(f.list(t, 0).Blocked) != 0 || len(f.list(t, 0).Peers) != 0 {
 		t.Fatal("unblock restored data")
 	}
-	f.must(t, 1, 0, player.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsApply)
 	if len(f.list(t, 0).Incoming) != 1 {
 		t.Fatal("unblock still rejects")
 	}
 }
 func TestFriendsRejectOnlyConsumesTheReceivedApplication(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	f.must(t, 0, 1, player.FriendsApply)
-	f.must(t, 1, 0, player.FriendsApply)
-	f.must(t, 1, 0, player.FriendsReject)
+	f.must(t, 0, 1, gamefriends.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsReject)
 	if len(f.list(t, 1).Incoming) != 0 || len(f.list(t, 0).Incoming) != 1 {
 		t.Fatal("reject changed wrong side")
 	}
@@ -207,26 +208,26 @@ func TestFriendsRejectOnlyConsumesTheReceivedApplication(t *testing.T) {
 func TestFriendsListsAreBounded(t *testing.T) {
 	f := newFriendsFixture(t, 66)
 	for i := 1; i <= 64; i++ {
-		f.must(t, i, 0, player.FriendsApply)
+		f.must(t, i, 0, gamefriends.FriendsApply)
 	}
 	before := f.commit.commits.Load()
-	if e := f.change(65, 0, player.FriendsApply); !errors.Is(e, apperrors.ErrFriendsFull) {
+	if e := f.change(65, 0, gamefriends.FriendsApply); !errors.Is(e, apperrors.ErrFriendsFull) {
 		t.Fatal(e)
 	}
 	if len(f.list(t, 0).Incoming) != 64 || f.commit.commits.Load() != before {
 		t.Fatal("incoming overflow wrote")
 	}
 	for i := 1; i <= 64; i++ {
-		f.must(t, 0, i, player.FriendsAccept)
+		f.must(t, 0, i, gamefriends.FriendsAccept)
 	}
-	if e := f.change(0, 65, player.FriendsApply); !errors.Is(e, apperrors.ErrFriendsFull) {
+	if e := f.change(0, 65, gamefriends.FriendsApply); !errors.Is(e, apperrors.ErrFriendsFull) {
 		t.Fatal(e)
 	}
 	for i := 1; i <= 64; i++ {
-		f.must(t, 0, i, player.FriendsBlock)
+		f.must(t, 0, i, gamefriends.FriendsBlock)
 	}
 	before = f.commit.commits.Load()
-	if e := f.change(0, 65, player.FriendsBlock); !errors.Is(e, apperrors.ErrFriendsFull) {
+	if e := f.change(0, 65, gamefriends.FriendsBlock); !errors.Is(e, apperrors.ErrFriendsFull) {
 		t.Fatal(e)
 	}
 	if len(f.list(t, 0).Blocked) != 64 || f.commit.commits.Load() != before {
@@ -235,27 +236,27 @@ func TestFriendsListsAreBounded(t *testing.T) {
 }
 func TestFriendsRejectedCommitRollsBackBothPlayers(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	f.must(t, 0, 1, player.FriendsApply)
+	f.must(t, 0, 1, gamefriends.FriendsApply)
 	f.commit.reject.Store(true)
-	if e := f.change(1, 0, player.FriendsAccept); e == nil {
+	if e := f.change(1, 0, gamefriends.FriendsAccept); e == nil {
 		t.Fatal("commit accepted")
 	}
 	f.commit.reject.Store(false)
 	if len(f.list(t, 0).Peers) != 0 || len(f.list(t, 1).Peers) != 0 || len(f.list(t, 1).Incoming) != 1 {
 		t.Fatal("partial friendship survived")
 	}
-	f.must(t, 1, 0, player.FriendsAccept)
+	f.must(t, 1, 0, gamefriends.FriendsAccept)
 }
 func TestFriendsInvalidAndMissingPeerWriteNothing(t *testing.T) {
 	f := newFriendsFixture(t, 2)
-	if e := f.change(0, 0, player.FriendsApply); e == nil {
+	if e := f.change(0, 0, gamefriends.FriendsApply); e == nil {
 		t.Fatal("self accepted")
 	}
 	if e := f.change(0, 1, 999); !errors.Is(e, apperrors.ErrFriendsInvalid) {
 		t.Fatal(e)
 	}
 	missing, _ := entity.BuildEntityID(99999, player.EntityKindPlayer)
-	if e := f.changes.MultiSync_FriendsChange(context.Background(), f.players[0].ID(), missing, player.FriendsApply); e == nil {
+	if e := f.changes.MultiSync_FriendsChange(context.Background(), f.players[0].ID(), missing, gamefriends.FriendsApply); e == nil {
 		t.Fatal("missing peer accepted")
 	}
 	if f.commit.commits.Load() != 0 {
@@ -269,24 +270,24 @@ func TestFriendsOwnSideActionsLockOnlyTheActor(t *testing.T) {
 	f := newFriendsFixture(t, 2)
 	own := syncsender.NewFriendsOwnSender(f.engine)
 	actor, peer := f.players[0].ID(), f.players[1].ID()
-	f.must(t, 0, 1, player.FriendsBlock)
+	f.must(t, 0, 1, gamefriends.FriendsBlock)
 	delete(f.getter, peer)
-	if e := own.Sync_FriendsOwn(context.Background(), actor, peer, player.FriendsUnblock); e != nil {
+	if e := own.Sync_FriendsOwn(context.Background(), actor, peer, gamefriends.FriendsUnblock); e != nil {
 		t.Fatalf("unblock without the peer: %v", e)
 	}
 	if s, touched := f.list(t, 0), f.commit.lastTouched(); len(s.Blocked) != 0 || !slices.Equal(touched, []int64{actor}) {
 		t.Fatalf("unblock: %+v touched=%v", s, touched)
 	}
 	before := f.commit.commits.Load()
-	for _, action := range []int32{player.FriendsApply, player.FriendsAccept, player.FriendsRemove, player.FriendsBlock, 999} {
+	for _, action := range []int32{gamefriends.FriendsApply, gamefriends.FriendsAccept, gamefriends.FriendsRemove, gamefriends.FriendsBlock, 999} {
 		if e := own.Sync_FriendsOwn(context.Background(), actor, peer, action); !errors.Is(e, apperrors.ErrFriendsInvalid) {
 			t.Fatalf("own-side entry accepted action %d: %v", action, e)
 		}
 	}
-	if e := own.Sync_FriendsOwn(context.Background(), actor, actor, player.FriendsUnblock); !errors.Is(e, apperrors.ErrFriendsInvalid) {
+	if e := own.Sync_FriendsOwn(context.Background(), actor, actor, gamefriends.FriendsUnblock); !errors.Is(e, apperrors.ErrFriendsInvalid) {
 		t.Fatalf("own-side entry accepted self: %v", e)
 	}
-	if e := own.Sync_FriendsOwn(context.Background(), actor, peer, player.FriendsReject); e != nil {
+	if e := own.Sync_FriendsOwn(context.Background(), actor, peer, gamefriends.FriendsReject); e != nil {
 		t.Fatalf("reject with nothing to reject: %v", e)
 	}
 	if f.commit.commits.Load() != before {
@@ -298,9 +299,9 @@ func TestFriendsOwnSideActionsLockOnlyTheActor(t *testing.T) {
 func TestFriendsOwnSideRejectConsumesTheReceivedApplication(t *testing.T) {
 	f := newFriendsFixture(t, 2)
 	actor, peer := f.players[0].ID(), f.players[1].ID()
-	f.must(t, 1, 0, player.FriendsApply)
+	f.must(t, 1, 0, gamefriends.FriendsApply)
 	delete(f.getter, peer)
-	if e := syncsender.NewFriendsOwnSender(f.engine).Sync_FriendsOwn(context.Background(), actor, peer, player.FriendsReject); e != nil {
+	if e := syncsender.NewFriendsOwnSender(f.engine).Sync_FriendsOwn(context.Background(), actor, peer, gamefriends.FriendsReject); e != nil {
 		t.Fatalf("reject without the applicant: %v", e)
 	}
 	if s, touched := f.list(t, 0), f.commit.lastTouched(); len(s.Incoming) != 0 || !slices.Equal(touched, []int64{actor}) {
@@ -313,19 +314,19 @@ func TestFriendsRemoveAndBlockLeaveUnrelatedPeerUntouched(t *testing.T) {
 	f := newFriendsFixture(t, 3)
 	actor := f.players[0].ID()
 	// 让对方的名单非空：DAO 对“非空名单里不存在的键”的删除也会登记修改，空名单测不出来。
-	f.must(t, 1, 2, player.FriendsApply)
-	f.must(t, 2, 1, player.FriendsAccept)
-	f.must(t, 2, 1, player.FriendsApply)
+	f.must(t, 1, 2, gamefriends.FriendsApply)
+	f.must(t, 2, 1, gamefriends.FriendsAccept)
+	f.must(t, 2, 1, gamefriends.FriendsApply)
 	before := f.commit.commits.Load()
-	f.must(t, 0, 1, player.FriendsRemove)
+	f.must(t, 0, 1, gamefriends.FriendsRemove)
 	if f.commit.commits.Load() != before {
 		t.Fatal("removing a stranger wrote")
 	}
-	f.must(t, 0, 1, player.FriendsBlock)
+	f.must(t, 0, 1, gamefriends.FriendsBlock)
 	if touched := f.commit.lastTouched(); f.commit.commits.Load() != before+1 || !slices.Equal(touched, []int64{actor}) {
 		t.Fatalf("blocking a stranger touched %v", touched)
 	}
-	f.must(t, 0, 1, player.FriendsBlock)
+	f.must(t, 0, 1, gamefriends.FriendsBlock)
 	if f.commit.commits.Load() != before+1 {
 		t.Fatal("repeated block wrote")
 	}

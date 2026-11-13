@@ -79,6 +79,8 @@ func run(args []string, stdout io.Writer) error {
 		return err
 	}
 	selfSyncFound := false
+	// viewKeep：每个 game/view 目录里本次生成的 entity_*.go；全量扫描结束后删掉别的生成文件。
+	viewKeep := map[string]map[string]bool{}
 	for _, dir := range scanDirs {
 		// Parse all .go files in the directory
 		defs, pkg, err := parsePackage(dir)
@@ -156,6 +158,27 @@ func run(args []string, stdout io.Writer) error {
 			siblings = append(siblings, ent.Name)
 		}
 		sort.Strings(siblings)
+		view, err := viewTargetFor(dir)
+		if err != nil {
+			return err
+		}
+		for i := range entities {
+			holders := applyViewAccessors(&entities[i], view)
+			if view.Dir == "" || *output != "" {
+				continue
+			}
+			path, changed, err := generateViewEntity(entities[i], view, holders, *force)
+			if err != nil {
+				return fmt.Errorf("generate view for %s: %w", entities[i].Name, err)
+			}
+			if viewKeep[view.Dir] == nil {
+				viewKeep[view.Dir] = map[string]bool{}
+			}
+			viewKeep[view.Dir][filepath.Base(path)] = true
+			if changed {
+				fmt.Fprintf(stdout, "generated: %s\n", path)
+			}
+		}
 		for _, ent := range entities {
 			outFile := *output
 			if outFile == "" {
@@ -222,6 +245,12 @@ func run(args []string, stdout io.Writer) error {
 			if err := writeLifecycle(dir, pkg, entities, *force, stdout); err != nil {
 				return err
 			}
+		}
+	}
+	// 只有扫的是整个 game/entities 时才知道全部实体，才删多余的 view 实体文件。
+	if viewDir := viewDirOfFullScan(scanDir); *output == "" && viewDir != "" {
+		if err := retireViewEntities(viewDir, viewKeep[viewDir], stdout); err != nil {
+			return err
 		}
 	}
 	if *selfSync != "" && !selfSyncFound {

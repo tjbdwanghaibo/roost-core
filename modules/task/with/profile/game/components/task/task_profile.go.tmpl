@@ -1,0 +1,14 @@
+package task
+
+import (
+	"{{MODULE}}/game/view"
+	gameprofile "{{MODULE}}/game/components/profile"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
+func init() {
+	gameprofile.OnProfileLevelUp("task", func(host view.PlayerEntity, from, to int32) error {
+		return host.Task().Report("profile.level_up", int64(to-from), fctx.NowMilli())
+	})
+}

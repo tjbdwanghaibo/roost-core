@@ -1,0 +1,9 @@
+package view
+
+// Matchmaking 是 Matchmaking 组件对 game/ 下其它包公开的方法（实现在 game/components/matchmaking，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Matchmaking interface {
+	Clear(key string) error
+}
+
+// MatchmakingHolder 是“带有 Matchmaking 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+type MatchmakingHolder interface{ Matchmaking() Matchmaking }

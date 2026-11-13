@@ -12,6 +12,7 @@ import (
 
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
+	gamestamina "{{MODULE}}/game/components/stamina"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -187,11 +188,11 @@ func (f *staminaFixture) call(op string, n int64, swallow bool) (int64, error) {
 			case "spend":
 				value, err = component.Spend(params[1].(int64), now)
 			case "grant":
-				var result playerentity.StaminaGrantResult
+				var result gamestamina.StaminaGrantResult
 				result, err = component.Grant(params[1].(int64), now)
 				value = result.Value
 			case "refill":
-				var result playerentity.StaminaRefillResult
+				var result gamestamina.StaminaRefillResult
 				result, err = component.Refill(now)
 				value = result.Value
 			case "current":
@@ -234,7 +235,7 @@ func (f *staminaFixture) expectCurrent(t *testing.T, what string, want int64) {
 	f.expectFacts(t, what+" (Current must not write)", before)
 }
 
-func (f *staminaFixture) grant(amount int64) (playerentity.StaminaGrantResult, error) {
+func (f *staminaFixture) grant(amount int64) (gamestamina.StaminaGrantResult, error) {
 	return f.grants.Sync_StaminaGrant(context.Background(), f.player.ID(), amount)
 }
 

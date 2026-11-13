@@ -55,9 +55,9 @@ func TestModuleTeamGenerated(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/entities/team/roster.go", "const MaxInvites = 64", "const MaxInvites = 65", "./game/handler", "TestTeamInvitationsAreBoundedAndCanBeRenewed", "65th invitation accepted:")
 	recipeMutationMustFail(t, root, "game/entities/team/roster.go", "member < next", "member > next", "./game/handler", "TestTeamLeaderPassesToSmallestMember", "leader handoff=")
 	recipeMutationMustFail(t, root, "game/entities/team/roster.go", "d.GetRevision() != 0", "d.GetLeader() != 0", "./game/handler", "TestTeamLastLeaveKeepsNonReusableTombstone", "empty team ID reused:")
-	recipeMutationMustFail(t, root, "game/entities/player/team_component.go", "current != 0 && current != id", "false && current != 0 && current != id", "./game/handler", "TestTeamMemberCannotJoinASecondTeam", "joined second team:")
-	recipeMutationMustFail(t, root, "game/entities/player/team_rehome.go", "owner.TeamComp().TeamID() != 0", "false && owner.TeamComp().TeamID() != 0", "./game/handler", "TestWithTeamRehomeRejectsAPlayerInTeam", "team allowed rehome:")
-	recipeMutationMustFail(t, root, "game/entities/player/team_rehome.go", `owner.Dao().GetRehome().GetPendingID() != ""`, `false && owner.Dao().GetRehome().GetPendingID() != ""`, "./game/handler", "TestWithTeamRehomeRejectsJoiningDuringMove", "moving player joined:")
+	recipeMutationMustFail(t, root, "game/components/team/team.go", "current != 0 && current != id", "false && current != 0 && current != id", "./game/handler", "TestTeamMemberCannotJoinASecondTeam", "joined second team:")
+	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", "owner.TeamComp().TeamID() != 0", "false && owner.TeamComp().TeamID() != 0", "./game/handler", "TestWithTeamRehomeRejectsAPlayerInTeam", "team allowed rehome:")
+	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", `owner.Dao().GetRehome().GetPendingID() != ""`, `false && owner.Dao().GetRehome().GetPendingID() != ""`, "./game/handler", "TestWithTeamRehomeRejectsJoiningDuringMove", "moving player joined:")
 	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome", "./game/handler", "./game/controllers/team")
 
 }

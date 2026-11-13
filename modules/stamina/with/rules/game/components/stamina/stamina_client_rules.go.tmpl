@@ -1,0 +1,20 @@
+package stamina
+
+import (
+	"{{MODULE}}/game/view"
+	gamerules "{{MODULE}}/game/components/rules"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+func init() {
+	gamerules.RegisterPlayerRules("stamina", func(owner view.PlayerEntity) (*pb.RulePart, error) {
+		// 宿主上的体力组件就是本包的 Component（view 只公开导出方法，规则读取是包内方法）。
+		rules := owner.Stamina().(*Component).staminaRules()
+		payload, err := pb.MarshalStaminaRulesPush(&pb.StaminaRulesPush{Max: rules.Max, HardCap: rules.HardCap, RegenMillis: rules.RegenMillis, RefillDailyLimit: rules.RefillDailyLimit})
+		if err != nil {
+			return nil, err
+		}
+		return &pb.RulePart{MessageID: msgid.MsgStaminaRules, Payload: payload}, nil
+	})
+}

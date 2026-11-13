@@ -454,7 +454,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		// 档案（名字、等级、经验）是 profile 模块的：ProfileComponent 与 PlayerDao.Profile / ProfilePrivate 在最后的模块步骤
 		// 里装进来（demoModuleSteps）。下面两个文件是 demo 自己挂在那个组件上的东西——公会副本与副本领奖账本，不属于档案，
 		// 状态字段也在 demo 自己的 PlayerDao 里。它们与后面引用 ProfileComp() 的 handler 一样，等模块装好之后才一起编译。
-		{write: "game/entities/player/dungeon_ledger.go", why: "the exactly-once ledger for dungeon clear rewards and the per-season clear count, pruned on the write path"},
+		{write: "game/components/profile/dungeon_ledger.go", why: "the exactly-once ledger for dungeon clear rewards and the per-season clear count, pruned on the write path"},
 		{write: "game/entities/player/entity.go", why: "EntityCategoryPlayer: the kind's lock rank, decided before the first document is persisted"},
 		{add: &AddOptions{Kind: "component", Name: "Stats", Entity: "World"}, why: "World's one job: server-wide counters"},
 		{add: &AddOptions{Kind: "dao", Name: "World", Entity: "World"}, why: "persistence for the counters"},
@@ -816,7 +816,7 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 以及背包变化经提交观察者同步给本人的断言。
 		{write: "internal/service/game/bag_sync_test.go", why: "the module's Bag component never calls PublishSyncDirty: on a Nest built with the scene's commit observer a grant and a discard still reach the owner's client, a refused grant sends nothing, and a bystander never sees the bag"},
 		// 档案、属性成长、升级邮件由模块联动；demo 只提供在升级事务里读取的奖励规则。
-		{write: "game/entities/player/mailbox_profile_rules.go", why: "the mailbox/profile module owns reward effects; the demo chooses its hot-patchable attachment at upgrade time"},
+		{write: "game/components/mailbox/mailbox_profile_rules.go", why: "the mailbox/profile module owns reward effects; the demo chooses its hot-patchable attachment at upgrade time"},
 		// 邮件是 mailbox 模块：列表与领取两条协议、领取账本（PlayerDao.MailboxLedger）、附件的种类与编码、
 		// 发件入口 SendTo 都是模块的，demo 不带自己的 ListMail / ClaimMail / 领取账本，也不覆盖模块的任何文件。
 		// demo 的发件方（升级奖励、GM 补偿、活动结算、送礼的送达）import game/mailbox。它依赖的 wallet 跟着装进来

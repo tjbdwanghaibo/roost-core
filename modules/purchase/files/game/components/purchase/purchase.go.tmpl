@@ -1,0 +1,94 @@
+package purchase
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+
+	"{{MODULE}}/game/purchase"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// Owner 是 Purchase 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/purchase_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("purchase component: owner %T does not implement purchase.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "purchase" }
+
+type PurchaseReward struct {
+	// Validate 与 Grant 都在 Nest 事务内，不能做 I/O。失败由调用 handler 返回，不能吞掉错误后提交。
+	Validate func(purchase.Reward) error
+	Grant    func(view.PlayerEntity, purchase.Reward) error
+}
+
+var purchaseRewards = map[string]PurchaseReward{
+	"coins": {Validate: func(reward purchase.Reward) error {
+		if reward.ID != 0 {
+			return apperrors.ErrPurchaseInvalid
+		}
+		return nil
+	}, Grant: func(owner view.PlayerEntity, reward purchase.Reward) error {
+		_, err := owner.Wallet().Add(reward.Count)
+		return err
+	}},
+}
+
+// RegisterPurchaseReward 仅在 init 登记；各功能自己的 with/purchase 文件提供发货方式。
+func RegisterPurchaseReward(kind string, reward PurchaseReward) {
+	if kind == "" || reward.Validate == nil || reward.Grant == nil {
+		panic("purchase: complete reward handler is required")
+	}
+	if _, exists := purchaseRewards[kind]; exists {
+		panic("purchase: duplicate reward " + kind)
+	}
+	purchaseRewards[kind] = reward
+}
+
+// Apply 只接受权威队列读出的快照。连续游标与奖励一起提交，原样重放不写任何 DAO。
+// 即使旧队列消息已被外部取出、迟到到达，低序号也不能再发奖励；不靠过期时间或有限订单号窗口猜测。
+func (c *Component) Apply(grant purchase.Grant) (purchase.Receipt, error) {
+	if err := grant.Validate(); err != nil {
+		return purchase.Receipt{}, err
+	}
+	if grant.PlayerID != c.owner.UniqueID() {
+		return purchase.Receipt{}, apperrors.ErrPurchaseInvalid
+	}
+	state := c.owner.Dao().GetPurchase()
+	applied := state.GetApplied()
+	if grant.Sequence <= applied {
+		return grant.Receipt(), nil
+	}
+	if grant.Sequence != applied+1 {
+		return purchase.Receipt{}, apperrors.ErrPurchaseSequence
+	}
+	if grant.Settled {
+		state.SetApplied(grant.Sequence)
+		return grant.Receipt(), nil
+	}
+	reward, ok := purchaseRewards[grant.Reward.Kind]
+	if !ok {
+		return purchase.Receipt{}, apperrors.ErrPurchaseReward
+	}
+	if err := reward.Validate(grant.Reward); err != nil {
+		return purchase.Receipt{}, err
+	}
+	if err := reward.Grant(c.owner, grant.Reward); err != nil {
+		return purchase.Receipt{}, err
+	}
+	state.SetApplied(grant.Sequence)
+	return grant.Receipt(), nil
+}

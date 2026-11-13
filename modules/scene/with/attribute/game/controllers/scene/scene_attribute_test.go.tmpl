@@ -8,6 +8,7 @@ import (
 	"testing"
 	"{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
+	gameactor "{{MODULE}}/game/components/actor"
 	gamescene "{{MODULE}}/game/scene"
 )
 
@@ -18,7 +19,7 @@ func TestWithSceneAttributeSnapshotSeparatesPrivateFields(t *testing.T) {
 		p.Dao().GetAttributeBase().SetValues(map[int32]int64{1: 913})
 		p.Dao().GetAttributeGear().SetValues(map[int32]int64{1: 812})
 		p.Dao().GetAttributeFinal().SetValues(map[int32]int64{1: 725})
-		packer := player.NewActorPlayerSyncPacker(p)
+		packer := gameactor.NewActorPlayerSyncPacker(p)
 		decode := func(view entity.SyncProfile) *db.PlayerDao {
 			_ = dataengine.AllFields
 			payload, err := packer.PackSubjectSnapshot(view)
@@ -48,7 +49,7 @@ func TestWithSceneAttributeDeltaSeparatesPrivateFields(t *testing.T) {
 		p.Dao().GetAttributeBase().SetValues(map[int32]int64{1: 913})
 		p.Dao().GetAttributeGear().SetValues(map[int32]int64{1: 812})
 		p.Dao().GetAttributeFinal().SetValues(map[int32]int64{1: 725})
-		packer := player.NewActorPlayerSyncPacker(p)
+		packer := gameactor.NewActorPlayerSyncPacker(p)
 		decode := func(view entity.SyncProfile) *db.PlayerDao {
 			_ = dataengine.AllFields
 			payload, err := packer.PackSubjectDelta(view, dataengine.AllFields)

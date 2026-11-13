@@ -1,0 +1,13 @@
+package task
+
+import (
+	"{{MODULE}}/game/view"
+	gameshop "{{MODULE}}/game/components/shop"
+)
+
+// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
+func init() {
+	gameshop.OnShopBought("task", func(owner view.PlayerEntity, goodsID, count int64, _ gameshop.ShopResult, now int64) error {
+		return owner.Task().Report("shop.bought", count, now)
+	})
+}

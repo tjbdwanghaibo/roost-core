@@ -1,166 +1,22 @@
 package player
 
 import (
-	"fmt"
-	"slices"
+	"{{MODULE}}/game/components/friends"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-
-	"{{MODULE}}/db"
-	apperrors "{{MODULE}}/internal/errors"
 )
 
 //roost:component type={{ID:component:Friends}}
 const CompTypeFriends entity.ComponentType = {{ID:component:Friends}}
 
-type FriendsComponent struct {
-	entity.ComponentBase
-	owner *Player
-}
+// FriendsComponent 是 game/components/friends 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type FriendsComponent = friends.Component
+
 type IFriendsEntity interface {
 	entity.IThreadSafeEntity
 	FriendsComp() *FriendsComponent
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeFriends, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		p, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("friends owner %T", owner)
-		}
-		return &FriendsComponent{owner: p}, nil
-	})
-}
-func (c *FriendsComponent) Name() string { return "friends" }
-
-// 名单分别限制在 64 人；重复请求不占第二份名额。
-const FriendsLimit = 64
-const (
-	FriendsApply   int32 = 1
-	FriendsAccept  int32 = 2
-	FriendsRemove  int32 = 3
-	FriendsBlock   int32 = 4
-	FriendsUnblock int32 = 5
-	FriendsReject  int32 = 6
-)
-
-type FriendsSnapshot struct{ Peers, Incoming, Blocked []int64 }
-
-// ChangeOwnSide 是只改操作者自己名单的两种动作：取消拉黑、拒绝申请。只需要锁住本人，对方的档不参与，
-// 所以对方不在线、不在本进程都能做。peerID 是对方的完整 EntityID。别的动作要同时改对方的名单，走 Change。
-func (c *FriendsComponent) ChangeOwnSide(peerID int64, action int32) error {
-	if peerID == c.owner.ID() {
-		return apperrors.ErrFriendsInvalid
-	}
-	own := c.owner.Dao().GetFriends()
-	switch action {
-	case FriendsUnblock:
-		if _, ok := own.GetBlocked(peerID); ok {
-			own.DelBlockedKey(peerID)
-		}
-	case FriendsReject:
-		if _, ok := own.GetIncoming(peerID); ok {
-			own.DelIncomingKey(peerID)
-		}
-	default:
-		return apperrors.ErrFriendsInvalid
-	}
-	return nil
-}
-
-// forgetFriend 把 id 从一份名单的好友与收到的申请里去掉。名单里没有就不动：DAO 的删除对不存在的键也会登记一次修改，
-// 这里不让“没有可删的”变成一笔写入——删除、拉黑对没有关系的对方不写他的档。
-func forgetFriend(list *db.FriendsState, id int64) {
-	if _, ok := list.GetPeers(id); ok {
-		list.DelPeersKey(id)
-	}
-	if _, ok := list.GetIncoming(id); ok {
-		list.DelIncomingKey(id)
-	}
-}
-
-// Change 只可在同时锁住双方的 Nest 事务内调用；先检查全部容量和权限，再写双方 DAO。
-// ID 保存的是完整 EntityID，客户端快照转回玩家号。跨服实体不允许拿镜像替代。
-func (c *FriendsComponent) Change(peer *FriendsComponent, action int32) error {
-	if peer == nil || c.owner.ID() == peer.owner.ID() {
-		return apperrors.ErrFriendsInvalid
-	}
-	a, b := c.owner.Dao().GetFriends(), peer.owner.Dao().GetFriends()
-	aid, bid := c.owner.ID(), peer.owner.ID()
-	_, af := a.GetPeers(bid)
-	_, bf := b.GetPeers(aid)
-	_, ab := a.GetBlocked(bid)
-	_, bb := b.GetBlocked(aid)
-	switch action {
-	case FriendsApply:
-		if ab || bb {
-			return apperrors.ErrFriendsBlocked
-		}
-		if af && bf {
-			return nil
-		}
-		if _, ok := b.GetIncoming(aid); ok {
-			return nil
-		}
-		if a.PeersLen() >= FriendsLimit || b.PeersLen() >= FriendsLimit || b.IncomingLen() >= FriendsLimit {
-			return apperrors.ErrFriendsFull
-		}
-		b.SetIncomingKey(aid, true)
-	case FriendsAccept:
-		if ab || bb {
-			return apperrors.ErrFriendsBlocked
-		}
-		if af && bf {
-			return nil
-		}
-		if _, ok := a.GetIncoming(bid); !ok {
-			return apperrors.ErrFriendsApplicationMissing
-		}
-		if (!af && a.PeersLen() >= FriendsLimit) || (!bf && b.PeersLen() >= FriendsLimit) {
-			return apperrors.ErrFriendsFull
-		}
-		a.SetPeersKey(bid, true)
-		b.SetPeersKey(aid, true)
-		a.DelIncomingKey(bid)
-		b.DelIncomingKey(aid)
-	case FriendsRemove:
-		forgetFriend(a, bid)
-		forgetFriend(b, aid)
-	case FriendsBlock:
-		if !ab && a.BlockedLen() >= FriendsLimit {
-			return apperrors.ErrFriendsFull
-		}
-		if !ab {
-			a.SetBlockedKey(bid, true)
-		}
-		forgetFriend(a, bid)
-		forgetFriend(b, aid)
-	case FriendsUnblock, FriendsReject:
-		return c.ChangeOwnSide(bid, action)
-	default:
-		return apperrors.ErrFriendsInvalid
-	}
-	return nil
-}
-
-// Snapshot 返回排序后的值拷贝，只能在本人的实体锁内读取。
-func (c *FriendsComponent) Snapshot() FriendsSnapshot {
-	s := c.owner.Dao().GetFriends()
-	out := FriendsSnapshot{}
-	s.RangePeers(func(id int64, _ bool) bool {
-		out.Peers = append(out.Peers, entity.GetUniqueIDFromEntityID(id))
-		return true
-	})
-	s.RangeIncoming(func(id int64, _ bool) bool {
-		out.Incoming = append(out.Incoming, entity.GetUniqueIDFromEntityID(id))
-		return true
-	})
-	s.RangeBlocked(func(id int64, _ bool) bool {
-		out.Blocked = append(out.Blocked, entity.GetUniqueIDFromEntityID(id))
-		return true
-	})
-	slices.Sort(out.Peers)
-	slices.Sort(out.Incoming)
-	slices.Sort(out.Blocked)
-	return out
+	entity.RegisterComponentFactory(CompTypeFriends, friends.NewComponent)
 }

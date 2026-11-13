@@ -1,0 +1,25 @@
+package mailbox
+
+import (
+	"{{MODULE}}/game/view"
+	gamemailbox "{{MODULE}}/game/mailbox"
+)
+
+// 这个文件是 mailbox 与 bag 两个模块的联动：两个都装着时才有。
+//
+// 它登记道具附件（gamemailbox.TypeItem，种类本身登记在 game/mailbox/mailbox_item.go）的发放方式：
+// 进背包。发放在 MailboxComponent.Claim 的那笔事务里：道具与“这封到过账”一起提交或回滚，每封至多一次。
+//
+// 背包拒绝时（道具号不合法、放入后超过单种上限、种类数已满）原样返回背包的错误码：事务回滚，
+// 端点归还预留，邮件保持未领——玩家腾出位置之后还能再领。背包不做“能放多少放多少”，所以不会只到账一部分。
+// 持有量是这个道具号在背包里的数量，首次发放与重复到达回的是同一个量。
+func init() {
+	RegisterMailboxGrant(gamemailbox.TypeItem, MailboxGrant{
+		Grant: func(owner view.PlayerEntity, attachment gamemailbox.Attachment) (int64, error) {
+			return owner.Bag().Add(attachment.ID, attachment.Amount)
+		},
+		Held: func(owner view.PlayerEntity, attachment gamemailbox.Attachment) int64 {
+			return owner.Bag().Count(attachment.ID)
+		},
+	})
+}

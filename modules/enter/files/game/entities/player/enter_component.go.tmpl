@@ -1,6 +1,7 @@
 package player
 
 import (
+	gamelogin "{{MODULE}}/game/login"
 	db "{{MODULE}}/db"
 	"{{MODULE}}/game/components/enter"
 
@@ -28,14 +29,9 @@ func init() {
 // EnterState 实现 enter.Owner：只在 Player 被 Nest 锁住期间调用。
 func (e *Player) EnterState() *db.EnterState { return e.Dao().GetEnter() }
 
-// GrantFirstEnter 实现 enter.FirstEnterGranter：工程的 firstEnter，然后是别的功能登记的钩子（OnFirstEnter）。
+// GrantFirstEnter 实现 enter.FirstEnterGranter：工程的 firstEnter（game/login/enter_first.go），然后是别的功能登记的钩子（gamelogin.OnFirstEnter）。
 // Init 与 Create 都经它，所以两条路上发的东西一样；“只发一次”由组件在同一笔事务里置的标记保证。
-func (e *Player) GrantFirstEnter(nowUnixMilli int64) error {
-	if err := e.firstEnter(nowUnixMilli); err != nil {
-		return err
-	}
-	return runFirstEnter(e, nowUnixMilli)
-}
+func (e *Player) GrantFirstEnter(nowUnixMilli int64) error { return gamelogin.GrantFirstEnter(e, nowUnixMilli) }
 
 // RunCreateHooks 实现 enter.CreateHooks：新建事务内的钩子（OnCreate）。
-func (e *Player) RunCreateHooks(name string, nowUnixMilli int64) error { return runCreate(e, name, nowUnixMilli) }
+func (e *Player) RunCreateHooks(name string, nowUnixMilli int64) error { return gamelogin.RunCreateHooks(e, name, nowUnixMilli) }

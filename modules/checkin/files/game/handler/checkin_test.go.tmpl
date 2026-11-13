@@ -10,6 +10,7 @@ import (
 	"time"
 
 	playerentity "{{MODULE}}/game/entities/player"
+	gamecheckin "{{MODULE}}/game/components/checkin"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -235,7 +236,7 @@ var checkinProbe struct {
 func useCheckinProbe(t *testing.T) {
 	t.Helper()
 	checkinProbe.once.Do(func() {
-		playerentity.OnCheckinClaimed("zz-checkin-test-probe", func(owner *playerentity.Player, result playerentity.CheckinResult, nowUnixMilli int64) error {
+		gamecheckin.OnCheckinClaimed("zz-checkin-test-probe", func(owner *playerentity.Player, result gamecheckin.CheckinResult, nowUnixMilli int64) error {
 			if !checkinProbe.enabled.Load() {
 				return nil
 			}

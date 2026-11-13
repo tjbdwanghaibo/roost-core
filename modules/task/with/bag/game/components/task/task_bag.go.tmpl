@@ -1,0 +1,21 @@
+package task
+
+import (
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func init() {
+	RegisterTaskReward("item", TaskRewardHandler{
+		Validate: func(reward TaskReward) error {
+			if reward.ID <= 0 {
+				return apperrors.ErrTaskUnknown
+			}
+			return nil
+		},
+		Grant: func(owner view.PlayerEntity, reward TaskReward) error {
+			_, err := owner.Bag().Add(reward.ID, reward.Count)
+			return err
+		},
+	})
+}

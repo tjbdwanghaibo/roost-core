@@ -1,0 +1,23 @@
+package team
+
+import (
+	"{{MODULE}}/game/view"
+	rehomecomp "{{MODULE}}/game/components/rehome"
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func init() {
+	rehomecomp.OnRehomeApplying("team", func(owner view.PlayerEntity, _ gamerehome.Move, _ int64) error {
+		if owner.Team().TeamID() != 0 {
+			return apperrors.ErrTeamBlocked
+		}
+		return nil
+	})
+	OnTeamJoining("rehome", func(owner view.PlayerEntity) error {
+		if owner.Dao().GetRehome().GetPendingID() != "" {
+			return apperrors.ErrTeamBlocked
+		}
+		return nil
+	})
+}

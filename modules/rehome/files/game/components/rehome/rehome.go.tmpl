@@ -1,0 +1,147 @@
+package rehome
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// Owner 是 Rehome 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+// Component 是换服在玩家档上的那一部分：记意图、到达、清意图。它不保存事务会改的状态：
+// 都记在 PlayerDao.Rehome 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+//
+// 它只管业务事实（冷却、到达只做一次），不决定这名玩家归哪个服、本进程能不能写他——那是 account 与
+// game/rehome 的 Residency 的事。规则（可去的服、冷却多久）在 game/rehome/rehome_rules.go。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/rehome_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("rehome component: owner %T does not implement rehome.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "rehome" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *Component) Owner() Owner { return component.owner }
+
+// Prepare 是换服的第 0 步：核对能不能换，能就记下意图。全部在一笔事务里，任何一条拒绝都什么也没写。
+//
+// 依次：
+//
+//  1. 同一个换服 ID 已经记着：不重记，只把第 4 步的事务内检查重跑一遍并返回它的结论（重发，以及驱动器
+//     在离开之前的复核）。这个 ID 已经到达过：拒绝，一个 ID 只用一次。
+//  2. 目标必须是另一个服。
+//  3. 规则（玩家自己申请时；服务端发起的不受约束）：目标在可去的列表里（gamerehome.TargetAllowed），
+//     距上一次到达已经过了冷却（gamerehome.Cooldown）。冷却按业务时间、从到达那一刻算。
+//  4. 别的功能登记的事务内检查（OnRehomeApplying），按名字顺序，第一个拒绝即返回。
+//  5. 记意图。档里留着另一个 ID 的意图时直接覆盖：走到这里说明 account 上没有换服在途、
+//     本进程也没有另一次在做，那份意图是没成的那一次留下的。
+//
+// 这里不决定换服成不成：记下意图之后 account 仍可能拒绝，那时由 Cancel 清掉。
+func (component *Component) Prepare(move gamerehome.Move, nowUnixMilli int64) error {
+	state := component.owner.Dao().GetRehome()
+	if move.ID == "" {
+		return fmt.Errorf("rehome: a transfer id is required")
+	}
+	if state.GetPendingID() == move.ID {
+		// 同一次换服再来：意图已经记着，不重记、不再看规则与冷却；事务内的检查重跑一遍。
+		// 驱动器在离开之前用它复核（Recheck）：申请时通过的检查，到交出实体之前未必还成立。
+		if err := runRehomeApplying(component.owner, move, nowUnixMilli); err != nil {
+			return gamerehome.Refused(err, "refused by a check")
+		}
+		return nil
+	}
+	if state.GetArrivedID() == move.ID {
+		return gamerehome.Refused(nil, fmt.Sprintf("transfer %s has already arrived", move.ID))
+	}
+	if move.To <= 0 || move.To == move.From {
+		return gamerehome.Refused(nil, fmt.Sprintf("target server %d is not another server (from %d)", move.To, move.From))
+	}
+	if !move.Operator {
+		if !gamerehome.TargetAllowed(move.From, move.To) {
+			return gamerehome.Refused(nil, fmt.Sprintf("players of server %d may not move to server %d", move.From, move.To))
+		}
+		if last, cooldown := state.GetLastAt(), gamerehome.Cooldown().Milliseconds(); last != 0 && cooldown > 0 && nowUnixMilli-last < cooldown {
+			return errcode.Wrap(apperrors.ErrRehomeCooldown, nil, "last_at", last, "available_at", last+cooldown)
+		}
+	}
+	if err := runRehomeApplying(component.owner, move, nowUnixMilli); err != nil {
+		return gamerehome.Refused(err, "refused by a check")
+	}
+	state.SetPendingID(move.ID)
+	state.SetPendingFrom(move.From)
+	state.SetPendingTo(move.To)
+	state.SetPendingAt(nowUnixMilli)
+	return nil
+}
+
+// Arrive 在这名玩家进入 sid（做这次调用的进程的服）之后调用，每次进入都调。
+//
+//   - 档里没有意图：什么都不做。
+//   - 意图指向 sid：他是换过来的。清掉意图；这个换服 ID 还没到达过的话，记下它、把冷却的起点设为现在、
+//     次数加一，然后执行别的功能登记的事务内到达钩子（OnRehomeArrived）。这些与清意图在同一笔事务里：
+//     钩子返回错误就整笔回滚，下一次进入重做；提交之后再进入时意图已经不在，不会做第二次。
+//   - 意图指向别的服：原样报给调用方（StaleID / StaleTo），这里不动——他此刻在本服，那一次换服成没成
+//     要问 account，问清楚之后由 Cancel 清。
+func (component *Component) Arrive(sid int32, nowUnixMilli int64) (gamerehome.ArriveResult, error) {
+	state := component.owner.Dao().GetRehome()
+	id := state.GetPendingID()
+	if id == "" {
+		return gamerehome.ArriveResult{}, nil
+	}
+	from, to := state.GetPendingFrom(), state.GetPendingTo()
+	if to != sid {
+		return gamerehome.ArriveResult{StaleID: id, StaleTo: to}, nil
+	}
+	component.clearIntent()
+	if state.GetArrivedID() == id {
+		return gamerehome.ArriveResult{}, nil
+	}
+	count := state.GetCount() + 1
+	state.SetArrivedID(id)
+	state.SetLastAt(nowUnixMilli)
+	state.SetCount(count)
+	arrival := gamerehome.Arrival{PlayerID: component.owner.UniqueID(), ID: id, From: from, To: to, Count: count}
+	if err := runRehomeArrived(component.owner, arrival, nowUnixMilli); err != nil {
+		return gamerehome.ArriveResult{}, err
+	}
+	return gamerehome.ArriveResult{Arrived: true, Arrival: arrival}, nil
+}
+
+// Cancel 清掉这个换服 ID 的意图，返回是否清了。档里的意图是另一个 ID（或者没有）时什么都不做：
+// 迟到的清理不会清掉后一次换服刚记下的意图。冷却、次数、到达标记都不动——没换成不算换过。
+func (component *Component) Cancel(id string) bool {
+	if id == "" || component.owner.Dao().GetRehome().GetPendingID() != id {
+		return false
+	}
+	component.clearIntent()
+	return true
+}
+
+func (component *Component) clearIntent() {
+	state := component.owner.Dao().GetRehome()
+	state.SetPendingID("")
+	state.SetPendingFrom(0)
+	state.SetPendingTo(0)
+	state.SetPendingAt(0)
+}
+
+// LastAt 是这名玩家上一次换服到达的业务时间（Unix 毫秒），没换过是 0；Count 是换过几次。给同一个实体上别的组件读。
+func (component *Component) LastAt() int64 {
+	return component.owner.Dao().GetRehome().GetLastAt()
+}
+func (component *Component) Count() int32 { return component.owner.Dao().GetRehome().GetCount() }

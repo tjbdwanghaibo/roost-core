@@ -1,0 +1,11 @@
+package view
+
+// Wallet 是钱包组件对 game/ 下其它包公开的方法（实现在 game/components/wallet，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Wallet interface {
+	Apply(key string, delta int64) (int64, error)
+	Add(delta int64) (int64, error)
+	Balance() int64
+}
+
+// WalletHolder 是“带有钱包”的小接口：只要钱包的组件、钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
+type WalletHolder interface{ Wallet() Wallet }

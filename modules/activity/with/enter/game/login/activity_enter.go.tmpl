@@ -1,0 +1,11 @@
+package login
+
+import (
+	"{{MODULE}}/game/activity"
+	"{{MODULE}}/game/view"
+)
+
+func init() {
+	activity.PlayerCreatedAt = func(owner view.PlayerEntity) int64 { return owner.Dao().GetEnter().GetFirstAt() }
+	OnFirstEnter("activity", func(owner view.PlayerEntity, now int64) error { return owner.Activity().Reconcile("created", now) })
+}

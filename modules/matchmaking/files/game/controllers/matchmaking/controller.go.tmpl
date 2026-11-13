@@ -3,8 +3,7 @@ package matchmaking
 import (
 	"fmt"
 	"log/slog"
-
-	player "{{MODULE}}/game/entities/player"
+	gamematchmaking "{{MODULE}}/game/components/matchmaking"
 	game "{{MODULE}}/game/matchmaking"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
@@ -30,7 +29,7 @@ func authenticated(ctx *playeraccess.Context) error {
 	}
 	return nil
 }
-func response(ctx *playeraccess.Context, s player.MatchSnapshot, err error) *pb.MatchmakingResponse {
+func response(ctx *playeraccess.Context, s gamematchmaking.MatchSnapshot, err error) *pb.MatchmakingResponse {
 	out := &pb.MatchmakingResponse{Sequence: s.Sequence, Key: s.Key, Phase: s.Phase, RoomID: s.RoomID, MatchID: s.MatchID, Members: s.Members}
 	if err != nil {
 		out.Code, out.Reason = errcode.ClientError(err)
@@ -52,7 +51,7 @@ func (c *Controller) HandleMatchEnqueue(ctx *playeraccess.Context, req *pb.Match
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(ctx, player.MatchSnapshot{}, err), nil
+		return response(ctx, gamematchmaking.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Enqueue(ctx.Context(), ctx.PlayerID, req.Sequence, req.Team)
 	return response(ctx, s, err), nil
@@ -66,7 +65,7 @@ func (c *Controller) HandleMatchCancel(ctx *playeraccess.Context, req *pb.MatchC
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(ctx, player.MatchSnapshot{}, err), nil
+		return response(ctx, gamematchmaking.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Cancel(ctx.Context(), ctx.PlayerID, req.Key)
 	return response(ctx, s, err), nil
@@ -80,7 +79,7 @@ func (c *Controller) HandleMatchStatus(ctx *playeraccess.Context, req *pb.MatchS
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(ctx, player.MatchSnapshot{}, err), nil
+		return response(ctx, gamematchmaking.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Status(ctx.Context(), ctx.PlayerID)
 	return response(ctx, s, err), nil
@@ -94,7 +93,7 @@ func (c *Controller) HandleMatchClear(ctx *playeraccess.Context, req *pb.MatchCl
 	}
 	runtime, err := game.FromRegistry(c.registry)
 	if err != nil {
-		return response(ctx, player.MatchSnapshot{}, err), nil
+		return response(ctx, gamematchmaking.MatchSnapshot{}, err), nil
 	}
 	s, err := runtime.Clear(ctx.Context(), ctx.PlayerID, req.Key)
 	return response(ctx, s, err), nil

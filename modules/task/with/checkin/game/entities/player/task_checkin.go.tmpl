@@ -1,8 +1,0 @@
-package player
-
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	OnCheckinClaimed("task", func(owner *Player, _ CheckinResult, now int64) error {
-		return owner.TaskComp().Report("checkin.claimed", 1, now)
-	})
-}

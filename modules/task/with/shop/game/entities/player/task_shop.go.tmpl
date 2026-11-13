@@ -1,8 +1,0 @@
-package player
-
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	OnShopBought("task", func(owner *Player, goodsID, count int64, _ ShopResult, now int64) error {
-		return owner.TaskComp().Report("shop.bought", count, now)
-	})
-}

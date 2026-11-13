@@ -308,6 +308,9 @@ func buildImportBlock(ent EntityDef, needsFmt, needsDataEngine, needsNest bool) 
 			local = append(local, fmt.Sprintf(`"%s"`, imp.Path))
 		}
 	}
+	if ent.ViewImport != "" {
+		local = append(local, fmt.Sprintf(`view "%s"`, ent.ViewImport))
+	}
 	if needsDataEngine {
 		local = append(local, `"github.com/tjbdwanghaibo/roost-core/framework/dataengine"`)
 	}
@@ -520,6 +523,11 @@ func (e *{{$.Entity.Name}}) {{.GetterName}}() {{.GetterType}} { return e.{{.Fiel
 
 func (e *{{$.Entity.Name}}) {{.GetterName}}() {{.TypeName}} { return e.{{.FieldName}} }
 {{- end}}
+{{- end}}
+{{- range .Entity.ViewAccessors}}
+
+// {{.Name}} 返回 game/view 的组件接口，供只依赖 view 的组件包、钩子与联动使用。
+func (e *{{$.Entity.Name}}) {{.Name}}() {{.Type}} { return e.{{.Field}} }
 {{- end}}
 
 {{- if and .Entity.Sync (not (hasMethod .Entity "TakeEntitySyncChanges"))}}

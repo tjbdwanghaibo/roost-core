@@ -1,0 +1,47 @@
+package equipment
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"sort"
+	"sync"
+)
+
+// EquipmentChangedHook 在穿脱成功后执行。只可修改已锁住的同一个 Player，不能做外部 I/O。
+// 任一错误返回给 Equip/Unequip，调用方必须把错误交还 Nest，穿戴、背包及全部钩子写入一起回滚。
+type EquipmentChangedHook func(host view.PlayerEntity) error
+
+var equipmentChangedMu sync.RWMutex
+var equipmentChangedHooks = map[string]EquipmentChangedHook{}
+
+// OnEquipmentChanged 仅在启动 init 登记；空名、nil 和重复名直接 panic。执行按名字排序。
+func OnEquipmentChanged(name string, hook EquipmentChangedHook) {
+	if name == "" || hook == nil {
+		panic("equipment: changed hook needs name and function")
+	}
+	equipmentChangedMu.Lock()
+	defer equipmentChangedMu.Unlock()
+	if _, ok := equipmentChangedHooks[name]; ok {
+		panic(fmt.Sprintf("equipment: duplicate changed hook %q", name))
+	}
+	equipmentChangedHooks[name] = hook
+}
+func runEquipmentChanged(host view.PlayerEntity) error {
+	equipmentChangedMu.RLock()
+	names := make([]string, 0, len(equipmentChangedHooks))
+	for name := range equipmentChangedHooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hooks := make([]EquipmentChangedHook, len(names))
+	for i, name := range names {
+		hooks[i] = equipmentChangedHooks[name]
+	}
+	equipmentChangedMu.RUnlock()
+	for i, h := range hooks {
+		if err := h(host); err != nil {
+			return fmt.Errorf("equipment: changed hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

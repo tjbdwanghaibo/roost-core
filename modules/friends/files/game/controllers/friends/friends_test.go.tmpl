@@ -19,6 +19,7 @@ import (
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
+	gamefriends "{{MODULE}}/game/components/friends"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 )
 
@@ -107,7 +108,7 @@ func friendsControllerFixture(t *testing.T, online friendsOnline) (*Controller, 
 func TestFriendsEndpointRefusesPeerOutsideThisProcess(t *testing.T) {
 	c, n, ids, commit := friendsControllerFixture(t, friendsOnline{97000: 1})
 	invalid, _ := errcode.ClientError(apperrors.ErrFriendsInvalid)
-	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsApply})
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsApply})
 	if e != nil || response.Code != invalid {
 		t.Fatalf("response=%+v err=%v", response, e)
 	}
@@ -115,9 +116,9 @@ func TestFriendsEndpointRefusesPeerOutsideThisProcess(t *testing.T) {
 	if e != nil || len(s.Incoming) != 0 || commit.commits.Load() != 0 {
 		t.Fatalf("remote peer wrote %+v %v", s, e)
 	}
-	friendsEndpointSetup(t, n, ids[1], ids[0], player.FriendsApply)
+	friendsEndpointSetup(t, n, ids[1], ids[0], gamefriends.FriendsApply)
 	before := commit.commits.Load()
-	response, e = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsAccept})
+	response, e = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsAccept})
 	if e != nil || response.Code != invalid {
 		t.Fatalf("accept while the applicant is offline: response=%+v err=%v", response, e)
 	}
@@ -127,7 +128,7 @@ func TestFriendsEndpointRefusesPeerOutsideThisProcess(t *testing.T) {
 }
 func TestFriendsEndpointUsesAuthenticatedActorAndListsOwnFacts(t *testing.T) {
 	c, _, _, _ := friendsControllerFixture(t, friendsOnline{97000: 1, 97001: 1})
-	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsApply})
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsApply})
 	if e != nil || response.Code != 0 {
 		t.Fatalf("response=%+v err=%v", response, e)
 	}
@@ -144,7 +145,7 @@ func friendsEndpointSetup(t *testing.T, n *nest.NestMgr, actor, peer int64, acti
 		t.Fatal(e)
 	}
 }
-func friendsEndpointList(t *testing.T, n *nest.NestMgr, id int64) player.FriendsSnapshot {
+func friendsEndpointList(t *testing.T, n *nest.NestMgr, id int64) gamefriends.FriendsSnapshot {
 	t.Helper()
 	s, e := syncsender.NewFriendsListSender(n).Sync_FriendsList(context.Background(), id)
 	if e != nil {
@@ -156,16 +157,16 @@ func friendsEndpointList(t *testing.T, n *nest.NestMgr, id int64) player.Friends
 // 拒绝申请、取消拉黑只改自己一侧：对方离线也能做。
 func TestFriendsEndpointOwnSideActionsWorkWhilePeerIsOffline(t *testing.T) {
 	c, n, ids, _ := friendsControllerFixture(t, friendsOnline{97000: 1})
-	friendsEndpointSetup(t, n, ids[1], ids[0], player.FriendsApply)
-	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsReject})
+	friendsEndpointSetup(t, n, ids[1], ids[0], gamefriends.FriendsApply)
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsReject})
 	if e != nil || response.Code != 0 {
 		t.Fatalf("reject while the applicant is offline: response=%+v err=%v", response, e)
 	}
 	if s := friendsEndpointList(t, n, ids[0]); len(s.Incoming) != 0 {
 		t.Fatalf("rejected application kept: %+v", s)
 	}
-	friendsEndpointSetup(t, n, ids[0], ids[1], player.FriendsBlock)
-	response, e = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: player.FriendsUnblock})
+	friendsEndpointSetup(t, n, ids[0], ids[1], gamefriends.FriendsBlock)
+	response, e = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsUnblock})
 	if e != nil || response.Code != 0 {
 		t.Fatalf("unblock while the blocked player is offline: response=%+v err=%v", response, e)
 	}
@@ -179,9 +180,9 @@ func TestFriendsEndpointRemoveAndBlockRequirePeerOwnership(t *testing.T) {
 	online := friendsOnline{97000: 1}
 	c, n, ids, commit := friendsControllerFixture(t, online)
 	invalid, _ := errcode.ClientError(apperrors.ErrFriendsInvalid)
-	for _, action := range []int32{player.FriendsRemove, player.FriendsBlock} {
-		friendsEndpointSetup(t, n, ids[0], ids[1], player.FriendsApply)
-		friendsEndpointSetup(t, n, ids[1], ids[0], player.FriendsAccept)
+	for _, action := range []int32{gamefriends.FriendsRemove, gamefriends.FriendsBlock} {
+		friendsEndpointSetup(t, n, ids[0], ids[1], gamefriends.FriendsApply)
+		friendsEndpointSetup(t, n, ids[1], ids[0], gamefriends.FriendsAccept)
 		before := commit.commits.Load()
 		response, err := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: action})
 		if err != nil || response.Code != invalid || commit.commits.Load() != before {
@@ -206,14 +207,14 @@ func TestFriendsEndpointRemoveAndBlockRequirePeerOwnership(t *testing.T) {
 // 对象是自己答 friends_invalid。
 func TestFriendsEndpointOfflinePeerWithoutRecordIsNotCreated(t *testing.T) {
 	c, n, ids, commit := friendsControllerFixture(t, friendsOnline{97000: 1})
-	for _, action := range []int32{player.FriendsRemove, player.FriendsBlock} {
+	for _, action := range []int32{gamefriends.FriendsRemove, gamefriends.FriendsBlock} {
 		response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97009, Action: action})
 		if e != nil || response.Code != errcode.CodeOf(apperrors.ErrFriendsInvalid) {
 			t.Fatalf("action %d on a player without a record: response=%+v err=%v", action, response, e)
 		}
 	}
 	invalid, _ := errcode.ClientError(apperrors.ErrFriendsInvalid)
-	for _, action := range []int32{player.FriendsRemove, player.FriendsBlock, player.FriendsUnblock, player.FriendsReject} {
+	for _, action := range []int32{gamefriends.FriendsRemove, gamefriends.FriendsBlock, gamefriends.FriendsUnblock, gamefriends.FriendsReject} {
 		response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97000, Action: action})
 		if e != nil || response.Code != invalid {
 			t.Fatalf("action %d on self: response=%+v err=%v", action, response, e)

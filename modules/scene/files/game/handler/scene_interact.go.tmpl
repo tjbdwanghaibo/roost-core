@@ -1,6 +1,7 @@
 package handler
 
 import (
+	gamescenecomp "{{MODULE}}/game/components/scene"
 	"math"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -42,7 +43,7 @@ func handlerSceneInteract(target player.IActorEntity, area scene.ISceneEntity, s
 	if !spatial.WithinDistance(body.Position(), object.Position, object.Radius) {
 		return nil, apperrors.ErrSceneObjectFar
 	}
-	if err := p.InteractObject(object); err != nil {
+	if err := gamescenecomp.InteractObject(p, object); err != nil {
 		return nil, err
 	}
 	state.SetSequence(sequence)

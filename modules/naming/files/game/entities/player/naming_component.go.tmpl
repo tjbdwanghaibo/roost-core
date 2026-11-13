@@ -1,147 +1,27 @@
 package player
 
 import (
-	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"math"
-	"strings"
 	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/game/components/naming"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 //roost:component type={{ID:component:Naming}}
 const CompTypeNaming entity.ComponentType = {{ID:component:Naming}}
 
-type NamingComponent struct {
-	entity.ComponentBase
-	owner *Player
-}
+// NamingComponent 是 game/components/naming 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type NamingComponent = naming.Component
+
 type INamingEntity interface {
 	entity.IThreadSafeEntity
 	NamingComp() *NamingComponent
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeNaming, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		p, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("naming owner %T", owner)
-		}
-		return &NamingComponent{owner: p}, nil
-	})
+	entity.RegisterComponentFactory(CompTypeNaming, naming.NewComponent)
 }
-func (c *NamingComponent) Name() string { return "naming" }
 
 // CheckProfileRenameRequest 禁止旧的本地 ProfileRename Sender 绕过目录。
 // ProfileComponent.Rename 是可信事务内写入原语；正式业务入口必须走命名协调器。
-func (p *Player) CheckProfileRenameRequest() error { return apperrors.ErrNamingRequired }
-
-// NamingTicket 是锁外可持有的快照，目录 RPC 只能拿快照，不能拿 Player。
-type NamingTicket struct {
-	Seq                                           int64
-	Operation, Target                             string
-	Phase                                         int32
-	ClaimKey, ClaimToken, Owner, OldKey, OldOwner string
-}
-
-func (c *NamingComponent) Ticket() NamingTicket {
-	s := c.owner.Dao().GetNaming()
-	return NamingTicket{Seq: s.GetSeq(), Operation: s.GetOperation(), Target: s.GetTarget(), Phase: s.GetPhase(), ClaimKey: s.GetClaimKey(), ClaimToken: s.GetClaimToken(), Owner: fmt.Sprintf("naming:%d:%d", c.owner.ID(), s.GetSeq()), OldKey: s.GetOldKey(), OldOwner: s.GetOldOwner()}
-}
-
-// Begin 持久受理请求，串行化同一玩家；重试同一 key/目标继续原操作，不同目标一律拒绝。
-func (c *NamingComponent) Begin(operation, name string) (NamingTicket, error) {
-	name, err := NormalizeProfileName(name)
-	if err != nil {
-		return NamingTicket{}, err
-	}
-	if len(operation) == 0 || len(operation) > 64 || strings.TrimSpace(operation) != operation {
-		return NamingTicket{}, apperrors.ErrNamingInvalid
-	}
-	s := c.owner.Dao().GetNaming()
-	if s.GetOperation() == operation {
-		if s.GetTarget() != name {
-			return NamingTicket{}, apperrors.ErrNamingInvalid
-		}
-		return c.Ticket(), nil
-	}
-	if s.GetPhase() != 0 {
-		return NamingTicket{}, apperrors.ErrNamingBusy
-	}
-	if s.GetSeq() == math.MaxInt64 {
-		return NamingTicket{}, apperrors.ErrNamingInvalid
-	}
-	// 完全相同的显示名作为新的已完成回执，不重新占名，也不释放当前 claim。
-	if s.GetCurrentKey() != "" && c.owner.ProfileComp().DisplayName() == name {
-		s.SetOperation(operation)
-		s.SetTarget(name)
-		return c.Ticket(), nil
-	}
-	s.SetSeq(s.GetSeq() + 1)
-	s.SetOperation(operation)
-	s.SetTarget(name)
-	s.SetPhase(1)
-	s.SetClaimKey("")
-	s.SetClaimToken("")
-	s.SetOldKey(s.GetCurrentKey())
-	s.SetOldOwner(s.GetCurrentOwner())
-	return c.Ticket(), nil
-}
-
-// Step 的每个动作都是一笔 strict Nest 事务。旧 Seq/操作不能完成或清除新操作。
-// 1=记录claim；2=目录已提交后写名字；3=旧名已释放后完成；4=Reserve明确拒绝且尚未记claim时中止；
-// 5=目录明确证明token已失效，回到意图阶段重新占名。结果未知时禁止动作4/5。
-func (c *NamingComponent) Step(seq int64, operation string, action int32, key, token string) (NamingTicket, error) {
-	s := c.owner.Dao().GetNaming()
-	if s.GetSeq() != seq || s.GetOperation() != operation {
-		return NamingTicket{}, apperrors.ErrNamingBusy
-	}
-	switch action {
-	case 1:
-		if s.GetPhase() == 1 {
-			if key == "" || token == "" {
-				return NamingTicket{}, apperrors.ErrNamingInvalid
-			}
-			s.SetClaimKey(key)
-			s.SetClaimToken(token)
-			s.SetPhase(2)
-		}
-		if s.GetPhase() == 2 && (s.GetClaimKey() != key || s.GetClaimToken() != token) {
-			return NamingTicket{}, apperrors.ErrNamingBusy
-		}
-	case 2:
-		if s.GetPhase() == 2 {
-			if s.GetClaimKey() != key || s.GetClaimToken() != token {
-				return NamingTicket{}, apperrors.ErrNamingBusy
-			}
-			if _, err := c.owner.ProfileComp().Rename(s.GetTarget()); err != nil {
-				return NamingTicket{}, err
-			}
-			s.SetCurrentKey(key)
-			s.SetCurrentOwner(c.Ticket().Owner)
-			s.SetPhase(3)
-		}
-	case 3:
-		if s.GetPhase() == 3 {
-			s.SetPhase(0)
-			s.SetOldKey("")
-			s.SetOldOwner("")
-		}
-	case 5:
-		if s.GetPhase() == 2 && s.GetClaimKey() == key && s.GetClaimToken() == token {
-			s.SetPhase(1)
-			s.SetClaimKey("")
-			s.SetClaimToken("")
-		}
-	case 4:
-		if s.GetPhase() == 1 {
-			s.SetPhase(0)
-			s.SetOperation("")
-			s.SetTarget("")
-			s.SetOldKey("")
-			s.SetOldOwner("")
-		}
-	default:
-		return NamingTicket{}, apperrors.ErrNamingInvalid
-	}
-	return c.Ticket(), nil
-}
+func (e *Player) CheckProfileRenameRequest() error { return apperrors.ErrNamingRequired }

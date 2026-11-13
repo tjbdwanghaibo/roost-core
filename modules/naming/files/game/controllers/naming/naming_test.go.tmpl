@@ -16,6 +16,7 @@ import (
 	"time"
 	profilecontroller "{{MODULE}}/game/controllers/profile"
 	player "{{MODULE}}/game/entities/player"
+	gamenaming "{{MODULE}}/game/components/naming"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
@@ -65,7 +66,7 @@ type namingFaultProfile struct {
 	fired     atomic.Bool
 }
 
-func (p *namingFaultProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (player.NamingTicket, error) {
+func (p *namingFaultProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (gamenaming.NamingTicket, error) {
 	if action == p.action && p.fired.CompareAndSwap(false, true) {
 		if p.committer != nil {
 			p.committer.reject.Store(true)
@@ -74,10 +75,10 @@ func (p *namingFaultProfile) Step(ctx context.Context, id, seq int64, op string,
 		}
 		if p.after {
 			if _, err := p.namingProfile.Step(ctx, id, seq, op, action, key, token); err != nil {
-				return player.NamingTicket{}, err
+				return gamenaming.NamingTicket{}, err
 			}
 		}
-		return player.NamingTicket{}, errors.New("injected step result unknown")
+		return gamenaming.NamingTicket{}, errors.New("injected step result unknown")
 	}
 	return p.namingProfile.Step(ctx, id, seq, op, action, key, token)
 }

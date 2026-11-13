@@ -1,0 +1,238 @@
+package shop
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"math"
+	"time"
+
+	db "{{MODULE}}/db"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// Owner 是 Shop 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+// Component 是商店的业务逻辑。它不保存事务会改的状态：限购计数在 PlayerDao.Shop、
+// 回执在 PlayerDao.ShopLedger 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/shop_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("shop component: owner %T does not implement shop.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "shop" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *Component) Owner() Owner { return component.owner }
+
+// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+const (
+	// ShopReceiptWindow 是去重窗口的大小：保留最近这么多次成功购买的结果。
+	ShopReceiptWindow = 64
+	// ShopKeyMaxLen 是请求键的最大字节数。键是客户端给的、要落库，不设上限就能把玩家档案撑大。
+	ShopKeyMaxLen = 64
+)
+
+// shopKeyValid 回答“这个请求键能不能用”：1 到 ShopKeyMaxLen 个字节，只含 ASCII 字母、数字与 - _ :。
+// 键会成为落库文档里的字段名：带空字节的键编码不了，带 . 或以 $ 开头的键在存储里有特殊含义，
+// 所以只放行这几种字符（UUID、十六进制串、“会话号:序号”都在内），其余在写入之前就拒绝。
+func shopKeyValid(key string) bool {
+	if key == "" || len(key) > ShopKeyMaxLen {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '-', c == '_', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ShopResult 是一次成功购买的结果，也是回执里存下来、重发时原样返回的内容。
+type ShopResult struct {
+	// Cost 是这一笔扣的金币，Balance 是扣完之后的余额。
+	Cost    int64
+	Balance int64
+	// ItemID 是发放的道具号，Gained 是这一笔发了几个，Held 是发完之后的持有数量。
+	ItemID int64
+	Gained int64
+	Held   int64
+	// Bought 是这一笔之后该商品在限购周期内已买的份数；不限购的商品为 0。
+	Bought int64
+}
+
+// Buy 用金币买 count 份 goodsID。key 是客户端为这一次购买生成的请求键，nowUnixMilli 是这条消息冻结的业务时间。
+//
+// 重发不重复扣费：成功的购买在 ShopLedger 里留一条回执（键 -> 结果）。同一个 key 再来时在任何校验与写入
+// 之前就认出来，直接返回第一次的结果——不扣钱、不发货、不记限购、连每日清零都不做。回执与扣钱、发货、
+// 限购计数在同一笔事务里提交或回滚，所以“有回执”与“这一笔生效过”是同一件事：提交被拒时回执也没了，
+// 重发会重新买一次，不会出现扣了钱却认不出来、或认出来了却没发货。同一个 key 换了商品或份数是
+// 客户端用错了键，答 shop_key_conflict。
+//
+// 去重只在窗口内成立：这个 key 之后又成功买了 ShopReceiptWindow 次，它的回执被淘汰，再用它会当成
+// 一次新的购买。回执记在商店自己的账本里而不占货币的去重窗口（扣钱用 WalletComp().Add）：货币的回执
+// 只有金额，认不出“同一个键换了商品”，也存不下发货结果；别的消费也不会把购买的键挤出窗口。
+// 被拒绝的购买不留回执，重发时重新判断。
+//
+// 被拒绝时返回带码错误：键为空、过长或含不允许的字符（shop_key_invalid），份数不为正
+// （shop_count_invalid），商品不在目录里、已下架或目录行不合法（shop_goods_invalid），总价或道具总数
+// 超出 int64（shop_overflow），超过限购（shop_limit，不做“能买几份买几份”）；钱不够、背包放不下
+// 原样返回货币与背包的错误（wallet_short、bag_stack_full、bag_kinds_full、bag_item_invalid）。
+// 商店自己的校验都在第一次写入之前；背包拒绝时钱已经在本笔事务里扣过，调用方必须把错误返回给 Nest，
+// 由它把整笔回滚——不要吞掉错误改走别的分支。
+func (component *Component) Buy(key string, goodsID, count, nowUnixMilli int64) (ShopResult, error) {
+	if !shopKeyValid(key) {
+		return ShopResult{}, apperrors.ErrShopKeyInvalid
+	}
+	ledger := component.owner.Dao().GetShopLedger()
+	if receipt, ok := ledger.GetReceipts(key); ok {
+		if receipt.GetGoodsID() != goodsID || receipt.GetCount() != count {
+			return ShopResult{}, apperrors.ErrShopKeyConflict
+		}
+		return ShopResult{
+			Cost:    receipt.GetCost(),
+			Balance: receipt.GetBalance(),
+			ItemID:  receipt.GetItemID(),
+			Gained:  receipt.GetGained(),
+			Held:    receipt.GetHeld(),
+			Bought:  receipt.GetBought(),
+		}, nil
+	}
+	if count <= 0 {
+		return ShopResult{}, apperrors.ErrShopCountInvalid
+	}
+	goods, ok := shopGoodsByID(goodsID)
+	// 单价与每份数量不为正的目录行不卖：负的单价会变成给玩家发钱。
+	if !ok || goods.Off || goods.Price <= 0 || goods.ItemCount <= 0 {
+		return ShopResult{}, apperrors.ErrShopGoodsInvalid
+	}
+	// 用除法比较：price * count 溢出后会回绕成很小的数甚至负数，变成白送或倒贴。
+	if count > math.MaxInt64/goods.Price || count > math.MaxInt64/goods.ItemCount {
+		return ShopResult{}, apperrors.ErrShopOverflow
+	}
+	cost, gained := goods.Price*count, goods.ItemCount*count
+
+	state := component.owner.Dao().GetShop()
+	today := int64(clock.BusinessDay(time.UnixMilli(nowUnixMilli)))
+	// 存的业务日早于今天，Daily 里是前几天的数，今天算没买过。时钟回拨（存的业务日比今天晚）时不清：
+	// 宁可少卖，不多卖。
+	newDay := state.GetDay() < today
+	var bought int64
+	switch goods.Limit {
+	case ShopLimitNone:
+	case ShopLimitDaily:
+		if !newDay {
+			bought, _ = state.GetDaily(goodsID)
+		}
+	case ShopLimitLifetime:
+		bought, _ = state.GetLifetime(goodsID)
+	default:
+		return ShopResult{}, apperrors.ErrShopGoodsInvalid
+	}
+	// 用减法比较：bought + count 在 count 接近 int64 上限时会溢出。
+	if goods.Limit != ShopLimitNone && count > goods.LimitCount-bought {
+		return ShopResult{}, apperrors.ErrShopLimit
+	}
+
+	// 先扣钱再发货：钱不够最常见，货币组件拒绝时什么都没写。
+	balance, err := component.owner.Wallet().Add(-cost)
+	if err != nil {
+		return ShopResult{}, err
+	}
+	held, err := component.owner.Bag().Add(goods.ItemID, gained)
+	if err != nil {
+		return ShopResult{}, err
+	}
+
+	if newDay {
+		state.SetDaily(nil)
+		state.SetDay(today)
+	}
+	component.dropStaleCounts(state)
+	switch goods.Limit {
+	case ShopLimitDaily:
+		bought += count
+		state.SetDailyKey(goodsID, bought)
+	case ShopLimitLifetime:
+		bought += count
+		state.SetLifetimeKey(goodsID, bought)
+	}
+
+	result := ShopResult{Cost: cost, Balance: balance, ItemID: goods.ItemID, Gained: gained, Held: held, Bought: bought}
+	if ledger.ReceiptsLen() >= ShopReceiptWindow {
+		ledger.DelReceiptsKey(oldestShopReceipt(ledger))
+	}
+	seq := ledger.GetNextSeq() + 1
+	ledger.SetNextSeq(seq)
+	receipt := &db.ShopReceipt{}
+	receipt.SetGoodsID(goodsID)
+	receipt.SetCount(count)
+	receipt.SetCost(result.Cost)
+	receipt.SetBalance(result.Balance)
+	receipt.SetItemID(result.ItemID)
+	receipt.SetGained(result.Gained)
+	receipt.SetHeld(result.Held)
+	receipt.SetBought(result.Bought)
+	receipt.SetSeq(seq)
+	ledger.SetReceiptsKey(key, receipt)
+	if err := runShopBought(component.owner, goodsID, count, result, nowUnixMilli); err != nil {
+		return ShopResult{}, err
+	}
+	return result, nil
+}
+
+// dropStaleCounts 清掉不该再留着的限购计数：商品已不在目录里，或它的限购类型已经不是这张表管的那一种。
+// 每次成功购买顺手做一遍，所以两张表的大小不超过目录里对应类型的限购商品数；下架（Off）的商品还在
+// 目录里，计数保留。只在成功的购买里调：被拒绝的购买不写任何字段。
+func (component *Component) dropStaleCounts(state *db.ShopState) {
+	var stale []int64
+	state.RangeDaily(func(goodsID, _ int64) bool {
+		if goods, ok := shopGoodsByID(goodsID); !ok || goods.Limit != ShopLimitDaily {
+			stale = append(stale, goodsID)
+		}
+		return true
+	})
+	// 先收集再删：不在遍历里改正在遍历的表。
+	for _, goodsID := range stale {
+		state.DelDailyKey(goodsID)
+	}
+	stale = stale[:0]
+	state.RangeLifetime(func(goodsID, _ int64) bool {
+		if goods, ok := shopGoodsByID(goodsID); !ok || goods.Limit != ShopLimitLifetime {
+			stale = append(stale, goodsID)
+		}
+		return true
+	})
+	for _, goodsID := range stale {
+		state.DelLifetimeKey(goodsID)
+	}
+}
+
+// oldestShopReceipt 返回序号最小的回执的请求键。窗口不大，逐个比较即可。
+func oldestShopReceipt(ledger *db.ShopLedger) string {
+	var oldestKey string
+	var oldestSeq int64
+	ledger.RangeReceipts(func(key string, receipt *db.ShopReceipt) bool {
+		if oldestKey == "" || receipt.GetSeq() < oldestSeq {
+			oldestKey, oldestSeq = key, receipt.GetSeq()
+		}
+		return true
+	})
+	return oldestKey
+}

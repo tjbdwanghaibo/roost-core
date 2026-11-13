@@ -6,8 +6,7 @@ import (
 	"slices"
 
 	apperrors "{{MODULE}}/internal/errors"
-	player "{{MODULE}}/game/entities/player"
-
+	gamematchmaking "{{MODULE}}/game/components/matchmaking"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 )
 
@@ -34,7 +33,7 @@ func (r *Runtime) eligible(ctx context.Context, t svcmatch.Ticket, size int) boo
 			return false
 		}
 		s, err := r.State(ctx, id)
-		if err != nil || s.Key != p.Key || s.TicketID != t.ID || s.Phase != player.MatchQueued || s.TeamID != p.TeamID || s.SID != p.SID || !slices.Equal(s.Members, p.Members) {
+		if err != nil || s.Key != p.Key || s.TicketID != t.ID || s.Phase != gamematchmaking.MatchQueued || s.TeamID != p.TeamID || s.SID != p.SID || !slices.Equal(s.Members, p.Members) {
 			return false
 		}
 	}
@@ -107,7 +106,7 @@ func (r *Runtime) accept(ctx context.Context, result svcmatch.Match) error {
 			failures = append(failures, apperrors.ErrMatchmakingStale)
 			continue
 		}
-		state, err = r.update(ctx, state, player.MatchUpdate{Action: "matched", MatchID: result.ID, RoomID: roomID})
+		state, err = r.update(ctx, state, gamematchmaking.MatchUpdate{Action: "matched", MatchID: result.ID, RoomID: roomID})
 		if err != nil {
 			failures = append(failures, err)
 			continue

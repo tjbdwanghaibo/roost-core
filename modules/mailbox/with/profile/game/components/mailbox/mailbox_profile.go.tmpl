@@ -1,0 +1,13 @@
+package mailbox
+
+import (
+	"{{MODULE}}/game/view"
+	gameprofile "{{MODULE}}/game/components/profile"
+	"{{MODULE}}/game/mailbox"
+)
+
+func init() {
+	gameprofile.OnProfileLevelUp("mailbox", func(host view.PlayerEntity, from, to int32) error {
+		return mailbox.EmitProfileReward(host.UniqueID(), from, to, MailboxProfileReward(from, to))
+	})
+}

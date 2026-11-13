@@ -41,19 +41,19 @@ func TestModuleGachaIdleScenariosAndMutations(t *testing.T) {
 	}
 
 	// 只接受可编译且命中指定业务断言的红灯；每次自动恢复原文件。
-	recipeMutationMustFail(t, root, "game/entities/player/gacha_component.go",
+	recipeMutationMustFail(t, root, "game/components/gacha/gacha.go",
 		"if misses+1 >= pool.PityAfter {", "if misses+1 > pool.PityAfter {",
 		"./game/handler", "TestGachaTenAppliesPityInsideTheSameTransaction", "ten result")
-	recipeMutationMustFail(t, root, "game/entities/player/gacha_component.go",
-		"component.owner.WalletComp().Add(-cost)", "component.owner.WalletComp().Add(-cost/2)",
+	recipeMutationMustFail(t, root, "game/components/gacha/gacha.go",
+		"component.owner.Wallet().Add(-cost)", "component.owner.Wallet().Add(-cost/2)",
 		"./game/handler", "TestGachaSingleChargesAndGrants", "single result")
-	recipeMutationMustFail(t, root, "game/entities/player/gacha_rules.go",
+	recipeMutationMustFail(t, root, "game/components/gacha/rules.go",
 		"if roll < row.Weight {", "if roll <= row.Weight {",
 		"./game/entities/player", "TestGachaWeightsUseExactHalfOpenIntervals", "roll 2")
-	recipeMutationMustFail(t, root, "game/entities/player/idle_component.go",
+	recipeMutationMustFail(t, root, "game/components/idle/idle.go",
 		"if capped {", "if false && capped {",
 		"./game/handler", "TestIdleOfflineCapDropsOldOverflow", "cap")
-	recipeMutationMustFail(t, root, "game/entities/player/idle_component.go",
+	recipeMutationMustFail(t, root, "game/components/idle/idle.go",
 		"sequence == state.GetSequence()", "false && sequence == state.GetSequence()",
 		"./game/handler", "TestIdleDuplicateReturnsOriginalAfterTimeMoves", "idle_sequence")
 	roost("generate", "--check")

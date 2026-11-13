@@ -1,0 +1,13 @@
+package view
+
+import "{{MODULE}}/game/actor"
+
+// game/actor 只有角色身体与钩子的类型（不引用实体与组件包），view 可以引用。
+// Actor 是 Actor 组件对 game/ 下其它包公开的方法（实现在 game/components/actor，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Actor interface {
+	Body() *actor.Body
+	MoveRefusal(err error) error
+}
+
+// ActorHolder 是“带有 Actor 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+type ActorHolder interface{ Actor() Actor }

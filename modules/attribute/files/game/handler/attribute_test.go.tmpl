@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	controller "{{MODULE}}/game/controllers/attribute"
 	gameattr "{{MODULE}}/game/gameplay/attribute"
 	playerentity "{{MODULE}}/game/entities/player"
+	gameprofile "{{MODULE}}/game/components/profile"
 	sender "{{MODULE}}/game/handler/syncsender"
 )
 
@@ -156,7 +158,7 @@ func (f *attributeFixture) exp(amount int64) (int32, error) {
 var attributeRejectHook atomic.Bool
 
 func init() {
-	playerentity.OnProfileLevelUp("zz_attribute_test", func(c *playerentity.ProfileComponent, _, _ int32) error {
+	gameprofile.OnProfileLevelUp("zz_attribute_test", func(_ view.PlayerEntity, _, _ int32) error {
 		if attributeRejectHook.Load() {
 			return errors.New("attribute hook rejected")
 		}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	playerentity "{{MODULE}}/game/entities/player"
+	gamemailbox "{{MODULE}}/game/components/mailbox"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamemailbox "{{MODULE}}/game/mailbox"
@@ -66,7 +67,7 @@ func init() {
 		}
 		return nil
 	})
-	playerentity.RegisterMailboxGrant(mailboxTestChest, playerentity.MailboxGrant{
+	gamemailbox.RegisterMailboxGrant(mailboxTestChest, gamemailbox.MailboxGrant{
 		Grant: func(owner *playerentity.Player, attachment gamemailbox.Attachment) (int64, error) {
 			balance, err := owner.WalletComp().Add(attachment.Amount * attachment.ID)
 			return balance + 5000, err

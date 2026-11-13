@@ -17,6 +17,7 @@ import (
 
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
+	gameprofile "{{MODULE}}/game/components/profile"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -604,7 +605,7 @@ func TestProfileCheckAddExpAnswersLikeAddExpAndWritesNothing(t *testing.T) {
 func TestProfileCardCarriesNameAndLevel(t *testing.T) {
 	f := newProfileFixture(t)
 	card, err := f.cards.Sync_ProfileCard(context.Background(), f.player.ID())
-	if err != nil || card != (playerentity.ProfileCard{}) {
+	if err != nil || card != (gameprofile.ProfileCard{}) {
 		t.Fatalf("an uninitialized DAO's card = %+v err=%v, want no name and level 0", card, err)
 	}
 	if _, err := f.rename(" Alice "); err != nil {
@@ -613,7 +614,7 @@ func TestProfileCardCarriesNameAndLevel(t *testing.T) {
 	f.mustAddExp(t, 275, 2)
 	before := f.facts(t)
 	card, err = f.cards.Sync_ProfileCard(context.Background(), f.player.ID())
-	if err != nil || card != (playerentity.ProfileCard{Name: "Alice", Level: 2}) {
+	if err != nil || card != (gameprofile.ProfileCard{Name: "Alice", Level: 2}) {
 		t.Fatalf("card = %+v err=%v, want Alice at level 2", card, err)
 	}
 	if after := f.facts(t); after != before {

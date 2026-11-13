@@ -20,7 +20,7 @@ func TestModuleCombatScenariosAndMutations(t *testing.T) {
 	roost("module", "add", "equipment")
 	verifyCombatModules(t, root, map[string]int{"combat": 38, "combat+skillbook": 1, "combat+scene": 2, "combat+equipment": 2}, "combat")
 
-	recipeMutationMustFail(t, root, "game/entities/player/combat_component.go",
+	recipeMutationMustFail(t, root, "game/components/combat/combat.go",
 		"if len(raw) == 0 {", "if true {",
 		"./game/handler", "TestCombatCooldownIsRestoredFromCheckpoint", "cooldown")
 	recipeMutationMustFail(t, root, "game/combat/host.go",
@@ -29,7 +29,7 @@ func TestModuleCombatScenariosAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/combat/host.go",
 		"StepBuffsToTick(int64(tick))", "StepBuffsToTick(int64(tick)-1)",
 		"./game/handler", "TestCombatBuffExpiresThroughFormalDriver", "expired stun still gates")
-	recipeMutationMustFail(t, root, "game/entities/player/combat_scene.go",
+	recipeMutationMustFail(t, root, "game/components/combat/combat_scene.go",
 		`OnSceneFields("combat", "Combat")`, `_ = OnSceneFields`,
 		"./game/controllers/scene", "TestWithCombatSceneSnapshotPublishesOnlyProjection", "combat public projection missing")
 	roost("generate", "--check")

@@ -10,7 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"{{MODULE}}/game/mailbox"
-	player "{{MODULE}}/game/entities/player"
+	gameprofile "{{MODULE}}/game/components/profile"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -49,13 +49,13 @@ func TestExperienceGrantAtStorageLimit(t *testing.T) {
 	RegisterAddExpNestHandlers()
 	sender := syncsender.NewAddExpSender(client)
 	wantLevels := int64(math.MaxInt32) - int64(subject.ProfileComp().Level())
-	amount := wantLevels*player.ProfileExpPerLevel + player.ProfileExpPerLevel - 1
+	amount := wantLevels*gameprofile.ProfileExpPerLevel + gameprofile.ProfileExpPerLevel - 1
 	gained, err := sender.MultiSync_AddExp(context.Background(), subject.ID(), counters.ID(), amount)
-	if err != nil || int64(gained) != wantLevels || subject.ProfileComp().Level() != math.MaxInt32 || subject.ProfileComp().Exp() != player.ProfileExpPerLevel-1 || counters.StatsComp().Snapshot().ExpGranted != amount {
+	if err != nil || int64(gained) != wantLevels || subject.ProfileComp().Level() != math.MaxInt32 || subject.ProfileComp().Exp() != gameprofile.ProfileExpPerLevel-1 || counters.StatsComp().Snapshot().ExpGranted != amount {
 		t.Fatalf("valid boundary grant: gained=%d err=%v level=%d exp=%d", gained, err, subject.ProfileComp().Level(), subject.ProfileComp().Exp())
 	}
 	before := len(committer.records)
-	if _, err := sender.MultiSync_AddExp(context.Background(), subject.ID(), counters.ID(), 1); err == nil || len(committer.records) != before || subject.ProfileComp().Exp() != player.ProfileExpPerLevel-1 {
+	if _, err := sender.MultiSync_AddExp(context.Background(), subject.ID(), counters.ID(), 1); err == nil || len(committer.records) != before || subject.ProfileComp().Exp() != gameprofile.ProfileExpPerLevel-1 {
 		t.Fatal("grant beyond level storage limit was not refused without changes")
 	}
 }
@@ -76,7 +76,7 @@ func TestWorldExperienceOverflowLeavesThePlayerUnchanged(t *testing.T) {
 		t.Fatal("missing final attributes")
 	}
 	hp, attack := beforeAttrs.HP, beforeAttrs.Attack
-	_, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(context.Background(), subject.ID(), counters.ID(), player.ProfileExpPerLevel)
+	_, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(context.Background(), subject.ID(), counters.ID(), gameprofile.ProfileExpPerLevel)
 	afterAttrs, ok := subject.AttributeComp().Final()
 	if err == nil || !ok || subject.ProfileComp().Level() != level || subject.ProfileComp().Exp() != 0 || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 || len(committer.records) != 0 || afterAttrs.HP != hp || afterAttrs.Attack != attack {
 		t.Fatalf("world overflow changed player, attributes or effect: err=%v", err)
@@ -95,7 +95,7 @@ func TestWorldExperienceOverflowLeavesTheDungeonClaimUnpaid(t *testing.T) {
 		t.Fatal(err)
 	}
 	level := subject.ProfileComp().Level()
-	_, err := syncsender.NewClaimDungeonSender(client).MultiSync_ClaimDungeon(context.Background(), subject.ID(), counters.ID(), "overflow-run", player.ProfileExpPerLevel, now, clearsSeason)
+	_, err := syncsender.NewClaimDungeonSender(client).MultiSync_ClaimDungeon(context.Background(), subject.ID(), counters.ID(), "overflow-run", gameprofile.ProfileExpPerLevel, now, clearsSeason)
 	if err == nil || subject.ProfileComp().DungeonRunClaimed("overflow-run") || subject.ProfileComp().DungeonClears(clearsSeason) != 0 || subject.ProfileComp().Level() != level || subject.ProfileComp().Exp() != 0 || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 || len(committer.records) != 0 {
 		t.Fatalf("world overflow left a claim or reward committed: err=%v", err)
 	}
@@ -136,11 +136,11 @@ func TestExperienceOverflowIsRefusedBeforeAnyWrite(t *testing.T) {
 	level := subject.ProfileComp().Level()
 	calls := map[string]func() error{
 		"add_exp": func() error {
-			_, err := handlerAddExp(subject, counters, player.ProfileExpPerLevel)
+			_, err := handlerAddExp(subject, counters, gameprofile.ProfileExpPerLevel)
 			return err
 		},
 		"claim_dungeon": func() error {
-			_, err := handlerClaimDungeon(subject, counters, "refused-run", player.ProfileExpPerLevel, now, now, clearsSeason)
+			_, err := handlerClaimDungeon(subject, counters, "refused-run", gameprofile.ProfileExpPerLevel, now, now, clearsSeason)
 			return err
 		},
 	}
@@ -223,18 +223,18 @@ func TestLevelUpCarriesTheRewardEffectInTheSameCommit(t *testing.T) {
 		t.Fatalf("the level-up did not raise the attributes: HP %d -> %d", startHP, after.HP)
 	}
 	// 连升多级：仍是一条，带最后的等级。
-	if gained, err := sender.MultiSync_AddExp(ctx, subject.ID(), counters.ID(), 3*player.ProfileExpPerLevel); err != nil || gained != 3 {
+	if gained, err := sender.MultiSync_AddExp(ctx, subject.ID(), counters.ID(), 3*gameprofile.ProfileExpPerLevel); err != nil || gained != 3 {
 		t.Fatalf("add 300 exp: gained=%d err=%v", gained, err)
 	}
 	wantOne("three levels at once", levelUps("three levels at once"), startLevel+4)
 	// 副本领奖走同一个钩子。
-	claim, err := syncsender.NewClaimDungeonSender(client).MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "level-up-run", player.ProfileExpPerLevel, now, clearsSeason)
+	claim, err := syncsender.NewClaimDungeonSender(client).MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "level-up-run", gameprofile.ProfileExpPerLevel, now, clearsSeason)
 	if err != nil || !claim.Claimed || claim.LevelsGained != 1 {
 		t.Fatalf("claim: %+v err=%v", claim, err)
 	}
 	wantOne("a level-up through the dungeon claim", levelUps("a level-up through the dungeon claim"), startLevel+5)
 	// 模块自己的发经验 handler 也走同一个钩子。
-	if gained, err := syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, subject.ID(), player.ProfileExpPerLevel); err != nil || gained != 1 {
+	if gained, err := syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, subject.ID(), gameprofile.ProfileExpPerLevel); err != nil || gained != 1 {
 		t.Fatalf("ProfileAddExp: gained=%d err=%v", gained, err)
 	}
 	wantOne("a level-up through the module's ProfileAddExp", levelUps("a level-up through the module's ProfileAddExp"), startLevel+6)

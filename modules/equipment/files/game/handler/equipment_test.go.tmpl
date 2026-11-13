@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 	controller "{{MODULE}}/game/controllers/equipment"
 	playerentity "{{MODULE}}/game/entities/player"
+	gameequipment "{{MODULE}}/game/components/equipment"
 	sender "{{MODULE}}/game/handler/syncsender"
 )
 
@@ -188,7 +190,7 @@ func (f *equipmentFixture) mustUnequip(t *testing.T, slot int32) *pb.EquipmentUn
 var equipmentRejectHook atomic.Bool
 
 func init() {
-	playerentity.OnEquipmentChanged("zz_equipment_test", func(*playerentity.EquipmentComponent) error {
+	gameequipment.OnEquipmentChanged("zz_equipment_test", func(view.PlayerEntity) error {
 		if equipmentRejectHook.Load() {
 			return errors.New("equipment hook rejected")
 		}

@@ -27,6 +27,10 @@ func (e *Player) ActivityBook() *db.ActivityBook { return e.Dao().GetActivity() 
 func (e *Player) ActivityScope() string          { return "player" }
 
 // enter 联动安装时提供首次建档时间；没有持久事实时返回 0，不用当前时间冒充。
-var activityCreatedAt = func(*Player) int64 { return 0 }
 
-func (e *Player) ActivityCreatedAt() int64 { return activityCreatedAt(e) }
+func (e *Player) ActivityCreatedAt() int64 {
+	if activity.PlayerCreatedAt == nil {
+		return 0
+	}
+	return activity.PlayerCreatedAt(e)
+}

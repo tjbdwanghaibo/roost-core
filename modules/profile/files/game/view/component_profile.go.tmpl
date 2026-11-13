@@ -1,0 +1,14 @@
+package view
+
+// Profile 是 Profile 组件对 game/ 下其它包公开的方法（实现在 game/components/profile，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Profile interface {
+	Rename(name string) (string, error)
+	CheckAddExp(amount int64) error
+	AddExp(amount int64) (int32, error)
+	DisplayName() string
+	Level() int32
+	Exp() int64
+}
+
+// ProfileHolder 是“带有 Profile 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+type ProfileHolder interface{ Profile() Profile }

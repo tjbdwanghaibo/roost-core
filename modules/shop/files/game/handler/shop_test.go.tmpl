@@ -17,6 +17,7 @@ import (
 	"{{MODULE}}/configs/schema"
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
+	gameshop "{{MODULE}}/game/components/shop"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -49,18 +50,18 @@ const (
 	shopTestMaxKinds = 200
 )
 
-func shopTestGoods() map[int64]playerentity.ShopGoods {
-	return map[int64]playerentity.ShopGoods{
+func shopTestGoods() map[int64]gameshop.ShopGoods {
+	return map[int64]gameshop.ShopGoods{
 		shopTestPotion:  {ItemID: 1001, ItemCount: 1, Price: 10},
-		shopTestTicket:  {ItemID: 1002, ItemCount: 5, Price: 30, Limit: playerentity.ShopLimitDaily, LimitCount: 3},
-		shopTestPack:    {ItemID: 1003, ItemCount: 1, Price: 200, Limit: playerentity.ShopLimitLifetime, LimitCount: 2},
-		shopTestOff:     {ItemID: 1004, ItemCount: 1, Price: 10, Limit: playerentity.ShopLimitDaily, LimitCount: 5, Off: true},
+		shopTestTicket:  {ItemID: 1002, ItemCount: 5, Price: 30, Limit: gameshop.ShopLimitDaily, LimitCount: 3},
+		shopTestPack:    {ItemID: 1003, ItemCount: 1, Price: 200, Limit: gameshop.ShopLimitLifetime, LimitCount: 2},
+		shopTestOff:     {ItemID: 1004, ItemCount: 1, Price: 10, Limit: gameshop.ShopLimitDaily, LimitCount: 5, Off: true},
 		shopTestBulk:    {ItemID: 1005, ItemCount: 10, Price: 5},
 		shopTestCheap:   {ItemID: 1006, ItemCount: 1, Price: 4},
-		shopTestGem:     {ItemID: 1007, ItemCount: 1, Price: 20, Limit: playerentity.ShopLimitDaily, LimitCount: 2},
-		shopTestBadge:   {ItemID: 1008, ItemCount: 1, Price: 50, Limit: playerentity.ShopLimitLifetime, LimitCount: 1},
+		shopTestGem:     {ItemID: 1007, ItemCount: 1, Price: 20, Limit: gameshop.ShopLimitDaily, LimitCount: 2},
+		shopTestBadge:   {ItemID: 1008, ItemCount: 1, Price: 50, Limit: gameshop.ShopLimitLifetime, LimitCount: 1},
 		shopTestBadItem: {ItemID: 0, ItemCount: 1, Price: 10},
-		shopTestTitle:   {ItemID: 1010, ItemCount: 1, Price: 40, Limit: playerentity.ShopLimitLifetime, LimitCount: 1},
+		shopTestTitle:   {ItemID: 1010, ItemCount: 1, Price: 40, Limit: gameshop.ShopLimitLifetime, LimitCount: 1},
 	}
 }
 
@@ -105,7 +106,7 @@ func (c *shopCommitter) Commit(context.Context, dataengine.CommitRecord) error {
 //
 // 表按生成代码的名字与键类型登记。装载会发布两处进程级的东西
 // （缺省 Store 与新请求钉住的配置快照），两处都换回，这张表才不会漏给本包后面的用例。
-func shopTestLoadTables(t *testing.T, goods map[int64]playerentity.ShopGoods) {
+func shopTestLoadTables(t *testing.T, goods map[int64]gameshop.ShopGoods) {
 	t.Helper()
 	// 目录里的道具 1001～1010，加上把背包摆满用的 5001～5198。
 	var rows []schema.Item
@@ -385,11 +386,11 @@ func TestShopUnknownOffShelfOrMalformedGoodsAreRefused(t *testing.T) {
 	f.wantRefused(t, "off-shelf goods", apperrors.ErrShopGoodsInvalid, "k1", shopTestOff, 1)
 
 	malformed := shopTestGoods()
-	malformed[101] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 1, Price: 0}
-	malformed[102] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 1, Price: -10}
-	malformed[103] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 0, Price: 10}
-	malformed[104] = playerentity.ShopGoods{ItemID: 1001, ItemCount: -1, Price: 10}
-	malformed[105] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 1, Price: 10, Limit: playerentity.ShopLimitKind(7), LimitCount: 5}
+	malformed[101] = gameshop.ShopGoods{ItemID: 1001, ItemCount: 1, Price: 0}
+	malformed[102] = gameshop.ShopGoods{ItemID: 1001, ItemCount: 1, Price: -10}
+	malformed[103] = gameshop.ShopGoods{ItemID: 1001, ItemCount: 0, Price: 10}
+	malformed[104] = gameshop.ShopGoods{ItemID: 1001, ItemCount: -1, Price: 10}
+	malformed[105] = gameshop.ShopGoods{ItemID: 1001, ItemCount: 1, Price: 10, Limit: gameshop.ShopLimitKind(7), LimitCount: 5}
 	shopTestLoadTables(t, malformed)
 	for goodsID := int64(101); goodsID <= 105; goodsID++ {
 		f.wantRefused(t, fmt.Sprintf("malformed goods %d", goodsID), apperrors.ErrShopGoodsInvalid, "k1", goodsID, 1)
@@ -684,7 +685,7 @@ func TestShopStaleCountsAreDroppedOnTheNextSuccessfulPurchase(t *testing.T) {
 	// 徽章从终身限购改成每日限购。
 	changed := shopTestGoods()
 	ticket := changed[shopTestTicket]
-	ticket.Limit, ticket.LimitCount = playerentity.ShopLimitNone, 0
+	ticket.Limit, ticket.LimitCount = gameshop.ShopLimitNone, 0
 	changed[shopTestTicket] = ticket
 	delete(changed, shopTestGem)
 	delete(changed, shopTestTitle)
@@ -692,7 +693,7 @@ func TestShopStaleCountsAreDroppedOnTheNextSuccessfulPurchase(t *testing.T) {
 	pack.Off = true
 	changed[shopTestPack] = pack
 	badge := changed[shopTestBadge]
-	badge.Limit = playerentity.ShopLimitDaily
+	badge.Limit = gameshop.ShopLimitDaily
 	changed[shopTestBadge] = badge
 	shopTestLoadTables(t, changed)
 

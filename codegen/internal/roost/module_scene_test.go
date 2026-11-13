@@ -76,8 +76,8 @@ func TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat(t *testing.T) {
 		}
 	}
 	mutations := []struct{ path, from, to, test string }{
-		{"game/entities/player/scene_profile.go", `OnSceneFields("profile", "Profile")`, `OnSceneFields("profile", "Profile", "ProfilePrivate")`, "TestWithSceneProfileSnapshotSeparatesPrivateFields"},
-		{"game/entities/player/actor_sync.go", "mask &= view.Fields", "mask &= view.Fields | dataengine.AllFields", "TestWithSceneProfileDeltaSeparatesPrivateFields"},
+		{"game/components/scene/scene_profile.go", `OnSceneFields("profile", "Profile")`, `OnSceneFields("profile", "Profile", "ProfilePrivate")`, "TestWithSceneProfileSnapshotSeparatesPrivateFields"},
+		{"game/components/actor/sync.go", "mask &= view.Fields", "mask &= view.Fields | dataengine.AllFields", "TestWithSceneProfileDeltaSeparatesPrivateFields"},
 		{"game/entities/scene/entity.go", "s.Dao().GetClosed() || s.Dao().GetClosing()", "s.Dao().GetClosed()", "TestSceneStopRetriesRejectedEvacuation"},
 		{"game/controllers/chat/scene_chat.go", "transport.ActiveSessions(recipient) > 0", "true", "TestWithSceneChatSkipsDisconnectedRecipients"},
 	}

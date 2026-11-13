@@ -1,6 +1,9 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import (
+	player "{{MODULE}}/game/entities/player"
+	gameprofile "{{MODULE}}/game/components/profile"
+)
 
 // handlerProfileCard 在这名玩家的锁内读名片（名字与等级），值带出来，实体不带出来。不对客户端开放：
 // 没有协议也没有端点，由服务端代码经生成的 Sender（syncsender.NewProfileCardSender）按玩家号调用——
@@ -9,6 +12,6 @@ import player "{{MODULE}}/game/entities/player"
 // 名片里只有别的玩家也可以看的那一半（PlayerDao.Profile）；经验只给本人，这里不带。
 //
 //roost:nest
-func handlerProfileCard(target player.IProfileEntity) (player.ProfileCard, error) {
+func handlerProfileCard(target player.IProfileEntity) (gameprofile.ProfileCard, error) {
 	return target.ProfileComp().Card(), nil
 }

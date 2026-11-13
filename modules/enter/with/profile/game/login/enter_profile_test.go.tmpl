@@ -1,9 +1,10 @@
-package login
+package login_test
 
 import (
+	gamelogin "{{MODULE}}/game/login"
 	"github.com/spf13/viper"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
-	gameprofile "{{MODULE}}/game/profile"
+	gameprofile "{{MODULE}}/game/components/profile"
 	"context"
 	"errors"
 	"fmt"
@@ -88,7 +89,7 @@ func (f *enterProfileFixture) create(name string) error {
 	cfg := viper.New()
 	cfg.Set("sid", 1)
 	claims := map[string]string{svcaccount.ServerIDClaim: "1"}
-	return Create(context.Background(), app.NewRegistry(cfg), Creating{PlayerID: 94301, Name: name, Claims: claims}, CreateSteps{
+	return gamelogin.Create(context.Background(), app.NewRegistry(cfg), gamelogin.Creating{PlayerID: 94301, Name: name, Claims: claims}, gamelogin.CreateSteps{
 		Ensure: func(context.Context) error { f.ensured++; return nil },
 		Commit: func(ctx context.Context, name string) error {
 			return sender.NewEnterCreateSender(f.engine).Sync_EnterCreate(ctx, f.player.ID(), name)

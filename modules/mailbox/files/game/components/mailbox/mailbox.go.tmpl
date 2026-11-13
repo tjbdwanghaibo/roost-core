@@ -1,0 +1,117 @@
+package mailbox
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+
+	gamemailbox "{{MODULE}}/game/mailbox"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// Owner 是 Mailbox 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+type Owner = view.PlayerEntity
+
+// Component 是邮件附件到账的业务逻辑：每封至多一次，发什么按附件的种类取登记的发放方式。
+// 它不保存事务会改的状态：领取账本在 PlayerDao.MailboxLedger 里，经生成的 setter 修改，
+// 所以回滚只有 DAO 一处；不要在这里登记 undo。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂；Player 在 game/entities/player/mailbox_component.go 登记它。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("mailbox component: owner %T does not implement mailbox.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return "mailbox" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *Component) Owner() Owner { return component.owner }
+
+// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+// Claim 把邮件 mailID 的附件发给玩家，每封邮件至多一次。expiresAtUnix 是这封邮件自己的过期时刻
+// （mail 服务随预留交回的 Claim.ExpiresAtUnix，Unix 秒），nowUnix 是这条消息冻结的业务时间（Unix 秒）。
+//
+// 附件是什么种类、怎么发，不写在这里：种类的合法性登记在 game/mailbox，发放方式登记在本包的
+// mailbox_grant.go（金币内置，经货币组件到账）。这里只管“每封至多一次”。
+//
+// 奖励与“这封到过账”写在同一笔事务里：账本记下邮件 id，发放方式改玩家的状态，任何一步被拒绝或提交失败都一起回滚。
+// 这是三步领取里唯一能保证不重复发放的地方——发放成功而 CommitClaim 丢失时，重试会用同一个 token
+// 再预留、再到这里一次，mail 服务只能把它算作重复尝试，游戏这边在账本上撞到自己：
+// 返回 Claimed=false 与当前持有量，什么也不写。
+//
+// 判断顺序是规则的一部分，每一步都在任何写入之前：
+//
+//  1. 请求不合法（空 id、数量不为正、没有过期时刻）→ mailbox_invalid。没有过期时刻的记录永远清不掉，
+//     账本就不再有界；mail 服务要求每封邮件都有过期时刻，所以真实的预留不会走到这里。
+//  2. 附件这一版发不了 → mailbox_attachment：种类没登记或没通过它自己的校验（gamemailbox.Validate，
+//     与端点解码时是同一个判断，这里再判一次是因为这个入口也可能被别的服务端代码直接调用），
+//     或者种类合法但没有登记发放方式。排在账本之前：不认识的附件连“当前持有量”都答不出。
+//  3. 已在账本里 → 只确认、不再发，回这个种类此刻的持有量（MailboxGrant.Held）。即使邮件此刻已过期
+//     也照样确认：奖励早就到账了，这次到达是为了让端点补上丢失的 CommitClaim。
+//  4. 不在账本里且邮件已过期（gamemailbox.ClaimWindowClosed）→ 拒绝，错误码与 ReserveClaim 拒绝过期邮件
+//     相同（mail: mail has expired）。账本会在过期后清理记录，清理之后这封邮件“发没发过”已无从得知，
+//     只能一律不发；所以清理与这一步必须成对——去掉这一步，一条晚到的旧预留就能把清理过的邮件再发一次。
+//  5. 发放（MailboxGrant.Grant；它拒绝时——余额溢出、背包满——原样返回它的错误，事务回滚），
+//     再清理过期记录、记下这一封。
+//
+// 账本有界且不需要清扫任务：清理在写入路径上，每次首次发放顺手清掉可以忘记的记录
+// （gamemailbox.LedgerMayForget：过期再加一段宽限）。留在账本里的只有“已领、且邮件尚未过期满宽限”的记录，
+// 数量受 mail 服务对单个邮箱的上限约束（条目与已结算领取记录各有上限，超过时 mail 服务拒绝投递）。
+func (component *Component) Claim(mailID string, attachment gamemailbox.Attachment, expiresAtUnix, nowUnix int64) (gamemailbox.ClaimResult, error) {
+	if mailID == "" || attachment.Amount <= 0 || expiresAtUnix <= 0 {
+		return gamemailbox.ClaimResult{}, errcode.Wrap(apperrors.ErrMailboxInvalid, nil, "mail_id", mailID, "amount", attachment.Amount, "expires_at", expiresAtUnix)
+	}
+	if err := gamemailbox.Validate(attachment); err != nil {
+		return gamemailbox.ClaimResult{}, errcode.Wrap(apperrors.ErrMailboxAttachment, err, "mail_id", mailID)
+	}
+	grant, grantable := mailboxGrantFor(attachment.Type)
+	if !grantable {
+		return gamemailbox.ClaimResult{}, errcode.Wrap(apperrors.ErrMailboxAttachment, nil, "mail_id", mailID, "type", string(attachment.Type), "reason", "no grant is registered for this type")
+	}
+	ledger := component.owner.Dao().GetMailboxLedger()
+	if _, claimed := ledger.GetClaims(mailID); claimed {
+		return gamemailbox.ClaimResult{Held: grant.Held(component.owner, attachment)}, nil
+	}
+	if gamemailbox.ClaimWindowClosed(expiresAtUnix, nowUnix) {
+		return gamemailbox.ClaimResult{}, errcode.Wrap(svcmail.ErrExpired, nil, "mail_id", mailID, "expires_at", expiresAtUnix, "now", nowUnix)
+	}
+	held, err := grant.Grant(component.owner, attachment)
+	if err != nil {
+		return gamemailbox.ClaimResult{}, err
+	}
+	var stale []string
+	ledger.RangeClaims(func(recorded string, recordedExpiry int64) bool {
+		if gamemailbox.LedgerMayForget(recordedExpiry, nowUnix) {
+			stale = append(stale, recorded)
+		}
+		return true
+	})
+	for _, recorded := range stale {
+		ledger.DelClaimsKey(recorded)
+	}
+	ledger.SetClaimsKey(mailID, expiresAtUnix)
+	return gamemailbox.ClaimResult{Claimed: true, Held: held}, nil
+}
+
+// Claimed 报告这封邮件是否在账本里（已到账且记录尚未清理）。给持有实体锁的调用方读；
+// 发放本身必须走 Claim，在发奖励的那笔事务里。
+func (component *Component) Claimed(mailID string) bool {
+	_, claimed := component.owner.Dao().GetMailboxLedger().GetClaims(mailID)
+	return claimed
+}
+
+// LedgerSize 是账本里的记录数，给持有实体锁的调用方读（排查、测试）。
+func (component *Component) LedgerSize() int {
+	return component.owner.Dao().GetMailboxLedger().ClaimsLen()
+}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	player "{{MODULE}}/game/entities/player"
+	gamemailbox "{{MODULE}}/game/components/mailbox"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/mailbox"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -58,9 +59,9 @@ func (c *profileMailCommitter) snapshot() []dataengine.CommitRecord {
 }
 func newProfileMailFixture(t *testing.T, rule func(int32, int32) mailbox.Attachment, reject bool) (*player.Player, *syncsender.ProfileAddExpSender, *profileMailCommitter) {
 	t.Helper()
-	original := player.MailboxProfileReward
-	player.MailboxProfileReward = rule
-	t.Cleanup(func() { player.MailboxProfileReward = original })
+	original := gamemailbox.MailboxProfileReward
+	gamemailbox.MailboxProfileReward = rule
+	t.Cleanup(func() { gamemailbox.MailboxProfileReward = original })
 	player.RegisterEntity()
 	RegisterProfileAddExpNestHandlers()
 	id, err := entity.BuildEntityID(98771, player.EntityKindPlayer)

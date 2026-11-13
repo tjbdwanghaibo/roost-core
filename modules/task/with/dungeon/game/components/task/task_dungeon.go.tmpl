@@ -1,0 +1,13 @@
+package task
+
+import (
+	"{{MODULE}}/game/view"
+	gamedungeon "{{MODULE}}/game/components/dungeon"
+)
+
+// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
+func init() {
+	gamedungeon.OnDungeonClaimed("task", func(owner view.PlayerEntity, runID, season, now int64) error {
+		return owner.Task().Report("dungeon.claimed", 1, now)
+	})
+}

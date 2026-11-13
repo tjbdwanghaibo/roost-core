@@ -22,6 +22,8 @@ import (
 	"{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
 	player "{{MODULE}}/game/entities/player"
+	gamescene "{{MODULE}}/game/components/scene"
+	gameactor "{{MODULE}}/game/components/actor"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
@@ -397,7 +399,7 @@ func TestScenePublicPackerIncludesOnlyRegisteredFields(t *testing.T) {
 	p := f.player(1001)
 	f.enter(p, 1)
 	f.must(p, func(p *player.Player) error {
-		payload, err := player.NewActorPlayerSyncPacker(p).PackSubjectSnapshot(gamescene.Public)
+		payload, err := gameactor.NewActorPlayerSyncPacker(p).PackSubjectSnapshot(gamescene.Public)
 		if err != nil {
 			return err
 		}
@@ -415,7 +417,7 @@ func TestScenePackerRejectsUnknownViews(t *testing.T) {
 	f := newSceneFixture(t)
 	p := f.player(1001)
 	f.must(p, func(p *player.Player) error {
-		_, err := player.NewActorPlayerSyncPacker(p).PackSubjectSnapshot(entity.SyncProfile{Key: "admin"})
+		_, err := gameactor.NewActorPlayerSyncPacker(p).PackSubjectSnapshot(entity.SyncProfile{Key: "admin"})
 		if !errors.Is(err, entity.ErrSyncViewUnknown) {
 			t.Fatal(err)
 		}
@@ -463,7 +465,7 @@ var sceneRegionReject atomic.Bool
 var sceneRegionCoded atomic.Bool
 
 func init() {
-	player.OnRegion("scene_test", func(_ *player.Player, event gamescene.RegionEvent) error {
+	gamescene.OnRegion("scene_test", func(_ *player.Player, event gamescene.RegionEvent) error {
 		if event.ID == 33 && sceneRegionCoded.Load() {
 			return apperrors.ErrSceneObjectFar
 		}
@@ -472,7 +474,7 @@ func init() {
 		}
 		return nil
 	})
-	player.OnSceneInteract("scene_test", func(p *player.Player, object gamescene.Object) error {
+	gamescene.OnSceneInteract("scene_test", func(p *player.Player, object gamescene.Object) error {
 		if object.ID == 71 {
 			s := p.Dao().GetActorSaved()
 			s.SetFacing(s.GetFacing() + 1)
@@ -669,7 +671,7 @@ func TestSceneSensingOnlySeesCommittedPositions(t *testing.T) {
 var sceneStopReject atomic.Bool
 
 func init() {
-	player.OnActor("scene.stop_test", func(*player.Player) actor.Hooks {
+	gameactor.OnActor("scene.stop_test", func(*player.Player) actor.Hooks {
 		return actor.Hooks{Leave: func(*actor.Body) error {
 			if sceneStopReject.Load() {
 				return errors.New("reject evacuation")

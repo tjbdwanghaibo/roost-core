@@ -8,7 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	"log/slog"
 	"time"
-	player "{{MODULE}}/game/entities/player"
+	gamenaming "{{MODULE}}/game/components/naming"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
 )
@@ -16,7 +16,7 @@ import (
 // resume 不持实体锁，不在 Nest worker 内执行 Redis/RPC。顺序严格为：
 // 持久意图→Reserve→持久claim→Commit目录→持久档案→Release旧名→完成。
 // 任一结果未知都保留意图和占名；绝不在超时或提交失败时 Cancel/Release 新名。
-func (c *Controller) resume(ctx context.Context, id int64, t player.NamingTicket) (string, error) {
+func (c *Controller) resume(ctx context.Context, id int64, t gamenaming.NamingTicket) (string, error) {
 	var err error
 	if t.Phase == 1 {
 		claim, e := c.names.Reserve(ctx, "player-name/"+t.Target, directory.Owner(t.Owner), time.Minute)

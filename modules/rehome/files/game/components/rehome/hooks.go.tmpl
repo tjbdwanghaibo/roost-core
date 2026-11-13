@@ -1,0 +1,106 @@
+package rehome
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"sort"
+	"sync"
+
+	gamerehome "{{MODULE}}/game/rehome"
+)
+
+// 换服的三个登记点里事务之内的那两半（事务之外的在 game/rehome/rehome_hooks.go，“离开时”只有事务之外的一半）。
+// 它们在 Component 的事务里、Player 的实体锁内执行，拿到的是这名 Player 自己：只经同一个实体上别的组件
+// 读写这名 Player，不做事务之外的事（发消息、调别的服务）。
+//
+// 登记只在 init 里做（装了对应模块时由它的联动文件登记），之后只读；重名、空名、nil 是写错了，直接 panic。
+
+// RehomeApplyingCheck 是换服前检查在事务之内的一半：只看这名玩家自己的档能不能换（等级不够、有未领的奖励、
+// 付不起费用……）。它与记下换服意图在同一笔事务里。
+//
+//   - 返回错误就拒绝这次申请，整笔事务回滚、什么都没写。返回带业务码的错误时客户端拿到那个码，否则是 rehome_refused；
+//   - 当成只读来写：申请通过之后换服仍可能被 account 拒绝或中途中止，那时只有意图会被清掉，
+//     这里改过的东西不会还原。要随换服改这名玩家的状态（扣费、重置位置），放进到达钩子。
+type RehomeApplyingCheck func(owner view.PlayerEntity, move gamerehome.Move, nowUnixMilli int64) error
+
+// RehomeArrivedHook 是到达钩子在事务之内的一半：这名玩家换服之后第一次在目标服进入游戏时执行，
+// 与“到达过了”的标记同一笔事务，所以恰好一次。
+//
+//   - 返回错误会让这一次到达整笔回滚，下一次进入重做——钩子一直失败，这名玩家就一直没有到达
+//     （冷却不起算、别的到达钩子也不生效），但不影响他进入游戏。不想拖住别人的功能自己把错误吞掉；
+//   - 用它做必须跟着换服发生的事：扣换服费、把位置重置到出生点、清掉只在原服有意义的状态。
+type RehomeArrivedHook func(owner view.PlayerEntity, arrival gamerehome.Arrival, nowUnixMilli int64) error
+
+var (
+	rehomeHooksMu  sync.RWMutex
+	rehomeApplying = map[string]RehomeApplyingCheck{}
+	rehomeArrived  = map[string]RehomeArrivedHook{}
+)
+
+// OnRehomeApplying 登记一条事务之内的换服前检查，name 用功能自己的名字（模块名）。
+func OnRehomeApplying(name string, check RehomeApplyingCheck) {
+	if name == "" || check == nil {
+		panic("rehome: OnRehomeApplying needs a name and a check")
+	}
+	rehomeHooksMu.Lock()
+	defer rehomeHooksMu.Unlock()
+	if _, taken := rehomeApplying[name]; taken {
+		panic(fmt.Sprintf("rehome: check %q is registered twice", name))
+	}
+	rehomeApplying[name] = check
+}
+
+// OnRehomeArrived 登记一个事务之内的到达钩子。
+func OnRehomeArrived(name string, hook RehomeArrivedHook) {
+	if name == "" || hook == nil {
+		panic("rehome: OnRehomeArrived needs a name and a hook")
+	}
+	rehomeHooksMu.Lock()
+	defer rehomeHooksMu.Unlock()
+	if _, taken := rehomeArrived[name]; taken {
+		panic(fmt.Sprintf("rehome: arrived hook %q is registered twice", name))
+	}
+	rehomeArrived[name] = hook
+}
+
+// runRehomeApplying 按名字顺序执行检查；第一个拒绝原样返回（带业务码的保持它的码）。
+func runRehomeApplying(owner view.PlayerEntity, move gamerehome.Move, nowUnixMilli int64) error {
+	rehomeHooksMu.RLock()
+	names := make([]string, 0, len(rehomeApplying))
+	for name := range rehomeApplying {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	checks := make([]RehomeApplyingCheck, len(names))
+	for i, name := range names {
+		checks[i] = rehomeApplying[name]
+	}
+	rehomeHooksMu.RUnlock()
+	for _, check := range checks {
+		if err := check(owner, move, nowUnixMilli); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runRehomeArrived 按名字顺序执行到达钩子；第一个错误返回，交给事务回滚。
+func runRehomeArrived(owner view.PlayerEntity, arrival gamerehome.Arrival, nowUnixMilli int64) error {
+	rehomeHooksMu.RLock()
+	names := make([]string, 0, len(rehomeArrived))
+	for name := range rehomeArrived {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hooks := make([]RehomeArrivedHook, len(names))
+	for i, name := range names {
+		hooks[i] = rehomeArrived[name]
+	}
+	rehomeHooksMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, arrival, nowUnixMilli); err != nil {
+			return fmt.Errorf("rehome: arrived hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

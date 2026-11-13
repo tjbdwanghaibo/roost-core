@@ -1,9 +1,0 @@
-package player
-
-import "{{MODULE}}/game/mailbox"
-
-func init() {
-	OnProfileLevelUp("mailbox", func(c *ProfileComponent, from, to int32) error {
-		return mailbox.EmitProfileReward(c.owner.UniqueID(), from, to, MailboxProfileReward(from, to))
-	})
-}

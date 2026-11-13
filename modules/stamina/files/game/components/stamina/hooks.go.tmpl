@@ -1,0 +1,49 @@
+package stamina
+
+import (
+	"{{MODULE}}/game/view"
+	"fmt"
+	"slices"
+	"sync"
+)
+
+// StaminaSpentHook 在消耗成功；每次成功 Spend 执行一次。
+// 钩子在 Player 锁内、同一笔 Nest 事务中执行，只改同一实体，不能做 I/O。
+// 任一钩子失败，调用方必须把错误返回给 Nest，让原业务与钩子的全部写入一起回滚。
+type StaminaSpentHook func(owner view.PlayerEntity, amount, nowUnixMilli int64) error
+
+var staminaHooksMu sync.RWMutex
+var staminaHooks = map[string]StaminaSpentHook{}
+
+// OnStaminaSpent 只在 init 登记。名字用于确定执行顺序，空名、nil、重名直接 panic。
+func OnStaminaSpent(name string, hook StaminaSpentHook) {
+	if name == "" || hook == nil {
+		panic("stamina: hook needs name and function")
+	}
+	staminaHooksMu.Lock()
+	defer staminaHooksMu.Unlock()
+	if _, exists := staminaHooks[name]; exists {
+		panic(fmt.Sprintf("stamina: duplicate hook %q", name))
+	}
+	staminaHooks[name] = hook
+}
+
+func runStaminaSpent(owner view.PlayerEntity, amount, nowUnixMilli int64) error {
+	staminaHooksMu.RLock()
+	names := make([]string, 0, len(staminaHooks))
+	for name := range staminaHooks {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	hooks := make([]StaminaSpentHook, len(names))
+	for i, name := range names {
+		hooks[i] = staminaHooks[name]
+	}
+	staminaHooksMu.RUnlock()
+	for i, hook := range hooks {
+		if err := hook(owner, amount, nowUnixMilli); err != nil {
+			return fmt.Errorf("stamina: hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

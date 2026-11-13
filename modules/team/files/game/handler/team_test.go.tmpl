@@ -20,6 +20,7 @@ import (
 
 	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
+	gameteam "{{MODULE}}/game/components/team"
 	sender "{{MODULE}}/game/handler/syncsender"
 	team "{{MODULE}}/game/entities/team"
 )
@@ -598,7 +599,7 @@ var teamHookReject atomic.Bool
 
 func TestTeamProjectionHookFailureRollsBackBothEntities(t *testing.T) {
 	teamHookOnce.Do(func() {
-		player.OnTeamChanged("test-rejection", func(_ *player.Player, _ player.TeamChange) error {
+		gameteam.OnTeamChanged("test-rejection", func(_ *player.Player, _ gameteam.TeamChange) error {
 			if teamHookReject.Load() {
 				return errors.New("projection hook rejected")
 			}
@@ -627,7 +628,7 @@ func (f *teamFixture) note(t *testing.T, invitee, teamID, inviter, expireAt int6
 	}
 	return noted
 }
-func (f *teamFixture) invites(t *testing.T, invitee int64) []player.TeamInvitation {
+func (f *teamFixture) invites(t *testing.T, invitee int64) []gameteam.TeamInvitation {
 	t.Helper()
 	out, err := sender.NewTeamInvitesSender(f.engine).Sync_TeamInvites(context.Background(), f.playerID(invitee))
 	if err != nil {
@@ -677,7 +678,7 @@ func TestTeamInviteNoteIsListedUntilItExpires(t *testing.T) {
 	if !f.note(t, 102, f.teamID, 101, expireAt) {
 		t.Fatal("valid invitation not noted")
 	}
-	want := []player.TeamInvitation{{TeamID: f.teamID, Inviter: 101, ExpireAt: expireAt}}
+	want := []gameteam.TeamInvitation{{TeamID: f.teamID, Inviter: 101, ExpireAt: expireAt}}
 	if got := f.invites(t, 102); !reflect.DeepEqual(got, want) {
 		t.Fatalf("listed=%+v want=%+v", got, want)
 	}

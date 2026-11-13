@@ -1,0 +1,23 @@
+package matchmaking
+
+import (
+	"{{MODULE}}/game/view"
+	rehomecomp "{{MODULE}}/game/components/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+	gamerehome "{{MODULE}}/game/rehome"
+)
+
+func init() {
+	rehomecomp.OnRehomeApplying("matchmaking", func(p view.PlayerEntity, _ gamerehome.Move, _ int64) error {
+		if p.Dao().GetMatchmaking().GetPhase() != "" {
+			return apperrors.ErrMatchmakingBusy
+		}
+		return nil
+	})
+	OnMatchmakingStarting("rehome", func(p view.PlayerEntity) error {
+		if p.Dao().GetRehome().GetPendingID() != "" {
+			return apperrors.ErrMatchmakingBusy
+		}
+		return nil
+	})
+}

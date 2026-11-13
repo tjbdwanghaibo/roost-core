@@ -36,7 +36,10 @@ type EntityDef struct {
 	SourceFile      string
 	Imports         []ImportDef
 	ExistingMethods map[string]bool
-	RemoteBase      bool // embeds entity.RemoteEntityBase
+	// ViewAccessors / ViewImport：game/view 的访问器（view.go 的 applyViewAccessors 填写）。
+	ViewAccessors []ViewAccessor
+	ViewImport    string
+	RemoteBase    bool // embeds entity.RemoteEntityBase
 	// NoSnapshots: snapshots=none on a remote=managed entity — its commits
 	// carry only the DAO writes, no Remote snapshot (no
 	// _remote_entity_snapshots document, no L2 entry, no interest broadcast),

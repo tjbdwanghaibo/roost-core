@@ -1,0 +1,11 @@
+package attribute
+
+import (
+	gameprofile "{{MODULE}}/game/components/profile"
+	"{{MODULE}}/game/view"
+)
+
+// 升级时重算等级带来的属性（attribute 依赖 profile）：钩子收宿主，经 view 的 Attribute() 找到本组件。
+func init() {
+	gameprofile.OnProfileLevelUp("attribute", func(host view.PlayerEntity, from, to int32) error { return host.Attribute().LevelUp(to - from) })
+}

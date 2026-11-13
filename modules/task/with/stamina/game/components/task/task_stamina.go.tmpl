@@ -1,0 +1,13 @@
+package task
+
+import (
+	"{{MODULE}}/game/view"
+	gamestamina "{{MODULE}}/game/components/stamina"
+)
+
+// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
+func init() {
+	gamestamina.OnStaminaSpent("task", func(owner view.PlayerEntity, amount, now int64) error {
+		return owner.Task().Report("stamina.spent", amount, now)
+	})
+}

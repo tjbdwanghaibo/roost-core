@@ -1,6 +1,8 @@
 package handler
 
 import (
+	gamelogin "{{MODULE}}/game/login"
+	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"sync"
@@ -8,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 
@@ -28,7 +29,7 @@ var (
 )
 
 func init() {
-	playerentity.OnCreate("enter-scenarios", func(_ *playerentity.Player, name string, _ int64) error {
+	gamelogin.OnCreate("enter-scenarios", func(_ view.PlayerEntity, name string, _ int64) error {
 		if name == "taken" {
 			return errEnterCreateName
 		}
@@ -37,7 +38,7 @@ func init() {
 		enterCreateMu.Unlock()
 		return nil
 	})
-	playerentity.OnFirstEnter("enter-scenarios", func(*playerentity.Player, int64) error {
+	gamelogin.OnFirstEnter("enter-scenarios", func(view.PlayerEntity, int64) error {
 		enterCreateGrants.Add(1)
 		return nil
 	})

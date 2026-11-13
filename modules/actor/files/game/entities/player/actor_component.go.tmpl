@@ -1,96 +1,27 @@
 package player
 
 import (
-	"errors"
-	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"{{MODULE}}/game/components/actor"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-
-	"{{MODULE}}/game/actor"
-	apperrors "{{MODULE}}/internal/errors"
 )
 
 //roost:component type={{ID:component:Actor}}
 const CompTypeActor entity.ComponentType = {{ID:component:Actor}}
 
-type ActorComponent struct {
-	entity.ComponentBase
-	owner *Player
-	body  *actor.Body
-}
+// ActorComponent 是 game/components/actor 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+type ActorComponent = actor.Component
+
 type IActorEntity interface {
 	entity.IThreadSafeEntity
 	ActorComp() *ActorComponent
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompTypeActor, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		player, ok := owner.(*Player)
-		if !ok {
-			return nil, fmt.Errorf("actor: owner %T is not Player", owner)
-		}
-		return &ActorComponent{owner: player}, nil
-	})
-}
-func (component *ActorComponent) Name() string      { return "actor" }
-func (component *ActorComponent) Owner() *Player    { return component.owner }
-func (component *ActorComponent) Body() *actor.Body { return component.body }
-func (component *ActorComponent) OnInitFinish(*entity.EntityCreateParam, bool) error {
-	body, err := actor.New(component.owner, actor.Config{Fields: actorFields{component.owner}, Save: component.save, Hooks: component.hooks()})
-	component.body = body
-	return err
-}
-func (component *ActorComponent) OnDestroy(entity.EntityDestroyReason) {
-	if component.body != nil {
-		component.body.Close()
-	}
+	entity.RegisterComponentFactory(CompTypeActor, actor.NewComponent)
 }
 
-// MoveRefusal 把 Body.Walk / Follow 的正常拒绝换成带业务码的错误，必须在同一把实体锁内、紧接着失败的那次调用使用：
-// 不在空间里答 actor_not_placed，在空间里但被定身答 actor_rooted，路径点超限答 actor_path_too_long。
-// 原错误保留在链上（errors.Is(err, actor.ErrCannotMove) 仍成立）。别的错误原样返回，端点按内部错误处理并记日志。
-func (component *ActorComponent) MoveRefusal(err error) error {
-	switch {
-	case errors.Is(err, movement.ErrNotInScene):
-		return errcode.Wrap(apperrors.ErrActorNotPlaced, err)
-	case errors.Is(err, actor.ErrCannotMove):
-		if !component.body.Map.InScene() {
-			return errcode.Wrap(apperrors.ErrActorNotPlaced, err)
-		}
-		return errcode.Wrap(apperrors.ErrActorRooted, err)
-	case errors.Is(err, actor.ErrPathTooLong):
-		return errcode.Wrap(apperrors.ErrActorPathTooLong, err)
-	}
-	return err
-}
-func (player *Player) MapBasic() *movement.MapBasic  { return player.ActorComp().body.Map }
-func (player *Player) MoveComponent() *movement.Move { return player.ActorComp().body.Move }
-func (component *ActorComponent) SavedPosition() (int64, spatial.Point, movement.Facing) {
-	saved := component.owner.Dao().GetActorSaved()
-	return saved.GetSceneID(), spatial.Point{X: saved.GetX(), Y: saved.GetY()}, movement.Facing(saved.GetFacing())
-}
-func (component *ActorComponent) save(id int64, p spatial.Point, facing movement.Facing) error {
-	saved := component.owner.Dao().GetActorSaved()
-	saved.SetSceneID(id)
-	saved.SetX(p.X)
-	saved.SetY(p.Y)
-	saved.SetFacing(int32(facing))
-	return nil
-}
-
-type actorFields struct{ owner *Player }
-
-func (f actorFields) SceneID() int64     { return f.owner.Dao().GetActor().GetSceneID() }
-func (f actorFields) SetSceneID(v int64) { f.owner.Dao().GetActor().SetSceneID(v) }
-func (f actorFields) Pos() spatial.Point {
-	s := f.owner.Dao().GetActor()
-	return spatial.Point{X: s.GetX(), Y: s.GetY()}
-}
-func (f actorFields) SetPos(v spatial.Point) { s := f.owner.Dao().GetActor(); s.SetX(v.X); s.SetY(v.Y) }
-func (f actorFields) Facing() movement.Facing {
-	return movement.Facing(f.owner.Dao().GetActor().GetFacing())
-}
-func (f actorFields) SetFacing(v movement.Facing) { f.owner.Dao().GetActor().SetFacing(int32(v)) }
+// MapBasic / MoveComponent 让 Player 满足 gameplay/movement 的宿主接口（移动走 actor 组件的 Body）。
+func (e *Player) MapBasic() *movement.MapBasic  { return e.ActorComp().Body().Map }
+func (e *Player) MoveComponent() *movement.Move { return e.ActorComp().Body().Move }

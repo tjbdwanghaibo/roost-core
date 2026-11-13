@@ -11,6 +11,7 @@ import (
 
 	"{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
+	gameactor "{{MODULE}}/game/components/actor"
 	gamescene "{{MODULE}}/game/scene"
 )
 
@@ -23,7 +24,7 @@ func TestWithCombatSceneSnapshotPublishesOnlyProjection(t *testing.T) {
 		p.Dao().GetCombatPrivate().SetSequence(123)
 		p.Dao().GetCombatPrivate().SetRuntime([]byte("private checkpoint"))
 		p.CombatComp().Core().InitCombatant(corecombat.Combatant{Alive: true, Health: 99, MaxHealth: 100})
-		packer := player.NewActorPlayerSyncPacker(p)
+		packer := gameactor.NewActorPlayerSyncPacker(p)
 		for _, view := range []entity.SyncProfile{gamescene.Public, policy.SelfProfile} {
 			payload, err := packer.PackSubjectSnapshot(view)
 			if err != nil {
@@ -53,7 +54,7 @@ func TestWithCombatSceneDeltaPublishesOnlyProjection(t *testing.T) {
 		p.Dao().GetCombatPrivate().SetSequence(123)
 		p.Dao().GetCombatPrivate().SetRuntime([]byte("private checkpoint"))
 		p.CombatComp().Core().InitCombatant(corecombat.Combatant{Alive: true, Health: 99, MaxHealth: 100})
-		packer := player.NewActorPlayerSyncPacker(p)
+		packer := gameactor.NewActorPlayerSyncPacker(p)
 		for _, view := range []entity.SyncProfile{gamescene.Public, policy.SelfProfile} {
 			payload, err := packer.PackSubjectDelta(view, dataengine.AllFields)
 			if err != nil {

@@ -16,7 +16,7 @@ import (
 
 	apperrors "{{MODULE}}/internal/errors"
 	game "{{MODULE}}/game/matchmaking"
-	player "{{MODULE}}/game/entities/player"
+	gamematchmaking "{{MODULE}}/game/components/matchmaking"
 	room "{{MODULE}}/game/entities/room"
 	sender "{{MODULE}}/game/handler/syncsender"
 )
@@ -83,7 +83,7 @@ func (f *matchFixture) Open(ctx context.Context, key string, members []int64) (i
 	err := sender.NewMatchroomOpenSender(f.engine).Sync_MatchroomOpen(ctx, f.roomID, key, members)
 	return entity.GetUniqueIDFromEntityID(f.roomID), err
 }
-func (f *matchFixture) enqueue(t *testing.T, id int64, team bool) player.MatchSnapshot {
+func (f *matchFixture) enqueue(t *testing.T, id int64, team bool) gamematchmaking.MatchSnapshot {
 	t.Helper()
 	s, err := f.runtime.Enqueue(context.Background(), id, 1, team)
 	if err != nil {
@@ -91,7 +91,7 @@ func (f *matchFixture) enqueue(t *testing.T, id int64, team bool) player.MatchSn
 	}
 	return s
 }
-func (f *matchFixture) status(t *testing.T, id int64) player.MatchSnapshot {
+func (f *matchFixture) status(t *testing.T, id int64) gamematchmaking.MatchSnapshot {
 	t.Helper()
 	s, err := f.runtime.Status(context.Background(), id)
 	if err != nil {
@@ -126,7 +126,7 @@ func TestMatchmakingSoloCreatesReservedRoomAndReturnsBothResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, b := f.status(t, 101), f.status(t, 102)
-	if a.Phase != player.MatchMatched || b.Phase != player.MatchMatched || a.RoomID != b.RoomID || a.RoomID == 0 {
+	if a.Phase != gamematchmaking.MatchMatched || b.Phase != gamematchmaking.MatchMatched || a.RoomID != b.RoomID || a.RoomID == 0 {
 		t.Fatalf("results: %+v %+v", a, b)
 	}
 	for _, id := range []int64{101, 102} {
@@ -151,13 +151,13 @@ func TestMatchmakingTeamFreezesRosterAndDoesNotSplitIt(t *testing.T) {
 	if err := f.runtime.Step(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if f.status(t, 101).Phase != player.MatchQueued {
+	if f.status(t, 101).Phase != gamematchmaking.MatchQueued {
 		t.Fatal("party mixed with solo")
 	}
 	if _, err := f.runtime.Cancel(context.Background(), 102, first.Key); err != nil {
 		t.Fatal(err)
 	}
-	if f.status(t, 101).Phase != player.MatchCancelled || f.status(t, 102).Phase != player.MatchCancelled {
+	if f.status(t, 101).Phase != gamematchmaking.MatchCancelled || f.status(t, 102).Phase != gamematchmaking.MatchCancelled {
 		t.Fatal("party cancellation not shared")
 	}
 	if err := sender.NewTeamLeaveSender(f.engine).MultiSync_TeamLeave(context.Background(), f.teamID, f.playerID(102), false); err != nil {
@@ -188,7 +188,7 @@ func TestMatchmakingTwoTeamsMatchAllMembers(t *testing.T) {
 		t.Fatalf("split party: %v", f.members)
 	}
 	for _, id := range f.members {
-		if s := f.status(t, id); s.Phase != player.MatchMatched {
+		if s := f.status(t, id); s.Phase != gamematchmaking.MatchMatched {
 			t.Fatalf("member %d: %+v", id, s)
 		}
 	}
@@ -198,7 +198,7 @@ func TestMatchmakingCancelBeforeMatchLeavesNoRoom(t *testing.T) {
 	s := f.enqueue(t, 101, false)
 	f.enqueue(t, 102, false)
 	got, err := f.runtime.Cancel(context.Background(), 101, s.Key)
-	if err != nil || got.Phase != player.MatchCancelled {
+	if err != nil || got.Phase != gamematchmaking.MatchCancelled {
 		t.Fatalf("cancel: %+v %v", got, err)
 	}
 	if err := f.runtime.Step(context.Background()); err != nil {
@@ -223,7 +223,7 @@ func TestMatchmakingCancelAfterCommitRecoversOriginalMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := f.runtime.Cancel(context.Background(), 101, a.Key)
-	if err != nil || got.Phase != player.MatchMatched {
+	if err != nil || got.Phase != gamematchmaking.MatchMatched {
 		t.Fatalf("cancel lost committed match: %+v %v", got, err)
 	}
 	if f.status(t, 102).RoomID != got.RoomID {
@@ -280,7 +280,7 @@ func TestMatchmakingLostEnqueueReplyIsFoundWithoutReenqueuing(t *testing.T) {
 		t.Fatal("lost reply not surfaced")
 	}
 	s := f.status(t, 101)
-	if s.Phase != player.MatchQueued || s.TicketID == "" {
+	if s.Phase != gamematchmaking.MatchQueued || s.TicketID == "" {
 		t.Fatalf("orphan ticket not found: %+v", s)
 	}
 }
@@ -303,7 +303,7 @@ func TestMatchmakingNeverBoundIntentExpiresWithoutUnsafeRetry(t *testing.T) {
 	}
 	f.now.Add(60000)
 	s := f.status(t, 101)
-	if s.Phase != player.MatchExpired || store.calls != 1 {
+	if s.Phase != gamematchmaking.MatchExpired || store.calls != 1 {
 		t.Fatalf("unknown enqueue retried: %+v calls=%d", s, store.calls)
 	}
 }
