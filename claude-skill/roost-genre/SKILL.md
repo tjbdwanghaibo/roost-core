@@ -9,7 +9,7 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 
 前置：Go 1.27 及以上，能访问 GitHub 与 Go 模块代理。全程 `GOWORK=off`。命令用 bash 执行。
 
-入口版本：2026-11-13.2
+入口版本：2026-11-13.3
 
 ## 0. 每次使用先检查更新
 
@@ -75,7 +75,7 @@ ROOST="$WORK/bin/roost"
 | `go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE` | **不做**；工程直接依赖发布版 `$V` |
 | 按玩法出 demo 时拷 `$CORE/scripts/testdata/…` 夹具 | 照做，从 `$CORE` 拷（只读取，不改 `$CORE`） |
 
-其余步骤（`module add`、`module verify`、`go test`、生成 `docs/DEMO.zh-CN.md` 与 `docs/DEMO-HISTORY.zh-CN.md`）照正文。
+其余步骤（`module add`、`module verify`、`go test`、生成 `docs/DEMO.zh-CN.md`、`docs/DEMO-HISTORY.zh-CN.md`，以及工程根目录的 `AGENTS.md`、`CLAUDE.md` 与入口 skill 的副本）照正文 compose §5A。
 
 ## 5. 规则
 

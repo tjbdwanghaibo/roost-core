@@ -223,7 +223,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 工程生成之后，需求会不断增加和修改。每一轮都按这个顺序做，不从头重新生成工程：
 
-1. **先读记忆**：`docs/DEMO.zh-CN.md`（当前有哪些需求、边界、模块、实体、服务、手写功能）、`docs/DEMO-HISTORY.zh-CN.md`（以前每轮的原话、决定、冲突的选择、待确认项）、`roost.yaml`。记忆与工程对不上时（有人手改过工程），以工程为准，先把差异告诉用户，再把文档改成与工程一致。
+1. **先读记忆**：工程根目录的 `AGENTS.md`、`docs/DEMO.zh-CN.md`（当前有哪些需求、边界、模块、实体、服务、手写功能）、`docs/DEMO-HISTORY.zh-CN.md`（以前每轮的原话、决定、冲突的选择、待确认项）、`roost.yaml`。记忆与工程对不上时（有人手改过工程），以工程为准，先把差异告诉用户，再把文档改成与工程一致。
 2. **分清这一轮是什么**：新增的条目、修改的条目（指出改的是文档里的哪一条）、删除的条目。只对这些条目走第 1 步（拆、分端、定复用、查限制）；专业模式只就这些条目和受它们影响的旧条目提问。
 3. **查与旧需求的关系**：新条目与已做的条目互相矛盾、或者会改变已做条目的行为时，算规则 4 的冲突，提出来让用户选，不要悄悄改掉旧行为。以前用户“接受限制”的条目，这一轮的改动让限制不再成立或变得更严时，也要提。
 4. **修改与删除有额外的限制**，动手前对照：
@@ -504,7 +504,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 ## 5A. 工程说明文档
 
-每个生成的工程都要带 `docs/DEMO.zh-CN.md` 与 `docs/DEMO-HISTORY.zh-CN.md`，业余与专业模式都要生成。前者写给接手这个工程的人（服务器与客户端），描述**当前状态**；后者是逐次变更的记录，也是下一次增改需求时 agent 的记忆（第 2A 步）。
+每个生成的工程都要带 `docs/DEMO.zh-CN.md` 与 `docs/DEMO-HISTORY.zh-CN.md`，以及给之后接手的 agent 看的 `AGENTS.md`、`CLAUDE.md` 与入口 skill（本节末尾），业余与专业模式都要生成。前者写给接手这个工程的人（服务器与客户端），描述**当前状态**；后者是逐次变更的记录，也是下一次增改需求时 agent 的记忆（第 2A 步）。
 
 `docs/DEMO.zh-CN.md` 的内容从工程里取，不凭记忆写；改了工程就同步改它。固定这几节：
 
@@ -527,6 +527,38 @@ go test -mod=mod ./...                                            # 其余生成
 - 改了哪些文件、新分配或弃用的号与存储键；
 - 验收结果（新场景与回归场景的数量）；
 - 照 skill 做时走不通、自己绕过的地方（只记在这里并告诉用户，不改 skill）。
+
+**给之后接手的 agent**：工程根目录还要放这三样，让以后在这个工程里提的需求自动走本 skill：
+
+- `.claude/skills/roost-genre/SKILL.md`：入口 skill，取自 roost-core 仓库的 `claude-skill/roost-genre/SKILL.md`（从 GitHub 用 `curl -fsSL https://raw.githubusercontent.com/tjbdwanghaibo/roost-core/main/claude-skill/roost-genre/SKILL.md` 下载，整份放入，不改内容）。工程用 Codex 等读 `.agents/skills/` 的工具时，同一份再放一份到 `.agents/skills/roost-genre/SKILL.md`。
+- `CLAUDE.md`：只写一行 `@AGENTS.md`，让 Claude Code 与别的工具读同一份说明。
+- `AGENTS.md`：按下面的骨架写，尖括号里的换成本工程的实际内容。
+
+```markdown
+# 编码助手指引
+
+本工程是用 roost-core <版本> 生成的游戏服务端（Go）。<一句话：做什么游戏、服务哪个客户端工程，客户端工程的路径>。
+
+## 需求怎么做
+
+- 新增或修改业务需求，一律先用 `roost-genre` skill（入口在 `.claude/skills/roost-genre/SKILL.md`）：它会先检查更新、读本工程的记忆、拆需求与分端、查限制，再改工程。
+- 记忆：`docs/DEMO.zh-CN.md` 是当前状态，`docs/DEMO-HISTORY.zh-CN.md` 是逐次变更（只追加）。动手前先读这两份。
+- skill 只读：不改 `.claude/skills/`、`.agents/skills/` 下的文件，也不改 Go 模块缓存里的 roost-core。发现 skill 有问题告诉用户。
+- roost-core 的版本以 `go.mod` 为准，未经用户同意不升级。
+
+## 工程约定
+
+- 业务状态在实体的 DAO 里，改状态只在 Nest handler 里；不改带 `_gen` 的文件；协议号、错误码、组件号、`store` 键分配后不改、不复用。
+- 已装模块（`roost.yaml` 的 `modules` 段）的文件是业务代码，改之前读工程里现在的版本。
+- 玩家操作在提交之后用框架的日志（`log/slog`）打业务日志，高频逻辑可以不打。
+
+## 验证
+
+- `roost module verify`（含 build、vet、`roost id check`、`roost generate --check`），`go test ./...`，全程 `GOWORK=off`。
+- 改了行为要有场景测试；回归时以前的场景一条不能少。没有跑的验证在回复里写明“未验证”。
+```
+
+已有工程里已经有 `AGENTS.md` 的，不整份覆盖：只补上“需求怎么做”这一节（已有同名小节就改它），其余保留。
 
 ## 6. 向用户报告
 

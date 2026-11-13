@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **组合 skill**（compose §5A，2026-11-13，维护者要求）：生成的工程根目录还要带 `AGENTS.md`（需求一律先用 roost-genre、记忆在 DEMO 两份文档、skill 只读、版本以 go.mod 为准、工程约定与验证命令）、只含 `@AGENTS.md` 的 `CLAUDE.md`，以及入口 skill 的副本（`.claude/skills/roost-genre/`，用 Codex 时再放 `.agents/skills/`），之后在该工程里提的需求自动走 skill；已有 `AGENTS.md` 时只补“需求怎么做”一节。入口版本 2026-11-13.3。
+
 - **组合 skill**（compose §0D，2026-11-13，维护者指出战斗判断有误）：有战斗时先分五档再判断——回合 / 异步、MMO 级服务器权威实时战斗、帧同步对战都支持；动作 / 射击级不支持、大规模同屏状态同步暂缓，作为冲突提出。写明 `combat` 模块只是双人 PvP、`monster` 不战斗、`dungeon` 不判定击杀，MMO 级多人战斗与打怪按 MMORPG 参考与 `gameplay/skill` 手写；设计上用前摇、预警、锁定或范围判定吸收没有延迟补偿的影响。实时战斗本身不再算 §0C“不用 roost”的信号。
 
 - **组合 skill 入口**（claude-skill/，2026-11-13，维护者要求）：每次使用先检查更新——入口文件与 GitHub main 上的比较，有新版就告诉用户并给更新办法（不自己改文件，用户同意后才执行项目写明的更新命令）；roost-core 有新发布版时，新工程直接用、已有工程读发布说明后问用户，同意后按 `roost project upgrade --dry-run` → 升级 → 重跑全部验收 → 记进 DEMO-HISTORY。入口文件加“入口版本”行。
