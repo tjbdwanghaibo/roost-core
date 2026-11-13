@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **匹配补位在真实 Redis 与两个匹配器实例上的用例**（wiring/integration，2026-11-14，KNOWN-LIMITS“匹配补位”）：新增 `TestMatchBackfillWithTwoMatchersOnRedis`（`-tags integration`，单机用 `REDIS_ADDR`、Cluster 用 `ROOST_REVIEW_CLUSTER`）。补位队列里房间票（Score = 空位数）+ 玩家票弹性成局，两个匹配器实例各用自己的连接与 `Store`、按相反票序提交互相重叠的票集合，玩家在匹配期间陆续排队，房间按剩余空位一轮轮挂票；断言每张票至多进一局、每局恰好一张房间票且玩家数不超过 Score、座位最终填满、存储里每张已匹配的票指向它的局。没有行为改动。
+  - **验证**：单机 Redis 与 3 主 Redis Cluster 各 `-race -count=5` 通过（每次 8～17 次匹配器之间的提交冲突）；变异自检把 `Commit` 的“票必须在等待”放宽为“只拒绝已取消”后用例红（`ticket … is in two matches …`）。
+  - **仍未覆盖**：用的是 party-room 夹具 `partymatch.Pass` 同一规则的副本，不经房间的进房 handler；补位吞吐没有测。
+
 - **组同步的慢消费者、独立 Gate 用例与容量基准**（wiring/selfsync、entitysync/policy，2026-11-14，KNOWN-LIMITS“组同步的容量与独立 Gate 用例”）：`TestGroupsOverTCPCloseAStalledMemberOnlyAndTheReconnectGetsTheGroupFull`（停读成员只断自己、同组在读的成员收到每次变化、重连全量是最新值）、`TestGroupsOverGateRecoverAfterEveryRefusedPush`（`-tags integration`，真实 Gate + NATS，6 轮拒收各经一次重连恢复；`newGateSelfHarness` 接上 `harnessGroups`）、`BenchmarkGroupViewFlush`（房间数 × 成员数四档）。两条用例变异“会话释放时不置回未订阅”后都变红（重连后只有 `player/self`、没有 `room/room`）。只加测试，行为不变；容量数据**未测**（等机器空闲）。
 
 - **玩家 TCP 写期限到期关闭连接时区分是哪一个期限**（infra/network/gateway，2026-11-14，KNOWN-LIMITS“独立 Gate 慢链路：先到期的是 write_timeout 还是单帧预算”）：新指标 `player_tcp_write_deadline_total{deadline="write_timeout"|"send_budget"}`，关闭原因的错误文本写明 `write_timeout (5s) ran out` 或 `the frame's send budget ... ran out`，带已写出 / 总字节数；`player_tcp_write_error_total` 口径不变。`TestAWriteCutOffByTheCallerDeadlineBeforeAnyByteIsARefusal` 修前 `player_tcp_write_deadline_total{deadline=write_timeout} grew by 0, want 1`。独立 Gate 慢链路演练上两者的实测分布与纯追帧页的影响**未测**（等机器空闲）。
