@@ -8,6 +8,8 @@
 # 与 SYNC=1 互斥）。嵌入模式可选 ROOST_NEST_GAME_TCP_RESIDENT_BYTES 覆盖出站驻留预算。正式参数见 docs/performance/README.md。
 # 心跳的驱动：ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker（缺省，帧回调逐个投递）或 heartbeat（gameplay/heartbeat，
 # 每个 Unit 一个登记，周期 1s / ROOST_NEST_GAME_HZ，必须是心跳档位：1、2、5、10、20Hz）。
+# heartbeat 驱动的投递方式：ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch（Nest 批量作业）| dispatch（每拍单目标 Dispatch），
+# 空跟驱动缺省（batch）；ticker 驱动下给值直接报错。生效方式进结果的 Beats.Delivery。
 set -euo pipefail
 # 复用同一正式生成流程，仅验证手写空间组件，不启动负载或外部服务。
 test_pattern='^TestNestGameLoad$'

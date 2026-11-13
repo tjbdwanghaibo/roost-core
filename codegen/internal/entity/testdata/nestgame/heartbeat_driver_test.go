@@ -21,6 +21,10 @@ import (
 //	           驱动按相位打散逐个投递，回调在 Unit 自己的 worker、实体锁与事务内执行同一个 HeartbeatComponent.Tick。
 //
 // 缺省 ticker：已有报告的复跑命令保持原负载；正式对比放在 v1.31 发版前的压测之后再定缺省。
+//
+// heartbeat 驱动的投递方式（ROOST_NEST_GAME_HEARTBEAT_DELIVERY）：batch（Nest 批量作业）或 dispatch（每拍一条
+// 单目标 Dispatch）；空串跟驱动缺省（heartbeat.DefaultDelivery，批量）。只对 heartbeat 驱动有效，生效方式进结果的
+// Beats.Delivery，用来对照两种投递（sync-aoi 的 -heartbeat-delivery 同一含义）。
 const (
 	heartbeatDriverTicker = "ticker"
 	heartbeatDriverBeat   = "heartbeat"
@@ -57,9 +61,11 @@ func beatChanges(index int, beats int64, dirty int) int64 {
 // 停机之后读。
 type beatLoad struct {
 	driver *heartbeat.Driver
-	period time.Duration
-	dirty  int
-	beats  []int64
+	// delivery 是驱动实际使用的投递方式（空配置时为驱动缺省）。
+	delivery heartbeat.Delivery
+	period   time.Duration
+	dirty    int
+	beats    []int64
 	// interval 是同一登记相邻两拍的业务时间差（Beat.Elapsed，非首拍），只在测量窗口内记。
 	interval  timings
 	measuring atomic.Bool
@@ -68,8 +74,14 @@ type beatLoad struct {
 }
 
 // newBeatLoad 给每个 Unit 登记心跳并启动（加载阶段，不在事务里，立即生效；驱动 Start 之后才开始跳）。
-func newBeatLoad(units []*Unit, period time.Duration, dirty int, onBeat func(*Unit, bool, heartbeat.Beat) error) (*beatLoad, error) {
-	load := &beatLoad{driver: heartbeat.NewDriver(heartbeat.Config{Name: "nest-game"}), period: period, dirty: dirty, beats: make([]int64, len(units)), onBeat: onBeat}
+// delivery 是 ROOST_NEST_GAME_HEARTBEAT_DELIVERY 的值（空串 = 驱动缺省），不认识的值报错。
+func newBeatLoad(units []*Unit, period time.Duration, dirty int, delivery string, onBeat func(*Unit, bool, heartbeat.Beat) error) (*beatLoad, error) {
+	parsed, err := heartbeat.ParseDelivery(delivery)
+	if err != nil {
+		return nil, fmt.Errorf("ROOST_NEST_GAME_HEARTBEAT_DELIVERY: %w", err)
+	}
+	driver := heartbeat.NewDriver(heartbeat.Config{Name: "nest-game", Delivery: parsed})
+	load := &beatLoad{driver: driver, delivery: driver.Delivery(), period: period, dirty: dirty, beats: make([]int64, len(units)), onBeat: onBeat}
 	for i, u := range units {
 		index, unit := i, u
 		reg, err := load.driver.NewHost(unit).Register("perf.game.heartbeat", period, func(b heartbeat.Beat) error {
@@ -112,6 +124,8 @@ func (l *beatLoad) stop(ctx context.Context) error {
 
 // beatReport 是 heartbeat 模式的心跳结果（ticker 模式为 nil）。
 type beatReport struct {
+	// Delivery 是驱动实际使用的投递方式（batch / dispatch）。
+	Delivery                     heartbeat.Delivery
 	PeriodMS                     float64
 	Driver                       heartbeat.Stats
 	Interval                     latencyResult
@@ -125,7 +139,7 @@ type beatReport struct {
 // （相位与启停时刻差一拍以内，另留一拍余量）；每个 Unit 的 DAO 与“按拍数算出的改值次数”一致；间隔 P99 不超过
 // 档位 + 50ms。duration 为 0 时不核对拍数。
 func (l *beatLoad) verify(units []*Unit, duration time.Duration) beatReport {
-	r := beatReport{PeriodMS: float64(l.period) / float64(time.Millisecond), Driver: l.driver.Stats(), Interval: l.interval.result(), BeatsMin: -1}
+	r := beatReport{Delivery: l.delivery, PeriodMS: float64(l.period) / float64(time.Millisecond), Driver: l.driver.Stats(), Interval: l.interval.result(), BeatsMin: -1}
 	var problems []error
 	s := r.Driver
 	if s.SkippedInflight+s.SkippedQueueFull+s.SkippedRejected+s.Stalled > 0 {
@@ -164,14 +178,38 @@ func (l *beatLoad) verify(units []*Unit, duration time.Duration) beatReport {
 	return r
 }
 
-// 心跳驱动接线的短测（几百毫秒、64 个 Unit，不是性能测量）：nest-game.sh --check-heartbeat 在生成工程里跑。
-// 每个 Unit 的心跳经正式生成的组件与 DAO setter 执行，拍数、DAO 与“按拍数算出的改值次数”一致，没有跳拍。
+// 心跳驱动接线的短测（每种投递几百毫秒、64 个 Unit，不是性能测量）：nest-game.sh --check-heartbeat 在生成工程里跑。
+// 每个 Unit 的心跳经正式生成的组件与 DAO setter 执行，拍数、DAO 与“按拍数算出的改值次数”一致，没有跳拍；
+// ROOST_NEST_GAME_HEARTBEAT_DELIVERY 的三种取值（空 = 驱动缺省 batch、batch、dispatch）都到达驱动并记进结果。
 func TestHeartbeatDriverTicksGeneratedUnits(t *testing.T) {
 	RegisterEntity()
+	if _, err := newBeatLoad(nil, 50*time.Millisecond, 50, "fanout", nil); err == nil {
+		t.Fatal("an unknown ROOST_NEST_GAME_HEARTBEAT_DELIVERY was accepted")
+	}
+	for i, tc := range []struct {
+		value string
+		want  heartbeat.Delivery
+	}{{"", heartbeat.DefaultDelivery}, {"batch", heartbeat.DeliveryBatch}, {"dispatch", heartbeat.DeliveryDispatch}} {
+		t.Run("delivery="+string(tc.want)+"/"+tc.value, func(t *testing.T) {
+			r := runHeartbeatDriverCheck(t, int64(100000+1000*i), tc.value)
+			if r.Delivery != tc.want {
+				t.Fatalf("ROOST_NEST_GAME_HEARTBEAT_DELIVERY=%q: the driver delivered by %q, want %q", tc.value, r.Delivery, tc.want)
+			}
+		})
+	}
+	// (3 + r) % 100 < 10 的 r 是 0..6 与 97..99：250 拍 = 两整轮 20 次 + 前 50 拍里的 7 次。
+	if beatChanges(3, 250, 10) != 27 || beatChanges(95, 10, 10) != 5 {
+		t.Fatalf("beatChanges: %d / %d", beatChanges(3, 250, 10), beatChanges(95, 10, 10))
+	}
+}
+
+// runHeartbeatDriverCheck 用一种投递方式跑一轮 500ms 的接线短测并核对，返回结果。
+func runHeartbeatDriverCheck(t *testing.T, firstUnique int64, delivery string) beatReport {
+	t.Helper()
 	access := entity.NewManagerAccess(entity.NewEntityManager())
 	units := make([]*Unit, 64)
 	for i := range units {
-		id, err := entity.BuildEntityID(int64(100000+i+1), kindUnit)
+		id, err := entity.BuildEntityID(firstUnique+int64(i)+1, kindUnit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,7 +227,7 @@ func TestHeartbeatDriverTicksGeneratedUnits(t *testing.T) {
 		t.Fatal("3Hz is not a heartbeat tier and must be refused")
 	}
 	var inTx atomic.Int64
-	load, err := newBeatLoad(units, period, 50, func(*Unit, bool, heartbeat.Beat) error {
+	load, err := newBeatLoad(units, period, 50, delivery, func(*Unit, bool, heartbeat.Beat) error {
 		if nest.CurrentRollbackTx() != nil {
 			inTx.Add(1)
 		}
@@ -223,8 +261,5 @@ func TestHeartbeatDriverTicksGeneratedUnits(t *testing.T) {
 	if inTx.Load() != r.BeatsSum {
 		t.Fatalf("%d of %d beats ran inside a Nest transaction", inTx.Load(), r.BeatsSum)
 	}
-	// (3 + r) % 100 < 10 的 r 是 0..6 与 97..99：250 拍 = 两整轮 20 次 + 前 50 拍里的 7 次。
-	if beatChanges(3, 250, 10) != 27 || beatChanges(95, 10, 10) != 5 {
-		t.Fatalf("beatChanges: %d / %d", beatChanges(3, 250, 10), beatChanges(95, 10, 10))
-	}
+	return r
 }

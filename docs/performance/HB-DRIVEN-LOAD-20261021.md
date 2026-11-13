@@ -16,7 +16,7 @@
 | `-move-period` | `200ms`（2026-10-22 起，跟 `movement.DefaultMovePeriod`；之前是 `100ms`） | 心跳模式移动组心跳的档位（`heartbeat.Periods` 之一）。**与 2026-10-22 之前的心跳模式结果对照时显式加 `-move-period=100ms`**，见 §4 |
 | `-move-speed` | `30` | 巡逻速度（格/秒）。100ms 档每拍 3 格（与全局循环每次改值走的 3 格相同），200ms 档每拍 6 格；都保证每拍换格、每拍一次改值 |
 | `-movers` | `0` | 巡逻的实体数；0 按与全局循环相同的改值速率折算：`ceil(每 tick 改值数 × 20/s × move-period)`。缺省参数（1 万实体、1%）在 100ms 档是 200 个、200ms 档是 400 个，都是每秒 2000 次改值 |
-| `-heartbeat-delivery=batch\|dispatch` | 空（驱动缺省 `batch`） | 心跳模式的投递方式（2026-11-13 加）：`batch` 按 64 拍一批交给 Nest 批量作业，`dispatch` 每拍一条单目标 `Dispatch`，取值同配置 `heartbeat.delivery`；实际生效的方式记在 `server.json` 的 `heartbeat.delivery`。全局循环模式下给值报错。本页 §4A 的数据是驱动缺省（10-22 决定 B 之后即 `batch`）。nest-game 夹具（`ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat`）仍按驱动缺省，没有这个开关 |
+| `-heartbeat-delivery=batch\|dispatch` | 空（驱动缺省 `batch`） | 心跳模式的投递方式（2026-11-13 加）：`batch` 按 64 拍一批交给 Nest 批量作业，`dispatch` 每拍一条单目标 `Dispatch`，取值同配置 `heartbeat.delivery`；实际生效的方式记在 `server.json` 的 `heartbeat.delivery`。全局循环模式下给值报错。本页 §4A 的数据是驱动缺省（10-22 决定 B 之后即 `batch`）。nest-game 夹具同一含义的开关是 `ROOST_NEST_GAME_HEARTBEAT_DELIVERY`（2026-11-14 加，见下表） |
 
 几何不变：基点与全局循环相同（`patrolBase`，原 `position` 的偏移 0），X 在 `[基点, 基点 + -move-amplitude]`，Y 不变；移动者用与全局循环相同的互素步长散在整张地图上。心跳 handler 用 memory 级别（与全局循环的 memory handler 一致）。
 
@@ -44,6 +44,7 @@
 | 环境变量 | 缺省 | 含义 |
 | --- | --- | --- |
 | `ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker\|heartbeat` | `ticker` | `ticker` 是原负载：唯一的 Nest 帧回调按 `HZ × 实体数` 的速率逐个 `Dispatch` 一条心跳业务消息。`heartbeat`：每个生成的 `Unit` 在 `gameplay/heartbeat` 上一个周期 `1s / ROOST_NEST_GAME_HZ` 的登记（必须是档位：1、2、5、10、20Hz），回调在 Unit 自己的 worker、实体锁与事务内执行同一个 `HeartbeatComponent.Tick`，计数与 Sync 接线与 ticker 模式的 handler 相同；帧回调只投普通业务 |
+| `ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch\|dispatch` | 空（驱动缺省 `batch`） | 只对 `HEARTBEAT_DRIVER=heartbeat`：`batch` 交给 Nest 批量作业，`dispatch` 每拍一条单目标 `Dispatch`（与 sync-aoi 的 `-heartbeat-delivery` 同义）；实际生效的方式记在结果的 `Beats.Delivery`；ticker 驱动下给值报错。2026-11-14 前的 nest-game 数据都是驱动缺省 |
 
 `scripts/perf/nest-game.sh --check-heartbeat` 在生成工程里跑接线短测 `TestHeartbeatDriverTicksGeneratedUnits`（64 个 Unit、20Hz、0.5 秒）。
 

@@ -30,6 +30,8 @@ type gameConfig struct {
 	// HeartbeatDriver 是心跳的驱动（ROOST_NEST_GAME_HEARTBEAT_DRIVER，见 heartbeat_driver_test.go）：ticker（缺省，
 	// 帧回调逐个 Dispatch）或 heartbeat（gameplay/heartbeat，每个 Unit 一个登记）。
 	HeartbeatDriver string
+	// HeartbeatDelivery 是 heartbeat 驱动的投递方式（ROOST_NEST_GAME_HEARTBEAT_DELIVERY：batch / dispatch，空串跟驱动缺省）。
+	HeartbeatDelivery string
 }
 
 func envInt(t *testing.T, key string, fallback int) int {
@@ -314,6 +316,10 @@ func TestNestGameLoad(t *testing.T) {
 	default:
 		t.Fatalf("ROOST_NEST_GAME_HEARTBEAT_DRIVER must be %s or %s, got %q", heartbeatDriverTicker, heartbeatDriverBeat, c.HeartbeatDriver)
 	}
+	c.HeartbeatDelivery = os.Getenv("ROOST_NEST_GAME_HEARTBEAT_DELIVERY")
+	if c.HeartbeatDelivery != "" && c.HeartbeatDriver != heartbeatDriverBeat {
+		t.Fatal("ROOST_NEST_GAME_HEARTBEAT_DELIVERY applies to ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat only; the ticker driver dispatches every beat itself")
+	}
 	switch {
 	case c.SceneSync && c.Frontend == "direct":
 		t.Fatal("Sync mixed load requires real Gate or embedded TCP")
@@ -419,7 +425,7 @@ func TestNestGameLoad(t *testing.T) {
 	var beats *beatLoad
 	var beatSeq atomic.Uint64
 	if c.HeartbeatDriver == heartbeatDriverBeat {
-		beats, err = newBeatLoad(units, beatPeriod, c.DirtyPercent, func(u *Unit, change bool, _ heartbeat.Beat) error {
+		beats, err = newBeatLoad(units, beatPeriod, c.DirtyPercent, c.HeartbeatDelivery, func(u *Unit, change bool, _ heartbeat.Beat) error {
 			began := time.Now()
 			in := invocation{planned: began, admitted: began, sent: began, change: change, sample: beatSeq.Add(1)%16 == 0, heartbeat: true}
 			if change && stateSync != nil {
