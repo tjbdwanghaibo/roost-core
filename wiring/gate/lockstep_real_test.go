@@ -351,7 +351,7 @@ func gateCatchupDrill(t *testing.T, api string, rateKB int) {
 	}
 	t.Logf("rate %d KB/s: backlog %d frames, client read %d B over %d frames (%.0f B/frame); server catch-up done %v (client had %d B); client at head %v; expected backlog/(rate-live) %v; ratio %.2f; Tick errors %d (last %v); closed by Gate %v; live after head %v; client next %d head %d",
 		rateKB, backlog, totalBytes, lastFrame, frameBytes, serverDone.Round(time.Millisecond), bytesAtServerDone, headAt.Round(time.Millisecond), expect.Round(time.Millisecond), ratio, tickErrors, lastTickErr, closed, stillLive, next.Load(), lastFrame)
-	for _, name := range []string{"lockstep.catchup.frames.total", "lockstep.catchup.pages.total", "lockstep.catchup.failed.total", "lockstep.catchup.unservable.total"} {
+	for _, name := range []string{"lockstep.catchup.frames.total", "lockstep.catchup.pages.total", "lockstep.catchup.failed.total", "lockstep.catchup.unservable.total", "player_tcp_write_deadline_total", "player_tcp_outbound_overflow_total"} {
 		t.Logf("metric %s: %v -> %v", name, drillMetric(before, name), drillMetric(after, name))
 	}
 	if closed || headAt == 0 || !stillLive {
