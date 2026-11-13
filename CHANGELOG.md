@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **组合 skill**（compose §0D，2026-11-13，维护者指出战斗判断有误）：有战斗时先分五档再判断——回合 / 异步、MMO 级服务器权威实时战斗、帧同步对战都支持；动作 / 射击级不支持、大规模同屏状态同步暂缓，作为冲突提出。写明 `combat` 模块只是双人 PvP、`monster` 不战斗、`dungeon` 不判定击杀，MMO 级多人战斗与打怪按 MMORPG 参考与 `gameplay/skill` 手写；设计上用前摇、预警、锁定或范围判定吸收没有延迟补偿的影响。实时战斗本身不再算 §0C“不用 roost”的信号。
+
 - **组合 skill 入口**（claude-skill/，2026-11-13，维护者要求）：每次使用先检查更新——入口文件与 GitHub main 上的比较，有新版就告诉用户并给更新办法（不自己改文件，用户同意后才执行项目写明的更新命令）；roost-core 有新发布版时，新工程直接用、已有工程读发布说明后问用户，同意后按 `roost project upgrade --dry-run` → 升级 → 重跑全部验收 → 记进 DEMO-HISTORY。入口文件加“入口版本”行。
 
 - **新增**（claude-skill/）：在自己的项目里使用组合 skill 的入口。`claude-skill/roost-genre/SKILL.md` 放进项目的 `.claude/skills/`，运行时从 GitHub 取 roost-core 的指定发布版（已有工程跟 `go.mod`，新工程用最新版）：`go mod download` 得到只读的正文与模块说明，`go install …/codegen/cmd/roost@版本` 得到 CLI，工程直接依赖发布版、不用 replace。2026-11-13 在 v1.45.0 实测：取版本、取正文、装 CLI、`-template game` 新工程装 wallet / checkin、`module verify` 全部通过。SKILL.md §3.1 里“私有模块、未实测”的过期说法一并更正。
