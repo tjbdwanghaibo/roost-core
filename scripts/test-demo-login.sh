@@ -9,8 +9,8 @@
 #   3. 机器人 `-login portal`：缺省场景（新号：握手 → EnterStatus → EnterCreate → EnterGame → 整个场景，含改名三步）与
 #      alliance_offline_join（同一个身份第二次登录时入口清单里已有角色：老号路径）；
 #   4. 机器人缺省的总线登录：同两个场景（即 make dev-smoke）；
-#   5. 可选（DEMO_LOGIN_GATE=1）：停掉 game 1000，换成 Game Ingress 接法（cmd/drillingress，嵌入 TCP 关闭）并起独立 Gate
-#      （cmd/drillgate），机器人经 Gate 跑 -login portal 与总线登录（DEMO_LOGIN_GATE_SCENARIO，缺省 alliance_offline_join）。
+#   5. 独立 Gate（DEMO_LOGIN_GATE=0 时跳过）：停掉 game 1000，换成 Game Ingress 接法（cmd/drillingress，嵌入 TCP 关闭）并起
+#      独立 Gate（cmd/drillgate），机器人经 Gate 跑 -login portal 与总线登录（DEMO_LOGIN_GATE_SCENARIO，缺省是整个缺省场景 demo）。
 # 结束时停掉全部进程、删本工程的库 / 流 / 键；证据（curl 应答、机器人报告与输出、各进程日志）留在 $DEMO_LOGIN_OUT。
 #
 #   ROOST_MIRROR_LOCAL_HOME=<私有目录> ROOST_MIRROR_LOCAL_OFFSET=<偏移> scripts/mirror-local.sh up
@@ -84,7 +84,7 @@ drill_robots bus-demo "${endpoint[@]}" -count "$robots"
 drill_robots bus-offline-join "${endpoint[@]}" -scenario alliance_offline_join -count "$robots"
 
 # 5. 可选：独立 Gate。
-if [[ "${DEMO_LOGIN_GATE:-0}" == 1 ]]; then
+if [[ "${DEMO_LOGIN_GATE:-1}" == 1 ]]; then
 	drill_log "independent Gate: game 1000 behind Game Ingress"
 	sh deploy/dev/run.sh stop game >/dev/null
 	drill_ingress_config configs/service/config.game.yaml configs/service/config.game-ingress.yaml
@@ -93,7 +93,7 @@ if [[ "${DEMO_LOGIN_GATE:-0}" == 1 ]]; then
 	drill_start gate bin/drillgate gate 9500 configs/service/config.gate.yaml \
 		DRILL_GATE_ADDR="127.0.0.1:$(drill_port 7100)" DRILL_GATE_ADVERTISE="127.0.0.1:$(drill_port 7100)"
 	gate=(-endpoint "127.0.0.1:$(drill_port 7100)" -server-id 1000)
-	gate_scenario="${DEMO_LOGIN_GATE_SCENARIO:-alliance_offline_join}"
+	gate_scenario="${DEMO_LOGIN_GATE_SCENARIO:-demo}"
 	drill_robots gate-portal "${gate[@]}" -login portal -portal "$portal" -scenario "$gate_scenario" -count "$robots"
 	drill_robots gate-bus "${gate[@]}" -scenario "$gate_scenario" -count "$robots"
 fi
