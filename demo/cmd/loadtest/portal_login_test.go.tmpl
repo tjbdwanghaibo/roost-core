@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/alliancerule"
 	gamelogin "{{MODULE}}/game/login"
 	"{{MODULE}}/services/account/portal"
 	accountcollaborators "{{MODULE}}/services/account"
@@ -114,6 +115,11 @@ func TestPortalLoginHandsTheRobotAnEnterTicketTheHandshakeTakes(t *testing.T) {
 	}
 	if again, err := authenticator.Authenticate(context.Background(), handshakeTicket(t, packet)); err != nil || again.PlayerID != 100_001 {
 		t.Fatalf("the second handshake: %+v, %v", again, err)
+	}
+	// 回来的机器人在这里就认定了玩家号，found_alliance 读的联盟名随之写好，且是服务认的名字（以前 portal 这条路写的
+	// 是旧键，请求里没有名字，控制器答“联盟名无效”）。
+	if allianceName, _ := rb.Blackboard.String("alliance_name"); alliancerule.ValidateName(allianceName) != nil || !strings.Contains(allianceName, "100001") {
+		t.Fatalf("the returning robot's alliance name is %q", allianceName)
 	}
 
 	// login_as 的另一个身份是另一个账号、另一名玩家，名字也不同。

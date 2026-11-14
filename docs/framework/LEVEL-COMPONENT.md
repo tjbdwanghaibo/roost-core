@@ -36,7 +36,7 @@ flow  *level.LevelComponent  `comp:"CompTypeLevel"`
 
 生成器要求业务 wrapper 提供 `NewLevelDao()`、`LevelDaoCollection`；wrapper 嵌入 `*level.LevelDAO`，生成器设置持久 ID。组件 factory 从 owner 取得已创建的 DAO，用 `level.NewLevelComponent(dao, program)` 装配。Program 是编译后的深拷贝，允许多个实体共享；不要每次处理事件重新编译。
 
-瞬态房间选择 `NewTransientLevelDAO`、实体 `noPersist=true` 和 Nest `rollback=undo durability=memory`；持久模式选择 `NewLevelDAO(id, logicalDB)` 并接入正式持久事务和 DAO descriptor。逻辑库映射遵循 DataEngine 约定。所有写 handler 必须声明 `rollback=undo` 或 `rollback=state`，默认无回滚 handler 没有组件所需事务，调用会拒绝。持久 DAO 不能放入 memory 写事务。生成消费者演示瞬态路径；持久模式的序列化与提交拒绝回滚在包测试中验证。
+瞬态房间选择 `NewTransientLevelDAO`、实体 `noPersist=true` 和 Nest `rollback=undo durability=memory`；持久模式选择 `NewLevelDAO(id, logicalDB)` 并接入正式持久事务和 DAO descriptor。逻辑库映射遵循 DataEngine 约定。所有写 handler 必须声明 `rollback=undo` 或 `rollback=state`，默认无回滚 handler 没有组件所需事务，调用会拒绝。持久 DAO 不能放入 memory 写事务。生成消费者演示瞬态路径；持久模式的序列化与提交拒绝回滚在包测试中验证；真实 Mongo 副本集 + 文件 WAL 的进程崩溃恢复由 [crash_recovery_integration_test.go](../../gameplay/level/crash_recovery_integration_test.go) 的 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`（`-tags integration`，要隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI`）验证：写进程推进到第二波、把投影拦住后再提交一笔只在 WAL 里的击杀，被 SIGKILL；恢复进程用同一 WAL 目录启动、回放进 Mongo，冷加载出的状态（阶段 generation、变量、待办动作、计时器）与崩溃前最后一笔提交后完全一致，之后结算回执并关闭。物理世界等原生状态不在 LevelDAO 里，不随之恢复。
 
 所有读写都由所属 Entity Guard 串行化。组件方法不是并发容器，也不自行启动 goroutine。读操作返回副本，但读取本身仍需要实体所有权；不要在网络线程直接访问 DAO 或组件。
 

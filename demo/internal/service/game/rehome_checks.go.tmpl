@@ -12,9 +12,36 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// 联盟成员可以换服：Saga 在 IO 上下文核对当前绑定，进入/重连修正展示与通知地址。
-// 队伍中的换服互斥由 team/rehome 联动负责。demo 这里只保留尚不能迁出的分区 SceneActor 限制。
-func init() { gamerehome.OnApplying("{{GAME_SERVICE}}", refuseRehomeInAPartitionedScene) }
+// demo 的换服前检查（rehome 模块的进程内检查点）。
+//
+//   - 联盟成员可以换服：Saga 在 IO 上下文核对当前绑定，进入/重连修正展示与通知地址；
+//   - 队伍中的换服互斥由 team/rehome 联动负责；
+//   - 分区场景：SceneActor 还不能迁出，开着分区场景的服一律拒绝；
+//   - 对战：lockstep 房间在本进程内存里，座位上的玩家换走了就连不上这一局。申请时（OnApplying）与离开时
+//     （OnLeaving，会话已断、新请求进不来）各查一次：申请之后、标记之前撮合成的一局由离开时的检查拦下，
+//     标记之后撮合不再选他（PlayerOwners.Resident 不认迁出表里的玩家）；
+//   - 匹配票据不拦：票据在全服共用的 match 服务里，离开中的玩家不再是本进程的候选，换走之后由他所在服的
+//     撮合照常处理，或到期；
+//   - 副本（session 服务的 run）不拦：run 与领奖账本（PlayerDao 上的 dungeonledger）都不在本进程，跟着玩家走，
+//     到目标服照常结算。
+func init() {
+	gamerehome.OnApplying("{{GAME_SERVICE}}", refuseRehomeInAPartitionedScene)
+	gamerehome.OnApplying("{{GAME_SERVICE}}.battle", refuseRehomeInABattle)
+	gamerehome.OnLeaving("{{GAME_SERVICE}}.battle", refuseRehomeInABattle)
+}
+
+// refuseRehomeInABattle 拒绝正坐在本进程某一局对战里的玩家换服。对战管理器没发布（不该发生）时放行：
+// 没有房间就没有座位。
+func refuseRehomeInABattle(_ context.Context, registry *app.Registry, move gamerehome.Move) error {
+	battles, ok := app.Lookup[*battleManager](registry, BattleCapability)
+	if !ok || battles == nil {
+		return nil
+	}
+	if battleID, seated := battles.Seated(move.PlayerID); seated {
+		return errcode.Wrap(apperrors.ErrRehomeRefused, fmt.Errorf("player %d is seated in battle %s on this process", move.PlayerID, battleID), "player_id", move.PlayerID, "battle_id", battleID)
+	}
+	return nil
+}
 
 func refuseRehomeInAPartitionedScene(_ context.Context, registry *app.Registry, move gamerehome.Move) error {
 	partition, err := settings.LoadPartition(registry)

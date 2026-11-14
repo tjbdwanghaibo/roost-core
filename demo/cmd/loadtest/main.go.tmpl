@@ -326,8 +326,7 @@ func (login *portalLogin) authPacket(rb *robot.Context) (*transport.Packet, erro
 		found = true
 		if server.Role != nil {
 			// A returning identity: the front door knows the player.
-			rb.PlayerID = server.Role.PlayerID
-			rb.Blackboard.Set("player_id", rb.PlayerID)
+			adoptPlayer(rb, server.Role.PlayerID)
 		}
 	}
 	if !found {
@@ -368,9 +367,7 @@ func (login *portalLogin) registerEnter(actions *action.Registry, protocols *pro
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
-			rb.PlayerID = resp.PlayerID
-			rb.Blackboard.Set("player_id", rb.PlayerID)
-			rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", rb.PlayerID))
+			adoptPlayer(rb, resp.PlayerID)
 			return nil
 		}))
 	actions.MustRegister(action.Func{ActionName: "enter_game", Handle: func(ctx context.Context, rb *robot.Context, param any) error {
@@ -474,13 +471,22 @@ func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, err
 	if err != nil {
 		return nil, fmt.Errorf("account select role: %w", err)
 	}
-	rb.PlayerID = playerID.(int64)
-	rb.Blackboard.Set("player_id", rb.PlayerID)
-	// Every robot founds its own alliance, under a name of its own: names are not
-	// unique in the alliance service, but a per-robot name keeps a run's
-	// alliances apart when reading them back.
-	rb.Blackboard.Set("alliance_name", fmt.Sprintf("robot alliance %d", rb.PlayerID))
+	adoptPlayer(rb, playerID.(int64))
 	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", rb.PlayerID, session.Token)), nil
+}
+
+// adoptPlayer makes playerID the robot's real player id. Both login paths (bus
+// and portal, a new and a returning identity) adopt the id here, so the
+// blackboard keys the scenario's later steps read are set in one place:
+// player_id, and alliance_name for found_alliance — every robot founds its own
+// alliance under a name of its own (names are not unique in the alliance
+// service, but a per-robot name keeps a run's alliances apart when reading them
+// back). The portal path used to set an older key, so found_alliance went out
+// with no name and the controller refused it as invalid.
+func adoptPlayer(rb *robot.Context, playerID int64) {
+	rb.PlayerID = playerID
+	rb.Blackboard.Set("player_id", playerID)
+	rb.Blackboard.Set("alliance_name", fmt.Sprintf("robot alliance %d", playerID))
 }
 
 // serveMetrics exposes the robot-side registry — the only place the scenario
@@ -1497,6 +1503,17 @@ func (sink *battleSink) send(request *pb.BattleInputRequest) error {
 	return coded(response.Code, response.Reason)
 }
 
+// SubmitInput sends this seat's input for a frame and does not wait for the
+// answer: the room cuts frames on its own clock whether or not an input has
+// arrived, so a client that waited one round trip per frame would fall a
+// round trip behind every frame and, on any link slower than the frame
+// interval, still be applying early frames when the room closes (the
+// 200 ms ± 100 ms toxiproxy drill: every robot was refused "battle not found"
+// around frame 10 of 45). A late or refused input only costs that seat its
+// move for the frame; agreement is still checked, because the keyframe hash
+// reports (ReportHash) and catch-up requests keep waiting for their answer.
+// The first input, which opens the room and binds the seat's connection, is
+// sent with send so its refusal is seen (runBattle).
 func (sink *battleSink) SubmitInput(frame lockstep.FrameID, payload []byte) error {
 	// The battle's length is part of the contract both sides read, so the
 	// client stops at the last frame rather than being refused for a room
@@ -1504,7 +1521,7 @@ func (sink *battleSink) SubmitInput(frame lockstep.FrameID, payload []byte) erro
 	if battle.Over(frame) {
 		return nil
 	}
-	return sink.send(&pb.BattleInputRequest{BattleID: sink.battleID, Frame: uint32(frame), Payload: payload})
+	return sink.session.Notify(sink.ctx, msgid.MsgBattleInput, &pb.BattleInputRequest{BattleID: sink.battleID, Frame: uint32(frame), Payload: payload})
 }
 
 func (sink *battleSink) ReportHash(frame lockstep.FrameID, hash uint64) error {
@@ -1603,7 +1620,7 @@ func runBattle(ctx context.Context, rb *robot.Context, param any) error {
 	// tells the room which connection this seat's frames go to; frames cut
 	// before it arrived come back by catch-up when the first packet shows
 	// the gap.
-	if err := sink.SubmitInput(bot.Next(), battle.Encode(battle.Input{DX: 1})); err != nil {
+	if err := sink.send(&pb.BattleInputRequest{BattleID: battleID, Frame: uint32(bot.Next()), Payload: battle.Encode(battle.Input{DX: 1})}); err != nil {
 		return fmt.Errorf("battle: first input: %w", err)
 	}
 	for {

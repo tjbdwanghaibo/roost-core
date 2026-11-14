@@ -12,9 +12,11 @@ import (
 	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/game/settings"
 	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 )
@@ -58,6 +60,9 @@ type PlayerOwners struct {
 	// 它让测试在“等待者已被唤醒”与“runEviction 返回”之间插入一次登录，钉住“删除记录必须在关闭
 	// done 之前”；进程里没有人设置它，测试在卸载开始之前设置。
 	afterUnloadDone func(playerID int64)
+	// residentKind 回答 Player 这个 kind 是否声明了 lifetime=resident。常驻的玩家不做闲置卸载：框架只拒绝从内存
+	// 卸载常驻实例（ErrEntityResident），卸载却会先让他离开场景，结果是实体留在内存、人已不在场景。
+	residentKind func() bool
 
 	// bound 回答一名玩家当前的绑定（rehome 模块的 Binding：先看迁出表，再问 account）。AdmitBound 对没有
 	// 驻留记录的玩家问它。nil 表示没有权威可问，按“都绑定在本服”处理——只在测试与单进程部署里出现，
@@ -168,6 +173,7 @@ func newPlayerOwners(sid int32, fencer sessionFencer, now func() time.Time) *Pla
 	}
 	return &PlayerOwners{
 		sid: sid, fencer: fencer, now: now, evictWait: evictBudget,
+		residentKind: playerKindIsResident,
 		residents: map[int64]*resident{},
 		emigrants: map[int64]*emigrant{},
 		evictions: map[int64]*eviction{},
@@ -389,15 +395,16 @@ func (owners *PlayerOwners) AdmitMessage(playerID int64, messageID uint32) error
 	return owners.Admit(playerID)
 }
 
-// Resident 只读地回答“这个玩家此刻在本进程服务吗”：有驻留记录，并且副本没有在卸载。
-// 不算使用、不建记录；给只决定要不要处理别人放进共享队列的工作的调用方用（matchmaker）。
+// Resident 只读地回答“这个玩家此刻在本进程服务吗”：有驻留记录，不在迁出表里（离开中、已迁走），并且副本没有在卸载。
+// 不算使用、不建记录；给只决定要不要处理别人放进共享队列的工作的调用方用（matchmaker）。离开中的玩家
+// 驻留记录还在（交出实体之前本进程仍是他的写者），但不能再被撮合进本进程的一局。
 func (owners *PlayerOwners) Resident(playerID int64) bool {
 	if owners == nil {
 		return true
 	}
 	owners.mu.Lock()
 	defer owners.mu.Unlock()
-	if owners.residents[playerID] == nil {
+	if owners.residents[playerID] == nil || owners.emigrants[playerID] != nil {
 		return false
 	}
 	_, unloading := owners.evictions[playerID]
@@ -467,13 +474,14 @@ func (owners *PlayerOwners) unloadLoop(ctx context.Context) {
 // unloadIdle 是一轮闲置卸载，单独拆出来，测试可以不等 ticker 直接驱动。
 //
 // 选中的条件：没有连接、IdleUnload 内没被使用、没有在卸载。逐个处理，每个最多等 evictWait；等超时的
-// 卸载在后台继续，这一轮去处理下一个玩家。
+// 卸载在后台继续，这一轮去处理下一个玩家。Player 声明为常驻（lifetime=resident）时一个都不选：在选人这一步
+// 跳过，而不是让卸载先离场景、再被框架拒绝。
 func (owners *PlayerOwners) unloadIdle(ctx context.Context) {
 	owners.mu.Lock()
 	sessions, evictor := owners.fencer, owners.evict
 	now := owners.now()
 	var idle []int64
-	if sessions != nil && evictor != nil {
+	if sessions != nil && evictor != nil && (owners.residentKind == nil || !owners.residentKind()) {
 		for playerID, state := range owners.residents {
 			if _, unloading := owners.evictions[playerID]; !unloading && now.Sub(state.lastUsed) >= IdleUnload {
 				idle = append(idle, playerID)
@@ -698,14 +706,18 @@ func (owners *PlayerOwners) Where(playerID int64) (gamerehome.Whereabouts, bool)
 
 var _ gamerehome.Residency = (*PlayerOwners)(nil)
 
-// DepartPlayer 是 demo 对“把这名玩家交出去”的回答（residentDeparter）：离开场景（退订观察者、注销同步对象，
-// 与登出同一条路径），再让 DataEngine 交出实体。场景先走：仍有订阅者时，卸载之后框架会为订阅者把实体读回内存。
+// DepartPlayer 是 demo 对“把这名玩家交出去”的回答（residentDeparter）：离开地图（存位置）、离开场景（退订观察者、
+// 注销同步对象，与登出同一条路径），再让 DataEngine 交出 Player 与只由他所在进程写的实体（playerScoped：地形编辑账本）。
+// 场景先走：仍有订阅者时，卸载之后框架会为订阅者把实体读回内存。返回的 release 撤掉全部屏障。
 func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (func(context.Context) error, error) {
 	if evictor.handOff == nil {
 		return nil, fmt.Errorf("player evictor: the dataengine hand-off is not assembled")
 	}
 	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
 	if err != nil {
+		return nil, err
+	}
+	if err := evictor.leaveMap(ctx, subjectID); err != nil {
 		return nil, err
 	}
 	if evictor.scene != nil {
@@ -715,7 +727,33 @@ func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (
 	if err != nil {
 		return nil, err
 	}
-	return handed.Release, nil
+	releases := []func(context.Context) error{handed.Release}
+	release := func(ctx context.Context) error {
+		var errs []error
+		for _, undo := range releases {
+			if err := undo(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	// 只由这名玩家所在的进程写的别的实体（地形编辑账本）随他一起交出：否则本进程内存里留着旧副本，他换回来时
+	// 按旧的版本写回，投影版本冲突致命。任何一个交不出就撤掉已经立的屏障，整次交出失败（换服被中止）。
+	for _, scoped := range evictor.playerScoped {
+		id, err := scoped(playerID)
+		if err == nil {
+			var more *kitdataengine.EntityHandOff
+			if more, err = evictor.handOff.HandOffEntity(ctx, id); err == nil {
+				releases = append(releases, more.Release)
+				continue
+			}
+		}
+		if undo := release(ctx); undo != nil {
+			slog.Warn("player evictor: a hand-off that failed half way could not lift its barriers", "player_id", playerID, "err", undo)
+		}
+		return nil, fmt.Errorf("player evictor: hand off what player %d writes: %w", playerID, err)
+	}
+	return release, nil
 }
 
 // playerEvictor is the demo's answer to "drop this process's copy of a
@@ -735,6 +773,13 @@ type playerEvictor struct {
 	// handOff is the DataEngine Mod's HandOffEntity, used by DepartPlayer
 	// (a player changing servers). nil: no player can be handed off.
 	handOff entityHandOff
+	// nest runs the LeaveScene transaction that saves a loaded player's last
+	// position before it leaves this process (leaveMap).
+	nest corenest.Client
+	// playerScoped lists the other entities only this player's process writes
+	// and that therefore leave with the player (the terrain edit ledger,
+	// terrainEditorOf). nil: the player is the only one.
+	playerScoped []func(playerID int64) (int64, error)
 }
 
 // entityHandOff is the slice of the DataEngine Mod a hand-off uses.
@@ -748,6 +793,14 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 	}
 	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
 	if err != nil {
+		return err
+	}
+	// 常驻的玩家只从内存卸载会被框架拒绝（Destroy 返回 ErrEntityResident）；在离开场景之前就拒绝，
+	// 否则拒绝时人已经不在场景里了。
+	if playerKindIsResident() {
+		return fmt.Errorf("player evictor: player %d: %w", playerID, coreentity.ErrEntityResident)
+	}
+	if err := evictor.leaveMap(ctx, subjectID); err != nil {
 		return err
 	}
 	if evictor.scene != nil {
@@ -773,6 +826,29 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 	default:
 		return err
 	}
+}
+
+// leaveMap 让一名仍在本进程内存里的玩家在他自己的事务里离开地图（handler LeaveScene → MapBasic.Leave）：
+// SaveOnLeave 先把最后的位置写进落库字段，再清场景号。离开本进程（闲置卸载、换服交出）都先走它，存档位置
+// 不再只靠 10 秒一次的周期落库。玩家不在内存里时什么都不做——不为了离开地图把他装载进来；不在地图上的玩家
+// handler 直接返回。失败时调用方不继续：卸载保留驻留记录、下一轮再试；换服在“离开”这一步失败、被中止。
+// 会等待（一次 Nest 请求），不能在 Nest 业务 worker 上调用。
+func (evictor playerEvictor) leaveMap(ctx context.Context, subjectID int64) error {
+	if evictor.nest == nil || evictor.manager == nil {
+		return nil
+	}
+	if evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer)) == nil {
+		return nil
+	}
+	if err := syncsender.NewLeaveSceneSender(evictor.nest).Sync_LeaveScene(ctx, subjectID); err != nil {
+		return fmt.Errorf("player evictor: save the position of player %d before it leaves: %w", coreentity.GetUniqueIDFromEntityID(subjectID), err)
+	}
+	return nil
+}
+
+// playerKindIsResident 报告 Player 这个 kind 是否声明了 lifetime=resident（`//roost:entity lifetime=resident`）。
+func playerKindIsResident() bool {
+	return coreentity.IsEntityKindResident(player.EntityKindPlayer)
 }
 
 var (

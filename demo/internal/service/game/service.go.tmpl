@@ -17,6 +17,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
@@ -226,6 +227,14 @@ func (s *Service) Init(registry *app.Registry) error {
 	// 换服（rehome 模块）用的是同一个东西的另一面：不是丢副本，而是把实体的写权交出去——离开场景、DataEngine
 	// 交出实体并保持屏障。DataEngine 不在（不该发生：Nest 的提交器就是它）时不装，换服在“离开”这一步被中止。
 	evictor := playerEvictor{scene: scene, players: players, manager: access.Manager()}
+	// 开了地形：玩家的编辑账本只由他所在的进程写，换服时随他交出（terrainEditorOf）。
+	if s.terrain != nil {
+		evictor.playerScoped = append(evictor.playerScoped, terrainEditorOf)
+	}
+	// 离开本进程之前先存一次位置（LeaveScene，playerEvictor.leaveMap）用的 Nest。
+	if nestClient, ok := app.Lookup[corenest.Client](registry, mods.ModNest); ok && nestClient != nil {
+		evictor.nest = nestClient
+	}
 	if dataEngine, ok := app.Lookup[*kitdataengine.Mod](registry, mods.ModDataEngine); ok && dataEngine != nil {
 		evictor.handOff = dataEngine
 	}

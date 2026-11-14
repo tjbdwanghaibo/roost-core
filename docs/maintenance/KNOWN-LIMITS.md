@@ -168,7 +168,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
 - **下游迁移**：从 cube 迁来的实体若只有部分 DAO 文档，框架会自动补空，迁移工具不再需要补齐缺失的 DAO 文档；但迁移出的文档仍要满足当前 schema（`_schema`）与持久键约定（D13），补空不处理 schema 不符。
 - **handler 之外的 `RunDetachedTransaction` 里新建**：外层没有能把新实体锁持到提交的 Guard 作用域，新建由 DataEngine 的新建准入门单独起一笔 strict 事务提交；外层随后回滚不撤销已落库的新实体（handler 内的 detached / isolated 事务不受此限，回滚会撤销）。
 - **Nest 之外新建要等 WAL**：生成 Lifecycle 的 `Create` / `GetOrCreate` 在 Nest 之外为持久实体补一笔 strict 事务，提交被接受后才返回；业务 worker 上调用返回 `fctx.ErrBlockingInBusinessWorker`，I/O worker 上开 Guard 作用域照旧 panic。每次新建是一条独立 WAL 记录，之后的修改是第二笔。没有 DataEngine 的进程（没注册准入门）事务外新建只在内存。
-- **Remote 托管 kind 在 Nest 之外新建不经准入门**：Remote 持久写只能经消息声明的 Remote 批次，准入门的本地 strict 事务写不了；这类实体照旧在第一笔 Remote 批次提交时写齐每个 DAO，新建后没有 Remote 写就不落库。handler 内新建（带 Remote 批次的消息）验证到 nest 层认领（每个 DAO 整文档认领）与 Remote 事务记录掩码按位存取（`scripts/test-remote-generated.sh` 全部通过）。给 Remote 托管 kind 的事务外新建补一笔 Remote 写（需要所有权认领）按需求触发再做（维护者 2026-11-03），见 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。（Remote 端到端用例见[Remote：遗留](#remote遗留)）
+- **Remote 托管 kind 在 Nest 之外新建不经准入门**：Remote 持久写只能经消息声明的 Remote 批次，准入门的本地 strict 事务写不了；这类实体照旧在第一笔 Remote 批次提交时写齐每个 DAO，新建后没有 Remote 写就不落库。handler 内只能持久写本消息声明的 Remote 托管实体：新建或捕获一个不在本消息 Remote 批次里的 Remote 托管实体返回 `nest.ErrDurableRemoteWriteUnsupported`、整条事务回滚（2026-11-14 起；修前消息因另一个声明目标带批次时，新实体被本地投影写成普通文档），契约见 [REMOTE_ENTITY](../framework/REMOTE_ENTITY.md)；真实依赖 `scripts/testdata/remoteflow/create_unchanged_test.go` 覆盖 `in_handler` 与 `outside_nest` 两种新建位置。给 Remote 托管 kind 的事务外新建补一笔 Remote 写（需要所有权认领）按需求触发再做（维护者 2026-11-03），见 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。
 - **失败的新建**（RV-20261031-01 已修复，见 [impl 03 §2 第 12 条](../framework/impl/03-dataengine.md#2-必须保持的契约)）：交给事务捕获之前失败的新建，构建期间以它自己 DAO 登记的修改从事务撤销；构建还写了别的持久内容（别的实体、`Emit`、`AddReceipt`、删除意图、构建中新建的其他实体）时整条回滚、业务吞不掉（`nest.ErrFailedCreateLeftEffects`）。边界：只覆盖 `CreateInScope` 在 Nest 事务捕获者下的新建（handler 内、handler 里的 isolated / detached 事务、准入门）；handler 内经 `Create(IsCreate=false)` 走自建短作用域的冷加载 builder 若登记持久修改后失败，不在撤销范围内（冷加载 builder 按设计不写库）；失败 builder 对其他实体非持久字段的内存修改只随事务回滚撤销，业务吞掉错误并提交时保留，与 handler 里任何部分完成的函数相同。
 - **手写 DAO**：tracker 不实现 `entity.AggregateMember` 的 DAO（自己用 `AddMutation` 落库）不参与新建写齐与补空后的写出，由写它的代码保证文档齐全。
 
@@ -196,7 +196,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
 
 #### Remote
 
-- **多写者本地副本**（2026-11-04 修复后的边界，契约见 [REMOTE_ENTITY“多写者：本地副本与权威”](../framework/REMOTE_ENTITY.md#多写者本地副本与权威)）：写准入发现本地实例落后于权威或停在 `Fenced` 时卸载重载，需要 loader 实现 `IRemoteEntityUnloader`（正式 `ManagerAccess` 实现了）；自定义 loader 不支持卸载时照旧报版本冲突 / fenced，直到业务自己重载。事务外独立删档持有实体锁，遇到落后实例按版本冲突拒绝，不在删档中途换实例；先有一次 Nest 写准入（或 `ManagerAccess.Unload`）换掉旧实例再删。回归用两进程共用的 Mongo 权威替身与 Redis 版本锁替身（`write_admission_test.go`），以及 `scripts/test-remote-generated.sh` / `test-remote-matrix.sh` 的现有真实依赖用例。（两个真实进程交替写的用例见[Remote：遗留](#remote遗留)）
+- **多写者本地副本**（2026-11-04 修复后的边界，契约见 [REMOTE_ENTITY“多写者：本地副本与权威”](../framework/REMOTE_ENTITY.md#多写者本地副本与权威)）：写准入发现本地实例落后于权威或停在 `Fenced` 时卸载重载，需要 loader 实现 `IRemoteEntityUnloader`（正式 `ManagerAccess` 实现了）；自定义 loader 不支持卸载时照旧报版本冲突 / fenced，直到业务自己重载。事务外独立删档持有实体锁，遇到落后实例按版本冲突拒绝，不在删档中途换实例；先有一次 Nest 写准入（或 `ManagerAccess.Unload`）换掉旧实例再删。回归用两进程共用的 Mongo 权威替身与 Redis 版本锁替身（`write_admission_test.go`），以及 `scripts/test-remote-generated.sh` / `test-remote-matrix.sh` 的现有真实依赖用例。两个真实进程交替写同一共享实体见 `scripts/testdata/remoteflow/shared_writers_test.go` 的 `TestGeneratedRemoteSharedEntityTwoWriterProcesses`（2026-11-14）。
 - **路由 RPC 与 Redis 路由登记的边界**（联盟服务方案 1R，2026-11-04，契约见 [REMOTE_ENTITY“路由登记”](../framework/REMOTE_ENTITY.md#路由登记)、[guide/09“路由 RPC 与改投”](../framework/guide/09-services.md#2a-路由-rpc-与改投)）：① 登记表只增不减：Remote 实体没有空闲卸载，续期量是“已加载的登记 kind 实体数 / 10s”，`AllianceMember` 这类按玩家的实体长时间运行后会一直增长，阶段 5 实测：续期量就是已登记实体数——预加载 1000 / 10000 个联盟后 `route_renew_total{result=renewed}` 每 10s 1000 / 10000 次（每批不超过 1000 个键一次 pipeline），按需加载的守卫每个同样每 10s 一次，长时间运行后的守卫加载量没有测（[benchmarks/alliance-20261104](../performance/benchmarks/alliance-20261104/README.md)）。② Redis 不可用时每次缓存未命中的查找多一次 Mongo 点读：阶段 5 断开 toxiproxy 的 redis 代理实测，空路由缓存的调用方 Redis 正常时 0 次点读，断开时每次 1 次，调用方 p50 14ms → 125ms（多出的是 go-redis 拨号重试）；跨实例两步入会照常完成，恢复后约 5s 由续期“不存在”重新登记。**断开超过单实例锁扛得住的时长时，实例因单实例锁续不上而 fail-stop**（缺省配置下断开开始后 9～12s，取决于断开落在续期节拍的哪个相位，Redis 恢复后驱动还可能再拖约 1s；算法见 [guide/01“单实例锁在后端短暂不可用时”](../framework/guide/01-app-lifecycle.md#单实例锁在后端短暂不可用时)，原来写的“`ttl − guard` 约 10s”不对）（`singleton lock lost; fail-stop`，exit 1）：单实例锁连的是同一个 Redis，所以“只影响路由效率”只对短于这个期限的断开成立，更长的断开由进程管理按同 sid 拉起（App 级“失锁即停”的统一保证，没改）。③ 死掉的 owner 不拉起同 sid 时登记按 TTL 过期，调用方回退读到的仍是它，请求一直是 no responders（“可重试”），直到它被拉起；转不走它的实体（`TransferRemoteOwnership` 要求本地是 owner）。④ 缩容入口 `(*bus.Bus).LeaveRPCQueue` 只支持轻量 RPC：JetStream RPC 的服务级 consumer 是全部实例共享的 durable，按实例退出返回 `ErrRPCQueueLeaveUnsupported`；退出后不能重新加入（重启实例）。⑤ “预加载完成前不接请求”要求路由 RPC 的 owner Mod 把 `remote_entity.preload` 写进 `OptionalDependsOn`，由生成器（方案 2R）声明；1R 只验证了预加载 Mod 的 Start 跑完才返回与依赖声明，阶段 5 已在生成工程的真实进程上验证（`scripts/test-alliance-e2e.sh` 的 `TestAllianceE2EPreloadOrder`：2000 个联盟预加载 2.0s，期间 342 次路由请求全部 no responders，完成后约 30ms 第一次得到答复）。⑥ 预加载的起服时间与内存随“owner 是本 sid 的该 kind 实体数”线性增长：阶段 5 实测 1000 / 2000 / 10000 个演示联盟预加载 1.7 / 2.0 / 13.7s（约 1.4ms 一个，并发 16），预加载完的常驻内存 65 / 71 / 123 MiB；演示联盟只有几个成员，大联盟的文档与内存没有测。
 - **独占实体的只读请求与所有权查询**（2026-11-06 修复后，修复经过见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-06remote-独占实体的只读请求不再取写许可)）：（1）扫描仍是 N 次本地 Nest 事务，所有权列表 `ListOwnedRemoteEntities` 按 `_id` 扫、在 FETCH 里按 owner / kind 过滤，键数约 N + 守卫数；按 DAO 字段只列带标记的联盟仍不可行（Remote 的 DAO 文档在 Mongo 里是不透明的 `data` 字节）。（2）只读请求与写请求同样排在同一实体的写门后、占 `max_concurrent_writes` 名额，写额度被在途写占满时读也答 overloaded。（3）前提（一个实体同一时刻只有一个 owner）由 App 单实例与 fail-stop 保证；被打破时稳定持有的进程在下一次写之前读到的是自己的内存，写在投影元数据 CAS 被拒（WAL 写使进程 fail-stop，memory 写隔离后重载），计 `remote_entity.commit_conflict_total` 并记 ERROR。
 - **NATS 驱动建消费者的重发**（2026-11-04 修复后，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-04联盟服务冒烟里的两条观察)）：重发最多 4 次、每次 2s，连续 4 次都没有回答仍按原样失败；`EnsureStream` 同时建同一个流没有观察到同样的问题，没有加重发。
@@ -547,7 +547,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 
 #### 通用 LevelComponent 首版边界
 
-`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。私有参与者状态、网络增量与 Unity UI 由宿主接入。（未验证的部分见[LevelComponent 与 UGC 物理闯关：遗留](#levelcomponent-与-ugc-物理闯关遗留)）
+`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。私有参与者状态、网络增量与 Unity UI 由宿主接入。持久模式的真实 Mongo / WAL 进程崩溃恢复已验证（`gameplay/level` 的 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`，2026-11-14），但不恢复原生物理世界；状态复制与整状态 mutation 有预算没有容量承诺；动作账本满额拒绝；长期归档要另行设计。（物理动作执行器与 LevelComponent 的联合玩法见[LevelComponent 与 UGC 物理闯关：遗留](#levelcomponent-与-ugc-物理闯关遗留)）
 
 #### UGC 物理闯关
 
@@ -617,7 +617,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 - **批量作业参数的未测部分**（[实体心跳（D20 第 1 期）](#实体心跳d20-第-1-期)“心跳缺省走 Nest 批量作业”的边界）：① 组 4 / 100µs 是同时段测过的组合（组 4 / 8 × 100 / 200µs）里 p99 最低的，更小的组或时间片没有测；② 全部数据来自 macOS / arm64，Linux 未复测，宿主在测量中途换过一次“时段”（原因尚未确认）；③ 真实移动回调（5～20µs、带事务）与热点实体下的业务延迟与冲突转单目标率没有测。
 - **热点实体下的冲突转单目标率**：热点实体（同一实体高频业务消息）下的转换率没有测。
-- **独占模式 Remote 心跳的真实依赖故障注入**：独占模式下不经共享的直接迁移只有模拟 Remote 写准入的用例（`heartbeat/remote_test.go`），真实依赖下的故障注入（Redis / Mongo 断开时切换）没有做。
 
 #### 移动与动作、行为与技能：遗留
 
@@ -641,13 +640,10 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **换服崩溃窗口没有自动清理**：换服提交后、删原服的库之前崩溃，原服重启会把旧档预加载进内存；续做时目标服补搬冲突，旧档留给运维删（见 [rehome 模块 README](../../modules/rehome/README.md)）。与 rehome 的“搬档”是同一个窗口，见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
 - **夹具与玩法脚本没有重跑**：`add dao --entity` 的骨架缺省改成 `dbscope=sid`，各玩法脚本（`scripts/test-{slg,mmorpg,card-rpg,auto-chess,idle-sim}-generated.sh`、`scripts/test-genres-generated.py`）与 genre 参考文档里经它生成的 DAO 随之变化；mmorpg 跨服演练改为按玩家的 sid 读 `<db>_<sid>`，各玩法真实依赖用例（`ROOST_*_REAL`）的收尾多删一个 `<库>_0`。合并后的全套与真实依赖用例跑过之前，是否还有别处直接读共用库**尚未确认**。
 - **game-demo 的空闲卸载不认识常驻**：`PlayerOwners` 的清扫如果遇到标了 `lifetime=resident` 的 Player，每轮记 WARN，且卸载前已让玩家离开场景，结果是实体留在内存、人已不在场景。demo 的 Player 缺省不是常驻，未改；要常驻 Player 时清扫要先跳过常驻实体。
-- **常驻的刷新与载回只有替身存储的用例**：强制刷新、换服中止后的载回用 mongotest 验证，没有真实 Mongo 副本集用例；真实 DataEngine 下 rehome 走到常驻实体的交出与载回未演练。
 
 #### Remote：遗留
 
-- **Remote 托管 kind 的“新建不改字段”**：没有“新建不改字段”的 Remote 端到端用例。
 - **交出实体的验证范围**：正式 Nest + 文件 WAL + Mongo 替身的用例（含 `-race`、并发写入、停机、订阅者重载），真实副本集上的现状刻画与整条流程各一条（本机隔离环境）。没有跑两个真实进程的换服演练（每个阶段后 kill -9），那是换服二期的内容。
-- **多写者本地副本**：两个真实进程交替写同一共享实体的真实依赖用例没有加。
 - **路由登记的长时运行与大联盟**：[Remote](#remote) 路由登记条的 ① “长时间运行后的守卫加载量没有测”、⑥ “大联盟的文档与内存没有测”。
 - **空认领不清除**（[Remote](#remote) 空认领条的 ②）：每个占一条 `_remote_entity_meta`，按 owner 枚举会列出它、`alliance.transfer` 会把它转走（转过去仍是空认领）；对它的请求每次多一次所有权点读与一次聚合冷加载（不登记路由，调用方回退读所有权记录）。被拒的建盟多时这些会累积，要清理需要新的“删空认领”入口（带所有权代际守护），未做。
 - **单实例 128 / 256 并发写偶发“全体同时约 3 s 超时”**（发布侧两处框架缺陷已修复，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-0406实体服务-rpc-按方法串行与跨实例写超时)；剩下的尚未处理，不是“非问题”）：修后 8 轮仍有 20 个全体超时簇（修前 8 轮 19 个；本机当时 load 11～57、swap 几乎用满，噪声大于差异），剩下的停顿全部在 I/O——投影器的 Mongo 事务与 outbox 的 Mongo 标记等多数派写关注（三个副本集节点同机，从节点应用 oplog 卡 1～2 s 时主节点的写一起等）、WAL `fsyncSegment`、投影器主循环里同步做的 checkpoint 落盘（`nestwal.storeCheckpoint` 的 rename / fsync 在 `Projector.ReplayPass` 里执行，磁盘一卡投影全停）。strict 写要等持久与发布，这类停顿超过请求期限时全部在途写仍会一起超时；是否把 checkpoint 落盘移出投影器主循环、在独立机器 / 安静机器上这类停顿多大，都未评估。下次复现时抓：探针的停顿栈（看 `Projector).run` 栈顶、`fsyncSegment`、`MarkRemoteCommitPublished`、`ApplyRemoteCommitsInTransaction` 各多少）、`remote_entity_outbox_detached_total` 与 `nestwal_fsync_duration_max`、`remote_entity_outbox_mark_published_max` 的差值、mongod 慢日志（主节点带写关注的慢操作、从节点的慢 `Applied op`）、`uptime` 与 `sysctl vm.swapusage`。
@@ -813,7 +809,6 @@ room 自动断线订阅、保留策略、重启在线状态重建、广播继续
 
 #### LevelComponent 与 UGC 物理闯关：遗留
 
-- **LevelComponent**：该组件尚未验证真实 Mongo/WAL 多进程崩溃恢复，不恢复原生物理世界。状态复制与整状态 mutation 有预算但没有容量承诺，动作账本满额拒绝，长期归档另设计。
 - **UGC 物理闯关**：可选 PhysX 房间当前支持运动学转轮/平台、动态 Box、弹簧抓取和铰链马达、固定版本关卡加载、Unity 预测/纠偏接法；见 [物理房间契约与验证](../framework/PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。Linux 原生功能、真实 TCP/Gate/NATS/Nest 联合链及 C# 预测核心已验证，新增 Unity 交互未在编辑器运行。历史单房间性能数据不覆盖新载荷/约束或多房间容量。
 - **UGC 分频显示**：Unity 编辑器、WAN 和多房间容量未验。
 - **UGC 多房间与长稳**：物理房间已补 Linux 的 1/4/8 房间短测（每房 20 个逻辑客户端，普通/机关两类）。这是直接 Service + PhysX + Nest、预热 1 秒/采集 5 秒的证据，不含生产网络、原生内存与长稳，不能作为容量上限；普通 8 房间样本实际物理均频 49.32Hz。Go 分配已于 2026-10-29 profile 定位并削减：macOS ARM64 同机对照，机关 8 房间 81.57→31.15MB/s、普通 70.04→27.38MB/s，载荷字节不变；同日晚每帧状态索引与 AOI 索引由 map 改为切片（房间提交路径不再复制本帧状态），再降到机关 23.46、普通 19.87MB/s（同机交替 3 轮，载荷字节不变）；剩余主要是 `StateDAO.Accept` 的所有权副本（约 3MB/s，去掉要让 Nest undo 保护的权威状态与网络侧索引共用切片，判断为高风险，不做）与交给网络 / 视图账本的副本。**macOS ARM64 长稳已测**（2026-10-29，机关 8 房间 × 20 客户端连续 20 分钟）：footprint、Go 映射、goroutine、PhysX 原生堆（malloc 已分配约 9.6MiB / 8 房间，个数持平）在稳定窗口斜率都在 0 附近，没有发现无界增长；物理均频 49.85Hz（不含 vmmap 挂起窗口最低 49.93Hz）。RSS 每分钟 +0.035MB 推断为干净页换入（footprint 持平），未逐区域核对；交付频率后 8 分钟比前 8 分钟低 0.9%，原因尚未确认（倾向客户端定时器）。**仍未测**：Linux 的复测、RSS 与长稳（本机 Docker 未运行），小时级与房间反复创建销毁，真实 Gate/NATS/TCP 链路下的内存，原生堆按房间拆分。见 [测量口径和复跑](../framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)、[分配 profile](../framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64) 与 [长稳与原生内存](../framework/PHYSICS-ROOM-SERVICE.md#长稳rss-与原生内存2026-10-29macos-arm64)。闯关流程由通用 `gameplay/level` 承担（见上文“通用 LevelComponent 首版边界”），不另建专用检查点 / 排名 / 结算状态机；物理动作执行器与 LevelComponent 的真实联合玩法尚未验收。
@@ -896,6 +891,7 @@ Nest 的 `TestLifecycleCreateInHandler*` 仍需保留：它们覆盖 handler 内
 
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-14：遗留核心第 2 批**：handler 内新建未声明的 Remote 托管实体原来被本地投影写成普通文档，现在拒绝并回滚（`nest.ErrDurableRemoteWriteUnsupported`，行为变化）；SLG 联盟交接夹具改为先退出共享模式再独占转移（旧夹具与 REMOTE_ENTITY 多写者契约不符，20/20 失败）；补真实依赖用例：常驻实体的刷新与换服中止后载回（真实副本集）、两个真实进程交替写同一共享实体、LevelComponent 的 WAL 崩溃恢复、独占模式 Remote 转移时的 Mongo 故障注入（三个故障时刻）。证据见 CHANGELOG 与各用例。
 - **2026-11-14：遗留第 1 批与 CellWorld 千人排查**：嵌套 DAO 字段上的 `persist / nopersist / sync / nosync` 原来被静默忽略（v1.47 起字段默认同步，嵌套里的私有账本会发给客户端），现在生成期报错；预加载加了数量上限与时间预算（`dataengine.preload.max_entities` / `timeout`）；匹配补位补了 Redis 单机与 Cluster 上两个匹配器的并发验收；删去没有调用方的地形 `Brush.ApplyIn` / `View.BrushChangesIn`；sync-aoi 加心跳投递开关；Lockstep 历史窗口写进 guide/04 的核对表；活动施法一项有了逐拍证据。CellWorld：Touch 锁争用、视野查询分配、按 ID 分批与整帧相位不齐、整端重置风暴已修（CHANGELOG `[Unreleased]`）。
 - **2026-11-13：saga 准入的“换服中”钩子**：原来 demo 的 `admitBound` 只留钩子 `playerMoving`（缺省不在换服中）；rehome 模块合入后（v1.45.0）准入改用 `PlayerOwners` 取玩家当前绑定与是否换服中，钩子已删除（`kitsaga.WithAdmit(steps.admitBound)`，`demo/internal/service/game/gift_saga.go.tmpl`）。
 - **2026-11-13：combat 与 dungeon 的组件 DAO 原来是 global**：`CombatDao` / `LevelDAO` 原来没有 `DbScope()`，挂在 sid 实体上时一个实体的文档分在两个库里；2026-11-13 改为跟随宿主主 DAO 的范围，注册校验拒绝范围不一致的组合（未发版）。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-13本地实体起服预加载与本地实体-dao-缺省-dbscopesidcombat-与-dungeon-的组件-dao)；CHANGELOG `[Unreleased]`“组件 DAO 跟随宿主实体的 dbscope”。

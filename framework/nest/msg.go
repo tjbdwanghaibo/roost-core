@@ -24,16 +24,19 @@ func (m *Msg) setRemoteWriteBatch(batch entity.RemoteWriteBatch) {
 // CurrentRemoteWriteBatchContains 报告当前 Nest 派发是否为该实体准备了带 fence 的 Remote 写条目。基础设施 hook
 // 用它拒绝取锁前未在消息目标中声明的 Remote 删除。
 func CurrentRemoteWriteBatchContains(entityID int64) bool {
-	msg := currentNestDispatchMsg()
+	return remoteBatchCovers(currentNestDispatchMsg(), entityID)
+}
+
+// remoteBatchCovers 报告 msg 的 Remote 写批次是否包含该实体。Remote 托管实体的持久写只能走消息声明、取锁前准备的
+// 批次：批次为它取得分布式所有权与 fence，提交时由批次认领它的 DAO（RemotePersistChangeFor）。只看“消息带不带批次”
+// 不够——handler 里新建 / 捕获一个没声明的 Remote 托管实体时，消息可能因另一个声明目标而带批次，新实体却不在其中，
+// 它的 DAO 没人认领，会由本地投影以普通文档写进 Remote 集合、没有信封与所有权。CaptureEntities（含 handler 内新建）
+// 与删除准入（CurrentRemoteWriteBatchContains）共用这一判据。
+func remoteBatchCovers(msg *Msg, entityID int64) bool {
 	if msg == nil || msg.RemoteWriteBatch == nil {
 		return false
 	}
-	for _, id := range msg.RemoteWriteBatch.EntityIDs() {
-		if id == entityID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(msg.RemoteWriteBatch.EntityIDs(), entityID)
 }
 
 // CurrentDispatchHasRemoteWriteBatch 报告当前 Nest 派发是否带 Remote 写批次（消息声明了 Remote 目标、取锁前已准备）。

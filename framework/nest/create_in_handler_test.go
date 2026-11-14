@@ -1178,3 +1178,84 @@ func TestAFailedCreateDoesNotPublishItsEffects(t *testing.T) {
 		}
 	}
 }
+
+// declaredRemoteBatch 是只声明了 ids 的 Remote 写批次替身（strict 下 Commit 成功、没有 Remote 提交内容）。
+type declaredRemoteBatch struct {
+	stagedRemoteBatch
+	ids []int64
+}
+
+func (b *declaredRemoteBatch) EntityIDs() []int64 { return append([]int64(nil), b.ids...) }
+
+// handler 里新建一个没有声明进本消息的 Remote 托管实体（本消息声明的是另一个 Remote 实体，所以带 Remote 批次）：
+// 新实体不在批次里，没有它的分布式所有权保护，Remote 持久写只能走消息声明的批次（REMOTE_ENTITY“写准入”），与 Cast 对
+// 未声明 Remote 目标的拒绝（refuseUndeclaredRemoteTargets）同一结论。新建返回 ErrDurableRemoteWriteUnsupported，发布被
+// 撤销；业务吞掉错误时整条事务回滚（捕获失败），批次中止、不提交。修前 CaptureEntities 只看消息带不带批次，新实体的
+// DAO 由本地投影以普通文档写进 Remote 集合（真实依赖用例 scripts/testdata/remoteflow create_unchanged_test.go in_handler）。
+func TestCreateInHandlerRefusesARemoteEntityTheMessageDidNotDeclare(t *testing.T) {
+	for _, swallow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("swallow=%v", swallow), func(t *testing.T) {
+			unique := int64(36760)
+			if swallow {
+				unique += 10
+			}
+			manager := entity.NewEntityManager()
+			access := entity.NewManagerAccess(manager)
+			declared := mustBuildCastID(t, unique, entity.EntityCategoryRemote, remoteRecreatableKind)
+			undeclared := mustBuildCastID(t, unique+1, entity.EntityCategoryRemote, remoteRecreatableKind)
+			param := func(id int64) *entity.EntityCreateParam {
+				return &entity.EntityCreateParam{IsCreate: true, Id: id, Category: entity.EntityCategoryRemote, Kind: remoteRecreatableKind}
+			}
+			if _, err := access.Create(param(declared)); err != nil { // Nest 之外创建并发布
+				t.Fatal(err)
+			}
+			var batches []*declaredRemoteBatch
+			var commits atomic.Int32
+			remote := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) {
+				batch := &declaredRemoteBatch{stagedRemoteBatch: stagedRemoteBatch{commit: func() { commits.Add(1) }}, ids: []int64{declared}}
+				batches = append(batches, batch)
+				return batch, nil
+			}}
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
+			meta := HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict}
+			noop := NewHandlerName(fmt.Sprintf("remote_undeclared_create_noop_%d", unique))
+			mgr.MustRegisterHandlerWithMeta(noop, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+				return "ok", nil
+			}, meta)
+			name := NewHandlerName(fmt.Sprintf("remote_undeclared_create_%d", unique))
+			var createErr error
+			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+				_, createErr = access.Create(param(undeclared))
+				if swallow {
+					return "ok", nil
+				}
+				return nil, createErr
+			}, meta)
+			if err := mgr.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = mgr.Shutdown(context.Background()) }()
+
+			// 对照：声明的 Remote 目标照常在批次里捕获并提交。
+			if reply, err := mgr.Request(context.Background(), noop, declared, nil); err != nil || reply != "ok" || commits.Load() != 1 {
+				t.Fatalf("premise: a strict message on the declared Remote entity reply=%v err=%v batch commits=%d, want ok with one commit", reply, err, commits.Load())
+			}
+			reply, err := mgr.Request(context.Background(), name, declared, nil)
+			if !errors.Is(createErr, ErrDurableRemoteWriteUnsupported) {
+				t.Fatalf("create of an undeclared Remote entity err=%v, want ErrDurableRemoteWriteUnsupported", createErr)
+			}
+			if err == nil {
+				t.Fatalf("handler reply=%v with no error: the transaction that created an undeclared Remote entity must not commit", reply)
+			}
+			if got := manager.Get(undeclared); got != nil {
+				t.Fatalf("the undeclared Remote entity stayed published after the refusal: %p", got)
+			}
+			if commits.Load() != 1 {
+				t.Fatalf("batch commits=%d, want only the premise's commit", commits.Load())
+			}
+			if last := batches[len(batches)-1]; !last.aborted.Load() || last.closed.Load() != 1 {
+				t.Fatalf("refused message's batch aborted=%v closed=%d, want aborted and closed once", last.aborted.Load(), last.closed.Load())
+			}
+		})
+	}
+}

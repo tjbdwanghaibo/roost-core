@@ -7,9 +7,13 @@ import (
 	"testing"
 	"time"
 
+	player "{{MODULE}}/game/entities/player"
+	gamescene "{{MODULE}}/game/scene"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/msgid"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // 静态绑定下的驻留表：只有通过绑定校验
@@ -726,5 +730,72 @@ func TestCloseServedSessionsClosesEveryServedPlayer(t *testing.T) {
 	}
 	if !got[42] || !got[43] {
 		t.Fatalf("not every served player was disconnected: %v", fencer.closedPlayers())
+	}
+}
+
+// residentPlayerKind 把 Player 这个 kind 临时声明成 lifetime=resident（照 `//roost:entity lifetime=resident` 生成的
+// builder），测试结束时改回。demo 的 Player 缺省不是常驻；这里验证的是“哪天改成常驻，闲置卸载不去动它”。
+func residentPlayerKind(t *testing.T) {
+	t.Helper()
+	player.RegisterEntity()
+	builder := coreentity.GetEntityBuilderParam(player.EntityKindPlayer)
+	if builder == nil {
+		t.Fatal("the Player kind is not registered")
+	}
+	was := builder.Lifetime
+	builder.Lifetime = coreentity.EntityLifetimeResident
+	t.Cleanup(func() { builder.Lifetime = was })
+}
+
+// 常驻的 Player 不进闲置卸载：清扫在选人时就跳过它（不离开场景、不调卸载、不每轮记 WARN），驻留记录照旧。
+// 修前清扫照常选中它，卸载先让玩家离开场景、再被框架以 ErrEntityResident 拒绝销毁：实体留在内存、人已不在场景。
+func TestTheIdleSweepSkipsAResidentPlayer(t *testing.T) {
+	residentPlayerKind(t)
+	owners, _, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	if local, err := admitHere(owners, 78); !local || err != nil {
+		t.Fatalf("admit bound: %v %v", local, err)
+	}
+	*clock = clock.Add(IdleUnload + time.Second)
+	owners.unloadIdle(context.Background())
+
+	if got := evictor.taken(); len(got) != 0 {
+		t.Fatalf("the idle sweep tried to unload a resident player: %v", got)
+	}
+	if !hasRecord(owners, 78) || owners.Admit(78) != nil {
+		t.Fatal("a resident player lost its residency record to the idle sweep")
+	}
+}
+
+// 卸载本身也认常驻（清扫之外的调用方）：在离开场景之前拒绝，玩家仍在场景里。
+func TestEvictingAResidentPlayerKeepsItOnTheScene(t *testing.T) {
+	residentPlayerKind(t)
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	resident := newScenePlayer(t, 9201)
+	joinReady(t, scene, ctx, resident, spatial.Point{X: 500, Y: 500})
+
+	manager := coreentity.NewEntityManager()
+	manager.Add(resident)
+	evictor := playerEvictor{scene: scene, players: &player.Lifecycle{}, manager: manager}
+	err = evictor.EvictPlayer(ctx, coreentity.GetUniqueIDFromEntityID(resident.ID()))
+	if !errors.Is(err, coreentity.ErrEntityResident) {
+		t.Fatalf("evicting a resident player answered %v, want ErrEntityResident", err)
+	}
+	if scene.Members() != 1 {
+		t.Fatalf("the resident player was taken off the scene: %d members left", scene.Members())
 	}
 }

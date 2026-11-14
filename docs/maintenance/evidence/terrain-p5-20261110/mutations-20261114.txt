@@ -1,0 +1,15 @@
+== no-push-after-lots
+--- FAIL: TestTerrainPartitionGhostBandSeesNeighbourBuildings (1.01s)
+    terrain_relay_test.go:792: the lot reached the neighbour without a push after the commit (only the renewal filled it in): {SubscribesOut:2 SubscribesIn:2 Subscribers:1 ChunksOut:1 PushedOut:0 ChunkBytesOut:30 ChunksIn:0 Applied:0 Stale:0 LotsApplied:0 LotsStale:0 BaseRevisionDrops:0 WrongOwner:0 Unwanted:0 NotOwned:0 Unloaded:0 Ahead:0 DecodeErrors:0 ApplyErrors:0 InboxDrops:0 SendDrops:0 WantsRejected:0}
+FAIL
+FAIL	example.com/planet/internal/service/game	3.160s
+== no-inflight-dedup
+--- FAIL: TestTerrainRelayRunsARequestOnceWhileItIsRunning (0.00s)
+    terrain_relay_test.go:894: the cell ran one request 4 times while it was running
+FAIL
+FAIL	example.com/planet/internal/service/game	2.173s
+== no-incarnation-check
+--- FAIL: TestTerrainRelayIgnoresAnAnswerFromAnEarlierIncarnation (0.00s)
+    terrain_relay_test.go:921: the base took an answer meant for an earlier incarnation: {Outcome:refused Refusal:terrain: edit not allowed here (cell: terrain: edit not allowed here) Chunks:[] Points:0 LastSeq:0 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0) Foundation:0 Leveled:false BaseRevision:0}}
+FAIL
+FAIL	example.com/planet/internal/service/game	2.028s

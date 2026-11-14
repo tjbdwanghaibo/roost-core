@@ -38,3 +38,45 @@ func TestRehomeRejectsInvalidPartitionSettings(t *testing.T) {
 		t.Fatalf("invalid settings allowed rehome: %v", err)
 	}
 }
+
+// 对战房间在本进程内存里（battleManager），座位上的玩家换走了就再也连不上这一局：申请与离开时都拒绝。
+// 房间结束（forget）之后放行。
+func TestRehomeRefusesAPlayerSeatedInABattle(t *testing.T) {
+	battles := newRecordingBattleManager(newRecordingPushes())
+	t.Cleanup(battles.Close)
+	if err := battles.Open("m-rehome", []int64{7, 8}); err != nil {
+		t.Fatal(err)
+	}
+	r := app.NewRegistry(viper.New())
+	if err := r.Register(BattleCapability, battles); err != nil {
+		t.Fatal(err)
+	}
+	move := gamerehome.Move{PlayerID: 7, From: 1000, To: 1001}
+	if err := refuseRehomeInABattle(context.Background(), r, move); !errors.Is(err, apperrors.ErrRehomeRefused) {
+		t.Fatalf("a seated player was allowed to move: %v", err)
+	}
+	if err := refuseRehomeInABattle(context.Background(), r, gamerehome.Move{PlayerID: 9, From: 1000, To: 1001}); err != nil {
+		t.Fatalf("a player in no battle was refused: %v", err)
+	}
+	battles.forget("m-rehome")
+	if err := refuseRehomeInABattle(context.Background(), r, move); err != nil {
+		t.Fatalf("the battle is over, but the move is still refused: %v", err)
+	}
+}
+
+// 离开中（Reserve 之后）的玩家不再是本进程撮合的候选：撮合不能在他交出实体之前把他放进本进程的一局。
+func TestALeavingPlayerIsNoMatchCandidate(t *testing.T) {
+	owners, _, _ := ownersUnderTest(t)
+	if local, err := admitHere(owners, 7); !local || err != nil {
+		t.Fatalf("admit bound: %v %v", local, err)
+	}
+	if !owners.Resident(7) {
+		t.Fatal("precondition: the player is served here")
+	}
+	if err := owners.Reserve(gamerehome.Move{ID: "mv-1", PlayerID: 7, From: ownSID, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	if owners.Resident(7) {
+		t.Fatal("a player leaving this process is still a match candidate here")
+	}
+}
