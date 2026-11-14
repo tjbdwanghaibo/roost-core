@@ -564,14 +564,15 @@ func bags(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			// bag 模块起物品在 bag.1.<物品号>（int64）：“1” 是 db/def/bag.go 里 Items 字段的 store 标签。
 			var doc struct {
-				Items map[string]int32 `bson:"items"`
+				Bag map[string]map[string]int64 `bson:"bag"`
 			}
 			// v1.47.0 起 add dao --entity 给本地实体写 dbscope=sid：玩家的文档在他所在服的库 <db>_<sid>。
 			if err := client.Database(fmt.Sprintf("%s_%d", *database, p.SID)).Collection("player").FindOne(ctx, bson.M{"_id": id}).Decode(&doc); err != nil {
 				return err
 			}
-			counts[name] = doc.Items[strconv.FormatInt(itemID, 10)]
+			counts[name] = int32(doc.Bag["1"][strconv.FormatInt(itemID, 10)])
 			if want, ok := expected[name]; ok && counts[name] != want {
 				matched = false
 			}
