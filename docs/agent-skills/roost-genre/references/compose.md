@@ -286,6 +286,8 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 | 换服 | `rehome` | — | 把一名玩家改绑到另一个 game sid |
 | 运维命令 | `gm` | — | 命令登记与审计，各模块按联动接入 |
 
+运营真实验收见 [P8 报告](../../../maintenance/evidence/operations-real-20261114/README.md)：GM/purchase 使用完整 game-demo，活动使用 casual + gm/rehome/alliance/activity_world/activity_alliance 的独立精简工程。完整 demo 的 Player DAO 已达 64 个顶层字段，不能继续叠装 activity；不要把两个通过的工程当成同一个组合通过。报告区分普通 Player 定时器与共享 Remote 权威、Ack 丢失与仅 WAL 恢复、模拟支付渠道与真实渠道。
+
 ```bash
 "$ROOST" module list --json                 # 模块、依赖、状态字段、场景数
 "$ROOST" module plan checkin --json         # 只预览：不改动工程

@@ -1,0 +1,202 @@
+package e2e
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"OPERATIONS_MODULE/game/purchase"
+	"OPERATIONS_MODULE/protocol/msgid"
+	"OPERATIONS_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+)
+
+func operationsAssets(s *suite, sid int32, id, coins, applied int64) {
+	s.t.Helper()
+	s.eventually("persisted wallet and purchase cursor", 15*time.Second, func() (bool, string) {
+		raw, err := operationsPlayerDoc(s, sid, id)
+		balance, cursor := operationsNumber(raw, "wallet", "1"), operationsNumber(raw, "purchase", "1")
+		return err == nil && balance == coins && cursor == applied, fmt.Sprintf("wallet=%d applied=%d err=%v", balance, cursor, err)
+	})
+}
+
+func TestOperationsGMHTTPMailAndRehome(t *testing.T) {
+	s, _, _ := operationsSuite(t)
+	games, _ := s.fullStack(procOptions{})
+	p := s.login(games[0], "operationsgm")
+	letter := map[string]any{"player_id": p.id, "subject": "operations acceptance", "body": "same request across game processes", "attachment": map[string]any{"type": "coins", "amount": 55}, "request_id": "operations-mail-stable", "note": "private acceptance"}
+	operationsAdmin(s, games[0], "gm.mail.send", "", letter, false)
+	first := operationsAdmin(s, games[0], "gm.mail.send", "operations", letter, true)
+	second := operationsAdmin(s, games[0], "gm.mail.send", "operations", letter, true)
+	id, ok := first["mail_id"].(string)
+	if !ok || id == "" || second["mail_id"] != id {
+		t.Fatalf("mail dedupe %v %v", first, second)
+	}
+	claim := call(p, msgid.MsgMailboxClaim, &pb.MailboxClaimRequest{MailID: id}, pb.MarshalMailboxClaimRequest, pb.UnmarshalMailboxClaimResponse)
+	if claim.Code != 0 || claim.Amount != 55 || claim.Held != 55 {
+		t.Fatalf("mail grant %+v", claim)
+	}
+	operationsAssets(s, 1000, p.id, 55, 0)
+	operationsMove(s, games[0], p.id, 1001)
+	p = s.login(games[1], "operationsgm")
+	third := operationsAdmin(s, games[1], "gm.mail.send", "operations", letter, true)
+	if third["mail_id"] != id {
+		t.Fatalf("cross-process stable request created another mail: %v", third)
+	}
+	claim = call(p, msgid.MsgMailboxClaim, &pb.MailboxClaimRequest{MailID: id}, pb.MarshalMailboxClaimRequest, pb.UnmarshalMailboxClaimResponse)
+	if claim.Code == 0 {
+		t.Fatalf("settled mail unexpectedly granted again: %+v", claim)
+	}
+	operationsAssets(s, 1001, p.id, 55, 0)
+	operationsAdmin(s, games[0], "gm.player.coins", "operations", map[string]any{"player_id": p.id, "delta": 1, "note": "old owner must refuse"}, false)
+	operationsAssets(s, 1001, p.id, 55, 0)
+	t.Log("PASS GM ops HTTP -> mail NATS -> TCP claim; same mail id across sid; final binding=1001, source absent, wallet=55; accepted checked separately from completion")
+}
+
+func operationsCallback(s *suite, payments svcplatform.Platform, id int64, orderID string, replay bool) svcplatform.Order {
+	s.t.Helper()
+	raw, _ := json.Marshal(map[string]any{"order_id": orderID, "player_id": id, "channel": "demo", "product_id": "coins_100", "amount_minor": 99, "currency": "USD", "paid_at_unix": 1700000000})
+	// 只使用生成工程的开发模拟渠道。HMAC 仍由正式 platform 校验。
+	config, err := os.ReadFile(s.procs["platform"].config)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	secret := ""
+	for _, line := range strings.Split(string(config), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "payment_secret:") {
+			secret = strings.Trim(strings.TrimSpace(strings.SplitN(line, ":", 2)[1]), "\"")
+			break
+		}
+	}
+	if secret == "" {
+		s.t.Fatal("generated payment secret missing")
+	}
+	receipt, err := payments.HandleCallback(s.ctx, raw, svcplatform.SignPayload(raw, secret))
+	if err != nil || !receipt.Delivered || receipt.Replayed != replay || receipt.Order.State != svcplatform.DeliveryDelivered || len(receipt.Order.PendingAttempts) != 0 {
+		s.t.Fatalf("callback replay=%v: %+v %v", replay, receipt, err)
+	}
+	return receipt.Order
+}
+
+func operationsQueue(s *suite, id int64, next, acked string, pending int) map[string]string {
+	s.t.Helper()
+	fields, err := s.redis.HGetAll(s.ctx, purchase.StoragePrefix+":{"+strconv.FormatInt(id, 10)+"}").Result()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	expectedFields := pending*2 + 1
+	if acked != "" {
+		expectedFields++
+	}
+	if fields["next"] != next || fields["acked"] != acked || len(fields) != expectedFields {
+		s.t.Fatalf("queue next=%s acked=%s pending=%d: %v", next, acked, pending, fields)
+	}
+	return fields
+}
+
+func TestOperationsPurchaseCrashAcrossSIDAndRedisRestart(t *testing.T) {
+	s, redis, control := operationsSuite(t)
+	games, _ := s.fullStack(procOptions{})
+	p := s.login(games[0], "operationspurchase")
+	payments, err := svcplatform.NewBusClient(s.bus, "", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID := "operations-order-one"
+	original := operationsCallback(s, payments, p.id, orderID, false)
+	operationsCallback(s, payments, p.id, orderID, true)
+	queued := operationsQueue(s, p.id, "1", "", 1)
+	if err = os.WriteFile(filepath.Join(control, "purchase-arm"), []byte(orderID), 0600); err != nil {
+		t.Fatal(err)
+	}
+	request, err := pb.MarshalPurchaseCollectRequest(&pb.PurchaseCollectRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.seq++
+	err = wire.Write(p.conn, []*wire.Packet{{MsgID: msgid.MsgPurchaseCollect, Seq: p.seq, Payload: request}}, wire.DefaultMaxPayload)
+	p.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reached struct {
+		PID      int    `json:"pid"`
+		Order    string `json:"order"`
+		Sequence uint64 `json:"sequence"`
+		Player   int64  `json:"player"`
+	}
+	s.eventually("strict grant before Ack barrier", 20*time.Second, func() (bool, string) {
+		raw, err := os.ReadFile(filepath.Join(control, "purchase-reached"))
+		if err != nil {
+			return false, err.Error()
+		}
+		err = json.Unmarshal(raw, &reached)
+		return err == nil, fmt.Sprint(err)
+	})
+	if reached.PID != games[0].cmd.Process.Pid || reached.Order != orderID || reached.Sequence != 1 || reached.Player != p.id {
+		t.Fatalf("wrong barrier %+v", reached)
+	}
+	operationsAssets(s, 1000, p.id, 100, 1)
+	operationsQueue(s, p.id, "1", "", 1)
+	s.stop(games[0], syscall.SIGKILL)
+	status, ok := games[0].exitErr.(*exec.ExitError)
+	if !ok || status.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+		t.Fatalf("source did not SIGKILL: %v", games[0].exitErr)
+	}
+	if err = os.Remove(filepath.Join(control, "purchase-arm")); err != nil {
+		t.Fatal(err)
+	}
+	// 先停依赖 Redis 的所有服务，避免把 Redis 的停止误当成 singleton 接管实验。
+	s.stopAll()
+	redis.stop()
+	redis.start()
+	if got := operationsQueue(s, p.id, "1", "", 1); !reflect.DeepEqual(got, queued) {
+		t.Fatalf("AOF restart changed pending snapshot: before=%v after=%v", queued, got)
+	}
+	for _, name := range []string{"account", "activity", "chat", "global", "mail", "match", "platform", "rank", "session", "alliance-3000", "alliance-3001", "game-1000", "game-1001"} {
+		p := s.procs[name]
+		s.start(name, p.service, p.sid, procOptions{})
+	}
+	order, found, err := payments.Order(s.ctx, orderID)
+	if err != nil || !found || !reflect.DeepEqual(order, original) {
+		t.Fatalf("platform order changed on AOF restart: %+v vs %+v err=%v", order, original, err)
+	}
+	operationsQueue(s, p.id, "1", "", 1)
+	operationsMove(s, games[0], p.id, 1001)
+	p = s.login(games[1], "operationspurchase") // enter 联动从新 sid 补领，同一 strict 游标不得再发奖。
+	collect := call(p, msgid.MsgPurchaseCollect, &pb.PurchaseCollectRequest{}, pb.MarshalPurchaseCollectRequest, pb.UnmarshalPurchaseCollectResponse)
+	if collect.Code != 0 {
+		t.Fatalf("cross-sid replay collect: %+v", collect)
+	}
+	operationsAssets(s, 1001, p.id, 100, 1)
+	operationsQueue(s, p.id, "1", "1", 0)
+	operationsCallback(s, payments, p.id, orderID, true)
+	operationsQueue(s, p.id, "1", "1", 0)
+	operationsCallback(s, payments, p.id, "operations-order-two", false)
+	collect = call(p, msgid.MsgPurchaseCollect, &pb.PurchaseCollectRequest{}, pb.MarshalPurchaseCollectRequest, pb.UnmarshalPurchaseCollectResponse)
+	if collect.Code != 0 || len(collect.Receipts) != 1 || collect.Receipts[0].Sequence != 2 || collect.Receipts[0].OrderID != "operations-order-two" {
+		t.Fatalf("next order %+v", collect)
+	}
+	operationsAssets(s, 1001, p.id, 200, 2)
+	operationsQueue(s, p.id, "2", "2", 0)
+	s.stop(games[1], syscall.SIGKILL)
+	s.start(games[1].name, "game", 1001, procOptions{})
+	p = s.login(games[1], "operationspurchase")
+	collect = call(p, msgid.MsgPurchaseCollect, &pb.PurchaseCollectRequest{}, pb.MarshalPurchaseCollectRequest, pb.UnmarshalPurchaseCollectResponse)
+	if collect.Code != 0 || len(collect.Receipts) != 0 {
+		t.Fatalf("cold retry %+v", collect)
+	}
+	operationsAssets(s, 1001, p.id, 200, 2)
+	operationsQueue(s, p.id, "2", "2", 0)
+	t.Log("PASS purchase NATS callback / TCP Collect / Mongo+WAL; kill after strict before Ack, Redis SIGKILL AOF same-dir restart, sid1000->1001; platform terminal immutable; pending=0 next=acked=Applied=2 wallet=200")
+}

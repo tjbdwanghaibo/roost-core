@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **运营模块真实联合验收**（2026-11-14，B-8）：新增 GM ops HTTP→跨进程 mail→真实换服、purchase strict 后 Ack 前 SIGKILL→私有 Redis AOF 原目录重启→跨 sid 补领，以及 Player/World/Alliance 活动迁移和 SIGKILL 后定时器/扫描恢复档。各用例运行正式 Nest、生成 DAO、Mongo/WAL/NATS；移除购买重放处理或 World 扫描的临时变异分别失败。活动使用独立精简工程，完整 demo 的 64 字段组合上限保留；不宣称仅 WAL 未投影恢复或真实支付渠道验收。[证据](docs/maintenance/evidence/operations-real-20261114/README.md)。
+
 - **合作 Roguelike / 社交经营真实恢复档**（2026-11-14）：新增 `ROOST_COOP_ROGUELIKE_REAL=1`、`ROOST_SOCIAL_SIM_REAL=1`，共用正式 Nest/生成 DAO/文件 WAL/Mongo 装配；各两种仅 WAL 已确认、Mongo 尚无文档的 SIGKILL 窗口，恢复完整状态与最后回执、继续领奖，第三进程冷加载核对奖励不重复。默认10/9条场景不变，并编译/vet真实夹具；新档直接走Sender，TCP/真实账号/Gate联合链不在本批。[证据与变异](docs/maintenance/evidence/session-real-20261114/README.md)。
 
 - **回合 PvP 真实验收与 demo Robot**（2026-11-14）：新增 `ROOST_TURN_PVP_REAL=1`，分别验证 GameRoom 纵切真实 Mongo/WAL 的持久定时器跨进程冷加载，以及正式 turn-pvp 配方经 account/match、独立 Gate/NATS 的对局、SIGKILL 恢复、代际接管与幂等重试。game-demo 追加正式 room/turn/matchroom/matchmaking 模块，`make dev-smoke` 新增双人 turn 场景，与既有 lockstep 匹配池独立；[证据与边界](docs/maintenance/evidence/turn-real-20261114/README.md)。

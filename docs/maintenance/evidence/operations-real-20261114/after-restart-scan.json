@@ -1,0 +1,58 @@
+{
+  "owners": {
+    "4611686018427388941": {
+      "OwnerSid": 3001,
+      "MarkerEpoch": 2,
+      "RouteEpoch": 2,
+      "Shared": false
+    },
+    "4611686018427466773": {
+      "OwnerSid": 4101,
+      "MarkerEpoch": 2,
+      "RouteEpoch": 2,
+      "Shared": false
+    }
+  },
+  "snapshots": [
+    {
+      "Token": {
+        "Definition": 2,
+        "Scope": "world",
+        "Owner": 4611686018427466773,
+        "Generation": 1,
+        "Cycle": 1,
+        "Phase": 4,
+        "FlowVersion": 0
+      },
+      "Version": 1,
+      "Logic": "operations-pending",
+      "Start": 1794628122642,
+      "OpenAt": 1794628122642,
+      "CloseAt": 1794628182642,
+      "Pending": true,
+      "Flow": "",
+      "FlowDue": 0,
+      "CompletedThrough": 0
+    },
+    {
+      "Token": {
+        "Definition": 3,
+        "Scope": "alliance",
+        "Owner": 4611686018427388941,
+        "Generation": 1,
+        "Cycle": 1,
+        "Phase": 4,
+        "FlowVersion": 0
+      },
+      "Version": 1,
+      "Logic": "operations-pending",
+      "Start": 1794628122681,
+      "OpenAt": 1794628122681,
+      "CloseAt": 1794628182681,
+      "Pending": true,
+      "Flow": "",
+      "FlowDue": 0,
+      "CompletedThrough": 0
+    }
+  ]
+}

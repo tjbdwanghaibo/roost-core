@@ -1,0 +1,143 @@
+// 仅用于验收的进程驱动：正式 bootstrap / service / Mod 原样运行。
+// 私有文件控制只调用公开的 Remote 所有权与 Nest Sender，不注册任何生产 HTTP/RPC 旁路。
+package main
+
+import (
+	"ACTIVITY_MODULE/game/activity"
+	syncsender "ACTIVITY_MODULE/game/handler/syncsender"
+	"ACTIVITY_MODULE/internal/bootstrap"
+	rpcworld "ACTIVITY_MODULE/internal/rpc/activity_world"
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+	_ "time/tzdata"
+)
+
+func main() {
+	activity.Register("operations-pending", activity.Hooks{
+		Eligible: func(owner entity.IThreadSafeEntity, event string) bool {
+			_, ok := owner.(activity.Owner)
+			return ok && event == "operations"
+		},
+		Enter: func(c activity.Context) (bool, error) {
+			return c.Snapshot.Token.Scope != "player" && (c.Snapshot.Token.Phase == activity.Initializing || c.Snapshot.Token.Phase == activity.Settling), nil
+		},
+	})
+	a, err := bootstrap.New()
+	if err == nil {
+		a.Mods(&probe{})
+		err = a.Execute()
+	}
+	if err != nil {
+		slog.Error("activity acceptance exit", "err", err)
+		os.Exit(1)
+	}
+}
+
+type probe struct {
+	registry *app.Registry
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+func (*probe) Name() app.ModName               { return "operations.probe" }
+func (*probe) DependsOn() []app.ModName        { return nil }
+func (*probe) Init(*viper.Viper) error         { return nil }
+func (p *probe) Provide(r *app.Registry) error { p.registry = r; return nil }
+func (p *probe) Start() error {
+	dir := os.Getenv("OPERATIONS_CONTROL_DIR")
+	if dir == "" {
+		return fmt.Errorf("private control directory required")
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(p.registry.Config(), &identity); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
+	p.done = make(chan struct{})
+	go func() {
+		defer close(p.done)
+		p.run(ctx, filepath.Join(dir, identity.ServerType+"-"+strconv.Itoa(int(identity.Sid))))
+	}()
+	return nil
+}
+func (p *probe) Stop() {
+	if p.cancel != nil {
+		p.cancel()
+		<-p.done
+	}
+}
+
+func (p *probe) run(ctx context.Context, path string) {
+	for {
+		raw, err := os.ReadFile(path + ".request")
+		if err == nil {
+			var command struct {
+				Op string
+				ID int64
+				To int32
+			}
+			err = json.Unmarshal(raw, &command)
+			var result any
+			if err == nil {
+				callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				switch command.Op {
+				case "transfer":
+					manager, ok := app.Lookup[entity.IRemoteEntityManager](p.registry, mods.ModRemoteEntity)
+					if !ok {
+						err = fmt.Errorf("Remote manager missing")
+					} else {
+						result, err = manager.TransferRemoteOwnership(callCtx, command.ID, command.To)
+					}
+				case "world-local-pulse":
+					service, ok := app.Lookup[rpcworld.WorldActivities](p.registry, rpcworld.CapabilityName)
+					if !ok {
+						err = fmt.Errorf("World authority missing")
+					} else {
+						result, err = service.Pulse(callCtx, command.ID, "", 0)
+					}
+				case "player-event":
+					client, ok := app.Lookup[nest.Client](p.registry, mods.ModNest)
+					if !ok {
+						err = fmt.Errorf("Nest missing")
+					} else {
+						result, err = syncsender.NewActivityEventSender(client).Sync_ActivityEvent(callCtx, command.ID, "operations", 0)
+					}
+				default:
+					err = fmt.Errorf("unknown probe operation")
+				}
+				cancel()
+			}
+			answer := map[string]any{"result": result, "pid": os.Getpid(), "error": ""}
+			if err != nil {
+				answer["error"] = err.Error()
+			}
+			raw, _ = json.Marshal(answer)
+			if err = os.Remove(path + ".request"); err != nil {
+				panic(err)
+			}
+			if err = os.WriteFile(path+".response.tmp", raw, 0600); err != nil {
+				panic(err)
+			}
+			if err = os.Rename(path+".response.tmp", path+".response"); err != nil {
+				panic(err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}

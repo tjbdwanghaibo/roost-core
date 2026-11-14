@@ -59,4 +59,5 @@
 - `roost module verify activity_alliance`：5 个场景（`./internal/rpc/activity_alliance`，`^TestAllianceActivity`）。
 - 场景是离线的：Nest、生成的 DAO 与组件、handler、Remote 准入检查是真实代码；Remote 所有权与提交是内存替身。
 - 覆盖：一期活动在权威联盟实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做；`created` 触发——没建成的联盟不激活，建盟（联盟自己的 `Found`，写秒）之后按恢复扫描的调用形态 `Pulse(target, "", 0)` 自动激活，开始时间等于建盟时间换成毫秒再加 `DelayMillis`，再扫不重置锚点，解散后不新激活。
-- 没有验证：恢复扫描在真实联盟服务进程里的行为、与真实联盟写入并发时的表现、真实的 Mongo / WAL / NATS、跨进程迁移与长时间运行。
+- 真实档：[scripts/test-activity-real.sh](../../scripts/test-activity-real.sh) 经正式联盟 Found 创建权威实体，活动 pending 初始化时通过 `alliance.transfer` 迁到另一进程；完整 Token/时间锚点不变。目标 SIGKILL 后沿用原 WAL 重启，先只读真实 Mongo 观察扫描推进到 Settling，再经 NATS 完成结算；终态水位为 1，旧阶段及已完成 Token 均被拒。与 World 权威和普通 Player 定时器分别核对，见 [报告](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
+- 该档使用精简正式配方，允许 Mongo 正常投影，不是仅 WAL 恢复；未验证与联盟写入的持续并发、真实奖励外部副作用、长时间运行、跨机或容量。

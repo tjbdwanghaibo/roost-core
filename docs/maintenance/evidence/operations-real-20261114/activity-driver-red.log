@@ -1,0 +1,43 @@
+=== RUN   TestOperationsActivityAuthorityMigration
+    activity_test.go:116: private Redis ready pid=43734 appendonly=yes appendfsync=always same_dir=/var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestOperationsActivityAuthorityMigration2090272229/001
+2026/11/14 11:45:36 INFO nats: connected url=nats://127.0.0.1:51722,nats://127.0.0.1:51723,nats://127.0.0.1:51724
+2026/11/14 11:45:36 INFO bus: subscribed subject=a5by6g9dns.srv.9100
+2026/11/14 11:45:36 INFO bus: subscribed subject=a5by6g9dns.svc.e2eclient.9100
+2026/11/14 11:45:36 INFO bus: subscribed subject=a5by6g9dns.svc.e2eclient.all
+2026/11/14 11:45:36 INFO bus: subscribed subject=a5by6g9dns.srv.all
+2026/11/14 11:45:36 INFO nats mod: started
+    harness_test.go:139: prefix a5by6g9dns, logs /Users/whb/roost/worktrees/v147-operations-real/artifacts/operations-real-20261114/activity-driver-red/processes/TestOperationsActivityAuthorityMigration
+    harness_test.go:424: started account (account --sid 1000) pid 43735
+    harness_test.go:424: started mail (mail --sid 1000) pid 43736
+    harness_test.go:424: started alliance-3000 (alliance --sid 3000) pid 43737
+    harness_test.go:424: started alliance-3001 (alliance --sid 3001) pid 43738
+    harness_test.go:424: started game-1000 (game --sid 1000) pid 43739
+    harness_test.go:424: started game-1001 (game --sid 1001) pid 43740
+    harness_test.go:424: started world-4100 (activity_world --sid 4100) pid 43743
+    harness_test.go:424: started world-4101 (activity_world --sid 4101) pid 43744
+    activity_test.go:173: before-migration snapshots=[{Token:{Definition:1 Scope:player Owner:102401029 Generation:1 Cycle:1 Phase:3 FlowVersion:0} Version:1 Logic:operations-pending Start:1794627939920 OpenAt:1794627939920 CloseAt:1794627999920 Pending:false Flow: FlowDue:0 CompletedThrough:0} {Token:{Definition:2 Scope:world Owner:4611686018427466773 Generation:1 Cycle:1 Phase:1 FlowVersion:0} Version:1 Logic:operations-pending Start:1794627940112 OpenAt:1794627940112 CloseAt:1794628000112 Pending:true Flow: FlowDue:0 CompletedThrough:0} {Token:{Definition:3 Scope:alliance Owner:4611686018427388941 Generation:1 Cycle:1 Phase:1 FlowVersion:0} Version:1 Logic:operations-pending Start:1794627940146 OpenAt:1794627940146 CloseAt:1794628000146 Pending:true Flow: FlowDue:0 CompletedThrough:0}] owners=map[4611686018427388941:{OwnerSid:3000 MarkerEpoch:1 RouteEpoch:1 Shared:false} 4611686018427466773:{OwnerSid:4100 MarkerEpoch:1 RouteEpoch:1 Shared:false}]
+    activity_test.go:180: old owner direct call rejected: servicerpc: not the owner, redirect to sid 4101: redirect: not the owner; redirect to the owner: remote_entity: entity 4611686018427466773 is owned by sid 4101
+    activity_test.go:195: after-migration snapshots=[{Token:{Definition:2 Scope:world Owner:4611686018427466773 Generation:1 Cycle:1 Phase:1 FlowVersion:0} Version:1 Logic:operations-pending Start:1794627940112 OpenAt:1794627940112 CloseAt:1794628000112 Pending:true Flow: FlowDue:0 CompletedThrough:0} {Token:{Definition:3 Scope:alliance Owner:4611686018427388941 Generation:1 Cycle:1 Phase:1 FlowVersion:0} Version:1 Logic:operations-pending Start:1794627940146 OpenAt:1794627940146 CloseAt:1794628000146 Pending:true Flow: FlowDue:0 CompletedThrough:0}] owners=map[4611686018427388941:{OwnerSid:3001 MarkerEpoch:2 RouteEpoch:2 Shared:false} 4611686018427466773:{OwnerSid:4101 MarkerEpoch:2 RouteEpoch:2 Shared:false}]
+    harness_test.go:477: stopped world-4101 with killed (signal: killed)
+    harness_test.go:424: started world-4101 (activity_world --sid 4101) pid 43745
+    harness_test.go:477: stopped alliance-3001 with killed (signal: killed)
+    harness_test.go:424: started alliance-3001 (alliance --sid 3001) pid 43759
+    harness_test.go:477: stopped game-1001 with killed (signal: killed)
+    harness_test.go:424: started game-1001 (game --sid 1001) pid 43782
+    activity_test.go:214: World background scan after migration and SIGKILL: not within 1m20s: phase=3 err=<nil>
+    harness_test.go:477: stopped game-1000 with interrupt (<nil>)
+    harness_test.go:477: stopped game-1001 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:477: stopped world-4100 with interrupt (<nil>)
+    harness_test.go:477: stopped world-4101 with interrupt (<nil>)
+    harness_test.go:477: stopped account with interrupt (<nil>)
+    harness_test.go:477: stopped mail with interrupt (<nil>)
+    harness_test.go:523: all processes stopped; 0 ERROR log lines in total
+2026/11/14 11:47:47 INFO nats: disconnected err=<nil>
+2026/11/14 11:47:47 INFO nats: connection closed
+2026/11/14 11:47:47 INFO nats mod: stopped
+--- FAIL: TestOperationsActivityAuthorityMigration (131.55s)
+FAIL
+FAIL	example.com/activity-accept/e2e	132.372s
+FAIL

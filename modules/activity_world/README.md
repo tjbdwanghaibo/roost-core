@@ -59,4 +59,5 @@
 - 场景是离线的：Nest、生成的 DAO 与组件、handler、Remote 准入检查是真实代码；Remote 所有权与提交是内存替身。
 - 场景装载自带的空 `activity` / `activity_scope` 表，不读工程的 `configs/data`：按“复用方式”加了自己的全服活动与逻辑号之后 `roost module verify` 照样通过（2026-11-14 换表核对：读工程表时“配置为空”“业务失败不留激活”两条变红）。
 - 覆盖：一期活动在权威实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做。
-- 没有验证：启动建档（`bootstrap`）与恢复扫描在真实进程里的行为、真实的 Mongo / WAL / NATS、跨进程迁移与长时间运行。
+- 真实档：[scripts/test-activity-real.sh](../../scripts/test-activity-real.sh) 在两个独立 World 服务上验证正式 scope 表启动建档、pending 初始化的完整 Token/时间锚点跨 sid 不变、旧 owner 直接调用被拒；目标 SIGKILL 后沿用原 WAL 重启，先只读 Mongo 观察恢复扫描推进到 Settling，再经 NATS 确认结束，旧阶段及已完成 Token 均被拒。删除恢复扫描调用的变异停在 Open。迁移前后与重启后的 Snapshot/所有权证据见 [报告](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
+- 该档使用精简正式配方，允许 Mongo 正常投影，不是仅 WAL 恢复；未验证真实奖励外部副作用、长时间运行、跨机或容量。完整 demo 的 Player DAO 顶层字段上限仍适用。

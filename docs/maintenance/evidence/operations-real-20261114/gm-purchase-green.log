@@ -1,0 +1,114 @@
+=== RUN   TestOperationsGMHTTPMailAndRehome
+    operations_test.go:33: private Redis ready pid=42562 appendonly=yes appendfsync=always same_dir=/var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestOperationsGMHTTPMailAndRehome3019847683/001
+2026/11/14 11:44:04 INFO nats: connected url=nats://127.0.0.1:51722,nats://127.0.0.1:51723,nats://127.0.0.1:51724
+2026/11/14 11:44:04 INFO bus: subscribed subject=a5as48g0e0.srv.9100
+2026/11/14 11:44:04 INFO bus: subscribed subject=a5as48g0e0.svc.e2eclient.9100
+2026/11/14 11:44:04 INFO bus: subscribed subject=a5as48g0e0.svc.e2eclient.all
+2026/11/14 11:44:04 INFO bus: subscribed subject=a5as48g0e0.srv.all
+2026/11/14 11:44:04 INFO nats mod: started
+    harness_test.go:139: prefix a5as48g0e0, logs /Users/whb/roost/worktrees/v147-operations-real/artifacts/operations-real-20261114/gm-purchase-final/processes/TestOperationsGMHTTPMailAndRehome
+    harness_test.go:424: started account (account --sid 1000) pid 42563
+    harness_test.go:424: started activity (activity --sid 1000) pid 42564
+    harness_test.go:424: started chat (chat --sid 1000) pid 42565
+    harness_test.go:424: started global (global --sid 1000) pid 42566
+    harness_test.go:424: started mail (mail --sid 1000) pid 42567
+    harness_test.go:424: started match (match --sid 1000) pid 42568
+    harness_test.go:424: started platform (platform --sid 1000) pid 42569
+    harness_test.go:424: started rank (rank --sid 1000) pid 42570
+    harness_test.go:424: started session (session --sid 1000) pid 42571
+    harness_test.go:424: started alliance-3000 (alliance --sid 3000) pid 42572
+    harness_test.go:424: started alliance-3001 (alliance --sid 3001) pid 42578
+    harness_test.go:424: started game-1000 (game --sid 1000) pid 42579
+    harness_test.go:424: started game-1001 (game --sid 1001) pid 42587
+    operations_test.go:62: PASS GM ops HTTP -> mail NATS -> TCP claim; same mail id across sid; final binding=1001, source absent, wallet=55; accepted checked separately from completion
+    harness_test.go:477: stopped game-1001 with interrupt (<nil>)
+    harness_test.go:477: stopped game-1000 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:477: stopped rank with interrupt (<nil>)
+    harness_test.go:477: stopped activity with interrupt (<nil>)
+    harness_test.go:477: stopped mail with interrupt (<nil>)
+    harness_test.go:477: stopped session with interrupt (<nil>)
+    harness_test.go:477: stopped global with interrupt (<nil>)
+    harness_test.go:477: stopped platform with interrupt (<nil>)
+    harness_test.go:477: stopped match with interrupt (<nil>)
+    harness_test.go:477: stopped account with interrupt (<nil>)
+    harness_test.go:477: stopped chat with interrupt (<nil>)
+    harness_test.go:523: all processes stopped; 0 ERROR log lines in total
+2026/11/14 11:44:10 INFO nats: disconnected err=<nil>
+2026/11/14 11:44:10 INFO nats: connection closed
+2026/11/14 11:44:10 INFO nats mod: stopped
+--- PASS: TestOperationsGMHTTPMailAndRehome (5.68s)
+=== RUN   TestOperationsPurchaseCrashAcrossSIDAndRedisRestart
+    operations_test.go:107: private Redis ready pid=42592 appendonly=yes appendfsync=always same_dir=/var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestOperationsPurchaseCrashAcrossSIDAndRedisRestart3452075/001
+2026/11/14 11:44:10 INFO nats: connected url=nats://127.0.0.1:51722,nats://127.0.0.1:51723,nats://127.0.0.1:51724
+2026/11/14 11:44:10 INFO bus: subscribed subject=a5auq5zfp4.srv.9100
+2026/11/14 11:44:10 INFO bus: subscribed subject=a5auq5zfp4.svc.e2eclient.9100
+2026/11/14 11:44:10 INFO bus: subscribed subject=a5auq5zfp4.svc.e2eclient.all
+2026/11/14 11:44:10 INFO bus: subscribed subject=a5auq5zfp4.srv.all
+2026/11/14 11:44:10 INFO nats mod: started
+    harness_test.go:139: prefix a5auq5zfp4, logs /Users/whb/roost/worktrees/v147-operations-real/artifacts/operations-real-20261114/gm-purchase-final/processes/TestOperationsPurchaseCrashAcrossSIDAndRedisRestart
+    harness_test.go:424: started account (account --sid 1000) pid 42593
+    harness_test.go:424: started activity (activity --sid 1000) pid 42594
+    harness_test.go:424: started chat (chat --sid 1000) pid 42595
+    harness_test.go:424: started global (global --sid 1000) pid 42596
+    harness_test.go:424: started mail (mail --sid 1000) pid 42597
+    harness_test.go:424: started match (match --sid 1000) pid 42598
+    harness_test.go:424: started platform (platform --sid 1000) pid 42599
+    harness_test.go:424: started rank (rank --sid 1000) pid 42600
+    harness_test.go:424: started session (session --sid 1000) pid 42601
+    harness_test.go:424: started alliance-3000 (alliance --sid 3000) pid 42602
+    harness_test.go:424: started alliance-3001 (alliance --sid 3001) pid 42603
+    harness_test.go:424: started game-1000 (game --sid 1000) pid 42604
+    harness_test.go:424: started game-1001 (game --sid 1001) pid 42605
+    harness_test.go:477: stopped game-1000 with killed (signal: killed)
+    harness_test.go:477: stopped game-1001 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:477: stopped session with interrupt (<nil>)
+    harness_test.go:477: stopped platform with interrupt (<nil>)
+    harness_test.go:477: stopped account with interrupt (<nil>)
+    harness_test.go:477: stopped mail with interrupt (<nil>)
+    harness_test.go:477: stopped match with interrupt (<nil>)
+    harness_test.go:477: stopped rank with interrupt (<nil>)
+    harness_test.go:477: stopped global with interrupt (<nil>)
+    harness_test.go:477: stopped chat with interrupt (<nil>)
+    harness_test.go:477: stopped activity with interrupt (<nil>)
+    harness_test.go:523: all processes stopped; 0 ERROR log lines in total
+    operations_test.go:162: private Redis ready pid=42614 appendonly=yes appendfsync=always same_dir=/var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestOperationsPurchaseCrashAcrossSIDAndRedisRestart3452075/001
+    harness_test.go:424: started account (account --sid 1000) pid 42615
+    harness_test.go:424: started activity (activity --sid 1000) pid 42616
+    harness_test.go:424: started chat (chat --sid 1000) pid 42617
+    harness_test.go:424: started global (global --sid 1000) pid 42618
+    harness_test.go:424: started mail (mail --sid 1000) pid 42619
+    harness_test.go:424: started match (match --sid 1000) pid 42620
+    harness_test.go:424: started platform (platform --sid 1000) pid 42621
+    harness_test.go:424: started rank (rank --sid 1000) pid 42622
+    harness_test.go:424: started session (session --sid 1000) pid 42623
+    harness_test.go:424: started alliance-3000 (alliance --sid 3000) pid 42624
+    harness_test.go:424: started alliance-3001 (alliance --sid 3001) pid 42625
+    harness_test.go:424: started game-1000 (game --sid 1000) pid 42626
+    harness_test.go:424: started game-1001 (game --sid 1001) pid 42640
+    harness_test.go:477: stopped game-1001 with killed (signal: killed)
+    harness_test.go:424: started game-1001 (game --sid 1001) pid 42641
+    operations_test.go:201: PASS purchase NATS callback / TCP Collect / Mongo+WAL; kill after strict before Ack, Redis SIGKILL AOF same-dir restart, sid1000->1001; platform terminal immutable; pending=0 next=acked=Applied=2 wallet=200
+    harness_test.go:477: stopped game-1000 with interrupt (<nil>)
+    harness_test.go:477: stopped game-1001 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:477: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:477: stopped session with interrupt (<nil>)
+    harness_test.go:477: stopped platform with interrupt (<nil>)
+    harness_test.go:477: stopped account with interrupt (<nil>)
+    harness_test.go:477: stopped mail with interrupt (<nil>)
+    harness_test.go:477: stopped match with interrupt (<nil>)
+    harness_test.go:477: stopped rank with interrupt (<nil>)
+    harness_test.go:477: stopped global with interrupt (<nil>)
+    harness_test.go:477: stopped chat with interrupt (<nil>)
+    harness_test.go:477: stopped activity with interrupt (<nil>)
+    harness_test.go:523: all processes stopped; 0 ERROR log lines in total
+2026/11/14 11:44:44 INFO nats: disconnected err=<nil>
+2026/11/14 11:44:44 INFO nats: connection closed
+2026/11/14 11:44:44 INFO nats mod: stopped
+--- PASS: TestOperationsPurchaseCrashAcrossSIDAndRedisRestart (33.94s)
+PASS
+ok  	example.com/operations-accept/e2e	41.528s
