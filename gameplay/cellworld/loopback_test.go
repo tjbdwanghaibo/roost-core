@@ -1,6 +1,8 @@
 package cellworld
 
 import (
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -94,6 +96,30 @@ func (l *loopback) Publish(subject string, data []byte) error {
 		}
 	}
 	return nil
+}
+
+// subjectTo 从收件主题里取出收件进程的 sid（roost.cellworld.<world>.<to>.…）；不是收件主题时为 0。
+func subjectTo(subject string) int32 {
+	parts := strings.Split(subject, ".")
+	if len(parts) < 5 || parts[0] != "roost" || parts[1] != "cellworld" {
+		return 0
+	}
+	to, err := strconv.ParseInt(parts[3], 10, 32)
+	if err != nil {
+		return 0
+	}
+	return int32(to)
+}
+
+// subscriptions 返回当前仍在的订阅数（全部主题合计）。
+func (l *loopback) subscriptions() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	total := 0
+	for _, list := range l.subs {
+		total += len(list)
+	}
+	return total
 }
 
 func (l *loopback) setFault(f func(subject string, m *wireMsg) (bool, bool, time.Duration)) {

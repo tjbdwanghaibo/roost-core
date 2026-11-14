@@ -10,7 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// 线上格式：每个进程（Cell 或 Base）一个收件主题，消息是 msgpack 编码的 wireMsg，Kind 决定哪个字段有值。
+// 线上格式：消息是 msgpack 编码的 wireMsg，Kind 决定哪个字段有值。收件主题按收件进程与来源分（v13，见 SubjectFromCell）。
 // wireMsg.V 是格式版本（WireVersion）：不是当前版本的消息按坏消息丢弃（未上线，不做跨版本兼容）。字段用短键控制体积。
 
 // WireVersion 是当前线上格式版本。v2：加版本号、witness 带每个对象的版本、写回消息。v3：EntityState 带心跳档位（Idle，D1）。
@@ -24,7 +24,9 @@ import (
 // v10：全局授权、进程 incarnation 与不可重用的交接身份。
 // v11：内部状态差值、Witness 成员增删、按 Base 合批及基线重置。
 // v12：基线重置只列出解不出的对象与观察者（replicaReset），不再整个 peer 退回全量。
-const WireVersion uint8 = 12
+// v13：收件主题按来源分（托管格的进程发件走 SubjectFromCell，只托管玩家的走 SubjectFromBase），接收方按来源 Cell 分订阅、
+// 并行解码（D13 C）；消息体不变，升版本让新旧进程混跑时明确拒收而不是靠主题对不上静默失联。
+const WireVersion uint8 = 13
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -467,9 +469,28 @@ func decodeMsg(data []byte) (*wireMsg, error) {
 	return &m, nil
 }
 
-// Subject 返回 sid 的收件主题。world 只允许字母、数字、'-' 与 '_'（由 validWorld 检查）。
-func Subject(world string, sid int32) string {
-	return "roost.cellworld." + world + "." + strconv.FormatInt(int64(sid), 10)
+// 收件主题（v13，D13 C）：
+//
+//	roost.cellworld.<world>.<to>.c.<from>   发件进程托管格 from（Cell 进程，含它同进程的 Base 发出的消息）
+//	roost.cellworld.<world>.<to>.b          发件进程只托管玩家（Base-only）
+//
+// 收件进程 to 对 Grid 里的每个格各订一个 SubjectFromCell(world, to, 格的 sid)，再订一个 SubjectFromBase(world, to)。
+// 两种主题不重叠，一条消息只落进一个订阅。每个订阅由传输按到达顺序串行回调（NATS：一个订阅一个投递 goroutine），
+// 所以同一来源 Cell 的消息按发布顺序处理，不同来源的订阅互不等待，Base 解码与展开随来源 Cell 数并行。
+// 主题只是路由，不是身份：收件时仍核对消息里的 From 与订阅的来源一致（Node.receiveFrom）。
+
+// SubjectFromCell 返回托管格的进程 from 发给进程 to 的主题。world 只允许字母、数字、'-' 与 '_'（由 validWorld 检查）。
+func SubjectFromCell(world string, to, from int32) string {
+	return inboxPrefix(world, to) + ".c." + strconv.FormatInt(int64(from), 10)
+}
+
+// SubjectFromBase 返回只托管玩家的进程发给进程 to 的主题（所有 Base-only 发件方共用一个）。
+func SubjectFromBase(world string, to int32) string {
+	return inboxPrefix(world, to) + ".b"
+}
+
+func inboxPrefix(world string, to int32) string {
+	return "roost.cellworld." + world + "." + strconv.FormatInt(int64(to), 10)
 }
 
 func validWorld(world string) bool {

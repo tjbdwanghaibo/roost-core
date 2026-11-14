@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -126,6 +127,66 @@ type replicaCache struct {
 	states     map[replicaKey]stateBaseline
 	views      map[replicaKey]viewBaseline
 	resetAfter map[resetKey]time.Time // 接收方：每个对象 / 观察者上一次请求重置后的静默期
+}
+
+// receivedReplicas 是接收端的内部复制缓存，按来源 Cell（发件格的 sid）分片（D13 C）。
+//
+// 并发契约：Node 对每个来源格各订一个收件主题（SubjectFromCell），传输对同一个订阅按到达顺序串行回调，不同订阅的
+// 回调并发。解码与按观察者展开（decodeReplica）读写的共享状态只有这里，保护方式：
+//   - peers 在 NewNode 里按 Grid 建好，之后只读，查找不加锁；不在表里的来源（不是格）发来的复制状态按坏消息丢弃，
+//     所以分片数有界、不会被乱写的 From 撑大。
+//   - 每个分片的 mu 保护它自己的 states / views / resetAfter；这些表的键都带 peer，不同分片没有共同的键，跨来源的
+//     解码不争同一把锁、不会互相覆盖基线。同一来源只有它自己的订阅回调在用这个分片，mu 只兜住传输不串行回调的情况，
+//     平时不争用。同一来源的解码按订阅回调的顺序推进基线，所以按序到达的增量不会因并行而变成缺口。
+//   - 容量上限仍是全部分片的总和（states + views 不超过 ReplicaCacheSize，resetAfter 另计同一上限），与分片前相同：
+//     各分片在自己的锁内把条目增减记进原子计数；解码结束、放开自己的锁之后发现超限，逐个分片加锁清空。任何时候至多
+//     持有一把分片锁，不会死锁。清空只丢可重建的基线：之后的增量报缺口、请求重置，周期全量兜底，与分片前“超限清空
+//     整个缓存”的语义相同。
+//
+// 接收路径上的其余共享状态：统计是原子量；Nest 派发、出站队列是并发安全的准入；mirror 自带锁；sentReplica 的 forget
+// 在它自己的锁内。跨来源的消息本来就没有顺序保证（传输契约：可能乱序），业务由版本与 epoch 核对。
+type receivedReplicas struct {
+	peers        map[int32]*replicaCache
+	size, resets atomic.Int64
+}
+
+func (r *receivedReplicas) init(peers []int32) {
+	r.peers = make(map[int32]*replicaCache, len(peers))
+	for _, sid := range peers {
+		c := &replicaCache{}
+		c.init()
+		r.peers[sid] = c
+	}
+}
+
+// peer 返回来源 sid 的分片；不是已知的来源格时为 nil。
+func (r *receivedReplicas) peer(sid int32) *replicaCache { return r.peers[sid] }
+
+// bound 在全部分片的基线条目达到 limit 时逐个清空。调用方不能持有任何分片锁。
+func (r *receivedReplicas) bound(limit int) {
+	if r.size.Load() < int64(limit) {
+		return
+	}
+	for _, c := range r.peers {
+		c.mu.Lock()
+		r.size.Add(-int64(len(c.states) + len(c.views)))
+		clear(c.states)
+		clear(c.views)
+		c.mu.Unlock()
+	}
+}
+
+// boundResets 与 bound 相同，管的是重置请求的静默期记录。调用方不能持有任何分片锁。
+func (r *receivedReplicas) boundResets(limit int) {
+	if r.resets.Load() < int64(limit) {
+		return
+	}
+	for _, c := range r.peers {
+		c.mu.Lock()
+		r.resets.Add(-int64(len(c.resetAfter)))
+		clear(c.resetAfter)
+		c.mu.Unlock()
+	}
 }
 
 // resetKey 标识接收方请求过重置的一个对象（view=false，kind 是消息种类）或一个观察者的成员表（view=true）。
@@ -358,10 +419,25 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 	if input.Kind != kindGhost && input.Kind != kindWitness {
 		return nil, errBadMessage
 	}
-	c := &n.receivedReplica
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.bound(n.cfg.ReplicaCacheSize)
+	r := &n.receivedReplica
+	c := r.peer(input.From)
+	if c == nil {
+		return nil, errBadMessage // 复制状态只由 Grid 里的格发出
+	}
+	r.bound(n.cfg.ReplicaCacheSize)
+	messages, err := func() ([]*wireMsg, error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		before := len(c.states) + len(c.views)
+		defer func() { r.size.Add(int64(len(c.states) + len(c.views) - before)) }()
+		return n.decodeReplicaLocked(c, input)
+	}()
+	r.bound(n.cfg.ReplicaCacheSize) // 放开分片锁之后再查总量：bound 要逐个分片加锁
+	return messages, err
+}
+
+// decodeReplicaLocked 是 decodeReplica 在来源分片 c 的锁内的部分。
+func (n *Node) decodeReplicaLocked(c *replicaCache, input *wireMsg) ([]*wireMsg, error) {
 	if len(input.Deltas) > n.cfg.ReplicaCacheSize || len(input.Witnesses) > n.cfg.WitnessBatch {
 		return nil, errBadMessage
 	}
@@ -483,7 +559,6 @@ func (n *Node) decodeReplica(input *wireMsg) ([]*wireMsg, error) {
 			}
 		}
 	}
-	c.bound(n.cfg.ReplicaCacheSize)
 	if len(gap.states)+len(gap.views) > 0 {
 		return messages, gap
 	}
@@ -517,12 +592,18 @@ func applyMembership(old, added, removed []int64) []int64 {
 // 修复到达之前它所在的后续消息还会报同样的缺口，不能每份都发请求；请求本身丢了，窗口过后再报时重发，周期全量兜底。
 // 返回是否发出了请求。
 func (n *Node) requestReplicaRepair(peer int32, gap *replicaGap, now time.Time) bool {
-	c := &n.receivedReplica
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.resetAfter) >= n.cfg.ReplicaCacheSize {
-		clear(c.resetAfter)
+	r := &n.receivedReplica
+	c := r.peer(peer)
+	if c == nil {
+		return false
 	}
+	r.boundResets(n.cfg.ReplicaCacheSize)
+	c.mu.Lock()
+	before := len(c.resetAfter)
+	defer func() {
+		r.resets.Add(int64(len(c.resetAfter) - before))
+		c.mu.Unlock()
+	}()
 	due := func(key resetKey) bool {
 		if now.Before(c.resetAfter[key]) {
 			return false

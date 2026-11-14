@@ -36,7 +36,7 @@ type GridConfig struct {
 	// 这样越界未交接的 Real 一定在目标格的 Ghost 范围里。
 	Hysteresis int64
 	// Owners 给每个格指定负责它的 Cell 进程 sid（非零），必须覆盖全部格；一个 sid 只能负责一个格
-	// （v1 每个 Cell 进程一个格，收件主题按 sid 区分）。
+	// （v1 每个 Cell 进程一个格；收件方按格的 sid 分来源订阅，见 SubjectFromCell）。
 	Owners map[CellID]int32
 }
 

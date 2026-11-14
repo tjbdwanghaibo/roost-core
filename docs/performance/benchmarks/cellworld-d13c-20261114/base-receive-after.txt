@@ -1,0 +1,42 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkBaseReceiveSources/sources_1-10         	   19047	    125596 ns/op	    127392 witness/s	  230813 B/op	     344 allocs/op
+BenchmarkBaseReceiveSources/sources_4-10         	    9468	    228307 ns/op	    280324 witness/s	  923223 B/op	    1376 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkBaseReceiveSources/sources_1-10         	   18927	    125550 ns/op	    127439 witness/s	  230813 B/op	     344 allocs/op
+BenchmarkBaseReceiveSources/sources_4-10         	   14191	    171168 ns/op	    373902 witness/s	  923221 B/op	    1376 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkBaseReceiveSources/sources_1-10         	   19344	    124003 ns/op	    129029 witness/s	  230813 B/op	     344 allocs/op
+BenchmarkBaseReceiveSources/sources_4-10         	   14124	    171463 ns/op	    373259 witness/s	  923222 B/op	    1376 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkBaseReceiveSources/sources_1-10         	   19245	    146019 ns/op	    109575 witness/s	  230813 B/op	     344 allocs/op
+BenchmarkBaseReceiveSources/sources_4-10         	   12628	    278319 ns/op	    229952 witness/s	  923222 B/op	    1376 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkBaseReceiveSources/sources_1-10         	   15464	    146072 ns/op	    109535 witness/s	  230813 B/op	     344 allocs/op
+BenchmarkBaseReceiveSources/sources_4-10         	   10000	    241921 ns/op	    264549 witness/s	  923225 B/op	    1376 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+cpu: Apple M5
+BenchmarkBaseReceiveSources/sources_1-10         	   11296	    197658 ns/op	     80948 witness/s	  230814 B/op	     344 allocs/op
+BenchmarkBaseReceiveSources/sources_4-10         	    7792	    289359 ns/op	    221178 witness/s	  923226 B/op	    1376 allocs/op
+PASS

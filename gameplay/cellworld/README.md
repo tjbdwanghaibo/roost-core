@@ -79,13 +79,15 @@ Player 死亡后重新登录不自动复活。复活规则由业务定义，不�
 
 ## 内部复制与出站
 
-内部协议为 MessagePack v12，与客户端 PB / EntitySync 分离。不兼容旧协议，升级先停旧节点；PlayerDao schema 5 同样须按当前 schema 重建或离线迁移，不能新旧节点混跑。
+内部协议为 MessagePack v13，与客户端 PB / EntitySync 分离。不兼容旧协议，升级先停旧节点；PlayerDao schema 5 同样须按当前 schema 重建或离线迁移，不能新旧节点混跑。
 
 Ghost / Witness 传全量或字段 mask 增量，零值变化也可表达；接收方严格匹配 BaseVersion。Witness 成员传 add/remove，按 Base 批量共享实体编码，默认最多 16 个观察者一批；Cell 按观察者所在的刷新区块（边长 2R）排序后合批，相邻观察者进同一条消息。定期全量自包含：每个观察者的成员表至少每 `ReplicaRefresh` 发一次全量并连带成员状态全量；同一区块的观察者按区块相位对齐刷新（`refreshDue`），被强制全量的对象在一条消息里只编一次。缺口只拒绝解不出的部分：增量对不上的对象从接收缓存删掉，引用它的视野不交付但成员表照常推进；成员表对不上的观察者不交付。接收方只请求发送方忘掉这些对象与观察者的基线（`replicaReset`），同一对象 / 观察者每个刷新窗口最多请求一次；一次丢包不再让整个 peer 退回全量。缓存有界、可丢弃；缓存不是权威。消息按完整观察者 / 实体拆分，不在任意字节处切断。
 
+收件主题按来源分（v13，D13 C）：托管格的进程发件走 `roost.cellworld.<world>.<to>.c.<from>`（`SubjectFromCell`），只托管玩家的进程走共用的 `roost.cellworld.<world>.<to>.b`（`SubjectFromBase`）。每个进程对 Grid 里的每个格各订一个来源主题、再订一个共用主题，Run 开始时一次订齐，`CloseIngress` 或 Run 结束时全部退掉；固定分区下格的集合不变，格换进程（同 sid 新 incarnation）主题不变，不用重订。传输对同一订阅按序串行回调、不同订阅并发（NATS 每个订阅一个投递 goroutine 与独立的待处理队列）：同一来源格的消息按发布顺序解码，增量不会因并行乱序变成缺口；不同来源格的 Ghost / Witness 解码与按观察者展开并行，一个慢来源不挡别的来源。展开读写的共享状态只有接收复制缓存，按来源格分片、各自一把锁（`receivedReplicas`），总量上限仍是全部来源合计；来源主题上 From 不是那一格、共用主题上 From 冒充格的消息按坏消息丢弃。同一来源格发给同一 Base 的消息仍在一个回调里串行，单个热点格的展开上限不变；`Ext` 处理器与 `PlayerEntity` 因此会被不同来源并发调用，必须并发安全。
+
 出站分为本地调度、控制网络、状态网络与销毁处理：慢网络或销毁不能卡住本地事实提交。控制消息有界重试，默认最多 3 次；耗尽计数并交给业务协议的重试 / 超时状态机。状态队列保存完整对象，按目标、种类和对象合并，真正发送时才计算增量；同版本删除优先，更新不改变 FIFO 排队位置。
 
-`Node.SendExt` 给其他模块复用可信内网通道。队列满返回 false；扩展协议自己处理丢包 / 重复 / 乱序。传输回调必须快速返回。NATS Subject 级 ACL 与部署网络隔离由运维配置，框架不把主题名当身份认证。
+`Node.SendExt` 给其他模块复用可信内网通道。队列满返回 false；扩展协议自己处理丢包 / 重复 / 乱序。传输回调必须快速返回。NATS Subject 级 ACL 与部署网络隔离由运维配置（主题形状见上），框架不把主题名当身份认证。
 
 停止顺序：关业务准入 → 停出生巡检 → `Drain(ctx)` 等事务、授权 I/O、销毁与出站完成 → 停 Node → 释放实体和 Mods。第一次超时保持依赖与待办责任，新 ctx 可重试；不能因已调用过 Stop 就报告成功。
 
@@ -96,7 +98,7 @@ Ghost / Witness 传全量或字段 mask 增量，零值变化也可表达；接�
 | `OwnershipWorkers / Queue / Timeout` | 8 / 1024 / 2s；只承接授权存储 I/O，不执行 Entity 业务 |
 | `ControlQueue / PublishAttempts` | 4096 / 3；传输错误重试有上限，协议仍负责最终收尾 |
 | `DestroyWorkers / DestroyQueue` | 4 / 1024；销毁与网络隔离 |
-| `ReplicaCacheSize / WitnessBatch` | 131072 / 16；缓存容量与同 Base 合批数 |
+| `ReplicaCacheSize / WitnessBatch` | 131072 / 16；缓存容量（接收端是全部来源格合计）与同 Base 合批数 |
 | `ReplicaRefresh / MaxWireBytes` | 250ms / 512KiB；自包含修复全量与消息硬上限 |
 | `MaxDeathReceipts` | 每 Player 20000 个目标高水位；满时拒绝，不能静默丢弃 |
 | `MaxViewEntities / MaxReals` | 256 / 50000；视野截断上限与单 Cell 准入上限，不是实测吞吐保证 |

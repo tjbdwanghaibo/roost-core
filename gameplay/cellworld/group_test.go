@@ -63,14 +63,7 @@ func startTeamWorld(t *testing.T, mod func(*NodeConfig)) *teamWorld {
 	return tw
 }
 
-func sidOfSubject(subject string) int32 {
-	for sid := int32(100); sid < 1000; sid++ {
-		if Subject("w", sid) == subject {
-			return sid
-		}
-	}
-	return 0
-}
+func sidOfSubject(subject string) int32 { return subjectTo(subject) }
 
 // baseMod 给 Base 进程打开队伍面板：每个玩家的组视野 ID 是 1<<53 | 玩家号；重读按测试里的“权威”在玩家自己的 Base 上
 // 投一笔改成员表的请求（异步：GroupResync 只做准入）。
