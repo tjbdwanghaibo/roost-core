@@ -3,7 +3,7 @@
 // roost-core 的 docs/framework/PLAYER-MIGRATION.md 一步步做；它只回答每一步之后
 // “能不能进入下一步”：
 //
-//	go run ./cmd/sidmove wal-drained -dir data/wal/dataengine/1000
+//	go run ./cmd/sidmove wal-drained -dir data/wal/{{GAME_SERVICE}}/1000
 //	    旧进程停机之后：WAL 里每条记录都已投影进 Mongo 并确认（checkpoint 停在最后一条记录）。
 //	    进程还在跑（writer.lock 被持有）、有未确认的尾部、WAL 损坏都以非零码退出。
 //	go run ./cmd/sidmove singleton -redis 127.0.0.1:6379 -key roost:{{PROJECT}}:singleton:{{GAME_SERVICE}}:1000
@@ -56,7 +56,7 @@ func main() {
 	switch os.Args[1] {
 	case "wal-drained":
 		fs := flag.NewFlagSet("wal-drained", flag.ExitOnError)
-		dir := fs.String("dir", "", "the stopped game process's WAL directory (dataengine.wal.dir; data/wal/dataengine/<sid> when unset)")
+		dir := fs.String("dir", "", "the stopped game process's WAL directory (dataengine.wal.dir; data/wal/{{GAME_SERVICE}}/<sid> when unset)")
 		_ = fs.Parse(os.Args[2:])
 		result, err = walDrained(ctx, *dir)
 	case "singleton":

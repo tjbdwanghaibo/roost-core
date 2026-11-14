@@ -32,7 +32,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	// works before the first local `go mod tidy`. Sync never overwrites it.
 	add("go.sum", "", false)
 	add(".gitattributes", renderGitattributes(), true)
-	// /data/wal/ 与 skippedProjectDirectory 一致：DataEngine 默认 WAL（data/wal/dataengine/<sid>，
+	// /data/wal/ 与 skippedProjectDirectory 一致：DataEngine 默认 WAL（data/wal/<服务>/<sid>，
 	// second-game.sh 对手写 dir 改出的 data/wal/dataengine-<sid>）是运行期输出。只忽略 .dev/ 的话，
 	// dev-run 之后 git add -A 会把 WAL 段提交进仓库。只忽略 WAL 目录，不忽略
 	// data/（configs/data 是要提交的生成物，根目录 data/ 下也可能有使用者自己的文件）。
@@ -990,7 +990,7 @@ func productionizeConfig(value string) string {
 var dataEngineWALSection = regexp.MustCompile(`(?m)^dataengine:\n(?:(?:  .*|#.*)?\n)*?  wal:\n`)
 
 // productionWALDir 给生产示例的 dataengine.wal 写上 dir: /var/lib/roost/wal。开发配置不写 dir，运行期取
-// data/wal/dataengine/<sid>，同一工作目录下不同 sid 的进程各用各的目录；生产每个实例一个容器 / Pod / systemd 单元，
+// data/wal/<服务>/<sid>，同一工作目录下不同服务、不同 sid 的进程各用各的目录；生产每个实例一个容器 / Pod / systemd 单元，
 // WAL 必须落在挂给这个实例独占的持久卷上（生成的 compose、k8s、docker run 都挂 /var/lib/roost/wal），所以显式写。
 // wal: 下已经有 dir 的（重复调用、使用者手改）不动。
 func productionWALDir(value string) string {

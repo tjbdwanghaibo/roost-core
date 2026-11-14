@@ -200,7 +200,7 @@ esac
 //	WAL dir     nestwal takes an exclusive lock on its directory and correctly
 //	            refuses the second process otherwise. The generated config
 //	            leaves dataengine.wal.dir unset, so the runtime default
-//	            data/wal/dataengine/<sid> already separates the two; the sed
+//	            data/wal/<service>/<sid> already separates the two; the sed
 //	            rule below only rewrites a dir: the application wrote by hand
 //
 // Each game process serves only the players bound to its sid (the role's
@@ -244,7 +244,7 @@ derive_config() {
   # its own etcd.advertise_addr (every process on one host advertises its own
   # address; roost config check / doctor refuse two services sharing one).
   # The WAL needs no override while dataengine.wal.dir is unset (the default is
-  # data/wal/dataengine/<sid>); a hand-written .../wal/dataengine is moved to
+  # data/wal/<service>/<sid>); a hand-written .../wal/dataengine is moved to
   # .../wal/dataengine-<sid>.
   sed \
     -e "s/^\(  *\)sid: .*/\1sid: $SID/" \

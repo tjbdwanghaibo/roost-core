@@ -570,7 +570,7 @@ func copyProject(ctx context.Context, src, dst string) error {
 // all use it, so the three agree on what the project is.
 //
 // `make dev-run` logs to .dev/ and DataEngine's default WAL
-// directory is data/wal/dataengine/<sid> (the generated config.<svc>.yaml
+// directory is data/wal/<service>/<sid> (the generated config.<svc>.yaml
 // leaves dataengine.wal.dir unset); while the
 // project ran, every generate / sync failed with "project inputs changed".
 // data/wal is matched by path: configs/data is generator output and must not

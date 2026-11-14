@@ -158,9 +158,9 @@ func TestGeneratorConstantsMatchTheDeclaredExamples(t *testing.T) {
 
 // 同一工作目录下用同一份生成的开发配置起两个 sid（make dev-run 起 sid 1000，再 bin/app game --sid 1001
 // --config configs/service/config.game.yaml），两个进程的 DataEngine 必须各有自己的 WAL 目录：nestwal 对目录加
-// 独占锁，共用一个目录的第二个进程启动即失败。dataengine.wal.dir 不写时运行期取 data/wal/dataengine/<sid>，
-// 按 sid 分开（两个真实进程的验证在 wiring/dataengine 的 TestDataEngineModWALDirectoryIsPerSid；生成器不得
-// import 运行时，那一半放不进这里）；所以生成的开发配置不能显式写不带 sid 的 data/wal/dataengine，否则会绕过这条缺省。
+// 独占锁，共用一个目录的第二个进程启动即失败。dataengine.wal.dir 不写时运行期取 data/wal/<服务>/<sid>，
+// 按服务与 sid 分开（两个真实进程的验证在 wiring/dataengine 的 TestDataEngineModWALDirectoryIsPerServiceAndSid；
+// 生成器不得 import 运行时，那一半放不进这里）；所以生成的开发配置不能显式写不带 sid 的目录，否则会绕过这条缺省。
 // 生产示例与 k8s Secret 示例写每个实例独占的持久卷 /var/lib/roost/wal。
 func TestGeneratedDevConfigGivesEachSidItsOwnWAL(t *testing.T) {
 	plan, err := renderProject(gameTemplateManifest(t))
@@ -184,7 +184,7 @@ func TestGeneratedDevConfigGivesEachSidItsOwnWAL(t *testing.T) {
 			t.Fatalf("%s has no dataengine.wal section; the game template changed shape", tc.rel)
 		}
 		if got := cfg.GetString("dataengine.wal.dir"); got != tc.want {
-			t.Errorf("%s: dataengine.wal.dir = %q, want %q (unset in development: the runtime default data/wal/dataengine/<sid> keeps two sids started from one config in one working directory apart)",
+			t.Errorf("%s: dataengine.wal.dir = %q, want %q (unset in development: the runtime default data/wal/<服务>/<sid> keeps two sids started from one config in one working directory apart)",
 				tc.rel, got, tc.want)
 		}
 	}

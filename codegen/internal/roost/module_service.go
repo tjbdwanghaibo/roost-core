@@ -178,8 +178,8 @@ func newFrameworkServices(before, after Manifest) []string {
 
 func moduleServiceConfig(name string) string { return "configs/service/config." + name + ".yaml" }
 
-// 新增业务服务与 game 在同一开发目录运行，且缺省 SID 都是 1000。
-// 配置随模块一起安装，给每个服务自己的 WAL 目录；生产示例仍使用每实例独占的持久卷。
+// 新增业务服务与 game 在同一开发目录运行，且缺省 SID 都是 1000。开发配置不写 dataengine.wal.dir：
+// 运行期缺省 data/wal/<服务>/<sid> 已按服务分目录；生产示例仍使用每实例独占的持久卷。
 func writeModuleServiceConfigs(root string, before, manifest Manifest, spec ModuleSpec) error {
 	for _, name := range slices.Sorted(maps.Keys(spec.Services)) {
 		if spec.Services[name].Existing {
@@ -191,9 +191,6 @@ func writeModuleServiceConfigs(root string, before, manifest Manifest, spec Modu
 			continue
 		}
 		body := renderServiceConfig(manifest, name, false)
-		if loc := dataEngineWALSection.FindStringIndex(body); loc != nil {
-			body = body[:loc[1]] + "    dir: data/wal/" + name + "\n" + body[loc[1]:]
-		}
 		if err := writeAtomic(filepath.Join(root, moduleServiceConfig(name)), []byte(body), 0o644); err != nil {
 			return err
 		}

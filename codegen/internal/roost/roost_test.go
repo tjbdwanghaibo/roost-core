@@ -1820,7 +1820,7 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if strings.Contains(production, "127.0.0.1") || strings.Contains(production, "file: true") {
 		t.Fatalf("development topology leaked into production config:\n%s", production)
 	}
-	// 开发配置不写 dataengine.wal.dir（运行期按 sid 分目录），生产示例由 productionizeConfig 补上持久卷；
+	// 开发配置不写 dataengine.wal.dir（运行期按服务与 sid 分目录 data/wal/<服务>/<sid>），生产示例由 productionizeConfig 补上持久卷；
 	// 再改写一次（add mod 追加段等）不能写出第二个 dir。
 	dev := renderServiceConfig(m, "game", false)
 	for _, line := range strings.Split(dev, "\n") {

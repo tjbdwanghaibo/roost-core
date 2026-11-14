@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ func (*modJetStream) Subscribe(context.Context, fnats.JetStreamConsumerConfig, f
 
 func TestDataEngineModReadsProjectionBatchByteLimit(t *testing.T) {
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.projection.batch_bytes", 2<<20)
 	cfg.Set("dataengine.projection.read_bytes", 8<<20)
@@ -65,6 +67,7 @@ func TestDataEngineModReadsProjectionBatchByteLimit(t *testing.T) {
 // 0 取 core 缺省；负数自 A4 ① 起由声明拒绝（以前静默取缺省）。
 func TestDataEngineModKeepsProjectionBatchByteDefaultForZero(t *testing.T) {
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.projection.batch_bytes", 0)
 	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
@@ -89,6 +92,7 @@ func TestEffectStreamDefaultsMatchTheDeclaration(t *testing.T) {
 
 func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.wal.dir", t.TempDir())
 	mongoClient := mongotest.NewClient()
@@ -120,58 +124,97 @@ func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	}
 }
 
-// 同一工作目录、同一份配置用 --sid 起两个进程：dataengine.wal.dir 不写时 WAL 取 data/wal/dataengine/<sid>，
-// 两个进程各用各的目录、都能启动；显式写了同一个目录时 nestwal 的目录锁拒绝第二个进程（启动即失败，不会两个
-// writer 共用一份 WAL）。生成的开发配置因此不写 dir（codegen 的 TestGeneratedDevConfigGivesEachSidItsOwnWAL）。
-// 两个真实进程：本测试进程按 sid 1000 起 Mod 并持有 WAL，再把测试二进制作为子进程在同一工作目录按 sid 1001 起。
-func TestDataEngineModWALDirectoryIsPerSid(t *testing.T) {
-	const childSid, childDir = "ROOST_TEST_WAL_CHILD_SID", "ROOST_TEST_WAL_CHILD_DIR"
+// 同一工作目录、同一份配置起两个带 DataEngine 的进程：dataengine.wal.dir 不写时 WAL 取 data/wal/<服务>/<sid>，
+// 同一服务不同 sid、同一 sid 不同服务（deploy/dev/run.sh 用同一个 SID 起全部服务）都各用各的目录、都能启动；
+// 显式写了同一个目录时 nestwal 的目录锁拒绝第二个进程（启动即失败，不会两个 writer 共用一份 WAL）。
+// 生成的开发配置因此不写 dir（codegen 的 TestGeneratedDevConfigGivesEachSidItsOwnWAL）。
+// 两个真实进程：本测试进程按 game/1000 起 Mod 并持有 WAL，再把测试二进制作为子进程在同一工作目录起第二个。
+func TestDataEngineModWALDirectoryIsPerServiceAndSid(t *testing.T) {
+	const childSid, childService, childDir = "ROOST_TEST_WAL_CHILD_SID", "ROOST_TEST_WAL_CHILD_SERVICE", "ROOST_TEST_WAL_CHILD_DIR"
 	if sid := os.Getenv(childSid); sid != "" {
 		value, err := strconv.Atoi(sid)
 		if err != nil {
 			t.Fatal(err)
 		}
-		mod, err := startWALTestMod(value, os.Getenv(childDir))
+		mod, err := startWALTestMod(os.Getenv(childService), value, os.Getenv(childDir))
 		if err != nil {
-			t.Fatalf("sid %d: DataEngine Start: %v", value, err)
+			t.Fatalf("%s/%d: DataEngine Start: %v", os.Getenv(childService), value, err)
 		}
 		mod.Stop()
 		return
 	}
 	for _, tc := range []struct {
-		name, dir   string
-		secondStart bool
+		name, service string
+		sid           int
+		dir           string
+		secondStart   bool
 	}{
-		{"dir unset: per-sid default", "", true},
-		{"one explicit dir for both sids", "data/wal/dataengine", false},
+		{"dir unset: same service, another sid", "game", 1001, "", true},
+		{"dir unset: same sid, another service", "alliance", 1000, "", true},
+		{"one explicit dir for both sids", "game", 1001, "data/wal/dataengine", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
-			first, err := startWALTestMod(1000, tc.dir)
+			first, err := startWALTestMod("game", 1000, tc.dir)
 			if err != nil {
-				t.Fatalf("sid 1000: DataEngine Start: %v", err)
+				t.Fatalf("game/1000: DataEngine Start: %v", err)
 			}
 			defer first.Stop()
-			child := exec.Command(os.Args[0], "-test.run=^TestDataEngineModWALDirectoryIsPerSid$", "-test.count=1")
-			child.Env = append(os.Environ(), childSid+"=1001", childDir+"="+tc.dir)
+			child := exec.Command(os.Args[0], "-test.run=^TestDataEngineModWALDirectoryIsPerServiceAndSid$", "-test.count=1")
+			child.Env = append(os.Environ(), childSid+"="+strconv.Itoa(tc.sid), childService+"="+tc.service, childDir+"="+tc.dir)
 			out, err := child.CombinedOutput()
 			switch {
 			case tc.secondStart && err != nil:
-				t.Fatalf("sid 1001 could not start beside sid 1000 in one working directory (dataengine.wal.dir %q): %v\n%s", tc.dir, err, out)
+				t.Fatalf("%s/%d could not start beside game/1000 in one working directory (dataengine.wal.dir %q): %v\n%s", tc.service, tc.sid, tc.dir, err, out)
 			case !tc.secondStart && err == nil:
-				t.Fatalf("sid 1001 started on the WAL directory %q sid 1000 holds; the directory lock did not refuse it", tc.dir)
+				t.Fatalf("%s/%d started on the WAL directory %q game/1000 holds; the directory lock did not refuse it", tc.service, tc.sid, tc.dir)
 			case !tc.secondStart && !strings.Contains(string(out), "nestwal: directory is already locked"):
-				t.Fatalf("sid 1001 on a shared WAL directory failed for another reason: %v\n%s", err, out)
+				t.Fatalf("%s/%d on a shared WAL directory failed for another reason: %v\n%s", tc.service, tc.sid, err, out)
 			}
 		})
 	}
 }
 
+// 运维工具（sidmove、sidmerge）经 WALDir 取一个已停进程的 WAL 目录，与 Mod 同一条规则：缺省按服务与 sid 分，
+// 两个同 sid 的服务目录不同；不知道服务（配置里没有 server_type）又没写 dir 时报错，不猜一个目录。
+func TestWALDirDefaultIsPerServiceAndSid(t *testing.T) {
+	dir := func(service string, sid int32) string {
+		t.Helper()
+		cfg := viper.New()
+		cfg.Set("sid", 1)
+		if service != "" {
+			cfg.Set("server_type", service)
+		}
+		got, err := WALDir(cfg, sid)
+		if err != nil {
+			t.Fatalf("%s/%d: %v", service, sid, err)
+		}
+		return got
+	}
+	game, alliance := dir("game", 1000), dir("alliance", 1000)
+	if game == alliance {
+		t.Fatalf("game and alliance with sid 1000 share the default WAL directory %q", game)
+	}
+	if want := filepath.Join("data", "wal", "game", "1000"); game != want {
+		t.Fatalf("game/1000 default WAL directory = %q, want %q", game, want)
+	}
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	if got, err := WALDir(cfg, 0); err == nil {
+		t.Fatalf("no server_type and no dataengine.wal.dir resolved to %q, want an error", got)
+	}
+	cfg.Set("dataengine.wal.dir", "/var/lib/roost/wal")
+	if got, err := WALDir(cfg, 0); err != nil || got != "/var/lib/roost/wal" {
+		t.Fatalf("explicit dir: %q, %v", got, err)
+	}
+}
+
 // startWALTestMod 起真实的 DataEngine Mod（Init、Provide、Start；Start 打开 WAL、对目录加锁），dir 为空时不写
 // dataengine.wal.dir。Mongo 与 JetStream 是进程内替身。
-func startWALTestMod(sid int, dir string) (*Mod, error) {
+func startWALTestMod(service string, sid int, dir string) (*Mod, error) {
 	cfg := viper.New()
 	cfg.Set("persistence.engine", "dataengine")
+	cfg.Set("server_type", service)
 	cfg.Set("sid", sid)
 	if dir != "" {
 		cfg.Set("dataengine.wal.dir", dir)
@@ -198,6 +241,7 @@ func startWALTestMod(sid int, dir string) (*Mod, error) {
 
 func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.projection.checkpoint_records", 32)
 	cfg.Set("dataengine.projection.checkpoint_interval", "10ms")
@@ -228,6 +272,7 @@ func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
 func TestDataEngineProjectionWorkerConfig(t *testing.T) {
 	for _, value := range []int{-1, 0, 1, 8, 64, 65} {
 		cfg := viper.New()
+		cfg.Set("server_type", "game")
 		cfg.Set("dataengine.projection.workers", value)
 		mod := NewMod()
 		err := mod.Init(cfg)
@@ -249,6 +294,7 @@ func TestDataEngineProjectionEffectOrderConfig(t *testing.T) {
 		ok    bool
 	}{{nil, engine.EffectOrderEntity, true}, {"wal", engine.EffectOrderWAL, true}, {"entity", engine.EffectOrderEntity, true}, {"per_entity", "", false}} {
 		cfg := viper.New()
+		cfg.Set("server_type", "game")
 		if tc.value != nil {
 			cfg.Set("dataengine.projection.effect_order", tc.value)
 		}
@@ -428,6 +474,7 @@ func TestModRegistersEntityUnloadAdminCommand(t *testing.T) {
 // 才创建的 Projector，Nest 绑定前（启动恢复阶段）就地执行；重载回调在 Runtime 启动后才能注册。
 func TestModForwardsNestLocalExecutorAndReloadHook(t *testing.T) {
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.wal.dir", t.TempDir())
 	registry := app.NewRegistry(cfg)
@@ -493,6 +540,7 @@ func (remoteStoreStub) ApplyRemoteCommitsInTransaction(context.Context, []entity
 func newModConfig(t *testing.T) *viper.Viper {
 	t.Helper()
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.wal.dir", t.TempDir())
 	return cfg
@@ -614,6 +662,7 @@ func TestTransactionReceiptRetentionExceedsWALWindow(t *testing.T) {
 	for _, ttl := range []string{"1h", "24h", "24h500ms"} {
 		t.Run(ttl, func(t *testing.T) {
 			cfg := viper.New()
+			cfg.Set("server_type", "game")
 			cfg.Set("persistence.engine", "dataengine")
 			cfg.Set("dataengine.transaction_receipt_ttl", ttl)
 			if err := NewMod().Init(cfg); err == nil || !strings.Contains(err.Error(), "transaction_receipt_ttl") {
@@ -623,6 +672,7 @@ func TestTransactionReceiptRetentionExceedsWALWindow(t *testing.T) {
 	}
 	for _, ttl := range []string{"24h1s", "720h"} {
 		cfg := viper.New()
+		cfg.Set("server_type", "game")
 		cfg.Set("persistence.engine", "dataengine")
 		cfg.Set("dataengine.transaction_receipt_ttl", ttl)
 		if err := NewMod().Init(cfg); err != nil {
@@ -638,6 +688,7 @@ func TestDataEngineStartupTimeoutDefaultOutlastsALeftoverTransaction(t *testing.
 	const requiredTransactionLifetime = 20 * time.Second // SAGA.md 的部署要求
 	worstReclaim := requiredTransactionLifetime * 3 / 2
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	mod := NewMod()
 	if err := mod.Init(cfg); err != nil {
@@ -658,6 +709,7 @@ func TestDataEngineStartupTimeoutDefaultOutlastsALeftoverTransaction(t *testing.
 // dataengine.shutdown_timeout 通过 App 的停机预算接口生效：App 的 StopWithContext 路径按声明值给截止时间（总时长足够时）。
 func TestDataEngineModDeclaresShutdownTimeoutAsStopBudget(t *testing.T) {
 	cfg := viper.New()
+	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
 	if err := mod.Init(cfg); err != nil {
@@ -697,6 +749,7 @@ func TestDataEngineModDerivesPipelinedSettingsFromSagaNativeSteps(t *testing.T) 
 	initWith := func(t *testing.T, keys map[string]any) (engine.PipelinedRuntimeConfig, []corenest.NestOption, error) {
 		t.Helper()
 		cfg := viper.New()
+		cfg.Set("server_type", "game")
 		cfg.Set("persistence.engine", "dataengine")
 		for key, value := range keys {
 			cfg.Set(key, value)
