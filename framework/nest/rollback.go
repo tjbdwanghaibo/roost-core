@@ -1225,7 +1225,8 @@ func (memoryHandlerCreates) BeginCreatedEntityBuild() func(map[string]entity.Dao
 }
 
 // CaptureEntities 把实体纳入本事务（按 GUId 去重）：登记提交参与者，按回滚策略为实体与它的 DAO 登记快照或
-// tracker 恢复。Remote 托管实体不登记本地提交参与者；它们只能在 memory 事务或带 Remote 批次的消息中持久写。
+// tracker 恢复。Remote 托管实体不登记本地提交参与者；它们只能在 memory 事务中，或在当前消息的 Remote 批次
+// 包含它时持久写（remoteBatchCovers）。
 func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 	if tx == nil {
 		return nil
@@ -1243,9 +1244,8 @@ func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 		remoteManaged := entity.IsEntityKindRemoteManaged(e.GetEntityKind())
 		if remoteManaged {
 			tx.remoteWrite = true
-			msg := currentNestDispatchMsg()
-			if tx.durability != DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
-				return fmt.Errorf("%w: entity=%d kind=%d", ErrDurableRemoteWriteUnsupported, e.ID(), e.GetEntityKind())
+			if tx.durability != DurabilityMemory && !remoteBatchCovers(currentNestDispatchMsg(), e.ID()) {
+				return fmt.Errorf("%w: entity=%d kind=%d is not declared in the Nest message's Remote write batch", ErrDurableRemoteWriteUnsupported, e.ID(), e.GetEntityKind())
 			}
 		}
 		if participant, ok := e.(CommitParticipant); ok && !remoteManaged {

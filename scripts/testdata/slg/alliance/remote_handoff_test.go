@@ -33,12 +33,19 @@ func TestSLGAllianceRemoteDelivery(t *testing.T) {
 		if !found || lease.OwnerSid != 2000 || !lease.Shared {
 			t.Fatal("initial shared owner missing", lease)
 		}
+		// 共享模式下每个进程都能写（REMOTE_ENTITY“多写者：本地副本与权威”），转移只换 owner、不撤销其他写者的写许可，旧节点
+		// 照样能写。要让转移把旧节点挡在外面，先退出共享回到独占，再转给 2001（独占转移把旧实例置为 Fenced）。
+		exclusive, e := first.manager.LeaveRemoteSharedMode(ctx, first.id)
+		check(t, e)
+		if exclusive.OwnerSid != 2000 || exclusive.Shared {
+			t.Fatal("leaving shared mode did not return an exclusive lease for 2000", exclusive)
+		}
 		next, e := first.manager.TransferRemoteOwnership(ctx, first.id, 2001)
 		check(t, e)
-		if next.OwnerSid != 2001 || next.MarkerEpoch <= lease.MarkerEpoch || next.RouteEpoch <= lease.RouteEpoch {
-			t.Fatal("ownership generations did not advance", lease, next)
+		if next.OwnerSid != 2001 || next.Shared || next.MarkerEpoch <= exclusive.MarkerEpoch || next.RouteEpoch <= exclusive.RouteEpoch {
+			t.Fatal("ownership generations did not advance", lease, exclusive, next)
 		}
-		// 转移后旧节点仍活着；即使传相同成员撤权，也不能绕过 Remote 所有权准入。
+		// 独占转移后旧节点仍活着；即使传相同成员撤权，也不能绕过 Remote 所有权准入。
 		if e := original.revoke(ctx, "alice"); e == nil {
 			t.Fatal("old owner kept writing after transfer")
 		} else {

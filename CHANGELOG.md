@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+- **测试：独占模式 Remote 心跳在转移时的真实 Mongo 故障注入**（gameplay/movement，2026-11-14，KNOWN-LIMITS“独占模式 Remote 心跳的真实依赖故障注入”）：新增 `TestRealRemoteExclusiveTransferDuringAMongoFault`（`-tags integration`，要 toxiproxy）。旧 owner 的 Mongo 经本用例自建的代理直连主节点，三种故障时刻：转移前断开（确定未改、旧 owner 照常推进）、CAS 发出时断开（结果未知，旧实例冻结在 Recovering、零推进，恢复后解冻）、CAS 生效而回程超时（新 owner 立刻能写，旧实例冻结、恢复后被 fence）；都断言新 owner 拥有之后旧 owner 零推进。`realRemoteManagers` 抽出按 sid 换 Mongo 客户端与配置的 `realRemoteManagersWith`。变异“结果未知按未改处理”变红。独占模式不经 Redis，只注入 Mongo 故障。没有行为改动。
+
+- **测试夹具：SLG 联盟 Remote 交接先退出共享再转移**（scripts/testdata/slg，2026-11-14）：`TestSLGAllianceRemoteDelivery` 在共享模式下直接 `TransferRemoteOwnership`，期望旧 owner 写入被拒；按 REMOTE_ENTITY“多写者：本地副本与权威”，共享模式下每个进程都能写，转移不撤销其他写者，2026-11-04 起 `Fenced` 的旧实例由写准入从权威重载后照常写，所以 20/20 失败（`old owner kept writing after transfer`）。夹具改为先 `LeaveRemoteSharedMode` 回到独占、再转给 2001（独占转移把旧实例 fence），断言改为退出共享与转移后都独占、代际前进。只改夹具，没有框架行为改动。修后私有隔离环境 `ROOST_SLG_REAL=1 scripts/test-slg-generated.sh` 全部通过；旧夹具同环境复现红。
+
+- **测试：LevelComponent 持久模式的真实 Mongo / WAL 进程崩溃恢复**（gameplay/level，2026-11-14，KNOWN-LIMITS“LevelComponent”）：新增 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`（`-tags integration`）：写子进程（正式 DataEngine Runtime + Nest，waves 定义）推进到第二波后拦住投影、再提交一笔只在 WAL 里的击杀，被 SIGKILL；恢复子进程回放 WAL，冷加载出的组件状态与崩溃前最后一笔提交后一致，随后结算并关闭。变异 2 条（恢复时丢 WAL、恢复时丢计时器）均变红。没有行为改动。
+
+- **测试：共享模式两个真实进程交替写同一 Remote 实体**（scripts/testdata/remoteflow，2026-11-14，KNOWN-LIMITS“多写者本地副本”）：新增 `TestGeneratedRemoteSharedEntityTwoWriterProcesses`，两个子进程（sid 1000 / 1001，各自正式装配）经 stdin 命令交替 8 笔写：每笔写后的本地值是此前全部写的累计（写准入先按权威换掉落后的本地副本），Mongo 权威版本 8、终值为各笔之和。变异“不换落后副本”时第三笔写版本冲突、用例红。没有行为改动。
+
+- **测试：常驻实体的刷新与换服中止后的载回补真实副本集用例**（framework/dataengine/engine，2026-11-14，KNOWN-LIMITS“常驻的刷新与载回只有替身存储的用例”）：新增 `TestRealMongoResidentEntityRefreshAndReloadAfterAbortedHandOff`（`-tags integration`），正式 Nest + 文件 WAL + 后台投影 + 真实 Mongo 副本集：运维卸载被拒、人工修库后 `RefreshEntity` 换成库里的状态并接着写、`HandOffEntity` 后另一个写者推进文档、`Release` 立刻载回那个版本（不等第一次访问）并接着写，投影器不 fence。真实 Mongo 用例的装配抽成 `newRealMongoUnloadFixture`，与 `TestRealMongoEntityHandOffThenAnotherWriterThenRelease` 共用。变异 2 条（Release 不载回、Refresh 不载回）均变红。没有行为改动。
+
+- **修复：handler 里新建未声明的 Remote 托管实体被本地投影写成普通文档**（framework/nest，2026-11-14，KNOWN-LIMITS“Remote 托管 kind 的‘新建不改字段’”的 in_handler 用例发现）：消息声明了另一个 Remote 实体（所以带 Remote 批次）时，handler 里新建一个没声明的 Remote 托管实体，`CaptureEntities` 只看“消息带不带批次”，新实体的 DAO 没被批次认领，由本地投影以 `{_version,_last_tx,_schema,value}` 写进 `remote_*` 集合，没有 Remote 信封与所有权，回复成功。现在判据是“本消息的批次包含这个实体”（`remoteBatchCovers`，与 Remote 删除准入同一处），不在批次里时返回 `nest.ErrDurableRemoteWriteUnsupported`、撤销发布、整条事务回滚（与 `Cast` 拒绝未声明 Remote 目标同一结论，契约见 REMOTE_ENTITY“handler 内只能持久写本消息声明的 Remote 托管实体”）。**行为变化**：原来能“成功”的这种写法现在失败；Remote 托管实体要由以它为声明目标的消息写，或在 Nest 之外新建。
+  - **先红后绿**：nest `TestCreateInHandlerRefusesARemoteEntityTheMessageDidNotDeclare` 修前新建返回 nil（两种子用例都红）；变异 3 条（判据恒假、恒真、去掉捕获失败记录）均变红。真实依赖 `scripts/test-remote-generated.sh`（共享隔离 Mongo / Redis / NATS）修前 `in_handler` 红、修后全套 `^TestGeneratedRemote` 通过。验证：nest、remoteentity、dataengine、entity `-race` 整包。
+
 - **测试：`TestInterestShrinksAFullSessionToTheNearest/async` 偶发失败已定位为用例的时序假设**（framework/sync/entitysync/policy，2026-11-14）：异步模式的应用线程在第一条事实到达时就走第一步，可能只取走用例还在逐个 `Show` 的前半段；前半段先结算、Manager 按它暂缓，收紧时按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，行为不变）。用例的 `flush` 在结算前先把已登记的事实全部应用（`stepApplier`，与 `flushInterest` 相同）。修前 CPU 满载（10 核上 16 个 `yes`）下 `-race -count=500` 定向失败 36 次；修后 8 个 `yes` 500 次、16 个 `yes` 1000 次、8 个 `yes` + `GOMAXPROCS=2` 500 次全部通过。没有框架行为改动。
 
 - **CellWorld witness 按区块合批、对齐全量刷新相位；复制缺口按对象 / 观察者修复**（cellworld，2026-11-14）：

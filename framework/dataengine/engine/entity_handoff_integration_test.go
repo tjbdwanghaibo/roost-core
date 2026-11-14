@@ -127,7 +127,10 @@ func TestRealMongoUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocu
 // 整条流程，真实 Mongo、真实文件 WAL、后台投影循环、正式 Nest：交出返回时本进程的写入都在库里且已被 checkpoint 确认；
 // 之后写入被拒；另一个写者推进文档，本进程的投影器不受影响（没有可重放的记录，不 fatal）；Release 之后冷加载读到
 // 另一个写者的版本，在它之上继续写。
-func TestRealMongoEntityHandOffThenAnotherWriterThenRelease(t *testing.T) {
+// newRealMongoUnloadFixture 是 newUnloadFixtureOfKind 的真实副本集版：一次性库里 level=1、_version=4，正式 Nest、
+// 文件 WAL、后台投影循环与共享冷加载；实体还没有加载。返回 fixture、DAO 集合与 WAL。
+func newRealMongoUnloadFixture(t *testing.T, uniqueID int64, kind entity.EntityKind) (*unloadFixture, fmongo.ICollection, *nestwal.WAL) {
+	t.Helper()
 	ensureUnloadKinds()
 	ctx, client, database := isolatedRealMongo(t)
 	// unloadHeroDAO 的逻辑库是 "game"：映射到一次性物理库，不碰共享的 game 库。
@@ -144,7 +147,7 @@ func TestRealMongoEntityHandOffThenAnotherWriterThenRelease(t *testing.T) {
 	if err := store.EnsureInfrastructure(ctx); err != nil {
 		t.Fatal(err)
 	}
-	id, err := entity.BuildEntityID(9301, unloadTestKind)
+	id, err := entity.BuildEntityID(uniqueID, kind)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +183,12 @@ func TestRealMongoEntityHandOffThenAnotherWriterThenRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.scheduler.Shutdown(context.Background()) })
+	return f, heroes, wal
+}
 
+func TestRealMongoEntityHandOffThenAnotherWriterThenRelease(t *testing.T) {
+	f, heroes, wal := newRealMongoUnloadFixture(t, 9301, unloadTestKind)
+	ctx, id, projector := f.ctx, f.id, f.projector
 	for range 3 {
 		if err := f.levelUpRequest(); err != nil {
 			t.Fatal(err)
@@ -234,5 +242,105 @@ func TestRealMongoEntityHandOffThenAnotherWriterThenRelease(t *testing.T) {
 	}
 	if err := projector.fatal(); err != nil {
 		t.Fatalf("the projector fenced: %v", err)
+	}
+}
+
+// 常驻实体（lifetime=resident）的强制刷新与换服中止后的载回，在真实副本集上走一遍（KNOWN-LIMITS“常驻的刷新与载回只有
+// 替身存储的用例”；替身版是 TestResidentEntityUnloadIsRefusedAndForceRefreshesIt、TestResidentEntityIsHandedOffAndReloadedOnRelease）：
+//   - 运维卸载被拒（entity.ErrEntityResident），实例不动；
+//   - 库里的文档被人工修过之后 RefreshEntity：新实例就是库里的状态，之后的写从那个版本接着写；
+//   - HandOffEntity 交出后实体不在内存、写被拒；交出期间另一个写者推进了文档；Release（换服中止）立刻把它载回内存
+//     （不等第一次访问），载回的就是另一个写者的版本，之后的写接着写、投影器不 fence。
+func TestRealMongoResidentEntityRefreshAndReloadAfterAbortedHandOff(t *testing.T) {
+	f, heroes, wal := newRealMongoUnloadFixture(t, 9331, unloadResidentKind)
+	ctx, id, projector := f.ctx, f.id, f.projector
+	if _, err := f.access.Get(ctx, id, entity.EntityCategoryNone); err != nil || f.manager.Get(id) == nil {
+		t.Fatalf("initial load: %v", err)
+	}
+	for range 2 {
+		if err := f.levelUpRequest(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := projector.WaitEntityProjection(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRealHero(t, ctx, heroes, id); got.Version != 6 || got.Level != 3 {
+		t.Fatalf("stored after two writes = %+v, want level 3 at version 6", got)
+	}
+	before := f.manager.Get(id)
+	if got := receiveUnload(t, f.unloadAsync(5*time.Second)); !errors.Is(got.err, entity.ErrEntityResident) || f.manager.Get(id) != before {
+		t.Fatalf("UnloadEntity on a resident entity = %+v, %v; same instance kept: %v; want entity.ErrEntityResident", got.result, got.err, f.manager.Get(id) == before)
+	}
+
+	// 人工修库：版本 6 → 7、level 50。强制刷新把内存换成库里的状态。
+	if result, err := heroes.UpdateOne(ctx, bson.M{"_id": id, "_version": uint64(6)},
+		bson.M{"$set": bson.M{"_version": uint64(7), "_last_tx": "operator-fix", "level": int32(50)}}); err != nil || result.MatchedCount != 1 {
+		t.Fatalf("operator fix: %+v, %v", result, err)
+	}
+	refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	refreshed, err := f.runtime.RefreshEntity(refreshCtx, id)
+	if err != nil || !refreshed.Reloaded {
+		t.Fatalf("RefreshEntity = %+v, %v; want the entity reloaded", refreshed, err)
+	}
+	after := f.manager.Get(id)
+	if after == nil || after == before {
+		t.Fatalf("after RefreshEntity loaded=%v new instance=%v", after != nil, after != before)
+	}
+	if level, version, ok := f.heroState(); !ok || level != 50 || version != 7 {
+		t.Fatalf("refreshed instance level=%d version=%d loaded=%v, want the operator's 50 at version 7", level, version, ok)
+	}
+	if err := f.levelUpRequest(); err != nil {
+		t.Fatalf("write after the refresh: %v", err)
+	}
+	if err := projector.WaitEntityProjection(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRealHero(t, ctx, heroes, id); got.Version != 8 || got.Level != 51 {
+		t.Fatalf("stored after the write that followed the refresh = %+v, want level 51 at version 8", got)
+	}
+
+	// 换服：交出后不在内存、写被拒；目标服写到版本 9；换服中止，Release 立刻载回目标服写下的状态。
+	handOff, err := f.runtime.HandOffEntity(refreshCtx, id)
+	if err != nil || handOff == nil || !handOff.Resident || !handOff.Unloaded {
+		t.Fatalf("HandOffEntity on a resident entity = %+v, %v; want it handed off and unloaded", handOff, err)
+	}
+	if f.manager.Get(id) != nil {
+		t.Fatal("the resident entity is still in memory after the hand-off")
+	}
+	if pending, err := wal.HasUnacknowledgedRecords(ctx); err != nil || pending {
+		t.Fatalf("WAL still has unacknowledged records after the hand-off: %v, %v", pending, err)
+	}
+	if err := f.levelUpRequest(); !refusedAsHandedOff(err) {
+		t.Fatalf("write after the hand-off = %v, want ErrEntityHandedOff", err)
+	}
+	if result, err := heroes.UpdateOne(ctx, bson.M{"_id": id, "_version": uint64(8)},
+		bson.M{"$set": bson.M{"_version": uint64(9), "_last_tx": "target-server", "level": int32(100)}}); err != nil || result.MatchedCount != 1 {
+		t.Fatalf("target server's write: %+v, %v", result, err)
+	}
+	if err := handOff.Release(refreshCtx); err != nil {
+		t.Fatalf("Release = %v", err)
+	}
+	if level, version, ok := f.heroState(); !ok || level != 100 || version != 9 {
+		t.Fatalf("after Release the resident entity level=%d version=%d loaded=%v, want it back in memory at the target's 100 / version 9 before any access", level, version, ok)
+	}
+	if stats := projector.Stats(); stats.HandedOffEntities != 0 || stats.UnloadingEntities != 0 {
+		t.Fatalf("barriers after Release = %+v", stats)
+	}
+	if err := f.levelUpRequest(); err != nil {
+		t.Fatalf("write after Release: %v", err)
+	}
+	if err := projector.WaitEntityProjection(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRealHero(t, ctx, heroes, id); got.Version != 10 || got.Level != 101 {
+		t.Fatalf("stored after the write that followed Release = %+v, want level 101 at version 10", got)
+	}
+	if err := projector.fatal(); err != nil {
+		t.Fatalf("the projector fenced: %v", err)
+	}
+	if stats := projector.Stats(); stats.FatalProjectionConflicts != 0 || stats.ProjectionFailures != 0 {
+		t.Fatalf("projector stats = %+v", stats)
 	}
 }

@@ -36,6 +36,13 @@ import (
 // realRemoteManagers 返回用正式装配构造 Manager 的工厂；没有共享隔离环境时跳过。
 func realRemoteManagers(t *testing.T) npcManagerFactory {
 	t.Helper()
+	return realRemoteManagersWith(t, nil)
+}
+
+// realRemoteManagersWith 同 realRemoteManagers；perSID 非 nil 时按 sid 调整 Remote 配置，返回非 nil 的 Mongo 客户端时这个
+// 进程经它连接（故障注入用经 toxiproxy 的客户端），否则用共用的直连客户端。
+func realRemoteManagersWith(t *testing.T, perSID func(sid int32, cfg *remoteentity.Config) fmongo.IMongo) npcManagerFactory {
+	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
 		t.Skip("set ROOST_DATAENGINE_IT=1 with the isolated environment (wiring/scripts/integration/dataengine-env.sh)")
 	}
@@ -68,7 +75,13 @@ func realRemoteManagers(t *testing.T) npcManagerFactory {
 		cfg.LockKey = unique
 		cfg.SnapshotL2KeyPrefix = unique
 		cfg.LockTTL = 3 * time.Second
-		assembly, err := remoteentity.Assemble(remoteentity.AssemblyDeps{Redis: redis, Mongo: mongo, Loader: loader}, cfg, sid,
+		var storage fmongo.IMongo = mongo
+		if perSID != nil {
+			if own := perSID(sid, cfg); own != nil {
+				storage = own
+			}
+		}
+		assembly, err := remoteentity.Assemble(remoteentity.AssemblyDeps{Redis: redis, Mongo: storage, Loader: loader}, cfg, sid,
 			remoteentity.MongoBackendConfig{Database: unique})
 		if err != nil {
 			t.Fatal(err)
