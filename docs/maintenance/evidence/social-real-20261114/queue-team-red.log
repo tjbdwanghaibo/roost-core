@@ -1,0 +1,7 @@
+    social_test.go:120: SOCIAL_TEAM two game SIDs, lost accept reply + 80±20ms downstream, retry revision=2, leader transfer revision=3; cross-sid queue rejected without intent
+--- PASS: TestAllianceE2ESocialTeam (5.78s)
+    social_test.go:142: queue must block team join: &{Code:0 Reason: Info:0x217f07ec9da0}
+--- FAIL: TestAllianceE2ESocialMatchmaking (3.18s)
+{"time":"2026-11-14T11:06:23.707537+08:00","level":"INFO","msg":"matchmaking: phase confirmed","goId":1444,"frame":17,"server_time_ms":1794625583707,"player_id":100001,"request_key":"100001:1","phase":"dispatching","action":"dispatch","match_id":"","room_id":0}
+{"time":"2026-11-14T11:06:23.7155+08:00","level":"INFO","msg":"matchmaking: phase confirmed","goId":1444,"frame":18,"server_time_ms":1794625583715,"player_id":100001,"request_key":"100001:1","phase":"queued","action":"bind","match_id":"","room_id":0}
+{"time":"2026-11-14T11:06:23.868764+08:00","level":"INFO","msg":"team: create completed","goId":1444,"frame":21,"server_time_ms":1794625583868,"player_id":100001,"team_id":4611686018427388949,"leader":100001,"revision":1,"members":[100001]}

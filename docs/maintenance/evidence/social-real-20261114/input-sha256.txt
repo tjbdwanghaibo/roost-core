@@ -1,0 +1,5 @@
+55af89217eb8e24d73eba5fc735506457735a480bd24d6b783661d55c126b919  scripts/test-alliance-e2e.sh
+b06a1247471dc2b230b96f3098c6b232eeff89a7425dfb072709182afb0df16b  scripts/test-social-real.sh
+22004a4279745559871543f23b9207f951e6098513325068f9afbb5de92b53ef  scripts/testdata/alliance-e2e/social_test.go.txt
+f13577e10c3c6f78bd1639819cdb799e60d86c4da2f8af9b6e8df6957a53f2e6  scripts/testdata/alliance-e2e/game_test.go.txt
+3a1fb4363f6a856362ada87ea13c140bf255abd8c2c401a40b49c6653b140257  modules/matchmaking/files/game/components/matchmaking/matchmaking.go.tmpl

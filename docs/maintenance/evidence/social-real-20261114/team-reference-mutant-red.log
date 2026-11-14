@@ -1,0 +1,3 @@
+    social_test.go:106: TEAM_AUTHORITY: got &{Code:0 Reason: Info:0x28c098f58a50} info &{TeamID:0 Leader:0 Revision:0 Members:[]}; want id=4611686018427388949 leader=100001 revision=2 members=[100001 100002]
+--- FAIL: TestAllianceE2ESocialTeam (5.40s)
+FAIL	example.com/planet/e2e	6.140s

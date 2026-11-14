@@ -553,6 +553,9 @@ var generatedRealDependencyEntries = []struct {
 var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
+	{"TestAllianceE2ESocialTeam", "scripts/test-alliance-e2e.sh", "TestAllianceE2ESocialTeam", "B-7 私有 mirror-local 两 game 共享 Team，toxiproxy 丢接受回包与下行延迟，TCP 重登重试核对成员/版本、跨 sid 排队拒绝无意图；定向入口 test-social-real.sh，不进 pretag"},
+	{"TestAllianceE2ESocialMatchmaking", "scripts/test-alliance-e2e.sh", "TestAllianceE2ESocialMatchmaking", "B-7 真实 Redis/Mongo/NATS 上排队屏障、game SIGKILL 后原意图恢复、重复请求同 RoomID；定向入口 test-social-real.sh，不进 pretag"},
+	{"TestAllianceE2ESocialRehome", "scripts/test-alliance-e2e.sh", "TestAllianceE2ESocialRehome", "B-7 联盟成员双 game sid 换服 handed-off/committed SIGKILL，源登录触发恢复与目标服成员/Saga；保留 Q4 旧副本写隔离限制，不进 pretag"},
 	{"TestAllianceE2EPreloadOrder", "scripts/test-alliance-e2e.sh", "TestAllianceE2EPreloadOrder", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},
 	{"TestAllianceE2ECrashTakeoverAndScaleIn", "scripts/test-alliance-e2e.sh", "TestAllianceE2ECrashTakeoverAndScaleIn", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},
 	{"TestAllianceE2EOneAllianceUnderRace", "scripts/test-alliance-e2e.sh", "TestAllianceE2EOneAllianceUnderRace", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},

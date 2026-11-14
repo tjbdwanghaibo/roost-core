@@ -1,0 +1,17 @@
+--- PASS: TestAllianceE2EGamePlayers (71.51s)
+--- PASS: TestAllianceE2EOneAllianceUnderRace (54.20s)
+--- PASS: TestAllianceE2ERedisOutage (49.53s)
+--- PASS: TestAllianceE2ERobotOfflineJoin (5.12s)
+--- PASS: TestAllianceE2ERobotCrossGameJoin (4.51s)
+--- PASS: TestAllianceE2EPreloadOrder (7.57s)
+--- PASS: TestAllianceE2ECrashTakeoverAndScaleIn (45.14s)
+--- PASS: TestAllianceE2ERejectedFoundingAfterRestart (1.91s)
+    social_test.go:129: SOCIAL_TEAM two game SIDs, lost accept reply + 80±20ms downstream, retry revision=2, leader transfer revision=3; cross-sid queue rejected without intent
+--- PASS: TestAllianceE2ESocialTeam (5.17s)
+    social_test.go:187: SOCIAL_MATCH queued key=100001:1 survives game SIGKILL; retry produces one room=1; team/rehome remain blocked until terminal clearance
+--- PASS: TestAllianceE2ESocialMatchmaking (18.88s)
+    social_test.go:286: SOCIAL_REHOME stage=handed-off killed_pid=25293 player=100002 transfer=rh1001-2bc9b0ec5a01c7ffde2b8044 target=1000 members=2 donate exactly once; Q4 old-source timers/writes not certified
+    social_test.go:286: SOCIAL_REHOME stage=committed killed_pid=25298 player=100003 transfer=rh1001-2890c0a15d1f31993a0c52ca target=1000 members=3 donate exactly once; Q4 old-source timers/writes not certified
+--- PASS: TestAllianceE2ESocialRehome (36.94s)
+ok  	example.com/planet/e2e	301.199s
+alliance actual cases: passed=11, skipped=0

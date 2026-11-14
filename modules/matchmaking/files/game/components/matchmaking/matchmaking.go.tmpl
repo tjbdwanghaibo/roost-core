@@ -1,12 +1,13 @@
 package matchmaking
 
 import (
-	"{{MODULE}}/game/view"
 	"fmt"
 	"math"
 	"slices"
 	"sort"
 	"sync"
+	teamcomp "{{MODULE}}/game/components/team"
+	"{{MODULE}}/game/view"
 
 	apperrors "{{MODULE}}/internal/errors"
 
@@ -21,6 +22,17 @@ type Component struct {
 	owner Owner
 }
 
+func init() {
+	// 单排也必须挡住建队 / 接受邀请；检查与 Team、Player 修改处于同一笔事务。
+	// 匹配终态未 Clear 前仍保留屏障，不能凭客户端丢回包或进程重启解除。
+	teamcomp.OnTeamJoining("matchmaking", func(p view.PlayerEntity) error {
+		if p.Dao().GetMatchmaking().GetPhase() != "" {
+			return apperrors.ErrMatchmakingBusy
+		}
+		return nil
+	})
+}
+
 // NewComponent 是组件工厂；Player 在 game/entities/player/matchmaking_component.go 登记它。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
@@ -32,13 +44,13 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 
 // 匹配阶段的取值定义在 game/view（MatchSnapshot.Terminal 要用），这里留同名常量。
 const (
-	MatchPreparing = view.MatchPreparing
+	MatchPreparing   = view.MatchPreparing
 	MatchDispatching = view.MatchDispatching
-	MatchQueued = view.MatchQueued
-	MatchCancelling = view.MatchCancelling
-	MatchMatched = view.MatchMatched
-	MatchCancelled = view.MatchCancelled
-	MatchExpired = view.MatchExpired
+	MatchQueued      = view.MatchQueued
+	MatchCancelling  = view.MatchCancelling
+	MatchMatched     = view.MatchMatched
+	MatchCancelled   = view.MatchCancelled
+	MatchExpired     = view.MatchExpired
 )
 
 // MatchSnapshot 是 view.MatchSnapshot（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。

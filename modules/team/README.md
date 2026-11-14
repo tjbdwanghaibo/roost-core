@@ -69,5 +69,5 @@
 - `roost module verify team`：35 条场景（`^TestTeam`，包 `./game/handler` 28 条、`./game/controllers/team` 7 条）。覆盖：建队与入队同一笔事务、准入失败回滚建队与双方成员、同一条提交记录同时含 Remote 的变化与 Player 的变化、重复接受与重复建队不改事实、必须有邀请、邀请恰好到期即失效、只有队长能邀请与解散、容量在接受时检查、邀请有界且可续期、过期邀请释放名额、队长交给最小号成员、最后一人离开留下不可复用的空壳、解散后其他人的引用在读权威时清除、不能加入第二支队、快照自有集合、并发接受被串行化、离队 / 解散被拒时双方恢复、非法 sid、外人不能读或改名单、投影钩子失败整笔回滚；端点要求已认证玩家、拒绝空请求、拒绝错误类型的实体号与非法被邀请人、Controller 使用实体运行时的 lifecycle。
 - 新增覆盖：收件记录的回滚、过期、容量与迟到告知；入队同事务清收件记录；查询过滤权威已失效邀请；在线推送失败不改变邀请，离线不冷加载。
 - rehome 联动另有 2 条（`^TestWithTeamRehome`）。
-- 这些是离线场景：真实的 Nest 引擎与生成的 DAO / Sender；提交器、Remote 的外部锁与权威回执是进程内的内存替身。不能据此说跨进程的持久化已经验收：真实 Mongo / Redis / NATS、独立 Gate、多个 game 进程同时操作一支队伍都没有跑过。
+- 上述模块场景用真实 Nest 引擎与生成的 DAO / Sender，提交器、Remote 外部锁与权威回执是内存替身。另有 `scripts/test-social-real.sh` 的 `TestAllianceE2ESocialTeam`：私有 Mongo / Redis / NATS 上两个 game sid 共享同一 Team，经真实玩家 TCP 建队、邀请、跨进程接受；toxiproxy 丢接受回包与 80±20ms 下行延迟下重连重试，核对双方同一成员表 / 版本、队长转移，以及跨 sid 整队匹配拒绝后无意图。跨 game 邀请推送仍不保证送达（用已知 TeamID 接受），本场景不验证独立 Gate、容量或持续压力；[#154 归属决定](../../docs/maintenance/KNOWN-LIMITS.md)不因本场景关闭。证据见 [B-7 报告](../../docs/maintenance/evidence/social-real-20261114/README.md)。
 - 仓库侧的安装验收是 `codegen/internal/roost` 里的 `TestModuleTeamGenerated`（含缺少 remote_entity 时自动补齐、重复安装不改文件）。

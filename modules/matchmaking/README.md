@@ -28,6 +28,9 @@
 - `matchmaking.OnMatchmakingStarting(name, func(view.PlayerEntity) error)`（`game/components/matchmaking/matchmaking.go`）：开始排队前的检查。在记排队意图的那笔 Player 事务里、对组里每名成员各执行一次；返回错误即拒绝，整组什么都不写。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。
 - 模块自己登记了 team 的 `OnTeamJoining("matchmaking", …)`：排队中（`Phase` 非空）的玩家不能建队或入队。
 
+这个检查也覆盖 `cancelled` / `expired` / `matched` 尚未 `MatchClear` 的状态，以及查不到历史的未知结果；不能把取消答复当作引用和回执都已清理。组件拆分漏搬这项登记的问题及真实进程红绿证据见 [B-7 报告](../../docs/maintenance/evidence/social-real-20261114/README.md)。
+已安装模块的工程需要把该登记补回自己的 `game/components/matchmaking`；模块是工程所有的业务源码，升级 core 不会自动改写它。
+
 **状态**：`PlayerDao.Matchmaking`（`db/def/matchmaking.go` 的 `MatchmakingState`），只落库、不下发给客户端。每人只保留当前意图与最后结果（`Sequence`、`Key`、`Leader`、`TeamID`、`Members`、`SID`、`Phase`、`TicketID`、`MatchID`、`RoomID`、`Deadline`）；`Sequence` 只增不清零。队伍一侧的名单冻结记在 team 模块的 `Team.MatchKey`。
 
 **配置**：没有配置表与配置键。匹配策略写在 `game/matchmaking/matcher.go` 与 `runtime.go` 的 `queue`（队列模式 `module-duel`、`GroupSize: 2`、分区 `sid-<sid>-size-<人数>`），归工程所有。
@@ -54,7 +57,7 @@
   - **票已绑定而 match 的历史已经没了时**，答 `matchmaking_unknown`，意图与名单冻结都保留，不自动解除。match 已结束的历史缺省只保留 10 分钟，查询与恢复要在保留期内完成。
 - **前提**：依赖 `team`、`matchroom`（连带 `room`）；业务服务要 `uses: [match]`（托管的 match 服务）并有 Nest Mod 与玩家 TCP 接入；进程要有正数的 `sid`。排队的全部成员必须驻留在本进程（实体在本进程的 EntityManager 里）且队伍记录的 sid 都是本服，否则答 `matchmaking_busy`。模块只在单个 game 进程内配对与开房。
 - **启动窗口**：协议在 Mod 的 Provide 阶段注册，运行时在模块启动时才发布；这之间到达的请求明确失败，不排队。
-- **已知限制**：见 [KNOWN-LIMITS“R7 匹配模块的当前边界”](../../docs/maintenance/KNOWN-LIMITS.md)——历史消失时保留屏障、默认每池窗口 64、不跨服、匹配房的持久映射不自动清理、离线验收不能替代真实 Redis / Mongo / NATS 联合验收。
+- **已知限制**：见 [KNOWN-LIMITS“R7 匹配模块的当前边界”](../../docs/maintenance/KNOWN-LIMITS.md)——历史消失时保留屏障、默认每池窗口 64、不跨服、匹配房的持久映射不自动清理。真实 Redis / Mongo / NATS 联合场景由 `scripts/test-social-real.sh` 验证：队列拒绝换服 / 建队、game SIGKILL 后同 Key / Sequence 恢复、重试与反复查询保持同一 RoomID；另有 P9 的 Room / Turn 纵切，见 [B-7 报告](../../docs/maintenance/evidence/social-real-20261114/README.md)。这些场景不验证容量。
 
 ## 复用方式
 

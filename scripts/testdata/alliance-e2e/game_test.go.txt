@@ -44,7 +44,7 @@ type player struct {
 var accountOnce sync.Map
 
 // login 走真实凭证路径：account 的 Login → CreateRole（角色建在 sid 上）→ SelectRole，拿会话票据握手，再 enter_game、scene_ready。
-func (s *suite) login(game *proc, openID string) *player {
+func (s *suite) login(game *proc, openID string, expectedEnterCode ...int32) *player {
 	t := s.t
 	accounts, err := svcaccount.NewBusClient(s.bus, "", 0)
 	if err != nil {
@@ -88,6 +88,14 @@ func (s *suite) login(game *proc, openID string) *player {
 	go p.read()
 	t.Cleanup(func() { _ = conn.Close() })
 	enter := call(p, msgid.MsgEnterGame, &pb.EnterGameRequest{ClientVersion: "e2e"}, pb.MarshalEnterGameRequest, pb.UnmarshalEnterGameResponse)
+	// 换服恢复验收需要一次真实源登录触发 driver；明确的 moving / elsewhere 拒绝是预期结果。
+	// 普通登录不传此参数，仍要求完整 EnterGame + SceneReady 成功。
+	if len(expectedEnterCode) == 1 {
+		if expectedEnterCode[0] == 0 || enter.Code != expectedEnterCode[0] {
+			t.Fatalf("enter_game %d on sid %d: %+v, want refusal code %d", playerID, game.sid, enter, expectedEnterCode[0])
+		}
+		return p
+	}
 	if enter.Code != 0 || enter.PlayerID != playerID {
 		t.Fatalf("enter_game %d: %+v", playerID, enter)
 	}
