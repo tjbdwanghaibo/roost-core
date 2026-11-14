@@ -33,6 +33,10 @@ type ModuleSpec struct {
 	Needs     ModuleNeeds    `yaml:"needs" json:"needs"`
 	Access    ModuleAccess   `yaml:"access" json:"access"`
 	Runtime   *ModuleRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	// Managers 是模块的后台 manager（D22）：构造函数名（func() app.IManager），定义在 files/game/managers/ 下的模板里
+	// （package managers）。安装器把 "<名字>()," 加到 game/managers/managers.go 的 Managers() 列表末尾，由 manager Mod
+	// 统一启停。不在 runtime: 里的后台循环（会话激活后的告知、换服的后台步骤）放在这里。见 module_managers.go。
+	Managers []string `yaml:"managers,omitempty" json:"managers,omitempty"`
 	// Sagas 复用 add saga 的定义与实体回执生成；步骤业务和启动入口由模块模板提供。
 	Sagas []ModuleSaga `yaml:"sagas,omitempty" json:"sagas,omitempty"`
 	// Services 声明新业务服务，或通过 existing 为已有服务追加 Mod/RPC。
@@ -153,6 +157,8 @@ type InstalledModule struct {
 	Service  string         `yaml:"service,omitempty"`
 	Runtime  *ModuleRuntime `yaml:"runtime,omitempty"`
 	Requires []string       `yaml:"requires,omitempty"`
+	// Managers 是它登记进 game/managers/managers.go 的 manager 构造函数（清单的 managers）。
+	Managers []string `yaml:"managers,omitempty"`
 	// TimerEntity 是 timer 类型号的作用域（实体 snake 名）；其他 ID 仍为工程级。
 	TimerEntity string `yaml:"timer_entity,omitempty"`
 	// IDs 是 kind -> 名字 -> 号（entity / protocol / errcode / component / timer）。
@@ -357,6 +363,9 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 		return err
 	}
 	if err := validateModuleNext(spec.Next); err != nil {
+		return err
+	}
+	if err := validateModuleManagers(spec); err != nil {
 		return err
 	}
 	if err := validateModuleSagas(spec); err != nil {
