@@ -6,8 +6,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// SpawnID 把持久目录的序号放在静态 ID 半区的专用段；与普通运行时从 1 起的计数器隔离。
-// 业务必须保留该段，不能在别的 ID 分配器重复使用。Kind 使用正式生成的 EntityKind。
+// SpawnID 把持久目录的序号放在静态 ID 半区的专用段：Static | home<<34 | 1<<33 | seq（seq ≤ 50000）。
+// 第 33 位是出生号标记；同一 sid 下的运行期号（game-demo 的 runtimeid、monster 模块）序号只用第 0～32 位，
+// 两段不重叠。业务自己的分配器若也按 sid<<34 编码，同样不能用到第 33 位。Kind 使用正式生成的 EntityKind。
 func SpawnID(home int32, sequence uint64, kind entity.EntityKind) (int64, error) {
 	if home <= 0 || home > 65535 || sequence == 0 || sequence > 50000 {
 		return 0, fmt.Errorf("cellworldhost: invalid birth identity %d/%d", home, sequence)

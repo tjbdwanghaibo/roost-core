@@ -519,7 +519,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   生成器保证它全字段 `nopersist`、且只被 `noPersist=true` 的实体使用（[设计记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/DAO-NO-COLLECTION-2026-10-04.md)）。
 - **system 仍是纯状态机**：`Due(now)` 的时间是传进去的（心跳的 `Beat.Now`），所以它可测、可重放。
 - GM：`gm.scene.population` 看当前几只，`gm.scene.kill` 杀一只——表里写 20 秒，20 秒（业务时间）后的那一拍回到满员且是一个**新 id**；
-  `gm.scene.root` 定身。怪物 id 由 `game/runtimeid` 按 sid 编码，两个进程不会撞。
+  `gm.scene.root` 定身。怪物 id 由 `game/runtimeid` 按 sid 编码，两个进程不会撞；序号只用第 0～32 位，第 33 位留给分区场景的出生号（`cellworldhost.SpawnID`），同一 sid 下两种号不重叠。
 
 ## 装备栏
 

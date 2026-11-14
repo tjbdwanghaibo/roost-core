@@ -417,6 +417,30 @@ func TestMonsterInvalidRulesAndShardAreRefusedBeforeCreating(t *testing.T) {
 		t.Fatal("invalid sid accepted")
 	}
 }
+// 运行期号的第 33 位留给 cellworldhost.SpawnID（Static | home<<34 | 1<<33 | seq）：同一 sid 的序号走到这一位
+// 就与 CellWorld 出生号撞号，所以序号在 1<<33-1 处拒绝，不创建实体。
+func TestMonsterIDSequenceStaysBelowTheCellWorldBirthBit(t *testing.T) {
+	f := newMonsterFixture(t)
+	f.manager.sequence = 1<<33 - 2
+	last, err := f.manager.Spawn(context.Background(), 1, rules.DefaultSpec())
+	if err != nil {
+		t.Fatalf("the last sequence below the birth bit was refused: %v", err)
+	}
+	if entity.GetUniqueIDFromEntityID(last)&(1<<33) != 0 {
+		t.Fatalf("monster %d already carries the birth bit", last)
+	}
+	before := len(f.manager.IDs())
+	id, err := f.manager.Spawn(context.Background(), 1, rules.DefaultSpec())
+	if err == nil && entity.GetUniqueIDFromEntityID(id)&(1<<33) != 0 {
+		t.Fatalf("monster %d (unique %#x) carries bit 33: it lands in the CellWorld birth range of sid 1000", id, entity.GetUniqueIDFromEntityID(id))
+	}
+	if err == nil {
+		t.Fatal("the sequence went past 1<<33-1 without refusing")
+	}
+	if len(f.manager.IDs()) != before {
+		t.Fatal("a refused spawn created a monster")
+	}
+}
 func TestMonsterStopDrainsAndRefusesNewPopulation(t *testing.T) {
 	f := newMonsterFixture(t)
 	m := f.spawn(rules.DefaultSpec())

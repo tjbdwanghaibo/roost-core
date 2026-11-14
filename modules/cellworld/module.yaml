@@ -6,7 +6,7 @@ needs:
 verify:
   packages: [./game/cellworldhost]
   run: ^TestCellworld
-  pass: 3
+  pass: 6
 next:
   - 在服务 InstallNestHandlers 中登记 cellworld.NewHandlers()，NewNode 时传同一份 Handlers。
   - 用 game/cellworldhost.New 装配 Node；业务实现 Actor、RegionHost、BasePlayer 接口，Player 的快照和死亡回执必须为持久 DAO 字段。

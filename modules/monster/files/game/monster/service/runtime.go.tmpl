@@ -22,7 +22,11 @@ import (
 
 const Capability app.ModName = "gameplay.monster"
 const MaxMonsters = 256
-const sequenceBits = 34
+// 怪物号 = Static | sid<<shardShift | 序号。序号只用第 0～32 位：第 33 位留给 CellWorld 出生号
+// （cellworldhost.SpawnID = Static | home<<34 | 1<<33 | seq，home 就是本进程 sid），两种号在同一 sid 下互不重叠；
+// 序号用到 1<<33-1 就拒绝出生，不回绕。
+const shardShift = 34
+const sequenceBits = 33
 const maxSequence = int64(1)<<sequenceBits - 1
 
 type record struct {
@@ -106,7 +110,7 @@ func newManager(access *entity.ManagerAccess, client nest.Client, scenes *scenes
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{records: map[int64]record{}, access: access, lives: lives, client: client, scenes: scenes, base: int64(entity.StaticUniqueIDBase) | int64(sid)<<sequenceBits, queue: make(chan int64, 64), ctx: ctx, cancel: cancel, drained: make(chan struct{})}
+	m := &Manager{records: map[int64]record{}, access: access, lives: lives, client: client, scenes: scenes, base: int64(entity.StaticUniqueIDBase) | int64(sid)<<shardShift, queue: make(chan int64, 64), ctx: ctx, cancel: cancel, drained: make(chan struct{})}
 	m.work.Add(1)
 	go m.run()
 	return m, nil

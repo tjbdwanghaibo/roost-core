@@ -2,11 +2,19 @@ package cellworldhost
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // 本测试包不注册业务实体，237 专用于 ID 分类验证。
@@ -52,5 +60,194 @@ func TestCellworldSpawnIdentityRejectsOverflow(t *testing.T) {
 func TestCellworldMissingRegistryFailsClosed(t *testing.T) {
 	if _, err := New(nil, cellworld.NodeConfig{}); err == nil {
 		t.Fatal("missing authority accepted")
+	}
+}
+
+// 下面的替身只覆盖 Runtime 装配与启停会走到的调用：空闲的 Cell 不收消息、不建实体，Nest 与 Redis 只需存在。
+// idleRedis 的读一律“没有记录”（死亡巡检每 100ms 读一次），写一律报错；用到别的方法就是装配越界，直接 panic。
+type idleRedis struct{ fredis.IRedis }
+
+func (idleRedis) Get(context.Context, string) ([]byte, error) { return nil, nil }
+func (idleRedis) Eval(context.Context, string, []string, ...any) (any, error) {
+	return nil, errors.New("cellworldhost test: idle redis does not write")
+}
+
+type idleNest struct{ nest.Client }
+type openLease struct{}
+
+func (openLease) Check() error { return nil }
+
+type sameProcess struct{}
+
+func (sameProcess) Matches(context.Context, string, int32, string) (bool, error) { return true, nil }
+
+// hostTransport 的 Subscribe 可以失败（Node 在就绪前退出）或等 release 关闭才返回（Start 的 ctx 先到）。
+type hostTransport struct {
+	fail    error
+	release chan struct{}
+}
+
+func (hostTransport) Publish(string, []byte) error { return nil }
+func (h hostTransport) Subscribe(string, func([]byte)) (func() error, error) {
+	if h.release != nil {
+		<-h.release
+	}
+	if h.fail != nil {
+		return nil, h.fail
+	}
+	return func() error { return nil }, nil
+}
+
+const hostSID int32 = 7
+
+// cellRegistry 登记 Cell 分支要的全部能力：服务身份、单实例锁的本次启动令牌、本地租约检查、身份核对与 Redis。
+func cellRegistry(t *testing.T, skip app.ModName) *app.Registry {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("server_type", "game")
+	cfg.Set("sid", hostSID)
+	registry := app.NewRegistry(cfg)
+	for name, value := range map[app.ModName]any{
+		app.ModSingletonIncarnation:     app.SingletonIncarnation{Key: "roost:singleton:game:7", Sid: hostSID, Token: "incarnation-7"},
+		app.ModSingletonLease:           app.SingletonLease(openLease{}),
+		app.ModSingletonIdentityChecker: app.SingletonIdentityChecker(sameProcess{}),
+		mods.ModRedis:                   fredis.IRedis(idleRedis{}),
+	} {
+		if name == skip {
+			continue
+		}
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return registry
+}
+
+func cellConfig(t *testing.T, transport cellworld.Transport) cellworld.NodeConfig {
+	t.Helper()
+	grid, err := cellworld.NewGrid(cellworld.GridConfig{Cols: 1, Rows: 1, CellSize: 1000, GhostBand: 100, Hysteresis: 10, Owners: map[cellworld.CellID]int32{{}: hostSID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell := cellworld.CellID{}
+	return cellworld.NodeConfig{World: "hosttest", SID: hostSID, Grid: grid, Transport: transport, Nest: idleNest{},
+		Destroy: func(context.Context, entity.IThreadSafeEntity) error { return nil },
+		Cell:    &cell, Scene: 1, ViewRadius: 50,
+		CreateActor: func(int64, cellworld.EntityKind) (cellworld.Actor, error) {
+			return nil, errors.New("cellworldhost test: no actors")
+		}}
+}
+
+// New 的 Cell 分支：授权记录、出生目录、本次启动令牌与租约检查都取自 Registry；缺任何一项或身份对不上都拒绝，
+// 不退回内存授权。
+func TestCellworldNewCellBranchTakesAuthorityFromTheApp(t *testing.T) {
+	runtime, err := New(cellRegistry(t, ""), cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runtime.Node.Config()
+	if runtime.Births == nil || got.Owners == nil || got.Incarnation != "incarnation-7" || got.CheckLease == nil {
+		t.Fatalf("Cell runtime not wired from the App: births=%v owners=%v incarnation=%q lease=%v", runtime.Births != nil, got.Owners != nil, got.Incarnation, got.CheckLease != nil)
+	}
+	for _, missing := range []app.ModName{app.ModSingletonIncarnation, app.ModSingletonLease, app.ModSingletonIdentityChecker, mods.ModRedis} {
+		if _, err := New(cellRegistry(t, missing), cellConfig(t, hostTransport{})); err == nil {
+			t.Errorf("Cell runtime built without %s", missing)
+		}
+	}
+	other := cellConfig(t, hostTransport{})
+	other.SID = hostSID + 1
+	if _, err := New(cellRegistry(t, ""), other); err == nil {
+		t.Error("Cell runtime built for a sid the App does not hold")
+	}
+	foreign := cellRegistry(t, app.ModSingletonIncarnation)
+	if err := foreign.Register(app.ModSingletonIncarnation, app.SingletonIncarnation{Sid: hostSID + 1, Token: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(foreign, cellConfig(t, hostTransport{})); err == nil {
+		t.Error("Cell runtime accepted another sid's singleton incarnation")
+	}
+}
+
+// Start 等到 Node 就绪才返回、只能调用一次；Stop 排空后 Node.Run 退出。没启动过的 Runtime 的 Stop 什么都不做。
+func TestCellworldStartAndStop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	idle, err := New(cellRegistry(t, ""), cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idle.Stop(ctx); err != nil {
+		t.Fatalf("Stop before Start: %v", err)
+	}
+	runtime, err := New(cellRegistry(t, ""), cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.StartSpawns(nil, nil); err == nil {
+		t.Fatal("spawns started before the Node")
+	}
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runtime.Node.Ready():
+	default:
+		t.Fatal("Start returned before the Node was ready")
+	}
+	if err := runtime.Start(ctx); err == nil {
+		t.Fatal("a second Start was accepted")
+	}
+	if err := runtime.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	select {
+	case <-runtime.done:
+	default:
+		t.Fatal("Stop returned while Node.Run was still running")
+	}
+}
+
+// Start 失败（Node 在就绪前退出，或 ctx 先到）后 Runtime 回到未启动：不留已停 Node 的 done / cancel，
+// StartSpawns 拒绝，Stop 无事可做；Start 只能调用一次，再调仍拒绝。
+func TestCellworldFailedStartLeavesRuntimeNotStarted(t *testing.T) {
+	cases := map[string]func() (cellworld.Transport, context.Context, context.CancelFunc){
+		"node exits before ready": func() (cellworld.Transport, context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			return hostTransport{fail: errors.New("subscribe refused")}, ctx, cancel
+		},
+		"start context ends first": func() (cellworld.Transport, context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			release := make(chan struct{})
+			go func() { <-ctx.Done(); close(release) }()
+			time.AfterFunc(20*time.Millisecond, cancel)
+			return hostTransport{release: release}, ctx, cancel
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			transport, ctx, cancel := setup()
+			defer cancel()
+			runtime, err := New(cellRegistry(t, ""), cellConfig(t, transport))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Start(ctx); err == nil {
+				t.Fatal("Start succeeded")
+			}
+			if runtime.done != nil || runtime.cancel != nil {
+				t.Error("a failed Start left the stopped Node's done / cancel behind")
+			}
+			stop, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelStop()
+			if err := runtime.Stop(stop); err != nil {
+				t.Errorf("Stop after a failed Start: %v", err)
+			}
+			if err := runtime.StartSpawns(nil, nil); err == nil {
+				t.Fatal("spawns started on a Node that never became ready")
+			}
+			if err := runtime.Start(stop); err == nil || !strings.Contains(err.Error(), "already started") {
+				t.Fatalf("second Start after a failure: %v", err)
+			}
+		})
 	}
 }

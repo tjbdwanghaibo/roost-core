@@ -17,7 +17,10 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
@@ -363,4 +366,255 @@ func mustHex(t *testing.T, s string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// confirmFrame 是确认来源夹具的一帧：Go entitysync Manager 交给传输层的原始字节（客户端 EntityViews.Receive 的输入），
+// session 标出属于哪个会话（重连换一个会话，客户端先 Reset 再收它的第一帧）。
+type confirmFrame struct {
+	Name    string `json:"name"`
+	Session int    `json:"session"`
+	Frame   string `json:"frame"`
+}
+
+type confirmFixture struct {
+	Description string         `json:"description"`
+	Pack        string         `json:"pack"`
+	Namespace   string         `json:"namespace"`
+	Profile     string         `json:"profile"`
+	Encoding    uint16         `json:"encoding"`
+	Schema      uint32         `json:"schema"`
+	Frames      []confirmFrame `json:"frames"`
+}
+
+// confirmKind 是本夹具里地形块 subject 的 kind（只在临时 module 内登记，客户端不读 kind）。
+const confirmKind entity.EntityKind = 41
+
+// confirmCodec 与 game-demo terrain_chunk.TerrainChunkSyncCodec 相同：载荷是 TerrainChunkDao 的同步 PB。
+const confirmCodec uint16 = 2
+
+// confirmChunk 是改过的块：packer 与 game-demo 的 terrainChunkSyncPacker 相同（全量 MarshalSync、增量 MarshalSyncChanges，
+// 变化树的捕获版本与确认委托给 DAO）。
+type confirmChunk struct{ dao *TerrainChunkDao }
+
+func (c confirmChunk) PackSubjectSnapshot(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return entity.TakeFrozenSyncPayload(confirmCodec, c.dao.MarshalSync(dataengine.AllFields)), nil
+}
+func (c confirmChunk) PackSubjectDelta(_ entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	raw := c.dao.MarshalSyncChanges(mask)
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	return entity.TakeFrozenSyncPayload(confirmCodec, raw), nil
+}
+func (c confirmChunk) SubjectSyncChangeVersion() uint64 {
+	return c.dao.DirtyTracker().SyncChangeVersion()
+}
+func (c confirmChunk) AcknowledgeSubjectSyncChanges(v uint64) {
+	c.dao.DirtyTracker().AcknowledgeSyncChanges(v)
+}
+
+// TestWriteTerrainConfirmFramesFixture 写出确认来源夹具（可编辑地形方案 §31.9）：正式 entitysync Manager 给一个会话下发
+// 地形块对象的真实帧——没改过的块是就绪标记（与 game-demo terrain_chunk.Base 相同：只有 BaseRevision 与 Version 0），改过的
+// 块是生成 DAO 的全量 / 增量。依次：进场缺一块、最后一块到达、第一次改一块（标记换成实体，Manager rebind，无 remove）、
+// 改过的块收到按下标的增量、一块离开视野（remove）、再进入、重连（新会话的 Full 帧）。C# 测试（RebuildTests 的
+// TestChunkSyncFromFrames）用 EntityViews 收这些帧、交给 TerrainChunkSync，逐帧核对确认时序。
+func TestWriteTerrainConfirmFramesFixture(t *testing.T) {
+	spec, out := os.Getenv("TERRAIN_SPEC"), os.Getenv("CONFIRM_FIXTURE_OUT")
+	if spec == "" || out == "" {
+		t.Fatal("TERRAIN_SPEC and CONFIRM_FIXTURE_OUT are required (run regen.sh)")
+	}
+	pack, err := terrain.OpenPack(filepath.Join(spec, "terrain-golden.pack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pack.Close()
+	meta := pack.Meta()
+	entity.MustRegisterEntityKindCategory(confirmKind, entity.EntityCategoryOther)
+	format := func() uint32 {
+		patch, err := UnmarshalSyncTerrainChunkDao(NewTerrainChunkDao().MarshalSync(dataengine.AllFields))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return patch.SyncFormat
+	}()
+	idOf := func(key terrain.ChunkKey) int64 {
+		id, err := entity.BuildEntityID(int64(key.ID())+1, confirmKind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	marker := func(key terrain.ChunkKey) *entity.SubjectSyncState {
+		id := idOf(key)
+		return entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: id, Namespace: "terrain", SubjectKind: uint32(confirmKind),
+			Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+				raw, err := MarshalSyncTerrainChunkDao(&SyncTerrainChunkDao{EntityID: id, SyncFormat: format,
+					BaseRevision: &SyncTerrainChunkDaoBaseRevisionField{Value: meta.BaseRevision}, Version: &SyncTerrainChunkDaoVersionField{Value: 0}})
+				return entity.TakeFrozenSyncPayload(confirmCodec, raw), err
+			}}})
+	}
+	edited := func(key terrain.ChunkKey, version int64, lift int) (*TerrainChunkDao, *entity.SubjectSyncState) {
+		base, err := pack.ReadChunk(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := NewTerrainChunkDao()
+		d.SetId(idOf(key))
+		d.baseRevision, d.version = meta.BaseRevision, version
+		d.heights = slices.Clone(base.Heights)
+		for _, i := range disk(20, 20, 6) {
+			d.heights[i] = shift(d.heights[i], lift)
+		}
+		d.materials = widen(base.Materials)
+		d.Init()
+		return d, entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: idOf(key), Namespace: "terrain",
+			SubjectKind: uint32(confirmKind), Packer: confirmChunk{dao: d}})
+	}
+
+	sent := map[entitysync.SessionID][][]byte{}
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Name: "terrain-confirm-fixture",
+		Transport: entitysync.TransportFunc(func(_ context.Context, session entitysync.SessionID, data []byte) error {
+			sent[session] = append(sent[session], slices.Clone(data))
+			return nil
+		})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(context.Background())
+	register := func(state *entity.SubjectSyncState) {
+		if err := manager.Register(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := func(x, y int32) terrain.ChunkKey { return terrain.ChunkKey{X: x, Y: y} }
+	all := []terrain.ChunkKey{k(0, 0), k(1, 0), k(2, 0), k(0, 1), k(1, 1), k(2, 1)}
+	if meta.ChunksX != 3 || meta.ChunksY != 2 {
+		t.Fatalf("golden pack is %dx%d chunks, the fixture expects 3x2", meta.ChunksX, meta.ChunksY)
+	}
+	markers := map[terrain.ChunkKey]*entity.SubjectSyncState{}
+	for _, key := range all {
+		if key == k(1, 0) {
+			continue
+		}
+		markers[key] = marker(key)
+		register(markers[key])
+	}
+	k10, k10State := edited(k(1, 0), 3, 30)
+	register(k10State)
+
+	decoders := map[entitysync.SessionID]*entitysync.Decoder{}
+	var frames []confirmFrame
+	var identity entity.SubjectSyncUpdate
+	// flush 下发一帧并核对它的形状（want：每个 subject 的对象操作；full：整帧是不是 Full）。
+	flush := func(name string, session entitysync.SessionID, full bool, want map[terrain.ChunkKey]frame.ObjectOperation) entitysync.ReceivedFrame {
+		t.Helper()
+		before := len(sent[session])
+		if err := manager.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(sent[session]) != before+1 {
+			t.Fatalf("%s: session %d got %d frames, want one", name, session, len(sent[session])-before)
+		}
+		data := sent[session][before]
+		if decoders[session] == nil {
+			decoders[session] = entitysync.NewDecoder(frame.Limits{})
+		}
+		got, err := decoders[session].Decode(data)
+		if err != nil {
+			t.Fatalf("%s: decode: %v", name, err)
+		}
+		if (got.Kind == frame.Full) != full || len(got.Objects) != len(want) {
+			t.Fatalf("%s: kind %v with %d objects, want full=%v with %d", name, got.Kind, len(got.Objects), full, len(want))
+		}
+		for _, o := range got.Objects {
+			key := terrain.KeyFromID(uint64(entity.GetUniqueIDFromEntityID(o.SubjectID) - 1))
+			if op, ok := want[key]; !ok || op != o.Operation {
+				t.Fatalf("%s: object %v operation %v, want %v", name, key, o.Operation, want[key])
+			}
+			if o.Operation != frame.ObjectRemove && identity.Namespace == "" {
+				identity = o.Components[0].Update
+			}
+		}
+		frames = append(frames, confirmFrame{Name: name, Session: int(session), Frame: hex.EncodeToString(data)})
+		return got
+	}
+	subscribe := func(session entitysync.SessionID, keys ...terrain.ChunkKey) {
+		for _, key := range keys {
+			if err := manager.Subscribe(session, idOf(key), entity.SyncProfile{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	creates := func(keys ...terrain.ChunkKey) map[terrain.ChunkKey]frame.ObjectOperation {
+		m := map[terrain.ChunkKey]frame.ObjectOperation{}
+		for _, key := range keys {
+			m[key] = frame.ObjectCreate
+		}
+		return m
+	}
+
+	// 1. 进场：视野里五块到了（(1,0) 是改过的实体，其余是标记），(2,0) 还没到。
+	if err := manager.OpenSession(1); err != nil {
+		t.Fatal(err)
+	}
+	subscribe(1, k(0, 0), k(1, 0), k(0, 1), k(1, 1), k(2, 1))
+	flush("enter_without_k20", 1, true, creates(k(0, 0), k(1, 0), k(0, 1), k(1, 1), k(2, 1)))
+	// 2. 最后一块的标记到达。
+	subscribe(1, k(2, 0))
+	flush("k20_arrives", 1, false, creates(k(2, 0)))
+	// 3. 第一次改 (0,1)：关掉标记、以实体状态重新登记（Manager rebind），订阅者收到同一对象的全量，没有 remove。
+	markers[k(0, 1)].Close()
+	_, k01State := edited(k(0, 1), 1, 12)
+	register(k01State)
+	got := flush("k01_first_edit", 1, false, map[terrain.ChunkKey]frame.ObjectOperation{k(0, 1): frame.ObjectUpdate})
+	if !got.Objects[0].Components[0].Update.Full {
+		t.Fatal("k01_first_edit: the rebind did not send a full")
+	}
+	// 4. (1,0) 再改一笔（按下标的高度增量，Version 3 → 4）。
+	if _, err := nest.RunIsolatedTransaction(context.Background(), fixtureCommitter{}, "terrain", func() (any, error) {
+		for _, i := range disk(40, 40, 4) {
+			v, _ := k10.GetHeights(i)
+			k10.SetHeightsAt(i, shift(v, -15))
+		}
+		k10.SetVersion(k10.GetVersion() + 1)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	k10State.MarkDirty(k10.DirtyTracker().TakeEntitySyncDirty())
+	got = flush("k10_brush_delta", 1, false, map[terrain.ChunkKey]frame.ObjectOperation{k(1, 0): frame.ObjectUpdate})
+	if u := got.Objects[0].Components[0].Update; u.Full {
+		t.Fatal("k10_brush_delta: sent a full instead of the delta")
+	}
+	// 5. (2,1) 离开视野，6. 再进入。
+	if err := manager.Unsubscribe(1, idOf(k(2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	flush("k21_leaves", 1, false, map[terrain.ChunkKey]frame.ObjectOperation{k(2, 1): frame.ObjectRemove})
+	subscribe(1, k(2, 1))
+	flush("k21_reenters", 1, false, creates(k(2, 1)))
+	// 7. 重连：旧会话关闭，新会话的第一帧是 Full，带来视野里的每一块。
+	manager.CloseSession(1)
+	if err := manager.OpenSession(2); err != nil {
+		t.Fatal(err)
+	}
+	subscribe(2, all...)
+	flush("reconnect_full", 2, true, creates(all...))
+
+	if identity.Namespace != "terrain" || identity.Payload.Codec() != confirmCodec {
+		t.Fatalf("subject identity %q codec %d", identity.Namespace, identity.Payload.Codec())
+	}
+	raw, err := json.MarshalIndent(confirmFixture{
+		Description: "Real entitysync frames for one client: TerrainChunk base markers (Version 0) and edited chunks (generated DAO fulls / deltas) " +
+			"from the entitysync Manager, in the order enter without (2,0), (2,0) arrives, first edit of (0,1) by rebind, a brush delta on (1,0), " +
+			"(2,1) leaves and re-enters, reconnect. Regenerate with regen.sh.",
+		Pack: "terrain-golden.pack", Namespace: identity.Namespace, Profile: identity.Profile.Key, Encoding: identity.Payload.Codec(),
+		Schema: identity.Profile.SchemaVersion, Frames: frames,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, append(raw, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
