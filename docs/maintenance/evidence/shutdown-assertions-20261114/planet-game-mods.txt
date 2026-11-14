@@ -1,0 +1,49 @@
+Shared Mods:
+	a.Mods(
+		kitlock.NewLockMod(),
+		kitops.NewOpsMod(),
+		kitstatslog.NewStatsLogMod(),
+	)
+
+Game service:
+	a.RegisterServer(app.ServiceName("game"), serviceGame.NewWithModules(),
+		kitconfigdata.NewConfigDataMod(),
+		kitmongo.NewMongoMod(),
+		kitnats.NewNatsMod(nil),
+		kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess), kitdataengine.WithRemoteProjection(true)),
+		playerDiscovery(options, kitetcd.NewEtcdMod()),
+		kitmanager.NewManagerMod(gamemanagers.Managers()...),
+		kitnest.NewMod(EntityAccess),
+		kitredis.NewRedisMod(),
+		kitsyncbus.NewSyncBusMod(0),
+		kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess), kitremoteentity.WithForeignKinds(registry.ForeignKinds("game")...), kitremoteentity.WithRouteKinds(registry.RouteKinds("game")...)),
+		kitsaga.NewMod(kitsaga.CombineDefinitions(sagaAllianceDonate.Definitions(), sagaAllianceFound.Definitions(), sagaAllianceReward.Definitions(), sagaGiftItem.Definitions())...),
+		registry.NewOwnedNestHandlersMod("game"),
+		svcaccount.NewClientMod(),
+		svcactivity.NewClientMod(),
+		svcchat.NewClientMod(),
+		svcglobal.NewClientMod(),
+		svcmail.NewClientMod(),
+		svcmatch.NewClientMod(),
+		svcplatform.NewClientMod(),
+		svcrank.NewClientMod(),
+		svcsession.NewClientMod(),
+		svcaccount.NewServingGuardMod(),
+		rpcAlliance.NewClientMod(),
+		kitentitytimer.NewMod(EntityAccess, room.TimerDriver),
+		accessplayer.NewMod(),
+		playerTransport(options, accessplayertcp.NewMod()))
+
+Shutdown config:
+shutdown:
+  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without
+  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one
+  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only
+  # when the rest cannot cover it. Generated for this service's 29 Mods: 40s declared + 3s x 27
+  # undeclared + 5s for Service.Shutdown + 3s for the singleton release = 129s (the App keeps the
+  # release share back from the Mods while singleton.enabled is true). roost sync updates this
+  # block while it is unedited when the service's Mods change; roost doctor checks an edited one.
+  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose
+  # stop_grace_period, systemd TimeoutStopSec, deploy/dev/run.sh) must be
+  # >= total_timeout + 5s: 134s for this service.
+  total_timeout: 129s

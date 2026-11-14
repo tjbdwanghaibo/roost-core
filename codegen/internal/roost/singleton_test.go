@@ -226,18 +226,18 @@ func TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn(t *testing.T) {
 	t.Parallel()
 	root := newGameDemo(t)
 	dev := "configs/service/config.game.yaml"
-	// 40s declared + 3s x 25 = 115s for the Mods, + 3s the App keeps back for the release.
-	setShutdownTotal(t, root, dev, "116s")
+	// 40s declared + 3s x 26 = 118s for the Mods, + 3s the App keeps back for the release.
+	setShutdownTotal(t, root, dev, "119s")
 	item := shutdownStatus(t, root)["shutdown:game"]
-	if item.Status != StatusWarn || !strings.Contains(item.Detail, dev+": total_timeout 116s cannot cover 27 Mods (40s declared + 3s x 25 + 3s singleton release = 118s)") || !strings.Contains(item.Detail, "Set it to 123s") {
-		t.Errorf("singleton on, total 116s: %s %s", item.Status, item.Detail)
+	if item.Status != StatusWarn || !strings.Contains(item.Detail, dev+": total_timeout 119s cannot cover 28 Mods (40s declared + 3s x 26 + 3s singleton release = 121s)") || !strings.Contains(item.Detail, "Set it to 126s") {
+		t.Errorf("singleton on, total 119s: %s %s", item.Status, item.Detail)
 	}
 	// The same total with the singleton off covers the Mods.
 	body := readProjectFile(t, root, dev)
 	writeProjectFile(t, root, dev, strings.Replace(body, "  enabled: true\n  key_prefix: roost:planet:singleton", "  enabled: false\n  key_prefix: roost:planet:singleton", 1))
 	item = shutdownStatus(t, root)["shutdown:game"]
 	if strings.Contains(item.Detail, dev+": total_timeout") {
-		t.Errorf("singleton off, total 116s still reported short: %s %s", item.Status, item.Detail)
+		t.Errorf("singleton off, total 119s still reported short: %s %s", item.Status, item.Detail)
 	}
 }
 

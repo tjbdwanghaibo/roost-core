@@ -1,0 +1,45 @@
+{
+  "base": "48ed0113ac17897b8bb1eebd8821c75b10813f3d",
+  "original_red_log": "/private/tmp/v147-final-roost-retry-20261114.log",
+  "original_red_sha256": "8dc9cde08d18a2b74ac14b884a93dff225d236160855154d759647055b2dbdec",
+  "original_red_count": 6,
+  "additional_targeted_stale_assertion": "TestOneSyncConvergesAfterAServiceLosesAMod",
+  "generated_projects": {
+    "fixture": {
+      "shared_mods": 3,
+      "service_mods": 25,
+      "total_mods": 28,
+      "total_timeout": "126s",
+      "room_timer_driver": true
+    },
+    "planet": {
+      "shared_mods": 3,
+      "service_mods": 26,
+      "total_mods": 29,
+      "total_timeout": "129s",
+      "room_timer_driver": true
+    }
+  },
+  "targeted_tests": {
+    "top_level_selected": 31,
+    "top_level_pass": 31,
+    "fail": 0,
+    "skip": 0,
+    "package_seconds": 103.834
+  },
+  "mutation": {
+    "description": "serviceShutdownPlan: if service == game, plan.mods-- after constructor count",
+    "exit_code": 1,
+    "package_seconds": 35.587,
+    "failure": "game generated total_timeout / grace / deployment values differ from independently pinned 126s / 131s",
+    "restored_production_file_sha256": "32f1e46160fac5e6ca109a06c222aecdd1365c45a55fac9e53e76cb5cb060d52"
+  },
+  "restored": {
+    "exit_code": 0,
+    "package_seconds": 34.904,
+    "top_level_pass": 1,
+    "fail": 0,
+    "skip": 0,
+    "production_diff_empty": true
+  }
+}

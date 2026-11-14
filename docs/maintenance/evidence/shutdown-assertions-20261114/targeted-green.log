@@ -1,0 +1,148 @@
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== PAUSE TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== RUN   TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods
+=== PAUSE TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods
+=== RUN   TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods
+=== PAUSE TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods
+=== RUN   TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal
+=== PAUSE TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal
+=== RUN   TestDoctorChecksEachServicesShutdownWindow
+=== PAUSE TestDoctorChecksEachServicesShutdownWindow
+=== RUN   TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors
+=== PAUSE TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors
+=== RUN   TestOneSyncConvergesAfterAServiceLosesAMod
+=== PAUSE TestOneSyncConvergesAfterAServiceLosesAMod
+=== RUN   TestOneSyncConvergesAfterAServiceGainsAMod
+=== PAUSE TestOneSyncConvergesAfterAServiceGainsAMod
+=== RUN   TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet
+=== PAUSE TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet
+=== RUN   TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten
+--- PASS: TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten (0.92s)
+=== RUN   TestSyncRollsTheShutdownRefreshBackWithTheTemplates
+--- PASS: TestSyncRollsTheShutdownRefreshBackWithTheTemplates (0.61s)
+=== RUN   TestSyncRefusesAConfigEditedWhileItRuns
+--- PASS: TestSyncRefusesAConfigEditedWhileItRuns (0.50s)
+=== RUN   TestDoctorJudgesANonPositiveTotalAsTheAppsFallback
+=== PAUSE TestDoctorJudgesANonPositiveTotalAsTheAppsFallback
+=== RUN   TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods
+=== PAUSE TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods
+=== RUN   TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback
+=== PAUSE TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback
+=== RUN   TestDoctorAdviceFollowsTheConfiguredDataEngineBudget
+=== PAUSE TestDoctorAdviceFollowsTheConfiguredDataEngineBudget
+=== RUN   TestDoctorAdvicePerFileWhenTheConfigsDiffer
+=== PAUSE TestDoctorAdvicePerFileWhenTheConfigsDiffer
+=== RUN   TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse
+=== PAUSE TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse
+=== RUN   TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure
+=== PAUSE TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure
+=== RUN   TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig
+=== PAUSE TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig
+=== RUN   TestGeneratedShutdownCountsThePlayerTCPStopBudget
+=== PAUSE TestGeneratedShutdownCountsThePlayerTCPStopBudget
+=== RUN   TestDoctorCountsTheConfiguredPlayerTCPStopBudget
+=== PAUSE TestDoctorCountsTheConfiguredPlayerTCPStopBudget
+=== RUN   TestDoctorRejectsANegativePlayerTCPShutdownTimeout
+=== PAUSE TestDoctorRejectsANegativePlayerTCPShutdownTimeout
+=== RUN   TestExplicitZeroTCPShutdownBudgetIsRefused
+--- PASS: TestExplicitZeroTCPShutdownBudgetIsRefused (0.00s)
+=== RUN   TestGeneratedTCPBudgetKeepsInheritance
+--- PASS: TestGeneratedTCPBudgetKeepsInheritance (0.00s)
+=== RUN   TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn
+=== PAUSE TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn
+=== RUN   TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices
+=== PAUSE TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices
+=== RUN   TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn
+=== PAUSE TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn
+=== RUN   TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock
+=== PAUSE TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock
+=== RUN   TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn
+=== PAUSE TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn
+=== RUN   TestDeploymentStartupAllowanceCoversTheSingletonWait
+=== PAUSE TestDeploymentStartupAllowanceCoversTheSingletonWait
+=== CONT  TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== CONT  TestDoctorAdvicePerFileWhenTheConfigsDiffer
+=== CONT  TestOneSyncConvergesAfterAServiceGainsAMod
+=== CONT  TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn
+=== CONT  TestDoctorCountsTheConfiguredPlayerTCPStopBudget
+=== CONT  TestDoctorChecksEachServicesShutdownWindow
+=== CONT  TestDeploymentStartupAllowanceCoversTheSingletonWait
+=== CONT  TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices
+=== CONT  TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn
+=== CONT  TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock
+--- PASS: TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock (0.00s)
+=== CONT  TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn
+--- PASS: TestOneSyncConvergesAfterAServiceGainsAMod (2.05s)
+=== CONT  TestDoctorRejectsANegativePlayerTCPShutdownTimeout
+--- PASS: TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn (2.08s)
+=== CONT  TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods
+--- PASS: TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn (3.50s)
+=== CONT  TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal
+--- PASS: TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods (2.41s)
+=== CONT  TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/activity
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/alliance
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/chat
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/global
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/mail
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/match
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/session
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/account
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/game
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/platform
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/rank
+--- PASS: TestDeploymentStartupAllowanceCoversTheSingletonWait (41.03s)
+=== CONT  TestGeneratedShutdownCountsThePlayerTCPStopBudget
+--- PASS: TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices (41.32s)
+=== CONT  TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods
+--- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods (41.35s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/activity (0.01s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/alliance (0.01s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/chat (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/global (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/mail (0.01s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/match (0.01s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/session (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/account (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/game (0.01s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/platform (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/rank (0.00s)
+=== CONT  TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure
+--- PASS: TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig (37.68s)
+=== CONT  TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods
+--- PASS: TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods (1.20s)
+=== CONT  TestDoctorAdviceFollowsTheConfiguredDataEngineBudget
+=== CONT  TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback
+--- PASS: TestDoctorAdvicePerFileWhenTheConfigsDiffer (42.66s)
+--- PASS: TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn (42.99s)
+=== CONT  TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse
+=== RUN   TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/prod_example_total_timeout_is_not_a_duration
+--- PASS: TestDoctorRejectsANegativePlayerTCPShutdownTimeout (41.00s)
+=== CONT  TestOneSyncConvergesAfterAServiceLosesAMod
+--- PASS: TestGeneratedShutdownCountsThePlayerTCPStopBudget (15.56s)
+=== CONT  TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors
+--- PASS: TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure (15.56s)
+=== CONT  TestDoctorJudgesANonPositiveTotalAsTheAppsFallback
+=== RUN   TestDoctorJudgesANonPositiveTotalAsTheAppsFallback/0s
+--- PASS: TestDoctorCountsTheConfiguredPlayerTCPStopBudget (58.00s)
+=== CONT  TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet
+--- PASS: TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback (15.57s)
+=== RUN   TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/secret_example_dataengine.shutdown_timeout_is_not_a_duration
+--- PASS: TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet (0.95s)
+=== RUN   TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/prod_example_does_not_parse
+--- PASS: TestDoctorChecksEachServicesShutdownWindow (78.66s)
+--- PASS: TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse (45.13s)
+    --- PASS: TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/prod_example_total_timeout_is_not_a_duration (15.78s)
+    --- PASS: TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/secret_example_dataengine.shutdown_timeout_is_not_a_duration (17.44s)
+    --- PASS: TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/prod_example_does_not_parse (11.91s)
+--- PASS: TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods (45.95s)
+--- PASS: TestDoctorAdviceFollowsTheConfiguredDataEngineBudget (45.92s)
+--- PASS: TestOneSyncConvergesAfterAServiceLosesAMod (46.11s)
+--- PASS: TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors (33.98s)
+=== RUN   TestDoctorJudgesANonPositiveTotalAsTheAppsFallback/-5s
+--- PASS: TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal (92.00s)
+--- PASS: TestDoctorJudgesANonPositiveTotalAsTheAppsFallback (44.03s)
+    --- PASS: TestDoctorJudgesANonPositiveTotalAsTheAppsFallback/0s (35.03s)
+    --- PASS: TestDoctorJudgesANonPositiveTotalAsTheAppsFallback/-5s (9.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	103.834s

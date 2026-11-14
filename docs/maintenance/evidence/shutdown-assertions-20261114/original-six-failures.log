@@ -1,0 +1,28 @@
+--- FAIL: TestGeneratedShutdownTimeoutFollowsEachServicesMods (12.26s)
+    shutdown_test.go:170: game registers 28 Mods (declaring: {dataengine:true playerTCP:true mirror:false}), want 27 with dataengine and the player TCP Mod, without the read-only mirror
+--- FAIL: TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal (61.51s)
+    shutdown_test.go:342: game: dev grace period = 131s, want 134s
+    shutdown_test.go:342: game: k8s grace period = 131s, want 134s
+    shutdown_test.go:342: game: compose grace period = 131s, want 134s
+    shutdown_test.go:342: game: systemd grace period = 131s, want 134s
+    shutdown_test.go:347: configs/service/config.game.yaml does not contain "total_timeout: 129s\n"
+    shutdown_test.go:349: deploy/dev/second-game.sh does not contain "[ \"$i\" -lt 134 ]"
+--- FAIL: TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure (6.24s)
+    shutdown_test.go:1019: WARN does not carry the shortfall with its advice "deploy/k8s/base/secret.game.example.yaml: total_timeout 60s cannot cover 27 Mods (40s declared + 3s x 25 + 3s singleton release = 118s); every stop warns and budgets are cut. Set it to 123s": deploy/k8s/base/secret.game.example.yaml: total_timeout 60s cannot cover 28 Mods (40s declared + 3s x 26 + 3s singleton release = 121s); every stop warns and budgets are cut. Set it to 126s; configs/service/config.game.prod.example.yaml: shutdown.total_timeout: time: invalid duration "soon"; grace period 131s
+--- FAIL: TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn (6.29s)
+    singleton_test.go:233: singleton on, total 116s: warn configs/service/config.game.yaml: total_timeout 116s cannot cover 28 Mods (40s declared + 3s x 26 + 3s singleton release = 121s); every stop warns and budgets are cut. Set it to 126s; grace period 131s
+    singleton_test.go:240: singleton off, total 116s still reported short: warn configs/service/config.game.yaml: total_timeout 116s cannot cover 28 Mods (40s declared + 3s x 26 = 118s); every stop warns and budgets are cut. Set it to 123s; grace period 131s
+--- FAIL: TestDoctorCountsTheConfiguredPlayerTCPStopBudget (4.11s)
+    shutdown_test.go:1099: player_access.tcp.shutdown_timeout 30s with total_timeout 126s: warn configs/service/config.game.yaml: total_timeout 126s cannot cover 28 Mods (60s declared + 3s x 26 + 3s singleton release = 141s); configs/service/config.game.prod.example.yaml: total_timeout 126s cannot cover 28 Mods (60s declared + 3s x 26 + 3s singleton release = 141s); every stop warns and budgets are cut. Set it to 146s; grace period 131s, want a WARN with 60s declared and advice 146s
+--- FAIL: TestGeneratedShutdownCountsThePlayerTCPStopBudget (4.37s)
+    shutdown_test.go:1074: configs/service/config.game.yaml does not contain "40s declared + 3s x 25\n"
+    shutdown_test.go:1074: configs/service/config.game.yaml does not contain "3s for the singleton release = 123s"
+    shutdown_test.go:1074: configs/service/config.game.yaml does not contain "total_timeout: 123s\n"
+    shutdown_test.go:1074: configs/service/config.game.prod.example.yaml does not contain "40s declared + 3s x 25\n"
+    shutdown_test.go:1074: configs/service/config.game.prod.example.yaml does not contain "3s for the singleton release = 123s"
+    shutdown_test.go:1074: configs/service/config.game.prod.example.yaml does not contain "total_timeout: 123s\n"
+    shutdown_test.go:1074: deploy/k8s/base/secret.game.example.yaml does not contain "40s declared + 3s x 25\n"
+    shutdown_test.go:1074: deploy/k8s/base/secret.game.example.yaml does not contain "3s for the singleton release = 123s"
+    shutdown_test.go:1074: deploy/k8s/base/secret.game.example.yaml does not contain "total_timeout: 123s\n"
+    shutdown_test.go:1079: fresh game-demo: ok total_timeout 126s, grace period 131s
+panic: test timed out after 30m0s
