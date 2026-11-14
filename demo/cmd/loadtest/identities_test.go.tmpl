@@ -1,0 +1,155 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	gamelogin "{{MODULE}}/game/login"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// -identities：login_as 点名的身份在哪个 game 上玩。表里的身份在它的 sid 上建角（进服票据也是那个服的），connect 拨
+// 它的地址；不在表里的（含机器人自己的 ""）用 -server-id 与 -endpoint。alliance_cross_join 靠它把两名玩家放在两个
+// game 进程上。
+func TestIdentityRoutesPutEachIdentityOnItsGame(t *testing.T) {
+	routes, err := parseIdentityRoutes(" member=1001@127.0.0.1:7001, founder2=1001@127.0.0.1:7001 ")
+	if err != nil || len(routes) != 2 || routes["member"] != (identityRoute{serverID: 1001, endpoint: "127.0.0.1:7001"}) {
+		t.Fatalf("parse: %+v, %v", routes, err)
+	}
+	if empty, err := parseIdentityRoutes(""); err != nil || len(empty) != 0 {
+		t.Fatalf("an empty -identities: %+v, %v", empty, err)
+	}
+	for _, bad := range []string{"member=1001", "=1001@a:1", "member=x@a:1", "member=1001@", "member=0@a:1", "member", "m=1@a:1,m=2@b:2"} {
+		if _, err := parseIdentityRoutes(bad); err == nil {
+			t.Errorf("-identities %q was accepted", bad)
+		}
+	}
+	if routes.serverFor("member", 1000) != 1001 || routes.serverFor("", 1000) != 1000 || routes.serverFor("member2", 1000) != 1000 {
+		t.Fatal("serverFor does not follow the table")
+	}
+
+	// login_as 改 connect 拨的地址：表里的身份拨它的 game，回到不在表里的身份时删掉，connect 用 -endpoint。
+	actions := action.NewRegistry()
+	registerIdentities(actions, routes)
+	rb := robot.NewContext(robot.Config{ID: 1})
+	loginAs := func(identity string) {
+		t.Helper()
+		if err := actions.Run(context.Background(), rb, "login_as", map[string]any{"identity": identity}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loginAs("member")
+	if endpoint, _ := rb.Blackboard.String(endpointKey); endpoint != "127.0.0.1:7001" {
+		t.Fatalf("login_as member: connect would dial %q", endpoint)
+	}
+	loginAs("")
+	if endpoint, ok := rb.Blackboard.Get(endpointKey); ok {
+		t.Fatalf("login_as \"\": connect would still dial %v instead of -endpoint", endpoint)
+	}
+	if identity, _ := rb.Blackboard.String(identityKey); identity != "" {
+		t.Fatalf("login_as \"\" left identity %q", identity)
+	}
+
+	// 入口一侧：同一个机器人，自己的身份拿 1000 的进服票据，member 拿 1001 的，握手解析到各自的服。
+	accounts, url, _ := portalFrontDoor(t)
+	if _, err := accounts.UpsertServer(context.Background(), svcaccount.GameServer{ID: 1001, Name: "s1001", Status: svcaccount.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	login := newPortalLogin(url, 1000)
+	login.routes = routes
+	authenticator := gamelogin.Authenticator{Accounts: accounts}
+	for _, step := range []struct {
+		identity string
+		sid      int32
+	}{{"", 1000}, {"member", 1001}} {
+		loginAs(step.identity)
+		packet, err := login.authPacket(rb)
+		if err != nil {
+			t.Fatalf("portal login as %q: %v", step.identity, err)
+		}
+		principal, err := authenticator.Authenticate(context.Background(), handshakeTicket(t, packet))
+		if err != nil || principal.ServerID != step.sid {
+			t.Fatalf("identity %q handshakes into server %d (%v), want %d", step.identity, principal.ServerID, err, step.sid)
+		}
+	}
+}
+
+// alliance_cross_join 的判定动作（离线，对着按脚本应答的游戏服）：remember / recall 把正在操作的联盟（号与上一次写
+// 答复的版本）存下、取回；my_alliance_joined 问“我在的联盟”（不带号，带上一次写的版本），必须是黑板上的那个联盟、
+// 至少两名成员——别的联盟、只有一名成员、带码的应答都失败，好让外面的 retry 等镜像追上。
+func TestCrossJoinActions(t *testing.T) {
+	var asked []*pb.AllianceInfoRequest
+	answers := []*pb.AllianceResponse{
+		{AllianceID: 7, Members: 1, Version: 3},         // 镜像还没追上那次入会
+		{AllianceID: 8, Members: 2, Version: 9},         // 别的联盟
+		{Code: 560001, Reason: "alliance_mirror_stale"}, // 带码
+		{AllianceID: 7, Members: 2, Version: 4},         // 对了
+	}
+	answer := func(request *transport.Packet) []*transport.Packet {
+		info, err := pb.UnmarshalAllianceInfoRequest(request.Payload)
+		if err != nil || request.MsgID != msgid.MsgAllianceInfo {
+			t.Errorf("unexpected request msg %d: %v", request.MsgID, err)
+			return nil
+		}
+		asked = append(asked, info)
+		next := answers[0]
+		answers = answers[1:]
+		payload, err := pb.MarshalAllianceResponse(next)
+		return answerTo(t, request, payload, err)
+	}
+	protocols := protocol.NewRegistry(pbCodec{})
+	actions := action.NewRegistry()
+	registerCrossJoin(actions, protocols)
+	_, robotSession := newScriptedGame(t, protocols, answer)
+	rb := robot.NewContext(robot.Config{ID: 2, PlayerID: 100_005, Protocols: protocols})
+	rb.RunAction = actions.Run
+	rb.SetSession(robotSession)
+	do := func(name string, param any) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return actions.Run(ctx, rb, name, param)
+	}
+
+	if err := do("remember_alliance", map[string]any{"as": "home"}); err == nil {
+		t.Fatal("remember_alliance with no alliance on the blackboard succeeded")
+	}
+	rb.Blackboard.Set("alliance_id", int64(7))
+	rb.Blackboard.Set("alliance_version", int64(4))
+	if err := do("remember_alliance", map[string]any{"as": "home"}); err != nil {
+		t.Fatal(err)
+	}
+	rb.Blackboard.Set("alliance_id", int64(8))
+	rb.Blackboard.Set("alliance_version", int64(9))
+	if err := do("recall_alliance", map[string]any{"as": "home"}); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := rb.Blackboard.Int64("alliance_id"); id != 7 {
+		t.Fatalf("recall_alliance brought back %d, want 7", id)
+	}
+	if err := do("recall_alliance", map[string]any{"as": "other"}); err == nil {
+		t.Fatal("recall_alliance of a name never remembered succeeded")
+	}
+
+	for i, want := range []string{"with 1 members", "is 8 with 2 members", "alliance_mirror_stale"} {
+		if err := do("my_alliance_joined", nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("answer %d: my_alliance_joined = %v, want an error naming %q", i, err, want)
+		}
+	}
+	if err := do("my_alliance_joined", nil); err != nil {
+		t.Fatalf("the right alliance with two members: %v", err)
+	}
+	for i, request := range asked {
+		if request.AllianceID != 0 || request.MinVersion != 4 {
+			t.Fatalf("request %d asked for alliance %d at version %d, want 0 (mine) at 4 (the join's)", i, request.AllianceID, request.MinVersion)
+		}
+	}
+}

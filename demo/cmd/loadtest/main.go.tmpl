@@ -96,7 +96,14 @@ func main() {
 	serverID := flag.Int("server-id", 1000, "the game server's sid, which roles are created on")
 	gameOps := flag.String("game-ops", "127.0.0.1:9100", "ops address of that game server (ops.addr in config.game.yaml); the alliance_offline_join scenario runs its operator step there (gm.player.join_alliance)")
 	adminToken := flag.String("admin-token", "dev-gm-token", "ops admin token for that operator step (ops.admin_token in config.game.yaml)")
+	identities := flag.String("identities", "", "where the identities login_as names play, as name=sid@host:port,...: the role is created on that sid and connect dials that address (the alliance_cross_join scenario puts its second and third identities on another game process); an identity not listed plays on -server-id at -endpoint")
 	flag.Parse()
+
+	routes, err := parseIdentityRoutes(*identities)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+		os.Exit(2)
+	}
 
 	if *metricsAddr != "" {
 		go serveMetrics(*metricsAddr)
@@ -113,9 +120,12 @@ func main() {
 			os.Exit(1)
 		}
 		defer accounts.Close()
+		accounts.routes = routes
 		login = accounts
 	case "portal":
-		login = newPortalLogin(*portalURL, int32(*serverID))
+		portal := newPortalLogin(*portalURL, int32(*serverID))
+		portal.routes = routes
+		login = portal
 	default:
 		fmt.Fprintf(os.Stderr, "loadtest: -login %q is not bus or portal\n", *loginMode)
 		os.Exit(2)
@@ -127,13 +137,13 @@ func main() {
 		os.Exit(2)
 	}
 	ops := gameOpsClient{addr: *gameOps, token: *adminToken, http: &http.Client{Timeout: 15 * time.Second}}
-	if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login, ops); err != nil {
+	if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login, ops, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login robotLogin, ops gameOpsClient) error {
+func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login robotLogin, ops gameOpsClient, routes identityRoutes) error {
 	playertcp.MustRegister()
 
 	protocols := protocol.NewRegistry(pbCodec{})
@@ -143,7 +153,10 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 	registerCellworld(actions, protocols)
 	defer reportCellworld()
 	login.registerEnter(actions, protocols)
+	registerIdentities(actions, routes)
 	registerOfflineJoin(actions, protocols, ops)
+	registerCrossJoin(actions, protocols)
+	registerProfileRename(actions, protocols)
 	registerPushes(protocols)
 	if err := loadScenarios(scenarios, scenarioDir); err != nil {
 		return err
@@ -235,6 +248,7 @@ func (login *accountLogin) registerEnter(actions *action.Registry, protocols *pr
 type portalLogin struct {
 	base     string
 	serverID int32
+	routes   identityRoutes
 	nonce    string
 	http     *http.Client
 }
@@ -293,6 +307,7 @@ func (login *portalLogin) authPacket(rb *robot.Context) (*transport.Packet, erro
 	// per login_as name.
 	identity, _ := rb.Blackboard.Get(identityKey)
 	name, _ := identity.(string)
+	serverID := login.routes.serverFor(name, login.serverID)
 	openID := fmt.Sprintf("robot-%s-%d", login.nonce, rb.ID)
 	// The name is the game's now (the profile module's rule: at most 16
 	// characters), asked for in EnterCreate.
@@ -320,7 +335,7 @@ func (login *portalLogin) authPacket(rb *robot.Context) (*transport.Packet, erro
 	}
 	found := false
 	for _, server := range listed.Servers {
-		if server.ServerID != login.serverID {
+		if server.ServerID != serverID {
 			continue
 		}
 		found = true
@@ -330,12 +345,12 @@ func (login *portalLogin) authPacket(rb *robot.Context) (*transport.Packet, erro
 		}
 	}
 	if !found {
-		return nil, fmt.Errorf("portal: server %d is not in the list of %d servers (accountctl upsert-server -sid %d)", login.serverID, len(listed.Servers), login.serverID)
+		return nil, fmt.Errorf("portal: server %d is not in the list of %d servers (accountctl upsert-server -sid %d)", serverID, len(listed.Servers), serverID)
 	}
 	var entered struct {
 		Ticket string `json:"ticket"`
 	}
-	if err := login.post(ctx, "/portal/enter", map[string]any{"account_ticket": loggedIn.AccountTicket, "server_id": login.serverID}, &entered); err != nil {
+	if err := login.post(ctx, "/portal/enter", map[string]any{"account_ticket": loggedIn.AccountTicket, "server_id": serverID}, &entered); err != nil {
 		return nil, err
 	}
 	rb.Blackboard.Set(createNameKey, createName)
@@ -409,6 +424,7 @@ type accountLogin struct {
 	bus      *bus.Bus
 	accounts svcaccount.Accounts
 	serverID int32
+	routes   identityRoutes
 	nonce    string
 }
 
@@ -460,7 +476,7 @@ func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, err
 	}
 	playerID, known := rb.Blackboard.Get("role:" + name)
 	if !known {
-		role, err := login.accounts.CreateRole(ctx, account.ID, login.serverID, roleName)
+		role, err := login.accounts.CreateRole(ctx, account.ID, login.routes.serverFor(name, login.serverID), roleName)
 		if err != nil {
 			return nil, fmt.Errorf("account create role: %w", err)
 		}
@@ -559,17 +575,6 @@ func (ops gameOpsClient) execute(ctx context.Context, name string, payload any) 
 // and reads "my alliance" with no alliance id and the version the join answered:
 // it must be the founder's alliance with the member in it.
 func registerOfflineJoin(actions *action.Registry, protocols *protocol.Registry, ops gameOpsClient) {
-	// login_as {identity}: the identity the next connect logs in as.
-	actions.MustRegister(action.Func{ActionName: "login_as", Handle: func(_ context.Context, rb *robot.Context, param any) error {
-		rb.Blackboard.Set(identityKey, action.ParamsOf(rb, param).String("identity", ""))
-		return nil
-	}})
-	// disconnect closes the robot's connection; the server sees the socket
-	// close like any client going away.
-	actions.MustRegister(action.Func{ActionName: "disconnect", Handle: func(_ context.Context, rb *robot.Context, _ any) error {
-		rb.SetSession(nil)
-		return nil
-	}})
 	// join_alliance_offline: the operator joins the current identity (offline)
 	// to the alliance on the blackboard (the one the found saga reported).
 	actions.MustRegister(action.Func{ActionName: "join_alliance_offline", Handle: func(ctx context.Context, rb *robot.Context, _ any) error {
@@ -612,6 +617,249 @@ func registerOfflineJoin(actions *action.Registry, protocols *protocol.Registry,
 			return nil
 		}))
 }
+
+// identityRoute is where one identity named by login_as plays: the game sid
+// its role is created on (and its enter ticket is for), and the player TCP
+// address of the game process serving that sid.
+type identityRoute struct {
+	serverID int32
+	endpoint string
+}
+
+// identityRoutes is -identities: name → route. An identity not listed — the
+// robot's own ("") included — plays on -server-id at -endpoint.
+type identityRoutes map[string]identityRoute
+
+// parseIdentityRoutes reads "name=sid@host:port,...". Every entry needs all
+// three parts: a sid without an address would create the role on one game
+// and dial another, which the game answers player_elsewhere.
+func parseIdentityRoutes(spec string) (identityRoutes, error) {
+	routes := identityRoutes{}
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, target, ok := strings.Cut(entry, "=")
+		sid, endpoint, hasEndpoint := strings.Cut(target, "@")
+		serverID, err := strconv.ParseInt(sid, 10, 32)
+		if !ok || name == "" || !hasEndpoint || endpoint == "" || err != nil || serverID <= 0 {
+			return nil, fmt.Errorf("-identities: %q is not name=sid@host:port", entry)
+		}
+		if _, dup := routes[name]; dup {
+			return nil, fmt.Errorf("-identities: %q is listed twice", name)
+		}
+		routes[name] = identityRoute{serverID: int32(serverID), endpoint: endpoint}
+	}
+	return routes, nil
+}
+
+// serverFor is the sid the identity's role lives on.
+func (routes identityRoutes) serverFor(name string, fallback int32) int32 {
+	if route, ok := routes[name]; ok {
+		return route.serverID
+	}
+	return fallback
+}
+
+// endpointKey is the blackboard key connect reads its address from (the
+// built-in connect action takes "endpoint" from its param or the blackboard).
+const endpointKey = "endpoint"
+
+// registerIdentities: login_as and disconnect, the two halves of playing more
+// than one role from one robot.
+func registerIdentities(actions *action.Registry, routes identityRoutes) {
+	// login_as {identity}: the identity the next connect logs in as, and the
+	// address it dials — the identity's own game under -identities, else the
+	// run's -endpoint (the key is removed, so connect falls back to it).
+	actions.MustRegister(action.Func{ActionName: "login_as", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+		name := action.ParamsOf(rb, param).String("identity", "")
+		rb.Blackboard.Set(identityKey, name)
+		if route, ok := routes[name]; ok {
+			rb.Blackboard.Set(endpointKey, route.endpoint)
+		} else {
+			rb.Blackboard.Delete(endpointKey)
+		}
+		return nil
+	}})
+	// disconnect closes the robot's connection; the server sees the socket
+	// close like any client going away.
+	actions.MustRegister(action.Func{ActionName: "disconnect", Handle: func(_ context.Context, rb *robot.Context, _ any) error {
+		rb.SetSession(nil)
+		return nil
+	}})
+}
+
+// registerCrossJoin is the alliance_cross_join scenario's half: players on two
+// game processes join each other's alliances. The alliance lives in the
+// alliance service; each game reaches it by routed RPC and reads it through
+// its own mirror, and each player's copy of "my alliance" is on the game that
+// serves that player. One robot plays four roles (-identities puts member and
+// founder2 on the second game): its own founds A on the first game, member
+// joins A from the second; founder2 founds B on the second game, member2 joins
+// it from the first; then each founder reads its alliance back on its own
+// game, at least as new as the join from the other process.
+func registerCrossJoin(actions *action.Registry, protocols *protocol.Registry) {
+	// remember / recall {as}: keep the alliance the scenario is working on
+	// (its id and the version the last write answered) under a name, and
+	// bring it back — the second founding overwrites alliance_id.
+	actions.MustRegister(action.Func{ActionName: "remember_alliance", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+		as := action.ParamsOf(rb, param).String("as", "")
+		id, _ := rb.Blackboard.Int64("alliance_id")
+		if as == "" || id == 0 {
+			return fmt.Errorf("remember_alliance: need a name (as) and an alliance on the blackboard (got %q, %d)", as, id)
+		}
+		version, _ := rb.Blackboard.Int64("alliance_version")
+		rb.Blackboard.Set("alliance_id@"+as, id)
+		rb.Blackboard.Set("alliance_version@"+as, version)
+		return nil
+	}})
+	actions.MustRegister(action.Func{ActionName: "recall_alliance", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+		as := action.ParamsOf(rb, param).String("as", "")
+		id, ok := rb.Blackboard.Int64("alliance_id@" + as)
+		if !ok || id == 0 {
+			return fmt.Errorf("recall_alliance: nothing remembered as %q", as)
+		}
+		version, _ := rb.Blackboard.Int64("alliance_version@" + as)
+		rb.Blackboard.Set("alliance_id", id)
+		rb.Blackboard.Set("alliance_version", version)
+		return nil
+	}})
+	// my_alliance_joined reads "the alliance I am in" (no id) at least as new
+	// as the last write's version: it must be the alliance on the blackboard,
+	// with at least "members" members (default 2: the founder and the one who
+	// joined from the other game). The mirror may still be older than the
+	// version on the game asked — a retry node around it is the wait.
+	action.MustRegisterCall[pb.AllianceInfoRequest, pb.AllianceResponse](actions, protocols, "my_alliance_joined", msgid.MsgAllianceInfo,
+		action.MapField[pb.AllianceResponse]("AllianceID", "my_alliance_query_id"),
+		action.MapField[pb.AllianceResponse]("MinVersion", "alliance_version"),
+		action.OnResp(func(rb *robot.Context, resp *pb.AllianceResponse) error {
+			want, _ := rb.Blackboard.Int64("alliance_id")
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return fmt.Errorf("player %d, in alliance %d: my alliance answers %w", rb.PlayerID, want, err)
+			}
+			members := int32(2)
+			if raw, ok := rb.Blackboard.Int64("cross_join_members"); ok && raw > 0 {
+				members = int32(raw)
+			}
+			if resp.AllianceID != want || resp.Members < members {
+				return fmt.Errorf("player %d: my alliance is %d with %d members, want %d with at least %d", rb.PlayerID, resp.AllianceID, resp.Members, want, members)
+			}
+			return nil
+		}))
+}
+
+// registerProfileRename: the profile module's ProfileRename from the robot's
+// side. The rules are the module's (ProfileComponent.Rename): blanks around the
+// name are trimmed, an empty name or one over 16 characters is refused, and
+// nothing is written on a refusal.
+func registerProfileRename(actions *action.Registry, protocols *protocol.Registry) {
+	action.MustRegisterCall[pb.ProfileRenameRequest, pb.ProfileRenameResponse](actions, protocols, "profile_rename_call", msgid.MsgProfileRename,
+		action.IgnoreCode[pb.ProfileRenameResponse](),
+		action.OnResp(func(rb *robot.Context, resp *pb.ProfileRenameResponse) error {
+			rb.Blackboard.Set(profileRenameAnswerKey, resp)
+			return nil
+		}))
+	// profile_rename {name}: rename this player. Without a name the robot
+	// takes " rn<player id> " — with blanks around it, so the trim is part of
+	// what is checked. The answer's Name is the stored name and must be the
+	// trimmed request; it goes on the blackboard (profile_name) for
+	// profile_name_expect.
+	actions.MustRegister(action.Func{ActionName: "profile_rename", Handle: func(ctx context.Context, rb *robot.Context, param any) error {
+		requested := action.ParamsOf(rb, param).String("name", fmt.Sprintf(" rn%d ", rb.PlayerID))
+		want := strings.TrimSpace(requested)
+		resp, err := callProfileRename(ctx, rb, requested)
+		if err != nil {
+			return err
+		}
+		if err := coded(resp.Code, resp.Reason); err != nil {
+			return fmt.Errorf("rename to %q: %w", requested, err)
+		}
+		if resp.Name != want {
+			return fmt.Errorf("rename to %q answered name %q, want %q", requested, resp.Name, want)
+		}
+		rb.Blackboard.Set("profile_name", resp.Name)
+		return nil
+	}})
+	// profile_rename_refused {name}: a name the rules refuse (default 17
+	// characters, one over the limit) must come back with the module's code
+	// for it, not a success; the stored name is unchanged, which
+	// profile_name_expect checks afterwards.
+	actions.MustRegister(action.Func{ActionName: "profile_rename_refused", Handle: func(ctx context.Context, rb *robot.Context, param any) error {
+		requested := action.ParamsOf(rb, param).String("name", strings.Repeat("x", 17))
+		resp, err := callProfileRename(ctx, rb, requested)
+		if err != nil {
+			return err
+		}
+		if resp.Code == 0 {
+			return fmt.Errorf("rename to %q (%d characters) was accepted as %q", requested, len([]rune(requested)), resp.Name)
+		}
+		if want := apperrors.ErrProfileNameLong.Code(); len([]rune(strings.TrimSpace(requested))) > 16 && resp.Code != want {
+			return fmt.Errorf("rename to %q was refused with %d %s, want %d (profile_name_long)", requested, resp.Code, resp.Reason, want)
+		}
+		return nil
+	}})
+	// profile_name_expect {timeout}: this client's own replicated profile
+	// carries the name profile_rename stored — the rename went through a
+	// committed transaction and the scene replicated it. scene_watch must run
+	// first.
+	actions.MustRegister(action.Func{ActionName: "profile_name_expect", Handle: func(ctx context.Context, rb *robot.Context, param any) error {
+		timeout := action.ParamsOf(rb, param).Duration("timeout", 10*time.Second)
+		want, _ := rb.Blackboard.String("profile_name")
+		if want == "" {
+			return errors.New("profile_name_expect: no name on the blackboard; profile_rename must run first")
+		}
+		raw, _ := rb.Blackboard.Get("scene_watcher")
+		watcher, ok := raw.(*sceneWatcher)
+		if !ok || watcher == nil {
+			return errors.New("profile_name_expect: no watcher on the blackboard; scene_watch must run first")
+		}
+		playerID, _ := rb.Blackboard.Int64("player_id")
+		deadline := time.After(timeout)
+		for {
+			watcher.mu.Lock()
+			failure, name, found := watcher.failure, "", false
+			for subjectID, document := range watcher.subjects {
+				if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
+					name, found = clientsync.PlayerName(document)
+					break
+				}
+			}
+			watcher.mu.Unlock()
+			if failure != nil {
+				return failure
+			}
+			if found && name == want {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-deadline:
+				return fmt.Errorf("profile_name_expect: after %s this client's own name is %q (known %v), want %q", timeout, name, found, want)
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}})
+}
+
+// callProfileRename sends one ProfileRename through the registered call
+// profile_rename_call, which keeps the answer, coded or not, on the blackboard.
+func callProfileRename(ctx context.Context, rb *robot.Context, name string) (*pb.ProfileRenameResponse, error) {
+	rb.Blackboard.Delete(profileRenameAnswerKey)
+	if err := rb.Do(ctx, "profile_rename_call", map[string]any{"name": name}); err != nil {
+		return nil, fmt.Errorf("profile rename: %w", err)
+	}
+	raw, _ := rb.Blackboard.Get(profileRenameAnswerKey)
+	resp, ok := raw.(*pb.ProfileRenameResponse)
+	if !ok {
+		return nil, fmt.Errorf("profile rename: no answer kept")
+	}
+	return resp, nil
+}
+
+// profileRenameAnswerKey is where profile_rename_call leaves the answer.
+const profileRenameAnswerKey = "profile_rename_answer"
 
 // registerCalls turns the project's request/response pairs into actions a
 // scenario can name. Request fields fill from the scenario param (snake_case
@@ -1286,6 +1534,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalJoinAllianceRequest(message)
 	case *pb.AllianceInfoRequest:
 		return pb.MarshalAllianceInfoRequest(message)
+	case *pb.ProfileRenameRequest:
+		return pb.MarshalProfileRenameRequest(message)
 	case *pb.LeaveAllianceRequest:
 		return pb.MarshalLeaveAllianceRequest(message)
 	case *pb.DonateAllianceRequest:
@@ -1309,6 +1559,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.EnterCreateResponse:
 		decoded, err := pb.UnmarshalEnterCreateResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ProfileRenameResponse:
+		decoded, err := pb.UnmarshalProfileRenameResponse(data)
 		if err != nil {
 			return err
 		}

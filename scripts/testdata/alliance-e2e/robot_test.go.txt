@@ -43,3 +43,40 @@ func TestAllianceE2ERobotOfflineJoin(t *testing.T) {
 	}
 	t.Logf("ROBOT alliance_offline_join: 4 robots passed in %v (report %s)", time.Since(start).Round(time.Millisecond), report)
 }
+
+// 机器人场景 alliance_cross_join（两个 game 进程上的玩家互相入会）在真实进程上跑一遍：全栈之上，机器人自己的身份与
+// member2 连 game 1000，member 与 founder2 经 -identities 在 1001 上建角、连 game 1001 的玩家 TCP。每个机器人：自己的
+// 身份在 1000 建盟 A、member 从 1001 入 A；founder2 在 1001 建盟 B、member2 从 1000 入 B；入会者各在自己的 game 上读
+// “我的联盟”（至少是入会答复的版本），两位盟主再各在自己的 game 上读回自己的联盟：两名成员、至少是另一个进程上那次
+// 入会的版本。-login 由 ALLIANCE_E2E_ROBOT_LOGIN 选（缺省 bus；portal 时走 account 进程的登录入口）。
+func TestAllianceE2ERobotCrossGameJoin(t *testing.T) {
+	loadtest := env(t, "ALLIANCE_E2E_LOADTEST")
+	s := newSuite(t, 10*time.Minute)
+	games, _ := s.fullStack(procOptions{})
+	login := os.Getenv("ALLIANCE_E2E_ROBOT_LOGIN")
+	if login == "" {
+		login = "bus"
+	}
+	report := filepath.Join(s.logs, "loadtest-alliance-cross-join-"+login+".json")
+	args := []string{
+		"-login", login, "-portal", "http://" + s.portalAddr(),
+		"-endpoint", games[0].client, "-server-id", "1000",
+		"-identities", "member=1001@" + games[1].client + ",founder2=1001@" + games[1].client,
+		"-account-nats", s.natsURL, "-nats-prefix", s.prefix,
+		"-scenarios", filepath.Join(s.root, "loadtest", "scenarios"), "-scenario", "alliance_cross_join",
+		"-count", "2", "-report", report}
+	cmd := exec.CommandContext(s.ctx, loadtest, args...)
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	_ = os.WriteFile(filepath.Join(s.logs, "loadtest-alliance-cross-join-"+login+".out"), out, 0o644)
+	if err != nil {
+		var failed []string
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if strings.Contains(line, "scenario failed") || strings.HasPrefix(line, "loadtest:") {
+				failed = append(failed, line)
+			}
+		}
+		t.Fatalf("robots (alliance_cross_join, 2, -login %s) failed after %v: %v\n%s", login, time.Since(start).Round(time.Millisecond), err, strings.Join(failed, "\n"))
+	}
+	t.Logf("ROBOT alliance_cross_join (-login %s): 2 robots passed in %v (report %s)", login, time.Since(start).Round(time.Millisecond), report)
+}
