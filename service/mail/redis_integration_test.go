@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,14 +21,23 @@ import (
 // The unit double evaluates commands in Go and cannot prove driver semantics.
 //
 //	docker run --rm -p 6379:6379 redis:7
-//	REDIS_ADDR=127.0.0.1:6379 go test -tags integration ./mail/ -run Integration
+//	REDIS_ADDR=127.0.0.1:6379 go test -tags integration ./service/mail/ -run Integration
+//
+// REDIS_ADDR 接受单机地址或逗号分隔的 Cluster 种子，与 redistest.Cleanup 使用同一口径。
 func integrationClient(t testing.TB) fredis.IRedis {
 	t.Helper()
-	addr := os.Getenv("REDIS_ADDR")
+	addr := strings.TrimSpace(os.Getenv("REDIS_ADDR"))
 	if addr == "" {
 		t.Skip("set REDIS_ADDR to run the mail Redis integration tests")
 	}
-	client, err := kitredis.NewClient(fredis.DefaultConfig(addr))
+	cfg := fredis.DefaultConfig(addr)
+	if strings.Contains(addr, ",") {
+		cfg.ClusterAddrs = strings.Split(addr, ",")
+		for i := range cfg.ClusterAddrs {
+			cfg.ClusterAddrs[i] = strings.TrimSpace(cfg.ClusterAddrs[i])
+		}
+	}
+	client, err := kitredis.NewClient(cfg)
 	if err != nil {
 		t.Fatalf("connect %s: %v", addr, err)
 	}
