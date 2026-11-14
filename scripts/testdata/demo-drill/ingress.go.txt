@@ -1,0 +1,37 @@
+// Command drillingress 是 game-demo 的 game 服务在独立 Gate 后面的接法（演练用，scripts/test-demo-*.sh 复制进生成工程的
+// cmd/drillingress/ 后编译）：与工程的 main.go 相同，只是 bootstrap.NewWithOptions 带上 GameIngress——game 不开嵌入 TCP
+// （配置里 player_access.tcp.enabled: false），玩家连接由 Gate 经 NATS 转来；认证器是登录模块的 NewAuthenticator，
+// 会话激活后的告知（EnterStatus）经 Game Ingress 的 OnActivated 发出。接法照 modules/login/README.md 的“边界”。
+//
+//	DRILL_INGRESS_ADVERTISE=127.0.0.1 bin/drillingress game --sid 1000 --config configs/service/config.game.yaml
+package main
+
+import (
+	"log/slog"
+	"os"
+	_ "time/tzdata"
+
+	accessplayertcp "DRILL_MODULE/internal/access/player/tcp"
+	"DRILL_MODULE/internal/bootstrap"
+
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+)
+
+func main() {
+	options := gatewiring.DefaultOptions()
+	options.Authenticator = accessplayertcp.NewAuthenticator()
+	options.RegisterDiscovery = true
+	options.AdvertiseAddr = os.Getenv("DRILL_INGRESS_ADVERTISE")
+	if options.AdvertiseAddr == "" {
+		options.AdvertiseAddr = "127.0.0.1"
+	}
+	options.Ready = func() bool { return true }
+	a, err := bootstrap.NewWithOptions(bootstrap.Options{GameIngress: &options})
+	if err == nil {
+		err = a.Execute()
+	}
+	if err != nil {
+		slog.Error("server exit", "err", err)
+		os.Exit(1)
+	}
+}

@@ -1,0 +1,50 @@
+// Command drillgate 是 game-demo 的独立 Gate（演练用，scripts/test-demo-*.sh 复制进生成工程的 cmd/drillgate/ 后编译）。
+// 生成器不生成 Gate 进程；接法照 modules/login/README.md 的“边界”：NATS、etcd（不自动登记，Gate 自己登记候选）、
+// account 的客户端、gatewiring.NewGateMod。认证器是 wiring/gate 缺省的 AccountAuthenticator（认 enter: 与 session:
+// 两种票据，路由到角色的承载服 Role.ServingServerID），按 etcd 里的 game 候选（drillingress 登记的）转发。
+//
+//	DRILL_GATE_ADDR=127.0.0.1:37100 DRILL_GATE_ADVERTISE=127.0.0.1:37100 bin/drillgate gate --sid 9500 --config gate.yaml
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	_ "time/tzdata"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo"
+	accountwiring "github.com/tjbdwanghaibo/roost-core/wiring/account"
+	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
+	kitops "github.com/tjbdwanghaibo/roost-core/wiring/ops"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
+)
+
+// gateService 是 Gate 进程的 App 服务：Gate 的工作都在 GateMod 里，服务本身只等停机。
+type gateService struct{}
+
+func (gateService) Name() app.ServiceName           { return "gate" }
+func (gateService) Init(*app.Registry) error        { return nil }
+func (gateService) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+func (gateService) Shutdown(context.Context) error  { return nil }
+
+func main() {
+	options := gatewiring.DefaultOptions()
+	options.RegisterDiscovery = true
+	options.TCP.Enabled = true
+	options.TCP.Addr = os.Getenv("DRILL_GATE_ADDR")
+	options.AdvertiseAddr = os.Getenv("DRILL_GATE_ADVERTISE")
+	options.Ready = func() bool { return true }
+	a := app.New("drillgate", buildinfo.VersionString()).Singleton(kitredis.SingletonStore)
+	// ops 端点（/readyz、/metrics）：演练脚本按 /readyz 等 Gate 就绪。
+	a.Mods(kitops.NewOpsMod())
+	a.RegisterServer("gate", gateService{},
+		kitnats.NewNatsMod(nil), kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration()),
+		accountwiring.NewClientMod(), gatewiring.NewGateMod(options))
+	if err := a.Execute(); err != nil {
+		slog.Error("gate exit", "err", err)
+		os.Exit(1)
+	}
+}
