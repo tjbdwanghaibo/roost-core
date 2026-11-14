@@ -85,7 +85,7 @@
 - **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md` 的“enter 模块的边界”“进入钩子不是事务的一部分”“game-demo 只用了 enter 模块的协议、域与首次初始化”“game-demo 接入登录链路的边界”）：
   - 握手之后不进入就断开的已有玩家，`EnterStatus` 读档时装载的那份内存副本不经工程自己的驻留表（game-demo 的情形），到进程重启才释放。
   - 工程改写进入端点时要自己在同样的位置调 `RunEntering` 与 `RunEntered`，否则检查与钩子不执行。
-  - 与真实的 naming 一起建角没有跑过，只用替身命名入口验证过。
+  - 与真实 naming 的建角、跨 sid 重名拒绝、改名后旧名释放已由 `scripts/test-demo-login.sh` 的 casual + naming 阶段验证；故障窗口逐步恢复仍以 naming 的离线状态机场景为准。
 
 ## 复用方式
 
@@ -127,4 +127,4 @@
 - 新建与进入的事务（`game/handler`）用真实的 Nest 加替身提交器（不落盘，可以拒绝提交来验证回滚），覆盖首次初始化、重复进入、提交被拒后补做、新建恰好一次、并发新建、名字钩子拒绝什么都不写。
 - 骨架与登记点（`game/login`、`game/entities/player`）是纯函数级的场景。
 - `EnterStatus`（`game/controllers/enter`）用玩家传输的替身，验证推送内容、拒绝后断开、判断不了时不推。
-- 模块自己的场景没有覆盖端点 `HandleEnterGame` / `HandleEnterCreate` 经真实 TCP 的串接；这一段在两个配方的 TCP 场景与一次单机真实进程登录里验证过（见 KNOWN-LIMITS），不等同多实例故障恢复验证。没有经真实持久层的场景。
+- 模块自己的场景使用离线持久层；`scripts/test-demo-login.sh` 另外生成 casual + naming，通过真实 HTTP / Robot TCP、Redis Directory、Mongo / WAL 验证新建与进入、两服唯一命名、双 Gate、game 重启后首次金币与购买回执不重复。范围与复跑命令见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。

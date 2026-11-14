@@ -666,4 +666,4 @@ go test -mod=mod ./...                                            # 其余生成
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。
 - 模块的 README 写的是模块自己的能力与边界；几个模块组合之后的行为（联动没有覆盖的那些）没有人替你验证过，要自己写场景。
 - 独占新服务的模块（alliance）与带 Saga 的模块只在新生成或结构相同的工程上验证过；已有工程的服务名、Mod 组合不同时先 `module plan` 看它要动什么。
-- 登录链路在单机真实进程上演练过（嵌入 TCP 与独立 Gate 各一次，见 CHANGELOG）；多个 Gate、account 多副本、跨机没有验证。
+- 登录链路的单机真实入口为 `scripts/test-demo-login.sh`：game-demo 原有场景之后，casual + naming 阶段验证双 account、双 game sid、双 Gate、真实命名与购买回执、game / Gate 重启后重连和服务器时间推送。`DEMO_LOGIN_MODULES_ONLY=1` 只跑模块阶段；跨机与其它配方玩法不在这个验收范围内，见[登录线证据](../../../maintenance/evidence/v147-login-20261114.md)。

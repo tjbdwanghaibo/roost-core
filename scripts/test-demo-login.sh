@@ -11,6 +11,8 @@
 #   4. 机器人缺省的总线登录：同两个场景（即 make dev-smoke）；
 #   5. 独立 Gate（DEMO_LOGIN_GATE=0 时跳过）：停掉 game 1000，换成 Game Ingress 接法（cmd/drillingress，嵌入 TCP 关闭）并起
 #      独立 Gate（cmd/drillgate），机器人经 Gate 跑 -login portal 与总线登录（DEMO_LOGIN_GATE_SCENARIO，缺省是整个缺省场景 demo）。
+#   6. 全新 casual + naming 工程：双 account、双 game sid、双 Gate、真实命名与购买回执，game / Gate SIGKILL 后重连，
+#      ServertimeNow 的真实收包次序。DEMO_LOGIN_MODULES=0 只跑 demo；DEMO_LOGIN_MODULES_ONLY=1 只跑这一阶段。
 # 结束时停掉全部进程、删本工程的库 / 流 / 键；证据（curl 应答、机器人报告与输出、各进程日志）留在 $DEMO_LOGIN_OUT。
 #
 #   ROOST_MIRROR_LOCAL_HOME=<私有目录> ROOST_MIRROR_LOCAL_OFFSET=<偏移> scripts/mirror-local.sh up
@@ -28,6 +30,13 @@ for tool in etcd jq curl mongosh redis-cli nats; do
 	command -v "$tool" >/dev/null || { echo "$tool not found on PATH" >&2; exit 2; }
 done
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${DEMO_LOGIN_MODULES_ONLY:-0}" == 1 ]]; then
+	exec bash "$repo_dir/scripts/testdata/demo-drill/login-modules.sh"
+fi
+if [[ "${DRILL_KEEP:-0}" == 1 && "${DEMO_LOGIN_MODULES:-1}" == 1 ]]; then
+	echo "DRILL_KEEP=1 requires DEMO_LOGIN_MODULES_ONLY=1 or DEMO_LOGIN_MODULES=0 (the two stages reuse the same ports)" >&2
+	exit 2
+fi
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/roost-demo-login.XXXXXX")"
 project="${DEMO_LOGIN_PROJECT:-$(printf 'lgd%06x' $(((RANDOM << 9) ^ RANDOM)))}"
 out="$DEMO_LOGIN_OUT"
@@ -104,3 +113,9 @@ for log in .dev/*.log; do
 	[ "$n" = 0 ] || { drill_log "$(basename "$log"): $n ERROR lines"; errors=$((errors + n)); }
 done
 drill_log "PASS demo login drill ($errors ERROR log lines in total; logs in $out/logs)"
+if [[ "${DEMO_LOGIN_MODULES:-1}" == 1 ]]; then
+	# 顺序释放 demo 的端口，再以全新前缀验证正式模块组合；公共清理只操作本次生成工程。
+	drill_cleanup
+	trap - EXIT
+	DEMO_LOGIN_OUT="$out/modules" bash "$repo_dir/scripts/testdata/demo-drill/login-modules.sh"
+fi

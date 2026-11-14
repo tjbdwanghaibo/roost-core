@@ -106,7 +106,8 @@ roost module verify
 - 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）与 login 模块的认证器；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
 - 覆盖：从渠道身份走到一条认证过的握手、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、注册表的过期 / 上限 / 并发、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；game-demo 的这一段有可重复的脚本（仓库的 `scripts/test-demo-login.sh`：`make dev-run`、curl 三步、机器人 `-login portal` 新号与老号，最后经独立 Gate 再跑一遍）。已并入别的服的老角色也有脚本（`scripts/test-demo-merge.sh`：合服后原服 1001 的角色走三步，清单标出 `merged_into`、地址给承载服，1001 的进服票据在承载服 1000 上嵌入 TCP 与经独立 Gate 各握手一次，进到原角色、背包延续）。
-- 没有验证：account 多副本、动态注册表经真实进程、换服中的角色、与 naming 的组合、生产配置。
+- `scripts/test-demo-login.sh` 的 casual + naming 阶段增加两个 account 进程：A 签发账号票据，B 校验并选服、签发进服票据；停掉 A 后 B 独立完成同一角色的重连。两个 game sid 共用正式 Redis Directory，验证建角、重名拒绝与换名；嵌入 TCP 和双 Gate 都走真实入口。
+- 没有验证：动态注册表经真实进程、换服中的角色、生产配置、跨机。可重复步骤见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
 
 ## 整条链路
 
