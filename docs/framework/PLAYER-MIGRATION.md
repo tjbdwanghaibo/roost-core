@@ -110,11 +110,13 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 ### 6.2 回退
 
 1. 停服窗口内停 game(B)，`sidmove wal-drained` 确认排空。
-2. `go run ./cmd/sidmerge revert -from A -into B -manifest merge-A.json`：先核对（B 已排空、清单记的库名与按配置重新换算的相同、清单上每份文档都在 B 里），再把每份文档按 B 里的**当前版本**写回 A 的源库、按版本从 B 删掉。合服期间 B 里新产生、不在清单上的按 sid 独占文档不动，报告 `new_in_target` 计数：框架无法判断归属，由业务按自己的键规则处理，否则留在 B。
+2. `go run ./cmd/sidmerge revert -from A -into B -manifest merge-A.json`：先核对（B 已排空、清单记的库名与按配置重新换算的相同、清单上每份文档都在 B 里），再把每份文档按 B 里的**当前版本**写回 A 的源库、按版本从 B 删掉。不在清单上的按 sid 独占文档不动，报告 `new_in_target` 计数——**B 合服前自己的文档与合服期间新产生的都算在里面、不区分**（清单只记迁入的文档）：要知道合服期间新产生了多少，用合服前另记的 B 的文档数相减（`scripts/test-demo-merge.sh` 的两服演练里 B 合服前有 2 份 Player、1 份 World，合服期间没有新文档，报告 `{"main/player": 2, "main/world": 1}`）。合服期间新产生的框架无法判断归属，由业务按自己的键规则处理，否则留在 B。
 3. `accountctl unmerge-server -from A -note …`：清空别名，A 保持 closed；拍平时一并改指 B 的其他服不受影响。
 4. 用**新的** WAL 目录部署 game(A)（旧目录已排空，可清掉），`accountctl upsert-server -sid A -status open`，接入层改回；启动 B。
 
 没有按 sid 独占数据的工程只有第 1、3、4 步。中途失败：revert 是逐份“写回 A、按版本删 B”，已搬回的文档在 A、不在 B，原样重跑会把它们报成 missing 并整体拒绝——对照报告去掉清单里已搬回的项再跑。
+
+可重复的两服演练：仓库的 `scripts/test-demo-merge.sh`（game-demo，私有依赖）走一遍 6.1 与 6.2：建数据、`wal-drained`、`migrate` 与重跑、`merge-server`、误启动 A 被拒、B 冷加载迁入的按 sid 分库 Player 文档并写入、经独立 Gate 登录 A 的角色、`revert` 与 `unmerge-server` 后角色回到 A。
 
 ### 6.3 持久总线消息与业务合并清单
 
@@ -129,7 +131,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 | 可靠总线（`nats.reliable.enabled`） | 是（Redis） | 是：去重收件箱与死信按消费者 `<服务>:<sid>` | A 的死信无人重放 | 停 A 前用 admin `bus.dlq.*` 列出，重放到 B 或丢弃（业务决定）。缺省关闭 |
 | Remote 快照兴趣 | 是（Redis） | 是：消费者 sid | 按 `remote_entity.snapshot_interest_ttl` 过期 | 无 |
 
-需要业务语义的合并（框架只列出，不实现）：World 单例（UniqueID = sid，合服后只加载 World(B)，World(A) 的计数 / 进度并入或丢弃）、按服排行榜（并存或重算）、活动组 `activity.groups_file`（移除 A）、跨服 global `Routing`（解除 A 的绑定）、按服唯一的名字（改名规则）、按服的邮件 / 聊天频道、业务数据里记着的 sid。
+需要业务语义的合并（框架只列出，不实现）：World 单例（UniqueID = sid，合服后只加载 World(B)，World(A) 的计数 / 进度 / 未到期的定时并入或丢弃；World 的 DAO 是 `dbscope=sid` 时——game-demo v1.47 起——`migrate` 把 World(A) 的文档拷进 B 的库，那里没有人加载它，定时也不会触发）、按服排行榜（并存或重算）、活动组 `activity.groups_file`（移除 A）、跨服 global `Routing`（解除 A 的绑定）、按服唯一的名字（改名规则）、按服的邮件 / 聊天频道、业务数据里记着的 sid。
 
 ### 6.4 边界
 

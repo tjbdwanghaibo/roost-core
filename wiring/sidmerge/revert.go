@@ -27,7 +27,8 @@ type RevertReport struct {
 	// Reverted 是搬回 A 的文档数；Missing 是 B 里找不到的清单项（有它们时什么也没写）。
 	Reverted int      `json:"reverted"`
 	Missing  []string `json:"missing,omitempty"`
-	// NewInTarget 是 B 的按 sid 分库里不在清单上的文档（合服期间新产生的），按 "<逻辑库>/<集合>" 计数。
+	// NewInTarget 是 B 的按 sid 分库里不在清单上的文档，按 "<逻辑库>/<集合>" 计数：B 合服前自己的文档与合服期间
+	// 新产生的都算，不区分（清单只记迁入的文档，没有记迁移那一刻 B 里原有什么）。回退不动它们。名字沿用 JSON 字段名。
 	NewInTarget map[string]int `json:"new_in_target,omitempty"`
 }
 
@@ -97,7 +98,7 @@ func Revert(ctx context.Context, plan Plan, manifest Manifest) (RevertReport, er
 	}
 	report.Checks = append(report.Checks, Check{Name: "manifest-documents", Status: StatusOK, Detail: fmt.Sprintf("all %d manifest documents are in B", len(manifest.Documents))})
 
-	// 合服期间新产生的：只计数。
+	// 不在清单上的（B 原有的与合服期间新产生的）：只计数。
 	report.NewInTarget = map[string]int{}
 	for logical, scoped := range byLogical {
 		names, err := collectionNames(ctx, r.intoMongo.Database(scoped.Target))
