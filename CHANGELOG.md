@@ -10,8 +10,11 @@
   - **行为变化（demo，换服前检查）**：坐在本进程某一局 lockstep 对战里的玩家申请换服与离开时都答 `rehome_refused`（`battleManager.Seated`）；`PlayerOwners.Resident` 不再认迁出表里的玩家，离开中的玩家不会被本进程撮合进新的一局。匹配票据与副本 run 不拦（理由见 `rehome_checks.go`）。
   - **行为变化（demo）**：`Player.PublishSyncDirty` 改取客户端同步掩码（生成的 `TakeEntitySyncChanges`，与提交观察者同一份），模块写入（背包）发过之后不再随下一次 `PublishSyncDirty` 重发；服务间同步的掩码不再被它取走。闲置清扫认 `lifetime=resident`：Player 声明为常驻时不卸载、不离场景（`EvictPlayer` 在离场之前答 `ErrEntityResident`）。
   - **新增（client/unity）**：`RoostSceneTime`，场景时间域的 Unity 适配（每帧经 `SceneTimeDomain` 推进场景时间，给出 `NowNanos` / `DeltaSeconds`）；.NET 测试工程链接正式源码跑 `TestUnitySceneTime`。Unity Editor / Player 未实跑。
+  - **行为变化（demo 机器人，lockstep 战斗）**：`cmd/loadtest` 的 `battle` 每帧输入改为不等应答（`Session.Notify`）；开房的第一条输入、关键帧哈希与追帧请求仍等应答。修前每帧等一个往返，toxiproxy 200ms ± 100ms 延迟下四个机器人都在第 10 帧左右被答 `battle not found`；修后 256 / 64 / 4 / 2 KB/s 与 200ms ± 100ms 下战斗都打完，1 KB/s 下帧流超过链路、最后的哈希晚于收尾窗口（链路容量）。回归 `TestBattleInputsDoNotWaitForTheirAnswers`。
+  - **修复（demo 机器人，portal 登录）**：`-login portal` 的机器人建盟不再被拒为“联盟名无效”：两条登录路径都经 `adoptPlayer` 写 `player_id` 与 `alliance_name`（portal 路径原来写旧键 `guild_name`）。真实进程（mirror-local、十一进程）bus / portal / `alliance_offline_join` 各 2 个机器人通过；`test-alliance-e2e.sh`、`test-seamless-demo.sh`（含 `ROOST_SEAMLESS_TERRAIN=1`）在新认证器下全部通过。
+  - **测试**：`scripts/perf/sync-business.sh` 加 `ROOST_SYNC_SCHEDULE=on_change`（生产接线：Nest 提交观察者 + on_change 场景与按类型例外），并修夹具对 profile 模块的编译失败（等级 / 经验已移进嵌套状态，修前两种口径都编译不过）；性能对照未跑。
   - **测试**：`flushOverCrowd` 等到 Interest 日志也清空（负载下政策阶段预算停止时旧条件误判稳定）；转发编辑用例按客户端规则重发到有结论（负载下 300ms 期限答 Unknown 是正确行为）；为地形 P5 三项未杀死的变异各补用例并全部变红；`TestCellWorldMeasure` 加 `ROOST_CELLWORLD_PERF_SCALE=game`（游戏尺度分区视野的成本对照入口，测量未跑）。
-  - **生成物**：已生成的 game-demo 工程需重新生成（新增 `game/handler/leave_scene.go`，`playerowner.go`、`rehome_checks.go`、`battle.go`、`terrain.go`、`service.go`、Player 的 `entity.go` 有改动）。
+  - **生成物**：已生成的 game-demo 工程需重新生成（新增 `game/handler/leave_scene.go`、`cmd/loadtest/battle_client_test.go`，`cmd/loadtest/main.go`、`playerowner.go`、`rehome_checks.go`、`battle.go`、`terrain.go`、`service.go`、Player 的 `entity.go` 有改动）。
 
 - **测试：`TestInterestShrinksAFullSessionToTheNearest/async` 偶发失败已定位为用例的时序假设**（framework/sync/entitysync/policy，2026-11-14）：异步模式的应用线程在第一条事实到达时就走第一步，可能只取走用例还在逐个 `Show` 的前半段；前半段先结算、Manager 按它暂缓，收紧时按通知到达时更大的可见数去减，停在比会话放得下多一个的上限上，要等 Manager 1 秒后的重新通知才收敛（异步模式的近似语义，行为不变）。用例的 `flush` 在结算前先把已登记的事实全部应用（`stepApplier`，与 `flushInterest` 相同）。修前 CPU 满载（10 核上 16 个 `yes`）下 `-race -count=500` 定向失败 36 次；修后 8 个 `yes` 500 次、16 个 `yes` 1000 次、8 个 `yes` + `GOMAXPROCS=2` 500 次全部通过。没有框架行为改动。
 
