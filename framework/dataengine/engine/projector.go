@@ -70,7 +70,8 @@ type ProjectorOptions struct {
 	// BackgroundCheckpoint 为 true 时，一轮 ReplayPass 内把“已成功投影、事务标记保证可幂等重放”的连续前缀交给
 	// 本轮的单个后台写者（replayCheckpointWriter）确认，投影继续下一单元；WAL.Ack 仍是同步持久入口，未确认账本只在
 	// 它成功后释放。快路 / 非批量 Store / 含快路的并行窗口 / 下一并行窗口之前与每轮退出仍等持久确认，ReplayPass
-	// 返回前写者已排空退出，Flush、HandOff、Shutdown 不感知它。缺省 false（M-19 开关对照未测，收益未证实）。
+	// 返回前写者已排空退出，Flush、HandOff、Shutdown 不感知它。零值 false（直接构造 Projector 时同步确认）；经 wiring/dataengine 的
+	// 配置 dataengine.projection.background_checkpoint 缺省 true（维护者 2026-11-14 决定，M-19 开 / 关无退步）。
 	BackgroundCheckpoint bool
 	MaxUnackedRecords    uint64 // 0 不限制；拒绝发生于 WAL 准入前。
 	WarnUnackedRecords   uint64 // 0 不设独立预警；达到准入上限也会报告预警。

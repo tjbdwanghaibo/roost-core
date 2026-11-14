@@ -240,7 +240,7 @@ func startWALTestMod(service string, sid int, dir string) (*Mod, error) {
 }
 
 func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
-	// background_checkpoint 不写时关闭（M-19 开关对照未测，缺省保持同步 checkpoint）。
+	// background_checkpoint 不写时打开（维护者 2026-11-14 决定，M-19 开 / 关无退步）。
 	defaults := viper.New()
 	defaults.Set("server_type", "game")
 	defaults.Set("persistence.engine", "dataengine")
@@ -248,8 +248,8 @@ func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
 	if err := defaultMod.Init(defaults); err != nil {
 		t.Fatal(err)
 	}
-	if defaultMod.cfg.projector.BackgroundCheckpoint {
-		t.Fatal("background_checkpoint is on without being configured")
+	if !defaultMod.cfg.projector.BackgroundCheckpoint {
+		t.Fatal("background_checkpoint is off without being configured; the default is on")
 	}
 	cfg := viper.New()
 	cfg.Set("server_type", "game")

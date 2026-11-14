@@ -155,7 +155,7 @@ type config struct {
 		RetryMax             time.Duration `config:"retry_max" min:"0" example:"5s"`
 		CheckpointRecords    int           `config:"checkpoint_records" min:"0"`
 		CheckpointInterval   time.Duration `config:"checkpoint_interval" min:"0"`
-		BackgroundCheckpoint bool          `config:"background_checkpoint" default:"false" help:"一轮回放内由单个后台写者确认已投影的可重放前缀（WAL.Ack 同步契约不变，未确认额度在 checkpoint 持久成功后才释放，\n快路记录、含快路的并行窗口与每轮退出仍等确认，回放返回前写者已排空）。缺省 false：开 / 关的性能对照（M-19）尚未测，收益未证实"`
+		BackgroundCheckpoint bool          `config:"background_checkpoint" default:"true" help:"一轮回放内由单个后台写者确认已投影的可重放前缀（WAL.Ack 同步契约不变，未确认额度在 checkpoint 持久成功后才释放，\n快路记录、含快路的并行窗口与每轮退出仍等确认，回放返回前写者已排空）。缺省 true（维护者 2026-11-14 决定；M-19 开 / 关对照无退步也未见收益）；false 回到逐单元同步确认"`
 		MaxUnackedRecords    int64         `config:"max_unacked_records" min:"0" example:"20000" help:"未投影 WAL 记录数的硬上限（0 不限）：到上限时新的 Nest 提交在 WAL 准入前被拒。同进程有 saga Mod 且准入开启时必须 > 0 且 ≥ 4 × saga.admission.high_records"`
 		WarnUnackedRecords   int64         `config:"warn_unacked_records" min:"0"`
 	} `config:"dataengine.projection"`

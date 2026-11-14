@@ -161,4 +161,4 @@
 
 ## 七、等测量结果再问
 
-- **后台 checkpoint 要不要合入**（B-3）：**已决定（2026-11-14）：不等 M-19，先合入，`dataengine.projection.background_checkpoint` 缺省关闭**；缺省是否改为打开仍等 M-19，见[实验记录](../checkpoint-experiment-20261114/README.md)。原问题：实现只在 `experiment/v147-background-checkpoint`（`300be3a0`），等 M-19 的开关对照（128 / 256 并发各三轮）出来再问。“128 / 256 并发约 3 秒全体超时”的根因也靠这次对照。
+- **后台 checkpoint 要不要合入**（B-3）：**已决定（2026-11-14）：不等 M-19，先合入，`dataengine.projection.background_checkpoint` 缺省关闭**；缺省是否改为打开仍等 M-19，见[实验记录](../checkpoint-experiment-20261114/README.md)。原问题：实现只在 `experiment/v147-background-checkpoint`（`300be3a0`），等 M-19 的开关对照（128 / 256 并发各三轮）出来再问。“128 / 256 并发约 3 秒全体超时”的根因也靠这次对照。（同日后续：M-19 开 / 关无退步，缺省改为打开，见[实验记录](../checkpoint-experiment-20261114/README.md#m-19-结果2026-11-14)。）
