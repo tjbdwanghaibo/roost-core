@@ -318,6 +318,80 @@ func TestTerrainPartitionEveryChunkInViewReachesTheClient(t *testing.T) {
 	}
 }
 
+// N4（D12 A，维护者 2026-11-14）：拥有者装不进的块按原始地形包确认。原始地形包里 (2,0)、(3,0) 坏了（三个进程开的是
+// 同一个包），两块都归格 (0,0)（sid 101）写，它装不进自己的视图。修前拥有者对这样的块不答订阅（计 Replicator 的
+// Unloaded），只做 Base 的进程（sid 103）与格 (1,0)（sid 102，(3,0) 在它的 Ghost 带里、本地同样装不进）都拿不到说法：
+// 客户端永远缺这两块，订阅每次续期都再问一遍。现在拥有者对自己装不进的块答“原始块”，两个客户端都拿到视野里 11 块的
+// 就绪标记；本地 Held 报 0（有了说法），续期不再要拥有者重发；格 (1,0) 的 Ghost 带仍不把坏块装进视图（行走照旧不可走）。
+func TestTerrainPartitionChunksTheOwnerCannotLoadAreConfirmedAsTheBasePack(t *testing.T) {
+	dir := t.TempDir()
+	pack := writePartitionPack(t, dir, 1)
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 8, ChunksY: 2, WaterLevel: 40000}
+	inner, edge := terrain.ChunkKey{X: 2, Y: 0}, terrain.ChunkKey{X: 3, Y: 0}
+	corruptPackChunk(t, pack, meta, inner)
+	corruptPackChunk(t, pack, meta, edge)
+	grid := partitionTerrainGrid(t)
+	store := &memoryChunkStore{}
+	net := newPartitionNet()
+	a := startPartitionProc(t, net, grid, partitionSidA, pack, store)
+	b := startPartitionProc(t, net, grid, partitionSidB, pack, store)
+	c := startPartitionProc(t, net, grid, partitionSidC, pack, store)
+	for _, key := range []terrain.ChunkKey{inner, edge} {
+		if _, unloadable := a.process.m.Unloadable()[key]; !unloadable {
+			t.Fatalf("the premise: the owner loaded the corrupt chunk %v", key)
+		}
+	}
+	if _, unloadable := b.process.m.Unloadable()[edge]; !unloadable {
+		t.Fatalf("the premise: the neighbour's ghost band loaded the corrupt chunk %v", edge)
+	}
+	at := centreOf(terrain.ChunkKey{X: 5, Y: 0})
+	want := chunksWithin(a.process.m.Meta(), at, terrainViewRadius)
+	p1 := c.join(t, 41021, at)
+	p2 := b.join(t, 41022, at)
+	allMarkers := func(client *terrainClient) bool {
+		held := client.terrainObjects()
+		if len(held) != len(want) {
+			return false
+		}
+		for id := range want {
+			if got := held[id]; got == nil || got.Version == nil || got.Version.Value != 0 || got.BaseRevision == nil || got.BaseRevision.Value != 1 {
+				return false
+			}
+		}
+		return true
+	}
+	missing := func(client *terrainClient) []string {
+		held := client.terrainObjects()
+		var keys []string
+		for id, key := range want {
+			if held[id] == nil {
+				keys = append(keys, key.String())
+			}
+		}
+		slices.Sort(keys)
+		return keys
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !(allMarkers(p1) && allMarkers(p2)) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !allMarkers(p1) || !allMarkers(p2) {
+		t.Fatalf("want a base marker for each of the %d chunks in view: the base-only process's client lacks %v, the cell's client lacks %v (owner replicator %+v)",
+			len(want), missing(p1), missing(p2), a.pt.rep.Stats())
+	}
+	for name, held := range map[string]int64{
+		"base-only " + inner.String(): c.pt.Held(inner), "base-only " + edge.String(): c.pt.Held(edge),
+		"cell " + inner.String(): b.pt.Held(inner), "cell ghost " + edge.String(): b.pt.Held(edge),
+	} {
+		if held != 0 {
+			t.Fatalf("%s: Held = %d, want 0 (the owner's answer is kept; a renewal must not ask again)", name, held)
+		}
+	}
+	if _, err := b.process.m.Height(centreOf(edge).X, centreOf(edge).Y); !errors.Is(err, terrain.ErrNotLoaded) {
+		t.Fatalf("the neighbour's ghost band answers %v for the corrupt chunk, want ErrNotLoaded: the base answer is for the client, not for walking", err)
+	}
+}
+
 // 方案 §9 P3 / D14：格 (0,0) 改它边上的块 (3,0)，格 (1,0) 的 Ghost 带副本在有界时间内到同一版本、逐点相同，查询一致；
 // 只做 Base 的进程上站在格 (1,0) 里的玩家，客户端收到两个格写的改过的块（别的格写的块是副本：先全量，之后的小笔刷是
 // 按下标的增量），与写它们的格进程逐点一致；格 (1,0) 上的玩家看到本格的块（实体）与邻格的块（副本）。玩家走远（witness

@@ -3,6 +3,7 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"maps"
@@ -61,6 +62,12 @@ type terrainSyncHarness struct {
 // 复制循环，只有测试自己的 Flush（测量按“一次 Flush = 50ms”数）。
 func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64, maxVisible int, started bool, mixed ...bool) *terrainSyncHarness {
 	t.Helper()
+	return startTerrainSyncHarnessOn(t, chunksX, chunksY, radius, maxVisible, started, len(mixed) > 0 && mixed[0], nil)
+}
+
+// startTerrainSyncHarnessOn 是 startTerrainSyncHarness，prepare 在原始地形包写好之后、进程打开它之前调用（例如弄坏一块）。
+func startTerrainSyncHarnessOn(t *testing.T, chunksX, chunksY int32, radius int64, maxVisible int, started, mixedSync bool, prepare func(pack string, meta terrain.Meta)) *terrainSyncHarness {
+	t.Helper()
 	transport, addr := startScenePlayerTransport(t)
 	dir := t.TempDir()
 	pack := filepath.Join(dir, "sync.pack")
@@ -68,9 +75,12 @@ func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64,
 	if err := terrain.WritePackFile(pack, meta, terrain.Generated(meta, terrainSeed)); err != nil {
 		t.Fatal(err)
 	}
+	if prepare != nil {
+		prepare(pack, meta)
+	}
 	var observer *sceneSyncObserver
  var options []nest.NestOption
- if len(mixed)>0 && mixed[0] { observer=&sceneSyncObserver{}; options=append(options,nest.NestOptionWithEntitySync(observer)) }
+ if mixedSync { observer=&sceneSyncObserver{}; options=append(options,nest.NestOptionWithEntitySync(observer)) }
  p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
 		policy := terrainmap.DefaultPolicy
 		policy.MaxRadius, policy.EditPointsPerSecond = 2500, 0
@@ -754,6 +764,64 @@ func TestTerrainEveryChunkInViewReachesTheClient(t *testing.T) {
 	if stats := h.scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred != 0 {
 		t.Fatalf("%d sessions lost, %d objects deferred over a limit", stats.SessionsLost, stats.OverLimitDeferred)
 	}
+}
+
+// corruptPackChunk 弄坏原始地形包里一块的数据（块中间翻一位）：包头与索引表照旧校验通过，只有这一块读出
+// terrain.ErrCorruptChunk（包格式见 gameplay/terrain/pack.go：索引表在偏移 128，每项 44 字节，前 8 字节是块数据偏移、
+// 接着 4 字节是长度，下标 y·ChunksX + x）。
+func corruptPackChunk(t *testing.T, pack string, meta terrain.Meta, key terrain.ChunkKey) {
+	t.Helper()
+	raw, err := os.ReadFile(pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := 128 + 44*(int(key.Y)*int(meta.ChunksX)+int(key.X))
+	offset := binary.LittleEndian.Uint64(raw[entry:])
+	length := binary.LittleEndian.Uint32(raw[entry+8:])
+	raw[offset+uint64(length)/2] ^= 0x40
+	if err := os.WriteFile(pack, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// N4（D12 A，维护者 2026-11-14）：原始地形包里坏了、服务端装不进视图的块，也要给客户端一个可据以确认的说法——
+// 就绪标记（Version 0、本包的 BaseRevision），客户端按本地原始地形包显示并确认（坏块本来也只能按基础包显示）。
+// 修前 showBases 跳过装不进视图的块，客户端视野里永远缺这一块、永远不确认。真实 TCP 与生产的启动步骤。
+func TestTerrainABadBaseChunkIsConfirmedAsTheBasePack(t *testing.T) {
+	bad := terrain.ChunkKey{X: 5, Y: 4}
+	h := startTerrainSyncHarnessOn(t, 8, 8, terrainViewRadius, terrainMaxVisible, false, false, func(pack string, meta terrain.Meta) {
+		corruptPackChunk(t, pack, meta, bad)
+	})
+	if cause, unloadable := h.process.m.Unloadable()[bad]; !unloadable || !errors.Is(cause, terrain.ErrCorruptChunk) {
+		t.Fatalf("the premise: chunk %v is unloadable for %v (listed %v), want ErrCorruptChunk", bad, cause, unloadable)
+	}
+	h.startSubjects(t)
+	at := centreOf(terrain.ChunkKey{X: 4, Y: 4})
+	want := chunksWithin(h.process.m.Meta(), at, terrainViewRadius)
+	if _, inView := want[chunkID(t, bad)]; !inView {
+		t.Fatalf("the premise: the bad chunk %v is not in the view", bad)
+	}
+	client := h.join(t, 30021, at)
+	holdsAll := func() bool {
+		held := client.terrainObjects()
+		for id := range want {
+			if held[id] == nil {
+				return false
+			}
+		}
+		return true
+	}
+	// 进场的全量按快照预算每次 Flush 4 块（29 块约 8 次）；32 次之后还缺的块就是永远等不到的块。
+	for flushes := 0; flushes < 32 && !holdsAll(); flushes++ {
+		if err := h.scene.Flush(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(200 * time.Millisecond)
+		for !holdsAll() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	h.assertTerrainObjects(t, client, want, nil)
 }
 
 // 方案 §9 P2：视野里改过的块多于 MaxVisible（64）时，会话持有恰好 64 块、没有对象被暂缓（OverLimitWaiting 0）——即使主视野里

@@ -25,7 +25,9 @@ import (
 //     地形 Interest；本进程自己写的块仍是实体 subject（terrain_sync.go）。客户端收到的对象、编码与增量形状与本格的块
 //     相同，TerrainChunk 的类型调度（periodic 1s）与 terrain 命名空间的上限、快照预算一样适用。拥有者答“原始块”的
 //     块登记就绪标记（terrain_chunk.Base，方案 §31.9），客户端据此确认；为了拿到这个答复，客户端想要、本进程还没有
-//     任何说法的块 Held 报 -1（Replicator 协议里“要拥有者把当前状态（含原始块）发来”），有了标记之后报 0。
+//     任何说法的块 Held 报 -1（Replicator 协议里“要拥有者把当前状态（含原始块）发来”），有了标记之后报 0。拥有者自己装不进
+//     的块（原始块坏了、记录装不进来）同样答“原始块”（N4，维护者 2026-11-14 定 A），客户端按原始地形包确认；Ghost 带里
+//     本进程也装不进的这种块不进视图（terrainmap.Map.ApplyReplica），只给客户端标记。
 //
 // 传输是本进程的 cellworld Node 的扩展消息（命名空间 terrainReplicaSpace）：发件排进 Node 的出站队列，所以拥有者在改块
 // 事务的提交后回调里登记推送（Replicator.Changed）也不 Dispatch、不做 I/O。可靠性是 gameplay/terrain 的 Replicator 的
@@ -283,6 +285,13 @@ func (p *partitionTerrain) recompute() []terrain.ChunkKey {
 		}
 		chunk, version, loaded := p.m.View().Chunk(key)
 		if !loaded {
+			// 本进程装不进的块：拥有者已经答过“原始块”（它也装不进，N4）就按原始地形包给客户端就绪标记，否则等它答复
+			// （Held 报 -1）。
+			if p.m.ReplicaHeld(key) == 0 {
+				if err := p.sync.showBase(key, meta.BaseRevision); err != nil {
+					slog.Warn("partition terrain: a ghost chunk's base marker was not shown", "chunk", key.String(), "err", err)
+				}
+			}
 			continue
 		}
 		if version < 1 {
