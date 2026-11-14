@@ -9,8 +9,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"os"
+	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // mobaSnapshotCrashFrames 是子进程 SIGKILL 前提交的帧数：大于 64 帧窗口，重建后的 Match 历史从第 37 帧起，
@@ -18,10 +20,11 @@ import (
 const mobaSnapshotCrashFrames = 100
 
 type mobaSnapshotBarrier struct {
-	Digest      string
-	Frames      int
-	Setup       uint64 // 建局（目录预留、选英雄、开局）留下的未投影记录
-	Unprojected uint64 // SIGKILL 前的未投影记录总数
+	Digest       string
+	Frames       int
+	Setup        uint64  // 建局（目录预留、选英雄、开局）留下的未投影记录
+	Unprojected  uint64  // SIGKILL 前的未投影记录总数
+	StrictMicros []int64 // 每帧 Sender 调用到 strict durable 返回；不含建局
 }
 
 // lockstepCounter 汇总默认注册表里一个计数器的值；reason 非空时只取该标签。用前后差值断言，不依赖进程里别的 Match。
@@ -74,18 +77,21 @@ func TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL(t *testing.T) {
 		h := openActiveRuntime(t, "active-snapshot", true)
 		r := h.createRound(t)
 		setup := h.projector.Stats()
+		latency := make([]int64, 0, mobaSnapshotCrashFrames)
 		for id := lockstep.FrameID(1); id <= mobaSnapshotCrashFrames; id++ {
 			f := lockstep.Frame{ID: id}
 			for i := range moba.ArenaSeats {
 				f.Inputs = append(f.Inputs, lockstep.Input{Player: lockstep.PlayerID(i + 1), Payload: realArenaInput(id, i)})
 			}
+			started := time.Now()
 			r = h.mustApply(t, moba.Change{Op: "frame", HostSID: 2000, Epoch: 1, Frame: f})
+			latency = append(latency, time.Since(started).Microseconds())
 		}
 		stats := h.projector.Stats()
 		if r.Phase != "playing" || len(r.Frames) != mobaSnapshotCrashFrames || stats.Projected != 0 || setup.WALUnacked == 0 || stats.WALUnacked != setup.WALUnacked+mobaSnapshotCrashFrames {
 			t.Fatalf("crash boundary: phase %s frames %d projected %d unprojected %d after setup %d, want one unprojected record per frame", r.Phase, len(r.Frames), stats.Projected, stats.WALUnacked, setup.WALUnacked)
 		}
-		writeMOBAReady(t, "snapshot-ready", mobaSnapshotBarrier{r.Reference.Digest(), len(r.Frames), setup.WALUnacked, stats.WALUnacked})
+		writeMOBAReady(t, "snapshot-ready", mobaSnapshotBarrier{r.Reference.Digest(), len(r.Frames), setup.WALUnacked, stats.WALUnacked, latency})
 		select {} // 父进程在 barrier 后 SIGKILL；不会执行测试 cleanup / Runtime.Shutdown。
 	}
 	if err := os.MkdirAll(os.Getenv("ROOST_MOBA_WAL"), 0700); err != nil {
@@ -103,6 +109,12 @@ func TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL(t *testing.T) {
 	if err := <-child.done; err == nil {
 		t.Fatal("snapshot child exited cleanly")
 	}
+	samples := append([]int64(nil), barrier.StrictMicros...)
+	if len(samples) != mobaSnapshotCrashFrames {
+		t.Fatal("missing strict latency samples")
+	}
+	slices.Sort(samples)
+	t.Logf("strict WAL Sender latency diagnostic: n=%d p50_us=%d p99_us=%d max_us=%d (100 sequential frame commits; functional run, not capacity evidence)", len(samples), samples[(len(samples)*50+99)/100-1], samples[(len(samples)*99+99)/100-1], samples[len(samples)-1])
 	h := openActiveRuntime(t, "active-snapshot", false)
 	r := h.mustApply(t, moba.Change{Op: "read"})
 	if barrier.Frames != mobaSnapshotCrashFrames || len(r.Frames) != barrier.Frames || r.Reference.Digest() != barrier.Digest {

@@ -96,7 +96,7 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/moba ./ga
 
 - 一档：§3 的 28 条 PASS + SKILL.md §3.4。2026-10-31 在 v1.33.0 检出、自定 module `example.com/mymoba` 实测通过（约 11s，构建缓存热）。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：28 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 collaborators FAIL。
 - 框架自带网络门禁（在 roost-core 根目录）：`GOWORK=off go test -race -count=1 ./framework/sync/lockstep ./framework/sync/nettransport`（MOBA §12）。
-- 二档：`ROOST_MOBA_REAL=1`（隔离 Mongo 副本集）追加两进程结算恢复、活动对局 SIGKILL 续赛、SIGKILL 后窗口外快照恢复；再加 `ROOST_MOBA_ROUTING=1`（+ NATS）追加五进程宿主交接与奖励重投（MOBA §9、§11）。
+- 二档：`ROOST_MOBA_REAL=1`（隔离 Mongo 副本集）追加两进程结算恢复、活动对局 SIGKILL 续赛、SIGKILL 后窗口外快照恢复；再加 `ROOST_MOBA_ROUTING=1`（+ NATS）追加五进程宿主交接与奖励重投，以及三进程旧宿主快照在途时交接、新宿主恢复（MOBA §9、§11）。原快照用例另输出 100 次 strict Sender 的 p50 / p99 诊断，功能验收负载未隔离，不作为容量证据。
 - 不证明：对客户端广播与真实鉴权的端到端链路、权威 HA、tick 预算、5v5 目标负载与跨机（KNOWN-LIMITS“游戏接入验收”MOBA 行）。
 
 ## 8. 手册指针

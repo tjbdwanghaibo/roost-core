@@ -114,6 +114,8 @@ if [[ "${ROOST_MOBA_REAL:-0}" == 1 ]]; then
   if [[ "$(grep -c '^--- PASS: TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL' "$review_root/active-snapshot.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/active-snapshot.log"; then exit 1; fi
   if [[ "${ROOST_MOBA_ROUTING:-0}" == 1 ]]; then
     : "${ROOST_DATAENGINE_IT_NATS_URL:?isolated NATS required}"
+    go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealSnapshotDuringHostHandoff$' ./game/handler | tee "$review_root/process-snapshot.log"
+    if [[ "$(grep -c '^--- PASS: TestMOBARealSnapshotDuringHostHandoff' "$review_root/process-snapshot.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/process-snapshot.log"; then exit 1; fi
     go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealCrossSIDHostRouting$' ./game/handler | tee "$review_root/cross-sid.log"
     if [[ "$(grep -c '^--- PASS: TestMOBARealCrossSIDHostRouting' "$review_root/cross-sid.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/cross-sid.log"; then exit 1; fi
   fi
