@@ -1,0 +1,25 @@
+package main
+
+// 只由 checkpoint 实验脚本复制到临时工程。正式模板不安装信号处理器。
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"runtime/pprof"
+	"syscall"
+	"time"
+)
+
+func init() {
+	requests := make(chan os.Signal, 1)
+	signal.Notify(requests, syscall.SIGUSR2)
+	go func() {
+		for range requests {
+			fmt.Fprintf(os.Stderr, "CHECKPOINT STACK BEGIN pid=%d utc=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339Nano))
+			if err := pprof.Lookup("goroutine").WriteTo(os.Stderr, 2); err != nil {
+				fmt.Fprintf(os.Stderr, "CHECKPOINT STACK ERROR %v\n", err)
+			}
+			fmt.Fprintln(os.Stderr, "CHECKPOINT STACK END")
+		}
+	}()
+}

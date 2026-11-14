@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **DataEngine 回放批内后台 checkpoint（合入，默认关闭）**（交接 B-3，2026-11-14 维护者决定先合入、不等 M-19）：新增 `dataengine.projection.background_checkpoint`（缺省 `false`）。打开后，一轮 `ReplayPass` 内由一个单写者把“已成功投影、持久事务标记保证可幂等重放”的连续前缀交给 `WAL.Ack`，投影可继续下一单元，待写目标只保留最新前缀；单 mutation 快路、非批量 Store、含快路的并行窗口、下一并行窗口之前和每轮退出前仍等真实持久确认，`ReplayPass` 返回前排空并退出写者。`WAL.Ack` 的同步契约与 `syncActive → checkpoint → 内存确认 → 回收段` 顺序不变；未确认账本只在 checkpoint 持久成功后释放，ack 失败回传本轮并停止后续投影。关闭时行为与此前相同。**默认关闭的原因**：M-19（128 / 256 并发开关对照）尚未运行，没有性能收益证据；128 / 256 并发约 3 秒全体超时簇的根因也仍未确认，不能据此认定 checkpoint 是根因。联盟 RPC 并发探针保留 `ALLIANCE_E2E_BACKGROUND_CHECKPOINT=0|1` 与只装进临时生成工程的 `ALLIANCE_E2E_STACKS=1` 栈采集器，M-19 可直接在 main 上跑。回归：engine 四个定向用例与真实 Mongo `TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint` 关 / 开两个子例；契约见 [实现篇 §2 第 7 条](docs/framework/impl/03-dataengine.md#2-必须保持的契约)，[实验记录](docs/maintenance/evidence/checkpoint-experiment-20261114/README.md)。
 - **生成物要求的最低 core 提到 v1.47.0**（2026-11-14）：新生成物用到 v1.47.0 才有的 `infra/network/playeraccess`、`game/managers` 登记点与本地 Nest 实体起服预加载；framework-compat 的 minimum 一栏随之改为 v1.47.0。
 
 ## [v1.47.0] - 2026-11-14

@@ -146,17 +146,18 @@ type config struct {
 		GroupCommitInterval time.Duration `config:"group_commit_interval" min:"0" example:"2ms"`
 	} `config:"dataengine.wal" help:"dir 不写取 data/wal/<服务>/<sid>（服务即 server_type，相对进程工作目录），每个服务的每个 sid 一个目录；生成的开发配置因此不写 dir。\n显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写"`
 	Projection struct {
-		Workers            int           `config:"workers" min:"1" max:"64" help:"投影器按实体分片并行的通道数（同时在途的投影调用数）。不写取缺省 32；1 = 串行投影（含 Remote 记录）。\n冲突键（同一实体、回执、effect；effect_order: wal 时再加全部带 effect 的记录）相交的记录保持 WAL 顺序，checkpoint 只确认连续成功前缀"`
-		EffectOrder        string        `config:"effect_order" default:"entity" enum:"entity|wal" help:"带 effect 的记录之间按什么范围保持 WAL 顺序（只在 workers > 1 时起作用）。entity（缺省）：写同一实体、同一回执、同一 effect 的记录之间按 WAL 顺序，\n不相干实体的带 effect 记录并行投影，effect 进 outbox 的先后可能与 WAL 不同（outbox 发布与 JetStream 消费本来不保证全局顺序）；\nwal：全部带 effect 的记录按 WAL 顺序逐条投影、按 WAL 顺序暂存（2026-11-05 前的行为），只给依赖“不同实体的 effect 按 WAL 顺序”的进程打开"`
-		BatchRecords       int           `config:"batch_records" min:"0" example:"256"`
-		BatchBytes         int           `config:"batch_bytes" min:"0"`
-		ReadBytes          int           `config:"read_bytes" min:"0"`
-		RetryMin           time.Duration `config:"retry_min" min:"0" example:"100ms"`
-		RetryMax           time.Duration `config:"retry_max" min:"0" example:"5s"`
-		CheckpointRecords  int           `config:"checkpoint_records" min:"0"`
-		CheckpointInterval time.Duration `config:"checkpoint_interval" min:"0"`
-		MaxUnackedRecords  int64         `config:"max_unacked_records" min:"0" example:"20000" help:"未投影 WAL 记录数的硬上限（0 不限）：到上限时新的 Nest 提交在 WAL 准入前被拒。同进程有 saga Mod 且准入开启时必须 > 0 且 ≥ 4 × saga.admission.high_records"`
-		WarnUnackedRecords int64         `config:"warn_unacked_records" min:"0"`
+		Workers              int           `config:"workers" min:"1" max:"64" help:"投影器按实体分片并行的通道数（同时在途的投影调用数）。不写取缺省 32；1 = 串行投影（含 Remote 记录）。\n冲突键（同一实体、回执、effect；effect_order: wal 时再加全部带 effect 的记录）相交的记录保持 WAL 顺序，checkpoint 只确认连续成功前缀"`
+		EffectOrder          string        `config:"effect_order" default:"entity" enum:"entity|wal" help:"带 effect 的记录之间按什么范围保持 WAL 顺序（只在 workers > 1 时起作用）。entity（缺省）：写同一实体、同一回执、同一 effect 的记录之间按 WAL 顺序，\n不相干实体的带 effect 记录并行投影，effect 进 outbox 的先后可能与 WAL 不同（outbox 发布与 JetStream 消费本来不保证全局顺序）；\nwal：全部带 effect 的记录按 WAL 顺序逐条投影、按 WAL 顺序暂存（2026-11-05 前的行为），只给依赖“不同实体的 effect 按 WAL 顺序”的进程打开"`
+		BatchRecords         int           `config:"batch_records" min:"0" example:"256"`
+		BatchBytes           int           `config:"batch_bytes" min:"0"`
+		ReadBytes            int           `config:"read_bytes" min:"0"`
+		RetryMin             time.Duration `config:"retry_min" min:"0" example:"100ms"`
+		RetryMax             time.Duration `config:"retry_max" min:"0" example:"5s"`
+		CheckpointRecords    int           `config:"checkpoint_records" min:"0"`
+		CheckpointInterval   time.Duration `config:"checkpoint_interval" min:"0"`
+		BackgroundCheckpoint bool          `config:"background_checkpoint" default:"false" help:"一轮回放内由单个后台写者确认已投影的可重放前缀（WAL.Ack 同步契约不变，未确认额度在 checkpoint 持久成功后才释放，\n快路记录、含快路的并行窗口与每轮退出仍等确认，回放返回前写者已排空）。缺省 false：开 / 关的性能对照（M-19）尚未测，收益未证实"`
+		MaxUnackedRecords    int64         `config:"max_unacked_records" min:"0" example:"20000" help:"未投影 WAL 记录数的硬上限（0 不限）：到上限时新的 Nest 提交在 WAL 准入前被拒。同进程有 saga Mod 且准入开启时必须 > 0 且 ≥ 4 × saga.admission.high_records"`
+		WarnUnackedRecords   int64         `config:"warn_unacked_records" min:"0"`
 	} `config:"dataengine.projection"`
 	Outbox struct {
 		Owner           string        `config:"owner" help:"不写取 dataengine-<sid>"`
@@ -261,6 +262,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		projector.CheckpointInterval = projection.CheckpointInterval
 	}
 	projector.MaxUnackedRecords = uint64(projection.MaxUnackedRecords)
+	projector.BackgroundCheckpoint = projection.BackgroundCheckpoint
 	projector.WarnUnackedRecords = uint64(projection.WarnUnackedRecords)
 	projector.OnFatal = mod.onFatal
 	owner := settings.Outbox.Owner

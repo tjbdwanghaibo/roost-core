@@ -25,6 +25,8 @@
 #                                              ALLIANCE_E2E_WARSCAN_COUNTS（缺省 1000,10000）、ALLIANCE_E2E_WARSCAN_PENDING（千分比，缺省 10）。
 # RPC probe: ALLIANCE_E2E_RPC_CONCURRENCY=16 (1..256), max_concurrent_writes=512.
 # Spread reads/joins keep 16 target alliances; hotspot joins stay below 500 members.
+# M-19: ALLIANCE_E2E_BACKGROUND_CHECKPOINT=0|1 sets dataengine.projection.background_checkpoint (default 0);
+# ALLIANCE_E2E_STACKS=1 copies the SIGUSR2 stack capturer into the throwaway project only (never the templates).
 # Retry probe controls: ALLIANCE_E2E_EFFECT_WORKERS=16, ALLIANCE_E2E_RETRY=0|1,
 # ALLIANCE_E2E_RETRY_CONCURRENCY=256 (use 8 for a functional smoke run).
 # Retries preserve request/player IDs, stop after 8 attempts, and never retry unknown outcomes.
@@ -93,6 +95,9 @@ p.write_text(text[:start] + text[start:].replace(anchor, '// MUTANT: accepted Te
 PY
 fi
 mkdir -p "$work_dir/planet/e2e"
+if [[ "${ALLIANCE_E2E_STACKS:-0}" == 1 ]]; then
+	cp scripts/testdata/checkpoint-experiment/stack_capture.go.txt "$work_dir/planet/checkpoint_stacks.go"
+fi
 for source in scripts/testdata/alliance-e2e/*_test.go.txt; do
 	cp "$source" "$work_dir/planet/e2e/$(basename "${source%.txt}")"
 done

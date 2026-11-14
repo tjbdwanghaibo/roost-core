@@ -122,6 +122,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "dataengine.projection.retry_max", Kind: "duration", Min: "0", Starter: true, Example: "5s"},
 		{Name: "dataengine.projection.checkpoint_records", Kind: "int", Min: "0"},
 		{Name: "dataengine.projection.checkpoint_interval", Kind: "duration", Min: "0"},
+		{Name: "dataengine.projection.background_checkpoint", Kind: "bool", Default: "false", Help: "一轮回放内由单个后台写者确认已投影的可重放前缀（WAL.Ack 同步契约不变，未确认额度在 checkpoint 持久成功后才释放，\n快路记录、含快路的并行窗口与每轮退出仍等确认，回放返回前写者已排空）。缺省 false：开 / 关的性能对照（M-19）尚未测，收益未证实"},
 		{Name: "dataengine.projection.max_unacked_records", Kind: "int", Min: "0", Help: "未投影 WAL 记录数的硬上限（0 不限）：到上限时新的 Nest 提交在 WAL 准入前被拒。同进程有 saga Mod 且准入开启时必须 > 0 且 ≥ 4 × saga.admission.high_records", Starter: true, Example: "20000"},
 		{Name: "dataengine.projection.warn_unacked_records", Kind: "int", Min: "0"},
 		{Name: "dataengine.outbox.owner", Kind: "string", Help: "不写取 dataengine-<sid>"},

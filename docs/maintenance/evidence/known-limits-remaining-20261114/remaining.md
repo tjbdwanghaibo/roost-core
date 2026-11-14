@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | B-1 / 11、61、65、68 | [P1 换服](../rehome-20261114/README.md)：嵌入式玩家 TCP 上六个 SIGKILL 点各两次、checkpoint 负对照，不含独立 Gate；account / 玩家入口唯一归属，资产、计数、WAL 恢复 | committed 后源库旧档明确 KNOWN_LIMIT，源服入口归属检查拒绝（P1 为 player_elsewhere），不保证 Resume 清理；旧内存 / 定时器权威写未全部隔离，Q4 与人工恢复保留；非跨机 |
 | B-2 / 12⑥、15.2 | [联盟探针](../../../performance/benchmarks/alliance-probes-20261114/README.md)：真实成员 ≤500、合成 1k/5k/10k、内存/命令计数与精确嵌套 setKey；RPC 1..256 参数修正和 c4 功能实跑 | M-11 / 正式大形状成本 pending；heap 不是 RSS，空 L1 不是冷 Mongo；Found 固定 1/16，变量只作用于 Info/Join；PASS 要另核 failed/slow |
-| B-3 / 14 | 后台 checkpoint 实验仅在 `experiment/v147-background-checkpoint`（`300be3a0`） | 不合实现/配置；M-19 off/on 对照 pending，全体超时根因未确认 |
+| B-3 / 14 | 后台 checkpoint 实验仅在 `experiment/v147-background-checkpoint`（`300be3a0`） | 不合实现/配置；M-19 off/on 对照 pending，全体超时根因未确认。2026-11-14 后续：维护者决定先合入、`background_checkpoint` 缺省关闭，M-19 与根因仍未定 |
 | B-4 / 31① | [MOBA](../v147-moba-20261114.md)：分进程权威 / 宿主、快照与交接、已提交头门、旧宿主隔离及变异 | 下游记录器；非真实客户端/跨机 HA/正式负载容量 |
 | B-5 / 114 | [合作/经营](../session-real-20261114/README.md)：各两个 WAL-only SIGKILL 窗口，原 WAL 恢复、第三冷进程领奖幂等；丢 WAL 变异红 | Sender 真实存储，不含 TCP/account/Gate/NATS 联合链；与默认 TCP 分开统计 |
 | B-6 / 40、46～50 | [登录](../v147-login-20261114.md)：双 account/game/Gate、重启重连、真实 naming、casual 购买与 self_sync 解码，两轮与丢推送变异 | naming 完整故障阶段、Redis 故障、生产渠道/跨机/长稳未验；时间推送先后只是观察；非 WAL-only |

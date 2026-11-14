@@ -240,11 +240,23 @@ func startWALTestMod(service string, sid int, dir string) (*Mod, error) {
 }
 
 func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
+	// background_checkpoint 不写时关闭（M-19 开关对照未测，缺省保持同步 checkpoint）。
+	defaults := viper.New()
+	defaults.Set("server_type", "game")
+	defaults.Set("persistence.engine", "dataengine")
+	defaultMod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := defaultMod.Init(defaults); err != nil {
+		t.Fatal(err)
+	}
+	if defaultMod.cfg.projector.BackgroundCheckpoint {
+		t.Fatal("background_checkpoint is on without being configured")
+	}
 	cfg := viper.New()
 	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.projection.checkpoint_records", 32)
 	cfg.Set("dataengine.projection.checkpoint_interval", "10ms")
+	cfg.Set("dataengine.projection.background_checkpoint", true)
 	cfg.Set("dataengine.projection.max_unacked_records", 100)
 	cfg.Set("dataengine.projection.warn_unacked_records", 80)
 	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
@@ -252,7 +264,7 @@ func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := mod.cfg.projector
-	if opts.CheckpointRecords != 32 || opts.CheckpointInterval.String() != "10ms" || opts.MaxUnackedRecords != 100 || opts.WarnUnackedRecords != 80 {
+	if !opts.BackgroundCheckpoint || opts.CheckpointRecords != 32 || opts.CheckpointInterval.String() != "10ms" || opts.MaxUnackedRecords != 100 || opts.WarnUnackedRecords != 80 {
 		t.Fatalf("opts=%+v", opts)
 	}
 	for _, key := range []string{"checkpoint_records", "checkpoint_interval", "max_unacked_records", "warn_unacked_records"} {
