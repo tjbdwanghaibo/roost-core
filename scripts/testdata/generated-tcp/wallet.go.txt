@@ -1,0 +1,8 @@
+package player
+
+// AddGold 的变化只由生成 DAO setter 记录，self_sync 由正式 Nest 提交观察器发布。
+func (c *WalletComponent) AddGold() int64 {
+	d := c.owner.Dao()
+	d.SetGold(d.GetGold() + 1)
+	return d.GetGold()
+}

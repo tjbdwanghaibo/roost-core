@@ -1,0 +1,28 @@
+package tcp
+
+import (
+	"context"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"net"
+	"strconv"
+	"strings"
+)
+
+// 仅供本机夹具：token 为 player:<unique-player-id>:<connection-id>，不能用于真实鉴权。
+type applicationAuthenticator struct{}
+
+func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
+	return applicationAuthenticator{}, nil
+}
+func (applicationAuthenticator) Authenticate(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+	parts := strings.Split(token, ":")
+	if len(parts) != 3 || parts[0] != "player" {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || id <= 0 {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	return gateway.Principal{PlayerID: id, SessionID: token}, nil
+}

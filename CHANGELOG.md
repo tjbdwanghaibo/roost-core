@@ -6,6 +6,8 @@
 
 - **测试：C++ 跨 Gate 同会话接管与完整 Protobuf 验收**（2026-11-14）：`ROOST_GATE_CPP=1 scripts/test-gate-client.sh` 增加两个真实 Gate / NATS 的迟到握手场景，要求旧连接被拒且新连接前后均可请求，Go 服务端带 race；暂时移除原生客户端连接代号后，同一用例发现新连接被关闭。`ROOST_PROTOBUF_TESTS=ON scripts/test-client-cpp.sh` 的 8 项 ctest 通过。两个 Gate 同处一个 Go 测试进程，C++ 独立进程，仅声明 macOS 本机验证；[证据与复跑](docs/maintenance/evidence/known-limits-remaining-20261114/native-acceptance.md)。运行逻辑不变。
 
+- 新增 `scripts/perf/generated-tcp.sh` 与入库业务夹具：当前 CLI 生成 Player/endpoint，公共 Robot 经嵌入 TCP 调生成 Sender，每次金币 +1 走真实文件 WAL/Mongo；支持 strict/pipelined/async、self_sync、分散/同实体连接与有界开环到达。结束冷加载逐实体核对成功回包数、WAL 排空与客户端最终 Sync；JSON 分列往返、计划到回复、客户端排队、投影排空和 Robot 消息统计。10 秒冒烟用于验证接线，正式 M-17 性能对照仍需空闲机器；配置与边界见 `scripts/testdata/generated-tcp/README.md`。
+
 - MOBA 真实依赖补齐三进程快照交接：独立权威从 SIGKILL 留下的 strict WAL 恢复；旧宿主快照分块在途时交接，旧提交被拒并排空，新宿主从已提交检查点恢复。原快照用例保留 100 次 strict Sender 耗时并输出 p50 / p99 诊断。验证：私有 Mongo / NATS 下 `ROOST_MOBA_REAL=1 ROOST_MOBA_ROUTING=1 bash scripts/test-moba-generated.sh` 全过；去掉已提交门变异被逐包水位断言拒绝。功能验收延迟不作为容量测量，真实客户端链路与跨机范围见 MOBA 手册 §11。
 
 - **地形真实恢复验收与重复运行期号分配器收口**（2026-11-14，B-11）：game-demo 新增 `TestTerrainWALCrashRealMongo`，正式 strict handler 完成跨四块笔刷或跨两块整平建筑，Mongo 的块/建筑/账本仍为空时 SIGKILL 子进程；同 WAL 恢复后核对所有块版本/摘要、建筑完整状态、占位、账本与重复请求。恢复改用空 WAL 目录的变异两场景均红；真实入口 `GOWORK=off GOFLAGS=-p=2 bash scripts/test-demo-generated.sh`，见[证据](docs/maintenance/evidence/terrain-wal-crash-20261114/README.md)。删除 player controller 没人调用的同 sid `runtimeid` 分配器与 `RuntimeIDs()`，保留 spawner 的唯一分配器；game-demo 需重新生成。没有存储/协议格式变化，不扩大为 TCP 重连或跨机验收。
