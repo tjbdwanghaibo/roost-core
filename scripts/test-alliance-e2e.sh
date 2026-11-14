@@ -23,6 +23,8 @@
 #                                              3 轮各 ALLIANCE_E2E_RETRY_SECONDS（缺省 15）秒。
 #   - TestAllianceE2EWarScanStartup            只在 ALLIANCE_E2E_PERF=1 时跑：起服宣战补发扫描（ScanWars）随联盟数的代价，
 #                                              ALLIANCE_E2E_WARSCAN_COUNTS（缺省 1000,10000）、ALLIANCE_E2E_WARSCAN_PENDING（千分比，缺省 10）。
+# RPC probe: ALLIANCE_E2E_RPC_CONCURRENCY=16 (1..256), max_concurrent_writes=512.
+# Spread reads/joins keep 16 target alliances; hotspot joins stay below 500 members.
 # Retry probe controls: ALLIANCE_E2E_EFFECT_WORKERS=16, ALLIANCE_E2E_RETRY=0|1,
 # ALLIANCE_E2E_RETRY_CONCURRENCY=256 (use 8 for a functional smoke run).
 # Retries preserve request/player IDs, stop after 8 attempts, and never retry unknown outcomes.

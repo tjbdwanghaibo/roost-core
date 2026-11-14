@@ -254,12 +254,17 @@ func TestAllianceE2EMirrorRevalidation(t *testing.T) {
 func TestAllianceE2ERPCConcurrency(t *testing.T) {
 	perfOnly(t)
 	s := newSuite(t, 30*time.Minute)
-	s.start("alliance-3000", "alliance", 3000, procOptions{keys: [][3]string{{"alliance", "max_members", "500"}}})
+	concurrency := perfPositiveInt(t, "ALLIANCE_E2E_RPC_CONCURRENCY", 16, 256)
+	s.start("alliance-3000", "alliance", 3000, procOptions{keys: [][3]string{
+		{"alliance", "max_members", "500"},
+		{"remote_entity", "max_concurrent_writes", "512"},
+	}})
+	t.Logf("PERF rpc config concurrency=%d max_concurrent_writes=512", concurrency)
 	client := s.client(nil, 60*time.Second)
 	measure := func(name string, conc, perWorker int, call func(ctx context.Context, w, i int) error) {
 		var mu sync.Mutex
 		var lat []time.Duration
-		failed := 0
+		failed, slow := 0, 0
 		var firstErr error
 		start := time.Now()
 		var wg sync.WaitGroup
@@ -271,7 +276,12 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 					st := time.Now()
 					err := call(s.ctx, w, i)
 					mu.Lock()
-					lat = append(lat, time.Since(st))
+					elapsed := time.Since(st)
+					lat = append(lat, elapsed)
+					if elapsed >= 3*time.Second {
+						slow++
+						t.Logf("PERF rpc slow name=%s worker=%d start=%s duration=%s error=%v", name, w, st.UTC().Format(time.RFC3339Nano), elapsed, err)
+					}
 					if err != nil {
 						failed++
 						if firstErr == nil {
@@ -285,7 +295,7 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 		wg.Wait()
 		elapsed := time.Since(start)
 		sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
-		t.Logf("PERF rpc %s conc=%d n=%d failed=%d in %v %.1f/s %s", name, conc, len(lat), failed, elapsed.Round(time.Millisecond), float64(len(lat))/elapsed.Seconds(), durations(lat))
+		t.Logf("PERF rpc %s conc=%d n=%d failed=%d slow_ge_3s=%d in %v %.1f/s %s", name, conc, len(lat), failed, slow, elapsed.Round(time.Millisecond), float64(len(lat))/elapsed.Seconds(), durations(lat))
 		if firstErr != nil {
 			t.Logf("PERF rpc %s first error: %v", name, firstErr)
 		}
@@ -310,11 +320,11 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 		_, err := client.Info(ctx, target(t, ids[i%16]))
 		return err
 	})
-	measure("info-spread16", 16, 100, func(ctx context.Context, w, i int) error {
-		_, err := client.Info(ctx, target(t, ids[w]))
+	measure("info-spread16", concurrency, 100, func(ctx context.Context, w, i int) error {
+		_, err := client.Info(ctx, target(t, ids[w%16]))
 		return err
 	})
-	measure("info-same", 16, 50, func(ctx context.Context, w, i int) error {
+	measure("info-same", concurrency, 50, func(ctx context.Context, w, i int) error {
 		_, err := client.Info(ctx, target(t, ids[0]))
 		return err
 	})
@@ -323,12 +333,12 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[1+i%15]))
 		return err
 	})
-	measure("join-spread16", 16, 8, func(ctx context.Context, w, i int) error {
+	measure("join-spread16", concurrency, 8, func(ctx context.Context, w, i int) error {
 		p := int64(6_100_000 + w*100 + i)
-		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[w]))
+		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[w%16]))
 		return err
 	})
-	measure("join-same", 16, 8, func(ctx context.Context, w, i int) error {
+	measure("join-same", concurrency, min(8, 256/concurrency), func(ctx context.Context, w, i int) error {
 		p := int64(6_200_000 + w*100 + i)
 		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[0]))
 		return err

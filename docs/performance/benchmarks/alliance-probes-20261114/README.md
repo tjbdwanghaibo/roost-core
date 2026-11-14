@@ -2,10 +2,11 @@
 
 对应 v1.47.0 交接 B-2。正式联盟仍限制最多 500 人，本批没有扩大业务准入。新增探针已经用当前 CLI 生成工程跑过小规模功能验证；并行编译期间的数字只证明入口有效，不作为容量结论。effect worker 的正式交替测量归 M-11。
 
-## 三种入口
+## 入口
 
 | 用例 | 路径与边界 |
 | --- | --- |
+| `TestAllianceE2ERPCConcurrency` | `ALLIANCE_E2E_RPC_CONCURRENCY=16`（1～256），写额度固定 512。Info / Join 分散到 16 个联盟与单热点对照；单热点新增入会总数至多 256，保持 500 人准入上限。Found 初始化固定顺序和 16 并发。报告耗时至少 3 秒样本的开始时间、错误与数量；没有自动重试。 |
 | `TestAllianceE2EJoinRetryableSources` | 真实联盟进程、NATS RPC、Mongo 与 Redis。可配置 `dataengine.effect_consumer.workers`，对明确的 retryable 沿用玩家号与请求号退避重试，最多 8 次；unknown 不自动重试。RPC 答复次数与逻辑请求终态分开计数。没有 unknown 时，最终人数必须等于创始人加成功入会数。 |
 | `TestAllianceE2ELargeAllianceFootprint` | 正式 RPC 建盟和入会，1～500 人。读取 Mongo Remote 外层文档及其 `data` 中 DAO BSON，核对名单；再经正式 SnapshotClient、Redis L2、Mongo 回源、生成 Mirror 解码器冷读。 |
 | `TestAllianceE2ESyntheticRosterFootprint` | 默认 1000 / 5000 / 10000 人。用持久文档形状经 `RestorePersisted` 加载生成的 AllianceDao，再用 DAO 编码及生成 Mirror 解码器读取 BSON；每名成员保留一条入会回执。不开服务、不经过存储和 L1、不表示业务支持超额联盟。更长回执历史、捐赠和战争记录需要另给数据形状。 |
@@ -58,3 +59,11 @@ M-11 保持缺省 256 并发、写额度 512，`ALLIANCE_E2E_RETRY=1`，effect w
 - 原始日志：`/tmp/roost-v147-alliance-mutation.log`、`/tmp/roost-v147-alliance-final-green.log`、`/tmp/roost-v147-alliance-shape-green.log`；初轮失败保留在 `*-shape-smoke.log`、`*-missing-config.log` 与 `*-wrapper-red.log`。
 
 最终文档批可把“尚无正式探针”改为：**重试 / effect worker 对照与正式上限内的 BSON、Mirror 成本入口已实跑；超额人数仅有生成 DAO / DTO 合成探针。正式容量与 M-11 结果仍需空闲测量，500 人上限没有改变。**
+
+## RPC 并发入口补齐
+
+原正式用例忽略 `ALLIANCE_E2E_RPC_CONCURRENCY`，始终执行 16 并发；128/256 的开关此前只存在 checkpoint 实验。修前设为 4 的真实脚本仍打印 `info-spread16 conc=16 n=1600`，要求并发为 4 的参数核对退出 1。现在正式探针读取 1～256，分散目标始终是 16 个联盟，单热点请求规模不会突破 500 人上限；Found 初始化仍用原来的顺序/16 并发，不把它报成可变档。
+
+同一私有 offset 22000 环境，设置 `ALLIANCE_E2E_PERF=1 ALLIANCE_E2E_RPC_CONCURRENCY=4 ALLIANCE_E2E_RUN='^TestAllianceE2ERPCConcurrency$'` 实际运行脚本后，Info 分散档为 4 并发/400 次，Join 热点为 4 并发/32 次；各档错误与 ≥3 秒样本均 0，1 PASS、零 SKIP。只是功能验证，不能用该次耗时推断正式容量。修前源码也等同于去掉新开关的反向对照，确实不能通过参数核对。
+
+原始日志 `/tmp/roost-v147-rpc-options-before.log`、`/tmp/roost-v147-rpc-options-after.log`，过程日志分别在 `/private/tmp/v147-rpc-options-before`、`/private/tmp/v147-rpc-options-after`；依赖已停止。本批只移出测量参数、人数边界和慢样本统计，没有合入后台 checkpoint 配置或实现。后续 C-Q1/Q2 可使用正式开关在目标宿主测 128/256，M-19 仍在实验分支保持同夹具关/开交替。
