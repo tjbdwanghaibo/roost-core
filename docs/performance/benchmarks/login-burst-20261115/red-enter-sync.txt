@@ -1,0 +1,8 @@
+2026/11/15 00:28:07 WARN enter: hook failed; it runs again on the next enter hook=purchase player_id=100001 err="purchase: platform client is unavailable"
+2026/11/15 00:28:07 WARN enter_game: login not announced on the world channel player_id=100001 err="chat controller: nil"
+2026/11/15 00:28:07 INFO enter: player entered player_id=100001 first=true created=true server_id=1000
+--- FAIL: TestEnterGameDoesNotWaitForTheWorldsLoginCount (3.01s)
+    enter_login_scenario_test.go:741: EnterGame did not answer while the World's login count was waiting on its commit: the login waits for the one World, which counts one login per fsync
+FAIL
+FAIL	example.com/lbdemo/game/controllers/player	3.716s
+FAIL

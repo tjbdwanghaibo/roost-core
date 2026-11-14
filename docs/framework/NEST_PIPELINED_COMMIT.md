@@ -13,6 +13,14 @@
 
 四条运行时不变量全部保持，其中第 1 条（成功不可先于 commit point 被观察）的实现方式从"锁不放"改为"外化闸门"。
 
+**单个热点实体经派发器的吞吐，第一阶段 pipelined 解不开，只有异步完成（§11）能解。** 第一阶段放了实体锁，但派发
+worker 仍在锁外等票据，派发器按实体 ID 的准入链让同一实体的下一条消息等这条作业（含回复）结束才开始，所以经
+Sender / Dispatch 打到同一个实体的同步请求仍是“每次 fsync 一条”，与 strict 相同。异步完成按 handler 点名，生产装配
+只点名 saga 原生步骤（维护者 2026-10-29），业务自己声明的 pipelined handler 拿不到。async 也不是出路：nestwal 只有一个
+writer，async 记录要等同批或上一批 strict 记录的 fsync，进程里有 strict 流量时 async 的锁持有同样约等于一次 fsync。
+所以“每个请求都经过的唯一实体”上的写不要放在请求的关键路径上同步等（game-demo 的登录计数改为只投递，见
+[login-burst-20261115](../performance/benchmarks/login-burst-20261115/README.md)，M-15）。
+
 ## 2. 正确性论证
 
 1. **append 在实体锁内** ⇒ 同一实体上 LSN 顺序 = 变更顺序。

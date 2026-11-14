@@ -719,7 +719,9 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
 
 World 有了自己的 DAO（`PlayersEntered` / `MatchesFormed`）和 `Stats` 组件：`RecordEnter` 在 EnterGame 之后、
 `RecordMatch` 在 Commit 之后各是一次独立的 Nest 调用（Player 与 World 是不同实体、不同锁档）；`WorldStats` 是一个带返回值的
-读 handler，锁内读、值出锁，端点从不碰 World 本身。
+读 handler，锁内读、值出锁，端点从不碰 World 本身。`RecordEnter` 是投递（`Send_RecordEnter`），登录不等它：World 只有一个，
+strict 的计数在 World 锁内等 fsync、同一实体的消息一条接一条，每次 fsync 只记一人；千人登录潮里等它会让后来的玩家等光请求预算
+（M-15，[login-burst-20261115](../docs/performance/benchmarks/login-burst-20261115/README.md)）。
 
 World 还有一组持久定时器（`Timer` 组件，类型号 2006），目前只有一种：活动窗口的关窗阶段。它是**手写**的，不用 `roost add timer`
 （维护者 2026-10-18：demo 是手写的参考实现，不迁到生成器产物上，生成器只生成框架内容）；手写的是适配，期限、触发与驱动都用框架的

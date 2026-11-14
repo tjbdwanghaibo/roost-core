@@ -1,0 +1,10 @@
+baseline chat world channel CAS applied=587
+baseline chat world channel CAS lost=77
+fix1 chat world channel CAS applied=629
+fix1 chat world channel CAS lost=101
+fix2 chat world channel CAS applied=281
+fix2 chat world channel CAS lost=6391
+fix3 chat world channel CAS applied=1000
+fix3 chat world channel CAS lost=0
+fix4 chat world channel CAS applied=1000
+fix4 chat world channel CAS lost=0

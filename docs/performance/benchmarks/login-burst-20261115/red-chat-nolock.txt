@@ -1,0 +1,4 @@
+    chat_test.go:1277: 12 compare-and-sets were lost among 8 publishes from one process to one channel: they fought over the write instead of queueing for it
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/chat	0.529s
+FAIL
