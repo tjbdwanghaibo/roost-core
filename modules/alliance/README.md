@@ -135,3 +135,9 @@
 game-demo 只把规则里的货币道具覆盖成它已有的道具 9001，并在 `internal/service/game/alliance.go` 里先发布自己的归属适配、再手动启动模块的运行期入口（demo 的工程清单关闭了这个模块的自动启动，避免启动两份消费者）。模块没有为旧的 guild 接口、字段或旧生成工程保留兼容层。
 
 只读声明：AllianceInfo / AllianceReceipt / GuardInfo / GuardReceipt 使用 `//roost:nest durability=memory`，仍在正式 Nest 实体锁内执行，不取持久状态回滚快照、不写 WAL。裸 `//roost:nest` 的默认值是 state / async，不能与 memory 混同；带状态推进、回执写入或引用校正的入口保持写事务声明。
+
+## 真实换服验收
+
+`scripts/test-alliance-e2e.sh` 缺省集合包含 `TestAllianceE2ESocialRehome`，也可用 `scripts/test-social-real.sh` 定向运行。两个 game sid、两个 alliance 与真实 account / Mongo / Redis / NATS 上，联盟成员分别在换服交出后、account 提交后被 `SIGKILL`；同 WAL 重启后检查 account 目标归属、旧入口拒绝、目标服成员展示与捐献回执、联盟资金只增加一次。交出后场景由一次源登录触发恢复，不能写成无人介入自动完成。
+
+account 已提交到删源档之间的 Q4 仍未关闭：这里验证 account / 玩家入口唯一归属，没有证明旧副本的全部定时器或其他权威写被隔离，也不承诺已提交分支会被源登录自动清理。过程与具体边界见 [B-7 报告](../../docs/maintenance/evidence/social-real-20261114/README.md)。

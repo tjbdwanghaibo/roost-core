@@ -1,0 +1,50 @@
+ok   module alliance: 55 passed (want 55), 0 skipped
+ok   module alliance+enter: 2 passed (want 2), 0 skipped
+ok   module alliance+rehome: 2 passed (want 2), 0 skipped
+ok   module attribute: 20 passed (want 20), 0 skipped
+ok   module attribute+enter: 2 passed (want 2), 0 skipped
+ok   module attribute+equipment: 8 passed (want 8), 0 skipped
+ok   module bag: 20 passed (want 20), 0 skipped
+ok   module bag+gm: 4 passed (want 4), 0 skipped
+ok   module cellworld: 6 passed (want 6), 0 skipped
+ok   module chat: 10 passed (want 10), 0 skipped
+ok   module chat+enter: 2 passed (want 2), 0 skipped
+ok   module enter: 29 passed (want 29), 0 skipped
+ok   module enter+profile: 3 passed (want 3), 0 skipped
+ok   module equipment: 18 passed (want 18), 0 skipped
+ok   module gm: 9 passed (want 9), 0 skipped
+ok   module leaderboard: 21 passed (want 21), 0 skipped
+ok   module login: 32 passed (want 32), 0 skipped
+ok   module login+enter: 6 passed (want 6), 0 skipped
+ok   module mailbox: 33 passed (want 33), 0 skipped
+ok   module mailbox+bag: 9 passed (want 9), 0 skipped
+ok   module mailbox+enter: 5 passed (want 5), 0 skipped
+ok   module mailbox+gm: 4 passed (want 4), 0 skipped
+ok   module mailbox+profile: 10 passed (want 10), 0 skipped
+ok   module matchmaking: 17 passed (want 17), 0 skipped
+ok   module matchmaking+rehome: 2 passed (want 2), 0 skipped
+ok   module matchroom: 12 passed (want 12), 0 skipped
+ok   module portal: 12 passed (want 12), 0 skipped
+ok   module portal+enter: 2 passed (want 2), 0 skipped
+ok   module profile: 20 passed (want 20), 0 skipped
+ok   module profile+enter: 4 passed (want 4), 0 skipped
+ok   module profile+gm: 4 passed (want 4), 0 skipped
+ok   module purchase: 21 passed (want 21), 0 skipped
+ok   module purchase+bag: 4 passed (want 4), 0 skipped
+ok   module purchase+enter: 2 passed (want 2), 0 skipped
+ok   module rehome: 44 passed (want 44), 0 skipped
+ok   module rehome+enter: 5 passed (want 5), 0 skipped
+ok   module rehome+gm: 4 passed (want 4), 0 skipped
+ok   module room: 22 passed (want 22), 0 skipped
+ok   module servertime: 12 passed (want 12), 0 skipped
+ok   module servertime+enter: 3 passed (want 3), 0 skipped
+ok   module skillbook: 11 passed (want 11), 0 skipped
+ok   module team: 35 passed (want 35), 0 skipped
+ok   module team+rehome: 2 passed (want 2), 0 skipped
+ok   module turn: 25 passed (want 25), 0 skipped
+ok   module wallet: 17 passed (want 17), 0 skipped
+ok   module wallet+gm: 4 passed (want 4), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check

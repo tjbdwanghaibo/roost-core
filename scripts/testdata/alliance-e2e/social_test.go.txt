@@ -1,0 +1,288 @@
+package e2e
+
+// 社交模块真实验收：只经 PB / account RPC 驱动，毒性代理和文件栅栏仅改变时序。
+// Team 仍归 game 的 Remote 共享实体；Q4 的旧驻留副本写隔离不在本用例结论内。
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"syscall"
+	"testing"
+	"time"
+
+	apperrors "example.com/planet/internal/errors"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+func teamInfo(p *player) *pb.TeamResponse {
+	return call(p, msgid.MsgTeamInfo, &pb.TeamInfoRequest{}, pb.MarshalTeamInfoRequest, pb.UnmarshalTeamResponse)
+}
+
+func requireTeam(t *testing.T, got *pb.TeamResponse, id, leader, revision int64, members ...int64) {
+	t.Helper()
+	slices.Sort(members)
+	if got.Code != 0 || got.Info == nil || got.Info.TeamID != id || got.Info.Leader != leader || got.Info.Revision != revision || !slices.Equal(got.Info.Members, members) {
+		t.Fatalf("TEAM_AUTHORITY: got %+v info %+v; want id=%d leader=%d revision=%d members=%v", got, got.Info, id, leader, revision, members)
+	}
+}
+
+func (s *suite) socialProxy(method, path string, value any) {
+	s.t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(s.ctx, method, s.toxiproxy+path, bytes.NewReader(raw))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		s.t.Fatalf("toxiproxy %s %s: status %d", method, path, resp.StatusCode)
+	}
+}
+
+func TestAllianceE2ESocialTeam(t *testing.T) {
+	s := newSuite(t, 8*time.Minute)
+	games, _ := s.fullStack(procOptions{})
+	a := s.login(games[0], s.prefix+"-team-a")
+	name := s.prefix + "-player"
+	proxy := fmt.Sprintf("127.0.0.1:%d", s.portBase+295)
+	s.socialProxy("POST", "/proxies", map[string]any{"name": name, "listen": proxy, "upstream": games[1].client, "enabled": true})
+	t.Cleanup(func() { s.socialProxy("DELETE", "/proxies/"+name, nil) })
+	viaProxy := *games[1]
+	viaProxy.client = proxy
+	b := s.login(&viaProxy, s.prefix+"-team-b")
+	created := call(a, msgid.MsgTeamCreate, &pb.TeamCreateRequest{}, pb.MarshalTeamCreateRequest, pb.UnmarshalTeamResponse)
+	if created.Code != 0 || created.Info == nil || created.Info.TeamID == 0 {
+		t.Fatalf("create: %+v", created)
+	}
+	id := created.Info.TeamID
+	requireTeam(t, created, id, a.id, 1, a.id)
+	invite := call(a, msgid.MsgTeamInvite, &pb.TeamInviteRequest{Invitee: b.id}, pb.MarshalTeamInviteRequest, pb.UnmarshalTeamResponse)
+	requireTeam(t, invite, id, a.id, 1, a.id)
+	// 跨 game 邀请通知不作前提：当前 TeamInvited 只投本进程，权威邀请仍允许持 TeamID 接受。
+	// 下行无限 timeout 暂存所有回包，写入照常到达 game 1001。由另一进程读到提交后主动断开，形成真实丢回包。
+	s.socialProxy("POST", "/proxies/"+name+"/toxics", map[string]any{"name": "lost-reply", "type": "timeout", "stream": "downstream", "toxicity": 1, "attributes": map[string]any{"timeout": 0}})
+	raw, _ := pb.MarshalTeamAcceptRequest(&pb.TeamAcceptRequest{TeamID: id})
+	b.mu.Lock()
+	b.seq++
+	seq := b.seq
+	reply := make(chan *wire.Packet, 1)
+	b.wait[seq] = reply
+	b.mu.Unlock()
+	if err := wire.Write(b.conn, []*wire.Packet{{MsgID: msgid.MsgTeamAccept, Seq: seq, Payload: raw}}, wire.DefaultMaxPayload); err != nil {
+		t.Fatal(err)
+	}
+	s.eventually("cross-game accept committed despite lost reply", 20*time.Second, func() (bool, string) {
+		got := teamInfo(a)
+		return got.Code == 0 && got.Info != nil && got.Info.Revision == 2 && slices.Contains(got.Info.Members, b.id), fmt.Sprintf("%+v", got)
+	})
+	select {
+	case <-reply:
+		t.Fatal("toxiproxy did not withhold the accepted response")
+	default:
+	}
+	_ = b.conn.Close()
+	s.socialProxy("DELETE", "/proxies/"+name+"/toxics/lost-reply", nil)
+	s.socialProxy("POST", "/proxies/"+name+"/toxics", map[string]any{"name": "latency", "type": "latency", "stream": "downstream", "toxicity": 1, "attributes": map[string]any{"latency": 80, "jitter": 20}})
+	b = s.login(&viaProxy, s.prefix+"-team-b")
+	retry := call(b, msgid.MsgTeamAccept, &pb.TeamAcceptRequest{TeamID: id}, pb.MarshalTeamAcceptRequest, pb.UnmarshalTeamResponse)
+	requireTeam(t, retry, id, a.id, 2, a.id, b.id)
+	requireTeam(t, teamInfo(a), id, a.id, 2, a.id, b.id)
+	requireTeam(t, teamInfo(b), id, a.id, 2, a.id, b.id)
+	blocked := call(b, msgid.MsgRehomeApply, &pb.RehomeApplyRequest{To: 1000}, pb.MarshalRehomeApplyRequest, pb.UnmarshalRehomeApplyResponse)
+	if blocked.Code == 0 || blocked.TransferID != "" {
+		t.Fatalf("team must block rehome: %+v", blocked)
+	}
+	// 整队跨 sid 不符合 module-duel 的本服契约，拒绝后不得留下任何排队意图。
+	queue := call(a, msgid.MsgMatchEnqueue, &pb.MatchEnqueueRequest{Sequence: 1, Team: true}, pb.MarshalMatchEnqueueRequest, pb.UnmarshalMatchmakingResponse)
+	if queue.Code == 0 {
+		t.Fatalf("cross-sid team unexpectedly queued: %+v", queue)
+	}
+	for _, p := range []*player{a, b} {
+		if st := matchStatus(p); st.Code != 0 || st.Phase != "" || st.Key != "" {
+			t.Fatalf("rejected team left intent: %+v", st)
+		}
+	}
+	left := call(a, msgid.MsgTeamLeave, &pb.TeamLeaveRequest{}, pb.MarshalTeamLeaveRequest, pb.UnmarshalTeamResponse)
+	if left.Code != 0 {
+		t.Fatalf("leader leave: %+v", left)
+	}
+	requireTeam(t, teamInfo(b), id, b.id, 3, b.id)
+	if got := teamInfo(a); got.Code != 0 || got.Info == nil || got.Info.TeamID != 0 {
+		t.Fatalf("old leader reference: %+v", got)
+	}
+	t.Logf("SOCIAL_TEAM two game SIDs, lost accept reply + 80±20ms downstream, retry revision=2, leader transfer revision=3; cross-sid queue rejected without intent")
+}
+
+func matchStatus(p *player) *pb.MatchmakingResponse {
+	return call(p, msgid.MsgMatchStatus, &pb.MatchStatusRequest{}, pb.MarshalMatchStatusRequest, pb.UnmarshalMatchmakingResponse)
+}
+
+func TestAllianceE2ESocialMatchmaking(t *testing.T) {
+	s := newSuite(t, 8*time.Minute)
+	games, _ := s.fullStack(procOptions{})
+	a := s.login(games[0], s.prefix+"-queue-a")
+	b := s.login(games[0], s.prefix+"-queue-b")
+	queued := call(a, msgid.MsgMatchEnqueue, &pb.MatchEnqueueRequest{Sequence: 1}, pb.MarshalMatchEnqueueRequest, pb.UnmarshalMatchmakingResponse)
+	if queued.Code != 0 || queued.Key == "" || queued.Phase != "queued" {
+		t.Fatalf("enqueue: %+v", queued)
+	}
+	move := call(a, msgid.MsgRehomeApply, &pb.RehomeApplyRequest{To: 1001}, pb.MarshalRehomeApplyRequest, pb.UnmarshalRehomeApplyResponse)
+	if move.Code == 0 || move.TransferID != "" {
+		t.Fatalf("queue must block rehome: %+v", move)
+	}
+	team := call(a, msgid.MsgTeamCreate, &pb.TeamCreateRequest{}, pb.MarshalTeamCreateRequest, pb.UnmarshalTeamResponse)
+	if team.Code == 0 {
+		t.Fatalf("queue must block team join: %+v", team)
+	}
+	s.stop(games[0], syscall.SIGKILL)
+	s.launch(games[0])
+	s.waitReady(games[0], 2*time.Minute)
+	a = s.login(games[0], s.prefix+"-queue-a")
+	b = s.login(games[0], s.prefix+"-queue-b")
+	resume := matchStatus(a)
+	if resume.Code != 0 || resume.Key != queued.Key || resume.Sequence != 1 || resume.Phase != "queued" {
+		t.Fatalf("QUEUE_RECOVERY: %+v want key=%s", resume, queued.Key)
+	}
+	retry := call(a, msgid.MsgMatchEnqueue, &pb.MatchEnqueueRequest{Sequence: 1}, pb.MarshalMatchEnqueueRequest, pb.UnmarshalMatchmakingResponse)
+	if retry.Code != 0 || retry.Key != queued.Key {
+		t.Fatalf("queue retry: %+v", retry)
+	}
+	peer := call(b, msgid.MsgMatchEnqueue, &pb.MatchEnqueueRequest{Sequence: 1}, pb.MarshalMatchEnqueueRequest, pb.UnmarshalMatchmakingResponse)
+	if peer.Code != 0 {
+		t.Fatalf("peer enqueue: %+v", peer)
+	}
+	var room int64
+	s.eventually("both players receive one match room", 30*time.Second, func() (bool, string) {
+		x, y := matchStatus(a), matchStatus(b)
+		if x.Code == 0 && y.Code == 0 && x.Phase == "matched" && y.Phase == "matched" && x.RoomID > 0 && x.RoomID == y.RoomID {
+			room = x.RoomID
+			return true, ""
+		}
+		return false, fmt.Sprintf("A=%+v B=%+v", x, y)
+	})
+	for _, p := range []*player{a, b} {
+		for i := 0; i < 3; i++ {
+			st := matchStatus(p)
+			if st.Code != 0 || st.RoomID != room || st.Phase != "matched" {
+				t.Fatalf("matched replay changed room: %+v", st)
+			}
+		}
+	}
+	t.Logf("SOCIAL_MATCH queued key=%s survives game SIGKILL; retry produces one room=%d; team/rehome remain blocked until terminal clearance", queued.Key, room)
+}
+
+func TestAllianceE2ESocialRehome(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DRILL_REHOME_FAULT_DIR", dir)
+	s := newSuite(t, 12*time.Minute)
+	games, _ := s.fullStack(procOptions{})
+	leader := s.login(games[0], s.prefix+"-rehome-leader")
+	leader.addGold(1000)
+	key := leader.startOp("found", &pb.FoundAllianceRequest{Name: "social rehome", OpenJoin: true})
+	status := leader.waitOp("found", key, time.Minute)
+	if status.Status != "completed" || status.AllianceID == 0 {
+		t.Fatalf("found: %+v", status)
+	}
+	guild := status.AllianceID
+	accounts, err := svcaccount.NewBusClient(s.bus, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, stage := range []string{"handed-off", "committed"} {
+		open := s.prefix + "-rehome-" + stage
+		member := s.login(games[1], open)
+		joined := call(member, msgid.MsgJoinAlliance, &pb.JoinAllianceRequest{AllianceID: guild}, pb.MarshalJoinAllianceRequest, pb.UnmarshalAllianceResponse)
+		if joined.Code != 0 {
+			t.Fatalf("join: %+v", joined)
+		}
+		member.addGold(200)
+		raw, _ := json.Marshal(map[string]any{"Stage": stage, "PlayerID": member.id})
+		if err := os.WriteFile(filepath.Join(dir, "arm.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		move := call(member, msgid.MsgRehomeApply, &pb.RehomeApplyRequest{To: 1000}, pb.MarshalRehomeApplyRequest, pb.UnmarshalRehomeApplyResponse)
+		if move.Code != 0 || move.TransferID == "" {
+			t.Fatalf("rehome apply: %+v", move)
+		}
+		var marker struct {
+			Stage      string `json:"stage"`
+			PID        int    `json:"pid"`
+			PlayerID   int64  `json:"player_id"`
+			TransferID string `json:"transfer_id"`
+			From, To   int32
+		}
+		s.eventually("exact rehome "+stage, 30*time.Second, func() (bool, string) {
+			raw, err := os.ReadFile(filepath.Join(dir, "reached.json"))
+			if err != nil {
+				return false, err.Error()
+			}
+			err = json.Unmarshal(raw, &marker)
+			return err == nil && marker.Stage == stage && marker.PlayerID == member.id, string(raw)
+		})
+		if marker.PID != games[1].cmd.Process.Pid || marker.TransferID != move.TransferID || marker.From != 1001 || marker.To != 1000 {
+			t.Fatalf("wrong kill barrier: %+v", marker)
+		}
+		s.stop(games[1], syscall.SIGKILL)
+		if err := os.Remove(filepath.Join(dir, "arm.json")); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Remove(filepath.Join(dir, "reached.json"))
+		s.launch(games[1])
+		s.waitReady(games[1], 2*time.Minute)
+		if stage == "handed-off" {
+			// account 尚未改绑；一次源登录是明确的恢复触发，不能宣称无人介入自动恢复。
+			movingCode, _ := errcode.ClientError(apperrors.ErrRehomeMoving)
+			member = s.login(games[1], open, movingCode)
+		}
+		s.eventually("account committed to target", time.Minute, func() (bool, string) {
+			b, err := accounts.RoleBinding(s.ctx, member.id)
+			return err == nil && b.ServerID == 1000 && b.ServingServerID == 1000, fmt.Sprintf("%+v %v", b, err)
+		})
+		elsewhereCode, _ := errcode.ClientError(apperrors.ErrPlayerElsewhere)
+		refused := s.login(games[1], open, elsewhereCode)
+		_ = refused.conn.Close()
+		member = s.login(games[0], open)
+		mine := member.guildInfo(0, joined.Version)
+		if mine.Code != 0 || mine.AllianceID != guild || mine.Members != int32(i+2) {
+			t.Fatalf("ALLIANCE_REHOME: target membership %+v", mine)
+		}
+		before, _ := s.funds(guild)
+		donation := member.startOp("donate", &pb.DonateAllianceRequest{Amount: 25})
+		if st := member.waitOp("donate", donation, time.Minute); st.Status != "completed" {
+			t.Fatalf("target donate: %+v", st)
+		}
+		after, _ := s.funds(guild)
+		if after-before != 25 || member.gold() != 175 {
+			t.Fatalf("target saga funds=%d→%d (want +25)", before, after)
+		}
+		// 重登并重复查询同一 Saga 回执，不再扣款；联盟名单不会因换服多出一名成员。
+		_ = member.conn.Close()
+		member = s.login(games[0], open)
+		if st := member.waitOp("donate", donation, time.Minute); st.Status != "completed" {
+			t.Fatalf("replay receipt: %+v", st)
+		}
+		if again, _ := s.funds(guild); again != after {
+			t.Fatalf("duplicate donation credit: %d→%d", after, again)
+		}
+		if info := leader.guildInfo(0, 0); info.Code != 0 || info.Members != int32(i+2) {
+			t.Fatalf("leader membership: %+v", info)
+		}
+		t.Logf("SOCIAL_REHOME stage=%s killed_pid=%d player=%d transfer=%s target=1000 members=%d donate exactly once; Q4 old-source timers/writes not certified", stage, marker.PID, member.id, move.TransferID, i+2)
+	}
+}

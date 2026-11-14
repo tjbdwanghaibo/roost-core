@@ -1,0 +1,8 @@
+    social_test.go:129: SOCIAL_TEAM two game SIDs, lost accept reply + 80±20ms downstream, retry revision=2, leader transfer revision=3; cross-sid queue rejected without intent
+--- PASS: TestAllianceE2ESocialTeam (5.71s)
+    social_test.go:187: SOCIAL_MATCH queued key=100001:1 survives game SIGKILL; retry produces one room=1; team/rehome remain blocked until terminal clearance
+--- PASS: TestAllianceE2ESocialMatchmaking (18.88s)
+    social_test.go:286: SOCIAL_REHOME stage=handed-off killed_pid=21538 player=100002 transfer=rh1001-19e57b60e5d50ec318373399 target=1000 members=2 donate exactly once; Q4 old-source timers/writes not certified
+    social_test.go:286: SOCIAL_REHOME stage=committed killed_pid=21541 player=100003 transfer=rh1001-9015b3aec2d47ceea3f2b8c8 target=1000 members=3 donate exactly once; Q4 old-source timers/writes not certified
+--- PASS: TestAllianceE2ESocialRehome (36.37s)
+ok  	example.com/planet/e2e	61.680s

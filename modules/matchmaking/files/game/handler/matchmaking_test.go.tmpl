@@ -14,11 +14,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 
-	apperrors "{{MODULE}}/internal/errors"
-	game "{{MODULE}}/game/matchmaking"
 	gamematchmaking "{{MODULE}}/game/components/matchmaking"
 	room "{{MODULE}}/game/entities/room"
 	sender "{{MODULE}}/game/handler/syncsender"
+	game "{{MODULE}}/game/matchmaking"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 func registerMatchmaking(engine *nest.NestMgr) {
@@ -325,6 +325,9 @@ func TestMatchmakingExpiredMatchHistoryKeepsWriteBarrier(t *testing.T) {
 	if _, err := f.runtime.Clear(context.Background(), 101, a.Key); err == nil {
 		t.Fatal("unknown match cleared")
 	}
+	if _, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), f.teamID, f.playerID(101), 1); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("unknown match lost the team joining barrier: %v", err)
+	}
 }
 func TestMatchmakingPartyBeginRollbackRestoresEveryPlayerAndTeam(t *testing.T) {
 	f := newMatchFixture(t)
@@ -378,7 +381,27 @@ func TestMatchmakingSoloCannotBypassTeamAndForeignKeyCannotCancel(t *testing.T) 
 		t.Fatalf("team member solo queued: %v", err)
 	}
 	f.enqueue(t, 102, false)
+	f.invite(t, 101, 102)
+	if _, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("queued player accepted team invitation: %v", err)
+	}
+	if _, err := sender.NewTeamCreateSender(f.engine).MultiSync_TeamCreate(context.Background(), f.teamID, f.playerID(102), 1); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("queued player bypassed team create guard: %v", err)
+	}
 	if _, err := f.runtime.Cancel(context.Background(), 102, "101:1"); !errors.Is(err, apperrors.ErrMatchmakingStale) {
 		t.Fatalf("foreign key cancelled: %v", err)
+	}
+	key := f.status(t, 102).Key
+	if s, err := f.runtime.Cancel(context.Background(), 102, key); err != nil || s.Phase != gamematchmaking.MatchCancelled {
+		t.Fatalf("cancel: %+v %v", s, err)
+	}
+	if _, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1); !errors.Is(err, apperrors.ErrMatchmakingBusy) {
+		t.Fatalf("cancelled but uncleared match lost team barrier: %v", err)
+	}
+	if _, err := f.runtime.Clear(context.Background(), 102, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewTeamAcceptSender(f.engine).MultiSync_TeamAccept(context.Background(), f.teamID, f.playerID(102), 1); err != nil {
+		t.Fatalf("cleared player still cannot accept team: %v", err)
 	}
 }

@@ -13,6 +13,9 @@
 #   - TestAllianceE2ERobotOfflineJoin          生成工程的机器人跑 alliance_offline_join：离线时被运维入会、再登录“我的公会”可读（决定 D）；
 #   - TestAllianceE2ERobotCrossGameJoin        生成工程的机器人跑 alliance_cross_join：两个 game 进程上的玩家互相入会（-identities 把
 #                                              两个身份放到 game 1001），各在自己的 game 上读回；ALLIANCE_E2E_ROBOT_LOGIN=portal 走登录入口；
+#   - TestAllianceE2ESocialTeam               两 game 共享队伍，toxiproxy 丢接受回包 / 80±20ms 下行延迟、重试不重复入队；
+#   - TestAllianceE2ESocialMatchmaking        单排意图经 game SIGKILL 恢复，同一 RoomID；队伍 / 换服屏障；
+#   - TestAllianceE2ESocialRehome             联盟成员跨 sid 换服 handed-off / committed 两点 SIGKILL，目标服成员展示与捐献；Q4 保留。
 #   - TestAllianceE2EShortPerf                 只在 ALLIANCE_E2E_PERF=1 时跑：续期量、预加载 1k / 10k、路由 RPC 延迟；
 #   - TestAllianceE2EMirrorRevalidation        只在 ALLIANCE_E2E_PERF=1 时跑：cached_max_staleness 30s / 5s 的 Mirror 回源量。
 #   - TestAllianceE2ERPCConcurrency            只在 ALLIANCE_E2E_PERF=1 时跑：一个实例上 Found / Info / Join 的吞吐随并发与顺序键的变化（约 2 分钟）。
@@ -66,10 +69,27 @@ etcd --name alliance-e2e --data-dir "$work_dir/etcd" \
 etcd_pid=$!
 
 default_run='^TestAllianceE2E(PreloadOrder|CrashTakeoverAndScaleIn|OneAllianceUnderRace|RedisOutage|GamePlayers|RejectedFoundingAfterRestart|RobotOfflineJoin|RobotCrossGameJoin)$'
+default_run="${default_run%')$'}|SocialTeam|SocialMatchmaking|SocialRehome)$"
 export GOWORK=off
 cd "$repo_dir"
 go run ./codegen/cmd/roost project new planet -module example.com/planet -out "$work_dir/planet" -template game-demo --skip-deps
 printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$work_dir/planet/go.mod"
+if [[ "${SOCIAL_REAL_MODULE_MATRIX:-0}" == 1 ]]; then
+	go build -o "$work_dir/bin/roost" ./codegen/cmd/roost
+	(cd "$work_dir/planet" && "$work_dir/bin/roost" module verify)
+fi
+# 只给临时生成工程加确定性故障栅栏；不改正式模块、归属语义或仓库源码。
+python3 "$repo_dir/scripts/testdata/demo-drill/rehome-instrument.py" "$repo_dir" "$work_dir/planet" "$work_dir/unused-overlay"
+if [[ "${SOCIAL_REAL_MUTATION:-}" == "drop-team-reference" ]]; then
+	python3 - "$work_dir/planet/game/components/team/team.go" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); text = p.read_text()
+start = text.index('func (c *Component) Accept(')
+anchor = 'c.owner.Dao().GetTeam().SetTeamID(target.ID())'
+if text[start:].count(anchor) != 1: raise SystemExit('team mutation anchor drift')
+p.write_text(text[:start] + text[start:].replace(anchor, '// MUTANT: accepted Team member without Player reference', 1))
+PY
+fi
 mkdir -p "$work_dir/planet/e2e"
 for source in scripts/testdata/alliance-e2e/*_test.go.txt; do
 	cp "$source" "$work_dir/planet/e2e/$(basename "${source%.txt}")"
@@ -82,5 +102,15 @@ done
 	ALLIANCE_E2E_BINARY="$work_dir/bin/app" ALLIANCE_E2E_ACCOUNTCTL="$work_dir/bin/accountctl" ALLIANCE_E2E_ROOT="$work_dir/planet" \
 		ALLIANCE_E2E_LOADTEST="$work_dir/bin/loadtest" \
 		ALLIANCE_E2E_ETCD="127.0.0.1:$etcd_port" ALLIANCE_E2E_PORT_BASE="$port_base" \
-		go test -mod=mod -count=1 -timeout 60m -v -run "${ALLIANCE_E2E_RUN:-$default_run}" ./e2e/
+		go test -mod=mod -count=1 -timeout 60m -v -run "${ALLIANCE_E2E_RUN:-$default_run}" ./e2e/ | tee "$work_dir/e2e.log"
+	python3 - "$work_dir/e2e.log" "${ALLIANCE_E2E_EXPECT:-}" <<'PY'
+import os, pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+passed = len(re.findall(r'^--- PASS: TestAllianceE2E', text, re.M))
+skipped = len(re.findall(r'^\s*--- SKIP:', text, re.M))
+expected = int(sys.argv[2]) if sys.argv[2] else (11 if not os.environ.get('ALLIANCE_E2E_RUN') else None)
+if not passed or skipped or (expected is not None and passed != expected):
+    raise SystemExit(f'alliance actual cases: passed={passed}, skipped={skipped}, expected={expected}')
+print(f'alliance actual cases: passed={passed}, skipped={skipped}')
+PY
 )
