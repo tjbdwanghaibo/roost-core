@@ -48,8 +48,9 @@ login.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry,
 ```
 
 - 只在 `init` 里登记；空名、nil、重名 panic；按名字顺序执行。没有登记任何告知的工程这一步什么都不做。
-- 在后台执行、有界：`Notifier` 同时至多处理 `MaxPendingNotices`（256）条会话，超过的直接丢弃；进程退出不等在途的告知；告知 panic 只记 Error。所以它只能是“告知”，任何规则都不能只在这里执行。
-- 接线：生成的传输 Mod 认认证器的可选接口 `SessionObserver`（生成文件 `internal/access/player/tcp/server_gen.go`），模块的 `auth.go` 实现了它的 `SessionActive`。嵌入 TCP 是鉴权 ACK 写出、自身视图登记之后调用；独立 Gate 是 Game Ingress 的激活通知（`OnActivated`）调用。两种部署下告知拿到的都是这条会话认证出来的 claims。
+- 在后台执行、有界：`Notifier` 同时至多处理 `MaxPendingNotices`（256）条会话，超过的直接丢弃；告知 panic 只记 Error。所以它只能是“告知”，任何规则都不能只在这里执行。
+- 后台执行归 manager（D22）：`game/managers/login_notices.go` 的 `NewLoginNotices()`，安装时登记进 `game/managers/managers.go` 的 `Managers()`，由 manager Mod 启停。Start 建 `Notifier` 并以 `gamelogin.NoticesCapability` 发布；Stop 不再接新的会话、取消在途告知的 ctx、在停机期限内等它们返回（期限先到时返回期限错误，ManagerMod 用新期限再停）。玩家 TCP 传输的 Mod 先停，停到这里时已经没有新的会话激活。`Managers()` 里没有这一行时告知全部丢弃，第一次记一条 Error。
+- 接线：生成的传输 Mod 认认证器的可选接口 `SessionObserver`（生成文件 `internal/access/player/tcp/server_gen.go`），模块的 `auth.go` 实现了它的 `SessionActive`，经 `gamelogin.AnnounceActive` 按能力名取进程里的 `Notifier`（认证器自己不起协程）。嵌入 TCP 是鉴权 ACK 写出、自身视图登记之后调用；独立 Gate 是 Game Ingress 的激活通知（`OnActivated`）调用。两种部署下告知拿到的都是这条会话认证出来的 claims。
 
 ### 进入前的判断：`Admit`（`game/login/login_admit.go`）
 

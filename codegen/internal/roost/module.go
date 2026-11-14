@@ -188,6 +188,9 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 		} else if item.Runtime != nil {
 			fmt.Fprintf(stdout, "  runtime:   %s.%s (before service Init; stop after service Shutdown)\n", item.Runtime.Package, item.Runtime.Start)
 		}
+		for _, manager := range item.Managers {
+			fmt.Fprintf(stdout, "  manager:   %s() in %s (started and stopped by the manager mod)\n", manager, gameManagersPath)
+		}
 		for _, state := range item.State {
 			fmt.Fprintf(stdout, "  state:     %s\n", state)
 		}

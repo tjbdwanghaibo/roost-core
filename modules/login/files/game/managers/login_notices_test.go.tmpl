@@ -1,0 +1,120 @@
+package managers
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	gamelogin "{{MODULE}}/game/login"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	kitmanager "github.com/tjbdwanghaibo/roost-core/wiring/manager"
+)
+
+// login manager 的场景：告知在 manager 的后台执行，停机时被取消、在期限内等完，停了之后不再告知。
+
+// 这个测试进程里登记的告知（登记表是进程级的，只能在 init 里登记）：开始时报一次玩家号，等到 ctx 结束后把 ctx 的错误
+// 报回来。玩家 loginStuckPlayer 的告知在 ctx 结束之后还不返回，直到 loginManagerRelease 关闭——模拟不看 ctx 的告知。
+const loginStuckPlayer = 4
+
+var (
+	loginManagerStarted = make(chan int64, 8)
+	loginManagerEnded   = make(chan error, 8)
+	loginManagerRelease = make(chan struct{})
+)
+
+func init() {
+	gamelogin.OnSessionActive("managers-login-scenarios", func(ctx context.Context, _ *app.Registry, session gamelogin.Active) {
+		loginManagerStarted <- session.PlayerID
+		<-ctx.Done()
+		loginManagerEnded <- ctx.Err()
+		if session.PlayerID == loginStuckPlayer {
+			<-loginManagerRelease
+		}
+	})
+}
+
+// 经 ManagerMod 起停（与生成的 bootstrap 相同）：Start 之后会话激活的告知在后台执行；停机时它的 ctx 被取消、
+// StopWithContext 等它返回才算停完（远早于告知自己的 5 秒期限），之后到达的会话不再告知。
+func TestLoginNoticesRunUnderTheManagerAndStopWithIt(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	mod := kitmanager.NewManagerMod(NewLoginNotices())
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	// manager 还没启动：没有 Notifier，告知被丢弃，也不起协程。
+	gamelogin.AnnounceActive(registry, gateway.Principal{PlayerID: 1, SessionID: "before-start"})
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	gamelogin.AnnounceActive(registry, gateway.Principal{PlayerID: 2, SessionID: "running"})
+	select {
+	case got := <-loginManagerStarted:
+		if got != 2 {
+			t.Fatalf("the notice ran for player %d, want 2 (the session before Start must be dropped)", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the notice did not run under the started manager")
+	}
+
+	stopping, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	began := time.Now()
+	if err := mod.StopWithContext(stopping); err != nil {
+		t.Fatalf("stopping the manager mod: %v", err)
+	}
+	if elapsed := time.Since(began); elapsed >= gamelogin.NoticeTimeout {
+		t.Fatalf("stop took %v: it waited for the notice's own deadline instead of cancelling it", elapsed)
+	}
+	select {
+	case err := <-loginManagerEnded:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the running notice ended with %v, want context.Canceled from the stop", err)
+		}
+	default:
+		t.Fatal("StopWithContext returned while the notice was still running")
+	}
+
+	gamelogin.AnnounceActive(registry, gateway.Principal{PlayerID: 3, SessionID: "after-stop"})
+	select {
+	case got := <-loginManagerStarted:
+		t.Fatalf("a notice ran for player %d after the manager stopped", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// 停机期限比在途告知先到（告知不看 ctx）：StopWithContext 不无限等，到期返回期限的错误（ManagerMod 据此把它留在
+// 待停列表里）；告知返回之后，用新的期限再停一次就停完。
+func TestLoginNoticesStopIsBoundedByItsContext(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	manager := NewLoginNotices()
+	if err := manager.Start(registry); err != nil {
+		t.Fatal(err)
+	}
+	gamelogin.AnnounceActive(registry, gateway.Principal{PlayerID: loginStuckPlayer, SessionID: "stuck"})
+	select {
+	case <-loginManagerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the notice did not start")
+	}
+	stopper := manager.(app.IManagerStopperWithContext)
+	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	if err := stopper.StopWithContext(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop while a notice ignores its context: %v, want the stop deadline", err)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("stop took %v with a 100ms deadline", elapsed)
+	}
+	<-loginManagerEnded // 它的 ctx 已经被取消，只是还没返回。
+	close(loginManagerRelease)
+	again, cancelAgain := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelAgain()
+	if err := stopper.StopWithContext(again); err != nil {
+		t.Fatalf("stopping again after the notice returned: %v", err)
+	}
+}

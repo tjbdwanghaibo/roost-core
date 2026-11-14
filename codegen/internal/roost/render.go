@@ -798,6 +798,10 @@ import "github.com/tjbdwanghaibo/roost-core/framework/app"
 // Start 时 World 还不存在：ManagerMod 与 Nest 等 Mod 一起在 Service.Init 之前启动，而 World 在 game Service 的
 // Init 里才经 world.EnsureWorld 创建或加载。Start 里不要找 World、不要假设任何实体已加载；需要 World 的
 // 工作放到第一次用到时，或由 Service.Init 之后的业务入口触发。
+//
+// 后台循环（定时扫描、后台重试、会话激活后的后台告知）也写成 manager：Start 起、Stop 停，停机时 ManagerMod 带着期限
+// 调 StopWithContext，manager 在期限内让自己起的协程全部退出。业务模块（roost module add）带的 manager 也登记在这里：
+// 安装器在下面的列表末尾加一行（例如 NewLoginNotices()），文件在本目录里。
 func Managers() []app.IManager {
 	return []app.IManager{
 		// mymgr.Mgr,

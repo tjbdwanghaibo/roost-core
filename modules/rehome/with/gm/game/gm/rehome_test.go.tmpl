@@ -116,6 +116,18 @@ func newRehomeGM(t *testing.T) (*gmFixture, *player.Player, *gmMoveDirectory, *g
 	if err := f.registry.Register(app.ModName("dataengine"), engine); err != nil {
 		t.Fatal(err)
 	}
+	// 受理之后的后台部分在 rehome manager 发布的 Background 里执行（生产上由 game/managers 的 NewRehomeBackground 启停）。
+	background := rehome.NewBackground()
+	if err := f.registry.Register(rehome.BackgroundCapability, background); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := background.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
 	return f, target.(*player.Player), d, r, engine
 }
 func TestWithRehomeGMSuccess(t *testing.T) {

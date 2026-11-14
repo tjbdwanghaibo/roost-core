@@ -64,9 +64,11 @@ type ModulePlanItem struct {
 	Component string   `json:"component,omitempty"`
 	Files     []string `json:"files"`
 	// Replaces 是 Files 里会替换掉的生成桩（仍是没改过的生成内容）。
-	Replaces []string                 `json:"replaces,omitempty"`
-	Verify   ModuleVerify             `json:"verify"`
-	Runtime  *ModuleRuntime           `json:"runtime,omitempty"`
+	Replaces []string       `json:"replaces,omitempty"`
+	Verify   ModuleVerify   `json:"verify"`
+	Runtime  *ModuleRuntime `json:"runtime,omitempty"`
+	// Managers 是登记进 game/managers/managers.go 的 manager 构造函数（清单的 managers）。
+	Managers []string                 `json:"managers,omitempty"`
 	Sagas    []ModuleSaga             `json:"sagas,omitempty"`
 	Services map[string]ModuleService `json:"services,omitempty"`
 	Timer    *ModuleTimerPlan         `json:"timer,omitempty"`
@@ -162,7 +164,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	}
 	for _, spec := range order {
 		item := ModulePlanItem{
-			Name: spec.Name, Summary: spec.Summary, Requires: append([]string{}, spec.Requires...), Runtime: spec.Runtime,
+			Name: spec.Name, Summary: spec.Summary, Requires: append([]string{}, spec.Requires...), Runtime: spec.Runtime, Managers: spec.Managers,
 			IDs: map[string]map[string]int64{}, State: []string{}, Files: spec.ownedFiles(), Verify: spec.Verify, spec: spec,
 		}
 		if installed, ok := manifest.Modules[spec.Name]; ok {
@@ -170,6 +172,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 				return ModulePlan{}, fmt.Errorf("module %s belongs to service %s, not %s", spec.Name, installed.Service, service)
 			}
 			item.Runtime = installed.Runtime
+			item.Managers = installed.Managers
 			item.Requires = append([]string{}, installed.Requires...)
 			item.Status = moduleStatusInstalled
 			if installed.Digest != spec.Digest {
@@ -202,6 +205,12 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		}
 		if len(spec.DAOs) > 0 && !newEntities[spec.Entity] {
 			if _, _, err := moduleDAOFields(root, manifest, spec); err != nil {
+				return ModulePlan{}, err
+			}
+		}
+		// manager Mod 还没有时由前置命令代办（roost add mod manager 生成标准的 managers.go），登记留到写入时再核对。
+		if len(spec.Managers) > 0 && !contains(moduleMissingMods(manifest, service, spec), "manager") {
+			if _, _, err := moduleManagersEdit(root, manifest, service, spec); err != nil {
 				return ModulePlan{}, err
 			}
 		}
@@ -427,8 +436,10 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 // 只代办有确定接线和工程隔离配置的 Mod。外部依赖仍通过 plan 和开发环境配置明确展示。
 // web（业务 HTTP 监听）在此列：接线是固定的一行，roost add mod 写下的 web.* 配置缺省只绑回环地址，
 // 生产绑非回环要工程显式写 web.allow_public_addr，代办不会替工程把端点暴露出去。
+// manager 在此列：带后台 manager 的模块（清单的 managers，D22）要它；接线是固定的一行，没有配置，
+// 新加时生成器写出标准的 game/managers/managers.go，安装器随后往里登记。
 func moduleCanAddMod(name string) bool {
-	return name == "configdata" || name == "heartbeat" || name == "directory" || name == "remote_entity" || name == "remote_mirror" || name == "saga" || name == "web"
+	return name == "configdata" || name == "heartbeat" || name == "directory" || name == "remote_entity" || name == "remote_mirror" || name == "saga" || name == "web" || name == "manager"
 }
 
 // moduleModsService 是清单的 needs.mods 所指的服务：模块的入口在哪个服务的进程里启动，Mod 就得在哪个服务上。
@@ -743,6 +754,9 @@ func ensureModulePrerequisites(root, service string, spec ModuleSpec, options Mo
 // moduleTouchedFiles 是安装一个模块会写的业务文件：模板的落点、实体的主 DAO 定义、实体聚合文件。
 func moduleTouchedFiles(root string, spec ModuleSpec, newEntity bool) ([]string, error) {
 	paths := spec.ownedFiles()
+	if len(spec.Managers) > 0 {
+		paths = append(paths, gameManagersPath)
+	}
 	if newEntity {
 		// 依赖模块的实体也可能尚未写入；其固定落点已经由自带实体声明校验。
 		return append(paths, moduleEntityDefinitions(spec.Entity)...), nil
@@ -770,7 +784,7 @@ func moduleTouchedFiles(root string, spec ModuleSpec, newEntity bool) ([]string,
 // writeModule 先写模板，再追加字段、接组件。所有写入都在外层回滚边界内。
 func writeModule(root string, manifest Manifest, service string, item ModulePlanItem) (InstalledModule, error) {
 	spec := item.spec
-	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: spec.ownedFiles(), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...)}
+	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: spec.ownedFiles(), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...), Managers: append([]string(nil), spec.Managers...)}
 	for _, rel := range spec.Files {
 		body, err := renderModuleFile(manifest, service, spec, "files", rel, item.IDs)
 		if err != nil {
@@ -779,6 +793,9 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 		if err := writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644); err != nil {
 			return InstalledModule{}, err
 		}
+	}
+	if err := writeModuleManagers(root, manifest, service, spec); err != nil {
+		return InstalledModule{}, err
 	}
 	if len(spec.State) > 0 {
 		source, err := locateDaoStruct(root, spec.Entity+"Dao")

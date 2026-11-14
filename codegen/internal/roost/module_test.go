@@ -489,12 +489,26 @@ func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 		"long hint":      {moduleFixtureYAML + "next: [\"" + strings.Repeat("长", 241) + "\"]\n", good, "next[0] is 241 characters; at most 240"},
 		"too many hints": {moduleFixtureYAML + "next: [a, b, c, d, e, f, g, h, i]\n", good, "next lists 9 hints; at most 8"},
 		"misspelt next":  {moduleFixtureYAML + "nexts: [a]\n", good, "field nexts not found"},
+		// managers（D22）：构造函数名导出且不重复；模块带了 game/managers 下的模板；needs.mods 写了 manager。
+		"manager name":         {strings.Replace(moduleFixtureYAML, "needs: {mods: [nest]}", "needs: {mods: [nest, manager]}", 1) + "managers: [newDemo]\n", withManagerFile(good), `managers: "newDemo" must be a unique exported constructor name`},
+		"duplicate manager":    {strings.Replace(moduleFixtureYAML, "needs: {mods: [nest]}", "needs: {mods: [nest, manager]}", 1) + "managers: [NewDemo, NewDemo]\n", withManagerFile(good), `managers: "NewDemo" must be a unique`},
+		"manager without file": {strings.Replace(moduleFixtureYAML, "needs: {mods: [nest]}", "needs: {mods: [nest, manager]}", 1) + "managers: [NewDemo]\n", good, "files/game/managers/ has no .go template defining NewDemo"},
+		"manager without mod":  {moduleFixtureYAML + "managers: [NewDemo]\n", withManagerFile(good), "needs.mods must list manager"},
 	} {
 		_, err := loadModuleCatalogFS(moduleFixtureFS(test.yaml, test.files))
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: err = %v, want it to contain %q", name, err, test.want)
 		}
 	}
+}
+
+// withManagerFile 是 files 加上一个 game/managers 下的模板（模块 manager 的落点）。
+func withManagerFile(files map[string]string) map[string]string {
+	out := map[string]string{"game/managers/demo_manager.go": "package managers\n"}
+	for rel, body := range files {
+		out[rel] = body
+	}
+	return out
 }
 
 func TestModuleInstallOrderPutsDependenciesFirst(t *testing.T) {
@@ -587,6 +601,36 @@ func TestAppendDaoFieldsAppendsAtTheEndAndIsIdempotent(t *testing.T) {
 	}
 	if missing, err := locateDaoStruct(root, "GuildDao"); err != nil || missing != nil {
 		t.Fatalf("a DAO that is not defined: %v %v", missing, err)
+	}
+}
+
+// 模块的 manager 登记（D22）：安装器只往 game/managers/managers.go 的 Managers() 列表末尾加 "<构造函数>()," ——
+// 生成的那份（带注释的空列表）、业务已经加过几行的、写成一行的空列表都认；已经有的不再加（重装、两个模块先后装）；
+// 业务把 Managers 改成别的写法时拒绝，并说清要加哪一行。
+func TestModuleManagersAreAppendedToTheManagerList(t *testing.T) {
+	generated := []byte(renderGameManagers())
+	once, changed, err := appendManagerRegistrations(generated, []string{"NewLoginNotices"})
+	if err != nil || !changed {
+		t.Fatalf("the generated list: changed %v, err %v", changed, err)
+	}
+	text := string(once)
+	if !strings.Contains(text, "\t\t// mymgr.Mgr,\n\t\tNewLoginNotices(),\n\t}") || !strings.Contains(text, "// Managers 返回 game 服务进程要启动的 manager") {
+		t.Fatalf("the registration is not the last element or the comments were lost:\n%s", text)
+	}
+	twice, changed, err := appendManagerRegistrations(once, []string{"NewRehomeBackground", "NewLoginNotices"})
+	if err != nil || !changed || !strings.Contains(string(twice), "\t\tNewLoginNotices(),\n\t\tNewRehomeBackground(),\n\t}") {
+		t.Fatalf("a second module: changed %v, err %v:\n%s", changed, err, twice)
+	}
+	if again, changed, err := appendManagerRegistrations(twice, []string{"NewRehomeBackground"}); err != nil || changed || !bytes.Equal(again, twice) {
+		t.Fatalf("an existing registration was added again (changed %v, err %v):\n%s", changed, err, again)
+	}
+	business := []byte("package managers\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/app\"\n\nfunc Managers() []app.IManager {\n\treturn []app.IManager{scene.Mgr}\n}\n")
+	if edited, _, err := appendManagerRegistrations(business, []string{"NewLoginNotices"}); err != nil || !strings.Contains(string(edited), "scene.Mgr,\n\t\tNewLoginNotices(),\n\t}") {
+		t.Fatalf("a one-line list: err %v:\n%s", err, edited)
+	}
+	rewritten := []byte("package managers\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/app\"\n\nfunc Managers() []app.IManager {\n\treturn append(base(), extra()...)\n}\n")
+	if _, _, err := appendManagerRegistrations(rewritten, []string{"NewLoginNotices"}); err == nil || !strings.Contains(err.Error(), "does not return a []app.IManager{...} literal") {
+		t.Fatalf("a rewritten Managers: %v", err)
 	}
 }
 
@@ -1393,6 +1437,10 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 	if bytes.Contains(collaborators, []byte(collaboratorUnconfiguredMarker)) || !bytes.Contains(collaborators, []byte("identityVerifier")) {
 		t.Fatalf("account's collaborators stub was not replaced by the module's:\n%s", collaborators)
 	}
+	// 会话激活后的告知在 login 的 manager 里执行（D22）：安装器把它登记进 game 服务的 manager 列表。
+	if managers, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(gameManagersPath))); err != nil || !bytes.Contains(managers, []byte("\t\tNewLoginNotices(),\n")) {
+		t.Fatalf("login's manager is not registered in %s (err %v):\n%s", gameManagersPath, err, managers)
+	}
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1414,7 +1462,7 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 		}
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
-	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 32 {
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 34 {
 		t.Fatalf("verify: %v\n%+v", err, report)
 	}
 	// 再装一次没有变化：这两个文件现在是模块自己的。

@@ -86,7 +86,8 @@ func TestLoginAuthenticatorValidatesTicketsThroughAccount(t *testing.T) {
 		}
 	}
 	// 会话激活通知接到了 game/login 的告知上：独立 Gate 的通知带着 Game Ingress 绑定时认证出来的 Principal
-	// （会话号换成 Gate 的），告知拿到的就是它的 claims。
+	// （会话号换成 Gate 的），告知拿到的就是它的 claims。告知由进程里发布的 Notifier（login manager 建的）执行；
+	// 没有发布时丢弃，不在认证器里另起协程。
 	observer, ok := authenticator.(SessionObserver)
 	if !ok {
 		t.Fatalf("%T is not a SessionObserver, so the transport never tells it about activated sessions", authenticator)
@@ -94,7 +95,18 @@ func TestLoginAuthenticatorValidatesTicketsThroughAccount(t *testing.T) {
 	bound := principal
 	bound.SessionID = "gate-session"
 	observer.SessionActive(app.NewRegistry(viper.New()), bound)
-	authenticator.(*applicationAuthenticator).notifier.Wait()
+	select {
+	case session := <-loginTCPNotices:
+		t.Fatalf("a notice ran for %+v without a notifier in the registry", session)
+	default: // 没有 Notifier 时同步丢弃，不会稍后才执行。
+	}
+	registry := app.NewRegistry(viper.New())
+	notifier := gamelogin.NewNotifier()
+	if err := registry.Register(gamelogin.NoticesCapability, notifier); err != nil {
+		t.Fatal(err)
+	}
+	observer.SessionActive(registry, bound)
+	notifier.Wait()
 	select {
 	case session := <-loginTCPNotices:
 		if session.PlayerID != 100_001 || session.SessionID != "gate-session" || session.Claims["server_id"] != "1000" {

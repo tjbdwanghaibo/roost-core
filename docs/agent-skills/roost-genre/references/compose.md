@@ -295,7 +295,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 "$ROOST" module verify                      # 每个模块的场景数 + build / vet / id check / generate --check
 ```
 
-- `plan` 的 JSON：`modules[].status` 为 `install`（将安装）、`installed`（已装）、`installed_other_version`（已装的是另一版，安装器不动它）；`prerequisites` 是会先执行的 `roost add`；`framework_services` 是这次会新声明的托管框架服务（模块用到、工程还没有的；随安装一起写进 roost.yaml 与业务服务的 `uses`，配置、部署与协作者文件一并生成，安装失败整体撤销）；`ids`、`state`、`files` 是将分配的号、追加的 DAO 字段、写入的文件；可选 `runtime` 是自动接入服务启动与停机的入口，安装后连同目标 service、requires 记进 roost.yaml，不用改业务 Service；见 [服务级接线](../../../../modules/README.md#服务级启动与停机)。
+- `plan` 的 JSON：`modules[].status` 为 `install`（将安装）、`installed`（已装）、`installed_other_version`（已装的是另一版，安装器不动它）；`prerequisites` 是会先执行的 `roost add`；`framework_services` 是这次会新声明的托管框架服务（模块用到、工程还没有的；随安装一起写进 roost.yaml 与业务服务的 `uses`，配置、部署与协作者文件一并生成，安装失败整体撤销）；`ids`、`state`、`files` 是将分配的号、追加的 DAO 字段、写入的文件；可选 `runtime` 是自动接入服务启动与停机的入口，安装后连同目标 service、requires 记进 roost.yaml，不用改业务 Service；见 [服务级接线](../../../../modules/README.md#服务级启动与停机)。可选 `managers` 是模块的后台 manager（login 的 `NewLoginNotices`、rehome 的 `NewRehomeBackground`），安装器把它们加进 `game/managers/managers.go` 的 `Managers()` 列表，由 manager Mod 启停；见 [后台循环：manager](../../../../modules/README.md#后台循环manager)。
 - `add` 报错时按错误文字处理，不要绕过：
   - `already exists and is not this module's file`：落点被业务文件占着。读那个文件，告诉用户，由用户决定保留自己的实现还是让位。
   - `cannot be installed yet`：缺 Mod 或 feature，错误里给了要执行的命令。托管服务不在此列：安装器自己声明；只有工程里已经有一个同名的业务服务时报 `is taken by a business service`，这是冲突，告诉用户，不要改名绕过。
@@ -534,7 +534,7 @@ game/handler、controllers → 实体包、组件包
 
 | 需求 | 放哪里 | 依据 |
 | --- | --- | --- |
-| 缓存、索引、路由表、场景注册表、从配置或别的数据推导出来、丢了能重建的东西 | **manager**：实现 `app.IManager`（Start / Stop），登记在 `game/managers/managers.go` 的 `Managers()`（game 服务；v1.47.0 之前的工程在 `internal/service/<服务>/managers.go`） | 不进 Nest 事务，自己加锁，可以并发读；按 `DependsOn()` 的依赖顺序启动、反序停止；改动不随事务回滚 |
+| 缓存、索引、路由表、场景注册表、从配置或别的数据推导出来、丢了能重建的东西；进程内的后台循环（定时扫描、后台重试、会话激活后的后台告知，D22） | **manager**：实现 `app.IManager`（Start / Stop），登记在 `game/managers/managers.go` 的 `Managers()`（game 服务；v1.47.0 之前的工程在 `internal/service/<服务>/managers.go`） | 不进 Nest 事务，自己加锁，可以并发读；按 `DependsOn()` 的依赖顺序启动、反序停止；改动不随事务回滚 |
 | 全服状态，要和玩家的修改在同一笔事务里成败（全服限量、全服计数、拍卖库存） | **World 上加组件**：`"$ROOST" add component <Feature> --entity World`，状态放在 World 的 DAO 里 | 走 Nest 的锁与事务，失败一起回滚；World 每个进程唯一（ID 是 sid）、`Service.Init` 里已确保存在，不用自己处理创建顺序 |
 | 同上，但不需要落盘 | 同上，DAO 字段标 `dao:"nopersist,nosync"` | 只在内存，进程结束就没了 |
 | 很热：几乎每个玩家请求都要写 | **先不要放进单个实体** | 一个实体同一时刻只有一笔事务拿得到锁，全服的写都排在这把锁上。能按 key 拆就拆成多个实体（第 4 步“独立实体”），或者 manager 里攒着、定时批量提交，作为限制写进说明文档 |

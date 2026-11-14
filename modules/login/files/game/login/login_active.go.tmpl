@@ -21,6 +21,7 @@ import (
 //
 // 告知只是告知：它在握手之后、后台执行，可能被丢弃（见 Notifier），所以不能是任何规则的唯一执行处——
 // 权威判断仍在客户端随后发的请求里。没有登记任何告知的工程，这个文件什么都不做。
+// 后台执行由 game/managers 里的 login manager 启停（D22）：停机时不再接新的告知，在途的被取消并在期限内等完。
 
 // EnterTicketClaim 只在用进服票据握手的会话上有，值 "1"（authenticateEnter 写）。它说的是握手的方式：
 // 这条会话的客户端走的是“登录 → 选服 → 进服票据”那条链路，账号在本服的角色名与玩家数据由游戏服负责建。
@@ -39,7 +40,8 @@ type Active struct {
 // Notice 是一条告知。它在后台执行（不在握手协程里），ctx 带着期限（NoticeTimeout）；可以读档、调别的服务、
 // 推送。约定：
 //
-//   - 尽力而为：会话太多时新的告知会被丢弃，进程退出时在途的告知不被等待。必须成立的事不放在这里；
+//   - 尽力而为：会话太多时新的告知会被丢弃；停机时在途告知的 ctx 被取消（manager 在停机期限内等它们返回），
+//     之后到达的会话不再告知。必须成立的事不放在这里；
 //   - 可以重复、可以过时：同一名玩家的每条会话各调一次；执行时会话可能已经断开；
 //   - 不改握手的结论：握手已经成功。要让一条不该留在本服的会话离开，自己推送原因并断开它。
 type Notice func(ctx context.Context, registry *app.Registry, session Active)
@@ -85,25 +87,69 @@ const (
 	NoticeTimeout = 5 * time.Second
 )
 
-// Notifier 把“会话激活了”交给登记的告知。每个认证器一个（internal/access/player/tcp/auth.go 持有），
-// 由它实现传输 Mod 的会话激活通知（SessionObserver）。
+// Notifier 把“会话激活了”交给登记的告知，在后台执行它们。它的生命周期归 manager（D22）：game/managers 里的
+// NewLoginNotices（login 模块安装时登记进 game/managers/managers.go）在 Start 时建一个、以 NoticesCapability 发布，
+// Stop 时 Close——不再接新的会话、取消在途告知的 ctx、在停机期限内等它们返回。认证器（internal/access/player/tcp/auth.go）
+// 不持有它，会话激活时经 AnnounceActive 按能力名取。
 //
 // 两种部署下通知带的都是这条会话认证出来的 Principal（含 claims）：嵌入 TCP 是握手时认证器返回的那一个；
 // 独立 Gate 是 Game Ingress 绑定会话时用同一个认证器认证出来的那一个（激活通知 OnActivated 把它带过来）。
 // Notifier 自己不记任何会话的状态。
 type Notifier struct {
 	slots chan struct{}
-	// running 让测试能等后台的告知跑完（Wait）；生产代码不等。
+	// ctx 是全部告知的上级：Close 取消它，在途的告知随之结束等待（每条告知另有 NoticeTimeout 的期限）。
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// mu 保护 closed，并让“登记一条在途告知”（running.Add）与 Close 的等待不交错：Close 之后不再 Add。
+	mu      sync.Mutex
+	closed  bool
 	running sync.WaitGroup
 }
 
-// NewNotifier 建一个空的 Notifier。
+// NewNotifier 建一个空的 Notifier。生产上由 game/managers 的 login manager 建；测试可以直接建（不 Close 也不留协程：
+// 协程只在有告知时才起，告知返回就退出）。
 func NewNotifier() *Notifier {
-	return &Notifier{slots: make(chan struct{}, MaxPendingNotices)}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Notifier{slots: make(chan struct{}, MaxPendingNotices), ctx: ctx, cancel: cancel}
 }
 
-// SessionActive 是传输 Mod 的会话激活通知（internal/access/player/tcp 的 SessionObserver）：principal 是这条
-// 会话认证出来的身份，带着 claims。它立即返回：告知在后台执行，同时至多 MaxPendingNotices 条会话，超过的丢弃。
+// NoticesCapability 是执行告知的 Notifier 在 Registry 里的能力名（game/managers 的 login manager 发布）。
+const NoticesCapability app.ModName = "game.login.notices"
+
+// HasNotices 报告有没有登记任何告知。
+func HasNotices() bool {
+	noticesMu.RLock()
+	defer noticesMu.RUnlock()
+	return len(notices) > 0
+}
+
+var missingNotifier sync.Once
+
+// AnnounceActive 是认证器的会话激活通知（internal/access/player/tcp 的 SessionObserver）要调的入口：把会话交给
+// 这个进程的 Notifier（manager 发布的那一个），立即返回。没有登记告知时什么都不做。登记了告知却取不到 Notifier
+// （game/managers/managers.go 里没有登记 NewLoginNotices，或者它已经停了还没发布）时丢弃这次告知，第一次记一条 Error：
+// 告知只是告知，客户端照常由 EnterGame / EnterCreate 的应答得到结论。
+func AnnounceActive(registry *app.Registry, principal gateway.Principal) {
+	if !HasNotices() {
+		return
+	}
+	var notifier *Notifier
+	if registry != nil {
+		notifier, _ = app.Lookup[*Notifier](registry, NoticesCapability)
+	}
+	if notifier == nil {
+		missingNotifier.Do(func() {
+			slog.Error("login: session notices are registered but no notifier is running; add managers.NewLoginNotices() to game/managers/managers.go",
+				"capability", NoticesCapability)
+		})
+		return
+	}
+	notifier.SessionActive(registry, principal)
+}
+
+// SessionActive 把一条刚激活的会话交给登记的告知：principal 是这条会话认证出来的身份，带着 claims。它立即返回：
+// 告知在后台执行，同时至多 MaxPendingNotices 条会话，超过的丢弃；Close 之后到达的也丢弃。
 func (notifier *Notifier) SessionActive(registry *app.Registry, principal gateway.Principal) {
 	if notifier == nil {
 		return
@@ -118,12 +164,20 @@ func (notifier *Notifier) SessionActive(registry *app.Registry, principal gatewa
 		slog.Debug("login: session not announced; too many notices are pending", "player_id", principal.PlayerID)
 		return
 	}
-	session := Active{PlayerID: principal.PlayerID, SessionID: principal.SessionID, Claims: principal.Claims}
+	notifier.mu.Lock()
+	if notifier.closed {
+		notifier.mu.Unlock()
+		<-notifier.slots
+		slog.Debug("login: session not announced; the notifier is stopping", "player_id", principal.PlayerID)
+		return
+	}
 	notifier.running.Add(1)
+	notifier.mu.Unlock()
+	session := Active{PlayerID: principal.PlayerID, SessionID: principal.SessionID, Claims: principal.Claims}
 	go func() {
 		defer notifier.running.Done()
 		defer func() { <-notifier.slots }()
-		ctx, cancel := context.WithTimeout(context.Background(), NoticeTimeout)
+		ctx, cancel := context.WithTimeout(notifier.ctx, NoticeTimeout)
 		defer cancel()
 		for i, notice := range run {
 			runNotice(ctx, registry, names[i], notice, session)
@@ -141,5 +195,29 @@ func runNotice(ctx context.Context, registry *app.Registry, name string, notice 
 	notice(ctx, registry, session)
 }
 
-// Wait 等在途的告知跑完。给测试用；生产代码不调（进程退出时在途的告知最多再跑 NoticeTimeout）。
+// Close 停下 Notifier：之后到达的会话不再告知，在途告知的 ctx 被取消，然后在 ctx 之内等它们返回。
+// 告知都看 ctx（推送、读档、断开前的等待都带着它），取消之后很快返回；ctx 先到期时返回 ctx 的错误，
+// 不再等——没返回的那几条只会是不看 ctx 的告知。可以重复调用。
+func (notifier *Notifier) Close(ctx context.Context) error {
+	if notifier == nil {
+		return nil
+	}
+	notifier.mu.Lock()
+	notifier.closed = true
+	notifier.mu.Unlock()
+	notifier.cancel()
+	done := make(chan struct{})
+	go func() {
+		notifier.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("login: session notices still running at shutdown: %w", ctx.Err())
+	}
+}
+
+// Wait 等在途的告知跑完。给测试用；生产代码不调（停机由 Close 收尾）。
 func (notifier *Notifier) Wait() { notifier.running.Wait() }

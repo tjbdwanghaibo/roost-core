@@ -1,0 +1,127 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是换服后台部分的执行者。受理之后的步骤（安静下来、复核、离开钩子、交出、搬档、提交、落定）与“重发到 account
+// 给出结论为止”的那些循环都不在申请的请求里跑，而是交给 Background。它的生命周期归 manager（维护者 D22）：
+// game/managers 里的 NewRehomeBackground（rehome 模块安装时登记进 game/managers/managers.go）在 Start 时建一个、
+// 以 BackgroundCapability 发布，Stop 时 Close——不再接新的步骤、取消在途步骤的 ctx、在停机期限内等它们返回。
+//
+// 停机时被取消的换服与进程在那一刻崩溃是同一回事：迁出表随进程没了，account 上换服仍在途（或已经有了结论）；
+// 重启之后这名玩家再来进入时 Admit 接着做完（Resume），见 Driver 的注释。所以后台步骤被取消时**不按失败处理**
+// （不去中止、不撤屏障），只是停下。
+
+// BackgroundCapability 是 Background 在 Registry 里的能力名（game/managers 的 rehome manager 发布）。
+const BackgroundCapability app.ModName = "game.rehome.background"
+
+// StopBudget 是不带期限的停止（manager 的 Stop()）等在途步骤返回的上限：步骤都看 ctx，取消之后很快返回，
+// 这里给一次调用的预算。经 ManagerMod 停机时用的是它给的期限。
+const StopBudget = callBudget
+
+// ErrBackgroundStopped：Background 已经停了（进程在停机），新的后台步骤不再执行。
+var ErrBackgroundStopped = errors.New("rehome: the background is stopping")
+
+// Background 执行换服的后台步骤。零值不能用，用 NewBackground。
+type Background struct {
+	// ctx 是全部后台步骤的上级：Close 取消它。
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// mu 保护 closed，并让 running.Add 与 Close 的等待不交错：Close 之后不再 Add。
+	mu      sync.Mutex
+	closed  bool
+	running sync.WaitGroup
+}
+
+// NewBackground 建一个空的 Background。生产上由 game/managers 的 rehome manager 建。
+func NewBackground() *Background {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Background{ctx: ctx, cancel: cancel}
+}
+
+// Go 在后台执行 run，传给它的 ctx 在 Close 时取消。已经 Close 时不执行，返回 ErrBackgroundStopped。
+func (b *Background) Go(run func(ctx context.Context)) error {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return ErrBackgroundStopped
+	}
+	b.running.Add(1)
+	b.mu.Unlock()
+	go func() {
+		defer b.running.Done()
+		run(b.ctx)
+	}()
+	return nil
+}
+
+// Close 停下 Background：之后的 Go 不再执行，在途步骤的 ctx 被取消，然后在 ctx 之内等它们返回。
+// 后台步骤的每一次调用、每一次重发之间的等待都看 ctx，取消之后很快返回；ctx 先到期时返回 ctx 的错误，不再等。
+// 可以重复调用。
+func (b *Background) Close(ctx context.Context) error {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	b.cancel()
+	done := make(chan struct{})
+	go func() {
+		b.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("rehome: background steps still running at shutdown: %w", ctx.Err())
+	}
+}
+
+// backgroundRunner 是 Driver 交出后台步骤的地方。生产上是 registryBackground（用到时才从 Registry 取 Background），
+// 测试换成把步骤收起来、按顺序同步执行的替身。
+type backgroundRunner interface {
+	// Ready 报告现在能不能交出后台步骤：Background 已发布且没有停。申请在打标记之前先问它——交不出去的话，
+	// 受理之后的步骤没有人做，玩家会一直停在“换服中”直到进程重启。
+	Ready() error
+	// Go 交出一个后台步骤；交不出去（没有 Background、已经停了）时返回错误，步骤不执行。
+	Go(run func(ctx context.Context)) error
+}
+
+// registryBackground 每次用到时从 Registry 取 Background：Driver 在协议绑定时建，早于 manager 的 Start。
+type registryBackground struct{ registry *app.Registry }
+
+func (r registryBackground) background() (*Background, error) {
+	if r.registry != nil {
+		if background, ok := app.Lookup[*Background](r.registry, BackgroundCapability); ok && background != nil {
+			return background, nil
+		}
+	}
+	return nil, fmt.Errorf("rehome: capability %q not found; add managers.NewRehomeBackground() to game/managers/managers.go", BackgroundCapability)
+}
+
+func (r registryBackground) Ready() error {
+	background, err := r.background()
+	if err != nil {
+		return err
+	}
+	background.mu.Lock()
+	defer background.mu.Unlock()
+	if background.closed {
+		return ErrBackgroundStopped
+	}
+	return nil
+}
+
+func (r registryBackground) Go(run func(ctx context.Context)) error {
+	background, err := r.background()
+	if err != nil {
+		return err
+	}
+	return background.Go(run)
+}

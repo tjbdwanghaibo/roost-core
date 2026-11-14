@@ -1,0 +1,60 @@
+package managers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	gamerehome "{{MODULE}}/game/rehome"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是 rehome 模块的 manager（维护者 D22：不在模块 runtime: 里的后台循环做成 manager，由 manager Mod 统一启停）。
+// 安装 rehome 时，安装器在本目录 managers.go 的 Managers() 列表里加了一行 NewRehomeBackground()。
+//
+// 它管的是换服受理之后的后台部分（game/rehome 的 Driver 交出的步骤：安静下来——断开会话后按间隔查看会话收尾、
+// 复核、离开钩子、交出、搬档、提交、落定，以及结果未知时重发到 account 给出结论为止的循环）：
+//
+//   - Start：建一个 gamerehome.Background，以 gamerehome.BackgroundCapability 发布。Driver 交出步骤时按能力名取它；
+//     取不到（这一行被删了、manager 已经停了）时不受理新的换服（答可重试）。
+//   - Stop：不再接新的步骤，取消在途步骤的 ctx，在停机期限之内等它们返回（ManagerMod 带着期限调 StopWithContext）。
+//     被取消的步骤不按失败处理、不去中止：与进程在那一刻崩溃相同，重启之后玩家再来进入时接着做（见 Driver 的注释）。
+
+// rehomeBackgroundStopBudget 是没有带期限的 Stop()（不经 ManagerMod 的调用方）等在途步骤返回的上限。
+const rehomeBackgroundStopBudget = gamerehome.StopBudget
+
+// NewRehomeBackground 返回 rehome 模块的 manager，登记在 Managers() 里。
+func NewRehomeBackground() app.IManager { return &rehomeBackground{} }
+
+type rehomeBackground struct {
+	background *gamerehome.Background
+}
+
+func (*rehomeBackground) Name() string { return "rehome.background" }
+
+func (m *rehomeBackground) Start(registry *app.Registry) error {
+	background := gamerehome.NewBackground()
+	if err := registry.Register(gamerehome.BackgroundCapability, background); err != nil {
+		return fmt.Errorf("rehome background: %w", err)
+	}
+	m.background = background
+	return nil
+}
+
+func (m *rehomeBackground) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), rehomeBackgroundStopBudget)
+	defer cancel()
+	if err := m.StopWithContext(ctx); err != nil {
+		slog.Warn("rehome background: stop", "err", err)
+	}
+}
+
+// StopWithContext 停下换服的后台步骤，在 ctx 之内等它们返回；ctx 先到期时返回它的错误（ManagerMod 据此把这个 manager
+// 留在待停列表里，用新的期限再停一次）。可以重复调用。
+func (m *rehomeBackground) StopWithContext(ctx context.Context) error {
+	if m.background == nil {
+		return nil
+	}
+	return m.background.Close(ctx)
+}

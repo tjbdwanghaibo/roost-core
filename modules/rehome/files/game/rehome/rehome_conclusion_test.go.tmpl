@@ -366,7 +366,7 @@ func TestRehomeBindingThatDoesNotAddUpIsAskedAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.events.take()
-	f.driver.wait = func(int) {
+	f.driver.wait = func(context.Context, int) {
 		f.waits++
 		if where, tracked := f.residency.Where(rehomePlayer); !tracked || !where.Moving {
 			t.Errorf("while the binding did not add up the table says %+v (%v), want moving", where, tracked)
