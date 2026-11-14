@@ -7,9 +7,9 @@ readonly output="$repo_dir/artifacts/perf/sync/$label"
 [[ ! -e "$output" ]] || { echo "Output already exists: $output" >&2; exit 2; }
 readonly repeats="${ROOST_PERF_COUNT:-3}"
 [[ "$repeats" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid repeat count' >&2; exit 2; }
-export GOMAXPROCS="${ROOST_PERF_CPU:-4}"
+export GOMAXPROCS="${ROOST_PERF_CPU:-0}"
 export GOWORK=off
-[[ "$GOMAXPROCS" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid CPU count' >&2; exit 2; }
+[[ "$GOMAXPROCS" =~ ^(0|[1-9][0-9]*)$ ]] || { echo 'Invalid CPU count' >&2; exit 2; }
 mkdir -p "$output"
 cd "$repo_dir"
 {
