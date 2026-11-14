@@ -4,9 +4,9 @@
 
 ## 1. 先说清“迁移”的对象
 
-静态绑定下，玩家建角时由 account 绑定到一个 game sid（`Role.ServerID`，[service/account/types.go](../../service/account/types.go)），之后只有单个玩家换服（[§7](#7-单个玩家换服account-一侧)）会改它；同一 sid 同一时刻只有一个进程（App 单实例锁），game 进程只为绑定在自己 sid 上的玩家服务（demo 的 [playerowner.go](../../demo/internal/service/game/playerowner.go.tmpl)）。因此“同一玩家至多一个写者”就等于“同一 sid 至多一个进程”。
+静态绑定下，玩家建角时由 account 绑定到一个 game sid（`Role.ServerID`，[service/account/types.go](../../service/account/types.go)），之后只有单个玩家换服（[§7](#7-单个玩家换服account-一侧)）会改它；同一 sid 同一时刻只有一个进程（App 单实例锁），game 进程只为绑定在自己 sid 上的玩家服务（demo 的 [playerowner.go](../../demo/internal/service/game/playerowner.go.tmpl)）。这保证当前绑定下的玩家请求入口只有一个承载进程；rehome committed 后旧源档/预加载副本的定时写仍有 Q4 窗口，不能据此宣称旧副本全部隔离。
 
-所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。把单个玩家改绑到另一个 sid 是另一件事，见 [§7 单个玩家换服（account 一侧）](#7-单个玩家换服account-一侧)：account 已有改绑的接口与换服状态，游戏侧的流程（源服停写、交出实体、到达，以及把这些串起来的业务模块）**还在实施中**，在它完成之前 `PlayerOwners` 仍拒绝不属于本 sid 的玩家，不要只凭 account 的接口在线上改绑；把整个服并入另一个服用别名合服（[§6](#6-合服把服-a-并入服-b)），角色仍绑定原服，由承载服的进程服务。
+所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。把单个玩家改绑到另一个 sid 是另一件事，见 [§7 单个玩家换服（account 一侧）](#7-单个玩家换服account-一侧)：account 已有改绑的接口与换服状态，游戏侧已由 rehome 模块提供源服停写、交出实体、sid 库搬档与到达，并完成本机真实进程验收（§7）；仍须使用完整流程，不能只凭 account 接口改绑，committed 源档清理 Q4 未关；把整个服并入另一个服用别名合服（[§6](#6-合服把服-a-并入服-b)），角色仍绑定原服，由承载服的进程服务。
 
 数据只以已落库（Mongo）为准：WAL 只保证本机落库，新机器用空的 WAL 目录启动，不搬运旧机器的 WAL 热状态（[guide/03-dataengine §6](guide/03-dataengine.md#6-维护与升级)）。整个流程的正确性取决于一点：**旧进程的 WAL 在新进程启动前已全部投影并确认**。
 
@@ -144,7 +144,11 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 把一个角色从它绑定的服改绑到另一个服（方案 [FEATURE-2026-11-11-player-rehome](../maintenance/FEATURE-2026-11-11-player-rehome.md)，其中第 6 节的决定按推荐项先实施、待维护者确认）。本节是 **account 一侧**的现行契约：绑定、换服状态、四个接口、运维工具（[service/account/transfer.go](../../service/account/transfer.go)、`transfer_test.go`）。
 
-游戏侧由业务模块 [rehome](../../modules/README.md) 接上（2026-11-11）：源服打“离开中”标记（从此在写闸门拒绝这名玩家新的请求）→ 记意图 → account 发起 → 断开会话并等在途的请求执行完 → 复核检查、离开钩子 → DataEngine“交出实体”（之后拒写）→ 搬档（v1.47.0 起 Player 的 DAO 是 `dbscope=sid`：把他的文档从源服的库复制到目标服的库）→ account 提交 → 删源服库里的那几份 → 目标服首次进入时到达；提交 / 中止的结论按 account 带回的**当前绑定**判定（承载服、绑定代数、在途的换服），不按单个错误码——应答丢失之后重发得到的 stale 或“中止成功”不说明那个 ID 当年提交了没有；每一步失败的去向与崩溃恢复见[换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)。game-demo 已装上它：`PlayerOwners` 实现驻留与迁出表，saga 步骤按当前绑定准入，登录先过进入前检查，GM 命令 `gm.player.rehome`。**只有离线验证**（替身提交器、替身的交出实体）：真实的交出实体、两个 game 进程加 account 的演练、每个阶段后 kill -9 都没有做。
+游戏侧由业务模块 [rehome](../../modules/README.md) 接上（2026-11-11）：源服打“离开中”标记（从此在写闸门拒绝这名玩家新的请求）→ 记意图 → account 发起 → 断开会话并等在途的请求执行完 → 复核检查、离开钩子 → DataEngine“交出实体”（之后拒写）→ 搬档（v1.47.0 起 Player 的 DAO 是 `dbscope=sid`：把他的文档从源服的库复制到目标服的库）→ account 提交 → 删源服库里的那几份 → 目标服首次进入时到达；提交 / 中止的结论按 account 带回的**当前绑定**判定（承载服、绑定代数、在途的换服），不按单个错误码——应答丢失之后重发得到的 stale 或“中止成功”不说明那个 ID 当年提交了没有；每一步失败的去向与崩溃恢复见[换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)。game-demo 已装上它：`PlayerOwners` 实现驻留与迁出表，saga 步骤按当前绑定准入，登录先过进入前检查，GM 命令 `gm.player.rehome`。
+
+**本机真实进程已验**：`scripts/test-demo-rehome.sh` 使用嵌入式玩家 TCP，启动 account、两个 game（1000 / 1001）、alliance 等正式协作者，覆盖六个 SIGKILL 点各两轮及 checkpoint 负对照，核对 account / 玩家入口唯一归属、计数 / 资产与 WAL 恢复。该档不包含独立 Gate。
+
+**committed 窗口（Q4）仍保留**：源档删除未执行时崩溃会保留旧副本。源服用 account 当前会话再次进入时被归属检查拒绝（P1 观测为 `player_elsewhere`，owner sid 1001），不保证触发 Resume 或源档清理。旧内存 / 定时器写尚未全部隔离，需要人工恢复；Q4 不因脚本退出 0 关闭。见[换服证据](../maintenance/evidence/rehome-20261114/README.md)。
 
 ### 7.1 模型
 
@@ -225,10 +229,10 @@ go run ./cmd/accountctl transfer-role abort  -player 1000001 -id <ID> -note "源
 
 ### 7.5 边界
 
-- 游戏侧流程已由模块 rehome 实现，只有离线验证（见本节开头）。
+- 游戏侧 rehome 已完成本节开头的本机真实验收；跨机、物理卷迁移与 Q4 旧源副本清理仍未验/未定。
 - 一期不涉及**已并入另一服的服**：角色的绑定服已并入别服、或目标服已并入别服，发起都被拒绝；提交时目标服已并入别服也被拒绝。承载着别的服（别人并入它）的服是普通的源与目标。`MergeServer` 不检查有没有在途的换服指向被合并的服（没有在途换服的索引）。
 - 没有在途换服的列举与过期清扫；期限只记录。
 - 换服 ID 仍由调用方保证不复用，但“已中止的换服不被重放复活”不再依赖它：过期的 Begin 由 `TransferSeq` 挡住。account 按 ID 只认在途的那一次与最近了结的那一次——调用方拿一个早已了结的 ID、带着**当前**的代数与序号重新发起，会被当作一次新的换服受理；重发一个早已被别的了结覆盖掉的 ID 的 Abort（当前没有换服在途时），会被当作“中止一个没发起过的 ID”再记一次（即使它当年是提交的）。
-- account 不知道两个服是否共用玩家数据的物理库：物理库不同的服之间换服，目标服会读到“从未创建”。可去的服由游戏侧的规则决定。
-- 独立 Gate 转交给 game 的绑定不带 Claims：`BindEpochClaim` / `TransferClaim` 只在认证器那一侧（嵌入 TCP 的 Principal）可见。
+- account 只负责绑定，不负责搬玩家 DAO。只调 account 改绑而不执行游戏侧搬档，目标物理库里可能没有玩家数据；rehome 在 v1.47.0 的完整流程中负责 dbscope=sid 文档复制与条件删除，可去的服仍由业务规则限定。
+- 独立 Gate 的会话 claims 已由激活通知交给 Game（`GameDependencies.OnActivated`，login 联动）；claims 只是认证时的快照，恢复/准入仍核对 account 当前绑定，不能拿快照作持续写授权。
 - 其余见 [KNOWN-LIMITS“单个角色换服”](../maintenance/KNOWN-LIMITS.md#单个角色换服account-一侧)。

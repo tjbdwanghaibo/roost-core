@@ -195,7 +195,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 - **接法**：roost.yaml 的 `access.player` 写 `self_sync: true` 与 `sync_groups: [party_room]`，`roost project sync` 在实体包里创建一次 `sync_group.go`（`SyncGroup` 变量，业务把视图改成 `RoomSyncProfile`），bootstrap 把它交给 `PlayerSelfSync`。不要再自建 Manager 交给 Nest：Nest 只有一个 `EntitySync` 观察者，Nest Mod 启动时报 `ErrEntitySyncObserverConflict`。
 - **内容走提交门**：Manager 是 Nest 的 `EntitySync` 观察者，Board 的修改在事务确认后才进入下一次 Flush；回滚的修改不会推出去（`FoulEliminationAndUndoRollback` 的 `refuse` 断言 Board 不变）。
 - **成员关系跟着座位在 handler 里变**：`PartyConnect`（connected）里 `SyncGroup.Join`，`PartyLeave` 与 `PartyRelease` 里 `Leave`，最后一个归还关闭房间时 `Disband`。三者在 Nest 事务里调用时推迟到提交之后，回滚就不发生。会话由自身视图按连接开关：断线只关连接，成员关系保留，宽限内重连的那个同步周期新连接收到自己与房间的全量，业务不再调用任何东西；`Disband` 后的下一个同步周期成员收到 remove、房间注销，然后再销毁实体。成员关系不持久：进程重启后由玩家重连时的 `PartyConnect` 再 `Join`。
-- **边界**：组同步要求 self_sync（会话归自身视图）；不开 self_sync、自己开关会话的进程仍可用 `policy.Group`。独立 Gate 下没有组同步自己的用例（[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 表下房间内同步一条）。
+- **边界**：组同步要求 self_sync（会话归自身视图）；不开 self_sync、自己开关会话的进程仍可用 `policy.Group`。已有组同步自己的真实 TCP 慢消费者与独立 Gate 拒收/重连用例（[Sync 指南](guide/04-sync.md)）；它们不等于本派对玩法账号、Gate 与持久存储的联合验收，房间数/成员数容量仍未提供。
 - **视图白名单**：packer 只放出 `Board`；`State`（种子、星星出现时刻、票号、回执）不标 sync，任何视图都拿不到。夹具的客户端核对收到的文档只有 `_id` 与 `board` 两个键。
 - **慢消费者、帧上限**：沿用 Manager 与接入层的契约——一帧被活着的连接拒收时关会话（[guide/04 §2](guide/04-sync.md#玩家只看自己自身视图)）；一个会话持有的对象受 `Limits.MaxObjects`（缺省 100）约束（[guide/04 视野上限](guide/04-sync.md#谁看见谁视野viewd19)）。派对房间每个会话只有一个对象，不会碰到。
 - **推送频率**：`Board` 带“本回合剩余毫秒”，心跳每拍都会改它，所以 `playing` 时每 100ms 每房间一个增量。要省带宽就去掉剩余时间、让客户端按回合结束时刻自己倒计时，Board 只在事件发生时变化。
@@ -265,7 +265,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | 高于 20Hz 的服务端权威模拟 | 心跳档位固定 50ms～60s 十档，最短 50ms（`gameplay/heartbeat/tier.go` 的 `Periods`；[时间 §4A](guide/10-time.md#4a-实体心跳周期推进)） | 抢答、回合制、计时类派对游戏够用；动作 / 物理对抗类用 Lockstep（[MOBA](MOBA-INTEGRATION.md)）或物理房间（[PHYSICS-ROOM-SERVICE](PHYSICS-ROOM-SERVICE.md)） |
 | 固定步长、追帧 | 心跳是可变步长：上一拍没跑完就跳拍、不补发、不追帧，`Elapsed` 夹在 `[0, max(1s, 档位)]`（[时间 §4A](guide/10-time.md#4a-实体心跳周期推进)、[KNOWN-LIMITS 实体心跳](../maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)） | 规则按时间戳与事件顺序写（本例 `Advance`），不要按“第几拍”累加 |
 | UDP / KCP 玩家接入 | 玩家接入层（嵌入 TCP、独立 Gate）只提供 TCP；`-features nettransport-kcp` 等只生成装配函数，监听、握手鉴权与 Session 绑定由宿主自己写（[MOBA §2](MOBA-INTEGRATION.md#2-模块分工对局里的状态归谁)、[GATEWAY](GATEWAY.md)） | 派对房间的输入频率低，TCP 足够；要 UDP 自己写接入 |
-| 房间跨机接管 / HA | 房间是普通本地实体，属于开房的进程；进程崩溃后只能由同一份 WAL / Mongo 冷加载恢复（第 13 节），没有自动迁到别的机器继续跑。Player 静态绑定 sid、不做动态迁移（[guide/09 §4](guide/09-services.md#4-关键业务边界)） | 短局可接受“崩溃 → 冷加载 → 硬期限结算”；需要跨机接管要另做 Remote 托管或宿主交接（MOBA 的宿主交接是写法参考） |
+| 房间跨机接管 / HA | 房间是普通本地实体，属于开房的进程；进程崩溃后只能由同一份 WAL / Mongo 冷加载恢复（第 13 节），没有自动迁到别的机器继续跑。本纵切的 Player 绑定固定 sid；rehome 可断线改绑但不迁移派对房间（[guide/09 §4](guide/09-services.md#4-关键业务边界)） | 短局可接受“崩溃 → 冷加载 → 硬期限结算”；需要跨机接管要另做 Remote 托管或宿主交接（MOBA 的宿主交接是写法参考） |
 | 跨服务广播的可靠送达 | SyncBus 定位为可丢广播：普通 NATS 至多一次，JetStream 有限重投（[guide/04 §5](guide/04-sync.md#syncbus-的定位与丢失兜底)） | 房间内同步不走 SyncBus；跨服务的房间事件（大厅列表、好友在玩）要业务对账 |
 | 存储原生补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；补位按业务层写法（第 6A 节，维护者 2026-10-31 选方案 B）；由存储扣空位、保证不超员的原生补位（[FEATURE-2026-10-31 第 3 节](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 A）未提供 | 房间票 + 玩家票在补位队列里弹性成局，进房 handler 按座位拒绝超员（第 6A 节）；多个玩法都要框架保证不超员时再做方案 A |
 | 房间码、大厅列表 | 没有房间码服务与房间列表 | directory 做短码；大厅列表自己维护（可丢、可重建） |

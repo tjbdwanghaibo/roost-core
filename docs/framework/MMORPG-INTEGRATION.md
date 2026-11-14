@@ -10,7 +10,7 @@
 
 基础阅读顺序：[入门](../GETTING-STARTED.md) → [Nest / Entity](guide/02-nest-entity.md) → [DataEngine](guide/03-dataengine.md) → [同步](guide/04-sync.md) → 本文对应场景。
 
-Player 当前**静态绑定 game sid**：跨服玩法由 Remote / Saga 协作，不迁移 Player 的权威归属（§6）。同进程地图切换、跨服服务协作、按 sid 换机器是三个不同流程，不要混用。
+本 MMORPG 纵切采用**Player 固定绑定 game sid**：跨服玩法由 Remote/Saga 协作。框架另有 rehome 单玩家改绑与 sid 库搬档（断线后重连，本机真实崩溃演练已跑、Q4 旧源档窗口未关），不把它当成本纵切的无缝跨服（§6）。同进程地图切换、跨服服务协作、按 sid 换机器是三个不同流程，不要混用。
 
 ### 2. 四种状态
 
@@ -148,7 +148,7 @@ sequenceDiagram
 
 ### 6. 保持 Player 归属的跨服协作
 
-每个角色从 account 取得 `ServerID`；[EnterGame](../../demo/game/controllers/player/enter_game.go.tmpl) 在装载前核对认证会话中的绑定，错服返回 `player_elsewhere` 与 owner sid。[搬服](PLAYER-MIGRATION.md)是按 sid 排空后换机器，绑定不变。Player 不随一次跨服交互搬到别的 game 进程：本服业务经 Saga 请求对方或邮件服务完成交互。玩家动态跨 sid 无缝迁移不是现有能力；需要先定义权威交接、旧连接准入、路由与恢复协议，不能只改 SceneID 或借 Remote Guild 的 lease 推断 Player 已支持。
+每个角色从 account 取得 `ServerID`；[EnterGame](../../demo/game/controllers/player/enter_game.go.tmpl) 在装载前核对认证会话中的绑定，错服返回 `player_elsewhere` 与 owner sid。[搬服](PLAYER-MIGRATION.md)是按 sid 排空后换机器，绑定不变。Player 不随一次跨服交互搬到别的 game 进程：本服业务经 Saga 请求对方或邮件服务完成交互。单玩家改绑可用[rehome 模块](../../modules/rehome/README.md)的权威交接、断线与恢复流程，本机嵌入式玩家 TCP 六个 SIGKILL 点已验（不含独立 Gate）；committed 后的旧源档清理仍为 Q4。它不是无缝迁移，不自动接本纵切的交易、房间或战斗流程，不能只改 SceneID 或借 Remote Guild 的 lease 推断已支持。
 
 ```text
 sid A 的玩家 → 本地 Nest 扣物品 / 记意图 → Saga / outbox
@@ -182,7 +182,7 @@ SLG 的[跨服联盟活动链路](SLG-INTEGRATION.md#7-跨服联盟活动权限�
 | strict 成功等于 Mongo 已落库 | strict 的边界是 WAL fsync；需要 Mongo 可见时用 DataEngine 的 Flush / 投影等待契约 |
 | 连接关闭或 ctx 超时就等于请求撤销 | 已准入的事务可能仍完成；先识别结果未知，再按业务身份查询或恢复 |
 | Skill Runtime 放进组件就自动回滚 | Host 副作用与 Runtime 状态需要业务设计一致的持久边界；本例 DAO 战斗没有接持久技能 Host |
-| 多个 map server 分区就能做无缝大世界 | 当前没有跨进程迁移、边界 Ghost 与跨区实时交互；用大区单进程 + 切图、伪无缝或分线，思路与业界方案见[无缝大世界方案](../maintenance/FEATURE-2026-11-03-seamless-world.md) |
+| 多个 map server 分区就能做无缝大世界 | 当前已有固定 Cell 分区、Ghost 与角色跨格/交互（Player 留在 Base），业务适配见 game-demo/cellworld；动态拆格、任意跨 Cell 原子战斗与目标千人/50ms 容量未通过。本 MMORPG 纵切仍是同进程地图，不自动装入 CellWorld，思路与方案见[无缝大世界方案](../maintenance/FEATURE-2026-11-03-seamless-world.md) |
 | 框架有 Lockstep，所以 MMO 必须帧同步 | 开放世界可做服务器权威状态同步；竞技副本可单独选 Lockstep |
 | 真实 TCP 场景通过就说明容量合格 | 功能与容量分开；玩家密度、带宽、分位时延、跨机故障和长稳需要目标负载证据 |
 

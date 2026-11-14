@@ -116,13 +116,13 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/part
 | 可变步长 | 上一拍没跑完就跳拍、不补发、不追帧，`Elapsed` 夹在 `[0, max(1s, 档位)]`；规则按时间戳与事件顺序写，不按“第几拍”累加 | PARTY §8 第 2 行；KNOWN-LIMITS“实体心跳（D20 第 1 期）” |
 | 心跳不持久 | 重启 / 卸载后要在 `onHeartbeatInit` 按持久阶段重新启动（REAL 用例去掉这行即失败）；心跳缺省 `async`，丢最后几拍由下一拍按时间重算 | PARTY §4、§13 |
 | 只有 TCP | 玩家接入层（嵌入 TCP、独立 Gate）只提供 TCP；KCP / UDP 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写 | PARTY §8 第 3 行；GATEWAY.md；SKILL.md §5 #10 |
-| 房间无跨机接管 | 房间是开房进程的本地实体，崩溃后只能同一份 WAL / Mongo 冷加载恢复，没有自动迁机；Player 静态绑定 sid | PARTY §8 第 4 行；guide/09-services.md §4 |
+| 房间无跨机接管 | 房间是开房进程的本地实体，崩溃后只能同一份 WAL / Mongo 冷加载恢复，没有自动迁机；本纵切的 Player 绑定固定 sid，rehome 的断线改绑不是房间 HA | PARTY §8 第 4 行；guide/09-services.md §4 |
 | SyncBus 可丢 | 至多一次 / 有限重投；房间内同步不走 SyncBus，跨服务房间事件（大厅、好友在玩）要业务对账 | PARTY §8 第 6 行；guide/04-sync.md §5 |
-| 房间同步：**v1.34.0 起已提供正式入口**，剩余边界 | `access.player.sync_groups` + `wiring/selfsync.Groups`（§2）。剩余：**要求 self_sync**（会话归自身视图；不开 self_sync 的进程仍用 `policy.Group` 并自己开关会话）；**成员关系不持久**，重启后靠玩家重连的 `PartyConnect` 再 `Join`；离线成员每个政策阶段复查一次，成本与有离线成员的组的人数成正比，无房间数 / 成员数容量数据；**独立 Gate 下的组同步、慢消费者断开没有组同步自己的用例**（真实 TCP 只有 `wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection`）；掉线出局的人宽限期满不自动退组 | PARTY §5、§6A 局限、§8 第 5 行；ENTITY_SYNC.md“Groups”限制；KNOWN-LIMITS“游戏接入验收”表下房间内同步一条 |
+| 房间同步：**v1.34.0 起已提供正式入口**，剩余边界 | `access.player.sync_groups` + `wiring/selfsync.Groups`（§2）。剩余：**要求 self_sync**（会话归自身视图；不开 self_sync 的进程仍用 `policy.Group` 并自己开关会话）；**成员关系不持久**，重启后靠玩家重连的 `PartyConnect` 再 `Join`；离线成员每个政策阶段复查一次，成本与有离线成员的组的人数成正比，无房间数 / 成员数容量数据；**已有组同步自己的真实 TCP 与独立 Gate 用例**（`TestGroupsOverTCPCloseAStalledMemberOnlyAndTheReconnectGetsTheGroupFull`、`TestGroupsOverGateRecoverAfterEveryRefusedPush`）；它们验证组视图重连/慢消费者，不是本派对玩法的真实账号/存储联合链；掉线出局的人宽限期满不自动退组 | PARTY §5、§6A 局限、§8 第 5 行；ENTITY_SYNC.md“Groups”限制；KNOWN-LIMITS“游戏接入验收”表下房间内同步一条 |
 | 匹配：弹性成局**已提供（v1.34.0）** | “凑满 N 立即开、最早一张等满 T 秒后 M..N-1 人也开”。边界：等待按 Unix 秒取整（最多提前不到 1 秒）；存储按自己的时钟判，匹配器与存储业务时钟不一致时策略认为能开的局可能被 `ErrGroupNotReady` 拒、下一轮再试；`FillAfterSeconds` 不得 ≥ `match.ticket_ttl`；弹性字段只有新服务端认识，**先升级匹配服务再用弹性队列** | guide/09-services.md §4；KNOWN-LIMITS“匹配的弹性人数成局与补位” |
 | 补位：**存储原生补位未提供**，业务层补位（v1.34.1 起）的局限 | ①**不超员靠进房 handler 按座位拒绝，不是存储保证**：超员的补位局在匹配服务里照常成功，被拒的人要多排一次队（要框架保证时等方案 A，未提供）；②**不跨分区**：房间票与玩家票要在同一分区，`CommitAcross` 不用于补位；③**一人两队列都可能成局**：补位与普通成局的优先级由业务匹配循环决定，存储不跨队列检查同一玩家，一名玩家同时在两个队列各有一张票会被两边各成一局——业务要保证一人只排一个队列（本例只有选“快速加入”才进补位队列）；④**截止无回调、需对账**：截止常由心跳推进，心跳回调不做 I/O，宿主得不到通知，要在离开 / 补位进房后调 `SyncRoom` 并**周期性对账**撤票，期间过期房间票留在队列里（匹配循环不再给它配人）直到撤回或票期限到；⑤本例只补主动离开的座位（掉线出局的座位、房间码房间不补），座位记录上限 `MaxSeatRecords`（16）；⑥只在内存存储、单进程匹配循环上验证，Redis 存储上的补位、多进程匹配器、补位吞吐没跑 | PARTY §6A“局限”“截止与撤票”、§8 第 7 行；KNOWN-LIMITS“匹配的弹性人数成局与补位” |
 | 推送带宽 | Board 带剩余毫秒时 `playing` 期间每 100ms 每房间一个增量；要省就让客户端按回合结束时刻自己倒计时 | PARTY §5 |
-| 容量 / 验证边界 | 没有房间数、心跳负载、推送带宽数据；组同步在纵切里经替身接入层（不经嵌入 TCP / 独立 Gate、无慢消费者）；match / session 只测内存存储；提交在途崩溃未测；真实依赖模式（`ROOST_PARTY_ROOM_REAL=1`）在改用组同步入口后未重跑 | PARTY §12“不证明”、§13；KNOWN-LIMITS“游戏接入验收”派对房间行 |
+| 容量 / 验证边界 | 没有房间数、心跳负载、推送带宽数据；组同步在纵切里经替身接入层（不经嵌入 TCP / 独立 Gate、无慢消费者）；match / session 只测内存存储；提交在途崩溃未测；真实依赖模式（`ROOST_PARTY_ROOM_REAL=1`）已复跑，恢复档不推组视图，不把它与独立网络用例合称联合链 | PARTY §12“不证明”、§13；KNOWN-LIMITS“游戏接入验收”派对房间行 |
 | 业务要自己补 | 玩法规则、房间码短码服务（夹具码是房间号 36 进制、可枚举）、大厅列表、Match → 房间目录（夹具用散列）、接入层票号签发、掉线托管 / AI 补位、观战、跨 sid 发奖（走 Saga / effect；Saga 业务键保留期后可复用，见 SKILL.md §5 #13）、补位宿主的周期性对账 | PARTY §6、§6A、§7、§8 末两行、§14 |
 
 ## 6. 常见坑（PARTY §5、§6A、§9）
@@ -141,9 +141,9 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/part
 
 ## 7. 验证
 
-- 一档：§3 的 18 条 PASS + SKILL.md §3.4。2026-10-31 在 main `24a9dbc3`（v1.34.0 之后、补位已合入、未发版）、自定 module 按 SKILL.md §3.2 + 本节命令 + §3.4 原样抽 bash 块连跑：18 PASS（`game/partyroom` 3 + `game/handler` 15）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL；persistence 夹具 `fix_mod` 后 `go vet ./game/handler` 通过。同次把 `game/partymatch` 挪到 `project sync` 之后重跑一遍作对照，`project sync` 的 `go mod tidy` 失败（见 §3）。
-- 二档：`ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh`（隔离 Mongo 副本集，`ROOST_DATAENGINE_IT_MONGO_URI`）：局内 SIGKILL → 冷加载、心跳按持久阶段重启并结算、发奖、DataEngine 删档 → 第三进程核对（PARTY §13）。仓库记录改用组同步入口后真实依赖模式未重跑；本 skill 未跑。
-- 缺省模式不证明：无 WAL / Mongo、房间只做内存卸载、组同步的接入层是替身（真实 TCP 只在 `wiring/selfsync` 包测试）、match / session 内存存储、补位的“两个匹配器”是同进程 goroutine、单进程（PARTY §12）。
+- 一档：当前§3 为 19 条 PASS（含 Robot）+ SKILL.md §3.4。以下 18 条是历史版本的实际记录：2026-10-31 在 main `24a9dbc3`（v1.34.0 之后、补位已合入、未发版）、自定 module 按 SKILL.md §3.2 + 本节命令 + §3.4 原样抽 bash 块连跑：18 PASS（`game/partyroom` 3 + `game/handler` 15）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL；persistence 夹具 `fix_mod` 后 `go vet ./game/handler` 通过。同次把 `game/partymatch` 挪到 `project sync` 之后重跑一遍作对照，`project sync` 的 `go mod tidy` 失败（见 §3）。
+- 二档：`ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh`（隔离 Mongo 副本集，`ROOST_DATAENGINE_IT_MONGO_URI`）：局内 SIGKILL → 冷加载、心跳按持久阶段重启并结算、发奖、DataEngine 删档 → 第三进程核对（PARTY §13）。改用组同步入口后 2026-11-02 Linux 已通过，2026-11-14 统一最终复验再次通过；不验证恢复后的 EntitySync 重新登记/真实网络送达，见[最终验收报告](../../../maintenance/evidence/v147-final-validation-20261114/README.md)。
+- 缺省模式不证明：无 WAL / Mongo、房间只做内存卸载、组同步的接入层是替身（网络层另有真实 TCP/独立 Gate 专用用例）、match / session 内存存储、补位的“两个匹配器”是同进程 goroutine、单进程（PARTY §12）。
 
 ## 8. 手册指针
 

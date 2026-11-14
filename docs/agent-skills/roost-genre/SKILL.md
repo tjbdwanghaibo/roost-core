@@ -46,9 +46,9 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 | 卡牌 / 回合制 RPG（抽卡、养成、回合 PvE） | [references/card-turn-based.md](references/card-turn-based.md) | 高，v1.33.1 起可用（v1.33.0 失败） | 17（`TestCardRPG`） |
 | 房间合作 PvE：塔防 / 生存撤离 / 自走棋 | [references/room-coop-pve.md](references/room-coop-pve.md) | 高 | 11 / 13 / 13 |
 | 放置模拟 / 合成休闲 | [references/idle-merge-casual.md](references/idle-merge-casual.md) | 放置高；合成 v1.33.1 起可用（v1.33.0 失败） | 13（`TestIdleSim`）/ 16（`TestMergeCasual`） |
-| 实时派对房间（2～8 人短局：抢答、计时、回合、轻反应；第二批） | [references/party-room.md](references/party-room.md) | 中高：弹性成局 / 进房 / 心跳回合 / 组同步（`sync_groups`，与 self_sync 共用连接）/ 重连 / 补位 / 结算都有纵切；PARTY §8 余下的是这类玩法够用的硬边界（心跳 ≤20Hz、只有 TCP）、房间无跨机接管、补位不超员只靠进房 handler（存储原生补位未提供），另缺容量数据、组同步的真实接入层用例与改用组同步后的真实依赖重跑，所以不到“高”。**最低：弹性成局与组同步 v1.34.0，补位 v1.34.1** | 19（`TestPartyGame`，含 Robot；v1.34.0 为 13、v1.33.2 为 12） |
+| 实时派对房间（2～8 人短局：抢答、计时、回合、轻反应；第二批） | [references/party-room.md](references/party-room.md) | 中高：弹性成局 / 进房 / 心跳回合 / 组同步（`sync_groups`，与 self_sync 共用连接）/ 重连 / 补位 / 结算都有纵切；PARTY §8 余下的是这类玩法够用的硬边界（心跳 ≤20Hz、只有 TCP）、房间无跨机接管、补位不超员只靠进房 handler（存储原生补位未提供），另缺容量数据；组同步已有真实 TCP/独立 Gate 专用用例，派对 REAL 也已复跑，但这两套证据不是派对账号/Gate/存储联合链，所以不到“高”。**最低：弹性成局与组同步 v1.34.0，补位 v1.34.1** | 19（`TestPartyGame`，含 Robot；v1.34.0 为 13、v1.33.2 为 12） |
 
-新增三类见 [references/session-genres.md](references/session-genres.md)：回合制 PvP 9、合作 Roguelike 10、异步社交经营 9 个正式生成工程场景。自 v1.35.0 提供，v1.34.2 尚无对应脚本；先检查目标版本，不能把旧版运行依赖配上新夹具。
+新增三类见 [references/session-genres.md](references/session-genres.md)：回合制 PvP 10、合作 Roguelike 10、异步社交经营 9 个正式生成工程场景。自 v1.35.0 提供，v1.34.2 尚无对应脚本；先检查目标版本，不能把旧版运行依赖配上新夹具。
 
 场景数出自各 `scripts/test-<genre>-generated.sh` 的计数断言与 KNOWN-LIMITS“游戏接入验收”表；v1.33.1 起这些脚本的缺省模式由 `scripts/pretag.sh` 每次发版跑一遍，v1.33.2 起是十个玩法纵切 + 三个离线生成器专项（§5 #15）。用户的玩法跨两类时（如 MMO 里的竞技副本），分别按两篇 reference 取模块，不要为“用全所有模块”硬拼（SLG-INTEGRATION §8“聊天、匹配与 session”行）。
 
@@ -155,7 +155,7 @@ v1.35.0 起（v1.36.0 补齐闭环与 SyncProbe）13 类网络验收已覆盖既
 | 6 | 实体持久定时器：离线实体不准点，加载后只触发一次，补算由业务按 `Fire` 做；Remote 托管与 noPersist 实体不支持；回调只改本实体 | KNOWN-LIMITS“按实体的持久定时器（D11）”；guide/10-time.md §4；SLG-INTEGRATION §6 |
 | 7 | 实体心跳只有 10 档（50ms～60s），回调不阻塞不做 I/O；`strict` 心跳每拍持锁等落盘，快池高频心跳不要用 | guide/10-time.md §4A |
 | 8 | 长期幂等靠实体上的持久业务事实（序号账本、领奖事实），服务去重环只防短期重投；夹具账本满了拒绝新写、不淘汰旧回执 | SLG-INTEGRATION §9；各手册“幂等身份”节 |
-| 9 | Player 静态绑定 game sid，无动态跨 sid 迁移；跨服协作走 Remote / Saga / 邮件 | MMORPG-INTEGRATION §1、§6；KNOWN-LIMITS“平台与外部验证”Player跨机 |
+| 9 | Player 跨服业务协作走 Remote / Saga / 邮件；单玩家改绑 sid 可用 rehome（断线后重连，非无缝迁移），已验本机嵌入式玩家 TCP 六个 SIGKILL 点（不含独立 Gate），committed 源档清理 Q4 仍未关；按 sid 搬机与实时 CellWorld 角色跨格是另外两条路径 | MMORPG-INTEGRATION §1、§6；modules/rehome/README.md；KNOWN-LIMITS“单个玩家换服”与“平台与外部验证” |
 | 10 | 玩家接入层（player TCP、独立 Gate）只提供 TCP；KCP/UDP/QUIC 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写 | MOBA-INTEGRATION §6；docs/framework/GATEWAY.md §4 |
 | 11 | SyncBus 是默认可丢广播；要最终一致须业务自建对账 | KNOWN-LIMITS“广播与 AOI”SyncBus投递；guide/04-sync.md §5 |
 | 12 | AOI：缺省 ApplySync 每玩家 ≤ 9 个视野（超出用 ApplyAsync）；一个会话持有目标受 `MaxObjects`（缺省 100）约束，超出时不断开、**超额降级**（暂缓多出的对象，Interest 从最远处收紧视野，2026-11-08 D17） | guide/04-sync.md §2“视野”上限与两种应用模式；KNOWN-LIMITS“广播与 AOI”AOI 视野③ |

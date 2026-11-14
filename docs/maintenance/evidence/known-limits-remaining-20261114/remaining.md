@@ -1,15 +1,68 @@
-# KNOWN-LIMITS“二、遗留问题”剩余条目的收口计划（只读核对）
+# KNOWN-LIMITS 遗留收口状态与原始计划
 
-> 本文件从 scratchpad 入库时，把相对链接改成了从本文件位置解析（前面加了 `../../`）。§A 的段落贴回 `docs/maintenance/KNOWN-LIMITS.md` 时去掉这个前缀。
+> 下方“全表”、各类数量与 B 原方案是 `28055f06` 的历史基线，用于追踪 No.，不是当前未完成清单。当前状态以本节及 KNOWN-LIMITS 为准；M 运行参数有明确更正，C 以现行外部清单为准。
 
 - 依据：`docs/maintenance/KNOWN-LIMITS.md` 第 617～873 行，分支 feat/v147，HEAD `28055f06`。
 - 对照：旧归类（本机 scratchpad，未入库）（HEAD `067c14f7`，200 行）、`decisions.md`、`git log 067c14f7..HEAD`（106 个提交）、CHANGELOG `[Unreleased]`、“三、已修复的历史”2026-11-13/14 行，以及当前源码 / 脚本 / 文档（逐条核对，不照抄旧归类）。
-- codebase-memory-mcp 本次连不上（连接关闭），结构核对用源码 + grep；没有跑任何测试或压测。
+- 原始分类时 codebase-memory-mcp 连不上（连接关闭），结构核对用源码 + grep；没有跑任何测试或压测。
 - 计数口径：顶层 bullet、编号条、能力表每一行、只有段落没有 bullet 的小节各算一条，共 **114 条**；带子 bullet 的父条把子条拆成 `.1/.2/.3` 行（另 5 行）。只做导航的引言段（L643、L678、L703、L705、L752、L764、L825、L835、L853、L859）不计，所在小节清空后随之删除。
 - 类别：A 移到“一”；B 本机可修；C 外部环境；D 维护者决定；E 未确认偶发；M 本机空闲时测；F 过时 / 已解决；**IP** 另一个 agent 正在做（只标记）。混合条目写成“A + C”等，各部分的去向分别给出。
-- A 的成段文字见 §A，B 的方案见 §B，C 见 §4，D 见 §D 与 §5，E 见 §E，M 见 §3，F 的证据写在表里。
+- A 的现行去向见 §A，B 的原方案见 §B，C 见 §4，D 见 §D 与 §5，E 见 §E，M 见 §3，F 的证据写在表里。
 
-## 一、全表
+## 当前收口状态（2026-11-14）
+
+本机功能实现 / 演练与正式性能、外部环境、维护者决定分开判定。A 的 31 段已迁入 [KNOWN-LIMITS 一](../../KNOWN-LIMITS.md#一框架本身的限制)，F 的 17 项按下表收敛；B 的结果如下。**M-1～M-19、E-1 / E-3 正式测量均未运行**，B-2 大形状成本与 B-3 checkpoint 实验不由功能冒烟关闭。E-2 完成原版 200 轮调查，实际 max load10.39，未复现不是修复。C 的 36 项继续待外部环境；D 与 N1～N4 原样保留未答。
+
+| B / 对应 No. | 本机结果与证据 | 仍保留的边界 |
+| --- | --- | --- |
+| B-1 / 11、61、65、68 | [P1 换服](../rehome-20261114/README.md)：嵌入式玩家 TCP 上六个 SIGKILL 点各两次、checkpoint 负对照，不含独立 Gate；account / 玩家入口唯一归属，资产、计数、WAL 恢复 | committed 后源库旧档明确 KNOWN_LIMIT，源服入口归属检查拒绝（P1 为 player_elsewhere），不保证 Resume 清理；旧内存 / 定时器权威写未全部隔离，Q4 与人工恢复保留；非跨机 |
+| B-2 / 12⑥、15.2 | [联盟探针](../../../performance/benchmarks/alliance-probes-20261114/README.md)：真实成员 ≤500、合成 1k/5k/10k、内存/命令计数与精确嵌套 setKey；RPC 1..256 参数修正和 c4 功能实跑 | M-11 / 正式大形状成本 pending；heap 不是 RSS，空 L1 不是冷 Mongo；Found 固定 1/16，变量只作用于 Info/Join；PASS 要另核 failed/slow |
+| B-3 / 14 | 后台 checkpoint 实验仅在 `experiment/v147-background-checkpoint`（`300be3a0`） | 不合实现/配置；M-19 off/on 对照 pending，全体超时根因未确认 |
+| B-4 / 31① | [MOBA](../v147-moba-20261114.md)：分进程权威 / 宿主、快照与交接、已提交头门、旧宿主隔离及变异 | 下游记录器；非真实客户端/跨机 HA/正式负载容量 |
+| B-5 / 114 | [合作/经营](../session-real-20261114/README.md)：各两个 WAL-only SIGKILL 窗口，原 WAL 恢复、第三冷进程领奖幂等；丢 WAL 变异红 | Sender 真实存储，不含 TCP/account/Gate/NATS 联合链；与默认 TCP 分开统计 |
+| B-6 / 40、46～50 | [登录](../v147-login-20261114.md)：双 account/game/Gate、重启重连、真实 naming、casual 购买与 self_sync 解码，两轮与丢推送变异 | naming 完整故障阶段、Redis 故障、生产渠道/跨机/长稳未验；时间推送先后只是观察；非 WAL-only |
+| B-7 / 38、54、56 | [社交](../social-real-20261114/README.md)：两 game 共享 Team+toxiproxy、匹配 queued SIGKILL/重试、联盟双 sid handed-off/committed SIGKILL；漏装 OnTeamJoining 红绿与变异；当批模块 594/594，联盟脚本 11/11 | 排队取消后先 Clear、unknown 不放行；不改跨 sid 匹配，Q4/#154 未关；基础 alliance55 不是 594 |
+| B-8 / 34、52、53 | [运营](../operations-real-20261114/README.md)：三条真实绿、两项变异红/复绿；GM HTTP 邮件+rehome、purchase 跨 sid/Redis AOF 重启、活动权威迁移+SIGKILL | 非 WAL-only；GM/purchase 在完整 demo，活动在由 casual 扩展的共 18 模块工程；PlayerDao64 字段限额不变；真实支付/外部奖励/长稳/容量未验 |
+| B-9 / 36、39、48 | [Room/Turn](../turn-real-20261114/README.md)：真实 portal/account→match→Room/Turn、Gate/NATS/Ingress、SIGKILL、旧 Epoch 拒绝与 timeout 只补一次；demo Robot/dev-smoke；另有正常停机 timer 档 | 两档各自范围；非 WAL-only/跨机；Q13 后续保留 |
+| B-10 / 73④ | [地形确认帧](../terrain-confirm-source-20261110/README.md)：Go entitysync 真实帧→.NET EntityViews/TerrainChunkSync 已通过 | 不经 TCP/Gate/demo Interest，Unity 仍 C-U2，坏块 N4 未答 |
+| B-11 / 74 | [地形 WAL](../terrain-wal-crash-20261114/README.md)：四块笔刷/两块建筑，strict 确认且 Mongo 空后 SIGKILL，版本/hash/占位/账本/幂等，丢 WAL 红 | 不含网络同步送达/跨机/容量；T09/T10/Unity 等仍保留 |
+| B-12 / 76 | CellWorld Runtime 六场景已合（Start/Stop、失败复位），见 [模块说明](../../../../modules/cellworld/README.md) | AddIngress 失败分支仍缺用例，业务 Entity 适配仍在 demo |
+| B-13 / 77 | 运行期序号上限`2^33-1`及边界回归已合；P10 删除 game-demo 未使用的重复分配器 | 不把编号修复当容量证明；最终 monster 场景计数随统一矩阵报告 |
+| B-14 / 86 | [C++跨 Gate](native-acceptance.md)：独立 C++客户端真实 TCP/NATS，两 Gate 同 Session 迟到 Bind、两绿/变异红 | Gate/Game 同 Go 测试进程；非跨机/Unity/设备全矩阵 |
+| B-15 / 87 | [C++ protobuf](native-acceptance.md)：libprotoc36.2，8/8 CTest | 与 E-2 弱网偶发调查分开 |
+| B-16 / 103、112 | [GeneratedTCP](../v147-generated-tcp-20261114.md)：正式夹具入库，12 个 10s 配置与开环冒烟，丢 DAO 变异红 | M-17 四档正式测量 pending；客户端/服务模块同一测试进程，不是旧 10 服务 Main 拓扑 |
+
+M-13 的 [Cluster 探针修复](../mail-cluster-probe-20261114.md)已合：仅 integration helper 装配地址，单机 / Cluster 四子项以 1x 通过，保留红绿对照；不计为正式性能。
+
+本轮代码工作与功能矩阵已完成，准确计数由[最终验收报告](../v147-final-validation-20261114/README.md)汇总。`go generate ./...` 已在 `fef75aee` 退出 0，生成后 diff / status 均为空。
+
+生成器整包复验仍待补跑：30m 重试曾出现六处 shutdown 预算旧断言失败（实际 28 Mod、预期 27）及总超时；[断言修复](../shutdown-assertions-20261114/README.md)已合，31 项定向测试与关键变异红绿通过。修复后的最后一轮 60m 整包复验因用户要求交接而主动中止，不能计为通过或测试超时。详见[最终验证与性能交接](../../HANDOFF-2026-11-14-v147-validation-performance.md)。M-1～M-19 / E-1 / E-3 均未运行，后续正式测量统一回写 `docs/performance/benchmarks/v147-remaining-20261114/README.md`，取得实测前不关闭 M。
+
+### F：17 项过时表述的处理
+
+| No. | 本次处理 / 仍保留 |
+| --- | --- |
+| 7 | 删除 MOBA D22 路由档未跑；Linux SLG 修后复跑仍 C-L2 |
+| 15.3 | 删除额度 512 仍大量 retryable 来源不明；既有三轮零，M-11 仍 pending |
+| 16 | 删除上线后兼容政策未定；维护手册已有必须兼容决定，Linux 拓扑仍待 |
+| 19 | 明确 Linux 两条生成 Saga 功能不含 SIGKILL 恢复/性能，C-L3 保留 |
+| 30 | deadline 分类指标已实现；M-10 仍待，修正 kB/s 单位 |
+| 32① | robot 阻塞写用例期限时序已修，race2600 次；②E-2 只本轮未复现 |
+| 58 | Sweep limit200 已修重跑；Cluster/异步复制容量仍 C-X5 |
+| 68 | 删除 Redis Cluster 没跑与两 game 没演练；Q4 仍未关 |
+| 73⑤ | 无缝演练已跑，不再作遗留；.NET/Unity 与 N4 分别判定 |
+| 93 | 旧 Saga 默认串行已随`298e4396`替换；同盘/长尾外部调查保留 |
+| 94 | 旧 v1.27 单变量比较任务移除；历史数据保留原报告，C-L10 保留 |
+| 97 | observedBlocks4 不收敛已修`fa936c0d`；M-16 正式复验待测 |
+| 100 | 删除旧 HEAD/v1.27 各两轮重跑要求；历史 Mongo 慢原因及 C-X11/S5 保留 |
+| 105 | 独立 Gate 组同步已有专用测试`9aa30cf8`；M-18 容量待测 |
+| 107 | 删除已迁历史的 Sync P99 重复待办，不伪造根因 |
+| 108 | 删除已迁历史的 Remote P99 重复待办，不伪造 Mongo 根因 |
+| 110 | 旧 Saga Mongo 中间档随旧实现删除，不作现行待测 |
+
+<a id="一全表"></a>
+
+## 一、全表（原始基线）
 
 | No. | 标题路径（行） | 条目 | 类 | 去向 | 理由 |
 | --- | --- | --- | --- | --- | --- |
@@ -162,102 +215,45 @@
 
 ## A：移到“一”的文字
 
-每段可直接贴进“一”对应小节（作为新的 bullet）；贴完后删掉“二”里的原条目或原条目的这一部分。
+31 段已按当前证据修正后迁入 [KNOWN-LIMITS 一](../../KNOWN-LIMITS.md#一框架本身的限制)，本处保留去向而不再复制另一份现行事实。特别修正 A-5 的 MOBA 检查点/宿主恢复、A-15 配方联合验收、A-23 两种匹配的换服边界、A-25 未答#154、A-31 默认与 REAL 两层口径。
 
-- **A-1 → “一 / 验收与运维 / 压测工具的心跳驱动（D20 第 4 期）”**（No.8）：
-  > **心跳驱动的业务消息代价**（2026-10-22 晚，[HB-DRIVEN-LOAD §4A](../../../performance/HB-DRIVEN-LOAD-20261021.md#4a-2026-10-22-晚正式测量v1310-发版前压测第-6-项)，macOS 单机、每格 2～3 次）：心跳模式零跳拍、投递 = 执行；nest-game 心跳驱动下普通业务消息的服务端 P99 0.87 → 2.13 ms（批量作业占 worker）。心跳驱动的移动者是固定集合、持续巡逻，多视野下与全局循环的差距（16 视野 P99 70～84 对 116～137 ms）不能全归给投递方式。Linux 数字见外部验证。
-
-- **A-2 → “一 / DataEngine、Remote 与 Saga / Remote”**（No.15）：
-  > **单实例分散 `Join` 的吞吐**（2026-11-05，本机三成员同盘副本集，[基准页](../../../performance/benchmarks/alliance-join-1000-20261105/README.md)）：约 340～400 次/秒，封顶在 Mongo——每次 `Join` 约 22～25 条 Mongo 命令、约 1.15 个提交的事务。为此调整过的缺省：Nest I/O 池 max(256, 4×短池)、`dataengine.projection.workers` 32、`remote_entity.outbox_publish_workers` 32、Nest 派发队列满答“可重试”、effect outbox 一批认领 / 确认常数次往返、effect 消费者进程内按实体并发（缺省 16，`dataengine.effect_consumer.workers`）。写额度 `remote_entity.max_concurrent_writes` 缺省 128，256 并发下会答“可重试”，调到 512 后不再出现（2026-11-14 `TestAllianceE2EJoinRetryableSources`）。目标 1000 次/秒要主节点约 2.2～2.5 万条命令/秒、约 1200 事务/秒，属部署硬件容量。
-
-- **A-3 → “一 / DataEngine、Remote 与 Saga / Saga”**（No.17）：
-  > **正式实现的性能口径**（2026-10-29，macOS 单机，[验收报告](../../../performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)，设计 §12 判据全部达标）：生产推荐配置（原生步骤 pipelined + Nest 异步完成、short 池 4）原生正向 c128 约 1050 saga/s、c1 P50 23.6 ms，正确性门槛全 0；单样本为主，同配置跨时段差约 25%。参与方是框架正式路径（Nest + WAL + DataEngine 投影 + 实体内回执 + `SubscribeNativeStep`），账户 DAO 是同形手写，`wiring/saga` 的 `Steps` 胶水不在压测路径上；旧 Redis / 旧原生路径的容量数字不再适用。云 Mongo、Linux 与跨机数字见外部验证。
-
-- **A-4 → “一 / Sync、玩家接入与 Lockstep / 嵌入 TCP 出站”**（No.24）：
-  > **出站驻留预算缺省 256 MiB**：按 Gate 缺省 128 MiB / 4096 连接折算到 10000 连接取整；没有驻留字节 Gauge，也不按帧龄关闭（维护者已定：有证据再做）。停读连接与健康连接共用这份预算，被占满时健康连接的推送同样被拒，直到停读连接被 `write_timeout` 或每连接上限关掉——预算只保内存上界，不区分谁占着。2026-10-20 夜间 1000 连接重档 15 分钟增量 0；停读档的测量入口是 `ROOST_TCP_BUDGET_DRILL=1 go test -run TestOutboundBudgetDrill ./infra/network/gateway/`（[GATEWAY](../../../framework/GATEWAY.md)）。
-
-- **A-5 → “一 / Sync、玩家接入与 Lockstep / Lockstep”**（No.31 ⑧）：
-  > **快照恢复没做的部分**（设计 §13）：客户端上传快照（多数一致）、增量 / 压缩快照、检查点持久化与宿主崩溃续赛都没有实现。接了快照来源的只有 MOBA 持久对局 `Room`（`RecoverRoomWithSnapshots` + 已提交门 `MatchConfig.CommittedFrame`）；game-demo 的 lockstep 战斗没有接快照恢复。
-
-- **A-6 → “一 / 生成器、配置与模块 / 业务模块的既定设计”**（No.34）：
-  > **gm 联动的边界**：直接加减币 / 道具 / 经验不自动重试，超时不等于未生效；要可重试的补偿用带稳定 `request_id` 的邮件。操作者字段是 token 持有人自报的审计信息，不是独立账号认证。只读 Nest 核对收件人后才调 mail，发件 RPC 不在实体锁内；换服命令答 accepted 只表示已受理。
-
-- **A-7 → 同上**（No.35）：
-  > **模块目录与 demo / 玩法的关系**：现行清单、固定场景数与联动以 [modules/README](../../../../modules/README.md) 和各 `module.yaml` 为准；新增场景线与六个补充模块只面向新工程，不兼容旧生成工程 / 存储形状。game-demo 的属性 / 装备用模块，移动共用 actor Body；CellWorld 进程装配在 cellworld 模块，业务 Entity 适配、LOD / 队伍视图、SceneReady、玩法刷怪、副本与地形适配仍在 demo，不宣称全面迁移。casual / turn-pvp 配方的平台身份验证、角色号分配与可信匹配 / 胜负规则要业务提供。
-
-- **A-8 → 同上**（No.36）：
-  > **room 的边界**：1～64 席、单个 owner、公开房间的成员准入；没有私房邀请码、跨房唯一成员约束、自动广播或匹配移交。客户端保存 RoomID / Epoch，重连显式 CAS，连接 nonce 只从服务端 Session 取；业务接入层要把该连接成功时取得的代际交给 `room.Disconnect`，断线保留 / 踢出 / 重启后的状态重建不自动代办。持久 `Connected` 是最后处理的连接事件，不是跨重启的在线权威。
-
-- **A-9 → 同上**（No.37）：
-  > **模块运行期接线**：`runtime` 声明的入口在框架 Mod 启动后、业务 Service.Init 前按依赖运行，停机时业务先停、模块逆序停，不能依赖业务 Init 才发布的能力。自动接线只在生成的 bootstrap 生效，手动构造服务要用 `NewWithModules()`。生命周期只支持一次 Init、串行 Shutdown，不支持重启。（ingress 登记 / 超时 / 排空的契约待 N2 定。）
-
-- **A-10 → 同上**（No.38）：
-  > **team 的边界**：Remote 共享权威，Player 存队伍引用与有界的邀请收件记录；七个请求加邀请推送。邀请提交后只给本进程在线玩家写收件记录并尽力推送，离线 / 跨 game 玩家没有自动投递；收件记录写入或推送失败不回滚权威邀请，查询发现不了从未送达的记录。查询按 Team 当前权威过滤失效记录、续期用当前到期时间；解散后的引用惰性清理，rehome 双向检查保留。
-
-- **A-11 → 同上**（No.39）：
-  > **turn 的边界**：固定开局名单，每位玩家成功命令连续编号、最后一条可重放；期限迟到只推进一次，离线实体下次加载补触发；成员减少 / 房间关闭在下一次推进结束；没有自动广播、胜负 / 伤害规则或跨机接管。
-
-- **A-12 → 同上**（No.40）：
-  > **enter 的边界**：建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`，但不做鉴权（`auth.go` 缺省拒绝，也不执行 `roost config enable player-tcp`），独立安装要业务接入鉴权并开启监听。“先新建、再进入”（`EnterCreate` / `EnterStatus` / `enter_need_create`）只对登记为“先新建”的会话生效（login 联动登记的是进服票据握手的会话），其余会话与没装 login 的工程照旧由 `EnterGame` 加载或创建。新建先建空档再提交：名字被 naming 拒绝或提交失败时空档留着、下次接着用，不合规的名字在建档前被拒；已建成的再发 `EnterCreate` 答 `enter_created`、不改；在 `EnterGame` 里直接建成的玩家没有名字，用改名协议。`PlayerDao.Enter.Fresh`（store 键 3）只落库。
-
-- **A-13 → 同上**（No.46）：
-  > **login 的边界**：握手认进服票据 `enter:<票据>` 与角色会话令牌，成败只由 account 决定；新号第一次握手就在 account 里建出账号 ↔ 玩家号映射（握手后没在游戏服新建就离开的，映射与号已占）。游戏服的结论在会话激活后以 `EnterStatus` 推送，只是告知（后台执行、同时至多 256 条、超出丢弃、进程退出不等；带码拒绝后 300 ms 按玩家断开，慢连接可能收不到那一帧），权威判断在 `EnterGame` / `EnterCreate`。生成器不生成 Gate 进程；独立 Gate 下 account 的 `EnterServer` 每次握手执行两次，别的服的票据在 Gate 上直接断开、收不到 `login_elsewhere`。票据都不能单张吊销；封号对进服票据与账号票据立即生效，对已签发的会话令牌至多滞后一个 `session_ttl`。开发令牌可冒充任何账号，生产靠环境键加 `dev-` 前缀拒绝（没写 `env: prod` 的预发环境照样可冒充）；doctor 的 `collaborators:account` 变 OK 不代表渠道验签已接。玩家号计数器在 Redis，被清或换前缀不搬数据会重号。已有 `cmd/accountctl` 或自己实现 account collaborators 的工程装不了 login（`replaces` 全有或全无）。没装 rehome 时换服在途的角色不被源服拒绝；login 与 rehome 的进入前检查先后靠名字排序。
-
-- **A-14 → 同上**（No.47）：
-  > **portal 的边界**：入口挂在托管 account 服务的进程上（`runtime.framework: account`；手写 bootstrap 要加 `kitmodulehost.NewMod`），三个端点：登录 → 凭票清单与推荐 → 换进服票据；不持有密钥，不建角不选角。没有限流、没有防撞库，`/portal/login` 每次都问渠道；凭据与票据明文放在请求体里，web Mod 不终止 TLS，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr`。账号票据与进服票据不落库、不能单张吊销，有效期内可重复使用。区服地址缺省来自静态配置 `portal.servers`（模块自己读，`--check-config` 查不到写错的值）；清单开销随区服数线性增长（account 读 1 + N 条记录、每服一次角色查询、顺序执行、无缓存），任何一个服的记录对不上（560113）或合服别名两跳，整个请求失败；清单里的 `role` 指 account 映射。新号被送到非 open 的服时拿得到票据、握手才被拒。account 新增的总线接口要求 account 先于 manifest 升级。
-
-- **A-15 → 同上**（No.48）：
-  > **配方的登录验收口径**（2026-11-12，[证据](../../evidence/recipes-login-20261112/README.md)）：casual / turn-pvp 使用 login、portal、servertime，开发配置自带本机令牌与业务服地址，生产与 Secret 示例不带。配方场景（7 / 6 条，零 SKIP）的持久提交是替身；`make dev-run` 在真实 Mongo 副本集 / Redis / NATS JetStream / etcd 上验证的是登录通路（curl 三步、TCP 新建与重连），不涵盖 self_sync 内容解析与生产渠道。
-
-- **A-16 → 同上（作为“game-demo 接入登录链路的既定取舍”的子 bullet）**（No.49）：
-  > **验证范围**（2026-11-14）：新认证器下的真实进程已跑通机器人总线登录、`-login portal`、`alliance_offline_join`，以及 alliance-e2e、seamless、mmorpg 跨服（sid 1000 / 1001）三个演练；`scripts/test-demo-login.sh`（含独立 Gate）与 `scripts/test-demo-merge.sh`（合服中的角色、已并入服老角色经入口三步再握手）可重复跑；仓库里的用例是离线场景（持久层、驻留表、传输为替身）与 `TestPortalRobotAfterTheHandshake`。
-
-- **A-17 → 同上**（No.50）：
-  > **servertime 的边界**：客户端的业务时间是估计（网络时延加走速差），重置前后几秒以服务器应答为准；重置之后在线客户端会集中来问一次，服务端不限流；与 checkin 等模块按同一个 `clock.BusinessDay` 表达式对齐，不调对方的 handler 比对。
-
-- **A-18 → 同上**（No.52）：
-  > **activity 的驱动**：同一个 activity.Component 与 ActivityBook 挂在 Player、ActivityWorld、Alliance 上。个人活动复用 entitytimer，离线默认在加载 / 进入时惰性恢复，要离线准点结算由业务提供可靠后台驱动；全服 / 联盟宿主不挂本地持久定时器，权威服务每秒最多扫描一页 128 个宿主、8 个并发调用，扫描积压会延后推进，业务按冻结期限拒绝过期请求，扫描周期不是准点保证。每宿主单次最多 32 次阶段 / 流程动作；128 个定义号、128 条共享参与资格，满后明确拒绝、不驱逐未完成责任。排行榜 / 邮件 / coordinator 只提供可组合适配，业务要自己冻结奖单并幂等执行。
-
-- **A-19 → 同上**（No.53）：
-  > **purchase 的恢复边界**：Player 账本是常量大小游标，Redis 未履行订单与 platform 支付历史仍会增长；每次补领最多 32 笔，较早的异常订单会暂缓该玩家之后的订单。渠道缺省拒绝，真实支付验签 / 查单由工程接入。队列依赖部署提供的持久 Redis，游标、待发与 Player 必须协调恢复，不支持单独重置其中一侧；demo schema 4 不自动迁移旧订单账本。
-
-- **A-20 → 同上**（No.54）：
-  > **matchmaking 的边界**：本服单排 / 整队与匹配房移交；match 历史缺省保留 10 分钟，已绑定票但历史消失时不自动解除意图、答 unknown 等待核对；缺省每池候选窗口 64、两支同人数队伍成局；不提供跨服房间路由；匹配房的持久映射不自动清理。demo 的旧锁步匹配仍单独服务 battle。
-
-- **A-21 → 同上**（No.56）：
-  > **alliance 模块**：从 demo 迁入，独立服务与三个 Saga 可由安装器直接装配，demo 复用同一份源码。成员通知不可靠投递，离线 / 漏通知靠进入时对账；副本与 HomeSID 不承担权威写权限。历史联盟压测属于当时的 demo 版本，不代表模块迁移后的数字。
-
-- **A-22 → “一 / 框架服务与 game-demo”**（No.59）：
-  > **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
-
-- **A-23 → “一 / 框架服务与 game-demo / 单个玩家换服（rehome）：既定设计”**（No.64）：
-  > **game-demo 换服前的检查**：队伍经双向事务内准入阻止成员换服，本服开着分区场景时也拒绝；坐在本进程 lockstep 对战座位上的玩家拒绝换服，离开中的玩家不再被撮合；匹配票据与副本 run 不拦（理由见 `rehome_checks.go`）。联盟成员可以换服，HomeSID 按入盟批次与旧 SID 条件刷新、进入时对账（尽力通知，不是 account 的线性一致副本）。地形编辑账本 `TerrainEditor` 随玩家一起 `HandOffEntity`。
-
-- **A-24 → “一 / 地形与无缝世界”（小节首）**（No.74）：
-  > **地形未做与只到算法层的部分**（逐项见 [TERRAIN-STATUS](../../TERRAIN-STATUS.md)）：T10 可选物理（PhysX 高度场与每格物理世界）没有做，按是否启用地形物理单独验收；C# 岸线与重建调度只到算法层，Unity 表现未做。默认编辑配额与桶容量 270、terrainpack 缺省 HeightBase −100 米，不重写既有资源；历史 270 档临时数据不代替容量验收。
-
-- **A-25 → “一 / 地形与无缝世界 / CellWorld 固定分区（v1.47.0）”**（No.78）：
-  > **无缝世界原型的产品简化**：方案 §8.4、§9.6、§10.4、§11.10、§12.2、§13.6 列的简化（面板变化不回血、邀请不推送、队伍面板只在分区场景里等）按原样保留。Team 归 game 服务（`service=game`、共享模式，game 因此保留 `remote_entity`），按方案 §14.3 B 实施（`649f2c78`）。（若维护者在 decisions.md“#154”改选 A，改这一句。）
-
-- **A-26 → “一 / 玩法组件与物理房间 / UGC 物理闯关”**（No.80）：
-  > **验证到哪一层**：可选 PhysX 房间支持运动学转轮 / 平台、动态 Box、弹簧抓取与铰链马达、固定版本关卡加载、Unity 预测 / 纠偏接法；Linux 原生功能、真实 TCP / Gate / NATS / Nest 联合链与 C# 预测核心已验证。历史单房间性能数据不覆盖新载荷 / 约束，也不是多房间容量。
-
-- **A-27 → 同上**（No.82）：
-  > **多房间与内存的已测口径**：Linux 1 / 4 / 8 房间短测（每房 20 个逻辑客户端，直接 Service + PhysX + Nest，预热 1 s / 采集 5 s）不含生产网络、原生内存与长稳，不作容量上限；macOS ARM64 机关 8 房间 × 20 客户端连续 20 分钟，footprint、Go 映射、goroutine、PhysX 原生堆斜率都在 0 附近。剩余分配主要是 `StateDAO.Accept` 的所有权副本（约 3 MB/s），去掉要让 Nest undo 保护的权威状态与网络侧索引共用切片，按高风险不做。
-
-- **A-28 → “一 / 客户端 / Native 客户端（2026-11-01）”**（No.83）：
-  > **没有实现的传输**：TLS / WS / UDP / KCP 适配没有实现。已实跑的是 macOS ARM64 的 Editor、Mono / IL2CPP Player、50～10000 可见集解码与 TCP 延迟 / 分片 / 故障（[客户端报告](../../../performance/CLIENT-20261101.md)）。
-
-- **A-29 → “一 / 验收与运维”**（No.93）：
-  > **持久写入保持生产默认**（维护者 2026-10-23）：保留 Mongo 事务与 majority + j:true；混合负载下 Mongo journal 同步与 NATS 文件写入相互影响（[混合负载诊断](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/jetstream-isolation-20261023/README.md)），本机不再继续压测，实际 Mongo 服务容量在目标环境验证。Redis MOVED / ASK 已纳入既有的有界安全重试，持续重定向仍可能耗尽预算。
-
-- **A-30 → “一 / 验收与运维”（与“sync-business 夹具的范围”并列，或写进它下面）**（No.97）：
-  > **nest-game 的 Block AOI 核对在进程内**：客户端与服务端同进程，核对依赖进程内共享的终值；独立客户端进程的核对没有做（要先换成不依赖共享终值的验证方式）。Block AOI 的正确性由包内回归与这份进程内终值核对承担。
-
-- **A-31 → “一 / 验收与运维 / 游戏接入验收”**（No.114）：
-  > **离散玩法纵切的验收口径**：回合 PvP、合作 Roguelike、异步社交经营分别 9、10、9 个场景，进 pretag，含公共 Robot 的实际 TCP / PB 接线；合作包含双客户端三关、领奖、重连和授权视图。仍用替身提交器，跨服与容量不验证；合作 Roguelike 只做离散闯关。范围与命令见 [SESSION-GENRES](../../../framework/SESSION-GENRES.md)。
+| A / No. | 目标精确标题 |
+| --- | --- |
+| A-1 / 8 | 压测工具的心跳驱动（D20 第 4 期） |
+| A-2 / 15 | Remote |
+| A-3 / 17 | Saga |
+| A-4 / 24 | 嵌入 TCP 出站 |
+| A-5 / 31 | Lockstep |
+| A-6 / 34 | 业务模块的既定设计 |
+| A-7 / 35 | 业务模块的既定设计 |
+| A-8 / 36 | 业务模块的既定设计 |
+| A-9 / 37 | 业务模块的既定设计 |
+| A-10 / 38 | 业务模块的既定设计 |
+| A-11 / 39 | 业务模块的既定设计 |
+| A-12 / 40 | 业务模块的既定设计 |
+| A-13 / 46 | 业务模块的既定设计 |
+| A-14 / 47 | 业务模块的既定设计 |
+| A-15 / 48 | 业务模块的既定设计 |
+| A-16 / 49 | 业务模块的既定设计 |
+| A-17 / 50 | 业务模块的既定设计 |
+| A-18 / 52 | 业务模块的既定设计 |
+| A-19 / 53 | 业务模块的既定设计 |
+| A-20 / 54 | 业务模块的既定设计 |
+| A-21 / 56 | 业务模块的既定设计 |
+| A-22 / 59 | 框架服务与 game-demo |
+| A-23 / 64 | 单个玩家换服（rehome）：既定设计 |
+| A-24 / 74 | 地形与无缝世界 |
+| A-25 / 78 | CellWorld 固定分区（v1.47.0） |
+| A-26 / 80 | UGC 物理闯关 |
+| A-27 / 82 | UGC 物理闯关 |
+| A-28 / 83 | Native 客户端（2026-11-01） |
+| A-29 / 93 | 验收与运维 |
+| A-30 / 97 | sync-business 夹具的范围 |
+| A-31 / 114 | 游戏接入验收 |
 
 ## B：本机可修的方案
+
+以下是原始实施方案；当前完成范围与残留以上方 B 状态表为准，不按旧预计工作量重新执行。
 
 量级：S < 1 h，M 1～4 h，L > 4 h。验证一律先红后绿（能构造的话），最后按“full-tests-once-at-end”只跑一次慢套件。
 
@@ -299,6 +295,8 @@
 
 ## 2. B 的批次（每批约 3～4 h，按领域分，文件互不相交，可并行；遵守“最多 4 个并行 agent”）
 
+此表保留原分工；功能批已经执行，B-3 仅实验 / M-19 待测，不重复整批。
+
 | 批 | 领域 | 条目 | 碰的文件 | 时长 | 先决 |
 | --- | --- | --- | --- | --- | --- |
 | P1 | 换服真实进程演练 | B-1 | `scripts/test-demo-rehome.sh`（新）、`scripts/testdata/demo-drill/rehome*`（新） | 5～6 h（可拆成“脚本骨架 + 前三个 kill 点”与“后三个 kill 点 + checkpoint 计时”两段） | 无 |
@@ -316,11 +314,13 @@
 
 ## 3. M：空闲机器上的运行序列
 
+**状态：M-1～M-19 正式测量均未运行。** 下列是计划入口，实际报告须记录生效参数与错误，不以开关冒烟为完成。2026-11-14 更正：M-10 单位为十进制 kB/s，使用 256/64（原 262144/65536 大 1024 倍）；M-16 显式 8/8/queue65536/CPU0（省略时旧默认 4/32，不作同参数对照）；M-17 开环固定 1500/s、四档各 5min，不是容量保证。统一使用`GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0`，每段≤30min，等待无编译/race/索引负载。
+
 前提：没有别的 agent 在跑 race / 编译 / 索引；每段开始前 `sysctl -n vm.loadavg`、`sysctl vm.swapusage` 记入结果（CorpLink 常驻约 1 核，load 2～4 视为空闲）；用到依赖的段 `source ~/.roost-it/roost-dataengine-it/env.sh`（偏移 1000）或 `bash scripts/mirror-local.sh up`（偏移 ≤ 38135）。按维护者的节奏分成每段 ≤ 30 分钟的 14 段，可分几天跑；每段结束检查孤儿进程。
 
 ```sh
-cd /Users/whb/roost/worktrees/v147
-export GOWORK=off
+cd /path/to/roost-core
+export GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0
 
 # ── S1 微基准（约 25 min，无依赖）──
 go test ./gameplay/movement -run '^$' -bench MoveBeatAllocations -benchmem -count 6            # M-2（No.3），约 2 min
@@ -354,7 +354,7 @@ for d in batch dispatch batch dispatch; do ROOST_PERF_LABEL=hbdel-$d-$RANDOM ROO
   ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_SYNC=1 bash scripts/perf/nest-game.sh; done   # 4 × 5 min（历史口径 15 min，按“每轮 ~10 min”缩短）
 
 # ── S5 独立 Gate + self_sync 重档 + 出站预算演练（约 25 min，私有 NATS）──
-ROOST_PERF_LABEL=gate-selfsync-$RANDOM ROOST_PERF_COUNT=1 ROOST_PERF_CPU=4 ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SELF_SYNC=1 \
+ROOST_PERF_LABEL=gate-selfsync-$RANDOM ROOST_PERF_COUNT=1 ROOST_PERF_CPU=0 ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SELF_SYNC=1 \
   ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_ENTITIES=10000 ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 \
   ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_DURATION=15m \
   bash scripts/perf/nest-game.sh                                           # M-6（No.23、98），15 min
@@ -362,22 +362,25 @@ ROOST_TCP_BUDGET_DRILL=1 DRILL_HEALTHY=1000 DRILL_STALLED=50 DRILL_FRAME_BYTES=4
   go test -run TestOutboundBudgetDrill -count=1 -timeout 10m -v ./infra/network/gateway/   # M-7（No.24），约 3 min；再加一档 DRILL_RATE=100
 
 # ── S6 Gate 追帧演练 + 全服邮件账本（约 15 min，私有 NATS / toxiproxy / Redis + mirror-local Cluster）──
-LS_DRILL_FRAMES=3000 LS_DRILL_RATES=262144,65536 go test -tags integration -run TestRealGateLockstepCatchupOverASlowLinkDrill \
+LS_DRILL_FRAMES=3000 LS_DRILL_RATES=256,64 go test -tags integration -run TestRealGateLockstepCatchupOverASlowLinkDrill \
   -count=1 -timeout 20m -v ./wiring/gate/                                   # M-10（No.30、99），读 player_tcp_write_deadline_total{deadline}
 REDIS_ADDR=127.0.0.1:17379 go test -tags integration ./service/mail -run '^$' -bench BroadcastLedgerAtCapacity -benchtime 2000x -count 3
+# Cluster入口已修d2457b26，仅integration helper；单机/Cluster四子项1x功能通过，非M-13正式结果。
 REDIS_ADDR=$ROOST_MIRROR_LOCAL_REDIS_CLUSTER go test -tags integration ./service/mail -run '^$' -bench BroadcastLedgerAtCapacity -benchtime 2000x -count 3   # M-13（No.60）
 
 # ── S7 Block AOI 重档复验（约 25 min，私有 NATS）── M-16（No.97）
-for blocks in 0 4; do ROOST_PERF_LABEL=blockaoi-c$blocks-$RANDOM ROOST_PERF_COUNT=1 ROOST_PERF_CPU=4 ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 \
+for blocks in 0 4; do ROOST_PERF_LABEL=blockaoi-c$blocks-$RANDOM ROOST_PERF_COUNT=1 ROOST_PERF_CPU=0 ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 \
   ROOST_NEST_GAME_LAYOUT=concentrated ROOST_NEST_GAME_OBSERVED_BLOCKS=$blocks ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_ENTITIES=10000 \
-  ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 ROOST_NEST_GAME_HZ=1 ROOST_NEST_GAME_DIRTY=1 ROOST_NEST_GAME_DURATION=10m bash scripts/perf/nest-game.sh; done
+  ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 ROOST_NEST_GAME_HZ=1 ROOST_NEST_GAME_DIRTY=1 \
+  ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_SHORT_QUEUE=65536 \
+  ROOST_NEST_GAME_DURATION=10m bash scripts/perf/nest-game.sh; done
 
 # ── S8 effect 消费者对 RPC 的影响（约 30 min，mirror-local；先做 B-2）── M-11（No.15.2）
 for r in 1 2 3; do for w in 16 1; do ALLIANCE_E2E_PERF=1 ALLIANCE_E2E_RETRY=1 ALLIANCE_E2E_EFFECT_WORKERS=$w \
   ALLIANCE_E2E_RUN='^TestAllianceE2EJoinRetryableSources$' bash scripts/test-alliance-e2e.sh; done; done   # 6 × ~4 min
 
 # ── S9 + S10 game-demo 100 / 200 人（约 2 × 25 min，每轮新环境）── M-12（No.57、113）
-# 每轮：bash scripts/mirror-local.sh clean && up（新偏移）→ 生成 game-demo、写私有地址、单 IP 上限 512 → make dev-run
+# 每轮：新建私有mirror目录/端口并up/env（不clean共享或已保留数据）→ 生成game-demo、唯一命名空间、单IP上限512 → make dev-run
 #   → go run ./cmd/loadtest -count 100（再 200）同秒起跑；再 -ramp-step 20 -ramp-interval 1s 与 -ramp-step 10 -ramp-interval 1s 两档爬坡
 #   → 记成功数、saga“仍未知 / 等待”数、World 热点 nest: sync timeout；每档之间不复用环境（验证“上一轮 saga 积压被继承”）
 
@@ -388,7 +391,8 @@ ROOST_SEAMLESS_OUT=$PWD/artifacts/perf/cellworld-1000-$RANDOM ROOST_SEAMLESS_ROB
 # ── S12 输入丢拍（约 10 min，私有依赖）── E-3（No.92），见 §E
 
 # ── S13 生成工程持久写入对照（约 25 min；先做 B-16）── M-17（No.103、112）
-#   strict / strict+SELF_SYNC=1 / pipelined 开环 / pipelined 同一实体，各 5 min
+#   strict / strict+SELF_SYNC=1 / pipelined 开环 / pipelined 同一实体，各5min；开环档OPEN_LOOP_RATE=1500
+#   ROOST_GENERATED_TCP_SECONDS=300、每档独立ROOST_GENERATED_TCP_OUTPUT，实际参数以正式报告为准
 
 # ── S14 B-3 实验的 A/B（约 30 min，mirror-local；先做 B-3）── M-19（No.14）
 #   main 与实验分支交替各 3 轮 TestAllianceE2ERPCConcurrency（128 / 256 并发），数“全体超时簇”与停顿栈里 storeCheckpoint 的份数
@@ -397,6 +401,8 @@ ROOST_SEAMLESS_OUT=$PWD/artifacts/perf/cellworld-1000-$RANDOM ROOST_SEAMLESS_ROB
 合计约 5.3 小时（14 段，S1～S7 约 2.7 h 不依赖任何 B；S8、S13、S14 要先做对应的 B）。
 
 ## 4. C：按环境分组
+
+**36 项仍待外部环境，不在本机关闭。现行入口、拓扑/设备缺口与关闭证据统一见 [external.md](external.md)。** 下表是原始环境分类索引，其中“运行”是当时的计划摘要；不能直接把 Remote 时长、Saga 脚本或本机进程脚本当成已具跨机/小时级装配。执行以 external 逐项核对后的入口为准。
 
 | 环境 | 条目（ID） | 关闭它的命令 / 运行 |
 | --- | --- | --- |

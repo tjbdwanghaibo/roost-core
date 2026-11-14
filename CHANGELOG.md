@@ -8,6 +8,8 @@
 
 - **测试：game-demo 停机预算随 Room 定时器更新**（2026-11-14）：P9 新增正式 Room timer Mod 后，显式测试夹具为 28 Mods、126s/131s，默认 CLI 含 manager 为 29 Mods、129s/134s。修正 shutdown/singleton 的旧固定预期，保留 bootstrap 独立枚举、手改配置不被覆盖与 singleton 开关边界；不修改生产预算算法。31 项定向通过，漏计一 Mod 的变异被独立断言拒绝；[原失败与红绿证据](docs/maintenance/evidence/shutdown-assertions-20261114/README.md)。
 
+- **文档：v147 遗留分类收口**（2026-11-14）：31 段既定设计/验收口径迁入 KNOWN-LIMITS 一，17 项过时表述收敛，按 B-1～16 报告逐项限定真实链路与崩溃窗口；新增 36 项外部环境入口/拓扑/关闭证据清单。修正 rehome committed 后登录自动清理的旧说法、玩法 REAL 与默认 TCP 不可合称联合链、Skill/框架接入事实及 M10 单位/M16 工作池/M17 负载口径。Q4、全部未答决定、C 与未运行的 M / E1 / E3 仍保留；生成器最后一轮 60m 整包复验主动中止，待接手补跑。本批不改变实现，只做轻量 diff 检查，最终文档检查留待续跑收尾。
+
 - **测量入口：联盟 RPC 并发档可配置**（2026-11-14）：正式探针支持 `ALLIANCE_E2E_RPC_CONCURRENCY=1..256`（默认 16），写额度 512，分散 16 联盟与单热点对照保持 500 人业务限制，并打印 ≥3 秒样本。此前设置开关仍固定 16；后台 checkpoint 实验没有合入。见 [探针口径](docs/performance/benchmarks/alliance-probes-20261114/README.md)。
 
 - **性能入口：AOI 支持自动 CPU 并发度**（2026-11-14）：`sync-aoi.sh` 接受并缺省使用 `ROOST_PERF_CPU=0`，与当前验证口径一致；原来校验直接拒绝 0。保留显式正整数档和原有延迟断言；真实 on_change 小规模功能运行通过，数字不作为容量。

@@ -12,7 +12,7 @@
 
 | 适用 | 不适用 / 要另想办法 |
 | --- | --- |
-| 同进程多地图的服务器权威状态同步 MMO：登录建角、移动与 AOI、组队、面对面交易、权威战斗与冷却、Buff / 死亡复活、掉落任务副本、背包装备、公会（Remote）、跨 sid 赠礼（Saga）、邮件 / 支付 / 活动 / 排行 | 无缝大世界多进程分区、Player 动态跨 sid 迁移（MMO §6，需框架先补）；跨服世界 Boss + 副本权限视野 + 活动结算的联合消费者尚未验收（MMO §6.1）；竞技副本要帧同步时单独走 moba-lockstep |
+| 同进程多地图的服务器权威状态同步 MMO：登录建角、移动与 AOI、组队、面对面交易、权威战斗与冷却、Buff / 死亡复活、掉落任务副本、背包装备、公会（Remote）、跨 sid 赠礼（Saga）、邮件 / 支付 / 活动 / 排行 | 本纵切不含 CellWorld 固定分区或 Player 跨 sid 无缝迁移；另有 rehome 断线改绑，Q4 旧源档窗口保留（MMO §6）；跨服世界 Boss + 副本权限视野 + 活动结算的联合消费者尚未验收（MMO §6.1）；竞技副本要帧同步时单独走 moba-lockstep |
 
 ## 2. 用到的框架模块（MMO §2、§3）
 
@@ -95,7 +95,7 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Com
 | 类别 | 内容 | 出处 |
 | --- | --- | --- |
 | 框架能做 | 多实体同事务（交易三实体）、持久期限、同进程切图（Nest 提交 + Interest Reconcile 两阶段）、Hold / Ready 与高 epoch 全量、Profile 字段白名单、Remote 公会、Saga 跨 sid 赠礼 | MMO §3、§5、§6 |
-| 框架不能做 | Player 动态跨 sid 迁移、副本 / 战场自动 HA、跨服撤权传播、已下发信息收回；寻路 / 巡逻组件（movement 只有 MapBasic / Move / MoveTo / Follow）；Skill Runtime 随 Nest 回滚 | MMO §6、§6.1、§7；guide/10-time.md §4B；guide/08-skill.md |
+| 框架不能做 | Player 跨 sid 无缝迁移（rehome 断线改绑另有入口）、副本 / 战场自动 HA、跨服撤权传播、已下发信息收回；寻路 / 巡逻组件（movement 只有 MapBasic / Move / MoveTo / Follow）；Skill Runtime 随 Nest 回滚 | MMO §6、§6.1、§7；guide/10-time.md §4B；guide/08-skill.md |
 | AOI 容量 | 2026-10-20 sync-aoi（1000 玩家、1 万实体、20Hz、本机 loopback）：单视野 Nest 改值→客户端 P99 约 64ms，+4 视野 78ms（修复后 65ms），+16 视野修复后 97～141ms（ApplyAsync）；缺省 ApplySync 每玩家 ≤ 9 视野；`MaxSpatialViews` 缺省 8192；`MaxObjects` 缺省 100，超出关整个会话 | guide/04-sync.md §2“已测规模与边界”；KNOWN-LIMITS“广播与 AOI” |
 | 吞吐 / 心跳 | 生成工程 strict 50 连接约 1253 TPS、同实体约 108 TPS（SKILL.md §5 #3）；心跳最短 50ms，移动建议 200ms | KNOWN-LIMITS“能力与验证边界”；guide/10-time.md §4A |
 | 一致性边界 | strict = WAL fsync，Mongo 可见要用 Flush / 投影等待；连接关闭或 ctx 超时不等于撤销；AOI 可见不等于攻击 / 交易授权；Saga 不是跨服瞬时原子交易；Saga 业务键（如跨 sid 赠礼）只在运行期间 + 终态保留期内唯一，保留期后可复用、前后两轮靠协调器生成的生命周期身份区分（维护者 2026-10-31 定案 A），要“同一礼物永远只送一次”在业务数据里记已用过的键 | MMO §3、§7；SAGA.md“定义”业务键与查询；guide/06-saga.md 幂等键 |
