@@ -33,7 +33,10 @@ var commitTokenRE = regexp.MustCompile("`([0-9a-f]{7,40})`")
 // documentedCommitExemptions 是有意引用、不在 HEAD 历史里的提交（例如说明某个分支上的原始提交与最终合入
 // 版本不同）。键是文档里写的短 SHA，值写明它在哪个分支、为什么必须保留。保持很小：能改成 main 上的提交号
 // 就改；条目不再被任何文档引用、或已能在 HEAD 历史里找到时，本测试要求删掉它。
-var documentedCommitExemptions = map[string]string{}
+var documentedCommitExemptions = map[string]string{
+	"300be3a0": "v147 B3 位于 experiment/v147-background-checkpoint；交接要求只合报告，不合实验实现，必须保留精确测量来源",
+	"300be3a03e22d6426b22ffe8ced0c96782ff3dac": "同一 B3 实验提交的完整 SHA，供 checkpoint-experiment 报告复建；维护者决定前不能合入实现",
+}
 
 // docCommitIncident 是本门禁要抓的那一次：该提交的 KNOWN-LIMITS 写着 rebase 前的 `b717fd14`。
 const (

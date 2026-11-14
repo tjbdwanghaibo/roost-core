@@ -140,3 +140,9 @@ GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0 \
 本轮使用Codebase Memory Verify/Tier2，实际项目为 **`Users-whb-roost-worktrees-v147`**，根目录是本集成工作树；不要因为上层 `/Users/whb/roost` 没有项目而索引错仓。最近确认generation为`2026-11-14T02:55:37Z`，晚于此的变化用精确源码补证，不能把它称为最新全覆盖。
 
 接手先`index_status`/`list_projects`确认实际代际，结构查询优先`search_graph → trace_path → get_code_snippet`，对全部证据文件检查coverage；metadata_changed/模板缺口直接读源码。需要刷新时在正式性能窗口之前或结束后做，不与测量并跑。遗留工作树、实验patch、原始日志均保留；同机原始材料丢失时按仓内入口重建，不编造曾经的运行结果。
+
+## 7. 本次交接检查
+
+文档合入后，`python3 scripts/check-doc-anchors.py` 检查 383 份文件、0 个坏链接；`git diff --check` 通过。根包初查因 B3 实验提交不在集成分支祖先中而失败：这是有意只合报告、保留实验分支，故在已有 `documentedCommitExemptions` 中为该提交的短/完整 SHA 登记明确原因，保持原守卫及其历史坏引用自检。没有合入实验实现，也没有删除精确实验来源来避开检查。
+
+随后 `GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0 go test -count=1 -timeout 3m .` 通过（10.803s）。该次只是根包文档/入口守卫，不代表中止的生成器整包已补完。原始输出保留为 `/private/tmp/v147-handoff-doc-anchors-20261114.log`、`/private/tmp/v147-handoff-root-doc-check-20261114.log`（初查失败）及 `/private/tmp/v147-handoff-root-doc-check-fixed-20261114.log`（通过）。接手完成剩余工作并改文档后，仍按影响做最终检查。
