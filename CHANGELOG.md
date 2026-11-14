@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **仅实验分支：回放批内后台 checkpoint**（交接 B-3，2026-11-14）：默认关闭；只对可幂等重放的成功前缀重叠投影与单写者确认，最新前缀合并，快路和每轮退出仍等待真实 WAL 确认。WAL.Ack 与 fsync 顺序不改；代码不合入发布分支。四个定向边界用例、WAL/engine/装配全包 race、真实 Mongo checkpoint 丢失重放及生成联盟 RPC 冒烟通过，两种关键变异红。性能 A/B 待空闲执行，见 [实验记录](docs/maintenance/evidence/checkpoint-experiment-20261114/README.md)。
+
 - **测试：C++ 跨 Gate 同会话接管与完整 Protobuf 验收**（2026-11-14）：`ROOST_GATE_CPP=1 scripts/test-gate-client.sh` 增加两个真实 Gate / NATS 的迟到握手场景，要求旧连接被拒且新连接前后均可请求，Go 服务端带 race；暂时移除原生客户端连接代号后，同一用例发现新连接被关闭。`ROOST_PROTOBUF_TESTS=ON scripts/test-client-cpp.sh` 的 8 项 ctest 通过。两个 Gate 同处一个 Go 测试进程，C++ 独立进程，仅声明 macOS 本机验证；[证据与复跑](docs/maintenance/evidence/known-limits-remaining-20261114/native-acceptance.md)。运行逻辑不变。
 
 - 新增 `scripts/perf/generated-tcp.sh` 与入库业务夹具：当前 CLI 生成 Player/endpoint，公共 Robot 经嵌入 TCP 调生成 Sender，每次金币 +1 走真实文件 WAL/Mongo；支持 strict/pipelined/async、self_sync、分散/同实体连接与有界开环到达。结束冷加载逐实体核对成功回包数、WAL 排空与客户端最终 Sync；JSON 分列往返、计划到回复、客户端排队、投影排空和 Robot 消息统计。10 秒冒烟用于验证接线，正式 M-17 性能对照仍需空闲机器；配置与边界见 `scripts/testdata/generated-tcp/README.md`。

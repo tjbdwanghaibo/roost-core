@@ -67,9 +67,11 @@ type ProjectorOptions struct {
 	EffectOrder        EffectOrder
 	CheckpointRecords  int           // 连续成功记录的 ack 阈值；1 保留逐单元确认。
 	CheckpointInterval time.Duration // 投影单元之间检查，阻塞的存储调用仍由其 context 控制。
-	MaxUnackedRecords  uint64        // 0 不限制；拒绝发生于 WAL 准入前。
-	WarnUnackedRecords uint64        // 0 不设独立预警；达到准入上限也会报告预警。
-	CloseWAL           bool
+	// BackgroundCheckpoint 仅用于 B-3 实验：本轮回放内把安全前缀交给单写者，返回前仍等持久确认。
+	BackgroundCheckpoint bool
+	MaxUnackedRecords    uint64 // 0 不限制；拒绝发生于 WAL 准入前。
+	WarnUnackedRecords   uint64 // 0 不设独立预警；达到准入上限也会报告预警。
+	CloseWAL             bool
 	// OnFatal 在首次确定性投影冲突后异步调用一次（独立 goroutine，panic 被吞掉）。
 	// 调用前 fatal 已对准入、Flush 与实体等待方可见；回调里可以同步调用 Close / Shutdown。
 	OnFatal func(error)

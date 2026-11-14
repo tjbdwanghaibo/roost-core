@@ -74,6 +74,12 @@ func isolatedRealMongo(t *testing.T) (context.Context, fmongo.IMongo, string) {
 // 已经投影。重启（重开 WAL、新 Store、新投影器）后重放必须返回首投的结论：业务值、回执、事务标记都恰好一次，
 // effect 不被重新暂存（契约：CONTRACT-2026-10-18-projector-checkpoint-merge）。
 func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background=%v", background), func(t *testing.T) { testLostCheckpointReplay(t, background) })
+	}
+}
+
+func testLostCheckpointReplay(t *testing.T, background bool) {
 	ctx, client, database := isolatedRealMongo(t)
 	store, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: database})
 	if err != nil {
@@ -115,7 +121,7 @@ func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		projector, err := NewProjector(wal, store, ProjectorOptions{ManualReplay: true, CloseWAL: true, CheckpointInterval: time.Hour})
+		projector, err := NewProjector(wal, store, ProjectorOptions{ManualReplay: true, CloseWAL: true, CheckpointInterval: time.Hour, BackgroundCheckpoint: background})
 		if err != nil {
 			t.Fatal(err)
 		}
