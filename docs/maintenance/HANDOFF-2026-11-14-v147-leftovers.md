@@ -101,7 +101,7 @@ decisions.md 的 Q1～Q17、#154、#37、CellWorld B / C / E、self_sync RetryLa
 
 | 批 | 决定 | 内容 | 主要文件 | 量级 |
 | --- | --- | --- | --- | --- |
-| R1 Sync | D1 | `tmp/sync-fixes`（`8c86065f`、`a0f07234`）rebase 到 feat/v147 合入；两条回归与 5 个变异重跑；impl/04 §2C、ENTITY_SYNC、guide/04 按新行为（从被拒会话轮转）改写 | `framework/sync/entitysync/**` | S～M |
+| R1 Sync | D1 | 已做：`tmp/sync-fixes` 的两个提交 cherry-pick 为 `2e1486b4`、`3c48c5f2`（分支 tmp/r1-sync）；两条回归与 5 个变异重跑；impl/04 §2C、ENTITY_SYNC、guide/04 按新行为（从被拒会话轮转）改写 | `framework/sync/entitysync/**` | S～M |
 | R2 换服 / account | D7、D8 | D7：源服预加载时向 account 核对绑定，不属于本服的跳过并带版本守护删除；P1 的 committed 点验收这条窗口关闭。D8：account 加在途换服索引，按期限自动向前恢复或中止，`accountctl` 能列出；真实依赖用例 | `modules/rehome/**`、`service/account/**`、`wiring/` 相关 | M～L |
 | R3 地形 | D11、D12 | Q17 A：按地图归属选库范围（普通场景 sid、分区场景 global），demo 的 `terrain_chunks` / `buildings` / `terrain_editors` 与 terrain 模块一致；N3 A：换服时建筑留在原地图，全服邮件离开前按旧范围拉一次；N4 A：坏块 / 装不进的块按基础包确认 | `demo/**/terrain*`、`modules/terrain/**`、`demo/game/controllers/player` 换服段 | M |
 | R4 DataEngine / Remote / Saga | D16、D17、D18 | D16：原生正向档推荐配置开启准入限流，c128 追平复测 ≤ 30s；D17：“删空认领”运维入口（所有权代际守护）+ 累积计数指标；D18：缺省 WAL 目录 `data/wal/<服务>/<sid>`，更新生成配置、doctor 与文档（未上线不兼容旧目录） | `framework/saga` 配置与文档、`framework/remoteentity` / `wiring/remoteentity`、`codegen/internal/roost` 的 WAL 缺省 | M |

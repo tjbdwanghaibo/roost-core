@@ -90,7 +90,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_interest_over_limit_total{action}` | Counter | Interest 对超额暂缓通知的反应：`tighten`（收紧一个空间视野的可见上限，从最远的开始退订）、`raise`（冷却到期上调一档）、`lift`（撤掉收紧，回到 `MaxVisible`）、`untightened`（通知里的 pair 不来自任何空间视野、玩家也没有主视野，没有可收紧的） |
 | `entitysync_interest_limited_views` | Gauge | 此刻收紧着可见上限的空间视野数（进程内所有 Interest 之和）。拥挤时不为 0 是正常的降级；拥挤散去后应在冷却（1～32 秒）内回到 0 |
 | `entitysync.self_view.stranded_players` | Gauge | 自身视图里在线（至少一条连接）却超过 3 个同步周期没有打开的同步会话的玩家数，每个政策阶段由 `wiring/selfsync` 写入（`SelfView.Stranded`）。**正常为 0**；持续不为 0 = 有连接活着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（会话数上限）。玩家实体的帧编码失败 2026-10-22 起断开该玩家（见 `player.sync.session_lost_disconnect.total`），不再滞留 |
-| `player.sync.push_refused.total{outcome}` | Counter | `wiring/selfsync.PushPlayerFrame`（自身视图与 game-demo 场景共用）处理的 Sync 推送拒收：`closed` = 活着的连接拒收、关闭了该玩家的全部连接；`retried` = 整个进程的驻留预算耗尽、整轮重试。接入层未就绪与玩家没有连接不计 |
+| `player.sync.push_refused.total{outcome}` | Counter | `wiring/selfsync.PushPlayerFrame`（自身视图与 game-demo 场景共用）处理的 Sync 推送拒收：`closed` = 活着的连接拒收、关闭了该玩家的全部连接；`retried` = 整个进程的驻留预算耗尽、交还 `ErrRetryLater` 重试（只作废没交付到的 subject，下一轮从被拒会话轮转）。接入层未就绪与玩家没有连接不计 |
 | `player.sync.session_lost_disconnect.total{reason}` | Counter | `wiring/selfsync.DisconnectLostPlayer`（自身视图与 game-demo 场景共用）因同步会话被 Manager 丢掉、而原因不是推送拒收（连接仍活着）断开玩家的次数，只计确实关掉了连接的（维护者 2026-10-22 决定 A）。`reason`：`too_large`（单实体超过帧 / 组件上限）、`encode_failed`（其他编码错误）、`unknown`（原因不是 Manager 给出的）；持有对象超过 `MaxObjects` 自 2026-11-08 起不再丢会话（超额降级，见 `entitysync_over_limit_*`），原先的 `object_limit` 不再出现。**正常为 0**；持续增长 = 同一原因让玩家反复被踢、重连，看限频 Warn `selfsync: a player's sync session was lost …` 里的 `player_id` 与 `reason`，查 `MaxVisible` 与实体大小 |
 | `entitysync_drain_timeout_total` | Counter | `Manager.Drain` 因 ctx 超时 / 取消而未排空的次数（停机预算不够或有条目卡住；卡住条目见返回的 `*DrainStalledError`） |
 | `entitysync_codec_resyncs_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
@@ -625,7 +625,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 
 | 指标 | 含义与口径 |
 | --- | --- |
-| `player_tcp_outbound_budget_exhausted_total` | 一帧因全进程出站驻留预算（`player_access.tcp.outbound.resident_bytes`，缺省 256 MiB，所有连接“排队 + 写协程在途”字节合计）放不下而被拒的次数（2026-10-20 起）；**不关闭连接**，推给玩家多条连接时每条各计一次。持续增长说明很多连接同时停读或健康流量超过发送能力：Entity Sync 整轮重试、延迟上升（同时看 `player.sync.push_refused.total{outcome="retried"}`），Lockstep 实时帧靠冗余补；修前没有这个预算，最坏驻留 `max_connections × 每连接字节上限` |
+| `player_tcp_outbound_budget_exhausted_total` | 一帧因全进程出站驻留预算（`player_access.tcp.outbound.resident_bytes`，缺省 256 MiB，所有连接“排队 + 写协程在途”字节合计）放不下而被拒的次数（2026-10-20 起）；**不关闭连接**，推给玩家多条连接时每条各计一次。持续增长说明很多连接同时停读或健康流量超过发送能力：Entity Sync 交还 `ErrRetryLater` 重试、延迟上升（同时看 `player.sync.push_refused.total{outcome="retried"}`），Lockstep 实时帧靠冗余补；修前没有这个预算，最坏驻留 `max_connections × 每连接字节上限` |
 | `player_tcp_outbound_overflow_total` | 一帧入队会让该连接“排队 + 写协程在途”超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节而被拒的次数（拒绝即关闭连接）；计被拒次数，不是关闭的连接数，并发推送方同时撞到上限时各计一次 |
 | `player_tcp_push_closed_total` | 推送路径因 `errConnectionBroken`（溢出、连接已被写协程关闭但尚未注销）注销并关闭连接的次数；同一连接在注销前收到多次推送会多次计入，写协程关闭后没有推送到达的连接不计 |
 | `player_tcp_write_error_total` | 写 socket 失败次数（写协程、读循环直写、Gate `WritePacket`）：写超时、半帧、reset，以及关闭连接时被打断的那次写；连接已关闭后被拒的写不计 |
@@ -678,7 +678,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 7. `lockstep.desync.total` 非零 —— 立即告警（确定性被破坏：作弊或模拟 bug，两者都必须查）。
 8. ~~`dataengine_fence_skipped_total`~~ —— saga 设计第 5 批（2026-10-29）起该指标已移除：DataEngine lease fence 机制删除，投影不再有“整笔跳过”的结果（原生步骤回执在实体里，见 [SAGA.md](SAGA.md)）。
 9. `obs_series_dropped_total` 非零 —— 某 metric 的 label 基数打满，新组合的观测在静默丢失；排查 label 来源或调整配置 `metrics.max_series_per_metric`。
-10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（日志 `self view:` / `entitysync`）。`player_sync_session_lost_disconnect_total{reason}` 持续增长 —— 同步会话因编码失败被丢、玩家被断开后重连又被断开（反复重连），按 Warn 里的 `player_id` / `reason` 查视野上限（`MaxVisible`）与实体大小。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`（嵌入 TCP 是 `player_access.tcp.outbound.resident_bytes`，同时看 `player_tcp_outbound_budget_exhausted_total`）。
+10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（日志 `self view:` / `entitysync`）。`player_sync_session_lost_disconnect_total{reason}` 持续增长 —— 同步会话因编码失败被丢、玩家被断开后重连又被断开（反复重连），按 Warn 里的 `player_id` / `reason` 查视野上限（`MaxVisible`）与实体大小。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 反复 `ErrRetryLater` 重试（按 subject 作废、从被拒会话轮转）、延迟上升，查发送能力与 `outbound.resident_bytes`（嵌入 TCP 是 `player_access.tcp.outbound.resident_bytes`，同时看 `player_tcp_outbound_budget_exhausted_total`）。
 11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 12. `heartbeat.skipped_total` 或 `heartbeat.stalled_total` 持续增长 —— 关注：实体心跳跟不上（快池 worker 饱和、回调慢，或 Remote 写准入反复被拒）；按 Warn `heartbeat: beats skipped` 里的样本实体与原因排查。
 13. `saga.partition.fail_stop_total` 非零 —— 立即告警：协调器进程 fail-stop（`fenced` = 出现第二个写者，崩溃重启的短暂重叠或部署错误；`publish_unknown` = 一条流的发布结果未知超过预算；`rejected` = 流满等明确拒绝），按 ERROR 日志点名的分区与流核对；同 sid 进程重启后从快照 + 日志重放恢复。

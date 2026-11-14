@@ -40,10 +40,13 @@ var (
 	ErrWireFrame                  = errors.New("entitysync: malformed wire frame")
 
 	// ErrRetryLater is what a Transport returns when it cannot take frames
-	// from ANYBODY right now (starting up, shutting down). The tick is
-	// abandoned whole — every subject keeps its dirty state — and no session
-	// is blamed. Any other push error is that session's alone: it is closed.
-	// 已准入帧不会回滚；部分成功的订阅在重试时改发全量以恢复内容基线。
+	// right now for reasons that are nobody's fault (starting up, shutting
+	// down, the process-wide resident byte budget used up). No session is
+	// blamed and nothing is pushed for the rest of the tick. Any other push
+	// error is that session's alone: it is closed.
+	// 本轮从被拒的会话起不再推送：被拒及其后未尝试的会话本轮内容里的 subject 作废捕获、保留脏状态，已交付给每个
+	// 拿到它内容的会话的 subject 照常提交（2026-11-14 起；原先整轮作废）。下一轮从被拒的会话开始轮转。
+	// 已准入帧不会回滚；收到了被作废 subject 内容的订阅在重试时改发全量以恢复内容基线。
 	ErrRetryLater = errors.New("entitysync: transport cannot take frames now; retry the tick")
 
 	// ErrDurabilityDeferred marks a subject whose newest commit the durable

@@ -213,6 +213,9 @@ type Manager struct {
 	flushWork         map[SessionID]*flushSession
 	flushPool         []*flushSession
 	encodeWork        encodeWorkspace // flushGate 独占，只有临时结构，不保存发送字节。
+	// retryFrom：上一轮传输以 ErrRetryLater 拒收的会话（flushGate 独占；0 = 上一轮没有被拒）。下一轮没有冷创建计费的会话
+	// 从它开始按 ID 轮转尝试，被拒的位置随之推进，持续发不完时每个会话都轮得到（flush.go rotateAfterRetry）。
+	retryFrom         SessionID
 	snapshotsDeferred atomic.Uint64
 	sendDeferred      atomic.Uint64
 

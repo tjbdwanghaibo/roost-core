@@ -347,6 +347,200 @@ func TestRetryLaterAbandonsTheTickWithoutBlamingAnySession(t *testing.T) {
 	}
 }
 
+// residentBudgetTransport 模拟进程驻留字节预算：每个 tick 能接下 budget 字节（测试在两次 Flush 之间调 drain，
+// 等同客户端一直在读、写协程把上一轮写完），放不下的帧返回 ErrRetryLater（与 wiring/selfsync 对
+// gateway.ErrResidentBudgetExhausted 的分类相同），frames > 0 时另限每 tick 的帧数。接下的帧交给 recordingTransport 解码。
+type residentBudgetTransport struct {
+	*recordingTransport
+	budget, used     int
+	frames, admitted int
+}
+
+func (t *residentBudgetTransport) Push(ctx context.Context, sid SessionID, raw []byte) error {
+	if t.used+len(raw) > t.budget || t.frames > 0 && t.admitted >= t.frames {
+		return fmt.Errorf("%w: resident budget exhausted", ErrRetryLater)
+	}
+	t.used += len(raw)
+	t.admitted++
+	return t.recordingTransport.Push(ctx, sid, raw)
+}
+
+func (t *residentBudgetTransport) drain() { t.used, t.admitted = 0, 0 }
+
+// clientBaselines 像客户端一样逐帧应用每个会话收到的帧：全量换基线，增量必须接在客户端持有的版本上。
+// 返回该会话本次取走的帧数。
+type clientBaselines map[SessionID]uint64
+
+func (c clientBaselines) apply(t *testing.T, transport *recordingTransport, sid SessionID, subjectID int64) int {
+	t.Helper()
+	frames := transport.take(sid)
+	for _, raw := range frames {
+		update, ok := decodeFrame(t, raw).updates[subjectID]
+		if !ok {
+			continue
+		}
+		if !update.Full && update.BaseVersion != c[sid] {
+			t.Fatalf("session %d received a delta %d → %d but the client holds version %d", sid, update.BaseVersion, update.Version, c[sid])
+		}
+		c[sid] = update.Version
+	}
+	return len(frames)
+}
+
+// paddedSubject 的全量比增量大 pad 字节（自身视图里玩家实体的典型形状：全量几 KiB，增量几个字段）。
+func paddedSubject(t *testing.T, id int64, pad int) *entity.SubjectSyncState {
+	t.Helper()
+	full := append([]byte("snapshot:"), bytes.Repeat([]byte{'x'}, pad)...)
+	return entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
+		Enabled: true, SubjectID: id, Namespace: "test",
+		Packer: entity.SubjectSyncPackFunc{
+			Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+				return entity.TakeFrozenSyncPayload(1, append([]byte(nil), full...)), nil
+			},
+			Delta: func(entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error) {
+				return entity.TakeFrozenSyncPayload(1, []byte("delta")), nil
+			},
+		},
+	})
+}
+
+// 驻留预算一轮只放得下 k 个全量、每名玩家每 tick 都在变（自身视图演练的形状）：传输拒收一帧只让“没交付到的 subject”
+// 留着脏状态，已经交付给全部订阅者的 subject 照常提交，所以被拒的位置每轮向后推进，⌈N/k⌉ 轮左右每个会话都收到全量、
+// 内容都提交过一次，之后增量放得下、Flush 不再重试。修前整轮作废：已准入的前几个会话每轮重收全量、占满预算，
+// 后面的会话一帧也收不到，一轮也提交不了。
+func TestRetryLaterUnderAResidentBudgetStillCommitsEverySession(t *testing.T) {
+	const (
+		sessions = 20
+		pad      = 4096
+		perTick  = 3                                // 一轮放得下的全量帧数
+		bound    = (sessions+perTick-1)/perTick + 3 // ⌈N/k⌉ + 余量
+		budget   = perTick*pad + pad/2              // 3 个全量 + 若干增量放得下，4 个全量放不下
+	)
+	transport := &residentBudgetTransport{recordingTransport: newRecordingTransport(), budget: budget}
+	m := newTestManager(t, transport, ManagerConfig{})
+	states := make([]*entity.SubjectSyncState, sessions)
+	for i := range states {
+		sid := SessionID(i + 1)
+		states[i] = paddedSubject(t, int64(sid), pad)
+		if err := m.Register(states[i]); err != nil {
+			t.Fatal(err)
+		}
+		open(t, m, sid)
+		mustSubscribe(t, m, sid, int64(sid), entity.SyncProfile{})
+	}
+	committedAt := make(map[SessionID]int)
+	clients := make(clientBaselines)
+	var outcomes []string
+	cleanFrom := 0
+	for tick := 1; tick <= bound+2; tick++ {
+		for _, state := range states {
+			state.MarkDirty(1)
+		}
+		transport.drain()
+		err := m.Flush(t.Context())
+		switch {
+		case err == nil:
+			outcomes = append(outcomes, "ok")
+			if cleanFrom == 0 {
+				cleanFrom = tick
+			}
+		case errors.Is(err, ErrRetryLater):
+			outcomes = append(outcomes, "retry")
+			cleanFrom = 0
+		default:
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+		for i, state := range states {
+			sid := SessionID(i + 1)
+			clients.apply(t, transport.recordingTransport, sid, int64(sid))
+			if _, done := committedAt[sid]; !done && state.Version() > 0 && m.sessionHoldsSubject(sid, int64(sid)) {
+				committedAt[sid] = tick
+			}
+		}
+	}
+	t.Logf("first tick each session held a committed view: %v; flush outcomes: %v", committedAt, outcomes)
+	var late []string
+	for sid := SessionID(1); sid <= sessions; sid++ {
+		if at, done := committedAt[sid]; !done || at > bound {
+			late = append(late, fmt.Sprintf("%d@%d", sid, at))
+		}
+	}
+	if len(late) > 0 {
+		t.Fatalf("sessions %v did not hold a committed view within %d ticks (⌈%d/%d⌉ + 3) under a resident budget of %d bytes (0 = never); flush outcomes %v",
+			late, bound, sessions, perTick, budget, outcomes)
+	}
+	if cleanFrom == 0 || cleanFrom > bound {
+		t.Fatalf("flushes never settled back to committing every tick (outcomes %v): the retry amplification sustains itself", outcomes)
+	}
+	if lost := m.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("a resident budget lost %d sessions", lost)
+	}
+}
+
+// 增量本身就超过一轮的发送能力（预算持续不够）：谁也不能每轮都收到，但被拒之后下一轮从被拒的会话开始，
+// 每个会话在 ⌈N/k⌉ + 1 轮之内都收到一帧，ID 大的会话不会被 ID 小的会话永久挤掉。
+// 修前每轮都从最小 ID 开始，排在第 k 个之后的会话一帧也收不到。
+func TestRetryLaterStartsTheNextTickAtTheRefusedSession(t *testing.T) {
+	const (
+		sessions = 12
+		perTick  = 3
+		gapBound = (sessions+perTick-1)/perTick + 1
+		ticks    = 6 * gapBound
+	)
+	transport := &residentBudgetTransport{recordingTransport: newRecordingTransport(), budget: 1 << 30, frames: perTick}
+	m := newTestManager(t, transport, ManagerConfig{})
+	states := make([]*entity.SubjectSyncState, sessions)
+	packs := 0
+	for i := range states {
+		sid := SessionID(i + 1)
+		states[i] = testSubject(t, int64(sid), &packs)
+		if err := m.Register(states[i]); err != nil {
+			t.Fatal(err)
+		}
+		open(t, m, sid)
+		mustSubscribe(t, m, sid, int64(sid), entity.SyncProfile{})
+	}
+	lastAt := make(map[SessionID]int)
+	clients := make(clientBaselines)
+	worstGap := make(map[SessionID]int)
+	retries := 0
+	for tick := 1; tick <= ticks; tick++ {
+		for _, state := range states {
+			state.MarkDirty(1)
+		}
+		transport.drain()
+		if err := m.Flush(t.Context()); err != nil {
+			if !errors.Is(err, ErrRetryLater) {
+				t.Fatalf("tick %d: %v", tick, err)
+			}
+			retries++
+		}
+		for sid := SessionID(1); sid <= sessions; sid++ {
+			if clients.apply(t, transport.recordingTransport, sid, int64(sid)) > 0 {
+				worstGap[sid] = max(worstGap[sid], tick-lastAt[sid])
+				lastAt[sid] = tick
+			}
+		}
+	}
+	if retries < ticks-1 {
+		t.Fatalf("premise: only %d of %d ticks hit the budget", retries, ticks)
+	}
+	var starved []string
+	for sid := SessionID(1); sid <= sessions; sid++ {
+		gap := max(worstGap[sid], ticks+1-lastAt[sid])
+		if gap > gapBound {
+			starved = append(starved, fmt.Sprintf("%d(gap %d)", sid, gap))
+		}
+	}
+	if len(starved) > 0 {
+		t.Fatalf("under a budget of %d frames per tick sessions %v went more than %d ticks without a frame (last frame tick per session %v)",
+			perTick, starved, gapBound, lastAt)
+	}
+	if lost := m.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("a resident budget lost %d sessions", lost)
+	}
+}
+
 // 退订与退役都是状态变更：持有对象的会话下一帧收到 remove，从未收到过的什么都不欠；
 // 最后一个 remove 发出后 subject 被遗忘，可以重新注册。
 func TestUnsubscribeAndUnregisterOweARemoveOnlyToWhoHoldsTheObject(t *testing.T) {

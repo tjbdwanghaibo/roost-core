@@ -983,8 +983,9 @@ func TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused(t *testing.T) {
 }
 
 // TestSelfSyncResidentBudgetRetryDrill 测进程出站驻留预算压到触发点时自身视图的整轮重试放大（KNOWN-LIMITS
-// “self_sync/TCP/AOI 未测”第 7 条，规则见 impl/04-sync §2C 与第 4 条限制）：预算耗尽时这一轮整轮重试，已准入的会话
-// 下一轮改收全量（requireSnapshotsAfterRetry），全量比增量大时重试会自我放大。真实嵌入 TCP + 正式装配的 Manager：
+// “self_sync/TCP/AOI 未测”第 7 条，规则见 impl/04-sync §2C 与第 4 条限制）：预算耗尽时这一轮从被拒的会话起不再推送。
+// 2026-11-14 之前整轮作废、已准入的会话下一轮改收全量，全量比增量大时放大自我维持（0 轮提交）；之后只作废没交付到的
+// subject、下一轮从被拒的会话开始轮转，这里测的是修后剩下的放大与提交率。真实嵌入 TCP + 正式装配的 Manager：
 // DRILL_PLAYERS 个玩家一直读，每个 tick（DRILL_HZ）全部玩家改一次金币；增量只带 "gold=N"，全量另带 DRILL_FULL_PAD 字节
 // （代表全量远大于增量的业务）；DRILL_BUDGET 是 player_access.tcp.outbound.resident_bytes（0 = 缺省 256 MiB），
 // DRILL_MAX_PAYLOAD 是 max_payload_bytes（0 = 缺省；预算压到一个最大帧以下时要一起压小）。
