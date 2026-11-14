@@ -12,6 +12,7 @@ import (
 	playerctl "{{MODULE}}/game/controllers/player"
 	playerentity "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
+	worldentity "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/handler"
 	gamelogin "{{MODULE}}/game/login"
 	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
@@ -60,21 +61,83 @@ func (scenarioStore) LoadEntity(context.Context, int64, entity.EntityKind) (enti
 	return nil, engine.ErrEntityAggregateNotFound
 }
 
-// scenarioCommitter 记下 Nest 交来的每一笔提交；reject 打开时拒绝提交（事务回滚），用来造“建到一半”的玩家。
-type scenarioCommitter struct {
-	mu      sync.Mutex
-	records int
-	reject  bool
+// scenarioGetter 是 Nest 取实体的入口：玩家从 Player 的 lifecycle（access）取，另外接上的实体（World）从 extra 取。
+type scenarioGetter struct {
+	access *entity.ManagerAccess
+	mu     sync.Mutex
+	extra  map[int64]entity.IThreadSafeEntity
 }
 
-func (committer *scenarioCommitter) Commit(context.Context, coredata.CommitRecord) error {
+func (getter *scenarioGetter) add(value entity.IThreadSafeEntity) {
+	getter.mu.Lock()
+	defer getter.mu.Unlock()
+	if getter.extra == nil {
+		getter.extra = map[int64]entity.IThreadSafeEntity{}
+	}
+	getter.extra[value.ID()] = value
+}
+
+func (getter *scenarioGetter) Get(ctx context.Context, id int64, category entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	getter.mu.Lock()
+	value, ok := getter.extra[id]
+	getter.mu.Unlock()
+	if ok {
+		return value, nil
+	}
+	return getter.access.Get(ctx, id, category)
+}
+
+func (getter *scenarioGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := getter.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+// scenarioCommitter 记下 Nest 交来的每一笔提交；reject 打开时拒绝提交（事务回滚），用来造“建到一半”的玩家。
+// worldHeld 非 nil 时，World 登录计数（handlerRecordEnter）的提交停在这里，直到它被关闭：模拟 World 锁内
+// 一次迟迟不回的 fsync。这类提交另计在 worldCounts，不进 records。
+type scenarioCommitter struct {
+	mu          sync.Mutex
+	records     int
+	reject      bool
+	worldHeld   chan struct{}
+	worldCounts int
+}
+
+func (committer *scenarioCommitter) Commit(_ context.Context, record coredata.CommitRecord) error {
 	committer.mu.Lock()
+	if record.Handler == worldCountHandler {
+		held := committer.worldHeld
+		committer.mu.Unlock()
+		if held != nil {
+			<-held
+		}
+		committer.mu.Lock()
+		committer.worldCounts++
+		committer.mu.Unlock()
+		return nil
+	}
 	defer committer.mu.Unlock()
 	if committer.reject {
 		return errors.New("scenario: the store refused the commit")
 	}
 	committer.records++
 	return nil
+}
+
+// worldCountHandler 是 World 登录计数的 handler 名（game/handler/record_enter.go）。
+const worldCountHandler = "handlerRecordEnter"
+
+func (committer *scenarioCommitter) worldCounted() int {
+	committer.mu.Lock()
+	defer committer.mu.Unlock()
+	return committer.worldCounts
 }
 
 func (committer *scenarioCommitter) refuse(reject bool) {
@@ -160,6 +223,7 @@ type loginScenario struct {
 	owners     *scenarioOwners
 	transport  *scenarioTransport
 	committer  *scenarioCommitter
+	entities   *scenarioGetter
 	notifier   *gamelogin.Notifier
 	nextID     int64
 	seq        uint32
@@ -215,10 +279,12 @@ func newLoginScenario(t *testing.T) *loginScenario {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.entities = &scenarioGetter{access: access}
+	// 4 个 worker：世界计数的场景里，一笔停在提交上的 World 计数占着一个 worker，登录的其余 Nest 调用要用别的。
 	nestEngine := nest.NewEngine(
-		nest.NestOptionWithGetter(access),
+		nest.NestOptionWithGetter(s.entities),
 		nest.NestOptionWithTransactionCommitter(s.committer),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
 	)
 	if err := nestEngine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)
@@ -615,4 +681,77 @@ func TestANewPlayerStartsAtTheSpawnThroughTheFirstEnterHookOnce(t *testing.T) {
 }
 
 // v1.47.0：登录对进入的检查不再随 game/login 的 init 打开（见 RegisterEnterChecks），本测试包照旧要它们。
+// World 只有一个，每名玩家的登录都要在它上面记一次数；这笔计数是 strict，World 锁内等 fsync，同一实体的消息
+// 一条接一条，所以 World 每次 fsync 只记一人。登录不能等它：千人登录潮里后来的玩家曾在 World 队列里等光 3 秒的
+// 请求预算，之后的进场景、进入钩子全部超时（M-15）。这里让 World 计数的提交停住（像一次迟迟不回的 fsync）：
+// EnterGame 照常答复；放行之后，这次登录仍在 World 上记了数。
+func TestEnterGameDoesNotWaitForTheWorldsLoginCount(t *testing.T) {
+	s := newLoginScenario(t)
+	worldentity.RegisterEntity()
+	handler.RegisterRecordEnterNestHandlers()
+	worldID, err := entity.BuildEntityID(1, worldentity.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: worldentity.EntityKindWorld, Id: worldID})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	counters := built.(*worldentity.World)
+	s.entities.add(counters)
+	s.controller.UseWorldForTest(counters.ID())
+	held := make(chan struct{})
+	s.committer.mu.Lock()
+	s.committer.worldHeld = held
+	s.committer.mu.Unlock()
+	release := sync.OnceFunc(func() { close(held) })
+	t.Cleanup(release)
+
+	ctx := context.Background()
+	account, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "burst-1", Credential: "demo:burst-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := s.accounts.CreateRole(ctx, account.ID, scenarioSID, "burst_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := s.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
+
+	type answer struct {
+		response *pb.EnterGameResponse
+		err      error
+	}
+	answered := make(chan answer, 1)
+	request := s.context(session, msgid.MsgEnterGame)
+	go func() {
+		response, err := s.controller.EnterGame(request, &pb.EnterGameRequest{ClientVersion: "scenario"})
+		answered <- answer{response, err}
+	}()
+	select {
+	case got := <-answered:
+		if got.err != nil || got.response.Code != 0 || got.response.PlayerID != role.PlayerID {
+			t.Fatalf("EnterGame = %+v, %v; want the player entered", got.response, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("EnterGame did not answer while the World's login count was waiting on its commit: " +
+			"the login waits for the one World, which counts one login per fsync")
+	}
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.committer.worldCounted() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the login was never counted on the World after its commit was released")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := counters.Dao().GetPlayersEntered(); got != 1 {
+		t.Fatalf("the World counted %d logins, want 1", got)
+	}
+}
+
 func init() { gamelogin.RegisterEnterChecks() }

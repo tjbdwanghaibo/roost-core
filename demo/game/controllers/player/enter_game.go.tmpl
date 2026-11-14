@@ -10,6 +10,7 @@ import (
 
 	gamelogin "{{MODULE}}/game/login"
 	player "{{MODULE}}/game/entities/player"
+	handlersender "{{MODULE}}/game/handler/sender"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	gamerehome "{{MODULE}}/game/rehome"
@@ -156,7 +157,12 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	if entered.First {
 		slog.InfoContext(context.Context(), "enter: first entry confirmed", "player_id", context.PlayerID)
 	}
-	if err := syncsender.NewRecordEnterSender(controller.NestClient()).Sync_RecordEnter(context.Context(), controller.WorldID()); err != nil {
+	// 世界计数只投递、不等：World 只有一个，计数是 strict（World 锁内等 fsync），同一实体的消息一条接一条，
+	// World 每次 fsync 只记一人（本机约 110 人/秒）。登录若等它，千人登录潮里后来的玩家在 World 队列里等光请求
+	// 预算（3 秒），之后的进场景、进入钩子全部超时（M-15，docs/performance/benchmarks/login-burst-20261115）。
+	// 登录本来就不看计数的结果；投递之后计数在 World 上排队补记（异步消息不带请求的期限），只有投递被拒
+	// （Nest 停机、队列满）时少记这一次并记日志。
+	if err := handlersender.NewRecordEnterSender(controller.NestClient()).Send_RecordEnter(context.Context(), controller.WorldID()); err != nil {
 		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
 	}
 	// On the map. The position is the player's own state, so it is written in

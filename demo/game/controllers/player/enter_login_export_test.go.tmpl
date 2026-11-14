@@ -22,3 +22,6 @@ func NewLoginControllerForTest(registry *app.Registry, nestClient corenest.Clien
 	controller.owners.Store(&owners)
 	return controller
 }
+
+// UseWorldForTest 让登录端点的世界计数投给 worldID（场景里另建的 World）；不调时为 0，计数投递被拒、只记日志。
+func (controller *Controller) UseWorldForTest(worldID int64) { controller.worldID = worldID }

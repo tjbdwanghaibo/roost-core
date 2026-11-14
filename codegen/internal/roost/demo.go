@@ -546,7 +546,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/add_exp.go", why: "the transaction that starts the event chain: two entity parameters (Player, World) in one transaction; the Sender becomes MultiSync_AddExp"},
 		{add: &AddOptions{Kind: "handler", Name: "RecordEnter", Entity: "World", Component: "Stats"}, why: "World counts a login"},
 		{write: "game/handler/record_enter.go", why: "a separate Nest call after the Player one"},
-		{write: "game/handler/record_enter_test.go", why: "every login passes through the one World: a login count is written to the WAL and answers without waiting for an fsync on the World"},
 		{add: &AddOptions{Kind: "handler", Name: "RecordMatch", Entity: "World", Component: "Stats"}, why: "World counts a formed match"},
 		{write: "game/handler/record_match.go", why: "called by the matchmaker after the remote Commit"},
 		{add: &AddOptions{Kind: "handler", Name: "WorldStats", Entity: "World", Component: "Stats"}, why: "a read under the lock"},

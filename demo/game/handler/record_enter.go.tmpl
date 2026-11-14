@@ -2,20 +2,16 @@ package handler
 
 import world "{{MODULE}}/game/entities/world"
 
-// handlerRecordEnter is called by the EnterGame endpoint after the Player is
+// handlerRecordEnter is sent by the EnterGame endpoint after the Player is
 // loaded: the World counts the login. Player and World are different Entities
 // with different lock categories, so this is a second, separate Nest call —
 // never a World mutation from inside the Player's handler.
 //
-// World 只有一个，每次登录都经过它：它是登录路径上的单点，所以这笔计数用 durability=async——WAL 写入即回复，
-// 不在 World 锁内等 fsync。用 strict 时 fsync 在锁内，Nest 又让同一实体的下一条消息等上一条（含回复）做完，
-// World 只能“每次 fsync 记一人”（macOS 本机约 110 人/秒）；千人登录潮里后来的玩家在 World 队列里等光 3 秒的
-// 请求预算，之后的进场景、进入钩子全部超时（M-15，docs/performance/benchmarks/login-burst-20261115）。
-// pipelined 也不行：它只在锁外等盘，同一实体的后继照样等它的回复（异步完成只开给 saga 原生步骤）。
-// async 的代价：机器掉电（不是进程崩溃）时可能少记最后几次登录；这是统计数，可以接受。要求“答成功即已落盘”的
-// World 写（发奖、结算）照旧 strict。回归见 record_enter_test.go。
+// World 只有一个，每次登录都经过它，而 strict 的计数在 World 锁内等 WAL fsync、Nest 又让同一实体的下一条消息
+// 等上一条做完，所以 World 每次 fsync 只记一人（macOS 本机约 110 人/秒）。登录因此只投递、不等这笔计数
+// （EnterGame 用 Send_RecordEnter）：登录潮里计数在 World 上排队补记，不占登录的请求预算。
 //
-//roost:nest rollback=undo durability=async
+//roost:nest rollback=undo durability=strict
 func handlerRecordEnter(target world.IStatsEntity) error {
 	target.StatsComp().RecordEnter()
 	return nil
