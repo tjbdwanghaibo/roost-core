@@ -1,0 +1,455 @@
+{
+  "status": "handoff_incomplete_final_go_package",
+  "date": "2026-11-14",
+  "code_baseline": "f62ceec7e2036c3971299177bafa10cca64d894f",
+  "execution_head": "48ed0113ac17897b8bb1eebd8821c75b10813f3d",
+  "platform": "macOS arm64; go1.27.3",
+  "environment": {
+    "GOMAXPROCS": "0",
+    "GOWORK": "off",
+    "GOFLAGS": "-p=2"
+  },
+  "scope": "functional parallel window; not performance/capacity/long-duration certification",
+  "go_initial": {
+    "passed_packages": 165,
+    "no_test_packages": 25,
+    "failed_packages": [
+      [
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "600.678s"
+      ]
+    ],
+    "initial_exit": 1,
+    "failure": "default 10m package timeout; active equipment test19s; failed generator package retried separately"
+  },
+  "go_initial_active_test": "TestModuleEquipmentInstallsIndependentlyAndAddsAttributeLater (19s)",
+  "go_retry": {
+    "status": "failed",
+    "exit_code": 1,
+    "package": "./codegen/internal/roost",
+    "flags": "-count=1 -timeout 30m",
+    "timeout_minutes": 30,
+    "assertion_failures": [
+      "TestGeneratedShutdownTimeoutFollowsEachServicesMods",
+      "TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal",
+      "TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure",
+      "TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn",
+      "TestDoctorCountsTheConfiguredPlayerTCPStopBudget",
+      "TestGeneratedShutdownCountsThePlayerTCPStopBudget"
+    ],
+    "log": "/private/tmp/v147-final-roost-retry-20261114.log",
+    "budget_note": "outdated maintenance estimate led to30m; current pretag budget already60m; failure was assertions plus timeout"
+  },
+  "generate": {
+    "command": "GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0 go generate ./...",
+    "cwd": "/Users/whb/roost/worktrees/v147",
+    "exit": 0,
+    "head_before": "fef75aee6d61a8986444de3980cc7db0c24a3765",
+    "head_after": "fef75aee6d61a8986444de3980cc7db0c24a3765",
+    "git_diff_exit_code": 0,
+    "git_status_porcelain": "",
+    "log": "/private/tmp/v147-final-go-generate-20261114.log",
+    "sha256": "8d02f66a09cbc0199dc89df1b38a81581fc0067be23495c091238c0974579e30",
+    "verified_utc": "2026-11-14T04:51:21Z",
+    "status": "passed",
+    "metadata": "/private/tmp/v147-final-go-generate-20261114.json"
+  },
+  "modules": {
+    "exit_code": 0,
+    "consumers": 5,
+    "modules": 42,
+    "glue": 47,
+    "verify_reports": [
+      {
+        "file": "verify-1-atelier.json",
+        "entries": 2,
+        "passed": 25,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-2-bazaar.json",
+        "entries": 1,
+        "passed": 17,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-3-bazaar.json",
+        "entries": 2,
+        "passed": 25,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-4-bazaar.json",
+        "entries": 3,
+        "passed": 35,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-5-bazaar.json",
+        "entries": 5,
+        "passed": 66,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-6-bazaar.json",
+        "entries": 14,
+        "passed": 191,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-7-bazaar.json",
+        "entries": 15,
+        "passed": 213,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-8-bazaar.json",
+        "entries": 16,
+        "passed": 238,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-9-harbor.json",
+        "entries": 38,
+        "passed": 477,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-10-foundry.json",
+        "entries": 89,
+        "passed": 1027,
+        "skipped": 0,
+        "checks_passed": 4
+      },
+      {
+        "file": "verify-11-citadel.json",
+        "entries": 89,
+        "passed": 1027,
+        "skipped": 0,
+        "checks_passed": 4
+      }
+    ],
+    "repeated_stage_passes_not_unique": 3341,
+    "forward_reverse_equal": true,
+    "full_consumers_clean": {
+      "foundry": true,
+      "citadel": true
+    }
+  },
+  "genres": {
+    "initial_exit": 1,
+    "initial_reason": "Go module-cache writes denied by sandbox before gameplay tests; original evidence retained",
+    "default_scripts_passed": 13,
+    "default_top_pass": 182,
+    "custom_module_pass": 182,
+    "real_scripts_passed": 13,
+    "real_additional_stage_pass": 26,
+    "real_distinct_top_names_per_genre": 22,
+    "real_script_top_pass": 208,
+    "rows": [
+      {
+        "genre": "slg",
+        "default_top_pass": 9,
+        "custom_module_pass": 9,
+        "real_additional_stage_pass": 4,
+        "real_script_top_pass": 13,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "moba",
+        "default_top_pass": 28,
+        "custom_module_pass": 28,
+        "real_additional_stage_pass": 6,
+        "real_script_top_pass": 34,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "kcp_lockstep_robot_match_settlement_result; fixture auth"
+      },
+      {
+        "genre": "mmorpg",
+        "default_top_pass": 14,
+        "custom_module_pass": 14,
+        "real_additional_stage_pass": 3,
+        "real_script_top_pass": 17,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "card-rpg",
+        "default_top_pass": 17,
+        "custom_module_pass": 17,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 18,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "tower-defense",
+        "default_top_pass": 11,
+        "custom_module_pass": 11,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 12,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "survival-extraction",
+        "default_top_pass": 13,
+        "custom_module_pass": 13,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 14,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "merge-casual",
+        "default_top_pass": 16,
+        "custom_module_pass": 16,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 17,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "idle-sim",
+        "default_top_pass": 13,
+        "custom_module_pass": 13,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 14,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "auto-chess",
+        "default_top_pass": 13,
+        "custom_module_pass": 13,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 14,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "party-room",
+        "default_top_pass": 19,
+        "custom_module_pass": 19,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 20,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "turn-pvp",
+        "default_top_pass": 10,
+        "custom_module_pass": 10,
+        "real_additional_stage_pass": 4,
+        "real_script_top_pass": 14,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      },
+      {
+        "genre": "coop-roguelike",
+        "default_top_pass": 10,
+        "custom_module_pass": 10,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 11,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "tcp_pb_robot_complete_coop_rewards_client_views; substitute persistence"
+      },
+      {
+        "genre": "social-sim",
+        "default_top_pass": 9,
+        "custom_module_pass": 9,
+        "real_additional_stage_pass": 1,
+        "real_script_top_pass": 10,
+        "real_exit": 0,
+        "real_skips": 0,
+        "network_scope": "embedded_tcp_pb_retry_reconnect; substitute persistence"
+      }
+    ]
+  },
+  "real_group": {
+    "exit_code": 0,
+    "demo_pass": 14,
+    "remote_pass": 18,
+    "remote_skips": [
+      "TestGeneratedRemoteMirrorLocal",
+      "TestGeneratedRemoteMirrorLocalProcess",
+      "TestGeneratedRemoteMirrorReaderProcess"
+    ],
+    "alliance_pass": 11,
+    "seamless_default_steps": 15,
+    "ordinary_scene_robot_success": 2,
+    "ordinary_scene_robot_total": 2,
+    "seamless_terrain_steps": 7
+  },
+  "retention": {
+    "modules": "five consumers and all logs/JSON retained",
+    "genres_default": "initial failure and retry1 retained",
+    "genres_real_24000": "mirror down; directory retained; standard fixtures cleaned their own test DB/streams/keys",
+    "real_group_18500": "mirror clean removed own new private dependency root; dependency/service logs copied out; standard scripts removed temporary consumers; DB files cannot be queried again",
+    "shared_data_or_caches_deleted": false
+  },
+  "source_json": {
+    "modules": {
+      "path": "/private/tmp/v147-final-modules-20261114/summary.json",
+      "sha256": "3e280d0363995b953f4f4584d749631654dfc4f975c16f120d4c3d5d15af9dfa"
+    },
+    "genres_default": {
+      "path": "/private/tmp/v147-final-genres-20261114-retry1/report.json",
+      "sha256": "8fdc2df48fb0766e4f4a9ec97faa943041d744987c69f459b0bc514d6a5631c5"
+    },
+    "genres_initial_failure": {
+      "path": "/private/tmp/v147-final-genres-20261114/report.json",
+      "sha256": "a6babb27261778acff84f91110c30bb8a3e2d0e835b5e0e8ea407a546898ee4f"
+    },
+    "genres_real": {
+      "path": "/private/tmp/v147-final-genres-real-20261114/report.json",
+      "sha256": "41c26d035b3fbdd7f2f2de06acede69691c6f673958cde1ac685273fa85d836e"
+    },
+    "real_group": {
+      "path": "/private/tmp/v147-final-real-20261114/summary.json",
+      "sha256": "d01f73cf73c2dd05120054c5918515f0783deba976c59d0ed5a58ace111f8b2c"
+    },
+    "go_initial": {
+      "path": "/private/tmp/v147-final-go-summary.json",
+      "sha256": "029fa2044400705eecac67019cd52b4c1b83c8943a32db2cf995b6c430e67be1"
+    },
+    "go_generate": {
+      "path": "/private/tmp/v147-final-go-generate-20261114.json",
+      "sha256": "f0021e57c88710a1db447a4200240e8ffd4ee0b24c1b538844fbb6dab1e6e4c6"
+    },
+    "shutdown_fix": {
+      "path": "/Users/whb/roost/worktrees/v147-shutdown-assertions/docs/maintenance/evidence/shutdown-assertions-20261114/source-evidence.json",
+      "sha256": "566de123e46e9734d46f684b7de0b5a1f163fa766114df4fb42910ad77cd6d22"
+    },
+    "go_final_retry": {
+      "path": "/private/tmp/v147-final-roost-60m-20261114.json",
+      "sha256": "f06946bc43cff29955c2d70eccb37cc945241ee198382e670fb5142131faf497"
+    },
+    "go_handoff_stop": {
+      "path": "/private/tmp/v147-final-roost-handoff-stop-20261114.json",
+      "sha256": "7876af94559d181013528c3a26850741f2ea868dbbebd73e1a1d399d1fea2fcf"
+    }
+  },
+  "execution_head_scope": "modules/genres/real group before later test-only fixes",
+  "shutdown_fix": {
+    "commit": "21c7183f865deb04ab2c88c3ab7c18a2b20b6223",
+    "integration_head": "aff286349fb1bca215e8aa761665826d03628389",
+    "root_cause": "P9 Room persistent timer adds one actual Mod; tests retained old fixed counts",
+    "runtime_changed": false,
+    "additional_targeted_stale_assertion": "TestOneSyncConvergesAfterAServiceLosesAMod",
+    "targeted": {
+      "top_level_selected": 31,
+      "top_level_pass": 31,
+      "fail": 0,
+      "skip": 0,
+      "package_seconds": 103.834
+    },
+    "mutation": {
+      "description": "serviceShutdownPlan: if service == game, plan.mods-- after constructor count",
+      "exit_code": 1,
+      "package_seconds": 35.587,
+      "failure": "game generated total_timeout / grace / deployment values differ from independently pinned 126s / 131s",
+      "restored_production_file_sha256": "32f1e46160fac5e6ca109a06c222aecdd1365c45a55fac9e53e76cb5cb060d52"
+    },
+    "restored": {
+      "exit_code": 0,
+      "package_seconds": 34.904,
+      "top_level_pass": 1,
+      "fail": 0,
+      "skip": 0,
+      "production_diff_empty": true
+    },
+    "report": "../shutdown-assertions-20261114/README.md"
+  },
+  "go_final_retry": {
+    "head": "aff286349fb1bca215e8aa761665826d03628389",
+    "cwd": "/Users/whb/roost/worktrees/v147",
+    "command": [
+      "go",
+      "test",
+      "-count=1",
+      "-timeout",
+      "60m",
+      "-v",
+      "./codegen/internal/roost"
+    ],
+    "environment": {
+      "GOWORK": "off",
+      "GOFLAGS": "-p=2",
+      "GOMAXPROCS": "0"
+    },
+    "started_utc": "2026-11-14T05:00:00.070340+00:00",
+    "status": "failed",
+    "log": "/private/tmp/v147-final-roost-60m-20261114.log",
+    "exit": -15,
+    "seconds": 766.372053042,
+    "ended_utc": "2026-11-14T05:12:46.445844+00:00",
+    "result": "USER_HANDOFF_INTERRUPTED",
+    "complete": false,
+    "implementation_failure": false,
+    "wrapper_status_preserved": "failed",
+    "shell_exit": 241,
+    "metadata": "/private/tmp/v147-final-roost-60m-20261114.json",
+    "stop_metadata": "/private/tmp/v147-final-roost-handoff-stop-20261114.json",
+    "stop_reason": "User requested handoff to another agent; stop owned functional test to avoid overlapping work",
+    "stopped_at_utc": "2026-11-14T05:12:46.443237+00:00",
+    "test_progress": {
+      "top_level_passes": 123,
+      "observed_failures": [],
+      "tail": [
+        "    module_matchmaking_test.go:21: rehome: pass=44 skip=0 ok=true",
+        "    module_matchmaking_test.go:21: room: pass=22 skip=0 ok=true",
+        "    module_matchmaking_test.go:21: team: pass=35 skip=0 ok=true",
+        "    module_matchmaking_test.go:21: team+rehome: pass=2 skip=0 ok=true",
+        "--- PASS: TestModuleMatchmakingGenerated (59.97s)",
+        "=== RUN   TestModuleMatchroomGenerated"
+      ]
+    },
+    "process_group": 19153,
+    "process_group_after": [],
+    "signal": "SIGTERM",
+    "signaled_pids": [
+      29719,
+      29690,
+      29658,
+      19166,
+      19157
+    ]
+  },
+  "source_log": {
+    "go_retry_30m": {
+      "path": "/private/tmp/v147-final-roost-retry-20261114.log",
+      "sha256": "8dc9cde08d18a2b74ac14b884a93dff225d236160855154d759647055b2dbdec"
+    },
+    "go_final_retry": {
+      "path": "/private/tmp/v147-final-roost-60m-20261114.log",
+      "sha256": "268e468c2dd22faa72991a034486f7a9002e36f36e38e76b820cca543d82acbb"
+    }
+  },
+  "formal_performance": {
+    "status": "not_started",
+    "reason": "user requested handoff; formal performance start canceled for this round"
+  }
+}
