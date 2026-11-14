@@ -588,6 +588,16 @@ func TestNodeSubscribesPerSourceCellAndUnsubscribesAll(t *testing.T) {
 		now := runtime.NumGoroutine()
 		return now <= before, fmt.Sprintf("goroutines %d, before start %d", now, before)
 	})
+	// 不经 CloseIngress、直接结束 Run（ctx 取消）也退掉全部订阅。
+	_, stopRun := startWitnessBase(t, grid, lb, &witnessNest{})
+	if got := lb.subscriptions(); got != len(want) {
+		stopRun()
+		t.Fatalf("%d subscriptions on the second run, want %d", got, len(want))
+	}
+	stopRun()
+	if left := lb.subscriptions(); left != 0 {
+		t.Fatalf("%d subscriptions left after Run returned", left)
+	}
 
 	for failAt := 1; failAt <= len(want); failAt++ {
 		ft := &failingSubscribe{loopback: newLoopback(), failAt: failAt}
