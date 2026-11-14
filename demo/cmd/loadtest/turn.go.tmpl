@@ -1,0 +1,230 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+// registerTurn 走模块的正式单排匹配开房；module-duel 池与 demo 的 lockstep duel/ranked 分开。
+// 两个机器人各控制自己的真实连接，按服务端 ActorID 行动；房间 ID 和代际只取服务端响应。
+func registerTurn(actions *action.Registry, protocols *protocol.Registry) {
+	turnProtocol(protocols, msgid.MsgMatchEnqueue, pb.MarshalMatchEnqueueRequest, pb.UnmarshalMatchmakingResponse)
+	turnProtocol(protocols, msgid.MsgMatchStatus, pb.MarshalMatchStatusRequest, pb.UnmarshalMatchmakingResponse)
+	turnProtocol(protocols, msgid.MsgRoomJoin, pb.MarshalRoomJoinRequest, pb.UnmarshalRoomJoinResponse)
+	turnProtocol(protocols, msgid.MsgRoomView, pb.MarshalRoomViewRequest, pb.UnmarshalRoomViewResponse)
+	turnProtocol(protocols, msgid.MsgRoomReconnect, pb.MarshalRoomReconnectRequest, pb.UnmarshalRoomReconnectResponse)
+	turnProtocol(protocols, msgid.MsgTurnStart, pb.MarshalTurnStartRequest, pb.UnmarshalTurnStartResponse)
+	turnProtocol(protocols, msgid.MsgTurnEnd, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+	turnProtocol(protocols, msgid.MsgTurnView, pb.MarshalTurnViewRequest, pb.UnmarshalTurnViewResponse)
+	actions.MustRegister(action.Func{ActionName: "turn_match", Handle: turnMatch})
+	actions.MustRegister(action.Func{ActionName: "turn_play", Handle: turnPlay})
+	actions.MustRegister(action.Func{ActionName: "turn_reconnect", Handle: turnReconnect})
+}
+
+func turnProtocol[Q, R any](protocols *protocol.Registry, id uint32, marshal func(*Q) ([]byte, error), unmarshal func([]byte) (*R, error)) {
+	protocols.MustRegisterEncoder(id, func(value any) ([]byte, error) {
+		request, ok := value.(*Q)
+		if !ok {
+			return nil, fmt.Errorf("turn request %d: unexpected %T", id, value)
+		}
+		return marshal(request)
+	})
+	protocols.MustRegisterDecoder(id, protocol.DecodeTyped(id, unmarshal))
+}
+
+func turnCall[R any](ctx context.Context, rb *robot.Context, id uint32, request any) (*R, error) {
+	message, err := rb.Session().Call(ctx, id, id, request)
+	if err != nil {
+		return nil, err
+	}
+	response, ok := message.Value.(*R)
+	if !ok {
+		return nil, fmt.Errorf("turn response %d: unexpected %T", id, message.Value)
+	}
+	return response, nil
+}
+
+func turnWait(ctx context.Context) error {
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func turnMatch(ctx context.Context, rb *robot.Context, _ any) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	enqueued, err := turnCall[pb.MatchmakingResponse](ctx, rb, msgid.MsgMatchEnqueue, &pb.MatchEnqueueRequest{Sequence: 1})
+	if err != nil {
+		return err
+	}
+	if err := coded(enqueued.Code, enqueued.Reason); err != nil {
+		return err
+	}
+	for {
+		status, err := turnCall[pb.MatchmakingResponse](ctx, rb, msgid.MsgMatchStatus, &pb.MatchStatusRequest{})
+		if err != nil {
+			return err
+		}
+		if err := coded(status.Code, status.Reason); err != nil {
+			return err
+		}
+		if status.Phase == "matched" {
+			if status.RoomID <= 0 || len(status.Members) != 1 {
+				return fmt.Errorf("turn match: invalid single-party receipt %+v", status)
+			}
+			joined, err := turnCall[pb.RoomJoinResponse](ctx, rb, msgid.MsgRoomJoin, &pb.RoomJoinRequest{RoomID: status.RoomID})
+			if err != nil {
+				return err
+			}
+			if err := coded(joined.Code, joined.Reason); err != nil {
+				return err
+			}
+			// 成局名单由 matchroom 固定；Room 席位在各自 Join 时登记，首位进入时同伴可能还在网络上。
+			if joined.Info == nil || joined.Info.Epoch == 0 || joined.Info.Capacity != 2 || len(joined.Info.Seats) == 0 {
+				return fmt.Errorf("turn join: missing room or own seat %+v", joined)
+			}
+			rb.Blackboard.Set("turn_room", joined.Info)
+			return nil
+		}
+		if err := turnWait(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func turnRoom(rb *robot.Context) (*pb.RoomInfo, error) {
+	raw, _ := rb.Blackboard.Get("turn_room")
+	info, ok := raw.(*pb.RoomInfo)
+	if !ok || info == nil {
+		return nil, fmt.Errorf("turn: match and join a room first")
+	}
+	return info, nil
+}
+
+// turnPlay 只在自己的回合发送 End；每条 End 立即以同序号重试，并核对服务器保留的最后回执。
+func turnPlay(ctx context.Context, rb *robot.Context, _ any) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	info, err := turnRoom(rb)
+	if err != nil {
+		return err
+	}
+	if info.HostID == rb.PlayerID {
+		for {
+			view, err := turnCall[pb.RoomViewResponse](ctx, rb, msgid.MsgRoomView, &pb.RoomViewRequest{RoomID: info.RoomID})
+			if err != nil {
+				return err
+			}
+			if err := coded(view.Code, view.Reason); err != nil {
+				return err
+			}
+			if view.Info != nil && len(view.Info.Seats) == 2 && view.Info.Seats[0].Connected && view.Info.Seats[1].Connected {
+				break
+			}
+			if err := turnWait(ctx); err != nil {
+				return err
+			}
+		}
+		started, err := turnCall[pb.TurnStartResponse](ctx, rb, msgid.MsgTurnStart, &pb.TurnStartRequest{RoomID: info.RoomID, Epoch: info.Epoch, TurnMillis: 10000, MaxTurns: 4})
+		if err != nil {
+			return err
+		}
+		if err := coded(started.Code, started.Reason); err != nil {
+			return err
+		}
+	}
+	for {
+		view, err := turnCall[pb.TurnViewResponse](ctx, rb, msgid.MsgTurnView, &pb.TurnViewRequest{RoomID: info.RoomID, Epoch: info.Epoch})
+		if err != nil {
+			return err
+		}
+		if err := coded(view.Code, view.Reason); err != nil {
+			return err
+		}
+		if view.Info == nil {
+			return fmt.Errorf("turn view missing")
+		}
+		if view.Info.Status == 2 {
+			if view.Info.Round != 4 || view.Info.Timeouts != 0 || view.Info.Sequence != 2 || view.Info.Deadline != 0 {
+				return fmt.Errorf("turn terminal mismatch: %+v", view.Info)
+			}
+			return nil
+		}
+		if view.Info.Status == 1 && view.Info.ActorID == rb.PlayerID {
+			request := &pb.TurnEndRequest{RoomID: info.RoomID, Epoch: info.Epoch, Round: view.Info.Round, Sequence: view.Info.Sequence + 1}
+			for range 2 {
+				ended, err := turnCall[pb.TurnEndResponse](ctx, rb, msgid.MsgTurnEnd, request)
+				if err != nil {
+					return err
+				}
+				if err := coded(ended.Code, ended.Reason); err != nil {
+					return err
+				}
+				if ended.Info == nil || ended.Info.Sequence != request.Sequence || ended.Info.Timeouts != 0 {
+					return fmt.Errorf("turn replay mismatch: %+v", ended.Info)
+				}
+			}
+			rb.Blackboard.Set("turn_last", request)
+		}
+		if err := turnWait(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+// turnReconnect 在场景重新登录后执行：旧代际不能借新物理连接读取，CAS 重连后恢复终态并重试最后行动。
+func turnReconnect(ctx context.Context, rb *robot.Context, _ any) error {
+	info, err := turnRoom(rb)
+	if err != nil {
+		return err
+	}
+	stale, err := turnCall[pb.TurnViewResponse](ctx, rb, msgid.MsgTurnView, &pb.TurnViewRequest{RoomID: info.RoomID, Epoch: info.Epoch})
+	if err != nil {
+		return err
+	}
+	if stale.Code != apperrors.ErrRoomStaleEpoch.Code() {
+		return fmt.Errorf("turn reconnect: old connection authority accepted: %+v", stale)
+	}
+	reconnected, err := turnCall[pb.RoomReconnectResponse](ctx, rb, msgid.MsgRoomReconnect, &pb.RoomReconnectRequest{RoomID: info.RoomID, Epoch: info.Epoch})
+	if err != nil {
+		return err
+	}
+	if err := coded(reconnected.Code, reconnected.Reason); err != nil {
+		return err
+	}
+	if reconnected.Info == nil || reconnected.Info.Epoch <= info.Epoch || len(reconnected.Info.Seats) != 2 {
+		return fmt.Errorf("turn reconnect missing epoch/roster: %+v", reconnected)
+	}
+	last, _ := rb.Blackboard.Get("turn_last")
+	request, ok := last.(*pb.TurnEndRequest)
+	if !ok || request == nil {
+		return fmt.Errorf("turn reconnect: no completed command")
+	}
+	replay := *request
+	replay.Epoch = reconnected.Info.Epoch
+	ended, err := turnCall[pb.TurnEndResponse](ctx, rb, msgid.MsgTurnEnd, &replay)
+	if err != nil {
+		return err
+	}
+	if err := coded(ended.Code, ended.Reason); err != nil {
+		return err
+	}
+	if ended.Info == nil || ended.Info.Status != 2 || ended.Info.Round != 4 || ended.Info.Sequence != 2 || ended.Info.Timeouts != 0 || ended.Info.Deadline != 0 {
+		return fmt.Errorf("turn reconnected replay changed terminal state: %+v", ended.Info)
+	}
+	rb.Blackboard.Set("turn_room", reconnected.Info)
+	return nil
+}

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+project=/private/tmp/v147-turn-generated/project
+out=/Users/whb/roost/worktrees/v147-turn/artifacts/turn-timer-mutation
+mkdir -p "$out"
+cd "$project"
+source_file=game/entities/game_room/timer_handlers.go
+cp "$source_file" "$out/timer-original.go.txt"
+export ROOST_TURN_PVP_REAL=1 GOWORK=off GOFLAGS=-p=2
+cleanup() {
+  cp "$out/timer-original.go.txt" "$source_file"
+  if [[ -n "${TURN_TIMER_DATABASE:-}" ]]; then mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval "db.getSiblingDB('$TURN_TIMER_DATABASE').dropDatabase(); db.getSiblingDB('${TURN_TIMER_DATABASE}_0').dropDatabase()" >/dev/null; fi
+}
+trap cleanup EXIT
+export TURN_TIMER_DATABASE="roost_turn_it_mutation_$$" TURN_TIMER_ROOT="$out/red-wal"
+mkdir -p "$TURN_TIMER_ROOT"
+TURN_TIMER_PHASE=seed go test -mod=mod -race -count=1 -v -run '^TestTurnPVPRealTimerRecovery$' ./game/handler >"$out/seed.log" 2>&1
+python3 - "$source_file" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);s=p.read_text();needle='func (component *TimerComponent) onTurnTimeout(fire entitytimer.Fire) time.Duration {'
+assert needle in s
+p.write_text(s.replace(needle,needle+'\nif fire.Now.UnixMilli() > 0 { return 0 } // mutation: discard recovered timer without advancing the turn\n',1))
+PY
+gofmt -w "$source_file"
+set +e
+TURN_TIMER_PHASE=recover go test -mod=mod -race -count=1 -v -run '^TestTurnPVPRealTimerRecovery$' ./game/handler >"$out/drop-timer-red.log" 2>&1
+result=$?
+set -e
+[[ "$result" != 0 ]] || { echo 'mutation unexpectedly passed'; exit 1; }
+grep 'recovered room timer did not fire' "$out/drop-timer-red.log"
+cp "$out/timer-original.go.txt" "$source_file"
+mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval "db.getSiblingDB('$TURN_TIMER_DATABASE').dropDatabase(); db.getSiblingDB('${TURN_TIMER_DATABASE}_0').dropDatabase()" >/dev/null
+export TURN_TIMER_DATABASE="roost_turn_it_restored_$$" TURN_TIMER_ROOT="$out/green-wal"
+mkdir -p "$TURN_TIMER_ROOT"
+for phase in seed recover; do
+  TURN_TIMER_PHASE="$phase" go test -mod=mod -race -count=1 -v -run '^TestTurnPVPRealTimerRecovery$' ./game/handler >"$out/restored-$phase.log" 2>&1
+  grep 'PASS real timer' "$out/restored-$phase.log"
+done

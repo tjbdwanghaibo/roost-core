@@ -1,0 +1,14 @@
+# 两个机器人经正式 matchmaking/matchroom 成局，各自在自己的真实连接上行动。
+# 用新的身份跑偶数个 pool 机器人；与 demo 原有 lockstep duel 队列独立。
+scenarios:
+  - name: turn
+    node:
+      sequence:
+        - action: connect
+        - action: enter_game
+        - action: turn_match
+        - action: turn_play
+        - action: disconnect
+        - action: connect
+        - action: enter_game
+        - action: turn_reconnect

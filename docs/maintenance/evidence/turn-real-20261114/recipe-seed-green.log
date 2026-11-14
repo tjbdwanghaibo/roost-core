@@ -1,0 +1,4 @@
+=== RUN   TestTurnRecipeRealLifecycle
+    recipe_test.go:94: PASS real turn seed: room=1 round=2 sequence=1; replay stayed round=2; deadline=1794624837895
+--- PASS: TestTurnRecipeRealLifecycle (0.63s)
+PASS

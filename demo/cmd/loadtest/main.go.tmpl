@@ -157,6 +157,7 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 	registerOfflineJoin(actions, protocols, ops)
 	registerCrossJoin(actions, protocols)
 	registerProfileRename(actions, protocols)
+	registerTurn(actions, protocols)
 	registerPushes(protocols)
 	if err := loadScenarios(scenarios, scenarioDir); err != nil {
 		return err

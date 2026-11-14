@@ -54,3 +54,7 @@
 2026-11-12 另用生成工程的 `make dev-run` 完成单机真实进程演练：Mongo 副本集、Redis、NATS JetStream、etcd，
 curl 登录三步 → TCP 握手 → 拒绝未新建进入与空名字 → 新建 → 首次进入 → 重连。复跑探针见 roost-core 的
 `docs/maintenance/evidence/recipes-login-20261112/`。未验证完整对局的真实存储、进程重启恢复、自身 Sync 解码或跨机故障。
+
+## 真实依赖验收
+
+roost-core 仓库的 `ROOST_TURN_PVP_REAL=1 bash scripts/test-turn-pvp-generated.sh` 在私有 Mongo / Redis / NATS / etcd 上生成本配方，经正式登录与匹配开房、独立 Gate / Game Ingress 跑四回合。第 2 回合确认后 SIGKILL，重启核对旧连接拒绝、Epoch 接管、超时只补一次、命令回执重放及终态关闭。两阶段 probe 各独立进程；不把另一套 GameRoom 伤害纵切当作本配方证据。单机功能范围，不含跨机房间接管或性能结论。

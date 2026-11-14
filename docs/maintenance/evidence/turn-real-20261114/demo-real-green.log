@@ -1,0 +1,10 @@
+[drill 10:59:21] generating game-demo dtr20e445 in /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-demo-turn.YQTfiP/dtr20e445
+[drill 11:00:23] building
+[drill 11:01:05] PASS make dev-smoke: demo, alliance_offline_join, turn; each 2/2 robots
+[drill 11:01:08] game-ingress ready (pid 98368, ops 127.0.0.1:44100)
+[drill 11:01:09] gate ready (pid 98384, ops 127.0.0.1:44300)
+[drill 11:01:09] robots gate-turn: -endpoint 127.0.0.1:42100 -scenario turn -count 2
+[drill 11:01:11] robots gate-turn passed: {"state":"finished","count":2,"stats":{"scheduled":2,"dropped_capacity":0,"dropped_schedule":0,"launch_failed":0,"peak_online":2,"started":2,"online":0,"success":2,"failure":0,"canceled":0,"failure_rate":0},"p95_ms":765.9985419999999}
+[drill 11:01:11] PASS demo Room/Turn: real matchmaking, TCP and Gate, full game, same-connection replay, reconnect epoch and final replay
+[drill 11:01:12] stopped game-ingress
+[drill 11:01:13] stopped gate

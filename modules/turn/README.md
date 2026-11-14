@@ -74,6 +74,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 
 - `roost module verify turn`：25 条场景（`^TestTurn`，包 `./game/handler` 22 条、`./game/controllers/turn` 3 条）。22 条 Nest 场景覆盖：开局与重试只有一个期限、只有房主能开、规则越界与换规则、至少两人、结束只推进一次并从当下续期、重复结束不多消耗回合、跳号与冲突重放、错误的行动者与回合、恰好到期拒绝命令、期限不提前不重复、迟到不追帧、旧期限不消费新回合、到上限结束且最后一条可重放、迟到加入者能看不能动、跳过离开的人、关房后在下一个期限结束、旧连接不能行动或重放、开局 / 结束 / 超时被拒提交时回滚、重载后保留序号且过期只触发一次、快照不暴露 DAO 数组。3 条 Controller 场景经实体运行时 → lifecycle → Nest Sender，覆盖认证身份与 PB 编解码。定时器用生成的 Tick handler，测试时钟可控，不依赖 sleep。
 - 这些场景用替身提交器，不等于真实 Mongo / WAL 落盘、TCP / Gate 联合验收或性能测试。配方 `turn-pvp` 另有双人 TCP → PB → Controller → Nest 的链路场景（在配方里，不在本模块的计数内）。
+- 真实联合档：`ROOST_TURN_PVP_REAL=1 bash scripts/test-turn-pvp-generated.sh` 另用正式配方跑真实 Gate / NATS / Mongo / WAL、SIGKILL 后到期一次及命令重试；game-demo 的 `turn` Robot 已接进 `make dev-smoke`（匹配开房、完整四回合、重连与最后回执）。这两档不计入上述 25 条；[证据与复跑](../../docs/maintenance/evidence/turn-real-20261114/README.md)。
 - 重跑入口：仓库里的 `scripts/test-modules-generated.sh`，或在装好模块的新工程里运行 `GOWORK=off roost module verify turn`。
 
 ## 定时器安装细节

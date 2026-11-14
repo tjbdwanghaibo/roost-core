@@ -103,6 +103,8 @@ MOBA 的完整链由 `TestMOBAKCPRobotMatchSettlementAndClientResult` 验证；�
 
 这两个样板证明既有玩法规则的整局和客户端结果闭环，**不证明账号服务、动态匹配、完整业务重登、EntitySync 或真实 WAL/Mongo 已串成生产链**。合作使用 PB 查询视图，不冒充 EntitySync 推送验收；MOBA 不通过 session.Call 传帧，不能把 TCP 请求报告当作其 KCP 流量统计。
 
+game-demo 的 `turn` 场景使用正式 account 登录与 matchmaking/matchroom 开房，两个机器人各控制一个真实连接，完成四回合、每步同序号重试、断线重登与 Room Epoch 接管、终态回执重放。`make dev-smoke` 将它放在 demo 与 alliance_offline_join 之后，各跑 2 人；`scripts/test-demo-turn.sh` 实跑这一目标并追加独立 Gate 的 turn。正式配方的 SIGKILL 恢复与 GameRoom 纵切的持久 timer 恢复分别见 [回合 PvP 真实档](SESSION-GENRES.md#回合-pvp-真实档)，不从这份 Robot 记录推出跨机接管或容量结论。
+
 ## 上线补齐顺序
 
 1. 13 类玩法的网络业务闭环已补齐；各玩法的独立真实账号重登、Sync 与持久存储组合仍要分别验收，不能从通用 game-demo 推导。

@@ -1,0 +1,9 @@
+go run ./cmd/loadtest -endpoint 127.0.0.1:42000 -count 2 -account-nats nats://127.0.0.1:51722 -nats-prefix dtr20e445 -game-ops 127.0.0.1:44100
+2026/11/14 11:00:57 INFO robot runner: start executor=pool count=2 rate=10 scenario=demo transport=player-tcp endpoint=127.0.0.1:42000
+2026/11/14 11:01:02 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+go run ./cmd/loadtest -endpoint 127.0.0.1:42000 -count 2 -scenario alliance_offline_join -account-nats nats://127.0.0.1:51722 -nats-prefix dtr20e445 -game-ops 127.0.0.1:44100
+2026/11/14 11:01:03 INFO robot runner: start executor=pool count=2 rate=10 scenario=alliance_offline_join transport=player-tcp endpoint=127.0.0.1:42000
+2026/11/14 11:01:04 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+go run ./cmd/loadtest -endpoint 127.0.0.1:42000 -count 2 -scenario turn -account-nats nats://127.0.0.1:51722 -nats-prefix dtr20e445 -game-ops 127.0.0.1:44100
+2026/11/14 11:01:04 INFO robot runner: start executor=pool count=2 rate=10 scenario=turn transport=player-tcp endpoint=127.0.0.1:42000
+2026/11/14 11:01:05 INFO robot runner: stop started=2 success=2 failure=0 canceled=0

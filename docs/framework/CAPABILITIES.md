@@ -235,7 +235,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`；七个 PB 请求、邀请推送与权威核对；安装时代办 Remote | 现成模块；邀请有界，解散后成员引用惰性核对。matchmaking 可组合，demo 通过登记点保留分区队伍视野；真实跨进程验收待补 | [team](../../modules/team/README.md) |
 | 本服匹配与房间移交 | 单人/整队，取消与补查，固定名单房间 | `roost module add matchmaking`，自动安装 matchroom / team / room | 默认两支同人数队伍；历史消失时保留屏障；跨服房间不在本轮 | [matchmaking](../../modules/matchmaking/README.md) |
 | 基础房间 room | 服务端开房；1～64 席、进出、房主交接、重连代际、关闭 | `roost module add room`；`game/room.Open` / `Disconnect` 与生成的 Nest Sender | 现成模块。自带持久实体；客户端读 PB 快照；不含自动断线订阅、广播、匹配移交或回合超时 | [room](../../modules/room/README.md) |
-| 顺序回合 turn | 固定名单、当前行动者、命令序号与重放、持久回合超时 | `roost module add turn`（自动装 room）；`TurnStart / TurnEnd / TurnView` | 现成模块。超时不追帧；无默认胜负/伤害、自动广播或跨机房间接管；25 条离线场景 | [turn](../../modules/turn/README.md) |
+| 顺序回合 turn | 固定名单、当前行动者、命令序号与重放、持久回合超时 | `roost module add turn`（自动装 room）；`TurnStart / TurnEnd / TurnView` | 现成模块。超时不追帧；无默认胜负/伤害、自动广播或跨机房间接管；25 条离线场景，另有真实 Gate / 存储重启验收与 demo Robot | [turn](../../modules/turn/README.md) |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功的登记点 `OnCheckinClaimed`（别的功能在同一笔事务里顺带做事） | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；钩子返回错误会让这一次签到整笔回滚；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 | 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；世界/私聊不经过 Nest，scene 附近联动在 Nest 中读取收件人快照后于锁外推送，不改聊天实体 | 同上 |
@@ -269,7 +269,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 放置模拟 | 多工坊生产队列、有界窗口的离线收益、唤醒定时器、订单与每日奖励回执 | [test-idle-sim-generated.sh](../../scripts/test-idle-sim-generated.sh) | 参考实现（demo） | [放置手册](IDLE-SIM-INTEGRATION.md) |
 | 合成休闲 | 服务器重放离线命令批次、惰性恢复体力、限时挑战、模拟的签名广告回调与到账账本 | [test-merge-casual-generated.sh](../../scripts/test-merge-casual-generated.sh) | 参考实现（demo）。广告平台是模拟的 | [合成手册](MERGE-CASUAL-INTEGRATION.md) |
 | 实时派对房间 | 2～8 人短局：成局、进房、心跳推进回合、组同步、重连、补位、结算归还 | [test-party-room-generated.sh](../../scripts/test-party-room-generated.sh) | 参考实现（demo）。框架没有的部分列在手册第 8 节 | [派对房间手册](PARTY-ROOM-INTEGRATION.md) |
-| 回合 PvP | 双人轮流行动、回合超时、终局拒绝、重连继续 | [test-turn-pvp-generated.sh](../../scripts/test-turn-pvp-generated.sh) | 参考实现（demo）。回合超时由房间的持久定时器（`roost add timer`）自动推进；持久恢复未在纵切里验证 | [三类离散玩法](SESSION-GENRES.md) |
+| 回合 PvP | 双人轮流行动、回合超时、终局拒绝、重连继续 | [test-turn-pvp-generated.sh](../../scripts/test-turn-pvp-generated.sh) | 参考实现（demo）。回合超时由房间的持久定时器（`roost add timer`）自动推进；`ROOST_TURN_PVP_REAL=1` 验跨进程持久节点恢复与回执；另验正式配方 Gate / SIGKILL | [三类离散玩法](SESSION-GENRES.md) |
 | 合作 Roguelike | 双人投票选路线、阶段屏障、固定种子、分别领奖 | [test-coop-roguelike-generated.sh](../../scripts/test-coop-roguelike-generated.sh) | 参考实现（demo）。离散房间流程，不含实时战斗 | [三类离散玩法](SESSION-GENRES.md) |
 | 异步社交经营 | 主人种植、受邀访客帮助一次、成熟收获、离线收获去重 | [test-social-sim-generated.sh](../../scripts/test-social-sim-generated.sh) | 参考实现（demo）。只演示本进程两实体事务 | [三类离散玩法](SESSION-GENRES.md) |
 

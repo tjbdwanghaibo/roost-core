@@ -42,7 +42,7 @@ ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/myfarm bash scripts/test-socia
 | `coop-roguelike` | 双人投票选路线，双方齐备推进；分歧由固定种子决策；三阶段后分别领奖 | 队伍阶段屏障、奖励只到账一次、Room 与 Player 一起回滚、重载不重抽；四个共同场景 |
 | `social-sim` | 主人种植，受邀访客帮助一次缩短 10 秒，成熟后主人收获；长时间离线只收本次种植，不凭空累积无限作物 | 访客权限、离线收获去重、帮助期限只缩短一次、收获双实体回滚；四个共同场景 |
 
-回合超时由房间的持久定时器自动推进（2026-11-14）：脚本对 GameRoom 跑 `roost add timer`，夹具的 `timer_handlers.go.txt` 覆盖生成的示例回调；开局在同一个事务里登记一个回合定时器（`handlerScenarioOpen`），到期由生成的 `game_room.TimerDriver` 投递 Tick，回调在房间的 Nest 锁与事务内按 `rules.State.Timeout` 消费当前回合（修订号加一，旧页面的命令按过期拒绝）；期限内有人行动时期限后移，定时器续到新期限而不提前消费；终局后定时器结束。`TestScenarioTurnTimesOutByTheRoomTimer` 用真实的驱动循环（不手动调 `DeliverDue`）拨业务钟验证。客户端上报的 `timeout` 命令仍保留（同一规则，到期前拒绝）。离线语义沿用框架：房间不在内存期间到期的，加载后只补触发一次、只消费一个回合。持久恢复（DAO 里的节点经真实 DataEngine 重启后补触发）没有在纵切里跑：纵切用替身提交器、没有进程级的房间加载入口，属于 `REAL` 模式。Roguelike 是离散房间流程，不含实时动作战斗、技能或物理；种子常量用于可复现样例，生产由服务器创建时注入并持久保存。社交经营只演示本进程两实体事务，不包含跨服访问者授权、Remote 或 Saga。
+回合超时由房间的持久定时器自动推进（2026-11-14）：脚本对 GameRoom 跑 `roost add timer`，夹具的 `timer_handlers.go.txt` 覆盖生成的示例回调；开局在同一个事务里登记一个回合定时器（`handlerScenarioOpen`），到期由生成的 `game_room.TimerDriver` 投递 Tick，回调在房间的 Nest 锁与事务内按 `rules.State.Timeout` 消费当前回合（修订号加一，旧页面的命令按过期拒绝）；期限内有人行动时期限后移，定时器续到新期限而不提前消费；终局后定时器结束。`TestScenarioTurnTimesOutByTheRoomTimer` 用真实的驱动循环（不手动调 `DeliverDue`）拨业务钟验证。客户端上报的 `timeout` 命令仍保留（同一规则，到期前拒绝）。离线语义沿用框架：房间不在内存期间到期的，加载后只补触发一次、只消费一个回合。`ROOST_TURN_PVP_REAL=1` 另跑两个 OS 进程：真实 Mongo / 文件 WAL 保存并冷加载完整 DAO 与节点，驱动恢复到期索引；业务钟跨过两小时只补一次，原回执可重放、旧页面被拒，继续终局后节点删除。默认档仍用替身提交器。Roguelike 是离散房间流程，不含实时动作战斗、技能或物理；种子常量用于可复现样例，生产由服务器创建时注入并持久保存。社交经营只演示本进程两实体事务，不包含跨服访问者授权、Remote 或 Saga。
 
 每类另有第 9 条 `TestScenarioRobotTCPRetryAndReconnect`：真实 loopback TCP → 生成 PB → 正式 Nest/DAO，先验证首个动作、同连接重复、重连重复时 Revision=1；回合 PvP 继续至终态（Revision=5），社交经营继续至帮助/收获（Revision=3），重试不重复奖励。合作的完整三关另由第 10 条覆盖。生成工程可使用真实票据运行：
 
@@ -67,3 +67,11 @@ go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <已分配的新房间ID>
 ## 合作 Roguelike 整局 Robot
 
 当前合作与回合 PvP 脚本各 **10 条**，异步经营 9 条。新增 `CoopView` PB、成员授权的 Nest 视图查询、`scenarionet.CoopDispatch` 与 `loadtest.Coop`；`cmd/robot` 默认运行双客户端三关与领奖闭环，另需 `ROOST_ROBOT_PEER_TICKET`。详细流程、报告口径和未覆盖项统一见 [Robot 完整业务样板](ROBOT.md#完整业务样板)。这是客户端 PB 权威视图查询，不是 EntitySync；仍使用替身鉴权/提交器，宿主负责分配新房间和真实票据。
+
+## 回合 PvP 真实档
+
+使用本机私有 mirror-local 的 Mongo、Redis、NATS 环境，运行 `ROOST_TURN_PVP_REAL=1 GOWORK=off GOFLAGS=-p=2 bash scripts/test-turn-pvp-generated.sh`。默认 10 条场景保持不变，真实档再跑 `TestTurnPVPRealTimerRecovery` 的 seed / recover 两阶段（各独立进程、race、零 SKIP），随后调用 `scripts/test-turn-pvp-real.sh`。可用 `ROOST_GENRE_MODULE` 验证自定义 module。
+
+后者生成正式 `-recipe turn-pvp`：真实 portal/account 登录、MatchEnqueue/MatchStatus 成局、RoomJoin、TurnStart/End/View 经独立 Gate → NATS → Game Ingress → Nest/DAO；第 2 回合收到确认后 SIGKILL game，离线跨过多个期限，再用同一 WAL / Mongo 重启。新连接带旧 Epoch 被拒，RoomReconnect 增加 Epoch，持久序号可重放；超时只补一次，之后完成并关闭房间。`TestTurnRecipeRealLifecycle` 的 seed / recover 各实际执行一次。此配方 Room/Turn 与上述带伤害规则的 GameRoom 纵切是两套业务模型，证据分别计数；配方没有伤害、胜负或奖励规则。
+
+`ROOST_TURN_PVP_PORT_SHIFT`（默认 35000）、`ROOST_TURN_PVP_ETCD_PORT`（57779）可隔离端口；脚本只清理自己的生成工程、数据及进程，日志在 `ROOST_TURN_PVP_OUT`。这是 macOS 单机功能验收，无跨机接管、断电或容量结论。game-demo 另有 `scripts/test-demo-turn.sh` 实跑 Makefile 的三个 dev-smoke 场景及 Gate 下的 turn Robot，见 [验收记录](../maintenance/evidence/turn-real-20261114/README.md)。

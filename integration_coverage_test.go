@@ -597,6 +597,8 @@ var generatedRealDependencyElsewhere = []struct {
 	{"TestGeneratedGateNestDAOAndWAL", "codegen/internal/roost/demo_test.go", "^TestGeneratedGate(NestDAOAndWAL|TransportSelection|ProjectionCapabilities)$", "TestGateGeneratedBusinessConsumer 把它写进新生成的 game-demo 后运行"},
 	{"TestGeneratedGateProjectionCapabilities", "codegen/internal/roost/demo_test.go", "^TestGeneratedGate(NestDAOAndWAL|TransportSelection|ProjectionCapabilities)$", "同一生成工程入口验证投影包装保留目标能力与失败批次语义"},
 	{"TestSagaNativeStepsAndEffectRealDependencies", "codegen/internal/roost/add_saga_test.go", "^TestSagaNativeStepsAndEffectRealDependencies$", "TestGeneratedSagaNativeStepsAndEffectConsumer 把 testdata/saga_native 复制进新生成的工程后运行"},
+	{"TestTurnPVPRealTimerRecovery", "scripts/test-turn-pvp-generated.sh", "TestTurnPVPRealTimerRecovery", "ROOST_TURN_PVP_REAL=1：GameRoom 纵切在两个 OS 进程用真实 Mongo / 文件 WAL 验证持久节点冷加载、离线超时一次与回执重试；默认档只编译与 vet"},
+	{"TestTurnRecipeRealLifecycle", "scripts/test-turn-pvp-real.sh", "TestTurnRecipeRealLifecycle", "ROOST_TURN_PVP_REAL=1 经 generated 入口调用：正式配方真实 account / match / Game Ingress / 独立 Gate、Mongo / Redis / NATS / etcd、SIGKILL 重启与回合终态；私有依赖手动档，不进 pretag"},
 }
 
 var (
