@@ -1,0 +1,11 @@
+=== RUN   TestTerrainWALCrashRealMongo
+=== RUN   TestTerrainWALCrashRealMongo/brush
+2026/11/14 10:33:03 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=2.959875ms changed=0 added=6 removed=0 unchanged=0 members="[building building_param equipment_item featureflag item spawn]"
+    terrain_wal_crash_test.go:198: SIGKILL after WAL-only brush: 6 records, fsyncs 6, Mongo empty before recovery; all 6 chunks, ledger and building facts restored; replay duplicate
+=== RUN   TestTerrainWALCrashRealMongo/building
+    terrain_wal_crash_test.go:198: SIGKILL after WAL-only building: 5 records, fsyncs 5, Mongo empty before recovery; all 6 chunks, ledger and building facts restored; replay duplicate
+--- PASS: TestTerrainWALCrashRealMongo (1.49s)
+    --- PASS: TestTerrainWALCrashRealMongo/brush (0.79s)
+    --- PASS: TestTerrainWALCrashRealMongo/building (0.69s)
+PASS
+ok  	example.com/terraincrash/internal/service/game	3.270s

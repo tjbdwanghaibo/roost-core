@@ -1,0 +1,6 @@
+=== RUN   TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances
+    admin_test.go:153: nats: connect nats://127.0.0.1:51722,nats://127.0.0.1:51723,nats://127.0.0.1:51724: nats: no servers available for connection
+--- FAIL: TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances (0.00s)
+FAIL
+FAIL	example.com/planet/internal/service/alliance	0.586s
+FAIL

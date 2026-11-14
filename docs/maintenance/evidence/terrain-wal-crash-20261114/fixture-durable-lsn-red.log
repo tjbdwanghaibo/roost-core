@@ -1,0 +1,17 @@
+=== RUN   TestTerrainWALCrashRealMongo
+=== RUN   TestTerrainWALCrashRealMongo/brush
+    terrain_wal_crash_test.go:128: invalid WAL-only receipt: {Chunks:[{Key:(0,0) Version:1 Digest:f76c0f10d2c79025} {Key:(1,0) Version:1 Digest:55cc0c1ce8954331} {Key:(2,0) Version:0 Digest:48e51c1ee9523325} {Key:(0,1) Version:1 Digest:88c40f49b54dd031} {Key:(1,1) Version:1 Digest:a30a87bf4d0f19f9} {Key:(2,1) Version:0 Digest:48e51c1ee9523325}] Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0) Foundation:0 Leveled:false BaseRevision:0} LastSeq:1 DurableLSN:0 Records:6}
+    terrain_wal_crash_test.go:110: child output:
+        === RUN   TestTerrainWALCrashRealMongo
+        2026/11/14 10:32:32 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.792584ms changed=0 added=6 removed=0 unchanged=0 members="[building building_param equipment_item featureflag item spawn]"
+=== RUN   TestTerrainWALCrashRealMongo/building
+    terrain_wal_crash_test.go:128: invalid WAL-only receipt: {Chunks:[{Key:(0,0) Version:1 Digest:62484a4fd1477f45} {Key:(1,0) Version:1 Digest:8fe29959497a829d} {Key:(2,0) Version:0 Digest:48e51c1ee9523325} {Key:(0,1) Version:0 Digest:48e51c1ee9523325} {Key:(1,1) Version:0 Digest:1671aeab02c1b225} {Key:(2,1) Version:0 Digest:48e51c1ee9523325}] Building:{ID:1342239798 Standing:true Owner:4242 ConfigID:2 Params:[2 0] Facing:0 Lot:[60,68)×[20,26) Foundation:50010 Leveled:true BaseRevision:1} LastSeq:1 DurableLSN:0 Records:5}
+    terrain_wal_crash_test.go:110: child output:
+        === RUN   TestTerrainWALCrashRealMongo
+        2026/11/14 10:32:32 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=4.428459ms changed=0 added=6 removed=0 unchanged=0 members="[building building_param equipment_item featureflag item spawn]"
+--- FAIL: TestTerrainWALCrashRealMongo (0.85s)
+    --- FAIL: TestTerrainWALCrashRealMongo/brush (0.45s)
+    --- FAIL: TestTerrainWALCrashRealMongo/building (0.40s)
+FAIL
+FAIL	example.com/terraincrash/internal/service/game	1.651s
+FAIL

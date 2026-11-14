@@ -12,7 +12,6 @@ import (
 	purchasecontroller "{{MODULE}}/game/controllers/purchase"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -54,9 +53,7 @@ type Controller struct {
 	// paymentSecret is the demo's stand-in for a payment provider's signing
 	// key. A real game process does not hold one (see the purchase endpoint).
 	paymentSecret string
-	// Runtime IDs are only for ephemeral objects.
-	serverSID int32
-	ids       *runtimeid.Allocator
+	serverSID     int32
 }
 
 // battleRouter is the slice of the game service's battle manager the
@@ -192,10 +189,6 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	serverSID := identity.Sid
-	ids, err := runtimeid.New(serverSID)
-	if err != nil {
-		return nil, fmt.Errorf("player controller: %w", err)
-	}
 	worldID, err := worldentity.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -208,7 +201,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		registry: registry, nestClient: client, players: players,
 		matcher: matcher, chat: chat, sessions: sessions,
 		payments: payments, paymentSecret: paymentSecret,
-		serverSID: serverSID, ids: ids,
+		serverSID: serverSID,
 		worldID: worldID, sceneID: sceneID,
 	}, nil
 }
@@ -334,14 +327,6 @@ func (controller *Controller) ServerSID() int32 {
 		return 0
 	}
 	return controller.serverSID
-}
-
-// RuntimeIDs mints ids for objects this process creates at run time.
-func (controller *Controller) RuntimeIDs() (*runtimeid.Allocator, error) {
-	if controller == nil || controller.ids == nil {
-		return nil, errors.New("player controller: runtime id allocator is unavailable")
-	}
-	return controller.ids, nil
 }
 
 // PaymentSecret is what this process signs simulated provider callbacks with.

@@ -1,0 +1,260 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"syscall"
+	"testing"
+	"time"
+
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/buildingsite"
+	"{{MODULE}}/game/components/terrainsurface"
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
+	"{{MODULE}}/game/terrainmap"
+)
+
+type terrainCrashChunk struct {
+	Key     terrain.ChunkKey
+	Version int64
+	Digest  string
+}
+
+type terrainCrashReceipt struct {
+	Chunks     []terrainCrashChunk
+	Building   buildingsite.State
+	LastSeq    int64
+	Syncs      uint64
+	Records    uint64
+}
+
+func terrainCrashChunks(m *terrainmap.Map) []terrainCrashChunk {
+	var result []terrainCrashChunk
+	for _, key := range m.Keys() {
+		chunk, version, _ := m.View().Chunk(key)
+		result = append(result, terrainCrashChunk{key, version, terrainChunkDigest(chunk.Heights, chunk.Materials)})
+	}
+	return result
+}
+
+func terrainCrashBrush() terrain.Brush {
+	return terrain.Brush{Op: terrain.BrushRaise, X: terrain.ChunkSize, Y: terrain.ChunkSize, Radius: 300,
+		Falloff: terrain.FalloffConstant, Strength: 20}
+}
+
+// B-11：不是正常 Shutdown 后重读 Mongo。子进程只运行 WAL 准入，禁用后台投影，答复一笔跨块编辑或放建筑后经专用
+// 管道报告快照；父进程检查三个业务集合仍为空，再 SIGKILL。新进程的启动恢复屏障必须从同一目录的真实 WAL 投影、冷加载，
+// 还原全部块内容/版本、建筑/占地与账本。管道确认是杀进程的唯一时序，不用延时猜测投影窗口。
+func TestTerrainWALCrashRealMongo(t *testing.T) {
+	uri := os.Getenv("ROOST_TERRAIN_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("ROOST_TERRAIN_IT_MONGO_URI not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	if mode := os.Getenv("ROOST_TERRAIN_CRASH_CHILD"); mode != "" {
+		terrainCrashChild(t, ctx, client, mode)
+		return
+	}
+	for _, mode := range []string{"brush", "building"} {
+		t.Run(mode, func(t *testing.T) {
+			physical := fmt.Sprintf("terrain_wal_crash_%s_%d", mode, time.Now().UnixNano())
+			t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+			dir := t.TempDir()
+			pack := buildingPack(t, dir, 1)
+			read, write, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer read.Close()
+			defer write.Close()
+			log, err := os.Create(filepath.Join(dir, "child.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer log.Close()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTerrainWALCrashRealMongo$", "-test.v")
+			cmd.Env = append(os.Environ(), "ROOST_TERRAIN_CRASH_CHILD="+mode,
+				"ROOST_TERRAIN_CRASH_DB="+physical, "ROOST_TERRAIN_CRASH_DIR="+dir)
+			cmd.ExtraFiles = []*os.File{write}
+			cmd.Stdout, cmd.Stderr = log, log
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			_ = write.Close()
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			waited := false
+			defer func() {
+				if !waited {
+					_ = cmd.Process.Kill()
+					<-done
+				}
+				if t.Failed() {
+					data, _ := os.ReadFile(log.Name())
+					t.Logf("child output:\n%s", data)
+				}
+			}()
+			var receipt terrainCrashReceipt
+			decoded := make(chan error, 1)
+			go func() { decoded <- json.NewDecoder(read).Decode(&receipt) }()
+			select {
+			case err := <-decoded:
+				if err != nil {
+					t.Fatalf("child did not acknowledge WAL-only commit: %v", err)
+				}
+			case err := <-done:
+				waited = true
+				t.Fatalf("child exited before the crash: %v", err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if receipt.Syncs == 0 || receipt.Records == 0 || receipt.LastSeq != 1 {
+				t.Fatalf("invalid WAL-only receipt: %+v", receipt)
+			}
+			assertTerrainCrashMongoEmpty(t, ctx, client, physical)
+			if err := cmd.Process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			err = <-done
+			waited = true
+			status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+			if err == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+				t.Fatalf("child exit %v (%v), want SIGKILL", err, cmd.ProcessState)
+			}
+			assertTerrainCrashMongoEmpty(t, ctx, client, physical)
+			walDir := filepath.Join(dir, "wal")
+			recovered := startRealTerrainProcess(t, ctx, client, terrainCrashDatabases(t, physical), physical, walDir, pack)
+			if got := terrainCrashChunks(recovered.m); !slices.Equal(got, receipt.Chunks) {
+				t.Fatalf("WAL recovery lost acknowledged terrain: got %+v, want %+v", got, receipt.Chunks)
+			}
+			if last, err := recovered.m.LastSeq(ctx, brushPlayer); err != nil || last != receipt.LastSeq {
+				t.Fatalf("recovered ledger: %d, %v, want %d", last, err, receipt.LastSeq)
+			}
+			if mode == "building" {
+				standing := recovered.m.ReconciledBuildings()
+				if recovered.buildingStats != (terrainmap.BuildingStats{Standing: 1}) || len(standing) != 1 ||
+					standing[0].Building == nil || !buildingsite.StatesEqual(standing[0].Building.SiteComp().State(), receipt.Building) ||
+					standing[0].Lot != (terrainsurface.Lot{GX: 60, GY: 20, W: 8, H: 6}) {
+					t.Fatalf("recovered building: stats %+v, standing %+v, want %+v", recovered.buildingStats, standing, receipt.Building)
+				}
+				// 两块上的全部占位与边界外都检查，避免只找回建筑实体而丢掉占地。
+				for gy := int64(19); gy <= 26; gy++ {
+					for gx := int64(59); gx <= 68; gx++ {
+						key, index := terrain.PointIndex(gx*terrain.SampleSpacing, gy*terrain.SampleSpacing)
+						want := gx >= 60 && gx < 68 && gy >= 20 && gy < 26
+						if recovered.m.Occupied(key, int32(index)) != want {
+							t.Fatalf("recovered occupancy (%d,%d), want %v", gx, gy, want)
+						}
+					}
+				}
+				result, err := recovered.m.Place(ctx, brushPlayer, 1, hall(60, 20, true))
+				if err != nil || !result.Duplicate {
+					t.Fatalf("replayed placement: %+v, %v", result, err)
+				}
+			} else {
+				result, err := recovered.m.Brush(ctx, brushPlayer, 1, terrainCrashBrush())
+				if err != nil || !result.Duplicate {
+					t.Fatalf("replayed brush: %+v, %v", result, err)
+				}
+			}
+			if got := terrainCrashChunks(recovered.m); !slices.Equal(got, receipt.Chunks) {
+				t.Fatal("a replay changed recovered chunks")
+			}
+			ledgerID, err := terrain_editor.EntityID(brushPlayer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ledger struct {
+				LastSeq   int64 `bson:"1"`
+				Buildings int64 `bson:"3"`
+			}
+			if err := client.Database(physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &ledger); err != nil {
+				t.Fatal(err)
+			}
+			wantBuildings := int64(0)
+			if mode == "building" {
+				wantBuildings = 1
+			}
+			if ledger.LastSeq != 1 || ledger.Buildings != wantBuildings {
+				t.Fatalf("stored recovered ledger: %+v", ledger)
+			}
+			recovered.stop(t)
+			t.Logf("SIGKILL after WAL-only %s: %d records, fsyncs %d, Mongo empty before recovery; all %d chunks, ledger and building facts restored; replay duplicate", mode, receipt.Records, receipt.Syncs, len(receipt.Chunks))
+		})
+	}
+}
+
+func terrainCrashDatabases(t *testing.T, physical string) *coredata.DatabaseMap {
+	t.Helper()
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+		Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return databases
+}
+
+func assertTerrainCrashMongoEmpty(t *testing.T, ctx context.Context, client fmongo.IMongo, physical string) {
+	t.Helper()
+	for _, name := range []string{db.TerrainChunkDaoCollection, db.TerrainEditorDaoCollection, db.BuildingDaoCollection} {
+		count, err := client.Database(physical).Collection(name).CountDocuments(ctx, map[string]any{})
+		if err != nil || count != 0 {
+			t.Fatalf("%s has %d documents (%v), want WAL-only with zero projected documents", name, count, err)
+		}
+	}
+}
+
+func terrainCrashChild(t *testing.T, ctx context.Context, client fmongo.IMongo, mode string) {
+	t.Helper()
+	dir, physical := os.Getenv("ROOST_TERRAIN_CRASH_DIR"), os.Getenv("ROOST_TERRAIN_CRASH_DB")
+	p := startRealTerrainProcessWithProjection(t, ctx, client, terrainCrashDatabases(t, physical), physical,
+		filepath.Join(dir, "wal"), filepath.Join(dir, "building-r1.pack"), engine.ProjectorOptions{ManualReplay: true})
+	var receipt terrainCrashReceipt
+	switch mode {
+	case "brush":
+		result, err := p.m.Brush(ctx, brushPlayer, 1, terrainCrashBrush())
+		if err != nil || result.Duplicate || len(result.Chunks) != 4 {
+			t.Fatalf("brush before crash: %+v, %v", result, err)
+		}
+		receipt.LastSeq = result.LastSeq
+	case "building":
+		result, err := p.m.Place(ctx, brushPlayer, 1, hall(60, 20, true))
+		if err != nil || result.Duplicate || len(result.Chunks) != 2 || !result.Building.Leveled {
+			t.Fatalf("placement before crash: %+v, %v", result, err)
+		}
+		receipt.Building, receipt.LastSeq = result.Building, result.LastSeq
+	default:
+		t.Fatalf("unknown child mode %q", mode)
+	}
+	stats := p.runtime.WAL.Stats()
+	if stats.Appended == 0 || stats.Appended != stats.Admitted || stats.Syncs == 0 || stats.Acknowledged != 0 || stats.TerminalError != "" {
+		t.Fatalf("commit is not durably WAL-only: %+v", stats)
+	}
+	assertTerrainCrashMongoEmpty(t, ctx, client, physical)
+	receipt.Chunks, receipt.Records, receipt.Syncs = terrainCrashChunks(p.m), stats.Appended, stats.Syncs
+	report := os.NewFile(3, "WAL-only receipt")
+	if err := json.NewEncoder(report).Encode(receipt); err != nil {
+		t.Fatal(err)
+	}
+	_ = report.Close()
+	// 故意不 Shutdown：父进程已拿到 strict 成功后的事实，接下来必须真由 SIGKILL 终止。
+	<-ctx.Done()
+	t.Fatal("parent did not kill the child after the WAL-only receipt")
+}

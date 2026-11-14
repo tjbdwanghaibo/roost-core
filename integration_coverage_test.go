@@ -545,6 +545,7 @@ var generatedRealDependencyEntries = []struct {
 	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGateGeneratedBusinessConsumer$"},
 	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGeneratedSagaNativeStepsAndEffectConsumer$"},
 	{"codegen/internal/dao/testdata/runtime", "codegen/scripts/dao-golden-runtime.sh", "^Test"},
+	{"demo/internal/service/game/terrain_wal_crash_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestTerrainWALCrashRealMongo$"},
 }
 
 // 由专门入口负责、不进 dataengine-env.sh test 的用例：mention 必须原样出现在 script 里。
