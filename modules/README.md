@@ -43,7 +43,7 @@
 | [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 14 |
 | [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor | SceneDao；Player 场景交互回执 | 28 |
 | [monster](monster/README.md) | 正式实体生命周期、AI/actionflow 巡逻追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 27 |
-| [cellworld](cellworld/README.md) | 固定 Cell 分区、共享授权、持久出生目录与停机排空；Entity 适配见 game-demo | nest、redis、nats | 业务自行声明 | 3 |
+| [cellworld](cellworld/README.md) | 固定 Cell 分区、共享授权、持久出生目录与停机排空；Entity 适配见 game-demo | nest、redis、nats | 业务自行声明 | 6 |
 | [attribute](attribute/README.md) | 生成的属性 profile 与 Container：基础/装备/最终三层、升级成长 | profile | AttributeBase / AttributeGear / AttributeFinal | 20 |
 | [equipment](equipment/README.md) | 配置表槽位、穿卸、背包原子扣回；不包含物品实例和随机词条 | bag | Equipment | 18 |
 | [combat](combat/README.md) | 双人同意战斗、正式技能 Runtime / CombatDAO、Buff 与冷却恢复 | actor、attribute、skillbook | CombatDAO；Player 的公开投影与私有 checkpoint | 38 |

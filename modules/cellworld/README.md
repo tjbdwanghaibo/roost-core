@@ -31,7 +31,7 @@
 
 ## 验证范围
 
-- `roost module verify cellworld`：3 条装配契约，覆盖出生号稳定性、越界拒绝与缺失 Registry 拒绝。
+- `roost module verify cellworld`：6 条装配契约，覆盖出生号稳定性、越界拒绝、缺失 Registry 拒绝、`New` 的 Cell 分支（授权记录、出生目录、启动令牌与租约检查取自 App，缺一项或 sid 对不上即拒绝）、`Start` / `Stop`（就绪后返回、只能调一次、Stop 等 Node 退出），以及 `Start` 失败（Node 就绪前退出、ctx 先到）后回到未启动（StartSpawns 拒绝、Stop 无事可做、再 Start 仍拒绝）。用替身 Redis / Nest / Transport，不连真实依赖。`Start` 里 `AddIngress` 失败的分支没有用例（生成工程拿不到关闭 Registry 准入的入口）；真实 NATS / Redis 下的启停见下面 core 与 game-demo 两条。
 - core `go test -race ./gameplay/cellworld`：授权交错、丢包 / 乱序、死亡与奖励回滚、出生代次、出站背压、排空，以及本机真实 NATS / Redis / App 进程故障。
 - 生成 game-demo 后测试 `./game/partition`：类型映射、回滚及真实文件 WAL 恢复。`scripts/test-seamless-demo.sh`：私有真实依赖下的账号、玩家 TCP、跨 Cell 与进程重启。
 - 容量入口及已测边界见 [CellWorld README](../../gameplay/cellworld/README.md)。Linux / 跨机 / 生产 Redis HA 的结果须在目标环境实跑，不能由本机样本替代。
