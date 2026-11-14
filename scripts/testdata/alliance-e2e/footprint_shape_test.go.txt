@@ -1,0 +1,77 @@
+package e2e
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"example.com/planet/db"
+	allianceentity "example.com/planet/game/entities/alliance"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// 超过正式 500 人上限只测数据形状：生成 DAO 的 BSON 与生成 Mirror 解码器。
+// 不开联盟服务、不绕过入会准入、不写生产存储；本结果不代表支持该人数或入会吞吐。
+func TestAllianceE2ESyntheticRosterFootprint(t *testing.T) {
+	perfOnly(t)
+	raw := os.Getenv("ALLIANCE_E2E_SHAPE_COUNTS")
+	if raw == "" {
+		raw = "1000,5000,10000"
+	}
+	copies := perfPositiveInt(t, "ALLIANCE_E2E_MIRROR_COPIES", 16, 128)
+	for _, value := range strings.Split(raw, ",") {
+		count, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || count <= 0 || count > 10000 {
+			t.Fatalf("invalid shape count %q (1..10000)", value)
+		}
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			owner := db.NewAllianceDao()
+			members, receipts := bson.M{}, bson.M{}
+			for i := range count {
+				player := int64(6_000_000 + i)
+				request := fmt.Sprintf("footprint-%d", player)
+				members[strconv.FormatInt(player, 10)] = bson.M{"home_sid": 1000, "joined_at_unix": int64(1_700_000_000), "join_request_id": request}
+				// 每名成员一条入会回执；长历史、多捐赠等工作负载需要另给形状。
+				receipts[request] = bson.M{"subject": player, "version": int64(i + 1), "at_unix": int64(1_700_000_000)}
+			}
+			// 合成探针走持久化加载入口。DAO setter 只能在正式 Nest 事务内调用，不能为测大小绕过守卫。
+			input, err := bson.Marshal(bson.M{"name": "footprint", "leader_id": int64(6_000_000), "open_join": true, "members": members, "requests": receipts})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := owner.RestorePersisted(input, db.AllianceDaoSchemaVersion, 1); err != nil {
+				t.Fatal(err)
+			}
+			payload := owner.Marshal()
+			// 先预热 BSON 的类型元数据；随后 GC 不保留这份临时视图。
+			if _, err := allianceentity.DecodeAllianceMirror(payload); err != nil {
+				t.Fatal(err)
+			}
+			views := make([]allianceentity.AllianceMirror, copies)
+			latency := make([]time.Duration, copies)
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			for i := range views {
+				start := time.Now()
+				views[i], err = allianceentity.DecodeAllianceMirror(payload)
+				latency[i] = time.Since(start)
+				if err != nil || len(views[i].Members) != count || views[i].LeaderID != 6_000_000 {
+					t.Fatalf("shape decoded incorrectly: members=%d err=%v", len(views[i].Members), err)
+				}
+			}
+			runtime.GC()
+			runtime.ReadMemStats(&after)
+			slices.Sort(latency)
+			t.Logf("PERF synthetic-roster members=%d join_receipts=%d dao_bson_bytes=%d views=%d retained_dto_heap_delta_bytes=%d per_view_bytes=%d decode_%s (no admission, storage, L1 or network)", count, count, len(payload), copies, int64(after.HeapAlloc)-int64(before.HeapAlloc), (int64(after.HeapAlloc)-int64(before.HeapAlloc))/int64(copies), durations(latency))
+			runtime.KeepAlive(owner)
+			runtime.KeepAlive(payload)
+			runtime.KeepAlive(views)
+		})
+	}
+}
