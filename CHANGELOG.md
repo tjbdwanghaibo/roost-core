@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测量入口：联盟 RPC 并发档可配置**（2026-11-14）：正式探针支持 `ALLIANCE_E2E_RPC_CONCURRENCY=1..256`（默认 16），写额度 512，分散 16 联盟与单热点对照保持 500 人业务限制，并打印 ≥3 秒样本。此前设置开关仍固定 16；后台 checkpoint 实验没有合入。见 [探针口径](docs/performance/benchmarks/alliance-probes-20261114/README.md)。
+
 - **性能入口：AOI 支持自动 CPU 并发度**（2026-11-14）：`sync-aoi.sh` 接受并缺省使用 `ROOST_PERF_CPU=0`，与当前验证口径一致；原来校验直接拒绝 0。保留显式正整数档和原有延迟断言；真实 on_change 小规模功能运行通过，数字不作为容量。
 - **game-demo Robot 单档入口**（M-12，2026-11-14）：新增 `scripts/perf/demo-robot.sh`，每次新私有依赖、新 CLI 工程，单 IP 512，支持 100/200 人同批与每秒 20/10 人爬坡；保留正式整场景门槛、报告、日志、Saga 启动空分区与超时诊断。2 人实际脚本通过且清理完整；正式六档仍待空闲窗口，不作容量结论。见[证据与边界](docs/maintenance/evidence/v147-demo-robot-20261114.md)。
 
