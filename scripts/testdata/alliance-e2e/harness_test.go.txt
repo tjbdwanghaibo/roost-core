@@ -298,13 +298,18 @@ func (s *suite) derive(name, service string, sid int32, index int, opts procOpti
 	text = strings.ReplaceAll(text, "127.0.0.1:6379", redis)
 	text = strings.ReplaceAll(text, "[127.0.0.1:2379]", "["+s.etcd+"]")
 	text = strings.ReplaceAll(text, "0.0.0.0:7000", client)
+	// account 进程的登录入口（web.addr，开发配置 8081）也挪到本用例的端口段，免得与本机别的 demo 抢。
+	text = strings.ReplaceAll(text, "addr: 127.0.0.1:8081", "addr: "+s.portalAddr())
 	text = opsAddr.ReplaceAllString(text, "${1}"+ops)
 	text = advertiseAddr.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", s.portBase+100+index))
-	// 生成配置缺省是 roost:<工程名>（上面已换成 roost:<前缀>）；本用例按裸前缀读路由键，所以整行换掉。
-	if !l2Prefix.MatchString(text) {
-		t.Fatalf("%s: remote_entity.snapshot_l2_key_prefix not found in the generated config", service)
+	// 生成配置缺省是 roost:<工程名>（上面已换成 roost:<前缀>）；本用例按裸前缀读路由键，所以整行换掉。只有带
+	// remote_entity 的服务（game、alliance）有这个键；带了却找不到才是生成配置变了。
+	if strings.Contains(text, "\nremote_entity:") {
+		if !l2Prefix.MatchString(text) {
+			t.Fatalf("%s: remote_entity.snapshot_l2_key_prefix not found in the generated config", service)
+		}
+		text = l2Prefix.ReplaceAllString(text, `${1}"`+s.prefix+`"`)
 	}
-	text = l2Prefix.ReplaceAllString(text, `${1}"`+s.prefix+`"`)
 	text = strings.ReplaceAll(text, "max_bytes: 8589934592", "max_bytes: 268435456")
 	text = strings.ReplaceAll(text, "dir: data/wal/alliance\n", fmt.Sprintf("dir: data/wal/alliance-%d\n", sid))
 	text = setKey(t, text, "log", "file", "false")
@@ -319,17 +324,26 @@ func (s *suite) derive(name, service string, sid int32, index int, opts procOpti
 	return configPath, ops, client
 }
 
+// portalAddr 是 account 进程登录入口的地址（端口段末尾，进程端口用不到那里）。
+func (s *suite) portalAddr() string { return fmt.Sprintf("127.0.0.1:%d", s.portBase+299) }
+
 // start 起一个服务进程并等它 /readyz 就绪。name 唯一；同名进程停过之后再 start 沿用原配置与端口（同 sid 拉起）。
 func (s *suite) start(name, service string, sid int32, opts procOptions) *proc {
+	// derive 失败时 t.Fatalf：不能在持锁时调它（停机清理 stopAll 要同一把锁，持锁 Fatal 会让用例挂到超时）。
 	s.mu.Lock()
 	p := s.procs[name]
+	index := s.next
 	if p == nil {
-		config, ops, client := s.derive(name, service, sid, s.next, opts)
 		s.next++
-		p = &proc{name: name, service: service, sid: sid, config: config, ops: ops, client: client, log: filepath.Join(s.logs, name+".log")}
-		s.procs[name] = p
 	}
 	s.mu.Unlock()
+	if p == nil {
+		config, ops, client := s.derive(name, service, sid, index, opts)
+		p = &proc{name: name, service: service, sid: sid, config: config, ops: ops, client: client, log: filepath.Join(s.logs, name+".log")}
+		s.mu.Lock()
+		s.procs[name] = p
+		s.mu.Unlock()
+	}
 	s.launch(p)
 	s.waitReady(p, 120*time.Second)
 	return p

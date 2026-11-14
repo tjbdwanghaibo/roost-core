@@ -335,6 +335,11 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 对账还从 Mirror 取得同一入盟批次的 HomeSID，调用 `RefreshHome` 比较 JoinRequestID 和旧 SID 后修正通知地址。
 联盟成员因此可以换服；HomeSID 仅为尽力通知提示，不是权限来源。account 与 RPC 没有跨服务事务，快速往返换服的短暂旧提示由下一次对账继续修正。
 PB 号由模块安装器分配，以生成的 msgid 为准，不再硬编码本文旧号。
+两个 game 进程上的玩家互相入会有机器人场景 `alliance_cross_join`：`-identities member=1001@<game 1001 的地址>,founder2=1001@<同上>`
+让这两个身份在 1001 上建角、连 1001，机器人自己的身份与 member2 在 `-server-id` / `-endpoint` 上；自己建 A、member 从 1001 入 A，
+founder2 在 1001 建 B、member2 从 1000 入 B，入会者与盟主各在自己的 game 上读回（至少是另一个进程上那次入会答复的版本、两名成员）。
+真实进程上由仓库的 `scripts/test-alliance-e2e.sh`（`TestAllianceE2ERobotCrossGameJoin`）跑。
+
 这条路径有一个机器人场景 `alliance_offline_join`（`loadtest/scenarios/demo.yaml`，`make dev-smoke` 的第二轮）：机器人建开放公会，
 第二个身份登录一次后断开，运维命令 `gm.player.join_alliance {player_id, alliance_id, request_id}`（game 进程，按玩家代发 `Join`；
 本进程仍有该玩家会话时不入会、答 `joined=false`，机器人重试它，所以“已离线”是一个事实而不是等出来的）把它拉进公会，
@@ -758,7 +763,9 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1
   清单里要有 `-server-id` → 进服票据），以 `enter:<进服票据>` 握手，等服务器的 `EnterStatus`（至多 1 秒；它只是告知，没等到就当作要新建），
   需要时发 `EnterCreate`（名字 `r<本次运行的随机串>_<机器人序号>`，不超过档案的 16 个字符；已经建成的答 `enter_created`，同样算过），
   再发 `EnterGame`，玩家号取自它的应答。场景文件是同一份：`enter_game` 这个动作由所用的登录方式登记。
-  凭据那一段（三次 HTTP 与握手票据）有离线场景 `cmd/loadtest/portal_login_test.go`；握手之后的三步在机器人里**没有离线场景，也没有做过真实进程的实跑**。
+  凭据那一段（三次 HTTP 与握手票据）与握手之后的三步（告知要新建 → `EnterCreate` → `EnterGame`、告知不用新建、告知带码、
+  告知没来、`EnterGame` 带码）都有离线场景 `cmd/loadtest/portal_login_test.go`（后者对着按脚本应答的游戏服）；真实进程上由仓库的
+  `scripts/test-demo-login.sh` 跑（见[登录](#登录入口--握手--先新建--进入)一节的“用 curl 走一遍”）。
   整条链路见[登录](#登录入口--握手--先新建--进入)。
 
 `CreateRole` 会拒绝未知或未开放的服务器，而 **`UpsertServer` 刻意不在 account 的 RPC 接口上**：登记 / 开关服务器改变的是
@@ -778,6 +785,10 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1
 server 关掉，机器人报 `connect: auth send: robot session: closed`，server 侧计入 `player_tcp_connection_rejected_total{reason}`。
 600 个机器人的实跑正好 128 成功、472 这样失败——这是上限在工作，不是缺陷；要压更大就在 game 配置里调高它。
 2026-10-22 登录风暴 200 个机器人里 72 个这样失败，game 指标 `player_tcp_connection_rejected_total{reason="per_ip"} 72`，同一原因。
+
+`scene_expect` 之后是改名三步（profile 模块的 `ProfileRename`）：`profile_rename` 请求 `" rn<玩家号> "`，应答里存下的名字必须是去掉首尾空白的那个；
+`profile_rename_refused` 请求 17 个字符，必须答 `profile_name_long`；`profile_name_expect` 等本人同步视图里的名字变成第一次存下的那个
+（拒绝没有写任何东西）。离线用例 `cmd/loadtest/profile_rename_test.go`。
 
 最后一步 `scene_alive` 判“服务端还在给这个客户端复制”：自己 `add_exp 1`，10 秒内这次改动没有作为帧回到自己的 subject 上就失败
 （`scene_alive: … the server stopped replicating to it`），原因在 game 日志的 `scene: push to player failed, its replication session was closed`。
@@ -857,7 +868,11 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 第一步也可以用登录模块的开发渠道：`{"channel":"dev","open_id":"bob","credential":"dev-local"}`。拿到的 `ticket` 就是握手帧里出示的
 票据；之后的 `EnterStatus` / `EnterCreate` / `EnterGame` 要一条真的连接，用 `go run ./cmd/loadtest -login portal -count 2`。
 这三步在工程自带的开发配置上有离线场景（`services/account/portal/dev_walkthrough_test.go`：入口的 `Start` 读那份配置文件，两个渠道各走一遍，
-拿到的票据握手成功）；2026-11-12 起真实进程后用 curl 走过这三步（记录在仓库 CHANGELOG）。
+拿到的票据握手成功）。
+
+整段演练有一个可重复的脚本：仓库的 `scripts/test-demo-login.sh`（私有依赖：`scripts/mirror-local.sh up` 的 env.sh）生成本工程、
+开发配置改指私有依赖并把端口整体平移、`make dev-run`、上面的 curl 三步（加开发渠道与错凭据），再跑机器人 `-login portal` 与总线
+登录各两轮；最后经独立 Gate 跑一遍（见“边界”的最后一条）。
 
 ### 握手：两种票据
 
@@ -926,8 +941,12 @@ servertime 模块：`ServertimeSync` 拉、进入游戏时推 `ServertimeNow`（
 - **告知会在驻留表之外装载 Player**：对进服票据握手、已经有档的玩家，`EnterStatus` 要读“建成了没有”，这一步经 lifecycle 装载他的档，
   不经驻留表的 `Serve`。它排在进入前检查之后（只对本服承载、不在换服的会话发生），随后的 `EnterGame` 会照常 `Serve`。握手之后不进入
   就断开的玩家，这份内存副本没有驻留记录，闲置卸载扫不到它，要到进程重启才释放。记录在 [已知限制](../docs/maintenance/KNOWN-LIMITS.md)。
-- 新链路在真实进程上手工演练过一次（`make dev-run`、curl 三步、`-login portal` 的机器人新号与老号各一轮），没有做成可重复的脚本。
-- 独立 Gate 部署下的差别（Gate 与 Game Ingress 各认证一次）见 login 模块 README 的“边界”；demo 用的是嵌入 TCP。
+- 新链路的真实进程演练是 `scripts/test-demo-login.sh`（`make dev-run`、curl 三步、`-login portal` 新号与老号、总线登录）。
+- 独立 Gate 部署下的差别（Gate 与 Game Ingress 各认证一次）见 login 模块 README 的“边界”；demo 缺省用嵌入 TCP。生成器不生成 Gate
+  进程，仓库的演练工具给了两个小程序：`scripts/testdata/demo-drill/ingress.go.txt`（与本工程 `main.go` 相同，只是
+  `bootstrap.NewWithOptions` 带上 `GameIngress`，配置里 `player_access.tcp.enabled: false`）与 `gate.go.txt`（NATS、etcd、account 的客户端、
+  `gatewiring.NewGateMod`，缺省认证器）。`scripts/test-demo-login.sh` 的最后一段用它们把 game 1000 换到 Gate 后面再跑机器人；
+  合服演练 `scripts/test-demo-merge.sh` 经 Gate 登录原服已并入的角色。
 
 
 ## 社交队伍模块

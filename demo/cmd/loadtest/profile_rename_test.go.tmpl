@@ -1,0 +1,127 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+
+	"{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+// 机器人的改名三步（离线，对着按脚本应答的游戏服）：profile_rename 发带首尾空白的名字，存下的名字（应答的 Name）
+// 必须是去掉空白的那一个；profile_rename_refused 发 17 个字符，必须被拒且码是 profile_name_long；
+// profile_name_expect 等本人同步视图里的名字等于存下的那个。服务器的规则不在这里测（模块的场景测），这里测的是
+// 机器人能分辨对错：答错名字、该拒不拒、拒错码、视图里还是旧名字，都要失败。
+func TestProfileRenameActions(t *testing.T) {
+	const playerID = int64(100_077)
+	// renamer 是游戏服的改名：trim 为真时按模块的规则去空白、超过 16 个字符答 profile_name_long；
+	// 为假时原样存（一个忘了去空白、也不限长度的服务器）。
+	renamer := func(t *testing.T, trim bool, refuseCode int32) func(*transport.Packet) []*transport.Packet {
+		return func(request *transport.Packet) []*transport.Packet {
+			if request.MsgID != msgid.MsgProfileRename {
+				t.Errorf("unexpected request msg %d", request.MsgID)
+				return nil
+			}
+			rename, err := pb.UnmarshalProfileRenameRequest(request.Payload)
+			if err != nil {
+				t.Errorf("ProfileRename does not decode: %v", err)
+				return nil
+			}
+			answer := &pb.ProfileRenameResponse{Name: rename.Name}
+			if trim {
+				answer.Name = strings.TrimSpace(rename.Name)
+				if len([]rune(answer.Name)) > 16 {
+					answer = &pb.ProfileRenameResponse{Code: refuseCode, Reason: "refused"}
+				}
+			}
+			payload, err := pb.MarshalProfileRenameResponse(answer)
+			return answerTo(t, request, payload, err)
+		}
+	}
+	newRobot := func(t *testing.T, answer func(*transport.Packet) []*transport.Packet) (*robot.Context, *action.Registry) {
+		protocols := protocol.NewRegistry(pbCodec{})
+		actions := action.NewRegistry()
+		registerProfileRename(actions, protocols)
+		_, robotSession := newScriptedGame(t, protocols, answer)
+		rb := robot.NewContext(robot.Config{ID: 7, PlayerID: playerID, Protocols: protocols})
+		rb.RunAction = actions.Run
+		rb.SetSession(robotSession)
+		rb.Blackboard.Set("player_id", playerID)
+		return rb, actions
+	}
+	do := func(rb *robot.Context, actions *action.Registry, name string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return actions.Run(ctx, rb, name, nil)
+	}
+	long := apperrors.ErrProfileNameLong.Code()
+
+	t.Run("an_honest_server", func(t *testing.T) {
+		rb, actions := newRobot(t, renamer(t, true, long))
+		if err := do(rb, actions, "profile_rename"); err != nil {
+			t.Fatalf("profile_rename: %v", err)
+		}
+		if name, _ := rb.Blackboard.String("profile_name"); name != "rn100077" {
+			t.Fatalf("the stored name is %q, want rn100077 (the default name, trimmed)", name)
+		}
+		if err := do(rb, actions, "profile_rename_refused"); err != nil {
+			t.Fatalf("profile_rename_refused: %v", err)
+		}
+	})
+	t.Run("a_server_that_does_not_trim", func(t *testing.T) {
+		rb, actions := newRobot(t, renamer(t, false, long))
+		if err := do(rb, actions, "profile_rename"); err == nil || !strings.Contains(err.Error(), `want "rn100077"`) {
+			t.Fatalf("profile_rename against an untrimmed answer: %v", err)
+		}
+		if err := do(rb, actions, "profile_rename_refused"); err == nil || !strings.Contains(err.Error(), "was accepted") {
+			t.Fatalf("profile_rename_refused against a server that took 17 characters: %v", err)
+		}
+	})
+	t.Run("refused_with_another_code", func(t *testing.T) {
+		rb, actions := newRobot(t, renamer(t, true, apperrors.ErrProfileNameEmpty.Code()))
+		if err := do(rb, actions, "profile_rename_refused"); err == nil || !strings.Contains(err.Error(), "profile_name_long") {
+			t.Fatalf("profile_rename_refused with the wrong code: %v", err)
+		}
+	})
+	t.Run("the_replicated_name", func(t *testing.T) {
+		rb, actions := newRobot(t, renamer(t, true, long))
+		player.RegisterEntity()
+		subjectID, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		watcher := &sceneWatcher{subjects: map[int64]map[string]any{subjectID: {"profile": db.SyncProfileState{Name: "old"}}}}
+		rb.Blackboard.Set("scene_watcher", watcher)
+		if err := do(rb, actions, "profile_name_expect"); err == nil || !strings.Contains(err.Error(), "profile_rename must run first") {
+			t.Fatalf("profile_name_expect before a rename: %v", err)
+		}
+		if err := do(rb, actions, "profile_rename"); err != nil {
+			t.Fatal(err)
+		}
+		short := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			return actions.Run(ctx, rb, "profile_name_expect", map[string]any{"timeout": "200ms"})
+		}
+		if err := short(); err == nil || !strings.Contains(err.Error(), `own name is "old"`) {
+			t.Fatalf("profile_name_expect while the view still shows the old name: %v", err)
+		}
+		watcher.mu.Lock()
+		watcher.subjects[subjectID]["profile"] = db.SyncProfileState{Name: "rn100077"}
+		watcher.mu.Unlock()
+		if err := short(); err != nil {
+			t.Fatalf("profile_name_expect once the view shows the new name: %v", err)
+		}
+	})
+}

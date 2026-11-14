@@ -115,7 +115,7 @@ type BusinessItem struct {
 }
 
 var businessChecklist = []BusinessItem{
-	{"World singleton", "UniqueID = sid; the World DAO is in a shared database, so after the merge only World(B) loads; World(A)'s document stays where it is", "fold counters / progress into World(B), or drop them"},
+	{"World singleton", "UniqueID = sid, so World(A) and World(B) never share an _id and after the merge only World(B) loads; a World DAO in a shared database leaves World(A)'s document where it is, one with dbscope=sid (game-demo since v1.47) is copied into B's database by migrate, where nothing loads it (its timers never fire there)", "fold counters / progress / pending timers into World(B), or drop them"},
 	{"per-server leaderboards", "board names often contain the sid", "keep A's board read-only beside B's, or recompute a merged board"},
 	{"activity groups (activity.groups_file)", "groups list game sids; a member whose process is not live holds the activity back", "remove A from its group; carry A's contribution over if needed"},
 	{"cross-server global routing", "service/global RouteBinding binds game sids to global instances", "unbind A"},
