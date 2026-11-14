@@ -1,5 +1,5 @@
 {
-  "status": "handoff_incomplete_final_go_package",
+  "status": "functional_complete_perf_pending",
   "date": "2026-11-14",
   "code_baseline": "f62ceec7e2036c3971299177bafa10cca64d894f",
   "execution_head": "48ed0113ac17897b8bb1eebd8821c75b10813f3d",
@@ -451,5 +451,24 @@
   "formal_performance": {
     "status": "not_started",
     "reason": "user requested handoff; formal performance start canceled for this round"
+  },
+  "go_final_resume": {
+    "head": "d0d5a8b707fc35ce2870e183323cd1940f54ef0d",
+    "command": "GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0 go test -count=1 -timeout 60m -v ./codegen/internal/roost",
+    "start": "2026-11-14T07:55:45Z",
+    "end": "2026-11-14T08:28:18Z",
+    "exit": 0,
+    "seconds": 1950.786,
+    "top_level_pass": 406,
+    "top_level_fail": 0,
+    "top_level_skip": 4,
+    "skips_rerun_with_env": {
+      "TestGeneratedSagaNativeStepsAndEffectConsumer": "pass",
+      "TestGateGeneratedBusinessConsumer": "pass",
+      "TestDoctorPlayerTCPPassesAfterAuthAndConfig": "fail: published v1.46.0 lacks infra/network/playeraccess; expected before v1.47.0 is published",
+      "TestGeneratedComposeShapeCheckCatchesTheTmpfsShapeComposeUpRefuses": "skip: docker not installed"
+    },
+    "log": "/private/tmp/v147-roost-final-resume-20261114-1555.log",
+    "skips_log": "/private/tmp/v147-roost-final-resume-20261114-skips.log"
   }
 }

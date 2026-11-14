@@ -2,7 +2,7 @@
 
 模块、玩法与真实组的代码基线为 `f62ceec7e2036c3971299177bafa10cca64d894f`，执行 HEAD `48ed0113ac17897b8bb1eebd8821c75b10813f3d`（差异仅为 E2 报告）。后续生成检查在 `fef75aee6d61a8986444de3980cc7db0c24a3765` 完成；shutdown 测试修正合入后的最终 Go 单包复验基线为 `aff286349fb1bca215e8aa761665826d03628389`，用户要求交给后续 agent 后，root 已于 `2026-11-14T05:12:46.443237+00:00` 主动中止该轮。平台为 macOS arm64 / Go 1.27.3，统一 `GOMAXPROCS=0 GOWORK=off GOFLAGS=-p=2`。各功能组允许并行；耗时与小规模 Robot 延迟只作验收诊断，不能用于性能、容量或长稳结论。没有 push 或发布。
 
-**交接状态：模块、玩法、真实依赖功能组及生成漂移检查已完成；修正旧断言后的 60 分钟 Go 单包复验未完成，结论为 USER HANDOFF INTERRUPTED（用户要求交接，root 主动中止），不当作实现失败或整包通过。本轮未启动正式性能测量，不宣称整轮验收通过。初轮和 30 分钟复验都失败，不能记成最初全套退出 0。** 本页将四组结果合并记录；便于机器读取的精简计数及输入 JSON 摘要见 [summary.json](summary.json)。
+**交接状态：模块、玩法、真实依赖功能组及生成漂移检查已完成；修正旧断言后的 60 分钟 Go 单包复验先因交接中止（USER HANDOFF INTERRUPTED），随后于 `d0d5a8b7` 补跑通过（见下表“补跑”行）。本轮未启动正式性能测量，不宣称整轮验收通过。初轮和 30 分钟复验都失败，不能记成最初全套退出 0。** 本页将四组结果合并记录；便于机器读取的精简计数及输入 JSON 摘要见 [summary.json](summary.json)。
 
 ## 完成状态与计数口径
 
@@ -12,6 +12,7 @@
 | `codegen/internal/roost` 30 分钟复验 | exit 1；6 条真实断言失败，随后整包超时 | 不是只有超时；原始失败和栈保留 |
 | shutdown / singleton 定向修复 | 31 顶层 PASS、0 FAIL/SKIP；漏计 Mod 变异红，还原绿 | 初次定向又暴露第 7 个同源旧预期；仅改测试/证据，保留独立固定预算 |
 | `codegen/internal/roost` 最终单包复验 | **USER HANDOFF INTERRUPTED；未完成** | `aff28634`，766.372s 后按交接要求 SIGTERM；已观察 123 顶层 PASS、0 条失败，不能计整包通过；其余 165 包未重跑 |
+| `codegen/internal/roost` 补跑（2026-11-14） | **exit 0**；1950.786s，406 顶层 PASS、0 FAIL、4 顶层 SKIP | `d0d5a8b7`，`-count=1 -timeout 60m -v`；4 个 SKIP 都是环境开关，其中 3 个带依赖补跑：Saga 原生步骤与 Gate 业务消费者通过；网络档 `TestDoctorPlayerTCPPassesAfterAuthAndConfig` 按已发布框架 v1.46.0 解析，生成代码引用的 `infra/network/playeraccess`（`bf8fcf43`，11-13 进 core）不在 v1.46.0 里，`go mod tidy` 失败——发布 v1.47.0 并提升最低 core 后才能通过，属发版前预期；compose 形状检查要 docker，本机 Docker Desktop 已卸载，未跑 |
 | `go generate ./...` 与源码漂移 | exit 0；diff exit 0、status 空、HEAD 前后相同 | 在 `fef75aee` 完成；后续 shutdown 合并只改测试/证据，无生产生成改动 |
 | 完整模块安装矩阵 | exit 0；5 个消费者、11 份 verify JSON 全部 ok | 全安装为 42 模块 + 47 联动；正序和逆序各 89 项、1027 条场景、0 SKIP、4 项工程检查通过 |
 | 13 玩法默认矩阵 | 13/13 成功；默认 182 次顶层 PASS，自定义 module 复验 182 次 PASS；0 SKIP | 默认主玩法 180 + SLG 联盟附加 2；13 份 PB registry 存在，build/vet/ID/生成漂移检查均完成 |
@@ -67,6 +68,8 @@ Remote 的三个跳过分别是 `TestGeneratedRemoteMirrorLocal`（要求独立 
 
 最终单包于 `2026-11-14T05:00:00.070340+00:00` 在 `aff286349fb1bca215e8aa761665826d03628389` 开始，以 `-count=1 -timeout 60m -v` 执行。**用户在该轮运行期间要求交给另一个 agent，root 于 `2026-11-14T05:12:46.443237+00:00` 按交接要求主动中止。结论是 USER HANDOFF INTERRUPTED，该轮未完成。** wrapper 原样记录 `status=failed`、子进程 `exit=-15`，外层 shell 返回 241；这对应主动 SIGTERM，不当作实现断言失败。运行 766.372s，停止记录观察到 123 个顶层 PASS、`observed_failures=[]`，当时正在进入 `TestModuleMatchroomGenerated`；不把这些已输出的用例或之前定向通过当作整包通过。
 
+**补跑**：`2026-11-14T07:55:45Z`～`08:28:18Z` 在 `d0d5a8b707fc35ce2870e183323cd1940f54ef0d` 以 `GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0 go test -count=1 -timeout 60m -v ./codegen/internal/roost` 执行，exit 0，1950.786s；406 个顶层 PASS、0 FAIL；4 个顶层 SKIP 均为环境开关（隔离 Mongo / NATS、私有 NATS、`ROOST_NETWORK_TESTS`、docker），嵌套 13 个 SKIP 是生成 demo 里要真实依赖的用例（由 `scripts/test-demo-generated.sh` 带依赖跑过）与按需测量。随后带依赖与网络开关补跑这 4 个：Saga 原生步骤 17.76s、Gate 业务消费者 47.97s 通过；网络档因已发布 v1.46.0 不含 `infra/network/playeraccess` 而 `go mod tidy` 失败（发版前预期）；compose 检查因本机没有 docker 仍跳过。日志 `/private/tmp/v147-roost-final-resume-20261114-1555.log`（含 `.meta`）与 `/private/tmp/v147-roost-final-resume-20261114-skips.log`。
+
 停止元数据保留了 PGID 19153 的现场进程和精确 SIGTERM 列表，最终 `group_after=[]`；本轮 Go 进程组没有残留。后续接手者应先读主交接入口，在代码与资源状态明确后重新执行该包完整验收，保留本次中止日志。正式性能本轮取消启动，不能用功能窗口的耗时填充性能结论。
 
 `go generate ./...` 已在 `fef75aee6d61a8986444de3980cc7db0c24a3765` 退出 0；独立 `git diff --exit-code` 为 0，`git status --porcelain` 为空，HEAD 前后完全相同。核对时间为 `2026-11-14T04:51:21Z`，原日志与 JSON 元数据保留；该结果与稍后的测试修复分别记录。
@@ -96,7 +99,7 @@ Remote 的三个跳过分别是 `TestGeneratedRemoteMirrorLocal`（要求独立 
 ```sh
 export GOMAXPROCS=0 GOWORK=off GOFLAGS=-p=2
 go test -timeout 60m ./... > /private/tmp/v147-go-rerun.log 2>&1
-# 本次其他包已通过；以下单包在交接时被中止，后续需重新完整执行：
+# 本次其他包已通过；以下单包已于 d0d5a8b7 补跑通过：
 go test -count=1 -timeout 60m -v ./codegen/internal/roost > /private/tmp/v147-roost-rerun.log 2>&1
 go generate ./... > /private/tmp/v147-generate-rerun.log 2>&1
 git diff --exit-code

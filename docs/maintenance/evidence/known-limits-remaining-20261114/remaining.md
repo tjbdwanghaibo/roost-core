@@ -36,7 +36,7 @@ M-13 的 [Cluster 探针修复](../mail-cluster-probe-20261114.md)已合：仅 i
 
 本轮代码工作与功能矩阵已完成，准确计数由[最终验收报告](../v147-final-validation-20261114/README.md)汇总。`go generate ./...` 已在 `fef75aee` 退出 0，生成后 diff / status 均为空。
 
-生成器整包复验仍待补跑：30m 重试曾出现六处 shutdown 预算旧断言失败（实际 28 Mod、预期 27）及总超时；[断言修复](../shutdown-assertions-20261114/README.md)已合，31 项定向测试与关键变异红绿通过。修复后的最后一轮 60m 整包复验因用户要求交接而主动中止，不能计为通过或测试超时。详见[最终验证与性能交接](../../HANDOFF-2026-11-14-v147-validation-performance.md)。M-1～M-19 / E-1 / E-3 均未运行，后续正式测量统一回写 `docs/performance/benchmarks/v147-remaining-20261114/README.md`，取得实测前不关闭 M。
+生成器整包复验仍待补跑：30m 重试曾出现六处 shutdown 预算旧断言失败（实际 28 Mod、预期 27）及总超时；[断言修复](../shutdown-assertions-20261114/README.md)已合，31 项定向测试与关键变异红绿通过。修复后的 60m 整包复验先因用户要求交接而主动中止，随后于 `d0d5a8b7` 补跑通过（exit 0，406 顶层 PASS、0 FAIL）。详见[最终验证与性能交接](../../HANDOFF-2026-11-14-v147-validation-performance.md)。M-1～M-19 / E-1 / E-3 均未运行，后续正式测量统一回写 `docs/performance/benchmarks/v147-remaining-20261114/README.md`，取得实测前不关闭 M。
 
 ### F：17 项过时表述的处理
 
