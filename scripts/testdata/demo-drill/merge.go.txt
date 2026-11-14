@@ -6,6 +6,7 @@
 //	mergedrill login  -state s.json -who u2:1001 -expect-serving 1000 -add 5   # login, enter the serving server's endpoint, add items
 //	mergedrill login  ... -gate 127.0.0.1:37100       # the same through an independent Gate (it routes by the serving server)
 //	mergedrill create -state s.json -sid 1001 -expect-refused                   # a fresh account creating a role on sid
+//	mergedrill ticket -state s.json -who u2:1001 -ticket enter:... -endpoint 127.0.0.1:37000 -add 1   # handshake with an enter ticket from the portal
 package main
 
 import (
@@ -60,6 +61,8 @@ var (
 	expectRefused = flag.Bool("expect-refused", false, "create must be refused")
 	items         = flag.Int("items", 10, "items added at setup")
 	gate          = flag.String("gate", "", "connect through this independent Gate instead of the serving server's own endpoint")
+	ticket        = flag.String("ticket", "", "ticket: the handshake ticket the portal issued (enter:<ticket>)")
+	endpoint      = flag.String("endpoint", "", "ticket: the address the portal gave (ignored with -gate)")
 )
 
 func main() {
@@ -78,6 +81,8 @@ func main() {
 		err = login(ctx)
 	case "create":
 		err = create(ctx)
+	case "ticket":
+		err = enterWithTicket(ctx)
 	default:
 		err = fmt.Errorf("unknown command %q", command)
 	}
@@ -114,10 +119,76 @@ func endpointOf(sid int32) (string, error) {
 	return "", fmt.Errorf("no endpoint for sid %d", sid)
 }
 
+// conn 是一条玩家 TCP 连接：一个读协程把收到的帧交给 packets，请求按序号认应答，推送里只留 EnterStatus，
+// 握手的确认帧（消息号 transport.AuthMessageID）记下后跳过。
 type conn struct {
-	raw transport.Conn
-	seq uint32
-	mu  sync.Mutex
+	raw     transport.Conn
+	seq     uint32
+	mu      sync.Mutex
+	packets chan *transport.Packet
+	failed  chan error
+	status  *pb.EnterStatusPush
+	acked   bool
+}
+
+func newConn(raw transport.Conn) *conn {
+	c := &conn{raw: raw, packets: make(chan *transport.Packet, 64), failed: make(chan error, 1)}
+	go func() {
+		for {
+			packet, err := raw.ReadPacket()
+			if err != nil {
+				c.failed <- err
+				return
+			}
+			c.packets <- packet
+		}
+	}()
+	return c
+}
+
+// take 收一帧：握手确认与 EnterStatus 推送记下来并返回 nil，其余推送丢掉，应答原样返回。
+func (c *conn) take(timeout <-chan time.Time) (*transport.Packet, error) {
+	select {
+	case packet := <-c.packets:
+		if packet.Flags&wire.FlagPush == 0 {
+			if packet.MsgID == transport.AuthMessageID {
+				c.acked = true
+				return nil, nil
+			}
+			return packet, nil
+		}
+		if packet.MsgID == msgid.MsgEnterStatus {
+			status, err := pb.UnmarshalEnterStatusPush(packet.Payload)
+			if err != nil {
+				return nil, fmt.Errorf("decode EnterStatus: %w", err)
+			}
+			c.status = status
+		}
+		return nil, nil
+	case err := <-c.failed:
+		return nil, err
+	case <-timeout:
+		return nil, errTimeout
+	}
+}
+
+var errTimeout = fmt.Errorf("timed out")
+
+// waitStatus 等会话激活后的 EnterStatus 推送，最多等 d；没等到返回 nil（它只是告知，可能先于或晚于应答、也可能丢）。
+func (c *conn) waitStatus(d time.Duration) (*pb.EnterStatusPush, error) {
+	timeout := time.After(d)
+	for c.status == nil {
+		packet, err := c.take(timeout)
+		switch {
+		case err == errTimeout:
+			return nil, nil
+		case err != nil:
+			return nil, err
+		case packet != nil:
+			return nil, fmt.Errorf("unexpected response %d before any request", packet.MsgID)
+		}
+	}
+	return c.status, nil
 }
 
 func (c *conn) call(id uint32, payload []byte) ([]byte, error) {
@@ -128,13 +199,14 @@ func (c *conn) call(id uint32, payload []byte) ([]byte, error) {
 	if err := c.raw.WritePackets([]*transport.Packet{{MsgID: id, Seq: seq, Payload: payload}}); err != nil {
 		return nil, err
 	}
+	timeout := time.After(30 * time.Second)
 	for {
-		packet, err := c.raw.ReadPacket()
+		packet, err := c.take(timeout)
 		if err != nil {
 			return nil, err
 		}
 		// 推送带 FlagPush，序号是服务端自己的会话序号，可能与请求的序号相同：只有应答才算。
-		if packet.Flags&wire.FlagPush == 0 && packet.Seq == seq {
+		if packet != nil && packet.Seq == seq {
 			return packet.Payload, nil
 		}
 	}
@@ -164,26 +236,36 @@ func enter(ctx context.Context, client *svcaccount.BusClient, accountID string, 
 	if err != nil {
 		return nil, session, err
 	}
-	c := &conn{raw: raw}
+	c := newConn(raw)
 	if err := raw.WritePackets([]*transport.Packet{playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", playerID, session.Token))}); err != nil {
 		raw.Close()
 		return nil, session, err
 	}
-	resp, err := c.call(msgid.MsgEnterGame, mustMarshal(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{ClientVersion: "mergedrill"})))
+	entered, err := enterGame(c, endpoint)
 	if err != nil {
 		raw.Close()
 		return nil, session, err
+	}
+	if entered.PlayerID != playerID {
+		raw.Close()
+		return nil, session, fmt.Errorf("enter game on %s: player %d, want %d", endpoint, entered.PlayerID, playerID)
+	}
+	return c, session, nil
+}
+
+func enterGame(c *conn, endpoint string) (*pb.EnterGameResponse, error) {
+	resp, err := c.call(msgid.MsgEnterGame, mustMarshal(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{ClientVersion: "mergedrill"})))
+	if err != nil {
+		return nil, err
 	}
 	entered, err := pb.UnmarshalEnterGameResponse(resp)
 	if err != nil {
-		raw.Close()
-		return nil, session, err
+		return nil, err
 	}
 	if entered.Code != 0 {
-		raw.Close()
-		return nil, session, fmt.Errorf("enter game %d on %s: code %d %s (owner sid %d)", playerID, endpoint, entered.Code, entered.Reason, entered.OwnerSID)
+		return nil, fmt.Errorf("enter game %d on %s: code %d %s (owner sid %d)", entered.PlayerID, endpoint, entered.Code, entered.Reason, entered.OwnerSID)
 	}
-	return c, session, nil
+	return entered, nil
 }
 
 func addItems(c *conn, count int) (int32, error) {
@@ -243,28 +325,33 @@ func setup(ctx context.Context) error {
 	return os.WriteFile(*statePath, raw, 0o644)
 }
 
-func login(ctx context.Context) error {
+// whom 从状态文件取 -who（用户:原服）对应的账号与角色。
+func whom() (*user, *role, error) {
 	raw, err := os.ReadFile(*statePath)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	var s state
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return err
+		return nil, nil, err
 	}
 	name, origin, _ := strings.Cut(*who, ":")
 	u := s.Users[name]
 	if u == nil {
-		return fmt.Errorf("unknown user %q", name)
+		return nil, nil, fmt.Errorf("unknown user %q", name)
 	}
-	var target *role
 	for _, r := range u.Roles {
 		if strconv.Itoa(int(r.SID)) == origin {
-			target = r
+			return u, r, nil
 		}
 	}
-	if target == nil {
-		return fmt.Errorf("%s has no role on %s", name, origin)
+	return nil, nil, fmt.Errorf("%s has no role on %s", name, origin)
+}
+
+func login(ctx context.Context) error {
+	u, target, err := whom()
+	if err != nil {
+		return err
 	}
 	client, stop, err := accounts()
 	if err != nil {
@@ -290,6 +377,62 @@ func login(ctx context.Context) error {
 		return err
 	}
 	fmt.Printf("%s role=%d origin=%d serving=%d bag[%d]=%d\n", *who, target.PlayerID, session.ServerID, session.ServingServerID, itemID, count)
+	if *expectCount >= 0 && int(count) != *expectCount {
+		return fmt.Errorf("%s: bag %d, want %d", *who, count, *expectCount)
+	}
+	return nil
+}
+
+// enterWithTicket 用入口签的进服票据握手（enter:<票据>，不经 SelectRole）：会话激活后的 EnterStatus 必须是
+// “能进、不用新建”（等不到按告知的约定放过，结论以 EnterGame 为准），EnterGame 进到的是这个角色本人，
+// 再加道具读背包（-expect-count 断言数据延续）。
+func enterWithTicket(ctx context.Context) error {
+	_, target, err := whom()
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(*ticket, "enter:") {
+		return fmt.Errorf("-ticket must be the portal's enter:<ticket>")
+	}
+	addr := *gate
+	if addr == "" {
+		addr = *endpoint
+	}
+	if addr == "" {
+		return fmt.Errorf("-endpoint or -gate is required")
+	}
+	raw, err := transport.Dial(ctx, transport.Config{Type: playertcp.TransportType, Endpoint: addr, DialTimeout: 5 * time.Second})
+	if err != nil {
+		return err
+	}
+	defer raw.Close()
+	c := newConn(raw)
+	if err := raw.WritePackets([]*transport.Packet{playertcp.AuthPacket(*ticket)}); err != nil {
+		return err
+	}
+	status, err := c.waitStatus(3 * time.Second)
+	if err != nil {
+		return fmt.Errorf("%s: waiting for EnterStatus: %w", *who, err)
+	}
+	statusText := "not received"
+	if status != nil {
+		if status.Code != 0 || status.NeedCreate {
+			return fmt.Errorf("%s: EnterStatus code %d %s need_create=%v, want 0 and an existing role", *who, status.Code, status.Reason, status.NeedCreate)
+		}
+		statusText = "code=0 need_create=false"
+	}
+	entered, err := enterGame(c, addr)
+	if err != nil {
+		return err
+	}
+	if entered.PlayerID != target.PlayerID {
+		return fmt.Errorf("%s: the enter ticket entered player %d, want the role %d", *who, entered.PlayerID, target.PlayerID)
+	}
+	count, err := addItems(c, *add)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s ticket via %s: handshake acked=%v, EnterStatus %s, role=%d bag[%d]=%d\n", *who, addr, c.acked, statusText, entered.PlayerID, itemID, count)
 	if *expectCount >= 0 && int(count) != *expectCount {
 		return fmt.Errorf("%s: bag %d, want %d", *who, count, *expectCount)
 	}
