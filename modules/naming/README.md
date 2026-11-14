@@ -82,7 +82,8 @@ name, err := c.Rename(ctx, playerID, requestKey, name) // 只能在 Nest 事务�
 - `roost module verify naming`：15 条场景，都在 `game/controllers/naming`。
 - 离线：Directory 用真实的实现加内存 versionstore，Nest 用真实引擎加替身提交器。
 - 覆盖：唯一性与重放、只释放旧名、目录提交应答丢失、档案提交失败（两个名字都保留待重试）、档案回包丢失、释放失败后恢复、同一玩家不同请求互斥、同一请求并发重试幂等、过期凭据重试、旧 Sender 被拒、旧端点走统一入口、非法输入与被拒的受理不写任何东西、迟到的清理不误删重新取得的名字、等待目录时不占 Nest worker、释放应答丢失且旧名已被别人取得时仍能完成。
-- 没有验证：真实 Redis 与 Mongo、跨进程故障、TCP 网络、长期稳定性。
+- `scripts/test-demo-login.sh` 的 casual + naming 阶段使用真实 HTTP / Robot TCP、Redis Directory、Mongo / WAL：新建占名、两服同名拒绝、失败后仍需新建、换名释放旧名、完成回执重放、game `SIGKILL` 后重连恢复。见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
+- 没有验证：真实 Redis 故障与命名各中间阶段崩溃的联合恢复、跨机、长期稳定性。
 
 ## 阶段表
 

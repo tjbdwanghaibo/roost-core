@@ -30,7 +30,7 @@
 - **夏令时**：`NextResetUnixMilli` 不一定是 `DayStartUnixMilli` 之后 24 小时；`UTCOffsetSeconds` 只用来显示墙上时间，不要拿它推算重置时刻；`PrevDay` 是按“本业务日起点之前那一刻所在的业务日”算的，不是日期数字减一。
 - **一致性的范围**：`At` 与各功能判定业务日用的是同一个进程日历，所以同一个 `nowUnixMilli` 两边的业务日相同；但 `Now()` 现读的时钟会比某条 Nest 消息冻结的时间晚，跨天那一刻两者可能不是同一个业务日。
 - **前提**：没有模块依赖。安装时代办玩家 TCP 接入（`access.transport: tcp`）；推送按能力名 `access.player.tcp` 取传输，只对连接在本进程的玩家有效。
-- **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md`）：“servertime 的边界”一条（只有离线场景；推送经真实 TCP 到达、与 `EnterGame` 应答的先后、独立 Gate 部署都没有验收；独立 Gate 下 Game 重启后客户端连接是否保留尚未确认）；“惰性清零对客户端可见”一条说明了客户端为什么需要它。
+- **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md`）：推送尽力而为；客户端仍需支持主动对时。“惰性清零对客户端可见”一条说明了客户端为什么需要它。单机 TCP / Gate 与重启行为的验收见本页“验证范围”。
 
 ## 复用方式
 
@@ -55,4 +55,5 @@
 
 - `roost module verify servertime`：12 条场景（`^TestServertime`，包 `./game/servertime` 7 条、`./game/controllers/servertime` 5 条）。覆盖：普通时刻、重置瞬间与前后各 1 毫秒、凌晨 5 点重置、业务时区不是 UTC、夏令时切换日不是 24 小时、`Now()` 跟随业务时钟偏移、`Day` 与 `clock.BusinessDay` 一致；同步应答带快照并回显 `ClientTick`、快照取自应答那一刻、缺上下文或请求时拒绝、`PushNow` 把快照发给指定玩家、传输不可用时报告错误。
 - enter 联动另有 3 条（`^TestWithServertimeEnter`）：进入时推送、没有传输时照常进入、推送失败照常进入。
-- 全部是离线场景：传输是内存替身。推送经真实 TCP 到达、与 `EnterGame` 应答的先后、独立 Gate 部署都没有验收；与 checkin 等模块的一致性是按“同一个 `clock.BusinessDay`”核对的，没有调它们的 handler 对比。
+- 上述模块场景用内存传输。`scripts/test-demo-login.sh` 的 casual + naming 阶段另经真实 Robot TCP 验证嵌入 TCP、双 Gate 上的 `ServertimeNow`、时间字段与 `EnterGame` 应答顺序；无故障演练中推送先于应答。game `SIGKILL` 重启后旧连接请求失败，重新握手进入再次收到时间推送；这不承诺所有部署下的连接保留或推送可靠性。见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
+- 与 checkin 等模块的一致性仍按“同一个 `clock.BusinessDay`”核对，没有调它们的 handler 对比。

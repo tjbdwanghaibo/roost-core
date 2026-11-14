@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：登录线真实进程与重启恢复**（2026-11-14，B-6）：`scripts/test-demo-login.sh` 在原 game-demo 演练后生成 casual + naming，验证双 account 跨副本票据、双 game sid 的真实 Redis 命名、双 Gate、game / Gate `SIGKILL` 后重连、首次金币与购买 / 改名回执，以及自身 Sync 的金币 / 背包 / 名字。每次进入记录实际服务器时间推送与应答顺序，并验证主动对时；去掉进入推送的变异被断言拒绝。单机范围与原始证据见[登录线验收](docs/maintenance/evidence/v147-login-20261114.md)，不扩大为跨机或所有玩法恢复；运行时代码不变，协议注释补充独立 Gate 也须处理 game 重启断连。
+
 - **测试：C++ 跨 Gate 同会话接管与完整 Protobuf 验收**（2026-11-14）：`ROOST_GATE_CPP=1 scripts/test-gate-client.sh` 增加两个真实 Gate / NATS 的迟到握手场景，要求旧连接被拒且新连接前后均可请求，Go 服务端带 race；暂时移除原生客户端连接代号后，同一用例发现新连接被关闭。`ROOST_PROTOBUF_TESTS=ON scripts/test-client-cpp.sh` 的 8 项 ctest 通过。两个 Gate 同处一个 Go 测试进程，C++ 独立进程，仅声明 macOS 本机验证；[证据与复跑](docs/maintenance/evidence/known-limits-remaining-20261114/native-acceptance.md)。运行逻辑不变。
 
 - MOBA 真实依赖补齐三进程快照交接：独立权威从 SIGKILL 留下的 strict WAL 恢复；旧宿主快照分块在途时交接，旧提交被拒并排空，新宿主从已提交检查点恢复。原快照用例保留 100 次 strict Sender 耗时并输出 p50 / p99 诊断。验证：私有 Mongo / NATS 下 `ROOST_MOBA_REAL=1 ROOST_MOBA_ROUTING=1 bash scripts/test-moba-generated.sh` 全过；去掉已提交门变异被逐包水位断言拒绝。功能验收延迟不作为容量测量，真实客户端链路与跨机范围见 MOBA 手册 §11。

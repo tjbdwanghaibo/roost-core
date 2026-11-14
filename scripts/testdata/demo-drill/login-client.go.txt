@@ -1,0 +1,305 @@
+// Command drilllogin 只从真实 HTTP / Robot TCP 观察登录、命名与购买，不装进程内替身。
+// 票据只保留在内存；报告只含身份、帧顺序与业务断言，不输出凭据。
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"time"
+
+	"DRILL_MODULE/db"
+	apperrors "DRILL_MODULE/internal/errors"
+	"DRILL_MODULE/protocol/msgid"
+	"DRILL_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+)
+
+func must[T any](value T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+func require(ok bool, format string, args ...any) {
+	if !ok {
+		panic(fmt.Errorf(format, args...))
+	}
+}
+
+type client struct {
+	conn              transport.Conn
+	packets           chan *transport.Packet
+	errors            chan error
+	seq               uint32
+	frames, timeFrame int
+	now               *pb.ServertimeNowPush
+	decoder           *entitysync.Decoder
+	state             *db.PlayerDao
+	stop              func() bool
+}
+
+func connect(ctx context.Context, endpoint, ticket string) *client {
+	c := &client{conn: must(transport.DialPlayerTCP(ctx, transport.Config{Endpoint: endpoint, DialTimeout: 5 * time.Second})), packets: make(chan *transport.Packet, 128), errors: make(chan error, 1), seq: 1}
+	c.decoder, c.state = entitysync.NewDecoder(frame.Limits{}), db.NewPlayerDao()
+	c.stop = context.AfterFunc(ctx, func() { _ = c.conn.Close() })
+	go func() {
+		for {
+			p, err := c.conn.ReadPacket()
+			if err != nil {
+				c.errors <- err
+				return
+			}
+			select {
+			case c.packets <- p:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	auth := transport.AuthPacket(ticket)
+	auth.Seq = c.seq
+	require(c.conn.WritePackets([]*transport.Packet{auth}) == nil, "write auth")
+	ack := must(c.next(ctx))
+	require(ack.MsgID == 0 && ack.Seq == c.seq && len(ack.Payload) == 0, "invalid auth ACK")
+	return c
+}
+func (c *client) close() { c.stop(); _ = c.conn.Close() }
+func (c *client) next(ctx context.Context) (*transport.Packet, error) {
+	select {
+	case p := <-c.packets:
+		c.frames++
+		if p.MsgID == msgid.MsgSelfSync {
+			decoded := must(c.decoder.Decode(p.Payload))
+			for _, object := range decoded.Objects {
+				for _, component := range object.Components {
+					require(c.state.ApplySync(component.Update.Payload.BytesCopy()) == nil, "apply Player self sync")
+				}
+			}
+		}
+		if p.MsgID == msgid.MsgServertimeNow {
+			c.now = must(pb.UnmarshalServertimeNowPush(p.Payload))
+			c.timeFrame = c.frames
+			checkTime(c.now)
+		}
+		return p, nil
+	case err := <-c.errors:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+func (c *client) call(ctx context.Context, id uint32, raw []byte) ([]byte, error) {
+	c.seq++
+	if err := c.conn.WritePackets([]*transport.Packet{{MsgID: id, Seq: c.seq, Payload: raw}}); err != nil {
+		return nil, err
+	}
+	for {
+		p, err := c.next(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if p.MsgID == id && p.Seq == c.seq {
+			return p.Payload, nil
+		}
+		require(p.Seq == 0, "unexpected response id=%d seq=%d", p.MsgID, p.Seq)
+	}
+}
+func (c *client) status(ctx context.Context, needCreate bool) {
+	for {
+		p := must(c.next(ctx))
+		if p.MsgID == msgid.MsgEnterStatus {
+			s := must(pb.UnmarshalEnterStatusPush(p.Payload))
+			require(s.Code == 0 && s.NeedCreate == needCreate, "EnterStatus = %+v, need_create=%t", s, needCreate)
+			return
+		}
+	}
+}
+func (c *client) create(ctx context.Context, name string) *pb.EnterCreateResponse {
+	return must(pb.UnmarshalEnterCreateResponse(must(c.call(ctx, msgid.MsgEnterCreate, must(pb.MarshalEnterCreateRequest(&pb.EnterCreateRequest{Name: name}))))))
+}
+func (c *client) enter(ctx context.Context, first bool) {
+	before := c.frames
+	r := must(pb.UnmarshalEnterGameResponse(must(c.call(ctx, msgid.MsgEnterGame, must(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{}))))))
+	require(r.Code == 0 && r.First == first, "EnterGame = %+v, first=%t", r, first)
+	// 在无故障本机演练中要求钩子实际推送且先于应答；不把尽力推送提升为产品的可靠交付契约。
+	require(c.timeFrame > before && c.timeFrame < c.frames, "ServertimeNow absent before EnterGame response: before=%d time=%d response=%d", before, c.timeFrame, c.frames)
+	fmt.Printf("{\"event\":\"enter\",\"first\":%t,\"time_frame\":%d,\"response_frame\":%d}\n", first, c.timeFrame, c.frames)
+	synced := must(pb.UnmarshalServertimeSyncResponse(must(c.call(ctx, msgid.MsgServertimeSync, must(pb.MarshalServertimeSyncRequest(&pb.ServertimeSyncRequest{ClientTick: 47}))))))
+	require(synced.Code == 0 && synced.ClientTick == 47, "ServertimeSync = %+v", synced)
+	checkTime(synced.Time)
+}
+func checkTime(now *pb.ServertimeNowPush) {
+	require(now != nil && now.DayStartUnixMilli <= now.NowUnixMilli && now.NextResetUnixMilli > now.NowUnixMilli && now.Day > 0 && now.Zone == "UTC", "invalid server time: %+v", now)
+}
+
+// 回执与实际可见状态分别核对；冷启动后只恢复了回执、却漏掉钱包/背包/名字也必须失败。
+func (c *client) waitState(ctx context.Context, name string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for {
+		if c.state.GetWallet() != nil && c.state.GetBag() != nil && c.state.GetProfile() != nil {
+			held, _ := c.state.GetBag().GetItems(1001)
+			if c.state.GetWallet().GetCoins() == 90 && held == 1 && c.state.GetProfile().GetName() == name {
+				return
+			}
+		}
+		if _, err := c.next(ctx); err != nil {
+			panic(fmt.Errorf("self sync did not converge to coins=90 held=1 name=%s: %w", name, err))
+		}
+	}
+}
+func (c *client) buy(ctx context.Context) {
+	r := must(pb.UnmarshalShopBuyResponse(must(c.call(ctx, msgid.MsgShopBuy, must(pb.MarshalShopBuyRequest(&pb.ShopBuyRequest{GoodsID: 1, Count: 1, Key: "purchase-1"}))))))
+	require(r.Code == 0 && r.Balance == 90 && r.Cost == 10 && r.ItemID == 1001 && r.Held == 1, "purchase/replay = %+v, want balance=90 held=1", r)
+}
+func (c *client) rename(ctx context.Context, name string) {
+	r := must(pb.UnmarshalNamingRenameResponse(must(c.call(ctx, msgid.MsgNamingRename, must(pb.MarshalNamingRenameRequest(&pb.NamingRenameRequest{RequestKey: "rename-1", Name: name}))))))
+	require(r.Code == 0 && r.Name == name, "rename/replay = %+v", r)
+}
+
+func post(ctx context.Context, base, path string, body any, result any) {
+	raw := must(json.Marshal(body))
+	req := must(http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(raw)))
+	req.Header.Set("Content-Type", "application/json")
+	response := must(http.DefaultClient.Do(req))
+	defer response.Body.Close()
+	raw = must(io.ReadAll(io.LimitReader(response.Body, 1<<20)))
+	var verdict struct {
+		OK     bool
+		Code   int32
+		Reason string
+	}
+	require(json.Unmarshal(raw, &verdict) == nil && response.StatusCode == http.StatusOK && verdict.OK, "portal %s: status=%d code=%d reason=%s", path, response.StatusCode, verdict.Code, verdict.Reason)
+	require(json.Unmarshal(raw, result) == nil, "decode portal %s", path)
+}
+
+func ticket(ctx context.Context, portalA, portalB, identity string, sid int) string {
+	var logged struct {
+		AccountTicket string `json:"account_ticket"`
+	}
+	post(ctx, portalA, "/portal/login", map[string]any{"channel": "dev", "open_id": identity, "credential": "dev-recipe-local"}, &logged)
+	var listed struct {
+		Servers []struct {
+			ServerID int `json:"server_id"`
+		}
+	}
+	// A 签发、B 校验并选服：两个真实 account 进程共享正式 Redis 状态。
+	post(ctx, portalB, "/portal/servers", map[string]any{"account_ticket": logged.AccountTicket}, &listed)
+	found := false
+	for _, s := range listed.Servers {
+		found = found || s.ServerID == sid
+	}
+	require(found, "server %d absent", sid)
+	var entered struct {
+		Ticket          string
+		ServingServerID int `json:"serving_server_id"`
+	}
+	post(ctx, portalB, "/portal/enter", map[string]any{"account_ticket": logged.AccountTicket, "server_id": sid}, &entered)
+	require(entered.Ticket != "" && entered.ServingServerID == sid, "portal serving server mismatch")
+	return entered.Ticket
+}
+func waitFile(ctx context.Context, path string) {
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		select {
+		case <-tick.C:
+		case <-ctx.Done():
+			panic(ctx.Err())
+		}
+	}
+}
+
+func main() {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Fprintln(os.Stderr, "FAIL:", err)
+			os.Exit(1)
+		}
+	}()
+	mode := flag.String("mode", "seed", "seed, resume, hold or collision")
+	endpoint := flag.String("endpoint", "", "real player TCP endpoint")
+	portalA := flag.String("portal-a", "", "login account replica")
+	portalB := flag.String("portal-b", "", "ticket validation account replica")
+	identity := flag.String("identity", "", "stable identity within the private project")
+	sid := flag.Int("sid", 1000, "serving game")
+	ready := flag.String("ready", "", "hold ready barrier")
+	release := flag.String("release", "", "restart complete barrier")
+	occupied := flag.String("occupied", "", "collision: another player's occupied name")
+	createName := flag.String("create-name", "", "create with a released name instead of the identity")
+	flag.Parse()
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	c := connect(ctx, *endpoint, ticket(ctx, *portalA, *portalB, *identity, *sid))
+	defer c.close()
+	fresh := *mode == "seed" || *mode == "collision"
+	c.status(ctx, fresh)
+	if fresh {
+		r := must(pb.UnmarshalEnterGameResponse(must(c.call(ctx, msgid.MsgEnterGame, must(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{}))))))
+		require(r.Code == apperrors.ErrEnterNeedCreate.Code(), "uncreated EnterGame = %+v", r)
+		if *mode == "collision" {
+			rejected := c.create(ctx, *occupied)
+			require(rejected.Code == directory.CodeKeyTaken, "occupied name = %+v, want directory key taken", rejected)
+			// 占名失败之后仍然没建成，不得发首次金币。
+			r = must(pb.UnmarshalEnterGameResponse(must(c.call(ctx, msgid.MsgEnterGame, must(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{}))))))
+			require(r.Code == apperrors.ErrEnterNeedCreate.Code(), "failed naming created a player: %+v", r)
+		}
+		name := *createName
+		if name == "" {
+			name = *identity
+		}
+		created := c.create(ctx, name)
+		require(created.Code == 0, "EnterCreate = %+v", created)
+		c.enter(ctx, true)
+		again := c.create(ctx, *identity)
+		require(again.Code == apperrors.ErrEnterCreated.Code(), "repeat EnterCreate = %+v", again)
+	} else {
+		c.enter(ctx, false)
+	}
+	c.buy(ctx)
+	c.buy(ctx)
+	c.rename(ctx, *identity+"R")
+	c.rename(ctx, *identity+"R")
+	c.waitState(ctx, *identity+"R")
+	if *mode == "hold" {
+		require(os.WriteFile(*ready, []byte("ready\n"), 0600) == nil, "write ready")
+		waitFile(ctx, *release)
+		probeCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+		raw, err := c.call(probeCtx, msgid.MsgServertimeSync, must(pb.MarshalServertimeSyncRequest(&pb.ServertimeSyncRequest{ClientTick: 47})))
+		stop()
+		require(!errors.Is(err, context.DeadlineExceeded), "old connection state unknown: probe timed out")
+		retained := err == nil
+		if retained {
+			r := must(pb.UnmarshalServertimeSyncResponse(raw))
+			require(r.Code == 0 && r.ClientTick == 47, "retained connection response %+v", r)
+			checkTime(r.Time)
+		}
+		result := map[string]any{"event": "restart", "old_connection_retained": retained}
+		if err != nil {
+			result["old_connection_error"] = err.Error()
+		}
+		fmt.Println(string(must(json.Marshal(result))))
+		c.close()
+		c = connect(ctx, *endpoint, ticket(ctx, *portalA, *portalB, *identity, *sid))
+		defer c.close()
+		c.status(ctx, false)
+		c.enter(ctx, false)
+		c.buy(ctx)
+		c.rename(ctx, *identity+"R")
+		c.waitState(ctx, *identity+"R")
+	}
+	fmt.Printf("PASS: mode=%s identity=%s sid=%d balance=90 held=1 naming=%sR\n", *mode, *identity, *sid, *identity)
+}

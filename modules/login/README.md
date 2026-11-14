@@ -100,7 +100,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
   - Gate：工程自己加一个服务，Mod 是 NATS、`kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration())`、account 的 `NewClientMod()`、`gatewiring.NewGateMod(options)`。不带认证器时用 `wiring/gate` 缺省的 `AccountAuthenticator`，它认 `enter:` 与 `session:` 两种票据。
   - 两端的 `options.Config.Namespace` 相同，都开单实例锁（`singleton.enabled`）。
   - 与嵌入 TCP 不同的地方：每次握手 account 的 `EnterServer` 执行两次（Gate 一次，Game Ingress 绑定时用同一张票据再认证一次；第二次读到已建好的映射，所以 Game 侧的会话上没有 `new_role`）。别的服的票据在 Gate 上握手直接被断开，客户端收不到 `login_elsewhere`。
-  - 没有跑：多个 Gate、Gate 或 Game 重启之后的重连、跨机、业务服务不叫 `game` 的工程。
+  - `scripts/test-demo-login.sh` 另有 casual + naming 阶段：双 Gate 同时在线、嵌入 TCP 与 Game Ingress 被 `SIGKILL` 后重连、Gate 自身重启后重连、account 两副本。没有跑跨机与业务服务不叫 `game` 的工程。
 - **已知限制：** 以上各条与 game-demo 接入后的取舍见 `docs/maintenance/KNOWN-LIMITS.md` 的“login 的边界”“game-demo 接入登录链路的边界”。
 
 ## 复用方式
@@ -164,4 +164,4 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 - account 一侧验证开发令牌（对、错、关、生产配置拒绝）、渠道缺省全拒、计数器的键与出错不发号。
 - `cmd/accountctl` 的子命令在内存存储上跑，连接旗标只验到“读对了”；真正去连 Redis 的那一段（`openService`）没有被场景执行。
 - 与 enter 的联动里游戏服的档是内存替身；新建与进入的事务在 enter 模块自己的场景里验证。
-- 没有经真实的 TCP、总线、Redis 与持久层的场景。真实进程上的演练在 game-demo 上：仓库的 `scripts/test-demo-login.sh`（单机 `make dev-run` 的自动登记、三步登录、机器人的两种登录，最后一段经独立 Gate），可重复；多实例、跨机没有跑。
+- 模块单测使用离线替身；真实进程入口是 `scripts/test-demo-login.sh`，先运行 game-demo 的 `make dev-run`、三步登录与两种机器人登录，再生成 casual + naming 验证两 account、两 game sid、两 Gate 与重启恢复。`DEMO_LOGIN_MODULES_ONLY=1` 可只复跑后者；见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。跨机没有跑。

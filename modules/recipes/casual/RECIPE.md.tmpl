@@ -50,4 +50,10 @@
 登录入口的 HTTP 那一段在 portal 模块自己的场景里。
 2026-11-12 另用生成工程的 `make dev-run` 完成单机真实进程演练：Mongo 副本集、Redis、NATS JetStream、etcd，
 curl 登录三步 → TCP 握手 → 拒绝未新建进入 → 新建 → 首次进入 → 重连。复跑探针见 roost-core 的
-`docs/maintenance/evidence/recipes-login-20261112/`。未验证全玩法的真实存储、进程重启恢复、自身 Sync 解码或跨机故障。
+`docs/maintenance/evidence/recipes-login-20261112/`。
+
+框架仓库 `scripts/test-demo-login.sh` 另有可重复的 casual + naming 真实阶段（`DEMO_LOGIN_MODULES_ONLY=1` 可单独跑）：
+两 account、两 game sid、两 Gate，入口跨副本票据、新建与真实唯一命名、100 金币买一次后为 90 / 道具 1、购买与改名回执重放，
+game / Gate `SIGKILL` 后重新握手恢复，以及服务器时间推送的实际收包次序。重启前后用正式自身 Sync 解码核对金币、道具与名字，
+两 game 共享 Redis Directory，仍按 sid 使用各自 WAL。证据见框架仓库 `docs/maintenance/evidence/v147-login-20261114.md`。
+未验证其它玩法的真实存储、命名中间阶段故障或跨机故障。
