@@ -209,7 +209,8 @@ type LoadStats struct {
 // Map 是本进程的地形。
 //
 // 锁与所有权：pack、view、meta、region、chunks、editors、editor 在 Open 之后不变；view 自己保证并发（查询无锁）。unloadable
-// 由 mu 保护：Load 里写（启动阶段，发布之前），之后只有邻格的副本（ApplyReplica，P3）把 Ghost 带里的块从中移出。
+// 由 mu 保护：Load 里写（启动阶段，发布之前），之后只有邻格的副本（ApplyReplica，P3）改 Ghost 带里的块：装入成功的移出，
+// 按原始块也装不进的记入（连同 ownerBase）。
 // Map 拥有 pack：Close 关闭它。
 type Map struct {
 	pack    *terrain.Pack
@@ -224,6 +225,10 @@ type Map struct {
 	// unloadable 是装不进视图的块及原因（基于旧原始地形的记录、损坏的记录或原始块）。不自动丢弃或改写数据库里的
 	// 记录：这些块查询返回 ErrNotLoaded、改块返回 ErrUnloadable，换版后的旧编辑怎么处理由维护者 / 产品决定。
 	unloadable map[terrain.ChunkKey]error
+	// ownerBase 是 Ghost 带里本进程装不进、拥有者答了“原始块”的块（ApplyReplica）：拥有者自己也装不进它
+	// （同一个坏包、同一份坏记录），按原始块答（N4）。视图仍不装它（查询 ErrNotLoaded、行走不可走），只记下“有了说法”，
+	// ReplicaHeld 报 0，订阅续期不再要。由 mu 保护。
+	ownerBase map[terrain.ChunkKey]struct{}
 	// commitFailures 是提交后装入视图失败的次数（正常不会发生：Apply 已校验形状与版本；发生即视图落后于数据库，
 	// 直到重启重新装入）。
 	commitFailures atomic.Int64
@@ -274,7 +279,7 @@ func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunk
 	}
 	return &Map{
 		pack: pack, view: terrain.NewView(pack), meta: meta, region: region,
-		chunks: chunks, editors: editors, editor: editor, unloadable: map[terrain.ChunkKey]error{},
+		chunks: chunks, editors: editors, editor: editor, unloadable: map[terrain.ChunkKey]error{}, ownerBase: map[terrain.ChunkKey]struct{}{},
 		policy: DefaultPolicy, quota: pointQuota{now: time.Now}, occupancy: newOccupancyTable(meta),
 	}, nil
 }
@@ -367,9 +372,17 @@ func (m *Map) GhostKeys() []terrain.ChunkKey {
 }
 
 // ReplicaHeld 是 Ghost 带里一块在本进程视图里的版本（副本订阅时报给拥有者）：0 是原始块，≥ 1 是覆盖块，-1 是装不进
-// 视图（启动时记录基于另一版原始地形、损坏）或没装着——拥有者据此把当前状态（含“原始块”）发来。
+// 视图（启动时记录基于另一版原始地形、损坏）或没装着——拥有者据此把当前状态（含“原始块”）发来。装不进、而拥有者已经
+// 答了“原始块”的块（ownerBase，N4）报 0：有了说法，续期不再要。
 func (m *Map) ReplicaHeld(key terrain.ChunkKey) int64 {
-	if m.unloadableErr(key) != nil {
+	m.mu.Lock()
+	_, unloadable := m.unloadable[key]
+	_, answered := m.ownerBase[key]
+	m.mu.Unlock()
+	if unloadable {
+		if answered {
+			return 0
+		}
 		return -1
 	}
 	version, loaded := m.view.Version(key)
@@ -384,6 +397,12 @@ func (m *Map) ReplicaHeld(key terrain.ChunkKey) int64 {
 // D13），视图里已有覆盖块时同样答 ErrStaleOverlay（同一原始地形版本内拥有者的版本不回退；换版前后的消息由
 // Replicator 按 BaseRevision 丢弃），否则按原始块装入。装入成功后这块不再是 unloadable（例如启动时读到邻格还没丢弃的
 // 旧记录，拥有者丢弃之后这里撤回到原始块）。调用方是 Replicator 的 goroutine：读包、解压在那里做。
+//
+// 拥有者自己装不进的块也答“原始块”（N4，gameplay/terrain 的 Replicator）。本进程同样装不进、且原因不是“基于另一版原始
+// 地形”的块（损坏的记录、坏了的原始块——拥有者读的是同一个库、同一个包，它答的“原始块”只能是“它也装不进”），以及按
+// 原始块也装不进的块（原始块坏了），不装进视图：行走与查询照旧当它不在（ErrNotLoaded），只记下拥有者给了说法
+// （ownerBase，ReplicaHeld 报 0），答 nil——调用方据此给客户端登记就绪标记。之后拥有者推来覆盖块（运维修好、拥有者重启
+// 之后）照常装入。
 func (m *Map) ApplyReplica(key terrain.ChunkKey, o terrain.Overlay) error {
 	if !m.meta.Contains(key) || m.Owns(key) || intersect(m.region.Load, key.Bounds()).Empty() {
 		return fmt.Errorf("%w: chunk %v is not in this process's ghost band", ErrNotOwned, key)
@@ -396,14 +415,31 @@ func (m *Map) ApplyReplica(key terrain.ChunkKey, o terrain.Overlay) error {
 		if version, loaded := m.view.Version(key); loaded && version >= 1 {
 			return fmt.Errorf("%w: the owner says base, this view holds version %d", terrain.ErrStaleOverlay, version)
 		}
+		if cause := m.unloadableErr(key); cause != nil && !errors.Is(cause, terrain.ErrBaseRevision) {
+			m.answeredBase(key)
+			return nil
+		}
 		if err := m.view.LoadBase(key); err != nil {
-			return err
+			if !errors.Is(err, terrain.ErrCorruptChunk) {
+				return err
+			}
+			m.markUnloadable(key, err)
+			m.answeredBase(key)
+			return nil
 		}
 	}
 	m.mu.Lock()
 	delete(m.unloadable, key)
+	delete(m.ownerBase, key)
 	m.mu.Unlock()
 	return nil
+}
+
+// answeredBase 记下拥有者对一块本进程装不进的块答了“原始块”（见 ownerBase）。
+func (m *Map) answeredBase(key terrain.ChunkKey) {
+	m.mu.Lock()
+	m.ownerBase[key] = struct{}{}
+	m.mu.Unlock()
 }
 
 // CommitFailures 是提交后装入视图失败的次数（见 Map.commitFailures）。

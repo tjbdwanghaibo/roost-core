@@ -821,7 +821,7 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "services/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
 		{write: "services/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
 		{write: "game/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
-		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的四个业务文件。协议多几个字段，
+		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的五个业务文件（含新玩家初始化 game/login/enter_first.go）。协议多几个字段，
 		// 两个要装载 Player 的端点交给 player controller——EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
 		// 拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter 的联动登记）与 EnterCreate（区服归属、
 		// 登录预算、接入驻留表之后才建档）。会话激活后的告知 enter_status.go 是模块的，不覆盖。
@@ -830,6 +830,7 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "game/controllers/enter/enter_game.go", why: "the endpoint hands the login to the player controller's EnterGame"},
 		{write: "game/controllers/enter/enter_create.go", why: "the create request's endpoint hands over to the player controller's EnterCreate: creating a Player loads it, and the demo loads a Player only where its role is bound, after the ownership table took it into service"},
 		{write: "game/controllers/player/enter_create.go", why: "the demo's two record operations behind the enter module's Create: Serve then GetOrCreate on the login budget, and the module's EnterCreate transaction"},
+		{write: "game/login/enter_first.go", why: "the demo's new-player initialization in the enter module's first-enter hook (D25): a new player's saved position is the world scene's spawn, written once in the transaction that marks the player initialized, on both the load-or-create and the create path"},
 		{write: "game/controllers/player/enter_login_export_test.go", why: "the test-only constructor the external login scenario builds its player controller with"},
 		{write: "game/controllers/player/enter_login_scenario_test.go", why: "the whole chain landing on the demo's own login: an enter-ticket handshake against the real account service, EnterStatus says create, EnterGame before the create is refused and writes nothing, EnterCreate, the demo's EnterGame, and a reconnect that is not asked to create again; the session-token path still loads or creates"},
 		// 排行榜是 leaderboard 模块：读榜的两条协议（LeaderboardTop 带自己的名次、LeaderboardMe）与提交入口

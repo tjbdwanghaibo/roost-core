@@ -121,6 +121,32 @@ func TestDungeonClearIsPaidOnce(t *testing.T) {
 	}
 }
 
+// D26：副本通关除经验外还发金币，经 wallet 模块到账（PlayerDao.Wallet，玩家本人可见）；与经验同一个准入——
+// 只有真正付款的那一笔加金币，同一局的重放不再加。修前通关只发经验，钱包一直是 0。
+func TestDungeonClearPaysCoinsIntoTheWalletOnce(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+	coins := func() int64 { return subject.Dao().GetWallet().GetCoins() }
+
+	before := coins()
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "run-coins", dungeon.ClearExp, now, clearsSeason); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	paid := coins()
+	if paid <= before {
+		t.Fatalf("after a paid clear the wallet holds %d coins (before %d), want more: the dungeon is a coin source", paid, before)
+	}
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "run-coins", dungeon.ClearExp, now, clearsSeason); err != nil {
+		t.Fatalf("replayed claim: %v", err)
+	}
+	if got := coins(); got != paid {
+		t.Fatalf("a replayed claim moved the wallet from %d to %d coins", paid, got)
+	}
+}
+
 // 通关数是排行的来源，它与奖励同一个准入：只在这笔事务真正付款时加一，重放（不论隔了多少局）只报当前值，
 // 窗口外的一局在计数之前就被拒绝；按赛季分开，并随 Player 持久化。
 func TestTheClearCountMovesOnlyWhenARunIsPaid(t *testing.T) {

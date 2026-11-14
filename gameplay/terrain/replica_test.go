@@ -523,6 +523,31 @@ func TestReplicaFollowsADiscardOnANewBaseRevision(t *testing.T) {
 	sameData(t, a2.view, b2.view, column0[0])
 }
 
+// 拥有者自己装不进的块（原始块坏了、记录装不进来）按原始块答（可编辑地形方案 §31.9 N4，维护者 2026-11-14 定 A）：
+// 副本拿到 Version 0，有了说法，之后的续期不再要它；拥有者计 Unloaded。修前拥有者对这样的块不答，副本 Held 一直是 -1，
+// 每次续期都再问一遍，game-demo 的客户端永远等不到这块的确认。
+func TestReplicaAnswersAChunkTheOwnerCannotLoadAsBase(t *testing.T) {
+	pack, _ := writeTestPack(t, testMeta, Generated(testMeta, testSeed))
+	net := newReplicaNet()
+	bad := column0[0]
+	a := startReplicaProc(t, net, sidA, pack, []ChunkKey{bad}, nil, nil)
+	b := startReplicaProc(t, net, sidB, pack, []ChunkKey{bad}, column0, nil)
+	waitSubscribers(t, a, 1)
+	waitVersion(t, b, bad, 0, "the owner's answer for a chunk it cannot load")
+	if got := b.store.Held(bad); got != 0 {
+		t.Fatalf("held %d after the owner's answer, want 0", got)
+	}
+	if s := a.r.Stats(); s.Unloaded == 0 {
+		t.Fatalf("the owner did not count the chunk it cannot load: %+v", s)
+	}
+	// 有了说法之后的续期：拥有者不再为这块发任何东西。
+	settled := a.r.Stats().ChunksOut
+	time.Sleep(4 * testRenew)
+	if s := a.r.Stats(); s.ChunksOut != settled || s.SubscribesIn < 2 {
+		t.Fatalf("after the answer the renewals still fetched chunks: %d chunk states out (was %d), %d subscriptions in", s.ChunksOut, settled, s.SubscribesIn)
+	}
+}
+
 // 只认拥有者；不想要的块不装；撤销订阅时 store 收到 Forget、拥有者的订阅表清掉；副本停了不续期，拥有者在租约之后删掉订阅。
 func TestReplicaTrustsOnlyTheOwnerAndLetsGo(t *testing.T) {
 	pack, _ := writeTestPack(t, testMeta, Generated(testMeta, testSeed))

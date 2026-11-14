@@ -42,6 +42,11 @@ import (
 //     块的 Version 不变，只差占位时答复不带块数据。邻格的 Ghost 带用它让行走判定看见邻格的建筑。占位记录的修订号同样
 //     只进不退（ApplyLots 对旧的答 ErrStaleOverlay），与块数据同一个代际（BaseRevision）。
 //
+// 装不进的块：拥有者自己的视图装不进的块（原始地形包里这块坏了、持久记录装不进来）按“原始块”（Version 0）答复与推送，
+// 计 Unloaded——这块对谁都只能按原始地形包显示（可编辑地形方案 §31.9 N4，维护者 2026-11-14）。副本因此总能拿到
+// 一个说法、不会每次续期都再要；它自己的视图装得下原始块就照常装入，装不下（同一个坏包）由存放处决定怎么记
+// （game-demo 不把它装进视图，只给客户端一个就绪标记）。拥有者在这块上没有覆盖块可推，也不会有（装不进的块改不了）。
+//
 // 限制：拥有者的数据倒退（例如从备份恢复数据库）不在保证内——副本持有的更新版本不会被拉回（计 Ahead），要重启副本
 // 进程。各进程的原始地形包版本不同（换版只换了一部分进程）时，两边之间不复制（计 BaseRevisionDrops），副本停在换包前
 // 的数据；换版要整组进程换包重启。
@@ -121,7 +126,8 @@ type ReplicaStats struct {
 	ChunksIn, Applied, Stale, LotsApplied, LotsStale uint64
 	// BaseRevisionDrops：对方的原始地形包版本与本进程的不同而丢弃（订阅计 1，块状态按条数）。WrongOwner：发件的不是这块的拥有者。Unwanted：
 	// 本进程这一路没有订阅这块（订阅刚变）。NotOwned：订阅里有不归本进程写的块（不答）。Unloaded：拥有者自己这块没装入
-	// （记录装不进来，不答）。Ahead：副本持有的版本比拥有者的新（拥有者数据倒退，见包说明的限制）。
+	// （原始块坏了、记录装不进来；按原始块答，见包说明“装不进的块”）。Ahead：副本持有的版本比拥有者的新（拥有者数据
+	// 倒退，见包说明的限制）。
 	BaseRevisionDrops, WrongOwner, Unwanted, NotOwned, Unloaded, Ahead uint64
 	// DecodeErrors：坏消息、坏块数据。ApplyErrors：store 拒绝（ErrStaleOverlay 之外）。InboxDrops / SendDrops：收件队列满、
 	// 发送被拒。
@@ -555,14 +561,17 @@ func (r *Replicator) answer(from int32, m subscribeMsg) {
 		}
 		keys[key] = struct{}{}
 		version, loaded := r.cfg.Source.Version(key)
+		if !loaded {
+			// 拥有者自己装不进的块（原始块坏了、记录装不进来）按原始块答：这块对谁都只能按原始地形包显示，答复给副本
+			// 一个说法（客户端据此确认），副本有了说法续期就不再要（可编辑地形方案 §31.9 N4）。仍计 Unloaded。
+			r.stats.unloaded.Add(1)
+		}
 		var lotsDiffer bool
 		if wantsLots {
 			rev, _ := r.lotsOf(key)
 			lotsDiffer = m.heldLots[i] != rev
 		}
 		switch held := m.held[i]; {
-		case !loaded:
-			r.stats.unloaded.Add(1)
 		case held > version:
 			r.stats.ahead.Add(1)
 		case held != version || lotsDiffer:
@@ -609,8 +618,7 @@ func (r *Replicator) push(changed map[ChunkKey]struct{}) {
 			}
 			version, loaded := r.cfg.Source.Version(key)
 			if !loaded {
-				r.stats.unloaded.Add(1)
-				continue
+				r.stats.unloaded.Add(1) // 与 answer 相同：装不进的块按原始块（version 为 0）推
 			}
 			if e, ok := r.entry(key, version); ok {
 				batch.add(r, sk.sid, sk.ch, r.withLots(e, sub.lots), true)

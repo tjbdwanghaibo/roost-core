@@ -11,6 +11,7 @@ import (
 
 	playerctl "{{MODULE}}/game/controllers/player"
 	playerentity "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/handler"
 	gamelogin "{{MODULE}}/game/login"
 	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
@@ -28,6 +29,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
@@ -535,6 +537,80 @@ func TestSessionTokenLoginStillLoadsOrCreatesInEnterGame(t *testing.T) {
 	}
 	if entered := s.enterGame(otherSession); entered.Code != 0 || !entered.First || entered.Created || s.displayName(otherRole.PlayerID) != "Second" {
 		t.Fatalf("EnterGame after a create on a session-token session = %+v (name %q)", entered, s.displayName(otherRole.PlayerID))
+	}
+}
+
+// savedPos 是这名玩家落库的位置（PlayerDao.SavedPosX / SavedPosY）：进场景时从这里放回地图。
+func (s *loginScenario) savedPos(playerID int64) spatial.Point {
+	s.t.Helper()
+	subject, err := s.players.Get(context.Background(), playerID)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return spatial.Point{X: subject.Dao().GetSavedPosX(), Y: subject.Dao().GetSavedPosY()}
+}
+
+// D25：demo 的新玩家初始化——新玩家从世界场景的出生点开始——写在 enter 模块的首次初始化钩子里
+// （game/login/enter_first.go 的 firstEnter），与“建成了”的标记同一笔事务，两条路（EnterGame 的加载或创建、
+// EnterCreate 的新建）都经过它，且只执行一次：老玩家再进入时记住的位置不被重置回出生点。
+// 修前 demo 用模块缺省的 enter_first.go（什么都不写），新玩家的落库位置停在零，靠进场景时的“零就取出生点”兜底。
+func TestANewPlayerStartsAtTheSpawnThroughTheFirstEnterHookOnce(t *testing.T) {
+	s := newLoginScenario(t)
+	ctx := context.Background()
+	spawn := sceneentity.WorldSceneConfig().Spawn
+	if spawn == (spatial.Point{}) {
+		t.Fatal("the premise: the world scene's spawn is the origin, indistinguishable from an unwritten position")
+	}
+	account, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "spawn-1", Credential: "demo:spawn-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := s.accounts.CreateRole(ctx, account.ID, scenarioSID, "spawn_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := s.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
+	if entered := s.enterGame(session); entered.Code != 0 || !entered.First || !entered.Created {
+		t.Fatalf("the first EnterGame = %+v, want the player created and initialized", entered)
+	}
+	if got := s.savedPos(role.PlayerID); got != spawn {
+		t.Fatalf("after the first entry the saved position is %v, want the spawn %v written by the first-enter hook", got, spawn)
+	}
+	if s.committer.count() != 1 {
+		t.Fatalf("the first entry committed %d times, want 1: the start position goes with the initialized mark", s.committer.count())
+	}
+
+	// 玩家走开了（位置落库）；再进入不是首次，钩子不再执行，记住的位置留着。
+	moved := spatial.Point{X: spawn.X + 1234, Y: spawn.Y + 567}
+	subject, err := s.players.Get(ctx, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nest.RunIsolatedTransaction(ctx, s.committer, "move_saved_position", func() (any, error) {
+		subject.Dao().SetSavedPosX(moved.X)
+		subject.Dao().SetSavedPosY(moved.Y)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if again := s.enterGame(session); again.Code != 0 || again.First || again.Created {
+		t.Fatalf("the second EnterGame = %+v, want a plain enter", again)
+	}
+	if got := s.savedPos(role.PlayerID); got != moved {
+		t.Fatalf("a returning player's saved position became %v, want %v kept: the first-enter hook ran again", got, moved)
+	}
+
+	// 新建那条路（进服票据）：首次初始化在新建的事务里，同一个钩子。
+	created := s.handshake(s.enterTicket("spawn-2", scenarioSID))
+	if answer := s.enterCreate(created, "SpawnTwo"); answer.Code != 0 {
+		t.Fatalf("EnterCreate = %+v", answer)
+	}
+	if got := s.savedPos(created.principal.PlayerID); got != spawn {
+		t.Fatalf("a player built by EnterCreate starts at %v, want the spawn %v", got, spawn)
 	}
 }
 

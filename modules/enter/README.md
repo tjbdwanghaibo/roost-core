@@ -96,7 +96,7 @@
 - **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档用 `gamelogin.OnCreate`。
 - **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers/enter` 的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
 - **不要改的文件：** `game/login/enter.go`、`game/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/components/enter/enter.go` 里标记与发放同一笔事务的写法。
-- **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
+- **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化（它的新玩家初始化写在自己覆盖的 `game/login/enter_first.go` 里）。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
 
 ## 联动
 

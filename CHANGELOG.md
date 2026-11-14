@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **game-demo 玩法产出金币**（D26，2026-11-14）：副本通关在领奖事务里经 wallet 模块的 `Add` 发 20 金币（`dungeon.ClearCoins`），只发一次由领奖账本保证、不用 wallet 业务键；活动结算按名次另发一封金币邮件（300 / 200 / 100，键 `activity-coins:<活动>:<玩家>`），领取时由 mailbox 经 wallet 到账，离线玩家照发。此前金币只有 GM 邮件一个来源。回归 `TestDungeonClearPaysCoinsIntoTheWalletOnce`、`TestActivitySettlementPaysCoinsIntoTheWallet` 修前红。只对新生成的工程生效。
+- **game-demo 的新玩家初始化写进 enter 钩子**（D25，2026-11-14）：demo 覆盖 enter 模块的 `game/login/enter_first.go`，新玩家落库的位置在首次初始化的那笔事务里写成世界场景的出生点（加载或创建、新建两条路都经过，只执行一次）；demo 改写的 EnterGame 不变，不发初始道具或金币。回归 `TestANewPlayerStartsAtTheSpawnThroughTheFirstEnterHookOnce` 修前红。只对新生成的工程生效。
+- **地形坏块按原始地形包确认**（N4 / D12 A，2026-11-14）：game-demo 启动时给本进程写的、装不进视图的块（原始块坏了、记录装不进来）同样登记就绪标记；`gameplay/terrain` 的 Replicator 对拥有者自己装不进的块按“原始块”答复与推送（仍计 `Unloaded`），副本有了说法、续期不再要；demo 的 Ghost 带不把这种块装进视图（行走与查询照旧不可用），只给客户端标记。客户端协议与 C# 不变。此前客户端永远等不到这些块的确认，分区场景每次续期都再问一次。回归 `TestTerrainABadBaseChunkIsConfirmedAsTheBasePack`、`TestTerrainPartitionChunksTheOwnerCannotLoadAreConfirmedAsTheBasePack`、`TestReplicaAnswersAChunkTheOwnerCannotLoadAsBase` 修前红。
+
 - **修复邮件 Cluster 测量入口**（2026-11-14）：integration 夹具将 `REDIS_ADDR` 的逗号种子列表装配为 `ClusterAddrs`，单地址仍使用单机客户端；此前列表被当作一个地址，M-13 的 Cluster 档无法运行。真实私有集群修前红、修后四子项绿，单机同样通过；仅修测试配置，生产邮件与驱动不变。[证据](docs/maintenance/evidence/mail-cluster-probe-20261114.md)。
 
 - **测试：game-demo 停机预算随 Room 定时器更新**（2026-11-14）：P9 新增正式 Room timer Mod 后，显式测试夹具为 28 Mods、126s/131s，默认 CLI 含 manager 为 29 Mods、129s/134s。修正 shutdown/singleton 的旧固定预期，保留 bootstrap 独立枚举、手改配置不被覆盖与 singleton 开关边界；不修改生产预算算法。31 项定向通过，漏计一 Mod 的变异被独立断言拒绝；[原失败与红绿证据](docs/maintenance/evidence/shutdown-assertions-20261114/README.md)。

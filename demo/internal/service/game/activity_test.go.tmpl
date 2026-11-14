@@ -8,13 +8,18 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	gameactivity "{{MODULE}}/game/activity"
+	player "{{MODULE}}/game/entities/player"
 	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/flags"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamemailbox "{{MODULE}}/game/mailbox"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -25,6 +30,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
@@ -665,4 +671,129 @@ func TestActivityBoardKeepsTheLatestCumulativeScore(t *testing.T) {
 	if score != 2 {
 		t.Fatalf("coordinator score is 2 but settlement board fell from 2 to %v after the delayed score-1 reply", score)
 	}
+}
+
+// settleCoordinator 只答结算用到的确认；其余方法嵌入接口，没想到的调用直接 panic。
+type settleCoordinator struct {
+	svcactivity.Coordinator
+	acked []svcactivity.Key
+}
+
+func (c *settleCoordinator) AckDispatch(_ context.Context, key svcactivity.Key, _ int32, _ string) (svcactivity.Dispatch, error) {
+	c.acked = append(c.acked, key)
+	return svcactivity.Dispatch{State: svcactivity.DispatchAcked}, nil
+}
+
+// settleBoard 是结算读的榜（前 PaidRanks 名，分数从高到低）。
+type settleBoard struct {
+	fredis.IRedis
+	entries []fredis.Z
+}
+
+func (b settleBoard) ZRevRangeWithScores(context.Context, string, int64, int64) ([]fredis.Z, error) {
+	return b.entries, nil
+}
+
+// settleMailer 记下结算发出的每一封邮件（mail 服务按 RequestID 幂等，这里不去重）。
+type settleMailer struct {
+	svcmail.Mail
+	sent []svcmail.SendRequest
+}
+
+func (m *settleMailer) Send(_ context.Context, request svcmail.SendRequest) (svcmail.Envelope, error) {
+	m.sent = append(m.sent, request)
+	return svcmail.Envelope{ID: fmt.Sprintf("mail-%d", len(m.sent))}, nil
+}
+
+// settledNest 答 World 的“记下这次结算”。
+type settledNest struct{ corenest.Client }
+
+func (settledNest) Request(context.Context, corenest.HandlerName, int64, corenest.Params, ...corenest.SendOpt) (any, error) {
+	return true, nil
+}
+
+type settleCommitter struct{}
+
+func (settleCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+// D26：活动结算除名次道具外还发金币。结算发出的邮件逐封走 mailbox 模块的领取 handler（附件经 wallet 模块到账）
+// 领到玩家身上，领完之后钱包里的金币变多。修前结算只发道具邮件，领完钱包仍是 0。
+func TestActivitySettlementPaysCoinsIntoTheWallet(t *testing.T) {
+	const playerID int64 = 95101
+	coordinator := &settleCoordinator{}
+	mailer := &settleMailer{}
+	runner := &ActivityRunner{
+		coordinator: coordinator, mailer: mailer, nest: settledNest{},
+		redis:   settleBoard{entries: []fredis.Z{{Score: 3, Member: strconv.FormatInt(playerID, 10)}}},
+		prefix:  "settle-test", groupID: "west", gameSID: 1300, worldID: 1,
+		now: time.Now,
+	}
+	activityID := gameactivity.ID(time.Now().Unix())
+	if err := runner.settle(context.Background(), activityID, svcactivity.Dispatch{Token: "t-1", State: svcactivity.DispatchPending}); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if len(coordinator.acked) != 1 {
+		t.Fatalf("the dispatch was acked %d times, want once", len(coordinator.acked))
+	}
+
+	// 领取：真实的 Player、真实的领取 handler 与 Nest 事务，提交器不落盘。
+	player.RegisterEntity()
+	handler.RegisterMailboxClaimRewardNestHandlers()
+	id, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := coreentity.BuildEntity(&coreentity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := built.(*player.Player)
+	engine := corenest.NewEngine(corenest.NestOptionWithGetter(settleGetter{value: built}), corenest.NestOptionWithTransactionCommitter(settleCommitter{}),
+		corenest.NestOptionWithWorkerPools(corenest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, corenest.WorkerPoolConfig{}, corenest.WorkerPoolConfig{}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	claims := syncsender.NewMailboxClaimRewardSender(engine)
+	expires := time.Now().Unix() + 3600
+	for i, request := range mailer.sent {
+		if len(request.Recipients) != 1 || request.Recipients[0] != playerID {
+			t.Fatalf("mail %d went to %v, want player %d", i, request.Recipients, playerID)
+		}
+		attachment, err := gamemailbox.Decode(request.Attachment)
+		if err != nil {
+			t.Fatalf("mail %d attachment: %v", i, err)
+		}
+		if attachment.Type != gamemailbox.TypeCoins {
+			continue // 道具附件进背包，与钱包无关
+		}
+		if _, err := claims.Sync_MailboxClaimReward(context.Background(), subject.ID(), fmt.Sprintf("mail-%d", i+1), string(attachment.Type), attachment.ID, attachment.Amount, expires); err != nil {
+			t.Fatalf("claim mail %d: %v", i, err)
+		}
+	}
+	var coins int64
+	if err := engine.RunLocal(context.Background(), func() {
+		subject.GetMutex().Lock()
+		defer subject.GetMutex().Unlock()
+		coins = subject.Dao().GetWallet().GetCoins()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if coins <= 0 {
+		t.Fatalf("after claiming the %d settlement mails of rank 1 the wallet holds %d coins, want more than 0: the activity is a coin source", len(mailer.sent), coins)
+	}
+}
+
+type settleGetter struct{ value coreentity.IThreadSafeEntity }
+
+func (g settleGetter) Get(context.Context, int64, coreentity.EntityCategory) (coreentity.IThreadSafeEntity, error) {
+	return g.value, nil
+}
+
+func (g settleGetter) GetMany(_ context.Context, ids []int64, _ []coreentity.EntityCategory) ([]coreentity.IThreadSafeEntity, error) {
+	out := make([]coreentity.IThreadSafeEntity, len(ids))
+	for i := range out {
+		out[i] = g.value
+	}
+	return out, nil
 }

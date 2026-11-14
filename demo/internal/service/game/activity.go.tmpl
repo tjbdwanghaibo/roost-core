@@ -548,6 +548,17 @@ func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dis
 		}); sendErr != nil {
 			return fmt.Errorf("mail rank %d: %w", rank+1, sendErr)
 		}
+		// The rank's coins (D26), a second mail with its own key: paid into the
+		// wallet by the mailbox when claimed, so an offline player is paid too.
+		if _, sendErr := gamemailbox.SendTo(ctx, runner.mailer, gamemailbox.Letter{
+			To:      playerID,
+			Subject: fmt.Sprintf("Race %s: rank %d coins", activityID, rank+1),
+			Body:    fmt.Sprintf("%d coins for finishing rank %d.", reward.Coins, rank+1),
+			Attachment: gamemailbox.Coins(reward.Coins), ExpiresInSeconds: activitySettleMailExpiresIn,
+			RequestID: gameactivity.CoinsMailRequestID(activityID, playerID),
+		}); sendErr != nil {
+			return fmt.Errorf("coins mail rank %d: %w", rank+1, sendErr)
+		}
 	}
 	recorded, err := syncsender.NewSettleActivitySender(runner.nest).
 		Sync_SettleActivity(ctx, runner.worldID, activityID)
