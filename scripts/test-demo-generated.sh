@@ -15,6 +15,10 @@
 #     plan / apply / verify / rollback 在真实副本集上跑一遍，唯一库名、结束删库）；
 #   - game/purchase 的 TestPurchaseRedis*（ROOST_PURCHASE_REDIS_ADDR：实际执行序号分配、并发去重、分批清理 Lua；
 #     显式 integration 构建标签，未设置地址直接失败；原 demo 发货实现已迁入 purchase 模块）；
+#   - game/controllers/mailbox 的 TestMailboxRealDependencies*（ROOST_MAILBOX_IT_NATS_URL / ROOST_MAILBOX_IT_REDIS_ADDR：显式
+#     integration 标签；邮件端点经 wiring/mail.ClientMod 的 BusClient（真实 NATS，core 与 jetstream 两种 RPC 传输）调
+#     Redis 存储的 mail 服务：答复超时后重试、确认答复超时、服务停机与重启、jetstream 实例断开后 broker 重投给另一个实例，
+#     每封附件恰好到账一次；唯一前缀、键与流用后删除。模板在 modules/mailbox）；
 #   - internal/service/game 的 TestActivityBoardKeepsTheLatestCumulativeScore（ROOST_REVIEW_REDIS：真实 Redis 上
 #     延后旧贡献回复，验证结算榜不被较低的累计分快照覆盖；协调器使用内存版本存储）；
 #   - game/controllers/player 的 TestDungeonClearsBoardCountsEachRunOnceRealRedis（ROOST_REVIEW_REDIS：正式端点 +
@@ -42,6 +46,7 @@ printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$
 	cd "$work_dir/planet"
 	go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances$' ./internal/service/alliance
 	ROOST_PURCHASE_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseRedis' ./game/purchase
+	ROOST_MAILBOX_IT_NATS_URL="$ROOST_DATAENGINE_IT_NATS_URL" ROOST_MAILBOX_IT_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestMailboxRealDependencies' ./game/controllers/mailbox
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestDungeonClearsBoardCountsEachRunOnceRealRedis$' ./game/controllers/player
 	ROOST_MIGRATION_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPlayerMigrationRealMongo$' ./db/migrations

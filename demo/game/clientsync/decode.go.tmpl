@@ -31,6 +31,13 @@ func DecodeFields(update entity.SubjectSyncUpdate) (map[string]any, error) {
 			return nil, err
 		}
 		return patch.Values()
+	case "building":
+		// 开地形的场景把站着的建筑放进主视野（与怪同一条链路，building_sync.go）：机器人与演练程序的帧里会有它。
+		patch, err := db.UnmarshalSyncBuildingDao(update.Payload.BytesCopy())
+		if err != nil {
+			return nil, err
+		}
+		return patch.Values()
 	default:
 		return nil, fmt.Errorf("unknown sync namespace %q", update.Namespace)
 	}

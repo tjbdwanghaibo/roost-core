@@ -794,7 +794,9 @@ func runTerrain(ctx context.Context) error {
 	// (c) 格进程崩溃重启：B 提交一次边界编辑（块 (2,0)，在 A 的 Ghost 带里）、答复到了就读一次 B 的视图，然后 pB2 在 B 的
 	//     块 (3,1) 上连续编辑，期间 kill -9 B；B 停机时 A 改它的边界块 (1,1)（B 的 Ghost 带）。B 重启之后：块 (2,0) 仍是崩溃
 	//     前读到的版本与数据（WAL 持久），A 的 Ghost 带与它对齐；B 的 Ghost 带补上 A 停机期间的编辑；pB2 的账本 LastSeq 不小于
-	//     最后一次答复成功的序号，且块 (3,1) 的版本等于 LastSeq（块与账本同一笔事务）；用同一序号重发答 Duplicate。
+	//     最后一次答复成功的序号；块 (3,1) 的版本等于 LastSeq，或少一（P5 起分区场景的笔刷一律转发：Base 先在玩家的账本上
+	//     发号、再由格在另一笔事务里执行，kill 落在两笔之间时号发了、块没改）——少一时照客户端规则用同一序号重发，格执行、
+	//     块追上 LastSeq（答复没有 Duplicate）；最后用最后一次答复成功的序号重发答 Duplicate。
 	if *killCmd == "" || *restartCmd == "" {
 		return errors.New("(c) -kill and -restart are required")
 	}
@@ -892,8 +894,18 @@ func runTerrain(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if last < int64(lastAck.seq) || burstOwner.Version != last {
+	if last < int64(lastAck.seq) || burstOwner.Version != last && burstOwner.Version != last-1 {
 		return fmt.Errorf("(c) after the restart pB2's ledger says %d, the burst chunk is at %v; the last answered seq was %d", last, burstOwner, lastAck.seq)
+	}
+	issuedNotApplied := burstOwner.Version == last-1
+	if issuedNotApplied {
+		resent, err := pB2again.edit(ctx, uint64(last), raise(22000+last%20*100, tMonsterY, 100, 1))
+		if err != nil || resent.Code != 0 || resent.Duplicate {
+			return fmt.Errorf("(c) resending seq %d that was issued but not applied before the kill: %v %+v, want it applied", last, err, resent)
+		}
+		if burstOwner, err = ownerAt(ctx, 1002, burstKey, last); err != nil {
+			return fmt.Errorf("(c) %w", err)
+		}
 	}
 	again, err := pB2again.edit(ctx, lastAck.seq, raise(22000+int64(lastAck.seq%20)*100, tMonsterY, 100, 1))
 	if err != nil || again.Code != 0 || !again.Duplicate {
@@ -927,7 +939,7 @@ func runTerrain(ctx context.Context) error {
 		"down_seconds": readyAt.Sub(killedAt).Seconds(), "b_after_restart": afterRestart.String(),
 		"a_ghost_aligned_after_ready_ms": ms(aAligned), "b_ghost_caught_up_after_ready_ms": ms(bCaughtUp),
 		"burst_answers": ackCount, "burst_last_answered_seq": lastAck.seq, "burst_end": fmt.Sprint(burstEnd),
-		"burst_answer_to_kill_ms": killedAt.Sub(lastAck.at).Milliseconds(), "ledger_last_seq_after_restart": last,
+		"burst_answer_to_kill_ms": killedAt.Sub(lastAck.at).Milliseconds(), "ledger_last_seq_after_restart": last, "issued_not_applied_resent": issuedNotApplied,
 		"burst_chunk_after_restart": burstOwner.String(), "resend_last_answered": "duplicate", "clients_after_ready_ms": clientsAfter}
 	if reenterErr == nil {
 		detail["pw_reentered_on_b_after_ready_ms"] = reenter.Milliseconds()
@@ -969,6 +981,117 @@ func runTerrain(ctx context.Context) error {
 	}
 	step("terrain_consistent", map[string]any{"chunks": table, "replicas_a": replicaStats(ctx, 1001), "replicas_b": replicaStats(ctx, 1002),
 		"replicas_1004": replicaStats(ctx, 1004)})
+
+	// (d) 分区场景的建筑进主视野（P5，方案 §30）：pW 的连接在只做 Base 的 1004 上，在格 A 的块 (1,0) 里、pA 附近放一座
+	//     小屋——1004 转发给写这块地的 A（RelayPlace → Exec → BuildingPlacePart），A 提交后经 announceBuilding 把建筑
+	//     放进 A 进程的场景主视野（attachBuildings，与怪同一个 ShowSubject）。断言：连在 A 上的 pA（与放置者不在同一个
+	//     Base 上）收到这座建筑的 create，位置是占地中心；再由 pW 拆除，pA 收到 remove。连在 1004（pW）与 1002（pB）上的
+	//     玩家看不见别的格写的建筑（需要建筑副本，§27.6）：只记下他们此刻是否持有，不作断言。
+	if err := runTerrainBuilding(ctx, pA, pW, pBagain); err != nil {
+		return fmt.Errorf("(d) %w", err)
+	}
+	return nil
+}
+
+// 演练的建筑：配置 1（小屋，4 × 4 个节点），锚点节点 (105, 45)，占地 x 10500～10800、y 4500～4800，整份在格 A 的块 (1,0)
+// 里，离 pA 的进场点 (11800, 3000) 约 20m（游戏尺度主视野的进入半径以内）；前面各步的笔刷与怪都不经过这里，地面是平的。
+const (
+	tBuildingConfig = 1
+	tBuildingGX     = 105
+	tBuildingGY     = 45
+	// 占地中心（building_sync.go 的 lotCentre）：((gx*2 + w - 1) * 100 / 2, (gy*2 + h - 1) * 100 / 2)。
+	tBuildingCentreX = (tBuildingGX*2 + 4 - 1) * 100 / 2
+	tBuildingCentreY = (tBuildingGY*2 + 4 - 1) * 100 / 2
+)
+
+// building 发一次建筑请求（op 1 放置、2 拆除）。配额不够（terrain_rate）时退避后用同一序号重发。
+func (c *client) building(ctx context.Context, request *pb.BuildingRequest) (*pb.BuildingResponse, error) {
+	for attempt := 0; ; attempt++ {
+		raw, err := c.call(ctx, msgid.MsgBuilding, must(pb.MarshalBuildingRequest(request)))
+		if err != nil {
+			return nil, err
+		}
+		r, err := pb.UnmarshalBuildingResponse(raw)
+		if err != nil {
+			return nil, err
+		}
+		if r.Code == codeTerrainRate && attempt < 20 {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		return r, nil
+	}
+}
+
+// holdsBuilding 报告客户端此刻是否持有 subject 为 id 的建筑（building 命名空间），以及它的位置字段。
+func (c *client) holdsBuilding(id int64) (object, bool) {
+	o, ok := c.snapshot()[id]
+	if !ok || o.ns != "building" {
+		return object{}, false
+	}
+	return o, true
+}
+
+func runTerrainBuilding(ctx context.Context, observer, placer *client, others ...*client) error {
+	last, err := placer.lastSeq(ctx)
+	if err != nil {
+		return err
+	}
+	seq := uint64(last) + 1
+	placeSent := time.Now()
+	placed, err := placer.building(ctx, &pb.BuildingRequest{Seq: seq, Op: 1, ConfigID: tBuildingConfig, GX: tBuildingGX, GY: tBuildingGY})
+	if err != nil {
+		return err
+	}
+	placeRTT := time.Since(placeSent)
+	if placed.Code != 0 || placed.Duplicate || !placed.Standing || placed.BuildingID == 0 {
+		return fmt.Errorf("%s places a building at (%d, %d) through its Base 1004: %+v, want a standing building", placer.name, tBuildingGX, tBuildingGY, placed)
+	}
+	id := placed.BuildingID
+	var seen object
+	if err := pollFast(ctx, 10*time.Second, observer.name+" sees the building in its main view", func() (bool, string) {
+		o, ok := observer.holdsBuilding(id)
+		seen = o
+		return ok, fmt.Sprintf("building %d not held; objects: %s; err %v", id, observer.describe(), observer.err())
+	}); err != nil {
+		return err
+	}
+	seenAfter := seen.created.Sub(placeSent)
+	if got := seen.pos(); got.X != tBuildingCentreX || got.Y != tBuildingCentreY {
+		// 位置字段名与怪 / 玩家相同（pos_x / pos_y）时核对占地中心；建筑同步视图不带位置时记下，不作断言。
+		if _, hasPos := seen.fields["pos_x"]; hasPos {
+			return fmt.Errorf("%s holds the building at %v, want the lot centre (%d, %d)", observer.name, got, tBuildingCentreX, tBuildingCentreY)
+		}
+	}
+	elsewhere := map[string]bool{}
+	for _, c := range append([]*client{placer}, others...) {
+		_, held := c.holdsBuilding(id)
+		elsewhere[c.name+"_sid_"+strconv.Itoa(int(c.sid))] = held
+	}
+	removeSent := time.Now()
+	removed, err := placer.building(ctx, &pb.BuildingRequest{Seq: seq + 1, Op: 2, GX: tBuildingGX, GY: tBuildingGY})
+	if err != nil {
+		return err
+	}
+	if removed.Code != 0 || removed.Duplicate || removed.Standing {
+		return fmt.Errorf("%s removes its building: %+v, want removed", placer.name, removed)
+	}
+	if err := pollFast(ctx, 10*time.Second, observer.name+" drops the removed building", func() (bool, string) {
+		_, ok := observer.holdsBuilding(id)
+		return !ok, fmt.Sprintf("building %d still held", id)
+	}); err != nil {
+		return err
+	}
+	var removedAfter time.Duration
+	for _, r := range observer.removalsSince(removeSent) {
+		if r.ID == id {
+			removedAfter = r.At.Sub(removeSent)
+		}
+	}
+	step("terrain_building_view", map[string]any{"building": id, "placer": placer.name, "placer_sid": placer.sid,
+		"observer": observer.name, "observer_sid": observer.sid, "place_rtt_ms": ms(placeRTT),
+		"observer_create_after_request_ms": ms(seenAfter), "observer_fields": seen.fields,
+		"observer_remove_after_request_ms": ms(removedAfter), "held_on_other_bases": elsewhere})
 	return nil
 }
 

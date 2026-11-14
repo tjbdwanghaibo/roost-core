@@ -27,6 +27,10 @@ for name in Player GameRoom; do
   if [[ "$name" != Player ]]; then "$review_root/roost" add entity "$name" >> "$review_root/generate.log" 2>&1; fi
   "$review_root/roost" add dao "$name" --entity "$name" >> "$review_root/generate.log" 2>&1
 done
+# 回合 PvP 的回合期限走框架的按实体持久定时器（roost add timer）：房间开局登记、到期由驱动投递 Tick。
+if [[ "$genre" == turn-pvp ]]; then
+  "$review_root/roost" add timer --entity GameRoom >> "$review_root/generate.log" 2>&1
+fi
 python3 - "$repo_root" "$genre" "$module" "$first_command" <<'PY'
 from pathlib import Path
 import sys
@@ -38,7 +42,7 @@ for filename, typename, fields in [('player','Player','Coins int64 `store:"coins
 p=Path('game/entities/game_room/entity.go');text=p.read_text();assert 'category=entity.EntityCategoryOther' in text
 p.write_text(text.replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryWorld'))
 fixtures=Path(repo)/'scripts/testdata'
-for source,target in [(fixtures/'robot-common/snapshot_test.go.txt','game/handler/robot_snapshot_test.go'),(fixtures/'genre-common/robot_main.go.txt','cmd/robot/main.go'),(fixtures/'genre-common/protocol.go.txt','protocol/def/scenario.go'),(fixtures/'genre-common/network.go.txt','game/scenarionet/dispatch.go'),(fixtures/'genre-common/robot.go.txt','loadtest/scenario.go'),(fixtures/'genre-common/network_test.go.txt','game/handler/network_test.go'),(fixtures/genre/'rules.go.txt','game/rules/rules.go'),(fixtures/'genre-common/handlers.go.txt','game/handler/scenario.go'),(fixtures/'genre-common/gameplay_test.go.txt','game/handler/scenario_test.go'),(fixtures/genre/'scenarios_test.go.txt','game/handler/genre_test.go')]:
+for source,target in [(fixtures/'robot-common/snapshot_test.go.txt','game/handler/robot_snapshot_test.go'),(fixtures/'genre-common/robot_main.go.txt','cmd/robot/main.go'),(fixtures/'genre-common/protocol.go.txt','protocol/def/scenario.go'),(fixtures/'genre-common/network.go.txt','game/scenarionet/dispatch.go'),(fixtures/'genre-common/robot.go.txt','loadtest/scenario.go'),(fixtures/'genre-common/network_test.go.txt','game/handler/network_test.go'),(fixtures/genre/'rules.go.txt','game/rules/rules.go'),(fixtures/genre/'handlers.go.txt' if (fixtures/genre/'handlers.go.txt').exists() else fixtures/'genre-common/handlers.go.txt','game/handler/scenario.go'),(fixtures/'genre-common/gameplay_test.go.txt','game/handler/scenario_test.go'),(fixtures/genre/'scenarios_test.go.txt','game/handler/genre_test.go')]:
     p=Path(target);p.parent.mkdir(parents=True,exist_ok=True)
     p.write_text(source.read_text().replace('GENRE_MODULE',module).replace('FIRST_COMMAND','"'+first+'"'))
 if genre in ('turn-pvp','social-sim'):
@@ -49,6 +53,10 @@ if genre in ('turn-pvp','social-sim'):
     p=Path('game/handler/network_test.go')
     text=p.read_text().rstrip()
     p.write_text(text[:-1]+'\ncompleteScenarioRobot(t,f,server.Addr().String())\n}\n')
+if genre == 'turn-pvp':
+    p=Path('game/entities/game_room/timer_handlers.go')
+    assert p.exists(), 'roost add timer did not create the business timer file'
+    p.write_text((fixtures/genre/'timer_handlers.go.txt').read_text().replace('GENRE_MODULE',module))
 if genre == 'coop-roguelike':
     for source,target in [('robot_main.go.txt','cmd/robot/main.go'),('view_handlers.go.txt','game/handler/coop_view_handlers.go'),('view_protocol.go.txt','protocol/def/coop_view.go'),('view_network.go.txt','game/scenarionet/coop_view.go'),('robot_full.go.txt','loadtest/coop.go'),('robot_full_test.go.txt','game/handler/coop_robot_test.go')]:
         p=Path(target);p.parent.mkdir(parents=True,exist_ok=True)
@@ -59,7 +67,7 @@ gofmt -w db/def game/entities/game_room game/rules game/handler game/scenarionet
 go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestScenario' ./game/handler | tee "$review_root/test.log"
 passed="$(grep -c '^--- PASS: TestScenario' "$review_root/test.log" || true)"
 expected=9
-if [[ "$genre" == coop-roguelike ]]; then expected=10; fi
+if [[ "$genre" == coop-roguelike || "$genre" == turn-pvp ]]; then expected=10; fi
 if [[ "$passed" != "$expected" ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
   echo "Expected $expected passing scenarios, got $passed" >&2
   exit 1

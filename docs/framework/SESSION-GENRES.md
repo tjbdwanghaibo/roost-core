@@ -12,7 +12,7 @@ ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/mycoop bash scripts/test-coop-
 ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/myfarm bash scripts/test-social-sim-generated.sh
 ```
 
-每条脚本打印临时目录，生成物位于其 `project/`。不指定 `KEEP` 时成功后删除；失败保留工程和日志。`ROOST_GENRE_MODULE` 可替换模块名，无需手工替换导入。脚本执行正式 CLI 创建工程、Player 与 GameRoom DAO、实体与 Nest sender 生成，然后运行场景（回合 PvP、社交经营各 **9 个**，合作 Roguelike **10 个**，零 SKIP；`scripts/testdata/genre-common/run.sh` 的计数断言），最后 build、vet、ID 与生成漂移检查。三个脚本均加入 pretag。
+每条脚本打印临时目录，生成物位于其 `project/`。不指定 `KEEP` 时成功后删除；失败保留工程和日志。`ROOST_GENRE_MODULE` 可替换模块名，无需手工替换导入。脚本执行正式 CLI 创建工程、Player 与 GameRoom DAO、实体与 Nest sender 生成（回合 PvP 另有 `roost add timer --entity GameRoom`），然后运行场景（社交经营 **9 个**，回合 PvP、合作 Roguelike 各 **10 个**，零 SKIP；`scripts/testdata/genre-common/run.sh` 的计数断言），最后 build、vet、ID 与生成漂移检查。三个脚本均加入 pretag。
 
 公共生成机械步骤在 `scripts/testdata/genre-common/run.sh`，业务规则与专属断言在各玩法目录。生成工程主要文件：
 
@@ -38,11 +38,11 @@ ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/myfarm bash scripts/test-socia
 
 | 玩法 | 规则 | 基础 8 个场景（Robot 场景见表后） |
 | --- | --- | --- |
-| `turn-pvp` | 双人轮流攻击；每回合 30 秒；超时只消耗当前回合、扣当前行动方生命，再开启新回合，不追跑所有错过的回合 | 行动顺序、超时单拍、终局拒绝行动、重连状态继续；共同的相同重试/冲突、提交拒绝回滚、过期版本、非成员拒绝 |
+| `turn-pvp` | 双人轮流攻击；每回合 30 秒；超时只消耗当前回合、扣当前行动方生命，再开启新回合，不追跑所有错过的回合 | 行动顺序、超时单拍、房间定时器自动超时、终局拒绝行动、重连状态继续；共同的相同重试/冲突、提交拒绝回滚、过期版本、非成员拒绝 |
 | `coop-roguelike` | 双人投票选路线，双方齐备推进；分歧由固定种子决策；三阶段后分别领奖 | 队伍阶段屏障、奖励只到账一次、Room 与 Player 一起回滚、重载不重抽；四个共同场景 |
 | `social-sim` | 主人种植，受邀访客帮助一次缩短 10 秒，成熟后主人收获；长时间离线只收本次种植，不凭空累积无限作物 | 访客权限、离线收获去重、帮助期限只缩短一次、收获双实体回滚；四个共同场景 |
 
-回合超时由宿主通过受控命令触发，本纵切没有挂自动定时驱动；实际游戏可参考 card-rpg 的持久定时器，但必须保持预期 Revision，旧定时事件不能消耗下一回合。Roguelike 是离散房间流程，不含实时动作战斗、技能或物理；种子常量用于可复现样例，生产由服务器创建时注入并持久保存。社交经营只演示本进程两实体事务，不包含跨服访问者授权、Remote 或 Saga。
+回合超时由房间的持久定时器自动推进（2026-11-14）：脚本对 GameRoom 跑 `roost add timer`，夹具的 `timer_handlers.go.txt` 覆盖生成的示例回调；开局在同一个事务里登记一个回合定时器（`handlerScenarioOpen`），到期由生成的 `game_room.TimerDriver` 投递 Tick，回调在房间的 Nest 锁与事务内按 `rules.State.Timeout` 消费当前回合（修订号加一，旧页面的命令按过期拒绝）；期限内有人行动时期限后移，定时器续到新期限而不提前消费；终局后定时器结束。`TestScenarioTurnTimesOutByTheRoomTimer` 用真实的驱动循环（不手动调 `DeliverDue`）拨业务钟验证。客户端上报的 `timeout` 命令仍保留（同一规则，到期前拒绝）。离线语义沿用框架：房间不在内存期间到期的，加载后只补触发一次、只消费一个回合。持久恢复（DAO 里的节点经真实 DataEngine 重启后补触发）没有在纵切里跑：纵切用替身提交器、没有进程级的房间加载入口，属于 `REAL` 模式。Roguelike 是离散房间流程，不含实时动作战斗、技能或物理；种子常量用于可复现样例，生产由服务器创建时注入并持久保存。社交经营只演示本进程两实体事务，不包含跨服访问者授权、Remote 或 Saga。
 
 每类另有第 9 条 `TestScenarioRobotTCPRetryAndReconnect`：真实 loopback TCP → 生成 PB → 正式 Nest/DAO，先验证首个动作、同连接重复、重连重复时 Revision=1；回合 PvP 继续至终态（Revision=5），社交经营继续至帮助/收获（Revision=3），重试不重复奖励。合作的完整三关另由第 10 条覆盖。生成工程可使用真实票据运行：
 
@@ -66,4 +66,4 @@ go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <已分配的新房间ID>
 
 ## 合作 Roguelike 整局 Robot
 
-当前合作脚本为 **10 条**，回合 PvP/异步经营仍各 9 条。新增 `CoopView` PB、成员授权的 Nest 视图查询、`scenarionet.CoopDispatch` 与 `loadtest.Coop`；`cmd/robot` 默认运行双客户端三关与领奖闭环，另需 `ROOST_ROBOT_PEER_TICKET`。详细流程、报告口径和未覆盖项统一见 [Robot 完整业务样板](ROBOT.md#完整业务样板)。这是客户端 PB 权威视图查询，不是 EntitySync；仍使用替身鉴权/提交器，宿主负责分配新房间和真实票据。
+当前合作与回合 PvP 脚本各 **10 条**，异步经营 9 条。新增 `CoopView` PB、成员授权的 Nest 视图查询、`scenarionet.CoopDispatch` 与 `loadtest.Coop`；`cmd/robot` 默认运行双客户端三关与领奖闭环，另需 `ROOST_ROBOT_PEER_TICKET`。详细流程、报告口径和未覆盖项统一见 [Robot 完整业务样板](ROBOT.md#完整业务样板)。这是客户端 PB 权威视图查询，不是 EntitySync；仍使用替身鉴权/提交器，宿主负责分配新房间和真实票据。

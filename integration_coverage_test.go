@@ -536,6 +536,7 @@ var generatedRealDependencyEntries = []struct {
 	{"scripts/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
 	{"modules/alliance/files/internal/service/alliance/admin_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances$"},
 	{"modules/purchase/files/game/purchase/queue_integration_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseRedis"},
+	{"modules/mailbox/files/game/controllers/mailbox/mailbox_real_integration_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestMailboxRealDependencies"},
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
 	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
 	{"demo/db/migrations/player_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPlayerMigrationRealMongo$"},

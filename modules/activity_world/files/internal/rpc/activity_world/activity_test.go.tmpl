@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,8 +15,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
-	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
 	"{{MODULE}}/game/activity"
 	host "{{MODULE}}/game/entities/activity_world"
 	"{{MODULE}}/game/handler"
@@ -91,13 +94,7 @@ var scopeAction = nest.NewHandlerName("test_world_activity_scope")
 func newScopeFixture(t *testing.T) *scopeFixture {
 	t.Helper()
 	host.RegisterEntity()
-	config := configdata.NewRegistry()
-	if err := generated.RegisterGeneratedConfigData(config); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := configdata.NewStore(config, "../../../configs/data").Load(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	scopeLoadOwnTables(t)
 	id, err := entity.BuildEntityID(98101, host.EntityKindActivityWorld)
 	if err != nil {
 		t.Fatal(err)
@@ -215,5 +212,40 @@ func TestWorldActivityEmptyConfigurationDoesNothing(t *testing.T) {
 	values, err := f.service.Pulse(context.Background(), f.owner.ID(), "", 0)
 	if err != nil || len(values) != 0 {
 		t.Fatalf("empty config=%+v %v", values, err)
+	}
+}
+
+// scopeLoadOwnTables 装载这组场景自带的表，不读工程的 configs/data：模块随带的 activity 与 activity_scope 样例都是
+// 空表（场景里的活动定义由 rule() 在用例里给出），工程按 README“复用方式”加了自己的全服活动与逻辑号之后，“配置为空时
+// 什么都不做”“业务失败不留下激活”照样成立（2026-11-14 换表矩阵：读工程表时这两条变红）。表按生成代码的名字、文件与
+// 键类型登记（activity int32、activity_scope int64）；测试结束时把进程级的缺省 Store 与配置快照换回。
+func scopeLoadOwnTables(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, file := range []string{"activity.json", "activity_scope.json"} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte("[]"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int32, schema.Activity]{
+		Name: configdata.Name("activity"), File: "activity.json",
+		Key: func(row schema.Activity) int32 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.ActivityScope]{
+		Name: configdata.Name("activity_scope"), File: "activity_scope.json",
+		Key: func(row schema.ActivityScope) int64 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

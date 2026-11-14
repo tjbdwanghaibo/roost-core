@@ -1,0 +1,58 @@
+package game_room
+
+import (
+	"encoding/json"
+	"log/slog"
+	"time"
+
+	rules "GENRE_MODULE/game/rules"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+)
+
+// GameRoom 的定时器类型（回合 PvP 夹具，scripts/testdata/turn-pvp/timer_handlers.go.txt 覆盖 roost add timer 生成的
+// 示例文件）。类型号随节点存进 DAO，发布后不要改号。
+const (
+	// TimerTypeTurnTimeout 是回合期限：开局时登记（handlerScenarioOpen），到期消费当前回合。
+	TimerTypeTurnTimeout int32 = 1
+)
+
+func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
+	handlers.Register(TimerTypeTurnTimeout, component.onTurnTimeout)
+}
+
+// onTurnTimeout 在房间的 Nest 锁与事务内执行（生成的 Tick handler）：只读写房间 DAO，不做 I/O。
+//   - 期限已后移（玩家在期限内行动过）：续到新期限，不消费；
+//   - 期限到了：按 rules.State.Timeout 消费当前回合（与客户端上报的 "timeout" 同一规则，修订号加一，旧页面的命令按过期拒绝），
+//     再续到下一回合的期限；终局或状态读不出时结束定时器。
+//
+// 离线语义（框架不追帧）：房间不在内存期间到期的，加载后只补触发这一次，只消费一个回合；之后按新的期限照常推进。
+func (component *TimerComponent) onTurnTimeout(fire entitytimer.Fire) time.Duration {
+	dao := component.owner.Dao()
+	var state rules.State
+	if err := json.Unmarshal([]byte(dao.GetState()), &state); err != nil {
+		slog.Error("turn timer: room state unreadable; timer stopped", "room", component.owner.ID(), "err", err)
+		return 0
+	}
+	if state.Finished {
+		return 0
+	}
+	now := fire.Now.UnixMilli()
+	if now < state.Deadline {
+		return time.Duration(state.Deadline-now) * time.Millisecond
+	}
+	if err := state.Timeout(now); err != nil {
+		slog.Error("turn timer: timeout refused; timer stopped", "room", component.owner.ID(), "err", err)
+		return 0
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		slog.Error("turn timer: room state not encodable; timer stopped", "room", component.owner.ID(), "err", err)
+		return 0
+	}
+	dao.SetState(string(raw))
+	if state.Finished {
+		return 0
+	}
+	return time.Duration(state.Deadline-now) * time.Millisecond
+}

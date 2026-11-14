@@ -82,7 +82,7 @@ func TestTheGameScaleMainViewHoldsTheNearest128(t *testing.T) {
 		t.Fatal(err)
 	}
 	centre := spatial.Point{X: terrain.ChunkSize, Y: terrain.ChunkSize}
-	crowd := func(t *testing.T, scene *Scene, recorder *sceneRecorder, players int, base int64) (ids []int64, subjects map[int64]int64, positions map[int64]spatial.Point) {
+	crowd := func(t *testing.T, scene *Scene, recorder *sceneRecorder, players int, base int64, want int) (ids []int64, subjects map[int64]int64, positions map[int64]spatial.Point) {
 		t.Helper()
 		scene.watchSessions(recorder)
 		ctx := context.Background()
@@ -103,7 +103,7 @@ func TestTheGameScaleMainViewHoldsTheNearest128(t *testing.T) {
 			ids = append(ids, base+i)
 			subjects[base+i], positions[subject.ID()] = subject.ID(), at
 		}
-		flushOverCrowd(t, scene, ctx)
+		flushOverCrowd(t, scene, ctx, recorder, ids, want)
 		return ids, subjects, positions
 	}
 
@@ -113,7 +113,7 @@ func TestTheGameScaleMainViewHoldsTheNearest128(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ids, subjects, positions := crowd(t, scene, recorder, 140, 34000)
+		ids, subjects, positions := crowd(t, scene, recorder, 140, 34000, 129)
 		if stats := scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred != 0 {
 			t.Fatalf("%d sessions lost, %d objects deferred: the cap of 128 should keep every session inside its limit", stats.SessionsLost, stats.OverLimitDeferred)
 		}
@@ -132,7 +132,7 @@ func TestTheGameScaleMainViewHoldsTheNearest128(t *testing.T) {
 			t.Fatal(err)
 		}
 		disconnectsBefore := sessionLostDisconnects()
-		ids, subjects, positions := crowd(t, scene, recorder, 170, 35000)
+		ids, subjects, positions := crowd(t, scene, recorder, 170, 35000, 164)
 		stats := scene.manager.Stats()
 		if stats.SessionsLost != 0 || stats.OverLimitWaiting != 0 || stats.OverLimitDeferred == 0 {
 			t.Fatalf("over the limit: %d sessions lost, %d waiting, %d ever deferred (want 0, 0 and the crowd overflowing)", stats.SessionsLost, stats.OverLimitWaiting, stats.OverLimitDeferred)

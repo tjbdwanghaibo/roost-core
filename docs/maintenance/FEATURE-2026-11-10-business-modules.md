@@ -398,7 +398,7 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 ### 12.3 脚本与门禁
 
 - 三个 `scripts/test-<genre>-generated.sh` 保留文件名（pretag 守卫与手册都引用它们），内容改成“按配方新建 → `roost module verify` → 核对场景数”。
-- 场景数不得减少：9 / 10 / 9（[SESSION-GENRES](../framework/SESSION-GENRES.md)）。测试改名（不再都叫 `TestScenario*`）时，同步改脚本的 `-run` 与计数断言，以及 `scripts/test-genres-generated.py` 的归类规则。
+- 场景数不得减少：10 / 10 / 9（回合 PvP 2026-11-14 加了房间定时器自动超时）（[SESSION-GENRES](../framework/SESSION-GENRES.md)）。测试改名（不再都叫 `TestScenario*`）时，同步改脚本的 `-run` 与计数断言，以及 `scripts/test-genres-generated.py` 的归类规则。
 - 删除 `genre-common/run.sh` 里已被取代的部分；`genre-common` 目录在三类都迁完后删除，并检查所有 Markdown 引用。
 
 ### 12.4 第一条组合验收

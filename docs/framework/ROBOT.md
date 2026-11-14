@@ -140,11 +140,11 @@ macOS arm64、Go 1.27.3，基线 `ffdc7b2d` 加本轮未提交工作树：13 类
 | idle-sim | 13 |
 | auto-chess | 13 |
 | party-room | 19 |
-| turn-pvp | 9 |
+| turn-pvp | 10 |
 | coop-roguelike | 10 |
 | social-sim | 9 |
 
-SLG 的 9 条含原 6 条、两条联盟断言与新增 Robot。合计 181 条自定义 module 场景；九类新增 TCP Robot，MOBA 原 KCP 用例扩到公共 LockstepBot 整局及客户端结算结果，回合 PvP/社交经营各 9 条，合作 10 条包含整局 TCP Robot。全部为上述明确范围，不代表完整生产端到端认证。
+SLG 的 9 条含原 6 条、两条联盟断言与新增 Robot。合计 182 条自定义 module 场景；九类新增 TCP Robot，MOBA 原 KCP 用例扩到公共 LockstepBot 整局及客户端结算结果，回合 PvP 10 条（含房间持久定时器自动超时）、社交经营 9 条，合作 10 条包含整局 TCP Robot。全部为上述明确范围，不代表完整生产端到端认证。
 
 最终代码通过 `go test ./...`、`go vet ./...`、`go test -race ./robot/...` 及文档/真实依赖入口门禁。13 类完整生成矩阵 `/tmp/roost-closed-loop-delivery-20261101` 全部通过：181 条自定义 module 场景、零测试 SKIP，生成漂移/ID/build/vet/race 检查通过。使用本文命令可重新生成，不依赖临时目录作长期证明。本轮没有 Linux 实跑；2026-11-02 的 [Linux 验收续报](../maintenance/LINUX-FUNCTIONAL-20261102.md)在 v1.37.1 上跑通同一 13 类矩阵（自定义 module 181 PASS、零 SKIP）。
 

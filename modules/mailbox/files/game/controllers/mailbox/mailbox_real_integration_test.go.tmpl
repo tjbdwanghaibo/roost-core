@@ -1,0 +1,541 @@
+//go:build integration
+
+package mailbox
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/protocol/pb"
+
+	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	wiringmail "github.com/tjbdwanghaibo/roost-core/wiring/mail"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	wiringnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
+)
+
+// 真实依赖档（显式 -tags integration，ROOST_MAILBOX_IT_NATS_URL 与 ROOST_MAILBOX_IT_REDIS_ADDR 必填）：邮件端点经生成工程
+// 同一套装配跨进程调用 mail 服务——调用方是 wiring/mail.ClientMod 发布的 BusClient（wiring/nats.NatsMod 的总线），
+// 服务方是 wiring/mail.Mod（Redis 存储）经 RegisterHandlers 挂在另一条总线上；Nest 仍是真实引擎加替身提交器（这一档
+// 只验跨进程的那一跳与 Redis 存储）。两种 RPC 传输各跑一遍：core（NATS request-reply）与 jetstream（请求进流、
+// ack_wait 内没有答复就重投给服务方）。
+//
+// 故障注入在服务方的 Mail 外面（mailboxStallingMail）：执行完再拖住答复，超过调用方的期限——请求已经生效、调用方只看到
+// 超时，是“答复丢了”的真实形态；jetstream 下拖过 ack_wait 的请求还会被重投、在服务方再执行一次。断言只看结果：
+// 每封邮件的附件恰好到账一次、mail 服务最终标成已领。
+//
+// scripts/test-demo-generated.sh 在生成的 game-demo 里运行（根包 integration_coverage_test.go 钉住）。
+
+// mailboxStallingMail 在真实的 mail 服务外面：被拖住的那几次调用先照常执行（请求已经生效），再拖住答复。
+type mailboxStallingMail struct {
+	svcmail.Mail
+	mu sync.Mutex
+	// stalls 是每个方法接下来几次执行各拖多久。
+	stalls map[string][]time.Duration
+	// executed 记每个方法在服务方实际执行的次数（含 JetStream 的重投）。
+	executed map[string]int
+	// stalled 在一次被拖住的执行开始拖之前收到方法名（容量够大，不阻塞）。
+	stalled chan string
+}
+
+func newStallingMail(inner svcmail.Mail) *mailboxStallingMail {
+	return &mailboxStallingMail{Mail: inner, stalls: map[string][]time.Duration{}, executed: map[string]int{}, stalled: make(chan string, 16)}
+}
+
+func (m *mailboxStallingMail) stallNext(method string, delay time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stalls[method] = append(m.stalls[method], delay)
+}
+
+func (m *mailboxStallingMail) count(method string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.executed[method]
+}
+
+// after 记一次执行；该拖住时拖住答复。
+func (m *mailboxStallingMail) after(method string) {
+	m.mu.Lock()
+	m.executed[method]++
+	var delay time.Duration
+	if queue := m.stalls[method]; len(queue) > 0 {
+		delay, m.stalls[method] = queue[0], queue[1:]
+	}
+	m.mu.Unlock()
+	if delay > 0 {
+		m.stalled <- method
+		time.Sleep(delay)
+	}
+}
+
+func (m *mailboxStallingMail) ReserveClaim(ctx context.Context, playerID int64, mailID string, scope string) (svcmail.Claim, error) {
+	claim, err := m.Mail.ReserveClaim(ctx, playerID, mailID, scope)
+	m.after("ReserveClaim")
+	return claim, err
+}
+
+func (m *mailboxStallingMail) CommitClaim(ctx context.Context, playerID int64, mailID string, token string) (svcmail.Entry, error) {
+	entry, err := m.Mail.CommitClaim(ctx, playerID, mailID, token)
+	m.after("CommitClaim")
+	return entry, err
+}
+
+// mailboxRealEnv 是一次子用例的真实依赖：服务方与调用方各一条总线、Redis 上的 mail 服务、Nest 与端点。
+type mailboxRealEnv struct {
+	natsURL, redisAddr string
+	transport          string
+	prefix             string
+	streams            []string
+	redis              fredis.IRedis
+
+	server     *mailboxServer
+	clientCfg  *viper.Viper
+	clientBus  bus.IBus
+	remote     svcmail.Mail
+	controller *Controller
+	engine     *nest.NestMgr
+	player     *playerentity.Player
+	sends      atomic.Int64
+}
+
+const (
+	mailboxRealCallTimeout = time.Second
+	mailboxRealStall       = 1500 * time.Millisecond
+	mailboxRealLease       = 2 * time.Second
+)
+
+func (env *mailboxRealEnv) config(sid int32, serverType string) *viper.Viper {
+	cfg := viper.New()
+	cfg.Set("sid", sid)
+	cfg.Set("server_type", serverType)
+	cfg.Set("nats.url", env.natsURL)
+	cfg.Set("nats.prefix", env.prefix)
+	cfg.Set("mail.key_prefix", env.prefix+":mail")
+	cfg.Set("mail.send_ttl", time.Hour)
+	cfg.Set("mail.claim_lease", mailboxRealLease)
+	cfg.Set("mail.call_timeout", mailboxRealCallTimeout)
+	if env.transport == "jetstream" {
+		cfg.Set("nats.rpc.transport", "jetstream")
+		cfg.Set("nats.rpc.request_stream", env.streams[0])
+		cfg.Set("nats.rpc.response_stream", env.streams[1])
+		cfg.Set("nats.rpc.ack_wait", time.Second)
+		cfg.Set("nats.rpc.max_deliver", 5)
+		cfg.Set("nats.rpc.replicas", 1)
+		cfg.Set("nats.rpc.max_bytes", int64(8<<20))
+		cfg.Set("nats.rpc.setup_timeout", 20*time.Second)
+	}
+	return cfg
+}
+
+// startBus 走正式装配起一条总线（NatsMod 的 Init → Provide → Start），返回它的 Registry 与停机函数。
+// 返回的 stop 只生效一次：ctx 已到期时按“进程死了”停（不等在途的 handler，连接直接断开），错误由调用方决定是否在意。
+func (env *mailboxRealEnv) startBus(t *testing.T, cfg *viper.Viper) (*app.Registry, func(context.Context) error) {
+	t.Helper()
+	mod := wiringnats.NewNatsMod(nil)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	registry := app.NewRegistry(cfg)
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	stop := func(ctx context.Context) (err error) {
+		once.Do(func() { err = mod.StopWithContext(ctx) })
+		return err
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := stop(ctx); err != nil {
+			t.Errorf("stop bus: %v", err)
+		}
+	})
+	return registry, stop
+}
+
+// mailboxServer 是一个 mail 服务实例：它的总线（hardStop 不等在途的 handler，连接直接断开）与故障注入。
+type mailboxServer struct {
+	mail *mailboxStallingMail
+	stop func(context.Context) error
+}
+
+// gracefulStop 正常停机（等在途的 handler）。
+func (s *mailboxServer) gracefulStop(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.stop(ctx); err != nil {
+		t.Fatalf("stop the mail service: %v", err)
+	}
+}
+
+// hardStop 按“进程死了”停掉这个实例：停机期限立即到期，在途的 handler 来不及答复、也不再续 in-progress。
+func (s *mailboxServer) hardStop() {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = s.stop(ctx)
+}
+
+// startServer 起服务方：wiring/mail.Mod 用 Redis 存储（同一个键前缀，重启后读回同一份状态），处理器挂在新的总线上。
+// 同一个服务类型的实例共用一个队列组（jetstream 下共用一个 durable）。
+func (env *mailboxRealEnv) startServer(t *testing.T, sid int32) *mailboxServer {
+	t.Helper()
+	cfg := env.config(sid, svcmail.ServiceType)
+	registry, stop := env.startBus(t, cfg)
+	if err := registry.Register(mods.ModRedis, env.redis); err != nil {
+		t.Fatal(err)
+	}
+	mod := wiringmail.NewMod(nil, nil)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	local, ok := app.Lookup[svcmail.Mail](registry, svcmail.LocalCapabilityName)
+	if !ok || local == nil {
+		t.Fatal("the mail Mod did not publish the local service")
+	}
+	serverBus, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
+	if !ok || serverBus == nil {
+		t.Fatal("the nats Mod did not publish the bus")
+	}
+	server := &mailboxServer{mail: newStallingMail(local), stop: stop}
+	if err := svcmail.RegisterHandlers(serverBus, server.mail); err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+func newMailboxRealEnv(t *testing.T, transport string) *mailboxRealEnv {
+	t.Helper()
+	env := &mailboxRealEnv{natsURL: os.Getenv("ROOST_MAILBOX_IT_NATS_URL"), redisAddr: os.Getenv("ROOST_MAILBOX_IT_REDIS_ADDR"), transport: transport}
+	if env.natsURL == "" || env.redisAddr == "" {
+		t.Fatal("ROOST_MAILBOX_IT_NATS_URL and ROOST_MAILBOX_IT_REDIS_ADDR are required for the integration tests")
+	}
+	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
+	env.prefix = "mailboxit_" + transport + "_" + suffix
+	env.streams = []string{"MAILBOXIT_REQ_" + suffix, "MAILBOXIT_RESP_" + suffix}
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(env.redisAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	env.redis = client
+	// 后注册先执行：键在总线与服务停下之后删除，流也是。
+	redistest.Cleanup(t, env.redisAddr, env.prefix)
+	if transport == "jetstream" {
+		t.Cleanup(func() { deleteMailboxStreams(t, env.natsURL, env.streams...) })
+	}
+	env.server = env.startServer(t, 7401)
+
+	clientCfg := env.config(7402, "game")
+	clientRegistry, _ := env.startBus(t, clientCfg)
+	env.clientCfg = clientCfg
+	if env.clientBus, _ = app.Lookup[bus.IBus](clientRegistry, mods.ModBus); env.clientBus == nil {
+		t.Fatal("the nats Mod did not publish the client bus")
+	}
+	clientMod := wiringmail.NewClientMod()
+	if err := clientMod.Init(clientCfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientMod.Provide(clientRegistry); err != nil {
+		t.Fatal(err)
+	}
+	remote, ok := app.Lookup[svcmail.Mail](clientRegistry, svcmail.CapabilityName)
+	if !ok || remote == nil {
+		t.Fatal("the mail client Mod did not publish the capability")
+	}
+	env.remote = remote
+
+	playerentity.RegisterEntity()
+	handler.RegisterMailboxClaimRewardNestHandlers()
+	handler.RegisterWalletGrantNestHandlers()
+	id, err := entity.BuildEntityID(mailboxPlayerA, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.player = built.(*playerentity.Player)
+	env.engine = nest.NewEngine(nest.NestOptionWithGetter(mailboxEndpointGetter{id: built}), nest.NestOptionWithTransactionCommitter(mailboxEndpointCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := env.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := env.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	env.controller = newController(nil, env.engine, env.remote)
+	return env
+}
+
+func deleteMailboxStreams(t *testing.T, url string, streams ...string) {
+	t.Helper()
+	nc, err := gonats.Connect(url, gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Errorf("cleanup: connect: %v", err)
+		return
+	}
+	defer nc.Close()
+	js, err := gojs.New(nc)
+	if err != nil {
+		t.Errorf("cleanup: JetStream: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, stream := range streams {
+		if err := js.DeleteStream(ctx, stream); err != nil && !errors.Is(err, gojs.ErrStreamNotFound) {
+			t.Errorf("cleanup: delete stream %s: %v", stream, err)
+		}
+	}
+}
+
+// send 经调用方的 BusClient 发一封一小时后过期的金币邮件。
+func (env *mailboxRealEnv) send(t *testing.T, amount int64) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	envelope, err := env.remote.Send(ctx, svcmail.SendRequest{
+		Audience: svcmail.AudienceDirect, Recipients: []int64{mailboxPlayerA}, Subject: "real reward",
+		Attachment: mailboxCoins(t, amount), ExpiresInSeconds: 3600, RequestID: fmt.Sprintf("%s-send-%d", env.prefix, env.sends.Add(1)),
+	})
+	if err != nil {
+		t.Fatalf("send over the bus: %v", err)
+	}
+	return envelope.ID
+}
+
+func (env *mailboxRealEnv) claim(t *testing.T, mailID string) *pb.MailboxClaimResponse {
+	t.Helper()
+	response, err := env.controller.HandleMailboxClaim(mailboxAs(mailboxPlayerA), &pb.MailboxClaimRequest{MailID: mailID})
+	if err != nil || response == nil {
+		t.Fatalf("claim %s: response=%v err=%v", mailID, response, err)
+	}
+	return response
+}
+
+// claimUntilDone 按客户端的做法重试同一封邮件（超时或“领取在途”时稍后再领），直到答成功；返回尝试次数。
+func (env *mailboxRealEnv) claimUntilDone(t *testing.T, mailID string, within time.Duration) (int, *pb.MailboxClaimResponse) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for attempt := 1; ; attempt++ {
+		response := env.claim(t, mailID)
+		if response.Code == 0 {
+			return attempt, response
+		}
+		if response.Code == mailboxCodeAlreadyClaimed {
+			t.Fatalf("claim attempt %d of %s: already claimed before any attempt answered success", attempt, mailID)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("claim of %s did not succeed within %v; last answer %+v", mailID, within, response)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func (env *mailboxRealEnv) wallet(t *testing.T) (coins int64, ledger int) {
+	t.Helper()
+	if err := env.engine.RunLocal(context.Background(), func() {
+		env.player.GetMutex().Lock()
+		defer env.player.GetMutex().Unlock()
+		coins = env.player.Dao().GetWallet().GetCoins()
+		ledger = env.player.MailboxComp().LedgerSize()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return coins, ledger
+}
+
+// status 经 BusClient 列出玩家的邮件，返回这封的状态（跨进程读 Redis 上的邮箱）。
+func (env *mailboxRealEnv) status(t *testing.T, mailID string) svcmail.Status {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	page, err := env.remote.List(ctx, mailboxPlayerA, "", 0)
+	if err != nil {
+		t.Fatalf("list over the bus: %v", err)
+	}
+	for _, item := range page.Items {
+		if item.Envelope.ID == mailID {
+			return item.Status
+		}
+	}
+	t.Fatalf("mail %s is not in the list", mailID)
+	return ""
+}
+
+// 邮件端点经 NATS 上的 BusClient 调 Redis 存储的 mail 服务：正常领取、预留答复超时后重试、确认答复超时、
+// mail 服务停机期间领取失败与重启后（同一份 Redis 状态）领取成功。每一步都核对钱包与账本：每封恰好到账一次。
+func TestMailboxRealDependenciesClaimOverNATSAndRedis(t *testing.T) {
+	for _, transport := range []string{"core", "jetstream"} {
+		t.Run(transport, func(t *testing.T) {
+			env := newMailboxRealEnv(t, transport)
+			paid := int64(0)
+			expectWallet := func(step string, ledger int) {
+				t.Helper()
+				if coins, got := env.wallet(t); coins != paid || got != ledger {
+					t.Fatalf("%s: coins=%d ledger=%d, want %d and %d", step, coins, got, paid, ledger)
+				}
+			}
+
+			// 1. 正常领取：列表可领 → 领取到账 → mail 服务（Redis）标成已领 → 再领答已领取。
+			first := env.send(t, 100)
+			listed, err := env.controller.HandleMailboxList(mailboxAs(mailboxPlayerA), &pb.MailboxListRequest{})
+			if err != nil || listed.Code != 0 || len(listed.Mails) != 1 || !listed.Mails[0].Claimable || listed.Mails[0].Amount != 100 {
+				t.Fatalf("list over the bus = %+v %v", listed, err)
+			}
+			if got := env.claim(t, first); got.Code != 0 || got.Amount != 100 || got.Held != 100 {
+				t.Fatalf("claim over the bus = %+v", got)
+			}
+			paid += 100
+			expectWallet("after the first claim", 1)
+			if status := env.status(t, first); status != svcmail.StatusClaimed {
+				t.Fatalf("mail service holds %s as %q, want claimed", first, status)
+			}
+			if again := env.claim(t, first); again.Code != mailboxCodeAlreadyClaimed {
+				t.Fatalf("second claim = %+v, want already claimed", again)
+			}
+			expectWallet("after the second claim", 1)
+
+			// 2. 预留的答复超时（服务方已预留）：这次答错误、什么都没发；玩家重试——租约内答“领取在途”，租约到期后
+			//    同一个 token 再预留、发放、确认。jetstream 下拖过 ack_wait 的预留请求还会被重投执行一次。
+			second := env.send(t, 50)
+			env.server.mail.stallNext("ReserveClaim", mailboxRealStall)
+			timedOut := env.claim(t, second)
+			if timedOut.Code == 0 {
+				t.Fatalf("claim whose reservation answer timed out = %+v, want a refusal", timedOut)
+			}
+			expectWallet("after the reservation timed out", 1)
+			attempts, done := env.claimUntilDone(t, second, 15*time.Second)
+			if done.Amount != 50 || done.Held != paid+50 {
+				t.Fatalf("claim after the timed-out reservation = %+v", done)
+			}
+			paid += 50
+			expectWallet("after retrying the timed-out reservation", 2)
+			if status := env.status(t, second); status != svcmail.StatusClaimed {
+				t.Fatalf("mail %s is %q after the retry, want claimed", second, status)
+			}
+			t.Logf("timed-out reservation: first answer code %d, success after %d more attempts, ReserveClaim executed %d times on the service",
+				timedOut.Code, attempts, env.server.mail.count("ReserveClaim"))
+
+			// 3. 确认的答复超时（服务方已确认）：附件已到账，端点照常答成功；mail 服务那边已是已领，再领答已领取。
+			third := env.send(t, 30)
+			env.server.mail.stallNext("CommitClaim", mailboxRealStall)
+			if got := env.claim(t, third); got.Code != 0 || got.Amount != 30 || got.Held != paid+30 {
+				t.Fatalf("claim whose commit answer timed out = %+v, want success", got)
+			}
+			paid += 30
+			expectWallet("after the commit answer timed out", 3)
+			time.Sleep(mailboxRealStall) // 等拖住的确认答完（jetstream 下的重投也执行完）
+			if status := env.status(t, third); status != svcmail.StatusClaimed {
+				t.Fatalf("mail %s is %q after the late commit, want claimed", third, status)
+			}
+			if again := env.claim(t, third); again.Code != mailboxCodeAlreadyClaimed {
+				t.Fatalf("claim after the late commit = %+v, want already claimed", again)
+			}
+			expectWallet("after re-claiming the late-committed mail", 3)
+
+			// 4. mail 服务停机：领取失败、什么都没发；服务方按同一个 Redis 键前缀重启，玩家重试领取成功（状态在 Redis 里）。
+			fourth := env.send(t, 20)
+			env.server.gracefulStop(t)
+			down := env.claim(t, fourth)
+			if down.Code == 0 {
+				t.Fatalf("claim while the mail service is down = %+v, want a refusal", down)
+			}
+			expectWallet("while the mail service is down", 3)
+			env.server = env.startServer(t, 7401)
+			_, done = env.claimUntilDone(t, fourth, 15*time.Second)
+			if done.Amount != 20 || done.Held != paid+20 {
+				t.Fatalf("claim after the restart = %+v", done)
+			}
+			paid += 20
+			expectWallet("after the mail service restarted", 4)
+			mails := []string{first, second, third, fourth}
+
+			// 5. jetstream 的重投：服务实例 A 执行了预留、答复之前“进程死了”（连接断开，不再续 in-progress）；ack_wait 到了
+			//    broker 把同一条请求重投给同一 durable 上的实例 B，B 在调用方期限内执行并答复（预留还在租约里，答“领取在途”）。
+			//    调用方这次用更长的期限（8s > ack_wait 1s），重投的答复才赶得上。之后照常重试领取，恰好到账一次。
+			if transport == "jetstream" {
+				fifth := env.send(t, 10)
+				patient, err := svcmail.NewBusClient(env.clientBus, "", 8*time.Second, servicerpc.OptionsFromConfig(env.clientCfg)...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				patientController := newController(nil, env.engine, patient)
+				a := env.server
+				a.mail.stallNext("ReserveClaim", 20*time.Second)
+				answered := make(chan *pb.MailboxClaimResponse, 1)
+				go func() {
+					response, err := patientController.HandleMailboxClaim(mailboxAs(mailboxPlayerA), &pb.MailboxClaimRequest{MailID: fifth})
+					if err != nil {
+						t.Errorf("claim through the patient client: %v", err)
+					}
+					answered <- response
+				}()
+				select {
+				case <-a.mail.stalled:
+				case <-time.After(5 * time.Second):
+					t.Fatal("instance A never executed the reservation")
+				}
+				b := env.startServer(t, 7403)
+				a.hardStop()
+				var redelivered *pb.MailboxClaimResponse
+				select {
+				case redelivered = <-answered:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the redelivered reservation was not answered within the caller's deadline")
+				}
+				if b.mail.count("ReserveClaim") < 1 {
+					t.Fatalf("the claim was answered %+v but instance B never executed the reservation: no redelivery", redelivered)
+				}
+				if redelivered == nil || redelivered.Code != mailboxCodeClaimHeld {
+					t.Fatalf("answer of the redelivered reservation = %+v, want claim held (A's reservation is still leased)", redelivered)
+				}
+				expectWallet("after the redelivered reservation", 4)
+				env.server = b
+				_, done = env.claimUntilDone(t, fifth, 15*time.Second)
+				if done.Amount != 10 || done.Held != paid+10 {
+					t.Fatalf("claim after the redelivery = %+v", done)
+				}
+				paid += 10
+				expectWallet("after claiming the redelivered mail", 5)
+				mails = append(mails, fifth)
+			}
+			for _, mailID := range mails {
+				if status := env.status(t, mailID); status != svcmail.StatusClaimed {
+					t.Fatalf("mail %s is %q at the end, want claimed", mailID, status)
+				}
+			}
+		})
+	}
+}
