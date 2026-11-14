@@ -95,7 +95,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 - **玩家号计数器与 account 的数据同生共死。** Redis 被清、或者换了 `account.key_prefix` 却没搬数据，会从头再数、发出重复的号。Redis 出错时不发号（建角失败可以重试）。
 - **`accountctl` 的前缀填错不会报错**，只是写进了没人读的键里；登记之后用 `list-servers` 与一次真实的握手确认。合服、换服的人工兜底不在这个最小命令里。
 - **装不上的情形：** 模块接管 `internal/access/player/tcp/auth.go` 与 `services/account/collaborators.go`，只在它们仍是没改过的生成内容时替换，业务改过任何一个就拒绝安装、工程不变（全有或全无）；工程里已经有自己的 `cmd/accountctl/main.go` 时也装不上。
-- **独立 Gate 部署只做过一次单机真实进程演练**（account、走 Game Ingress 的 game、Gate 三个进程，真实 NATS / Redis / Mongo / etcd）。生成器不生成 Gate 进程，接法是：
+- **独立 Gate 部署只有单机真实进程演练**（2026-11-12 手工一次：account、走 Game Ingress 的 game、Gate 三个进程，真实 NATS / Redis / Mongo / etcd；2026-11-14 起 game-demo 有可重复的脚本：仓库的 `scripts/test-demo-login.sh` 最后一段把 game 1000 换到 Gate 后面跑机器人的两种登录（整个缺省场景），`scripts/test-demo-merge.sh` 经 Gate 登录已并入别的服的角色；两个小程序在 `scripts/testdata/demo-drill/`）。生成器不生成 Gate 进程，接法是：
   - Game：`bootstrap.NewWithOptions(bootstrap.Options{GameIngress: &options})`，`options.Authenticator = accessplayertcp.NewAuthenticator()`（模块 `auth.go` 的 `NewAuthenticator`，claims 与会话激活后的告知都靠它），`options.RegisterDiscovery = true`，再给 `options.Ready` 与 `options.AdvertiseAddr`；配置里 `player_access.tcp.enabled: false`。
   - Gate：工程自己加一个服务，Mod 是 NATS、`kitetcd.NewEtcdMod(kitetcd.WithoutServiceRegistration())`、account 的 `NewClientMod()`、`gatewiring.NewGateMod(options)`。不带认证器时用 `wiring/gate` 缺省的 `AccountAuthenticator`，它认 `enter:` 与 `session:` 两种票据。
   - 两端的 `options.Config.Namespace` 相同，都开单实例锁（`singleton.enabled`）。
@@ -164,4 +164,4 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 - account 一侧验证开发令牌（对、错、关、生产配置拒绝）、渠道缺省全拒、计数器的键与出错不发号。
 - `cmd/accountctl` 的子命令在内存存储上跑，连接旗标只验到“读对了”；真正去连 Redis 的那一段（`openService`）没有被场景执行。
 - 与 enter 的联动里游戏服的档是内存替身；新建与进入的事务在 enter 模块自己的场景里验证。
-- 没有经真实的 TCP、总线、Redis 与持久层的场景。真实进程上做过的是手工演练（单机 `make dev-run` 的自动登记与三步登录、一次独立 Gate 三进程演练），没有做成可重复的脚本，记录在 KNOWN-LIMITS 与 CHANGELOG。
+- 没有经真实的 TCP、总线、Redis 与持久层的场景。真实进程上的演练在 game-demo 上：仓库的 `scripts/test-demo-login.sh`（单机 `make dev-run` 的自动登记、三步登录、机器人的两种登录，最后一段经独立 Gate），可重复；多实例、跨机没有跑。
