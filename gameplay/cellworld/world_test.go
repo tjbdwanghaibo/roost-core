@@ -866,10 +866,10 @@ func TestWorldJitterAtBoundary(t *testing.T) {
 func TestWorldJitterAtBoundarySlowHandoffConclusion(t *testing.T) {
 	spec, lb := loopbackSpec(t, 2, 1)
 	w := startWorld(t, spec)
-	b := Subject("w", w.grid.SID(CellID{1, 0}))
+	b := w.grid.SID(CellID{1, 0})
 	scenarioJitter(t, w, contMaxMiss, contGap, func() {
 		lb.setFault(func(subject string, m *wireMsg) (bool, bool, time.Duration) {
-			if subject != b {
+			if subjectTo(subject) != b {
 				return false, false, 0
 			}
 			if m.Kind == kindOfferReply {

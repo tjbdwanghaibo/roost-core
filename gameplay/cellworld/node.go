@@ -24,7 +24,7 @@ var ErrNodeConfig = errors.New("cellworld: invalid node config")
 //
 // 一个进程一个 Node：Cell 侧（托管一个格：Cell 非空）与 Base 侧（托管玩家：PlayerEntity 非空）可以同时启用。
 type NodeConfig struct {
-	// World 是主题命名空间，只允许字母、数字、'-'、'_'；SID 是本进程 sid（收件主题按它区分）。
+	// World 是主题命名空间，只允许字母、数字、'-'、'_'；SID 是本进程 sid（收件主题按它与来源区分，见 SubjectFromCell）。
 	World string
 	SID   int32
 	// Cell 必须使用共享授权记录和 App 单实例锁的本次启动令牌；Base-only 不需要。
@@ -362,7 +362,7 @@ type Node struct {
 	out             chan job
 	network         networkQueue
 	sentReplica     replicaCache
-	receivedReplica replicaCache
+	receivedReplica receivedReplicas
 	controls        chan queuedSend
 	destroyQueue    chan job
 	destroyMu       sync.Mutex
@@ -381,7 +381,8 @@ type Node struct {
 	ready        chan struct{}
 	running      atomic.Bool
 	lastExpire   atomic.Int64
-	// ingress 是收件的准入门（CloseIngress）：closed 之后回调直接丢弃；busy 是正在执行的回调数，closed 且归零时关 idle。
+	// ingress 是收件的准入门（CloseIngress）：closed 之后回调直接丢弃；busy 是正在执行的回调数（各来源订阅的回调合计），
+	// closed 且归零时关 idle。unsubscribe 退掉本进程的全部收件订阅。
 	ingress struct {
 		sync.Mutex
 		closed      bool
@@ -402,7 +403,11 @@ func NewNode(cfg NodeConfig) (*Node, error) {
 	n := &Node{cfg: cfg, out: make(chan job, cfg.OutboxSize), ready: make(chan struct{}), handlers: cfg.Handlers}
 	n.network.init()
 	n.sentReplica.init()
-	n.receivedReplica.init()
+	sources := make([]int32, 0, len(cfg.Grid.Cells()))
+	for _, cell := range cfg.Grid.Cells() {
+		sources = append(sources, cfg.Grid.SID(cell))
+	}
+	n.receivedReplica.init(sources)
 	n.controls = make(chan queuedSend, cfg.ControlQueue)
 	n.destroyQueue = make(chan job, cfg.DestroyQueue)
 	n.destroyBusy = make(map[fentity.IThreadSafeEntity]bool)
@@ -429,17 +434,18 @@ func (n *Node) Config() NodeConfig { return n.cfg }
 // Ready 在 Run 完成订阅后关闭。
 func (n *Node) Ready() <-chan struct{} { return n.ready }
 
-// Run 订阅本进程收件主题、运行出站 goroutine，直到 ctx 结束；返回前退订。只能 Run 一次。
+// Run 订阅本进程的收件主题（每个来源格一个，加 Base-only 共用的一个，见 subscribe）、运行出站 goroutine，直到 ctx
+// 结束；返回前退掉全部订阅。只能 Run 一次。
 func (n *Node) Run(ctx context.Context) error {
 	if !n.running.CompareAndSwap(false, true) {
 		return errors.New("cellworld: node already ran")
 	}
 	n.ingress.Lock()
 	if !n.ingress.closed {
-		unsubscribe, err := n.cfg.Transport.Subscribe(Subject(n.cfg.World, n.cfg.SID), n.receive)
+		unsubscribe, err := n.subscribe()
 		if err != nil {
 			n.ingress.Unlock()
-			return fmt.Errorf("cellworld: subscribe sid %d: %w", n.cfg.SID, err)
+			return fmt.Errorf("cellworld: sid %d: %w", n.cfg.SID, err)
 		}
 		var once sync.Once
 		n.ingress.unsubscribe = func() error {
@@ -469,6 +475,50 @@ func (n *Node) Run(ctx context.Context) error {
 	n.pump(ctx)
 	workers.Wait()
 	return nil
+}
+
+// subscribe 订阅本进程的全部收件主题：Grid 里每个格一个来源订阅（SubjectFromCell），再加 Base-only 发件方共用的
+// 一个（SubjectFromBase）。来源订阅随 Grid：固定分区下格的集合在进程生命周期内不变，格换进程（同一 sid 的新
+// incarnation 接手）主题不变，不用重订；所以订阅在 Run 开始时一次订齐，CloseIngress 或 Run 结束时一起退掉。
+// 任何一个订阅失败就退掉已经订上的再返回错误，不留下半套订阅。返回的函数退掉全部订阅。
+//
+// 每个订阅的回调只处理一个来源（receiveFrom 的 from），同一来源串行、按序，不同来源并发；并发下的共享状态见
+// receivedReplicas。
+func (n *Node) subscribe() (func() error, error) {
+	var stops []func() error
+	stopAll := func() error {
+		var errs []error
+		for _, stop := range stops {
+			errs = append(errs, stop())
+		}
+		return errors.Join(errs...)
+	}
+	add := func(subject string, handler func([]byte)) error {
+		stop, err := n.cfg.Transport.Subscribe(subject, handler)
+		if err != nil {
+			return errors.Join(fmt.Errorf("subscribe %s: %w", subject, err), stopAll())
+		}
+		stops = append(stops, stop)
+		return nil
+	}
+	for _, cell := range n.cfg.Grid.Cells() {
+		from := n.cfg.Grid.SID(cell)
+		if err := add(SubjectFromCell(n.cfg.World, n.cfg.SID, from), func(data []byte) { n.receiveFrom(from, data) }); err != nil {
+			return nil, err
+		}
+	}
+	if err := add(SubjectFromBase(n.cfg.World, n.cfg.SID), func(data []byte) { n.receiveFrom(0, data) }); err != nil {
+		return nil, err
+	}
+	return stopAll, nil
+}
+
+// subjectTo 是本进程发给 to 的主题：托管格的进程按自己的格走来源主题，只托管玩家的进程走共用主题。
+func (n *Node) subjectTo(to int32) string {
+	if n.hostsCell {
+		return SubjectFromCell(n.cfg.World, to, n.cfg.SID)
+	}
+	return SubjectFromBase(n.cfg.World, to)
 }
 
 // ---- 出站 ----
@@ -591,7 +641,7 @@ func (n *Node) publish(o outgoing) error {
 		err = fmt.Errorf("cellworld: message has %d bytes, limit %d", len(data), n.cfg.MaxWireBytes)
 	}
 	if err == nil {
-		err = n.cfg.Transport.Publish(Subject(n.cfg.World, o.sid), data)
+		err = n.cfg.Transport.Publish(n.subjectTo(o.sid), data)
 	}
 	if err != nil {
 		n.stats.publishErrors.Add(1)
@@ -661,8 +711,13 @@ func (n *Node) registerCommit(fx *txEffects) {
 
 // ---- 入站：传输回调 ----
 
-// receive 是传输回调：解码后投成 Nest 请求。不阻塞（Dispatch 只做准入）；准入失败计数，协议靠重传容忍。
-func (n *Node) receive(data []byte) {
+// receiveFrom 是一个收件订阅的传输回调：from 是订阅的来源格的 sid，0 表示 Base-only 共用的主题。解码后投成 Nest
+// 请求。不阻塞（Dispatch 只做准入）；准入失败计数，协议靠重传容忍。
+//
+// 不同来源的回调并发执行（D13 C）：这里与它调到的 decodeReplica / requestReplicaRepair / receiveMessage 只碰
+// receivedReplicas 的来源分片（按 m.From，下面核对它就是订阅的来源）、原子统计、并发安全的 Nest 准入与出站队列、
+// 自带锁的 mirror 与 sentReplica；配置里的回调（PlayerEntity、Ext 处理器）因此也会被不同来源并发调用。
+func (n *Node) receiveFrom(from int32, data []byte) {
 	if !n.admit() {
 		return
 	}
@@ -675,6 +730,12 @@ func (n *Node) receive(data []byte) {
 	}
 	m, err := decodeMsg(data)
 	if err != nil {
+		n.stats.decodeErrors.Add(1)
+		return
+	}
+	// 主题只是路由：来源主题上的消息必须来自那一格，共用主题上的不能冒充格。否则一个来源的分片会被别的订阅回调
+	// 并发推进，同一来源的顺序就没有保证了。
+	if from != 0 && m.From != from || from == 0 && n.isCellSID(m.From) {
 		n.stats.decodeErrors.Add(1)
 		return
 	}
@@ -696,6 +757,15 @@ func (n *Node) receive(data []byte) {
 	for _, decoded := range messages {
 		n.receiveMessage(decoded)
 	}
+}
+
+// isCellSID 报告 sid 是不是 Grid 里某一格的 sid。
+func (n *Node) isCellSID(sid int32) bool {
+	if n.cfg.Grid == nil {
+		return false
+	}
+	_, ok := n.cfg.Grid.CellOf(sid)
+	return ok
 }
 
 func (n *Node) receiveMessage(m *wireMsg) {
@@ -1423,7 +1493,8 @@ func (n *Node) handleInspect(es []fentity.IThreadSafeEntity, _ []any, _ ...nest.
 // 交接 / witness / 队伍快照与成员通知都是外部输入，要在 Service.Shutdown 与 Nest 停止之前关掉）。
 //
 // 关准入（幂等）：之后进来的回调直接丢弃（不解码、不计 MsgsIn、不投 Nest、不喂 mirror）；在 ctx 内等调用时正在执行的
-// 回调返回（它们只做 Nest 准入或 mirror 的短锁更新），然后退订收件主题。ctx 先到期返回 ctx 错误，用新 ctx 再调继续等。
+// 回调返回（它们只做 Nest 准入或 mirror 的短锁更新），然后退掉全部收件订阅（每个来源格一个，加共用的一个）。
+// ctx 先到期返回 ctx 错误，用新 ctx 再调继续等。
 // 只停“接收”：出站 goroutine、Base / Cell 的心跳与已经准入 Nest 的请求照常，直到 Run 的 ctx 结束（Service.Shutdown）。
 // 丢掉的消息由协议容忍（重传、租约、看门狗），与进程退出时一样。
 func (n *Node) CloseIngress(ctx context.Context) error {

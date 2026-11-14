@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -274,8 +275,8 @@ func TestLateLeaveAfterHandoffKeepsTheNewEntry(t *testing.T) {
 	b := CellID{1, 0}
 	w.enter(1, spatial.Point{X: 10500, Y: 5000})
 	old := w.leaveAndCapture(lb, 1, b)
-	if want := Subject("w", w.grid.SID(b)); old.subject != want {
-		t.Fatalf("old leave went to %s, want %s", old.subject, want)
+	if want := w.grid.SID(b); subjectTo(old.subject) != want {
+		t.Fatalf("old leave went to %s, want sid %d", old.subject, want)
 	}
 	w.resetViews(1)
 	w.enter(1, spatial.Point{X: 9500, Y: 5000})
@@ -482,7 +483,7 @@ func TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := lb.Publish(Subject("w", p.sid), data); err != nil {
+		if err := lb.Publish(SubjectFromBase("w", p.sid), data); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -533,6 +534,75 @@ func TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight(t *testing.T) 
 	}
 	if err := p.node.CloseIngress(context.Background()); err != nil {
 		t.Fatalf("a second CloseIngress = %v, want nil (idempotent)", err)
+	}
+}
+
+// failingSubscribe 让第 failAt 次 Subscribe 失败（之前的照常交给内层传输）。
+type failingSubscribe struct {
+	*loopback
+	calls, failAt int
+}
+
+func (f *failingSubscribe) Subscribe(subject string, handler func([]byte)) (func() error, error) {
+	f.calls++
+	if f.calls == f.failAt {
+		return nil, errors.New("subscribe refused")
+	}
+	return f.loopback.Subscribe(subject, handler)
+}
+
+// 收件订阅跟着来源格（D13 C）：Run 给 Grid 里每个格订一个来源主题、再加 Base-only 共用的一个；CloseIngress 与 Run
+// 结束都把它们全部退掉，不留订阅与投递 goroutine。订到一半失败时 Run 报错，已经订上的也退掉。
+func TestNodeSubscribesPerSourceCellAndUnsubscribesAll(t *testing.T) {
+	grid := worldGrid(t, 3, 1)
+	lb := newLoopback()
+	sink := &witnessNest{}
+	before := runtime.NumGoroutine()
+	n, stop := startWitnessBase(t, grid, lb, sink)
+	want := []string{SubjectFromBase("w", 900)}
+	for _, cell := range grid.Cells() {
+		want = append(want, SubjectFromCell("w", 900, grid.SID(cell)))
+	}
+	lb.mu.Lock()
+	var got []string
+	for subject, list := range lb.subs {
+		for range list {
+			got = append(got, subject)
+		}
+	}
+	lb.mu.Unlock()
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		stop()
+		t.Fatalf("subscriptions %v, want one per source cell plus the shared one %v", got, want)
+	}
+	if err := n.CloseIngress(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if left := lb.subscriptions(); left != 0 {
+		t.Fatalf("%d subscriptions left after CloseIngress", left)
+	}
+	stop()
+	eventually(t, 5*time.Second, "node goroutines gone", func() (bool, string) {
+		now := runtime.NumGoroutine()
+		return now <= before, fmt.Sprintf("goroutines %d, before start %d", now, before)
+	})
+
+	for failAt := 1; failAt <= len(want); failAt++ {
+		ft := &failingSubscribe{loopback: newLoopback(), failAt: failAt}
+		node, err := NewNode(NodeConfig{World: "w", SID: 900, Grid: grid, Transport: ft, Nest: &witnessNest{},
+			Destroy:      func(context.Context, fentity.IThreadSafeEntity) error { return nil },
+			PlayerEntity: func(actor int64) int64 { return actor }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := node.Run(context.Background()); err == nil {
+			t.Fatalf("subscribe #%d failed but Run returned nil", failAt)
+		}
+		if left := ft.subscriptions(); left != 0 {
+			t.Fatalf("subscribe #%d failed: %d subscriptions left behind", failAt, left)
+		}
 	}
 }
 

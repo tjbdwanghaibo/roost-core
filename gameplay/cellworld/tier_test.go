@@ -265,10 +265,10 @@ func TestIdleTierDamageAcrossBoundaryAppliedOnce(t *testing.T) {
 
 	lossy := lossyFault(5)
 	var hold atomic.Int64
-	toB := Subject("w", w.grid.SID(b))
+	toB := w.grid.SID(b)
 	lb.setFault(func(subject string, m *wireMsg) (bool, bool, time.Duration) {
 		drop, dup, d := lossy(subject, m)
-		if subject == toB && m.Kind == kindGhost && time.Now().UnixNano() < hold.Load() {
+		if subjectTo(subject) == toB && m.Kind == kindGhost && time.Now().UnixNano() < hold.Load() {
 			d += 600 * time.Millisecond
 		}
 		return drop, dup, d
