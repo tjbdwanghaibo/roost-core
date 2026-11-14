@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -245,6 +246,9 @@ var (
 // setKey 改 section 下第一处 key 的值（缩进的子键也算）；找不到就失败，免得改了个寂寞。
 func setKey(t *testing.T, text, section, key, value string) string {
 	t.Helper()
+	if strings.Contains(section, ".") {
+		return setNestedKey(t, text, section, key, value)
+	}
 	pattern := regexp.MustCompile(`(?m)(^` + regexp.QuoteMeta(section) + `:\n(?:[ \t].*\n|\n)*?[ \t]+` + regexp.QuoteMeta(key) + `:)[^\n]*`)
 	if !pattern.MatchString(text) {
 		// 生成配置里没写的键（取缺省）：加在 section 的第一行。
@@ -263,6 +267,49 @@ func setKey(t *testing.T, text, section, key, value string) string {
 		sub := pattern.FindStringSubmatch(match)
 		return sub[1] + " " + value
 	})
+}
+
+// 嵌套配置必须逐层定位，不能把 effect_consumer.workers 误改成 projection.workers。
+func setNestedKey(t *testing.T, text, section, key, value string) string {
+	t.Helper()
+	lines := strings.Split(text, "\n")
+	begin, end, indent := 0, len(lines), 0
+	for depth, part := range strings.Split(section, ".") {
+		found := -1
+		for i := begin; i < end; i++ {
+			if strings.TrimRight(lines[i], " \t") == strings.Repeat(" ", indent)+part+":" {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			if depth == 0 {
+				t.Fatalf("config has no section %s", section)
+			}
+			// 生成配置会省略取默认值的子段，显式写入本次测量的覆盖值。
+			lines = slices.Insert(lines, end, strings.Repeat(" ", indent)+part+":")
+			found = end
+			end++
+		}
+		begin = found + 1
+		for i := begin; i < end; i++ {
+			trimmed := strings.TrimSpace(lines[i])
+			if trimmed != "" && !strings.HasPrefix(trimmed, "#") && len(lines[i])-len(strings.TrimLeft(lines[i], " ")) <= indent {
+				end = i
+				break
+			}
+		}
+		indent += 2
+	}
+	prefix := strings.Repeat(" ", indent) + key + ":"
+	for i := begin; i < end; i++ {
+		if strings.HasPrefix(lines[i], prefix) {
+			lines[i] = prefix + " " + value
+			return strings.Join(lines, "\n")
+		}
+	}
+	lines = slices.Insert(lines, end, prefix+" "+value)
+	return strings.Join(lines, "\n")
 }
 
 // procOptions 是进程配置的差异：Redis 地址（经 toxiproxy 时用代理地址）与额外的键。

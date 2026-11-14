@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **验证：联盟重试与大名单成本入口**（2026-11-14，交接 B-2）：真实探针新增 effect worker 配置和同请求 ID 的有界退避重试，分别统计 RPC 答复与调用终态，确定结果时核对最终名单。保留正式 500 人上限：上限内测 Remote BSON 文档、正式 Mirror L1/DTO 冷读；1000/5000/10000 人仅测生成 DAO/DTO 的合成形状。真实脚本小规模通过；误改 projection worker 的变异被配置核对拦下，恢复后通过。并行编译期数字不作为容量；空闲测量仍归 M-11。命令、口径和日志见 [探针报告](docs/performance/benchmarks/alliance-probes-20261114/README.md)。
+
 - **测试：C# 地形确认来源用真实 entitysync 帧驱动**（client/dotnet，2026-11-14，KNOWN-LIMITS“地形确认来源 ③④”的 ④）：`Fixtures/regen.sh` 新增 `TestWriteTerrainConfirmFramesFixture`，用正式 entitysync Manager 给一个会话下发地形块对象的真实帧（就绪标记与 game-demo `terrain_chunk.Base` 同形、改过的块用生成 DAO 的全量 / 增量），写出 `terrain-confirm-frames.json`；`Roost.Client.Terrain.Tests` 新增 `TestChunkSyncFromFrames`：`EntityViews` 解码、生成 Apply 合并后按 client/README 的接线交给 `TerrainChunkSync`，逐帧核对确认时序（进场缺一块时依赖它的不显示、业务先装上那块也不确认、标记到达后确认、第一次改是 rebind 的全量且没有 remove、按下标的增量、离开撤销 / 再进入等 LoadBase、重连后新会话的 Full 帧逐块重新确认）。变异“视图装入时没有说法也确认”“Remove 不撤销确认”均红；“标记先于块装入就确认”被调度器自己的守卫挡住（等价变异）。client/README 写明地形视图线上 profile 是 `"default"`、块坐标取自 subject ID。没有行为改动；Unity 未跑。
 
 - **测试：cellworld 模块补 Runtime 装配与启停的回归**（modules/cellworld，2026-11-14，KNOWN-LIMITS“CellWorld 模块的验收范围”）：`roost module verify cellworld` 由 3 条增到 6 条：`TestCellworldNewCellBranchTakesAuthorityFromTheApp`（`New` 的 Cell 分支从 App 取授权记录、出生目录、启动令牌与租约检查，缺单实例令牌 / 租约 / 身份核对 / Redis、sid 对不上、令牌属于别的 sid 都拒绝）、`TestCellworldStartAndStop`（就绪后才返回、第二次 Start 拒绝、Stop 等 Node.Run 退出、没启动过的 Stop 无事可做）、`TestCellworldFailedStartLeavesRuntimeNotStarted`（Node 就绪前退出与 ctx 先到两种失败后不留 done / cancel、Stop 返回 nil、StartSpawns 拒绝、再 Start 仍拒绝）。替身 Redis / Nest / Transport，不连真实依赖。变异“去掉 38430d16 加的 Start 失败复位”时两个子用例都红（Stop 返回 `subscribe refused`、StartSpawns 被接受）。没有行为改动；`AddIngress` 失败分支仍没有用例。

@@ -16,10 +16,19 @@
 #   - TestAllianceE2EShortPerf                 只在 ALLIANCE_E2E_PERF=1 时跑：续期量、预加载 1k / 10k、路由 RPC 延迟；
 #   - TestAllianceE2EMirrorRevalidation        只在 ALLIANCE_E2E_PERF=1 时跑：cached_max_staleness 30s / 5s 的 Mirror 回源量。
 #   - TestAllianceE2ERPCConcurrency            只在 ALLIANCE_E2E_PERF=1 时跑：一个实例上 Found / Info / Join 的吞吐随并发与顺序键的变化（约 2 分钟）。
-#   - TestAllianceE2EJoinRetryableSources      只在 ALLIANCE_E2E_PERF=1 时跑：写额度 512、256 并发新玩家 Join（不重试）的“可重试”按答复点归类，
+#   - TestAllianceE2EJoinRetryableSources      只在 ALLIANCE_E2E_PERF=1 时跑：写额度 512、256 并发新玩家 Join 的“可重试”按答复点归类，
 #                                              3 轮各 ALLIANCE_E2E_RETRY_SECONDS（缺省 15）秒。
 #   - TestAllianceE2EWarScanStartup            只在 ALLIANCE_E2E_PERF=1 时跑：起服宣战补发扫描（ScanWars）随联盟数的代价，
 #                                              ALLIANCE_E2E_WARSCAN_COUNTS（缺省 1000,10000）、ALLIANCE_E2E_WARSCAN_PENDING（千分比，缺省 10）。
+# Retry probe controls: ALLIANCE_E2E_EFFECT_WORKERS=16, ALLIANCE_E2E_RETRY=0|1,
+# ALLIANCE_E2E_RETRY_CONCURRENCY=256 (use 8 for a functional smoke run).
+# Retries preserve request/player IDs, stop after 8 attempts, and never retry unknown outcomes.
+# Outcome counters count RPC attempts; logical counts terminal caller results separately.
+# TestAllianceE2ELargeAllianceFootprint: ALLIANCE_E2E_MEMBERS=500 (1..500),
+# ALLIANCE_E2E_MIRROR_COPIES=16; records BSON bytes, retained L1 + DTO heap and cold reads.
+# ALLIANCE_E2E_PERF=1 ALLIANCE_E2E_RUN='^TestAllianceE2ELargeAllianceFootprint$'
+# TestAllianceE2ESyntheticRosterFootprint: ALLIANCE_E2E_SHAPE_COUNTS=1000,5000,10000;
+# generated DAO / DTO sizing only, with one join receipt per member. No admission or network claim.
 # 依赖：scripts/mirror-local.sh 起的私有环境（需要 toxiproxy；会断开它的 redis 代理，不要指向共享隔离环境），
 # 加上本脚本自起的私有 etcd（ALLIANCE_E2E_ETCD_PORT，缺省 34379）；进程端口从 ALLIANCE_E2E_PORT_BASE（缺省 35100）起
 # 约占 0..300。用例各用唯一前缀并在结束时删掉自己的库 / 流 / 键。耗时约 7 分钟（本机实测 400s，含生成与编译），不进 pretag。
