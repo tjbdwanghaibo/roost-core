@@ -1,0 +1,60 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+type reviewLostReplyClient struct{ fmongo.IMongo }
+
+func (c reviewLostReplyClient) StartSession(ctx context.Context) (fmongo.ISession, error) {
+	s, err := c.IMongo.StartSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return reviewLostReplySession{s}, nil
+}
+
+type reviewLostReplySession struct{ fmongo.ISession }
+
+func (s reviewLostReplySession) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
+	if err := s.ISession.WithTransaction(ctx, fn); err != nil {
+		return err
+	}
+	return errors.Join(fmongo.ErrCommitResultUnknown, context.DeadlineExceeded)
+}
+
+// Characterization: exercise the real copy and preload implementations with a
+// transactional memory Mongo adapter whose successful commit reply is lost.
+// This proves the lower-level state that the Driver probe must reconcile.
+func TestReviewUnknownCopyCanBePreloaded(t *testing.T) {
+	ctx := context.Background()
+	client := mongotest.NewClient()
+	source := newCopyServer(t, client, 3)
+	id := seedPreload(t, client, 3, preloadFirstKind, "preload_first", 987, 1, bson.M{"level": int32(7)})[0]
+	source.runtime.Projector.holdEntityHandOff(id)
+	source.store.client = reviewLostReplyClient{client}
+	copied, err := source.runtime.CopyHandedOffEntity(ctx, id, 4, true)
+	if !errors.Is(err, fmongo.ErrCommitResultUnknown) {
+		t.Fatalf("unknown outcome lost: %v", err)
+	}
+	if len(copied.Documents) != 0 {
+		t.Fatalf("unexpected returned manifest: %+v", copied)
+	}
+	_, present := client.Collection(testDatabase+"_4", "preload_first").Lookup(id)
+	if !present {
+		t.Fatal("injection did not leave a committed target document")
+	}
+	target := newPreloadServer(t, client, 4)
+	report, err := target.runtime.PreloadLocalEntities(ctx, []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{})
+	if err != nil || report.Loaded != 1 || target.manager.Get(id) == nil {
+		t.Fatalf("preload=%+v err=%v", report, err)
+	}
+	t.Logf("copy returned unknown with %d manifest documents; target document=%t; target startup loaded=%d", len(copied.Documents), present, report.Loaded)
+}

@@ -1,0 +1,7 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/app	16.855s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/entity	7.575s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	7.625s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	6.790s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	4.147s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess	1.019s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver	1.646s

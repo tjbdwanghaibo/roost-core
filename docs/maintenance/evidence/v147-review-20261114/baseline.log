@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	1.937s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	16.115s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	121.577s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	10.549s

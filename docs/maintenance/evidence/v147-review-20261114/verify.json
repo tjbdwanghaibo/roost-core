@@ -1,0 +1,30 @@
+{
+  "modules": [
+    {
+      "name": "rehome",
+      "want": 44,
+      "passed": 44,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}
