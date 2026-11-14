@@ -209,9 +209,9 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 ### 业务模块命令
 
-付费到账可安装 [purchase 模块](../../modules/purchase/README.md)：平台待发队列与 Player 连续游标保证重放不重复发货，渠道缺省拒绝；持久依赖与恢复边界见模块说明。
+付费到账可安装 [purchase 模块](../../modules/purchase/README.md)：平台待发队列与 Player 连续游标保证重放不重复发货，渠道缺省拒绝；真实 NATS/TCP/Mongo/WAL、跨 sid 与私有 AOF Redis 原目录重启补领已做本机验收，持久依赖与恢复边界见模块说明。
 
-运维入口可安装 [gm 模块](../../modules/gm/README.md)：各功能模块按联动登记命令，复用 ops 的鉴权与 Nest 事务。
+运维入口可安装 [gm 模块](../../modules/gm/README.md)：各功能模块按联动登记命令，复用 ops 的鉴权与 Nest 事务；真实 HTTP→跨进程邮件→换服交出实体的本机验收见模块文档。
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
@@ -230,7 +230,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/skills/*.json` 与 `game/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
-| 活动生命周期 | 共用活动状态与阶段引擎，个人/全服/联盟 Entity 适配；五阶段、循环、解锁与自定义流程 | `roost module add activity`；共享宿主另装 `activity_world` / `activity_alliance` | 现成模块；空配置无活动；个人持久定时器，Remote 权威服务有界扫描；真实恢复待最终批次 | [activity](../../modules/activity/README.md) |
+| 活动生命周期 | 共用活动状态与阶段引擎，个人/全服/联盟 Entity 适配；五阶段、循环、解锁与自定义流程 | `roost module add activity`；共享宿主另装 `activity_world` / `activity_alliance` | 现成模块；空配置无活动；个人定时器与 Remote 扫描已做本机跨进程迁移/SIGKILL 验收，精简组合与边界见模块文档 | [activity](../../modules/activity/README.md) |
 | 联盟 alliance | 独立服务独占联盟与成员守卫；路由 RPC、Mirror、跨域 Saga 与换服惰性校正 | `roost module add alliance` | 现成模块；普通联盟操作不用 Saga，真实跨进程与存储验收待最终批次 | [alliance](../../modules/alliance/README.md) |
 | 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`；七个 PB 请求、邀请推送与权威核对；安装时代办 Remote | 现成模块；邀请有界，解散后成员引用惰性核对。matchmaking 可组合，demo 通过登记点保留分区队伍视野；真实跨进程验收待补 | [team](../../modules/team/README.md) |
 | 本服匹配与房间移交 | 单人/整队，取消与补查，固定名单房间 | `roost module add matchmaking`，自动安装 matchroom / team / room | 默认两支同人数队伍；历史消失时保留屏障；跨服房间不在本轮 | [matchmaking](../../modules/matchmaking/README.md) |

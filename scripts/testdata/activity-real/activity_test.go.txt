@@ -1,0 +1,292 @@
+package e2e
+
+import (
+	"ACTIVITY_MODULE/game/activity"
+	worldentity "ACTIVITY_MODULE/game/entities/activity_world"
+	playerentity "ACTIVITY_MODULE/game/entities/player"
+	rpcactivityalliance "ACTIVITY_MODULE/internal/rpc/activity_alliance"
+	rpcworld "ACTIVITY_MODULE/internal/rpc/activity_world"
+	"ACTIVITY_MODULE/protocol/msgid"
+	"ACTIVITY_MODULE/protocol/pb"
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func activityProbe(s *suite, control string, p *proc, op string, id int64, to int32, wantError bool) json.RawMessage {
+	s.t.Helper()
+	path := filepath.Join(control, fmt.Sprintf("%s-%d", p.service, p.sid))
+	_ = os.Remove(path + ".response")
+	raw, _ := json.Marshal(map[string]any{"Op": op, "ID": id, "To": to})
+	if err := os.WriteFile(path+".request.tmp", raw, 0600); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := os.Rename(path+".request.tmp", path+".request"); err != nil {
+		s.t.Fatal(err)
+	}
+	var response struct {
+		Result json.RawMessage `json:"result"`
+		Error  string          `json:"error"`
+		PID    int             `json:"pid"`
+	}
+	s.eventually("own process probe "+op, 20*time.Second, func() (bool, string) {
+		raw, err := os.ReadFile(path + ".response")
+		if err != nil {
+			return false, err.Error()
+		}
+		err = json.Unmarshal(raw, &response)
+		return err == nil, fmt.Sprint(err)
+	})
+	if response.PID != p.cmd.Process.Pid || (response.Error != "") != wantError {
+		s.t.Fatalf("probe %s: %+v", op, response)
+	}
+	if wantError {
+		s.t.Logf("old owner direct call rejected: %s", response.Error)
+	}
+	return response.Result
+}
+
+func activityDoc(s *suite, coll string, id int64) (bson.Raw, error) {
+	// Remote Mongo 文档外层是版本/围栏，业务 DAO BSON 放在 data；普通 Player 文档没有此包装。
+	var stored struct {
+		Data []byte `bson:"data"`
+	}
+	err := s.mongo.Database(s.prefix).Collection(coll).FindOne(s.ctx, bson.M{"_id": id}).Decode(&stored)
+	if err != nil {
+		return nil, err
+	}
+	if err = bson.Raw(stored.Data).Validate(); err != nil {
+		return nil, err
+	}
+	return bson.Raw(stored.Data), nil
+}
+func activityPhase(raw bson.Raw, book, definition string) int64 {
+	return operationsNumber(raw, book, "1", definition, "5")
+}
+
+func activityView(t *testing.T, views []activity.Snapshot, scope string, owner int64, definition int32, phase activity.Phase, pending bool) activity.Snapshot {
+	t.Helper()
+	if len(views) != 1 {
+		t.Fatalf("%s views=%+v", scope, views)
+	}
+	v := views[0]
+	if v.Token.Scope != scope || v.Token.Owner != owner || v.Token.Definition != definition || v.Token.Generation != 1 || v.Token.Cycle != 1 || v.Token.Phase != phase || v.Pending != pending || v.CloseAt-v.OpenAt != 60000 {
+		t.Fatalf("%s snapshot %+v", scope, v)
+	}
+	if phase == activity.Ended && v.CompletedThrough != 1 {
+		t.Fatalf("%s completed-through=%d", scope, v.CompletedThrough)
+	}
+	return v
+}
+
+func activityEvidence(s *suite, label string, snapshots any, ids ...int64) {
+	s.t.Helper()
+	owners := map[int64]entity.RemoteEntityMarkerLease{}
+	for _, id := range ids {
+		lease, found, err := s.owners.GetRemoteOwnership(s.ctx, id)
+		if err != nil || !found {
+			s.t.Fatalf("evidence ownership %d: found=%v err=%v", id, found, err)
+		}
+		owners[id] = lease
+	}
+	raw, err := json.MarshalIndent(map[string]any{"snapshots": snapshots, "owners": owners}, "", "  ")
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(s.logs, label+".json"), raw, 0600); err != nil {
+		s.t.Fatal(err)
+	}
+	s.t.Logf("%s snapshots=%+v owners=%+v", label, snapshots, owners)
+}
+
+// 三种宿主分别验收：Player 经持久定时器与 rehome，World/Alliance 经真实 Remote 权威和恢复扫描。
+// 查询前先只读 Mongo 观察推进，避免测试自己的 Pulse/ActivityView 把丢失驱动掩盖掉。
+func TestOperationsActivityAuthorityMigration(t *testing.T) {
+	if os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI") == "" {
+		t.Fatal("private Mongo required: run scripts/test-activity-real.sh")
+	}
+	s, _, control := operationsSuite(t)
+	adminKeys := [][3]string{{"ops", "admin_enabled", "true"}, {"ops", "admin_token", "dev-gm-token"}, {"ops", "allow_dev_token", "true"}}
+	s.start("account", "account", 1000, procOptions{})
+	s.start("mail", "mail", 1000, procOptions{})
+	a := s.start("alliance-3000", "alliance", 3000, procOptions{keys: adminKeys})
+	b := s.start("alliance-3001", "alliance", 3001, procOptions{keys: adminKeys})
+	games := [2]*proc{s.start("game-1000", "game", 1000, procOptions{keys: adminKeys}), s.start("game-1001", "game", 1001, procOptions{keys: adminKeys})}
+	for _, sid := range []int{1000, 1001} {
+		out, err := exec.Command(s.accountctl, "-redis", s.redisAddr, "-prefix", "roost:"+s.prefix+":account", "upsert-server", "-sid", fmt.Sprint(sid)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("server register: %v %s", err, out)
+		}
+	}
+	w0 := s.start("world-4100", "activity_world", 4100, procOptions{keys: [][3]string{{"dataengine.wal", "dir", "data/wal/activity_world-4100"}}})
+	w1 := s.start("world-4101", "activity_world", 4101, procOptions{keys: [][3]string{{"dataengine.wal", "dir", "data/wal/activity_world-4101"}}})
+	worldID, err := entity.BuildEntityID(77, worldentity.EntityKindActivityWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.eventually("formal World bootstrap", 15*time.Second, func() (bool, string) {
+		raw, err := activityDoc(s, "activity_world", worldID)
+		created := operationsNumber(raw, "1")
+		return err == nil && created == 1700000000000, fmt.Sprintf("created=%d err=%v", created, err)
+	})
+	wc, err := rpcworld.NewBusClient(s.bus, lookupResolver{s.lookup}, "", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ac, err := rpcactivityalliance.NewBusClient(s.bus, lookupResolver{s.lookup}, "", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guild := s.found(s.client(nil, 5*time.Second), 91830001)
+	allianceID := target(t, guild.Alliance.AllianceID)
+	if guild.ServedBySID == 3001 {
+		a, b = b, a
+	}
+	p := s.login(games[0], "activityplayer")
+	playerID, err := entity.BuildEntityID(p.id, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pv []activity.Snapshot
+	if err = json.Unmarshal(activityProbe(s, control, games[0], "player-event", playerID, 0, false), &pv); err != nil {
+		t.Fatal(err)
+	}
+	playerBefore := activityView(t, pv, "player", playerID, 1, activity.Open, false)
+	wv, err := wc.Pulse(s.ctx, worldID, "operations", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worldInit := activityView(t, wv, "world", worldID, 2, activity.Initializing, true)
+	av, err := ac.Pulse(s.ctx, allianceID, "operations", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allianceInit := activityView(t, av, "alliance", allianceID, 3, activity.Initializing, true)
+	activityEvidence(s, "before-migration", []activity.Snapshot{playerBefore, worldInit, allianceInit}, worldID, allianceID)
+	// pending 初始化先迁移，证明锚点/令牌由权威 DAO 搬走，而非新进程重新激活。
+	activityProbe(s, control, w0, "transfer", worldID, 4101, false)
+	report := s.admin(a, "alliance.transfer", map[string]any{"ids": []int64{allianceID}, "to_sid": b.sid})
+	if moved, ok := report["moved"].([]any); !ok || len(moved) != 1 {
+		t.Fatalf("alliance transfer: %v", report)
+	}
+	activityProbe(s, control, w0, "world-local-pulse", worldID, 0, true)
+	wv, err = wc.Pulse(s.ctx, worldID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := activityView(t, wv, "world", worldID, 2, activity.Initializing, true); v.Start != worldInit.Start || v.Token != worldInit.Token {
+		t.Fatalf("World timeline restarted %+v -> %+v", worldInit, v)
+	}
+	av, err = ac.Pulse(s.ctx, allianceID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := activityView(t, av, "alliance", allianceID, 3, activity.Initializing, true); v.Start != allianceInit.Start || v.Token != allianceInit.Token {
+		t.Fatalf("Alliance timeline restarted %+v -> %+v", allianceInit, v)
+	}
+	activityEvidence(s, "after-migration", []activity.Snapshot{wv[0], av[0]}, worldID, allianceID)
+	if err = wc.Complete(s.ctx, worldID, worldInit.Token); err != nil {
+		t.Fatal(err)
+	}
+	if err = ac.Complete(s.ctx, allianceID, allianceInit.Token); err != nil {
+		t.Fatal(err)
+	}
+	operationsMove(s, games[0], p.id, 1001)
+	p = s.login(games[1], "activityplayer")
+	// 同 WAL 冷启动；先完成登录加载 Player，再观察持久定时器。共享宿主靠真实预加载与扫描，不靠本地 timer。
+	for _, owner := range []*proc{w1, b, games[1]} {
+		s.stop(owner, syscall.SIGKILL)
+		s.start(owner.name, owner.service, owner.sid, procOptions{})
+	}
+	p = s.login(games[1], "activityplayer")
+	stillOpen := call(p, msgid.MsgActivityView, &pb.ActivityViewRequest{}, pb.MarshalActivityViewRequest, pb.UnmarshalActivityViewResponse)
+	if stillOpen.Code != 0 || len(stillOpen.Activities) != 1 || stillOpen.Activities[0].Phase != int32(activity.Open) || time.Until(time.UnixMilli(stillOpen.Activities[0].CloseAt)) < 2*time.Second {
+		t.Fatalf("timer premise: Player must be loaded before its deadline: %+v", stillOpen)
+	}
+	s.eventually("World background scan after migration and SIGKILL", 80*time.Second, func() (bool, string) {
+		raw, err := activityDoc(s, "activity_world", worldID)
+		phase := activityPhase(raw, "activity_world", "2")
+		if err == nil && phase == int64(activity.Settling) {
+			t.Logf("MONGO before query world phase=%d generation=%d cycle=%d start=%d", phase, operationsNumber(raw, "activity_world", "1", "2", "2"), operationsNumber(raw, "activity_world", "1", "2", "4"), operationsNumber(raw, "activity_world", "1", "2", "13"))
+		}
+		return err == nil && phase == int64(activity.Settling), fmt.Sprintf("phase=%d err=%v", phase, err)
+	})
+	s.eventually("Alliance background scan after migration and SIGKILL", 80*time.Second, func() (bool, string) {
+		raw, err := activityDoc(s, "alliance", allianceID)
+		phase := activityPhase(raw, "activity_alliance", "3")
+		if err == nil && phase == int64(activity.Settling) {
+			t.Logf("MONGO before query alliance phase=%d generation=%d cycle=%d start=%d", phase, operationsNumber(raw, "activity_alliance", "1", "3", "2"), operationsNumber(raw, "activity_alliance", "1", "3", "4"), operationsNumber(raw, "activity_alliance", "1", "3", "13"))
+		}
+		return err == nil && phase == int64(activity.Settling), fmt.Sprintf("phase=%d err=%v", phase, err)
+	})
+	s.eventually("Player persistent timer after rehome and SIGKILL", 80*time.Second, func() (bool, string) {
+		raw, err := operationsPlayerDoc(s, 1001, p.id)
+		phase := activityPhase(raw, "activity", "1")
+		if err == nil && phase == int64(activity.Ended) {
+			t.Logf("MONGO before query player phase=%d generation=%d cycle=%d start=%d completed_through=%d", phase, operationsNumber(raw, "activity", "1", "1", "2"), operationsNumber(raw, "activity", "1", "1", "4"), operationsNumber(raw, "activity", "1", "1", "13"), operationsNumber(raw, "activity", "1", "1", "12"))
+			if operationsNumber(raw, "activity", "1", "1", "12") != 1 {
+				t.Fatal("Player activity completed more than one cycle")
+			}
+		}
+		return err == nil && phase == int64(activity.Ended), fmt.Sprintf("phase=%d err=%v", phase, err)
+	})
+	wv, err = wc.Pulse(s.ctx, worldID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worldSettling := activityView(t, wv, "world", worldID, 2, activity.Settling, true)
+	av, err = ac.Pulse(s.ctx, allianceID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allianceSettling := activityView(t, av, "alliance", allianceID, 3, activity.Settling, true)
+	activityEvidence(s, "after-restart-scan", []activity.Snapshot{worldSettling, allianceSettling}, worldID, allianceID)
+	if worldSettling.Start != worldInit.Start || allianceSettling.Start != allianceInit.Start {
+		t.Fatal("shared activity anchor changed")
+	}
+	if wc.Complete(s.ctx, worldID, worldInit.Token) == nil || ac.Complete(s.ctx, allianceID, allianceInit.Token) == nil {
+		t.Fatal("stale initialization completion was accepted")
+	}
+	if err = wc.Complete(s.ctx, worldID, worldSettling.Token); err != nil {
+		t.Fatal(err)
+	}
+	if err = ac.Complete(s.ctx, allianceID, allianceSettling.Token); err != nil {
+		t.Fatal(err)
+	}
+	wv, err = wc.Pulse(s.ctx, worldID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	av, err = ac.Pulse(s.ctx, allianceID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activityView(t, wv, "world", worldID, 2, activity.Ended, false)
+	activityView(t, av, "alliance", allianceID, 3, activity.Ended, false)
+	activityEvidence(s, "ended", []activity.Snapshot{wv[0], av[0]}, worldID, allianceID)
+	if wc.Complete(s.ctx, worldID, worldSettling.Token) == nil || ac.Complete(s.ctx, allianceID, allianceSettling.Token) == nil {
+		t.Fatal("completed token retry must reject as stale")
+	}
+	view := call(p, msgid.MsgActivityView, &pb.ActivityViewRequest{}, pb.MarshalActivityViewRequest, pb.UnmarshalActivityViewResponse)
+	if view.Code != 0 || len(view.Activities) != 1 || view.Activities[0].Phase != int32(activity.Ended) || view.Activities[0].Start != playerBefore.Start || view.Activities[0].Generation != 1 || view.Activities[0].Cycle != 1 {
+		t.Fatalf("Player activity cold view %+v", view)
+	}
+	for _, id := range []int64{worldID, allianceID} {
+		lease, found, err := s.owners.GetRemoteOwnership(context.Background(), id)
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		if (id == worldID && lease.OwnerSid != 4101) || (id == allianceID && lease.OwnerSid != b.sid) {
+			t.Fatalf("authority owner %+v", lease)
+		}
+	}
+	t.Log("PASS Player timer/rehome vs World+Alliance Remote ownership/scan; pending init moved unchanged, SIGKILL same WAL, background settling observed before RPC, old owner refused, stale completions refused, three timelines ended once")
+}

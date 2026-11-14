@@ -605,6 +605,9 @@ var generatedRealDependencyElsewhere = []struct {
 	{"TestTurnRecipeRealLifecycle", "scripts/test-turn-pvp-real.sh", "TestTurnRecipeRealLifecycle", "ROOST_TURN_PVP_REAL=1 经 generated 入口调用：正式配方真实 account / match / Game Ingress / 独立 Gate、Mongo / Redis / NATS / etcd、SIGKILL 重启与回合终态；私有依赖手动档，不进 pretag"},
 	{"TestCoopRoguelikeRealCrashRecovery", "scripts/test-coop-roguelike-generated.sh", "TestCoopRoguelikeRealCrashRecovery", "ROOST_COOP_ROGUELIKE_REAL=1：第二关半票与首人已领奖两个 WAL-only SIGKILL 窗口，真实 Mongo/Nest/生成 DAO；恢复保留种子、投票、回执与两人各10金币，第三进程再冷加载重试；默认只编译/vet恢复夹具"},
 	{"TestSocialSimRealCrashRecovery", "scripts/test-social-sim-generated.sh", "TestSocialSimRealCrashRecovery", "ROOST_SOCIAL_SIM_REAL=1：帮助后生长与收获确认两个 WAL-only SIGKILL 窗口，真实 Mongo/Nest/生成 DAO；恢复期限不重算、主人收获一次5金币、访客不能领，第三进程冷加载重试；默认只编译/vet恢复夹具"},
+	{"TestOperationsGMHTTPMailAndRehome", "scripts/test-operations-real.sh", "TestOperationsGMHTTPMailAndRehome", "P8 私有依赖：正式 demo 的 ops HTTP、跨进程 mail NATS、TCP 领取与 GM rehome；稳定请求键跨 sid 去重并核对 account 最终绑定与源文档删除，不进 pretag"},
+	{"TestOperationsPurchaseCrashAcrossSIDAndRedisRestart", "scripts/test-operations-real.sh", "TestOperationsPurchaseCrashAcrossSIDAndRedisRestart", "P8 私有依赖：正式 NATS callback、TCP Collect、Mongo/WAL；strict 确认后 Ack 前 SIGKILL，独占 Redis AOF always 原目录重启，再跨 sid 补领、目标冷启，核对平台终态和三个游标/待发/资产一致"},
+	{"TestOperationsActivityAuthorityMigration", "scripts/test-activity-real.sh", "TestOperationsActivityAuthorityMigration", "P8 精简正式配方：Player 持久 timer/rehome、World/Alliance Remote 权威迁移与 SIGKILL 同 WAL 恢复；真实 Mongo/NATS/Redis，先读 Mongo 观察后台推进再发查询，不用查询代替恢复驱动"},
 }
 
 var (

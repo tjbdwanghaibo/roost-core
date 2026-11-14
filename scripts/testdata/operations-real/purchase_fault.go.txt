@@ -1,0 +1,35 @@
+package purchase
+
+// 仅复制到临时验收工程。暂停 strict Sender 已确认、Redis Ack 尚未执行的精确窗口。
+// 不替换队列/提交器；父进程核对 pid、订单与序号之后 SIGKILL。
+import (
+	"OPERATIONS_MODULE/game/purchase"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+func operationsBeforeAck(grant purchase.Grant) {
+	dir := os.Getenv("OPERATIONS_CONTROL_DIR")
+	if dir == "" {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "purchase-arm"))
+	if err != nil || string(raw) != grant.OrderID {
+		return
+	}
+	raw, err = json.Marshal(map[string]any{"pid": os.Getpid(), "order": grant.OrderID, "sequence": grant.Sequence, "player": grant.PlayerID})
+	if err != nil {
+		panic(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "purchase-reached.tmp"), raw, 0600); err != nil {
+		panic(err)
+	}
+	if err = os.Rename(filepath.Join(dir, "purchase-reached.tmp"), filepath.Join(dir, "purchase-reached")); err != nil {
+		panic(err)
+	}
+	for {
+		time.Sleep(time.Second)
+	}
+}

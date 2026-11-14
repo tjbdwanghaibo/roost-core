@@ -85,7 +85,7 @@ GM 命令是给运维、客服用的可信操作（加币、发补偿邮件、�
 - **换服命令的 `accepted` 只是受理**，最终绑定要查 account 的角色记录。运维入口免玩家冷却与目标白名单，仍受各模块登记的换服检查限制。
 - **邮件命令先用一条只读的 Nest 请求确认收件人存在，再在实体锁之外调 mail 服务**；它不改玩家余额，奖励在玩家领取附件时到账。附件里的道具在不在表里、背包有没有空间，要到领取时才核对。
 - **前提：** 需要 ops Mod（game 模板自带）；admin 命令表取不到时 `Start` 返回 `gm_unavailable`。命令只作用于本进程能加载到的实体。
-- **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“gm 联动边界”：离线场景不替代真实的 ops HTTP、跨进程 mail、真实 DataEngine 交出实体的验收。
+- **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“gm 联动边界”。真实入口验收见下节；换服的 committed→删除源文档崩溃窗口仍沿用 rehome 的 Q4 限制。
 
 ## 复用方式
 
@@ -126,3 +126,5 @@ GM 命令是给运维、客服用的可信操作（加币、发补偿邮件、�
 `roost module verify` 跑 9 条场景（`^TestGM`）：没有联动命令也能启动、缺操作者拒绝、缺备注拒绝、畸形 payload 拒绝、带审计的命令执行（执行前后两条日志按 `trace_id` 对齐，成功的结果码是 0）、停止后拒绝新调用、保留带码的原因（执行后那条日志带同一个码）、生产配置拒绝开发 token、`Replace` 之后审计仍在。六组联动各 4 条，记在各自模块下。
 
 场景是离线的：直接对 admin 命令表执行，不经真实的 ops HTTP；联动场景里的提交器、mail RPC、chat 服务、account 与实体交出都是替身。仓库一侧另有专项测试 `TestModuleGMScenariosAndMutations`（先单装再增量装 wallet、bag、profile、mailbox、rehome 五组联动；notice 的联动只由 `roost module verify` 覆盖），它不属于 `roost module verify`。
+
+真实入口另跑 [scripts/test-operations-real.sh](../../scripts/test-operations-real.sh)：生成当前 game-demo，ops HTTP 检查审计字段后调用跨进程 mail，玩家 TCP 领取；再经 `gm.player.rehome` 交出真实 DataEngine 实体到另一 sid，核对 account 最终绑定、源文档删除和资产不变。在目标进程重发同一邮件 `request_id` 得到同一个 mail ID，已领附件不能再次发奖。使用私有 Mongo/NATS/etcd 与用例自己的 AOF Redis；不替代完整 GM 命令矩阵、Q4 故障窗口或长稳。[2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。

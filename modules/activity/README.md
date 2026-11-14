@@ -83,7 +83,8 @@
 - `roost module verify activity`：21 个场景（`./game/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter` 的联动 2 个场景（`./game/handler` 与 `./game/controllers/activity`），与 `profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO 与实体定时器；提交器是替身。覆盖五阶段与期限、异步初始化与结算、零预热、独立解锁与重复激活、初始化失败回滚、定时器回调出错时保留期限并回滚、循环的有界补期与规则冻结、自定义流程与迟到事件、时钟回拨与显式重开、参与资格不是个人实例、`pending` 经 BSON 往返恢复、并发激活只有一个锚点；规则校验、业务日历不按 24 小时、重叠周期拒绝、跳过空期的有界查找、`Resume` 重试、驱动停止时保留在途工作、汇聚键、相对日历等到业务日界。
 - 与 `enter` 的联动：一个场景直接调建档初始化，验证重连不重置创建锚点；另一个经 `gamelogin.RunEntered` 真正执行登记的进入钩子（正式 Nest、生成的 Sender 与 handler），验证钩子按玩家号定位到 `Player`、对账激活、`Resume` 报告完成后用原 `Token` 确认 `pending`，重连再进入不重复 `Resume`、不改时间线。
-- 没有验证：经 `EnterGame` 端点与真实会话的整条进入链路（场景从 `RunEntered` 起）；真实的 Mongo、WAL、NATS、跨进程迁移与长时间运行。验收记录见 [证据](../../docs/maintenance/evidence/module-activity-20261112/README.md)。
+- 离线验收记录见 [证据](../../docs/maintenance/evidence/module-activity-20261112/README.md)。真实档另跑 [scripts/test-activity-real.sh](../../scripts/test-activity-real.sh)：精简正式配方经 account、玩家 TCP `EnterGame`、Nest 与 Mongo/文件 WAL，Player 活动先换服再 SIGKILL、同 WAL 重启；到期前已进入游戏，随后只读 Mongo 观察持久定时器推进到 Ended，最后才发 `ActivityView`。World/Alliance 的权威迁移与恢复扫描在同一档分别核对，见 [2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
+- 真实档只验证一个事件触发周期，允许 Mongo 正常投影，不是仅 WAL 恢复；未覆盖真实奖励回调、长时间运行、离线玩家准点结算或容量。完整 game-demo 的 Player DAO 已有 64 个顶层字段，不能继续叠装 activity；该档实际使用 casual 配方与报告中的 18 模块组合。
 
 ## 生命周期
 

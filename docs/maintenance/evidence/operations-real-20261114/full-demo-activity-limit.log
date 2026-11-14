@@ -1,0 +1,2 @@
+2026/11/14 11:20:52 generate after installing modules: generator dao: parse definitions: dao PlayerDao has 65 fields; a DAO holds at most 64 top-level fields (the dirty and sync masks are uint64, one bit per field). Group related fields into a nested struct: it takes one bit and its sub-fields still persist and sync incrementally
+exit status 1

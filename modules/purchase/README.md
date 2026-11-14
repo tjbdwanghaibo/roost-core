@@ -53,7 +53,7 @@
 - **三处状态必须一起恢复**：Redis 的游标与待发、Player 的 `Applied`、platform 的订单，不能单独重置、回退其中一侧，也不能把旧订单手工放回队列。`StoragePrefix` 在有在途发货时不能改。
 - **序号上限**：2^53−1（Redis Lua 的数值精度）。
 - **前提**：依赖 `wallet`；业务服务要有 `nest` 与 `redis` 两个 Mod 并 `uses: [platform]`；game 与 platform 必须用同一个 Redis 与同一个 `StoragePrefix`；Redis 的持久性由部署保证，模块不调整 AOF 或副本策略。安装时替换 `services/platform/collaborators.go`，那个文件已经被工程改过时安装被拒绝。
-- **已知限制**：[KNOWN-LIMITS“purchase 模块的恢复与验收边界”](../../docs/maintenance/KNOWN-LIMITS.md)——真实 NATS / TCP / Mongo / WAL、跨 sid 与故障恢复没有验收；旧订单格式不自动迁移。
+- **已知限制**：[KNOWN-LIMITS“purchase 模块的恢复与验收边界”](../../docs/maintenance/KNOWN-LIMITS.md)。下节列出真实 NATS/TCP/Mongo/WAL 的限定恢复验收；旧订单格式不自动迁移，Redis/Player/platform 不能单侧回退。
 
 ## 复用方式
 
@@ -83,7 +83,8 @@
   ROOST_PURCHASE_REDIS_ADDR=127.0.0.1:6379 GOWORK=off go test -tags=integration -race -count=2 -run '^TestPurchaseRedis' ./game/purchase
   ```
 
-- 没有验证：Redis 的持久性，真实 NATS / TCP / Mongo / WAL 的联合验收，跨 sid，故障恢复。
+- 真实联合验收：[scripts/test-operations-real.sh](../../scripts/test-operations-real.sh) 生成 game-demo，用开发模拟渠道经真实 NATS 送单、玩家 TCP 补领、正式 Nest/DataEngine/Mongo/WAL 入账。精确暂停在 strict Sender 成功之后、队列 Ack 之前并 SIGKILL；停掉依赖该 Redis 的进程后，SIGKILL 用例自己的 `appendonly=yes, appendfsync=always` Redis，沿用同一持久目录重启。平台终态与待发快照保持不变，玩家移到另一 sid 后补领不增发，再杀目标进程冷启；核对 `next=acked=Applied=2`、待发为空、钱包 200。[2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
+- 此窗口允许 Mongo 已投影，证明 Ack 丢失与跨 sid 恢复，不冒称仅 WAL 未投影；未验证真实支付渠道、主从切换/断电持久性、单侧回退、长期积压或容量。Redis 策略由部署保证，本测试不修改模块配置。
 
 ## 发货过程
 

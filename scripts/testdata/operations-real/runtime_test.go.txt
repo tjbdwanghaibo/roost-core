@@ -1,0 +1,156 @@
+package e2e
+
+// 两份正式生成工程共用进程/Redis/HTTP观察辅助，不改业务状态。
+import (
+	playerentity "OPERATIONS_MODULE/game/entities/player"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	goredis "github.com/redis/go-redis/v9"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// ownRedis 只持有本用例启动的进程。AOF always + 同目录重启，不清游标/待发/平台订单。
+type ownRedis struct {
+	t         *testing.T
+	dir, addr string
+	cmd       *exec.Cmd
+	done      chan error
+}
+
+func operationsSuite(t *testing.T) (*suite, *ownRedis, string) {
+	t.Helper()
+	if os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI") == "" || os.Getenv("ROOST_DATAENGINE_IT_NATS_URL") == "" {
+		t.Fatal("private Mongo and NATS required: run the operations/activity real script")
+	}
+	base, err := strconv.Atoi(env(t, "ALLIANCE_E2E_PORT_BASE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &ownRedis{t: t, dir: t.TempDir(), addr: fmt.Sprintf("127.0.0.1:%d", base+350)}
+	t.Cleanup(func() { r.stop() })
+	r.start()
+	t.Setenv("ROOST_DATAENGINE_IT_REDIS_ADDR", r.addr)
+	control := t.TempDir()
+	t.Setenv("OPERATIONS_CONTROL_DIR", control)
+	s := newSuite(t, 8*time.Minute)
+	return s, r, control
+}
+
+func (r *ownRedis) start() {
+	r.t.Helper()
+	_, port, _ := strings.Cut(r.addr, ":")
+	f, err := os.OpenFile(filepath.Join(r.dir, "redis.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.cmd = exec.Command("redis-server", "--bind", "127.0.0.1", "--port", port, "--dir", r.dir, "--appendonly", "yes", "--appendfsync", "always", "--save", "", "--daemonize", "no")
+	r.cmd.Stdout, r.cmd.Stderr = f, f
+	if err := r.cmd.Start(); err != nil {
+		r.t.Fatal(err)
+	}
+	r.done = make(chan error, 1)
+	go func(cmd *exec.Cmd, done chan error) { done <- cmd.Wait(); _ = f.Close() }(r.cmd, r.done)
+	c := goredis.NewClient(&goredis.Options{Addr: r.addr})
+	defer c.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.Ping(context.Background()).Err() == nil {
+			r.t.Logf("private Redis ready pid=%d appendonly=yes appendfsync=always same_dir=%s", r.cmd.Process.Pid, r.dir)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	r.t.Fatal("private Redis not ready")
+}
+
+func (r *ownRedis) stop() {
+	if r.cmd == nil {
+		return
+	}
+	_ = r.cmd.Process.Kill()
+	select {
+	case <-r.done:
+	case <-time.After(10 * time.Second):
+		r.t.Error("owned Redis did not exit")
+	}
+	r.cmd = nil
+}
+
+func operationsAdmin(s *suite, p *proc, name, operator string, payload any, ok bool) map[string]any {
+	s.t.Helper()
+	raw, _ := json.Marshal(map[string]any{"name": name, "operator": operator, "trace_id": "operations-" + name, "payload": payload})
+	req, err := http.NewRequestWithContext(s.ctx, http.MethodPost, "http://"+p.ops+"/admin/execute", bytes.NewReader(raw))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	req.Header.Set("X-Admin-Token", "dev-gm-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var answer struct {
+		OK   bool           `json:"ok"`
+		Data map[string]any `json:"data"`
+	}
+	if err = json.Unmarshal(out, &answer); err != nil || answer.OK != ok {
+		s.t.Fatalf("GM %s ok=%v: HTTP %d %s: %v", name, ok, resp.StatusCode, out, err)
+	}
+	return answer.Data
+}
+
+func operationsPlayerDoc(s *suite, sid int32, id int64) (bson.Raw, error) {
+	full, err := entity.BuildEntityID(id, playerentity.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	return s.mongo.Database(fmt.Sprintf("%s_%d", s.prefix, sid)).Collection("player").FindOne(s.ctx, bson.M{"_id": full}).Raw()
+}
+
+func operationsNumber(raw bson.Raw, path ...string) int64 {
+	v := raw.Lookup(path...)
+	n, ok := v.AsInt64OK()
+	if !ok {
+		return -1
+	}
+	return n
+}
+
+func operationsMove(s *suite, from *proc, id int64, to int32) {
+	s.t.Helper()
+	data := operationsAdmin(s, from, "gm.player.rehome", "operations", map[string]any{"player_id": id, "to": to, "note": "private operations acceptance"}, true)
+	if data["accepted"] != true || data["transfer_id"] == "" {
+		s.t.Fatalf("rehome only admission receipt missing: %v", data)
+	}
+	accounts, err := svcaccount.NewBusClient(s.bus, "", 0)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	s.eventually("account final serving binding", 30*time.Second, func() (bool, string) {
+		binding, err := accounts.RoleBinding(s.ctx, id)
+		return err == nil && binding.ServingServerID == to && binding.Transfer == nil, fmt.Sprintf("binding=%+v err=%v", binding, err)
+	})
+	s.eventually("source documents dropped after successful handoff", 15*time.Second, func() (bool, string) {
+		raw, err := operationsPlayerDoc(s, from.sid, id)
+		return len(raw) == 0 && errors.Is(err, mongo.ErrNoDocuments), fmt.Sprintf("source bytes=%d err=%v", len(raw), err)
+	})
+}
