@@ -256,7 +256,7 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 	s := newSuite(t, 30*time.Minute)
 	background := os.Getenv("ALLIANCE_E2E_BACKGROUND_CHECKPOINT") == "1"
 	concurrency := perfPositiveInt(t, "ALLIANCE_E2E_RPC_CONCURRENCY", 16, 256)
-	s.start("alliance-3000", "alliance", 3000, procOptions{keys: [][3]string{
+	server := s.start("alliance-3000", "alliance", 3000, procOptions{keys: [][3]string{
 		{"alliance", "max_members", "500"},
 		{"dataengine.projection", "background_checkpoint", strconv.FormatBool(background)},
 		{"remote_entity", "max_concurrent_writes", "512"},
@@ -269,6 +269,32 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 		failed, slow := 0, 0
 		var firstErr error
 		start := time.Now()
+		lastProgress := start
+		stopSampling, samplingDone := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(samplingDone)
+			if os.Getenv("ALLIANCE_E2E_STACKS") != "1" {
+				return
+			}
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			// 每阶段最多两份；只给本用例持有的进程发信号，不终止它。
+			for samples := 0; samples < 2; {
+				select {
+				case <-stopSampling:
+					return
+				case <-ticker.C:
+					mu.Lock()
+					completed, idle := len(lat), time.Since(lastProgress)
+					mu.Unlock()
+					if completed < conc*perWorker && idle >= time.Second {
+						err := server.cmd.Process.Signal(syscall.SIGUSR2)
+						t.Logf("PERF stack sample name=%s completed=%d expected=%d no_completion=%s utc=%s signal_error=%v", name, completed, conc*perWorker, idle, time.Now().UTC().Format(time.RFC3339Nano), err)
+						samples++
+					}
+				}
+			}
+		}()
 		var wg sync.WaitGroup
 		for w := 0; w < conc; w++ {
 			wg.Add(1)
@@ -280,6 +306,7 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 					mu.Lock()
 					elapsed := time.Since(st)
 					lat = append(lat, elapsed)
+					lastProgress = time.Now()
 					if elapsed >= 3*time.Second {
 						slow++
 						t.Logf("PERF rpc slow name=%s worker=%d start=%s duration=%s error=%v", name, w, st.UTC().Format(time.RFC3339Nano), elapsed, err)
@@ -295,6 +322,8 @@ func TestAllianceE2ERPCConcurrency(t *testing.T) {
 			}()
 		}
 		wg.Wait()
+		close(stopSampling)
+		<-samplingDone
 		elapsed := time.Since(start)
 		sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
 		t.Logf("PERF rpc %s conc=%d n=%d failed=%d slow_ge_3s=%d in %v %.1f/s %s", name, conc, len(lat), failed, slow, elapsed.Round(time.Millisecond), float64(len(lat))/elapsed.Seconds(), durations(lat))

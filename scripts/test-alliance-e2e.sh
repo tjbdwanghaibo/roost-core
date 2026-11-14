@@ -71,6 +71,9 @@ cd "$repo_dir"
 go run ./codegen/cmd/roost project new planet -module example.com/planet -out "$work_dir/planet" -template game-demo --skip-deps
 printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$work_dir/planet/go.mod"
 mkdir -p "$work_dir/planet/e2e"
+if [[ "${ALLIANCE_E2E_STACKS:-0}" == 1 ]]; then
+	cp scripts/testdata/checkpoint-experiment/stack_capture.go.txt "$work_dir/planet/checkpoint_stacks.go"
+fi
 for source in scripts/testdata/alliance-e2e/*_test.go.txt; do
 	cp "$source" "$work_dir/planet/e2e/$(basename "${source%.txt}")"
 done

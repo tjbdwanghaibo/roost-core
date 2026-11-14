@@ -29,4 +29,6 @@
 
 在本实验分支上用同一夹具交替 `ALLIANCE_E2E_BACKGROUND_CHECKPOINT=0|1`，其余参数一致；`ALLIANCE_E2E_RPC_CONCURRENCY=128|256`，`ALLIANCE_E2E_PERF=1`，`ALLIANCE_E2E_RUN='^TestAllianceE2ERPCConcurrency$'`。写额度固定 512；Join 分散 16 联盟，单热点档每轮限制总入会数在 500 人业务上限内。每次调用打印 ≥3 秒样本的开始时间、耗时与错误，可据此核对超时簇。正式运行前换空闲私有偏移并检查全部端口，不能复用仍占用的 39401。
 
+`ALLIANCE_E2E_STACKS=1` 只在临时生成工程加入 SIGUSR2 栈采集器。调用方每 500ms 检查一次：该测量阶段尚有请求未完成、连续至少 1s 没有完成时，向本用例持有的服务进程请求 goroutine 栈，每阶段至多两份。服务日志保留 `CHECKPOINT STACK BEGIN/END` 与 UTC，调用方记录阶段、已完成数、等待时长与信号结果；正常调用不抓栈。两个配置档都使用同一开关，触发采集的样本必须注明额外诊断开销，不能拿栈出现次数直接证明因果。该入口不进入正式模板或发布分支。独立信号冒烟已确认完整栈及进程存活，日志 `/private/tmp/v147-checkpoint-stack-smoke/run.log`；完整夹具运行结果随 M-19 记录。
+
 **当前结论：实现与功能验证完成，性能判定待 M-19。不能据此认定 checkpoint 是历史 3 秒整体停顿的根因，也不建议在无 A/B 证据时合入。**
