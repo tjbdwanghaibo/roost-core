@@ -345,6 +345,12 @@ func (client *terrainClient) apply(f entitysync.ReceivedFrame, received *receive
 					return fmt.Errorf("apply building %d: %w", update.SubjectID, err)
 				}
 				client.buildings[update.SubjectID] = next
+				// 机器人（cmd/loadtest）与无缝演练读同步帧用的是 clientsync.DecodeFields：主视野里有建筑时它也要认得。
+				if len(raw) > 0 {
+					if _, err := clientsync.DecodeFields(update); err != nil {
+						return fmt.Errorf("the robot decoder on building %d: %w", update.SubjectID, err)
+					}
+				}
 				received.buildings = append(received.buildings, buildingUpdate{subject: update.SubjectID, full: update.Full,
 					componentBytes: component.Size, payloadBytes: len(raw), params: patch.Params != nil})
 				continue

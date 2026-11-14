@@ -19,7 +19,8 @@
 # scripts/testdata/seamless/terrain.go.txt）。分区换成 2 × 1 个 12800（两块地形）见方的格；主视野是游戏尺度（P5：Base 用
 # TerrainView，离开上限 67.2m），所以 view_radius 6800、hysteresis 200、ghost_band 7000 = view_radius + hysteresis；所有
 # game 进程配同一个 4 × 2 块的平地地形包（演练程序写出，70m 的带让每个格装下整张图）；起 sid 1001（格 A）、
-# 1002（格 B）、1004（只做 Base），不起普通场景 sid 1003、不跑它的机器人。不设（缺省）时是原来的演练，行为不变。
+# 1002（格 B）、1004（只做 Base），不起普通场景 sid 1003、不跑它的机器人。最后一步 terrain_building_view：连在 1004 上的
+# 玩家在格 A 放一座建筑（转发给 A 执行），连在 A 上的玩家主视野收到它、拆除后收到 remove。不设（缺省）时是原来的演练，行为不变。
 # ROOST_SEAMLESS_PROJECT_HOOK：生成工程之后、编译之前在工程目录里执行的一条 shell 命令（变异验证用：例如删掉装地面
 # 钩子的那一行，确认演练会变红）。
 # Optional Robot load after the fault drill: ROOST_SEAMLESS_ROBOTS=1000,
@@ -312,7 +313,7 @@ if [[ "$status" != 0 ]]; then
 	exit "$status"
 fi
 if [[ "$terrain" == 1 ]]; then
-	for name in terrain_start terrain_ghost_edit terrain_player_step terrain_monster_step terrain_cell_restart terrain_consistent; do
+	for name in terrain_start terrain_ghost_edit terrain_player_step terrain_monster_step terrain_cell_restart terrain_consistent terrain_building_view; do
 		grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 	done
 	echo "seamless: all terrain steps passed; evidence in $out"
