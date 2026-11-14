@@ -22,6 +22,12 @@ package dungeon
 // chain.
 const ClearExp int64 = 100
 
+// ClearCoins 是一次通关在经验之外发的金币（D26：玩法产出金币，不只 GM 邮件）。与经验在同一笔领奖事务里经 wallet
+// 模块的 Add 到账：“这一次通关发过没有”由领奖账本（DungeonLedger 的 run id）保证，不用 wallet 的业务键——
+// 账本的期限（ClaimWindowSeconds）远长于 wallet 128 次的去重窗口，按 wallet 的规则，长期只发一次的发放由调用方
+// 自己记事实、调不留回执的 Add。
+const ClearCoins int64 = 20
+
 // ClaimWindowSeconds is how long after a run resolves its clear reward may
 // still be claimed — and, by the same number, how long the claim ledger
 // remembers that it paid. One constant for both is not tidiness; it is the
@@ -112,5 +118,7 @@ type ClaimResult struct {
 	Claimed      bool
 	ExpGranted   int64
 	LevelsGained int32
+	// CoinsGranted 是这一次发的金币（ClearCoins）；重放为 0。
+	CoinsGranted int64
 	Clears       int64
 }

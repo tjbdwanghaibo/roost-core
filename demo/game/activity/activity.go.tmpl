@@ -98,16 +98,24 @@ func Key(groupID, activityID string) svcactivity.Key {
 // new contribution.
 func ProgressRequestID(runID string) string { return "clear:" + runID }
 
-// Reward is what a rank on the final board is paid, as a mail attachment.
+// Reward is what a rank on the final board is paid: an item and coins, each
+// as its own mail (a mail carries one attachment). The coins reach the wallet
+// module when the player claims the mail — the mailbox's coin attachment is
+// paid by the wallet's Add, exactly once per mail by the mailbox's claim
+// ledger — so a player who is offline at settlement is paid when they claim,
+// and the settlement itself never addresses a Player that is not loaded here.
 type Reward struct {
 	ItemID int64
 	Count  int32
+	// Coins is the gold the rank is paid (D26: gameplay is a coin source, not
+	// only GM mail). Always positive: a coins attachment of 0 cannot be sent.
+	Coins int64
 }
 
 var rewards = []Reward{
-	{ItemID: 2001, Count: 1},
-	{ItemID: 1001, Count: 5},
-	{ItemID: 1001, Count: 2},
+	{ItemID: 2001, Count: 1, Coins: 300},
+	{ItemID: 1001, Count: 5, Coins: 200},
+	{ItemID: 1001, Count: 2, Coins: 100},
 }
 
 // RewardFor is what rank pays; ranks are 1-based and a rank past the table
@@ -141,4 +149,11 @@ func BoardKey(prefix, groupID, activityID string) string {
 // redelivered dispatch mails once.
 func MailRequestID(activityID string, playerID int64) string {
 	return fmt.Sprintf("activity:%s:%d", activityID, playerID)
+}
+
+// CoinsMailRequestID is the coins mail's key: one per (activity, player),
+// beside the item mail's, with its own prefix so the two never collapse into
+// one mail.
+func CoinsMailRequestID(activityID string, playerID int64) string {
+	return fmt.Sprintf("activity-coins:%s:%d", activityID, playerID)
 }

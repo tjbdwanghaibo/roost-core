@@ -12,11 +12,13 @@ const CompTypeDungeonLedger entity.ComponentType = 2103
 // DungeonLedgerComponent 是 game/components/dungeonledger 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
 type DungeonLedgerComponent = dungeonledger.Component
 
-// IDungeonClaimEntity 是领奖事务 handlerClaimDungeon 锁住的 Player：同一笔事务里记账（DungeonLedger）又发经验（Profile）。
+// IDungeonClaimEntity 是领奖事务 handlerClaimDungeon 锁住的 Player：同一笔事务里记账（DungeonLedger）、发经验（Profile）
+// 与金币（wallet 模块的 Wallet）。
 type IDungeonClaimEntity interface {
 	entity.IThreadSafeEntity
 	ProfileComp() *ProfileComponent
 	DungeonLedgerComp() *DungeonLedgerComponent
+	WalletComp() *WalletComponent
 }
 
 func init() {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"math"
+
 	"{{MODULE}}/game/dungeon"
 	player "{{MODULE}}/game/entities/player"
 	world "{{MODULE}}/game/entities/world"
@@ -57,9 +59,12 @@ func handlerClaimDungeon(target player.IDungeonClaimEntity, stats world.IStatsEn
 		// current count, so the caller can bring the board up to it.
 		return dungeon.ClaimResult{Clears: target.DungeonLedgerComp().DungeonClears(season)}, nil
 	}
-	// 经验范围在写账本之前校验：超限的奖励不留下“已领取”记录，也不靠 undo 撤回账本。
+	// 经验范围与金币余额在写账本之前校验：超限的奖励不留下“已领取”记录，也不靠 undo 撤回账本。
 	if err := checkExpGrant(target, stats, amount); err != nil {
 		return dungeon.ClaimResult{}, err
+	}
+	if balance := target.WalletComp().Balance(); balance > math.MaxInt64-dungeon.ClearCoins {
+		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrWalletOverflow, nil, "run_id", runID, "balance", balance, "delta", dungeon.ClearCoins)
 	}
 	if !target.DungeonLedgerComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
 		return dungeon.ClaimResult{Clears: target.DungeonLedgerComp().DungeonClears(season)}, nil
@@ -72,6 +77,10 @@ func handlerClaimDungeon(target player.IDungeonClaimEntity, stats world.IStatsEn
 	if err := stats.StatsComp().RecordExp(amount); err != nil {
 		return dungeon.ClaimResult{}, err
 	}
+	// 金币（D26）：wallet 模块的 Add，不带业务键——只发一次由上面的账本保证（见 dungeon.ClearCoins）。
+	if _, err := target.WalletComp().Add(dungeon.ClearCoins); err != nil {
+		return dungeon.ClaimResult{}, err
+	}
 	clears := target.DungeonLedgerComp().CountDungeonClear(season)
-	return dungeon.ClaimResult{Claimed: true, ExpGranted: amount, LevelsGained: gained, Clears: clears}, nil
+	return dungeon.ClaimResult{Claimed: true, ExpGranted: amount, LevelsGained: gained, CoinsGranted: dungeon.ClearCoins, Clears: clears}, nil
 }
