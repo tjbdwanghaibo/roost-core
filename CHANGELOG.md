@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：邮件端点经 NATS 上的 BusClient 调 Redis 存储的 mail 服务**（modules/mailbox，2026-11-14，KNOWN-LIMITS“mailbox 经 NATS 的 BusClient 与 Redis 存储没有跑过”）：新增模块真实依赖档 `game/controllers/mailbox/mailbox_real_integration_test.go`（`-tags integration`，`ROOST_MAILBOX_IT_NATS_URL` / `ROOST_MAILBOX_IT_REDIS_ADDR`），走生成工程同一套装配（`wiring/nats.NatsMod`、`wiring/mail.ClientMod` / `Mod`），core 与 jetstream 两种 RPC 传输：答复超时（请求已生效）后重试、确认答复超时、服务停机与重启、jetstream 实例断开后 broker 重投给另一个实例，每封附件恰好到账一次。`scripts/test-demo-generated.sh` 运行，根包 `TestGeneratedProjectRealDependencyTestsHaveAnEntry` 钉住。私有环境（mirror-local）上 core 4.6s、jetstream 6.5s 通过；变异 2 条（不断开实例 A 的连接 → 没有重投；确认失败时归还预留并答错误 → 确认答复超时那一步红）。
+
 - **玩法夹具：回合 PvP 的回合超时经房间持久定时器自动推进**（scripts/testdata/turn-pvp，2026-11-14，KNOWN-LIMITS“回合超时尚无自动 timer 装配”）：`test-turn-pvp-generated.sh` 对 GameRoom 跑 `roost add timer`，夹具覆盖生成的示例回调（`timer_handlers.go.txt`）与开局 handler（`handlers.go.txt`，`run.sh` 优先用玩法自己的 handlers）；开局登记一个回合定时器，到期回调按新增的 `rules.State.Timeout` 消费当前回合，期限后移时续期、终局结束。新场景 `TestScenarioTurnTimesOutByTheRoomTimer`（真实驱动循环）：到期前 1ms 不消费、到期自动消费、按旧修订号的行动被拒、行动后旧触发不提前消费、到新期限消费并终局、定时器清空；场景数 9 → 10。变异 2 条（期限后移时不续期、开局不登记）都红。持久恢复（真实 DataEngine 重启后补触发）未做，见手册。
 
 - **测试：activity_world 的自带场景不再读工程配置表**（modules/activity_world，2026-11-14，KNOWN-LIMITS“activity_world 的自带场景是否读工程配置表”）：新生成工程（`-template game`）装上 activity_world，按 README“复用方式”加一行逻辑号（`activity_scope.csv`）与一条 `Scope=world` 的活动（`activity.csv`）并 `roost generate` 后，`roost module verify activity_world` 2/4（`TestWorldActivityEmptyConfigurationDoesNothing`、`TestWorldActivityFailureLeavesNoActivation` 读到工程的活动，Pulse 答出一期）；场景改为装载自带的空 `activity` / `activity_scope` 表（按生成代码的名字、文件与键登记，结束时换回缺省 Store 与配置快照），换表后 4/4、换表前 4/4。只改模块场景，不改运行代码。

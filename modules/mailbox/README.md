@@ -68,7 +68,7 @@
 - **列表不取实体锁：** 满背包时道具邮件仍显示可领。
 - **新旧进程混跑：** 旧进程把新种类当未知附件拒绝并归还预留，玩家可能看到同一封邮件时而可领、时而不可领。
 - **前提：** 依赖 wallet；需要 nest 与 dataengine 两个 Mod，业务服务 `uses: [mail]`。取不到 mail 的客户端时 `FromRegistry` 返回错误。领取跨两个进程（game 与 mail）。
-- **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“mailbox 的边界”（只在进程内验证过；经 NATS 的客户端、Redis 存储、超时与重投没有跑过）、“进入钩子不是事务的一部分”（全服邮件的画像规则）、“模块的规则大多还是 Go 写的业务文件”。
+- **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“mailbox 的边界”、“进入钩子不是事务的一部分”（全服邮件的画像规则）、“模块的规则大多还是 Go 写的业务文件”。
 
 ## 复用方式
 
@@ -107,7 +107,7 @@
 
 `roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/mailbox` 10 条、`game/controllers/mailbox` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
 
-场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。Nest 调用因等结果超时返回错误而事务其实已提交的那条路径有端点场景（`TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce`：这一次答错误码并归还预留，重试在账本上认出这封邮件、不发第二笔、补上确认）。没有跑过的：经 NATS 的 mail 客户端、Redis 存储、mail 服务一侧的超时与重投。
+场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。Nest 调用因等结果超时返回错误而事务其实已提交的那条路径有端点场景（`TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce`：这一次答错误码并归还预留，重试在账本上认出这封邮件、不发第二笔、补上确认）。真实依赖另有一档（不在 `roost module verify` 里）：`game/controllers/mailbox/mailbox_real_integration_test.go`（显式 `-tags integration`，`ROOST_MAILBOX_IT_NATS_URL` / `ROOST_MAILBOX_IT_REDIS_ADDR` 必填），端点经 `wiring/mail.ClientMod` 的 BusClient 在真实 NATS 上调 `wiring/mail.Mod`（Redis 存储）挂出的 mail 服务，core 与 jetstream 两种 RPC 传输各一遍：正常领取；预留的答复超时（服务方已预留）后重试，租约内答“领取在途”、租约到期后领到；确认的答复超时（服务方已确认）照常答成功、再领答已领取；mail 服务停机时领取失败、按同一个 Redis 键前缀重启后领到；jetstream 下服务实例执行预留后连接断开，broker 把请求重投给另一个实例。每一步核对附件恰好到账一次。由 `scripts/test-demo-generated.sh` 在生成的 game-demo 里运行。Nest 仍是替身提交器，Redis Cluster、跨机与容量没有跑。
 
 ## 与 profile 的升级奖励联动
 
