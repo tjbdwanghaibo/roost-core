@@ -35,6 +35,12 @@
 
 ## 合入后复跑
 
-见本次合入提交的说明与 CHANGELOG `[Unreleased]` 条目。
+2026-11-14，合入后的树上（macOS 本机，未跑 M-19 / 联盟夹具）：
+
+- `GOWORK=off go test -race ./framework/nestwal ./framework/dataengine/engine ./wiring/dataengine -count=1`：三个包通过（7.180 / 14.036 / 5.573 s）。
+- 真实 Mongo（私有副本集，端口偏移 24300，只起 Mongo）`go test -tags integration -race -run '^TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint$'`：`background=false` / `background=true` 两个子例均 PASS；用后已停并删除私有根目录。
+- 配置：`TestBackgroundCheckpointIsDeclaredOffByDefault`（codegen，声明为 bool、缺省 false、不写进生成配置，config check 拒绝非布尔值）与 wiring 的缺省关闭断言通过；把声明缺省改为 true 的变异两条都红。`TestKitConfigSchemasMatchKitDeclarations`、`TestGameDemoConfigsPassTheDoctorConfigCheck` 等配置契约用例通过。
+- 根包 `go test . -count=1` 通过（含 `TestDocumentedCommitsAreReachableFromHEAD`、`TestTrackedMarkdownRelativeLinksResolve`）；`scripts/check-doc-anchors.py` 0 处断链。
+- 联盟夹具只做了语法解析，与实验提交相比只改了一行日志文字（`PERF rpc config background_checkpoint=… concurrency=… max_concurrent_writes=512`），没有重跑真实联盟脚本。
 
 **当前结论：实现与功能验证完成并已合入，配置默认关闭；性能判定待 M-19。不能据此认定 checkpoint 是历史 3 秒整体停顿的根因。**
