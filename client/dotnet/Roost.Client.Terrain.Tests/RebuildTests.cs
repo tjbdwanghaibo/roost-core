@@ -1,7 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
+using Roost.Client;
+using Roost.Client.Codecs;
 using Roost.Client.Terrain;
+using Roost.Dao.Sync;
 
 internal static partial class Program
 {
@@ -450,5 +455,127 @@ internal static partial class Program
         sync.Dispose();
         Console.WriteLine("PASS terrain confirm source: markers and edited fulls confirm, a missing one blocks its dependents, marker to entity without a gap, " +
             "leave / re-enter without a rebuild, enter while moving before and after LoadBase, unload and reload keep the overlay, a stale cached overlay reverts, reconnect, bad records, base pack switch");
+    }
+
+    // 业务接线（client/README.md“地形”一节）：EntityViews 的一批变化交给 TerrainChunkSync。块坐标取自 subject ID
+    // （与 game-demo terrain_chunk.KeyOf 相同：EntityID 的唯一号减一是 ChunkKey 的 Id；Remove 也带着身份）；Full / Delta 的
+    // Current.Value 是生成 Apply 合并好的完整记录，Version 0 是就绪标记，高度与材质传 null。
+    private static ChunkKey ChunkOfSubject(long subjectId) => ChunkKey.FromId((ulong)(((subjectId >> 10) & ((1L << 52) - 1)) - 1));
+
+    private static void ForwardTerrainChanges(TerrainChunkSync sync, string ns, IReadOnlyList<EntityChange> changes)
+    {
+        foreach (var change in changes)
+        {
+            var update = change.Identity.Update;
+            if (update.Namespace != ns) continue;
+            var key = ChunkOfSubject(update.SubjectId);
+            if (change.Kind == EntityChangeKind.Remove) { sync.Remove(key); continue; }
+            var dao = (SyncTerrainChunkDao)change.Current!.Value;
+            long version = dao.Version?.Value ?? 0;
+            sync.Apply(key, dao.BaseRevision?.Value ?? 0, version, version >= 1 ? dao.Heights.Value : null, version >= 1 ? dao.Materials.Value : null);
+        }
+    }
+
+    // 确认来源的真实帧（KNOWN-LIMITS“地形确认来源”④）：Go 正式 entitysync Manager 下发的帧（Fixtures/terrain-confirm-frames.json，
+    // regen.sh 生成）经 EntityViews 解码、生成 Apply 合并，再按上面的接线交给 TerrainChunkSync；逐帧核对哪些块已确认、
+    // 什么时候可以显示。与 TestChunkSyncConfirm 的区别是说法来自真实帧（对象的 create / update / remove、Full 帧替换、
+    // rebind 的全量、按下标的增量），不是直接构造的 Apply 参数。
+    private static void TestChunkSyncFromFrames(byte[] packBytes, string fixturePath)
+    {
+        var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath)).RootElement;
+        using var pack = TerrainPack.Open(packBytes);
+        var meta = pack.Meta;
+        var all = AllKeys(meta);
+        var k00 = new ChunkKey(0, 0); var k10 = new ChunkKey(1, 0); var k20 = new ChunkKey(2, 0);
+        var k01 = new ChunkKey(0, 1); var k11 = new ChunkKey(1, 1); var k21 = new ChunkKey(2, 1);
+        bool Depends(ChunkKey key, ChunkKey dep) => TerrainChunkBuilder.Dependencies(meta, key).Contains(dep);
+        string ns = fixture.GetProperty("namespace").GetString()!;
+        Check(ns == "terrain" && fixture.GetProperty("encoding").GetInt32() == 2, "fixture: TerrainChunk subjects in the terrain namespace with the DAO PB codec");
+        var views = new EntityViews();
+        views.RegisterDao<SyncTerrainChunkDao>(ns, SyncTerrainChunkDao.Parser, (patch, previous) => patch.Apply(previous!),
+            fixture.GetProperty("profile").GetString()!, fixture.GetProperty("schema").GetUInt32());
+        var frames = fixture.GetProperty("frames").EnumerateArray().ToDictionary(f => f.GetProperty("name").GetString()!, f => Convert.FromHexString(f.GetProperty("frame").GetString()!));
+        Check(frames.Count == 7, "fixture: seven frames");
+
+        // 业务一开始只装了五块：(2,0) 在视野边上，晚一点才 LoadBase。
+        var rig = new Rig(ViewOf(pack, all.Where(k => k != k20).ToArray()));
+        var sync = new TerrainChunkSync(rig.Scheduler);
+        foreach (var k in all) rig.Want(k, 0);
+        var seen = new List<EntityChange>();
+        IReadOnlyList<EntityChange> Receive(string name)
+        {
+            seen.Clear();
+            Check(views.Receive(frames[name], changed: batch => { seen.AddRange(batch); ForwardTerrainChanges(sync, ns, batch); }), name + ": frame accepted");
+            return seen.ToList();
+        }
+        bool Confirmed(ChunkKey key) => rig.Scheduler.IsConfirmed(key);
+
+        // 1. 进场：五个对象（(1,0) 是改过的实体，其余是标记），(2,0) 的对象还没到。
+        var changes = Receive("enter_without_k20");
+        Check(changes.Count == 5 && changes.All(c => c.Kind == EntityChangeKind.Full), "enter: five fulls");
+        foreach (var k in all) Check(Confirmed(k) == (k != k20), $"enter: {k} confirmed only once its object arrived");
+        Check(!sync.TryGetVersion(k20, out _), "enter: no record for (2,0)");
+        Check(rig.View.TryGetVersion(k10, out long v10) && v10 == 3, "enter: the edited chunk's overlay is in the view");
+        // 业务现在装上 (2,0) 的原始块：服务端还没说这块，不能确认。
+        rig.View.LoadBase(k20);
+        Check(!Confirmed(k20), "enter: loading (2,0) before its object arrives does not confirm it");
+        rig.Settle();
+        foreach (var k in all)
+            Check(rig.Shown(k, out _, out _) == !(Depends(k, k20) || k == k20), $"enter: {k} shown only when none of its dependencies waits for the server");
+
+        // 2. (2,0) 的标记到达：确认，全部可以显示。
+        changes = Receive("k20_arrives");
+        Check(changes.Count == 1 && changes[0].Kind == EntityChangeKind.Full && Confirmed(k20), "(2,0) arrives and is confirmed");
+        rig.Settle();
+        rig.CheckAllCurrent();
+
+        // 3. 第一次改 (0,1)：同一对象从标记换成实体的全量（rebind），没有 remove，确认不中断，按新数据重建。
+        changes = Receive("k01_first_edit");
+        Check(changes.Count == 1 && changes[0].Kind == EntityChangeKind.Full && changes[0].Previous != null &&
+              ChunkOfSubject(changes[0].Identity.Update.SubjectId) == k01, "first edit: one full replacing the marker, no remove");
+        Check(Confirmed(k01) && sync.TryGetVersion(k01, out long r01) && r01 == 1 && rig.View.TryGetVersion(k01, out long v01) && v01 == 1, "first edit: confirmed on the entity's version");
+        rig.Settle();
+        rig.CheckAllCurrent();
+        Check(rig.Shown(k01, out var b01, out _) && b01!.Input.ChunkAt(0, 0)!.Version == 1, "first edit: rebuilt from the entity's data");
+
+        // 4. (1,0) 的按下标增量：生成 Apply 合并成完整记录，视图换到版本 4，仍确认。
+        changes = Receive("k10_brush_delta");
+        Check(changes.Count == 1 && changes[0].Kind == EntityChangeKind.Delta && Confirmed(k10), "brush delta: one delta, still confirmed");
+        var merged = (SyncTerrainChunkDao)changes[0].Current!.Value;
+        var chunk10 = rig.View.GetChunk(k10)!;
+        Check(chunk10.Version == 4 && merged.Version.Value == 4 && chunk10.Heights.ToArray().Select(h => (uint)h).SequenceEqual(merged.Heights.Value),
+            "brush delta: the view holds the merged heights");
+        rig.Settle();
+        rig.CheckAllCurrent();
+
+        // 5. (2,1) 离开视野：撤销确认，读它的网格报过期；业务随后卸下这块。
+        changes = Receive("k21_leaves");
+        Check(changes.Count == 1 && changes[0].Kind == EntityChangeKind.Remove && !Confirmed(k21), "leave: unconfirmed");
+        foreach (var k in all.Where(k => Depends(k, k21) || k == k21))
+            Check(rig.Shown(k, out _, out bool cur) && !cur, $"leave: {k} reads (2,1) and is reported expired");
+        rig.View.Unload(k21);
+
+        // 6. 再进入：标记先到、块还没装，等业务 LoadBase 之后才确认。
+        changes = Receive("k21_reenters");
+        Check(changes.Count == 1 && changes[0].Kind == EntityChangeKind.Full && !Confirmed(k21), "re-enter: a marker for a chunk not loaded yet waits");
+        rig.View.LoadBase(k21);
+        Check(Confirmed(k21), "re-enter: confirmed once the business loads the base chunk");
+        rig.Settle();
+        rig.CheckAllCurrent();
+
+        // 7. 重连：连接重置（EntitiesReset）时 EntityViews 与确认一起作废；新会话的 Full 帧带来每一块，按新会话重建。
+        views.Reset();
+        sync.BeginSession();
+        Check(all.All(k => !Confirmed(k)), "reconnect: nothing confirmed before the new session's full frame");
+        changes = Receive("reconnect_full");
+        Check(changes.Count == all.Length && changes.All(c => c.Kind == EntityChangeKind.Full) && all.All(Confirmed), "reconnect: every chunk confirmed again");
+        Check(sync.TryGetVersion(k10, out long r10) && r10 == 4 && sync.TryGetVersion(k01, out r01) && r01 == 1 &&
+              sync.TryGetVersion(k00, out long r00) && r00 == 0 && sync.TryGetVersion(k11, out long r11) && r11 == 0, "reconnect: the edited chunks keep their versions");
+        rig.Settle();
+        rig.CheckAllCurrent();
+        Check(all.All(k => rig.Shown(k, out var bb, out _) && bb!.Session == rig.Scheduler.Session), "reconnect: everything rebuilt for the new session");
+        sync.Dispose();
+        Console.WriteLine("PASS terrain confirm source from real frames: EntityViews -> TerrainChunkSync over entitysync frames (enter without a chunk, " +
+            "late load not confirmed, arrival, first edit by rebind without remove, brush delta, leave / re-enter before LoadBase, reconnect)");
     }
 }

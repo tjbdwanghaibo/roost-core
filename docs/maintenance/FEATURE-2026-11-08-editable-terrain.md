@@ -1687,7 +1687,7 @@ Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`
 ### 31.8 未覆盖（后置）
 
 - Unity：网格对象与上传、材质 / 泡沫 / 湿润带着色、水面侧壁、主线程与 Job 的切换，以及 Editor、Mono / IL2CPP、移动设备上的耗时与内存。本机 .NET（Apple M5，`net10.0` 测试程序）以外没有运行过；没有性能基准（一次块重建的耗时只在 Debug 测试里粗看过，不作为结论）。
-- 确认来源（§31.7 ③）已在 §31.9 实施：服务端信号走真实 entitysync 链路（Go TCP 客户端核对），C# 接入层用构造的说法核对时序，没有用真实帧驱动 C# 的 `EntityViews`；编辑者本地预测预览与已确认地形分层（本轮 SDK 没有预览层，预览由业务在 `TerrainView` 之外叠加）；远端 1 秒合并后的渐变表现。
+- 确认来源（§31.7 ③）已在 §31.9 实施：服务端信号走真实 entitysync 链路（Go TCP 客户端核对），C# 接入层除构造的说法外，另用 Go entitysync Manager 下发的真实帧驱动 `EntityViews` → `TerrainChunkSync` 核对时序（2026-11-14，`TestChunkSyncFromFrames`）；编辑者本地预测预览与已确认地形分层（本轮 SDK 没有预览层，预览由业务在 `TerrainView` 之外叠加）；远端 1 秒合并后的渐变表现。
 - 粗 LOD 下岸线（全分辨率）与粗网格的视觉偏离；跨块岸线的连续 UV / 弧长（每块只有本块折线）；盆地水位 / 灌水（§5 后续可选）不在范围。
 - 填土分裂池塘、挖通两片水：岸线按当前高度重新生成，拓扑自然正确（不保留旧水面），已由“任意高度场上逐点一致”覆盖，没有专门用例。
 
@@ -1723,6 +1723,6 @@ Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`
 - 显示半径：一块就绪要 8 个邻块都已确认，服务端按块中心离视点 ≤ 200m 下发、视点每 8m 上报，所以 `Want` 的显示半径约为 200 − 8 − 90.5（一块的对角线）≈ 100m。要更远就放大地形视野（300m 约 69 块，超过 64 的上限，要一起改 `terrainMaxVisible` 与会话上限）——**待维护者确认**是否需要。
 - 原始地形包里坏了的块（服务端装不进视图）不登记标记，客户端永远不确认它（服务端自己也查不了）；分区场景里拥有者装不进的块同样不答，订阅每秒续期都会再问一次（计 Replicator 的 `unloaded`）。
 - 第一次改时以实体状态 `Register` 失败（Manager 已关闭、状态已归别的 Manager）：退役这个 ID，订阅者收到 remove、撤销确认，不留一个停在 Version 0 的标记把改过的块当成没改过；记 Error。
-- 客户端：覆盖块只经 `TerrainChunkSync` 写进视图；与 `EntityViews` 接线时，地形块的视图键是缺省视图（`""`），不受 player / monster / building 的 `near` / `team` 视图注册影响。C# 只用构造的说法核对时序，没有用真实 entitysync 帧驱动；Unity 未跑。
+- 客户端：覆盖块只经 `TerrainChunkSync` 写进视图；与 `EntityViews` 接线时，地形块的视图键是缺省视图（`""`），不受 player / monster / building 的 `near` / `team` 视图注册影响（线上 profile 是归一后的 `"default"`，客户端按它注册）。C# 除构造的说法外，`TestChunkSyncFromFrames`（2026-11-14）用 Go 正式 entitysync Manager 下发的真实帧（`Fixtures/terrain-confirm-frames.json`：进场缺一块、业务先装上那块、它的标记到达、第一次改的 rebind 全量、按下标的增量、离开 / 再进入、新会话的 Full 帧）驱动 `EntityViews` → 生成 Apply → `TerrainChunkSync`，逐帧核对确认时序；变异“视图装入时没有说法也确认”“Remove 不撤销确认”均红。帧来自 Manager 直接驱动（不经 TCP / Gate，也不经 game-demo 的地形 Interest）；Unity 未跑。
 
 **验证**（[证据](evidence/terrain-confirm-source-20261110/README.md)）：生成的 game-demo 里 `TestTerrainEveryChunkInViewReachesTheClient`（真实 TCP、生产启动步骤 `startTerrainSync`：进场 29 块齐、第一次改没有 remove 且是全量、移动后新进入的都到 / 220m 外的被 remove、重连后 29 块齐）与 `TestTerrainPartitionEveryChunkInViewReachesTheClient`（两个格进程 + 只做 Base 的进程：两个客户端都拿到视野里 11 块的标记，邻格第一次改后标记换成副本、没有 remove）修前都红；`TestChunkSyncConfirm`（C#）覆盖进场缺一块、标记转实体、离开 / 再进入不重建、移动中新进入（LoadBase 前后）、卸载重装、缓存的旧覆盖块被标记换回、重连、坏记录、换包。Go 5 项、C# 8 项变异全部变红。

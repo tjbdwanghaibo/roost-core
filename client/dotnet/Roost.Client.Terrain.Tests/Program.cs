@@ -50,6 +50,7 @@ internal static partial class Program
         TestLod();
         TestChunkBuild(pack);
         TestRebuildScheduler(pack);
+        TestChunkSyncFromFrames(pack, Path.Combine(AppContext.BaseDirectory, "Fixtures", "terrain-confirm-frames.json"));
         TestChunkSyncConfirm(pack);
         Console.WriteLine("PASS terrain");
         return 0;
