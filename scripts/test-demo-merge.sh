@@ -12,8 +12,10 @@
 #      两服登记；u1 在 1000、u2 在 1001、u3 两服各一个角色，各加 10 个道具 1001；停两个 game。
 #   2. 合服：sidmove wal-drained 两侧；sidmerge migrate -dry-run（冲突时报告并按“A 的文档让给 B”处置，见下）；migrate 与
 #      重跑幂等；accountctl merge-server；误启动 1001 被拒；1000 起来后四个角色登录写入（u2 背包 10 → 15：B 冷加载迁入的
-#      文档）；1001 上建角被拒、1000 上成功；B 里迁入文档的 _version 都比 A 的归档高。
-#   3. 独立 Gate：停 game 1000，换 Game Ingress + 起 Gate；u2、u3@1001、u1 经 Gate 登录写入。
+#      文档）；u2 再走登录入口（portal）三步：清单把 1001 标为并入 1000、角色承载在 1000、地址是 1000 的，进服票据
+#      （server_id 1001、serving_server_id 1000）在 game 1000 上握手，EnterStatus 是“能进、不用新建”，进到的是 u2 原来的
+#      角色、背包 15 → 16；1001 上建角被拒、1000 上成功；B 里迁入文档的 _version 都比 A 的归档高。
+#   3. 独立 Gate：停 game 1000，换 Game Ingress + 起 Gate；u2、u3@1001、u1 经 Gate 登录写入；u2 的入口票据经 Gate 握手。
 #   4. 回退：停 Gate 与 game 1000，sidmerge revert，unmerge-server，1001 用新 WAL 目录起来；u2 回到 1001（背包延续）。
 #
 # 依赖与清理同 scripts/test-demo-login.sh（scripts/testdata/demo-drill/lib.sh）：私有 Mongo 副本集 / NATS JetStream / Redis，
@@ -66,6 +68,32 @@ drill() {
 mongo_eval() { mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval "$1"; }
 merge_flags=(-from 1001 -into 1000 -from-config "$game_a" -into-config "$game_b")
 gate_addr="127.0.0.1:$(drill_port 7100)"
+portal="http://127.0.0.1:$(drill_port 8081)"
+host_addr="127.0.0.1:$(drill_port 7000)"
+ticket=""
+post() { curl -s -X POST "$portal$1" -H 'Content-Type: application/json' -d "$2"; }
+# portal_ticket <标签>：u2（只在 1001 有角色）走登录入口三步，断言清单把 1001 标为并入 1000、角色就是状态文件里的那个、
+# 承载在 1000、推荐它的家 1001 且地址是 1000 的；进服票据 server_id 1001、serving_server_id 1000、地址是 1000 的。
+# 票据放进 $ticket（调用方交给 mergedrill ticket；响应留在证据目录，私有环境的测试票据，十分钟过期）。
+portal_ticket() {
+	local label=$1 open_id player_id account_ticket
+	open_id=$(jq -r '.users.u2.open_id' "$out/state.json")
+	player_id=$(jq -r '.users.u2.roles[] | select(.sid == 1001) | .player_id' "$out/state.json")
+	post /portal/login "{\"channel\":\"demo\",\"open_id\":\"$open_id\",\"credential\":\"demo:$open_id\"}" >"$out/portal-$label-1-login.json"
+	account_ticket=$(jq -r 'select(.ok == true) | .account_ticket' "$out/portal-$label-1-login.json")
+	[ -n "$account_ticket" ] || { cat "$out/portal-$label-1-login.json"; drill_fail "/portal/login ($label)"; }
+	post /portal/servers "{\"account_ticket\":\"$account_ticket\"}" >"$out/portal-$label-2-servers.json"
+	jq -e --arg addr "$host_addr" --argjson pid "$player_id" '.ok == true and .recommended_server_id == 1001 and
+		([.servers[] | select(.server_id == 1001 and .merged_into == 1000 and .addr == $addr and
+			.role.player_id == $pid and .role.serving_server_id == 1000)] | length == 1) and
+		([.servers[] | select(.server_id == 1000 and .addr == $addr and .role == null)] | length == 1)' \
+		"$out/portal-$label-2-servers.json" >/dev/null || { cat "$out/portal-$label-2-servers.json"; drill_fail "/portal/servers ($label)"; }
+	post /portal/enter "{\"account_ticket\":\"$account_ticket\",\"server_id\":1001}" >"$out/portal-$label-3-enter.json"
+	jq -e --arg addr "$host_addr" '.ok == true and (.ticket | startswith("enter:")) and .server_id == 1001 and .serving_server_id == 1000 and .addr == $addr' \
+		"$out/portal-$label-3-enter.json" >/dev/null || { cat "$out/portal-$label-3-enter.json"; drill_fail "/portal/enter ($label)"; }
+	drill_log "portal ($label): 1001 merged into 1000, u2's role $player_id serving 1000, home 1001 recommended at $host_addr, enter ticket for 1001 served by 1000"
+	ticket=$(jq -r '.ticket' "$out/portal-$label-3-enter.json")
+}
 
 # ---- 1. 建数据 ----
 drill_log "phase 1: make dev-run, game 1001, roles and items"
@@ -111,6 +139,8 @@ drill login -who u1:1000 -expect-serving 1000 -add 1 -expect-count 11
 drill login -who u2:1001 -expect-serving 1000 -add 5 -expect-count 15
 drill login -who u3:1000 -expect-serving 1000 -add 1 -expect-count 11
 drill login -who u3:1001 -expect-serving 1000 -add 2 -expect-count 12
+portal_ticket embedded
+drill ticket -who u2:1001 -ticket "$ticket" -endpoint "$(jq -r '.addr' "$out/portal-embedded-3-enter.json")" -add 1 -expect-count 16
 drill create -sid 1001 -expect-refused
 drill create -sid 1000
 # B 冷加载并写了迁入的文档：A 的每一份（归档）在 B 里都有，且 B 的 _version 更高。
@@ -130,9 +160,12 @@ drill_ingress_config "$game_b" configs/service/config.game-ingress.yaml
 drill_gate_config
 drill_start game-ingress bin/drillingress game 1000 configs/service/config.game-ingress.yaml
 drill_start gate bin/drillgate gate 9500 configs/service/config.gate.yaml DRILL_GATE_ADDR="$gate_addr" DRILL_GATE_ADVERTISE="$gate_addr"
-drill login -who u2:1001 -expect-serving 1000 -add 1 -expect-count 16 -gate "$gate_addr"
+drill login -who u2:1001 -expect-serving 1000 -add 1 -expect-count 17 -gate "$gate_addr"
 drill login -who u3:1001 -expect-serving 1000 -add 1 -expect-count 13 -gate "$gate_addr"
 drill login -who u1:1000 -expect-serving 1000 -add 1 -expect-count 12 -gate "$gate_addr"
+# 入口目录里登记的仍是 game 1000 自己的地址（本演练没把 Gate 登记进去），客户端改连 Gate：票据与承载服不变。
+portal_ticket gate
+drill ticket -who u2:1001 -ticket "$ticket" -gate "$gate_addr" -add 1 -expect-count 18
 drill_log "phase 3 done: roles of the merged server entered 1000 through the Gate"
 
 # ---- 4. 回退 ----
@@ -146,7 +179,7 @@ accountctl upsert-server -sid 1001 -status open >/dev/null
 mv data/wal/dataengine/1001 "$work_dir/wal-1001-retired"
 sh deploy/dev/run.sh start game >/dev/null || drill_fail "start game 1000 after revert"
 drill_start game1001 bin/app game 1001 "$game_a"
-drill login -who u2:1001 -expect-serving 1001 -add 1 -expect-count 17
+drill login -who u2:1001 -expect-serving 1001 -add 1 -expect-count 19
 drill login -who u3:1001 -expect-serving 1001 -add 1 -expect-count 14
 drill login -who u3:1000 -expect-serving 1000 -add 1 -expect-count 12
 drill login -who u1:1000 -expect-serving 1000 -add 1 -expect-count 13

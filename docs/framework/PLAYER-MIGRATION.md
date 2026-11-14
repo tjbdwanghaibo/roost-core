@@ -116,7 +116,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 没有按 sid 独占数据的工程只有第 1、3、4 步。中途失败：revert 是逐份“写回 A、按版本删 B”，已搬回的文档在 A、不在 B，原样重跑会把它们报成 missing 并整体拒绝——对照报告去掉清单里已搬回的项再跑。
 
-可重复的两服演练：仓库的 `scripts/test-demo-merge.sh`（game-demo，私有依赖）走一遍 6.1 与 6.2：建数据、`wal-drained`、`migrate` 与重跑、`merge-server`、误启动 A 被拒、B 冷加载迁入的按 sid 分库 Player 文档并写入、经独立 Gate 登录 A 的角色、`revert` 与 `unmerge-server` 后角色回到 A。
+可重复的两服演练：仓库的 `scripts/test-demo-merge.sh`（game-demo，私有依赖）走一遍 6.1 与 6.2：建数据、`wal-drained`、`migrate` 与重跑、`merge-server`、误启动 A 被拒、B 冷加载迁入的按 sid 分库 Player 文档并写入、A 的老角色经登录入口（portal）拿 A 的进服票据后在 B 上握手（嵌入 TCP 与独立 Gate 各一次）、经独立 Gate 登录 A 的角色、`revert` 与 `unmerge-server` 后角色回到 A。
 
 ### 6.3 持久总线消息与业务合并清单
 
