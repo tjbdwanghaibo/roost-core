@@ -20,7 +20,7 @@ import (
 //
 // The layout is the framework's own split, used as intended:
 //
-//	unique id (52 bits) = [static half (1)][shard (16)][sequence (34)]
+//	unique id (52 bits) = [static half (1)][unused (1)][shard (16)][birth (1)][sequence (33)]
 //
 // `entity.StaticUniqueIDBase` marks the upper half of the unique range, which
 // the framework reserves for explicitly assigned ids — as opposed to the
@@ -31,14 +31,22 @@ import (
 // Above the base, the shard is the process's sid: stable, unique per
 // deployment, and already required for everything else in the demo. What is
 // left is the per-process sequence.
+//
+// The birth bit (bit 33) is not ours: CellWorld's birth ids
+// (cellworldhost.SpawnID) are Static | home<<34 | 1<<33 | seq with home = the
+// cell process's sid, i.e. the same shard. Runtime sequences stay in bits 0..32
+// so the two ranges of one sid can never meet; reaching bit 33 is refused like
+// any other exhaustion.
 const (
 	// ShardBits is how many distinct sids this scheme admits.
 	ShardBits = 16
+	// ShardShift is where the sid starts; bits 33..ShardShift-1 are reserved.
+	ShardShift = 34
 	// SequenceBits is how many ids one process may mint before it must be
-	// restarted with a fresh... nothing. It cannot be refreshed: 2^34 is
-	// seventeen billion, which is the point — overflow is a refusal, not a
+	// restarted with a fresh... nothing. It cannot be refreshed: 2^33 is
+	// eight billion, which is the point — overflow is a refusal, not a
 	// wrap, and nobody will reach it.
-	SequenceBits = 34
+	SequenceBits = 33
 
 	MaxShard    = int64(1)<<ShardBits - 1
 	MaxSequence = int64(1)<<SequenceBits - 1
@@ -57,7 +65,7 @@ func New(sid int32) (*Allocator, error) {
 	if sid <= 0 || int64(sid) > MaxShard {
 		return nil, fmt.Errorf("runtimeid: sid %d is outside 1..%d, so it cannot be encoded into a runtime entity id", sid, MaxShard)
 	}
-	base := int64(entity.StaticUniqueIDBase) | int64(sid)<<SequenceBits
+	base := int64(entity.StaticUniqueIDBase) | int64(sid)<<ShardShift
 	return &Allocator{base: base}, nil
 }
 
@@ -80,5 +88,5 @@ func Shard(uniqueID int64) int32 {
 	if uniqueID&int64(entity.StaticUniqueIDBase) == 0 {
 		return 0
 	}
-	return int32((uniqueID >> SequenceBits) & MaxShard)
+	return int32((uniqueID >> ShardShift) & MaxShard)
 }

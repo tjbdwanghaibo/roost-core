@@ -13,4 +13,4 @@ runtime: {package: game/monster/service, start: Start}
 verify:
   packages: [./game/monster/service]
   run: ^TestMonster
-  pass: 26
+  pass: 27

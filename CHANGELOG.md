@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **修复：运行期号与 CellWorld 出生号在同一 sid 下撞号**（demo/game/runtimeid、modules/monster，2026-11-14，KNOWN-LIMITS“CellWorld 出生号与运行期号共用 shard 位”）：`cellworldhost.SpawnID` 是 `Static | home<<34 | 1<<33 | seq`（home = Cell 进程的 sid），game-demo 的 `runtimeid` 与 monster 模块的怪物号是 `Static | sid<<34 | 序号`、序号可到 2^34−1，序号走到 2^33 以上就与同一 sid 的出生号重叠（序号 2^33+k 正好等于出生序号 k 的号）。现在两处序号都只用第 0～32 位（至多 2^33−1，用完拒绝、不回绕），sid 仍在第 34 位起，第 33 位留给出生号；其余号段（静态半区的出生号、动态半区的计数器）不变，没有别的分配器用 `sid<<34` 编码。**行为变化**：单进程可铸的运行期号上限从 2^34−1 降到 2^33−1。只对新生成的工程生效。
+  - **先红后绿**：game-demo `TestSequenceStaysBelowTheCellWorldBirthBit` 修前 `runtime id 0x80fa200000000 carries bit 33: it lands in the CellWorld birth range of sid 1000`；monster `TestMonsterIDSequenceStaysBelowTheCellWorldBirthBit` 修前 `monster … (unique 0x80fa200000000) carries bit 33`；修后都通过。monster 模块场景 26 → 27。
+
 - **修复：块覆盖扇出时超额暂缓的对象永远到不了客户端**（framework/sync/entitysync/policy，2026-11-14，KNOWN-LIMITS“Block AOI 扇出 4 时客户端缺对象”）：会话持有数到 `Limits.MaxObjects` 后，Manager 暂缓新对象并通知 Interest，Interest 按通知数把空间视野上限减一、让最远的成员离开。最远的成员同时经块覆盖（或关系视野、别的空间视野）被看见时，它离开这个视野后仍被订阅，会话里没有空出位置；冷却到期上调即撤掉收紧、Manager 每秒再通知又只减一，循环不收敛（nest-game `OBSERVED_BLOCKS=4` 三次都缺同一个对象）。现在收紧一直往下减，直到离开的成员里有足够多不再被这名玩家的别的来源持有（真正腾出位置）或上限到 0；没有别的来源时与原来一步相同。契约见 ENTITY_SYNC“超额降级”。
   - **先红后绿**：`TestInterestTightensPastMembersHeldByOtherSources`（块覆盖 / 关系视野两个子用例）修前客户端停在 `[1 2 3 1001]`、暂缓 1；变异 3 条（任何离开都算腾出、只认块覆盖为别的来源、只减一步）均变红，每步多减一个的变异由既有收紧用例抓住。nest-game 同参数修前红（1 次原样、2 次带诊断日志），修后 3/3 通过；`spread`、`concentrated`、`concentrated + OBSERVED_BLOCKS=4` 各 1 次通过。夹具核对（`Interest.Seen` 的全部来源）不变。
 - **game-demo 演练与机器人覆盖：登录、改名、两个 game 互相入会、合服**（demo / scripts / wiring/sidmerge，2026-11-14，KNOWN-LIMITS #87、#100、#110、#128 与“game-demo 接入登录链路的边界”）：

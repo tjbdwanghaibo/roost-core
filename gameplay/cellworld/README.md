@@ -71,7 +71,7 @@ Player 死亡后重新登录不自动复活。复活规则由业务定义，不�
 
 ## NPC 出生账本
 
-`SpawnBook.Reserve` 按 home SID 与稳定出生 Key 分配持久序号；`SpawnID` 将它映射到业务保留的静态 ID 段。数量、规格、Generation、LastDeath、RespawnAt 可恢复，不依赖进程内随机号或启动时间。
+`SpawnBook.Reserve` 按 home SID 与稳定出生 Key 分配持久序号；`SpawnID` 将它映射到业务保留的静态 ID 段（`Static | home<<34 | 1<<33 | seq`，第 33 位是出生号标记；同一 sid 下按 `sid<<34` 编码的运行期号只用第 0～32 位，见 [cellworld 模块](../../modules/cellworld/README.md)）。数量、规格、Generation、LastDeath、RespawnAt 可恢复，不依赖进程内随机号或启动时间。
 
 出生槽只拥有数量配额，Actor 跨格不会让原格补刷。原格巡检查共享授权：其他 Cell 仍存活则等待，活性未知则拒绝，死亡事实已确认且达到绝对复活时间后才推进下一代 Life。owner 在确认之后、退役之前崩溃时，巡检核实旧进程已死（与认领相同：活性在 CAS 外查询，CAS 内核对整份记录未变）后代为关闭记录；owner 活着或活性未知时不动。整个过程 CAS 核对上一代，多个巡检者不能重复占同一槽。
 

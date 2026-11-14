@@ -86,3 +86,26 @@ func TestSequenceExhaustionIsRefused(t *testing.T) {
 		t.Fatal("the sequence wrapped instead of refusing")
 	}
 }
+
+// Bit 33 of the sequence belongs to CellWorld's birth ids: cellworldhost.SpawnID
+// builds Static | home<<34 | 1<<33 | seq with home = this process's sid. A
+// runtime sequence that reached bit 33 would mint the same unique id as a
+// birth slot of the same sid, so the allocator refuses before it gets there.
+func TestSequenceStaysBelowTheCellWorldBirthBit(t *testing.T) {
+	allocator, _ := New(1000)
+	allocator.sequence.Store(1<<33 - 2)
+	last, err := allocator.Next()
+	if err != nil {
+		t.Fatalf("the last sequence below the birth bit was refused: %v", err)
+	}
+	if last&(1<<33) != 0 {
+		t.Fatalf("runtime id %#x already carries the birth bit", last)
+	}
+	id, err := allocator.Next()
+	if err == nil && id&(1<<33) != 0 {
+		t.Fatalf("runtime id %#x carries bit 33: it lands in the CellWorld birth range of sid %d", id, Shard(id))
+	}
+	if err == nil {
+		t.Fatalf("the sequence went past %d without refusing", int64(1)<<33-1)
+	}
+}
