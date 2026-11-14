@@ -1,0 +1,18 @@
+package player
+
+import (
+	player "example.com/tcp-perf/game/entities/player"
+	"example.com/tcp-perf/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+)
+
+func (c *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+	lifecycle, err := player.LifecycleFromRegistry(c.Registry())
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err = lifecycle.GetOrCreate(ctx.Context(), ctx.PlayerID); err != nil {
+		return nil, err
+	}
+	return &pb.EnterGameResponse{}, nil
+}

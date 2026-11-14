@@ -1,0 +1,6 @@
+package dbdef
+
+//roost:dao coll=player db=main
+type PlayerDao struct {
+	Gold int64 `store:"gold" dao:"persist,sync"`
+}

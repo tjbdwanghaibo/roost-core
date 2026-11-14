@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 新增 `scripts/perf/generated-tcp.sh` 与入库业务夹具：当前 CLI 生成 Player/endpoint，公共 Robot 经嵌入 TCP 调生成 Sender，每次金币 +1 走真实文件 WAL/Mongo；支持 strict/pipelined/async、self_sync、分散/同实体连接与有界开环到达。结束冷加载逐实体核对成功回包数、WAL 排空与客户端最终 Sync；JSON 分列往返、计划到回复、客户端排队、投影排空和 Robot 消息统计。10 秒冒烟用于验证接线，正式 M-17 性能对照仍需空闲机器；配置与边界见 `scripts/testdata/generated-tcp/README.md`。
+
 - MOBA 真实依赖补齐三进程快照交接：独立权威从 SIGKILL 留下的 strict WAL 恢复；旧宿主快照分块在途时交接，旧提交被拒并排空，新宿主从已提交检查点恢复。原快照用例保留 100 次 strict Sender 耗时并输出 p50 / p99 诊断。验证：私有 Mongo / NATS 下 `ROOST_MOBA_REAL=1 ROOST_MOBA_ROUTING=1 bash scripts/test-moba-generated.sh` 全过；去掉已提交门变异被逐包水位断言拒绝。功能验收延迟不作为容量测量，真实客户端链路与跨机范围见 MOBA 手册 §11。
 
 - **测试：C# 地形确认来源用真实 entitysync 帧驱动**（client/dotnet，2026-11-14，KNOWN-LIMITS“地形确认来源 ③④”的 ④）：`Fixtures/regen.sh` 新增 `TestWriteTerrainConfirmFramesFixture`，用正式 entitysync Manager 给一个会话下发地形块对象的真实帧（就绪标记与 game-demo `terrain_chunk.Base` 同形、改过的块用生成 DAO 的全量 / 增量），写出 `terrain-confirm-frames.json`；`Roost.Client.Terrain.Tests` 新增 `TestChunkSyncFromFrames`：`EntityViews` 解码、生成 Apply 合并后按 client/README 的接线交给 `TerrainChunkSync`，逐帧核对确认时序（进场缺一块时依赖它的不显示、业务先装上那块也不确认、标记到达后确认、第一次改是 rebind 的全量且没有 remove、按下标的增量、离开撤销 / 再进入等 LoadBase、重连后新会话的 Full 帧逐块重新确认）。变异“视图装入时没有说法也确认”“Remove 不撤销确认”均红；“标记先于块装入就确认”被调度器自己的守卫挡住（等价变异）。client/README 写明地形视图线上 profile 是 `"default"`、块坐标取自 subject ID。没有行为改动；Unity 未跑。

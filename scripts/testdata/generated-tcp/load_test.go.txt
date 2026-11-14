@@ -1,0 +1,473 @@
+package bootstrap
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"example.com/tcp-perf/db"
+	player "example.com/tcp-perf/game/entities/player"
+	accessplayer "example.com/tcp-perf/internal/access/player"
+	accessplayertcp "example.com/tcp-perf/internal/access/player/tcp"
+	"example.com/tcp-perf/internal/registry"
+	"example.com/tcp-perf/loadtest/protocol"
+	"example.com/tcp-perf/protocol/msgid"
+	"example.com/tcp-perf/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	data "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	robotprotocol "github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
+)
+
+type loadNoEffects struct{}
+
+func (loadNoEffects) Publish(context.Context, engine.OutboxItem) error {
+	return errors.New("unexpected effect in generated TCP fixture")
+}
+
+type loadClient struct {
+	conn                                  *session.Session
+	id                                    int64
+	mu                                    sync.Mutex
+	decoder                               *entitysync.Decoder
+	state                                 *db.PlayerDao
+	syncPackets                           int
+	syncError                             error
+	accepted                              int64
+	latency, scheduledLatency, queueDelay []int64
+}
+
+func (c *loadClient) request(id uint32, payload any) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	message, err := c.conn.CallChecked(ctx, id, id, payload, func(m *session.Message) error {
+		switch r := m.Value.(type) {
+		case *pb.AddGoldResponse:
+			if r.Code != 0 {
+				return session.ErrRejected
+			}
+		case *pb.EnterGameResponse:
+			if r.Code != 0 {
+				return session.ErrRejected
+			}
+		default:
+			return fmt.Errorf("invalid response %T", m.Value)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return message.Packet.Payload, nil
+}
+func (c *loadClient) push(m *session.Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.syncError != nil {
+		return
+	}
+	decoded, err := c.decoder.Decode(m.Packet.Payload)
+	if err != nil {
+		c.syncError = err
+		return
+	}
+	for _, obj := range decoded.Objects {
+		for _, component := range obj.Components {
+			if err := c.state.ApplySync(component.Update.Payload.BytesCopy()); err != nil {
+				c.syncError = err
+				return
+			}
+		}
+	}
+	c.syncPackets++
+}
+func (c *loadClient) synced() (int64, int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state.GetGold(), c.syncPackets, c.syncError
+}
+
+func TestGeneratedTCPPersistentLoad(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	uri, database := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI"), os.Getenv("ROOST_GENERATED_TCP_DB")
+	if uri == "" || !strings.HasPrefix(database, "roost_generated_tcp_") {
+		t.Fatal("isolated Mongo and unique fixture database required")
+	}
+	if err := registry.RegisterAll(); err != nil {
+		t.Fatal(err)
+	}
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	mapping, _, err := data.NewDatabaseMap(data.DatabaseMapConfig{Declared: data.DeclaredDatabases(), Configured: map[string]string{db.DatabaseMain: database}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database, Databases: mapping})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	walOpts := nestwal.DefaultOptions(os.Getenv("ROOST_GENERATED_TCP_WAL"))
+	walOpts.GroupCommitInterval = 2 * time.Millisecond
+	wal, err := nestwal.Open(walOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outboxStore, err := engine.NewMongoOutboxStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := engine.NewOutboxWorker(outboxStore, loadNoEffects{}, engine.OutboxWorkerOptions{Owner: database})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := engine.NewRuntime(store, wal, projector, outbox, EntityAccess, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: []string{"handlerAddGold"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := runtime.Shutdown(stopCtx); err != nil {
+			t.Error(err)
+		}
+	})
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	_ = probe.Close()
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.enabled", true)
+	cfg.Set("player_access.tcp.addr", addr)
+	cfg.Set("sync.entity.interval", "10ms")
+	reg := app.NewRegistry(cfg)
+	if err := reg.Register(mods.ModDataEngine, runtime); err != nil {
+		t.Fatal(err)
+	}
+	enabled := os.Getenv("SELF_SYNC") == "1"
+	nestMod := kitnest.NewMod(EntityAccess)
+	tcp := accessplayertcp.NewMod()
+	if enabled {
+		nestMod = kitnest.NewModWithEntitySync(EntityAccess, PlayerSelfSync.EntitySyncSetup())
+		tcp = tcp.WithSelfSync(PlayerSelfSync)
+	}
+	access := accessplayer.NewMod()
+	all := []app.Mod{nestMod, access, tcp}
+	for _, mod := range all {
+		if err := mod.Init(cfg); err != nil {
+			t.Fatal(mod.Name(), err)
+		}
+	}
+	for _, mod := range all {
+		if p, ok := mod.(interface{ Provide(*app.Registry) error }); ok {
+			if err := p.Provide(reg); err != nil {
+				t.Fatal(mod.Name(), err)
+			}
+		}
+	}
+	for _, mod := range all {
+		if err := mod.Start(); err != nil {
+			t.Fatal(mod.Name(), err)
+		}
+	}
+	t.Cleanup(func() {
+		stopCtx, c := context.WithTimeout(context.Background(), 30*time.Second)
+		defer c()
+		if err := tcp.StopWithContext(stopCtx); err != nil {
+			t.Error(err)
+		}
+		if err := nestMod.StopWithContext(stopCtx); err != nil {
+			t.Error(err)
+		}
+	})
+	n, _ := strconv.Atoi(os.Getenv("CONNECTIONS"))
+	seconds, _ := strconv.Atoi(os.Getenv("ROOST_GENERATED_TCP_SECONDS"))
+	rate, rateErr := strconv.Atoi(os.Getenv("OPEN_LOOP_RATE"))
+	if rateErr != nil || rate < 0 || rate > 100000 {
+		t.Fatal("OPEN_LOOP_RATE must be 0..100000")
+	}
+	if n < 1 || n > 5000 || seconds < 1 || seconds > 300 {
+		t.Fatal("connections must be 1..5000, seconds 1..300")
+	}
+	clients := make([]*loadClient, n)
+	enter := &pb.EnterGameRequest{}
+	payload := &pb.AddGoldRequest{}
+	protocols := robotprotocol.NewRegistry(nil)
+	protocol.RegisterDefaults(protocols)
+	recorder := &session.Recorder{}
+	for i := range clients {
+		sequence := int64(10000 + i)
+		if os.Getenv("ENTITY_MODE") == "shared" {
+			sequence = 10000
+		}
+		id, err := entity.BuildEntityID(sequence, player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := transport.DialPlayerTCP(ctx, transport.Config{Endpoint: addr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WritePackets([]*transport.Packet{transport.AuthPacket(fmt.Sprintf("player:%d:%d", sequence, i))}); err != nil {
+			t.Fatal(err)
+		}
+		authTimer := time.AfterFunc(15*time.Second, func() { _ = conn.Close() })
+		ack, err := conn.ReadPacket()
+		authTimer.Stop()
+		if err != nil || ack.MsgID != 0 {
+			t.Fatal("login ack", ack, err)
+		}
+		c := &loadClient{conn: session.New(conn, protocols, recorder), id: id, decoder: entitysync.NewDecoder(frame.Limits{}), state: db.NewPlayerDao()}
+		clients[i] = c
+		t.Cleanup(func() { _ = c.conn.Close() })
+		c.conn.RegisterPushHandler(msgid.MsgSelfSync, c.push)
+		raw, err := c.request(msgid.MsgEnterGame, enter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := pb.UnmarshalEnterGameResponse(raw)
+		if err != nil || response.Code != 0 {
+			t.Fatal("enter", response, err)
+		}
+	}
+	if err := projector.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	baseline := projector.Stats()
+	walBefore := wal.Stats()
+	var wg sync.WaitGroup
+	var failed, dropped, offered atomic.Int64
+	errorsOut := make(chan error, n)
+	start := time.Now()
+	duration := time.Duration(seconds) * time.Second
+	until := start.Add(duration)
+	// 每条连接只有一个读写 owner；开环调度独立于响应，队列有界，满时记录丢弃而不阻塞到变成闭环。
+	jobs := make(chan time.Time, n*2)
+	for _, c := range clients {
+		wg.Go(func() {
+			for {
+				planned := time.Now()
+				if rate > 0 {
+					var ok bool
+					planned, ok = <-jobs
+					if !ok {
+						return
+					}
+				} else {
+					if !planned.Before(until) {
+						return
+					}
+					offered.Add(1)
+				}
+				sent := time.Now()
+				raw, err := c.request(msgid.MsgAddGold, payload)
+				if err != nil {
+					failed.Add(1)
+					errorsOut <- err
+					return
+				}
+				response, err := pb.UnmarshalAddGoldResponse(raw)
+				if err != nil || response.Code != 0 {
+					failed.Add(1)
+					errorsOut <- fmt.Errorf("add reply %+v: %v", response, err)
+					return
+				}
+				finished := time.Now()
+				c.accepted++
+				c.latency = append(c.latency, finished.Sub(sent).Microseconds())
+				c.scheduledLatency = append(c.scheduledLatency, finished.Sub(planned).Microseconds())
+				c.queueDelay = append(c.queueDelay, sent.Sub(planned).Microseconds())
+			}
+		})
+	}
+	if rate > 0 {
+		count := int64(seconds) * int64(rate)
+		for i := int64(0); i < count; i++ {
+			planned := start.Add(time.Duration(i) * time.Second / time.Duration(rate))
+			if wait := time.Until(planned); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					t.Fatal(ctx.Err())
+				}
+			}
+			offered.Add(1)
+			if time.Since(planned) >= time.Second/time.Duration(rate) {
+				dropped.Add(1)
+				continue
+			}
+			select {
+			case jobs <- planned:
+			default:
+				dropped.Add(1)
+			}
+		}
+		close(jobs)
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	if rate > 0 {
+		for range jobs {
+			dropped.Add(1)
+		}
+	}
+	close(errorsOut)
+	var accepted int64
+	expected := map[int64]int64{}
+	var latency, scheduled, queue []int64
+	for _, c := range clients {
+		accepted += c.accepted
+		expected[c.id] += c.accepted
+		latency = append(latency, c.latency...)
+		scheduled = append(scheduled, c.scheduledLatency...)
+		queue = append(queue, c.queueDelay...)
+	}
+	// 停止业务后先等待全部投影；最终值从新 Manager/Repository 冷加载，不用热实体替代持久验证。
+	drainStart := time.Now()
+	if err := projector.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	drainTime := time.Since(drainStart)
+	cold, err := engine.NewEntityRepository(entity.NewEntityManager(), store, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted int64
+	for id, want := range expected {
+		v, err := cold.LoadEntity(ctx, id, player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := v.(*player.Player).Dao().GetGold()
+		if got != want {
+			t.Fatalf("cold Gold id=%d got=%d acknowledged=%d", id, got, want)
+		}
+		persisted += got
+	}
+	syncPackets := 0
+	if enabled {
+		for _, c := range clients {
+			deadline := time.Now().Add(15 * time.Second)
+			for {
+				gold, packets, err := c.synced()
+				if err != nil {
+					t.Fatal("self sync", err)
+				}
+				if gold == expected[c.id] {
+					syncPackets += packets
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("self sync gold %d want %d", gold, expected[c.id])
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}
+	stats := projector.Stats()
+	if accepted == 0 || offered.Load() != accepted+failed.Load()+dropped.Load() || stats.WALUnacked != 0 {
+		t.Fatal("load accounting or WAL drain mismatch", offered.Load(), accepted, failed.Load(), dropped.Load(), stats)
+	}
+	report := map[string]any{
+		"durability":                      os.Getenv("DURABILITY"),
+		"self_sync":                       enabled,
+		"entity_mode":                     os.Getenv("ENTITY_MODE"),
+		"connections":                     n,
+		"entities":                        len(expected),
+		"seconds":                         seconds,
+		"open_loop_rate":                  rate,
+		"offered":                         offered.Load(),
+		"accepted":                        accepted,
+		"errors":                          failed.Load(),
+		"dropped":                         dropped.Load(),
+		"elapsed_seconds":                 elapsed.Seconds(),
+		"acknowledged_tps":                float64(accepted) / elapsed.Seconds(),
+		"tcp_rtt_us":                      loadPercentiles(latency),
+		"scheduled_to_reply_us":           loadPercentiles(scheduled),
+		"client_queue_us":                 loadPercentiles(queue),
+		"projection_drain_ms":             drainTime.Milliseconds(),
+		"projected_during_load_and_drain": stats.Projected - baseline.Projected,
+		"wal_unacked":                     stats.WALUnacked,
+		"wal_append_records":              wal.Stats().Appended - walBefore.Appended,
+		"wal_syncs":                       wal.Stats().Syncs - walBefore.Syncs,
+		"persisted_gold":                  persisted,
+		"cold_verified":                   true,
+		"self_sync_packets":               syncPackets,
+		"capacity_claim":                  false,
+		"robot_requests":                  recorder.Snapshot(),
+	}
+	encoded, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("ROOST_GENERATED_TCP_REPORT"), append(encoded, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Log(string(encoded))
+	for err := range errorsOut {
+		t.Error(err)
+	}
+	if failed.Load() != 0 {
+		return
+	}
+	for _, c := range clients {
+		_ = c.conn.Close()
+	}
+	if err := tcp.StopWithContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := nestMod.StopWithContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Database(database).Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+func loadPercentiles(samples []int64) map[string]int64 {
+	if len(samples) == 0 {
+		return map[string]int64{}
+	}
+	slices.Sort(samples)
+	return map[string]int64{"p50": samples[(len(samples)*50+99)/100-1], "p99": samples[(len(samples)*99+99)/100-1], "max": samples[len(samples)-1]}
+}

@@ -1,0 +1,13 @@
+package handler
+
+import (
+	player "example.com/tcp-perf/game/entities/player"
+	"example.com/tcp-perf/protocol/pb"
+)
+
+// 每次已接受请求恰好加一；重复请求不是幂等重试，客户端不自动重发。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAddGold(target player.IWalletEntity, _ *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
+	return &pb.AddGoldResponse{Gold: target.WalletComp().AddGold()}, nil
+}

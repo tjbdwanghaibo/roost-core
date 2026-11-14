@@ -1,0 +1,22 @@
+package player
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+type Controller struct {
+	registry   *app.Registry
+	nestClient nest.Client
+}
+
+func FromRegistry(reg *app.Registry) (*Controller, error) {
+	client, ok := app.Lookup[nest.Client](reg, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("missing Nest client")
+	}
+	return &Controller{registry: reg, nestClient: client}, nil
+}
+func (c *Controller) NestClient() nest.Client { return c.nestClient }
+func (c *Controller) Registry() *app.Registry { return c.registry }
