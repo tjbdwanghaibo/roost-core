@@ -240,6 +240,17 @@ func startWALTestMod(service string, sid int, dir string) (*Mod, error) {
 }
 
 func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
+	// background_checkpoint 不写时关闭（M-19 开关对照未测，缺省保持同步 checkpoint）。
+	defaults := viper.New()
+	defaults.Set("server_type", "game")
+	defaults.Set("persistence.engine", "dataengine")
+	defaultMod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := defaultMod.Init(defaults); err != nil {
+		t.Fatal(err)
+	}
+	if defaultMod.cfg.projector.BackgroundCheckpoint {
+		t.Fatal("background_checkpoint is on without being configured")
+	}
 	cfg := viper.New()
 	cfg.Set("server_type", "game")
 	cfg.Set("persistence.engine", "dataengine")

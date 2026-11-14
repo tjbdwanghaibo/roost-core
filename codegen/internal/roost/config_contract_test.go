@@ -1327,3 +1327,31 @@ func TestGeneratedRemoteEntityKeysCarryTheProjectPrefix(t *testing.T) {
 		}
 	}
 }
+
+// dataengine.projection.background_checkpoint（后台 checkpoint，2026-11-14 合入）缺省关闭：声明为 bool、缺省 false，
+// 不写进生成的配置（Starter 为 false，新工程不显式带它）；doctor / config-check 按同一份声明拒绝非布尔值。
+// M-19 的开 / 关对照出来之前，改缺省或写进生成配置都要维护者决定。
+func TestBackgroundCheckpointIsDeclaredOffByDefault(t *testing.T) {
+	var key *configschema.Key
+	for i, k := range kitConfigSchemas["dataengine"].Keys {
+		if k.Name == "dataengine.projection.background_checkpoint" {
+			key = &kitConfigSchemas["dataengine"].Keys[i]
+		}
+	}
+	if key == nil {
+		t.Fatal("kitconfig_gen.go does not declare dataengine.projection.background_checkpoint")
+	}
+	if key.Kind != "bool" || key.Default != "false" || key.Starter {
+		t.Fatalf("background_checkpoint declaration = %+v; want bool, default false, not a starter key", *key)
+	}
+	errs := kitConfigSchemas["dataengine"].Check(configschema.NewMapSource(map[string]any{
+		"dataengine": map[string]any{"projection": map[string]any{"background_checkpoint": "sometimes"}},
+	}), false)
+	found := false
+	for _, err := range errs {
+		found = found || strings.Contains(err.Error(), "background_checkpoint")
+	}
+	if !found {
+		t.Fatalf("config check accepted background_checkpoint: sometimes (errors %v)", errs)
+	}
+}
