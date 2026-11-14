@@ -28,7 +28,7 @@ func TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations(t *testing.T) {
 		{"if err := c.body.Leave(); err != nil {\n\t\treturn false, err\n\t}", "// injected: do not leave the scene on death", "TestMonsterDeathHidesButRetainsSpawnSlotUntilRespawn"},
 		{"if b.GetTarget() == target && c.body.Move.Moving() {", "if false && b.GetTarget() == target && c.body.Move.Moving() {", "TestMonsterChasesPublishedPlayerWithoutRestartingSlowFollow"},
 	}
-	path := filepath.Join(root, "game/entities/monster/monster_actor_component.go")
+	path := filepath.Join(root, "game/components/monsteractor/monsteractor.go")
 	original, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

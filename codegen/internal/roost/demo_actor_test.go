@@ -37,7 +37,7 @@ func TestDemoActorConsumesOneBodyAndPreservesMovementTransactions(t *testing.T) 
 		{"MaxPathPoints: 4096", "MaxPathPoints: 256", "TestPlayerSharedBodyRetainsDemoRouteBudget", "demo route budget shrank"},
 		{"c.body.Stop()", "// injected: omit stopping the old walk", "TestAPlayerWalksToItsGoalOnItsOwnHeartbeatAndTheWatcherSeesTheSteps", "after a teleport"},
 	}
-	path := filepath.Join(root, "game/entities/player/map_component.go")
+	path := filepath.Join(root, "game/components/mapview/mapview.go")
 	for _, m := range mutations {
 		raw, err := os.ReadFile(path)
 		if err != nil {

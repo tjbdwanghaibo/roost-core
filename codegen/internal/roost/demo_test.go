@@ -993,7 +993,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if matchmaker := read("internal/service/game/matchmaker.go"); !strings.Contains(matchmaker, "matcher.Commit(") || !strings.Contains(matchmaker, "grouping.Group(") || !strings.Contains(matchmaker, "Sync_RecordMatch(") {
 		t.Errorf("matchmaker does not drive the match service and record into the World:\n%s", matchmaker)
 	}
-	if stats := read("game/handler/world_stats.go"); !strings.Contains(stats, "(world.Stats, error)") {
+	if stats := read("game/handler/world_stats.go"); !strings.Contains(stats, "(view.StatsSnapshot, error)") {
 		t.Errorf("world_stats handler does not return the counters as a value:\n%s", stats)
 	}
 	if config := read("configs/service/config.match.yaml"); !strings.Contains(config, "- duel:2:default") {
