@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1237,6 +1238,158 @@ func TestConcurrentPublishesLoseNothingAndDoNotReuseASequence(t *testing.T) {
 	if stored := h.metrics.snapshot().stored; stored != publishers {
 		t.Fatalf("the stored metric counted %d, want %d", stored, publishers)
 	}
+}
+
+// 一个进程里同时发到同一个频道的消息（登录潮里每名玩家的登录公告都发到世界频道）在本进程排队写，不在存储上
+// 互相抢 compare-and-set：抢输的每一次都是白读白算（Redis 上是一次往返加整份频道状态的编解码），同时写的越多
+// 输得越多，输满 versionstore.DefaultMaxAttempts 次的那条以 conflict 失败。M-15 千人登录潮实测世界频道 281 条
+// 写成、6391 次 compare-and-set 抢输（docs/performance/benchmarks/login-burst-20261115）。
+//
+// optimisticState 像 Redis 一样在锁外算、写回时比版本，并用一道屏障让第一轮的 publishers 次读全部发生在任何
+// 一次写之前（凑不齐就等到 gatherWait）：不排队时这一轮必定有 publishers-1 次抢输；排队之后后来的写要等前一个
+// 写完才读，凑不齐屏障，一次都不该输，每条都写成。
+func TestConcurrentPublishesToOneChannelQueueInsteadOfFightingOverTheWrite(t *testing.T) {
+	ctx := context.Background()
+	const publishers = 8
+	state := newOptimisticState(publishers, 100*time.Millisecond)
+	h := newHarness(t, withState(state))
+
+	var wait sync.WaitGroup
+	failed := make(chan error, publishers)
+	for i := 0; i < publishers; i++ {
+		wait.Add(1)
+		go func(i int) {
+			defer wait.Done()
+			key := fmt.Sprintf("login-%d", i)
+			if _, err := h.service.PublishSystem(ctx, SystemPublishRequest{
+				Channel: world(), Actor: "game", Type: typeNotice, Body: []byte(key), RequestID: key,
+			}); err != nil {
+				failed <- fmt.Errorf("publish %s: %w", key, err)
+			}
+		}(i)
+	}
+	wait.Wait()
+	close(failed)
+	for err := range failed {
+		t.Error(err)
+	}
+	if lost := state.lost.Load(); lost != 0 {
+		t.Fatalf("%d compare-and-sets were lost among %d publishes from one process to one channel: "+
+			"they fought over the write instead of queueing for it", lost, publishers)
+	}
+	page, err := h.service.History(ctx, role(1), HistoryQuery{Channel: world(), Limit: MaxPageSize})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != publishers {
+		t.Fatalf("history holds %d of %d messages", len(page.Messages), publishers)
+	}
+}
+
+// 排队的写等的时候看自己的期限：轮不到就带着 ctx 的错误放弃、什么都不写；写完的键不留在表里。
+func TestAQueuedChannelWriteGivesUpAtItsDeadline(t *testing.T) {
+	var writers channelWriters
+	unlock, err := writers.lock(context.Background(), "world:7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := writers.lock(ctx, "world:7"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a write queued behind a held channel returned %v at its deadline, want context.DeadlineExceeded", err)
+	}
+	other, err := writers.lock(context.Background(), "world:8")
+	if err != nil {
+		t.Fatalf("another channel waited for this one: %v", err)
+	}
+	other()
+	unlock()
+	writers.mu.Lock()
+	left := len(writers.keys)
+	writers.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d channel keys stayed in the writer table after every write finished", left)
+	}
+}
+
+// optimisticState 是按 Redis 的方式工作的频道状态：Update 读出当前值与版本，放开锁去算，写回时版本变了就算输
+// 一次（lost），重读重算，输满 versionstore.DefaultMaxAttempts 次报 versionstore.ErrConflict。MemoryStore 在锁内
+// 算，永远不会输，测不出抢写。第一轮的读经过一道屏障：凑齐 gather 次读（或等满 gatherWait）才往下写。
+type optimisticState struct {
+	lost       atomic.Int64
+	gather     int
+	gatherWait time.Duration
+	gathered   chan struct{}
+	mu         sync.Mutex
+	reads      int
+	items      map[string]versionstore.Versioned[channelState]
+}
+
+func newOptimisticState(gather int, wait time.Duration) *optimisticState {
+	return &optimisticState{gather: gather, gatherWait: wait, gathered: make(chan struct{})}
+}
+
+// firstRead 是第一轮读之后的屏障；第 gather 次读放行所有人，之后的读不再等。
+func (s *optimisticState) firstRead() {
+	s.mu.Lock()
+	s.reads++
+	if s.reads == s.gather {
+		close(s.gathered)
+	}
+	waiting := s.reads <= s.gather
+	s.mu.Unlock()
+	if !waiting {
+		return
+	}
+	select {
+	case <-s.gathered:
+	case <-time.After(s.gatherWait):
+	}
+}
+
+func (s *optimisticState) Get(_ context.Context, key string) (versionstore.Versioned[channelState], bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.items[key]
+	return value, ok, nil
+}
+
+func (s *optimisticState) Update(ctx context.Context, key string, mutate versionstore.Mutate[channelState]) (versionstore.Versioned[channelState], bool, error) {
+	for attempt := 0; attempt < versionstore.DefaultMaxAttempts; attempt++ {
+		current, found, _ := s.Get(ctx, key)
+		if attempt == 0 {
+			s.firstRead()
+		}
+		next, save, err := mutate(current.Value, found)
+		if err != nil {
+			return versionstore.Versioned[channelState]{}, false, err
+		}
+		if !save {
+			return current, false, nil
+		}
+		s.mu.Lock()
+		if s.items[key].Version != current.Version {
+			s.mu.Unlock()
+			s.lost.Add(1)
+			continue
+		}
+		if s.items == nil {
+			s.items = map[string]versionstore.Versioned[channelState]{}
+		}
+		stored := versionstore.Versioned[channelState]{Value: next, Version: current.Version + 1}
+		s.items[key] = stored
+		s.mu.Unlock()
+		return stored, true, nil
+	}
+	return versionstore.Versioned[channelState]{}, false, versionstore.ErrConflict
+}
+
+func (s *optimisticState) Create(context.Context, string, channelState) (versionstore.Versioned[channelState], bool, error) {
+	return versionstore.Versioned[channelState]{}, false, errors.New("optimisticState: Create is not used by the chat store")
+}
+
+func (s *optimisticState) Delete(context.Context, string, versionstore.Versioned[channelState]) error {
+	return errors.New("optimisticState: Delete is not used by the chat store")
 }
 
 // Concurrent replays of one idempotency key must store exactly one message —
