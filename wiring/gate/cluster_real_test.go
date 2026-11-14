@@ -3,10 +3,13 @@
 package gate_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -311,6 +314,12 @@ func TestRealAcrossGatesALateOlderBindDoesNotDisplaceTheNewerConnection(t *testi
 			t.Error(err)
 		}
 	})
+	if executable := os.Getenv("ROOST_GATE_NATIVE_CROSS_EXE"); executable != "" {
+		runNativeCrossGate(t, executable, servers, oldEntered, func() {
+			releaseOnce.Do(func() { close(releaseOld) })
+		})
+		return
+	}
 	dial := func(gateIndex int, ticket string, generation uint64) net.Conn {
 		t.Helper()
 		payload, err := wire.EncodeAuth(ticket, generation)
@@ -366,4 +375,85 @@ func TestRealAcrossGatesALateOlderBindDoesNotDisplaceTheNewerConnection(t *testi
 	if err := echo(newer, 3); err != nil {
 		t.Errorf("the newer connection was displaced by an older connection's Bind that finished after it: %v", err)
 	}
+}
+
+// 原生客户端与 Go 夹具用管道确认握手阶段；放行旧 Bind 前，必须收到新连接的真实业务回包。
+func runNativeCrossGate(t *testing.T, executable string, servers []*gateway.TCPServer, oldEntered <-chan struct{}, releaseOld func()) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ports := make([]string, len(servers))
+	for i, server := range servers {
+		_, ports[i], _ = net.SplitHostPort(server.Addr().String())
+	}
+	cmd := exec.CommandContext(ctx, executable, ports...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+		if stderr.Len() != 0 {
+			t.Logf("native stderr: %s", stderr.String())
+		}
+	}()
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	send := func(command string) {
+		t.Helper()
+		if _, err := fmt.Fprintln(stdin, command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expect := func(want string) {
+		t.Helper()
+		select {
+		case line, ok := <-lines:
+			if !ok || line != want {
+				t.Fatalf("native output %q (open=%v), want %q", line, ok, want)
+			}
+			t.Log(line)
+		case <-ctx.Done():
+			t.Fatalf("waiting for native %q: %v", want, ctx.Err())
+		}
+	}
+	select {
+	case <-oldEntered:
+	case <-ctx.Done():
+		t.Fatal("the native old connection's Bind never reached Game")
+	}
+	send("connect-new")
+	expect("new-ready")
+	releaseOld()
+	send("old-released")
+	expect("PASS C++ same-session cross-Gate late-bind")
+	if err := cmd.Wait(); err != nil {
+		waited = true
+		t.Fatal(err)
+	}
+	waited = true
 }
