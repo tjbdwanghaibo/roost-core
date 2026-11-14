@@ -72,9 +72,13 @@ func (s Envelope) bsonDoc() envelopeBSONDoc {
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *Envelope) loadBSONDoc(doc envelopeBSONDoc) {
 	srcMarks := doc.Marks
-	s.marks = fmap.NewSmallSafeMap[int32, []byte](len(srcMarks))
-	for key, val := range srcMarks {
-		s.marks.Set(key, val)
+	// 存的是 null（嵌套结构体的零值 map 是 nil）就读回 nil：再写一次仍是 null，一次往返文档形状不变。
+	s.marks = nil
+	if srcMarks != nil {
+		s.marks = fmap.NewSmallSafeMap[int32, []byte](len(srcMarks))
+		for key, val := range srcMarks {
+			s.marks.Set(key, val)
+		}
 	}
 }
 
@@ -131,8 +135,13 @@ func (s Envelope) marksRawMap() map[int32][]byte {
 	return ret
 }
 
+// setMarksRawMap 与 marksRawMap 互逆：nil 进 nil 出（嵌套结构体的零值 map 是 nil、存成 null），
+// 读回再写不把 null 变成 {}。
 func (s *Envelope) setMarksRawMap(src map[int32][]byte) {
-	s.marks = fmap.NewSmallSafeMap[int32, []byte](len(src))
+	s.marks = nil
+	if src != nil {
+		s.marks = fmap.NewSmallSafeMap[int32, []byte](len(src))
+	}
 	for key, val := range src {
 		s.marks.Set(key, val)
 	}

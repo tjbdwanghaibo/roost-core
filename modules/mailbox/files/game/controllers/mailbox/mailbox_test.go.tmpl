@@ -393,6 +393,63 @@ func TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce(t *testing.T) {
 	}
 }
 
+// mailboxLateResultClient 把 Nest 请求原样交给引擎、等事务真的提交，再对调用方报“等结果超时”：
+// 模拟等结果的期限比事务先到（Request 返回错误，事务其实已提交）。
+type mailboxLateResultClient struct {
+	nest.Client
+	late atomic.Int32
+}
+
+func (c *mailboxLateResultClient) Request(ctx context.Context, name nest.HandlerName, id int64, params nest.Params, opts ...nest.SendOpt) (any, error) {
+	result, err := c.Client.Request(ctx, name, id, params, opts...)
+	if err == nil && c.late.Load() > 0 {
+		c.late.Add(-1)
+		return nil, fmt.Errorf("injected: %w while waiting for the result of %s", context.DeadlineExceeded, name)
+	}
+	return result, err
+}
+
+// Nest 调用因等结果超时返回错误、事务其实已提交：端点按失败归还预留、答错误码（玩家这次没看到到账），
+// 但钱已经在钱包里、账本里也有这封邮件。重试照常预留，发放在账本上认出这封邮件、不发第二笔，补上确认。
+func TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	late := &mailboxLateResultClient{Client: f.engine}
+	f.controller = newController(nil, late, f.mail)
+	mailID := f.send(t, mailboxPlayerA, "level reward", mailboxCoins(t, 100))
+
+	late.late.Store(1)
+	first := f.claim(t, mailboxPlayerA, mailID)
+	if first.Code == 0 || first.Amount != 0 || first.Held != 0 {
+		t.Fatalf("claim whose result timed out = %+v, want an error code and no amount", first)
+	}
+	if coins, ledger := f.wallet(t); coins != 100 || ledger != 1 {
+		t.Fatalf("premise: the timed-out grant did not commit (coins=%d ledger=%d)", coins, ledger)
+	}
+	if entry := f.entry(t, mailboxPlayerA, mailID); entry.Status == svcmail.StatusClaimed {
+		t.Fatalf("a claim that reported failure committed the mail: %+v", entry)
+	}
+	if listed := f.listed(t, mailboxPlayerA, mailID); !listed.Claimable {
+		t.Fatalf("the reservation was not released after the timed-out grant: %+v", listed)
+	}
+
+	retry := f.claim(t, mailboxPlayerA, mailID)
+	if retry.Code != 0 || retry.AttachmentType != "coins" || retry.Amount != 100 || retry.Held != 100 {
+		t.Fatalf("retry after the timed-out grant = %+v, want this mail's 100 coins and the balance still 100", retry)
+	}
+	if coins, ledger := f.wallet(t); coins != 100 || ledger != 1 {
+		t.Fatalf("the retry paid again: coins=%d ledger=%d, want 100 and one record", coins, ledger)
+	}
+	if status := f.entry(t, mailboxPlayerA, mailID).Status; status != svcmail.StatusClaimed {
+		t.Fatalf("the retry did not commit the mail: status %q", status)
+	}
+	if again := f.claim(t, mailboxPlayerA, mailID); again.Code != mailboxCodeAlreadyClaimed {
+		t.Fatalf("claim after the commit = %+v, want already claimed", again)
+	}
+	if coins, _ := f.wallet(t); coins != 100 {
+		t.Fatalf("coins = %d after all retries, want 100", coins)
+	}
+}
+
 // 这一版解不出来的附件：归还预留、答 mailbox_attachment，邮件保持未领、不被占用，认识它的版本上线后还能领。
 // 列表里它有附件但不可领、说不出是什么。三种：种类没登记；带着不认识的字段（道具写成了别的字段名）；
 // 以及没装 bag（没有联动）的工程里一份写得完全正确的道具附件——道具这个种类由联动登记，没有它就是没登记。

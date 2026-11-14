@@ -24,12 +24,22 @@ type gameConfig struct {
 	Entities, Players, MessageTargets, MessagesPerPlayer, HeartbeatHz, DirtyPercent, Workers, IOWorkers, Queue int
 	Duration                                                                                                   time.Duration
 	// Frontend 是普通业务的入口：direct（ticker 直接投递 Nest）、gate（ROOST_NEST_GAME_GATE=1）、
-	// embedded（ROOST_NEST_GAME_EMBEDDED=1）。SceneSync / SelfSync 对应 ROOST_NEST_GAME_SYNC / _SELF_SYNC。
+	// embedded（ROOST_NEST_GAME_EMBEDDED=1）。SceneSync / SelfSync 对应 ROOST_NEST_GAME_SYNC / _SELF_SYNC
+	// （两者都可以叠在 gate 或 embedded 上，互斥）。
 	Frontend            string
 	SceneSync, SelfSync bool
 	// HeartbeatDriver 是心跳的驱动（ROOST_NEST_GAME_HEARTBEAT_DRIVER，见 heartbeat_driver_test.go）：ticker（缺省，
 	// 帧回调逐个 Dispatch）或 heartbeat（gameplay/heartbeat，每个 Unit 一个登记）。
 	HeartbeatDriver string
+	// HeartbeatDelivery 是 heartbeat 驱动的投递方式（ROOST_NEST_GAME_HEARTBEAT_DELIVERY：batch / dispatch，空串跟驱动缺省）。
+	HeartbeatDelivery string
+	// Layout 是场景 Sync 下 Unit 的布局（ROOST_NEST_GAME_LAYOUT）：spread（缺省，网格间距 30，与历史样本相同）或
+	// concentrated（全部挤进约一个 AOI 块，观察者集中、每个视野都顶到 MaxVisible）。
+	Layout string
+	// ObservedBlocks 是场景 Sync 下每次改值时玩家 Unit 额外声明的被观察块数（ROOST_NEST_GAME_OBSERVED_BLOCKS，缺省 0）：
+	// 大于 0 时改值走 Interest.QueueSpatial（与 SpatialComponent.MoveWithObservedBlocks 同一入口），覆盖自己右侧
+	// 连续 N 个块；块来源不占 MaxVisible，用来压 Block AOI 的额外扇出（INTEREST-BLOCK-AOI §5、§8）。
+	ObservedBlocks int
 }
 
 func envInt(t *testing.T, key string, fallback int) int {
@@ -107,6 +117,7 @@ type loadCounters struct {
 	planned, accepted, rejected                       uint64 // 只由 ticker 调度者写；调度完后读取。
 	completed, changed                                atomic.Uint64
 	firstError                                        string
+	firstErrorAt                                      time.Time
 	queueWait, handler, completion, changedCompletion timings
 	admitLag, clientQueue, serverQueue, serverDone    timings
 }
@@ -119,9 +130,11 @@ type loadCounters struct {
 //
 // sent 是模拟客户端把请求写进 TCP 之前的时刻；不经 Gate 的直接投递没有客户端，sent 等于 admitted。
 type streamResult struct {
-	Planned, Accepted, Rejected, Completed, EntityChanges   uint64
-	CompletedPerSecond                                      float64
-	FirstError                                              string
+	Planned, Accepted, Rejected, Completed, EntityChanges uint64
+	CompletedPerSecond                                    float64
+	FirstError                                            string
+	// FirstErrorAt 是首个拒绝的墙钟时刻（RFC3339Nano），与 ClientFirstFailure.At 比先后，定位哪一层先出错。
+	FirstErrorAt                                            string `json:",omitempty"`
 	QueueWait, Handler, Completion, ChangedEntityCompletion latencyResult
 	Harness                                                 harnessResult
 	Server                                                  serverResult
@@ -145,7 +158,7 @@ type serverResult struct {
 func (c *loadCounters) result(elapsed float64) streamResult {
 	return streamResult{
 		Planned: c.planned, Accepted: c.accepted, Rejected: c.rejected, Completed: c.completed.Load(),
-		EntityChanges: c.changed.Load(), CompletedPerSecond: float64(c.completed.Load()) / elapsed, FirstError: c.firstError,
+		EntityChanges: c.changed.Load(), CompletedPerSecond: float64(c.completed.Load()) / elapsed, FirstError: c.firstError, FirstErrorAt: wallTime(c.firstErrorAt),
 		QueueWait: c.queueWait.result(), Handler: c.handler.result(), Completion: c.completion.result(), ChangedEntityCompletion: c.changedCompletion.result(),
 		Harness: harnessResult{AdmitLag: c.admitLag.result(), ClientQueue: c.clientQueue.result()},
 		Server:  serverResult{QueueWait: c.serverQueue.result(), Completion: c.serverDone.result()},
@@ -262,7 +275,28 @@ type gameResult struct {
 	FinalNest                                           nest.DispatcherStats
 	// Beats 只在 heartbeat 驱动下有：驱动计数、心跳间隔、每个 Unit 的拍数与核对结论。
 	Beats *beatReport `json:",omitempty"`
+	// ClientFirstFailure 是模拟客户端（Gate / 嵌入 TCP）记下的第一个错误：读写、回包不符、Sync 帧解码或应用。
+	// 与 Messages / Heartbeats 的 FirstErrorAt 一起按墙钟排出“哪一层先出错”（首错定位）。
+	ClientFirstFailure *failureEvent `json:",omitempty"`
 }
+
+// failureEvent 是一层的第一个错误与它的墙钟时刻。
+type failureEvent struct {
+	At, Error string
+}
+
+// wallTime 把时刻写成 RFC3339Nano；零值为空串。
+func wallTime(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.Format(time.RFC3339Nano)
+}
+
+const (
+	layoutSpread       = "spread"
+	layoutConcentrated = "concentrated"
+)
 
 // 用商和余数计算，避免长时间高频负载在纳秒乘法中溢出。
 func eventOffset(sequence uint64, rate int) time.Duration {
@@ -314,11 +348,29 @@ func TestNestGameLoad(t *testing.T) {
 	default:
 		t.Fatalf("ROOST_NEST_GAME_HEARTBEAT_DRIVER must be %s or %s, got %q", heartbeatDriverTicker, heartbeatDriverBeat, c.HeartbeatDriver)
 	}
+	c.Layout = os.Getenv("ROOST_NEST_GAME_LAYOUT")
+	if c.Layout == "" {
+		c.Layout = layoutSpread
+	}
+	if c.Layout != layoutSpread && c.Layout != layoutConcentrated {
+		t.Fatalf("ROOST_NEST_GAME_LAYOUT must be %s or %s, got %q", layoutSpread, layoutConcentrated, c.Layout)
+	}
+	c.ObservedBlocks = envInt(t, "ROOST_NEST_GAME_OBSERVED_BLOCKS", 0)
+	if c.ObservedBlocks < 0 || c.ObservedBlocks > 64 {
+		t.Fatalf("ROOST_NEST_GAME_OBSERVED_BLOCKS must be 0..64, got %d", c.ObservedBlocks)
+	}
+	if (c.ObservedBlocks > 0 || c.Layout != layoutSpread) && !c.SceneSync {
+		t.Fatal("ROOST_NEST_GAME_LAYOUT / ROOST_NEST_GAME_OBSERVED_BLOCKS shape the scene Sync (ROOST_NEST_GAME_SYNC=1); without it nothing reads the positions")
+	}
+	c.HeartbeatDelivery = os.Getenv("ROOST_NEST_GAME_HEARTBEAT_DELIVERY")
+	if c.HeartbeatDelivery != "" && c.HeartbeatDriver != heartbeatDriverBeat {
+		t.Fatal("ROOST_NEST_GAME_HEARTBEAT_DELIVERY applies to ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat only; the ticker driver dispatches every beat itself")
+	}
 	switch {
 	case c.SceneSync && c.Frontend == "direct":
 		t.Fatal("Sync mixed load requires real Gate or embedded TCP")
-	case c.SelfSync && c.Frontend != "embedded":
-		t.Fatal("self_sync load runs over embedded TCP only (ROOST_NEST_GAME_EMBEDDED=1)")
+	case c.SelfSync && c.Frontend == "direct":
+		t.Fatal("self_sync load needs a player connection: embedded TCP (ROOST_NEST_GAME_EMBEDDED=1) or the independent Gate (ROOST_NEST_GAME_GATE=1)")
 	case c.SelfSync && c.SceneSync:
 		// 一个 SubjectSyncState 只能登记在一个 Manager（entitysync.ErrSubjectRegisteredElsewhere）；生产同样不支持
 		// 场景与自身视图同时覆盖玩家实体（PLAYER-ACCESS §7）。
@@ -419,7 +471,7 @@ func TestNestGameLoad(t *testing.T) {
 	var beats *beatLoad
 	var beatSeq atomic.Uint64
 	if c.HeartbeatDriver == heartbeatDriverBeat {
-		beats, err = newBeatLoad(units, beatPeriod, c.DirtyPercent, func(u *Unit, change bool, _ heartbeat.Beat) error {
+		beats, err = newBeatLoad(units, beatPeriod, c.DirtyPercent, c.HeartbeatDelivery, func(u *Unit, change bool, _ heartbeat.Beat) error {
 			began := time.Now()
 			in := invocation{planned: began, admitted: began, sent: began, change: change, sample: beatSeq.Add(1)%16 == 0, heartbeat: true}
 			if change && stateSync != nil {
@@ -506,9 +558,9 @@ func TestNestGameLoad(t *testing.T) {
 			if err := dispatchErr; err != nil {
 				counter.rejected++
 				if counter.firstError == "" {
-					counter.firstError = err.Error()
+					counter.firstError, counter.firstErrorAt = err.Error(), time.Now()
 					// 只在首个已发生的拒绝后采诊断，不能给健康样本持续加栈采样开销。
-					t.Logf("first admission failure: heartbeat=%v elapsed=%s planned_lag=%s due=%v planned=[%d %d] completed=[%d %d] nest=%+v err=%v", k == 1, now.Sub(start), time.Since(planned), due, messages.planned, heartbeats.planned, messages.completed.Load(), heartbeats.completed.Load(), engine.Stats(), err)
+					t.Logf("first admission failure at %s: heartbeat=%v elapsed=%s planned_lag=%s due=%v planned=[%d %d] completed=[%d %d] nest=%+v err=%v", wallTime(counter.firstErrorAt), k == 1, now.Sub(start), time.Since(planned), due, messages.planned, heartbeats.planned, messages.completed.Load(), heartbeats.completed.Load(), engine.Stats(), err)
 					stack := make([]byte, 16<<20)
 					n := runtime.Stack(stack, true)
 					if saveErr := os.WriteFile(fmt.Sprintf("%s.failure-%d.stack", output, k), stack[:n], 0600); saveErr != nil {
@@ -649,6 +701,11 @@ func TestNestGameLoad(t *testing.T) {
 	if syncReport != nil {
 		r.EntityValuesVerified = r.EntityValuesVerified && syncReport.ValuesVerified
 		r.LatencyPassed = r.LatencyPassed && syncReport.LatencyPassed
+	}
+	if network != nil {
+		if failure, at := network.firstFailure(); failure != nil {
+			r.ClientFirstFailure = &failureEvent{At: wallTime(at), Error: failure.Error()}
+		}
 	}
 	if gateNetwork != nil {
 		r.GateEnabled = true

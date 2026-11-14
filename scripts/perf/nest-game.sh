@@ -4,10 +4,16 @@
 #   缺省               ticker 直接投递 Nest；
 #   ROOST_NEST_GAME_GATE=1      TCP → 独立 Gate → NATS → Game Ingress → Nest（需私有 ROOST_DATAENGINE_IT_NATS_URL）；
 #   ROOST_NEST_GAME_EMBEDDED=1  TCP → Game 进程内 TCPServer + TCPRuntime → Nest（不需要 NATS，见 embedded_load_test.go）。
-# 叠加 Sync：ROOST_NEST_GAME_SYNC=1 场景 Sync（GATE 或 EMBEDDED）；ROOST_NEST_GAME_SELF_SYNC=1 自身视图（只 EMBEDDED，
+# 叠加 Sync：ROOST_NEST_GAME_SYNC=1 场景 Sync（GATE 或 EMBEDDED）；ROOST_NEST_GAME_SELF_SYNC=1 自身视图（GATE 或 EMBEDDED，
 # 与 SYNC=1 互斥）。嵌入模式可选 ROOST_NEST_GAME_TCP_RESIDENT_BYTES 覆盖出站驻留预算。正式参数见 docs/performance/README.md。
 # 心跳的驱动：ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker（缺省，帧回调逐个投递）或 heartbeat（gameplay/heartbeat，
 # 每个 Unit 一个登记，周期 1s / ROOST_NEST_GAME_HZ，必须是心跳档位：1、2、5、10、20Hz）。
+# heartbeat 驱动的投递方式：ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch（Nest 批量作业）| dispatch（每拍单目标 Dispatch），
+# 空跟驱动缺省（batch）；ticker 驱动下给值直接报错。生效方式进结果的 Beats.Delivery。
+# Block AOI（只对 ROOST_NEST_GAME_SYNC=1）：ROOST_NEST_GAME_LAYOUT=spread（缺省，网格间距 30）| concentrated（全部挤进约
+# 一个 AOI 块，观察者集中）；ROOST_NEST_GAME_OBSERVED_BLOCKS=N（0..64，缺省 0）玩家 Unit 每次改值经 QueueSpatial 额外覆盖右侧
+# N 个块，压块覆盖的额外扇出。首错定位：结果的 Messages/Heartbeats.FirstErrorAt 与 ClientFirstFailure.At 按墙钟比先后，
+# 值不收敛时日志列出缺少 / 多出的对象及其在 Manager 里是否已订阅。
 set -euo pipefail
 # 复用同一正式生成流程，仅验证手写空间组件，不启动负载或外部服务。
 test_pattern='^TestNestGameLoad$'

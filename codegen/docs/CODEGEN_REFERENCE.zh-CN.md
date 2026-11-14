@@ -445,7 +445,7 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 | `list` | 列出模块、依赖与它追加的状态字段 | 不需要在工程里执行 |
 | `plan <name…>` | 算出安装顺序（依赖在前）、会先执行的 `roost add`、会新声明的托管框架服务（`framework_services`）、追加的 DAO 字段、分配的号、写入的文件 | 不改动工程 |
 | `add <name…>` | 按同一份计划安装，运行全部生成器 | 已安装的模块不再处理；不覆盖业务文件 |
-| `verify [name…]` | 每个已装模块跑自带场景，要求通过数等于清单里的数、零跳过；再跑 `go build`、`go vet`、`roost id check`、`roost generate --check` | 场景用替身提交器，不连真实依赖 |
+| `verify [name…]` | 每个已装模块跑自带场景，要求通过的顶层场景数等于清单里的数（子测试不另算）、任何一层零跳过；再跑 `go build`、`go vet`、`roost id check`、`roost generate --check` | 场景用替身提交器，不连真实依赖 |
 
 自带实体用清单 `entities: [Room]`：模板提供 Entity / DAO，`{{ID:entity:Room}}` 分配实体号，安装器补 lifecycle，并在同一暂存区刷新 owner / handler 接线；失败整体回退，不作为保留的前置步骤。细节见 [modules/README](../../modules/README.md#自带实体)。
 

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+- **生成器与模块的遗留一批**（codegen / modules，2026-11-14）：
+  - **`roost module verify` 只数顶层场景**（#92）：`verify.pass` 定为顶层测试数，`t.Run` 的子测试不另算；任何一层的 `--- SKIP` 仍算跳过。唯一用子测试的 rehome 由 46 改为 44。
+  - **`-template game` 缺省带 Player 的主 DAO**（#58）：新工程有 `db/def/player.go` 的 `PlayerDao`，模块安装不再列这条前置；照旧再跑 `roost add dao Player --entity Player` 只报已有、不改文件（同一 DAO 已接在该实体上时）。
+  - **嵌套类型的 nil map 往返不再改形状**（#60）：`null` 读回仍是 nil、再写仍是 `null`（原先变成 `{}`）。只改嵌套结构体的读回，顶层 map 本来就稳定。
+  - **模块场景补用例 / 去掉对工程配置表的依赖**：stamina 免费补满（#78，25 → 26）、mailbox 等结果超时而已提交的领取（#83，32 → 33）；purchase+bag、bag+gm 的场景装载自带道具行，工程换表后不变红（#104）。
+  - **Nest 生命周期用例与生成物同步**（#199）：handler 内新建的生命周期用例改用 `wiring/entitylifecycle.Lifecycle[T]` 的逐条同形测试副本，`TestEntityLifecycleTestCopyMatchesWiring` 守卫两边一致；`GetOrCreate` 的“没有记录”改按加载器契约的 `entity.ErrAuthorityEntityNotFound` 判断（DataEngine 下行为不变）。
+  - **金样**：`client/spec/dao-collections.json` 跟上 578fa31f 起增量不带实体 ID（`dao-golden-runtime.sh` 的 `TestTrackedSyncChanges`）。
+  - **nest-game 压测夹具**：`ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch|dispatch`（#15）；独立 Gate 可叠 `SELF_SYNC=1`（#45）；场景 Sync 的 `ROOST_NEST_GAME_LAYOUT=concentrated`、`ROOST_NEST_GAME_OBSERVED_BLOCKS=N` 与首错定位（#178）。`OBSERVED_BLOCKS=4` 的短测在同一处不收敛（Manager 已订阅、客户端缺一个全量），根因尚未确认。对照测量等机器空闲。
+
 - **测试：独占模式 Remote 心跳在转移时的真实 Mongo 故障注入**（gameplay/movement，2026-11-14，KNOWN-LIMITS“独占模式 Remote 心跳的真实依赖故障注入”）：新增 `TestRealRemoteExclusiveTransferDuringAMongoFault`（`-tags integration`，要 toxiproxy）。旧 owner 的 Mongo 经本用例自建的代理直连主节点，三种故障时刻：转移前断开（确定未改、旧 owner 照常推进）、CAS 发出时断开（结果未知，旧实例冻结在 Recovering、零推进，恢复后解冻）、CAS 生效而回程超时（新 owner 立刻能写，旧实例冻结、恢复后被 fence）；都断言新 owner 拥有之后旧 owner 零推进。`realRemoteManagers` 抽出按 sid 换 Mongo 客户端与配置的 `realRemoteManagersWith`。变异“结果未知按未改处理”变红。独占模式不经 Redis，只注入 Mongo 故障。没有行为改动。
 
 - **测试夹具：SLG 联盟 Remote 交接先退出共享再转移**（scripts/testdata/slg，2026-11-14）：`TestSLGAllianceRemoteDelivery` 在共享模式下直接 `TransferRemoteOwnership`，期望旧 owner 写入被拒；按 REMOTE_ENTITY“多写者：本地副本与权威”，共享模式下每个进程都能写，转移不撤销其他写者，2026-11-04 起 `Fenced` 的旧实例由写准入从权威重载后照常写，所以 20/20 失败（`old owner kept writing after transfer`）。夹具改为先 `LeaveRemoteSharedMode` 回到独占、再转给 2001（独占转移把旧实例 fence），断言改为退出共享与转移后都独占、代际前进。只改夹具，没有框架行为改动。修后私有隔离环境 `ROOST_SLG_REAL=1 scripts/test-slg-generated.sh` 全部通过；旧夹具同环境复现红。

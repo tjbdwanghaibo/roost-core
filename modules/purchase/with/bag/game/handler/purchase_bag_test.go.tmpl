@@ -2,23 +2,21 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
-	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
 	"{{MODULE}}/game/purchase"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 func newPurchaseBag(t *testing.T) *purchaseFixture {
 	t.Helper()
-	registry := configdata.NewRegistry()
-	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := configdata.NewStore(registry, "../../configs/data").Load(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	purchaseBagLoadItems(t)
 	return newPurchaseFixture(t)
 }
 func purchaseItemGrant() purchase.Grant {
@@ -92,4 +90,34 @@ func TestWithPurchaseBagCommitFailureRollsBackBoth(t *testing.T) {
 		t.Fatal("retry did not grant exactly once")
 	}
 	f.expect(t, 1, 0, 1)
+}
+
+// purchaseBagLoadItems 装载这组联动自带的道具表（1001 药水单种上限 99、1002 体力券单种上限 999），不读工程的
+// configs/data：工程按 bag README 的“复用方式”换了道具表之后，这些场景照样成立。表按 bag 生成代码的
+// 名字与键类型登记（item、int64），只登记这一张；测试结束时把进程级的缺省 Store 与配置快照换回。
+func purchaseBagLoadItems(t *testing.T) {
+	t.Helper()
+	raw, err := json.Marshal([]schema.Item{{ID: 1001, Name: "potion", MaxStack: 99}, {ID: 1002, Name: "stamina ticket", MaxStack: 999}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.Item]{
+		Name: configdata.Name("item"), File: "item.json",
+		Key: func(row schema.Item) int64 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -18,7 +18,8 @@ import (
 )
 
 // 可选正式接入负载：普通业务改走 TCP → Gate → Core NATS → Game Ingress → Nest，HB 保持原 ticker。
-// Entity/DAO 由同一生成模块提供；SYNC=1 叠加正式 Interest/Sync。Saga/Remote 仍是独立专项。
+// Entity/DAO 由同一生成模块提供；SYNC=1 叠加正式 Interest/Sync，SELF_SYNC=1 叠加自身视图（接线同生成的
+// IngressMod.WithSelfSync：OnActive / OnClosed 交给 selfsync，推送经 Game Ingress）。Saga/Remote 仍是独立专项。
 type gateFrontend struct {
 	loadClients
 	server  *gateway.TCPServer
@@ -67,16 +68,24 @@ func newGateFrontend(t *testing.T, engine *nest.NestMgr, name nest.HandlerName, 
 		}
 		return &gateway.TCPResponse{MessageID: 2, Sequence: seq}, nil
 	}}
-	if stateSync != nil {
+	switch {
+	case stateSync != nil && stateSync.self:
+		// 自身视图：与生成的 IngressMod.WithSelfSync 相同——Game Ingress 的 OnActive / OnClosed 登记与撤销连接，
+		// 推送经 Game Ingress（BindPlayers）。
+		deps.OnActive = stateSync.selfSync.OnActive
+		deps.OnClosed = stateSync.selfSync.OnClosed
+	case stateSync != nil:
 		deps.OnActive = stateSync.active
 		deps.OnClosed = stateSync.closed
 	}
 	f.ingress, err = gateway.NewGameIngress(config, gameID, deps)
-	if stateSync != nil {
-		stateSync.gateTransport.Game = f.ingress
-	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	if stateSync != nil && stateSync.self {
+		stateSync.selfSync.BindPlayers(f.ingress)
+	} else if stateSync != nil {
+		stateSync.gateTransport.Game = f.ingress
 	}
 	if err = f.ingress.Start(); err != nil {
 		t.Fatal(err)

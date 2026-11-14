@@ -58,16 +58,24 @@ func addEntityDAO(root string, manifest Manifest, options AddOptions) ([]string,
 	}
 	daoSnake, daoType := toSnake(options.Name), toPascal(options.Name)+"Dao"
 	daoPath := filepath.Join(root, "db", "def", daoSnake+".go")
+	raw, err := os.ReadFile(entityPath)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(daoPath); err == nil {
+		// -template game 缺省已带 Player 的主 DAO：同一个 DAO 已接在这个实体上时什么都不做（照旧的步骤能重跑），
+		// 文件在而没接在这个实体上时仍然报错。
+		if entityHoldsDAO(raw, entityPath, toPascal(entityName), daoSnake, daoType) {
+			if source, locateErr := locateDaoStruct(root, daoType); locateErr == nil && source != nil {
+				fmt.Fprintf(options.Warnings, "%s already exists and %s already holds %s; nothing to do\n", relativeSlash(root, daoPath), toPascal(entityName), daoType)
+				return nil, nil
+			}
+		}
 		return nil, fmt.Errorf("%s already exists", relativeSlash(root, daoPath))
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 
-	raw, err := os.ReadFile(entityPath)
-	if err != nil {
-		return nil, err
-	}
 	updated, err := wireDAOField(raw, entityPath, toPascal(entityName), manifest.Project.Module+"/db", daoSnake, daoType)
 	if err != nil {
 		return nil, err
@@ -147,6 +155,24 @@ func wireDAOField(raw []byte, path, entityType, importPath, collection, daoType 
 		fieldName = "dao"
 	}
 	return wireNamedDAOField(raw, path, entityType, importPath, fieldName, collection, daoType)
+}
+
+// entityHoldsDAO 报告实体结构体是否已有 `dao:"<collection>"`、类型为 *<db>.<daoType> 的字段。
+func entityHoldsDAO(raw []byte, path, entityType, collection, daoType string) bool {
+	_, _, _, structure, err := parseEntityAggregate(raw, path, entityType)
+	if err != nil || !structHasTagValue(structure, "dao", collection) {
+		return false
+	}
+	for _, field := range structure.Fields.List {
+		star, ok := field.Type.(*ast.StarExpr)
+		if !ok {
+			continue
+		}
+		if selector, ok := star.X.(*ast.SelectorExpr); ok && selector.Sel.Name == daoType {
+			return true
+		}
+	}
+	return false
 }
 
 // wireNamedDAOField 同时用于 add dao 与模块附加 DAO；只追加声明，不另建运行时注册路径。

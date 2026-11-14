@@ -88,9 +88,13 @@ func (s *{{.Nested.Name}}) loadBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
 {{- range .Nested.Fields}}
 {{- if eq .Kind 2}}
 	src{{.Name}} := {{fromWire . (printf "doc.%s" .Name)}}
-	s.{{fieldVar .Name}} = {{mapNewExpr . (printf "len(src%s)" .Name)}}
-	for key, val := range src{{.Name}} {
-		s.{{fieldVar .Name}}.Set(key, val)
+	// 存的是 null（嵌套结构体的零值 map 是 nil）就读回 nil：再写一次仍是 null，一次往返文档形状不变。
+	s.{{fieldVar .Name}} = nil
+	if src{{.Name}} != nil {
+		s.{{fieldVar .Name}} = {{mapNewExpr . (printf "len(src%s)" .Name)}}
+		for key, val := range src{{.Name}} {
+			s.{{fieldVar .Name}}.Set(key, val)
+		}
 	}
 {{- else}}
 	s.{{fieldVar .Name}} = {{fromWire . (printf "doc.%s" .Name)}}
@@ -157,8 +161,13 @@ func (s {{$.Nested.Name}}) {{fieldVar .Name}}RawMap() {{rawMapType .}} {
 	return ret
 }
 
+// set{{.Name}}RawMap 与 {{fieldVar .Name}}RawMap 互逆：nil 进 nil 出（嵌套结构体的零值 map 是 nil、存成 null），
+// 读回再写不把 null 变成 {}。
 func (s *{{$.Nested.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
-	s.{{fieldVar .Name}} = {{mapNewExpr . "len(src)"}}
+	s.{{fieldVar .Name}} = nil
+	if src != nil {
+		s.{{fieldVar .Name}} = {{mapNewExpr . "len(src)"}}
+	}
 	for key, val := range src {
 		s.{{fieldVar .Name}}.Set(key, val)
 	}

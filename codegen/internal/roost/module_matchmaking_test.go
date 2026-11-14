@@ -18,7 +18,7 @@ func TestModuleMatchmakingGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("matchmaking/rehome: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"room": 22, "team": 35, "matchroom": 12, "matchmaking": 17, "rehome": 46, "team+rehome": 2, "matchmaking+rehome": 2})
+	checkTaskModuleRows(t, report, map[string]int{"room": 22, "team": 35, "matchroom": 12, "matchmaking": 17, "rehome": 44, "team+rehome": 2, "matchmaking+rehome": 2})
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "team", "matchroom", "matchmaking")
 	if moduleProjectDigest(t, root) != before {

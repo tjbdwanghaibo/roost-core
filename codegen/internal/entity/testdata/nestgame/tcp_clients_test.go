@@ -3,7 +3,9 @@ package nestgame
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -19,6 +21,7 @@ import (
 type loadFrontend interface {
 	dispatch(index int, in invocation) error
 	drain() error
+	firstFailure() (error, time.Time)
 	currentFailure() error
 }
 
@@ -32,10 +35,11 @@ type loadClients struct {
 	completed atomic.Uint64
 	roundTrip timings
 	// stream 是长尾采集里往返时延的流名（gate / embedded）。
-	stream   string
-	mu       sync.Mutex
-	failure  error
-	stopping atomic.Bool
+	stream    string
+	mu        sync.Mutex
+	failure   error
+	failureAt time.Time
+	stopping  atomic.Bool
 }
 
 // connect 拨号并完成鉴权（票据是玩家序号 1..Players），随后为每条连接启动读、写协程。
@@ -167,12 +171,21 @@ func (clients *loadClients) close() {
 	clients.readWait.Wait()
 }
 
+// recordFailure 记下第一个错误与它的墙钟时刻（首错定位），并立刻打到日志：之后 t.Fatal 时结果文件可能写不出来。
 func (clients *loadClients) recordFailure(err error) {
 	clients.mu.Lock()
 	defer clients.mu.Unlock()
 	if clients.failure == nil {
-		clients.failure = err
+		clients.failure, clients.failureAt = err, time.Now()
+		fmt.Fprintf(os.Stderr, "first %s client failure at %s: %v\n", clients.stream, clients.failureAt.Format(time.RFC3339Nano), err)
 	}
+}
+
+// firstFailure 返回第一个错误与它的墙钟时刻。
+func (clients *loadClients) firstFailure() (error, time.Time) {
+	clients.mu.Lock()
+	defer clients.mu.Unlock()
+	return clients.failure, clients.failureAt
 }
 
 func (clients *loadClients) currentFailure() error {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,19 +46,23 @@ type syncLoadReport struct {
 	VisibleMin, VisibleMax                              int
 	ValuesVerified, LatencyPassed                       bool
 	PlannedToClient, ChangedToClient, CommittedToClient latencyResult
+	// SelfOnline / SelfStranded 是自身视图在负载结束时的在线连接数与滞留玩家数（selfsync.Online / Stranded；
+	// 场景 Sync 下为 0）。独立 Gate 下没有嵌入 TCP 的出站计数，滞留玩家数从这里看。
+	SelfOnline, SelfStranded int `json:",omitempty"`
 }
 
 // syncGameLoad 是 Sync 负载的两种形态，客户端解码、终值核对与延迟口径相同：
 //   - 场景（ROOST_NEST_GAME_SYNC=1）：全部 Unit 登记在一个 Manager，Interest/AOI 决定每个玩家订阅谁（最多 49 个加自己）。
 //     独立 Gate 下会话 ID 是 Game Ingress 的 receiver（gatewiring.Transport）；嵌入 TCP 下会话 ID 就是玩家 ID，
 //     传输是 selfsync.PushPlayerFrame（与 game-demo 场景 sceneLane 同一条，见 embedded_load_test.go）。
-//   - 自身视图（ROOST_NEST_GAME_SELF_SYNC=1，只在嵌入 TCP 下）：玩家 Unit 由 wiring/selfsync 的 SelfView 登记，
+//   - 自身视图（ROOST_NEST_GAME_SELF_SYNC=1，嵌入 TCP 或独立 Gate）：玩家 Unit 由 wiring/selfsync 的 SelfView 登记，
 //     每个玩家只订阅自己；没有 Interest，NPC Unit 不启用 Sync。
 type syncGameLoad struct {
 	units    []*Unit
 	config   gameConfig
 	manager  *entitysync.Manager
 	interest *policy.Interest // 自身视图下为 nil
+	bounds   spatial.Rect     // 场景 Sync 的 AOI 范围
 	// gateTransport 只在独立 Gate 下非 nil，由 gateFrontend 接上 Game Ingress。
 	gateTransport                   *gatewiring.Transport
 	self                            bool
@@ -69,11 +75,36 @@ type syncGameLoad struct {
 	planned, changedTime, committed timings
 }
 
+// position 是 Unit 此刻的位置：网格上的固定格子加随 DAO 变化的小抖动。spread 网格间距 30（历史样本的布局）；
+// concentrated 把整个网格压进约 140×140（一个 150 的 AOI 块之内，间距至少 1），观察者全部集中在同一处。
 func (load *syncGameLoad) position(unit *Unit) spatial.Point {
 	i := entity.GetUniqueIDFromEntityID(unit.ID()) - 1
 	side := int64(math.Ceil(math.Sqrt(float64(load.config.Entities))))
-	return spatial.Point{X: 200 + (i%side)*30 + (unit.state.GetX()%7)*2, Y: 200 + (i/side)*30 + (unit.state.GetHP()%7)*2}
+	spacing := int64(30)
+	if load.config.Layout == layoutConcentrated {
+		spacing = max(1, 140/side)
+	}
+	return spatial.Point{X: 200 + (i%side)*spacing + (unit.state.GetX()%7)*2, Y: 200 + (i/side)*spacing + (unit.state.GetHP()%7)*2}
 }
+
+// observedBlocks 是玩家 Unit 在 at 处额外声明的被观察块：自己所在块右侧连续 ObservedBlocks 个（越界的跳过）。
+func (load *syncGameLoad) observedBlocks(at spatial.Point) []int64 {
+	if load.config.ObservedBlocks <= 0 {
+		return nil
+	}
+	blocks := make([]int64, 0, load.config.ObservedBlocks)
+	for k := 1; k <= load.config.ObservedBlocks; k++ {
+		next := spatial.Point{X: at.X + int64(k)*loadBlockSize, Y: at.Y}
+		if next.X >= load.bounds.Max.X {
+			break
+		}
+		blocks = append(blocks, load.interest.BlockAt(next))
+	}
+	return blocks
+}
+
+// loadBlockSize 是场景 Sync 的 AOI 块边长。
+const loadBlockSize = 150
 
 // enableUnitSync 打开一个 Unit 的同步内容；packer 不区分视图（场景与自身视图 "self" 都给全部同步字段）。
 func enableUnitSync(unit *Unit) {
@@ -100,7 +131,9 @@ func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, lane entitysync.
 		}
 	}
 	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
-	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49}})
+	// 右侧留出 ObservedBlocks 个块的余量，让覆盖扇出的块都在边界内。
+	load.bounds = spatial.Rect{Max: spatial.Point{X: side*30 + 500 + int64(c.ObservedBlocks)*loadBlockSize, Y: side*30 + 500}}
+	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: load.bounds, BlockSize: loadBlockSize, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +160,13 @@ func newSelfSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, access *enti
 	load.selfSync, err = selfsync.New(selfsync.Config{Entities: access, Kind: kindUnit, MessageID: 502})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.Frontend == "gate" {
+		// 独立 Gate：与生成的 IngressMod.WithSelfSync 相同，一帧的上限取 Game Ingress 的 MaxPayloadBytes，
+		// 在 Manager 创建之前交给 selfsync（gateFrontend 用的就是 gateway.DefaultConfig()）。
+		if err := load.selfSync.LimitFrameBytes(gateway.DefaultConfig().MaxPayloadBytes); err != nil {
+			t.Fatal(err)
+		}
 	}
 	setup := load.selfSync.EntitySyncSetup()
 	config := setup.Config
@@ -193,7 +233,12 @@ func (load *syncGameLoad) changed(unit *Unit, in invocation) error {
 		return nil
 	}
 	// 玩家 Unit 的主视野跟随它（Enter 时登记），事务移动把视野一起带走；NPC 只移动自己。
-	return load.interest.QueueMove(unit, load.position(unit))
+	at := load.position(unit)
+	if load.config.ObservedBlocks > 0 && entity.GetUniqueIDFromEntityID(unit.ID()) <= int64(load.config.Players) {
+		// 覆盖扇出：玩家 Unit 每次改值都重新声明被观察块（与 SpatialComponent.MoveWithObservedBlocks 同一入口）。
+		return load.interest.QueueSpatial(unit, at, load.observedBlocks(at))
+	}
+	return load.interest.QueueMove(unit, at)
 }
 func (load *syncGameLoad) start(t *testing.T, network loadFrontend) {
 	t.Helper()
@@ -316,6 +361,14 @@ func (load *syncGameLoad) wanted(index int) []int64 {
 		return []int64{load.units[index].ID()}
 	}
 	observer, _ := load.observerOf(load.units[index].ID())
+	if load.config.ObservedBlocks > 0 {
+		// 有覆盖扇出时可见集合不只是距离：取 Interest 归并全部来源（距离、块覆盖、self）之后要订阅的集合。
+		seen := load.interest.Seen(observer)
+		if !slices.Contains(seen, load.units[index].ID()) {
+			seen = append(seen, load.units[index].ID())
+		}
+		return seen
+	}
 	return append(load.interest.Visible(observer), load.units[index].ID())
 }
 func (load *syncGameLoad) valuesMatch() bool {
@@ -372,6 +425,9 @@ func (load *syncGameLoad) finish(t *testing.T, network loadFrontend) *syncLoadRe
 		mode = "self:" + mode
 	}
 	report := &syncLoadReport{Mode: mode, Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: math.MaxInt}
+	if load.self {
+		report.SelfOnline, report.SelfStranded = load.selfSync.Online(), load.selfSync.Stranded()
+	}
 	for index := range load.clients {
 		client := &load.clients[index]
 		client.mu.Lock()
@@ -390,8 +446,21 @@ func (load *syncGameLoad) mismatch() string {
 		client.mu.Lock()
 		if len(wanted) != len(client.objects) {
 			got := len(client.objects)
+			// 首错定位：列出多出与缺少的对象，以及缺少的对象此刻在 Manager 里是否订阅给了这个会话。
+			var missing, extra []string
+			observer, _ := load.observerOf(load.units[index].ID())
+			for _, id := range wanted {
+				if _, ok := client.objects[id]; !ok {
+					missing = append(missing, fmt.Sprintf("%d(subscribed=%v)", id, slices.Contains(load.manager.Subscribers(id), entitysync.SessionID(observer))))
+				}
+			}
+			for id := range client.objects {
+				if !slices.Contains(wanted, id) {
+					extra = append(extra, strconv.FormatInt(id, 10))
+				}
+			}
 			client.mu.Unlock()
-			return fmt.Sprintf("client=%d want count=%d got=%d wanted=%v", index, len(wanted), got, wanted)
+			return fmt.Sprintf("client=%d want count=%d got=%d missing=%v extra=%v wanted=%v", index, len(wanted), got, missing, extra, wanted)
 		}
 		for _, id := range wanted {
 			v, exists := client.objects[id]

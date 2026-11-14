@@ -1,10 +1,12 @@
 package roost
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -273,6 +275,33 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 	// v1.47.0：lifecycle 由 roost generate 生成到各实体包，不再有 game/lifecycle。
 	if _, err := os.Stat(filepath.Join(root, "game", "lifecycle")); !os.IsNotExist(err) {
 		t.Errorf("game/lifecycle still exists: %v", err)
+	}
+	// Player 缺省带主 DAO（db/def/player.go 的 PlayerDao，接在 Player 上），预加载与往 Player 加状态不用先 add dao。
+	definition, err := os.ReadFile(filepath.Join(root, "db", "def", "player.go"))
+	if err != nil || !strings.Contains(string(definition), "type PlayerDao struct") {
+		t.Errorf("the template has no Player DAO (db/def/player.go): %v\n%s", err, definition)
+	}
+	if source, err := locateDaoStruct(root, "PlayerDao"); err != nil || source == nil {
+		t.Errorf("locate PlayerDao = %v, %v", source, err)
+	}
+	playerEntity, _ := os.ReadFile(filepath.Join(root, "game", "entities", "player", "entity.go"))
+	if !strings.Contains(string(playerEntity), "PlayerDao") {
+		t.Errorf("the Player entity does not hold its DAO:\n%s", playerEntity)
+	}
+	// 旧的步骤（先 -template game、再 add dao Player --entity Player）照旧能跑：DAO 已接在 Player 上时什么都不改。
+	var warnings bytes.Buffer
+	if files, err := Add(root, AddOptions{Kind: "dao", Name: "Player", Entity: "Player", Warnings: &warnings}); err != nil || len(files) != 0 {
+		t.Errorf("add dao Player --entity Player on the template = %v, %v; want nothing to do", files, err)
+	}
+	if !strings.Contains(warnings.String(), "already") {
+		t.Errorf("add dao Player again did not say it had nothing to do: %q", warnings.String())
+	}
+	if after, _ := os.ReadFile(filepath.Join(root, "game", "entities", "player", "entity.go")); !bytes.Equal(after, playerEntity) {
+		t.Errorf("add dao Player again changed the entity:\n%s", after)
+	}
+	// 同名 DAO 文件已在、却没接在这个实体上时仍然报错，不静默跳过。
+	if _, err := Add(root, AddOptions{Kind: "dao", Name: "Player", Entity: "World", Warnings: io.Discard}); err == nil {
+		t.Error("add dao Player --entity World succeeded although db/def/player.go belongs to Player")
 	}
 	service, _ := os.ReadFile(filepath.Join(root, "internal", "service", "game", "service.go"))
 	if !strings.Contains(string(service), "world.EnsureWorld(") {

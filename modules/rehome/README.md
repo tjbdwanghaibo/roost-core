@@ -141,7 +141,7 @@
 
 ## 验证范围
 
-- `roost module verify rehome`：46 条场景（`game/rehome` 35、`game/handler` 8、`game/controllers/rehome` 3）；与 `enter` 的联动 5 条，与 `gm` 的联动 4 条。
+- `roost module verify rehome`：44 条场景（`game/rehome` 33、`game/handler` 8、`game/controllers/rehome` 3）；与 `enter` 的联动 5 条，与 `gm` 的联动 4 条。
 - **全部是离线的**：account 是真实的 `service/account` 服务但存储在进程内；Nest 是真实的引擎加替身提交器；玩家传输与 DataEngine 是只记事件的替身，所以“断开会话”“交出实体”与“搬档”都没有经过真实实现（搬档的 DataEngine 一侧另有框架单测与真实 Mongo 副本集上的 `TestRealMongoLocalPreloadAndCopyAcrossServers`）；两个服共用同一个进程内的 account 与同一份玩家档。没有 NATS、Redis、Mongo。
 - 覆盖：整条顺序、各种拒绝不写任何东西、发起被拒清意图、发起结果未知用中止拿结论、离开钩子与交出失败时中止、提交结果未知重发直到有结论、提交被拒转中止、搬档失败中止、中止时删目标副本、删除失败重试、补搬冲突时保留源档、撤屏障忙时重试、迁出表一人一行、`Binding` 先表后 account、离开中的玩家在闸门被拒、排空等待先前的请求、排空不完中止、复核不过中止、应答丢失后按当前绑定落定、对不上的绑定继续问、`Admit` 的三种回答、换回来的玩家重新放行、源服重启后续做、到达只做一次、意图对账、GM 入口。
 - **没有验证**：真实的 `HandOffEntity` 与经模块走到的真实搬档；两个真实 game 进程加 account 的演练（含每个阶段之后 kill -9）；等 WAL checkpoint 实际要多久；独立 Gate 部署；account 长时间不可用。
