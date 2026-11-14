@@ -15,14 +15,15 @@ def replace_once(text, old, new):
 driver = generated / "game/rehome/rehome_driver.go"
 text = driver.read_text()
 for anchor, stage in [
-    ("\tquiescing, cancel := context.WithTimeout(context.Background(), departBudget)", "accepted"),
-    ("\trechecking, cancel := context.WithTimeout(context.Background(), callBudget)", "quiesced"),
-    ("\tdeparting, cancel := context.WithTimeout(context.Background(), departBudget)", "leaving"),
-    ("\tcopying, cancel := context.WithTimeout(context.Background(), departBudget)", "handed-off"),
-    ("\td.finishCopied(move, verdict, binding, Aborted, &copied)", "committed"),
+    # 锚点带前导换行：D22 之后 copying 在异地清理分支里还有一处更深缩进的同形语句，只认函数体第一层那一处。
+    ("\n\tquiescing, cancel := context.WithTimeout(ctx, departBudget)", "accepted"),
+    ("\n\trechecking, cancel := context.WithTimeout(ctx, callBudget)", "quiesced"),
+    ("\n\tdeparting, cancel := context.WithTimeout(ctx, departBudget)", "leaving"),
+    ("\n\tcopying, cancel := context.WithTimeout(ctx, departBudget)", "handed-off"),
+    ("\n\td.finishCopied(ctx, move, verdict, binding, Aborted, &copied)", "committed"),
 ]:
-    text = replace_once(text, anchor, f'\trehomeDrillPoint("{stage}", move)\n'+anchor)
-anchor = '\t\terr := d.documents.Drop(ctx, copied, sid)\n\t\tcancel()\n\t\tif err == nil {\n\t\t\treturn'
+    text = replace_once(text, anchor, f'\n\trehomeDrillPoint("{stage}", move)'+anchor)
+anchor = '\t\terr := d.documents.Drop(dropping, copied, sid)\n\t\tcancel()\n\t\tif err == nil {\n\t\t\treturn'
 text = replace_once(text, anchor, anchor.replace('\n\t\t\treturn', '\n\t\t\tif sid == d.self { rehomeDrillPoint("dropped", move) }\n\t\t\treturn'))
 driver.write_text(text)
 (generated / "game/rehome/rehome_drill_faults.go").write_text((repo / "scripts/testdata/demo-drill/rehome-faults.go.txt").read_text())

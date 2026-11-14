@@ -55,9 +55,9 @@ elif segment=='s7-block-aoi':
  for blocks in (0,4):
   run(f'm16-blocks{blocks}',['bash','scripts/perf/nest-game.sh'],{'ROOST_PERF_LABEL':f'v147-m16-blocks{blocks}','ROOST_PERF_COUNT':'1','ROOST_PERF_CPU':'0','ROOST_NEST_GAME_GATE':'1','ROOST_NEST_GAME_SYNC':'1','ROOST_NEST_GAME_LAYOUT':'concentrated','ROOST_NEST_GAME_OBSERVED_BLOCKS':str(blocks),'ROOST_NEST_GAME_SHORT_WORKERS':'8','ROOST_NEST_GAME_IO_WORKERS':'8','ROOST_NEST_GAME_SHORT_QUEUE':'65536','ROOST_NEST_GAME_PLAYERS':'1000','ROOST_NEST_GAME_ENTITIES':'10000','ROOST_NEST_GAME_MESSAGES_PER_PLAYER':'10','ROOST_NEST_GAME_HZ':'1','ROOST_NEST_GAME_DIRTY':'1','ROOST_NEST_GAME_DURATION':'10m'})
 elif segment=='s8-alliance-effects':
- for round in (1,2,3):
+ for rnd in (1,2,3):
   for workers in (16,1):
-   label=f'm11-r{round}-w{workers}'
+   label=f'm11-r{rnd}-w{workers}'
    run(label,['bash','scripts/test-alliance-e2e.sh'],{'ALLIANCE_E2E_PERF':'1','ALLIANCE_E2E_RETRY':'1','ALLIANCE_E2E_EFFECT_WORKERS':str(workers),'ALLIANCE_E2E_RUN':'^TestAllianceE2EJoinRetryableSources$','ALLIANCE_E2E_LOGS':str(out/label)})
 elif segment=='b2-footprints':
  run('b2-business',['bash','scripts/test-alliance-e2e.sh'],{'ALLIANCE_E2E_PERF':'1','ALLIANCE_E2E_MEMBERS':'500','ALLIANCE_E2E_MIRROR_COPIES':'16','ALLIANCE_E2E_RUN':'^TestAllianceE2ELargeAllianceFootprint$','ALLIANCE_E2E_LOGS':str(out/'business')})
@@ -77,9 +77,9 @@ elif segment in ('s9-demo100','s10-demo200'):
 elif segment in ('s14-checkpoint128','s15-checkpoint256'):
  concurrency='128' if segment=='s14-checkpoint128' else '256'
  experiment=os.environ.get('ROOST_CHECKPOINT_TREE',str(root.parent/'v147-background-checkpoint'))
- for round in (1,2,3):
+ for rnd in (1,2,3):
   for enabled in ('0','1'):
-   label=f'm19-c{concurrency}-r{round}-bg{enabled}'
+   label=f'm19-c{concurrency}-r{rnd}-bg{enabled}'
    run(label,['bash',experiment+'/scripts/test-alliance-e2e.sh'],{'ALLIANCE_E2E_PERF':'1','ALLIANCE_E2E_BACKGROUND_CHECKPOINT':enabled,'ALLIANCE_E2E_STACKS':'1','ALLIANCE_E2E_RPC_CONCURRENCY':concurrency,'ALLIANCE_E2E_RUN':'^TestAllianceE2ERPCConcurrency$','ALLIANCE_E2E_LOGS':str(out/label)})
 else: raise ValueError(segment)
 
