@@ -972,3 +972,41 @@ func TestGeneratedScriptsAreInPretag(t *testing.T) {
 		t.Error("scripts/pretag.sh runs no generated-project script")
 	}
 }
+
+// 真实进程脚本没有 Go Test 函数，单独登记其入口与夹具；不能伪造函数塞进上面的 generatedRealDependencyElsewhere。
+// 这些用例由维护者在私有环境显式运行，根包这里只验证登记的入口仍能找到夹具，不把静态检查当成真实验收。
+var realProcessDependencyEntries = []struct {
+	script, environment, scope string
+	fixtures                   []string
+}{
+	{
+		script:      "scripts/test-demo-rehome.sh",
+		environment: "mirror-local 私有 Mongo 副本集 / Redis / NATS，自起 etcd；DEMO_REHOME_OUT=/abs/path bash scripts/test-demo-rehome.sh",
+		scope:       "account + game 1000/1001 六个阶段 SIGKILL，TCP 重登、钱包去重、背包、源档和 checkpoint 阻塞；committed→删源库窗口按 Q4 单列，不进 pretag",
+		fixtures: []string{
+			"scripts/testdata/demo-drill/rehome.go.txt",
+			"scripts/testdata/demo-drill/rehome-instrument.py",
+		},
+	},
+}
+
+func TestRealProcessDependencyEntriesRemainReachable(t *testing.T) {
+	for _, entry := range realProcessDependencyEntries {
+		text, err := os.ReadFile(filepath.FromSlash(entry.script))
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		if entry.environment == "" || entry.scope == "" {
+			t.Errorf("%s must name its private environment and actual verification scope", entry.script)
+		}
+		for _, fixture := range entry.fixtures {
+			if _, err := os.Stat(filepath.FromSlash(fixture)); err != nil {
+				t.Error(err)
+			}
+			if !strings.Contains(string(text), fixture) {
+				t.Errorf("%s no longer uses its registered fixture %s", entry.script, fixture)
+			}
+		}
+	}
+}

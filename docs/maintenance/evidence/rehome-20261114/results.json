@@ -1,0 +1,270 @@
+{
+  "baseline": "086524b35ce7937551e65b55d04d879f7e69449c",
+  "platform": "Darwin arm64",
+  "go": "go version go1.27.3 darwin/arm64",
+  "scope": "same-host private dependencies; account binding and player ingress ownership; Q4 remains",
+  "runs": [
+    {
+      "run": "run1",
+      "script_pass": true,
+      "case_count": 7,
+      "cases": [
+        {
+          "stage": "accepted",
+          "reached_stage": "accepted",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "quiesced",
+          "reached_stage": "quiesced",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 8,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "leaving",
+          "reached_stage": "leaving",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 8,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "handed-off",
+          "reached_stage": "handed-off",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "committed",
+          "reached_stage": "committed",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": true,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": "Q4"
+        },
+        {
+          "stage": "dropped",
+          "reached_stage": "dropped",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "checkpoint",
+          "reached_stage": "handed-off",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        }
+      ],
+      "checkpoint_wait_us": [
+        0,
+        0,
+        0,
+        12251,
+        0,
+        29926,
+        12237,
+        327755,
+        0
+      ],
+      "checkpoint_hold_verified": true,
+      "wal_drained": {
+        "source": true,
+        "target": true
+      },
+      "input_hashes": [
+        "ac8bb664aedc397f1a15dca3099ccfa2f14fa5e5d1dc51ada36768001a5b2bed  scripts/test-demo-rehome.sh",
+        "022360851b06301e5bd23be50998b17129e9bd848d0c6386880d0c527b7b291d  scripts/testdata/demo-drill/rehome-faults.go.txt",
+        "d63f2604ec1ac530906feb61743ac59902d51c26667009381cb15122165995a8  scripts/testdata/demo-drill/rehome-instrument.py",
+        "8e5164bd45c9e3707911fea5ef438f597d458f4c56d21bbebff74e1285ec0f67  scripts/testdata/demo-drill/rehome.go.txt"
+      ]
+    },
+    {
+      "run": "run2",
+      "script_pass": true,
+      "case_count": 7,
+      "cases": [
+        {
+          "stage": "accepted",
+          "reached_stage": "accepted",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 8,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "quiesced",
+          "reached_stage": "quiesced",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 8,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "leaving",
+          "reached_stage": "leaving",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 8,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "handed-off",
+          "reached_stage": "handed-off",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "committed",
+          "reached_stage": "committed",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": true,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": "Q4"
+        },
+        {
+          "stage": "dropped",
+          "reached_stage": "dropped",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        },
+        {
+          "stage": "checkpoint",
+          "reached_stage": "handed-off",
+          "signal": "SIGKILL",
+          "serving_sid": 1001,
+          "in_flight": false,
+          "source_retained": false,
+          "target_version": 9,
+          "bag": 11,
+          "wallet": 93,
+          "arrival_count": 1,
+          "pending_intent": "",
+          "known_limit": null
+        }
+      ],
+      "checkpoint_wait_us": [
+        0,
+        0,
+        0,
+        10332,
+        0,
+        8399,
+        10856,
+        321758,
+        0
+      ],
+      "checkpoint_hold_verified": true,
+      "wal_drained": {
+        "source": true,
+        "target": true
+      },
+      "input_hashes": [
+        "ac8bb664aedc397f1a15dca3099ccfa2f14fa5e5d1dc51ada36768001a5b2bed  scripts/test-demo-rehome.sh",
+        "022360851b06301e5bd23be50998b17129e9bd848d0c6386880d0c527b7b291d  scripts/testdata/demo-drill/rehome-faults.go.txt",
+        "d63f2604ec1ac530906feb61743ac59902d51c26667009381cb15122165995a8  scripts/testdata/demo-drill/rehome-instrument.py",
+        "8e5164bd45c9e3707911fea5ef438f597d458f4c56d21bbebff74e1285ec0f67  scripts/testdata/demo-drill/rehome.go.txt"
+      ]
+    }
+  ],
+  "mutation": {
+    "change": "remove HandOffEntity checkpoint wait in temporary go overlay",
+    "exit_code": 1,
+    "failure": "CHECKPOINT_BYPASS: hand-off returned before checkpoint release",
+    "mongo_projected_ack_held": true,
+    "premature_stage": "handed-off",
+    "checkpoint_wait_marker_present": false
+  }
+}
