@@ -2,7 +2,7 @@
 
 用户需要双人回合对战、合作路线闯关、离线经营加好友帮助时读本篇。玩法规则与边界唯一来源是 `docs/framework/SESSION-GENRES.md`；生成与执行命令也在该文档，不维护第二份手抄生成流程。
 
-- 回合 PvP：`scripts/test-turn-pvp-generated.sh`，9 场景。
+- 回合 PvP：`scripts/test-turn-pvp-generated.sh`，10 场景（含房间持久定时器自动超时：`roost add timer --entity GameRoom`）。
 - 合作 Roguelike：`scripts/test-coop-roguelike-generated.sh`，10 场景。
 - 异步社交经营：`scripts/test-social-sim-generated.sh`，9 场景。
 

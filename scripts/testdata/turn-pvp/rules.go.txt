@@ -70,6 +70,19 @@ func (s *State) Apply(actor int64, cmd Command, now int64) (Result, error) {
 	return result, nil
 }
 
+// Timeout 是房间定时器的到期动作（game_room/timer_handlers.go）：期限到了才消费当前回合，与客户端上报的
+// "timeout" 同一规则；修订号加一，按旧修订号准备的命令随之按过期拒绝。不记任何玩家的回执。
+func (s *State) Timeout(now int64) error {
+	if len(s.Members) != 2 || s.Last == nil || s.Finished || now < s.Deadline {
+		return ErrRule
+	}
+	if _, err := s.execute(s.Turn, Command{Kind: "timeout"}, now); err != nil {
+		return err
+	}
+	s.Revision++
+	return nil
+}
+
 // 超时只消费当前回合，迟到动作不能顺带执行下一回合；调用者只能声明预期 revision。
 func (s *State) execute(index int, cmd Command, now int64) (int, error) {
 	if s.Finished {

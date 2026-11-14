@@ -1,0 +1,75 @@
+// 回合 PvP 专用：genre-common/handlers.go.txt 加上开局登记回合定时器（run.sh 优先用玩法自己的 handlers.go.txt）。
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+
+	"time"
+
+	db "GENRE_MODULE/db"
+	game_room "GENRE_MODULE/game/entities/game_room"
+	rules "GENRE_MODULE/game/rules"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+type IScenarioPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+// 回合 PvP 的房间带持久定时器（roost add timer --entity GameRoom）：开局时在同一个事务里登记回合期限，
+// 到期由 game_room.TimerDriver 投递 Tick，回调在房间的 Nest 锁与事务内消费当前回合（game_room/timer_handlers.go）。
+type IGameRoomEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.GameRoomDao
+	TimerComp() *game_room.TimerComponent
+}
+
+// 名单来自宿主的鉴权与成局结果，不接受客户端自由指定 actor 或成员。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioOpen(room IGameRoomEntity, members []int64, nowUnixMilli int64) error {
+	if room.Dao().GetState() != "" {
+		return errors.New("room already initialized")
+	}
+	state, err := rules.New(members, nowUnixMilli)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	room.Dao().SetState(string(raw))
+	// 一个房间只挂一个回合定时器：玩家行动推迟期限时不改它，到期回调发现期限已后移就续到新期限，终局时结束。
+	if room.TimerComp().NewTimerAt(time.UnixMilli(state.Deadline), game_room.TimerTypeTurnTimeout, 0, 0, nil) == 0 {
+		return errors.New("turn timer was not armed")
+	}
+	return nil
+}
+
+// actor 由接入层从已鉴权的玩家身份解析。期望版本阻止旧页面覆盖新状态；
+// 同序号同内容返回原结果，改内容的重试拒绝。每位玩家只保留最后一条回执，旧序号不能重放。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioCommand(room IGameRoomEntity, player IScenarioPlayerEntity, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
+	var state rules.State
+	if err := json.Unmarshal([]byte(room.Dao().GetState()), &state); err != nil {
+		return rules.Result{}, err
+	}
+	previous := state.Last[player.ID()]
+	result, err := state.Apply(player.ID(), cmd, nowUnixMilli)
+	if err != nil {
+		return rules.Result{}, err
+	}
+	raw, err := json.Marshal(state)
+	if err == nil {
+		room.Dao().SetState(string(raw))
+		if cmd.Seq > previous.Command.Seq {
+			player.Dao().SetCoins(player.Dao().GetCoins() + int64(result.Reward))
+		}
+	}
+	return result, err
+}

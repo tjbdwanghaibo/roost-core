@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **玩法夹具：回合 PvP 的回合超时经房间持久定时器自动推进**（scripts/testdata/turn-pvp，2026-11-14，KNOWN-LIMITS“回合超时尚无自动 timer 装配”）：`test-turn-pvp-generated.sh` 对 GameRoom 跑 `roost add timer`，夹具覆盖生成的示例回调（`timer_handlers.go.txt`）与开局 handler（`handlers.go.txt`，`run.sh` 优先用玩法自己的 handlers）；开局登记一个回合定时器，到期回调按新增的 `rules.State.Timeout` 消费当前回合，期限后移时续期、终局结束。新场景 `TestScenarioTurnTimesOutByTheRoomTimer`（真实驱动循环）：到期前 1ms 不消费、到期自动消费、按旧修订号的行动被拒、行动后旧触发不提前消费、到新期限消费并终局、定时器清空；场景数 9 → 10。变异 2 条（期限后移时不续期、开局不登记）都红。持久恢复（真实 DataEngine 重启后补触发）未做，见手册。
+
 - **测试：activity_world 的自带场景不再读工程配置表**（modules/activity_world，2026-11-14，KNOWN-LIMITS“activity_world 的自带场景是否读工程配置表”）：新生成工程（`-template game`）装上 activity_world，按 README“复用方式”加一行逻辑号（`activity_scope.csv`）与一条 `Scope=world` 的活动（`activity.csv`）并 `roost generate` 后，`roost module verify activity_world` 2/4（`TestWorldActivityEmptyConfigurationDoesNothing`、`TestWorldActivityFailureLeavesNoActivation` 读到工程的活动，Pulse 答出一期）；场景改为装载自带的空 `activity` / `activity_scope` 表（按生成代码的名字、文件与键登记，结束时换回缺省 Store 与配置快照），换表后 4/4、换表前 4/4。只改模块场景，不改运行代码。
 
 - **生成配置：Remote 的 Redis 键默认带工程前缀**（wiring/remoteentity、codegen，2026-11-14）：`remote_entity.snapshot_l2_key_prefix` 的生成值由空改为 `roost:<工程名>`。原来为空时 L2 快照键与路由键（`remote_entity:snapshot:*`、`remote_entity:route:*`）没有工程前缀，两个不同名的工程共用一个 Redis db 时互相覆盖（第 3 批真实进程演练里 alliance 进程一直报“同一快照版本内容不同”，换干净环境后消失），与 demo/README“不同名工程可以共用一套环境”不符。运行期契约不变（空值仍表示不带前缀）。已生成的工程重新生成配置或手工加上这个键；改正在运行的部署的前缀要整体重启。回归 `TestGeneratedRemoteEntityKeysCarryTheProjectPrefix`（改回空值时红）；alliance-e2e 夹具改为不论原值整行设置该键。

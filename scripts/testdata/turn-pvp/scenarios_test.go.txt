@@ -1,6 +1,15 @@
 package handler
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+
+	game_room "GENRE_MODULE/game/entities/game_room"
+	rules "GENRE_MODULE/game/rules"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
 
 func TestScenarioTurnOrder(t *testing.T) {
 	f := newScenario(t)
@@ -49,5 +58,95 @@ func TestScenarioReconnectReadsAuthoritativeTurn(t *testing.T) {
 	live := f.state(t)
 	if live.HP != s.HP || live.Turn != s.Turn {
 		t.Fatal("decoded state diverged")
+	}
+}
+
+// 回合期限由房间的持久定时器自动推进（roost add timer --entity GameRoom，wiring/entitytimer 同一个驱动）：没有任何
+// 客户端上报 timeout，业务时间到了期限，驱动投递 Tick、回调消费当前回合；期限内的行动把期限后移，定时器续到新期限
+// 而不提前消费；终局后定时器结束。驱动按真实的投递循环运行（MaxWait 1s 内看到业务时间前进），不手动调用 DeliverDue。
+func TestScenarioTurnTimesOutByTheRoomTimer(t *testing.T) {
+	f := newScenario(t)
+	RegisterTickGameRoomTimerGenNestHandlers()
+	driver := game_room.TimerDriver
+	if err := driver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity {
+		if id == f.room.ID() {
+			return f.room
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := driver.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	timers := func() int {
+		return len(robotRead(t, f.engine, f.room, func() []int64 {
+			var ids []int64
+			for _, node := range f.room.TimerComp().Timers() {
+				ids = append(ids, node.ID)
+			}
+			return ids
+		}))
+	}
+	if n := timers(); n != 1 {
+		t.Fatalf("open armed %d turn timers, want 1", n)
+	}
+	// 还差 1ms：驱动循环至少每秒看一次业务时间，等过一轮也不消费。
+	f.now.Add(29999)
+	time.Sleep(1500 * time.Millisecond)
+	if s := f.state(t); s.Revision != 0 || s.HP != [2]int{3, 3} {
+		t.Fatalf("timed out before the deadline: %+v", s)
+	}
+	stale := f.command(t, 0, "attack")
+	waitTurn := func(what string, ok func(s rules.State) bool) rules.State {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			s := f.state(t)
+			if ok(s) {
+				return s
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: room still %+v", what, s)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	// 到期：消费玩家 0 的回合，交给玩家 1，期限从触发时刻起算。
+	f.now.Add(1)
+	s := waitTurn("first timeout", func(s rules.State) bool { return s.Revision == 1 })
+	if s.Turn != 1 || s.HP != [2]int{2, 3} || s.Deadline != f.now.Load()+30000 || s.Finished {
+		t.Fatalf("after the first timeout: %+v", s)
+	}
+	// 按旧修订号准备的行动按过期拒绝；行动方是新的回合。
+	f.refuse(t, 0, stale)
+	// 玩家 1 在期限内行动（期限后移到行动时刻 + 30s）：原来的触发时刻到了，定时器续到新期限，不消费。
+	f.now.Add(10000)
+	f.do(t, 1, "attack")
+	moved := f.state(t)
+	if moved.Turn != 0 || moved.Deadline != f.now.Load()+30000 {
+		t.Fatalf("after player 1 acted: %+v", moved)
+	}
+	f.now.Add(20000)
+	time.Sleep(1500 * time.Millisecond)
+	if s := f.state(t); s.Revision != moved.Revision {
+		t.Fatalf("the old trigger consumed the moved turn: %+v", s)
+	}
+	if n := timers(); n != 1 {
+		t.Fatalf("%d turn timers after re-arming, want 1", n)
+	}
+	// 新期限到了：消费玩家 0 的回合（玩家 1 的行动已把玩家 0 打到 1 点），玩家 0 归零，终局，定时器结束。
+	f.now.Store(moved.Deadline)
+	s = waitTurn("timeout at the moved deadline", func(s rules.State) bool { return s.Revision == moved.Revision+1 })
+	if !s.Finished || s.HP != [2]int{0, 3} || s.Winner != 1 {
+		t.Fatalf("after the last timeout: %+v", s)
+	}
+	if n := timers(); n != 0 {
+		t.Fatalf("%d turn timers after the game ended, want 0", n)
 	}
 }

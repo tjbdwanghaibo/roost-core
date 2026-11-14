@@ -269,7 +269,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 放置模拟 | 多工坊生产队列、有界窗口的离线收益、唤醒定时器、订单与每日奖励回执 | [test-idle-sim-generated.sh](../../scripts/test-idle-sim-generated.sh) | 参考实现（demo） | [放置手册](IDLE-SIM-INTEGRATION.md) |
 | 合成休闲 | 服务器重放离线命令批次、惰性恢复体力、限时挑战、模拟的签名广告回调与到账账本 | [test-merge-casual-generated.sh](../../scripts/test-merge-casual-generated.sh) | 参考实现（demo）。广告平台是模拟的 | [合成手册](MERGE-CASUAL-INTEGRATION.md) |
 | 实时派对房间 | 2～8 人短局：成局、进房、心跳推进回合、组同步、重连、补位、结算归还 | [test-party-room-generated.sh](../../scripts/test-party-room-generated.sh) | 参考实现（demo）。框架没有的部分列在手册第 8 节 | [派对房间手册](PARTY-ROOM-INTEGRATION.md) |
-| 回合 PvP | 双人轮流行动、回合超时、终局拒绝、重连继续 | [test-turn-pvp-generated.sh](../../scripts/test-turn-pvp-generated.sh) | 参考实现（demo）。回合超时由宿主触发，没有挂自动定时驱动 | [三类离散玩法](SESSION-GENRES.md) |
+| 回合 PvP | 双人轮流行动、回合超时、终局拒绝、重连继续 | [test-turn-pvp-generated.sh](../../scripts/test-turn-pvp-generated.sh) | 参考实现（demo）。回合超时由房间的持久定时器（`roost add timer`）自动推进；持久恢复未在纵切里验证 | [三类离散玩法](SESSION-GENRES.md) |
 | 合作 Roguelike | 双人投票选路线、阶段屏障、固定种子、分别领奖 | [test-coop-roguelike-generated.sh](../../scripts/test-coop-roguelike-generated.sh) | 参考实现（demo）。离散房间流程，不含实时战斗 | [三类离散玩法](SESSION-GENRES.md) |
 | 异步社交经营 | 主人种植、受邀访客帮助一次、成熟收获、离线收获去重 | [test-social-sim-generated.sh](../../scripts/test-social-sim-generated.sh) | 参考实现（demo）。只演示本进程两实体事务 | [三类离散玩法](SESSION-GENRES.md) |
 
