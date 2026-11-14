@@ -239,6 +239,7 @@ var (
 	opsAddr       = regexp.MustCompile(`(?m)^(\s+addr: )127\.0\.0\.1:91\d\d$`)
 	advertiseAddr = regexp.MustCompile(`(?m)^(\s+advertise_addr: )127\.0\.0\.1:90\d\d$`)
 	projectName   = regexp.MustCompile(`\bplanet(_[a-z]+)?\b`)
+	l2Prefix      = regexp.MustCompile(`(?m)^(\s+snapshot_l2_key_prefix: )[^\n]*$`)
 )
 
 // setKey 改 section 下第一处 key 的值（缩进的子键也算）；找不到就失败，免得改了个寂寞。
@@ -299,7 +300,11 @@ func (s *suite) derive(name, service string, sid int32, index int, opts procOpti
 	text = strings.ReplaceAll(text, "0.0.0.0:7000", client)
 	text = opsAddr.ReplaceAllString(text, "${1}"+ops)
 	text = advertiseAddr.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", s.portBase+100+index))
-	text = strings.ReplaceAll(text, `snapshot_l2_key_prefix: ""`, `snapshot_l2_key_prefix: "`+s.prefix+`"`)
+	// 生成配置缺省是 roost:<工程名>（上面已换成 roost:<前缀>）；本用例按裸前缀读路由键，所以整行换掉。
+	if !l2Prefix.MatchString(text) {
+		t.Fatalf("%s: remote_entity.snapshot_l2_key_prefix not found in the generated config", service)
+	}
+	text = l2Prefix.ReplaceAllString(text, `${1}"`+s.prefix+`"`)
 	text = strings.ReplaceAll(text, "max_bytes: 8589934592", "max_bytes: 268435456")
 	text = strings.ReplaceAll(text, "dir: data/wal/alliance\n", fmt.Sprintf("dir: data/wal/alliance-%d\n", sid))
 	text = setKey(t, text, "log", "file", "false")

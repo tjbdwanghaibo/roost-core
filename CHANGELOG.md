@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成配置：Remote 的 Redis 键默认带工程前缀**（wiring/remoteentity、codegen，2026-11-14）：`remote_entity.snapshot_l2_key_prefix` 的生成值由空改为 `roost:<工程名>`。原来为空时 L2 快照键与路由键（`remote_entity:snapshot:*`、`remote_entity:route:*`）没有工程前缀，两个不同名的工程共用一个 Redis db 时互相覆盖（第 3 批真实进程演练里 alliance 进程一直报“同一快照版本内容不同”，换干净环境后消失），与 demo/README“不同名工程可以共用一套环境”不符。运行期契约不变（空值仍表示不带前缀）。已生成的工程重新生成配置或手工加上这个键；改正在运行的部署的前缀要整体重启。回归 `TestGeneratedRemoteEntityKeysCarryTheProjectPrefix`（改回空值时红）；alliance-e2e 夹具改为不论原值整行设置该键。
+
 - **生成器与模块的遗留一批**（codegen / modules，2026-11-14）：
   - **`roost module verify` 只数顶层场景**（#92）：`verify.pass` 定为顶层测试数，`t.Run` 的子测试不另算；任何一层的 `--- SKIP` 仍算跳过。唯一用子测试的 rehome 由 46 改为 44。
   - **`-template game` 缺省带 Player 的主 DAO**（#58）：新工程有 `db/def/player.go` 的 `PlayerDao`，模块安装不再列这条前置；照旧再跑 `roost add dao Player --entity Player` 只报已有、不改文件（同一 DAO 已接在该实体上时）。

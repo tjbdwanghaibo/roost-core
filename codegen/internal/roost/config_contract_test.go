@@ -1305,3 +1305,25 @@ func TestPortBlockIsARequiredManagedManifestField(t *testing.T) {
 		t.Errorf("doctor config-across-services = %s %q; want a WARN naming 9150", item.Status, item.Detail)
 	}
 }
+
+// Remote 的 L2 快照键与路由键都带 remote_entity.snapshot_l2_key_prefix；它原来生成为空，两个不同名的工程共用一个
+// Redis db 时 remote_entity:snapshot:* / remote_entity:route:* 互相覆盖（2026-11-14 第 3 批真实进程演练：alliance
+// 进程一直报“同一快照版本内容不同”）。生成配置每个服务都要是 roost:<工程名>，并且跨服务相同（键声明为 shared）。
+func TestGeneratedRemoteEntityKeysCarryTheProjectPrefix(t *testing.T) {
+	t.Parallel()
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
+		Services: []string{"game", "alliance"}, Mods: []string{"configdata", "nest", "remote_entity"}, Features: []string{"entity", "dao", "nest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{
+		"configs/service/config.game.yaml", "configs/service/config.alliance.yaml",
+		"configs/service/config.game.prod.example.yaml", "configs/service/config.alliance.prod.example.yaml",
+	} {
+		if got := configLeaves(t, rel, readProjectFile(t, root, rel))["remote_entity.snapshot_l2_key_prefix"]; got != "roost:planet" {
+			t.Errorf("%s: remote_entity.snapshot_l2_key_prefix = %q, want roost:planet", rel, got)
+		}
+	}
+}
