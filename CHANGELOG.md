@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **性能入口：AOI 支持自动 CPU 并发度**（2026-11-14）：`sync-aoi.sh` 接受并缺省使用 `ROOST_PERF_CPU=0`，与当前验证口径一致；原来校验直接拒绝 0。保留显式正整数档和原有延迟断言；真实 on_change 小规模功能运行通过，数字不作为容量。
+
 - **合作 Roguelike / 社交经营真实恢复档**（2026-11-14）：新增 `ROOST_COOP_ROGUELIKE_REAL=1`、`ROOST_SOCIAL_SIM_REAL=1`，共用正式 Nest/生成 DAO/文件 WAL/Mongo 装配；各两种仅 WAL 已确认、Mongo 尚无文档的 SIGKILL 窗口，恢复完整状态与最后回执、继续领奖，第三进程冷加载核对奖励不重复。默认10/9条场景不变，并编译/vet真实夹具；新档直接走Sender，TCP/真实账号/Gate联合链不在本批。[证据与变异](docs/maintenance/evidence/session-real-20261114/README.md)。
 - **诊断：Gate 混合负载分清客户端漏发与服务端信号**（E-3，2026-11-14）：`Dropped` 唯一来源是客户端等待 PB/Sync 后错过的未发送槽位，新增明确原因和独立的 Nest 准入、请求拒绝/超时、heartbeat 原始计数；最终核对事务单列并验证计数平衡，失败也保留 `verified=false` 的诊断 JSON。实际脚本两轮通过、删除计数累加的变异变红；本批为功能验证，100/s × 30s × 5 的空闲复跑另计。见 [口径与证据](docs/performance/benchmarks/gate-pacing-20261114/README.md)。
 - **修复与验收：社交模块排队屏障、跨 game 队伍和联盟换服**（2026-11-14）：组件拆分漏搬 `OnTeamJoining("matchmaking")`，导致 queued 玩家仍能建队 / 接受邀请；恢复同事务检查，取消未 Clear、成局未清理和 unknown 均保留屏障。新增 `test-social-real.sh`，并将三场景加入联盟脚本缺省集合：两个 game 共享 Team 的 toxiproxy 丢回包 / 延迟与重试、单排 SIGKILL 后原意图和唯一房号恢复、联盟成员跨 sid 在 handed-off / committed 两点 SIGKILL 后成员展示与捐献回执。Q4 与 #154 仍保留，详见 [红绿证据和验收边界](docs/maintenance/evidence/social-real-20261114/README.md)。

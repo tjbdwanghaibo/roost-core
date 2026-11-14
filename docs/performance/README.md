@@ -25,7 +25,7 @@ Generated TCP 持久写入的可重复夹具见 [运行说明](../../scripts/tes
 
 - Nest 混合负载：[`scripts/perf/nest-game.sh`](../../scripts/perf/nest-game.sh)。参数按对应报告选择，不把不同消息频率、实体变化率、worker 数或持久策略混作同一档。
 - Saga：[`scripts/perf/saga-js-scan.sh`](../../scripts/perf/saga-js-scan.sh)。区分 strict/pipelined、准入、并发和参与方投影，统计终态、积压与追平时间。
-- Remote、物理、AOI 与微基准：使用表中报告记录的命令和环境。代码版本必须匹配；无法复现时重新建立基线，不沿用旧结论。
+- Remote、物理、AOI 与微基准：使用表中报告记录的命令和环境。代码版本必须匹配；无法复现时重新建立基线，不沿用旧结论。 `scripts/perf/sync-aoi.sh` 缺省 `ROOST_PERF_CPU=0`，由 Go 自动选择并发度；显式正整数用于固定核数的历史对照，报告保留实际 `server_gomaxprocs`。
 - 真实资源使用隔离库、命名空间与环境锁；不对生产或其他任务的共享资源注入故障。
 
 ## 指标与证据规则
