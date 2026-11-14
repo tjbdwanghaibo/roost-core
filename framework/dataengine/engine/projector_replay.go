@@ -37,10 +37,27 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		return 0, replayErr
 	}
 	_, batchCapable := projector.store.(BatchProjectionStore)
-	// processed 是已成功投影的连续前缀；acked 只在 checkpoint 成功后前移。
+	var background *replayCheckpointWriter
+	if projector.opts.BackgroundCheckpoint {
+		background = newReplayCheckpointWriter(ctx, projector, records, fences)
+		defer background.close()
+	}
+	// processed 是已成功投影的连续前缀。同步路径 acked 是已确认前缀；
+	// 后台写者路径（BackgroundCheckpoint）中它只记已提交给写者的目标，真实额度由写者持久确认后释放。
 	acked := 0
 	lastAck := projector.now()
-	checkpoint := func() error {
+	checkpoint := func(wait bool) error {
+		if background != nil {
+			if err := background.submit(processed); err != nil {
+				return err
+			}
+			acked = processed
+			lastAck = projector.now()
+			if wait {
+				return background.wait()
+			}
+			return nil
+		}
 		if processed == acked {
 			return nil
 		}
@@ -61,7 +78,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		if ackFailed {
 			return
 		}
-		if err := checkpoint(); err != nil {
+		if err := checkpoint(true); err != nil {
 			if errors.Is(resultErr, errProjectorTransactionHeld) {
 				resultErr = err
 			} else {
@@ -72,7 +89,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	for _, window := range projector.planReplayWindows(records) {
 		if window.lanes != nil {
 			// 并行窗口：先确认之前的成功前缀，窗口结束后只确认窗口内的连续成功前缀（设计 §6）。
-			if err := checkpoint(); err != nil {
+			if err := checkpoint(true); err != nil {
 				ackFailed = true
 				return processed, err
 			}
@@ -82,7 +99,12 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				// fatal 已由 projectParallelWindow 逐通道判定（isFatalProjection 统一唤醒全部待投影等待方）。
 				return processed, err
 			}
-			if err := checkpoint(); err != nil {
+			// 并行窗口里的单 mutation 快路仍需确认后才可继续下一窗口。
+			wait := false
+			for _, fast := range window.fastPath {
+				wait = wait || fast
+			}
+			if err := checkpoint(wait); err != nil {
 				ackFailed = true
 				return processed, err
 			}
@@ -102,6 +124,13 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 			// 真实冲突。锁定而不是只重试失败单元，避免反复发出注定再次退回的批量写。
 			perRecord := false
 			for start := 0; start < len(segment.records); {
+				if background != nil {
+					// 写者 ack 已失败：不再投影，也不在退出时再确认一次（与同步路径 ack 失败相同）。
+					if err := background.failure(); err != nil {
+						ackFailed = true
+						return processed, err
+					}
+				}
 				end := len(segment.records)
 				if segment.batch && (!batchCapable || perRecord) {
 					end = start + 1
@@ -130,7 +159,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				// 非批量 Store 没有承诺这种重放安全，也逐单元确认。
 				replaySafe := batchCapable && (len(unit.records) > 1 || !projectsOnFastPath(unit.records[0]))
 				if !replaySafe || processed-acked >= projector.opts.CheckpointRecords || projector.now().Sub(lastAck) >= projector.opts.CheckpointInterval {
-					if err := checkpoint(); err != nil {
+					if err := checkpoint(!replaySafe); err != nil {
 						ackFailed = true
 						return processed, err
 					}
