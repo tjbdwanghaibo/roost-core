@@ -1,0 +1,18 @@
+[
+  {
+    "name": "aoi-no-branches.patch",
+    "base": "c91b6d93",
+    "original_path": "/private/tmp/v147-perf-bin/aoi-no-branches.patch",
+    "original_sha256": "a36b0141c14b5fed14a8a9bac0177a8be868c91a0d15076d04f8153867fe51cc",
+    "packaged_sha256": "9b90d983d917b65bfa0b99da57492dfccf783926b36796da7133877e2f317af9",
+    "packaging_change": "zero context diff; same edits; git apply --unidiff-zero"
+  },
+  {
+    "name": "sync-aoi-views16.patch",
+    "base": "357263ba",
+    "original_path": "/private/tmp/v147-perf-bin/sync-aoi-views16.patch",
+    "original_sha256": "b095c69f5fed35882f38999ab29d20347716b717d591669205a525a13e20bcc5",
+    "packaged_sha256": "f8c0eaadbb8077e8a4d53d9d3f79dccd2ac8b06a11ffe33f8a0fb62d1116aca5",
+    "packaging_change": "zero context diff; same edits; git apply --unidiff-zero"
+  }
+]

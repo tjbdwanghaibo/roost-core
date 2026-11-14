@@ -1,0 +1,57 @@
+{
+  "toolchain": "go version go1.27.3 darwin/arm64",
+  "head": "5c6091437438bc63abed09c92d6f79ab3c5f2eb0",
+  "gomaxprocs_env": "0",
+  "note": "Prepared only; formal measurements have not started. Core benchmark paths unchanged since c91b6d93. Experimental limits are not merged.",
+  "aoi": {
+    "base": "b4699758",
+    "head": "c91b6d93",
+    "no_branches": "experiment/v147-aoi-branches (patch retained)"
+  },
+  "heartbeat": [
+    {
+      "group": 2,
+      "slice_us": 50,
+      "binary": "/private/tmp/v147-perf-bin/hb-g2-s50.test",
+      "head": "ee5ad2a4d75d1418e0cb1b67fdbcae1771cce385"
+    },
+    {
+      "group": 2,
+      "slice_us": 100,
+      "binary": "/private/tmp/v147-perf-bin/hb-g2-s100.test",
+      "head": "ee5ad2a4d75d1418e0cb1b67fdbcae1771cce385"
+    },
+    {
+      "group": 4,
+      "slice_us": 50,
+      "binary": "/private/tmp/v147-perf-bin/hb-g4-s50.test",
+      "head": "ee5ad2a4d75d1418e0cb1b67fdbcae1771cce385"
+    },
+    {
+      "group": 4,
+      "slice_us": 100,
+      "binary": "/private/tmp/v147-perf-bin/hb-g4-s100.test",
+      "head": "ee5ad2a4d75d1418e0cb1b67fdbcae1771cce385"
+    }
+  ],
+  "interest16": {
+    "head": "357263ba",
+    "patch": "/private/tmp/v147-perf-bin/sync-aoi-views16.patch",
+    "constant": "SyncApplyMaxExtraViews=16 (production8)"
+  },
+  "runbook_corrections": [
+    "LS_DRILL_RATES is KB/s: use256,64",
+    "M16 explicitly short8 io8 queue65536 CPU0; historical omitted flags selected4/32",
+    "M17 OPEN_LOOP_RATE=1500/s fixed offer rate, no capacity claim"
+  ],
+  "mail": {
+    "head": "fef75aee6d61a8986444de3980cc7db0c24a3765",
+    "fix_commit": "d2457b26644ac1c75cf0f34f203181a67783aa30",
+    "binary": "/private/tmp/v147-perf-bin/mail.test",
+    "sha256": "be360a92d2a7a28707d992cc990cb3e1e120d733aea780752dfc6e53bcffc89d",
+    "old_binary": "/private/tmp/v147-perf-bin/mail-before-cluster-357263ba.test",
+    "old_sha256": "2a9fa377ea722d837a1b9b1a9c2e371c66c909597161392ed84f77d0d2c15852",
+    "build_record": "/Users/whb/roost/worktrees/v147/artifacts/perf/v147-remaining/mail-cluster-rebuild/build.json",
+    "note": "Unified corrected binary for standalone and Cluster; preparation build only; other binaries retain their previously documented bases."
+  }
+}

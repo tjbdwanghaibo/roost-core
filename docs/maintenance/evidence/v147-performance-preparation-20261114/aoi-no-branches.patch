@@ -1,0 +1,17 @@
+diff --git a/framework/sync/entitysync/policy/aoi.go b/framework/sync/entitysync/policy/aoi.go
+index 0045e7b0..efdfcc4e 100644
+--- a/framework/sync/entitysync/policy/aoi.go
++++ b/framework/sync/entitysync/policy/aoi.go
+@@ -693,6 +693 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
+-	// 上限被收紧（SetObserverLimit）后成员可能多于上限：从最远的开始离开，直到不超出。
+-	if limit, bounded := m.visibleLimit(observer); bounded {
+-		for len(observer.visible) > limit {
+-			m.evictFarthest(observer)
+-		}
+-	}
++	// E-1 diagnostic only: omit observer override trimming; never merge this variant.
+@@ -906,3 +901 @@ func (m *AOI) visibleLimit(observer *interestObserver) (limit int, bounded bool)
+-	if observer.limited {
+-		return int(observer.limit), true
+-	}
++	// E-1 diagnostic only: ignore observer override in this benchmark variant.

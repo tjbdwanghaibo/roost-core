@@ -1,0 +1,7 @@
+diff --git a/framework/sync/entitysync/policy/interest.go b/framework/sync/entitysync/policy/interest.go
+index 7d4e1375..12fdfb47 100644
+--- a/framework/sync/entitysync/policy/interest.go
++++ b/framework/sync/entitysync/policy/interest.go
+@@ -117 +117 @@ const (
+-	SyncApplyMaxExtraViews     = 8
++	SyncApplyMaxExtraViews     = 16

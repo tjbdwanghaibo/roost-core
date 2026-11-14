@@ -1,0 +1,8 @@
+{
+  "aoi-no-branches.patch": "9b90d983d917b65bfa0b99da57492dfccf783926b36796da7133877e2f317af9",
+  "demo-robot-retained.py": "cb774fe76101b779d1827556c3da2d782a2494d648b787290ec5da5720dd6550",
+  "run-micro.py": "72ae821c2f58d7313d1ea22be0bac4492b4c1115c403599d00c688239f543c3c",
+  "run-segment.sh": "05a9bb25e803953d86388fd5e9e7f7dc7879149823f78c81813ae25fec41ef00",
+  "sync-aoi-views16.patch": "f8c0eaadbb8077e8a4d53d9d3f79dccd2ac8b06a11ffe33f8a0fb62d1116aca5",
+  "timed-command.py": "10a9d5d314ac4df10c1522d73b3f55b09fdf9122f40e9f3d64d017c6f95f8eaf"
+}

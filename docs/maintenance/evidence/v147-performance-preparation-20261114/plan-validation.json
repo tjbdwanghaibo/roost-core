@@ -1,0 +1,33 @@
+{
+  "status": "NOT RUN",
+  "formal_calls_executed": 0,
+  "validation": "AST parse, bash -n, read-only --plan, path checks only; no tests/builds/measurements",
+  "segment_counts": {
+    "s1-micro": 33,
+    "s2-heartbeat": 24,
+    "s3-sync": 12,
+    "s4-nest-game": 4,
+    "s5-gate-budget": 3,
+    "s6-catchup-mail": 3,
+    "s7-block-aoi": 2,
+    "s8-alliance-effects": 6,
+    "b2-footprints": 2,
+    "s9-demo100": 3,
+    "s10-demo200": 3,
+    "s11-cellworld-robot": 1,
+    "s12-gate-pacing": 5,
+    "s13-generated-tcp": 4,
+    "s14-checkpoint128": 6,
+    "s15-checkpoint256": 6
+  },
+  "total_calls": 117,
+  "resume_labels": [
+    "m3-3-batch",
+    "m3-4-dispatch"
+  ],
+  "inner_labels": [
+    "v147-m3-3-batch-s4-resume-example",
+    "v147-m3-4-dispatch-s4-resume-example"
+  ],
+  "m12_resume_out": "/Users/whb/roost/worktrees/v147-performance-report/artifacts/perf/v147-remaining/s9-resume-example/ramp10"
+}
