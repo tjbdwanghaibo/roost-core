@@ -36,6 +36,8 @@ var commitTokenRE = regexp.MustCompile("`([0-9a-f]{7,40})`")
 var documentedCommitExemptions = map[string]string{
 	"300be3a0": "v147 B3 位于 experiment/v147-background-checkpoint；交接要求只合报告，不合实验实现，必须保留精确测量来源",
 	"300be3a03e22d6426b22ffe8ced0c96782ff3dac": "同一 B3 实验提交的完整 SHA，供 checkpoint-experiment 报告复建；维护者决定前不能合入实现",
+	"8c86065f": "self_sync RetryLater 修复，只在 tmp/sync-fixes；待维护者决定（decisions D1）是否合入，决定前不能进集成分支",
+	"a0f07234": "同一 tmp/sync-fixes 分支的契约注释提交；随 D1 一起决定",
 }
 
 // docCommitIncident 是本门禁要抓的那一次：该提交的 KNOWN-LIMITS 写着 rebase 前的 `b717fd14`。
