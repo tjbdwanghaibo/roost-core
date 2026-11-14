@@ -195,8 +195,8 @@ func TestHostedModuleNeedsItsModsOnTheHost(t *testing.T) {
 	}
 	// 不代办的 Mod 缺在托管服务上：点名托管服务。
 	saga := spec
-	saga.Needs = ModuleNeeds{Mods: []string{"manager"}}
-	if err := checkModuleNeeds(manifest, "game", saga); err == nil || !strings.Contains(err.Error(), "service account has no manager mod: roost add mod manager -service account") {
+	saga.Needs = ModuleNeeds{Mods: []string{"nest"}}
+	if err := checkModuleNeeds(manifest, "game", saga); err == nil || !strings.Contains(err.Error(), "service account has no nest mod: roost add mod nest -service account") {
 		t.Fatalf("a mod the installer does not add, missing on the host: %v", err)
 	}
 	delete(withGameWeb.Services, "account")
