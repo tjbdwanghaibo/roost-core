@@ -44,8 +44,8 @@ TCP (player access)
 - **同步不用组件自己标脏**：模块的组件不调 `Player.PublishSyncDirty()`（模块不认识工程的同步）。demo 的 Nest 装着场景的
   提交观察者，事务准入时按实体收集生成的 setter 留下的同步标记，所以背包的变化照样作为增量到本人的客户端；被拒绝而回滚的
   发放什么都不发；别的玩家的视图里没有 `bag`。`internal/service/game/bag_sync_test.go` 在与服务相同的接线上断言这三件事。
-  有一处冗余：`PublishSyncDirty()` 与提交观察者各读一份掩码，模块的写入只被观察者那一份消费，所以背包变化之后，
-  这名玩家下一次 `PublishSyncDirty()`（走一步、加经验）会把整份背包再给本人发一次，内容与上一次相同；背包至多 200 种，量有界。
+  `PublishSyncDirty()` 与提交观察者取的是同一份客户端同步掩码（生成的 `TakeEntitySyncChanges`，与 TerrainChunk / Building
+  相同），所以观察者已经发过的背包不会在这名玩家下一次 `PublishSyncDirty()`（走一步、加经验）时再发一遍（用例同上）。
 
 几个刻意保留的教学点：
 
@@ -376,6 +376,10 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find, r
 - **位置不每拍落库**（D20 决定 ⑮）：`PosX/PosY/SceneID/Facing` 是 `nopersist,sync`；落库的是 `SavedSceneID/SavedPosX/SavedPosY/SavedFacing`，
   由 `MapBasic` 在离开场景时与在场景里每 10 秒（`actor.SavePeriod`，心跳 `"map.save"`）写一次、场景 / 位置 / 朝向都没变不写；进场景时
   以保存的位置为首选点、恢复保存的朝向。朝向和位置是同一份 MapBasic 数据（维护者 2026-10-22）：只转向也算变过，回滚随 DAO。
+  “离开场景”包括离开本进程：闲置卸载与换服交出（`playerEvictor`）在丢副本 / 交出之前先跑一次 `LeaveScene` 事务
+  （`game/handler/leave_scene.go`），SaveOnLeave 把最后的位置写进落库字段；只有仍在内存里的玩家才跑，不为它装载。
+  断线不离开地图：玩家留在内存里、周期落库照常，重连回到原处；崩溃仍可能丢最后不到 10 秒的走动
+  （`TestLeavingTheProcessSavesTheLastPosition`）。
 - **玩家不占地**（`Walkable` 而不是 `Occupy`）：两个玩家可以站在同一点，于是断线也没有残留占位要回收。占位留给真正会挡路的东西
   （地图里的墙、将来判定为实心的怪）。
 - **落点用 `Place` 向外一圈圈找**：地图每次重建，玩家记住的位置可能不再可用；返回最近的可站点，而不是"某个"可站点。
@@ -538,10 +542,11 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 demo 在模块之上接的线：
 
+- **交出带上只由他所在进程写的实体**（`playerEvictor.DepartPlayer`）：开了地形时，玩家面向客户端的编辑账本 `TerrainEditor`（全局库）与 Player 一起交出、一起撤屏障（`terrainEditorOf`）。不带它时源服内存里留着旧账本，玩家换回来按旧 `LastSeq` 判号、写回旧版本，投影版本冲突致命（`TestTerrainEditLedgerRealMongo` 的换进程子用例，真实 Mongo）。
 - **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
 - **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gamelogin.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gamelogin.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
 - **saga 步骤按当前绑定准入**（`gift_saga.go` 与 `game/alliance/runtime`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
-- **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：只保留尚不能交接 SceneActor 的分区场景限制，非法分区配置也拒绝迁服。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。matchmaking 同装时会保护排队意图；尚未接入的副本、对战与建筑仍须由工程提供迁移规则。
+- **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：开着分区场景的服拒绝（SceneActor 还不能交接），非法分区配置也拒绝迁服；坐在本进程某一局对战里的玩家申请时与离开时各拒一次（lockstep 房间在本进程内存里，`battleManager.Seated`）。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。匹配票据不拦：离开中的玩家不再是本进程撮合的候选（`PlayerOwners.Resident` 不认迁出表里的玩家），票据在全服共用的 match 服务里，换走之后由所在服处理或到期。副本不拦：session 服务的 run 与领奖账本都跟着玩家走。地形编辑账本随玩家交出（见下面“交出带上只由他所在进程写的实体”）。名下建筑留在地图上（建筑是地图的实体、不是玩家的档，按地形 DAO 的库范围归属，待维护者决定），全服邮件的服范围不随换服迁移，也待维护者决定。
 - **联盟消费者启动**（`internal/service/game/alliance.go`）：Service.Init 先创建 PlayerOwners，再发布模块 PlayerBinding 适配并启动联盟 runtime。demo 在 manifest 关闭该 runtime 的自动接线，业务逻辑仍全部来自模块。App 先排空 Saga ingress，再关闭业务服务。
 
 用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
@@ -650,6 +655,11 @@ demo 把两者都给出来：匹配成功后，形成这场比赛的 game 进程
 - **机器人是真客户端**：`cmd/loadtest` 的 `battle` 动作用 `robot` 包的 `LockstepBot` 跑完整条链——推送喂给 bot，bot 按序应用帧到
   `battle.State`，再把本座位下一帧的输入和关键帧哈希发回。推送处理器只负责把包转交：它跑在会话读循环上，而应用一帧要在同一条会话上发请求，
   在那里应用会把读循环堵死在自己的响应上。
+- **输入不等应答，哈希等**：房间按自己的时钟切帧，不等输入；客户端若每帧等一个往返，就每帧落后一个往返。所以机器人每帧的输入直接发出
+  （`Session.Notify`，迟到或被拒的输入只让本座位那一帧没动作），只有开房的第一条输入、关键帧哈希和追帧请求等应答——第一条要看到"不在座位上"
+  这类拒绝，哈希是 desync 裁决的依据。限速链路演练（toxiproxy，2026-11-14，4 个机器人两场 duel）：256 / 64 / 4 / 2 KB/s 与 200ms ± 100ms
+  延迟下两场都打完；改之前 200ms ± 100ms 下四个机器人都在第 10 帧左右被答 `battle not found`。1 KB/s 下仍打不完：帧流本身超过链路，
+  最后一个关键帧的哈希晚于收尾窗口（`battleDrainWindow` 2 秒）到达，这是链路容量，不是客户端问题。
 - **座位**：`poll_match` 返回的 members 顺序就是座位顺序，服务端开房间和客户端算自己座位用的是同一份顺序。
 - **desync 长什么样**：两个客户端的模拟不一致时，房间在关键帧判出 outlier，game 日志里是一条 `battle: desync verdict` 的 ERROR。
   真实游戏在这里踢人或强制重同步；demo 只记录——所有客户端都诚实时它不该出现。

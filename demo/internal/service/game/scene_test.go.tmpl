@@ -868,25 +868,46 @@ func TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting(t *testin
 	}
 }
 
-// flushOverCrowd runs the replication until no object waits for room for a
+// flushOverCrowd runs the replication until it has settled: no object waits
+// for room, and the scene's Interest has no logged command left to run, for a
 // few flushes in a row (deferral notice, the view tightening, the removes and
 // the swapped-in creates take a few flushes).
+//
+// Both halves are needed. Each Flush runs the Interest's policy phase under a
+// time budget (half the sync interval); on a loaded machine the phase stops
+// with joins still in its log, the sessions have not been offered those
+// subjects yet, and the manager has nothing waiting — "nothing waiting" then
+// means "not there yet", not "settled". The log backlog is the gauge the
+// policy phase leaves after each run (entitysync.interest.log_backlog; one
+// scene per test, so the last value is this scene's). Waiting is counted in
+// flushes, not time: a slow machine needs more of them, not a longer sleep.
 func flushOverCrowd(t *testing.T, scene *Scene, ctx context.Context) {
 	t.Helper()
 	quiet := 0
 	for flushes := 0; quiet < 3; flushes++ {
-		if flushes == 40 {
-			t.Fatalf("over-limit objects still waiting after %d flushes: %+v", flushes, scene.manager.Stats())
+		if flushes == 400 {
+			t.Fatalf("not settled after %d flushes: %d commands left in the interest log, manager %+v", flushes, interestLogBacklog(), scene.manager.Stats())
 		}
 		if err := scene.Flush(ctx); err != nil {
 			t.Fatalf("flush: %v", err)
 		}
-		if scene.manager.Stats().OverLimitWaiting == 0 {
+		if scene.manager.Stats().OverLimitWaiting == 0 && interestLogBacklog() == 0 {
 			quiet++
 		} else {
 			quiet = 0
 		}
 	}
+}
+
+// interestLogBacklog is how many logged commands the last policy phase left
+// for the next one (the Interest's entitysync.interest.log_backlog gauge).
+func interestLogBacklog() int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == "entitysync.interest.log_backlog" {
+			return metric.Value
+		}
+	}
+	return 0
 }
 
 // assertDroppedAreFarthest checks that every subject the player does not hold

@@ -25,6 +25,7 @@ RV-20261101-04：v1.37.0 在业务占满容量时，心跳会报 `Pending reques
 - `GameClient`：在创建线程调用 `Subscribe` / `Request` / `Pump`；PB 解析、推送和完成回调都在 Pump 中执行。取消/超时/网络/解析错误走失败回调；业务错误码仍由应答 PB 表示。未消费完成回调也占容量；满时同步拒绝新请求。
 - `EntityViews`：Full 清场、Delta/create/update/remove、对象代际、subject 版本、命名空间和 profile 路由。缺口或解析/应用失败关闭连接，恢复经正常鉴权流程，不跳过错误增量。默认容量 10000 对象，仍需按项目实际负载验证。
 - `RoostClientDriver`：Unity 主线程 Attach 后每帧 Pump，销毁时 Dispose。它与低层 `RoostConnection` 是不同使用层级，同一连接只选一个消费者。
+- `RoostSceneTime`：场景时间域（`SceneTimeDomain`）的 Unity 适配。业务把场景同步下来的锚点与倍率交给 `Apply`、设 `ServerBusinessNanos`（估计的服务端业务时间：校时探针的服务端 UTC 加 servertime 下发的逻辑偏移），每帧读 `NowNanos` / `DeltaSeconds`（2 倍速副本里是业务时间的 2 倍、时停为 0、单调不减）。.NET 测试工程链接正式源码跑 `TestUnitySceneTime`；Unity Editor / Player 未实跑。
 
 `Roost.Client` 本体无第三方依赖；可选 `Roost.Client.Codecs` 仅依赖 Google.Protobuf 3.31.1，提供生成 PB 类型的便利重载。默认 DAO 同步已在 main 改成 **PB 字段补丁**，持久化仍是 BSON；见 [DAO 同步协议](../docs/framework/DAO-SYNC-PROTOBUF.md)。v1.34.2 的旧同步客户端须重新生成，不能混用。
 

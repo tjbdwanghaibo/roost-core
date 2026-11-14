@@ -30,6 +30,11 @@ import (
 // 没配 scene.terrain.pack 时不发布，查不到就是本进程没有地形。
 const TerrainCapability app.ModName = "{{GAME_SERVICE}}.terrain"
 
+// terrainEditorOf 是玩家面向客户端的地形编辑账本（TerrainEditor）的实体 ID。账本在全局库里、只由玩家所在的进程写
+// （普通场景的 Brush、分区场景 Base 的发号），所以它和 Player 一样随玩家离开本进程：换服交出时一起交出
+// （playerEvictor.DepartPlayer），否则本进程内存里留着旧副本，玩家换回来时按旧的 LastSeq 判号、写回旧值。
+func terrainEditorOf(playerID int64) (int64, error) { return terrain_editor.EntityID(playerID) }
+
 // terrainLoadTimeout 是启动时装入地形（读改过的块的记录 + 读包）的上限。
 const terrainLoadTimeout = 2 * time.Minute
 

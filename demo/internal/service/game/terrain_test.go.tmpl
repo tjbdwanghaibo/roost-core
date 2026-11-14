@@ -18,6 +18,7 @@ import (
 	"{{MODULE}}/game/components/terrainledger"
 	db "{{MODULE}}/db"
 	building "{{MODULE}}/game/entities/building"
+	player "{{MODULE}}/game/entities/player"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/handler"
@@ -1041,6 +1042,80 @@ func TestTerrainEditLedgerRealMongo(t *testing.T) {
 	if got := readLedger(); got != (storedLedger{LastSeq: 71, Window: -1}) {
 		t.Fatalf("stored ledger after sequence 71: %+v", got)
 	}
+
+	// 玩家换到另一个进程（换服：rehome 的交出）再换回来，编辑账本跟着玩家走（TerrainEditor 在全局库里，只由玩家所在的
+	// 进程写）。修前交出只带 Player：进程 1 内存里留着 LastSeq 3 的旧账本，玩家回来后它把进程 2 已应用的序号 4 再应用
+	// 一遍、写回库，投影版本冲突致命（expected=4 next=5 stored=6），账本回退。
+	t.Run("the ledger leaves with the player and comes back current", func(t *testing.T) {
+		physical := fmt.Sprintf("terrain_ledger_move_it_%d", time.Now().UnixNano())
+		t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+		databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+			Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		readMoved := func() storedLedger {
+			t.Helper()
+			var stored storedLedger
+			_ = client.Database(physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &stored)
+			return stored
+		}
+		// 每个进程改自己的块（块不冲突），共用的只有账本。
+		paintAt := func(x int64, seq uint64) terrain.Brush {
+			return terrain.Brush{Op: terrain.BrushPaint, X: x, Y: 3200, Radius: 300, Material: byte(seq)}
+		}
+		brush := func(p *realTerrainProcess, x int64, seq uint64) {
+			t.Helper()
+			terrainmap.Install(p.m)
+			if r, err := p.m.Brush(ctx, brushPlayer, seq, paintAt(x, seq)); err != nil || r.Duplicate || r.LastSeq != int64(seq) {
+				t.Fatalf("sequence %d: %+v, %v", seq, r, err)
+			}
+		}
+		player.RegisterEntity() // 交出的是 Player 与它的账本
+		depart := func(p *realTerrainProcess) func(context.Context) error {
+			t.Helper()
+			evictor := playerEvictor{handOff: p.runtime, playerScoped: []func(int64) (int64, error){terrainEditorOf}}
+			release, err := evictor.DepartPlayer(ctx, brushPlayer)
+			if err != nil {
+				t.Fatalf("hand the player off: %v", err)
+			}
+			return release
+		}
+		one := startRealTerrainProcess(t, ctx, client, databases, physical, filepath.Join(dir, "move-1"), pack)
+		unlimited(one)
+		for seq := uint64(1); seq <= 3; seq++ {
+			brush(one, 3200, seq)
+		}
+		backHere := depart(one)
+
+		two := startRealTerrainProcess(t, ctx, client, databases, physical, filepath.Join(dir, "move-2"), pack)
+		unlimited(two)
+		for seq := uint64(4); seq <= 5; seq++ {
+			brush(two, 9600, seq)
+		}
+		depart(two)
+		if err := backHere(ctx); err != nil {
+			t.Fatalf("release the barrier on the first process: %v", err)
+		}
+
+		terrainmap.Install(one.m)
+		if r, err := one.m.Brush(ctx, brushPlayer, 4, paintAt(3200, 4)); err != nil || !r.Duplicate || r.LastSeq != 5 {
+			t.Fatalf("the first process replayed sequence 4, which the second applied: %+v, %v (want Duplicate, LastSeq 5)", r, err)
+		}
+		brush(one, 3200, 6)
+		select {
+		case fatal := <-one.fatal:
+			t.Fatalf("the first process failed: %v", fatal)
+		default:
+		}
+		one.stop(t)
+		if got := readMoved(); got.LastSeq != 6 {
+			t.Fatalf("stored ledger %+v, want LastSeq 6", got)
+		}
+		terrainmap.Install(two.m)
+		two.stop(t)
+	})
 }
 
 // ---- 玩家编辑（P2：笔刷、校验、幂等、多块事务） ----

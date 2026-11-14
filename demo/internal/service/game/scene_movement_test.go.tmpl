@@ -5,17 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/game/actor"
@@ -74,6 +77,47 @@ type moveWorld struct {
 	engine   *nest.NestMgr
 	area     *sceneentity.Scene
 	views    map[int64]map[int64]bson.M
+	// saved is the committer: it keeps nothing but the last stored position
+	// (saved_pos_x / saved_pos_y) each transaction wrote per document.
+	saved *savedPositions
+}
+
+// savedPositions is a committer that remembers, per document id, the last
+// saved position a committed transaction wrote — what a cold load would read.
+type savedPositions struct {
+	mu sync.Mutex
+	at map[int64]spatial.Point
+}
+
+func (s *savedPositions) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, mutation := range record.Mutations {
+		for _, raw := range [][]byte{mutation.Data, mutation.Patch.SetBSON} {
+			if len(raw) == 0 {
+				continue
+			}
+			x, okX := bson.Raw(raw).Lookup("saved_pos_x").AsInt64OK()
+			y, okY := bson.Raw(raw).Lookup("saved_pos_y").AsInt64OK()
+			if okX || okY {
+				at := s.at[mutation.Key.ID]
+				if okX {
+					at.X = x
+				}
+				if okY {
+					at.Y = y
+				}
+				s.at[mutation.Key.ID] = at
+			}
+		}
+	}
+	return nil
+}
+
+func (s *savedPositions) of(id int64) spatial.Point {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.at[id]
 }
 
 func newMoveWorld(t *testing.T) *moveWorld {
@@ -87,7 +131,7 @@ func newMoveWorld(t *testing.T) *moveWorld {
 func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	t.Helper()
 	ctx := context.Background()
-	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}}
+	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}, saved: &savedPositions{at: map[int64]spatial.Point{}}}
 	w.clock.nanos.Store(time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano())
 	clock.SetSource(w.clock.now)
 	t.Cleanup(func() { clock.SetSource(nil) })
@@ -107,7 +151,7 @@ func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	access := entity.NewManagerAccess(w.entities)
 	w.engine = nest.NewEngine(
 		nest.NestOptionWithGetter(access),
-		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithTransactionCommitter(w.saved),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 1024}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}),
 	)
 	if err := w.engine.Start(); err != nil {
@@ -840,5 +884,73 @@ func TestPlayerSharedBodyRollsBackTeleportAndItsStop(t *testing.T) {
 	}
 	if !locked(w, p.ID(), p.MapComp().Body().MoveHeartbeat().Active) {
 		t.Fatal("rejected teleport stopped heartbeat")
+	}
+}
+
+// handOffProbe 是换服的 DataEngine 交出（entityHandOff）：被调用时记下玩家已经落库的位置，然后拒绝交出。
+type handOffProbe struct {
+	w     *moveWorld
+	saved spatial.Point
+	calls int
+}
+
+func (probe *handOffProbe) HandOffEntity(_ context.Context, entityID int64) (*kitdataengine.EntityHandOff, error) {
+	probe.calls++
+	probe.saved = locked(probe.w, entityID, func() spatial.Point {
+		dao := probe.w.entities.Get(entityID).(*player.Player).Dao()
+		return spatial.Point{X: dao.GetSavedPosX(), Y: dao.GetSavedPosY()}
+	})
+	return nil, errors.New("handOffProbe: not handed off")
+}
+
+// 玩家离开本进程（闲置卸载、换服交出）之前先走一次 LeaveScene：MapBasic 的 SaveOnLeave 把最后的位置写进落库字段，
+// 不再只靠 10 秒一次的周期落库（业务时钟停住时周期落库一次都不会发生，所以这里的位置只能来自离开时的那次保存）。
+// 修前卸载与交出都不调 Leave：落库位置停在进场时的点。
+func TestLeavingTheProcessSavesTheLastPosition(t *testing.T) {
+	handler.RegisterLeaveSceneNestHandlers()
+	w := newMoveWorld(t)
+	access := entity.NewManagerAccess(w.entities)
+	players, err := player.NewLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, moved := spatial.Point{X: 500, Y: 500}, spatial.Point{X: 560, Y: 500}
+	for _, leave := range []string{"evict", "depart"} {
+		t.Run(leave, func(t *testing.T) {
+			uniqueID := int64(9301)
+			if leave == "depart" {
+				uniqueID = 9302
+			}
+			walker := w.join(uniqueID, start)
+			if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, walker.ID(), w.area.ID(), moved.X, moved.Y); err != nil {
+				t.Fatalf("move: %v", err)
+			}
+			w.settle(walker.ID())
+			probe := &handOffProbe{w: w}
+			evictor := playerEvictor{scene: w.bridge, players: players, manager: w.entities, nest: w.engine, handOff: probe}
+			var saved spatial.Point
+			switch leave {
+			case "evict":
+				id := walker.ID() // Destroy 会清空实例，先记下 ID
+				if err := evictor.EvictPlayer(w.ctx, uniqueID); err != nil {
+					t.Fatalf("evict: %v", err)
+				}
+				if w.entities.Get(id) != nil {
+					t.Fatal("the evicted player is still in the entity manager")
+				}
+				saved = w.saved.of(id)
+			case "depart":
+				if _, err := evictor.DepartPlayer(w.ctx, uniqueID); err == nil {
+					t.Fatal("the probe refused the hand-off, but DepartPlayer reported success")
+				}
+				if probe.calls != 1 {
+					t.Fatalf("the hand-off ran %d times, want 1", probe.calls)
+				}
+				saved = probe.saved
+			}
+			if saved != moved {
+				t.Fatalf("%s: the saved position is %v, want the last one %v", leave, saved, moved)
+			}
+		})
 	}
 }

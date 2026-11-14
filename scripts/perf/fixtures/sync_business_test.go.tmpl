@@ -21,6 +21,7 @@ import (
 
 	db "example.com/syncperf/db"
 	player "example.com/syncperf/game/entities/player"
+	handler "example.com/syncperf/game/handler"
 	syncsender "example.com/syncperf/game/handler/syncsender"
 	gamescene "example.com/syncperf/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -277,16 +278,18 @@ func (lane *businessTCP) consume(conn net.Conn) {
 				lane.fail(fmt.Errorf("no expectation tick=%d subject=%d", tick, id))
 				return
 			}
-			if state.Level == nil {
-				lane.fail(fmt.Errorf("tick %d subject %d: the held state has no level", tick, id))
+			// 等级与经验在 profile 模块的嵌套状态里（v1.45.0 起）：profile（名字、等级）谁都看得到，profile_private（经验）
+			// 只有本人；合并后的全量里没有 profile 就是视图丢了字段。
+			if state.Profile == nil {
+				lane.fail(fmt.Errorf("tick %d subject %d: the held state has no profile", tick, id))
 				return
 			}
-			if state.Level.Value != want.Level {
-				lane.fail(fmt.Errorf("tick %d subject %d level: got %d want %d", tick, id, state.Level.Value, want.Level))
+			if level := state.Profile.Value.Level; level != want.Level {
+				lane.fail(fmt.Errorf("tick %d subject %d level: got %d want %d", tick, id, level, want.Level))
 				return
 			}
-			if state.Exp != nil && state.Exp.Value != want.Exp {
-				lane.fail(fmt.Errorf("tick %d subject %d exp: got %d want %d", tick, id, state.Exp.Value, want.Exp))
+			if state.ProfilePrivate != nil && state.ProfilePrivate.Value.Exp != want.Exp {
+				lane.fail(fmt.Errorf("tick %d subject %d exp: got %d want %d", tick, id, state.ProfilePrivate.Value.Exp, want.Exp))
 				return
 			}
 		}
@@ -368,6 +371,41 @@ func init() {
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 }
 
+// businessSchedule 读 ROOST_SYNC_SCHEDULE（periodic / on_change，缺省 periodic），别的值直接失败，免得拼错时悄悄量了另一种。
+func businessSchedule(t *testing.T) string {
+	t.Helper()
+	switch value := os.Getenv("ROOST_SYNC_SCHEDULE"); value {
+	case "", "periodic":
+		return "periodic"
+	case "on_change":
+		return "on_change"
+	default:
+		t.Fatalf("ROOST_SYNC_SCHEDULE must be periodic or on_change, got %q", value)
+		return ""
+	}
+}
+
+// newBusinessNest 是 newSceneNest 加上生产的提交观察者：observer 非空时 Nest 在提交时把事务标脏的同步字段交给场景
+// （与 Service 的接法相同），为空时与 newSceneNest 一样。
+func newBusinessNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity, observer *sceneSyncObserver) nest.Client {
+	t.Helper()
+	if observer == nil {
+		return newSceneNest(t, entities)
+	}
+	handler.RegisterAddExpNestHandlers()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(sceneGetter(entities)),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+		nest.NestOptionWithEntitySync(observer),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return engine
+}
+
 // An absolute schedule preserves overdue work: no ticker drops missed ticks,
 // and client latency starts at the scheduled tick, so overload cannot appear fast.
 func TestSyncBusinessLoad(t *testing.T) {
@@ -417,7 +455,26 @@ func TestSyncBusinessLoad(t *testing.T) {
 				t.Skip("case filter")
 			}
 			lane := newBusinessTCP(t, c.Players, ticks)
-			scene, err := newScene(lane, nil, gamescene.DefaultConfig())
+			// ROOST_SYNC_SCHEDULE 选场景的复制方式：缺省 periodic 是历史口径（原周期构造器、处理器经 Player.PublishSyncDirty
+			// 标脏）；on_change 是生产接线（Service.NestSyncObserver 装进 Nest、newSceneWithObserver 的 on_change 加按类型
+			// 例外 sceneTypeSchedules），两者同机交替跑才能对照“类型调度前后”。场景都不 Start，帧只在下面的 Flush 里出，
+			// 所以两种方式的延迟口径相同。
+			var observer *sceneSyncObserver
+			if businessSchedule(t) == "on_change" {
+				observer = &sceneSyncObserver{}
+			}
+			// Nest 先建：观察者在 Nest 构造时绑定（BindSyncProducer），newSceneWithObserver 要求已绑定。实体表是同一个
+			// map，下面加入场景的玩家随后放进去，Nest 的 Getter 读到的就是它们。
+			entities := make(map[int64]entity.IThreadSafeEntity)
+			client := newBusinessNest(t, entities, observer)
+			config := gamescene.DefaultConfig()
+			var scene *Scene
+			var err error
+			if observer != nil {
+				scene, err = newSceneWithObserver(sceneLane{transport: lane}, lane, nil, config, config.Normalize().View.MaxVisible, nil, observer)
+			} else {
+				scene, err = newScene(lane, nil, config)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -430,7 +487,6 @@ func TestSyncBusinessLoad(t *testing.T) {
 			})
 			ctx := context.Background()
 			players := make([]*player.Player, c.Players)
-			entities := make(map[int64]entity.IThreadSafeEntity)
 			world := newSceneWorld(t)
 			entities[world.ID()] = world
 			positions := make([]spatial.Point, c.Players)
@@ -449,12 +505,11 @@ func TestSyncBusinessLoad(t *testing.T) {
 				positions[i] = at
 				joinReady(t, scene, ctx, p, at)
 			}
-			client := newSceneNest(t, entities)
 			sender := syncsender.NewAddExpSender(client)
 			capture := func(tick int) {
 				states := make(map[int64]businessState, len(players))
 				for _, p := range players {
-					states[p.ID()] = businessState{p.Dao().GetExp(), p.Dao().GetLevel()}
+					states[p.ID()] = businessState{p.Dao().GetProfilePrivate().GetExp(), p.Dao().GetProfile().GetLevel()}
 				}
 				lane.mu.Lock()
 				lane.expected[tick] = states
@@ -552,7 +607,8 @@ func TestSyncBusinessLoad(t *testing.T) {
 				"start_lag_ms": businessQuantiles(lagMS), "overdue_ticks": overdue,
 				"process_gc_pause_ms": float64(memAfter.PauseTotalNs-memBefore.PauseTotalNs) / 1e6,
 				"subscriptions_final": scene.manager.Stats().Subscriptions,
-				"case":                c.Name, "players": c.Players, "dirty_percent": c.Dirty, "dirty_per_tick": dirty, "ticks": ticks, "hz": float64(time.Second) / float64(interval),
+				"schedule": businessSchedule(t),
+				"case":     c.Name, "players": c.Players, "dirty_percent": c.Dirty, "dirty_per_tick": dirty, "ticks": ticks, "hz": float64(time.Second) / float64(interval),
 				"elapsed_seconds": elapsed.Seconds(), "tick_work_ms": businessQuantiles(workMS), "flush_ms": businessQuantiles(flushMS),
 				"scheduled_to_client_ms": latency, "client_frame_samples": samples, "decoded_updates": updates,
 				"harness": harness, "server": server,
