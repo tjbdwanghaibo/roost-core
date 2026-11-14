@@ -208,7 +208,8 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 				return ModulePlan{}, err
 			}
 		}
-		if len(spec.Managers) > 0 {
+		// manager Mod 还没有时由前置命令代办（roost add mod manager 生成标准的 managers.go），登记留到写入时再核对。
+		if len(spec.Managers) > 0 && !contains(moduleMissingMods(manifest, service, spec), "manager") {
 			if _, _, err := moduleManagersEdit(root, manifest, service, spec); err != nil {
 				return ModulePlan{}, err
 			}
@@ -435,8 +436,10 @@ func modulePrerequisites(root string, manifest Manifest, service string, spec Mo
 // 只代办有确定接线和工程隔离配置的 Mod。外部依赖仍通过 plan 和开发环境配置明确展示。
 // web（业务 HTTP 监听）在此列：接线是固定的一行，roost add mod 写下的 web.* 配置缺省只绑回环地址，
 // 生产绑非回环要工程显式写 web.allow_public_addr，代办不会替工程把端点暴露出去。
+// manager 在此列：带后台 manager 的模块（清单的 managers，D22）要它；接线是固定的一行，没有配置，
+// 新加时生成器写出标准的 game/managers/managers.go，安装器随后往里登记。
 func moduleCanAddMod(name string) bool {
-	return name == "configdata" || name == "heartbeat" || name == "directory" || name == "remote_entity" || name == "remote_mirror" || name == "saga" || name == "web"
+	return name == "configdata" || name == "heartbeat" || name == "directory" || name == "remote_entity" || name == "remote_mirror" || name == "saga" || name == "web" || name == "manager"
 }
 
 // moduleModsService 是清单的 needs.mods 所指的服务：模块的入口在哪个服务的进程里启动，Mod 就得在哪个服务上。
