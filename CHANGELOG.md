@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：activity_world 的自带场景不再读工程配置表**（modules/activity_world，2026-11-14，KNOWN-LIMITS“activity_world 的自带场景是否读工程配置表”）：新生成工程（`-template game`）装上 activity_world，按 README“复用方式”加一行逻辑号（`activity_scope.csv`）与一条 `Scope=world` 的活动（`activity.csv`）并 `roost generate` 后，`roost module verify activity_world` 2/4（`TestWorldActivityEmptyConfigurationDoesNothing`、`TestWorldActivityFailureLeavesNoActivation` 读到工程的活动，Pulse 答出一期）；场景改为装载自带的空 `activity` / `activity_scope` 表（按生成代码的名字、文件与键登记，结束时换回缺省 Store 与配置快照），换表后 4/4、换表前 4/4。只改模块场景，不改运行代码。
+
 - **生成配置：Remote 的 Redis 键默认带工程前缀**（wiring/remoteentity、codegen，2026-11-14）：`remote_entity.snapshot_l2_key_prefix` 的生成值由空改为 `roost:<工程名>`。原来为空时 L2 快照键与路由键（`remote_entity:snapshot:*`、`remote_entity:route:*`）没有工程前缀，两个不同名的工程共用一个 Redis db 时互相覆盖（第 3 批真实进程演练里 alliance 进程一直报“同一快照版本内容不同”，换干净环境后消失），与 demo/README“不同名工程可以共用一套环境”不符。运行期契约不变（空值仍表示不带前缀）。已生成的工程重新生成配置或手工加上这个键；改正在运行的部署的前缀要整体重启。回归 `TestGeneratedRemoteEntityKeysCarryTheProjectPrefix`（改回空值时红）；alliance-e2e 夹具改为不论原值整行设置该键。
 
 - **生成器与模块的遗留一批**（codegen / modules，2026-11-14）：

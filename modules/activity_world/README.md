@@ -57,5 +57,6 @@
 
 - `roost module verify activity_world`：4 个场景（`./internal/rpc/activity_world`，`^TestWorldActivity`）。
 - 场景是离线的：Nest、生成的 DAO 与组件、handler、Remote 准入检查是真实代码；Remote 所有权与提交是内存替身。
+- 场景装载自带的空 `activity` / `activity_scope` 表，不读工程的 `configs/data`：按“复用方式”加了自己的全服活动与逻辑号之后 `roost module verify` 照样通过（2026-11-14 换表核对：读工程表时“配置为空”“业务失败不留激活”两条变红）。
 - 覆盖：一期活动在权威实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做。
 - 没有验证：启动建档（`bootstrap`）与恢复扫描在真实进程里的行为、真实的 Mongo / WAL / NATS、跨进程迁移与长时间运行。
