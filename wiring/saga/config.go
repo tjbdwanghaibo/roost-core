@@ -73,8 +73,8 @@ type config struct {
 		StartVerdictTimeout  time.Duration `config:"start_verdict_timeout" default:"2s" min:"1ns" example:"2s" help:"StartSaga / Resume / Compensate 等所有者判定回复多久后改为按 Get 补查"`
 		PurgeStallAlarm      time.Duration `config:"purge_stall_alarm" default:"10m" min:"1s" example:"10m" help:"某个步骤 durable 挡住清理多久告警（下线的步骤要由运维删掉它的 durable）"`
 		Admission            struct {
-			Enabled        bool          `config:"enabled" default:"true" example:"true" help:"按参与方投影积压准入新启动；在途推进不受影响"`
-			HighRecords    int64         `config:"high_records" default:"5000" min:"1" example:"5000" help:"积压（参与方 WAL 未投影记录数的最大值）≥ 它时关闭准入"`
+			Enabled        bool          `config:"enabled" default:"true" example:"true" help:"按参与方投影积压准入新启动；在途推进不受影响。\n推荐配置：有原生步骤的部署保持开启，把持续负载压在参与方投影速率以内；关闭后接纳高于投影速率时积压一直涨，\n停止加压后追平超过 30s（c128 云 Mongo 实测 45.9s，投影约 1.5～1.8k 条/s）"`
+			HighRecords    int64         `config:"high_records" default:"5000" min:"1" example:"5000" help:"积压（参与方 WAL 未投影记录数的最大值）≥ 它时关闭准入。取投影器持续速率 × 允许的追平时间（门槛 30s）以内；\n缺省 5000 在投影约 1.5k 条/s 时约 3～4s 追平"`
 			LowRecords     int64         `config:"low_records" default:"2500" min:"0" example:"2500" help:"关闭后积压 ≤ 它才重开；< high_records"`
 			SignalInterval time.Duration `config:"signal_interval" default:"200ms" min:"1ms" example:"200ms" help:"参与方发布积压信号的间隔"`
 			StaleAfter     time.Duration `config:"stale_after" default:"2s" min:"1ms" example:"2s" help:"一个参与方的信号多久没更新算停更（关闭准入）；≥ 5 × signal_interval"`

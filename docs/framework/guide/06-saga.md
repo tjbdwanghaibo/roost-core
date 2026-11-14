@@ -122,7 +122,8 @@ roost add effect player.level_up -consumer game
 
 业务给稳定业务键、可重复执行的步骤输入、补偿策略、有限超时与人工处理入口。观察准入状态、分区 fail-stop、清理阻塞、步骤时延、失败终态和补偿积压
 （[OBSERVABILITY](../OBSERVABILITY.md#sagacoresaga)）。容量应按全链路测，不用 handler 微基准代替；协调器原型的实测见
-[原型报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)，正式实现的压测入口是 `scripts/perf/saga-js-scan.sh`（设计 §12，**尚未跑正式一轮**），
+[原型报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)，正式实现的压测入口是 `scripts/perf/saga-js-scan.sh`（设计 §12；原生档按推荐配置开准入，`@noadmission` 是不开准入的诊断档，
+见 [SAGA 准入](../SAGA.md#准入)），
 旧 Redis / 旧原生路径的历史数字不再适用。
 
 ## 源码与核对范围

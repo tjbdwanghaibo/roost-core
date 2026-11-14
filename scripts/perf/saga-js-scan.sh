@@ -3,7 +3,7 @@
 # 取代已删除的 saga-scan.sh（Redis / Mongo 协调器）与原型目录 saga-jslog-proto/ 的 run-perf.sh。
 #
 # 用法：
-#   ROOST_PERF_LABEL=<唯一名> scripts/perf/saga-js-scan.sh          整轮（缺省 15 档，每档 30s，整轮 ≤ 30 分钟）
+#   ROOST_PERF_LABEL=<唯一名> scripts/perf/saga-js-scan.sh          整轮（缺省 16 档，每档 30s，整轮 ≤ 30 分钟）
 #   ROOST_PERF_LABEL=<唯一名> scripts/perf/saga-js-scan.sh smoke    冒烟：一档 native-forward c2（pipelined + 异步完成）、3s，只证明脚本端到端能跑
 #
 # 每档跑一次 framework/saga 的 TestRealSagaJSScanLevel（-tags integration，测试二进制只编译一次）：私有三节点 NATS（R3、文件存储，
@@ -19,7 +19,11 @@
 #   - 后缀 @strict<N> 是对照档：步骤 handler durability=strict（ROOST_SAGA_PT_STRICT=1）、short 池 N 个 worker（缺省计划带
 #     @strict4 与 @strict64：strict 在生产缺省 short 池上等 fsync 会占满 worker，64 是原型压测放大池的口径）。
 #   - mongo-forward / replay 没有 Nest 参与方，后缀不适用。
-# 缺省计划 15 档，每档 30s 加启动与排空，整轮 ≤ 30 分钟。summary.tsv 带 durability / 异步完成 / short 池 worker 数与忙占比、
+# 准入（维护者 2026-11-14 D16，SAGA.md「准入」）：原生参与方的档（native-forward、native-compensate、snapshot，含 @strict<N>）
+#   按推荐配置开准入（saga.admission 缺省：高 5000 / 低 2500，参与方每 200ms 发投影积压），持续负载压在投影速率以内，停止加压后
+#   30s 内追平是硬门槛。后缀 @noadmission 关准入（pipelined + 异步完成、short 池生产缺省），只测原始接纳能力，是诊断档：
+#   接纳高于投影速率时积压一直涨，追平可能超过 30s 而失败（2026-10-29 云 Mongo c128 45.9s）。
+# 缺省计划 16 档，每档 30s 加启动与排空，整轮 ≤ 30 分钟。summary.tsv 带 durability / 异步完成 / short 池 worker 数与忙占比、
 # 每个作业平均等 worker 的时长，对照 strict 档能直接看出差别；还带余额核对分项（读失败 / 不符）、实际加压时长与加压结束时的积压。
 # 每档另写 <档>.series.tsv：参与方 WAL / 投影器 / 积压 / 准入信号的逐秒累计值（JSON 的 series 字段）。
 #
@@ -56,8 +60,8 @@ elif [ "$MODE" != full ]; then
   exit 2
 fi
 # 设计 §12 的档位：原生正向主档、全补偿（都按生产推荐 pipelined + 异步完成、short 池生产缺省）、strict 对照（short 4 / 64）、
-# Mongo 步骤、准入、快照、重放、原生正向第二样本。
-PLAN="${PLAN:-native-forward:1 native-forward:16 native-forward:64 native-forward:128 native-compensate:16 native-compensate:128 native-forward:128@strict4 native-forward:128@strict64 mongo-forward:16 mongo-forward:128 admission:128 snapshot:64 replay:10000 replay:50000 native-forward:128}"
+# Mongo 步骤、准入、快照、重放、原生正向第二样本、不开准入的原生正向诊断档。
+PLAN="${PLAN:-native-forward:1 native-forward:16 native-forward:64 native-forward:128 native-compensate:16 native-compensate:128 native-forward:128@strict4 native-forward:128@strict64 mongo-forward:16 mongo-forward:128 admission:128 snapshot:64 replay:10000 replay:50000 native-forward:128 native-forward:128@noadmission}"
 NATS_BASE="${ROOST_SCAN_NATS_PORT_BASE:-29622}"
 MONGO_PORT="${ROOST_SCAN_MONGO_PORT:-29817}"
 LOAD_MAX="${ROOST_SCAN_LOAD_MAX:-8}"
@@ -176,14 +180,19 @@ for entry in $PLAN; do
     mongo-forward:*|replay:*)
       echo "level $entry: @$variant does not apply to $scenario (no Nest participant)" >&2; exit 2 ;;
     *:)
-      # 生产推荐：pipelined + 异步完成（参与方缺省），short 池 = GOMAXPROCS（Nest 缺省）。
-      env_args+=(ROOST_SAGA_PT_STRICT= ROOST_SAGA_SCAN_NEST_WORKERS="$GOMAXPROCS") ;;
+      # 生产推荐：pipelined + 异步完成（参与方缺省），short 池 = GOMAXPROCS（Nest 缺省），原生档开准入（测试缺省）。
+      env_args+=(ROOST_SAGA_PT_STRICT= ROOST_SAGA_SCAN_NEST_WORKERS="$GOMAXPROCS" ROOST_SAGA_SCAN_ADMISSION=on) ;;
+    admission:noadmission)
+      echo "level $entry: @noadmission does not apply to the admission scenario" >&2; exit 2 ;;
+    *:noadmission)
+      # 诊断：同生产推荐，但关准入，只测原始接纳能力。
+      env_args+=(ROOST_SAGA_PT_STRICT= ROOST_SAGA_SCAN_NEST_WORKERS="$GOMAXPROCS" ROOST_SAGA_SCAN_ADMISSION=off) ;;
     *:strict[0-9]*)
       workers="${variant#strict}"
       case "$workers" in *[!0-9]*) echo "level $entry: want @strict<N>" >&2; exit 2 ;; esac
-      env_args+=(ROOST_SAGA_PT_STRICT=1 ROOST_SAGA_SCAN_NEST_WORKERS="$workers") ;;
+      env_args+=(ROOST_SAGA_PT_STRICT=1 ROOST_SAGA_SCAN_NEST_WORKERS="$workers" ROOST_SAGA_SCAN_ADMISSION=on) ;;
     *)
-      echo "level $entry: unknown variant @$variant (want @strict<N>)" >&2; exit 2 ;;
+      echo "level $entry: unknown variant @$variant (want @strict<N> or @noadmission)" >&2; exit 2 ;;
   esac
   read -r load waited < <(gate)
   began=$(date +%s)
@@ -203,13 +212,13 @@ done
 python3 -I - "$OUT" > "$OUT/summary.tsv" <<'PY'
 import json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
-print("level\tscenario\tconcurrency\tdurability\tasync\tshort_workers\tper_second\tp50_ms\tp99_ms\tshort_busy\tworker_wait_us\tsagas\tunexpected\tbalance_mismatch\tbalance_read_errors\tmongo_checked\tunobserved\tpublish_unknown\tbacklog_peak\tload_s\tbacklog_at_load_end\tmax_drop_in_load\tdrain_s\treplay_messages\treplay_start_s")
+print("level\tscenario\tconcurrency\tdurability\tasync\tshort_workers\tadmission\tper_second\tp50_ms\tp99_ms\tshort_busy\tworker_wait_us\tsagas\tunexpected\tbalance_mismatch\tbalance_read_errors\tmongo_checked\tunobserved\tpublish_unknown\tbacklog_peak\tload_s\tbacklog_at_load_end\tmax_drop_in_load\tdrain_s\treplay_messages\treplay_start_s")
 cols = ("t", "phase", "terminals", "wal_admitted", "wal_appended", "wal_durable_lsn", "wal_syncs", "wal_checkpoints", "proj_committed", "proj_projected", "backlog", "admission_open", "admission_backlog")
 for path in sorted(out.glob("[0-9][0-9]-*.json")):
     r = json.loads(path.read_text())
     replay = r.get("replay") or {}
     print("\t".join(str(x) for x in (path.stem, r["scenario"], r["concurrency"], r.get("durability", "-"), "on" if r.get("pipelined_async") else "off",
-        r.get("nest_workers", "-"), round(r["per_second"], 1), round(r["p50_ms"], 1), round(r["p99_ms"], 1),
+        r.get("nest_workers", "-"), "on" if r.get("admission_enabled") else "off", round(r["per_second"], 1), round(r["p50_ms"], 1), round(r["p99_ms"], 1),
         round(r.get("short_busy_fraction", 0), 2), round(r.get("short_worker_wait_mean_us", 0)), r["sagas"], r["unexpected_terminals"], r["balance_mismatches"],
         r.get("balance_read_errors", 0), r.get("mongo_checked", "-"), r.get("unobserved_sagas", 0), r["publish_unknown"], r["backlog_peak_records"],
         round(r.get("load_seconds", 0), 1), r.get("backlog_at_load_end", 0), r.get("backlog_max_drop_in_load", 0), round(r["drain_seconds"], 1),
