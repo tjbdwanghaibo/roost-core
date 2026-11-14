@@ -1,6 +1,8 @@
 # 交接：v1.47.0 之前要收口的遗留（2026-11-14）
 
-给接手的 agent。目标是把 [KNOWN-LIMITS](KNOWN-LIMITS.md)“二、遗留问题”清到只剩**框架限制**与**外部环境验收**，然后由维护者拍板剩下的决定，再发 v1.47.0。
+**续跑交接**：用户已要求转交后续验收，详细状态、证据与命令见 [最终验证与性能交接](HANDOFF-2026-11-14-v147-validation-performance.md)。代码工作与功能矩阵已完成；生成器最后一轮 60m 整包复验主动中止，仍待补跑；M-1～M-19、E-1 / E-3 正式测量均未运行。
+
+给接手的 agent。本轮状态以本节续跑交接、第二节和 remaining 当前状态为准。目标是把 [KNOWN-LIMITS](KNOWN-LIMITS.md)“二、遗留问题”在本机任务实证完成后收敛到**框架限制**与**外部环境验收**，然后由维护者拍板剩下的决定，再发 v1.47.0。
 
 - 分支：`feat/v147`（worktree `/Users/whb/roost/worktrees/v147`），交接时 HEAD 见本文件所在提交。没有合进 main，没有打 tag。
 - 逐条收口计划（114 条，含每条的类别、做法、验证与量级）：[remaining.md](evidence/known-limits-remaining-20261114/remaining.md)。表里的行号对应 HEAD `28055f06` 的 KNOWN-LIMITS，按标题找，不要按行号。
@@ -31,7 +33,7 @@
 13. **性能测量**（remaining.md §3 的 M 序列）只在机器空闲时跑，每段 ≤ 30 分钟、整轮约 30 分钟一段；开始前记 `sysctl -n vm.loadavg` 和 swap。CorpLink 常驻约 1 核，load 2～4 视为空闲。有别的 agent 在编译 / 跑 race 时不测。
 14. **依赖环境**：
     - 共享环境 `~/.roost-it`（偏移 1000：Mongo 28117-28119、NATS 15222-15224、Redis 17379）只用来跑测试，不 reset、不批量删键或流。mongo-3 的端口 28119 被 BSPrintNotify 占着时，按脚本里的同一条 `mongod` 命令手工起 mongo-3，再跑 `up`。
-    - 要改动数据或做故障注入，用自己的私有环境：`scripts/mirror-local.sh`，`ROOST_MIRROR_LOCAL_OFFSET` ≤ 38135。先 `lsof` 确认端口空闲：12500 / 14500 / 23000 / 24000 / 26000 / 28000 / 31000 都被别的 agent 用过。跑完 `clean`。
+    - 要改动数据或做故障注入，用自己的私有环境：`scripts/mirror-local.sh`，`ROOST_MIRROR_LOCAL_OFFSET` ≤ 38135。先 `lsof` 确认端口空闲：12500 / 14500 / 23000 / 24000 / 26000 / 28000 / 31000 都被别的 agent 用过。up/env/用例/down 使用同一受控生命周期，只停自己的进程；保留数据和缓存，不运行 clean/reset 共享或已保留环境。
     - 生成的 game-demo 接测试环境时，`dataengine.effects.max_bytes` 与 `saga.stream_max_bytes` 要降到 ≤ 512 MiB。
 15. **收尾清理**：每个 agent 结束后 `ps` 找残留的测试二进制、私有环境、`yes` 负载进程并停掉。删 worktree 之前先把 artifacts / pprof 复制出来。
 
@@ -43,53 +45,52 @@
 19. **不推送、不发版**：v1.47.0 只在维护者明确说“发 v1.47.0”后发（合 main、写 NOTES、`scripts/release.sh v1.47.0`，打 tag 之后单独一个提交把最低 core 提到 v1.47.0）。删除操作（worktree、分支、数据、缓存）要维护者同意。
 20. **安装外部工具要维护者同意**（protoc 已于 2026-11-14 同意并装好，libprotoc 36.2）。
 
-## 二、未做的事
+## 二、当前状态与未做的事
 
 数字是 remaining.md 里的编号，详细做法、验证与量级以 remaining.md 为准。
 
-### 1. 本机可修（B）——按批次，可并行
+### 1. 本机批次（B）——已实施的范围
 
-| 批 | 内容 | 量级 | 先决 |
-| --- | --- | --- | --- |
-| P1 | 换服真实进程演练 `scripts/test-demo-rehome.sh`：六个时间点 `kill -9` 后续做，核对单一所有者、计数不丢、源库删除（B-1） | L 5～6 h，可拆两段 | 无 |
-| P2 | 联盟大成员数占用与 256 并发探针的开关（B-2）；nestwal / 投影器 checkpoint 后台写者实验（B-3，只在实验分支，不合并，结果交维护者） | 4 h + M-19 | 无 |
-| P4 | C++ 两个 Gate 同一 SessionID 先 A 后 B 的端到端（B-14）；C++ protobuf ctest（B-15，protoc 已装：`ROOST_PROTOBUF_TESTS=ON bash scripts/test-client-cpp.sh`） | 3 h | 无 |
-| P5 | MOBA 宿主与权威分进程的快照恢复、真实 strict WAL 提交延迟分布（B-4）；2026-10-20 / 22 一次性持久写入夹具入库 `scripts/perf/generated-tcp.sh`（B-16） | 6 h，建议拆两批 | 无 |
-| P6 | 登录线模块真实依赖：两个 Gate、game 重启后重连、account 两副本、enter + 真实 naming、servertime 经真实 TCP、casual 配方（B-6） | L 4～5 h | 无 |
-| P7 | 社交模块真实依赖：team 两进程 + 弱网、matchmaking 联合验收、alliance 双 sid 迁服 `kill -9`（B-7） | L 4～5 h | 与 P2 同目录不同文件 |
-| P8 | 运营模块真实依赖：gm、purchase（跨 sid、Redis 重启补领）、activity 跨进程（B-8） | L 5 h | 等进行中的 mailbox、activity_world 合入 |
-| P9 | room / turn 联合验收与 Robot 步骤、turn-pvp 配方（B-9）；合作 Roguelike、异步社交经营加 `_REAL` 档（B-5） | 2 × 4～5 h | 等进行中的回合超时（#200）合入 |
-| P10 | 地形编辑 / 放建筑后 `kill -9` 从 WAL 恢复（B-11） | 3 h | 等进行中的 #146 合入 |
+P1、P2 正式探针、P4～P10 的本机功能工作已合入 feat/v147；不重复实施整批。逐 B 编号、精确证据和未关边界见 [remaining 当前状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。重点：
+
+- P1 嵌入式玩家 TCP 上六个换服 SIGKILL 点各两次，不含独立 Gate；committed 后源库旧档明列 Q4，需人工恢复，不能写成登录自动清理或旧副本定时器已全部隔离。
+- P7 两 game Team / 弱网、匹配排队恢复、联盟双 sid 迁服已验；修复漏装 OnTeamJoining。#154 / Q4 未关。
+- P8 三条真实绿、两变异红/复绿；活动使用由 casual 扩展、共 18 模块的独立工程，完整 demo 的 PlayerDao 64 字段上限仍保留；不是 WAL-only。
+- P9 turn-pvp 真实账号 / Gate / 存储联合链与合作 / 经营直接 Sender 的 WAL-only 恢复是不同档，不能合称全部玩法都有联合链。
+- P2 的 B3 后台 checkpoint 仅实验分支 `300be3a0`，实现与配置不合；M-19 报告到齐后再记录实验结论。
+
+本轮代码工作与功能矩阵已完成，模块、13 玩法默认与 REAL、真实脚本组的准确计数统一见[最终验收报告](evidence/v147-final-validation-20261114/README.md)。`go generate ./...` 已在 `fef75aee` 退出 0，生成后 diff / status 均为空。
+
+生成器整包复验仍待完成。此前 30m 重试除总超时外，还出现六处 shutdown 预算旧断言失败（实际 28 Mod、预期 27）；[断言修复](evidence/shutdown-assertions-20261114/README.md)已合，31 项定向测试及关键变异红绿通过。修复后的最后一轮 60m 整包复验因本次交接主动中止，不能计为通过或测试超时。接手后沿用现行 pretag 的 `-timeout 60m` 预算补跑，原始日志与续跑入口见[新交接](HANDOFF-2026-11-14-v147-validation-performance.md)。
 
 ### 2. 未确认的偶发（E）
 
-E-1 AOI 微基准慢 7～11%、E-2 C++ 弱网用例、E-3 Gate 丢拍来源：复现 / 否证办法见 remaining.md §E。E-1 放在 M 序列 S1 里跑。
+E-1 AOI 微基准与 E-3 Gate 丢拍的正式测量均未运行，办法见 remaining.md §E。E-2 原版 200 轮 / 1000 场景全绿，实际 max load 10.39；只是该窗口未复现，没有定位 / 修复，也没覆盖历史 load 40～55 条件，见[原生弱网调查](evidence/v147-native-weak-20261114.md)。
 
 ### 3. 空闲机器上的测量（M）
 
-remaining.md §3，14 段，每段 ≤ 30 分钟，共约 5.3 小时，可分几天跑。另有各批报告里留下的测量命令：nest-game 心跳投递对照、独立 Gate + self_sync 重档、Block AOI 集中布局与扇出重档、类型调度 sync-business 对照（`ROOST_SYNC_SCHEDULE=periodic|on_change`）、游戏尺度分区视野（`ROOST_CELLWORLD_PERF_SCALE=game`）、机器人 100 / 200 人同秒与爬坡（每轮新环境）、CellWorld Robot 在 A+D 之后复跑。跑完把数字写回对应条目，“没测”改成结论。
+**M-1～M-19 正式测量均未运行**；统一报告位置为 `docs/performance/benchmarks/v147-remaining-20261114/README.md`，收到实测后逐项回写。remaining.md §3，14 段，每段 ≤ 30 分钟，共约 5.3 小时，可分几天跑。另有各批报告里留下的测量命令：nest-game 心跳投递对照、独立 Gate + self_sync 重档、Block AOI 集中布局与扇出重档、类型调度 sync-business 对照（`ROOST_SYNC_SCHEDULE=periodic|on_change`）、游戏尺度分区视野（`ROOST_CELLWORLD_PERF_SCALE=game`）、机器人 100 / 200 人同秒与爬坡（每轮新环境）、CellWorld Robot 在 A+D 之后复跑。跑完把数字写回对应条目，“没测”改成结论。
 
 ### 4. 文档批（最后做，只有它改 KNOWN-LIMITS）
 
-- remaining.md §A：31 段移到“一”，目标小节已写好。
-- remaining.md 表里的 F：17 处删除或改写（各有证据）。
-- 回写各批和 M 的结果、关闭的条目移到“三、已修复的历史”（一行结论）。
-- 小节清空后删掉只做导航的引言段。
-- 跑 `python3 scripts/check-doc-anchors.py` 和根包 `go test -count=1 .`。
+- remaining.md §A：31 段已按现行证据迁入“一”；A-5 快照、A-15 配方、A-23 换服前检查、A-25 归属、A-31 离散玩法修正了旧措辞。
+- remaining.md 表里的 F：17 处已删除或改写，当前结果表保留出处；不删除仍未答的决定。
+- 已回写各批功能结果，保留 M 未运行状态；后续按实测回写，关闭的条目移到“三、已修复的历史”（一行结论）。
+- 本次交接只做轻量 diff 检查。生成器整包复验与 M 完成后，接手者再运行 `python3 scripts/check-doc-anchors.py` 和根包 `go test -count=1 .`，核对最终文档；性能期间不跑编译、race、索引或大扫描。
 
 ### 5. 外部环境（C）——只列清单，不在本机做
 
-remaining.md §4，按 Linux 单机、安静独立机器、跨机 / HA、长稳 ≥1h、云 / 托管 Mongo、Unity / 原生设备分组，每项写了关闭它的命令。KNOWN-LIMITS 里这些条目保留，写明环境与命令即可。
+[external.md](evidence/known-limits-remaining-20261114/external.md)按 Linux 单机 12、安静独占机器 2、跨机/HA11、≥1h 长稳 5、云 Mongo2、Unity/设备 4 项分组，列现行入口与仍缺的拓扑/夹具/手工验收以及关闭证据。用户暂无生产部署，本轮 36 项保留，不用宿主本地进程冒充跨机。
 
 ### 6. 维护者决定（D）——不要动
 
 decisions.md 的 Q1～Q17、#154、#37、CellWorld B / C / E、self_sync RetryLater（分支 `tmp/sync-fixes` 未合并；remaining.md §三第 1 条：放大已在 11-14 演练中确认会自我维持），以及 remaining.md §5 的 N1～N4。另有两条小的：合服回退要不要真正统计“合服期间新增”（现在按选项 C：保持行为、说明已改对）；超额降级放宽到 `MaxVisible` 即删记录、丢掉冷却历史（现已记为限制）。
 
-## 三、交接时仍在进行的（不要重复做）
+## 三、交接时的先决批（已合入，不要重复做）
 
-由交接前的会话收尾、合进 feat/v147：
+原交接前的批次已收尾、合入 feat/v147：
 
 - **夹具与模块**（分支 `tmp/leftovers-fixtures`，**已合入** `cacf0d96`，KNOWN-LIMITS 已回写）：无缝演练加放建筑并核对进别的 Cell / Base 的主视野（#146）、turn-pvp 回合超时（#200）、mailbox 经 BusClient + Redis 的真实依赖用例、activity_world 换表确认、两条偶发（game-demo 主视野超限、地形转发编辑 `-race`）的负载循环。
 - **小件**（分支 `tmp/leftovers-p3`，**已合入**，KNOWN-LIMITS 已回写）：出生号与运行期号共用 shard 位（运行期序号上限改为 `1<<33 - 1`）、cellworldhost Runtime 的 Start / Stop 回归、C# 地形确认用真实 entitysync 帧驱动。
 
-夹具与模块已合入，P8 / P9 / P10 的先决条件已满足（P9 注意：turn-pvp 回合超时已接房间持久定时器，真实 DataEngine 重启后的补触发是 P9 的一部分）。小件那批也已合入。它留下两件小事归进 B：① game-demo 里同一 sid 有两个运行期号分配器（`controllers/player` 的 `runtimeid.New(serverSID)` 只经没人调用的 `RuntimeIDs()` 暴露，和刷怪器自己的 `runtimeid.New`），一旦有人调 `RuntimeIDs()` 两边会发同样的号——删掉没用的那个或改成共用一个；② `scripts/test-modules-generated.sh` 里 monster 的场景数改成了 27，脚本本身没跑过，最后的全量要跑它。合入情况看 `git log --oneline feat/v147`。
+夹具与模块的先决条件已满足，后续 P8 / P9 / P10 已完成各自本机验收。重复运行期号分配器已由 P10 删除；monster 场景数与整套生成模块的最终计数由统一验收报告确认。当前接续工作包括生成器最后一轮 60m 整包复验、尚未运行的 M-1～M-19 / E-1 / E-3，以及最终文档检查；`go generate ./...` 已完成，C 与 D 保留。详见[最终验证与性能交接](HANDOFF-2026-11-14-v147-validation-performance.md)。

@@ -65,7 +65,7 @@
 | store 键 | 字段在库里的稳定键，与 Go 字段名解耦 | 字段 tag `store:"<键>"`（推荐数字短键） | 正式。改键等于改数据格式，要提升 schema 并离线迁移 | [tag 手册 §3](../../codegen/docs/TAGS.zh-CN.md#3-dao持久客户端同步与服务端视图)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#dao-持久键d13) |
 | schema 版本 | 运行时只认当前 schema，读到旧版或更新版都拒绝 | `//roost:dao … schema=<N>` | 正式。没有自动迁移，没有在线双读 | [schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema) |
 | schema 离线迁移示例 | 停写 → 备份 → 转换 → 校验 → 切换 → 回退的执行器与命令行 | game-demo 的 `db/migrations/` 与 `cmd/schemamigrate`；公共件 `infra/storage/migration` | 参考实现（demo）。`roost add migration` 骨架未实施 | [schema 变更手册](SCHEMA-MIGRATION.md)、[demo 持久 schema](../../demo/WALKTHROUGH.md#持久-schema) |
-| 按 sid 搬机 | 把一个 game sid 连同数据搬到另一台机器的参考流程与检查工具 | 流程文档；game-demo 的 `cmd/sidmove` | 参考实现（demo）。以已落库数据为准；单个玩家改绑 sid 没有框架能力 | [Player 迁移](PLAYER-MIGRATION.md) |
+| 按 sid 搬机 | 把一个 game sid 连同数据搬到另一台机器的参考流程与检查工具 | 流程文档；game-demo 的 `cmd/sidmove` | 参考实现（demo）。以已落库数据为准；单玩家改绑另用 rehome 模块，断线重连，committed 源档窗口 Q4 未关 | [Player 迁移](PLAYER-MIGRATION.md) |
 | 合服（别名合服） | 把服 A 并入服 B：account 记录别名，数据按清单离线迁移 | `wiring/sidmerge`；`service/account` 的 `MergeServer`；game-demo 的 `cmd/sidmerge`、`cmd/accountctl merge-server` | 正式（工具与流程）。持久总线消息只列清单不检查积压；saga 要全部终态 | [Player 迁移 §6](PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#合服d15) |
 
 ## 同步
@@ -158,7 +158,7 @@
 | activity | 跨服活动协调：活动组、窗口、进度账本、带确认的结果投递 | `uses: [activity]`；包 `service/activity` | 正式。无法恢复的投递走人工管理流程收口 | [Service §4](guide/09-services.md#4-关键业务边界)、[SLG 手册](SLG-INTEGRATION.md) |
 | chat | 频道消息的发布、历史与保留 | `uses: [chat]`；包 `service/chat` | 正式。频道策略是协作者；系统消息只能经服务端签发的令牌发 | [通用服务](../../wiring/SERVICES.md#包)、[demo 聊天](../../demo/WALKTHROUGH.md#跨服务game--chat-聊天) |
 | directory | 全局名字目录：预留 → 提交 → 释放的两阶段占名 | 嵌入能力，不在九个托管服务里：`wiring/directory.NewMod(normalize, reporter)`，`app.Lookup[directory.Directory]` | 正式。同一 owner 重复预留幂等，所以不是互斥锁 | [Service §4](guide/09-services.md#4-关键业务边界) |
-| global | 静态角色 / 区服路由绑定 | `uses: [global]`；包 `service/global` | 正式。Player 静态绑定 sid，不做动态迁移 | [Service §1](guide/09-services.md#1-实际目录归属) |
+| global | 静态角色 / 区服路由绑定 | `uses: [global]`；包 `service/global` | 正式。global 本身不迁移 Player；单玩家改绑由 account/rehome 流程承担 | [Service §1](guide/09-services.md#1-实际目录归属) |
 | mail | 邮件信封、邮箱、三段式领取；全服 / 单服 / 公会广播邮件按登录拉取合并 | `uses: [mail]`；广播用 `mail.NewLazyBroadcast`，登录端点调 `PullBroadcasts` | 正式。广播缺省拒绝，要配置投递策略；未过期的全局邮件有条数上界 | [Service §1B](guide/09-services.md#1b-mail-全服邮件)、[demo 邮件](../../demo/WALKTHROUGH.md#邮件列表与领附件客户端这一半) |
 | match | 排队、分组、原子成局、取消；按分区分键；弹性人数成局 | `uses: [match]`；包 `service/match` | 正式。已结束记录只保留固定时长；没有存储原生补位；分区容量见 KNOWN-LIMITS | [Service §4](guide/09-services.md#4-关键业务边界)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |
 | platform | 渠道边缘：凭证换会话、支付回调换恰好一次发货 | `uses: [platform]`；包 `service/platform` | 正式。验签由接入方提供，且必要而不充分；订单是仅插入的持久记录 | [通用服务](../../wiring/SERVICES.md#包) |
@@ -260,7 +260,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | SLG | 建造 → 行军、取消退款、离线收益、两名玩家抢地；跨服联盟活动联合链路 | [test-slg-generated.sh](../../scripts/test-slg-generated.sh) | 参考实现（demo）。不证明跨机、容量与真实客户端 | [SLG 手册](SLG-INTEGRATION.md) |
-| MMORPG | 组队、托管交易、战斗与 Buff、同进程多地图切换与重连、双 sid 跨服赠礼 | [test-mmorpg-generated.sh](../../scripts/test-mmorpg-generated.sh)、[test-mmorpg-scenes.sh](../../scripts/test-mmorpg-scenes.sh)、[test-mmorpg-cross-sid.sh](../../scripts/test-mmorpg-cross-sid.sh) | 参考实现（demo）。没有动态 Player 跨 sid | [MMORPG 手册](MMORPG-INTEGRATION.md) |
+| MMORPG | 组队、托管交易、战斗与 Buff、同进程多地图切换与重连、双 sid 跨服赠礼 | [test-mmorpg-generated.sh](../../scripts/test-mmorpg-generated.sh)、[test-mmorpg-scenes.sh](../../scripts/test-mmorpg-scenes.sh)、[test-mmorpg-cross-sid.sh](../../scripts/test-mmorpg-cross-sid.sh) | 参考实现（demo）。此纵切不含 Player 跨 sid 无缝迁移；rehome 断线改绑另验 | [MMORPG 手册](MMORPG-INTEGRATION.md) |
 | MOBA（帧同步） | 匹配成局、Lockstep 输入与追帧、服务器参考模拟判胜负、多实体结算、持久对局 | [test-moba-generated.sh](../../scripts/test-moba-generated.sh) | 参考实现（demo）。跨引擎确定性由业务保证 | [MOBA 手册](MOBA-INTEGRATION.md) |
 | 卡牌 RPG | 抽卡保底与养成的幂等序号账本、服务器权威回合、持久回合定时器、领奖 | [test-card-rpg-generated.sh](../../scripts/test-card-rpg-generated.sh) | 参考实现（demo） | [卡牌 RPG 手册](CARD-RPG-INTEGRATION.md) |
 | 合作塔防 | 四人共享房间实体：共享金币建塔、阻路校验、按期开波、团队领奖 | [test-tower-defense-generated.sh](../../scripts/test-tower-defense-generated.sh) | 参考实现（demo）。每次触发只算一步，框架不追帧 | [塔防手册](TOWER-DEFENSE-INTEGRATION.md) |
