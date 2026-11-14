@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **诊断：Gate 混合负载分清客户端漏发与服务端信号**（E-3，2026-11-14）：`Dropped` 唯一来源是客户端等待 PB/Sync 后错过的未发送槽位，新增明确原因和独立的 Nest 准入、请求拒绝/超时、heartbeat 原始计数；最终核对事务单列并验证计数平衡，失败也保留 `verified=false` 的诊断 JSON。实际脚本两轮通过、删除计数累加的变异变红；本批为功能验证，100/s × 30s × 5 的空闲复跑另计。见 [口径与证据](docs/performance/benchmarks/gate-pacing-20261114/README.md)。
+
 - **回合 PvP 真实验收与 demo Robot**（2026-11-14）：新增 `ROOST_TURN_PVP_REAL=1`，分别验证 GameRoom 纵切真实 Mongo/WAL 的持久定时器跨进程冷加载，以及正式 turn-pvp 配方经 account/match、独立 Gate/NATS 的对局、SIGKILL 恢复、代际接管与幂等重试。game-demo 追加正式 room/turn/matchroom/matchmaking 模块，`make dev-smoke` 新增双人 turn 场景，与既有 lockstep 匹配池独立；[证据与边界](docs/maintenance/evidence/turn-real-20261114/README.md)。
 
 - **测试：C++ 跨 Gate 同会话接管与完整 Protobuf 验收**（2026-11-14）：`ROOST_GATE_CPP=1 scripts/test-gate-client.sh` 增加两个真实 Gate / NATS 的迟到握手场景，要求旧连接被拒且新连接前后均可请求，Go 服务端带 race；暂时移除原生客户端连接代号后，同一用例发现新连接被关闭。`ROOST_PROTOBUF_TESTS=ON scripts/test-client-cpp.sh` 的 8 项 ctest 通过。两个 Gate 同处一个 Go 测试进程，C++ 独立进程，仅声明 macOS 本机验证；[证据与复跑](docs/maintenance/evidence/known-limits-remaining-20261114/native-acceptance.md)。运行逻辑不变。
