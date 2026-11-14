@@ -1,0 +1,70 @@
+package demorobotcapacity
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+)
+
+// TestDemoRobotCapacity 只调用正式 loadtest；不替换登录、协议、业务或场景。
+// count 是完整场景数，保持正式 CLI 的错误率 0 / p95 16s 门槛。
+func TestDemoRobotCapacity(t *testing.T) {
+	nats := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if nats == "" {
+		t.Fatal("private NATS required; use scripts/perf/demo-robot.sh")
+	}
+	out := os.Getenv("DEMO_ROBOT_OUT")
+	count, err := strconv.Atoi(os.Getenv("DEMO_ROBOT_COUNT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	args := []string{"-executor", "pool", "-duration", "0", "-scenario", "demo", "-count", strconv.Itoa(count), "-seed", "1",
+		"-ramp-step", os.Getenv("DEMO_ROBOT_STEP"), "-ramp-interval", os.Getenv("DEMO_ROBOT_INTERVAL"),
+		"-endpoint", os.Getenv("DEMO_ROBOT_ENDPOINT"), "-server-id", "1000", "-login", "bus", "-account-nats", nats,
+		"-nats-prefix", os.Getenv("DEMO_ROBOT_PROJECT"), "-game-ops", os.Getenv("DEMO_ROBOT_OPS"),
+		"-max-error-rate", "0", "-max-p95", "16", "-report", filepath.Join(out, "robot.json")}
+	data, err := json.MarshalIndent(args, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(out, "loadtest-args.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.Create(filepath.Join(out, "robot.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	cmd := exec.CommandContext(ctx, "bin/loadtest", args...)
+	cmd.Stdout, cmd.Stderr = log, log
+	runErr := cmd.Run()
+	data, err = os.ReadFile(filepath.Join(out, "robot.json"))
+	if err != nil {
+		t.Fatalf("loadtest=%v, report=%v; see robot.log", runErr, err)
+	}
+	var report struct {
+		State string `json:"state"`
+		Count int    `json:"count"`
+		Stats struct {
+			Scheduled, Started, Success, Failure, Canceled int
+			LaunchFailed                                   int `json:"launch_failed"`
+			DroppedCapacity                                int `json:"dropped_capacity"`
+			DroppedSchedule                                int `json:"dropped_schedule"`
+		} `json:"stats"`
+	}
+	if err = json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("count=%d state=%s stats=%+v", report.Count, report.State, report.Stats)
+	s := report.Stats
+	if runErr != nil || report.State != "finished" || report.Count != count || s.Scheduled != count || s.Started != count || s.Success != count || s.Failure+s.Canceled+s.LaunchFailed+s.DroppedCapacity+s.DroppedSchedule != 0 {
+		t.Fatalf("loadtest=%v; incomplete/failed whole scenarios; see robot.json and robot.log", runErr)
+	}
+}
