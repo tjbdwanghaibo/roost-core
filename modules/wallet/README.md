@@ -35,7 +35,7 @@
 - **宿主**：组件本身不认具体实体，任何在自己 DAO 里放 `WalletState` / `WalletLedger` 的实体都能挂（见“复用方式”）。模块装好时只接在 `Player` 上：协议、两个自带 handler、`OnWalletSpent` 钩子与各联动都是 Player 的；挂到别的实体时这些不跟过去，那个实体的入口与（可选的）消费回调由接线的人写。
 - **跨实体**：组件的每个方法只改所在宿主自己的 DAO。一笔操作同时动两个宿主（例如玩家捐金币给公会金库）照多实体 handler（两边在同一个进程、同一笔 Nest 事务）、Remote 实体或 Saga（跨进程、带补偿）写，组件不替你协调。
 - **前提**：工程是 `-template game` 的目录形状，模块装在名为 `Player` 的实体上，装有 nest Mod。所有入口只在持有宿主实体的进程内有效，没有跨进程的货币操作。
-- **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md`）：“wallet 的业务键”“wallet 的去重窗口不是永久账本”“模块安装绑定 Player 与工程形状”“game-demo 里 wallet 的金币没有玩法来源”四条。
+- **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md`）：“wallet 的业务键”“wallet 的去重窗口不是永久账本”“模块安装绑定 Player 与工程形状”三条。
 
 ## 复用方式
 

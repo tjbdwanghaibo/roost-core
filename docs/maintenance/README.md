@@ -107,6 +107,10 @@ scripts/release.sh vX.Y.Z [--min-core]
 3. 大轮次收尾（维护者明确要求时）：照旧写“说明 + 实现”两篇，同一套条目编号互链。
 4. 已有的历史发版文档不动。
 
+### 上线前冻结模块协议号 / 错误码（D20）
+
+维护者 2026-11-14 决定（D20 B）：模块的协议号与错误码维持按“最小空号”分配，不加号锁定；工程删掉写死的号、换用模块时，后面模块的号会重排（现象见 [KNOWN-LIMITS“业务模块的既定设计”](KNOWN-LIMITS.md#业务模块的既定设计)）。未上线时这不算不兼容。**维护者宣布上线的那一版，发版前加做一步**：以 game-demo 与要上线的工程 `roost.yaml` 的 `modules.<name>` 段里已分配的协议号 / 错误码为准冻结一次，客户端按冻结后的号出包；冻结之后再改号就是协议不兼容，按上线后的兼容规则处理。冻结用什么机制（例如号锁定文件）到那时再定，本条只保证这一步不会被漏掉。
+
 pretag 除 build / vet / tidy / `go test ./...` / 生成物漂移 / C# SDK 外，还并行跑十三个玩法纵切脚本的缺省模式（`scripts/test-<玩法>-generated.sh`，离线）、MMORPG 多地图 TCP `scripts/test-mmorpg-scenes.sh`（离线，单跑约 25 秒）与三个离线生成器专项（`test-heartbeat-generated.sh`、`test-level-generated.sh`、`test-sync-modes-generated.sh`，维护者 2026-10-31 决定纳入）；并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4；历史本机 45～125 秒来自当时的较小矩阵，不作为当前十三玩法的耗时承诺（2026-10-31 同机负载 4～6 时九个 50 秒、十二个 63 秒，三个专项单跑约 25 / 4 / 4 秒），失败时打印该脚本日志路径并保留生成工程。新增 `scripts/test-*-generated.sh`，或玩法接入手册（`docs/framework/*-INTEGRATION.md`）点名的其他 `scripts/test-*.sh`，要加进 pretag 的列表，或在根包 `TestGeneratedScriptsAreInPretag` 的豁免表里写明由谁跑。
 
 pretag 的全量测试现为 `GOWORK=off go test -timeout 60m ./...`（2026-11-13 起，见 `scripts/pretag.sh`）。`go test` 缺省每个测试二进制 10 分钟；`codegen/internal/roost` 会反复生成、同步和编译工程，耗时受文件系统与并发负载影响。2026-11-04 的 299～815s 是旧规模；2026-11-13 加到 42 个业务模块后，同机全仓运行该包为 2024～2151s（约 34～36 分钟），30m 曾超时且未发现失败断言，所以复跑沿用 60m，不再推荐 30m。超时本身只说明预算耗尽：保留日志、宿主负载与进程状态，再看最后仍在运行的用例，不能直接判为实现失败或真卡住。
