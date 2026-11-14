@@ -54,8 +54,8 @@ type SessionLifecycle interface {
 // used up (nettransport.ErrResidentBudgetExhausted) and a closed async
 // transport are nobody's failure and ask for a retry of the tick.
 //
-// 这就是慢消费者规则：“这个接收者跟不上”关会话；“整个进程待发的字节到了上限”整轮重试、保留脏状态
-// （由 MaxFrozenBytes 与发送侧的 MaxReliableAge 兜底）。玩家接入层（wiring/selfsync.PushPlayerFrame）
+// 这就是慢消费者规则：“这个接收者跟不上”关会话；“整个进程待发的字节到了上限”交还 ErrRetryLater 重试
+// （只作废没交付到的 subject、保留其脏状态，见 ErrRetryLater；由 MaxFrozenBytes 与发送侧的 MaxReliableAge 兜底）。玩家接入层（wiring/selfsync.PushPlayerFrame）
 // 用同一规则，并在关会话时同时关闭玩家的连接。
 type AsyncTransport struct {
 	async *nettransport.AsyncTransport
