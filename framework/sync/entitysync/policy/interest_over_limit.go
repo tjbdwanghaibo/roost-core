@@ -15,12 +15,16 @@ import (
 // 会话里某一类对象已满时，Manager 不关会话，暂缓多出来的新对象并通知订阅来源（entitysync.SubscriptionSourceHooks.Deferred，
 // 见 entitysync/over_limit.go）。Interest 是唯一知道距离的政策，所以由它把“谁留下”收敛到最近的 N 个：
 //
-//   - 收紧（deferred）：一批通知按玩家的视野归并，每条通知让一个空间视野的可见上限减一——优先这对 pair 所在的、
-//     只挂给这名玩家的空间视野；没有就用玩家的主视野；再没有就用 pair 所在的共享空间视野（收紧会让挂接它的其他玩家
-//     一起少看）。新上限 = min(当前上限, 当前可见数) − 通知数（不低于 0），AOI 随即完整重评：从最远的成员开始离开，
-//     结算时退订。被暂缓的 pair 若本身就在最远的那几个里，退订后它从未到过客户端；否则离开的是更远的已持有对象，
-//     腾出的位置在下一次 Flush 由 Manager 放回最近的暂缓对象。通知只说“少一个”，不需要知道 Manager 的类别与上限。
-//     关系视野、块覆盖、self 没有距离，不收紧；只来自它们的 pair 让主视野让位。
+//   - 收紧（deferred）：一批通知按玩家的视野归并，每条通知要这名玩家在一个空间视野里腾出一个位置——优先这对 pair
+//     所在的、只挂给这名玩家的空间视野；没有就用玩家的主视野；再没有就用 pair 所在的共享空间视野（收紧会让挂接它的
+//     其他玩家一起少看）。上限从 min(当前上限, 当前可见数) 往下减，AOI 随即完整重评：从最远的成员开始离开，结算时退订。
+//     离开的成员只有在这名玩家已没有别的来源持有它时才算腾出位置：同时经块覆盖、关系视野、别的空间视野或 self 被看见的
+//     成员离开这个视野后仍被订阅，会话里一个位置也没空出来（扇出时最远的常常就是这种）。所以上限一直往下减，直到每名
+//     玩家要的位置都腾出来或上限到 0；只减通知数会停在“想要的比放得下的多”上，被暂缓的对象永远到不了客户端
+//     （2026-11-14 nest-game OBSERVED_BLOCKS=4 的不收敛）。被暂缓的 pair 若本身就在最远的那几个里，退订后它从未到过
+//     客户端；否则腾出的位置在下一次 Flush 由 Manager 放回最近的暂缓对象。通知只说“少一个”，不需要知道 Manager 的
+//     类别与上限。关系视野、块覆盖、self 没有距离，不收紧；只来自它们的 pair 让主视野让位。上限到 0 仍腾不够时（无距离
+//     来源本身就超过会话上限），剩下的订阅留在 Manager 的超额暂缓里，按 Manager 的规则在有空位时恢复。
 //   - 放宽（relaxLimitsLocked，每次结算）：先在当前上限内补位（成员离开后腾出的名额立即给次近的目标，不会超额）；
 //     冷却期内上限保持。到期后，补位之后可见数仍低于上限（上限已不起作用）就撤掉、回到 AOIConfig.MaxVisible；
 //     否则上调一档（MaxVisible 的 1/8，至少 1；不限时按当前上限的 1/8，至少 1），到 MaxVisible 即撤掉。
@@ -76,7 +80,8 @@ func (in *Interest) deferred(items []entitysync.DeferredSubscription) {
 	if in.closed {
 		return
 	}
-	shrink := make(map[int64]int)
+	// need：空间视野 → 玩家 → 这名玩家还要在这个视野里腾出的位置数。
+	need := make(map[int64]map[int64]int)
 	for _, item := range items {
 		key := pair{observer: int64(item.Session), subject: item.Subject}
 		current := in.held[key]
@@ -88,14 +93,17 @@ func (in *Interest) deferred(items []entitysync.DeferredSubscription) {
 			metrics.IncCounter(overLimitMetric, metrics.Labels{"action": "untightened"}, 1)
 			continue
 		}
-		shrink[handle]++
+		if need[handle] == nil {
+			need[handle] = make(map[int64]int)
+		}
+		need[handle][key.observer]++
 	}
-	if len(shrink) == 0 {
+	if len(need) == 0 {
 		return
 	}
 	now := in.now()
-	for _, handle := range slices.Sorted(maps.Keys(shrink)) {
-		in.tightenLocked(handle, shrink[handle], now)
+	for _, handle := range slices.Sorted(maps.Keys(need)) {
+		in.tightenLocked(handle, need[handle], now)
 	}
 	in.publishLimitedViewsLocked()
 }
@@ -129,8 +137,9 @@ func (in *Interest) limitedViewForLocked(key pair, current *hold) int64 {
 	return shared
 }
 
-// tightenLocked 把空间视野的上限再降 by 个（见文件开头）并让 AOI 重评。
-func (in *Interest) tightenLocked(handle int64, by int, now time.Time) {
+// tightenLocked 把空间视野的上限往下减，直到 need 里每名玩家要的位置都真正腾出来或上限到 0（见文件开头），
+// 每一步都由 AOI 完整重评、从最远的成员开始离开。need 在这里被消耗。
+func (in *Interest) tightenLocked(handle int64, need map[int64]int, now time.Time) {
 	observer := in.aoi.observers[handle]
 	if observer == nil {
 		return
@@ -150,9 +159,52 @@ func (in *Interest) tightenLocked(handle int64, by int, now time.Time) {
 		// 上调之后又超额：边界就在这里，下次隔更久再试。
 		entry.cooldown = min(2*entry.cooldown, overLimitRelaxMax)
 	}
-	entry.limit, entry.raised, entry.next = max(0, current-by), false, now.Add(entry.cooldown)
-	_ = in.aoi.SetObserverLimit(handle, entry.limit, true)
+	limit := current
+	for {
+		// 一步减去还缺得最多的那名玩家的数：离开的每个成员至多给每名玩家腾出一个位置，不会多减。
+		limit = max(0, limit-mostMissing(need))
+		before := slices.Collect(maps.Keys(observer.visible))
+		_ = in.aoi.SetObserverLimit(handle, limit, true)
+		for _, subject := range before {
+			if _, stays := observer.visible[subject]; stays {
+				continue
+			}
+			for player, missing := range need {
+				if missing > 0 && !in.heldBesidesLocked(pair{observer: player, subject: subject}, handle) {
+					need[player] = missing - 1
+				}
+			}
+		}
+		if limit == 0 || mostMissing(need) == 0 {
+			break
+		}
+	}
+	entry.limit, entry.raised, entry.next = limit, false, now.Add(entry.cooldown)
 	metrics.IncCounter(overLimitMetric, metrics.Labels{"action": "tighten"}, 1)
+}
+
+// mostMissing 是 need 里缺得最多的那名玩家还要腾出的位置数。
+func mostMissing(need map[int64]int) int {
+	most := 0
+	for _, missing := range need {
+		most = max(most, missing)
+	}
+	return most
+}
+
+// heldBesidesLocked 报告 pair 除了空间视野 handle 的距离来源之外是否还有别的来源（块覆盖、关系视野、别的空间视野、
+// self）：有的话它离开这个视野后仍被订阅，不腾出会话里的位置。
+func (in *Interest) heldBesidesLocked(key pair, handle int64) bool {
+	current := in.held[key]
+	if current == nil {
+		return false
+	}
+	for source := range current.layers {
+		if source != (contribution{view: handle}) {
+			return true
+		}
+	}
+	return false
 }
 
 // relaxLimitsLocked 是每次结算开头的放宽（见文件开头）。按视野编号顺序处理，结果确定。

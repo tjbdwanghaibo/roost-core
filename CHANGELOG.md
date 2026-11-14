@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **修复：块覆盖扇出时超额暂缓的对象永远到不了客户端**（framework/sync/entitysync/policy，2026-11-14，KNOWN-LIMITS“Block AOI 扇出 4 时客户端缺对象”）：会话持有数到 `Limits.MaxObjects` 后，Manager 暂缓新对象并通知 Interest，Interest 按通知数把空间视野上限减一、让最远的成员离开。最远的成员同时经块覆盖（或关系视野、别的空间视野）被看见时，它离开这个视野后仍被订阅，会话里没有空出位置；冷却到期上调即撤掉收紧、Manager 每秒再通知又只减一，循环不收敛（nest-game `OBSERVED_BLOCKS=4` 三次都缺同一个对象）。现在收紧一直往下减，直到离开的成员里有足够多不再被这名玩家的别的来源持有（真正腾出位置）或上限到 0；没有别的来源时与原来一步相同。契约见 ENTITY_SYNC“超额降级”。
+  - **先红后绿**：`TestInterestTightensPastMembersHeldByOtherSources`（块覆盖 / 关系视野两个子用例）修前客户端停在 `[1 2 3 1001]`、暂缓 1；变异 3 条（任何离开都算腾出、只认块覆盖为别的来源、只减一步）均变红，每步多减一个的变异由既有收紧用例抓住。nest-game 同参数修前红（1 次原样、2 次带诊断日志），修后 3/3 通过；`spread`、`concentrated`、`concentrated + OBSERVED_BLOCKS=4` 各 1 次通过。夹具核对（`Interest.Seen` 的全部来源）不变。
+
 - **生成配置：Remote 的 Redis 键默认带工程前缀**（wiring/remoteentity、codegen，2026-11-14）：`remote_entity.snapshot_l2_key_prefix` 的生成值由空改为 `roost:<工程名>`。原来为空时 L2 快照键与路由键（`remote_entity:snapshot:*`、`remote_entity:route:*`）没有工程前缀，两个不同名的工程共用一个 Redis db 时互相覆盖（第 3 批真实进程演练里 alliance 进程一直报“同一快照版本内容不同”，换干净环境后消失），与 demo/README“不同名工程可以共用一套环境”不符。运行期契约不变（空值仍表示不带前缀）。已生成的工程重新生成配置或手工加上这个键；改正在运行的部署的前缀要整体重启。回归 `TestGeneratedRemoteEntityKeysCarryTheProjectPrefix`（改回空值时红）；alliance-e2e 夹具改为不论原值整行设置该键。
 
 - **生成器与模块的遗留一批**（codegen / modules，2026-11-14）：
@@ -13,7 +16,7 @@
   - **模块场景补用例 / 去掉对工程配置表的依赖**：stamina 免费补满（#78，25 → 26）、mailbox 等结果超时而已提交的领取（#83，32 → 33）；purchase+bag、bag+gm 的场景装载自带道具行，工程换表后不变红（#104）。
   - **Nest 生命周期用例与生成物同步**（#199）：handler 内新建的生命周期用例改用 `wiring/entitylifecycle.Lifecycle[T]` 的逐条同形测试副本，`TestEntityLifecycleTestCopyMatchesWiring` 守卫两边一致；`GetOrCreate` 的“没有记录”改按加载器契约的 `entity.ErrAuthorityEntityNotFound` 判断（DataEngine 下行为不变）。
   - **金样**：`client/spec/dao-collections.json` 跟上 578fa31f 起增量不带实体 ID（`dao-golden-runtime.sh` 的 `TestTrackedSyncChanges`）。
-  - **nest-game 压测夹具**：`ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch|dispatch`（#15）；独立 Gate 可叠 `SELF_SYNC=1`（#45）；场景 Sync 的 `ROOST_NEST_GAME_LAYOUT=concentrated`、`ROOST_NEST_GAME_OBSERVED_BLOCKS=N` 与首错定位（#178）。`OBSERVED_BLOCKS=4` 的短测在同一处不收敛（Manager 已订阅、客户端缺一个全量），根因尚未确认。对照测量等机器空闲。
+  - **nest-game 压测夹具**：`ROOST_NEST_GAME_HEARTBEAT_DELIVERY=batch|dispatch`（#15）；独立 Gate 可叠 `SELF_SYNC=1`（#45）；场景 Sync 的 `ROOST_NEST_GAME_LAYOUT=concentrated`、`ROOST_NEST_GAME_OBSERVED_BLOCKS=N` 与首错定位（#178）。`OBSERVED_BLOCKS=4` 短测发现的不收敛已修（见本节“块覆盖扇出时超额暂缓的对象永远到不了客户端”）。对照测量等机器空闲。
 
 - **测试：独占模式 Remote 心跳在转移时的真实 Mongo 故障注入**（gameplay/movement，2026-11-14，KNOWN-LIMITS“独占模式 Remote 心跳的真实依赖故障注入”）：新增 `TestRealRemoteExclusiveTransferDuringAMongoFault`（`-tags integration`，要 toxiproxy）。旧 owner 的 Mongo 经本用例自建的代理直连主节点，三种故障时刻：转移前断开（确定未改、旧 owner 照常推进）、CAS 发出时断开（结果未知，旧实例冻结在 Recovering、零推进，恢复后解冻）、CAS 生效而回程超时（新 owner 立刻能写，旧实例冻结、恢复后被 fence）；都断言新 owner 拥有之后旧 owner 零推进。`realRemoteManagers` 抽出按 sid 换 Mongo 客户端与配置的 `realRemoteManagersWith`。变异“结果未知按未改处理”变红。独占模式不经 Redis，只注入 Mongo 故障。没有行为改动。
 
