@@ -7,3 +7,23 @@
 - `core-runs.log`：`TestCellWorldMeasure`（1000 玩家 + 每格 2250 NPC，4 Cell，5% 运动，20s 窗口）基线与修后同机交替各 3 轮，只保留测量输出行。测量自带 witness P99 ≤ 50ms 的断言，宿主机过载时两边都会报红（修后 3 轮里 1 轮通过）。
 
 完整日志与测试二进制没有入库，留在本次会话的临时目录。M-15（Robot 千人，A + D + C 之后）没有跑。
+
+## M-15：Robot 千人复跑（2026-11-15，A + D + C 之后，同机对照 main）
+
+[性能入口](../../../maintenance/evidence/v147-performance-preparation-20261114/README.md)的 `s11-cellworld-robot` 段（`scripts/test-seamless-demo.sh`，ROBOT_ONLY + CAPACITY，1000 人、60 秒、active 5%、预热 30 秒），macOS 本机，load 约 3.5～4.1。先跑 feat/v148（含 D13 C），再在同一台机器上跑 main `603dd139`（v1.47.0 + 最低 core，无 D13 C）作对照。原始输出在各自检出的 `artifacts/perf/v147-remaining/s11-cellworld-robot-{v148,main603}/`（不入库）。两次都按阈值判失败（error_rate 门槛 0）。
+
+| 指标 | main（无 C） | feat/v148（有 C） |
+| --- | --- | --- |
+| Robot 成功 / 失败 | 629 / 371 | 690 / 310 |
+| 失败原因 | 全部“预热期未到分散目标” | 同左 |
+| 移动请求完成 / 错误 / p99 | 564,906 / 0 / 21.95 ms | 619,376 / 0 / 18.48 ms |
+| 每秒完成请求 | 5,795 | 6,348 |
+| Base（game-1000）“未进入复制场景” | 398 | 333 |
+| Base 进入钩子失败（rehome / alliance `sync canceled`、mail / chat NATS 请求超时等） | 2,079 | 1,756 |
+| NATS slow consumer | 0 | 0 |
+
+读法：
+
+- 失败的机器人集中在后上线的那一批（ID 尾部），目标点在地图上均匀分布；它们没走到，是因为在 1000 人约 5 秒的登录潮里 Base 的进入流程超时（进入钩子与世界频道公告超时、没进入复制场景），进不了场景就不会移动。瓶颈在 Base 的登录 / 进入路径，不在 Witness 接收。
+- C 在同机对照下有改善（失败 371 → 310，吞吐 +9.5%，移动 p99 22 → 18 ms），没有退步；但千人仍不达标，50ms 端到端也无从判定。
+- 下一步该查 Base 登录潮下的进入路径（进入钩子的 Nest sync 与 NATS 请求在 5 秒爬坡里排队），而不是 D13 的 B / E。

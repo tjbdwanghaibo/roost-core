@@ -781,7 +781,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### 地形 / 无缝世界：遗留
 
 - **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`；terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid。**已决定（D11 Q17 A，2026-11-14），v1.47.0 之后实施**：按地图归属选库范围——普通场景按 sid，分区场景（跨服共享地图）保持 global，demo 与 terrain 模块一致，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R3）。
-- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅），M-15 A + D + C 之后 Robot 千人复跑待测；B / E 等 M-15 结果再定；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
+- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）；M-15 A + D + C 之后 Robot 千人复跑（2026-11-15）仍不达标：1000 人中 310 人预热期没走到分散目标（同机 main 无 C 为 371），原因是 Base 在登录潮里进入流程超时（进入钩子 `sync canceled` / NATS 请求超时、没进复制场景），瓶颈在登录 / 进入路径而不在 Witness 接收，见[记录](../performance/benchmarks/cellworld-d13c-20261114/README.md#m-15robot-千人复跑2026-11-15a--d--c-之后同机对照-main)；B / E 暂不做，先查进入路径；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
 - **CellWorld Runtime**：六条模块场景含 Start / Stop 与失败复位已验；AddIngress 失败分支仍缺场景，业务 Entity 适配仍只在 demo。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 
