@@ -118,7 +118,7 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 
 ## 安装做了什么
 
-1. **前置骨架**：缺少的 configdata / heartbeat / directory / remote_entity / remote_mirror / saga / web Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
+1. **前置骨架**：缺少的 configdata / heartbeat / directory / remote_entity / remote_mirror / saga / web / manager Mod 使用正式 `add mod` 代办；attribute feature 由模块启用并 `project sync`。实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
 2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
 3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
 4. **组件与附加 DAO**：把模块组件接到实体上；`daos: [{field: combatState, type: CombatDAO, tag: combat_state}]` 追加独立 DAO 的聚合声明，复用同一份实例的加载、事务与恢复。字段/集合被占用时拒绝。`sync_packer` 只接明确的模块视图工厂，已有业务 packer 时拒绝覆盖。
@@ -182,7 +182,7 @@ runtime:
 
 ```yaml
 needs:
-  mods: [manager]            # 必须写：没有 manager Mod 就没有人启停它们
+  mods: [manager]            # 必须写：服务没有 manager Mod 时安装器代办 roost add mod manager
 managers: [NewLoginNotices]  # func() app.IManager，定义在 files/game/managers/ 下的模板里
 ```
 
