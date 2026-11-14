@@ -525,6 +525,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **跨格笔刷与跨格占地直接拒绝（维护者 2026-11-10，[方案 §30.10](FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)）**：覆盖块归两个及以上地图进程的笔刷答 `terrain_cross_cell`（100070）、占地答 `building_cross_cell`（100069），都在预扣配额与发号之前，不做拆分、跨进程事务或部分成功。代价：格边上半径以内（笔刷至多 16m）不能一次刷过分界线，玩法层靠地形设计避开；客户端要能处理这个码（挪进一个格里再发，可用同一个 `Seq`）。（演练与 `Brush.ApplyIn` 的去留见[地形 / 无缝世界：遗留](#地形--无缝世界遗留)）
 
 **地形确认来源（就绪标记，2026-11-10）**：可编辑地形 §31.7 ③ 按维护者定的 A 实施（[方案 §31.9](FEATURE-2026-11-08-editable-terrain.md#319-确认来源就绪标记317-③-a2026-11-10)；已合入 main，随 v1.43.0 发布）：地形视野里每一块都下发 TerrainChunk 对象，没改过的块是 Version 0 的就绪标记，C# `TerrainChunkSync` 据此 `Confirm` / `Unconfirm`。留下的边界：① 可确认的显示半径约 100m（一块就绪要 8 个邻块都已确认，地形视野 200m、视点每 8m 上报）；要更远需放大地形视野，300m 约 69 块，超过地形 64 的上限，要连同 `terrainMaxVisible` 与会话上限一起改——**待维护者确认**是否需要；② 进场时视野里 29～37 块按地形快照预算每 Flush 4 个，约 8～10 次 Flush（约 0.4～0.5s）后才全部可确认，期间显示原有网格或空洞。③④⑤ 见[地形 / 无缝世界：遗留](#地形--无缝世界遗留)。
+- **分区场景的建筑只对同一 Base 进程上的观察者可见**：`EnableBuildings` 在分区场景也调用，建筑随 `attachBuildings` / `loadStanding` 进本进程 Base 场景的主视野（真实多进程无缝演练 `terrain_building_view` 步覆盖：sid 1004 放建筑，sid 1001 的观察者主视野收到创建与删除，2026-11-14）；连在没有该建筑副本的别的 Base 进程上的玩家看不见（需要建筑副本，§27.6）。
 
 #### CellWorld 固定分区（v1.47.0）
 
@@ -669,7 +670,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 同步：尚未确认的偶发与疑点
 
-- **2026-11-13：game-demo 主视野超限用例在重负载下失败一次（尚未确认）**：`TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164`（game-demo 的 `internal/service/game/scene_view_scale_test.go`）在全仓 `go test ./...` 的 `TestClientSDKAgainstGeneratedPlayerTCP`（生成 game-demo 并跑它的测试）里失败一次，原文 `scene_view_scale_test.go:138: over the limit: 0 sessions lost, 0 waiting, 0 ever deferred (want 0, 0 and the crowd overflowing)`；当时同机并行跑着模块门禁与 17 个玩法纵切脚本。之后单独重跑 `TestClientSDKAgainstGeneratedPlayerTCP` 通过、生成的 game-demo 里该用例 `-count=5` 通过、独立生成的 game-demo `go test ./...` 通过。发生在“生成工程只带用到的托管服务”那一轮（2026-11-13），但那一轮的 game-demo 生成物除 `docs/ROOST_YAML.zh-CN.md` 一段说明外与改动前逐字相同，判断与该改动无关；“超限从未延后”在什么时序下出现没有定位，用例断言没有放宽。
 - **类型调度的 demo 性能验收**：game-demo 生产 Scene 已改成 on_change/地形 1 秒；历史功能/测量夹具仍保留原周期构造器，本批未跑新性能验收。 sync-business 夹具已能测生产接线（`ROOST_SYNC_SCHEDULE=on_change`，两种调度 20 拍冒烟通过）；正式对照等机器空闲时交替跑 `ROOST_SYNC_SCHEDULE={periodic|on_change} bash scripts/perf/sync-business.sh`。
 - **`BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4` 慢 7～11%，原因尚未确认**：三次同机交替对照（count 6）都显著，约 9µs 一档；同一路径 workers=1 与其余七个组合无差异，AOI 观察者结构已收回原大小，改动在这条路径上只多两次分支判断。可能是 4 worker 小批量下的调度或代码布局噪声，没有定位到代码原因（[证据](evidence/sync-overcap-degrade-20261108/README.md#基准对照同机交替)）。
 
@@ -713,7 +713,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **enter 模块的边界**：它建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`；但不做鉴权（`auth.go` 仍缺省拒绝，`roost config enable player-tcp` 也没有执行），所以真实客户端仍连不上。独立安装仍需业务接入鉴权与开启监听；配方使用 login 模块的进服票据/session 验证并开启开发监听；覆盖先新建、进入、重连和进入前拒绝，休闲配方另测发放与标记一起回滚。enter 自带 29 条场景（含进入前检查与 3 条事务内钩子登记检查）。 “先新建、再进入”那条路（`EnterCreate` / `EnterStatus` / `enter_need_create`，2026-11-12）只对被登记为“先新建”的会话生效（login 的联动登记的是用进服票据握手的会话），别的会话与没装 login 的工程照旧由 `EnterGame` 加载或创建。新建与进入的事务在模块场景里用真实的 Nest（替身提交器）验证，端点里“没有档就答 `enter_need_create`、不创建”与会话激活后读档已有两个配方的 TCP 场景和单机真实进程登录验证；不等同多实例故障恢复验证。新建先建一份空档再提交：名字被 naming 拒绝、提交失败时空档留着（没建成，下一次新建接着用），不合规的名字在建档之前被拒。已经建成的玩家再发 `EnterCreate` 答 `enter_created`、什么都不改。装了 naming 时名字先于“建成了”落定（占了名而新建事务没成的玩家，下一次换名字由 naming 释放旧名）；这条组合只用替身命名入口验证过，没有与真实的 naming 一起跑。在 `EnterGame` 里直接建成的玩家没有名字，照旧用改名协议。`PlayerDao.Enter` 多了一个只落库的字段 `Fresh`（store 键 3）。
 - **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player/enter_game.go`），demo 覆盖了模块的 `protocol/def/enter_game.go` 与 `game/controllers/enter/` 两个文件。enter 域的 controller 自己建一个 player controller，一个进程里因此有两个 player controller 实例；它们共享的东西（在线名单、归属、场景）都经 Registry 或进程级对象，不存在各自一份的状态，但往 player controller 上加每实例状态时要记得这一点。demo 的 `enter_first.go` 是模块的缺省版本（不发任何东西）：demo 没有把自己的新玩家初始化搬进这个钩子。
 - **模块的规则大多还是 Go 写的业务文件**：模块可以带配置表（bag 的道具表就是），但清单不能声明配置项。profile 的每级经验、stamina 的规则、leaderboard 的榜与周期（`leaderboard_board.go`）、mailbox 的账本宽限（600 秒）都是代码里的常量或业务文件，要调只能改已装的文件；task 与 shop 已使用配置表；rules 统一进入推送和补取，尚无热更广播或大目录分页。
-- **mailbox 经 NATS 的 BusClient 与 Redis 存储没有跑过**：场景只用真实的 mail `Service` 加内存存储；BusClient、Redis 存储、超时与重投要在真实依赖（wiring/integration）下跑。
 - **game-demo 删掉写死的号之后，模块的号会重排**：模块的协议号、错误码按“最小空号”分配；demo 每换用一块、删掉自己写死的号，空出来的号就被列表里靠前的模块占走（例如邮件换用后 `ChatSend` 10016 → 10008）。“新模块加在末尾、前面的号不变”只对加模块成立。未上线，不做兼容；要让号稳定需要安装器支持保留号，没有做。
 - **game-demo 里 wallet 的金币没有玩法来源**：只有 GM 的 `gm.mail.send -coins` 邮件产出，demo 的玩法（副本、活动）发的仍是道具。
 - **login 的边界**：模块自己的场景是离线的（真实 account 内存存储 + 认证器；与 enter 的联动里游戏服的档是内存替身）。握手认两种票据：进服票据 `enter:<票据>`（account 的 `EnterServer`，新号的第一次握手在 account 里建出账号 ↔ 玩家号的映射——握手之后不在游戏服新建就离开的账号，映射与玩家号已经占了）与角色会话令牌。握手成功与否只由 account 决定，不等游戏服；游戏服的结论（本服该不该服务他、要不要先新建）在会话激活之后推 `EnterStatus`，**只是告知**：后台执行、同时至多 256 条会话、超过的丢弃、进程退出不等，推完带码的拒绝 300 毫秒后按玩家断开（传输没有只断一条会话的入口，慢连接可能没收到那一帧），权威判断在 `EnterGame` / `EnterCreate`。**独立 Gate 部署只做过一次单机真实进程演练**（2026-11-12，account + 走 Game Ingress 的 game + Gate 三个进程；接法与差异见 `modules/login/README.md` 的“边界”）：生成器不生成 Gate 进程，Gate 服务要工程自己装；每次握手 account 的 `EnterServer` 执行两次（Gate 与 Game Ingress 各认证一次）；别的服的票据在 Gate 上握手直接被断开、客户端收不到 `login_elsewhere`；告知要的 claims 由 gateway 的激活通知带到（`GameDependencies.OnActivated`，维护者 2026-11-12 定“改”；原先按玩家号记 30 秒的旁路缓存已删）；多个 Gate、重启后的重连、跨机没有跑。独立装模块仍要在开发配置里写 `login.dev_token`、`roost config enable player-tcp`，区服用模块带的 `cmd/accountctl upsert-server` 登记；game-demo 与两个配方已代办开发配置。生成的 `deploy/dev/run.sh` 在全部服务起来后自动登记本机的服，2026-11-12 在新生成的 game-demo 与两个配方工程上都实跑过。工程已有自己的 `cmd/accountctl` 时装不了 login。票据都不能单张吊销；封号对进服票据与账号票据立即生效（account 每次校验都再读账号），对已签发的会话令牌不生效（至多一个 `session_ttl`）。开发令牌可以冒充任何账号，生产拒绝靠环境键加 `dev-` 前缀——没写 `env: prod` 的预发环境带着它就是全员可冒充。doctor 的 `collaborators:account` 变 OK 不代表渠道验签已接。玩家号计数器在 Redis 里，被清或换前缀没搬数据会重号。没装 rehome 时换服在途的角色不被源服拒绝；login 与 rehome 的进入前检查先后靠名字排序。已经自己实现了 account collaborators 的工程装不了 login（`replaces` 全有或全无）。game-demo 与两个配方均已换用 login：进服票据握手的会话先新建再进入，会话令牌握手的仍是加载或创建；配方另有一条进入前检查拒绝换服在途的角色。
@@ -723,7 +722,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
   - **验证范围**：仓库用例是整条链路的离线场景（持久层、驻留表、传输是替身）与机器人握手之后三步的离线场景（`TestPortalRobotAfterTheHandshake`）；真实进程由 `scripts/test-demo-login.sh` 可重复跑（`make dev-run`、curl 三步、`-login portal` 新号 / 老号、总线登录、最后经独立 Gate 跑整个缺省场景）。
 - **servertime 的边界**：只有离线场景，推送经真实 TCP 到达、与 EnterGame 应答的先后、独立 Gate 部署都没有验收；独立 Gate 下 Game 重启后客户端连接是否保留尚未确认，保留时测试环境改 `time.logic_offset` 要等客户端下一次定期同步才发现；客户端的业务时间是估计（网络时延加走速差），重置前后几秒以服务器应答为准；重置之后在线客户端会集中来问一次，服务端不限流；与 checkin 等模块的一致性按表达式核对（同一个 `clock.BusinessDay`），没有调它们的 handler 对比。
 
-- **activity_world 的自带场景是否读工程配置表（尚未确认）**：2026-11-14 按 bag README 换表的矩阵里，task、purchase+bag、bag+gm 原来会红，已改为装载自带样例行；shop、activity、activity_alliance 换表后为绿。activity_world 的场景也装载工程的 `configs/data`，不在那次矩阵里。确认办法：新生成工程装上 activity_world，按 README“复用方式”换表，跑 `roost module verify`。
 
 ##### 2026-11-12：活动模块的驱动与验收边界
 
@@ -782,8 +780,6 @@ room 自动断线订阅、保留策略、重启在线状态重建、广播继续
 #### 地形 / 无缝世界：遗留
 
 - **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`（维护者本轮只点名 Player / World）。terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid；分区场景（同一张地图跨多个 game 服）下地形按服分库是否合适**尚未确认**，要定下来并让 demo 与模块一致。
-- **转发编辑用例在重负载下的一次 `-race` 失败（尚未确认）**：`TestTerrainRelayForwardsABrushToTheCellThatWritesIt` 在与仓库其余测试并发运行时失败一次，原文没有保存，之后单独、并发与 `-count=40` 的压力运行都没有复现；疑似进程内网转发超过用例配的 300ms 期限（结论 Unknown）。见[证据](evidence/terrain-brush-single-cell-20261110/README.md#尚未确认一次--race-失败没有复现)。
-- **分区场景里建筑进本进程场景主视野的接线只有编译与单元覆盖**：`EnableBuildings` 现在也在分区场景调用，`attachBuildings` / `loadStanding` 随之在分区的 Base 场景上执行；连在别的 Base 上的玩家看不见建筑（需要建筑副本，§27.6）。真实多进程演练没有放建筑的步骤。
 - **游戏尺度分区视野（`view_radius` 68m、`ghost_band` 70m）的成本没有实测**：witness 列表、Ghost 数、副本订阅的块数都随之增加（T09）。 测量已能按游戏尺度跑（`ROOST_CELLWORLD_PERF_SCALE=game`，命令见 [CELLWORLD 性能](../performance/CELLWORLD.md)），等机器空闲时测。
 - **地形确认来源 ③④**：③ 原始地形包里坏了的块（服务端装不进视图）、分区场景里拥有者装不进的块没有标记，客户端永远不确认（后者每次订阅续期都会再问一次）——**待维护者决定**：按基础包确认（不改协议）还是新增“不可用”标记（改协议与 C#）；④ C# 接入层只用构造的说法核对时序，没有用真实 entitysync 帧驱动 `EntityViews` → `TerrainChunkSync`，Unity 未跑（外部环境）。⑤ 已在 mirror-local 的无缝演练上跑过（2026-11-14，`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh` 全部通过）。证据见 [evidence/terrain-confirm-source-20261110](evidence/terrain-confirm-source-20261110/README.md)。
 - **2026-11-09：地形首批参数实施边界**：默认编辑配额与桶容量已降至 270，terrainpack 默认 HeightBase 已设为 −100 米（−10000 厘米）；不重写既有资源。按类型同步现已完成框架与 demo 接线。本条写下时“圆滑岸线只完成决策，原地形去重两项问题及 P3～P6 未完成”，此后的状态（2026-11-11 按 CHANGELOG v1.43.0 段核对）：去重两项 T01 / T02 已修复；P3（Ghost 副本、移动与寻路、跨格移动）、P4（区域水位、建筑）、P5（转发编辑、分区场景的建筑）的代码与岸线 / 重建调度的 C# 算法层都已合入 main 并随 v1.43.0 发布；仍未完成的是 P5 的规模与降级验收（T09）、P6 可选物理（T10）、Unity 表现，以及真实 Mongo / WAL 崩溃演练、跨机与长稳验收。当前清单见 [地形进度总表](TERRAIN-STATUS.md)。功能测试、修正记录与预期跳过见 [实施状态](TERRAIN-DECISIONS-20261109.md)；未新增压测，历史 270 档临时数据不代替容量验收。
@@ -869,12 +865,13 @@ room 自动断线订阅、保留策略、重启在线状态重建、广播继续
 
 #### 新增离散玩法纵切
 
-回合 PvP、合作 Roguelike、异步社交经营分别提供 9、10、9 个场景，进入 pretag，包含公共 Robot 的实际 TCP/PB 接线；合作包含双客户端三关、领奖、重连和授权视图。玩法纵切仍用替身提交器，未逐玩法验证真实持久恢复、跨服或容量；回合超时尚无自动 timer 装配，Roguelike 仅离散闯关。范围与命令见[手册](../framework/SESSION-GENRES.md)。
+回合 PvP、合作 Roguelike、异步社交经营分别提供 10、10、9 个场景，进入 pretag，包含公共 Robot 的实际 TCP/PB 接线；合作包含双客户端三关、领奖、重连和授权视图。玩法纵切仍用替身提交器，未逐玩法验证真实持久恢复、跨服或容量；回合超时经房间持久定时器自动推进（`roost add timer`，`TestScenarioTurnTimesOutByTheRoomTimer`），房间定时器在真实 DataEngine 重启后的补触发未在纵切里跑（替身提交器）；Roguelike 仅离散闯关。范围与命令见[手册](../framework/SESSION-GENRES.md)。
 
 ## 三、已修复的历史
 
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-14：夹具与模块收口**：分区场景建筑进别的 Cell / Base 观察者主视野进了无缝真实演练（`terrain_building_view`），演练发现 demo 的 clientsync 解码不认识 `building` 命名空间（已修）、转发编辑在 Base 发号与 Cell 写入之间被杀时块版本可比已答序号少一（断言改为接受并重发验证）；turn-pvp 回合超时接房间持久定时器；mailbox 经 NATS BusClient（core / jetstream）调 Redis 存储的 mail 服务补真实依赖用例（答复超时重试、确认超时、停机重启、断开后重投给另一实例）；activity_world 场景原读工程 configs/data、换表后 2/4 红，改为装载自带空表；两条偶发确认是夹具时序——主视野超限用例在 D17 收紧越界、冷却放宽前就判定（8×yes、GOMAXPROCS=2、`-race` 旧 22/300 红 → 新 0/300），转发编辑是进程内转发超过 300ms 期限（旧 1/1000 红 → 现 0/1300）。证据见 CHANGELOG。
 - **2026-11-14：`dbscope=sid` 骨架缺省后的夹具与玩法脚本重跑**：合并后在 feat/v147 上全部重跑通过——17 个玩法脚本、模块门禁、`go test ./...`、dataengine / demo / Remote / 联盟 / 无缝真实进程演练、mmorpg 跨服演练（背包核对改读 `bag.1.<物品号>`），以及 12 个真实依赖档（`ROOST_{SLG,MMORPG,MOBA,CARD_RPG,TOWER_DEFENSE,SURVIVAL_EXTRACTION,MERGE_CASUAL,IDLE_SIM,AUTO_CHESS,PARTY_ROOM,GATE}_REAL`、`ROOST_MOBA_ROUTING`，没有跳过）。没有发现别处直接读共用库。
 - **2026-11-14：demo 机器人与演练**：`ProfileRename` 进了 game-demo 机器人缺省场景（改名三步）；登录链路做成可重复的真实进程脚本 `scripts/test-demo-login.sh`（含独立 Gate）并补了机器人握手之后三步的离线场景；两个 game 进程上的玩家互相入会进了机器人场景 `alliance_cross_join`；合服演练 `scripts/test-demo-merge.sh` 加了独立 Gate 与 B 冷加载按 sid 分库文档；`sidmerge` 回退报告 `new_in_target` 的说明改为“不在清单上的都算”（原文说只算合服期间新产生的，行为未变）；alliance-e2e 夹具在 L2 前缀默认值改动后对没有 remote_entity 段的服务也要求该键、并在持锁时 Fatal 导致挂起，已修。证据见 CHANGELOG。
 - **2026-11-14：Block AOI 扇出 4 时客户端缺对象**（同日发现并修复，`fa936c0d`）：块覆盖让玩家要看的对象（101）超过会话上限 `Limits.MaxObjects`（100），Manager 暂缓只经块覆盖看见的对象并通知 Interest；`tightenLocked` 按通知数把主视野上限减一，离开的最远成员同时经块覆盖被看见、仍被订阅，没有腾出位置；冷却到期上调即撤掉收紧，每秒循环，暂缓对象永远到不了客户端。现在收紧一直减到真正腾出位置（离开的成员不再被别的来源持有）或上限到 0。回归 `TestInterestTightensPastMembersHeldByOtherSources`；复现命令修后 3/3 通过。框架 Sync 缺陷，夹具核对无误。

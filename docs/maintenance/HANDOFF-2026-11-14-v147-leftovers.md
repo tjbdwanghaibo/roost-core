@@ -89,7 +89,7 @@ decisions.md 的 Q1～Q17、#154、#37、CellWorld B / C / E、self_sync RetryLa
 
 由交接前的会话收尾、合进 feat/v147：
 
-- **夹具与模块**（分支 `tmp/leftovers-fixtures`）：无缝演练加放建筑并核对进别的 Cell / Base 的主视野（#146）、turn-pvp 回合超时（#200）、mailbox 经 BusClient + Redis 的真实依赖用例、activity_world 换表确认、两条偶发（game-demo 主视野超限、地形转发编辑 `-race`）的负载循环。
+- **夹具与模块**（分支 `tmp/leftovers-fixtures`，**已合入** `cacf0d96`，KNOWN-LIMITS 已回写）：无缝演练加放建筑并核对进别的 Cell / Base 的主视野（#146）、turn-pvp 回合超时（#200）、mailbox 经 BusClient + Redis 的真实依赖用例、activity_world 换表确认、两条偶发（game-demo 主视野超限、地形转发编辑 `-race`）的负载循环。
 - **小件**（分支 `tmp/leftovers-p3`）：出生号与运行期号共用 shard 位（运行期序号上限改为 `1<<33 - 1`）、cellworldhost Runtime 的 Start / Stop 回归、C# 地形确认用真实 entitysync 帧驱动。
 
-这两批合入后，P8 / P9 / P10 的先决条件才满足。合入情况看 `git log --oneline feat/v147`。
+夹具与模块已合入，P8 / P9 / P10 的先决条件已满足（P9 注意：turn-pvp 回合超时已接房间持久定时器，真实 DataEngine 重启后的补触发是 P9 的一部分）。小件那批合入后这里会更新。合入情况看 `git log --oneline feat/v147`。
