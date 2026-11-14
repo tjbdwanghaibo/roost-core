@@ -150,7 +150,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
 - **发件方都走 `gamemailbox.SendTo`**（`game/mailbox/mailbox_send.go`）：给一名玩家发一封信，附件先按领取端的同一个判断校验
   （发不出去的不进邮箱，返回 `ErrLetterInvalid`，重试无用），幂等键必填。demo 的四个发件方只差标题、附件与幂等键：
   升级奖励（mailbox/profile 联动，键是 EffectID）、GM 补偿（模块联动，键是显式 request_id）、活动结算（`activity.go`，
-  键是“活动 id + 玩家 id”）、送礼的送达（`gift_saga.go`，键是 saga 步骤的幂等键）。
+  道具一封、金币一封，键是“活动 id + 玩家 id”，金币那封另加前缀）、送礼的送达（`gift_saga.go`，键是 saga 步骤的幂等键）。
 - **领取是恰好一次的**：中间那一步把邮件 id 和奖励放进同一条 WAL 记录（`MailboxComponent.Claim`，账本是 `PlayerDao.MailboxLedger`）。
   三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢了、预留到期、重试用同一个 token 再预留一次。
   邮件服务只能把它算作重复**尝试**（它无从知道游戏发没发），游戏这边知道：第二次发放在账本上撞到自己，什么也不做，回的还是同一组数字。
@@ -170,7 +170,10 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
 - **金币**：装 mailbox 连带装进了 wallet 模块（`PlayerDao.Wallet` 是同步字段、`WalletLedger` 与 `MailboxLedger` 只落库、协议 `WalletSpend`）。
   同步视图里 `Wallet` 只给本人：普通场景的 default 视图（全部同步字段）与分区场景的 `self` 视图带它，
   别的玩家（near / team / far）的字段白名单里没有（`game/entities/player/sync_packer.go`）。
-  demo 的玩法不产出金币；GM 可以发金币附件（`gm.mail.send` 的 `attachment: {"type":"coins","amount":100}`），领取后进 wallet 的余额，`WalletSpend` 能把它花掉。
+  金币的来源（D26，2026-11-14）：副本通关在领奖事务里经 wallet 的 `Add` 发 `dungeon.ClearCoins`（20），“这一局发过没有”由领奖账本保证，
+  不用 wallet 的业务键（账本的期限远长于 wallet 128 次的去重窗口）；活动结算按名次另发一封金币邮件（`activity.Reward.Coins`：
+  第 1 名 300、第 2 名 200、之后 100，键 `activity-coins:<活动>:<玩家>`），领取时由 mailbox 经 wallet 的 `Add` 到账（离线的玩家
+  也照发）；GM 可以发金币附件（`gm.mail.send` 的 `attachment: {"type":"coins","amount":100}`）。`WalletSpend` 能把它花掉。
 - 机器人脚本：add_exp 之后 `retry × 20 { wait 250ms; mailbox_list }`（效果链是异步的：WAL → outbox → JetStream → consumer → mail.Send），
   拿到第一封可领邮件的 id 再 `mailbox_claim`，断言领到的是道具、背包里这个道具的数量 ≥ 领到的数量；`mailbox_claim_replay`
   再领同一封，断言数量不再增加。
@@ -805,7 +808,9 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
   场景、已付订单、公会、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
   后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
-  `EnterInit`，响应里的 `First` 说明这一次是不是首次；新玩家的初始发放写在 `game/login/enter_first.go`。
+  `EnterInit`，响应里的 `First` 说明这一次是不是首次。demo 的新玩家初始化写在 `game/login/enter_first.go`（D25，覆盖模块的
+  缺省版本）：新玩家落库的位置写成世界场景的出生点，与“建成了”的标记同一笔事务，加载或创建与新建两条路都经过它，只执行一次；
+  demo 不发初始道具或金币。
   之后照样执行进入钩子（`gamelogin.RunEntered`，带着会话的 claims）：聊天上线与拉全服邮件是 chat、mailbox 各自与 enter 的联动登记的，
   不写在 demo 的进入流程里。
 - **登录有预算**：传输层给每个请求 `player_access.tcp.dispatch_timeout`（与 `nest.request_timeout` 对齐）；
