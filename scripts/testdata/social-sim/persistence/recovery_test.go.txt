@@ -1,0 +1,66 @@
+package handler
+
+import (
+	"os"
+	"testing"
+)
+
+// 两个崩溃点分别覆盖离线待成熟的种植/帮助，与已确认但未投影的收获奖励。
+// ReadyAt 来自持久状态；恢复不自动积累离线收益，只有主人显式 harvest 才付一次 5 金币。
+func TestSocialSimRealCrashRecovery(t *testing.T) {
+	if os.Getenv("ROOST_SOCIAL_SIM_REAL") != "1" {
+		t.Skip("ROOST_SOCIAL_SIM_REAL not set")
+	}
+	if os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI") == "" {
+		t.Fatal("private Mongo replica set required")
+	}
+
+	verify := func(t *testing.T, h *sessionRuntime) {
+		s := h.state(t)
+		if s.Planted || !s.Helped || s.ReadyAt != sessionRealT0+50000 || s.Harvests != 1 || s.Revision != 3 || h.coins(t) != [2]int64{5, 0} {
+			t.Fatalf("social terminal/rewards: %+v coins=%v", s, h.coins(t))
+		}
+		h.replayLast(t)
+		for i := range h.players {
+			h.refuse(t, i, h.command(t, i, "harvest", 0))
+		}
+		h.refuse(t, 1, h.command(t, 1, "plant", 0))
+	}
+	plant := func(t *testing.T, h *sessionRuntime) {
+		h.act(t, 0, "plant", 0)
+		h.act(t, 1, "help", 0)
+		s := h.state(t)
+		if !s.Planted || !s.Helped || s.ReadyAt != sessionRealT0+50000 || s.Harvests != 0 || s.Revision != 2 {
+			t.Fatal("wrong growing crash state", s)
+		}
+		h.replayLast(t)
+		h.refuse(t, 0, h.command(t, 0, "harvest", 0))
+		h.refuse(t, 1, h.command(t, 1, "help", 0))
+	}
+	runSessionCrash(t, []sessionCrashCase{
+		{name: "growing", seed: plant, recover: func(t *testing.T, h *sessionRuntime) {
+			s := h.state(t)
+			if !s.Planted || s.Harvests != 0 || h.coins(t) != [2]int64{} {
+				t.Fatal("offline load paid income before harvest", s)
+			}
+			h.refuse(t, 1, h.command(t, 1, "harvest", 0))
+			if got := h.act(t, 0, "harvest", 0); got.Reward != 5 {
+				t.Fatal("harvest reward", got)
+			}
+			h.replayLast(t)
+		}, verify: verify},
+		{name: "harvested", seed: func(t *testing.T, h *sessionRuntime) {
+			plant(t, h)
+			h.now.Store(sessionRealT0 + 50000)
+			h.act(t, 0, "harvest", 0)
+			if h.coins(t) != [2]int64{5, 0} {
+				t.Fatal("wrong acknowledged reward")
+			}
+		}, recover: func(t *testing.T, h *sessionRuntime) {
+			if h.coins(t) != [2]int64{5, 0} {
+				t.Fatal("acknowledged harvest lost or doubled")
+			}
+			h.replayLast(t)
+		}, verify: verify},
+	})
+}

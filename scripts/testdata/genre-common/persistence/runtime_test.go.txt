@@ -1,0 +1,431 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	db "GENRE_MODULE/db"
+	room "GENRE_MODULE/game/entities/game_room"
+	player "GENRE_MODULE/game/entities/player"
+	sender "GENRE_MODULE/game/handler/syncsender"
+	rules "GENRE_MODULE/game/rules"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+)
+
+const sessionRealT0 int64 = 1800000000000
+
+type sessionNoEffects struct{}
+
+func (sessionNoEffects) Publish(context.Context, engine.OutboxItem) error {
+	return errors.New("unexpected effect in local session workflow")
+}
+
+// 两个离散玩法共用相同的 Player/Coins、GameRoom/State DAO 与 Scenario Sender；这里只共享真实接线和崩溃屏障，
+// 种子命令、未完成状态与奖励断言都留在各玩法 persistence/recovery_test.go，不能拿一种玩法的通过替代另一种。
+type sessionRuntime struct {
+	runtime   *engine.Runtime
+	nest      *nest.NestMgr
+	access    *entity.ManagerAccess
+	mongo     *mongodriver.Client
+	database  string
+	root      string
+	now       atomic.Int64
+	room      *room.GameRoom
+	players   [2]*player.Player
+	closeOnce sync.Once
+}
+
+type sessionFacts struct {
+	Room           []byte
+	Players        [2][]byte
+	Records, Syncs uint64
+}
+
+func (facts sessionFacts) equal(other sessionFacts) bool {
+	return bytes.Equal(facts.Room, other.Room) && bytes.Equal(facts.Players[0], other.Players[0]) && bytes.Equal(facts.Players[1], other.Players[1])
+}
+
+func sessionMongo(t *testing.T) *mongodriver.Client {
+	t.Helper()
+	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
+	if uri == "" {
+		t.Fatal("private Mongo replica set required")
+	}
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func openSessionRuntime(t *testing.T, database, root string, manual bool, now int64) *sessionRuntime {
+	t.Helper()
+	if !strings.HasPrefix(database, "roost_session_it_") || root == "" {
+		t.Fatal("unique session database and WAL root required")
+	}
+	room.RegisterEntity()
+	player.RegisterEntity()
+	RegisterScenarioNestHandlers()
+	h := &sessionRuntime{database: database, root: root, mongo: sessionMongo(t)}
+	h.now.Store(now)
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.DatabaseMain: database}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := engine.NewMongoStore(h.mongo, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := store.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wal, err := nestwal.Open(nestwal.DefaultOptions(filepath.Join(root, "wal")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{ManualReplay: manual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obStore, err := engine.NewMongoOutboxStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := engine.NewOutboxWorker(obStore, sessionNoEffects{}, engine.OutboxWorkerOptions{Owner: "session-real"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.access = entity.NewManagerAccess(entity.NewEntityManager())
+	h.runtime, err = engine.NewRuntime(store, wal, projector, outbox, h.access, nil, nil, engine.PipelinedRuntimeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	h.nest = nest.NewEngine(options...)
+	if err := h.nest.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.close(t) })
+	for i, kind := range []entity.EntityKind{room.EntityKindGameRoom, player.EntityKindPlayer, player.EntityKindPlayer} {
+		id, err := entity.BuildEntityID(int64(83001+i), kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var e entity.IThreadSafeEntity
+		if manual {
+			e, err = h.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
+		} else {
+			category := entity.EntityCategoryOther
+			if i == 0 {
+				category = entity.EntityCategoryWorld
+			}
+			e, err = h.access.Get(ctx, id, category)
+		}
+		if err != nil {
+			t.Fatalf("WAL recovery lost acknowledged entity %d: %v", id, err)
+		}
+		if i == 0 {
+			h.room = e.(*room.GameRoom)
+		} else {
+			h.players[i-1] = e.(*player.Player)
+		}
+	}
+	if manual {
+		if err := sender.NewScenarioSender(h.nest).Sync_ScenarioOpen(ctx, h.room.ID(), []int64{h.players[0].ID(), h.players[1].ID()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return h
+}
+
+func (h *sessionRuntime) close(t *testing.T) {
+	t.Helper()
+	h.closeOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := h.nest.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+		if err := h.runtime.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func (h *sessionRuntime) facts(t *testing.T) sessionFacts {
+	t.Helper()
+	return sessionFacts{Room: robotRead(t, h.nest, h.room, func() []byte { return h.room.Dao().Marshal() }), Players: [2][]byte{
+		robotRead(t, h.nest, h.players[0], func() []byte { return h.players[0].Dao().Marshal() }),
+		robotRead(t, h.nest, h.players[1], func() []byte { return h.players[1].Dao().Marshal() }),
+	}}
+}
+
+func (h *sessionRuntime) state(t *testing.T) rules.State {
+	t.Helper()
+	var state rules.State
+	raw := robotRead(t, h.nest, h.room, func() string { return h.room.Dao().GetState() })
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func (h *sessionRuntime) command(t *testing.T, index int, kind string, choice int) rules.Command {
+	t.Helper()
+	state := h.state(t)
+	return rules.Command{Seq: state.Last[h.players[index].ID()].Command.Seq + 1, Revision: state.Revision, Kind: kind, Choice: choice}
+}
+
+func (h *sessionRuntime) send(index int, command rules.Command) (rules.Result, error) {
+	return sender.NewScenarioSender(h.nest).MultiSync_ScenarioCommand(context.Background(), h.room.ID(), h.players[index].ID(), command)
+}
+
+func (h *sessionRuntime) act(t *testing.T, index int, kind string, choice int) rules.Result {
+	t.Helper()
+	result, err := h.send(index, h.command(t, index, kind, choice))
+	if err != nil {
+		t.Fatal(kind, err)
+	}
+	return result
+}
+
+func (h *sessionRuntime) refuse(t *testing.T, index int, command rules.Command) {
+	t.Helper()
+	before := h.facts(t)
+	if _, err := h.send(index, command); err == nil {
+		t.Fatal("invalid command accepted", command)
+	}
+	if !h.facts(t).equal(before) {
+		t.Fatal("rejected command changed persisted facts")
+	}
+}
+
+func (h *sessionRuntime) replayLast(t *testing.T) {
+	t.Helper()
+	before := h.facts(t)
+	state := h.state(t)
+	for i, p := range h.players {
+		receipt := state.Last[p.ID()]
+		if receipt.Command.Seq == 0 {
+			continue
+		}
+		result, err := h.send(i, receipt.Command)
+		if err != nil || result != receipt.Result {
+			t.Fatalf("recovered last receipt changed: %v %+v want %+v", err, result, receipt.Result)
+		}
+	}
+	if !h.facts(t).equal(before) {
+		t.Fatal("receipt replay duplicated reward or changed room")
+	}
+}
+
+func (h *sessionRuntime) coins(t *testing.T) [2]int64 {
+	t.Helper()
+	return [2]int64{robotRead(t, h.nest, h.players[0], func() int64 { return h.players[0].Dao().GetCoins() }), robotRead(t, h.nest, h.players[1], func() int64 { return h.players[1].Dao().GetCoins() })}
+}
+
+// assertSessionMongoEmpty 在父子进程都查两张真实业务集合；WAL receipt 之外还必须证明没有投影可兜底。
+func assertSessionMongoEmpty(t *testing.T, client *mongodriver.Client, database string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, coll := range []string{db.GameRoomDaoCollection, db.PlayerDaoCollection} {
+		count, err := client.DatabaseForSid(database, 0).Collection(coll).CountDocuments(ctx, map[string]any{})
+		if err != nil || count != 0 {
+			t.Fatalf("%s: %d documents (%v), want WAL-only zero", coll, count, err)
+		}
+	}
+}
+
+type sessionCrashCase struct {
+	name                  string
+	seed, recover, verify func(*testing.T, *sessionRuntime)
+}
+
+// runSessionCrash 把业务确认、落盘屏障与 SIGKILL 分开：FD 3 报告完整快照；父进程读完后验证 Mongo 为空再杀。
+// 恢复使用原 WAL，第三个进程再次冷加载最终奖励并重试。只覆盖 strict 已确认提交，不模拟回复未知或磁盘断电。
+func runSessionCrash(t *testing.T, cases []sessionCrashCase) {
+	t.Helper()
+	if role := os.Getenv("ROOST_SESSION_CHILD"); role != "" {
+		var selected *sessionCrashCase
+		for i := range cases {
+			if cases[i].name == os.Getenv("ROOST_SESSION_CASE") {
+				selected = &cases[i]
+			}
+		}
+		if selected == nil {
+			t.Fatal("unknown session case")
+		}
+		root, database := os.Getenv("ROOST_SESSION_ROOT"), os.Getenv("ROOST_SESSION_DATABASE")
+		h := openSessionRuntime(t, database, root, role == "write", sessionRealT0)
+		if role == "verify" {
+			var expected sessionFacts
+			raw, err := os.ReadFile(filepath.Join(root, "final.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(raw, &expected); err != nil {
+				t.Fatal(err)
+			}
+			if !h.facts(t).equal(expected) {
+				t.Fatal("cold terminal room/reward facts changed")
+			}
+			h.replayLast(t)
+			selected.verify(t, h)
+			return
+		}
+		if role != "write" {
+			t.Fatal("unknown child role")
+		}
+		selected.seed(t, h)
+		stats := h.runtime.WAL.Stats()
+		if stats.Appended == 0 || stats.Appended != stats.Admitted || stats.Syncs == 0 || stats.Acknowledged != 0 || stats.TerminalError != "" {
+			t.Fatalf("not durably WAL-only: %+v", stats)
+		}
+		assertSessionMongoEmpty(t, h.mongo, database)
+		facts := h.facts(t)
+		facts.Records, facts.Syncs = stats.Appended, stats.Syncs
+		report := os.NewFile(3, "session WAL-only receipt")
+		if err := json.NewEncoder(report).Encode(facts); err != nil {
+			t.Fatal(err)
+		}
+		_ = report.Close()
+		select {} // 唯一退出是父进程 SIGKILL；不执行 Runtime/Nest cleanup。
+	}
+	for _, scenario := range cases {
+		t.Run(scenario.name, func(t *testing.T) {
+			client := sessionMongo(t)
+			database := fmt.Sprintf("roost_session_it_%s_%d", scenario.name, time.Now().UnixNano())
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = client.Database(database).Drop(ctx)
+				_ = client.DatabaseForSid(database, 0).Drop(ctx)
+			})
+			root := t.TempDir()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			read, write, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer read.Close()
+			defer write.Close()
+			log, err := os.Create(filepath.Join(root, "child.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer log.Close()
+			newChild := func(role string) *exec.Cmd {
+				cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+strings.Split(t.Name(), "/")[0]+"$", "-test.v")
+				cmd.Env = append(os.Environ(), "ROOST_SESSION_CHILD="+role, "ROOST_SESSION_CASE="+scenario.name, "ROOST_SESSION_DATABASE="+database, "ROOST_SESSION_ROOT="+root)
+				return cmd
+			}
+			cmd := newChild("write")
+			cmd.ExtraFiles = []*os.File{write}
+			cmd.Stdout, cmd.Stderr = log, log
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			_ = write.Close()
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			waited := false
+			defer func() {
+				if !waited {
+					_ = cmd.Process.Kill()
+					<-done
+				}
+				if t.Failed() {
+					raw, _ := os.ReadFile(log.Name())
+					t.Logf("child output:\n%s", raw)
+				}
+			}()
+			var expected sessionFacts
+			decoded := make(chan error, 1)
+			go func() { decoded <- json.NewDecoder(read).Decode(&expected) }()
+			select {
+			case err := <-decoded:
+				if err != nil {
+					t.Fatal("no WAL-only receipt", err)
+				}
+			case err := <-done:
+				waited = true
+				t.Fatal("child exited before SIGKILL", err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if expected.Records == 0 || expected.Syncs == 0 {
+				t.Fatal("invalid WAL receipt", expected.Records, expected.Syncs)
+			}
+			assertSessionMongoEmpty(t, client, database)
+			if err := cmd.Process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			err = <-done
+			waited = true
+			status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+			if err == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+				t.Fatalf("not SIGKILL: %v %v", err, cmd.ProcessState)
+			}
+			assertSessionMongoEmpty(t, client, database)
+			h := openSessionRuntime(t, database, root, false, sessionRealT0+2*time.Hour.Milliseconds())
+			if !h.facts(t).equal(expected) {
+				t.Fatal("WAL recovery lost acknowledged room or player state")
+			}
+			h.replayLast(t)
+			scenario.recover(t, h)
+			scenario.verify(t, h)
+			if err := h.runtime.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(h.facts(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "final.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			h.close(t)
+			if t.Failed() {
+				return
+			}
+			if output, err := newChild("verify").CombinedOutput(); err != nil {
+				t.Fatalf("third-process reward verification: %v\n%s", err, output)
+			}
+			t.Logf("PASS WAL-only SIGKILL: %d strict records, %d fsyncs; complete cold facts, continuation, reward replay and third-process verification", expected.Records, expected.Syncs)
+		})
+	}
+}

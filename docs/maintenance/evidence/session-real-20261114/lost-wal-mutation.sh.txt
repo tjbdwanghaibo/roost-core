@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+out=/Users/whb/roost/worktrees/v147-session-real/artifacts/session-real-20261114
+export GOWORK=off GOFLAGS=-p=2
+for genre in coop social; do
+  project="/private/tmp/v147-$genre-real/project"
+  target="$project/game/handler/session_real_runtime_test.go"
+  original="$out/$genre-runtime-original.go.txt"
+  cp "$target" "$original"
+  trap 'cp "$original" "$target"' EXIT
+  if [[ "$genre" == coop ]]; then export ROOST_COOP_ROGUELIKE_REAL=1; test_name=TestCoopRoguelikeRealCrashRecovery; else export ROOST_SOCIAL_SIM_REAL=1; test_name=TestSocialSimRealCrashRecovery; fi
+  python3 - "$target" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);s=p.read_text()
+needle='h := openSessionRuntime(t, database, root, false, sessionRealT0+2*time.Hour.Milliseconds())'
+assert s.count(needle)==1
+p.write_text(s.replace(needle,'h := openSessionRuntime(t, database, filepath.Join(root, "lost-wal"), false, sessionRealT0+2*time.Hour.Milliseconds())'))
+PY
+  gofmt -w "$target"
+  set +e
+  (cd "$project" && go test -mod=mod -race -count=1 -timeout 3m -v -run "^$test_name$" ./game/handler) >"$out/$genre-lost-wal-red.log" 2>&1
+  result=$?
+  set -e
+  [[ "$result" != 0 ]] || { echo "$genre lost-WAL mutation unexpectedly passed"; exit 1; }
+  failures=$(grep -c 'WAL recovery lost acknowledged' "$out/$genre-lost-wal-red.log" || true)
+  [[ "$failures" == 2 ]] || { cat "$out/$genre-lost-wal-red.log"; exit 1; }
+  grep 'WAL recovery lost acknowledged' "$out/$genre-lost-wal-red.log"
+  cp "$original" "$target"
+  (cd "$project" && go test -mod=mod -race -count=1 -timeout 3m -v -run "^$test_name$" ./game/handler) >"$out/$genre-restored-green.log" 2>&1
+  grep 'PASS WAL-only SIGKILL' "$out/$genre-restored-green.log"
+  trap - EXIT
+done

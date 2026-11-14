@@ -599,6 +599,8 @@ var generatedRealDependencyElsewhere = []struct {
 	{"TestSagaNativeStepsAndEffectRealDependencies", "codegen/internal/roost/add_saga_test.go", "^TestSagaNativeStepsAndEffectRealDependencies$", "TestGeneratedSagaNativeStepsAndEffectConsumer 把 testdata/saga_native 复制进新生成的工程后运行"},
 	{"TestTurnPVPRealTimerRecovery", "scripts/test-turn-pvp-generated.sh", "TestTurnPVPRealTimerRecovery", "ROOST_TURN_PVP_REAL=1：GameRoom 纵切在两个 OS 进程用真实 Mongo / 文件 WAL 验证持久节点冷加载、离线超时一次与回执重试；默认档只编译与 vet"},
 	{"TestTurnRecipeRealLifecycle", "scripts/test-turn-pvp-real.sh", "TestTurnRecipeRealLifecycle", "ROOST_TURN_PVP_REAL=1 经 generated 入口调用：正式配方真实 account / match / Game Ingress / 独立 Gate、Mongo / Redis / NATS / etcd、SIGKILL 重启与回合终态；私有依赖手动档，不进 pretag"},
+	{"TestCoopRoguelikeRealCrashRecovery", "scripts/test-coop-roguelike-generated.sh", "TestCoopRoguelikeRealCrashRecovery", "ROOST_COOP_ROGUELIKE_REAL=1：第二关半票与首人已领奖两个 WAL-only SIGKILL 窗口，真实 Mongo/Nest/生成 DAO；恢复保留种子、投票、回执与两人各10金币，第三进程再冷加载重试；默认只编译/vet恢复夹具"},
+	{"TestSocialSimRealCrashRecovery", "scripts/test-social-sim-generated.sh", "TestSocialSimRealCrashRecovery", "ROOST_SOCIAL_SIM_REAL=1：帮助后生长与收获确认两个 WAL-only SIGKILL 窗口，真实 Mongo/Nest/生成 DAO；恢复期限不重算、主人收获一次5金币、访客不能领，第三进程冷加载重试；默认只编译/vet恢复夹具"},
 }
 
 var (
