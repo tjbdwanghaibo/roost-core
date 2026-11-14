@@ -1,0 +1,10 @@
+=== RUN   TestCoopRoguelikeRealCrashRecovery
+=== RUN   TestCoopRoguelikeRealCrashRecovery/partial_vote
+    session_real_runtime_test.go:428: PASS WAL-only SIGKILL: 7 strict records, 7 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+=== RUN   TestCoopRoguelikeRealCrashRecovery/first_reward
+    session_real_runtime_test.go:428: PASS WAL-only SIGKILL: 11 strict records, 11 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+--- PASS: TestCoopRoguelikeRealCrashRecovery (3.59s)
+    --- PASS: TestCoopRoguelikeRealCrashRecovery/partial_vote (1.81s)
+    --- PASS: TestCoopRoguelikeRealCrashRecovery/first_reward (1.77s)
+PASS
+ok  	example.com/custom-coop-accept/game/handler	5.282s

@@ -1,0 +1,81 @@
+package handler
+
+import (
+	"os"
+	"testing"
+)
+
+// 两个严格 WAL 崩溃点：第二关只有一人投票，以及通关后仅第一人领奖。
+// 恢复必须保留路线种子/已投票与两实体领奖事实；第三个进程仍只有各 10 金币。
+func TestCoopRoguelikeRealCrashRecovery(t *testing.T) {
+	if os.Getenv("ROOST_COOP_ROGUELIKE_REAL") != "1" {
+		t.Skip("ROOST_COOP_ROGUELIKE_REAL not set")
+	}
+	if os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI") == "" {
+		t.Fatal("private Mongo replica set required")
+	}
+
+	verify := func(t *testing.T, h *sessionRuntime) {
+		s := h.state(t)
+		if s.Stage != 3 || s.Seed != 8129822322734983565 || !s.Cleared || s.Claimed != [2]bool{true, true} || s.Votes != [2]int{-1, -1} || s.Revision != 8 || h.coins(t) != [2]int64{10, 10} {
+			t.Fatalf("cooperative terminal/rewards: %+v coins=%v", s, h.coins(t))
+		}
+		for i := range h.players {
+			h.refuse(t, i, h.command(t, i, "claim", 0))
+			h.refuse(t, i, h.command(t, i, "vote", 0))
+		}
+		h.replayLast(t)
+	}
+	finish := func(t *testing.T, h *sessionRuntime) {
+		for !h.state(t).Cleared {
+			for i := range h.players {
+				if h.state(t).Votes[i] < 0 {
+					h.act(t, i, "vote", i)
+				}
+			}
+		}
+		for i := range h.players {
+			if !h.state(t).Claimed[i] {
+				if got := h.act(t, i, "claim", 0); got.Reward != 10 {
+					t.Fatal("missing reward", got)
+				}
+			}
+			h.replayLast(t)
+		}
+	}
+	runSessionCrash(t, []sessionCrashCase{
+		{name: "partial_vote", seed: func(t *testing.T, h *sessionRuntime) {
+			h.act(t, 0, "vote", 0)
+			h.act(t, 1, "vote", 1)
+			h.act(t, 0, "vote", 0)
+			s := h.state(t)
+			if s.Stage != 1 || s.Votes != [2]int{0, -1} || s.Revision != 3 || s.Seed == 12345 {
+				t.Fatal("wrong partial-vote crash state", s)
+			}
+			h.refuse(t, 0, h.command(t, 0, "vote", 0))
+			h.refuse(t, 1, h.command(t, 1, "claim", 0))
+		}, recover: func(t *testing.T, h *sessionRuntime) {
+			s := h.state(t)
+			if s.Stage != 1 || s.Votes != [2]int{0, -1} || h.coins(t) != [2]int64{} {
+				t.Fatal("partial vote/rewards changed", s)
+			}
+			finish(t, h)
+		}, verify: verify},
+		{name: "first_reward", seed: func(t *testing.T, h *sessionRuntime) {
+			for range 3 {
+				h.act(t, 0, "vote", 0)
+				h.act(t, 1, "vote", 1)
+			}
+			h.act(t, 0, "claim", 0)
+			s := h.state(t)
+			if !s.Cleared || s.Claimed != [2]bool{true, false} || s.Revision != 7 || h.coins(t) != [2]int64{10, 0} {
+				t.Fatal("wrong reward crash state", s)
+			}
+		}, recover: func(t *testing.T, h *sessionRuntime) {
+			if s := h.state(t); s.Claimed != [2]bool{true, false} || h.coins(t) != [2]int64{10, 0} {
+				t.Fatal("acknowledged reward was lost or doubled", s)
+			}
+			finish(t, h)
+		}, verify: verify},
+	})
+}

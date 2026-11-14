@@ -1,0 +1,46 @@
+=== RUN   TestScenarioVisitorPermissions
+--- PASS: TestScenarioVisitorPermissions (0.01s)
+=== RUN   TestScenarioOfflineHarvestOnce
+--- PASS: TestScenarioOfflineHarvestOnce (0.00s)
+=== RUN   TestScenarioHelpChangesDeadlineOnlyOnce
+--- PASS: TestScenarioHelpChangesDeadlineOnlyOnce (0.00s)
+=== RUN   TestScenarioHarvestRollback
+--- PASS: TestScenarioHarvestRollback (0.00s)
+=== RUN   TestScenarioRobotTCPRetryAndReconnect
+2026/11/14 11:10:30 INFO player tcp listener started addr=127.0.0.1:63244 max_connections=10000
+2026/11/14 11:10:30 INFO robot runner: start executor=pool count=1 rate=1 scenario=smoke transport=player-tcp endpoint=127.0.0.1:63244
+2026/11/14 11:10:30 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/14 11:10:30 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:63244
+2026/11/14 11:10:30 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/14 11:10:30 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:63244
+2026/11/14 11:10:30 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/14 11:10:30 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:63244
+2026/11/14 11:10:30 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/14 11:10:30 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:63244
+2026/11/14 11:10:30 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/14 11:10:30 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:63244
+2026/11/14 11:10:30 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestScenarioRobotTCPRetryAndReconnect (0.01s)
+=== RUN   TestScenarioRetryAndConflict
+--- PASS: TestScenarioRetryAndConflict (0.00s)
+=== RUN   TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioCommitRejectionRollsBack (0.00s)
+=== RUN   TestScenarioStaleRevision
+--- PASS: TestScenarioStaleRevision (0.00s)
+=== RUN   TestScenarioMembership
+--- PASS: TestScenarioMembership (0.00s)
+PASS
+ok  	example.com/custom-social-accept/game/handler	1.659s
+IDs are valid
+generated files are up to date
+=== RUN   TestSocialSimRealCrashRecovery
+=== RUN   TestSocialSimRealCrashRecovery/growing
+    session_real_runtime_test.go:428: PASS WAL-only SIGKILL: 6 strict records, 6 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+=== RUN   TestSocialSimRealCrashRecovery/harvested
+    session_real_runtime_test.go:428: PASS WAL-only SIGKILL: 7 strict records, 7 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+--- PASS: TestSocialSimRealCrashRecovery (4.09s)
+    --- PASS: TestSocialSimRealCrashRecovery/growing (2.07s)
+    --- PASS: TestSocialSimRealCrashRecovery/harvested (2.02s)
+PASS
+ok  	example.com/custom-social-accept/game/handler	5.479s
+Generated consumer and evidence: /private/tmp/v147-social-real

@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 genre=$1
 first_command=$2
+real_env="${3:-}"
+real_test="${4:-}"
 review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-${genre}.XXXXXX")}"
 mkdir -p "$review_root"
 project_root="$review_root/project"
@@ -61,6 +63,10 @@ if genre == 'coop-roguelike':
     for source,target in [('robot_main.go.txt','cmd/robot/main.go'),('view_handlers.go.txt','game/handler/coop_view_handlers.go'),('view_protocol.go.txt','protocol/def/coop_view.go'),('view_network.go.txt','game/scenarionet/coop_view.go'),('robot_full.go.txt','loadtest/coop.go'),('robot_full_test.go.txt','game/handler/coop_robot_test.go')]:
         p=Path(target);p.parent.mkdir(parents=True,exist_ok=True)
         p.write_text((fixtures/genre/source).read_text().replace('GENRE_MODULE',module))
+# 两个离散玩法共享真实 Runtime 接线；业务崩溃点与恢复断言仍各自维护。默认档也编译 / vet 它们。
+if (fixtures/genre/'persistence/recovery_test.go.txt').exists():
+    for source,target in [(fixtures/'genre-common/persistence/runtime_test.go.txt','game/handler/session_real_runtime_test.go'),(fixtures/genre/'persistence/recovery_test.go.txt','game/handler/session_real_recovery_test.go')]:
+        Path(target).write_text(source.read_text().replace('GENRE_MODULE',module))
 PY
 gofmt -w db/def game/entities/game_room game/rules game/handler game/scenarionet loadtest protocol/def cmd/robot
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
@@ -76,4 +82,14 @@ go build -mod=mod ./...
 go vet -mod=mod ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+if [[ -n "$real_env" && "${!real_env:-0}" == 1 ]]; then
+  : "${ROOST_DATAENGINE_IT_MONGO_URI:?private Mongo replica set required}"
+  [[ -n "$real_test" ]] || { echo "REAL test name required" >&2; exit 1; }
+  go test -mod=mod -race -count=1 -timeout 3m -v -run "^${real_test}$" ./game/handler | tee "$review_root/real.log"
+  passed=$(grep -c "^--- PASS: $real_test " "$review_root/real.log" || true)
+  if [[ "$passed" != 1 ]] || grep -q -- '--- SKIP:' "$review_root/real.log"; then
+    echo "Expected one real crash suite without SKIP, got $passed" >&2
+    exit 1
+  fi
+fi
 succeeded=1

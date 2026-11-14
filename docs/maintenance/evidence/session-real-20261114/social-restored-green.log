@@ -1,0 +1,10 @@
+=== RUN   TestSocialSimRealCrashRecovery
+=== RUN   TestSocialSimRealCrashRecovery/growing
+    session_real_runtime_test.go:428: PASS WAL-only SIGKILL: 6 strict records, 6 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+=== RUN   TestSocialSimRealCrashRecovery/harvested
+    session_real_runtime_test.go:428: PASS WAL-only SIGKILL: 7 strict records, 7 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+--- PASS: TestSocialSimRealCrashRecovery (3.65s)
+    --- PASS: TestSocialSimRealCrashRecovery/growing (1.85s)
+    --- PASS: TestSocialSimRealCrashRecovery/harvested (1.80s)
+PASS
+ok  	example.com/custom-social-accept/game/handler	5.038s

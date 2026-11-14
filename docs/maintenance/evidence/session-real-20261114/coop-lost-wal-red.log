@@ -1,0 +1,15 @@
+=== RUN   TestCoopRoguelikeRealCrashRecovery
+=== RUN   TestCoopRoguelikeRealCrashRecovery/partial_vote
+    session_real_runtime_test.go:404: WAL recovery lost acknowledged entity 84993038: dataengine repository: entity aggregate not found: entity=84993038 state=absent
+    session_real_runtime_test.go:373: child output:
+        === RUN   TestCoopRoguelikeRealCrashRecovery
+=== RUN   TestCoopRoguelikeRealCrashRecovery/first_reward
+    session_real_runtime_test.go:404: WAL recovery lost acknowledged entity 84993038: dataengine repository: entity aggregate not found: entity=84993038 state=absent
+    session_real_runtime_test.go:373: child output:
+        === RUN   TestCoopRoguelikeRealCrashRecovery
+--- FAIL: TestCoopRoguelikeRealCrashRecovery (1.55s)
+    --- FAIL: TestCoopRoguelikeRealCrashRecovery/partial_vote (0.69s)
+    --- FAIL: TestCoopRoguelikeRealCrashRecovery/first_reward (0.86s)
+FAIL
+FAIL	example.com/custom-coop-accept/game/handler	2.638s
+FAIL

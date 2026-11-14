@@ -1,0 +1,15 @@
+=== RUN   TestSocialSimRealCrashRecovery
+=== RUN   TestSocialSimRealCrashRecovery/growing
+    session_real_runtime_test.go:404: WAL recovery lost acknowledged entity 84993038: dataengine repository: entity aggregate not found: entity=84993038 state=absent
+    session_real_runtime_test.go:373: child output:
+        === RUN   TestSocialSimRealCrashRecovery
+=== RUN   TestSocialSimRealCrashRecovery/harvested
+    session_real_runtime_test.go:404: WAL recovery lost acknowledged entity 84993038: dataengine repository: entity aggregate not found: entity=84993038 state=absent
+    session_real_runtime_test.go:373: child output:
+        === RUN   TestSocialSimRealCrashRecovery
+--- FAIL: TestSocialSimRealCrashRecovery (0.97s)
+    --- FAIL: TestSocialSimRealCrashRecovery/growing (0.49s)
+    --- FAIL: TestSocialSimRealCrashRecovery/harvested (0.48s)
+FAIL
+FAIL	example.com/custom-social-accept/game/handler	1.576s
+FAIL

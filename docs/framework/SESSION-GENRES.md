@@ -58,7 +58,7 @@ go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <已分配的新房间ID>
 
 ## 验证边界
 
-提交器为可注入拒绝的内存替身，DAO / undo / Nest / 生成 Sender 为正式实现。默认模式不连接 Mongo、Redis、NATS，不提供 REAL 模式；不能据此声称 strict 已真正 fsync、进程崩溃恢复或跨进程原子性通过。完整 Gate、EntitySync、自动期限驱动、客户端展示、多人容量和跨机恢复是独立验收项。
+默认场景的提交器为可注入拒绝的内存替身，DAO / undo / Nest / 生成 Sender 为正式实现；默认不连接 Mongo、Redis、NATS，不能用这些场景证明 strict fsync 或进程崩溃恢复。三个玩法各有显式 REAL 档，范围见下文。TCP/PB 场景与存储恢复分别计数；只有回合配方的独立 Gate 已在对应真实档运行，EntitySync、客户端展示、多人容量和跨机恢复仍是独立项。
 
 ## 后续补齐顺序
 
@@ -75,3 +75,22 @@ go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <已分配的新房间ID>
 后者生成正式 `-recipe turn-pvp`：真实 portal/account 登录、MatchEnqueue/MatchStatus 成局、RoomJoin、TurnStart/End/View 经独立 Gate → NATS → Game Ingress → Nest/DAO；第 2 回合收到确认后 SIGKILL game，离线跨过多个期限，再用同一 WAL / Mongo 重启。新连接带旧 Epoch 被拒，RoomReconnect 增加 Epoch，持久序号可重放；超时只补一次，之后完成并关闭房间。`TestTurnRecipeRealLifecycle` 的 seed / recover 各实际执行一次。此配方 Room/Turn 与上述带伤害规则的 GameRoom 纵切是两套业务模型，证据分别计数；配方没有伤害、胜负或奖励规则。
 
 `ROOST_TURN_PVP_PORT_SHIFT`（默认 35000）、`ROOST_TURN_PVP_ETCD_PORT`（57779）可隔离端口；脚本只清理自己的生成工程、数据及进程，日志在 `ROOST_TURN_PVP_OUT`。这是 macOS 单机功能验收，无跨机接管、断电或容量结论。game-demo 另有 `scripts/test-demo-turn.sh` 实跑 Makefile 的三个 dev-smoke 场景及 Gate 下的 turn Robot，见 [验收记录](../maintenance/evidence/turn-real-20261114/README.md)。
+
+## 合作与经营的 WAL-only 真实档
+
+```sh
+# 先 source 私有 mirror-local 的 env.sh；这两档只连接其中的 Mongo 副本集。
+GOWORK=off GOFLAGS=-p=2 ROOST_COOP_ROGUELIKE_REAL=1 bash scripts/test-coop-roguelike-generated.sh
+GOWORK=off GOFLAGS=-p=2 ROOST_SOCIAL_SIM_REAL=1 bash scripts/test-social-sim-generated.sh
+```
+
+合作默认 **10**、经营默认 **9** 条场景保持不变；各自再运行 1 条真实测试、2 个崩溃子场景（race、零 SKIP）。`ROOST_GENRE_MODULE` 支持自定义 module，`ROOST_GENRE_OUTPUT` 指定保留生成工程与完整日志。默认档也把真实恢复夹具装入工程并编译 / vet，pretag 仍仅运行默认档。
+
+共用的 `genre-common/persistence/runtime_test.go.txt` 只负责正式 Runtime / Nest / 生成 DAO / Sender / 文件 WAL / Mongo 装配和崩溃屏障。子进程关闭后台投影，所有命令经 strict 确认，确认 WAL 已 fsync、Appended=Admitted、Acknowledged=0，父子均核对真实 GameRoom/Player 集合为空；通过独立管道报告完整持久字节后，由父进程 SIGKILL。恢复读取原 WAL，核对 Room 和两名 Player 的完整持久状态、最后命令回执，继续业务；正常排空后再开第三个进程核对终态并重试。没有改变持久策略，也没有靠延时猜测未投影窗口。
+
+| 真实测试 | 崩溃点 | 恢复断言 |
+| --- | --- | --- |
+| `TestCoopRoguelikeRealCrashRecovery` | 第二关只有一人投票（7 条 strict 记录）；三关完成后第一人已领奖（11 条） | 固定路线种子、阶段、半票及回执不变；继续到双方各 10 金币；同请求重试只返回原结果、新序号重复领奖拒绝；第三进程继续保持终态 |
+| `TestSocialSimRealCrashRecovery` | 种植、访客帮助后尚未成熟（6 条）；主人收获已确认（7 条） | ReadyAt 不重算，离线两小时加载不自动发收益；仅主人显式收获一次 5 金币，帮助不会再次提前，访客不能领；第三进程保持 Harvests=1、Coins=5/0 |
+
+两档的“恢复改用空 WAL 目录”变异都必须红；完整证据和复跑见 [B5 验收记录](../maintenance/evidence/session-real-20261114/README.md)。这些真实测试直接调用正式 Sender，不包含 TCP/PB、真实登录、Gate、NATS、跨服访问者授权或客户端引擎。各脚本先执行的既有 TCP Robot 使用替身提交器，不能与本段拼称为同一条网络与存储联合链。没有新增社交经营自动 timer，成熟仍按持久 ReadyAt 在 harvest 时判定；不承诺永久回执账本、回复未知、断电、跨机或容量。
