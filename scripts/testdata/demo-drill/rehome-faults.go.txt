@@ -1,0 +1,40 @@
+package rehome
+
+// 仅复制到演练生成工程。文件栅栏只暂停真实流程，不替换 Directory、Residency、DAO 或持久提交。
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+func rehomeDrillPoint(stage string, move Move) {
+	dir := os.Getenv("DRILL_REHOME_FAULT_DIR")
+	if dir == "" {
+		return
+	}
+	var arm struct {
+		Stage    string
+		PlayerID int64
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "arm.json"))
+	if err != nil || json.Unmarshal(raw, &arm) != nil || arm.Stage != stage || arm.PlayerID != move.PlayerID {
+		return
+	}
+	raw, err = json.Marshal(map[string]any{"stage": stage, "pid": os.Getpid(), "player_id": move.PlayerID, "entity_id": move.EntityID, "transfer_id": move.ID, "from": move.From, "to": move.To})
+	if err != nil {
+		panic(err)
+	}
+	target := filepath.Join(dir, "reached.json")
+	if err = os.WriteFile(target+".tmp", raw, 0600); err == nil {
+		err = os.Rename(target+".tmp", target)
+	}
+	if err != nil {
+		panic(fmt.Errorf("rehome drill marker: %w", err))
+	}
+	// 脚本收到精确阶段事实后 SIGKILL；故障点不能自己超时放行，否则跑慢时会杀错阶段。
+	for {
+		time.Sleep(time.Second)
+	}
+}

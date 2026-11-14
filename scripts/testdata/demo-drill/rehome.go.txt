@@ -1,0 +1,159 @@
+// 与 merge.go.txt 的客户端连接辅助一起编译；后者的 main 仅改名，业务请求仍走正式 PB/TCP。
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	player "DRILL_MODULE/game/entities/player"
+	"DRILL_MODULE/loadtest/playertcp"
+	"DRILL_MODULE/protocol/msgid"
+	"DRILL_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+func main() {
+	playertcp.MustRegister()
+	// 客户端不启动服务 bootstrap；这里只登记生成 Player 声明的 kind/category 以编码 Mongo 主键。
+	entity.MustRegisterEntityKindCategory(player.EntityKindPlayer, entity.EntityCategoryPlayer)
+	if len(os.Args) < 2 {
+		panic("rehome drill command required")
+	}
+	command := os.Args[1]
+	if err := flag.CommandLine.Parse(os.Args[2:]); err != nil {
+		panic(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := rehomeCommand(ctx, command); err != nil {
+		fmt.Fprintln(os.Stderr, "rehomedrill:", err)
+		os.Exit(1)
+	}
+}
+
+func rehomeCommand(ctx context.Context, command string) error {
+	client, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	if command == "setup" {
+		open := "rehome-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		account, err := client.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: open, Credential: "demo:" + open})
+		if err != nil {
+			return err
+		}
+		r, err := client.CreateRole(ctx, account.ID, 1000, "r"+open[len(open)-10:])
+		if err != nil {
+			return err
+		}
+		c, _, err := enter(ctx, client, account.ID, r.PlayerID)
+		if err != nil {
+			return err
+		}
+		defer c.raw.Close()
+		count, err := addItems(c, 10)
+		if err != nil || count != 10 {
+			return fmt.Errorf("initial bag=%d: %v", count, err)
+		}
+		full, err := entity.BuildEntityID(r.PlayerID, player.EntityKindPlayer)
+		if err != nil {
+			return err
+		}
+		s := state{Users: map[string]*user{"u": {OpenID: open, Account: account.ID, Roles: []*role{{SID: 1000, PlayerID: r.PlayerID}}}}}
+		raw, _ := json.Marshal(s)
+		if err = os.WriteFile(*statePath, raw, 0600); err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"player_id": r.PlayerID, "entity_id": strconv.FormatInt(full, 10)})
+	}
+	*who = "u:1000"
+	u, r, err := whom()
+	if err != nil {
+		return err
+	}
+	if command == "binding" {
+		binding, err := client.RoleBinding(ctx, r.PlayerID)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(binding)
+	}
+	c, session, err := enter(ctx, client, u.Account, r.PlayerID)
+	if command == "source-refused" {
+		if err == nil {
+			c.raw.Close()
+			return fmt.Errorf("source accepted target-owned player %d", r.PlayerID)
+		}
+		if !strings.Contains(err.Error(), "the player is changing servers") && !strings.Contains(err.Error(), "player is bound to another server") {
+			return fmt.Errorf("expected an ownership refusal, got: %w", err)
+		}
+		fmt.Println("source refused target-owned player:", err)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer c.raw.Close()
+	switch command {
+	case "apply":
+		raw, err := c.call(msgid.MsgRehomeApply, mustMarshal(pb.MarshalRehomeApplyRequest(&pb.RehomeApplyRequest{To: 1001})))
+		if err != nil {
+			return err
+		}
+		response, err := pb.UnmarshalRehomeApplyResponse(raw)
+		if err != nil {
+			return err
+		}
+		if response.Code != 0 || response.TransferID == "" {
+			return fmt.Errorf("apply: %+v", response)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(response); err != nil {
+			return err
+		}
+		for {
+			select {
+			case err := <-c.failed:
+				fmt.Fprintln(os.Stderr, "accepted session disconnected:", err)
+				return nil
+			case <-c.packets: // 继续读掉推送，不能由探针自己的满队列挡住 EOF。
+			case <-ctx.Done():
+				return fmt.Errorf("accepted session stayed connected: %w", ctx.Err())
+			}
+		}
+	case "spend", "verify":
+		if command == "verify" {
+			if session.ServingServerID != 1001 || session.ServerID != 1001 {
+				return fmt.Errorf("binding on target: %+v", session)
+			}
+			count, err := addItems(c, 1)
+			if err != nil || count != 11 {
+				return fmt.Errorf("bag after move=%d, want 11: %v", count, err)
+			}
+		}
+		// 同一键在换服两侧重发：余额和去重账本都必须跟着档走，不能重复扣款。
+		raw, err := c.call(msgid.MsgWalletSpend, mustMarshal(pb.MarshalWalletSpendRequest(&pb.WalletSpendRequest{Key: "rehome-drill-spend", Amount: 7})))
+		if err != nil {
+			return err
+		}
+		response, err := pb.UnmarshalWalletSpendResponse(raw)
+		if err != nil {
+			return err
+		}
+		if response.Code != 0 || response.Balance != 93 {
+			return fmt.Errorf("wallet after %s=%+v, want balance 93", command, response)
+		}
+		fmt.Printf("%s player=%d serving=%d wallet=93 wallet_duplicate_safe=true\n", command, r.PlayerID, session.ServingServerID)
+		return nil
+	case "resume":
+		return nil
+	}
+	return fmt.Errorf("unknown command %s", command)
+}
