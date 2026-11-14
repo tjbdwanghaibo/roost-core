@@ -272,7 +272,45 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	end := start.Add(time.Duration(seconds) * time.Second)
 	interval := time.Second / time.Duration(rate)
 	next := start
+	// dropped 只计客户端没有发出的节拍：send 等 PB 应答和 Sync 完成后才返回。
+	// 服务端拒绝、请求超时与 heartbeat 跳拍分别观测，不能相加当作网络丢包。
 	var scheduled, dropped int64
+	baseline := business.Stats()
+	signals := func() map[string]any {
+		now := business.Stats()
+		var rejected, deadlines, transportErrors int64
+		for _, r := range requests.Snapshot().Messages {
+			rejected += r.Rejected
+			deadlines += r.Timeout
+			transportErrors += r.Errors
+		}
+		return map[string]any{
+			"client_pacing_missed":    dropped,
+			"request_rejected":        rejected,
+			"request_deadline":        deadlines,
+			"request_other_error":     transportErrors,
+			"nest_admission_rejected": now.Queue.Short.Rejected - baseline.Queue.Short.Rejected + now.Queue.IO.Rejected - baseline.Queue.IO.Rejected + now.Queue.Long.Rejected - baseline.Queue.Long.Rejected,
+			"heartbeat":               beat.Stats(),
+			"meaning":                 "independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss",
+		}
+	}
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		failed, marshalErr := json.MarshalIndent(map[string]any{
+			"verified": false, "phase": "failed", "signals": signals(),
+			"requests": requests.Snapshot(), "sync": probe.Snapshot(time.Now()),
+			"scheduled": scheduled, "completed": completed, "dropped": dropped,
+		}, "", "  ")
+		if marshalErr == nil {
+			if writeErr := os.WriteFile(reportPath+".failure.json", failed, 0600); writeErr != nil {
+				t.Logf("write failure evidence: %v", writeErr)
+			}
+		} else {
+			t.Logf("marshal failure evidence: %v", marshalErr)
+		}
+	}()
 	for time.Now().Before(end) {
 		now := time.Now()
 		if now.Before(next) {
@@ -301,7 +339,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	elapsed := time.Since(start)
 	t.Logf("load complete: requests=%d dropped=%d projector=%+v", completed, dropped, projector.Stats())
 	// 即使后续排空失败也保留已完成负载的数据，不把它写成成功验收。
-	phase, marshalErr := json.MarshalIndent(map[string]any{"verified": false, "phase": "before_drain", "target_rate": rate, "completed": completed, "dropped": dropped, "seconds": elapsed.Seconds(), "sync": probe.Snapshot(time.Now()), "requests": requests.Snapshot(), "traffic": traffic.Snapshot(), "projector": projector.Stats(), "projection_diagnostics": store.diagnostics(), "nest": business.Stats()}, "", "  ")
+	phase, marshalErr := json.MarshalIndent(map[string]any{"verified": false, "phase": "before_drain", "target_rate": rate, "completed": completed, "dropped": dropped, "drop_reasons": map[string]int64{"client_pacing": dropped}, "signals": signals(), "seconds": elapsed.Seconds(), "sync": probe.Snapshot(time.Now()), "requests": requests.Snapshot(), "traffic": traffic.Snapshot(), "projector": projector.Stats(), "projection_diagnostics": store.diagnostics(), "nest": business.Stats()}, "", "  ")
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
@@ -389,7 +427,23 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 		Projector                                                           dataengine.ProjectorStats
 		WAL                                                                 nestwal.Stats
 		ProjectionDiagnostics                                               map[string]any
-	}{true, fmt.Sprintf("one real account; one Player + shared World hotspot; %d ordinary requests/s target; 10Hz heartbeat, 5%% mutation; same-process Go Robot; no Remote/Saga capacity claim", rate), scheduled, dropped, completed, beats.Load(), beatChanges.Load(), elapsed.Seconds(), float64(completed-1) / elapsed.Seconds(), probe.Snapshot(time.Now()), requests.Snapshot(), traffic.Snapshot(), resources, business.Stats(), stats, walStats, store.diagnostics()}
+		DropReasons                                                         map[string]int64 `json:"drop_reasons"`
+		Signals                                                             map[string]any   `json:"signals"`
+		FinalVerificationRequests                                           int64            `json:"final_verification_requests"`
+	}{
+		Verified:  true,
+		Scope:     fmt.Sprintf("one real account; one Player + shared World hotspot; %d ordinary requests/s target; 10Hz heartbeat, 5%% mutation; same-process Go Robot; no Remote/Saga capacity claim", rate),
+		Scheduled: scheduled, Dropped: dropped, Completed: completed,
+		HeartbeatCallbacks: beats.Load(), HeartbeatChanges: beatChanges.Load(),
+		Seconds: elapsed.Seconds(), CompletedPerSecond: float64(completed-1) / elapsed.Seconds(),
+		Sync: probe.Snapshot(time.Now()), Requests: requests.Snapshot(), Traffic: traffic.Snapshot(),
+		ServerAndClientProcess: resources, Nest: business.Stats(), Projector: stats, WAL: walStats,
+		ProjectionDiagnostics: store.diagnostics(), DropReasons: map[string]int64{"client_pacing": dropped},
+		Signals: signals(), FinalVerificationRequests: 1,
+	}
+	if report.Scheduled != report.Completed-report.FinalVerificationRequests+report.Dropped {
+		t.Fatalf("pacing counters do not balance: scheduled=%d completed=%d dropped=%d", report.Scheduled, report.Completed, report.Dropped)
+	}
 	for _, event := range report.Sync.Events {
 		if event.Received == 0 || event.Pending != 0 || event.TimedOut != 0 || event.Canceled != 0 {
 			t.Fatalf("incomplete sync evidence: %+v", event)

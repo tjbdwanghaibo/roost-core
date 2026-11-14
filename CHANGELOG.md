@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 - **合作 Roguelike / 社交经营真实恢复档**（2026-11-14）：新增 `ROOST_COOP_ROGUELIKE_REAL=1`、`ROOST_SOCIAL_SIM_REAL=1`，共用正式 Nest/生成 DAO/文件 WAL/Mongo 装配；各两种仅 WAL 已确认、Mongo 尚无文档的 SIGKILL 窗口，恢复完整状态与最后回执、继续领奖，第三进程冷加载核对奖励不重复。默认10/9条场景不变，并编译/vet真实夹具；新档直接走Sender，TCP/真实账号/Gate联合链不在本批。[证据与变异](docs/maintenance/evidence/session-real-20261114/README.md)。
+- **诊断：Gate 混合负载分清客户端漏发与服务端信号**（E-3，2026-11-14）：`Dropped` 唯一来源是客户端等待 PB/Sync 后错过的未发送槽位，新增明确原因和独立的 Nest 准入、请求拒绝/超时、heartbeat 原始计数；最终核对事务单列并验证计数平衡，失败也保留 `verified=false` 的诊断 JSON。实际脚本两轮通过、删除计数累加的变异变红；本批为功能验证，100/s × 30s × 5 的空闲复跑另计。见 [口径与证据](docs/performance/benchmarks/gate-pacing-20261114/README.md)。
 
 - **回合 PvP 真实验收与 demo Robot**（2026-11-14）：新增 `ROOST_TURN_PVP_REAL=1`，分别验证 GameRoom 纵切真实 Mongo/WAL 的持久定时器跨进程冷加载，以及正式 turn-pvp 配方经 account/match、独立 Gate/NATS 的对局、SIGKILL 恢复、代际接管与幂等重试。game-demo 追加正式 room/turn/matchroom/matchmaking 模块，`make dev-smoke` 新增双人 turn 场景，与既有 lockstep 匹配池独立；[证据与边界](docs/maintenance/evidence/turn-real-20261114/README.md)。
 
