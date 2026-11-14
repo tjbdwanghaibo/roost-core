@@ -94,3 +94,22 @@ decisions.md 的 Q1～Q17、#154、#37、CellWorld B / C / E、self_sync RetryLa
 - **小件**（分支 `tmp/leftovers-p3`，**已合入**，KNOWN-LIMITS 已回写）：出生号与运行期号共用 shard 位（运行期序号上限改为 `1<<33 - 1`）、cellworldhost Runtime 的 Start / Stop 回归、C# 地形确认用真实 entitysync 帧驱动。
 
 夹具与模块的先决条件已满足，后续 P8 / P9 / P10 已完成各自本机验收。重复运行期号分配器已由 P10 删除；monster 场景数与整套生成模块的最终计数由统一验收报告确认。当前接续工作包括生成器最后一轮 60m 整包复验、尚未运行的 M-1～M-19 / E-1 / E-3，以及最终文档检查；`go generate ./...` 已完成，C 与 D 保留。详见[最终验证与性能交接](HANDOFF-2026-11-14-v147-validation-performance.md)。
+
+## 四、维护者答复后要实施的（2026-11-14）
+
+答复见 [decisions.md“维护者答复”](evidence/known-limits-remaining-20261114/decisions.md#维护者答复2026-11-14)。准则同第一节（先红后绿、变异、真实依赖用例登记、最多 4 个 agent、KNOWN-LIMITS 由最后的文档批统一改）。按文件互不相交分批：
+
+| 批 | 决定 | 内容 | 主要文件 | 量级 |
+| --- | --- | --- | --- | --- |
+| R1 Sync | D1 | `tmp/sync-fixes`（`8c86065f`、`a0f07234`）rebase 到 feat/v147 合入；两条回归与 5 个变异重跑；impl/04 §2C、ENTITY_SYNC、guide/04 按新行为（从被拒会话轮转）改写 | `framework/sync/entitysync/**` | S～M |
+| R2 换服 / account | D7、D8 | D7：源服预加载时向 account 核对绑定，不属于本服的跳过并带版本守护删除；P1 的 committed 点验收这条窗口关闭。D8：account 加在途换服索引，按期限自动向前恢复或中止，`accountctl` 能列出；真实依赖用例 | `modules/rehome/**`、`service/account/**`、`wiring/` 相关 | M～L |
+| R3 地形 | D11、D12 | Q17 A：按地图归属选库范围（普通场景 sid、分区场景 global），demo 的 `terrain_chunks` / `buildings` / `terrain_editors` 与 terrain 模块一致；N3 A：换服时建筑留在原地图，全服邮件离开前按旧范围拉一次；N4 A：坏块 / 装不进的块按基础包确认 | `demo/**/terrain*`、`modules/terrain/**`、`demo/game/controllers/player` 换服段 | M |
+| R4 DataEngine / Remote / Saga | D16、D17、D18 | D16：原生正向档推荐配置开启准入限流，c128 追平复测 ≤ 30s；D17：“删空认领”运维入口（所有权代际守护）+ 累积计数指标；D18：缺省 WAL 目录 `data/wal/<服务>/<sid>`，更新生成配置、doctor 与文档（未上线不兼容旧目录） | `framework/saga` 配置与文档、`framework/remoteentity` / `wiring/remoteentity`、`codegen/internal/roost` 的 WAL 缺省 | M |
+| R5 模块配置 | D19 | 模块清单可声明配置结构，安装器接入 Mod 配置声明，`roost config check` / `--check-config` 能查；先迁 profile、stamina、leaderboard、mailbox 的常量与 portal.servers | `codegen/internal/roost` 安装器与清单、相关 `modules/*` | L |
+| R6 后台 manager | D22 | activity_world / activity_alliance 驱动、login 的 EnterStatus 协程、cellworldhost、rehome 静默 ticker 改成 manager，代码写在 `game/managers`，在 `game/managers/managers.go` 登记，由 manager Mod 统一启停；契约写进“一” | `modules/{activity_world,activity_alliance,login,cellworld,rehome}/**`、生成器的 managers 登记 | M～L |
+| R7 portal / room | D23、D24 | D23：game 经总线定期上报到 account 的带过期注册表，portal 读它；D24：room 自动断线订阅与重启后在线状态重建（广播、R11 写进“一”） | `modules/{portal,room}/**`、`service/account` 注册表 | M～L |
+| R8 game-demo | D25、D26 | D25：demo 的新玩家初始化搬进 `enter_first.go`，保留 demo 改写的 EnterGame；D26：副本 / 活动奖励加金币 | `demo/**` | M |
+| R9 玩法模块化（进行中） | D21 | 13 类玩法逐类改成“装模块 + 只写模块没覆盖的部分”（按 compose.md），每类保持场景数与 REAL 档全绿；CellWorld 业务适配进模块排在后面 | `scripts/testdata/<genre>/**`、`modules/**` | L（逐类） |
+| 文档批 | D2～D6、D9、D10、D14、D15、D20 及各批结果 | D2～D5、D9、D10、D14 写进“一”；D6 确认后移到“一”；D15 关闭（#37）；D20 发版清单加“上线前冻结协议号 / 错误码”；各批关闭的条目回写 | `docs/maintenance/KNOWN-LIMITS.md`、发版清单 | M |
+
+不在本表：D13 先跑 M-15（性能测量）再定；后台 checkpoint 等 M-19。R2 与 R3 都碰换服，R3 只改 demo / terrain 的换服段，R2 改 rehome 模块与 account，开工前对一下文件。

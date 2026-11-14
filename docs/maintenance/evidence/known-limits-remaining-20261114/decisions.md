@@ -2,6 +2,19 @@
 
 每项写现状、要定的问题、选项（含代价）和推荐。编号沿用 KNOWN-LIMITS 与 remaining.md（Q1～Q17、N1～N4、#154、#37）。已经按推荐先实施的，标“已实施，待确认”。维护者答复后由实施者按答复改代码 / 文档，KNOWN-LIMITS 里对应条目移到“一”或关闭。
 
+## 维护者答复（2026-11-14）
+
+- **D1～D20：按推荐。** D1 合并 `tmp/sync-fixes`；D2～D5、D9、D10、D14、D20 是文档 / 确认类；D6 确认；D7 A、D8 A、D11（Q17 A + N3 A）、D12 A、D16 A、D17 A、D18 A、D19 B 要实施；D13 先跑 M-15 再定（真要动先 C）；D15 关闭；D20 加进发版清单“上线前冻结协议号 / 错误码”。
+- **D21：先做 13 类玩法改成模块组合**（维护者：已经做了很多），这一条保留为在做的工作。CellWorld 业务适配进模块**未完成**：核对结果（2026-11-14）见下。
+- **D22：后台循环做成 manager**，代码写在 `game/managers` 里（v1.47.0 起 game 服务的 manager 登记点 `game/managers/managers.go`），由 manager Mod 统一启停；不另做模块 ingress 登记。
+- **D23～D26：按推荐。**
+- **后台 checkpoint：等 M-19 结果出来再问。**
+
+### D21 核对（2026-11-14）
+
+- 13 类玩法：脚本仍由 `scripts/testdata/genre-common` + 各玩法夹具生成，没有一个用 `roost module add` 组合；已有的模块组合只有两份配方 `modules/recipes/{casual,turn-pvp}`。玩法 skill（`docs/agent-skills/roost-genre/references/compose.md`）已经要求“能复用就装模块、不能就借鉴最近的模块”。要做的是逐类把夹具改成“装模块 + 只写模块没覆盖的部分”，每类保持现有场景数与 REAL 档全绿。
+- CellWorld：模块 `modules/cellworld` 只有宿主运行时与出生（`game/cellworldhost/{runtime,spawn}.go`）；分区装配、Player / Monster / SceneActor 的 Cell 适配、mapview 的 Cell/Base、队伍视图、地形分区与转发仍在 demo（`demo/game/partition`、`demo/game/entities/{player,monster,scene_actor}`、`demo/game/components/{mapview,monsteractor}` 的 cell 文件、`demo/internal/service/game/terrain_partition.go` 等）。
+
 ## 一、Sync
 
 ### D1 self_sync 的 RetryLater 语义（推翻 C29）
