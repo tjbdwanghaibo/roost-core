@@ -1,0 +1,16 @@
+{
+  "started_utc": "2026-11-14T04:48:59.512117+00:00",
+  "head": "fef75aee6d61a8986444de3980cc7db0c24a3765",
+  "old_binary": "/private/tmp/v147-perf-bin/mail-before-cluster-357263ba.test",
+  "old_sha256": "2a9fa377ea722d837a1b9b1a9c2e371c66c909597161392ed84f77d0d2c15852",
+  "source_sha256": "3486e3b4efee769faa2432b9e9bc52dbb5e8362357b37fe32d484f14f6c24142",
+  "command": "GOMAXPROCS=0 GOWORK=off GOFLAGS=-p=2 go test -tags integration -c -o /private/tmp/v147-perf-bin/mail.test ./service/mail",
+  "purpose": "prepare unified standalone/Cluster benchmark binary; no test or benchmark execution",
+  "exit": 0,
+  "finished_utc": "2026-11-14T04:49:54.447392+00:00",
+  "binary": "/private/tmp/v147-perf-bin/mail.test",
+  "sha256": "be360a92d2a7a28707d992cc990cb3e1e120d733aea780752dfc6e53bcffc89d",
+  "initial_sandbox_exit": 1,
+  "initial_sandbox_reason": "standard Go build cache write denied; successful retry used authorized escalation",
+  "measurements_started": false
+}

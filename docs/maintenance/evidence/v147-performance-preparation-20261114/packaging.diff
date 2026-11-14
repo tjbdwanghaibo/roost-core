@@ -1,0 +1,62 @@
+--- /private/tmp/v147-run-segment.sh
++++ run-segment.sh
+@@ -5 +5,3 @@
+-cd /Users/whb/roost/worktrees/v147
++entry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++export ROOST_PERF_REPO="${ROOST_PERF_REPO:-$(cd "$entry_dir/../../../.." && pwd)}"
++cd "$ROOST_PERF_REPO"
+@@ -10 +12 @@
+-plan="$(python3 /private/tmp/v147-run-micro.py "$segment" "$@" --plan)"
++plan="$(python3 "$entry_dir/run-micro.py" "$segment" "$@" --plan)"
+@@ -16,0 +19 @@
++mkdir -p "$(dirname "$control")"
+@@ -25,2 +28,2 @@
+-export ROOST_MIRROR_LOCAL_HOME=/private/tmp/v147-formal-mirror-20261114
+-export ROOST_MIRROR_LOCAL_OFFSET=18000
++export ROOST_MIRROR_LOCAL_HOME="${ROOST_MIRROR_LOCAL_HOME:-/private/tmp/v147-formal-mirror-20261114}"
++export ROOST_MIRROR_LOCAL_OFFSET="${ROOST_MIRROR_LOCAL_OFFSET:-18000}"
+@@ -32 +35 @@
+-    python3 /private/tmp/v147-timed-command.py "$ROOST_SEGMENT_DEADLINE_MONO" "$control/down.json" bash scripts/mirror-local.sh down >"$control/dependencies-down.log" 2>&1
++    python3 "$entry_dir/timed-command.py" "$ROOST_SEGMENT_DEADLINE_MONO" "$control/down.json" bash scripts/mirror-local.sh down >"$control/dependencies-down.log" 2>&1
+@@ -48 +51 @@
+-  python3 /private/tmp/v147-timed-command.py "$up_deadline" "$control/up.json" bash scripts/mirror-local.sh up >"$control/dependencies-up.log" 2>&1
++  python3 "$entry_dir/timed-command.py" "$up_deadline" "$control/up.json" bash scripts/mirror-local.sh up >"$control/dependencies-up.log" 2>&1
+@@ -51 +54 @@
+-python3 /private/tmp/v147-run-micro.py "$segment" "$@"
++python3 "$entry_dir/run-micro.py" "$segment" "$@"
+--- /private/tmp/v147-run-micro.py
++++ run-micro.py
+@@ -2,2 +2,3 @@
+-root=pathlib.Path('/Users/whb/roost/worktrees/v147')
+-bins=pathlib.Path('/private/tmp/v147-perf-bin')
++entry=pathlib.Path(__file__).resolve().parent
++root=pathlib.Path(os.environ.get('ROOST_PERF_REPO',entry.parents[3])).resolve()
++bins=pathlib.Path(os.environ.get('ROOST_PERF_BINS','/private/tmp/v147-perf-bin')).resolve()
+@@ -14,2 +15,2 @@
+-out=root/'artifacts/perf/v147-remaining'/name
+-env=dict(os.environ,GOMAXPROCS='0',GOWORK='off',GOFLAGS='-p=2',ALLIANCE_E2E_ETCD_PORT='43379',ALLIANCE_E2E_PORT_BASE='43500',ROOST_SEAMLESS_ETCD_PORT='58379')
++out=pathlib.Path(os.environ.get('ROOST_PERF_OUTPUT_ROOT',root/'artifacts/perf/v147-remaining')).resolve()/name
++env=dict(os.environ,ROOST_PERF_REPO=str(root),GOMAXPROCS='0',GOWORK='off',GOFLAGS='-p=2',ALLIANCE_E2E_ETCD_PORT='43379',ALLIANCE_E2E_PORT_BASE='43500',ROOST_SEAMLESS_ETCD_PORT='58379')
+@@ -75 +76 @@
+-  run(f'm12-{count}-{mode}',['bash','/private/tmp/v147-demo-robot-preserve.sh'],{'DEMO_ROBOT_OUT':str(out/mode),'DEMO_ROBOT_COUNT':count,'DEMO_ROBOT_MODE':mode,'DEMO_ROBOT_MIRROR_OFFSET':'36600'})
++  run(f'm12-{count}-{mode}',['python3',str(entry/'demo-robot-retained.py')],{'DEMO_ROBOT_OUT':str(out/mode),'DEMO_ROBOT_COUNT':count,'DEMO_ROBOT_MODE':mode,'DEMO_ROBOT_MIRROR_OFFSET':'36600'})
+@@ -78 +79 @@
+- experiment='/Users/whb/roost/worktrees/v147-background-checkpoint'
++ experiment=os.environ.get('ROOST_CHECKPOINT_TREE',str(root.parent/'v147-background-checkpoint'))
+@@ -85 +86,6 @@
+-selected=[task for task in tasks if selector.fullmatch(task[0])]
++selected=[]
++for label,args,extra in tasks:
++ if selector.fullmatch(label):
++  extra=dict(extra)
++  if 'ROOST_PERF_LABEL' in extra: extra['ROOST_PERF_LABEL']+='-'+name
++  selected.append((label,args,extra))
+@@ -100,0 +107 @@
++attempted=[]
+@@ -105,0 +113 @@
++ attempted.append(label)
+@@ -107 +114,0 @@
+- if name!=segment and 'ROOST_PERF_LABEL' in extra: extra['ROOST_PERF_LABEL']+='-'+name
+@@ -149 +156 @@
+- summary={'exit':status,'completed_runs':done,'remaining_selected_labels':[a for a,_,_ in selected if a not in done],'elapsed_seconds_before_dependency_down':time.monotonic()-start,'note':'Per-run exit is authoritative; a failed or timeout run is not a capacity pass.'}
++ summary={'exit':status,'attempted_labels':attempted,'finished_labels':done,'succeeded_labels':[r['label'] for r in results if r['exit']==0],'failed_labels':[r['label'] for r in results if r['exit']!=0],'unfinished_labels':[a for a in attempted if a not in done],'unstarted_labels':[a for a,_,_ in selected if a not in attempted],'elapsed_seconds_before_dependency_down':time.monotonic()-start,'note':'Finished means an exit was recorded, including failure/timeout; succeeded means command exit 0, not capacity acceptance. Inspect failed and unfinished labels before any resumption.'}

@@ -1,0 +1,38 @@
+--- scripts/perf/demo-robot.sh
++++ materialized-retention-copy.sh
+@@ -2,7 +2,7 @@
+ # 一次只跑一个完整 game-demo Robot 档；每次私有依赖和工程都全新。
+ # 默认仅 2 人冒烟；正式六档见 scripts/testdata/demo-robot/README.md。
+ set -euo pipefail
+-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
++repo_dir=/Users/whb/roost/worktrees/v147
+ : "${DEMO_ROBOT_OUT:?new absolute evidence directory required}"
+ [[ "$DEMO_ROBOT_OUT" == /* && ! -e "$DEMO_ROBOT_OUT" ]] || { echo 'DEMO_ROBOT_OUT must be a new absolute directory' >&2; exit 2; }
+ robots="${DEMO_ROBOT_COUNT:-2}"
+@@ -45,10 +45,24 @@
+   capture_host >"$out/host-after.txt" 2>&1
+   # 先保留服务日志和本轮依赖日志，再只停止自己创建的工程与私有环境。
+   [[ -f "$work_dir/etcd/etcd.log" ]] && cp "$work_dir/etcd/etcd.log" "$out/etcd.log"
+-  drill_cleanup >"$out/cleanup.log" 2>&1
++  # Formal M12 retains this new project's data and sources; stop only owned processes.
++  if [[ -d "$work_dir/$project" ]]; then
++    (
++      cd "$work_dir/$project" || exit 1
++      sh deploy/dev/run.sh stop
++      stop_rc=$?
++      mkdir -p "$out/logs"
++      cp .dev/*.log "$out/logs/" 2>/dev/null
++      exit "$stop_rc"
++    ) >"$out/cleanup.log" 2>&1 || rc=1
++  fi
++  if [[ -n "${etcd_pid:-}" ]]; then
++    kill "$etcd_pid" 2>/dev/null
++    wait "$etcd_pid" 2>/dev/null
++  fi
+   if (( mirror_started )); then
+     python3 "$repo_dir/scripts/testdata/demo-robot/report.py" copy-dependency-logs "$out"
+-    bash "$repo_dir/scripts/mirror-local.sh" clean >>"$out/cleanup.log" 2>&1 || rc=1
++    bash "$repo_dir/scripts/mirror-local.sh" down >>"$out/cleanup.log" 2>&1 || rc=1
+   fi
+   python3 "$repo_dir/scripts/testdata/demo-robot/report.py" summarize "$out" "$rc" || rc=1
+   echo "game-demo Robot evidence: $out (exit $rc)"
