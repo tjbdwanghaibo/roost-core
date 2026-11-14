@@ -61,7 +61,8 @@ P3 的 Ghost 副本（T05）与单格移动寻路（T06）已合入 main；跨�
 | 同期 Player 更新、三次地形编辑合批、新订阅全量不丢老订阅变化 | 已通过 TCP 功能用例 | 同上；Monster 使用相同默认策略，但没有独立 Monster 事务 TCP 用例 |
 | 最新心跳修复与本批联合回归 | 已通过 | rebase 到 `fd9538f0` 后地形/场景 race 和 heartbeat、wiring/nest race 再次通过，原始日志在 demo 报告目录 |
 | P3 Ghost 副本（T05）多进程、乱序 / 丢失 / 重启、D13 撤回、邻格客户端 | 已通过（main） | [P3 Ghost 证据](evidence/terrain-p3-ghost-20261109/README.md)；`gameplay/terrain`、`gameplay/cellworld` 全包 race，生成工程 build/vet/test，变异均能变红；无缝演练 14 步通过（最后的普通场景压测阈值在 main 上同样失败，与本项无关）；真实 Mongo/WAL 下 kill -9 格进程的演练见下“开地形的分区场景真实多进程演练”（答复过的编辑重启后仍在、副本对齐；“提交了但答复没到”的在途编辑没有构造出来） |
-| 最新混合同步真实 Mongo/WAL 与崩溃恢复 | 待补 | 当前批次真实 Mongo 门跳过；需对新模式验证落盘、故障恢复和重连数据一致，不沿用旧 P1 证据宣布关闭 |
+| 真实 Mongo/WAL 的服务端崩溃恢复（B-11） | 已通过（2026-11-14） | [WAL-only SIGKILL 证据](evidence/terrain-wal-crash-20261114/README.md)：正式生成工程跨四块笔刷与跨两块整平建筑，strict 确认且 Mongo 三个业务集合仍为空时 SIGKILL，同 WAL 启动恢复后全部块版本/数据摘要、建筑/占位、编辑账本与重放去重一致；丢 WAL 变异两场景均红 |
+| 最新混合同步在真实持久层上的客户端重连 | 待补 | B-11 验收服务端 WAL 恢复，不接网络；需继续验证真实持久层下混合同步交付与客户端重连数据一致，不沿用离线或旧 P1 证据宣布关闭 |
 | Unity Editor、Mono/IL2CPP、移动设备及端到端表现 | 待补 | 实测资源读取、DAO Apply、网格/岸线、加载代际、纠偏与成本；C# 算法通过不等同 Unity 通过 |
 | Linux .NET 地形链路、C# 大地图装块/查询/内存 | 待补 | 本次没有提供这些结果，按客户端独立验收记录 |
 | P3 移动与寻路（单格） | 已通过（main） | [证据](evidence/terrain-p3-move-20261109/README.md)：规则边界、负高度、未装入块、改块后重算、加权 A* 代价上界、demo 端到端（真实 Nest/心跳/TCP，持久层替身）与变异；同机基准。跨格/交接、分区场景、真实依赖未测 |

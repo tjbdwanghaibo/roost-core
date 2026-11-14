@@ -743,6 +743,12 @@ type realTerrainProcess struct {
 
 func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IMongo, databases *coredata.DatabaseMap, physical, walDir, pack string) *realTerrainProcess {
 	t.Helper()
+	return startRealTerrainProcessWithProjection(t, ctx, client, databases, physical, walDir, pack, engine.ProjectorOptions{})
+}
+
+// 崩溃夹具用 ManualReplay 固定“WAL 已确认、投影未开始”的窗口；通常仍使用后台投影。
+func startRealTerrainProcessWithProjection(t *testing.T, ctx context.Context, client fmongo.IMongo, databases *coredata.DatabaseMap, physical, walDir, pack string, projection engine.ProjectorOptions) *realTerrainProcess {
+	t.Helper()
 	useDemoConfig(t)
 	handler.RegisterTerrainEditNestHandlers()
 	handler.RegisterBuildingNestHandlers()
@@ -767,7 +773,8 @@ func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IM
 		default:
 		}
 	}
-	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{OnFatal: onFatal})
+	projection.OnFatal = onFatal
+	projector, err := engine.NewProjector(wal, store, projection)
 	if err != nil {
 		t.Fatal(err)
 	}

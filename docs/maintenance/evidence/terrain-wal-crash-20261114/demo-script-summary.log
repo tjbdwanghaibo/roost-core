@@ -1,0 +1,72 @@
+=== RUN   TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances
+--- PASS: TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances (0.04s)
+PASS
+ok  	example.com/planet/internal/service/alliance	1.642s
+=== RUN   TestPurchaseRedisBoundedDrainAndReplay
+--- PASS: TestPurchaseRedisBoundedDrainAndReplay (0.02s)
+=== RUN   TestPurchaseRedisConcurrentCallbackUsesOneSequence
+--- PASS: TestPurchaseRedisConcurrentCallbackUsesOneSequence (0.00s)
+=== RUN   TestPurchaseRedisRefusedWriteDoesNotAllocate
+--- PASS: TestPurchaseRedisRefusedWriteDoesNotAllocate (0.00s)
+PASS
+ok  	example.com/planet/game/purchase	1.650s
+=== RUN   TestMailboxRealDependenciesClaimOverNATSAndRedis
+=== RUN   TestMailboxRealDependenciesClaimOverNATSAndRedis/core
+=== RUN   TestMailboxRealDependenciesClaimOverNATSAndRedis/jetstream
+--- PASS: TestMailboxRealDependenciesClaimOverNATSAndRedis (11.84s)
+    --- PASS: TestMailboxRealDependenciesClaimOverNATSAndRedis/core (4.60s)
+    --- PASS: TestMailboxRealDependenciesClaimOverNATSAndRedis/jetstream (7.24s)
+PASS
+ok  	example.com/planet/game/controllers/mailbox	13.536s
+=== RUN   TestActivityBoardKeepsTheLatestCumulativeScore
+--- PASS: TestActivityBoardKeepsTheLatestCumulativeScore (0.00s)
+PASS
+ok  	example.com/planet/internal/service/game	1.759s
+=== RUN   TestDungeonClearsBoardCountsEachRunOnceRealRedis
+--- PASS: TestDungeonClearsBoardCountsEachRunOnceRealRedis (0.03s)
+PASS
+ok  	example.com/planet/game/controllers/player	1.735s
+=== RUN   TestPlayerMigrationRealMongo
+--- PASS: TestPlayerMigrationRealMongo (0.34s)
+PASS
+ok  	example.com/planet/db/migrations	1.946s
+=== RUN   TestBuildingRestartRealMongo
+--- PASS: TestBuildingRestartRealMongo (0.92s)
+=== RUN   TestTerrainRestartRealMongo
+--- PASS: TestTerrainRestartRealMongo (0.98s)
+=== RUN   TestTerrainEditLedgerRealMongo
+=== RUN   TestTerrainEditLedgerRealMongo/the_ledger_leaves_with_the_player_and_comes_back_current
+--- PASS: TestTerrainEditLedgerRealMongo (1.98s)
+    --- PASS: TestTerrainEditLedgerRealMongo/the_ledger_leaves_with_the_player_and_comes_back_current (0.74s)
+PASS
+ok  	example.com/planet/internal/service/game	5.411s
+=== RUN   TestTerrainWALCrashRealMongo
+=== RUN   TestTerrainWALCrashRealMongo/brush
+    terrain_wal_crash_test.go:198: SIGKILL after WAL-only brush: 6 records, fsyncs 6, Mongo empty before recovery; all 6 chunks, ledger and building facts restored; replay duplicate
+=== RUN   TestTerrainWALCrashRealMongo/building
+    terrain_wal_crash_test.go:198: SIGKILL after WAL-only building: 5 records, fsyncs 5, Mongo empty before recovery; all 6 chunks, ledger and building facts restored; replay duplicate
+--- PASS: TestTerrainWALCrashRealMongo (1.47s)
+    --- PASS: TestTerrainWALCrashRealMongo/brush (0.68s)
+    --- PASS: TestTerrainWALCrashRealMongo/building (0.79s)
+PASS
+ok  	example.com/planet/internal/service/game	3.007s
+=== RUN   TestGateGeneratedBusinessConsumer
+        --- PASS: TestGeneratedGateProjectionCapabilities (0.00s)
+        === RUN   TestGeneratedGateNestDAOAndWAL
+        --- PASS: TestGeneratedGateNestDAOAndWAL (0.58s)
+        PASS
+        ok  	example.com/planet/internal/service/game	2.381s
+        === RUN   TestGeneratedGateTransportSelection
+        --- PASS: TestGeneratedGateTransportSelection (0.00s)
+        PASS
+        ok  	example.com/planet/internal/bootstrap	2.370s
+--- PASS: TestGateGeneratedBusinessConsumer (74.25s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	75.044s
+=== RUN   TestGeneratedSagaNativeStepsAndEffectConsumer
+        --- PASS: TestSagaNativeStepsAndEffectRealDependencies (4.44s)
+        PASS
+        ok  	example.com/planet/internal/bootstrap	6.123s
+--- PASS: TestGeneratedSagaNativeStepsAndEffectConsumer (19.66s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	20.014s
