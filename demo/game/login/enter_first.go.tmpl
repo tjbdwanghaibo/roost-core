@@ -1,0 +1,38 @@
+package login
+
+import (
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/view"
+)
+
+// firstEnter 是 game-demo 的新玩家初始化：这名玩家第一次进入游戏时执行一次，与“做过了”的标记（PlayerDao.Enter）
+// 同一笔事务。enter 模块的 Init（EnterGame 的加载或创建）与 Create（EnterCreate 的新建）都经 GrantFirstEnter 到这里，
+// 所以两条路上新玩家的初始状态一样。这个文件覆盖 enter 模块的缺省版本（缺省什么都不写）。
+//
+// demo 的新玩家从世界场景的出生点开始：落库的位置（SavedPosX / SavedPosY）在这里写成出生点。进场景
+// （handler EnterScene）从落库的位置放回地图，所以之后走到哪里、下线时记在哪里，再进入就回到哪里——这个钩子
+// 不再执行，不会把老玩家拉回出生点。等级、属性等初始值是 profile、attribute 等模块与 enter 的联动（OnFirstEnter）
+// 写的，不在这里；demo 不发初始道具或金币（D26 之后金币来自副本与活动）。
+//
+// 分区场景（scene.partition）不读这里写的位置：分区快照只认记在本分区场景之下的位置（SavedSceneID，见
+// game/partition 的 ReadBase），新玩家的 SavedSceneID 是 0，照旧从格的出生点进入。
+//
+// 约定同模块：只改当前玩家的 DAO，不调服务、不发消息；返回错误整笔回滚，下次进入再执行。
+func firstEnter(host view.PlayerEntity, nowUnixMilli int64) error {
+	_ = nowUnixMilli
+	spawn := sceneentity.WorldSceneConfig().Spawn
+	dao := host.Dao()
+	dao.SetSavedPosX(spawn.X)
+	dao.SetSavedPosY(spawn.Y)
+	return nil
+}
+
+// GrantFirstEnter 是首次初始化的发放：工程自己的 firstEnter，然后是别的功能登记的钩子（OnFirstEnter）。
+// Player 的 enter 接线（game/entities/player/enter_component.go）经它实现 enter.FirstEnterGranter；
+// Init 与 Create 都经它，所以两条路上发的东西一样。
+func GrantFirstEnter(host view.PlayerEntity, nowUnixMilli int64) error {
+	if err := firstEnter(host, nowUnixMilli); err != nil {
+		return err
+	}
+	return RunFirstEnter(host, nowUnixMilli)
+}
