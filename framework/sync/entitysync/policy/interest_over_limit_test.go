@@ -411,3 +411,56 @@ func TestInterestRelationPairMakesTheMainViewGiveWay(t *testing.T) {
 		t.Fatalf("client holds %v, want the farthest spatial target (3) to give way to the teammate", held)
 	}
 }
+
+// 主视野最远的成员同时经别的来源（块覆盖、关系视野）被看见：它离开主视野后 pair 仍被持有，腾不出会话里的位置。
+// 收紧要一直让到真正腾出位置为止（这里是让出次远的 2），被暂缓的块覆盖目标才能进来；只减一个会停在
+// “想要的比放得下的多”上，暂缓的目标永远到不了客户端（nest-game OBSERVED_BLOCKS=4 的 client=93 缺 102152）。
+func TestInterestTightensPastMembersHeldByOtherSources(t *testing.T) {
+	for _, other := range []string{"block", "relation"} {
+		t.Run(other, func(t *testing.T) {
+			scene := newOverLimitScene(t, 4, 0)
+			const watcher, blockOnly = int64(1001), int64(900)
+			player(t, scene.manager, watcher)
+			if err := scene.interest.Enter(watcher, watcher, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+				t.Fatal(err)
+			}
+			for id := int64(1); id <= 3; id++ {
+				scene.show(t, id, 10*id)
+			}
+			// 最远的 3 还经第二个来源被看见。
+			switch other {
+			case "block":
+				coverBlock(t, scene, 3, spatial.Point{X: 400, Y: 400})
+			case "relation":
+				setRelation(t, scene.interest, watcher, 3)
+			}
+			scene.flush(t, 2)
+			session := entitysync.SessionID(watcher)
+			if held := scene.client.held(session); !slices.Equal(held, []int64{1, 2, 3, watcher}) {
+				t.Fatalf("client holds %v before the block-only target arrives", held)
+			}
+			// 900 在视野外，只经块覆盖被看见；会话已满，Manager 暂缓它并通知 Interest。
+			scene.show(t, blockOnly, -450)
+			coverBlock(t, scene, blockOnly, spatial.Point{X: 500, Y: 500})
+			scene.flush(t, 4)
+			if held := scene.client.held(session); !slices.Equal(held, []int64{1, 3, blockOnly, watcher}) {
+				t.Fatalf("client holds %v (waiting %d), want the farthest member held by distance alone (2) to give way to %d; 3 stays through its %s source",
+					held, scene.manager.Stats().OverLimitWaiting, blockOnly, other)
+			}
+			if waiting := scene.manager.Stats().OverLimitWaiting; waiting != 0 {
+				t.Fatalf("%d subscriptions still deferred after converging", waiting)
+			}
+			if seen := scene.interest.Seen(watcher); !slices.Equal(seen, []int64{1, 3, blockOnly, watcher}) {
+				t.Fatalf("Interest wants %v, the client holds what fits", seen)
+			}
+		})
+	}
+}
+
+// coverBlock 让目标 id 额外被 at 所在的块观察（经提交门的排队事实，与 SpatialComponent 同一入口）。
+func coverBlock(t *testing.T, scene *overLimitScene, id int64, at spatial.Point) {
+	t.Helper()
+	if err := scene.interest.QueueObservedBlocks(factEntity(t, id), []int64{scene.interest.BlockAt(at)}); err != nil {
+		t.Fatal(err)
+	}
+}
