@@ -219,10 +219,14 @@ func (s *suite) fullStack(gameOpts procOptions) (games, alliances [2]*proc) {
 	var wg sync.WaitGroup
 	var helpers []*proc
 	for _, service := range []string{"account", "activity", "chat", "global", "mail", "match", "platform", "rank", "session"} {
+		// derive 失败时 t.Fatalf：不能在持锁时调它（停机清理 stopAll 要同一把锁，持锁 Fatal 会让用例挂到超时）。
 		s.mu.Lock()
-		config, ops, client := s.derive(service, service, 1000, s.next, procOptions{})
+		index := s.next
 		s.next++
+		s.mu.Unlock()
+		config, ops, client := s.derive(service, service, 1000, index, procOptions{})
 		p := &proc{name: service, service: service, sid: 1000, config: config, ops: ops, client: client, log: s.logs + "/" + service + ".log"}
+		s.mu.Lock()
 		s.procs[service] = p
 		s.mu.Unlock()
 		s.launch(p)
