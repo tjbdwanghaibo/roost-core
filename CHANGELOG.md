@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.47.0**（2026-11-14）：新生成物用到 v1.47.0 才有的 `infra/network/playeraccess`、`game/managers` 登记点与本地 Nest 实体起服预加载；framework-compat 的 minimum 一栏随之改为 v1.47.0。
+
 ## [v1.47.0] - 2026-11-14
 
 - **game-demo 玩法产出金币**（D26，2026-11-14）：副本通关在领奖事务里经 wallet 模块的 `Add` 发 20 金币（`dungeon.ClearCoins`），只发一次由领奖账本保证、不用 wallet 业务键；活动结算按名次另发一封金币邮件（300 / 200 / 100，键 `activity-coins:<活动>:<玩家>`），领取时由 mailbox 经 wallet 到账，离线玩家照发。此前金币只有 GM 邮件一个来源。回归 `TestDungeonClearPaysCoinsIntoTheWalletOnce`、`TestActivitySettlementPaysCoinsIntoTheWallet` 修前红。只对新生成的工程生效。
