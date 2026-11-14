@@ -1,0 +1,131 @@
+### baseline round 1 (1f618e1f)
+load averages: 12.34 8.01 6.89
+    measure_test.go:126: scale demo (cell 7500, ghost band 900, hysteresis 100, view radius 800, max view 64); moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+    measure_test.go:191: witness p99 346.70ms exceeds 50ms
+    measure_test.go:197: witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+    measure_test.go:198: idle period 0ms, players concentrated in one cell false
+    measure_test.go:199: level 2250 NPC/cell, 1000 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 132.1% of one core; views accepted 386511 stale 5 owner changes 29 re-enters 0; witness latency p50 14.20ms p99 346.70ms max 410.20ms (n=200000); mirrors 9209
+    measure_test.go:213: cell (0,0): idle NPCs 0 of 2471 reals, actor beats 47852/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,0): reals 2471 ghosts 687 | CPU 94.2% of one core | region beat p50 6.80ms p99 36.44ms max 78.25ms | out 2479 msg/s 5651 KB/s, in 2227 msg/s 861 KB/s | ghost latency p50 0.39ms p99 44.85ms (n=32347) | handoffs 70 (p50 5.34ms p99 173.13ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,0): replica full 536055 delta 149690 gaps 0; coalesced 112 control exhausted 0 max queue age 107.51ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,0): idle NPCs 0 of 2526 reals, actor beats 49142/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,0): reals 2526 ghosts 625 | CPU 93.8% of one core | region beat p50 8.35ms p99 60.24ms max 87.56ms | out 2000 msg/s 6499 KB/s, in 2742 msg/s 823 KB/s | ghost latency p50 0.51ms p99 29.77ms (n=38955) | handoffs 75 (p50 4.60ms p99 67.16ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,0): replica full 614922 delta 167426 gaps 0; coalesced 606 control exhausted 0 max queue age 82.22ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (0,1): idle NPCs 0 of 2516 reals, actor beats 48842/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,1): reals 2516 ghosts 616 | CPU 92.2% of one core | region beat p50 7.78ms p99 46.48ms max 53.95ms | out 2031 msg/s 6076 KB/s, in 2652 msg/s 808 KB/s | ghost latency p50 0.58ms p99 27.62ms (n=38393) | handoffs 68 (p50 5.52ms p99 95.46ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,1): replica full 569902 delta 165865 gaps 0; coalesced 159 control exhausted 0 max queue age 96.31ms pending 363; owner errors 0 full 0
+    measure_test.go:213: cell (1,1): idle NPCs 0 of 2487 reals, actor beats 48401/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,1): reals 2487 ghosts 658 | CPU 94.8% of one core | region beat p50 7.80ms p99 57.31ms max 80.21ms | out 2092 msg/s 5761 KB/s, in 2241 msg/s 828 KB/s | ghost latency p50 0.44ms p99 22.30ms (n=33151) | handoffs 74 (p50 7.47ms p99 91.24ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,1): replica full 547211 delta 153153 gaps 0; coalesced 1399 control exhausted 0 max queue age 116.08ms pending 0; owner errors 0 full 0
+--- FAIL: TestCellWorldMeasure (26.72s)
+    --- FAIL: TestCellWorldMeasure/2250 (26.72s)
+
+### new round 1 (D13 C)
+load averages: 16.01 9.23 7.36
+    measure_test.go:126: scale demo (cell 7500, ghost band 900, hysteresis 100, view radius 800, max view 64); moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+    measure_test.go:191: witness p99 85.81ms exceeds 50ms
+    measure_test.go:197: witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+    measure_test.go:198: idle period 0ms, players concentrated in one cell false
+    measure_test.go:199: level 2250 NPC/cell, 1000 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 134.4% of one core; views accepted 387114 stale 10 owner changes 29 re-enters 0; witness latency p50 3.98ms p99 85.81ms max 188.03ms (n=200000); mirrors 9175
+    measure_test.go:213: cell (0,0): idle NPCs 0 of 2470 reals, actor beats 48236/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,0): reals 2470 ghosts 691 | CPU 95.1% of one core | region beat p50 7.61ms p99 47.82ms max 64.86ms | out 2142 msg/s 5644 KB/s, in 2429 msg/s 866 KB/s | ghost latency p50 0.36ms p99 27.96ms (n=36428) | handoffs 70 (p50 6.07ms p99 129.04ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,0): replica full 536227 delta 152614 gaps 0; coalesced 175 control exhausted 0 max queue age 169.39ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,0): idle NPCs 0 of 2526 reals, actor beats 48659/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,0): reals 2526 ghosts 627 | CPU 101.6% of one core | region beat p50 9.05ms p99 53.24ms max 109.29ms | out 2158 msg/s 6453 KB/s, in 2639 msg/s 826 KB/s | ghost latency p50 0.43ms p99 42.10ms (n=36888) | handoffs 76 (p50 6.60ms p99 105.78ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,0): replica full 611978 delta 163410 gaps 0; coalesced 948 control exhausted 0 max queue age 190.21ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (0,1): idle NPCs 0 of 2514 reals, actor beats 48829/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,1): reals 2514 ghosts 614 | CPU 98.8% of one core | region beat p50 8.30ms p99 51.19ms max 106.04ms | out 2314 msg/s 6044 KB/s, in 2537 msg/s 809 KB/s | ghost latency p50 0.39ms p99 39.50ms (n=36224) | handoffs 66 (p50 4.88ms p99 136.04ms), rejected 0 aborted 0 retransmits 1 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,1): replica full 566692 delta 165870 gaps 0; coalesced 606 control exhausted 0 max queue age 186.79ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,1): idle NPCs 0 of 2490 reals, actor beats 48719/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,1): reals 2490 ghosts 655 | CPU 97.7% of one core | region beat p50 7.90ms p99 59.69ms max 104.05ms | out 2159 msg/s 5786 KB/s, in 2428 msg/s 833 KB/s | ghost latency p50 0.28ms p99 31.80ms (n=37044) | handoffs 71 (p50 5.93ms p99 49.10ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,1): replica full 550503 delta 156168 gaps 0; coalesced 253 control exhausted 0 max queue age 127.22ms pending 2; owner errors 0 full 0
+--- FAIL: TestCellWorldMeasure (26.80s)
+    --- FAIL: TestCellWorldMeasure/2250 (26.80s)
+
+### baseline round 2 (1f618e1f)
+load averages: 22.77 11.54 8.26
+    measure_test.go:126: scale demo (cell 7500, ghost band 900, hysteresis 100, view radius 800, max view 64); moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+    measure_test.go:191: witness p99 281.70ms exceeds 50ms
+    measure_test.go:197: witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+    measure_test.go:198: idle period 0ms, players concentrated in one cell false
+    measure_test.go:199: level 2250 NPC/cell, 1000 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 139.6% of one core; views accepted 394494 stale 5 owner changes 22 re-enters 0; witness latency p50 7.87ms p99 281.70ms max 351.19ms (n=200000); mirrors 9193
+    measure_test.go:213: cell (0,0): idle NPCs 0 of 2471 reals, actor beats 49022/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,0): reals 2471 ghosts 690 | CPU 99.4% of one core | region beat p50 7.07ms p99 36.33ms max 71.32ms | out 2579 msg/s 5675 KB/s, in 2613 msg/s 880 KB/s | ghost latency p50 0.33ms p99 16.30ms (n=39883) | handoffs 69 (p50 3.88ms p99 47.19ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,0): replica full 535728 delta 152238 gaps 0; coalesced 49 control exhausted 0 max queue age 43.04ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,0): idle NPCs 0 of 2526 reals, actor beats 50030/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,0): reals 2526 ghosts 627 | CPU 99.0% of one core | region beat p50 8.40ms p99 40.93ms max 95.93ms | out 2188 msg/s 6524 KB/s, in 2949 msg/s 842 KB/s | ghost latency p50 0.54ms p99 22.00ms (n=42709) | handoffs 73 (p50 4.18ms p99 47.26ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,0): replica full 613603 delta 169359 gaps 0; coalesced 168 control exhausted 0 max queue age 76.00ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (0,1): idle NPCs 0 of 2515 reals, actor beats 49515/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,1): reals 2515 ghosts 615 | CPU 101.1% of one core | region beat p50 7.35ms p99 37.69ms max 82.94ms | out 2637 msg/s 6086 KB/s, in 2834 msg/s 826 KB/s | ghost latency p50 0.39ms p99 17.28ms (n=41847) | handoffs 66 (p50 4.17ms p99 70.69ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,1): replica full 567917 delta 165201 gaps 0; coalesced 579 control exhausted 0 max queue age 83.03ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,1): idle NPCs 0 of 2489 reals, actor beats 49237/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,1): reals 2489 ghosts 654 | CPU 92.3% of one core | region beat p50 7.14ms p99 30.59ms max 40.62ms | out 2328 msg/s 5816 KB/s, in 2619 msg/s 846 KB/s | ghost latency p50 0.31ms p99 15.36ms (n=40630) | handoffs 69 (p50 2.74ms p99 74.26ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,1): replica full 549190 delta 158123 gaps 0; coalesced 8 control exhausted 0 max queue age 55.89ms pending 0; owner errors 0 full 0
+--- FAIL: TestCellWorldMeasure (26.84s)
+    --- FAIL: TestCellWorldMeasure/2250 (26.84s)
+
+### new round 2 (D13 C)
+load averages: 21.01 12.03 8.53
+    measure_test.go:126: scale demo (cell 7500, ghost band 900, hysteresis 100, view radius 800, max view 64); moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+    measure_test.go:191: witness p99 68.51ms exceeds 50ms
+    measure_test.go:197: witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+    measure_test.go:198: idle period 0ms, players concentrated in one cell false
+    measure_test.go:199: level 2250 NPC/cell, 1000 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 132.7% of one core; views accepted 395040 stale 4 owner changes 25 re-enters 0; witness latency p50 4.01ms p99 68.51ms max 204.72ms (n=200000); mirrors 9167
+    measure_test.go:213: cell (0,0): idle NPCs 0 of 2470 reals, actor beats 49230/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,0): reals 2470 ghosts 690 | CPU 90.7% of one core | region beat p50 7.10ms p99 52.17ms max 84.98ms | out 2087 msg/s 5664 KB/s, in 2479 msg/s 877 KB/s | ghost latency p50 0.39ms p99 19.79ms (n=37316) | handoffs 70 (p50 5.50ms p99 64.77ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,0): replica full 537374 delta 152492 gaps 0; coalesced 144 control exhausted 0 max queue age 133.46ms pending 342; owner errors 0 full 0
+    measure_test.go:213: cell (1,0): idle NPCs 0 of 2527 reals, actor beats 49644/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,0): reals 2527 ghosts 627 | CPU 99.9% of one core | region beat p50 8.34ms p99 42.91ms max 59.23ms | out 2445 msg/s 6529 KB/s, in 2547 msg/s 824 KB/s | ghost latency p50 0.57ms p99 25.65ms (n=34729) | handoffs 72 (p50 3.85ms p99 65.88ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,0): replica full 613038 delta 170425 gaps 0; coalesced 115 control exhausted 0 max queue age 120.29ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (0,1): idle NPCs 0 of 2514 reals, actor beats 49496/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,1): reals 2514 ghosts 619 | CPU 97.1% of one core | region beat p50 8.04ms p99 41.76ms max 57.56ms | out 2147 msg/s 6072 KB/s, in 2503 msg/s 811 KB/s | ghost latency p50 0.53ms p99 24.28ms (n=35251) | handoffs 69 (p50 3.99ms p99 45.07ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,1): replica full 567638 delta 167271 gaps 0; coalesced 358 control exhausted 0 max queue age 77.27ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,1): idle NPCs 0 of 2489 reals, actor beats 49346/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,1): reals 2489 ghosts 655 | CPU 90.0% of one core | region beat p50 7.11ms p99 37.76ms max 49.77ms | out 2059 msg/s 5779 KB/s, in 2478 msg/s 845 KB/s | ghost latency p50 0.39ms p99 19.03ms (n=37834) | handoffs 70 (p50 5.89ms p99 39.77ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,1): replica full 546490 delta 157004 gaps 0; coalesced 248 control exhausted 0 max queue age 68.73ms pending 240; owner errors 0 full 0
+--- FAIL: TestCellWorldMeasure (26.66s)
+    --- FAIL: TestCellWorldMeasure/2250 (26.66s)
+
+### baseline round 3 (1f618e1f)
+load averages: 22.17 13.06 9.01
+    measure_test.go:126: scale demo (cell 7500, ghost band 900, hysteresis 100, view radius 800, max view 64); moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+    measure_test.go:191: witness p99 503.54ms exceeds 50ms
+    measure_test.go:197: witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+    measure_test.go:198: idle period 0ms, players concentrated in one cell false
+    measure_test.go:199: level 2250 NPC/cell, 1000 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 120.5% of one core; views accepted 381486 stale 3 owner changes 22 re-enters 0; witness latency p50 5.45ms p99 503.54ms max 596.84ms (n=200000); mirrors 9181
+    measure_test.go:213: cell (0,0): idle NPCs 0 of 2472 reals, actor beats 48718/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,0): reals 2472 ghosts 688 | CPU 88.9% of one core | region beat p50 6.48ms p99 78.34ms max 93.14ms | out 2213 msg/s 5616 KB/s, in 2605 msg/s 866 KB/s | ghost latency p50 0.28ms p99 27.06ms (n=39922) | handoffs 70 (p50 4.42ms p99 226.85ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,0): replica full 532106 delta 149297 gaps 0; coalesced 1584 control exhausted 0 max queue age 157.72ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,0): idle NPCs 0 of 2526 reals, actor beats 48547/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,0): reals 2526 ghosts 627 | CPU 95.3% of one core | region beat p50 6.81ms p99 57.89ms max 97.49ms | out 2654 msg/s 6476 KB/s, in 2656 msg/s 815 KB/s | ghost latency p50 0.34ms p99 40.27ms (n=37226) | handoffs 72 (p50 3.61ms p99 186.72ms), rejected 0 aborted 0 retransmits 1 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,0): replica full 612185 delta 161993 gaps 0; coalesced 1291 control exhausted 0 max queue age 175.13ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (0,1): idle NPCs 0 of 2515 reals, actor beats 48412/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,1): reals 2515 ghosts 616 | CPU 86.1% of one core | region beat p50 6.71ms p99 53.01ms max 82.18ms | out 2167 msg/s 6044 KB/s, in 2631 msg/s 802 KB/s | ghost latency p50 0.70ms p99 40.09ms (n=38043) | handoffs 66 (p50 4.68ms p99 275.72ms), rejected 0 aborted 0 retransmits 3 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,1): replica full 568517 delta 163008 gaps 0; coalesced 319 control exhausted 0 max queue age 68.51ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,1): idle NPCs 0 of 2488 reals, actor beats 47676/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,1): reals 2488 ghosts 655 | CPU 84.5% of one core | region beat p50 5.96ms p99 58.79ms max 95.51ms | out 2186 msg/s 5736 KB/s, in 2591 msg/s 831 KB/s | ghost latency p50 0.46ms p99 31.85ms (n=40300) | handoffs 69 (p50 5.17ms p99 261.45ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,1): replica full 547259 delta 149513 gaps 0; coalesced 1432 control exhausted 0 max queue age 138.79ms pending 0; owner errors 0 full 0
+--- FAIL: TestCellWorldMeasure (26.72s)
+    --- FAIL: TestCellWorldMeasure/2250 (26.72s)
+
+### new round 3 (D13 C)
+load averages: 19.62 13.29 9.23
+    measure_test.go:126: scale demo (cell 7500, ghost band 900, hysteresis 100, view radius 800, max view 64); moving entities=5%; short=8 queue=65536 io=8 queue=16; GOMAXPROCS inherited
+    measure_test.go:197: witness entity counts p50=64 p99=64 max=64 (Base AOI can further filter)
+    measure_test.go:198: idle period 0ms, players concentrated in one cell false
+    measure_test.go:199: level 2250 NPC/cell, 1000 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 123.6% of one core; views accepted 394348 stale 5 owner changes 22 re-enters 0; witness latency p50 2.55ms p99 48.28ms max 131.78ms (n=200000); mirrors 9162
+    measure_test.go:213: cell (0,0): idle NPCs 0 of 2471 reals, actor beats 49098/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,0): reals 2471 ghosts 690 | CPU 95.6% of one core | region beat p50 5.64ms p99 27.71ms max 59.98ms | out 2816 msg/s 5674 KB/s, in 2927 msg/s 896 KB/s | ghost latency p50 0.26ms p99 13.04ms (n=46446) | handoffs 69 (p50 3.39ms p99 29.55ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,0): replica full 535569 delta 153832 gaps 0; coalesced 32 control exhausted 0 max queue age 73.83ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,0): idle NPCs 0 of 2525 reals, actor beats 50112/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,0): reals 2525 ghosts 630 | CPU 98.4% of one core | region beat p50 7.33ms p99 48.03ms max 59.03ms | out 2448 msg/s 6529 KB/s, in 3163 msg/s 849 KB/s | ghost latency p50 0.40ms p99 22.72ms (n=47321) | handoffs 73 (p50 5.68ms p99 94.89ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,0): replica full 616009 delta 169783 gaps 0; coalesced 136 control exhausted 0 max queue age 106.18ms pending 816; owner errors 0 full 0
+    measure_test.go:213: cell (0,1): idle NPCs 0 of 2515 reals, actor beats 49882/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (0,1): reals 2515 ghosts 615 | CPU 100.5% of one core | region beat p50 5.85ms p99 38.87ms max 50.20ms | out 3062 msg/s 6131 KB/s, in 3034 msg/s 832 KB/s | ghost latency p50 0.23ms p99 19.53ms (n=46090) | handoffs 66 (p50 2.56ms p99 113.96ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (0,1): replica full 571090 delta 169474 gaps 0; coalesced 66 control exhausted 0 max queue age 115.39ms pending 0; owner errors 0 full 0
+    measure_test.go:213: cell (1,1): idle NPCs 0 of 2489 reals, actor beats 49385/s, tier changes idle 0 fast 0
+    measure_test.go:215: cell (1,1): reals 2489 ghosts 654 | CPU 92.9% of one core | region beat p50 6.43ms p99 36.29ms max 49.41ms | out 2500 msg/s 5793 KB/s, in 2961 msg/s 863 KB/s | ghost latency p50 0.38ms p99 19.76ms (n=47775) | handoffs 69 (p50 4.96ms p99 141.53ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:220: cell (1,1): replica full 548316 delta 156957 gaps 0; coalesced 42 control exhausted 0 max queue age 99.59ms pending 636; owner errors 0 full 0
+--- PASS: TestCellWorldMeasure (26.99s)
+    --- PASS: TestCellWorldMeasure/2250 (26.99s)
+

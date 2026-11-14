@@ -1,0 +1,39 @@
+# 修前红：基线 1f618e1f 的 gameplay/cellworld 加上新用例（不依赖新 API 的三条；订阅数用例的基线版只数订阅）
+# GOWORK=off go test -count=1 -timeout 5m ./gameplay/cellworld -run 'TestBaseDecodesEachSourceCellInOrder|TestSlowSourceCellDoesNotBlockOthers|TestRedSubscriptionsPerSourceCell' -v
+--- PASS: TestBaseDecodesEachSourceCellInOrder (0.02s)
+    zz_red_test.go:182: timed out after 5s waiting for fast source delivered while the slow one is stuck: fast delivered 0 of 50 (replica gaps 0)
+--- FAIL: TestSlowSourceCellDoesNotBlockOthers (5.01s)
+    zz_red_test.go:302: 1 subscriptions, want one per source cell plus the shared one (4)
+--- FAIL: TestRedSubscriptionsPerSourceCell (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	5.651s
+FAIL
+
+# 修后绿（D13 C，-race）
+# GOWORK=off go test -race -count=1 ./gameplay/cellworld -run '<五条新用例与 TestReplica*/TestWitness*/TestPeriodic*/TestNearby*>' -v
+--- PASS: TestNodeSubscribesPerSourceCellAndUnsubscribesAll
+--- PASS: TestBaseDecodesEachSourceCellInOrder
+--- PASS: TestSlowSourceCellDoesNotBlockOthers
+--- PASS: TestReceiveRejectsMessagesOffTheirSourceLane
+--- PASS: TestReceivedReplicaBoundCoversAllSources
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld
+
+# 变异（在修后代码上改一处，跑对应用例；每次跑完 git checkout 还原）
+== M1 全部来源回调共用一把锁（退回单路串行）
+--- FAIL: TestSlowSourceCellDoesNotBlockOthers (5.01s)
+    replication_test.go:682: timed out after 5s waiting for fast source delivered while the slow one is stuck: fast delivered 0 of 50 (replica gaps 0)
+== M2 每条消息另起 goroutine（同一来源不再保序）
+--- FAIL: TestBaseDecodesEachSourceCellInOrder (10.01s)
+    replication_test.go:635: timed out after 10s waiting for every source delivered: sid 101 delivered 2 of 400
+== M3 订到一半失败不退已订的
+--- FAIL: TestNodeSubscribesPerSourceCellAndUnsubscribesAll (0.00s)
+    lifecycle_test.go:604: subscribe #2 failed: 1 subscriptions left behind
+== M4 去掉来源核对
+--- FAIL: TestReceiveRejectsMessagesOffTheirSourceLane (5.01s)
+    replication_test.go:713: timed out after 5s waiting for both off-lane messages rejected: decode errors 0
+== M5 接收缓存上限按分片各算
+--- FAIL: TestReceivedReplicaBoundCoversAllSources (0.00s)
+    replication_test.go:753: size after crossing the bound: 80
+== M6 Run 结束不退订（只靠 CloseIngress）
+--- FAIL: TestNodeSubscribesPerSourceCellAndUnsubscribesAll (0.00s)
+    lifecycle_test.go:599: 4 subscriptions left after Run returned
