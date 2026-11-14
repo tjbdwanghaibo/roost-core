@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the generated game-demo with an isolated local NATS and the C# GameClient.
+# Run the generated game-demo with isolated NATS and the selected C# / C++ client.
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
@@ -28,3 +28,10 @@ done
 export ROOST_GATE_DOTNET=0 ROOST_DATAENGINE_IT_NATS_URL="nats://$endpoint"
 if [[ "${ROOST_GATE_CPP:-}" != "1" ]]; then export ROOST_GATE_DOTNET=1; fi
 GOWORK=off go test -count=1 -v -timeout 10m -run '^TestGateGeneratedBusinessConsumer$' ./codegen/internal/roost
+
+if [[ "${ROOST_GATE_CPP:-}" == "1" ]]; then
+  cmake -S client/cpp -B "$run_dir/native" -DROOST_BUILD_TESTS=ON
+  cmake --build "$run_dir/native" --target roost_native_cross_gate --parallel 2
+  ROOST_GATE_NATIVE_CROSS_EXE="$run_dir/native/roost_native_cross_gate" GOWORK=off \
+    go test -tags integration -race -count=1 -v -timeout 2m -run '^TestRealAcrossGatesALateOlderBindDoesNotDisplaceTheNewerConnection$' ./wiring/gate
+fi

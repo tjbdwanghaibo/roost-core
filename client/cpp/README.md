@@ -137,11 +137,13 @@ Unity iOS 绑定使用 `__Internal`，其他平台使用插件名；见 [Unity i
 bash scripts/test-client-cpp.sh
 # 官方完整 Protobuf C++ runtime/protoc 安装前缀，二者版本一致：
 ROOST_MANAGED_TESTS=1 ROOST_PROTOBUF_TESTS=ON ROOST_PROTOBUF_PREFIX=/path/to/protobuf bash scripts/test-client-cpp.sh
-# 使用相同生成 game-demo、独立 NATS 与正式 Gate/Nest/WAL：
+# 生成 game-demo 的正式 Gate/Nest/WAL，以及同一会话跨两个 Gate 的迟到握手：
 ROOST_GATE_CPP=1 ROOST_PROTOBUF_PREFIX=/path/to/protobuf bash scripts/test-gate-client.sh
 # macOS 动态库 PInvoke 冒烟（替换成自己的构建目录）：
 DYLD_LIBRARY_PATH=/tmp/roost-client-build dotnet run --project client/cpp/tests/managed/NativeInterop.csproj
 ```
+
+2026-11-14 补验（macOS arm64、Protobuf 36.2）：`ROOST_PROTOBUF_TESTS=ON` 的 8 项 ctest 全过。Gate 脚本的 C++ 档同时验证生成业务 PB / DAO 同步链路，以及同一 SessionID 先连 A、后连 B、旧 Bind 迟到的接管：旧连接没有 READY、新连接在迟到前后都能请求。夹具通过管道等待实际握手与回包，不用固定等待猜先后。两个 Gate 与 Game 在同一 Go 测试进程中，各有独立真实 NATS 连接；C++ 是另一个进程，不代表跨机验收。详情见[补验证据](../../docs/maintenance/evidence/known-limits-remaining-20261114/native-acceptance.md)。
 
 2026-11-01 本轮（macOS arm64、AppleClang 21、Protobuf 31.1、.NET 10）：
 
