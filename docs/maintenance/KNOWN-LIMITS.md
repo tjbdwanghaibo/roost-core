@@ -643,7 +643,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 设计上的边界见[起服预加载与按服分库（v1.47.0）](#起服预加载与按服分库v1470)；`-template game` 的 Player DAO 见[生成器与工具：遗留](#生成器与工具遗留)，game-demo 地形 DAO 见[地形 / 无缝世界：遗留](#地形--无缝世界遗留)。
 
 - **换服崩溃窗口没有自动清理**：换服提交后、删原服的库之前崩溃，原服重启会把旧档预加载进内存；续做时目标服补搬冲突，旧档留给运维删（见 [rehome 模块 README](../../modules/rehome/README.md)）。与 rehome 的“搬档”是同一个窗口，见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
-- **夹具与玩法脚本没有重跑**：`add dao --entity` 的骨架缺省改成 `dbscope=sid`，各玩法脚本（`scripts/test-{slg,mmorpg,card-rpg,auto-chess,idle-sim}-generated.sh`、`scripts/test-genres-generated.py`）与 genre 参考文档里经它生成的 DAO 随之变化；mmorpg 跨服演练改为按玩家的 sid 读 `<db>_<sid>`，各玩法真实依赖用例（`ROOST_*_REAL`）的收尾多删一个 `<库>_0`。合并后的全套与真实依赖用例跑过之前，是否还有别处直接读共用库**尚未确认**。
 
 #### Remote：遗留
 
@@ -876,6 +875,7 @@ room 自动断线订阅、保留策略、重启在线状态重建、广播继续
 
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-14：`dbscope=sid` 骨架缺省后的夹具与玩法脚本重跑**：合并后在 feat/v147 上全部重跑通过——17 个玩法脚本、模块门禁、`go test ./...`、dataengine / demo / Remote / 联盟 / 无缝真实进程演练、mmorpg 跨服演练（背包核对改读 `bag.1.<物品号>`），以及 12 个真实依赖档（`ROOST_{SLG,MMORPG,MOBA,CARD_RPG,TOWER_DEFENSE,SURVIVAL_EXTRACTION,MERGE_CASUAL,IDLE_SIM,AUTO_CHESS,PARTY_ROOM,GATE}_REAL`、`ROOST_MOBA_ROUTING`，没有跳过）。没有发现别处直接读共用库。
 - **2026-11-14：demo 机器人与演练**：`ProfileRename` 进了 game-demo 机器人缺省场景（改名三步）；登录链路做成可重复的真实进程脚本 `scripts/test-demo-login.sh`（含独立 Gate）并补了机器人握手之后三步的离线场景；两个 game 进程上的玩家互相入会进了机器人场景 `alliance_cross_join`；合服演练 `scripts/test-demo-merge.sh` 加了独立 Gate 与 B 冷加载按 sid 分库文档；`sidmerge` 回退报告 `new_in_target` 的说明改为“不在清单上的都算”（原文说只算合服期间新产生的，行为未变）；alliance-e2e 夹具在 L2 前缀默认值改动后对没有 remote_entity 段的服务也要求该键、并在持锁时 Fatal 导致挂起，已修。证据见 CHANGELOG。
 - **2026-11-14：Block AOI 扇出 4 时客户端缺对象**（同日发现并修复，`fa936c0d`）：块覆盖让玩家要看的对象（101）超过会话上限 `Limits.MaxObjects`（100），Manager 暂缓只经块覆盖看见的对象并通知 Interest；`tightenLocked` 按通知数把主视野上限减一，离开的最远成员同时经块覆盖被看见、仍被订阅，没有腾出位置；冷却到期上调即撤掉收紧，每秒循环，暂缓对象永远到不了客户端。现在收紧一直减到真正腾出位置（离开的成员不再被别的来源持有）或上限到 0。回归 `TestInterestTightensPastMembersHeldByOtherSources`；复现命令修后 3/3 通过。框架 Sync 缺陷，夹具核对无误。
 - **2026-11-14：遗留第 2 批（生成器与模块）**：`roost module verify` 只数顶层场景（原来把子测试数进通过数）；`-template game` 缺省带 `PlayerDao`（`add dao` 对已接好的同一 DAO 不重复）；嵌套类型里的 nil map 往返保持 `null`；nest 测试里手写的 `Lifecycle[T]` 副本加了与 wiring 逐声明比对的守卫；stamina 的免费补满、mailbox 的“等结果超时但事务已提交”补了场景；purchase+bag、bag+gm 的场景改为装载自带道具行；DAO golden 去掉 delta 里的实体号前缀；nest-game 夹具加心跳投递方式、独立 Gate + self_sync、集中布局与覆盖扇出开关；生成配置的 `remote_entity.snapshot_l2_key_prefix` 默认 `roost:<工程名>`（原为空，不同名工程共用 Redis 时 Remote 键互相覆盖）；组件拆分后过期的 5 个 codegen 用例改到新文件。证据见 CHANGELOG。
