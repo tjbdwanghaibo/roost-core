@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -210,6 +211,13 @@ func (recorder *sceneRecorder) reconnect(playerID int64) {
 	defer recorder.mu.Unlock()
 	delete(recorder.offline, playerID)
 	delete(recorder.unreachable, playerID)
+}
+
+// peek is what take would return, without taking it.
+func (recorder *sceneRecorder) peek(playerID int64) []*pb.EntitySyncPush {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return slices.Clone(recorder.pushes[playerID])
 }
 
 func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
@@ -843,7 +851,7 @@ func TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting(t *testin
 		subjects[playerID] = subject.ID()
 		positions[subject.ID()] = at
 	}
-	flushOverCrowd(t, scene, ctx)
+	flushOverCrowd(t, scene, ctx, recorder, ids, frame.DefaultLimits().MaxObjects)
 	stats := scene.manager.Stats()
 	if stats.SessionsLost != 0 || stats.Sessions != players || stats.OverLimitWaiting != 0 {
 		t.Fatalf("after the crowd settled: %d sessions lost, %d open, %d objects still waiting for room", stats.SessionsLost, stats.Sessions, stats.OverLimitWaiting)
@@ -871,17 +879,34 @@ func TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting(t *testin
 // flushOverCrowd runs the replication until it has settled: no object waits
 // for room, and the scene's Interest has no logged command left to run, for a
 // few flushes in a row (deferral notice, the view tightening, the removes and
-// the swapped-in creates take a few flushes).
+// the swapped-in creates take a few flushes) — and then, while any of the
+// players does not yet hold exactly want objects, keeps flushing until the
+// Interest's over-limit relaxing has filled the room back in.
 //
-// Both halves are needed. Each Flush runs the Interest's policy phase under a
-// time budget (half the sync interval); on a loaded machine the phase stops
-// with joins still in its log, the sessions have not been offered those
-// subjects yet, and the manager has nothing waiting — "nothing waiting" then
-// means "not there yet", not "settled". The log backlog is the gauge the
-// policy phase leaves after each run (entitysync.interest.log_backlog; one
-// scene per test, so the last value is this scene's). Waiting is counted in
-// flushes, not time: a slow machine needs more of them, not a longer sleep.
-func flushOverCrowd(t *testing.T, scene *Scene, ctx context.Context) {
+// The first two conditions are both needed. Each Flush runs the Interest's
+// policy phase under a time budget (half the sync interval); on a loaded
+// machine the phase stops with joins still in its log, the sessions have not
+// been offered those subjects yet, and the manager has nothing waiting —
+// "nothing waiting" then means "not there yet", not "settled". The log backlog
+// is the gauge the policy phase leaves after each run
+// (entitysync.interest.log_backlog; one scene per test, so the last value is
+// this scene's). Waiting for them is counted in flushes, not time: a slow
+// machine needs more of them, not a longer sleep.
+//
+// The third is the over-limit contract itself (D17, policy/interest_over_limit.go):
+// every deferral notice lowers the view's limit by one, and on a loaded machine
+// the same pairs are deferred again in the flushes before the tightened view has
+// been settled, so the limit can end a few below the session's room (seen
+// 2026-11-14 under -race, GOMAXPROCS=2 and eight busy CPUs: 3/300 runs, players
+// holding 159..162 of 164 with nothing waiting; the next relax, one cooldown of
+// at least a second later, raised the limit and every player held 164 after
+// 1.3s). The relaxing runs on wall time, so this part waits in time: a flush
+// every 50ms until every player holds want with nothing waiting and nothing
+// left in the log (a raise first offers more than fits, the excess waits until
+// the next tightening), at most 40s (the longest relax
+// cooldown is 32s). The assertions after it stay exact: the crowd has to
+// converge to exactly want, never above it, keeping the nearest.
+func flushOverCrowd(t *testing.T, scene *Scene, ctx context.Context, recorder *sceneRecorder, ids []int64, want int) {
 	t.Helper()
 	quiet := 0
 	for flushes := 0; quiet < 3; flushes++ {
@@ -895,6 +920,28 @@ func flushOverCrowd(t *testing.T, scene *Scene, ctx context.Context) {
 			quiet++
 		} else {
 			quiet = 0
+		}
+	}
+	short := func() (int64, int) {
+		for _, playerID := range ids {
+			if n := len(heldSubjects(t, recorder.peek(playerID))); n != want {
+				return playerID, n
+			}
+		}
+		return 0, want
+	}
+	deadline := time.Now().Add(40 * time.Second)
+	for {
+		playerID, held := short()
+		if playerID == 0 && scene.manager.Stats().OverLimitWaiting == 0 && interestLogBacklog() == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the crowd did not converge: player %d holds %d objects, want %d (manager %+v)", playerID, held, want, scene.manager.Stats())
+		}
+		time.Sleep(50 * time.Millisecond)
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatalf("flush: %v", err)
 		}
 	}
 }

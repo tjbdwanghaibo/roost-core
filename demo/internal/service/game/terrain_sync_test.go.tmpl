@@ -969,7 +969,7 @@ func TestTerrainDoesNotWidenThePlayerObjectLimit(t *testing.T) {
 		subjects[playerID] = subject.ID()
 		positions[subject.ID()] = at
 	}
-	flushOverCrowd(t, scene, ctx)
+	flushOverCrowd(t, scene, ctx, recorder, ids, frame.DefaultLimits().MaxObjects)
 	if stats := scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred == 0 {
 		t.Fatalf("with terrain on: %d sessions lost, %d objects ever deferred (want 0 lost and the crowd overflowing)", stats.SessionsLost, stats.OverLimitDeferred)
 	}
