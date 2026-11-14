@@ -50,7 +50,8 @@ E2 原生弱网调查已经单独完成，见[原始报告](../v147-native-weak-
 export ROOST_PERF_REPO=/Users/whb/roost/worktrees/v147
 export ROOST_PERF_BINS=/private/tmp/v147-perf-bin
 export ROOST_PERF_OUTPUT_ROOT="$ROOST_PERF_REPO/artifacts/perf/v147-remaining"
-export ROOST_CHECKPOINT_TREE=/Users/whb/roost/worktrees/v147-background-checkpoint
+# 后台 checkpoint 已合入（缺省关闭）：M19 改用含该合入的仓库本身；run-micro.py 按哈希保留未改，缺省仍指向旧实验树，所以显式设置（ROOST_PERF_REPO 须是含该合入的检出）。
+export ROOST_CHECKPOINT_TREE="$ROOST_PERF_REPO"
 entry="$ROOST_PERF_REPO/docs/maintenance/evidence/v147-performance-preparation-20261114"
 # 合入本报告后在 integration 使用该 entry；或将 entry 指向报告工作树同目录。
 bash "$entry/run-segment.sh" s1-micro --plan
@@ -169,6 +170,6 @@ E1 的 benchstat 已安装于 `/Users/whb/go/bin/benchstat`；汇总时按实际
 
 ## B3 / M19 实验保留
 
-实验工作树 `/Users/whb/roost/worktrees/v147-background-checkpoint`，分支 `experiment/v147-background-checkpoint`，HEAD **`300be3a0`**，原基线 `fe83c60a`。完整[实验报告副本](../checkpoint-experiment-20261114/README.md)随本交接保存，**只复制报告，不合实验代码**。源码丢失时可从保留提交建立新 detached worktree，再设置 `ROOST_CHECKPOINT_TREE`；引用不存在时先找回实验提交，不能静默换成发布树。
+实验工作树 `/Users/whb/roost/worktrees/v147-background-checkpoint`，分支 `experiment/v147-background-checkpoint`，HEAD **`300be3a0`**，原基线 `fe83c60a`。完整[实验报告副本](../checkpoint-experiment-20261114/README.md)随本交接保存，**只复制报告，不合实验代码**。源码丢失时可从保留提交建立新 detached worktree，再设置 `ROOST_CHECKPOINT_TREE`；引用不存在时先找回实验提交，不能静默换成发布树。（2026-11-14 后续：维护者决定不等 M-19 先合入，`dataengine.projection.background_checkpoint` 缺省关闭；M-19 改在含该合入的同一棵树上切配置跑，见[实验记录](../checkpoint-experiment-20261114/README.md)。）
 
 M19 两档都在该同一实验树执行，配置0/1各3轮，分别128/256并发。`STACKS=1` 在调用阶段至少1s无完成时采样，每阶段至多2次，500ms检查；两档一致开启，但实际触发的栈打印有额外开销，须注明。`storeCheckpoint` 栈份数是相关性材料，不能直接证明历史3s整体停顿根因。完整夹具在这个采样开关下的正式运行尚未进行。

@@ -6,7 +6,7 @@
 
 - 集成分支：`feat/v147`，工作树 `/Users/whb/roost/worktrees/v147`。**不要在 `/Users/whb/roost/roost-core` 的 main 上继续本批，也不要直接发版。** 当前最后代码/测试集成点为 `aff286349fb1bca215e8aa761665826d03628389`；之后的交接与报告提交以本文件所在分支的 `git log` 为准。
 - 计划内代码和功能夹具已完成并合入。P1、P2 正式探针、P4～P10 及先决批不必重新实施。逐条对应、边界与证据见 [remaining 当前状态](evidence/known-limits-remaining-20261114/remaining.md)；原始纪律见[总交接](HANDOFF-2026-11-14-v147-leftovers.md)。
-- **例外 B3：后台 checkpoint 只在实验分支** `experiment/v147-background-checkpoint`，工作树 `/Users/whb/roost/worktrees/v147-background-checkpoint`，当前 `300be3a0`。实验代码、配置和诊断信号处理器都不得合进集成分支；只交回 [实验报告](evidence/checkpoint-experiment-20261114/README.md)，M19 后由维护者判断。
+- **例外 B3：后台 checkpoint 只在实验分支** `experiment/v147-background-checkpoint`，工作树 `/Users/whb/roost/worktrees/v147-background-checkpoint`，当前 `300be3a0`。实验代码、配置和诊断信号处理器都不得合进集成分支；只交回 [实验报告](evidence/checkpoint-experiment-20261114/README.md)，M19 后由维护者判断。（2026-11-14 后续：维护者改为不等 M-19 先合入、配置缺省关闭；M-19 在含该合入的树上切配置跑，见实验报告。）
 - 不 push、不合 main、不打 tag、不发版。每批独立工作树，完成后由主 agent 串行 `--no-ff` 合回 `feat/v147`。用户已允许最多 4 个 agent 并行，不嵌套；正式性能期间所有其他 agent 停止编译、测试、race 和索引。
 - Q1～Q17、N1～N4、Q4、#37、#154、CellWorld B/C/E、self_sync RetryLater 等未回答事项保持原样，不把实施授权解释为代替维护者选择。见 [decisions](evidence/known-limits-remaining-20261114/decisions.md) 和 remaining §5。
 
