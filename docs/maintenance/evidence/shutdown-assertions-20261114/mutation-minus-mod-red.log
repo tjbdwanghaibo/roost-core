@@ -1,0 +1,76 @@
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== PAUSE TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== CONT  TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/activity
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/alliance
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/global
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/mail
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/platform
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/rank
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/account
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/chat
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/game
+    shutdown_test.go:182: configs/service/config.game.yaml does not contain "total_timeout: 126s\n"
+    shutdown_test.go:182: configs/service/config.game.yaml does not contain ">= total_timeout + 5s: 131s for this service"
+    shutdown_test.go:182: configs/service/config.game.prod.example.yaml does not contain "total_timeout: 126s\n"
+    shutdown_test.go:182: configs/service/config.game.prod.example.yaml does not contain ">= total_timeout + 5s: 131s for this service"
+    shutdown_test.go:182: deploy/k8s/base/secret.game.example.yaml does not contain "total_timeout: 126s\n"
+    shutdown_test.go:182: deploy/k8s/base/secret.game.example.yaml does not contain ">= total_timeout + 5s: 131s for this service"
+    shutdown_test.go:182: deploy/k8s/base/game.yaml does not contain "terminationGracePeriodSeconds: 131\n"
+    shutdown_test.go:182: compose service game: stop_grace_period is not 131s:
+        
+          game:
+            image: ${ROOST_IMAGE:?ROOST_IMAGE must be an immutable digest}
+            container_name: planet-game
+            command: ["game", "--sid=1004", "--config=/etc/roost/config.yaml"]
+            restart: unless-stopped
+            read_only: true
+            init: true
+            user: "65532:65532"
+            cap_drop: [ALL]
+            security_opt: [no-new-privileges:true]
+            tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+            stop_grace_period: 128s
+            healthcheck:
+              test: [CMD, /app/healthprobe, http://127.0.0.1:9100/readyz]
+              interval: 10s
+              timeout: 3s
+              retries: 6
+              start_period: 90s
+            volumes:
+              - type: bind
+                source: ${ROOST_CONFIG_ROOT:?ROOST_CONFIG_ROOT is required}/config.game.yaml
+                target: /etc/roost/config.yaml
+                read_only: true
+              - type: volume
+                source: planet-game-wal
+                target: /var/lib/roost/wal
+              - type: volume
+                source: planet-game-log
+                target: /app/log
+            deploy:
+              resources:
+                limits: {cpus: "2", memory: 2G}
+                reservations: {cpus: "0.25", memory: 256M}
+    shutdown_test.go:182: deploy/shell/install.sh does not contain "  game) STOP_TIMEOUT=131s ;;\n"
+    shutdown_test.go:182: deploy/shell/README.md does not give game the stop budget 131s install.sh uses
+    shutdown_test.go:182: deploy/dev/run.sh SERVICES has no "game:9100:131" entry
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/match
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/session
+=== NAME  TestGeneratedShutdownTimeoutFollowsEachServicesMods
+    shutdown_test.go:188: deploy/dev/second-game.sh does not contain "[ \"$i\" -lt 131 ]"
+--- FAIL: TestGeneratedShutdownTimeoutFollowsEachServicesMods (34.77s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/activity (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/alliance (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/global (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/mail (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/platform (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/rank (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/account (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/chat (0.00s)
+    --- FAIL: TestGeneratedShutdownTimeoutFollowsEachServicesMods/game (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/match (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/session (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	35.587s
+FAIL

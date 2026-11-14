@@ -1,0 +1,28 @@
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== PAUSE TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== CONT  TestGeneratedShutdownTimeoutFollowsEachServicesMods
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/game
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/global
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/mail
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/session
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/account
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/activity
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/match
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/platform
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/rank
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/alliance
+=== RUN   TestGeneratedShutdownTimeoutFollowsEachServicesMods/chat
+--- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods (34.44s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/game (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/global (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/mail (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/session (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/account (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/activity (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/match (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/platform (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/rank (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/alliance (0.00s)
+    --- PASS: TestGeneratedShutdownTimeoutFollowsEachServicesMods/chat (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	34.904s

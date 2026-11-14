@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：game-demo 停机预算随 Room 定时器更新**（2026-11-14）：P9 新增正式 Room timer Mod 后，显式测试夹具为 28 Mods、126s/131s，默认 CLI 含 manager 为 29 Mods、129s/134s。修正 shutdown/singleton 的旧固定预期，保留 bootstrap 独立枚举、手改配置不被覆盖与 singleton 开关边界；不修改生产预算算法。31 项定向通过，漏计一 Mod 的变异被独立断言拒绝；[原失败与红绿证据](docs/maintenance/evidence/shutdown-assertions-20261114/README.md)。
+
 - **测量入口：联盟 RPC 并发档可配置**（2026-11-14）：正式探针支持 `ALLIANCE_E2E_RPC_CONCURRENCY=1..256`（默认 16），写额度 512，分散 16 联盟与单热点对照保持 500 人业务限制，并打印 ≥3 秒样本。此前设置开关仍固定 16；后台 checkpoint 实验没有合入。见 [探针口径](docs/performance/benchmarks/alliance-probes-20261114/README.md)。
 
 - **性能入口：AOI 支持自动 CPU 并发度**（2026-11-14）：`sync-aoi.sh` 接受并缺省使用 `ROOST_PERF_CPU=0`，与当前验证口径一致；原来校验直接拒绝 0。保留显式正整数档和原有延迟断言；真实 on_change 小规模功能运行通过，数字不作为容量。
