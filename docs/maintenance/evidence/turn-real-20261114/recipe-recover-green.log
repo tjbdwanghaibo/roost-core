@@ -1,0 +1,4 @@
+=== RUN   TestTurnRecipeRealLifecycle
+    recipe_test.go:151: PASS real turn recovery: room=1; old connections rejected; epochs advanced; offline timeout once; sequence retained; replay and finish exactly once
+--- PASS: TestTurnRecipeRealLifecycle (0.15s)
+PASS

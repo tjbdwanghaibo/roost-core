@@ -1,0 +1,299 @@
+package acceptance
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"testing"
+	"time"
+
+	apperrors "TURN_MODULE/internal/errors"
+	"TURN_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"gopkg.in/yaml.v3"
+)
+
+type turnRealState struct {
+	RoomID   int64
+	Epochs   [2]uint64
+	Deadline int64
+}
+
+type turnRealClient struct {
+	conn transport.Conn
+	seq  uint32
+	ids  map[string]uint32
+}
+
+// TestTurnRecipeRealLifecycle 由 test-turn-pvp-real.sh 分 seed/recover 两次执行，中间实际 SIGKILL game 进程。
+// Gate、account、match 与 Mongo/Redis/NATS/etcd 都是真实进程；只经正式登录、匹配、Room/Turn 协议驱动游戏。
+func TestTurnRecipeRealLifecycle(t *testing.T) {
+	if os.Getenv("ROOST_TURN_PVP_REAL") != "1" {
+		t.Skip("ROOST_TURN_PVP_REAL not set")
+	}
+	if os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI") == "" {
+		t.Fatal("private Mongo environment required by the process harness")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	phase := os.Getenv("TURN_REAL_PHASE")
+	a := turnRealLogin(t, ctx, "a", phase == "seed")
+	b := turnRealLogin(t, ctx, "b", phase == "seed")
+	statePath := os.Getenv("TURN_REAL_STATE")
+	var state turnRealState
+	if phase == "seed" {
+		for _, c := range []*turnRealClient{a, b} {
+			r := turnRealRPC(t, c, "MatchEnqueue", &pb.MatchEnqueueRequest{Sequence: 1}, pb.MarshalMatchEnqueueRequest, pb.UnmarshalMatchmakingResponse)
+			if r.Code != 0 {
+				t.Fatalf("enqueue: %+v", r)
+			}
+		}
+		for {
+			ra := turnRealRPC(t, a, "MatchStatus", &pb.MatchStatusRequest{}, pb.MarshalMatchStatusRequest, pb.UnmarshalMatchmakingResponse)
+			rb := turnRealRPC(t, b, "MatchStatus", &pb.MatchStatusRequest{}, pb.MarshalMatchStatusRequest, pb.UnmarshalMatchmakingResponse)
+			if ra.Code != 0 || rb.Code != 0 {
+				t.Fatalf("match status: %+v %+v", ra, rb)
+			}
+			if ra.Phase == "matched" && rb.Phase == "matched" {
+				if ra.RoomID <= 0 || ra.RoomID != rb.RoomID || len(ra.Members) != 1 || len(rb.Members) != 1 {
+					t.Fatalf("matched rooms: %+v %+v", ra, rb)
+				}
+				state.RoomID = ra.RoomID
+				break
+			}
+			turnRealWait(t, ctx)
+		}
+		for i, c := range []*turnRealClient{a, b} {
+			r := turnRealRPC(t, c, "RoomJoin", &pb.RoomJoinRequest{RoomID: state.RoomID}, pb.MarshalRoomJoinRequest, pb.UnmarshalRoomJoinResponse)
+			if r.Code != 0 || r.Info == nil || r.Info.Epoch == 0 {
+				t.Fatalf("join: %+v", r)
+			}
+			state.Epochs[i] = r.Info.Epoch
+		}
+		start := turnRealRPC(t, a, "TurnStart", &pb.TurnStartRequest{RoomID: state.RoomID, Epoch: state.Epochs[0], TurnMillis: 5000, MaxTurns: 4}, pb.MarshalTurnStartRequest, pb.UnmarshalTurnStartResponse)
+		if start.Code != 0 || start.Info == nil || start.Info.Round != 1 || start.Info.Status != 1 {
+			t.Fatalf("start: %+v", start)
+		}
+		for range 2 {
+			r := turnRealRPC(t, a, "TurnEnd", &pb.TurnEndRequest{RoomID: state.RoomID, Epoch: state.Epochs[0], Round: 1, Sequence: 1}, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+			if r.Code != 0 || r.Info == nil || r.Info.Round != 2 || r.Info.Sequence != 1 || r.Info.Timeouts != 0 {
+				t.Fatalf("first end/replay: %+v", r)
+			}
+			state.Deadline = r.Info.Deadline
+		}
+		raw, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(statePath, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("PASS real turn seed: room=%d round=2 sequence=1; replay stayed round=2; deadline=%d", state.RoomID, state.Deadline)
+		return
+	}
+	if phase != "recover" {
+		t.Fatalf("unknown phase %q", phase)
+	}
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range []*turnRealClient{a, b} {
+		old := turnRealRPC(t, c, "TurnView", &pb.TurnViewRequest{RoomID: state.RoomID, Epoch: state.Epochs[i]}, pb.MarshalTurnViewRequest, pb.UnmarshalTurnViewResponse)
+		if old.Code != apperrors.ErrRoomStaleEpoch.Code() {
+			t.Fatalf("new connection accepted the old epoch: %+v", old)
+		}
+		r := turnRealRPC(t, c, "RoomReconnect", &pb.RoomReconnectRequest{RoomID: state.RoomID, Epoch: state.Epochs[i]}, pb.MarshalRoomReconnectRequest, pb.UnmarshalRoomReconnectResponse)
+		if r.Code != 0 || r.Info == nil || r.Info.Epoch <= state.Epochs[i] || len(r.Info.Seats) != 2 {
+			t.Fatalf("reconnect: %+v", r)
+		}
+		state.Epochs[i] = r.Info.Epoch
+	}
+	var view *pb.TurnViewResponse
+	for {
+		view = turnRealRPC(t, a, "TurnView", &pb.TurnViewRequest{RoomID: state.RoomID, Epoch: state.Epochs[0]}, pb.MarshalTurnViewRequest, pb.UnmarshalTurnViewResponse)
+		if view.Code != 0 || view.Info == nil {
+			t.Fatalf("view after recovery: %+v", view)
+		}
+		if view.Info.Round >= 3 {
+			break
+		}
+		turnRealWait(t, ctx)
+	}
+	if view.Info.Round != 3 || view.Info.Timeouts != 1 || view.Info.Sequence != 1 || view.Info.Status != 1 {
+		t.Fatalf("offline timer must consume exactly one turn: %+v", view)
+	}
+	// 更换连接后只更新 Epoch；原先成功的命令仍按持久回执去重。
+	replayed := turnRealRPC(t, a, "TurnEnd", &pb.TurnEndRequest{RoomID: state.RoomID, Epoch: state.Epochs[0], Round: 1, Sequence: 1}, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+	if replayed.Code != 0 || replayed.Info == nil || replayed.Info.Round != 3 || replayed.Info.Timeouts != 1 {
+		t.Fatalf("replay after recovery: %+v", replayed)
+	}
+	next := turnRealRPC(t, a, "TurnEnd", &pb.TurnEndRequest{RoomID: state.RoomID, Epoch: state.Epochs[0], Round: 3, Sequence: 2}, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+	if next.Code != 0 || next.Info == nil || next.Info.Round != 4 || next.Info.Sequence != 2 {
+		t.Fatalf("continue: %+v", next)
+	}
+	for range 2 {
+		end := turnRealRPC(t, b, "TurnEnd", &pb.TurnEndRequest{RoomID: state.RoomID, Epoch: state.Epochs[1], Round: 4, Sequence: 1}, pb.MarshalTurnEndRequest, pb.UnmarshalTurnEndResponse)
+		if end.Code != 0 || end.Info == nil || end.Info.Status != 2 || end.Info.Deadline != 0 || end.Info.Timeouts != 1 {
+			t.Fatalf("finish/replay: %+v", end)
+		}
+	}
+	closed := turnRealRPC(t, a, "RoomClose", &pb.RoomCloseRequest{RoomID: state.RoomID, Epoch: state.Epochs[0]}, pb.MarshalRoomCloseRequest, pb.UnmarshalRoomCloseResponse)
+	if closed.Code != 0 {
+		t.Fatalf("close: %+v", closed)
+	}
+	t.Logf("PASS real turn recovery: room=%d; old connections rejected; epochs advanced; offline timeout once; sequence retained; replay and finish exactly once", state.RoomID)
+}
+
+func turnRealWait(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func turnRealRPC[Q, R any](t *testing.T, c *turnRealClient, name string, q *Q, encode func(*Q) ([]byte, error), decode func([]byte) (*R, error)) *R {
+	t.Helper()
+	id := c.ids[name]
+	if id == 0 {
+		t.Fatalf("missing protocol %s", name)
+	}
+	raw, err := encode(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.seq++
+	if err := c.conn.WritePackets([]*transport.Packet{{MsgID: id, Seq: c.seq, Payload: raw}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		p, err := c.conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if p.MsgID != id || p.Seq != c.seq {
+			continue
+		}
+		result, err := decode(p.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+}
+
+func turnRealLogin(t *testing.T, ctx context.Context, player string, fresh bool) *turnRealClient {
+	t.Helper()
+	var manifest struct {
+		Modules map[string]struct {
+			IDs struct {
+				Protocol map[string]uint32 `yaml:"protocol"`
+			} `yaml:"ids"`
+		} `yaml:"modules"`
+	}
+	raw, err := os.ReadFile("roost.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	c := &turnRealClient{ids: map[string]uint32{}, seq: 1}
+	for _, module := range manifest.Modules {
+		for k, v := range module.IDs.Protocol {
+			c.ids[k] = v
+		}
+	}
+	post := func(path string, body any, result any) {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, os.Getenv("TURN_REAL_PORTAL")+path, bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("%s HTTP %d", path, response.StatusCode)
+		}
+		if err := json.NewDecoder(response.Body).Decode(result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var login struct {
+		OK            bool
+		AccountTicket string `json:"account_ticket"`
+		Code          int32
+	}
+	post("/portal/login", map[string]any{"channel": "dev", "open_id": os.Getenv("TURN_REAL_PROJECT") + "-" + player, "credential": "dev-recipe-local"}, &login)
+	if !login.OK || login.AccountTicket == "" {
+		t.Fatalf("portal login code=%d", login.Code)
+	}
+	var entered struct {
+		OK     bool
+		Ticket string
+		Code   int32
+	}
+	post("/portal/enter", map[string]any{"account_ticket": login.AccountTicket, "server_id": 1000}, &entered)
+	if !entered.OK || entered.Ticket == "" {
+		t.Fatalf("portal enter code=%d", entered.Code)
+	}
+	c.conn, err = transport.DialPlayerTCP(ctx, transport.Config{Endpoint: os.Getenv("TURN_REAL_ENDPOINT"), DialTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.conn.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
+	t.Cleanup(func() { stop() })
+	auth := transport.AuthPacket(entered.Ticket)
+	auth.Seq = 1
+	if err := c.conn.WritePackets([]*transport.Packet{auth}); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := c.conn.ReadPacket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.MsgID != 0 || len(ack.Payload) != 0 {
+		t.Fatal("invalid authentication ACK")
+	}
+	for {
+		packet, err := c.conn.ReadPacket()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if packet.MsgID != c.ids["EnterStatus"] {
+			continue
+		}
+		status, err := pb.UnmarshalEnterStatusPush(packet.Payload)
+		if err != nil || status.Code != 0 || status.NeedCreate != fresh {
+			t.Fatalf("enter status: %+v %v", status, err)
+		}
+		break
+	}
+	if fresh {
+		created := turnRealRPC(t, c, "EnterCreate", &pb.EnterCreateRequest{Name: fmt.Sprintf("Turn%s", player)}, pb.MarshalEnterCreateRequest, pb.UnmarshalEnterCreateResponse)
+		if created.Code != 0 {
+			t.Fatalf("create: %+v", created)
+		}
+	}
+	result := turnRealRPC(t, c, "EnterGame", &pb.EnterGameRequest{}, pb.MarshalEnterGameRequest, pb.UnmarshalEnterGameResponse)
+	if result.Code != 0 || result.First != fresh {
+		t.Fatalf("enter: %+v", result)
+	}
+	return c
+}

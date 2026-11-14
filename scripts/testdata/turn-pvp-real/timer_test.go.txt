@@ -1,0 +1,266 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	db "TURN_MODULE/db"
+	room "TURN_MODULE/game/entities/game_room"
+	player "TURN_MODULE/game/entities/player"
+	sender "TURN_MODULE/game/handler/syncsender"
+	rules "TURN_MODULE/game/rules"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+)
+
+type turnNoEffects struct{}
+
+func (turnNoEffects) Publish(context.Context, engine.OutboxItem) error {
+	return errors.New("unexpected effect in turn workflow")
+}
+
+type turnTimerFacts struct {
+	Room    []byte
+	Players [2][]byte
+}
+
+// TestTurnPVPRealTimerRecovery 分别在两个 OS 进程运行。seed 用正式 Sender 写入房间、玩家回执和持久节点；
+// recover 冷加载同一真实 Mongo / 文件 WAL，先核对完整持久字节及到期索引，再启动正式驱动循环。
+// 业务钟一次越过两小时，循环只能补消费一个回合；随后继续对战至终局，重试不能再次推进。
+func TestTurnPVPRealTimerRecovery(t *testing.T) {
+	if os.Getenv("ROOST_TURN_PVP_REAL") != "1" {
+		t.Skip("requires isolated real dependencies")
+	}
+	uri, database, root := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI"), os.Getenv("TURN_TIMER_DATABASE"), os.Getenv("TURN_TIMER_ROOT")
+	if uri == "" || !strings.HasPrefix(database, "roost_turn_it_") || root == "" {
+		t.Fatal("private Mongo, database and WAL root required")
+	}
+	phase := os.Getenv("TURN_TIMER_PHASE")
+	if phase != "seed" && phase != "recover" {
+		t.Fatal("unknown phase", phase)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	room.RegisterEntity()
+	player.RegisterEntity()
+	RegisterScenarioNestHandlers()
+	RegisterTickGameRoomTimerGenNestHandlers()
+	var now atomic.Int64
+	now.Store(1800000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	room.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(now.Load()) })
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	if err := client.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.DatabaseMain: database}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wal, err := nestwal.Open(nestwal.DefaultOptions(filepath.Join(root, "wal")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obStore, err := engine.NewMongoOutboxStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := engine.NewOutboxWorker(obStore, turnNoEffects{}, engine.OutboxWorkerOptions{Owner: "turn-timer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	runtime, err := engine.NewRuntime(store, wal, projector, outbox, access, nil, nil, engine.PipelinedRuntimeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	n := nest.NewEngine(options...)
+	if err := n.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := room.TimerDriver.Stop(shutdown); err != nil {
+			t.Error(err)
+		}
+		if err := n.Shutdown(shutdown); err != nil {
+			t.Error(err)
+		}
+		if err := runtime.Shutdown(shutdown); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := room.TimerDriver.Bind(n, func(id int64) entity.IThreadSafeEntity { return access.Manager().Get(id) }); err != nil {
+		t.Fatal(err)
+	}
+	makeID := func(unique int64, kind entity.EntityKind) int64 {
+		id, err := entity.BuildEntityID(unique, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	roomID := makeID(81001, room.EntityKindGameRoom)
+	ids := [2]int64{makeID(82001, player.EntityKindPlayer), makeID(82002, player.EntityKindPlayer)}
+	if phase == "seed" {
+		for _, c := range []struct {
+			id   int64
+			kind entity.EntityKind
+		}{{roomID, room.EntityKindGameRoom}, {ids[0], player.EntityKindPlayer}, {ids[1], player.EntityKindPlayer}} {
+			if _, err := access.Create(&entity.EntityCreateParam{IsCreate: true, Id: c.id, Kind: c.kind}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	r, err := access.Get(ctx, roomID, entity.EntityCategoryWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roomEntity := r.(*room.GameRoom)
+	var players [2]*player.Player
+	for i, id := range ids {
+		p, err := access.Get(ctx, id, entity.EntityCategoryOther)
+		if err != nil {
+			t.Fatal(err)
+		}
+		players[i] = p.(*player.Player)
+	}
+	s := sender.NewScenarioSender(n)
+	first := rules.Command{Seq: 1, Kind: "attack"}
+	// 驱动停止时可直接读取 DAO；驱动运行期间用已有 robotRead 在 Nest 锁内冻结快照。
+	facts := func() turnTimerFacts {
+		return turnTimerFacts{Room: roomEntity.Dao().Marshal(), Players: [2][]byte{players[0].Dao().Marshal(), players[1].Dao().Marshal()}}
+	}
+	state := func() rules.State {
+		var v rules.State
+		if err := json.Unmarshal([]byte(robotRead(t, n, roomEntity, func() string { return roomEntity.Dao().GetState() })), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if phase == "seed" {
+		if err := s.Sync_ScenarioOpen(ctx, roomID, ids[:]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.MultiSync_ScenarioCommand(ctx, roomID, ids[0], first); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(facts())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "facts.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("PASS real timer seed: strict command, receipt and persistent node flushed")
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "facts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected turnTimerFacts
+	if err := json.Unmarshal(raw, &expected); err != nil {
+		t.Fatal(err)
+	}
+	got := facts()
+	if !bytes.Equal(got.Room, expected.Room) || !bytes.Equal(got.Players[0], expected.Players[0]) || !bytes.Equal(got.Players[1], expected.Players[1]) {
+		t.Fatal("cold persistent facts changed")
+	}
+	if due, ok := room.TimerDriver.DueOf(roomEntity); !ok || due.UnixMilli() != now.Load()+30000 {
+		t.Fatalf("cold timer index missing: due=%v indexed=%v", due, ok)
+	}
+	if result, err := s.MultiSync_ScenarioCommand(ctx, roomID, ids[0], first); err != nil || result.Revision != 1 {
+		t.Fatal("cold receipt replay", result, err)
+	}
+	now.Add(2 * time.Hour.Milliseconds())
+	if err := room.TimerDriver.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var v rules.State
+	for {
+		v = state()
+		if v.Revision >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recovered room timer did not fire", v)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if v.Revision != 2 || v.Turn != 0 || v.HP != [2]int{3, 1} || v.Deadline != now.Load()+30000 || v.Finished {
+		t.Fatalf("offline timer must consume exactly one turn: %+v", v)
+	}
+	if result, err := s.MultiSync_ScenarioCommand(ctx, roomID, ids[0], first); err != nil || result.Revision != 1 {
+		t.Fatal("retry after timeout", result, err)
+	}
+	if _, err := s.MultiSync_ScenarioCommand(ctx, roomID, ids[1], rules.Command{Seq: 1, Revision: 1, Kind: "attack"}); err == nil {
+		t.Fatal("stale page accepted after timeout")
+	}
+	if _, err := s.MultiSync_ScenarioCommand(ctx, roomID, ids[0], rules.Command{Seq: 2, Revision: 2, Kind: "attack"}); err != nil {
+		t.Fatal(err)
+	}
+	v = state()
+	if !v.Finished || v.Revision != 3 || v.Winner != 0 {
+		t.Fatal("recovered game did not finish", v)
+	}
+	// 下一次触发清除终态节点；不手发 Tick，不调用 DeliverDue。
+	now.Add(30000)
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		count := robotRead(t, n, roomEntity, func() int { return roomEntity.Dao().TimersLen() })
+		if count == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminal timer was not removed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if v = state(); v.Revision != 3 {
+		t.Fatal("terminal timeout changed the game", v)
+	}
+	if err := runtime.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("PASS real timer recover: complete cold DAO, indexed deadline, offline timeout once, replay and terminal cleanup")
+}

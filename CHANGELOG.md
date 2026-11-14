@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **回合 PvP 真实验收与 demo Robot**（2026-11-14）：新增 `ROOST_TURN_PVP_REAL=1`，分别验证 GameRoom 纵切真实 Mongo/WAL 的持久定时器跨进程冷加载，以及正式 turn-pvp 配方经 account/match、独立 Gate/NATS 的对局、SIGKILL 恢复、代际接管与幂等重试。game-demo 追加正式 room/turn/matchroom/matchmaking 模块，`make dev-smoke` 新增双人 turn 场景，与既有 lockstep 匹配池独立；[证据与边界](docs/maintenance/evidence/turn-real-20261114/README.md)。
+
 - **测试：C++ 跨 Gate 同会话接管与完整 Protobuf 验收**（2026-11-14）：`ROOST_GATE_CPP=1 scripts/test-gate-client.sh` 增加两个真实 Gate / NATS 的迟到握手场景，要求旧连接被拒且新连接前后均可请求，Go 服务端带 race；暂时移除原生客户端连接代号后，同一用例发现新连接被关闭。`ROOST_PROTOBUF_TESTS=ON scripts/test-client-cpp.sh` 的 8 项 ctest 通过。两个 Gate 同处一个 Go 测试进程，C++ 独立进程，仅声明 macOS 本机验证；[证据与复跑](docs/maintenance/evidence/known-limits-remaining-20261114/native-acceptance.md)。运行逻辑不变。
 
 - MOBA 真实依赖补齐三进程快照交接：独立权威从 SIGKILL 留下的 strict WAL 恢复；旧宿主快照分块在途时交接，旧提交被拒并排空，新宿主从已提交检查点恢复。原快照用例保留 100 次 strict Sender 耗时并输出 p50 / p99 诊断。验证：私有 Mongo / NATS 下 `ROOST_MOBA_REAL=1 ROOST_MOBA_ROUTING=1 bash scripts/test-moba-generated.sh` 全过；去掉已提交门变异被逐包水位断言拒绝。功能验收延迟不作为容量测量，真实客户端链路与跨机范围见 MOBA 手册 §11。

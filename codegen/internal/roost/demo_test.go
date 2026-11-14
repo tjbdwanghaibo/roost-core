@@ -131,7 +131,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime cellworld"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime cellworld room turn matchroom matchmaking"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()

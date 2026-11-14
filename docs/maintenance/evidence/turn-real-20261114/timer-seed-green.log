@@ -1,0 +1,5 @@
+=== RUN   TestTurnPVPRealTimerRecovery
+    turn_timer_real_test.go:193: PASS real timer seed: strict command, receipt and persistent node flushed
+--- PASS: TestTurnPVPRealTimerRecovery (0.60s)
+PASS
+ok  	example.com/custom-turn-check/game/handler	2.238s

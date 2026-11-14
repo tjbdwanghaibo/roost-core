@@ -69,6 +69,6 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 - 离线：真实的 Nest 引擎、生成的 Sender、正式的 ManagerAccess 与 lifecycle，提交器是替身（可以注入提交失败）；没有 Mongo、Redis 与真实网络。
 - 覆盖：容量、幂等、座位复用、房主交接、关闭终态、CAS 竞争、旧连接的请求与关闭事件、PB 编解码、成员权限、BSON 往返恢复、代际上限，以及 Join / Reconnect / Leave / Close 提交失败后的完整回滚；加载失败不会建出空实体。
 - 安装器另测实体号避让、已有文件冲突、生成失败回滚、重复安装与业务文件保留。
-- 没有验证：房间协议在真实 Mongo / WAL 下的联合验收。连接标识随可信会话经 TCP → Gate → Game 传到业务层，在 core 的用例里验证过；配方的双人房间端点跑过真实 TCP，Account 与持久提交仍是替身。
+- 真实联合验收（2026-11-14）：`ROOST_TURN_PVP_REAL=1 bash scripts/test-turn-pvp-generated.sh` 的正式配方经真实 account / match、独立 Gate / NATS / Game Ingress、Mongo / 文件 WAL 验证名单入房、重连代际、关闭，以及 SIGKILL 后冷加载与顺序回合恢复。模块原 22 条计数不变；[证据和边界](../../docs/maintenance/evidence/turn-real-20261114/README.md)。
 
 只读声明：RoomView 成员快照 使用 `//roost:nest durability=memory`，仍在正式 Nest 实体锁内执行，不取持久状态回滚快照、不写 WAL。裸 `//roost:nest` 的默认值是 state / async，不能与 memory 混同；带状态推进、回执写入或引用校正的入口保持写事务声明。

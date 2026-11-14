@@ -74,7 +74,7 @@ make dev-run     # deploy/dev/run.sh start：编译 bin/app，先起九个托管
                  # 再起 alliance（联盟服务，game 的公会走它），最后起 game，共十一个进程，等每个 /readyz，
                  # 再用 cmd/accountctl 把 sid 1000 注册进 account（否则 CreateRole 拒绝）；日志与 pid 在 .dev/
 make dev-smoke   # 两个机器人走完整条链（登录 → 聊天 → 加道具 → 升级 → 匹配 → 世界计数 → 建盟 / 捐献 / 领奖 saga），
-                 # 再跑一轮 alliance_offline_join（离线时被运维入会、再登录看到公会；要能连 game 的 ops 9100）
+                 # 再跑 alliance_offline_join（离线时被运维入会、再登录看到公会；要能连 game 的 ops 9100），以及 turn 双人四回合与重连重试
 sh deploy/dev/second-alliance.sh start   # 可选：第二个 alliance 实例（sid 1001），建盟分到两个实例；缩容步骤见脚本头
 make loadtest LOADTEST_COUNT=20   # 更多机器人；偶数，duel 两人一组
 make dev-stop
@@ -491,3 +491,11 @@ scene:
    模板用到尚未发版的 roost-core API 时，生成工程要用 `go.work`（或临时 `replace`）指向本仓库工作树才能编译，不能只用已发布 tag；发版后按[维护手册 §5](../docs/maintenance/README.md#5-发版)对着 tag 重新生成验证。
    生成后再跑 `roost id check` 与 `roost generate --check`，确认 demo 留下的是一份干净的生成态。
 3. 根包 `TestExamplesRun` 另外编译并实际运行独立 examples 模块中的示例。
+
+## 顺序回合模块 Robot
+
+game-demo 追加安装 `room / turn / matchroom / matchmaking`（旧模块的协议分配顺序保持不变）。`module-duel` 匹配池按本服与队伍人数分区，和 demo 原有 `duel / ranked` lockstep 业务分开。没有额外的客户端任意开房入口：`turn` 场景通过 MatchEnqueue → MatchStatus → RoomJoin 取得可信房间。
+
+`make dev-smoke` 依次跑 `demo`、`alliance_offline_join`、`turn` 三个场景，各 2 个机器人。turn 读取服务端 ActorID 完成四回合，每条行动重试；断线重新登录后旧 Epoch 被拒，CAS 重连取得新 Epoch，再重放最后一条并核对终态。单独运行 `go run ./cmd/loadtest -scenario turn -count 2`，使用新身份与偶数个 pool 机器人。
+
+仓库入口 `scripts/test-demo-turn.sh` 会实跑完整 `make dev-smoke`，再用独立 Gate 运行 turn；需要私有 mirror-local 环境。它不验证跨机房间接管、自动广播或伤害/胜负规则。正式配方的进程崩溃恢复是另一条 `scripts/test-turn-pvp-real.sh`。

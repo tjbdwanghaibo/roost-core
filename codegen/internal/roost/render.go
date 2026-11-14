@@ -1403,6 +1403,7 @@ dev-smoke:
 	@test -d cmd/loadtest || { echo "cmd/loadtest is not part of this project (game-demo template); run your own client against the services started by make dev-run"; exit 1; }
 	go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count 2 -account-nats $(LOADTEST_ACCOUNT_NATS) $(LOADTEST_ARGS)
 	go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count 2 -scenario alliance_offline_join -account-nats $(LOADTEST_ACCOUNT_NATS) $(LOADTEST_ARGS)
+	go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count 2 -scenario turn -account-nats $(LOADTEST_ACCOUNT_NATS) $(LOADTEST_ARGS)
 clean:
 	go clean
 `, m.Project.Name, generatorVersion(m), service)
