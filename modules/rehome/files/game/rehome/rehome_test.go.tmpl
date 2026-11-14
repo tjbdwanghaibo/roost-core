@@ -12,6 +12,7 @@ import (
 
 	apperrors "{{MODULE}}/internal/errors"
 
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
@@ -180,7 +181,7 @@ type rehomeFixture struct {
 	handOffErr  error
 	releaseErrs []error
 	// background 是受理之后交给后台的部分：用例自己决定什么时候跑。
-	background []func()
+	background []func(context.Context)
 	waits      int
 	// documents 是搬档的替身；documentEvents 为 true 时它也往事件流里记（只有关心搬档顺序的用例打开，
 	// 别的用例的事件流不变）。
@@ -261,11 +262,21 @@ func newRehomeFixture(t *testing.T) *rehomeFixture {
 		t.Fatal(err)
 	}
 	driver.newID = func() string { return rehomeID }
-	driver.spawn = func(run func()) { f.background = append(f.background, run) }
-	driver.wait = func(int) { f.waits++ }
+	driver.background = rehomeQueue{f: f}
+	driver.wait = func(context.Context, int) { f.waits++ }
 	driver.grace = 0
 	f.driver = driver
 	return f
+}
+
+// rehomeQueue 是场景用的后台执行者：交出的步骤先收起来，由 runBackground 按顺序同步执行，事件流因此是确定的。
+type rehomeQueue struct{ f *rehomeFixture }
+
+func (rehomeQueue) Ready() error { return nil }
+
+func (q rehomeQueue) Go(run func(context.Context)) error {
+	q.f.background = append(q.f.background, run)
+	return nil
 }
 
 // runBackground 把交给后台的部分依次跑完。
@@ -273,7 +284,7 @@ func (f *rehomeFixture) runBackground() {
 	for len(f.background) > 0 {
 		run := f.background[0]
 		f.background = f.background[1:]
-		run()
+		run(context.Background())
 	}
 }
 
@@ -553,6 +564,50 @@ func TestRehomeHandOffFailureAborts(t *testing.T) {
 	}
 }
 
+// 停机：受理之后的后台步骤在 manager 发布的 Background 里执行（真实的协程，不是场景的同步队列）。它停在“提交结果未知、
+// 重发之前的等待”里时进程停机——Background 取消它：等待提前结束，不再重发，也不按失败处理：不去中止、不撤屏障、
+// 不清意图，迁出表里他仍是“换服中”（与此刻崩溃相同，重启之后 Admit 接着做）。Close 在期限内返回；之后的申请答可重试，
+// 什么都不做（受理了也没有人做后台部分）。
+func TestRehomeBackgroundStopLeavesTheTransferAsACrashWould(t *testing.T) {
+	f := newRehomeFixture(t)
+	registry := app.NewRegistry(viper.New())
+	background := NewBackground()
+	if err := registry.Register(BackgroundCapability, background); err != nil {
+		t.Fatal(err)
+	}
+	f.driver.background = registryBackground{registry: registry}
+	f.directory.commits = []error{errRehomeLost}
+	waiting := make(chan struct{})
+	var once sync.Once
+	f.driver.wait = func(ctx context.Context, _ int) {
+		once.Do(func() { close(waiting) })
+		pause(ctx, time.Hour)
+	}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the background part did not reach the retry wait; events: %v", f.events.peek())
+	}
+	stopping, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := background.Close(stopping); err != nil {
+		t.Fatalf("closing the background: %v", err)
+	}
+	f.expectEvents(t, "binding 94301", "prepare t-1", "begin 94301 t-1",
+		"close 94301: rehome: the player is changing servers", "recheck t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301",
+		"commit 94301 t-1")
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || !where.Moving {
+		t.Fatalf("after the stop the table says %+v (%v), want still moving as a crash would leave it", where, tracked)
+	}
+	if _, err := f.apply(); rehomeCode(err) != errcode.CodeOf(errcode.ErrRetryable) {
+		t.Fatalf("applying while stopped: %v, want retryable", err)
+	}
+	f.expectEvents(t)
+}
+
 // 提交的结果未知：原样重发，直到 account 回答。期间标记与屏障都在。回答“已提交”就落定为已迁走，屏障不撤。
 func TestRehomeCommitOutcomeUnknownIsResentUntilCommitted(t *testing.T) {
 	f := newRehomeFixture(t)
@@ -561,7 +616,7 @@ func TestRehomeCommitOutcomeUnknownIsResentUntilCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.events.take()
-	f.driver.wait = func(int) {
+	f.driver.wait = func(context.Context, int) {
 		f.waits++
 		if where, tracked := f.residency.Where(rehomePlayer); !tracked || !where.Moving {
 			t.Errorf("while the commit is unknown the table says %+v (%v), want moving", where, tracked)
@@ -633,7 +688,7 @@ func TestRehomeReleaseBusyIsRetriedBeforeTheMarkIsWithdrawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.events.take()
-	f.driver.wait = func(int) {
+	f.driver.wait = func(context.Context, int) {
 		f.waits++
 		if where, tracked := f.residency.Where(rehomePlayer); !tracked || !where.Moving {
 			t.Errorf("while the release is failing the table says %+v (%v), want moving", where, tracked)

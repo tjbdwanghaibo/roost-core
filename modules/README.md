@@ -36,10 +36,10 @@
 | [matchroom](matchroom/README.md) | MatchID 幂等移交到 Room，固定准入名单、掉线保座 | room、Mongo | RoomDao.Matchroom、持久房号映射 | 12 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
-| [login](login/README.md) | 登录鉴权：玩家 TCP 握手把票据交给 account 校验——进服票据（`enter:<票据>`，account 的 `EnterServer` 按账号与服解析玩家号、没有映射就新建，不带名字）或角色会话令牌（`session:<player_id>:<token>`）；把承载服 / 原服 / 映射创建时间 / 绑定代数 / 换服 / 握手方式 / 新建标记写进会话；会话激活后的告知登记点 `login.OnSessionActive`（有界的后台执行，只是告知）；接管鉴权桩与 account 的 collaborators（开发令牌登录 `login.dev_token`、Redis 玩家号计数器；渠道入口 `login_channels.go` 缺省全拒）；带运维命令 `cmd/accountctl`（`upsert-server` / `show-server` / `list-servers`，`make dev-run` 自动登记本机的服） | 无（要求业务服务 `uses: [account]`；玩家 TCP 接入安装时代办，监听要自己 `roost config enable player-tcp`） | 无 | 32 |
+| [login](login/README.md) | 登录鉴权：玩家 TCP 握手把票据交给 account 校验——进服票据（`enter:<票据>`，account 的 `EnterServer` 按账号与服解析玩家号、没有映射就新建，不带名字）或角色会话令牌（`session:<player_id>:<token>`）；把承载服 / 原服 / 映射创建时间 / 绑定代数 / 换服 / 握手方式 / 新建标记写进会话；会话激活后的告知登记点 `login.OnSessionActive`（有界的后台执行，只是告知；后台执行由 manager `NewLoginNotices` 启停）；接管鉴权桩与 account 的 collaborators（开发令牌登录 `login.dev_token`、Redis 玩家号计数器；渠道入口 `login_channels.go` 缺省全拒）；带运维命令 `cmd/accountctl`（`upsert-server` / `show-server` / `list-servers`，`make dev-run` 自动登记本机的服） | 无（要求业务服务 `uses: [account]`；玩家 TCP 接入安装时代办，监听要自己 `roost config enable player-tcp`） | 无 | 34 |
 | [portal](portal/README.md) | 登录入口（manifest）：三个 HTTP 端点代客户端调只在内部总线上的 account——`POST /portal/login` 渠道登录拿账号票据，`/portal/servers` 凭票拿区服清单（地址、负载、本账号在各服有没有角色）与推荐的服，`/portal/enter` 换握手票据 `enter:<进服票据>` 与承载服的地址。**入口挂在托管 account 服务的进程上**（清单的 `runtime.framework: account`），game 不因此多出 HTTP 监听；入口不持有任何密钥（票据全部由 account 签发与校验）、不建角不选角，只守“账号只取自 account 校验过的账号票据”；区服目录 `Directory`（静态配置 `portal.servers`、进程内带过期的 `Registry`）与推荐规则在归工程所有的 `portal_rules.go` | login（web Mod 安装时代办，加在托管 account 的服务上） | 无 | 12 |
 | [servertime](servertime/README.md) | 服务器时间：客户端拿到服务器的业务时间、当前业务日、前后两个业务日、本业务日起点与下一次每日重置的时刻（拉取 `ServertimeSync`，原样带回 `ClientTick`；推送 `ServertimeNow`）；给别的功能调的纯函数 `servertime.At(nowUnixMilli)` / `Now()`，与 `clock.BusinessDay` 同一份日历；`PushNow` 按能力名取玩家 TCP 传输；对外展示的时区名写在 `game/servertime/servertime_zone.go` | 无（玩家 TCP 接入安装时代办） | 无 | 12 |
-| [rehome](rehome/README.md) | 单个玩家换服（改绑 game sid）：申请协议 `RehomeApply` 与服务端入口 `Move`；account 的发起 / 提交 / 中止，结论按它带回的当前绑定判定；源服从“离开中”的标记起在写闸门拒绝这名玩家新的请求，受理之后断开会话、等在途的请求执行完、复核检查、跑离开钩子，再交出实体（之后拒写），目标服首次进入时到达；可去的服与冷却写在 `game/rehome/rehome_rules.go`；三个登记点（换服前检查、离开时、到达后）；给 saga 准入用的 `rehome.Binding`（这名玩家现在绑定在哪个服、是否正在换服）。game-demo 用的就是它 | 无（要求业务服务 `uses: [account]`） | `PlayerDao.Rehome`（只落库） | 46 |
+| [rehome](rehome/README.md) | 单个玩家换服（改绑 game sid）：申请协议 `RehomeApply` 与服务端入口 `Move`；account 的发起 / 提交 / 中止，结论按它带回的当前绑定判定；源服从“离开中”的标记起在写闸门拒绝这名玩家新的请求，受理之后断开会话、等在途的请求执行完、复核检查、跑离开钩子，再交出实体（之后拒写），目标服首次进入时到达；可去的服与冷却写在 `game/rehome/rehome_rules.go`；三个登记点（换服前检查、离开时、到达后）；给 saga 准入用的 `rehome.Binding`（这名玩家现在绑定在哪个服、是否正在换服）；受理之后的后台步骤在 manager `NewRehomeBackground` 里执行，停机时取消、按崩溃处理。game-demo 用的就是它 | 无（要求业务服务 `uses: [account]`） | `PlayerDao.Rehome`（只落库） | 47 |
 | [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 14 |
 | [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor | SceneDao；Player 场景交互回执 | 28 |
 | [monster](monster/README.md) | 正式实体生命周期、AI/actionflow 巡逻追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 27 |
@@ -122,7 +122,7 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
 3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
 4. **组件与附加 DAO**：把模块组件接到实体上；`daos: [{field: combatState, type: CombatDAO, tag: combat_state}]` 追加独立 DAO 的聚合声明，复用同一份实例的加载、事务与恢复。字段/集合被占用时拒绝。`sync_packer` 只接明确的模块视图工厂，已有业务 packer 时拒绝覆盖。
-5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires` 与可选 `runtime`。
+5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires`、可选 `runtime` 与登记的 `managers`（清单的 `managers` 在第 2 步之后加进 `game/managers/managers.go` 的 `Managers()` 列表，见“后台循环：manager”）。
 6. **生成**：运行全部生成器。自带实体时同时刷新 owner / handler / shutdown 接线；有 `runtime` 时生成服务适配层。自身同步在 packer、附加 DAO 与模块文件全部就位后开启，并在同一暂存树补齐推送协议。全部生成物与需刷新配置一起暂存、提交，失败不会留下半套接线。
 
 模块可用 `services` 声明独占的新业务服务；`existing: true` 只给已存在服务追加 Mod/RPC 及缺少的配置段，不能接管实体所有权或覆盖 `service.go`。新服务模板、开发/生产示例配置及 Kubernetes Secret 示例的修改都纳入安装失败回滚。
@@ -176,6 +176,18 @@ runtime:
 
 这时安装器不动业务服务的 `modules_gen.go`：bootstrap 在托管那个框架服务的 Mod 列表末尾加一个 `wiring/modulehost` 的 Mod（`kitmodulehost.NewMod("account", …, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`），在全部 Mod 启动之后、`Service.Init` 之前调入口，停机按反序。清单的 `needs.mods` 这时是对那个托管服务的要求（portal 的 `web` 加在 account 上，开发端口取 8080 + 它的端口块号），不是对业务服务的；模块的文件仍按落点写进工程，安装记录的 `service` 仍是业务服务。工程里没有托管那个框架服务的服务时，安装器在同一次安装里声明它（名字与种类相同，带上 `needs.mods` 里可代办的 Mod）；名字被业务服务占着时拒绝安装。自己手写 bootstrap 的工程要照着加这一个 Mod。
 
+### 后台循环：manager
+
+不在 `runtime:` 里的后台循环（会话激活后的后台告知、换服受理之后的后台步骤这类）做成 **manager**（维护者 D22，2026-11-14）：代码写在 `files/game/managers/` 下（`package managers`），在清单里列出构造函数名：
+
+```yaml
+needs:
+  mods: [manager]            # 必须写：没有 manager Mod 就没有人启停它们
+managers: [NewLoginNotices]  # func() app.IManager，定义在 files/game/managers/ 下的模板里
+```
+
+安装器把 `NewLoginNotices(),` 加到 `game/managers/managers.go` 的 `Managers()` 列表末尾（已经有了不再加；`roost.yaml` 的 `modules.<name>.managers` 记下它），由 manager Mod 统一启停：依赖先启（`app.ManagerDependencyProvider`）、停机反序，停机时带着期限调 `StopWithContext`。manager 要做到：Start 里建好要用的东西并以能力名发布到 Registry（调用方用到时按能力名取，取不到就明确拒绝或丢弃，不自己另起协程）；Stop 不再接新的工作、取消在途工作的 ctx、在期限内等它们返回，期限先到时返回期限的错误（ManagerMod 会用新期限再停），不能无限等。manager Mod 在玩家接入的 Mod 之前启动、之后停止，Start 时 World 还不存在（见 `managers.go` 的注释）。只对 manager 登记点在 `game/managers/managers.go` 的工程生效（v1.47.0 起新生成的工程）；业务把 `Managers()` 改成不是 `return []app.IManager{...}` 的写法时安装器拒绝，并说明要自己加哪一行。现有使用者：login（`NewLoginNotices`）、rehome（`NewRehomeBackground`）。
+
 模块的玩家侧只安装到一个业务服务，依赖属于同一服务；模块也可声明自己独占的新业务服务（如 alliance）。跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
 ### 清单
@@ -202,6 +214,7 @@ component: Wallet            # 挂在实体上的组件
 components: []               # 自带实体的其他组件名，安装时分配类型号
 services: {}                 # 模块独占的新服务；mods/rpcs/entities，已有同名服务拒绝接管
 sagas: []                    # name/steps/routed/receipts；定义与实体回执原子安装，业务由 runtime 提供
+managers: []                 # 后台 manager 的构造函数（见“后台循环：manager”），安装时登记进 game/managers/managers.go
 timer_types: []              # 实体内的持久定时器类型名，例如 turn 的 [TurnDeadline]
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字

@@ -27,10 +27,10 @@ import (
 // 监听开始之前调 BindRegistry。绑定之前到达的握手一律拒绝。
 //
 // 它还实现 SessionObserver：会话激活之后把它交给 game/login 登记的告知（gamelogin.OnSessionActive，
-// 例如 enter 模块装着时推给客户端的 EnterStatus）。没有登记任何告知时这一步什么都不做。
+// 例如 enter 模块装着时推给客户端的 EnterStatus）。告知在 game/managers 的 login manager 的后台执行（D22），
+// 认证器不持有任何协程。没有登记任何告知时这一步什么都不做。
 type applicationAuthenticator struct {
-	bound    atomic.Pointer[gamelogin.Authenticator]
-	notifier *gamelogin.Notifier
+	bound atomic.Pointer[gamelogin.Authenticator]
 }
 
 func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
@@ -41,7 +41,7 @@ func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
 // 独立 Gate 部署下把它交给 bootstrap.Options.GameIngress.Authenticator，Game Ingress 的 Mod 在 Provide 时
 // 同样调 BindRegistry。
 func NewAuthenticator() Authenticator {
-	return &applicationAuthenticator{notifier: gamelogin.NewNotifier()}
+	return &applicationAuthenticator{}
 }
 
 // BindRegistry 取 account 的客户端。取不到就返回错误、进程不启动：认证器问不到 account 的监听不该开。
@@ -76,9 +76,9 @@ func (authenticator *applicationAuthenticator) Authenticate(ctx context.Context,
 	return gateway.Principal{}, err
 }
 
-// SessionActive 是传输 Mod 的会话激活通知：交给 game/login 的 Notifier，立即返回。
+// SessionActive 是传输 Mod 的会话激活通知：交给这个进程的 Notifier（login manager 发布的），立即返回。
 func (authenticator *applicationAuthenticator) SessionActive(registry *app.Registry, principal gateway.Principal) {
-	authenticator.notifier.SessionActive(registry, principal)
+	gamelogin.AnnounceActive(registry, principal)
 }
 
 var _ SessionObserver = (*applicationAuthenticator)(nil)

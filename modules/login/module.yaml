@@ -3,8 +3,10 @@ summary: 登录鉴权：玩家 TCP 握手把票据交给 account 校验——进
 requires: []
 conflicts: []
 needs:
+  mods: [manager]
   features: [errcode]
   uses: [account]
+managers: [NewLoginNotices]
 access:
   transport: tcp
 errcodes: [login_elsewhere]
@@ -19,9 +21,9 @@ next:
   - "装了 enter 模块时，用进服票据握手的会话要先发 EnterCreate（带角色名）再发 EnterGame；握手之后服务器会推 EnterStatus 告诉客户端要不要新建（只是告知，以两个请求的应答为准）"
   - "上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接"
 verify:
-  packages: [./game/login, ./internal/access/player/tcp, ./services/account, ./cmd/accountctl]
+  packages: [./game/login, ./internal/access/player/tcp, ./services/account, ./cmd/accountctl, ./game/managers]
   run: ^TestLogin
-  pass: 32
+  pass: 34
 with:
   enter:
     summary: 进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player；用进服票据握手的会话先新建再进入（EnterGame 不代建，没建成答 enter_need_create）；会话激活之后把“能不能进、要不要先新建”推给客户端（EnterStatus），本服不该服务的会话推完断开

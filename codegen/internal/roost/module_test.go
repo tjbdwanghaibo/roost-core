@@ -1437,6 +1437,10 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 	if bytes.Contains(collaborators, []byte(collaboratorUnconfiguredMarker)) || !bytes.Contains(collaborators, []byte("identityVerifier")) {
 		t.Fatalf("account's collaborators stub was not replaced by the module's:\n%s", collaborators)
 	}
+	// 会话激活后的告知在 login 的 manager 里执行（D22）：安装器把它登记进 game 服务的 manager 列表。
+	if managers, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(gameManagersPath))); err != nil || !bytes.Contains(managers, []byte("\t\tNewLoginNotices(),\n")) {
+		t.Fatalf("login's manager is not registered in %s (err %v):\n%s", gameManagersPath, err, managers)
+	}
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)

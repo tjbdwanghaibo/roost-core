@@ -1,0 +1,107 @@
+package managers
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	gamerehome "{{MODULE}}/game/rehome"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	kitmanager "github.com/tjbdwanghaibo/roost-core/wiring/manager"
+)
+
+// rehome manager 的场景：换服的后台步骤在 manager 发布的 Background 里执行，停机时被取消、在期限内等完，
+// 停了之后不再接新的步骤。Driver 被取消时不按失败处理的场景在 game/rehome（TestRehomeBackgroundStop…）。
+
+// 经 ManagerMod 起停（与生成的 bootstrap 相同）：Start 之后 Background 已发布；一个一直在重发的步骤（只在 ctx 结束时
+// 返回）在停机时被取消，StopWithContext 等它返回才算停完；之后交出的步骤不执行。
+func TestRehomeBackgroundRunsUnderTheManagerAndStopsWithIt(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	mod := kitmanager.NewManagerMod(NewRehomeBackground())
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := app.Lookup[*gamerehome.Background](registry, gamerehome.BackgroundCapability); ok {
+		t.Fatal("the background was published before the manager started")
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	background, ok := app.Lookup[*gamerehome.Background](registry, gamerehome.BackgroundCapability)
+	if !ok || background == nil {
+		t.Fatal("the started manager did not publish the background")
+	}
+	started, ended := make(chan struct{}), make(chan error, 1)
+	if err := background.Go(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		ended <- ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the background step did not run under the started manager")
+	}
+
+	stopping, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := mod.StopWithContext(stopping); err != nil {
+		t.Fatalf("stopping the manager mod: %v", err)
+	}
+	select {
+	case err := <-ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the running step ended with %v, want context.Canceled from the stop", err)
+		}
+	default:
+		t.Fatal("StopWithContext returned while the step was still running")
+	}
+	ran := make(chan struct{}, 1)
+	if err := background.Go(func(context.Context) { ran <- struct{}{} }); !errors.Is(err, gamerehome.ErrBackgroundStopped) {
+		t.Fatalf("handing a step to the stopped background: %v, want ErrBackgroundStopped", err)
+	}
+	select {
+	case <-ran:
+		t.Fatal("a step ran after the manager stopped")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// 停机期限比在途步骤先到（步骤不看 ctx）：StopWithContext 不无限等，到期返回期限的错误；步骤返回之后再停一次就停完。
+func TestRehomeBackgroundStopIsBoundedByItsContext(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	manager := NewRehomeBackground()
+	if err := manager.Start(registry); err != nil {
+		t.Fatal(err)
+	}
+	background, _ := app.Lookup[*gamerehome.Background](registry, gamerehome.BackgroundCapability)
+	release, started := make(chan struct{}), make(chan struct{})
+	if err := background.Go(func(context.Context) {
+		close(started)
+		<-release
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	stopper := manager.(app.IManagerStopperWithContext)
+	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	if err := stopper.StopWithContext(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop while a step ignores its context: %v, want the stop deadline", err)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("stop took %v with a 100ms deadline", elapsed)
+	}
+	close(release)
+	again, cancelAgain := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelAgain()
+	if err := stopper.StopWithContext(again); err != nil {
+		t.Fatalf("stopping again after the step returned: %v", err)
+	}
+}

@@ -213,17 +213,27 @@ func newRehomeWorld(t *testing.T, servers ...int32) *rehomeWorld {
 }
 
 // server 起一个服的进程：新的 Registry（新的迁出表），发布 Nest、account 的客户端、玩家传输与 DataEngine 的替身，
-// 然后照生成的协议绑定那样用 FromRegistry 建 Controller。同一个 sid 再起一次就是“这个服的进程重启了”。
+// 以及 rehome manager 在 Start 时发布的后台执行者（Background），然后照生成的协议绑定那样用 FromRegistry 建 Controller。
+// 同一个 sid 再起一次就是“这个服的进程重启了”。
 func (w *rehomeWorld) server(sid int32) *rehomeServer {
 	w.t.Helper()
 	config := viper.New()
 	config.Set("sid", sid)
 	server := &rehomeServer{sid: sid, registry: app.NewRegistry(config), events: &rehomeServerEvents{}}
+	background := gamerehome.NewBackground()
+	w.t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := background.Close(ctx); err != nil {
+			w.t.Error(err)
+		}
+	})
 	for name, value := range map[app.ModName]any{
 		app.ModName("nest"):              nest.Client(w.engine),
 		svcaccount.CapabilityName:        svcaccount.Accounts(w.accounts),
 		app.ModName("access.player.tcp"): rehomeTransport{events: server.events},
 		app.ModName("dataengine"):        rehomeEngine{events: server.events},
+		gamerehome.BackgroundCapability:  background,
 	} {
 		if err := server.registry.Register(name, value); err != nil {
 			w.t.Fatal(err)

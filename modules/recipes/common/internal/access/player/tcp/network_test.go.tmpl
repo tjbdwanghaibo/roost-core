@@ -175,10 +175,19 @@ func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *rec
 	if err := server.ConnectHandshake(observeHandshake(f.registry, auth, nil)); err != nil {
 		t.Fatal(err)
 	}
-	// 告知在后台执行。监听停下之后等它们跑完，再把登录模块的场景收告知用的进程级通道（login_test.go 的
-	// loginTCPNotices，登记表是进程级的）清空：这里握手过的会话不留给它的用例。先登记、后执行。
+	// 会话激活后的告知在 login manager 发布的 Notifier 里执行（生产上由 game/managers 的 NewLoginNotices 启停）；
+	// 这里照它的 Start 发布一个。监听停下之后照它的 Stop 收尾（取消在途告知、等它们返回），再把登录模块的场景收告知用的
+	// 进程级通道（login_test.go 的 loginTCPNotices，登记表是进程级的）清空：这里握手过的会话不留给它的用例。先登记、后执行。
+	notifier := gamelogin.NewNotifier()
+	if err := f.registry.Register(gamelogin.NoticesCapability, notifier); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		auth.(*applicationAuthenticator).notifier.Wait()
+		stopping, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := notifier.Close(stopping); err != nil {
+			t.Error(err)
+		}
 		for {
 			select {
 			case <-loginTCPNotices:
