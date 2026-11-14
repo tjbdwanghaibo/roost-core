@@ -358,7 +358,6 @@ func (s *suite) derive(name, service string, sid int32, index int, opts procOpti
 		text = l2Prefix.ReplaceAllString(text, `${1}"`+s.prefix+`"`)
 	}
 	text = strings.ReplaceAll(text, "max_bytes: 8589934592", "max_bytes: 268435456")
-	text = strings.ReplaceAll(text, "dir: data/wal/alliance\n", fmt.Sprintf("dir: data/wal/alliance-%d\n", sid))
 	text = setKey(t, text, "log", "file", "false")
 	text = setKey(t, text, "stats_log", "enabled", "false")
 	for _, kv := range opts.keys {

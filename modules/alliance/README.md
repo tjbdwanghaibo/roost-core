@@ -73,7 +73,7 @@
 - **跨实例**：一名玩家的守卫与他要加入的联盟可能在不同的联盟服务实例上。入盟先预约守卫、再由联盟名单裁决、最后确认守卫；中途失败由预约期限或下一次请求修复，不靠时钟单方面释放。跨实例宣战先记本方，对方一侧最终补上。
 - **前提**
   - 依赖 `bag` 模块；需要 `nest`、`saga`、`remote_mirror` 三个 Mod 与玩家 TCP 接入、自身视图（安装时代办）。
-  - 新增独立的 `alliance` 服务（带 `dataengine`、`etcd`、`mongo`、`nats`、`nest`、`redis`、`remote_entity`），开发配置用独立的 WAL 目录 `data/wal/alliance`。同机第二个联盟实例必须独占 SID、端口与 WAL 目录。
+  - 新增独立的 `alliance` 服务（带 `dataengine`、`etcd`、`mongo`、`nats`、`nest`、`redis`、`remote_entity`），开发配置不写 WAL 目录，运行期缺省 `data/wal/alliance/<sid>` 已与同 sid 的 game 分开。同机第二个联盟实例必须独占 SID 与端口（WAL 目录随 sid 自动分开）。
   - game 进程不能认领 `Alliance` 与 `AllianceMember` 两种实体。
   - 工程已有同名的 `alliance` 服务或同名 Saga 时拒绝安装。
 - **已知限制**：`docs/maintenance/KNOWN-LIMITS.md` 的“业务模块 R10 联盟的验收范围”一节，以及“路由 RPC 与 Redis 路由登记的边界”“实体服务的 RPC”相关条目（同一联盟的请求逐个处理，热点联盟的吞吐受单个事务耗时限制）。

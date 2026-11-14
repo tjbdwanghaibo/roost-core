@@ -103,7 +103,7 @@ func planFlags(fs *flag.FlagSet) func() (sidmerge.Plan, error) {
 	intoConfig := fs.String("into-config", defaultConfig, "B's game service config")
 	fromMongo := fs.String("from-mongo", "", "A's Mongo URI; empty reads mongo.uri from -from-config")
 	intoMongo := fs.String("into-mongo", "", "B's Mongo URI; empty reads mongo.uri from -into-config")
-	fromWAL := fs.String("from-wal", "", "A's WAL directory; empty reads dataengine.wal.dir (data/wal/dataengine/<sid> when unset)")
+	fromWAL := fs.String("from-wal", "", "A's WAL directory; empty reads dataengine.wal.dir (data/wal/{{GAME_SERVICE}}/<sid> when unset)")
 	intoWAL := fs.String("into-wal", "", "B's WAL directory")
 	fromWALChecked := fs.Bool("from-wal-checked", false, "A's WAL is on another machine and sidmove wal-drained passed there")
 	intoWALChecked := fs.Bool("into-wal-checked", false, "B's WAL is on another machine and sidmove wal-drained passed there")
@@ -162,6 +162,8 @@ func loadConfig(path string) (*viper.Viper, error) {
 	if err := cfg.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	// server_type 由 App 按子命令写入，配置文件里通常没有；缺省 WAL 目录（data/wal/<server_type>/<sid>）按它分。
+	cfg.SetDefault("server_type", "{{GAME_SERVICE}}")
 	return cfg, nil
 }
 

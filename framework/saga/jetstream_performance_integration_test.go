@@ -461,7 +461,33 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	result := scanResult{Partitions: partitions, Scenario: scenario, Concurrency: concurrency, Seconds: seconds, Warmup: warmup, GOMAXPROCS: runtime.GOMAXPROCS(0)}
 	options := realEngineOptions(layout, allPartitions(layout.Partitions))
 	options.PublishUnknownBudget, options.DuplicateWindow = 30*time.Second, 2*time.Minute
+	// 准入（维护者 2026-11-14 D16）：原生参与方的档按推荐配置开准入（saga.admission 的缺省：高 5000 / 低 2500 / 停更 2s，
+	// 参与方 LoadPublisher 每 200ms 发投影积压），持续负载被压在投影速率以内，停止加压后的追平才落在设计 §12 的 30s 内；
+	// ROOST_SAGA_SCAN_ADMISSION=off（脚本的 @noadmission 档）关掉准入，只作测原始接纳能力的诊断档（c128 云 Mongo 追平 45.9s，
+	// SAGA-CLOUD-C128-REPRO-20261029.md）。mongo-forward 没有投影积压，不开。
 	options.Admission.Enabled = false
+	admissionOff := false
+	switch raw := os.Getenv("ROOST_SAGA_SCAN_ADMISSION"); raw {
+	case "", "on":
+	case "off":
+		admissionOff = true
+	default:
+		t.Fatalf("ROOST_SAGA_SCAN_ADMISSION=%q, want on or off", raw)
+	}
+	switch scenario {
+	case "native-forward", "native-compensate", "native-pipelined", "snapshot":
+		if !admissionOff {
+			options.Admission = AdmissionOptions{Enabled: true}.withDefaults()
+		}
+	case "admission":
+		if admissionOff {
+			t.Fatal("ROOST_SAGA_SCAN_ADMISSION=off does not apply to the admission scenario")
+		}
+	default:
+		if admissionOff {
+			t.Fatalf("ROOST_SAGA_SCAN_ADMISSION=off does not apply to scenario %q (no projection backlog)", scenario)
+		}
+	}
 	switch scenario {
 	case "admission":
 		options.Admission = AdmissionOptions{Enabled: true, HighRecords: 5000, LowRecords: 2500, StaleAfter: 2 * time.Second}
@@ -497,7 +523,7 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 		if err := participant.subscribe(ctx, js, layout); err != nil {
 			t.Fatal(err)
 		}
-		if scenario == "admission" {
+		if options.Admission.Enabled {
 			kv, err := conn.log.KeyValue(ctx, loadBucketConfig(layout, options.Replicas, options.Admission.withDefaults()))
 			if err != nil {
 				t.Fatal(err)
@@ -792,6 +818,7 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	result.PublishUnknown, result.AdmissionRejected, result.StartRetries, result.BacklogPeak = stats.PublishUnknown, stats.AdmissionRejected, rejected.Load(), peak.Load()
 	result.FenceBusy = stats.FenceBusy
 	result.Snapshots, result.Purges = stats.Snapshots, stats.Purges
+	result.AdmissionEnabled = options.Admission.Enabled
 	if options.Admission.Enabled {
 		result.AdmissionHigh, result.AdmissionClosures, result.AdmissionReopens = options.Admission.HighRecords, closures.Load(), reopens.Load()
 		if n := allSamples.Load(); n > 0 {
@@ -858,8 +885,9 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 		result.Series = nil // 序列在结果文件里，失败信息里不重复
 		t.Fatalf("correctness gate failed: %+v", result)
 	}
-	// 准入档的判据（设计 §12）：准入真的关过又重开过、积压峰值 ≤ 1.3 × 高水位、关闭期间有效吞吐不为 0。
-	if options.Admission.Enabled && (result.AdmissionClosures == 0 || result.AdmissionReopens == 0 ||
+	// 准入档的判据（设计 §12）：准入真的关过又重开过、积压峰值 ≤ 1.3 × 高水位、关闭期间有效吞吐不为 0。按推荐配置开准入的
+	// 其他原生档不一定碰到高水位（低并发），不套这条；它们的门槛是上面的追平（积压在追平上限内归零）。
+	if scenario == "admission" && (result.AdmissionClosures == 0 || result.AdmissionReopens == 0 ||
 		float64(result.BacklogPeak) > 1.3*float64(result.AdmissionHigh) || result.ClosedTerminalsPerSecond <= 0) {
 		t.Fatalf("admission gate failed: closures %d reopens %d backlog peak %d (high %d) closed-time terminals %.1f/s",
 			result.AdmissionClosures, result.AdmissionReopens, result.BacklogPeak, result.AdmissionHigh, result.ClosedTerminalsPerSecond)
@@ -928,6 +956,7 @@ type scanResult struct {
 	CoordinatorPublishes       uint64 `json:"coordinator_publishes,omitempty"`
 	CoordinatorPublishedEvents uint64 `json:"coordinator_published_events,omitempty"`
 	// 准入档：高水位、开→关 / 关→开次数、关闭时间占比、关闭期间每秒到终态的笔数（加压结束后的不计）。
+	AdmissionEnabled         bool    `json:"admission_enabled"`
 	AdmissionHigh            uint64  `json:"admission_high_records,omitempty"`
 	AdmissionClosures        int64   `json:"admission_closures,omitempty"`
 	AdmissionReopens         int64   `json:"admission_reopens,omitempty"`

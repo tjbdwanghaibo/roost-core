@@ -138,13 +138,13 @@ type config struct {
 	TransactionReceiptTTL time.Duration   `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	ReceiptTTL            time.Duration   `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	WAL                   struct {
-		Dir                 string        `config:"dir" help:"不写取 data/wal/dataengine/<sid>；显式写时只给一个进程用（见 dataengine.wal）"`
+		Dir                 string        `config:"dir" help:"不写取 data/wal/<服务>/<sid>；显式写时只给一个进程用（见 dataengine.wal）"`
 		SegmentBytes        int64         `config:"segment_bytes" min:"0" example:"268435456"`
 		MaxDiskBytes        int64         `config:"max_disk_bytes" min:"0" example:"8589934592"`
 		MaxUnackedAge       time.Duration `config:"max_unacked_age" min:"0" example:"24h"`
 		QueueCapacity       int           `config:"queue_capacity" min:"0" example:"8192"`
 		GroupCommitInterval time.Duration `config:"group_commit_interval" min:"0" example:"2ms"`
-	} `config:"dataengine.wal" help:"dir 不写取 data/wal/dataengine/<sid>（相对进程工作目录），每个 sid 一个目录；生成的开发配置因此不写 dir。\n显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写"`
+	} `config:"dataengine.wal" help:"dir 不写取 data/wal/<服务>/<sid>（服务即 server_type，相对进程工作目录），每个服务的每个 sid 一个目录；生成的开发配置因此不写 dir。\n显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写"`
 	Projection struct {
 		Workers            int           `config:"workers" min:"1" max:"64" help:"投影器按实体分片并行的通道数（同时在途的投影调用数）。不写取缺省 32；1 = 串行投影（含 Remote 记录）。\n冲突键（同一实体、回执、effect；effect_order: wal 时再加全部带 effect 的记录）相交的记录保持 WAL 顺序，checkpoint 只确认连续成功前缀"`
 		EffectOrder        string        `config:"effect_order" default:"entity" enum:"entity|wal" help:"带 effect 的记录之间按什么范围保持 WAL 顺序（只在 workers > 1 时起作用）。entity（缺省）：写同一实体、同一回执、同一 effect 的记录之间按 WAL 顺序，\n不相干实体的带 effect 记录并行投影，effect 进 outbox 的先后可能与 WAL 不同（outbox 发布与 JetStream 消费本来不保证全局顺序）；\nwal：全部带 effect 的记录按 WAL 顺序逐条投影、按 WAL 顺序暂存（2026-11-05 前的行为），只给依赖“不同实体的 effect 按 WAL 顺序”的进程打开"`
@@ -212,7 +212,10 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	}
 	pipelined := pipelinedSettings(settings, coresaga.PipelinedNativeStepHandlers())
 	sid := settings.Sid
-	dir := walDir(settings.WAL.Dir, sid)
+	dir, err := walDir(settings.WAL.Dir, settings.ServerType, sid)
+	if err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
+	}
 	wal := nestwal.DefaultOptions(dir)
 	if value := settings.WAL.SegmentBytes; value > 0 {
 		wal.SegmentBytes = value
@@ -694,19 +697,25 @@ func LoadEffectsConfig(cfg *viper.Viper) (EffectsConfig, error) {
 // Prefix 是效果主题前缀去掉首尾点之后的值，与 Mod 发布效果时用的相同。
 func (c EffectsConfig) Prefix() string { return c.subjectPrefix() }
 
-// walDir 是 WAL 目录的规则：dataengine.wal.dir 写了就用它；不写时缺省按 sid 分目录
-// data/wal/dataengine/<sid>（相对进程工作目录），同一工作目录、同一份配置用 --sid 起的多个进程各用各的 WAL。
-// 生成的开发配置不写 dataengine.wal.dir，靠的就是这条缺省；生产示例显式写每实例独占的持久卷。
-func walDir(configured string, sid int32) string {
+// walDir 是 WAL 目录的规则：dataengine.wal.dir 写了就用它；不写时缺省按服务与 sid 分目录
+// data/wal/<服务>/<sid>（服务即 server_type，相对进程工作目录）：同一工作目录、同一份配置用 --sid 起的多个进程，
+// 以及 deploy/dev/run.sh 用同一个 SID 起的不同服务，各用各的 WAL（nestwal 对目录加独占锁，共用一个目录的第二个
+// 进程启动即失败）。生成的开发配置不写 dataengine.wal.dir，靠的就是这条缺省；生产示例显式写每实例独占的持久卷。
+// 不知道服务又没写 dir 时报错，不退回一个各服务共用的目录。
+func walDir(configured, serverType string, sid int32) (string, error) {
 	if configured != "" {
-		return configured
+		return configured, nil
 	}
-	return filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
+	if serverType == "" {
+		return "", errors.New("dataengine.wal.dir is unset and server_type is unknown: the default WAL directory is data/wal/<server_type>/<sid>")
+	}
+	return filepath.Join("data", "wal", serverType, fmt.Sprintf("%d", sid)), nil
 }
 
 // WALDir 按 DataEngine Mod 的声明与同一条规则（walDir）返回 cfg 对应进程的 WAL 目录；sid 不为 0 时覆盖
-// 配置里的 sid（与进程 --sid 一致）。运维工具（cmd/sidmove、cmd/sidmerge）检查一个已停进程的 WAL 时用它，
-// 不另抄缺省。相对路径相对那个进程的工作目录。
+// 配置里的 sid（与进程 --sid 一致）。服务取配置的 server_type：App 按子命令写入，运维工具读服务配置文件时
+// 要自己写上（配置文件里通常没有这个键）。运维工具（cmd/sidmove、cmd/sidmerge）检查一个已停进程的 WAL 时
+// 用它，不另抄缺省。相对路径相对那个进程的工作目录。
 func WALDir(cfg *viper.Viper, sid int32) (string, error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
@@ -715,7 +724,11 @@ func WALDir(cfg *viper.Viper, sid int32) (string, error) {
 	if sid == 0 {
 		sid = settings.Sid
 	}
-	return walDir(settings.WAL.Dir, sid), nil
+	dir, err := walDir(settings.WAL.Dir, settings.ServerType, sid)
+	if err != nil {
+		return "", fmt.Errorf("dataengine: %w", err)
+	}
+	return dir, nil
 }
 
 // EffectSettings 按 DataEngine Mod 的声明（整份 dataengine.*，与 Mod Init 读的同一个结构体）返回业务订阅效果流

@@ -81,7 +81,7 @@ source_kill() {
 	rm .dev/rehome-source.pid
 	cp .dev/rehome-source.log "$out/$case_name/source-killed.log"
 	cp "$out/control/reached.json" "$out/$case_name/reached.json"
-	bin/sidmove wal-drained -dir data/wal/dataengine/1000 >"$out/$case_name/killed-wal.json" 2>"$out/$case_name/killed-wal.err" || true
+	bin/sidmove wal-drained -dir data/wal/game/1000 >"$out/$case_name/killed-wal.json" 2>"$out/$case_name/killed-wal.err" || true
 	rm "$out/control/reached.json" "$out/control/arm.json"
 }
 snapshot() {
@@ -173,6 +173,6 @@ for case_name in ${DEMO_REHOME_STAGES:-accepted quiesced leaving handed-off comm
 done
 drill_stop rehome-source
 drill_stop rehome-target
-bin/sidmove wal-drained -dir data/wal/dataengine/1000 >"$out/source-wal-drained.json"
-bin/sidmove wal-drained -dir data/wal/dataengine/1001 >"$out/target-wal-drained.json"
+bin/sidmove wal-drained -dir data/wal/game/1000 >"$out/source-wal-drained.json"
+bin/sidmove wal-drained -dir data/wal/game/1001 >"$out/target-wal-drained.json"
 drill_log "PASS demo rehome drill; Q4 committed-window copy remains explicitly documented"

@@ -20,6 +20,7 @@ var testDeclared = []coredata.LogicalDatabase{{Name: "main"}, {Name: "zone", Ser
 func serverConfig(values map[string]any) *viper.Viper {
 	cfg := viper.New()
 	cfg.Set("saga.coordinators", []string{"1000"}) // 必填键；本包的单测不连 NATS
+	cfg.Set("server_type", "game")                 // 缺省 WAL 目录按服务分：data/wal/<server_type>/<sid>
 	for key, value := range values {
 		cfg.Set(key, value)
 	}
@@ -50,7 +51,7 @@ func TestEachSideResolvesWithItsOwnMapping(t *testing.T) {
 	if scoped.Source != "zone_a_1001" || scoped.Target != "zone_b_1000" {
 		t.Fatalf("zone moves %s -> %s, want zone_a_1001 -> zone_b_1000", scoped.Source, scoped.Target)
 	}
-	if from.walDir != "data/wal/dataengine/1001" || into.walDir != "data/wal/dataengine/1000" {
+	if from.walDir != "data/wal/game/1001" || into.walDir != "data/wal/game/1000" {
 		t.Fatalf("WAL directories %q / %q, want the per-sid default", from.walDir, into.walDir)
 	}
 	if from.controlDB != "planet_ctl" || from.saga.Database != "saga" || from.saga.Layout.Stream != "ROOST_SAGA" || from.natsURL != "nats://localhost:4222" {

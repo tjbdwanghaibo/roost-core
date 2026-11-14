@@ -46,7 +46,8 @@ type Server struct {
 	// MongoURI 为空时按 Mongo Mod 的规则取配置的 mongo.uri（mongo.uri_env 写了变量名就是变量的值，R11）与账号
 	// （mongo.username / password / auth_source，含 `_env`）。命令行允许单独给，它取代 mongo.uri 与 mongo.uri_env，账号键照旧生效。
 	MongoURI string
-	// WALDir 为空时取 kitdataengine.WALDir（dataengine.wal.dir，不写为 data/wal/dataengine/<sid>，相对工作目录）。
+	// WALDir 为空时取 kitdataengine.WALDir（dataengine.wal.dir，不写为 data/wal/<server_type>/<sid>，相对工作目录）；
+	// 这时 Config 要带 server_type（服务配置文件里通常没有，由读配置的命令写上，game-demo 的 cmd/sidmerge 写 game 服务名）。
 	WALDir string
 	// WALCheckedElsewhere 表示这个服的 WAL 不在本机，运维已在那台机器上跑过 sidmove wal-drained 且 drained；
 	// 检查项记为 confirm（人工确认）而不是 ok。

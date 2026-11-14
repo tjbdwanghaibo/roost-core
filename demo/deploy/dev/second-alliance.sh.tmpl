@@ -8,9 +8,9 @@
 #
 # Config is derived from configs/service/config.alliance.yaml the first time
 # and written to configs/service/config.alliance2.yaml; edit that file to keep
-# changes. What differs: the sid, the ops port, the etcd advertise address and
-# the WAL directory (the dev config names data/wal/alliance explicitly, and one
-# WAL directory serves one process).
+# changes. What differs: the sid, the ops port and the etcd advertise address;
+# the WAL directory follows the sid on its own (dataengine.wal.dir is unset, so
+# the runtime default is data/wal/alliance/<sid>).
 #
 # With two instances, founding spreads over both (Found is delivered through
 # the bus queue group) and each alliance is owned by the instance that founded it;
@@ -41,9 +41,8 @@ derive_config() {
     -e "s/^sid: .*/sid: $SID/" \
     -e "s#^\(  *\)addr: \(.*\):9110\$#\1addr: \2:$OPS_PORT#" \
     -e "s#^\(  *\)advertise_addr: \(.*\):9010\$#\1advertise_addr: \2:$ADVERTISE_PORT#" \
-    -e "s#^\(  *\)dir: data/wal/alliance\$#\1dir: data/wal/alliance-$SID#" \
     "$SOURCE" > "$TARGET"
-  echo "wrote $TARGET (sid $SID, ops $OPS_PORT, advertise $ADVERTISE_PORT, WAL data/wal/alliance-$SID)"
+  echo "wrote $TARGET (sid $SID, ops $OPS_PORT, advertise $ADVERTISE_PORT, WAL data/wal/alliance/$SID)"
 }
 
 ready_url() {

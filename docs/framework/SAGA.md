@@ -344,7 +344,11 @@ GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队�
   所有者把状态写进同桶 `admit` 键，`StartSaga` 与启动中继先看 3s 内的提示，关闭时不写意图直接返回 `ErrBackpressure`。
 - **硬上限**：`dataengine.projection.max_unacked_records`。本进程有 DataEngine 且准入开启时，它必须 > 0 且 ≥ 4 × `high_records`（生成配置写 20000），
   配置检查强制。到上限时 DataEngine 在 WAL 准入前拒绝，Nest 回滚、命令 nak，协调器按步骤预算重试。
-- **调参**：高水位 = 投影器持续速率 × 允许的追平时间；阈值随部署变。
+- **推荐配置：有原生步骤的部署开准入**（`saga.admission.enabled: true`，缺省与生成配置都是开；维护者 2026-11-14 决定）。准入把持续负载
+  压在参与方投影速率以内：参与方投影器约 1.5～1.8k 条/s，关准入时 c128 的接纳约 4k 条/s，积压一直涨，停止加压后追平 45.9s（@strict64 39.8s），
+  超过设计 §12 的 30s（[云 Mongo 复核](../performance/SAGA-CLOUD-C128-REPRO-20261029.md)）。关准入只用于测原始接纳能力
+  （`saga-js-scan.sh` 的 `@noadmission` 诊断档）；压测的原生档缺省按推荐配置开准入，30s 内追平是硬门槛。
+- **调参**：高水位 = 投影器持续速率 × 允许的追平时间（门槛 30s）；缺省 5000 在投影约 1.5k 条/s 时约 3～4s 追平，阈值随部署变。
 
 ## 失败语义
 

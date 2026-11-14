@@ -107,8 +107,8 @@ drill_stop game1001
 
 # ---- 2. 合服 ----
 drill_log "phase 2: merge 1001 into 1000"
-bin/sidmove wal-drained -dir data/wal/dataengine/1000 >"$out/wal-1000.json" || drill_fail "WAL 1000 not drained"
-bin/sidmove wal-drained -dir data/wal/dataengine/1001 >"$out/wal-1001.json" || drill_fail "WAL 1001 not drained"
+bin/sidmove wal-drained -dir data/wal/game/1000 >"$out/wal-1000.json" || drill_fail "WAL 1000 not drained"
+bin/sidmove wal-drained -dir data/wal/game/1001 >"$out/wal-1001.json" || drill_fail "WAL 1001 not drained"
 if ! bin/sidmerge migrate "${merge_flags[@]}" -dry-run >"$out/dryrun.json" 2>"$out/dryrun.err"; then
 	# 两侧都有的按 sid 分库文档（同一个 _id）：报告里点名，业务处置。本演练按“B 的为准”删掉 A 的那几份（A 的库是归档，
 	# 处置前先另存一份），然后再查一次。
@@ -172,11 +172,11 @@ drill_log "phase 3 done: roles of the merged server entered 1000 through the Gat
 drill_log "phase 4: revert"
 drill_stop gate
 drill_stop game-ingress
-bin/sidmove wal-drained -dir data/wal/dataengine/1000 >"$out/wal-1000-revert.json" || drill_fail "WAL 1000 not drained before revert"
+bin/sidmove wal-drained -dir data/wal/game/1000 >"$out/wal-1000-revert.json" || drill_fail "WAL 1000 not drained before revert"
 bin/sidmerge revert "${merge_flags[@]}" -manifest "$out/manifest.json" >"$out/revert.json" || { cat "$out/revert.json"; drill_fail "revert"; }
 accountctl unmerge-server -from 1001 -note "demo merge drill revert" >"$out/unmerge.json"
 accountctl upsert-server -sid 1001 -status open >/dev/null
-mv data/wal/dataengine/1001 "$work_dir/wal-1001-retired"
+mv data/wal/game/1001 "$work_dir/wal-1001-retired"
 sh deploy/dev/run.sh start game >/dev/null || drill_fail "start game 1000 after revert"
 drill_start game1001 bin/app game 1001 "$game_a"
 drill login -who u2:1001 -expect-serving 1001 -add 1 -expect-count 19

@@ -38,8 +38,10 @@ func TestModuleAllianceGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(config, []byte("dir: data/wal/alliance")) {
-		t.Fatal("alliance shares the game WAL directory")
+	// 开发配置不写 WAL 目录：运行期缺省 data/wal/<服务>/<sid> 让同 sid 的 game 与 alliance 各用各的目录
+	// （wiring/dataengine 的 TestDataEngineModWALDirectoryIsPerServiceAndSid）。
+	if bytes.Contains(config, []byte("dir: data/wal/")) {
+		t.Fatal("the alliance dev config pins a WAL directory; the runtime default already separates services")
 	}
 	if len(manifest.Sagas) != 3 {
 		t.Fatalf("sagas=%v", manifest.Sagas)
