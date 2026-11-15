@@ -135,7 +135,7 @@
 #### 热点单例实体的写吞吐（2026-11-15）
 
 - **经派发器打到同一个实体的同步请求约“每次 fsync 一条”**：pipelined 第一阶段虽然在实体锁外等票据，派发器按实体 ID 的准入链仍让同一实体的后继消息等这一条（含回复）结束，所以请求路径上的热点单例实体按 strict 或 pipelined 都只能约每次 fsync 处理一条；异步完成只开给 saga 原生步骤。热点单例上的计数类写入要只投递（`Send_`），不要在请求关键路径上同步等（game-demo 的 World 登录计数即此例，见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)）。
-- **async 持久性在有 strict 负载时并不更快**：nestwal 只有一个 writer，async 记录要排在同批或上一批 strict 记录的 fsync 之后；登录潮里 async 的锁持有仍约 8.6ms。要改需让业务 pipelined handler 可选异步完成、或把 nestwal 的 fsync 与写入解耦，都是核心改动，维护者 2026-11-15 决定先作为限制保留。
+- **async 持久性在有 strict 负载时并不更快**：nestwal 只有一个 writer，async 记录要排在同批或上一批 strict 记录的 fsync 之后；登录潮里 async 的锁持有仍约 8.6ms。要改需让业务 pipelined handler 可选异步完成、或把 nestwal 的 fsync 与写入解耦，都是核心改动，2026-11-15 起另开一批处理，不随 v1.48.0。
 
 ### DataEngine、Remote 与 Saga
 
