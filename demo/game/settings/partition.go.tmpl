@@ -46,6 +46,10 @@ type ScenePartition struct {
 	// 玩家进入时的位置与 HP（没有快照时）。
 	SpawnX   int64 `config:"spawn_x" default:"2900" help:"where a player with no snapshot in the partitioned scene enters, X"`
 	SpawnY   int64 `config:"spawn_y" default:"1500" help:"where a player with no snapshot in the partitioned scene enters, Y"`
+	// SpawnSpread 把没有快照的玩家分散在出生点周围（维护者 2026-11-15）：每名玩家落在以 (spawn_x, spawn_y) 为中心、
+	// 半边长 spawn_spread 的正方形里的一个固定点（按玩家号算，同一名玩家每次都一样），超出世界的部分截到世界内。
+	// 0 = 都从出生点进入。千人同时从一个点进入时人人互相可见，Base 的兴趣（AOI）处理与同步开局就要处理约百万对关系。
+	SpawnSpread int64 `config:"spawn_spread" default:"0" min:"0" help:"half-width of the square around (spawn_x, spawn_y) a player with no snapshot enters at, at a point fixed by the player id; 0 = everyone enters at the spawn"`
 	PlayerHP int32 `config:"player_hp" default:"100" min:"1" help:"a player's HP the first time it enters the partitioned scene"`
 	// MonsterTemplate 是分区场景里刷出的 Monster 的模板（客户端按它画）。
 	MonsterTemplate int32 `config:"monster_template" default:"9001" help:"template id the partitioned scene's monsters are drawn with"`
@@ -143,6 +147,26 @@ func (p ScenePartition) ValidateConfig(bool) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// PlayerSpawn 是没有快照的玩家 playerID 在分区场景里的进入点：spawn_spread 为 0 时就是出生点；否则是出生点周围
+// 半边长 spawn_spread 的正方形里由玩家号决定的一点，截到 bounds 之内（bounds 的 Max 不含在内）。
+func (p ScenePartition) PlayerSpawn(playerID int64, bounds spatial.Rect) spatial.Point {
+	at := spatial.Point{X: p.SpawnX, Y: p.SpawnY}
+	if p.SpawnSpread <= 0 {
+		return at
+	}
+	// splitmix64：相邻的玩家号落点也互不相关。
+	z := uint64(playerID) + 0x9e3779b97f4a7c15
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	z ^= z >> 31
+	side := uint64(2*p.SpawnSpread + 1)
+	at.X += int64(z%side) - p.SpawnSpread
+	at.Y += int64((z>>32)%side) - p.SpawnSpread
+	at.X = min(max(at.X, bounds.Min.X), bounds.Max.X-1)
+	at.Y = min(max(at.Y, bounds.Min.Y), bounds.Max.Y-1)
+	return at
 }
 
 // Grid 是 owners 等键描述的静态分区。

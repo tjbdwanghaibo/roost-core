@@ -97,6 +97,15 @@ type activityRunner interface {
 	Settled(ctx context.Context, activityID string) (bool, error)
 }
 
+// loginAnnouncer 是 game 服务发布的登录公告合并器（game/announce.Batcher）在 EnterGame 用到的那一面：
+// 交出一名进入的玩家，不阻塞、不做 I/O，每秒至多一条公告由它在后台发。
+type loginAnnouncer interface {
+	Entered(playerID int64)
+}
+
+// loginAnnounceCapability 是 internal/service/<game> 发布合并器用的能力名（LoginAnnounceCapability）。
+const loginAnnounceCapability app.ModName = "{{GAME_SERVICE}}.loginannounce"
+
 // pushTransport is the slice of the player TCP Runtime the endpoints use.
 // It is an interface here, and the capability is looked up by name, because
 // the transport package imports the protocol binding that constructs this
@@ -375,6 +384,15 @@ func (controller *Controller) Activities() (activityRunner, error) {
 	}
 	controller.activities.Store(&runner)
 	return runner, nil
+}
+
+// LoginAnnouncer 是登录公告的合并器；game 服务没有发布它（离线测试的 Controller）时 ok 为 false。
+func (controller *Controller) LoginAnnouncer() (loginAnnouncer, bool) {
+	if controller == nil || controller.registry == nil {
+		return nil, false
+	}
+	announcer, ok := app.Lookup[loginAnnouncer](controller.registry, loginAnnounceCapability)
+	return announcer, ok && announcer != nil
 }
 
 // WorldSceneID is the full entity id of the one map this process runs.

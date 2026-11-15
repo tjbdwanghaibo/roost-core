@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 func validPartition() ScenePartition {
@@ -52,5 +54,37 @@ func TestPartitionConfigIsCheckedAtLoad(t *testing.T) {
 				t.Fatalf("want an error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+// spawn_spread 把没有快照的玩家分散在出生点周围（维护者 2026-11-15）：0 时人人从出生点进入；配了之后每名玩家一个
+// 固定的点（同一名玩家每次一样），落在出生点周围半边长 spawn_spread 的正方形与世界的交集里，千人不会挤在一点。
+func TestPlayersWithoutASnapshotEnterSpreadAroundTheSpawn(t *testing.T) {
+	p := validPartition()
+	world := spatial.Rect{Max: spatial.Point{X: 6000, Y: 3000}}
+	spawn := spatial.Point{X: p.SpawnX, Y: p.SpawnY}
+	if got := p.PlayerSpawn(100_001, world); got != spawn {
+		t.Fatalf("without spawn_spread a player enters at %v, want the spawn %v", got, spawn)
+	}
+	p.SpawnSpread = 1000
+	points := map[spatial.Point]bool{}
+	for id := int64(100_001); id <= 101_000; id++ {
+		at := p.PlayerSpawn(id, world)
+		if at != p.PlayerSpawn(id, world) {
+			t.Fatalf("player %d entered at two different points", id)
+		}
+		if !world.Contains(at) || abs(at.X-spawn.X) > p.SpawnSpread || abs(at.Y-spawn.Y) > p.SpawnSpread {
+			t.Fatalf("player %d enters at %v, outside the spread square around %v or the world", id, at, spawn)
+		}
+		points[at] = true
+	}
+	if len(points) < 990 {
+		t.Fatalf("1000 players share only %d entry points: they are not spread", len(points))
+	}
+	p.SpawnX, p.SpawnY = 50, 2990 // 出生点贴着世界边：分散的点截到世界之内
+	for id := int64(100_001); id <= 100_200; id++ {
+		if at := p.PlayerSpawn(id, world); !world.Contains(at) {
+			t.Fatalf("player %d enters at %v, outside the world %v", id, at, world)
+		}
 	}
 }

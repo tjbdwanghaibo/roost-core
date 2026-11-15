@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
@@ -299,6 +300,56 @@ type channelStore struct {
 	system  func() time.Time // system: StoredAtUnix and the Prune cutoff
 	age     time.Duration
 	metrics servicemetrics.Sink
+	// writers 让本进程对同一频道的写（store、Prune）排队。频道状态是一个键，写是一次 compare-and-set：
+	// 不排队时同一进程里同时写一个频道的请求在存储上互相抢，抢输的白读白算一整份状态再重来，人越多输得越多，
+	// 输满 versionstore.DefaultMaxAttempts 次的以 conflict 失败（M-15 千人登录潮：世界频道 281 条写成、
+	// 6391 次抢输）。排队只管本进程；多个 chat 进程之间仍由 compare-and-set 保证正确。
+	writers channelWriters
+}
+
+// channelWriters 是按频道键的进程内写锁：同一个键同一时刻只有一个写在做 compare-and-set，别的写按到达先后等；
+// 等的时候看 ctx，期限到了返回 ctx 的错误、不写。没有人用的键不留在表里。
+type channelWriters struct {
+	mu   sync.Mutex
+	keys map[string]*channelWriter
+}
+
+type channelWriter struct {
+	turn  chan struct{} // 容量 1：放进一个值表示有人在写
+	users int           // 正在写与正在等的个数，归 0 时从表里删掉
+}
+
+// lock 等到 key 的写权；返回的 unlock 必须调用一次。ctx 先到期时返回它的错误，不取得写权。
+func (w *channelWriters) lock(ctx context.Context, key string) (func(), error) {
+	w.mu.Lock()
+	if w.keys == nil {
+		w.keys = map[string]*channelWriter{}
+	}
+	writer := w.keys[key]
+	if writer == nil {
+		writer = &channelWriter{turn: make(chan struct{}, 1)}
+		w.keys[key] = writer
+	}
+	writer.users++
+	w.mu.Unlock()
+	release := func() {
+		w.mu.Lock()
+		writer.users--
+		if writer.users == 0 {
+			delete(w.keys, key)
+		}
+		w.mu.Unlock()
+	}
+	select {
+	case writer.turn <- struct{}{}:
+		return func() {
+			<-writer.turn
+			release()
+		}, nil
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
 }
 
 // NewStore wires a Store over versioned per-channel state.
@@ -452,6 +503,11 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 		keyReused bool
 		evicted   int
 	)
+	unlock, err := s.writers.lock(ctx, ref.key)
+	if err != nil {
+		return Message{}, err
+	}
+	defer unlock()
 	_, applied, err := s.state.Update(ctx, ref.key, func(current channelState, _ bool) (channelState, bool, error) {
 		next := current.clone()
 		replayed, keyReused, evicted = false, false, 0
@@ -697,7 +753,12 @@ func (s *channelStore) Prune(ctx context.Context, ref ChannelRef, limit int) (in
 	cutoff := s.system().Add(-s.age).Unix()
 
 	pruned := 0
-	_, _, err := s.state.Update(ctx, ref.key, func(current channelState, found bool) (channelState, bool, error) {
+	unlock, err := s.writers.lock(ctx, ref.key)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	_, _, err = s.state.Update(ctx, ref.key, func(current channelState, found bool) (channelState, bool, error) {
 		pruned = 0
 		if !found {
 			return current, false, nil

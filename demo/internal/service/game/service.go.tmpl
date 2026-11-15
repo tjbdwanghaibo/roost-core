@@ -1,6 +1,7 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	"{{MODULE}}/game/announce"
 	playerentity "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"context"
@@ -56,6 +57,8 @@ type Service struct {
 	stopTimers         func(context.Context) error
 	stopHeartbeat      func(context.Context) error
 	activityPhase      fnats.IJetStreamSubscription
+	// loginAnnounce 是登录公告的合并器（每秒至多一条，login_announce.go）；Shutdown 里发出最后那一批。
+	loginAnnounce *announce.Batcher
 }
 
 func New() *Service                    { return &Service{cellHandlers: cellworld.NewHandlers()} }
@@ -287,6 +290,12 @@ func (s *Service) Init(registry *app.Registry) error {
 	// Chat presence (who gets world-channel pushes) is the chat module's: its
 	// controller subscribes to session closes the first time it pushes
 	// (game/controllers/chat/chat_push.go), so nothing is wired here.
+	// 登录公告：EnterGame 只把进入的玩家交给合并器，合并器每秒至多在世界频道发一条（login_announce.go）。
+	loginAnnounce, err := startLoginAnnounce(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.loginAnnounce = loginAnnounce
 	// 传输层此时已经起来：卸载要用它判断玩家还有没有连接，停机要用它断开服务中的玩家。没有它就不卸载。
 	if runtime, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && runtime != nil {
 		owners.Fence(runtime)
@@ -342,6 +351,11 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.stopMatchmaker != nil {
 		s.stopMatchmaker()
 		s.stopMatchmaker = nil
+	}
+	// 连接已断开，不再有新的进入：把还没发出的那一批登录公告发掉（chat 的客户端 Mod 在服务之后才停）。
+	if s.loginAnnounce != nil {
+		s.loginAnnounce.Close(ctx)
+		s.loginAnnounce = nil
 	}
 	// The heartbeat driver early: no walk advances, no monster decides and
 	// the scene asks for no new population while the rest closes. Nest is

@@ -1,0 +1,33 @@
+# 第二轮（2026-11-15 维护者决定）的变异记录：每条在生成的 demo 工程里把一处改回/改坏，跑对应测试，必须变红。
+# 标题行写变异内容（多行替换只写意思），下面是 go test 的原样输出（截断到 400 列）。
+### mutation: game/announce/announce.go :: Entered 里每次进入立刻发一条（b.count++ 之后加 b.publish(..., Text(1, {playerID}), ...)，即回到逐次公告）
+--- FAIL: TestALoginBurstIsAnnouncedOncePerWindow (0.00s)
+    announce_test.go:70: 52 announcements for two windows with logins and one without, want 2: ["1 player entered the world: 100001" "1 player entered the world: 100002" "1 player entered the world: 100003" "1 player entered the world: 100004" "1 player entered the world: 100005" "1 player entered the world: 100006" "1 player entered the world: 100007" "1 player entered the world: 100008" "1 playe
+FAIL
+FAIL	example.com/lbdemo/game/announce	0.606s
+FAIL
+### mutation: game/announce/announce.go :: Close 里删掉最后那次 b.flush(ctx)（停机时不发未发出的那一批）
+--- FAIL: TestCloseAnnouncesThePendingWindowAndNothingAfterIt (0.00s)
+    announce_test.go:98: after Close the announcements were [], want the pending window once
+FAIL
+FAIL	example.com/lbdemo/game/announce	0.510s
+FAIL
+### mutation: game/controllers/player/enter_game.go :: 	if err := context.Context().Err(); err != nil { -> 	if err := context.Context().Err(); false && err != nil {
+--- FAIL: TestEnterGameAnswersLoginTimeoutWhenTheDeadlinePassedBeforeTheSceneJoin (1.00s)
+    enter_login_scenario_test.go:789: an EnterGame whose deadline passed before the scene join answered &{Code:0 Reason: PlayerID:100001 Created:true OwnerSID:0 First:true}, want login_timeout (100021): the client must retry instead of believing it is in the scene
+FAIL
+FAIL	example.com/lbdemo/game/controllers/player	1.667s
+FAIL
+### mutation: cmd/loadtest/main.go :: 		if err == nil || attempt == loginTimeoutRetries || -> 		if true || err == nil || attempt == loginTimeoutRetries ||
+        portal_login_test.go:439: the game received 1 EnterGame, want 5
+    --- FAIL: TestRobotEnterRetriesLoginTimeout/portal_login_retries_too (0.10s)
+        portal_login_test.go:464: portal enter_game after one login_timeout: robot action enter_game_built: response code 100021: scripted
+FAIL
+FAIL	example.com/lbdemo/cmd/loadtest	0.727s
+FAIL
+### mutation: game/settings/partition.go :: 	if p.SpawnSpread <= 0 { -> 	if true || p.SpawnSpread <= 0 {
+--- FAIL: TestPlayersWithoutASnapshotEnterSpreadAroundTheSpawn (0.00s)
+    partition_test.go:82: 1000 players share only 1 entry points: they are not spread
+FAIL
+FAIL	example.com/lbdemo/game/settings	0.663s
+FAIL

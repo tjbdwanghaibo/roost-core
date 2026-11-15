@@ -2,10 +2,14 @@ package handler
 
 import world "{{MODULE}}/game/entities/world"
 
-// handlerRecordEnter is called by the EnterGame endpoint after the Player is
+// handlerRecordEnter is sent by the EnterGame endpoint after the Player is
 // loaded: the World counts the login. Player and World are different Entities
 // with different lock categories, so this is a second, separate Nest call —
 // never a World mutation from inside the Player's handler.
+//
+// World 只有一个，每次登录都经过它，而 strict 的计数在 World 锁内等 WAL fsync、Nest 又让同一实体的下一条消息
+// 等上一条做完，所以 World 每次 fsync 只记一人（macOS 本机约 110 人/秒）。登录因此只投递、不等这笔计数
+// （EnterGame 用 Send_RecordEnter）：登录潮里计数在 World 上排队补记，不占登录的请求预算。
 //
 //roost:nest rollback=undo durability=strict
 func handlerRecordEnter(target world.IStatsEntity) error {

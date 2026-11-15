@@ -1,0 +1,247 @@
+## lb-baseline
+robot: threshold violated: error_rate = 0.368 > max 0 (1000 samples) ok/s=5813
+ 368 robot action cellworld_walk: cellworld: player N did not reach spread target "
+players 1000 ok 578 bad 422
+ok  hs [0.0, 1.406, 3.443, 4.71, 4.81] hs->init [0.01, 0.043, 0.142, 0.407, 0.42] init->done [0.042, 1.383, 2.927, 2.97, 3.002] hs->done [0.052, 1.433, 2.97, 3.015, 3.06]
+bad hs [2.303, 3.71, 4.71, 4.912, 4.912] hs->init [0.019, 0.057, 0.09, 0.136, 0.137] init->fail [2.866, 2.958, 2.977, 2.987, 2.991] hs->fail [3.0, 3.014, 3.034, 3.043, 3.046]
+Counter({('enter_game: world did not record the login', ''): 356, ('enter_game: player did not join the replicated sce', ''): 36, ('enter: hook failed; it runs again on the next ente', 'alliance'): 13, ('enter_game: login not announced on the world chann', ''): 8, ('enter: hook failed; it runs again on the next ente', 'rehome'): 6, ('enter: hook failed; it runs again on the next ente', 'mailbox'): 3})
+hs second 0 ok 200 bad 0
+hs second 1 ok 200 bad 0
+hs second 2 ok 95 bad 105
+hs second 3 ok 46 bad 154
+hs second 4 ok 37 bad 163
+entitysync_interest_budget_stop_total 44
+entitysync_interest_log_backlog 0
+entitysync_sessions_lost_total 14
+nest_handler_lock_hold_count{handler="handlerRecordEnter"} 681
+nest_handler_lock_hold_sum_nanos{handler="handlerRecordEnter"} 6275598287
+nestwal_fsync_duration_count 2438
+nestwal_fsync_duration_sum_nanos 13687244205
+player_tcp_dispatch_timeout_total 438
+player_tcp_push_total 816686
+
+## lb-fix1
+robot: threshold violated: error_rate = 0.327 > max 0 (1000 samples) ok/s=6193
+ 327 robot action cellworld_walk: cellworld: player N did not reach spread target "
+players 1000 ok 618 bad 382
+ok  hs [0.0, 1.503, 2.902, 4.716, 4.812] hs->init [0.016, 0.048, 0.091, 0.283, 0.309] init->done [0.034, 1.411, 2.919, 2.966, 2.987] hs->done [0.051, 1.443, 2.958, 3.006, 3.015]
+bad hs [2.706, 3.907, 4.716, 4.912, 4.913] hs->init [0.026, 0.053, 0.078, 0.106, 0.11] init->fail [2.892, 2.96, 2.977, 2.988, 3.0] hs->fail [3.0, 3.01, 3.028, 3.034, 3.037]
+Counter({('enter_game: world did not record the login', ''): 311, ('enter_game: player did not join the replicated sce', ''): 42, ('enter: hook failed; it runs again on the next ente', 'alliance'): 13, ('enter_game: login not announced on the world chann', ''): 10, ('enter: hook failed; it runs again on the next ente', 'purchase'): 4, ('enter: hook failed; it runs again on the next ente', 'rehome'): 2})
+hs second 0 ok 200 bad 0
+hs second 1 ok 200 bad 0
+hs second 2 ok 159 bad 41
+hs second 3 ok 31 bad 169
+hs second 4 ok 28 bad 172
+entitysync_interest_budget_stop_total 39
+entitysync_interest_log_backlog 0
+entitysync_sessions_lost_total 12
+nest_handler_lock_hold_count{handler="handlerRecordEnter"} 713
+nest_handler_lock_hold_sum_nanos{handler="handlerRecordEnter"} 6135603523
+nestwal_fsync_duration_count 2415
+nestwal_fsync_duration_sum_nanos 13409110554
+player_tcp_dispatch_timeout_total 389
+player_tcp_push_total 851152
+
+## lb-fix2
+robot: threshold violated: error_rate = 0.03 > max 0 (1000 samples) ok/s=8541
+  30 robot action connect: auth packet: account create role: nats: request timeout: context deadline exceeded"
+players 970 ok 271 bad 699
+ok  hs [0.0, 0.788, 5.957, 8.479, 8.569] hs->init [0.013, 0.056, 0.18, 0.318, 0.318] init->done [0.024, 0.225, 1.088, 2.552, 2.872] hs->done [0.039, 0.35, 1.153, 2.58, 2.999]
+bad hs [0.201, 6.454, 8.753, 8.765, 8.765] hs->init [0.017, 0.064, 0.211, 0.301, 0.307] init->fail [0.287, 2.015, 2.91, 2.985, 2.988] hs->fail [0.398, 2.079, 3.032, 3.051, 3.054]
+Counter({('enter_game: login not announced on the world chann', ''): 699})
+hs second 0 ok 146 bad 34
+hs second 1 ok 39 bad 99
+hs second 2 ok 8 bad 34
+hs second 3 ok 15 bad 65
+hs second 4 ok 14 bad 26
+hs second 5 ok 23 bad 53
+hs second 6 ok 9 bad 55
+hs second 7 ok 10 bad 70
+hs second 8 ok 7 bad 263
+entitysync_interest_budget_stop_total 106
+entitysync_interest_log_backlog 0
+entitysync_sessions_lost_total 25
+nest_handler_lock_hold_count{handler="handlerRecordEnter"} 970
+nest_handler_lock_hold_sum_nanos{handler="handlerRecordEnter"} 8929619175
+nestwal_fsync_duration_count 3170
+nestwal_fsync_duration_sum_nanos 17245212896
+player_tcp_dispatch_timeout_total 287
+player_tcp_push_total 789217
+
+## lb-fix3
+robot: threshold violated: error_rate = 0.446 > max 0 (1000 samples) ok/s=5675
+ 446 robot action cellworld_walk: cellworld: player N did not reach spread target "
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.559, 4.547, 4.975, 4.976] hs->init [0.011, 0.101, 0.225, 0.281, 0.317] init->done [0.006, 0.29, 0.84, 0.917, 0.95] hs->done [0.039, 0.392, 1.066, 1.169, 1.2]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+hs second 0 ok 200 bad 0
+hs second 1 ok 200 bad 0
+hs second 2 ok 200 bad 0
+hs second 3 ok 200 bad 0
+hs second 4 ok 200 bad 0
+entitysync_interest_budget_stop_total 1895
+entitysync_interest_log_backlog 377329
+entitysync_interest_retry_stalled_total 22140
+entitysync_sessions_lost_total 222
+nest_handler_lock_hold_count{handler="handlerRecordEnter"} 1000
+nest_handler_lock_hold_sum_nanos{handler="handlerRecordEnter"} 10380627427
+nestwal_fsync_duration_count 4867
+nestwal_fsync_duration_sum_nanos 26810211689
+player_tcp_push_total 1098972
+
+## lb-fix4
+robot: threshold violated: error_rate = 0.58 > max 0 (1000 samples) ok/s=4554
+ 580 robot action cellworld_walk: cellworld: player N did not reach spread target "
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.593, 4.528, 4.939, 4.939] hs->init [0.012, 0.094, 0.253, 0.443, 0.471] init->done [0.01, 0.24, 1.051, 1.223, 1.258] hs->done [0.03, 0.356, 1.302, 1.473, 1.521]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+hs second 0 ok 200 bad 0
+hs second 1 ok 200 bad 0
+hs second 2 ok 200 bad 0
+hs second 3 ok 200 bad 0
+hs second 4 ok 200 bad 0
+entitysync_interest_budget_stop_total 1782
+entitysync_interest_log_backlog 495652
+entitysync_interest_retry_stalled_total 18783
+entitysync_sessions_lost_total 444
+nest_handler_lock_hold_count{handler="handlerRecordEnter"} 1000
+nest_handler_lock_hold_sum_nanos{handler="handlerRecordEnter"} 10374541469
+nestwal_fsync_duration_count 4736
+nestwal_fsync_duration_sum_nanos 26383928864
+player_tcp_push_total 1065978
+
+## lb-exp-noannounce (throwaway: EnterGame's world announcement removed, not committed)
+robot: threshold violated: error_rate = 0.194 > max 0 (1000 samples) ok/s=7477
+ 194 robot action cellworld_walk: cellworld: player N did not reach spread target "
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.509, 4.59, 4.915, 4.915] hs->init [0.014, 0.086, 0.157, 0.448, 0.507] init->done [0.004, 0.148, 0.507, 0.589, 0.599] hs->done [0.033, 0.237, 0.646, 0.737, 0.756]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+hs second 0 ok 200 bad 0
+hs second 1 ok 200 bad 0
+hs second 2 ok 200 bad 0
+hs second 3 ok 200 bad 0
+hs second 4 ok 200 bad 0
+entitysync_interest_budget_stop_total 561
+entitysync_interest_log_backlog 0
+entitysync_interest_retry_stalled_total 11103
+entitysync_sessions_lost_total 96
+player_tcp_push_total 757463
+
+
+# 第二轮（维护者 2026-11-15 决定之后）：登录公告每秒至多一条 + login_timeout + 机器人退避重试；spread = 进入点分散 spawn_spread 1400（测试条件变了，不与上面同一出生点的轮次直接比）
+
+## lb-r2-spread-a (spread 1400)
+robot: threshold violated: error_rate = 0.24 > max 0 (1000 samples) ok/s=7060
+ 240 robot action cellworld_walk: cellworld: player N did not reach spread target "
+failed robots by id/100: 0:47 1:62 2:43 3:44 4:31 5:12 6:1 
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.51, 4.533, 4.916, 4.916] hs->init [0.014, 0.1, 0.159, 0.339, 0.354] init->done [0.012, 0.198, 0.584, 0.737, 0.751] hs->done [0.043, 0.344, 0.722, 0.881, 0.922]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+entitysync_interest_budget_stop_total 381
+entitysync_interest_log_backlog 0
+entitysync_interest_retry_stalled_total 631
+entitysync_sessions_lost_total 154
+player_tcp_push_total 831458
+first enter T08:20:15.9; first scene-subscribe warning T08:20:46.0; first replication session closed T08:20:46.0; first robot failure 08:20:45 (warmup 30s)
+scene: subscribe warnings 2345 (subject is not registered 72)
+EnterGame answered login_timeout before the scene join: 0
+world channel CAS applied (= announcements): 7
+partition 9100 InputsResent=532722 OwnerChanges=1772 ReplicaGaps=1
+partition 9201 InputsDropped=1698 HandoffsStarted=1003 StaleDrops=776
+partition 9202 InputsDropped=1610 HandoffsStarted=945 StaleDrops=821 ReplicaGaps=273
+
+## lb-r2-spread-b (spread 1400)
+robot: threshold violated: error_rate = 0.021 > max 0 (1000 samples) ok/s=8723
+  21 robot action cellworld_walk: cellworld: player N did not reach spread target "
+failed robots by id/100: 0:16 1:4 2:1 
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.513, 4.518, 4.93, 4.931] hs->init [0.01, 0.082, 0.176, 0.229, 0.242] init->done [0.005, 0.113, 0.63, 0.755, 0.789] hs->done [0.037, 0.203, 0.786, 0.943, 1.028]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+entitysync_interest_budget_stop_total 318
+entitysync_interest_log_backlog 0
+entitysync_interest_retry_stalled_total 2
+entitysync_sessions_lost_total 28
+player_tcp_push_total 743830
+first enter T08:23:52.5; first scene-subscribe warning T08:24:22.6; first replication session closed T08:24:22.6; first robot failure 08:24:22 (warmup 30s)
+scene: subscribe warnings 17 (subject is not registered 0)
+EnterGame answered login_timeout before the scene join: 0
+world channel CAS applied (= announcements): 7
+partition 9100 InputsResent=449698 OwnerChanges=1754 ReplicaGaps=1
+partition 9201 InputsDropped=1932 HandoffsStarted=992 StaleDrops=1019
+partition 9202 InputsDropped=1696 HandoffsStarted=939 StaleDrops=950 ReplicaGaps=285
+
+## lb-r2-spread-c (spread 1400)
+robot: threshold violated: error_rate = 0.417 > max 0 (1000 samples) ok/s=5944
+ 417 robot action cellworld_walk: cellworld: player N did not reach spread target "
+failed robots by id/100: 0:49 1:53 2:62 3:65 4:61 5:56 6:55 7:16 
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.502, 4.509, 4.917, 4.918] hs->init [0.016, 0.074, 0.166, 0.233, 0.239] init->done [0.011, 0.087, 0.624, 0.771, 0.798] hs->done [0.035, 0.171, 0.799, 0.928, 0.966]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+entitysync_interest_budget_stop_total 658
+entitysync_interest_log_backlog 0
+entitysync_interest_retry_stalled_total 29203
+entitysync_sessions_lost_total 199
+player_tcp_push_total 756451
+first enter T08:32:00.2; first scene-subscribe warning T08:32:17.5; first replication session closed T08:32:30.3; first robot failure 08:32:30 (warmup 30s)
+scene: subscribe warnings 32606 (subject is not registered 3127)
+EnterGame answered login_timeout before the scene join: 0
+world channel CAS applied (= announcements): 7
+partition 9100 InputsResent=513048 OwnerChanges=1756 ReplicaGaps=1
+partition 9201 InputsDropped=1818 HandoffsStarted=996 StaleDrops=906
+partition 9202 InputsDropped=1637 HandoffsStarted=938 StaleDrops=858 ReplicaGaps=281
+
+## lb-r2-nospread (no spread, same spawn as round 1)
+robot: threshold violated: error_rate = 0.962 > max 0 (1000 samples) ok/s=2043
+ 962 robot action cellworld_walk: cellworld: player N did not reach spread target "
+failed robots by id/100: 0:93 1:91 2:97 3:99 4:99 5:96 6:99 7:100 8:95 9:92 10:1 
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.502, 4.512, 4.907, 4.907] hs->init [0.01, 0.078, 0.197, 0.361, 0.374] init->done [0.007, 0.121, 0.708, 0.828, 0.832] hs->done [0.042, 0.22, 0.877, 1.027, 1.031]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+entitysync_interest_budget_stop_total 2187
+entitysync_interest_log_backlog 402707
+entitysync_interest_retry_stalled_total 42275
+entitysync_sessions_lost_total 755
+player_tcp_push_total 255749
+first enter T08:27:35.1; first scene-subscribe warning T08:27:44.7; first replication session closed T08:28:05.1; first robot failure 08:28:05 (warmup 30s)
+scene: subscribe warnings 45431 (subject is not registered 338)
+EnterGame answered login_timeout before the scene join: 0
+world channel CAS applied (= announcements): 7
+partition 9100 InputsResent=151088 OwnerChanges=2072
+partition 9201 InputsDropped=4397 HandoffsStarted=1407 StaleDrops=1590
+partition 9202 InputsDropped=1649 HandoffsStarted=888 StaleDrops=757 ReplicaGaps=231
+
+## lb-r2-nospread-b (no spread, same spawn as round 1)
+robot: ok ok/s=8943
+failed robots by id/100: 
+players 1000 ok 1000 bad 0
+ok  hs [0.0, 2.551, 4.524, 4.928, 4.928] hs->init [0.015, 0.097, 0.175, 0.473, 0.495] init->done [0.007, 0.2, 0.536, 0.563, 0.574] hs->done [0.033, 0.305, 0.685, 0.729, 0.75]
+bad hs None hs->init None init->fail None hs->fail None
+Counter()
+entitysync_interest_budget_stop_total 420
+entitysync_interest_log_backlog 0
+entitysync_interest_retry_stalled_total 16
+entitysync_sessions_lost_total 17
+player_tcp_push_total 760256
+first enter T08:36:23.2; first scene-subscribe warning T08:36:32.8; first replication session closed T08:37:53.2; first robot failure  (warmup 30s)
+scene: subscribe warnings 25 (subject is not registered 25)
+EnterGame answered login_timeout before the scene join: 0
+world channel CAS applied (= announcements): 6
+partition 9100 InputsResent=475374 OwnerChanges=1657 ReplicaGaps=3
+partition 9201 InputsDropped=2260 HandoffsStarted=1175 StaleDrops=1250
+partition 9202 InputsDropped=383 HandoffsStarted=656 StaleDrops=746 ReplicaGaps=219
+
+## 未到分散目标的玩家，按目标 y 分段（每 500，首尾两段宽 200；括号里是按段宽折成每 500 的人数）
+lb-baseline 300-:26(65) 500-:78(78) 1000-:84(84) 1500-:67(67) 2000-:83(83) 2500-:30(75)
+lb-fix4 300-:36(90) 500-:94(94) 1000-:124(124) 1500-:128(128) 2000-:138(138) 2500-:60(150)
+lb-exp-noannounce 300-:1(2) 500-:5(5) 1000-:36(36) 1500-:43(43) 2000-:77(77) 2500-:32(80)
+lb-r2-nospread 300-:74(185) 500-:203(203) 1000-:197(197) 1500-:197(197) 2000-:203(203) 2500-:88(220)
+lb-r2-spread-a 300-:7(18) 500-:13(13) 1000-:46(46) 1500-:55(55) 2000-:78(78) 2500-:41(102)
+lb-r2-spread-b 300-:0(0) 500-:0(0) 1000-:0(0) 1500-:5(5) 2000-:10(10) 2500-:6(15)
+lb-r2-spread-c 300-:16(40) 500-:38(38) 1000-:92(92) 1500-:100(100) 2000-:118(118) 2500-:53(132)

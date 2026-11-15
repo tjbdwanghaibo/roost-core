@@ -1,6 +1,8 @@
 package player
 
 import (
+	stdcontext "context"
+
 	playerentity "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -21,4 +23,15 @@ func NewLoginControllerForTest(registry *app.Registry, nestClient corenest.Clien
 	controller := &Controller{registry: registry, nestClient: nestClient, players: players}
 	controller.owners.Store(&owners)
 	return controller
+}
+
+// UseWorldForTest 让登录端点的世界计数投给 worldID（场景里另建的 World）；不调时为 0，计数投递被拒、只记日志。
+func (controller *Controller) UseWorldForTest(worldID int64) { controller.worldID = worldID }
+
+// HoldBeforePlacementForTest 让 EnterGame 在检查分发期限、进场景之前先执行 hold（例如等请求的期限过去）；
+// 返回的函数恢复原样。只在测试里用，不能与别的用例并行。
+func HoldBeforePlacementForTest(hold func(stdcontext.Context)) (restore func()) {
+	previous := beforePlacement
+	beforePlacement = hold
+	return func() { beforePlacement = previous }
 }
