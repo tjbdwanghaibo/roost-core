@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.49.0] - 2026-11-15
+
 - **Nest：业务 handler 可声明异步完成**（2026-11-15）：新增 `HandlerMeta.AsyncCompletion` 与 `//roost:nest completion=async`（只能与 `durability=pipelined` 一起用，否则 `ErrAsyncCompletionRequiresPipelined`），复用 saga 原生步骤的异步完成机制；同一实体的下一条请求不再等上一条持久与回复，热点实体微基准约 120 → 约 2900 次/秒，回复仍在持久之后。`wiring/dataengine`、`engine.Runtime` 总是传入 `nest.pipelined.async_workers` / `async_queue_capacity`。
 - **nestwal：段 fsync 移到独立 goroutine**（2026-11-15）：fsync 进行中继续写入，strict 追加登记等待者、fsync 覆盖后才回复；async 追加不再等 strict 的 fsync（有 strict 负载时 async 吞吐 +135%）。macOS 上 `F_FULLFSYNC` 进行中同文件 write 仍在内核里等，Linux 未测。
 - **login 模块：`login.notice_dropped_total{reason=busy|stopping}`**（2026-11-15）：会话激活告知溢出与停机后到达的丢弃现在计数（此前只记 Debug）。login 场景数合计 37。
