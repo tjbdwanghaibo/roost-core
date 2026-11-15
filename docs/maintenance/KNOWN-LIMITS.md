@@ -134,8 +134,8 @@
 
 #### 热点单例实体的写吞吐（2026-11-15）
 
-- **经派发器打到同一个实体的同步请求约“每次 fsync 一条”**：pipelined 第一阶段虽然在实体锁外等票据，派发器按实体 ID 的准入链仍让同一实体的后继消息等这一条（含回复）结束，所以请求路径上的热点单例实体按 strict 或 pipelined 都只能约每次 fsync 处理一条；异步完成只开给 saga 原生步骤。热点单例上的计数类写入要只投递（`Send_`），不要在请求关键路径上同步等（game-demo 的 World 登录计数即此例，见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)）。
-- **async 持久性在有 strict 负载时并不更快**：nestwal 只有一个 writer，async 记录要排在同批或上一批 strict 记录的 fsync 之后；登录潮里 async 的锁持有仍约 8.6ms。要改需让业务 pipelined handler 可选异步完成、或把 nestwal 的 fsync 与写入解耦，都是核心改动，2026-11-15 起另开一批处理，不随 v1.48.0。
+- **strict 热点仍约“每次 fsync 一条”**：经派发器打到同一实体的同步请求，strict 与不声明的 pipelined 仍约每次 fsync 一条（同实体准入链等回复，这是契约代价）；要吞吐的热点写声明 `//roost:nest durability=pipelined completion=async`（2026-11-15 起，`HandlerMeta.AsyncCompletion`；同一实体约 120 → 约 2900 次/秒，回复仍在持久之后）。异步完成不是缺省，handler 要显式声明。game-demo 的 World 登录计数仍只投递（`Send_RecordEnter`）。
+- **nestwal 的 fsync 已移出 writer，平台差异未测**：async 追加不再排在 strict 的 fsync 后面（有 strict 负载时 async 吞吐 +135%）；macOS 上 `F_FULLFSYNC` 进行中同一文件的 write 仍在内核里等（约 190µs），目标 Linux 上未对照测量。证据见 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。
 
 ### DataEngine、Remote 与 Saga
 
@@ -783,9 +783,8 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### 地形 / 无缝世界：遗留
 
 - **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`；terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid。**已决定（D11 Q17 A，2026-11-14），v1.47.0 之后实施**：按地图归属选库范围——普通场景按 sid，分区场景（跨服共享地图）保持 global，demo 与 terrain 模块一致，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R3）。
-- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。复测仍不稳定：分散三轮失败 240 / 21 / 417（中位 240），同一出生点两轮 962 / 0；同一出生点时 Base 兴趣在开局人人互见时饱和（日志积压 37～50 万、会话丢失 222～755），分散后不再出现，剩余失败是“预热结束时未停在目标 ±20 内”，原因尚未确认（失败数随目标 y 增大而升高、机器人到达判定可能来回摆动，均未验证），见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
-- **login.notices 溢出丢弃没有指标**（2026-11-15）：会话激活告知超过 256 条在途时丢弃，只记 Debug，INFO 下看不到丢了多少；登录潮排查里用日志排除了它，要常态可见需加计数。
-- **登录潮里 30 次 account CreateRole 超时，尚未确认**（2026-11-15，`lb-fix2`）：只出现在 chat 频道写修复之前的那一轮，推测是同进程抢写拖慢共用 Redis，修复后各轮未再出现，未单独证明。
+- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
+- **登录潮里 account CreateRole 超时，尚未确认**（2026-11-15）：在 chat 抢写风暴条件下可复现（2 轮中 1 轮，53 次，同一秒内），无风暴的 21 轮都没有；“Redis 被拖慢到 3 秒”的推测已排除（Redis CPU ≤ 0.3 核，PING 最长约 0.18s，同批机器人前一步 Login 未超时）；account 的 Redis 连接池（缺省 10，一次 CreateRole 十几次往返）、NATS 排队、整机 CPU 未排除，要给 account 加 RPC 处理时长与连接池等待的指标再复现。风暴条件已由 chat 写排队与公告合并去掉。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
 - **CellWorld Runtime**：六条模块场景含 Start / Stop 与失败复位已验；AddIngress 失败分支仍缺场景，业务 Entity 适配仍只在 demo。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 

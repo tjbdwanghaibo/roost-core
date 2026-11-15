@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **Nest：业务 handler 可声明异步完成**（2026-11-15）：新增 `HandlerMeta.AsyncCompletion` 与 `//roost:nest completion=async`（只能与 `durability=pipelined` 一起用，否则 `ErrAsyncCompletionRequiresPipelined`），复用 saga 原生步骤的异步完成机制；同一实体的下一条请求不再等上一条持久与回复，热点实体微基准约 120 → 约 2900 次/秒，回复仍在持久之后。`wiring/dataengine`、`engine.Runtime` 总是传入 `nest.pipelined.async_workers` / `async_queue_capacity`。
+- **nestwal：段 fsync 移到独立 goroutine**（2026-11-15）：fsync 进行中继续写入，strict 追加登记等待者、fsync 覆盖后才回复；async 追加不再等 strict 的 fsync（有 strict 负载时 async 吞吐 +135%）。macOS 上 `F_FULLFSYNC` 进行中同文件 write 仍在内核里等，Linux 未测。
+- **login 模块：`login.notice_dropped_total{reason=busy|stopping}`**（2026-11-15）：会话激活告知溢出与停机后到达的丢弃现在计数（此前只记 Debug）。login 场景数合计 37。
+- **demo 机器人：cellworld 预热分散改为分段到达**（2026-11-15）：比例控制在回传延迟下来回摆，预热结束时常在判定框外；改为走一段、停稳、再走，判定与阈值不变；未到达时报出走法诊断。M-15 分散三轮 0 / 0 / 0。
 - **wiring/manager：ManagerMod 排在基础设施之后启动、之前停止**（2026-11-15）：以 `OptionalDependsOn` 排在 Nest、Remote（含预加载）、DataEngine（含预加载）、Redis、NATS、Saga、心跳等之后（服务没装的不算）。此前生成的 bootstrap 把它登记在 Nest 之前，manager 先于 Nest 启动、晚于 Nest 停止，停机排空后台工作（login 告知、rehome 后台步骤）时 Nest 已停。manager 的 Start 现在晚于预加载。回归 `TestManagerModStartsAfterAndStopsBeforeTheInfrastructureItsManagersUse`（修前 7 个 Mod 先后反了）。
 - **模块后台循环改 manager 收尾（D22，2026-11-15）**：activity_world / activity_alliance 的恢复扫描改成 manager（`NewWorldActivityScan` / `NewAllianceActivityScan`，`game/activity.ScanHost`），跑在属主服务里；清单新增 `services.<服务>.managers`；activity_world 服务与 alliance 服务装上 manager Mod，RPC Mod 依赖 manager Mod；间隔、页大小、并行度、单次预算不变。cellworldhost 的 Node 由 manager `NewCellWorldHost` 托管：`Runtime.Start` 需要 manager 发布的 `Host`（没有就拒绝），manager 停时排空服务没停下的 Node；`Runtime.Stop` 可以重复调用。模块场景 activity_world 4 → 6、activity_alliance 5 → 7、cellworld 6 → 9。只对新生成的工程。
 - **portal 动态区服目录（D23，2026-11-15）**：account 新增区服入口登记表（`ReportServerPresence` / `WithdrawServerPresence` / `ListServerPresence`，Redis `<prefix>:presence` 一个 hash，Lua 用 Redis `TIME` 判期，最多 256 个 sid）；login 模块新增 manager `NewLoginPresence`（配置 `login.presence.addr|interval|tags`，缺省每 10s 上报、TTL 30s，没配 addr 时不上报）；portal 缺省区服目录叠加 account 登记表（上报的优先），**删除** portal 进程内 `Registry` 目录。**升级顺序：先升 account，再升 game / manifest**（旧 account 不认新方法）。
