@@ -82,6 +82,14 @@ memory 且没有 effect 的事务不写 WAL：带事务的本地持久修改由 
 | strict | 等 WAL fsync；仍不等 Mongo 投影 |
 | pipelined | Enqueue 接纳后不再回滚/重排；回复、AfterCommit、Sync 等票据持久确认与解锁 |
 
+**热点实体的 pipelined 异步完成（显式声明，不是缺省）**：同一时刻有很多请求打到同一个实体（全服唯一的 World、热点联盟）
+时，`durability=pipelined` 仍要等上一条持久并回复后同实体的下一条才开始，约每次 fsync 一条。这类 handler 写
+`//roost:nest durability=pipelined completion=async`：同实体的下一条在上一条入队后就开始，回复仍在持久之后、按序返回
+（本机同一实体约 120 → 约 2900 次/秒）。声明前确认 AfterCommit 钩子能接受：在完成池上执行、没有请求上下文、不持实体锁、
+不同步等同一实体的 Nest 请求。不声明的 handler 行为不变；框架不把它设成缺省，原因见
+[NEST_PIPELINED_COMMIT §12.3](../NEST_PIPELINED_COMMIT.md#123-没做的与备选)。只要计数、不看结果的热点写（如 demo 的
+World 登录计数）更简单的做法是只投递（`Send_`），不在请求关键路径上同步等。
+
 明确拒绝可按策略回滚；ErrCommitIndeterminate 表示结果未知，进入 fence，不能自动当未执行重试。回复错误怎样判断“是否可能已提交、能否重试”见 [§6](#6-回复错误判别是否可能已提交能否重试)。生成 //roost:nest 支持 pipelined，仍须满足运行配置准入条件。
 
 ## 5. 调用方与运行排查
