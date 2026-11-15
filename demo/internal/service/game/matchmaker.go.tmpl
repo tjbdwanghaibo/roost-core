@@ -8,14 +8,14 @@ import (
 	"log/slog"
 	"time"
 
-	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/matchmaking"
-	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
-	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/matchmaking"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
 )
 
 const (

@@ -112,8 +112,8 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 ## 4. 做成模块的部分：`rehome`
 
 - 清单：`needs`（`mods [nest]`、`features [protocol, entity, dao, errcode]`、`uses [account]`），`access.transport: tcp`，`entity: Player`，状态 `PlayerDao.Rehome`（只落库），组件 `Rehome`，协议 `RehomeApply`，错误码 `rehome_refused / rehome_moving / rehome_elsewhere`，联动 `with/enter`。
-- `game/rehome`（登记点包，不 import 实体与 controller）：`Directory` 接口（Begin / Commit / Abort / Binding）与 account 适配；`Residency` 接口（离开 / 落定 / 当前绑定）与缺省实现（断开会话 + `HandOffEntity` + 进程内迁出表）；给 saga 准入用的 `Binding(ctx, registry, playerID) (sid, moving, err)`。
-- `game/rehome/rehome_rules.go`（归工程所有）：可去的服、冷却、费用。
+- `game/modules/rehome`（登记点包，不 import 实体与 controller）：`Directory` 接口（Begin / Commit / Abort / Binding）与 account 适配；`Residency` 接口（离开 / 落定 / 当前绑定）与缺省实现（断开会话 + `HandOffEntity` + 进程内迁出表）；给 saga 准入用的 `Binding(ctx, registry, playerID) (sid, moving, err)`。
+- `game/modules/rehome/rehome_rules.go`（归工程所有）：可去的服、冷却、费用。
 - 三个登记点：**换服前检查**（事务内，拿到 `*Player`，返回错误即拒绝；事务外，给要问别的服务的检查用）；**离开时**（事务外，Begin 之后、卸载之前，失败即 Abort）；**到达后**（事务内的一半恰好一次，事务外的一半失败只记日志）。
 - 客户端交互：`RehomeApply` 在第 1 步成功后就应答“已受理”并带换服 ID，其后在后台继续（断连接发生在 Commit 之前）；客户端重连后选角，看到的服变了就是成功。
 - enter 模块新增**能否决登录的“进入前检查”登记点**（现有 `OnEntered` 失败只记日志）；rehome 的 `with/enter` 登记：换服中 → `rehome_moving`；不在本服 → `rehome_elsewhere` 带目标 sid；首次进入目标服做到达。

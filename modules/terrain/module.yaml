@@ -12,7 +12,7 @@ state:
   - {field: TerrainLedger, type: TerrainLedgerState, store: terrain_ledger, dao: 'persist,nosync', comment: 全局连续编辑序号与摘要，保留最后结果，拒绝过期重放。}
 protocols: [TerrainBrush, TerrainBuild, TerrainRemove, TerrainQuery]
 errcodes: [terrain_invalid, terrain_denied, terrain_sequence, terrain_occupied, terrain_site, terrain_full]
-runtime: {package: game/terrain/service, start: Start}
+runtime: {package: game/modules/terrain/service, start: Start}
 verify:
   packages: [./game/controllers/terrain]
   run: ^TestTerrain

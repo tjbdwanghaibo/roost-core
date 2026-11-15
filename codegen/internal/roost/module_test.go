@@ -79,12 +79,12 @@ func TestModuleCatalogEmbedsEveryTemplateAndValidates(t *testing.T) {
 
 // game/view 的组件接口要列出组件包里 *Component 的全部导出方法（handler、钩子与别的组件经 view 调用它们），
 // 签名用到的结构体也放在 view（组件包里只留同名别名）；view 只引用内建类型、db、protocol、core 的包，
-// 以及两个叶子类型包 game/actor 与 game/gameplay/attribute（见 compose §4D）。
+// 以及两个叶子类型包 game/modules/actor 与 game/modules/gameplay/attribute（见 compose §4D）。
 // viewMethodExemptions 是不进 view 的方法与原因，只有两种：返回 core 运行时对象、参数是同一组件的另一个实例。
 // 新增的导出方法不在 view 里也不在这里时报错；豁免表里的方法已经进了 view 或已经不存在时也报错（表不留陈项）。
 func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 	viewMethodExemptions := map[string]map[string]string{
-		"activity":  {"Host": "returns the game/activity Host, which carries the activity runtime"},
+		"activity":  {"Host": "returns the game/modules/activity Host, which carries the activity runtime"},
 		"actor":     {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
 		"attribute": {"Container": "exposes the core attribute container to the generated runtime only"},
 		"combat": {
@@ -108,8 +108,8 @@ func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 			sources = append(sources, matches...)
 		}
 		if len(sources) == 0 {
-			// activity 的共用组件早于 game/components，在功能包 game/activity 里。
-			sources, _ = fs.Glob(modules.Files, module+"/files/game/"+pkg+"/*.go.tmpl")
+			// activity 的共用组件早于 game/components，在功能包 game/modules/activity 里。
+			sources, _ = fs.Glob(modules.Files, module+"/files/game/modules/"+pkg+"/*.go.tmpl")
 		}
 		return sources
 	}, viewMethodExemptions)
@@ -203,7 +203,9 @@ func checkComponentViews(t *testing.T, fsys fs.FS, views []string, sourcesOf fun
 			path, _ := strconv.Unquote(imp.Path.Value)
 			allowed := !strings.Contains(path, ".") || strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-core/") ||
 				path == "example.com/m/db" || strings.HasPrefix(path, "example.com/m/protocol/") ||
-				path == "example.com/m/game/actor" || path == "example.com/m/game/gameplay/attribute"
+				path == "example.com/m/game/modules/actor" || path == "example.com/m/game/modules/gameplay/attribute" ||
+				// game-demo 没装 actor 模块，它的 actor 包（含模块 Body 的副本）是 demo 自己的，暂留 game/actor。
+				path == "example.com/m/game/actor"
 			if !allowed {
 				t.Errorf("%s imports %s; game/view may only use builtin, db, protocol and core types", viewPath, path)
 			}
@@ -444,7 +446,7 @@ func TestModuleVerifyCountsTopLevelScenariosOnly(t *testing.T) {
     --- SKIP: TestRehomeC/case (0.00s)
         rehome_test.go:12: not here
 PASS
-ok  	example/game/rehome	1.234s
+ok  	example/game/modules/rehome	1.234s
 `)
 	passed, skipped := countModuleScenarios(output)
 	if passed != 3 || skipped != 1 {
@@ -454,7 +456,7 @@ ok  	example/game/rehome	1.234s
 
 func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 	good := map[string]string{
-		"game/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n",
+		"game/modules/x/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n",
 	}
 	if _, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML, good)); err != nil {
 		t.Fatalf("a consistent module: %v", err)
@@ -471,8 +473,8 @@ func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 		files map[string]string
 		want  string
 	}{
-		"undeclared id":       {moduleFixtureYAML, map[string]string{"game/x.go": "{{ID:component:Demo}} {{ID:errcode:demo_bad}} {{ID:protocol:DemoPing}}"}, "uses {{ID:protocol:DemoPing}} but module.yaml does not declare it"},
-		"unused id":           {moduleFixtureYAML, map[string]string{"game/x.go": "{{ID:component:Demo}}"}, `declares errcode "demo_bad" but no template uses`},
+		"undeclared id":       {moduleFixtureYAML, map[string]string{"game/modules/x/x.go": "{{ID:component:Demo}} {{ID:errcode:demo_bad}} {{ID:protocol:DemoPing}}"}, "uses {{ID:protocol:DemoPing}} but module.yaml does not declare it"},
+		"unused id":           {moduleFixtureYAML, map[string]string{"game/modules/x/x.go": "{{ID:component:Demo}}"}, `declares errcode "demo_bad" but no template uses`},
 		"field prefix":        {strings.Replace(moduleFixtureYAML, "field: DemoState", "field: State", 1), good, `state field "State" must be PascalCase and start with Demo`},
 		"store prefix":        {strings.Replace(moduleFixtureYAML, "store: demo", "store: state", 1), good, `store key "state" must start with demo`},
 		"unknown dao option":  {strings.Replace(moduleFixtureYAML, `dao: "persist,sync"`, `dao: "persits,sync"`, 1), good, "unknown option"},
@@ -482,6 +484,11 @@ func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 		"unknown key":         {moduleFixtureYAML + "surprise: 1\n", good, "field surprise not found"},
 		"name mismatch":       {strings.Replace(moduleFixtureYAML, "name: demo", "name: other", 1), good, "the directory is the name"},
 		"no files":            {moduleFixtureYAML, nil, "files/ is empty"},
+		// 工程目录（维护者 2026-11-15）：game/ 只放框架层与 game/modules/<包>/；game/modules/ 本身不放文件。
+		"file in game/":           {moduleFixtureYAML, map[string]string{"game/x.go": "{{ID:component:Demo}} {{ID:errcode:demo_bad}}"}, "game/x.go sits directly in game/"},
+		"file in game/modules/":   {moduleFixtureYAML, map[string]string{"game/modules/x.go": "{{ID:component:Demo}} {{ID:errcode:demo_bad}}"}, "game/modules/x.go sits directly in game/modules/"},
+		"feature outside modules": {moduleFixtureYAML, map[string]string{"game/x/x.go": "{{ID:component:Demo}} {{ID:errcode:demo_bad}}"}, "game/x is not a framework layer"},
+		"runtime outside modules": {moduleFixtureYAML + "runtime: {package: game/x, start: Start}\n", good, `runtime.package "game/x" must be a module package under game/modules/`},
 		// next（安装后提示）：每条是非空的一行、不带 {{ID:...}}，条数与长度有上限；写错键名照样按未知键拒绝。
 		"empty hint":     {moduleFixtureYAML + "next: [\"roost config enable player-tcp\", \"  \"]\n", good, "next[1] is empty"},
 		"multiline hint": {moduleFixtureYAML + "next: [\"first line\\nsecond line\"]\n", good, "next[0] spans several lines"},
@@ -1574,7 +1581,7 @@ func TestModuleStubKindsRecogniseOnlyUntouchedGeneratedStubs(t *testing.T) {
 // 联动文件（with/<另一个模块>/）的清单规则：目录与 with 段一一对应；场景名与模块自己的分开；
 // 只能用模块已声明的号；整个目录里没有两处写同一个落点。
 func TestModuleWithValidationNamesWhatIsWrong(t *testing.T) {
-	files := map[string]string{"game/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"}
+	files := map[string]string{"game/modules/x/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"}
 	const otherYAML = "name: other\nsummary: fixture\nverify: {packages: [./game/other], run: ^TestOther, pass: 1}\n"
 	const withYAML = "with:\n  other:\n    summary: glue\n    verify: {packages: [./game/handler], run: ^TestWithDemoOther, pass: 1}\n"
 	build := func(yaml string, glue map[string]string, otherFiles map[string]string) fstest.MapFS {
@@ -1588,17 +1595,17 @@ func TestModuleWithValidationNamesWhatIsWrong(t *testing.T) {
 		}
 		return out
 	}
-	otherFiles := map[string]string{"game/other/other.go": "package other\n"}
-	glue := map[string]string{"game/x_other.go": "package x\n// {{ID:errcode:demo_bad}}\n"}
+	otherFiles := map[string]string{"game/modules/other/other.go": "package other\n"}
+	glue := map[string]string{"game/modules/x/x_other.go": "package x\n// {{ID:errcode:demo_bad}}\n"}
 	catalog, err := loadModuleCatalogFS(build(moduleFixtureYAML+withYAML, glue, otherFiles))
 	if err != nil {
 		t.Fatalf("a consistent module with glue: %v", err)
 	}
-	if got := catalog["demo"].With["other"].Files; len(got) != 1 || got[0] != "game/x_other.go" {
+	if got := catalog["demo"].With["other"].Files; len(got) != 1 || got[0] != "game/modules/x/x_other.go" {
 		t.Fatalf("glue files = %v", got)
 	}
 	// 联动文件的内容算进摘要：它变了，已装的模块显示为另一版。
-	changed, err := loadModuleCatalogFS(build(moduleFixtureYAML+withYAML, map[string]string{"game/x_other.go": "package x\n// changed {{ID:errcode:demo_bad}}\n"}, otherFiles))
+	changed, err := loadModuleCatalogFS(build(moduleFixtureYAML+withYAML, map[string]string{"game/modules/x/x_other.go": "package x\n// changed {{ID:errcode:demo_bad}}\n"}, otherFiles))
 	if err != nil || changed["demo"].Digest == catalog["demo"].Digest {
 		t.Fatalf("a changed glue file left the digest alone (err=%v)", err)
 	}
@@ -1613,9 +1620,10 @@ func TestModuleWithValidationNamesWhatIsWrong(t *testing.T) {
 		"unknown module":          {moduleFixtureYAML + strings.Replace(withYAML, "  other:", "  ghost:", 1), nil, otherFiles, "with.ghost"},
 		"scenario name overlaps":  {moduleFixtureYAML + strings.Replace(withYAML, "^TestWithDemoOther", "^TestDemoOther", 1), glue, otherFiles, `must start with ^TestWithDemo`},
 		"no summary":              {moduleFixtureYAML + strings.Replace(withYAML, "summary: glue", "summary: ''", 1), glue, otherFiles, "with.other: summary is required"},
-		"undeclared id":           {moduleFixtureYAML + withYAML, map[string]string{"game/x_other.go": "{{ID:protocol:DemoPing}}"}, otherFiles, "with/other/game/x_other.go uses {{ID:protocol:DemoPing}} but module.yaml does not declare it"},
-		"same path as own file":   {moduleFixtureYAML + withYAML, map[string]string{"game/x.go": "package x\n"}, otherFiles, "both ship game/x.go"},
-		"same path as other's":    {moduleFixtureYAML + withYAML, map[string]string{"game/other/other.go": "package other\n"}, otherFiles, "both ship game/other/other.go"},
+		"undeclared id":           {moduleFixtureYAML + withYAML, map[string]string{"game/modules/x/x_other.go": "{{ID:protocol:DemoPing}}"}, otherFiles, "with/other/game/modules/x/x_other.go uses {{ID:protocol:DemoPing}} but module.yaml does not declare it"},
+		"same path as own file":   {moduleFixtureYAML + withYAML, map[string]string{"game/modules/x/x.go": "package x\n"}, otherFiles, "both ship game/modules/x/x.go"},
+		"glue in game/modules/":   {moduleFixtureYAML + withYAML, map[string]string{"game/modules/x_other.go": "package x\n"}, otherFiles, "with/other: game/modules/x_other.go sits directly in game/modules/"},
+		"same path as other's":    {moduleFixtureYAML + withYAML, map[string]string{"game/modules/other/other.go": "package other\n"}, otherFiles, "both ship game/modules/other/other.go"},
 	} {
 		_, err := loadModuleCatalogFS(build(test.yaml, test.glue, test.otherFiles))
 		if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -1632,7 +1640,7 @@ func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
 	}
 	t.Parallel()
 	root, roost, try := moduleProject(t, "lobby")
-	glue := filepath.Join(root, "game", "chat", "chat_enter.go")
+	glue := filepath.Join(root, "game", "modules", "chat", "chat_enter.go")
 
 	// 只装 chat：没有联动文件，计划里也没有。
 	out := roost("module", "add", "chat")
@@ -1648,7 +1656,7 @@ func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := moduleProjectDigest(t, root)
-	if out, err := try("module", "add", "enter"); err == nil || !strings.Contains(err.Error(), "module chat with enter: game/chat/chat_enter.go already exists and is not this glue file") {
+	if out, err := try("module", "add", "enter"); err == nil || !strings.Contains(err.Error(), "module chat with enter: game/modules/chat/chat_enter.go already exists and is not this glue file") {
 		t.Fatalf("an occupied glue path: err = %v\n%s", err, out)
 	}
 	if moduleProjectDigest(t, root) != before {
@@ -1663,7 +1671,7 @@ func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
 	if err := json.Unmarshal([]byte(roost("module", "plan", "enter", "--json")), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Glue) != 1 || plan.Glue[0].Module != "chat" || plan.Glue[0].With != "enter" || !contains(plan.Glue[0].Files, "game/chat/chat_enter.go") {
+	if len(plan.Glue) != 1 || plan.Glue[0].Module != "chat" || plan.Glue[0].With != "enter" || !contains(plan.Glue[0].Files, "game/modules/chat/chat_enter.go") {
 		t.Fatalf("plan does not list the chat+enter glue: %+v", plan.Glue)
 	}
 	if _, err := os.Stat(glue); !os.IsNotExist(err) {
@@ -1674,14 +1682,14 @@ func TestModuleGlueIsWrittenWhenTheSecondModuleArrives(t *testing.T) {
 		t.Fatalf("add did not report the glue:\n%s", out)
 	}
 	body, err := os.ReadFile(glue)
-	if err != nil || !bytes.Contains(body, []byte(`"example.com/studio/lobby/game/login"`)) || bytes.Contains(body, []byte("{{")) {
+	if err != nil || !bytes.Contains(body, []byte(`"example.com/studio/lobby/game/modules/login"`)) || bytes.Contains(body, []byte("{{")) {
 		t.Fatalf("the glue file is missing or not rendered (err=%v):\n%s", err, body)
 	}
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := manifest.Modules["chat"].With["enter"]; !contains(got, "game/chat/chat_enter.go") || len(manifest.Modules["enter"].With) != 0 {
+	if got := manifest.Modules["chat"].With["enter"]; !contains(got, "game/modules/chat/chat_enter.go") || len(manifest.Modules["enter"].With) != 0 {
 		t.Fatalf("ownership: chat.with = %v, enter.with = %v", manifest.Modules["chat"].With, manifest.Modules["enter"].With)
 	}
 

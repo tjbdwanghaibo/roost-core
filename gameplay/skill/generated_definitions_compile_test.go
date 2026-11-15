@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// 生成工程在启动期对 game/skills/*.json 做 Parse + Compile，任何 error 诊断都让 game 服起不来：生成器写出的两份定义——
+// 生成工程在启动期对 game/modules/skills/*.json 做 Parse + Compile，任何 error 诊断都让 game 服起不来：生成器写出的两份定义——
 // `roost add skill` 的骨架与 game-demo 的 fireball——必须无诊断编译。core 不能 import codegen，这里把它们当数据读：
 // 骨架取自 add_skill.go 里 Sprintf 的格式串，fireball 取自 demo 模板。
 func TestGeneratedSkillDefinitionsCompileWithoutDiagnostics(t *testing.T) {
@@ -69,7 +69,7 @@ func addSkillSkeleton(t *testing.T, project, snake, pascal string) string {
 
 func demoFireball(t *testing.T, project string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "demo", "game", "skills", "fireball.json.tmpl"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "demo", "game", "modules", "skills", "fireball.json.tmpl"))
 	if err != nil {
 		t.Fatal(err)
 	}

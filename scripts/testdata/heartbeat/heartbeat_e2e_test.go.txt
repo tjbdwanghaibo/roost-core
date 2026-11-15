@@ -10,7 +10,7 @@ import (
 
 	monster "example.com/planet/game/entities/monster"
 	scene "example.com/planet/game/entities/scene"
-	gameheartbeat "example.com/planet/game/heartbeat"
+	gameheartbeat "example.com/planet/game/modules/heartbeat"
 	registry "example.com/planet/internal/registry"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"

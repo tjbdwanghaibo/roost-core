@@ -1,14 +1,14 @@
 package handler
 
 import (
-	gamelogin "{{MODULE}}/game/login"
-	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	gamelogin "{{MODULE}}/game/modules/login"
+	"{{MODULE}}/game/view"
 
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"

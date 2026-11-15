@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	playerentity "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	mailboxcomp "{{MODULE}}/game/components/mailbox"
+	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
-	gamemailbox "{{MODULE}}/game/mailbox"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	gamemailbox "{{MODULE}}/game/modules/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
@@ -45,7 +45,7 @@ const (
 	mailboxCodeRangeInvalid   int32 = 590112
 )
 
-// 测试自己登记两个种类，方式与正式的种类相同（只在 init 里；本包的 init 在 game/mailbox 与实体包之后跑）：
+// 测试自己登记两个种类，方式与正式的种类相同（只在 init 里；本包的 init 在 game/modules/mailbox 与实体包之后跑）：
 //
 //   - mailboxTestVoucher 只登记了“合不合法”、没有登记发放方式的“券”：解得出来，但领不了。
 //   - mailboxTestChest 两样都登记了：号是 1 到 3 的“宝箱”，开出 数量×号 个金币。它报的持有量故意

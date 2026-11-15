@@ -55,7 +55,7 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"roost.yaml", "game/entities/monster/entity.go", "game/heartbeat/driver_gen.go",
+		"roost.yaml", "game/entities/monster/entity.go", "game/modules/heartbeat/driver_gen.go",
 		"game/entities/monster/heartbeat_component_gen.go", "game/entities/monster/heartbeat_beats.go",
 		"game/entities/monster/behavior_component_gen.go", "game/entities/monster/behavior_actions.go",
 		"game/handler/monster_behavior.go", "game/entities/monster/behavior_strategy.go", "game/entities/monster/states.go",
@@ -66,7 +66,7 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 	if strings.Join(paths, ",") != strings.Join(want, ",") {
 		t.Fatalf("paths = %v\nwant %v", paths, want)
 	}
-	for _, rel := range []string{"game/heartbeat/driver_gen.go", "game/entities/monster/heartbeat_component_gen.go", "game/entities/monster/behavior_component_gen.go"} {
+	for _, rel := range []string{"game/modules/heartbeat/driver_gen.go", "game/entities/monster/heartbeat_component_gen.go", "game/entities/monster/behavior_component_gen.go"} {
 		if body := readProjectFile(t, root, rel); !strings.HasPrefix(body, generatedHeader) {
 			t.Fatalf("%s is generator-owned but has no generated header:\n%s", rel, body)
 		}
@@ -78,7 +78,7 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 		}
 	}
 	for rel, fragments := range map[string][]string{
-		"game/heartbeat/driver_gen.go": {`var Driver = coreheartbeat.NewDriver(coreheartbeat.Config{Name: "planet"})`},
+		"game/modules/heartbeat/driver_gen.go": {`var Driver = coreheartbeat.NewDriver(coreheartbeat.Config{Name: "planet"})`},
 		"game/entities/monster/heartbeat_component_gen.go": {
 			"//roost:component type=2000", "host: gameheartbeat.Driver.NewHost(typed)", "func (component *HeartbeatComponent) OnDestroy(entity.EntityDestroyReason) {\n\tcomponent.host.OnDestroy()",
 			"return component.onHeartbeatInit(isCreate)", "func (component *HeartbeatComponent) Beat(name string) *heartbeat.Reg",
@@ -101,7 +101,7 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 		"roost.yaml":                                    {"heartbeats:\n    monster:\n        id: 2000\n        service: game\n        behavior:\n            id: 2001\n            ai: true\n            state: true\n", "            - heartbeat\n"},
 		"configs/service/config.game.yaml":              {"\nheartbeat:\n", "  delivery: batch\n"},
 		"configs/service/config.game.prod.example.yaml": {"\nheartbeat:\n", "  delivery: batch\n"},
-		"internal/bootstrap/generated.go":               {"kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)", `gameheartbeat "example.com/planet/game/heartbeat"`, `kitheartbeat "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"`},
+		"internal/bootstrap/generated.go":               {"kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)", `gameheartbeat "example.com/planet/game/modules/heartbeat"`, `kitheartbeat "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"`},
 	} {
 		body := readProjectFile(t, root, rel)
 		for _, fragment := range fragments {
@@ -170,7 +170,7 @@ func TestAddHeartbeatThenBehaviorAndTimeDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(paths, "game/heartbeat/driver_gen.go") || contains(paths, "game/entities/scene/behavior_component_gen.go") {
+	if !contains(paths, "game/modules/heartbeat/driver_gen.go") || contains(paths, "game/entities/scene/behavior_component_gen.go") {
 		t.Fatalf("add heartbeat paths = %v", paths)
 	}
 	if got := readProjectFile(t, root, "game/entities/scene/heartbeat_component_gen.go"); !strings.Contains(got, "//roost:component type=2042") {
@@ -180,7 +180,7 @@ func TestAddHeartbeatThenBehaviorAndTimeDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contains(paths, "game/heartbeat/driver_gen.go") || contains(paths, "game/entities/scene/heartbeat_component_gen.go") {
+	if contains(paths, "game/modules/heartbeat/driver_gen.go") || contains(paths, "game/entities/scene/heartbeat_component_gen.go") {
 		t.Fatalf("second add re-created the host: %v", paths)
 	}
 	if config := readProjectFile(t, root, "configs/service/config.game.yaml"); strings.Count(config, "\nheartbeat:\n") != 1 {
@@ -332,7 +332,7 @@ func TestHeartbeatModWithoutEntities(t *testing.T) {
 	if nest < 0 || heartbeat < nest {
 		t.Fatalf("bootstrap does not install nest and then heartbeat:\n%s", bootstrap)
 	}
-	if driver := readProjectFile(t, root, "game/heartbeat/driver_gen.go"); !strings.Contains(driver, "var Driver = coreheartbeat.NewDriver") {
+	if driver := readProjectFile(t, root, "game/modules/heartbeat/driver_gen.go"); !strings.Contains(driver, "var Driver = coreheartbeat.NewDriver") {
 		t.Fatalf("driver:\n%s", driver)
 	}
 }

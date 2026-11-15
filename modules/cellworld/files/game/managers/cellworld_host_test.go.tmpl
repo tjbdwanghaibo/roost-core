@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"{{MODULE}}/game/cellworldhost"
+	"{{MODULE}}/game/modules/cellworldhost"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -14,7 +14,7 @@ import (
 
 // cellworld manager 的场景：经 ManagerMod 起停（与生成的 bootstrap 相同），Start 之前没有 Host、Start 不启动任何 Node，
 // Start 之后 Host 已发布、等服务交 Node；停了之后 Host 关闭，再交 Node 被拒绝。Host 排空服务没停下的 Node、Start 没有 Host
-// 时拒绝的场景在 game/cellworldhost（TestCellworldHostStopsTheNodeTheServiceLeftRunning、TestCellworldStartNeedsTheManagerHost）。
+// 时拒绝的场景在 game/modules/cellworldhost（TestCellworldHostStopsTheNodeTheServiceLeftRunning、TestCellworldStartNeedsTheManagerHost）。
 func TestCellworldHostManagerPublishesTheHostAndClosesItOnStop(t *testing.T) {
 	registry := app.NewRegistry(viper.New())
 	mod := kitmanager.NewManagerMod(NewCellWorldHost())

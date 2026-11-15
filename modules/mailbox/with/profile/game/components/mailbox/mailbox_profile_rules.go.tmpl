@@ -1,6 +1,6 @@
 package mailbox
 
-import "{{MODULE}}/game/mailbox"
+import "{{MODULE}}/game/modules/mailbox"
 
 // MailboxProfileReward 是工程自己的规则。默认不发奖；连升 from+1…to 只调用一次，返回整封邮件的总奖励。
 // 只在启动前设置此函数；运行中的热更使用函数内部线程安全的规则查询，不能并发改写函数变量。

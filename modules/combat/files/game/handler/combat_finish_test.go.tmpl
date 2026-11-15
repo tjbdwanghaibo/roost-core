@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"{{MODULE}}/protocol/pb"
-	gameattr "{{MODULE}}/game/gameplay/attribute"
 	sender "{{MODULE}}/game/handler/syncsender"
+	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
+	"{{MODULE}}/protocol/pb"
 )
 
 func combatDefeatPeer(t *testing.T, f *combatFixture) {

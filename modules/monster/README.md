@@ -9,7 +9,7 @@
 - `MonsterInspect{MonsterID}` → `MonsterInspectResponse{Code, Reason, MonsterID, LifeSeq, HP, Template, X, Y}`：查看一只怪。`MonsterID` 是完整的 Entity ID（就是 AOI 同步里的 subject id）。只有查看者与怪在同一个场景时才答；被拒时应答只有 `Code` / `Reason`（见“错误码”），连接保留。客户端没有出生、伤害、杀怪的入口。
 - 怪的位置与生命经场景视野同步下发：公开视图只有 `Actor`（场景、坐标、朝向）与 `Vitals`（`Template`、`HP`、`LifeSeq`）两个字段（`game/entities/monster/sync.go`）。
 
-**服务端入口**（`game/monster/service/runtime.go`；`service.FromRegistry(registry)` 取 `*Manager`，能力名 `gameplay.monster`。都会等待 Nest，必须在 Nest 业务 worker 之外调用）
+**服务端入口**（`game/modules/monster/service/runtime.go`；`service.FromRegistry(registry)` 取 `*Manager`，能力名 `gameplay.monster`。都会等待 Nest，必须在 Nest 业务 worker 之外调用）
 
 - `Spawn(ctx, sceneUniqueID, spec) (monsterEntityID int64, err error)`：在已开的场景里按 `spec` 放一只怪。失败会自己清理；清理也失败时同时返回 ID 与错误，调用方可以对这个 ID 重试 `Destroy`。
 - `Damage(ctx, entityID, expectedLife, amount) (monster.Snapshot, error)`：扣血。`expectedLife` 必须等于怪当前的 `LifeSeq`，否则拒绝（上一条命的迟到伤害打不到新命）。血量扣到 0 即死亡。
@@ -23,7 +23,7 @@
 
 **状态**：`MonsterDao`（`db/def/monster.go`）三个字段，**都不落库**：`Actor`（同步）、`Vitals`（同步）、`Brain`（不同步：出生点、当前目标、巡逻角点游标、重生截止时间、是否已退休）。实体声明为 `noPersist=true lifetime=runtime_rebuild`。
 
-**配置**：没有配置表与配置键。出生规则是归工程所有的 `game/monster/rules.go`：
+**配置**：没有配置表与配置键。出生规则是归工程所有的 `game/modules/monster/rules.go`：
 
 - `Spec{Template, HP, Speed, PatrolHalf, SenseRadius, RespawnDelay, At}`，`Spec.Validate()` 限定取值范围。
 - `DefaultSpec()`：模板 1、100 HP、速度 6、巡逻半边长 12、感知半径 30、死亡 5 秒后重生、出生点 `(80,80)`。模块启动时用它在场景 1 放一只怪。
@@ -36,7 +36,7 @@
 - `monster_not_here`：怪活着，但查看者不在它所在的场景里（或查看者还没进任何场景）。
 - 查看者自己还没进入游戏时仍是框架码 `entity_not_found`；不带码的失败答框架的内部码并记一条 Error。服务端入口（`Spawn` / `Damage` / `Destroy`）的拒绝仍是不带码的普通错误，它们不面向客户端。
 
-**日志**：出生、死亡、销毁、关图清怪确认记 Debug；普通命中、AI 与重生扫描不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/monster/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：出生、死亡、销毁、关图清怪确认记 Debug；普通命中、AI 与重生扫描不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/monster/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -55,10 +55,10 @@
 
 - **需求正好是它**：`roost module add monster`，连带装上 `actor` 与 `scene`，并接好心跳、AOI 与模块启动入口。
 - **需求多一点**：
-  - 改缺省怪或不要它：改 `game/monster/rules.go` 的 `DefaultSpec`，或改 `runtime.go` 的 `Start` 里那一次 `Spawn`。
+  - 改缺省怪或不要它：改 `game/modules/monster/rules.go` 的 `DefaultSpec`，或改 `runtime.go` 的 `Start` 里那一次 `Spawn`。
   - 多种怪、多个刷怪点：在自己的启动代码或玩法逻辑里多次调 `Spawn`，每次给不同的 `Spec`。
   - 改选目标的规则：改 `rules.go` 的 `Nearest`。改巡逻路线：改 `game/components/monsteractor/monsteractor.go` 的 `Decide`。
-  - 不要把跨拍的状态存进 `game/monster/brain.go` 里每拍新建的 AI / actionflow 对象：它们不支持 Nest 回滚，跨拍事实只放 DAO 与 actor 的 `Body`。
+  - 不要把跨拍的状态存进 `game/modules/monster/brain.go` 里每拍新建的 AI / actionflow 对象：它们不支持 Nest 回滚，跨拍事实只放 DAO 与 actor 的 `Body`。
 - **别的代码要用它**：
   - 打怪：`manager.Damage(ctx, monsterEntityID, lifeSeq, amount)`，`lifeSeq` 取自先前读到的快照（`MonsterInspect` 的应答或同步下来的 `Vitals.LifeSeq`）。
   - 在自己的事务里读怪：handler 的目标接口用 `monster.IMonsterEntity`，调 `target.MonsterActorComp().Snapshot()`。
@@ -73,7 +73,7 @@
 
 ## 验证范围
 
-- `roost module verify monster`：27 条场景，全部在 `game/monster/service`（清单的包列表只有这一个包）。
+- `roost module verify monster`：27 条场景，全部在 `game/modules/monster/service`（清单的包列表只有这一个包）。
 - 离线，但用的是真实的 Nest、实体 Manager 与 lifecycle、heartbeat、AI / actionflow、movement、Sync / AOI；持久提交与网络传输是替身。
 - 覆盖：正式出生与 AOI 可见、`MonsterInspect`、`MonsterInspect` 的每种拒绝各答自己的业务码（不是怪的号、不存在的怪物号、查看者离开场景、怪已死亡；查看者没进入游戏仍是框架码；拒绝之后同一个入口照常可用）、巡逻、定身、低速追击、感知边界、决策失败回滚、死亡隐藏与重生截止、旧命的伤害被拒、销毁、非法规则与 sid、序号停在 CellWorld 出生号位之前、停机准入、真实心跳驱动的巡逻与重生、出生失败清理、死亡失败回滚、退出回复丢失后续做，以及出生 / 异步重生 / 伤害 / 退出遇到同 ID 重建的 8 种交错。
 - 没有验证：真实数据库、TCP 联网、跨进程故障、长期稳定性、大规模性能。
@@ -82,7 +82,7 @@
 
 移动、位置、朝向、跟随与定身门控共用 actor 的 `Body`。场景通过实例回调提供已提交的玩家位置；怪只在自己的锁里读这份值快照，不读别人的 DAO、不拿别人的锁。当前目标没变且跟随仍在进行时不重新发起，低速移动的小数进度不会每拍归零。目标离开或看不见时回到四角巡逻。
 
-每拍实际创建一个 `ai.Controller` 与一个 `actionflow.Behavior`（`game/monster/brain.go` 的 `Decide`），AI 经一个瞬时动作提交一次巡逻或追击意图。真正持续的移动只留在支持回滚的 `Body` 里，目标、游标与生命留在 DAO。一次决策的后续步骤失败时，DAO 与 `Body` 同时撤销，不会留下后台动作。
+每拍实际创建一个 `ai.Controller` 与一个 `actionflow.Behavior`（`game/modules/monster/brain.go` 的 `Decide`），AI 经一个瞬时动作提交一次巡逻或追击意图。真正持续的移动只留在支持回滚的 `Body` 里，目标、游标与生命留在 DAO。一次决策的后续步骤失败时，DAO 与 `Body` 同时撤销，不会留下后台动作。
 
 actor 的心跳按场景时间域移动；死亡重生用单独的 1 秒心跳（`monster.respawn`），按业务时间。
 

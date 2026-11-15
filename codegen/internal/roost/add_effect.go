@@ -13,7 +13,7 @@ import (
 // effectTopic 是 roost add effect 的名字：点分的 effect 主题（例如 player.level_up）及其派生名字。
 type effectTopic struct {
 	topic  string // player.level_up：nest.Effect.Topic，线上 subject 是 <dataengine.effects.subject_prefix>.<topic>
-	file   string // player_level_up：game/effects/<file>.go 与消费者文件名
+	file   string // player_level_up：game/modules/effects/<file>.go 与消费者文件名
 	pascal string // PlayerLevelUp：载荷类型、Topic<Pascal>、Emit<Pascal>
 }
 
@@ -38,7 +38,7 @@ func parseEffectTopic(raw string) (effectTopic, error) {
 	return effectTopic{topic: strings.Join(segments, "."), file: strings.Join(segments, "_"), pascal: strings.Join(pascal, "")}, nil
 }
 
-// addEffect 是 roost add effect：载荷类型、topic 常量与 Emit 辅助（game/effects/<topic>.go），以及消费服务里的
+// addEffect 是 roost add effect：载荷类型、topic 常量与 Emit 辅助（game/modules/effects/<topic>.go），以及消费服务里的
 // SubscribeEffects 骨架（internal/service/<svc>/<topic>_consumer.go）。都是业务文件、只建一次；effect 文件已存在
 // （另一个服务已经消费它）时只建消费者。服务的 Init / Shutdown 归业务，只在 next 提示里给要加的两行。
 func addEffect(root string, m Manifest, options AddOptions) ([]string, error) {
@@ -70,7 +70,7 @@ func addEffect(root string, m Manifest, options AddOptions) ([]string, error) {
 		// 生产方与消费方不会各写一份“effect 发到哪里”。
 		return nil, fmt.Errorf("effect consumer service %s needs the dataengine Mod (the consumer reads where effects go from dataengine.effects.* and keeps its receipts in dataengine.database); run: roost add mod dataengine -service %s", service, service)
 	}
-	effectRel := "game/effects/" + topic.file + ".go"
+	effectRel := "game/modules/effects/" + topic.file + ".go"
 	consumerRel := "internal/service/" + service + "/" + topic.file + "_consumer.go"
 	var changes []syncChange
 	effectPath := filepath.Join(root, filepath.FromSlash(effectRel))
@@ -221,7 +221,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"%[2]s/game/effects"
+	"%[2]s/game/modules/effects"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
@@ -295,7 +295,7 @@ func printEffectNext(stdout io.Writer, name string) {
 	if err != nil {
 		return
 	}
-	fmt.Fprintf(stdout, "next: add the payload fields to game/effects/%s.go and write the consumer body in internal/service/<service>/%s_consumer.go\n", topic.file, topic.file)
+	fmt.Fprintf(stdout, "next: add the payload fields to game/modules/effects/%s.go and write the consumer body in internal/service/<service>/%s_consumer.go\n", topic.file, topic.file)
 	fmt.Fprintf(stdout, "next: emit it inside a Nest handler: effects.Emit%s(key, effects.%s{...})\n", topic.pascal, topic.pascal)
 	fmt.Fprintf(stdout, "next: start the consumer in the service (roost does not rewrite Init / Shutdown):\n")
 	fmt.Fprintf(stdout, "  Init:     subscription, err := %s(context.Background(), registry)\n", effectConsumerFunc(topic))

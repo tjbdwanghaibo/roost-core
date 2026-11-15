@@ -367,10 +367,10 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	if args[0] == "attribute" {
-		fmt.Fprintln(stdout, "next: edit the fields and _<Field> formulas in game/gameplay/attribute/"+toSnake(args[1])+".go, then roost generate")
+		fmt.Fprintln(stdout, "next: edit the fields and _<Field> formulas in game/modules/gameplay/attribute/"+toSnake(args[1])+".go, then roost generate")
 	}
 	if args[0] == "skill" {
-		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then go test ./game/skills/ (TestSkillCatalogCompiles compiles every definition); call skills.CompileAll in the service Init so a broken definition stops startup")
+		fmt.Fprintln(stdout, "next: edit game/modules/skills/<name>.json, then go test ./game/modules/skills/ (TestSkillCatalogCompiles compiles every definition); call skills.CompileAll in the service Init so a broken definition stops startup")
 		fmt.Fprintln(stdout, "guide: docs/SKILL.zh-CN.md")
 	}
 	return nil

@@ -13,16 +13,16 @@
 - **服务端入口**
   - 组件方法（`game/components/combat/combat.go`，要求已持有双方的锁）：`CombatComp().Ready(seq, ready)`、`Cast(peer, seq, skillID, now)`、`Step(peer, seq, now)`、`Leave(peer, seq)`、`Tick(peer, epoch, now)`；前四个返回 `CombatResult`，`Tick` 只返回错误。`Core()` 返回框架的战斗组件供持锁的可信业务只读；`Input()` 返回下一拍的外部输入（场景号、坐标、最大生命、攻击）。窄接口 `ICombatEntity`。
   - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerCombatReady`（单实体）、`handlerCombatCast` / `handlerCombatStep` / `handlerCombatLeave`（双实体，生成的 Sender 是 `MultiSync_CombatCast` 等）、`handlerCombatTick`（双实体，仅供本服的后台驱动调用，没有协议）。
-  - 运行期入口 `combat.Start(registry)`（`game/combat/runtime.go`），以及 `combat.Queue(owner, peer, epoch)`、`combat.Program(id)`、`combat.Resolver()`、`combat.Environment()`、`combat.FailedDeliveries()`。
-  - `combat.NewHost(...)`、`Host`、`Participant`、`Input`（`game/combat/host.go`）：把技能运行时限制在本次事务已锁住的两名参与者之内的宿主。
+  - 运行期入口 `combat.Start(registry)`（`game/modules/combat/runtime.go`），以及 `combat.Queue(owner, peer, epoch)`、`combat.Program(id)`、`combat.Resolver()`、`combat.Environment()`、`combat.FailedDeliveries()`。
+  - `combat.NewHost(...)`、`Host`、`Participant`、`Input`（`game/modules/combat/host.go`）：把技能运行时限制在本次事务已锁住的两名参与者之内的宿主。
 - **登记点 / 钩子**：本模块不提供登记函数。它自己接在别的模块上：在 `actor` 的 `Body.Host` 上登记心跳 `combat.duel`，把 Buff 标签绑定到 `actor.Rooted` / `actor.Silenced`。
 - **状态**
   - `PlayerDao.Combat`（`CombatState`，`db/def/combat.go`，`persist,sync`）：公开投影与同意绑定——`Initialized`、`Ready`、`Opponent`、`Health`、`MaxHealth`、`Shield`、`Alive`、`Rooted`、`Silenced`。下发给本人。
   - `PlayerDao.CombatPrivate`（`CombatPrivateState`，`nosync`，不下发）：最近一次请求的回执（`Sequence`、`Kind`、`Skill`、`Target`、`Reply`）与会话代际 `Epoch`；两人中实体号较小的一方另存整场的 `Runtime` 与 `Host` 检查点。
   - 附加 DAO `CombatDAO`（`db/combat.go`，清单的 `daos`，字段 `combatState`）：生命、护盾、Buff 的唯一权威，与 `PlayerDao` 一起加载和提交。
 - **配置**
-  - 四个技能文件 `game/skills/combat_strike.json`、`combat_bolt.json`、`combat_stun.json`、`combat_silence.json`，技能号是 `skill.<工程名>.combat.strike` 等。`strike` 立即造成伤害；`bolt` 延迟 4 拍后造成伤害；`stun`、`silence` 给对手加持续 20 拍的状态；四个技能冷却都是 20 拍。
-  - 常量在 `game/components/combat/combat.go`：`CombatRange = 5000`（施法准入距离）、`CombatClock`（1 拍 = 50 毫秒）、`CombatRuntimeMaxBytes`（运行时检查点上限 512 KiB）；`game/combat/host.go` 的 `MaxHostBytes`（宿主检查点上限 256 KiB）。
+  - 四个技能文件 `game/modules/skills/combat_strike.json`、`combat_bolt.json`、`combat_stun.json`、`combat_silence.json`，技能号是 `skill.<工程名>.combat.strike` 等。`strike` 立即造成伤害；`bolt` 延迟 4 拍后造成伤害；`stun`、`silence` 给对手加持续 20 拍的状态；四个技能冷却都是 20 拍。
+  - 常量在 `game/components/combat/combat.go`：`CombatRange = 5000`（施法准入距离）、`CombatClock`（1 拍 = 50 毫秒）、`CombatRuntimeMaxBytes`（运行时检查点上限 512 KiB）；`game/modules/combat/host.go` 的 `MaxHostBytes`（宿主检查点上限 256 KiB）。
 - **错误码**（`internal/errors/combat.go`）
   - `combat_invalid`：请求非法（对手是自己、没有属性等）。
   - `combat_sequence`：序号不是“上一个加 1”也不是“最近一次的原样重试”。
@@ -36,7 +36,7 @@
   - `combat_silenced`：施法者处于沉默状态（眩晕也会派生沉默），不能施法。
   - `combat_skill`：技能被拒绝（技能号不存在、冷却中、时钟回拨、同一拍内输入变化等）。
 
-**日志**：准备 / 离开确认记 Info；combat_boundary 与未知内部失败记 Error，后台推进同样记录异常；施法、伤害和每拍成功推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/combat/runtime.go`, `game/controllers/combat/combat_cast.go`, `game/controllers/combat/combat_leave.go`, `game/controllers/combat/combat_ready.go`, `game/controllers/combat/combat_step.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：准备 / 离开确认记 Info；combat_boundary 与未知内部失败记 Error，后台推进同样记录异常；施法、伤害和每拍成功推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/combat/runtime.go`, `game/controllers/combat/combat_cast.go`, `game/controllers/combat/combat_leave.go`, `game/controllers/combat/combat_ready.go`, `game/controllers/combat/combat_step.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 结束规则：死亡状态保留到显式 `CombatLeave` 或场景结束；结束时双方恢复到各自已确认的最大生命、护盾清零，清除控制、冷却与施法状态。双方须重新 Ready 才能再战。恢复和会话清理在同一事务中，提交拒绝时全部回滚；重复 Ready 不能用于会话内回血。新增死亡后结束、拒交后重试两条场景。
 
@@ -61,11 +61,11 @@
 
 - **需求正好是它**：`roost module add combat`，连带安装 `actor`、`attribute`、`skillbook`（`attribute` 又带上 `profile`）。要让玩家能站进同一个空间，一般还要装 `scene`。
 - **需求比它多一点**
-  - 改技能数值或加技能：改或新增 `game/skills/` 下的 JSON（技能由 `skillbook` 在服务启动时编译）。新技能用到的状态要在技能编译环境里登记，写法见本模块的 `with/skillbook` 联动文件。
+  - 改技能数值或加技能：改或新增 `game/modules/skills/` 下的 JSON（技能由 `skillbook` 在服务启动时编译）。新技能用到的状态要在技能编译环境里登记，写法见本模块的 `with/skillbook` 联动文件。
   - 改施法距离、拍长：改 `game/components/combat/combat.go` 的 `CombatRange`、`CombatClock`。
   - 加胜负判定与奖励：在 `game/components/combat/combat.go` 的 `run` 之后（`Cast` / `Step` / `Tick` 拿到结果处）检查 `Alive`，调用 `end` 并在同一笔事务里写自己的结算状态。
 
-  - `game/combat/host.go` 的检查点格式与哈希校验不要改。
+  - `game/modules/combat/host.go` 的检查点格式与哈希校验不要改。
 - **别的模块 / 业务代码要用它**
   - 读战斗状态：持锁时读 `owner.Dao().GetCombat()`（是否在战斗 `GetOpponent() != 0`、生命、是否存活）。
   - 服务端代发操作：`syncsender.NewCombatCastSender(client).MultiSync_CombatCast(ctx, 施法者完整实体号, 对手完整实体号, &pb.CombatCastRequest{…})`；`Ready` 是单实体的 `Sync_CombatReady`。
@@ -73,7 +73,7 @@
 
 ## 联动
 
-- `combat` + `skillbook`（`with/skillbook/game/skillbook/combat_environment.go`）：经 `OnCompileEnvironment("combat", …)` 往技能编译环境里登记 `stun`、`silence` 两个状态；另有 1 条正式目录、摘要校验、眩晕与到期释放的联动场景。
+- `combat` + `skillbook`（`with/skillbook/game/modules/skillbook/combat_environment.go`）：经 `OnCompileEnvironment("combat", …)` 往技能编译环境里登记 `stun`、`silence` 两个状态；另有 1 条正式目录、摘要校验、眩晕与到期释放的联动场景。
 - `combat` + `scene`（`with/scene/game/components/combat/combat_scene.go`）：经 `OnSceneFields("combat", "Combat")` 只把公开投影 `Combat` 开放给附近玩家，`CombatPrivate` 不公开。
 - `combat` + `equipment`（`with/equipment/`，只有场景测试）：验证真实换装只在下一拍进入战斗世界、换装提交被拒时保持原权威。
 - 别的模块没有 `with/combat`。

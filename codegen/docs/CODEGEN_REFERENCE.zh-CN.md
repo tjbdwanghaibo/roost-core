@@ -180,7 +180,7 @@ roost add rpc guild -service game
 
 容量（投影 checkpoint 缺省间隔 20 ms）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；DataEngine 投影器逐条处理带回执 / effect 的记录，约 20 条/s（正向每笔 2 条、全补偿每笔 3 条）。单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内，P99 不稳定：2026-10-20 各 15 分钟实测（正向 8/s 两次各 7200 笔、全补偿 5/s 一次 4500 笔，全部 0 笔终态不对）服务端 P50 549～713 ms、P99 0.9～3.9 s，两次正向 8/s 的 P99 相差 4 倍（0.92 s 与 3.89 s）。WAL 放 RAM disk 时服务端 P50 从 555 ms 降到 334 ms、投影 checkpoint 从 57 ms 降到 1 ms，磁盘同步是主要成本，部署时 WAL 放快盘。正向 10/s 仍 0 笔终态不对，但积压、延迟升到秒级（P50 2.2 s，2026-10-18）；正向 12/s、全补偿 7/s 起步骤超时、重试放大而崩溃（上限档各单样本）。Mongo 步骤单进程上限在正向 20～30/s、全补偿 10～15/s 之间。量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [v1.30.0 候选夜间补测](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md) §6～§8 与 [投影器合并 checkpoint 前后对照](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-CHECKPOINT-20261018.md) §3、§5（优化过程见 [Saga 性能优化](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-OPT-20261018.md)）。
 
-`add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。载荷里的玩家号在组件里用 `Owner().UniqueID()` 取；`Owner().ID()` 是编码后的 EntityID（带实体类型位），不是玩家号，骨架注释写明了这一点。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
+`add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/modules/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。载荷里的玩家号在组件里用 `Owner().UniqueID()` 取；`Owner().ID()` 是编码后的 EntityID（带实体类型位），不是玩家号，骨架注释写明了这一点。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
 
 需要编号的类型默认从 `roost.yaml` 的 ID 空间分配；`-id` 可显式指定，`-group` 选择协议分组。Component 使用 `--entity` 后会在所属 Entity 包生成工厂、窄 Entity 接口，并自动添加 ComponentManager 与字段 tag；项目只有一个 Entity 时可自动推断。DAO 使用 `--entity` 后会自动添加 import、DaoManager 和 dao tag。Entity wire 统一生成 Component/DAO getter。业务只需补领域字段、Component 方法与 Saga/Nest handler。
 
@@ -193,7 +193,7 @@ roost add rpc guild -service game
 | （生成）实体 lifecycle | 无 | `game/entities/<entity>/lifecycle_gen.go`（`roost generate`；v1.47.0 起不再有 `add lifecycle`） | 登录/创角边界从 Registry 构造（`<entity>.LifecycleFromRegistry`） |
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
 | `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与该实体 | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
-| `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog 与 catalog_test.go（`go test ./game/skills/` 编译全部定义，doctor `skills:catalog` 运行它） | 配置 CompileEnvironment 与 Host；服务 Init 调 CompileAll |
+| `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog 与 catalog_test.go（`go test ./game/modules/skills/` 编译全部定义，doctor `skills:catalog` 运行它） | 配置 CompileEnvironment 与 Host；服务 Init 调 CompileAll |
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
 **接 account 的玩家接入（别名合服，D15）**：应用的 `auth.go` 骨架默认拒绝，注释写明接 account 时的写法：经 `svcaccount.Accounts.ValidateSession` 校验票据，用返回的 `role.ServingServerID`（承载服：角色自己的服，或它已并入的那个服）填 `svcaccount.ServerIDClaim`，`role.ServerID`（原服，供显示）填 `svcaccount.OriginServerIDClaim`；按 `role.ServerID` 路由会把合服后原服的每个角色拒绝成 `player_elsewhere`；用到单个角色换服时再把 `role.BindEpoch` 填进 `svcaccount.BindEpochClaim`、换服在途时把 `svcaccount.TransferClaimValue(*role.Transfer)` 填进 `svcaccount.TransferClaim`（完整示例是 game-demo 的 `internal/access/player/tcp/auth.go`）。`access.player` 指向、且 `uses: account` 的服务，生成的 bootstrap 在 account 的 ClientMod 之后多装一个 `svcaccount.NewServingGuardMod()`：进程启动时问 account 本服是否已并入另一服，已并入就拒绝启动（DataEngine Mod 排在它之后，WAL 与 outbox 都还没打开）；它计入生成的 `shutdown.total_timeout`（多一个 3s 保底）。工程带 `cmd/sidmerge`（game-demo）时，`roost project doctor` 多一项只读的 `merge-readiness`（OK / WARN，不让 doctor 失败）：运行 `go run ./cmd/sidmerge checklist`，概括按 sid 分库（合服时要搬）的逻辑库与两侧部署必须同一位置的逻辑库（每个逻辑库都在内：按 sid 分库的库里不按 sid 的 DAO 同样要同址）、按 sid 寻址的持久总线用法、需要业务语义的合并项数；WAL / outbox / saga / 冲突只能在停服窗口里由 `sidmerge migrate -dry-run` 检查（[PLAYER-MIGRATION §6](../../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)）。
@@ -394,7 +394,7 @@ roost add timedomain --entity <Scene> [--id <component-id>]
 | `roost.yaml` `services.<service>.mods` | add 时加 `heartbeat` | catalog Mod `heartbeat`（`wiring/heartbeat`，依赖 nest）；也可以 `roost add mod heartbeat -service <s>` 单独装 |
 | `game/entities/<entity>/entity.go` | 业务（add 时加字段） | `heartbeat *HeartbeatComponent`、`behavior *BehaviorComponent`、`timeDomain *TimeDomainComponent` |
 | `db/def/<entity>.go`（timedomain） | 业务（add 时加字段） | `TimeAnchorBusiness int64`、`TimeAnchorDomain int64`、`TimeRate float64`，`dao:"nopersist,sync"`；三个都已同类型存在时不改，只有一部分时拒绝 |
-| `game/heartbeat/driver_gen.go` | 生成（sync 重写） | 工程唯一的 `Driver = heartbeat.NewDriver(...)`（一个 Nest 引擎一个驱动；每个进程只跑一个服务） |
+| `game/modules/heartbeat/driver_gen.go` | 生成（sync 重写） | 工程唯一的 `Driver = heartbeat.NewDriver(...)`（一个 Nest 引擎一个驱动；每个进程只跑一个服务） |
 | `game/entities/<entity>/heartbeat_component_gen.go` | 生成 | `HeartbeatComponent`：构造时 `Driver.NewHost`；`Host()`、`Register(name, period, fn, opts...)` / `Beat(name)`；`OnInitFinish` 调业务 `onHeartbeatInit`，`OnDestroy` 让实例离开驱动 |
 | `game/entities/<entity>/behavior_component_gen.go` | 生成 | `BehaviorComponent`：`OnInitFinish` 用实体的宿主与业务的 `timeDomain()` 构造 `Behavior`（与 `--ai` 的 Controller，作 Observer），再调业务 `onBehaviorReady`；`OnDestroy` 先 `AI().Close`、再 `Behavior.OnDestroy`（在途动作与任务以 `actionflow.ErrOwnerDestroyed` 结束，动作指标减回）；`Behavior()` / `AI()` |
 | `game/entities/<entity>/timedomain_component_gen.go` | 生成 | `TimeDomainComponent`：加载时 `timedomain.New(DAO 适配, timeDomainConfig())`；`Domain()` |
@@ -929,7 +929,7 @@ roost add attribute Combat     # 开启 feature（project sync 写 doc.go 与 ru
 roost generate                 # 改字段 / 公式之后
 ```
 
-`roost add attribute <Profile>` 写 `game/gameplay/attribute/<profile>.go`（业务文件，只建一次）：第一个 profile 带示例字段与 `_Power` 公式，包里已有 profile 时只留 `dirtyMask` 与 TODO，`index=` 取已有 profile 范围之后（生成的 `Attr<Field>` 常量按字段名命名，同包不同 profile 的字段不能同名）。同名 profile 再 add 拒绝。手改 `roost.yaml` 的 `features` 开启时先 `roost project sync`；没有 `runtime.go` 时 `roost generate` 报错指出这一步。
+`roost add attribute <Profile>` 写 `game/modules/gameplay/attribute/<profile>.go`（业务文件，只建一次）：第一个 profile 带示例字段与 `_Power` 公式，包里已有 profile 时只留 `dirtyMask` 与 TODO，`index=` 取已有 profile 范围之后（生成的 `Attr<Field>` 常量按字段名命名，同包不同 profile 的字段不能同名）。同名 profile 再 add 拒绝。手改 `roost.yaml` 的 `features` 开启时先 `roost project sync`；没有 `runtime.go` 时 `roost generate` 报错指出这一步。
 
 ```go
 //roost:attribute index=1 max=64
@@ -950,7 +950,7 @@ func (p *Combat) _Power(Attack int64, HP int64) int64 {
 
 ```bash
 # 单独运行生成器时，目录与 roost generate 读的一致：
-go run .../cmd/attribute@latest -dir ./game/gameplay/attribute
+go run .../cmd/attribute@latest -dir ./game/modules/gameplay/attribute
 ```
 
 生成属性 ID/mask、metadata、类型化 setter、dirty mask、派生属性 Update、clone 以及包级访问器
@@ -959,7 +959,7 @@ go run .../cmd/attribute@latest -dir ./game/gameplay/attribute
 属性统一以 `AttrValue`（int64）进出框架，所以字段只能是整数类型；`float32/float64`、`bool`、`string` 在生成期报错（float 会被静默截断），小数用缩放整数（如万分比）。`max` 不超过 64（dirty mask 位数），`index+max-1` 不超过 65535（AttrID）。
 
 **框架半在 `roost-core/gameplay/attribute`**：`AttrID`、`AttrValue`、`Meta`、`Profile` 接口、`Selector`、`Snapshot`、`Container`。
-启用 `attribute` feature 的工程会拿到 codegen 受控的 `game/gameplay/attribute/runtime.go`，把这些以别名再导出成
+启用 `attribute` feature 的工程会拿到 codegen 受控的 `game/modules/gameplay/attribute/runtime.go`，把这些以别名再导出成
 生成物使用的名字（`AttributeMeta`、`AttributeProfile`、`Snapshot`、`Container`、`Selector`），所以声明一个 profile 之后直接就能编译。访问器是**包级函数**而不是 `Snapshot` / `Container` 的方法：
 Go 不允许给外包类型定义方法，做成函数别名才成立。
 

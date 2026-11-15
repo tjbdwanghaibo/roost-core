@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"log/slog"
 
-	player "{{MODULE}}/game/entities/player"
-	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/matchmaking"
-	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/matchmaking"
+	"{{MODULE}}/protocol/pb"
 )
 
 // HandleJoinQueue enqueues the player with the match service — a typed call

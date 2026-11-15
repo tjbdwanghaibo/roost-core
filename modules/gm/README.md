@@ -32,7 +32,7 @@ GM 命令是给运维、客服用的可信操作（加币、发补偿邮件、�
 - 每条命令都必须带 `operator`（1～64 字节）与 `payload.note`（1～256 字节），不能是空白，必须是合法 UTF-8；否则答 `gm_invalid`，命令不执行。
 - 命令被拒绝时，应答的 `result.data.code` 是业务码；基础设施异常用框架的 internal 码。
 
-### 服务端入口（`game/gm/gm.go`）
+### 服务端入口（`game/modules/gm/gm.go`）
 
 - `Register(def Definition)`：登记一条命令。`Definition{Name, Description, Handler}`，`Handler` 的签名是 `func(context.Context, *app.Registry, admin.Command) (admin.Result, error)`。只在 `init` 里调；空名、nil、重名 panic。
 - `Replace(registry, def) error`：服务初始化时替换一条已登记命令的业务执行部分，审计与停止后的拒绝保持不变。
@@ -73,7 +73,7 @@ GM 命令是给运维、客服用的可信操作（加币、发补偿邮件、�
 
 `gm_invalid`（命令参数或审计信息不合法）、`gm_unavailable`（admin 命令表不可用、模块已停止、或命令依赖的能力不在）。
 
-**日志**：执行前一条 `gm: executing`（命令、`trace_id`、操作者、备注），执行后一条 `gm: completed`（命令、`trace_id`、操作者、结果码 `code`：成功是 0，被拒是业务码，基础设施异常是 internal），两条按 `trace_id` 对齐；必填检查不过或模块已停止时命令没有开始执行，这两条都不记（框架 admin 层的开始 / 结束日志仍在）。具体玩家变更由各模块的 GM 联动记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/gm/gm.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：执行前一条 `gm: executing`（命令、`trace_id`、操作者、备注），执行后一条 `gm: completed`（命令、`trace_id`、操作者、结果码 `code`：成功是 0，被拒是业务码，基础设施异常是 internal），两条按 `trace_id` 对齐；必填检查不过或模块已停止时命令没有开始执行，这两条都不记（框架 admin 层的开始 / 结束日志仍在）。具体玩家变更由各模块的 GM 联动记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/gm/gm.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -90,7 +90,7 @@ GM 命令是给运维、客服用的可信操作（加币、发补偿邮件、�
 ## 复用方式
 
 - **需求正好是它：** `roost module add gm`。单装时没有任何玩法命令；同时装着 wallet、bag、profile、mailbox、rehome、notice 中的哪个，就多出上表里对应的命令，两种安装顺序都可以。然后按上面的 YAML 打开 ops 的 admin。
-- **给自己的功能加一条命令：** 在工程的 `game/gm/` 下新写一个文件：
+- **给自己的功能加一条命令：** 在工程的 `game/modules/gm/` 下新写一个文件：
 
   ```go
   func init() {

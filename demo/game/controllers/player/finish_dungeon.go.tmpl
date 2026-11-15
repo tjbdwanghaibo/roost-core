@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/game/dungeon"
-	gameleaderboard "{{MODULE}}/game/leaderboard"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	gameleaderboard "{{MODULE}}/game/modules/leaderboard"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
@@ -111,7 +111,7 @@ func (controller *Controller) HandleFinishDungeon(context *playeraccess.Context,
 		response.ExpGranted, response.LevelsGained = result.ExpGranted, result.LevelsGained
 	}
 	// The leaderboard point, through the leaderboard module's submit
-	// (game/leaderboard; which board and season is the demo's
+	// (game/modules/leaderboard; which board and season is the demo's
 	// leaderboard_board.go). It is OUTSIDE the transaction — the board lives
 	// in another service — so the two are not atomic: a crash here leaves a
 	// paid clear that was never counted. That direction is the recoverable

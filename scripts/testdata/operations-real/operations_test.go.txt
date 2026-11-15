@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"OPERATIONS_MODULE/game/purchase"
+	"OPERATIONS_MODULE/game/modules/purchase"
 	"OPERATIONS_MODULE/protocol/msgid"
 	"OPERATIONS_MODULE/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"

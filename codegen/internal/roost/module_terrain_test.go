@@ -20,13 +20,13 @@ func TestModuleTerrainInstallAndVerify(t *testing.T) {
 			t.Fatalf("missing dependency %s", name)
 		}
 	}
-	for _, path := range []string{"game/terrain/service/runtime.go", "game/entities/terrain_chunk/terrain_chunk_gen_wire.go", "game/entities/terrain_building/terrain_building_gen_wire.go", "game/entities/terrain_chunk/lifecycle_gen.go", "game/handler/syncsender/terrain_nest_gen.go", "protocol/pb/protocol.pb.go", "internal/service/game/modules_gen.go"} {
+	for _, path := range []string{"game/modules/terrain/service/runtime.go", "game/entities/terrain_chunk/terrain_chunk_gen_wire.go", "game/entities/terrain_building/terrain_building_gen_wire.go", "game/entities/terrain_chunk/lifecycle_gen.go", "game/handler/syncsender/terrain_nest_gen.go", "protocol/pb/protocol.pb.go", "internal/service/game/modules_gen.go"} {
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			t.Fatalf("missing generated integration %s: %v", path, err)
 		}
 	}
 	source, err := os.ReadFile(filepath.Join(root, "game/controllers/terrain/controller.go"))
-	if err != nil || !strings.Contains(string(source), "example.com/studio/terrainlab/game/terrain") {
+	if err != nil || !strings.Contains(string(source), "example.com/studio/terrainlab/game/modules/terrain") {
 		t.Fatalf("custom module not rendered: %v", err)
 	}
 	report, err := VerifyModules(context.Background(), root, []string{"terrain"}, nil)

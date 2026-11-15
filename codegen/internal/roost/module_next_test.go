@@ -12,7 +12,7 @@ import (
 func TestModuleNextHintsAreRenderedIntoThePlanAndPrinted(t *testing.T) {
 	catalog, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML+
 		"next:\n  - \"enable the listener: roost config enable player-tcp\"\n  - \"  edit configs/service/config.{{GAME_SERVICE}}.yaml of {{PROJECT}} ({{MODULE}}, package {{GAME_SERVICE_PKG}})  \"\n",
-		map[string]string{"game/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"}))
+		map[string]string{"game/modules/x/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestModuleNextHintsAreRenderedIntoThePlanAndPrinted(t *testing.T) {
 	plan := ModulePlan{
 		Service: "arena", Prerequisites: []string{}, Glue: []ModuleGlueItem{},
 		Modules: []ModulePlanItem{
-			{Name: "demo", Status: moduleStatusInstall, Files: []string{"game/x.go"}, Next: hints},
+			{Name: "demo", Status: moduleStatusInstall, Files: []string{"game/modules/x/x.go"}, Next: hints},
 			// 已装的模块即使带着提示也不打印：提示只跟着“这一次安装”走。
 			{Name: "old", Status: moduleStatusInstalled, Next: []string{"must not be printed"}},
 		},
@@ -54,7 +54,7 @@ func TestModuleNextHintsAreRenderedIntoThePlanAndPrinted(t *testing.T) {
 		if strings.Contains(text, "must not be printed") {
 			t.Fatalf("applied=%v: an installed module's hints were printed:\n%s", applied, text)
 		}
-		if strings.Index(text, "  file:      game/x.go") > strings.Index(text, "  todo:      ") {
+		if strings.Index(text, "  file:      game/modules/x/x.go") > strings.Index(text, "  todo:      ") {
 			t.Fatalf("applied=%v: the hints must come after the module's files:\n%s", applied, text)
 		}
 	}

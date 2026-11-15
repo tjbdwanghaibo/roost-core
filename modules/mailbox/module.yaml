@@ -7,7 +7,7 @@ needs:
   features: [protocol, entity, dao, errcode]
   uses: [mail]
 runtime:
-  package: game/mailbox
+  package: game/modules/mailbox
   start: Start
 entity: Player
 state:
@@ -20,7 +20,7 @@ component: Mailbox
 protocols: [MailboxList, MailboxClaim]
 errcodes: [mailbox_invalid, mailbox_attachment]
 verify:
-  packages: [./game/handler, ./game/mailbox, ./game/controllers/mailbox]
+  packages: [./game/handler, ./game/modules/mailbox, ./game/controllers/mailbox]
   run: ^TestMailbox
   pass: 33
 with:
@@ -33,18 +33,18 @@ with:
   bag:
     summary: 道具附件：登记 item 这个附件种类，领取时道具进背包（BagComp().Add），与领取账本同一笔事务
     verify:
-      packages: [./game/mailbox, ./game/handler, ./game/controllers/mailbox]
+      packages: [./game/modules/mailbox, ./game/handler, ./game/controllers/mailbox]
       run: ^TestWithMailboxBag
       pass: 9
   gm:
     summary: 经 GM 审计入口调用本模块正式事务或服务入口
     verify:
-      packages: [./game/gm]
+      packages: [./game/modules/gm]
       run: ^TestWithMailboxGM
       pass: 4
   profile:
     summary: 升级与奖励快照同一 WAL，消费者以 EffectID 发一封邮件；默认不发奖
     verify:
-      packages: [./game/handler, ./game/mailbox]
+      packages: [./game/handler, ./game/modules/mailbox]
       run: ^TestWithMailboxProfile
       pass: 10

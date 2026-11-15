@@ -4,7 +4,7 @@ import (
 	"{{MODULE}}/game/view"
 	"fmt"
 
-	gamerehome "{{MODULE}}/game/rehome"
+	gamerehome "{{MODULE}}/game/modules/rehome"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -18,7 +18,7 @@ type Owner = view.PlayerEntity
 // 都记在 PlayerDao.Rehome 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
 //
 // 它只管业务事实（冷却、到达只做一次），不决定这名玩家归哪个服、本进程能不能写他——那是 account 与
-// game/rehome 的 Residency 的事。规则（可去的服、冷却多久）在 game/rehome/rehome_rules.go。
+// game/modules/rehome 的 Residency 的事。规则（可去的服、冷却多久）在 game/modules/rehome/rehome_rules.go。
 type Component struct {
 	entity.ComponentBase
 	owner Owner

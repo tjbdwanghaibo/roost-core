@@ -1,8 +1,8 @@
 package handler
 
 import (
-	gamecdkey "{{MODULE}}/game/cdkey"
 	player "{{MODULE}}/game/entities/player"
+	gamecdkey "{{MODULE}}/game/modules/cdkey"
 )
 
 // 两个 handler 只操作玩家持久事实，不在 Nest 快/长 worker 中发 RPC。

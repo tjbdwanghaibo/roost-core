@@ -11,7 +11,7 @@ state:
 component: Actor
 protocols: [ActorMove, ActorStop]
 errcodes: [actor_not_placed, actor_rooted, actor_path_too_long]
-runtime: {package: game/actor, start: Start}
+runtime: {package: game/modules/actor, start: Start}
 verify:
   packages: [./game/handler]
   run: ^TestActor

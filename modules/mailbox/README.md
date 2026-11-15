@@ -13,11 +13,11 @@
 
 ### 服务端入口
 
-- **发件** `mailbox.SendTo(ctx, mailer, Letter)`（`game/mailbox/mailbox_send.go`）：给一名玩家发一封邮件，返回 mail 服务产生的信封。`Letter{To, Subject, Body, Attachment, ExpiresInSeconds, RequestID}`；`RequestID` 是幂等键，必填；`ExpiresInSeconds` 为 0 用 `DefaultExpiresInSeconds`（7 天）。`mailer` 是 mail 服务的客户端（`app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)`）。
-- **附件**（`game/mailbox/mailbox.go`）：`Attachment{Type, ID, Amount}`，线上格式是 JSON，例如 `{"type":"coins","amount":100}`。`Coins(amount)` 构造金币附件；`Encode` / `Decode` / `Validate` 是发件、列表、领取共用的同一个判断。
+- **发件** `mailbox.SendTo(ctx, mailer, Letter)`（`game/modules/mailbox/mailbox_send.go`）：给一名玩家发一封邮件，返回 mail 服务产生的信封。`Letter{To, Subject, Body, Attachment, ExpiresInSeconds, RequestID}`；`RequestID` 是幂等键，必填；`ExpiresInSeconds` 为 0 用 `DefaultExpiresInSeconds`（7 天）。`mailer` 是 mail 服务的客户端（`app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)`）。
+- **附件**（`game/modules/mailbox/mailbox.go`）：`Attachment{Type, ID, Amount}`，线上格式是 JSON，例如 `{"type":"coins","amount":100}`。`Coins(amount)` 构造金币附件；`Encode` / `Decode` / `Validate` 是发件、列表、领取共用的同一个判断。
 - **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo durability=strict`，不对客户端开放）调组件 `MailboxComp().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（`game/components/mailbox/mailbox.go`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
 - **端点** `HandleMailboxList` / `HandleMailboxClaim` 在 `game/controllers/mailbox`。
-- **运行时** `mailbox.Start(registry)`（`game/mailbox/mailbox_runtime.go`，清单 `runtime.start`）：启动联动登记的消费者；只装 mailbox 时没有消费者。
+- **运行时** `mailbox.Start(registry)`（`game/modules/mailbox/mailbox_runtime.go`，清单 `runtime.start`）：启动联动登记的消费者；只装 mailbox 时没有消费者。
 
 ### 领取的三步（`game/controllers/mailbox/mailbox_claim.go`）
 
@@ -31,7 +31,7 @@
 
 ### 登记点
 
-- `mailbox.RegisterType(kind, Validator)`（`game/mailbox/mailbox.go`）：登记一种附件的名字与校验。校验必须是纯函数，不能读配置表。
+- `mailbox.RegisterType(kind, Validator)`（`game/modules/mailbox/mailbox.go`）：登记一种附件的名字与校验。校验必须是纯函数，不能读配置表。
 - `mailbox.RegisterMailboxGrant(kind, MailboxGrant{Grant, Held})`（`game/components/mailbox/grant.go`）：登记这种附件怎么发到玩家身上。`Grant` 在领取的那笔事务、Player 锁内执行，只能经同一个 Player 的 DAO 或组件改状态，不能做事务外的事；`Held` 只读，返回当前持有量。
 - 两处都只在 `init` 里登记，空名、nil、重名 panic；给没有登记过校验的种类登记发放方式也 panic。只登记了校验的种类解得出来、列表里看得见，但不可领。
 
@@ -50,7 +50,7 @@
 
 邮件不存在、已过期、已领取、正被占用由 mail 服务答它自己的码；余额溢出、背包放不下原样透出 wallet、bag 的码。
 
-**日志**：附件领取与 SendTo 发件确认；profile 联动记录升级区间、邮件号和 effect_id。发件只记收件人和确认邮件号，不把重放请求里的附件当成首次发件事实，也不记录可能承载兑换凭据的 RequestID。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/mailbox/mailbox_claim.go`, `game/mailbox/mailbox_send.go`, `game/mailbox/mailbox_profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：附件领取与 SendTo 发件确认；profile 联动记录升级区间、邮件号和 effect_id。发件只记收件人和确认邮件号，不把重放请求里的附件当成首次发件事实，也不记录可能承载兑换凭据的 RequestID。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/mailbox/mailbox_claim.go`, `game/modules/mailbox/mailbox_send.go`, `game/modules/mailbox/mailbox_profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -84,7 +84,7 @@
   ```
 
   `errors.Is(err, mailbox.ErrLetterInvalid)` 表示这封信本身发不出去，不要重试；mail 服务的带码拒绝（邮箱已满、标题过长）重试也没用；其余错误用同一个 `RequestID` 重试是安全的。
-- **加一种附件**（例如体力、英雄碎片）：在 `game/mailbox` 下新文件里 `RegisterType("stamina", validate)` 并给一个构造函数；在 `game/entities/player` 下新文件里 `RegisterMailboxGrant("stamina", MailboxGrant{Grant: …, Held: …})`。照 `with/bag` 的两个文件写。附件只有（种类，号，数量）三个字段，不要往 `Attachment` 里加字段。
+- **加一种附件**（例如体力、英雄碎片）：在 `game/modules/mailbox` 下新文件里 `RegisterType("stamina", validate)` 并给一个构造函数；在 `game/entities/player` 下新文件里 `RegisterMailboxGrant("stamina", MailboxGrant{Grant: …, Held: …})`。照 `with/bag` 的两个文件写。附件只有（种类，号，数量）三个字段，不要往 `Attachment` 里加字段。
 - **手拼附件字节的发件方**（不经 `Encode`）要注意：解码不认识的字段会被拒绝；Go 的 JSON 解码对键名大小写不敏感。
 - **不要改的：** `MailboxComponent.Claim` 里判断的顺序（请求合法 → 附件发得了 → 已在账本 → 已过期 → 发放并记账），以及 `ClaimWindowClosed` 与 `LedgerMayForget` 成对的定义——去掉其中一步会放出重复发放。调小 `LedgerPruneGraceSeconds` 到小于进程间时钟差同样会。
 - **只适合借鉴的情形：** 邮件要存在游戏服自己的库里、要一封多附件、要玩家之间互发时，不适合直接用。值得借鉴的是“跨进程三步领取，中间那一步在游戏服的事务里记账本，账本的遗忘以邮件自己的过期时刻为界”。
@@ -105,7 +105,7 @@
 
 ## 验证范围
 
-`roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/mailbox` 10 条、`game/controllers/mailbox` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
+`roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/modules/mailbox` 10 条、`game/controllers/mailbox` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
 
 场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。Nest 调用因等结果超时返回错误而事务其实已提交的那条路径有端点场景（`TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce`：这一次答错误码并归还预留，重试在账本上认出这封邮件、不发第二笔、补上确认）。真实依赖另有一档（不在 `roost module verify` 里）：`game/controllers/mailbox/mailbox_real_integration_test.go`（显式 `-tags integration`，`ROOST_MAILBOX_IT_NATS_URL` / `ROOST_MAILBOX_IT_REDIS_ADDR` 必填），端点经 `wiring/mail.ClientMod` 的 BusClient 在真实 NATS 上调 `wiring/mail.Mod`（Redis 存储）挂出的 mail 服务，core 与 jetstream 两种 RPC 传输各一遍：正常领取；预留的答复超时（服务方已预留）后重试，租约内答“领取在途”、租约到期后领到；确认的答复超时（服务方已确认）照常答成功、再领答已领取；mail 服务停机时领取失败、按同一个 Redis 键前缀重启后领到；jetstream 下服务实例执行预留后连接断开，broker 把请求重投给另一个实例。每一步核对附件恰好到账一次。由 `scripts/test-demo-generated.sh` 在生成的 game-demo 里运行。Nest 仍是替身提交器，Redis Cluster、跨机与容量没有跑。
 
@@ -115,7 +115,7 @@
 
 一次经验发放从 `from` 升到 `to`，**只调用规则一次、生成一封邮件**，奖励覆盖 `from+1…to`。例如每升一级送 10 币，返回 `mailbox.Coins(int64(to-from)*10)`；装了 bag 也可以返回 `mailbox.Item(id, count)`。不要逐级发邮件，不要在规则里做 I/O。非法附件会把错误返回给 Nest，升级、属性成长与奖励 effect 一起回滚。
 
-`ProfileReward`（`game/mailbox/mailbox_profile.go`）在升级事务中冻结玩家号、起止等级与附件，经 `nest.Emit` 与 DAO 的变化进同一条 WAL。消费者不再查奖励表，所以热更只影响之后的升级。topic 是 `mailbox.profile_reward`（`TopicProfileReward`），消费者的 durable 名是 `<业务服务>-profile-reward-mail`；升级邮件保留 7 天。
+`ProfileReward`（`game/modules/mailbox/mailbox_profile.go`）在升级事务中冻结玩家号、起止等级与附件，经 `nest.Emit` 与 DAO 的变化进同一条 WAL。消费者不再查奖励表，所以热更只影响之后的升级。topic 是 `mailbox.profile_reward`（`TopicProfileReward`），消费者的 durable 名是 `<业务服务>-profile-reward-mail`；升级邮件保留 7 天。
 
 消费走框架的 `SubscribeEffects`，邮件用 `RequestID = EffectID` 去重：邮件已发而消费记录或 ACK 没完成时，重试返回原信封，不会用新奖励覆盖第一次的邮件。坏载荷或永久非法的附件标记为毒消息并告警，传输错误保留重试。订阅登记为 App 的输入，App 先排空它、再关 Nest 与存储。
 

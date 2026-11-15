@@ -310,7 +310,7 @@ go test -race ./gameplay/skill ./skillcompose -count=1
 go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./gameplay/skill
 
 # 扩大到 gameplay 子树，并检查补丁空白错误。
-go test ./game/gameplay/... -count=1
+go test ./game/modules/gameplay/... -count=1
 git diff --check
 ```
 

@@ -32,11 +32,11 @@
   - game 侧 `Controller`（`game/controllers/alliance/controller.go`，经 `FromRegistry` 取得）：除十三个 `Handle…` 端点外，公开方法 `RefreshMembership(ctx, playerID) error`（`refresh.go`）在进入或重连后对账玩家的展示副本与通知地址。
   - `Player` 组件（`game/components/alliance/alliance.go`）：`AllianceComp().AllianceID()`、`SetAlliance(id)`，窄接口 `IAllianceEntity`。
   - game 侧 Nest handler（`game/handler/`）：`handlerPlayerAlliance`（读展示副本）、`handlerShowAlliance`（改展示副本，`replaces` 非零时只替换指定的旧联盟）、`handlerStartAllianceOp`（在 `Player` 事务里启动 Saga）、`handlerAllianceDebit` / `handlerAllianceCredit`（Saga 的背包扣除与放入步骤）。
-  - `game/alliance` 包：`Answer(err)`（把 RPC 错误映射成客户端码）、`Binding(ctx, registry, playerID, sid)`（查玩家当前归属的 game 实例）、`BusinessKey` / `RequestID`（幂等键格式）、`State` 及 `Encode` / `Decode`（Saga 载荷）、常量 `Deadline`（Saga 期限 10 分钟）。
-  - `game/alliance/runtime` 包：运行期入口 `Start(registry)`（启动 Saga 步骤消费者与成员通知处理），`AdmitPlayerStep`（Saga 原生步骤进 Nest 之前的归属准入，可供自定义消费者复用）。
+  - `game/modules/alliance` 包：`Answer(err)`（把 RPC 错误映射成客户端码）、`Binding(ctx, registry, playerID, sid)`（查玩家当前归属的 game 实例）、`BusinessKey` / `RequestID`（幂等键格式）、`State` 及 `Encode` / `Decode`（Saga 载荷）、常量 `Deadline`（Saga 期限 10 分钟）。
+  - `game/modules/alliance/runtime` 包：运行期入口 `Start(registry)`（启动 Saga 步骤消费者与成员通知处理），`AdmitPlayerStep`（Saga 原生步骤进 Nest 之前的归属准入，可供自定义消费者复用）。
   - 运维命令（联盟服务进程的 ops `/admin`，`internal/service/alliance/admin.go`）：`alliance.info`、`alliance.guard`、`alliance.transfer`（把本实例拥有的联盟与守卫迁给另一个实例）、`alliance.stop_founding`（本实例不再接新建盟请求，缩容第一步）。
 - **登记点 / 钩子**
-  - `PlayerBindingCapability` 与接口 `PlayerBinding`（`game/alliance/binding.go`）：工程有自己的玩家驻留表时，实现 `Binding(ctx, playerID, sid) (sid, moving, err)` 并在联盟消费者启动之前发布这个能力，替换缺省的静态归属判断。
+  - `PlayerBindingCapability` 与接口 `PlayerBinding`（`game/modules/alliance/binding.go`）：工程有自己的玩家驻留表时，实现 `Binding(ctx, playerID, sid) (sid, moving, err)` 并在联盟消费者启动之前发布这个能力，替换缺省的静态归属判断。
   - 没有“入盟后 / 退盟后”的业务回调登记点。
 - **状态**
   - `PlayerDao.Alliance`（`AllianceState{ID}`，`db/def/player_alliance.go`，`persist,sync`）：玩家所在联盟号的展示副本，下发给本人。它不是权限依据。
@@ -46,8 +46,8 @@
   - game 侧只读镜像 `AllianceMirror`（`game/entities/alliance/mirror.go`）：名称、盟主、是否开放、资金、成员、申请人、交战列表。
 - **配置**
   - 联盟服务的配置段 `alliance.*`（`internal/rpc/alliance/settings.go` 的 `Settings`）：`max_members`（缺省 100，硬上限 500）、`reservation_ttl`（缺省 30s）、`receipt_retention`（缺省 168h）、`rejoin_cooldown`（缺省 0，关闭）、`reward_item_id`（缺省 1002）、`reward_count`（缺省 5）、`reward_period`（缺省 24h）。
-  - 留给工程改的业务常量：`game/alliance/rules.go` 的 `CoinItemID`（建盟与捐赠用的背包道具号，缺省 1003）；`game/controllers/alliance/controller.go` 里的 `foundCost`（建盟费，缺省 100）。
-  - 规则常量 `game/alliancerule/alliancerule.go`：`MaxNameBytes = 48`、`MaxWars = 8`、角色 `RoleMember` / `RoleLeader`。
+  - 留给工程改的业务常量：`game/modules/alliance/rules.go` 的 `CoinItemID`（建盟与捐赠用的背包道具号，缺省 1003）；`game/controllers/alliance/controller.go` 里的 `foundCost`（建盟费，缺省 100）。
+  - 规则常量 `game/modules/alliancerule/alliancerule.go`：`MaxNameBytes = 48`、`MaxWars = 8`、角色 `RoleMember` / `RoleLeader`。
 - **错误码**
   - 业务拒绝（`internal/errors/alliance.go`，同一个 `requestID` 重发得到相同的拒绝）：`alliance_name`、`alliance_missing`、`alliance_full`、`alliance_denied`、`alliance_membership`、`alliance_application`、`alliance_leader`、`alliance_amount`、`alliance_cooldown`、`alliance_war`、`alliance_expired`、`alliance_reward`。
   - 给客户端的四个状态码（各自一个文件）：`alliance_busy`（没有执行，原样重发）、`alliance_moved`（联盟或玩家正在迁移，原样重发）、`alliance_pending`（结果未知，原样重发会从回执得到答案）、`alliance_view_missing`（联盟不存在，或玩家不在任何联盟）。
@@ -82,12 +82,12 @@
 
 - **需求正好是它**：`roost module add alliance`，连带安装 `bag`，新建 `alliance` 服务，写入三个 Saga 定义。
 - **需求比它多一点**
-  - 改建盟费、货币道具：改 `controller.go` 的 `foundCost` 与 `game/alliance/rules.go` 的 `CoinItemID`。
+  - 改建盟费、货币道具：改 `controller.go` 的 `foundCost` 与 `game/modules/alliance/rules.go` 的 `CoinItemID`。
   - 改成员上限、奖励、冷却：改联盟服务配置的 `alliance.*` 键，不改代码。
   - 再加一个只改联盟的客户端入口（例如补上结束战争之后的宣战）：新增协议与端点，照 `alliance_manage.go` 的 `manageAlliance` 写——用 `alliance.RequestID` 生成请求号、`controller.boundSID` 核对归属、调 `controller.alliances` 上对应的 RPC 方法、用 `allianceRefusal` / `allianceReply` 组应答；权限判断留在联盟服务的 handler 里，端点不读镜像判断角色。
   - 改“谁能看申请人列表”：改 `HandleAllianceRoster` 里那一处筛选（缺省只给镜像里的盟主）。
   - 改“盟主什么时候能退”：改 `game/components/allianceroster/allianceroster.go` 的 `CheckRemoval` 与 `Remove`（缺省：还有别的成员时拒绝；只剩自己时退出即解散）。
-  - 改名字规则：改 `game/alliancerule/alliancerule.go` 的 `ValidateName`（端点与联盟服务用同一个函数）。
+  - 改名字规则：改 `game/modules/alliancerule/alliancerule.go` 的 `ValidateName`（端点与联盟服务用同一个函数）。
   - 自有玩家驻留表：实现 `PlayerBinding` 并发布 `PlayerBindingCapability`。
   - 不建议改：`internal/rpc/alliance/` 下的守卫预约与对账（`guard.go`、`membership.go`）、请求回执（`alliancerule.Execute`）、所有权迁移（`transfer.go`）。
 - **别的模块 / 业务代码要用它**
@@ -100,13 +100,13 @@
 ## 联动
 
 - `alliance` + `enter`（`with/enter/game/controllers/alliance/enter.go`）：经 `gamelogin.OnEntered("alliance", …)` 在每次进入或重连后调 `RefreshMembership`；失败只记日志，留待下次进入。
-- `alliance` + `rehome`（`with/rehome/game/alliance/rehome.go`）：把归属查询换成 `rehome.Binding`，Saga 的 `Player` 步骤进 Nest 之前先核对玩家当前在哪个 game 实例——换服中则等待，已换服则改投，结果未知不放行。
+- `alliance` + `rehome`（`with/rehome/game/modules/alliance/rehome.go`）：把归属查询换成 `rehome.Binding`，Saga 的 `Player` 步骤进 Nest 之前先核对玩家当前在哪个 game 实例——换服中则等待，已换服则改投，结果未知不放行。
 - `activity_alliance` 以 `requires` 依赖它，在 `Alliance` 实体上追加活动状态与组件。
 - 别的模块没有 `with/alliance`。
 
 ## 验证范围
 
-- `roost module verify alliance`：55 个场景（`./internal/rpc/alliance`、`./internal/service/alliance`、`./game/handler`、`./game/alliance/runtime`、`./game/controllers/alliance`、`./db`，`^TestAlliance`）；与 `enter`、`rehome` 的联动各 2 个场景。
+- `roost module verify alliance`：55 个场景（`./internal/rpc/alliance`、`./internal/service/alliance`、`./game/handler`、`./game/modules/alliance/runtime`、`./game/controllers/alliance`、`./db`，`^TestAlliance`）；与 `enter`、`rehome` 的联动各 2 个场景。
 - 场景是离线的。真实的部分：每个实例的 Nest 引擎、生成的 Sender 与分发、handler 与实体规则、生成的路由 RPC 客户端与服务端处理（路由检查、一次改投）。替身的部分：进程内的测试总线、内存的 Remote 所有权表与提交器；Saga 场景里没有真实的协调器，用例按协调器的顺序逐步调用步骤函数，联盟服务一侧是桩。
 - 覆盖：一人一盟（单实例与跨实例）、守卫并发创建只有一个属主、预约期限由联盟裁决、建盟在另一实例重试不产生第二个联盟、同实例宣战一笔事务与跨实例最终双侧、路由检查先于 Nest、写错误映射成四种应答、所有权迁移、守卫的各种丢失后修复、通知地址的条件更新、回执重放、权限、成员上限、奖励每周期一次与撤销、原生步骤每次操作只生效一次、建盟被拒退费、发奖被拒撤销标记、归属准入、成员通知到达在线成员、进入对账的四种情况、展示副本落库；最后一名成员（盟主）退出即解散（同实例与守卫在另一实例两种、有成员时仍拒绝、解散后一律 `alliance_missing`、申请清空、号不再被建成联盟、原盟主可再建盟）；八个端点场景（建盟两条、加入、读联盟、申请只转交且不动展示副本、四个盟主操作只转交并原样带回服务的拒绝、名单里申请人只给盟主、退出成功才清展示副本）；`alliance.stop_founding` 只退出建盟的队列组、可重复执行、路由 RPC 仍到达属主。
 - `internal/service/alliance` 的 `TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances` 有两种跑法：设了 `ROOST_DATAENGINE_IT_NATS_URL` 时在真实 NATS 上跑（`scripts/test-demo-generated.sh` 的入口）；没设时同一套步骤跑在进程内的队列组替身上，不跳过——`roost module verify` 走的是后一种，验证的是模块自己的部分（命令退出的是哪个方法的队列组、重复执行、生成的客户端与 handler），队列组本身的行为这时是替身的，不是 NATS 的。

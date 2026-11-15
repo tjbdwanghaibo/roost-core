@@ -12,7 +12,7 @@ def replace_once(text, old, new):
         raise SystemExit(f"fault anchor drift: expected one occurrence of {old!r}")
     return text.replace(old, new)
 
-driver = generated / "game/rehome/rehome_driver.go"
+driver = generated / "game/modules/rehome/rehome_driver.go"
 text = driver.read_text()
 for anchor, stage in [
     # 锚点带前导换行：D22 之后 copying 在异地清理分支里还有一处更深缩进的同形语句，只认函数体第一层那一处。
@@ -26,7 +26,7 @@ for anchor, stage in [
 anchor = '\t\terr := d.documents.Drop(dropping, copied, sid)\n\t\tcancel()\n\t\tif err == nil {\n\t\t\treturn'
 text = replace_once(text, anchor, anchor.replace('\n\t\t\treturn', '\n\t\t\tif sid == d.self { rehomeDrillPoint("dropped", move) }\n\t\t\treturn'))
 driver.write_text(text)
-(generated / "game/rehome/rehome_drill_faults.go").write_text((repo / "scripts/testdata/demo-drill/rehome-faults.go.txt").read_text())
+(generated / "game/modules/rehome/rehome_drill_faults.go").write_text((repo / "scripts/testdata/demo-drill/rehome-faults.go.txt").read_text())
 
 # 暂停发生在真实 Mongo 投影完成、WAL Ack 之前；不伪造已落库或 checkpoint。
 handoff = repo / "framework/dataengine/engine/entity_handoff.go"

@@ -4,10 +4,10 @@ needs:
   mods: [ops]
   features: [errcode]
 runtime:
-  package: game/gm
+  package: game/modules/gm
   start: Start
 errcodes: [gm_invalid, gm_unavailable]
 verify:
-  packages: [./game/gm]
+  packages: [./game/modules/gm]
   run: ^TestGM
   pass: 9

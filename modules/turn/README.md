@@ -40,7 +40,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 
 ## 复用方式
 
-- **需求正好是它**：`roost module add turn`，连带装上 room。流程：服务端经 room 的 `game/room.Open` 开房 → 客户端 `RoomJoin` 拿到自己的 `Epoch` → 房主 `TurnStart` → 当前行动者 `TurnEnd` → 任何成员 `TurnView`。配方 `turn-pvp` 就是这样组合的。
+- **需求正好是它**：`roost module add turn`，连带装上 room。流程：服务端经 room 的 `game/modules/room.Open` 开房 → 客户端 `RoomJoin` 拿到自己的 `Epoch` → 房主 `TurnStart` → 当前行动者 `TurnEnd` → 任何成员 `TurnView`。配方 `turn-pvp` 就是这样组合的。
 - **需求多一点——接上游戏动作**：自己加一条协议与一个 Room 的 Nest handler，在同一笔事务里按这个顺序写：
 
   ```go

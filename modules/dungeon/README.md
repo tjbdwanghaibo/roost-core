@@ -25,7 +25,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 - 组件 `DungeonComp()`（Player 上，`game/components/dungeon/dungeon.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
 - 组件 `DungeonRunComp()`（Dungeon 实体上，`game/components/dungeonrun/dungeonrun.go`，`view.DungeonRun`）：`Open`、`Defeated`、`View`、`Reward`，结果是 `view.DungeonSnapshot`（`logic.Snapshot` 是它的别名）；两份 DAO 的存档校验在组件的 `OnInitFinish`。
 
-### 关卡规则（`game/dungeon/rules.go`，归工程）
+### 关卡规则（`game/modules/dungeon/rules.go`，归工程）
 
 `Program()` 用框架的 `gameplay/level`（事件、条件、动作、计时器）定义缺省关卡：`waves` 阶段累计击败两只 `minion` → 切到 `boss` 阶段 → `boss` 被击败才产生 `success`。并行的 `deadline` 阶段在开局 30 分钟后把结果定为 `failed`；没有周期任务，超时由下一次查看或下一条事件顺带处理。敌人种类只在这个文件里定义：触发器用 `enemyIs("名字")` 写“被击败的是谁”，写过的名字就是关卡认识的敌人，`KnownEnemy(name)` 从定义里读出来（事件名与字段名是常量 `EventEnemyDefeated`、`FieldEnemy`）。同文件的常量：`ClearExp`（100 经验）、`ClaimWindowSeconds`（4 小时）、`LedgerPruneGraceSeconds`（10 分钟）、`MaxClaims`（128）、`MaxSeasons`（8）。
 
@@ -40,7 +40,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 ### 配置
 
-没有配置表与配置键。规则写在 `game/dungeon/rules.go`。
+没有配置表与配置键。规则写在 `game/modules/dungeon/rules.go`。
 
 ### 错误码（`internal/errors/dungeon.go`）
 
@@ -71,8 +71,8 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 - **需求正好是它：** `roost module add dungeon`，连带装上 profile（profile 又依赖 enter）。想要通关数排行榜再 `roost module add leaderboard`。
 - **需求比它多一点：**
-  - 换关卡流程、时限、奖励数额、窗口与上限：改 `game/dungeon/rules.go`。改了 `Program()` 的定义要考虑已有存档。
-  - 加一种敌人：只改 `game/dungeon/rules.go`——在关卡定义里加一条用 `enemyIs("新名字")` 的触发器（它被击败时做什么），`Defeated` 就接受这个名字；`run.go` 不用动。改了定义同样要考虑已有存档。
+  - 换关卡流程、时限、奖励数额、窗口与上限：改 `game/modules/dungeon/rules.go`。改了 `Program()` 的定义要考虑已有存档。
+  - 加一种敌人：只改 `game/modules/dungeon/rules.go`——在关卡定义里加一条用 `enemyIs("新名字")` 的触发器（它被击败时做什么），`Defeated` 就接受这个名字；`run.go` 不用动。改了定义同样要考虑已有存档。
   - 首次通关要顺带推进任务、成就：登记 `dungeon.OnDungeonClaimed`，不要改 `game/components/dungeon/dungeon.go` 的判断顺序。
   - 奖励想发别的东西：在 `DungeonComponent.Claim` 里把 `ProfileComp().AddExp` 换成同一实体上别的组件的入口，保持“先检查、后写、账本同事务”。
 - **别的业务代码要开局 / 上报战斗结果：** `dungeon.FromRegistry(registry)` 取 `Controller`，调 `Open` 与 `Defeated`；每次都要检查错误。读某赛季通关数用 `DungeonCountsSender` 的 `Sync_DungeonCounts(ctx, playerEntityID, season)`。

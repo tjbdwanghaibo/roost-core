@@ -9,8 +9,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
-	logic "{{MODULE}}/game/dungeon"
-	leaderboard "{{MODULE}}/game/leaderboard"
+	logic "{{MODULE}}/game/modules/dungeon"
+	leaderboard "{{MODULE}}/game/modules/leaderboard"
 )
 
 // 替身只替换服务传输；正式leaderboard.SubmitSeason必须传入UpdateMax与持久总数，且不占Nest业务worker。

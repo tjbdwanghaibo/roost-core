@@ -48,13 +48,13 @@ func optionalNextHints(root string, m Manifest) []optionalHint {
 	if !contains(m.Features, "attribute") {
 		hints = append(hints, optionalHint{
 			Command: "add attribute to roost.yaml features, then make sync",
-			Why:     "attribute profiles: ids, masks, setters, derived formulas and snapshots generated from one declaration (game/gameplay/attribute/)",
+			Why:     "attribute profiles: ids, masks, setters, derived formulas and snapshots generated from one declaration (game/modules/gameplay/attribute/)",
 		})
 	}
-	if _, err := os.Stat(filepath.Join(root, "game", "skills")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "game", "modules", "skills")); os.IsNotExist(err) {
 		hints = append(hints, optionalHint{
 			Command: "roost add skill <Name>",
-			Why:     "a skill as a stable roost-core/skill JSON contract, compiled at startup and catalogued (game/skills/)",
+			Why:     "a skill as a stable roost-core/skill JSON contract, compiled at startup and catalogued (game/modules/skills/)",
 		})
 	}
 	if !contains(m.Features, "webroute") {

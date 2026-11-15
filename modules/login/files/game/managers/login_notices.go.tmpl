@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	gamelogin "{{MODULE}}/game/login"
+	gamelogin "{{MODULE}}/game/modules/login"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
@@ -13,14 +13,14 @@ import (
 // 这个文件是 login 模块的 manager（维护者 D22：不在模块 runtime: 里的后台循环做成 manager，由 manager Mod 统一启停）。
 // 安装 login 时，安装器在本目录 managers.go 的 Managers() 列表里加了一行 NewLoginNotices()。
 //
-// 它管的是“会话激活后的告知”（game/login 的 OnSessionActive，例如 enter 模块装着时推给客户端的 EnterStatus）的后台执行：
+// 它管的是“会话激活后的告知”（game/modules/login 的 OnSessionActive，例如 enter 模块装着时推给客户端的 EnterStatus）的后台执行：
 //
 //   - Start：建一个 gamelogin.Notifier，以 gamelogin.NoticesCapability 发布。认证器在会话激活时按能力名取它
 //     （gamelogin.AnnounceActive），告知在它的协程里执行，同时至多 gamelogin.MaxPendingNotices 条会话。
 //   - Stop：不再接新的会话，取消在途告知的 ctx，在停机期限之内等它们返回（ManagerMod 带着期限调 StopWithContext）。
 //     玩家 TCP 传输的 Mod 排在 manager Mod 之后启动、因而先停：停到这里时已经没有新的会话激活。
 //
-// 告知仍然只是告知（见 game/login/login_active.go）：停机时被取消的告知，客户端照常由 EnterGame / EnterCreate 的应答得到结论。
+// 告知仍然只是告知（见 game/modules/login/login_active.go）：停机时被取消的告知，客户端照常由 EnterGame / EnterCreate 的应答得到结论。
 
 // loginNoticesStopBudget 是没有带期限的 Stop()（不经 ManagerMod 的调用方）等在途告知返回的上限。
 const loginNoticesStopBudget = gamelogin.NoticeTimeout

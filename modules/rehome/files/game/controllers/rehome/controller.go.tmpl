@@ -7,7 +7,7 @@ import (
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	gamerehome "{{MODULE}}/game/rehome"
+	gamerehome "{{MODULE}}/game/modules/rehome"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -15,7 +15,7 @@ import (
 )
 
 // Controller 是换服的入口：协议端点 RehomeApply（玩家自己申请）与服务端入口 Move（GM、运维），
-// 两者走同一个驱动器（game/rehome 的 Driver）。换服的顺序、每一步失败的去向都在 Driver 的注释里。
+// 两者走同一个驱动器（game/modules/rehome 的 Driver）。换服的顺序、每一步失败的去向都在 Driver 的注释里。
 //
 // 它自己不保存状态：在途的换服记在 Residency 的迁出表里。
 type Controller struct {

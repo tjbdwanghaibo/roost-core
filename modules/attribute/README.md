@@ -14,7 +14,7 @@
   - `AttributeComp().LevelUp(levels int32) error`：基础层一次性成长 `levels` 级并重算。由档案升级钩子调用，一般不直接调。
   - `IAttributeEntity`：窄实体接口。
   - Nest handler `handlerAttributeGet`（`game/handler/attribute_get.go`）：协议背后的只读 handler，声明 `//roost:nest durability=memory`（不开事务、不取回滚快照、不写 WAL；在里面改持久字段会 panic）。
-- **属性定义**（`game/gameplay/attribute/combat.go`，归工程所有）
+- **属性定义**（`game/modules/gameplay/attribute/combat.go`，归工程所有）
   - `Combat` 结构带 `//roost:attribute` 标注，属性号、Setter 与公式更新代码由框架的 attribute 生成器产出。
   - `_Power` 是推导公式：`Power = Attack*2 + HP/10`。`Power` 不能直接写。
   - `ForLevel(level)` 是缺省基础值：`HP = 100 + level*10`，`Attack = 10 + level*2`。
@@ -26,7 +26,7 @@
   - `AttributeBase`：`persist,sync`，基础属性，落库并下发给本人。没有记录时按档案等级用 `ForLevel` 派生。
   - `AttributeGear`：`nopersist,nosync`，装备层，不落库也不下发，加载时重算。
   - `AttributeFinal`：`nopersist,sync`，最终属性，不落库，加载时重算并下发。
-- **配置**：没有配置表。成长数值与公式写在 `game/gameplay/attribute/combat.go`。
+- **配置**：没有配置表。成长数值与公式写在 `game/modules/gameplay/attribute/combat.go`。
 - **错误码**（`internal/errors/attribute.go`）
   - `attribute_overflow`：属性为负，或超过支持的范围（单项上限是 `math.MaxInt64/4`）。
 
@@ -50,7 +50,7 @@
 
 - **需求正好是它**：`roost module add attribute`，连带安装 `profile`。
 - **需求比它多一点**
-  - 改成长数值、缺省值或战力公式：改 `game/gameplay/attribute/combat.go`（`ForLevel`、`LevelUp`、`_Power`）。
+  - 改成长数值、缺省值或战力公式：改 `game/modules/gameplay/attribute/combat.go`（`ForLevel`、`LevelUp`、`_Power`）。
   - 加属性（防御、暴击等）：在 `Combat` 结构里加带 `attr` 标签的字段，`roost generate`；`game/components/attribute/attribute.go` 的 `refresh` 与 `game/components/attribute/gear.go` 的 `attributeGear` 里目前只合并 `HP` 与 `Attack`，新属性要在这两处补上合并与溢出检查，协议 `AttributeGet` 的应答也要加字段。
   - 加一个属性来源（坐骑、称号、公会科技）：在自己的包的 `init` 里调 `OnAttributeGear("<来源名>", 钩子)`，并在来源变化的事务里调 `AttributeComp().RefreshGear()`。不要直接写 `AttributeGear` 或 `AttributeFinal` 字段。
 - **别的模块 / 业务代码要用它**
@@ -68,13 +68,13 @@
 ## 联动
 
 - `attribute` + `equipment`（`with/equipment/game/components/attribute/attribute_equipment.go`）：登记 `OnAttributeGear("equipment", …)`，按已穿戴装备与等级算装备层；并登记 `OnEquipmentChanged("attribute", …)`，穿卸装备的同一笔事务里调 `RefreshGear()`。装备规则已被移除的穿戴物不再提供属性。
-- `attribute` + `enter`（`with/enter/game/login/attribute_enter.go`）：登记 `OnFirstEnter("profile.attribute", …)`，首次建档时调 `Refresh()`，按初始等级建立基础层与最终层，与建档一起提交或回滚。
+- `attribute` + `enter`（`with/enter/game/modules/login/attribute_enter.go`）：登记 `OnFirstEnter("profile.attribute", …)`，首次建档时调 `Refresh()`，按初始等级建立基础层与最终层，与建档一起提交或回滚。
 - `scene` + `attribute`（在 `scene/with/attribute`）：把 `AttributeFinal` 登记为对附近玩家公开的字段，基础层与装备层仍只有本人（或无人）可见。
 - 以 `requires` 依赖它的模块：`combat`（开战时从 `Final()` 取最大生命与攻击）。
 
 ## 验证范围
 
-- `roost module verify attribute`：20 个场景（`./game/handler` 与 `./game/gameplay/attribute`，`^TestAttribute`）；与 `equipment` 的联动另有 8 个场景，与 `enter` 的联动另有 2 个场景（都在 `./game/handler`）。
+- `roost module verify attribute`：20 个场景（`./game/handler` 与 `./game/modules/gameplay/attribute`，`^TestAttribute`）；与 `equipment` 的联动另有 8 个场景，与 `enter` 的联动另有 2 个场景（都在 `./game/handler`）。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO、属性生成代码与 `profile` 组件；提交器是替身（`attributeCommitter`，可注入拒绝）。
 - 覆盖：新玩家只派生不落库、升级成长、一次升多级只成长一次、只加经验不升级时不写基础层、`Final` 与 `Container` 返回副本、`Refresh` 落库且重复调用稳定、提交被拒与钩子失败时等级和各层一起回滚、非法基础值拒绝、并发加经验串行成长、协议使用认证身份、只读 handler 的事务声明是 memory 快路径且读取不产生提交、基础层加成在升级后保留、重新加载后重建派生层且不写基础层；生成的属性定义拒绝直接写推导属性；以及把同一个组件挂在测试里的第二个实体（不是 Player，自己一份状态、自己给等级与装备层）上的 3 个场景：派生 / 刷新 / 成长、提交被拒与装备层来源失败时回滚及溢出拒绝、玩家与第二个实体互不影响。
 - 没有验证：真实数据库、经 TCP 的客户端链路与同步载荷到达客户端。

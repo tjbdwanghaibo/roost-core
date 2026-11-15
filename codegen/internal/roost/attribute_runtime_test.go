@@ -19,7 +19,7 @@ func TestAttributeRuntimeFileIsMarkedGenerated(t *testing.T) {
 	if !strings.HasPrefix(body, generatedHeader) {
 		t.Fatalf("the attribute runtime file does not start with the generated header:\n%s", body[:min(len(body), 120)])
 	}
-	if !canOverwriteGenerated("game/gameplay/attribute/runtime.go", []byte(body)) {
+	if !canOverwriteGenerated("game/modules/gameplay/attribute/runtime.go", []byte(body)) {
 		t.Error("doctor would refuse to overwrite the attribute runtime file")
 	}
 	if !strings.Contains(body, "package attribute") {
@@ -74,32 +74,32 @@ func TestAddAttributeEnablesFeatureWritesProfileAndGenerates(t *testing.T) {
 		t.Errorf("add attribute did not enable the attribute feature: %v", m.Features)
 	}
 	for _, rel := range []string{
-		"game/gameplay/attribute/runtime.go",
-		"game/gameplay/attribute/player_profile.go",
-		"game/gameplay/attribute/gen_player_profile_attribute.go",
+		"game/modules/gameplay/attribute/runtime.go",
+		"game/modules/gameplay/attribute/player_profile.go",
+		"game/modules/gameplay/attribute/gen_player_profile_attribute.go",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("add attribute did not write %s: %v\n%s", rel, err, out.String())
 		}
 	}
-	profile := readProjectFile(t, root, "game/gameplay/attribute/player_profile.go")
+	profile := readProjectFile(t, root, "game/modules/gameplay/attribute/player_profile.go")
 	for _, want := range []string{"//roost:attribute index=1 max=64", "type PlayerProfile struct", "dirtyMask uint64"} {
 		if !strings.Contains(profile, want) {
 			t.Errorf("player_profile.go lacks %q:\n%s", want, profile)
 		}
 	}
 	useLocalRoostCore(t, root)
-	build := exec.Command("go", "build", "./game/gameplay/attribute")
+	build := exec.Command("go", "build", "./game/modules/gameplay/attribute")
 	build.Dir = root
 	build.Env = append(os.Environ(), "GOWORK=off")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("generated attribute package does not build: %v\n%s", err, output)
 	}
-	before := readProjectFile(t, root, "game/gameplay/attribute/player_profile.go")
+	before := readProjectFile(t, root, "game/modules/gameplay/attribute/player_profile.go")
 	if err := Run([]string{"add", "attribute", "PlayerProfile", "--root", root}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("second add attribute PlayerProfile = %v; want already exists", err)
 	}
-	if after := readProjectFile(t, root, "game/gameplay/attribute/player_profile.go"); after != before {
+	if after := readProjectFile(t, root, "game/modules/gameplay/attribute/player_profile.go"); after != before {
 		t.Error("a refused add attribute changed the profile file")
 	}
 }
@@ -113,7 +113,7 @@ func TestAttributeHelpMatchesTheGenerator(t *testing.T) {
 			topic = candidate
 		}
 	}
-	if !strings.Contains(topic.Usage, "./game/gameplay/attribute") || strings.Contains(topic.Usage, "./game/attribute ") {
+	if !strings.Contains(topic.Usage, "./game/modules/gameplay/attribute") || strings.Contains(topic.Usage, "./game/attribute ") {
 		t.Errorf("help attribute names a directory roost generate does not read:\n%s", topic.Usage)
 	}
 	if !strings.Contains(topic.Usage, "roost add attribute") {
@@ -147,7 +147,7 @@ func TestGenerateAttributeWithoutRuntimeNamesProjectSync(t *testing.T) {
 	if err := os.WriteFile(manifestPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(root, "game", "gameplay", "attribute")
+	dir := filepath.Join(root, "game", "modules", "gameplay", "attribute")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

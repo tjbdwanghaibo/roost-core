@@ -13,7 +13,7 @@ component: Attribute
 protocols: [AttributeGet]
 errcodes: [attribute_overflow]
 verify:
-  packages: [./game/handler, ./game/gameplay/attribute]
+  packages: [./game/handler, ./game/modules/gameplay/attribute]
   run: ^TestAttribute
   pass: 20
 with:

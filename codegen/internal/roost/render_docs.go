@@ -94,8 +94,8 @@ go.mod/go.sum；全部成功后才提交，后置步骤失败不会留下半生�
 
 目录约定：game/ 放玩法与实体（game/entities/<实体> 是本体、生成文件与组件的薄接线；game/components/<功能> 是组件逻辑；
 game/view 只放接口：component_<功能>.go 是组件接口与 <功能>Holder，entity_<实体>.go 由 roost generate 生成，
-组件包、game/login 与联动只依赖 view，实体包依赖组件包并实现 view 的接口；
-game/login 是登录链（含进入钩子与首次发放 enter_first.go）；game/managers 是 manager 登记点）；internal/ 放框架接线（bootstrap、registry、access、service）；
+组件包、game/modules/login 与联动只依赖 view，实体包依赖组件包并实现 view 的接口；
+game/modules/login 是登录链（含进入钩子与首次发放 enter_first.go）；game/managers 是 manager 登记点）；internal/ 放框架接线（bootstrap、registry、access、service）；
 services/<托管服务>/ 放托管框架服务的手写代码（collaborators、登录渠道、HTTP 登录入口），只有用到的服务才有目录；
 每类定义放在自己的顶层 <kind>/def；configs/ 放配置。静态注册统一汇总在
 internal/registry/generated.go（含 nest_gen.go），由 //roost:register 标记驱动，不再有 game/bootstrap。
@@ -438,7 +438,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | remote_mirror | 只读进程读别的服务拥有的 Remote Entity（与 remote_entity 互斥） | redis、mongo、syncbus |
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
-| heartbeat | 实体心跳驱动（gameplay/heartbeat）：game/heartbeat.Driver 接到本服务的 Nest；roost add heartbeat / behavior 自动加上 | nest |
+| heartbeat | 实体心跳驱动（gameplay/heartbeat）：game/modules/heartbeat.Driver 接到本服务的 Nest；roost add heartbeat / behavior 自动加上 | nest |
 | saga | 跨服务 Saga 编排（协调器权威是 JetStream 分区事件日志） | dataengine、mongo、nats |
 | web | 业务 HTTP 路由（roost add webroute）的监听：Start 时 bind、服务 Init 里 kitweb.RegisterRoutes 登记、不做鉴权 | 无 |
 
@@ -558,7 +558,7 @@ modules 是 roost module add 写下的归属清单，键为模块名：
           - game/handler/wallet_spend.go
         with:                   # 与别的已装模块的联动文件（两个都装着时才写），键是另一个模块
           enter:
-            - game/chat/chat_enter.go
+            - game/modules/chat/chat_enter.go
 
 由安装器写入，不要手工增删：删掉一条记录不会删掉工程里的文件，安装器却会把这个模块当成没装过。模块没有
 卸载命令，分配过的号与存储键不回收；要去掉一个模块时按这份清单手工删文件和 DAO 字段。roost module list 看

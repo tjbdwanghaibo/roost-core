@@ -20,13 +20,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
-	"{{MODULE}}/game/activity"
 	"{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/modules/activity"
 
-	gamelogin "{{MODULE}}/game/login"
 	generated "{{MODULE}}/configs/generated"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamelogin "{{MODULE}}/game/modules/login"
 )
 
 // 进入钩子场景自带的替身：只认完整实体号的 getter 与总是成功的提交器。

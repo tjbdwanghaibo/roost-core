@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	gamerehome "{{MODULE}}/game/rehome"
+	gamerehome "{{MODULE}}/game/modules/rehome"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -14,7 +14,7 @@ import (
 )
 
 // rehome manager 的场景：换服的后台步骤在 manager 发布的 Background 里执行，停机时被取消、在期限内等完，
-// 停了之后不再接新的步骤。Driver 被取消时不按失败处理的场景在 game/rehome（TestRehomeBackgroundStop…）。
+// 停了之后不再接新的步骤。Driver 被取消时不按失败处理的场景在 game/modules/rehome（TestRehomeBackgroundStop…）。
 
 // 经 ManagerMod 起停（与生成的 bootstrap 相同）：Start 之后 Background 已发布；一个一直在重发的步骤（只在 ctx 结束时
 // 返回）在停机时被取消，StopWithContext 等它返回才算停完；之后交出的步骤不执行。

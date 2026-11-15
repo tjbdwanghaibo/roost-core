@@ -26,11 +26,11 @@ func TestModuleProfileMailScenariosAndMutations(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeat install changed project")
 	}
-	recipeMutationMustFail(t, root, "game/mailbox/mailbox_profile.go", "if reward == (Attachment{}) {", "if false && reward == (Attachment{}) {", "./game/handler", "TestWithMailboxProfileDefaultDoesNotReward", "not one this version can grant")
-	recipeMutationMustFail(t, root, "game/mailbox/mailbox_profile.go", "Level: to,", "Level: to+1,", "./game/handler", "TestWithMailboxProfileOneUpgradeOneEffect", "events=")
-	recipeMutationMustFail(t, root, "game/mailbox/mailbox_profile.go", "From: from,", "From: to-1,", "./game/handler", "TestWithMailboxProfileSeveralLevelsOneCombinedMail", "combined events=")
-	recipeMutationMustFail(t, root, "game/mailbox/mailbox_profile.go", "return Validate(event.Reward)", "return nil", "./game/handler", "TestWithMailboxProfileInvalidRewardRollsBackUpgrade", "invalid reward accepted")
-	recipeMutationMustFail(t, root, "game/mailbox/mailbox_profile.go", "RequestID: envelope.EffectID,", "RequestID: envelope.EffectID+fmt.Sprint(event.Reward.Amount),", "./game/mailbox", "TestWithMailboxProfileReplayKeepsFirstReward", "envelopes=")
-	recipeMutationMustFail(t, root, "game/mailbox/mailbox_profile.go", "RequestID: envelope.EffectID,", "RequestID: \"constant\",", "./game/mailbox", "TestWithMailboxProfileTransportFailureCanRetry", "requests=")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestWithMailboxProfile", "./game/handler", "./game/mailbox")
+	recipeMutationMustFail(t, root, "game/modules/mailbox/mailbox_profile.go", "if reward == (Attachment{}) {", "if false && reward == (Attachment{}) {", "./game/handler", "TestWithMailboxProfileDefaultDoesNotReward", "not one this version can grant")
+	recipeMutationMustFail(t, root, "game/modules/mailbox/mailbox_profile.go", "Level: to,", "Level: to+1,", "./game/handler", "TestWithMailboxProfileOneUpgradeOneEffect", "events=")
+	recipeMutationMustFail(t, root, "game/modules/mailbox/mailbox_profile.go", "From: from,", "From: to-1,", "./game/handler", "TestWithMailboxProfileSeveralLevelsOneCombinedMail", "combined events=")
+	recipeMutationMustFail(t, root, "game/modules/mailbox/mailbox_profile.go", "return Validate(event.Reward)", "return nil", "./game/handler", "TestWithMailboxProfileInvalidRewardRollsBackUpgrade", "invalid reward accepted")
+	recipeMutationMustFail(t, root, "game/modules/mailbox/mailbox_profile.go", "RequestID: envelope.EffectID,", "RequestID: envelope.EffectID+fmt.Sprint(event.Reward.Amount),", "./game/modules/mailbox", "TestWithMailboxProfileReplayKeepsFirstReward", "envelopes=")
+	recipeMutationMustFail(t, root, "game/modules/mailbox/mailbox_profile.go", "RequestID: envelope.EffectID,", "RequestID: \"constant\",", "./game/modules/mailbox", "TestWithMailboxProfileTransportFailureCanRetry", "requests=")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestWithMailboxProfile", "./game/handler", "./game/modules/mailbox")
 }

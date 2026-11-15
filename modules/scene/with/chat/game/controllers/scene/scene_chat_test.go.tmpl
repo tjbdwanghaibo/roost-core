@@ -9,13 +9,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 
-	"{{MODULE}}/game/handler"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"{{MODULE}}/protocol/pb"
-	apperrors "{{MODULE}}/internal/errors"
 	chatcontroller "{{MODULE}}/game/controllers/chat"
-	gamescene "{{MODULE}}/game/scene"
 	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	gamescene "{{MODULE}}/game/modules/scene"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 )
 
 type sceneChatTransport struct {

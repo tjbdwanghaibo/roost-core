@@ -16,7 +16,7 @@ type IAllianceMemberEntity interface{ entity.IThreadSafeEntity }
 // player who ever joined): an instance loads it on the first request routed
 // to it, and the instance that creates it first owns it (the claim is atomic,
 // plan §2.5). It enforces "one player, one alliance" across alliances
-// that may be on different service instances (game/alliancerule, plan §2.5)
+// that may be on different service instances (game/modules/alliancerule, plan §2.5)
 // and is not a second roster — the alliance's Members is the authority: the
 // guard is a cache of the rosters that may be stale-occupied (a finishing
 // call was lost) and is healed by the next request that finds it held

@@ -724,7 +724,7 @@ E4 = A 的本意是“自己的 exp、背包等经自身视图走同一条连接
 
 | 字段 | 存在哪 | 谁写 | 性质 |
 | --- | --- | --- | --- |
-| 属性 `hp`、`attack`（`game/gameplay/attribute/combat.go` 的 `Combat`）的 **Base 层** | PlayerDao `AttrBase`（persist,sync） | `AttributeComponent.LevelUp`（`ProfileComponent` 升级时调：`AddExp`、副本结算、邮件 / 购买发经验等经 `handlerAddExp` / `handlerClaimDungeon` 的升级路径）；装载时按等级重建 | **由等级推出**：等级、经验是养成数据 |
+| 属性 `hp`、`attack`（`game/modules/gameplay/attribute/combat.go` 的 `Combat`）的 **Base 层** | PlayerDao `AttrBase`（persist,sync） | `AttributeComponent.LevelUp`（`ProfileComponent` 升级时调：`AddExp`、副本结算、邮件 / 购买发经验等经 `handlerAddExp` / `handlerClaimDungeon` 的升级路径）；装载时按等级重建 | **由等级推出**：等级、经验是养成数据 |
 | 属性的 **Gear 层** | PlayerDao `AttrGear`（nopersist,nosync） | `AttributeComponent.RefreshGear`（`handlerEquipItem` 换装、配置重载） | **由装备推出**：装备在背包里，是养成数据 |
 | 属性的 **Final 层**、派生的 `power` | PlayerDao `AttrFinal`（nopersist,sync） | `derive`（Base + Gear 之后 `Update`） | 派生值 |
 | 分区场景的**当前 HP** | SceneActor DAO `HP`（Real，Cell 进程）；Base 的快照 `CellHP`（persist,sync）与 `CellSnap*` | Cell：伤害结算（`onDamage`）、回写；Base：接受回写；进场 / 重建时取快照或 `scene.partition.player_hp` | 已经只有 Cell 权威 + Base 快照（v2） |

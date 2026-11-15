@@ -18,7 +18,7 @@ func TestDemoActorConsumesOneBodyAndPreservesMovementTransactions(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := renderModuleFile(manifest, "game", ModuleSpec{Name: "actor"}, "files", "game/actor/body.go", nil)
+	want, err := renderModuleFile(manifest, "game", ModuleSpec{Name: "actor"}, "files", "game/modules/actor/body.go", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

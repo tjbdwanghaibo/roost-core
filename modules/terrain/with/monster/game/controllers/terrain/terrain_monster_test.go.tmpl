@@ -10,11 +10,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	"{{MODULE}}/game/actor"
 	monster "{{MODULE}}/game/entities/monster"
 	"{{MODULE}}/game/handler"
-	rules "{{MODULE}}/game/monster"
-	monsters "{{MODULE}}/game/monster/service"
+	"{{MODULE}}/game/modules/actor"
+	rules "{{MODULE}}/game/modules/monster"
+	monsters "{{MODULE}}/game/modules/monster/service"
 )
 
 func terrainMonsters(t *testing.T) (*terrainFixture, *monsters.Manager) {

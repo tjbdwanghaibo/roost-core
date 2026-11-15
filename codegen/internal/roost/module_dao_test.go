@@ -54,7 +54,7 @@ func TestModuleAdditionalDAOPlanRejectsOwnedFieldsWithoutWriting(t *testing.T) {
 }
 
 func TestModuleAdditionalDAOManifestRejectsAmbiguousDeclarations(t *testing.T) {
-	files := map[string]string{"game/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"}
+	files := map[string]string{"game/modules/x/x.go": "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"}
 	valid := "daos: [{field: demoState, type: DemoDAO, tag: demo_state}]\n"
 	if _, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML+valid, files)); err != nil {
 		t.Fatal(err)

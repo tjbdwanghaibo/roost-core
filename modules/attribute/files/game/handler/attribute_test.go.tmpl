@@ -20,16 +20,16 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 
-	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"{{MODULE}}/protocol/pb"
-	apperrors "{{MODULE}}/internal/errors"
+	db "{{MODULE}}/db"
+	attributecomp "{{MODULE}}/game/components/attribute"
+	gameprofile "{{MODULE}}/game/components/profile"
 	controller "{{MODULE}}/game/controllers/attribute"
 	playerentity "{{MODULE}}/game/entities/player"
-	attributecomp "{{MODULE}}/game/components/attribute"
-	gameattr "{{MODULE}}/game/gameplay/attribute"
-	gameprofile "{{MODULE}}/game/components/profile"
 	sender "{{MODULE}}/game/handler/syncsender"
+	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 )
 
 type attributeGetter map[int64]entity.IThreadSafeEntity

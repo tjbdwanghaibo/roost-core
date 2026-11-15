@@ -13,6 +13,6 @@ state:
     dao: persist,nosync
     comment: 匹配来源与准入名单和 Room 初始化同事务提交。
 verify:
-  packages: [./game/handler, ./game/matchroom]
+  packages: [./game/handler, ./game/modules/matchroom]
   run: ^TestMatchroom
   pass: 12

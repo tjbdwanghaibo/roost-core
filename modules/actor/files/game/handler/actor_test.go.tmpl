@@ -22,14 +22,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
-	"{{MODULE}}/game/actor"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"{{MODULE}}/protocol/pb"
 	actorcontroller "{{MODULE}}/game/controllers/actor"
-	apperrors "{{MODULE}}/internal/errors"
-	gameheartbeat "{{MODULE}}/game/heartbeat"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/actor"
+	gameheartbeat "{{MODULE}}/game/modules/heartbeat"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 )
 
 type actorGetter struct{ value *player.Player }

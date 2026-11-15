@@ -14,7 +14,7 @@
 
 - `purchase.FromRegistry(registry)`（`game/controllers/purchase/controller.go`）之后 `controller.Collect(ctx, playerID) ([]purchase.Receipt, error)`：服务端替一名玩家补领一批，在 Nest 事务之外调用。
 - handler `PurchaseGrant(grant)`（`game/handler/purchase_grant.go`，`rollback=undo durability=strict`）：把一笔待发记录应用到 Player。参数只能来自待发队列。
-- 待发队列 `purchase.Queue`（`game/purchase/purchase.go`）：`Record(ctx, order)`（platform 一侧，第一次投递时写快照）、`Pending(ctx, playerID, limit)`、`Ack(ctx, grant)`。实现是 `RedisQueue`（`game/purchase/queue.go`）。
+- 待发队列 `purchase.Queue`（`game/modules/purchase/purchase.go`）：`Record(ctx, order)`（platform 一侧，第一次投递时写快照）、`Pending(ctx, playerID, limit)`、`Ack(ctx, grant)`。实现是 `RedisQueue`（`game/modules/purchase/queue.go`）。
 - platform 一侧的协作者（`services/platform/collaborators.go`，安装时替换生成的桩）：`Deliver()` 把订单记进待发队列；`Verify()` 与 `Players()` 一律拒绝（充值不管登录）。
 
 **登记点**
@@ -23,7 +23,7 @@
 
 **留给工程的文件**
 
-- `game/purchase/products.go`：`LookupProduct(id)`（商品、价格、币种与奖励；缺省只有 `coins_100`：99 美分换 100 金币）与 `StoragePrefix`（待发队列的 Redis 命名空间，缺省 `roost:<工程名>:purchase`）。
+- `game/modules/purchase/products.go`：`LookupProduct(id)`（商品、价格、币种与奖励；缺省只有 `coins_100`：99 美分换 100 金币）与 `StoragePrefix`（待发队列的 Redis 命名空间，缺省 `roost:<工程名>:purchase`）。
 - `services/platform/purchase_channels.go`：`verifyPaymentCallback(ctx, raw, signature)`，渠道验签与查单。**缺省全部拒绝**。
 
 **状态**
@@ -74,13 +74,13 @@
 
 ## 验证范围
 
-- `roost module verify purchase`：21 条场景（`game/handler` 8、`game/purchase` 5、`game/controllers/purchase` 6、`services/platform` 2）；与 `bag` 的联动 4 条，与 `enter` 的联动 2 条。
+- `roost module verify purchase`：21 条场景（`game/handler` 8、`game/modules/purchase` 5、`game/controllers/purchase` 6、`services/platform` 2）；与 `bag` 的联动 4 条，与 `enter` 的联动 2 条。
 - 离线：真实的 Nest 引擎加替身提交器，待发队列与 platform 是内存替身。
 - 覆盖：金币发货与游标同提交、重放不写、乱序等待、提交失败后重放、超过 513 笔之后重放旧单仍安全、别人的订单被拒、结清只推进游标、价格不符不入队、目录变化不影响已有快照、队列回答损坏不当回执、补领时等待在途投递与未终结订单、`Ack` 失败后重试得到同一张回执、渠道缺省拒绝。
 - 真实 Redis 上的 Lua 另有 3 条集成用例（构建标签 `integration`，不在 `verify` 的 21 条里），在生成的工程里跑：
 
   ```sh
-  ROOST_PURCHASE_REDIS_ADDR=127.0.0.1:6379 GOWORK=off go test -tags=integration -race -count=2 -run '^TestPurchaseRedis' ./game/purchase
+  ROOST_PURCHASE_REDIS_ADDR=127.0.0.1:6379 GOWORK=off go test -tags=integration -race -count=2 -run '^TestPurchaseRedis' ./game/modules/purchase
   ```
 
 - 真实联合验收：[scripts/test-operations-real.sh](../../scripts/test-operations-real.sh) 生成 game-demo，用开发模拟渠道经真实 NATS 送单、玩家 TCP 补领、正式 Nest/DataEngine/Mongo/WAL 入账。精确暂停在 strict Sender 成功之后、队列 Ack 之前并 SIGKILL；停掉依赖该 Redis 的进程后，SIGKILL 用例自己的 `appendonly=yes, appendfsync=always` Redis，沿用同一持久目录重启。平台终态与待发快照保持不变，玩家移到另一 sid 后补领不增发，再杀目标进程冷启；核对 `next=acked=Applied=2`、待发为空、钱包 200。[2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。

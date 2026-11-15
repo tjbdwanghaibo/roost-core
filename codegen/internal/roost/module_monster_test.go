@@ -40,12 +40,12 @@ func TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations(t *testing.T) {
 		if err := os.WriteFile(path, []byte(strings.Replace(string(original), mutation.from, mutation.to, 1)), 0644); err != nil {
 			t.Fatal(err)
 		}
-		output, compileErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-run", "^$", "./game/monster/service")
+		output, compileErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-run", "^$", "./game/modules/monster/service")
 		if compileErr != nil {
 			_ = os.WriteFile(path, original, 0644)
 			t.Fatalf("mutation failed to compile:\n%s", output)
 		}
-		output, runErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-v", "-run", "^"+mutation.test+"$", "./game/monster/service")
+		output, runErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-v", "-run", "^"+mutation.test+"$", "./game/modules/monster/service")
 		if err := os.WriteFile(path, original, 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -59,10 +59,10 @@ func TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations(t *testing.T) {
 func TestModuleMonsterDrainRecoveryMutations(t *testing.T) {
 	root, roost, _ := moduleProject(t, "monsterdrainmutants")
 	roost("module", "add", "monster")
-	runGeneratedGo(t, root, "test", "-count=1", "-run", "^TestMonster(DrainRetriesWhenRemoveCommittedButReplyWasLost|DestroyRejectsAReplacementEntityInstance|.*InFlight)$", "./game/monster/service")
+	runGeneratedGo(t, root, "test", "-count=1", "-run", "^TestMonster(DrainRetriesWhenRemoveCommittedButReplyWasLost|DestroyRejectsAReplacementEntityInstance|.*InFlight)$", "./game/modules/monster/service")
 	mutants := []struct{ path, from, to, test, evidence string }{
-		{"game/scene/service/runtime.go", "callbacks[kind] = callback", "if area.Dao().MembersLen() > 0 { callbacks[kind] = callback }", "TestMonsterDrainRetriesWhenRemoveCommittedButReplyWasLost", "drain retry leaked retired lifecycle record"},
-		{"game/monster/service/runtime.go", "if current != r.value {", "if false && current != r.value {", "TestMonsterDestroyRejectsAReplacementEntityInstance", "known replacement reached Nest instead of early refusal"},
+		{"game/modules/scene/service/runtime.go", "callbacks[kind] = callback", "if area.Dao().MembersLen() > 0 { callbacks[kind] = callback }", "TestMonsterDrainRetriesWhenRemoveCommittedButReplyWasLost", "drain retry leaked retired lifecycle record"},
+		{"game/modules/monster/service/runtime.go", "if current != r.value {", "if false && current != r.value {", "TestMonsterDestroyRejectsAReplacementEntityInstance", "known replacement reached Nest instead of early refusal"},
 		{"game/handler/monster_spawn.go", "if err := expected.Check(target, area); err != nil {", "if err := expected.Check(target, area); false && err != nil {", "TestMonsterSpawnRejectsReplacementSceneInFlight", "was not rejected"},
 		{"game/handler/monster_spawn.go", "if err := expected.Check(target, area); err != nil {", "if err := expected.Check(target, area); false && err != nil {", "TestMonsterRespawnRejectsReplacementMonsterInFlight", "was not rejected"},
 		{"game/handler/monster_damage.go", "if err := expected.Check(target, area); err != nil {", "if err := expected.Check(target, area); false && err != nil {", "TestMonsterDamageRejectsReplacementMonsterInFlight", "was not rejected"},
@@ -82,12 +82,12 @@ func TestModuleMonsterDrainRecoveryMutations(t *testing.T) {
 		if err := os.WriteFile(path, []byte(strings.Replace(string(raw), m.from, m.to, 1)), 0644); err != nil {
 			t.Fatal(err)
 		}
-		out, compileErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-run", "^$", "./game/monster/service")
+		out, compileErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-run", "^$", "./game/modules/monster/service")
 		if compileErr != nil {
 			_ = os.WriteFile(path, raw, 0644)
 			t.Fatalf("mutation did not compile: %v %s", compileErr, out)
 		}
-		out, runErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-timeout", "30s", "-v", "-run", "^"+m.test+"$", "./game/monster/service")
+		out, runErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-timeout", "30s", "-v", "-run", "^"+m.test+"$", "./game/modules/monster/service")
 		if err := os.WriteFile(path, raw, 0644); err != nil {
 			t.Fatal(err)
 		}

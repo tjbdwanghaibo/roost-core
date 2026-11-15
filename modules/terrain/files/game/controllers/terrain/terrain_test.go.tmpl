@@ -28,6 +28,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	db "{{MODULE}}/db"
 	scenecontroller "{{MODULE}}/game/controllers/scene"
 	player "{{MODULE}}/game/entities/player"
@@ -36,11 +37,10 @@ import (
 	chunk "{{MODULE}}/game/entities/terrain_chunk"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	gamescene "{{MODULE}}/game/scene"
-	scenes "{{MODULE}}/game/scene/service"
-	logic "{{MODULE}}/game/terrain"
-	runtime "{{MODULE}}/game/terrain/service"
+	gamescene "{{MODULE}}/game/modules/scene"
+	scenes "{{MODULE}}/game/modules/scene/service"
+	logic "{{MODULE}}/game/modules/terrain"
+	runtime "{{MODULE}}/game/modules/terrain/service"
 	"{{MODULE}}/protocol/pb"
 )
 

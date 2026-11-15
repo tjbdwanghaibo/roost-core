@@ -6,11 +6,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
-	"{{MODULE}}/game/activity"
 	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/activity"
 
-	gamelogin "{{MODULE}}/game/login"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamelogin "{{MODULE}}/game/modules/login"
 )
 
 // 进入回调失败只会记日志；下一次进入/操作仍按持久时间线恢复，不假装离线准点结算。

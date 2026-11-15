@@ -195,7 +195,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	}
 	featurePackages := map[string]string{
 		"protocol": "protocol/def/doc.go", "entity": "game/entities/doc.go", "nest": "game/handler/doc.go",
-		"dao": "db/def/doc.go", "attribute": "game/gameplay/attribute/doc.go",
+		"dao": "db/def/doc.go", "attribute": "game/modules/gameplay/attribute/doc.go",
 		"webroute": "service/web/doc.go",
 	}
 	for feature, path := range featurePackages {
@@ -713,7 +713,7 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 		}
 		return "kitnest.NewMod(EntityAccess)"
 	case "heartbeat":
-		// 工程唯一的心跳驱动（game/heartbeat/driver_gen.go），实体组件经它 NewHost。
+		// 工程唯一的心跳驱动（game/modules/heartbeat/driver_gen.go），实体组件经它 NewHost。
 		return "kitheartbeat.NewMod(EntityAccess, " + heartbeatDriverAlias + ".Driver)"
 	case "saga":
 		if len(m.Sagas) == 0 {

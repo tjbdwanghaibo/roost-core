@@ -3,9 +3,9 @@ package handler
 import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
-	apperrors "{{MODULE}}/internal/errors"
-	gamescene "{{MODULE}}/game/scene"
 	player "{{MODULE}}/game/entities/player"
+	gamescene "{{MODULE}}/game/modules/scene"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 // handlerSceneChat 不遍历或读取其他 Player DAO；空间索引只提供本进程、同一场景已提交站位。

@@ -45,7 +45,7 @@ import (
 	"fmt"
 	"time"
 
-	gameheartbeat "@Module@/game/heartbeat"
+	gameheartbeat "@Module@/game/modules/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )

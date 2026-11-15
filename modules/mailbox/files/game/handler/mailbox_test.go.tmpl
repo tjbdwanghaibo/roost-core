@@ -11,10 +11,10 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
-	playerentity "{{MODULE}}/game/entities/player"
 	mailboxcomp "{{MODULE}}/game/components/mailbox"
+	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
-	gamemailbox "{{MODULE}}/game/mailbox"
+	gamemailbox "{{MODULE}}/game/modules/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -32,7 +32,7 @@ import (
 // mailboxStart 是用例的起点时刻（Unix 秒）。
 const mailboxStart int64 = 1_800_000_000
 
-// 测试自己登记两个种类，方式与正式的种类相同（只在 init 里；本包的 init 在 game/mailbox 与实体包之后跑）：
+// 测试自己登记两个种类，方式与正式的种类相同（只在 init 里；本包的 init 在 game/modules/mailbox 与实体包之后跑）：
 //
 //   - mailboxTestVoucher 只登记了“合不合法”，没有登记发放方式：解得出来，但领不了。
 //   - mailboxTestChest 两样都登记了：号是 1 到 3 的“宝箱”，开出 数量×号 个金币。3 号箱先把金币写进去
@@ -635,7 +635,7 @@ func TestMailboxRegisteredTypeIsGrantedOnceInTheClaimTransaction(t *testing.T) {
 	}
 }
 
-// 发放方式的登记是程序结构的一部分：空名、缺 Grant 或 Held、重名、种类没在 game/mailbox 登记过，
+// 发放方式的登记是程序结构的一部分：空名、缺 Grant 或 Held、重名、种类没在 game/modules/mailbox 登记过，
 // 都直接 panic，而且不改变已经登记的东西。
 func TestMailboxRegisterGrantRefusesBadRegistrations(t *testing.T) {
 	grant := mailboxcomp.MailboxGrant{
@@ -655,7 +655,7 @@ func TestMailboxRegisterGrantRefusesBadRegistrations(t *testing.T) {
 		"no Held": func() {
 			mailboxcomp.RegisterMailboxGrant(mailboxTestVoucher, mailboxcomp.MailboxGrant{Grant: grant.Grant})
 		},
-		"a type game/mailbox does not know": func() { mailboxcomp.RegisterMailboxGrant("gem", grant) },
+		"a type game/modules/mailbox does not know": func() { mailboxcomp.RegisterMailboxGrant("gem", grant) },
 		"the built-in coins again":          func() { mailboxcomp.RegisterMailboxGrant(gamemailbox.TypeCoins, grant) },
 		"a registered grant once again":     func() { mailboxcomp.RegisterMailboxGrant(mailboxTestChest, grant) },
 	} {

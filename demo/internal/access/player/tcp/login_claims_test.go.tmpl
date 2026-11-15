@@ -8,13 +8,13 @@ import (
 	controllermailbox "{{MODULE}}/game/controllers/mailbox"
 	controllerplayer "{{MODULE}}/game/controllers/player"
 
-	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	gamelogin "{{MODULE}}/game/modules/login"
 )
 
-// 认证器是登录模块的（auth.go 与 game/login，roost module add login 写下，demo 不改）；读它写进会话的 claims 的一方
+// 认证器是登录模块的（auth.go 与 game/modules/login，roost module add login 写下，demo 不改）；读它写进会话的 claims 的一方
 // 有一半是 demo 自己的——登录端点的 BoundServerID。这个文件钉住两边对得上，用例名不以 TestLogin 开头
 // （那个前缀是登录模块自己的验收口径）。
 //

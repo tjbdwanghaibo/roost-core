@@ -86,7 +86,7 @@ type ModuleSpec struct {
 // ModuleRuntime 声明模块的服务级启动入口。函数返回 stop（可为 nil）与 error；
 // 返回 error 时仍可同时返回 stop，App 的失败停机路径会调用它。
 type ModuleRuntime struct {
-	Package string `yaml:"package" json:"package"` // 工程内 import 路径，如 game/skillbook
+	Package string `yaml:"package" json:"package"` // 工程内 import 路径，如 game/modules/skillbook
 	Start   string `yaml:"start" json:"start"`     // func(*app.Registry) (func(context.Context) error, error)
 	// Framework 不写时入口在模块装进的业务服务上启动（生成的 modules_gen.go，业务 Init 之前）。
 	// 写一个托管框架服务的种类（roost.yaml 里 services.<名字>.framework 的取值，例如 account）时，入口改在
@@ -363,6 +363,18 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	}
 	if err := validateModuleRuntime(spec.Runtime); err != nil {
 		return err
+	}
+	for _, rel := range spec.Files {
+		if err := validateModuleGamePath(rel); err != nil {
+			return err
+		}
+	}
+	for _, other := range spec.withNames() {
+		for _, rel := range spec.With[other].Files {
+			if err := validateModuleGamePath(rel); err != nil {
+				return fmt.Errorf("with/%s: %w", other, err)
+			}
+		}
 	}
 	if err := validateModuleNext(spec.Next); err != nil {
 		return err
@@ -658,15 +670,41 @@ func validateModuleNext(hints []string) error {
 	return nil
 }
 
-// 入口包在 game/ 下（业务服务进程里启动），或在托管框架服务的 services/<服务>/ 下（v1.47.0 起，须写 runtime.framework）。
-var moduleRuntimePackagePattern = regexp.MustCompile(`^(game|services/[a-z][a-z0-9_]*)/[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$`)
+// 入口包是模块自己的功能包 game/modules/<包>/（业务服务进程里启动），或在托管框架服务的 services/<服务>/ 下
+// （v1.47.0 起，须写 runtime.framework）。
+var moduleRuntimePackagePattern = regexp.MustCompile(`^(game/modules|services/[a-z][a-z0-9_]*)/[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$`)
+
+// moduleGameLayers 是工程 game/ 下固定的框架层（维护者 2026-11-15）：game/ 只放这几层与 game/modules/。
+// 模块（以及生成器）自己的功能包一律在 game/modules/<包>/，包名与原来相同；game/modules/ 只是目录，本身不放文件。
+var moduleGameLayers = map[string]bool{"components": true, "controllers": true, "entities": true, "handler": true, "managers": true, "view": true}
+
+// validateModuleGamePath 检查模块模板在工程 game/ 下的落点：只能在框架层里，或在 game/modules/<包>/ 里。
+// 规则只在这里声明一次，清单加载时（module list / plan / add / verify 与 codegen 测试）就执行。
+func validateModuleGamePath(rel string) error {
+	rest, ok := strings.CutPrefix(rel, "game/")
+	if !ok {
+		return nil
+	}
+	first, after, nested := strings.Cut(rest, "/")
+	switch {
+	case !nested:
+		return fmt.Errorf("%s sits directly in game/; game/ only holds the framework layers and game/modules/<package>/", rel)
+	case first == "modules":
+		if !strings.Contains(after, "/") {
+			return fmt.Errorf("%s sits directly in game/modules/, which only holds feature packages; put it in game/modules/<package>/", rel)
+		}
+	case !moduleGameLayers[first]:
+		return fmt.Errorf("%s: game/%s is not a framework layer (components, controllers, entities, handler, managers, view); a module's own package lives in game/modules/%s/", rel, first, first)
+	}
+	return nil
+}
 
 func validateModuleRuntime(runtime *ModuleRuntime) error {
 	if runtime == nil {
 		return nil
 	}
 	if !moduleRuntimePackagePattern.MatchString(runtime.Package) {
-		return fmt.Errorf("runtime.package %q must be a project-local game package (or services/<framework>/... with runtime.framework)", runtime.Package)
+		return fmt.Errorf("runtime.package %q must be a module package under game/modules/ (or services/<framework>/... with runtime.framework)", runtime.Package)
 	}
 	if runtime.Framework != "" {
 		if _, known := frameworkCatalog[runtime.Framework]; !known {

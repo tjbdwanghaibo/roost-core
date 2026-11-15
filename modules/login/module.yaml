@@ -22,13 +22,13 @@ next:
   - "上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接"
   - "区服入口上报（给 portal 的清单配地址）：在 game 服务配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate；可选 login.presence.interval 缺省 10s、login.presence.tags），game 定期报给 account，停报三个间隔后自动消失；不写不报"
 verify:
-  packages: [./game/login, ./internal/access/player/tcp, ./services/account, ./cmd/accountctl, ./game/managers]
+  packages: [./game/modules/login, ./internal/access/player/tcp, ./services/account, ./cmd/accountctl, ./game/managers]
   run: ^TestLogin
   pass: 37
 with:
   enter:
     summary: 进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player；用进服票据握手的会话先新建再进入（EnterGame 不代建，没建成答 enter_need_create）；会话激活之后把“能不能进、要不要先新建”推给客户端（EnterStatus），本服不该服务的会话推完断开
     verify:
-      packages: [./game/login]
+      packages: [./game/modules/login]
       run: ^TestWithLoginEnter
       pass: 6

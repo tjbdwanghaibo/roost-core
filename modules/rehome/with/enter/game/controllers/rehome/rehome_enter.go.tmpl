@@ -3,15 +3,15 @@ package rehome
 import (
 	"context"
 
-	gamelogin "{{MODULE}}/game/login"
-	gamerehome "{{MODULE}}/game/rehome"
+	gamelogin "{{MODULE}}/game/modules/login"
+	gamerehome "{{MODULE}}/game/modules/rehome"
 	"{{MODULE}}/protocol/msgid"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
 // 这个文件是 rehome 与 enter 两个模块的联动：两个都装着时才有。它把换服接到进入游戏的两个登记点上，
-// 判断与写入都在 game/rehome 的 Driver 里（Admit、Arrive），这里只是接线。
+// 判断与写入都在 game/modules/rehome 的 Driver 里（Admit、Arrive），这里只是接线。
 //
 // 进入前检查（gamelogin.OnEntering）——在加载或创建 Player 之前：
 //

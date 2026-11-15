@@ -3,8 +3,8 @@ package alliance
 import (
 	"context"
 
-	gamelogin "{{MODULE}}/game/login"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	gamelogin "{{MODULE}}/game/modules/login"
 )
 
 func init() { gamelogin.OnEntered("alliance", refreshOnEnter) }

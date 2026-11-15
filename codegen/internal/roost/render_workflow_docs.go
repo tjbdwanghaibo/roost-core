@@ -170,7 +170,7 @@ fire.Now 是实际触发时刻。周期性的（例如每小时收益）错过�
     roost add behavior --entity Monster --ai --state
     roost generate
 
-生成的是框架胶水（HeartbeatComponent、BehaviorComponent 与工程唯一的心跳驱动 game/heartbeat.Driver）；你写的是
+生成的是框架胶水（HeartbeatComponent、BehaviorComponent 与工程唯一的心跳驱动 game/modules/heartbeat.Driver）；你写的是
 业务文件：behavior_actions.go（动作种类、组、示例动作 ExampleAction）、behavior_strategy.go（示例 AI 策略）、
 states.go（状态目录）与 game/handler/monster_behavior.go（发起示例动作的 Nest handler）。动作在 handler 的最后一步
 发起（runner 不随事务回滚），由动作组自己的心跳推进；按 ctx.Elapsed（经过的业务时间）算，不按“第几拍”：
@@ -610,7 +610,7 @@ func renderSkillGuide() string {
 
     roost add skill Fireball
 
-命令创建 game/skills/fireball.json 和首次使用时的 catalog.go、catalog_test.go。初始定义只立即 finish，是一个可编译的
+命令创建 game/modules/skills/fireball.json 和首次使用时的 catalog.go、catalog_test.go。初始定义只立即 finish，是一个可编译的
 空骨架，不偷偷选择伤害、目标、资源或战斗规则。按 roost-core/docs/skill 文档显式添加 input_schema、costs、
 cast_window、phase flow、effect、selection 和 presentation。
 
@@ -625,7 +625,7 @@ CompileAll 对嵌入的每个 JSON 做严格 Parse 和 Compile，重复 ID 或 e
 保存在 Catalog.Diagnostics，发布流程应审阅并按项目策略决定是否升级成失败。
 
 启动前就要拦住写坏的定义：catalog_test.go 的 TestSkillCatalogCompiles 走同一条 CompileAll，
-go test ./game/skills/ 与 roost project doctor 的 skills:catalog 项都会失败并给出编译器的原话。
+go test ./game/modules/skills/ 与 roost project doctor 的 skills:catalog 项都会失败并给出编译器的原话。
 用自定义 environment 时，把测试里的 skill.DefaultCompileEnvironment() 换成同一个。
 
 ## 3. 运行时边界

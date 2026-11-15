@@ -9,7 +9,7 @@
 按照生成工程 README 配置 MongoDB、Redis、NATS 与 etcd，运行需要的托管服务和 `{{GAME_SERVICE}}`。
 登录链路是 login 与 portal 两个模块的（细节见 roost-core 的 `modules/login/README.md`、`modules/portal/README.md`）：
 
-- 握手的认证器（`internal/access/player/tcp/auth.go` 与 `game/login`）和 account 的协作者由 login 模块写下：票据全部由 account
+- 握手的认证器（`internal/access/player/tcp/auth.go` 与 `game/modules/login`）和 account 的协作者由 login 模块写下：票据全部由 account
   签发与校验，玩家号是 account 的 Redis 里的计数器。渠道验签在 `services/account/login_channels.go` 接，缺省一个渠道都没接；
   认证保持 fail-closed，没有接受任意身份的测试密码。
 - 新建配方时已在开发配置 `configs/service/config.account.yaml` 写入 `login.dev_token: dev-recipe-local` 和
@@ -30,7 +30,7 @@
 1. 客户端经登录入口登录、拿区服清单、换进服票据，用 `enter:<进服票据>` 完成 TCP 握手。
 2. 服务器推 `EnterStatus`：`need_create` 为 true 就先发 `EnterCreate{name}`（本配方没装档案模块，名字没有规则、也不保存），
    再发 `EnterGame`；为 false 直接发 `EnterGame`。推送只是告知：一两秒没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。
-   `game/login/recipe_first_enter.go` 登记首次 100 金币：在新建的那一笔事务里发，与“建成了”的标记一起提交或回滚；
+   `game/modules/login/recipe_first_enter.go` 登记首次 100 金币：在新建的那一笔事务里发，与“建成了”的标记一起提交或回滚；
    再发新建（`enter_created`）与重复进入都不会再发。进入时服务器把业务时间推给客户端（`ServertimeNow`），也可以用 `ServertimeSync` 拉。
    不经登录入口、由自己的入口调 account 的 CreateRole / SelectRole 拿 `session:<player_id>:<token>` 握手的会话照旧：
    `EnterGame` 加载或创建玩家并完成首次初始化，发放规则与只发一次的保证相同。

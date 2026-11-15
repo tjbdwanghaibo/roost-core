@@ -9,7 +9,7 @@ import (
 )
 
 // 这个文件只在测试里编译。登录的整条链路场景（enter_login_scenario_test.go）在外部测试包 player_test 里：
-// 它要 import 登录模块的 game/login（认证器，以及它与 enter 的联动登记的“先新建”规则与进入前检查），而 game/login
+// 它要 import 登录模块的 game/modules/login（认证器，以及它与 enter 的联动登记的“先新建”规则与进入前检查），而 game/modules/login
 // 经 enter 域的 controller import 本包，放在本包的内部测试里会成环。外部测试包够不着未导出的字段，所以这里给它
 // 一个只装登录要用的那几样的构造函数。
 

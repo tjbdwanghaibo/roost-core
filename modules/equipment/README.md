@@ -18,7 +18,7 @@
   - `Unequip(slot int32) (itemID int64, found bool, err error)`：内部把道具退回背包后清槽。
   - `Worn(slot) (itemID, level, ok)` 与 `RangeWorn(fn)`：只读。
 - Nest handler（`game/handler/equipment_equip.go`、`equipment_unequip.go`）：`handlerEquipmentEquip`、`handlerEquipmentUnequip`，都是 `rollback=undo durability=strict`。端点 `HandleEquipmentEquip` / `HandleEquipmentUnequip` 直接分发到它们。
-- 规则函数（`game/equipment/equipment.go`）：`Lookup(itemID) (slot, attack, hp, ok)`、`SlotFor(itemID)`、`ValidSlot(slot)`、`Slots()`，常量 `SlotWeapon`（1）、`SlotArmor`（2）、`MaxSlots`（32）、`MaxLevel`（10000）、`MaxStat`（1e12）。
+- 规则函数（`game/modules/equipment/equipment.go`）：`Lookup(itemID) (slot, attack, hp, ok)`、`SlotFor(itemID)`、`ValidSlot(slot)`、`Slots()`，常量 `SlotWeapon`（1）、`SlotArmor`（2）、`MaxSlots`（32）、`MaxLevel`（10000）、`MaxStat`（1e12）。
 
 ### 登记点
 
@@ -58,7 +58,7 @@
 - **需求正好是它：** `roost module add equipment`，连带装上 bag。要让装备加属性再装 attribute。
 - **需求比它多一点：**
   - 加装备、改槽位与加成：改 `configs/table/equipment_item.csv`，道具本身要先在 bag 的 `item` 表里。
-  - 加槽位名字：在 `game/equipment/equipment.go` 加常量（上限 `MaxSlots`）。
+  - 加槽位名字：在 `game/modules/equipment/equipment.go` 加常量（上限 `MaxSlots`）。
   - 穿卸之后要重算别的东西（战力、外观）：登记 `equipment.OnEquipmentChanged`，不要改 `Equip` / `Unequip` 的顺序。
   - 做强化：自己写一个 Nest handler 调 `EquipmentComp().Equip(itemID, 新等级)`；对已经穿着的这件只改等级、不动背包。强化的消耗（材料、金币）由这个 handler 在同一笔事务里自己扣。
 - **别的业务代码要读 / 改穿戴：** 在自己的 Nest handler 里（目标实体实现 `player.IEquipmentEntity`）调 `target.EquipmentComp().Worn(slot)`、`RangeWorn(fn)`、`Equip(itemID, level)`、`Unequip(slot)`。调用方不要再自己扣、退背包。

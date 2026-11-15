@@ -111,8 +111,9 @@ func writeDemoActorBody(root, gameService string) error {
 	if err != nil {
 		return err
 	}
-	const rel = "game/actor/body.go"
-	body, err := renderModuleFile(manifest, gameService, ModuleSpec{Name: "actor"}, "files", rel, nil)
+	// 模块里的 Body 在 game/modules/actor；demo 的 actor 包是 demo 自己的（没装 actor 模块），仍在 game/actor。
+	const source, rel = "game/modules/actor/body.go", "game/actor/body.go"
+	body, err := renderModuleFile(manifest, gameService, ModuleSpec{Name: "actor"}, "files", source, nil)
 	if err != nil {
 		return err
 	}
@@ -466,7 +467,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/world/stats_component.go", why: "wiring only: the component type, its name on World (Stats), the factory registration; the logic is game/components/stats/stats.go"},
 		{write: "game/view/component_stats.go", why: "the Stats interface other game packages use and its Holder (view.WorldEntity embeds it)"},
 		{write: "game/entities/world/entity.go", why: "EntityCategoryWorld: locked before Player in the two-entity AddExp"},
-		{write: "game/matchmaking/queue.go", why: "the duel and ranked queues, their grouping policies, and how a player is named in them"},
+		{write: "game/modules/matchmaking/queue.go", why: "the duel and ranked queues, their grouping policies, and how a player is named in them"},
 		{add: &AddOptions{Kind: "table", Name: "FeatureFlag"}, why: "the kill switches: config data, because \"should this be on right now\" is an operational question with a live answer"},
 		{write: "configs/schema/feature_flag.go", why: "name, enabled and a note for the operator who finds it off at 3am"},
 		{write: "configs/table/feature_flag.csv", why: "three switches the demo actually reads: the store, respawns, opening activity windows"},
@@ -609,7 +610,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "protocol/def/move_target.go", why: "a point or a player to follow in, the walk's action id and the start position out"},
 		{write: "game/controllers/player/move_target.go", why: "resolve the scene, start the walk, answer with where it starts"},
 		{write: "game/activity/activity.go", why: "what this game means by a timed server-wide event: window ids derived from the clock, what a point is worth, what settlement pays, and the board the game keeps because the coordinator has no enumeration"},
-		{write: "game/effects/activity_phase.go", why: "the timer's effect: a bus call recorded inside the World's lock and made outside it"},
+		{write: "game/modules/effects/activity_phase.go", why: "the timer's effect: a bus call recorded inside the World's lock and made outside it"},
 		{write: "game/entities/world/timer_component.go", why: "the World's timers, hand-written on the framework's entity timer runtime: persisted in WorldDao, rebuilt per call, fired inside the transaction that removes the node, the earliest deadline indexed by the framework's driver (the demo does not use roost add timer); the callbacks are components' methods, reached through the owner"},
 		{write: "game/entities/world/timer_component_test.go", why: "the part only a test can show: a deadline armed before a restart still fires after one"},
 		{write: "game/components/activityphase/activityphase.go", why: "the business the World's timers carry: arm one close node per activity window (idempotent per id), find it, and on firing record the phase effect inside the World's transaction or ask to be retried"},
@@ -812,20 +813,20 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // 不打开 access.player.self_sync：demo 的场景自己装着 entitysync Manager，一个 Nest 只有一个观察者。
 //
 // 全部模块在同一步里装（一次 roost module add）。安装结束时要跑生成器与 go mod tidy，那时工程必须是完整的：demo 的文件
-// 在前面的步骤里就 import 模块的包（副本结算 import game/leaderboard）、引用模块的组件（BagComp()、ProfileComp()），
+// 在前面的步骤里就 import 模块的包（副本结算 import game/modules/leaderboard）、引用模块的组件（BagComp()、ProfileComp()），
 // 分成几步装的话，前一步结束时后一步的模块还不在盘上。号按列表里的顺序、每次取最小的空号分配，与分几步无关；
 // 所以新换用的模块加在列表**末尾**，前面的模块拿到的号不变。demo 覆盖模块业务文件的 write 都排在这一步之后
 // （落点已被占用时安装器拒绝安装）。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
 		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome", "attribute", "equipment", "gm", "purchase", "team", "alliance", "login", "portal", "servertime", "cellworld", "room", "turn", "matchroom", "matchmaking"}, why: "login is the login module (the handshake authenticator that hands enter:<ticket> and session:<player_id>:<token> to account, the account collaborators, cmd/accountctl); portal is the HTTP front door on the account process (login, server list, enter ticket); servertime is the server clock a client reads; enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding; gm supplies audited feature commands, while the demo keeps its Player + World experience transaction"},
-		{write: "game/alliance/rules.go", why: "demo alliance currency is gold item 9001"},
-		{write: "game/purchase/products.go", why: "the purchase module's project-owned catalogue: demo item packs plus the default coin product"},
-		{write: "game/purchase/demo_provider.go", why: "the demo-only provider's channel and deterministic order identity"},
+		{write: "game/modules/alliance/rules.go", why: "demo alliance currency is gold item 9001"},
+		{write: "game/modules/purchase/products.go", why: "the purchase module's project-owned catalogue: demo item packs plus the default coin product"},
+		{write: "game/modules/purchase/demo_provider.go", why: "the demo-only provider's channel and deterministic order identity"},
 		{write: "services/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
 		{write: "services/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
-		{write: "game/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
-		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的五个业务文件（含新玩家初始化 game/login/enter_first.go）。协议多几个字段，
+		{write: "game/modules/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
+		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的五个业务文件（含新玩家初始化 game/modules/login/enter_first.go）。协议多几个字段，
 		// 两个要装载 Player 的端点交给 player controller——EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
 		// 拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter 的联动登记）与 EnterCreate（区服归属、
 		// 登录预算、接入驻留表之后才建档）。会话激活后的告知 enter_status.go 是模块的，不覆盖。
@@ -834,14 +835,14 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "game/controllers/enter/enter_game.go", why: "the endpoint hands the login to the player controller's EnterGame"},
 		{write: "game/controllers/enter/enter_create.go", why: "the create request's endpoint hands over to the player controller's EnterCreate: creating a Player loads it, and the demo loads a Player only where its role is bound, after the ownership table took it into service"},
 		{write: "game/controllers/player/enter_create.go", why: "the demo's two record operations behind the enter module's Create: Serve then GetOrCreate on the login budget, and the module's EnterCreate transaction"},
-		{write: "game/login/enter_first.go", why: "the demo's new-player initialization in the enter module's first-enter hook (D25): a new player's saved position is the world scene's spawn, written once in the transaction that marks the player initialized, on both the load-or-create and the create path"},
+		{write: "game/modules/login/enter_first.go", why: "the demo's new-player initialization in the enter module's first-enter hook (D25): a new player's saved position is the world scene's spawn, written once in the transaction that marks the player initialized, on both the load-or-create and the create path"},
 		{write: "game/controllers/player/enter_login_export_test.go", why: "the test-only constructor the external login scenario builds its player controller with"},
 		{write: "game/controllers/player/enter_login_scenario_test.go", why: "the whole chain landing on the demo's own login: an enter-ticket handshake against the real account service, EnterStatus says create, EnterGame before the create is refused and writes nothing, EnterCreate, the demo's EnterGame, and a reconnect that is not asked to create again; the session-token path still loads or creates"},
 		// 排行榜是 leaderboard 模块：读榜的两条协议（LeaderboardTop 带自己的名次、LeaderboardMe）与提交入口
 		// SubmitSeason 都是模块的；demo 只覆盖模块留给工程的业务文件——哪张榜、哪个赛季、分数范围、一屏多长——
-		// 与钉住这些数的测试。副本结算（finish_dungeon）在事务之外调模块的提交，它 import game/leaderboard。
-		{write: "game/leaderboard/leaderboard_board.go", why: "the module's project-owned board rules with the demo's board: dungeon clears, global, per season, pages of ten; and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
-		{write: "game/leaderboard/leaderboard_board_test.go", why: "the demo's board rules pinned with literal numbers, in place of the module's test of its default board"},
+		// 与钉住这些数的测试。副本结算（finish_dungeon）在事务之外调模块的提交，它 import game/modules/leaderboard。
+		{write: "game/modules/leaderboard/leaderboard_board.go", why: "the module's project-owned board rules with the demo's board: dungeon clears, global, per season, pages of ten; and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
+		{write: "game/modules/leaderboard/leaderboard_board_test.go", why: "the demo's board rules pinned with literal numbers, in place of the module's test of its default board"},
 		// 背包是 bag 模块：组件（Add / Remove / Count / Has）、PlayerDao.Bag、道具表、丢弃协议、服务端发放 handler、
 		// 错误码都来自模块，demo 不带自己的背包。demo 只换数据：道具表多两列（attack / hp，属性系统按它给穿着的装备算加成），
 		// 行是 demo 的四种道具。背包的规则文件 game/components/bag/items.go 用模块的缺省实现（读这张表），不覆盖。
@@ -855,17 +856,17 @@ func demoModuleSteps() []demoScaffoldStep {
 		{write: "game/components/mailbox/mailbox_profile_rules.go", why: "the mailbox/profile module owns reward effects; the demo chooses its hot-patchable attachment at upgrade time"},
 		// 邮件是 mailbox 模块：列表与领取两条协议、领取账本（PlayerDao.MailboxLedger）、附件的种类与编码、
 		// 发件入口 SendTo 都是模块的，demo 不带自己的 ListMail / ClaimMail / 领取账本，也不覆盖模块的任何文件。
-		// demo 的发件方（升级奖励、GM 补偿、活动结算、送礼的送达）import game/mailbox。它依赖的 wallet 跟着装进来
+		// demo 的发件方（升级奖励、GM 补偿、活动结算、送礼的送达）import game/modules/mailbox。它依赖的 wallet 跟着装进来
 		// （金币附件经它到账）。enter 与 bag 也在这一步里，所以两组联动一起写：进入游戏时拉全服邮件
 		// （画像读会话的 claims）、道具附件进背包（demo 的奖励邮件带的都是道具）。
 		//
 		// 换服是 rehome 模块：申请协议、驱动器、档里的换服记录、与 enter 的联动（进入前检查、到达）都是模块的，
 		// demo 不覆盖它的任何文件。demo 这一侧的接线在自己的文件里：驻留表实现模块的 Residency 并发布
-		// （playerowner.go、service.go），saga 步骤按当前绑定准入（gift_saga.go、game/alliance/runtime），
+		// （playerowner.go、service.go），saga 步骤按当前绑定准入（gift_saga.go、game/modules/alliance/runtime），
 		// 登录在装载玩家之前跑进入前检查（game/controllers/player/enter_game.go），GM 命令 gm.player.rehome，
 		// 以及 demo 自己的换服前检查（rehome_checks.go）。
 		//
-		// 登录是 login 模块：握手的认证器（internal/access/player/tcp/auth.go 与 game/login）、account 的协作者
+		// 登录是 login 模块：握手的认证器（internal/access/player/tcp/auth.go 与 game/modules/login）、account 的协作者
 		// （开发登录、玩家号计数器、名字规则、指标）与 cmd/accountctl 都是模块的，demo 不带自己的认证器与 collaborators。
 		// demo 只动模块留给工程的地方：渠道入口 login_channels.go 换成 demo 渠道（机器人、演练脚本与 WALKTHROUGH 用它登录），
 		// accountctl 经模块的 registerCommand 多登记四个命令（另一个文件，模块的 main.go 不动）。

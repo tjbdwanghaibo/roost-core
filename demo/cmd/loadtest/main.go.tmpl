@@ -1138,7 +1138,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			rb.Blackboard.Set("activity_id", resp.ActivityID)
 			return nil
 		}))
-	// The alliance is the alliance service's (game/alliance in the generated
+	// The alliance is the alliance service's (game/modules/alliance in the generated
 	// project). found_alliance, donate_alliance and claim_alliance_reward change the
 	// robot's Bag as well, so each starts a saga and answers with its key;
 	// alliance_op_status polls it (in a retry node, like gift_status) and
@@ -1383,7 +1383,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
-	// skill_catalog: the server compiled game/skills/*.json at startup and
+	// skill_catalog: the server compiled game/modules/skills/*.json at startup and
 	// lists the ids; the demo ships one, and a warning-free compile is part
 	// of the regression.
 	action.MustRegisterCall[pb.SkillCatalogRequest, pb.SkillCatalogResponse](actions, protocols, "skill_catalog", msgid.MsgSkillCatalog,

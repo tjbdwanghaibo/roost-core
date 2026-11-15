@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"{{MODULE}}/game/alliance"
-	"{{MODULE}}/game/alliancerule"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/game/modules/alliance"
+	"{{MODULE}}/game/modules/alliancerule"
 	apperrors "{{MODULE}}/internal/errors"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"{{MODULE}}/protocol/pb"
@@ -24,7 +24,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// The alliance endpoints. The alliance is the alliance service's (game/alliance): this
+// The alliance endpoints. The alliance is the alliance service's (game/modules/alliance): this
 // process cannot write it — it has no Remote write runtime — so every write is
 // an alliance RPC or a saga whose alliance step is one, and every alliance read is a
 // mirror read of the alliance. Which alliance the player is in is the player's

@@ -13,7 +13,7 @@
 
 `Phase` 的取值在 `game/components/matchmaking/matchmaking.go`：`preparing`、`dispatching`、`queued`、`cancelling`、`matched`、`cancelled`、`expired`；空串表示没有排队。`Key` 是 `"<队长玩家号>:<Sequence>"`。
 
-**服务端入口**（`game/matchmaking/runtime.go`，都在 Nest 事务之外调用，会等待 match 服务与 Nest）
+**服务端入口**（`game/modules/matchmaking/runtime.go`，都在 Nest 事务之外调用，会等待 match 服务与 Nest）
 
 - `matchmaking.FromRegistry(registry) (*Runtime, error)`：取模块启动时发布的运行时（能力名 `matchmaking.runtime`）。
 - `(*Runtime).Enqueue(ctx, playerID, sequence, asTeam)`、`Cancel(ctx, playerID, key)`、`Status(ctx, playerID)`、`Clear(ctx, playerID, key)`：四个协议各自对应的入口，返回 `matchmaking.MatchSnapshot`。
@@ -33,7 +33,7 @@
 
 **状态**：`PlayerDao.Matchmaking`（`db/def/matchmaking.go` 的 `MatchmakingState`），只落库、不下发给客户端。每人只保留当前意图与最后结果（`Sequence`、`Key`、`Leader`、`TeamID`、`Members`、`SID`、`Phase`、`TicketID`、`MatchID`、`RoomID`、`Deadline`）；`Sequence` 只增不清零。队伍一侧的名单冻结记在 team 模块的 `Team.MatchKey`。
 
-**配置**：没有配置表与配置键。匹配策略写在 `game/matchmaking/matcher.go` 与 `runtime.go` 的 `queue`（队列模式 `module-duel`、`GroupSize: 2`、分区 `sid-<sid>-size-<人数>`），归工程所有。
+**配置**：没有配置表与配置键。匹配策略写在 `game/modules/matchmaking/matcher.go` 与 `runtime.go` 的 `queue`（队列模式 `module-duel`、`GroupSize: 2`、分区 `sid-<sid>-size-<人数>`），归工程所有。
 
 **错误码**（`internal/errors/matchmaking.go`）
 
@@ -43,7 +43,7 @@
 - `matchmaking_unknown`：票已经绑定，但 match 服务里查不到它或它的成局记录，需要人工核对。
 - 整队排队还会原样带回 team 模块的码（没有队伍、不是队长）。
 
-**日志**：持久意图受理及阶段变化确认，记录玩家、请求键、阶段、MatchID / RoomID；unknown 记 Warn，内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/matchmaking/controller.go`, `game/matchmaking/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：持久意图受理及阶段变化确认，记录玩家、请求键、阶段、MatchID / RoomID；unknown 记 Warn，内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/matchmaking/controller.go`, `game/modules/matchmaking/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -63,7 +63,7 @@
 
 - **需求正好是它**：`roost module add matchmaking`，连带装上 `team`、`matchroom`、`room`，并接入托管 match 的客户端与模块的后台循环。客户端先完成 `EnterGame` 再排队。
 - **需求多一点**：
-  - 改配对规则（按人数以外的条件分池、一局几支队伍）：改 `game/matchmaking/matcher.go` 的 `Step` / `form` / `eligible` 与 `runtime.go` 的 `queue`。注意 match 服务的 `GroupSize` 在这里数的是队伍数，不是玩家数。
+  - 改配对规则（按人数以外的条件分池、一局几支队伍）：改 `game/modules/matchmaking/matcher.go` 的 `Step` / `form` / `eligible` 与 `runtime.go` 的 `queue`。注意 match 服务的 `GroupSize` 在这里数的是队伍数，不是玩家数。
   - 加“什么时候不许排队”：登记 `matchmaking.OnMatchmakingStarting`。
   - 成局后要做别的事（通知、初始化玩法）：改 `matcher.go` 的 `accept`，在结果写进成员之后做；它可能被重复调用，要按 `MatchID` 幂等。
   - 不要改 `game/components/matchmaking/matchmaking.go` 里 `UpdateMatching` 的阶段转换与 `handler/match_*.go` 的事务边界，恢复逻辑依赖它们。
@@ -80,7 +80,7 @@
 
 ## 验证范围
 
-- `roost module verify matchmaking`：17 条场景（`game/handler` 13 条、`game/matchmaking` 2 条、`game/controllers/matchmaking` 2 条）；与 `rehome` 的联动另有 2 条。
+- `roost module verify matchmaking`：17 条场景（`game/handler` 13 条、`game/modules/matchmaking` 2 条、`game/controllers/matchmaking` 2 条）；与 `rehome` 的联动另有 2 条。
 - 场景是离线的：真实的 Nest 引擎与 match 的 `MemoryStore`，Remote / WAL 提交是替身，开房用测试夹具里的单间房；没有经过真实的 Redis、Mongo、NATS 与 TCP。
 - 覆盖：单排与两队成局、取消与 Commit 的两种先后、掉线后补查并重连、重复结果、Enqueue 回包丢失、未绑定意图到期、历史到期不解除屏障、队伍冻结与整组回滚、旧序号、活房不能清、端点可在模块启动前注册、两个只读 handler 的事务声明是 memory 快路径（核对生成的注册代码）。
 - turn-pvp 配方另有一条经 TCP / Robot 的“排队到回合”链路，房号映射用 mongotest；真实依赖的联合验收没有做。

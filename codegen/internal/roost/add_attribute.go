@@ -12,7 +12,7 @@ import (
 )
 
 // attributeDir 是属性 profile 所在的包，roost generate 的属性生成器与 project sync 写的 doc.go / runtime.go 都在这里。
-const attributeDir = "game/gameplay/attribute"
+const attributeDir = "game/modules/gameplay/attribute"
 
 // addAttribute 是属性生成器的上手入口（roost add attribute <Profile>）：写一个带 dirtyMask 的 profile 骨架（业务文件，
 // 只建一次），立即跑属性生成器，再在 feature 还没开启时开启它（project sync 写出 doc.go 与受控的 runtime.go——生成

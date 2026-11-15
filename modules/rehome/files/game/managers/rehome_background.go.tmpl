@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	gamerehome "{{MODULE}}/game/rehome"
+	gamerehome "{{MODULE}}/game/modules/rehome"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
@@ -13,7 +13,7 @@ import (
 // 这个文件是 rehome 模块的 manager（维护者 D22：不在模块 runtime: 里的后台循环做成 manager，由 manager Mod 统一启停）。
 // 安装 rehome 时，安装器在本目录 managers.go 的 Managers() 列表里加了一行 NewRehomeBackground()。
 //
-// 它管的是换服受理之后的后台部分（game/rehome 的 Driver 交出的步骤：安静下来——断开会话后按间隔查看会话收尾、
+// 它管的是换服受理之后的后台部分（game/modules/rehome 的 Driver 交出的步骤：安静下来——断开会话后按间隔查看会话收尾、
 // 复核、离开钩子、交出、搬档、提交、落定，以及结果未知时重发到 account 给出结论为止的循环）：
 //
 //   - Start：建一个 gamerehome.Background，以 gamerehome.BackgroundCapability 发布。Driver 交出步骤时按能力名取它；

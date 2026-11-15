@@ -6,7 +6,7 @@
 
 **客户端协议**：无。玩家只通过 `room` 模块的 `RoomJoin` 等协议操作自己的席位。
 
-**服务端入口**（`game/matchroom/matchroom.go`，在 Nest 事务之外调用，会等待 Mongo 与 Nest）
+**服务端入口**（`game/modules/matchroom/matchroom.go`，在 Nest 事务之外调用，会等待 Mongo 与 Nest）
 
 ```go
 rooms, err := matchroom.FromRegistry(registry)                  // 取 *matchroom.Rooms
@@ -29,7 +29,7 @@ roomID, err := rooms.Open(ctx, matchID, []int64{playerA, playerB}) // 返回房�
 
 **错误码**：模块没有自己的错误码。组件拒绝时用 room 的 `room_invalid`、`room_not_member`、`room_closed`；`Open` 入口的拒绝（参数不对、映射冲突）是不带业务码的普通错误。
 
-**日志**：房间移交确认记 Debug，记录 MatchID / RoomID、人数与服务号；绑定冲突记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/matchroom/matchroom.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：房间移交确认记 Debug，记录 MatchID / RoomID、人数与服务号；绑定冲突记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/matchroom/matchroom.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -62,7 +62,7 @@ roomID, err := rooms.Open(ctx, matchID, []int64{playerA, playerB}) // 返回房�
 
 ## 验证范围
 
-- `roost module verify matchroom`：12 条场景（`game/handler` 6 条、`game/matchroom` 6 条）。
-- 离线：`game/handler` 的场景用真实 Nest 引擎加替身提交器；`game/matchroom` 的场景里映射与开房多数是函数替身，持久映射的并发重试一条用 mongotest（内存里的 Mongo 替身）。
+- `roost module verify matchroom`：12 条场景（`game/handler` 6 条、`game/modules/matchroom` 6 条）。
+- 离线：`game/handler` 的场景用真实 Nest 引擎加替身提交器；`game/modules/matchroom` 的场景里映射与开房多数是函数替身，持久映射的并发重试一条用 mongotest（内存里的 Mongo 替身）。
 - 覆盖：名单外的人入房被拒且不占座、重复移交不动席位与代际、掉线成员仍可入房与重连、改名单与普通房改造被拒、提交失败整体回滚、已关闭的房只确认身份、开房失败后用同一个房号重试、冲突映射不开房、非法名单不取号、取号失败不开房、缺依赖时启动失败。
 - 没有验证：真实 Mongo 的故障恢复、跨进程。turn-pvp 配方的 TCP 场景经过正式的计数器与映射代码，数据库同样是 mongotest。

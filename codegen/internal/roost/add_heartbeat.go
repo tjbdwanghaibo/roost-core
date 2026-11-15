@@ -30,7 +30,7 @@ import (
 //	roost.yaml services.<service>.mods                               add 时加 heartbeat（Mod 依赖 nest）
 //	game/entities/<entity>/entity.go                                 add 时加组件字段（之后归业务）
 //	db/def/<entity>.go（timedomain）                                 add 时加三个 nopersist,sync 字段（之后归业务）
-//	game/heartbeat/driver_gen.go                                     工程唯一的心跳驱动              project sync 重写
+//	game/modules/heartbeat/driver_gen.go                             工程唯一的心跳驱动              project sync 重写
 //	game/entities/<entity>/heartbeat_component_gen.go                心跳宿主组件                    project sync 重写
 //	game/entities/<entity>/behavior_component_gen.go                 actionflow.Behavior（+ AI）     project sync 重写
 //	game/entities/<entity>/timedomain_component_gen.go               timedomain.Domain 与 DAO 适配    project sync 重写
@@ -49,7 +49,7 @@ import (
 // 保底；所以与 entitytimer 一样，由 add 命令在需要时把 Mod 加进服务（也可以 roost add mod heartbeat 手工装）。
 
 const (
-	heartbeatDriverDir   = "game/heartbeat"
+	heartbeatDriverDir   = "game/modules/heartbeat"
 	heartbeatDriverAlias = "gameheartbeat"
 	heartbeatDocURL      = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/10-time.md#4a-实体心跳周期推进"
 	behaviorDocURL       = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结"

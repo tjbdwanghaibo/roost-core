@@ -31,7 +31,7 @@ func TestModuleDungeonInstallAndVerify(t *testing.T) {
 		}
 	}
 	source, err := os.ReadFile(filepath.Join(root, "game/controllers/dungeon/controller.go"))
-	if err != nil || !strings.Contains(string(source), "example.com/studio/labyrinth/game/dungeon") {
+	if err != nil || !strings.Contains(string(source), "example.com/studio/labyrinth/game/modules/dungeon") {
 		t.Fatalf("custom module not rendered: %v", err)
 	}
 	report, err := VerifyModules(context.Background(), root, []string{"dungeon"}, nil)

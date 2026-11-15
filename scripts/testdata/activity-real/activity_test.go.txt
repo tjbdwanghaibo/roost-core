@@ -1,9 +1,9 @@
 package e2e
 
 import (
-	"ACTIVITY_MODULE/game/activity"
 	worldentity "ACTIVITY_MODULE/game/entities/activity_world"
 	playerentity "ACTIVITY_MODULE/game/entities/player"
+	"ACTIVITY_MODULE/game/modules/activity"
 	rpcactivityalliance "ACTIVITY_MODULE/internal/rpc/activity_alliance"
 	rpcworld "ACTIVITY_MODULE/internal/rpc/activity_world"
 	"ACTIVITY_MODULE/protocol/msgid"

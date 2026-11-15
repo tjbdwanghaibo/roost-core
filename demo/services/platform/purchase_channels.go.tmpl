@@ -1,10 +1,10 @@
 package platform
 
 import (
-	"{{MODULE}}/game/purchase"
 	"context"
 	"encoding/json"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+	"{{MODULE}}/game/modules/purchase"
 )
 
 // 模块缺省拒绝所有渠道；demo 明确接入模拟渠道。framework 已校验 HMAC 后才调用这里。

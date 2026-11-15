@@ -23,7 +23,7 @@ import (
 // 加字段不需要迁移（BSON 解码给零值）；需要迁移的是改形状——新定义无论如何都找不到旧的那个数字。
 const PlayerWeaponToEquipment = "player_weapon_to_equipment"
 
-// weaponSlot 是武器所在的槽位；game/equipment 给槽位命名，这里只需要它的编号。
+// weaponSlot 是武器所在的槽位；game/modules/equipment 给槽位命名，这里只需要它的编号。
 const weaponSlot = "1"
 
 // PlayerSteps 登记 Player 的全部离线步骤。登记是显式调用而不是 init()：一个因为包恰好被链接进来

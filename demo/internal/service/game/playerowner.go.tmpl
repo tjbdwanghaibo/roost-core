@@ -8,17 +8,17 @@ import (
 	"sync"
 	"time"
 
-	"{{MODULE}}/protocol/msgid"
-	gamerehome "{{MODULE}}/game/rehome"
-	"{{MODULE}}/game/settings"
-	player "{{MODULE}}/game/entities/player"
-	syncsender "{{MODULE}}/game/handler/syncsender"
-	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamerehome "{{MODULE}}/game/modules/rehome"
+	"{{MODULE}}/game/settings"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
 )
 
 // PlayerOwnerCapability is the name the ownership table is published under, so

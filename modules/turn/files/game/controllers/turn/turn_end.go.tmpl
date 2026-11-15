@@ -3,12 +3,12 @@ package turn
 import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"log/slog"
 	turncomponent "{{MODULE}}/game/components/turn"
-	"{{MODULE}}/game/view"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	roomlogic "{{MODULE}}/game/room"
+	roomlogic "{{MODULE}}/game/modules/room"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 

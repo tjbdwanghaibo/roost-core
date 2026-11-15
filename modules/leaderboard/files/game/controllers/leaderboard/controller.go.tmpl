@@ -3,14 +3,14 @@ package leaderboard
 import (
 	"fmt"
 
-	gameleaderboard "{{MODULE}}/game/leaderboard"
+	gameleaderboard "{{MODULE}}/game/modules/leaderboard"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
 )
 
 // Controller 持有排行榜端点的依赖：rank 服务的客户端。读榜不改任何 Entity，不经过 Nest。
-// 这里只有读：提交分数不对客户端开放，入口是 game/leaderboard 的 Submit。
+// 这里只有读：提交分数不对客户端开放，入口是 game/modules/leaderboard 的 Submit。
 type Controller struct {
 	registry *app.Registry
 	ranking  svcrank.Rank

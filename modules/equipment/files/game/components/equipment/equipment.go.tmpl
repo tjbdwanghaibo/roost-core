@@ -7,8 +7,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 	"{{MODULE}}/db"
+	rules "{{MODULE}}/game/modules/equipment"
 	apperrors "{{MODULE}}/internal/errors"
-	rules "{{MODULE}}/game/equipment"
 )
 
 // Owner 是 Equipment 组件的宿主：整个 Player（换装钩子要拿到宿主）。只在实体被 Nest 锁住期间使用。

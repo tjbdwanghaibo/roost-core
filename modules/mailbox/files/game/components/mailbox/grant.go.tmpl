@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync"
 
-	gamemailbox "{{MODULE}}/game/mailbox"
+	gamemailbox "{{MODULE}}/game/modules/mailbox"
 )
 
-// 这个文件是邮件附件“怎么发到玩家身上”的登记点。附件有哪些种类、各自合不合法登记在 game/mailbox
+// 这个文件是邮件附件“怎么发到玩家身上”的登记点。附件有哪些种类、各自合不合法登记在 game/modules/mailbox
 // （那个包不认识实体）；这里登记每个种类在 Player 上的发放方式，Component.Claim 按附件的种类取用。
 // 金币内置；别的种类由提供它的功能在本包自己的文件里用 init 登记（例如 mailbox 与 bag 的联动文件）。
 
@@ -43,15 +43,15 @@ var (
 )
 
 // RegisterMailboxGrant 登记一种附件的发放方式。只在 init 里调用，之后只读。
-// 缺函数、重名、或者这个种类没有在 game/mailbox 登记过（RegisterType；空名也在此列）是写错了，直接 panic：
-// 没登记校验的种类解不出来，给它登记发放方式永远用不上。本包 import game/mailbox，
+// 缺函数、重名、或者这个种类没有在 game/modules/mailbox 登记过（RegisterType；空名也在此列）是写错了，直接 panic：
+// 没登记校验的种类解不出来，给它登记发放方式永远用不上。本包 import game/modules/mailbox，
 // 那边的 init 先跑完，所以这里查得到。
 func RegisterMailboxGrant(kind gamemailbox.Type, grant MailboxGrant) {
 	if grant.Grant == nil || grant.Held == nil {
 		panic("mailbox: RegisterMailboxGrant needs both Grant and Held")
 	}
 	if !gamemailbox.Registered(kind) {
-		panic(fmt.Sprintf("mailbox: attachment type %q has a grant but is not registered in game/mailbox", kind))
+		panic(fmt.Sprintf("mailbox: attachment type %q has a grant but is not registered in game/modules/mailbox", kind))
 	}
 	mailboxGrantsMu.Lock()
 	defer mailboxGrantsMu.Unlock()

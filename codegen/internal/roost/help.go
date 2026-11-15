@@ -209,7 +209,7 @@ roost generate`,
 		Name: "heartbeat", Aliases: []string{"heartbeats", "entity-heartbeat"},
 		Summary:       "给实体加心跳宿主：在线周期推进（回复、冷却、场景逻辑帧）跑在实体自己的 Nest 锁内",
 		Usage:         `roost add heartbeat --entity <Entity> [--service <service>] [--id <component-id>]`,
-		Configuration: `要求工程有 entity 与 nest；全部实体都支持（Remote 托管实体只在拥有方跳，共享模式下不允许挂载）。写入 roost.yaml heartbeats.<entity>，服务的 mods 加 heartbeat（依赖 nest；按需装配：空转的驱动也每 10ms 走一格、多一个 Mod 让 shutdown.total_timeout 多 3s），实体加组件字段（之后归业务）；生成部分 game/heartbeat/driver_gen.go（工程唯一的驱动）、game/entities/<entity>/heartbeat_component_gen.go 与 bootstrap 里的 wiring/heartbeat 由 project sync 重写；本实体自己的心跳登记写在 heartbeat_beats.go（业务文件，只建一次，示例登记是停止状态）。档位只有 50ms～60s 十个；每个登记至多一拍在途，不追帧，回调按 Beat.Elapsed 推进，只做内存计算与入队。心跳不持久，加载后按 DAO 状态重新登记 / 启动。服务 Init / Shutdown 不用改。说明见 ` + heartbeatDocURL + `。`,
+		Configuration: `要求工程有 entity 与 nest；全部实体都支持（Remote 托管实体只在拥有方跳，共享模式下不允许挂载）。写入 roost.yaml heartbeats.<entity>，服务的 mods 加 heartbeat（依赖 nest；按需装配：空转的驱动也每 10ms 走一格、多一个 Mod 让 shutdown.total_timeout 多 3s），实体加组件字段（之后归业务）；生成部分 game/modules/heartbeat/driver_gen.go（工程唯一的驱动）、game/entities/<entity>/heartbeat_component_gen.go 与 bootstrap 里的 wiring/heartbeat 由 project sync 重写；本实体自己的心跳登记写在 heartbeat_beats.go（业务文件，只建一次，示例登记是停止状态）。档位只有 50ms～60s 十个；每个登记至多一拍在途，不追帧，回调按 Beat.Elapsed 推进，只做内存计算与入队。心跳不持久，加载后按 DAO 状态重新登记 / 启动。服务 Init / Shutdown 不用改。说明见 ` + heartbeatDocURL + `。`,
 		Example: `roost add heartbeat --entity Scene
 # game/entities/scene/heartbeat_beats.go：component.Register("frame", 100*time.Millisecond, component.onFrame)
 # Nest handler 里：target.HeartbeatComp().Beat("frame").Start()
@@ -236,10 +236,10 @@ roost generate
 		Name: "skill", Aliases: []string{"skills", "ability"},
 		Summary:       "生成稳定 roost-core/skill JSON 骨架和启动期编译目录",
 		Usage:         `roost add skill <name>`,
-		Configuration: `创建 game/skills/<name>.json；首次创建同时生成 catalog.go 与 catalog_test.go（已有目录缺测试时补上，两者都归业务、只建一次）。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 返回错误。catalog_test.go 的 TestSkillCatalogCompiles 用同一路径编译全部 JSON，go test ./game/skills/ 与 roost project doctor 的 skills:catalog 项拦住写坏的定义；服务启动时也调用一次 CompileAll，失败拒绝启动（Init 归业务，需自己接上）。工程用自定义 CompileEnvironment 时把测试里的环境换成同一个。`,
+		Configuration: `创建 game/modules/skills/<name>.json；首次创建同时生成 catalog.go 与 catalog_test.go（已有目录缺测试时补上，两者都归业务、只建一次）。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 返回错误。catalog_test.go 的 TestSkillCatalogCompiles 用同一路径编译全部 JSON，go test ./game/modules/skills/ 与 roost project doctor 的 skills:catalog 项拦住写坏的定义；服务启动时也调用一次 CompileAll，失败拒绝启动（Init 归业务，需自己接上）。工程用自定义 CompileEnvironment 时把测试里的环境换成同一个。`,
 		Example: `roost add skill Fireball
-# 编辑 game/skills/fireball.json
-go test ./game/skills/          # TestSkillCatalogCompiles 编译全部定义
+# 编辑 game/modules/skills/fireball.json
+go test ./game/modules/skills/          # TestSkillCatalogCompiles 编译全部定义
 # 服务 Init：skills.CompileAll(skill.DefaultCompileEnvironment())，失败返回错误`,
 	},
 	{
@@ -356,8 +356,8 @@ type Monster struct {
 		Usage: `roost add attribute <Profile> [--root dir]
 roost generate
 # 单独运行生成器（roost generate 读的就是这个目录）：
-go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute@latest -dir ./game/gameplay/attribute [-output file] [-force]`,
-		Configuration: `roost add attribute 开启 attribute feature（project sync 写出 game/gameplay/attribute/doc.go 与受控的 runtime.go，生成代码引用的 AttrID、AttributeProfile 等在那里）、写带 dirtyMask 的 profile 骨架并立即生成。手改 roost.yaml 的 features 开启时要先 roost project sync，否则 roost generate 报错指出缺 runtime.go。profile 使用 //roost:attribute index=<start> max=<count>（写在 type 上一行），必须带未导出的 dirtyMask uint64 字段（生成的 setter 写它）；导出字段都是属性且必须是整数，可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute@latest -dir ./game/modules/gameplay/attribute [-output file] [-force]`,
+		Configuration: `roost add attribute 开启 attribute feature（project sync 写出 game/modules/gameplay/attribute/doc.go 与受控的 runtime.go，生成代码引用的 AttrID、AttributeProfile 等在那里）、写带 dirtyMask 的 profile 骨架并立即生成。手改 roost.yaml 的 features 开启时要先 roost project sync，否则 roost generate 报错指出缺 runtime.go。profile 使用 //roost:attribute index=<start> max=<count>（写在 type 上一行），必须带未导出的 dirtyMask uint64 字段（生成的 setter 写它）；导出字段都是属性且必须是整数，可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
 		Example: `//roost:attribute index=1 max=64
 type PlayerProfile struct {
     HP        int64
@@ -409,7 +409,7 @@ roost generate`,
 		Name: "effect", Aliases: []string{"outbox", "effects"},
 		Summary: "生成 effect：载荷类型、topic 与持久性常量、Emit 辅助与消费服务的 SubscribeEffects 骨架；持久性 reliable（事务 outbox，缺省）/ best_effort，消费顺序 entity（缺省）/ none",
 		Usage:   `roost add effect <topic> -consumer <service> [-delivery reliable|best_effort] [-order entity|none]`,
-		Configuration: `<topic> 是点分名字（例如 player.level_up，saga.* 保留给 saga）。生成 game/effects/<topic>.go（载荷 struct、Topic<Topic> 与 Delivery<Topic> 常量、Emit<Topic>(key, event)：在 Nest handler 里调用，事务回滚、被拒或结局未知都不发）与 internal/service/<consumer>/<topic>_consumer.go（start<Topic>EffectConsumer：kitdataengine.SubscribeEffects，载荷解不开返回 kitdataengine.PoisonEffect，durable <consumer>-<topic>）。都是业务文件、只建一次；effect 文件已存在时只建新消费服务的消费者（同一 effect 多个消费者）。消费服务需要 dataengine Mod（效果流与回执库取 dataengine.effects.*、dataengine.database，不另配）。
+		Configuration: `<topic> 是点分名字（例如 player.level_up，saga.* 保留给 saga）。生成 game/modules/effects/<topic>.go（载荷 struct、Topic<Topic> 与 Delivery<Topic> 常量、Emit<Topic>(key, event)：在 Nest handler 里调用，事务回滚、被拒或结局未知都不发）与 internal/service/<consumer>/<topic>_consumer.go（start<Topic>EffectConsumer：kitdataengine.SubscribeEffects，载荷解不开返回 kitdataengine.PoisonEffect，durable <consumer>-<topic>）。都是业务文件、只建一次；effect 文件已存在时只建新消费服务的消费者（同一 effect 多个消费者）。消费服务需要 dataengine Mod（效果流与回执库取 dataengine.effects.*、dataengine.database，不另配）。
 持久性（-delivery，生产方在 effect 文件里声明一次，消费者骨架引用同一常量；effect 文件已存在时不能再给 -delivery）：reliable（缺省）effect 与实体修改进同一条 WAL 记录，经事务 outbox 发到效果流，消费方带 Mongo 回执；best_effort 不进 WAL、没有 outbox 与回执，写到达持久点（回复调用方那一刻；async 事务因此升为 strict）后经 NATS 发一次，主题 <dataengine.effects.subject_prefix>_best_effort.<topic>，至多一次——写后发前进程停止、发送队列满（dataengine.effects.best_effort_queue）或连接断开都会丢，handler 出错只记日志与计数、不重投，只用于丢了有别处补的通知。
 消费顺序（-order）：entity（缺省）信封 Key 相同的按到达顺序逐条处理；none 不按 Key 排队，只受 workers 上限。全局顺序是生产方 dataengine.projection.effect_order=wal 的事，不在消费者选。
 reliable 语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经它的 ctx 写的 Mongo 与回执一起提交；调用别的服务在事务外，要按 envelope.EffectID 幂等。普通错误退避重投，PoisonEffect 丢弃并计 dataengine.effect_consumer.handled_total{result="poison"}。骨架默认返回错误（重投、不丢），写完业务前不会把 effect 当作已处理。

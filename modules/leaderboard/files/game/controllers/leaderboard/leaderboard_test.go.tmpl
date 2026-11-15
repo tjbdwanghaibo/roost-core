@@ -16,8 +16,8 @@ import (
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	gameleaderboard "{{MODULE}}/game/modules/leaderboard"
 	"{{MODULE}}/protocol/pb"
-	gameleaderboard "{{MODULE}}/game/leaderboard"
 )
 
 // 这个文件的场景跑在真实的 rank 服务实现上：svcrank.RedisStore（合并方式、同分保留较早的 Tie、
@@ -25,7 +25,7 @@ import (
 // “只升不降”“同分先到在前”因此是 rank 服务自己算出来的，不是照文档模拟的。
 //
 // 这个文件的用例只按名字引用榜的规则（gameleaderboard.CurrentBoard、DefaultTop、MaxTop），工程改了
-// game/leaderboard/leaderboard_board.go 之后不用动它——除了一点：用例提交的分数都在 1 到 1000 之间，
+// game/modules/leaderboard/leaderboard_board.go 之后不用动它——除了一点：用例提交的分数都在 1 到 1000 之间，
 // 分数范围不含这一段时要跟着改。
 
 // leaderboardMemoryRedis 是 RedisStore 用到的那一小块 Redis 的内存实现：有序集合（分值都是 0，
@@ -278,7 +278,7 @@ func newLeaderboardFixture(t *testing.T) *leaderboardFixture {
 	return fixture
 }
 
-// submit 走服务端别的功能会走的那条路：game/leaderboard 的 Submit。
+// submit 走服务端别的功能会走的那条路：game/modules/leaderboard 的 Submit。
 func (fixture *leaderboardFixture) submit(playerID, total int64) gameleaderboard.Standing {
 	fixture.t.Helper()
 	standing, err := gameleaderboard.Submit(context.Background(), fixture.registry, playerID, total)

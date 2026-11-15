@@ -22,9 +22,9 @@ import (
 
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/db"
-	"{{MODULE}}/game/activity"
 	"{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/activity"
 )
 
 // 正式 Nest + 生成 DAO/定时器。提交器可拒绝；BSON 冷恢复不等于真实 Mongo 恢复验收。

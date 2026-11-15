@@ -12,6 +12,6 @@ managers: [NewRoomPresence]
 protocols: [RoomJoin, RoomReconnect, RoomLeave, RoomView, RoomClose]
 errcodes: [room_invalid, room_unopened, room_closed, room_full, room_not_member, room_stale_epoch, room_not_host]
 verify:
-  packages: [./game/handler, ./game/controllers/room, ./game/room, ./game/managers]
+  packages: [./game/handler, ./game/controllers/room, ./game/modules/room, ./game/managers]
   run: ^TestRoom
   pass: 29

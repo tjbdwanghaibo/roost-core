@@ -3,10 +3,10 @@ summary: 技能目录：服务启动编译游戏 JSON 技能，客户端读取�
 needs:
   features: [protocol]
 runtime:
-  package: game/skillbook
+  package: game/modules/skillbook
   start: Start
 protocols: [SkillCatalog]
 verify:
-  packages: [./game/skillbook, ./game/controllers/skillbook]
+  packages: [./game/modules/skillbook, ./game/controllers/skillbook]
   run: ^TestSkillbook
   pass: 11

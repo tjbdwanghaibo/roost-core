@@ -3,7 +3,7 @@ package cardrpg
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	attr "example.com/card-rpg-practice/game/gameplay/attribute"
+	attr "example.com/card-rpg-practice/game/modules/gameplay/attribute"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 	"reflect"
 	"sort"

@@ -143,11 +143,11 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
 ```
 
 - **附件是（种类，号，数量）**：线上格式 `{"type":"item","id":1002,"amount":1}`，金币是 `{"type":"coins","amount":100}`
-  （`game/mailbox/mailbox.go`）。种类是登记点：金币内置，经 wallet 模块到账；道具（`item`）由 mailbox 与 bag 的联动登记
-  （`game/mailbox/mailbox_item.go` 登记校验，`game/components/mailbox/mailbox_item.go` 登记发放：`BagComp().Add`，与领取账本同一笔事务）。
+  （`game/modules/mailbox/mailbox.go`）。种类是登记点：金币内置，经 wallet 模块到账；道具（`item`）由 mailbox 与 bag 的联动登记
+  （`game/modules/mailbox/mailbox_item.go` 登记校验，`game/components/mailbox/mailbox_item.go` 登记发放：`BagComp().Add`，与领取账本同一笔事务）。
   demo 发的奖励邮件带的都是道具。回包与列表用同样的字段说附件：`AttachmentType` / `AttachmentID` / `Amount`，领取回包另有
   `Held`（到账后这个道具在背包里的数量；金币是余额）。
-- **发件方都走 `gamemailbox.SendTo`**（`game/mailbox/mailbox_send.go`）：给一名玩家发一封信，附件先按领取端的同一个判断校验
+- **发件方都走 `gamemailbox.SendTo`**（`game/modules/mailbox/mailbox_send.go`）：给一名玩家发一封信，附件先按领取端的同一个判断校验
   （发不出去的不进邮箱，返回 `ErrLetterInvalid`，重试无用），幂等键必填。demo 的四个发件方只差标题、附件与幂等键：
   升级奖励（mailbox/profile 联动，键是 EffectID）、GM 补偿（模块联动，键是显式 request_id）、活动结算（`activity.go`，
   道具一封、金币一封，键是“活动 id + 玩家 id”，金币那封另加前缀）、送礼的送达（`gift_saga.go`，键是 saga 步骤的幂等键）。
@@ -156,7 +156,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
   邮件服务只能把它算作重复**尝试**（它无从知道游戏发没发），游戏这边知道：第二次发放在账本上撞到自己，什么也不做，回的还是同一组数字。
   没有账本时这里就是第二叠道具——模块的 `TestMailboxSameMailArrivingAgainPaysNothing`、`TestWithMailboxBagItemMailLandsInTheBagOnce`
   与端点一级的 `TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce` 把这条钉住了（去掉账本判断即红）。
-- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到（Nest 排队、Player 冷加载、重试）。`MailboxClaimReward` handler 的 `nowUnixMilli` 是执行时这条消息冻结的业务时间（生成的 Nest 分发包装从 `fctx.Now` 填，调用方不传时间；DESIGN-TODO D22-1），按它判 `gamemailbox.ClaimWindowClosed`（与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发奖；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`mail: mail has expired`），判断在任何 DAO 写入之前。账本在过期后再等 `gamemailbox.LedgerPruneGraceSeconds`（10 分钟）才清理（`gamemailbox.LedgerMayForget`）：宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着，只能靠账本还记得。没有到期时间的发放请求直接拒绝（`mailbox_invalid`；mail 服务要求每封邮件都有过期时刻，真实的预留不会走到这里），所以账本里不会有清不掉的记录。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/mailbox`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。回归是模块的 `TestMailboxExpiredFirstGrantIsRefusedAtExecutionTime`、`TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused`、`TestMailboxRecordOutlivesTheExpiryByTheGrace`（`game/handler/mailbox_test.go`）。
+- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到（Nest 排队、Player 冷加载、重试）。`MailboxClaimReward` handler 的 `nowUnixMilli` 是执行时这条消息冻结的业务时间（生成的 Nest 分发包装从 `fctx.Now` 填，调用方不传时间；DESIGN-TODO D22-1），按它判 `gamemailbox.ClaimWindowClosed`（与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发奖；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`mail: mail has expired`），判断在任何 DAO 写入之前。账本在过期后再等 `gamemailbox.LedgerPruneGraceSeconds`（10 分钟）才清理（`gamemailbox.LedgerMayForget`）：宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着，只能靠账本还记得。没有到期时间的发放请求直接拒绝（`mailbox_invalid`；mail 服务要求每封邮件都有过期时刻，真实的预留不会走到这里），所以账本里不会有清不掉的记录。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/modules/mailbox`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。回归是模块的 `TestMailboxExpiredFirstGrantIsRefusedAtExecutionTime`、`TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused`、`TestMailboxRecordOutlivesTheExpiryByTheGrace`（`game/handler/mailbox_test.go`）。
 - **仍然开着的**：预留成功但发放前崩溃（邮件被占到租约到期，玩家等，什么都没丢）；`CommitClaim` 丢失（账本挡的是重复**发放**，不是重复尝试）。
 - `Claimable` 是“现在领会成功吗”：mail 服务说可以预留，并且附件是这一版发得了的奖励（解得出来、种类登记了发放方式）。
   客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
@@ -190,7 +190,7 @@ internal/service/game/matchmaker.go  每 500ms：Candidates → Grouping.Group �
 PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务端校验票的归属）
 ```
 
-- `game/matchmaking/queue.go` 是游戏对 match 说的话：duel 队列两人一组按到达顺序（`FirstComeGrouping`），ranked 队列按等级配（`ScoreWindowGrouping`：
+- `game/modules/matchmaking/queue.go` 是游戏对 match 说的话：duel 队列两人一组按到达顺序（`FirstComeGrouping`），ranked 队列按等级配（`ScoreWindowGrouping`：
   等级差 5 以内立刻配，窗口随最老候选的等待每秒放宽 5，上限 50）；ticket 的 Score 在 JoinQueue 时经 profile 模块的 `ProfileCard` 读 handler 取（Player 锁内，名字与等级），
   PollMatch 带 `mode` 选队列。subject kind 是 `player`。matchmaker 每 500ms 扫两个 pool，各用自己的策略。
 - 所有对 match 的调用都从端点或普通 goroutine 发出，**从不在实体锁里**——World 只在 Commit 成功之后经自己的 Nest handler 记一笔。
@@ -202,7 +202,7 @@ PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务�
 聊天不是 demo 自己的代码：它是 [chat 业务模块](../modules/README.md)，`-template game-demo` 生成时由 `roost module add chat` 装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。demo 在它之上只做一件事：登录时把玩家加进在线名单并发一条公告（`game/controllers/player/enter_game.go`）。
 
 chat 服务是通用的：它按频道存带序号的消息、执行这个工程交给它的策略；哪些频道存在、一句话长什么样、谁在线能收到，
-是游戏的事，住在 `game/chat/`（game 进程与 chat 进程都 import 它——这就是两边对 `text` 这个消息类型名达成一致的方式）：
+是游戏的事，住在 `game/modules/chat/`（game 进程与 chat 进程都 import 它——这就是两边对 `text` 这个消息类型名达成一致的方式）：
 
 ```
 ChatSend 端点 ─ Publish(sender=认证玩家, requestID=帧序号) ─▶ chat 服务（typed servicerpc）
@@ -311,7 +311,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 - **公会与玩家背包一起改**——`found_alliance`（建盟费由 Controller.foundCost 指定，默认 100；demo 金币道具为 9001）、`donate_alliance`、
   `claim_alliance_reward`：两个事务域，各一个 saga（`saga/alliance_found`、`alliance_donate`、`alliance_reward`）。端点
   `StartAllianceOp` 在玩家锁内做建议性检查后 `saga.EmitStart`，立即答“已受理”与交易号（`SagaKey`），结果用 `alliance_op_status`查。
-  步骤在 `game/alliance/runtime/saga.go`：Player 一侧是**原生步骤**（`AllianceDebit` / `AllianceCredit`，`durability=pipelined`，
+  步骤在 `game/modules/alliance/runtime/saga.go`：Player 一侧是**原生步骤**（`AllianceDebit` / `AllianceCredit`，`durability=pipelined`，
   回执在 `PlayerDao.SagaReceipts`，按 sid 路由到玩家绑定的 sid、属主核对与送礼相同）；公会一侧是 **Mongo 步骤**，步骤体调 alliance RPC，
   请求号 = 命令的 `IdempotencyKey`。
 
@@ -348,7 +348,7 @@ founder2 在 1001 建 B、member2 从 1000 入 B，入会者与盟主各在自�
 本进程仍有该玩家会话时不入会、答 `joined=false`，机器人重试它，所以“已离线”是一个事实而不是等出来的）把它拉进公会，
 再登录后“我的公会”必须就是这个公会。
 通知是 alliance 写答复成功之后由**服务层直接**按成员的原服 sid 经 Bus 发的 `alliance.member_notice`（不经 effect；
-`game/alliance/runtime/notices.go`）：玩家在本进程在线才处理——改副本（离开只清“正显示这个公会”的，晚到的旧
+`game/modules/alliance/runtime/notices.go`）：玩家在本进程在线才处理——改副本（离开只清“正显示这个公会”的，晚到的旧
 退盟不会盖掉新公会）并推 `AllianceNoticePush`；至多一次，丢了不重发、只记日志与 `alliance.member_notice_lost_total`。
 
 alliance 服务不产生、不消费任何 effect（2026-11-05 晚起）：守卫是名单的缓存，只允许“过时地占着”、绝不“过时地空着”。跨实例两步写成功后服务直接调
@@ -546,18 +546,18 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 ## 把一名玩家换到另一个服（rehome 模块）
 
-单个玩家换服是 `rehome` 模块（`roost module add rehome`，demo 的模块列表里最后一个）：协议 `RehomeApply`（玩家自己申请，受规则文件 `game/rehome/rehome_rules.go` 的可去列表与 7 天冷却约束）与服务端入口（GM 命令 `gm.player.rehome {player_id, to, note}`，不受规则约束）走同一个驱动器。顺序是：源服打“离开中”标记（从此他新的请求在写闸门被拒）→ 换服前检查 → Player 上记意图 → account `BeginRoleTransfer` →（答复客户端“已受理”）→ 断开会话并等标记之前准入的请求执行完 → 事务里把检查再跑一遍 → 离开钩子 → 离开场景、DataEngine 交出实体（屏障保持）→ account `CommitRoleTransfer` → 目标服首次进入时到达（清意图、冷却起算）。提交 / 中止的结论按 account 带回的当前绑定判定，不按错误码（应答丢失之后重发得到的 stale 不等于“没提交”）。Player 的 DAO 是 `dbscope=sid`（v1.47.0 起，档在 `<库>_<sid>`）：交出实体之后先把他的文档复制到目标服的库、再提交，提交后删源服库里的那几份（rehome README“搬档”）。每一步失败的去向见 `game/rehome/rehome_driver.go` 的注释；account 一侧的契约见[参考流程 §7](../docs/framework/PLAYER-MIGRATION.md)。客户端在被受理之后只认一个信号：连接断开，然后重新选角，角色所在的服变了就是换成了。
+单个玩家换服是 `rehome` 模块（`roost module add rehome`，demo 的模块列表里最后一个）：协议 `RehomeApply`（玩家自己申请，受规则文件 `game/modules/rehome/rehome_rules.go` 的可去列表与 7 天冷却约束）与服务端入口（GM 命令 `gm.player.rehome {player_id, to, note}`，不受规则约束）走同一个驱动器。顺序是：源服打“离开中”标记（从此他新的请求在写闸门被拒）→ 换服前检查 → Player 上记意图 → account `BeginRoleTransfer` →（答复客户端“已受理”）→ 断开会话并等标记之前准入的请求执行完 → 事务里把检查再跑一遍 → 离开钩子 → 离开场景、DataEngine 交出实体（屏障保持）→ account `CommitRoleTransfer` → 目标服首次进入时到达（清意图、冷却起算）。提交 / 中止的结论按 account 带回的当前绑定判定，不按错误码（应答丢失之后重发得到的 stale 不等于“没提交”）。Player 的 DAO 是 `dbscope=sid`（v1.47.0 起，档在 `<库>_<sid>`）：交出实体之后先把他的文档复制到目标服的库、再提交，提交后删源服库里的那几份（rehome README“搬档”）。每一步失败的去向见 `game/modules/rehome/rehome_driver.go` 的注释；account 一侧的契约见[参考流程 §7](../docs/framework/PLAYER-MIGRATION.md)。客户端在被受理之后只认一个信号：连接断开，然后重新选角，角色所在的服变了就是换成了。
 
 demo 在模块之上接的线：
 
 - **交出带上只由他所在进程写的实体**（`playerEvictor.DepartPlayer`）：开了地形时，玩家面向客户端的编辑账本 `TerrainEditor`（全局库）与 Player 一起交出、一起撤屏障（`terrainEditorOf`）。不带它时源服内存里留着旧账本，玩家换回来按旧 `LastSeq` 判号、写回旧版本，投影版本冲突致命（`TestTerrainEditLedgerRealMongo` 的换进程子用例，真实 Mongo）。
 - **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
 - **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gamelogin.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gamelogin.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
-- **saga 步骤按当前绑定准入**（`gift_saga.go` 与 `game/alliance/runtime`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
+- **saga 步骤按当前绑定准入**（`gift_saga.go` 与 `game/modules/alliance/runtime`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
 - **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：开着分区场景的服拒绝（SceneActor 还不能交接），非法分区配置也拒绝迁服；坐在本进程某一局对战里的玩家申请时与离开时各拒一次（lockstep 房间在本进程内存里，`battleManager.Seated`）。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。匹配票据不拦：离开中的玩家不再是本进程撮合的候选（`PlayerOwners.Resident` 不认迁出表里的玩家），票据在全服共用的 match 服务里，换走之后由所在服处理或到期。副本不拦：session 服务的 run 与领奖账本都跟着玩家走。地形编辑账本随玩家交出（见下面“交出带上只由他所在进程写的实体”）。名下建筑留在地图上（建筑是地图的实体、不是玩家的档，按地形 DAO 的库范围归属，待维护者决定），全服邮件的服范围不随换服迁移，也待维护者决定。
 - **联盟消费者启动**（`internal/service/game/alliance.go`）：Service.Init 先创建 PlayerOwners，再发布模块 PlayerBinding 适配并启动联盟 runtime。demo 在 manifest 关闭该 runtime 的自动接线，业务逻辑仍全部来自模块。App 先排空 Saga ingress，再关闭业务服务。
 
-用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
+用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/modules/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
 
 ## 兴趣：距离是一种视野，关系是另一种
 
@@ -586,7 +586,7 @@ demo 在模块之上接的线：
 
 ## 属性：层、合成，以及两种存储意图
 
-属性使用 [attribute 模块](../modules/attribute/README.md)：`game/gameplay/attribute` 声明属性与派生公式，组件按 DAO 内容构造只读副本；升级由 profile 的登记点同事务触发，demo 的升级钩子只发奖励邮件事件。
+属性使用 [attribute 模块](../modules/attribute/README.md)：`game/modules/gameplay/attribute` 声明属性与派生公式，组件按 DAO 内容构造只读副本；升级由 profile 的登记点同事务触发，demo 的升级钩子只发奖励邮件事件。
 
 - **三层**：`Base`（玩家自己的值）、`Gear`（穿戴集的投影，按 equipment_item 表的 `attack` / `hp` 求和）、`Final`（合成视图）。
 - **合成规则**：`Final = Base + Gear` 逐属性相加，**然后**才 `Update()` 重算派生属性。派生属性只算一次、且算在合成后的输入上——
@@ -600,7 +600,7 @@ demo 在模块之上接的线：
 
 排行榜用的是 [leaderboard 业务模块](../modules/README.md)（生成时由 `roost module add leaderboard` 装进工程）：读榜的两条协议、
 提交入口 `gameleaderboard.SubmitSeason` 与它们的场景测试都是模块的，demo 不再带自己的 `game/ranking` 与 `RankTop`。demo 只覆盖
-模块留给工程的业务文件 `game/leaderboard/leaderboard_board.go`（连同钉住它的 `leaderboard_board_test.go`）——哪张榜（`clears`，
+模块留给工程的业务文件 `game/modules/leaderboard/leaderboard_board.go`（连同钉住它的 `leaderboard_board_test.go`）——哪张榜（`clears`，
 副本通关次数，全服）、哪个赛季（`CurrentSeason()`）、分数范围、一屏十行；一分是什么、什么让提交可重试也写在这个文件头上。
 通关计数本身（`PlayerDao.DungeonClears`、领奖账本）是副本玩法，留在 demo。
 
@@ -630,9 +630,9 @@ demo 在模块之上接的线：
 
 ## 技能目录：启动时编译，客户端可查
 
-技能目录来自 [skillbook 模块](../modules/README.md)，demo 只覆盖规则数据 `game/skills/fireball.json`。模块的 `game/skills/catalog.go` 把目录下的 JSON
+技能目录来自 [skillbook 模块](../modules/README.md)，demo 只覆盖规则数据 `game/modules/skills/fireball.json`。模块的 `game/modules/skills/catalog.go` 把目录下的 JSON
 嵌进二进制并用 `gameplay/skill` 严格 `Parse` + `Compile`。生成的服务适配层在业务 `Init` 前编译整份目录——**编不过就不起来**；
-warning 数进日志，编译环境在 `game/skillbook/skillbook_rules.go`。`game/controllers/skillbook` 的 `SkillCatalog` 端点读取启动时发布的同一份目录，
+warning 数进日志，编译环境在 `game/modules/skillbook/skillbook_rules.go`。`game/controllers/skillbook` 的 `SkillCatalog` 端点读取启动时发布的同一份目录，
 返回排序后的 id 与 warning 数；消息号安装时分配，见 `roost.yaml` 的 `modules.skillbook.ids`，机器人断言至少一个且 0 warning。
 技能**执行**（Host 读已锁 Entity、确定性 tick、checkpoint / replay）刻意没进 demo，见 `roost help skill`。
 
@@ -810,7 +810,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
   场景、已付订单、公会、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
   后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
-  `EnterInit`，响应里的 `First` 说明这一次是不是首次。demo 的新玩家初始化写在 `game/login/enter_first.go`（D25，覆盖模块的
+  `EnterInit`，响应里的 `First` 说明这一次是不是首次。demo 的新玩家初始化写在 `game/modules/login/enter_first.go`（D25，覆盖模块的
   缺省版本）：新玩家落库的位置写成世界场景的出生点，与“建成了”的标记同一笔事务，加载或创建与新建两条路都经过它，只执行一次；
   demo 不发初始道具或金币。
   之后照样执行进入钩子（`gamelogin.RunEntered`，带着会话的 claims）：聊天上线与拉全服邮件是 chat、mailbox 各自与 enter 的联动登记的，
@@ -883,7 +883,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 
 ### 握手：两种票据
 
-`internal/access/player/tcp/auth.go` 是登录模块写下的接线，票据规则在 `game/login/login.go`：
+`internal/access/player/tcp/auth.go` 是登录模块写下的接线，票据规则在 `game/modules/login/login.go`：
 
 - `enter:<进服票据>`——登录入口那条路。认证器把票据交给 account 的 `EnterServer`：按“账号 + 服”解析玩家号，没有映射就新建。
 - `session:<player_id>:<token>`——老路，机器人的缺省方式与演练脚本在用。token 由 account 签发（`Login` → `CreateRole` → `SelectRole`），

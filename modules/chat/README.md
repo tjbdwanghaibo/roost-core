@@ -11,14 +11,14 @@
 - **服务端入口**
   - `Controller.AnnounceWorld(ctx, text, requestID string) error`（`game/controllers/chat/chat_push.go`）：以游戏的名义在世界频道说一句话并推给在线玩家。`requestID` 是幂等键，同一个键重发不会存两次。不对客户端开放。
   - `chat.FromRegistry(registry)`（`game/controllers/chat/controller.go`）：取得 `Controller`。
-  - `Controller.Presence()` 与包级 `DefaultPresence()`（`game/chat/chat.go`）：本进程的世界频道在线名单，方法 `Add`、`Remove`、`Holds`、`Snapshot`。
-  - `game/chat` 包的规则函数：`ChannelOf(kind, target)`（协议字段换成频道）、`ValidateText(body)`（消息体校验）、`Allow(who, channel)`（频道政策）、`PlayerSender(playerID)`（发送者身份）、`PrivateChannel(peer)`、变量 `WorldChannel`。
+  - `Controller.Presence()` 与包级 `DefaultPresence()`（`game/modules/chat/chat.go`）：本进程的世界频道在线名单，方法 `Add`、`Remove`、`Holds`、`Snapshot`。
+  - `game/modules/chat` 包的规则函数：`ChannelOf(kind, target)`（协议字段换成频道）、`ValidateText(body)`（消息体校验）、`Allow(who, channel)`（频道政策）、`PlayerSender(playerID)`（发送者身份）、`PrivateChannel(peer)`、变量 `WorldChannel`。
 - **登记点 / 钩子**
   - `OnLocalChannel(name string, send LocalChannel)`（`game/controllers/chat/local.go`）：登记一个不经 chat 服务存储的瞬时频道。`ChatSend` 的 `Kind` 等于登记名时，文本校验通过后交给登记的函数处理。只在 `init` 登记；名字不能是 `world`、`private`、`system`、`group`，重复登记 panic。登记的函数在端点的请求上下文里执行，不在任何实体事务里，必须自己检查权限与收件范围。
 - **状态**
   - 不在任何实体上挂字段。消息保存在 chat 服务里；在线名单 `Presence` 是进程内存。
 - **配置**
-  - 没有配置表与配置键。规则是 `game/chat/chat.go` 里的常量：`MaxTextBytes = 256`、`WorldChannelTarget = 1`、`TypeText`（唯一的消息类型）、`SystemActor = "game"`。
+  - 没有配置表与配置键。规则是 `game/modules/chat/chat.go` 里的常量：`MaxTextBytes = 256`、`WorldChannelTarget = 1`、`TypeText`（唯一的消息类型）、`SystemActor = "game"`。
   - `services/chat/collaborators.go`：chat 进程向工程要的协作者（`Policy`、`Bodies`、`System`、`Rules`、`Metrics`）。安装时它取代生成的拒绝桩，之后归工程所有。
 - **错误码**
   - 模块自己不定义错误码。拒绝时应答的 `Code` / `Reason` 来自框架 `service/chat` 的错误（例如 `ErrMessageInvalid`、`ErrChannelInvalid`、`ErrNotPermitted`、`ErrRequestInvalid`）经 `errcode.ClientError` 的映射。
@@ -43,25 +43,25 @@
 
 - **需求正好是它**：`roost module add chat`。不连带安装别的模块。
 - **需求比它多一点**
-  - 改长度上限、分区世界（把区号放进 `WorldChannelTarget`）、发送者显示名：改 `game/chat/chat.go`。game 进程与 chat 进程都 import 这个包，两边规则保持一致。
-  - 开放群组频道：改 `game/chat/chat.go` 的 `Allow` 与 `ChannelOf`，按队伍或公会的成员关系授权；`chat_push.go` 的 `deliver` 也要补上群组的收件人。
+  - 改长度上限、分区世界（把区号放进 `WorldChannelTarget`）、发送者显示名：改 `game/modules/chat/chat.go`。game 进程与 chat 进程都 import 这个包，两边规则保持一致。
+  - 开放群组频道：改 `game/modules/chat/chat.go` 的 `Allow` 与 `ChannelOf`，按队伍或公会的成员关系授权；`chat_push.go` 的 `deliver` 也要补上群组的收件人。
   - 加敏感词或频率限制：在 `HandleChatSend` 里、调用 `messaging.Publish` 之前加检查。
   - 加一个不存历史的瞬时频道（附近、房间内）：在自己的包里 `init` 调 `OnLocalChannel`，不要改 `chat_send.go`。
   - 替换后的 `collaborators.go` 里不要再出现 `is not configured` 这句话，`roost project doctor` 靠它判断文件是否还是拒绝桩。
 - **别的模块 / 业务代码要用它**
   - 发全服公告：`controller, _ := chat.FromRegistry(registry)`，然后 `controller.AnnounceWorld(ctx, text, requestID)`，`requestID` 用稳定的业务键。
-  - 让玩家立刻收到世界频道推送：`chat.DefaultPresence().Add(playerID)`（`game/chat` 包）。
+  - 让玩家立刻收到世界频道推送：`chat.DefaultPresence().Add(playerID)`（`game/modules/chat` 包）。
   - 复用文本校验：`chat.ValidateText([]byte(text))`。
 - **只适合借鉴的情形**：需要跨进程实时扇出的世界频道（多个 game 进程的玩家互相即时可见）时，本模块的进程内名单不够，要改为订阅 chat 服务的流；值得借鉴的是“存储为准、推送为捷径、每条推送带 `Seq` 供补读”的做法。
 
 ## 联动
 
-- `chat` + `enter`（`with/enter/game/chat/chat_enter.go`）：经 `gamelogin.OnEntered("chat", …)` 在玩家进入游戏时把他加进本进程的世界频道在线名单。不发登录公告。
+- `chat` + `enter`（`with/enter/game/modules/chat/chat_enter.go`）：经 `gamelogin.OnEntered("chat", …)` 在玩家进入游戏时把他加进本进程的世界频道在线名单。不发登录公告。
 - `scene` + `chat`（在 `scene/with/chat`）：经 `OnLocalChannel("nearby", …)` 登记附近聊天，在 Nest 里取同场景收件人快照后在锁外推送，没有历史。
 - 以 `requires` 依赖它的模块：`notice`（公告与跑马灯经 `AnnounceWorld` 发出）。
 
 ## 验证范围
 
-- `roost module verify chat`：10 个场景（`./game/chat`、`./game/controllers/chat`、`./services/chat`，`^TestChat`）；与 `enter` 的联动另有 2 个场景（`./game/chat`，`^TestWithChatEnter`）。
+- `roost module verify chat`：10 个场景（`./game/modules/chat`、`./game/controllers/chat`、`./services/chat`，`^TestChat`）；与 `enter` 的联动另有 2 个场景（`./game/modules/chat`，`^TestWithChatEnter`）。
 - 场景是离线的，覆盖：文本校验、`ChannelOf` 的寻址、`Allow` 的放行与拒绝、在线名单的增删、最后一条连接关闭后移出名单（玩家传输用替身 `chatSessions`）、本地频道先校验再分发且没有历史、collaborators 执行同一套政策并授予系统入口。
 - 没有验证：`HandleChatSend` 经 chat 服务发布世界或私聊消息、`HandleChatHistory` 读回、`AnnounceWorld`、`deliver` 的实际推送——这几条路径在模块场景里没有用例；真实 chat 进程、NATS 总线与 TCP 推送也没有在模块场景里跑过。

@@ -7,12 +7,12 @@ package protocoldef
 // alliance's new state; founding, donating and claiming the alliance reward also
 // change the player's Bag, so they start a saga and answer "accepted" with the
 // saga's key (AllianceOpStatus reports how it went); reading a alliance reads its
-// Remote mirror. See game/alliance for the rules and the codes. Applying to an
+// Remote mirror. See game/modules/alliance for the rules and the codes. Applying to an
 // alliance that is not open, and what its leader does (approve, reject, kick,
 // hand the leadership over, read the roster), are in alliance_manage.go.
 
 // FoundAllianceRequest founds a alliance led by this player. The fee is
-// Controller.foundCost of the bag item game/alliance.CoinItemID (100 of item
+// Controller.foundCost of the bag item game/modules/alliance.CoinItemID (100 of item
 // 1003 unless the project changed them); the saga takes it and refunds it if
 // the alliance service refuses (an invalid name, the player is already in a
 // alliance).
@@ -44,7 +44,7 @@ type AllianceInfoRequest struct {
 	MinVersion int64 `pb:"2"`
 }
 
-// DonateAllianceRequest donates Amount of the bag item game/alliance.CoinItemID
+// DonateAllianceRequest donates Amount of the bag item game/modules/alliance.CoinItemID
 // to the alliance the player is in.
 type DonateAllianceRequest struct {
 	Amount int32 `pb:"1"`

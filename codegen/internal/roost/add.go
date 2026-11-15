@@ -34,7 +34,7 @@ type AddOptions struct {
 	// player.level_up -consumer game.
 	Consumer string
 	// Delivery / Order are roost add effect's -delivery (reliable | best_effort,
-	// the producer's declaration, written once into game/effects/<topic>.go)
+	// the producer's declaration, written once into game/modules/effects/<topic>.go)
 	// and -order (entity | none, the consumer's in-process order).
 	Delivery, Order string
 	// AI / State are roost add behavior options: build an AI heartbeat

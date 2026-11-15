@@ -8,7 +8,7 @@ access:
   transport: tcp
 protocols: [ServertimeSync, ServertimeNow]
 verify:
-  packages: [./game/servertime, ./game/controllers/servertime]
+  packages: [./game/modules/servertime, ./game/controllers/servertime]
   run: ^TestServertime
   pass: 12
 with:

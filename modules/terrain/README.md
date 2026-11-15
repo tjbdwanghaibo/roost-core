@@ -12,14 +12,14 @@
   - 三条编辑协议的 `Result` 都是 `TerrainEditResult{ProjectionPending, Sequence, Duplicate, Changed, BuildingID, Standing}`：`Duplicate` 表示这是重发、没有再执行；`Changed` 是改动的采样点数；`ProjectionPending` 表示这张图有一次提交后的本地投影失败、等服务端恢复。
   - 客户端不能指定操作人、块实体号、属主，也不能直接上传地形数组。地形块与建筑的内容经场景的实体同步下发，不另设推送协议。
 - **服务端入口**
-  - 运行期 `Runtime`（`game/terrain/service/runtime.go`），用 `service.FromRegistry(registry)` 取得（能力名 `gameplay.terrain`）：
+  - 运行期 `Runtime`（`game/modules/terrain/service/runtime.go`），用 `service.FromRegistry(registry)` 取得（能力名 `gameplay.terrain`）：
     - `Open(ctx, id int64, path string) (*logic.World, error)`：用一个地形包打开一张地形图（同时在 scene 里开出同号场景），只给可信服务端用。
     - `Execute(ctx, playerID, command) (logic.Result, error)`：执行一条编辑命令（协议端点就是调它）。
     - `Query(ctx, playerID, sceneID, key)`：读一块。
     - `Refresh(ctx, id) error`：投影失败后，从 DAO 重新恢复本进程的视图、占位与建筑显示；不产生新的编辑序号。
     - `World(id)`、`Stop(ctx)`；包级的 `Start(registry)`（模块的运行期入口）与 `DefaultPack()`。
-  - 规则与类型（`game/terrain/rules.go`）：`Command{SceneID, Sequence, Op, X, Y, Radius, Strength, Material}`（`view.TerrainCommand` 的别名；命令规则是函数 `ValidateCommand`、`CommandDigest`、`CommandBrush`、`CommandFootprint`）、`Result`、`ChunkState`、`SiteState`（同样是 `view.TerrainResult` / `TerrainChunkState` / `TerrainSiteState` 的别名）、`ChunkUnique` / `SiteUnique`（由场景号与坐标算持久实体号）。
-  - `World`（`game/terrain/world.go`）：一张图的只读底图与提交后的投影；`Blocked(at)`、`Occupied(key, index)`、`Failures()`，并作为场景的 `Ground`、它的 `Walker` 作为场景的 `Surface`。
+  - 规则与类型（`game/modules/terrain/rules.go`）：`Command{SceneID, Sequence, Op, X, Y, Radius, Strength, Material}`（`view.TerrainCommand` 的别名；命令规则是函数 `ValidateCommand`、`CommandDigest`、`CommandBrush`、`CommandFootprint`）、`Result`、`ChunkState`、`SiteState`（同样是 `view.TerrainResult` / `TerrainChunkState` / `TerrainSiteState` 的别名）、`ChunkUnique` / `SiteUnique`（由场景号与坐标算持久实体号）。
+  - `World`（`game/modules/terrain/world.go`）：一张图的只读底图与提交后的投影；`Blocked(at)`、`Occupied(key, index)`、`Failures()`，并作为场景的 `Ground`、它的 `Walker` 作为场景的 `Surface`。
   - 组件 `TerrainComponent`（`game/components/terrain/terrain.go`，经 `ITerrainEntity` 的 `TerrainComp()`）：`Check(command, sceneID)`（锁内判重与授权）、`Record(command, result, delta)`（记账本）、`BuildingCount()`、`Sequence()`，接口是 `view.Terrain`。
   - 两个实体的组件：TerrainChunk 的 `TerrainChunkDataComp()`（`game/components/terrainchunkdata`，`view.TerrainChunkData`：开图 `Initialize`、按地图身份 `Validate`、笔刷 `Apply`、占位 `SetLots`、快照 `State`、`Lot`，存档校验在组件的 `OnInitFinish`）；TerrainBuilding 的 `TerrainSiteComp()`（`game/components/terrainsite`，`view.TerrainSite`：`Validate` / `Set` / `Snapshot` / `SceneID`）。实体包（`game/entities/terrain_chunk`、`terrain_building`）只留实体、接线、同步脏位适配 `PublishSyncDirty` 与同步打包器。
   - Nest handler（`game/handler/terrain.go`，都是 `rollback=undo durability=strict`）：`handlerTerrainBrush`（参与的块 + Player）、`handlerTerrainBuild`（参与的块 + 建筑 + Player，放置与拆除共用）、`handlerTerrainQuery`、`handlerTerrainLoad`（开图装载）、`handlerTerrainSite`。经同一个 `sender.NewTerrainSender(client)` 调用。
@@ -28,8 +28,8 @@
   - `TerrainChunkDao`（`db/def/terrain_chunk.go`，集合 `terrain_chunk`）：`SceneID`、`X`、`Y`、`BaseRevision`、`Version`、`Heights`、`Materials` 落库并同步给视野内的人；`Lots`（采样点 → 占着它的建筑号）落库不下发，是占地的权威。
   - `TerrainBuildingDao`（`db/def/terrain_building.go`，集合 `terrain_building`）：`SceneID`、`GX`、`GY`、`OwnerID`、`Standing`、`Version`，落库并同步。一个锚点对应一个固定的建筑槽，拆除后槽与版本保留。
   - `PlayerDao.TerrainLedger`（`db/def/terrain.go`，`TerrainLedgerState{Sequence, Digest, Reply, Buildings}`）：这名玩家的编辑序号、最后一条命令的摘要与应答、站立建筑数；只落库不下发。
-- **配置**：没有配置表与配置键。启动时生成一份缺省地形包（2×2 块即 128m×128m、版本 1、高度 10m 的平地、水位 0）放在临时文件里，并用它打开 **2 号**场景；scene 自带的 1 号平面场景保留。业务规则是 `game/terrain/rules.go` 里的常量：`MaxMaps = 4`、`MaxBuildings = 32`、`EditReach = 1600`、`MaxRadius = 400`、`MaxSceneID`。
-- **错误码**（`internal/errors/terrain.go`；`game/terrain/rules.go` 的 `ErrInvalid` / `ErrDenied` / `ErrSequence` / `ErrOccupied` / `ErrSite` / `ErrFull` 就是这几个值，服务端调用方照旧用 `errors.Is` 判别。每种正常拒绝一个码，端点把它填进应答，不记 Error 日志）
+- **配置**：没有配置表与配置键。启动时生成一份缺省地形包（2×2 块即 128m×128m、版本 1、高度 10m 的平地、水位 0）放在临时文件里，并用它打开 **2 号**场景；scene 自带的 1 号平面场景保留。业务规则是 `game/modules/terrain/rules.go` 里的常量：`MaxMaps = 4`、`MaxBuildings = 32`、`EditReach = 1600`、`MaxRadius = 400`、`MaxSceneID`。
+- **错误码**（`internal/errors/terrain.go`；`game/modules/terrain/rules.go` 的 `ErrInvalid` / `ErrDenied` / `ErrSequence` / `ErrOccupied` / `ErrSite` / `ErrFull` 就是这几个值，服务端调用方照旧用 `errors.Is` 判别。每种正常拒绝一个码，端点把它填进应答，不记 Error 日志）
   - `terrain_invalid`：请求本身不合规（未知操作、坐标或块坐标出界、半径 / 强度 / 材质超出范围、建筑锚点不在整米上）。改请求，不要原样重发。
   - `terrain_denied`：与“玩家是谁、在哪”有关——不在这张地形图里（或那个场景不是地形图）、操作点离得太远、要拆的建筑不是自己的或已不在。
   - `terrain_sequence`：序号不是上一个成功序号加 1，或同一个序号换了内容。用 `TerrainQuery` 取 `LastSequence`，从它的下一个接着发。
@@ -38,7 +38,7 @@
   - `terrain_full`：这名玩家站立的建筑数到了上限。
   - 不是玩家的拒绝不带码，端点答框架的内部码并记一条 Error：`ErrBase`（持久地形与地形包版本不符）、`ErrState`（持久数据或服务端传入的参与者与这张图对不上）、提交失败。
 
-**日志**：建造 / 拆除确认记 Info，带序号、建筑号和 duplicate；开图、关闭、Refresh 记 Debug；端点异常记 Error，已知规则拒绝静默，笔刷成功不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/terrain/controller.go`, `game/terrain/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：建造 / 拆除确认记 Info，带序号、建筑号和 duplicate；开图、关闭、Refresh 记 Debug；端点异常记 Error，已知规则拒绝静默，笔刷成功不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/terrain/controller.go`, `game/modules/terrain/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -63,7 +63,7 @@
 - **需求正好是它**：`roost module add terrain`，连带装上 scene 与 actor。模块启动后初始化 2 号地形场景，客户端先 `SceneChange{ToID: 2}` 进场，再发编辑协议。新工程不需要额外的地形配置。
 - **需求多一点**
   - 用自己的地形包：在可信的服务端代码里 `runtime.Open(ctx, sceneID, packPath)`（每图至多 2×2 块；要更大先改 `world.go` 里 `OpenWorld` 与 `Occupied` 的 2×2 假设）。
-  - 调编辑距离、笔刷半径、建筑上限、地图数：改 `game/terrain/rules.go` 顶部的常量与 `ValidateCommand`。
+  - 调编辑距离、笔刷半径、建筑上限、地图数：改 `game/modules/terrain/rules.go` 顶部的常量与 `ValidateCommand`。
   - 把拒绝分得更细（例如“太远”单独一个码）：在工程里 `roost add errcode` 加自己的码，在 `rules.go` 加一个 `Err…` 指向它，把对应的那处 `return` 换掉；不要改已有六个码的含义。
   - 多种建筑、朝向、建造消耗：在 `TerrainBuildingDao` 加字段（新字段用新的 store 键），在 `handlerTerrainBuild` 的事务里扣资源（同一个 Player 上的 wallet / bag 可以直接调）。
   - 不要改的地方：`ChunkUnique` / `SiteUnique` 的编号方式（它们决定持久实体号）、两个 DAO 已有的 store 键与集合名、“先查锁内 `Lots` 再写、提交后才发布视图”的次序。

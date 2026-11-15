@@ -22,7 +22,7 @@
 - **配置**：没有配置表与配置键。两个常量写在共用组件里：`wallet.ReceiptWindow = 128`（去重窗口大小）、`wallet.KeyMaxLen = 64`（业务键最大字节数）；Player 包里以 `WalletReceiptWindow`、`WalletKeyMaxLen` 的名字再导出一次。
 - **错误码**（`internal/errors/wallet.go`）：`wallet_short`（余额不足）、`wallet_invalid`（键不合规或金额为 0 / 不为正）、`wallet_conflict`（同一个键换了金额）、`wallet_overflow`（余额超过 int64 上限）。
 
-**日志**：客户端消费与 GM 调整确认，记录请求键 / delta、确认余额。服务端直接用 WalletGrant Sender 的调用方负责记原因。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/wallet/wallet_spend.go`, `game/gm/wallet.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：客户端消费与 GM 调整确认，记录请求键 / delta、确认余额。服务端直接用 WalletGrant Sender 的调用方负责记原因。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/wallet/wallet_spend.go`, `game/modules/gm/wallet.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -61,5 +61,5 @@
 ## 验证范围
 
 - `roost module verify wallet`：17 条场景（`^TestWallet`，包 `./game/handler`）。覆盖发放、消费、余额不足零写入、同键只生效一次、同键换金额拒绝、窗口淘汰、不合规的键、`math.MinInt64` 扣款、最大值与溢出、提交被拒时余额与回执一起回滚、只有 `Wallet` 被同步；另有 3 条把同一个组件挂在测试里的第二个实体（不是 Player，自己一份状态）上：加减、去重与各种拒绝、提交被拒与宿主回调失败时回滚、同一个业务键在玩家与第二个实体上各生效一次。
-- GM 联动另有 4 条（`^TestWithWalletGM`，包 `./game/gm`）。
+- GM 联动另有 4 条（`^TestWithWalletGM`，包 `./game/modules/gm`）。
 - 这些场景用真实的 Nest 引擎与生成的 DAO / Sender，提交器是不落盘的替身（可注入拒绝）。没有经过真实 TCP、Mongo、WAL 或多进程；协议端点 `HandleWalletSpend` 的网络路径没有在本模块的场景里验证。

@@ -50,7 +50,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"example.com/planet/game/alliancerule"
+	"example.com/planet/game/modules/alliancerule"
 	"example.com/planet/internal/registry"
 	rpcalliance "example.com/planet/internal/rpc/alliance"
 )

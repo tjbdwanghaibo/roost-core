@@ -115,7 +115,7 @@ Ghost / Witness 传全量或字段 mask 增量，零值变化也可表达；接�
 | --- | --- |
 | `game/partition` | Entity / DAO 适配、面板与客户端载荷 |
 | `game/entities/player/cell_base.go` | Base 快照、持久入场计数与死亡回执 |
-| `game/cellworldhost` | 通用 Runtime、App / Redis / NATS 装配、稳定出生 ID |
+| `game/modules/cellworldhost` | 通用 Runtime、App / Redis / NATS 装配、稳定出生 ID |
 | `game/managers/cellworld_host.go` | 托管 Node 协程的 manager（D22）：发布 Host，服务心跳装好后 `Runtime.Start` 交给它，停机兜底排空 |
 | `internal/service/game/partition.go` | 心跳、镜像、Scene 与服务生命周期 |
 | `cmd/loadtest` | 正式 Robot 登录、PB 移动请求、EntitySync 解码与统计 |

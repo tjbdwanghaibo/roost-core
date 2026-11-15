@@ -44,7 +44,7 @@ func TestModuleRuntimeInstallationIsTransactional(t *testing.T) {
 	if err := json.Unmarshal([]byte(roost("module", "plan", "skillbook", "--json")), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Modules) != 1 || plan.Modules[0].Runtime == nil || plan.Modules[0].Runtime.Package != "game/skillbook" {
+	if len(plan.Modules) != 1 || plan.Modules[0].Runtime == nil || plan.Modules[0].Runtime.Package != "game/modules/skillbook" {
 		t.Fatalf("missing runtime plan: %+v", plan)
 	}
 	roost("module", "add", "skillbook")

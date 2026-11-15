@@ -90,7 +90,7 @@ func TestHostedModuleRuntimesBelongToTheHostNotTheBusinessService(t *testing.T) 
 	m.Modules["beacon"] = InstalledModule{Service: "game", Runtime: &ModuleRuntime{Package: "game/beacon", Start: "Start", Framework: "account"}}
 	m.Modules["audit"] = InstalledModule{Service: "game", Requires: []string{"portal"}, Runtime: &ModuleRuntime{Package: "game/audit", Start: "Start", Framework: "account"}}
 	// 一个入口在业务服务上的模块不受影响，也不混进托管服务的顺序。
-	m.Modules["skillbook"] = InstalledModule{Service: "game", Runtime: &ModuleRuntime{Package: "game/skillbook", Start: "Start"}}
+	m.Modules["skillbook"] = InstalledModule{Service: "game", Runtime: &ModuleRuntime{Package: "game/modules/skillbook", Start: "Start"}}
 	if got := strings.Join(hostedModuleRuntimes(m, "account"), ","); got != "portal,audit,beacon" {
 		t.Fatalf("start order on account = %s, want portal,audit,beacon", got)
 	}
@@ -166,7 +166,7 @@ func TestHostedModuleNeedsItsModsOnTheHost(t *testing.T) {
 	if service, err := moduleModsService(manifest, "game", spec); err != nil || service != "account" {
 		t.Fatalf("the service a hosted module needs its mods on = %q, %v", service, err)
 	}
-	if service, err := moduleModsService(manifest, "game", ModuleSpec{Name: "skillbook", Runtime: &ModuleRuntime{Package: "game/skillbook", Start: "Start"}}); err != nil || service != "game" {
+	if service, err := moduleModsService(manifest, "game", ModuleSpec{Name: "skillbook", Runtime: &ModuleRuntime{Package: "game/modules/skillbook", Start: "Start"}}); err != nil || service != "game" {
 		t.Fatalf("a module without runtime.framework needs its mods on %q, %v", service, err)
 	}
 	if err := checkModuleNeeds(manifest, "game", spec); err != nil {
@@ -239,13 +239,13 @@ func TestDevWebPortFollowsThePortBlock(t *testing.T) {
 func TestModulePlanSaysWhereAHostedRuntimeStarts(t *testing.T) {
 	plan := ModulePlan{Service: "game", Prerequisites: []string{}, Glue: []ModuleGlueItem{}, Modules: []ModulePlanItem{
 		{Name: "portal", Status: moduleStatusInstall, Runtime: &ModuleRuntime{Package: "services/account/portal", Start: "Start", Framework: "account"}},
-		{Name: "skillbook", Status: moduleStatusInstall, Runtime: &ModuleRuntime{Package: "game/skillbook", Start: "Start"}},
+		{Name: "skillbook", Status: moduleStatusInstall, Runtime: &ModuleRuntime{Package: "game/modules/skillbook", Start: "Start"}},
 	}}
 	var out bytes.Buffer
 	printModulePlan(&out, plan)
 	for _, want := range []string{
 		"  runtime:   services/account/portal.Start in the process of the hosted account service (after its Mods start, before service Init; stopped in reverse)\n",
-		"  runtime:   game/skillbook.Start (before service Init; stop after service Shutdown)\n",
+		"  runtime:   game/modules/skillbook.Start (before service Init; stop after service Shutdown)\n",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("the plan does not print %q:\n%s", want, out.String())

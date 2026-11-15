@@ -23,10 +23,10 @@ func TestModuleCombatScenariosAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/components/combat/combat.go",
 		"if len(raw) == 0 {", "if true {",
 		"./game/handler", "TestCombatCooldownIsRestoredFromCheckpoint", "cooldown")
-	recipeMutationMustFail(t, root, "game/combat/host.go",
+	recipeMutationMustFail(t, root, "game/modules/combat/host.go",
 		"if h.state.Hashes[p.ID()] != hash {", "if false && h.state.Hashes[p.ID()] != hash {",
 		"./game/handler", "TestCombatExternalHPWriteRejectsWorldRestore", "HP boundary")
-	recipeMutationMustFail(t, root, "game/combat/host.go",
+	recipeMutationMustFail(t, root, "game/modules/combat/host.go",
 		"StepBuffsToTick(int64(tick))", "StepBuffsToTick(int64(tick)-1)",
 		"./game/handler", "TestCombatBuffExpiresThroughFormalDriver", "expired stun still gates")
 	recipeMutationMustFail(t, root, "game/components/combat/combat_scene.go",

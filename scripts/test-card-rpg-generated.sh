@@ -62,11 +62,11 @@ DEFS
 mkdir -p game/cardrpg
 for name in catalog profile battle; do cp "$repo_root/scripts/testdata/card-rpg/$name.go.txt" "game/cardrpg/$name.go"; done
 cp "$repo_root/scripts/testdata/card-rpg/catalog_test.go.txt" game/cardrpg/catalog_test.go
-cp "$repo_root/scripts/testdata/card-rpg/attributes.go.txt" game/gameplay/attribute/hero_stats.go
+cp "$repo_root/scripts/testdata/card-rpg/attributes.go.txt" game/modules/gameplay/attribute/hero_stats.go
 cp "$repo_root/scripts/testdata/card-rpg/timer_handlers.go.txt" game/entities/card_run/timer_handlers.go
 cp "$repo_root/scripts/testdata/card-rpg/handlers.go.txt" game/handler/card_rpg.go
 cp "$repo_root/scripts/testdata/card-rpg/gameplay_test.go.txt" game/handler/card_rpg_test.go
-gofmt -w db/def/*.go game/cardrpg/*.go game/gameplay/attribute/hero_stats.go game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
+gofmt -w db/def/*.go game/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" card-rpg
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/cardrpg ./game/handler | tee "$review_root/test.log"

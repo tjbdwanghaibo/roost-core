@@ -9,7 +9,7 @@ access:
   transport: tcp
   self_sync: true
 runtime:
-  package: game/alliance/runtime
+  package: game/modules/alliance/runtime
   start: Start
 services:
   alliance:
@@ -42,7 +42,7 @@ sagas:
 protocols: [FoundAlliance, JoinAlliance, AllianceInfo, LeaveAlliance, DonateAlliance, ClaimAllianceReward, AllianceOpStatus, AllianceNotice, ApplyAlliance, ApproveAllianceApply, RejectAllianceApply, KickAllianceMember, TransferAllianceLeader, AllianceRoster]
 errcodes: [alliance_request_invalid, alliance_name, alliance_missing, alliance_full, alliance_denied, alliance_membership, alliance_application, alliance_leader, alliance_amount, alliance_cooldown, alliance_war, alliance_expired, alliance_reward, alliance_busy, alliance_view_missing, alliance_moved, alliance_pending]
 verify:
-  packages: [./internal/rpc/alliance, ./internal/service/alliance, ./game/handler, ./game/alliance/runtime, ./game/controllers/alliance, ./db]
+  packages: [./internal/rpc/alliance, ./internal/service/alliance, ./game/handler, ./game/modules/alliance/runtime, ./game/controllers/alliance, ./db]
   run: ^TestAlliance
   pass: 55
 with:
@@ -55,6 +55,6 @@ with:
   rehome:
     summary: Saga 原生步骤先在 IO 上下文核对当前绑定，换服中等待、已换服改投
     verify:
-      packages: [./game/alliance]
+      packages: [./game/modules/alliance]
       run: ^TestWithAllianceRehome
       pass: 2

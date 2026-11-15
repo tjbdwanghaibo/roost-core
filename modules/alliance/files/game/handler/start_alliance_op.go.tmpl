@@ -7,12 +7,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
-	"{{MODULE}}/game/alliance"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/alliance"
+	apperrors "{{MODULE}}/internal/errors"
 	alliancedonate "{{MODULE}}/saga/alliance_donate"
 	alliancefound "{{MODULE}}/saga/alliance_found"
 	alliancereward "{{MODULE}}/saga/alliance_reward"
-	apperrors "{{MODULE}}/internal/errors"
-	player "{{MODULE}}/game/entities/player"
 )
 
 // handlerStartAllianceOp starts one of the alliance sagas (found, donate, claim
@@ -20,7 +20,7 @@ import (
 // the Player, checks under the lock that
 // the coins the saga's debit will take are there, and emits the saga start
 // intent into the same WAL record; the Data Engine outbox delivers it to the
-// coordinator, which commands the steps (game/alliance/runtime/saga.go).
+// coordinator, which commands the steps (game/modules/alliance/runtime/saga.go).
 //
 // The coin check is advisory — the coins can still be spent before the debit
 // step runs; then the debit refuses with the same bag_short and the saga

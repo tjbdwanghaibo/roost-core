@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	player "{{MODULE}}/game/entities/player"
-	gamemailbox "{{MODULE}}/game/mailbox"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	player "{{MODULE}}/game/entities/player"
+	gamemailbox "{{MODULE}}/game/modules/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
@@ -23,7 +23,7 @@ import (
 // 让领取恰好一次的是中间那一步。三次调用拼不成一个事务（邮件在另一个进程），所以窗口是真的：
 // 发放成功、CommitClaim 丢了、预留到期、重试用同一个 token 再预留一次。mail 服务只能把它算作重复尝试
 // （它无从知道游戏发没发）；游戏这边知道——第二次发放在账本上撞到自己，什么也不发，回的是同样的数字。
-// 账本为什么能清理、清理为什么不会放出重复发放，见 MailboxComponent.Claim 与 game/mailbox。
+// 账本为什么能清理、清理为什么不会放出重复发放，见 MailboxComponent.Claim 与 game/modules/mailbox。
 //
 // 每一种中途失败的去向：
 //

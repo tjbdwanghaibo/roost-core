@@ -135,7 +135,7 @@
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| skill 与 combat | 技能 JSON 定义编译成执行计划，Runtime 按 tick 推进，经 Host 接业务；`combat` 算战斗，`combatcomponent` 把战斗状态接到实体 | `roost add skill <name>` 生成 `game/skills/<name>.json` 与编译目录；包 `gameplay/skill`（含 `combat`、`combatcomponent`、`skillsync`、`skillcompose`） | 正式。Runtime 不在 Nest 回滚域内；跨平台确定性由业务保证 | [技能](guide/08-skill.md)、[技能专项手册](../skill/README.md)、[包 README](../../gameplay/skill/README.md) |
+| skill 与 combat | 技能 JSON 定义编译成执行计划，Runtime 按 tick 推进，经 Host 接业务；`combat` 算战斗，`combatcomponent` 把战斗状态接到实体 | `roost add skill <name>` 生成 `game/modules/skills/<name>.json` 与编译目录；包 `gameplay/skill`（含 `combat`、`combatcomponent`、`skillsync`、`skillcompose`） | 正式。Runtime 不在 Nest 回滚域内；跨平台确定性由业务保证 | [技能](guide/08-skill.md)、[技能专项手册](../skill/README.md)、[包 README](../../gameplay/skill/README.md) |
 | attribute | 属性 ID、分层容器、派生公式与快照 | `roost add attribute <Profile>`，标记 `//roost:attribute`；包 `gameplay/attribute` | 正式。属性必须是整数 | [命令参考 §10](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#10-attribute)、[demo 属性](../../demo/WALKTHROUGH.md#属性层合成以及两种存储意图) |
 | ai | 感知实体的 AI 策略边界、行为树与黑板 | `roost add behavior --entity <Entity> --ai`；包 `gameplay/ai` | 正式 | [时间 §4C](guide/10-time.md#4c-行为控制behavior取代冲突与冻结) |
 | actionflow | 动作与任务的运行契约：动作组、取代、延后变更 | `roost add behavior --entity <Entity>`；包 `gameplay/actionflow` | 正式。由拥有它的实体串行调用，不引入第二个锁域 | [时间 §4C](guide/10-time.md#4c-行为控制behavior取代冲突与冻结) |
@@ -229,17 +229,17 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/skills/*.json` 与 `game/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
+| 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/modules/skills/*.json` 与 `game/modules/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
 | 活动生命周期 | 共用活动状态与阶段引擎，个人/全服/联盟 Entity 适配；五阶段、循环、解锁与自定义流程 | `roost module add activity`；共享宿主另装 `activity_world` / `activity_alliance` | 现成模块；空配置无活动；个人定时器与 Remote 扫描已做本机跨进程迁移/SIGKILL 验收，精简组合与边界见模块文档 | [activity](../../modules/activity/README.md) |
 | 联盟 alliance | 独立服务独占联盟与成员守卫；路由 RPC、Mirror、跨域 Saga 与换服惰性校正 | `roost module add alliance` | 现成模块；普通联盟操作不用 Saga，真实跨进程与存储验收待最终批次 | [alliance](../../modules/alliance/README.md) |
 | 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`；七个 PB 请求、邀请推送与权威核对；安装时代办 Remote | 现成模块；邀请有界，解散后成员引用惰性核对。matchmaking 可组合，demo 通过登记点保留分区队伍视野；真实跨进程验收待补 | [team](../../modules/team/README.md) |
 | 本服匹配与房间移交 | 单人/整队，取消与补查，固定名单房间 | `roost module add matchmaking`，自动安装 matchroom / team / room | 默认两支同人数队伍；历史消失时保留屏障；跨服房间不在本轮 | [matchmaking](../../modules/matchmaking/README.md) |
-| 基础房间 room | 服务端开房；1～64 席、进出、房主交接、重连代际、关闭 | `roost module add room`；`game/room.Open` / `Disconnect` 与生成的 Nest Sender | 现成模块。自带持久实体；客户端读 PB 快照；不含自动断线订阅、广播、匹配移交或回合超时 | [room](../../modules/room/README.md) |
+| 基础房间 room | 服务端开房；1～64 席、进出、房主交接、重连代际、关闭 | `roost module add room`；`game/modules/room.Open` / `Disconnect` 与生成的 Nest Sender | 现成模块。自带持久实体；客户端读 PB 快照；不含自动断线订阅、广播、匹配移交或回合超时 | [room](../../modules/room/README.md) |
 | 顺序回合 turn | 固定名单、当前行动者、命令序号与重放、持久回合超时 | `roost module add turn`（自动装 room）；`TurnStart / TurnEnd / TurnView` | 现成模块。超时不追帧；无默认胜负/伤害、自动广播或跨机房间接管；25 条离线场景，另有真实 Gate / 存储重启验收与 demo Robot | [turn](../../modules/turn/README.md) |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功的登记点 `OnCheckinClaimed`（别的功能在同一笔事务里顺带做事） | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；钩子返回错误会让这一次签到整笔回滚；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 | 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；世界/私聊不经过 Nest，scene 附近联动在 Nest 中读取收件人快照后于锁外推送，不改聊天实体 | 同上 |
-| 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里；进入之前的登记点 `OnEntering`（能否决登录，换服模块用它挡住正在换服或已换走的玩家）与进入之后的登记点 `game/login` 的 `OnEntered`（别的功能在玩家进入后顺带做事：聊天上线、拉全服邮件）；另一条路“先新建、再进入”（只对被登记为“先新建”的会话生效，login 的联动登记的是用进服票据握手的会话）：新建请求 `EnterCreate{name}` 一笔事务里起名、初始发放、建成，名字规则的登记点（profile 的联动接上档案的名字规则，naming 装着时全服唯一），`EnterGame` 不代建（没建成答 `enter_need_create`），会话激活后的告知 `EnterStatus` | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图；自己的功能要在进入时做事，在自己的包的 `init` 里调 `gamelogin.OnEntered(名字, 钩子)` | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化 → 钩子”的串接没有离线用例；进入钩子在事务之外、失败只记日志 | 同上 |
+| 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里；进入之前的登记点 `OnEntering`（能否决登录，换服模块用它挡住正在换服或已换走的玩家）与进入之后的登记点 `game/modules/login` 的 `OnEntered`（别的功能在玩家进入后顺带做事：聊天上线、拉全服邮件）；另一条路“先新建、再进入”（只对被登记为“先新建”的会话生效，login 的联动登记的是用进服票据握手的会话）：新建请求 `EnterCreate{name}` 一笔事务里起名、初始发放、建成，名字规则的登记点（profile 的联动接上档案的名字规则，naming 装着时全服唯一），`EnterGame` 不代建（没建成答 `enter_need_create`），会话激活后的告知 `EnterStatus` | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图；自己的功能要在进入时做事，在自己的包的 `init` 里调 `gamelogin.OnEntered(名字, 钩子)` | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化 → 钩子”的串接没有离线用例；进入钩子在事务之外、失败只记日志 | 同上 |
 | 换服 rehome | 把一名玩家从本服改绑到另一个 game sid：申请协议与服务端入口；源服断开会话、交出实体后拒写；目标服首次进入时到达；换服前检查 / 离开时 / 到达后三个登记点 | `roost module add rehome`（业务服务要 `uses: [account]`，`-template game` 已有；装了 enter 时进入前检查与到达由联动接上）；GM 或别的功能调 `rehomecontroller.FromRegistry(registry).Move(ctx, 玩家号, 目标 sid, 备注)`；saga 步骤的属主核对用 `rehome.Binding` | 现成模块，game-demo 用的就是它。缺省允许换到任何别的开放的服、冷却 7 天、不收费（规则文件里改）；只有离线验证；没装 enter 的工程要自己在加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive` | 同上 |
 | 客户端规则 rules | 进入/重连统一推送、RulesGet 补取；模块 PB 规则在 Player 锁内读取 | `roost module add rules`；shop/stamina 自动依赖 | 现成模块。没有规则热更广播；补取失败不返回半份 | [规则模块](../../modules/rules/README.md) |
 | 任务 task | 事件推进；每日、每周、永久、前置链；配置表与金币/道具奖励 | `roost module add task`；事务内 `TaskComp().Report(event, count, nowUnixMilli)`，或保留 `Advance` | 现成模块。ID 1～4096 固定、不复用；事务内联动负责首次上报；排行提交是独立的尽力通知，重放也计数，不作恰好一次结算依据 | [任务模块](../../modules/task/README.md) |
@@ -283,11 +283,11 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 背包、经验与升级 | 一条玩家写请求从协议到 Nest 到 DAO 的完整链路 | `game/handler/`、`game/controllers/player/` | 参考实现（demo） | [链路](../../demo/WALKTHROUGH.md#链路) |
 | 升级发奖励邮件 | effect 与状态变更同一条 WAL 记录，消费者调 mail | mailbox 与 profile 联动，`MailboxProfileReward` 在升级事务中冻结奖励，模块消费并以 EffectID 发件 | 现成模块；缺省不发奖，工程定义连升总奖励 | [事件链](../../demo/WALKTHROUGH.md#事件链升级--奖励邮件事务性-outbox) |
 | 邮件列表与领附件 | 客户端这一半：列表、领取到背包 | 端点 + mail 访问器 | 参考实现（demo） | [邮件](../../demo/WALKTHROUGH.md#邮件列表与领附件客户端这一半) |
-| 匹配组队 | game 调 match 成局 | `game/matchmaking` | 参考实现（demo） | [组队](../../demo/WALKTHROUGH.md#跨服务game--match-组队) |
+| 匹配组队 | game 调 match 成局 | `game/modules/matchmaking` | 参考实现（demo） | [组队](../../demo/WALKTHROUGH.md#跨服务game--match-组队) |
 | 聊天 | game 调 chat 发布、推送与读取；demo 用的就是 chat 业务模块，只在登录时加在线名单并发公告 | `roost module add chat`（demo 生成时已装） | 现成模块 | [聊天](../../demo/WALKTHROUGH.md#跨服务game--chat-聊天) |
 | 副本 | session 的一次运行，进入、通关、领奖 | `game/dungeon` | 参考实现（demo） | [副本](../../demo/WALKTHROUGH.md#跨服务game--session-副本) |
 | 送礼 saga | 扣 → 送，失败补偿；原生步骤带准入 | `saga/gift_item/` | 参考实现（demo） | [送礼 saga](../../demo/WALKTHROUGH.md#跨域事务送礼-sagadebit--deliver失败补偿) |
-| 公会 = alliance 服务 | 独立进程独占联盟实体，写走路由 RPC 或 saga，game 读 Mirror | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliance/` | alliance 模块；demo 只留规则与 PlayerOwners 启动适配，边界见 KNOWN-LIMITS“Remote” | [公会](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)、[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md) |
+| 公会 = alliance 服务 | 独立进程独占联盟实体，写走路由 RPC 或 saga，game 读 Mirror | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/modules/alliance/` | alliance 模块；demo 只留规则与 PlayerOwners 启动适配，边界见 KNOWN-LIMITS“Remote” | [公会](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)、[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md) |
 | 地图 Scene | Scene 是一个实体，子系统各自带锁 | `game/scene`、`internal/service/game/scene.go` | 参考实现（demo） | [地图](../../demo/WALKTHROUGH.md#地图scene-是一个实体它的-system-各自带锁) |
 | 移动 | 客户端发目标，服务端在实体心跳里走 | `game/actor` | 参考实现（demo） | [移动](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20) |
 | 怪物 | 巡逻、定身与状态门控 | Monster 实体 + 行为组件 | 参考实现（demo） | [怪物](../../demo/WALKTHROUGH.md#怪物巡逻定身与状态门控d21) |
@@ -297,7 +297,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 兴趣 | 距离视野与关系视野 | 场景的 Interest | 参考实现（demo） | [兴趣](../../demo/WALKTHROUGH.md#兴趣距离是一种视野关系是另一种) |
 | 刷新 | 场景该有多少东西活着 | spawner | 参考实现（demo） | [刷新](../../demo/WALKTHROUGH.md#刷新场景该有多少东西活着) |
 | 装备栏 | demo 唯一的嵌套字段 | `PlayerDao` 的嵌套结构体 | 参考实现（demo） | [装备栏](../../demo/WALKTHROUGH.md#装备栏) |
-| 属性 | 分层、合成与两种存储意图 | `game/gameplay/attribute` | 参考实现（demo） | [属性](../../demo/WALKTHROUGH.md#属性层合成以及两种存储意图) |
+| 属性 | 分层、合成与两种存储意图 | `game/modules/gameplay/attribute` | 参考实现（demo） | [属性](../../demo/WALKTHROUGH.md#属性层合成以及两种存储意图) |
 | 排行榜 | rank 服务，与领奖账本同一个准入 | `game/ranking` | 参考实现（demo） | [排行榜](../../demo/WALKTHROUGH.md#排行榜rank-服务与领奖账本同一个准入) |
 | 技能目录 | 启动时编译，客户端可查 | `roost module add skillbook`（demo 已装） | 现成模块；demo 只覆盖技能数据 | [技能目录](../../demo/WALKTHROUGH.md#技能目录启动时编译客户端可查) |
 | lockstep 战斗 | 匹配之后的帧同步对战 | `game/battle` | 参考实现（demo） | [实时战斗](../../demo/WALKTHROUGH.md#实时战斗lockstep-帧同步匹配之后的那一段) |

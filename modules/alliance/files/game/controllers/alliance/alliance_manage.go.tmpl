@@ -6,11 +6,11 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
-	"{{MODULE}}/game/alliance"
-	"{{MODULE}}/protocol/pb"
-	apperrors "{{MODULE}}/internal/errors"
 	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/game/modules/alliance"
+	apperrors "{{MODULE}}/internal/errors"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"{{MODULE}}/protocol/pb"
 )
 
 // 申请入盟、盟主审批、踢人、转让盟主与名单查询的端点。

@@ -18,10 +18,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
-	"{{MODULE}}/game/activity"
-	"{{MODULE}}/game/handler"
 	generated "{{MODULE}}/configs/generated"
 	host "{{MODULE}}/game/entities/alliance"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/modules/activity"
 )
 
 // Nest、生成 DAO/组件、handler 和 Remote 准入是真实接口；Remote 授权及提交是内存替身。

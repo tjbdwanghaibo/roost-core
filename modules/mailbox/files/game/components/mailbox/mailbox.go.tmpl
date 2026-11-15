@@ -4,7 +4,7 @@ import (
 	"{{MODULE}}/game/view"
 	"fmt"
 
-	gamemailbox "{{MODULE}}/game/mailbox"
+	gamemailbox "{{MODULE}}/game/modules/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -42,7 +42,7 @@ func (component *Component) Owner() Owner { return component.owner }
 // Claim 把邮件 mailID 的附件发给玩家，每封邮件至多一次。expiresAtUnix 是这封邮件自己的过期时刻
 // （mail 服务随预留交回的 Claim.ExpiresAtUnix，Unix 秒），nowUnix 是这条消息冻结的业务时间（Unix 秒）。
 //
-// 附件是什么种类、怎么发，不写在这里：种类的合法性登记在 game/mailbox，发放方式登记在本包的
+// 附件是什么种类、怎么发，不写在这里：种类的合法性登记在 game/modules/mailbox，发放方式登记在本包的
 // mailbox_grant.go（金币内置，经货币组件到账）。这里只管“每封至多一次”。
 //
 // 奖励与“这封到过账”写在同一笔事务里：账本记下邮件 id，发放方式改玩家的状态，任何一步被拒绝或提交失败都一起回滚。

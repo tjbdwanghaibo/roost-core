@@ -1,13 +1,13 @@
 package terrain
 
 import (
-	"{{MODULE}}/game/view"
-	db "{{MODULE}}/db"
 	"encoding/json"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"math"
-	logic "{{MODULE}}/game/terrain"
+	db "{{MODULE}}/db"
+	logic "{{MODULE}}/game/modules/terrain"
+	"{{MODULE}}/game/view"
 )
 
 // Owner 是 Terrain 组件的宿主（Player 的接线见 game/entities/player/terrain_component.go）：只列组件用得到的

@@ -87,14 +87,14 @@ cp "$F/tasks.go.txt"              game/handler/slg_tasks.go
 cp "$F/tasks_test.go.txt"         game/handler/slg_tasks_test.go
 cp "$F/alliance_rewards.go.txt"   game/handler/alliance_rewards.go
 cp "$F/alliance_authority.go.txt" game/handler/alliance_authority.go
-mkdir -p game/alliance && cp "$F"/alliance/*.go game/alliance/
-fix_mod slg-practice game/entities/player/timer_handlers.go game/handler/*.go game/alliance/*.go
-gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go game/alliance/*.go
+mkdir -p game/modules/alliance && cp "$F"/alliance/*.go game/modules/alliance/
+fix_mod slg-practice game/entities/player/timer_handlers.go game/handler/*.go game/modules/alliance/*.go
+gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go game/modules/alliance/*.go
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" slg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler 2>&1 | tee "$WORK/test.log"
 go test -mod=mod -race -count=1 -timeout 2m -v \
-  -run '^(TestAllianceReportWindowFollowsTheCoordinatorReservationTTL|TestAllianceReceiverBudgetRejectsLateSuccess)$' ./game/alliance 2>&1 | tee "$WORK/alliance.log"
+  -run '^(TestAllianceReportWindowFollowsTheCoordinatorReservationTTL|TestAllianceReceiverBudgetRejectsLateSuccess)$' ./game/modules/alliance 2>&1 | tee "$WORK/alliance.log"
 ```
 
 期望：`test.log` 里 `--- PASS: TestSLG` 恰好 7 条（含 Robot）、`alliance.log` 里两条顶层 PASS（`grep -c '^--- PASS: TestAlliance'` = 2），合计 9 条，即 `scripts/test-slg-generated.sh` 缺省模式（pretag 跑的就是这个形态）的全部断言；0 SKIP，再按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。其余联盟用例（`TestSLGAlliance*` 四条）要真实 Mongo / Redis / NATS，缺省只编译与 vet（SLG §11、§12.1）；`-run '^TestSLG'` 只跑 `./game/handler`，不会碰到它们。

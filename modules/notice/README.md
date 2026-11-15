@@ -6,7 +6,7 @@
 
 **客户端协议**：无。客户端收到的就是 chat 模块的世界频道消息（推送 `ChatMessage`，漏掉的用 `ChatHistory` 补读），文字以 `公告：` 或 `跑马灯：` 开头，按前缀选表现。
 
-**服务端入口**（`game/notice/notice.go`，在 Nest 事务之外调用）
+**服务端入口**（`game/modules/notice/notice.go`，在 Nest 事务之外调用）
 
 ```go
 publisher, err := notice.FromRegistry(registry)                     // 能力名 notice.publisher
@@ -15,7 +15,7 @@ err = publisher.Publish(ctx, "announce", "维护完成", "maintenance-20261112")
 
 `Publish(ctx, kind, text, key)`：`key` 是这一次业务事件的稳定键，同一个键的内容不能变。实际调 chat controller 的 `AnnounceWorld(ctx, 前缀+text, "notice:"+kind+":"+key)`。
 
-**运维命令**：本模块自己不登记。同时装着 `gm` 模块时，联动文件 `game/gm/notice.go` 经 gm 的登记点提供两条（经 ops 的 `/admin` 入口执行）：
+**运维命令**：本模块自己不登记。同时装着 `gm` 模块时，联动文件 `game/modules/gm/notice.go` 经 gm 的登记点提供两条（经 ops 的 `/admin` 入口执行）：
 
 - `gm.notice.announce`：发公告。
 - `gm.notice.marquee`：发跑马灯。
@@ -30,7 +30,7 @@ err = publisher.Publish(ctx, "announce", "维护完成", "maintenance-20261112")
 
 **错误码**：模块没有自己的业务码（没有玩家协议）。`Publish` 返回两个可用 `errors.Is` 判断的错误：`notice.ErrInvalid`（类别、正文或键不合法，没有调 chat）、`notice.ErrStopped`（没启动或已停止）；chat 的错误原样返回。
 
-**日志**：服务端公告发布确认记 Debug，记录 kind / key，不打印正文。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/notice/notice.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：服务端公告发布确认记 Debug，记录 kind / key，不打印正文。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/notice/notice.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -49,21 +49,21 @@ err = publisher.Publish(ctx, "announce", "维护完成", "maintenance-20261112")
 - **需求正好是它**：`roost module add notice`，连带装上 `chat`。
 - **需求多一点**：
   - 周期播放：用工程自己的调度器，每次播放用一个新的稳定键调 `Publish`（例如 `活动号-第几次`）。
-  - 新的展示类别：在 `notice.go` 的 `Publish` 里加一个 `kind` 与前缀；要运维命令时在 `game/gm/notice.go` 的 `init` 里再 `Register` 一条。
+  - 新的展示类别：在 `notice.go` 的 `Publish` 里加一个 `kind` 与前缀；要运维命令时在 `game/modules/gm/notice.go` 的 `init` 里再 `Register` 一条。
   - 定向或带结构的公告：不适合在这里改，另写协议。
 - **别的代码要用它**：`notice.FromRegistry(registry)` 之后 `publisher.Publish(ctx, kind, text, key)`。在 Nest handler 里不能直接调（它会等 chat 服务），要放到事务之外，或者经 effect 在提交之后发。
 - **只适合借鉴的情形**：需要“公告列表 + 已读状态”的公告系统。值得借鉴的是用稳定业务键把“发一次”做成幂等，以及复用已有的 chat 频道而不另建广播通道。
 
 ## 联动
 
-- **`with/gm`**（`game/gm/notice.go`，两个模块都装着时写，不论先装哪个）：把 `gm.notice.announce` 与 `gm.notice.marquee` 经 gm 的登记点装进运维命令表。命令在实体锁之外调 `Publish`，不经 Nest（notice 不改实体）。4 条场景（`^TestWithNoticeGM`）。
+- **`with/gm`**（`game/modules/gm/notice.go`，两个模块都装着时写，不论先装哪个）：把 `gm.notice.announce` 与 `gm.notice.marquee` 经 gm 的登记点装进运维命令表。命令在实体锁之外调 `Publish`，不经 Nest（notice 不改实体）。4 条场景（`^TestWithNoticeGM`）。
 
 别的模块没有 `with/notice`。
 
 ## 验证范围
 
-- `roost module verify notice`：8 条场景，都在 `game/notice`。
+- `roost module verify notice`：8 条场景，都在 `game/modules/notice`。
 - 离线：多数场景用只记调用的 chat 替身；一条经正式的 chat controller 验证系统发布的形状；一条是可编译变异（去掉空白文本的拒绝后，行为场景必须失败）。
 - 覆盖：公告与跑马灯各自的键空间、非法输入在发布前被拒（`ErrInvalid`）、chat 的错误原样传出、启动不登记任何运维命令且停止后拒绝（`ErrStopped`）、缺依赖时启动失败。
-- 与 gm 的联动 4 条（`game/gm`，chat 服务是替身，notice 的 `Publish`、chat controller、gm 的审计包装是真实代码）：两条命令带齐操作者与备注时发布，执行前后的审计日志按 `trace_id` 对齐、成功的结果码是 0；缺操作者、缺备注、备注为空白时答 `gm_invalid`、不执行也不记执行日志；正文或键不合法、带未知字段时答 `gm_invalid` 且执行后那条带这个码；chat 失败原样返回、notice 停止后答 `gm_unavailable`。
+- 与 gm 的联动 4 条（`game/modules/gm`，chat 服务是替身，notice 的 `Publish`、chat controller、gm 的审计包装是真实代码）：两条命令带齐操作者与备注时发布，执行前后的审计日志按 `trace_id` 对齐、成功的结果码是 0；缺操作者、缺备注、备注为空白时答 `gm_invalid`、不执行也不记执行日志；正文或键不合法、带未知字段时答 `gm_invalid` 且执行后那条带这个码；chat 失败原样返回、notice 停止后答 `gm_unavailable`。
 - 没有验证：真实的 NATS / Redis / TCP，多进程广播，真实的 ops HTTP。

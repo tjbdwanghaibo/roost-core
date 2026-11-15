@@ -556,7 +556,7 @@ func fillSagaNativeBusiness(t *testing.T, root string) {
 	return saga.Completion{Success: true}, nil`)
 	writeProjectFile(t, root, stepsRel, steps)
 
-	const effectRel = "game/effects/player_level_up.go"
+	const effectRel = "game/modules/effects/player_level_up.go"
 	writeProjectFile(t, root, effectRel, replaceOnce(t, effectRel, readProjectFile(t, root, effectRel),
 		"\t// TODO: the effect's fields, e.g. PlayerID int64 `json:\"player_id\"`.\n", "\tPlayerID int64 `json:\"player_id\"`\n\tLevel    int32 `json:\"level\"`\n"))
 

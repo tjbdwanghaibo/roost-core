@@ -166,7 +166,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 
 控制实体行为的逻辑（移动、技能、AI 决策）不这样直接挂组件心跳，而是写成动作、由 `actionflow.BeatRunner` 挂心跳（维护者 2026-10-21，见 §4B）。
 
-**生成工程的入口**：`roost add heartbeat --entity <Entity>` 生成上面这套接线——工程唯一的驱动 `game/heartbeat/driver_gen.go`（`Driver`）、实体的 `HeartbeatComponent`（构造时 `Driver.NewHost`，`OnDestroy` 时 `Host.OnDestroy`，`Register(name, period, fn)` / `Beat(name)`），并把 `heartbeat` Mod 加进实体所在服务、bootstrap 装 `wiring/heartbeat`（Nest 之后启动、之前停止，服务 Init / Shutdown 不用改）。业务只写 `heartbeat_beats.go` 的 `onHeartbeatInit`（加载 / 新建时登记，示例登记是停止状态）。Mod 按需装配，不进新工程的缺省 Mod 集：实体侧零开销，但驱动空转也每 10ms 走一格、多一个 Mod 停机预算多 3s。细则见 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)。
+**生成工程的入口**：`roost add heartbeat --entity <Entity>` 生成上面这套接线——工程唯一的驱动 `game/modules/heartbeat/driver_gen.go`（`Driver`）、实体的 `HeartbeatComponent`（构造时 `Driver.NewHost`，`OnDestroy` 时 `Host.OnDestroy`，`Register(name, period, fn)` / `Beat(name)`），并把 `heartbeat` Mod 加进实体所在服务、bootstrap 装 `wiring/heartbeat`（Nest 之后启动、之前停止，服务 Init / Shutdown 不用改）。业务只写 `heartbeat_beats.go` 的 `onHeartbeatInit`（加载 / 新建时登记，示例登记是停止状态）。Mod 按需装配，不进新工程的缺省 Mod 集：实体侧零开销，但驱动空转也每 10ms 走一格、多一个 Mod 停机预算多 3s。细则见 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)。
 
 | API | 说明 |
 | --- | --- |

@@ -378,6 +378,23 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	t.Parallel()
 	target := copyOfNewProject(t, "game-demo")
 
+	// 模块与生成器的功能包在 game/modules/<包>/（维护者 2026-11-15）；game/modules/ 只是目录，本身不放文件。
+	// demo 自己手写的包（scene、actor、dungeon……）暂留在 game/ 下，等 demo 在新框架上重建。
+	entries, err := os.ReadDir(filepath.Join(target, "game", "modules"))
+	if err != nil {
+		t.Fatalf("game-demo has no game/modules: %v", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			t.Errorf("game/modules/%s is a file; game/modules only holds feature packages", entry.Name())
+		}
+	}
+	for _, moved := range []string{"chat", "login", "mailbox", "skills", "effects", "gameplay", "alliance", "matchmaking"} {
+		if _, err := os.Stat(filepath.Join(target, "game", moved)); !os.IsNotExist(err) {
+			t.Errorf("game/%s still exists; module and generator packages live in game/modules/%s", moved, moved)
+		}
+	}
+
 	shipped, err := demoSourceFiles()
 	if err != nil {
 		t.Fatal(err)
@@ -420,18 +437,18 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("endpoint does not pass the request through:\n%s", endpoint)
 	}
 	// 握手的认证器是 login 模块的（demoModuleSteps），demo 不带自己的一份：生成的“一律拒绝”的桩被模块替换，
-	// 票据规则在 game/login。没有“直接报玩家号”的调试旁路。
+	// 票据规则在 game/modules/login。没有“直接报玩家号”的调试旁路。
 	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, "gamelogin.Authenticator{Accounts: accounts}") || strings.Contains(auth, `"player:"`) {
 		t.Errorf("auth.go is not the login module's authenticator, or carries a debug shortcut:\n%s", auth)
 	}
-	if rules := read("game/login/login.go"); strings.Contains(rules, `"player:"`) || !strings.Contains(rules, `enterTicketPrefix = "enter:"`) {
-		t.Errorf("game/login/login.go is not the login module's ticket rules:\n%s", rules)
+	if rules := read("game/modules/login/login.go"); strings.Contains(rules, `"player:"`) || !strings.Contains(rules, `enterTicketPrefix = "enter:"`) {
+		t.Errorf("game/modules/login/login.go is not the login module's ticket rules:\n%s", rules)
 	}
 	// demo 只覆盖登录模块留给工程的渠道入口：demo 渠道，凭据 demo:<open_id>。开发登录、玩家号计数器是模块的。
 	if channels := read("services/account/login_channels.go"); !strings.Contains(channels, `DemoChannel svcaccount.Channel = "demo"`) || !strings.Contains(channels, `demoCredentialPrefix = "demo:"`) {
 		t.Errorf("login_channels.go is not the demo channel:\n%s", channels)
 	}
-	for _, rel := range []string{"services/account/login_dev.go", "services/account/login_player_id.go", "services/account/portal/portal.go", "game/servertime/servertime.go", "game/login/login_enter.go"} {
+	for _, rel := range []string{"services/account/login_dev.go", "services/account/login_player_id.go", "services/account/portal/portal.go", "game/modules/servertime/servertime.go", "game/modules/login/login_enter.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("%s is missing: the login, portal and servertime modules are not installed: %v", rel, err)
 		}
@@ -533,12 +550,12 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("chat collaborators do not grant the system path and register the text type:\n%s", chatCollaborators)
 	}
 	// 聊天是 chat 模块装进来的（demoModuleSteps），demo 自己不带一份。
-	for _, rel := range []string{"game/chat/chat.go", "protocol/def/chat_send.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
+	for _, rel := range []string{"game/modules/chat/chat.go", "protocol/def/chat_send.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
 		"game/controllers/chat/chat_send.go", "game/controllers/chat/chat_history.go", "game/controllers/chat/chat_push.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "game/rewards/rewards_test.go",
 		"services/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
-		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook/skillbook_catalog.go",
+		"game/modules/skills/fireball.json", "game/modules/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook/skillbook_catalog.go",
 		"internal/service/game/gm.go",
 		"saga/gift_item/definition.go", "game/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
 		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player/send_gift.go", "game/controllers/player/gift_status.go",
@@ -563,7 +580,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		}
 	}
 	for _, owned := range []string{"    mailbox:\n", "    wallet:\n", "- PlayerDao.MailboxLedger", "- PlayerDao.Wallet", "MailboxList:", "MailboxClaim:", "WalletSpend:",
-		"mailbox_attachment:", "- game/mailbox/mailbox_send.go", "- game/controllers/mailbox/mailbox_enter.go", "- game/mailbox/mailbox_item.go", "- game/components/mailbox/mailbox_item.go"} {
+		"mailbox_attachment:", "- game/modules/mailbox/mailbox_send.go", "- game/controllers/mailbox/mailbox_enter.go", "- game/modules/mailbox/mailbox_item.go", "- game/components/mailbox/mailbox_item.go"} {
 		if !strings.Contains(manifestText, owned) {
 			t.Errorf("roost.yaml does not record %q under the mailbox / wallet modules", owned)
 		}
@@ -597,7 +614,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// 发件方都走模块的 SendTo，附件是模块的编码；升级奖励的幂等键是 EffectID（见下面事件链那一段）。
 	for rel, call := range map[string]string{
-		"game/gm/mailbox.go":                 "Attachment: payload.Attachment",
+		"game/modules/gm/mailbox.go":         "Attachment: payload.Attachment",
 		"internal/service/game/activity.go":  "gamemailbox.Item(reward.ItemID, int64(reward.Count))",
 		"internal/service/game/gift_saga.go": "gamemailbox.Item(state.ItemID, int64(state.Count))",
 	} {
@@ -781,7 +798,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "owners.AdmitBound(ctx, playerID)") || !strings.Contains(steps, `saga.BounceStep("", `) || strings.Contains(steps, "playerMoving") || strings.Contains(steps, "notMoving") {
 		t.Errorf("gift saga does not admit its Player steps by the sender's current binding")
 	}
-	if steps := read("game/alliance/runtime/runtime.go"); !strings.Contains(steps, "alliance.Binding(ctx, registry, playerID, sid)") || strings.Contains(steps, "playerMoving") {
+	if steps := read("game/modules/alliance/runtime/runtime.go"); !strings.Contains(steps, "alliance.Binding(ctx, registry, playerID, sid)") || strings.Contains(steps, "playerMoving") {
 		t.Errorf("the alliance sagas do not admit their Player steps by the player's current binding")
 	}
 	// 驻留表实现并发布 rehome 模块的 Residency；GM 有换服命令；demo 自己的换服前检查在盘上。
@@ -791,7 +808,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners))") {
 		t.Errorf("the game service does not publish its ownership table as the rehome module's Residency")
 	}
-	if gm := read("game/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, unique, payload.To,") {
+	if gm := read("game/modules/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, unique, payload.To,") {
 		t.Errorf("the game GM lacks gm.player.rehome, or it does not go through the rehome module's server-side entry")
 	}
 	if checks := read("internal/service/game/rehome_checks.go"); !strings.Contains(checks, `gamerehome.OnApplying("game"`) {
@@ -839,8 +856,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, "BindRegistry(") {
 		t.Errorf("auth.go does not bind an account client:\n%s", auth)
 	}
-	if rules := read("game/login/login.go"); !strings.Contains(rules, "ValidateSession(") || !strings.Contains(rules, "EnterServer(") {
-		t.Errorf("game/login/login.go does not validate both kinds of ticket through account:\n%s", rules)
+	if rules := read("game/modules/login/login.go"); !strings.Contains(rules, "ValidateSession(") || !strings.Contains(rules, "EnterServer(") {
+		t.Errorf("game/modules/login/login.go does not validate both kinds of ticket through account:\n%s", rules)
 	}
 	if server := read("internal/access/player/tcp/server_gen.go"); !strings.Contains(server, "type RegistryBound interface") {
 		t.Errorf("the generated transport lost the RegistryBound hook the demo authenticator relies on")
@@ -849,7 +866,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if hook := read("game/components/mailbox/mailbox_profile.go"); !strings.Contains(hook, "OnProfileLevelUp(") || !strings.Contains(hook, "mailbox.EmitProfileReward(") || !strings.Contains(read("game/components/attribute/profile.go"), "OnProfileLevelUp(") {
 		t.Errorf("module profile hooks do not register both attribute and mailbox")
 	}
-	if mailer := read("game/mailbox/mailbox_profile.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID: envelope.EffectID") || !strings.Contains(mailer, "errors.Is(err, ErrLetterInvalid)") {
+	if mailer := read("game/modules/mailbox/mailbox_profile.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID: envelope.EffectID") || !strings.Contains(mailer, "errors.Is(err, ErrLetterInvalid)") {
 		t.Errorf("module reward mail consumer lost durable/idempotent handling: %s", mailer)
 	}
 	if endpoint := read("game/controllers/player/add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
@@ -924,7 +941,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if !strings.Contains(flow, "gamelogin.RunEntered(") || strings.Contains(flow, "Presence().Add(") {
 		t.Errorf("the demo's enter flow does not go through the enter hooks:\n%s", flow)
 	}
-	if glue := read("game/chat/chat_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("chat"`) {
+	if glue := read("game/modules/chat/chat_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("chat"`) {
 		t.Errorf("the chat+enter glue was not written into the demo:\n%s", glue)
 	}
 	// 排行榜是 leaderboard 模块装进来的：demo 不带自己的 game/ranking 与 RankTop；模块的逻辑文件原样，
@@ -934,11 +951,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("the demo still ships its own leaderboard file %s (err=%v)", gone, err)
 		}
 	}
-	if board := read("game/leaderboard/leaderboard_board.go"); !strings.Contains(board, `BoardID = "clears"`) || !strings.Contains(board, "func CurrentSeason() int64") {
+	if board := read("game/modules/leaderboard/leaderboard_board.go"); !strings.Contains(board, `BoardID = "clears"`) || !strings.Contains(board, "func CurrentSeason() int64") {
 		t.Errorf("the leaderboard module's board file is not the demo's clears board:\n%s", board)
 	}
-	if logic := read("game/leaderboard/leaderboard.go"); !strings.Contains(logic, "func SubmitSeason(") || strings.Contains(logic, `"clears"`) {
-		t.Errorf("game/leaderboard/leaderboard.go is not the module's own logic file:\n%s", logic)
+	if logic := read("game/modules/leaderboard/leaderboard.go"); !strings.Contains(logic, "func SubmitSeason(") || strings.Contains(logic, `"clears"`) {
+		t.Errorf("game/modules/leaderboard/leaderboard.go is not the module's own logic file:\n%s", logic)
 	}
 	if bind := read("internal/access/player/protocols_gen.go"); !strings.Contains(bind, "HandleLeaderboardTop") || !strings.Contains(bind, "HandleLeaderboardMe") {
 		t.Errorf("the leaderboard protocols are not bound to the leaderboard controller:\n%s", bind)
@@ -1528,9 +1545,9 @@ func TestGateGeneratedBusinessConsumer(t *testing.T) {
 import (
 	"testing"
 
+	playertcp "example.com/planet/internal/access/player/tcp"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
 	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
-	playertcp "example.com/planet/internal/access/player/tcp"
 )
 func TestGeneratedGateTransportSelection(t *testing.T) {
  local := playertcp.NewMod()

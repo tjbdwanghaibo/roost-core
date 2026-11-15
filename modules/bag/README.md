@@ -29,7 +29,7 @@
   - `bag_stack_full`：放入后会超过这种道具的单种上限。
   - `bag_kinds_full`：背包里没有这种道具，且种类数已到上限。
 
-**日志**：丢弃与 GM 发放确认，记录道具、数量和剩余数量；事务内 Add/Remove 由发起业务记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/bag/bag_discard.go`, `game/gm/bag.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：丢弃与 GM 发放确认，记录道具、数量和剩余数量；事务内 Add/Remove 由发起业务记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/bag/bag_discard.go`, `game/modules/gm/bag.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -67,7 +67,7 @@
 
 ## 联动
 
-- `bag` + `gm`（`with/gm/game/gm/bag.go`）：登记运维命令 `gm.player.add_item`，参数 `player_id`、`item_id`、`count` 与审计字段，经 `Sync_BagGrant` 发放；不自动重试。
+- `bag` + `gm`（`with/gm/game/modules/gm/bag.go`）：登记运维命令 `gm.player.add_item`，参数 `player_id`、`item_id`、`count` 与审计字段，经 `Sync_BagGrant` 发放；不自动重试。
 - `mailbox` + `bag`（在 `mailbox/with/bag`）：登记 `item` 附件种类，领取邮件时道具进背包，与领取账本同一笔事务。
 - `purchase` + `bag`（在 `purchase/with/bag`）：付费道具在发货游标的同一笔事务里进背包。
 - `task` + `bag`（在 `task/with/bag`）：任务的道具奖励与领奖在同一笔事务里提交。
@@ -75,7 +75,7 @@
 
 ## 验证范围
 
-- `roost module verify bag`：20 个场景（`./game/handler`，`^TestBag`）；与 `gm` 的联动另有 4 个场景（`./game/gm`，`^TestWithBagGM`）。
+- `roost module verify bag`：20 个场景（`./game/handler`，`^TestBag`）；与 `gm` 的联动另有 4 个场景（`./game/modules/gm`，`^TestWithBagGM`）。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO 与 Sender、真实装载的测试道具表；提交器是替身（`bagCommitter`，不落盘，可注入拒绝来验证回滚）。
 - 覆盖：发放与堆叠、丢弃与扣到 0 删键、数量不足与非法输入零写入、单种上限与种类上限、上限调小、道具从表里删除、没装配置表、提交被拒后回滚、状态标记为同步；以及把同一个组件挂在测试里的第二个实体（不是 Player，自己一份状态）上的 3 个场景：放入 / 拿走 / 各种拒绝、提交被拒与 handler 失败时回滚、玩家背包满了不影响第二个实体。
 - 没有验证：真实数据库与 WAL、经 TCP 的客户端链路、同步载荷实际到达客户端。

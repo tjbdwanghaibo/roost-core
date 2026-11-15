@@ -47,7 +47,7 @@ type ServertimeNowPush struct {
 	// 有夏令时的时区它会变：不要用它推算重置时刻，重置时刻只看 NextResetUnixMilli。
 	UTCOffsetSeconds int32 `pb:"7"`
 	// Zone 是给人看的业务时区名，缺省是 IANA 名（UTC、Asia/Shanghai）；工程可以在
-	// game/servertime/servertime_zone.go 里改成别的文案。
+	// game/modules/servertime/servertime_zone.go 里改成别的文案。
 	Zone string `pb:"8"`
 }
 

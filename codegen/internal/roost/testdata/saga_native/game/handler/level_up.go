@@ -3,8 +3,8 @@ package handler
 import (
 	"strconv"
 
-	"example.com/planet/game/effects"
 	player "example.com/planet/game/entities/player"
+	"example.com/planet/game/modules/effects"
 )
 
 // handlerLevelUp raises the level and emits player.level_up in the same

@@ -9,8 +9,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// InitResult 是首次初始化（Nest handler EnterInit）的结果。game/login 的 InitResult 是它的别名
-// （放在组件包里，实体包接组件时不必 import game/login，game/login 因此可以 import 实体包而不成环）。
+// InitResult 是首次初始化（Nest handler EnterInit）的结果。game/modules/login 的 InitResult 是它的别名
+// （放在组件包里，实体包接组件时不必 import game/modules/login，game/modules/login 因此可以 import 实体包而不成环）。
 type InitResult struct {
 	// First 为 true 表示这一次进入执行了首次初始化（新玩家）。
 	First bool

@@ -16,7 +16,7 @@ type PurchaseGrantReward struct {
 }
 
 // PurchaseGrant 是第一次持久投递时确定的快照。商品改价、下架不修改已存在的快照。
-// Sequence 由队列分配，业务不得自行造号；队列删除后计数器也不能重置。完整性检查见 game/purchase 的 ValidateGrant。
+// Sequence 由队列分配，业务不得自行造号；队列删除后计数器也不能重置。完整性检查见 game/modules/purchase 的 ValidateGrant。
 type PurchaseGrant struct {
 	Sequence uint64 `json:"-"`
 	// Settled 仅由消费者根据 platform 不可重开的 settled 终态设置；退款/人工结清只推进游标、不再发奖。

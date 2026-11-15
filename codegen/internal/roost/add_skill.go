@@ -9,7 +9,7 @@ import (
 
 func addSkillDefinition(root string, manifest Manifest, options AddOptions) ([]string, error) {
 	snake := toSnake(options.Name)
-	directory := filepath.Join(root, "game", "skills")
+	directory := filepath.Join(root, "game", "modules", "skills")
 	definitionPath := filepath.Join(directory, snake+".json")
 	if _, err := os.Stat(definitionPath); err == nil {
 		return nil, fmt.Errorf("%s already exists", relativeSlash(root, definitionPath))
@@ -130,7 +130,7 @@ func CompileAll(environment skill.CompileEnvironment) (*Catalog, error) {
 }
 
 // renderSkillCatalogTest 是技能目录的测试：用框架的正式加载路径（CompileAll → skill.Parse / skill.Compile）编译
-// game/skills 下的全部 JSON，写坏的定义在 go test 与 doctor 的 skills:catalog 项就失败。工程用自己的编译环境
+// game/modules/skills 下的全部 JSON，写坏的定义在 go test 与 doctor 的 skills:catalog 项就失败。工程用自己的编译环境
 // （自定义 Host 能力表、catalog）时，把这里的环境换成启动时用的那一个。
 func renderSkillCatalogTest() string {
 	return `package skills
@@ -141,7 +141,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
 
-// TestSkillCatalogCompiles compiles every game/skills/*.json the way startup
+// TestSkillCatalogCompiles compiles every game/modules/skills/*.json the way startup
 // does. Use the same CompileEnvironment as the service when it is not the
 // default one (custom Host capabilities or catalog).
 func TestSkillCatalogCompiles(t *testing.T) {
@@ -150,7 +150,7 @@ func TestSkillCatalogCompiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(catalog.Programs) == 0 {
-		t.Fatal("game/skills has no Skill definitions")
+		t.Fatal("game/modules/skills has no Skill definitions")
 	}
 }
 `

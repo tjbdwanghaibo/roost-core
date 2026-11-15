@@ -3,7 +3,7 @@ package purchase
 // 仅复制到临时验收工程。暂停 strict Sender 已确认、Redis Ack 尚未执行的精确窗口。
 // 不替换队列/提交器；父进程核对 pid、订单与序号之后 SIGKILL。
 import (
-	"OPERATIONS_MODULE/game/purchase"
+	"OPERATIONS_MODULE/game/modules/purchase"
 	"encoding/json"
 	"os"
 	"path/filepath"

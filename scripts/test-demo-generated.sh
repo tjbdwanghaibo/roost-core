@@ -15,7 +15,7 @@
 #     同目录恢复跨四块的笔刷与跨两块的整平建筑，核对版本/全部块摘要、建筑/占地、账本和重放去重；B-11）；
 #   - db/migrations 的 TestPlayerMigrationRealMongo（ROOST_MIGRATION_IT_MONGO_URI：Player schema 离线迁移的
 #     plan / apply / verify / rollback 在真实副本集上跑一遍，唯一库名、结束删库）；
-#   - game/purchase 的 TestPurchaseRedis*（ROOST_PURCHASE_REDIS_ADDR：实际执行序号分配、并发去重、分批清理 Lua；
+#   - game/modules/purchase 的 TestPurchaseRedis*（ROOST_PURCHASE_REDIS_ADDR：实际执行序号分配、并发去重、分批清理 Lua；
 #     显式 integration 构建标签，未设置地址直接失败；原 demo 发货实现已迁入 purchase 模块）；
 #   - game/controllers/mailbox 的 TestMailboxRealDependencies*（ROOST_MAILBOX_IT_NATS_URL / ROOST_MAILBOX_IT_REDIS_ADDR：显式
 #     integration 标签；邮件端点经 wiring/mail.ClientMod 的 BusClient（真实 NATS，core 与 jetstream 两种 RPC 传输）调
@@ -47,7 +47,7 @@ printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$
 (
 	cd "$work_dir/planet"
 	go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances$' ./internal/service/alliance
-	ROOST_PURCHASE_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseRedis' ./game/purchase
+	ROOST_PURCHASE_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseRedis' ./game/modules/purchase
 	ROOST_MAILBOX_IT_NATS_URL="$ROOST_DATAENGINE_IT_NATS_URL" ROOST_MAILBOX_IT_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestMailboxRealDependencies' ./game/controllers/mailbox
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestDungeonClearsBoardCountsEachRunOnceRealRedis$' ./game/controllers/player

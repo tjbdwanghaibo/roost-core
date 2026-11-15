@@ -91,7 +91,7 @@ func ClaimWindowClosed(resolvedAtUnix, nowUnix int64) bool {
 // the App lets a process start up to a minute behind the deployment's
 // business-time high-water mark (framework/app business_time.go), so the
 // ledger keeps a record a comfortable multiple of that longer. It only costs
-// records kept ten minutes longer; the mailbox module (game/mailbox) uses the
+// records kept ten minutes longer; the mailbox module (game/modules/mailbox) uses the
 // same margin for the mail ledger.
 const LedgerPruneGraceSeconds int64 = 10 * 60
 
@@ -111,7 +111,7 @@ func LedgerMayForget(resolvedAtUnix, nowUnix int64) bool {
 //
 // Clears is the player's count of paid clears in the season the claim named,
 // AFTER this call, and it is reported on a replay too: it is the snapshot the
-// clears board is brought up to (game/leaderboard), so a replay that finds the
+// clears board is brought up to (game/modules/leaderboard), so a replay that finds the
 // reward already paid can still fill a board point an earlier attempt failed
 // to submit, without adding one.
 type ClaimResult struct {

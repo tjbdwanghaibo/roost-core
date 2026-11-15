@@ -35,7 +35,7 @@ func TestOptionalHintsNameWhatTheProjectHasNotUsedYet(t *testing.T) {
 	game.Rpcs = []string{"guild"}
 	m.Services["game"] = game
 	m.Features = append(m.Features, "saga", "attribute", "webroute", "rpc")
-	if err := os.MkdirAll(filepath.Join(root, "game", "skills"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "game", "modules", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "configs", "schema", "cfg.yaml"), []byte("package: cfg\n"), 0o644); err != nil {

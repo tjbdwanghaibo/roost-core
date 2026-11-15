@@ -55,7 +55,7 @@ func TestModuleActivityGenerated(t *testing.T) {
 		t.Fatal("repeat install changed activity")
 	}
 	activityMutationChecks(t, root)
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestActivity|^TestWithActivity|^TestWorldActivity|^TestAllianceActivity", "./game/activity", "./game/handler", "./game/managers", "./internal/rpc/activity_world", "./internal/rpc/activity_alliance")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestActivity|^TestWithActivity|^TestWorldActivity|^TestAllianceActivity", "./game/modules/activity", "./game/handler", "./game/managers", "./internal/rpc/activity_world", "./internal/rpc/activity_alliance")
 }
 
 func TestModuleExistingServiceExtensionKeepsOwnership(t *testing.T) {
@@ -78,16 +78,16 @@ func TestModuleExistingServiceExtensionKeepsOwnership(t *testing.T) {
 }
 
 func activityMutationChecks(t *testing.T, root string) {
-	recipeMutationMustFail(t, root, "game/activity/engine.go", " || now >= r.GetCloseAt()", "", "./game/handler", "TestActivityFivePhasesAndDeadline", "deadline admission=")
-	recipeMutationMustFail(t, root, "game/activity/engine.go", "if r.GetPending() {", "if false {", "./game/handler", "TestActivityAsyncInitializationAndSettlement", "initial=")
-	recipeMutationMustFail(t, root, "game/activity/engine.go", "if h.token(token.Definition, r) != token {", "if false {", "./game/handler", "TestActivityCustomFlowAndLateEvents", "")
-	recipeMutationMustFail(t, root, "game/activity/types.go", "AdvanceBudget  = 32", "AdvanceBudget  = 1000000", "./game/handler", "TestActivityLoopBoundedCatchupAndFrozenDefinition", "unbounded or missing catchup")
-	recipeMutationMustFail(t, root, "game/activity/engine.go", "if record, ok := h.Book.GetRecords(d.ID); ok {", "if record, ok := h.Book.GetRecords(d.ID); ok && false {", "./game/handler", "TestActivityIndependentUnlockAndDuplicate", "anchors")
-	recipeMutationMustFail(t, root, "game/activity/component.go", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\tpanic(fmt.Errorf(\"activity timer: %w\", err))", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\treturn 0", "./game/handler", "TestActivityTimerErrorKeepsDeadlineAndRollsBackHook", "timer swallowed")
-	recipeMutationMustFail(t, root, "game/activity/rules.go", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond).UnixMilli()", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond + time.Hour).UnixMilli()", "./game/activity", "TestActivityBusinessCalendarDoesNotUse24Hours", "DST day=")
-	recipeMutationMustFail(t, root, "game/activity/mailbox.go", "token.Generation, token.Cycle, action", "token.Generation, int64(1), action", "./game/activity", "TestWithActivityMailboxUsesStableInstanceKey", "")
+	recipeMutationMustFail(t, root, "game/modules/activity/engine.go", " || now >= r.GetCloseAt()", "", "./game/handler", "TestActivityFivePhasesAndDeadline", "deadline admission=")
+	recipeMutationMustFail(t, root, "game/modules/activity/engine.go", "if r.GetPending() {", "if false {", "./game/handler", "TestActivityAsyncInitializationAndSettlement", "initial=")
+	recipeMutationMustFail(t, root, "game/modules/activity/engine.go", "if h.token(token.Definition, r) != token {", "if false {", "./game/handler", "TestActivityCustomFlowAndLateEvents", "")
+	recipeMutationMustFail(t, root, "game/modules/activity/types.go", "AdvanceBudget  = 32", "AdvanceBudget  = 1000000", "./game/handler", "TestActivityLoopBoundedCatchupAndFrozenDefinition", "unbounded or missing catchup")
+	recipeMutationMustFail(t, root, "game/modules/activity/engine.go", "if record, ok := h.Book.GetRecords(d.ID); ok {", "if record, ok := h.Book.GetRecords(d.ID); ok && false {", "./game/handler", "TestActivityIndependentUnlockAndDuplicate", "anchors")
+	recipeMutationMustFail(t, root, "game/modules/activity/component.go", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\tpanic(fmt.Errorf(\"activity timer: %w\", err))", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\treturn 0", "./game/handler", "TestActivityTimerErrorKeepsDeadlineAndRollsBackHook", "timer swallowed")
+	recipeMutationMustFail(t, root, "game/modules/activity/rules.go", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond).UnixMilli()", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond + time.Hour).UnixMilli()", "./game/modules/activity", "TestActivityBusinessCalendarDoesNotUse24Hours", "DST day=")
+	recipeMutationMustFail(t, root, "game/modules/activity/mailbox.go", "token.Generation, token.Cycle, action", "token.Generation, int64(1), action", "./game/modules/activity", "TestWithActivityMailboxUsesStableInstanceKey", "")
 	// 停 manager 时不收扫描：在途的推进没被取消、停机不等它。
-	recipeMutationMustFail(t, root, "game/activity/driver.go", "\treturn driver.Stop(ctx)\n}", "\treturn nil\n}", "./game/managers", "TestWorldActivityScanRunsUnderTheManagerAndStopsWithIt", "StopWithContext returned while an advance was still running")
+	recipeMutationMustFail(t, root, "game/modules/activity/driver.go", "\treturn driver.Stop(ctx)\n}", "\treturn nil\n}", "./game/managers", "TestWorldActivityScanRunsUnderTheManagerAndStopsWithIt", "StopWithContext returned while an advance was still running")
 	recipeMutationMustFail(t, root, "game/managers/alliance_activity_scan.go", "return m.scans.Close(ctx)", "return nil", "./game/managers", "TestAllianceActivityScanRunsUnderTheManagerAndStopsWithIt", "StopWithContext returned while an advance was still running")
 	recipeMutationMustFail(t, root, "internal/rpc/activity_alliance/service.go", "return remoteentity.RPCRouteCheck(ctx, s.owners, s.sid, target)", "_ = remoteentity.RPCRouteCheck(ctx, s.owners, s.sid, target); return nil", "./internal/rpc/activity_alliance", "TestAllianceActivityChangedOwnerRejectsOldDriver", "route accepted foreign owner")
 }

@@ -6,15 +6,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/flags"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"{{MODULE}}/game/purchase"
+	"{{MODULE}}/game/modules/purchase"
 	"{{MODULE}}/protocol/pb"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 )
 
 // HandlePurchase buys a product: the payment callback, then the grant.

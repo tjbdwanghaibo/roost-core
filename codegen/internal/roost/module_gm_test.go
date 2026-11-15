@@ -32,13 +32,13 @@ func TestModuleGMScenariosAndMutations(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeat install changed project")
 	}
-	recipeMutationMustFail(t, root, "game/gm/gm.go", "!auditText(command.Operator, 64)", "false", "./game/gm", "TestGMRequiresOperator", "calls=1")
-	recipeMutationMustFail(t, root, "game/gm/gm.go", "!auditText(meta.Note, 256)", "false", "./game/gm", "TestGMRequiresNote", "calls=1")
-	recipeMutationMustFail(t, root, "game/gm/gm.go", "if r.stopped.Load() {", "if false && r.stopped.Load() {", "./game/gm", "TestGMStopRejectsNewCalls", "calls=1")
-	recipeMutationMustFail(t, root, "game/gm/wallet.go", "full, payload.Delta)", "full, payload.Delta*2)", "./game/gm", "TestWithWalletGMSuccess", "value=")
-	recipeMutationMustFail(t, root, "game/gm/bag.go", "payload.ItemID, payload.Count)", "payload.ItemID, payload.Count+1)", "./game/gm", "TestWithBagGMSuccess", "value=")
-	recipeMutationMustFail(t, root, "game/gm/profile.go", "full, payload.Amount)", "full, payload.Amount+1)", "./game/gm", "TestWithProfileGMSuccess", "value=")
-	recipeMutationMustFail(t, root, "game/gm/mailbox.go", "if err := syncsender.NewGmMailTargetSender(client).Sync_GMMailTarget(ctx, full); err != nil {", "if err := syncsender.NewGmMailTargetSender(client).Sync_GMMailTarget(ctx, full); false && err != nil {", "./game/gm", "TestWithMailboxGMMissingTargetWritesNothing", "result=")
-	recipeMutationMustFail(t, root, "game/gm/rehome.go", `"gm "+command.Operator+": "+payload.Note`, `payload.Note`, "./game/gm", "TestWithRehomeGMSuccess", "note=")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "./game/gm")
+	recipeMutationMustFail(t, root, "game/modules/gm/gm.go", "!auditText(command.Operator, 64)", "false", "./game/modules/gm", "TestGMRequiresOperator", "calls=1")
+	recipeMutationMustFail(t, root, "game/modules/gm/gm.go", "!auditText(meta.Note, 256)", "false", "./game/modules/gm", "TestGMRequiresNote", "calls=1")
+	recipeMutationMustFail(t, root, "game/modules/gm/gm.go", "if r.stopped.Load() {", "if false && r.stopped.Load() {", "./game/modules/gm", "TestGMStopRejectsNewCalls", "calls=1")
+	recipeMutationMustFail(t, root, "game/modules/gm/wallet.go", "full, payload.Delta)", "full, payload.Delta*2)", "./game/modules/gm", "TestWithWalletGMSuccess", "value=")
+	recipeMutationMustFail(t, root, "game/modules/gm/bag.go", "payload.ItemID, payload.Count)", "payload.ItemID, payload.Count+1)", "./game/modules/gm", "TestWithBagGMSuccess", "value=")
+	recipeMutationMustFail(t, root, "game/modules/gm/profile.go", "full, payload.Amount)", "full, payload.Amount+1)", "./game/modules/gm", "TestWithProfileGMSuccess", "value=")
+	recipeMutationMustFail(t, root, "game/modules/gm/mailbox.go", "if err := syncsender.NewGmMailTargetSender(client).Sync_GMMailTarget(ctx, full); err != nil {", "if err := syncsender.NewGmMailTargetSender(client).Sync_GMMailTarget(ctx, full); false && err != nil {", "./game/modules/gm", "TestWithMailboxGMMissingTargetWritesNothing", "result=")
+	recipeMutationMustFail(t, root, "game/modules/gm/rehome.go", `"gm "+command.Operator+": "+payload.Note`, `payload.Note`, "./game/modules/gm", "TestWithRehomeGMSuccess", "note=")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "./game/modules/gm")
 }

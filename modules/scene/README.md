@@ -9,20 +9,20 @@
   - `SceneInteract`（`protocol/def/scene_interact.go`）：请求 `SceneInteractRequest{SceneID, ObjectID, Sequence}`，应答 `SceneInteractResponse{Code, Reason, Sequence, Text}`。与场景里一个静态交互对象交互一次；`Sequence` 是这名玩家自己的连续序号，从 1 起每次加 1。被拒的请求不消耗序号。
   - 没有专门的推送协议：附近玩家的公开字段经框架的实体同步（entitysync）按视野下发；场景的时间域放在全场关系视图里，下发给这张图的所有成员，不需要靠近某一点。
 - **服务端入口**
-  - 场景管理器 `Manager`（`game/scene/service/runtime.go`），用 `service.FromRegistry(registry)` 取得（能力名 `gameplay.scene`）：
+  - 场景管理器 `Manager`（`game/modules/scene/service/runtime.go`），用 `service.FromRegistry(registry)` 取得（能力名 `gameplay.scene`）：
     - `Open(uniqueID int64, config gamescene.Config) (*sceneentity.Scene, error)`：开一张图，只给可信服务端用。
     - `Close(ctx, uniqueID) error`：关一张**空**图；还有成员就拒绝。
     - `Drain(ctx, id) error`：先关准入，再通知登记过的模块清走自己的成员，撤离玩家，最后关图；只动指定的这一张。失败可重试。
     - `Stop(ctx) error`：停机入口（模块的 `runtime` 接线自动调用）。先禁止再开图，再逐图 `Drain`。
     - `IDs(from, to int64) ([]int64, int64, error)`：把场景号换成实体号，供要把 Scene 放进自己事务的调用方声明参与者。`to` 没开或正在关返回 `scene_unavailable`，`from` 没开返回 `scene_stale`。
     - `RegisterDrainer(kind, run) (func(), error)`：见“登记点”。
-  - 场景配置 `Config`（`game/scene/scene.go`）：`Template`、`Line`（分线号）、`Bounds`、`Spawn`、`BlockSize`、`Sight`（视距）、`Capacity`、`Ground`、`Surface`、`Regions`、`Objects`；`DefaultConfig()` 是缺省的一份。
+  - 场景配置 `Config`（`game/modules/scene/scene.go`）：`Template`、`Line`（分线号）、`Bounds`、`Spawn`、`BlockSize`、`Sight`（视距）、`Capacity`、`Ground`、`Surface`、`Regions`、`Objects`；`DefaultConfig()` 是缺省的一份。
   - 空间 `Space`（同文件，经 `Scene.Space()` 取得）：
     - `Sense(at, radius) []SensedActor`：返回同场景、半径内**已提交位置**的玩家，半径不能超过视距。不读别的实体的 DAO、不取别的实体的锁。
     - `Nearby(playerID) []int64`：这名玩家当前视野里的实体号。
     - `Enter(value, at)` / `Leave(value)` / `QueueMove(value, at)`：把一个实体放进 / 移出 / 移动这张图的视野索引（怪物、地形块、建筑等非玩家实体用 `Enter` 显示）。
     - `Placement(preferred)`：先试给定点，再试出生点，返回一个能站的位置。
-    - `RegionsAt(at)`、`Object(id)`（`game/scene/regions.go`）：某点所在的区域号、按号取交互对象。
+    - `RegionsAt(at)`、`Object(id)`（`game/modules/scene/regions.go`）：某点所在的区域号、按号取交互对象。
   - Scene 的成员账本是组件 `SceneMembersComp()`（`game/components/scenemembers`，`view.SceneMembers`）：`Admit(id)` / `Depart(id)`（必须与对应的 actor 同时持锁；`Admit` 在已关闭 / 正在关闭时返回 `scene_unavailable`，满员返回 `scene_full`）、`Close()`、`BeginClosing()`。
   - Scene 实体（`game/entities/scene/entity.go`）只留运行期对象：`Environment()`（交给 actor 的环境）、`TimeDomain()`、`Config()`、`Space()`，以及成员账本组件用的适配 `Capacity` / `MemberLoaded` / `ForgetMember` / `CloseSpace`（`members_component.go`）。
   - Nest handler（`game/handler/`）：`handlerSceneChange`（`rollback=undo durability=async`，Player 与至多两张 Scene 同一笔事务）、`handlerSceneInteract`（`durability=strict`）、`handlerSceneTime`（改场景时间倍率，只给可信管理逻辑：`sender.NewSceneTimeSender(client).Sync_SceneTime(ctx, sceneEntityID, rate)`）、`handlerSceneClose`、`handlerSceneBeginClosing`、`handlerSceneEvacuate`（后三个由 `Manager` 内部使用）。
@@ -48,14 +48,14 @@
   - `scene_sequence`：交互序号不是上一次成功的序号加 1（跳号、旧号、0），或同一个序号换了场景或对象。
   - 框架码（没进入游戏的 `entity_not_found` 等）与登记的回调返回的带码错误同样答在应答里。
 
-**日志**：玩家切图、撤离确认记 Info；开图、关闭、排空准入记 Debug。时间倍率只提供 handler / Sender，日志由外部调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/scene/controller.go`, `game/scene/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：玩家切图、撤离确认记 Info；开图、关闭、排空准入记 Debug。时间倍率只提供 handler / Sender，日志由外部调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/scene/controller.go`, `game/modules/scene/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
 - **启动顺序**：`access.player` 在 Provide 阶段构造控制器，Scene 的 Start 完成开图后才发布 Manager。控制器只保存 Registry 与已提供的 Nest，在处理请求时查 Manager；就绪前请求明确失败，不提前开图、不缓存缺失结果。正式停止顺序仍由 App / modulehost 管理。2026-11-13 已验证真实生成工程启动，见[修复验收 §7](../../docs/maintenance/evidence/module-fixes-20261112/README.md#7-scene--terrain-启动时序修复2026-11-13)。
 
 - **只管本进程**：Scene 是进程内的实体，成员、视野、时间域都是进程内权威。不做跨 game 进程切图、全服同图成员、分布式容量；跨服迁移要另做所有权交接。进程重启后场景要用同样的配置重新 `Open`，在线成员与时间域不恢复。
-- **数量上限**（都写在 `game/scene/scene.go` 与 `service/runtime.go`）：一个进程至多 128 张图（`MaxScenes`）；每张图容量 1～10000；每张图至多 64 个静态区域、256 个静态交互对象；交互对象的半径不超过视距、文本不超过 512 字节；每个观察者视野里至多 128 个实体（`MaxVisible: 128`）；一次 `SceneChange` 至多涉及两张图。
+- **数量上限**（都写在 `game/modules/scene/scene.go` 与 `service/runtime.go`）：一个进程至多 128 张图（`MaxScenes`）；每张图容量 1～10000；每张图至多 64 个静态区域、256 个静态交互对象；交互对象的半径不超过视距、文本不超过 512 字节；每个观察者视野里至多 128 个实体（`MaxVisible: 128`）；一次 `SceneChange` 至多涉及两张图。
 - **视野规则**：进入视野的半径是 `Sight`，离开视野的半径是 `Sight + BlockSize`（留一圈滞回）。不同分线是不同的 Scene 实体，不共享成员、视野或时间域，互相看不见。进出与位移只在事务**提交之后**才影响旁观者；回滚的移动不会让别人看到。
 - **视野不是授权依据**：`Sense` / `Nearby` 的结果只是候选。要对目标做修改（伤害、交易）时，必须在包含目标的 Nest 事务里重新核对场景、距离与存活，不能拿视野结果当事实。成员归属以 Scene 的成员账本与 actor 的所在场景为准。
 - **一致性**
@@ -79,7 +79,7 @@
   - 可交互的静态物件：在 `Config.Objects` 里配位置、半径与文本，`init` 里登记 `OnSceneInteract` 做业务（发奖、推进任务都在同一笔事务里）。
   - 让附近的人看到 Player 的更多字段：`init` 里 `OnSceneFields("<名字>", "<PlayerDao 顶层字段>")`。登记的是整个顶层字段，登记前检查它嵌套的内容里有没有不该公开的；不要登记 `*`。
   - 有地形的图：`Config.Ground` / `Config.Surface` 由提供方实现（terrain 模块就是这样接的），实现必须支持并发读取已提交状态。
-  - 不要改的文件：`game/scene/scene.go` 里 `Space` 的提交后发布逻辑、`handlerSceneChange` 的锁内复查、`SceneDao` 的字段。
+  - 不要改的文件：`game/modules/scene/scene.go` 里 `Space` 的提交后发布逻辑、`handlerSceneChange` 的锁内复查、`SceneDao` 的字段。
 - **别的模块 / 业务代码要用它**
   - 取附近的玩家（附近聊天、AI 索敌）：在已持有某个 actor 锁的 handler 里，`space, ok := body.Environment().Space.(*gamescene.Space)`，再 `space.Sense(body.Position(), space.Sight())`；拿到名单后离开 Nest 再做网络推送。
   - 把自己的实体显示在场景里：实体开启同步后调 `area.Space().Enter(value, at)`，消失时 `Leave(value)`；并向 `Manager.RegisterDrainer` 登记关图时的清理。

@@ -74,8 +74,8 @@ func TestModuleAllianceGenerated(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/handler/alliance_home.go", "seat.SetHomeSID(nextSID)", "seat.SetHomeSID(current)", "./internal/rpc/alliance", "TestAllianceHomeUpdatesOnce", "replay=")
 	recipeMutationMustFail(t, root, "game/controllers/alliance/refresh.go", "!errors.Is(err, errcode.ErrEntityNotFound)", "!errors.Is(err, errcode.ErrEntityNotFound) && !errors.Is(err, context.DeadlineExceeded)", "./game/controllers/alliance", "TestAllianceRefreshKeepsDisplayOnUnknownFailure", "<nil>")
 	recipeMutationMustFail(t, root, "game/controllers/alliance/refresh.go", "seat.JoinRequestID != reply.State.JoinRequestID || ", "", "./game/controllers/alliance", "TestAllianceRefreshRejectsStaleMirrorGeneration", "stale mirror")
-	recipeMutationMustFail(t, root, "game/alliance/rehome.go", "return rehome.Binding(ctx, registry, playerID)", "_, _, _ = rehome.Binding(ctx, registry, playerID); return int32(1000), false, nil", "./game/alliance", "TestWithAllianceRehomeUsesCurrentBinding", "")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestAlliance|^TestWithAlliance", "./internal/rpc/alliance", "./game/handler", "./game/alliance/...", "./game/controllers/alliance")
+	recipeMutationMustFail(t, root, "game/modules/alliance/rehome.go", "return rehome.Binding(ctx, registry, playerID)", "_, _, _ = rehome.Binding(ctx, registry, playerID); return int32(1000), false, nil", "./game/modules/alliance", "TestWithAllianceRehomeUsesCurrentBinding", "")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestAlliance|^TestWithAlliance", "./internal/rpc/alliance", "./game/handler", "./game/modules/alliance/...", "./game/controllers/alliance")
 }
 
 // 本轮只跑联盟、换服接线与 demo 的相邻代码，不代替最终完整 demo 验收。
@@ -95,7 +95,7 @@ func TestDemoAllianceModuleIntegration(t *testing.T) {
 	if err = os.WriteFile(path, raw, 0644); err != nil {
 		t.Fatal(err)
 	}
-	runGeneratedGo(t, root, "test", "-count=1", "-run", "^TestAlliance|^TestWithAlliance|^TestRehome|^TestTeam|^TestA.*Step|^TestThePlayerSteps", "./game/handler", "./game/alliance/...", "./game/controllers/alliance", "./internal/rpc/alliance", "./internal/service/game", "./db")
+	runGeneratedGo(t, root, "test", "-count=1", "-run", "^TestAlliance|^TestWithAlliance|^TestRehome|^TestTeam|^TestA.*Step|^TestThePlayerSteps", "./game/handler", "./game/modules/alliance/...", "./game/controllers/alliance", "./internal/rpc/alliance", "./internal/service/game", "./db")
 }
 
 func TestModuleAllianceFailedGenerationRollsBackServiceAndSagas(t *testing.T) {

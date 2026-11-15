@@ -6,7 +6,7 @@ package protocoldef
 type SkillCatalogRequest struct{}
 
 // SkillCatalogResponse lists the compiled skill ids (roost-core/skill
-// programs, from game/skills/*.json) and how many compile warnings the
+// programs, from game/modules/skills/*.json) and how many compile warnings the
 // catalog carries — a client or a release check can refuse a non-zero count.
 type SkillCatalogResponse struct {
 	Code     int32    `pb:"1"`

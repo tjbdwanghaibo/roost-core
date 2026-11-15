@@ -371,7 +371,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 `roost add heartbeat` / `roost add behavior [--ai] [--state]` / `roost add timedomain`（[D20“生成器接入”实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/3fddb51ea19dcd66451fd0ce8c80dcdf6b04be45/docs/maintenance/DESIGN-TODO.md#生成器接入实施结果2026-10-21)，用法见 [CODEGEN_REFERENCE](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)）。
 
 - **按需装配，不进缺省 Mod 集**（维护者 2026-10-21 晚按推荐）：`heartbeat` Mod 只在 add 命令（或 `roost add mod heartbeat`）之后才装在那个服务上。实体侧零开销，进程侧装上之后驱动空转也每 10ms 走一格、停机预算多 3s。
-- **工程只有一个驱动变量**：`game/heartbeat.Driver`，依据是生成工程每个进程只跑一个服务；同一个进程里起两个装了 heartbeat Mod 的 App（测试）时它们共用一个驱动：后一次 `Bind` 覆盖前一次的 Nest 客户端（`Bind` 允许重复调用），拍都投到后接上的那个 Nest。驱动的 `Name`（日志 / 指标标签）是工程名，不区分服务。
+- **工程只有一个驱动变量**：`game/modules/heartbeat.Driver`，依据是生成工程每个进程只跑一个服务；同一个进程里起两个装了 heartbeat Mod 的 App（测试）时它们共用一个驱动：后一次 `Bind` 覆盖前一次的 Nest 客户端（`Bind` 允许重复调用），拍都投到后接上的那个 Nest。驱动的 `Name`（日志 / 指标标签）是工程名，不区分服务。
 - **示例 AI 的 `EndActions` 结束全部组的动作**：生成的 `ai.ControllerHooks.EndActions` 是 `Behavior.EndAllAction(true, reason)`（切换策略时清场），写在生成部分，业务要换成“只结束某些组”需要另写 Controller，生成器不提供钩子。
 - **成员挂场景时间域由业务写**：生成的 `timeDomain()` 返回 nil；域在构造时定下、运行中不能换（D22 边界），实体换场景要 `Close` 旧的行为组件后重建（`Behavior.Close` / `Controller.Close`，见上文“域要在构造时给”），生成器没有生成重建入口；生成的 `BehaviorComponent.OnDestroy` 已调 `Controller.Close` 与 `Behavior.OnDestroy`。
 - **时间域字段缺省 `nopersist,sync`**：随进程结束的副本场景；要持久的场景手工改成 `persist`（DAO 定义归业务）。三个字段名固定，已有同名字段只有一部分或类型不同时 add 拒绝。
@@ -439,7 +439,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。
 
 - **签名里的结构体要定义在 view 里**（维护者 2026-11-13：组件对外的方法都应在 view 下）：view 不能反向 import 组件包，所以方法参数 / 结果用到的结构体定义在 `game/view/component_<功能>.go`，名字带功能前缀（`view.ShopResult`、`view.PurchaseGrant`），组件包与功能包留同名别名。搬进 view 的类型只能带用内建、db 与其他 view 类型的方法；要用工程错误码或别的包的方法改成功能包里的函数（如 `purchase.ValidateGrant`）。名字在全部模块与 game-demo 的 view 文件里必须唯一（`TestModuleViewNamesAreUniqueAcrossModules`、`TestDemoViewNamesDoNotCollideWithItsModules` 检查）。
-- **view 是一个包**：import 它就带上所有 view 文件的依赖（db、`game/actor` 及其玩法包、`game/gameplay/attribute`）。`actor.Body` 是带行为的运行时类型、`gameattr.Combat` 由 `roost add attribute` 生成在固定目录，两者没有搬进 view。
+- **view 是一个包**：import 它就带上所有 view 文件的依赖（db、`game/modules/actor` 及其玩法包、`game/modules/gameplay/attribute`）。`actor.Body` 是带行为的运行时类型、`gameattr.Combat` 由 `roost add attribute` 生成在固定目录，两者没有搬进 view。
 - **冷组件没有 view 访问器**：冷组件的字段可能是 nil，装进接口后不等于 nil，所以生成器不给它生成 `func (e *Player) X() view.X`；跨组件调用冷组件要经实体的具体类型。
 - **view 豁免只剩两类**（`TestModuleViewInterfacesListTheComponentMethods` 的豁免表，2026-11-14）：返回 core 运行时对象的方法（activity `Host`、actor `SavedPosition`、attribute `Container`、combat `Core`），以及参数是对方 `*Component`、要读对方战斗核心的 combat `Cast` / `Step` / `Tick` / `Leave`。
 - **实体包只留接线**：实体包保留框架接口的实现（`cellworld.Actor` / `BasePlayer` 等）、运行时对象、定时器与同步适配、packer、mirror 与 replica；生成的定时器组件的方法只能声明在实体包，回调只把节点交给组件方法（`on…` 回调必须一行）。守卫测试（`TestModuleEntityPackagesHoldOnlyComponentWiring`、`TestDemoEntityPackagesHoldOnlyComponentWiring`）按 `Set…` / `Del…` 调用识别实体方法改状态，换个名字的写入认不出。
@@ -477,7 +477,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
-- **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player/enter_game.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter/` 的三个文件与 `game/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。enter 域的 controller 自己建一个 player controller，一个进程里因此有两个 player controller 实例；它们共享的东西（在线名单、归属、场景）都经 Registry 或进程级对象，往 player controller 上加每实例状态时要记得这一点。
+- **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player/enter_game.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter/` 的三个文件与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。enter 域的 controller 自己建一个 player controller，一个进程里因此有两个 player controller 实例；它们共享的东西（在线名单、归属、场景）都经 Registry 或进程级对象，往 player controller 上加每实例状态时要记得这一点。
 
 #### game-demo 的玩法范围（D20 第 3 期）
 
@@ -487,7 +487,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **一个进程一张地图**：心跳驱动、`actor.WorldTime`（场景时间域）与 `actor.Ground`（地形）都是进程级的；成员在构造时绑定域（`BeatConfig.TimeDomain` 运行中不能换）。多场景的游戏要在成员进入场景时构造它的行为组件，或不挂域。
 - **寻路预算用完走直线**：`PathFind.Path` 最多访问 4096 个节点，开阔地上远处的斜向目标就会用完；用完时改走直线，`Move` 每进一格问一次地形，被挡停在最后一个可走的格（动作以 `Blocked` 失败），不绕路。证明不可达的目标直接拒绝。
 - **`Join` 之前的移动 AOI 不跟**：`actor.InterestMoves` 对兴趣政策还不认识的实体（进场景事务已提交、`Scene.Join` 还没做或失败）忽略 `ErrInterestUnknown`，位置照写、AOI 不更新；`Join` 用进场景事务返回的位置，期间走的几步要等下一步才进 AOI。
-- **只有怪物的 Buff 挂了心跳，没有技能 Runtime**：怪物的 `CombatComponent` 用 P5 的 `AttachBeat`（1Hz、场景时间），限时定身到点由它自己的心跳移除；demo 的实体上没有技能 `Runtime`（`game/skills` 只编译目录），所以没有用 `NewRuntimeBeat`。到期最多晚一个心跳周期（1 秒）加 tick 取整。怪物的 `CombatDao` / `StateDao` 不在 DaoManager 里（怪物不持久），只有 `rollback=undo` 的 handler 能回滚它们（demo 的 handler 都是 undo）。
+- **只有怪物的 Buff 挂了心跳，没有技能 Runtime**：怪物的 `CombatComponent` 用 P5 的 `AttachBeat`（1Hz、场景时间），限时定身到点由它自己的心跳移除；demo 的实体上没有技能 `Runtime`（`game/modules/skills` 只编译目录），所以没有用 `NewRuntimeBeat`。到期最多晚一个心跳周期（1 秒）加 tick 取整。怪物的 `CombatDao` / `StateDao` 不在 DaoManager 里（怪物不持久），只有 `rollback=undo` 的 handler 能回滚它们（demo 的 handler 都是 undo）。
 - **怪物只巡逻**：没有追击、回巢、占地与战斗伤害；巡逻走直线（出生点附近边长 12 的正方形），角按地形裁剪。
 - **刷怪一次一批**：上一批还在建时交来的批次丢弃，等下一拍；建一只要一次 `lifecycle.Create`、一次 `ShowSubject` 与一条场景 + 怪物的两实体 Nest 消息（场景实体是这一步的串行点，玩家的 `move_target` / `move` 也锁场景）。
 - **场景视野的扇出上限 65536**：每个成员都挂在场景视野上（`MaxPlayersPerView` 由缺省 4096 调到 `sceneMaxMembers`）；超过时 `AttachView` 失败、只打 Warn，那个玩家收不到场景时间。
@@ -846,7 +846,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：坏块与拥有者装不进的块永远等不到确认**（D12 A，`5361b9e6`）：按原始地形包确认，客户端协议与 C# 不变；边界见[跨格编辑直接拒绝与确认来源](#跨格编辑直接拒绝与确认来源)。
 - **2026-11-14：开发配置里两个带 DataEngine 的服务争同一个 WAL 目录**（2026-11-14 关闭，D18 A：缺省改为 `data/wal/<服务>/<sid>`，alliance 开发配置不再显式写目录；回归 `TestDataEngineModWALDirectoryIsPerServiceAndSid`。）
 - **2026-11-14：game-demo 里 wallet 的金币没有玩法来源**（D26 A）：副本通关与活动结算发金币，事实见[框架服务与 game-demo](#框架服务与-game-demo)。
-- **2026-11-14：game-demo 的新玩家初始化没进 enter 钩子**（D25 A，`24a04ff8`）：写进 `game/login/enter_first.go`（出生点，只执行一次），其余事实见[框架服务与 game-demo](#框架服务与-game-demo)。
+- **2026-11-14：game-demo 的新玩家初始化没进 enter 钩子**（D25 A，`24a04ff8`）：写进 `game/modules/login/enter_first.go`（出生点，只执行一次），其余事实见[框架服务与 game-demo](#框架服务与-game-demo)。
 - **2026-11-14：#37 Saga 原型第三轮云 c128 的余额 false**（D15 A 关闭）：原型代码已删除、无法再查；正式 JetStream 实现的同类门槛是 0 false。
 - **2026-11-14：CellWorld 出生号与运行期号共用 shard 位**：`cellworldhost.SpawnID` 是 `home<<34 | 1<<33 | seq`，game-demo 的 runtimeid 与 monster 模块的运行期序号原来可到 34 位，同 sid 下运行期序号 2^33+k 恰好等于出生序号 k。两处序号封顶 `1<<33 − 1`（第 33 位留给出生号，用完拒绝、不回绕），各加越界用例（修前红）。一个进程的运行期号上限因此由 2^34−1 降到 2^33−1。另补 cellworldhost Runtime 的 `New` / `Start` / `Stop` / 启动失败复位用例，C# 地形确认改用真实同步帧驱动（文档更正：地形视图在线上的 profile 是 `"default"`）。证据见 CHANGELOG。
 - **2026-11-14：夹具与模块收口**：分区场景建筑进别的 Cell / Base 观察者主视野进了无缝真实演练（`terrain_building_view`），演练发现 demo 的 clientsync 解码不认识 `building` 命名空间（已修）、转发编辑在 Base 发号与 Cell 写入之间被杀时块版本可比已答序号少一（断言改为接受并重发验证）；turn-pvp 回合超时接房间持久定时器；mailbox 经 NATS BusClient（core / jetstream）调 Redis 存储的 mail 服务补真实依赖用例（答复超时重试、确认超时、停机重启、断开后重投给另一实例）；activity_world 场景原读工程 configs/data、换表后 2/4 红，改为装载自带空表；两条偶发确认是夹具时序——主视野超限用例在 D17 收紧越界、冷却放宽前就判定（8×yes、GOMAXPROCS=2、`-race` 旧 22/300 红 → 新 0/300），转发编辑是进程内转发超过 300ms 期限（旧 1/1000 红 → 现 0/1300）。证据见 CHANGELOG。

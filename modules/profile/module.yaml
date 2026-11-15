@@ -28,7 +28,7 @@ with:
   gm:
     summary: 经 GM 审计入口调用本模块正式事务或服务入口
     verify:
-      packages: [./game/gm]
+      packages: [./game/modules/gm]
       run: ^TestWithProfileGM
       pass: 4
   enter:

@@ -11,7 +11,7 @@
 
 两条协议都只读；没上榜不是错误（`OnBoard` 为 false，名次与分数为 0）。查的是谁取自已认证的会话；读哪张榜、哪个周期由服务端定，请求里没有榜名。**没有让客户端提交分数的协议。**
 
-### 服务端入口（`game/leaderboard/leaderboard.go`）
+### 服务端入口（`game/modules/leaderboard/leaderboard.go`）
 
 - `Submit(ctx, registry, playerID, total) (Standing, error)`：把玩家**当前总分的快照**提交到当前周期的榜，返回提交之后他的位置 `Standing{OnBoard, Rank, Score}`。
 - `SubmitSeason(ctx, registry, season, playerID, total) (Standing, error)`：同上，但周期由调用方指定。给总分按周期分开存的功能用。
@@ -21,7 +21,7 @@
 
 ### 登记点
 
-`leaderboard.OnSubmitted(name, SubmittedHook)`（`game/leaderboard/leaderboard_hooks.go`）：每次 `Submit` / `SubmitSeason` 得到 rank 的成功答复之后执行，钩子签名 `func(context.Context, *app.Registry, Submission) error`，`Submission{Board, PlayerID, Total, Standing}`。它在事务之外执行，可以再发一条 Nest 消息，不能直接操作实体；失败只记一条 Warn。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
+`leaderboard.OnSubmitted(name, SubmittedHook)`（`game/modules/leaderboard/leaderboard_hooks.go`）：每次 `Submit` / `SubmitSeason` 得到 rank 的成功答复之后执行，钩子签名 `func(context.Context, *app.Registry, Submission) error`，`Submission{Board, PlayerID, Total, Standing}`。它在事务之外执行，可以再发一条 Nest 消息，不能直接操作实体；失败只记一条 Warn。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
 
 注意它的含义是“rank 答复了这次提交成功”，不是“分数增加了”：重复提交同一个快照也会触发。
 
@@ -29,7 +29,7 @@
 
 无。模块不往任何实体上加字段：玩家的总分由产生分数的功能保存在它自己的状态里，榜只是那个数的投影。
 
-### 配置（`game/leaderboard/leaderboard_board.go`，归工程）
+### 配置（`game/modules/leaderboard/leaderboard_board.go`，归工程）
 
 没有配置表与配置键，榜的身份与规则是这个业务文件里的常量与函数：
 
@@ -72,7 +72,7 @@
   ```
 
   总分为正时才提交；重放发现分已经加过时照样提交当前总分。
-- **需求比它多一点**（都改 `game/leaderboard/leaderboard_board.go`，同时改 `leaderboard_board_test.go`，它把这些数钉住）：
+- **需求比它多一点**（都改 `game/modules/leaderboard/leaderboard_board.go`，同时改 `leaderboard_board_test.go`，它把这些数钉住）：
   - 换成别的榜（通关次数榜）：改 `BoardID` 与分数范围。上线后改 `BoardID` 等于换一张空榜。
   - 分区榜：把 `Board` 里的范围改成 `svcrank.ScopeServer` 并填区号。
   - 赛季 / 周榜：改 `CurrentSeason()` 的函数体。这时持有总分的功能也要按周期分开存，并用 `SubmitSeason`：先取一次周期号，事务里按它记总分，事务外按同一个周期号提交。
@@ -91,6 +91,6 @@
 
 ## 验证范围
 
-`roost module verify` 跑 21 条场景（`^TestLeaderboard`：`game/leaderboard` 12 条、`game/controllers/leaderboard` 9 条）。覆盖缺省榜与规则的数值、分数范围两端、条数的收拢、`Standing` 的判断、提交用快照加 `UpdateMax` 且不带请求号、`SubmitSeason` 进指定周期、坏参数在调 rank 之前被拒、rank 失败返回给调用方、提交后读榜头与自己的名次、榜头带上调用者的位置、从不向 rank 要超过 `MaxTop` 行、没上榜是答案不是错误、重复与过期的快照不动榜、同分先到在前（与玩家号无关，后来追平的排在后面，先到的人重发不后退）、rank 失败作为码到达客户端、没有 rank 能力时 controller 拒绝启动。
+`roost module verify` 跑 21 条场景（`^TestLeaderboard`：`game/modules/leaderboard` 12 条、`game/controllers/leaderboard` 9 条）。覆盖缺省榜与规则的数值、分数范围两端、条数的收拢、`Standing` 的判断、提交用快照加 `UpdateMax` 且不带请求号、`SubmitSeason` 进指定周期、坏参数在调 rank 之前被拒、rank 失败返回给调用方、提交后读榜头与自己的名次、榜头带上调用者的位置、从不向 rank 要超过 `MaxTop` 行、没上榜是答案不是错误、重复与过期的快照不动榜、同分先到在前（与玩家号无关，后来追平的排在后面，先到的人重发不后退）、rank 失败作为码到达客户端、没有 rank 能力时 controller 拒绝启动。
 
-场景是离线的。端点的 9 条场景跑在**真实的 rank 服务实现**上：`svcrank.RedisStore`（合并方式、同分保留较早的时间、排序编码、分页与名次都是它的代码），它背后的 Redis 换成测试里的内存存储 `leaderboardMemoryRedis`（有序集合、哈希，以及 `RedisStore` 三段脚本的语义用 Go 重写——不执行 Lua，脚本文本本身的缺陷看不到；认不出的脚本直接报错）；“首次达到”的时间用测试时钟，每次提交走 1 毫秒。所以“只升不降”“同分先到在前”是 rank 服务自己算出来的。外面包一层只记录调用、可注入读失败的 `leaderboardProbeRank`，不改回答；“读到一半这一行被删掉”在内存存储上注入。`game/leaderboard` 的场景仍用只记录调用、回答预先给定结果的替身（`leaderboardRecordingRank`），它们测的是“本模块向 rank 发了什么、对回答（含失败）做了什么”。真实的 Redis 与 Lua 脚本、并发下抢 compare-and-swap、跨进程调用、真实 TCP 都没有经过。game-demo 用的是这个模块，但模块自己没有在真实进程上的专项验证记录。
+场景是离线的。端点的 9 条场景跑在**真实的 rank 服务实现**上：`svcrank.RedisStore`（合并方式、同分保留较早的时间、排序编码、分页与名次都是它的代码），它背后的 Redis 换成测试里的内存存储 `leaderboardMemoryRedis`（有序集合、哈希，以及 `RedisStore` 三段脚本的语义用 Go 重写——不执行 Lua，脚本文本本身的缺陷看不到；认不出的脚本直接报错）；“首次达到”的时间用测试时钟，每次提交走 1 毫秒。所以“只升不降”“同分先到在前”是 rank 服务自己算出来的。外面包一层只记录调用、可注入读失败的 `leaderboardProbeRank`，不改回答；“读到一半这一行被删掉”在内存存储上注入。`game/modules/leaderboard` 的场景仍用只记录调用、回答预先给定结果的替身（`leaderboardRecordingRank`），它们测的是“本模块向 rank 发了什么、对回答（含失败）做了什么”。真实的 Redis 与 Lua 脚本、并发下抢 compare-and-swap、跨进程调用、真实 TCP 都没有经过。game-demo 用的是这个模块，但模块自己没有在真实进程上的专项验证记录。

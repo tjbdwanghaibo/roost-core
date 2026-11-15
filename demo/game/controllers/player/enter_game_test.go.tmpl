@@ -42,7 +42,7 @@ func (alwaysOwner) Serve(context.Context, int64, int32) error { return nil }
 func (alwaysOwner) SID() int32                                 { return 1000 }
 
 // thisServer 是本进程（sid 1000）的 Registry。sid 写在配置里：登录模块与 enter 的联动登记的进入前检查读它
-// （这个测试进程里它是登记着的——外部测试包的登录场景 import 了 game/login），读不到就判断不了玩家归不归本服。
+// （这个测试进程里它是登记着的——外部测试包的登录场景 import 了 game/modules/login），读不到就判断不了玩家归不归本服。
 func thisServer() *app.Registry {
 	cfg := viper.New()
 	cfg.Set("sid", 1000)

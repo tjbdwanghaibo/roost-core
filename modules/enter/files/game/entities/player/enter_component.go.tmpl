@@ -1,9 +1,9 @@
 package player
 
 import (
-	gamelogin "{{MODULE}}/game/login"
 	db "{{MODULE}}/db"
 	"{{MODULE}}/game/components/enter"
+	gamelogin "{{MODULE}}/game/modules/login"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -29,7 +29,7 @@ func init() {
 // EnterState 实现 enter.Owner：只在 Player 被 Nest 锁住期间调用。
 func (e *Player) EnterState() *db.EnterState { return e.Dao().GetEnter() }
 
-// GrantFirstEnter 实现 enter.FirstEnterGranter：工程的 firstEnter（game/login/enter_first.go），然后是别的功能登记的钩子（gamelogin.OnFirstEnter）。
+// GrantFirstEnter 实现 enter.FirstEnterGranter：工程的 firstEnter（game/modules/login/enter_first.go），然后是别的功能登记的钩子（gamelogin.OnFirstEnter）。
 // Init 与 Create 都经它，所以两条路上发的东西一样；“只发一次”由组件在同一笔事务里置的标记保证。
 func (e *Player) GrantFirstEnter(nowUnixMilli int64) error { return gamelogin.GrantFirstEnter(e, nowUnixMilli) }
 

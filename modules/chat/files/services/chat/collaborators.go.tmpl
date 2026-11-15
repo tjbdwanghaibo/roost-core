@@ -5,13 +5,13 @@ package chat
 import (
 	"context"
 
-	gamechat "{{MODULE}}/game/chat"
+	gamechat "{{MODULE}}/game/modules/chat"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	"github.com/tjbdwanghaibo/roost-core/service/chat"
 )
 
-// Policy 决定谁能往一个频道发、谁能读。规则在 game/chat.Allow（game 进程的端点用同一份）：
+// Policy 决定谁能往一个频道发、谁能读。规则在 game/modules/chat.Allow（game 进程的端点用同一份）：
 // 世界频道与一对一私聊对每个已认证玩家开放，其余拒绝。系统频道任何人可读，只有发布是特权。
 func Policy() chat.ChannelPolicy {
 	return chat.PolicyFuncs{

@@ -13,7 +13,7 @@ daos:
 component: Combat
 protocols: [CombatReady, CombatCast, CombatStep, CombatLeave]
 errcodes: [combat_invalid, combat_sequence, combat_conflict, combat_boundary, combat_busy, combat_scene, combat_range, combat_consent, combat_dead, combat_silenced, combat_skill]
-runtime: {package: game/combat, start: Start}
+runtime: {package: game/modules/combat, start: Start}
 verify:
   packages: [./game/handler]
   run: ^TestCombat

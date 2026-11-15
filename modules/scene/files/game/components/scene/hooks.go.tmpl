@@ -1,13 +1,13 @@
 package scene
 
 import (
-	"{{MODULE}}/game/view"
-	gameactor "{{MODULE}}/game/components/actor"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"slices"
-	"{{MODULE}}/game/actor"
-	gamescene "{{MODULE}}/game/scene"
+	gameactor "{{MODULE}}/game/components/actor"
+	"{{MODULE}}/game/modules/actor"
+	gamescene "{{MODULE}}/game/modules/scene"
+	"{{MODULE}}/game/view"
 )
 
 // OnRegion 只在 init 登记。回调在玩家同一 Nest 事务内，适合向 task 上报可信的进入/离开事件。

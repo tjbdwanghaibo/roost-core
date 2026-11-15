@@ -9,7 +9,7 @@ package dbdef
 // different service instances, which no single alliance transaction can
 // enforce. A join reserves the guard first (Pending*), the alliance then
 // admits the player, and the guard is confirmed; when the two disagree, the
-// alliance wins (see game/alliancerule).
+// alliance wins (see game/modules/alliancerule).
 //
 //roost:dao coll=alliance_member db=main
 type AllianceMemberDao struct {

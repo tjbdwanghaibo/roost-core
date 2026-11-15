@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
-	gamechat "{{MODULE}}/game/chat"
+	gamechat "{{MODULE}}/game/modules/chat"
 
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 )
 
-// chat 进程执行的政策就是 game/chat 的规则：世界与私聊放行，其余拒绝；系统频道只读放行。
+// chat 进程执行的政策就是 game/modules/chat 的规则：世界与私聊放行，其余拒绝；系统频道只读放行。
 func TestChatCollaboratorsEnforceTheGamePolicy(t *testing.T) {
 	policy := Policy()
 	who := gamechat.PlayerSender(1001)

@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"strconv"
 
-	gamelogin "{{MODULE}}/game/login"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	player "{{MODULE}}/game/entities/player"
 	handlersender "{{MODULE}}/game/handler/sender"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	gamerehome "{{MODULE}}/game/rehome"
+	gamelogin "{{MODULE}}/game/modules/login"
+	gamerehome "{{MODULE}}/game/modules/rehome"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
@@ -137,7 +137,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	// login: "done or not" is a fact on the Player (PlayerDao.Enter), so a
 	// Player created by a login that crashed before this point is initialized
 	// by the next one, and a repeated login does nothing. The new player's
-	// grants are written in game/login/enter_first.go.
+	// grants are written in game/modules/login/enter_first.go.
 	//
 	// “先新建”的会话发的是 EnterExisting：建成了就是一次进入（经新建请求建成之后的第一次进入报 First=true），
 	// 有档而没建成（上次新建到一半）答 enter_need_create，什么都不写。
@@ -203,7 +203,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	// login. The hooks get the session's claims (Entered.Claims) — the facts
 	// the authenticator recorded from account — beside the first-enter time.
 	//
-	//   - chat (game/chat/chat_enter.go) puts the player in this process's
+	//   - chat (game/modules/chat/chat_enter.go) puts the player in this process's
 	//     online set, so from now on they receive world-channel pushes.
 	//   - mailbox (game/controllers/mailbox/mailbox_enter.go) is the login half
 	//     of mail.LazyBroadcast: server-wide mail (AudienceBroadcast) sent while
@@ -321,14 +321,14 @@ func (controller *Controller) boundHere(context *playeraccess.Context, endpoint 
 	return owners, boundSID, nil
 }
 
-// BoundServerID 读会话里 account 给出的承载服：认证器（登录模块的 game/login，Claims）以
+// BoundServerID 读会话里 account 给出的承载服：认证器（登录模块的 game/modules/login，Claims）以
 // svcaccount.ServerIDClaim 为键写进 Principal.Claims 的 Role.ServingServerID。没有合服时
 // 它就是角色建角时绑定的原服；原服并入本服（别名合服）之后，原服的角色在这里读到的是本服，登录照常通过，
 // 比较逻辑不变。原服另在 svcaccount.OriginServerIDClaim，路由与驻留不读它。没有会话、没有这个 claim、
 // 或值不是正整数都回答 false，由调用方 fail-closed。
 //
 // 导出是为了让认证器那一侧的测试（tcp/login_claims_test.go）用登录端点真正使用的读取函数核对认证器写的
-// Principal：认证器的规则留给工程改（game/login），两边对不上时登录会一律 fail-closed。
+// Principal：认证器的规则留给工程改（game/modules/login），两边对不上时登录会一律 fail-closed。
 func BoundServerID(session gateway.Session) (int32, bool) {
 	if session == nil {
 		return 0, false

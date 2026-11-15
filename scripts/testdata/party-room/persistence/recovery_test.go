@@ -16,7 +16,7 @@ import (
 	roomentity "example.com/party-room-practice/game/entities/party_room"
 	playerentity "example.com/party-room-practice/game/entities/player"
 	sender "example.com/party-room-practice/game/handler/syncsender"
-	gameheartbeat "example.com/party-room-practice/game/heartbeat"
+	gameheartbeat "example.com/party-room-practice/game/modules/heartbeat"
 	party "example.com/party-room-practice/game/partyroom"
 	"example.com/party-room-practice/protocol/msgid"
 	"github.com/spf13/viper"

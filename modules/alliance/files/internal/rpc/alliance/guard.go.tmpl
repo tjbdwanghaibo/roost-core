@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"{{MODULE}}/game/alliancerule"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/alliancerule"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
@@ -294,7 +294,7 @@ func (s *Service) finishGuard(ctx context.Context, playerID, allianceID int64, r
 
 // MemberNotice is the best-effort notice a player's game server gets when
 // their membership changes; the game updates what an online player is shown
-// and pushes AllianceNotice to the client (game/alliance/runtime/notices.go).
+// and pushes AllianceNotice to the client (game/modules/alliance/runtime/notices.go).
 // A notice that is lost is made up for at the next login: the game checks the
 // alliance the player is shown in against the alliance's mirror, and asks
 // Membership when it shows none.

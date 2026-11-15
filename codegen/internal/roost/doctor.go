@@ -243,19 +243,19 @@ func checkCICDTemplates(root string) []CheckItem {
 	return items
 }
 
-// checkSkillCatalog 是 doctor 的 skills:catalog 项：工程有技能目录（game/skills/catalog.go）时运行它的测试，
+// checkSkillCatalog 是 doctor 的 skills:catalog 项：工程有技能目录（game/modules/skills/catalog.go）时运行它的测试，
 // 测试用框架的正式加载路径编译全部 JSON（renderSkillCatalogTest），写坏的定义在这里 FAIL。没有测试文件时 WARN：
 // 那样没有任何地方在启动前编译这些定义。没有技能目录时不报这一项。
 func checkSkillCatalog(ctx context.Context, root string) (CheckItem, bool) {
-	if _, err := os.Stat(filepath.Join(root, "game", "skills", "catalog.go")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "game", "modules", "skills", "catalog.go")); err != nil {
 		return CheckItem{}, false
 	}
-	if _, err := os.Stat(filepath.Join(root, "game", "skills", "catalog_test.go")); err != nil {
-		return CheckItem{Name: "skills:catalog", Status: StatusWarn, Detail: "game/skills has no catalog_test.go, so nothing compiles the Skill definitions before startup; " +
+	if _, err := os.Stat(filepath.Join(root, "game", "modules", "skills", "catalog_test.go")); err != nil {
+		return CheckItem{Name: "skills:catalog", Status: StatusWarn, Detail: "game/modules/skills has no catalog_test.go, so nothing compiles the Skill definitions before startup; " +
 			"the next roost add skill creates one (TestSkillCatalogCompiles calls CompileAll), or write it by hand"}, true
 	}
-	return runDoctorGoCommand(ctx, root, "skills:catalog", 3*time.Minute, "every game/skills/*.json compiles (go test ./game/skills/)",
-		"fix the Skill definition named above, then run GOWORK=off go test ./game/skills/", "test", "-buildvcs=false", "-mod=readonly", "-count=1", "./game/skills/"), true
+	return runDoctorGoCommand(ctx, root, "skills:catalog", 3*time.Minute, "every game/modules/skills/*.json compiles (go test ./game/modules/skills/)",
+		"fix the Skill definition named above, then run GOWORK=off go test ./game/modules/skills/", "test", "-buildvcs=false", "-mod=readonly", "-count=1", "./game/modules/skills/"), true
 }
 
 // checkRemoteRuntime 是 doctor 的 remote-runtime 项：工程里有 remote=managed 实体时，带 Nest 的服务要有

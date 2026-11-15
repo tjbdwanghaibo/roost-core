@@ -1,7 +1,6 @@
 package monsteractor
 
 import (
-	"{{MODULE}}/game/view"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -10,8 +9,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"math"
 	"time"
-	"{{MODULE}}/game/actor"
-	rules "{{MODULE}}/game/monster"
+	"{{MODULE}}/game/modules/actor"
+	rules "{{MODULE}}/game/modules/monster"
+	"{{MODULE}}/game/view"
 )
 
 // CreateParams 由Manager在实体可见之前提供，只含不可变规则及已提交空间的感知/投递能力。

@@ -38,7 +38,7 @@
 
 **错误码**（`internal/errors/profile.go`）：`profile_name_empty`（去掉首尾空白后为空）、`profile_name_long`（超过 16 个字符）、`profile_name_invalid`（不是合法 UTF-8）、`profile_exp_invalid`（数额不是正数）、`profile_exp_overflow`（经验或等级超出存储范围，或存档里的值已坏）。
 
-**日志**：默认改名确认（新名）；GM 发经验只在升级时记录 levels_gained，升级奖励邮件另记 from/to。接管改名的 naming 记录旧名、新名和请求键。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/profile/profile_rename.go`, `game/gm/profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：默认改名确认（新名）；GM 发经验只在升级时记录 levels_gained，升级奖励邮件另记 from/to。接管改名的 naming 记录旧名、新名和请求键。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/profile/profile_rename.go`, `game/modules/gm/profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -72,8 +72,8 @@
 
 本模块的 `with/`：
 
-- `profile` + `enter`（`with/enter/game/login/profile_enter.go`）：登记 enter 的首次建档钩子，把等级设为 1，与“已建档”标记同一笔事务；不调升级钩子，重进与冷加载不重置。
-- `profile` + `gm`（`with/gm/game/gm/profile.go`）：运维命令 `gm.player.add_exp`，payload `{player_id, amount, note}`，经 `ProfileAddExp` 的 Sender 发经验；不判重、不自动重试。
+- `profile` + `enter`（`with/enter/game/modules/login/profile_enter.go`）：登记 enter 的首次建档钩子，把等级设为 1，与“已建档”标记同一笔事务；不调升级钩子，重进与冷加载不重置。
+- `profile` + `gm`（`with/gm/game/modules/gm/profile.go`）：运维命令 `gm.player.add_exp`，payload `{player_id, amount, note}`，经 `ProfileAddExp` 的 Sender 发经验；不判重、不自动重试。
 
 别的模块的 `with/profile`：
 

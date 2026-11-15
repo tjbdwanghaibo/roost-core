@@ -3,7 +3,7 @@
 package protocoldef
 
 // LeaderboardTopRequest 查榜的前 Limit 名，连同调用者自己的名次。Limit 不填（0）或为负按缺省条数处理，
-// 超过上限按上限处理（缺省 10 / 50，见 game/leaderboard/leaderboard_board.go）：一次读整张榜不是这条协议
+// 超过上限按上限处理（缺省 10 / 50，见 game/modules/leaderboard/leaderboard_board.go）：一次读整张榜不是这条协议
 // 提供的选项。查哪张榜、哪个周期由服务端定，请求里没有榜名——从线上收榜名等于让任何人读到任何榜。
 type LeaderboardTopRequest struct {
 	Limit int32 `pb:"1"`

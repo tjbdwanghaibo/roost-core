@@ -1480,7 +1480,7 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 	if len(paths) != 3 {
 		t.Fatalf("created paths = %v", paths)
 	}
-	definition, err := os.ReadFile(filepath.Join(root, "game", "skills", "fireball.json"))
+	definition, err := os.ReadFile(filepath.Join(root, "game", "modules", "skills", "fireball.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1489,7 +1489,7 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 			t.Errorf("Skill definition missing %q:\n%s", want, definition)
 		}
 	}
-	catalog, err := os.ReadFile(filepath.Join(root, "game", "skills", "catalog.go"))
+	catalog, err := os.ReadFile(filepath.Join(root, "game", "modules", "skills", "catalog.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1508,10 +1508,10 @@ func TestAddSkillGeneratesACatalogTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(paths, "game/skills/catalog_test.go") {
-		t.Fatalf("created paths = %v, want game/skills/catalog_test.go", paths)
+	if !slices.Contains(paths, "game/modules/skills/catalog_test.go") {
+		t.Fatalf("created paths = %v, want game/modules/skills/catalog_test.go", paths)
 	}
-	test, err := os.ReadFile(filepath.Join(root, "game", "skills", "catalog_test.go"))
+	test, err := os.ReadFile(filepath.Join(root, "game", "modules", "skills", "catalog_test.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1521,29 +1521,29 @@ func TestAddSkillGeneratesACatalogTest(t *testing.T) {
 		}
 	}
 	// 已有目录、没有测试：下一次 add skill 补上；已有测试（业务文件）不改写。
-	if err := os.Remove(filepath.Join(root, "game", "skills", "catalog_test.go")); err != nil {
+	if err := os.Remove(filepath.Join(root, "game", "modules", "skills", "catalog_test.go")); err != nil {
 		t.Fatal(err)
 	}
 	paths, err = Add(root, AddOptions{Kind: "skill", Name: "IceBolt"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(paths, "game/skills/catalog_test.go") || slices.Contains(paths, "game/skills/catalog.go") {
+	if !slices.Contains(paths, "game/modules/skills/catalog_test.go") || slices.Contains(paths, "game/modules/skills/catalog.go") {
 		t.Fatalf("second add paths = %v, want the missing test added and catalog.go left alone", paths)
 	}
 	custom := []byte("package skills\n\n// business-owned\n")
-	if err := os.WriteFile(filepath.Join(root, "game", "skills", "catalog_test.go"), custom, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "game", "modules", "skills", "catalog_test.go"), custom, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Add(root, AddOptions{Kind: "skill", Name: "Heal"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(root, "game", "skills", "catalog_test.go")); !bytes.Equal(got, custom) {
+	if got, _ := os.ReadFile(filepath.Join(root, "game", "modules", "skills", "catalog_test.go")); !bytes.Equal(got, custom) {
 		t.Fatalf("add skill rewrote the business-owned catalog_test.go:\n%s", got)
 	}
 }
 
-// 端到端：生成的目录测试真的编译 JSON。把火球的 flow 改成不存在的流程后，go test ./game/skills/ 与 doctor 的
+// 端到端：生成的目录测试真的编译 JSON。把火球的 flow 改成不存在的流程后，go test ./game/modules/skills/ 与 doctor 的
 // skills:catalog 都失败并带框架编译器的原话（修前 build / test / doctor 全部通过，只有手动调用 CompileAll 才报错）。
 func TestSkillCatalogTestRejectsABrokenDefinition(t *testing.T) {
 	if testing.Short() {
@@ -1560,7 +1560,7 @@ func TestSkillCatalogTestRejectsABrokenDefinition(t *testing.T) {
 	if item, ok := checkSkillCatalog(ctx, root); !ok || item.Status != StatusOK {
 		t.Fatalf("fresh Skill catalog: %+v (reported %v)", item, ok)
 	}
-	path := filepath.Join(root, "game", "skills", "fireball.json")
+	path := filepath.Join(root, "game", "modules", "skills", "fireball.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

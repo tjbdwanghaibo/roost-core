@@ -303,7 +303,7 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 
 ### 11.6 运行期接线点
 
-已实现（A1）：模块清单可声明 `runtime: {package: game/skillbook, start: Start}`，入口是 `func(*app.Registry) (func(context.Context) error, error)`。安装记录保存目标 service、requires 与 runtime；生成的 `modules_gen.go` 嵌入实际 Service，bootstrap 调用 `NewWithModules()`，不修改业务 Service 文件。启动顺序为框架 Mod → 模块依赖顺序 → 业务 Init；停机为业务 → 模块反向顺序 → 框架 Mod。部分启动失败也返回清理函数；停机错误保留依赖与回调，不把取消当成退出。
+已实现（A1）：模块清单可声明 `runtime: {package: game/modules/skillbook, start: Start}`，入口是 `func(*app.Registry) (func(context.Context) error, error)`。安装记录保存目标 service、requires 与 runtime；生成的 `modules_gen.go` 嵌入实际 Service，bootstrap 调用 `NewWithModules()`，不修改业务 Service 文件。启动顺序为框架 Mod → 模块依赖顺序 → 业务 Init；停机为业务 → 模块反向顺序 → 框架 Mod。部分启动失败也返回清理函数；停机错误保留依赖与回调，不把取消当成退出。
 
 首个使用者为 skillbook，demo 已迁移，详见 [modules 的服务级启动与停机](../../modules/README.md#服务级启动与停机)。不引入框架运行时包、不要求业务补两行调用，也不通过 doctor 提示代替自动接线。生命周期只支持单次启动，不支持在业务 Init 之后再启动一组模块。
 

@@ -26,7 +26,7 @@ import (
 //
 // 实体包里每个挂在实体上、在 view 里有 <X>Holder 的组件，生成器在 <实体>_gen_wire.go 里给出同名访问器
 // （例如 func (e *Player) Profile() view.Profile），返回 view 接口；原来的 <X>Comp() 照旧返回具体类型给 handler 用。
-// 组件包、钩子、联动与 game/login 只依赖 view，实体包依赖组件包并实现 view 的接口，所以没有反向引用。
+// 组件包、钩子、联动与 game/modules/login 只依赖 view，实体包依赖组件包并实现 view 的接口，所以没有反向引用。
 const (
 	viewDirRel        = "game/view"
 	viewEntityPrefix  = "entity_"

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// roost add effect（D12 方向 B）：载荷类型、topic 常量与 Emit 辅助在 game/effects，消费服务里一个 SubscribeEffects
+// roost add effect（D12 方向 B）：载荷类型、topic 常量与 Emit 辅助在 game/modules/effects，消费服务里一个 SubscribeEffects
 // 骨架（毒消息 PoisonEffect）。都是业务文件；第二个消费服务只建自己的消费者，沿用已有的 effect 文件。
 func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 	t.Parallel()
@@ -17,7 +17,7 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 	if err := Run([]string{"add", "effect", "player.level_up", "-consumer", "game", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("add effect: %v\n%s", err, out.String())
 	}
-	effect := readProjectFile(t, root, "game/effects/player_level_up.go")
+	effect := readProjectFile(t, root, "game/modules/effects/player_level_up.go")
 	for _, want := range []string{
 		"package effects",
 		`const TopicPlayerLevelUp = "player.level_up"`,
@@ -29,7 +29,7 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 		"Owner().UniqueID()",
 	} {
 		if !strings.Contains(effect, want) {
-			t.Errorf("game/effects/player_level_up.go lacks %q:\n%s", want, effect)
+			t.Errorf("game/modules/effects/player_level_up.go lacks %q:\n%s", want, effect)
 		}
 	}
 	consumer := readProjectFile(t, root, "internal/service/game/player_level_up_consumer.go")
@@ -62,7 +62,7 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 		t.Fatalf("add service mailer: %v\n%s", err, out.String())
 	}
 	edited := strings.Replace(effect, "\t// TODO: the effect's fields", "\tPlayerID int64 `json:\"player_id\"`\n\t// TODO: the effect's fields", 1)
-	writeProjectFile(t, root, "game/effects/player_level_up.go", edited)
+	writeProjectFile(t, root, "game/modules/effects/player_level_up.go", edited)
 	paths, err := Add(root, AddOptions{Kind: "effect", Name: "player.level_up", Consumer: "mailer"})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 	if strings.Join(paths, ",") != "internal/service/mailer/player_level_up_consumer.go" {
 		t.Errorf("second consumer wrote %v, want only its own consumer", paths)
 	}
-	if got := readProjectFile(t, root, "game/effects/player_level_up.go"); got != edited {
+	if got := readProjectFile(t, root, "game/modules/effects/player_level_up.go"); got != edited {
 		t.Errorf("the second consumer rewrote the business's effect file:\n%s", got)
 	}
 	if mailer := readProjectFile(t, root, "internal/service/mailer/player_level_up_consumer.go"); !strings.Contains(mailer, `"mailer-player-level_up"`) {
@@ -86,14 +86,14 @@ func TestAddEffectChoosesDeliveryAndOrder(t *testing.T) {
 	if err := Run([]string{"add", "effect", "player.online_notice", "-consumer", "game", "-delivery", "best_effort", "-order", "none", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("add effect: %v\n%s", err, out.String())
 	}
-	effect := readProjectFile(t, root, "game/effects/player_online_notice.go")
+	effect := readProjectFile(t, root, "game/modules/effects/player_online_notice.go")
 	for _, want := range []string{
 		"const DeliveryPlayerOnlineNotice = nest.EffectBestEffort",
 		"Delivery: DeliveryPlayerOnlineNotice})",
 		"best effort: no WAL record, no\n// outbox, no inbox.",
 	} {
 		if !strings.Contains(effect, want) {
-			t.Errorf("game/effects/player_online_notice.go lacks %q:\n%s", want, effect)
+			t.Errorf("game/modules/effects/player_online_notice.go lacks %q:\n%s", want, effect)
 		}
 	}
 	consumer := readProjectFile(t, root, "internal/service/game/player_online_notice_consumer.go")
@@ -116,7 +116,7 @@ func TestAddEffectRejectsBadInputWithoutTouchingTheProject(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "effect", Name: "player.level_up", Consumer: "game"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "game", "effects", "hand_written.go"), []byte("package effects\n\nconst TopicHandWritten = \"hand.written\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "game", "modules", "effects", "hand_written.go"), []byte("package effects\n\nconst TopicHandWritten = \"hand.written\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	before := projectFileHashes(t, root)
@@ -132,7 +132,7 @@ func TestAddEffectRejectsBadInputWithoutTouchingTheProject(t *testing.T) {
 		{"ambiguous service", []string{"player.renamed"}, "effect requires -consumer <service> when the project has multiple services"},
 		{"consumer without dataengine", []string{"player.renamed", "-consumer", "lobby"}, "effect consumer service lobby needs the dataengine Mod"},
 		{"repeat", []string{"player.level_up", "-consumer", "game"}, "internal/service/game/player_level_up_consumer.go already exists"},
-		{"hand-written effect file", []string{"hand.written", "-consumer", "game"}, `game/effects/hand_written.go exists but does not declare "type HandWritten struct"`},
+		{"hand-written effect file", []string{"hand.written", "-consumer", "game"}, `game/modules/effects/hand_written.go exists but does not declare "type HandWritten struct"`},
 		{"bad delivery", []string{"player.renamed", "-consumer", "game", "-delivery", "sometimes"}, `invalid -delivery "sometimes"`},
 		{"bad order", []string{"player.renamed", "-consumer", "game", "-order", "global"}, `invalid -order "global"`},
 		{"delivery for an existing effect", []string{"player.level_up", "-consumer", "mailer", "-delivery", "best_effort"}, "its durability is declared there (DeliveryPlayerLevelUp)"},

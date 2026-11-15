@@ -4,7 +4,7 @@
 
 ## 能力
 
-### 握手：两种票据（规则在 `game/login/login.go`）
+### 握手：两种票据（规则在 `game/modules/login/login.go`）
 
 | 票据 | 从哪来 | 认证器做什么 | 会话上多带的 claims |
 | --- | --- | --- | --- |
@@ -21,7 +21,7 @@
 
 两种失败在连接上都只是被关掉（握手失败不带原因）。**握手成功与否只由 account 决定，不等游戏服**；认证器也不拒绝“不该由本服服务”的角色——那要给客户端一个码，由进入游戏的那一步答。
 
-辅助函数（都在 `game/login/login.go`）：`Ticket(playerID, token)` 与 `EnterTicket(ticket)` 拼握手票据，`ParseTicket` 与 `ParseEnterTicket` 拆（只看形状），`MaxTicketBytes`（8192，超过的不问 account 直接拒绝）。
+辅助函数（都在 `game/modules/login/login.go`）：`Ticket(playerID, token)` 与 `EnterTicket(ticket)` 拼握手票据，`ParseTicket` 与 `ParseEnterTicket` 拆（只看形状），`MaxTicketBytes`（8192，超过的不问 account 直接拒绝）。
 
 ### 会话里记的 claims（`Claims(role)` 与 `authenticateEnter`）
 
@@ -37,7 +37,7 @@
 
 claims 是握手那一刻的快照。读承载服用 `ServingServer(claims)`。工程要多记别的事实（渠道、设备）就在 `Claims` 里加键；已有的键不要改名。
 
-### 握手之后：会话激活后的告知（`game/login/login_active.go`）
+### 握手之后：会话激活后的告知（`game/modules/login/login_active.go`）
 
 握手成功、会话已经能收推送之后，认证器把这条会话交给别的功能登记的告知：
 
@@ -59,7 +59,7 @@ login.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry,
 - 地址必须写：上报的是**客户端连得到的地址**（通常是本服前面的 Gate）；监听地址 `0.0.0.0`、独立 Gate 部署时进程猜不出来。不写就不报，启动时记一条 Info。负载是玩家接入层的在线连接数（`access.player.tcp` 的 `SessionCount`；独立 Gate 部署时是经 Gate 进来的会话数），刻度要换时改这个文件。
 - 失败不影响本服：account 不可达时只记日志（成功 ↔ 失败的转变各一条），下一轮再报。配置写错（地址不是带主机的 `host:port`、间隔越界、标签超过 8 个或单个超过 32 字节、写了地址而 `sid` 不是正数）进程启动到这一步报错退出；这几个键由 manager 自己读，`--check-config` 查不到。
 
-### 进入前的判断：`Admit`（`game/login/login_admit.go`）
+### 进入前的判断：`Admit`（`game/modules/login/login_admit.go`）
 
 `Admit(self int32, playerID int64, claims map[string]string) error`：会话记的承载服就是本进程的 `sid` 返回 nil；是别的服、或者没有记，返回 `login_elsewhere`（带 `owner_sid`）。只读、不问任何服务。换服在途的角色这里不拒，那是 rehome 模块的事。
 
@@ -89,7 +89,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 - **配置键：** `login.dev_token`（写在 `configs/service/config.account.yaml`，必须以 `dev-` 开头；生产配置里写了它 account 进程不启动）。`login.presence.addr` / `login.presence.interval` / `login.presence.tags`（写在 **game 服务**的配置里，区服入口上报，见上；不写不上报）。握手的认证器要求承载玩家接入的业务服务在 `roost.yaml` 的 `uses` 里有 `account`。
 - **错误码：** `login_elsewhere`（`internal/errors/login.go`）：这条会话的角色不由本服承载，客户端重新选角。握手失败没有码。
 
-**日志**：握手认证成功，记录玩家、承载服、握手方式与是否新建映射，不记录票据和 claims。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/login/login.go`, `internal/access/player/tcp/auth.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：握手认证成功，记录玩家、承载服、握手方式与是否新建映射，不记录票据和 claims。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/login/login.go`, `internal/access/player/tcp/auth.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -129,7 +129,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
   4. 给客户端一个登录入口：`roost module add portal`（HTTP 的登录、清单与推荐、进服三个端点），或者由工程自己的入口代客户端调 account 的 `Login` → `IssueEnterTicket`（或 `CreateRole` → `SelectRole`）。
   5. 上线前接渠道：在 `services/account/login_channels.go` 的 `verifyChannel` 里按 `identity.Channel` 分支接平台验签。必须守住三条：验不过返回包着 `svcaccount.ErrIdentityDenied` 的错误；问不到渠道返回包着 `svcaccount.ErrVerifierUnavailable` 的错误；返回渠道确认的 `OpenID`，不是客户端提交的那个。
 - **需求比它多一点：**
-  - 多记会话事实：改 `game/login/login.go` 的 `Claims`。
+  - 多记会话事实：改 `game/modules/login/login.go` 的 `Claims`。
   - 把区服编进玩家号：改 `login_player_id.go` 的 `Allocate`。有玩家之后不要调小 `firstPlayerID`。
   - 换名字规则（只影响 `CreateRole` 那条路）：改 `collaborators.go` 的 `NameRules`。
   - 加运维子命令：在 `cmd/accountctl` 另写文件调 `registerCommand`，不改 `main.go`（game-demo 这样加了 `merge-server` / `unmerge-server` / `show-role` / `transfer-role`）。
@@ -143,7 +143,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 
 本模块的 `with/`：
 
-- `with/enter` 接三件事，函数在 `game/login/login_enter.go`（`RegisterEnterChecks`，只登记一次），登记在 `internal/access/player/tcp/login_enter.go` 的 `init` 里；推 `EnterStatus` 的 `Announce` 由 `game/controllers/enter/login_announce.go` 的 `init` 经 `RegisterEnterAnnounce` 交给 `game/login`（v1.47 起 game/login 与原 game/enter 合包，直接 import controllers 会成环）：
+- `with/enter` 接三件事，函数在 `game/modules/login/login_enter.go`（`RegisterEnterChecks`，只登记一次），登记在 `internal/access/player/tcp/login_enter.go` 的 `init` 里；推 `EnterStatus` 的 `Announce` 由 `game/controllers/enter/login_announce.go` 的 `init` 经 `RegisterEnterAnnounce` 交给 `game/modules/login`（v1.47 起 game/modules/login 与原 game/enter 合包，直接 import controllers 会成环）：
   1. 进入前检查 `OnEntering("login", …)`：调 `Admit`，承载服不是本进程的 `sid`（或没有记）答 `login_elsewhere`，不加载也不创建 Player。与 rehome 一起装时两条检查按名字顺序执行，`login` 在前。
   2. `RequireCreateFirst("login", EnterTicketSession)`：用进服票据握手的会话“先新建、再进入”——`EnterGame` 不代建，没建成答 `enter_need_create`；客户端发 `EnterCreate{name}` 建成之后再发 `EnterGame`。用会话令牌握手的会话照旧由 `EnterGame` 加载或创建。
   3. `OnSessionActive("enter", …)`：会话激活后调 enter 模块的 `Announce`，推 `EnterStatus{code, reason, need_create}`；本服不该服务的会话推完断开。
@@ -166,7 +166,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 
 ## 验证范围
 
-`roost module verify` 跑 36 条场景（`^TestLogin`：`game/login` 20 条、`internal/access/player/tcp` 2 条、`services/account` 6 条、`cmd/accountctl` 4 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）。全部是离线的：
+`roost module verify` 跑 36 条场景（`^TestLogin`：`game/modules/login` 20 条、`internal/access/player/tcp` 2 条、`services/account` 6 条、`cmd/accountctl` 4 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）。全部是离线的：
 
 - 认证器的场景用真实的 `account.Service` 加内存存储：两种票据的通过与拒绝、过期、伪造、合服后的承载服、换服在途、并发握手只建一个映射、“拒绝”与“判断不了”的区分。
 - 告知的场景验证后台执行、上限（含丢弃计数）、停机后到达的会话不告知（含丢弃计数）与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。

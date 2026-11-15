@@ -8,13 +8,13 @@ import (
 	"sync"
 	"testing"
 
-	player "{{MODULE}}/game/entities/player"
-	gamemailbox "{{MODULE}}/game/components/mailbox"
-	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/mailbox"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	gamemailbox "{{MODULE}}/game/components/mailbox"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/mailbox"
 )
 
 type profileMailGetter map[int64]entity.IThreadSafeEntity

@@ -18,14 +18,14 @@ import (
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"{{MODULE}}/game/alliancerule"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	alliance "{{MODULE}}/game/entities/alliance"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/alliancerule"
+	apperrors "{{MODULE}}/internal/errors"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
-	alliance "{{MODULE}}/game/entities/alliance"
-	apperrors "{{MODULE}}/internal/errors"
-	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	playerentity "{{MODULE}}/game/entities/player"
-	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 )
 
 // allianceStub is the alliance service as the game endpoints see it: the

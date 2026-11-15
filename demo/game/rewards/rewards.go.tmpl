@@ -1,12 +1,12 @@
 // Package rewards is where this game decides what a reward is worth. What a
 // mail attachment's bytes mean, how one is sent and how it is claimed exactly
-// once are the mailbox module's (game/mailbox, game/controllers/mailbox, the
+// once are the mailbox module's (game/modules/mailbox, game/controllers/mailbox, the
 // Mailbox component); this package only answers "which attachment", so the
 // answer is frozen at the level-up transaction, then the mail consumer uses that snapshot.
 package rewards
 
 import (
-	gamemailbox "{{MODULE}}/game/mailbox"
+	gamemailbox "{{MODULE}}/game/modules/mailbox"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/hotcode"
 )

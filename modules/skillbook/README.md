@@ -1,23 +1,23 @@
 # skillbook：服务启动时把游戏的技能定义编译成一份只读目录，客户端与别的功能读同一份
 
-“技能定义”是 `game/skills/` 下的 JSON 文件（框架 `gameplay/skill` 的定义格式）；“编译”是把它们变成可执行的 `skill.Program`。skillbook 只管这份目录的编译、发布与查询，不执行技能。
+“技能定义”是 `game/modules/skills/` 下的 JSON 文件（框架 `gameplay/skill` 的定义格式）；“编译”是把它们变成可执行的 `skill.Program`。skillbook 只管这份目录的编译、发布与查询，不执行技能。
 
 ## 能力
 
 - **客户端协议**（`protocol/def/skillbook_catalog.go`）
   - `SkillCatalog`：请求 `SkillCatalogRequest{}`，应答 `SkillCatalogResponse{Code, Reason, Skills, Warnings}`。返回本服务启动时编译出来的技能 ID（已排序）与编译告警的总数。目录没在运行时应答带 `Code` / `Reason`。
-- **服务端入口**（包 `game/skillbook`，`skillbook.go`）
+- **服务端入口**（包 `game/modules/skillbook`，`skillbook.go`）
   - `Start(registry) (func(context.Context) error, error)`：模块的运行期入口，由生成的 bootstrap 在业务 Init 之前调用。编译全部定义并把目录发布成能力 `skillbook.catalog`；任何一个定义解析失败、编译出错或 ID 重复，返回错误、不发布半份结果，服务起不来。返回的停止函数把目录标成已停止。
   - `Read(registry) ([]string, int32, error)`：技能 ID 列表（复制出来的切片）与告警数。
   - `LookupProgram(registry, id) (*skill.Program, error)`：按 ID 取启动时编译好的只读 Program；不在每次请求时重新编译。
   - `Resolver(registry) (skill.ProgramResolver, error)`：给技能运行时恢复 checkpoint 用的解析器；它的 `ResolveProgram(id, digest)` 同时核对游戏逻辑摘要，定义改过规则的同名技能接不到旧的施法上。
   - `CompileEnvironment() skill.CompileEnvironment`（`skillbook_rules.go`）：工程的技能编译环境，启动、doctor 与别的功能用同一份。
-  - 包 `game/skills`（`catalog.go`）：`CompileAll(environment) (*Catalog, error)`，把内嵌的 `*.json` 全部解析、编译。
+  - 包 `game/modules/skills`（`catalog.go`）：`CompileAll(environment) (*Catalog, error)`，把内嵌的 `*.json` 全部解析、编译。
   - `Controller.HandleSkillCatalog`（`game/controllers/skillbook/skillbook_catalog.go`）：协议端点，不经过 Nest。
-- **登记点**（`game/skillbook/skillbook_rules.go`）
+- **登记点**（`game/modules/skillbook/skillbook_rules.go`）
   - `OnCompileEnvironment(name string, apply func(*skill.CompileEnvironment))`：往编译环境里加业务的 Host 能力、状态目录等。只在包 `init` 里登记，运行期不能换；空名、nil、重名 panic。每次取环境都从独立的缺省环境出发，按名字顺序调用，全部扩展完之后统一算摘要。
 - **状态**：无玩家状态。目录是服务级、启动后只读的内存对象。
-- **配置**：没有配置表。留给工程的文件是 `game/skills/*.json`（技能定义，缺省带一个 `fireball.json`，ID 是 `skill.<工程名>.fireball`）与 `game/skillbook/skillbook_rules.go`（编译环境）。
+- **配置**：没有配置表。留给工程的文件是 `game/modules/skills/*.json`（技能定义，缺省带一个 `fireball.json`，ID 是 `skill.<工程名>.fireball`）与 `game/modules/skillbook/skillbook_rules.go`（编译环境）。
 - **错误码**：无自己的业务码。目录不可用时的错误不带码，客户端收到的是通用的内部错误码。
 
 ## 能力边界
@@ -33,7 +33,7 @@
 
 - **需求正好是它**：`roost module add skillbook`，没有依赖。combat 依赖它，装 combat 时一起装上。
 - **需求多一点**
-  - 加技能、改技能：在 `game/skills/` 下增改 `*.json`（一个文件一个技能，ID 不能重复），删掉样例 `fireball.json`。
+  - 加技能、改技能：在 `game/modules/skills/` 下增改 `*.json`（一个文件一个技能，ID 不能重复），删掉样例 `fireball.json`。
   - 技能定义里要用业务自己的 Host 能力或状态：在自己的文件里 `init` 登记 `OnCompileEnvironment("<名字>", func(e *skill.CompileEnvironment) { … })`，照 `combat/with/skillbook` 的写法；或直接改 `skillbook_rules.go`。
   - 不要改 `skillbook.go` 里“先全部编译成功、再发布”的次序，也不要在请求路径上重新编译。
 - **别的功能要用**
@@ -50,6 +50,6 @@
 
 ## 验证范围
 
-- `roost module verify skillbook`：11 条场景（`^TestSkillbook`，包 `./game/skillbook` 9 条、`./game/controllers/skillbook` 2 条）。覆盖：启动编译出缺省目录、编译环境的钩子在算摘要之前执行、应答排序且是副本、编译失败不发布任何东西、缺输入拒绝、重复启动不破坏运行中的目录、停止后拒绝读取且可重复停止、取回启动时的 Program 并核对摘要、发布的 Program 表归目录所有；端点读到启动目录、缺上下文或请求时拒绝。
-- `game/skills` 包里另有一条 `TestSkillCatalogCompiles`（缺省定义能编译），不在上面的计数里。
+- `roost module verify skillbook`：11 条场景（`^TestSkillbook`，包 `./game/modules/skillbook` 9 条、`./game/controllers/skillbook` 2 条）。覆盖：启动编译出缺省目录、编译环境的钩子在算摘要之前执行、应答排序且是副本、编译失败不发布任何东西、缺输入拒绝、重复启动不破坏运行中的目录、停止后拒绝读取且可重复停止、取回启动时的 Program 并核对摘要、发布的 Program 表归目录所有；端点读到启动目录、缺上下文或请求时拒绝。
+- `game/modules/skills` 包里另有一条 `TestSkillCatalogCompiles`（缺省定义能编译），不在上面的计数里。
 - 全部是进程内的离线场景，不经过网络；`SkillCatalog` 经真实 TCP 的路径没有在本模块的场景里验证。

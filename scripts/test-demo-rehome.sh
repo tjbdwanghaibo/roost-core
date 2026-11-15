@@ -54,7 +54,7 @@ mkdir -p cmd/rehomedrill
 sed -e "s|DRILL_MODULE|example.com/$project|g" -e 's/^func main()/func mergeMain()/' "$repo_dir/scripts/testdata/demo-drill/merge.go.txt" >cmd/rehomedrill/merge.go
 sed "s|DRILL_MODULE|example.com/$project|g" "$repo_dir/scripts/testdata/demo-drill/rehome.go.txt" >cmd/rehomedrill/main.go
 python3 "$repo_dir/scripts/testdata/demo-drill/rehome-instrument.py" "$repo_dir" "$PWD" "$work_dir/overlay" "${DEMO_REHOME_MUTATION:-}"
-gofmt -w cmd/rehomedrill game/rehome/rehome_drill_faults.go game/rehome/rehome_driver.go "$work_dir/overlay/"*.go
+gofmt -w cmd/rehomedrill game/modules/rehome/rehome_drill_faults.go game/modules/rehome/rehome_driver.go "$work_dir/overlay/"*.go
 go build -overlay "$work_dir/overlay/overlay.json" -o bin/rehomeapp .
 go build -o bin/rehomedrill ./cmd/rehomedrill
 go build -o bin/sidmove ./cmd/sidmove

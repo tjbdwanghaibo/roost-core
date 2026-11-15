@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"MMO_MODULE/game/clientsync"
-	gameattr "MMO_MODULE/game/gameplay/attribute"
+	gameattr "MMO_MODULE/game/modules/gameplay/attribute"
 	"MMO_MODULE/loadtest/playertcp"
 	"MMO_MODULE/protocol/msgid"
 	"MMO_MODULE/protocol/pb"

@@ -447,7 +447,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 ## 4B. 进入游戏：建档与首次初始化
 
-**装 `enter` 模块即可**（`"$ROOST" module add enter`）：它带 `EnterGame` 端点和首次初始化，新玩家的初始发放写进它的 `game/login/enter_first.go`（例如 `host.Wallet().Add(100)`）。手写的功能要在玩家进入时顺带做事（上线登记、拉离线期间的数据），不要改进入端点：在自己的包里写
+**装 `enter` 模块即可**（`"$ROOST" module add enter`）：它带 `EnterGame` 端点和首次初始化，新玩家的初始发放写进它的 `game/modules/login/enter_first.go`（例如 `host.Wallet().Add(100)`）。手写的功能要在玩家进入时顺带做事（上线登记、拉离线期间的数据），不要改进入端点：在自己的包里写
 
 ```go
 func init() {
@@ -458,7 +458,7 @@ func init() {
 }
 ```
 
-（`gamelogin` 是 `<module>/game/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `gamelogin.OnFirstEnter` 登记事务内钩子（配方已使用）。
+（`gamelogin` 是 `<module>/game/modules/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/modules/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `gamelogin.OnFirstEnter` 登记事务内钩子（配方已使用）。
 
 **enter 有两条路**。会话是用进服票据握手的（第 3A 步的链路，装了 `login` 时）：玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`；建档、名字、首次初始化、“建成了”的标记在同一笔事务里。别的会话：`EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码，初始发放只写一处。要在“新建”这一步加自己的检查或写入，用 enter 的登记点（`OnCreating`、`OnCreatePrepare`、实体包的 `OnCreate`，见它的 README），不要改它的端点。
 
@@ -484,14 +484,14 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 **依赖方向**（谁 import 谁）：
 
 ```
-game/view                 ← 只放接口；只依赖 framework、db、协议类型（以及只有类型的 game/actor、game/gameplay/attribute）
+game/view                 ← 只放接口；只依赖 framework、db、协议类型（以及只有类型的 game/modules/actor、game/modules/gameplay/attribute）
 game/components/<功能>    → game/view（以及它联动的别的组件包）
-game/login、钩子、联动    → game/view、组件包
-game/entities/<实体>      → 组件包、game/login（实体实现 view 的接口）
+game/modules/login、钩子、联动    → game/view、组件包
+game/entities/<实体>      → 组件包、game/modules/login（实体实现 view 的接口）
 game/handler、controllers → 实体包、组件包
 ```
 
-组件包、`game/login` 与联动永远不 import 实体包；组件包可以 import 别的组件包（同一实体上依赖另一个组件的规则：`turn`、`matchroom` 用 `room` 的席位检查与容量，`team` 用 `teamroster` 的上限）。要实体类型号这类常量时在组件包里按同一个号再声明一次（`{{ID:entity:Team}}`），不为它 import 实体包。
+组件包、`game/modules/login` 与联动永远不 import 实体包；组件包可以 import 别的组件包（同一实体上依赖另一个组件的规则：`turn`、`matchroom` 用 `room` 的席位检查与容量，`team` 用 `teamroster` 的上限）。要实体类型号这类常量时在组件包里按同一个号再声明一次（`{{ID:entity:Team}}`），不为它 import 实体包。
 
 1. **组件包** `game/components/<功能>/<功能>.go`：`Component` 类型、宿主接口 `Owner`、工厂 `NewComponent(value any, *entity.EntityCreateParam)`（把 `value` 断言成 `Owner`，断言失败返回错误）。`Owner` 只列组件用得到的东西：
 
@@ -519,7 +519,7 @@ game/handler、controllers → 实体包、组件包
    - 参数是功能包的运行期对象时，在 view 里写只含用到的方法的小接口（demo `Map.Teleport` 收 `view.MapGround{ Standable(spatial.Point) bool }`，handler 照旧交场景的 `gamescene.Terrain`），或改成纯数据参数（`terrainchunkdata` 的 `Initialize(sceneID, key, baseRevision, base)` 不再收 `*terrain.World`，handler 先取 `world.Base(key)`）。
    - 要对方实体时收对方的 view 接口（`friends` 的 `Change(peer view.PlayerEntity, ...)`、`team` 的 `Create(target view.TeamEntity, ...)`）。
 3. **跨组件调用写访问器**：`host.Wallet().Add(n)`、`c.owner.Bag().Remove(id, 1)`，不写 `Owner().WalletComp()`。组件、钩子与联动只收用得到的最小接口：只要背包的收 `view.BagHolder`，要整个玩家的才收 `view.PlayerEntity`。
-4. **钩子**：登记表放在发出事件的组件包里（`profile.OnProfileLevelUp`、`checkin.OnCheckinClaimed`），钩子收宿主 `func(host view.PlayerEntity, ...) error`；进入相关的 `OnFirstEnter` / `OnCreate` 与工程的首次发放 `enter_first.go` 在 `game/login`。别的功能的联动文件放在**登记方自己的包**里（task 的签到联动在 `game/components/task/task_checkin.go`），进入钩子的联动放在 `game/login/<功能>_enter.go`。不要在别的包里给组件类型声明方法：改成函数，或改成经 view 接口登记的回调。
+4. **钩子**：登记表放在发出事件的组件包里（`profile.OnProfileLevelUp`、`checkin.OnCheckinClaimed`），钩子收宿主 `func(host view.PlayerEntity, ...) error`；进入相关的 `OnFirstEnter` / `OnCreate` 与工程的首次发放 `enter_first.go` 在 `game/modules/login`。别的功能的联动文件放在**登记方自己的包**里（task 的签到联动在 `game/components/task/task_checkin.go`），进入钩子的联动放在 `game/modules/login/<功能>_enter.go`。不要在别的包里给组件类型声明方法：改成函数，或改成经 view 接口登记的回调。
 5. **每个实体一个很薄的接线文件** `game/entities/<实体>/<功能>_component.go`：自己的组件号（`//roost:component type=<号>`，每个实体单独申请）、类型别名（`type <功能>Component = <功能>.Component`）、handler 用的窄实体接口 `I<功能>Entity`、`entity.RegisterComponentFactory(<组件号>, <功能>.NewComponent)`、实现 `Owner` 的方法（例如 `func (e *Player) BagState() *db.BagState`）。
 6. **共用组件的状态类型共用，每个实体各存一份**：同一个嵌套结构体放进各自的 DAO，各有自己的 `store` 键，各自落盘、各自回滚。不存在跨实体共享的可变状态，不用进程级变量。
 7. **事务边界不变**：每次调用都在宿主实体自己的 Nest 事务里。两个实体之间搬东西（玩家存进公会仓库）仍走多实体 handler、Remote 或 Saga（第 0A 节），不能因为组件相同就跨实体直接改状态。
@@ -625,7 +625,8 @@ go test -mod=mod ./...                                            # 其余生成
 
 - `game/entities/<实体>/`：实体本体、生成文件（`*_gen_wire.go`、`lifecycle_gen.go`）与每个组件一个薄接线文件（组件号、类型别名、注册工厂、实现 Owner）。
 - `game/components/<功能>/<功能>.go`：组件逻辑（经 Owner 宿主接口拿状态），模块之间的联动也放在对应功能的包里。
-- `game/login/`：登录链（票据校验、进入游戏的登记点、“先新建”、新建时的角色名校验）。
+- `game/modules/<包>/`：模块与生成器的功能包（`game/` 下只有上面两层、这一层和下面的 managers / handler / controllers / view）；`game/modules/` 本身不放文件。
+- `game/modules/login/`：登录链（票据校验、进入游戏的登记点、“先新建”、新建时的角色名校验）。
 - `game/managers/managers.go`：进程内 manager 的登记点；`game/handler/`：Nest handler；`game/controllers/<功能>/`：协议入口。
 - `services/<托管服务>/`：托管框架服务的手写代码（collaborators、登录渠道、`services/account/portal/` 登录入口）；`internal/` 是生成的框架接线（`internal/access/player/protocols_gen.go` 是协议登记）。
 

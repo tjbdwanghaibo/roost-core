@@ -41,13 +41,13 @@ world game/entities/card_run/entity.go
 F="$CORE/scripts/testdata/card-rpg"
 mkdir -p game/cardrpg
 for n in catalog profile battle catalog_test; do cp "$F/$n.go.txt" "game/cardrpg/$n.go"; done
-cp "$F/attributes.go.txt"     game/gameplay/attribute/hero_stats.go
+cp "$F/attributes.go.txt"     game/modules/gameplay/attribute/hero_stats.go
 cp "$F/timer_handlers.go.txt" game/entities/card_run/timer_handlers.go
 cp "$F/handlers.go.txt"       game/handler/card_rpg.go
 cp "$F/gameplay_test.go.txt"  game/handler/card_rpg_test.go
-fix_mod card-rpg-practice game/cardrpg/*.go game/gameplay/attribute/hero_stats.go \
+fix_mod card-rpg-practice game/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
   game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
-gofmt -w db/def/*.go game/cardrpg/*.go game/gameplay/attribute/hero_stats.go \
+gofmt -w db/def/*.go game/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
   game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" card-rpg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate

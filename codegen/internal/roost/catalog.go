@@ -119,7 +119,7 @@ var modCatalog = map[string]modSpec{
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/nest", Alias: "kitnest",
 	},
 	// heartbeat 是实体心跳驱动（gameplay/heartbeat）：投递走同一服务的 Nest，所以依赖 nest；驱动是工程的
-	// game/heartbeat.Driver（生成），roost add heartbeat / roost add behavior 自动给服务加上这个 Mod。
+	// game/modules/heartbeat.Driver（生成），roost add heartbeat / roost add behavior 自动给服务加上这个 Mod。
 	"heartbeat": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat", Alias: "kitheartbeat", Depends: []string{"nest"},
 	},

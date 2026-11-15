@@ -116,7 +116,7 @@ grep -Fq 'prerequisite (did run): enable access.player.self_sync after module de
 ! grep -q 'roost add transport tcp' "$review_root/add-enter.log"
 # chat 与 enter 都装着了：chat 的联动文件（进入游戏时加进在线名单）在这一步写进工程，场景单独计数。
 grep -q 'glue chat with enter: written' "$review_root/add-enter.log"
-[[ -f game/chat/chat_enter.go ]]
+[[ -f game/modules/chat/chat_enter.go ]]
 grep -q 'self_sync: true' roost.yaml
 expect_verify wallet=17 checkin=8 chat=10 enter=29 chat+enter=2
 go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review_root/test-all.log"; exit 1; }
@@ -239,6 +239,9 @@ verify_full_project() {
     grep -q "glue ${pair%:*} with ${pair#*:}: written" "$review_root/$name-add.log" || { cat "$review_root/$name-add.log"; echo "missing glue $pair" >&2; exit 1; }
   done
   if grep -rnE '\{\{(ID:[a-z]+:[A-Za-z0-9_]+|MODULE|PROJECT|GAME_SERVICE|GAME_SERVICE_PKG|TIMER_COMPONENT)\}\}' cmd db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
+  # 工程目录（维护者 2026-11-15）：game/ 只有框架层与 game/modules/；game/modules/ 只放功能包，本身没有文件。
+  layout="$(find game -mindepth 1 -maxdepth 1 \( -type f -o -type d ! -name components ! -name controllers ! -name entities ! -name handler ! -name managers ! -name view ! -name modules \) -print; find game/modules -mindepth 1 -maxdepth 1 -type f -print)"
+  [[ -z "$layout" ]] || { echo "$layout"; echo "game/ holds something other than the framework layers and game/modules/<package>/" >&2; exit 1; }
   # 模块的后台 manager（D22）各登记一次，不论安装顺序。
   for manager in NewLoginNotices NewRehomeBackground; do
     [[ "$(grep -c "^		$manager(),$" game/managers/managers.go)" == 1 ]] || { cat game/managers/managers.go; echo "manager $manager is not registered exactly once" >&2; exit 1; }

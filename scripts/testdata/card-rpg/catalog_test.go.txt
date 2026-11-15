@@ -3,7 +3,7 @@ package cardrpg
 import (
 	"context"
 	"encoding/json"
-	attr "example.com/card-rpg-practice/game/gameplay/attribute"
+	attr "example.com/card-rpg-practice/game/modules/gameplay/attribute"
 	frameworkattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 	"os"
 	"path/filepath"

@@ -86,7 +86,7 @@ func TestModuleOwnedEntityInstallIsTransactional(t *testing.T) {
 func TestModuleOwnedEntityValidationRequiresDefinitionsAndUniqueNames(t *testing.T) {
 	yaml := moduleFixtureYAML + "entities: [Demo]\n"
 	files := map[string]string{
-		"game/x.go":                    "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}} {{ID:entity:Demo}}\n",
+		"game/modules/x/x.go":          "package x\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}} {{ID:entity:Demo}}\n",
 		"game/entities/demo/entity.go": "package demo\n",
 		"db/def/demo.go":               "package dbdef\n",
 	}

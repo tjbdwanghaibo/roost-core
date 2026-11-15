@@ -5,10 +5,10 @@ import (
 	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"{{MODULE}}/game/view"
-	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	roomlogic "{{MODULE}}/game/room"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	roomlogic "{{MODULE}}/game/modules/room"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -28,7 +28,7 @@ func (controller *Controller) HandleRoomJoin(ctx *playeraccess.Context, req *pb.
 		result, err = syncsender.NewRoomJoinSender(controller.nestClient).Sync_RoomJoin(ctx.Context(), id, ctx.PlayerID, connection)
 		if err == nil {
 			response.Info = roomInfo(req.RoomID, result)
-			// 提交成功之后登记这条连接：它关了，房间自己断线（game/room/room_presence.go）。
+			// 提交成功之后登记这条连接：它关了，房间自己断线（game/modules/room/room_presence.go）。
 			roomlogic.PresenceFromRegistry(controller.registry).Track(req.RoomID, ctx.PlayerID, connection, result.Epoch)
 		}
 	}

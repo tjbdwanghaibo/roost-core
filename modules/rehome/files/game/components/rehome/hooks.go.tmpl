@@ -6,10 +6,10 @@ import (
 	"sort"
 	"sync"
 
-	gamerehome "{{MODULE}}/game/rehome"
+	gamerehome "{{MODULE}}/game/modules/rehome"
 )
 
-// 换服的三个登记点里事务之内的那两半（事务之外的在 game/rehome/rehome_hooks.go，“离开时”只有事务之外的一半）。
+// 换服的三个登记点里事务之内的那两半（事务之外的在 game/modules/rehome/rehome_hooks.go，“离开时”只有事务之外的一半）。
 // 它们在 Component 的事务里、Player 的实体锁内执行，拿到的是这名 Player 自己：只经同一个实体上别的组件
 // 读写这名 Player，不做事务之外的事（发消息、调别的服务）。
 //

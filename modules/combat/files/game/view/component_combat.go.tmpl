@@ -20,7 +20,7 @@ type CombatResult struct {
 	Ended              bool
 }
 
-// CombatInput 是参战者的下一拍输入（外部移动 / 成长产生，不直接改 CombatDAO）：game/combat 的 Input 是它的别名。
+// CombatInput 是参战者的下一拍输入（外部移动 / 成长产生，不直接改 CombatDAO）：game/modules/combat 的 Input 是它的别名。
 type CombatInput struct {
 	ID                int64
 	SceneID           int64
