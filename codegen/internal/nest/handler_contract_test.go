@@ -116,6 +116,41 @@ func handlerSave(player Player) error { return nil }
 	}
 }
 
+// completion=async 生成 HandlerMeta.AsyncCompletion（热点实体上的 pipelined handler 不再每次 fsync 只处理一条）；只能和
+// durability=pipelined 一起写，写在别的持久级别上或拼错取值时生成期拒绝，与 Nest 注册期同一条规则。
+func TestGenerateAsyncCompletionHandlerMeta(t *testing.T) {
+	path := writeTempGoFile(t, `package capability
+type Player interface { ID() int64 }
+//roost:nest target=player rollback=undo durability=pipelined completion=async
+func handlerCount(player Player) error { return nil }
+`)
+	funcs, pkg, err := parseFile(path)
+	if err != nil {
+		t.Fatalf("completion=async rejected: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "handler_nest_gen.go")
+	if _, err := generate(funcs, pkg, out, true, false, "RegisterHandlers"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityPipelined, AsyncCompletion: true}") {
+		t.Fatalf("async completion registration missing: %s", data)
+	}
+	for _, marker := range []string{"durability=strict completion=async", "durability=async completion=async", "completion=async", "durability=pipelined completion=deferred"} {
+		path := writeTempGoFile(t, `package capability
+type Player interface { ID() int64 }
+//roost:nest target=player rollback=undo `+marker+`
+func handlerCount(player Player) error { return nil }
+`)
+		if _, _, err := parseFile(path); err == nil || !strings.Contains(err.Error(), "completion") {
+			t.Fatalf("%q: err = %v, want a completion error", marker, err)
+		}
+	}
+}
+
 func writePromiseSource(t *testing.T, src string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "handler.go")

@@ -54,10 +54,16 @@ func (p RollbackPolicy) String() string {
 	}
 }
 
-// HandlerMeta 是 handler 的事务声明：回滚策略与持久级别。
+// HandlerMeta 是 handler 的事务声明：回滚策略、持久级别与 pipelined 的完成方式。
 type HandlerMeta struct {
 	Rollback   RollbackPolicy
 	Durability DurabilityPolicy
+	// AsyncCompletion 让这个 pipelined handler 使用提交第二阶段（异步完成，NEST_PIPELINED_COMMIT.md §11）：Enqueue 之后
+	// 派发 worker 不在票据上等，作业立即结束，同一实体的下一条消息随即开始；记录持久后 AfterCommit 与回复在完成池上按
+	// 同实体 LSN 序执行。回复仍在持久之后，持久性不变；变的是 AfterCommit 的执行环境——不带请求上下文、不持实体锁，
+	// 也不能同步等待同一实体上的 Nest 请求。只能和 DurabilityPipelined 一起声明（注册时校验，//roost:nest 写
+	// completion=async）。热点单例上的同步请求靠它摆脱“每次 fsync 一条”（维护者 2026-11-15 批次）。
+	AsyncCompletion bool
 }
 
 // RollbackParticipant 由需要自定义状态回滚（超出生成 DAO 快照兜底）的实体或 DAO 实现。

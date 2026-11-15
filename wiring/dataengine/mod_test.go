@@ -784,12 +784,21 @@ func TestDataEngineModDerivesPipelinedSettingsFromSagaNativeSteps(t *testing.T) 
 	if got, options, err := initWith(t, nil); err != nil || got.AsyncHandlers != nil || got.Allowlist != nil || asyncHandlers(options) != nil {
 		t.Fatalf("without pipelined native steps: %+v, %v; want no async completion and the configured (empty) allowlist", got, err)
 	}
-	if got, _, err := initWith(t, map[string]any{"nest.pipelined.allowlist": []string{"test_plain_pipelined"}, "nest.pipelined.async_workers": 3}); err != nil || got.AsyncHandlers != nil || got.AsyncWorkers != 3 || !slices.Equal(got.Allowlist, []string{"test_plain_pipelined"}) {
+	got, options, err := initWith(t, map[string]any{"nest.pipelined.allowlist": []string{"test_plain_pipelined"}, "nest.pipelined.async_workers": 3})
+	if err != nil || got.AsyncHandlers != nil || got.AsyncWorkers != 3 || !slices.Equal(got.Allowlist, []string{"test_plain_pipelined"}) {
 		t.Fatalf("without pipelined native steps, explicit settings: %+v, %v", got, err)
+	}
+	// 名单为空时完成池规模仍要交给 Nest：业务 handler 声明 AsyncCompletion（completion=async）时 Nest 按它建池。
+	var sized corenest.NestOpts
+	for _, option := range options {
+		option(&sized)
+	}
+	if sized.PipelinedAsyncWorkers != 3 || sized.PipelinedAsyncHandlers != nil {
+		t.Fatalf("Nest options without native steps: async workers %d, handlers %v; want the configured size 3 and no names", sized.PipelinedAsyncWorkers, sized.PipelinedAsyncHandlers)
 	}
 
 	coresaga.MustRegisterNativeStepHandler(corenest.NewHandlerName("test_step_pipelined"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityPipelined})
-	got, options, err := initWith(t, nil)
+	got, options, err = initWith(t, nil)
 	if err != nil || !slices.Equal(got.AsyncHandlers, []string{"test_step_pipelined"}) || got.Allowlist != nil {
 		t.Fatalf("pipelined native step, nothing configured: %+v, %v; want async completion for exactly the native step and the allow-all list left alone", got, err)
 	}

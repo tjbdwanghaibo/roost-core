@@ -28,6 +28,9 @@ type FuncInfo struct {
 	Sync          bool
 	Rollback      string
 	Durability    string
+	// Completion 是 pipelined 的完成方式：空 = 派发 worker 等票据（第一阶段），"async" = 异步完成
+	// （nest.HandlerMeta.AsyncCompletion，同一实体的下一条消息不等这条持久）。
+	Completion    string
 	RemoteAccess  []RemoteAccessInfo
 	SourceImports []ImportInfo // imports needed for type references
 	ReceiverType  string       // injected pointer receiver for method handlers
@@ -171,7 +174,8 @@ func parseFile(path string) ([]*FuncInfo, string, error) {
 		}
 		fi.Rollback = marker.NestOptions["rollback"]
 		fi.Durability = marker.NestOptions["durability"]
-		if err := validateTransactionOptions(fi.Rollback, fi.Durability); err != nil {
+		fi.Completion = marker.NestOptions["completion"]
+		if err := validateTransactionOptions(fi.Rollback, fi.Durability, fi.Completion); err != nil {
 			return nil, pkg, fmt.Errorf("nest: handler %s: %w", fnDecl.Name.Name, err)
 		}
 		fi.Sync = markerOptionEnabled(marker.NestOptions, "sync")
@@ -237,7 +241,7 @@ func bindNativeStep(fi *FuncInfo, imports []*ast.ImportSpec) error {
 	return nil
 }
 
-func validateTransactionOptions(rollback string, durability string) error {
+func validateTransactionOptions(rollback string, durability string, completion string) error {
 	switch rollback {
 	case "", "state", "undo":
 	default:
@@ -247,6 +251,16 @@ func validateTransactionOptions(rollback string, durability string) error {
 	case "", "memory", "async", "strict", "pipelined":
 	default:
 		return fmt.Errorf("unsupported durability policy %q", durability)
+	}
+	// completion=async 只改 pipelined 提交的完成路径（nest.HandlerMeta.AsyncCompletion），与运行期注册同一条规则。
+	switch completion {
+	case "":
+	case "async":
+		if durability != "pipelined" {
+			return fmt.Errorf("completion=async needs durability=pipelined (got %q)", durability)
+		}
+	default:
+		return fmt.Errorf("unsupported completion %q (only completion=async)", completion)
 	}
 	return nil
 }

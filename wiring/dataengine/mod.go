@@ -299,12 +299,13 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 }
 
 // pipelinedSettings 由 nest.pipelined.* 与本进程登记的 pipelined 原生步骤 handler（saga.PipelinedNativeStepHandlers）
-// 得出 Nest 的 pipelined 设置（维护者 2026-10-29 决定：Nest 异步完成按 handler 生效，只给 saga 原生步骤用；其他 handler
-// 照旧，包括自己声明 pipelined 的——它们仍在派发 worker 上等票据，不会悄悄得到异步完成）。
+// 得出 Nest 的 pipelined 设置（维护者 2026-10-29 决定：Nest 异步完成按 handler 生效；saga 原生步骤由这里放进名单，其他
+// handler 照旧，包括自己声明 pipelined 的——它们仍在派发 worker 上等票据，不会悄悄得到异步完成。业务 handler 要异步完成
+// 得在自己的 HandlerMeta 显式声明 AsyncCompletion（//roost:nest completion=async，2026-11-15 批次），不经这里）。
 //
 //   - 白名单：配置写了名单时把这些原生步骤补进去；没写（空 = 全部允许）时不动——补名字会把“全部允许”收窄成只剩原生步骤，
 //     改变别的 handler 的行为。
-//   - 异步完成名单就是这些原生步骤，没有配置项：没有这类原生步骤时名单为空，Nest 不建完成池。
+//   - 异步完成名单就是这些原生步骤，没有配置项：没有这类原生步骤、也没有 handler 声明 AsyncCompletion 时 Nest 不建完成池。
 //
 // 声明 strict 的原生步骤不在名单里，不受这里影响。规则只在这里（Init）执行一次，engine.Runtime 与 NestOptions 用结果。
 func pipelinedSettings(settings config, nativeSteps []string) engine.PipelinedRuntimeConfig {
@@ -544,9 +545,9 @@ func (mod *Mod) NestOptions() []corenest.NestOption {
 	if len(mod.cfg.pipelined.Allowlist) > 0 {
 		options = append(options, corenest.NestOptionWithPipelinedAllowlist(mod.cfg.pipelined.Allowlist...))
 	}
-	if len(mod.cfg.pipelined.AsyncHandlers) > 0 {
-		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(mod.cfg.pipelined.AsyncWorkers, mod.cfg.pipelined.AsyncQueueCap, mod.cfg.pipelined.AsyncHandlers...))
-	}
+	// 总是传：名单为空时只给完成池定规模——handler 自己声明 AsyncCompletion（completion=async）时 Nest 按它建池；
+	// 名单为空且没有 handler 声明时 Nest 不建完成池。
+	options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(mod.cfg.pipelined.AsyncWorkers, mod.cfg.pipelined.AsyncQueueCap, mod.cfg.pipelined.AsyncHandlers...))
 	return options
 }
 func (mod *Mod) Flush(ctx context.Context) error {

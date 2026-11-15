@@ -1463,3 +1463,113 @@ func TestMultiEntityCommitWaitsForAsyncCompletionOnSecondaryEntity(t *testing.T)
 		t.Fatalf("AfterCommit order = %v, want [A1 C1]", hooks)
 	}
 }
+
+// declaredAsyncSeq 给包级注册的用例 handler 名加后缀，-count>1 重跑时不重名。
+var declaredAsyncSeq atomic.Int64
+
+// newDeclaredAsyncEngine 建一个没有异步完成名单（不传 NestOptionWithPipelinedAsyncCompletion）的引擎，handler 自己在
+// HandlerMeta 里声明 AsyncCompletion。packageLevel 为真时 handler 在引擎构造之前注册到包级表（生产生成代码的 init 路径，
+// 经引擎构造时的快照解析），否则注册在引擎实例上（Start 之前）。
+func newDeclaredAsyncEngine(t *testing.T, workers int, packageLevel bool, e *rollbackTestEntity) (*asyncSetEngine, HandlerName) {
+	t.Helper()
+	name := NewHandlerName("declared_async_" + strconv.FormatInt(declaredAsyncSeq.Add(1), 10))
+	getter := newMockGetter()
+	getter.Add(e)
+	f := &asyncSetEngine{committer: newPipelinedTestCommitter(false), onDispatch: map[string]bool{}, gates: map[string]*hookGate{}, entered: make(chan string, 8)}
+	handler := func(targets []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		e := targets[0].(*rollbackTestEntity)
+		old := e.dao.Value
+		RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil })
+		e.dao.Value++
+		label := "A" + strconv.Itoa(e.dao.Value)
+		AfterCommit(func() {
+			onDispatch := currentNestDispatchMsg() != nil
+			f.mu.Lock()
+			f.hooks = append(f.hooks, label)
+			f.onDispatch[label] = onDispatch
+			f.mu.Unlock()
+		})
+		return e.dao.Value, MarkPersist(e.dao, 1)
+	}
+	meta := HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined, AsyncCompletion: true}
+	if packageLevel {
+		MustRegisterHandlerWithMeta(name, handler, meta)
+		// 包级表是进程全局的：用完摘掉，之后构造的引擎不会因为它而建完成泵。
+		t.Cleanup(func() {
+			handlerMu.Lock()
+			delete(handlerMap, name)
+			handlerMu.Unlock()
+		})
+	}
+	f.engine = NewEngine(
+		NestOptionWithGetter(getter),
+		NestOptionWithTransactionCommitter(f.committer),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+	)
+	if !packageLevel {
+		f.engine.MustRegisterHandlerWithMeta(name, handler, meta)
+	}
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = f.engine.Shutdown(ctx)
+	})
+	t.Cleanup(func() { f.committer.resolveAll(nil) })
+	return f, name
+}
+
+// 热点单例：handler 在 HandlerMeta 里声明 AsyncCompletion（//roost:nest completion=async）就走异步完成，不需要引擎的名单。
+// 同一实体上的第二条请求在第一条的票据未持久时就已经执行并 Enqueue（准入链在 Enqueue 之后放开），两条回复都在各自
+// 持久之后、按提交序发出，AfterCommit 在完成池上。没有这条声明时（第一阶段），第二条要等第一条持久并回复才开始，
+// 热点实体每次 fsync 只能处理一条（KNOWN-LIMITS“热点单例实体的写吞吐”）。
+func TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		packageLevel bool
+	}{{"instance registration", false}, {"package registration", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, e := newAsyncPilotEntity(t, 9990+declaredAsyncSeq.Load(), 0)
+			f, name := newDeclaredAsyncEngine(t, 1, tc.packageLevel, e)
+			reply1 := f.requestRetChan(t, name, id)
+			awaitSignal(t, f.committer.enqueued, "first request enqueued")
+			reply2 := f.requestRetChan(t, name, id)
+			awaitSignal(t, f.committer.enqueued, "second request on the same entity enqueued while the first is not durable")
+			expectSilence(t, reply1, "first reply before its record was durable")
+			expectSilence(t, reply2, "second reply before its record was durable")
+			f.committer.resolveAll(nil)
+			if got := awaitSignal(t, reply1, "first reply"); got != 1 {
+				t.Fatalf("first reply = %v, want 1", got)
+			}
+			if got := awaitSignal(t, reply2, "second reply"); got != 2 {
+				t.Fatalf("second reply = %v, want 2", got)
+			}
+			waitHooks(t, f, 2)
+			hooks, onDispatch := f.recorded()
+			if !slices.Equal(hooks, []string{"A1", "A2"}) {
+				t.Fatalf("AfterCommit order = %v, want [A1 A2]", hooks)
+			}
+			if onDispatch["A1"] || onDispatch["A2"] {
+				t.Fatalf("AfterCommit ran on the dispatch goroutine (%v); want the completion pool", onDispatch)
+			}
+		})
+	}
+}
+
+// AsyncCompletion 只能和 pipelined 一起声明：包级与实例注册都拒绝别的持久级别。
+func TestAsyncCompletionDeclarationRequiresPipelined(t *testing.T) {
+	handler := func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return nil, nil }
+	for _, durability := range []DurabilityPolicy{DurabilityMemory, DurabilityAsync, DurabilityStrict} {
+		meta := HandlerMeta{Rollback: RollbackUndo, Durability: durability, AsyncCompletion: true}
+		name := NewHandlerName("declared_async_invalid_" + strconv.FormatInt(declaredAsyncSeq.Add(1), 10))
+		if err := RegisterHandlerWithMeta(name, handler, meta); !errors.Is(err, ErrAsyncCompletionRequiresPipelined) {
+			t.Fatalf("package registration with durability %s: err = %v, want ErrAsyncCompletionRequiresPipelined", durability, err)
+		}
+		engine := NewEngine()
+		if err := engine.RegisterHandlerWithMeta(name, handler, meta); !errors.Is(err, ErrAsyncCompletionRequiresPipelined) {
+			t.Fatalf("instance registration with durability %s: err = %v, want ErrAsyncCompletionRequiresPipelined", durability, err)
+		}
+	}
+}

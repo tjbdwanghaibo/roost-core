@@ -39,7 +39,7 @@ type Spec struct {
 // through the generator that owns it.
 var (
 	Endpoint  = Spec{Kind: "endpoint", Keys: []string{"nest"}}
-	Nest      = Spec{Kind: "nest", Keys: []string{"rollback", "durability", "sync", "target", "targets"}, Flags: []string{"sync"}}
+	Nest      = Spec{Kind: "nest", Keys: []string{"rollback", "durability", "completion", "sync", "target", "targets"}, Flags: []string{"sync"}}
 	Dao       = Spec{Kind: "dao", Keys: []string{"coll", "db", "dbscope", "schema"}, Flags: []string{"nocoll"}}
 	RedisDao  = Spec{Kind: "redisdao", Keys: []string{"mode", "key", "key_type", "prefix", "version", "ttl", "name"}}
 	Attribute = Spec{Kind: "attribute", Keys: []string{"index", "max"}}
