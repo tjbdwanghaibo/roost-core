@@ -71,4 +71,11 @@ out.mkdir(parents=True, exist_ok=True)
 replay = repo / "framework/dataengine/engine/projector_replay.go"
 text = replace_once(replay.read_text(), '\t\tackStart := hoptrace.Now()', '\t\tif err := rehomeDrillHoldAck(ctx, records[acked:processed]); err != nil { return err }\n\t\tackStart := hoptrace.Now()')
 (out / replay.name).write_text(text)
-(out / "overlay.json").write_text(json.dumps({"Replace": {str(handoff): str(out / handoff.name), str(replay): str(out / replay.name)}}))
+# 后台 checkpoint（v1.48.0 起缺省打开）时确认在本轮的后台写者里做，不走上面的同步分支；两处都要堵，
+# 否则 checkpoint 用例的“暂停确认”根本没生效，交出会在确认之前合法返回、演练误报 CHECKPOINT_BYPASS。
+writer = repo / "framework/dataengine/engine/projector_checkpoint.go"
+text = replace_once(writer.read_text(), '\t\t\tstart := hoptrace.Now()\n\t\t\terr := p.ack(ctx, fences[target-1])',
+    '\t\t\tif herr := rehomeDrillHoldAck(ctx, records[from:target]); herr != nil {\n\t\t\t\tw.mu.Lock()\n\t\t\t\tw.err = herr\n\t\t\t\tw.notifyLocked()\n\t\t\t\tw.mu.Unlock()\n\t\t\t\treturn\n\t\t\t}\n'
+    '\t\t\tstart := hoptrace.Now()\n\t\t\terr := p.ack(ctx, fences[target-1])')
+(out / writer.name).write_text(text)
+(out / "overlay.json").write_text(json.dumps({"Replace": {str(handoff): str(out / handoff.name), str(replay): str(out / replay.name), str(writer): str(out / writer.name)}}))
