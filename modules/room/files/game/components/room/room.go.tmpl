@@ -109,8 +109,8 @@ func (component *Component) Join(playerID int64, connection string) (RoomSnapsho
 	seat.SetSlot(slot)
 	seat.SetEpoch(epoch)
 	seat.SetConnection(connection)
-	seat.SetConnected(true)
 	dao.SetSeats(playerID, seat)
+	dao.SetOnline(playerID, connection)
 	if dao.GetHostID() == 0 {
 		dao.SetHostID(playerID)
 	}
@@ -137,13 +137,14 @@ func (component *Component) Reconnect(playerID int64, expectedEpoch uint64, conn
 	if err := component.checkOpen(); err != nil {
 		return RoomSnapshot{}, err
 	}
-	seat, exists := component.owner.Dao().GetSeats(playerID)
+	dao := component.owner.Dao()
+	seat, exists := dao.GetSeats(playerID)
 	if !exists {
 		return RoomSnapshot{}, apperrors.ErrRoomNotMember
 	}
 	// 同一物理连接的重连回包丢失可以重放，不能凭旧 Join 接管另一个连接。
 	if seat.GetConnection() == connection {
-		if !seat.GetConnected() {
+		if !component.Connected(playerID) {
 			return RoomSnapshot{}, apperrors.ErrRoomStaleEpoch
 		}
 		return component.Snapshot(playerID), nil
@@ -157,8 +158,20 @@ func (component *Component) Reconnect(playerID int64, expectedEpoch uint64, conn
 	}
 	seat.SetEpoch(next)
 	seat.SetConnection(connection)
-	seat.SetConnected(true)
+	dao.SetOnline(playerID, connection)
 	return component.Snapshot(playerID), nil
+}
+
+// Connected 报告 playerID 的席位现在是否在线：本进程里最后一次 Join / Reconnect 认下的连接还没有断线（Online 里
+// 记的就是席位的 Connection）。在线状态不落库：房间在新进程里装载时全部是断线，见 db/def/room.go 的 RoomDao。
+func (component *Component) Connected(playerID int64) bool {
+	dao := component.owner.Dao()
+	seat, exists := dao.GetSeats(playerID)
+	if !exists {
+		return false
+	}
+	online, ok := dao.GetOnline(playerID)
+	return ok && online == seat.GetConnection()
 }
 
 // Member 返回 playerID 在 epoch 代际下的席位：不在座、代际过期时返回房间错误。同一 Room 上的组件（turn）用它鉴权。
@@ -179,11 +192,10 @@ func (component *Component) Member(playerID int64, epoch uint64) (*db.RoomSeat, 
 // Disconnect 是服务端断线回调入口。接入层在成功 Join/Reconnect 后捕获该 Epoch；
 // 旧连接迟到的关闭事件返回 false，不影响新连接，也不踢出座位或转移房主。
 func (component *Component) Disconnect(playerID int64, epoch uint64) bool {
-	seat, err := component.Member(playerID, epoch)
-	if err != nil || !seat.GetConnected() {
+	if _, err := component.Member(playerID, epoch); err != nil || !component.Connected(playerID) {
 		return false
 	}
-	seat.SetConnected(false)
+	component.owner.Dao().DelOnline(playerID)
 	return true
 }
 
@@ -205,6 +217,7 @@ func (component *Component) Leave(playerID int64, epoch uint64, connection strin
 		return apperrors.ErrRoomStaleEpoch
 	}
 	dao.DelSeats(playerID)
+	dao.DelOnline(playerID)
 	if dao.SeatsLen() == 0 {
 		dao.SetHostID(0)
 		dao.SetClosed(true)
@@ -236,6 +249,7 @@ func (component *Component) Close(playerID int64, epoch uint64, connection strin
 	}
 	for _, seat := range component.Snapshot(playerID).Seats {
 		dao.DelSeats(seat.PlayerID)
+		dao.DelOnline(seat.PlayerID)
 	}
 	dao.SetHostID(0)
 	dao.SetClosed(true)
@@ -264,7 +278,8 @@ func (component *Component) Snapshot(playerID int64) RoomSnapshot {
 		out.Epoch = seat.GetEpoch()
 	}
 	dao.RangeSeats(func(id int64, seat *db.RoomSeat) bool {
-		out.Seats = append(out.Seats, SeatSnapshot{PlayerID: id, Slot: seat.GetSlot(), Connected: seat.GetConnected()})
+		online, ok := dao.GetOnline(id)
+		out.Seats = append(out.Seats, SeatSnapshot{PlayerID: id, Slot: seat.GetSlot(), Connected: ok && online == seat.GetConnection()})
 		return true
 	})
 	slices.SortFunc(out.Seats, func(a, b SeatSnapshot) int { return int(a.Slot) - int(b.Slot) })

@@ -19,6 +19,11 @@ type PlayerRuntime interface {
 	PushLockstepSession(context.Context, string, uint32, []byte) error
 	LoginTimeout() time.Duration
 	ActiveSessions(int64) int
+	// ConnectionActive 报告 playerID 的这条物理连接（Session.ConnectionID()）现在是否还在本进程登记着。
+	// 关闭的连接先摘掉再发布关闭事件，收到关闭事件之后它一定答 false。
+	ConnectionActive(playerID int64, connectionID string) bool
+	// SessionCount 是本进程现在可推送的玩家连接数（在线连接数）。
+	SessionCount() int
 	CloseSessions(int64, error) int
 	OnSessionClosed(func(TCPSessionClosed)) func()
 	StopNotifications(context.Context) error
@@ -71,6 +76,29 @@ func (game *GameIngress) pushPlayer(ctx context.Context, playerID int64, message
 }
 func (game *GameIngress) ActiveSessions(playerID int64) int {
 	return len(game.playerResources(playerID))
+}
+func (game *GameIngress) ConnectionActive(playerID int64, connectionID string) bool {
+	if connectionID == "" {
+		return false
+	}
+	for _, resource := range game.playerResources(playerID) {
+		if resource.record.identity.ConnectionNonce == connectionID {
+			return true
+		}
+	}
+	return false
+}
+func (game *GameIngress) SessionCount() int {
+	game.mu.Lock()
+	defer game.mu.Unlock()
+	count := 0
+	for _, resource := range game.resources {
+		activating := resource.activationDone != nil && !resource.activated && resource.activationErr == nil
+		if (resource.activated || activating) && !resource.closed {
+			count++
+		}
+	}
+	return count
 }
 func (game *GameIngress) CloseSessions(playerID int64, reason error) int {
 	count := 0

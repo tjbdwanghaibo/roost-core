@@ -63,6 +63,7 @@ func pendingContractService(t *testing.T, mutate ...func(*Config)) (*Service, *c
 	}
 	base := func(c *Config) {
 		c.Accounts, c.Roles, c.Servers, c.Slots, c.Names = stores.Accounts, stores.Roles, stores.Servers, stores.Slots, stores.Names
+		c.Presence = stores.Presence
 		c.ClaimTTL = time.Second
 	}
 	return newService(t, append([]func(*Config){base}, mutate...)...)

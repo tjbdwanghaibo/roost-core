@@ -36,23 +36,26 @@ const ServiceType = "account"
 // The RPC method names, prefixed with the service type so a bus subject is
 // unambiguous when several services register handlers on one connection.
 const (
-	MethodLogin                 = "account.Login"
-	MethodCreateRole            = "account.CreateRole"
-	MethodSelectRole            = "account.SelectRole"
-	MethodValidateSession       = "account.ValidateSession"
-	MethodUpdateProfile         = "account.UpdateProfile"
-	MethodMarkLogout            = "account.MarkLogout"
-	MethodGetServer             = "account.GetServer"
-	MethodListServers           = "account.ListServers"
-	MethodRoleOnServer          = "account.RoleOnServer"
-	MethodIssueAccountTicket    = "account.IssueAccountTicket"
-	MethodValidateAccountTicket = "account.ValidateAccountTicket"
-	MethodIssueEnterTicket      = "account.IssueEnterTicket"
-	MethodEnterServer           = "account.EnterServer"
-	MethodRoleBinding           = "account.RoleBinding"
-	MethodBeginRoleTransfer     = "account.BeginRoleTransfer"
-	MethodCommitRoleTransfer    = "account.CommitRoleTransfer"
-	MethodAbortRoleTransfer     = "account.AbortRoleTransfer"
+	MethodLogin                  = "account.Login"
+	MethodCreateRole             = "account.CreateRole"
+	MethodSelectRole             = "account.SelectRole"
+	MethodValidateSession        = "account.ValidateSession"
+	MethodUpdateProfile          = "account.UpdateProfile"
+	MethodMarkLogout             = "account.MarkLogout"
+	MethodGetServer              = "account.GetServer"
+	MethodListServers            = "account.ListServers"
+	MethodRoleOnServer           = "account.RoleOnServer"
+	MethodReportServerPresence   = "account.ReportServerPresence"
+	MethodWithdrawServerPresence = "account.WithdrawServerPresence"
+	MethodListServerPresence     = "account.ListServerPresence"
+	MethodIssueAccountTicket     = "account.IssueAccountTicket"
+	MethodValidateAccountTicket  = "account.ValidateAccountTicket"
+	MethodIssueEnterTicket       = "account.IssueEnterTicket"
+	MethodEnterServer            = "account.EnterServer"
+	MethodRoleBinding            = "account.RoleBinding"
+	MethodBeginRoleTransfer      = "account.BeginRoleTransfer"
+	MethodCommitRoleTransfer     = "account.CommitRoleTransfer"
+	MethodAbortRoleTransfer      = "account.AbortRoleTransfer"
 )
 
 // Methods is every method on Accounts, in interface order.
@@ -69,6 +72,9 @@ var Methods = []string{
 	MethodGetServer,
 	MethodListServers,
 	MethodRoleOnServer,
+	MethodReportServerPresence,
+	MethodWithdrawServerPresence,
+	MethodListServerPresence,
 	MethodIssueAccountTicket,
 	MethodValidateAccountTicket,
 	MethodIssueEnterTicket,
@@ -255,6 +261,52 @@ type rpcRoleOnServerRequest struct {
 type rpcRoleOnServerResponse struct {
 	rpcStatus
 	Role Role `json:"role"`
+}
+
+// rpcReportServerPresenceRequest is the ReportServerPresence request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcReportServerPresenceRequest struct {
+	Presence   ServerPresence `json:"presence"`
+	TtlSeconds int64          `json:"ttl_seconds"`
+}
+
+// rpcReportServerPresenceResponse is the ReportServerPresence response on the wire.
+type rpcReportServerPresenceResponse struct {
+	rpcStatus
+}
+
+// rpcWithdrawServerPresenceRequest is the WithdrawServerPresence request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcWithdrawServerPresenceRequest struct {
+	ServerID int32 `json:"server_id"`
+}
+
+// rpcWithdrawServerPresenceResponse is the WithdrawServerPresence response on the wire.
+type rpcWithdrawServerPresenceResponse struct {
+	rpcStatus
+}
+
+// rpcListServerPresenceRequest is the ListServerPresence request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcListServerPresenceRequest struct {
+}
+
+// rpcListServerPresenceResponse is the ListServerPresence response on the wire.
+type rpcListServerPresenceResponse struct {
+	rpcStatus
+	Presences []ServerPresence `json:"presences"`
 }
 
 // rpcIssueAccountTicketRequest is the IssueAccountTicket request on the wire.
@@ -477,6 +529,30 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			role, err := service.RoleOnServer(ctx.Context(), wire.AccountID, wire.ServerID)
 			return rpcRoleOnServerResponse{rpcStatus: statusOf(err), Role: role}, nil
+		},
+		MethodReportServerPresence: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcReportServerPresenceRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcReportServerPresenceResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			err := service.ReportServerPresence(ctx.Context(), wire.Presence, wire.TtlSeconds)
+			return rpcReportServerPresenceResponse{rpcStatus: statusOf(err)}, nil
+		},
+		MethodWithdrawServerPresence: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcWithdrawServerPresenceRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcWithdrawServerPresenceResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			err := service.WithdrawServerPresence(ctx.Context(), wire.ServerID)
+			return rpcWithdrawServerPresenceResponse{rpcStatus: statusOf(err)}, nil
+		},
+		MethodListServerPresence: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcListServerPresenceRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcListServerPresenceResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			presences, err := service.ListServerPresence(ctx.Context())
+			return rpcListServerPresenceResponse{rpcStatus: statusOf(err), Presences: presences}, nil
 		},
 		MethodIssueAccountTicket: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcIssueAccountTicketRequest
@@ -715,6 +791,36 @@ func (c *BusClient) RoleOnServer(ctx context.Context, accountID string, serverID
 	return resp.Role, err
 }
 
+// ReportServerPresence 登记或续期一个服的入口条目，ttlSeconds 秒之内有效（1..MaxPresenceTTLSeconds）；不成样子的
+// 条目、超范围的期限、表满时的新服号以 ErrRangeInvalid 拒绝。调用方是 game 进程（login 模块的 manager）。
+// ReportServerPresence implements Accounts.
+func (c *BusClient) ReportServerPresence(ctx context.Context, presence ServerPresence, ttlSeconds int64) error {
+	var resp rpcReportServerPresenceResponse
+	err := c.call(ctx, MethodReportServerPresence, rpcReportServerPresenceRequest{
+		Presence:   presence,
+		TtlSeconds: ttlSeconds,
+	}, &resp)
+	return err
+}
+
+// WithdrawServerPresence 立刻撤掉一个服的入口条目（game 正常停机时）。没有登记过不是错误。
+// WithdrawServerPresence implements Accounts.
+func (c *BusClient) WithdrawServerPresence(ctx context.Context, serverID int32) error {
+	var resp rpcWithdrawServerPresenceResponse
+	err := c.call(ctx, MethodWithdrawServerPresence, rpcWithdrawServerPresenceRequest{
+		ServerID: serverID,
+	}, &resp)
+	return err
+}
+
+// ListServerPresence 返回没过期的入口条目，按服号升序，至多 MaxServers 条。只读、不需要调用方身份。
+// ListServerPresence implements Accounts.
+func (c *BusClient) ListServerPresence(ctx context.Context) ([]ServerPresence, error) {
+	var resp rpcListServerPresenceResponse
+	err := c.call(ctx, MethodListServerPresence, rpcListServerPresenceRequest{}, &resp)
+	return resp.Presences, err
+}
+
 // IssueAccountTicket 给 accountID 签一张账号票据（寿命 account.ticket_ttl）。可信调用方在 Login 之后
 // 给出 accountID。只读；账号不存在、被封时拒绝。
 // IssueAccountTicket implements Accounts.
@@ -880,6 +986,18 @@ func (c capability) ListServers(ctx context.Context) ([]GameServer, error) {
 
 func (c capability) RoleOnServer(ctx context.Context, accountID string, serverID int32) (Role, error) {
 	return c.inner.RoleOnServer(ctx, accountID, serverID)
+}
+
+func (c capability) ReportServerPresence(ctx context.Context, presence ServerPresence, ttlSeconds int64) error {
+	return c.inner.ReportServerPresence(ctx, presence, ttlSeconds)
+}
+
+func (c capability) WithdrawServerPresence(ctx context.Context, serverID int32) error {
+	return c.inner.WithdrawServerPresence(ctx, serverID)
+}
+
+func (c capability) ListServerPresence(ctx context.Context) ([]ServerPresence, error) {
+	return c.inner.ListServerPresence(ctx)
 }
 
 func (c capability) IssueAccountTicket(ctx context.Context, accountID string) (AccountTicket, error) {

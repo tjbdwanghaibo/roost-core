@@ -28,6 +28,8 @@ func (controller *Controller) HandleRoomReconnect(ctx *playeraccess.Context, req
 		result, err = syncsender.NewRoomReconnectSender(controller.nestClient).Sync_RoomReconnect(ctx.Context(), id, ctx.PlayerID, req.Epoch, connection)
 		if err == nil {
 			response.Info = roomInfo(req.RoomID, result)
+			// 换了连接：登记新连接（同房间的旧连接登记随之撤掉）。
+			roomlogic.PresenceFromRegistry(controller.registry).Track(req.RoomID, ctx.PlayerID, connection, result.Epoch)
 		}
 	}
 	if err != nil {

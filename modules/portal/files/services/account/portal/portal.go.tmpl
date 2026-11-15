@@ -124,7 +124,7 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if !ok || routes == nil {
 		return nil, fmt.Errorf("portal: capability %q not found; add the web mod to the service that hosts account (roost add mod web -service <that service>)", mods.ModWeb)
 	}
-	directory, stop, err := newDirectory(registry, configured)
+	directory, stop, err := newDirectory(registry, configured, NewPresenceDirectory(accounts))
 	if err != nil {
 		return stop, fmt.Errorf("portal: choose the server directory: %w", err)
 	}

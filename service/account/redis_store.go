@@ -25,6 +25,8 @@ type RedisStores struct {
 	Servers  versionstore.Store[int32, GameServer]
 	Slots    versionstore.Store[string, Slot]
 	Names    directory.Directory
+	// Presence 是区服入口的登记表（redis_presence.go）：易失、带过期，与上面四份不同，过期正是它的用途。
+	Presence PresenceStore
 }
 
 // NewRedisStores builds them.
@@ -94,7 +96,12 @@ func NewRedisStores(client versionstore.RedisClient, prefix string, claimTTL tim
 		return RedisStores{}, fmt.Errorf("account: name directory: %w", err)
 	}
 
+	presence, err := NewRedisPresenceStore(client, prefix+":presence")
+	if err != nil {
+		return RedisStores{}, err
+	}
+
 	return RedisStores{
-		Accounts: accounts, Roles: roles, Servers: servers, Slots: slots, Names: names,
+		Accounts: accounts, Roles: roles, Servers: servers, Slots: slots, Names: names, Presence: presence,
 	}, nil
 }

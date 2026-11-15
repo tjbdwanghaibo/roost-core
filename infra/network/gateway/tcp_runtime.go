@@ -56,6 +56,9 @@ type TCPSessionClosed struct {
 	ReceiverID uint64
 	PlayerID   int64
 	SessionID  string
+	// ConnectionID 是关掉的那条物理连接的标识（与 Session.ConnectionID() 相同：嵌入 TCP 是连接 nonce，独立 Gate 是
+	// Binding.ConnectionNonce）。按连接登记在线的订阅方（room 的席位）用它分辨“关掉的是不是我登记的那一条”。
+	ConnectionID string
 }
 
 // sessionClosedQueue is how many closes may be in flight before the oldest are
@@ -315,6 +318,34 @@ func (runtime *TCPRuntime) ActiveSessions(playerID int64) int {
 		return 0
 	}
 	return server.activeSessions(playerID)
+}
+
+// ConnectionActive 报告 playerID 的这条连接（ConnectionID）现在是否还登记在本进程：关闭的连接先从登记表里摘掉、
+// 再发布关闭事件，所以收到某条连接的关闭事件之后它一定答 false。订阅方用它补丢掉的关闭事件（关闭队列满时
+// 最旧的事件被丢弃），以及“关闭先于登记”的竞态。
+func (runtime *TCPRuntime) ConnectionActive(playerID int64, connectionID string) bool {
+	if runtime == nil || connectionID == "" {
+		return false
+	}
+	server := runtime.server.Load()
+	if server == nil {
+		return false
+	}
+	return server.connectionActive(playerID, connectionID)
+}
+
+// SessionCount 是本进程现在登记着的玩家连接数（在线连接数）。
+func (runtime *TCPRuntime) SessionCount() int {
+	if runtime == nil {
+		return 0
+	}
+	server := runtime.server.Load()
+	if server == nil {
+		return 0
+	}
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	return len(server.sessions)
 }
 
 // CloseSessions disconnects every tcpSession of one player and reports how many

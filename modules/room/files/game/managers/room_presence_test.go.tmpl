@@ -1,0 +1,74 @@
+package managers
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	gameroom "{{MODULE}}/game/room"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	kitmanager "github.com/tjbdwanghaibo/roost-core/wiring/manager"
+)
+
+type roomManagerConns struct {
+	subscribed   int
+	unsubscribed int
+}
+
+func (*roomManagerConns) ConnectionActive(int64, string) bool { return true }
+func (c *roomManagerConns) OnSessionClosed(func(gateway.TCPSessionClosed)) func() {
+	c.subscribed++
+	return func() { c.unsubscribed++ }
+}
+
+type roomManagerNest struct{ nest.Client }
+
+// 经 ManagerMod 起停（与生成的 bootstrap 相同）：Start 订阅玩家接入层的连接关闭并以能力名发布 Presence（控制器
+// 按名字取）；Stop 退订、在期限内停下。没有玩家 TCP 接入或没有 Nest 时进程不启动，错误说出缺什么。
+func TestRoomPresenceRunsUnderTheManager(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	conns := &roomManagerConns{}
+	if err := registry.Register(app.ModName("nest"), nest.Client(roomManagerNest{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(roomPlayerTCPCapability, conns); err != nil {
+		t.Fatal(err)
+	}
+	mod := kitmanager.NewManagerMod(NewRoomPresence())
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if gameroom.PresenceFromRegistry(registry) != nil {
+		t.Fatal("the presence is published before the manager starts")
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if gameroom.PresenceFromRegistry(registry) == nil || conns.subscribed != 1 {
+		t.Fatalf("after Start: presence published = %v, subscriptions = %d", gameroom.PresenceFromRegistry(registry) != nil, conns.subscribed)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := mod.StopWithContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if conns.unsubscribed != 1 {
+		t.Fatalf("unsubscribed %d times after Stop, want 1", conns.unsubscribed)
+	}
+
+	for label, register := range map[string]func(*app.Registry){
+		"access.player.tcp": func(r *app.Registry) { _ = r.Register(app.ModName("nest"), nest.Client(roomManagerNest{})) },
+		"nest":              func(r *app.Registry) { _ = r.Register(roomPlayerTCPCapability, &roomManagerConns{}) },
+	} {
+		missing := app.NewRegistry(viper.New())
+		register(missing)
+		if err := NewRoomPresence().Start(missing); err == nil || !strings.Contains(err.Error(), label) {
+			t.Fatalf("without %s: Start = %v", label, err)
+		}
+	}
+}

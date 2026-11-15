@@ -52,6 +52,13 @@ login.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry,
 - 后台执行归 manager（D22）：`game/managers/login_notices.go` 的 `NewLoginNotices()`，安装时登记进 `game/managers/managers.go` 的 `Managers()`，由 manager Mod 启停。Start 建 `Notifier` 并以 `gamelogin.NoticesCapability` 发布；Stop 不再接新的会话、取消在途告知的 ctx、在停机期限内等它们返回（期限先到时返回期限错误，ManagerMod 用新期限再停）。玩家 TCP 传输的 Mod 先停，停到这里时已经没有新的会话激活。`Managers()` 里没有这一行时告知全部丢弃，第一次记一条 Error。
 - 接线：生成的传输 Mod 认认证器的可选接口 `SessionObserver`（生成文件 `internal/access/player/tcp/server_gen.go`），模块的 `auth.go` 实现了它的 `SessionActive`，经 `gamelogin.AnnounceActive` 按能力名取进程里的 `Notifier`（认证器自己不起协程）。嵌入 TCP 是鉴权 ACK 写出、自身视图登记之后调用；独立 Gate 是 Game Ingress 的激活通知（`OnActivated`）调用。两种部署下告知拿到的都是这条会话认证出来的 claims。
 
+### 区服入口上报（`game/managers/login_presence.go`，维护者 D23）
+
+- 第二个 manager `NewLoginPresence()`（安装时登记进 `Managers()`）：写了 `login.presence.addr` 就先报一次、再每 `login.presence.interval`（缺省 10 秒，1～200 秒）报一次，经 account 的总线接口 `ReportServerPresence({sid, addr, 在线连接数, tags}, 期限)` 写进 account 的带过期登记表；期限是间隔的三倍（缺省 30 秒，错过两次还在）。[portal](../portal/README.md#动态目录) 的清单与进服结果从那张表取地址与负载，上报的盖住 `portal.servers`。
+- 停报即消失：进程崩溃、断网之后，期限一到这个服的动态地址从清单里消失（回到静态配置的地址或没有地址）；正常停机时 Stop 先停下循环、再 `WithdrawServerPresence` 立刻撤销（撤销失败只记 Warn，期限到了照样消失）。
+- 地址必须写：上报的是**客户端连得到的地址**（通常是本服前面的 Gate）；监听地址 `0.0.0.0`、独立 Gate 部署时进程猜不出来。不写就不报，启动时记一条 Info。负载是玩家接入层的在线连接数（`access.player.tcp` 的 `SessionCount`；独立 Gate 部署时是经 Gate 进来的会话数），刻度要换时改这个文件。
+- 失败不影响本服：account 不可达时只记日志（成功 ↔ 失败的转变各一条），下一轮再报。配置写错（地址不是带主机的 `host:port`、间隔越界、标签超过 8 个或单个超过 32 字节、写了地址而 `sid` 不是正数）进程启动到这一步报错退出；这几个键由 manager 自己读，`--check-config` 查不到。
+
 ### 进入前的判断：`Admit`（`game/login/login_admit.go`）
 
 `Admit(self int32, playerID int64, claims map[string]string) error`：会话记的承载服就是本进程的 `sid` 返回 nil；是别的服、或者没有记，返回 `login_elsewhere`（带 `owner_sid`）。只读、不问任何服务。换服在途的角色这里不拒，那是 rehome 模块的事。
@@ -79,7 +86,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 ### 状态、配置、错误码
 
 - **状态：** 无。模块不往任何实体上加字段；账号、角色映射、区服记录都在 account 服务的存储里。
-- **配置键：** `login.dev_token`（写在 `configs/service/config.account.yaml`，必须以 `dev-` 开头；生产配置里写了它 account 进程不启动）。握手的认证器要求承载玩家接入的业务服务在 `roost.yaml` 的 `uses` 里有 `account`。
+- **配置键：** `login.dev_token`（写在 `configs/service/config.account.yaml`，必须以 `dev-` 开头；生产配置里写了它 account 进程不启动）。`login.presence.addr` / `login.presence.interval` / `login.presence.tags`（写在 **game 服务**的配置里，区服入口上报，见上；不写不上报）。握手的认证器要求承载玩家接入的业务服务在 `roost.yaml` 的 `uses` 里有 `account`。
 - **错误码：** `login_elsewhere`（`internal/errors/login.go`）：这条会话的角色不由本服承载，客户端重新选角。握手失败没有码。
 
 **日志**：握手认证成功，记录玩家、承载服、握手方式与是否新建映射，不记录票据和 claims。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/login/login.go`, `internal/access/player/tcp/auth.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -102,6 +109,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
   - 两端的 `options.Config.Namespace` 相同，都开单实例锁（`singleton.enabled`）。
   - 与嵌入 TCP 不同的地方：每次握手 account 的 `EnterServer` 执行两次（Gate 一次，Game Ingress 绑定时用同一张票据再认证一次；第二次读到已建好的映射，所以 Game 侧的会话上没有 `new_role`）。别的服的票据在 Gate 上握手直接被断开，客户端收不到 `login_elsewhere`。
   - `scripts/test-demo-login.sh` 另有 casual + naming 阶段：双 Gate 同时在线、嵌入 TCP 与 Game Ingress 被 `SIGKILL` 后重连、Gate 自身重启后重连、account 两副本。没有跑跨机与业务服务不叫 `game` 的工程。
+- **区服入口上报是自报的。** account 不核对上报者真的是那个服（总线只在内网、调用方可信）；地址写错了客户端就被导到错的地方，直到改配置重启或期限过去。动态地址的新鲜度以期限为界（缺省 30 秒）。
 - **已知限制：** 以上各条与 game-demo 接入后的取舍见 `docs/maintenance/KNOWN-LIMITS.md` 的“login 的边界”“game-demo 接入登录链路的边界”。
 
 ## 复用方式
@@ -158,10 +166,11 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 
 ## 验证范围
 
-`roost module verify` 跑 32 条场景（`^TestLogin`：`game/login` 20 条、`internal/access/player/tcp` 2 条、`services/account` 6 条、`cmd/accountctl` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）。全部是离线的：
+`roost module verify` 跑 36 条场景（`^TestLogin`：`game/login` 20 条、`internal/access/player/tcp` 2 条、`services/account` 6 条、`cmd/accountctl` 4 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）。全部是离线的：
 
 - 认证器的场景用真实的 `account.Service` 加内存存储：两种票据的通过与拒绝、过期、伪造、合服后的承载服、换服在途、并发握手只建一个映射、“拒绝”与“判断不了”的区分。
 - 告知的场景验证后台执行、上限与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。
+- 区服入口上报（`game/managers` 的 2 条）用真实的 `account.Service`（内存登记表、测试时钟）：报上地址、在线数与标签，在线数变了下一次跟上，account 不可达时不影响本服、恢复后接着报，崩溃（循环停了、没撤销）后到期消失、差一毫秒还在，正常停机立刻撤销、停了不再报；没写地址不报，写错的配置启动失败。经真实 NATS / Redis 的上报没有跑。
 - account 一侧验证开发令牌（对、错、关、生产配置拒绝）、渠道缺省全拒、计数器的键与出错不发号。
 - `cmd/accountctl` 的子命令在内存存储上跑，连接旗标只验到“读对了”；真正去连 Redis 的那一段（`openService`）没有被场景执行。
 - 与 enter 的联动里游戏服的档是内存替身；新建与进入的事务在 enter 模块自己的场景里验证。

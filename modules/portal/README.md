@@ -16,19 +16,20 @@
 
 - `portal.Start(registry) (stop func(context.Context) error, err error)`：模块的启动入口（清单的 `runtime`）。读配置、取本进程的 account 服务与 web Mod、让规则文件选区服目录、登记三条路由。任何一样不对进程不启动。
 - `portal.New(Options{Accounts, Directory, Recommend}) (*Portal, error)` 与 `(*Portal).RegisterRoutes(reg)`：自己装配（把 manifest 拆成独立服务、测试）时用。
-- 区服目录的构件：`NewStaticDirectory(addrs)`、`NewRegistry(now)`（带过期的注册表，方法 `Announce` / `Withdraw` / `Entries` / `Len`）、`Overlay(directories...)`、`DirectoryFunc`。
+- 区服目录的构件：`NewStaticDirectory(addrs)`、`NewPresenceDirectory(accounts)`（account 的带过期区服入口登记表，见“动态目录”）、`Overlay(directories...)`、`DirectoryFunc`。
 
 **扩展点**（都在归工程所有的 `services/account/portal/portal_rules.go`）
 
-- `newDirectory(registry, configured) (Directory, stop, error)`：入口启动时调一次，决定用哪个**区服目录**（每个服该连哪个地址、多忙）。缺省直接用配置 `portal.servers` 的静态目录。要动态的地址（上报、服务发现、运维登记）改这里，见“区服目录”与“动态目录”。
+- `newDirectory(registry, configured, reported) (Directory, stop, error)`：入口启动时调一次，决定用哪个**区服目录**（每个服该连哪个地址、多忙）。缺省 `Overlay(configured, reported)`：account 登记表里 game 上报的地址盖住配置 `portal.servers` 的，没有上报（或已过期）的回到配置。别的来源（服务发现）改这里，见“区服目录”与“动态目录”。
 - `recommend(servers []ServerChoice) int32`：**推荐规则**（导量），每次 `/portal/servers` 调一次。见“推荐规则”。
 - `Directory` 接口（`services/account/portal/portal_directory.go`）：`Entries(ctx) ([]Entry, error)`，工程可以自己实现。
 
-**状态**：无。入口不存任何东西，也不持有任何密钥；票据全部由 account 签发与校验。动态注册表是进程内的内存表。
+**状态**：无。入口不存任何东西，也不持有任何密钥；票据全部由 account 签发与校验。动态地址的登记表在 account 那边（共享存储），入口每次请求读一次。
 
 **配置**（写在**托管 account 的服务**的配置里，`configs/service/config.account.yaml`；细节见“配置”一节）
 
 - `portal.servers`：静态的区服目录，服号 → 客户端连得到的 `host:port`。可以不写。
+- 动态地址不在这里配：写在 **game 服务**的配置里（`login.presence.addr`，login 模块的 manager 读），game 定期报给 account。
 - `web.*`：入口的监听地址、超时、请求体上限（web Mod 的键）。
 - 票据的有效期与签名密钥是 account 的键（`account.ticket_ttl`、`account.session_ttl`、`account.session_secret`）。
 
@@ -41,16 +42,16 @@
 - **入口只守一件事**：账号只取自 account 校验过的账号票据，绝不取自请求。它不认证任何人（身份由 account 向渠道确认）、不签也不验任何票据、**不建角不选角**、不知道玩家号、不知道角色名（名字是游戏服的数据）。
 - **没有限流，也没有防撞库**。三个端点谁都能调；`/portal/login` 每次都会去问渠道。对外暴露时放在有限流的反向代理后面。
 - **明文**。凭据与票据都在请求体里；web Mod 不终止 TLS。生产环境 web Mod 缺省只绑回环地址，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr: true`。生成的生产示例配置里 `web.addr` 是占位值，上线前要改。
-- **上限**：请求体 16 KiB（`MaxRequestBytes`）；`channel` 32 字节、`open_id` 128 字节、`credential` 8 KiB、账号票据 1024 字节；区服至多 256 个（`MaxEntries`，与 account 的区服上限一致）；目录条目的地址至多 255 字节、标签至多 8 个、每个至多 32 字节；注册表一次登记的期限至多 10 分钟（`MaxAnnounceTTL`）。
-- **清单的开销随区服数增长**：每次 `/portal/servers` 是 1 次清单（account 读 1 + N 条记录）加每个服 1 次角色查询，顺序执行，没有缓存。区服很多、请求很密的部署该把 manifest 拆出去并自己加缓存，或者换成分页的清单。
-- **清单要么完整要么失败**：account、目录、任何一个服的角色记录问不到（不是“没有角色”，而是出错），整个请求失败，不给一份缺了角色或缺了地址的清单。某个服上本账号的 slot 与角色对不上（`560113`）或合服别名两跳时也是整个请求失败。
+- **上限**：请求体 16 KiB（`MaxRequestBytes`）；`channel` 32 字节、`open_id` 128 字节、`credential` 8 KiB、账号票据 1024 字节；区服至多 256 个（`MaxEntries`，与 account 的区服上限一致）；目录条目的地址至多 255 字节、标签至多 8 个、每个至多 32 字节；account 登记表一次登记的期限至多 600 秒（`svcaccount.MaxPresenceTTLSeconds`），至多 256 个没过期的服。
+- **清单的开销随区服数增长**：每次 `/portal/servers` 是 1 次清单（account 读 1 + N 条记录）、1 次登记表（account 读一个 Redis 哈希）加每个服 1 次角色查询，顺序执行，没有缓存；`/portal/enter` 也多 1 次登记表。区服很多、请求很密的部署该把 manifest 拆出去并自己加缓存，或者换成分页的清单。
+- **清单要么完整要么失败**：account、目录（含 account 的登记表）、任何一个服的角色记录问不到（不是“没有角色”，而是出错），整个请求失败，不给一份缺了角色或缺了地址的清单——登记表问不到时也不回落到静态配置冒充全部。某个服上本账号的 slot 与角色对不上（`560113`）或合服别名两跳时也是整个请求失败。
 - **票据不能单张吊销**：账号票据与进服票据都是无状态的签名，有效期内可以重复使用；封号对已经发出去的票据立即生效（account 每次校验都再读账号）。同一张账号票据对同一个服反复 `enter` 不会多出玩家——映射的唯一性在 account。
 - **区服状态在 `/portal/enter` 不拦**：维护中的服老号照常能进；新号被送去非 `open` 的服时拿得到进服票据，握手才被拒，而握手失败客户端拿不到原因。客户端要按清单里的 `status` 与 `role` 自己判断。
 - **账号 ↔ 玩家号的映射在握手时才建**：拿了进服票据而没有去握手的新号，在 account 里没有角色，清单里仍是 `role: null`。反过来，握手过而没有在游戏服新建的账号，清单里已经有 `role`（“老号”），推荐规则把那个服当作他玩过的服；游戏服那边仍告知要新建。清单里的 `role` 说的是 account 的映射，不是游戏服的玩家数据。
 - **地址可以是空的**：零配置时清单与进服结果里 `addr` 为空、`addr_source` 是 `none`，票据照发。
-- **动态目录只有机制**：上报从哪里来（Gate / game 经总线、服务发现、运维登记）没有接；进程内的注册表是每个副本一张。静态配置没有这个问题。
+- **动态地址的新鲜度**：game 每 `login.presence.interval`（缺省 10 秒）报一次，期限是三倍（30 秒）。进程死了、断网了，它的地址最多还会被发出去一个期限；正常停机时立刻撤销。上报者自报服号，account 不核对（总线只在内网，调用方可信）。没写 `login.presence.addr` 的 game 不上报，那个服只有静态地址。
 - **`portal.servers` 不在 App 的配置声明里**：`--print-config` 不打印、`--check-config` 与 `roost config check` 不检查，写错了要等进程启动到入口这一步才报错退出。
-- **前提**：依赖 `login`（握手时把票据交给 account 的认证器；`/portal/enter` 的握手票据由 `game/login` 的 `EnterTicket` 拼）；托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
+- **前提**：依赖 `login`（握手时把票据交给 account 的认证器；`/portal/enter` 的握手票据由 `game/login` 的 `EnterTicket` 拼）；托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`ListServerPresence`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
 - **已知限制**：[KNOWN-LIMITS“portal 的边界”](../../docs/maintenance/KNOWN-LIMITS.md)，以及同一处的“login 的边界”“game-demo 接入登录链路的边界”（demo 渠道经入口对外、生成依赖没发布的 `wiring/modulehost`）。
 
 ## 复用方式
@@ -66,28 +67,28 @@ roost module verify
 装它时 [login](../login/README.md) 跟着装；account 服务没有 web Mod 时安装器先补上（`roost add mod web -service <托管 account 的服务>`，连同 `web.*` 配置段，开发端口是 8080 + 那个服务的端口块号）；工程还没有 account 时（`-template game` 缺省不托管框架服务）安装器声明它，web 直接写进声明，配置生成时就带 `web.*` 段。零配置就能启动、登录、拿清单、换进服票据，只是没有连接地址。要走通整条链路还要做（`roost module plan / add` 的输出里列着，`todo:` 行）：
 
 1. login 的那几步（[login 的“安装之后还要做的”](../login/README.md#复用方式)）：打开玩家 TCP 监听、写开发令牌、登记区服。
-2. 给区服配地址：在托管 account 的服务的配置里写 `portal.servers`，或者接上动态目录。
+2. 给区服配地址：在 game 服务的配置里写 `login.presence.addr`（game 定期上报，见“动态目录”），或在托管 account 的服务的配置里写静态的 `portal.servers`。
 
 **需求比它多一点**
 
-- 区服地址要动态（扩缩容、上报负载）：改 `portal_rules.go` 的 `newDirectory`，见“动态目录”的三种接法。
+- 区服地址要动态（扩缩容、上报负载）：缺省已经接上——game 配 `login.presence.addr` 就行；负载的刻度、标签要换时改 login 的 `game/managers/login_presence.go`，来源要换（服务发现）时改 `portal_rules.go` 的 `newDirectory`。
 - 导量（按负载、标签、渠道分流）：改 `portal_rules.go` 的 `recommend`，规则数据也放在那个文件里。
 - 登录渠道：不在这里，在 login 模块留给工程的 `services/account/login_channels.go`。
 - 限流、TLS：放在反向代理上。
 - 清单要缓存或分页：把 manifest 拆成独立服务（见下），在自己的服务里包一层。
-- 不要改的文件：`portal.go`（端点与“账号只取自票据”的检查）、`portal_directory.go`、`portal_registry.go`、`portal_config.go`。
+- 不要改的文件：`portal.go`（端点与“账号只取自票据”的检查）、`portal_directory.go`、`portal_config.go`。
 
 **把 manifest 拆成独立服务**
 
-入口用到的只有 account 在总线上的接口（`Login`、`IssueAccountTicket`、`ValidateAccountTicket`、`ListServers`、`RoleOnServer`、`IssueEnterTicket`），不依赖“与 account 同进程”：
+入口用到的只有 account 在总线上的接口（`Login`、`IssueAccountTicket`、`ValidateAccountTicket`、`ListServers`、`ListServerPresence`、`RoleOnServer`、`IssueEnterTicket`），不依赖“与 account 同进程”：
 
 - 新建一个业务服务，`uses: [account]`，加 web Mod；在它的 `Init` 里调 `portal.Start(registry)`（它按能力名取 account——同进程时是本地服务，拆出去之后是总线客户端，代码不用改）。原来装在 account 进程上的那一行接线从 `roost.yaml` 的模块记录里拿掉（`modules.portal.runtime.framework`），再 `roost project sync`。
 - 两个进程之间**不需要共享任何密钥**：票据是 account 的，manifest 每次都把票据交回 account 校验。manifest 的副本数与 account 的副本数互不相干。
-- 区服目录如果用的是进程内的注册表，上报要送到 manifest 的每个副本。
+- 动态地址的登记表在 account（共享存储）里，manifest 多副本、拆出去之后都读同一张，不用把上报送到每个副本。
 
 **别的代码要用它的数据或动作**
 
-- 运维或 Gate 要登记 / 撤销一个服的地址：拿到 `newDirectory` 里建的那张 `*Registry`，调 `Announce(Entry{ServerID, Addr, Load, Tags}, ttl)` / `Withdraw(serverID)`。
+- 运维或 Gate 要登记 / 撤销一个服的地址：调 account 的总线接口 `ReportServerPresence(ServerPresence{ServerID, Addr, Load, Tags}, ttlSeconds)` / `WithdrawServerPresence(serverID)`（与 game 的上报写同一张表，后到的为准）。
 - game 服的业务代码没有理由调入口：入口在另一个进程里，账号与角色的事实直接问 account。
 
 **不适合直接用、只适合借鉴的情形**
@@ -104,10 +105,10 @@ roost module verify
 
 - `roost module verify portal`：12 条场景（`services/account/portal`）；与 `enter` 的联动 2 条。
 - 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）与 login 模块的认证器；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
-- 覆盖：从渠道身份走到一条认证过的握手、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、注册表的过期 / 上限 / 并发、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败。
+- 覆盖：从渠道身份走到一条认证过的握手、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；game-demo 的这一段有可重复的脚本（仓库的 `scripts/test-demo-login.sh`：`make dev-run`、curl 三步、机器人 `-login portal` 新号与老号，最后经独立 Gate 再跑一遍）。已并入别的服的老角色也有脚本（`scripts/test-demo-merge.sh`：合服后原服 1001 的角色走三步，清单标出 `merged_into`、地址给承载服，1001 的进服票据在承载服 1000 上嵌入 TCP 与经独立 Gate 各握手一次，进到原角色、背包延续）。
 - `scripts/test-demo-login.sh` 的 casual + naming 阶段增加两个 account 进程：A 签发账号票据，B 校验并选服、签发进服票据；停掉 A 后 B 独立完成同一角色的重连。两个 game sid 共用正式 Redis Directory，验证建角、重名拒绝与换名；嵌入 TCP 和双 Gate 都走真实入口。
-- 没有验证：动态注册表经真实进程、换服中的角色、生产配置、跨机。可重复步骤见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
+- 没有验证：动态地址经真实进程（game 上报 → NATS → account → Redis → 入口）、换服中的角色、生产配置、跨机。可重复步骤见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
 
 ## 整条链路
 
@@ -239,28 +240,28 @@ type Directory interface {
 - 不成样子的条目与重复的服号（留第一个）由入口丢掉并记一条 Warn，那个服在清单里就是没有地址；坏数据不会让请求失败，也不会被带给客户端。至多认 256 个条目。
 - 用哪个目录在 `services/account/portal/portal_rules.go` 的 `newDirectory` 里选，**那个文件归工程所有**。
 
-缺省是静态目录：配置 `portal.servers`（`NewStaticDirectory`）。静态数据写错（地址不成样子、服号不是正数、超过 256 条）在启动时就报错。
+静态目录：配置 `portal.servers`（`NewStaticDirectory`）。静态数据写错（地址不成样子、服号不是正数、超过 256 条）在启动时就报错。
 
 ### 动态目录
 
-`Registry` 是一张进程内的、带过期的注册表：
+动态地址的登记表在 **account** 里（维护者 D23）：game 进程经总线定期上报“本服现在连这个地址、这么忙”，account 放进一张带过期的登记表（`service/account` 的 `ReportServerPresence` / `WithdrawServerPresence` / `ListServerPresence`，Redis 里一个哈希，过期用 Redis 自己的时钟判断）；入口每个要地址的请求读一次（`NewPresenceDirectory`）。缺省目录是 `Overlay(静态配置, 登记表)`：
 
-```go
-dynamic := portal.NewRegistry(nil)
-err := dynamic.Announce(portal.Entry{ServerID: 1000, Addr: "203.0.113.7:7000", Load: 137}, 30*time.Second) // 登记或续期
-dynamic.Withdraw(1000)                                                                                      // 正常下线
-directory := portal.Overlay(configured, dynamic)                                                            // 登记的盖住配置的，过期之后回到配置
+```
+game（login 模块的 manager NewLoginPresence）
+  每 login.presence.interval（缺省 10s）：ReportServerPresence({sid, login.presence.addr, 在线连接数, login.presence.tags}, 期限 = 三倍间隔)
+  正常停机：WithdrawServerPresence(sid)
+        │ NATS（account 的总线接口，投给任意一个 account 副本）
+        ▼
+account：登记表（Redis 哈希 <prefix>:presence，到期的不给出）
+        ▲ ListServerPresence（每次 /portal/servers、/portal/enter）
+入口（任意副本）：Overlay(portal.servers, 登记表) → 清单与进服结果的 addr / load / tags
 ```
 
-到期那一刻起条目不再给出（进程死了、网络断了，它的地址自己从清单里消失）；期限至多 10 分钟，条目至多 256 个（满了之后新的服号答 `ErrRegistryFull`，已登记的照常续期），过期的不占名额；并发安全。`Overlay` 里任何一层出错，整体出错。**这里只有机制，登记从哪里来由工程接**，入口不替工程订阅任何东西。三种常见接法：
-
-| 接法 | 怎么做 | 注意 |
-| --- | --- | --- |
-| Gate / game 定时经内部总线上报 | 在 `newDirectory` 里用 `registry` 取总线，订阅工程自己的主题；收到一条就 `Announce`（期限取上报间隔的两三倍），下线通知调 `Withdraw`；返回的 `stop` 里取消订阅 | 入口多副本时用广播主题，不要用只投给一个副本的队列组 |
-| 读服务发现 | 不用注册表，自己实现 `Directory`：`Entries` 里读发现结果并带上缓存（入口每个请求都会问一次） | 托管 account 的进程缺省没有 etcd Mod，要自己加（`roost add mod etcd -service <服务>`）；发现里登记的要是客户端连得到的地址，不是内网地址 |
-| 运维手工登记 | 把 `Announce` / `Withdraw` 挂到工程的运维入口上（例如 ops 的 admin 命令） | 手工登记没有心跳，期限要给足，或者干脆写 `portal.servers` |
-
-**注册表是每个进程一张**。入口多副本时每个副本各有各的表：上报要让每个副本都收到，否则同一个客户端两次请求打到两个副本，看到的清单不一样。不想这样就实现一个读共享存储（Redis、服务发现）的 `Directory`。
+- 到期那一刻起条目不再给出：进程死了、断网了，它的地址最多还会被发出去一个期限（缺省 30 秒），之后那个服回到静态配置的地址（没有就没有地址）。
+- 登记表在共享存储里：入口多副本、manifest 拆成独立服务，读到的都是同一张，不用把上报送到每个副本。
+- game 一侧只要配 `login.presence.addr`（客户端连得到的 `host:port`，通常是 Gate；监听地址 `0.0.0.0` 与独立 Gate 部署时进程猜不出来，所以必须写）；不写就不报。负载是那个 game 进程的在线连接数（独立 Gate 部署时是经 Gate 进来的会话数）。细节见 [login 的“区服入口上报”](../login/README.md)。
+- 至多 256 个没过期的服（满了之后新的服号被拒、已登记的照常续期）；期限至多 600 秒；条目的地址、负载、标签与目录条目同样的上限，account 在上报时就拒绝不成样子的。
+- 别的来源：读服务发现时自己实现 `Directory`（`Entries` 里读发现结果并带上缓存——入口每个请求都会问一次；托管 account 的进程缺省没有 etcd Mod，要自己加；发现里登记的要是客户端连得到的地址），在 `newDirectory` 里换掉或叠上去。运维手工登记直接调 account 的 `ReportServerPresence`（期限至多 600 秒，要持续有效就写 `portal.servers`）。
 
 ## 推荐规则
 
@@ -306,8 +307,7 @@ portal:
 | --- | --- |
 | `services/account/portal/portal.go` | 启动入口 `Start`（清单的 `runtime`，在托管 account 的进程里启动）、三个端点、请求与响应的形状 |
 | `services/account/portal/portal_rules.go` | **归工程所有**：用哪个区服目录（`newDirectory`）、推荐规则（`recommend`） |
-| `services/account/portal/portal_directory.go` | 区服目录的接口、静态目录、`Overlay` |
-| `services/account/portal/portal_registry.go` | 动态注册表 |
+| `services/account/portal/portal_directory.go` | 区服目录的接口、静态目录、account 登记表的目录（`NewPresenceDirectory`）、`Overlay` |
 | `services/account/portal/portal_config.go` | `portal.servers` 的声明与启动时的检查 |
 | `internal/errors/portal.go` | 入口自己的业务码 |
 | `services/account/portal/portal_enter_test.go` | 只在装了 enter 时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |

@@ -2,7 +2,8 @@ package handler
 
 import room "{{MODULE}}/game/entities/room"
 
-// handlerRoomDisconnect 在 Room 的 Nest 锁内处理。持久事实提交成功后才向调用者确认。
+// handlerRoomDisconnect 在 Room 的 Nest 锁内处理。它只改不落库的在线标记（RoomDao.Online，nopersist），
+// 没有持久事实要提交；返回 true 表示这次把席位标成了断线。
 //
 //roost:nest rollback=undo durability=strict
 func handlerRoomDisconnect(target room.IRoomEntity, playerID int64, epoch uint64) bool {

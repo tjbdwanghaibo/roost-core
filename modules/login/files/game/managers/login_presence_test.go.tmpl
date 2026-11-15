@@ -1,0 +1,229 @@
+package managers
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	kitmanager "github.com/tjbdwanghaibo/roost-core/wiring/manager"
+)
+
+// 区服入口上报（D23）的场景。account 是真实的 svcaccount.Service（内存存储，登记表的过期用测试时钟拨），
+// 上报经它的 ReportServerPresence；玩家接入层是一个只报在线连接数的替身。需求里的数在这里写死。
+
+// loginPresenceAccounts 包着真实的 account：能让上报或撤销答“问不到”，数上报了几次。
+type loginPresenceAccounts struct {
+	svcaccount.Accounts
+	reports      atomic.Int64
+	failReport   atomic.Bool
+	failWithdraw atomic.Bool
+}
+
+var errLoginPresenceBusDown = errors.New("bus: no responders for account")
+
+func (accounts *loginPresenceAccounts) ReportServerPresence(ctx context.Context, presence svcaccount.ServerPresence, ttlSeconds int64) error {
+	if accounts.failReport.Load() {
+		return errLoginPresenceBusDown
+	}
+	accounts.reports.Add(1)
+	return accounts.Accounts.ReportServerPresence(ctx, presence, ttlSeconds)
+}
+
+func (accounts *loginPresenceAccounts) WithdrawServerPresence(ctx context.Context, serverID int32) error {
+	if accounts.failWithdraw.Load() {
+		return errLoginPresenceBusDown
+	}
+	return accounts.Accounts.WithdrawServerPresence(ctx, serverID)
+}
+
+type loginPresencePlayers struct{ online atomic.Int64 }
+
+func (players *loginPresencePlayers) SessionCount() int { return int(players.online.Load()) }
+
+type loginPresenceWorld struct {
+	t        *testing.T
+	now      atomic.Int64 // Unix 毫秒：account 的系统时钟
+	accounts *loginPresenceAccounts
+	players  *loginPresencePlayers
+}
+
+func newLoginPresenceWorld(t *testing.T) *loginPresenceWorld {
+	t.Helper()
+	w := &loginPresenceWorld{t: t, players: &loginPresencePlayers{}}
+	w.now.Store(time.Unix(1_800_000_000, 0).UnixMilli())
+	clock := func() time.Time { return time.UnixMilli(w.now.Load()) }
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Roles: versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](), Slots: versionstore.NewMemoryStore[string, svcaccount.Slot](), Names: names,
+		Verifier: svcaccount.VerifierFunc(func(context.Context, svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{}, errors.New("no logins here")
+		}),
+		Allocator:     svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) { return 0, errors.New("no roles here") }),
+		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "login-presence-scenarios", Now: clock, SystemNow: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.accounts = &loginPresenceAccounts{Accounts: service}
+	return w
+}
+
+// start 起一个上报 manager（经 ManagerMod，与生成的 bootstrap 相同），间隔缩到 20 毫秒。
+func (w *loginPresenceWorld) start(settings map[string]any) (*kitmanager.ManagerMod, error) {
+	w.t.Helper()
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	for key, value := range settings {
+		cfg.Set(key, value)
+	}
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(svcaccount.CapabilityName, svcaccount.Accounts(w.accounts)); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := registry.Register(loginPlayerTCPCapability, w.players); err != nil {
+		w.t.Fatal(err)
+	}
+	mod := kitmanager.NewManagerMod(&loginPresence{interval: 20 * time.Millisecond})
+	if err := mod.Provide(registry); err != nil {
+		w.t.Fatal(err)
+	}
+	return mod, mod.Start()
+}
+
+func (w *loginPresenceWorld) listed() map[int32]svcaccount.ServerPresence {
+	w.t.Helper()
+	presences, err := w.accounts.Accounts.ListServerPresence(context.Background())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	out := map[int32]svcaccount.ServerPresence{}
+	for _, presence := range presences {
+		out[presence.ServerID] = presence
+	}
+	return out
+}
+
+// eventually 在 2 秒之内等 account 的登记表满足 ok。
+func (w *loginPresenceWorld) eventually(label string, ok func(map[int32]svcaccount.ServerPresence) bool) {
+	w.t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		listed := w.listed()
+		if ok(listed) {
+			return
+		}
+		if time.Now().After(deadline) {
+			w.t.Fatalf("%s: account's presence table is %+v", label, listed)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func loginPresenceStop(t *testing.T, mod *kitmanager.ManagerMod) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := mod.StopWithContext(ctx); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+// 写了 login.presence.addr：本服定期把地址、在线连接数与标签报给 account；在线数变了下一次就跟上；account 问不到时
+// 不影响本服、恢复后接着报；进程停报（这里用撤销失败模拟崩溃：循环停了、登记没撤）后，登记在期限（间隔的三倍，
+// 向上取整到秒）到了就从 account 的表里消失；正常停机立刻撤销，停了之后不再上报。
+func TestLoginPresenceReportsThisServerAndExpiresWhenItStops(t *testing.T) {
+	w := newLoginPresenceWorld(t)
+	w.players.online.Store(5)
+	settings := map[string]any{"login.presence.addr": " gate-1000.example.test:7000 ", "login.presence.tags": []string{"new"}}
+	mod, err := w.start(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.eventually("first report", func(listed map[int32]svcaccount.ServerPresence) bool {
+		got := listed[1000]
+		return got.Addr == "gate-1000.example.test:7000" && got.Load == 5 && len(got.Tags) == 1 && got.Tags[0] == "new"
+	})
+	w.players.online.Store(7)
+	w.eventually("the load follows the online count", func(listed map[int32]svcaccount.ServerPresence) bool { return listed[1000].Load == 7 })
+
+	// account 问不到：本服照常，恢复后接着报。
+	w.accounts.failReport.Store(true)
+	time.Sleep(60 * time.Millisecond)
+	w.players.online.Store(9)
+	w.accounts.failReport.Store(false)
+	w.eventually("reports resume after account comes back", func(listed map[int32]svcaccount.ServerPresence) bool { return listed[1000].Load == 9 })
+
+	// 崩溃：循环停了、登记没撤。期限 = 20ms × 3 向上取整到 1 秒：差一毫秒还在，到期起不在。
+	w.accounts.failWithdraw.Store(true)
+	loginPresenceStop(t, mod)
+	if w.listed()[1000].ServerID != 1000 {
+		t.Fatal("the entry vanished although the withdraw failed")
+	}
+	reports := w.accounts.reports.Load()
+	w.now.Add((time.Second - time.Millisecond).Milliseconds())
+	if w.listed()[1000].ServerID != 1000 {
+		t.Fatal("the entry expired before its ttl")
+	}
+	w.now.Add(time.Millisecond.Milliseconds())
+	if got := w.listed(); len(got) != 0 {
+		t.Fatalf("a server that stopped reporting is still listed after its ttl: %+v", got)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if after := w.accounts.reports.Load(); after != reports {
+		t.Fatalf("%d reports after the manager stopped", after-reports)
+	}
+
+	// 正常停机：立刻撤销，不等过期。
+	w.accounts.failWithdraw.Store(false)
+	mod, err = w.start(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.eventually("reporting again", func(listed map[int32]svcaccount.ServerPresence) bool { return listed[1000].ServerID == 1000 })
+	loginPresenceStop(t, mod)
+	if got := w.listed(); len(got) != 0 {
+		t.Fatalf("the entry is still listed after a clean stop: %+v", got)
+	}
+}
+
+// 没写 login.presence.addr：不上报、启停照常。写错了（只写端口、没有端口、间隔超出 1s～200s、标签超限、sid 不是正数）
+// 启动时就报错，点名是哪个键。
+func TestLoginPresenceConfiguration(t *testing.T) {
+	w := newLoginPresenceWorld(t)
+	mod, err := w.start(nil)
+	if err != nil {
+		t.Fatalf("no login.presence at all: %v", err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if w.accounts.reports.Load() != 0 || len(w.listed()) != 0 {
+		t.Fatalf("reported %d times without login.presence.addr", w.accounts.reports.Load())
+	}
+	loginPresenceStop(t, mod)
+
+	for label, settings := range map[string]map[string]any{
+		"port only":          {"login.presence.addr": ":7000"},
+		"no port":            {"login.presence.addr": "gate.example.test"},
+		"port zero":          {"login.presence.addr": "gate.example.test:0"},
+		"interval too short": {"login.presence.addr": "gate.example.test:7000", "login.presence.interval": "500ms"},
+		"interval too long":  {"login.presence.addr": "gate.example.test:7000", "login.presence.interval": "201s"},
+		"nine tags":          {"login.presence.addr": "gate.example.test:7000", "login.presence.tags": strings.Split("a,b,c,d,e,f,g,h,i", ",")},
+		"no sid":             {"login.presence.addr": "gate.example.test:7000", "sid": 0},
+	} {
+		if _, err := w.start(settings); err == nil || !strings.Contains(err.Error(), "login.presence") && !strings.Contains(err.Error(), "sid") {
+			t.Fatalf("%s: Start = %v, want an error naming the key", label, err)
+		}
+	}
+}

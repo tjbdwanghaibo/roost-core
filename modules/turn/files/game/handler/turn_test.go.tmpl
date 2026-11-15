@@ -488,12 +488,28 @@ func TestTurnReloadKeepsSequenceAndFiresOverdueOnce(t *testing.T) {
 	f.value = value.(*room.Room)
 	f.getter.value = value
 	f.tick(t)
-	v := f.view(t)
-	if v.Round != 3 || v.ActorID != 101 || v.Sequence != 1 || v.Timeouts != 1 || v.Deadline != 1900000101000 {
-		t.Fatalf("restore: %+v", v)
-	}
 	before := f.document(t)
-	f.end(t, 101, 1, 1)
+	// 重新装载之后没有任何席位在线（在线状态不落库，D24）：旧连接的回合操作与查看都被拒，什么都不改。
+	if _, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 1, "c101", 1, 1); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("end from a connection of the previous process: %v, want room_stale_epoch", err)
+	}
+	if _, err := f.views.Sync_TurnView(context.Background(), f.id, 101, 1, "c101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("view from a connection of the previous process: %v, want room_stale_epoch", err)
+	}
+	f.unchanged(t, before)
+	// 成员用新连接重连（新代际 3）之后照常查看；超时只触发一次、序号不变；重复的结束回合按序号幂等。
+	reconnected, err := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(context.Background(), f.id, 101, 1, "c101-after-reload")
+	if err != nil || reconnected.Epoch != 3 {
+		t.Fatalf("reconnect after reload: %+v %v", reconnected, err)
+	}
+	v, err := f.views.Sync_TurnView(context.Background(), f.id, 101, 3, "c101-after-reload")
+	if err != nil || v.Round != 3 || v.ActorID != 101 || v.Sequence != 1 || v.Timeouts != 1 || v.Deadline != 1900000101000 {
+		t.Fatalf("restore: %+v %v", v, err)
+	}
+	before = f.document(t)
+	if _, err := f.ends.Sync_TurnEnd(context.Background(), f.id, 101, 3, "c101-after-reload", 1, 1); err != nil {
+		t.Fatalf("duplicate end after reconnecting: %v", err)
+	}
 	f.tick(t)
 	f.unchanged(t, before)
 }

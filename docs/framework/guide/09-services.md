@@ -120,7 +120,9 @@ account 的身份验证、玩家号分配、名字校验由接入方提供，不
 
 `Accounts.RoleOnServer(accountID, serverID)` 只读地返回账号在某个服上的角色（登录入口用它让换了设备的客户端认回自己的角色，模块 portal）：按 slot 读，带承载服与在途的换服；没有角色、建角计划还没发布、换服在目标服的占位都答 `ErrRoleMissing`，slot 与角色对不上答 `ErrConflict`；以绑定服为准，并入别的服的角色要用原服号问。没有“列出账号的全部角色”——存储是键值的；登录入口对 `ListServers` 给出的每个服各问一次。
 
-`Accounts.ListServers()` 只读地返回登记过的全部区服（按服号升序，至多 `MaxServers` = 256 个）。存储是键值的、不能枚举，所以 `UpsertServer` / `MergeServer` 在写服务器记录之前先把服号记进一条索引（Servers 存储里保留的键 0，内存与 Redis 相同）：索引先写、记录后写，中途停下只会留下一个没有记录的服号，读清单时跳过；索引满了之后登记新的服号答 `ErrRangeInvalid`，已在索引里的服照常更新。有索引之前登记的服不在清单里，重新 `UpsertServer`（或 `MergeServer`）一次即补上。客户端连哪里不是 account 的数据，见模块 portal 的区服目录。
+`Accounts.ListServers()` 只读地返回登记过的全部区服（按服号升序，至多 `MaxServers` = 256 个）。存储是键值的、不能枚举，所以 `UpsertServer` / `MergeServer` 在写服务器记录之前先把服号记进一条索引（Servers 存储里保留的键 0，内存与 Redis 相同）：索引先写、记录后写，中途停下只会留下一个没有记录的服号，读清单时跳过；索引满了之后登记新的服号答 `ErrRangeInvalid`，已在索引里的服照常更新。有索引之前登记的服不在清单里，重新 `UpsertServer`（或 `MergeServer`）一次即补上。
+
+**区服入口登记**（维护者 D23，[service/account/presence.go](../../../service/account/presence.go)）：客户端连哪里、现在多忙不是区服记录，是 game 进程定期上报的**易失**事实。`Accounts.ReportServerPresence(ServerPresence{ServerID, Addr, Load, Tags}, ttlSeconds)` 登记或续期（期限 1～`MaxPresenceTTLSeconds` = 600 秒，地址必须是带主机的 `host:port`，标签至多 8 个），`WithdrawServerPresence(serverID)` 立刻撤销，`ListServerPresence()` 只读地给出没过期的条目（按服号升序；至多 256 个没过期的服，满了之后新的服号答 `ErrRangeInvalid`、已登记的照常续期）。生产存储是 Redis 里一个哈希（`<prefix>:presence`，`RedisPresenceStore`）：到期由脚本里的 Redis `TIME` 判断，多个 account 副本写读同一张表、不比较各自的时钟；一个键，Cluster 下也是一个槽。登记表有、`ListServers` 没有的服不会出现在任何清单里；account 不核对上报者是不是那个服（总线只在内网，调用方可信）。上报方是模块 login 的 manager（`login.presence.addr`），读方是模块 portal 的缺省区服目录（叠在静态 `portal.servers` 上，上报的优先）。`Config.Presence` 为 nil 时用进程内的 `MemoryPresenceStore`（单进程、测试），`wiring/account` 的 Mod 总是传 Redis 的那一种。
 
 **票据统一由 account 签发和校验**（维护者 2026-11-12）。同一把 `account.session_secret`、三个互不相通的域，都是无状态的 HMAC-SHA256，至多 `MaxTicketBytes` = 1024 字节，任何一种无效（格式、签名、过期、拿别的域的票据冒充）都答同一个 `ErrSessionInvalid`：
 

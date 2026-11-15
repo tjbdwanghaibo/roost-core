@@ -535,3 +535,71 @@ func TestRoomRejectedCloseRestoresAllSeatsAndHost(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// D24 重启后的在线状态：在线不落库（RoomDao.Online 是 nopersist），房间从持久字节重新装载之后每个席位都是断线——
+// 上一个进程的连接不可能还在。座位、房主、代际与连接围栏照旧；迟到的旧断线不改任何东西；成员重连之后才在线，
+// 没重连的仍是断线。
+func TestRoomOnlineStateIsNotCarriedAcrossAReload(t *testing.T) {
+	f := newRoomFixture(t, 3)
+	f.join(t, 101)
+	f.join(t, 102)
+	if _, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.view(t, 102); !got.Seats[0].Connected || !got.Seats[1].Connected {
+		t.Fatalf("before the reload: %+v", got.Seats)
+	}
+	raw := f.document(t)
+	restored := newRoomFixture(t, 0)
+	var decodeErr error
+	restored.locked(t, func() { decodeErr = restored.value.Dao().Unmarshal(raw) })
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	got := restored.view(t, 102)
+	if got.HostID != 101 || len(got.Seats) != 2 || got.Seats[0].Connected || got.Seats[1].Connected {
+		t.Fatalf("after the reload every seat must be offline with seats and host kept: %+v", got)
+	}
+	changed, err := restored.disconnects.Sync_RoomDisconnect(context.Background(), restored.id, 102, 2)
+	if err != nil || changed {
+		t.Fatalf("disconnect of a seat that is already offline after the reload: %v %v", changed, err)
+	}
+	// 同一条（上一个进程的）连接不能凭重放重连回来；带代际换新连接才行。
+	if _, err := restored.reconnects.Sync_RoomReconnect(context.Background(), restored.id, 102, 2, "connection-102"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("replayed reconnect of the previous process's connection: %v", err)
+	}
+	back, err := restored.reconnects.Sync_RoomReconnect(context.Background(), restored.id, 102, 2, "after-reload")
+	if err != nil || back.Epoch != 4 || back.Seats[0].Connected || !back.Seats[1].Connected {
+		t.Fatalf("reconnect after the reload: %+v %v", back, err)
+	}
+}
+
+// 在线标记与座位一起回滚：离开、重连在提交阶段被拒时，在线状态回到操作之前（nopersist 字段同样登记逆操作）。
+// 断线只改不落库的在线标记，没有要提交的持久事实，所以不经提交、直接生效。
+func TestRoomRejectedCommitsRestoreOnlineState(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	f.commit.reject.Store(true)
+	if err := f.leaves.Sync_RoomLeave(context.Background(), f.id, 102, 2, "connection-102"); err == nil {
+		t.Fatal("commit rejection acknowledged a leave")
+	}
+	if changed, err := f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 101, 1); err != nil || !changed {
+		t.Fatalf("a disconnect has nothing to persist and must not wait for a commit: %v %v", changed, err)
+	}
+	f.commit.reject.Store(false)
+	if got := f.view(t, 102); len(got.Seats) != 2 || got.Seats[0].Connected || !got.Seats[1].Connected {
+		t.Fatalf("after a rejected leave and a disconnect: %+v", got.Seats)
+	}
+	f.commit.reject.Store(true)
+	if _, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection"); err == nil {
+		t.Fatal("commit rejection acknowledged a reconnect")
+	}
+	f.commit.reject.Store(false)
+	if got := f.view(t, 102); got.Seats[0].Connected || !got.Seats[1].Connected {
+		t.Fatalf("a rejected reconnect brought the seat online: %+v", got.Seats)
+	}
+	if got, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection"); err != nil || !got.Seats[0].Connected {
+		t.Fatalf("reconnect after the rejection: %+v %v", got, err)
+	}
+}

@@ -147,7 +147,7 @@ func (game *GameIngress) retire(record *bindingRecord) {
 		if done != nil {
 			<-done
 		}
-		game.lifecycle.publishClosed(TCPSessionClosed{PlayerID: record.identity.PlayerID, SessionID: record.identity.SessionID, Binding: record.identity, ReceiverID: record.receiverID})
+		game.lifecycle.publishClosed(TCPSessionClosed{PlayerID: record.identity.PlayerID, SessionID: record.identity.SessionID, Binding: record.identity, ReceiverID: record.receiverID, ConnectionID: record.identity.ConnectionNonce})
 		if game.deps.OnClosed != nil {
 			game.deps.OnClosed(record.identity, record.receiverID)
 		}

@@ -33,6 +33,11 @@ type Config struct {
 	// creation excludes different plans; same-name retries resume the same ID.
 	// Stores used here must preserve ConditionalDeleter for safe pre-role cleanup.
 	Slots versionstore.Store[string, Slot]
+	// Presence 是区服入口的登记表（presence.go，维护者 D23）：game 定期上报的地址与负载，带过期。
+	// nil 取进程内的 MemoryPresenceStore（单个 account 进程、测试）；多个 account 副本共用一张表要传
+	// Redis 的那一种——wiring/account 的 Mod 传 RedisStores.Presence。它是易失的登记，不是区服记录，
+	// 所以有安全的缺省，不像上面几项那样必填。
+	Presence PresenceStore
 
 	// Verifier, Allocator and NameRules are required. See their interfaces
 	// for why none of them has a default.
@@ -92,8 +97,9 @@ const (
 
 // Service is the account directory.
 type Service struct {
-	cfg    Config
-	report servicemetrics.Sink
+	cfg      Config
+	presence PresenceStore
+	report   servicemetrics.Sink
 }
 
 // New validates the configuration and returns a Service.
@@ -159,7 +165,11 @@ func New(cfg Config) (*Service, error) {
 	if cfg.SystemNow == nil {
 		cfg.SystemNow = time.Now
 	}
-	return &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
+	presence := cfg.Presence
+	if presence == nil {
+		presence = NewMemoryPresenceStore(cfg.SystemNow)
+	}
+	return &Service{cfg: cfg, presence: presence, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }
 
 // Login verifies an identity with its channel and returns the account,

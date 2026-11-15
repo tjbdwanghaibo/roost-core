@@ -2442,3 +2442,55 @@ func TestOutboundBudgetDrill(t *testing.T) {
 	}
 	server.mu.RUnlock()
 }
+
+// 按连接登记在线的订阅方（room 的席位）靠两件事认出“关掉的是我登记的那一条”：关闭事件带着连接标识
+// （ConnectionID，与 Session.ConnectionID() 相同），以及按连接问“它还在不在”（ConnectionActive）。
+// 承诺：同一玩家的两条连接分得开；收到关闭事件时那一条已经答 false（关闭先摘掉再发布）；SessionCount 是在线连接数。
+func TestTCPCloseEventNamesTheConnectionAndItIsNoLongerActive(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	activeAtClose := make(chan bool, 4)
+	runtime.OnSessionClosed(func(event TCPSessionClosed) {
+		activeAtClose <- runtime.ConnectionActive(event.PlayerID, event.ConnectionID)
+	})
+	first := dialAuthenticated(t, server, "first")
+	dialAuthenticated(t, server, "second")
+	waitRegistered(t, runtime, 7, 2)
+	server.mu.RLock()
+	firstNonce, secondNonce := server.sessions["first"].nonce, server.sessions["second"].nonce
+	server.mu.RUnlock()
+	if firstNonce == "" || firstNonce == secondNonce {
+		t.Fatalf("connection ids %q / %q are not distinct", firstNonce, secondNonce)
+	}
+	if !runtime.ConnectionActive(7, firstNonce) || !runtime.ConnectionActive(7, secondNonce) {
+		t.Fatal("an open connection is not active")
+	}
+	if runtime.ConnectionActive(8, firstNonce) || runtime.ConnectionActive(7, "someone-else") || runtime.ConnectionActive(7, "") {
+		t.Fatal("ConnectionActive answered true for a connection the player does not have")
+	}
+	if got := runtime.SessionCount(); got != 2 {
+		t.Fatalf("SessionCount = %d, want 2", got)
+	}
+	_ = first.Close()
+	select {
+	case event := <-closed:
+		if event.PlayerID != 7 || event.SessionID != "first" || event.ConnectionID != firstNonce {
+			t.Fatalf("close event = %+v, want player 7 session first connection %q", event, firstNonce)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no close event")
+	}
+	select {
+	case active := <-activeAtClose:
+		if active {
+			t.Fatal("the closed connection was still active when its close event was delivered")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no close event for the checking subscriber")
+	}
+	if runtime.ConnectionActive(7, firstNonce) || !runtime.ConnectionActive(7, secondNonce) {
+		t.Fatal("after closing the first connection: first must be inactive, second still active")
+	}
+	if got := runtime.SessionCount(); got != 1 {
+		t.Fatalf("SessionCount after one close = %d, want 1", got)
+	}
+}
