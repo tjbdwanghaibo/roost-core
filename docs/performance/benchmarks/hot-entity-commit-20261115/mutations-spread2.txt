@@ -1,0 +1,12 @@
+== old controller (speed = 2/s x displacement, every tick)
+    cellworld_test.go:18: echo 400ms jitter 600ms late 0ms from [2500 -1800]: echoed position outside the box at 25.0s of the 30s warmup: (-4,-125)
+== first leg/settle version (legs counted in ticks, settle only near the expected end or after 5s)
+    cellworld_test.go:18: echo 100ms jitter 0ms late 200ms from [2500 -1800]: echoed position outside the box at 25.0s of the 30s warmup: (441,-309)
+== mutation: s/near := abs64(px-s.expX) <= s.slack \&\& abs64(py-s.expY) <= s.slack/near := true/
+    cellworld_test.go:18: echo 1000ms jitter 600ms late 0ms from [-40 35]: echoed position outside the box at 25.6s of the 30s warmup: (21,-18)
+== mutation: s/spreadMinMove       = time.Second/spreadMinMove       = 100 * time.Millisecond/
+    cellworld_test.go:18: echo 100ms jitter 300ms late 200ms from [-40 35]: echoed position outside the box at 25.0s of the 30s warmup: (-22,17)
+== mutation: s/s.still >= spreadSettleFar \&\& left/s.still >= spreadSettleTicks \&\& !left/
+    cellworld_test.go:18: echo 1000ms jitter 600ms late 0ms from [-40 35]: echoed position outside the box at 25.0s of the 30s warmup: (-75,63)
+== mutation: s/ms := walked.Milliseconds()/ms := s.legFor.Milliseconds()/
+ok  	example.com/cwdemo/cmd/loadtest	0.589s

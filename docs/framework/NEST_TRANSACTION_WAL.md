@@ -80,13 +80,13 @@ pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释�
 
 ## 5. WAL 格式与恢复
 
-- 单 writer goroutine，调用方可并发 append；
+- 单 writer goroutine 写入，调用方可并发 append；段 fsync 由独立的刷盘 goroutine 做（2026-11-15 起），fsync 只持 `syncMu`、不持写入用的 `stateMu`，所以 fsync 进行中 writer 照常写下一批。一次 fsync 只确认它开始之前已写完的记录（写入序号快照），进行中写入的记录等下一次；当前段的轮转与关闭持 `syncMu`。见 [NEST_PIPELINED_COMMIT §12](NEST_PIPELINED_COMMIT.md#12-热点单例实体的写吞吐2026-11-15)；
 - segment 默认 256 MiB；
 - record 默认上限 16 MiB；
 - frame 包含 magic、格式版本、payload 长度、header CRC、payload CRC；
 - payload 为确定性二进制编码，header map 按 key 排序；
-- strict 请求在 batch 中合并为一次 fsync；经阻塞式 `Append` 提交的 pipelined 记录（broadcast、带 Remote 批次时回退到 strict 路径）同样等这次 fsync（[RR-20260928-11](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20260928-11.md)）；
-- async 默认每 10 ms 刷盘；
+- strict 请求写完登记等待，由覆盖它的那次 fsync 回复（同批与 fsync 期间写入的 strict 记录合并为下一次 fsync）；经阻塞式 `Append` 提交的 pipelined 记录（broadcast、带 Remote 批次时回退到 strict 路径）同样等 fsync（[RR-20260928-11](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20260928-11.md)）；
+- async 写完即回复，不排在任何 fsync 之后（macOS 上 `F_FULLFSYNC` 进行时同一文件的 `write` 在内核里等它，见 §12 的平台说明）；刷盘 goroutine 默认每 10 ms 刷一次；
 - 启动时只截断最后 segment 的不完整尾 frame 或零填充尾部，判据见下文“尾部截断判据”；
 - 完整 frame CRC 错误、segment 缺口、ack 越界均拒绝启动，不静默跳过；
 - writer 目录使用 OS 文件锁，禁止双进程同时写；

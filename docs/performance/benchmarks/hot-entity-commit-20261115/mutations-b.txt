@@ -1,0 +1,18 @@
+== MB1: a sync publishes the write position at its end (not the snapshot taken before fsync)
+    wal_test.go:217: pipelined ticket 1 resolved by fsync #1, which started before it was written (DurableLSN=1)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nestwal	0.784s
+FAIL
+== MB2: strict Append answered right after the write, before any fsync
+--- FAIL: TestAckRefusesTerminalWALAndKeepsCheckpoint (0.02s)
+    terminal_test.go:74: premise: strict append after injected EIO err=<nil>, want ErrCommitIndeterminate
+--- FAIL: TestSyncOnlyCoversWritesFinishedBeforeItStarted (0.02s)
+    wal_test.go:216: strict append answered (<nil>) after fsync #1, which started before it was written
+--- FAIL: TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined (0.05s)
+    --- FAIL: TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined/strict (0.01s)
+        pipelined_strict_fallback_test.go:140: Append(Durability strict) returned (err=<nil>) before its batch was fsynced: syncs=+0; a record on the strict commit path must be durable when Append returns
+    --- FAIL: TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined/pipelined (0.01s)
+        pipelined_strict_fallback_test.go:140: Append(Durability pipelined) returned (err=<nil>) before its batch was fsynced: syncs=+0; a record on the strict commit path must be durable when Append returns
+--- FAIL: TestBroadcastPipelinedIsInvisibleUntilFsync (0.03s)
+    --- FAIL: TestBroadcastPipelinedIsInvisibleUntilFsync/strict (0.01s)
+        pipelined_strict_fallback_test.go:417: broadcast strict after fsync: lock free=true at syncs=+0, Sync gate released=true at syncs=+0; want both, each after the fsync

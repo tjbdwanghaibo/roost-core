@@ -139,3 +139,5 @@ CommitRecord，结果在落盘后直接发回协调器。Mongo 步骤使用 `Mon
 8. 用严格/异步/pipelined handler 测试 Put、Patch、Delete 和 rollback，并验证只有 Data Engine 一条写路径。
 
 `durability=pipelined` 自 v1.23.1 起可由标记生成；生成代码不绕过 Nest 的 committer 能力检查和 handler allowlist。
+`durability=pipelined completion=async` 生成 `HandlerMeta.AsyncCompletion`（2026-11-15 起）：热点实体上的同步请求不再每次
+fsync 只处理一条，代价是 AfterCommit 改在完成池上执行（[NEST_PIPELINED_COMMIT §12](../../docs/framework/NEST_PIPELINED_COMMIT.md#12-热点单例实体的写吞吐2026-11-15)）。

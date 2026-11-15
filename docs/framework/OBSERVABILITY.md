@@ -77,7 +77,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | --- | --- | --- |
 | `nestwal.batch.total` / `nestwal.append.total` | Counter | 组提交批数 / 记录数（比值 = 合批放大率） |
 | `nestwal.bytes.total` | Counter | 写入字节 |
-| `nestwal.fsync.duration` | Duration | 物理 WAL 段刷盘尝试的时延（含失败）：覆盖 strict 写批、后台 ticker、Ack、轮转和关闭；不含 checkpoint / 目录刷盘。async 不等待自己的 durable barrier，但可能等待正在刷段的 writer / stateMu；不能因本事务没有 strict 刷盘就排除间接等待 |
+| `nestwal.fsync.duration` | Duration | 物理 WAL 段刷盘尝试的时延（含失败）：覆盖 strict 写批、后台 ticker、Ack、轮转和关闭；不含 checkpoint / 目录刷盘。2026-11-15 起 fsync 在独立刷盘 goroutine 上、不持写入锁，nestwal 不再让 async 记录等进行中的 fsync（macOS 上 `F_FULLFSYNC` 期间同一文件的 write 仍在内核里等；Linux 未在本机测量） |
 | `nestwal.pending.tickets` | Gauge | 未 durable 的 pipelined ticket 数（durable lag 的实体侧读数） |
 | `nestwal.disk.bytes` | Gauge | 段文件占用（回收压力） |
 | `nestwal.reject.total` | Counter | 容量拒绝（labels.reason: queue_full/disk_cap） |
@@ -413,6 +413,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `failurelog_delete_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_purge_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_trim_total` | Counter | `failurelog/failurelog.go:IncCounter` |
+| `login.notice_dropped_total{reason}` | Counter | `modules/login/files/game/login/login_active.go.tmpl (template)`：登录模块的会话激活告知被丢弃的条数，`busy` = 在途已满 256 条、`stopping` = 停止之后才到；非零说明登录潮里有玩家的激活告知没送到（见模块 README） |
 | `lockstep.catchup.frames.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.catchup.unservable.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.desync.total` | Counter | `sync/lockstep/match.go:IncCounter` |

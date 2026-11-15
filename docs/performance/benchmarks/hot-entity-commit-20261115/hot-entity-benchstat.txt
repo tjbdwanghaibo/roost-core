@@ -1,0 +1,35 @@
+                                               │ hot-entity-before.txt │        hot-entity-after.txt         │
+                                               │        sec/op         │    sec/op     vs base               │
+HotEntityRequest/strict-10                                8.288m ±  2%   8.436m ± 11%        ~ (p=0.240 n=6)
+HotEntityRequest/pipelined-10                             8.385m ± 10%   8.454m ±  4%        ~ (p=0.699 n=6)
+HotEntityRequest/pipelined_async_completion-10            321.6µ ± 32%   342.5µ ± 12%        ~ (p=0.310 n=6)
+HotEntityRequest/async-10                                 4.515m ± 10%   3.089m ±  7%  -31.57% (p=0.002 n=6)
+HotEntityRequest/async_under_strict_load-10               8.257m ±  9%   3.516m ±  4%  -57.41% (p=0.002 n=6)
+geomean                                                   3.838m         3.053m        -20.45%
+
+                                               │ hot-entity-before.txt │         hot-entity-after.txt         │
+                                               │         ops/s         │    ops/s      vs base                │
+HotEntityRequest/strict-10                                 120.7 ±  2%    118.5 ± 10%         ~ (p=0.240 n=6)
+HotEntityRequest/pipelined-10                              119.2 ±  9%    118.2 ±  5%         ~ (p=0.699 n=6)
+HotEntityRequest/pipelined_async_completion-10            3.110k ± 24%   2.920k ± 11%         ~ (p=0.310 n=6)
+HotEntityRequest/async-10                                  221.7 ±  9%    323.9 ±  7%   +46.11% (p=0.002 n=6)
+HotEntityRequest/async_under_strict_load-10                121.2 ±  9%    284.4 ±  4%  +134.75% (p=0.002 n=6)
+geomean                                                    260.6          327.5         +25.70%
+
+                                               │ hot-entity-before.txt │         hot-entity-after.txt         │
+                                               │        p50-sec        │    p50-sec     vs base               │
+HotEntityRequest/strict-10                                266.5m ±  1%    269.6m ± 11%        ~ (p=0.180 n=6)
+HotEntityRequest/pipelined-10                             267.5m ±  6%    271.0m ±  4%        ~ (p=0.485 n=6)
+HotEntityRequest/pipelined_async_completion-10            8.281m ± 48%   11.619m ±  6%        ~ (p=0.065 n=6)
+HotEntityRequest/async-10                                141.01m ± 11%    97.47m ± 10%  -30.87% (p=0.002 n=6)
+HotEntityRequest/async_under_strict_load-10               262.3m ± 10%    112.6m ±  5%  -57.08% (p=0.002 n=6)
+geomean                                                   116.9m          98.59m        -15.67%
+
+                                               │ hot-entity-before.txt │        hot-entity-after.txt         │
+                                               │        p99-sec        │   p99-sec     vs base               │
+HotEntityRequest/strict-10                                283.9m ±  8%   287.9m ± 17%        ~ (p=0.937 n=6)
+HotEntityRequest/pipelined-10                             285.8m ± 25%   284.6m ± 10%        ~ (p=0.937 n=6)
+HotEntityRequest/pipelined_async_completion-10            19.29m ± 35%   18.10m ± 29%        ~ (p=0.180 n=6)
+HotEntityRequest/async-10                                 175.2m ± 16%   121.9m ±  9%  -30.42% (p=0.002 n=6)
+HotEntityRequest/async_under_strict_load-10               282.0m ± 10%   129.4m ±  5%  -54.12% (p=0.002 n=6)
+geomean                                                   150.5m         118.5m        -21.27%

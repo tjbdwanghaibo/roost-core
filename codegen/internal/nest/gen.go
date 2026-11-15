@@ -336,6 +336,10 @@ func rollbackMeta(f *FuncInfo) string {
 	if rollback == "nest.RollbackNone" && durability == "nest.DurabilityMemory" {
 		return "nest.HandlerMeta{}"
 	}
+	if f.Completion == "async" {
+		// 异步完成：AfterCommit 在完成池上执行（无请求上下文、不持实体锁），同实体下一条消息不等本条持久。
+		return "nest.HandlerMeta{Rollback: " + rollback + ", Durability: " + durability + ", AsyncCompletion: true}"
+	}
 	return "nest.HandlerMeta{Rollback: " + rollback + ", Durability: " + durability + "}"
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // 会话激活后的告知的场景。登记表是进程级的：每条用例换成自己的，结束时换回去。
@@ -132,7 +133,18 @@ func TestLoginSessionActiveUnderAnIndependentGateUsesTheBoundPrincipal(t *testin
 	}
 }
 
-// 有界：同时在后台执行的告知至多 256 条会话，超过的丢弃而不是排队。
+// droppedNotices 读丢弃计数 login.notice_dropped_total{reason}（进程级累计，用例比较前后差）。
+func droppedNotices(reason string) int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == NoticeDroppedMetric && metric.Labels["reason"] == reason {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
+// 有界：同时在后台执行的告知至多 256 条会话，超过的丢弃而不是排队；丢弃计入 login.notice_dropped_total{reason=busy}，
+// INFO 日志下也看得到丢了多少。
 func TestLoginSessionActiveIsBounded(t *testing.T) {
 	withNotices(t)
 	log := &noticeLog{}
@@ -148,6 +160,7 @@ func TestLoginSessionActiveIsBounded(t *testing.T) {
 	for i := 0; i < 256; i++ {
 		notifier.SessionActive(nil, gateway.Principal{PlayerID: int64(i + 1), SessionID: "held"})
 	}
+	busyBefore := droppedNotices("busy")
 	over := make(chan struct{})
 	go func() {
 		notifier.SessionActive(nil, gateway.Principal{PlayerID: 999, SessionID: "over"})
@@ -157,6 +170,9 @@ func TestLoginSessionActiveIsBounded(t *testing.T) {
 	case <-over:
 	case <-time.After(2 * time.Second):
 		t.Fatal("SessionActive waited for a free slot; over the bound it must drop the notice and return")
+	}
+	if got := droppedNotices("busy") - busyBefore; got != 1 {
+		t.Fatalf("%s{reason=busy} grew by %d over the bound, want 1", NoticeDroppedMetric, got)
 	}
 	close(release)
 	notifier.Wait()
@@ -196,4 +212,24 @@ func TestLoginSessionActiveRegistrationMistakesPanic(t *testing.T) {
 	// nil 的 Notifier（认证器没建它）不 panic。
 	var none *Notifier
 	none.SessionActive(nil, gateway.Principal{PlayerID: 1})
+}
+
+// 停机之后到达的会话不再告知，丢弃计入 login.notice_dropped_total{reason=stopping}。
+func TestLoginSessionActiveAfterCloseCountsTheDrop(t *testing.T) {
+	withNotices(t)
+	log := &noticeLog{}
+	OnSessionActive("enter", func(_ context.Context, _ *app.Registry, session Active) { log.record("enter", session) })
+	notifier := NewNotifier()
+	if err := notifier.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := droppedNotices("stopping")
+	notifier.SessionActive(nil, gateway.Principal{PlayerID: 7, SessionID: "late"})
+	notifier.Wait()
+	if got := log.events(); len(got) != 0 {
+		t.Fatalf("a session after Close was announced: %v", got)
+	}
+	if got := droppedNotices("stopping") - before; got != 1 {
+		t.Fatalf("%s{reason=stopping} grew by %d after Close, want 1", NoticeDroppedMetric, got)
+	}
 }

@@ -60,6 +60,9 @@ func validateHandlerMeta(name HandlerName, meta HandlerMeta) (HandlerMeta, error
 	if meta.Durability != DurabilityMemory && meta.Rollback == RollbackNone {
 		return meta, fmt.Errorf("%w: durable handler %q requires rollback", ErrRollbackUnsupported, name.String())
 	}
+	if meta.AsyncCompletion && meta.Durability != DurabilityPipelined {
+		return meta, fmt.Errorf("%w: handler %q declares durability %s", ErrAsyncCompletionRequiresPipelined, name.String(), meta.Durability)
+	}
 	return meta, nil
 }
 
@@ -137,8 +140,10 @@ func (mgr *NestMgr) getHandlerEntry(name HandlerName) (handlerEntry, bool) {
 	entry, ok := mgr.handlers[name]
 	if !ok {
 		// 引擎构造之后才注册到包级表的 handler（测试常见；生产在 init 里注册，都在快照里）：在这里解析名单。
+		// 这里不建完成泵（派发已开始）：引擎没有泵时 route.pump 为 nil，声明了 AsyncCompletion 的 handler 退回第一阶段
+		// （worker 内等票据），语义仍正确、只是慢；生产的生成代码在 init 里注册，都在快照里。
 		entry, ok = GetHandlerEntry(name)
-		entry.asyncCompletion = ok && mgr.usesAsyncCompletion(name)
+		entry.asyncCompletion = ok && mgr.usesAsyncCompletion(name, entry.meta)
 		return entry, ok
 	}
 	if entry.handler != nil {
@@ -174,14 +179,33 @@ func (mgr *NestMgr) RegisterHandlerWithMeta(name HandlerName, handler BaseHandle
 	if _, ok := mgr.handlers[name]; ok {
 		return fmt.Errorf("nest: duplicate handler %q", name.String())
 	}
-	mgr.handlers[name] = handlerEntry{handler: handler, meta: meta, asyncCompletion: mgr.usesAsyncCompletion(name)}
+	async := mgr.usesAsyncCompletion(name, meta)
+	if async {
+		// 实例注册只在 Start 之前（上面已检查），此时建泵与 NewEngine 里建泵等价。
+		mgr.ensureCompletionPump()
+	}
+	mgr.handlers[name] = handlerEntry{handler: handler, meta: meta, asyncCompletion: async}
 	return nil
 }
 
-// usesAsyncCompletion 报告本引擎的异步完成名单是否点名 name。名单在 NewEngine 之后只读，不加锁。
-func (mgr *NestMgr) usesAsyncCompletion(name HandlerName) bool {
+// usesAsyncCompletion 报告 handler 是否使用异步完成：meta 声明了 AsyncCompletion（注册时已保证是 pipelined），或本引擎的
+// 异步完成名单点名了它。名单在 NewEngine 之后只读，不加锁。
+func (mgr *NestMgr) usesAsyncCompletion(name HandlerName, meta HandlerMeta) bool {
+	if meta.AsyncCompletion {
+		return true
+	}
 	_, ok := mgr.asyncCompletion[name]
 	return ok
+}
+
+// ensureCompletionPump 在还没有完成泵时按配置的规模建一个。只在 Start 之前调用（NewEngine、实例注册持 lifecycleMu），
+// Start 启动它、Shutdown 排空它。
+func (mgr *NestMgr) ensureCompletionPump() {
+	if mgr.completions != nil {
+		return
+	}
+	mgr.completions = newCompletionPump(mgr.asyncWorkers, mgr.asyncQueueCap)
+	mgr.completions.fence = mgr.Fence
 }
 
 // MustRegisterHandlerWithMeta 是实例级 RegisterHandlerWithMeta 的 panic 版本。

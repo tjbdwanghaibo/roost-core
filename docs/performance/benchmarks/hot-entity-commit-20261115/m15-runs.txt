@@ -1,0 +1,63 @@
+## v149-spread-a  load 2.63→16.58  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.05, 0.204, 0.344, 0.718, 0.743]
+  budget_stop 114 backlog 0 lost 30 push 605839 dispatch_timeout 0 RecordEnter n=1000 hold_avg=10.611ms
+## v149-spread-b  load 16.58→18.08  error_rate 0.025
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.046, 0.16, 0.355, 0.465, 0.471]
+    25 robot action cellworld_walk: cellworld: player N did not reach spread target 
+  spread failures by entered-the-box count: {'1': 2, '2': 3, '3': 5, '4': 2, '5': 4, '6': 2, '7': 1, '8': 1, '9': 2, '10': 2, '11': 1}
+  budget_stop 246 backlog 0 lost 36 push 525349 dispatch_timeout 0 RecordEnter n=1000 hold_avg=13.011ms
+## v149-spread-c  load 18.08→28.44  error_rate 0.85
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.041, 0.161, 0.44, 0.504, 0.545]
+   850 robot action cellworld_walk: cellworld: player N did not reach spread target 
+  spread failures by entered-the-box count: {'0': 477, '1': 130, '2': 93, '3': 54, '4': 45, '5': 15, '6': 21, '7': 8, '8': 4, '9': 3}
+  budget_stop 1502 backlog 338120 lost 68 push 220216 dispatch_timeout 0 RecordEnter n=1000 hold_avg=13.413ms
+## v149-syncasync-a  load 12.40→17.43  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.057, 0.139, 0.745, 0.921, 0.981]
+  budget_stop 134 backlog 0 lost 25 push 646892 dispatch_timeout 0 RecordEnter n=1000 hold_avg=0.021ms
+## v149-syncasync-b  load 17.43→21.30  error_rate 0.007
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.052, 0.186, 0.479, 0.874, 0.883]
+     7 robot action cellworld_walk: cellworld: player N did not reach spread target 
+  spread failures by entered-the-box count: {'5': 4, '6': 1, '7': 1, '8': 1}
+  budget_stop 217 backlog 0 lost 41 push 505600 dispatch_timeout 0 RecordEnter n=1000 hold_avg=0.029ms
+## v149-syncstrict-a  load 12.53→19.49  error_rate 0.04
+  enter: players 1000 ok 347 bad 653 | hs->done [0.059, 2.045, 3.006, 3.135, 3.162]
+    40 robot action cellworld_walk: cellworld: player N did not reach spread target 
+  spread failures by entered-the-box count: {'0': 13, '1': 9, '2': 2, '3': 1}
+  budget_stop 59 backlog 0 lost 25 push 480757 dispatch_timeout 1555 RecordEnter n=1276 hold_avg=13.328ms
+## v149-syncstrict-b  load 19.49→21.18  error_rate 0.029
+  enter: players 1000 ok 460 bad 540 | hs->done [0.045, 2.117, 2.993, 3.014, 3.07]
+    29 robot action cellworld_walk: cellworld: player N did not reach spread target 
+  budget_stop 29 backlog 0 lost 24 push 551763 dispatch_timeout 1032 RecordEnter n=1143 hold_avg=12.167ms
+## v149-steer-a  load 21.18→22.92  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.089, 0.385, 0.832, 0.986, 1.016]
+  budget_stop 134 backlog 0 lost 29 push 441458 dispatch_timeout 0 RecordEnter n=1000 hold_avg=13.490ms
+## v149-steer-b  load 22.92→19.09  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.052, 0.119, 0.399, 0.493, 0.562]
+  budget_stop 58 backlog 0 lost 19 push 465027 dispatch_timeout 0 RecordEnter n=1000 hold_avg=11.455ms
+## v149-steer-c  load 19.09→24.80  error_rate 0.013
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.065, 1.02, 1.434, 1.653, 1.837]
+    13 robot action cellworld_walk: cellworld: player N did not reach spread target 
+  spread failures by entered-the-box count: {'0': 3, '1': 9, '2': 1}
+  budget_stop 115 backlog 0 lost 38 push 397367 dispatch_timeout 0 RecordEnter n=1000 hold_avg=12.889ms
+## v149-repro-a  load 24.80→19.00  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.051, 1.255, 3.86, 4.031, 4.044]
+  budget_stop 63 backlog 0 lost 36 push 623245 dispatch_timeout 408 RecordEnter n=1000 hold_avg=11.332ms
+## v149-repro-b  load 10.43→21.93  error_rate 0.053
+  enter: players 947 ok 947 bad 0 | hs->done [0.057, 1.977, 3.908, 4.088, 4.125]
+    53 robot action connect: auth packet: account create role: nats: request timeout: context dea
+  budget_stop 43 backlog 0 lost 24 push 581595 dispatch_timeout 282 RecordEnter n=947 hold_avg=11.252ms
+## v149-steer2-a  load 3.77→19.72  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.034, 0.134, 0.307, 0.404, 0.412]
+  budget_stop 87 backlog 0 lost 31 push 573707 dispatch_timeout 0 RecordEnter n=1000 hold_avg=10.933ms
+## v149-steer2-b  load 18.14→14.81  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.047, 0.134, 0.298, 0.547, 0.577]
+  budget_stop 78 backlog 0 lost 29 push 712964 dispatch_timeout 0 RecordEnter n=1000 hold_avg=9.783ms
+## v149-steer2-c  load 14.81→16.05  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.044, 0.122, 0.392, 0.67, 0.689]
+  budget_stop 81 backlog 0 lost 29 push 733573 dispatch_timeout 0 RecordEnter n=1000 hold_avg=10.075ms
+## v149-same-a  load 15.48→16.29  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.054, 0.123, 0.301, 0.433, 0.453]
+  budget_stop 149 backlog 0 lost 23 push 696339 dispatch_timeout 0 RecordEnter n=1000 hold_avg=9.844ms
+## v149-same-b  load 15.14→19.50  error_rate 0
+  enter: players 1000 ok 1000 bad 0 | hs->done [0.037, 0.112, 0.236, 0.559, 0.6]
+  budget_stop 151 backlog 0 lost 13 push 686242 dispatch_timeout 0 RecordEnter n=1000 hold_avg=9.925ms

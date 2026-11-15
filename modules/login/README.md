@@ -48,7 +48,7 @@ login.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry,
 ```
 
 - 只在 `init` 里登记；空名、nil、重名 panic；按名字顺序执行。没有登记任何告知的工程这一步什么都不做。
-- 在后台执行、有界：`Notifier` 同时至多处理 `MaxPendingNotices`（256）条会话，超过的直接丢弃；告知 panic 只记 Error。所以它只能是“告知”，任何规则都不能只在这里执行。
+- 在后台执行、有界：`Notifier` 同时至多处理 `MaxPendingNotices`（256）条会话，超过的直接丢弃；告知 panic 只记 Error。所以它只能是“告知”，任何规则都不能只在这里执行。丢弃只记 Debug 日志，数量看计数 `login.notice_dropped_total`（Prometheus `login_notice_dropped_total`，标签 `reason`：`busy` = 在途已满，`stopping` = 停机之后到达，2026-11-15 起）。
 - 后台执行归 manager（D22）：`game/managers/login_notices.go` 的 `NewLoginNotices()`，安装时登记进 `game/managers/managers.go` 的 `Managers()`，由 manager Mod 启停。Start 建 `Notifier` 并以 `gamelogin.NoticesCapability` 发布；Stop 不再接新的会话、取消在途告知的 ctx、在停机期限内等它们返回（期限先到时返回期限错误，ManagerMod 用新期限再停）。玩家 TCP 传输的 Mod 先停，停到这里时已经没有新的会话激活。`Managers()` 里没有这一行时告知全部丢弃，第一次记一条 Error。
 - 接线：生成的传输 Mod 认认证器的可选接口 `SessionObserver`（生成文件 `internal/access/player/tcp/server_gen.go`），模块的 `auth.go` 实现了它的 `SessionActive`，经 `gamelogin.AnnounceActive` 按能力名取进程里的 `Notifier`（认证器自己不起协程）。嵌入 TCP 是鉴权 ACK 写出、自身视图登记之后调用；独立 Gate 是 Game Ingress 的激活通知（`OnActivated`）调用。两种部署下告知拿到的都是这条会话认证出来的 claims。
 
@@ -169,7 +169,7 @@ go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance
 `roost module verify` 跑 36 条场景（`^TestLogin`：`game/login` 20 条、`internal/access/player/tcp` 2 条、`services/account` 6 条、`cmd/accountctl` 4 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）。全部是离线的：
 
 - 认证器的场景用真实的 `account.Service` 加内存存储：两种票据的通过与拒绝、过期、伪造、合服后的承载服、换服在途、并发握手只建一个映射、“拒绝”与“判断不了”的区分。
-- 告知的场景验证后台执行、上限与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。
+- 告知的场景验证后台执行、上限（含丢弃计数）、停机后到达的会话不告知（含丢弃计数）与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。
 - 区服入口上报（`game/managers` 的 2 条）用真实的 `account.Service`（内存登记表、测试时钟）：报上地址、在线数与标签，在线数变了下一次跟上，account 不可达时不影响本服、恢复后接着报，崩溃（循环停了、没撤销）后到期消失、差一毫秒还在，正常停机立刻撤销、停了不再报；没写地址不报，写错的配置启动失败。经真实 NATS / Redis 的上报没有跑。
 - account 一侧验证开发令牌（对、错、关、生产配置拒绝）、渠道缺省全拒、计数器的键与出错不发号。
 - `cmd/accountctl` 的子命令在内存存储上跑，连接旗标只验到“读对了”；真正去连 Redis 的那一段（`openService`）没有被场景执行。

@@ -88,6 +88,9 @@ var (
 	// ErrPipelinedNotAllowed 表示 handler 声明了 DurabilityPipelined，但不在引擎的 pipelined 白名单内。提前放锁会改变提交
 	// 语义，所以生产环境按 handler 逐个放开；见 NEST_PIPELINED_COMMIT.md。
 	ErrPipelinedNotAllowed = errors.New("nest: handler is not on the pipelined durability allowlist")
+	// ErrAsyncCompletionRequiresPipelined 是注册期错误：HandlerMeta.AsyncCompletion 只改 pipelined 提交的完成路径，
+	// 和其他持久级别一起声明没有意义，多半是写错了持久级别。
+	ErrAsyncCompletionRequiresPipelined = errors.New("nest: async completion requires durability pipelined")
 	// ErrDurabilityUnset 是注册期错误：手写 HandlerMeta 的 Rollback 不为 none，却没有显式写 Durability。
 	// Durability 零值不隐含 memory，要在 memory / async / strict / pipelined 里选一个；
 	// //roost:nest 生成的 meta 总是写明 durability，不受影响。
@@ -214,14 +217,17 @@ type NestMgr struct {
 	// pipelinedAllow 非 nil 时是允许使用 DurabilityPipelined 的 handler 名单；nil 允许全部（开发默认）。
 	// 生产部署应固定名单，避免 handler 未经评审就采用提前放锁。
 	pipelinedAllow map[string]struct{}
-	// completions 非 nil 时，NestOptionWithPipelinedAsyncCompletion 点名的 pipelined handler（handlerEntry.asyncCompletion）
-	// 启用第二阶段异步完成：派发 worker 把持久之后的工作（AfterCommit、回复）交给完成泵，不在提交票据上等待。其余
-	// pipelined handler 仍是第一阶段在 worker 内等待，只在完成链上排队（同实体 LSN 序，见 commitPipelined）。nil 时
-	// 全部 pipelined handler 都是第一阶段。
+	// completions 非 nil 时，使用异步完成的 pipelined handler（handlerEntry.asyncCompletion：被
+	// NestOptionWithPipelinedAsyncCompletion 点名，或自己在 HandlerMeta 声明 AsyncCompletion）启用第二阶段：派发 worker
+	// 把持久之后的工作（AfterCommit、回复）交给完成泵，不在提交票据上等待。其余 pipelined handler 仍是第一阶段在 worker
+	// 内等待，只在完成链上排队（同实体 LSN 序，见 commitPipelined）。nil 时全部 pipelined handler 都是第一阶段。
 	completions *completionPump
 	// asyncCompletion 是启用异步完成的 handler 名单（冷路径用：注册与包级注册表回退时解析出 handlerEntry.asyncCompletion，
-	// 派发热路径只读那个布尔）。完成泵存在当且仅当名单非空。
+	// 派发热路径只读那个布尔）。完成泵存在当且仅当名单非空或有 handler 声明了 AsyncCompletion（Start 之前确定）。
 	asyncCompletion map[HandlerName]struct{}
+	// asyncWorkers / asyncQueueCap 是完成泵的规模（NestOptionWithPipelinedAsyncCompletion，<= 0 取默认）；实例注册
+	// 第一个声明 AsyncCompletion 的 handler 时按它建泵。
+	asyncWorkers, asyncQueueCap int
 }
 
 func (mgr *NestMgr) groupLockManager() *entityLockGroupLockManager {
@@ -387,8 +393,10 @@ var (
 	// 这些回调不带请求上下文、也不持实体锁；启用前先读 NEST_PIPELINED_COMMIT.md §11。
 	//
 	// 按 handler 生效（维护者 2026-10-29 决定）：没点名的 pipelined handler 保持第一阶段，worker 在票据上等、AfterCommit
-	// 在派发 goroutine 上回复之前执行；handlers 为空等于不开异步完成（不建完成泵），没有“全部”通配。点名的 handler
-	// 不是 pipelined 时没有作用（异步完成只改 pipelined 的完成路径）。多次调用名单累加，workers 与 queueCap 取最后一次。
+	// 在派发 goroutine 上回复之前执行；没有“全部”通配。handler 也可以自己在 HandlerMeta 声明 AsyncCompletion
+	// （//roost:nest completion=async，维护者 2026-11-15 批次），不必出现在名单里；名单为空且没有 handler 声明时不建完成泵，
+	// 只传规模（handlers 为空）用来给声明了 AsyncCompletion 的 handler 定完成池大小。点名的 handler 不是 pipelined 时
+	// 没有作用（异步完成只改 pipelined 的完成路径）。多次调用名单累加，workers 与 queueCap 取最后一次。
 	//
 	// workers 与 queueCap <= 0 取默认值（4、8192）；队列满时单笔事务降级为第一阶段的 worker 内等待。
 	NestOptionWithPipelinedAsyncCompletion = func(workers, queueCap int, handlers ...string) NestOption {
@@ -435,18 +443,22 @@ func NewEngine(opts ...NestOption) *NestMgr {
 			ret.pipelinedAllow[name] = struct{}{}
 		}
 	}
+	ret.asyncWorkers, ret.asyncQueueCap = params.PipelinedAsyncWorkers, params.PipelinedAsyncQueueCap
 	if len(params.PipelinedAsyncHandlers) > 0 {
 		ret.asyncCompletion = make(map[HandlerName]struct{}, len(params.PipelinedAsyncHandlers))
 		for _, name := range params.PipelinedAsyncHandlers {
 			ret.asyncCompletion[NewHandlerName(name)] = struct{}{}
 		}
-		// 注册时解析：快照里的条目在这里定下 asyncCompletion，派发时不再按名字查名单。
-		for name, entry := range ret.handlers {
-			entry.asyncCompletion = ret.usesAsyncCompletion(name)
-			ret.handlers[name] = entry
-		}
-		ret.completions = newCompletionPump(params.PipelinedAsyncWorkers, params.PipelinedAsyncQueueCap)
-		ret.completions.fence = ret.Fence
+	}
+	// 注册时解析：快照里的条目在这里定下 asyncCompletion（名单点名或 meta 声明），派发时不再按名字查名单。
+	anyAsync := len(ret.asyncCompletion) > 0
+	for name, entry := range ret.handlers {
+		entry.asyncCompletion = ret.usesAsyncCompletion(name, entry.meta)
+		anyAsync = anyAsync || entry.asyncCompletion
+		ret.handlers[name] = entry
+	}
+	if anyAsync {
+		ret.ensureCompletionPump()
 	}
 	if ret.syncTimeout <= 0 {
 		ret.syncTimeout = NestSyncTimeout

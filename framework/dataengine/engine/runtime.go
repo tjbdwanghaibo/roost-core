@@ -47,8 +47,9 @@ type Runtime struct {
 
 // PipelinedRuntimeConfig 是 Runtime 交给 Nest 的 pipelined 提交配置：允许名单与异步完成池。
 //
-// AsyncHandlers 是使用异步完成的 handler（按 handler 生效，NestOptionWithPipelinedAsyncCompletion）；为空时不开异步完成，
-// 全部 pipelined handler 在派发 worker 上等票据（第一阶段）。wiring/dataengine 把它设为本进程声明 pipelined 的 saga 原生步骤。
+// AsyncHandlers 是按名单使用异步完成的 handler（NestOptionWithPipelinedAsyncCompletion）；wiring/dataengine 把它设为本进程
+// 声明 pipelined 的 saga 原生步骤。业务 handler 在 HandlerMeta 声明 AsyncCompletion（completion=async）即可，不进名单。
+// 名单为空且没有 handler 声明时不开异步完成，全部 pipelined handler 在派发 worker 上等票据（第一阶段）。
 type PipelinedRuntimeConfig struct {
 	Allowlist     []string
 	AsyncHandlers []string
@@ -180,9 +181,9 @@ func (runtime *Runtime) NestOptions() []corenest.NestOption {
 	if len(runtime.pipelined.Allowlist) > 0 {
 		options = append(options, corenest.NestOptionWithPipelinedAllowlist(runtime.pipelined.Allowlist...))
 	}
-	if len(runtime.pipelined.AsyncHandlers) > 0 {
-		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(runtime.pipelined.AsyncWorkers, runtime.pipelined.AsyncQueueCap, runtime.pipelined.AsyncHandlers...))
-	}
+	// 总是传：名单为空时只给完成池定规模——handler 自己声明 AsyncCompletion（completion=async）时 Nest 按它建池；
+	// 名单为空且没有 handler 声明时 Nest 不建完成池。
+	options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(runtime.pipelined.AsyncWorkers, runtime.pipelined.AsyncQueueCap, runtime.pipelined.AsyncHandlers...))
 	return options
 }
 

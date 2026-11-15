@@ -1,0 +1,16 @@
+== M1: usesAsyncCompletion ignores meta
+--- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart (20.01s)
+    --- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart/instance_registration (10.00s)
+        pipelined_completion_test.go:1539: timed out waiting for second request on the same entity enqueued while the first is not durable
+    --- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart/package_registration (10.00s)
+        pipelined_completion_test.go:1539: timed out waiting for second request on the same entity enqueued while the first is not durable
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	20.557s
+FAIL
+== M2: instance registration does not build the pump
+--- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart (10.21s)
+    --- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart/instance_registration (10.00s)
+        pipelined_completion_test.go:1539: timed out waiting for second request on the same entity enqueued while the first is not durable
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	10.741s
+FAIL

@@ -118,7 +118,7 @@ func TestCollectUsedImportsHandlesWrappedPackageTypes(t *testing.T) {
 }
 
 func TestValidateTransactionOptionsRejectsLegacyDirty(t *testing.T) {
-	if err := validateTransactionOptions("dirty", "memory"); err == nil {
+	if err := validateTransactionOptions("dirty", "memory", ""); err == nil {
 		t.Fatal("legacy rollback=dirty must be rejected")
 	}
 }

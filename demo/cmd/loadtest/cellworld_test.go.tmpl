@@ -1,0 +1,64 @@
+package main
+
+import (
+	"testing"
+	"time"
+)
+
+// 预热分散的到达控制要经得起回传位置的延迟、意图生效的抖动与拍子迟到。模拟按 10ms 积分：机器人约每 100ms（另迟到
+// 0～late）按 echo 之前的服务端位置发意图，意图在 0～jitter 之后生效（按发出顺序），服务端按“速度 × 实际时长”积分
+// （与 cellworld 的 integrate 相同）。预热 30 秒、速度 300（test-seamless-demo.sh 的 CAPACITY=1 段）；预热结束那一刻按
+// 最后回传的位置判 ±20，这里要求最后 5 秒的回传位置一直在框里，只“恰好结束那一刻在框里”不算稳。M-15（2026-11-15）
+// 负载下回传延迟到 0.6～1 秒、丢拍约一成；旧控制（速度 = 2/秒 × 位移，每拍连续调）在这个延迟下进框又出框、一直来回摆。
+func TestSpreadSteerSettlesUnderPositionEchoDelay(t *testing.T) {
+	for _, echo := range []int{100, 400, 700, 1000} {
+		for _, jitter := range []int{0, 300, 600} {
+			for _, late := range []int{0, 200} {
+				for _, start := range [][2]int64{{2500, -1800}, {-40, 35}, {300, 0}, {-4000, 2600}, {90, -95}, {0, 3000}} {
+					simulateSpread(t, echo, jitter, late, start)
+				}
+			}
+		}
+	}
+}
+
+func simulateSpread(t *testing.T, echoMS, jitterMS, lateMS int, start [2]int64) {
+	t.Helper()
+	const stepMS, warmupMS = 10, 30000
+	type intent struct {
+		at     int
+		vx, vy int64
+	}
+	base := time.Unix(0, 0)
+	// 服务端位置以千分之一单位记，与 integrate 的小数位相同。
+	x, y := start[0]*1000, start[1]*1000
+	var vx, vy int64
+	var history [][2]int64
+	var pending []intent
+	var steer spreadSteer
+	lastApply, nextTick, rnd := 0, 0, uint32(7)
+	random := func(n int) int {
+		rnd = rnd*1103515245 + 12345
+		return int(rnd>>16) % (n + 1)
+	}
+	for now := 0; now < warmupMS; now += stepMS {
+		for len(pending) > 0 && pending[0].at <= now {
+			vx, vy, pending = pending[0].vx, pending[0].vy, pending[1:]
+		}
+		x += vx * stepMS
+		y += vy * stepMS
+		history = append(history, [2]int64{x / 1000, y / 1000})
+		if now < nextTick {
+			continue
+		}
+		nextTick = (now/100+1)*100 + random(lateMS)/100*100
+		seen := history[max(0, len(history)-1-echoMS/stepMS)]
+		ix, iy, _ := steer.next(base.Add(time.Duration(now)*time.Millisecond), seen[0], seen[1], -seen[0], -seen[1], 300)
+		at := max(lastApply, now+random(jitterMS))
+		lastApply = at
+		pending = append(pending, intent{at: at, vx: ix, vy: iy})
+		if now >= warmupMS-5000 && (abs64(seen[0]) > spreadArrival || abs64(seen[1]) > spreadArrival) {
+			t.Fatalf("echo %dms jitter %dms late %dms from %v: echoed position outside the box at %.1fs of the 30s warmup: (%d,%d)", echoMS, jitterMS, lateMS, start, float64(now)/1000, seen[0], seen[1])
+		}
+	}
+}

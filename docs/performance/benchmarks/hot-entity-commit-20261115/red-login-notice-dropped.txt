@@ -1,0 +1,7 @@
+--- FAIL: TestLoginSessionActiveIsBounded (0.00s)
+    login_active_test.go:175: login.notice_dropped_total{reason=busy} grew by 0 over the bound, want 1
+--- FAIL: TestLoginSessionActiveAfterCloseCountsTheDrop (0.00s)
+    login_active_test.go:233: login.notice_dropped_total{reason=stopping} grew by 0 after Close, want 1
+FAIL
+FAIL	example.com/lp/game/login	0.276s
+FAIL

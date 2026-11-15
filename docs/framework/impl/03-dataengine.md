@@ -384,7 +384,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - [pipelined_strict_fallback_test.go](../../../framework/nestwal/pipelined_strict_fallback_test.go)：`TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined`、`TestBroadcastPipelinedIsInvisibleUntilFsync`、`TestPipelinedFastPathStillReleasesLockBeforeFsync`、`TestWALTerminalWakesEntityProjectionWaiters`
 - [terminal_test.go](../../../framework/nestwal/terminal_test.go)：`TestAckRefusesTerminalWALAndKeepsCheckpoint`、`TestInflightAckFailsAfterFailedFinalSync`、`TestInflightAckAfterCleanCloseStillSucceeds`、`TestAckFirstFsyncFailureIsIndeterminateForTickets`、`TestSyncAfterTerminalNeverFsyncsOrAdvancesDurableLSN`；其余 4 项见文件
 - [wal_benchmark_test.go](../../../framework/nestwal/wal_benchmark_test.go)
-- [wal_test.go](../../../framework/nestwal/wal_test.go)：`TestWALReplayAckAndReopen`、`TestWALReplayStartsAtAckFenceAcrossRotation`、`TestWALConcurrentAppendAndRotation`、`TestWALRecoversTornTail`、`TestWALRejectsChecksumCorruption`；其余 15 项见文件
+- [wal_test.go](../../../framework/nestwal/wal_test.go)：`TestWALReplayAckAndReopen`、`TestWALReplayStartsAtAckFenceAcrossRotation`、`TestWALConcurrentAppendAndRotation`、`TestWALRecoversTornTail`、`TestWALRejectsChecksumCorruption`、`TestAsyncAppendDoesNotWaitForAnOngoingSegmentSync` 与 `TestSyncOnlyCoversWritesFinishedBeforeItStarted`（fsync 在独立刷盘 goroutine 上，只确认开始之前写完的记录，[NEST_PIPELINED_COMMIT §12](../NEST_PIPELINED_COMMIT.md#12-热点单例实体的写吞吐2026-11-15)）；其余 16 项见文件
 
 ### redis
 

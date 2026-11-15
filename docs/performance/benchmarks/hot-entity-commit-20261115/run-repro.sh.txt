@@ -1,0 +1,30 @@
+#!/bin/bash
+# lb-fix2 条件复现：chat 去掉进程内写锁（临时补丁，跑完还原）+ 每次登录同步公告；采 Redis。
+set -u
+SP=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad
+name=$1
+W=/Users/whb/roost/worktrees/v149-limits
+cp $W/service/chat/store.go $SP/store.go.keep
+python3 - <<'PY'
+p='/Users/whb/roost/worktrees/v149-limits/service/chat/store.go'
+s=open(p).read()
+old='''	unlock, err := s.writers.lock(ctx, ref.key)
+	if err != nil {
+		return Message{}, err
+	}
+	defer unlock()
+	_, applied, err := s.state.Update('''
+assert old in s
+s=s.replace(old,'''	_, applied, err := s.state.Update(''',1)
+open(p,'w').write(s)
+PY
+rm -f $SP/perf/$name.stop
+( until [ -e /private/tmp/v147-formal-mirror-20261114/roost-dataengine-it/env.sh ] && [ -d $SP/perf/$name/robot ]; do sleep 1; [ -e $SP/perf/$name.stop ] && exit; done
+  source /private/tmp/v147-formal-mirror-20261114/roost-dataengine-it/env.sh
+  python3 $SP/redis-sampler.py "${ROOST_DATAENGINE_IT_REDIS_ADDR%%:*}" "${ROOST_DATAENGINE_IT_REDIS_ADDR##*:}" $SP/perf/$name.redis.tsv $SP/perf/$name.stop ) &
+sampler=$!
+$SP/run-s11.sh $name ROOST_SEAMLESS_PROJECT_HOOK="python3 $SP/hook-announce.py"
+touch $SP/perf/$name.stop
+wait $sampler
+cp $SP/store.go.keep $W/service/chat/store.go
+cd $W && git diff --quiet service/chat/store.go && echo "store.go restored"

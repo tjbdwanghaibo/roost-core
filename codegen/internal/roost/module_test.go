@@ -1494,7 +1494,7 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 		}
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
-	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 36 {
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 37 {
 		t.Fatalf("verify: %v\n%+v", err, report)
 	}
 	// 再装一次没有变化：这两个文件现在是模块自己的。

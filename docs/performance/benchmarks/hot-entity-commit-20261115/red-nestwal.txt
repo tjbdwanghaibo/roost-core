@@ -1,0 +1,7 @@
+--- FAIL: TestAsyncAppendDoesNotWaitForAnOngoingSegmentSync (2.02s)
+    wal_test.go:142: async append waited for an ongoing segment sync; want it written and answered while the fsync runs
+--- FAIL: TestSyncOnlyCoversWritesFinishedBeforeItStarted (5.02s)
+    wal_test.go:205: records 2 and 3 not written while fsync #1 runs: appended=1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nestwal	7.577s
+FAIL
