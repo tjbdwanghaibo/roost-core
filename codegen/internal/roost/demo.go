@@ -747,7 +747,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "loadtest/playertcp/conn.go", why: "the robot transport that speaks the generated server's frame"},
 		{write: "loadtest/scenarios/cellworld.yaml", why: "CellWorld robots over real account, TCP, PB and EntitySync"},
 		{write: "cmd/loadtest/cellworld.go", why: "bounded CellWorld movement load and request/sync measurements"},
-		{write: "cmd/loadtest/cellworld_test.go", why: "the warmup walk settles on its spread target under delayed position echoes and jittery intents: it moves a leg, stops and waits for the echo to settle instead of steering continuously on stale positions"},
+		{write: "cmd/loadtest/cellworld_test.go", why: "the warmup walk settles on its spread target under delayed position echoes, jittery intents and late ticks: it walks a wall-clock-timed leg, stops and waits for the echo to settle instead of steering continuously on stale positions"},
 		{write: "loadtest/scenarios/demo.yaml", why: "one robot's life, as a scenario tree"},
 		{write: "cmd/loadtest/main.go", why: "robots + thresholds: the load test that is also the regression test"},
 		{write: "cmd/loadtest/turn.go", why: "module matchmaking opens a trusted room; two robots play and replay all turns, reconnect with a new epoch and verify the terminal receipt"},

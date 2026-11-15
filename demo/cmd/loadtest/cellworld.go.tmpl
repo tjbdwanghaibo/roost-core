@@ -214,7 +214,7 @@ func spreadCellworld(ctx context.Context, rb *robot.Context, w *sceneWatcher) er
 			dx, dy := x-px, y-py
 			now := arrived
 			var vx, vy int64
-			vx, vy, arrived = steer.next(px, py, dx, dy, cellworldLoad.speed)
+			vx, vy, arrived = steer.next(time.Now(), px, py, dx, dy, cellworldLoad.speed)
 			trace.observe(px, py, dx, dy, arrived, now, lastFrame)
 			trace.vx, trace.vy = vx, vy
 			if err := rb.Do(ctx, "cellworld_intent", map[string]any{"vx": vx, "vy": vy}); err != nil {
@@ -227,63 +227,79 @@ func spreadCellworld(ctx context.Context, rb *robot.Context, w *sceneWatcher) er
 // spreadArrival 是“到了”的判定：目标两个方向各 ±20 之内（预热结束那一刻按最后回传的位置判）。
 const spreadArrival = 20
 
-// spreadSteer 是预热分散的到达控制，每 100ms 按回传位置调用一次 next，返回这一拍的移动意图。
+// spreadSteer 是预热分散的到达控制，约每 100ms 按回传位置调用一次 next，返回这一拍的移动意图。
 //
-// 回传位置有延迟（同步帧间隔、Base 转发，负载下 0.6 秒以上），意图生效也有抖动（rb.Do 往返）。按旧位置每拍连续调速度
-// （旧做法：速度 = 2/秒 × 位移）在这个延迟下会在目标附近来回摆，预热结束那一刻常常正好在框外（M-15 2026-11-15：未到达的
-// 机器人全部进过框又出去）。这里改成“走一段 → 停下 → 等回传位置停稳 → 再按停稳的位置走下一段”：
-//   - 一段按当时回传的位移规划，速度至多 speed，并且至少走 spreadMinMoveTicks 拍（近处放慢）：服务端按意图到达的
-//     实际时间积分，一段的位移误差约等于“速度 × 意图生效的抖动”，放慢近处的速度让误差小于剩余距离，逐段收敛；
-//   - 停下以后要看到回传位置连续 spreadSettleTicks 拍不变、并且落在这一段预期终点附近才算停稳（附近 = 这一段位移的
-//     一半，至多 spreadSettleSlack）：负载下同步帧可能停更几秒，出发前或半路的旧位置不能当成终点。等了 spreadSettleTimeout 拍还对不上（被地形 / 世界边缘
-//     挡住、抖动过大）就按当前回传位置重新规划。
+// 回传位置有延迟（同步帧间隔、Base 转发，负载下 0.6 秒以上），意图生效与拍子本身也有抖动（rb.Do 往返；ticker 在
+// 接收方慢时丢拍）。按旧位置每拍连续调速度（旧做法：速度 = 2/秒 × 位移）在这个延迟下会在目标附近来回摆，预热结束
+// 那一刻常常正好在框外（M-15 2026-11-15：未到达的机器人全部进过框又出去）。这里改成“走一段 → 停下 → 等回传位置
+// 停稳 → 再按停稳的位置走下一段”：
+//   - 一段按当时回传的位移规划，速度至多 speed，并且至少走 spreadMinMove（近处放慢）。一段按墙钟计时（不按拍数：
+//     负载下会丢拍），停下时按“速度 × 实际走的时长”记下这一段的预期终点。服务端按意图到达的实际时间积分，一段的
+//     位移误差约等于“速度 × 意图生效的抖动”，近处放慢让误差小于剩余距离，逐段收敛；
+//   - 停下以后，回传位置连续 spreadSettleTicks 拍不变、并且落在预期终点附近（这一段位移的一半，至多
+//     spreadSettleSlack）就算停稳；不在附近时要求它已经离开出发点、并且不变满 spreadSettleFar（同步帧可能停更，
+//     出发前或半路的旧位置不能当成终点）；再不然等满 spreadSettleTimeout（被地形 / 世界边缘挡住）就按当前位置重来。
 //
 // 判定框（±20）与预热时长都不变，这里只改“怎么走过去”。
 const (
-	spreadMinMoveTicks  = 10
+	spreadMinMove       = time.Second
 	spreadSettleTicks   = 3
+	spreadSettleFar     = 10
 	spreadSettleSlack   = 40
 	spreadSettleTimeout = 50
 )
 
 type spreadSteer struct {
+	moving       bool
 	planned      bool
-	moving       int   // 这一段还要保持速度的拍数
-	vx, vy       int64 // 这一段的速度
-	expX, expY   int64 // 这一段的预期终点
-	slack        int64 // 回传位置离预期终点多近算“到了这一段的终点”
-	waited       int   // 这一段走完后已等的拍数
+	legStart     time.Time
+	legFor       time.Duration // 这一段计划走的时长
+	vx, vy       int64         // 这一段的速度
+	fromX, fromY int64         // 规划这一段时的回传位置
+	expX, expY   int64         // 这一段的预期终点（停下时按实际时长算）
+	slack        int64         // 回传位置离预期终点多近算“到了这一段的终点”
+	waited       int           // 这一段走完后已等的拍数
 	lastX, lastY int64
 	still        int // 回传位置连续不变的拍数
 }
 
-func (s *spreadSteer) next(px, py, dx, dy, speed int64) (vx, vy int64, arrived bool) {
+func (s *spreadSteer) next(now time.Time, px, py, dx, dy, speed int64) (vx, vy int64, arrived bool) {
 	if px == s.lastX && py == s.lastY {
 		s.still++
 	} else {
 		s.lastX, s.lastY, s.still = px, py, 0
 	}
 	arrived = abs64(dx) <= spreadArrival && abs64(dy) <= spreadArrival
-	if s.moving > 0 {
-		s.moving--
-		return s.vx, s.vy, arrived
+	if s.moving {
+		// 离计划时长不到半拍就停：停的那条意图最早下一拍才发得出去。
+		walked := now.Sub(s.legStart)
+		if walked+50*time.Millisecond < s.legFor {
+			return s.vx, s.vy, arrived
+		}
+		ms := walked.Milliseconds()
+		s.moving, s.waited = false, 0
+		s.expX, s.expY = s.fromX+s.vx*ms/1000, s.fromY+s.vy*ms/1000
+		s.slack = min(spreadSettleSlack, max(abs64(s.expX-s.fromX), abs64(s.expY-s.fromY))/2)
+		return 0, 0, arrived
 	}
 	if s.planned {
 		s.waited++
 		near := abs64(px-s.expX) <= s.slack && abs64(py-s.expY) <= s.slack
-		if s.still < spreadSettleTicks || !near && s.waited < spreadSettleTimeout {
+		left := px != s.fromX || py != s.fromY
+		settled := s.still >= spreadSettleTicks && near || s.still >= spreadSettleFar && left || s.waited >= spreadSettleTimeout
+		if !settled {
 			return 0, 0, arrived
 		}
 	}
 	if arrived {
 		return 0, 0, true
 	}
-	// 规划下一段：拍数 = 以 speed 走完较长一轴所需的拍数，至少 spreadMinMoveTicks；速度取整到“每拍整数位移”。
-	ticks := max(spreadMinMoveTicks, (max(abs64(dx), abs64(dy))*10+speed-1)/speed)
-	s.vx, s.vy = dx/ticks*10, dy/ticks*10
-	s.planned, s.moving, s.waited = true, int(ticks)-1, 0
-	s.expX, s.expY = px+s.vx*ticks/10, py+s.vy*ticks/10
-	s.slack = min(spreadSettleSlack, max(abs64(s.vx), abs64(s.vy))*ticks/20)
+	// 规划下一段：时长 = 以 speed 走完较长一轴所需的时间，至少 spreadMinMove。
+	legFor := max(spreadMinMove, time.Duration(max(abs64(dx), abs64(dy))*int64(time.Second)/speed))
+	ms := legFor.Milliseconds()
+	s.vx, s.vy = dx*1000/ms, dy*1000/ms
+	s.planned, s.moving, s.legStart, s.legFor = true, true, now, legFor
+	s.fromX, s.fromY = px, py
 	return s.vx, s.vy, false
 }
 
