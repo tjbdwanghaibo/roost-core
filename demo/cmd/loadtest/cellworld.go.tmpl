@@ -165,7 +165,8 @@ func walkCellworld(ctx context.Context, rb *robot.Context, _ any) error {
 }
 
 // 只通过正式移动 PB 与回传位置分散玩家，不修改服务端状态或绕过 Nest。
-// 预热不计入测量窗口；期限结束时仍未到达会明确失败。
+// 预热不计入测量窗口；期限结束时仍未到达会明确失败。失败信息带上走法的诊断（spreadTrace），用来区分“没看见
+// 自己”“走得慢 / 卡住”“到过目标附近又离开（来回摆）”“回传的位置停了”几种情况；判定本身不变。
 func spreadCellworld(ctx context.Context, rb *robot.Context, w *sceneWatcher) error {
 	if cellworldLoad.warmup == 0 {
 		return nil
@@ -178,16 +179,18 @@ func spreadCellworld(ctx context.Context, rb *robot.Context, w *sceneWatcher) er
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	arrived := false
+	trace := spreadTrace{started: time.Now(), minDist: -1}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-end.C:
 			if !arrived {
-				return fmt.Errorf("cellworld: player %d did not reach spread target (%d,%d)", rb.PlayerID, x, y)
+				return fmt.Errorf("cellworld: player %d did not reach spread target (%d,%d): %s", rb.PlayerID, x, y, trace.String(x, y))
 			}
 			return nil
 		case <-tick.C:
+			trace.ticks++
 			w.mu.Lock()
 			var px, py int64
 			found := false
@@ -199,7 +202,7 @@ func spreadCellworld(ctx context.Context, rb *robot.Context, w *sceneWatcher) er
 					}
 				}
 			}
-			failure := w.failure
+			failure, lastFrame := w.failure, w.lastFrame
 			w.mu.Unlock()
 			if failure != nil {
 				return failure
@@ -208,16 +211,74 @@ func spreadCellworld(ctx context.Context, rb *robot.Context, w *sceneWatcher) er
 				continue
 			}
 			dx, dy := x-px, y-py
+			now := arrived
 			arrived = dx >= -20 && dx <= 20 && dy >= -20 && dy <= 20
+			trace.observe(px, py, dx, dy, arrived, now, lastFrame)
 			vx, vy := min(cellworldLoad.speed, max(-cellworldLoad.speed, dx*2)), min(cellworldLoad.speed, max(-cellworldLoad.speed, dy*2))
 			if arrived {
 				vx, vy = 0, 0
 			}
+			trace.vx, trace.vy = vx, vy
 			if err := rb.Do(ctx, "cellworld_intent", map[string]any{"vx": vx, "vy": vy}); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// spreadTrace 记一个机器人预热期的走法，只用于失败信息。
+type spreadTrace struct {
+	started        time.Time
+	ticks, seen    int
+	firstSeen      time.Duration
+	px, py         int64
+	startX, startY int64
+	minDist        int64 // 预热期离目标最近的切比雪夫距离；-1 = 没看见过自己
+	minDistAt      time.Duration
+	entered, left  int // 进入 / 离开目标 ±20 的次数
+	moved          time.Time
+	lastFrame      time.Time
+	vx, vy         int64
+}
+
+func (t *spreadTrace) observe(px, py, dx, dy int64, arrived, wasArrived bool, lastFrame time.Time) {
+	now := time.Now()
+	if t.seen == 0 {
+		t.firstSeen = now.Sub(t.started)
+		t.startX, t.startY = px, py
+		t.moved = now
+	} else if px != t.px || py != t.py {
+		t.moved = now
+	}
+	t.seen++
+	t.px, t.py, t.lastFrame = px, py, lastFrame
+	dist := max(abs64(dx), abs64(dy))
+	if t.minDist < 0 || dist < t.minDist {
+		t.minDist, t.minDistAt = dist, now.Sub(t.started)
+	}
+	switch {
+	case arrived && !wasArrived:
+		t.entered++
+	case !arrived && wasArrived:
+		t.left++
+	}
+}
+
+func (t *spreadTrace) String(x, y int64) string {
+	if t.seen == 0 {
+		return fmt.Sprintf("never saw its own position in %d ticks", t.ticks)
+	}
+	now := time.Now()
+	return fmt.Sprintf("seen %d/%d ticks (first after %s) from (%d,%d), last at (%d,%d) dist %d, closest %d at %s, entered/left the box %d/%d, position unchanged for %s, last frame %s ago, last intent (%d,%d)",
+		t.seen, t.ticks, t.firstSeen.Round(time.Millisecond), t.startX, t.startY, t.px, t.py, max(abs64(x-t.px), abs64(y-t.py)),
+		t.minDist, t.minDistAt.Round(time.Millisecond), t.entered, t.left, now.Sub(t.moved).Round(time.Millisecond), now.Sub(t.lastFrame).Round(time.Millisecond), t.vx, t.vy)
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // 延迟样本有界，超过十万条保留最近窗口；报告明确这个窗口，不声称整个长稳的精确分位数。
