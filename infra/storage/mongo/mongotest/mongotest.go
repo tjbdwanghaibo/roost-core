@@ -1659,6 +1659,25 @@ func matchField(doc bson.M, field string, spec any) (bool, error) {
 			if !found {
 				return false, nil
 			}
+		case "$mod":
+			// {$mod: [divisor, remainder]}：只支持整数字段与整数操作数（Remote 按 owner 枚举用它按 _id 低位过滤 kind）；
+			// 余数与 Go 的 % 一样随被除数取符号，与服务端相同。
+			if !present || value == nil {
+				return false, nil
+			}
+			args, err := valueList(operand)
+			if err != nil || len(args) != 2 {
+				return false, fmt.Errorf("%w: $mod operand %v", ErrUnsupported, operand)
+			}
+			divisor, okDivisor := asInt64(args[0])
+			remainder, okRemainder := asInt64(args[1])
+			field, okField := asInt64(value)
+			if !okDivisor || !okRemainder || !okField || divisor == 0 {
+				return false, fmt.Errorf("%w: $mod on %T by %v", ErrUnsupported, value, operand)
+			}
+			if field%divisor != remainder {
+				return false, nil
+			}
 		default:
 			return false, fmt.Errorf("%w: query operator %s", ErrUnsupported, operator)
 		}

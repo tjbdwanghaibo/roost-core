@@ -636,6 +636,51 @@ func TestInAcceptsNamedSlices(t *testing.T) {
 	}
 }
 
+// $mod 按整数字段取余匹配（Remote 按 owner 枚举用它按 _id 低位过滤 kind），余数随被除数取符号，与服务端相同；
+// 缺字段不匹配，非整数操作数报 ErrUnsupported。
+func TestModMatchesIntegerRemainders(t *testing.T) {
+	ctx := context.Background()
+	c := NewClient().Collection("mod", "records")
+	for _, id := range []int64{1024 + 5, 2048 + 5, 2048 + 6, -5} {
+		if err := c.Seed(bson.M{"_id": id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Seed(bson.M{"_id": int64(9), "n": int32(7)}); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		filter bson.M
+		want   []int64
+	}{
+		"id_remainder":      {bson.M{"_id": bson.M{"$mod": bson.A{int64(1024), int64(5)}}}, []int64{1029, 2053}},
+		"negative_dividend": {bson.M{"_id": bson.M{"$mod": bson.A{int64(1024), int64(-5)}}}, []int64{-5}},
+		"or_of_remainders":  {bson.M{"$or": bson.A{bson.M{"_id": bson.M{"$mod": bson.A{int64(1024), int64(6)}}}, bson.M{"n": bson.M{"$mod": bson.A{3, 1}}}}}, []int64{9, 2054}},
+	} {
+		var rows []bson.M
+		if err := c.Find(ctx, tc.filter, &rows); err != nil {
+			t.Fatalf("%s: Find: %v", name, err)
+		}
+		got := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			got = append(got, row["_id"].(int64))
+		}
+		sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: matched %v, want %v", name, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: matched %v, want %v", name, got, tc.want)
+			}
+		}
+	}
+	var rows []bson.M
+	if err := c.Find(ctx, bson.M{"_id": bson.M{"$mod": bson.A{"x", 1}}}, &rows); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("non-integer $mod operand: err=%v, want ErrUnsupported", err)
+	}
+}
+
 // 页边界、排序后分页与 int64 大值在 Find / Stream 两入口一致。历史：RR-20261004-NC-20。
 
 func TestPaginationBoundaryPromises(t *testing.T) {

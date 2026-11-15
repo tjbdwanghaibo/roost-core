@@ -31,6 +31,10 @@ type WriteAuthority interface {
 type AuthorityState struct {
 	Version   int64
 	Ownership entity.RemoteEntityMarkerLease
+	// Claimed 只由 ClaimAuthorityState 填：这次调用确实插入了第一代记录（不是读回已有记录）。写准入据此判断事务没提交时
+	// 是不是留下了一条空认领（remote_entity.empty_claim_total{event="left"}）；插入结果未知、读回才知道是自己的记录时为
+	// false，计数偏少，不影响所有权。
+	Claimed bool
 }
 
 // WriteGrant 是一次共享模式的持久写许可：权威版本、新分配的 fence 与当时的所有权。
@@ -131,7 +135,9 @@ func (s *MongoCommitter) ClaimAuthorityState(ctx context.Context, id int64, owne
 		return AuthorityState{}, entity.ErrRemoteFenced
 	}
 	d := mongoAuthority{ID: id, Enabled: true, Owner: owner, Marker: 1, Route: 1}
+	inserted := true
 	if _, err := s.controlDB().Collection(remoteMetaCollection).InsertOne(ctx, d); err != nil {
+		inserted = false
 		if d, err = s.readAuthority(ctx, id); err != nil {
 			return AuthorityState{}, err
 		}
@@ -139,7 +145,7 @@ func (s *MongoCommitter) ClaimAuthorityState(ctx context.Context, id int64, owne
 	if d.Owner != owner {
 		return AuthorityState{}, entity.ErrRemoteFenced
 	}
-	return AuthorityState{Version: d.Version, Ownership: d.lease()}, nil
+	return AuthorityState{Version: d.Version, Ownership: d.lease(), Claimed: inserted}, nil
 }
 
 func authorityFilter(id int64, lease entity.RemoteEntityMarkerLease) bson.M {
@@ -221,10 +227,63 @@ type OwnedEntityLister interface {
 
 var _ OwnedEntityLister = (*MongoCommitter)(nil)
 
+// EmptyClaimStore 是“删空认领”（D17）的存储能力：按 owner 枚举空认领的候选、带所有权代际守护地删除一条空认领。
+// 空认领是“所有权记录在、这条记录下从没有提交落进权威”的实体（首写认领之后事务被拒绝回滚、读请求冷加载不到、或提交
+// 之前崩溃留下的），契约见 Manager.DeleteEmptyClaim。MongoCommitter 实现它。
+type EmptyClaimStore interface {
+	// ListEmptyClaims 与 OwnedEntityLister 同样分页，只列权威记录看起来是空认领的（候选：没有提交落进权威）。
+	ListEmptyClaims(ctx context.Context, owner int32, kinds []entity.EntityKind, after int64, limit int) (ids []int64, next int64, err error)
+	// DeleteEmptyClaimExpected 只在记录仍是 expected 这一代、仍是空认领时删除；deleted=false 且 err=nil 表示条件已不成立。
+	DeleteEmptyClaimExpected(ctx context.Context, id int64, expected entity.RemoteEntityMarkerLease) (deleted bool, err error)
+}
+
 // ListOwnedRemoteEntities 经 {_owner_sid: 1} 索引按 owner 查 _remote_entity_meta。kind 在 ID 的低位（category 2 位 +
 // kind 8 位，entity/idgen.go），用 _id 对 1024 取模过滤（每个 kind 四个 category 余数），不改元数据文档格式；
 // 返回前再按 ResolveEntityID 核对一次。
 func (s *MongoCommitter) ListOwnedRemoteEntities(ctx context.Context, owner int32, kinds []entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
+	return s.listOwned(ctx, owner, kinds, after, limit, nil)
+}
+
+var _ EmptyClaimStore = (*MongoCommitter)(nil)
+
+// ListEmptyClaims 与 ListOwnedRemoteEntities 同一个查询（同一个索引），另加空认领的条件 emptyClaimFilter：从未提交过
+// （_ver 为 0）、不是墓碑。
+func (s *MongoCommitter) ListEmptyClaims(ctx context.Context, owner int32, kinds []entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
+	return s.listOwned(ctx, owner, kinds, after, limit, emptyClaimFilter())
+}
+
+// emptyClaimFilter 是“这条所有权记录下从没有提交落进权威”的条件：每笔提交都在同一个 Mongo 事务里把 _ver 推进到
+// NextVersion（≥ 1，remoteMetadataUpdate），删档同样推进版本并置 _deleted；认领插入的第一代记录是 _ver 0、没有 _deleted。
+func emptyClaimFilter() bson.M {
+	return bson.M{"_ver": int64(0), "_deleted": bson.M{"$ne": true}}
+}
+
+// DeleteEmptyClaimExpected 是“删空认领”（D17）的比较删除：只有记录仍是 expected 这一代（owner、非共享、_owner_epoch、
+// _owner_route 都相同，authorityFilter）而且仍满足 emptyClaimFilter 时才删，一条 DeleteOne，不先读后删。
+//
+// 返回 deleted=false、err=nil 表示条件不再成立（这一代之后有提交落进来、所有权变了、记录已经不在），什么也没删；
+// err 非 nil 表示结果未知，调用方必须重读权威再下结论。比较条件带 owner：同一代际值（1/1）可能属于记录删掉后别的 sid
+// 重新认领的新记录，只比代际会误删它。
+func (s *MongoCommitter) DeleteEmptyClaimExpected(ctx context.Context, id int64, expected entity.RemoteEntityMarkerLease) (bool, error) {
+	if s == nil || s.mongo == nil || s.database == "" {
+		return false, entity.ErrRemoteWriteCapabilityDisabled
+	}
+	if id == 0 || !validOwnershipLease(expected) || expected.Shared {
+		return false, fmt.Errorf("%w: delete empty claim %d with lease %+v", entity.ErrRemoteRejected, id, expected)
+	}
+	filter := authorityFilter(id, expected)
+	for key, value := range emptyClaimFilter() {
+		filter[key] = value
+	}
+	deleted, err := s.controlDB().Collection(remoteMetaCollection).DeleteOne(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	return deleted == 1, nil
+}
+
+// listOwned 是按 owner 枚举的共同查询；extra 是附加条件（空认领），nil 表示不加。
+func (s *MongoCommitter) listOwned(ctx context.Context, owner int32, kinds []entity.EntityKind, after int64, limit int, extra bson.M) ([]int64, int64, error) {
 	if s == nil || s.mongo == nil || s.database == "" {
 		return nil, 0, entity.ErrRemoteWriteCapabilityDisabled
 	}
@@ -247,6 +306,9 @@ func (s *MongoCommitter) ListOwnedRemoteEntities(ctx context.Context, owner int3
 		"_authority":    true,
 		"_id":           bson.M{"$gt": after},
 		"$or":           remainders,
+	}
+	for key, value := range extra {
+		filter[key] = value
 	}
 	var docs []mongoAuthority
 	if err := s.controlDB().Collection(remoteMetaCollection).Find(ctx, filter, &docs, fmongo.FindOption{Sort: bson.D{{Key: "_id", Value: 1}}, Limit: int64(limit)}); err != nil {

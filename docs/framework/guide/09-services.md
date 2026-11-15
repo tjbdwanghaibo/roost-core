@@ -94,6 +94,7 @@ RPC 生成物分传输半与装配半：接口包持有 wire/handler/BusClient�
 
 - 登记的 kind 经 `wiring/remoteentity.WithRouteKinds(kinds...)` 交给本服务的 `RemoteEntityMod`（生成器由实体注解 `service=` 推出，不是 YAML 键）。
 - 起服预加载是实体类型的显式策略：`WithPreloadKinds(kinds...)` 加 `NewRemotePreloadMod()`；路由 RPC 的 owner Mod 把 `mods.ModRemoteEntityPreload` 写进 `OptionalDependsOn`，预加载完成前不注册 handler。
+- 空认领的清理：被拒绝的创建（建盟被拒）留下的空认领不会自动消失，用运维命令 `remote_entity.empty_claims`（不写 `delete` 先列候选，`delete=true` 删）在持有它的实例上清理，指标 `remote_entity.empty_claim_total{event="left"}` 看是否在累积；只删从没有提交过、仍是判定时那一代的所有权记录（[REMOTE_ENTITY“删空认领”](../REMOTE_ENTITY.md#路由登记)）。
 - 缩容：先让要下线的实例退出创建类方法的队列组（`(*bus.Bus).LeaveRPCQueue(method)`，经 `bus.RPCQueueLeaver` 断言取得；实例主题照常接路由 RPC），再把它持有的实体用 `TransferRemoteOwnership` 转走（按 owner 枚举用 `Manager.ListOwnedRemoteEntities`，分页、代价与本实例持有数成正比），确认持有数为 0 后停。只支持轻量 RPC；JetStream RPC 的服务级 consumer 是全部实例共享的 durable，返回 `bus.ErrRPCQueueLeaveUnsupported`。退出后不能重新加入，要重新加入就重启实例。
 
 **四类答复**：`servicerpc.Classify(err)` 给出 `OutcomeOK`、`OutcomeRejected`（业务错误码与“实体不存在”，不重试）、`OutcomeRetryable`（确定没执行：no responders、`CodeRetryable`、`CodeRedirect`，原 RequestID 重试）、`OutcomeUnknown`（超时、取消、`CodeInternal`、传输或解码错误等一切拿不准的，原 RequestID 查结果或重发）。

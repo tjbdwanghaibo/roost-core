@@ -307,6 +307,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		err = m.reconcileRemoteEntries(item.entries, status.Receipts)
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
+			noteEmptyClaimsLeft(item.entries, true)
 			m.releaseRemoteWriteSlot()
 			m.deliverRemoteOutcome(m.localContext(state.finalizeCtx), item.txID, item.onOutcome, true)
 			state.traceFinalize(item.txID, "released")
@@ -317,6 +318,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		err = m.settleRejectedRemoteEntries(state.finalizeCtx, item.entries)
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
+			noteEmptyClaimsLeft(item.entries, false)
 			m.releaseRemoteWriteSlot()
 			item.settled = true
 			m.finishRejectedRemoteClose(state, item)

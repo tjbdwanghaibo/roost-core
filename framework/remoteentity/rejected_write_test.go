@@ -352,6 +352,9 @@ type authorityLoader struct {
 	loads   atomic.Int32
 	// prepare 在实例登记进 EntityManager 之前调用（生成工厂在发布前启用同步，RR-20260926-59 回归用它）。
 	prepare func(*reloadableFullDocEntity)
+	// absentIsNotFound 为 true 时像 DataEngine 聚合仓库那样答“权威里没有”：没有 DAO 文档、权威也没有提交（没有记录或
+	// _ver 为 0）时返回满足 entity.ErrAuthorityEntityNotFound 的错误，而不是构造一个空实例。
+	absentIsNotFound bool
 }
 
 func (l *authorityLoader) LoadEntity(ctx context.Context, fullID int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
@@ -369,6 +372,9 @@ func (l *authorityLoader) LoadEntity(ctx context.Context, fullID int64, _ entity
 		}
 	}
 	authority, err := l.store.readAuthority(ctx, fullID)
+	if _, hasDoc := newCollectionLookup(l.store, fullDocCollection, fullID); l.absentIsNotFound && !hasDoc && (errors.Is(err, fmongo.ErrNotFound) || (err == nil && authority.Version == 0)) {
+		return nil, fmt.Errorf("test repository: aggregate %d not found: %w", fullID, entity.ErrAuthorityEntityNotFound)
+	}
 	switch {
 	case err == nil:
 		if err := e.SetEntityVersion(authority.Version); err != nil {
