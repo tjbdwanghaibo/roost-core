@@ -23,7 +23,7 @@ next:
 verify:
   packages: [./game/login, ./internal/access/player/tcp, ./services/account, ./cmd/accountctl, ./game/managers]
   run: ^TestLogin
-  pass: 34
+  pass: 35
 with:
   enter:
     summary: 进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player；用进服票据握手的会话先新建再进入（EnterGame 不代建，没建成答 enter_need_create）；会话激活之后把“能不能进、要不要先新建”推给客户端（EnterStatus），本服不该服务的会话推完断开

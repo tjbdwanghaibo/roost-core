@@ -10,6 +10,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // 这个文件是“会话激活后的告知”：握手成功、会话已经能收推送之后，让别的功能对这条会话说一句话。
@@ -85,6 +86,9 @@ const (
 	MaxPendingNotices = 256
 	// NoticeTimeout 是一条会话的全部告知加起来的期限。
 	NoticeTimeout = 5 * time.Second
+	// NoticeDroppedMetric 计没有告知的会话（Counter，标签 reason：busy = 在途已满 MaxPendingNotices，stopping = Notifier
+	// 已停）。丢弃只记 Debug 日志，INFO 下靠它看登录潮里丢了多少（Prometheus 名 login_notice_dropped_total）。
+	NoticeDroppedMetric = "login.notice_dropped_total"
 )
 
 // Notifier 把“会话激活了”交给登记的告知，在后台执行它们。它的生命周期归 manager（D22）：game/managers 里的
@@ -149,7 +153,8 @@ func AnnounceActive(registry *app.Registry, principal gateway.Principal) {
 }
 
 // SessionActive 把一条刚激活的会话交给登记的告知：principal 是这条会话认证出来的身份，带着 claims。它立即返回：
-// 告知在后台执行，同时至多 MaxPendingNotices 条会话，超过的丢弃；Close 之后到达的也丢弃。
+// 告知在后台执行，同时至多 MaxPendingNotices 条会话，超过的丢弃；Close 之后到达的也丢弃。丢弃都计入
+// NoticeDroppedMetric（按原因），日志只记 Debug。
 func (notifier *Notifier) SessionActive(registry *app.Registry, principal gateway.Principal) {
 	if notifier == nil {
 		return
@@ -161,6 +166,7 @@ func (notifier *Notifier) SessionActive(registry *app.Registry, principal gatewa
 	select {
 	case notifier.slots <- struct{}{}:
 	default:
+		metrics.IncCounter(NoticeDroppedMetric, metrics.Labels{"reason": "busy"}, 1)
 		slog.Debug("login: session not announced; too many notices are pending", "player_id", principal.PlayerID)
 		return
 	}
@@ -168,6 +174,7 @@ func (notifier *Notifier) SessionActive(registry *app.Registry, principal gatewa
 	if notifier.closed {
 		notifier.mu.Unlock()
 		<-notifier.slots
+		metrics.IncCounter(NoticeDroppedMetric, metrics.Labels{"reason": "stopping"}, 1)
 		slog.Debug("login: session not announced; the notifier is stopping", "player_id", principal.PlayerID)
 		return
 	}
