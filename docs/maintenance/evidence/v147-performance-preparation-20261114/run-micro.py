@@ -63,7 +63,7 @@ elif segment=='b2-footprints':
  run('b2-business',['bash','scripts/test-alliance-e2e.sh'],{'ALLIANCE_E2E_PERF':'1','ALLIANCE_E2E_MEMBERS':'500','ALLIANCE_E2E_MIRROR_COPIES':'16','ALLIANCE_E2E_RUN':'^TestAllianceE2ELargeAllianceFootprint$','ALLIANCE_E2E_LOGS':str(out/'business')})
  run('b2-synthetic',['bash','scripts/test-alliance-e2e.sh'],{'ALLIANCE_E2E_PERF':'1','ALLIANCE_E2E_SHAPE_COUNTS':'1000,5000,10000','ALLIANCE_E2E_MIRROR_COPIES':'16','ALLIANCE_E2E_RUN':'^TestAllianceE2ESyntheticRosterFootprint$','ALLIANCE_E2E_LOGS':str(out/'synthetic')})
 elif segment=='s11-cellworld-robot':
- run('m15-cellworld',['bash','scripts/test-seamless-demo.sh'],{'ROOST_SEAMLESS_OUT':str(out/'robot'),'ROOST_SEAMLESS_ROBOT_ONLY':'1','ROOST_SEAMLESS_CAPACITY':'1','ROOST_SEAMLESS_ROBOTS':'1000','ROOST_SEAMLESS_ROBOT_SECONDS':'60','ROOST_SEAMLESS_ROBOT_ACTIVE':'5'})
+ run('m15-cellworld',['bash','scripts/test-seamless-demo.sh'],{'ROOST_SEAMLESS_OUT':str(out/'robot'),'ROOST_SEAMLESS_ROBOT_ONLY':'1','ROOST_SEAMLESS_CAPACITY':'1','ROOST_SEAMLESS_ROBOTS':'1000','ROOST_SEAMLESS_ROBOT_SECONDS':'60','ROOST_SEAMLESS_ROBOT_ACTIVE':'5','ROOST_SEAMLESS_SPAWN_SPREAD':os.environ.get('ROOST_SEAMLESS_SPAWN_SPREAD','1400')})
 elif segment=='s12-gate-pacing':
  for n in range(1,6):
   run(f'e3-gate-{n}',['bash','scripts/perf/gate-mixed.sh'],{'ROOST_PERF_CPU':'0','ROOST_PERF_LABEL':f'v147-e3-{n}','ROOST_GATE_LOAD_RATE':'100','ROOST_GATE_LOAD_SECONDS':'30'})

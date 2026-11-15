@@ -27,6 +27,9 @@
 # ROOST_SEAMLESS_ROBOT_SECONDS=900, ROOST_SEAMLESS_ROBOT_ACTIVE=5.
 # ROOST_SEAMLESS_ROBOT_ONLY=1 skips the fault drill; useful for isolated capacity measurements.
 # ROOST_SEAMLESS_CAPACITY=1 installs 9000 NPCs and enables a 30s Robot spread warmup; requires ROBOT_ONLY=1.
+# ROOST_SEAMLESS_SPAWN_SPREAD=N（只在 CAPACITY=1 时生效，缺省 0）：没有快照的玩家进入点分散在出生点周围半边长 N 的
+# 正方形里（scene.partition.spawn_spread，按玩家号固定）；0 = 千人都从出生点进入。M-15 自 2026-11-15 起用 1400
+# （维护者接受改变测试条件），之前的 M-15 数字是同一出生点，不能直接对比。
 set -euo pipefail
 # Portable in-place sed: macOS and Linux use different -i spellings.
 edit_file() {
@@ -206,16 +209,20 @@ if [[ "$capacity" == 1 ]]; then
  active="${ROOST_SEAMLESS_ROBOT_ACTIVE:-5}"
  [[ "$active" -ge 1 && "$active" -le 100 ]] || { echo "active percentage must be in 1..100" >&2; exit 2; }
  # Replace the drill's spawn section rather than adding duplicate YAML keys.
- python3 - "$active" "${ROOST_SEAMLESS_ROBOTS:-0}" <<'PYCONFIG'
+ python3 - "$active" "${ROOST_SEAMLESS_ROBOTS:-0}" "${ROOST_SEAMLESS_SPAWN_SPREAD:-0}" <<'PYCONFIG'
 from pathlib import Path
 import sys
 active=int(sys.argv[1])
 robots=int(sys.argv[2])
+spread=int(sys.argv[3])
 if not 1<=robots<=10000: raise SystemExit('capacity robots must be in 1..10000')
+if spread<0: raise SystemExit('spawn spread must not be negative')
 p=Path('configs/service/config.game.yaml')
 s=p.read_text()
 # All robots originate on this machine. Keep production admission defaults unchanged.
 s=s.replace('    max_connections_per_ip: 128',f'    max_connections_per_ip: {max(128,robots)}',1)
+if spread>0:
+ s=s.replace('    player_hp: 100',f'    spawn_spread: {spread}\n    player_hp: 100',1)
 start=s.index('    spawns:',s.index('  partition:'))
 s=s[:start].replace('    idle_period: 1s','    idle_period: 0s')+'    spawns:\n'
 for row in range(90):

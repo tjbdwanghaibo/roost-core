@@ -32,7 +32,7 @@ E2 原生弱网调查已经单独完成，见[原始报告](../v147-native-weak-
 | `b2-footprints` | 2 | 真实业务500成员、16镜像；合成1000/5000/10000成员、16 DTO副本单列 | NOT RUN |
 | `s9-demo100` | 3 | M12 100人：同秒、20/s、10/s；每档全新私有依赖与工程 | NOT RUN |
 | `s10-demo200` | 3 | M12 200人：同秒、20/s、10/s；每档全新私有依赖与工程 | NOT RUN |
-| `s11-cellworld-robot` | 1 | M15 完整 CellWorld Robot 1000人，60s、active5、ROBOT_ONLY+CAPACITY | NOT RUN |
+| `s11-cellworld-robot` | 1 | M15 完整 CellWorld Robot 1000人，60s、active5、ROBOT_ONLY+CAPACITY；2026-11-15 起进入点分散 `ROOST_SEAMLESS_SPAWN_SPREAD=1400`（环境变量可改，0 = 旧条件，见 [login-burst-20261115](../../../performance/benchmarks/login-burst-20261115/README.md)） | NOT RUN |
 | `s12-gate-pacing` | 5 | E3 独立 Gate，100/s、30s，共5轮，CPU0 | NOT RUN |
 | `s13-generated-tcp` | 4 | M17 50连接各300s：strict独立实体、strict+self_sync、pipelined独立实体固定开环1500/s、pipelined同实体闭环 | NOT RUN |
 | `s14-checkpoint128` | 6 | M19 同一实验树，background_checkpoint=0/1 交替3轮，concurrency128，STACKS=1 | NOT RUN |
