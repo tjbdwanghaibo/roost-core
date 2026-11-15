@@ -58,7 +58,7 @@ func (component *Component) authorize(playerID int64, epoch uint64, connection s
 	if err != nil {
 		return err
 	}
-	if !room.ValidConnection(connection) || !seat.GetConnected() || seat.GetConnection() != connection {
+	if !room.ValidConnection(connection) || !component.owner.Room().Connected(playerID) || seat.GetConnection() != connection {
 		return apperrors.ErrRoomStaleEpoch
 	}
 	return nil

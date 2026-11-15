@@ -1,0 +1,76 @@
+package managers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	gameroom "{{MODULE}}/game/room"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 这个文件是 room 模块的 manager（维护者 D22 / D24）：房间的断线订阅。安装 room 时，安装器在本目录 managers.go 的
+// Managers() 列表里加了一行 NewRoomPresence()。
+//
+//   - Start：建 gameroom.Presence（席位连接登记表），订阅玩家接入层的连接关闭，起后台协程，以
+//     gameroom.PresenceCapability 发布。room 的控制器在 Join / Reconnect 成功之后按能力名取它登记，Leave / Close
+//     之后撤掉；登记过的连接关了，后台协程对那几间房调 Disconnect（契约见 game/room/room_presence.go）。
+//   - Stop：退订、停下后台协程，在停机期限之内等它返回。没处理完的断线不补：在线状态不落库，下次装载本来就是全断线。
+//
+// manager Mod 在 Nest 与玩家接入的 Mod 之前启动：Start 时两者都已经 Provide（能力在），连接还没开始接；停机时玩家接入
+// 先停，关掉的连接在 Nest 停之前多半来得及断线，来不及的随进程结束无关紧要。
+
+// roomPlayerTCPCapability 是玩家 TCP 接入发布 Runtime 的能力名（internal/access/player/tcp 的 Name）。
+const roomPlayerTCPCapability app.ModName = "access.player.tcp"
+
+// NewRoomPresence 返回 room 模块的 manager，登记在 Managers() 里。
+func NewRoomPresence() app.IManager { return &roomPresence{} }
+
+type roomPresence struct {
+	presence *gameroom.Presence
+}
+
+func (*roomPresence) Name() string { return "room.presence" }
+
+func (m *roomPresence) Start(registry *app.Registry) error {
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return fmt.Errorf("room presence: nest client is unavailable")
+	}
+	conns, ok := app.Lookup[gameroom.Connections](registry, roomPlayerTCPCapability)
+	if !ok || conns == nil {
+		return fmt.Errorf("room presence: capability %q not found; rooms learn about closed connections from the player tcp access (roost add transport tcp)", roomPlayerTCPCapability)
+	}
+	presence, err := gameroom.NewPresence(client, conns, 0)
+	if err != nil {
+		return err
+	}
+	if err := registry.Register(gameroom.PresenceCapability, presence); err != nil {
+		return fmt.Errorf("room presence: %w", err)
+	}
+	presence.Start()
+	m.presence = presence
+	return nil
+}
+
+func (m *roomPresence) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), roomPresenceStopBudget)
+	defer cancel()
+	if err := m.StopWithContext(ctx); err != nil {
+		slog.Warn("room presence: stop", "err", err)
+	}
+}
+
+// roomPresenceStopBudget 是没有带期限的 Stop() 等后台协程返回的上限。
+const roomPresenceStopBudget = 5 * time.Second
+
+// StopWithContext 停下断线订阅，在 ctx 之内等后台协程返回；ctx 先到期时返回它的错误。可以重复调用。
+func (m *roomPresence) StopWithContext(ctx context.Context) error {
+	if m.presence == nil {
+		return nil
+	}
+	return m.presence.Close(ctx)
+}

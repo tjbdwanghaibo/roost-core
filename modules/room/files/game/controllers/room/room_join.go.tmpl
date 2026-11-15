@@ -28,6 +28,8 @@ func (controller *Controller) HandleRoomJoin(ctx *playeraccess.Context, req *pb.
 		result, err = syncsender.NewRoomJoinSender(controller.nestClient).Sync_RoomJoin(ctx.Context(), id, ctx.PlayerID, connection)
 		if err == nil {
 			response.Info = roomInfo(req.RoomID, result)
+			// 提交成功之后登记这条连接：它关了，房间自己断线（game/room/room_presence.go）。
+			roomlogic.PresenceFromRegistry(controller.registry).Track(req.RoomID, ctx.PlayerID, connection, result.Epoch)
 		}
 	}
 	if err != nil {

@@ -32,6 +32,7 @@ func (controller *Controller) HandleRoomClose(ctx *playeraccess.Context, req *pb
 		}
 	}
 	if err == nil {
+		roomlogic.PresenceFromRegistry(controller.registry).ForgetRoom(req.RoomID)
 		slog.InfoContext(ctx.Context(), "room: close completed", "player_id", ctx.PlayerID, "room_id", req.RoomID)
 	}
 	return response, nil

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
 // 区服目录：入口的扩展点，回答“每个区服现在该连哪个地址”。
@@ -16,9 +18,12 @@ import (
 // 那通常是 Gate 的地址，由部署决定、会随扩缩容变化。入口把两边按服号拼起来，再加上本账号在各服的角色，
 // 就是给客户端的清单。目录只管地址这一半：
 //
-//   - 缺省实现是静态的：配置 portal.servers（服号 -> host:port），见 NewStaticDirectory；
-//   - 动态的那一种是一张带过期的注册表（Registry，portal_registry.go），谁往里登记由工程接；
-//   - 工程也可以自己实现 Directory（读服务发现、读共享存储……）。
+//   - 静态的：配置 portal.servers（服号 -> host:port），见 NewStaticDirectory；
+//   - 动态的：account 的区服入口登记表（NewPresenceDirectory）。game 进程经总线定期上报本服的地址与负载
+//     （login 模块的 manager，配置 login.presence.addr），account 放进带过期的登记表，停报的服到期自动消失（维护者 D23）；
+//   - 工程也可以自己实现 Directory（读服务发现……）。
+//
+// 缺省是 Overlay(静态, 登记表)：上报的盖住配置的，没有上报（或已过期）的回到配置。
 //
 // 用哪一个在 portal_rules.go 的 newDirectory 里选，那个文件归工程所有。
 
@@ -158,8 +163,27 @@ func cloneEntries(entries []Entry) []Entry {
 	return out
 }
 
+// NewPresenceDirectory 把 account 的区服入口登记表（ListServerPresence）当作目录：每次问一次 account（总线上
+// 一次只读调用，读的是共享存储，所以入口多副本时每个副本看到的是同一张表）。account 问不到时返回错误，入口答 500。
+func NewPresenceDirectory(accounts svcaccount.Accounts) Directory {
+	return DirectoryFunc(func(ctx context.Context) ([]Entry, error) {
+		if accounts == nil {
+			return nil, errors.New("portal: the account service is required for the server presence directory")
+		}
+		presences, err := accounts.ListServerPresence(ctx)
+		if err != nil {
+			return nil, err
+		}
+		entries := make([]Entry, 0, len(presences))
+		for _, presence := range presences {
+			entries = append(entries, Entry{ServerID: presence.ServerID, Addr: presence.Addr, Load: presence.Load, Tags: append([]string(nil), presence.Tags...)})
+		}
+		return entries, nil
+	})
+}
+
 // Overlay 把几个目录叠起来：同一个服在几个目录里都有时，后面的盖住前面的。
-// 常见用法是 Overlay(静态配置, 动态注册表)：注册表里有的服用上报的地址与负载，没有上报（或已过期）的回到配置。
+// 缺省用法是 Overlay(静态配置, account 的登记表)：登记表里有的服用上报的地址与负载，没有上报（或已过期）的回到配置。
 // 任何一个目录出错，整体出错——不拿一份不完整的回答冒充全部。nil 的目录跳过。
 func Overlay(directories ...Directory) Directory {
 	layers := make([]Directory, 0, len(directories))

@@ -617,7 +617,7 @@ func (server *TCPServer) registerSession(current *tcpSession) bool {
 // connection's resident outbound bytes are already returned.
 func (server *TCPServer) publishSessionClosed(current *tcpSession) {
 	if server.transport != nil {
-		server.transport.publishClosed(TCPSessionClosed{PlayerID: current.principal.PlayerID, SessionID: current.principal.SessionID})
+		server.transport.publishClosed(TCPSessionClosed{PlayerID: current.principal.PlayerID, SessionID: current.principal.SessionID, ConnectionID: current.nonce})
 	}
 }
 
@@ -763,6 +763,18 @@ func (server *TCPServer) activeSessions(playerID int64) int {
 	server.mu.RLock()
 	defer server.mu.RUnlock()
 	return len(server.playerSessions[playerID])
+}
+
+// connectionActive 报告 playerID 名下是否还登记着 nonce 为 connectionID 的会话。
+func (server *TCPServer) connectionActive(playerID int64, connectionID string) bool {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	for _, current := range server.playerSessions[playerID] {
+		if current.nonce == connectionID {
+			return true
+		}
+	}
+	return false
 }
 
 // closeSessions snapshots the player's sessions under the lock and closes

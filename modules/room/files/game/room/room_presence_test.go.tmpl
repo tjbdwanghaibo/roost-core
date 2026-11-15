@@ -1,0 +1,215 @@
+package room
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// Presence 自身的契约（不经 Nest：断线调用换成记录用的替身）。经真实控制器与 Nest 的整条链路在
+// game/controllers/room 的 TestRoomClosedConnectionMarksTheSeatOffline。
+
+type presenceConns struct {
+	mu          sync.Mutex
+	active      map[presenceKey]bool
+	subscribers []func(gateway.TCPSessionClosed)
+	unsubscribe int
+}
+
+func (c *presenceConns) ConnectionActive(playerID int64, connection string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active[presenceKey{playerID, connection}]
+}
+
+func (c *presenceConns) OnSessionClosed(fn func(gateway.TCPSessionClosed)) func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.subscribers = append(c.subscribers, fn)
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.subscribers, c.unsubscribe = nil, c.unsubscribe+1
+	}
+}
+
+func (c *presenceConns) close(playerID int64, connection string) {
+	c.mu.Lock()
+	delete(c.active, presenceKey{playerID, connection})
+	subscribers := append([]func(gateway.TCPSessionClosed){}, c.subscribers...)
+	c.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(gateway.TCPSessionClosed{PlayerID: playerID, ConnectionID: connection})
+	}
+}
+
+type presenceCall struct {
+	roomID, playerID int64
+	epoch            uint64
+}
+
+type presenceWorld struct {
+	conns    *presenceConns
+	presence *Presence
+	calls    chan presenceCall
+	fail     chan error // 非空时下一次断线调用答它
+}
+
+// presenceClient 只是让 NewPresence 收下一个非 nil 的客户端；断线调用换成了替身，不会用到它。
+type presenceClient struct{ nest.Client }
+
+func newPresenceWorld(t *testing.T) *presenceWorld {
+	t.Helper()
+	w := &presenceWorld{conns: &presenceConns{active: map[presenceKey]bool{}}, calls: make(chan presenceCall, 64), fail: make(chan error, 16)}
+	presence, err := NewPresence(presenceClient{}, w.conns, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	presence.disconnect = func(_ context.Context, _ nest.Client, roomID, playerID int64, epoch uint64) (bool, error) {
+		w.calls <- presenceCall{roomID, playerID, epoch}
+		select {
+		case err := <-w.fail:
+			return false, err
+		default:
+			return true, nil
+		}
+	}
+	presence.Start()
+	t.Cleanup(func() { _ = presence.Close(context.Background()) })
+	w.presence = presence
+	return w
+}
+
+func (w *presenceWorld) expect(t *testing.T, want presenceCall) {
+	t.Helper()
+	select {
+	case got := <-w.calls:
+		if got != want {
+			t.Fatalf("disconnect %+v, want %+v", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("no disconnect, want %+v", want)
+	}
+}
+
+func (w *presenceWorld) none(t *testing.T) {
+	t.Helper()
+	select {
+	case got := <-w.calls:
+		t.Fatalf("unexpected disconnect %+v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// 一条连接坐在两间房：它关了，两间房各断线一次，带各自登记的代际；ForgetRoom / Forget 撤掉的不再断线；
+// 在线的连接补扫不碰。
+func TestRoomPresenceDisconnectsEveryRoomOfAClosedConnection(t *testing.T) {
+	w := newPresenceWorld(t)
+	w.conns.active[presenceKey{101, "a"}] = true
+	w.conns.active[presenceKey{102, "b"}] = true
+	w.presence.Track(1, 101, "a", 3)
+	w.presence.Track(2, 101, "a", 7)
+	w.presence.Track(3, 102, "b", 1)
+	w.presence.Track(4, 102, "b", 2)
+	w.presence.Sweep()
+	w.none(t)
+	w.conns.close(101, "a")
+	got := map[presenceCall]bool{}
+	for range 2 {
+		select {
+		case call := <-w.calls:
+			got[call] = true
+		case <-time.After(2 * time.Second):
+			t.Fatalf("disconnects so far: %v", got)
+		}
+	}
+	if !got[presenceCall{1, 101, 3}] || !got[presenceCall{2, 101, 7}] {
+		t.Fatalf("disconnects = %v", got)
+	}
+	w.presence.ForgetRoom(3)
+	w.presence.Forget(4, 102)
+	if n := w.presence.Tracked(); n != 0 {
+		t.Fatalf("%d seats tracked after the disconnects and the forgets", n)
+	}
+	w.conns.close(102, "b")
+	w.none(t)
+}
+
+// 断线失败的留着，下一次补扫再试；连续失败三次放弃这一条（不无限重试）。
+func TestRoomPresenceRetriesAFailedDisconnectAndGivesUp(t *testing.T) {
+	w := newPresenceWorld(t)
+	w.conns.active[presenceKey{101, "a"}] = true
+	w.presence.Track(1, 101, "a", 3)
+	w.fail <- errors.New("room store unavailable")
+	w.conns.close(101, "a")
+	w.expect(t, presenceCall{1, 101, 3})
+	w.none(t)
+	if n := w.presence.Tracked(); n != 1 {
+		t.Fatalf("a failed disconnect dropped the seat: %d tracked", n)
+	}
+	w.presence.Sweep()
+	w.expect(t, presenceCall{1, 101, 3}) // 第二次：成功
+	deadline := time.Now().Add(2 * time.Second)
+	for w.presence.Tracked() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := w.presence.Tracked(); n != 0 {
+		t.Fatalf("%d tracked after a successful retry", n)
+	}
+
+	w.presence.Track(2, 102, "b", 1) // 连接本来就不在：登记时就断线
+	for range 3 {
+		w.fail <- errors.New("room store unavailable")
+	}
+	w.expect(t, presenceCall{2, 102, 1})
+	w.presence.Sweep()
+	w.expect(t, presenceCall{2, 102, 1})
+	w.presence.Sweep()
+	w.expect(t, presenceCall{2, 102, 1})
+	for deadline := time.Now().Add(2 * time.Second); w.presence.Tracked() != 0 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := w.presence.Tracked(); n != 0 {
+		t.Fatalf("still tracking after three failures: %d", n)
+	}
+	w.presence.Sweep()
+	w.none(t)
+}
+
+// 停了之后退订、不再断线；Close 可以重复调用；nil 的 Presence（没装 manager）登记与撤销什么都不做。
+func TestRoomPresenceStopsWithClose(t *testing.T) {
+	w := newPresenceWorld(t)
+	w.conns.active[presenceKey{101, "a"}] = true
+	w.presence.Track(1, 101, "a", 3)
+	if err := w.presence.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.presence.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.conns.unsubscribe != 1 {
+		t.Fatalf("unsubscribed %d times, want 1", w.conns.unsubscribe)
+	}
+	w.conns.close(101, "a")
+	w.presence.Sweep()
+	w.none(t)
+	var absent *Presence
+	absent.Track(1, 101, "a", 1)
+	absent.Forget(1, 101)
+	absent.ForgetRoom(1)
+	absent.Sweep()
+	if PresenceFromRegistry(nil) != nil {
+		t.Fatal("a presence from no registry")
+	}
+	if _, err := NewPresence(nil, w.conns, 0); err == nil {
+		t.Fatal("NewPresence accepted no nest client")
+	}
+	if _, err := NewPresence(presenceClient{}, nil, 0); err == nil {
+		t.Fatal("NewPresence accepted no connections")
+	}
+}

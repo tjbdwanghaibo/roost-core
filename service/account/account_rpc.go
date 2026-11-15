@@ -83,6 +83,19 @@ type Accounts interface {
 	// 没有“列出账号的全部角色 / 全部区服”：存储是键值的，没有扫描；区服清单由登录入口的配置给出。
 	RoleOnServer(ctx context.Context, accountID string, serverID int32) (role Role, err error)
 
+	// 区服入口登记（presence.go，维护者 D23）：game 进程定期上报本服的连接地址与负载，account 放进带过期的
+	// 登记表；登录入口读它给清单配地址。登记是易失的事实，不是区服记录（UpsertServer 仍在运维面上）。
+
+	// ReportServerPresence 登记或续期一个服的入口条目，ttlSeconds 秒之内有效（1..MaxPresenceTTLSeconds）；不成样子的
+	// 条目、超范围的期限、表满时的新服号以 ErrRangeInvalid 拒绝。调用方是 game 进程（login 模块的 manager）。
+	ReportServerPresence(ctx context.Context, presence ServerPresence, ttlSeconds int64) (err error)
+
+	// WithdrawServerPresence 立刻撤掉一个服的入口条目（game 正常停机时）。没有登记过不是错误。
+	WithdrawServerPresence(ctx context.Context, serverID int32) (err error)
+
+	// ListServerPresence 返回没过期的入口条目，按服号升序，至多 MaxServers 条。只读、不需要调用方身份。
+	ListServerPresence(ctx context.Context) (presences []ServerPresence, err error)
+
 	// 票据（tickets.go、enter.go）：客户端手里的短期凭证全部由 account 签发、由 account 校验，登录入口、
 	// Gate、game 都不持有密钥。账号票据在登录之后签发；进服票据在选定一个服之后签发，握手时出示。
 	// 这条“握手时按账号解析角色”的路与 CreateRole / SelectRole / ValidateSession（入口自己选角）并存。

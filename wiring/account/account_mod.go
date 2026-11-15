@@ -148,7 +148,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	}
 	service, err := domain.New(domain.Config{
 		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
-		Slots: stores.Slots, Names: stores.Names,
+		Slots: stores.Slots, Names: stores.Names, Presence: stores.Presence,
 		Verifier: m.verifier, Allocator: m.allocator, NameRules: m.nameRules,
 		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL, AccountTicketTTL: m.ticketTTL, ClaimTTL: m.claimTTL,
 		Metrics: m.metrics,

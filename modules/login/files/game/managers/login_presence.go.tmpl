@@ -1,0 +1,214 @@
+package managers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 这个文件是 login 模块的第二个 manager：**区服入口上报**（维护者 D23）。安装 login 时，安装器在本目录 managers.go 的
+// Managers() 列表里加了一行 NewLoginPresence()。
+//
+// 它定期经总线告诉 account：“本服（sid）现在连这个地址、有这么多在线连接”。account 把它放进带过期的登记表
+// （service/account 的 ReportServerPresence），登录入口（portal 模块）给客户端的区服清单从那里取地址与负载；
+// 本进程停报（崩溃、断网）之后，期限一到这个服的动态地址自己从清单里消失，入口回到 portal.servers 的静态地址。
+//
+//   - Start：读配置；没写 login.presence.addr 时什么都不做（只记一条 Info）——上报的必须是客户端连得到的地址，
+//     进程自己猜不出来（监听的 0.0.0.0、独立 Gate 部署时客户端连的是 Gate）。写了就先报一次，再每 interval 报一次，
+//     期限是 interval 的三倍（错过两次还在）。
+//   - Stop：停下后台循环，在期限之内等它返回，再撤销本服的登记（WithdrawServerPresence），不等过期；撤销失败只记 Warn，
+//     期限到了照样消失。
+//
+// 上报失败不影响本服：只记日志（成功 ↔ 失败的转变记一次 Warn / Info，期间的重复失败记 Debug），下一轮再报。
+// 负载取玩家接入层的在线连接数（access.player.tcp 的 SessionCount）；没有玩家接入时是 0。
+//
+// 配置写在 game 服务的配置里（configs/service/config.<game 服务>.yaml），可以不写：
+//
+//	login:
+//	  presence:
+//	    addr: gate.example.com:7000   # 客户端连得到的地址 host:port（通常是本服前面的 Gate）；不写不上报
+//	    interval: 10s                 # 上报间隔，1s～200s；期限取它的三倍（缺省 10s / 30s）
+//	    tags: [new]                   # 给客户端与推荐规则看的标签，至多 8 个、每个至多 32 字节
+//
+// 这几个键由 manager 在启动时自己读，不在 App 的配置声明里：--check-config 查不到写错的值，写错了在启动到这一步时报错退出。
+
+// 上报间隔的缺省与范围。期限（account 那边的过期）是间隔的 loginPresenceTTLFactor 倍，account 的期限上限是
+// svcaccount.MaxPresenceTTLSeconds（600 秒），所以间隔至多 200 秒。
+const (
+	loginPresenceDefaultInterval = 10 * time.Second
+	loginPresenceMinInterval     = time.Second
+	loginPresenceTTLFactor       = 3
+	loginPresenceMaxInterval     = time.Duration(svcaccount.MaxPresenceTTLSeconds/loginPresenceTTLFactor) * time.Second
+	// loginPresenceWithdrawBudget 是停机时撤销登记的上限：总线卡住不拖住停机，期限到了登记照样消失。
+	loginPresenceWithdrawBudget = 2 * time.Second
+)
+
+// loginPlayerTCPCapability 是玩家 TCP 接入发布 Runtime 的能力名（internal/access/player/tcp 的 Name）。
+const loginPlayerTCPCapability app.ModName = "access.player.tcp"
+
+// loginPresenceConfig 是这个 manager 读的键。
+type loginPresenceConfig struct {
+	app.ServiceIdentity
+	Login struct {
+		Presence struct {
+			Addr     string        `config:"addr" help:"本服给客户端的入口地址 host:port（通常是本服前面的 Gate）；写了就定期上报给 account，登录入口的清单用它；不写不上报"`
+			Interval time.Duration `config:"interval" help:"上报间隔（1s～200s，缺省 10s）；account 那边的期限是它的三倍"`
+			Tags     []string      `config:"tags" help:"给客户端与推荐规则看的标签，至多 8 个、每个至多 32 字节"`
+		} `config:"presence"`
+	} `config:"login"`
+}
+
+// ValidateConfig 在 Start 读配置时执行，不通过进程不启动。
+func (c *loginPresenceConfig) ValidateConfig(bool) error {
+	presence := &c.Login.Presence
+	presence.Addr = strings.TrimSpace(presence.Addr)
+	if presence.Interval == 0 {
+		presence.Interval = loginPresenceDefaultInterval
+	}
+	if presence.Interval < loginPresenceMinInterval || presence.Interval > loginPresenceMaxInterval {
+		return fmt.Errorf("config: login.presence.interval %s is outside %s..%s", presence.Interval, loginPresenceMinInterval, loginPresenceMaxInterval)
+	}
+	if presence.Addr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(presence.Addr)
+	number, portErr := strconv.Atoi(port)
+	if err != nil || strings.TrimSpace(host) == "" || portErr != nil || number <= 0 || number > 65535 || len(presence.Addr) > svcaccount.MaxPresenceAddrBytes {
+		return fmt.Errorf("config: login.presence.addr %q is not the host:port clients connect to", presence.Addr)
+	}
+	if len(presence.Tags) > svcaccount.MaxPresenceTags {
+		return fmt.Errorf("config: login.presence.tags lists %d tags; at most %d", len(presence.Tags), svcaccount.MaxPresenceTags)
+	}
+	for _, tag := range presence.Tags {
+		if tag == "" || len(tag) > svcaccount.MaxPresenceTagBytes {
+			return fmt.Errorf("config: login.presence.tags has an empty tag or one over %d bytes", svcaccount.MaxPresenceTagBytes)
+		}
+	}
+	if c.Sid <= 0 {
+		return fmt.Errorf("config: login.presence.addr is set but sid is %d; the report names this server by its sid", c.Sid)
+	}
+	return nil
+}
+
+// NewLoginPresence 返回区服入口上报的 manager，登记在 Managers() 里。
+func NewLoginPresence() app.IManager { return &loginPresence{} }
+
+type loginPresence struct {
+	accounts svcaccount.Accounts
+	// players 是玩家接入层（在线连接数）；没有玩家接入时为 nil，负载报 0。
+	players  interface{ SessionCount() int }
+	presence svcaccount.ServerPresence
+	interval time.Duration
+
+	cancel   context.CancelFunc
+	done     chan struct{}
+	withdraw sync.Once
+}
+
+func (*loginPresence) Name() string { return "login.presence" }
+
+func (m *loginPresence) Start(registry *app.Registry) error {
+	var settings loginPresenceConfig
+	if err := app.LoadConfig(registry.Config(), &settings); err != nil {
+		return fmt.Errorf("login presence: %w", err)
+	}
+	if settings.Login.Presence.Addr == "" {
+		slog.Info("login presence: login.presence.addr is not set; this server does not report its address to account (the login entry uses portal.servers)", "sid", settings.Sid)
+		return nil
+	}
+	accounts, ok := app.Lookup[svcaccount.Accounts](registry, svcaccount.CapabilityName)
+	if !ok || accounts == nil {
+		return fmt.Errorf("login presence: capability %q not found; the game service must list account under uses", svcaccount.CapabilityName)
+	}
+	m.accounts = accounts
+	if players, ok := app.Lookup[interface{ SessionCount() int }](registry, loginPlayerTCPCapability); ok && players != nil {
+		m.players = players
+	}
+	m.presence = svcaccount.ServerPresence{ServerID: settings.Sid, Addr: settings.Login.Presence.Addr, Tags: append([]string(nil), settings.Login.Presence.Tags...)}
+	if m.interval == 0 { // 测试可以预先给更短的间隔
+		m.interval = settings.Login.Presence.Interval
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel, m.done = cancel, make(chan struct{})
+	go m.loop(ctx)
+	return nil
+}
+
+// loop 先报一次，再每 interval 报一次，直到 ctx 结束。
+func (m *loginPresence) loop(ctx context.Context) {
+	defer close(m.done)
+	ttl := int64((m.interval*loginPresenceTTLFactor + time.Second - 1) / time.Second)
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+	failing := false
+	for first := true; ; first = false {
+		if !first {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+		presence := m.presence
+		presence.Tags = append([]string(nil), m.presence.Tags...)
+		if m.players != nil {
+			presence.Load = max(m.players.SessionCount(), 0)
+		}
+		reportCtx, cancel := context.WithTimeout(ctx, m.interval)
+		err := m.accounts.ReportServerPresence(reportCtx, presence, ttl)
+		cancel()
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return
+		case err != nil && !failing:
+			failing = true
+			slog.Warn("login presence: report to account failed; retrying every interval", "sid", presence.ServerID, "addr", presence.Addr, "err", err)
+		case err != nil:
+			slog.Debug("login presence: report to account still failing", "sid", presence.ServerID, "err", err)
+		case failing || first:
+			failing = false
+			slog.Info("login presence: reporting this server to account", "sid", presence.ServerID, "addr", presence.Addr, "interval", m.interval, "ttl_seconds", ttl)
+		}
+	}
+}
+
+func (m *loginPresence) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), loginPresenceWithdrawBudget+time.Second)
+	defer cancel()
+	if err := m.StopWithContext(ctx); err != nil {
+		slog.Warn("login presence: stop", "err", err)
+	}
+}
+
+// StopWithContext 停下上报循环，在 ctx 之内等它返回，再撤销本服的登记。ctx 先到期时返回它的错误（ManagerMod 会用新的
+// 期限再停一次）。可以重复调用。
+func (m *loginPresence) StopWithContext(ctx context.Context) error {
+	if m.cancel == nil {
+		return nil
+	}
+	m.cancel()
+	select {
+	case <-m.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	m.withdraw.Do(func() {
+		withdraw, cancel := context.WithTimeout(ctx, loginPresenceWithdrawBudget)
+		defer cancel()
+		if err := m.accounts.WithdrawServerPresence(withdraw, m.presence.ServerID); err != nil {
+			// 撤销不上不阻止停机：期限一到登记自己消失。
+			slog.Warn("login presence: withdraw from account failed; the entry expires on its own", "sid", m.presence.ServerID, "err", err)
+			return
+		}
+		slog.Info("login presence: withdrew this server from account", "sid", m.presence.ServerID)
+	})
+	return nil
+}

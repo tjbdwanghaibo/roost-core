@@ -179,6 +179,13 @@ func (accounts *portalRecordingAccounts) ListServers(ctx context.Context) ([]svc
 	return accounts.Accounts.ListServers(ctx)
 }
 
+func (accounts *portalRecordingAccounts) ListServerPresence(ctx context.Context) ([]svcaccount.ServerPresence, error) {
+	if err := accounts.enter("ListServerPresence", ""); err != nil {
+		return nil, err
+	}
+	return accounts.Accounts.ListServerPresence(ctx)
+}
+
 func (accounts *portalRecordingAccounts) RoleOnServer(ctx context.Context, accountID string, serverID int32) (svcaccount.Role, error) {
 	if err := accounts.enter("RoleOnServer", accountID); err != nil {
 		return svcaccount.Role{}, err
@@ -897,20 +904,18 @@ func TestPortalDoesNotPassOnAnAccountAnswerThatDoesNotMatchTheQuestion(t *testin
 
 // 清单是三样东西按服号拼起来的：account 的区服记录（名字、状态、合服）、目录的地址与负载（给的是承载服的）、
 // 本账号在各服的角色。目录里有而 account 没登记的服不列出；account 登记了而目录里没有的照常列出、没有地址。
-// 动态注册表叠在静态配置上：登记的盖住配置的，过期之后回到配置。
+// account 的区服入口登记表（game 上报、带过期）叠在静态配置上：上报的盖住配置的，过期之后回到配置。
 func TestPortalListsWhatAccountAndTheDirectoryKnow(t *testing.T) {
-	registryNow := time.Unix(1_800_000_000, 0)
-	dynamic := NewRegistry(func() time.Time { return registryNow })
 	w := newPortalWorld(t, func(options *Options) {
-		options.Directory = Overlay(portalAddrs(t, map[int32]string{1000: "203.0.113.7:7000", 1001: "203.0.113.8:7001", 4242: "203.0.113.99:7000"}), dynamic)
+		options.Directory = Overlay(portalAddrs(t, map[int32]string{1000: "203.0.113.7:7000", 1001: "203.0.113.8:7001", 4242: "203.0.113.99:7000"}), NewPresenceDirectory(options.Accounts))
 	})
 	ctx := context.Background()
 	w.upsert(1002, svcaccount.ServerMaintenance)
 	w.upsert(1003, svcaccount.ServerOpen)
-	if err := dynamic.Announce(Entry{ServerID: 1001, Addr: "gate-b.example.test:7443", Load: 87, Tags: []string{"crowded"}}, 30*time.Second); err != nil {
+	if err := w.service.ReportServerPresence(ctx, svcaccount.ServerPresence{ServerID: 1001, Addr: "gate-b.example.test:7443", Load: 87, Tags: []string{"crowded"}}, 30); err != nil {
 		t.Fatal(err)
 	}
-	if err := dynamic.Announce(Entry{ServerID: 1003, Addr: "gate-c.example.test:7443", Load: 3, Tags: []string{"new", "recommended"}}, 30*time.Second); err != nil {
+	if err := w.service.ReportServerPresence(ctx, svcaccount.ServerPresence{ServerID: 1003, Addr: "gate-c.example.test:7443", Load: 3, Tags: []string{"new", "recommended"}}, 30); err != nil {
 		t.Fatal(err)
 	}
 	ticket := w.login("alice")
@@ -946,8 +951,8 @@ func TestPortalListsWhatAccountAndTheDirectoryKnow(t *testing.T) {
 		t.Fatalf("a new account is recommended %d, want 1003 (the newest open server with an address)", recommended)
 	}
 
-	// 登记过期：1001 回到配置的地址，1003 没有配置、地址没了。
-	registryNow = registryNow.Add(30 * time.Second)
+	// 登记过期（game 停报）：1001 回到配置的地址，1003 没有配置、地址没了。
+	w.advance(30 * time.Second)
 	servers, _ = w.servers(ticket)
 	if servers[1001]["addr"] != "203.0.113.8:7001" || servers[1001]["load"] != float64(0) || servers[1003]["addr"] != "" || servers[1003]["addr_source"] != "none" {
 		t.Fatalf("after the announcements expired: 1001 = %v, 1003 = %v", servers[1001], servers[1003])
@@ -965,12 +970,12 @@ func TestPortalListsWhatAccountAndTheDirectoryKnow(t *testing.T) {
 	}
 	servers, recommended = w.servers(ticket)
 	home, _ := servers[1000]["role"].(map[string]any)
-	if home == nil || home["player_id"] != float64(onHome) || home["serving_server_id"] != float64(1000) || home["transferring_to"] != float64(1003) || home["last_login_at"] != float64(1_800_000_000) {
+	if home == nil || home["player_id"] != float64(onHome) || home["serving_server_id"] != float64(1000) || home["transferring_to"] != float64(1003) || home["last_login_at"] != float64(1_800_000_030) {
 		t.Fatalf("server 1000's role = %v, want player %d moving to 1003", home, onHome)
 	}
 	away, _ := servers[1001]["role"].(map[string]any)
 	if servers[1001]["merged_into"] != float64(1000) || servers[1001]["status"] != "closed" || servers[1001]["addr"] != "203.0.113.7:7000" ||
-		away == nil || away["player_id"] != float64(onAway) || away["serving_server_id"] != float64(1000) || away["last_login_at"] != float64(1_800_000_060) {
+		away == nil || away["player_id"] != float64(onAway) || away["serving_server_id"] != float64(1000) || away["last_login_at"] != float64(1_800_000_090) {
 		t.Fatalf("server 1001 = %v, want merged into 1000, reached at 1000's address, with player %d", servers[1001], onAway)
 	}
 	if _, moving := away["transferring_to"]; moving {
@@ -1133,133 +1138,101 @@ func TestPortalEnterHandsOutATicketAndTheServingAddress(t *testing.T) {
 	}
 }
 
-// 动态注册表：登记的条目在期限内给出、到期那一刻起不给；同一个服再登记是覆盖并重新计时；撤销立刻生效；
-// 不成样子的登记被拒且什么都不改；条目数有上限，过期的不占名额；并发登记与读取是安全的。
-func TestPortalRegistryExpiresCapsAndIsSafeForConcurrentUse(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	registry := NewRegistry(func() time.Time { return now })
+// D23：入口的动态目录是 account 持有的带过期登记表，不是入口进程自己的表。用 Start（缺省的 newDirectory）起两个
+// 入口副本，共用一个 account：game 只向 account 报一次，两个副本给出的地址一样（以前每个副本各有一张进程内的表，
+// 上报只到一个副本时两次请求看到的清单不一样）；上报盖住 portal.servers；停报到期后两个副本都回到配置；
+// 再报就回来；account 的登记表问不到时清单与进服答 500，不给一份缺了地址的清单。
+func TestPortalReadsTheServerPresenceAccountHolds(t *testing.T) {
+	w := newPortalWorld(t)
 	ctx := context.Background()
-	list := func() string {
-		entries, err := registry.Entries(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		parts := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			parts = append(parts, fmt.Sprintf("%d=%s/%d/%s", entry.ServerID, entry.Addr, entry.Load, strings.Join(entry.Tags, "+")))
-		}
-		return strings.Join(parts, " ")
+	settings := map[string]any{"portal.servers": map[string]any{"1000": "static-a.example.test:7000"}}
+	first, err := portalProcess(t, w.accounts, settings)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if list() != "" || registry.Len() != 0 {
-		t.Fatalf("a new registry lists %q", list())
+	second, err := portalProcess(t, w.accounts, settings)
+	if err != nil {
+		t.Fatal(err)
 	}
-	must := func(entry Entry, ttl time.Duration) {
+	ticket := w.login("alice")
+	addrs := func(engine http.Handler) map[int]string {
 		t.Helper()
-		if err := registry.Announce(entry, ttl); err != nil {
-			t.Fatal(err)
+		reply := portalPost(t, engine, "/portal/servers", map[string]any{"account_ticket": ticket})
+		if reply.status != http.StatusOK {
+			t.Fatalf("servers: %d %s", reply.status, reply.raw)
 		}
-	}
-	must(Entry{ServerID: 1001, Addr: "gate-b:7000", Load: 5}, 30*time.Second)
-	must(Entry{ServerID: 1000, Addr: " gate-a:7000 ", Tags: []string{"new"}}, 10*time.Second)
-	if got := list(); got != "1000=gate-a:7000/0/new 1001=gate-b:7000/5/" {
-		t.Fatalf("entries = %q, want both in ascending order with the address trimmed", got)
-	}
-	// 给出去的是副本。
-	entries, _ := registry.Entries(ctx)
-	entries[0].Addr, entries[0].Tags[0] = "tampered:1", "tampered"
-	if got := list(); !strings.HasPrefix(got, "1000=gate-a:7000/0/new") {
-		t.Fatalf("a caller's edit leaked into the registry: %q", got)
-	}
-	// 差一秒到期还在，到期那一刻起不在。
-	now = now.Add(9 * time.Second)
-	if registry.Len() != 2 {
-		t.Fatalf("one second before server 1000's announcement expires: %q", list())
-	}
-	now = now.Add(time.Second)
-	if got := list(); got != "1001=gate-b:7000/5/" {
-		t.Fatalf("at the expiry instant: %q", got)
-	}
-	// 续期：覆盖并重新计时。
-	must(Entry{ServerID: 1001, Addr: "gate-b2:7000", Load: 9}, 30*time.Second)
-	now = now.Add(25 * time.Second) // 第一次登记本该在 5 秒前到期
-	if got := list(); got != "1001=gate-b2:7000/9/" {
-		t.Fatalf("after renewing: %q", got)
-	}
-	registry.Withdraw(1001)
-	registry.Withdraw(4242)
-	if list() != "" {
-		t.Fatalf("after withdrawing: %q", list())
-	}
-
-	// 不成样子的登记。
-	must(Entry{ServerID: 7, Addr: "gate:7000"}, time.Minute)
-	for label, bad := range map[string]struct {
-		entry Entry
-		ttl   time.Duration
-	}{
-		"server id zero":       {Entry{ServerID: 0, Addr: "gate:7000"}, time.Minute},
-		"a negative server id": {Entry{ServerID: -7, Addr: "gate:7000"}, time.Minute},
-		"no host":              {Entry{ServerID: 7, Addr: ":7000"}, time.Minute},
-		"no port":              {Entry{ServerID: 7, Addr: "gate"}, time.Minute},
-		"port zero":            {Entry{ServerID: 7, Addr: "gate:0"}, time.Minute},
-		"an oversized address": {Entry{ServerID: 7, Addr: strings.Repeat("g", 252) + ":7000"}, time.Minute},
-		"a negative load":      {Entry{ServerID: 7, Addr: "gate:7000", Load: -1}, time.Minute},
-		"nine tags":            {Entry{ServerID: 7, Addr: "gate:7000", Tags: strings.Split("a,b,c,d,e,f,g,h,i", ",")}, time.Minute},
-		"an empty tag":         {Entry{ServerID: 7, Addr: "gate:7000", Tags: []string{""}}, time.Minute},
-		"a 33-byte tag":        {Entry{ServerID: 7, Addr: "gate:7000", Tags: []string{strings.Repeat("t", 33)}}, time.Minute},
-		"a zero ttl":           {Entry{ServerID: 7, Addr: "other:7000"}, 0},
-		"a negative ttl":       {Entry{ServerID: 7, Addr: "other:7000"}, -time.Second},
-		"a ttl over 10m":       {Entry{ServerID: 7, Addr: "other:7000"}, 10*time.Minute + time.Second},
-	} {
-		if err := registry.Announce(bad.entry, bad.ttl); err == nil {
-			t.Fatalf("%s: the announcement was accepted", label)
+		list, _ := reply.body["servers"].([]any)
+		out := map[int]string{}
+		for _, item := range list {
+			server, _ := item.(map[string]any)
+			sid, _ := server["server_id"].(float64)
+			addr, _ := server["addr"].(string)
+			out[int(sid)] = fmt.Sprintf("%s/%v", addr, server["load"])
 		}
+		return out
 	}
-	if got := list(); got != "7=gate:7000/0/" {
-		t.Fatalf("refused announcements changed the registry: %q", got)
-	}
-	must(Entry{ServerID: 7, Addr: "gate:7000"}, 10*time.Minute) // 恰好 10 分钟可以
-
-	// 上限 256：满了之后新的服号被拒，已登记的照常续期；过期的让出名额。
-	for sid := int32(1000); registry.Len() < 256; sid++ {
-		must(Entry{ServerID: sid, Addr: "gate:7000"}, time.Minute)
-	}
-	if err := registry.Announce(Entry{ServerID: 9000, Addr: "gate:7000"}, time.Minute); !errors.Is(err, ErrRegistryFull) {
-		t.Fatalf("the 257th server: %v, want ErrRegistryFull", err)
-	}
-	must(Entry{ServerID: 1000, Addr: "renewed:7000"}, time.Minute)
-	if registry.Len() != 256 {
-		t.Fatalf("the registry holds %d servers", registry.Len())
-	}
-	now = now.Add(time.Minute) // 一分钟的那 255 条到期，只剩 10 分钟的 7
-	must(Entry{ServerID: 9000, Addr: "gate:7000"}, time.Minute)
-	if got := list(); got != "7=gate:7000/0/ 9000=gate:7000/0/" {
-		t.Fatalf("after the short announcements expired: %q", got)
-	}
-
-	// 并发：登记、撤销与读取同时进行（配合 -race）。
-	shared := NewRegistry(nil)
-	var wg sync.WaitGroup
-	for worker := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for round := range 200 {
-				sid := int32(1 + (worker*200+round)%64)
-				_ = shared.Announce(Entry{ServerID: sid, Addr: "gate:7000", Load: round}, time.Minute)
-				if round%7 == 0 {
-					shared.Withdraw(sid)
-				}
-				if entries, err := shared.Entries(ctx); err != nil || len(entries) > 64 {
-					t.Errorf("concurrent read: %d entries, %v", len(entries), err)
-					return
+	want := func(label string, expected map[int]string) {
+		t.Helper()
+		for name, engine := range map[string]http.Handler{"first": first, "second": second} {
+			got := addrs(engine)
+			if len(got) != len(expected) {
+				t.Fatalf("%s, %s replica: %v, want %v", label, name, got, expected)
+			}
+			for sid, value := range expected {
+				if got[sid] != value {
+					t.Fatalf("%s, %s replica: server %d = %q, want %q (all: %v)", label, name, sid, got[sid], value, got)
 				}
 			}
-		}()
+		}
 	}
-	wg.Wait()
-	if shared.Len() > 64 {
-		t.Fatalf("the shared registry holds %d servers after the concurrent run", shared.Len())
+	want("nothing reported", map[int]string{1000: "static-a.example.test:7000/0", 1001: "/0"})
+
+	// game 1000、1001 各报一次（期限 30 秒），只报给 account。
+	for _, presence := range []svcaccount.ServerPresence{
+		{ServerID: 1000, Addr: "gate-a.example.test:7443", Load: 12},
+		{ServerID: 1001, Addr: "gate-b.example.test:7443", Load: 40},
+	} {
+		if err := w.service.ReportServerPresence(ctx, presence, 30); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want("both reported", map[int]string{1000: "gate-a.example.test:7443/12", 1001: "gate-b.example.test:7443/40"})
+	if entered := portalPost(t, second, "/portal/enter", map[string]any{"account_ticket": ticket, "server_id": 1001}); entered.status != http.StatusOK || entered.text("addr") != "gate-b.example.test:7443" {
+		t.Fatalf("enter 1001 on the second replica: %d %s", entered.status, entered.raw)
+	}
+
+	// 1001 接着报，1000 停报：差一点到期还在，到期起 1000 回到配置的地址，1001 还在。
+	w.advance(20 * time.Second)
+	if err := w.service.ReportServerPresence(ctx, svcaccount.ServerPresence{ServerID: 1001, Addr: "gate-b.example.test:7443", Load: 41}, 30); err != nil {
+		t.Fatal(err)
+	}
+	w.advance(10*time.Second - time.Millisecond)
+	want("just before 1000 expires", map[int]string{1000: "gate-a.example.test:7443/12", 1001: "gate-b.example.test:7443/41"})
+	w.advance(time.Millisecond)
+	want("1000 stopped reporting", map[int]string{1000: "static-a.example.test:7000/0", 1001: "gate-b.example.test:7443/41"})
+	// 1001 正常下线（撤销）：立刻没有地址（它没有静态配置）。
+	if err := w.service.WithdrawServerPresence(ctx, 1001); err != nil {
+		t.Fatal(err)
+	}
+	want("1001 withdrew", map[int]string{1000: "static-a.example.test:7000/0", 1001: "/0"})
+	// 再报就回来。
+	if err := w.service.ReportServerPresence(ctx, svcaccount.ServerPresence{ServerID: 1000, Addr: "gate-a2.example.test:7443", Load: 1}, 30); err != nil {
+		t.Fatal(err)
+	}
+	want("1000 reported again", map[int]string{1000: "gate-a2.example.test:7443/1", 1001: "/0"})
+
+	// account 的登记表问不到：清单与进服都答 500，不回落到静态配置冒充全部。
+	w.accounts.fail("ListServerPresence")
+	for _, try := range []struct {
+		path    string
+		payload map[string]any
+	}{
+		{"/portal/servers", map[string]any{"account_ticket": ticket}},
+		{"/portal/enter", map[string]any{"account_ticket": ticket, "server_id": 1000}},
+	} {
+		if reply := portalPost(t, first, try.path, try.payload); reply.status != http.StatusInternalServerError || strings.Contains(reply.raw, "gate-a2") || strings.Contains(reply.raw, "static-a") {
+			t.Fatalf("%s with the presence table down: %d %s; want 500 without an address", try.path, reply.status, reply.raw)
+		}
 	}
 }
 

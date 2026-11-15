@@ -1,0 +1,331 @@
+package room
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// 断线订阅（维护者 D24）：房间自己知道成员的连接断了，不用业务在连接关闭回调里调 Disconnect。
+//
+// Presence 记着本进程里“哪名玩家的哪条连接坐在哪间房、代际是多少”——只在 Join / Reconnect 提交成功之后由控制器
+// 登记（Track），离开、关房之后撤掉（Forget / ForgetRoom）。它订阅玩家接入层的连接关闭事件：登记过的连接关了，
+// 就在自己的后台协程里对每间房调一次 Disconnect（带登记时的代际，迟到的旧事件伤不到新连接——同一个 CAS）。
+//
+// 三个洞与各自的补法：
+//
+//   - 关闭事件可以丢（接入层的关闭队列满时丢最旧的，见 gateway.TCPRuntime.OnSessionClosed）：每 SweepInterval 扫一遍
+//     登记表，问接入层每条连接还在不在（ConnectionActive），不在的照样断线。
+//   - 关闭先于登记（连接在 Join 提交与回包之间断了，事件到的时候还没有登记）：Track 登记之后立刻问一次 ConnectionActive，
+//     接入层保证“先摘掉、再发布关闭事件”，所以要么事件看得到登记、要么这一问答 false。
+//   - 进程重启：在线状态不落库（RoomDao.Online 是 nopersist），房间在新进程里装载时全部席位都是断线，成员用
+//     RoomReconnect 重新上线并重新登记。登记表本身也只在内存里，重启后是空的，不需要恢复。
+//
+// 断线只改在线标记（nopersist），失败不丢座位；失败的留着下一轮再试，连续 maxDisconnectFailures 次失败（房间删了、
+// 一直装不上）就放弃这一条并记 Warn。停机时不再处理：在线状态不落库，下次装载本来就是全断线。
+//
+// 并发安全。由 manager（game/managers/room_presence.go）创建、启停，并以 PresenceCapability 发布；控制器在请求时
+// 按能力名取，取不到（没登记 manager）就不登记——那时断线要业务自己调 Disconnect。
+
+// PresenceCapability 是 Presence 在 Registry 里的能力名。
+const PresenceCapability app.ModName = "game.room.presence"
+
+// SweepInterval 是补扫丢失的关闭事件的间隔。
+const SweepInterval = 30 * time.Second
+
+// maxDisconnectFailures 是同一条登记连续断线失败多少次之后放弃。
+const maxDisconnectFailures = 3
+
+// Connections 是 Presence 用到的玩家接入层的那一部分（gateway.PlayerRuntime 满足它）。
+type Connections interface {
+	ConnectionActive(playerID int64, connectionID string) bool
+	OnSessionClosed(func(gateway.TCPSessionClosed)) func()
+}
+
+type presenceKey struct {
+	playerID   int64
+	connection string
+}
+
+type presenceSeat struct {
+	epoch    uint64
+	failures int
+}
+
+// Presence 是本进程的席位连接登记表与断线的后台执行。用 NewPresence 构造、Start 启动、Close 停止。
+type Presence struct {
+	client nest.Client
+	conns  Connections
+	sweep  time.Duration
+	// disconnect 是对一间房的断线调用；缺省是本包的 Disconnect，测试可以换。
+	disconnect func(ctx context.Context, client nest.Client, roomID, playerID int64, epoch uint64) (bool, error)
+
+	mu      sync.Mutex
+	seats   map[presenceKey]map[int64]presenceSeat // 连接 -> 房间号 -> 登记
+	byRoom  map[int64]map[presenceKey]struct{}     // 房间号 -> 坐在里面的连接
+	pending map[presenceKey]struct{}               // 要检查、断线的连接
+	wake    chan struct{}
+
+	cancel      context.CancelFunc
+	done        chan struct{}
+	unsubscribe func()
+	closeOnce   sync.Once
+}
+
+// NewPresence 构造。sweep 不是正数时取 SweepInterval。
+func NewPresence(client nest.Client, conns Connections, sweep time.Duration) (*Presence, error) {
+	if client == nil {
+		return nil, errors.New("room presence: nest client is required")
+	}
+	if conns == nil {
+		return nil, errors.New("room presence: the player connections are required")
+	}
+	if sweep <= 0 {
+		sweep = SweepInterval
+	}
+	return &Presence{
+		client: client, conns: conns, sweep: sweep, disconnect: Disconnect,
+		seats: map[presenceKey]map[int64]presenceSeat{}, byRoom: map[int64]map[presenceKey]struct{}{},
+		pending: map[presenceKey]struct{}{}, wake: make(chan struct{}, 1),
+	}, nil
+}
+
+// Start 订阅连接关闭并起后台协程。只调一次。
+func (p *Presence) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel, p.done = cancel, make(chan struct{})
+	p.unsubscribe = p.conns.OnSessionClosed(p.closed)
+	go p.run(ctx)
+}
+
+// Close 退订、停下后台协程，在 ctx 之内等它返回（在途的一次断线调用随 ctx 取消）。可以重复调用。
+func (p *Presence) Close(ctx context.Context) error {
+	if p.cancel == nil {
+		return nil
+	}
+	p.closeOnce.Do(func() {
+		if p.unsubscribe != nil {
+			p.unsubscribe()
+		}
+		p.cancel()
+	})
+	select {
+	case <-p.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Track 在 Join / Reconnect 提交成功之后登记：playerID 用 connection 坐在 roomID，代际 epoch。同一名玩家在这间房
+// 的旧连接登记随之撤掉（Reconnect 换了连接）。登记之后立刻问一次连接还在不在，补“关闭先于登记”。
+func (p *Presence) Track(roomID, playerID int64, connection string, epoch uint64) {
+	if p == nil || roomID <= 0 || playerID <= 0 || connection == "" || epoch == 0 {
+		return
+	}
+	key := presenceKey{playerID: playerID, connection: connection}
+	p.mu.Lock()
+	for other := range p.byRoom[roomID] {
+		if other.playerID == playerID && other != key {
+			p.dropLocked(roomID, other)
+		}
+	}
+	if p.seats[key] == nil {
+		p.seats[key] = map[int64]presenceSeat{}
+	}
+	p.seats[key][roomID] = presenceSeat{epoch: epoch}
+	if p.byRoom[roomID] == nil {
+		p.byRoom[roomID] = map[presenceKey]struct{}{}
+	}
+	p.byRoom[roomID][key] = struct{}{}
+	p.mu.Unlock()
+	if !p.conns.ConnectionActive(playerID, connection) {
+		p.markPending(key)
+	}
+}
+
+// Forget 在 Leave 提交成功之后撤掉 playerID 在 roomID 的登记。
+func (p *Presence) Forget(roomID, playerID int64) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.byRoom[roomID] {
+		if key.playerID == playerID {
+			p.dropLocked(roomID, key)
+		}
+	}
+}
+
+// ForgetRoom 在 Close 提交成功之后撤掉 roomID 的全部登记。
+func (p *Presence) ForgetRoom(roomID int64) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.byRoom[roomID] {
+		p.dropLocked(roomID, key)
+	}
+}
+
+// Sweep 立刻补扫一遍（不等 SweepInterval）：登记着、但接入层说已经不在的连接照样断线。给运维诊断与测试用。
+func (p *Presence) Sweep() {
+	if p == nil {
+		return
+	}
+	p.sweepInactive()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Tracked 是登记着的（连接, 房间）对数。给测试与诊断用。
+func (p *Presence) Tracked() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	count := 0
+	for _, rooms := range p.seats {
+		count += len(rooms)
+	}
+	return count
+}
+
+// dropLocked 撤掉 key 在 roomID 的登记。调用方持有锁。
+func (p *Presence) dropLocked(roomID int64, key presenceKey) {
+	if rooms := p.seats[key]; rooms != nil {
+		delete(rooms, roomID)
+		if len(rooms) == 0 {
+			delete(p.seats, key)
+			delete(p.pending, key)
+		}
+	}
+	if keys := p.byRoom[roomID]; keys != nil {
+		delete(keys, key)
+		if len(keys) == 0 {
+			delete(p.byRoom, roomID)
+		}
+	}
+}
+
+// closed 是连接关闭事件的订阅：只记下要处理的连接、唤醒后台协程，不在接入层的事件协程里做 Nest 调用。
+func (p *Presence) closed(event gateway.TCPSessionClosed) {
+	key := presenceKey{playerID: event.PlayerID, connection: event.ConnectionID}
+	p.mu.Lock()
+	_, tracked := p.seats[key]
+	p.mu.Unlock()
+	if tracked {
+		p.markPending(key)
+	}
+}
+
+func (p *Presence) markPending(key presenceKey) {
+	p.mu.Lock()
+	if _, tracked := p.seats[key]; tracked {
+		p.pending[key] = struct{}{}
+	}
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (p *Presence) run(ctx context.Context) {
+	defer close(p.done)
+	ticker := time.NewTicker(p.sweep)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.wake:
+		case <-ticker.C:
+			p.sweepInactive()
+		}
+		p.drain(ctx)
+	}
+}
+
+// sweepInactive 把登记着、但接入层说已经不在的连接记成待处理（补丢掉的关闭事件）。
+func (p *Presence) sweepInactive() {
+	p.mu.Lock()
+	keys := make([]presenceKey, 0, len(p.seats))
+	for key := range p.seats {
+		keys = append(keys, key)
+	}
+	p.mu.Unlock()
+	for _, key := range keys {
+		if !p.conns.ConnectionActive(key.playerID, key.connection) {
+			p.mu.Lock()
+			if _, tracked := p.seats[key]; tracked {
+				p.pending[key] = struct{}{}
+			}
+			p.mu.Unlock()
+		}
+	}
+}
+
+// drain 处理待处理的连接（只有接入层说不在了的才会待处理）：对每间房断线，成功（或房间已经不认这个代际）就撤掉登记，
+// 失败的留到下一轮补扫，连续失败 maxDisconnectFailures 次放弃。
+func (p *Presence) drain(ctx context.Context) {
+	type job struct {
+		key    presenceKey
+		roomID int64
+		epoch  uint64
+	}
+	p.mu.Lock()
+	var jobs []job
+	for key := range p.pending {
+		delete(p.pending, key)
+		for roomID, seat := range p.seats[key] {
+			jobs = append(jobs, job{key: key, roomID: roomID, epoch: seat.epoch})
+		}
+	}
+	p.mu.Unlock()
+	for _, item := range jobs {
+		if ctx.Err() != nil {
+			return
+		}
+		_, err := p.disconnect(ctx, p.client, item.roomID, item.key.playerID, item.epoch)
+		p.mu.Lock()
+		seat, still := p.seats[item.key][item.roomID]
+		switch {
+		case !still || seat.epoch != item.epoch:
+			// 处理期间重新登记过（Reconnect）或已经撤掉：结果以新登记为准。
+		case err == nil:
+			p.dropLocked(item.roomID, item.key)
+		case ctx.Err() != nil:
+		default:
+			seat.failures++
+			if seat.failures >= maxDisconnectFailures {
+				p.dropLocked(item.roomID, item.key)
+				slog.Warn("room presence: gave up marking a closed connection offline", "room_id", item.roomID, "player_id", item.key.playerID, "epoch", item.epoch, "err", err)
+			} else {
+				p.seats[item.key][item.roomID] = seat
+				slog.Debug("room presence: disconnect failed; retrying on the next sweep", "room_id", item.roomID, "player_id", item.key.playerID, "err", err)
+			}
+		}
+		p.mu.Unlock()
+	}
+}
+
+// PresenceFromRegistry 取 manager 发布的 Presence；没有登记时返回 nil（Track / Forget 对 nil 什么都不做）。
+func PresenceFromRegistry(registry *app.Registry) *Presence {
+	if registry == nil {
+		return nil
+	}
+	presence, ok := app.Lookup[*Presence](registry, PresenceCapability)
+	if !ok {
+		return nil
+	}
+	return presence
+}

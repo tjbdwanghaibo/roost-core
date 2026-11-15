@@ -1,5 +1,5 @@
 name: portal
-summary: 登录入口（manifest）：三个 HTTP 端点，挂在托管的 account 服务进程上，代客户端调 account——渠道登录拿账号票据、凭票据拿区服清单与推荐（每个服的地址 / 负载 / 本账号有没有角色）、选定一个服换进服票据与该连的地址；票据全部由 account 签发与校验，入口不持有密钥、不建角不选角；区服地址来自可替换的目录（静态配置 portal.servers，或带过期的动态注册表）
+summary: 登录入口（manifest）：三个 HTTP 端点，挂在托管的 account 服务进程上，代客户端调 account——渠道登录拿账号票据、凭票据拿区服清单与推荐（每个服的地址 / 负载 / 本账号有没有角色）、选定一个服换进服票据与该连的地址；票据全部由 account 签发与校验，入口不持有密钥、不建角不选角；区服地址来自可替换的目录（缺省：静态配置 portal.servers 叠上 account 的带过期区服入口登记表，game 经总线定期上报、停报到期自动消失）
 requires: [login]
 conflicts: []
 needs:
@@ -12,7 +12,7 @@ runtime:
 errcodes: [portal_request_invalid]
 next:
   - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter；请求与响应见 roost-core 的 modules/portal/README.md"
-  - "区服的连接地址：在 config.account.yaml 写 portal.servers（服号 -> 客户端连得到的地址 host:port，通常是 Gate）；不写时清单照常列出 account 登记过的服，只是没有地址。要动态的地址（上报、服务发现）改 services/account/portal/portal_rules.go 的 newDirectory"
+  - "区服地址：game 配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate），game 定期报给 account、停报 30 秒后消失；或在 config.account.yaml 写静态的 portal.servers（服号 -> host:port），两者都有时上报的优先。都不写时清单照常列出、没有地址；别的来源改 services/account/portal/portal_rules.go 的 newDirectory"
   - "推荐规则（导量）在 services/account/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服"
   - "上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr"
 verify:

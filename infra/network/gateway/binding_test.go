@@ -1135,3 +1135,80 @@ func TestIngressActivationNotifiesThePrincipalItAuthenticated(t *testing.T) {
 		t.Fatalf("OnActive refused, yet callbacks = %v", order)
 	}
 }
+
+// 独立 Gate 模式下同样的承诺：关闭事件带着 Binding.ConnectionNonce 作为 ConnectionID，收到时那条连接已不再 active；
+// 同一玩家的两条连接分得开；SessionCount 只数激活着的绑定。
+func TestAnIngressCloseEventNamesTheConnectionAndItIsNoLongerActive(t *testing.T) {
+	identity := packetTestBinding()
+	game, err := NewGameIngress(DefaultConfig(), identity.Game, GameDependencies{
+		Client: payloadClient{limit: 1 << 20}, Authenticator: AuthenticatorFunc(nil), Ready: func() bool { return true },
+		Dispatch: func(context.Context, Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) { return nil, nil },
+		QueueFactory: func(OutboundLimits, func(context.Context, uint64, []byte) error, func(uint64, error)) (ReliableQueue, error) {
+			return benchGateQueue{}, nil
+		},
+		Matches: func(context.Context, string, ProcessIdentity) (bool, error) { return true, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan TCPSessionClosed, 4)
+	activeAtClose := make(chan bool, 4)
+	game.OnSessionClosed(func(event TCPSessionClosed) {
+		activeAtClose <- game.ConnectionActive(event.PlayerID, event.ConnectionID)
+		events <- event
+	})
+	activate := func(sessionID string) *bindingRecord {
+		t.Helper()
+		binding := identity
+		binding.SessionID = sessionID
+		request := bindRequest(binding)
+		request.Binding.ConnectionNonce = newBindingToken()
+		record, _, err := game.bindings.reserve(request, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, result := game.bindings.finish(record, true)
+		if err := game.register(record, Principal{PlayerID: binding.PlayerID, SessionID: sessionID}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := game.bindings.control(ControlRequest{Version: InternalVersion, Operation: Activate, Binding: result.Binding}); err != nil {
+			t.Fatal(err)
+		}
+		if err := game.activate(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	first, second := activate("first"), activate("second")
+	firstNonce, secondNonce := first.identity.ConnectionNonce, second.identity.ConnectionNonce
+	if !game.ConnectionActive(identity.PlayerID, firstNonce) || !game.ConnectionActive(identity.PlayerID, secondNonce) {
+		t.Fatal("an active binding is not active")
+	}
+	if game.ConnectionActive(identity.PlayerID+1, firstNonce) || game.ConnectionActive(identity.PlayerID, "") {
+		t.Fatal("ConnectionActive answered true for a connection the player does not have")
+	}
+	if got := game.SessionCount(); got != 2 {
+		t.Fatalf("SessionCount = %d, want 2", got)
+	}
+	if _, changed := game.bindings.close(first.identity); !changed {
+		t.Fatal("closing the first binding changed nothing")
+	}
+	game.retire(first)
+	select {
+	case event := <-events:
+		if event.ConnectionID != firstNonce || event.SessionID != "first" {
+			t.Fatalf("close event = %+v, want connection %q", event, firstNonce)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no close event")
+	}
+	if <-activeAtClose {
+		t.Fatal("the closed binding was still active when its close event was delivered")
+	}
+	if game.ConnectionActive(identity.PlayerID, firstNonce) || !game.ConnectionActive(identity.PlayerID, secondNonce) {
+		t.Fatal("after closing the first binding: first must be inactive, second still active")
+	}
+	if got := game.SessionCount(); got != 1 {
+		t.Fatalf("SessionCount after one close = %d, want 1", got)
+	}
+}

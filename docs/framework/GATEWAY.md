@@ -71,7 +71,9 @@ PB、Sync、Lockstep 共用每绑定 OutSeq 和有界出站，Gate 检查连续�
 
 **例外：Game 进程的驻留预算耗尽**（Game Ingress 的 `outbound.resident_bytes`，对应 `nettransport.ErrResidentBudgetExhausted`，它同时满足 `ErrReliableBackpressure`）不是哪个连接慢：Entity Sync 推送交还 `entitysync.ErrRetryLater`，Manager 本轮从被拒的会话起停推、只作废没交付到的 subject（保留其脏状态）、下一轮从被拒的会话轮转，不断开任何人。预算不会被停滞的绑定长期占住——每帧从入队起最多驻留 `outbound.max_age`，到期发不出去的绑定被关闭、释放预算；持续耗尽只在健康流量持续超过发送能力时出现，代价是同步延迟上升（细节与放大见 [impl/04-sync §2C](impl/04-sync.md#2c-自身视图selfview的生命周期)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)）。只有同一玩家的部分连接因预算拒收时仍按“收不下”断开：收下这一帧的连接会把重试的同一 tick 当旧包丢掉。Gate 侧自己的驻留预算耗尽目前仍关闭连接，没有这个例外（KNOWN-LIMITS）。嵌入 TCP 的全进程驻留预算（`player_access.tcp.outbound.resident_bytes`，`gateway.ErrResidentBudgetExhausted`，2026-10-20 起）用同一个例外：`PushPlayerFrame` 把两个哨兵都交还 `ErrRetryLater`，区别是停读连接占着的预算要到每连接上限或 `write_timeout` 才归还，没有 `max_age`（下一节）。
 
-Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家推送（`PushPlayer` / `PushSyncPlayer` / `ActiveSessions` / `CloseSessions` 都算上它）：Gate 先物理写出 AuthACK、准备好接收出站才发 Activate，激活回调里登记的同步若在回调返回前推送，不会得到“玩家没有连接”。激活失败的绑定随即关闭、不再算在内。
+Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家推送（`PushPlayer` / `PushSyncPlayer` / `ActiveSessions` / `ConnectionActive` / `SessionCount` / `CloseSessions` 都算上它）：Gate 先物理写出 AuthACK、准备好接收出站才发 Activate，激活回调里登记的同步若在回调返回前推送，不会得到“玩家没有连接”。激活失败的绑定随即关闭、不再算在内。
+
+**按连接的在线**（2026-11-15，room 模块的断线订阅用它，维护者 D24）：关闭事件 `TCPSessionClosed` 带 `ConnectionID`——与 `Session.ConnectionID()` 相同（嵌入 TCP 是连接 nonce，独立 Gate 是 `Binding.ConnectionNonce`），订阅方用它分辨“关掉的是不是我登记的那一条”，不能只看玩家号或可复用的 SessionID。`PlayerRuntime.ConnectionActive(playerID, connectionID)` 问这条连接现在是否还登记在本进程；两种部署都是**先从查找表摘掉、再发布关闭事件**，所以收到某条连接的关闭事件时它一定答 false。关闭事件可能丢（队列满时丢最旧的），按连接维护在线状态的订阅方要用 `ConnectionActive` 定期补扫，并在登记之后立刻问一次（补“关闭先于登记”）。`PlayerRuntime.SessionCount()` 是本进程现在可推送的连接数（在线连接数；login 模块的区服入口上报把它当负载）。
 
 ### 嵌入 TCP 的出站
 
