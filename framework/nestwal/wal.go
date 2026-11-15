@@ -149,10 +149,10 @@ type WAL struct {
 	// writeSeq / syncedSeq（stateMu 保护）：writeSeq 是成功写入的次数（跨段单调），syncedSeq 是最近一次成功 fsync
 	// 开始前取到的 writeSeq。两者不等即有未刷写入。一次 fsync 只确认它开始之前已写完的内容：快照在 fsync 之前
 	// 取，fsync 进行中写入的记录等下一次 fsync。
-	writeSeq    uint64
-	syncedSeq   uint64
-	syncWaiters []syncWaiter // 写完、等 fsync 才回复的 strict 追加（Append），按 seq 升序
-	lockHandle  *os.File
+	writeSeq     uint64
+	syncedSeq    uint64
+	syncWaiters  []syncWaiter // 写完、等 fsync 才回复的 strict 追加（Append），按 seq 升序
+	lockHandle   *os.File
 	terminalErr  atomic.Pointer[terminalState] // 只写一次，热路径免锁读
 	terminated   chan struct{}                 // 首个 terminal 错误写入后关闭（Terminated）
 	fatalOnce    sync.Once

@@ -17,17 +17,17 @@ import (
 
 // FuncInfo describes a handler function to generate code for.
 type FuncInfo struct {
-	RawName       string        // original function name
-	Name          string        // cleaned name (without _cost suffix)
-	Entities      []EntityParam // entity parameters
-	Params        []NonEntityParam
-	Ret           RetParam
-	Returns       []RetParam
-	Err           ErrorRetParam
-	IsCost        bool
-	Sync          bool
-	Rollback      string
-	Durability    string
+	RawName    string        // original function name
+	Name       string        // cleaned name (without _cost suffix)
+	Entities   []EntityParam // entity parameters
+	Params     []NonEntityParam
+	Ret        RetParam
+	Returns    []RetParam
+	Err        ErrorRetParam
+	IsCost     bool
+	Sync       bool
+	Rollback   string
+	Durability string
 	// Completion 是 pipelined 的完成方式：空 = 派发 worker 等票据（第一阶段），"async" = 异步完成
 	// （nest.HandlerMeta.AsyncCompletion，同一实体的下一条消息不等这条持久）。
 	Completion    string
