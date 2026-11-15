@@ -1,0 +1,8 @@
+--- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart (20.01s)
+    --- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart/instance_registration (10.00s)
+        pipelined_completion_test.go:1533: timed out waiting for second request on the same entity enqueued while the first is not durable
+    --- FAIL: TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart/package_registration (10.00s)
+        pipelined_completion_test.go:1533: timed out waiting for second request on the same entity enqueued while the first is not durable
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	20.327s
+FAIL

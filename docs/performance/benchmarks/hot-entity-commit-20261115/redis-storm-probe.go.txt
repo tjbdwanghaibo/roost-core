@@ -1,0 +1,225 @@
+package chat
+
+// 登录潮里 30 次 account CreateRole 超时（lb-fix2）的机理复现：chat 世界频道在同一个 Redis 键上抢 compare-and-set
+// 时，共用这个 Redis 的小命令（account 的 GET / SET 一类）慢了多少。
+//
+// 复跑：把本文件复制进 service/chat/，起一个私有 redis-server，
+//   ROOST_CHAT_STORM_REDIS=127.0.0.1:<端口> go test -count=1 -run TestZZRedisStormProbe -v ./service/chat/
+// 三段：idle（只有探针）、storm_racing（每个发言协程各用一个 Store 实例 = 修复前同一进程里不排队的写）、
+// storm_queued（共用一个 Store = 修复后的进程内写锁）。每段报探针延迟 p50 / p99 / max、频道写成 / 抢输、
+// Redis 的 CPU 与 evalsha / get 的 usec_per_call。
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	kitredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+)
+
+func TestZZRedisStormProbe(t *testing.T) {
+	addr := os.Getenv("ROOST_CHAT_STORM_REDIS")
+	if addr == "" {
+		t.Skip("set ROOST_CHAT_STORM_REDIS")
+	}
+	client, err := kitredis.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	registry := NewBodyRegistry()
+	registry.MustRegister("text", BodySpec{Validator: TextValidator(256)})
+	prefix := fmt.Sprintf("stormprobe%d", time.Now().UnixNano())
+	newStore := func() Store {
+		store, err := NewRedisStore(client, prefix, Config{Policy: allowAllPolicy{}, Bodies: registry})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	world := Channel{Kind: ChannelWorld, Target: 1}
+	body := []byte(strings.Repeat("x", 48))
+	// 预热到稳态：环满（缺省 200 条）。
+	warm := newStore()
+	for i := 0; i < 260; i++ {
+		if _, err := warm.AppendSystem(context.Background(), GrantSystem(), SystemPublishRequest{Channel: world, Actor: "login", Type: "text", Body: body, RequestID: "warm-" + strconv.Itoa(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := client.Get(context.Background(), prefix+":ch:"+mustKey(t, warm, world))
+	t.Logf("world channel state: %d bytes", len(raw))
+
+	const announcements, writers = 1000, 200
+	var pace time.Duration
+	phase := func(name string, storm bool, shared bool) {
+		if _, err := redisCLI(addr, "CONFIG", "RESETSTAT"); err != nil {
+			t.Fatal(err)
+		}
+		before := redisInfo(t, addr)
+		casBefore, conflictBefore := casCounters(prefix)
+		stop := make(chan struct{})
+		var probeMu sync.Mutex
+		var latencies []time.Duration
+		var probeWG sync.WaitGroup
+		for p := 0; p < 8; p++ {
+			probeWG.Go(func() {
+				key := fmt.Sprintf("%s:acct:%d", prefix, p)
+				for i := 0; ; i++ {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					began := time.Now()
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					_, err := client.Get(ctx, key)
+					cancel()
+					if err != nil && !strings.Contains(err.Error(), "nil") {
+						t.Error(err)
+						return
+					}
+					d := time.Since(began)
+					probeMu.Lock()
+					latencies = append(latencies, d)
+					probeMu.Unlock()
+					time.Sleep(5 * time.Millisecond)
+				}
+			})
+		}
+		var failed atomic.Int64
+		start := time.Now()
+		if storm {
+			var next atomic.Int64
+			sharedStore := newStore()
+			var wg sync.WaitGroup
+			for w := 0; w < writers; w++ {
+				wg.Go(func() {
+					store := sharedStore
+					if !shared {
+						store = newStore()
+					}
+					for {
+						n := next.Add(1)
+						if n > announcements {
+							return
+						}
+						// 到达约 200 条/秒（千人登录潮 5 秒登完）。
+						if wait := time.Duration(n)*pace - time.Since(start); wait > 0 {
+							time.Sleep(wait)
+						}
+						ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+						_, err := store.AppendSystem(ctx, GrantSystem(), SystemPublishRequest{Channel: world, Actor: "login", Type: "text", Body: body, RequestID: name + "-" + strconv.FormatInt(n, 10)})
+						cancel()
+						if err != nil {
+							failed.Add(1)
+						}
+					}
+				})
+			}
+			wg.Wait()
+		} else {
+			time.Sleep(5 * time.Second)
+		}
+		elapsed := time.Since(start)
+		close(stop)
+		probeWG.Wait()
+		after := redisInfo(t, addr)
+		casAfter, conflictAfter := casCounters(prefix)
+		slices.Sort(latencies)
+		q := func(p float64) time.Duration { return latencies[int(float64(len(latencies)-1)*p)] }
+		t.Logf("%-13s %5.1fs probe n=%d p50=%v p99=%v max=%v | cas_lost=%d conflicts=%d failed=%d | redis cpu=%.2fs cmdstats(usec/call)=%v",
+			name, elapsed.Seconds(), len(latencies), q(0.5), q(0.99), latencies[len(latencies)-1],
+			casAfter-casBefore, conflictAfter-conflictBefore, failed.Load(),
+			after.cpu-before.cpu, after.stats)
+	}
+	for _, p := range []time.Duration{5 * time.Millisecond, 0} {
+		pace = p
+		t.Logf("--- arrival pace %v per announcement (0 = all at once)", p)
+		phase("idle", false, false)
+		phase("storm_racing", true, false)
+		phase("storm_queued", true, true)
+	}
+}
+
+func mustKey(t *testing.T, store Store, ch Channel) string {
+	t.Helper()
+	ref, err := store.(*channelStore).Resolve(ch, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref.key
+}
+
+type redisStats struct {
+	cpu   float64
+	stats map[string]string
+}
+
+func (s redisStats) stat(cmd string) string {
+	return s.stats[cmd]
+}
+
+func redisCLI(addr string, args ...string) (string, error) {
+	host, port, _ := strings.Cut(addr, ":")
+	out, err := exec.Command("redis-cli", append([]string{"-h", host, "-p", port}, args...)...).Output()
+	return string(out), err
+}
+
+func redisInfo(t *testing.T, addr string) redisStats {
+	t.Helper()
+	out := redisStats{stats: map[string]string{}}
+	text, err := redisCLI(addr, "INFO", "all")
+	if err != nil {
+		t.Logf("INFO: %v", err)
+		return out
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "used_cpu_sys:"); ok {
+			f, _ := strconv.ParseFloat(v, 64)
+			out.cpu += f
+		}
+		if v, ok := strings.CutPrefix(line, "used_cpu_user:"); ok {
+			f, _ := strconv.ParseFloat(v, 64)
+			out.cpu += f
+		}
+		if rest, ok := strings.CutPrefix(line, "cmdstat_"); ok {
+			name, fields, _ := strings.Cut(rest, ":")
+			for _, field := range strings.Split(fields, ",") {
+				if v, ok := strings.CutPrefix(field, "usec_per_call="); ok {
+					out.stats[name] = v
+				}
+			}
+		}
+	}
+	return out
+}
+
+// casCounters 读频道状态存储的 compare-and-set 计数（versionstore 统一计）：抢输的尝试数与输满次数。
+func casCounters(prefix string) (int64, int64) {
+	label := prefix + ":ch:"
+	var lost, conflicts int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Labels["store"] != label {
+			continue
+		}
+		switch {
+		case metric.Name == versionstore.MetricCompareAndSet && metric.Labels["result"] == "lost":
+			lost = metric.Value
+		case metric.Name == versionstore.MetricConflict:
+			conflicts = metric.Value
+		}
+	}
+	return lost, conflicts
+}

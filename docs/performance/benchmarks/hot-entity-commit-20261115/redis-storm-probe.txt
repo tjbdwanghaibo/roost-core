@@ -1,0 +1,11 @@
+    zz_redis_storm_probe_test.go:61: world channel state: 69986 bytes
+    zz_redis_storm_probe_test.go:148: --- arrival pace 5ms per announcement (0 = all at once)
+    zz_redis_storm_probe_test.go:141: idle            5.0s probe n=6200 p50=648.667µs p99=1.0045ms max=2.37725ms | cas_lost=0 conflicts=0 failed=0 | redis cpu=0.50s cmdstats(usec/call)=map[client|setinfo:0.06 config|resetstat:13.00 get:0.60 hello:0.75 info:50.00]
+    zz_redis_storm_probe_test.go:141: storm_racing    5.0s probe n=7216 p50=266.583µs p99=962.791µs max=1.46725ms | cas_lost=0 conflicts=0 failed=0 | redis cpu=1.24s cmdstats(usec/call)=map[config|resetstat:54.00 eval:494.32 get:0.44 info:93.00 set:0.61]
+    zz_redis_storm_probe_test.go:141: storm_queued    5.0s probe n=7198 p50=259.416µs p99=999.167µs max=8.544ms | cas_lost=0 conflicts=0 failed=0 | redis cpu=1.24s cmdstats(usec/call)=map[config|resetstat:10.00 eval:496.49 get:0.46 info:41.00 set:0.63]
+    zz_redis_storm_probe_test.go:148: --- arrival pace 0s per announcement (0 = all at once)
+    zz_redis_storm_probe_test.go:141: idle            5.0s probe n=6208 p50=584.958µs p99=970.292µs max=1.573ms | cas_lost=0 conflicts=0 failed=0 | redis cpu=0.46s cmdstats(usec/call)=map[config|resetstat:10.00 get:0.54 info:47.00]
+    zz_redis_storm_probe_test.go:141: storm_racing    2.7s probe n=815 p50=23.934875ms p99=46.189459ms max=56.782875ms | cas_lost=7564 conflicts=873 failed=873 | redis cpu=2.55s cmdstats(usec/call)=map[client|setinfo:0.50 config|resetstat:45.00 eval:254.15 get:0.77 hello:3.00 info:102.00 set:1.43]
+    zz_redis_storm_probe_test.go:141: storm_queued    1.1s probe n=1712 p50=173µs p99=594.583µs max=859.833µs | cas_lost=0 conflicts=0 failed=0 | redis cpu=0.52s cmdstats(usec/call)=map[config|resetstat:9.00 eval:241.92 get:0.44 info:41.00 set:0.23]
+--- PASS: TestZZRedisStormProbe (24.11s)
+ok  	github.com/tjbdwanghaibo/roost-core/service/chat	24.586s

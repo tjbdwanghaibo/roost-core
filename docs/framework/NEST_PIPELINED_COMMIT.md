@@ -311,6 +311,10 @@ write 平均约 190µs、最长约一次 fsync；没有 fsync 时约 7µs）。�
 fsync）未在本机测量，需在目标 Linux 上对照。测量见
 [hot-entity-commit-20261115](../performance/benchmarks/hot-entity-commit-20261115/README.md)。
 
+**实测**：微基准里同一实体 pipelined 约 120 → 声明异步完成后约 2900 次 / 秒，回复仍在持久之后；M-15 登录潮把 demo 的
+World 登录计数临时改回同步等待（`Sync_RecordEnter`），strict 时 World 锁持有约 12～13ms、进入路径失败 540～653 人、
+请求超时 1032～1555 次，改成 pipelined + 异步完成后锁持有约 0.02～0.03ms、进入路径失败 0、请求超时 0（各两轮）。
+
 ### 12.3 没做的与备选
 
 - **strict 热点**：契约要求锁内持久，单实体每次 fsync 一条是 strict 的固有代价，不改。
