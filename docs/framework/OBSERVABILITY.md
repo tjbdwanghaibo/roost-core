@@ -412,6 +412,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `failurelog_delete_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_purge_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_trim_total` | Counter | `failurelog/failurelog.go:IncCounter` |
+| `login.notice_dropped_total{reason}` | Counter | `modules/login/files/game/login/login_active.go.tmpl (template)`：登录模块的会话激活告知被丢弃的条数，`busy` = 在途已满 256 条、`stopping` = 停止之后才到；非零说明登录潮里有玩家的激活告知没送到（见模块 README） |
 | `lockstep.catchup.frames.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.catchup.unservable.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.desync.total` | Counter | `sync/lockstep/match.go:IncCounter` |
