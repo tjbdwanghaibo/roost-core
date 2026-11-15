@@ -634,7 +634,7 @@ func TestDungeonNewEnemyOnlyNeedsTheRulesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := filepath.Abs(filepath.Join(dir, "../..", "dungeon/rules.go"))
+	path, err := filepath.Abs(filepath.Join(dir, "../..", "modules/dungeon/rules.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +646,7 @@ func TestDungeonNewEnemyOnlyNeedsTheRulesFile(t *testing.T) {
 	const elite = `{ID: "elite", Event: EventEnemyDefeated, Conditions: []level.Condition{enemyIs("elite")}, Actions: []level.Action{{Kind: "add", Scope: level.Global, Name: "kills", Value: level.Literal(level.Int(2))}}},
 				`
 	if strings.Count(string(source), anchor) != 1 {
-		t.Fatal("rules anchor changed: dungeon/rules.go")
+		t.Fatal("rules anchor changed: modules/dungeon/rules.go")
 	}
 	scratch := t.TempDir()
 	replacement := filepath.Join(scratch, "rules.go")
@@ -673,7 +673,7 @@ func TestDungeonMutationsDetectDuplicateAndWindowRegression(t *testing.T) {
 	}
 	cases := []struct{ path, before, after, test, marker string }{
 		{"components/dungeon/dungeon.go", "if _, ok := state.GetClaims(runID); ok {", "if _, ok := state.GetClaims(runID); ok && false {", "TestDungeonClaimDuplicateGrantsExactlyOnce", "duplicate reward escaped"},
-		{"dungeon/rules.go", "return now-resolvedAt > ClaimWindowSeconds", "return now-resolvedAt > ClaimWindowSeconds+1", "TestDungeonClaimWindowUsesFrozenAuthorityAndInclusiveBoundary", "expired claim accepted"},
+		{"modules/dungeon/rules.go", "return now-resolvedAt > ClaimWindowSeconds", "return now-resolvedAt > ClaimWindowSeconds+1", "TestDungeonClaimWindowUsesFrozenAuthorityAndInclusiveBoundary", "expired claim accepted"},
 	}
 	for _, c := range cases {
 		path, err := filepath.Abs(filepath.Join(dir, "../..", c.path))

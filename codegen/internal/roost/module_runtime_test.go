@@ -80,10 +80,10 @@ func TestModuleRuntimeInstallationIsTransactional(t *testing.T) {
 func TestModuleRuntimeOrderFollowsDependencies(t *testing.T) {
 	t.Parallel()
 	m := Manifest{Modules: map[string]InstalledModule{
-		"consumer": {Service: "game", Requires: []string{"data"}, Runtime: &ModuleRuntime{Package: "game/consumer", Start: "Start"}},
+		"consumer": {Service: "game", Requires: []string{"data"}, Runtime: &ModuleRuntime{Package: "game/modules/consumer", Start: "Start"}},
 		"data":     {Service: "game", Requires: []string{"store"}},
-		"store":    {Service: "game", Runtime: &ModuleRuntime{Package: "game/store", Start: "Open"}},
-		"other":    {Service: "other", Runtime: &ModuleRuntime{Package: "game/other", Start: "Start"}},
+		"store":    {Service: "game", Runtime: &ModuleRuntime{Package: "game/modules/store", Start: "Open"}},
+		"other":    {Service: "other", Runtime: &ModuleRuntime{Package: "game/modules/other", Start: "Start"}},
 	}}
 	order, err := moduleRuntimeOrder(m, "game")
 	if err != nil || !reflect.DeepEqual(order, []string{"store", "consumer"}) {
@@ -107,9 +107,9 @@ func TestModuleRuntimeRejectsInvalidEntrypoints(t *testing.T) {
 	t.Parallel()
 	for _, runtime := range []*ModuleRuntime{
 		{Package: "../outside", Start: "Start"},
-		{Package: "game/book/../other", Start: "Start"},
-		{Package: "game/book", Start: "start"},
-		{Package: "game/book", Start: "Start()"},
+		{Package: "game/modules/book/../other", Start: "Start"},
+		{Package: "game/modules/book", Start: "start"},
+		{Package: "game/modules/book", Start: "Start()"},
 	} {
 		if err := validateModuleRuntime(runtime); err == nil {
 			t.Fatalf("invalid runtime accepted: %+v", runtime)
@@ -126,8 +126,8 @@ func TestModuleRuntimeGeneratedLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := Manifest{Project: ProjectSpec{Module: "example.com/runtimefixture"}, Modules: map[string]InstalledModule{
-		"consumer": {Service: "game", Requires: []string{"store"}, Runtime: &ModuleRuntime{Package: "game/consumer", Start: "Start"}},
-		"store":    {Service: "game", Runtime: &ModuleRuntime{Package: "game/store", Start: "Start"}},
+		"consumer": {Service: "game", Requires: []string{"store"}, Runtime: &ModuleRuntime{Package: "game/modules/consumer", Start: "Start"}},
+		"store":    {Service: "game", Runtime: &ModuleRuntime{Package: "game/modules/store", Start: "Start"}},
 	}}
 	body, err := renderModuleService(m, "game")
 	if err != nil {
@@ -143,7 +143,7 @@ func TestModuleRuntimeGeneratedLifecycle(t *testing.T) {
 		"game/probe/probe.go":                   moduleRuntimeProbe,
 	}
 	for _, name := range []string{"store", "consumer"} {
-		files["game/"+name+"/runtime.go"] = fmt.Sprintf(`package %s
+		files["game/modules/"+name+"/runtime.go"] = fmt.Sprintf(`package %s
 import ("context"; "github.com/tjbdwanghaibo/roost-core/framework/app"; "example.com/runtimefixture/game/probe")
 func Start(*app.Registry)(func(context.Context)error,error){return probe.Start(%q)}
 `, name, name)

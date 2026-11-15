@@ -26,7 +26,7 @@ func TestModuleRuntimeFrameworkNamesAHostedService(t *testing.T) {
 		t.Fatalf("a runtime on the hosted account service: %v", err)
 	}
 	// v1.47.0：托管服务的手写代码在 services/<服务>/。入口包在那里时必须写 runtime.framework，且服务对得上；
-	// 没写 framework 的入口仍只能在 game/ 下（业务服务进程里启动）。
+	// 没写 framework 的入口仍只能在 game/modules/ 下（业务服务进程里启动）。
 	if err := validateModuleRuntime(&ModuleRuntime{Package: "services/account/portal", Start: "Start"}); err == nil || !strings.Contains(err.Error(), "runtime.framework") {
 		t.Fatalf("a services/ runtime without runtime.framework: %v", err)
 	}
@@ -87,8 +87,8 @@ func TestHostedModuleRuntimesBelongToTheHostNotTheBusinessService(t *testing.T) 
 		t.Fatalf("another hosted service has modules: %v", got)
 	}
 	// 两个模块的入口都在 account 上：依赖在前，其余按名字。
-	m.Modules["beacon"] = InstalledModule{Service: "game", Runtime: &ModuleRuntime{Package: "game/beacon", Start: "Start", Framework: "account"}}
-	m.Modules["audit"] = InstalledModule{Service: "game", Requires: []string{"portal"}, Runtime: &ModuleRuntime{Package: "game/audit", Start: "Start", Framework: "account"}}
+	m.Modules["beacon"] = InstalledModule{Service: "game", Runtime: &ModuleRuntime{Package: "game/modules/beacon", Start: "Start", Framework: "account"}}
+	m.Modules["audit"] = InstalledModule{Service: "game", Requires: []string{"portal"}, Runtime: &ModuleRuntime{Package: "game/modules/audit", Start: "Start", Framework: "account"}}
 	// 一个入口在业务服务上的模块不受影响，也不混进托管服务的顺序。
 	m.Modules["skillbook"] = InstalledModule{Service: "game", Runtime: &ModuleRuntime{Package: "game/modules/skillbook", Start: "Start"}}
 	if got := strings.Join(hostedModuleRuntimes(m, "account"), ","); got != "portal,audit,beacon" {
