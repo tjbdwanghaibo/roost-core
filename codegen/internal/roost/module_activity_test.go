@@ -16,13 +16,13 @@ func TestModuleActivityGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activity: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 4, "activity_alliance": 5})
+	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 6, "activity_alliance": 7})
 	roost("module", "add", "profile", "leaderboard", "mailbox")
 	report, err = VerifyModules(context.Background(), root, []string{"activity", "activity_world", "activity_alliance"}, nil)
 	if err != nil {
 		t.Fatalf("activity combined: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 4, "activity_alliance": 5, "activity+enter": 2, "activity+profile": 1, "activity+leaderboard": 1, "activity+mailbox": 1})
+	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 6, "activity_alliance": 7, "activity+enter": 2, "activity+profile": 1, "activity+leaderboard": 1, "activity+mailbox": 1})
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
@@ -36,13 +36,26 @@ func TestModuleActivityGenerated(t *testing.T) {
 			t.Fatalf("%s config: %v %s", name, err, raw)
 		}
 	}
+	// 恢复扫描是跑在属主服务里的 manager（D22）：登记进那个服务自己的列表，服务带上 manager Mod。
+	for service, call := range map[string]string{"activity_world": "gamemanagers.NewWorldActivityScan()", "alliance": "gamemanagers.NewAllianceActivityScan()"} {
+		raw, err := os.ReadFile(filepath.Join(root, "internal", "service", service, "managers.go"))
+		if err != nil || !bytes.Contains(raw, []byte(call)) {
+			t.Fatalf("%s managers.go does not register %s: %v\n%s", service, call, err, raw)
+		}
+		if !contains(manifest.Services[service].Mods, "manager") {
+			t.Fatalf("%s has no manager mod: %v", service, manifest.Services[service].Mods)
+		}
+	}
+	if got := manifest.Modules["activity_world"].ServiceManagers["activity_world"]; len(got) != 1 || got[0] != "NewWorldActivityScan" {
+		t.Fatalf("roost.yaml does not record the service manager: %v", manifest.Modules["activity_world"].ServiceManagers)
+	}
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "activity_alliance", "activity_world", "activity")
 	if before != moduleProjectDigest(t, root) {
 		t.Fatal("repeat install changed activity")
 	}
 	activityMutationChecks(t, root)
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestActivity|^TestWithActivity|^TestWorldActivity|^TestAllianceActivity", "./game/activity", "./game/handler", "./internal/rpc/activity_world", "./internal/rpc/activity_alliance")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestActivity|^TestWithActivity|^TestWorldActivity|^TestAllianceActivity", "./game/activity", "./game/handler", "./game/managers", "./internal/rpc/activity_world", "./internal/rpc/activity_alliance")
 }
 
 func TestModuleExistingServiceExtensionKeepsOwnership(t *testing.T) {
@@ -73,6 +86,9 @@ func activityMutationChecks(t *testing.T, root string) {
 	recipeMutationMustFail(t, root, "game/activity/component.go", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\tpanic(fmt.Errorf(\"activity timer: %w\", err))", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\treturn 0", "./game/handler", "TestActivityTimerErrorKeepsDeadlineAndRollsBackHook", "timer swallowed")
 	recipeMutationMustFail(t, root, "game/activity/rules.go", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond).UnixMilli()", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond + time.Hour).UnixMilli()", "./game/activity", "TestActivityBusinessCalendarDoesNotUse24Hours", "DST day=")
 	recipeMutationMustFail(t, root, "game/activity/mailbox.go", "token.Generation, token.Cycle, action", "token.Generation, int64(1), action", "./game/activity", "TestWithActivityMailboxUsesStableInstanceKey", "")
+	// 停 manager 时不收扫描：在途的推进没被取消、停机不等它。
+	recipeMutationMustFail(t, root, "game/activity/driver.go", "\treturn driver.Stop(ctx)\n}", "\treturn nil\n}", "./game/managers", "TestWorldActivityScanRunsUnderTheManagerAndStopsWithIt", "StopWithContext returned while an advance was still running")
+	recipeMutationMustFail(t, root, "game/managers/alliance_activity_scan.go", "return m.scans.Close(ctx)", "return nil", "./game/managers", "TestAllianceActivityScanRunsUnderTheManagerAndStopsWithIt", "StopWithContext returned while an advance was still running")
 	recipeMutationMustFail(t, root, "internal/rpc/activity_alliance/service.go", "return remoteentity.RPCRouteCheck(ctx, s.owners, s.sid, target)", "_ = remoteentity.RPCRouteCheck(ctx, s.owners, s.sid, target); return nil", "./internal/rpc/activity_alliance", "TestAllianceActivityChangedOwnerRejectsOldDriver", "route accepted foreign owner")
 }
 

@@ -100,7 +100,8 @@ func (h hostTransport) Subscribe(string, func([]byte)) (func() error, error) {
 
 const hostSID int32 = 7
 
-// cellRegistry 登记 Cell 分支要的全部能力：服务身份、单实例锁的本次启动令牌、本地租约检查、身份核对与 Redis。
+// cellRegistry 登记 Cell 分支要的全部能力：服务身份、单实例锁的本次启动令牌、本地租约检查、身份核对与 Redis，
+// 以及 manager 发布的 Node 宿主（HostCapability，见 cellworldHost）。
 func cellRegistry(t *testing.T, skip app.ModName) *app.Registry {
 	t.Helper()
 	cfg := viper.New()
@@ -112,6 +113,7 @@ func cellRegistry(t *testing.T, skip app.ModName) *app.Registry {
 		app.ModSingletonLease:           app.SingletonLease(openLease{}),
 		app.ModSingletonIdentityChecker: app.SingletonIdentityChecker(sameProcess{}),
 		mods.ModRedis:                   fredis.IRedis(idleRedis{}),
+		HostCapability:                  NewHost(),
 	} {
 		if name == skip {
 			continue
@@ -249,5 +251,111 @@ func TestCellworldFailedStartLeavesRuntimeNotStarted(t *testing.T) {
 				t.Fatalf("second Start after a failure: %v", err)
 			}
 		})
+	}
+}
+
+// cellworldHost 是 cellRegistry 里 manager 发布的那个 Host。
+func cellworldHost(t *testing.T, registry *app.Registry) *Host {
+	t.Helper()
+	host, ok := app.Lookup[*Host](registry, HostCapability)
+	if !ok || host == nil {
+		t.Fatal("the registry has no Node host")
+	}
+	return host
+}
+
+// 装配顺序（D22）：manager 只发布 Host，Node 由服务在自己的就绪点（心跳装好之后）Start 时交给它。Registry 里没有 Host
+// （Managers() 里没登记 NewCellWorldHost()）或 Host 已经停了时 Start 拒绝、不起 Node；一个进程只有一个 Node。
+func TestCellworldStartNeedsTheManagerHost(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	orphan, err := New(cellRegistry(t, HostCapability), cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := orphan.Start(ctx); err == nil || !strings.Contains(err.Error(), "NewCellWorldHost()") {
+		t.Fatalf("Start without the manager's host: %v", err)
+	}
+	if orphan.done != nil {
+		t.Fatal("a Node was started without a host to stop it")
+	}
+
+	registry := cellRegistry(t, "")
+	host := cellworldHost(t, registry)
+	if err := host.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	late, err := New(registry, cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := late.Start(ctx); !errors.Is(err, ErrHostClosed) {
+		t.Fatalf("Start after the manager stopped: %v, want ErrHostClosed", err)
+	}
+	if late.done != nil {
+		t.Fatal("a Node was started on a stopped host")
+	}
+
+	registry = cellRegistry(t, "")
+	first, err := New(registry, cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(registry, cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Start(ctx); err == nil || second.done != nil {
+		t.Fatalf("a second Node started in the same process: %v", err)
+	}
+	if err := cellworldHost(t, registry).Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 服务没把 Node 停下（Shutdown 返回了 Stop 的错误、Init 在 Start 之后失败）时，manager 停 Host 把它排空并收回协程；
+// 服务已经停过的，Host 再停什么都不做。Runtime.Stop 可以重复调用。
+func TestCellworldHostStopsTheNodeTheServiceLeftRunning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	registry := cellRegistry(t, "")
+	runtime, err := New(registry, cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := cellworldHost(t, registry).Close(ctx); err != nil {
+		t.Fatalf("closing the host with a running Node: %v", err)
+	}
+	select {
+	case <-runtime.done:
+	default:
+		t.Fatal("Host.Close returned while Node.Run was still running")
+	}
+	if err := runtime.Stop(ctx); err != nil {
+		t.Fatalf("the service's Stop after the host stopped the Node: %v", err)
+	}
+	if err := runtime.StartSpawns(nil, nil); err == nil {
+		t.Fatal("spawns started on a stopped Node")
+	}
+
+	registry = cellRegistry(t, "")
+	stopped, err := New(registry, cellConfig(t, hostTransport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stopped.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopped.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := cellworldHost(t, registry).Close(ctx); err != nil {
+		t.Fatalf("closing the host after the service stopped the Node: %v", err)
 	}
 }

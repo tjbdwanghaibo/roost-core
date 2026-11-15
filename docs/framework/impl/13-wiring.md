@@ -19,6 +19,8 @@ Wiring把数据库、调度器、同步总线等能力接进一个App。你通�
 3. StopBudget 与 StopWithContext 的真实完成条件一致。
 4. 连接 Mod 的 `*_env`（R11，[设计 §2.1](../guide/13-wiring.md#21-连接与凭据的环境变量_env)）：取值规则只在 [wiring/mods/env.go](../../../wiring/mods/env.go) `EnvValues` 一处。每个连接配置结构体只写一个取值方法（`endpoint(env)`，列出本 Mod 的成对键），`ValidateConfig` 用 `mods.CheckEnvNames()` 调它（只查变量名，配置检查不读环境变量），读取入口用 `mods.ReadEnv()` 调它，两处的键清单因此只写一遍。读这些键的入口全部经各自 Mod 的同一个方法：mongo 的 `Init` 与 `Connection`（sidmerge 用），redis 的 `redisConfig`（Mod 与 `SingletonStore`），etcd 的 `Init`，nats 的 `Init`、`Connect`、`ServerURL`（sidmerge 用）；不要在工具里再声明一份 `mongo.uri` / `nats.url`。DataEngine、Remote、saga 不读 `mongo.*`，用 Mongo Mod 发布的 `IMongo`。错误与日志不带变量值、URI 原文与口令（Mongo 日志经 `redactedURI`，NATS 地址经 `natsdriver.RedactedURLs`）。
 
+5. ManagerMod（[wiring/manager](../../../wiring/manager/manager_mod.go)）以 `OptionalDependsOn` 排在 Nest、Remote（含预加载）、DataEngine（含预加载）、Redis、NATS、Saga、心跳等基础 Mod 之后启动、之前停止（D22，2026-11-15）：manager 托管的后台工作（模块的恢复扫描、CellWorld 的 Node、换服的后台步骤）停机排空时，它们调用的依赖都还在；排空超期时 ManagerMod 返回期限错误，App 不再停排在它之前启动的 Mod、不释放单实例锁。实体定时器不在其中（定时器 handler 可以用 manager 发布的能力）。生成的 bootstrap 把 ManagerMod 登记在 Nest 之前，修前它因此先于 Nest 启动、晚于 Nest 停止；回归 `TestManagerModStartsAfterAndStopsBeforeTheInfrastructureItsManagersUse` 经真实 App 按生成的登记顺序起停。
+
 ## 2A. Mod实现核对方式
 
 沿NewMod → ConfigSchema/Init → Provide → Start → StopWithContext逐段读。配置结构只负责本Mod读取的键；Provide发布接口，不应为了取一个接口再创建第二个后台实例。DependsOn指定生产者Mod名称；可选依赖仅在实际装配时进入排序。

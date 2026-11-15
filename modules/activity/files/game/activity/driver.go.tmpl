@@ -2,10 +2,12 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -13,6 +15,7 @@ import (
 // 期限保存在 DAO，进程内游标只影响扫描公平性。重启从头扫描；迁移后新属主从自己的清单接手。
 // 每轮最多 128 个、8 个并行 I/O 调用，调用方在进入 Nest 前再次核对 ownership。
 // 这是有界恢复扫描，不承诺离线或超容量时准点结算；个人活动不走它。
+// 宿主服务经 ScanHost 启停它（由宿主模块的 manager 发布与停止，见 ScanHost），不要在 Mod 或 Service 里直接起。
 type Driver struct {
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -90,4 +93,56 @@ func (d *Driver) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// ScanCapability 是 scope 那种 Remote 宿主的恢复扫描宿主（*ScanHost）在 Registry 里的能力名（D22）。
+// 宿主模块的 manager 在 Start 里以它发布 ScanHost，同一服务里宿主模块的 RPC Mod 在建档、注册 handler 之后按它取用。
+func ScanCapability(scope string) app.ModName { return app.ModName("activity.scan." + scope) }
+
+// ErrScanHostClosed 是 ScanHost 已经停了（进程在停机）之后再交扫描时的错误。
+var ErrScanHostClosed = errors.New("activity: the scan host is stopped")
+
+// ScanHost 是 Remote 宿主恢复扫描的宿主（维护者 D22：不在模块 runtime: 里的后台循环做成 manager）。
+//
+// 扫描的协程归它、因而归 manager Mod 启停：宿主模块的 manager 在 Start 里建好它并以 ScanCapability 发布；
+// 宿主模块的 RPC Mod 建完档、注册完 handler 之后（这一刻才可以扫）调 Start 把扫描交给它——manager 自己不知道
+// 什么时候能扫，所以由那个就绪点交过来。manager 停时调 Close：不再接扫描，取消在途调用的 ctx，在期限内等它们返回。
+// ManagerMod 排在 Nest、Remote 之后启动、之前停止，排空时扫描用到的依赖都还在。
+type ScanHost struct {
+	mu     sync.Mutex
+	closed bool
+	driver *Driver
+}
+
+// NewScanHost 返回一个还没有扫描的 ScanHost。
+func NewScanHost() *ScanHost { return &ScanHost{} }
+
+// Start 开始扫描 kind 种实体（见 StartDriver），一个 ScanHost 只扫一种、只开一次；停了之后返回 ErrScanHostClosed。
+func (h *ScanHost) Start(owned entity.RemoteOwnedEntityLister, kind entity.EntityKind, advance func(context.Context, int64) error) error {
+	if owned == nil || advance == nil {
+		return errors.New("activity: scan needs the owned-entity listing and an advance function")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return ErrScanHostClosed
+	}
+	if h.driver != nil {
+		return errors.New("activity: the scan is already running")
+	}
+	h.driver = StartDriver(owned, kind, advance)
+	return nil
+}
+
+// Close 停下扫描：之后的 Start 被拒绝；在途调用的 ctx 被取消，在 ctx 之内等它们返回。ctx 先到期时返回它的错误，
+// 扫描的协程仍在收尾，再调一次 Close 接着等（ManagerMod 用新期限再停）。可以重复调用。
+func (h *ScanHost) Close(ctx context.Context) error {
+	h.mu.Lock()
+	h.closed = true
+	driver := h.driver
+	h.mu.Unlock()
+	if driver == nil {
+		return nil
+	}
+	return driver.Stop(ctx)
 }

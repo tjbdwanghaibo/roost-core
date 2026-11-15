@@ -634,6 +634,38 @@ func TestModuleManagersAreAppendedToTheManagerList(t *testing.T) {
 	}
 }
 
+// 跑在别的服务里的模块 manager（services.<服务>.managers）登记进那个服务自己的列表：调用写成 gamemanagers.<名字>()，
+// import 补进已有的 import 声明（注释原样留在原处），重复登记不再加；alias 被别的包占了时拒绝。
+func TestServiceManagersAreQualifiedAndImported(t *testing.T) {
+	const importPath = "example.com/p/game/managers"
+	generated := []byte(renderServiceManagers("activity_world"))
+	once, changed, err := appendQualifiedManagerRegistrations(generated, []string{"NewWorldActivityScan"}, importPath)
+	if err != nil || !changed {
+		t.Fatalf("the generated service list: changed %v, err %v", changed, err)
+	}
+	text := string(once)
+	for _, want := range []string{
+		"import (\n\tgamemanagers \"example.com/p/game/managers\"\n\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n)\n\n// Managers returns",
+		"\t\t// mymgr.Mgr,\n\t\tgamemanagers.NewWorldActivityScan(),\n\t}",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	if again, changed, err := appendQualifiedManagerRegistrations(once, []string{"NewWorldActivityScan"}, importPath); err != nil || changed || !bytes.Equal(again, once) {
+		t.Fatalf("an existing qualified registration was added again (changed %v, err %v):\n%s", changed, err, again)
+	}
+	// 已经以别的名字 import 了这个包：沿用那个名字。
+	aliased := []byte("package alliance\n\nimport (\n\tmgrs \"example.com/p/game/managers\"\n\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n)\n\nfunc Managers() []app.IManager {\n\treturn []app.IManager{mgrs.NewOther()}\n}\n")
+	if edited, _, err := appendQualifiedManagerRegistrations(aliased, []string{"NewAllianceActivityScan"}, importPath); err != nil || !strings.Contains(string(edited), "mgrs.NewOther(),\n\t\tmgrs.NewAllianceActivityScan(),\n\t}") {
+		t.Fatalf("an aliased import: err %v:\n%s", err, edited)
+	}
+	taken := []byte("package alliance\n\nimport (\n\tgamemanagers \"example.com/other\"\n\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n)\n\nfunc Managers() []app.IManager {\n\treturn []app.IManager{}\n}\n")
+	if _, _, err := appendQualifiedManagerRegistrations(taken, []string{"NewAllianceActivityScan"}, importPath); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("an alias taken by another package: %v", err)
+	}
+}
+
 // 一次计划里的两个模块不会拿到同一个号；工程里已用的号、已装模块记录里的号都跳过。
 func TestModuleIDAllocatorNeverHandsOutAUsedID(t *testing.T) {
 	root := t.TempDir()

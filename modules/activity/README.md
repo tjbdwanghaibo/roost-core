@@ -19,7 +19,7 @@
     - `handlerActivityEvent`（`Sync_ActivityEvent(ctx, 完整实体号, event, createdAt)`）：可信业务入口，上报一个事件并返回全部活动快照。
     - `handlerActivityComplete`（`Sync_ActivityComplete(ctx, 完整实体号, token)`）：确认某一期的异步初始化或结算已经完成。
     - `handlerActivityView`：协议背后的事务。
-  - 包级函数（`game/activity/`）：`Definitions(scope)`（读配置表并校验）、`Validate(d)`、`ResumePending(ctx, registry, views, complete)`（锁外继续未完成的异步工作，`resume.go`）、`StartDriver(owned, kind, advance)`（给 Remote 宿主用的恢复扫描，`driver.go`）、`CoordinatorKey(token)`（映射到框架跨服汇聚服务的窗口键，`coordinator.go`）、`NewComponent`（三种宿主共用的组件工厂）。
+  - 包级函数（`game/activity/`）：`Definitions(scope)`（读配置表并校验）、`Validate(d)`、`ResumePending(ctx, registry, views, complete)`（锁外继续未完成的异步工作，`resume.go`）、`StartDriver(owned, kind, advance)`（给 Remote 宿主用的恢复扫描，`driver.go`）、`ScanHost` / `ScanCapability(scope)`（恢复扫描的宿主：宿主模块的 manager 发布、RPC Mod 在就绪点把扫描交给它，见 [modules/README](../README.md) 的“后台循环：manager”）、`CoordinatorKey(token)`（映射到框架跨服汇聚服务的窗口键，`coordinator.go`）、`NewComponent`（三种宿主共用的组件工厂）。
   - 类型：`Token`（一期活动在某阶段某流程版本的完整身份）、`Snapshot`（一期活动的只读快照）、`Context`（回调参数，`Key(action)` 给出稳定的幂等键）、`Flow{Name, Due}`、`Phase` 及常量 `Initializing`、`Warmup`、`Open`、`Settling`、`Ended`。
 - **登记点 / 钩子**
   - `activity.Register(name string, hooks activity.Hooks)`（`game/activity/types.go`）：把一段活动逻辑登记到配置表 `Logic` 列引用的名字上。只在进程启动时（`init`）登记，重名或空名 panic。`Hooks` 有四个可选回调：

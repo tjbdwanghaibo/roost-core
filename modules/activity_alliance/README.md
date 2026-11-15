@@ -19,7 +19,8 @@
   - `AllianceDao.ActivityAlliance`（类型 `ActivityBook`）：追加到联盟主 DAO 上的活动权威状态，`persist,nosync`。不进入 game 侧的联盟只读镜像。
 - **配置**
   - 没有自己的配置表。活动定义在 `activity` 的 `configs/table/activity.csv` 里，用 `Scope=alliance`。
-  - 安装时给已有的 `alliance` 服务追加 `configdata` Mod 与 `activity_alliance` RPC；只补缺少的配置段，不覆盖联盟服务已有的文件与配置。
+  - 安装时给已有的 `alliance` 服务追加 `configdata`、`manager` 两个 Mod 与 `activity_alliance` RPC；只补缺少的配置段，不覆盖联盟服务已有的文件与配置（联盟服务还没有 `managers.go` 时按生成器的样子建一份）。
+- **后台 manager**（D22）：恢复扫描由 `game/managers/alliance_activity_scan.go` 的 `NewAllianceActivityScan` 启停，登记在 **`alliance` 服务**的 `internal/service/alliance/managers.go`（`gamemanagers.NewAllianceActivityScan()`，安装器代加）。manager 在 Start 里发布 `activity.ScanHost`（能力名 `activity.ScanCapability("alliance")`）；RPC Mod 依赖 manager Mod，注册完 RPC 之后把扫描交给它，取不到就启动失败。停机时 manager 取消在途调用、在期限内等它们返回。
 - **错误码**：`activity_alliance_request_invalid`（`ErrRequestInvalid`，RPC 请求无法解码或不合法时由生成的 RPC 代码使用）。引擎自身的拒绝仍是 `activity` 的包级错误值。
 
 **日志**：显式事件触发与 Complete 确认记 Debug，记录宿主、scope、活动号、代数、期次与阶段；空事件恢复扫描不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `internal/rpc/activity_alliance/service.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -30,7 +31,7 @@
 - **`created` 触发靠恢复扫描激活，不是建盟那一刻**：建盟事务（`alliance` 模块）不认识本模块，不会在同一笔事务里激活活动。`Trigger=created` 的定义由下一轮恢复扫描（或任何一次 `Pulse` / `Reconcile`）激活，时间线锚在“建盟时间 + `DelayMillis`”上，与哪一轮扫到无关；但建盟时间只精确到秒（向下取整），而且 `DelayMillis`、预热都为 0 的定义在扫到之前不会进入开启阶段——扫描晚了，开启阶段的实际可用时间就短了（期限仍按建盟时间算）。要求建盟瞬间就开启的活动，在联盟侧自己的建盟后续里调一次 `Pulse(target, "", 0)`。
 - **调用方显式传的创建时间优先**：`createdAt` 非 0 时用调用方的值，不再读联盟的建盟时间；首次激活后锚点冻结。显式传值要传毫秒，并且必须是真实的持久事实。
 - **已解散的联盟**（最后一名成员退出，见 `alliance` 的能力边界）没有创建事实：`created` 定义不会在它身上新激活；已经激活的时间线继续由扫描推进到结束，模块不替业务清理。
-- **推进不是准点的**：Remote 实体不能挂本地持久定时器，期限存在 `ActivityBook` 里，由联盟服务进程里的恢复扫描推进：每秒至多一页 128 个联盟、8 个并行调用、每次调用预算 5 秒。联盟很多时一轮扫完的时间随联盟数增长。业务操作仍按冻结的期限拒绝过期请求（`CheckOpen`）。
+- **推进不是准点的**：Remote 实体不能挂本地持久定时器，期限存在 `ActivityBook` 里，由联盟服务进程里的恢复扫描（manager 托管）推进：每秒至多一页 128 个联盟、8 个并行调用、每次调用预算 5 秒。联盟很多时一轮扫完的时间随联盟数增长。业务操作仍按冻结的期限拒绝过期请求（`CheckOpen`）。
 - **数量上限**：沿用 `activity`——每个联盟 128 个定义号、每次推进至多 32 个动作。
 - **一致性**：所有推进都在联盟实体自己的 Nest 事务里，与联盟的其他写入共用同一个单写者；所有权迁移后旧实例的调用被拒。入盟、退盟、成员所在 game 变动都不会重开或重置联盟的活动时间线。game 侧的联盟镜像不参与推进。
 - **前提**：依赖 `activity` 与 `alliance` 两个模块；运行在已有的 `alliance` 服务进程里；调用方服务要声明 `uses_rpcs: [activity_alliance]`。排行、邮件等外部能力要配在 `alliance` 服务上。
@@ -56,8 +57,8 @@
 
 ## 验证范围
 
-- `roost module verify activity_alliance`：5 个场景（`./internal/rpc/activity_alliance`，`^TestAllianceActivity`）。
+- `roost module verify activity_alliance`：7 个场景（`./internal/rpc/activity_alliance`、`./game/managers`，`^TestAllianceActivity`）。
 - 场景是离线的：Nest、生成的 DAO 与组件、handler、Remote 准入检查是真实代码；Remote 所有权与提交是内存替身。
-- 覆盖：一期活动在权威联盟实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做；`created` 触发——没建成的联盟不激活，建盟（联盟自己的 `Found`，写秒）之后按恢复扫描的调用形态 `Pulse(target, "", 0)` 自动激活，开始时间等于建盟时间换成毫秒再加 `DelayMillis`，再扫不重置锚点，解散后不新激活。
+- 覆盖：一期活动在权威联盟实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做；`created` 触发——没建成的联盟不激活，建盟（联盟自己的 `Found`，写秒）之后按恢复扫描的调用形态 `Pulse(target, "", 0)` 自动激活，开始时间等于建盟时间换成毫秒再加 `DelayMillis`，再扫不重置锚点，解散后不新激活；恢复扫描经 ManagerMod 起停——停机时在途调用被取消且停机等它返回、停了之后不再接扫描，停机期限比在途调用先到时按期限返回、再停一次停完。
 - 真实档：[scripts/test-activity-real.sh](../../scripts/test-activity-real.sh) 经正式联盟 Found 创建权威实体，活动 pending 初始化时通过 `alliance.transfer` 迁到另一进程；完整 Token/时间锚点不变。目标 SIGKILL 后沿用原 WAL 重启，先只读真实 Mongo 观察扫描推进到 Settling，再经 NATS 完成结算；终态水位为 1，旧阶段及已完成 Token 均被拒。与 World 权威和普通 Player 定时器分别核对，见 [报告](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
 - 该档使用精简正式配方，允许 Mongo 正常投影，不是仅 WAL 恢复；未验证与联盟写入的持续并发、真实奖励外部副作用、长时间运行、跨机或容量。

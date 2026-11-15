@@ -7,9 +7,11 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -20,6 +22,11 @@ import (
 // 签名 func() app.IManager）。安装器把 "<构造函数名>()," 加到 Managers() 返回的列表末尾；已经有了就不加。
 // managers.go 是业务文件：安装器只往那个列表里加一行，别的不碰；列表找不到（业务把 Managers 改成了别的写法）时
 // 拒绝安装并说明要加哪一行。只对 manager 登记点在 game/managers/managers.go 的工程生效（v1.47.0 起新生成的工程）。
+//
+// 后台循环必须跑在别的业务服务里时（activity_world / activity_alliance 的恢复扫描：扫的是那个服务进程拥有的 Remote 实体），
+// 清单写 services.<服务>.managers：代码同样在 files/game/managers/ 下，登记进那个服务自己的 manager 列表
+// internal/service/<服务>/managers.go（"gamemanagers.<名字>()," 并补上 import；文件还没有时按生成器的样子先建出来，
+// 之后的生成不再覆盖它），那个服务的 Mods 必须带 manager。
 
 // moduleManagersDir 是模块 manager 模板的落点目录（package managers）。
 const moduleManagersDir = "game/managers/"
@@ -27,11 +34,22 @@ const moduleManagersDir = "game/managers/"
 // validateModuleManagers 检查清单的 managers：构造函数名是导出的标识符、不重复；模块带了 game/managers 下的模板；
 // needs.mods 写了 manager（没有 manager Mod 就没有人启停它们）；入口落在托管框架服务上的模块不能带（manager 在 game 服务里启动）。
 func validateModuleManagers(spec ModuleSpec) error {
-	if len(spec.Managers) == 0 {
+	all := append([]string(nil), spec.Managers...)
+	for _, service := range slices.Sorted(maps.Keys(spec.Services)) {
+		declared := spec.Services[service]
+		if len(declared.Managers) == 0 {
+			continue
+		}
+		if !contains(declared.Mods, "manager") {
+			return fmt.Errorf("services.%s.managers: services.%s.mods must list manager (the manager Mod starts and stops them)", service, service)
+		}
+		all = append(all, declared.Managers...)
+	}
+	if len(all) == 0 {
 		return nil
 	}
 	seen := map[string]bool{}
-	for _, name := range spec.Managers {
+	for _, name := range all {
 		if !modulePascalPattern.MatchString(name) || seen[name] {
 			return fmt.Errorf("managers: %q must be a unique exported constructor name (func() app.IManager in package managers)", name)
 		}
@@ -45,7 +63,10 @@ func validateModuleManagers(spec ModuleSpec) error {
 		}
 	}
 	if !hasFile {
-		return fmt.Errorf("managers: files/%s has no .go template defining %s", moduleManagersDir, strings.Join(spec.Managers, ", "))
+		return fmt.Errorf("managers: files/%s has no .go template defining %s", moduleManagersDir, strings.Join(all, ", "))
+	}
+	if len(spec.Managers) == 0 {
+		return nil
 	}
 	if !contains(spec.Needs.Mods, "manager") {
 		return fmt.Errorf("managers: needs.mods must list manager (the manager Mod starts and stops them)")
@@ -97,14 +118,78 @@ func moduleManagersHost(root string, manifest Manifest, service string) bool {
 
 // writeModuleManagers 把 spec 的 manager 登记进 game/managers/managers.go。在 AddModules 的回滚边界内调用（文件已备份）。
 func writeModuleManagers(root string, manifest Manifest, service string, spec ModuleSpec) error {
-	if len(spec.Managers) == 0 {
-		return nil
+	if len(spec.Managers) > 0 {
+		body, changed, err := moduleManagersEdit(root, manifest, service, spec)
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := writeAtomic(filepath.Join(root, filepath.FromSlash(gameManagersPath)), body, 0o644); err != nil {
+				return err
+			}
+		}
 	}
-	body, changed, err := moduleManagersEdit(root, manifest, service, spec)
-	if err != nil || !changed {
-		return err
+	for _, host := range slices.Sorted(maps.Keys(spec.Services)) {
+		names := spec.Services[host].Managers
+		if len(names) == 0 {
+			continue
+		}
+		rel, body, changed, err := moduleServiceManagersEdit(root, manifest, service, host, spec, names)
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644); err != nil {
+				return err
+			}
+		}
 	}
-	return writeAtomic(filepath.Join(root, filepath.FromSlash(gameManagersPath)), body, 0o644)
+	return nil
+}
+
+// moduleServiceManagersPath 是服务 host 的 manager 列表文件，qualified 表示列表不在 game/managers 包里、要写成
+// gamemanagers.<名字>()。host 就是模块装进的业务服务、且它的列表在 game/managers/managers.go 时与顶层 managers 相同。
+func moduleServiceManagersPath(root string, manifest Manifest, target, host string) (rel string, qualified bool) {
+	if host == target && moduleManagersHost(root, manifest, host) {
+		return gameManagersPath, false
+	}
+	return "internal/service/" + host + "/managers.go", true
+}
+
+// moduleServiceManagersEdit 返回把 names 登记进服务 host 的 manager 列表之后的内容。文件还没有（服务这次才装上
+// manager Mod）时从生成器的样子开始，包名取目录里现有文件的（模块自带的 service.go 在本步之前已经写好）。
+func moduleServiceManagersEdit(root string, manifest Manifest, target, host string, spec ModuleSpec, names []string) (rel string, body []byte, changed bool, err error) {
+	if _, ok := manifest.Services[host]; !ok || manifest.isFrameworkService(host) {
+		return "", nil, false, fmt.Errorf("module %s: services.%s.managers: %s is not a business service of this project", spec.Name, host, host)
+	}
+	rel, qualified := moduleServiceManagersPath(root, manifest, target, host)
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	raw, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+	case os.IsNotExist(err) && qualified:
+		pkg, ok := existingServicePackage(filepath.Dir(path))
+		if !ok {
+			pkg = manifest.servicePackage(host)
+		}
+		raw, changed = []byte(renderServiceManagers(pkg)), true
+	default:
+		return "", nil, false, fmt.Errorf("module %s: %w", spec.Name, err)
+	}
+	importPath := ""
+	if qualified {
+		importPath = manifest.Project.Module + "/" + strings.TrimSuffix(moduleManagersDir, "/")
+	}
+	edited, added, err := appendQualifiedManagerRegistrations(raw, names, importPath)
+	if err != nil {
+		calls := managerCalls(names)
+		if qualified {
+			calls = "gamemanagers." + strings.Join(strings.Split(calls, ", "), ", gamemanagers.")
+		}
+		return "", nil, false, fmt.Errorf("module %s: %s: %w; add %s to the list Managers() returns yourself, then install again",
+			spec.Name, rel, err, calls)
+	}
+	return rel, edited, changed || added, nil
 }
 
 func managerCalls(names []string) string {
@@ -118,6 +203,15 @@ func managerCalls(names []string) string {
 // appendManagerRegistrations 在 Managers() 返回的列表字面量末尾加上 "<name>()," （已有同名调用的跳过），保留其余文本与注释。
 // 认得的写法只有生成的那一种：func Managers() []app.IManager { return []app.IManager{ ... } }。
 func appendManagerRegistrations(src []byte, names []string) ([]byte, bool, error) {
+	return appendQualifiedManagerRegistrations(src, names, "")
+}
+
+// managersImportAlias 是别的服务的 manager 列表引用 game/managers 包时用的名字。
+const managersImportAlias = "gamemanagers"
+
+// appendQualifiedManagerRegistrations 同 appendManagerRegistrations；importPath 不为空时列表不在 game/managers 包里：
+// 调用写成 gamemanagers.<名字>()，并补上 import（已有同路径的 import 就用它的名字）。
+func appendQualifiedManagerRegistrations(src []byte, names []string, importPath string) ([]byte, bool, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, gameManagersPath, src, parser.ParseComments)
 	if err != nil {
@@ -144,18 +238,43 @@ func appendManagerRegistrations(src []byte, names []string) ([]byte, bool, error
 	if list == nil {
 		return nil, false, fmt.Errorf("func Managers does not return a []app.IManager{...} literal")
 	}
+	qualifier := ""
+	if importPath != "" {
+		qualifier = managersImportAlias
+		for _, spec := range file.Imports {
+			if strings.Trim(spec.Path.Value, `"`) == importPath {
+				qualifier = path.Base(importPath)
+				if spec.Name != nil {
+					qualifier = spec.Name.Name
+				}
+			}
+		}
+	}
 	present := map[string]bool{}
 	for _, element := range list.Elts {
-		if call, ok := element.(*ast.CallExpr); ok {
-			if ident, ok := call.Fun.(*ast.Ident); ok && len(call.Args) == 0 {
-				present[ident.Name] = true
+		call, ok := element.(*ast.CallExpr)
+		if !ok || len(call.Args) != 0 {
+			continue
+		}
+		switch fun := call.Fun.(type) {
+		case *ast.Ident:
+			if qualifier == "" {
+				present[fun.Name] = true
+			}
+		case *ast.SelectorExpr:
+			if pkg, ok := fun.X.(*ast.Ident); ok && qualifier != "" && pkg.Name == qualifier {
+				present[fun.Sel.Name] = true
 			}
 		}
 	}
 	var lines strings.Builder
 	for _, name := range names {
 		if !present[name] {
-			fmt.Fprintf(&lines, "\t\t%s(),\n", name)
+			if qualifier != "" {
+				fmt.Fprintf(&lines, "\t\t%s.%s(),\n", qualifier, name)
+			} else {
+				fmt.Fprintf(&lines, "\t\t%s(),\n", name)
+			}
 			present[name] = true
 		}
 	}
@@ -179,9 +298,55 @@ func appendManagerRegistrations(src []byte, names []string) ([]byte, bool, error
 	edited = append(edited, src[:at]...)
 	edited = append(edited, insert...)
 	edited = append(edited, src[at:]...)
+	if importPath != "" {
+		if edited, err = ensureManagersImport(edited, importPath, qualifier); err != nil {
+			return nil, false, err
+		}
+	}
 	formatted, err := format.Source(edited)
 	if err != nil {
 		return nil, false, err
 	}
 	return formatted, true, nil
+}
+
+// ensureManagersImport 在 src 里补上 import alias "importPath"（已有同路径的 import 时不动；alias 被别的包占了时报错）。
+func ensureManagersImport(src []byte, importPath, alias string) ([]byte, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, gameManagersPath, src, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+	for _, spec := range file.Imports {
+		if strings.Trim(spec.Path.Value, `"`) == importPath {
+			return src, nil
+		}
+		name := path.Base(strings.Trim(spec.Path.Value, `"`))
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if name == alias {
+			return nil, fmt.Errorf("import name %s is already used by %s", alias, spec.Path.Value)
+		}
+	}
+	// 按文本插入（不经 go/printer 重排：改写 import 块时会把后面的注释挪进块里）。
+	line := fmt.Sprintf("%s %q", alias, importPath)
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.IMPORT {
+			continue
+		}
+		var edited []byte
+		if gen.Lparen.IsValid() {
+			at := fset.Position(gen.Lparen).Offset + 1
+			edited = append(append(append(edited, src[:at]...), "\n\t"+line...), src[at:]...)
+		} else {
+			start, end := fset.Position(gen.Pos()).Offset, fset.Position(gen.End()).Offset
+			only := strings.TrimSpace(strings.TrimPrefix(string(src[start:end]), "import"))
+			edited = append(append(append(edited, src[:start]...), "import (\n\t"+line+"\n\t"+only+"\n)"...), src[end:]...)
+		}
+		return edited, nil
+	}
+	at := fset.Position(file.Name.End()).Offset
+	return append(append(append([]byte(nil), src[:at]...), "\n\nimport "+line...), src[at:]...), nil
 }

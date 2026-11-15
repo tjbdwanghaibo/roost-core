@@ -186,7 +186,24 @@ needs:
 managers: [NewLoginNotices]  # func() app.IManager，定义在 files/game/managers/ 下的模板里
 ```
 
-安装器把 `NewLoginNotices(),` 加到 `game/managers/managers.go` 的 `Managers()` 列表末尾（已经有了不再加；`roost.yaml` 的 `modules.<name>.managers` 记下它），由 manager Mod 统一启停：依赖先启（`app.ManagerDependencyProvider`）、停机反序，停机时带着期限调 `StopWithContext`。manager 要做到：Start 里建好要用的东西并以能力名发布到 Registry（调用方用到时按能力名取，取不到就明确拒绝或丢弃，不自己另起协程）；Stop 不再接新的工作、取消在途工作的 ctx、在期限内等它们返回，期限先到时返回期限的错误（ManagerMod 会用新期限再停），不能无限等。manager Mod 在玩家接入的 Mod 之前启动、之后停止，Start 时 World 还不存在（见 `managers.go` 的注释）。只对 manager 登记点在 `game/managers/managers.go` 的工程生效（v1.47.0 起新生成的工程）；业务把 `Managers()` 改成不是 `return []app.IManager{...}` 的写法时安装器拒绝，并说明要自己加哪一行。现有使用者：login（`NewLoginNotices`、`NewLoginPresence`）、rehome（`NewRehomeBackground`）、room（`NewRoomPresence`）。
+安装器把 `NewLoginNotices(),` 加到 `game/managers/managers.go` 的 `Managers()` 列表末尾（已经有了不再加；`roost.yaml` 的 `modules.<name>.managers` 记下它），由 manager Mod 统一启停：依赖先启（`app.ManagerDependencyProvider`）、停机反序，停机时带着期限调 `StopWithContext`。manager 要做到：Start 里建好要用的东西并以能力名发布到 Registry（调用方用到时按能力名取，取不到就明确拒绝或丢弃，不自己另起协程）；Stop 不再接新的工作、取消在途工作的 ctx、在期限内等它们返回，期限先到时返回期限的错误（ManagerMod 会用新期限再停），不能无限等。
+
+**启停先后**：manager Mod 排在 Nest、Remote（含预加载）、DataEngine（含预加载）、Redis、NATS、Saga、心跳这些基础 Mod 之后启动、之前停止（`wiring/manager` 的 `OptionalDependsOn`，服务没装的不算），所以 manager 排空在途工作时它用的依赖都还在；排空超期时 ManagerMod 返回期限错误，App 不再停这些依赖、不释放单实例锁。玩家接入的 Mod 在 manager Mod 之后启动、之前停止。Start 时 World 还不存在（见 `managers.go` 的注释）。
+
+**就绪点交接**：后台工作什么时候能开始，manager 往往不知道（要等 Service.Init 建好场景、装好心跳，或等某个 RPC Mod 建完档）。这时 manager 只在 Start 里发布一个“宿主”，工作的发起方在自己的就绪点把工作交给它（取不到宿主就拒绝、不自己起协程），协程从此归 manager，停机由 manager 收。三处用法：换服的 Driver 把后台步骤交给 `Background`（rehome），RPC Mod 建完档、注册完 handler 后把恢复扫描交给 `activity.ScanHost`（activity_world / activity_alliance），服务在心跳装好之后 `Runtime.Start` 把 Node 交给 `cellworldhost.Host`（cellworld；服务仍在 Shutdown 里先停 Node，manager 兜底排空服务没停下的）。
+
+**跑在别的服务里**：后台循环必须跑在模块声明的另一个业务服务里时（恢复扫描扫的是那个服务进程拥有的 Remote 实体），写在那个服务的声明下：
+
+```yaml
+services:
+  activity_world:
+    mods: [configdata, dataengine, etcd, manager, mongo, nats, nest, redis, remote_entity]   # 必须带 manager
+    managers: [NewWorldActivityScan]   # 代码同样在 files/game/managers/ 下
+```
+
+安装器把 `gamemanagers.NewWorldActivityScan(),` 加到 `internal/service/activity_world/managers.go` 的 `Managers()` 列表末尾并补上 `import gamemanagers "<module>/game/managers"`（文件还没有时按生成器的样子先建出来，之后的生成不再覆盖；`roost.yaml` 记在 `modules.<name>.service_managers`）。
+
+只对 manager 登记点在 `game/managers/managers.go` 的工程生效（v1.47.0 起新生成的工程）；业务把 `Managers()` 改成不是 `return []app.IManager{...}` 的写法时安装器拒绝，并说明要自己加哪一行。现有使用者：login（`NewLoginNotices`、`NewLoginPresence`）、rehome（`NewRehomeBackground`）、room（`NewRoomPresence`）、cellworld（`NewCellWorldHost`），以及跑在属主服务里的 activity_world（`NewWorldActivityScan`，activity_world 服务）、activity_alliance（`NewAllianceActivityScan`，alliance 服务）。
 
 模块的玩家侧只安装到一个业务服务，依赖属于同一服务；模块也可声明自己独占的新业务服务（如 alliance）。跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
@@ -212,9 +229,10 @@ state:                       # 追加到主 DAO 末尾的顶层字段
     comment: 写进 DAO 定义的注释
 component: Wallet            # 挂在实体上的组件
 components: []               # 自带实体的其他组件名，安装时分配类型号
-services: {}                 # 模块独占的新服务；mods/rpcs/entities，已有同名服务拒绝接管
+services: {}                 # 模块独占的新服务；mods/rpcs/entities/managers，已有同名服务拒绝接管
 sagas: []                    # name/steps/routed/receipts；定义与实体回执原子安装，业务由 runtime 提供
-managers: []                 # 后台 manager 的构造函数（见“后台循环：manager”），安装时登记进 game/managers/managers.go
+managers: []                 # 后台 manager 的构造函数（见“后台循环：manager”），安装时登记进 game/managers/managers.go；
+                             # 跑在模块声明的别的服务里的写在 services.<服务>.managers
 timer_types: []              # 实体内的持久定时器类型名，例如 turn 的 [TurnDeadline]
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字

@@ -1,0 +1,123 @@
+package managers
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/activity"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	kitmanager "github.com/tjbdwanghaibo/roost-core/wiring/manager"
+)
+
+// activity_world manager 的场景：恢复扫描在 manager 发布的 ScanHost 里执行，停机时在途调用被取消、在期限内等完，
+// 停了之后不再接扫描。扫描本身（建档、路由检查、推进）的场景在 internal/rpc/activity_world。
+
+// worldActivityScopes 每次都列出同一个宿主实体（扫描每秒一页）。
+type worldActivityScopes struct{ pages atomic.Int32 }
+
+func (l *worldActivityScopes) ListOwnedRemoteEntities(context.Context, []entity.EntityKind, int64, int) ([]int64, int64, error) {
+	l.pages.Add(1)
+	return []int64{71}, 0, nil
+}
+
+// 经 ManagerMod 起停（与生成的 bootstrap 相同）：Start 之前没有 ScanHost；Start 之后交给它的扫描在跑，一次一直等到
+// ctx 结束的推进在停机时被取消，StopWithContext 等它返回才算停完；停了之后再交扫描被拒绝、扫描不再列实体。
+func TestWorldActivityScanRunsUnderTheManagerAndStopsWithIt(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	mod := kitmanager.NewManagerMod(NewWorldActivityScan())
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := app.Lookup[*activity.ScanHost](registry, activity.ScanCapability("world")); ok {
+		t.Fatal("the scan host was published before the manager started")
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	scans, ok := app.Lookup[*activity.ScanHost](registry, activity.ScanCapability("world"))
+	if !ok || scans == nil {
+		t.Fatal("the started manager did not publish the scan host")
+	}
+	lister := &worldActivityScopes{}
+	entered, ended := make(chan struct{}), make(chan error, 1)
+	if err := scans.Start(lister, 1, func(ctx context.Context, id int64) error {
+		close(entered)
+		<-ctx.Done()
+		ended <- ctx.Err()
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the scan did not run under the started manager")
+	}
+
+	stopping, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := mod.StopWithContext(stopping); err != nil {
+		t.Fatalf("stopping the manager mod: %v", err)
+	}
+	select {
+	case err := <-ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the running advance ended with %v, want context.Canceled from the stop", err)
+		}
+	default:
+		t.Fatal("StopWithContext returned while an advance was still running")
+	}
+	if err := scans.Start(lister, 1, func(context.Context, int64) error { return nil }); !errors.Is(err, activity.ErrScanHostClosed) {
+		t.Fatalf("handing a scan to the stopped host: %v, want ErrScanHostClosed", err)
+	}
+	pages := lister.pages.Load()
+	time.Sleep(1200 * time.Millisecond) // 扫描间隔是 1 秒：还在扫的话这段时间里会再列一页。
+	if got := lister.pages.Load(); got != pages {
+		t.Fatalf("the scan listed %d more pages after the manager stopped", got-pages)
+	}
+}
+
+// 停机期限比在途调用先到（推进不看 ctx）：StopWithContext 不无限等，到期返回期限的错误；推进返回之后再停一次就停完。
+func TestWorldActivityScanStopIsBoundedByItsContext(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	manager := NewWorldActivityScan()
+	if err := manager.Start(registry); err != nil {
+		t.Fatal(err)
+	}
+	scans, _ := app.Lookup[*activity.ScanHost](registry, activity.ScanCapability("world"))
+	release, entered := make(chan struct{}), make(chan struct{})
+	if err := scans.Start(&worldActivityScopes{}, 1, func(context.Context, int64) error {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	stopper := manager.(app.IManagerStopperWithContext)
+	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	if err := stopper.StopWithContext(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop while an advance ignores its context: %v, want the stop deadline", err)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("stop took %v with a 100ms deadline", elapsed)
+	}
+	close(release)
+	again, cancelAgain := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelAgain()
+	if err := stopper.StopWithContext(again); err != nil {
+		t.Fatalf("stopping again after the advance returned: %v", err)
+	}
+}

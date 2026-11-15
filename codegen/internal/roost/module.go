@@ -8,9 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -190,6 +192,11 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 		}
 		for _, manager := range item.Managers {
 			fmt.Fprintf(stdout, "  manager:   %s() in %s (started and stopped by the manager mod)\n", manager, gameManagersPath)
+		}
+		for _, host := range slices.Sorted(maps.Keys(item.Services)) {
+			for _, manager := range item.Services[host].Managers {
+				fmt.Fprintf(stdout, "  manager:   gamemanagers.%s() in internal/service/%s/managers.go (service %s; started and stopped by its manager mod)\n", manager, host, host)
+			}
 		}
 		for _, state := range item.State {
 			fmt.Fprintf(stdout, "  state:     %s\n", state)

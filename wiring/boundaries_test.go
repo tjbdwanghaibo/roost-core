@@ -25,6 +25,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/etcd"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
 	"github.com/tjbdwanghaibo/roost-core/wiring/gate"
+	"github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/wiring/lock"
 	kitlock "github.com/tjbdwanghaibo/roost-core/wiring/lock"
 	"github.com/tjbdwanghaibo/roost-core/wiring/manager"
@@ -246,6 +247,10 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 		syncbus.NewSyncBusMod(0),
 		saga.NewMod(),
 		statslog.NewStatsLogMod(),
+		// 起服预加载与心跳驱动（ManagerMod 以可选依赖排在它们之后，D22）。
+		dataengine.NewLocalPreloadMod(),
+		remoteentity.NewRemotePreloadMod(),
+		heartbeat.NewMod(access, nil),
 		// 承载玩家的 game 进程的合服启动自检与它依赖的 account 客户端（DataEngine 把自检列为可选依赖）。
 		account.NewClientMod(),
 		account.NewServingGuardMod(),

@@ -15,12 +15,13 @@ state:
     comment: 活动权威状态；所有推进在宿主实体事务内。
 services:
   activity_world:
-    mods: [configdata, dataengine, etcd, mongo, nats, nest, redis, remote_entity]
+    mods: [configdata, dataengine, etcd, manager, mongo, nats, nest, redis, remote_entity]
     rpcs: [activity_world]
     entities: [ActivityWorld]
+    managers: [NewWorldActivityScan]
 entities: [ActivityWorld]
 errcodes: [activity_world_request_invalid]
 verify:
-  packages: [./internal/rpc/activity_world]
+  packages: [./internal/rpc/activity_world, ./game/managers]
   run: ^TestWorldActivity
-  pass: 4
+  pass: 6

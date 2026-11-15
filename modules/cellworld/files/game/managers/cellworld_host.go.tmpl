@@ -1,0 +1,62 @@
+package managers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"{{MODULE}}/game/cellworldhost"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是 cellworld 模块的 manager（维护者 D22：不在模块 runtime: 里的后台循环做成 manager，由 manager Mod 统一启停）。
+// 安装 cellworld 时，安装器在本目录 managers.go 的 Managers() 列表里加了一行 NewCellWorldHost()。
+//
+// 它管的是本进程 CellWorld Node 的协程（cellworldhost.Runtime：Node.Run、出生槽巡检）：
+//
+//   - Start：建一个 cellworldhost.Host，以 cellworldhost.HostCapability 发布。它不启动 Node——Node 要在 Service.Init 里
+//     建好场景、装好实体心跳之后才能跑，而 manager 的 Start 在 Service.Init 之前。服务在那个就绪点调 Runtime.Start，
+//     Start 把 Runtime 交给 Host；取不到 Host（这一行被删了）时 Start 拒绝，不起 Node。
+//   - Stop：之后的 Runtime.Start 被拒绝；服务在 Shutdown 里没停下的 Node 在停机期限之内排空、退出（ManagerMod 带着期限调
+//     StopWithContext）。ManagerMod 排在 Nest、NATS、Redis 与心跳之后启动、之前停止，排空时这些依赖都还在；期限先到时
+//     返回期限错误，ManagerMod 用新的期限再停，App 不再停它之前启动的 Mod、不释放单实例锁。
+
+// cellWorldHostStopBudget 是没有带期限的 Stop()（不经 ManagerMod 的调用方）等 Node 排空的上限。
+const cellWorldHostStopBudget = 10 * time.Second
+
+// NewCellWorldHost 返回 cellworld 模块的 manager，登记在 Managers() 里。
+func NewCellWorldHost() app.IManager { return &cellWorldHost{} }
+
+type cellWorldHost struct {
+	host *cellworldhost.Host
+}
+
+func (*cellWorldHost) Name() string { return "cellworld.host" }
+
+func (m *cellWorldHost) Start(registry *app.Registry) error {
+	host := cellworldhost.NewHost()
+	if err := registry.Register(cellworldhost.HostCapability, host); err != nil {
+		return fmt.Errorf("cellworld host: %w", err)
+	}
+	m.host = host
+	return nil
+}
+
+func (m *cellWorldHost) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), cellWorldHostStopBudget)
+	defer cancel()
+	if err := m.StopWithContext(ctx); err != nil {
+		slog.Warn("cellworld host: stop", "err", err)
+	}
+}
+
+// StopWithContext 停下 Host，在 ctx 之内把还在跑的 Node 排空；ctx 先到期时返回它的错误（ManagerMod 据此把这个 manager
+// 留在待停列表里，用新的期限再停一次）。可以重复调用。
+func (m *cellWorldHost) StopWithContext(ctx context.Context) error {
+	if m.host == nil {
+		return nil
+	}
+	return m.host.Close(ctx)
+}

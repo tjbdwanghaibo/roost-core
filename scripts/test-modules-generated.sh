@@ -11,7 +11,7 @@ verify_index=0
 all_modules=(wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn rehome actor scene monster attribute equipment dungeon naming cdkey notice gacha friends idle terrain combat servertime login gm purchase rules team matchroom matchmaking alliance activity activity_world activity_alliance portal)
 reverse_modules=()
 for ((i=${#all_modules[@]}-1; i>=0; i--)); do reverse_modules+=("${all_modules[i]}"); done
-all_counts=(combat+skillbook=1 notice+gm=4 wallet=17 checkin=8 chat=10 enter=29 profile=20 bag=20 leaderboard=21 mailbox=33 task=29 stamina=26 shop=20 skillbook=11 room=29 turn=25 rehome=47 actor=14 scene=28 monster=27 attribute=20 equipment=18 dungeon=21 naming=15 cdkey=12 notice=8 gacha=29 friends=18 idle=19 terrain=28 combat=38 servertime=12 login=36 portal=12 gm=9 purchase=21 purchase+bag=4 purchase+enter=2 wallet+gm=4 bag+gm=4 profile+gm=4 mailbox+gm=4 rehome+gm=4 chat+enter=2 enter+profile=3 mailbox+enter=5 mailbox+bag=9 mailbox+profile=10 task+checkin=3 rehome+enter=5 scene+chat=5 scene+profile=2 scene+attribute=2 scene+equipment=2 attribute+equipment=8 dungeon+leaderboard=3 combat+scene=2 combat+equipment=2 terrain+monster=2 servertime+enter=3 login+enter=6 portal+enter=2 profile+enter=4 attribute+enter=2 task+wallet=6 task+bag=3 task+shop=3 task+stamina=3 task+profile=2 task+dungeon=2 task+leaderboard=3 rules=10 shop+rules=2 stamina+rules=2 team=35 team+rehome=2 matchroom=12 matchmaking=17 matchmaking+rehome=2 alliance=55 alliance+enter=2 alliance+rehome=2 activity=21 activity_world=4 activity_alliance=5 activity+enter=2 activity+profile=1 activity+leaderboard=1 activity+mailbox=1)
+all_counts=(combat+skillbook=1 notice+gm=4 wallet=17 checkin=8 chat=10 enter=29 profile=20 bag=20 leaderboard=21 mailbox=33 task=29 stamina=26 shop=20 skillbook=11 room=29 turn=25 rehome=47 actor=14 scene=28 monster=27 attribute=20 equipment=18 dungeon=21 naming=15 cdkey=12 notice=8 gacha=29 friends=18 idle=19 terrain=28 combat=38 servertime=12 login=36 portal=12 gm=9 purchase=21 purchase+bag=4 purchase+enter=2 wallet+gm=4 bag+gm=4 profile+gm=4 mailbox+gm=4 rehome+gm=4 chat+enter=2 enter+profile=3 mailbox+enter=5 mailbox+bag=9 mailbox+profile=10 task+checkin=3 rehome+enter=5 scene+chat=5 scene+profile=2 scene+attribute=2 scene+equipment=2 attribute+equipment=8 dungeon+leaderboard=3 combat+scene=2 combat+equipment=2 terrain+monster=2 servertime+enter=3 login+enter=6 portal+enter=2 profile+enter=4 attribute+enter=2 task+wallet=6 task+bag=3 task+shop=3 task+stamina=3 task+profile=2 task+dungeon=2 task+leaderboard=3 rules=10 shop+rules=2 stamina+rules=2 team=35 team+rehome=2 matchroom=12 matchmaking=17 matchmaking+rehome=2 alliance=55 alliance+enter=2 alliance+rehome=2 activity=21 activity_world=6 activity_alliance=7 activity+enter=2 activity+profile=1 activity+leaderboard=1 activity+mailbox=1)
 cleanup() {
   if [[ -z "${ROOST_MODULES_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_MODULES_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
@@ -242,6 +242,10 @@ verify_full_project() {
   # 模块的后台 manager（D22）各登记一次，不论安装顺序。
   for manager in NewLoginNotices NewRehomeBackground; do
     [[ "$(grep -c "^		$manager(),$" game/managers/managers.go)" == 1 ]] || { cat game/managers/managers.go; echo "manager $manager is not registered exactly once" >&2; exit 1; }
+  done
+  # 跑在属主服务里的 manager（services.<服务>.managers）登记进那个服务自己的列表。
+  for pair in activity_world:NewWorldActivityScan alliance:NewAllianceActivityScan; do
+    [[ "$(grep -c "^		gamemanagers.${pair#*:}(),$" "internal/service/${pair%:*}/managers.go")" == 1 ]] || { cat "internal/service/${pair%:*}/managers.go"; echo "manager ${pair#*:} is not registered exactly once in service ${pair%:*}" >&2; exit 1; }
   done
   commit_all full-modules
   # 每个工程再以相反的请求顺序重复安装，所有模块和联动都应保持原样。

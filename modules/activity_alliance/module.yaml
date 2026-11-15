@@ -16,10 +16,11 @@ state:
 services:
   alliance:
     existing: true
-    mods: [configdata]
+    mods: [configdata, manager]
     rpcs: [activity_alliance]
+    managers: [NewAllianceActivityScan]
 errcodes: [activity_alliance_request_invalid]
 verify:
-  packages: [./internal/rpc/activity_alliance]
+  packages: [./internal/rpc/activity_alliance, ./game/managers]
   run: ^TestAllianceActivity
-  pass: 5
+  pass: 7
