@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.48.0**（2026-11-15）：新生成物的模块 manager 登记、CellWorld 线上格式 v13 与后台 checkpoint 缺省打开都要 v1.48.0；framework-compat 的 minimum 一栏随之改为 v1.48.0。
+
 ## [v1.48.0] - 2026-11-15
 
 - **登录潮：game-demo 的 EnterGame 不再同步等 World 的登录计数**（2026-11-15）：改为投递 `Send_RecordEnter`，计数 handler 仍是 strict。此前 strict 计数在唯一 World 的锁内等 fsync（约每秒 110 笔），千人约 5 秒的登录潮里后到的玩家在 World 前等光 3 秒请求期限，进场景与进入钩子全部超时（M-15：进入路径失败 422 → 0，请求超时 438 → 0）。只对新生成工程生效。
