@@ -62,6 +62,26 @@ func (m *ManagerMod) Manager(name string) (app.IManager, bool) { return m.engine
 func (m *ManagerMod) Name() app.ModName         { return mods.ModManager }
 func (m *ManagerMod) Init(_ *viper.Viper) error { return nil }
 
+// managerInfrastructure 是 manager 的后台工作会调用、因而要比 manager 先启动后停止的 Mod（D22）：模块的后台循环
+// （恢复扫描、CellWorld 的 Node、换服的后台步骤）经 Nest、Remote、DataEngine、Redis、NATS、Saga 与心跳工作，停机时
+// manager 取消并在期限内排空它们，那时这些依赖必须都还在；排空超期时 ManagerMod 返回期限错误，App 不再停排在它之前
+// 启动的 Mod（见 framework/app 的 stopModsReverseBefore），依赖与单实例锁照样保留。
+//
+// 用 OptionalDependsOn：服务没装的不算缺失。实体定时器（entity_timer）不在其中：定时器的 handler 可以用 manager 发布的
+// 能力，manager 不靠定时器排空。玩家接入、模块的 RPC Mod 这类入口排在 ManagerMod 之后（登记在它之后，或自己 DependsOn
+// manager），停机时先停。
+var managerInfrastructure = []app.ModName{
+	mods.ModConfigData, mods.ModMongo, mods.ModRedis, mods.ModNats, mods.ModEtcd,
+	mods.ModDataEngine, mods.ModDataEnginePreload, mods.ModNest,
+	mods.ModRemoteEntity, mods.ModRemoteEntityPreload, mods.ModRemoteMirror,
+	mods.ModSyncBus, mods.ModSaga, mods.ModHeartbeat, mods.ModLock,
+}
+
+// OptionalDependsOn 让 ManagerMod 排在 managerInfrastructure 之后启动、之前停止（不论 bootstrap 里的登记顺序）。
+func (m *ManagerMod) OptionalDependsOn() []app.ModName {
+	return append([]app.ModName(nil), managerInfrastructure...)
+}
+
 // Provide hands the registry to the engine (every manager receives it from
 // Start) and publishes the mod under mods.ModManager.
 func (m *ManagerMod) Provide(r *app.Registry) error {
@@ -90,6 +110,7 @@ func (m *ManagerMod) StopWithContext(ctx context.Context) error {
 }
 
 var (
-	_ app.Mod                   = (*ManagerMod)(nil)
-	_ app.ModStopperWithContext = (*ManagerMod)(nil)
+	_ app.Mod                           = (*ManagerMod)(nil)
+	_ app.ModStopperWithContext         = (*ManagerMod)(nil)
+	_ app.ModOptionalDependencyProvider = (*ManagerMod)(nil)
 )
