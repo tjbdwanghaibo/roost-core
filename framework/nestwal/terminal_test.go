@@ -240,7 +240,7 @@ func TestSyncAfterTerminalNeverFsyncsOrAdvancesDurableLSN(t *testing.T) {
 
 	syncErr := w.syncActive()
 	w.stateMu.RLock()
-	unsynced := w.unsynced
+	unsynced := w.writeSeq != w.syncedSeq
 	w.stateMu.RUnlock()
 	if !errors.Is(syncErr, corenest.ErrCommitIndeterminate) || script.calls.Load() != 1 || !unsynced || w.DurableLSN() != 0 {
 		t.Fatalf("syncActive after terminal: err=%v fsync calls=%d unsynced=%v DurableLSN=%d; want terminal error, 1 fsync, unsynced, DurableLSN 0",

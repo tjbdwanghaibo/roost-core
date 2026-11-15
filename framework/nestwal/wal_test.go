@@ -98,57 +98,136 @@ func TestSegmentSyncMetricsIncludeAsyncFlushAndAck(t *testing.T) {
 	}
 }
 
-// async 不要求自己的记录立即持久，但追加仍可能等正在刷盘的 stateMu。
-// 用屏障控制已有刷盘与下一批写入的交错，不用睡眠猜测是否发生等待。
-func TestAsyncAppendWaitsForAnOngoingSegmentSync(t *testing.T) {
+// async 只等写入：段 fsync（组提交 ticker、strict 批、Ack、Sync 发起的都一样）在进行时，async 追加照常写入并返回，
+// 不排在这次 fsync 后面（fsync 由独立的刷盘 goroutine 做，不持 stateMu）。修复前 writer 在 stateMu 内 fsync，async 记录
+// 要等正在进行的 fsync 结束，有 strict 负载时 async 的提交耗时约等于一次 fsync（KNOWN-LIMITS“热点单例实体的写吞吐”）。
+func TestAsyncAppendDoesNotWaitForAnOngoingSegmentSync(t *testing.T) {
 	opts := testOptions(t.TempDir())
 	opts.GroupCommitInterval = time.Hour
 	var block atomic.Bool
-	syncEntered, batchEntered, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	syncEntered, release := make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	defer unblock()
 	opts.syncFile = func(*os.File) error {
-		if block.Load() {
+		if block.CompareAndSwap(true, false) {
 			close(syncEntered)
 			<-release
 		}
 		return nil
 	}
-	opts.beforeProcessBatch = func() {
-		if block.Load() {
-			close(batchEntered)
-		}
-	}
 	w, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { unblock(); block.Store(false); _ = w.Close(context.Background()) }()
+	defer func() { unblock(); _ = w.Close(context.Background()) }()
 	if _, err := w.Append(context.Background(), testRecord(1, corenest.DurabilityAsync)); err != nil {
 		t.Fatal(err)
 	}
 	block.Store(true)
 	synced := make(chan error, 1)
 	go func() { synced <- w.syncActive() }()
-	<-syncEntered
+	waitSignal(t, syncEntered, "segment sync started")
 	appended := make(chan error, 1)
 	go func() {
 		_, err := w.Append(context.Background(), testRecord(2, corenest.DurabilityAsync))
 		appended <- err
 	}()
-	<-batchEntered
 	select {
 	case err := <-appended:
-		t.Fatalf("append returned before segment sync released: %v", err)
-	default:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("async append waited for an ongoing segment sync; want it written and answered while the fsync runs")
 	}
 	unblock()
 	if err := <-synced; err != nil {
 		t.Fatal(err)
 	}
-	if err := <-appended; err != nil {
+}
+
+// 刷盘与写入并行之后，一次 fsync 只能确认它开始之前已写完的记录：fsync 进行中写入的 strict 记录与 pipelined 票据，
+// 要等下一次 fsync 才算持久。把“确认到 fsync 结束时的写入位置”当成持久，会在掉电时丢掉已回复成功的记录。
+func TestSyncOnlyCoversWritesFinishedBeforeItStarted(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.GroupCommitInterval = time.Hour
+	var calls atomic.Int32
+	firstEntered, secondEntered := make(chan struct{}), make(chan struct{})
+	releaseFirst, releaseSecond := make(chan struct{}), make(chan struct{})
+	var firstOnce, secondOnce sync.Once
+	open := func() {
+		firstOnce.Do(func() { close(releaseFirst) })
+		secondOnce.Do(func() { close(releaseSecond) })
+	}
+	defer open()
+	var armed atomic.Bool
+	opts.syncFile = func(file *os.File) error {
+		if !armed.Load() {
+			return nil
+		}
+		switch calls.Add(1) {
+		case 1:
+			close(firstEntered)
+			<-releaseFirst
+		case 2:
+			close(secondEntered)
+			<-releaseSecond
+		}
+		return nil
+	}
+	w, err := Open(opts)
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer func() { open(); _ = w.Close(context.Background()) }()
+	if _, err := w.Append(context.Background(), testRecord(1, corenest.DurabilityAsync)); err != nil {
+		t.Fatal(err)
+	}
+	armed.Store(true)
+	synced := make(chan error, 1)
+	go func() { synced <- w.syncActive() }() // fsync #1：只覆盖记录 1
+	waitSignal(t, firstEntered, "fsync #1 started")
+
+	strict := make(chan error, 1)
+	go func() {
+		_, err := w.Append(context.Background(), testRecord(2, corenest.DurabilityStrict))
+		strict <- err
+	}()
+	ticket, err := w.Enqueue(context.Background(), testRecord(3, corenest.DurabilityPipelined))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 等记录 2、3 都写进段文件（fsync #1 仍停着）。
+	deadline := time.Now().Add(5 * time.Second)
+	for w.appended.Load() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("records 2 and 3 not written while fsync #1 runs: appended=%d", w.appended.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	firstOnce.Do(func() { close(releaseFirst) })
+	if err := <-synced; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-strict:
+		t.Fatalf("strict append answered (%v) after fsync #1, which started before it was written", err)
+	case <-ticket.Done():
+		t.Fatalf("pipelined ticket %d resolved by fsync #1, which started before it was written (DurableLSN=%d)", ticket.LSN(), w.DurableLSN())
+	case <-time.After(100 * time.Millisecond):
+	}
+	if w.DurableLSN() >= ticket.LSN() {
+		t.Fatalf("DurableLSN=%d covers ticket %d before the fsync that covers it", w.DurableLSN(), ticket.LSN())
+	}
+	waitSignal(t, secondEntered, "fsync #2 for the strict record")
+	secondOnce.Do(func() { close(releaseSecond) })
+	if err := <-strict; err != nil {
+		t.Fatal(err)
+	}
+	waitSignal(t, ticket.Done(), "ticket after fsync #2")
+	if ticket.Err() != nil || w.DurableLSN() < ticket.LSN() {
+		t.Fatalf("ticket err=%v DurableLSN=%d, want resolved and covered", ticket.Err(), w.DurableLSN())
 	}
 }
 

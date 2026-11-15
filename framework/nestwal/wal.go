@@ -114,10 +114,12 @@ type Stats struct {
 	OldestUnackedAge time.Duration
 }
 
-// WAL 是单写者分段提交日志。追加经 appendCh 交给唯一的 writer goroutine 成批写入；
-// Ack / Replay 受 operations 生命周期约束，Close 等它们全部退出后才释放目录锁。
+// WAL 是单写者分段提交日志。追加经 appendCh 交给唯一的 writer goroutine 成批写入；段文件 fsync 由独立的刷盘
+// goroutine（syncerLoop）做，不持 stateMu，所以 fsync 进行时 writer 照常写下一批：async 记录只等写入、不排在别人的
+// fsync 后面，strict 记录写完登记等待、由覆盖它的那次 fsync 回复（组提交）。Ack / Replay 受 operations 生命周期约束，
+// Close 等它们全部退出后才释放目录锁。
 //
-// 锁顺序：lifecycleMu → enqueueMu → ticketMu；checkpointMu → stateMu → ticketMu。
+// 锁顺序：lifecycleMu → enqueueMu → ticketMu；checkpointMu → syncMu → stateMu → ticketMu。
 type WAL struct {
 	operations operation.Lifetime
 	opts       Options
@@ -125,18 +127,32 @@ type WAL struct {
 	appendCh chan appendRequest
 	closeCh  chan struct{}
 	doneCh   chan struct{}
+	// syncKick 由 writer 在写完要求持久的记录后非阻塞地敲一下（容量 1，敲多次合并为一次）；syncerStop / syncerDone
+	// 由 writer 在排空关闭时停止并等待刷盘 goroutine。
+	syncKick   chan struct{}
+	syncerStop chan struct{}
+	syncerDone chan struct{}
 
 	lifecycleMu sync.RWMutex
 	closed      bool
 	closeOnce   sync.Once
 	closeErr    error
 
-	stateMu      sync.RWMutex
-	active       *os.File
-	segment      uint64
-	offset       int64
-	unsynced     bool
-	lockHandle   *os.File
+	// syncMu 串行化当前段的物理 fsync 与当前段的关闭 / 轮转：持 syncMu 时当前段文件不会被关闭或换掉，所以刷盘
+	// goroutine 可以只在取快照、发布结果时短暂持 stateMu，fsync 本身不持 stateMu。
+	syncMu sync.Mutex
+
+	stateMu sync.RWMutex
+	active  *os.File
+	segment uint64
+	offset  int64
+	// writeSeq / syncedSeq（stateMu 保护）：writeSeq 是成功写入的次数（跨段单调），syncedSeq 是最近一次成功 fsync
+	// 开始前取到的 writeSeq。两者不等即有未刷写入。一次 fsync 只确认它开始之前已写完的内容：快照在 fsync 之前
+	// 取，fsync 进行中写入的记录等下一次 fsync。
+	writeSeq    uint64
+	syncedSeq   uint64
+	syncWaiters []syncWaiter // 写完、等 fsync 才回复的 strict 追加（Append），按 seq 升序
+	lockHandle  *os.File
 	terminalErr  atomic.Pointer[terminalState] // 只写一次，热路径免锁读
 	terminated   chan struct{}                 // 首个 terminal 错误写入后关闭（Terminated）
 	fatalOnce    sync.Once
@@ -210,6 +226,13 @@ type appendResult struct {
 	err   error
 }
 
+// syncWaiter 是写完、等覆盖它的 fsync 才回复的 strict 追加：seq 是它写入后的 writeSeq。
+type syncWaiter struct {
+	seq   uint64
+	fence corenest.CommitFence
+	done  chan appendResult
+}
+
 // Open 取得目录锁、加载 checkpoint、修复最后一段的可截断尾部，然后启动 writer。
 // 已确认前缀内的任何损坏都拒绝启动，且不改动文件。
 func Open(options Options) (*WAL, error) {
@@ -237,6 +260,9 @@ func Open(options Options) (*WAL, error) {
 		appendCh:   make(chan appendRequest, opts.QueueCapacity),
 		closeCh:    make(chan struct{}),
 		doneCh:     make(chan struct{}),
+		syncKick:   make(chan struct{}, 1),
+		syncerStop: make(chan struct{}),
+		syncerDone: make(chan struct{}),
 		terminated: make(chan struct{}),
 		lockHandle: lockHandle,
 	}
@@ -255,6 +281,7 @@ func Open(options Options) (*WAL, error) {
 	}
 	usage, _ := w.diskUsage()
 	w.diskBytes.Store(usage)
+	go w.syncerLoop()
 	go w.writerLoop()
 	return w, nil
 }
@@ -432,9 +459,9 @@ func (w *WAL) DurableLSN() uint64 {
 	return w.durableLSN.Load()
 }
 
-// resolveDurableLocked 完成最近一次成功 fsync 覆盖的全部票据。调用方持 stateMu，ticketMu 嵌套在内。
-func (w *WAL) resolveDurableLocked() {
-	upto := w.writtenLSN
+// resolveDurableLocked 完成 LSN 不大于 upto 的全部票据；upto 必须是某次成功 fsync 开始之前已写入的最大票据 LSN
+// （或在没有未刷写入时的 writtenLSN）。调用方持 stateMu，ticketMu 嵌套在内。
+func (w *WAL) resolveDurableLocked(upto uint64) {
 	if upto == 0 {
 		return
 	}
@@ -787,10 +814,8 @@ func (w *WAL) Close(ctx context.Context) error {
 	}
 }
 
-// writerLoop 是唯一的 writer：按批写入追加请求，周期 fsync 组提交，收到关闭信号后排空退出。
+// writerLoop 是唯一的 writer：按批写入追加请求（不 fsync，要求持久时敲刷盘 goroutine），收到关闭信号后排空退出。
 func (w *WAL) writerLoop() {
-	ticker := time.NewTicker(w.opts.GroupCommitInterval)
-	defer ticker.Stop()
 	defer close(w.doneCh)
 	for {
 		select {
@@ -800,13 +825,37 @@ func (w *WAL) writerLoop() {
 				w.opts.beforeProcessBatch()
 			}
 			w.processBatch(batch)
-		case <-ticker.C:
-			// 失败在 syncActiveLocked 内粘滞为 terminal；terminal 后这里不再 fsync。
-			_ = w.syncActive()
 		case <-w.closeCh:
 			w.drainAndClose()
 			return
 		}
+	}
+}
+
+// syncerLoop 是刷盘 goroutine：被 writer 敲（批里有要求持久的记录）或组提交 ticker 到期（给 async 记录）时刷当前段。
+// fsync 进行中 writer 继续写、继续敲；敲在容量 1 的通道里合并，下一次 fsync 覆盖这期间写完的全部记录（组提交）。
+// 失败在 syncActive 内粘滞为 terminal，之后不再 fsync。由 drainAndClose 停止，关闭时最后一次刷盘归 writer。
+func (w *WAL) syncerLoop() {
+	defer close(w.syncerDone)
+	ticker := time.NewTicker(w.opts.GroupCommitInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.syncKick:
+			_ = w.syncActive()
+		case <-ticker.C:
+			_ = w.syncActive()
+		case <-w.syncerStop:
+			return
+		}
+	}
+}
+
+// kickSyncer 请刷盘 goroutine 尽快刷一次；已经有一次在排队时什么都不做。
+func (w *WAL) kickSyncer() {
+	select {
+	case w.syncKick <- struct{}{}:
+	default:
 	}
 }
 
@@ -882,20 +931,29 @@ func (w *WAL) processRecords(batch []appendRequest) error {
 		w.reservedBytes.Add(-reservedBytes)
 	}
 	fences := make([]corenest.CommitFence, len(batch))
-	if err := w.writeBatch(batch, fences); err != nil {
+	requireSync, err := w.writeBatch(batch, fences)
+	if err != nil {
 		err = indeterminate(err)
 		w.setTerminal(err)
 		for i := range batch {
-			batch[i].done <- appendResult{err: err}
+			if !waitsForSync(batch[i]) {
+				batch[i].done <- appendResult{err: err}
+			}
 		}
 		return err
+	}
+	if requireSync {
+		w.kickSyncer()
 	}
 	bytes := int64(0)
 	for i := range batch {
 		w.appended.Add(1)
 		w.bytesWritten.Add(uint64(len(batch[i].frame)))
 		bytes += int64(len(batch[i].frame))
-		batch[i].done <- appendResult{fence: fences[i]}
+		// strict 追加已在 writeBatch 里登记为等待者，由覆盖它的 fsync 回复；其余（async、票据记录）写完即回复。
+		if !waitsForSync(batch[i]) {
+			batch[i].done <- appendResult{fence: fences[i]}
+		}
 	}
 	// 每批指标：记录数 / 批数是组提交放大倍数，磁盘字节是保留压力。
 	metrics.IncCounter("nestwal.batch.total", nil, 1)
@@ -935,18 +993,34 @@ func (w *WAL) admitUnreserved(batch []appendRequest) ([]appendRequest, int64) {
 	return kept, reservedBytes
 }
 
-// writeBatch 在 stateMu 内把整批帧按段写入（段满先轮转），推进 writtenLSN；批内有记录
-// 要求持久时再 fsync 当前段。fences[i] 填写 batch[i] 的结束位置。返回的错误都意味着写入
-// 结果不确定，由调用方转为 terminal。
-func (w *WAL) writeBatch(batch []appendRequest, fences []corenest.CommitFence) error {
+// waitsForSync 报告请求是否在写完之后还要等 fsync 才回复：经 Append 到达、要求持久的记录（strict 与回退到 strict
+// 路径的 pipelined）。票据记录（Enqueue）的持久经票据通知，写完即可回复。
+func waitsForSync(req appendRequest) bool {
+	return req.requireSync && !req.reserved
+}
+
+// writeBatch 在 stateMu 内把整批帧按段写入（段满先轮转），推进 writeSeq 与 writtenLSN，并把要等 fsync 的 strict
+// 追加登记为等待者（失败时它们已由 failSyncWaitersLocked 回复）。不 fsync：返回批内是否有要求持久的记录，由调用方
+// 敲刷盘 goroutine。fences[i] 填写 batch[i] 的结束位置。返回的错误都意味着写入结果不确定，由调用方转为 terminal。
+func (w *WAL) writeBatch(batch []appendRequest, fences []corenest.CommitFence) (bool, error) {
 	requireSync := false
 	w.stateMu.Lock()
-	var err error
+	// 刷盘 goroutine 可能在 processRecords 的 terminal 检查之后才进入 terminal：之后不能再写、也不能再登记等待者
+	// （不会再有 fsync 回复它们）。
+	err := w.terminal()
 	bufferPtr := w.batchBuffers.Get().(*[]byte)
 	buffer := (*bufferPtr)[:0]
-	for start := 0; start < len(batch); {
+	failedFrom := 0 // batch[:failedFrom] 已写入并登记；出错时其后的都没写
+	for start := 0; err == nil && start < len(batch); {
 		if w.offset > 0 && w.offset+int64(len(batch[start].frame)) > w.opts.SegmentBytes {
-			if err = w.rotateLocked(); err != nil {
+			// 轮转要关闭当前段，必须持 syncMu（刷盘 goroutine 不持 stateMu 在 fsync 这个文件）。锁顺序是 syncMu → stateMu，
+			// 所以先放 stateMu；writer 是唯一的写者，放锁期间段、偏移不会变，刷盘 goroutine 只会推进 syncedSeq。
+			w.stateMu.Unlock()
+			w.syncMu.Lock()
+			w.stateMu.Lock()
+			err = w.rotateLocked()
+			w.syncMu.Unlock()
+			if err != nil {
 				break
 			}
 		}
@@ -970,23 +1044,36 @@ func (w *WAL) writeBatch(batch []appendRequest, fences []corenest.CommitFence) e
 		}
 		w.diskBytes.Add(int64(len(buffer)))
 		w.offset = nextOffset
-		w.unsynced = true
+		w.writeSeq++
 		for i := start; i < end; i++ {
 			if batch[i].lsn > w.writtenLSN {
 				w.writtenLSN = batch[i].lsn
 			}
+			if waitsForSync(batch[i]) {
+				w.syncWaiters = append(w.syncWaiters, syncWaiter{seq: w.writeSeq, fence: fences[i], done: batch[i].done})
+			}
 		}
 		start = end
+		failedFrom = end
 	}
-	if err == nil && requireSync {
-		err = w.syncActiveLocked()
+	if err != nil {
+		// 写入结果不确定：已登记的等待者（含更早批次写完、还没等到 fsync 的）一律失败；本批从 failedFrom 起还没
+		// 登记的 strict 追加也在这里回复——调用方只回复不等 fsync 的请求。
+		err = indeterminate(err)
+		w.setTerminal(err)
+		w.failSyncWaitersLocked(err)
+		for i := failedFrom; i < len(batch); i++ {
+			if waitsForSync(batch[i]) {
+				batch[i].done <- appendResult{err: err}
+			}
+		}
 	}
 	w.stateMu.Unlock()
 	if cap(buffer) <= w.opts.BatchMaxBytes*2 {
 		*bufferPtr = buffer[:0]
 		w.batchBuffers.Put(bufferPtr)
 	}
-	return err
+	return requireSync, err
 }
 
 // drainAndClose 在 Close 后由 writer 调用：写完队列中剩余的请求，刷盘并关闭当前段，等
@@ -999,6 +1086,9 @@ func (w *WAL) drainAndClose() {
 		}
 		w.processBatch(batch)
 	}
+	// 先停刷盘 goroutine，最后一次刷盘（覆盖排空时写入的全部记录、回复剩余等待者）归这里。
+	close(w.syncerStop)
+	<-w.syncerDone
 	if err := w.syncAndCloseActive(); err != nil {
 		// 最后一次 sync 失败时已入队记录的结果未知：进入 terminal 并让剩余票据失败，
 		// 不让 pipelined 等待方在关闭后悬挂。
@@ -1157,7 +1247,7 @@ func allZeroFrom(file *os.File, offset, size int64) (bool, error) {
 	return true, nil
 }
 
-// rotateLocked 刷盘并关闭当前段，创建下一段并持久化目录项。调用方持 stateMu。
+// rotateLocked 刷盘并关闭当前段，创建下一段并持久化目录项。调用方持 syncMu 与 stateMu。
 func (w *WAL) rotateLocked() error {
 	if err := w.syncActiveLocked(); err != nil {
 		return err
@@ -1184,46 +1274,105 @@ func (w *WAL) rotateLocked() error {
 	return nil
 }
 
+// syncActive 刷当前段并发布结果（解析票据、回复等待者）。Ack、组提交 ticker、writer 的敲门、Sync 都经这里。
+//
+// 只在取快照和发布时持 stateMu，fsync 本身只持 syncMu：writer 在 fsync 进行中照常写入。快照（writeSeq、writtenLSN）
+// 在 fsync 之前取，所以这次 fsync 只确认它开始之前已写完的记录；进行中写入的记录留给下一次。
+//
+// fsync 失败是粘滞的：Linux 同一 fd 的写回错误只报告一次，之后的 fsync 返回 0 并不证明失败那批页已落盘。所以失败时
+// 立即进入 ErrCommitIndeterminate terminal；terminal 之后不再 fsync、不推进 syncedSeq 与 DurableLSN，直接返回 terminal。
 func (w *WAL) syncActive() error {
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
+	w.stateMu.Lock()
+	if done, err := w.syncShortcutLocked(); done {
+		w.stateMu.Unlock()
+		return err
+	}
+	file, target, upto := w.active, w.writeSeq, w.writtenLSN
+	w.stateMu.Unlock()
+	err := w.fsyncSegment(file) // 持 syncMu：file 不会被轮转或关闭
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
-	return w.syncActiveLocked()
+	return w.publishSyncLocked(target, upto, err)
 }
 
-// syncActiveLocked 刷当前段并解析被覆盖的票据，调用方持 stateMu。Ack、ticker、Sync、
-// 批量写、轮转和关闭排空都经由这里刷段。
-//
-// fsync 失败是粘滞的：Linux 同一 fd 的写回错误只报告一次，之后的 fsync
-// 返回 0 并不证明失败那批页已落盘。所以失败时在 stateMu 内立即进入 ErrCommitIndeterminate
-// terminal；terminal 之后不再 fsync、不清 unsynced、不推进 DurableLSN，直接返回 terminal。
+// syncActiveLocked 是持锁版本：调用方持 syncMu 与 stateMu，fsync 期间不放 stateMu。只给轮转与关闭用（它们紧接着要
+// 关闭这个段），语义与 syncActive 相同。
 func (w *WAL) syncActiveLocked() error {
-	if terminal := w.terminal(); terminal != nil {
-		// 与 setTerminal 清扫并发登记的票据在这里兜底，不让等待方悬挂。
-		w.failPendingTickets(terminal)
-		return terminal
+	if done, err := w.syncShortcutLocked(); done {
+		return err
 	}
-	if !w.unsynced {
-		// 已写内容都已持久（干净关闭后 active 为 nil 也属此类）；晚登记、已被当前水位覆盖的票据
-		// 仍要在这里完成。
-		w.resolveDurableLocked()
-		return nil
+	target, upto := w.writeSeq, w.writtenLSN
+	return w.publishSyncLocked(target, upto, w.fsyncSegment(w.active))
+}
+
+// syncShortcutLocked 处理不需要 fsync 的情形，调用方持 stateMu；done 为真时直接返回 err：
+//   - 已 terminal：兜底清扫与 terminal 转换并发登记的票据与等待者，不让它们悬挂；
+//   - 没有未刷写入（干净关闭后 active 为 nil 也属此类）：晚登记、已被当前水位覆盖的票据在这里完成；
+//   - 段已关闭仍有未刷写入：只有关闭时最后一次 sync 失败才会如此，那时 terminal 已在上面返回；这里防御性兜底，绝不
+//     当作“已全部落盘”。
+func (w *WAL) syncShortcutLocked() (bool, error) {
+	if terminal := w.terminal(); terminal != nil {
+		w.failSyncWaitersLocked(terminal)
+		w.failPendingTickets(terminal)
+		return true, terminal
+	}
+	if w.writeSeq == w.syncedSeq {
+		w.resolveDurableLocked(w.writtenLSN)
+		w.replySyncWaitersLocked(w.syncedSeq)
+		return true, nil
 	}
 	if w.active == nil {
-		// 段已关闭仍有未刷写入：只有关闭时最后一次 sync 失败才会如此，而那时 terminal 已在上面
-		// 返回；这里防御性兜底，绝不当作“已全部落盘”。
 		err := indeterminate(errors.New("nestwal: segment closed with unsynced writes"))
 		w.setTerminal(err)
-		return err
+		w.failSyncWaitersLocked(err)
+		return true, err
 	}
-	if err := w.fsyncSegment(w.active); err != nil {
-		err = indeterminate(err)
+	return false, nil
+}
+
+// publishSyncLocked 发布一次 fsync 的结果，调用方持 stateMu。target / upto 是 fsync 开始前取的 writeSeq 与 writtenLSN。
+// fsync 期间别处已进入 terminal（例如 writer 写失败）时不再发布：terminal 之后 DurableLSN 不前进。
+func (w *WAL) publishSyncLocked(target, upto uint64, fsyncErr error) error {
+	if fsyncErr != nil {
+		err := indeterminate(fsyncErr)
 		w.setTerminal(err)
+		w.failSyncWaitersLocked(err)
 		return err
 	}
-	w.unsynced = false
+	if terminal := w.terminal(); terminal != nil {
+		w.failSyncWaitersLocked(terminal)
+		return terminal
+	}
+	if target > w.syncedSeq {
+		w.syncedSeq = target
+	}
 	w.syncs.Add(1)
-	w.resolveDurableLocked()
+	w.resolveDurableLocked(upto)
+	w.replySyncWaitersLocked(target)
 	return nil
+}
+
+// replySyncWaitersLocked 回复 seq 不大于 upto 的 strict 追加（它们的写入已被成功 fsync 覆盖）。调用方持 stateMu；
+// done 容量 1，回复不阻塞。
+func (w *WAL) replySyncWaitersLocked(upto uint64) {
+	n := 0
+	for n < len(w.syncWaiters) && w.syncWaiters[n].seq <= upto {
+		w.syncWaiters[n].done <- appendResult{fence: w.syncWaiters[n].fence}
+		n++
+	}
+	if n > 0 {
+		w.syncWaiters = slices.Delete(w.syncWaiters, 0, n)
+	}
+}
+
+// failSyncWaitersLocked 以 err 回复全部等待中的 strict 追加。调用方持 stateMu。
+func (w *WAL) failSyncWaitersLocked(err error) {
+	for _, waiter := range w.syncWaiters {
+		waiter.done <- appendResult{err: err}
+	}
+	w.syncWaiters = nil
 }
 
 // fsyncSegment 刷段文件；测试缝 syncFile 仅在包内测试设置。
@@ -1239,6 +1388,8 @@ func (w *WAL) fsyncSegment(file *os.File) error {
 }
 
 func (w *WAL) syncAndCloseActive() error {
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
 	if w.active == nil {
