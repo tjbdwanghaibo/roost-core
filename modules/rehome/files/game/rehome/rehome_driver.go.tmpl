@@ -54,6 +54,9 @@ const (
 	leaveBudget = 10 * time.Second
 	// departBudget 是断开会话加交出实体的上限：交出要等这名玩家已准入的写入落库、WAL checkpoint 盖过它们。
 	departBudget = 30 * time.Second
+	// copyAttempts 是受理之后搬档最多做几次：复制可以原样重做，出错（含提交应答丢失、结果未知）先重做，
+	// 拿到确定的结果再往下走。
+	copyAttempts = 3
 	// replyGrace 是受理之后、断开会话之前留给“已受理”这条应答写到客户端的时间。应答丢了也不影响结果
 	// （客户端断线后重新选角就知道），所以它只是让客户端多数时候能先看到应答。
 	replyGrace = 500 * time.Millisecond
@@ -395,20 +398,56 @@ func (d *Driver) carry(ctx context.Context, move Move) {
 		return
 	}
 	// 搬档：account 仍把他绑在本服（换服在途），只有本服写过他——目标库里别的版本是旧副本，覆盖。复制在一个 Mongo
-	// 事务里，失败时目标库没有这次的半份，中止即可。
-	copying, cancel := context.WithTimeout(ctx, departBudget)
-	copied, err := d.documents.Copy(copying, move.EntityID, move.To, true)
-	cancel()
+	// 事务里，不会留半份；但出错不等于什么都没写：提交应答丢了（结果未知）时目标库里可能已经有了整份副本
+	// （RV-20261114-01）。所以先重做（幂等，已写进去的答 already_present），拿到确定的结果就照常改绑；一直拿不到
+	// 才中止，并且撤屏障之前按最后一次给出的清单删掉目标库里可能写进去的副本。
+	copied, err := d.copyDocuments(ctx, move)
 	if err != nil {
 		if stopped(ctx, move, "copy documents") {
 			return
 		}
-		slog.Warn("rehome: the player's documents were not copied to the target server; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "to", move.To, "err", err)
-		d.abandon(ctx, move, Aborted, "the player's documents could not be copied to the target server")
+		slog.Warn("rehome: the player's documents were not copied to the target server; aborting", "player_id", move.PlayerID, "transfer_id", move.ID,
+			"to", move.To, "documents_maybe_written", len(copied.Documents), "err", err)
+		verdict, binding := d.conclude(ctx, move, false, "the player's documents could not be copied to the target server")
+		if verdict != standingStays {
+			// 他归别的服，或换走又换回：可能写进去的那份不能当作“已搬过”去删本服的档，按没搬过落定。
+			d.finish(ctx, move, verdict, binding, Aborted)
+			return
+		}
+		d.finishCopied(ctx, move, verdict, binding, Aborted, &copied)
 		return
 	}
 	verdict, binding := d.conclude(ctx, move, true, "")
 	d.finishCopied(ctx, move, verdict, binding, Aborted, &copied)
+}
+
+// copyDocuments 把他的文档复制到目标服的库（覆盖旧副本），出错时重做，最多 copyAttempts 次。成功返回确定的清单；
+// 都失败时返回最后一个错误，以及各次出错里列出过的、可能已经写进目标库的文档（core 在结果未知时列出；
+// 冲突与读源库失败是确定没写的，不列）。Background 停了时提前返回。
+func (d *Driver) copyDocuments(ctx context.Context, move Move) (Copied, error) {
+	var maybe Copied
+	var err error
+	for attempt := 0; attempt < copyAttempts; attempt++ {
+		if attempt > 0 {
+			if ctx.Err() != nil {
+				break
+			}
+			slog.Warn("rehome: copying the player's documents failed; redoing the copy", "player_id", move.PlayerID, "transfer_id", move.ID,
+				"to", move.To, "attempt", attempt, "err", err)
+			d.wait(ctx, attempt-1)
+		}
+		copying, cancel := context.WithTimeout(ctx, departBudget)
+		var copied Copied
+		copied, err = d.documents.Copy(copying, move.EntityID, move.To, true)
+		cancel()
+		if err == nil {
+			return copied, nil
+		}
+		if len(copied.Documents) > 0 {
+			maybe = copied
+		}
+	}
+	return maybe, err
 }
 
 // abandon 把一次换服中止到底：向 account 要到结论为止，再按结论落定。stays 是玩家留在本服时用哪种结论

@@ -30,6 +30,10 @@ import (
 //     ErrEntityCopyConflict、什么都不写。overwrite 只在“account 仍把这名玩家绑在本服、换服在途”时用：那时只有本服
 //     写过他，目标库里别的版本只能是以前留下的旧副本（换走又换回、中止后没清掉）。account 已经改绑之后补搬时用
 //     overwrite=false：目标服可能已经写过，不能覆盖。
+//     出错时结果未必是“全无”：Mongo 驱动对“提交已发出、应答没回来”返回 ErrCommitResultUnknown，那时目标库里可能已经
+//     有了这次写的文档。所以事务出错（冲突除外）时返回的 EntityCopy 照样列出这次要写的每份文档（Outcome 为
+//     EntityCopyUnknown），调用方要么重做复制拿到确定的结果（已写进去的答 already_present），要么拿它 DropEntityCopy
+//     把可能写进去的删掉；不能把出错当成目标库里什么都没有（RV-20261114-01）。冲突、读源库失败是确定没写的，不列文档。
 //   - DropEntityCopy(copy, sid)：按复制结果删掉 sid 库里这些文档，条件是 _version 仍是复制时的版本——之后被写过的
 //     文档不删（计入 Kept）。改绑成功之后删源库（本服不再预加载、按 ID 也加载不到他）；中止之后删目标库里这次写的副本。
 //
@@ -48,6 +52,8 @@ const (
 	EntityCopyCopied         = "copied"
 	EntityCopyAlreadyPresent = "already_present"
 	EntityCopyReplaced       = "replaced"
+	// EntityCopyUnknown：复制出错、结果未知时，这份文档可能已经写进目标库（见 CopyHandedOffEntity）。
+	EntityCopyUnknown = "unknown"
 )
 
 // EntityCopy 是一次搬档的结果：源服 From 的库里这个实体的每份 dbscope=sid 文档，以及它写到目标服 To 的哪里。
@@ -75,6 +81,7 @@ type copyMeta struct {
 
 // CopyHandedOffEntity 把本进程已交出的实体 id 的 dbscope=sid 文档复制到 sid=to 的库（见本文件开头）。
 // 会等待，只能在业务池之外调用。实体没有处于交出状态返回 ErrEntityNotHandedOff，什么都不读写。
+// 写目标库的事务出错（冲突除外）时，返回的结果连同错误列出可能已经写进去的文档（Outcome 为 EntityCopyUnknown）。
 func (runtime *Runtime) CopyHandedOffEntity(ctx context.Context, id int64, to int32, overwrite bool) (result EntityCopy, err error) {
 	if err := fctx.BlockingError("dataengine.CopyHandedOffEntity"); err != nil {
 		return EntityCopy{}, err
@@ -168,7 +175,17 @@ func (runtime *Runtime) CopyHandedOffEntity(ctx context.Context, id int64, to in
 		return nil
 	})
 	if err != nil {
-		return EntityCopy{}, err
+		if errors.Is(err, ErrEntityCopyConflict) {
+			return EntityCopy{}, err
+		}
+		// 结果未知：提交可能已经生效。列出这次要写的每份文档，交给调用方重做或按版本删掉。
+		maybe := EntityCopy{EntityID: id, From: result.From, To: to, Documents: make([]EntityCopyDocument, 0, len(sources))}
+		for _, item := range sources {
+			maybe.Documents = append(maybe.Documents, EntityCopyDocument{
+				Database: item.physical, Collection: item.key.Resource, Version: item.meta.Version, Outcome: EntityCopyUnknown,
+			})
+		}
+		return maybe, err
 	}
 	slog.Info("dataengine: copied a handed-off entity to another server's database", "entity", id, "from", result.From, "to", to,
 		"documents", len(result.Documents), "overwrite", overwrite)

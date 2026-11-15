@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **换服搬档：复制结果未知时不再直接中止并遗留目标副本**（RV-20261114-01，2026-11-15）：`CopyHandedOffEntity` 写目标库的事务出错（冲突除外，如提交应答丢失的 `ErrCommitResultUnknown`）时，连同错误返回可能已写入的文档（Outcome `unknown`，`wiring/dataengine.EntityCopyUnknown`）。rehome 驱动器先重做复制（最多 3 次，幂等），拿到确定结果照常改绑；都失败才中止，撤屏障之前按清单删掉目标库副本；中止时 account 答已在别处提交的，按没搬过补搬，不凭这份清单删本服的档。rehome 场景 47 → 50。只对新生成的工程。
 - **生成物要求的最低 core 提到 v1.49.0**（2026-11-15）：新生成物的模块后台 manager（activity 恢复扫描、cellworld 宿主、login 区服上报、room 断线订阅）、`gateway.PlayerRuntime.ConnectionActive` / `SessionCount` 与 account 区服登记表都要 v1.49.0；framework-compat 的 minimum 一栏随之改为 v1.49.0。
 
 ## [v1.49.0] - 2026-11-15

@@ -506,11 +506,16 @@ type EntityCopy = engine.EntityCopy
 // EntityCopyDocument 是一次搬档里的一份文档（engine.EntityCopyDocument）。
 type EntityCopyDocument = engine.EntityCopyDocument
 
+// EntityCopyUnknown 是复制出错、结果未知时文档的去向：它可能已经写进目标库（engine.EntityCopyUnknown）。
+// CopyHandedOffEntity 出错（冲突除外）时连同错误返回这些文档，调用方重做复制，或拿它 DropEntityCopy 删掉。
+const EntityCopyUnknown = engine.EntityCopyUnknown
+
 // ErrEntityCopyConflict：目标服的库里已有这个实体的另一个版本，不覆盖时拒绝（engine.ErrEntityCopyConflict）。
 var ErrEntityCopyConflict = engine.ErrEntityCopyConflict
 
 // CopyHandedOffEntity 把本进程已交出（HandOffEntity 成立、未 Release）的实体的 dbscope=sid 文档复制到 sid=to 的库
 // （engine.Runtime.CopyHandedOffEntity，换服的搬档）。overwrite 只在“account 仍绑在本服、换服在途”时用。
+// 出错（冲突除外）时返回的结果列出可能已经写进目标库的文档（EntityCopyUnknown），不能把出错当成目标库里什么都没有。
 // 会等待，只能在 io 池或独立 goroutine 调用。
 func (mod *Mod) CopyHandedOffEntity(ctx context.Context, entityID int64, to int32, overwrite bool) (EntityCopy, error) {
 	runtime := mod.Runtime()

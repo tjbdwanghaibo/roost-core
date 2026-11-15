@@ -190,9 +190,13 @@ type rehomeFixture struct {
 }
 
 // rehomeDocuments 是搬档的替身：Copy / Drop 依次取脚本里的错误，用完之后成功；成功的 Copy 返回一份文档。
+// copyMaybe 为 true 时失败的 Copy 按 core 的约定连同错误返回可能已经写进去的那份文档（Outcome unknown，
+// 提交应答丢了），并记 copyWrote：目标库里真有了这份副本，直到删目标库的那一次 Drop。
 type rehomeDocuments struct {
-	f        *rehomeFixture
-	copyErrs []error
+	f         *rehomeFixture
+	copyMaybe bool
+	copyWrote bool
+	copyErrs  []error
 	dropErrs []error
 	copies   []string
 	drops    []string
@@ -205,8 +209,13 @@ func (d *rehomeDocuments) Copy(_ context.Context, entityID int64, to int32, over
 		d.f.events.add("%s", call)
 	}
 	if err := rehomeNext(&d.copyErrs); err != nil {
-		return Copied{}, err
+		if !d.copyMaybe {
+			return Copied{}, err
+		}
+		d.copyWrote = true
+		return Copied{EntityID: entityID, From: rehomeSelf, To: to, Documents: []wiringde.EntityCopyDocument{{Database: "main", Collection: "player", Version: 9, Outcome: wiringde.EntityCopyUnknown}}}, err
 	}
+	d.copyWrote = true
 	return Copied{EntityID: entityID, From: rehomeSelf, To: to, Documents: []wiringde.EntityCopyDocument{{Database: "main", Collection: "player", Version: 9}}}, nil
 }
 
@@ -216,7 +225,13 @@ func (d *rehomeDocuments) Drop(_ context.Context, copied Copied, sid int32) erro
 	if d.f.documentEvents {
 		d.f.events.add("%s", call)
 	}
-	return rehomeNext(&d.dropErrs)
+	if err := rehomeNext(&d.dropErrs); err != nil {
+		return err
+	}
+	if sid == copied.To {
+		d.copyWrote = false
+	}
+	return nil
 }
 
 // newRehomeFixture 建一个驱动器：本服 1000，玩家 94301 绑定在本服、绑定代数 3、没有换服在途。
@@ -841,7 +856,8 @@ func TestRehomeBindingAnswersFromTheTableThenTheDirectory(t *testing.T) {
 func TestRehomeCopyFailureAbortsTheMove(t *testing.T) {
 	f := newRehomeFixture(t)
 	f.documentEvents = true
-	f.documents.copyErrs = []error{errors.New("target database unreachable")}
+	unreachable := errors.New("target database unreachable")
+	f.documents.copyErrs = []error{unreachable, unreachable, unreachable}
 	if _, err := f.apply(); err != nil {
 		t.Fatal(err)
 	}
@@ -849,10 +865,81 @@ func TestRehomeCopyFailureAbortsTheMove(t *testing.T) {
 	f.runBackground()
 	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
 		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"copy 7094301 to 1001 overwrite=true", "copy 7094301 to 1001 overwrite=true",
 		"abort 94301 t-1", "release 7094301", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
 	f.expectFree(t)
 	if len(f.documents.drops) != 0 {
 		t.Fatalf("a failed copy dropped documents: %v", f.documents.drops)
+	}
+}
+
+// 复制的提交应答丢了（RV-20261114-01）：Copy 报错，目标库里却已经有了副本。复制可以原样重做——重做得到确定的结果
+// （已写进去的答 already_present），换服照常完成，本服库里的那份按这次的清单删掉。
+func TestRehomeCopyWithALostCommitReplyIsRedoneAndTheMoveCompletes(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.documents.copyMaybe = true
+	f.documents.copyErrs = []error{errors.New("commit result unknown: context deadline exceeded")}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"copy 7094301 to 1001 overwrite=true", "commit 94301 t-1", "drop 7094301 copied to 1001 at 1000")
+	if f.directory.binding.ServingServerID != rehomeTarget || f.waits != 1 {
+		t.Fatalf("serving %d after %d waits; want the target after one wait", f.directory.binding.ServingServerID, f.waits)
+	}
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != rehomeTarget {
+		t.Fatalf("the table says %+v (%v), want departed to %d", where, tracked, rehomeTarget)
+	}
+}
+
+// 复制一直拿不到确定结果：中止，但撤屏障之前按最后一次给出的清单删掉目标库里可能已经写进去的副本——中止之后
+// 他仍归本服，目标库里不能留一份没人负责的档（开了预加载时目标服会把它装起来）。
+func TestRehomeCopyThatNeverSettlesDropsWhatMayHaveBeenWrittenBeforeAborting(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.documents.copyMaybe = true
+	unknown := errors.New("commit result unknown: context deadline exceeded")
+	f.documents.copyErrs = []error{unknown, unknown, unknown}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"copy 7094301 to 1001 overwrite=true", "copy 7094301 to 1001 overwrite=true",
+		"abort 94301 t-1", "drop 7094301 copied to 1001 at 1001", "release 7094301",
+		"close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
+	f.expectFree(t)
+	if f.directory.binding.ServingServerID != rehomeSelf || f.documents.copyWrote {
+		t.Fatalf("serving %d, target copy left=%v; want this server and no target copy", f.directory.binding.ServingServerID, f.documents.copyWrote)
+	}
+}
+
+// 复制一直拿不到确定结果、去中止时 account 却说这个 ID 已经提交（运维人工提交了）：他归目标服。可能写进去的那份
+// 不能当作“已搬过”——不能凭它就删本服的档；按没搬过落定：先不覆盖地补搬（那边没有才写），写成了才删本服的。
+func TestRehomeCopyThatNeverSettlesButWasCommittedElsewhereCopiesAgainBeforeDropping(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.documents.copyMaybe = true
+	unknown := errors.New("commit result unknown: context deadline exceeded")
+	f.documents.copyErrs = []error{unknown, unknown, unknown}
+	f.directory.aborts = []error{fmt.Errorf("%w: transfer t-1 is already committed", svcaccount.ErrTransferStale)}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"copy 7094301 to 1001 overwrite=true", "copy 7094301 to 1001 overwrite=true",
+		"abort 94301 t-1", "copy 7094301 to 1001 overwrite=false", "drop 7094301 copied to 1001 at 1000")
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != rehomeTarget {
+		t.Fatalf("the table says %+v (%v), want departed to %d", where, tracked, rehomeTarget)
 	}
 }
 
