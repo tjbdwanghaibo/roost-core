@@ -15,11 +15,10 @@
 
 **单个热点实体经派发器的吞吐，第一阶段 pipelined 解不开，只有异步完成（§11）能解。** 第一阶段放了实体锁，但派发
 worker 仍在锁外等票据，派发器按实体 ID 的准入链让同一实体的下一条消息等这条作业（含回复）结束才开始，所以经
-Sender / Dispatch 打到同一个实体的同步请求仍是“每次 fsync 一条”，与 strict 相同。异步完成按 handler 点名，生产装配
-只点名 saga 原生步骤（维护者 2026-10-29），业务自己声明的 pipelined handler 拿不到。async 也不是出路：nestwal 只有一个
-writer，async 记录要等同批或上一批 strict 记录的 fsync，进程里有 strict 流量时 async 的锁持有同样约等于一次 fsync。
-所以“每个请求都经过的唯一实体”上的写不要放在请求的关键路径上同步等（game-demo 的登录计数改为只投递，见
-[login-burst-20261115](../performance/benchmarks/login-burst-20261115/README.md)，M-15）。
+Sender / Dispatch 打到同一个实体的同步请求仍是“每次 fsync 一条”，与 strict 相同。2026-11-15 起业务 handler 可以在
+`HandlerMeta` 显式声明异步完成（`//roost:nest durability=pipelined completion=async`），热点实体上的同步请求一次 fsync
+覆盖一批；不声明的照旧。nestwal 的 fsync 同时移到了独立的刷盘 goroutine，async 记录不再排在 strict 记录的 fsync 后面。
+设计、契约与测量见 §12。
 
 ## 2. 正确性论证
 
@@ -153,8 +152,8 @@ Checkpoint Mod。
   - 引擎选项使用 `dataEngineMod.NestOptions()`（committer + 配置驱动的
     `nest.pipelined.allowlist` / `nest.pipelined.async_workers` / `nest.pipelined.async_queue_capacity`，
     异步完成名单取本进程的 pipelined saga 原生步骤），不配置且进程里没有 pipelined 的 saga 原生步骤时与旧行为完全一致。
-- **saga 原生步骤是白名单的标准用户**（维护者 2026-10-29 决定：只有它们用 pipelined + 异步完成，其他 handler
-  照旧，不改 Nest 池缺省、不加 saga 池）。生成的原生步骤 handler 声明 `durability=pipelined`，注册经
+- **saga 原生步骤是白名单的标准用户**（维护者 2026-10-29 决定：框架只替它们打开 pipelined + 异步完成，其他 handler
+  照旧，不改 Nest 池缺省、不加 saga 池；2026-11-15 起业务 handler 可以自己声明 `completion=async`，见 §12）。生成的原生步骤 handler 声明 `durability=pipelined`，注册经
   `saga.MustRegisterNativeStepHandler`；`wiring/dataengine` 的 Init 读 `saga.PipelinedNativeStepHandlers()`：
   名单写了就把它们补进去（没写 = 全部允许，不收窄），并以它们作为 Nest 异步完成的 handler 名单（§11，没有开关配置）。
   别的 pipelined handler 与 strict / async / memory handler 不经过完成泵
@@ -175,7 +174,10 @@ Checkpoint Mod。
 由 `NestOptionWithPipelinedAsyncCompletion(workers, queueCap, handlers...)` 按 handler 显式开启（维护者 2026-10-29
 决定）：
 
-- **只有 `handlers` 点名的 pipelined handler 走异步完成**。名单在引擎构造（包级注册表快照）、实例注册
+- **handler 自己声明（`HandlerMeta.AsyncCompletion`，`//roost:nest completion=async`，2026-11-15 起）或被 `handlers` 点名的
+  pipelined handler 走异步完成**。声明只能和 pipelined 一起写（注册期 `ErrAsyncCompletionRequiresPipelined`，生成期同一条
+  规则）；引擎构造或实例注册时发现有声明就建完成泵（Start 之前），`handlers` 为空时这个选项只给完成池定规模。下面关于
+  名单的描述对声明同样成立。名单在引擎构造（包级注册表快照）、实例注册
   （`NestMgr.RegisterHandlerWithMeta`）与包级回退查找时解析成 `handlerEntry.asyncCompletion`，派发热路径只读这个布尔，
   不按名字查表。`handlers` 为空等于不开异步完成（不建完成泵），**没有“全部”通配**；点名的 handler 不是 pipelined 时没有作用。
   多次调用名单累加。生产装配（`wiring/dataengine`）传 `saga.PipelinedNativeStepHandlers()`；框架内目前只有 saga 原生步骤用
@@ -249,3 +251,70 @@ Checkpoint Mod。
     [证据](../performance/benchmarks/nest-completion-order-all-20261029/README.md)。
 
 实现与测试入口见[Nest实现篇](impl/02-nest-entity.md)。历史复测与默认档规划归上一节的固定提交，不作为当前接入要求。
+
+## 12. 热点单例实体的写吞吐（2026-11-15）
+
+问题（[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md) §一）：经派发器打到同一个实体的同步请求，
+strict、第一阶段 pipelined 都约“每次 fsync 一条”；async 在有 strict 负载时锁持有仍约一次 fsync。两处原因：
+
+1. **同 ID 准入链等回复**：同一实体的下一条消息要等这条作业（含回复）结束。strict 在锁内等 fsync，第一阶段 pipelined
+   在锁外等票据，作业都要到持久之后才结束。异步完成（§11）早已让作业在 Enqueue 后结束，但只开给 saga 原生步骤。
+2. **nestwal 的 fsync 在 writer 上**：唯一的 writer 写完一批就在 `stateMu` 内 fsync，fsync 期间不写下一批；async 记录
+   在 writer 上排在正在进行的 fsync 后面，同批有 strict 记录时还要等本批的 fsync 才回复。
+
+### 12.1 不能变的契约
+
+- **strict = 回复前已持久**：strict 仍在锁内等 fsync，热点实体上的 strict 请求本来就只能每次 fsync 一条（锁持有含
+  fsync），这一点不改；要吞吐的热点写选 pipelined + 异步完成。
+- **pipelined 的外化闸门**（§6）：回复、AfterCommit、entitysync 外发、投影都在 `DurableLSN >= LSN` 之后。
+- **同实体顺序**：同一实体的提交按锁序分配 LSN（§2），完成按 LSN 序（§11 完成链）；异步完成之后的普通事务回复不先于它
+  （§11 决定 A）。
+- **崩溃恢复与前缀持久**：WAL 单日志，任一记录持久则 LSN 更小的都持久；DurableLSN 只由成功 fsync 推进，只覆盖这次
+  fsync 开始之前已写完的记录。
+- **WAL.Ack / checkpoint**：checkpoint 不越过已刷盘内容（Ack 先刷段再存 checkpoint）；terminal 之后 checkpoint 不前进、
+  DurableLSN 不前进、不再 fsync。
+- **fsync 失败粘滞**：一次失败即 `ErrCommitIndeterminate` terminal，之后任何“成功”都不采信。
+
+### 12.2 做了什么
+
+**A. 业务 handler 显式选用异步完成**（`framework/nest`、`codegen`）：`HandlerMeta.AsyncCompletion`，生成标记
+`completion=async`，只能与 `durability=pipelined` 同用。机制就是 §11 的异步完成，没有新的执行路径：派发 worker 在
+Enqueue 之后交出完成、作业结束，同 ID 准入链随即放下一条；同实体完成链保证回复与 AfterCommit 按 LSN 序。声明是
+handler 级的，因为它改变 AfterCommit 的执行环境（完成池、无请求上下文、不持锁、不能同步等同一实体的 Nest 请求），
+只有写 handler 的人能判断钩子是否满足（§11“契约变更”）；不声明的 pipelined handler 行为不变。装配层
+（`wiring/dataengine`、`engine.Runtime`）总把 `nest.pipelined.async_workers` / `async_queue_capacity` 交给 Nest，
+有声明时按它建完成池。回归：`TestDeclaredAsyncCompletionLetsTheNextRequestOnTheEntityStart`（实例注册与包级注册两条：
+第一条票据未持久时同实体第二条已执行并 Enqueue，两条回复都在持久后按序；去掉声明解析、实例注册不建泵各变红）、
+`TestAsyncCompletionDeclarationRequiresPipelined`、`TestGenerateAsyncCompletionHandlerMeta`。
+
+**B. nestwal 的 fsync 与写入解耦**（`framework/nestwal/wal.go`）：
+
+- writer 只写不刷：批写完，async 记录与票据记录立即回复；经 `Append` 的 strict（及回退到 strict 路径的 pipelined）记录
+  登记为等待者（带写入序号），批里有要求持久的记录时敲一下刷盘 goroutine。
+- 刷盘 goroutine（`syncerLoop`）被敲或组提交 ticker 到期时 `syncActive`：持 `syncMu`，在 `stateMu` 内取快照（写入序号、
+  writtenLSN、当前段文件），放开 `stateMu` 做 fsync，再取 `stateMu` 发布——推进 syncedSeq 与 DurableLSN 到**快照**、
+  回复快照覆盖的等待者。fsync 进行中 writer 继续写、继续敲（容量 1 的通道合并），下一次 fsync 覆盖这期间写完的全部记录。
+- `syncMu` 串行化物理 fsync 与当前段的轮转 / 关闭：持 `syncMu` 时段文件不会被关闭或换掉。锁顺序
+  `checkpointMu → syncMu → stateMu → ticketMu`；writer 轮转时先放 `stateMu` 再按序取（writer 是唯一写者，放锁期间段与
+  偏移不变）。
+- terminal：fsync 失败、fsync 期间写失败进入 terminal，都不发布；等待者与票据一律 `ErrCommitIndeterminate`。写入在
+  `stateMu` 内先查 terminal，terminal 之后不再写、不再登记等待者。关闭时 writer 先停刷盘 goroutine，最后一次刷盘
+  （覆盖排空时写入的全部记录）归 writer。
+- 回归：`TestAsyncAppendDoesNotWaitForAnOngoingSegmentSync`（修前红：async 追加等进行中的 fsync）、
+  `TestSyncOnlyCoversWritesFinishedBeforeItStarted`（fsync #1 进行中写入的 strict 记录与票据不能被 #1 确认；变异
+  “按 fsync 结束时的写入位置发布”变红）；既有的 strict 等 fsync、terminal、Ack、崩溃前缀用例不变（变异“strict 写完
+  即回复”时 `TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined` 等四条变红）。
+
+**平台说明**：macOS（APFS）上 `F_FULLFSYNC` 进行时，同一文件的 `write` 在内核里等它（本机实测：fsync 循环期间 200 字节
+write 平均约 190µs、最长约一次 fsync；没有 fsync 时约 7µs）。所以在 macOS 上 B 去掉的是“排在本批 fsync 之后才回复”
+与“writer 在 fsync 期间不收批”，async 记录仍可能在内核里等一次进行中的 fsync；Linux（ext4 / xfs 的追加写一般不等
+fsync）未在本机测量，需在目标 Linux 上对照。测量见
+[hot-entity-commit-20261115](../performance/benchmarks/hot-entity-commit-20261115/README.md)。
+
+### 12.3 没做的与备选
+
+- **strict 热点**：契约要求锁内持久，单实体每次 fsync 一条是 strict 的固有代价，不改。
+- **默认给全部 pipelined handler 异步完成**：会让已有的 pipelined handler 不声明就换了 AfterCommit 的执行环境，不做；
+  是否改缺省是产品决定。
+- **async 不等写入**（写入也交给后台、调用方只等入队）：async 的契约是“回复前已写入页缓存（进程崩溃不丢）”，不改。
+

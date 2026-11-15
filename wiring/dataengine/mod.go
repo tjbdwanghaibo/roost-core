@@ -177,7 +177,7 @@ type config struct {
 	} `config:"dataengine.effect_consumer"`
 	Pipelined struct {
 		Allowlist          []string `config:"allowlist" example:"[]" help:"允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写"`
-		AsyncWorkers       int      `config:"async_workers" min:"0" example:"8" help:"异步完成池的 worker 数（0 取缺省 4）。异步完成只给本进程声明 durability=pipelined 的 saga 原生步骤 handler 用，\n没有这类 handler 时不建完成池、本项不起作用"`
+		AsyncWorkers       int      `config:"async_workers" min:"0" example:"8" help:"异步完成池的 worker 数（0 取缺省 4）。异步完成给本进程声明 durability=pipelined 的 saga 原生步骤 handler 与声明\ncompletion=async 的 pipelined handler 用，没有这两类 handler 时不建完成池、本项不起作用"`
 		AsyncQueueCapacity int      `config:"async_queue_capacity" min:"0" example:"4096" help:"完成队列容量（0 取缺省 8192）；队列满时该事务降级为在派发 worker 上等 WAL，计 nest.pipelined.async_total{result=\"degraded\"}"`
 	} `config:"nest.pipelined"`
 }

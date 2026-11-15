@@ -759,6 +759,7 @@ func handlerQuery(player IPlayerEntity) (PlayerView, error) { return PlayerView{
 | `target` / `targets` | 实体名 / 逗号分隔的实体名 | 锁目标，按个数取开头的参数；不写时把类型名含 `Entity` 的参数（及其切片）推断为锁目标 |
 | `rollback` | `state`、`undo` | 全状态快照或生成 setter 的逆操作；热路径推荐 `undo` |
 | `durability` | `memory`、`async`、`strict`、`pipelined` | 内存、WAL admission、严格提交、流水线持久确认（受运行时准入约束） |
+| `completion` | `async` | 只能配 `durability=pipelined`：异步完成（`HandlerMeta.AsyncCompletion`）。Enqueue 之后作业结束，同一实体的下一条消息不等这条持久，回复与 AfterCommit 在持久后按提交序由完成池执行；AfterCommit 不带请求上下文、不持实体锁、不能同步等同一实体的 Nest 请求。热点单例实体上的同步写用它，见 [NEST_PIPELINED_COMMIT §12](../../docs/framework/NEST_PIPELINED_COMMIT.md#12-热点单例实体的写吞吐2026-11-15) |
 | `sync` | flag | 生成同步 Sender |
 
 未声明时默认 `rollback=state durability=async`，业务修改先进入 Nest WAL；需要请求返回前确认 durable admission 时声明 `durability=strict`，只有明确不持久化的 handler 才显式写 `durability=memory`。
