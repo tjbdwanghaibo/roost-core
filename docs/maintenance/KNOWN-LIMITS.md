@@ -419,7 +419,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **gm 联动的边界**：直接加减币 / 道具 / 经验不自动重试，超时不等于未生效；要可重试的补偿用带稳定 `request_id` 的邮件。操作者字段是 token 持有人自报的审计信息，不是独立账号认证。只读 Nest 核对收件人后才调 mail，发件 RPC 不在实体锁内；换服命令答 accepted 只表示已受理。
 - **模块目录与 demo / 玩法的关系**：现行清单、固定场景数与联动以 [modules/README](../../modules/README.md) 和各 `module.yaml` 为准；新增场景线与六个补充模块只面向新工程，不兼容旧生成工程 / 存储形状。game-demo 的属性 / 装备用模块，移动共用 actor Body；CellWorld 进程装配在 cellworld 模块，业务 Entity 适配、LOD / 队伍视图、SceneReady、玩法刷怪、副本与地形适配仍在 demo，不宣称全面迁移。casual / turn-pvp 配方已经接 login/account 角色号分配；生产渠道身份验证与可信玩法 / 胜负规则仍由业务提供。
-- **room 的边界**：1～64 席、单个 owner、公开房间的成员准入；没有私房邀请码、跨房唯一成员约束、自动广播或匹配移交。客户端保存 RoomID / Epoch，重连显式 CAS，连接 nonce 只从服务端 Session 取；业务接入层要把该连接成功时取得的代际交给 `room.Disconnect`，断线保留 / 踢出 / 重启后的状态重建不自动代办。持久 `Connected` 是最后处理的连接事件，不是跨重启的在线权威。
+- **room 的边界**：1～64 席、单个 owner、公开房间的成员准入；没有私房邀请码、跨房唯一成员约束、房间内广播或匹配移交（广播与 R11——demo 的锁步匹配改造成回合房——按维护者 D24 A 暂缓，需要时另立项）。客户端保存 RoomID / Epoch，重连显式 CAS，连接 nonce 只从服务端 Session 取；在线状态不落库（`RoomDao.Online`，nopersist，D24 2026-11-15 实施）：进程重启或房间重新装载后全部席位断线，成员用 `RoomReconnect` 重新上线；断线由 room 的 manager（`NewRoomPresence`）订阅连接关闭自动处理（每 30s 补扫丢失的关闭事件，连续 3 次 Disconnect 失败放弃并 Warn），只覆盖本进程的连接：房间与连接不在同一个 game 进程时不自动断线，`Managers()` 里没有 `NewRoomPresence()` 时业务要自己调 `room.Disconnect`。只改 nopersist 字段的 Disconnect 不提交，不是持久事实。断线保留 / 踢出策略仍由业务决定。
 - **模块运行期接线**：`runtime` 声明的入口在框架 Mod 启动后、业务 Service.Init 前按依赖运行，停机时业务先停、模块逆序停，不能依赖业务 Init 才发布的能力。自动接线只在生成的 bootstrap 生效，手动构造服务要用 `NewWithModules()`。生命周期只支持一次 Init、串行 Shutdown，不支持重启。不在 `runtime:` 里的后台循环做成 manager（D22）：清单 `managers: [<构造函数>]`，代码在 `game/managers/`，安装器登记进 `game/managers/managers.go` 的 `Managers()`（服务没有 manager Mod 时代办 `roost add mod manager`），由 manager Mod 统一启停；Stop 不再接新工作、取消在途工作的 ctx、在期限内排空，期限先到返回期限错误（ManagerMod 用新期限再停）；不另做 ingress 登记。只对登记点在 `game/managers/managers.go` 的工程（v1.47.0 起新生成）生效，`Managers()` 改成别的写法时安装器拒绝。已迁：login（`NewLoginNotices`）、rehome（`NewRehomeBackground`）；其余见[业务模块（roost module）](#业务模块roost-module)的 N2。
 - **team 的边界**：Remote 共享权威，Player 存队伍引用与有界的邀请收件记录；七个请求加邀请推送。邀请提交后只给本进程在线玩家写收件记录并尽力推送，离线 / 跨 game 玩家没有自动投递；收件记录写入或推送失败不回滚权威邀请，查询发现不了从未送达的记录。查询按 Team 当前权威过滤失效记录、续期用当前到期时间；解散后的引用惰性清理，rehome 双向检查保留。
 - **turn 的边界**：固定开局名单，每位玩家成功命令连续编号、最后一条可重放；期限迟到只推进一次，离线实体下次加载补触发；成员减少 / 房间关闭在下一次推进结束；没有自动广播、胜负 / 伤害规则或跨机接管。
@@ -739,7 +739,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **模块化顺序（N1）**：**已决定（D21 A，2026-11-14），v1.47.0 之后实施**：先把 13 类玩法逐类改成“装模块 + 只写模块没覆盖的部分”（按 compose.md，每类保持现有场景数与 REAL 档全绿），CellWorld 业务适配进模块排在后面，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R9）。现状：13 类玩法仍由 `scripts/testdata/genre-common` 与各玩法夹具生成，模块组合只有 casual / turn-pvp 两份配方；CellWorld 的分区装配与 Entity 适配仍在 demo。既定能力与模板边界已移到一。
 - **运行期契约（N2）**：**部分实施（D22，2026-11-14）**：login EnterStatus、rehome 后台步骤（含静默 ticker）已改成 manager（契约见[生成器、配置与模块](#生成器配置与模块)的“模块运行期接线”）；activity_world / activity_alliance 驱动、cellworldhost 未迁，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R6）。cellworldhost 现在不做成 manager 的原因（Node 要在实体心跳装好之后启动，manager 的 Start 早于它）见[CellWorld 固定分区](#cellworld-固定分区v1470)“装配顺序”，实施时要先解决这个先后。
 - **模块的规则大多还是 Go 写的业务文件**：模块可以带配置表（bag 的道具表就是），但清单不能声明配置项。profile 的每级经验、stamina 的规则、leaderboard 的榜与周期（`leaderboard_board.go`）、mailbox 的账本宽限（600 秒）都是代码里的常量或业务文件，要调只能改已装的文件；task 与 shop 已使用配置表；rules 统一进入推送和补取，尚无热更广播或大目录分页。**已决定（D19 B，2026-11-14），v1.47.0 之后实施**：模块清单可声明配置结构，安装器接入 Mod 配置声明，`roost config check` / `--check-config` 能查；先迁 profile、stamina、leaderboard、mailbox 的常量与 `portal.servers`，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R5）。
-- **portal 动态目录（Q12）**：动态注册表仍为每进程一份，Gate / game 的上报来源没接，现在靠静态配置加运维登记。**已决定（D23 A，2026-11-14），v1.47.0 之后实施**：game 经总线定期上报到 account 进程的带过期注册表，portal 读它，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R7）。双 account 的静态目录验收不关闭这一条。
 - **登录外部边界**：双 account / game / Gate、真实 naming 与重启重连、casual 购买 / self_sync 已验；完整 naming 故障阶段、生产渠道、Redis 故障、跨机与长稳未验。跨机入口见 C-X4；时间推送仍为 best-effort。
 - **社交容量与归属**：两 game 共享 Team + toxiproxy、排队 SIGKILL / 重试与排队禁止建队 / 入队已验；邀请的跨 game 自动投递没有实现，容量未验。Team 归 game 服务已由维护者确认（D14），见[CellWorld 固定分区](#cellworld-固定分区v1470)“无缝世界原型的产品简化”。
 
@@ -753,7 +752,7 @@ P8 已验真实 NATS / TCP、跨 sid、Redis AOF 重启、Player 已提交而 Re
 
 ##### R7 匹配模块的当前边界
 
-room 自动断线订阅、保留策略、重启在线状态重建、广播继续保留为 §5 后续；本轮实现名单准入和已有重连代际的组合。demo 的旧锁步匹配仍单独服务 battle，不在 R7 改造成回合房。**已决定（D24 A，2026-11-14），v1.47.0 之后实施**：先做自动断线订阅与重启后在线状态重建；广播与 R11（demo 的锁步匹配改造成回合房）继续延后，实施时作为既定范围写进一，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R7）。
+room 自动断线订阅与重启后在线状态（全部断线、重连上线）已实施（D24，2026-11-15），边界见[框架服务与 game-demo](#框架服务与-game-demo)“room 的边界”；保留策略由业务决定；本轮实现名单准入和已有重连代际的组合。demo 的旧锁步匹配仍单独服务 battle，不在 R7 改造成回合房。广播与 R11（demo 的锁步匹配改造成回合房）按 D24 A 暂缓，已写进一的“room 的边界”。
 
 #### 联盟（alliance）
 

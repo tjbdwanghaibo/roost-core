@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **portal 动态区服目录（D23，2026-11-15）**：account 新增区服入口登记表（`ReportServerPresence` / `WithdrawServerPresence` / `ListServerPresence`，Redis `<prefix>:presence` 一个 hash，Lua 用 Redis `TIME` 判期，最多 256 个 sid）；login 模块新增 manager `NewLoginPresence`（配置 `login.presence.addr|interval|tags`，缺省每 10s 上报、TTL 30s，没配 addr 时不上报）；portal 缺省区服目录叠加 account 登记表（上报的优先），**删除** portal 进程内 `Registry` 目录。**升级顺序：先升 account，再升 game / manifest**（旧 account 不认新方法）。
+- **room 断线订阅与重启后在线状态（D24，2026-11-15）**：`gateway.TCPSessionClosed.ConnectionID`；`gateway.PlayerRuntime` 接口新增 `ConnectionActive`、`SessionCount`（自行实现该接口的代码需补两个方法），两种部署都先摘查找表再发关闭事件。room 模块删除持久的 `RoomSeat.Connected`，在线状态改为 nopersist 的 `RoomDao.Online`（重启后全部断线）；新增 manager `NewRoomPresence` 订阅连接关闭自动 Disconnect（30s 补扫），模块依赖 nest、manager Mod。turn 鉴权读 `Room().Connected`。模块场景数 room 22 → 29、login 34 → 36。存储格式变化，只对新生成的工程。广播与 R11 按 D24 A 暂缓。
 - **Remote 删空认领（D17，2026-11-15）**：新运维命令 `remote_entity.empty_claims {kinds?, after?, limit?, delete?, reason?}`（`RemoteEntityMod` 自动挂到 admin 注册表，经 ops `/admin/execute`）。不写 `delete` 列出本 sid 独占、从没有提交过的所有权记录（候选）；`delete=true` 逐个在实体写门下复核（权威 `_ver` 0、非墓碑，内存实例版本 0 或冷加载答“不存在”），再按判定时那一代（owner、非共享、`_owner_epoch`、`_owner_route`、`_ver` 0、非墓碑）比较删除，判定之后记录有变的不删（答 `changed`）。新指标 `remote_entity.empty_claim_total{event=left|deleted}`。框架 API：`Manager.ListEmptyClaims` / `DeleteEmptyClaim`、`remoteentity.EmptyClaimStore`（`MongoCommitter` 实现）、`remoteentity.RegisterAdminCommands`、`AuthorityState.Claimed`。测试替身 mongotest 支持 `$mod`。不改存储格式与协议，无升级要求。
 - **生成物要求的最低 core 提到 v1.48.0**（2026-11-15）：新生成物的模块 manager 登记、CellWorld 线上格式 v13 与后台 checkpoint 缺省打开都要 v1.48.0；framework-compat 的 minimum 一栏随之改为 v1.48.0。
 
