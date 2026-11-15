@@ -754,4 +754,45 @@ func TestEnterGameDoesNotWaitForTheWorldsLoginCount(t *testing.T) {
 	}
 }
 
+// 分发期限在进场景之前已经用完的登录答 login_timeout（维护者 2026-11-15），不答成功：否则客户端以为进来了，玩家
+// 却不在复制场景里。这里让期限恰好在进场景之前过去（HoldBeforePlacementForTest 等到请求的 ctx 结束）；客户端照
+// login_timeout 重试，下一次正常的 EnterGame 答成功：玩家是上一次建的（Created=false），首次初始化已经做过
+// （First=false）。
+func TestEnterGameAnswersLoginTimeoutWhenTheDeadlinePassedBeforeTheSceneJoin(t *testing.T) {
+	s := newLoginScenario(t)
+	ctx := context.Background()
+	account, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "late-1", Credential: "demo:late-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := s.accounts.CreateRole(ctx, account.ID, scenarioSID, "late_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := s.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
+
+	restore := playerctl.HoldBeforePlacementForTest(func(requestCtx context.Context) { <-requestCtx.Done() })
+	request := s.context(session, msgid.MsgEnterGame)
+	deadlineCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	request.BaseCtx = deadlineCtx
+	late, err := s.controller.EnterGame(request, &pb.EnterGameRequest{ClientVersion: "scenario"})
+	restore()
+	if err != nil {
+		t.Fatalf("EnterGame returned a transport error: %v", err)
+	}
+	if late.Code != apperrors.ErrLoginTimeout.Code() {
+		t.Fatalf("an EnterGame whose deadline passed before the scene join answered %+v, want login_timeout (%d): "+
+			"the client must retry instead of believing it is in the scene", late, apperrors.ErrLoginTimeout.Code())
+	}
+	retried := s.enterGame(session)
+	if retried.Code != 0 || retried.PlayerID != role.PlayerID || retried.Created || retried.First {
+		t.Fatalf("the retried EnterGame = %+v, want the player entered (created and initialized by the timed-out attempt)", retried)
+	}
+}
+
 func init() { gamelogin.RegisterEnterChecks() }

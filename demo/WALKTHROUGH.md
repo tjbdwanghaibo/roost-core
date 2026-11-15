@@ -207,7 +207,7 @@ chat 服务是通用的：它按频道存带序号的消息、执行这个工程
 ```
 ChatSend 端点 ─ Publish(sender=认证玩家, requestID=帧序号) ─▶ chat 服务（typed servicerpc）
               └─ deliver：world 频道推给本进程在线名单里的每个玩家（含发送者），private 推给双方 ── ChatMessage 推送
-EnterGame 端点 ─ Chat().AnnounceWorld("player N entered") ─▶ chat 服务的特权入口 PublishSystem ── 同样 deliver
+EnterGame 端点 ─ 登录公告合并器（game/announce，每秒至多一条“N players entered …”）─ Chat().AnnounceWorld ─▶ chat 服务的特权入口 PublishSystem ── 同样 deliver
 ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（服务端校验读权限）—— 重连补读路径
 ```
 

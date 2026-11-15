@@ -165,6 +165,17 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	if err := handlersender.NewRecordEnterSender(controller.NestClient()).Send_RecordEnter(context.Context(), controller.WorldID()); err != nil {
 		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
 	}
+	// 进场景之前看一眼分发期限（维护者 2026-11-15）：期限已经用完时，后面的进场景、进入钩子都会立刻以
+	// context deadline exceeded 失败，若照旧答成功，客户端以为进来了，玩家却不在复制场景里（分区场景里也就动不了）。
+	// 所以答 login_timeout 让客户端重试：EnterGame 可以重试——装载找得到已有的 Player，首次初始化只做一次
+	// （重试的那次报 First=false），钩子约定可重复、本来就“下一次进入再跑”。连接已经关了（ctx 被取消）的同样按
+	// login_timeout 回答，那份回答没有人收。
+	beforePlacement(context.Context())
+	if err := context.Context().Err(); err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "place", err); cutShort {
+			return answer, nil
+		}
+	}
 	// On the map. The position is the player's own state, so it is written in
 	// a transaction like everything else; the scene only answers "where can
 	// this player stand".
@@ -214,15 +225,20 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	})
 	// The login announcement stays the demo's own decision: the game says so on
 	// the world channel through the chat module's privileged system path — a
-	// client cannot publish there. The request id is the session and frame, so
-	// a retried login frame is announced once.
-	requestID := fmt.Sprintf("enter:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
-	if err := controller.Chat().AnnounceWorld(context.Context(), fmt.Sprintf("player %d entered the world", context.PlayerID), requestID); err != nil {
-		slog.Warn("enter_game: login not announced on the world channel", "player_id", context.PlayerID, "err", err)
+	// client cannot publish there. 合并成每秒至多一条（维护者 2026-11-15，game/announce）：这里只把玩家交给
+	// 合并器，不等发送；一次登录一条时每条都推给全体在线，千人登录潮是约 50 万次推送（M-15）。
+	if announcer, ok := controller.LoginAnnouncer(); ok {
+		announcer.Entered(context.PlayerID)
+	} else {
+		slog.Debug("enter_game: no login announcer is running; the login is not announced", "player_id", context.PlayerID)
 	}
 	slog.InfoContext(context.Context(), "enter: player entered", "player_id", context.PlayerID, "first", entered.First, "created", created, "server_id", boundSID)
 	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created, First: entered.First}, nil
 }
+
+// beforePlacement 是测试缝：EnterGame 在检查分发期限、进场景之前调它。生产代码里什么都不做；测试
+// （enter_login_export_test.go 的 HoldBeforePlacementForTest）用它让期限恰好在这一步之前用完。
+var beforePlacement = func(stdcontext.Context) {}
 
 // loginContext is the login step's share of the request: the configured
 // login budget when the transport publishes one, otherwise the request's own

@@ -1,0 +1,113 @@
+package announce
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// published 记下发出的公告。
+type published struct {
+	mu    sync.Mutex
+	texts []string
+	keys  []string
+	sent  chan struct{}
+	fail  error
+}
+
+func newPublished() *published { return &published{sent: make(chan struct{}, 64)} }
+
+func (p *published) publish(_ context.Context, text, requestID string) error {
+	p.mu.Lock()
+	p.texts = append(p.texts, text)
+	p.keys = append(p.keys, requestID)
+	fail := p.fail
+	p.mu.Unlock()
+	p.sent <- struct{}{}
+	return fail
+}
+
+func (p *published) snapshot() ([]string, []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.texts...), append([]string(nil), p.keys...)
+}
+
+func (p *published) waitSent(t *testing.T) {
+	t.Helper()
+	select {
+	case <-p.sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no announcement was sent after the window closed")
+	}
+}
+
+// 一次登录潮（一个窗口里 50 人进入）只发一条公告：总数准确，点名最早的 MaxListed 个，其余计数；空窗口不发；
+// 下一个窗口另起一条，幂等键不同。维护者 2026-11-15：登录公告合并成每秒至多一条。
+func TestALoginBurstIsAnnouncedOncePerWindow(t *testing.T) {
+	sink := newPublished()
+	ticks := make(chan time.Time)
+	b := newBatcher(sink.publish, "1000:1", ticks)
+	b.Start()
+	defer b.Close(context.Background())
+
+	for id := int64(100_001); id <= 100_050; id++ {
+		b.Entered(id)
+	}
+	b.Entered(100_001) // 同一窗口里重试的登录不重复计数
+	ticks <- time.Now()
+	sink.waitSent(t)
+	ticks <- time.Now() // 空窗口：什么都不发
+	b.Entered(200_001)
+	ticks <- time.Now()
+	sink.waitSent(t)
+
+	texts, keys := sink.snapshot()
+	if len(texts) != 2 {
+		t.Fatalf("%d announcements for two windows with logins and one without, want 2: %q", len(texts), texts)
+	}
+	want := "50 players entered the world: 100001, 100002, 100003, 100004, 100005, 100006, 100007, 100008 and 42 more"
+	if texts[0] != want {
+		t.Fatalf("the burst was announced as %q, want %q", texts[0], want)
+	}
+	if texts[1] != "1 player entered the world: 200001" {
+		t.Fatalf("the next window was announced as %q", texts[1])
+	}
+	if keys[0] == keys[1] || !strings.HasPrefix(keys[0], "enter-batch:1000:1:") {
+		t.Fatalf("idempotency keys %q: each window needs its own key under this process's prefix", keys)
+	}
+	if len(texts[0]) > 256 {
+		t.Fatalf("an announcement of %d bytes exceeds the world channel's 256-byte text", len(texts[0]))
+	}
+}
+
+// 停机时还没发出的那一批由 Close 发出；Close 之后到达的进入不再公告。发送失败的那一批不重发。
+func TestCloseAnnouncesThePendingWindowAndNothingAfterIt(t *testing.T) {
+	sink := newPublished()
+	b := newBatcher(sink.publish, "1000:1", make(chan time.Time))
+	b.Start()
+	b.Entered(1)
+	b.Entered(2)
+	b.Close(context.Background())
+	b.Entered(3)
+	b.Close(context.Background())
+	if texts, _ := sink.snapshot(); len(texts) != 1 || texts[0] != "2 players entered the world: 1, 2" {
+		t.Fatalf("after Close the announcements were %q, want the pending window once", texts)
+	}
+
+	failing := newPublished()
+	failing.fail = errors.New("chat unreachable")
+	ticks := make(chan time.Time)
+	f := newBatcher(failing.publish, "1000:2", ticks)
+	f.Start()
+	f.Entered(7)
+	ticks <- time.Now()
+	failing.waitSent(t)
+	f.Close(context.Background())
+	if texts, _ := failing.snapshot(); len(texts) != 1 {
+		t.Fatalf("a failed batch was sent %d times, want once (dropped, not retried)", len(texts))
+	}
+}

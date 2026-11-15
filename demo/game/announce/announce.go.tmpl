@@ -1,0 +1,188 @@
+// Package announce 是 demo 的登录公告：玩家进入之后在世界频道说一声，但合并成每秒至多一条
+// （“N players entered the world: …”），不是每次登录一条。
+//
+// 为什么合并（维护者 2026-11-15）：每条公告都推给当时在线的所有人，一次登录一条时，千人登录潮就是约 50 万次
+// 推送（M-15，docs/performance/benchmarks/login-burst-20261115），而且 1000 条公告同时写同一个频道。合并之后
+// 登录潮里每秒一条，推送数与在线人数同阶。
+//
+// 为什么放在 demo 而不是 chat 服务：“登录要不要公告、怎么说”是 demo 自己的产品决定（chat 服务只负责发一条系统
+// 消息），合并的窗口、措辞与名单长度都是这个决定的一部分；chat 服务对所有系统消息一视同仁，不该替调用方攒批。
+//
+// 承诺与限制：
+//
+//   - 每个 Interval 至多发一条；窗口里没有人进入就不发。一条公告列出窗口里最早进入的至多 MaxListed 个玩家号，
+//     其余以“and K more”计数，总数 N 是窗口里进入的不同玩家数（同一名玩家在一个窗口里重试登录只算一次）。
+//   - 发送是尽力而为：一次发送失败（chat 不可达、超时）只记一条 Warn（带丢掉的人数），那一批不再重发——公告是
+//     告知，不是账。幂等键是“本进程的起始时刻 + 批序号”，同一批不会因为重放而在频道里出现两次。
+//   - 停机：Close 停下定时器，把还没发出的那一批用 Close 的 ctx 发一次；之后到达的进入（停机时仍在途的登录）不再
+//     公告，只计数在 Close 的日志里。进程崩溃时最后不足一个 Interval 的那一批丢失。
+package announce
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	// Interval 是公告的合并窗口：每个窗口至多一条。
+	Interval = time.Second
+	// MaxListed 是一条公告里点名的玩家数上限；世界频道一条文本至多 256 字节（chat 模块的 MaxTextBytes）。
+	MaxListed = 8
+)
+
+// Publisher 在世界频道发一条系统消息（chat 模块的 Controller.AnnounceWorld）；requestID 是幂等键。
+type Publisher func(ctx context.Context, text, requestID string) error
+
+// Batcher 攒下一个窗口里进入的玩家，每个窗口结束时发一条公告。Entered 不阻塞、不做 I/O，可以在登录请求里调用。
+type Batcher struct {
+	publish Publisher
+	ticks   <-chan time.Time
+	stopTicker func()
+	// keyPrefix 是本进程的幂等键前缀（sid 与起始时刻），批序号接在后面。
+	keyPrefix string
+	timeout   time.Duration
+
+	mu      sync.Mutex
+	pending []int64
+	seen    map[int64]struct{}
+	count   int
+	seq     uint64
+	closed  bool
+	started bool
+	late    int
+
+	stop chan struct{}
+	done chan struct{}
+}
+
+// NewBatcher 建一个按 Interval 合并的 Batcher，sid 用于幂等键。Start 起定时器之后才开始发。
+func NewBatcher(publish Publisher, sid int32) *Batcher {
+	return newBatcher(publish, fmt.Sprintf("%d:%d", sid, time.Now().UnixNano()), nil)
+}
+
+func newBatcher(publish Publisher, keyPrefix string, ticks <-chan time.Time) *Batcher {
+	return &Batcher{
+		publish: publish, ticks: ticks, keyPrefix: keyPrefix, timeout: Interval,
+		stop: make(chan struct{}), done: make(chan struct{}),
+	}
+}
+
+// Start 起后台协程：每个窗口结束时发出攒下的那一批。只调一次。
+func (b *Batcher) Start() {
+	b.mu.Lock()
+	b.started = true
+	if b.ticks == nil {
+		ticker := time.NewTicker(Interval)
+		b.ticks, b.stopTicker = ticker.C, ticker.Stop
+	}
+	b.mu.Unlock()
+	go func() {
+		defer close(b.done)
+		for {
+			select {
+			case <-b.ticks:
+				ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
+				b.flush(ctx)
+				cancel()
+			case <-b.stop:
+				return
+			}
+		}
+	}()
+}
+
+// Entered 记下一名进入的玩家，下一个窗口结束时一起公告。Close 之后到达的不再公告。
+func (b *Batcher) Entered(playerID int64) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		b.late++
+		return
+	}
+	// 同一窗口里同一名玩家只算一次（重试的登录帧、断线重连）。
+	if _, again := b.seen[playerID]; again {
+		return
+	}
+	if b.seen == nil {
+		b.seen = map[int64]struct{}{}
+	}
+	b.seen[playerID] = struct{}{}
+	b.count++
+	if len(b.pending) < MaxListed {
+		b.pending = append(b.pending, playerID)
+	}
+}
+
+// Close 停下定时器，把还没发出的那一批用 ctx 发一次。可以重复调用。
+func (b *Batcher) Close(ctx context.Context) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	started, stopTicker := b.started, b.stopTicker
+	b.mu.Unlock()
+	close(b.stop)
+	if stopTicker != nil {
+		stopTicker()
+	}
+	if started {
+		// 等后台协程退出，不让它的最后一次发送与下面这次交错。
+		select {
+		case <-b.done:
+		case <-ctx.Done():
+		}
+	}
+	b.flush(ctx)
+	b.mu.Lock()
+	late := b.late
+	b.mu.Unlock()
+	if late > 0 {
+		slog.Info("announce: logins after shutdown began were not announced", "players", late)
+	}
+}
+
+// flush 发出攒下的那一批（没有就什么都不做）。
+func (b *Batcher) flush(ctx context.Context) {
+	b.mu.Lock()
+	listed, count := b.pending, b.count
+	b.pending, b.count, b.seen = nil, 0, nil
+	if count == 0 {
+		b.mu.Unlock()
+		return
+	}
+	b.seq++
+	requestID := fmt.Sprintf("enter-batch:%s:%d", b.keyPrefix, b.seq)
+	b.mu.Unlock()
+	if err := b.publish(ctx, Text(count, listed), requestID); err != nil {
+		slog.Warn("announce: login announcement not sent; this batch is dropped", "players", count, "err", err)
+	}
+}
+
+// Text 是一批的公告文本：总数，点名的玩家号，其余计数。
+func Text(count int, listed []int64) string {
+	ids := make([]string, len(listed))
+	for i, id := range listed {
+		ids[i] = fmt.Sprint(id)
+	}
+	noun := "players"
+	if count == 1 {
+		noun = "player"
+	}
+	text := fmt.Sprintf("%d %s entered the world: %s", count, noun, strings.Join(ids, ", "))
+	if more := count - len(listed); more > 0 {
+		text += fmt.Sprintf(" and %d more", more)
+	}
+	return text
+}

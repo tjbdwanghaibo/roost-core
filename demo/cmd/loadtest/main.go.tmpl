@@ -228,11 +228,16 @@ type robotLogin interface {
 
 // registerEnter for the bus login: a session-ticket session is loaded or
 // created by EnterGame itself, so enter_game is the plain call.
+//
+// 服务端答 login_timeout（登录潮里预算用完）时 enter_game 退避重试（retryLoginTimeout）。
 func (login *accountLogin) registerEnter(actions *action.Registry, protocols *protocol.Registry) {
-	action.MustRegisterCall[pb.EnterGameRequest, pb.EnterGameResponse](actions, protocols, "enter_game", msgid.MsgEnterGame,
+	action.MustRegisterCall[pb.EnterGameRequest, pb.EnterGameResponse](actions, protocols, "enter_game_once", msgid.MsgEnterGame,
 		action.OnResp(func(_ *robot.Context, resp *pb.EnterGameResponse) error {
 			return coded(resp.Code, resp.Reason)
 		}))
+	actions.MustRegister(action.Func{ActionName: "enter_game", Handle: func(ctx context.Context, rb *robot.Context, param any) error {
+		return retryLoginTimeout(ctx, rb, func() error { return actions.Run(ctx, rb, "enter_game_once", param) })
+	}})
 }
 
 // portalLogin is the client's path through the front door (the portal
@@ -412,7 +417,7 @@ func (login *portalLogin) registerEnter(actions *action.Registry, protocols *pro
 				return err
 			}
 		}
-		return actions.Run(ctx, rb, "enter_game_built", param)
+		return retryLoginTimeout(ctx, rb, func() error { return actions.Run(ctx, rb, "enter_game_built", param) })
 	}})
 }
 
@@ -1427,7 +1432,47 @@ func coded(code int32, reason string) error {
 	if code == 0 {
 		return nil
 	}
-	return fmt.Errorf("response code %d: %s", code, reason)
+	return &responseCodeError{Code: code, Reason: reason}
+}
+
+// responseCodeError 是服务端带码的应答；errors.As 取得到码，用来分辨“该重试”的那几种（login_timeout）。
+type responseCodeError struct {
+	Code   int32
+	Reason string
+}
+
+func (err *responseCodeError) Error() string {
+	return fmt.Sprintf("response code %d: %s", err.Code, err.Reason)
+}
+
+// loginTimeoutRetries 是 enter_game 遇到 login_timeout 时最多再试的次数；loginTimeoutBackoff 是第一次重试前的等待，
+// 之后每次翻倍（200ms、400ms、800ms、1.6s，合计约 3 秒）。写成变量是为了让测试缩短等待。
+var (
+	loginTimeoutRetries = 4
+	loginTimeoutBackoff = 200 * time.Millisecond
+)
+
+// retryLoginTimeout 执行 enter 一次；服务端答 login_timeout（登录预算用完，EnterGame 可以重试）时退避后再试，
+// 至多 loginTimeoutRetries 次。别的错误（拒绝、需要新建、内部错误）原样返回，不重试。退避加上按机器人编号的
+// 0～99ms 错开，避免同一批超时的机器人同时再来。
+func retryLoginTimeout(ctx context.Context, rb *robot.Context, enter func() error) error {
+	wait := loginTimeoutBackoff
+	for attempt := 0; ; attempt++ {
+		err := enter()
+		var coded *responseCodeError
+		if err == nil || attempt == loginTimeoutRetries || !errors.As(err, &coded) || coded.Code != apperrors.ErrLoginTimeout.Code() {
+			return err
+		}
+		jitter := time.Duration(rb.ID%100) * time.Millisecond
+		timer := time.NewTimer(wait + jitter)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+		wait *= 2
+	}
 }
 
 // loadScenarios registers every YAML file in dir.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http/httptest"
 	"strings"
@@ -375,6 +376,95 @@ func TestPortalRobotAfterTheHandshake(t *testing.T) {
 		}
 		if rb.PlayerID != 900_003 {
 			t.Fatalf("a refused EnterGame adopted player id %d", rb.PlayerID)
+		}
+	})
+}
+
+// 服务端答 login_timeout（登录潮里预算用完，EnterGame 可以重试）时，enter_game 退避后再发 EnterGame，至多
+// loginTimeoutRetries 次；别的码不重试。两种登录方式（-login bus / portal）用的是同一个重试。
+func TestRobotEnterRetriesLoginTimeout(t *testing.T) {
+	previous := loginTimeoutBackoff
+	loginTimeoutBackoff = time.Millisecond
+	t.Cleanup(func() { loginTimeoutBackoff = previous })
+	timeout := apperrors.ErrLoginTimeout.Code()
+	// scripted 让前 timeouts 次 EnterGame 答 code（login_timeout 或别的），之后答成功。
+	scripted := func(t *testing.T, timeouts int, code int32) func(*transport.Packet) []*transport.Packet {
+		answered := 0
+		return func(request *transport.Packet) []*transport.Packet {
+			if request.MsgID != msgid.MsgEnterGame {
+				t.Errorf("unexpected request msg %d", request.MsgID)
+				return nil
+			}
+			answer := &pb.EnterGameResponse{PlayerID: 100_042}
+			if answered < timeouts {
+				answer = &pb.EnterGameResponse{Code: code, Reason: "scripted"}
+			}
+			answered++
+			payload, err := pb.MarshalEnterGameResponse(answer)
+			return answerTo(t, request, payload, err)
+		}
+	}
+	busRobot := func(t *testing.T, answer func(*transport.Packet) []*transport.Packet) (*robot.Context, *action.Registry, *scriptedGame) {
+		protocols := protocol.NewRegistry(pbCodec{})
+		actions := action.NewRegistry()
+		(&accountLogin{}).registerEnter(actions, protocols)
+		registerPushes(protocols)
+		game, robotSession := newScriptedGame(t, protocols, answer)
+		rb := robot.NewContext(robot.Config{ID: 3, PlayerID: 100_042, Protocols: protocols})
+		rb.RunAction = actions.Run
+		rb.SetSession(robotSession)
+		return rb, actions, game
+	}
+	enter := func(rb *robot.Context, actions *action.Registry) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return actions.Run(ctx, rb, "enter_game", nil)
+	}
+	t.Run("retried_until_it_enters", func(t *testing.T) {
+		rb, actions, game := busRobot(t, scripted(t, 2, timeout))
+		if err := enter(rb, actions); err != nil {
+			t.Fatalf("enter_game after two login_timeout answers: %v", err)
+		}
+		if got := len(game.requests()); got != 3 {
+			t.Fatalf("the game received %d EnterGame, want 3 (two timed out, the third entered)", got)
+		}
+	})
+	t.Run("gives_up_after_the_retries", func(t *testing.T) {
+		rb, actions, game := busRobot(t, scripted(t, 100, timeout))
+		var coded *responseCodeError
+		if err := enter(rb, actions); !errors.As(err, &coded) || coded.Code != timeout {
+			t.Fatalf("enter_game that always timed out returned %v, want the login_timeout answer", err)
+		}
+		if got := len(game.requests()); got != 1+loginTimeoutRetries {
+			t.Fatalf("the game received %d EnterGame, want %d", got, 1+loginTimeoutRetries)
+		}
+	})
+	t.Run("other_codes_are_not_retried", func(t *testing.T) {
+		rb, actions, game := busRobot(t, scripted(t, 100, apperrors.ErrEnterNeedCreate.Code()))
+		if err := enter(rb, actions); err == nil {
+			t.Fatal("enter_game succeeded on an enter_need_create answer")
+		}
+		if got := len(game.requests()); got != 1 {
+			t.Fatalf("the game received %d EnterGame for a refusal, want 1 (not retried)", got)
+		}
+	})
+	t.Run("portal_login_retries_too", func(t *testing.T) {
+		rb, actions, game := portalRobot(t, scripted(t, 1, timeout))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- actions.Run(ctx, rb, "enter_game", nil) }()
+		payload, err := pb.MarshalEnterStatusPush(&pb.EnterStatusPush{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		game.push(msgid.MsgEnterStatus, payload)
+		if err := <-done; err != nil {
+			t.Fatalf("portal enter_game after one login_timeout: %v", err)
+		}
+		if got := len(game.requests()); got != 2 {
+			t.Fatalf("the game received %d EnterGame, want 2", got)
 		}
 	})
 }
