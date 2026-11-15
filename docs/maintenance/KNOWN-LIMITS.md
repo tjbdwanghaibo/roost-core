@@ -132,6 +132,11 @@
 - **窗口过期即 fail-stop，不再复活**：开了 singleton 的进程被 SIGSTOP、长 GC、调试器或虚拟机暂停超过 `ttl`（缺省 15s）后恢复，一律停下由编排重启，即使 Redis 的键仍是自己的（原来续期 Applied 就继续持有）。契约见 [guide/01“有效窗口过期后不可复活”](../framework/guide/01-app-lifecycle.md)。
 - **`SingletonLease.Check()` 只看本地时钟**：“检查之后、写入之前”的空档消除不了，跨进程写入的最终防线是存储侧的条件写。`Check()` 判定过期时在调用方的 goroutine 上同步执行 OnFail 回调（含 Nest 围栏），新加的 OnFail 回调不能依赖调用它的 goroutine。
 
+#### 热点单例实体的写吞吐（2026-11-15）
+
+- **经派发器打到同一个实体的同步请求约“每次 fsync 一条”**：pipelined 第一阶段虽然在实体锁外等票据，派发器按实体 ID 的准入链仍让同一实体的后继消息等这一条（含回复）结束，所以请求路径上的热点单例实体按 strict 或 pipelined 都只能约每次 fsync 处理一条；异步完成只开给 saga 原生步骤。热点单例上的计数类写入要只投递（`Send_`），不要在请求关键路径上同步等（game-demo 的 World 登录计数即此例，见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)）。
+- **async 持久性在有 strict 负载时并不更快**：nestwal 只有一个 writer，async 记录要排在同批或上一批 strict 记录的 fsync 之后；登录潮里 async 的锁持有仍约 8.6ms。要改需让业务 pipelined handler 可选异步完成、或把 nestwal 的 fsync 与写入解耦，都是核心改动，维护者 2026-11-15 决定先作为限制保留。
+
 ### DataEngine、Remote 与 Saga
 
 #### 起服预加载与按服分库（v1.47.0）
@@ -781,7 +786,9 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### 地形 / 无缝世界：遗留
 
 - **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`；terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid。**已决定（D11 Q17 A，2026-11-14），v1.47.0 之后实施**：按地图归属选库范围——普通场景按 sid，分区场景（跨服共享地图）保持 global，demo 与 terrain 模块一致，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R3）。
-- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）；M-15 A + D + C 之后 Robot 千人复跑（2026-11-15）仍不达标：1000 人中 310 人预热期没走到分散目标（同机 main 无 C 为 371），原因是 Base 在登录潮里进入流程超时（进入钩子 `sync canceled` / NATS 请求超时、没进复制场景），瓶颈在登录 / 进入路径而不在 Witness 接收，见[记录](../performance/benchmarks/cellworld-d13c-20261114/README.md#m-15robot-千人复跑2026-11-15a--d--c-之后同机对照-main)；B / E 暂不做，先查进入路径；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
+- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。复测仍不稳定：分散三轮失败 240 / 21 / 417（中位 240），同一出生点两轮 962 / 0；同一出生点时 Base 兴趣在开局人人互见时饱和（日志积压 37～50 万、会话丢失 222～755），分散后不再出现，剩余失败是“预热结束时未停在目标 ±20 内”，原因尚未确认（失败数随目标 y 增大而升高、机器人到达判定可能来回摆动，均未验证），见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
+- **login.notices 溢出丢弃没有指标**（2026-11-15）：会话激活告知超过 256 条在途时丢弃，只记 Debug，INFO 下看不到丢了多少；登录潮排查里用日志排除了它，要常态可见需加计数。
+- **登录潮里 30 次 account CreateRole 超时，尚未确认**（2026-11-15，`lb-fix2`）：只出现在 chat 频道写修复之前的那一轮，推测是同进程抢写拖慢共用 Redis，修复后各轮未再出现，未单独证明。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
 - **CellWorld Runtime**：六条模块场景含 Start / Stop 与失败复位已验；AddIngress 失败分支仍缺场景，业务 Entity 适配仍只在 demo。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 
