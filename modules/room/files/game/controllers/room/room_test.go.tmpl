@@ -337,9 +337,12 @@ func TestRoomClosedConnectionMarksTheSeatOffline(t *testing.T) {
 	}
 	presence.Sweep()
 	eventually("a dropped close event is caught by the sweep", func() bool { got := online(101, "a2"); return !got[102] && got[101] })
-	// 登记里只剩重连之后的 101（新连接）；它离开之后一条都不剩。
-	if got := presence.Tracked(); got != 1 {
-		t.Fatalf("%d seats tracked; want only 101 on its new connection", got)
+	// 登记里只剩重连之后的 101（新连接）；它离开之后一条都不剩。补扫的后台协程先提交 Disconnect、再撤登记，
+	// 快照里看到断线时撤登记可能还差一步，所以这里也等到位，不立即断言。
+	for deadline := time.Now().Add(2 * time.Second); presence.Tracked() != 1; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d seats tracked; want only 101 on its new connection", presence.Tracked())
+		}
 	}
 	if reply, err := f.controller.HandleRoomLeave(roomContext(101, "a2"), &pb.RoomLeaveRequest{RoomID: 81005, Epoch: 4}); err != nil || reply.Code != 0 {
 		t.Fatalf("leave: %+v %v", reply, err)

@@ -133,8 +133,11 @@ func TestRoomPresenceDisconnectsEveryRoomOfAClosedConnection(t *testing.T) {
 	}
 	w.presence.ForgetRoom(3)
 	w.presence.Forget(4, 102)
-	if n := w.presence.Tracked(); n != 0 {
-		t.Fatalf("%d seats tracked after the disconnects and the forgets", n)
+	// drain 先调断线（这里收到调用）、再撤登记，收到第二次调用时撤登记可能还差一步，所以等到位。
+	for deadline := time.Now().Add(2 * time.Second); w.presence.Tracked() != 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d seats tracked after the disconnects and the forgets", w.presence.Tracked())
+		}
 	}
 	w.conns.close(102, "b")
 	w.none(t)
