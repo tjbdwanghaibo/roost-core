@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **Remote 删空认领（D17，2026-11-15）**：新运维命令 `remote_entity.empty_claims {kinds?, after?, limit?, delete?, reason?}`（`RemoteEntityMod` 自动挂到 admin 注册表，经 ops `/admin/execute`）。不写 `delete` 列出本 sid 独占、从没有提交过的所有权记录（候选）；`delete=true` 逐个在实体写门下复核（权威 `_ver` 0、非墓碑，内存实例版本 0 或冷加载答“不存在”），再按判定时那一代（owner、非共享、`_owner_epoch`、`_owner_route`、`_ver` 0、非墓碑）比较删除，判定之后记录有变的不删（答 `changed`）。新指标 `remote_entity.empty_claim_total{event=left|deleted}`。框架 API：`Manager.ListEmptyClaims` / `DeleteEmptyClaim`、`remoteentity.EmptyClaimStore`（`MongoCommitter` 实现）、`remoteentity.RegisterAdminCommands`、`AuthorityState.Claimed`。测试替身 mongotest 支持 `$mod`。不改存储格式与协议，无升级要求。
 - **生成物要求的最低 core 提到 v1.48.0**（2026-11-15）：新生成物的模块 manager 登记、CellWorld 线上格式 v13 与后台 checkpoint 缺省打开都要 v1.48.0；framework-compat 的 minimum 一栏随之改为 v1.48.0。
 
 ## [v1.48.0] - 2026-11-15
