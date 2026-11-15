@@ -173,7 +173,7 @@
 | [wiring/internal/configschemagen](../../wiring/internal/configschemagen) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 0 |
 | [wiring/lock](../../wiring/lock) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/mail](../../wiring/mail) | [次核心：Service 领域能力](impl/09-services.md) | 3 | 7 |
-| [wiring/manager](../../wiring/manager) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
+| [wiring/manager](../../wiring/manager) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 2 |
 | [wiring/match](../../wiring/match) | [次核心：Service 领域能力](impl/09-services.md) | 3 | 2 |
 | [wiring/mods](../../wiring/mods) | [次核心：Wiring 装配](impl/13-wiring.md) | 6 | 5 |
 | [wiring/modulehost](../../wiring/modulehost) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |

@@ -15,6 +15,7 @@ import (
 // 期限保存在 DAO，进程内游标只影响扫描公平性。重启从头扫描；迁移后新属主从自己的清单接手。
 // 每轮最多 128 个、8 个并行 I/O 调用，调用方在进入 Nest 前再次核对 ownership。
 // 这是有界恢复扫描，不承诺离线或超容量时准点结算；个人活动不走它。
+// 宿主服务经 ScanHost 启停它（由宿主模块的 manager 发布与停止，见 ScanHost），不要在 Mod 或 Service 里直接起。
 type Driver struct {
 	cancel context.CancelFunc
 	done   chan struct{}

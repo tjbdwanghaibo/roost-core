@@ -38,7 +38,7 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 //roost:entity id=12 name=Hero preload=startup preload_order=2
 ```
 
-- **时机**：生成器给持有这个实体的服务装 `kitdataengine.NewLocalPreloadMod(registry.LocalPreloadKinds("<服务>")...)`（Mod 名 `dataengine.preload`，依赖 DataEngine 与 Nest）。它在 DataEngine 回放完 WAL、Nest 启动之后、`Service.Init` 之前执行，所以 `Service.Init` 与第一条请求看到的是已载入的实体。它与 ManagerMod 没有依赖关系，manager 的 Start 不能假定预加载已完成。
+- **时机**：生成器给持有这个实体的服务装 `kitdataengine.NewLocalPreloadMod(registry.LocalPreloadKinds("<服务>")...)`（Mod 名 `dataengine.preload`，依赖 DataEngine 与 Nest）。它在 DataEngine 回放完 WAL、Nest 启动之后、`Service.Init` 之前执行，所以 `Service.Init` 与第一条请求看到的是已载入的实体。ManagerMod 排在它之后启动（D22：ManagerMod 以可选依赖排在 Nest、Remote、DataEngine 与两种预加载 Mod 之后），所以 manager 的 Start 时预加载已完成；Start 时 World 仍不存在（它在 `Service.Init` 里建出或载入）。
 - **范围**：只枚举本服的库。kind 的主 DAO（`DaoBuilders[0]`）所在集合，物理库是 `<库>_<sid>`，按 `_id` 升序、每页 1000 条、只取 `_deleted` 不为 true 的文档，然后经与按需加载相同的冷加载路径（`EntityManager` 的共享冷加载、Nest 业务池发布）载入，每批最多 16 个并发。
 - **顺序**：`preload_order` 小的先载入；同一个值的 kind 一起并发载入；下一批等上一批全部结束（成功或记失败）才开始。不写时为 0。它就是 `EntityBuilderParam.LoadPriority`，取值 0～1000。
 - **预算**（`dataengine.preload.*`，Init 时读一次）：`timeout`（缺省 10m）限整次预加载，到期取消在途的查询与加载、起服失败（Mongo 卡住时不再一直等到进程被停）；`max_entities`（缺省 1000000）限全部 kind 合计载入的实体数，再多一个就起服失败，报错让你调大它或不再预加载那个 kind。两者都返回 `engine.ErrLocalPreloadBudget`，起服失败后由进程管理拉起重试。

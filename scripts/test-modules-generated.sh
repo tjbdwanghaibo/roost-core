@@ -243,6 +243,10 @@ verify_full_project() {
   for manager in NewLoginNotices NewRehomeBackground; do
     [[ "$(grep -c "^		$manager(),$" game/managers/managers.go)" == 1 ]] || { cat game/managers/managers.go; echo "manager $manager is not registered exactly once" >&2; exit 1; }
   done
+  # 跑在属主服务里的 manager（services.<服务>.managers）登记进那个服务自己的列表。
+  for pair in activity_world:NewWorldActivityScan alliance:NewAllianceActivityScan; do
+    [[ "$(grep -c "^		gamemanagers.${pair#*:}(),$" "internal/service/${pair%:*}/managers.go")" == 1 ]] || { cat "internal/service/${pair%:*}/managers.go"; echo "manager ${pair#*:} is not registered exactly once in service ${pair%:*}" >&2; exit 1; }
+  done
   commit_all full-modules
   # 每个工程再以相反的请求顺序重复安装，所有模块和联动都应保持原样。
   local repeated=() requested=("$@") index

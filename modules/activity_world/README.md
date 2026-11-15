@@ -20,7 +20,8 @@
 - **配置**
   - `configs/schema/activity_scope.go` 与 `configs/table/activity_scope.csv`（表 `activity_scope`，默认为空）：每行 `ID`（逻辑号）、`BootstrapSID`（由哪个 `activity_world` 实例首次建档）、`CreatedAt`（真实开服时间）。
   - 活动定义仍在 `activity` 的 `configs/table/activity.csv` 里，用 `Scope=world`。
-  - 新增业务服务 `activity_world`（`internal/service/activity_world/service.go`），带 `configdata`、`dataengine`、`etcd`、`mongo`、`nats`、`nest`、`redis`、`remote_entity` 这些 Mod。
+  - 新增业务服务 `activity_world`（`internal/service/activity_world/service.go`），带 `configdata`、`dataengine`、`etcd`、`manager`、`mongo`、`nats`、`nest`、`redis`、`remote_entity` 这些 Mod。
+- **后台 manager**（D22）：恢复扫描由 `game/managers/world_activity_scan.go` 的 `NewWorldActivityScan` 启停，登记在 **`activity_world` 服务**的 `internal/service/activity_world/managers.go`（`gamemanagers.NewWorldActivityScan()`，安装器代加）。manager 在 Start 里发布 `activity.ScanHost`（能力名 `activity.ScanCapability("world")`）；RPC Mod 依赖 manager Mod，建完档、注册完 RPC 之后把扫描交给它，取不到（这一行被删了）就启动失败。停机时 manager 取消在途调用、在期限内等它们返回。
 - **错误码**：`activity_world_request_invalid`（`ErrRequestInvalid`，RPC 请求无法解码或不合法时由生成的 RPC 代码使用）。引擎自身的拒绝仍是 `activity` 的包级错误值。
 
 **日志**：显式事件触发与 Complete 确认记 Debug，记录宿主、scope、活动号、代数、期次与阶段；空事件恢复扫描不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `internal/rpc/activity_world/service.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -28,7 +29,7 @@
 ## 能力边界
 
 - **不做的事**：不给玩家提供查看全服活动的协议，也不向 game 推送阶段变化——game 要自己写端点，调 `Pulse(target, "", 0)` 取快照再转给客户端。不校验调用方身份与玩家资格：RPC 只面向可信服务器，面向玩家的端点要先校验区服与资格，不能把客户端自报的事件直接转发。不含任何具体活动内容。
-- **推进不是准点的**：Remote 实体不能挂本地持久定时器，期限存在 `ActivityBook` 里，由 `activity_world` 进程的恢复扫描推进：每秒至多一页 128 个实体、8 个并行调用、每次调用预算 5 秒。扫描只推进当前归本实例所有的实体。业务操作仍按冻结的期限拒绝过期请求（`CheckOpen`），不依赖扫描的及时性。
+- **推进不是准点的**：Remote 实体不能挂本地持久定时器，期限存在 `ActivityBook` 里，由 `activity_world` 进程的恢复扫描（manager 托管）推进：每秒至多一页 128 个实体、8 个并行调用、每次调用预算 5 秒。扫描只推进当前归本实例所有的实体；停机时在途调用被取消，重启后从头再扫。业务操作仍按冻结的期限拒绝过期请求（`CheckOpen`），不依赖扫描的及时性。
 - **数量上限**：沿用 `activity`——每个宿主 128 个定义号、每次推进至多 32 个动作。
 - **一致性**：所有推进都在 `ActivityWorld` 实体自己的 Nest 事务里；单写者由 Remote 所有权保证，所有权换了之后旧实例的调用被路由检查与 Remote 准入拒绝。`Pulse` 的应答丢失后重发是安全的（对账是幂等的）；带事件的 `Pulse` 是否重复触发业务由登记的 `Eligible` / `Enter` 决定。
 - **建档规则**：服务启动时，只有 `BootstrapSID` 等于本实例 SID 的行会被建档并初始化。创建时间一经写入不能改成别的值（`handlerWorldActivityInit` 发现不一致时拒绝）；创建时间不能晚于当前时间。迁移到别的实例后要同步改 `BootstrapSID`，不能换一个新的逻辑号重新开服。
@@ -47,7 +48,7 @@
   - 全服活动要调排行或邮件：给 `activity_world` 服务配置对应的 `uses`，在 `Hooks.Resume` 里做外部调用。
   - 不要改 `internal/rpc/activity_world/mod.go` 里“先建档、再注册 RPC、最后开扫描”的顺序。
 - **别的模块 / 业务代码要用它**：取得 `WorldActivities` 客户端后调 `Pulse(ctx, target, event, createdAt)` / `Complete(ctx, target, token)`；`target` 用 `entity.BuildEntityID(逻辑号, EntityKindActivityWorld)` 构造。
-- **只适合借鉴的情形**：想给别的共享实体（例如城市、赛区）挂活动时，照本模块的四样东西写一个新宿主即可：实现 `activity.Owner` 的实体、组件类型别名、三个 Nest handler、带 `StartDriver` 的 RPC Mod。
+- **只适合借鉴的情形**：想给别的共享实体（例如城市、赛区）挂活动时，照本模块的五样东西写一个新宿主即可：实现 `activity.Owner` 的实体、组件类型别名、三个 Nest handler、在就绪点把扫描交给 `activity.ScanHost` 的 RPC Mod、发布 `ScanHost` 的 manager（`services.<服务>.managers` 登记进那个服务）。
 
 ## 联动
 
@@ -55,9 +56,9 @@
 
 ## 验证范围
 
-- `roost module verify activity_world`：4 个场景（`./internal/rpc/activity_world`，`^TestWorldActivity`）。
+- `roost module verify activity_world`：6 个场景（`./internal/rpc/activity_world`、`./game/managers`，`^TestWorldActivity`）。
 - 场景是离线的：Nest、生成的 DAO 与组件、handler、Remote 准入检查是真实代码；Remote 所有权与提交是内存替身。
 - 场景装载自带的空 `activity` / `activity_scope` 表，不读工程的 `configs/data`：按“复用方式”加了自己的全服活动与逻辑号之后 `roost module verify` 照样通过（2026-11-14 换表核对：读工程表时“配置为空”“业务失败不留激活”两条变红）。
-- 覆盖：一期活动在权威实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做。
+- 覆盖：一期活动在权威实体上走完并使用稳定的范围身份、所有权变更后旧驱动被拒、业务失败时不留下激活、配置为空时什么都不做；恢复扫描经 ManagerMod 起停——Start 之前没有 ScanHost、停机时在途调用被取消且停机等它返回、停了之后不再接扫描也不再列实体，停机期限比在途调用先到时按期限返回、再停一次停完。
 - 真实档：[scripts/test-activity-real.sh](../../scripts/test-activity-real.sh) 在两个独立 World 服务上验证正式 scope 表启动建档、pending 初始化的完整 Token/时间锚点跨 sid 不变、旧 owner 直接调用被拒；目标 SIGKILL 后沿用原 WAL 重启，先只读 Mongo 观察恢复扫描推进到 Settling，再经 NATS 确认结束，旧阶段及已完成 Token 均被拒。删除恢复扫描调用的变异停在 Open。迁移前后与重启后的 Snapshot/所有权证据见 [报告](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
 - 该档使用精简正式配方，允许 Mongo 正常投影，不是仅 WAL 恢复；未验证真实奖励外部副作用、长时间运行、跨机或容量。完整 demo 的 Player DAO 顶层字段上限仍适用。
