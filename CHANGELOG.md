@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.48.0] - 2026-11-15
+
 - **登录潮：game-demo 的 EnterGame 不再同步等 World 的登录计数**（2026-11-15）：改为投递 `Send_RecordEnter`，计数 handler 仍是 strict。此前 strict 计数在唯一 World 的锁内等 fsync（约每秒 110 笔），千人约 5 秒的登录潮里后到的玩家在 World 前等光 3 秒请求期限，进场景与进入钩子全部超时（M-15：进入路径失败 422 → 0，请求超时 438 → 0）。只对新生成工程生效。
 - **service/chat：同一进程对同一频道的写先排队再 compare-and-set**（2026-11-15，`channelStore.writers`，等待看 ctx）。此前并发写同一频道互相抢写，登录潮里世界频道 281 条写成、6391 次抢输、大量 conflict；修复后 1000 / 0。多 chat 进程之间仍只靠 compare-and-set。
 - **game-demo：进复制场景前请求期限已过时 EnterGame 答 `login_timeout`**（2026-11-15，维护者决定）：此前答成功而玩家不在场景里；demo 的 loadtest 机器人遇 `login_timeout` 退避重试（200ms 起翻倍，最多 4 次）。
