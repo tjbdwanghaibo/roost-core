@@ -214,6 +214,15 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 				return ModulePlan{}, err
 			}
 		}
+		// 跑在别的服务里的 manager：列表文件已经在时先核对认得它的写法；还没有时（这次才给那个服务装 manager Mod）安装时建。
+		for host, declared := range spec.Services {
+			if len(declared.Managers) == 0 {
+				continue
+			}
+			if _, _, _, err := moduleServiceManagersEdit(root, manifest, service, host, spec, declared.Managers); err != nil {
+				return ModulePlan{}, err
+			}
+		}
 		item.Status = moduleStatusInstall
 		item.Next = moduleNextHints(manifest, service, spec)
 		item.Sagas = spec.Sagas
@@ -553,6 +562,12 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 			return ModulePlan{}, fmt.Errorf("module %s: %w", item.Name, err)
 		}
 		touched = append(touched, paths...)
+		for host, declared := range item.spec.Services {
+			if len(declared.Managers) > 0 {
+				rel, _ := moduleServiceManagersPath(root, manifest, plan.Service, host)
+				touched = append(touched, rel)
+			}
+		}
 		for service := range item.Services {
 			touched = append(touched, moduleServiceConfig(service), "configs/service/config."+service+".prod.example.yaml", kubernetesSecretExampleRel(service))
 		}
@@ -785,6 +800,14 @@ func moduleTouchedFiles(root string, spec ModuleSpec, newEntity bool) ([]string,
 func writeModule(root string, manifest Manifest, service string, item ModulePlanItem) (InstalledModule, error) {
 	spec := item.spec
 	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: spec.ownedFiles(), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...), Managers: append([]string(nil), spec.Managers...)}
+	for host, declared := range spec.Services {
+		if len(declared.Managers) > 0 {
+			if record.ServiceManagers == nil {
+				record.ServiceManagers = map[string][]string{}
+			}
+			record.ServiceManagers[host] = append([]string(nil), declared.Managers...)
+		}
+	}
 	for _, rel := range spec.Files {
 		body, err := renderModuleFile(manifest, service, spec, "files", rel, item.IDs)
 		if err != nil {

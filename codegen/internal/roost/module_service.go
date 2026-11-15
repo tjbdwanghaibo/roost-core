@@ -18,6 +18,11 @@ type ModuleService struct {
 	Mods     []string `yaml:"mods" json:"mods"`
 	RPCs     []string `yaml:"rpcs" json:"rpcs,omitempty"`
 	Entities []string `yaml:"entities" json:"entities,omitempty"`
+	// Managers 是跑在这个服务进程里的模块后台 manager（D22）：构造函数同样定义在 files/game/managers/ 下，
+	// 安装器把 "gamemanagers.<名字>()," 加到这个服务的 internal/service/<name>/managers.go（文件还没有时按生成的样子建）
+	// 的 Managers() 列表末尾；Mods 必须带 manager。只有后台循环必须跑在这个服务里（它扫的是本进程拥有的实体）时用它，
+	// 玩家接入所在的服务用清单顶层的 managers。见 module_managers.go。
+	Managers []string `yaml:"managers,omitempty" json:"managers,omitempty"`
 }
 
 func validateModuleServices(spec ModuleSpec) error {

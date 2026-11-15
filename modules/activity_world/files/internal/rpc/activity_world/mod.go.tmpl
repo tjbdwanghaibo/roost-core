@@ -15,10 +15,12 @@ import (
 	host "{{MODULE}}/game/entities/activity_world"
 )
 
+// Mod 是 activity_world RPC 的属主装配：Start 里先建档、再注册 RPC，最后把恢复扫描交给
+// manager 发布的 activity.ScanHost（维护者 D22：后台循环做成 manager，由 manager Mod 统一启停）。扫描的协程归 manager，
+// 本 Mod 不再自己起停它；它依赖 manager Mod，因而在 manager 之后启动、之前停止。
 type Mod struct {
 	service  *Service
 	registry *app.Registry
-	driver   *activity.Driver
 }
 
 func NewMod(service *Service) *Mod { return &Mod{service: service} }
@@ -26,7 +28,7 @@ func NewMod(service *Service) *Mod { return &Mod{service: service} }
 func (m *Mod) Name() app.ModName { return CapabilityName }
 
 func (m *Mod) DependsOn() []app.ModName {
-	return []app.ModName{mods.ModNats, mods.ModNest, mods.ModRemoteEntity, mods.ModConfigData}
+	return []app.ModName{mods.ModNats, mods.ModNest, mods.ModRemoteEntity, mods.ModConfigData, mods.ModManager}
 }
 
 func (m *Mod) OptionalDependsOn() []app.ModName {
@@ -75,21 +77,18 @@ func (m *Mod) Start() error {
 	if err := RegisterHandlers(transport, m.service); err != nil {
 		return err
 	}
-	m.driver = activity.StartDriver(owned, host.EntityKindActivityWorld, func(ctx context.Context, id int64) error {
+	scans, ok := app.Lookup[*activity.ScanHost](m.registry, activity.ScanCapability("world"))
+	if !ok || scans == nil {
+		return fmt.Errorf("activity_world: the recovery scan has no host; add gamemanagers.NewWorldActivityScan() to Managers() in this service's managers.go")
+	}
+	return scans.Start(owned, host.EntityKindActivityWorld, func(ctx context.Context, id int64) error {
 		views, err := m.service.Pulse(ctx, id, "", 0)
 		if err != nil {
 			return err
 		}
 		return activity.ResumePending(ctx, m.registry, views, func(ctx context.Context, token activity.Token) error { return m.service.Complete(ctx, id, token) })
 	})
-	return nil
 }
 
-func (m *Mod) Stop() { _ = m.StopWithContext(context.Background()) }
-
-func (m *Mod) StopWithContext(ctx context.Context) error {
-	if m.driver == nil {
-		return nil
-	}
-	return m.driver.Stop(ctx)
-}
+// Stop 没有要停的：RPC handler 随总线停，恢复扫描归 manager（见 Mod 的注释）。
+func (m *Mod) Stop() {}

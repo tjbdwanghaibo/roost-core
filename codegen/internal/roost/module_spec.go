@@ -159,6 +159,8 @@ type InstalledModule struct {
 	Requires []string       `yaml:"requires,omitempty"`
 	// Managers 是它登记进 game/managers/managers.go 的 manager 构造函数（清单的 managers）。
 	Managers []string `yaml:"managers,omitempty"`
+	// ServiceManagers 是它登记进别的服务 manager 列表的构造函数（清单的 services.<服务>.managers），按服务名。
+	ServiceManagers map[string][]string `yaml:"service_managers,omitempty"`
 	// TimerEntity 是 timer 类型号的作用域（实体 snake 名）；其他 ID 仍为工程级。
 	TimerEntity string `yaml:"timer_entity,omitempty"`
 	// IDs 是 kind -> 名字 -> 号（entity / protocol / errcode / component / timer）。

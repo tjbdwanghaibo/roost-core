@@ -1,0 +1,62 @@
+package managers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"{{MODULE}}/game/activity"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是 activity_world 模块的 manager（维护者 D22：不在模块 runtime: 里的后台循环做成 manager，由 manager Mod 统一启停）。
+// 它跑在 activity_world 服务进程里：安装 activity_world 时，安装器在 internal/service/activity_world/managers.go 的 Managers() 列表里加了一行
+// gamemanagers.NewWorldActivityScan()，并给 activity_world 服务装上 manager Mod。
+//
+// 它管的是全服 / 服务器组活动宿主（ActivityWorld）的恢复扫描（game/activity 的 Driver：每秒一页 128 个、8 个并行、每次调用 5 秒）：
+//
+//   - Start：建一个 activity.ScanHost，以 activity.ScanCapability("world") 发布。扫描什么时候能开始只有 RPC Mod 知道
+//     （先建档、再注册 RPC，最后开扫描），所以由 internal/rpc/activity_world 的 Mod 在那一刻按能力名取它、把扫描交给它；
+//     取不到（这一行被删了）时那个 Mod 启动失败。RPC Mod 依赖 manager Mod，ManagerMod 排在 Nest、Remote 之后启动。
+//   - Stop：不再接扫描，取消在途调用的 ctx，在停机期限之内等它们返回（ManagerMod 带着期限调 StopWithContext）；
+//     期限先到时返回期限错误，ManagerMod 用新的期限再停。期限存在宿主实体的 DAO 里，停下的扫描重启后从头再扫。
+
+// worldActivityScanStopBudget 是没有带期限的 Stop()（不经 ManagerMod 的调用方）等在途调用返回的上限（一次调用的预算）。
+const worldActivityScanStopBudget = 5 * time.Second
+
+// NewWorldActivityScan 返回 activity_world 模块的 manager，登记在 activity_world 服务的 Managers() 里。
+func NewWorldActivityScan() app.IManager { return &worldActivityScan{} }
+
+type worldActivityScan struct {
+	scans *activity.ScanHost
+}
+
+func (*worldActivityScan) Name() string { return "activity_world.scan" }
+
+func (m *worldActivityScan) Start(registry *app.Registry) error {
+	scans := activity.NewScanHost()
+	if err := registry.Register(activity.ScanCapability("world"), scans); err != nil {
+		return fmt.Errorf("activity_world scan: %w", err)
+	}
+	m.scans = scans
+	return nil
+}
+
+func (m *worldActivityScan) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), worldActivityScanStopBudget)
+	defer cancel()
+	if err := m.StopWithContext(ctx); err != nil {
+		slog.Warn("activity_world scan: stop", "err", err)
+	}
+}
+
+// StopWithContext 停下恢复扫描，在 ctx 之内等在途调用返回；ctx 先到期时返回它的错误（ManagerMod 据此把这个 manager
+// 留在待停列表里，用新的期限再停一次）。可以重复调用。
+func (m *worldActivityScan) StopWithContext(ctx context.Context) error {
+	if m.scans == nil {
+		return nil
+	}
+	return m.scans.Close(ctx)
+}
