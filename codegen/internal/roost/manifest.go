@@ -26,6 +26,9 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
+// v1.49.0：模块后台 manager 收尾（activity 的 ScanHost、cellworld 的 NewCellWorldHost、login 的 NewLoginPresence、
+// room 的 NewRoomPresence）、PlayerRuntime.ConnectionActive / SessionCount、account 区服登记表、HandlerMeta.AsyncCompletion；
+// 随发版后提高。
 // v1.48.0：模块 manager 登记（login 的 NewLoginNotices、rehome 的 NewRehomeBackground）、CellWorld 线上格式 v13
 // （SubjectFromCell / SubjectFromBase）与后台 checkpoint 缺省打开；随发版后提高，避免装完模块再 sync 升 go.mod。
 // v1.47.0：生成物用 infra/network/playeraccess（玩家接入层进 core）、game/managers 登记点与生成的 lifecycle、
@@ -58,7 +61,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.48.0",
+	Core: "v1.49.0",
 }
 
 type Manifest struct {

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.49.0**（2026-11-15）：新生成物的模块后台 manager（activity 恢复扫描、cellworld 宿主、login 区服上报、room 断线订阅）、`gateway.PlayerRuntime.ConnectionActive` / `SessionCount` 与 account 区服登记表都要 v1.49.0；framework-compat 的 minimum 一栏随之改为 v1.49.0。
+
 ## [v1.49.0] - 2026-11-15
 
 - **Nest：业务 handler 可声明异步完成**（2026-11-15）：新增 `HandlerMeta.AsyncCompletion` 与 `//roost:nest completion=async`（只能与 `durability=pipelined` 一起用，否则 `ErrAsyncCompletionRequiresPipelined`），复用 saga 原生步骤的异步完成机制；同一实体的下一条请求不再等上一条持久与回复，热点实体微基准约 120 → 约 2900 次/秒，回复仍在持久之后。`wiring/dataengine`、`engine.Runtime` 总是传入 `nest.pipelined.async_workers` / `async_queue_capacity`。
