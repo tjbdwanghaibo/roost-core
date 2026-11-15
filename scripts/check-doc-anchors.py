@@ -119,8 +119,16 @@ def tracked_markdown():
     return sorted(os.path.join(ROOT, f) for f in out.split('\n') if f)
 
 
+# 按原貌保留、链接无法再修的历史文档（与根包 doc_links_gate_test.go 的 docLinkExemptSources 同一份清单，新增须写理由）。
+EXEMPT_SOURCES = {
+    # 2026-11-12 模块日志审查的证据：链接指向 2026-11-15 game/modules 搬家之前的模板路径；历史证据不改原文。
+    'docs/maintenance/evidence/module-logging-20261112/README.md',
+}
+
+
 def main():
     files = collect(sys.argv[1:]) if sys.argv[1:] else tracked_markdown()
+    files = [f for f in files if os.path.relpath(os.path.join(ROOT, f) if not os.path.isabs(f) else f, ROOT) not in EXEMPT_SOURCES]
     broken = []
     for f in files:
         broken += check_file(f)

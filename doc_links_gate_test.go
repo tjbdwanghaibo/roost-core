@@ -17,9 +17,13 @@ import (
 //
 // 豁免（显式列出，新增须写理由）：
 //   - 目标在 artifacts/ 下：被忽略的本机证据目录（压测结果、pprof），文档按约定链接它，仓里没有；
-//   - docLinkExemptSources 列出的源文件前缀：按原貌保留、链接无法再修的历史文档。当前没有这类文件
-//     （docs/release/history/ 下的只读变更记录链接都能解析），新增条目须写明理由。
-var docLinkExemptSources = map[string]string{}
+//   - docLinkExemptSources 列出的源文件前缀：按原貌保留、链接无法再修的历史文档（docs/release/history/ 下的只读
+//     变更记录链接都能解析，不在此列），新增条目须写明理由。
+var docLinkExemptSources = map[string]string{
+	// 2026-11-12 模块日志审查的证据：链接指向当时的模板路径（modules/*/files/game/<包>/）。2026-11-15 生成工程的功能包
+	// 移到 game/modules/<包>/ 之后这些模板随之搬家；维护者要求历史证据按原貌保留、不改原文，所以豁免而不改链接。
+	"docs/maintenance/evidence/module-logging-20261112/README.md": "historical evidence; links name template paths before the 2026-11-15 game/modules move",
+}
 
 // docLinkPattern 匹配行内链接与图片 `[text](target "title")` 的 target；target 可用 <> 包住。
 var docLinkPattern = regexp.MustCompile(`\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)`)
