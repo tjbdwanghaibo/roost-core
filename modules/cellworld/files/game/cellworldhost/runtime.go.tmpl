@@ -15,21 +15,93 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// Runtime 只管理进程资源，不保存实体业务状态。Start/Stop 由服务生命周期串行调用。
+// HostCapability 是本进程 Node 的宿主（*Host）在 Registry 里的能力名。cellworld 模块的 manager（game/managers 的
+// NewCellWorldHost）在 Start 里以它发布 Host。
+const HostCapability app.ModName = "cellworld.host"
+
+// ErrHostClosed 是 Host 已经停了（进程在停机）之后再启动 Node 时的错误。
+var ErrHostClosed = errors.New("cellworldhost: the host is stopped")
+
+// Host 是本进程 CellWorld Node 的宿主（维护者 D22：不在模块 runtime: 里的后台循环做成 manager，由 manager Mod 统一启停）。
+//
+// 装配顺序的契约：Node 什么时候能启动只有服务知道——它要在 Service.Init 里建好场景、装好实体心跳（Scene 的
+// HostCell、业务的 Install）之后才能跑，而 manager 的 Start 在 Service.Init 之前。所以 manager 不启动 Node，只发布
+// Host；服务在自己的就绪点调 Runtime.Start，Start 把 Runtime 交给 Host（没有 Host 或 Host 已停就拒绝，不起协程）。
+// 停机时服务照旧在 Shutdown 里、关掉自己的准入之后、拆掉 Node 用到的场景之前调 Runtime.Stop；manager 停时调 Close，
+// 把服务没停下的 Node（Shutdown 返回了 Stop 的错误、Init 在 Start 之后失败）在期限内排空并收回协程。ManagerMod 排在
+// Nest、NATS、Redis、心跳之后启动、之前停止，Close 排空时 Node 用到的依赖都还在；期限先到时 Close 返回期限错误，
+// ManagerMod 用新期限再停，App 不再停那些依赖、不释放单实例锁。
+type Host struct {
+	mu      sync.Mutex
+	closed  bool
+	runtime *Runtime
+}
+
+// NewHost 返回一个还没有 Node 的 Host。
+func NewHost() *Host { return &Host{} }
+
+// attach 把 r 交给 Host：Host 已停或已经有别的 Node（一个进程一个）时拒绝。
+func (h *Host) attach(r *Runtime) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return ErrHostClosed
+	}
+	if h.runtime != nil && h.runtime != r {
+		return errors.New("cellworldhost: this process already runs a Node")
+	}
+	h.runtime = r
+	return nil
+}
+
+// detach 在 r 启动失败时把它从 Host 上拿下（没有协程要收）。
+func (h *Host) detach(r *Runtime) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.runtime == r {
+		h.runtime = nil
+	}
+}
+
+// Closed 报告 Host 是不是已经停了（之后的 Runtime.Start 都被拒绝）。
+func (h *Host) Closed() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.closed
+}
+
+// Close 停下 Host：之后的 Runtime.Start 被拒绝；交给它、服务还没停下的 Node 在 ctx 之内排空并退出（Runtime.Stop）。
+// ctx 先到期时返回它的错误，Node 仍在，再调一次 Close 接着停（ManagerMod 用新期限再停）。可以重复调用。
+func (h *Host) Close(ctx context.Context) error {
+	h.mu.Lock()
+	h.closed = true
+	r := h.runtime
+	h.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	return r.Stop(ctx)
+}
+
+// Runtime 只管理进程资源，不保存实体业务状态。Start / Stop 由服务生命周期与 Host.Close 调用，mu 让它们串行：
+// App 不会在 Service.Init 还在跑时停 Mod，所以实际不并发。
 type Runtime struct {
 	Node        *cellworld.Node
 	Births      *cellworld.SpawnBook
 	registry    *app.Registry
+	mu          sync.Mutex
 	cancel      context.CancelFunc
 	done        chan struct{}
 	runError    error
+	drained     bool
+	stopped     bool
 	spawnCancel context.CancelFunc
 	spawnDone   chan struct{}
 	startOnce   sync.Once
 }
 
 // New 取得正式 Mods 的依赖与 App 的实例身份；缺失即拒绝，不退回内存授权。
-// Handlers 必须已在 Nest 启动前注册。返回后先安装业务适配与心跳，再 Start。
+// Handlers 必须已在 Nest 启动前注册。返回后先安装业务适配与心跳，再 Start（Start 要 manager 发布的 Host，见 Host）。
 func New(registry *app.Registry, cfg cellworld.NodeConfig) (*Runtime, error) {
 	if registry == nil {
 		return nil, errors.New("cellworldhost: registry is required")
@@ -95,39 +167,53 @@ func New(registry *app.Registry, cfg cellworld.NodeConfig) (*Runtime, error) {
 	return runtime, nil
 }
 
-// Start 只能调用一次；失败时 Node 已退出，Runtime 回到“未启动”：StartSpawns 拒绝、Stop 无事可做。
+// Start 只能调用一次：把 Runtime 交给 manager 发布的 Host，再起 Node 并等它就绪。Registry 里没有 Host（Managers() 里
+// 没有 NewCellWorldHost()）或 Host 已停时拒绝，不起 Node。失败时 Node 已退出、已从 Host 拿下，Runtime 回到“未启动”：
+// StartSpawns 拒绝、Stop 无事可做。
 func (r *Runtime) Start(ctx context.Context) error {
 	started := false
 	r.startOnce.Do(func() { started = true })
 	if !started {
 		return errors.New("cellworldhost: runtime already started")
 	}
+	host, ok := app.Lookup[*Host](r.registry, HostCapability)
+	if !ok || host == nil {
+		return errors.New("cellworldhost: no Node host; add NewCellWorldHost() to Managers() in game/managers/managers.go")
+	}
+	if err := host.attach(r); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	runCtx, cancel := context.WithCancel(context.Background())
 	r.cancel, r.done = cancel, make(chan struct{})
 	go func() { defer close(r.done); r.runError = r.Node.Run(runCtx) }()
+	fail := func(err error) error {
+		r.cancel, r.done = nil, nil
+		host.detach(r)
+		return err
+	}
 	select {
 	case <-r.Node.Ready():
 	case <-r.done:
-		err := errors.Join(errors.New("cellworldhost: Node stopped before ready"), r.runError)
-		r.cancel, r.done = nil, nil
-		return err
+		return fail(errors.Join(errors.New("cellworldhost: Node stopped before ready"), r.runError))
 	case <-ctx.Done():
 		cancel()
 		<-r.done
-		r.cancel, r.done = nil, nil
-		return ctx.Err()
+		return fail(ctx.Err())
 	}
 	if err := app.AddIngress(r.registry, "cellworld", r.Node); err != nil {
 		cancel()
 		<-r.done
-		r.cancel, r.done = nil, nil
-		return err
+		return fail(err)
 	}
 	return nil
 }
 
 func (r *Runtime) StartSpawns(specs []cellworld.SpawnSpec, onError func(cellworld.SpawnSpec, error)) error {
-	if r.done == nil || r.spawnDone != nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done == nil || r.stopped || r.spawnDone != nil {
 		return errors.New("cellworldhost: start Node once before spawning")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -141,12 +227,15 @@ func (r *Runtime) StartSpawns(specs []cellworld.SpawnSpec, onError func(cellworl
 	return nil
 }
 
-// Stop 超时不取消 Node 或释放底层 Mods。Node.Drain 可以换新 ctx 重试；装在 App 的 Service.Shutdown 里时
-// App 不重试 Shutdown，错误交回 App 后按停机流程退出（Mod 没停完不释放单实例锁），未排空的工作由租约到期后接管。
+// Stop 超时不取消 Node 或释放底层 Mods，换新 ctx 再调接着停（Node.Drain 可以重试）。服务在 Shutdown 里调它（排在关掉
+// 自己的准入之后、拆掉 Node 用到的场景之前）；没停下的由 manager 的 Host.Close 再停一次，所以可以重复调用，停完之后
+// 再调返回 Node.Run 的结果、不再排空。
 func (r *Runtime) Stop(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.spawnCancel != nil {
 		r.spawnCancel()
 		select {
@@ -158,12 +247,19 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	if r.done == nil {
 		return nil
 	}
-	if err := r.Node.Drain(ctx); err != nil {
-		return err
+	if r.stopped {
+		return r.runError
+	}
+	if !r.drained {
+		if err := r.Node.Drain(ctx); err != nil {
+			return err
+		}
+		r.drained = true
 	}
 	r.cancel()
 	select {
 	case <-r.done:
+		r.stopped = true
 		return r.runError
 	case <-ctx.Done():
 		return ctx.Err()
