@@ -8,3 +8,9 @@ fix3 chat world channel CAS applied=1000
 fix3 chat world channel CAS lost=0
 fix4 chat world channel CAS applied=1000
 fix4 chat world channel CAS lost=0
+
+lb-r2-spread-a chat world channel CAS applied=7 lost=0
+lb-r2-spread-b chat world channel CAS applied=7 lost=0
+lb-r2-spread-c chat world channel CAS applied=7 lost=0
+lb-r2-nospread chat world channel CAS applied=7 lost=0
+lb-r2-nospread-b chat world channel CAS applied=6 lost=0

@@ -222,6 +222,8 @@ s=p.read_text()
 # All robots originate on this machine. Keep production admission defaults unchanged.
 s=s.replace('    max_connections_per_ip: 128',f'    max_connections_per_ip: {max(128,robots)}',1)
 if spread>0:
+ # 找不到锚点时明确失败，不让“分散出生点”悄悄没生效、测成同一出生点的结果。
+ if '    player_hp: 100' not in s: raise SystemExit('spawn spread: player_hp anchor not found in config.game.yaml')
  s=s.replace('    player_hp: 100',f'    spawn_spread: {spread}\n    player_hp: 100',1)
 start=s.index('    spawns:',s.index('  partition:'))
 s=s[:start].replace('    idle_period: 1s','    idle_period: 0s')+'    spawns:\n'
