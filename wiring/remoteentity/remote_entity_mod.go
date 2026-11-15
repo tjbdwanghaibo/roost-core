@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
@@ -231,6 +232,15 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 		return fmt.Errorf("remote_entity mod: required capability %q not found", mods.ModHealth)
 	}
 	healthRegistry.Register("remote_entity", health.CheckerFunc(m.checkHealth))
+	// remote_entity.empty_claims（D17 删空认领）是运维动作，与 entity.unload 一样挂到 App 的 admin 注册表，经 ops 的
+	// /admin/execute 调用。
+	commands, ok := app.Lookup[*admin.Registry](r, mods.ModAdmin)
+	if !ok || commands == nil {
+		return fmt.Errorf("remote_entity mod: required capability %q not found", mods.ModAdmin)
+	}
+	if err := coreremote.RegisterAdminCommands(commands, func() *coreremote.Manager { return asm.Manager }); err != nil {
+		return fmt.Errorf("remote_entity mod: %w", err)
+	}
 	m.registry = r
 	return nil
 }

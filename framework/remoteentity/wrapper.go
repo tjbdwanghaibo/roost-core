@@ -183,6 +183,13 @@ func (w *remoteEntityWrapper) markAligned(e entity.IThreadSafeRemoteEntity, leas
 	w.entityMu.Unlock()
 }
 
+// clearAligned 丢掉对齐记录（删空认领之后：那一代所有权已经不在，下一次准入必须重新认领、重新对齐）。
+func (w *remoteEntityWrapper) clearAligned() {
+	w.entityMu.Lock()
+	w.aligned, w.alignedLease = nil, entity.RemoteEntityMarkerLease{}
+	w.entityMu.Unlock()
+}
+
 // setWriting 记下持有写门的这次准入定稿了事务 tx；clearWriting 在写门释放（或定稿回滚）时清除。
 func (w *remoteEntityWrapper) setWriting(tx entity.RemoteTransactionID) {
 	w.entityMu.Lock()

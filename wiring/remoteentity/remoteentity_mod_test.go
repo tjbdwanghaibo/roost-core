@@ -3,6 +3,7 @@ package remoteentity
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
@@ -201,5 +203,10 @@ func TestRemoteEntityModForeignKinds(t *testing.T) {
 	}
 	if _, err := manager.PrepareRemoteWriteBatch(context.Background(), []int64{id}); !errors.Is(err, entity.ErrRemoteKindNotOwned) {
 		t.Fatalf("foreign kind write admission through the Mod: %v, want ErrRemoteKindNotOwned", err)
+	}
+	// 删空认领（D17）的运维命令由 Mod 挂到 App 的 admin 注册表；归属别的服务的 kind 不在这里删。
+	commands := app.MustLookup[*admin.Registry](r, mods.ModAdmin)
+	if _, err := commands.Execute(context.Background(), admin.Command{Name: coreremote.AdminCommandEmptyClaims, Payload: json.RawMessage(`{"kinds":[253]}`)}); !errors.Is(err, admin.ErrCommandInvalid) {
+		t.Fatalf("remote_entity.empty_claims on a foreign kind: %v, want ErrCommandInvalid", err)
 	}
 }

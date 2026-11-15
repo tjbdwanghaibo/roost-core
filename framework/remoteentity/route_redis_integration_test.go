@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -274,6 +275,103 @@ func TestRealListOwnedRemoteEntitiesFiltersByOwnerAndKind(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("indexes %+v; want owner_sid", indexes)
+	}
+}
+
+// 删空认领（D17）的存储一步在真实 Mongo 上：按 owner 枚举只列 _ver 0、不是墓碑的记录；比较删除只删仍是判定时那一代
+// 的空认领——有提交落进来、转走、同 owner 更新的代际、删掉后别的 sid 用同样的代际值重新认领，都不删。
+func TestRealDeleteEmptyClaimIsGuardedByTheOwnershipGeneration(t *testing.T) {
+	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
+	if os.Getenv("ROOST_DATAENGINE_IT") != "1" || uri == "" {
+		t.Skip("set ROOST_DATAENGINE_IT=1 with isolated MongoDB")
+	}
+	const kind entity.EntityKind = 176
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database := "empty_claim_it_" + strings.ReplaceAll(generateToken(), "-", "")[:12]
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = client.Database(database).Drop(ctx)
+		_ = client.Close(ctx)
+	})
+	store := NewMongoCommitter(client, database, 3000, 0)
+	other := NewMongoCommitter(client, database, 3001, 0)
+	if err := store.EnsureRemoteStorage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	meta := client.Database(database).Collection(remoteMetaCollection)
+	build := func(raw int64) int64 {
+		id, err := entity.BuildEntityID(raw, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	claims := map[string]int64{}
+	leases := map[string]entity.RemoteEntityMarkerLease{}
+	for i, name := range []string{"plain", "commit_landed", "transferred", "newer_generation", "reclaimed_elsewhere", "committed", "tombstone"} {
+		id := build(int64(i + 1))
+		lease, err := store.ClaimOwnership(ctx, id, 3000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims[name], leases[name] = id, lease
+	}
+	// 有过提交的与删过档的不是空认领。
+	if _, err := meta.UpdateOne(ctx, map[string]any{"_id": claims["committed"]}, map[string]any{"$set": map[string]any{"_ver": int64(3), "_deleted": false}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.UpdateOne(ctx, map[string]any{"_id": claims["tombstone"]}, map[string]any{"$set": map[string]any{"_ver": int64(2), "_deleted": true}}); err != nil {
+		t.Fatal(err)
+	}
+	listed, next, err := store.ListEmptyClaims(ctx, 3000, []entity.EntityKind{kind}, 0, 100)
+	if err != nil || next != 0 || len(listed) != 5 || slices.Contains(listed, claims["committed"]) || slices.Contains(listed, claims["tombstone"]) {
+		t.Fatalf("empty-claim candidates = %v next=%d err=%v; want the five never-committed claims", listed, next, err)
+	}
+
+	// 判定之后、删除之前权威变了：
+	if _, err := meta.UpdateOne(ctx, map[string]any{"_id": claims["commit_landed"]}, map[string]any{"$set": map[string]any{"_ver": int64(1), "_deleted": false}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.TransferExpected(ctx, claims["transferred"], leases["transferred"], 3001); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := store.EnterSharedExpected(ctx, claims["newer_generation"], leases["newer_generation"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LeaveSharedExpected(ctx, claims["newer_generation"], shared); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.DeleteOne(ctx, map[string]any{"_id": claims["reclaimed_elsewhere"]}); err != nil {
+		t.Fatal(err)
+	}
+	if lease, err := other.ClaimOwnership(ctx, claims["reclaimed_elsewhere"], 3001); err != nil || lease.MarkerEpoch != leases["reclaimed_elsewhere"].MarkerEpoch {
+		t.Fatalf("re-claim by 3001 = %+v, %v; want the same generation values", lease, err)
+	}
+	for _, name := range []string{"commit_landed", "transferred", "newer_generation", "reclaimed_elsewhere", "committed", "tombstone"} {
+		deleted, err := store.DeleteEmptyClaimExpected(ctx, claims[name], leases[name])
+		if err != nil || deleted {
+			t.Fatalf("%s: compare-and-delete with the checked generation = %v, %v; want nothing deleted", name, deleted, err)
+		}
+		if n, err := meta.CountDocuments(ctx, map[string]any{"_id": claims[name]}); err != nil || n != 1 {
+			t.Fatalf("%s: the record is gone (count=%d err=%v)", name, n, err)
+		}
+	}
+	if deleted, err := store.DeleteEmptyClaimExpected(ctx, claims["plain"], leases["plain"]); err != nil || !deleted {
+		t.Fatalf("plain empty claim: deleted=%v err=%v; want deleted", deleted, err)
+	}
+	if _, found, err := store.GetOwnership(ctx, claims["plain"]); err != nil || found {
+		t.Fatalf("plain empty claim after the delete: found=%v err=%v", found, err)
+	}
+	if deleted, err := store.DeleteEmptyClaimExpected(ctx, claims["plain"], leases["plain"]); err != nil || deleted {
+		t.Fatalf("deleting twice = %v, %v; want nothing deleted", deleted, err)
 	}
 }
 

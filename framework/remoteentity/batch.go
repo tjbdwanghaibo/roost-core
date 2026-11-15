@@ -25,6 +25,9 @@ type remoteWriteEntry struct {
 	commit    entity.RemoteCommit
 	// unloaded 表示持久拒绝后旧实例已被仅内存卸载，重试时跳过。
 	unloaded bool
+	// claimed 表示这次准入新插入了第一代所有权记录（首写认领，AuthorityState.Claimed）。批次结束时这个实体没有提交
+	// 落进权威，就留下一条空认领，计入 remote_entity.empty_claim_total{event="left"}（noteEmptyClaimsLeft）。
+	claimed bool
 }
 
 // remoteWriteBatch 实现 entity.RemoteWriteBatch：Prepare 取得全部写权限 → 持锁 FinalizeLocked 冻结提交 →
@@ -153,13 +156,22 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 		return nil, err
 	}
 	if !marked && durable {
+		// 认领发生在准入里、事务之前；这次准入失败（例如实体在权威里不存在、冷加载不到）时认领不撤销，留下空认领。
+		claimed := state != nil && state.Claimed
 		lease, version, err := w.alignExclusive(ctx, authority, state)
 		if err != nil {
 			w.abortBeginWrite(ctx, false)
+			noteEmptyClaimLeft(claimed)
 			return nil, err
 		}
 		metrics.IncCounter("remote_entity.exclusive_admission_total", metrics.Labels{"path": "aligned"}, 1)
-		return w.admitExclusive(ctx, w.lookupLocalEntity(), lease, true, version)
+		entry, err := w.admitExclusive(ctx, w.lookupLocalEntity(), lease, true, version)
+		if err != nil {
+			noteEmptyClaimLeft(claimed)
+			return nil, err
+		}
+		entry.claimed = claimed
+		return entry, nil
 	}
 	lockFence := uint64(0)
 	if marked {
@@ -896,6 +908,7 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 		// finalizer 已停止：拿不到持久结论，提交后工作不执行（Sync 门保持冻结）。
 	}
 	err := b.mgr.releaseRemoteEntries(ctx, entries)
+	noteEmptyClaimsLeft(entries, b.isCommitted())
 	if b.reserved {
 		b.mgr.releaseRemoteWriteSlot()
 		b.reserved = false
@@ -917,6 +930,35 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+// isCommitted 报告批次是否已拿到“已提交”的结论（Commit 成功返回过）。
+func (b *remoteWriteBatch) isCommitted() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.committed
+}
+
+// noteEmptyClaimLeft 在一次新插入了第一代所有权记录的准入失败时计一条留下的空认领。
+func noteEmptyClaimLeft(claimed bool) {
+	if claimed {
+		metrics.IncCounter(emptyClaimMetric, metrics.Labels{"event": "left"}, 1)
+	}
+}
+
+// noteEmptyClaimsLeft 在批次拿到最终结论、释放之后，计这批写留下的空认领：这次准入新插入了第一代所有权记录
+// （entry.claimed），而这个实体最终没有提交落进权威——批次没有提交（业务拒绝、Abort、Durability 0 被明确拒绝），或批次
+// 提交了但这个实体没有修改（只读请求，entry 没有定稿）。committed 是批次的最终结论。
+func noteEmptyClaimsLeft(entries []*remoteWriteEntry, committed bool) {
+	left := 0
+	for _, entry := range entries {
+		if entry != nil && entry.claimed && (!committed || !entry.finalized) {
+			left++
+		}
+	}
+	if left > 0 {
+		metrics.IncCounter(emptyClaimMetric, metrics.Labels{"event": "left"}, int64(left))
+	}
 }
 
 // commitsLocked 返回已定稿提交的副本，调用方持 b.mu。
