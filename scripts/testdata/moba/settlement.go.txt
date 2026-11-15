@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	db "example.com/moba-practice/db"
-	"example.com/moba-practice/game/moba"
+	"example.com/moba-practice/game/modules/moba"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )

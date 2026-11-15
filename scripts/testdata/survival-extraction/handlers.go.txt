@@ -3,7 +3,7 @@ package handler
 import (
 	db "example.com/survival-extraction-practice/db"
 	matchentity "example.com/survival-extraction-practice/game/entities/survival_raid"
-	survival "example.com/survival-extraction-practice/game/survival"
+	survival "example.com/survival-extraction-practice/game/modules/survival"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"time"
 )

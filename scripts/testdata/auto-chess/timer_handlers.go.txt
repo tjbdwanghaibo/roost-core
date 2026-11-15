@@ -1,7 +1,7 @@
 package chess_match
 
 import (
-	chess "example.com/auto-chess-practice/game/autochess"
+	chess "example.com/auto-chess-practice/game/modules/autochess"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"time"
 )

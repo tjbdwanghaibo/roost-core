@@ -54,7 +54,7 @@ ROOST_SURVIVAL_EXTRACTION_KEEP=1 bash scripts/test-survival-extraction-generated
 
 1. `roost project new survival-extraction-practice -module example.com/survival-extraction-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity SurvivalRaid`、`roost add dao SurvivalRaid --entity SurvivalRaid`、`roost add timer --entity SurvivalRaid`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"nosync"` `` 与 ``Initialized bool `store:"initialized" dao:"nosync"` ``，在 `db/def/survival_raid.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；把 `game/entities/survival_raid/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（入场 / 兑付时 Raid 与 Player 一起锁，Raid 放在更低的锁档，锁序固定）；放入业务包 `game/survival/`、定时回调 `game/entities/survival_raid/timer_handlers.go` 与 handler `game/handler/survival_extraction.go`；
+3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"nosync"` `` 与 ``Initialized bool `store:"initialized" dao:"nosync"` ``，在 `db/def/survival_raid.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；把 `game/entities/survival_raid/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（入场 / 兑付时 Raid 与 Player 一起锁，Raid 放在更低的锁档，锁序固定）；放入业务包 `game/modules/survival/`、定时回调 `game/entities/survival_raid/timer_handlers.go` 与 handler `game/handler/survival_extraction.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> survival-extraction`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 DAO 持久键变化的 WARN（加字段不需要迁移，老文档读成零值），见第 8 节。
 
@@ -66,9 +66,9 @@ ROOST_SURVIVAL_EXTRACTION_KEEP=1 bash scripts/test-survival-extraction-generated
 
 | 顺序 | 文件 | 先回答的问题 |
 | --- | --- | --- |
-| 1 | `game/survival/rules.go`（[rules.go.txt](../../scripts/testdata/survival-extraction/rules.go.txt)） | 配置怎样经校验发布？一次探险怎样固定一代？ |
-| 2 | `game/survival/state.go`（[state.go.txt](../../scripts/testdata/survival-extraction/state.go.txt)） | 探险状态存了什么、视图裁掉什么？物资守恒怎样算？下一期限怎样取？ |
-| 3 | `game/survival/match.go`（[match.go.txt](../../scripts/testdata/survival-extraction/match.go.txt)） | 入场、命令身份怎样核对？期限到达时按什么顺序处理制作、撤离、结束和环境伤害？ |
+| 1 | `game/modules/survival/rules.go`（[rules.go.txt](../../scripts/testdata/survival-extraction/rules.go.txt)） | 配置怎样经校验发布？一次探险怎样固定一代？ |
+| 2 | `game/modules/survival/state.go`（[state.go.txt](../../scripts/testdata/survival-extraction/state.go.txt)） | 探险状态存了什么、视图裁掉什么？物资守恒怎样算？下一期限怎样取？ |
+| 3 | `game/modules/survival/match.go`（[match.go.txt](../../scripts/testdata/survival-extraction/match.go.txt)） | 入场、命令身份怎样核对？期限到达时按什么顺序处理制作、撤离、结束和环境伤害？ |
 | 4 | `game/handler/survival_extraction.go`（[handlers.go.txt](../../scripts/testdata/survival-extraction/handlers.go.txt)） | 入场费与入场事实、兑付与封存清单在哪个锁与提交边界里一起生效？ |
 | 5 | `game/entities/survival_raid/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/survival-extraction/timer_handlers.go.txt)） | 回调怎样核对节点身份与期限？ |
 | 6 | `game/handler/syncsender/` | 生成的 Sender 怎样把目标 ID 与业务参数交给 Nest；业务调用它，不手改 |
@@ -88,7 +88,7 @@ import (
 	"context"
 
 	syncsender "example.com/survival-extraction-practice/game/handler/syncsender"
-	survival "example.com/survival-extraction-practice/game/survival"
+	survival "example.com/survival-extraction-practice/game/modules/survival"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )

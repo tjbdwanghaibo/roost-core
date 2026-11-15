@@ -52,7 +52,7 @@ ROOST_AUTO_CHESS_KEEP=1 bash scripts/test-auto-chess-generated.sh   # 保留生�
 
 1. `roost project new auto-chess-practice -module example.com/auto-chess-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity ChessMatch`、`roost add dao ChessMatch --entity ChessMatch`、`roost add timer --entity ChessMatch`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"nosync"` `` 与 ``Initialized bool `store:"initialized" dao:"nosync"` ``，在 `db/def/chess_match.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；把 `game/entities/chess_match/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（Match 与 Player 一起锁，放在更低的锁档，锁序固定）；放入业务包 `game/autochess/`、定时回调 `game/entities/chess_match/timer_handlers.go` 与 handler `game/handler/auto_chess.go`；
+3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"nosync"` `` 与 ``Initialized bool `store:"initialized" dao:"nosync"` ``，在 `db/def/chess_match.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；把 `game/entities/chess_match/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（Match 与 Player 一起锁，放在更低的锁档，锁序固定）；放入业务包 `game/modules/autochess/`、定时回调 `game/entities/chess_match/timer_handlers.go` 与 handler `game/handler/auto_chess.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> auto-chess`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
@@ -64,9 +64,9 @@ ROOST_AUTO_CHESS_KEEP=1 bash scripts/test-auto-chess-generated.sh   # 保留生�
 
 | 顺序 | 文件 | 先回答的问题 |
 | --- | --- | --- |
-| 1 | `game/autochess/rules.go`（[rules.go.txt](../../scripts/testdata/auto-chess/rules.go.txt)） | 配置怎样经校验发布？对局为什么在成局时冻结一代？ |
-| 2 | `game/autochess/state.go`（[state.go.txt](../../scripts/testdata/auto-chess/state.go.txt)） | 一局里有什么？卡池张数守恒怎样校验？视图怎样按观察者裁剪？商店抽卡怎样由种子 + 序号决定？ |
-| 3 | `game/autochess/match.go`（[match.go.txt](../../scripts/testdata/auto-chess/match.go.txt)） | 命令怎样核对席位 / 代际 / 序号 / 回合 / 期限？八人准备后怎样冻结战斗？战斗、淘汰、收入与终局怎样结算？ |
+| 1 | `game/modules/autochess/rules.go`（[rules.go.txt](../../scripts/testdata/auto-chess/rules.go.txt)） | 配置怎样经校验发布？对局为什么在成局时冻结一代？ |
+| 2 | `game/modules/autochess/state.go`（[state.go.txt](../../scripts/testdata/auto-chess/state.go.txt)） | 一局里有什么？卡池张数守恒怎样校验？视图怎样按观察者裁剪？商店抽卡怎样由种子 + 序号决定？ |
+| 3 | `game/modules/autochess/match.go`（[match.go.txt](../../scripts/testdata/auto-chess/match.go.txt)） | 命令怎样核对席位 / 代际 / 序号 / 回合 / 期限？八人准备后怎样冻结战斗？战斗、淘汰、收入与终局怎样结算？ |
 | 4 | `game/handler/auto_chess.go`（[handlers.go.txt](../../scripts/testdata/auto-chess/handlers.go.txt)） | 成局、命令、接管、查回执、领奖分别在哪个锁与提交边界里生效？阶段定时器在哪里替换？ |
 | 5 | `game/entities/chess_match/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/auto-chess/timer_handlers.go.txt)） | 到期回调怎样核对身份？离线很久为什么只推进一个阶段？ |
 | 6 | `game/handler/syncsender/` | 生成的 Sender 怎样把 Match ID、Player ID 与业务参数交给 Nest；业务调用它，不手改 |
@@ -87,7 +87,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
-	"example.com/auto-chess-practice/game/autochess"
+	"example.com/auto-chess-practice/game/modules/autochess"
 	syncsender "example.com/auto-chess-practice/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"

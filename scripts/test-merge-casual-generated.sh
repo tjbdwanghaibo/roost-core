@@ -49,16 +49,16 @@ text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `st
 assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
 p.write_text(text)
 DEFS
-mkdir -p game/mergecasual
-for name in rules state operations reward; do cp "$repo_root/scripts/testdata/merge-casual/$name.go.txt" "game/mergecasual/$name.go"; done
-cp "$repo_root/scripts/testdata/merge-casual/rules_test.go.txt" game/mergecasual/rules_test.go
+mkdir -p game/modules/mergecasual
+for name in rules state operations reward; do cp "$repo_root/scripts/testdata/merge-casual/$name.go.txt" "game/modules/mergecasual/$name.go"; done
+cp "$repo_root/scripts/testdata/merge-casual/rules_test.go.txt" game/modules/mergecasual/rules_test.go
 cp "$repo_root/scripts/testdata/merge-casual/timer_handlers.go.txt" game/entities/player/timer_handlers.go
 cp "$repo_root/scripts/testdata/merge-casual/handlers.go.txt" game/handler/merge_casual.go
 cp "$repo_root/scripts/testdata/merge-casual/gameplay_test.go.txt" game/handler/merge_casual_test.go
-gofmt -w db/def/player.go game/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
+gofmt -w db/def/player.go game/modules/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" merge-casual
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/mergecasual ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/modules/mergecasual ./game/handler | tee "$review_root/test.log"
 # 16 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestMergeCasual' "$review_root/test.log" || true)"
 if [[ "$passed" != 16 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

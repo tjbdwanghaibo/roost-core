@@ -58,16 +58,16 @@ for name, fields in {
 p = root / 'game/entities/tower_room/entity.go'
 p.write_text(p.read_text().replace('category=entity.EntityCategoryOther', 'category=entity.EntityCategoryWorld'))
 DEFS
-mkdir -p game/towerdefense
-for name in rules state match; do cp "$repo_root/scripts/testdata/tower-defense/$name.go.txt" "game/towerdefense/$name.go"; done
-cp "$repo_root/scripts/testdata/tower-defense/rules_test.go.txt" game/towerdefense/rules_test.go
+mkdir -p game/modules/towerdefense
+for name in rules state match; do cp "$repo_root/scripts/testdata/tower-defense/$name.go.txt" "game/modules/towerdefense/$name.go"; done
+cp "$repo_root/scripts/testdata/tower-defense/rules_test.go.txt" game/modules/towerdefense/rules_test.go
 cp "$repo_root/scripts/testdata/tower-defense/timer_handlers.go.txt" game/entities/tower_room/timer_handlers.go
 cp "$repo_root/scripts/testdata/tower-defense/handlers.go.txt" game/handler/tower_defense.go
 cp "$repo_root/scripts/testdata/tower-defense/gameplay_test.go.txt" game/handler/tower_defense_test.go
-gofmt -w db/def/*.go game/towerdefense/*.go game/entities/tower_room/*.go game/handler/tower_defense*.go
+gofmt -w db/def/*.go game/modules/towerdefense/*.go game/entities/tower_room/*.go game/handler/tower_defense*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" tower-defense
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestTowerDefense' ./game/towerdefense ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestTowerDefense' ./game/modules/towerdefense ./game/handler | tee "$review_root/test.log"
 # 11 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestTowerDefense' "$review_root/test.log" || true)"
 if [[ "$passed" != 11 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

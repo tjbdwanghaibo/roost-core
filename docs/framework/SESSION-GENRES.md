@@ -16,19 +16,19 @@ ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/myfarm bash scripts/test-socia
 
 公共生成机械步骤在 `scripts/testdata/genre-common/run.sh`，业务规则与专属断言在各玩法目录。生成工程主要文件：
 
-- `game/rules/rules.go`：纯玩法状态机。
+- `game/modules/rules/rules.go`：纯玩法状态机。
 - `game/handler/scenario.go`：房间初始化、鉴权身份对应的 Player 与 Room 多实体命令。
 - `db/def/player.go`、`db/def/game_room.go`：金币与房间状态的正式 DAO 定义。
 - `game/handler/*_test.go`：可直接运行的 Sender 调用与断言。
 - `protocol/def/scenario.go`、`loadtest/protocol/registry_gen.go`：业务 PB 定义及自动生成的公共 Robot 编解码注册。
-- `game/scenarionet/dispatch.go`：已鉴权 TCP 请求到生成 Sender 的业务边界。
+- `game/modules/scenarionet/dispatch.go`：已鉴权 TCP 请求到生成 Sender 的业务边界。
 - `loadtest/scenario.go`、`cmd/robot/main.go`：公共 Robot 的请求、幂等重试与重连断言；不是另一套网络实现。
 
 ## 共同契约
 
 房间属于 World 锁档，玩家属于 Player 原有锁档；命令由 `MultiSync_ScenarioCommand` 声明两实体，所有状态修改经 DAO setter，提交拒绝一起回滚。Roguelike 领奖与经营收获会在同一事务中更新 Room 领取事实和 Player 金币。
 
-`ScenarioOpen` 是宿主入口，名单来自已鉴权的成局或邀请结果。客户端不能直接提交 `members` 或选择任意 `player` 实体；接入层必须从会话解析身份，并校验目标房间路由。`game/scenarionet` 已提供 PB 命令入口，但宿主仍负责真实票据、房间分配与路由，不能直接公开测试鉴权器。
+`ScenarioOpen` 是宿主入口，名单来自已鉴权的成局或邀请结果。客户端不能直接提交 `members` 或选择任意 `player` 实体；接入层必须从会话解析身份，并校验目标房间路由。`game/modules/scenarionet` 已提供 PB 命令入口，但宿主仍负责真实票据、房间分配与路由，不能直接公开测试鉴权器。
 
 每名成员只有最后一条命令回执，包含命令全内容与结果。相同 Seq、相同内容返回原结果且不重复支付；相同 Seq 改内容、跳序、过旧 Seq、旧 Revision 拒绝。这是有界去重，不是永久回执账本；旧请求结果未知时查询当前权威状态，不换新 Seq 盲重试。房间标识不可用于另一局，终局保留或删除由宿主决定。
 

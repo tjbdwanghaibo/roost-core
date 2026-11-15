@@ -1,7 +1,7 @@
 package card_run
 
 import (
-	"example.com/card-rpg-practice/game/cardrpg"
+	"example.com/card-rpg-practice/game/modules/cardrpg"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"time"
 )

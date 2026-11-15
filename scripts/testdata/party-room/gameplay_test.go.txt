@@ -16,8 +16,8 @@ import (
 	playerentity "example.com/party-room-practice/game/entities/player"
 	sender "example.com/party-room-practice/game/handler/syncsender"
 	gameheartbeat "example.com/party-room-practice/game/modules/heartbeat"
-	partymatch "example.com/party-room-practice/game/partymatch"
-	party "example.com/party-room-practice/game/partyroom"
+	partymatch "example.com/party-room-practice/game/modules/partymatch"
+	party "example.com/party-room-practice/game/modules/partyroom"
 	"example.com/party-room-practice/protocol/msgid"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -1256,7 +1256,7 @@ func TestPartyGameSelfViewAndRoomShareOneConnection(t *testing.T) {
 	}
 }
 
-// newBackfill 是补位的宿主与匹配循环（game/partymatch）：补位队列用 service/match 的正式内存存储，房间经 Nest，进房的人进 session。
+// newBackfill 是补位的宿主与匹配循环（game/modules/partymatch）：补位队列用 service/match 的正式内存存储，房间经 Nest，进房的人进 session。
 func (f *partyFixture) newBackfill(t *testing.T) (*partymatch.Backfill, svcmatch.Store) {
 	t.Helper()
 	store, err := svcmatch.NewMemoryStore(svcmatch.Config{Now: clock.Now, TicketTTL: time.Minute})

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/moba-practice/game/moba"
+	"example.com/moba-practice/game/modules/moba"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"

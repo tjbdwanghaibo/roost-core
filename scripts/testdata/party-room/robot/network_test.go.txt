@@ -1,8 +1,8 @@
 package handler
 
 import (
-	domain "GENRE_MODULE/game/partyroom"
-	"GENRE_MODULE/game/robotaccess"
+	domain "GENRE_MODULE/game/modules/partyroom"
+	"GENRE_MODULE/game/modules/robotaccess"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
 	"context"

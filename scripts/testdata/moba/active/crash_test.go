@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	directoryentity "example.com/moba-practice/game/entities/battle_directory"
 	sender "example.com/moba-practice/game/handler/syncsender"
-	"example.com/moba-practice/game/moba"
+	"example.com/moba-practice/game/modules/moba"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"

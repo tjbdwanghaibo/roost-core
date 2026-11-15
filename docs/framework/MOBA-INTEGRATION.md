@@ -62,7 +62,7 @@ ROOST_MOBA_KEEP=1 bash scripts/test-moba-generated.sh   # 保留生成工程以�
 
 1. `roost project new moba-practice -module example.com/moba-practice -template game --skip-deps`，然后 `go mod edit -replace github.com/tjbdwanghaibo/roost-core=<本仓库路径>` 让依赖指向本地仓库（脚本随后以 `-mod=mod` 运行，自己动手时执行一次 `GOWORK=off go mod tidy`）；
 2. `roost add dao Player --entity Player`、`roost add entity MatchResult`、`roost add dao MatchResult --entity MatchResult`；5v5 再加 `roost add entity BattleRound`、`roost add dao BattleRound --entity BattleRound`、`roost add entity BattleDirectory`、`roost add dao BattleDirectory --entity BattleDirectory`；
-3. 业务只改这几处：在 `db/def/player.go`（`Gold` / `Wins` / `Losses`，5v5 的奖励回执 `MobaRewards`）、`db/def/match_result.go`（`MatchKey` / `Digest` / `WinnerID` / `LoserID` / `Status`）、`db/def/battle_round.go` 与 `db/def/battle_directory.go`（各一个 `Payload`）填 DAO 字段，骨架的逻辑库 `db=main` 不改（真实依赖模式的唯一物理库由测试夹具的库映射给出）；把 `game/entities/{match_result,battle_round,battle_directory}/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些记录被多名玩家共同引用，锁序低于 Player）；放入局内模拟与房间包 `game/moba/`、结算 handler `game/handler/moba_settlement.go` 与 5v5 handler `game/handler/moba_round.go`；
+3. 业务只改这几处：在 `db/def/player.go`（`Gold` / `Wins` / `Losses`，5v5 的奖励回执 `MobaRewards`）、`db/def/match_result.go`（`MatchKey` / `Digest` / `WinnerID` / `LoserID` / `Status`）、`db/def/battle_round.go` 与 `db/def/battle_directory.go`（各一个 `Payload`）填 DAO 字段，骨架的逻辑库 `db=main` 不改（真实依赖模式的唯一物理库由测试夹具的库映射给出）；把 `game/entities/{match_result,battle_round,battle_directory}/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些记录被多名玩家共同引用，锁序低于 Player）；放入局内模拟与房间包 `game/modules/moba/`、结算 handler `game/handler/moba_settlement.go` 与 5v5 handler `game/handler/moba_round.go`；
 4. `roost generate` 生成组件、访问器和 `MobaSettlementSender` / `MobaRoundSender`。
 
 #### 4.2 阅读顺序
@@ -101,7 +101,7 @@ import (
 	"errors"
 
 	syncsender "example.com/moba-practice/game/handler/syncsender"
-	moba "example.com/moba-practice/game/moba"
+	moba "example.com/moba-practice/game/modules/moba"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
@@ -198,7 +198,7 @@ import (
 	"context"
 
 	syncsender "example.com/moba-practice/game/handler/syncsender"
-	moba "example.com/moba-practice/game/moba"
+	moba "example.com/moba-practice/game/modules/moba"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 )

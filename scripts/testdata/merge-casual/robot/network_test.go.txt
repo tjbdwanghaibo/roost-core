@@ -1,8 +1,8 @@
 package handler
 
 import (
-	robotdomain "GENRE_MODULE/game/mergecasual"
-	"GENRE_MODULE/game/robotaccess"
+	robotdomain "GENRE_MODULE/game/modules/mergecasual"
+	"GENRE_MODULE/game/modules/robotaccess"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
 	"context"

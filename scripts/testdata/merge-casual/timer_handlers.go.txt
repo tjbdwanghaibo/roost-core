@@ -1,7 +1,7 @@
 package player
 
 import (
-	casual "example.com/merge-casual-practice/game/mergecasual"
+	casual "example.com/merge-casual-practice/game/modules/mergecasual"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"time"
 )

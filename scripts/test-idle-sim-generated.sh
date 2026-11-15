@@ -49,16 +49,16 @@ text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `st
 assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
 p.write_text(text)
 DEFS
-mkdir -p game/idlesim
-for name in rules state production; do cp "$repo_root/scripts/testdata/idle-sim/$name.go.txt" "game/idlesim/$name.go"; done
-cp "$repo_root/scripts/testdata/idle-sim/rules_test.go.txt" game/idlesim/rules_test.go
+mkdir -p game/modules/idlesim
+for name in rules state production; do cp "$repo_root/scripts/testdata/idle-sim/$name.go.txt" "game/modules/idlesim/$name.go"; done
+cp "$repo_root/scripts/testdata/idle-sim/rules_test.go.txt" game/modules/idlesim/rules_test.go
 cp "$repo_root/scripts/testdata/idle-sim/timer_handlers.go.txt" game/entities/player/timer_handlers.go
 cp "$repo_root/scripts/testdata/idle-sim/handlers.go.txt" game/handler/idle_sim.go
 cp "$repo_root/scripts/testdata/idle-sim/gameplay_test.go.txt" game/handler/idle_sim_test.go
-gofmt -w db/def/player.go game/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
+gofmt -w db/def/player.go game/modules/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" idle-sim
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestIdleSim' ./game/idlesim ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestIdleSim' ./game/modules/idlesim ./game/handler | tee "$review_root/test.log"
 # 13 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestIdleSim' "$review_root/test.log" || true)"
 if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

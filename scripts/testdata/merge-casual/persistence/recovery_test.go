@@ -7,7 +7,7 @@ import (
 	db "example.com/merge-casual-practice/db"
 	playerentity "example.com/merge-casual-practice/game/entities/player"
 	sender "example.com/merge-casual-practice/game/handler/syncsender"
-	casual "example.com/merge-casual-practice/game/mergecasual"
+	casual "example.com/merge-casual-practice/game/modules/mergecasual"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"

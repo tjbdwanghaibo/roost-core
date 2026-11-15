@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"example.com/card-rpg-practice/game/cardrpg"
+	"example.com/card-rpg-practice/game/modules/cardrpg"
 	runentity "example.com/card-rpg-practice/game/entities/card_run"
 	playerentity "example.com/card-rpg-practice/game/entities/player"
 	sender "example.com/card-rpg-practice/game/handler/syncsender"

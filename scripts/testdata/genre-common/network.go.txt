@@ -4,7 +4,7 @@ import (
 	"context"
 
 	syncsender "GENRE_MODULE/game/handler/syncsender"
-	"GENRE_MODULE/game/rules"
+	"GENRE_MODULE/game/modules/rules"
 	"GENRE_MODULE/protocol/msgid"
 	"GENRE_MODULE/protocol/pb"
 

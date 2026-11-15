@@ -9,7 +9,7 @@
 > - **v1.35.0**：最终 generate 前安装公共 Robot，纵切 19 条；
 > - **v1.40.0**：DAO 定义改用必填 `store` 键（之前写 `bson`）。
 >
-> 各档的夹具文件与命令不同（v1.34.0 起没有 `sync.go.txt`、要加 access player / TCP / self_sync / sync_groups；补位版多 `backfill.go` 与 `game/partymatch`），**按目标版本检出里的 `scripts/test-party-room-generated.sh` 走**，不要拿本篇命令套旧版本。目标早于 v1.33.2 时告诉用户升级并停下，不要从别的夹具拼一个。
+> 各档的夹具文件与命令不同（v1.34.0 起没有 `sync.go.txt`、要加 access player / TCP / self_sync / sync_groups；补位版多 `backfill.go` 与 `game/modules/partymatch`），**按目标版本检出里的 `scripts/test-party-room-generated.sh` 走**，不要拿本篇命令套旧版本。目标早于 v1.33.2 时告诉用户升级并停下，不要从别的夹具拼一个。
 
 ## 1. 适用与不适用
 
@@ -31,7 +31,7 @@
 | 开局硬期限 | `roost add timer --entity PartyRoom`，开局登记、结算即删 | PARTY §4；guide/10-time.md §4 |
 | 领奖 | Player + 房间多实体 `MultiSync_PartyClaim`，strict | PARTY §7 |
 | 房间内同步（v1.34.0 起正式入口） | roost.yaml `access.player.self_sync: true` + `sync_groups: [party_room]`（需要 `add access player` + `add transport tcp`）；`project sync` 在实体包创建一次业务文件 `sync_group.go`（`SyncGroup`，`wiring/selfsync.Groups`，装在 self_sync 的同一个 Manager 上），handler 里 `SyncGroup.Join / Leave / Disband`，在 Nest 事务里调用时**提交后才生效**、回滚不发生。与玩家自身视图同一条连接、同一个推送编号（`msgid.MsgSelfSync`），客户端只用一个 `frame.Receiver`，按每个更新的 `Namespace`（`party_room` / `player`）+ `Profile.Key` 分流。**不要再自建 Manager 交给 Nest**：带 Entity Sync 的 Nest Mod 只有一个观察者位置，`Provide` 报 `ErrEntitySyncObserverConflict` | PARTY §5；ENTITY_SYNC.md“按组同步与 self_sync 共用连接（Groups）”；CHANGELOG v1.34.0 |
-| 补位（v1.34.1 起，业务层写法） | 无框架 API。房间状态 `Backfill` + handler `PartyBackfillOffer` / `PartyBackfill` 在实体锁内裁决；宿主与匹配循环 `game/partymatch` 在事务外把空座挂成补位队列（`Queue{Mode: "party-backfill", GroupSize: 8, MinSize: 2}`，不等待）里的**房间票**（requestID `backfill:<房间 ID>:<轮次>`，Score = 空位数），一张房间票 + 若干玩家票弹性 `Commit`，成局交房间按座位逐个接受，多出的人被拒并按 `requeue:<Match ID>:<玩家>` 重排；截止 = 第 1 回合结束，过后匹配循环不再配人、宿主撤票、在途补位局进房全部拒绝 | PARTY §6A；guide/09-services.md §4 末段 |
+| 补位（v1.34.1 起，业务层写法） | 无框架 API。房间状态 `Backfill` + handler `PartyBackfillOffer` / `PartyBackfill` 在实体锁内裁决；宿主与匹配循环 `game/modules/partymatch` 在事务外把空座挂成补位队列（`Queue{Mode: "party-backfill", GroupSize: 8, MinSize: 2}`，不等待）里的**房间票**（requestID `backfill:<房间 ID>:<轮次>`，Score = 空位数），一张房间票 + 若干玩家票弹性 `Commit`，成局交房间按座位逐个接受，多出的人被拒并按 `requeue:<Match ID>:<玩家>` 重排；截止 = 第 1 回合结束，过后匹配循环不再配人、宿主撤票、在途补位局进房全部拒绝 | PARTY §6A；guide/09-services.md §4 末段 |
 | 业务时间 | handler 约定参数 `nowUnixMilli`（分发包装从 fctx 填，Sender 不带时间）；心跳 `Beat.Now`、定时器 `Fire.Now` | PARTY §3.3；guide/10-time.md §1A |
 
 ## 3. 生成最小 demo
@@ -52,17 +52,17 @@ perl -pi -e 's/category=entity\.EntityCategoryOther/category=entity.EntityCatego
   game/entities/party_room/entity.go
 grep -q 'subjectPacker=NewPartyRoomBoardPacker' game/entities/party_room/entity.go
 F="$CORE/scripts/testdata/party-room"
-mkdir -p game/partyroom game/partymatch
-for n in rules state backfill rules_test; do cp "$F/$n.go.txt" "game/partyroom/$n.go"; done
+mkdir -p game/modules/partyroom game/modules/partymatch
+for n in rules state backfill rules_test; do cp "$F/$n.go.txt" "game/modules/partyroom/$n.go"; done
 # 心跳登记、定时器回调是 roost add 只在缺失时创建的业务文件，用夹具覆盖
 for n in room heartbeat_beats timer_handlers board_packer; do cp "$F/$n.go.txt" "game/entities/party_room/$n.go"; done
 cp "$F/handlers.go.txt"      game/handler/party_room.go
 cp "$F/gameplay_test.go.txt" game/handler/party_room_test.go
-# 补位宿主与匹配循环：必须在 project sync 之前放进工程——project sync 跑 go mod tidy，handler 测试 import game/partymatch，
-# 缺了它 tidy 会去网上找 <module>/game/partymatch 而失败（2026-10-31 实测）
-cp "$F/backfill_match.go.txt" game/partymatch/backfill.go
-fix_mod party-room-practice game/partyroom/*.go game/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
-gofmt -w db/def/*.go game/partyroom/*.go game/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
+# 补位宿主与匹配循环：必须在 project sync 之前放进工程——project sync 跑 go mod tidy，handler 测试 import game/modules/partymatch，
+# 缺了它 tidy 会去网上找 <module>/game/modules/partymatch 而失败（2026-10-31 实测）
+cp "$F/backfill_match.go.txt" game/modules/partymatch/backfill.go
+fix_mod party-room-practice game/modules/partyroom/*.go game/modules/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
+gofmt -w db/def/*.go game/modules/partyroom/*.go game/modules/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
 # 房间内同步走正式入口：实体标记与 packer 就位之后再打开（project sync 的就绪检查要求 sync=true）
 "$ROOST" add access player --service game
 "$ROOST" add transport tcp
@@ -74,17 +74,17 @@ fix_mod party-room-practice game/entities/party_room/sync_group.go
 gofmt -w game/entities/party_room/sync_group.go
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" party-room   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
-go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/partyroom ./game/handler 2>&1 | tee "$WORK/test.log"
+go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/modules/partyroom ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望：`--- PASS: TestPartyGame` 恰好 **19** 条（`game/partyroom` 3 条规则 + `game/handler` 15 条 Nest / 心跳 / 同步 / 补位 + `TestPartyGameRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 收尾（`<前缀>` = `PartyGame`）。仓库脚本另把 `scripts/testdata/party-room/persistence/*_test.go` 复制为 `game/handler/party_room_*_test.go`、`fix_mod` / `gofmt` 后 `go vet ./game/handler`（真实模式夹具只编译）；一档 demo 可省。
+期望：`--- PASS: TestPartyGame` 恰好 **19** 条（`game/modules/partyroom` 3 条规则 + `game/handler` 15 条 Nest / 心跳 / 同步 / 补位 + `TestPartyGameRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 收尾（`<前缀>` = `PartyGame`）。仓库脚本另把 `scripts/testdata/party-room/persistence/*_test.go` 复制为 `game/handler/party_room_*_test.go`、`fix_mod` / `gofmt` 后 `go vet ./game/handler`（真实模式夹具只编译）；一档 demo 可省。
 
 - 场景前缀必须是 `TestPartyGame`：`add timer --entity PartyRoom` 会生成 `TestPartyRoomTimerTickHandlerMatchesTheDriver`，用 `^TestPartyRoom` 会多跑一条、计数对不上（PARTY §9）。
 - 本篇 Player 字段是 `Coins`（`persist,sync`）/ `Matches` / `Initialized`（不是别篇的 `Gold`）；同一工程叠加别篇夹具时要合并 Player 字段，不能各拷各的。
-- 顺序：`game/partymatch` 与全部夹具（含 `party_room_test.go`）在 `project sync` 之前就位并 `fix_mod`。放到 `project sync` 之后时它报 `project files synchronized but framework resolution failed ... go mod tidy: exit status 1`（`cannot find module providing package <module>/game/partymatch`）。实体标记（`sync=true` + packer）也要先改好，`project sync` 才过 `sync_groups` 的就绪检查。
+- 顺序：`game/modules/partymatch` 与全部夹具（含 `party_room_test.go`）在 `project sync` 之前就位并 `fix_mod`。放到 `project sync` 之后时它报 `project files synchronized but framework resolution failed ... go mod tidy: exit status 1`（`cannot find module providing package <module>/game/modules/partymatch`）。实体标记（`sync=true` + packer）也要先改好，`project sync` 才过 `sync_groups` 的就绪检查。
 - roost.yaml 的 perl 改写依赖 `add access player --service game` 写出的缩进（`    player:` 下一行 `        service: game`）；改不到时 `die`，不要静默继续。
-- `sync_group.go` 是 `project sync` 只在缺失时创建的业务文件，生成的缺省版本视图键是 `party_room`，本例 packer 只认 `RoomSyncProfile`，所以必须用夹具覆盖；覆盖后 `fix_mod`（它 import `game/partyroom`）。
-- 与 v1.33.2 版命令的差别：没有 `sync.go.txt`（自建 Manager 已删）；多 `backfill.go`、`game/partymatch/backfill.go`、`sync_group.go`；多 `add access player` / `add transport tcp` / roost.yaml / `project sync` 四步；`Coins` 改为 `persist,sync`。
+- `sync_group.go` 是 `project sync` 只在缺失时创建的业务文件，生成的缺省版本视图键是 `party_room`，本例 packer 只认 `RoomSyncProfile`，所以必须用夹具覆盖；覆盖后 `fix_mod`（它 import `game/modules/partyroom`）。
+- 与 v1.33.2 版命令的差别：没有 `sync.go.txt`（自建 Manager 已删）；多 `backfill.go`、`game/modules/partymatch/backfill.go`、`sync_group.go`；多 `add access player` / `add transport tcp` / roost.yaml / `project sync` 四步；`Coins` 改为 `persist,sync`。
 
 ## 4. demo 的最小玩法范围（PARTY §3.4，18 条业务 + 1 条 Robot）
 
@@ -141,7 +141,7 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/part
 
 ## 7. 验证
 
-- 一档：当前§3 为 19 条 PASS（含 Robot）+ SKILL.md §3.4。以下 18 条是历史版本的实际记录：2026-10-31 在 main `24a9dbc3`（v1.34.0 之后、补位已合入、未发版）、自定 module 按 SKILL.md §3.2 + 本节命令 + §3.4 原样抽 bash 块连跑：18 PASS（`game/partyroom` 3 + `game/handler` 15）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL；persistence 夹具 `fix_mod` 后 `go vet ./game/handler` 通过。同次把 `game/partymatch` 挪到 `project sync` 之后重跑一遍作对照，`project sync` 的 `go mod tidy` 失败（见 §3）。
+- 一档：当前§3 为 19 条 PASS（含 Robot）+ SKILL.md §3.4。以下 18 条是历史版本的实际记录：2026-10-31 在 main `24a9dbc3`（v1.34.0 之后、补位已合入、未发版）、自定 module 按 SKILL.md §3.2 + 本节命令 + §3.4 原样抽 bash 块连跑：18 PASS（`game/modules/partyroom` 3 + `game/handler` 15）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL；persistence 夹具 `fix_mod` 后 `go vet ./game/handler` 通过。同次把 `game/modules/partymatch` 挪到 `project sync` 之后重跑一遍作对照，`project sync` 的 `go mod tidy` 失败（见 §3）。
 - 二档：`ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh`（隔离 Mongo 副本集，`ROOST_DATAENGINE_IT_MONGO_URI`）：局内 SIGKILL → 冷加载、心跳按持久阶段重启并结算、发奖、DataEngine 删档 → 第三进程核对（PARTY §13）。改用组同步入口后 2026-11-02 Linux 已通过，2026-11-14 统一最终复验再次通过；不验证恢复后的 EntitySync 重新登记/真实网络送达，见[最终验收报告](../../../maintenance/evidence/v147-final-validation-20261114/README.md)。
 - 缺省模式不证明：无 WAL / Mongo、房间只做内存卸载、组同步的接入层是替身（网络层另有真实 TCP/独立 Gate 专用用例）、match / session 内存存储、补位的“两个匹配器”是同进程 goroutine、单进程（PARTY §12）。
 

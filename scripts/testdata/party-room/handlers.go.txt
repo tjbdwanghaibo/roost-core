@@ -7,7 +7,7 @@ import (
 
 	db "example.com/party-room-practice/db"
 	roomentity "example.com/party-room-practice/game/entities/party_room"
-	party "example.com/party-room-practice/game/partyroom"
+	party "example.com/party-room-practice/game/modules/partyroom"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -261,7 +261,7 @@ func handlerPartyRelease(room IPartyRoomEntity, player int64, nowUnixMilli int64
 }
 
 // 补位（业务层写法）：房间告诉宿主此刻的补位动作——挂出本轮房间票（List）、撤回已截止的房间票（Withdraw），或什么都不做。
-// 宿主在离开、补位进房之后以及周期性对账时调用，按返回值在事务外排队 / 撤票（game/partymatch）；它幂等，本轮已挂出时
+// 宿主在离开、补位进房之后以及周期性对账时调用，按返回值在事务外排队 / 撤票（game/modules/partymatch）；它幂等，本轮已挂出时
 // 返回同一轮，所以重复调用只会重放同一个排队请求。排队与撤票不在实体锁内做：handler 不做 I/O。
 //
 //roost:nest rollback=undo durability=strict

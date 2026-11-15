@@ -39,19 +39,19 @@ dao_add Player db/def/player.go "State string state"
 dao_add CardRun db/def/card_run.go "State string state" "TurnTimer int64 turn_timer"
 world game/entities/card_run/entity.go
 F="$CORE/scripts/testdata/card-rpg"
-mkdir -p game/cardrpg
-for n in catalog profile battle catalog_test; do cp "$F/$n.go.txt" "game/cardrpg/$n.go"; done
+mkdir -p game/modules/cardrpg
+for n in catalog profile battle catalog_test; do cp "$F/$n.go.txt" "game/modules/cardrpg/$n.go"; done
 cp "$F/attributes.go.txt"     game/modules/gameplay/attribute/hero_stats.go
 cp "$F/timer_handlers.go.txt" game/entities/card_run/timer_handlers.go
 cp "$F/handlers.go.txt"       game/handler/card_rpg.go
 cp "$F/gameplay_test.go.txt"  game/handler/card_rpg_test.go
-fix_mod card-rpg-practice game/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
+fix_mod card-rpg-practice game/modules/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
   game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
-gofmt -w db/def/*.go game/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
+gofmt -w db/def/*.go game/modules/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
   game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" card-rpg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/cardrpg ./game/handler 2>&1 | tee "$WORK/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/modules/cardrpg ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
 期望：`--- PASS: TestCardRPG` 恰好 **17** 条（16 条业务 + `TestCardRPGRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 收尾。
@@ -80,7 +80,7 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/cardrp
 
 ## 7. 验证
 
-- 一档：16 条 PASS + SKILL.md §3.4。2026-10-31 在 v1.33.1 检出、自定 module `example.com/mycard` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：16 PASS（`game/cardrpg` 4 + `game/handler` 12）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL。同日在 v1.33.0 上执行，唯一错误是 `card_rpg_test.go` `Sync_TickCardRunTimer` 多传参数。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：16 PASS（4 + 12）、0 SKIP，§3.4 全过，doctor 仅 4 项 FAIL。
+- 一档：16 条 PASS + SKILL.md §3.4。2026-10-31 在 v1.33.1 检出、自定 module `example.com/mycard` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：16 PASS（`game/modules/cardrpg` 4 + `game/handler` 12）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL。同日在 v1.33.0 上执行，唯一错误是 `card_rpg_test.go` `Sync_TickCardRunTimer` 多传参数。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：16 PASS（4 + 12）、0 SKIP，§3.4 全过，doctor 仅 4 项 FAIL。
 - 仓库脚本另把 `scripts/testdata/card-rpg/persistence/*_test.go` 复制为 `game/handler/card_rpg_*_test.go` 后 `go vet ./game/handler`（真实模式夹具只编译）；只做一档 demo 时可省。
 - 二档：`ROOST_CARD_RPG_REAL=1`（隔离 Mongo 副本集）：strict 提交后、WAL 未投影时 SIGKILL，新进程冷加载、投递一次过期回合、续战领奖，第三个进程核对（CARD §12）。
 

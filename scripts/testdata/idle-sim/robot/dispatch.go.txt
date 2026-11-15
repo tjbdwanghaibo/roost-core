@@ -2,7 +2,7 @@ package robotaccess
 
 import (
 	sender "GENRE_MODULE/game/handler/syncsender"
-	domain "GENRE_MODULE/game/idlesim"
+	domain "GENRE_MODULE/game/modules/idlesim"
 	"GENRE_MODULE/protocol/msgid"
 	"GENRE_MODULE/protocol/pb"
 	"context"

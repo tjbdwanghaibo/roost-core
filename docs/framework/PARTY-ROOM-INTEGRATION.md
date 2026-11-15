@@ -21,7 +21,7 @@
 | 回合推进、星星出现、断线宽限 | PartyRoom 的实体心跳 | `roost add heartbeat --entity PartyRoom`，100ms 档，回调在实体锁与事务内按 `Beat.Now` 推进 | 心跳不持久；判定只看时间戳，不按“第几拍” |
 | 开局硬期限 | PartyRoom 的持久实体定时器 | `roost add timer --entity PartyRoom`；开局登记、结算即删 | 心跳没在跑（冷加载、驱动停摆）时由它兜底结算 |
 | 永久金币、完赛次数 | Player DAO | 多实体 `MultiSync_PartyClaim(player, room)`，strict | 局内分数与永久金币只在领奖事务里跨过去 |
-| 补位 | 房间状态的 `Backfill`（轮次、本轮房间票是否挂出、已处理的补位成局）+ 补位队列里的房间票 | handler `PartyBackfillOffer` / `PartyBackfill` 在实体锁内裁决，宿主与匹配循环 `game/partymatch` 在事务外排队 / 撤票 / 成局 | 座位是权威，超员由进房 handler 拒绝，不是存储保证（第 6A 节） |
+| 补位 | 房间状态的 `Backfill`（轮次、本轮房间票是否挂出、已处理的补位成局）+ 补位队列里的房间票 | handler `PartyBackfillOffer` / `PartyBackfill` 在实体锁内裁决，宿主与匹配循环 `game/modules/partymatch` 在事务外排队 / 撤票 / 成局 | 座位是权威，超员由进房 handler 拒绝，不是存储保证（第 6A 节） |
 | 房间内同步 | `roomentity.SyncGroup`（`wiring/selfsync.Groups`，装在 self_sync 的 Manager 上） | `access.player.self_sync: true` + `sync_groups: [party_room]`；handler 在连接 / 离开 / 归还时 `Join` / `Leave` / `Disband`，事务内的调用提交后才生效 | 成员规则归业务；生成器只出声明文件 `sync_group.go` 与 bootstrap 接线（第 5 节） |
 
 ```mermaid
@@ -54,7 +54,7 @@ ROOST_PARTY_ROOM_KEEP=1 bash scripts/test-party-room-generated.sh   # 保留生�
 
 1. `roost project new party-room-practice -module example.com/party-room-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity PartyRoom`、`roost add dao PartyRoom --entity PartyRoom`、`roost add heartbeat --entity PartyRoom`、`roost add timer --entity PartyRoom`；
-3. 业务只改这几处：`db/def/player.go` 加 `Coins`（`persist,sync`，自身视图推给本人）/ `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `store:"state" dao:"nosync"` ``、``WakeTimer int64 `store:"wake_timer" dao:"nosync"` `` 与 ``Board string `store:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/partyroom/`（含补位规则 `backfill.go`）、补位宿主与匹配循环 `game/partymatch/backfill.go`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go`；场景测试 `game/partyroom/rules_test.go`（[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt)，3 条规则）与 `game/handler/party_room_test.go`（[gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)，15 条 Nest / 心跳 / 同步 / 补位）；
+3. 业务只改这几处：`db/def/player.go` 加 `Coins`（`persist,sync`，自身视图推给本人）/ `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `store:"state" dao:"nosync"` ``、``WakeTimer int64 `store:"wake_timer" dao:"nosync"` `` 与 ``Board string `store:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/modules/partyroom/`（含补位规则 `backfill.go`）、补位宿主与匹配循环 `game/modules/partymatch/backfill.go`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go`；场景测试 `game/modules/partyroom/rules_test.go`（[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt)，3 条规则）与 `game/handler/party_room_test.go`（[gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)，15 条 Nest / 心跳 / 同步 / 补位）；
 4. 房间内同步走正式入口：`roost add access player --service game`、`roost add transport tcp`，在 roost.yaml 的 `access.player` 下写 `self_sync: true` 与 `sync_groups: [party_room]`，`roost project sync`；它创建一次的 `game/entities/party_room/sync_group.go` 是业务文件，换成本例的视图 `RoomSyncProfile` 与座位上限（[sync_group.go.txt](../../scripts/testdata/party-room/sync_group.go.txt)）；
 5. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> party-room`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 6. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。
@@ -65,14 +65,14 @@ ROOST_PARTY_ROOM_KEEP=1 bash scripts/test-party-room-generated.sh   # 保留生�
 
 | 顺序 | 文件 | 先回答的问题 |
 | --- | --- | --- |
-| 1 | `game/partyroom/rules.go`（[rules.go.txt](../../scripts/testdata/party-room/rules.go.txt)） | 规则怎样校验、怎样按值冻结进房间？房间码是什么？ |
-| 2 | `game/partyroom/state.go`（[state.go.txt](../../scripts/testdata/party-room/state.go.txt)） | 房间存了什么、记分板裁掉什么？`Advance` 怎样按事件时间顺序结算宽限到期、回合结束与硬期限？输入去重、连接代、房主转移、提前结算、领奖与归还的规则？ |
+| 1 | `game/modules/partyroom/rules.go`（[rules.go.txt](../../scripts/testdata/party-room/rules.go.txt)） | 规则怎样校验、怎样按值冻结进房间？房间码是什么？ |
+| 2 | `game/modules/partyroom/state.go`（[state.go.txt](../../scripts/testdata/party-room/state.go.txt)） | 房间存了什么、记分板裁掉什么？`Advance` 怎样按事件时间顺序结算宽限到期、回合结束与硬期限？输入去重、连接代、房主转移、提前结算、领奖与归还的规则？ |
 | 3 | `game/entities/party_room/room.go`（[room.go.txt](../../scripts/testdata/party-room/room.go.txt)） | 为什么房间只有一个写入口 `SaveRoom`？心跳与期限定时器怎样跟阶段保持一致？ |
 | 4 | `heartbeat_beats.go` / `timer_handlers.go`（[heartbeat](../../scripts/testdata/party-room/heartbeat_beats.go.txt)、[timer](../../scripts/testdata/party-room/timer_handlers.go.txt)） | 冷加载后心跳怎样重新启动？期限回调怎样核对节点身份？ |
 | 5 | `board_packer.go`（[board_packer.go.txt](../../scripts/testdata/party-room/board_packer.go.txt)） | 同步视图怎样只放出 `Board` 一个字段？ |
 | 6 | `game/handler/party_room.go`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)） | 每个 handler 怎样先 `Advance(now)` 再裁决？领奖怎样与 Player 原子提交？ |
 | 7 | `game/entities/party_room/sync_group.go`（[sync_group.go.txt](../../scripts/testdata/party-room/sync_group.go.txt)） | 房间同步组声明了什么、成员关系在哪几个 handler 里变 |
-| 8 | `game/partyroom/backfill.go`（[backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)）、`game/partymatch/backfill.go`（[backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)） | 补位什么时候挂票、撤票？房间票的幂等身份是什么？超员的人在哪里被拒、怎样回到排队？（第 6A 节） |
+| 8 | `game/modules/partyroom/backfill.go`（[backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)）、`game/modules/partymatch/backfill.go`（[backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)） | 补位什么时候挂票、撤票？房间票的幂等身份是什么？超员的人在哪里被拒、怎样回到排队？（第 6A 节） |
 | 9 | [gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt) | 十八个场景怎样实际验证 |
 | 10 | [persistence/recovery_test.go](../../scripts/testdata/party-room/persistence/recovery_test.go) | 局内 SIGKILL 后怎样冷加载、重启心跳、结算并删档 |
 
@@ -91,7 +91,7 @@ import (
 
 	"example.com/party-room-practice/game/handler"
 	syncsender "example.com/party-room-practice/game/handler/syncsender"
-	party "example.com/party-room-practice/game/partyroom"
+	party "example.com/party-room-practice/game/modules/partyroom"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	"github.com/tjbdwanghaibo/roost-core/service/session"
@@ -212,7 +212,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 
 ### 6A. 补位（业务层写法）
 
-匹配房间开局后有人主动离开、仍在可补位阶段时，后来的玩家优先补进这个房间，而不是另开一局。core 没有补位 API；维护者 2026-10-31 选定业务层写法（[FEATURE-2026-10-31 第 3 节](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 B，零框架改动），只用 `service/match` 的弹性成局与它的两条契约（同一 requestID 排队幂等、同一票集合只成一局）。代码：规则 [backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)（`game/partyroom`）、handler `PartyBackfillOffer` / `PartyBackfill`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)）、宿主与匹配循环 [backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)（`game/partymatch`）。
+匹配房间开局后有人主动离开、仍在可补位阶段时，后来的玩家优先补进这个房间，而不是另开一局。core 没有补位 API；维护者 2026-10-31 选定业务层写法（[FEATURE-2026-10-31 第 3 节](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 B，零框架改动），只用 `service/match` 的弹性成局与它的两条契约（同一 requestID 排队幂等、同一票集合只成一局）。代码：规则 [backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)（`game/modules/partyroom`）、handler `PartyBackfillOffer` / `PartyBackfill`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)）、宿主与匹配循环 [backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)（`game/modules/partymatch`）。
 
 **流程**：
 

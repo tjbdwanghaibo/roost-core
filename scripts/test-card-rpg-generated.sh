@@ -59,17 +59,17 @@ for name, fields in {
 p = root / 'game/entities/card_run/entity.go'
 p.write_text(p.read_text().replace('category=entity.EntityCategoryOther', 'category=entity.EntityCategoryWorld'))
 DEFS
-mkdir -p game/cardrpg
-for name in catalog profile battle; do cp "$repo_root/scripts/testdata/card-rpg/$name.go.txt" "game/cardrpg/$name.go"; done
-cp "$repo_root/scripts/testdata/card-rpg/catalog_test.go.txt" game/cardrpg/catalog_test.go
+mkdir -p game/modules/cardrpg
+for name in catalog profile battle; do cp "$repo_root/scripts/testdata/card-rpg/$name.go.txt" "game/modules/cardrpg/$name.go"; done
+cp "$repo_root/scripts/testdata/card-rpg/catalog_test.go.txt" game/modules/cardrpg/catalog_test.go
 cp "$repo_root/scripts/testdata/card-rpg/attributes.go.txt" game/modules/gameplay/attribute/hero_stats.go
 cp "$repo_root/scripts/testdata/card-rpg/timer_handlers.go.txt" game/entities/card_run/timer_handlers.go
 cp "$repo_root/scripts/testdata/card-rpg/handlers.go.txt" game/handler/card_rpg.go
 cp "$repo_root/scripts/testdata/card-rpg/gameplay_test.go.txt" game/handler/card_rpg_test.go
-gofmt -w db/def/*.go game/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
+gofmt -w db/def/*.go game/modules/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" card-rpg
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/cardrpg ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/modules/cardrpg ./game/handler | tee "$review_root/test.log"
 # 17 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestCardRPG' "$review_root/test.log" || true)"
 if [[ "$passed" != 17 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

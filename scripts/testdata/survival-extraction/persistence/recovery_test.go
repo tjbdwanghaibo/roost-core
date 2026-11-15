@@ -8,7 +8,7 @@ import (
 	playerentity "example.com/survival-extraction-practice/game/entities/player"
 	runentity "example.com/survival-extraction-practice/game/entities/survival_raid"
 	sender "example.com/survival-extraction-practice/game/handler/syncsender"
-	survival "example.com/survival-extraction-practice/game/survival"
+	survival "example.com/survival-extraction-practice/game/modules/survival"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"

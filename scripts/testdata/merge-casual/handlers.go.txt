@@ -3,7 +3,7 @@ package handler
 import (
 	db "example.com/merge-casual-practice/db"
 	playerentity "example.com/merge-casual-practice/game/entities/player"
-	casual "example.com/merge-casual-practice/game/mergecasual"
+	casual "example.com/merge-casual-practice/game/modules/mergecasual"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"time"
 )

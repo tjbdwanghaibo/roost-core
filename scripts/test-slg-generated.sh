@@ -81,10 +81,10 @@ cp "$repo_root/scripts/testdata/slg/tasks.go.txt" game/handler/slg_tasks.go
 cp "$repo_root/scripts/testdata/slg/tasks_test.go.txt" game/handler/slg_tasks_test.go
 cp "$repo_root/scripts/testdata/slg/alliance_rewards.go.txt" game/handler/alliance_rewards.go
 cp "$repo_root/scripts/testdata/slg/alliance_authority.go.txt" game/handler/alliance_authority.go
-mkdir -p game/alliance
-cp "$repo_root/scripts/testdata/slg/alliance/alliance.go" game/alliance/alliance.go
-cp "$repo_root/scripts/testdata/slg/alliance/rpc_budget.go" game/alliance/rpc_budget.go
-gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go game/alliance/*.go
+mkdir -p game/modules/alliance
+cp "$repo_root/scripts/testdata/slg/alliance/alliance.go" game/modules/alliance/alliance.go
+cp "$repo_root/scripts/testdata/slg/alliance/rpc_budget.go" game/modules/alliance/rpc_budget.go
+gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go game/modules/alliance/*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" slg
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler | tee "$review_root/test.log"
@@ -99,15 +99,15 @@ go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
 # 联盟测试缺省模式也复制并 vet；补报截止跟随协调器保留期、普通 Bus RPC 接收端预算两条用例是纯内存的，缺省模式就跑。
-cp "$repo_root"/scripts/testdata/slg/alliance/*_test.go game/alliance/
-gofmt -w game/alliance/*_test.go
-go vet -mod=mod -p 2 ./game/alliance
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAllianceReportWindowFollowsTheCoordinatorReservationTTL$' ./game/alliance | tee "$review_root/alliance-unit.log"
+cp "$repo_root"/scripts/testdata/slg/alliance/*_test.go game/modules/alliance/
+gofmt -w game/modules/alliance/*_test.go
+go vet -mod=mod -p 2 ./game/modules/alliance
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAllianceReportWindowFollowsTheCoordinatorReservationTTL$' ./game/modules/alliance | tee "$review_root/alliance-unit.log"
 if [[ "$(grep -c '^--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL ' "$review_root/alliance-unit.log" || true)" != 1 ]]; then
   echo "alliance report-window test did not pass" >&2
   exit 1
 fi
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAllianceReceiverBudgetRejectsLateSuccess$' ./game/alliance | tee "$review_root/alliance-budget.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAllianceReceiverBudgetRejectsLateSuccess$' ./game/modules/alliance | tee "$review_root/alliance-budget.log"
 if [[ "$(grep -c '^--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess ' "$review_root/alliance-budget.log" || true)" != 1 ]]; then
   echo "alliance receiver-budget test did not pass" >&2
   exit 1
@@ -119,18 +119,18 @@ if [[ "${ROOST_SLG_REAL:-0}" == 1 ]]; then
   # 本次运行的物理库名前缀；写 Mongo 的两条用例各用 _player / _remote 一个库和一份 WAL 根，互不复用。
   slg_db="roost_slg_it_${PPID}_$$"
   # 基础活动链路（业务 Redis CAS 联盟、原服奖励义务回执与 ACK 重投），不写 Mongo。
-  go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestSLGAllianceActivity$' ./game/alliance | tee "$review_root/activity.log"
+  go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestSLGAllianceActivity$' ./game/modules/alliance | tee "$review_root/activity.log"
   if [[ "$(grep -c '^--- PASS: TestSLGAllianceActivity ' "$review_root/activity.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/activity.log"; then exit 1; fi
   # 同一条链路继续到两个原服的 Player 到账（每个原服 write → SIGKILL → recover → verify 三个子进程）。
   ROOST_SLG_DB="${slg_db}_player" ROOST_SLG_WAL="$review_root/persistence/player" \
-    go test -mod=mod -race -count=1 -timeout 4m -v -run '^TestSLGAlliancePlayerDelivery$' ./game/alliance | tee "$review_root/player.log"
+    go test -mod=mod -race -count=1 -timeout 4m -v -run '^TestSLGAlliancePlayerDelivery$' ./game/modules/alliance | tee "$review_root/player.log"
   if [[ "$(grep -c '^--- PASS: TestSLGAlliancePlayerDelivery ' "$review_root/player.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/player.log"; then exit 1; fi
   # 联盟权威换成生成的 Remote 托管实体，冻结后由 sid 2000 交接到 2001，再继续 Player 到账。
   ROOST_SLG_DB="${slg_db}_remote" ROOST_SLG_WAL="$review_root/persistence/remote" \
-    go test -mod=mod -race -count=1 -timeout 4m -v -run '^TestSLGAllianceRemoteDelivery$' ./game/alliance | tee "$review_root/remote.log"
+    go test -mod=mod -race -count=1 -timeout 4m -v -run '^TestSLGAllianceRemoteDelivery$' ./game/modules/alliance | tee "$review_root/remote.log"
   if [[ "$(grep -c '^--- PASS: TestSLGAllianceRemoteDelivery ' "$review_root/remote.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/remote.log"; then exit 1; fi
   # 普通 Bus RPC 的调用方 deadline 不传到接收端（框架现行契约）；接收端用自己的预算拒绝迟到成功。只用 NATS。
-  go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLGAllianceRPCReceiverBudget$' ./game/alliance | tee "$review_root/rpc-budget.log"
+  go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLGAllianceRPCReceiverBudget$' ./game/modules/alliance | tee "$review_root/rpc-budget.log"
   if [[ "$(grep -c '^--- PASS: TestSLGAllianceRPCReceiverBudget ' "$review_root/rpc-budget.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/rpc-budget.log"; then exit 1; fi
 fi
 succeeded=1

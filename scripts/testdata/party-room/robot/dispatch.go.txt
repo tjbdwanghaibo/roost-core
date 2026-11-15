@@ -2,7 +2,7 @@ package robotaccess
 
 import (
 	sender "GENRE_MODULE/game/handler/syncsender"
-	domain "GENRE_MODULE/game/partyroom"
+	domain "GENRE_MODULE/game/modules/partyroom"
 	"GENRE_MODULE/protocol/msgid"
 	"GENRE_MODULE/protocol/pb"
 	"context"

@@ -8,7 +8,7 @@ import (
 	playerentity "example.com/tower-defense-practice/game/entities/player"
 	runentity "example.com/tower-defense-practice/game/entities/tower_room"
 	sender "example.com/tower-defense-practice/game/handler/syncsender"
-	tower "example.com/tower-defense-practice/game/towerdefense"
+	tower "example.com/tower-defense-practice/game/modules/towerdefense"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"

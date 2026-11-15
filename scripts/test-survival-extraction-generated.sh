@@ -58,16 +58,16 @@ for name, fields in {
 p = root / 'game/entities/survival_raid/entity.go'
 p.write_text(p.read_text().replace('category=entity.EntityCategoryOther', 'category=entity.EntityCategoryWorld'))
 DEFS
-mkdir -p game/survival
-for name in rules state match; do cp "$repo_root/scripts/testdata/survival-extraction/$name.go.txt" "game/survival/$name.go"; done
-cp "$repo_root/scripts/testdata/survival-extraction/rules_test.go.txt" game/survival/rules_test.go
+mkdir -p game/modules/survival
+for name in rules state match; do cp "$repo_root/scripts/testdata/survival-extraction/$name.go.txt" "game/modules/survival/$name.go"; done
+cp "$repo_root/scripts/testdata/survival-extraction/rules_test.go.txt" game/modules/survival/rules_test.go
 cp "$repo_root/scripts/testdata/survival-extraction/timer_handlers.go.txt" game/entities/survival_raid/timer_handlers.go
 cp "$repo_root/scripts/testdata/survival-extraction/handlers.go.txt" game/handler/survival_extraction.go
 cp "$repo_root/scripts/testdata/survival-extraction/gameplay_test.go.txt" game/handler/survival_extraction_test.go
-gofmt -w db/def/*.go game/survival/*.go game/entities/survival_raid/*.go game/handler/survival_extraction*.go
+gofmt -w db/def/*.go game/modules/survival/*.go game/entities/survival_raid/*.go game/handler/survival_extraction*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" survival-extraction
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSurvivalExtraction' ./game/survival ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSurvivalExtraction' ./game/modules/survival ./game/handler | tee "$review_root/test.log"
 # 13 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestSurvivalExtraction' "$review_root/test.log" || true)"
 if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

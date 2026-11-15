@@ -16,7 +16,7 @@ import (
 	room "TURN_MODULE/game/entities/game_room"
 	player "TURN_MODULE/game/entities/player"
 	sender "TURN_MODULE/game/handler/syncsender"
-	rules "TURN_MODULE/game/rules"
+	rules "TURN_MODULE/game/modules/rules"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"

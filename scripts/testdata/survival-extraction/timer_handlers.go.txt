@@ -1,7 +1,7 @@
 package survival_raid
 
 import (
-	survival "example.com/survival-extraction-practice/game/survival"
+	survival "example.com/survival-extraction-practice/game/modules/survival"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"time"
 )

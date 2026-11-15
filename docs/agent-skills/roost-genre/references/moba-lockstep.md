@@ -40,22 +40,22 @@ dao_add MatchResult db/def/match_result.go "MatchKey string matchkey" "Digest st
   "WinnerID int64 winnerid" "LoserID int64 loserid" "Status int64 status"
 world game/entities/match_result/entity.go game/entities/battle_round/entity.go game/entities/battle_directory/entity.go
 F="$CORE/scripts/testdata/moba"
-mkdir -p game/moba loadtest protocol/def
+mkdir -p game/modules/moba loadtest protocol/def
 # 公共 Robot：结果协议、LockstepBot 场景与 KCP 网络用例（网络用例是 handler 包的测试）
 cp "$F/result_protocol.go.txt"     protocol/def/result.go
 cp "$F/robot.go.txt"               loadtest/battle.go
 cp "$F/network_test.go.txt"        game/handler/moba_network_test.go
 for n in simulation simulation_test matchmaking_test arena round room directory arena_test arena_network_test; do
-  cp "$F/$n.go.txt" "game/moba/$n.go"
+  cp "$F/$n.go.txt" "game/modules/moba/$n.go"
 done
 cp "$F/round_handlers.go.txt"      game/handler/moba_round.go
 cp "$F/round_handlers_test.go.txt" game/handler/moba_round_test.go
 cp "$F/settlement.go.txt"          game/handler/moba_settlement.go
 cp "$F/settlement_test.go.txt"     game/handler/moba_settlement_test.go
-fix_mod moba-practice game/moba/*.go game/handler/moba_*.go loadtest/battle.go protocol/def/result.go
-gofmt -w loadtest/*.go db/def/*.go game/moba/*.go game/handler/moba_*.go
+fix_mod moba-practice game/modules/moba/*.go game/handler/moba_*.go loadtest/battle.go protocol/def/result.go
+gofmt -w loadtest/*.go db/def/*.go game/modules/moba/*.go game/handler/moba_*.go
 "$ROOST" generate
-go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/moba ./game/handler 2>&1 | tee "$WORK/test.log"
+go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/modules/moba ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
 期望：`--- PASS: TestMOBA` 恰好 **28** 条、0 skip（含 4 条真实 loopback KCP，其中 `TestMOBAKCPRobotMatchSettlementAndClientResult` 用公共 LockstepBot 打完整局、经可信 Nest 幂等结算并向客户端发 PB 资产结果）；然后按 SKILL.md §3.4 收尾。store 键沿用脚本的“字段名小写”写法。服务端初始化 / 结算 / 奖励接口不开放为玩家 PB；固定会话凭据只供验收。

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	party "example.com/party-room-practice/game/partyroom"
+	party "example.com/party-room-practice/game/modules/partyroom"
 )
 
 // 房间的两个驱动：

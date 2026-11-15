@@ -15,7 +15,7 @@ fixtures = repo / "scripts/testdata"
 files = {
     fixtures / "robot-common/snapshot_test.go.txt": "game/handler/robot_snapshot_test.go",
     fixtures / genre / "robot/protocol.go.txt": "protocol/def/robot.go",
-    fixtures / genre / "robot/dispatch.go.txt": "game/robotaccess/dispatch.go",
+    fixtures / genre / "robot/dispatch.go.txt": "game/modules/robotaccess/dispatch.go",
     fixtures / genre / "robot/network_test.go.txt": "game/handler/robot_network_test.go",
     fixtures / "robot-common/scenario.go.txt": "loadtest/scenario.go",
     fixtures / "robot-common/main.go.txt": "cmd/robot/main.go",

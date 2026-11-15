@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	chess "example.com/auto-chess-practice/game/autochess"
+	chess "example.com/auto-chess-practice/game/modules/autochess"
 	matchentity "example.com/auto-chess-practice/game/entities/chess_match"
 	playerentity "example.com/auto-chess-practice/game/entities/player"
 	sender "example.com/auto-chess-practice/game/handler/syncsender"

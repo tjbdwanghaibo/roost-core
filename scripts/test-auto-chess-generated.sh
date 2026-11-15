@@ -58,16 +58,16 @@ for name, fields in {
 p = root / 'game/entities/chess_match/entity.go'
 p.write_text(p.read_text().replace('category=entity.EntityCategoryOther', 'category=entity.EntityCategoryWorld'))
 DEFS
-mkdir -p game/autochess
-for name in rules state match; do cp "$repo_root/scripts/testdata/auto-chess/$name.go.txt" "game/autochess/$name.go"; done
-cp "$repo_root/scripts/testdata/auto-chess/rules_test.go.txt" game/autochess/rules_test.go
+mkdir -p game/modules/autochess
+for name in rules state match; do cp "$repo_root/scripts/testdata/auto-chess/$name.go.txt" "game/modules/autochess/$name.go"; done
+cp "$repo_root/scripts/testdata/auto-chess/rules_test.go.txt" game/modules/autochess/rules_test.go
 cp "$repo_root/scripts/testdata/auto-chess/timer_handlers.go.txt" game/entities/chess_match/timer_handlers.go
 cp "$repo_root/scripts/testdata/auto-chess/handlers.go.txt" game/handler/auto_chess.go
 cp "$repo_root/scripts/testdata/auto-chess/gameplay_test.go.txt" game/handler/auto_chess_test.go
-gofmt -w db/def/*.go game/autochess/*.go game/entities/chess_match/*.go game/handler/auto_chess*.go
+gofmt -w db/def/*.go game/modules/autochess/*.go game/entities/chess_match/*.go game/handler/auto_chess*.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" auto-chess
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAutoChess' ./game/autochess ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAutoChess' ./game/modules/autochess ./game/handler | tee "$review_root/test.log"
 # 13 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestAutoChess' "$review_root/test.log" || true)"
 if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

@@ -625,7 +625,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 - `game/entities/<实体>/`：实体本体、生成文件（`*_gen_wire.go`、`lifecycle_gen.go`）与每个组件一个薄接线文件（组件号、类型别名、注册工厂、实现 Owner）。
 - `game/components/<功能>/<功能>.go`：组件逻辑（经 Owner 宿主接口拿状态），模块之间的联动也放在对应功能的包里。
-- `game/modules/<包>/`：模块与生成器的功能包（`game/` 下只有上面两层、这一层和下面的 managers / handler / controllers / view）；`game/modules/` 本身不放文件。
+- `game/modules/<包>/`：功能包——模块与生成器带来的，以及业务自己手写的玩法包（规则、状态机、匹配等，如 `game/modules/cardrpg`、`game/modules/partyroom`）都放这里（`game/` 下只有上面两层、这一层和下面的 managers / handler / controllers / view）；`game/modules/` 本身不放文件。
 - `game/modules/login/`：登录链（票据校验、进入游戏的登记点、“先新建”、新建时的角色名校验）。
 - `game/managers/managers.go`：进程内 manager 的登记点；`game/handler/`：Nest handler；`game/controllers/<功能>/`：协议入口。
 - `services/<托管服务>/`：托管框架服务的手写代码（collaborators、登录渠道、`services/account/portal/` 登录入口）；`internal/` 是生成的框架接线（`internal/access/player/protocols_gen.go` 是协议登记）。

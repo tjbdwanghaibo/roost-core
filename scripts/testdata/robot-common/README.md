@@ -2,7 +2,7 @@
 
 这是应用自己的场景，复用 roost-core 的公共 Robot、Player TCP 和生成 PB，不复制一套网络库。
 
-`protocol/def/robot.go` 定义业务请求，`game/robotaccess.Dispatch` 将已鉴权身份与请求交给正式 Sender。宿主必须自己装配 Dispatcher、账号鉴权和实体/房间初始化；生成骨架不会自动监听一个可玩的游戏。不要把测试中的固定票据鉴权器用于生产。
+`protocol/def/robot.go` 定义业务请求，`game/modules/robotaccess.Dispatch` 将已鉴权身份与请求交给正式 Sender。宿主必须自己装配 Dispatcher、账号鉴权和实体/房间初始化；生成骨架不会自动监听一个可玩的游戏。不要把测试中的固定票据鉴权器用于生产。
 
 ```sh
 go run ./cmd/robot -endpoint 127.0.0.1:7000 -steps /path/to/steps.json -timeout 30s

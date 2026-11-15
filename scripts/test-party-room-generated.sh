@@ -69,17 +69,17 @@ assert 'category=entity.EntityCategoryOther' in text, p
 p.write_text(text.replace('category=entity.EntityCategoryOther',
     'category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker'))
 DEFS
-mkdir -p game/partyroom
-for name in rules state backfill; do cp "$repo_root/scripts/testdata/party-room/$name.go.txt" "game/partyroom/$name.go"; done
-cp "$repo_root/scripts/testdata/party-room/rules_test.go.txt" game/partyroom/rules_test.go
+mkdir -p game/modules/partyroom
+for name in rules state backfill; do cp "$repo_root/scripts/testdata/party-room/$name.go.txt" "game/modules/partyroom/$name.go"; done
+cp "$repo_root/scripts/testdata/party-room/rules_test.go.txt" game/modules/partyroom/rules_test.go
 # 心跳登记与定时器回调是 roost add 只在缺失时创建的业务文件，用夹具覆盖。
 for name in room heartbeat_beats timer_handlers board_packer; do cp "$repo_root/scripts/testdata/party-room/$name.go.txt" "game/entities/party_room/$name.go"; done
 cp "$repo_root/scripts/testdata/party-room/handlers.go.txt" game/handler/party_room.go
 cp "$repo_root/scripts/testdata/party-room/gameplay_test.go.txt" game/handler/party_room_test.go
 # 补位的宿主与匹配循环（业务层写法）：用生成的 Sender，经 service/match 与 service/session 接房间。
-mkdir -p game/partymatch
-cp "$repo_root/scripts/testdata/party-room/backfill_match.go.txt" game/partymatch/backfill.go
-gofmt -w db/def/*.go game/partyroom/*.go game/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
+mkdir -p game/modules/partymatch
+cp "$repo_root/scripts/testdata/party-room/backfill_match.go.txt" game/modules/partymatch/backfill.go
+gofmt -w db/def/*.go game/modules/partyroom/*.go game/modules/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
 # 房间内同步走正式入口（在标记与 packer 就位之后打开，project sync 的就绪检查才过）：玩家接入（TCP）+ self_sync（玩家看自己）+ sync_groups（房间推给成员），同一条连接、同一个推送编号。
 "$review_root/roost" add access player --service game >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add transport tcp >> "$review_root/generate.log" 2>&1
@@ -98,7 +98,7 @@ cp "$repo_root/scripts/testdata/party-room/sync_group.go.txt" game/entities/part
 gofmt -w game/entities/party_room/sync_group.go
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" party-room
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/partyroom ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/modules/partyroom ./game/handler | tee "$review_root/test.log"
 # 19 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestPartyGame' "$review_root/test.log" || true)"
 if [[ "$passed" != 19 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

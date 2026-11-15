@@ -1,9 +1,9 @@
 package handler
 
 import (
-	domain "GENRE_MODULE/game/cardrpg"
+	domain "GENRE_MODULE/game/modules/cardrpg"
 	sender "GENRE_MODULE/game/handler/syncsender"
-	"GENRE_MODULE/game/robotaccess"
+	"GENRE_MODULE/game/modules/robotaccess"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
 	"context"

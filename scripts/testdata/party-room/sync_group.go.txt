@@ -1,7 +1,7 @@
 package party_room
 
 import (
-	party "example.com/party-room-practice/game/partyroom"
+	party "example.com/party-room-practice/game/modules/partyroom"
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 )
 

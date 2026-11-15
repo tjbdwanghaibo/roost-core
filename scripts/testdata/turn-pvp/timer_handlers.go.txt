@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	rules "GENRE_MODULE/game/rules"
+	rules "GENRE_MODULE/game/modules/rules"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 )

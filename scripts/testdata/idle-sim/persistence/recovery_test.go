@@ -7,7 +7,7 @@ import (
 	db "example.com/idle-sim-practice/db"
 	playerentity "example.com/idle-sim-practice/game/entities/player"
 	sender "example.com/idle-sim-practice/game/handler/syncsender"
-	idle "example.com/idle-sim-practice/game/idlesim"
+	idle "example.com/idle-sim-practice/game/modules/idlesim"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"

@@ -6,7 +6,7 @@ import (
 	resultentity "example.com/moba-practice/game/entities/match_result"
 	player "example.com/moba-practice/game/entities/player"
 	sender "example.com/moba-practice/game/handler/syncsender"
-	moba "example.com/moba-practice/game/moba"
+	moba "example.com/moba-practice/game/modules/moba"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"

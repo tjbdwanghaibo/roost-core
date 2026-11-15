@@ -3,7 +3,7 @@ package handler
 import (
 	"encoding/json"
 
-	"GENRE_MODULE/game/rules"
+	"GENRE_MODULE/game/modules/rules"
 )
 
 //roost:nest rollback=undo durability=strict

@@ -6,7 +6,7 @@ import (
 	"errors"
 	playerentity "example.com/idle-sim-practice/game/entities/player"
 	sender "example.com/idle-sim-practice/game/handler/syncsender"
-	idle "example.com/idle-sim-practice/game/idlesim"
+	idle "example.com/idle-sim-practice/game/modules/idlesim"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"

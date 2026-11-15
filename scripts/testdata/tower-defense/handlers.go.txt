@@ -3,7 +3,7 @@ package handler
 import (
 	db "example.com/tower-defense-practice/db"
 	matchentity "example.com/tower-defense-practice/game/entities/tower_room"
-	tower "example.com/tower-defense-practice/game/towerdefense"
+	tower "example.com/tower-defense-practice/game/modules/towerdefense"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"time"
 )

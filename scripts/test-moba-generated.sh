@@ -69,23 +69,23 @@ for name in ('match_result', 'battle_round', 'battle_directory'):
  p=root/'game/entities'/name/'entity.go'
  p.write_text(p.read_text().replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryWorld'))
 DEFS
-mkdir -p game/moba loadtest protocol/def
+mkdir -p game/modules/moba loadtest protocol/def
 cp "$repo_root/scripts/testdata/moba/result_protocol.go.txt" protocol/def/result.go
 cp "$repo_root/scripts/testdata/moba/robot.go.txt" loadtest/battle.go
-cp "$repo_root/scripts/testdata/moba/simulation.go.txt" game/moba/simulation.go
-cp "$repo_root/scripts/testdata/moba/simulation_test.go.txt" game/moba/simulation_test.go
+cp "$repo_root/scripts/testdata/moba/simulation.go.txt" game/modules/moba/simulation.go
+cp "$repo_root/scripts/testdata/moba/simulation_test.go.txt" game/modules/moba/simulation_test.go
 cp "$repo_root/scripts/testdata/moba/network_test.go.txt" game/handler/moba_network_test.go
-cp "$repo_root/scripts/testdata/moba/matchmaking_test.go.txt" game/moba/matchmaking_test.go
-for name in arena round room directory; do cp "$repo_root/scripts/testdata/moba/$name.go.txt" "game/moba/$name.go"; done
-for name in arena_test arena_network_test; do cp "$repo_root/scripts/testdata/moba/$name.go.txt" "game/moba/$name.go"; done
+cp "$repo_root/scripts/testdata/moba/matchmaking_test.go.txt" game/modules/moba/matchmaking_test.go
+for name in arena round room directory; do cp "$repo_root/scripts/testdata/moba/$name.go.txt" "game/modules/moba/$name.go"; done
+for name in arena_test arena_network_test; do cp "$repo_root/scripts/testdata/moba/$name.go.txt" "game/modules/moba/$name.go"; done
 cp "$repo_root/scripts/testdata/moba/round_handlers.go.txt" game/handler/moba_round.go
 cp "$repo_root/scripts/testdata/moba/round_handlers_test.go.txt" game/handler/moba_round_test.go
 cp "$repo_root/scripts/testdata/moba/settlement.go.txt" game/handler/moba_settlement.go
 cp "$repo_root/scripts/testdata/moba/settlement_test.go.txt" game/handler/moba_settlement_test.go
-gofmt -w loadtest/*.go db/def/*.go game/moba/*.go game/handler/moba_*.go
+gofmt -w loadtest/*.go db/def/*.go game/modules/moba/*.go game/handler/moba_*.go
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/moba ./game/handler | tee "$review_root/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/modules/moba ./game/handler | tee "$review_root/test.log"
 # 28 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestMOBA' "$review_root/test.log" || true)"
 if [[ "$passed" != 28 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then

@@ -50,7 +50,7 @@ ROOST_TOWER_DEFENSE_KEEP=1 bash scripts/test-tower-defense-generated.sh   # 保�
 
 1. `roost project new tower-defense-practice -module example.com/tower-defense-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity TowerRoom`、`roost add dao TowerRoom --entity TowerRoom`、`roost add timer --entity TowerRoom`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"nosync"` `` 与 ``Initialized bool `store:"initialized" dao:"nosync"` ``，在 `db/def/tower_room.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；把 `game/entities/tower_room/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（领奖时 Room 与 Player 一起锁，Room 放在更低的锁档，锁序固定）；放入业务包 `game/towerdefense/`、定时回调 `game/entities/tower_room/timer_handlers.go` 与 handler `game/handler/tower_defense.go`；
+3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"nosync"` `` 与 ``Initialized bool `store:"initialized" dao:"nosync"` ``，在 `db/def/tower_room.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；把 `game/entities/tower_room/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（领奖时 Room 与 Player 一起锁，Room 放在更低的锁档，锁序固定）；放入业务包 `game/modules/towerdefense/`、定时回调 `game/entities/tower_room/timer_handlers.go` 与 handler `game/handler/tower_defense.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> tower-defense`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 DAO 持久键变化的 WARN（加字段不需要迁移，老文档读成零值），见第 7 节。
 
@@ -62,9 +62,9 @@ ROOST_TOWER_DEFENSE_KEEP=1 bash scripts/test-tower-defense-generated.sh   # 保�
 
 | 顺序 | 文件 | 先回答的问题 |
 | --- | --- | --- |
-| 1 | `game/towerdefense/rules.go`（[rules.go.txt](../../scripts/testdata/tower-defense/rules.go.txt)） | 配置怎样经校验发布？一个房间怎样固定一代？ |
-| 2 | `game/towerdefense/state.go`（[state.go.txt](../../scripts/testdata/tower-defense/state.go.txt)） | 房间状态存了什么、视图裁掉什么？BFS 怎样保证入口到基地始终可达？加载时校验哪些不变量？ |
-| 3 | `game/towerdefense/match.go`（[match.go.txt](../../scripts/testdata/tower-defense/match.go.txt)） | 命令的身份（席位、Epoch、Seq、波次）怎样核对？准备屏障与开波、一步战斗怎样确定性推进？ |
+| 1 | `game/modules/towerdefense/rules.go`（[rules.go.txt](../../scripts/testdata/tower-defense/rules.go.txt)） | 配置怎样经校验发布？一个房间怎样固定一代？ |
+| 2 | `game/modules/towerdefense/state.go`（[state.go.txt](../../scripts/testdata/tower-defense/state.go.txt)） | 房间状态存了什么、视图裁掉什么？BFS 怎样保证入口到基地始终可达？加载时校验哪些不变量？ |
+| 3 | `game/modules/towerdefense/match.go`（[match.go.txt](../../scripts/testdata/tower-defense/match.go.txt)） | 命令的身份（席位、Epoch、Seq、波次）怎样核对？准备屏障与开波、一步战斗怎样确定性推进？ |
 | 4 | `game/handler/tower_defense.go`（[handlers.go.txt](../../scripts/testdata/tower-defense/handlers.go.txt)） | 共享金币、塔、路径、回执和定时器在哪个锁与提交边界里一起生效？领奖怎样与 Player 原子提交？ |
 | 5 | `game/entities/tower_room/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/tower-defense/timer_handlers.go.txt)） | 回调怎样核对节点身份与期限？为什么每次只算一步？ |
 | 6 | `game/handler/syncsender/` | 生成的 Sender 怎样把目标 ID 与业务参数交给 Nest；业务调用它，不手改 |
@@ -84,7 +84,7 @@ import (
 	"context"
 
 	syncsender "example.com/tower-defense-practice/game/handler/syncsender"
-	tower "example.com/tower-defense-practice/game/towerdefense"
+	tower "example.com/tower-defense-practice/game/modules/towerdefense"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )

@@ -54,7 +54,7 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 
 1. `roost project new idle-sim-practice -module example.com/idle-sim-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add timer --entity Player`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；放入业务包 `game/idlesim/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/idle_sim.go`；
+3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；放入业务包 `game/modules/idlesim/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/idle_sim.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> idle-sim`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
@@ -66,9 +66,9 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 
 | 顺序 | 文件 | 先回答的问题 |
 | --- | --- | --- |
-| 1 | `game/idlesim/rules.go`（[rules.go.txt](../../scripts/testdata/idle-sim/rules.go.txt)） | 配置怎样经校验发布？存档为什么在初始化时冻结一代？ |
-| 2 | `game/idlesim/state.go`（[state.go.txt](../../scripts/testdata/idle-sim/state.go.txt)） | 存档里有什么？`LastAt` 与 `Horizon` 各表示什么？视图为什么要深拷贝队列？ |
-| 3 | `game/idlesim/production.go`（[production.go.txt](../../scripts/testdata/idle-sim/production.go.txt)） | `Advance` 怎样把一段时间一次积分（倍率分段、余数、封顶、缓冲满暂停）？`Apply` 怎样先结算再改？ |
+| 1 | `game/modules/idlesim/rules.go`（[rules.go.txt](../../scripts/testdata/idle-sim/rules.go.txt)） | 配置怎样经校验发布？存档为什么在初始化时冻结一代？ |
+| 2 | `game/modules/idlesim/state.go`（[state.go.txt](../../scripts/testdata/idle-sim/state.go.txt)） | 存档里有什么？`LastAt` 与 `Horizon` 各表示什么？视图为什么要深拷贝队列？ |
+| 3 | `game/modules/idlesim/production.go`（[production.go.txt](../../scripts/testdata/idle-sim/production.go.txt)） | `Advance` 怎样把一段时间一次积分（倍率分段、余数、封顶、缓冲满暂停）？`Apply` 怎样先结算再改？ |
 | 4 | `game/handler/idle_sim.go`（[handlers.go.txt](../../scripts/testdata/idle-sim/handlers.go.txt)） | 命令、查回执分别在哪个锁与提交边界里生效？唤醒定时器在哪里替换？ |
 | 5 | `game/entities/player/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/idle-sim/timer_handlers.go.txt)） | 唤醒回调怎样核对身份？离线很久为什么只积分一次？ |
 | 6 | `game/handler/syncsender/` | 生成的 Sender 怎样把 Player ID 与业务参数交给 Nest；业务调用它，不手改 |
@@ -88,7 +88,7 @@ import (
 	"context"
 
 	syncsender "example.com/idle-sim-practice/game/handler/syncsender"
-	"example.com/idle-sim-practice/game/idlesim"
+	"example.com/idle-sim-practice/game/modules/idlesim"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )

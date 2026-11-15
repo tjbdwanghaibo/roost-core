@@ -35,16 +35,16 @@
 "$ROOST" add timer --entity Player
 dao_add Player db/def/player.go "State string state" "WakeTimer int64 wake_timer"
 F="$CORE/scripts/testdata/idle-sim"
-mkdir -p game/idlesim
-for n in rules state production rules_test; do cp "$F/$n.go.txt" "game/idlesim/$n.go"; done
+mkdir -p game/modules/idlesim
+for n in rules state production rules_test; do cp "$F/$n.go.txt" "game/modules/idlesim/$n.go"; done
 cp "$F/timer_handlers.go.txt" game/entities/player/timer_handlers.go
 cp "$F/handlers.go.txt"       game/handler/idle_sim.go
 cp "$F/gameplay_test.go.txt"  game/handler/idle_sim_test.go
-fix_mod idle-sim-practice game/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
-gofmt -w db/def/*.go game/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
+fix_mod idle-sim-practice game/modules/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
+gofmt -w db/def/*.go game/modules/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" idle-sim   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestIdleSim' ./game/idlesim ./game/handler 2>&1 | tee "$WORK/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestIdleSim' ./game/modules/idlesim ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
 期望 `--- PASS: TestIdleSim` 恰好 **13** 条（12 条业务 + `TestIdleSimRobotBusiness`）、0 skip。
@@ -56,16 +56,16 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestIdleSim' ./game/idlesi
 "$ROOST" add timer --entity Player
 dao_add Player db/def/player.go "State string state" "WakeTimer int64 wake_timer"
 F="$CORE/scripts/testdata/merge-casual"
-mkdir -p game/mergecasual
-for n in rules state operations reward rules_test; do cp "$F/$n.go.txt" "game/mergecasual/$n.go"; done
+mkdir -p game/modules/mergecasual
+for n in rules state operations reward rules_test; do cp "$F/$n.go.txt" "game/modules/mergecasual/$n.go"; done
 cp "$F/timer_handlers.go.txt" game/entities/player/timer_handlers.go
 cp "$F/handlers.go.txt"       game/handler/merge_casual.go
 cp "$F/gameplay_test.go.txt"  game/handler/merge_casual_test.go
-fix_mod merge-casual-practice game/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
-gofmt -w db/def/*.go game/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
+fix_mod merge-casual-practice game/modules/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
+gofmt -w db/def/*.go game/modules/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" merge-casual   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/mergecasual ./game/handler 2>&1 | tee "$WORK/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/modules/mergecasual ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
 期望 `--- PASS: TestMergeCasual` 恰好 **16** 条（15 条业务 + `TestMergeCasualRobotBusiness`）、0 skip。两者都以 SKILL.md §3.4 收尾。
@@ -99,7 +99,7 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/me
 ## 7. 验证
 
 - 放置：§3.1 12 条 PASS + SKILL.md §3.4；2026-10-31 在 v1.33.0 检出、自定 module 实测通过。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：12 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 FAIL。
-- 合成：§3.2 15 条 PASS。2026-10-31 在 v1.33.1 检出、自定 module `example.com/mymerge` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：15 PASS（`game/mergecasual` 3 + `game/handler` 12）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL。同日在 v1.33.0 上执行，唯一错误是 `merge_casual_test.go` 三处 `Sync_TickPlayerTimer` 多传参数。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：15 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 FAIL。仓库脚本另把 `scripts/testdata/merge-casual/persistence/*_test.go` 复制进 `game/handler` 后 `go vet`（只编译），一档 demo 可省。
+- 合成：§3.2 15 条 PASS。2026-10-31 在 v1.33.1 检出、自定 module `example.com/mymerge` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：15 PASS（`game/modules/mergecasual` 3 + `game/handler` 12）、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL。同日在 v1.33.0 上执行，唯一错误是 `merge_casual_test.go` 三处 `Sync_TickPlayerTimer` 多传参数。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：15 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 FAIL。仓库脚本另把 `scripts/testdata/merge-casual/persistence/*_test.go` 复制进 `game/handler` 后 `go vet`（只编译），一档 demo 可省。
 - 二档：各自 `*_REAL=1`（隔离 Mongo 副本集）SIGKILL 后冷加载、补算一次、下一期限按时投递，第三个进程核对（IDLE §11、MERGE §12）。
 
 ## 8. 手册指针

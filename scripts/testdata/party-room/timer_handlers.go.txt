@@ -3,7 +3,7 @@ package party_room
 import (
 	"time"
 
-	party "example.com/party-room-practice/game/partyroom"
+	party "example.com/party-room-practice/game/modules/partyroom"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 )
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"GENRE_MODULE/game/scenarionet"
+	"GENRE_MODULE/game/modules/scenarionet"
 	bots "GENRE_MODULE/loadtest"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"

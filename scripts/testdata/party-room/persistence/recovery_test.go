@@ -17,7 +17,7 @@ import (
 	playerentity "example.com/party-room-practice/game/entities/player"
 	sender "example.com/party-room-practice/game/handler/syncsender"
 	gameheartbeat "example.com/party-room-practice/game/modules/heartbeat"
-	party "example.com/party-room-practice/game/partyroom"
+	party "example.com/party-room-practice/game/modules/partyroom"
 	"example.com/party-room-practice/protocol/msgid"
 	"github.com/spf13/viper"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
