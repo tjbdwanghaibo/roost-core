@@ -13,7 +13,7 @@
   - `Resolver(registry) (skill.ProgramResolver, error)`：给技能运行时恢复 checkpoint 用的解析器；它的 `ResolveProgram(id, digest)` 同时核对游戏逻辑摘要，定义改过规则的同名技能接不到旧的施法上。
   - `CompileEnvironment() skill.CompileEnvironment`（`skillbook_rules.go`）：工程的技能编译环境，启动、doctor 与别的功能用同一份。
   - 包 `game/modules/skills`（`catalog.go`）：`CompileAll(environment) (*Catalog, error)`，把内嵌的 `*.json` 全部解析、编译。
-  - `Controller.HandleSkillCatalog`（`game/controllers/skillbook/skillbook_catalog.go`）：协议端点，不经过 Nest。
+  - `Controller.HandleSkillCatalog`（`game/controllers/skillbook.go`）：协议端点，不经过 Nest。
 - **登记点**（`game/modules/skillbook/skillbook_rules.go`）
   - `OnCompileEnvironment(name string, apply func(*skill.CompileEnvironment))`：往编译环境里加业务的 Host 能力、状态目录等。只在包 `init` 里登记，运行期不能换；空名、nil、重名 panic。每次取环境都从独立的缺省环境出发，按名字顺序调用，全部扩展完之后统一算摘要。
 - **状态**：无玩家状态。目录是服务级、启动后只读的内存对象。
@@ -50,6 +50,6 @@
 
 ## 验证范围
 
-- `roost module verify skillbook`：11 条场景（`^TestSkillbook`，包 `./game/modules/skillbook` 9 条、`./game/controllers/skillbook` 2 条）。覆盖：启动编译出缺省目录、编译环境的钩子在算摘要之前执行、应答排序且是副本、编译失败不发布任何东西、缺输入拒绝、重复启动不破坏运行中的目录、停止后拒绝读取且可重复停止、取回启动时的 Program 并核对摘要、发布的 Program 表归目录所有；端点读到启动目录、缺上下文或请求时拒绝。
+- `roost module verify skillbook`：11 条场景（`^TestSkillbook`，包 `./game/modules/skillbook` 9 条、`./game/controllers` 2 条）。覆盖：启动编译出缺省目录、编译环境的钩子在算摘要之前执行、应答排序且是副本、编译失败不发布任何东西、缺输入拒绝、重复启动不破坏运行中的目录、停止后拒绝读取且可重复停止、取回启动时的 Program 并核对摘要、发布的 Program 表归目录所有；端点读到启动目录、缺上下文或请求时拒绝。
 - `game/modules/skills` 包里另有一条 `TestSkillCatalogCompiles`（缺省定义能编译），不在上面的计数里。
 - 全部是进程内的离线场景，不经过网络；`SkillCatalog` 经真实 TCP 的路径没有在本模块的场景里验证。

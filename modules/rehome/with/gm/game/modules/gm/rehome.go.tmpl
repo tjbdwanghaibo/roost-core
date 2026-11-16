@@ -3,7 +3,7 @@ package gm
 import (
 	"context"
 
-	controller "{{MODULE}}/game/controllers/rehome"
+	"{{MODULE}}/game/controllers"
 	player "{{MODULE}}/game/entities/player"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -32,12 +32,12 @@ func movePlayer(ctx context.Context, registry *app.Registry, command admin.Comma
 	if payload.To <= 0 {
 		return admin.Result{}, Invalid("to must be positive")
 	}
-	rehome, err := controller.FromRegistry(registry)
+	rehome, err := controllers.FromRegistry(registry)
 	if err != nil {
 		return admin.Result{}, err
 	}
 	// 沿用换服驱动器的 Nest prepare、排空与 account 提交。失败和后台续行由驱动器负责，不另起流程。
-	ticket, err := rehome.Move(ctx, unique, payload.To, "gm "+command.Operator+": "+payload.Note)
+	ticket, err := rehome.RehomeMove(ctx, unique, payload.To, "gm "+command.Operator+": "+payload.Note)
 	if err != nil {
 		return admin.Result{}, err
 	}

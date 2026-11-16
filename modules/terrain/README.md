@@ -38,11 +38,11 @@
   - `terrain_full`：这名玩家站立的建筑数到了上限。
   - 不是玩家的拒绝不带码，端点答框架的内部码并记一条 Error：`ErrBase`（持久地形与地形包版本不符）、`ErrState`（持久数据或服务端传入的参与者与这张图对不上）、提交失败。
 
-**日志**：建造 / 拆除确认记 Info，带序号、建筑号和 duplicate；开图、关闭、Refresh 记 Debug；端点异常记 Error，已知规则拒绝静默，笔刷成功不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/terrain/controller.go`, `game/modules/terrain/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：建造 / 拆除确认记 Info，带序号、建筑号和 duplicate；开图、关闭、Refresh 记 Debug；端点异常记 Error，已知规则拒绝静默，笔刷成功不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/terrain.go`, `game/modules/terrain/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
-- **启动顺序**：控制器在 Provide 仅保存 Registry，Execute / Query 在请求时读取 Start 已发布的 Runtime；加载失败仍中止启动，不使用空 runtime 代替。夹具同样先构造控制器、后启动 Scene / Terrain，避免遗漏正式接线时序。
+- **启动顺序**：控制器在 Provide 仅保存 Registry，TerrainExecute / Query 在请求时读取 Start 已发布的 Runtime；加载失败仍中止启动，不使用空 runtime 代替。夹具同样先构造控制器、后启动 Scene / Terrain，避免遗漏正式接线时序。
 
 - **规模上限**（写在 `rules.go` 与 `world.go`）：一个进程至多 4 张地形图；每张图至多 2×2 块；每名玩家至多 32 座站立的建筑；场景号必须在 2 到 2²⁰−1 之间，并且一个编号必须始终代表同一个编辑空间——关图、重启后不能把这个编号配给另一张地图。
 - **单次编辑的限制**：笔刷半径 1～400（4m）；抬高 / 压低的 `Strength` 1～20（最多 2m）且 `Material` 必须为 0；刷材质的 `Material` 0～4 且 `Strength` 必须为 0；高度原始值限制在 0～200；一次笔刷至多涉及 4 块。建筑固定占 2×2 个采样点，锚点必须是整米坐标；放置要求四个点不在水下、高差不超过 50cm、不与别的建筑重叠；没有旋转、类型、参数。
@@ -81,7 +81,7 @@
 
 ## 验证范围
 
-- `roost module verify terrain`：28 条场景（`^TestTerrain`，包 `./game/controllers/terrain`）。覆盖：缺省包接到场景与行走判定、笔刷同时提交四块与玩家账本、重发只读、异内容 / 旧号 / 跳号拒绝、跨场景权限在事务内检查、过远与畸形笔刷、不同地图的同坐标有独立的持久号、建筑锁住四块 + 建筑槽 + 账本、重叠与拆别人的建筑被拒、不能刷建筑脚下、拆除释放占地但不恢复旧高度、提交失败时全部目标与视图回滚、建筑提交失败不发布占位、并发重叠建造只有一个成功、冷恢复保留编辑 / 占地 / 建筑 / 序号、换了版本的包不覆盖编辑、建筑数上限、同步暴露地表而隐藏占地权威、投影失败保留事实且 `Refresh` 可修复、PB 端点用认证身份与生成的编解码、每种正常拒绝经 PB 端点答各自的业务码（六个码互不相同；不返回 error、不写、不消耗序号、不记 Error；序号被拒之后按 `TerrainQuery` 的 `LastSequence` 续号成功）、落点太陡答 `terrain_site` 而平地可建、提交失败与参与者对不上答内部码并记 Error、损坏的包与地图数预算被拒、两个可编译的行为变异被发现、停机只排空地形图。
+- `roost module verify terrain`：28 条场景（`^TestTerrain`，包 `./game/controllers`）。覆盖：缺省包接到场景与行走判定、笔刷同时提交四块与玩家账本、重发只读、异内容 / 旧号 / 跳号拒绝、跨场景权限在事务内检查、过远与畸形笔刷、不同地图的同坐标有独立的持久号、建筑锁住四块 + 建筑槽 + 账本、重叠与拆别人的建筑被拒、不能刷建筑脚下、拆除释放占地但不恢复旧高度、提交失败时全部目标与视图回滚、建筑提交失败不发布占位、并发重叠建造只有一个成功、冷恢复保留编辑 / 占地 / 建筑 / 序号、换了版本的包不覆盖编辑、建筑数上限、同步暴露地表而隐藏占地权威、投影失败保留事实且 `Refresh` 可修复、PB 端点用认证身份与生成的编解码、每种正常拒绝经 PB 端点答各自的业务码（六个码互不相同；不返回 error、不写、不消耗序号、不记 Error；序号被拒之后按 `TerrainQuery` 的 `LastSequence` 续号成功）、落点太陡答 `terrain_site` 而平地可建、提交失败与参与者对不上答内部码并记 Error、损坏的包与地图数预算被拒、两个可编译的行为变异被发现、停机只排空地形图。
 - monster 联动另有 2 条（`^TestWithTerrainMonster`）。
 - 这些是离线场景：真实的 Nest 多实体事务、生成的 DAO / Sender、真实的地形包读写；提交器与同步传输是内存替身。另有 2026-11-13 单机真实依赖演练，完成新工程启动与 Portal / TCP 进入 2 号场景、查询默认块。该演练没有验证地形编辑的跨进程耐久性、客户端渲染或容量性能。
 - 仓库侧的安装验收是 `codegen/internal/roost` 里的 `TestModuleTerrainInstallAndVerify`。

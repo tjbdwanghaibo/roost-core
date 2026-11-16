@@ -35,7 +35,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 **错误码**（`internal/errors/room.go`）：`room_invalid`（参数或操作不合法）、`room_unopened`（还没初始化）、`room_closed`、`room_full`、`room_not_member`、`room_stale_epoch`（代际或连接对不上）、`room_not_host`。
 
-**日志**：玩家加入、离开、重连、关闭、断线确认记 Info；服务端开房记 Debug。加入返回房主；离开不返回新房主，不为日志追加查询。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/room/room_close.go`, `game/controllers/room/room_join.go`, `game/controllers/room/room_leave.go`, `game/controllers/room/room_reconnect.go`, `game/modules/room/room.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：玩家加入、离开、重连、关闭、断线确认记 Info；服务端开房记 Debug。加入返回房主；离开不返回新房主，不为日志追加查询。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/room.go`, `game/modules/room/room.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -68,7 +68,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 ## 验证范围
 
-- `roost module verify room`：29 条场景（`game/handler` 21 条、`game/controllers/room` 4 条、`game/modules/room` 3 条、`game/managers` 1 条）。
+- `roost module verify room`：29 条场景（`game/handler` 21 条、`game/controllers` 4 条、`game/modules/room` 3 条、`game/managers` 1 条）。
 - 离线：真实的 Nest 引擎、生成的 Sender、正式的 ManagerAccess 与 lifecycle，提交器是替身（可以注入提交失败）；没有 Mongo、Redis 与真实网络。
 - 覆盖：容量、幂等、座位复用、房主交接、关闭终态、CAS 竞争、旧连接的请求与关闭事件、PB 编解码、成员权限、BSON 往返恢复、代际上限，以及 Join / Reconnect / Leave / Close 提交失败后的完整回滚；加载失败不会建出空实体。
 - 断线订阅与重启（D24）：经真实控制器、生成的 Sender 与 Nest——连接关了席位自动断线（座位与房主不变）、Join 提交之前就关了的连接登记时补上、丢掉的关闭事件由补扫补上、离开之后不再登记（`TestRoomClosedConnectionMarksTheSeatOffline`，接入层是替身）；`Presence` 自身——一条连接坐在多间房各断一次、撤掉的不再断、失败重试与三次放弃、停了退订（`game/modules/room`）；manager 起停与缺能力时拒绝启动（`game/managers`）；从持久字节重新装载之后全部断线、成员换连接重连才在线、旧连接的重放被拒，离开 / 重连被拒提交时在线标记一起回滚（`game/handler`）。没有经真实 TCP / Gate 的断线与真实进程 kill -9 重启。

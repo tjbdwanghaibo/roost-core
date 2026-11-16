@@ -1,0 +1,165 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamerehome "{{MODULE}}/game/modules/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// 换服的入口：协议端点 RehomeApply（玩家自己申请）与服务端入口 RehomeMove（GM、运维），
+// 两者走同一个驱动器（game/modules/rehome 的 Driver）。换服的顺序、每一步失败的去向都在 Driver 的注释里。
+//
+// 这里自己不保存状态：在途的换服记在 Residency 的迁出表里。
+
+// rehomeDrivers 让一个进程（一个 Registry）只有一个 Driver：协议端点、进入游戏的联动、GM 入口拿到的是同一个。
+var (
+	rehomeDriversMu sync.Mutex
+	rehomeDrivers   = map[*app.Registry]*gamerehome.Driver{}
+)
+
+// RehomeDriverFromRegistry 取这个进程的换服驱动器，第一次用到时建。自己写进入流程的工程用它调 Admit 与 Arrive。
+// account 服务的客户端在业务服务 uses: [account] 时由 ClientMod 发布，建驱动器时就取；
+// 玩家传输与 DataEngine 到真正要断开会话、交出实体时才取。
+func RehomeDriverFromRegistry(registry *app.Registry) (*gamerehome.Driver, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("rehome controller: app registry is required")
+	}
+	rehomeDriversMu.Lock()
+	defer rehomeDriversMu.Unlock()
+	if driver := rehomeDrivers[registry]; driver != nil {
+		return driver, nil
+	}
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("rehome controller: nest client is unavailable")
+	}
+	self, err := gamerehome.SelfSID(registry)
+	if err != nil {
+		return nil, err
+	}
+	// account 的客户端此刻必须已经发布；但 Driver 拿的是“用到时再取”的那一层：
+	// 业务服务自己的 Residency（以及自己的 Directory）可能在协议绑定之后才发布。
+	if _, err := gamerehome.DirectoryOf(registry); err != nil {
+		return nil, err
+	}
+	driver, err := gamerehome.NewDriver(gamerehome.DriverConfig{
+		Registry: registry, Self: self, Directory: gamerehome.RegistryDirectory(registry),
+		Residency: gamerehome.RegistryResidency(registry), Profile: newRehomeProfile(client), EntityID: rehomePlayerEntityID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	rehomeDrivers[registry] = driver
+	return driver, nil
+}
+
+// rehomeDriver 取这个进程的换服驱动器（RehomeDriverFromRegistry）：驱动器按 Registry 只建一次，这里每次现取。
+func (controller *Controller) rehomeDriver() (*gamerehome.Driver, error) {
+	if controller == nil || controller.Registry() == nil {
+		return nil, fmt.Errorf("rehome controller: not assembled")
+	}
+	return RehomeDriverFromRegistry(controller.Registry())
+}
+
+// RehomeMove 是不经协议的服务端入口：把一名玩家换到 to 服，给 GM 命令与运维工具调用。它与 RehomeApply 走同一个驱动器，
+// 区别是不受规则文件约束（可去的服、冷却）；别的功能登记的检查、account 的条件照常生效。note 写进 account 的
+// 换服记录（谁、为什么）。
+//
+// 必须在这名玩家当前绑定的服的进程里调用（别的服答 rehome_elsewhere）。返回 Ticket 表示已受理、后台在继续，
+// 不表示已经换成；结论看 account 的角色记录（accountctl show-role），或者本进程的日志。
+// 会等待（account、Nest 事务），不能在 Nest 业务 worker 上调用。
+func (controller *Controller) RehomeMove(ctx context.Context, playerID int64, to int32, note string) (gamerehome.Ticket, error) {
+	driver, err := controller.rehomeDriver()
+	if err != nil {
+		return gamerehome.Ticket{}, err
+	}
+	return driver.Apply(ctx, gamerehome.Request{PlayerID: playerID, To: to, Operator: true, Note: note})
+}
+
+// rehomePlayerEntityID 把玩家号换成他的 Player 的完整 Entity ID。
+func rehomePlayerEntityID(playerID int64) (int64, error) {
+	return entity.BuildEntityID(playerID, player.EntityKindPlayer)
+}
+
+// rehomeProfile 把驱动器对玩家档的三个写入接到 Nest 上：每个都是 Player 上的一笔事务。
+type rehomeProfile struct {
+	prepares *syncsender.RehomePrepareSender
+	cancels  *syncsender.RehomeCancelSender
+	arrives  *syncsender.RehomeArriveSender
+}
+
+func newRehomeProfile(client corenest.Client) *rehomeProfile {
+	return &rehomeProfile{
+		prepares: syncsender.NewRehomePrepareSender(client),
+		cancels:  syncsender.NewRehomeCancelSender(client),
+		arrives:  syncsender.NewRehomeArriveSender(client),
+	}
+}
+
+func (p *rehomeProfile) Prepare(ctx context.Context, move gamerehome.Move) error {
+	return p.prepares.Sync_RehomePrepare(ctx, move.EntityID, move.ID, move.From, move.To, move.Operator)
+}
+
+// Recheck 就是同一个换服 ID 的 RehomePrepare 再发一次：意图已经记着时它只重跑事务内的检查。
+func (p *rehomeProfile) Recheck(ctx context.Context, move gamerehome.Move) error {
+	return p.prepares.Sync_RehomePrepare(ctx, move.EntityID, move.ID, move.From, move.To, move.Operator)
+}
+
+func (p *rehomeProfile) Cancel(ctx context.Context, playerID int64, transferID string) error {
+	entityID, err := rehomePlayerEntityID(playerID)
+	if err != nil {
+		return err
+	}
+	_, err = p.cancels.Sync_RehomeCancel(ctx, entityID, transferID)
+	return err
+}
+
+func (p *rehomeProfile) Arrive(ctx context.Context, playerID int64, sid int32) (gamerehome.ArriveResult, error) {
+	entityID, err := rehomePlayerEntityID(playerID)
+	if err != nil {
+		return gamerehome.ArriveResult{}, err
+	}
+	return p.arrives.Sync_RehomeArrive(ctx, entityID, sid)
+}
+
+// HandleRehomeApply 是玩家自己申请换服的入口；玩家是谁取自已认证的连接。
+//
+// 应答 Code 为 0 表示已受理：换服已经在 account 登记，TransferID 是这一次的换服 ID。其后在后台继续——
+// 执行离开钩子、断开这名玩家的连接、交出他的档、让 account 改绑。受理之后不论换成没换成，这条连接都会被断开；
+// 客户端重新选角，角色所在的服变了就是换成了。
+//
+// 拒绝时什么都没有改，Code 是原因：rehome_refused（目标不行、被检查否决、account 不接受）、rehome_cooldown、
+// rehome_moving（已经有一次在途）、rehome_elsewhere（他不归本服）、retryable（没有执行，原样再发）。
+func (controller *Controller) HandleRehomeApply(context *playeraccess.Context, request *pb.RehomeApplyRequest) (*pb.RehomeApplyResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("rehome_apply endpoint: context and request are required")
+	}
+	driver, err := controller.rehomeDriver()
+	if err != nil {
+		return nil, fmt.Errorf("rehome_apply endpoint: controller is not assembled: %w", err)
+	}
+	ticket, err := driver.Apply(context.Context(), gamerehome.Request{PlayerID: context.PlayerID, To: request.To})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == apperrors.ErrRehomeRefused.Code() || code == apperrors.ErrRehomeCooldown.Code() {
+			slog.InfoContext(context.Context(), "rehome: application refused", "player_id", context.PlayerID, "to", request.To, "code", code)
+		}
+		if code == errcode.CodeInternal {
+			slog.Error("rehome_apply failed", "player_id", context.PlayerID, "to", request.To, "err", err)
+		}
+		return &pb.RehomeApplyResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.RehomeApplyResponse{TransferID: ticket.ID, To: ticket.To}, nil
+}

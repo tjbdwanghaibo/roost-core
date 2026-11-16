@@ -48,7 +48,7 @@
   - `scene_sequence`：交互序号不是上一次成功的序号加 1（跳号、旧号、0），或同一个序号换了场景或对象。
   - 框架码（没进入游戏的 `entity_not_found` 等）与登记的回调返回的带码错误同样答在应答里。
 
-**日志**：玩家切图、撤离确认记 Info；开图、关闭、排空准入记 Debug。时间倍率只提供 handler / Sender，日志由外部调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/scene/controller.go`, `game/modules/scene/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：玩家切图、撤离确认记 Info；开图、关闭、排空准入记 Debug。时间倍率只提供 handler / Sender，日志由外部调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/scene.go`, `game/modules/scene/service/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -63,7 +63,7 @@
   - `SceneInteract`：序号必须是上一次的加 1。重发**最后一次**的同一请求返回上次的应答、不再触发回调；跳号、旧号、同序号换了场景或对象都拒绝。只保留最后一份回执，所以它只防紧接着的重发。
   - 断线不改成员：仍加载但断线的角色继续占容量（方便重连）；已卸载的角色留下的成员在 `Admit` / `Close` / `Stop` 持锁核实后清理。
   - 关图：`Close` 不会踢人；`Drain` / `Stop` 失败（某个模块没清干净、撤离事务被拒）时保留场景，可重试；别的实体 kind 没登记 `RegisterDrainer` 却还在图里时，`Drain` 返回错误。
-- **只有内部错误才断开连接**：`HandleSceneChange` / `HandleSceneInteract`（`game/controllers/scene/`，分类在 `controller.go` 的 `refusal`）把带码的错误答在应答里、连接保留；不带码的错误（提交被拒、回调返回了不带码的错误、找不到落脚点、结果未知）作为 Go error 返回，接入层按分发失败结束这条连接（`infra/network/gateway/tcp.go` 的 `dispatchRequest`），客户端重连后用 `FromID == ToID` 重新对齐。这一点与生成的端点不同——生成的端点对内部错误也答 `CodeInternal`、不断开。
+- **只有内部错误才断开连接**：`HandleSceneChange` / `HandleSceneInteract`（`game/controllers/scene.go`，分类在 `sceneRefusal`）把带码的错误答在应答里、连接保留；不带码的错误（提交被拒、回调返回了不带码的错误、找不到落脚点、结果未知）作为 Go error 返回，接入层按分发失败结束这条连接（`infra/network/gateway/tcp.go` 的 `dispatchRequest`），客户端重连后用 `FromID == ToID` 重新对齐。这一点与生成的端点不同——生成的端点对内部错误也答 `CodeInternal`、不断开。
 - **`scene_stale` 之后客户端要自己知道在哪**：应答不带玩家实际所在的场景号。客户端按最近一次成功的 `SceneChange` 应答对齐；自身视图里的 `Actor.SceneID` 是 Scene 的完整实体号，不是 `SceneChange` 用的场景号。
 - **交互序号没有查询入口**：`SceneInteraction` 只落库不下发，也没有读它的协议；客户端丢了自己的序号（重装、换设备）之后只能逐个试，每次不对都答 `scene_sequence`。
 - **不做的事**：不做移动（在 actor）；不做怪物、战斗、掉落；不做有状态的 NPC / 建筑（`Config` 里的区域与对象是静态只读的，有状态的要另建实体）；不做场景内广播协议；不做动态开图的客户端入口；时间域只有倍率（0～4），不影响全局业务时间。
@@ -104,7 +104,7 @@ scene 自己的 `with/`：
 
 ## 验证范围
 
-- `roost module verify scene`：28 条场景（`^TestScene`，包 `./game/controllers/scene`）。每一种业务拒绝都断言“controller 不返回 error、应答带着指定的业务码与原因、状态没变、同一控制器上改对之后重发成功”。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期或已关闭的 `FromID` 答 `scene_stale`、客户端不能开图（`scene_unavailable`）、有人的图不能关、满员答 `scene_full` 且不把人从原图踢掉、停机中的图答 `scene_unavailable`、回调的带码拒绝照样答码并整笔撤销、七个码互不相同且不带码的错误不被当成业务拒绝、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与回调失败回滚、交互按连续序号只生效一次（同号换内容、跳号、0 都答 `scene_sequence` 且不消耗序号）、不能够到别的场景（`scene_not_here`）、没开的场景（`scene_unavailable`）、不存在的对象（`scene_object_unknown`）或远处的对象（`scene_object_far`）、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
+- `roost module verify scene`：28 条场景（`^TestScene`，包 `./game/controllers`）。每一种业务拒绝都断言“controller 不返回 error、应答带着指定的业务码与原因、状态没变、同一控制器上改对之后重发成功”。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期或已关闭的 `FromID` 答 `scene_stale`、客户端不能开图（`scene_unavailable`）、有人的图不能关、满员答 `scene_full` 且不把人从原图踢掉、停机中的图答 `scene_unavailable`、回调的带码拒绝照样答码并整笔撤销、七个码互不相同且不带码的错误不被当成业务拒绝、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与回调失败回滚、交互按连续序号只生效一次（同号换内容、跳号、0 都答 `scene_sequence` 且不消耗序号）、不能够到别的场景（`scene_not_here`）、没开的场景（`scene_unavailable`）、不存在的对象（`scene_object_unknown`）或远处的对象（`scene_object_far`）、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
 - 联动：`with/chat` 5 条，`with/profile` / `with/attribute` / `with/equipment` 各 2 条；combat 模块拥有的 `with/scene` 另有 2 条。各联动都实际解码快照与增量，检查公开值存在、私有值不泄露、本人仍能看到私有值。
 - 这些是离线场景：使用实际的 Controller、生成的 Sender、Nest 多实体事务、DAO、movement、Sync AOI 与时间域；提交器与同步 / 网络传输是受控的内存替身。这些单测不证明真实存储与网络；另有 2026-11-13 单机真实 Mongo / Redis / NATS / etcd 与 Portal / TCP 演练：拒绝后同连接继续切图、交互拒绝、地形查询与退场通过。未验证跨机、容量与灾难恢复。
 - 场景夹具按正式顺序先构造控制器、后启动 runtime，并检查就绪前的请求明确失败、就绪后同一控制器恢复可用。

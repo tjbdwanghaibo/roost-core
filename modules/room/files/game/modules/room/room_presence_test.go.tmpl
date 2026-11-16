@@ -12,7 +12,7 @@ import (
 )
 
 // Presence 自身的契约（不经 Nest：断线调用换成记录用的替身）。经真实控制器与 Nest 的整条链路在
-// game/controllers/room 的 TestRoomClosedConnectionMarksTheSeatOffline。
+// game/controllers/room_test.go 的 TestRoomClosedConnectionMarksTheSeatOffline。
 
 type presenceConns struct {
 	mu          sync.Mutex

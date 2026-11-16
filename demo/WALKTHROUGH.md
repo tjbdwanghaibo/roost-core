@@ -557,7 +557,7 @@ demo 在模块之上接的线：
 - **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：开着分区场景的服拒绝（SceneActor 还不能交接），非法分区配置也拒绝迁服；坐在本进程某一局对战里的玩家申请时与离开时各拒一次（lockstep 房间在本进程内存里，`battleManager.Seated`）。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。匹配票据不拦：离开中的玩家不再是本进程撮合的候选（`PlayerOwners.Resident` 不认迁出表里的玩家），票据在全服共用的 match 服务里，换走之后由所在服处理或到期。副本不拦：session 服务的 run 与领奖账本都跟着玩家走。地形编辑账本随玩家交出（见下面“交出带上只由他所在进程写的实体”）。名下建筑留在地图上（建筑是地图的实体、不是玩家的档，按地形 DAO 的库范围归属，待维护者决定），全服邮件的服范围不随换服迁移，也待维护者决定。
 - **联盟消费者启动**（`internal/service/game/alliance.go`）：Service.Init 先创建 PlayerOwners，再发布模块 PlayerBinding 适配并启动联盟 runtime。demo 在 manifest 关闭该 runtime 的自动接线，业务逻辑仍全部来自模块。App 先排空 Saga ingress，再关闭业务服务。
 
-用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/modules/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
+用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/modules/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome_test.go`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
 
 ## 兴趣：距离是一种视野，关系是另一种
 
@@ -632,7 +632,7 @@ demo 在模块之上接的线：
 
 技能目录来自 [skillbook 模块](../modules/README.md)，demo 只覆盖规则数据 `game/modules/skills/fireball.json`。模块的 `game/modules/skills/catalog.go` 把目录下的 JSON
 嵌进二进制并用 `gameplay/skill` 严格 `Parse` + `Compile`。生成的服务适配层在业务 `Init` 前编译整份目录——**编不过就不起来**；
-warning 数进日志，编译环境在 `game/modules/skillbook/skillbook_rules.go`。`game/controllers/skillbook` 的 `SkillCatalog` 端点读取启动时发布的同一份目录，
+warning 数进日志，编译环境在 `game/modules/skillbook/skillbook_rules.go`。`game/controllers/skillbook.go` 的 `SkillCatalog` 端点读取启动时发布的同一份目录，
 返回排序后的 id 与 warning 数；消息号安装时分配，见 `roost.yaml` 的 `modules.skillbook.ids`，机器人断言至少一个且 0 warning。
 技能**执行**（Host 读已锁 Entity、确定性 tick、checkpoint / replay）刻意没进 demo，见 `roost help skill`。
 

@@ -555,7 +555,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/rewards/rewards.go", "game/rewards/rewards_test.go",
 		"services/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
-		"game/modules/skills/fireball.json", "game/modules/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook/skillbook_catalog.go",
+		"game/modules/skills/fireball.json", "game/modules/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook.go",
 		"internal/service/game/gm.go",
 		"saga/gift_item/definition.go", "game/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
 		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player/send_gift.go", "game/controllers/player/gift_status.go",
@@ -808,7 +808,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners))") {
 		t.Errorf("the game service does not publish its ownership table as the rehome module's Residency")
 	}
-	if gm := read("game/modules/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, unique, payload.To,") {
+	if gm := read("game/modules/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.RehomeMove(ctx, unique, payload.To,") {
 		t.Errorf("the game GM lacks gm.player.rehome, or it does not go through the rehome module's server-side entry")
 	}
 	if checks := read("internal/service/game/rehome_checks.go"); !strings.Contains(checks, `gamerehome.OnApplying("game"`) {
@@ -934,7 +934,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if check < 0 || serve < 0 || check > serve || !strings.Contains(flow, "gamerehome.OwnerSID(err)") {
 		t.Errorf("the demo's enter flow does not run the checks before entering ahead of taking the player into service:\n%s", flow)
 	}
-	if glue := read("game/controllers/rehome/rehome_enter.go"); !strings.Contains(glue, `gamelogin.OnEntering("rehome"`) || !strings.Contains(glue, `gamelogin.OnEntered("rehome"`) {
+	if glue := read("game/controllers/rehome_enter.go"); !strings.Contains(glue, `gamelogin.OnEntering("rehome"`) || !strings.Contains(glue, `gamelogin.OnEntered("rehome"`) {
 		t.Errorf("the rehome+enter glue was not written into the demo:\n%s", glue)
 	}
 	// enter 与 chat 都装着：chat 的联动文件登记了进入钩子，demo 的进入流程执行钩子而不是自己加在线名单。

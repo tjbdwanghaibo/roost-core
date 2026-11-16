@@ -18,7 +18,7 @@
   - 组件 `TeamComponent`（`game/components/team/team.go`，经 `ITeamEntity` 的 `TeamComp()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
   - Team 实体（`game/entities/team/entity.go`）上的成员表组件 TeamRoster（`game/components/teamroster/teamroster.go`，经 `TeamRosterComp()` 或 `view.TeamEntity` 的 `TeamRoster()` 取得）：`Info() view.TeamSnapshot`（`{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
   - Nest handler（`game/handler/`）：`handlerPlayerTeam`（只读本人的队伍号：`sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`）、`handlerTeamCreate`、`handlerTeamInvite`、`handlerTeamAccept`、`handlerTeamLeave`、`handlerTeamInfo`（后五个都是 `[Team, Player]` 两个实体的事务，`rollback=undo durability=strict`，例如 `sender.NewTeamCreateSender(client).MultiSync_TeamCreate(ctx, teamEntityID, playerEntityID, sid)`）。
-  - Controller（`game/controllers/team/`）：七个 `HandleTeam…` 端点；`FromRegistry` 里的建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
+  - Controller（`game/controllers/team.go`）：七个 `HandleTeam…` 端点；建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
 - **登记点**（都在 `game/entities/player/`，只在 `init` 登记，空名、nil、重名 panic，按名字排序执行）
   - `OnTeamJoining(name, check func(view.PlayerEntity) error)`（`game/components/team/team.go`）：建队与入队的事务内准入检查。返回错误就拒绝这次入队。回调不能做 I/O。
   - `OnTeamChanged(name, hook func(view.PlayerEntity, TeamChange) error)`（`game/components/team/changed.go`）：队伍关系变化时调用，`TeamChange{Before, After, Refresh}`；`Refresh` 为真表示只是当前玩家核对了一次（`TeamInfo` 等），不是名单变了。在同一笔事务里，回调出错整笔回滚；回调里不能做 I/O，要发通知得用提交后的机制。
@@ -28,7 +28,7 @@
 - **配置**：没有配置表。规则是 `game/components/teamroster/teamroster.go` 里的三个常量，归工程所有：`MaxMembers = 8`、`MaxInvites = 64`、`InviteMillis = 60000`（邀请 60 秒有效）。
 - **错误码**（`internal/errors/team.go`）：`team_invalid`、`team_missing`（不在这支队伍 / 队伍不存在）、`team_exists`（已经在别的队伍）、`team_not_leader`、`team_not_invited`（没被邀请或邀请已过期）、`team_full`、`team_invites_full`、`team_blocked`（队伍正在匹配中被冻结、与换服互斥等）。
 
-**日志**：建队、邀请、加入、离开 / 解散确认；返回快照时记录队长、版本和成员，错误补 player_id。离队 Sender 不返回新队长，因此不另查快照伪称本次交接结果。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/team/team.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：建队、邀请、加入、离开 / 解散确认；返回快照时记录队长、版本和成员，错误补 player_id。离队 Sender 不返回新队长，因此不另查快照伪称本次交接结果。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/team.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -66,7 +66,7 @@
 
 ## 验证范围
 
-- `roost module verify team`：35 条场景（`^TestTeam`，包 `./game/handler` 28 条、`./game/controllers/team` 7 条）。覆盖：建队与入队同一笔事务、准入失败回滚建队与双方成员、同一条提交记录同时含 Remote 的变化与 Player 的变化、重复接受与重复建队不改事实、必须有邀请、邀请恰好到期即失效、只有队长能邀请与解散、容量在接受时检查、邀请有界且可续期、过期邀请释放名额、队长交给最小号成员、最后一人离开留下不可复用的空壳、解散后其他人的引用在读权威时清除、不能加入第二支队、快照自有集合、并发接受被串行化、离队 / 解散被拒时双方恢复、非法 sid、外人不能读或改名单、投影钩子失败整笔回滚；端点要求已认证玩家、拒绝空请求、拒绝错误类型的实体号与非法被邀请人、Controller 使用实体运行时的 lifecycle。
+- `roost module verify team`：35 条场景（`^TestTeam`，包 `./game/handler` 28 条、`./game/controllers` 7 条）。覆盖：建队与入队同一笔事务、准入失败回滚建队与双方成员、同一条提交记录同时含 Remote 的变化与 Player 的变化、重复接受与重复建队不改事实、必须有邀请、邀请恰好到期即失效、只有队长能邀请与解散、容量在接受时检查、邀请有界且可续期、过期邀请释放名额、队长交给最小号成员、最后一人离开留下不可复用的空壳、解散后其他人的引用在读权威时清除、不能加入第二支队、快照自有集合、并发接受被串行化、离队 / 解散被拒时双方恢复、非法 sid、外人不能读或改名单、投影钩子失败整笔回滚；端点要求已认证玩家、拒绝空请求、拒绝错误类型的实体号与非法被邀请人、Controller 使用实体运行时的 lifecycle。
 - 新增覆盖：收件记录的回滚、过期、容量与迟到告知；入队同事务清收件记录；查询过滤权威已失效邀请；在线推送失败不改变邀请，离线不冷加载。
 - rehome 联动另有 2 条（`^TestWithTeamRehome`）。
 - 上述模块场景用真实 Nest 引擎与生成的 DAO / Sender，提交器、Remote 外部锁与权威回执是内存替身。另有 `scripts/test-social-real.sh` 的 `TestAllianceE2ESocialTeam`：私有 Mongo / Redis / NATS 上两个 game sid 共享同一 Team，经真实玩家 TCP 建队、邀请、跨进程接受；toxiproxy 丢接受回包与 80±20ms 下行延迟下重连重试，核对双方同一成员表 / 版本、队长转移，以及跨 sid 整队匹配拒绝后无意图。跨 game 邀请推送仍不保证送达（用已知 TeamID 接受），本场景不验证独立 Gate、容量或持续压力；[#154 归属决定](../../docs/maintenance/KNOWN-LIMITS.md)不因本场景关闭。证据见 [B-7 报告](../../docs/maintenance/evidence/social-real-20261114/README.md)。

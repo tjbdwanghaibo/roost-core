@@ -1,0 +1,59 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamelogin "{{MODULE}}/game/modules/login"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+// rulesRead 经 Nest 读一名玩家此刻的规则快照；查询端点与推送共用。
+func (controller *Controller) rulesRead(ctx context.Context, playerID int64) (*pb.RulesNowPush, error) {
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	return sender.NewRulesReadSender(controller.nestClient).Sync_RulesRead(ctx, id)
+}
+func (controller *Controller) HandleRulesGet(ctx *playeraccess.Context, request *pb.RulesGetRequest) (*pb.RulesGetResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("rules_get: context and request required")
+	}
+	result, err := controller.rulesRead(ctx.Context(), ctx.PlayerID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.RulesGetResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.RulesGetResponse{Rules: result}, nil
+}
+
+// RulesPushNow 在快池取值，在调用方阶段发送。失败由进入钩子记录，客户端可补取，不回滚已完成的建档。
+// 先取传输再读快照：传输没装配时不白读一次 Nest。
+func RulesPushNow(ctx context.Context, registry *app.Registry, playerID int64) error {
+	transport, err := LookupPlayerTransport[PlayerPusher](registry)
+	if err != nil {
+		return fmt.Errorf("rules: %w", err)
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		return err
+	}
+	snapshot, err := controller.rulesRead(ctx, playerID)
+	if err != nil {
+		return err
+	}
+	return transport.PushPlayer(ctx, playerID, msgid.MsgRulesNow, snapshot)
+}
+func init() {
+	gamelogin.OnEntered("rules", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
+		return RulesPushNow(ctx, registry, entered.PlayerID)
+	})
+}

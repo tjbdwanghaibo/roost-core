@@ -1,0 +1,353 @@
+package controllers
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	roomentity "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/handler"
+	roomlogic "{{MODULE}}/game/modules/room"
+	"{{MODULE}}/protocol/pb"
+)
+
+type roomEndpointCommitter struct{}
+
+func (roomEndpointCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type roomEndpointFixture struct {
+	registry   *app.Registry
+	controller *Controller
+	access     *entity.ManagerAccess
+}
+
+func newRoomEndpointFixture(t *testing.T) *roomEndpointFixture {
+	t.Helper()
+	roomentity.RegisterEntity()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(roomEndpointCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{handler.RegisterRoomOpenNestHandlersOn, handler.RegisterRoomJoinNestHandlersOn, handler.RegisterRoomViewNestHandlersOn, handler.RegisterRoomLeaveNestHandlersOn, handler.RegisterRoomReconnectNestHandlersOn, handler.RegisterRoomDisconnectNestHandlersOn, handler.RegisterRoomCloseNestHandlersOn} {
+		if err := register(engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(app.ModName("nest"), engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEntityRuntime, access); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &roomEndpointFixture{registry: registry, controller: controller, access: access}
+}
+
+// 真正走生成的 lifecycle、Nest Sender 与 Controller。操作人只来自认证 context，不来自 PB。
+func TestRoomEndpointsOnlyOperateTheirAuthenticatedSeat(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	if err := roomlogic.Open(context.Background(), f.registry, 81001, 2); err != nil {
+		t.Fatal(err)
+	}
+	a := roomContext(101, "a")
+	b := roomContext(102, "b")
+	outsider := roomContext(103, "c")
+	first, err := f.controller.HandleRoomJoin(a, &pb.RoomJoinRequest{RoomID: 81001})
+	if err != nil || first.Code != 0 || first.Info.HostID != 101 || first.Info.Epoch != 1 {
+		t.Fatalf("%+v %v", first, err)
+	}
+	second, err := f.controller.HandleRoomJoin(b, &pb.RoomJoinRequest{RoomID: 81001})
+	if err != nil || second.Code != 0 || len(second.Info.Seats) != 2 {
+		t.Fatalf("%+v %v", second, err)
+	}
+	hidden, err := f.controller.HandleRoomView(outsider, &pb.RoomViewRequest{RoomID: 81001})
+	if err != nil || hidden.Code == 0 || hidden.Info != nil {
+		t.Fatalf("outsider: %+v %v", hidden, err)
+	}
+	denied, err := f.controller.HandleRoomClose(b, &pb.RoomCloseRequest{RoomID: 81001, Epoch: 2})
+	if err != nil || denied.Code == 0 {
+		t.Fatalf("non-host: %+v %v", denied, err)
+	}
+	left, err := f.controller.HandleRoomLeave(a, &pb.RoomLeaveRequest{RoomID: 81001, Epoch: 1})
+	if err != nil || left.Code != 0 {
+		t.Fatalf("leave: %+v %v", left, err)
+	}
+	view, err := f.controller.HandleRoomView(b, &pb.RoomViewRequest{RoomID: 81001})
+	if err != nil || view.Code != 0 || view.Info.HostID != 102 || len(view.Info.Seats) != 1 {
+		t.Fatalf("view: %+v %v", view, err)
+	}
+	reconnected, err := f.controller.HandleRoomReconnect(roomContext(102, "new-b"), &pb.RoomReconnectRequest{RoomID: 81001, Epoch: 2})
+	if err != nil || reconnected.Code != 0 || reconnected.Info.Epoch != 3 {
+		t.Fatalf("reconnect: %+v %v", reconnected, err)
+	}
+	changed, err := roomlogic.Disconnect(context.Background(), f.controller.NestClient(), 81001, 102, 2)
+	if err != nil || changed {
+		t.Fatalf("old close: %v %v", changed, err)
+	}
+	closed, err := f.controller.HandleRoomClose(roomContext(102, "new-b"), &pb.RoomCloseRequest{RoomID: 81001, Epoch: 3})
+	if err != nil || closed.Code != 0 {
+		t.Fatalf("close: %+v %v", closed, err)
+	}
+}
+
+func TestRoomPBPreservesSnapshotAndInvalidRequestsFailClosed(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	if err := roomlogic.Open(context.Background(), f.registry, 81002, 4); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := pb.MarshalRoomJoinRequest(&pb.RoomJoinRequest{RoomID: 81002})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pb.UnmarshalRoomJoinRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := f.controller.HandleRoomJoin(roomContext(201, "d"), request)
+	if err != nil || response.Code != 0 {
+		t.Fatalf("%+v %v", response, err)
+	}
+	raw, err = pb.MarshalRoomJoinResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := pb.UnmarshalRoomJoinResponse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Info == nil || decoded.Info.RoomID != 81002 || decoded.Info.Capacity != 4 || decoded.Info.Epoch != 1 || len(decoded.Info.Seats) != 1 || decoded.Info.Seats[0].PlayerID != 201 || !decoded.Info.Seats[0].Connected {
+		t.Fatalf("PB roundtrip: %+v", decoded.Info)
+	}
+	bad, err := f.controller.HandleRoomJoin(roomContext(201, "d"), &pb.RoomJoinRequest{RoomID: -1})
+	if err != nil || bad.Code == 0 || bad.Info != nil {
+		t.Fatalf("invalid room: %+v %v", bad, err)
+	}
+	if _, err := f.controller.HandleRoomJoin(&playeraccess.Context{}, request); err == nil {
+		t.Fatal("anonymous context accepted")
+	}
+	if _, err := f.controller.HandleRoomJoin(roomContext(201, "d"), nil); err == nil {
+		t.Fatal("nil request accepted")
+	}
+}
+
+type roomUnavailableLoader struct{ err error }
+
+func (loader roomUnavailableLoader) LoadEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	return nil, loader.err
+}
+
+func TestRoomOpenUsesLifecycleAndNeverCreatesAfterLoadFailure(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	if err := roomlogic.Open(context.Background(), f.registry, 81003, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := roomlogic.Open(context.Background(), f.registry, 81003, 2); err != nil {
+		t.Fatal(err)
+	}
+	if f.access.Manager().Len() != 1 {
+		t.Fatal("repeated open created another entity")
+	}
+	if err := roomlogic.Open(context.Background(), f.registry, 81003, 3); err == nil {
+		t.Fatal("open reset the capacity")
+	}
+	if err := roomlogic.Open(context.Background(), f.registry, 81004, 65); err == nil || f.access.Manager().Len() != 1 {
+		t.Fatal("invalid rules created an entity")
+	}
+	unavailable := errors.New("room store unavailable")
+	release, err := f.access.ConfigureLoader(roomUnavailableLoader{err: unavailable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := roomlogic.Open(context.Background(), f.registry, 81004, 2); !errors.Is(err, unavailable) {
+		t.Fatalf("storage failure became creation: %v", err)
+	}
+	if f.access.Manager().Len() != 1 {
+		t.Fatal("load failure created an empty room")
+	}
+}
+
+type roomSession struct {
+	playerID int64
+	key      string
+}
+
+func (s roomSession) Principal() gateway.Principal {
+	return gateway.Principal{PlayerID: s.playerID, SessionID: "account-session"}
+}
+func (s roomSession) Reply(context.Context, any) error { return nil }
+func (s roomSession) Close(error) error                { return nil }
+func (s roomSession) ConnectionID() string             { return s.key }
+func roomContext(playerID int64, key string) *playeraccess.Context {
+	return &playeraccess.Context{PlayerID: playerID, Session: roomSession{playerID: playerID, key: key}}
+}
+
+// roomConns 是玩家接入层的替身：记着哪些（玩家, 连接）在线，关闭时先摘掉、再在另一个协程里发布关闭事件
+// （与 gateway 的顺序相同）；dropEvents 时只摘掉、不发布（模拟关闭队列满时丢掉的事件）。
+type roomConns struct {
+	mu          sync.Mutex
+	active      map[roomConnKey]bool
+	subscribers []func(gateway.TCPSessionClosed)
+	dropEvents  bool
+}
+
+type roomConnKey struct {
+	playerID   int64
+	connection string
+}
+
+func (c *roomConns) open(playerID int64, connection string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.active[roomConnKey{playerID, connection}] = true
+}
+
+func (c *roomConns) close(playerID int64, connection string) {
+	c.mu.Lock()
+	delete(c.active, roomConnKey{playerID, connection})
+	subscribers, drop := append([]func(gateway.TCPSessionClosed){}, c.subscribers...), c.dropEvents
+	c.mu.Unlock()
+	if drop {
+		return
+	}
+	go func() {
+		for _, fn := range subscribers {
+			fn(gateway.TCPSessionClosed{PlayerID: playerID, SessionID: "account-session", ConnectionID: connection})
+		}
+	}()
+}
+
+func (c *roomConns) ConnectionActive(playerID int64, connection string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active[roomConnKey{playerID, connection}]
+}
+
+func (c *roomConns) OnSessionClosed(fn func(gateway.TCPSessionClosed)) func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.subscribers = append(c.subscribers, fn)
+	return func() {}
+}
+
+// D24 断线订阅，经真实的控制器、生成的 Sender 与 Nest：连接关了，房间自己把那个席位标成断线（座位与房主不变），
+// 不用业务调 Disconnect。连接在 Join 提交之前就关了的，登记时补上；丢掉的关闭事件由补扫补上；换连接重连之后，
+// 旧连接迟到的关闭不影响新连接；离开之后不再登记。定时补扫的间隔给到一小时，补扫只在用例显式调 Sweep 时发生，
+// 前面几步不靠它兜底。
+func TestRoomClosedConnectionMarksTheSeatOffline(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	conns := &roomConns{active: map[roomConnKey]bool{}}
+	presence, err := roomlogic.NewPresence(f.controller.NestClient(), conns, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.Register(roomlogic.PresenceCapability, presence); err != nil {
+		t.Fatal(err)
+	}
+	presence.Start()
+	t.Cleanup(func() { _ = presence.Close(context.Background()) })
+	if err := roomlogic.Open(context.Background(), f.registry, 81005, 3); err != nil {
+		t.Fatal(err)
+	}
+	join := func(playerID int64, connection string) {
+		t.Helper()
+		if reply, err := f.controller.HandleRoomJoin(roomContext(playerID, connection), &pb.RoomJoinRequest{RoomID: 81005}); err != nil || reply.Code != 0 {
+			t.Fatalf("join %d: %+v %v", playerID, reply, err)
+		}
+	}
+	// online 经成员 viewer 的连接读快照，返回 玩家号 -> 在线。
+	online := func(viewer int64, connection string) map[int64]bool {
+		t.Helper()
+		reply, err := f.controller.HandleRoomView(roomContext(viewer, connection), &pb.RoomViewRequest{RoomID: 81005})
+		if err != nil || reply.Code != 0 {
+			t.Fatalf("view: %+v %v", reply, err)
+		}
+		out := map[int64]bool{}
+		for _, seat := range reply.Info.Seats {
+			out[seat.PlayerID] = seat.Connected
+		}
+		return out
+	}
+	eventually := func(label string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(2 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: seats = %v", label, online(102, "b"))
+			}
+		}
+	}
+	conns.open(101, "a")
+	conns.open(102, "b")
+	join(101, "a")
+	join(102, "b")
+	if got := online(102, "b"); !got[101] || !got[102] {
+		t.Fatalf("after two joins: %v", got)
+	}
+
+	// 101 的连接关了：席位还在、房主还是 101，只是断线。
+	conns.close(101, "a")
+	eventually("the closed connection's seat goes offline", func() bool { got := online(102, "b"); return !got[101] && got[102] })
+	if reply, _ := f.controller.HandleRoomView(roomContext(102, "b"), &pb.RoomViewRequest{RoomID: 81005}); reply.Info.HostID != 101 || len(reply.Info.Seats) != 2 {
+		t.Fatalf("a disconnect moved the host or the seat: %+v", reply.Info)
+	}
+
+	// 103 的连接在 Join 提交之前就关了（关闭事件到的时候还没有登记）。
+	join(103, "c")
+	eventually("a connection that closed before its join was registered goes offline", func() bool { got := online(102, "b"); return len(got) == 3 && !got[103] })
+
+	// 101 换连接重连：在线；旧连接迟到的关闭事件不影响新连接。
+	conns.open(101, "a2")
+	if reply, err := f.controller.HandleRoomReconnect(roomContext(101, "a2"), &pb.RoomReconnectRequest{RoomID: 81005, Epoch: 1}); err != nil || reply.Code != 0 {
+		t.Fatalf("reconnect: %+v %v", reply, err)
+	}
+	conns.close(101, "a")
+	time.Sleep(60 * time.Millisecond)
+	if got := online(102, "b"); !got[101] {
+		t.Fatalf("a late close of the old connection took the reconnected seat offline: %v", got)
+	}
+
+	// 丢掉的关闭事件：没有事件就没有断线，补扫发现 102 的连接不在了。
+	conns.mu.Lock()
+	conns.dropEvents = true
+	conns.mu.Unlock()
+	conns.close(102, "b")
+	time.Sleep(60 * time.Millisecond)
+	if got := online(101, "a2"); !got[102] {
+		t.Fatalf("102 went offline without a close event or a sweep: %v", got)
+	}
+	presence.Sweep()
+	eventually("a dropped close event is caught by the sweep", func() bool { got := online(101, "a2"); return !got[102] && got[101] })
+	// 登记里只剩重连之后的 101（新连接）；它离开之后一条都不剩。补扫的后台协程先提交 Disconnect、再撤登记，
+	// 快照里看到断线时撤登记可能还差一步，所以这里也等到位，不立即断言。
+	for deadline := time.Now().Add(2 * time.Second); presence.Tracked() != 1; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d seats tracked; want only 101 on its new connection", presence.Tracked())
+		}
+	}
+	if reply, err := f.controller.HandleRoomLeave(roomContext(101, "a2"), &pb.RoomLeaveRequest{RoomID: 81005, Epoch: 4}); err != nil || reply.Code != 0 {
+		t.Fatalf("leave: %+v %v", reply, err)
+	}
+	if got := presence.Tracked(); got != 0 {
+		t.Fatalf("%d seats still tracked after the last live member left", got)
+	}
+}

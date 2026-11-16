@@ -33,8 +33,8 @@ func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeated install changed business files")
 	}
-	recipeMutationMustFail(t, root, "game/components/scenemembers/scenemembers.go", "c.owner.Dao().MembersLen() != 0", "false && c.owner.Dao().MembersLen() != 0", "./game/controllers/scene", "TestSceneOccupiedCloseIsRefused", "occupied map closed")
-	recipeMutationMustFail(t, root, "game/handler/scene_interact.go", "sequence == state.GetSequence()", "false && sequence == state.GetSequence()", "./game/controllers/scene", "TestSceneInteractionIsOncePerContinuousSequence", "replayed interaction refused")
+	recipeMutationMustFail(t, root, "game/components/scenemembers/scenemembers.go", "c.owner.Dao().MembersLen() != 0", "false && c.owner.Dao().MembersLen() != 0", "./game/controllers", "TestSceneOccupiedCloseIsRefused", "occupied map closed")
+	recipeMutationMustFail(t, root, "game/handler/scene_interact.go", "sequence == state.GetSequence()", "false && sequence == state.GetSequence()", "./game/controllers", "TestSceneInteractionIsOncePerContinuousSequence", "replayed interaction refused")
 }
 
 func TestModuleScenePlanRefusesExplicitBusinessPacker(t *testing.T) {
@@ -79,7 +79,7 @@ func TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat(t *testing.T) {
 		{"game/components/scene/scene_profile.go", `OnSceneFields("profile", "Profile")`, `OnSceneFields("profile", "Profile", "ProfilePrivate")`, "TestWithSceneProfileSnapshotSeparatesPrivateFields"},
 		{"game/components/actor/sync.go", "mask &= view.Fields", "mask &= view.Fields | dataengine.AllFields", "TestWithSceneProfileDeltaSeparatesPrivateFields"},
 		{"game/components/scenemembers/scenemembers.go", "dao.GetClosed() || dao.GetClosing()", "dao.GetClosed()", "TestSceneStopRetriesRejectedEvacuation"},
-		{"game/controllers/chat/scene_chat.go", "transport.ActiveSessions(recipient) > 0", "true", "TestWithSceneChatSkipsDisconnectedRecipients"},
+		{"game/controllers/scene_chat.go", "transport.ActiveSessions(recipient) > 0", "true", "TestWithSceneChatSkipsDisconnectedRecipients"},
 	}
 	for _, m := range mutations {
 		path := filepath.Join(root, m.path)
@@ -93,12 +93,12 @@ func TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat(t *testing.T) {
 		if err := os.WriteFile(path, []byte(strings.Replace(string(raw), m.from, m.to, 1)), 0644); err != nil {
 			t.Fatal(err)
 		}
-		output, compileErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-run", "^$", "./game/controllers/scene")
+		output, compileErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-run", "^$", "./game/controllers")
 		if compileErr != nil {
 			_ = os.WriteFile(path, raw, 0644)
 			t.Fatalf("mutation does not compile: %v %s", compileErr, output)
 		}
-		output, runErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-v", "-run", "^"+m.test+"$", "./game/controllers/scene")
+		output, runErr := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-v", "-run", "^"+m.test+"$", "./game/controllers")
 		if err := os.WriteFile(path, raw, 0644); err != nil {
 			t.Fatal(err)
 		}

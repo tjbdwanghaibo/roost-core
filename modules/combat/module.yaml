@@ -28,7 +28,7 @@ with:
   scene:
     summary: 只向旁观者开放Combat投影字段
     verify:
-      packages: [./game/controllers/scene]
+      packages: [./game/controllers]
       run: ^TestWithCombatScene
       pass: 2
   equipment:

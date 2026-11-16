@@ -1,0 +1,315 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	db "{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	teamentity "{{MODULE}}/game/entities/team"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+// teamDeps 是建队与入队要用的依赖：本服 sid，与建队前的准备 create（取持久唯一号、创建空的 Remote 实体、
+// 切到共享模式）。都由无状态的能力拼成，每次请求从 Registry 现取（teamDepsFromRegistry），不挂在 Controller 上。
+type teamDeps struct {
+	sid    int32
+	create func(context.Context) (int64, error)
+}
+
+// teamDeps 现取建队与入队的依赖；缺任何一项都报错（Nest 由公共的 FromRegistry 检查）。
+func (c *Controller) teamDeps() (*teamDeps, error) {
+	return teamDepsFromRegistry(c.Registry())
+}
+
+func teamDepsFromRegistry(registry *app.Registry) (*teamDeps, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("team: registry required")
+	}
+	teams, err := teamentity.LifecycleFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("team: lifecycle: %w", err)
+	}
+	remote, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
+	if !ok || remote == nil {
+		return nil, fmt.Errorf("team: remote runtime unavailable")
+	}
+	mongo, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+	if !ok || mongo == nil {
+		return nil, fmt.Errorf("team: mongo unavailable")
+	}
+	databases, err := kitdataengine.Databases(registry)
+	if err != nil {
+		return nil, err
+	}
+	if registry.Config() == nil {
+		return nil, fmt.Errorf("team: service config unavailable")
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return nil, err
+	}
+	if identity.Sid <= 0 {
+		return nil, fmt.Errorf("team: positive service sid required")
+	}
+	ids := mongo.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence")
+	return &teamDeps{sid: identity.Sid, create: func(ctx context.Context) (int64, error) {
+		unique, err := teamNextID(ctx, ids)
+		if err != nil {
+			return 0, err
+		}
+		value, err := teams.Create(ctx, unique)
+		if err != nil {
+			return 0, err
+		}
+		id := value.ID()
+		lease, err := remote.ClaimRemoteOwnership(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		if !lease.Shared {
+			if _, err := remote.EnterRemoteSharedMode(ctx, id); err != nil {
+				return 0, err
+			}
+		}
+		return id, nil
+	}}, nil
+}
+
+// teamNextID 的计数器与 Team 使用相同物理库；拒绝回绕。未知结果允许跳号，绝不复用旧号。
+func teamNextID(ctx context.Context, ids fmongo.ICollection) (int64, error) {
+	var value struct {
+		Next int64 `bson:"next"`
+	}
+	if err := ids.FindOneAndUpdate(ctx, bson.M{"_id": "team"}, bson.M{"$inc": bson.M{"next": int64(1)}}, &value, fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true}); err != nil {
+		return 0, err
+	}
+	if value.Next <= 0 || uint64(value.Next) >= entity.StaticUniqueIDBase {
+		return 0, fmt.Errorf("team: id counter outside dynamic range")
+	}
+	return value.Next, nil
+}
+
+func teamPlayerID(ctx *playeraccess.Context) (int64, error) {
+	if ctx == nil || ctx.PlayerID <= 0 {
+		return 0, fmt.Errorf("team: authenticated player context required")
+	}
+	return entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+}
+func teamResponse(ctx *playeraccess.Context, info view.TeamSnapshot, err error) *pb.TeamResponse {
+	response := &pb.TeamResponse{}
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		if response.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "team request failed", "player_id", ctx.PlayerID, "err", err)
+		}
+		return response
+	}
+	response.Info = &pb.TeamView{TeamID: info.TeamID, Leader: info.Leader, Revision: info.Revision, Members: info.Members}
+	return response
+}
+
+// HandleTeamCreate 先保留持久唯一号、创建共享 Remote 空实体，再在 [Team, Player] 事务中建立队伍。
+// 准备失败只留下不可复用的空实体，不写玩家引用；重试已完成的建队返回现有队伍。
+func (c *Controller) HandleTeamCreate(ctx *playeraccess.Context, req *pb.TeamCreateRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err != nil {
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
+	}
+	if current != 0 {
+		return c.HandleTeamInfo(ctx, &pb.TeamInfoRequest{})
+	}
+	deps, err := c.teamDeps()
+	if err != nil {
+		return nil, fmt.Errorf("team: allocator unavailable: %w", err)
+	}
+	id, err := deps.create(ctx.Context())
+	if err != nil {
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
+	}
+	info, err := sender.NewTeamCreateSender(c.nestClient).MultiSync_TeamCreate(ctx.Context(), id, self, deps.sid)
+	if err == nil {
+		slog.InfoContext(ctx.Context(), "team: create completed", "player_id", ctx.PlayerID, "team_id", info.TeamID, "leader", info.Leader, "revision", info.Revision, "members", info.Members)
+	}
+	return teamResponse(ctx, info, err), nil
+}
+func (c *Controller) HandleTeamInvite(ctx *playeraccess.Context, req *pb.TeamInviteRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.Invitee <= 0 || uint64(req.Invitee) >= entity.StaticUniqueIDBase {
+		return teamResponse(ctx, view.TeamSnapshot{}, apperrors.ErrTeamInvalid), nil
+	}
+	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err != nil {
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
+	}
+	if id == 0 {
+		return teamResponse(ctx, view.TeamSnapshot{}, apperrors.ErrTeamMissing), nil
+	}
+	invitation, err := sender.NewTeamInviteSender(c.nestClient).MultiSync_TeamInvite(ctx.Context(), id, self, req.Invitee)
+	if err == nil {
+		slog.InfoContext(ctx.Context(), "team: invite completed", "player_id", ctx.PlayerID, "team_id", invitation.TeamID, "invitee", invitation.Invitee, "expire_at", invitation.ExpireAt, "leader", invitation.Leader, "revision", invitation.Revision, "members", invitation.Members)
+		c.teamAnnounceInvite(ctx.Context(), invitation)
+	}
+	return teamResponse(ctx, invitation.TeamSnapshot, err), nil
+}
+func (c *Controller) HandleTeamAccept(ctx *playeraccess.Context, req *pb.TeamAcceptRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !entity.MatchEntityID(req.TeamID, teamentity.EntityKindTeam) {
+		return teamResponse(ctx, view.TeamSnapshot{}, apperrors.ErrTeamInvalid), nil
+	}
+	deps, err := c.teamDeps()
+	if err != nil {
+		return nil, err
+	}
+	info, err := sender.NewTeamAcceptSender(c.nestClient).MultiSync_TeamAccept(ctx.Context(), req.TeamID, self, deps.sid)
+	if err == nil {
+		slog.InfoContext(ctx.Context(), "team: join completed", "player_id", ctx.PlayerID, "team_id", info.TeamID, "leader", info.Leader, "revision", info.Revision, "members", info.Members)
+	}
+	return teamResponse(ctx, info, err), nil
+}
+func (c *Controller) HandleTeamInfo(ctx *playeraccess.Context, req *pb.TeamInfoRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err != nil || id == 0 {
+		return teamResponse(ctx, view.TeamSnapshot{}, err), nil
+	}
+	info, err := sender.NewTeamInfoSender(c.nestClient).MultiSync_TeamInfo(ctx.Context(), id, self)
+	return teamResponse(ctx, info, err), nil
+}
+func (c *Controller) HandleTeamLeave(ctx *playeraccess.Context, req *pb.TeamLeaveRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	return c.teamLeave(ctx, false)
+}
+func (c *Controller) HandleTeamDisband(ctx *playeraccess.Context, req *pb.TeamDisbandRequest) (*pb.TeamResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	return c.teamLeave(ctx, true)
+}
+func (c *Controller) teamLeave(ctx *playeraccess.Context, disband bool) (*pb.TeamResponse, error) {
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id, err := sender.NewPlayerTeamSender(c.nestClient).Sync_PlayerTeam(ctx.Context(), self)
+	if err == nil && id != 0 {
+		err = sender.NewTeamLeaveSender(c.nestClient).MultiSync_TeamLeave(ctx.Context(), id, self, disband)
+		if err == nil {
+			slog.InfoContext(ctx.Context(), "team: leave completed", "player_id", ctx.PlayerID, "team_id", id, "disband", disband)
+		}
+	}
+	return teamResponse(ctx, view.TeamSnapshot{}, err), nil
+}
+
+// teamInviteTransport 是告知被邀请人用到的玩家 TCP Runtime 的两个方法，经 LookupPlayerTransport 取。
+type teamInviteTransport interface {
+	ActiveSessions(playerID int64) int
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+}
+
+// teamAnnounceInvite 在邀请提交之后把它告知被邀请人：他此刻在本进程在线时，先在他的档里记一条收件记录（之后能用
+// TeamInvites 查到），再推一条 TeamInvited。只对在线的人做，因为本进程的会话是“他的档归本进程写”的证明——
+// 不在线、或连在别的 game 进程上的被邀请人收不到告知，邀请本身照常有效。
+//
+// 这一步只是告知，不是邀请的一部分：传输没装配、记录没记上（记满、玩家还没建档）、推送失败都只记日志，
+// 邀请（Team 上的权威记录）不受影响，调用方的应答也不变。
+func (c *Controller) teamAnnounceInvite(ctx context.Context, invitation view.TeamInvitation) {
+	if invitation.ExpireAt == 0 || c.registry == nil {
+		return
+	}
+	transport, err := LookupPlayerTransport[teamInviteTransport](c.registry)
+	if err != nil || transport == nil || transport.ActiveSessions(invitation.Invitee) == 0 {
+		return
+	}
+	invitee, err := entity.BuildEntityID(invitation.Invitee, player.EntityKindPlayer)
+	if err != nil {
+		return
+	}
+	noted, err := sender.NewTeamInviteNoteSender(c.nestClient).Sync_TeamInviteNote(ctx, invitee, invitation.TeamID, invitation.Leader, invitation.ExpireAt)
+	if err != nil || !noted {
+		slog.DebugContext(ctx, "team: invitation not recorded for the invitee; it stays valid on the team", "player_id", invitation.Invitee, "team_id", invitation.TeamID, "err", err)
+	}
+	push := &pb.TeamInvitedPush{TeamID: invitation.TeamID, Inviter: invitation.Leader, ExpireAtUnixMilli: invitation.ExpireAt}
+	if err := transport.PushPlayer(ctx, invitation.Invitee, msgid.MsgTeamInvited, push); err != nil {
+		slog.DebugContext(ctx, "team: invitation push not delivered", "player_id", invitation.Invitee, "team_id", invitation.TeamID, "err", err)
+	}
+}
+
+// HandleTeamInvites 先读本人的有界收件记录，再逐个核对 Team 权威；不持 Player 锁等待 Remote。
+// 任一权威读取失败就返回错误码，不把部分结果伪装成完整列表。接受时仍须再次检查。
+func (c *Controller) HandleTeamInvites(ctx *playeraccess.Context, req *pb.TeamInvitesRequest) (*pb.TeamInvitesResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("team: request required")
+	}
+	self, err := teamPlayerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	response := &pb.TeamInvitesResponse{}
+	invites, err := sender.NewTeamInvitesSender(c.nestClient).Sync_TeamInvites(ctx.Context(), self)
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		if response.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "team invites request failed", "player_id", ctx.PlayerID, "err", err)
+		}
+		return response, nil
+	}
+	lookup := sender.NewTeamInvitationSender(c.nestClient)
+	for _, note := range invites {
+		invitation, err := lookup.Sync_TeamInvitation(ctx.Context(), note.TeamID, ctx.PlayerID)
+		if err != nil {
+			code, reason := errcode.ClientError(err)
+			if code == errcode.CodeEntityNotFound {
+				continue
+			}
+			if code == errcode.CodeInternal {
+				slog.ErrorContext(ctx.Context(), "team invitation lookup failed", "player_id", ctx.PlayerID, "team_id", note.TeamID, "err", err)
+			}
+			return &pb.TeamInvitesResponse{Code: code, Reason: reason}, nil
+		}
+		if invitation.ExpireAt != 0 {
+			response.Invites = append(response.Invites, pb.TeamInvitedPush{TeamID: invitation.TeamID, Inviter: note.Inviter, ExpireAtUnixMilli: invitation.ExpireAt})
+		}
+	}
+	return response, nil
+}

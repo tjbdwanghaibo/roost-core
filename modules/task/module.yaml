@@ -65,6 +65,6 @@ with:
   leaderboard:
     summary: 排行成功提交通知独立推进任务，尽力通知且重放会计数，不用于恰好一次结算奖励
     verify:
-      packages: [./game/controllers/task]
+      packages: [./game/controllers]
       run: ^TestWithTaskLeaderboard
       pass: 3

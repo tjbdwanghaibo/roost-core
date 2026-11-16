@@ -25,7 +25,7 @@ func TestModuleTerrainInstallAndVerify(t *testing.T) {
 			t.Fatalf("missing generated integration %s: %v", path, err)
 		}
 	}
-	source, err := os.ReadFile(filepath.Join(root, "game/controllers/terrain/controller.go"))
+	source, err := os.ReadFile(filepath.Join(root, "game/controllers/terrain.go"))
 	if err != nil || !strings.Contains(string(source), "example.com/studio/terrainlab/game/modules/terrain") {
 		t.Fatalf("custom module not rendered: %v", err)
 	}

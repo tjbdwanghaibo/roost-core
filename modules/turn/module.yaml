@@ -16,6 +16,6 @@ state:
 protocols: [TurnStart, TurnEnd, TurnView]
 errcodes: [turn_invalid, turn_not_running, turn_not_actor, turn_sequence, turn_expired]
 verify:
-  packages: [./game/handler, ./game/controllers/turn]
+  packages: [./game/handler, ./game/controllers]
   run: ^TestTurn
   pass: 25

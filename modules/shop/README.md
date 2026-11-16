@@ -20,7 +20,7 @@
   - 常量 `ShopReceiptWindow = 64`、`ShopKeyMaxLen = 64`（`game/components/shop/shop.go`）。
 - **错误码**（`internal/errors/shop.go`）：`shop_key_invalid`、`shop_key_conflict`（同一个键换了商品或份数）、`shop_count_invalid`、`shop_goods_invalid`（不在目录里、已下架或目录行不合法）、`shop_overflow`（总价或道具总数超出 int64）、`shop_limit`（超过限购）。钱不够、背包放不下原样透出 `wallet_short` 与背包模块的 `bag_stack_full`、`bag_kinds_full`、`bag_item_invalid`。
 
-**日志**：购买确认，记录请求键、商品、份数、花费、奖励和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/shop/shop_buy.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：购买确认，记录请求键、商品、份数、花费、奖励和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/shop.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 

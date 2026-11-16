@@ -1,0 +1,123 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	purchase "{{MODULE}}/game/modules/purchase"
+	"{{MODULE}}/protocol/pb"
+)
+
+func (c *Controller) HandlePurchaseCollect(ctx *playeraccess.Context, request *pb.PurchaseCollectRequest) (*pb.PurchaseCollectResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("purchase_collect: context and request are required")
+	}
+	receipts, err := c.PurchaseCollect(ctx.Context(), ctx.PlayerID)
+	response := &pb.PurchaseCollectResponse{}
+	for _, receipt := range receipts {
+		response.Receipts = append(response.Receipts, pb.PurchaseReceipt{OrderID: receipt.OrderID, Sequence: receipt.Sequence, Kind: receipt.Reward.Kind, ItemID: receipt.Reward.ID, Count: receipt.Reward.Count, Settled: receipt.Settled})
+	}
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+		slog.WarnContext(ctx.Context(), "purchase collect incomplete", "player_id", ctx.PlayerID, "settled", len(receipts), "err", err)
+	}
+	return response, nil
+}
+
+// purchaseDeps 是领取发货用到的三样依赖：发货队列、platform 客户端、Nest 上的发货 Sender。都是无状态的客户端，
+// 每次领取从 Registry 现取（purchaseDepsFromRegistry），不挂在 Controller 上；测试直接填替身。
+type purchaseDeps struct {
+	queue    purchase.Queue
+	platform svcplatform.Platform
+	sender   *syncsender.PurchaseGrantSender
+}
+
+// PurchaseCollect 是不经协议的领取入口（PurchaseCollect 端点、进入游戏的联动、工程自己的购买流程都走它）：
+// 现取依赖，再按 purchaseDeps.Collect 的规则领取。
+func (c *Controller) PurchaseCollect(ctx context.Context, playerID int64) ([]purchase.Receipt, error) {
+	deps, err := purchaseDepsFromRegistry(c.Registry())
+	if err != nil {
+		return nil, err
+	}
+	return deps.Collect(ctx, playerID)
+}
+
+func purchaseDepsFromRegistry(registry *app.Registry) (*purchaseDeps, error) {
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("purchase: Nest client is unavailable")
+	}
+	platform, ok := app.Lookup[svcplatform.Platform](registry, svcplatform.CapabilityName)
+	if !ok || platform == nil {
+		return nil, fmt.Errorf("purchase: platform client is unavailable")
+	}
+	redis, err := mods.Redis(registry)
+	if err != nil {
+		return nil, err
+	}
+	queue, err := purchase.NewRedisQueue(redis, purchase.StoragePrefix)
+	if err != nil {
+		return nil, err
+	}
+	return &purchaseDeps{queue: queue, platform: platform, sender: syncsender.NewPurchaseGrantSender(client)}, nil
+}
+
+// Collect 只接受可信会话给出的玩家号，序号与奖励全部从队列取；客户端不得提供发货载荷。
+// 所有 Redis / platform I/O 都在 Nest 之外。单次最多处理 BatchLimit 条；失败保留当前和后续记录。
+func (c *purchaseDeps) Collect(ctx context.Context, playerID int64) ([]purchase.Receipt, error) {
+	full, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	pending, err := c.queue.Pending(ctx, playerID, purchase.BatchLimit)
+	if err != nil {
+		return nil, err
+	}
+	receipts := make([]purchase.Receipt, 0, len(pending))
+	for _, grant := range pending {
+		if grant.PlayerID != playerID {
+			return receipts, fmt.Errorf("purchase: queue returned another player's grant")
+		}
+		// 先等 platform 投递完全终结再入账；这时不能重新打开订单或改成另一种结局。
+		// 该检查同时是稍后删除队列的依据，不把“超时/失败”当成“已没有在途投递”。
+		order, found, err := c.platform.Order(ctx, grant.OrderID)
+		if err != nil {
+			return receipts, err
+		}
+		if !found || order.OrderID != grant.OrderID || order.PlayerID != playerID || order.PayloadDigest != grant.Digest || order.ProductID != grant.ProductID {
+			slog.WarnContext(ctx, "purchase: queued order mismatch", "player_id", playerID, "order_id", grant.OrderID, "product_id", grant.ProductID)
+			return receipts, svcplatform.ErrOrderMismatch
+		}
+		if len(order.PendingAttempts) != 0 {
+			return receipts, svcplatform.ErrDeliveryHeld
+		}
+		switch order.State {
+		case svcplatform.DeliveryDelivered:
+		case svcplatform.DeliverySettled:
+			grant.Settled = true
+		default:
+			return receipts, svcplatform.ErrDeliveryHeld
+		}
+		receipt, err := c.sender.Sync_PurchaseGrant(ctx, full, grant)
+		if err != nil {
+			return receipts, err
+		}
+		receipts = append(receipts, receipt)
+		// 确认在 Nest 提交后、队列确认之前：Ack 失败仍保留本次已确认的事实；同订单重试可能再次出现。
+		slog.InfoContext(ctx, "purchase: grant confirmed", "player_id", playerID, "order_id", receipt.OrderID, "sequence", receipt.Sequence, "reward_kind", receipt.Reward.Kind, "item_id", receipt.Reward.ID, "count", receipt.Reward.Count, "settled", receipt.Settled)
+		if err := c.queue.Ack(ctx, grant); err != nil {
+			return receipts, err
+		}
+	}
+	return receipts, nil
+}

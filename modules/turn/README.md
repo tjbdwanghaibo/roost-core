@@ -16,7 +16,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
   - `End(playerID, epoch, connection, round, sequence) (TurnSnapshot, error)`：内部先 `CheckEnd`，再记回执、换定时器、推进一回合。
   - `View(playerID, epoch, connection) (TurnSnapshot, error)`
   - Nest handler（`game/handler/`，`rollback=undo durability=strict`）：`handlerTurnStart`、`handlerTurnEnd`、`handlerTurnView`；例如 `syncsender.NewTurnEndSender(client).Sync_TurnEnd(ctx, roomEntityID, playerID, epoch, connection, round, sequence)`。
-  - Controller（`game/controllers/turn/`）：`HandleTurnStart`、`HandleTurnEnd`、`HandleTurnView`。
+  - Controller（`game/controllers/turn.go`）：`HandleTurnStart`、`HandleTurnEnd`、`HandleTurnView`。
 - **登记点 / 钩子**
   - 模块没有“回合开始 / 结束 / 对局结束”的业务钩子。接游戏动作的方式是自己写 handler 组合 `CheckEnd` 与 `End`（见“复用方式”）。
   - 定时器回调（`game/entities/room/turn_timers.go`）：类型常量 `TurnDeadline`；`registerTurnTimers(handlers)` 由安装器追加到 Room 的定时器登记函数里，到期时在 Room 的 Nest 事务中调组件的 `OnDeadline`；建 / 删期限节点是 Room 上的适配方法 `ArmTurnDeadline` / `CancelTurnDeadline`（同一文件）。超时计数、下一回合与定时器续期在同一笔事务里提交。
@@ -24,7 +24,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 - **配置**：没有配置表。规则范围写在 `game/components/turn/turn.go` 的 `Start` 里：每回合 1000～3600000 毫秒（1 秒～1 小时），总回合数 1～10000；工程可以收窄。
 - **错误码**（`internal/errors/turn.go`）：`turn_invalid`（规则越界、重试时换了规则、不足两人）、`turn_not_running`、`turn_not_actor`（不是当前行动者、回合号不对、不在名单里）、`turn_sequence`（跳号、旧号、同序号配了不同回合）、`turn_expired`（已到期限，等定时器推进）。成员与连接校验透出 room 的 `room_stale_epoch`、`room_not_host` 等。
 
-**日志**：开局、对局结束确认；每回合推进 / timer 超时回调不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/turn/turn_end.go`, `game/controllers/turn/turn_start.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：开局、对局结束确认；每回合推进 / timer 超时回调不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/turn.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -72,7 +72,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 
 ## 验证范围
 
-- `roost module verify turn`：25 条场景（`^TestTurn`，包 `./game/handler` 22 条、`./game/controllers/turn` 3 条）。22 条 Nest 场景覆盖：开局与重试只有一个期限、只有房主能开、规则越界与换规则、至少两人、结束只推进一次并从当下续期、重复结束不多消耗回合、跳号与冲突重放、错误的行动者与回合、恰好到期拒绝命令、期限不提前不重复、迟到不追帧、旧期限不消费新回合、到上限结束且最后一条可重放、迟到加入者能看不能动、跳过离开的人、关房后在下一个期限结束、旧连接不能行动或重放、开局 / 结束 / 超时被拒提交时回滚、重载后保留序号且过期只触发一次（重载后全部席位断线：旧连接的行动与查看被拒，换连接重连之后才能操作）、快照不暴露 DAO 数组。3 条 Controller 场景经实体运行时 → lifecycle → Nest Sender，覆盖认证身份与 PB 编解码。定时器用生成的 Tick handler，测试时钟可控，不依赖 sleep。
+- `roost module verify turn`：25 条场景（`^TestTurn`，包 `./game/handler` 22 条、`./game/controllers` 3 条）。22 条 Nest 场景覆盖：开局与重试只有一个期限、只有房主能开、规则越界与换规则、至少两人、结束只推进一次并从当下续期、重复结束不多消耗回合、跳号与冲突重放、错误的行动者与回合、恰好到期拒绝命令、期限不提前不重复、迟到不追帧、旧期限不消费新回合、到上限结束且最后一条可重放、迟到加入者能看不能动、跳过离开的人、关房后在下一个期限结束、旧连接不能行动或重放、开局 / 结束 / 超时被拒提交时回滚、重载后保留序号且过期只触发一次（重载后全部席位断线：旧连接的行动与查看被拒，换连接重连之后才能操作）、快照不暴露 DAO 数组。3 条 Controller 场景经实体运行时 → lifecycle → Nest Sender，覆盖认证身份与 PB 编解码。定时器用生成的 Tick handler，测试时钟可控，不依赖 sleep。
 - 这些场景用替身提交器，不等于真实 Mongo / WAL 落盘、TCP / Gate 联合验收或性能测试。配方 `turn-pvp` 另有双人 TCP → PB → Controller → Nest 的链路场景（在配方里，不在本模块的计数内）。
 - 真实联合档：`ROOST_TURN_PVP_REAL=1 bash scripts/test-turn-pvp-generated.sh` 另用正式配方跑真实 Gate / NATS / Mongo / WAL、SIGKILL 后到期一次及命令重试；game-demo 的 `turn` Robot 已接进 `make dev-smoke`（匹配开房、完整四回合、重连与最后回执）。这两档不计入上述 25 条；[证据与复跑](../../docs/maintenance/evidence/turn-real-20261114/README.md)。
 - 重跑入口：仓库里的 `scripts/test-modules-generated.sh`，或在装好模块的新工程里运行 `GOWORK=off roost module verify turn`。

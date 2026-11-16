@@ -44,7 +44,7 @@ python3 "$repo_dir/scripts/testdata/operations-real/install.py" "$repo_dir" "$wo
 cd "$work_dir/planet"
 go build -o "$work_dir/app" .
 go build -o "$work_dir/accountctl" ./cmd/accountctl
-go vet ./e2e ./game/controllers/purchase
+go vet ./e2e ./game/controllers
 ALLIANCE_E2E_BINARY="$work_dir/app" ALLIANCE_E2E_ACCOUNTCTL="$work_dir/accountctl" ALLIANCE_E2E_ROOT="$PWD" \
 	ALLIANCE_E2E_ETCD="127.0.0.1:$etcd_port" ALLIANCE_E2E_PORT_BASE="$port_base" ALLIANCE_E2E_LOGS="$OPERATIONS_REAL_OUT/processes" \
 	go test -race -count=1 -timeout 12m -v -run "${OPERATIONS_REAL_RUN:-^TestOperations(GMHTTPMailAndRehome|PurchaseCrashAcrossSIDAndRedisRestart)$}" ./e2e | tee "$OPERATIONS_REAL_OUT/result.log"

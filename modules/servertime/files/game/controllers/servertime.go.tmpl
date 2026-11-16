@@ -1,0 +1,55 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	gameservertime "{{MODULE}}/game/modules/servertime"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleServertimeSync 回答服务器此刻的业务时间。时间现读进程业务时钟（不是连接建立或请求入队的时刻），
+// 所以应答里的快照就是“生成这条应答那一刻”。请求里的 ClientTick 原样带回，不解释：
+// 它是客户端自己的时钟读数，服务器的任何判断都不取客户端给的时间。
+func (controller *Controller) HandleServertimeSync(context *playeraccess.Context, request *pb.ServertimeSyncRequest) (*pb.ServertimeSyncResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("servertime_sync endpoint: context and request are required")
+	}
+	return &pb.ServertimeSyncResponse{ClientTick: request.ClientTick, Time: servertimeToPush(gameservertime.Now())}, nil
+}
+
+// servertimeToPush 把快照换成线上形状；推送与 ServertimeSync 的应答都用它，客户端只处理一种。
+func servertimeToPush(snapshot gameservertime.Snapshot) *pb.ServertimeNowPush {
+	return &pb.ServertimeNowPush{
+		NowUnixMilli:       snapshot.NowUnixMilli,
+		Day:                snapshot.Day,
+		DayStartUnixMilli:  snapshot.DayStartUnixMilli,
+		NextResetUnixMilli: snapshot.NextResetUnixMilli,
+		NextDay:            snapshot.NextDay,
+		PrevDay:            snapshot.PrevDay,
+		UTCOffsetSeconds:   snapshot.UTCOffsetSeconds,
+		Zone:               snapshot.Zone,
+	}
+}
+
+// ServertimePushNow 把服务器此刻的业务时间（ServertimeNow）推给一名玩家的全部连接。给别的功能调用：
+// 装了 enter 模块时玩家每次进入游戏推一次（servertime_enter.go）；工程用自己的登录流程时，
+// 在玩家进入之后调它，或者让客户端进入后自己发一次 ServertimeSync。
+//
+// 推送只是省一次往返的捷径，不是客户端拿到时间的唯一途径：传输还没装配、玩家没有连接、发送队列满了都会返回错误，
+// 调用方记日志即可，不要因此让自己的操作失败——客户端随时可以用 ServertimeSync 自己问。
+// 每次调用都现取传输、现读时钟，这里不缓存任何东西。
+func ServertimePushNow(ctx context.Context, registry *app.Registry, playerID int64) error {
+	transport, err := LookupPlayerTransport[PlayerPusher](registry)
+	if err != nil {
+		return fmt.Errorf("servertime: %w", err)
+	}
+	return servertimePushNow(ctx, transport, playerID)
+}
+
+func servertimePushNow(ctx context.Context, transport PlayerPusher, playerID int64) error {
+	return transport.PushPlayer(ctx, playerID, msgid.MsgServertimeNow, servertimeToPush(gameservertime.Now()))
+}

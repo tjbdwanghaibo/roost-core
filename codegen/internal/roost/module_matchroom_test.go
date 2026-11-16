@@ -19,5 +19,5 @@ func TestModuleMatchroomGenerated(t *testing.T) {
 		t.Fatal("repeat install changed project")
 	}
 	recipeMutationMustFail(t, root, "game/components/matchroom/matchroom.go", `state.GetMatchID() != "" && !slices.Contains`, `false && state.GetMatchID() != "" && !slices.Contains`, "./game/handler", "TestMatchroomRejectsOutsiderWithoutTakingReservedSeat", "outsider admitted:")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestRoom|^TestMatchroom", "./game/handler", "./game/modules/matchroom", "./game/controllers/room")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestRoom|^TestMatchroom", "./game/handler", "./game/modules/matchroom", "./game/controllers")
 }

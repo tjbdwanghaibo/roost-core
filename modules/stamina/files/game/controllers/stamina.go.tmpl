@@ -1,0 +1,21 @@
+package controllers
+
+import (
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleStaminaRefill 是购买补满协议的入口；目标取认证会话的玩家，体力是否已满、当日次数与金币
+// 都在 Nest handler 的锁内判断。
+//
+//roost:endpoint nest=StaminaRefill
+func (controller *Controller) HandleStaminaRefill(ctx *playeraccess.Context, req *pb.StaminaRefillRequest) (*pb.StaminaRefillResponse, error) {
+	response, err := controller.dispatchStaminaRefill(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "stamina: refill completed", "player_id", ctx.PlayerID, "cost", response.Cost, "refill_count", response.RefillCount, "value", response.Value, "balance", response.Balance)
+	}
+	return response, err
+}

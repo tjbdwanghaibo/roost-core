@@ -11,7 +11,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 
-	chatcontroller "{{MODULE}}/game/controllers/chat"
+	"{{MODULE}}/game/controllers"
 	gamechat "{{MODULE}}/game/modules/chat"
 )
 
@@ -80,7 +80,7 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("notice: registry is required")
 	}
-	chat, err := chatcontroller.FromRegistry(registry)
+	chat, err := controllers.FromRegistry(registry)
 	if err != nil {
 		return nil, err
 	}

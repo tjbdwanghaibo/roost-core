@@ -17,7 +17,7 @@ protocols: [PurchaseCollect]
 errcodes: [purchase_invalid, purchase_sequence, purchase_reward]
 replaces: [services/platform/collaborators.go]
 verify:
-  packages: [./game/handler, ./game/modules/purchase, ./game/controllers/purchase, ./services/platform]
+  packages: [./game/handler, ./game/modules/purchase, ./game/controllers, ./services/platform]
   run: ^TestPurchase
   pass: 21
 with:
@@ -30,6 +30,6 @@ with:
   enter:
     summary: 进入游戏后有界拉取待发订单，离线到账不丢弃
     verify:
-      packages: [./game/controllers/purchase]
+      packages: [./game/controllers]
       run: ^TestWithPurchaseEnter
       pass: 2
