@@ -46,6 +46,11 @@ type EntityBase struct {
 	// 生命周期 hook，由生成的实体工厂代码设置。
 	onClear   func()
 	onDestroy func(EntityDestroyReason)
+
+	// eventDispatch 由生成的实体工厂经 SetEventDispatch 设置，把事件交给 DispatchEvent（带上外层实体）；
+	// events 是正在执行的事件链，只在实体被当前 Guard 锁住时读写（见 entity_event.go）。
+	eventDispatch func(ev any) error
+	events        eventStack
 }
 
 // SetLastCommitLSN 记录最近一次修改本实体的 pipelined 事务的 WAL LSN。Nest 在实体锁内调用；启用同步时同时写入
@@ -398,6 +403,7 @@ func (e *EntityBase) doClear() {
 	e.groupTargetID.Store(0)
 	e.owner.Store(nil)
 	e.onDestroy = nil
+	e.eventDispatch = nil
 	if firstPanic != nil {
 		panic(firstPanic)
 	}
