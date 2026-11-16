@@ -97,9 +97,12 @@ mutator 同时维护 dirty、undo、持久化 patch 和客户端同步标记。
 把 game/handler/rename_player.go 改为：
 
     //roost:nest rollback=undo durability=strict
-    func handlerRenamePlayer(target player.IProfileEntity, name string) error {
-        return target.ProfileComp().Rename(name)
+    func handlerRenamePlayer(target view.IProfileEntity, name string) error {
+        return target.Profile().Rename(name)
     }
+
+Rename 也写进 game/view/component_profile.go 的 Profile 接口：handler 收 roost generate 生成的窄接口
+view.IProfileEntity，经访问器 Profile() 调用组件。
 
 第一个参数是锁目标；其余参数名必须能与协议 Request 字段对应。业务时间例外：参数名 nowUnix / nowUnixMilli（int64）
 由生成的 Nest 分发包装在 handler 执行时填这条消息冻结的业务时间（fctx.Now），不放进 Request（放进去就是让客户端
@@ -311,9 +314,12 @@ access player 是传输无关的已认证玩家接入层；它生成并发安全
 把 game/handler/rename_player.go 的 handler 改为：
 
     //roost:nest rollback=undo durability=strict
-    func handlerRenamePlayer(target player.IProfileEntity, name string) error {
-        return target.ProfileComp().Rename(name)
+    func handlerRenamePlayer(target view.IProfileEntity, name string) error {
+        return target.Profile().Rename(name)
     }
+
+Rename 也写进 game/view/component_profile.go 的 Profile 接口：handler 收 roost generate 生成的窄接口
+view.IProfileEntity，经访问器 Profile() 调用组件。
 
 业务层不用加锁。生成 Sender 将 PlayerID 转为 Entity 锁目标，Nest 在调用 handler 前完成锁定、
 加载、WAL/回滚上下文装配，退出后提交或回滚。

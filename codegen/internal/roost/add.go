@@ -431,7 +431,11 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			return nil, err
 		}
 		path = "game/handler/" + snake + ".go"
-		body = fmt.Sprintf("package handler\n\nimport %s %q\n\n//roost:nest rollback=undo durability=strict\nfunc handler%s(target %s.I%sEntity) error {\n\t// TODO: validate input and call target.%sComp().<BusinessMethod>().\n\treturn nil\n}\n", entityName, m.Project.Module+"/game/entities/"+entityName, pascal, entityName, toPascal(componentName), toPascal(componentName))
+		target, err := componentHandlerTarget(root, m.Project.Module, entityName, componentName)
+		if err != nil {
+			return nil, err
+		}
+		body = fmt.Sprintf("package handler\n\nimport %s\n\n//roost:nest rollback=undo durability=strict\nfunc handler%s(target %s) error {\n\t// TODO: validate input and call %s.\n\treturn nil\n}\n", target.importSpec, pascal, target.paramType, target.call)
 	case "lifecycle":
 		// v1.47.0 起每个实体包由 roost generate 产出 lifecycle_gen.go（core 泛型 wiring/entitylifecycle 的具名入口），
 		// 不再有一次性脚手架。
@@ -571,4 +575,59 @@ func splitWords(value string) []string {
 		parts = append(parts, string(current))
 	}
 	return parts
+}
+
+// handlerComponentTarget 是 Nest handler 骨架锁一个组件时的写法。
+type handlerComponentTarget struct {
+	importSpec string // import 行（不含 import 关键字）
+	paramType  string // target 参数类型
+	component  string // 取组件的表达式（target.Profile() / target.ProfileComp()）
+	call       string // TODO 里的调用说明
+}
+
+// componentHandlerTarget：组件在 game/view 里有 <X>Holder 时（roost add component 生成的组件、模块组件），handler 收
+// 生成的窄接口 view.I<X>Entity，经访问器 <X>() 拿组件，方法要先写进 view.<X>；没有 Holder 时（roost add timer /
+// heartbeat 生成的组件）沿用实体包里的 I<X>Entity 与 <X>Comp()。
+func componentHandlerTarget(root, module, entityName, componentName string) (handlerComponentTarget, error) {
+	component := toPascal(componentName)
+	holder, err := viewDeclaresHolder(root, component)
+	if err != nil {
+		return handlerComponentTarget{}, err
+	}
+	if holder {
+		return handlerComponentTarget{
+			importSpec: fmt.Sprintf("%q", module+"/game/view"),
+			paramType:  "view.I" + component + "Entity",
+			component:  "target." + component + "()",
+			call:       "target." + component + "().<BusinessMethod>() (declare the method in view." + component + " first)",
+		}, nil
+	}
+	return handlerComponentTarget{
+		importSpec: fmt.Sprintf("%s %q", entityName, module+"/game/entities/"+entityName),
+		paramType:  entityName + ".I" + component + "Entity",
+		component:  "target." + component + "Comp()",
+		call:       "target." + component + "Comp().<BusinessMethod>()",
+	}, nil
+}
+
+// viewDeclaresHolder 报告 game/view 里是否声明了 <component>Holder。
+func viewDeclaresHolder(root, component string) (bool, error) {
+	paths, err := filepath.Glob(filepath.Join(root, "game", "view", "*.go"))
+	if err != nil {
+		return false, err
+	}
+	needle := []byte("type " + component + "Holder interface")
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Contains(raw, needle) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

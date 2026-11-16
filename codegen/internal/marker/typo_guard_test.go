@@ -131,6 +131,8 @@ type PlayerDao struct {
 		source: "package guild\n\n//roost:mirror entityKind=EntityKindGuild colll=guild\ntype GuildMirror struct {\n\tID int64\n}\n"},
 	{kind: "web", file: "route.go", line: 5, typo: "methd", run: runWeb,
 		source: "package web\n\nimport \"context\"\n\n//roost:web methd=POST path=/x body=json\nfunc Handle(context.Context, *Service, Req) (Resp, error) { return Resp{}, nil }\n"},
+	{kind: "listen", file: "player.go", line: 6, typo: "priorty", run: runEntity,
+		source: "package player\n\n//roost:entity entityKind=EntityKindPlayer\ntype Player struct{ ID int64 }\n\n//roost:listen priorty=1\nfunc (e *Player) OnLevelUp(ev struct{}) error { return nil }\n"},
 	{kind: "register", file: "reg.go", line: 3, typo: "phse", run: runReg,
 		source: "package planet\n\n//roost:register phse=entity\nfunc RegisterX() {}\n"},
 }

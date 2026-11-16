@@ -30,6 +30,8 @@ type sagaStep struct {
 type sagaHandlerTarget struct {
 	entity, entityPascal, component string
 	dao, daoGetter                  string
+	// lock 是 handler 骨架的参数类型与取组件的写法（与 add handler 相同，见 componentHandlerTarget）。
+	lock handlerComponentTarget
 }
 
 // parseSagaSteps 按书写顺序解析 -steps 与 -native：-steps 的顺序就是 Definition.Steps 的下标顺序（Saga 按下标推进、
@@ -180,6 +182,9 @@ func resolveSagaHandlerTarget(root string, m Manifest, o AddOptions, service str
 		return sagaHandlerTarget{}, fmt.Errorf("saga %s -native: service %s runs the step consumers and needs the nest Mod for the native steps' transactions; run: roost add mod nest -service %s", toSnake(o.Name), service, service)
 	}
 	target := sagaHandlerTarget{entity: entityName, entityPascal: toPascal(entityName), component: toPascal(componentName)}
+	if target.lock, err = componentHandlerTarget(root, m.Project.Module, entityName, componentName); err != nil {
+		return sagaHandlerTarget{}, err
+	}
 	if err := resolveSagaReceiptHost(root, toSnake(o.Name), &target); err != nil {
 		return sagaHandlerTarget{}, err
 	}
@@ -642,13 +647,13 @@ func renderSagaNativeHandler(module, snake, sagaPascal string, step sagaStep, ta
 	return fmt.Sprintf(`package handler
 
 import (
-	%[1]s %[2]q
+	%[1]s
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 )
 
 // handler%[3]s is %[4]s of saga %[5]s,
 // a native step (roost add saga -native; a business file). It is one Nest transaction:
-// change the %[6]s through target.%[7]sComp(), then call step.Complete in the
+// change the %[6]s through %[7]s, then call step.Complete in the
 // same transaction. The change and the operation's receipt (kept in the
 // entity) are one WAL record: a redelivery replays the receipt instead of
 // running again, and a crash before the commit leaves neither (roost-core
@@ -672,12 +677,12 @@ import (
 // short-pool worker for the whole WAL fsync.
 //
 //roost:nest rollback=undo durability=pipelined
-func handler%[3]s(target %[1]s.I%[7]sEntity, step saga.NativeStep) error {
-	// TODO: call target.%[7]sComp().<BusinessMethod>(); on a coded business
+func handler%[3]s(target %[2]s, step saga.NativeStep) error {
+	// TODO: call %[7]s.<BusinessMethod>(); on a coded business
 	// error return step.Complete(false, reason). Until then the step refuses.
 	return step.Complete(false, %[9]q)
 }
-`, target.entity, module+"/game/entities/"+target.entity, handler, what, snake, target.entityPascal, target.component, refusedMeans, refusal)
+`, target.lock.importSpec, target.lock.paramType, handler, what, snake, target.entityPascal, target.lock.component, refusedMeans, refusal)
 }
 
 // addSaga 是 roost add saga：校验与生成全部文件内容（planSaga）之后才写盘，再把 saga Mod 接到服务上并同步工程

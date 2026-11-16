@@ -467,6 +467,12 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 		if check.name == "endpoint" {
 			found, err = anyConnectedEndpoint(root)
 		}
+		// 组件也可以在组件包里（game/components/<x>，类型号与 //roost:component 跟着组件走，2026-11-16 起）。
+		for _, pattern := range []string{"game/components/*/*.go", "game/components/*/*/*.go"} {
+			if check.name == "component" && !found && err == nil {
+				found, err = anyFileContains(root, pattern, check.needle)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}

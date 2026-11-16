@@ -42,7 +42,13 @@ type EntityDef struct {
 	// ViewAccessors / ViewImport：game/view 的访问器（view.go 的 applyViewAccessors 填写）。
 	ViewAccessors []ViewAccessor
 	ViewImport    string
-	RemoteBase    bool // embeds entity.RemoteEntityBase
+	// HostMethods：view 的 <X>Holder 要求实体提供、生成器能直接写出的宿主方法（纯 DAO 交接，view.go 填写）。
+	HostMethods []HostMethod
+	// ManualHosts：宿主方法里生成器不写、要在实体包手写的那些（写进编译期断言上方的注释）。
+	ManualHosts []ManualHost
+	// ViewEntity：本次生成了 game/view/entity_<snake>.go，接线里写编译期断言 var _ view.<E>Entity = (*E)(nil)。
+	ViewEntity bool
+	RemoteBase bool // embeds entity.RemoteEntityBase
 	// NoSnapshots: snapshots=none on a remote=managed entity — its commits
 	// carry only the DAO writes, no Remote snapshot (no
 	// _remote_entity_snapshots document, no L2 entry, no interest broadcast),
@@ -66,12 +72,19 @@ type ImportDef struct {
 
 // ComponentField is a component field in the entity struct.
 type ComponentField struct {
-	FieldName  string // Go field name, e.g. "bag"
-	TypeName   string // concrete type name, e.g. "BagComponent"
-	TypePkg    string // package path if external, empty if same package
-	CompType   string // ComponentType constant, e.g. "CompTypeBag"
-	Cold       bool   // skip startup wiring; business code initializes on demand
+	FieldName string // Go field name, e.g. "bag"
+	TypeName  string // concrete type name, e.g. "*BagComponent" or "*bag.Component"
+	// TypePkg 是组件类型所在包的导入路径；组件定义在实体包里（roost add component 的写法）时为空。
+	TypePkg string
+	// CompType 是组件类型号常量：实体包里的 "CompTypeBag"，或组件包里的 "bag.CompTypeBag"
+	// （2026-11-16 起类型号、//roost:component 标记与 RegisterComponentFactory 放在组件包里）。
+	CompType string
+	// CompPkg 是 CompType 常量所在包的导入路径；常量在实体包里时为空。
+	CompPkg    string
+	Cold       bool // skip startup wiring; business code initializes on demand
 	GetterName string
+	// GetterType 是 <X>Comp() 的返回类型：一律是字段的具体类型（只给生成的接线与实体包内部用；
+	// 别的包经 game/view 的 <X>Holder 拿组件）。
 	GetterType string
 }
 
@@ -151,6 +164,10 @@ func parsePackage(dir string) (packageDefs, string, error) {
 
 		if pkg == "" {
 			pkg = f.Name.Name
+		}
+		// //roost:listen 的选项拼错在这里就报出（不论包在不在生成工程里，事件登记见 event.go）。
+		if err := marker.CheckFile(fset, f, marker.Listen); err != nil {
+			return packageDefs{}, "", err
 		}
 
 		for recv, names := range collectViewMethods(f) {
@@ -301,6 +318,9 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					ent.Components, ent.Daos = extractFields(structType, content, fset)
 					ent.RemoteBase = hasRemoteEntityBase(structType)
 					deriveAccessors(&ent)
+					if err := resolveComponentPackages(&ent, importMap); err != nil {
+						return nil, fmt.Errorf("%s: %w", filePath, err)
+					}
 					ent.Imports = collectEntityImports(ent, importMap)
 					entities = append(entities, ent)
 					break
@@ -543,7 +563,7 @@ func qualifier(expr string) string {
 }
 
 func isGeneratedWireFile(name string) bool {
-	return strings.HasPrefix(name, "gen_") || strings.HasSuffix(name, "_gen_wire.go")
+	return strings.HasPrefix(name, "gen_") || strings.HasSuffix(name, "_gen_wire.go") || strings.HasSuffix(name, eventGenSuffix)
 }
 
 // extractFields categorizes struct fields into components and DAOs.
@@ -629,16 +649,35 @@ func deriveAccessors(ent *EntityDef) {
 			continue
 		}
 		comp.GetterName = compName + "Comp"
-		if alias := qualifier(comp.CompType); alias != "" {
-			comp.GetterType = alias + ".I" + compName + "Component"
-		} else {
-			comp.GetterType = comp.TypeName
-		}
+		comp.GetterType = comp.TypeName
 	}
 	for i := range ent.Daos {
 		dao := &ent.Daos[i]
 		dao.GetterName = daoGetterName(ent.Name, dao.TypeName)
 	}
+}
+
+// resolveComponentPackages 把 comp 标签与字段类型里的包名换成导入路径：组件包里的类型号与组件类型
+// （comp:"bag.CompTypeBag"、*bag.Component）要从实体源文件的 import 找到包，事件扫描与类型号解析都按路径找目录。
+func resolveComponentPackages(ent *EntityDef, importMap map[string]ImportDef) error {
+	for i := range ent.Components {
+		comp := &ent.Components[i]
+		for _, ref := range []struct {
+			expr string
+			path *string
+		}{{comp.CompType, &comp.CompPkg}, {comp.TypeName, &comp.TypePkg}} {
+			alias := qualifier(ref.expr)
+			if alias == "" {
+				continue
+			}
+			imp, ok := importMap[alias]
+			if !ok {
+				return fmt.Errorf("entity %s field %s: %q names package %s, which this file does not import", ent.Name, comp.FieldName, ref.expr, alias)
+			}
+			*ref.path = imp.Path
+		}
+	}
+	return nil
 }
 
 func componentNameFromCompType(compType string) string {

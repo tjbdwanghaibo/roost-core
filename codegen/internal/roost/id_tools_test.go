@@ -188,3 +188,33 @@ func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 		}
 	}
 }
+
+// 2026-11-16 起组件类型号、//roost:component 标记与工厂放在组件包（game/components/<x>）里：发号（NextID、模块安装的
+// moduleIDAllocator 都走 ScanIDs）与 roost id check（CheckIDs）把那里的号与实体包里的号算在同一个空间。
+func TestComponentIDsInComponentPackagesShareTheIDSpace(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("game/components/bag/bag.go", "package bag\n\n//roost:component type=2000\nconst CompTypeBag = 2000\n")
+	write("game/components/gameplay/skill/skill.go", "package skill\n\n//roost:component type=2001\nconst CompTypeSkill = 2001\n")
+	m := Manifest{IDs: map[string]IDSpace{"component": {Min: 2000, Max: 2999}}}
+	if id, err := NextID(root, m, "component", ""); err != nil || id != 2002 {
+		t.Fatalf("NextID(component) = %d, %v; want 2002 past the component packages' 2000 and 2001", id, err)
+	}
+	if err := CheckIDs(root, m); err != nil {
+		t.Fatalf("CheckIDs on distinct ids: %v", err)
+	}
+	write("game/entities/player/quest_component.go", "package player\n\n//roost:component type=2001\nconst CompTypeQuest = 2001\n")
+	if err := CheckIDs(root, m); err == nil || !strings.Contains(err.Error(), "duplicate component id 2001") || !strings.Contains(err.Error(), "game/components/gameplay/skill/skill.go") {
+		t.Fatalf("CheckIDs with an entity-package id equal to a component-package id = %v", err)
+	}
+}

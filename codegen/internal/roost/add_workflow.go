@@ -11,6 +11,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -479,7 +482,7 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType, pbI
 		if len(function.Type.Params.List[0].Names) != 1 {
 			return signature, fmt.Errorf("Nest handler %s endpoint requires exactly one named Player Entity target", handlerType)
 		}
-		signature.entity, err = endpointEntityOf(file, function.Type.Params.List[0].Type, handlerType)
+		signature.entity, err = endpointEntityOf(file, function.Type.Params.List[0].Type, handlerType, handlerPath)
 		if err != nil {
 			return signature, err
 		}
@@ -561,7 +564,9 @@ func endpointPBPointer(file *ast.File, expression ast.Expr, importPath, typeName
 // endpointEntityOf resolves the handler's first parameter type, written as
 // <alias>.I<Component>Entity, to the Entity package it imports. The kind
 // constant follows the entity scaffold's naming: EntityKind<Pascal(package)>.
-func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType string) (endpointEntity, error) {
+// A game/view type (view.I<Component>Entity, view.<Entity>Entity) is resolved
+// to the entity that mounts the component, see viewEndpointEntity.
+func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType, handlerPath string) (endpointEntity, error) {
 	selector, ok := expression.(*ast.SelectorExpr)
 	if !ok {
 		return endpointEntity{}, fmt.Errorf("Nest handler %s: the Entity target must be a <package>.I<Component>Entity interface", handlerType)
@@ -582,9 +587,64 @@ func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType string) (
 		if name != alias.Name {
 			continue
 		}
+		if module, isView := strings.CutSuffix(importPath, "/game/view"); isView {
+			// handler 在 <root>/game/handler/<名>.go。
+			root := filepath.Dir(filepath.Dir(filepath.Dir(handlerPath)))
+			return viewEndpointEntity(root, module, selector.Sel.Name, handlerType)
+		}
 		return endpointEntity{alias: alias.Name, importPath: importPath, kind: "EntityKind" + toPascal(path.Base(importPath))}, nil
 	}
 	return endpointEntity{}, fmt.Errorf("Nest handler %s: no import provides package %q for the Entity target", handlerType, alias.Name)
+}
+
+// viewEndpointEntity 把 game/view 里的参数类型解析成实体包：view.<E>Entity 就是实体 E；组件窄接口 view.I<X>Entity 找
+// game/entities/*/ 里挂了组件 X 的实体（comp:"CompType<X>" 或 comp:"<包>.CompType<X>"，不依赖已经生成的 view 文件，
+// add endpoint 常在 roost generate 之前跑）。挂了它的实体不止一个时报错：endpoint 按 PlayerID 拼实体 ID，要知道是哪一种。
+func viewEndpointEntity(root, module, typeName, handlerType string) (endpointEntity, error) {
+	entityAt := func(dir string) endpointEntity {
+		return endpointEntity{alias: dir, importPath: module + "/game/entities/" + dir, kind: "EntityKind" + toPascal(dir)}
+	}
+	name, ok := strings.CutSuffix(typeName, "Entity")
+	if !ok || name == "" {
+		return endpointEntity{}, fmt.Errorf("Nest handler %s: view.%s is not an entity interface (view.<Entity>Entity or view.I<Component>Entity)", handlerType, typeName)
+	}
+	// I 后面紧跟大写字母是组件窄接口（IProfileEntity）；ItemEntity 是实体 Item 的总接口。
+	isComponent := len(name) > 1 && name[0] == 'I' && name[1] >= 'A' && name[1] <= 'Z'
+	component := strings.TrimPrefix(name, "I")
+	if !isComponent {
+		dir := toSnake(name)
+		if _, err := os.Stat(filepath.Join(root, "game", "entities", dir)); err != nil {
+			return endpointEntity{}, fmt.Errorf("Nest handler %s: view.%s names no entity package game/entities/%s", handlerType, typeName, dir)
+		}
+		return entityAt(dir), nil
+	}
+	paths, err := filepath.Glob(filepath.Join(root, "game", "entities", "*", "*.go"))
+	if err != nil {
+		return endpointEntity{}, err
+	}
+	tag := regexp.MustCompile("\\bcomp:\"(?:[A-Za-z_][A-Za-z0-9_]*\\.)?CompType" + regexp.QuoteMeta(component) + "(?:,[^\"]*)?\"")
+	var dirs []string
+	for _, file := range paths {
+		if strings.HasSuffix(file, "_test.go") || strings.HasSuffix(file, "_gen.go") || strings.HasSuffix(file, "_gen_wire.go") {
+			continue
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return endpointEntity{}, err
+		}
+		if dir := filepath.Base(filepath.Dir(file)); tag.Match(raw) && !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	switch len(dirs) {
+	case 1:
+		return entityAt(dirs[0]), nil
+	case 0:
+		return endpointEntity{}, fmt.Errorf("Nest handler %s: no entity under game/entities mounts component %s (view.%s)", handlerType, component, typeName)
+	default:
+		sort.Strings(dirs)
+		return endpointEntity{}, fmt.Errorf("Nest handler %s: entities %s all mount component %s; an endpoint addresses one kind, so take view.<Entity>Entity of the player's entity", handlerType, strings.Join(dirs, ", "), component)
+	}
 }
 
 func protocolFieldNames(path, typeName string) (map[string]string, error) {

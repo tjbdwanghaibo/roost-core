@@ -44,11 +44,28 @@ func addEntityComponent(root string, manifest Manifest, options AddOptions) ([]s
 	if err != nil {
 		return nil, fmt.Errorf("format component scaffold: %w", err)
 	}
-	if err := writeRelatedBusinessFiles(entityPath, raw, updated, componentPath, body); err != nil {
+	changes := []syncChange{
+		{rel: filepath.ToSlash(componentPath), path: componentPath, body: body},
+		{rel: filepath.ToSlash(entityPath), path: entityPath, before: raw, body: updated, existed: true},
+	}
+	written := []string{relativeSlash(root, componentPath), relativeSlash(root, entityPath)}
+	// view 侧：组件对外的接口 <X> 与 <X>Holder（访问器与宿主方法）。别的实体已经加过同名组件、或模块带来了这个文件时不动它。
+	viewPath := filepath.Join(root, "game", "view", "component_"+componentSnake+".go")
+	if _, statErr := os.Stat(viewPath); os.IsNotExist(statErr) {
+		viewBody, err := format.Source([]byte(renderViewComponent(componentType, toSnake(entityName), componentSnake)))
+		if err != nil {
+			return nil, fmt.Errorf("format component view scaffold: %w", err)
+		}
+		changes = append(changes, syncChange{rel: filepath.ToSlash(viewPath), path: viewPath, body: viewBody})
+		written = append(written, relativeSlash(root, viewPath))
+	} else if statErr != nil {
+		return nil, statErr
+	}
+	if err := commitSyncChanges(changes); err != nil {
 		return nil, err
 	}
 	_ = manifest // reserved for future component policy validation
-	return []string{relativeSlash(root, componentPath), relativeSlash(root, entityPath)}, nil
+	return written, nil
 }
 
 func addEntityDAO(root string, manifest Manifest, options AddOptions) ([]string, error) {
@@ -342,7 +359,7 @@ func formatAST(fset *token.FileSet, file *ast.File) ([]byte, error) {
 }
 
 func renderEntityComponent(pkg, entityType, name, componentType string, id int64) string {
-	return fmt.Sprintf(`package %s
+	return fmt.Sprintf(`package %[1]s
 
 import (
 	"fmt"
@@ -350,46 +367,63 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-//roost:component type=%d
-const CompType%s entity.ComponentType = %d
+//roost:component type=%[2]d
+const CompType%[3]s entity.ComponentType = %[2]d
 
-// %sComponent owns %s gameplay logic. It keeps no state a transaction
+// %[3]sComponent owns %[4]s gameplay logic. It keeps no state a transaction
 // changes: such state lives in the DAO and moves through the generated
 // mutators — a nopersist field when it must not be stored — so the DAO's
 // rollback is the only rollback and dirty tracking stays correct. Do not
 // register undo here.
-type %sComponent struct {
+//
+// Other packages reach it through game/view: view.%[3]s (component_%[5]s.go) lists
+// the methods they may call, and Nest handlers take the generated narrow
+// interface view.I%[3]sEntity and call target.%[3]s().<Method>().
+type %[3]sComponent struct {
 	entity.ComponentBase
-	owner *%s
-}
-
-// I%sEntity is the narrow lock-safe view for Nest handlers using this
-// component. The generated Entity wire implements the getter.
-type I%sEntity interface {
-	entity.IThreadSafeEntity
-	%sComp() *%sComponent
+	owner *%[4]s
 }
 
 func init() {
-	entity.RegisterComponentFactory(CompType%s, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		typed, ok := owner.(*%s)
+	entity.RegisterComponentFactory(CompType%[3]s, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*%[4]s)
 		if !ok {
-			return nil, fmt.Errorf("%s component: owner %%T is not *%s", owner)
+			return nil, fmt.Errorf("%[5]s component: owner %%T is not *%[4]s", owner)
 		}
-		return &%sComponent{owner: typed}, nil
+		return &%[3]sComponent{owner: typed}, nil
 	})
 }
 
-func (component *%sComponent) Name() string { return %q }
+func (component *%[3]sComponent) Name() string { return %[6]q }
 
 // Owner is available only while the Entity is alive and locked by Nest.
-func (component *%sComponent) Owner() *%s { return component.owner }
+func (component *%[3]sComponent) Owner() *%[4]s { return component.owner }
 
-// Add business methods below. Do not add mutexes here: Nest enters business
-// handlers only after locking the owning Entity.
-`, pkg, id, componentType, id, componentType, entityType, componentType, entityType, componentType, componentType, componentType, componentType,
-		componentType, entityType, name, entityType, componentType, componentType, name,
-		componentType, entityType)
+// Add business methods below. Add the ones handlers call to view.%[3]s too.
+// Do not add mutexes here: Nest enters business handlers only after locking
+// the owning Entity.
+`, pkg, id, componentType, entityType, name, name)
+}
+
+// renderViewComponent 写 roost add component 的 view 侧：组件对外的接口 <X> 与 <X>Holder。访问器 <X>() 与
+// 窄接口 view.I<X>Entity 由 roost generate（entity 生成器）写。
+func renderViewComponent(componentType, entitySnake, componentSnake string) string {
+	return fmt.Sprintf(`package view
+
+// %[1]s is what other packages may call on the %[1]s component (implemented by
+// %[1]sComponent in game/entities/%[2]s/%[3]s_component.go). Add each method a
+// handler or another component calls; they run only while Nest holds the
+// entity's lock.
+type %[1]s interface{}
+
+// %[1]sHolder is "has a %[1]s component". roost generate implements the
+// accessor %[1]s() on every entity that mounts the component and writes the
+// narrow interface I%[1]sEntity (holder_entities_gen.go) that Nest handlers
+// take. Methods the component needs from its entity (host methods) go here too
+// and the entity implements them; one that only hands over a field of the
+// entity's DAO (for example State() *db.%[1]sState) is generated.
+type %[1]sHolder interface{ %[1]s() %[1]s }
+`, componentType, entitySnake, componentSnake)
 }
 
 // defaultDAODatabase 是 DAO 骨架 db= 的逻辑库名（D9 修订版 A）：代码里写固定的逻辑名，物理库名交给部署配置

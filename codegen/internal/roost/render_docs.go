@@ -210,12 +210,15 @@ Nest 同时需要 roost.yaml 的 nest feature（生成 Sender/handler）和目�
 
     package handler
 
-    import player "{{MODULE}}/game/entities/player"
+    import "{{MODULE}}/game/view"
 
     //roost:nest rollback=undo durability=strict
-    func handlerRenamePlayer(target player.IProfileEntity, name string) error {
-        return target.ProfileComp().Rename(name)
+    func handlerRenamePlayer(target view.IProfileEntity, name string) error {
+        return target.Profile().Rename(name)
     }
+
+handler 经 game/view 拿组件：Rename 也要写进 game/view/component_profile.go 的 Profile 接口；
+view.IProfileEntity 与实体上的访问器 Profile() 由 roost generate 生成。
 
 运行 make generate 后，Nest 会生成 Sender、按全局顺序取得 Entity 锁、执行 handler，
 并按声明完成回滚和 durability。业务层不要再次给

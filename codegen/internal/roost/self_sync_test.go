@@ -306,17 +306,19 @@ func (component *WalletComponent) AddGold(amount int64) error {
 	write("game/handler/add_gold.go", `package handler
 
 import (
- player "example.com/planet/game/entities/player"
+ "example.com/planet/game/view"
  messages "example.com/planet/protocol/pb"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerAddGold(target player.IWalletEntity, request *messages.AddGoldRequest, nowUnixMilli int64) (*messages.AddGoldResponse, error) {
+func handlerAddGold(target view.IWalletEntity, request *messages.AddGoldRequest, nowUnixMilli int64) (*messages.AddGoldResponse, error) {
  if request.Amount == -2 { return nil, nil } // 验证无响应不会被边界伪装成成功。
- if err := target.WalletComp().AddGold(request.Amount); err != nil { return nil, err }
- return &messages.AddGoldResponse{Gold: target.WalletComp().Gold()}, nil
+ if err := target.Wallet().AddGold(request.Amount); err != nil { return nil, err }
+ return &messages.AddGoldResponse{Gold: target.Wallet().Gold()}, nil
 }
 `)
+	// handler 经 view.Wallet 调用组件（roost add component 写的 view 接口）：方法也写进 view。
+	edit("game/view/component_wallet.go", "type Wallet interface{}", "type Wallet interface {\n\tAddGold(amount int64) error\n\tGold() int64\n}")
 	edit("game/entities/player/wallet_component.go", "// Add business methods below.", "func (component *WalletComponent) Gold() int64 { return component.owner.Dao().GetGold() }\n\n// Add business methods below.")
 	edit("protocol/def/add_gold.go", "type AddGoldRequest struct{}", "type AddGoldRequest struct {\n\tAmount int64 `pb:\"1\"`\n\tPlayerID int64 `pb:\"2\"`\n}")
 	edit("protocol/def/add_gold.go", "type AddGoldResponse struct {", "type AddGoldResponse struct {\n\tGold int64 `pb:\"3\"`")

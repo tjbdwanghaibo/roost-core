@@ -54,10 +54,13 @@ func (component *ProfileComponent) Rename(name string) error {
     return nil
 }
 
-// game/handler/profile.go
+// game/view/component_profile.go：handler 要调用的方法也写进 view.Profile
+type Profile interface{ Rename(name string) error }
+
+// game/handler/profile.go：参数是 roost generate 写的窄接口 view.IProfileEntity
 //roost:nest rollback=undo durability=strict
-func handlerRenamePlayer(target player.IProfileEntity, name string) error {
-    return target.ProfileComp().Rename(name)
+func handlerRenamePlayer(target view.IProfileEntity, name string) error {
+    return target.Profile().Rename(name)
 }`,
 	},
 	{

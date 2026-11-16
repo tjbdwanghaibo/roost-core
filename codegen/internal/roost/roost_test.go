@@ -439,7 +439,7 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(componentPaths, ","), "game/entities/player/inventory_component.go,game/entities/player/entity.go"; got != want {
+	if got, want := strings.Join(componentPaths, ","), "game/entities/player/inventory_component.go,game/entities/player/entity.go,game/view/component_inventory.go"; got != want {
 		t.Fatalf("component paths = %s, want %s", got, want)
 	}
 	if _, err := Add(root, AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}); err != nil {
@@ -469,11 +469,24 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"entity.RegisterComponentFactory", "owner.(*Player)", "func (component *InventoryComponent) Owner() *Player", "type IInventoryEntity interface", "InventoryComp() *InventoryComponent",
-		"Do not add mutexes here", "CompTypeInventory entity.ComponentType = 2000",
+		"entity.RegisterComponentFactory", "owner.(*Player)", "func (component *InventoryComponent) Owner() *Player",
+		"Do not add mutexes here", "CompTypeInventory entity.ComponentType = 2000", "view.IInventoryEntity",
 	} {
 		if !strings.Contains(string(componentSource), want) {
 			t.Errorf("Component scaffold missing %q:\n%s", want, componentSource)
+		}
+	}
+	// 2026-11-16：窄接口不再写进实体包，改由 view 的 <X>Holder 生成 view.I<X>Entity。
+	if strings.Contains(string(componentSource), "type IInventoryEntity interface") {
+		t.Errorf("Component scaffold still declares the narrow interface in the entity package:\n%s", componentSource)
+	}
+	viewSource, err := os.ReadFile(filepath.Join(root, "game", "view", "component_inventory.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"package view", "type Inventory interface{}", "type InventoryHolder interface{ Inventory() Inventory }"} {
+		if !strings.Contains(string(viewSource), want) {
+			t.Errorf("view scaffold missing %q:\n%s", want, viewSource)
 		}
 	}
 	if _, err := Add(root, AddOptions{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Inventory"}); err != nil {
@@ -486,7 +499,8 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"CreateComponent(CompTypeInventory", "func (e *Player) InventoryComp() *InventoryComponent", "func (e *Player) Dao() *db.PlayerDao"} {
+	for _, want := range []string{"CreateComponent(CompTypeInventory", "func (e *Player) InventoryComp() *InventoryComponent", "func (e *Player) Dao() *db.PlayerDao",
+		"func (e *Player) Inventory() view.Inventory { return e.inventory }", "var _ view.PlayerEntity = (*Player)(nil)"} {
 		if !strings.Contains(string(wire), want) {
 			t.Errorf("generated Entity wire missing %q:\n%s", want, wire)
 		}
@@ -499,7 +513,7 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"handlerRenamePlayer", "player.IInventoryEntity", "nest.DurabilityStrict"} {
+	for _, want := range []string{"handlerRenamePlayer", "view.IInventoryEntity", "nest.DurabilityStrict"} {
 		if !strings.Contains(string(nestWire), want) {
 			t.Errorf("generated Nest wire missing %q:\n%s", want, nestWire)
 		}
@@ -561,6 +575,16 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
 				t.Fatal(writeErr)
 			}
+			// handler 经 view.Profile 调用组件：方法也写进 view 的接口。
+			viewPath := filepath.Join(root, "game", "view", "component_profile.go")
+			viewRaw, readErr := os.ReadFile(viewPath)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			viewRaw = bytes.Replace(viewRaw, []byte("type Profile interface{}"), []byte("type Profile interface{ Rename(name string) error }"), 1)
+			if writeErr := os.WriteFile(viewPath, viewRaw, 0o644); writeErr != nil {
+				t.Fatal(writeErr)
+			}
 		case "dao":
 			path := filepath.Join(root, "db", "def", "player.go")
 			raw, readErr := os.ReadFile(path)
@@ -578,8 +602,8 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 				t.Fatal(readErr)
 			}
 			raw = bytes.Replace(raw,
-				[]byte("func handlerRenamePlayer(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}"),
-				[]byte("func handlerRenamePlayer(target player.IProfileEntity, name string) error {\n\treturn target.ProfileComp().Rename(name)\n}"), 1)
+				[]byte(profileHandlerSkeleton("RenamePlayer")),
+				[]byte("func handlerRenamePlayer(target view.IProfileEntity, name string) error {\n\treturn target.Profile().Rename(name)\n}"), 1)
 			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
 				t.Fatal(writeErr)
 			}
@@ -785,8 +809,8 @@ func TestEndpointScaffoldTakesTheHandlerResultAndAnswersBusinessErrors(t *testin
 		}
 	}
 	edit("game/handler/rename_player.go",
-		"func handlerRenamePlayer(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}",
-		"func handlerRenamePlayer(target player.IProfileEntity, name string) (string, error) {\n\treturn name, nil\n}")
+		profileHandlerSkeleton("RenamePlayer"),
+		"func handlerRenamePlayer(target view.IProfileEntity, name string) (string, error) {\n\treturn name, nil\n}")
 	edit("protocol/def/rename_player.go", "type RenamePlayerRequest struct{}", "type RenamePlayerRequest struct { Name string `pb:\"1\"` }")
 
 	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err != nil {
@@ -871,8 +895,8 @@ func TestEndpointLeavesBusinessTimeToTheDispatch(t *testing.T) {
 		}
 	}
 	edit("game/handler/use_double_card.go",
-		"func handlerUseDoubleCard(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}",
-		"func handlerUseDoubleCard(target player.IProfileEntity, cardID int64, nowUnixMilli int64) error {\n\t_, _ = cardID, nowUnixMilli\n\treturn nil\n}")
+		profileHandlerSkeleton("UseDoubleCard"),
+		"func handlerUseDoubleCard(target view.IProfileEntity, cardID int64, nowUnixMilli int64) error {\n\t_, _ = cardID, nowUnixMilli\n\treturn nil\n}")
 	edit("protocol/def/use_double_card.go", "type UseDoubleCardRequest struct{}", "type UseDoubleCardRequest struct { CardID int64 `pb:\"1\"` }")
 	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "UseDoubleCard", Handler: "player"}); err != nil {
 		t.Fatalf("add endpoint with a business-time parameter: %v", err)
@@ -893,8 +917,8 @@ func TestEndpointLeavesBusinessTimeToTheDispatch(t *testing.T) {
 
 	// 请求里没有、也不是业务时间的参数：照旧拒绝，但报错写明服务器决定的值不放进请求、业务时间用约定名。
 	edit("game/handler/claim.go",
-		"func handlerClaim(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}",
-		"func handlerClaim(target player.IProfileEntity, claimedAt int64) error {\n\t_ = claimedAt\n\treturn nil\n}")
+		profileHandlerSkeleton("Claim"),
+		"func handlerClaim(target view.IProfileEntity, claimedAt int64) error {\n\t_ = claimedAt\n\treturn nil\n}")
 	_, err = Add(root, AddOptions{Kind: "endpoint", Name: "Claim", Handler: "player"})
 	if err == nil {
 		t.Fatal("endpoint accepted a parameter that is neither a request field nor server-supplied")
@@ -2468,5 +2492,89 @@ func handlerRenamePlayer(target player.IPlayerEntity, request %s, nowUnixMilli i
 				t.Fatalf("signature=%+v err=%v", got, err)
 			}
 		})
+	}
+}
+
+// profileHandlerSkeleton 是 roost add handler --component Profile 写出的函数（组件由 roost add component 生成，view 里有
+// ProfileHolder，所以参数是生成的窄接口 view.IProfileEntity）。
+func profileHandlerSkeleton(name string) string {
+	return "func handler" + name + "(target view.IProfileEntity) error {\n\t// TODO: validate input and call target.Profile().<BusinessMethod>() (declare the method in view.Profile first).\n\treturn nil\n}"
+}
+
+// handler 的锁目标是 game/view 的类型时，add endpoint 按挂载关系找实体：view.<E>Entity 就是 E；view.I<X>Entity 是挂了组件 X
+// 的那个实体（实体包里的组件或组件包里的组件都算，不依赖生成的 view 文件）；挂了它的实体不止一个时报错。
+func TestEndpointResolvesViewTargetsToTheMountingEntity(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("game/entities/player/entity.go", "package player\n\ntype Player struct {\n\tprofile *ProfileComponent `comp:\"CompTypeProfile\"`\n\tbag *bag.Component `comp:\"bag.CompTypeBag,cold\"`\n\tactivity *activity.Component `comp:\"activity.CompTypeActivity\"`\n}\n")
+	write("game/entities/item/entity.go", "package item\n\ntype Item struct{}\n")
+	write("game/entities/guild/entity.go", "package guild\n\ntype Guild struct {\n\tactivity *activity.Component `comp:\"activity.CompTypeActivity\"`\n}\n")
+	for _, tc := range []struct{ typeName, want, err string }{
+		{"IProfileEntity", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
+		{"IBagEntity", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
+		{"PlayerEntity", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
+		{"ItemEntity", "item.EntityKindItem example.com/planet/game/entities/item", ""},
+		{"IActivityEntity", "", "entities guild, player all mount component Activity"},
+		{"IQuestEntity", "", "no entity under game/entities mounts component Quest"},
+		{"Profile", "", "is not an entity interface"},
+	} {
+		got, err := viewEndpointEntity(root, "example.com/planet", tc.typeName, "X")
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%s: err = %v, want %q", tc.typeName, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || got.alias+"."+got.kind+" "+got.importPath != tc.want {
+			t.Errorf("%s: got %+v, %v; want %s", tc.typeName, got, err, tc.want)
+		}
+	}
+}
+
+// first-business 的 component 一项：组件放在组件包（game/components/<x>，带 //roost:component）也算有组件，不再只认
+// 实体包里的 <x>_component.go。
+func TestFirstBusinessCountsAComponentPackage(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	status := func() CheckStatus {
+		t.Helper()
+		manifest, err := LoadManifest(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items, err := checkFirstBusinessWorkflow(root, manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Name == "workflow:component" {
+				return item.Status
+			}
+		}
+		t.Fatal("no workflow:component item")
+		return ""
+	}
+	if got := status(); got == StatusOK {
+		t.Fatalf("component item is ok in an empty project")
+	}
+	path := filepath.Join(root, "game", "components", "bag", "bag.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("package bag\n\n//roost:component type=2000\nconst CompTypeBag = 2000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(); got != StatusOK {
+		t.Fatalf("component item = %s with a component package", got)
 	}
 }

@@ -449,6 +449,8 @@ func New{{.Entity.Name}}(param *entity.EntityCreateParam) (*{{.Entity.Name}}, er
 	e.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, {{.Entity.NoPersist}}, param.Mutex, param.Kind)
 {{- end}}
 	e.EntityBase.SetHooks(e.generatedOnClear, e.generatedOnDestroy)
+	// 实体事件：Publish 经这里按 (kind, 事件类型) 找 init 里登记的监听（<实体>_event_gen.go）。
+	e.EntityBase.SetEventDispatch(func(ev any) error { return entity.DispatchEvent({{.Entity.EntityKind}}, e, ev) })
 
 {{- if .HasComps}}
 
@@ -528,6 +530,22 @@ func (e *{{$.Entity.Name}}) {{.GetterName}}() {{.TypeName}} { return e.{{.FieldN
 
 // {{.Name}} 返回 game/view 的组件接口，供只依赖 view 的组件包、钩子与联动使用。
 func (e *{{$.Entity.Name}}) {{.Name}}() {{.Type}} { return e.{{.Field}} }
+{{- end}}
+{{- range .Entity.HostMethods}}
+
+// {{.Name}} 是 view.{{.Holder}} 的宿主方法：把 {{.Source}} 交给组件（纯 DAO 交接，生成）。
+func (e *{{$.Entity.Name}}) {{.Name}}() {{.ResultType}} { return e.{{.DaoField}}.{{.DaoGetter}}() }
+{{- end}}
+{{- if .Entity.ViewEntity}}
+
+// {{.Entity.Name}} 必须实现 view.{{.Entity.Name}}Entity：漏写宿主方法时这一行编译失败，错误里写着缺哪个方法。
+{{- if .Entity.ManualHosts}}
+// 下面的宿主方法生成器不写，在实体包里手写（每个模块一个文件，例如 <模块>.go）：
+{{- range .Entity.ManualHosts}}
+//   - {{.Signature}}（view.{{.Holder}}{{if .Missing}}；还没有实现{{end}}{{if .Note}}；{{.Note}}{{end}}）
+{{- end}}
+{{- end}}
+var _ view.{{.Entity.Name}}Entity = (*{{.Entity.Name}})(nil)
 {{- end}}
 
 {{- if and .Entity.Sync (not (hasMethod .Entity "TakeEntitySyncChanges"))}}
