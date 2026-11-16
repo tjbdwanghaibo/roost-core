@@ -144,7 +144,7 @@
 
 - **只在同一实体、锁内、同步**：`Publish` 只在当前 Guard 持有发布事件的实体时执行，监听只在这个实体上、当场执行，修改落在同一笔事务里。不异步、不跨实体、不跨进程、不能运行时订阅或退订：要改别的实体走 Nest 发送（生成的 Sender，多个实体要原子就写多实体 handler），跨进程走 `nest.Emit`。所以事务和实体锁之外的登记点（`game/modules/login` 的 `OnEntering` / `OnEntered` / `OnCreating` / `OnCreatePrepare`、rehome 的 `OnApplying` / `OnLeaving` / `OnArrived`、leaderboard 的 `OnSubmitted`、login 的 `OnSessionActive`）和扩展提供方（`OnActor`、`OnAttributeGear`、`OnSceneFields` 等）不是实体事件，保留原登记方式。
 - **memory 快路径与 `rollback=none` 里不撤销**（维护者 2026-11-16 决定允许在这两种 handler 里发布）：监听返回的错误照常外传给发布方与 Nest，但发布方与前面监听已做的修改不撤销，与这类 handler 本身“不承诺失败恢复”一致。要“监听失败则整笔撤销”就把 handler 声明为可回滚。
-- **没有保存点**：事务只能整笔回滚，监听把内层 `Publish` 的错误吞掉时，内层出错前的修改会留下；拦截类事件的监听改了状态、发布方又把拒绝转成业务回包（不回滚）时同样留下。两条都靠约定（错误原样外传、拦截只读），没有静态检查（doctor 的 `event:publish-error` 未实施，见[生成工程目录：遗留](#生成工程目录遗留)）。
+- **没有保存点**：事务只能整笔回滚，监听把内层 `Publish` 的错误吞掉时，内层出错前的修改会留下；拦截类事件的监听改了状态、发布方又把拒绝转成业务回包（不回滚）时同样留下。两条都靠约定（错误原样外传、拦截只读），没有静态检查：doctor 的 `event:publish-error`、`event:cycle`、`event:publish`（方案 §4.5）本轮不做，记为以后的增强（维护者 2026-11-17）。“监听出错整笔回滚”由 core 测试 `TestEntityEventListenerFailureRollsBackTheWholeTransaction`（`framework/nest`，含嵌套发布、memory 与 strict）守住。
 - **循环靠运行时上限兜底**：嵌套深度 8、同一事件在栈上 3 次、一次最外层发布 256 次，超出整笔回滚；生成器的静态环提示只看直接写在监听方法（及同一接收者上被直接调用的方法）里的 `Publish(event.X{...})`，经别的包、接口或间接调用发布的看不到。
 - **登记只在 `init`，首次发布时冻结**：之后再 `RegisterEventListener` 或 `SetEventLimits` 直接 panic；只有 `init`、没被任何代码引用的包不会被链接，里面的登记不执行（scene 的 `game/components/scene` 由场景运行期入口空白引用）。
 
@@ -497,6 +497,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
+- **game-demo 自有组件仍是实体包写法**（维护者 2026-11-17 决定本轮不迁）：monster、terrain、world、map、dungeonledger 五个组件的类型号与工厂登记仍在实体包（别名挂载），能编译能跑，但这些组件上不能写 `//roost:listen`（生成器对旧写法挂载的组件上的监听报错）。哪个组件需要监听事件时再把它迁到组件包，做法同模块（`component_package`、view 宿主方法）。
 - **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player_enter_game.go`、`player_enter_create.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
 
 #### game-demo 的玩法范围（D20 第 3 期）
@@ -791,7 +792,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
   - 全部模块模板迁移（9aaebe7f、c8340c27、09e8feee、bcf8ca44、eaa85d13）；删除 `roost add module`（c9ca9243）。
 
   **还没做**：game-demo 中由模块与生成器带来的部分（另行进行）；本轮阶段 7 的全量（codegen 全量、全部模块门禁与场景数核对、genre 脚本、TestDemo、pretag）。方案见 [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)，全量安排见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
-- **组件钩子改为实体事件（已实施，待最终全量）**：维护者 2026-11-16 定的第二版方案已实施：core 的 `Publish` / 登记 / 三道上限（a0a4e405、16248e14），生成器的 `//roost:listen [priority=N]` 登记、顺序与静态环提示（596a21b1），旧写法挂载的组件上的监听改报错（13161a23），19 个事件替换了原来的通知与拦截类钩子（清单见 [FEATURE-2026-11-16-tx-event §1.3](FEATURE-2026-11-16-tx-event.md#13-33-个登记点的分类按实施结果改正)）。框架本身的边界写在上面的[实体事件](#实体事件2026-11-16)。**还没做**：方案 §4.5 的 doctor 检查（`event:publish-error`、`event:cycle`、`event:publish`）未实施；方案 §7 的“用真实 Nest 事务验证监听出错整笔回滚”目前只在模块场景里（profile 升级、enter 首次初始化），core 包里没有；先失败后通过证据（`DispatchEvent` 改成出错也继续时 profile 的回滚场景应变红）与本轮阶段 7 的全量。
+- **组件钩子改为实体事件（已实施，待最终全量）**：维护者 2026-11-16 定的第二版方案已实施：core 的 `Publish` / 登记 / 三道上限（a0a4e405、16248e14），生成器的 `//roost:listen [priority=N]` 登记、顺序与静态环提示（596a21b1），旧写法挂载的组件上的监听改报错（13161a23），19 个事件替换了原来的通知与拦截类钩子（清单见 [FEATURE-2026-11-16-tx-event §1.3](FEATURE-2026-11-16-tx-event.md#13-33-个登记点的分类按实施结果改正)）。框架本身的边界写在上面的[实体事件](#实体事件2026-11-16)。doctor 的 `event:*` 检查维护者 2026-11-17 定为以后的增强（见上面[实体事件](#实体事件2026-11-16)）；core 的真实 Nest 事务回滚测试已补（`TestEntityEventListenerFailureRollsBackTheWholeTransaction`，`Publish` 吞掉监听错误时变红）。**还没做**：本轮阶段 7 的全量。
 
 ### 框架服务与 game-demo（遗留）
 
