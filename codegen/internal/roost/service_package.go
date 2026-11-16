@@ -61,6 +61,7 @@ func (m Manifest) withServicePackages(root string) Manifest {
 	}
 	m.servicePackages = packages
 	m.gameManagers = gameManagersService(root, m)
+	m.playerAuthenticatorFactory = hasPlayerAuthenticatorFactory(root)
 	return m
 }
 

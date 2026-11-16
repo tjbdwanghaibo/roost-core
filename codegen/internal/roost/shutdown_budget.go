@@ -103,6 +103,8 @@ type serviceShutdown struct {
 	dataEngine int
 	playerTCP  int
 	mirror     int
+	// gate 是独立 Gate 的 Gate Mod（固定 10s，不读配置）。
+	gate int
 	margin     time.Duration
 	// release is the singleton release share (generatedSingletonRelease) for a
 	// service whose generated config turns the singleton on, zero otherwise.
@@ -157,6 +159,12 @@ func serviceShutdownPlan(m Manifest, service string) serviceShutdown {
 	if serviceOwnsPlayerTCP(m, service) {
 		plan.declaring++
 		plan.playerTCP++
+		plan.declared += generatedPlayerTCPShutdownTimeout
+	}
+	// 独立 Gate 的 Gate Mod 声明 TCP 的停机预算（gatewiring.DefaultOptions 的 10s；配置不开放这个键）。
+	if isPlayerGateService(m, service) {
+		plan.declaring++
+		plan.gate++
 		plan.declared += generatedPlayerTCPShutdownTimeout
 	}
 	// App 单实例锁：Mod 停机截止时间提前 3s 留给 Release（app/app.go 的 releaseReserve），
@@ -617,6 +625,7 @@ func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) 
 		}
 		declared += value * time.Duration(plan.playerTCP)
 	}
+	declared += generatedPlayerTCPShutdownTimeout * time.Duration(plan.gate)
 	// 只读 Mirror：remote_entity.mirror.shutdown_timeout 缺省 5s（wiring/remoteentity 的声明），非正值起服即被
 	// 配置校验拒绝（min:"1ns"）。
 	if plan.mirror > 0 {

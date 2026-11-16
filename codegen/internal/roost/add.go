@@ -80,6 +80,9 @@ func Add(root string, options AddOptions) ([]string, error) {
 	if !validName(toSnake(name)) {
 		return nil, fmt.Errorf("invalid %s name %q", options.Kind, name)
 	}
+	if options.Kind == "gate" {
+		return addGate(root, m, options)
+	}
 	if options.Kind == "service" {
 		manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
 		if err != nil {

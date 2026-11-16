@@ -24,7 +24,7 @@ roost help all              # 全部专题
 roost <command> --help      # 上下文帮助
 ```
 
-可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`services`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`effect`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
+可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`gate`、`lifecycle`、`endpoint`、`skill`、`services`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`effect`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
 
 框架发布维护者使用 `roost framework verify` 校验 `ci/framework-release.yaml` 的精确版本集合并生成 `framework-lock.json`。该命令拒绝 `latest`、replace 和框架内部伪版本依赖；具体发布顺序与 GitHub Environment 配置见 `docs/CI_CD_IMPLEMENTATION.zh-CN.md`。
 
@@ -47,10 +47,12 @@ roost add saga --help
 roost project new planet \
   -module example.com/planet \
   -out ./planet \
-  -services game,gate \
+  -services game,lobby \
   -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity,dataengine,nest \
   -features protocol,config,entity,nest,dao,errcode
 ```
+
+`-services` 只声明普通业务服务；名字叫 gate 也不会得到 Gate 接线。独立 Gate 用 `roost add gate`（§3 的命令表）。
 
 Data Engine 是唯一持久化引擎；即使只指定 `nest` 或 `saga`，生成器也会自动补齐
 `dataengine`、Mongo 与 NATS。工程会把 `WithEntityAccess`（Remote 开启时同时加
@@ -190,6 +192,7 @@ roost add rpc guild -service game
 | --- | --- | --- | --- |
 | `add access player` | 多 Service 时 `--service` | roost.yaml、access Mod（internal/access/player，派发层用 core 的 infra/network/playeraccess）、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
 | `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
+| `add gate [<name>]` | 已有玩家 TCP、托管 account 且玩家服务 uses 它（`roost module add login` 一并做好） | roost.yaml 的 Gate 服务（缺省 gate；mods etcd、nats，uses account）与 `access.player.gate`、玩家服务补 etcd；Gate 服务的 bootstrap（不自动登记的 etcd + `accessplayertcp.NewGateMod()`）、配置（`player_access.gate` 的 namespace / addr / advertise_addr，singleton 打开）、部署模板；玩家服务的 `bootstrap.New()` 走 Game Ingress，配置关嵌入 TCP、加 `player_access.gate`，装了登录模块时写 `login.presence.addr` | `roost project doctor` 的 gate:*；生产示例里填两端的 advertise_addr（`roost help gate`） |
 | （生成）实体 lifecycle | 无 | `game/entities/<entity>/lifecycle_gen.go`（`roost generate`；v1.47.0 起不再有 `add lifecycle`） | 登录/创角边界从 Registry 构造（`<entity>.LifecycleFromRegistry`） |
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
 | `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与该实体 | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
@@ -454,7 +457,7 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 1. **前置骨架**：实体没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程没有玩家接入时执行 `roost add access player --service <service>`；模块清单的 `access` 另可要求 `roost add transport tcp`（v1.47.0 起实体的 lifecycle 由 `roost generate` 生成，清单不再有 `lifecycle`），heartbeat / directory / web 也可由安装器代办；清单的 `next` 是安装后提示，`plan` / `add` 逐条列出（`todo:`），安装器不执行。它们各自是完整的工程状态，后面失败时不回退；`plan` 逐条列出。`access.player.self_sync` 则在模块文件全部就位后开启，随模块安装回滚，避免中间状态尚无显式 packer 时错误校验附加 DAO。
    - **托管框架服务**：模块的 `needs.uses` 与 `runtime.framework` 用到、工程还没有的托管服务（`-template game` 缺省一个都不带），在模块事务里声明 `services.<name>.framework: <name>` 并加进业务服务的 `uses`（`runtime.framework` 的托管服务这次才声明时，清单 `needs.mods` 里可代办的 Mod 直接写进它的 `mods`）；业务服务的配置补上 ClientMod 要的段（match、activity 要 etcd），新服务的配置、部署与协作者文件由第 6 步的 project sync 生成；随 `roost.yaml` 一起回滚。同名的已经是业务服务时拒绝安装。`plan` / `add` 输出 `framework service <name>: will declare` / `declared`。
 2. **状态**：模块的状态字段追加到实体主 DAO 的**末尾**，类型是模块自带的嵌套结构体。追加在末尾是因为同步的 PB 字段号按定义顺序排。同名字段已按同样的类型与标签存在时跳过；类型或标签不同、存储键已被占用时拒绝。
-3. **组件与文件**：模板先渲染进工程，再追加状态、接组件；`daos` 追加独立 DAO 聚合声明，`sync_packer` 接明确的同步工厂，已有业务工厂时拒绝覆盖；自带实体最后补 lifecycle。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `internal/service/<name>/collaborators.go`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
+3. **组件与文件**：模板先渲染进工程，再追加状态、接组件；`daos` 追加独立 DAO 聚合声明，`sync_packer` 接明确的同步工厂，已有业务工厂时拒绝覆盖；自带实体最后补 lifecycle。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `services/<name>/collaborators.go`；v1.47.0 之前生成的工程在 `internal/service/<name>/`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
    - **联动文件**：模块可以带与另一个模块的联动（`modules/<name>/with/<另一个模块>/`）。这次装的模块与已装的或同一次装的模块凑成一对、而这一对有联动时，全部模块写完之后把联动文件写进工程，归属记在拥有它的模块的 `modules.<name>.with.<另一个模块>` 下；`plan` / `add` 输出 `glue <模块> with <另一个模块>`，`--json` 里是 `glue` 数组。落点已有内容不同的文件时拒绝（`already exists and is not this glue file`）。两个都早已装好的不补。`verify` 把联动自带的场景单独列一项 `<模块>+<另一个模块>`。
 4. **号**：实体号、协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
 5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段、文件、目标 service、requires 与可选 runtime。
@@ -1146,7 +1149,7 @@ type Mail interface {
 
 拥有者进程：`mods.RegisterAll(r, OwnerCapabilities(service)...)` 加一个手写的 `func (s *Server) run(ctx context.Context) error`；调用方进程：`mail.NewClientMod()`。两者发布同一个 capability 名，同一进程放不下两份——registry 拒绝第二个，这是想要的行为。工程内的跨进程服务用 `roost add rpc`（见 [项目生成器 §6](PROJECT_GENERATOR.zh-CN.md#6-日常业务脚手架)）。
 
-托管框架服务的协作者骨架（`internal/service/<服务>/collaborators.go`）只生成一次、缺省拒绝。mail 的 `Broadcast()` 缺省 `nil`（拒绝 `AudienceBroadcast`）；注释给出内置的“存一份 + 拉取合并”接法：返回 `mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})`（owner Mod 给它 `<mail.key_prefix>:bcast:` 下的 Redis 账本），登录端点调用一次 `Mail.PullBroadcasts(ctx, playerID, mail.BroadcastProfile{Scopes: …, RegisteredAtUnix: Role.CreatedAtUnix})`，公会变化时再调一次；业务条件写在 `LazyBroadcastConfig.Eligible`，撤回用 `Mail.RevokeBroadcast`。game-demo 的 `enter_game` 已经这样调用（没启用时是 no-op）。语义见 [Service 指南 · Mail 全服邮件](../../docs/framework/guide/09-services.md#1b-mail-全服邮件)。
+托管框架服务的协作者骨架（`services/<服务>/collaborators.go`；v1.47.0 之前生成的工程在 `internal/service/<服务>/`）只生成一次、缺省拒绝。mail 的 `Broadcast()` 缺省 `nil`（拒绝 `AudienceBroadcast`）；注释给出内置的“存一份 + 拉取合并”接法：返回 `mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})`（owner Mod 给它 `<mail.key_prefix>:bcast:` 下的 Redis 账本），登录端点调用一次 `Mail.PullBroadcasts(ctx, playerID, mail.BroadcastProfile{Scopes: …, RegisteredAtUnix: Role.CreatedAtUnix})`，公会变化时再调一次；业务条件写在 `LazyBroadcastConfig.Eligible`，撤回用 `Mail.RevokeBroadcast`。game-demo 的 `enter_game` 已经这样调用（没启用时是 no-op）。语义见 [Service 指南 · Mail 全服邮件](../../docs/framework/guide/09-services.md#1b-mail-全服邮件)。
 
 `-check` 用于 CI：先跑全部拒绝规则，再生成并逐字节比对磁盘上的文件，任何差异非零退出，并区分"缺失"（没人跑过生成器）与"不一致"（文件被改过或由另一版本生成器产出）。它不写文件。
 

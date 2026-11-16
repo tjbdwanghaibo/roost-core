@@ -531,6 +531,9 @@ func renderDockerReadme(m Manifest) string {
 	playerNote := ""
 	if player, ok := m.Access["player"]; ok && contains(player.Transports, "tcp") {
 		service = player.Service
+		if gate := playerGateService(m); gate != "" {
+			service = gate
+		}
 		playerPort = "      -p 7000:7000 \\\n"
 		playerNote = "Player TCP 已声明，因此示例同时发布 7000；若生产配置修改 player_access.tcp.addr，端口映射、LB 和防火墙必须同步修改。"
 	}
@@ -976,7 +979,7 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	head.WriteString("      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
 	fmt.Fprintf(&head, "          image: ghcr.io/CHANGE_ME/%s:v1.0.0\n          imagePullPolicy: IfNotPresent\n          args: [%q, \"--sid=$(ROOST_SID)\", \"--config=/etc/roost/config.yaml\"]\n", m.Project.Name, service)
 	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n")
-	if serviceOwnsPlayerTCP(m, service) {
+	if servicePlayerListener(m, service) {
 		head.WriteString("            - name: player-tcp\n              containerPort: 7000\n              protocol: TCP\n")
 	}
 	// /healthz is the shared ops Mod's unconditional answer, up once the singleton lock is taken
@@ -1016,7 +1019,7 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	head.WriteString("  selector:\n")
 	fmt.Fprintf(&head, "    app.kubernetes.io/name: %s\n    app.kubernetes.io/component: %s\n", m.Project.Name, service)
 	head.WriteString("  ports:\n    - {name: ops, port: 9100, targetPort: ops, protocol: TCP}\n")
-	if serviceOwnsPlayerTCP(m, service) {
+	if servicePlayerListener(m, service) {
 		head.WriteString("    - {name: player-tcp, port: 7000, targetPort: player-tcp, protocol: TCP}\n")
 	}
 	return head.String()

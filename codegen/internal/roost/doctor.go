@@ -122,6 +122,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	report.Items = append(report.Items, checkStepAndEffectWiring(root, m)...)
 	report.Items = append(report.Items, checkEntityOwnerUse(root, m)...)
 	report.Items = append(report.Items, checkWebRouteServing(root, m)...)
+	report.Items = append(report.Items, checkPlayerGate(root, m)...)
 	if selfSyncEnabled(m) {
 		if status, err := checkSelfSync(root, m); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusFail, Detail: err.Error()})

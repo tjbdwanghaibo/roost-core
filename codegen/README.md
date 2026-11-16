@@ -57,8 +57,12 @@ roost-core 的项目脚手架与代码生成工具链（模块路径 `github.com
 
 ### 2. 创建项目
 
-    roost project new planet -module github.com/your-account/planet -services game,gate \
+    roost project new planet -module github.com/your-account/planet -services game,lobby \
       -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity
+
+`-services` 只声明普通业务服务（这里是 game 与 lobby 两个进程）。玩家要经独立 Gate 进来时不要在这里写一个叫 gate 的服务——
+那只是一个空的业务服务；先让工程有玩家 TCP 与 account（`roost module add login`），再 `roost add gate` 一次完成 Gate 服务、
+Game Ingress 与两端配置（`roost help gate`）。
 
 完全新手可以先用 `-mods configdata` 创建轻量项目，不必先理解 MongoDB、Redis、NATS、Nest WAL 和跨服能力。进入项目后第一条命令是 `roost project next`（或 `make next`），它按真实进度只给一个动作和原因。`-features` 与 `-mods` 的完整清单、`roost.yaml` 字段、生成的 CI/CD 与部署模板见[项目生成器](docs/PROJECT_GENERATOR.zh-CN.md)。
 

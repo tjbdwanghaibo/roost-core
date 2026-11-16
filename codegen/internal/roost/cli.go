@@ -281,8 +281,12 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		// roost add timer --entity Player：实体用 --entity 给出时不需要名字。
 		args = append([]string{args[0], ""}, args[1:]...)
 	}
+	if len(args) >= 1 && args[0] == "gate" && (len(args) == 1 || strings.HasPrefix(args[1], "-")) {
+		// roost add gate：Gate 服务缺省叫 gate。
+		args = append([]string{args[0], "gate"}, args[1:]...)
+	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|gate|module|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -314,7 +318,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	allowed := map[string][]string{
 		"service": {"root", "mods"}, "mod": {"root", "service"}, "access": {"root", "service"},
-		"transport": {"root", "service"}, "module": {"root"},
+		"transport": {"root", "service"}, "gate": {"root", "service"}, "module": {"root"},
 		"protocol": {"root", "group", "handler", "id"}, "entity": {"root", "id"},
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
@@ -345,6 +349,9 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "access" || args[0] == "transport" || args[0] == "protocol" {
 		fmt.Fprintln(stdout, "next: roost project next")
+	}
+	if args[0] == "gate" {
+		printGateNext(stdout, root, toSnake(args[1]), len(paths) == 0)
 	}
 	if args[0] == "timer" {
 		fmt.Fprintln(stdout, "next: define the timer types and callbacks in the generated *_handlers.go, arm them with <Component>Comp().NewTimer(...) inside a Nest handler, then roost generate")

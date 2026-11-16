@@ -489,7 +489,13 @@ func renderBootstrap(m Manifest) string {
 		fmt.Fprintf(&b, "var %s = selfsync.MustNew(selfsync.Config{Entities: EntityAccess, Kind: %s.EntityKind%s, MessageID: msgid.MsgSelfSync%s})\n", selfSyncVar, selfSyncEntity, toPascal(selfSyncEntity), groups)
 	}
 	if playerTCP {
-		b.WriteString("\n// Options 只选择玩家接入方式；GameIngress 非空时不再启动本地 TCP。\ntype Options struct { GameIngress *gatewiring.Options }\n\nfunc New() (*app.App, error) { return NewWithOptions(Options{}) }\n\nfunc playerTransport(options Options, local app.Mod) app.Mod {\n if options.GameIngress == nil { return local }\n")
+		b.WriteString("\n// Options 只选择玩家接入方式；GameIngress 非空时不再启动本地 TCP。\ntype Options struct { GameIngress *gatewiring.Options }\n\n")
+		if playerGateService(m) != "" {
+			b.WriteString(renderGateIngressNew(m))
+		} else {
+			b.WriteString("func New() (*app.App, error) { return NewWithOptions(Options{}) }\n")
+		}
+		b.WriteString("\nfunc playerTransport(options Options, local app.Mod) app.Mod {\n if options.GameIngress == nil { return local }\n")
 		if selfSyncEnabled(m) {
 			fmt.Fprintf(&b, " return accessplayertcp.NewIngressMod(*options.GameIngress).WithSelfSync(%s)\n", selfSyncVar)
 		} else {
@@ -544,6 +550,9 @@ func renderBootstrap(m Manifest) string {
 			}
 			if ownsPlayerTCP && constructor == etcdModConstructor {
 				constructor = "playerDiscovery(options, " + constructor + ")"
+			}
+			if isPlayerGateService(m, name) && constructor == etcdModConstructor {
+				constructor = gateEtcdConstructor
 			}
 			fmt.Fprintf(&b, ",\n\t\t%s", constructor)
 		}
@@ -651,6 +660,10 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 			args = append(args, names.Entity+"."+names.CompType+"Driver")
 		}
 		out = append(out, "kitentitytimer.NewMod("+strings.Join(args, ", ")+")")
+	}
+	// access.player.gate：Gate 服务的进程只装 Gate Mod（排在 account 的 ClientMod 之后）。
+	if isPlayerGateService(m, name) {
+		out = append(out, gateModConstructor)
 	}
 	if access, enabled := m.Access["player"]; enabled && access.Service == name {
 		out = append(out, "accessplayer.NewMod()")
@@ -827,7 +840,8 @@ const (
 // dataengine。带 DataEngine 的服务按 sid 划分 WAL 目录，设计上就是每个 sid 一个写者，
 // 打开不改变部署形态；其他服务是否按 sid 多副本部署生成器不知道，写 enabled: false，由应用自己打开。
 func serviceSingletonEnabled(m Manifest, service string) bool {
-	return contains(serviceConfigMods(m, service), "dataengine")
+	// 独立 Gate 要求 App singleton（wiring/gate 按单实例代次识别 Gate 与 Game）。
+	return contains(serviceConfigMods(m, service), "dataengine") || isPlayerGateService(m, service)
 }
 
 // serviceConfigMods 是一个服务的进程实际注册的 Mod（共享 Mod 加 effectiveServiceMods，按依赖解析）：
@@ -864,6 +878,9 @@ func serviceConfigSections(m Manifest, service string) []string {
 	}
 	if _, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
 		add(frameworkConfigSection(m.Services[service].Framework, m.Project.Name))
+	}
+	if isPlayerGateService(m, service) {
+		add(playerGateConfigSection(m))
 	}
 	if serviceSingletonEnabled(m, service) {
 		// 只补 redis: 配置段给单实例锁的连接用，不把 Redis Mod 强加给服务。

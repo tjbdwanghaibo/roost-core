@@ -188,6 +188,12 @@ func serviceConfigSchema(m Manifest, service string) (configschema.Schema, error
 		if contains(access.Transports, "tcp") {
 			schemas = append(schemas, playerTCPSchema())
 		}
+		if strings.TrimSpace(access.Gate) != "" {
+			schemas = append(schemas, playerGateIngressSchema())
+		}
+	}
+	if isPlayerGateService(m, service) {
+		schemas = append(schemas, playerGateSchema())
 	}
 	return configschema.Merge(schemas...)
 }
@@ -214,6 +220,7 @@ func allFrameworkConfigSchema() configschema.Schema {
 	}
 	add(playerTCPSchema())
 	add(playerAccessSchema())
+	add(playerGateSchema())
 	return all
 }
 

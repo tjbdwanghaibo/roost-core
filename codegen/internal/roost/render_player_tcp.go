@@ -131,6 +131,9 @@ func renderPlayerTCPServer(manifest Manifest) string {
 	if selfSyncEnabled(manifest) {
 		source = withPlayerTCPSelfSync(source)
 	}
+	if playerGateService(manifest) != "" {
+		source = withPlayerTCPGate(source)
+	}
 	return source
 }
 

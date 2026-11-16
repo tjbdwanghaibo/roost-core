@@ -110,10 +110,13 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
 
     roost project new planet \
       -module github.com/acme/planet \
-      -services game,gate \
+      -services game,lobby \
       -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity \
       -features protocol,config,entity,nest,dao,errcode \
       -out D:/work/planet
+
+`-services` 只声明普通业务服务。名字叫 gate 的服务也只是一个空的业务服务，没有 Gate 接线；玩家经独立 Gate 进来时用
+`roost add gate`（见下面“独立 Gate”）。
 
 features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节的 Mod 表。
 
@@ -430,6 +433,20 @@ Entity wire 会生成 Component/DAO getter，
 不需要手工编辑这些接线。玩法方法写在 `<name>_component.go`，持久化/同步字段写在
 `db/def` 并通过生成的 getter/setter 访问。完整流程见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md` 和 `docs/ENTITY_COMPONENT.zh-CN.md`。
+
+### 6.v 独立 Gate：`roost add gate`
+
+    roost module add login enter portal      # 玩家 TCP、托管 account 与登录模块的认证器
+    roost add gate                           # 缺省 Gate 服务名 gate；roost add gate <name> 换名字
+    roost project doctor                     # gate:* 检查
+
+把嵌入 Game 的玩家 TCP 改成独立 Gate 进程：roost.yaml 多一个普通业务服务 gate（mods etcd、nats，uses account）与
+`access.player.gate: gate`。Gate 服务的生成 bootstrap 装不自动登记的 etcd 与 `accessplayertcp.NewGateMod()`，配置写
+`player_access.gate`（namespace = <工程>.access、addr 0.0.0.0:7000、advertise_addr 127.0.0.1:7000）并打开 singleton；
+玩家服务的 `bootstrap.New()` 走 Game Ingress，配置关掉 `player_access.tcp.enabled`、加同样的 `player_access.gate`，装了登录模块
+时写 `login.presence.addr`。Gate 接过原来的 7000，客户端地址与 `portal.servers` 不用改；部署模板的 7000 端口跟到 Gate。
+`roost project doctor` 的 gate:* 检查两端是否一致（Game Ingress、嵌入 TCP 关闭、namespace、etcd 与 singleton、给客户端的地址）。
+前提、拒绝条件与限制见 `roost help gate`；运行时契约见 roost-core 的 docs/framework/GATEWAY.md。
 
 ### 6.x 本工程自己的跨进程服务：`roost add rpc`
 

@@ -115,6 +115,9 @@ type Manifest struct {
 	// localPreloadServices 是起服预加载本地实体（//roost:entity preload=startup，非 remote）的服务：bootstrap 给它们装
 	// kitdataengine.NewLocalPreloadMod(registry.LocalPreloadKinds("<service>")...)。Not part of roost.yaml.
 	localPreloadServices map[string]bool
+	// playerAuthenticatorFactory 表示工程的 internal/access/player/tcp 声明了 func NewAuthenticator()（登录模块的 auth.go）：
+	// 声明了 Gate 时 Game Ingress 用它（withServicePackages 从磁盘读出）。Not part of roost.yaml.
+	playerAuthenticatorFactory bool
 }
 
 type ProjectSpec struct {
@@ -219,6 +222,10 @@ type AccessSpec struct {
 	// （wiring/selfsync.Groups）。project sync 在实体包里创建一次业务文件 sync_group.go（SyncGroup 变量，视图键由业务定），
 	// bootstrap 把它交给 PlayerSelfSync；成员关系由业务 handler 调 SyncGroup.Join / Leave / Disband。
 	SyncGroups []string `yaml:"sync_groups,omitempty"`
+	// Gate（只用于 player，需要 tcp）是独立 Gate 服务的名字（roost add gate）：玩家连那个服务的进程（生成的 Gate Mod），
+	// Gate 经 NATS 转给本服务的 Game Ingress，本服务不开嵌入 TCP。Gate 服务照常声明在 services 下（mods: etcd、nats，
+	// uses: account）；规则见 gate.go。
+	Gate string `yaml:"gate,omitempty"`
 }
 
 // TimerSpec 是一个实体的持久定时器组件。project sync 按它重写生成部分（组件、节点类型、Tick handler、
@@ -377,6 +384,9 @@ func (m Manifest) Validate() error {
 		joined = errors.Join(joined, err)
 	}
 	if err := m.validatePortBlocks(); err != nil {
+		joined = errors.Join(joined, err)
+	}
+	if err := m.validatePlayerGate(); err != nil {
 		joined = errors.Join(joined, err)
 	}
 	for name, access := range m.Access {

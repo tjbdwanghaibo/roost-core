@@ -69,10 +69,13 @@ roost project next [--workflow first-business|player-tcp]
 roost project doctor --workflow first-business
 roost project upgrade [--root dir] [--dry-run] [--skip-deps] [-core version]
 make project-upgrade`,
-		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：只有第一个业务 Service，带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/entities/world/singleton.go 的 EnsureWorld，Service.Init 里确保存在；每个实体包的 lifecycle_gen.go 由 roost generate 产出）。它缺省不托管任何框架服务：roost module add 装的模块用到哪个（chat、rank、mail、account……）就在同一个安装事务里声明哪个（services.<name>.framework 并加进业务 Service 的 uses），-recipe 也只带它的模块用到的。-framework 让 -template game 一开始就托管指定的框架服务：all 是 account、activity、chat、global、mail、match、platform、rank、session 九个全部，或逗号分隔列出其中几个；每个作为独立子命令托管，第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器。托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现（接管它的模块会替换掉）。-framework 只对 -template game（含 -recipe）有效。-template game-demo 托管全部九个框架服务（demo 都在用），并在 game 之上再生成一套可运行的完整游戏 demo：登录、背包与经验、升级发奖励邮件、匹配、聊天、副本、送礼 saga、地图与服务端权威同步、lockstep 战斗、GM 运维面和机器人压测（逐项说明见本仓 demo/WALKTHROUGH.md）；最小的写入链路是 Player 的 Profile / Bag 组件与 PlayerDao 持久化字段、一个 //roost:nest rollback=undo durability=strict 的加道具事务和 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
-		Example: `roost project new planet -module example.com/planet -services game,gate
+		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：只有第一个业务 Service，带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/entities/world/singleton.go 的 EnsureWorld，Service.Init 里确保存在；每个实体包的 lifecycle_gen.go 由 roost generate 产出）。它缺省不托管任何框架服务：roost module add 装的模块用到哪个（chat、rank、mail、account……）就在同一个安装事务里声明哪个（services.<name>.framework 并加进业务 Service 的 uses），-recipe 也只带它的模块用到的。-framework 让 -template game 一开始就托管指定的框架服务：all 是 account、activity、chat、global、mail、match、platform、rank、session 九个全部，或逗号分隔列出其中几个；每个作为独立子命令托管，第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器。托管服务的协作者（身份校验、投递、频道策略……）在 services/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现（接管它的模块会替换掉）。-framework 只对 -template game（含 -recipe）有效。-template game-demo 托管全部九个框架服务（demo 都在用），并在 game 之上再生成一套可运行的完整游戏 demo：登录、背包与经验、升级发奖励邮件、匹配、聊天、副本、送礼 saga、地图与服务端权威同步、lockstep 战斗、GM 运维面和机器人压测（逐项说明见本仓 demo/WALKTHROUGH.md）；最小的写入链路是 Player 的 Profile / Bag 组件与 PlayerDao 持久化字段、一个 //roost:nest rollback=undo durability=strict 的加道具事务和 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
+		Example: `roost project new planet -module example.com/planet
 cd planet
 roost project next
+
+# 两个业务服务（-services 只声明普通业务服务；独立 Gate 用 roost add gate，见 roost help gate）：
+roost project new planet -module example.com/planet -services game,lobby
 
 # 想先看一条跑通的写入链路，再照着改：
 roost project new planet -module example.com/planet -mods configdata,mongo,nats,dataengine,nest -template game-demo
@@ -124,7 +127,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|gate|module|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--native、--consumer、--group、--id；saga 用 --steps 按执行顺序列步骤、--native 选出业务是 Nest 事务的步骤（见 roost help saga）；effect 用 --consumer 选消费服务（见 roost help effect）；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
@@ -177,6 +180,19 @@ roost add transport tcp
 roost config enable player-tcp
 roost project doctor --workflow player-tcp
 # 安全地设置 ROOST_PLAYER_TOKEN 后：go run ./cmd/playerprobe -addr 127.0.0.1:7000`,
+	},
+	{
+		Name: "gate", Aliases: []string{"standalone-gate", "gate-ingress", "game-ingress"},
+		Summary: "把嵌入 Game 的玩家 TCP 改成独立 Gate 进程：玩家连 Gate，Game 只开 Game Ingress",
+		Usage: `roost add gate [<name>] [--service <player service>]
+roost project doctor`,
+		Configuration: `前提：已有玩家 TCP（roost add access player、roost add transport tcp）与托管的 account，且玩家服务 uses account——roost module add login 一并做好，并写下 Game Ingress 用的认证器（internal/access/player/tcp 的 NewAuthenticator）。命令一次完成：roost.yaml 声明 Gate 服务（缺省名 gate；mods: etcd、nats，uses: account；它是普通业务服务，配置、端口块、部署模板、deploy/dev/run.sh 随之生成，internal/service/<gate>/service.go 只等停机）并写 access.player.gate；玩家服务补 etcd。生成物：Gate 服务的 bootstrap 装不自动登记的 etcd、account 的 ClientMod 与生成的 accessplayertcp.NewGateMod()（监听 player_access.gate.addr，握手票据经 account 校验，按 etcd 里 Game Ingress 的候选转发）；玩家服务的 bootstrap.New() 走 Game Ingress（认证器有 NewAuthenticator 时用它，否则用 account 的 ValidateSession；登记发现；Ready 恒真），生成的 IngressMod 从 player_access.gate 读 namespace 与 advertise_addr。配置：Gate 服务写 player_access.gate（namespace = <工程>.access，addr 0.0.0.0:7000，advertise_addr 127.0.0.1:7000，生产示例 CHANGE_ME:7000）并打开 singleton；玩家服务 player_access.tcp.enabled 设为 false、加 player_access.gate（同一 namespace 与 advertise_addr），装了登录模块时没写 login.presence.addr 就写成 Gate 的地址。Gate 接过玩家服务原来的 7000，所以已有的 portal.servers 地址不用改；k8s 模板的 7000 端口跟到 Gate。已经是同名 Gate 时什么都不改；已有别的 Gate、Gate 名与已有服务重名、没有 account 时拒绝并说明原因。doctor 的 gate:* 检查：声明 Gate ⇔ 玩家服务走 Game Ingress、玩家服务嵌入 TCP 关闭、两端 namespace 相同、两端 etcd 与 singleton、给客户端的地址（login.presence.addr、portal.servers、玩家服务的 advertise_addr）等于 Gate 的 advertise_addr。Gate 的 TCP 资源上限与内部限额取 wiring/gate 的 DefaultOptions，配置只开放地址与命名空间。跨机部署（多个 Gate、Gate 与 Game 在不同机器）没有经这条命令验收，见 roost-core 的 docs/framework/GATEWAY.md。`,
+		Example: `roost project new planet -module example.com/planet -template game
+cd planet
+roost module add login enter portal
+roost add gate
+roost project doctor
+make dev-run      # gate 与 game、account 一起起；玩家连 127.0.0.1:7000（Gate）`,
 	},
 	{
 		Name: "lifecycle", Aliases: []string{"entity-lifecycle"},
@@ -259,7 +275,7 @@ services:
 		Summary: "把托管框架服务（排行、邮件、聊天……）接进工程：services.<name>.framework 与 uses",
 		Usage: `# roost.yaml 里加一个托管服务进程，并让业务服务 uses 它，然后
 roost project sync`,
-		Configuration: `托管框架服务是 roost-core service/ 里现成的服务，共九个：account、chat、mail、match、session、activity、global、platform、rank。services.<name>.framework: <服务> 把一个进程声明为该托管服务（没有业务 Service，redis、nats 自动补齐，match、activity 另补 etcd）；它的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go，只生成一次、默认全部拒绝，doctor 的 collaborators:<name> 提示还没实现的。业务服务的 services.<svc>.uses: [<name>] 装配对应 ClientMod，并在 internal/service/<svc>/framework_clients_gen.go 生成类型化访问器（例如 Rank(registry) 返回 rank.Rank），在 Init 里取一次保存。已有工程接入一个：按下面改 roost.yaml 后 roost project sync（新服务的配置、部署与协作者文件随之生成），再 roost project doctor；用模块（roost module add chat / leaderboard / mailbox / login……）时不用手改，安装器声明模块用到的托管服务。roost project new -template game 缺省一个都不托管，-framework all 一次生成全部九个（或 -framework rank,chat 列出几个）并接到第一个业务服务；-template game-demo 托管全部九个。说明见生成工程的 docs/ROOST_YAML.zh-CN.md 与 docs/SERVICES.zh-CN.md。`,
+		Configuration: `托管框架服务是 roost-core service/ 里现成的服务，共九个：account、chat、mail、match、session、activity、global、platform、rank。services.<name>.framework: <服务> 把一个进程声明为该托管服务（没有业务 Service，redis、nats 自动补齐，match、activity 另补 etcd）；它的协作者（身份校验、投递、频道策略……）在 services/<name>/collaborators.go（v1.47.0 起；早先生成的工程在 internal/service/<name>/），只生成一次、默认全部拒绝，doctor 的 collaborators:<name> 提示还没实现的。业务服务的 services.<svc>.uses: [<name>] 装配对应 ClientMod，并在 internal/service/<svc>/framework_clients_gen.go 生成类型化访问器（例如 Rank(registry) 返回 rank.Rank），在 Init 里取一次保存。已有工程接入一个：按下面改 roost.yaml 后 roost project sync（新服务的配置、部署与协作者文件随之生成），再 roost project doctor；用模块（roost module add chat / leaderboard / mailbox / login……）时不用手改，安装器声明模块用到的托管服务。roost project new -template game 缺省一个都不托管，-framework all 一次生成全部九个（或 -framework rank,chat 列出几个）并接到第一个业务服务；-template game-demo 托管全部九个。说明见生成工程的 docs/ROOST_YAML.zh-CN.md 与 docs/SERVICES.zh-CN.md。`,
 		Example: `# roost.yaml：把排行接进已有的 game 服务
 services:
   game:
