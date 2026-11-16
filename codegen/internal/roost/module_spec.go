@@ -738,7 +738,7 @@ const (
 // other 为空表示模块自己的 files/，否则是 with/<other>/ 联动文件。规则只在这里声明一次，清单加载时
 // （module list / plan / add / verify 与 codegen 测试）就执行。两个框架层另有文件名规则：
 //   - game/controllers 是一个包（2026-11-16 起）：模块只能放 <模块>.go，联动文件只能是 <模块>_<对方模块>.go，
-//     各自可带对应的 _test.go；不能有子目录。包级名字因此天然按文件分开，安装器按整个文件安装也不会两个模块写同一个文件。
+//     各自可带对应的 _test.go 与要真实依赖的 _integration_test.go（带 integration build tag）；不能有子目录。包级名字因此天然按文件分开，安装器按整个文件安装也不会两个模块写同一个文件。
 //   - game/event 只放事件定义：模块只能放 game/event/<模块>.go，联动文件不能放（事件属于发布它的模块）；
 //     它只能 import 标准库和工程的 db 包（validateModuleEventImports）。
 func validateModuleGamePath(module, other, rel string) error {
@@ -764,12 +764,12 @@ func validateModuleGamePath(module, other, rel string) error {
 		if strings.Contains(after, "/") {
 			return fmt.Errorf("%s: game/controllers is one package without subdirectories; the module's controller file is game/controllers/%s.go", rel, base)
 		}
-		if after != base+".go" && after != base+"_test.go" {
+		if after != base+".go" && after != base+"_test.go" && after != base+"_integration_test.go" {
 			hint := ""
 			if other == "" {
 				hint = "; code that only exists with another module goes in with/<other>/game/controllers/<module>_<other>.go"
 			}
-			return fmt.Errorf("%s: a module's file in game/controllers is %s.go (tests: %s_test.go)%s", rel, base, base, hint)
+			return fmt.Errorf("%s: a module's file in game/controllers is %s.go (tests: %s_test.go, %s_integration_test.go)%s", rel, base, base, base, hint)
 		}
 	case first == "event":
 		if other != "" {

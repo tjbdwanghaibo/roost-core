@@ -528,10 +528,11 @@ func TestModuleSpecControllersAndEventLayout(t *testing.T) {
 		return out
 	}
 	for name, files := range map[string]map[string]string{
-		"controller file":    {"game/controllers/demo.go": "package controllers\n"},
-		"controller test":    {"game/controllers/demo_test.go": "package controllers\n"},
-		"event file":         {"game/event/demo.go": "package event\n\nimport (\n\t\"time\"\n\n\t\"{{MODULE}}/db\"\n)\n\ntype DemoDone struct{ At time.Time; State db.DemoState }\n"},
-		"event without deps": {"game/event/demo.go": "package event\n\ntype DemoDone struct{ Level int32 }\n"},
+		"controller file":             {"game/controllers/demo.go": "package controllers\n"},
+		"controller test":             {"game/controllers/demo_test.go": "package controllers\n"},
+		"controller integration test": {"game/controllers/demo_integration_test.go": "//go:build integration\n\npackage controllers\n"},
+		"event file":                  {"game/event/demo.go": "package event\n\nimport (\n\t\"time\"\n\n\t\"{{MODULE}}/db\"\n)\n\ntype DemoDone struct{ At time.Time; State db.DemoState }\n"},
+		"event without deps":          {"game/event/demo.go": "package event\n\ntype DemoDone struct{ Level int32 }\n"},
 	} {
 		if _, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML, with(files))); err != nil {
 			t.Errorf("%s: a conforming layout was refused: %v", name, err)
