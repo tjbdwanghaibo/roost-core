@@ -62,9 +62,13 @@ func SingletonStore(cfg *viper.Viper) (app.SingletonStore, error) {
 	if (username == "") != (password == "") {
 		return nil, errors.New("kitetcd: singleton store: config: etcd.username and etcd.password must be set together (directly or through their _env keys)")
 	}
+	var lock singletonStoreConfig
+	if err := app.LoadConfig(cfg, &lock); err != nil {
+		return nil, fmt.Errorf("kitetcd: singleton store: %w", err)
+	}
 	// singleton.ttl 由 App 的声明检查过（带单位的正时长）；这里只加 etcd 自己的限制：租约以整秒计。
-	if cfg.GetBool("singleton.enabled") && cfg.IsSet("singleton.ttl") {
-		if err := checkLeaseTTL(cfg.GetDuration("singleton.ttl")); err != nil {
+	if lock.Singleton.Enabled {
+		if err := checkLeaseTTL(lock.Singleton.TTL); err != nil {
 			return nil, fmt.Errorf("kitetcd: singleton store: singleton.ttl: %w", err)
 		}
 	}
@@ -74,7 +78,7 @@ func SingletonStore(cfg *viper.Viper) (app.SingletonStore, error) {
 	}
 	// 打开时读一次：地址、凭据或权限写错，在启动时就点名，而不是在第一次抢锁时才超时。读锁前缀下的计数，
 	// 开了 RBAC 的集群上这正是锁要用的权限范围。
-	probe := strings.TrimSpace(cfg.GetString("singleton.key_prefix"))
+	probe := strings.TrimSpace(lock.Singleton.KeyPrefix)
 	if probe == "" {
 		probe = "/"
 	}
@@ -85,6 +89,16 @@ func SingletonStore(cfg *viper.Viper) (app.SingletonStore, error) {
 		return nil, fmt.Errorf("kitetcd: singleton store: first read: %w", err)
 	}
 	return store, nil
+}
+
+// singletonStoreConfig 是 SingletonStore 要读的 singleton.*。这几个键的声明与检查归 App（framework/app 的
+// singletonConfig），打开之前已检查过；这里为读取再声明一次，enabled 共用 app.SingletonSwitch，ttl 的缺省与 App 相同。
+type singletonStoreConfig struct {
+	Singleton struct {
+		app.SingletonSwitch
+		KeyPrefix string        `config:"key_prefix"`
+		TTL       time.Duration `config:"ttl" default:"15s" min:"1ns"`
+	} `config:"singleton"`
 }
 
 // checkLeaseTTL 拒绝 etcd 租约表示不了的时长（负数或不是整秒）。0 表示不挂租约。
