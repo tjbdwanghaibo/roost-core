@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **新增 `roost add gate`**（2026-11-16）：`roost add gate [<名字>] [--service <玩家服务>]` 一条命令把嵌入玩家 TCP 的工程改成独立 Gate。`roost.yaml` 新增 `access.player.gate`，Gate 是一个普通业务服务（etcd、nats，uses account），跑生成的 `accessplayertcp.NewGateMod()`（读 `player_access.gate.{namespace, addr, advertise_addr}`）；玩家服务的 `bootstrap.New()` 改走 Game Ingress（工程有 `NewAuthenticator` 时用它），配置关掉嵌入 TCP、两边同一命名空间、开单实例锁，装了 login 时 `login.presence.addr` 写成 Gate 地址；部署模板的 7000 端口移到 Gate。同名重跑什么都不改；没有玩家 TCP、没有托管 account、已有别的 Gate、名字冲突时拒绝并说明原因。没声明 Gate 的工程生成结果逐字节不变。
+- **`roost project doctor` 检查 Gate 接法**（2026-11-16）：`gate:ingress`、`gate:player-tcp`、`gate:namespace`、`gate:etcd-singleton`、`gate:client-address`。离线脚本 `scripts/test-gate-generated.sh` 进 pretag；单机真实进程演练 `scripts/testdata/gate-drill/gate-drill.sh`（account + 经 Game Ingress 的 game + Gate，经 Gate 登录、建角、进入一次通过，[证据](docs/maintenance/evidence/gate-command-20261116/README.md)）。
+- **文档**（2026-11-16）：help、codegen README、PROJECT_GENERATOR、CODEGEN_REFERENCE 里误导的 `-services game,gate` 示例换掉（那个参数只会多出一个普通业务服务）；托管服务 collaborators 的路径更正为 `services/<名字>/collaborators.go`。
+- **roost-genre**（2026-11-16，按使用反馈）：入口 skill 检查更新改为取到变量里比较、不在工作目录外落盘（入口版本 2026-11-16.1）；compose 新增 §1A“定接入方式”（短连接与开房间类用嵌入 TCP，长连接缺省加独立 Gate；业余模式按缺省、专业模式请开发者确认，结论写进 DEMO §5 与 HISTORY）；DEMO §7 补“Unity 客户端接入”要点；限制表写明玩家协议只有 TCP、HTTP 业务路由不是玩家协议、独立 Gate 没有跨机验证（KNOWN-LIMITS“玩家接入方式”）。
 - **生成物要求的最低 core 提到 v1.50.0**（2026-11-16）：新生成物的 game/modules 布局（模块入口包与生成器功能目录）与 rehome 按“结果未知”清理目标副本都要 v1.50.0；framework-compat 的 minimum 一栏随之改为 v1.50.0。
 
 ## [v1.50.0] - 2026-11-16

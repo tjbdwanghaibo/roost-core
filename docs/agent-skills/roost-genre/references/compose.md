@@ -193,6 +193,27 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 
 用户选定之前不要动这一条（别的条目可以先做；专业模式下先等第 0B 节那一轮确认）。用户选了“接受限制”的，在最终报告里原样列出。没有冲突也要在报告里写一句“已对照三处，未发现冲突”，说明查过。
 
+## 1A. 定接入方式：嵌入 TCP，还是独立 Gate
+
+拆完需求、建工程之前，先定玩家怎么连进来。**玩家协议目前只有 TCP**（嵌入在业务服务里，或经独立 Gate 转进来）；HTTP 只用于登录入口（portal）和管理面，不是玩家协议（见第 7 步）。所以这里说的“短连接 / 长连接”指**交互方式**，不是传输协议：
+
+- **短连接（按请求交互）**：客户端发一个请求、等一个回复，服务器很少主动推送，玩家不需要长期在线；或者是开房间、一局打完就散的游戏（卡牌、回合制、休闲、房间合作）。
+- **长连接（长期在线、持续推送）**：玩家长期挂在线上，服务器持续推送状态，比如同屏 / 大地图、实时同步、频繁的世界广播（MMO、SLG 大地图、无缝世界）。
+
+缺省规则：
+
+| 需求 | 接入方式 | 做法 |
+| --- | --- | --- |
+| 短连接，或开房间类 | **嵌入 TCP**（不加 Gate） | `project new -template game` 缺省就是这样，玩家 TCP 嵌在 `game` 里，不用额外做什么 |
+| 长连接 | **独立 Gate** | 装完登录链路（第 3A 步，Gate 靠 account 签发和校验票据）之后执行 `"$ROOST" add gate`（v1.51.0 起，`[<名字>] [--service <玩家服务>]`，缺省名 gate）：一次生成 Gate 服务（`roost.yaml` 的 `access.player.gate`）、game 一侧的 Game Ingress 接线与配置（关掉 game 的嵌入 TCP，两边同一命名空间、开单实例锁）；Gate 接管原来给客户端的 7000 端口，`portal.servers` 不用改，装了 login 时区服上报地址写成 Gate 的。之后 `"$ROOST" project doctor` 检查这套接法（`gate:*` 五项）。参数与细节以 `"$ROOST" help add` 和 [GATEWAY §2](../../../framework/GATEWAY.md#2-正式接入方式) 为准 |
+
+- **业余模式**：按缺省规则定，不问。
+- **专业模式**：给出建议（按上表）和理由，请开发者确认；开发者选了别的，照开发者的。
+- 两种模式都把结论（嵌入 TCP / 独立 Gate、按缺省规则还是开发者决定、理由）写进 `docs/DEMO.zh-CN.md` 第 5 节“服务”，以及这一轮的 `docs/DEMO-HISTORY.zh-CN.md`。
+- 不要用 `project new -services game,gate` 造 Gate：那只会多出一个名叫 gate 的普通业务服务，没有任何 Gate 接线。
+- 独立 Gate 只做过单机真实进程演练，**没有跨机验证**（第 7 步）；多机部署前要自己补验收。
+- `roost` 是 v1.51.0 之前的版本时没有 `add gate`：独立 Gate 只能照 [modules/login/README](../../../../modules/login/README.md) 的“独立 Gate 部署”一条手写，或者先用嵌入 TCP，在 DEMO 第 9 节写明“上线前改成独立 Gate”。
+
 ## 2. 工程
 
 下面的命令按“本地检出”写。没有检出、从 GitHub 取发布版时（经仓库根目录 [claude-skill/](../../../../claude-skill/README.md) 的入口 skill 使用），CLI 用 `go install …/codegen/cmd/roost@$V`，`project new` 去掉 `--skip-deps`、加 `-roost-core-version "$V"`，不做 `replace`；对照表见入口 skill 第 4 节。
@@ -587,9 +608,13 @@ go test -mod=mod ./...                                            # 其余生成
 2. **服务器 / 客户端边界**：逐个逻辑点写放在哪一端、谁定的（业余模式是“按缺省规则”，专业模式是“开发者决定”或“开发者确认了建议”）、放在客户端的风险与服务器还做了哪些校验。
 3. **模块**：装了哪些（含连带装上的），每个一句话说它在本工程里管什么、通过的场景数；装上了哪些联动（`with`）；模块自带而需求没用到的客户端协议。来源：`roost.yaml` 的 `modules` 段、`"$ROOST" module verify` 的输出。
 4. **实体**：每种实体（Player、World、模块自带的 Room / Alliance 等）一节：谁创建、挂在哪个服务上、主 DAO 的顶层字段（字段名、来自哪个模块或手写、`persist` / `sync`）、组件与组件号、持久定时器类型。来源：`db/def/*.go`、`game/entities/`、`roost.yaml` 的 `entities` 与 `ids`。
-5. **服务**：`roost.yaml` 的 `services` 段逐个列：业务服务还是托管的框架服务（account、chat 等）、带了哪些 Mod（web、directory、heartbeat……）、对外的端口与入口（玩家 TCP、HTTP 路由）、哪些模块的逻辑跑在它上面、服务之间的 RPC / Saga。开发启动顺序（`make dev-run`）与依赖（Mongo / NATS / Redis / etcd）。
+5. **服务**：先写玩家接入方式（第 1A 步的结论：嵌入 TCP 还是独立 Gate、谁定的、理由）。再把 `roost.yaml` 的 `services` 段逐个列：业务服务还是托管的框架服务（account、chat 等）、带了哪些 Mod（web、directory、heartbeat……）、对外的端口与入口（玩家 TCP、HTTP 路由）、哪些模块的逻辑跑在它上面、服务之间的 RPC / Saga。开发启动顺序（`make dev-run`）与依赖（Mongo / NATS / Redis / etcd）。
 6. **协议与错误码**：客户端请求、服务器推送各一张表（名字、号、谁处理、要点），错误码表（名字、号、什么时候出现）。来源：`protocol/def/`、`internal/errors/`、`roost.yaml` 的 `ids`。
-7. **客户端对接**：登录到进入的完整顺序（第 3A 步）；每个功能的调用顺序；要解码的自身视图字段及含义（哪些字段要配合服务器时间判断“今天”）；每个错误码的提示建议；请求键怎么生成、什么时候重发。
+7. **客户端对接**：登录到进入的完整顺序（第 3A 步）；每个功能的调用顺序；要解码的自身视图字段及含义（哪些字段要配合服务器时间判断“今天”）；每个错误码的提示建议；请求键怎么生成、什么时候重发。客户端是 Unity 时，再加一小节“Unity 客户端接入”，内容按下面的要点写：
+   - **SDK 怎么拿到**：roost-core 的 `client/unity` 不能直接导入，要在与工程同版本的 roost-core 检出里执行 `python3 scripts/client/build-unity.py --target <macos|windows|linux|android|ios> --output <新目录> --protoc <protoc 路径>`（要 CMake、C++17 编译器、.NET SDK、protoc），再在 Unity Package Manager 里用 **Add package from disk** 选输出的 `com.roost.client/package.json`。Unity 项目选 .NET Standard 2.1；Google.Protobuf 由游戏工程自己引入并锁版本。
+   - **怎么生成客户端代码**：业务协议 `protoc -I ./protocol/proto --csharp_out=<客户端目录> ./protocol/proto/protocol.proto`；消息号 `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@<版本> -def ./protocol/def -csharp <客户端目录>/MessageIds.cs`；自身视图（Entity Sync）用 `roost generate` 产出的 `db/dao_sync.proto` 与 `db/dao_sync_apply.cs`（前者同样用 protoc 生成 C#，后者原样拷进客户端）。
+   - **最小接线**：常驻 GameObject 上挂 `RoostNativeDriver`；先异步完成登录入口取票（portal 的三个 HTTP 端点，第 3A 步）和 DNS；建 `NativeGameClient`，注册业务 PB 的回复 / 推送 parser 与自身视图的 codec；可选 `NativeReconnect`；`driver.Attach(game, reconnect)` 后 `game.Connect(地址, 票据)`。地址是第 1A 步定下的入口：嵌入 TCP 时连 game，独立 Gate 时连 Gate。
+   - **边界**：重连不自动重发业务请求（超时可能已经执行，按请求键幂等重发）；回到前台要重新取票登录；完整说明见 roost-core 的 [client/unity/README](../../../../client/unity/README.md) 与 [client/README](../../../../client/README.md)。包里的 Native Session 示例用的是 SDK 的回环夹具，不是账号服务示例。
 8. **手写的功能**：文件清单、样板模块与借鉴点、业务假设（数值、日界、上限）、日志打在哪。
 9. **验收与上线前缺口**：第 5 步的实际结果、离线验收的范围，上线前要补的（渠道验签、TLS、限流、生产地址、托管服务的 collaborators）。
 
@@ -669,4 +694,6 @@ go test -mod=mod ./...                                            # 其余生成
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。
 - 模块的 README 写的是模块自己的能力与边界；几个模块组合之后的行为（联动没有覆盖的那些）没有人替你验证过，要自己写场景。
 - 独占新服务的模块（alliance）与带 Saga 的模块只在新生成或结构相同的工程上验证过；已有工程的服务名、Mod 组合不同时先 `module plan` 看它要动什么。
+- **玩家接入只有 TCP**：嵌入在业务服务里，或经独立 Gate。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（web Mod）拿不到请求头、不做鉴权、缺省只绑回环地址，只适合管理面、内部调用或放在鉴权代理之后；需求要求玩家走 HTTP 业务协议（REST / WebSocket 等）的，按第 1 步的冲突格式提出。登录入口（portal）的 HTTP 端点只负责登录、选服和换票。
+- **独立 Gate 没有跨机验证**：只做过单机真实进程演练（account、game、Gate 各一个进程，真实依赖），没有跨机、跨机房的验证；多机部署前要自己补。
 - 登录链路的单机真实入口为 `scripts/test-demo-login.sh`：game-demo 原有场景之后，casual + naming 阶段验证双 account、双 game sid、双 Gate、真实命名与购买回执、game / Gate 重启后重连和服务器时间推送。`DEMO_LOGIN_MODULES_ONLY=1` 只跑模块阶段；跨机与其它配方玩法不在这个验收范围内，见[登录线证据](../../../maintenance/evidence/v147-login-20261114.md)。

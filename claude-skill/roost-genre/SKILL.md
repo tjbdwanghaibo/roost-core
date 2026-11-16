@@ -9,7 +9,7 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 
 前置：Go 1.27 及以上，能访问 GitHub 与 Go 模块代理。全程 `GOWORK=off`。命令用 bash 执行。
 
-入口版本：2026-11-13.3
+入口版本：2026-11-16.1
 
 ## 0. 每次使用先检查更新
 
@@ -17,11 +17,16 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 
 **① 入口文件有没有新版**：
 
+不落盘，用管道直接和本文件比较（`<本文件>` 换成本文件在工程里的路径，通常是 `.claude/skills/roost-genre/SKILL.md` 或 `.agents/skills/roost-genre/SKILL.md`）：
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tjbdwanghaibo/roost-core/main/claude-skill/roost-genre/SKILL.md -o "${TMPDIR:-/tmp}/roost-genre-entry.md"
+new="$(curl -fsSL https://raw.githubusercontent.com/tjbdwanghaibo/roost-core/main/claude-skill/roost-genre/SKILL.md)" || echo "未能检查更新"
+[ -n "$new" ] && { printf '%s\n' "$new" | diff --strip-trailing-cr <本文件> - && echo "入口文件已是最新"; }
 ```
 
-把它与本文件比较（忽略行尾差异）。不同时告诉用户：入口文件有新版、本文件与新版的“入口版本”各是多少、主要改了什么（只读新版，概括差异）。**不要自己改本文件**：给出更新办法，请用户决定——项目文档（`AGENTS.md`、`CLAUDE.md` 或技能维护说明）写了更新命令的，照它给；没写的，更新办法是用上面下载的新版整份覆盖本文件。用户明确同意后可以执行那条更新命令，但不手改内容。用户没表态之前，按本文件现有的步骤继续。
+打印“入口文件已是最新”就是相同；有差异时 diff 直接打出来，新版的内容从差异里读；取不到时只打印“未能检查更新”，不比较。不要把新版下载到工作目录之外，也不要用固定的临时文件名（多个会话会互相覆盖）；确实要落盘时用 `mktemp` 在工作目录里建唯一文件，比较完立即删掉。
+
+比较结果（忽略行尾差异）：不同时告诉用户：入口文件有新版、本文件与新版的“入口版本”各是多少、主要改了什么（只读新版，概括差异）。**不要自己改本文件**：给出更新办法，请用户决定——项目文档（`AGENTS.md`、`CLAUDE.md` 或技能维护说明）写了更新命令的，照它给；没写的，更新办法是从同一地址整份下载覆盖本文件：`curl -fsSL https://raw.githubusercontent.com/tjbdwanghaibo/roost-core/main/claude-skill/roost-genre/SKILL.md -o <本文件>`。用户明确同意后可以执行那条更新命令，但不手改内容。用户没表态之前，按本文件现有的步骤继续。
 
 **② roost-core 有没有新的发布版**：用第 1 步的命令取最新版 `latest`。
 

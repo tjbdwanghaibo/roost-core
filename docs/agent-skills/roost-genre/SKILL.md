@@ -156,7 +156,7 @@ v1.35.0 起（v1.36.0 补齐闭环与 SyncProbe）13 类网络验收已覆盖既
 | 7 | 实体心跳只有 10 档（50ms～60s），回调不阻塞不做 I/O；`strict` 心跳每拍持锁等落盘，快池高频心跳不要用 | guide/10-time.md §4A |
 | 8 | 长期幂等靠实体上的持久业务事实（序号账本、领奖事实），服务去重环只防短期重投；夹具账本满了拒绝新写、不淘汰旧回执 | SLG-INTEGRATION §9；各手册“幂等身份”节 |
 | 9 | Player 跨服业务协作走 Remote / Saga / 邮件；单玩家改绑 sid 可用 rehome（断线后重连，非无缝迁移），已验本机嵌入式玩家 TCP 六个 SIGKILL 点（不含独立 Gate），committed 源档清理 Q4 仍未关；按 sid 搬机与实时 CellWorld 角色跨格是另外两条路径 | MMORPG-INTEGRATION §1、§6；modules/rehome/README.md；KNOWN-LIMITS“单个玩家换服”与“平台与外部验证” |
-| 10 | 玩家接入层（player TCP、独立 Gate）只提供 TCP；KCP/UDP/QUIC 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写 | MOBA-INTEGRATION §6；docs/framework/GATEWAY.md §4 |
+| 10 | 玩家接入层（player TCP、独立 Gate）只提供 TCP；KCP/UDP/QUIC 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写。HTTP 不是玩家协议（`roost add webroute` 的路由不做鉴权、拿不到玩家身份，只用于管理面或鉴权代理之后）。独立 Gate 只有单机真实进程演练，没有跨机验证。嵌入 TCP 还是独立 Gate 按 compose §1A 定 | MOBA-INTEGRATION §6；docs/framework/GATEWAY.md §4；compose §1A、§7 |
 | 11 | SyncBus 是默认可丢广播；要最终一致须业务自建对账 | KNOWN-LIMITS“广播与 AOI”SyncBus投递；guide/04-sync.md §5 |
 | 12 | AOI：缺省 ApplySync 每玩家 ≤ 9 个视野（超出用 ApplyAsync）；一个会话持有目标受 `MaxObjects`（缺省 100）约束，超出时不断开、**超额降级**（暂缓多出的对象，Interest 从最远处收紧视野，2026-11-08 D17） | guide/04-sync.md §2“视野”上限与两种应用模式；KNOWN-LIMITS“广播与 AOI”AOI 视野③ |
 | 13 | Saga 正式实现只在 macOS 单机测过：原生正向 c128 约 1050 saga/s；Linux、跨机未测；Saga 不是跨服瞬时原子交易。业务键唯一只在运行期间 + 终态保留期（`saga.terminal_retention`，缺省 1h）内成立，**保留期后可复用**，前后两轮靠协调器生成的生命周期身份区分（维护者 2026-10-31 定案 A）；要“同一业务键永远只有一笔”的业务在自己数据里记已用过的键 | KNOWN-LIMITS“Saga”；MMORPG-INTEGRATION §3；SAGA.md“定义”业务键与查询；guide/06-saga.md 幂等键 |

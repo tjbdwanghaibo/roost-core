@@ -348,6 +348,15 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **房间内同步与 self_sync 同进程**（2026-10-31 修复后，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-10-31房间内同步与-self_sync-同进程)）：要求 self_sync（会话归自身视图）；成员关系不持久，重启后靠玩家重连的 handler 再 `Join`；离线成员每个政策阶段复查一次，成本与有离线成员的组的人数成正比。容量与独立 Gate 下的用例见[游戏接入验收：遗留](#游戏接入验收遗留)。
 
+#### 玩家接入方式（2026-11-16）
+
+- **玩家协议只有 TCP**：嵌入在业务服务里（缺省），或经独立 Gate。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（`wiring/web`）拿不到请求头、不做鉴权、缺省只绑回环地址，只用于管理面、内部调用或鉴权代理之后；登录入口（portal）的 HTTP 端点只负责登录、选服、换票。玩家走 HTTP / WebSocket 业务协议不支持。
+- **独立 Gate 没有跨机验证**：只做过单机真实进程演练（account、经 Game Ingress 的 game、Gate 各一个进程，真实 NATS / Redis / Mongo / etcd；`scripts/test-demo-login.sh` 的 casual + naming 阶段另有双 Gate 与重启重连），没有跨机、跨机房的验收；属于外部环境验收。`roost add gate` 生成的接线只在单机、单个 Gate 进程、一次登录上做过真实进程演练（`scripts/testdata/gate-drill/gate-drill.sh`，[证据](evidence/gate-command-20261116/README.md)）；多个 Gate、game / Gate 崩溃重启只由 game-demo 手写接线的脚本覆盖。
+- **`roost add gate` 的 Gate 是固定参数**（2026-11-16）：配置里只开放地址（`player_access.gate.addr` / `advertise_addr`）与命名空间；TCP 与内部上限（两侧报文 512 KiB、连接数、超时）取 `gatewiring.DefaultOptions()`，两侧 Ready 恒真（与嵌入 TCP 相同：Mod Start 起就接收，业务没有另外的准入条件）。要改这些按 [GATEWAY §2](../framework/GATEWAY.md#2-正式接入方式) 手写接线。
+- **生成的 Gate 只认 account 票据**：Gate 用 `wiring/gate.AccountAuthenticator`（`enter:` 与 `session:` 两种票据）；`auth.go` 认别的票据的工程不能直接在前面放生成的 Gate。
+- **doctor 的 `gate:client-address` 只查开发配置**：生产示例里的地址保持 `CHANGE_ME`，由运维填写。
+- **接入方式怎么选**写在 roost-genre 的 compose §1A：短连接（按请求交互）与开房间类用嵌入 TCP，长连接（长期在线、持续推送）缺省加独立 Gate。
+
 ### 生成器、配置与模块
 
 <a id="生成器配置与工具"></a>
