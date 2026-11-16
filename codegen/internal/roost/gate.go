@@ -584,8 +584,12 @@ func checkPlayerGate(root string, m Manifest) []CheckItem {
 	}
 	player := m.Access["player"].Service
 	items := make([]CheckItem, 0, 5)
-	fail := func(name, detail string) { items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: detail}) }
-	ok := func(name, detail string) { items = append(items, CheckItem{Name: name, Status: StatusOK, Detail: detail}) }
+	fail := func(name, detail string) {
+		items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: detail})
+	}
+	ok := func(name, detail string) {
+		items = append(items, CheckItem{Name: name, Status: StatusOK, Detail: detail})
+	}
 
 	bootstrap, err := os.ReadFile(filepath.Join(root, "internal", "bootstrap", "generated.go"))
 	switch {
@@ -666,7 +670,6 @@ func checkPlayerGate(root string, m Manifest) []CheckItem {
 	}
 	return items
 }
-
 
 // printGateNext 是 roost add gate 之后的提示；unchanged 表示已经是这个 Gate、什么都没改。
 func printGateNext(stdout io.Writer, root, name string, unchanged bool) {

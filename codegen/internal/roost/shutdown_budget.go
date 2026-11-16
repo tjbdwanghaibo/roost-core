@@ -104,8 +104,8 @@ type serviceShutdown struct {
 	playerTCP  int
 	mirror     int
 	// gate 是独立 Gate 的 Gate Mod（固定 10s，不读配置）。
-	gate int
-	margin     time.Duration
+	gate   int
+	margin time.Duration
 	// release is the singleton release share (generatedSingletonRelease) for a
 	// service whose generated config turns the singleton on, zero otherwise.
 	release time.Duration
