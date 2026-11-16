@@ -539,7 +539,7 @@ var generatedRealDependencyEntries = []struct {
 	{"modules/purchase/files/game/modules/purchase/queue_integration_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseRedis"},
 	{"modules/mailbox/files/game/controllers/mailbox_integration_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestMailboxRealDependencies"},
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
-	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
+	{"demo/game/controllers/player_finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
 	{"demo/db/migrations/player_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPlayerMigrationRealMongo$"},
 	{"demo/internal/service/game/terrain_test.go.tmpl", "scripts/test-demo-generated.sh", "^(TestTerrainRestartRealMongo|TestTerrainEditLedgerRealMongo|TestBuildingRestartRealMongo)$"},
 	{"demo/internal/service/game/terrain_building_test.go.tmpl", "scripts/test-demo-generated.sh", "^(TestTerrainRestartRealMongo|TestTerrainEditLedgerRealMongo|TestBuildingRestartRealMongo)$"},

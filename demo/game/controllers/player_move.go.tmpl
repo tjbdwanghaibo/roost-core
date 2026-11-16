@@ -1,0 +1,62 @@
+package controllers
+
+import (
+	"fmt"
+	"log/slog"
+
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+	player "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleMove puts the player on a point in one step — a teleport. It is the
+// demo's first movement path, kept next to the server-driven walk
+// (HandleMoveTarget, msg 10026) as the reference to compare it against and
+// as what a blink or a GM jump uses; it ends the walk in progress.
+//
+// The endpoint resolves WHICH scene and the transaction does the rest: the
+// position the client asked for is checked against the map inside the
+// transaction that writes it, so two players racing for the same point cannot
+// both win — the Scene Entity is locked by both transactions and one of them
+// finds the ground taken.
+//
+// The response carries the position the server settled on, read back after
+// the transaction. A refused move answers with a code and the position the
+// player still has, so a client can snap back instead of drifting.
+func (controller *Controller) HandleMove(context *playeraccess.Context, request *pb.MoveRequest) (*pb.MoveResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("move endpoint: context and request are required")
+	}
+	// A partitioned scene has no "stand here" and no server walk: the Cell
+	// process owns the player's position, and a player moves by intent
+	// (HandleMoveIntent; maintainer decision D6 = A).
+	if controller.Partition() != nil {
+		code, reason := errcode.ClientError(apperrors.ErrScenePartitioned)
+		return &pb.MoveResponse{Code: code, Reason: reason}, nil
+	}
+	playerEntityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("move endpoint: %w", err)
+	}
+	if err := syncsender.NewMovePlayerSender(controller.NestClient()).MultiSync_MovePlayer(context.Context(), playerEntityID, controller.WorldSceneID(), request.X, request.Y); err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("move failed", "player_id", context.PlayerID, "x", request.X, "y", request.Y, "err", err)
+		}
+		// Refused: answer with where the player actually is, so the client
+		// can correct itself.
+		position, readErr := syncsender.NewPlayerPositionSender(controller.NestClient()).Sync_PlayerPosition(context.Context(), playerEntityID)
+		if readErr != nil {
+			return &pb.MoveResponse{Code: code, Reason: reason}, nil
+		}
+		return &pb.MoveResponse{Code: code, Reason: reason, X: position.X, Y: position.Y}, nil
+	}
+	// Nothing to tell the scene: the transaction queued the new position for
+	// the AOI (MapBasic.SetPos → QueueMove, commit-gated), so the interest
+	// index follows the DAO from the same write.
+	return &pb.MoveResponse{X: request.X, Y: request.Y}, nil
+}

@@ -279,7 +279,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | 登录与凭据 | 登录入口（HTTP 三步）→ 进服票据握手 → 服务器告知 → 先新建（带角色名）→ 进入；会话令牌握手的老路仍是登录端点加载或创建 Player | login / portal / servertime 模块；demo 自己的是渠道入口 `services/account/login_channels.go`、`game/controllers/player/enter_game.go` 与 `enter_create.go`（归属、驻留表、登录预算） | 参考实现（demo），登录链路本身是现成模块。demo 渠道凭据不能用于生产；新链路只有离线场景，没有做过真实进程的实跑；连错服有两个码 | [登录](../../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入) |
-| 背包、经验与升级 | 一条玩家写请求从协议到 Nest 到 DAO 的完整链路 | `game/handler/`、`game/controllers/player/` | 参考实现（demo） | [链路](../../demo/WALKTHROUGH.md#链路) |
+| 背包、经验与升级 | 一条玩家写请求从协议到 Nest 到 DAO 的完整链路 | `game/handler/`、`game/controllers/player*.go` | 参考实现（demo） | [链路](../../demo/WALKTHROUGH.md#链路) |
 | 升级发奖励邮件 | effect 与状态变更同一条 WAL 记录，消费者调 mail | mailbox 与 profile 联动，`MailboxProfileReward` 在升级事务中冻结奖励，模块消费并以 EffectID 发件 | 现成模块；缺省不发奖，工程定义连升总奖励 | [事件链](../../demo/WALKTHROUGH.md#事件链升级--奖励邮件事务性-outbox) |
 | 邮件列表与领附件 | 客户端这一半：列表、领取到背包 | 端点 + mail 访问器 | 参考实现（demo） | [邮件](../../demo/WALKTHROUGH.md#邮件列表与领附件客户端这一半) |
 | 匹配组队 | game 调 match 成局 | `game/modules/matchmaking` | 参考实现（demo） | [组队](../../demo/WALKTHROUGH.md#跨服务game--match-组队) |

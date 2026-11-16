@@ -27,7 +27,7 @@
 
 | 业务场景 | 对应能力 | 接入方式与源码入口 | 业务负责什么 |
 | --- | --- | --- | --- |
-| 登录、建角与首登 | account、玩家接入、Entity lifecycle | [EnterGame 模板](../../demo/game/controllers/player/enter_game.go.tmpl)：先核对角色绑定 sid（错服答 `player_elsewhere` 与 owner sid），再经 lifecycle `GetOrCreate` 装载，不经 Sender | 渠道认证、区服和角色政策；PlayerID 取自已鉴权会话 |
+| 登录、建角与首登 | account、玩家接入、Entity lifecycle | [EnterGame 模板](../../demo/game/controllers/player_enter_game.go.tmpl)：先核对角色绑定 sid（错服答 `player_elsewhere` 与 owner sid），再经 lifecycle `GetOrCreate` 装载，不经 Sender | 渠道认证、区服和角色政策；PlayerID 取自已鉴权会话 |
 | 移动、寻路与地图归属 | Scene runtime、Map 组件、Nest | [MovePlayer](../../demo/game/handler/move_player.go.tmpl)、[MapComponent](../../demo/game/entities/player/map_component.go.tmpl)：验证地形后写 DAO，再发布脏状态 | 移动速度、射程、视线与反作弊；AOI 距离不等于攻击授权 |
 | 同进程切图 | 多实体 Nest + DAO undo | [持久切图](../../scripts/testdata/mmorpg/tasks.go.txt)：版本、原地图、新地图人数与归属一起修改 | 副本准入、容量、出生点、过期请求识别 |
 | 切图后的视图切换 | 一个 Manager、每张地图一个 Interest、held / ready | [多地图接法](../../scripts/testdata/mmorpg/scene_runtime.go.txt)：按已提交归属重建索引，失败保持 held，成功 Ready 后发新 Full | 重试驱动与生命周期；持久提交与网络交付不是同一事务 |
@@ -148,7 +148,7 @@ sequenceDiagram
 
 ### 6. 保持 Player 归属的跨服协作
 
-每个角色从 account 取得 `ServerID`；[EnterGame](../../demo/game/controllers/player/enter_game.go.tmpl) 在装载前核对认证会话中的绑定，错服返回 `player_elsewhere` 与 owner sid。[搬服](PLAYER-MIGRATION.md)是按 sid 排空后换机器，绑定不变。Player 不随一次跨服交互搬到别的 game 进程：本服业务经 Saga 请求对方或邮件服务完成交互。单玩家改绑可用[rehome 模块](../../modules/rehome/README.md)的权威交接、断线与恢复流程，本机嵌入式玩家 TCP 六个 SIGKILL 点已验（不含独立 Gate）；committed 后的旧源档清理仍为 Q4。它不是无缝迁移，不自动接本纵切的交易、房间或战斗流程，不能只改 SceneID 或借 Remote Guild 的 lease 推断已支持。
+每个角色从 account 取得 `ServerID`；[EnterGame](../../demo/game/controllers/player_enter_game.go.tmpl) 在装载前核对认证会话中的绑定，错服返回 `player_elsewhere` 与 owner sid。[搬服](PLAYER-MIGRATION.md)是按 sid 排空后换机器，绑定不变。Player 不随一次跨服交互搬到别的 game 进程：本服业务经 Saga 请求对方或邮件服务完成交互。单玩家改绑可用[rehome 模块](../../modules/rehome/README.md)的权威交接、断线与恢复流程，本机嵌入式玩家 TCP 六个 SIGKILL 点已验（不含独立 Gate）；committed 后的旧源档清理仍为 Q4。它不是无缝迁移，不自动接本纵切的交易、房间或战斗流程，不能只改 SceneID 或借 Remote Guild 的 lease 推断已支持。
 
 ```text
 sid A 的玩家 → 本地 Nest 扣物品 / 记意图 → Saga / outbox

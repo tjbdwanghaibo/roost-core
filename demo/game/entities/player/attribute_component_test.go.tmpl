@@ -1,6 +1,7 @@
 package player
 
 import (
+	attributecomp "{{MODULE}}/game/components/attribute"
 	gameprofile "{{MODULE}}/game/components/profile"
 	"context"
 	"errors"
@@ -19,6 +20,21 @@ import (
 	"{{MODULE}}/db"
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
 )
+
+// isolatedLocked 在持有 subject 锁的 Guard 作用域里跑一笔独立事务。组件发布实体事件（属性变化、装备变化、升级）
+// 要求当前 Guard 持有发布事件的实体：正式路径上由 Nest 派发取锁，这些测试直接调组件方法，所以在这里取锁。
+func isolatedLocked(subject *Player, committer nest.TransactionCommitter, handler string, call func() (any, error)) (any, error) {
+	var out any
+	err := entity.WithGuardScope(handler, func(scope *entity.GuardScope) error {
+		if !scope.Guard().RequireEntity(subject) {
+			return errors.New("the player could not be locked")
+		}
+		var err error
+		out, err = nest.RunIsolatedTransaction(context.Background(), committer, handler, call)
+		return err
+	})
+	return out, err
+}
 
 // attributeCommitter keeps nothing: this test is about the container, not
 // about what reaches storage.
@@ -86,14 +102,14 @@ func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
 	if !found || item.Attack <= 0 {
 		t.Fatalf("the item table gives %d no attack; this test asserts the gear layer", ironSword)
 	}
-	if _, ok := gameattr.CombatLive(component.Container(), Gear); !ok {
+	if _, ok := gameattr.CombatLive(component.Container(), attributecomp.Gear); !ok {
 		t.Fatal("the gear layer was not installed at init")
 	}
 	// Worn, not carried. The gear layer is a projection of the EQUIPMENT, so
 	// a sword in the bag changes nothing — which is the point of moving it
 	// there. Through the real methods in a real transaction, because the
 	// generated persist setters refuse to run outside one.
-	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "carry", func() (any, error) {
+	if _, err := isolatedLocked(subject, attributeCommitter{}, "carry", func() (any, error) {
 		if _, err := subject.BagComp().Add(ironSword, 1); err != nil {
 			return nil, err
 		}
@@ -104,10 +120,10 @@ func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("grant the sword: %v", err)
 	}
-	if carried, _ := gameattr.CombatLive(component.Container(), Gear); carried.Attack != 0 {
+	if carried, _ := gameattr.CombatLive(component.Container(), attributecomp.Gear); carried.Attack != 0 {
 		t.Fatalf("carrying the sword raised the gear layer to attack %d; only wearing it should", carried.Attack)
 	}
-	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
+	if _, err := isolatedLocked(subject, attributeCommitter{}, "equip", func() (any, error) {
 		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
 			return nil, err
 		}
@@ -118,7 +134,7 @@ func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
 	}
 
 	// Container is a view built from the DAO for the call, so read it again.
-	if gear, _ := gameattr.CombatLive(component.Container(), Gear); gear.Attack != item.Attack {
+	if gear, _ := gameattr.CombatLive(component.Container(), attributecomp.Gear); gear.Attack != item.Attack {
 		t.Fatalf("the gear layer holds attack %d, want the item's %d", gear.Attack, item.Attack)
 	}
 	final, _ = component.Final()
@@ -225,7 +241,7 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 			level := subject.Dao().GetProfile().GetLevel()
 			start := gameattr.ForLevel(level)
 
-			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "level_up_then_fail", func() (any, error) {
+			_, err := isolatedLocked(subject, tc.committer, "level_up_then_fail", func() (any, error) {
 				if _, err := subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel); err != nil {
 					return nil, err
 				}
@@ -256,7 +272,7 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 			// The consequence that made this an asset bug: the next level-up that
 			// DOES commit must store the numbers of the level it reached, not one
 			// level-up on top of a rolled-back one.
-			if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
+			if _, err := isolatedLocked(subject, attributeCommitter{}, "level_up", func() (any, error) {
 				return subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel)
 			}); err != nil {
 				t.Fatalf("the retry failed: %v", err)
@@ -289,7 +305,7 @@ func TestFinalIsRecomputedFromWornGearWhenThePlayerLoads(t *testing.T) {
 	if !found || item.Attack <= 0 {
 		t.Fatalf("the item table gives %d no attack; this test asserts the gear layer", ironSword)
 	}
-	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
+	if _, err := isolatedLocked(subject, attributeCommitter{}, "equip", func() (any, error) {
 		if _, err := subject.BagComp().Add(ironSword, 1); err != nil {
 			return nil, err
 		}
@@ -402,7 +418,7 @@ func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
 				if !ok || base.HP != start.HP || base.Attack != start.Attack {
 					t.Fatalf("base after rollback = %+v (present %v), want HP %d attack %d", base, ok, start.HP, start.Attack)
 				}
-				if gear, ok := gameattr.CombatLive(component.Container(), Gear); !ok || gear.Attack != 0 || gear.HP != 0 {
+				if gear, ok := gameattr.CombatLive(component.Container(), attributecomp.Gear); !ok || gear.Attack != 0 || gear.HP != 0 {
 					t.Fatalf("gear after rollback = %+v (present %v), want nothing worn", gear, ok)
 				}
 				if final, _ := component.Final(); final.HP != start.HP || final.Attack != start.Attack || final.Power != start.Power {
@@ -442,7 +458,7 @@ func TestNonPersistentAttributeLayersStayOutOfTheWAL(t *testing.T) {
 		t.Fatalf("open wal: %v", err)
 	}
 	committer := walAppendCommitter{wal: wal}
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "equip", func() (any, error) {
 		if _, err := subject.BagComp().Add(ironSword, 1); err != nil {
 			return nil, err
 		}
@@ -455,7 +471,7 @@ func TestNonPersistentAttributeLayersStayOutOfTheWAL(t *testing.T) {
 		t.Fatalf("equip: %v", err)
 	}
 	worn, _ := subject.AttributeComp().Final()
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "level_up", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "level_up", func() (any, error) {
 		return subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel)
 	}); err != nil {
 		t.Fatalf("level up: %v", err)
@@ -634,7 +650,7 @@ func TestCellPanelIsTheFinalLayer(t *testing.T) {
 	}
 	check("built")
 	before := subject.CellPanel()
-	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
+	if _, err := isolatedLocked(subject, attributeCommitter{}, "level_up", func() (any, error) {
 		return subject.ProfileComp().AddExp(gameprofile.ProfileExpPerLevel)
 	}); err != nil {
 		t.Fatal(err)

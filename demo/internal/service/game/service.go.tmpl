@@ -289,7 +289,7 @@ func (s *Service) Init(registry *app.Registry) error {
 	}
 	// Chat presence (who gets world-channel pushes) is the chat module's: its
 	// controller subscribes to session closes the first time it pushes
-	// (game/controllers/chat/chat_push.go), so nothing is wired here.
+	// (game/controllers/chat.go, chatPusher), so nothing is wired here.
 	// 登录公告：EnterGame 只把进入的玩家交给合并器，合并器每秒至多在世界频道发一条（login_announce.go）。
 	loginAnnounce, err := startLoginAnnounce(registry)
 	if err != nil {

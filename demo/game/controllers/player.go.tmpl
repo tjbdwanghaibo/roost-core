@@ -1,0 +1,326 @@
+package controllers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	worldentity "{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/settings"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+	svcsession "github.com/tjbdwanghaibo/roost-core/service/session"
+)
+
+// 本文件是 game-demo 玩家端点（协议分组 player，文件 player_*.go）共用的依赖。game/controllers 是一个包，
+// Controller 由生成器写在 controller.go 里，demo 不加字段：端点要用的东西放在 playerModuleState 里，经
+// moduleState 在一个 Controller 上只建一次。
+//
+//   - playerDeps 是启动时就必须在的依赖（Player 的 lifecycle、match / session / platform 三个服务客户端、
+//     支付密钥、本服 sid、World 与世界场景的 id）。第一次用到时从 Registry 取齐；requireAtStart 登记的检查在
+//     协议登记时先取一遍，取不齐进程起不来——与合包前 player controller 的 FromRegistry 同一个时机。
+//   - 其余的（场景、战斗、活动、驻留表）由 internal/service/<game> 在 Init 里发布，晚于协议登记，所以用到时
+//     再按能力名取，取到之后缓存。
+
+// playerDeps 是玩家端点启动时就必须在的依赖。
+type playerDeps struct {
+	players *player.Lifecycle
+	// 匹配仍由 demo 的锁步战斗使用，社交队伍端点来自 team 模块。
+	matcher  svcmatch.Matchmaker
+	sessions svcsession.Session
+	payments svcplatform.Platform
+	// paymentSecret is the demo's stand-in for a payment provider's signing
+	// key. A real game process does not hold one (see the purchase endpoint).
+	paymentSecret string
+	worldID       int64
+	sceneID       int64
+}
+
+// playerModuleState 是玩家端点在一个 Controller 上的状态。
+type playerModuleState struct {
+	// load 只在 deps 还没取到时取一次；取不齐时不缓存错误，下一次再取（启动检查已经让进程起不来，
+	// 离线测试里没有这些依赖的 Controller 只是拿到零值）。
+	load       sync.Mutex
+	deps       atomic.Pointer[playerDeps]
+	activities atomic.Pointer[activityRunner]
+	owners     atomic.Pointer[playerOwners]
+	battles    atomic.Pointer[battleRouter]
+	scene      atomic.Pointer[sceneJoiner]
+}
+
+func (controller *Controller) playerState() *playerModuleState {
+	return moduleState(controller, "player", func() *playerModuleState { return &playerModuleState{} })
+}
+
+func init() {
+	requireAtStart("player", func(controller *Controller) error {
+		_, err := controller.playerDeps()
+		return err
+	})
+}
+
+// battleRouter is the slice of the game service's battle manager the
+// endpoints use: one call, plain parameters. It is an interface here, and
+// looked up by capability name, because the service package imports this
+// one, not the other way round.
+type battleRouter interface {
+	// connection is the access-layer session the request arrived on: the
+	// room sends this seat's frames to that connection.
+	SubmitBattleInput(ctx context.Context, battleID string, playerID int64, connection string, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error
+}
+
+// sceneJoiner is the slice of the scene an endpoint needs: put this player's
+// Entity into the replicated world. Looked up by capability name for the same
+// reason as the battle manager — the service package imports this one.
+type sceneJoiner interface {
+	Join(ctx context.Context, subject *player.Player, at spatial.Point) error
+	// Ready releases the session Join held: the client's decoder is up.
+	Ready(playerID int64) error
+	// SetView applies the client's LOD / view-radius request and returns the
+	// view in force (clamped and quantized by the scene's interest policy).
+	SetView(playerID int64, view policy.ObserverView) (policy.ObserverView, error)
+	Leave(ctx context.Context, subjectID int64)
+}
+
+// playerOwners 是端点用到的那部分驻留表：登录把绑定在本服的玩家接入本进程服务，赠礼取本进程 sid。
+// 绑定在别的服时 Serve 返回 ErrPlayerElsewhere。按能力名查找，理由与场景相同。
+type playerOwners interface {
+	Serve(ctx context.Context, playerID int64, boundSID int32) error
+	// SID 是本进程的 sid。send_gift 把它作为发送方绑定的 sid 写进赠礼：能在本进程发起赠礼的玩家
+	// 一定经过了 Serve，也就一定绑定在这个 sid 上。
+	SID() int32
+}
+
+// activityRunner is the slice of the game service's activity runner the
+// endpoints use: where a player stands, and one contribution. Looked up by
+// capability name for the same reason the scene is.
+type activityRunner interface {
+	Standing(ctx context.Context, playerID int64) (string, svcactivity.Activity, svcactivity.Participant, error)
+	Contribute(ctx context.Context, playerID int64, runID string) (string, svcactivity.Participant, error)
+	Settled(ctx context.Context, activityID string) (bool, error)
+}
+
+// loginAnnouncer 是 game 服务发布的登录公告合并器（game/announce.Batcher）在 EnterGame 用到的那一面：
+// 交出一名进入的玩家，不阻塞、不做 I/O，每秒至多一条公告由它在后台发。
+type loginAnnouncer interface {
+	Entered(playerID int64)
+}
+
+// loginAnnounceCapability 是 internal/service/<game> 发布合并器用的能力名（LoginAnnounceCapability）。
+const loginAnnounceCapability app.ModName = "{{GAME_SERVICE}}.loginannounce"
+
+// loginBudgetSource is the slice of the player TCP Runtime EnterGame reads:
+// player_access.tcp.login_timeout, the share of a login request's dispatch
+// budget that taking the player into service may use.
+type loginBudgetSource interface {
+	LoginTimeout() time.Duration
+}
+
+// battleCapability is what internal/service/<game> publishes its battle
+// manager under (BattleCapability there). It is registered in the service's
+// Init, which runs after the protocol binding built the Controller, so the
+// lookup is lazy.
+const battleCapability app.ModName = "{{GAME_SERVICE}}.battle"
+
+// sceneCapability is what internal/service/<game> publishes its scene under
+// (SceneCapability there).
+const sceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
+
+// activityCapability is what internal/service/<game> publishes its activity
+// runner under (ActivityCapability there).
+const activityCapability app.ModName = "{{GAME_SERVICE}}.activity"
+
+// playerOwnerCapability is what internal/service/<game> publishes its player
+// ownership table under (PlayerOwnerCapability there).
+const playerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
+
+// playerDeps 返回玩家端点启动时就必须在的依赖：第一次从 Registry 取齐并缓存。取不齐返回错误（不缓存）。
+func (controller *Controller) playerDeps() (*playerDeps, error) {
+	state := controller.playerState()
+	if deps := state.deps.Load(); deps != nil {
+		return deps, nil
+	}
+	state.load.Lock()
+	defer state.load.Unlock()
+	if deps := state.deps.Load(); deps != nil {
+		return deps, nil
+	}
+	deps, err := loadPlayerDeps(controller.Registry())
+	if err != nil {
+		return nil, err
+	}
+	state.deps.Store(deps)
+	return deps, nil
+}
+
+// loadPlayerDeps 从 Registry 取齐 playerDeps。
+func loadPlayerDeps(registry *app.Registry) (*playerDeps, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("player endpoints: app registry is required")
+	}
+	players, err := player.LifecycleFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player endpoints: %w", err)
+	}
+	// The same capabilities internal/service/<game>'s generated Match() and
+	// Session() accessors return; looked up here directly so this package does
+	// not import the service package.
+	matcher, ok := app.Lookup[svcmatch.Matchmaker](registry, svcmatch.CapabilityName)
+	if !ok || matcher == nil {
+		return nil, fmt.Errorf("player endpoints: capability %q not found; list match under services.<game>.uses", svcmatch.CapabilityName)
+	}
+	sessions, ok := app.Lookup[svcsession.Session](registry, svcsession.CapabilityName)
+	if !ok || sessions == nil {
+		return nil, fmt.Errorf("player endpoints: capability %q not found; list session under services.<game>.uses", svcsession.CapabilityName)
+	}
+	// The demo plays the payment provider, so this process needs the secret
+	// the platform service checks callbacks with. Refused at start rather than
+	// at the first purchase: an empty secret turns every callback into an
+	// invalid-signature refusal, which reads as an attack rather than as a
+	// missing configuration key.
+	// platform.payment_secret is declared by the game service (game/settings,
+	// required), so an empty one already stopped the process before any Mod
+	// started; this reads the checked value.
+	platform, err := settings.LoadPlatform(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player endpoints: %w", err)
+	}
+	payments, ok := app.Lookup[svcplatform.Platform](registry, svcplatform.CapabilityName)
+	if !ok || payments == nil {
+		return nil, fmt.Errorf("player endpoints: capability %q not found; list platform under services.<game>.uses", svcplatform.CapabilityName)
+	}
+	worldID, err := worldentity.WorldID(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player endpoints: %w", err)
+	}
+	sceneID, err := entity.BuildEntityID(sceneentity.WorldSceneUniqueID, sceneentity.EntityKindScene)
+	if err != nil {
+		return nil, fmt.Errorf("player endpoints: %w", err)
+	}
+	return &playerDeps{
+		players: players, matcher: matcher, sessions: sessions,
+		payments: payments, paymentSecret: platform.PaymentSecret,
+		worldID: worldID, sceneID: sceneID,
+	}, nil
+}
+
+// playerDepsOrZero 是访问器用的：取不齐时返回零值（启动检查保证正式进程里不会发生；离线测试的 Controller
+// 只放了用例要的那几样）。
+func (controller *Controller) playerDepsOrZero() *playerDeps {
+	if controller == nil {
+		return &playerDeps{}
+	}
+	deps, err := controller.playerDeps()
+	if err != nil {
+		return &playerDeps{}
+	}
+	return deps
+}
+
+// Players is the create/load boundary for Player Entities.
+func (controller *Controller) Players() *player.Lifecycle {
+	return controller.playerDepsOrZero().players
+}
+
+// Matcher is the match service, reached over the bus.
+func (controller *Controller) Matcher() svcmatch.Matchmaker {
+	return controller.playerDepsOrZero().matcher
+}
+
+// Sessions is the session service (bounded runs), reached over the bus.
+func (controller *Controller) Sessions() svcsession.Session {
+	return controller.playerDepsOrZero().sessions
+}
+
+// Payments is the platform service: the process that owns paid orders.
+func (controller *Controller) Payments() svcplatform.Platform {
+	return controller.playerDepsOrZero().payments
+}
+
+// PaymentSecret is what this process signs simulated provider callbacks with.
+func (controller *Controller) PaymentSecret() string {
+	return controller.playerDepsOrZero().paymentSecret
+}
+
+// WorldSceneID is the full entity id of the one map this process runs.
+func (controller *Controller) WorldSceneID() int64 {
+	return controller.playerDepsOrZero().sceneID
+}
+
+// WorldID is the full entity id of this process's World.
+func (controller *Controller) WorldID() int64 {
+	return controller.playerDepsOrZero().worldID
+}
+
+// LoginTimeout is the transport's login budget, or zero when no transport
+// publishes one (the request's dispatch deadline still bounds the login).
+// Looked up on each call: it is one map read per login, and the transport
+// Mod publishes after the Controller is built.
+func (controller *Controller) LoginTimeout() time.Duration {
+	if controller == nil || controller.Registry() == nil {
+		return 0
+	}
+	source, ok := app.Lookup[loginBudgetSource](controller.Registry(), PlayerTCPCapability)
+	if !ok || source == nil {
+		return 0
+	}
+	return source.LoginTimeout()
+}
+
+// lookupPlayerCapability 按能力名取 internal/service/<game> 在 Init 里发布的对象，取到之后缓存在 slot 里。
+func lookupPlayerCapability[T comparable](controller *Controller, slot *atomic.Pointer[T], capability app.ModName, missing string) (T, error) {
+	var zero T
+	if controller == nil {
+		return zero, errors.New("player endpoints: nil controller")
+	}
+	if cached := slot.Load(); cached != nil {
+		return *cached, nil
+	}
+	value, ok := app.Lookup[T](controller.Registry(), capability)
+	if !ok || value == zero {
+		return zero, fmt.Errorf("player endpoints: capability %q not found; %s", capability, missing)
+	}
+	slot.Store(&value)
+	return value, nil
+}
+
+// Battles is the battle manager, looked up lazily: the service registers it
+// in Init, after the protocol binding has built the Controller.
+func (controller *Controller) Battles() (battleRouter, error) {
+	return lookupPlayerCapability(controller, &controller.playerState().battles, battleCapability, "the battle manager is not running")
+}
+
+// Scene is the replicated world, looked up lazily like the battle manager.
+func (controller *Controller) Scene() (sceneJoiner, error) {
+	return lookupPlayerCapability(controller, &controller.playerState().scene, sceneCapability, "the scene is not running")
+}
+
+// PlayerOwners is the ownership table, looked up lazily like the scene.
+func (controller *Controller) PlayerOwners() (playerOwners, error) {
+	return lookupPlayerCapability(controller, &controller.playerState().owners, playerOwnerCapability, "player ownership is not published")
+}
+
+// Activities is the timed server-wide event, looked up lazily like the scene.
+func (controller *Controller) Activities() (activityRunner, error) {
+	return lookupPlayerCapability(controller, &controller.playerState().activities, activityCapability, "the activity runner is not running")
+}
+
+// LoginAnnouncer 是登录公告的合并器；game 服务没有发布它（离线测试的 Controller）时 ok 为 false。
+func (controller *Controller) LoginAnnouncer() (loginAnnouncer, bool) {
+	if controller == nil || controller.Registry() == nil {
+		return nil, false
+	}
+	announcer, ok := app.Lookup[loginAnnouncer](controller.Registry(), loginAnnounceCapability)
+	return announcer, ok && announcer != nil
+}

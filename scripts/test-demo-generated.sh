@@ -23,7 +23,7 @@
 #     每封附件恰好到账一次；唯一前缀、键与流用后删除。模板在 modules/mailbox）；
 #   - internal/service/game 的 TestActivityBoardKeepsTheLatestCumulativeScore（ROOST_REVIEW_REDIS：真实 Redis 上
 #     延后旧贡献回复，验证结算榜不被较低的累计分快照覆盖；协调器使用内存版本存储）；
-#   - game/controllers/player 的 TestDungeonClearsBoardCountsEachRunOnceRealRedis（ROOST_REVIEW_REDIS：正式端点 +
+#   - game/controllers（player_finish_dungeon_test.go）的 TestDungeonClearsBoardCountsEachRunOnceRealRedis（ROOST_REVIEW_REDIS：正式端点 +
 #     真实 Redis 上的 rank RedisStore，超过去重环 8 个槽位后的重放、并发重放与排行提交失败后的补报都只计一次）；
 #   - codegen/internal/roost 的 TestGateGeneratedBusinessConsumer（ROOST_DATAENGINE_IT_NATS_URL）；
 #   - codegen/internal/roost 的 TestGeneratedSagaNativeStepsAndEffectConsumer（ROOST_DATAENGINE_IT_MONGO_URI / NATS_URL：新手工程
@@ -50,7 +50,7 @@ printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$
 	ROOST_PURCHASE_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseRedis' ./game/modules/purchase
 	ROOST_MAILBOX_IT_NATS_URL="$ROOST_DATAENGINE_IT_NATS_URL" ROOST_MAILBOX_IT_REDIS_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -tags=integration -mod=mod -race -count=1 -timeout 5m -v -run '^TestMailboxRealDependencies' ./game/controllers
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
-	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestDungeonClearsBoardCountsEachRunOnceRealRedis$' ./game/controllers/player
+	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestDungeonClearsBoardCountsEachRunOnceRealRedis$' ./game/controllers
 	ROOST_MIGRATION_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPlayerMigrationRealMongo$' ./db/migrations
 	ROOST_TERRAIN_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^(TestTerrainRestartRealMongo|TestTerrainEditLedgerRealMongo|TestBuildingRestartRealMongo)$' ./internal/service/game
 	ROOST_TERRAIN_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestTerrainWALCrashRealMongo$' ./internal/service/game

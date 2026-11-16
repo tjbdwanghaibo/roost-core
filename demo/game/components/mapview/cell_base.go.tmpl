@@ -3,7 +3,6 @@ package mapview
 import (
 	"time"
 
-	"{{MODULE}}/game/components/attribute"
 	"{{MODULE}}/game/partition"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
@@ -34,20 +33,9 @@ func (component *Component) registerCellBase() error {
 	return nil
 }
 
-// 属性在等级、装备或业务 Refresh 后实际变化时，Cell 面板在同一个 Player 事务里更新。
-// 不使用只覆盖升级的钩子，加载阶段的临时重建也不发送面板。
-func init() {
-	attribute.OnAttributeChanged("cellworld", func(host attribute.Owner) error {
-		player, ok := host.(Owner)
-		if !ok {
-			return nil // 属性组件也可以挂在别的实体上；只有 Player 有 Cell 面板
-		}
-		if node := partition.Node(); node != nil {
-			return node.UpdatePanel(player)
-		}
-		return nil
-	})
-}
+// 属性变化后 Cell 面板的更新不在这个组件上：mapview 按旧写法挂在 Player 上（实体包里的 MapComponent 别名），
+// 旧写法挂载的组件不能带 //roost:listen，所以监听 event.AttributeChanged 的是 Player 自己
+// （game/entities/player/cell_base.go 的 OnAttributeChanged）。
 
 // CellBaseBeat 是 cell.base 心跳的登记（本进程不跑分区场景时为 nil）；Player 的 StartBase 用它。
 func (c *Component) CellBaseBeat() *heartbeat.Reg { return c.cellBase }

@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -21,8 +21,8 @@ import (
 // Pipelined like the debit (see handlerGiftDebit).
 //
 //roost:nest rollback=undo durability=pipelined
-func handlerGiftRefund(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
-	held, err := target.BagComp().Add(itemID, int64(count))
+func handlerGiftRefund(target view.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
+	held, err := target.Bag().Add(itemID, int64(count))
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {

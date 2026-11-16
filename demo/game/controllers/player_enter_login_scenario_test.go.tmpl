@@ -1,0 +1,822 @@
+package controllers_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	_ "{{MODULE}}/game/components/profile" // enter 与 profile 的联动：新建请求的名字规则，名字在新建的那笔事务里进档案
+	playerctl "{{MODULE}}/game/controllers"
+	playerentity "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	worldentity "{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/handler"
+	gamelogin "{{MODULE}}/game/modules/login"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	accountcollaborators "{{MODULE}}/services/account"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 登录整条链路落到 demo 自己的登录流程上的场景（离线）。真实的部分：
+//
+//   - account：svcaccount.Service（内存存储），身份校验用工程自己的 Verifier（demo 渠道，login_channels.go）；
+//   - 握手：登录模块的认证器 gamelogin.Authenticator，会话的 claims 是它写的；
+//   - “先新建”的规则、承载服的进入前检查、会话激活后的告知：登录模块与 enter 的联动（import game/modules/login 就登记了），
+//     告知经 gamelogin.Notifier 走到 enter 域的 Announce（demo 的 enter controller + 模块的 enter_status.go）；
+//   - 名字规则：enter 与 profile 的联动；
+//   - 登录端点：demo 的 Controller.EnterGame 与 Controller.EnterCreate，Player 的 lifecycle 与 Nest（事务真的执行）。
+//
+// 替身：持久层（一个空的装载器加一个只记录提交的提交器——“什么都没写”就是它没收到提交）、驻留表
+// （与真的一样核对绑定，并记下谁被接入了服务）、玩家传输（只收推送与断开）。登录在装载之后顺带做的事
+// （世界计数、进场景、补单、公会、公告）在这里取不到依赖，按端点的约定只记日志。
+// 没有经真实的 TCP、总线、Redis 与 Mongo。
+
+const scenarioSID = 1000
+
+// scenarioStore 是空的持久层：哪名玩家都没有档。
+type scenarioStore struct{}
+
+func (scenarioStore) LoadEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	return nil, engine.ErrEntityAggregateNotFound
+}
+
+// scenarioGetter 是 Nest 取实体的入口：玩家从 Player 的 lifecycle（access）取，另外接上的实体（World）从 extra 取。
+type scenarioGetter struct {
+	access *entity.ManagerAccess
+	mu     sync.Mutex
+	extra  map[int64]entity.IThreadSafeEntity
+}
+
+func (getter *scenarioGetter) add(value entity.IThreadSafeEntity) {
+	getter.mu.Lock()
+	defer getter.mu.Unlock()
+	if getter.extra == nil {
+		getter.extra = map[int64]entity.IThreadSafeEntity{}
+	}
+	getter.extra[value.ID()] = value
+}
+
+func (getter *scenarioGetter) Get(ctx context.Context, id int64, category entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	getter.mu.Lock()
+	value, ok := getter.extra[id]
+	getter.mu.Unlock()
+	if ok {
+		return value, nil
+	}
+	return getter.access.Get(ctx, id, category)
+}
+
+func (getter *scenarioGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := getter.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+// scenarioCommitter 记下 Nest 交来的每一笔提交；reject 打开时拒绝提交（事务回滚），用来造“建到一半”的玩家。
+// worldHeld 非 nil 时，World 登录计数（handlerRecordEnter）的提交停在这里，直到它被关闭：模拟 World 锁内
+// 一次迟迟不回的 fsync。这类提交另计在 worldCounts，不进 records。
+type scenarioCommitter struct {
+	mu          sync.Mutex
+	records     int
+	reject      bool
+	worldHeld   chan struct{}
+	worldCounts int
+}
+
+func (committer *scenarioCommitter) Commit(_ context.Context, record coredata.CommitRecord) error {
+	committer.mu.Lock()
+	if record.Handler == worldCountHandler {
+		held := committer.worldHeld
+		committer.mu.Unlock()
+		if held != nil {
+			<-held
+		}
+		committer.mu.Lock()
+		committer.worldCounts++
+		committer.mu.Unlock()
+		return nil
+	}
+	defer committer.mu.Unlock()
+	if committer.reject {
+		return errors.New("scenario: the store refused the commit")
+	}
+	committer.records++
+	return nil
+}
+
+// worldCountHandler 是 World 登录计数的 handler 名（game/handler/record_enter.go）。
+const worldCountHandler = "handlerRecordEnter"
+
+func (committer *scenarioCommitter) worldCounted() int {
+	committer.mu.Lock()
+	defer committer.mu.Unlock()
+	return committer.worldCounts
+}
+
+func (committer *scenarioCommitter) refuse(reject bool) {
+	committer.mu.Lock()
+	committer.reject = reject
+	committer.mu.Unlock()
+}
+
+func (committer *scenarioCommitter) count() int {
+	committer.mu.Lock()
+	defer committer.mu.Unlock()
+	return committer.records
+}
+
+// scenarioOwners 是驻留表的替身：本服是 1000，Serve 与真的一样拒绝绑定在别的服的玩家，并记下被接入服务的玩家。
+type scenarioOwners struct {
+	mu     sync.Mutex
+	served []int64
+}
+
+func (*scenarioOwners) SID() int32 { return scenarioSID }
+
+func (owners *scenarioOwners) Serve(_ context.Context, playerID int64, boundSID int32) error {
+	if boundSID != scenarioSID {
+		return errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", playerID, "owner_sid", boundSID)
+	}
+	owners.mu.Lock()
+	owners.served = append(owners.served, playerID)
+	owners.mu.Unlock()
+	return nil
+}
+
+func (owners *scenarioOwners) servedTimes(playerID int64) int {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	times := 0
+	for _, served := range owners.served {
+		if served == playerID {
+			times++
+		}
+	}
+	return times
+}
+
+// scenarioTransport 是玩家传输的替身（能力名 access.player.tcp）：记下推给每条会话的 EnterStatus 与被断开的玩家。
+type scenarioTransport struct {
+	mu     sync.Mutex
+	pushes map[string][]*pb.EnterStatusPush
+	closed []int64
+}
+
+func (transport *scenarioTransport) PushSession(_ context.Context, sessionID string, messageID uint32, value any) error {
+	push, ok := value.(*pb.EnterStatusPush)
+	if !ok || messageID != msgid.MsgEnterStatus {
+		return fmt.Errorf("unexpected push %d %T", messageID, value)
+	}
+	transport.mu.Lock()
+	transport.pushes[sessionID] = append(transport.pushes[sessionID], push)
+	transport.mu.Unlock()
+	return nil
+}
+
+func (transport *scenarioTransport) CloseSessions(playerID int64, _ error) int {
+	transport.mu.Lock()
+	transport.closed = append(transport.closed, playerID)
+	transport.mu.Unlock()
+	return 1
+}
+
+// scenarioSession 是一条握手成功的会话：Principal 就是认证器给的那一个。
+type scenarioSession struct{ principal gateway.Principal }
+
+func (session scenarioSession) Principal() gateway.Principal { return session.principal }
+func (scenarioSession) Reply(context.Context, any) error     { return nil }
+func (scenarioSession) Close(error) error                    { return nil }
+
+type loginScenario struct {
+	t          *testing.T
+	accounts   *svcaccount.Service
+	registry   *app.Registry
+	controller *playerctl.Controller
+	players    *playerentity.Lifecycle
+	owners     *scenarioOwners
+	transport  *scenarioTransport
+	committer  *scenarioCommitter
+	entities   *scenarioGetter
+	notifier   *gamelogin.Notifier
+	nextID     int64
+	seq        uint32
+}
+
+// newLoginScenario 搭出本服（sid 1000）：account 里 1000 与 1001 两个开放的服，玩家号从 100001 起。
+func newLoginScenario(t *testing.T) *loginScenario {
+	t.Helper()
+	withLoginEnterRegistrations(t)
+	s := &loginScenario{
+		t: t, owners: &scenarioOwners{}, committer: &scenarioCommitter{}, notifier: gamelogin.NewNotifier(),
+		transport: &scenarioTransport{pushes: map[string][]*pb.EnterStatusPush{}},
+	}
+	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.accounts, err = svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Names:    names,
+		Verifier: accountcollaborators.Verifier(),
+		Allocator: svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) {
+			s.nextID++
+			return 100_000 + s.nextID, nil
+		}),
+		NameRules:     accountcollaborators.NameRules(),
+		SessionSecret: "login-scenario-secret",
+		Now:           now,
+		SystemNow:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []int32{scenarioSID, 1001} {
+		if _, err := s.accounts.UpsertServer(context.Background(), svcaccount.GameServer{ID: sid, Name: "s" + strconv.Itoa(int(sid)), Status: svcaccount.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	playerentity.RegisterEntity()
+	handler.RegisterEnterInitNestHandlers()
+	handler.RegisterEnterCreateNestHandlers()
+	handler.RegisterEnterExistingNestHandlers()
+	handler.RegisterEnterBuiltNestHandlers()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	if _, err := access.ConfigureLoader(scenarioStore{}); err != nil {
+		t.Fatal(err)
+	}
+	s.players, err = playerentity.NewLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.entities = &scenarioGetter{access: access}
+	// 4 个 worker：世界计数的场景里，一笔停在提交上的 World 计数占着一个 worker，登录的其余 Nest 调用要用别的。
+	nestEngine := nest.NewEngine(
+		nest.NestOptionWithGetter(s.entities),
+		nest.NestOptionWithTransactionCommitter(s.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+	)
+	if err := nestEngine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = nestEngine.Shutdown(context.Background()) })
+
+	cfg := viper.New()
+	cfg.Set("sid", scenarioSID)
+	s.registry = app.NewRegistry(cfg)
+	for name, value := range map[app.ModName]any{
+		app.ModName("nest"):                nest.Client(nestEngine),
+		mods.ModEntityRuntime:              access,
+		app.ModName("access.player.tcp"): s.transport,
+	} {
+		if err := s.registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.controller = playerctl.NewLoginControllerForTest(s.registry, nestEngine, s.players, s.owners)
+	return s
+}
+
+// enterTicket 走登录入口那条路到握手票据：demo 渠道登录 → 向 account 要这个服的进服票据 → enter:<票据>。
+func (s *loginScenario) enterTicket(openID string, sid int32) string {
+	s.t.Helper()
+	account, err := s.accounts.Login(context.Background(), svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
+	if err != nil {
+		s.t.Fatalf("demo login of %s: %v", openID, err)
+	}
+	ticket, err := s.accounts.IssueEnterTicket(context.Background(), account.ID, sid)
+	if err != nil {
+		s.t.Fatalf("enter ticket of %s for server %d: %v", openID, sid, err)
+	}
+	return gamelogin.EnterTicket(ticket.Ticket)
+}
+
+// handshake 用登录模块的认证器校验握手票据，握手成功后照传输 Mod 的做法通知会话激活，并等告知跑完。
+func (s *loginScenario) handshake(ticket string) scenarioSession {
+	s.t.Helper()
+	principal, err := gamelogin.Authenticator{Accounts: s.accounts}.Authenticate(context.Background(), ticket)
+	if err != nil {
+		s.t.Fatalf("handshake: %v", err)
+	}
+	s.notifier.SessionActive(s.registry, principal)
+	s.notifier.Wait()
+	return scenarioSession{principal: principal}
+}
+
+// status 是推给这条会话的 EnterStatus：恰好一条。
+func (s *loginScenario) status(session scenarioSession) *pb.EnterStatusPush {
+	s.t.Helper()
+	s.transport.mu.Lock()
+	defer s.transport.mu.Unlock()
+	pushes := s.transport.pushes[session.principal.SessionID]
+	if len(pushes) != 1 {
+		s.t.Fatalf("session %s of player %d was pushed %d EnterStatus, want 1", session.principal.SessionID, session.principal.PlayerID, len(pushes))
+	}
+	return pushes[0]
+}
+
+func (s *loginScenario) context(session scenarioSession, messageID uint32) *playeraccess.Context {
+	s.seq++
+	return &playeraccess.Context{BaseCtx: context.Background(), Session: session, PlayerID: session.principal.PlayerID, MsgID: messageID, Seq: s.seq}
+}
+
+func (s *loginScenario) enterGame(session scenarioSession) *pb.EnterGameResponse {
+	s.t.Helper()
+	response, err := s.controller.EnterGame(s.context(session, msgid.MsgEnterGame), &pb.EnterGameRequest{ClientVersion: "scenario"})
+	if err != nil {
+		s.t.Fatalf("EnterGame returned a transport error instead of an answer: %v", err)
+	}
+	return response
+}
+
+func (s *loginScenario) enterCreate(session scenarioSession, name string) *pb.EnterCreateResponse {
+	s.t.Helper()
+	response, err := s.controller.EnterCreate(s.context(session, msgid.MsgEnterCreate), &pb.EnterCreateRequest{Name: name})
+	if err != nil {
+		s.t.Fatalf("EnterCreate returned a transport error instead of an answer: %v", err)
+	}
+	return response
+}
+
+// loaded 报告这名玩家的 Player 在不在本进程的内存里（持久层是空的，所以在内存里就是被创建过）。
+func (s *loginScenario) loaded(playerID int64) bool {
+	s.t.Helper()
+	_, err := s.players.Get(context.Background(), playerID)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, playerentity.ErrNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+		return false
+	}
+	s.t.Fatalf("load player %d: %v", playerID, err)
+	return false
+}
+
+func (s *loginScenario) displayName(playerID int64) string {
+	s.t.Helper()
+	subject, err := s.players.Get(context.Background(), playerID)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return subject.ProfileComp().DisplayName()
+}
+
+// 新号经登录入口进来的整条路，落在 demo 的登录流程上：
+// 进服票据握手 → 服务器告知要先新建 → 不新建直接 EnterGame 被拒、什么都没写 → 名字不合规的新建被拒、仍然什么都没写
+// → EnterCreate 建成、名字进档案 → 再发新建是 enter_created、名字不变 → demo 的 EnterGame 成功（首次）
+// → 重连（同一张票据再握手）不再要求新建、进入不是首次。
+func TestEnterTicketLoginCreatesFirstThenEntersThroughTheDemoLogin(t *testing.T) {
+	s := newLoginScenario(t)
+	ticket := s.enterTicket("newcomer", scenarioSID)
+
+	session := s.handshake(ticket)
+	playerID := session.principal.PlayerID
+	if playerID != 100_001 || !gamelogin.EnterTicketSession(session.principal.Claims) {
+		t.Fatalf("the handshake gave player %d with claims %v, want 100001 marked as an enter-ticket session", playerID, session.principal.Claims)
+	}
+	if status := s.status(session); status.Code != 0 || !status.NeedCreate {
+		t.Fatalf("EnterStatus for a new account = %+v, want need_create", status)
+	}
+	if s.loaded(playerID) || s.committer.count() != 0 {
+		t.Fatalf("telling the client loaded or wrote something: loaded %v, %d commits", s.loaded(playerID), s.committer.count())
+	}
+
+	// 不新建直接进入：被拒，不创建档、不做首次初始化。demo 的归属检查照常执行过（驻留表被问到）。
+	refused := s.enterGame(session)
+	if refused.Code != apperrors.ErrEnterNeedCreate.Code() || refused.PlayerID != 0 || refused.Created || refused.First {
+		t.Fatalf("EnterGame before the create = %+v, want enter_need_create (%d) and nothing else", refused, apperrors.ErrEnterNeedCreate.Code())
+	}
+	if s.loaded(playerID) || s.committer.count() != 0 {
+		t.Fatalf("a refused EnterGame created the player (loaded %v) or wrote (%d commits)", s.loaded(playerID), s.committer.count())
+	}
+	if got := s.owners.servedTimes(playerID); got != 1 {
+		t.Fatalf("the ownership table was asked %d times by the refused EnterGame, want 1", got)
+	}
+
+	// 名字不合规：在建档之前被拒（档案模块的名字规则），没有被接入服务、没有档、没有提交。
+	for name, want := range map[string]int32{
+		"":                               apperrors.ErrProfileNameEmpty.Code(),
+		"   ":                            apperrors.ErrProfileNameEmpty.Code(),
+		"a-name-far-longer-than-a-name-may-be": apperrors.ErrProfileNameLong.Code(),
+		"bad\xffbytes":                    apperrors.ErrProfileNameInvalid.Code(),
+	} {
+		if answer := s.enterCreate(session, name); answer.Code != want {
+			t.Fatalf("EnterCreate with the name %q = %+v, want code %d", name, answer, want)
+		}
+	}
+	if s.loaded(playerID) || s.committer.count() != 0 || s.owners.servedTimes(playerID) != 1 {
+		t.Fatalf("a refused create left something behind: loaded %v, %d commits, served %d times", s.loaded(playerID), s.committer.count(), s.owners.servedTimes(playerID))
+	}
+
+	// 新建：建成，名字进档案；它不是一次进入。
+	if answer := s.enterCreate(session, "Newcomer"); answer.Code != 0 {
+		t.Fatalf("EnterCreate = %+v, want success", answer)
+	}
+	if !s.loaded(playerID) || s.committer.count() != 1 || s.owners.servedTimes(playerID) != 2 {
+		t.Fatalf("after the create: loaded %v, %d commits (want 1), served %d times (want 2: the create took the player into service before loading)",
+			s.loaded(playerID), s.committer.count(), s.owners.servedTimes(playerID))
+	}
+	if name := s.displayName(playerID); name != "Newcomer" {
+		t.Fatalf("the profile name after the create is %q, want Newcomer", name)
+	}
+	// 再发新建（带另一个名字）：已经建成，什么都不改。
+	if answer := s.enterCreate(session, "Renamed"); answer.Code != apperrors.ErrEnterCreated.Code() {
+		t.Fatalf("a second EnterCreate = %+v, want enter_created (%d)", answer, apperrors.ErrEnterCreated.Code())
+	}
+	if name := s.displayName(playerID); name != "Newcomer" || s.committer.count() != 1 {
+		t.Fatalf("a second create changed something: name %q, %d commits", name, s.committer.count())
+	}
+
+	// 进入：demo 的 EnterGame。建成之后的第一次进入是首次；玩家不是这一次登录创建的。
+	entered := s.enterGame(session)
+	if entered.Code != 0 || entered.PlayerID != playerID || !entered.First || entered.Created {
+		t.Fatalf("EnterGame after the create = %+v, want player %d entering for the first time", entered, playerID)
+	}
+	// 驻留表到这里被问了四次：被拒的 EnterGame、两次新建（第二次也先接入服务、再在事务里得到 enter_created）、这一次进入。
+	if got := s.owners.servedTimes(playerID); got != 4 {
+		t.Fatalf("the ownership table was asked %d times, want 4", got)
+	}
+
+	// 重连：同一张票据再握手，是同一名玩家；服务器告知直接进入，进入不再是首次。
+	again := s.handshake(ticket)
+	if again.principal.PlayerID != playerID || again.principal.SessionID == session.principal.SessionID {
+		t.Fatalf("the reconnect is player %d on session %s, want player %d on a new session", again.principal.PlayerID, again.principal.SessionID, playerID)
+	}
+	if status := s.status(again); status.Code != 0 || status.NeedCreate {
+		t.Fatalf("EnterStatus on the reconnect = %+v, want enter directly", status)
+	}
+	if reentered := s.enterGame(again); reentered.Code != 0 || reentered.PlayerID != playerID || reentered.First || reentered.Created {
+		t.Fatalf("EnterGame on the reconnect = %+v, want a plain enter", reentered)
+	}
+	if len(s.transport.closed) != 0 {
+		t.Fatalf("sessions of %v were closed; this server serves them", s.transport.closed)
+	}
+}
+
+// 建到一半的玩家：新建请求建了空档，新建的那笔事务却没提交成（这里是持久层拒绝）。他有档、没建成——
+// 进服票据握手的会话发 EnterGame 仍然答 enter_need_create，不替他把首次初始化补上（那是“加载或创建”那条路的做法）；
+// 服务器的告知仍是要先新建；再发一次 EnterCreate 才建成，首次发放与名字只落这一次。
+func TestEnterGameDoesNotFinishAPlayerTheCreateLeftHalfBuilt(t *testing.T) {
+	s := newLoginScenario(t)
+	ticket := s.enterTicket("halfway", scenarioSID)
+	session := s.handshake(ticket)
+	playerID := session.principal.PlayerID
+
+	s.committer.refuse(true)
+	if answer := s.enterCreate(session, "Halfway"); answer.Code != errcode.CodeInternal {
+		t.Fatalf("EnterCreate whose commit the store refused = %+v, want the server error", answer)
+	}
+	s.committer.refuse(false)
+	if !s.loaded(playerID) || s.committer.count() != 0 {
+		t.Fatalf("after the failed create: loaded %v (want the empty record), %d commits (want 0)", s.loaded(playerID), s.committer.count())
+	}
+	if name := s.displayName(playerID); name == "Halfway" {
+		t.Fatalf("the rolled-back create left the name %q on the record", name)
+	}
+	if refused := s.enterGame(session); refused.Code != apperrors.ErrEnterNeedCreate.Code() || refused.First || refused.PlayerID != 0 {
+		t.Fatalf("EnterGame of a half-built player = %+v, want enter_need_create (%d)", refused, apperrors.ErrEnterNeedCreate.Code())
+	}
+	if s.committer.count() != 0 {
+		t.Fatalf("EnterGame finished the half-built player: %d commits", s.committer.count())
+	}
+	if status := s.status(s.handshake(ticket)); status.Code != 0 || !status.NeedCreate {
+		t.Fatalf("EnterStatus for a half-built player = %+v, want need_create", status)
+	}
+	if answer := s.enterCreate(session, "Halfway"); answer.Code != 0 {
+		t.Fatalf("the second EnterCreate = %+v, want success", answer)
+	}
+	if entered := s.enterGame(session); entered.Code != 0 || !entered.First || s.displayName(playerID) != "Halfway" || s.committer.count() != 2 {
+		t.Fatalf("EnterGame after the create went through = %+v (name %q, %d commits); want the first enter, the name Halfway and 2 commits", entered, s.displayName(playerID), s.committer.count())
+	}
+}
+
+// 连错服的会话（账号选的是 1001 服，却连到了 1000 服的进程）：EnterGame 与 EnterCreate 都按 demo 的归属检查
+// 答 player_elsewhere（EnterGame 带 owner_sid），驻留表没有被问到，本进程没有他的档；
+// 会话激活后的告知推的是登录模块的 login_elsewhere，随后断开。
+func TestEnterTicketOfAnotherServerIsRefusedBeforeAnythingLoads(t *testing.T) {
+	s := newLoginScenario(t)
+	session := s.handshake(s.enterTicket("stray", 1001))
+	playerID := session.principal.PlayerID
+
+	if status := s.status(session); status.Code != apperrors.ErrLoginElsewhere.Code() || status.NeedCreate {
+		t.Fatalf("EnterStatus for a role of server 1001 = %+v, want login_elsewhere (%d)", status, apperrors.ErrLoginElsewhere.Code())
+	}
+	if len(s.transport.closed) != 1 || s.transport.closed[0] != playerID {
+		t.Fatalf("closed %v after telling the client, want player %d", s.transport.closed, playerID)
+	}
+	if answer := s.enterGame(session); answer.Code != apperrors.ErrPlayerElsewhere.Code() || answer.OwnerSID != 1001 {
+		t.Fatalf("EnterGame = %+v, want player_elsewhere (%d) pointing at 1001", answer, apperrors.ErrPlayerElsewhere.Code())
+	}
+	if answer := s.enterCreate(session, "Stray"); answer.Code != apperrors.ErrPlayerElsewhere.Code() {
+		t.Fatalf("EnterCreate = %+v, want player_elsewhere (%d)", answer, apperrors.ErrPlayerElsewhere.Code())
+	}
+	if s.loaded(playerID) || s.committer.count() != 0 || s.owners.servedTimes(playerID) != 0 {
+		t.Fatalf("a role of another server was touched here: loaded %v, %d commits, served %d times", s.loaded(playerID), s.committer.count(), s.owners.servedTimes(playerID))
+	}
+}
+
+// 老路不变：Login → CreateRole → SelectRole 拿会话令牌握手的会话（机器人与演练脚本），EnterGame 仍是“加载或创建”——
+// 第一次进入就建成，不需要、也不会被要求先新建；服务器的告知是“直接进入”。这样的会话发 EnterCreate 也可以
+// （还没建成时带着名字建）。
+func TestSessionTokenLoginStillLoadsOrCreatesInEnterGame(t *testing.T) {
+	s := newLoginScenario(t)
+	ctx := context.Background()
+	account, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "robot-1", Credential: "demo:robot-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := s.accounts.CreateRole(ctx, account.ID, scenarioSID, "robot_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := s.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
+	if gamelogin.EnterTicketSession(session.principal.Claims) {
+		t.Fatalf("a session-token handshake is marked as an enter-ticket session: %v", session.principal.Claims)
+	}
+	if status := s.status(session); status.Code != 0 || status.NeedCreate {
+		t.Fatalf("EnterStatus for a session-token session = %+v, want enter directly", status)
+	}
+	entered := s.enterGame(session)
+	if entered.Code != 0 || entered.PlayerID != role.PlayerID || !entered.Created || !entered.First {
+		t.Fatalf("the first EnterGame of a session-token session = %+v, want the player created and initialized by it", entered)
+	}
+	if !s.loaded(role.PlayerID) || s.committer.count() != 1 {
+		t.Fatalf("after the first EnterGame: loaded %v, %d commits (want 1)", s.loaded(role.PlayerID), s.committer.count())
+	}
+	if again := s.enterGame(session); again.Code != 0 || again.Created || again.First {
+		t.Fatalf("the second EnterGame = %+v, want a plain enter", again)
+	}
+	if answer := s.enterCreate(session, "Late"); answer.Code != apperrors.ErrEnterCreated.Code() {
+		t.Fatalf("EnterCreate after EnterGame built the player = %+v, want enter_created", answer)
+	}
+
+	// 另一名机器人先带着名字新建、再进入：会话令牌的会话也可以走新建。
+	other, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "robot-2", Credential: "demo:robot-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRole, err := s.accounts.CreateRole(ctx, other.ID, scenarioSID, "robot_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSelected, err := s.accounts.SelectRole(ctx, other.ID, otherRole.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSession := s.handshake(gamelogin.Ticket(otherRole.PlayerID, otherSelected.Token))
+	if answer := s.enterCreate(otherSession, "Second"); answer.Code != 0 {
+		t.Fatalf("EnterCreate on a session-token session = %+v", answer)
+	}
+	if entered := s.enterGame(otherSession); entered.Code != 0 || !entered.First || entered.Created || s.displayName(otherRole.PlayerID) != "Second" {
+		t.Fatalf("EnterGame after a create on a session-token session = %+v (name %q)", entered, s.displayName(otherRole.PlayerID))
+	}
+}
+
+// savedPos 是这名玩家落库的位置（PlayerDao.SavedPosX / SavedPosY）：进场景时从这里放回地图。
+func (s *loginScenario) savedPos(playerID int64) spatial.Point {
+	s.t.Helper()
+	subject, err := s.players.Get(context.Background(), playerID)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return spatial.Point{X: subject.Dao().GetSavedPosX(), Y: subject.Dao().GetSavedPosY()}
+}
+
+// D25：demo 的新玩家初始化——新玩家从世界场景的出生点开始——写在 enter 模块的首次初始化钩子里
+// （game/modules/login/enter_first.go 的 firstEnter），与“建成了”的标记同一笔事务，两条路（EnterGame 的加载或创建、
+// EnterCreate 的新建）都经过它，且只执行一次：老玩家再进入时记住的位置不被重置回出生点。
+// 修前 demo 用模块缺省的 enter_first.go（什么都不写），新玩家的落库位置停在零，靠进场景时的“零就取出生点”兜底。
+func TestANewPlayerStartsAtTheSpawnThroughTheFirstEnterHookOnce(t *testing.T) {
+	s := newLoginScenario(t)
+	ctx := context.Background()
+	spawn := sceneentity.WorldSceneConfig().Spawn
+	if spawn == (spatial.Point{}) {
+		t.Fatal("the premise: the world scene's spawn is the origin, indistinguishable from an unwritten position")
+	}
+	account, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "spawn-1", Credential: "demo:spawn-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := s.accounts.CreateRole(ctx, account.ID, scenarioSID, "spawn_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := s.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
+	if entered := s.enterGame(session); entered.Code != 0 || !entered.First || !entered.Created {
+		t.Fatalf("the first EnterGame = %+v, want the player created and initialized", entered)
+	}
+	if got := s.savedPos(role.PlayerID); got != spawn {
+		t.Fatalf("after the first entry the saved position is %v, want the spawn %v written by the first-enter hook", got, spawn)
+	}
+	if s.committer.count() != 1 {
+		t.Fatalf("the first entry committed %d times, want 1: the start position goes with the initialized mark", s.committer.count())
+	}
+
+	// 玩家走开了（位置落库）；再进入不是首次，钩子不再执行，记住的位置留着。
+	moved := spatial.Point{X: spawn.X + 1234, Y: spawn.Y + 567}
+	subject, err := s.players.Get(ctx, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nest.RunIsolatedTransaction(ctx, s.committer, "move_saved_position", func() (any, error) {
+		subject.Dao().SetSavedPosX(moved.X)
+		subject.Dao().SetSavedPosY(moved.Y)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if again := s.enterGame(session); again.Code != 0 || again.First || again.Created {
+		t.Fatalf("the second EnterGame = %+v, want a plain enter", again)
+	}
+	if got := s.savedPos(role.PlayerID); got != moved {
+		t.Fatalf("a returning player's saved position became %v, want %v kept: the first-enter hook ran again", got, moved)
+	}
+
+	// 新建那条路（进服票据）：首次初始化在新建的事务里，同一个钩子。
+	created := s.handshake(s.enterTicket("spawn-2", scenarioSID))
+	if answer := s.enterCreate(created, "SpawnTwo"); answer.Code != 0 {
+		t.Fatalf("EnterCreate = %+v", answer)
+	}
+	if got := s.savedPos(created.principal.PlayerID); got != spawn {
+		t.Fatalf("a player built by EnterCreate starts at %v, want the spawn %v", got, spawn)
+	}
+}
+
+// World 只有一个，每名玩家的登录都要在它上面记一次数；这笔计数是 strict，World 锁内等 fsync，同一实体的消息
+// 一条接一条，所以 World 每次 fsync 只记一人。登录不能等它：千人登录潮里后来的玩家曾在 World 队列里等光 3 秒的
+// 请求预算，之后的进场景、进入钩子全部超时（M-15）。这里让 World 计数的提交停住（像一次迟迟不回的 fsync）：
+// EnterGame 照常答复；放行之后，这次登录仍在 World 上记了数。
+func TestEnterGameDoesNotWaitForTheWorldsLoginCount(t *testing.T) {
+	s := newLoginScenario(t)
+	worldentity.RegisterEntity()
+	handler.RegisterRecordEnterNestHandlers()
+	worldID, err := entity.BuildEntityID(1, worldentity.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: worldentity.EntityKindWorld, Id: worldID})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	counters := built.(*worldentity.World)
+	s.entities.add(counters)
+	s.controller.UseWorldForTest(counters.ID())
+	held := make(chan struct{})
+	s.committer.mu.Lock()
+	s.committer.worldHeld = held
+	s.committer.mu.Unlock()
+	release := sync.OnceFunc(func() { close(held) })
+	t.Cleanup(release)
+
+	ctx := context.Background()
+	account, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "burst-1", Credential: "demo:burst-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := s.accounts.CreateRole(ctx, account.ID, scenarioSID, "burst_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := s.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
+
+	type answer struct {
+		response *pb.EnterGameResponse
+		err      error
+	}
+	answered := make(chan answer, 1)
+	request := s.context(session, msgid.MsgEnterGame)
+	go func() {
+		response, err := s.controller.EnterGame(request, &pb.EnterGameRequest{ClientVersion: "scenario"})
+		answered <- answer{response, err}
+	}()
+	select {
+	case got := <-answered:
+		if got.err != nil || got.response.Code != 0 || got.response.PlayerID != role.PlayerID {
+			t.Fatalf("EnterGame = %+v, %v; want the player entered", got.response, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("EnterGame did not answer while the World's login count was waiting on its commit: " +
+			"the login waits for the one World, which counts one login per fsync")
+	}
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.committer.worldCounted() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the login was never counted on the World after its commit was released")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := counters.Dao().GetPlayersEntered(); got != 1 {
+		t.Fatalf("the World counted %d logins, want 1", got)
+	}
+}
+
+// 分发期限在进场景之前已经用完的登录答 login_timeout（维护者 2026-11-15），不答成功：否则客户端以为进来了，玩家
+// 却不在复制场景里。这里让期限恰好在进场景之前过去（HoldBeforePlacementForTest 等到请求的 ctx 结束）；客户端照
+// login_timeout 重试，下一次正常的 EnterGame 答成功：玩家是上一次建的（Created=false），首次初始化已经做过
+// （First=false）。
+func TestEnterGameAnswersLoginTimeoutWhenTheDeadlinePassedBeforeTheSceneJoin(t *testing.T) {
+	s := newLoginScenario(t)
+	ctx := context.Background()
+	account, err := s.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "late-1", Credential: "demo:late-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := s.accounts.CreateRole(ctx, account.ID, scenarioSID, "late_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := s.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
+
+	restore := playerctl.HoldBeforePlacementForTest(func(requestCtx context.Context) { <-requestCtx.Done() })
+	request := s.context(session, msgid.MsgEnterGame)
+	deadlineCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	request.BaseCtx = deadlineCtx
+	late, err := s.controller.EnterGame(request, &pb.EnterGameRequest{ClientVersion: "scenario"})
+	restore()
+	if err != nil {
+		t.Fatalf("EnterGame returned a transport error: %v", err)
+	}
+	if late.Code != apperrors.ErrLoginTimeout.Code() {
+		t.Fatalf("an EnterGame whose deadline passed before the scene join answered %+v, want login_timeout (%d): "+
+			"the client must retry instead of believing it is in the scene", late, apperrors.ErrLoginTimeout.Code())
+	}
+	retried := s.enterGame(session)
+	if retried.Code != 0 || retried.PlayerID != role.PlayerID || retried.Created || retried.First {
+		t.Fatalf("the retried EnterGame = %+v, want the player entered (created and initialized by the timed-out attempt)", retried)
+	}
+}
+
+// withLoginEnterRegistrations 让进入的登记表在这个场景里与正式进程相同：登录对进入的三条登记（承载服核对、“先新建”
+// 的规则、会话激活后的告知）加上 enter 与 profile 的联动（新建请求的名字规则）。
+//
+// 正式进程里这三条由玩家 TCP 接入包的 init 调 gamelogin.RegisterEnterChecks 打开。这里不能调它：game/controllers
+// 是一个包，enter 模块的 controller 测试（enter_test.go）与本场景在同一个测试二进制里，它在 init 里占了“先新建”的
+// 规则（RequireCreateFirst 全进程只能登记一条），RegisterEnterChecks 又只执行一次（sync.Once），场景之间换不回来。
+// 所以每个场景先用 enter 模块的测试入口把登记表收窄到 profile 的名字规则（同时拿掉 enter 测试的“先新建”规则），
+// 再照 RegisterEnterChecks 的内容登记登录的那几条：EnterTicketSession 与 Admit 是登录模块导出的同一份规则，
+// 告知交给本包的 Announce（正式进程里 login_enter.go 经 RegisterEnterAnnounce 交给登录模块的也是它）。
+// 场景结束时换回。别的模块的进入钩子（聊天、邮件、换服……）不在场景里跑，场景只看登录这条链。
+func withLoginEnterRegistrations(t *testing.T) {
+	t.Helper()
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("profile"))
+	gamelogin.OnEntering("login", func(_ context.Context, _ *app.Registry, entering gamelogin.Entering) error {
+		return gamelogin.Admit(scenarioSID, entering.PlayerID, entering.Claims)
+	})
+	gamelogin.RequireCreateFirst("login", gamelogin.EnterTicketSession)
+	scenarioAnnounceOnce.Do(func() {
+		gamelogin.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry, session gamelogin.Active) {
+			playerctl.Announce(ctx, registry, gamelogin.Entering{PlayerID: session.PlayerID, Claims: session.Claims}, session.SessionID)
+		})
+	})
+}
+
+// scenarioAnnounceOnce：会话激活的通知表（登录模块的）不随 KeepOnlyRegistrationsForTest 换回，只登记一次。
+var scenarioAnnounceOnce sync.Once

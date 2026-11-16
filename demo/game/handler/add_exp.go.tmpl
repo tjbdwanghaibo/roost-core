@@ -2,6 +2,7 @@ package handler
 
 import (
 	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	world "{{MODULE}}/game/entities/world"
 )
 
@@ -15,13 +16,13 @@ import (
 // (MultiSync_AddExp, one id per entity parameter).
 //
 //roost:nest rollback=undo durability=strict
-func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount int64) (int32, error) {
+func handlerAddExp(target view.IProfileEntity, stats world.IStatsEntity, amount int64) (int32, error) {
 	// 两个实体的范围先只读校验：超出 int64 经验 / int32 等级 / World 累计时在任何 DAO 写入前拒绝，
 	// 不靠写完再由 rollback=undo 撤回。AddExp / RecordExp 自己也检查，只是兜底。
 	if err := checkExpGrant(target, stats, amount); err != nil {
 		return 0, err
 	}
-	gained, err := target.ProfileComp().AddExp(amount)
+	gained, err := target.Profile().AddExp(amount)
 	if err != nil {
 		return 0, err
 	}
@@ -38,8 +39,8 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 // must all stay in range, or nothing is written. The Player's half is the
 // profile module's CheckAddExp (codes profile_exp_invalid /
 // profile_exp_overflow); the World's half is the demo's own (exp_amount).
-func checkExpGrant(target player.IProfileEntity, stats world.IStatsEntity, amount int64) error {
-	if err := target.ProfileComp().CheckAddExp(amount); err != nil {
+func checkExpGrant(target view.IProfileEntity, stats world.IStatsEntity, amount int64) error {
+	if err := target.Profile().CheckAddExp(amount); err != nil {
 		return err
 	}
 	return stats.StatsComp().CheckRecordExp(amount)
@@ -48,7 +49,7 @@ func checkExpGrant(target player.IProfileEntity, stats world.IStatsEntity, amoun
 // publishExpGrant 把这次发放改动的同步字段交给场景同步，一次发放调一次。档案是 profile 模块的，它的 AddExp 只经
 // 生成的 setter 改 DAO；“何时把 DAO 的脏位交给主体”是 demo 自己的约定（Player.PublishSyncDirty），所以由 demo 的
 // handler 在发放之后做。升了级时属性组件已经交过一次，这里取到的是空掩码，不会多发一条增量。
-func publishExpGrant(target player.IProfileEntity) {
+func publishExpGrant(target view.IProfileEntity) {
 	if owner, ok := target.(*player.Player); ok {
 		owner.PublishSyncDirty()
 	}

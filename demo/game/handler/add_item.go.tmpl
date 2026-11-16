@@ -1,6 +1,6 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import "{{MODULE}}/game/view"
 
 // handlerAddItem is the demo's one write transaction: Nest locks the Player,
 // runs this body, and commits the DAO patch durably. Returning an error rolls
@@ -19,8 +19,8 @@ import player "{{MODULE}}/game/entities/player"
 // safe: a stack never exceeds player.BagMaxStack (999999).
 //
 //roost:nest rollback=undo durability=strict
-func handlerAddItem(target player.IBagEntity, itemID int64, count int32) (int32, error) {
-	held, err := target.BagComp().Add(itemID, int64(count))
+func handlerAddItem(target view.IBagEntity, itemID int64, count int32) (int32, error) {
+	held, err := target.Bag().Add(itemID, int64(count))
 	if err != nil {
 		return 0, err
 	}

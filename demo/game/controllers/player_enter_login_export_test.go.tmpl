@@ -1,0 +1,54 @@
+package controllers
+
+import (
+	stdcontext "context"
+
+	playerentity "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 这个文件只在测试里编译。登录的整条链路场景（player_enter_login_scenario_test.go）在外部测试包 controllers_test 里：
+// 它像生产代码一样只经导出的入口用本包（认证器、“先新建”规则与进入前检查的登记都来自 game/modules/login 与
+// internal/access/player/tcp）。外部测试包够不着未导出的状态，所以这里给它一个只装登录要用的那几样的构造函数。
+
+// LoginOwners 是登录端点用到的驻留表（playerOwners），导出给外部测试包实现替身。
+type LoginOwners = playerOwners
+
+// NewLoginControllerForTest 建一个只够跑 EnterGame / EnterCreate 的 Controller：Registry、Nest 客户端、Player 的
+// lifecycle 与驻留表。登录在装载之后顺带做的事（世界计数、进场景、补单、公会、公告）取不到各自的依赖，
+// 按端点自己的约定只记日志、不让登录失败。
+func NewLoginControllerForTest(registry *app.Registry, nestClient corenest.Client, players *playerentity.Lifecycle, owners LoginOwners) *Controller {
+	controller := &Controller{registry: registry, nestClient: nestClient}
+	useLoginForTest(controller, players, owners)
+	return controller
+}
+
+// useLoginForTest 给离线测试的 Controller 放上登录要用的依赖：Player 的 lifecycle（nil 表示不放，走到装载会 panic）
+// 与驻留表（nil 表示不放）。启动时就必须在的其余依赖（匹配、会话、支付、World）保持零值，不再从 Registry 取。
+func useLoginForTest(controller *Controller, players *playerentity.Lifecycle, owners playerOwners) {
+	state := controller.playerState()
+	state.deps.Store(&playerDeps{players: players})
+	if owners != nil {
+		state.owners.Store(&owners)
+	}
+}
+
+// UseWorldForTest 让登录端点的世界计数投给 worldID（场景里另建的 World）；不调时为 0，计数投递被拒、只记日志。
+func (controller *Controller) UseWorldForTest(worldID int64) {
+	state := controller.playerState()
+	deps := playerDeps{}
+	if current := state.deps.Load(); current != nil {
+		deps = *current
+	}
+	deps.worldID = worldID
+	state.deps.Store(&deps)
+}
+
+// HoldBeforePlacementForTest 让 EnterGame 在检查分发期限、进场景之前先执行 hold（例如等请求的期限过去）；
+// 返回的函数恢复原样。只在测试里用，不能与别的用例并行。
+func HoldBeforePlacementForTest(hold func(stdcontext.Context)) (restore func()) {
+	previous := beforePlacement
+	beforePlacement = hold
+	return func() { beforePlacement = previous }
+}

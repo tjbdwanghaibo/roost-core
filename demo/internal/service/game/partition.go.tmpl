@@ -468,7 +468,7 @@ func attackResultPush(r cellworld.AttackResult) *pb.AttackResultPush {
 
 // ---- 端点用的能力（PartitionCapability）----
 
-// TerrainForwarder 是本进程玩家的地形编辑与建筑操作的转发通道（P5，game/controllers/player 的端点用它调
+// TerrainForwarder 是本进程玩家的地形编辑与建筑操作的转发通道（P5，game/controllers/player_*.go 的端点用它调
 // terrainmap.Map.RelayBrush 等）；没有地形时为 nil。
 func (rt *partitionRuntime) TerrainForwarder() terrainmap.Forwarder {
 	if rt == nil || rt.relay == nil {

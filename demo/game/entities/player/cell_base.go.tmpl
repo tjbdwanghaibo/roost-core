@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/partition"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
@@ -41,6 +42,18 @@ func (player *Player) CellPanel() cellworld.Panel {
 		return cellworld.Panel{}
 	}
 	return cellworld.Panel{MaxHP: int32(final.HP), Attack: int32(final.Attack), Power: int32(final.Power)}
+}
+
+// OnAttributeChanged 在属性实际变化后（等级、装备或业务 Refresh；attribute 组件在同一个 Player 事务里发布
+// event.AttributeChanged）把新的面板交给分区场景的 Node，由它在同一笔事务里编号、发给所在格。加载阶段的临时重建
+// 不发布这个事件，也就不发送面板。本进程不跑分区场景时什么都不做。
+//
+//roost:listen
+func (player *Player) OnAttributeChanged(event.AttributeChanged) error {
+	if node := partition.Node(); node != nil {
+		return node.UpdatePanel(player)
+	}
+	return nil
 }
 
 func (player *Player) StartBase() error {

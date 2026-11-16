@@ -3,7 +3,7 @@ package handler
 import (
 	"time"
 
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/game/gift"
 	apperrors "{{MODULE}}/internal/errors"
 	giftitem "{{MODULE}}/saga/gift_item"
@@ -35,11 +35,11 @@ import (
 // refuses it; the coordinator refuses a routed saga without a route too.
 //
 //roost:nest rollback=undo durability=strict
-func handlerStartGift(target player.IBagEntity, fromPlayerID int64, fromSID int32, toPlayerID int64, itemID int64, count int32, sagaID string) (string, error) {
+func handlerStartGift(target view.IBagEntity, fromPlayerID int64, fromSID int32, toPlayerID int64, itemID int64, count int32, sagaID string) (string, error) {
 	if count <= 0 {
 		return "", errcode.Wrap(apperrors.ErrBagCountInvalid, nil, "item_id", itemID, "count", count)
 	}
-	if have := target.BagComp().Count(itemID); have < int64(count) {
+	if have := target.Bag().Count(itemID); have < int64(count) {
 		return "", errcode.Wrap(apperrors.ErrBagShort, nil, "item_id", itemID, "have", have, "want", count)
 	}
 	state, err := gift.Encode(gift.State{From: fromPlayerID, FromSID: fromSID, To: toPlayerID, ItemID: itemID, Count: count})
