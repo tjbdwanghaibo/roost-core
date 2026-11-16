@@ -2214,7 +2214,8 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 		"roost add component Profile --entity Player", "roost add dao Player --entity Player",
 		"roost add mod nest -service game",
 		"roost add handler RenamePlayer --entity Player --component Profile",
-		`import player "example.com/planet/game/entities/player"`, "SetName(name)",
+		`import "example.com/planet/game/view"`, "target view.IProfileEntity", "target.Profile().Rename(name)",
+		"game/view/component_profile.go", "game/view/holder_entities_gen.go", "Rename(name string) error", "SetName(name)",
 		"业务层不要再次", "rollback=undo durability=strict", "ID、id、tracker",
 	} {
 		if !strings.Contains(entityGuide, want) {

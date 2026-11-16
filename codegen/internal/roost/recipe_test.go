@@ -125,7 +125,7 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 				recipeMutationMustFail(t, target, "game/components/enter/enter.go", "if component.Built() {", "if false && component.Built() {", "./internal/access/player/tcp", "TestRecipeTCPFirstGrantPaysForAShopPurchase", "want enter_created")
 			}
 			if name == "turn-pvp" {
-				recipeMutationMustFail(t, target, "game/modules/login/enter_profile.go", "owner.Profile().Rename(name)", "owner.Profile().Rename(\"Wrong\")", "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "created profile name")
+				recipeMutationMustFail(t, target, "game/components/profile/enter_profile.go", "component.Rename(ev.Name)", "component.Rename(\"Wrong\")", "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "created profile name")
 				recipeMutationMustFail(t, target, "game/components/profile/profile.go", `if name == "" {`, `if false && name == "" {`, "./internal/access/player/tcp", "TestRecipeTCPCreatePersistsProfileName", "empty create name")
 			}
 			// 同步后仍保持业务文件；再生不应改变框架生成物。
