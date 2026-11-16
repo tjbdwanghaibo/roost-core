@@ -27,6 +27,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
 // v1.51.0：roost add gate 生成的独立 Gate（access.player.gate、accessplayertcp.NewGateMod、Game Ingress 接线）；随发版后提高。
+// v1.52.0：单实例锁存 etcd（kitetcd.SingletonStore）、entity.Publish 与实体事件登记（生成的 <实体>_event_gen.go）；随发版后提高。
 // v1.50.0：生成工程的功能包放 game/modules/<包>/（模块的 runtime.package、生成器的 skills / effects / heartbeat /
 // gameplay/attribute 都在那里）、CopyHandedOffEntity 出错时列出可能已写入的文档；随发版后提高。
 // v1.49.0：模块后台 manager 收尾（activity 的 ScanHost、cellworld 的 NewCellWorldHost、login 的 NewLoginPresence、
@@ -64,7 +65,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.51.0",
+	Core: "v1.52.0",
 }
 
 type Manifest struct {

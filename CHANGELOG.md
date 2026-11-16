@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.52.0**（2026-11-17）：生成的 bootstrap 用 `kitetcd.SingletonStore`、生成的 `<实体>_event_gen.go` 用 `entity.RegisterEventListener` / `SetEventDispatch`，都要 v1.52.0；framework-compat 的 minimum 一栏随之改为 v1.52.0。
+
 ## [v1.52.0] - 2026-11-17
 
 - **单实例锁改存 etcd，与服务发现共用一个集群（维护者 2026-11-16，做法 A；不兼容，重新生成即可）**：新增 `wiring/etcd.SingletonStore`（`app.SingletonOpener`）：锁键 `<singleton.key_prefix>:<server_type>:<sid>` 挂在持有者申请的 `ttl` 秒租约上，续锁 = KeepAlive + 核对键值与租约，业务时间高水位不挂租约；从同一份配置的 `etcd.*` 自建两个独立客户端（锁操作 / Live 读），必须显式写 `etcd.endpoints` 或 `etcd.endpoints_env`，`singleton.ttl` 必须是整秒。**删除** `wiring/redis.SingletonStore`（Redis 版）及其测试；`framework/app` 的接口与锁语义不变。生成器：bootstrap 改写 `a.Singleton(kitetcd.SingletonStore)`，工程里有 etcd 或 dataengine 时安装；生成的 `singleton.key_prefix` 改为 `/<project>/singleton`；开锁的服务没有 etcd Mod 时只补 `etcd:` 配置段（开发 compose 随之带 etcd，不再为锁带 redis）；配置声明检查里开锁服务要求的连接组由 redis 改为 etcd。doctor 新增 `singleton:etcd-consistent`：所有开锁（或为业务时间高水位打开同一存储）的服务 `etcd.endpoints` 与 `singleton.key_prefix` 必须一致。`physicsroom-local`、演练用 drillgate、game-demo 的 `sidmove singleton`（改为 `-etcd`）随之改。**行为变化**：etcd 连续不可用超过续期窗口时，所有开锁进程 fail-stop（之前是 Redis 不可用时）；生产要求 etcd 三节点或更多。**升级**：线上未部署，不迁移旧锁键；已有生成工程按新版重新生成，或手改：bootstrap 的 `kitredis.SingletonStore` 换成 `kitetcd.SingletonStore`（import `github.com/tjbdwanghaibo/roost-core/wiring/etcd`），开锁服务的配置补 `etcd.endpoints`、`singleton.key_prefix` 改为 `/<project>/singleton`，先停全部旧进程再起新进程（新旧进程的锁不在同一个存储里，互相看不见）。真实进程演练脚本 `scripts/testdata/singleton-etcd-drill/singleton-etcd-drill.sh`。
