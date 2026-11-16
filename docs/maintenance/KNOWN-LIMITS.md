@@ -771,6 +771,15 @@ room 自动断线订阅与重启后在线状态（全部断线、重连上线）
 
 P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 已验（其中 committed 保留 Q4），本机脚本 11 / 11 与当批模块矩阵 594 / 594 是不同统计口径。历史 demo 压测不是模块容量；本轮 M 与 C-Q1 / Q2 尚未提供正式容量结论。见[社交报告](evidence/social-real-20261114/README.md)。
 
+#### 生成工程目录：遗留
+
+- **controllers 合包、组件接口收进 view（已决定待实施）**：维护者 2026-11-16 定的方向：
+  - `game/controllers` 合成一个包，只有一个公共 `controller.go`，每个模块一个文件；
+  - 窄接口返回 view 接口，宿主方法也在 view 里抽成接口，由实体实现；
+  - 组件类型号挪进组件包，activity 只用一个类型号。
+
+  暂不实施。方案见 [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)。
+
 ### 框架服务与 game-demo（遗留）
 
 #### game-demo 的移动、怪物与场景时间（D20 第 3 期）
