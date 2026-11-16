@@ -15,10 +15,11 @@ import (
 	"{{MODULE}}/protocol/pb"
 )
 
-// 告知的场景：进入前检查与“先新建”的规则登记在 game/modules/login 的登记表里（进程级，只能在 init 里登记），
-// 所以这里登记一组按玩家号、按 claims 回答的替身。每条场景开头调 enterStatusOnlyScenarios：
-// 同装的别的模块（rehome……）在 init 里登记的进入前检查也在这张表里，它们没有这里的 nil Registry 就会拒绝，
-// 场景要看的是这组替身的结论。
+// 告知的场景：进入前检查与“先新建”的规则登记在 game/modules/login 的登记表里（进程级）。每条场景开头调
+// enterStatusOnlyScenarios：先把登记表清空（同装的别的模块，如 rehome，在 init 里登记的进入前检查没有这里的
+// nil Registry 就会拒绝），再登记一组按玩家号、按 claims 回答的替身，用例结束时换回原表。
+// 替身不在 init 里登记：“先新建”的规则全进程只能有一条，同包的别的测试（例如登录联动打开 RegisterEnterChecks）
+// 也会登记它，放在 init 里就会重复登记而 panic。
 const (
 	enterStatusElsewherePlayer = 94201 // 进入前检查拒绝：本服不该服务他
 	enterStatusUnknownPlayer   = 94202 // 进入前检查自己出错：判断不了
@@ -27,7 +28,9 @@ const (
 
 var errEnterStatusAway = errors.New("account is away")
 
-func init() {
+// enterStatusOnlyScenarios 把进入的登记表换成下面这组替身，用例结束时换回原表。
+func enterStatusOnlyScenarios(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest())
 	gamelogin.OnEntering("enter-status-scenarios", func(_ context.Context, _ *app.Registry, entering gamelogin.Entering) error {
 		switch entering.PlayerID {
 		case enterStatusElsewherePlayer:
@@ -39,11 +42,6 @@ func init() {
 		return nil
 	})
 	gamelogin.RequireCreateFirst("enter-status-scenarios", func(claims map[string]string) bool { return claims["handshake"] == "ticket" })
-}
-
-// enterStatusOnlyScenarios 把进入的登记表收窄到上面这组替身，用例结束时换回。
-func enterStatusOnlyScenarios(t *testing.T) {
-	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("enter-status-scenarios"))
 }
 
 // enterStatusRecorder 是玩家传输的替身：按发生顺序记下推送与断开。

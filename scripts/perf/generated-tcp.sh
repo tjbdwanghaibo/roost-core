@@ -44,12 +44,18 @@ cp "$repo_root/scripts/testdata/generated-tcp/player.go.txt" db/def/player.go
 cp "$repo_root/scripts/testdata/generated-tcp/add_gold.go.txt" game/handler/add_gold.go
 cp "$repo_root/scripts/testdata/generated-tcp/wallet.go.txt" game/entities/player/wallet.go
 cp "$repo_root/scripts/testdata/generated-tcp/auth.go.txt" internal/access/player/tcp/auth.go
-cp "$repo_root/scripts/testdata/generated-tcp/controller.go.txt" game/controllers/player/controller.go
-cp "$repo_root/scripts/testdata/generated-tcp/enter_game.go.txt" game/controllers/player/enter_game.go
 python3 - "$DURABILITY" <<'PY'
 from pathlib import Path
 import sys
 p=Path('game/handler/add_gold.go');p.write_text(p.read_text().replace('durability=strict','durability='+sys.argv[1]))
+p=Path('game/view/component_wallet.go');s=p.read_text();old='type Wallet interface{}';assert old in s;p.write_text(s.replace(old,'type Wallet interface{ AddGold() int64 }'))
+# EnterGame 只把玩家装载进来：填进生成的控制器桩（game/controllers 一个包，Controller 由生成器写）。
+p=Path('game/controllers/player.go');s=p.read_text()
+old='\treturn nil, fmt.Errorf("HandleEnterGame: not implemented")\n'
+new='\tlifecycle, err := player.LifecycleFromRegistry(controller.Registry())\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif _, _, err = lifecycle.GetOrCreate(ctx.Context(), ctx.PlayerID); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &pb.EnterGameResponse{}, nil\n'
+assert s.count(old)==1;s=s.replace(old,new)
+old='\tpb "example.com/tcp-perf/protocol/pb"\n';assert old in s
+p.write_text(s.replace(old,'\tplayer "example.com/tcp-perf/game/entities/player"\n'+old))
 p=Path('protocol/def/add_gold.go');p.write_text(p.read_text().replace('type AddGoldResponse struct {','type AddGoldResponse struct {\n Gold int64 `pb:"3"`'))
 p=Path('roost.yaml');s=p.read_text();old='        transports:\n            - tcp\n';assert old in s;p.write_text(s.replace(old,old+'        self_sync: true\n'))
 PY
@@ -58,7 +64,7 @@ run_roost project sync --skip-deps
 run_roost generate
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 cp "$repo_root/scripts/testdata/generated-tcp/load_test.go.txt" internal/bootstrap/generated_tcp_test.go
-gofmt -w db/def/player.go game/handler/add_gold.go game/controllers/player/*.go internal/access/player/tcp/auth.go internal/bootstrap/generated_tcp_test.go
+gofmt -w db/def/player.go game/handler/add_gold.go game/controllers/*.go internal/access/player/tcp/auth.go internal/bootstrap/generated_tcp_test.go
 go mod tidy > "$output/dependencies.log" 2>&1
 run_roost id check
 run_roost generate --check

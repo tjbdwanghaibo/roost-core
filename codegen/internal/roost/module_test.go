@@ -627,6 +627,9 @@ type Guild struct {
 	*entity.EntityBase
 	entity.DaoManager
 }
+
+// Tick 的说明紧跟在结构体后面，追加字段时必须留在结构体外。
+func (g *Guild) Tick() {}
 `
 	wired, err := wireComponentPackageField([]byte(source), "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo")
 	if err != nil {
@@ -636,6 +639,9 @@ type Guild struct {
 		if !strings.Contains(string(wired), want) {
 			t.Errorf("wired entity lacks %q:\n%s", want, wired)
 		}
+	}
+	if !strings.Contains(string(wired), "}\n\n// Tick 的说明紧跟在结构体后面，追加字段时必须留在结构体外。\nfunc (g *Guild) Tick()") {
+		t.Errorf("the comment after the struct moved:\n%s", wired)
 	}
 	if _, err := wireComponentPackageField(wired, "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo"); err == nil || !strings.Contains(err.Error(), "already contains component Demo") {
 		t.Errorf("wiring twice: err = %v", err)

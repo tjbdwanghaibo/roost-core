@@ -157,7 +157,7 @@ func wireComponentField(raw []byte, path, entityType, fieldName, componentType s
 		return nil, "", fmt.Errorf("entity %s already contains component %s", entityType, componentType)
 	}
 	ensureEmbeddedManager(structure, entityAlias, "ComponentManager")
-	structure.Fields.List = append(structure.Fields.List, &ast.Field{
+	appendStructField(structure, &ast.Field{
 		Names: []*ast.Ident{ast.NewIdent(fieldName)},
 		Type:  &ast.StarExpr{X: ast.NewIdent(componentType + "Component")},
 		Tag:   &ast.BasicLit{Kind: token.STRING, Value: "`comp:\"CompType" + componentType + "\"`"},
@@ -196,7 +196,7 @@ func wireComponentPackageField(raw []byte, path, entityType, fieldName, componen
 		return nil, err
 	}
 	ensureEmbeddedManager(structure, entityAlias, "ComponentManager")
-	structure.Fields.List = append(structure.Fields.List, &ast.Field{
+	appendStructField(structure, &ast.Field{
 		Names: []*ast.Ident{ast.NewIdent(fieldName)},
 		Type:  &ast.StarExpr{X: &ast.SelectorExpr{X: ast.NewIdent(alias), Sel: ast.NewIdent("Component")}},
 		Tag:   &ast.BasicLit{Kind: token.STRING, Value: "`comp:\"" + compType + "\"`"},
@@ -247,7 +247,7 @@ func wireNamedDAOField(raw []byte, path, entityType, importPath, fieldName, coll
 	if structHasNamedField(structure, fieldName) {
 		return nil, fmt.Errorf("entity %s already contains field %s", entityType, fieldName)
 	}
-	structure.Fields.List = append(structure.Fields.List, &ast.Field{
+	appendStructField(structure, &ast.Field{
 		Names: []*ast.Ident{ast.NewIdent(fieldName)},
 		Type:  &ast.StarExpr{X: &ast.SelectorExpr{X: ast.NewIdent(dbAlias), Sel: ast.NewIdent(daoType)}},
 		Tag:   &ast.BasicLit{Kind: token.STRING, Value: "`dao:\"" + collection + "\"`"},
@@ -292,6 +292,28 @@ func parseEntityAggregate(raw []byte, path, entityType string) (*ast.File, *toke
 		}
 	}
 	return nil, nil, "", nil, fmt.Errorf("entity struct %s not found in %s", entityType, path)
+}
+
+// appendStructField 把字段追加到结构体末尾，并把新字段的位置放在右花括号上。
+// 新节点不带位置时，go/printer 会把结构体后面紧跟的注释（例如下一个方法的说明）打印进结构体里。
+func appendStructField(structure *ast.StructType, field *ast.Field) {
+	placeNodeAt(field, structure.Fields.Closing)
+	structure.Fields.List = append(structure.Fields.List, field)
+}
+
+// placeNodeAt 把节点里所有标识符和字面量的位置设为 pos。
+func placeNodeAt(node ast.Node, pos token.Pos) {
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			x.NamePos = pos
+		case *ast.BasicLit:
+			x.ValuePos = pos
+		case *ast.StarExpr:
+			x.Star = pos
+		}
+		return true
+	})
 }
 
 func ensureEmbeddedManager(structure *ast.StructType, alias, name string) {
