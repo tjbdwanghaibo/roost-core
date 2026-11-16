@@ -116,7 +116,7 @@ func generateEndpoints(root string, manifest Manifest, stdout io.Writer) error {
 					return fmt.Errorf("%s: duplicate endpoint %s", path, protocolName)
 				}
 				expected[generatedPath] = true
-				plan, err := planProtocolEndpoint(root, manifest, AddOptions{Name: protocolName, NestHandler: params["nest"]}, true)
+				plan, err := planProtocolEndpoint(root, manifest, AddOptions{Name: protocolName, NestHandler: params["nest"], Target: params["target"]}, true)
 				if err != nil {
 					return fmt.Errorf("%s: %w", path, err)
 				}

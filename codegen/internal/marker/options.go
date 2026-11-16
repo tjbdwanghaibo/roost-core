@@ -38,7 +38,7 @@ type Spec struct {
 // against these; TestEveryMarkerRefusesAMisspeltKey feeds each one a typo
 // through the generator that owns it.
 var (
-	Endpoint  = Spec{Kind: "endpoint", Keys: []string{"nest"}}
+	Endpoint  = Spec{Kind: "endpoint", Keys: []string{"nest", "target"}}
 	Nest      = Spec{Kind: "nest", Keys: []string{"rollback", "durability", "completion", "sync", "target", "targets"}, Flags: []string{"sync"}}
 	Dao       = Spec{Kind: "dao", Keys: []string{"coll", "db", "dbscope", "schema"}, Flags: []string{"nocoll"}}
 	RedisDao  = Spec{Kind: "redisdao", Keys: []string{"mode", "key", "key_type", "prefix", "version", "ttl", "name"}}

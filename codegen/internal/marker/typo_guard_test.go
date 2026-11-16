@@ -77,7 +77,7 @@ type Mail interface {
 `
 
 var typoCases = []typoCase{
-	{kind: "endpoint", file: "route.go", line: 3, typo: "nesst", source: "package player\n\n//roost:endpoint nesst=Grant\nfunc (c *Controller) HandleGrant() {}\n", run: func(t *testing.T, root string) error {
+	{kind: "endpoint", file: "route.go", line: 3, typo: "nesst", source: "package controllers\n\n//roost:endpoint nesst=Grant\nfunc (c *Controller) HandleGrant() {}\n", run: func(t *testing.T, root string) error {
 		raw, err := os.ReadFile(filepath.Join(root, "route.go"))
 		if err != nil {
 			return err
@@ -86,7 +86,8 @@ var typoCases = []typoCase{
 		if _, _, err := roost.NewProject(roost.NewOptions{Name: "planet", Module: "example.com/planet", Out: project, Mods: []string{"configdata"}}); err != nil {
 			return err
 		}
-		dir := filepath.Join(project, "game/controllers/player")
+		// game/controllers 是一个包（2026-11-16 起），手写 endpoint 直接放在这个目录。
+		dir := filepath.Join(project, "game/controllers")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}

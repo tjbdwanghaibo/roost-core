@@ -105,3 +105,83 @@ func TestEndpointGenerationRefusesPerGroupSubdirectories(t *testing.T) {
 		t.Fatalf("an endpoint was generated into the old layout: %v", err)
 	}
 }
+
+// 组件挂在多个实体上时，endpoint 按 PlayerID 拼实体 ID 要知道是哪一种：//roost:endpoint target=<实体> 指定，没写时
+// 生成失败并提示写 target=；target 对不上挂载这个组件的实体也报错。Nest handler 自己的 //roost:nest target=<实体>
+// 能对上实体时同样采用（与 Nest 生成器按 target= 解析归属一致），两处写得不一致时报错。
+func TestEndpointTargetPicksTheEntityOfASharedComponent(t *testing.T) {
+	root := t.TempDir()
+	manifest := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
+	manifest.Access = map[string]AccessSpec{"player": {Service: "game"}}
+	writeProjectFile(t, root, "protocol/def/claim_activity.go", "package def\ntype ClaimActivityRequest struct{}; type ClaimActivityResponse struct { Code int32; Reason string }\n")
+	writeProjectFile(t, root, "game/entities/player/entity.go", "package player\n\ntype Player struct {\n\tactivity *activity.Component `comp:\"activity.CompTypeActivity\"`\n}\n")
+	writeProjectFile(t, root, "game/entities/guild_hall/entity.go", "package guild_hall\n\ntype GuildHall struct {\n\tactivity *activity.Component `comp:\"activity.CompTypeActivity\"`\n}\n")
+	writeProjectFile(t, root, "game/entities/item/entity.go", "package item\n\ntype Item struct{}\n")
+	handler := func(nestOptions string) {
+		writeProjectFile(t, root, "game/handler/claim_activity.go", "package handler\nimport view \"example.com/planet/game/view\"\n//roost:nest"+nestOptions+"\nfunc handlerClaimActivity(target view.IActivityEntity) error { return nil }\n")
+	}
+	controller := func(endpointOptions string) {
+		writeProjectFile(t, root, "game/controllers/player.go", "package controllers\n//roost:endpoint nest=ClaimActivity"+endpointOptions+"\nfunc (controller *Controller) HandleClaimActivity() {}\n")
+	}
+	generated := func() (string, error) {
+		if err := generateEndpoints(root, manifest, io.Discard); err != nil {
+			return "", err
+		}
+		return readProjectFile(t, root, "game/controllers/claim_activity_endpoint_gen.go"), nil
+	}
+
+	handler("")
+	controller("")
+	if _, err := generated(); err == nil || !strings.Contains(err.Error(), "target=<entity>") {
+		t.Fatalf("shared component without target: %v", err)
+	}
+	for target, want := range map[string]string{"player": "player.EntityKindPlayer", "Player": "player.EntityKindPlayer", "guild_hall": "guild_hall.EntityKindGuildHall", "GuildHall": "guild_hall.EntityKindGuildHall"} {
+		controller(" target=" + target)
+		body, err := generated()
+		if err != nil || !strings.Contains(body, want) {
+			t.Fatalf("target=%s: %v\n%s", target, err, body)
+		}
+	}
+	controller(" target=item")
+	if _, err := generated(); err == nil || !strings.Contains(err.Error(), "does not mount component Activity") {
+		t.Fatalf("target that does not mount the component: %v", err)
+	}
+	controller(" target=nobody")
+	if _, err := generated(); err == nil || !strings.Contains(err.Error(), "names no entity") {
+		t.Fatalf("unknown target: %v", err)
+	}
+
+	// Nest handler 上的 target= 能对上实体时 endpoint 也采用；语义名（对不上实体）不影响原规则。
+	controller("")
+	handler(" target=GuildHall")
+	if body, err := generated(); err != nil || !strings.Contains(body, "guild_hall.EntityKindGuildHall") {
+		t.Fatalf("Nest target: %v\n%s", err, body)
+	}
+	controller(" target=player")
+	if _, err := generated(); err == nil || !strings.Contains(err.Error(), "//roost:nest target=GuildHall") {
+		t.Fatalf("endpoint and Nest targets disagree: %v", err)
+	}
+	controller("")
+	handler(" target=RoomKind")
+	if _, err := generated(); err == nil || !strings.Contains(err.Error(), "target=<entity>") {
+		t.Fatalf("semantic Nest target: %v", err)
+	}
+
+	// roost add endpoint --target 写进标记，之后的 generate 按同一个实体刷新。
+	handler("")
+	if err := os.Remove(filepath.Join(root, "game/controllers/player.go")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := addProtocolEndpoint(root, manifest, AddOptions{Name: "ClaimActivity", Handler: "player"}); err == nil || !strings.Contains(err.Error(), "--target <entity>") {
+		t.Fatalf("add endpoint without --target: %v", err)
+	}
+	if _, err := addProtocolEndpoint(root, manifest, AddOptions{Name: "ClaimActivity", Handler: "player", Target: "GuildHall"}); err != nil {
+		t.Fatal(err)
+	}
+	if wrapper := readProjectFile(t, root, "game/controllers/player.go"); !strings.Contains(wrapper, "//roost:endpoint nest=ClaimActivity target=GuildHall\n") {
+		t.Fatal(wrapper)
+	}
+	if body, err := generated(); err != nil || !strings.Contains(body, "guild_hall.EntityKindGuildHall") {
+		t.Fatalf("regenerated after add --target: %v\n%s", err, body)
+	}
+}

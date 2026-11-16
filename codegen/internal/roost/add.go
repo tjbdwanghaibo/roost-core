@@ -20,7 +20,10 @@ type AddOptions struct {
 	// Lifecycle names the Entity whose lifecycle a login endpoint calls
 	// (GetOrCreate) instead of a Nest Sender: roost add endpoint EnterGame
 	// --lifecycle Player.
-	Lifecycle   string
+	Lifecycle string
+	// Target 是 roost add endpoint --target：组件挂在多个实体上时，endpoint 寻址的实体（结构体名或实体包名），
+	// 写进 //roost:endpoint target=。
+	Target      string
 	Mods, Steps []string
 	// Native names which of Steps are native steps (Nest transactions):
 	// roost add saga Gift -steps debit,deliver -native debit. A subset of

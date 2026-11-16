@@ -3,6 +3,8 @@ package roost
 import (
 	"bytes"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/entityowner"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"go/ast"
 	"go/format"
@@ -48,6 +50,9 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	if strings.TrimSpace(options.Lifecycle) != "" {
 		if options.NestHandler != "" {
 			return nil, fmt.Errorf("endpoint --lifecycle cannot use --nest-handler")
+		}
+		if strings.TrimSpace(options.Target) != "" {
+			return nil, fmt.Errorf("endpoint --lifecycle cannot use --target: the login endpoint addresses the --lifecycle Entity")
 		}
 		changes, err = planLifecycleEndpoint(root, manifest, options, toSnake(options.Handler))
 	} else {
@@ -188,7 +193,7 @@ func planProtocolEndpoint(root string, manifest Manifest, options AddOptions, re
 	if responseFields["code"] != "Code" || responseFields["reason"] != "Reason" {
 		return nil, fmt.Errorf("protocol %sResponse needs Code int32 and Reason string fields to answer business errors (roost add protocol creates them)", protocolType)
 	}
-	signature, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType, manifest.Project.Module+protocol.PBImportSuffix)
+	signature, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType, manifest.Project.Module+protocol.PBImportSuffix, strings.TrimSpace(options.Target))
 	if err != nil {
 		return nil, err
 	}
@@ -304,14 +309,19 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 			changes = append(changes, syncChange{rel: relativeSlash(root, generatedPath), path: generatedPath, body: body, before: before, existed: readErr == nil})
 		}
 		if !refresh {
+			// --target 写进标记：generate 刷新转交时按同一个实体解析。
+			markerOptions := "nest=" + nestType
+			if target := strings.TrimSpace(options.Target); target != "" {
+				markerOptions += " target=" + target
+			}
 			wrapper := fmt.Sprintf(`// Handle%s 是手写接入层：可在调用前做校验和授权，不要在此持有 Entity 锁。
 // dispatch 已把 handler 返回的业务错误转成回包的 Code / Reason；在这里自己做的校验
 // 拒绝也构造带错误码的响应返回，直接返回 error 会由接入层按分发失败处理。
-//roost:endpoint nest=%s
+//roost:endpoint %s
 func (controller *Controller) Handle%s(ctx *playeraccess.Context, req *pb.%sRequest) (*pb.%sResponse, error) {
 	return controller.dispatch%s(ctx, req)
 }
-`, protocolType, nestType, protocolType, protocolType, protocolType, protocolType)
+`, protocolType, markerOptions, protocolType, protocolType, protocolType, protocolType)
 			wrapperImports := []protocol.GoImport{{Name: "playeraccess", Path: protocol.PlayerAccessImport}, {Path: manifest.Project.Module + protocol.PBImportSuffix}}
 			change, err := endpointMethodChange(root, group, existing, wrapperImports, wrapper)
 			if err != nil {
@@ -460,7 +470,9 @@ type endpointSignature struct {
 // handler 执行时从 fctx 填这条消息冻结的业务时间，Sync_ 的签名里没有它们，骨架跳过。
 var serverBusinessTimeArguments = map[string]bool{"nowUnix": true, "nowUnixMilli": true}
 
-func endpointArguments(protocolPath, protocolType, handlerPath, handlerType, pbImport string) (endpointSignature, error) {
+// endpointArguments 读 Nest handler 的签名。target 是 endpoint 上写的 target=<实体>（--target），可以为空，
+// 见 endpointTargetDir。
+func endpointArguments(protocolPath, protocolType, handlerPath, handlerType, pbImport, target string) (endpointSignature, error) {
 	var signature endpointSignature
 	requestFields, err := protocolFieldNames(protocolPath, protocolType+"Request")
 	if err != nil {
@@ -482,7 +494,13 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType, pbI
 		if len(function.Type.Params.List[0].Names) != 1 {
 			return signature, fmt.Errorf("Nest handler %s endpoint requires exactly one named Player Entity target", handlerType)
 		}
-		signature.entity, err = endpointEntityOf(file, function.Type.Params.List[0].Type, handlerType, handlerPath)
+		// handler 在 <root>/game/handler/<名>.go。
+		root := filepath.Dir(filepath.Dir(filepath.Dir(handlerPath)))
+		targetDir, err := endpointTargetDir(root, handlerType, target, function.Doc)
+		if err != nil {
+			return signature, err
+		}
+		signature.entity, err = endpointEntityOf(file, function.Type.Params.List[0].Type, handlerType, root, targetDir)
 		if err != nil {
 			return signature, err
 		}
@@ -561,12 +579,88 @@ func endpointPBPointer(file *ast.File, expression ast.Expr, importPath, typeName
 	return false
 }
 
+// endpointTargetDir 决定 endpoint 寻址哪个实体包（game/entities/<目录>），返回空表示没有指定、按参数类型解析。
+// 来源有两处，认实体的规则与 Nest 生成器的 target= 相同（结构体名或实体包名，大小写不敏感，包名可带下划线）：
+//   - endpoint 上的 target=<实体>（//roost:endpoint ... target=，roost add endpoint --target）：必须对上一个实体；
+//   - Nest handler 的 //roost:nest target=<实体>（targets= 取第一个，对应第一个锁目标）：对上实体时采用，对不上
+//     （语义名，例如 target=RoomKind）不影响，与 Nest 生成器 paramOwner 的退回规则一致。
+//
+// 两处都写了且是不同实体时报错：endpoint 拼的实体 ID 必须就是 handler 锁住、Nest 按归属注册的那个实体。
+func endpointTargetDir(root, handlerType, target string, doc *ast.CommentGroup) (string, error) {
+	nestTarget := ""
+	if doc != nil {
+		for _, comment := range doc.List {
+			rest, ok := marker.Cut(comment.Text, "nest")
+			if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\t') {
+				continue
+			}
+			options, err := marker.Nest.Parse(rest)
+			if err != nil {
+				return "", fmt.Errorf("Nest handler %s: //roost:nest %w", handlerType, err)
+			}
+			raw := firstNonEmpty(options["target"], options["targets"])
+			nestTarget, _, _ = strings.Cut(raw, ",")
+			nestTarget = strings.TrimSpace(nestTarget)
+		}
+	}
+	nestDir := ""
+	if nestTarget != "" {
+		dir, err := entityDirNamed(root, nestTarget)
+		if err != nil {
+			return "", err
+		}
+		nestDir = dir
+	}
+	if target == "" {
+		return nestDir, nil
+	}
+	dir, err := entityDirNamed(root, target)
+	if err != nil {
+		return "", err
+	}
+	if dir == "" {
+		return "", fmt.Errorf("Nest handler %s: endpoint target=%s names no entity under game/entities (write the entity struct name or its package name)", handlerType, target)
+	}
+	if nestDir != "" && nestDir != dir {
+		return "", fmt.Errorf("Nest handler %s: endpoint target=%s is entity package %s, but the handler's //roost:nest target=%s is %s; the endpoint must address the entity the handler locks",
+			handlerType, target, dir, nestTarget, nestDir)
+	}
+	return dir, nil
+}
+
+// entityDirNamed 按 target= 的写法找 game/entities 下的实体包目录，规则与 nest 生成器的 entityNamed 相同：
+// 实体结构体名（大小写不敏感），或实体包名（可带下划线）。实体包没有 //roost:entity 标记时只按包名认。对不上返回 ""。
+func entityDirNamed(root, name string) (string, error) {
+	plain := func(value string) string { return strings.ReplaceAll(value, "_", "") }
+	entries, err := os.ReadDir(filepath.Join(root, "game", "entities"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && (strings.EqualFold(entry.Name(), name) || strings.EqualFold(plain(entry.Name()), plain(name))) {
+			return entry.Name(), nil
+		}
+	}
+	entities, err := entityowner.Entities(filepath.Join(root, "game"))
+	if err != nil {
+		return "", err
+	}
+	for _, ent := range entities {
+		if strings.EqualFold(ent.Entity, name) {
+			return filepath.Base(ent.Dir), nil
+		}
+	}
+	return "", nil
+}
+
 // endpointEntityOf resolves the handler's first parameter type, written as
 // <alias>.I<Component>Entity, to the Entity package it imports. The kind
 // constant follows the entity scaffold's naming: EntityKind<Pascal(package)>.
 // A game/view type (view.I<Component>Entity, view.<Entity>Entity) is resolved
-// to the entity that mounts the component, see viewEndpointEntity.
-func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType, handlerPath string) (endpointEntity, error) {
+// to the entity that mounts the component, see viewEndpointEntity. targetDir
+// (see endpointTargetDir) picks the entity when several mount the component;
+// for any other type it must agree with the type.
+func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType, root, targetDir string) (endpointEntity, error) {
 	selector, ok := expression.(*ast.SelectorExpr)
 	if !ok {
 		return endpointEntity{}, fmt.Errorf("Nest handler %s: the Entity target must be a <package>.I<Component>Entity interface", handlerType)
@@ -588,9 +682,10 @@ func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType, handlerP
 			continue
 		}
 		if module, isView := strings.CutSuffix(importPath, "/game/view"); isView {
-			// handler 在 <root>/game/handler/<名>.go。
-			root := filepath.Dir(filepath.Dir(filepath.Dir(handlerPath)))
-			return viewEndpointEntity(root, module, selector.Sel.Name, handlerType)
+			return viewEndpointEntity(root, module, selector.Sel.Name, handlerType, targetDir)
+		}
+		if targetDir != "" && path.Base(importPath) != targetDir {
+			return endpointEntity{}, fmt.Errorf("Nest handler %s: target names entity package %s, but the Entity target %s.%s is in %s", handlerType, targetDir, alias.Name, selector.Sel.Name, importPath)
 		}
 		return endpointEntity{alias: alias.Name, importPath: importPath, kind: "EntityKind" + toPascal(path.Base(importPath))}, nil
 	}
@@ -599,8 +694,9 @@ func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType, handlerP
 
 // viewEndpointEntity 把 game/view 里的参数类型解析成实体包：view.<E>Entity 就是实体 E；组件窄接口 view.I<X>Entity 找
 // game/entities/*/ 里挂了组件 X 的实体（comp:"CompType<X>" 或 comp:"<包>.CompType<X>"，不依赖已经生成的 view 文件，
-// add endpoint 常在 roost generate 之前跑）。挂了它的实体不止一个时报错：endpoint 按 PlayerID 拼实体 ID，要知道是哪一种。
-func viewEndpointEntity(root, module, typeName, handlerType string) (endpointEntity, error) {
+// add endpoint 常在 roost generate 之前跑）。挂了它的实体不止一个时要用 target=<实体> 指定（targetDir，见
+// endpointTargetDir），没指定就报错：endpoint 按 PlayerID 拼实体 ID，要知道是哪一种。指定的实体必须挂了这个组件。
+func viewEndpointEntity(root, module, typeName, handlerType, targetDir string) (endpointEntity, error) {
 	entityAt := func(dir string) endpointEntity {
 		return endpointEntity{alias: dir, importPath: module + "/game/entities/" + dir, kind: "EntityKind" + toPascal(dir)}
 	}
@@ -615,6 +711,9 @@ func viewEndpointEntity(root, module, typeName, handlerType string) (endpointEnt
 		dir := toSnake(name)
 		if _, err := os.Stat(filepath.Join(root, "game", "entities", dir)); err != nil {
 			return endpointEntity{}, fmt.Errorf("Nest handler %s: view.%s names no entity package game/entities/%s", handlerType, typeName, dir)
+		}
+		if targetDir != "" && targetDir != dir {
+			return endpointEntity{}, fmt.Errorf("Nest handler %s: target names entity package %s, but view.%s is entity %s", handlerType, targetDir, typeName, dir)
 		}
 		return entityAt(dir), nil
 	}
@@ -636,14 +735,25 @@ func viewEndpointEntity(root, module, typeName, handlerType string) (endpointEnt
 			dirs = append(dirs, dir)
 		}
 	}
+	sort.Strings(dirs)
+	if targetDir != "" {
+		if !slices.Contains(dirs, targetDir) {
+			mounted := "no entity mounts it"
+			if len(dirs) > 0 {
+				mounted = "it is mounted by " + strings.Join(dirs, ", ")
+			}
+			return endpointEntity{}, fmt.Errorf("Nest handler %s: target entity %s does not mount component %s (view.%s); %s", handlerType, targetDir, component, typeName, mounted)
+		}
+		return entityAt(targetDir), nil
+	}
 	switch len(dirs) {
 	case 1:
 		return entityAt(dirs[0]), nil
 	case 0:
 		return endpointEntity{}, fmt.Errorf("Nest handler %s: no entity under game/entities mounts component %s (view.%s)", handlerType, component, typeName)
 	default:
-		sort.Strings(dirs)
-		return endpointEntity{}, fmt.Errorf("Nest handler %s: entities %s all mount component %s; an endpoint addresses one kind, so take view.<Entity>Entity of the player's entity", handlerType, strings.Join(dirs, ", "), component)
+		return endpointEntity{}, fmt.Errorf("Nest handler %s: entities %s all mount component %s; an endpoint addresses one kind: write target=<entity> on its //roost:endpoint marker "+
+			"(roost add endpoint --target <entity>), or take view.<Entity>Entity of the player's entity", handlerType, strings.Join(dirs, ", "), component)
 	}
 }
 

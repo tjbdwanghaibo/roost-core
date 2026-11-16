@@ -212,7 +212,11 @@ endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使
 `--nest-handler`。`add protocol --handler <域>` 之后跑过 `roost generate`，协议生成器会先写一个“未实现”占位
 （`Handle<Protocol>` 只返回 `fmt.Errorf("Handle<Protocol>: not implemented")`）；add endpoint 认出**仍未改动**的占位并在同一次
 提交里替换它。占位被改过（多了语句、换了返回值、加了别的函数）或是别的文件时不覆盖，报错写明“删掉或改名（保留要留的代码）后重跑”。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
-字段；找不到字段会在 add 阶段报错，不生成半成品。**业务时间是服务器决定的值**（新用户试用第四轮登记项 2）：参数名
+字段；找不到字段会在 add 阶段报错，不生成半成品。第一个参数是 `game/view` 的组件窄接口（`view.I<X>Entity`）时，
+endpoint 找挂了组件 X 的实体，用 `context.PlayerID` 拼它的实体 ID；组件挂在多个实体上时要指定是哪一个：
+`roost add endpoint <名> --target <实体>`，写进标记成为 `//roost:endpoint nest=<Handler> target=<实体>`（实体结构体名或
+实体包名，与 `//roost:nest target=` 同一认法）。没写时生成失败并提示写 `target=`；指定的实体没挂这个组件也报错。
+Nest handler 自己写了 `//roost:nest target=<实体>` 且对得上实体时 endpoint 同样采用，两处写成不同实体时报错。**业务时间是服务器决定的值**（新用户试用第四轮登记项 2）：参数名
 `nowUnix` / `nowUnixMilli`（`int64`）不对应 Request 字段，也不在 `Sync_` 的参数里：Nest 生成器的分发包装在 handler
 **执行时**填这条消息冻结的业务时间（`fctx.Now().Unix()` / `fctx.NowMilli()`，真实时间 + `time.logic_offset`；DESIGN-TODO
 D22-1，维护者 2026-10-21 决定），排队、冷加载、重试的耽搁不算进“之前”，handler 里再读 `fctx.Now()` 是同一时刻。
@@ -322,7 +326,7 @@ func (controller *Controller) HandleAddGold(ctx *playeraccess.Context, req *pb.A
 }
 ```
 
-协议名从 `HandleAddGold` 推导，`--handler` 决定追加到哪个 `<分组>.go`，`nest=AddGold` 是唯一的 handler 对应声明；指定 `--nest-handler` 时写入指定名字。`roost generate`（包括 `--changed`）扫描手写标记，按当前 handler 签名更新 `dispatchAddGold`。手写入口可以改文件名、合并进同包文件，生成器不修改其方法体。
+协议名从 `HandleAddGold` 推导，`--handler` 决定追加到哪个 `<分组>.go`，`nest=AddGold` 是唯一的 handler 对应声明；指定 `--nest-handler` 时写入指定名字，指定 `--target <实体>` 时追加 `target=<实体>`。`roost generate`（包括 `--changed`）扫描手写标记，按当前 handler 签名更新 `dispatchAddGold`。手写入口可以改文件名、合并进同包文件，生成器不修改其方法体。
 
 自动部分负责认证 PlayerID 构造、参数转交、Nest 调用、错误码映射和空响应检查；手写层可在其前后处理业务，但提交后的响应处理失败不代表回滚。Entity 当前状态校验仍须在 Nest handler 锁内完成。不要从这里直接取 Entity local 锁或绕过 Nest 改 DAO。
 

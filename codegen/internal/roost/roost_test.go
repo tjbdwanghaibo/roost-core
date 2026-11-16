@@ -1638,7 +1638,7 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 	if err := os.WriteFile(handlerPath, []byte("package handler\n\nimport player \"example.com/planet/game/entities/player\"\n\nfunc handlerRenamePlayer(target player.IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	signature, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb")
+	signature, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1657,7 +1657,7 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 	if err := os.WriteFile(handlerPath, []byte("package handler\nfunc handlerRenamePlayer(target IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb"); err == nil || !strings.Contains(err.Error(), "<package>.I<Component>Entity") {
+	if _, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb", ""); err == nil || !strings.Contains(err.Error(), "<package>.I<Component>Entity") {
 		t.Fatalf("unqualified Entity target accepted: %v", err)
 	}
 }
@@ -2481,7 +2481,7 @@ import (
 )
 func handlerRenamePlayer(target player.IPlayerEntity, request %s, nowUnixMilli int64) (%s, error) { return nil, nil }
 `, tc.imported, tc.request, tc.response))
-			got, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb")
+			got, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb", "")
 			if !tc.accepted {
 				if err == nil {
 					t.Fatal("unsupported request accepted")
@@ -2519,16 +2519,19 @@ func TestEndpointResolvesViewTargetsToTheMountingEntity(t *testing.T) {
 	write("game/entities/player/entity.go", "package player\n\ntype Player struct {\n\tprofile *ProfileComponent `comp:\"CompTypeProfile\"`\n\tbag *bag.Component `comp:\"bag.CompTypeBag,cold\"`\n\tactivity *activity.Component `comp:\"activity.CompTypeActivity\"`\n}\n")
 	write("game/entities/item/entity.go", "package item\n\ntype Item struct{}\n")
 	write("game/entities/guild/entity.go", "package guild\n\ntype Guild struct {\n\tactivity *activity.Component `comp:\"activity.CompTypeActivity\"`\n}\n")
-	for _, tc := range []struct{ typeName, want, err string }{
-		{"IProfileEntity", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
-		{"IBagEntity", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
-		{"PlayerEntity", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
-		{"ItemEntity", "item.EntityKindItem example.com/planet/game/entities/item", ""},
-		{"IActivityEntity", "", "entities guild, player all mount component Activity"},
-		{"IQuestEntity", "", "no entity under game/entities mounts component Quest"},
-		{"Profile", "", "is not an entity interface"},
+	for _, tc := range []struct{ typeName, target, want, err string }{
+		{"IProfileEntity", "", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
+		{"IBagEntity", "", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
+		{"PlayerEntity", "", "player.EntityKindPlayer example.com/planet/game/entities/player", ""},
+		{"ItemEntity", "", "item.EntityKindItem example.com/planet/game/entities/item", ""},
+		{"IActivityEntity", "", "", "entities guild, player all mount component Activity"},
+		{"IActivityEntity", "guild", "guild.EntityKindGuild example.com/planet/game/entities/guild", ""},
+		{"IActivityEntity", "item", "", "target entity item does not mount component Activity"},
+		{"ItemEntity", "player", "", "but view.ItemEntity is entity item"},
+		{"IQuestEntity", "", "", "no entity under game/entities mounts component Quest"},
+		{"Profile", "", "", "is not an entity interface"},
 	} {
-		got, err := viewEndpointEntity(root, "example.com/planet", tc.typeName, "X")
+		got, err := viewEndpointEntity(root, "example.com/planet", tc.typeName, "X", tc.target)
 		if tc.err != "" {
 			if err == nil || !strings.Contains(err.Error(), tc.err) {
 				t.Errorf("%s: err = %v, want %q", tc.typeName, err, tc.err)

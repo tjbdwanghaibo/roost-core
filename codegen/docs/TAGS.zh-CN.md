@@ -31,7 +31,7 @@
 | `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service` |
 | `//roost:component type=N` | 组件声明；供 ID 空间检查 | `type` 为组件类型号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
 | `//roost:mirror` | 手写只读 DTO；生成读取器 | `entityKind`、`coll`，对应拥有者 kind 与 DAO 集合 |
-| `//roost:endpoint` | 手写 `Controller.Handle<Protocol>` 方法；持续生成同包 dispatch 转交 | 必需 `nest=<Nest handler>`；协议名由方法名推导 |
+| `//roost:endpoint` | 手写 `Controller.Handle<Protocol>` 方法；持续生成同包 dispatch 转交 | 必需 `nest=<Nest handler>`；可选 `target=<实体>`（handler 收的组件挂在多个实体上时指定寻址哪个实体，`roost add endpoint --target`）；协议名由方法名推导 |
 | `//roost:nest` | 业务 handler 函数；生成分发包装、Sender | `target` 或 `targets`、`rollback`、`durability`、`sync` |
 | `//roost:proto` | 协议定义文件；指定 PB 包 | `package`、`go_package` |
 | `//roost:protocol` | 协议接口 | `group`、`handler`；`controller` / `domain` 是 handler 的替代拼写，推荐只写 `handler` |
