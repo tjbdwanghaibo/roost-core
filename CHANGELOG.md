@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.51.0**（2026-11-16）：`roost add gate` 生成的 Gate 与 Game Ingress 接线要 v1.51.0；framework-compat 的 minimum 一栏随之改为 v1.51.0。
+
 ## [v1.51.0] - 2026-11-16
 
 - **新增 `roost add gate`**（2026-11-16）：`roost add gate [<名字>] [--service <玩家服务>]` 一条命令把嵌入玩家 TCP 的工程改成独立 Gate。`roost.yaml` 新增 `access.player.gate`，Gate 是一个普通业务服务（etcd、nats，uses account），跑生成的 `accessplayertcp.NewGateMod()`（读 `player_access.gate.{namespace, addr, advertise_addr}`）；玩家服务的 `bootstrap.New()` 改走 Game Ingress（工程有 `NewAuthenticator` 时用它），配置关掉嵌入 TCP、两边同一命名空间、开单实例锁，装了 login 时 `login.presence.addr` 写成 Gate 地址；部署模板的 7000 端口移到 Gate。同名重跑什么都不改；没有玩家 TCP、没有托管 account、已有别的 Gate、名字冲突时拒绝并说明原因。没声明 Gate 的工程生成结果逐字节不变。
