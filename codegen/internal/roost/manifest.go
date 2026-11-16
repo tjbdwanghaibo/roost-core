@@ -26,6 +26,8 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
+// v1.50.0：生成工程的功能包放 game/modules/<包>/（模块的 runtime.package、生成器的 skills / effects / heartbeat /
+// gameplay/attribute 都在那里）、CopyHandedOffEntity 出错时列出可能已写入的文档；随发版后提高。
 // v1.49.0：模块后台 manager 收尾（activity 的 ScanHost、cellworld 的 NewCellWorldHost、login 的 NewLoginPresence、
 // room 的 NewRoomPresence）、PlayerRuntime.ConnectionActive / SessionCount、account 区服登记表、HandlerMeta.AsyncCompletion；
 // 随发版后提高。
@@ -61,7 +63,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.49.0",
+	Core: "v1.50.0",
 }
 
 type Manifest struct {

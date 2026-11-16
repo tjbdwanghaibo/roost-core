@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.50.0**（2026-11-16）：新生成物的 game/modules 布局（模块入口包与生成器功能目录）与 rehome 按“结果未知”清理目标副本都要 v1.50.0；framework-compat 的 minimum 一栏随之改为 v1.50.0。
+
 ## [v1.50.0] - 2026-11-16
 
 - **生成工程的功能包移到 `game/modules/<包>/`（维护者 2026-11-15，只对新生成的工程）**：`game/` 下只留固定的框架层（`components`、`controllers`、`entities`、`handler`、`managers`、`view`）与 `game/modules/`。模块自带的 27 个包（activity actor alliance alliancerule cdkey cellworldhost chat combat dungeon equipment gameplay gm leaderboard login mailbox matchmaking matchroom monster notice purchase rehome room scene servertime skillbook skills terrain，子包保持相对路径，如 `game/modules/alliance/runtime`、`game/modules/gameplay/attribute`）与生成器的功能目录（`roost add skill` → `game/modules/skills`、`add effect` → `game/modules/effects`、`add heartbeat` → `game/modules/heartbeat`、`add attribute` → `game/modules/gameplay/attribute`）都搬过去；业务自己手写的玩法包也按同一规则放 `game/modules/<包>/`，roost-genre 的玩法夹具与指南已跟着改（`game/modules/cardrpg`、`moba`、`partyroom`、`partymatch`、`towerdefense`、`survival`、`mergecasual`、`idlesim`、`autochess`、`rules`、`scenarionet`、`robotaccess`，SLG 的 `alliance`）。包名与 import 关系不变，只是路径多一层。模块清单的落点由安装器在加载时检查（`validateModuleGamePath`：不能直接放在 `game/` 或 `game/modules/` 下，功能包必须在 `game/modules/<包>/`；`runtime.package` 必须在 `game/modules/` 或 `services/<服务>/` 下）。game-demo 里来自模块与生成器的包同样搬过去，它自己手写的包（scene、actor、dungeon、activity、settings……）暂留原处。**旧工程不兼容、没有迁移工具**，升级到本版本的生成器之前手工迁移：
