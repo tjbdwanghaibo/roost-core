@@ -119,6 +119,17 @@ func (f *nestFixture) step(n int) {
 	}
 }
 
+// stepSettled 与 step 相同，但每格投递之后先等 regs 的在途拍执行完再推进时钟：回调读到的 Beat.Now 就是这一格的时刻，
+// 断言 Elapsed 的用例不受 worker 调度快慢影响。
+func (f *nestFixture) stepSettled(n int, regs ...*Reg) {
+	f.t.Helper()
+	for range n {
+		f.driver.step(context.Background())
+		f.settle(regs...)
+		f.clock.Advance(Resolution)
+	}
+}
+
 // 回调在实体自己的 Nest worker 上、实体锁与事务内执行，与该实体的其他消息串行：业务消息持锁期间到期的拍排在它后面。
 func TestBeatRunsUnderTheEntityLockInsideATransaction(t *testing.T) {
 	forEachDelivery(t, func(t *testing.T) {
@@ -267,13 +278,12 @@ func TestStartStopFollowTheTransaction(t *testing.T) {
 		}
 
 		// 回调返回错误：本拍回滚，下一拍不是 First、Elapsed 覆盖两拍。
-		f.step(10)
-		f.settle(r)
+		// Beat.Now 取执行那一刻的时钟：每格先等投出的拍执行完再推进时钟（stepSettled），否则负载高时 worker
+		// 晚几格才执行，记下的时刻偏后，Elapsed 不再是整两拍。
+		f.stepSettled(10, r)
 		failNext = true
-		f.step(10)
-		f.settle(r)
-		f.step(10)
-		f.settle(r)
+		f.stepSettled(10, r)
+		f.stepSettled(10, r)
 		if len(beats) != 3 || !beats[0].First || beats[2].First || beats[2].Elapsed != 200*time.Millisecond {
 			t.Fatalf("beats around a failing callback: %+v", beats)
 		}
