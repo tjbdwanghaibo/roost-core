@@ -2048,6 +2048,10 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	if strings.Contains(makefile, "new-lifecycle:") {
 		t.Errorf("generated Makefile still has new-lifecycle:\n%s", makefile)
 	}
+	// 整理轮删除了 roost add module：Makefile 不再有 new-module。
+	if strings.Contains(makefile, "new-module") || strings.Contains(makefile, "add module") {
+		t.Errorf("generated Makefile still calls roost add module:\n%s", makefile)
+	}
 	ci := string(plan[".github/workflows/ci.yml"].Body)
 	if strings.Contains(ci, "make deps-update") || strings.Contains(ci, "go get -u") {
 		t.Fatalf("ordinary generated CI must use the committed dependency graph:\n%s", ci)
@@ -2499,6 +2503,20 @@ func handlerRenamePlayer(target player.IPlayerEntity, request %s, nowUnixMilli i
 // ProfileHolder，所以参数是生成的窄接口 view.IProfileEntity）。
 func profileHandlerSkeleton(name string) string {
 	return "func handler" + name + "(target view.IProfileEntity) error {\n\t// TODO: validate input and call target.Profile().<BusinessMethod>() (declare the method in view.Profile first).\n\treturn nil\n}"
+}
+
+// roost add module 已删除（整理轮，维护者 2026-11-16）：不再建 game/controllers/<名>.go，报错指向协议存根 / endpoint
+// 与装业务模块的 roost module add。
+func TestAddModuleWasRemoved(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	_, err := Add(root, AddOptions{Kind: "module", Name: "inventory"})
+	if err == nil || !strings.Contains(err.Error(), "roost add module was removed") || !strings.Contains(err.Error(), "roost module add inventory") {
+		t.Fatalf("roost add module: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "game", "controllers", "inventory.go")); !os.IsNotExist(statErr) {
+		t.Fatalf("roost add module still wrote game/controllers/inventory.go: %v", statErr)
+	}
 }
 
 // handler 的锁目标是 game/view 的类型时，add endpoint 按挂载关系找实体：view.<E>Entity 就是 E；view.I<X>Entity 是挂了组件 X

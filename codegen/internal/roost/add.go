@@ -10,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 )
 
 type AddOptions struct {
@@ -458,14 +456,9 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		path = "internal/errors/" + snake + ".go"
 		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")
 	case "module":
-		// 一个 controller 分组的文件。game/controllers 是一个包（2026-11-16 起）：Controller 与 FromRegistry 由协议生成器
-		// 写在 controller.go，分组只是 game/controllers/<分组>.go，handler=<分组> 的协议存根与 endpoint 追加在这里。
-		name, err := protocol.ControllerGroupFile(snake)
-		if err != nil {
-			return nil, err
-		}
-		path = "game/controllers/" + name
-		body = fmt.Sprintf("%s\npackage %s\n\n// 这里写 handler=%s 分组的 Handle* 方法（挂在 controller.go 生成的 Controller 上）。\n", protocol.ControllerScaffoldMarker, protocol.ControllersPackage, snake)
+		// 整理轮删除（维护者 2026-11-16）：game/controllers 合成一个包之后，分组文件由协议存根与 endpoint 追加时按需新建，
+		// 单独建空分组文件的命令没有用处，又容易和装业务模块的 roost module add 混淆。
+		return nil, fmt.Errorf("roost add module was removed: game/controllers/<group>.go is created when needed by roost add protocol --handler <group> (then roost generate) or roost add endpoint --handler <group>; to install a business module use roost module add %s", snake)
 	default:
 		return nil, fmt.Errorf("unsupported artifact kind %q", o.Kind)
 	}

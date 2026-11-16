@@ -1296,7 +1296,7 @@ LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
 LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs dev-run dev-stop dev-status dev-smoke clean
-.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-endpoint new-skill new-table new-dao new-timer new-webroute new-errcode new-saga new-effect new-rpc
+.PHONY: new-service add-mod new-access new-transport new-protocol new-entity new-component new-handler new-endpoint new-skill new-table new-dao new-timer new-webroute new-errcode new-saga new-effect new-rpc
 
 help:
 	$(ROOST) help-make
@@ -1358,8 +1358,6 @@ new-access:
 	$(ROOST) add access $(NAME) -service $(SERVICE)
 new-transport:
 	$(ROOST) add transport $(NAME) -service $(SERVICE)
-new-module:
-	$(ROOST) add module $(NAME)
 new-protocol:
 	$(ROOST) add protocol $(NAME) -group $(GROUP) $(if $(HANDLER),--handler $(HANDLER),)
 new-entity:
@@ -1369,7 +1367,7 @@ new-component:
 new-handler:
 	$(ROOST) add handler $(NAME) --entity $(ENTITY) --component $(COMPONENT)
 new-endpoint:
-	$(ROOST) add endpoint $(NAME) --handler $(HANDLER) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(NEST_HANDLER),--nest-handler $(NEST_HANDLER),) $(if $(LIFECYCLE),--lifecycle $(LIFECYCLE),)
+	$(ROOST) add endpoint $(NAME) --handler $(HANDLER) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(NEST_HANDLER),--nest-handler $(NEST_HANDLER),) $(if $(TARGET),--target $(TARGET),) $(if $(LIFECYCLE),--lifecycle $(LIFECYCLE),)
 new-skill:
 	$(ROOST) add skill $(NAME)
 new-table:

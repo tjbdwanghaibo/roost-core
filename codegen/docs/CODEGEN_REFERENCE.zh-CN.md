@@ -140,14 +140,13 @@ go test ./...
 
 ## 3. 业务骨架：roost add
 
-支持 `service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer`。
+支持 `service|mod|access|transport|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer`。
 
 ```bash
 roost add service world -mods etcd,redis,mongo,nats,dataengine,nest
 roost add mod saga -service game
 roost add access player --service game
 roost add transport tcp
-roost add module inventory
 roost add protocol use_item -group game --handler inventory
 roost add entity player
 roost add component inventory --entity player
