@@ -1,0 +1,11 @@
+[drill 01:52:23] acct ready (pid 12743, ops 127.0.0.1:40601)
+[drill 01:52:24] game1000 ready (pid 12756, ops 127.0.0.1:40600)
+[drill 01:52:25] gate1000 ready (pid 12767, ops 127.0.0.1:40602)
+[drill 01:52:25] client port 127.0.0.1:38500 is the Gate's (pid 12767); game pid 12756 does not listen on it
+[drill 01:52:25] acct: 0 ERROR log lines
+[drill 01:52:25] game1000: 0 ERROR log lines
+[drill 01:52:25] gate1000: 0 ERROR log lines
+[drill 01:52:25] PASS gate drill
+[drill 01:52:26] stopped acct
+[drill 01:52:28] stopped game1000
+[drill 01:52:29] stopped gate1000

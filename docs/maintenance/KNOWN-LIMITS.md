@@ -783,16 +783,7 @@ room 自动断线订阅与重启后在线状态（全部断线、重连上线）
 
 P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 已验（其中 committed 保留 Q4），本机脚本 11 / 11 与当批模块矩阵 594 / 594 是不同统计口径。历史 demo 压测不是模块容量；本轮 M 与 C-Q1 / Q2 尚未提供正式容量结论。见[社交报告](evidence/social-real-20261114/README.md)。
 
-#### 生成工程目录：遗留
-
-- **controllers 合包、组件接口收进 view（已实施，待最终全量）**：维护者 2026-11-16 定的方向，已在分支 `feat/round-20261116` 实施：
-  - `game/controllers` 合成一个包，生成器所有的 `controller.go`，每个模块一个 `<模块>.go`、联动 `<模块>_<对方>.go`（fa8a13ed、5b811fd6、4da36956；启动期依赖检查恢复在 72723174）；
-  - 组件类型号与工厂登记挪进组件包（`component_package`，c8e9b966），activity 只用一个类型号、整包挪到 `game/components/activity`；
-  - view 窄接口 `I<X>Entity`、宿主方法与纯 DAO 交接（596a21b1），Nest / endpoint 按 view 类型解析归属、认 `target=`（c48b849a、068ba7a0）；
-  - 全部模块模板迁移（9aaebe7f、c8340c27、09e8feee、bcf8ca44、eaa85d13）；删除 `roost add module`（c9ca9243）。
-
-  **还没做**：game-demo 中由模块与生成器带来的部分（另行进行）；本轮阶段 7 的全量（codegen 全量、全部模块门禁与场景数核对、genre 脚本、TestDemo、pretag）。方案见 [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)，全量安排见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
-- **组件钩子改为实体事件（已实施，待最终全量）**：维护者 2026-11-16 定的第二版方案已实施：core 的 `Publish` / 登记 / 三道上限（a0a4e405、16248e14），生成器的 `//roost:listen [priority=N]` 登记、顺序与静态环提示（596a21b1），旧写法挂载的组件上的监听改报错（13161a23），19 个事件替换了原来的通知与拦截类钩子（清单见 [FEATURE-2026-11-16-tx-event §1.3](FEATURE-2026-11-16-tx-event.md#13-33-个登记点的分类按实施结果改正)）。框架本身的边界写在上面的[实体事件](#实体事件2026-11-16)。doctor 的 `event:*` 检查维护者 2026-11-17 定为以后的增强（见上面[实体事件](#实体事件2026-11-16)）；core 的真实 Nest 事务回滚测试已补（`TestEntityEventListenerFailureRollsBackTheWholeTransaction`，`Publish` 吞掉监听错误时变红）。**还没做**：本轮阶段 7 的全量。
+<a id="生成工程目录遗留"></a>
 
 ### 框架服务与 game-demo（遗留）
 
@@ -877,6 +868,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-17：2026-11-16 整理轮（controllers 合包、组件包与 view 窄接口、组件钩子改实体事件、单实例锁改存 etcd）阶段 7 收口**：最终全量与真实进程演练（单实例锁 etcd 四步、Gate、alliance-e2e 11 条）通过；全量暴露的 14 个用例与两处脚本问题、etcd 不可达时进程退不出（停机撤销注册改为最多 5s）、friends 合包漏搬的测试与 notice 缺 chat 不再启动失败均已修。框架边界见[实体事件](#实体事件2026-11-16)与[组件包与 game/view](#组件包与-gameviewv1470)；根因、修复提交与先红后绿见[本轮证据](evidence/round-20261116/README.md)。
 - **2026-11-14：维护者答复 D1～D26**：确认类写进一——D2 超额降级放宽即删记录（限制）、D3 不做事务内门控进出场景、D4 `state` 不接同步打包、D5 Lockstep 房间与夹具不迁 `Stepper` / `DriveBuffs`、D6 account 换服方案 §6 第 1～4 项、D9 受理后中止即断线重选角、D10 合服回退 `new_in_target` 保持、D14 Team 归 game 服务、D20 模块号上线前冻结一次；已决定、v1.47.0 之后实施的 D7、D8、D11、D17、D19、D21～D24 留在二。[答复原文](evidence/known-limits-remaining-20261114/decisions.md#维护者答复2026-11-14)
 - **2026-11-14：self_sync 驻留预算拒收的整轮重试放大**（D1 A，`2e1486b4` / `3c48c5f2`）：`ErrRetryLater` 改为只作废没交付到的 subject、下一轮从被拒会话轮转（取代 C29“低 ID 总是先试”）；演练 16 KiB 0 → 171 / 200、64 KiB 31 → 200 / 200 轮提交，剩余代价见[自身视图](#自身视图self_sync与-sync-慢消费者规则)第 4 条。
 - **2026-11-14：坏块与拥有者装不进的块永远等不到确认**（D12 A，`5361b9e6`）：按原始地形包确认，客户端协议与 C# 不变；边界见[跨格编辑直接拒绝与确认来源](#跨格编辑直接拒绝与确认来源)。

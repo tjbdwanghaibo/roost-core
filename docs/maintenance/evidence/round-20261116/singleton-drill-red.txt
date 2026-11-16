@@ -1,0 +1,16 @@
+[drill 23:56:42] lock key /sgd73c1cd/singleton:game:1000, ttl 15s, renew 3s; A ops 127.0.0.1:42600, B ops 127.0.0.1:43600
+[drill 23:56:42] lock-a started (pid 1681, dir /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-singleton-drill.oF8hhW/sgd73c1cd)
+[drill 23:56:44] lock-b started (pid 1807, dir /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-singleton-drill.oF8hhW/b)
+[drill 23:56:53] step 1 PASS: B waits at start-up while A holds the lock
+[drill 23:56:53] A frozen (SIGSTOP)
+[drill 23:57:09] step 2 PASS: B took over 15s after A froze
+[drill 23:57:09] A resumed (SIGCONT)
+[drill 23:57:10] step 3 PASS: A failed stop (exit 1) with the lost-lock log; B still serving
+[drill 23:57:17] etcd stopped
+[drill 23:57:37] FAIL: lock-b still running after 20s
+--- lock-b（修前，etcd 停后丢锁、卡在 etcd mod stop）
+{"time":"2026-11-16T23:57:20.871401+08:00","level":"ERROR","msg":"singleton lock lost; fail-stop","goId":82,"frame":238,"server_time_ms":1794844640871,"key":"/sgd73c1cd/singleton:game:1000","holder":"","err":"renewal outcome unknown at the end of the validity 
+{"time":"2026-11-16T23:57:20.871455+08:00","level":"ERROR","msg":"runtime infrastructure failure, shutting down","goId":1,"frame":238,"server_time_ms":1794844640871,"err":"singleton lock lost: renewal outcome unknown at the end of the validity window: context 
+{"time":"2026-11-16T23:57:20.928199+08:00","level":"INFO","msg":"mod stop (service-specific)","goId":1,"frame":238,"server_time_ms":1794844640928,"mod":"etcd","budget":36971660146}
+{"time":"2026-11-16T23:57:21.892928+08:00","level":"WARN","msg":"business time: advancing the high-water mark failed; retrying on the next beat","goId":98,"frame":238,"server_time_ms":1794844641892,"key":"/sgd73c1cd/singleton:business_time","err":"context dead
+{"time":"2026-11-16T23:57:31.897427+08:00","level":"WARN","msg":"business time: advancing the high-water mark failed; retrying on the next beat","goId":98,"frame":238,"server_time_ms":1794844651897,"key":"/sgd73c1cd/singleton:business_time","err":"context dead

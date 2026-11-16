@@ -1,0 +1,2 @@
+fault anchor drift: expected one occurrence of '\n\tcopying, cancel := context.WithTimeout(ctx, departBudget)'
+alliance rc=1
