@@ -705,7 +705,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 单实例锁：遗留
 
-- **锁改存 etcd（已决定待实施）**：维护者 2026-11-16 定做法 A，在 `wiring/etcd` 实现 `SingletonStore`，生成工程全工程统一用它，锁与服务发现共用同一个 etcd 集群，`framework/app` 不改。暂不实施。尚未确认的两项是：Redis 版删除还是保留；是否接受 etcd 不可用时开锁进程 fail-stop。方案见 [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)。
+- **锁改存 etcd（已决定待实施）**：维护者 2026-11-16 定做法 A，在 `wiring/etcd` 实现 `SingletonStore`，生成工程全工程统一用它，锁与服务发现共用同一个 etcd 集群，`framework/app` 不改。暂不实施。同日已定：Redis 版 `SingletonStore` 删除；接受 etcd 不可用时开锁进程 fail-stop（实施时写进框架限制与部署文档）。方案见 [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)。
 
 ### DataEngine、Remote 与 Saga（遗留）
 
