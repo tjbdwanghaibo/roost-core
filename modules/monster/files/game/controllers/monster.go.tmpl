@@ -18,6 +18,14 @@ import (
 	sender "{{MODULE}}/game/handler/syncsender"
 )
 
+// 启动时先取一次实体运行时（Nest 由公共的 FromRegistry 检查）；取不到就让进程起不来。
+func init() {
+	requireAtStart("monster", func(controller *Controller) error {
+		_, err := controller.monsterEntities()
+		return err
+	})
+}
+
 // monsterEntities 取实体运行时，用来确认“缺的是怪还是查看者”。每次请求现取，不挂在 Controller 上。
 func (c *Controller) monsterEntities() (*entity.ManagerAccess, error) {
 	access, ok := app.Lookup[*entity.ManagerAccess](c.Registry(), mods.ModEntityRuntime)

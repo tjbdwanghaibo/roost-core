@@ -6,7 +6,6 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
@@ -22,7 +21,15 @@ import (
 // 用到时从 Registry 取（业务服务在 roost.yaml 里 uses: [mail] 时由 ClientMod 发布）；发放附件用的 Nest Sender
 // 每次从 NestClient 构造（改 Player 只能经 Nest，端点自己不取实体锁）。
 
-// mailboxMailer 取 mail 服务的客户端；取不到是装配错误，这一条请求按内部错误回答。
+// 启动时先取一次 mail 服务的客户端（Nest 由公共的 FromRegistry 检查）；取不到就让进程起不来。
+func init() {
+	requireAtStart("mailbox", func(controller *Controller) error {
+		_, err := controller.mailboxMailer()
+		return err
+	})
+}
+
+// mailboxMailer 取 mail 服务的客户端；启动检查已经验过它在，取不到只会是装配错误，这一条请求按内部错误回答。
 func (controller *Controller) mailboxMailer() (svcmail.Mail, error) {
 	registry := controller.Registry()
 	if registry == nil {

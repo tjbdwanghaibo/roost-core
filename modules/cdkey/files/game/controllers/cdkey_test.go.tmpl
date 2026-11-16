@@ -450,14 +450,25 @@ func TestCdkeyRegistryAndPBEndpointUseFormalChain(t *testing.T) {
 	if _, err := FromRegistry(registry); err == nil {
 		t.Fatal("missing dependencies accepted")
 	}
-	for name, value := range map[app.ModName]any{app.ModName("nest"): nest.Client(f.engine), mods.ModDirectory: directory.Directory(f.dir), svcmail.CapabilityName: svcmail.Mail(f.mail)} {
-		if err := registry.Register(name, value); err != nil {
-			t.Fatal(err)
-		}
+	if err := registry.Register(app.ModName("nest"), nest.Client(f.engine)); err != nil {
+		t.Fatal(err)
 	}
 	controller, err := FromRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// 缺 directory 与 mail：启动检查（生成的协议登记在 FromRegistry 之后调用）让进程起不来。
+	if err := controller.CheckAtStart(); err == nil || !strings.Contains(err.Error(), "module cdkey: cdkey: directory client is required") {
+		t.Fatalf("start checks without directory and mail = %v; the process would start and fail on the first redemption", err)
+	}
+	for name, value := range map[app.ModName]any{mods.ModDirectory: directory.Directory(f.dir), svcmail.CapabilityName: svcmail.Mail(f.mail)} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 只跑 cdkey 自己登记的那一条：工程里别的模块的检查在这个夹具上本来就会失败。
+	if check := startChecks["cdkey"]; check == nil || check(controller) != nil {
+		t.Fatal("the cdkey start check refuses a registry that has nest, directory and mail")
 	}
 	request := &pb.CdkeyRedeemRequest{Cdkey: "WELCOME"}
 	raw, err := pb.MarshalCdkeyRedeemRequest(request)

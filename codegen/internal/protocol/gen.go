@@ -185,7 +185,7 @@ func generateRobotProtocolGo(defs *Definitions) ([]byte, error) {
 // generateProtocolRegistration 产出玩家接入层的协议登记文件（缺省 internal/access/player/protocols_gen.go）：
 // 每个 handler= 分组一个 controller 接口与一条注册函数（Register<分组>PlayerProtocolsWith，直接给 controller），
 // 末尾是总入口 RegisterPlayerProtocols：只构造一次 controllers.FromRegistry（game/controllers 是一个包，
-// 2026-11-16 起），把同一个 Controller 逐个分组注册，再登记推送编码器。2026-11-13（v1.47.0）之前它们分散在
+// 2026-11-16 起），跑一遍模块登记的启动检查（CheckAtStart），把同一个 Controller 逐个分组注册，再登记推送编码器。2026-11-13（v1.47.0）之前它们分散在
 // game/protocol_handlers/<功能>/ 与 game/protocol_bootstrap/ 两层包里，唯一的调用方是接入层的 mod_gen.go，
 // 所以并成接入层包里的一份文件。没有协议定义时照样产出（空的总入口），接入层的 Mod 总能编译。
 func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte, error) {
@@ -253,7 +253,7 @@ func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte
 		fmt.Fprintf(&b, "}\n\n")
 	}
 
-	fmt.Fprintln(&b, "// RegisterPlayerProtocols 在接入层 Mod 的 Provide 里调用（Seal 之前）：构造一次 Controller，逐个分组注册协议，")
+	fmt.Fprintln(&b, "// RegisterPlayerProtocols 在接入层 Mod 的 Provide 里调用（Seal 之前）：构造一次 Controller，跑模块的启动检查，逐个分组注册协议，")
 	fmt.Fprintln(&b, "// 再登记推送编码器。")
 	fmt.Fprintln(&b, "func RegisterPlayerProtocols(protocols *playeraccess.ProtocolRegistry, registry *app.Registry) error {")
 	fmt.Fprintln(&b, "\tif protocols == nil || registry == nil {")
@@ -262,6 +262,8 @@ func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte
 	if len(domains) > 0 {
 		fmt.Fprintf(&b, "\tctl, err := %s.FromRegistry(registry)\n", ControllersPackage)
 		fmt.Fprintln(&b, "\tif err != nil {\n\t\treturn err\n\t}")
+		fmt.Fprintln(&b, "\t// 模块登记的启动检查（requireAtStart）：缺依赖在这里失败，一条协议都不注册，进程起不来。")
+		fmt.Fprintln(&b, "\tif err := ctl.CheckAtStart(); err != nil {\n\t\treturn err\n\t}")
 	}
 	for _, domain := range domains {
 		fmt.Fprintf(&b, "\tif err := Register%sPlayerProtocolsWith(protocols, ctl); err != nil {\n\t\treturn err\n\t}\n", protocolHandlerDisplayName(domain))

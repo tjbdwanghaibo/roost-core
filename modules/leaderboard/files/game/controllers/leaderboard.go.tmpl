@@ -14,8 +14,16 @@ import (
 // leaderboard 的端点只读：读榜不改任何 Entity，不经过 Nest；提交分数不对客户端开放，入口是
 // game/modules/leaderboard 的 Submit。
 
-// leaderboardRanking 取 rank 服务的客户端。客户端不带状态，用到时从 Registry 取；取不到是装配错误
-// （roost.yaml 里业务服务没有 uses: [rank]），这一条请求按内部错误回答。
+// 启动时先取一次 rank 服务的客户端；取不到就让进程起不来，而不是等第一条请求再失败。
+func init() {
+	requireAtStart("leaderboard", func(controller *Controller) error {
+		_, err := controller.leaderboardRanking()
+		return err
+	})
+}
+
+// leaderboardRanking 取 rank 服务的客户端。客户端不带状态，用到时从 Registry 取；启动检查已经验过它在，
+// 取不到只会是装配错误（roost.yaml 里业务服务没有 uses: [rank]），这一条请求按内部错误回答。
 func (controller *Controller) leaderboardRanking() (svcrank.Rank, error) {
 	ranking, err := gameleaderboard.Client(controller.Registry())
 	if err != nil {

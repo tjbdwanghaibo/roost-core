@@ -647,10 +647,21 @@ func TestLeaderboardRankFailureReachesTheClientAsACode(t *testing.T) {
 	}
 }
 
-func TestLeaderboardControllerWithoutRankAnswersInternal(t *testing.T) {
-	// 合成一个 controllers 包之后，Controller 由生成的 FromRegistry 构造，启动时不再单独检查 rank 客户端：
-	// 没装 rank 时进程照常起，端点在用到时取不到客户端，按内部错误回答（不回半截数据）。
+func TestLeaderboardControllerRefusesToStartWithoutRank(t *testing.T) {
+	if _, err := FromRegistry(nil); err == nil {
+		t.Fatal("a nil registry was accepted")
+	}
+	// 启动检查由生成的协议登记在 FromRegistry 之后调用（CheckAtStart）；它失败，进程就起不来。
+	// 工程里别的模块的检查在这个空 Registry 上也会失败，这里只认 leaderboard 那一条。
 	missing := &Controller{registry: app.NewRegistry(nil)}
+	if err := missing.CheckAtStart(); err == nil || !strings.Contains(err.Error(), "module leaderboard: leaderboard controller:") {
+		t.Fatalf("start checks without the rank client = %v; the process would start and fail on the first request", err)
+	}
+	fixture := newLeaderboardFixture(t)
+	if check := startChecks["leaderboard"]; check == nil || check(fixture.controller) != nil {
+		t.Fatal("the leaderboard start check refuses a registry that has the rank client")
+	}
+	// 检查之外装配又出了错（启动之后 rank 客户端不见了）：端点按内部错误回答，不回半截数据。
 	top, err := missing.HandleLeaderboardTop(&playeraccess.Context{PlayerID: 1001}, &pb.LeaderboardTopRequest{Limit: 10})
 	if err != nil || top.Code != errcode.CodeInternal || len(top.Rows) != 0 {
 		t.Fatalf("LeaderboardTop without rank = %+v, %v; want an internal-error answer and no rows", top, err)
@@ -659,7 +670,6 @@ func TestLeaderboardControllerWithoutRankAnswersInternal(t *testing.T) {
 	if err != nil || me.Code != errcode.CodeInternal || me.OnBoard {
 		t.Fatalf("LeaderboardMe without rank = %+v, %v; want an internal-error answer", me, err)
 	}
-	fixture := newLeaderboardFixture(t)
 	if fixture.controller.Registry() != fixture.registry {
 		t.Fatal("the controller does not hand back its registry")
 	}

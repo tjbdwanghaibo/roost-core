@@ -52,6 +52,14 @@ func (c *Controller) PurchaseCollect(ctx context.Context, playerID int64) ([]pur
 	return deps.Collect(ctx, playerID)
 }
 
+// 启动时先把领取的依赖取一遍（Nest、platform、Redis 发货队列；检查与错误文本同原来的 FromRegistry），缺了进程起不来。
+func init() {
+	requireAtStart("purchase", func(controller *Controller) error {
+		_, err := purchaseDepsFromRegistry(controller.Registry())
+		return err
+	})
+}
+
 func purchaseDepsFromRegistry(registry *app.Registry) (*purchaseDeps, error) {
 	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
 	if !ok || client == nil {

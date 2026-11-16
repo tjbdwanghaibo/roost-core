@@ -71,7 +71,7 @@ func TestTeamEndpointRejectsInvalidInviteeBeforeDispatch(t *testing.T) {
 }
 
 // 启动只发布 entity.runtime，不发布名为 lifecycle.Team 的能力。
-// 不放入 Remote，检查构造器已经越过正式 lifecycle 装配而到达下一项依赖。
+// 不放入 Remote，检查 team 的启动检查已经越过正式 lifecycle 装配而到达下一项依赖，并让进程起不来。
 func TestTeamControllerUsesEntityRuntimeLifecycle(t *testing.T) {
 	registry := app.NewRegistry(viper.New())
 	engine := nest.NewEngine()
@@ -81,9 +81,20 @@ func TestTeamControllerUsesEntityRuntimeLifecycle(t *testing.T) {
 	if err := registry.Register(mods.ModEntityRuntime, entity.NewManagerAccess(entity.NewEntityManager())); err != nil {
 		t.Fatal(err)
 	}
-	_, err := teamDepsFromRegistry(registry)
-	if err == nil || err.Error() != "team: remote runtime unavailable" {
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 只跑 team 自己登记的那一条：工程里别的模块的检查在这个夹具上本来就会失败。
+	check := startChecks["team"]
+	if check == nil {
+		t.Fatal("team registered no start check: a process without its dependencies would start and fail on the first request")
+	}
+	if err := check(controller); err == nil || err.Error() != "team: remote runtime unavailable" {
 		t.Fatalf("controller did not construct lifecycle from entity.runtime: %v", err)
+	}
+	if controller.CheckAtStart() == nil {
+		t.Fatal("start checks passed without the Remote runtime: the process would start")
 	}
 }
 

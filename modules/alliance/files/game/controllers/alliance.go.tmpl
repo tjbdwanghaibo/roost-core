@@ -29,10 +29,25 @@ import (
 
 // alliance 端点只用联盟 RPC、Mirror 与 Nest 客户端；不会在 game 取得 Alliance 的写锁。
 // 依赖不挂在 Controller 上：联盟 RPC 客户端、联盟 Mirror 读取器、本服 sid 都不带状态，用到时从 Registry 取
-// （检查与错误文本同原来的 FromRegistry）。取不到是装配错误，这一次请求失败。
+// （检查与错误文本同原来的 FromRegistry）。启动检查已经验过一遍；取不到只会是装配错误，这一次请求失败。
 
 // allianceFoundCost 是建盟费：归工程所有的价格规则；普通入会 / 退出仅 RPC，不使用 Saga。
 const allianceFoundCost int32 = 100
+
+// 启动时先把端点的依赖取一遍（联盟 RPC、Mirror 读取器、本服 sid；检查与错误文本同原来的 FromRegistry），
+// 缺了进程起不来。
+func init() {
+	requireAtStart("alliance", func(controller *Controller) error {
+		if _, err := controller.allianceRPC(); err != nil {
+			return err
+		}
+		if _, err := controller.allianceMirrorReader(); err != nil {
+			return err
+		}
+		_, err := controller.allianceSID()
+		return err
+	})
+}
 
 // allianceRPC 取联盟服务的 RPC 客户端。
 func (controller *Controller) allianceRPC() (rpcalliance.Alliance, error) {

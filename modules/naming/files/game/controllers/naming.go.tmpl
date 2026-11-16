@@ -66,6 +66,14 @@ func newNamingRenamer(r *app.Registry) (*namingRenamer, error) {
 	return &namingRenamer{names: names, profile: namingNestProfile{syncsender.NewNamingBeginSender(client), syncsender.NewNamingStepSender(client)}}, nil
 }
 
+// 启动检查：目录与 Nest 在启动时就要在（照原来 FromRegistry 的检查），缺了进程起不来；请求时 newNamingRenamer 仍每次现取。
+func init() {
+	requireAtStart("naming", func(controller *Controller) error {
+		_, err := newNamingRenamer(controller.Registry())
+		return err
+	})
+}
+
 // init 把协调器登记成 profile 的事务外改名入口：旧的 ProfileRename 协议与首次建档取名都经它走目录。
 func init() {
 	profile.RegisterRenamer(func(ctx context.Context, r *app.Registry, id int64, name string) (string, error) {

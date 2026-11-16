@@ -67,7 +67,7 @@
 - **账本有界但没有独立的清扫：** 每次首次发放时顺手清掉“邮件过期后再过 600 秒”的记录。已过期且不在账本里的邮件一律拒绝首次发放（按发放执行时 Nest 冻结的业务时间判断）。game 进程之间业务时钟差超过 600 秒时，已遗忘的邮件可能被晚到的重放再发一次。
 - **列表不取实体锁：** 满背包时道具邮件仍显示可领。
 - **新旧进程混跑：** 旧进程把新种类当未知附件拒绝并归还预留，玩家可能看到同一封邮件时而可领、时而不可领。
-- **前提：** 依赖 wallet；需要 nest 与 dataengine 两个 Mod，业务服务 `uses: [mail]`。取不到 mail 的客户端时端点按内部错误回答（`controllers.FromRegistry` 由生成器写，启动时不检查 mail）。领取跨两个进程（game 与 mail）。
+- **前提：** 依赖 wallet；需要 nest 与 dataengine 两个 Mod，业务服务 `uses: [mail]`。取不到 mail 的客户端时启动检查失败（`game/controllers/mailbox.go` 的 `requireAtStart`，由生成的协议登记在启动时调用），进程起不来。领取跨两个进程（game 与 mail）。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“mailbox 的边界”、“进入钩子不是事务的一部分”（全服邮件的画像规则）、“模块的规则大多还是 Go 写的业务文件”。
 
 ## 复用方式

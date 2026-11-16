@@ -47,6 +47,14 @@ func (controller *Controller) chatState() *chatModuleState {
 	})
 }
 
+// 启动时先取一次 chat 服务的客户端；取不到就让进程起不来（玩家传输可能发布得更晚，不在这里取）。
+func init() {
+	requireAtStart("chat", func(controller *Controller) error {
+		_, err := controller.chatMessaging()
+		return err
+	})
+}
+
 // chatMessaging 取 chat 服务的客户端。
 func (controller *Controller) chatMessaging() (svcchat.Messaging, error) {
 	registry := controller.Registry()

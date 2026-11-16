@@ -65,6 +65,15 @@ func RehomeDriverFromRegistry(registry *app.Registry) (*gamerehome.Driver, error
 	return driver, nil
 }
 
+// 启动时就建好这个进程的驱动器（SelfSID、account 的目录客户端、驱动器构造都在这里验；同原来的 FromRegistry），
+// 缺了进程起不来。建好的驱动器按 Registry 缓存，之后的请求取的是同一个。
+func init() {
+	requireAtStart("rehome", func(controller *Controller) error {
+		_, err := RehomeDriverFromRegistry(controller.Registry())
+		return err
+	})
+}
+
 // rehomeDriver 取这个进程的换服驱动器（RehomeDriverFromRegistry）：驱动器按 Registry 只建一次，这里每次现取。
 func (controller *Controller) rehomeDriver() (*gamerehome.Driver, error) {
 	if controller == nil || controller.Registry() == nil {

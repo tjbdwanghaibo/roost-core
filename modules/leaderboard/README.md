@@ -57,7 +57,7 @@
 - **读的一致性：** 每一行的名次与分数来自同一次读取。`LeaderboardTop` 里调用者不在这一页时，“我的位置”是紧接着的第二次读取，与榜头可以相差一瞬；第二次读失败时整条请求按失败回答，不回半截数据。
 - **上限：** 一次至多读 50 行（`MaxTop`；rank 服务自己的页上限是 200），没有翻页协议——只能读榜头。
 - **`OnSubmitted` 是尽力通知：** 失败只记日志，重放会重复触发，不能用它发需要恰好一次的奖励。
-- **前提：** 业务服务 `uses: [rank]`；取不到 rank 的客户端时端点按内部错误回答（`controllers.FromRegistry` 由生成器写，启动时不检查 rank）。跨进程调用，受 rank 服务可用性影响。
+- **前提：** 业务服务 `uses: [rank]`；取不到 rank 的客户端时启动检查失败（`game/controllers/leaderboard.go` 的 `requireAtStart`，由生成的协议登记在启动时调用），进程起不来。跨进程调用，受 rank 服务可用性影响。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“leaderboard 的边界”与“模块的规则大多还是 Go 写的业务文件”。
 
 ## 复用方式

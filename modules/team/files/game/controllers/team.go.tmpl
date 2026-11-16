@@ -35,6 +35,15 @@ func (c *Controller) teamDeps() (*teamDeps, error) {
 	return teamDepsFromRegistry(c.Registry())
 }
 
+// 启动时先把建队与入队的依赖取一遍（lifecycle、Remote、Mongo、库名、服务 sid；检查与错误文本同原来的
+// FromRegistry），缺了进程起不来。
+func init() {
+	requireAtStart("team", func(controller *Controller) error {
+		_, err := teamDepsFromRegistry(controller.Registry())
+		return err
+	})
+}
+
 func teamDepsFromRegistry(registry *app.Registry) (*teamDeps, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("team: registry required")

@@ -137,7 +137,8 @@ func ControllerSource() ([]byte, error) {
 }
 
 // controllerSource 是公共 controller.go 的正文（不含生成头）。改动这里就是改所有生成工程的 Controller：
-// 模块模板依赖这里的名字（Controller 的字段、FromRegistry、NestClient、Registry、推送辅助、moduleState）。
+// 模块模板依赖这里的名字（Controller 的字段、FromRegistry、NestClient、Registry、推送辅助、moduleState、
+// requireAtStart）。
 const controllerSource = `// Package controllers 是玩家协议的业务入口。生成的协议登记（internal/access/player/protocols_gen.go）在每个
 // 进程里调用一次 FromRegistry，把同一个 *Controller 交给全部分组；每个分组的 Handle* 方法都挂在它上面。
 //
@@ -147,7 +148,10 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -168,7 +172,8 @@ type Controller struct {
 }
 
 // FromRegistry 由生成的协议登记在每个进程里调用一次；Nest 客户端此时必须已经发布。
-// 别的依赖（玩家传输、服务客户端）可能发布得更晚，用到时再从 Registry() 取，不在这里取。
+// 别的依赖（玩家传输、服务客户端）用到时再从 Registry() 取；启动时就该在的，由模块用 requireAtStart 登记，
+// 协议登记接着调 CheckAtStart 验一遍。
 func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("controller: app registry is required")
@@ -178,6 +183,41 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("controller: nest client is unavailable")
 	}
 	return &Controller{registry: registry, nestClient: client}, nil
+}
+
+// startChecks 是模块登记的启动检查：模块名 → 检查。只在包初始化（init，串行）时写，之后只读。
+var startChecks = map[string]func(*Controller) error{}
+
+// requireAtStart 登记 module 的启动检查，只在模块文件的 init 里调用。检查确认这个模块要的依赖（服务客户端、
+// 配置、驱动器等）在启动时已经可用：缺了让进程起不来，不拖到第一条请求才答内部错误。模块的取用函数照旧在
+// 用到时再取，这里只是启动时先验一遍。check 拿到的是 FromRegistry 建好的 Controller（Registry、NestClient 可用）。
+// 空名、nil、同一个模块登记两次是编程错误，直接 panic。
+func requireAtStart(module string, check func(*Controller) error) {
+	switch {
+	case module == "" || check == nil:
+		panic("controller: requireAtStart needs a module name and a check")
+	case startChecks[module] != nil:
+		panic(fmt.Sprintf("controller: start check of module %q registered twice", module))
+	}
+	startChecks[module] = check
+}
+
+// CheckAtStart 按模块名顺序跑全部登记的启动检查，汇总全部失败（每条带模块名）。生成的协议登记在 FromRegistry
+// 之后、注册协议之前调用一次：失败时接入层 Mod 的 Provide 返回错误，进程起不来。
+//
+// FromRegistry 自己不跑这些检查：测试按需用 FromRegistry 或 &Controller{...} 构造，夹具只发布自己模块的依赖；
+// 一个工程装着几个模块时，别的模块的检查在这样的夹具上必然失败。
+func (controller *Controller) CheckAtStart() error {
+	if controller == nil || controller.registry == nil {
+		return fmt.Errorf("controller: start checks need a Controller built by FromRegistry")
+	}
+	var failures []error
+	for _, module := range slices.Sorted(maps.Keys(startChecks)) {
+		if err := startChecks[module](controller); err != nil {
+			failures = append(failures, fmt.Errorf("controller: module %s: %w", module, err))
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // NestClient 是改 Entity 的唯一入口：生成的 Sender 都从它构造。

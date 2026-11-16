@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -186,6 +187,154 @@ func TestControllerSourceDeclaresTheSharedAPI(t *testing.T) {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("controller.go lacks %q:\n%s", want, raw)
 		}
+	}
+}
+
+// 模块在 init 里用 requireAtStart 登记启动检查；生成的协议登记在 FromRegistry 之后调 CheckAtStart，
+// 任何一个失败进程就起不来。这里把生成的 controller.go 编进一个临时工程，按真实的 init 登记跑一遍：
+// 检查按模块名排序执行、全部失败一起报（带模块名）、FromRegistry 自己不跑检查、重复登记 panic。
+func TestControllerStartChecksRunInModuleOrder(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a generated package")
+	}
+	repo, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modFile, err := os.ReadFile(filepath.Join(repo, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goVersion := ""
+	for _, line := range strings.Split(string(modFile), "\n") {
+		if version, ok := strings.CutPrefix(line, "go "); ok {
+			goVersion = strings.TrimSpace(version)
+		}
+	}
+	root := t.TempDir()
+	controller, err := ControllerSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"go.mod":                         "module example.com/g\n\ngo " + goVersion + "\n\nrequire github.com/tjbdwanghaibo/roost-core v0.0.0\n\nreplace github.com/tjbdwanghaibo/roost-core => " + repo + "\n",
+		"game/controllers/controller.go": string(controller),
+		// 两个模块，登记顺序与名字顺序相反：执行顺序必须按名字。
+		"game/controllers/zeta.go": `package controllers
+
+import "errors"
+
+func init() {
+	requireAtStart("zeta", func(c *Controller) error {
+		ran = append(ran, "zeta")
+		if failing["zeta"] {
+			return errors.New("zeta dependency missing")
+		}
+		return nil
+	})
+}
+`,
+		"game/controllers/alpha.go": `package controllers
+
+import "errors"
+
+var (
+	ran     []string
+	failing = map[string]bool{}
+	sawNest bool
+)
+
+func init() {
+	requireAtStart("alpha", func(c *Controller) error {
+		ran = append(ran, "alpha")
+		sawNest = c.Registry() != nil && c.NestClient() != nil
+		if failing["alpha"] {
+			return errors.New("alpha dependency missing")
+		}
+		return nil
+	})
+}
+`,
+		"game/controllers/start_test.go": `package controllers
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+type fakeNest struct{ corenest.Client }
+
+func TestStartChecks(t *testing.T) {
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(app.ModName("nest"), corenest.Client(fakeNest{})); err != nil {
+		t.Fatal(err)
+	}
+	failing["alpha"], failing["zeta"] = true, true
+	controller, err := FromRegistry(registry)
+	if err != nil || len(ran) != 0 {
+		t.Fatalf("FromRegistry = %v, ran %v; it builds the Controller only, the start checks belong to CheckAtStart", err, ran)
+	}
+	err = controller.CheckAtStart()
+	if err == nil {
+		t.Fatal("CheckAtStart passed although alpha and zeta report missing dependencies: the process would start and fail on the first request")
+	}
+	text := err.Error()
+	alpha, zeta := strings.Index(text, "module alpha: alpha dependency missing"), strings.Index(text, "module zeta: zeta dependency missing")
+	if alpha < 0 || zeta < 0 || alpha > zeta {
+		t.Fatalf("CheckAtStart error = %q; want both failures, each with its module, alpha first", text)
+	}
+	if strings.Join(ran, ",") != "alpha,zeta" || !sawNest {
+		t.Fatalf("checks ran %v (saw registry and nest client: %v); want alpha,zeta on the Controller FromRegistry built", ran, sawNest)
+	}
+	failing["alpha"], failing["zeta"], ran = false, false, nil
+	if err := controller.CheckAtStart(); err != nil || len(ran) != 2 {
+		t.Fatalf("CheckAtStart with every dependency present = %v, ran %v", err, ran)
+	}
+	if err := (*Controller)(nil).CheckAtStart(); err == nil {
+		t.Fatal("CheckAtStart accepted a nil Controller")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("registering the zeta start check twice did not panic")
+		}
+	}()
+	requireAtStart("zeta", func(*Controller) error { return nil })
+}
+`,
+	}
+	if sum, err := os.ReadFile(filepath.Join(repo, "go.sum")); err == nil {
+		files["go.sum"] = string(sum)
+	}
+	for name, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("go", "test", "-count=1", "-run", "^TestStartChecks$", "./game/controllers")
+	cmd.Dir, cmd.Env = root, append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("start checks in the generated package: %v\n%s", err, out)
+	}
+}
+
+// 生成的协议登记先建 Controller，再跑模块的启动检查，之后才注册协议：检查失败时一条协议都不注册，进程起不来。
+func TestProtocolRegistrationRunsStartChecksBeforeRegistering(t *testing.T) {
+	defs := &Definitions{ModulePath: "example.com/game", Messages: []MsgDef{{Name: "Ping", Req: "PingRequest", Resp: "PingResponse", Handler: "ping", ReqID: 1}}}
+	content, err := generateProtocolRegistration(defs, "player")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	build, check, register := strings.Index(text, "ctl, err := controllers.FromRegistry(registry)"), strings.Index(text, "if err := ctl.CheckAtStart(); err != nil {"), strings.Index(text, "RegisterPingPlayerProtocolsWith(protocols, ctl)")
+	if build < 0 || check < build || register < check {
+		t.Fatalf("registration does not build the Controller, run its start checks, then register (%d, %d, %d):\n%s", build, check, register, text)
 	}
 }
 

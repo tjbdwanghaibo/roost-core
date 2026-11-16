@@ -23,11 +23,20 @@ import (
 )
 
 // cdkeyDeps 是一次兑换用到的依赖：兑换账本的 Nest Sender、directory 客户端、mail 客户端。都不带状态，
-// 每次兑换从 Controller / Registry 取（检查与错误文本同原来的 FromRegistry）；取不到是装配错误，这次兑换失败。
+// 每次兑换从 Controller / Registry 取（检查与错误文本同原来的 FromRegistry）；启动检查已经验过一遍，
+// 取不到只会是装配错误，这次兑换失败。
 type cdkeyDeps struct {
 	ledger    *sender.CdkeySender
 	directory directory.Directory
 	mailer    mailbox.Sender
+}
+
+// 启动时先把兑换的依赖取一遍（检查与错误文本同原来的 FromRegistry）；缺了进程起不来。
+func init() {
+	requireAtStart("cdkey", func(controller *Controller) error {
+		_, err := controller.cdkeyDependencies()
+		return err
+	})
 }
 
 func (controller *Controller) cdkeyDependencies() (cdkeyDeps, error) {
