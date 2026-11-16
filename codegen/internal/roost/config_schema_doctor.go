@@ -175,7 +175,7 @@ func serviceConfigSchema(m Manifest, service string) (configschema.Schema, error
 		groups = append(groups, m.Services[target].Framework+".client")
 	}
 	if serviceSingletonEnabled(m, service) {
-		groups = append(groups, "redis") // 单实例锁按 redis.* 连接（kitredis.SingletonStore）
+		groups = append(groups, "etcd") // 单实例锁按 etcd.* 连接（kitetcd.SingletonStore）
 	}
 	schemas := make([]configschema.Schema, 0, len(groups)+1)
 	for _, group := range groups {

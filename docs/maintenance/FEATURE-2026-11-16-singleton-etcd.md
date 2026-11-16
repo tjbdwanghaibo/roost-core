@@ -2,7 +2,7 @@
 
 本轮三项方案的依赖、实施顺序、全量测试与时间预估见[总览](FEATURE-2026-11-16-round-overview.md)。
 
-状态：**已定做法 A，暂不实施**（维护者 2026-11-16 决定，第 7 节三问均已答复）。
+状态：**已实施（阶段 1a，分支 `feat/round-20261116`），待阶段 7 的全量、先失败后通过证据与真实进程演练**（维护者 2026-11-16 定做法 A，第 7 节三问均已答复）。实施时追加的决定：生成的 `singleton.startup_wait` 由 30s 改为 35s（第 6 节第 2 条的换 leader 最坏情况）。演练脚本 `scripts/testdata/singleton-etcd-drill/singleton-etcd-drill.sh`。
 
 ## 1. 现状与问题
 

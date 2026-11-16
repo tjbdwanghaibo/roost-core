@@ -7,7 +7,7 @@
 // 本机专用的只有三处，都在本文件：physics-slot-N 票据的 loopback 鉴权、首个输入时按需创建的房间（Seat），
 // 以及房间内容握手（Content）。房间内容缺省是 CrowdScene；game 子命令加 --level 时改用校验过的 UGC 关卡 JSON
 // （export-level 子命令导出可编辑的示例）。正式部署由业务提供账号鉴权、开房、选座与内容发布，其余接线照搬。
-// 依赖：NATS、Redis（App 单实例锁，Gate 接线要求）与 etcd（Game 候选发现），地址见 configs/。
+// 依赖：NATS 与 etcd（App 单实例锁——Gate 接线要求——与 Game 候选发现），地址见 configs/。
 package main
 
 import (
@@ -35,7 +35,6 @@ import (
 	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	roomwiring "github.com/tjbdwanghaibo/roost-core/wiring/physicsroom"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 )
 
 // 客户端协议与本机拓扑：Unity 的 client/physics-viewer 用同样的值。三个 sid 要与 configs/ 里的 sid 一致，
@@ -59,7 +58,7 @@ func main() {
 		slog.Error("physicsroom-local", "error", err)
 		os.Exit(1)
 	}
-	a := app.New("physicsroom-local", buildinfo.VersionString()).Singleton(kitredis.SingletonStore)
+	a := app.New("physicsroom-local", buildinfo.VersionString()).Singleton(kitetcd.SingletonStore)
 	a.RootCmd().PersistentFlags().StringVar(&players.levelPath, "level", "", "game only: validated UGC level JSON; empty uses the CrowdScene level")
 	a.RootCmd().AddCommand(&cobra.Command{Use: "export-level <file>", Short: "write the sample obstacle level JSON and exit", Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {

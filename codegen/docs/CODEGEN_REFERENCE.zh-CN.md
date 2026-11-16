@@ -98,7 +98,7 @@ roost project next --workflow player-tcp
 roost project deps
 ```
 
-配置段：服务配置建工程时生成一次、之后归应用；`add mod` / `add saga` / `add access` / `add rpc` 让服务多出 Mod 时追加缺的顶层段，手改 `roost.yaml` 后 `project sync` 不追加。doctor 的 `config-sections:<service>` 只读检查三份配置（dev、prod 示例、k8s Secret 示例）是否缺服务实际注册的 Mod 的段（带 DataEngine 的服务另查 `redis:` / `singleton:` 与 `singleton.enabled: true`），缺了报 WARN 并给出可直接追加的文本；有意删掉的段同样会报，可以忽略，或留空段（如 `saga: {}`）消掉提示。检查项清单见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
+配置段：服务配置建工程时生成一次、之后归应用；`add mod` / `add saga` / `add access` / `add rpc` 让服务多出 Mod 时追加缺的顶层段，手改 `roost.yaml` 后 `project sync` 不追加。doctor 的 `config-sections:<service>` 只读检查三份配置（dev、prod 示例、k8s Secret 示例）是否缺服务实际注册的 Mod 的段（带 DataEngine 的服务另查 `etcd:` / `singleton:` 与 `singleton.enabled: true`），缺了报 WARN 并给出可直接追加的文本；有意删掉的段同样会报，可以忽略，或留空段（如 `saga: {}`）消掉提示。检查项清单见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
 
 sync / deps 的暂存与提交语义（同级临时目录、逐文件原子替换与回滚、并发修改拒绝覆盖、只解析 roost-core 一个模块）见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
 
@@ -190,7 +190,7 @@ roost add rpc guild -service game
 
 | 命令 | 必需参数 | 生成/修改 | 下一步 |
 | --- | --- | --- | --- |
-| `add access player` | 多 Service 时 `--service` | roost.yaml、access Mod（internal/access/player，派发层用 core 的 infra/network/playeraccess）、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
+| `add access player` | 多 Service 时 `--service` | roost.yaml、access Mod（internal/access/player，派发层用 core 的 infra/network/playeraccess）、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 etcd 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
 | `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
 | `add gate [<name>]` | 已有玩家 TCP、托管 account 且玩家服务 uses 它（`roost module add login` 一并做好） | roost.yaml 的 Gate 服务（缺省 gate；mods etcd、nats，uses account）与 `access.player.gate`、玩家服务补 etcd；Gate 服务的 bootstrap（不自动登记的 etcd + `accessplayertcp.NewGateMod()`）、配置（`player_access.gate` 的 namespace / addr / advertise_addr，singleton 打开）、部署模板；玩家服务的 `bootstrap.New()` 走 Game Ingress，配置关嵌入 TCP、加 `player_access.gate`，装了登录模块时写 `login.presence.addr` | `roost project doctor` 的 gate:*；生产示例里填两端的 advertise_addr（`roost help gate`） |
 | （生成）实体 lifecycle | 无 | `game/entities/<entity>/lifecycle_gen.go`（`roost generate`；v1.47.0 起不再有 `add lifecycle`） | 登录/创角边界从 Registry 构造（`<entity>.LifecycleFromRegistry`） |

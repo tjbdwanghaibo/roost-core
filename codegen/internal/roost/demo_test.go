@@ -1333,7 +1333,7 @@ func TestNoActivityGroupsFileWithoutTheCoordinator(t *testing.T) {
 // 同时守“与开发配置同源”：每个服务的生产示例与开发配置的键集合一致；Secret 示例里 demo 追加的段与生产示例一致；
 // 前缀取值与开发配置、以及所属服务自己的配置相同；密钥不沿用开发值（生产里是 CHANGE_ME，由运维填）。
 // Secret 与生产示例整体同源由 k8s_contract_test.go 守。
-// App 单实例锁：game 带 dataengine，三份配置都要 singleton.enabled: true、key_prefix 为 roost:<project>:singleton，
+// App 单实例锁：game 带 dataengine，三份配置都要 singleton.enabled: true、key_prefix 为 /<project>/singleton，
 // 取值满足 App 启动校验的三条关系。按玩家的 Redis 表已删除，game_route 段在三份配置里都不能再有。
 
 // configLeaves flattens a YAML document into dotted key -> scalar text.
@@ -1480,7 +1480,7 @@ func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
 			if err := checkDemoGameInitConfig(body); err != nil {
 				t.Errorf("%s: the game refuses it at Init: %v", rel, err)
 			}
-			assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
+			assertSingletonOn(t, rel, leaves, "/planet/singleton")
 			for key := range leaves {
 				if key == "game_route" || strings.HasPrefix(key, "game_route.") {
 					t.Errorf("%s still has %s; the per-player route table and its keyspace were removed with static binding", rel, key)

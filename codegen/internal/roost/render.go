@@ -389,7 +389,7 @@ func renderBootstrap(m Manifest) string {
 	}
 	installSingleton := projectInstallsSingleton(m)
 	if installSingleton {
-		imports[modCatalog["redis"].ImportPath] = modCatalog["redis"].Alias
+		imports[modCatalog["etcd"].ImportPath] = modCatalog["etcd"].Alias
 	}
 	services := sortedServiceNames(m)
 	for _, name := range services {
@@ -520,7 +520,7 @@ func renderBootstrap(m Manifest) string {
 	if installSingleton {
 		// 单实例锁的后端（app.Singleton）。是否启用由每个服务配置的 singleton.enabled 决定，
 		// enabled=false 时 opener 不会被调用，所以只要有配置能打开它就安装（projectInstallsSingleton）。
-		b.WriteString("\ta.Singleton(kitredis.SingletonStore)\n")
+		b.WriteString("\ta.Singleton(kitetcd.SingletonStore)\n")
 	}
 	shared, _ := resolveMods(m.SharedMods)
 	if len(shared) > 0 {
@@ -825,15 +825,17 @@ func Managers() []app.IManager {
 
 // App 单实例锁（app.Singleton，见 framework/app/singleton.go）的生成规则。
 //
-// 生成值与 app/singleton.go 的默认值相同（15s / 3s / 5s / 2×ttl），满足 App 启动检查（singleton.* 的声明）钉住的三条关系：
+// 生成值 15s / 3s / 5s 与 app/singleton.go 的默认值相同，startup_wait 写 35s（比缺省的 2×ttl 多 5s，见下），满足 App
+// 启动检查（singleton.* 的声明）钉住的三条关系：
 // renew_interval ≤ guard、2×renew_interval ≤ ttl − guard、startup_wait ≥ ttl + 2×renew_interval。
 const (
 	generatedSingletonTTL           = 15 * time.Second
 	generatedSingletonRenewInterval = 3 * time.Second
 	generatedSingletonGuard         = 5 * time.Second
-	// generatedSingletonStartupWait 是 singleton.startup_wait 的生成值（2×ttl）；部署侧的启动等待
-	// （k8s startupProbe、shell HEALTH_ATTEMPTS、compose start_period）按它覆盖。
-	generatedSingletonStartupWait = 2 * generatedSingletonTTL
+	// generatedSingletonStartupWait 是 singleton.startup_wait 的生成值：35s（维护者 2026-11-16）。锁存 etcd 后，
+	// etcd 换 leader 会把全部租约续满一次，旧持有者真死时新进程最坏要等 2×ttl 再多约 1s，2×ttl（30s）没有余量。
+	// 部署侧的启动等待（k8s startupProbe、shell HEALTH_ATTEMPTS、compose start_period）按它覆盖。
+	generatedSingletonStartupWait = 35 * time.Second
 )
 
 // serviceSingletonEnabled 报告生成器是否给这个服务的配置写 singleton.enabled: true：resolved mods 含
@@ -853,7 +855,7 @@ func serviceConfigMods(m Manifest, service string) []string {
 }
 
 // serviceConfigSections 是生成器为一个服务的当前 Mod 写进服务配置的配置段，按写入顺序：每个 Mod 的起始段
-// （modConfigSection）、托管框架服务的段、带 DataEngine 的服务的单实例锁连接用 redis: 段与打开的 singleton: 段。
+// （modConfigSection）、托管框架服务的段、带 DataEngine 的服务的单实例锁连接用 etcd: 段与打开的 singleton: 段。
 // 同一个顶层键只出现一次。renderServiceConfig 按它写新工程的配置，doctor 的 config-sections 检查按它找
 // 已有配置里缺的段（只读，见 checkConfigSections）。不带 DataEngine 的服务的 singleton: 段（enabled: false）
 // 不在其中：缺这一段与写 false 效果相同。
@@ -883,29 +885,34 @@ func serviceConfigSections(m Manifest, service string) []string {
 		add(playerGateConfigSection(m))
 	}
 	if serviceSingletonEnabled(m, service) {
-		// 只补 redis: 配置段给单实例锁的连接用，不把 Redis Mod 强加给服务。
-		add(modConfigSection("redis", m.Project.Name))
+		// 只补 etcd: 配置段给单实例锁的连接用，不把 etcd Mod 强加给服务（已有 etcd Mod 的服务上面已经写过这一段）。
+		add(modConfigSection("etcd", m.Project.Name))
 		add(renderSingletonConfig(m.Project.Name, true))
 	}
 	return sections
 }
 
-// projectInstallsSingleton 报告 bootstrap 是否安装 kitredis.SingletonStore：项目里有 redis Mod（任何服务
+// projectInstallsSingleton 报告 bootstrap 是否安装 kitetcd.SingletonStore：项目里有 etcd Mod（任何服务
 // 都可以在配置里手工打开 singleton，bootstrap 是生成文件、用户改不了），或有服务默认打开
-// （dataengine 服务没有 redis Mod 时同样要装，否则启动时 fail-closed）。
+// （dataengine 服务没有 etcd Mod 时同样要装，否则启动时 fail-closed）。全工程只有这一个后端：Live 与 Gate、
+// cellworldhost 的 IdentityChecker 要读别的进程的锁键，后端不一致就读不到。
 func projectInstallsSingleton(m Manifest) bool {
 	all := allProjectMods(m)
-	return contains(all, "redis") || contains(all, "dataengine")
+	return contains(all, "etcd") || contains(all, "dataengine")
 }
 
-// renderSingletonConfig 是服务配置里的 singleton: 段。打开的段要求同一文件有 redis: 段
-// （kitredis.SingletonStore 从它建自己的连接），renderServiceConfig 与 appendModConfigSections 负责补上。
+// renderSingletonConfig 是服务配置里的 singleton: 段。打开的段要求同一文件有 etcd: 段
+// （kitetcd.SingletonStore 从它的 endpoints 与凭据建自己的连接），renderServiceConfig 与 appendModConfigSections 负责补上。
+// key_prefix 是 /<project>/singleton，与发现的 /<project>/services/ 在同一个 etcd 目录下，etcdctl 按前缀能放在一起看。
 func renderSingletonConfig(project string, enabled bool) string {
 	var b strings.Builder
 	b.WriteString("singleton:\n")
-	b.WriteString("  # One process per server type + sid: before any Mod starts, the App takes the Redis key\n")
-	b.WriteString("  # <key_prefix>:<server_type>:<sid> (connecting with this file's redis.* settings), renews it,\n")
-	b.WriteString("  # stops the process when it is lost, and releases it after every Mod has stopped.\n")
+	b.WriteString("  # One process per server type + sid: before any Mod starts, the App takes the etcd key\n")
+	b.WriteString("  # <key_prefix>:<server_type>:<sid> on a lease (connecting with this file's etcd.* settings),\n")
+	b.WriteString("  # renews it, stops the process when it is lost, and releases it after every Mod has stopped.\n")
+	b.WriteString("  # The lock lives in the same etcd as service discovery: when etcd is unavailable for\n")
+	b.WriteString("  # ttl - guard, every process holding a lock stops (production: run etcd with 3+ members).\n")
+	b.WriteString("  # Every service of the project uses the same etcd.endpoints and key_prefix; ttl is whole seconds.\n")
 	if enabled {
 		b.WriteString("  # On by default for a service with the Data Engine (one WAL writer per sid). The App refuses\n")
 		b.WriteString("  # to start unless renew_interval <= guard, 2 x renew_interval <= ttl - guard and\n")
@@ -913,10 +920,10 @@ func renderSingletonConfig(project string, enabled bool) string {
 		b.WriteString("  # start-up allowance with it (k8s startupProbe, compose start_period, HEALTH_ATTEMPTS).\n")
 	} else {
 		b.WriteString("  # Off: the generator cannot tell whether this service runs more than one process per sid.\n")
-		b.WriteString("  # Turning it on needs redis.addr or redis.cluster_addrs in this file.\n")
+		b.WriteString("  # Turning it on needs etcd.endpoints in this file.\n")
 	}
 	fmt.Fprintf(&b, "  enabled: %t\n", enabled)
-	fmt.Fprintf(&b, "  key_prefix: roost:%s:singleton\n", project)
+	fmt.Fprintf(&b, "  key_prefix: /%s/singleton\n", project)
 	fmt.Fprintf(&b, "  ttl: %s\n  renew_interval: %s\n  guard: %s\n  startup_wait: %s\n",
 		seconds(generatedSingletonTTL), seconds(generatedSingletonRenewInterval), seconds(generatedSingletonGuard),
 		seconds(generatedSingletonStartupWait))
@@ -1059,11 +1066,11 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		}
 	}
 	// 后加进 dataengine 的服务：生成时写的 enabled: false 段翻成 true（turnGeneratedSingletonOn），
-	// 没有 singleton: 段的文件追加打开的段，并补上单实例锁连接用的 redis: 段（已有则跳过）。
+	// 没有 singleton: 段的文件追加打开的段，并补上单实例锁连接用的 etcd: 段（已有则跳过）。
 	// 否则这个服务会带着 enabled: false 静默不启用。
 	turnOn := !serviceSingletonEnabled(before, service) && serviceSingletonEnabled(after, service)
 	if turnOn {
-		sections = append(sections, modConfigSection("redis", after.Project.Name), renderSingletonConfig(after.Project.Name, true))
+		sections = append(sections, modConfigSection("etcd", after.Project.Name), renderSingletonConfig(after.Project.Name, true))
 	}
 	if len(sections) == 0 {
 		return nil, nil
@@ -1548,11 +1555,11 @@ func renderCompose(m Manifest) string {
 			needed[svc] = true
 		}
 	}
-	// A service whose generated config turns the singleton on connects to Redis
-	// for the lock even without the Redis Mod.
+	// A service whose generated config turns the singleton on connects to etcd
+	// for the lock even without the etcd Mod.
 	for _, service := range sortedServiceNames(m) {
 		if serviceSingletonEnabled(m, service) {
-			needed["redis"] = true
+			needed["etcd"] = true
 		}
 	}
 	var b strings.Builder

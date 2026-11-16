@@ -284,8 +284,8 @@ func enableDemoPlayerTCP(root, gameService string) error {
 // exhausted. The refund only runs on the sid the sender is bound to; while
 // that process restarts every attempt just times out, and an exhausted
 // compensation is manual_required. A restart can take singleton.startup_wait
-// (30s) + singleton.ttl (15s) + the time to be started and run Init (45s
-// allowed): 90s, hence max_attempts 15. A step's budget is shared by both
+// (35s) + singleton.ttl (15s) + the time to be started and run Init (45s
+// allowed): 95s, hence max_attempts 15. A step's budget is shared by both
 // directions, so the debit's forward attempts get the same 15 — harmless: at
 // most one attempt of one operation takes effect, and a debit that never ran
 // took nothing. The relation is pinned by
@@ -315,7 +315,7 @@ func demoGiftRefundBudget(root, gameService string) error {
 		after := marker +
 			indent + "# debit's compensation is the refund, which only runs on the sender's sid: 15\n" +
 			indent + "# attempts (>= 98s with backoff) outlast a crash restart of that sid\n" +
-			indent + "# (startup_wait + ttl + 45s = 90s); see internal/service/" + gameService + "/gift_saga.go.\n" +
+			indent + "# (startup_wait + ttl + 45s = 95s); see internal/service/" + gameService + "/gift_saga.go.\n" +
 			indent + "steps:\n" + indent + "  gift_item:\n" + indent + "    debit:\n" + indent + "      max_attempts: 15\n"
 		if !strings.Contains(string(raw), before) {
 			return fmt.Errorf("%s: expected an empty saga.steps block to replace", path)

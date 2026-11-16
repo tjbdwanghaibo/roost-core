@@ -1027,13 +1027,14 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 
 // kubernetesStartupFailureThreshold is the startupProbe's failureThreshold at
 // periodSeconds 2: 60s, or singleton.startup_wait + 30s for a service with the
-// singleton on (the same 60s at the generated 30s startup_wait).
+// singleton on (65s at the generated 35s startup_wait), rounded up to whole probes.
 func kubernetesStartupFailureThreshold(m Manifest, service string) int {
 	allowance := 60 * time.Second
 	if serviceSingletonEnabled(m, service) {
 		allowance = max(allowance, generatedSingletonStartupWait+30*time.Second)
 	}
-	return int(allowance / (2 * time.Second))
+	const period = 2 * time.Second
+	return int((allowance + period - 1) / period)
 }
 
 func renderKubernetesPDB(m Manifest, service string) string {

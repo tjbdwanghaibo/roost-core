@@ -26,19 +26,29 @@ RuntimeFailure 是进程级不能继续安全写入的信号；失败回调包�
 
 ### 单实例锁在后端短暂不可用时
 
-续期按固定节拍：上一次及时 Applied 的发起时刻记为 T，节拍点是 T + k × `renew_interval`；报错或超时记“结果未知”、下一拍重试；回复不早于 T + `ttl − guard` 的失败判失锁并 fail-stop（让进程在键可能过期之前停下）。所以后端（Redis）不可用时，最后一次能挽回的是“失败回复第一次落到 T + `ttl − guard` 之后”的那一拍，它之前恢复就继续持有，晚于它就失锁：
+续期按固定节拍：上一次及时 Applied 的发起时刻记为 T，节拍点是 T + k × `renew_interval`；报错或超时记“结果未知”、下一拍重试；回复不早于 T + `ttl − guard` 的失败判失锁并 fail-stop（让进程在键可能过期之前停下）。所以后端（生成工程是 etcd，见下）不可用时，最后一次能挽回的是“失败回复第一次落到 T + `ttl − guard` 之后”的那一拍，它之前恢复就继续持有，晚于它就失锁：
 
 - 立即失败（连接被拒）：T 之后第一个不早于 T + `ttl − guard` 的节拍，即 T + ⌈(`ttl − guard`) / `renew_interval`⌉ × `renew_interval`（缺省 15s / 5s / 3s 时 T+12s）；
 - 请求挂到单次超时才失败（丢包）：再早一拍（缺省 T+9s，它的超时结论落在 T+12s）。
 
-不可用可能在 T 之后将近一个 `renew_interval` 才开始，所以**从断开开始算，对任意相位都扛得住的时长比上面再短一个 `renew_interval`**：缺省配置下连接被拒时 9～12s、丢包时 6～9s，不是 `ttl − guard`。Redis 后端还要再减去驱动的恢复延迟：go-redis 连接池连续 `PoolSize` 次拨号失败后不再拨号、直接返回上次的错误，由后台每秒探测一次，锁客户端（`PoolSize` 2）断开两拍后就进入这个状态，Redis 恢复后续期最多还会失败约 1s。依赖“Redis 短断开不停服”的用例或运维预案按这个时长留余量；这只会让失锁提前，不会让两个进程同时持锁。回归：`TestSingletonSurvivesAStoreOutageOnlyUntilTheLastChanceBeat`（singleton_test.go）。
+不可用可能在 T 之后将近一个 `renew_interval` 才开始，所以**从断开开始算，对任意相位都扛得住的时长比上面再短一个 `renew_interval`**：缺省配置下连接被拒时 9～12s、丢包时 6～9s，不是 `ttl − guard`。后端恢复后客户端重连还有延迟（etcd 客户端是 gRPC 连接的重连退避），这段时间续期仍失败，依赖“短断开不停服”的用例或运维预案按这个时长留余量；这只会让失锁提前，不会让两个进程同时持锁。回归：`TestSingletonSurvivesAStoreOutageOnlyUntilTheLastChanceBeat`（singleton_test.go）。
+
+### 锁存在 etcd（2026-11-16 起）
+
+生成工程的后端是 `kitetcd.SingletonStore`（[wiring/etcd/singleton.go](../../../wiring/etcd/singleton.go)），锁与服务发现共用一个 etcd 集群（同一组 `etcd.endpoints`），键 `<singleton.key_prefix>:<server_type>:<sid>` 挂在持有者申请的 `ttl` 秒租约上，续锁就是续租约（先 KeepAlive，再核对键值与租约）；业务时间高水位 `<key_prefix>:business_time` 不挂租约。框架层的接口、状态机与时间关系不变。
+
+- **etcd 不可用 → 开锁进程 fail-stop**：etcd 连续不可用超过上面算出的时长，所有开着单实例锁的进程在窗口末尾停下（维护者 2026-11-16 接受）。etcd 因此同时决定路由与存活，**生产要求 etcd 三节点或更多**。
+- **全工程一套**：Live 与 Gate、cellworldhost 的 IdentityChecker 要读别的进程的锁键，所以一个工程里所有开锁或读锁的服务必须用同一组 `etcd.endpoints` 与同一个 `singleton.key_prefix`；doctor 的 `singleton:etcd-consistent` 检查这一条。
+- **时间窗口只会更保守**：租约由 leader 从收到 Grant / KeepAlive 时计时，不早于 App 读取的 `asked`；etcd 换 leader 时把全部租约续满一次，旧锁只会更晚过期，互斥不受影响，代价是新进程最坏要等 2 × `ttl` 再多约 1s。生成的 `singleton.startup_wait` 因此是 35s（缺省 2 × `ttl` = 30s 没有余量；手写配置不写时仍取 2 × `ttl`，赶上换 leader 可能超时启动失败、由部署重启兜底）。
+- **`singleton.ttl` 必须是整秒**：etcd 租约以秒计，不是整秒时 opener 拒绝，不偷偷取整。
+- 续锁与 Live 用两个独立的 etcd 客户端，Live 的并发读不会把续锁排在后面。
 
 ### 有效窗口过期后不可复活（v1.47.0 起）
 
-单实例锁的本地有效窗口是上一次及时续期的发起时刻加 `ttl`。窗口一过，进程**永久失锁并 fail-stop**，之后即使续期 Applied（Redis 的键仍是自己的）也不恢复。原来“卡住后恢复、续期成功就继续持有”的行为取消了。这对所有开了 singleton 的服务都生效：进程被 SIGSTOP、长 GC、调试器断点或虚拟机暂停超过 `ttl`（缺省 15s）后恢复，就会停下，由编排重启。
+单实例锁的本地有效窗口是上一次及时续期的发起时刻加 `ttl`。窗口一过，进程**永久失锁并 fail-stop**，之后即使续期 Applied（后端的键仍是自己的）也不恢复。原来“卡住后恢复、续期成功就继续持有”的行为取消了。这对所有开了 singleton 的服务都生效：进程被 SIGSTOP、长 GC、调试器断点或虚拟机暂停超过 `ttl`（缺省 15s）后恢复，就会停下，由编排重启。
 
 - 续期 goroutine 在每次 CAS 之前和之后都核对一次窗口，迟到的 Applied 不延长写入许可。
-- 需要跨进程接管的模块（cellworld）经 `app.Lookup` 取 `ModSingletonLease` 能力（`SingletonLease`），在业务准入、提交、出站前调 `Check()`。它只看本地时钟、不访问 Redis，覆盖进程恢复后业务 goroutine 比续期 goroutine 先被调度的情况。
+- 需要跨进程接管的模块（cellworld）经 `app.Lookup` 取 `ModSingletonLease` 能力（`SingletonLease`），在业务准入、提交、出站前调 `Check()`。它只看本地时钟、不访问协调存储，覆盖进程恢复后业务 goroutine 比续期 goroutine 先被调度的情况。
 - `Check()` 发现窗口已过时会把锁置为 Lost，并**在调用方的 goroutine 上同步**执行 RuntimeFailure 的 OnFail 回调（包括 Nest 围栏）。所以新加的 OnFail 回调不能依赖“由续期 goroutine 调用”，也不能去拿业务入口正持有的锁。
 - “检查之后、真正写入之前”仍有一个空档，单靠本地时钟消除不了；跨进程写入的最终防线是存储侧的条件写（cellworld 用授权记录的 CAS）。
 

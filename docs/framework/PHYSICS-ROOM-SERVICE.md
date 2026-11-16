@@ -123,7 +123,7 @@ Unity `Room.unity` 经下文本机三进程的 Gate 连接这套 Host / Service�
 | `game`（sid 22） | NATS Mod、etcd Mod（只发现）、`NewClientMod(7801)`、`gate.NewGameIngressMod`、`PlayerIngress` | 启动时固定一个关卡：缺省 CrowdScene（slot N 控制刚体 50+N），`--level <json>` 时用校验过的 UGC 关卡（slot N 控制 `Players[N-1]`）；首个输入时按需建房（寿命 1h，停服时销毁）；`0x50485903` 内容握手返回关卡字节、SHA-256 与受控刚体 |
 | `gate`（sid 11） | NATS Mod、etcd Mod（只发现）、`gate.NewGateMod` | TCP `127.0.0.1:19093`，经 etcd 找到 sid 22 的 game |
 
-本机专用的只有 `physics-slot-N`（N=1..20）票据鉴权、Seat 与 Content（关卡），都在 main.go；正式部署由业务提供账号鉴权、开房、选座与内容发布，其余照搬。Gate 不读关卡，超出所选关卡槽数的票据由 game 的 Seat / Content 拒绝。依赖 NATS（4222）、Redis（6379，App 单实例锁，`wiring/gate` 要求启用）与 etcd（2379，Gate 发现 Game）。比原双进程多了 Redis 与 etcd：它们是 `wiring/gate` 正式装配的前提，不为本机另造一套。
+本机专用的只有 `physics-slot-N`（N=1..20）票据鉴权、Seat 与 Content（关卡），都在 main.go；正式部署由业务提供账号鉴权、开房、选座与内容发布，其余照搬。Gate 不读关卡，超出所选关卡槽数的票据由 game 的 Seat / Content 拒绝。依赖 NATS（4222）与 etcd（2379：App 单实例锁——`wiring/gate` 要求启用——与 Gate 发现 Game，2026-11-16 起锁也存 etcd，不再要 Redis）。比原双进程多了 etcd：它是 `wiring/gate` 正式装配的前提，不为本机另造一套。
 
 ```sh
 scripts/physics/build-native.sh   # 一次

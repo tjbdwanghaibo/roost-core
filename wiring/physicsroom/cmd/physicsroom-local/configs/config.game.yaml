@@ -5,9 +5,7 @@ log:
   file: false
 singleton:
   enabled: true
-  key_prefix: roost-physics-local
-redis:
-  addr: 127.0.0.1:6379
+  key_prefix: /roost-physics-local/singleton
 nats:
   url: nats://127.0.0.1:4222
   prefix: roost-physics-local
