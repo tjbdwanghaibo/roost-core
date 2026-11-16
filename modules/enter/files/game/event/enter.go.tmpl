@@ -1,0 +1,17 @@
+package event
+
+// EnterFirst 在新玩家首次初始化的那笔 Player 事务里发布（进入组件的 Init / Create 都经宿主的 GrantFirstEnter：
+// 先执行工程的 firstEnter，再发布它）。两条路（加载或创建、先新建）上都只发布一次，“只发一次”由同一笔事务里的
+// 初始化标记保证。监听只改同一个 Player（初始等级、初始属性、活动锚点、新手发放），不调服务、不发消息；
+// 返回错误时整笔回滚，玩家仍是没初始化，下次进入再做。NowUnixMilli 是这条 Nest 消息冻结的业务时间。
+type EnterFirst struct {
+	NowUnixMilli int64
+}
+
+// EnterCreate 在新建请求（EnterCreate）的那笔 Player 事务里发布，排在首次初始化（EnterFirst）之前；只在“先新建”
+// 那条路上发布，EnterGame 里直接建成的玩家不经过它。Name 是客户端给的名字，原样。监听只改同一个 Player
+// （没装 naming 时 profile 在这里把名字写进档案）；返回错误时整笔新建回滚（带码错误的码回给客户端）。
+type EnterCreate struct {
+	Name         string
+	NowUnixMilli int64
+}

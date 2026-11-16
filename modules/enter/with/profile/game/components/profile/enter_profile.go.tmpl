@@ -1,0 +1,17 @@
+package profile
+
+import "{{MODULE}}/game/event"
+
+// OnEnterCreate 在新建请求（EnterCreate）的那笔 Player 事务里把名字写进档案（enter 与 profile 的联动，两个都装着时才有），
+// 与初始发放、“建成了”的标记一起提交或回滚；名字不合规时返回档案的带码错误，整笔新建回滚。
+// 装了唯一命名入口（naming）时不写：名字已经在新建事务之前经它提交（game/modules/login/enter_profile.go 的
+// reserveCreateName），在这里直接写会绕过全服唯一。
+//
+//roost:listen
+func (component *Component) OnEnterCreate(ev event.EnterCreate) error {
+	if HasRenamer() {
+		return nil
+	}
+	_, err := component.Rename(ev.Name)
+	return err
+}

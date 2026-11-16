@@ -23,7 +23,7 @@ import (
 //     与没有这个文件时完全相同。
 //   - 先新建（规则对这条会话答 true）：EnterGame 只进入已经建成的玩家，没建成答 enter_need_create、什么都不写；
 //     客户端发 EnterCreate（带名字）建成之后再发 EnterGame。角色名的规则因此在游戏服：名字的校验与写入
-//     由别的功能登记在新建的登记点上（OnCreating、OnCreatePrepare、实体包的 OnCreate）。
+//     由别的功能登记在新建的登记点上（OnCreating、OnCreatePrepare），以及新建事务里的实体事件 event.EnterCreate 的监听。
 //
 // “建成”只有一个事实：档里的首次初始化标记（PlayerDao.Enter.Initialized）。有档而标记没置位（上次建到一半）
 // 与没有档是一回事——都要新建。
@@ -187,7 +187,7 @@ const MaxCreateNameBytes = 256
 type CreateSteps struct {
 	// Ensure 保证玩家的档在：没有就创建一份空档（不做首次初始化），有就什么都不做。
 	Ensure func(ctx context.Context) error
-	// Commit 在一笔事务里把玩家建成：事务内的新建钩子（实体包的 OnCreate，名字写进档案）、首次初始化
+	// Commit 在一笔事务里把玩家建成：新建事件（event.EnterCreate 的监听，名字写进档案）、首次初始化
 	// （初始发放）与“建成了”的标记一起提交或一起回滚。已经建成的玩家返回 enter_created，不写任何东西。
 	Commit func(ctx context.Context, name string) error
 }
@@ -200,7 +200,7 @@ type CreateSteps struct {
 //  2. 新建前检查（RunCreating）：名字不合规在这里被拒。到这一步为止什么都没写。
 //  3. steps.Ensure：建一份空档（已经有就不动）。
 //  4. 新建步骤（RunCreatePrepare）：要有档才能做的事务外步骤。失败则到此为止，玩家仍是没建成。
-//  5. steps.Commit：一笔事务建成。失败（提交被拒、钩子报错）整笔回滚，玩家仍是没建成，可以重试。
+//  5. steps.Commit：一笔事务建成。失败（提交被拒、事件监听报错）整笔回滚，玩家仍是没建成，可以重试。
 //
 // 成功之后玩家已经建成，但这不是一次进入：进入钩子（OnEntered）不在这里跑，客户端接着发 EnterGame，
 // 那一次进入报 First=true（档里记着“建成之后还没进过”）。

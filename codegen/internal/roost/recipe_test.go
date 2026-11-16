@@ -117,7 +117,7 @@ func TestRecipesCreateBuildableCompositions(t *testing.T) {
 				t.Fatalf("recipe %s verify: %v", name, err)
 			}
 			if name == "casual" {
-				recipeMutationMustFail(t, target, "game/modules/login/enter_first.go", "return RunFirstEnter(host, nowUnixMilli)", "return nil", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "initial coins = 0")
+				recipeMutationMustFail(t, target, "game/modules/login/enter_first.go", "return host.Publish(event.EnterFirst{NowUnixMilli: nowUnixMilli})", "_ = event.EnterFirst{}; return nil", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "initial coins = 0")
 				recipeMutationMustFail(t, target, "game/components/enter/enter.go", "if state.GetInitialized() {", "if false && state.GetInitialized() {", "./game/handler", "TestRecipeFirstGrantAndRepeatEnter", "repeat =")
 				// 登录链路的三条：进服票据握手的会话不再被当成“先新建”、换服在途的角色被放进来、已经建成的玩家能再新建一次（首次发放会再发）。
 				recipeMutationMustFail(t, target, "game/modules/login/login_enter.go", `return claims[EnterTicketClaim] == "1"`, "return false", "./internal/access/player/tcp", "TestRecipeTCPEnterTicketCreatesFirstThenEnters", "EnterStatus for a new account")

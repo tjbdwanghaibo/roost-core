@@ -1,0 +1,30 @@
+package view
+
+import db "{{MODULE}}/db"
+
+// Enter 是进入组件对 game/ 下其它包公开的方法（实现在 game/components/enter，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Enter interface {
+	Init(nowUnixMilli int64) (EnterInitResult, error)
+	Existing() (EnterInitResult, error)
+	Built() bool
+	Create(name string, nowUnixMilli int64) error
+}
+
+// EnterHolder 是“带有进入组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它，Nest handler 收生成的 IEnterEntity。
+type EnterHolder interface {
+	Enter() Enter
+	// EnterState 是宿主方法：返回宿主 DAO 里的那份进入记录（纯 DAO 交接，生成器写）。
+	EnterState() *db.EnterState
+	// GrantFirstEnter 是宿主方法：首次初始化的发放（Player 上手写在 game/entities/player/enter.go：工程的 firstEnter，
+	// 再发布 event.EnterFirst）。在首次初始化的那笔事务里调用，返回错误整笔回滚。
+	GrantFirstEnter(nowUnixMilli int64) error
+}
+
+// EnterInitResult 是首次初始化（Nest handler EnterInit / EnterExisting）的结果。
+type EnterInitResult struct {
+	// First 为 true 表示这一次进入执行了首次初始化（新玩家）。
+	First bool
+	// FirstAtUnixMilli 是这名玩家首次初始化提交时的业务时间。首次与之后的每次进入都填同一个值，
+	// 所以它可以当作“注册时间”用（例如全服邮件的“注册早于发送才收得到”）。
+	FirstAtUnixMilli int64
+}

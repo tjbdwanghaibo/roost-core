@@ -1,6 +1,7 @@
 package login
 
 import (
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/view"
 )
 
@@ -20,12 +21,13 @@ func firstEnter(host view.PlayerEntity, nowUnixMilli int64) error {
 	return nil
 }
 
-// GrantFirstEnter 是首次初始化的发放：工程自己的 firstEnter，然后是别的功能登记的钩子（OnFirstEnter）。
-// Player 的 enter 接线（game/entities/player/enter_component.go）经它实现 enter.FirstEnterGranter；
-// Init 与 Create 都经它，所以两条路上发的东西一样。
+// GrantFirstEnter 是首次初始化的发放：工程自己的 firstEnter，然后在 Player 上发布实体事件 event.EnterFirst
+// （别的功能在自己的组件或 Player 的方法上用 //roost:listen 监听，按 priority 排好顺序）。Player 的宿主方法
+// GrantFirstEnter（game/entities/player/enter.go）经它实现 view.EnterHolder；Init 与 Create 都经它，所以两条路上发的东西一样。
+// 监听返回的错误原样返回，交给 Nest 整笔回滚。
 func GrantFirstEnter(host view.PlayerEntity, nowUnixMilli int64) error {
 	if err := firstEnter(host, nowUnixMilli); err != nil {
 		return err
 	}
-	return RunFirstEnter(host, nowUnixMilli)
+	return host.Publish(event.EnterFirst{NowUnixMilli: nowUnixMilli})
 }

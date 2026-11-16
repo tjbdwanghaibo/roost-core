@@ -1,0 +1,18 @@
+package player
+
+import "{{MODULE}}/game/event"
+
+// InitialCoins 是休闲配方的新手发放规则，业务可直接修改此文件。
+const InitialCoins int64 = 100
+
+// OnEnterFirst 在新玩家首次初始化（建档）的那笔 Player 事务里发新手金币，与“建成了”的标记一起提交或回滚；
+// 重复进入不再发。
+//
+// priority=30 保持改成事件之前的执行顺序：原来的首次初始化钩子按登记名字母序执行（activity、casual、profile、
+// profile.attribute）。
+//
+//roost:listen priority=30
+func (e *Player) OnEnterFirst(ev event.EnterFirst) error {
+	_, err := e.Wallet().Add(InitialCoins)
+	return err
+}
