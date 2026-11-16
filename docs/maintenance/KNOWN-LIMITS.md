@@ -779,7 +779,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
   - 组件类型号挪进组件包，activity 只用一个类型号。
 
   暂不实施。方案见 [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)。
-- **组件钩子改为事务内事件（已决定待实施）**：维护者 2026-11-16 定：重写 `framework/event`，做成事务内同步事件；业务层只定义事件结构体（`//roost:event`）和监听声明（`//roost:listen`），监听方有没有实现由生成器判断。暂不实施。方案见 [FEATURE-2026-11-16-tx-event](FEATURE-2026-11-16-tx-event.md)。
+- **组件钩子改为事务内事件（已决定待实施）**：维护者 2026-11-16 定：事件定义集中在 `game/event`；实体底层自带 `Publish`；core 提供“事件名 + 回调”的登记方法，由生成代码调用；实体方法和组件方法都可以用 `//roost:listen` 标记为监听（第二版方案）。暂不实施。方案见 [FEATURE-2026-11-16-tx-event](FEATURE-2026-11-16-tx-event.md)。
 
 ### 框架服务与 game-demo（遗留）
 

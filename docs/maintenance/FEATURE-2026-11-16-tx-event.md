@@ -1,199 +1,241 @@
-# 方案：事务内同步事件（framework/event 重写，监听由生成器接线）（2026-11-16）
+# 方案：实体事件（framework/entity 自带 Publish，监听由生成器登记）（2026-11-16，第二版）
 
-状态：**方案，未实施。** 维护者 2026-11-16 定下三条：
+**状态：方案，未实施。**
 
-- 重写 `framework/event`，做成事务内同步事件；
-- 业务层只做两件事：定义事件结构体、声明要监听的事件名；
-- 监听方有没有实现，由代码生成判断。
+本方案和 [controllers 合包、组件接口收进 view](FEATURE-2026-11-16-controllers-view-layout.md) 属于同一轮整理，两者一起实施。
 
-本方案和 [controllers 合包、组件接口收进 view](FEATURE-2026-11-16-controllers-view-layout.md) 是同一轮整理，事件类型也放在 view。
+## 0. 维护者定的要求（2026-11-16）
+
+1. **事件定义集中放在 `game/event/`。**
+2. **实体底层自带 `Publish`。** 生成器不再为每个事件生成发布方法。
+3. **core 提供"事件名 + 回调方法"的登记方法。** 由生成代码调用它完成登记。
+4. **用 `//roost:listen` 标记监听方法。** 实体的方法和组件的方法都可以标记。
+
+和第一版相比：
+- 事件不再放在 view，也不再由生成器在 view 里写 `Publish`；
+- 去掉了独立的 `//roost:event` 标记和存根机制：方法标了 `//roost:listen` 就登记，没标就不登记，生成器据此判断"实现了没有"。
 
 ## 1. 要替换的东西
 
-### 1.1 现在的钩子
+### 1.1 现有的钩子
 
-19 个模块共有 33 个 `OnXxx` 登记点。其中 9 个模块各写了一份 `hooks.go`，合计约 630 行。每份都是同一套做法：
+- **规模**：19 个模块共有 33 个 `OnXxx` 登记点，其中 9 个模块各自手写了一份 `hooks.go`，合计约 630 行。
+- **做法**：
+  - 每份都是一张登记表加读写锁，在 init 时登记；
+  - 执行时按名字排序，同步依次调用；
+  - 任何一个返回错误，就交给 Nest 回滚整笔事务。
+- **登记位置**：监听方的登记代码放在 `with/<对方模块>/` 下，只有两个模块都装了才会生成。
 
-- 用一张登记表加读写锁，在 `init` 里登记；
-- 执行时按名字排序，依次调用；
-- 任何一个返回错误，就把错误交还 Nest，整笔事务回滚。
+### 1.2 旧的 framework/event
 
-监听方的登记代码放在 `with/<对方模块>/` 下，只有两个模块都装了才会生成。
+旧包已在 10-13 的 fa3d2e4e 中删除，不恢复：
 
-### 1.2 旧的 `framework/event`（10-13 删除，fa3d2e4e）
-
-不捡回来，原因有四点：
-
-- 它是每个实体实例在运行时订阅、销毁时退订，靠 eventgen 生成 `InitSub`/`SyncHandleEvent` 里的 switch 分发；
-- 事件编号是 `int32`，需要全局分配；
+- 它让每个实例在运行时订阅；
 - 订阅方没有返回值，既不能拦截，也不能让事务回滚；
-- 发给别的实体时走一个语义没有定义的 `AsyncDispatcher`，和 Nest 的事务模型冲突。
+- 跨实体时走一个语义未定义的异步分发。
 
-这次只沿用包名，从头重写。
+本方案只借用"实体能发布事件"这个形态，实现重写。
 
 ### 1.3 33 个登记点的分类
 
-实施时先按下表逐个确认：
-
 | 类别 | 登记点 | 处理 |
 |---|---|---|
-| **通知**：事情已经发生，监听方在同一笔事务里跟着改 | ProfileLevelUp、WalletSpent、ShopBought、StaminaSpent、CheckinClaimed、DungeonClaimed、EquipmentChanged、AttributeChanged、TeamChanged、RehomeArrived / Arrived、Submitted、Entered、FirstEnter、Create、Leaving、Region、SceneInteract | 改成事件 |
-| **拦截**：事情发生之前问一遍，返回错误就拒绝 | Entering、Creating、Applying、RehomeApplying、RoomJoining、TeamJoining、MatchmakingStarting | 改成事件。监听方返回错误就是拒绝 |
-| **扩展提供方**：登记工厂、字段表、配置修改器或取值函数，不是"发生了什么" | Actor（钩子工厂）、ActorSyncFields、SceneFields、CompileEnvironment、AttributeGear、CreatePrepare、LocalChannel | 不改成事件，保留现在的登记方式 |
-| **不在实体事务里** | SessionActive（连接层） | 用事件的 `tx=none` 选项（见 §2.1）；如果确认不需要，就保留现状 |
+| **通知**：事情已经发生，同一实体在同一笔事务里跟着改 | ProfileLevelUp、WalletSpent、ShopBought、StaminaSpent、CheckinClaimed、DungeonClaimed、EquipmentChanged、AttributeChanged、TeamChanged、RehomeArrived / Arrived、Submitted、Entered、FirstEnter、Create、Leaving、Region、SceneInteract | 改为实体事件 |
+| **拦截**：事情发生之前询问，返回错误就拒绝 | Entering、Creating、Applying、RehomeApplying、RoomJoining、TeamJoining、MatchmakingStarting | 改为实体事件，返回错误即拒绝 |
+| **扩展提供方**：登记工厂、字段表、配置修改器、取值函数 | Actor、ActorSyncFields、SceneFields、CompileEnvironment、AttributeGear、CreatePrepare、LocalChannel | 不是"发生了什么"，保留现有登记方式 |
+| **连接层**：不在实体锁里 | SessionActive | 实体事件只能在实体被锁住时发布，所以保留现状 |
 
-## 2. 业务层要写的东西
+实施时逐个核对这张表。现在所有通知和拦截类钩子改的都是**发布事件的那个实体自己**（例如 Player 自己的任务、属性、活动），这正好落在实体事件的范围内。
 
-只有两样：
+## 2. 业务层写什么
 
-### 2.1 事件结构体（放在 view）
+### 2.1 事件定义：`game/event/`
+
+`game/event` 成为 `game/` 下第七个固定层，和 components、controllers、entities、handler、managers、view 并列。每个模块放一个文件：
 
 ```go
-// game/view/event_profile.go（profile 模块带来）
+// game/event/profile.go（profile 模块带来）
+package event
 
-//roost:event host=Player
+// ProfileLevelUp 在 Player 升级成功后、同一笔事务内发布。
 type ProfileLevelUp struct {
     From, To int32
 }
 ```
 
-- `host`：事件发生在哪种实体上，写实体名，对应 view 里生成的 `<实体>Entity`。监听方拿到的就是这个实体，并且已经被这笔事务锁住。
-- `tx`：可选。缺省是 `required`，只能在 Nest 事务内发布；`none` 表示可以在事务外发布，这时监听方的错误交还给发布方，但没有回滚可言。
-- 事件结构体只放值，不放指针或实体引用。这和现在钩子的参数一致。
+- **事件名就是结构体名。** 同在一个包里，天然不会重名。
+- **不需要标记。** `game/event` 下导出的结构体都算事件。
+- **依赖要求：** `game/event` 处在最底层，只允许 import 标准库和 `db`，不能 import game 下的其他包。事件里只放值，不放实体引用或指针。
 
-### 2.2 监听声明（放在监听方自己的包里）
-
-```go
-// game/modules/activity/activity_profile.go（只在装了 profile 时生成，即现在的 with/profile）
-
-//roost:listen ProfileLevelUp
-func OnProfileLevelUp(host view.PlayerEntity, e view.ProfileLevelUp) error {
-    return host.Activity().Reconcile("profile.level_up", 0)
-}
-```
-
-- 监听名就是事件名。处理函数的名字固定为 `On<事件名>`，放在声明所在的包里。
-- 参数里的 host 可以写实体总接口，也可以写更窄的 view 接口，只要实体总接口满足它。这一点在编译时就会检查，见 §3.2。
-- 一个包可以监听多个事件，每个事件写一个 `//roost:listen`。
-
-### 2.3 发布
+### 2.2 发布：实体自带 `Publish`
 
 ```go
-// game/components/profile/levelup.go
-if err := (view.ProfileLevelUp{From: from, To: to}).Publish(host); err != nil {
+// 组件里（宿主是 view 接口）
+if err := host.Publish(event.ProfileLevelUp{From: from, To: to}); err != nil {
     return 0, err
 }
 ```
 
-`Publish` 方法由生成器写在 view 里（见 §3.1），参数类型就是事件声明的 host 接口。传错实体类型会编译不过。
+`Publish(ev any) error` 加在 `entity.IThreadSafeEntity` 上，由 `EntityBase` 实现。view 里所有实体接口都嵌入了 `IThreadSafeEntity`，所以拿到宿主就能发布。
 
-## 3. 生成器做的事
+### 2.3 监听：在方法上标 `//roost:listen`
 
-在 `roost generate` 里新增 event 一步，放在 entity（view 接口）之后、nest 之前。`generate --check` 也覆盖这一步。
-
-### 3.1 view 里：`game/view/events_gen.go`
-
-为每个 `//roost:event` 生成三样东西：
-
-- 一个 `Publish` 方法：`func (e ProfileLevelUp) Publish(host PlayerEntity) error { return event.Publish(host, e) }`；
-- 一个 `Listener` 类型：`type ProfileLevelUpListener func(PlayerEntity, ProfileLevelUp) error`；
-- 一份事件清单，包括事件名、host 和 tx，供运行时核对。
-
-### 3.2 接线：`game/handler/events_gen.go`
-
-handler 包本来就 import 实体包、组件包和功能包，是 Nest 处理函数的登记层；事件监听也是事务内的处理函数，所以接线放在这里。
+**组件级**：方法写在组件上，组件挂在哪些实体上，就在这些实体上生效。
 
 ```go
-func init() {
-    event.Register("ProfileLevelUp", event.TxRequired, func(host view.PlayerEntity, e view.ProfileLevelUp) error {
-        if err := activity.OnProfileLevelUp(host, e); err != nil { return fmt.Errorf("activity: %w", err) }
-        if err := attribute.OnProfileLevelUp(host, e); err != nil { return fmt.Errorf("attribute: %w", err) }
-        if err := mailbox.OnProfileLevelUp(host, e); err != nil { return fmt.Errorf("mailbox: %w", err) }
-        return nil
-    })
+// game/components/activity/activity_profile.go（只在装了 profile 时生成，即现在的 with/profile）
+
+//roost:listen
+func (c *Component) OnProfileLevelUp(ev event.ProfileLevelUp) error {
+    return c.Reconcile("profile.level_up", 0)
 }
 ```
 
-- **顺序**：按监听方包的 import 路径排序，生成时就固定下来。运行时没有登记表、没有锁，也不用排序。
-- **没有监听方的事件**：也会登记，执行体为空。这样发布一个没声明过的类型时，运行时可以明确报错。
-- **类型检查**：监听函数参数里的 host 是窄接口时，生成代码直接把 `view.PlayerEntity` 传进去，接口不满足就编译失败。
-
-### 3.3 "实现不实现"的判断
-
-生成器扫描每个 `//roost:listen <事件>`，按下表处理：
-
-| 情况 | 处理 |
-|---|---|
-| 同包里有签名正确的 `On<事件>` | 接线 |
-| 没有 `On<事件>` | 在声明所在文件末尾**追加存根**，只追加、不改已有内容，和协议存根同一个规则。存根返回 nil，第一行带存根标记；生成器打印"未实现"提示 |
-| 有 `On<事件>` 但签名不对 | 生成失败，说明期望的签名 |
-| 监听了不存在的事件，比如对方模块没装 | 生成失败 |
-| 同一个包对同一个事件写了两次 `//roost:listen` | 生成失败 |
-| 写了 `On<事件>` 但没有 `//roost:listen` | 不接线；生成器提示"有处理函数但没声明监听" |
-
-**存根为什么返回 nil，而不是返回错误**：返回错误会让源操作整笔回滚，比如升级本身失败。所以存根什么都不做，改由检查来拦住：
-
-- `roost project doctor` 新增 `event:stub`，列出还带存根标记的监听方；
-- 仓库自带模块的门禁（`module verify`）发现存根就判失败。
-
-## 4. core 运行时：`framework/event`
-
-约一百行，只做这几件事：
+**实体级**：方法写在实体上，只对这一种实体生效。
 
 ```go
-type TxMode int // TxRequired / TxNone
+// game/entities/player/player_naming.go
 
-// Register 只由生成的 init 调用；同名重复登记，或 App 启动后登记，直接 panic。
-func Register[H any, E any](name string, mode TxMode, dispatch func(H, E) error)
-
-// Publish 由 view 生成的 <E>.Publish 调用。
-func Publish[H any, E any](host H, e E) error
+//roost:listen
+func (e *Player) OnProfileRenaming(ev event.ProfileRenaming) error {
+    return apperrors.ErrNamingRequired
+}
 ```
 
-`Publish` 按以下顺序处理：
+规则：
 
-1. 用 E 的类型查登记。没登记过就报错。这张表只在 init 期间写，启动后只读，所以不加锁。
-2. `TxRequired` 时检查 `nest.CurrentRollbackTx()`，不在事务内就返回 `ErrTransactionClosed`。判断方式和 `nest.Emit` 相同。
-3. 嵌套深度加一。监听方可以再发布事件，嵌套超过 8 层就报错，事务随之回滚，用来挡住互相触发的死循环。深度记在当前事务上，需要 nest 的 `RollbackTx` 增加一个计数字段。
-4. 调用生成的 dispatch，然后原样返回它的错误。
+- **方法签名固定**：只有一个参数，类型是 `game/event` 里的某个结构体，按值传入；返回 `error`。监听哪个事件由参数类型决定。方法名不限，约定写成 `On<事件名>`。
+- **数量限制**：同一个接收者对同一个事件只能有一个监听方法。
+- **拦截类事件**：监听方法返回错误，发布方就拒绝这次操作。
 
-不做的事：
+## 3. core：framework/entity
 
+### 3.1 登记方法：事件名 + 回调
+
+```go
+// RegisterEventListener 把一个回调登记到某种实体的某个事件上，只由生成代码在 init 里调用。
+// eventName 用于日志和错误信息，取 E 的类型名；listener 是 "<接收者>.<方法>"，例如 "activity.Component.OnProfileLevelUp"。
+// 回调按登记先后执行。重复登记同一个 listener，或在 App 启动之后登记，直接 panic。
+func RegisterEventListener[T IThreadSafeEntity, E any](kind EntityKind, eventName, listener string, fn func(T, E) error)
+```
+
+内部是一张 `kind → 事件类型 → []回调` 的表。只在 init 期间写入，启动之后只读，所以不加锁。
+
+### 3.2 `EntityBase.Publish`
+
+**问题**：`EntityBase` 按设计不持有外层实体的接口引用，但回调需要拿到具体的实体（比如 `*Player`）。
+
+**做法**：和现有的 `SetHooks(onClear, onDestroy)` 一样，由生成的实体工厂注入一个函数：
+
+```go
+// 生成的工厂里
+e.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(KindPlayer, e, ev) })
+```
+
+`Publish(ev)` 按以下步骤执行：
+
+1. **检查锁**：实体必须正被 Nest 锁住，也就是当前在 Nest 事务里，否则返回 `ErrTransactionClosed`。
+   - entity 包不能 import nest，因为 nest 已经 import 了 entity。所以由 nest 在自己的 init 里注入检查函数：`entity.SetEventTxCheck(func() bool { return CurrentRollbackTx() != nil })`。
+2. **嵌套深度加一**：监听方法可以再发布事件，超过 8 层就报错，用来挡住互相触发的死循环。
+   - 计数放在 `EntityBase` 上。事件只在同一个实体上分发，而这个实体正被这一笔事务锁着，所以不需要再加锁。
+3. **查表、执行**：按 `(kind, ev 的类型)` 查到回调列表，依次执行。遇到第一个错误就停下，包装成 `"<事件名> listener <listener>: <err>"` 返回，由调用方交给 Nest 回滚。
+4. **没有监听的事件**：返回 nil。
+
+**不做的事**：
 - 不做异步；
 - 不跨实体：要改别的实体，仍然走 Nest 发送；
-- 不跨进程：跨进程仍然用 `nest.Emit`，它有 outbox 或 best-effort 的投递语义；
-- 不在运行时订阅或退订。
+- 不跨进程：跨进程用 `nest.Emit`，它有 outbox 或 best-effort 投递语义；
+- 不支持运行时订阅或退订。
 
-## 5. 迁移
+## 4. 生成器
 
-1. 把 §1.3 的"通知"和"拦截"两类，改写成 view 里的事件结构体加 `Publish` 调用，删掉 9 份 `hooks.go` 和其他模块里的同类登记表。
-2. 把 `with/<模块>/` 下的 `init()` 登记，改成 `//roost:listen` 加 `On<事件>`。安装条件不变，仍是两个模块都装了才生成。
-3. "扩展提供方"一类不动。
-4. 文档：
-   - `codegen/docs/TAGS` 新增 `//roost:event`、`//roost:listen`；
-   - framework 文档新增事件一节，写清和 `nest.Emit` 的分工；
-   - 写进 compose.md 的复用规则：新玩法联动先找现成的事件；
+在 entity 生成器（`codegen/internal/entity`）里新增事件登记，每个实体包生成一个 `<实体>_event_gen.go`：
+
+```go
+func init() {
+    entity.RegisterEventListener(KindPlayer, "ProfileLevelUp", "player.Player.OnProfileLevelUp",
+        func(e *Player, ev event.ProfileLevelUp) error { return e.OnProfileLevelUp(ev) })
+    entity.RegisterEventListener(KindPlayer, "ProfileLevelUp", "activity.Component.OnProfileLevelUp",
+        func(e *Player, ev event.ProfileLevelUp) error { return e.ActivityComp().OnProfileLevelUp(ev) })
+    entity.RegisterEventListener(KindPlayer, "ProfileLevelUp", "attribute.Component.OnProfileLevelUp",
+        func(e *Player, ev event.ProfileLevelUp) error { return e.AttributeComp().OnProfileLevelUp(ev) })
+}
+```
+
+### 4.1 扫描范围
+
+- 实体包本身：找实体类型上的方法，以及定义在实体包里的组件（`roost add component` 生成的那种）上的方法；
+- 实体挂载的每个组件所在的包：从 `comp:"<包>.CompTypeX"` 标签解析出包路径。
+
+这些地方带 `//roost:listen` 的方法都会被登记。activity 这种挂在多个实体上的组件，会在每个实体的生成文件里各登记一次。
+
+### 4.2 执行顺序（生成时固定）
+
+1. 实体自己的监听方法排在前面；
+2. 然后是各组件，按组件初始化顺序排列（已有的确定性拓扑序，见 CHANGELOG d610a1b6）；
+3. 同一个接收者有多个监听方法时，按方法名排序。
+
+### 4.3 生成时报错的情况
+
+- 标了 `//roost:listen` 但签名不对：参数不是唯一一个 `game/event` 结构体，或者返回值不是 `error`；
+- 标记写在普通函数上，而不是方法上；
+- 接收者既不是实体，也不是被某个实体挂载的组件；
+- 同一个接收者对同一个事件有多个监听方法。
+
+### 4.4 只提示、不报错的情况
+
+- 组件有监听方法，但当前工程里没有实体挂载这个组件；
+- 事件在 `game/event` 里定义了，但没有任何监听方法（发布时什么也不做，属于正常情况）。
+
+### 4.5 doctor
+
+新增 `event:publish` 检查：扫描 `.Publish(` 的调用，发现参数不是 `game/event` 里的类型时给出警告。这是静态兜底，防止把普通结构体当事件发布，结果没人收到。
+
+## 5. 安装器和目录规则
+
+- `game/event/` 加入固定层：
+  - 模块只能往里放 `game/event/<模块>.go`；
+  - 安装器要检查这个文件只 import 标准库和 `db`。
+- 监听方法照旧通过 `with/<对方模块>/` 文件带进来，安装条件不变：对方模块没装，事件类型就不存在，监听文件也不会生成。
+- 本方案和 controllers/view 方案里的组件类型号调整（`comp:"<包>.CompTypeX"`）一起实施，扫描组件包时依赖这个新标签。
+
+## 6. 迁移
+
+1. 把 §1.3 中"通知"和"拦截"两类钩子改成 `game/event` 里的结构体。原来调 `runXxx` 的地方改成 `host.Publish(...)`。删掉 9 份 `hooks.go` 和其他模块里的同类登记表。
+2. 把 `with/<模块>/` 下 init 里的登记，改成组件上带 `//roost:listen` 的方法。
+   - 原来写在功能包里的登记（例如 `game/modules/activity` 里的那个），挪成对应组件的方法。
+   - 少数不属于任何组件的，写成实体上的方法。
+3. naming 现在在 profile 的改名 handler 里做类型断言拦截。改成：profile 发布一个拦截事件 `ProfileRenaming`，naming 在 Player 上监听它。
+4. 文档要改：
+   - `codegen/docs/TAGS` 新增 `//roost:listen`；
+   - framework 文档新增"实体事件"一节，写清和 `nest.Emit`、Nest 发送的分工；
+   - compose.md：新玩法要联动时，先找现成的事件；
+   - 目录约定加上 `game/event`；
    - CHANGELOG 和迁移步骤。
-5. 线上未部署，不做兼容。
+5. 线上还没部署，不做兼容。
 
-## 6. 验证
+## 7. 验证
 
 - **core 单测**：
-  - 未登记的类型报错；
-  - 事务外发布：`TxRequired` 被拒绝、`TxNone` 放行；
-  - 监听出错时，整笔事务回滚，用真实的 Nest 事务测；
-  - 嵌套超过上限报错；
-  - 启动后登记会 panic。
-- **生成器单测**：§3.3 表里的每种情况都有用例；存根追加后重跑，不再改动文件；生成结果排序确定。
-- **先失败后通过**：去掉 dispatch 里"出错就返回"这一步，profile 的"升级钩子出错则整笔回滚"场景必须失败。
-- **模块门禁**：现有联动场景（task 进度、attribute 刷新、activity 资格、mailbox 发奖、各拦截）的数量不变，并且全部通过。
+  - 事务外发布被拒绝；
+  - 多个回调按登记顺序执行，遇到第一个错误就停下，错误信息带上事件名和监听方；
+  - 用真实 Nest 事务验证：监听出错时整笔回滚，包括发布方自己的改动；
+  - 嵌套超过上限会报错；
+  - 启动后再登记会 panic；
+  - 没有监听的事件返回 nil。
+- **生成器单测**：
+  - §4.3 的每种报错情况各一个用例；
+  - 组件挂在多个实体上时，每个实体都登记了；
+  - 多次生成，顺序和内容不变。
+- **先失败后通过**：把 `DispatchEvent` 改成"出错也继续执行"，profile 的"升级联动出错则整笔回滚"场景必须失败。
+- **模块门禁**：现有联动场景（task 进度、attribute 刷新、activity 资格、mailbox 发奖、各类拦截）数量不变，全部通过。
 
-## 7. 工作量
+## 8. 工作量
 
 | 项 | 估计 |
 |---|---|
-| core `framework/event`、nest 深度计数、单测 | 约 2 小时 |
-| 生成器（扫描、view 生成、handler 接线、存根、doctor）和单测 | 约 1 天 |
-| 26 个登记点迁到事件，删掉 hooks.go | 约 1 天 |
+| core：登记表、Publish、nest 注入事务检查、单测 | 约半天 |
+| 生成器：扫描实体和组件方法、生成登记代码、报错规则、doctor、安装器规则、单测 | 约 1 天 |
+| 迁移 26 个登记点，删除 hooks.go，改 naming 拦截 | 约 1 天 |
 
-合计约 2.5 天。和 controllers/view 那份方案一起做时，可以共用最后一次全量。
+合计约 2.5 天。和 controllers/view 方案一起做，最后共用一次全量测试。
