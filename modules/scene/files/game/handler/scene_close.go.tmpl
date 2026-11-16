@@ -1,6 +1,6 @@
 package handler
 
-import scene "{{MODULE}}/game/entities/scene"
+import "{{MODULE}}/game/view"
 
 //roost:nest rollback=undo durability=async
-func handlerSceneClose(target scene.ISceneEntity) error { return target.Scene().SceneMembersComp().Close() }
+func handlerSceneClose(target view.ISceneMembersEntity) error { return target.SceneMembers().Close() }

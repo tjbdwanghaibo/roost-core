@@ -1,0 +1,8 @@
+package player
+
+import gamelogin "{{MODULE}}/game/modules/login"
+
+// GrantFirstEnter 是 view.EnterHolder 的宿主方法（生成器不写的那一个；EnterState 由生成器交接 PlayerDao.Enter）：
+// 首次初始化的发放——工程的 firstEnter（game/modules/login/enter_first.go），再在 Player 上发布 event.EnterFirst。
+// 进入组件的 Init 与 Create 都经它，所以两条路上发的东西一样；“只发一次”由组件在同一笔事务里置的标记保证。
+func (e *Player) GrantFirstEnter(nowUnixMilli int64) error { return gamelogin.GrantFirstEnter(e, nowUnixMilli) }

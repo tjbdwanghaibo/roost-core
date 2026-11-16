@@ -8,16 +8,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 
-	player "{{MODULE}}/game/entities/player"
-	building "{{MODULE}}/game/entities/terrain_building"
-	chunk "{{MODULE}}/game/entities/terrain_chunk"
 	logic "{{MODULE}}/game/modules/terrain"
+	"{{MODULE}}/game/view"
 )
 
 // 初始化只在开图装载时调用；整组先校验再写，半份/旧版档不会被原始包覆盖。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainLoad(targets []chunk.ITerrainChunkEntity, world *logic.World) ([]logic.ChunkState, error) {
+func handlerTerrainLoad(targets []view.ITerrainChunkDataEntity, world *logic.World) ([]logic.ChunkState, error) {
 	if world == nil || len(targets) != world.Meta().Chunks() {
 		return nil, logic.ErrState
 	}
@@ -27,24 +25,24 @@ func handlerTerrainLoad(targets []chunk.ITerrainChunkEntity, world *logic.World)
 		if err != nil {
 			return nil, err
 		}
-		if err := target.TerrainChunkDataComp().Initialize(world.ID, keys[i], world.Meta().BaseRevision, base); err != nil {
+		if err := target.TerrainChunkData().Initialize(world.ID, keys[i], world.Meta().BaseRevision, base); err != nil {
 			return nil, err
 		}
 	}
 	out := make([]logic.ChunkState, len(targets))
 	for i, target := range targets {
-		out[i] = target.TerrainChunkDataComp().State()
+		out[i] = target.TerrainChunkData().State()
 	}
 	return out, nil
 }
 
-func terrainTargets(targets []chunk.ITerrainChunkEntity, world *logic.World, keys []core.ChunkKey) (map[core.ChunkKey]*chunk.TerrainChunkDataComponent, error) {
+func terrainTargets(targets []view.ITerrainChunkDataEntity, world *logic.World, keys []core.ChunkKey) (map[core.ChunkKey]view.TerrainChunkData, error) {
 	if world == nil || len(targets) < 1 || len(targets) > 4 || len(targets) != len(keys) {
 		return nil, logic.ErrState
 	}
-	out := map[core.ChunkKey]*chunk.TerrainChunkDataComponent{}
+	out := map[core.ChunkKey]view.TerrainChunkData{}
 	for _, target := range targets {
-		value := target.TerrainChunkDataComp()
+		value := target.TerrainChunkData()
 		state := value.State()
 		if err := value.Validate(world.ID, state.Key, world.Meta().BaseRevision); err != nil {
 			return nil, err
@@ -61,7 +59,7 @@ func terrainTargets(targets []chunk.ITerrainChunkEntity, world *logic.World, key
 	}
 	return out, nil
 }
-func terrainPublish(world *logic.World, targets map[core.ChunkKey]*chunk.TerrainChunkDataComponent) error {
+func terrainPublish(world *logic.World, targets map[core.ChunkKey]view.TerrainChunkData) error {
 	snapshots := make([]logic.ChunkState, 0, len(targets))
 	for _, target := range targets {
 		snapshots = append(snapshots, target.State())
@@ -84,14 +82,14 @@ func terrainPublish(world *logic.World, targets map[core.ChunkKey]*chunk.Terrain
 // 参与者与地图对不上是服务端路由或持久数据的问题，返回不带码的 logic.ErrState。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainBrush(targets []chunk.ITerrainChunkEntity, target player.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
+func handlerTerrainBrush(targets []view.ITerrainChunkDataEntity, target view.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
 	if world == nil || command.SceneID != world.ID {
 		return logic.Result{}, logic.ErrState
 	}
 	if err := logic.ValidateCommand(command, world.Meta()); err != nil {
 		return logic.Result{}, err
 	}
-	result, duplicate, err := target.TerrainComp().Check(command, world.SceneID)
+	result, duplicate, err := target.Terrain().Check(command, world.SceneID)
 	if err != nil || duplicate {
 		return result, err
 	}
@@ -127,7 +125,7 @@ func handlerTerrainBrush(targets []chunk.ITerrainChunkEntity, target player.ITer
 		chunks[change.Key].Apply(change.Points)
 		result.Changed += int32(len(change.Points))
 	}
-	if err := target.TerrainComp().Record(command, result, 0); err != nil {
+	if err := target.Terrain().Record(command, result, 0); err != nil {
 		return result, err
 	}
 	return result, terrainPublish(world, chunks)
@@ -136,18 +134,18 @@ func handlerTerrainBrush(targets []chunk.ITerrainChunkEntity, target player.ITer
 // 建筑固定2x2占位，跨角点至多4块；拆除必须属主与每块Lots都匹配，地表保持当前编辑结果。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainBuild(targets []chunk.ITerrainChunkEntity, site building.ITerrainBuildingEntity, target player.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
+func handlerTerrainBuild(targets []view.ITerrainChunkDataEntity, site view.ITerrainSiteEntity, target view.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
 	if world == nil || command.SceneID != world.ID || command.Op != "build" && command.Op != "remove" {
 		return logic.Result{}, logic.ErrState
 	}
 	if err := logic.ValidateCommand(command, world.Meta()); err != nil {
 		return logic.Result{}, err
 	}
-	result, duplicate, err := target.TerrainComp().Check(command, world.SceneID)
+	result, duplicate, err := target.Terrain().Check(command, world.SceneID)
 	if err != nil || duplicate {
 		return result, err
 	}
-	value := site.TerrainSiteComp()
+	value := site.TerrainSite()
 	if err := value.Validate(command, target.UniqueID()); err != nil {
 		return result, err
 	}
@@ -185,7 +183,7 @@ func handlerTerrainBuild(targets []chunk.ITerrainChunkEntity, site building.ITer
 	if command.Op == "build" {
 		delta = 1
 		id = site.ID()
-		if target.TerrainComp().BuildingCount() >= logic.MaxBuildings {
+		if target.Terrain().BuildingCount() >= logic.MaxBuildings {
 			return result, logic.ErrFull
 		}
 	}
@@ -220,7 +218,7 @@ func handlerTerrainBuild(targets []chunk.ITerrainChunkEntity, site building.ITer
 	}
 	value.Set(command, target.UniqueID())
 	result = logic.Result{Sequence: command.Sequence, Changed: 4, BuildingID: site.ID(), Standing: command.Op == "build"}
-	if err := target.TerrainComp().Record(command, result, delta); err != nil {
+	if err := target.Terrain().Record(command, result, delta); err != nil {
 		return result, err
 	}
 	snapshot := value.Snapshot()
@@ -237,21 +235,21 @@ func handlerTerrainBuild(targets []chunk.ITerrainChunkEntity, site building.ITer
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerTerrainQuery(value chunk.ITerrainChunkEntity, target player.ITerrainEntity, world *logic.World) (logic.ChunkState, error) {
-	if world == nil || target.ActorComp().Body().Map.SceneID() != world.SceneID {
+func handlerTerrainQuery(value view.ITerrainChunkDataEntity, target view.PlayerEntity, world *logic.World) (logic.ChunkState, error) {
+	if world == nil || target.Actor().Body().Map.SceneID() != world.SceneID {
 		return logic.ChunkState{}, logic.ErrDenied
 	}
-	state := value.TerrainChunkDataComp().State()
-	if err := value.TerrainChunkDataComp().Validate(world.ID, state.Key, world.Meta().BaseRevision); err != nil {
+	state := value.TerrainChunkData().State()
+	if err := value.TerrainChunkData().Validate(world.ID, state.Key, world.Meta().BaseRevision); err != nil {
 		return state, err
 	}
-	state.LastSequence = target.TerrainComp().Sequence()
+	state.LastSequence = target.Terrain().Sequence()
 	return state, nil
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerTerrainSite(site building.ITerrainBuildingEntity, world *logic.World) (logic.SiteState, error) {
-	value := site.TerrainSiteComp()
+func handlerTerrainSite(site view.ITerrainSiteEntity, world *logic.World) (logic.SiteState, error) {
+	value := site.TerrainSite()
 	if world == nil || value.SceneID() != world.ID {
 		return logic.SiteState{}, logic.ErrState
 	}

@@ -13,64 +13,64 @@ import (
 
 // App 单实例锁的生成承诺（docs/feature/APP-SINGLETON-LOCK-2026-10-05.md §6.3，第 2 笔）。
 //
-//  1. bootstrap：项目里有 redis Mod，或有带 dataengine 的服务（其配置默认打开 singleton），就生成
-//     a.Singleton(kitredis.SingletonStore)。按“项目里有 redis”而不是按“有服务启用”生成，是因为是否启用
-//     写在归应用所有的配置里，bootstrap 是生成文件、用户改不了；dataengine 服务没有 redis Mod 时也要装，
-//     否则它默认打开的 singleton 在启动时 fail-closed（ErrSingletonOpenerMissing）。
+//  1. bootstrap：项目里有 etcd Mod，或有带 dataengine 的服务（其配置默认打开 singleton），就生成
+//     a.Singleton(kitetcd.SingletonStore)（2026-11-16 起锁存 etcd，与服务发现共用一个集群）。按“项目里有 etcd”
+//     而不是按“有服务启用”生成，是因为是否启用写在归应用所有的配置里，bootstrap 是生成文件、用户改不了；
+//     dataengine 服务没有 etcd Mod 时也要装，否则它默认打开的 singleton 在启动时 fail-closed（ErrSingletonOpenerMissing）。
 //  2. 服务配置：resolved mods 含 dataengine 的服务写 singleton.enabled: true（D-B），并保证同一文件有
-//     redis: 段（kitredis.SingletonStore 从它建连接）；其他服务写 enabled: false 的同一段。后来 add 进
+//     etcd: 段（kitetcd.SingletonStore 从它建连接）；其他服务写 enabled: false 的同一段。后来 add 进
 //     dataengine 的服务把生成时的 enabled: false 段翻成 true，不留一个静默不启用的服务。
 //  3. 停机预算：启用的服务 total_timeout 计入 Release 的 3s（App 在 Mod 停机截止时间上预留它）；
 //     doctor 对 singleton.enabled 的配置同样计入。
 //  4. 启动等待：k8s startupProbe、shell 部署 HEALTH_ATTEMPTS、compose start_period 覆盖
 //     singleton.startup_wait（新进程可能先等旧进程的键过期，再做 DataEngine 重放）。
 
-const singletonBootstrapCall = "a.Singleton(kitredis.SingletonStore)"
+const singletonBootstrapCall = "a.Singleton(kitetcd.SingletonStore)"
 
 func TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn(t *testing.T) {
 	t.Parallel()
 	bootstrap := func(root string) string { return readProjectFile(t, root, "internal/bootstrap/generated.go") }
 
 	plain := copyOfNewProject(t, "configdata")
-	if body := bootstrap(plain); strings.Contains(body, "a.Singleton(") || strings.Contains(body, "wiring/redis") {
-		t.Errorf("a project with neither redis nor dataengine installs a singleton store:\n%s", body)
+	if body := bootstrap(plain); strings.Contains(body, "a.Singleton(") || strings.Contains(body, "wiring/etcd") {
+		t.Errorf("a project with neither etcd nor dataengine installs a singleton store:\n%s", body)
 	}
 
 	for _, shape := range []struct {
 		name string
 		mods []string
 	}{
-		{"redis without dataengine", []string{"configdata", "redis"}},
-		{"dataengine without redis", []string{"configdata", "nest"}},
+		{"etcd without dataengine", []string{"configdata", "etcd"}},
+		{"dataengine without etcd", []string{"configdata", "nest"}},
 	} {
 		root := filepath.Join(t.TempDir(), "planet")
 		if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: root, Mods: shape.mods}); err != nil {
 			t.Fatal(err)
 		}
 		body := bootstrap(root)
-		if !strings.Contains(body, "\t"+singletonBootstrapCall+"\n") || !strings.Contains(body, `kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"`) {
+		if !strings.Contains(body, "\t"+singletonBootstrapCall+"\n") || !strings.Contains(body, `kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"`) {
 			t.Errorf("%s: bootstrap does not install %s:\n%s", shape.name, singletonBootstrapCall, body)
 		}
 		// The store is installed before any server is registered: App.Singleton is an App option.
 		if strings.Index(body, singletonBootstrapCall) > strings.Index(body, "a.RegisterServer(") {
 			t.Errorf("%s: %s comes after RegisterServer:\n%s", shape.name, singletonBootstrapCall, body)
 		}
-		if shape.name == "dataengine without redis" {
-			// The service's singleton is on by default, so its config needs the redis: section the
-			// store connects with, without the Redis Mod being forced on the service.
+		if shape.name == "dataengine without etcd" {
+			// The service's singleton is on by default, so its config needs the etcd: section the
+			// store connects with, without the etcd Mod being forced on the service.
 			for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
 				leaves := configLeaves(t, rel, readProjectFile(t, root, rel))
-				assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
-				if leaves["redis.addr"] == "" {
-					t.Errorf("%s: singleton is on but the file has no redis.addr for the store", rel)
+				assertSingletonOn(t, rel, leaves, "/planet/singleton")
+				if leaves["etcd.endpoints"] == "" {
+					t.Errorf("%s: singleton is on but the file has no etcd.endpoints for the store", rel)
 				}
 			}
-			if strings.Contains(body, "kitredis.NewRedisMod()") {
-				t.Errorf("dataengine without redis: the Redis Mod was forced onto the service:\n%s", body)
+			if strings.Contains(body, "kitetcd.NewEtcdMod(") {
+				t.Errorf("dataengine without etcd: the etcd Mod was forced onto the service:\n%s", body)
 			}
-			// The developer infrastructure has the Redis the store connects to.
-			if compose := readProjectFile(t, root, "deploy/dev/docker-compose.yaml"); !strings.Contains(compose, "\n  redis:\n") {
-				t.Errorf("dataengine without redis: deploy/dev/docker-compose.yaml has no redis service:\n%s", compose)
+			// The developer infrastructure has the etcd the store connects to.
+			if compose := readProjectFile(t, root, "deploy/dev/docker-compose.yaml"); !strings.Contains(compose, "\n  etcd:\n") {
+				t.Errorf("dataengine without etcd: deploy/dev/docker-compose.yaml has no etcd service:\n%s", compose)
 			}
 		}
 	}
@@ -124,9 +124,9 @@ func TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices(t *testing.T)
 		for rel, body := range configs {
 			leaves := configLeaves(t, rel, body)
 			if contains(mods, "dataengine") {
-				assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
-				if leaves["redis.addr"] == "" {
-					t.Errorf("%s: singleton is on but the file has no redis.addr", rel)
+				assertSingletonOn(t, rel, leaves, "/planet/singleton")
+				if leaves["etcd.endpoints"] == "" {
+					t.Errorf("%s: singleton is on but the file has no etcd.endpoints", rel)
 				}
 				continue
 			}
@@ -160,13 +160,13 @@ func TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn(t *testing.T) {
 			t.Errorf("%s: want exactly one singleton: block after add mod dataengine:\n%s", rel, body)
 		}
 		leaves := configLeaves(t, rel, body)
-		assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
-		if leaves["redis.addr"] == "" {
-			t.Errorf("%s: dataengine added, singleton on, but no redis.addr for the store", rel)
+		assertSingletonOn(t, rel, leaves, "/planet/singleton")
+		if leaves["etcd.endpoints"] == "" {
+			t.Errorf("%s: dataengine added, singleton on, but no etcd.endpoints for the store", rel)
 		}
 	}
 	if secret := "deploy/k8s/base/secret.game.example.yaml"; fileExists(filepath.Join(root, secret)) {
-		assertSingletonOn(t, secret, configLeaves(t, secret, secretExampleConfig(t, secret, readProjectFile(t, root, secret))), "roost:planet:singleton")
+		assertSingletonOn(t, secret, configLeaves(t, secret, secretExampleConfig(t, secret, readProjectFile(t, root, secret))), "/planet/singleton")
 	}
 	if body := readProjectFile(t, root, "internal/bootstrap/generated.go"); !strings.Contains(body, singletonBootstrapCall) {
 		t.Errorf("bootstrap after add mod dataengine does not install the store:\n%s", body)
@@ -234,7 +234,7 @@ func TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn(t *testing.T) {
 	}
 	// The same total with the singleton off covers the Mods.
 	body := readProjectFile(t, root, dev)
-	writeProjectFile(t, root, dev, strings.Replace(body, "  enabled: true\n  key_prefix: roost:planet:singleton", "  enabled: false\n  key_prefix: roost:planet:singleton", 1))
+	writeProjectFile(t, root, dev, strings.Replace(body, "  enabled: true\n  key_prefix: /planet/singleton", "  enabled: false\n  key_prefix: /planet/singleton", 1))
 	item = shutdownStatus(t, root)["shutdown:game"]
 	if strings.Contains(item.Detail, dev+": total_timeout") {
 		t.Errorf("singleton off, total 122s still reported short: %s %s", item.Status, item.Detail)
@@ -286,5 +286,59 @@ func TestDeploymentStartupAllowanceCoversTheSingletonWait(t *testing.T) {
 		if !strings.Contains(block, fmt.Sprintf("start_period: %ds\n", want)) {
 			t.Errorf("compose %s: start_period is not %ds:\n%s", service, want, block)
 		}
+	}
+}
+
+// doctor 的 singleton:etcd-consistent：一个工程里所有开锁的服务必须连同一组 etcd.endpoints、用同一个 singleton.key_prefix
+// （Live 与 Gate 的 IdentityChecker 要读别的进程的锁键）。生成的 game-demo 一致；把第二个服务也打开锁后，逐项改坏
+// 地址、改坏前缀、混用 endpoints_env、删掉地址都是 FAIL 并点名；改回后 OK。
+func TestDoctorChecksEveryLockServiceUsesTheSameEtcdAndPrefix(t *testing.T) {
+	t.Parallel()
+	root := newGameDemo(t)
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := checkSingletonEtcd(root, m); item.Status != StatusOK {
+		t.Fatalf("generated game-demo: %s %s", item.Status, item.Detail)
+	}
+	// 再打开一个不带 DataEngine、装了 etcd Mod 的服务的锁，凑出两个开锁的服务。
+	var other string
+	for _, service := range sortedServiceNames(m) {
+		if !serviceSingletonEnabled(m, service) && contains(serviceConfigMods(m, service), "etcd") {
+			other = service
+			break
+		}
+	}
+	if other == "" {
+		t.Fatal("game-demo has no service with the etcd Mod and the singleton off")
+	}
+	rel := "configs/service/config." + other + ".yaml"
+	original := readProjectFile(t, root, rel)
+	on := strings.Replace(original, "  enabled: false\n  key_prefix: /planet/singleton\n", "  enabled: true\n  key_prefix: /planet/singleton\n", 1)
+	if on == original || !strings.Contains(on, "\n  endpoints: [127.0.0.1:2379]\n") {
+		t.Fatalf("precondition: %s has no generated singleton block or etcd endpoints:\n%s", rel, original)
+	}
+	writeProjectFile(t, root, rel, on)
+	if item := checkSingletonEtcd(root, m); item.Status != StatusOK || !strings.Contains(item.Detail, "development configs: ") {
+		t.Fatalf("two lock services on one etcd: %s %s", item.Status, item.Detail)
+	}
+	for _, broken := range []struct {
+		name, from, to, want string
+	}{
+		{"another etcd", "\n  endpoints: [127.0.0.1:2379]\n", "\n  endpoints: [127.0.0.1:12379]\n", `etcd.endpoints differs between the services with the singleton lock`},
+		{"another prefix", "  key_prefix: /planet/singleton\n", "  key_prefix: /other/singleton\n", `singleton.key_prefix differs between the services with the singleton lock`},
+		{"endpoints from a variable", "\n  endpoints: [127.0.0.1:2379]\n", "\n  endpoints: [127.0.0.1:2379]\n  endpoints_env: ROOST_ETCD\n", `"$ROOST_ETCD"`},
+		{"no endpoints", "\n  endpoints: [127.0.0.1:2379]\n", "\n", "writes neither etcd.endpoints nor etcd.endpoints_env"},
+	} {
+		writeProjectFile(t, root, rel, strings.Replace(on, broken.from, broken.to, 1))
+		item := checkSingletonEtcd(root, m)
+		if item.Status != StatusFail || !strings.Contains(item.Detail, broken.want) || !strings.Contains(item.Detail, other) {
+			t.Errorf("%s: %s %s; want FAIL naming %s and %q", broken.name, item.Status, item.Detail, other, broken.want)
+		}
+	}
+	writeProjectFile(t, root, rel, on)
+	if item := checkSingletonEtcd(root, m); item.Status != StatusOK {
+		t.Fatalf("after restoring %s: %s %s", rel, item.Status, item.Detail)
 	}
 }

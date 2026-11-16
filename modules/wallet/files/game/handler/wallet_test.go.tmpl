@@ -20,6 +20,8 @@ import (
 	db "{{MODULE}}/db"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
+	gamewallet "{{MODULE}}/game/components/wallet"
+	"{{MODULE}}/game/event"
 )
 
 type walletGetter map[int64]entity.IThreadSafeEntity
@@ -144,7 +146,7 @@ type walletCallResult struct {
 func (f *walletFixture) call(op, key string, delta int64, swallow bool) (int64, error) {
 	registerWalletCallHandler.Do(func() {
 		nest.MustRegisterHandlerWithMeta(walletCallHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-			component := es[0].(playerentity.IWalletEntity).WalletComp()
+			component := es[0].(*playerentity.Player).Wallet()
 			var balance int64
 			var err error
 			switch params[0].(string) {
@@ -270,17 +272,17 @@ func TestWalletRejectedCommitRollsBackCoinsAndReceipt(t *testing.T) {
 func TestWalletOldReceiptsLeaveTheWindow(t *testing.T) {
 	f := newWalletFixture(t)
 	const extra = 5
-	for i := 0; i < playerentity.WalletReceiptWindow+extra; i++ {
+	for i := 0; i < gamewallet.ReceiptWindow+extra; i++ {
 		if got := f.grant(t, fmt.Sprintf("g%d", i), 1); got != int64(i+1) {
 			t.Fatalf("grant %d: balance = %d", i, got)
 		}
 	}
 	coins, receipts := f.snapshot(t)
-	if coins != playerentity.WalletReceiptWindow+extra || receipts != playerentity.WalletReceiptWindow {
-		t.Fatalf("coins=%d receipts=%d, want %d coins and a full window of %d", coins, receipts, playerentity.WalletReceiptWindow+extra, playerentity.WalletReceiptWindow)
+	if coins != gamewallet.ReceiptWindow+extra || receipts != gamewallet.ReceiptWindow {
+		t.Fatalf("coins=%d receipts=%d, want %d coins and a full window of %d", coins, receipts, gamewallet.ReceiptWindow+extra, gamewallet.ReceiptWindow)
 	}
 	// 窗口内的键仍然去重：最后一次发放重发，余额不变。
-	if got := f.grant(t, fmt.Sprintf("g%d", playerentity.WalletReceiptWindow+extra-1), 1); got != coins {
+	if got := f.grant(t, fmt.Sprintf("g%d", gamewallet.ReceiptWindow+extra-1), 1); got != coins {
 		t.Fatalf("a key inside the window applied again: balance = %d, want %d", got, coins)
 	}
 	// 被淘汰的键不再去重：这是窗口的边界，长期“只发一次”由调用方自己的状态保证。
@@ -486,16 +488,16 @@ func TestWalletNegativeBalanceRefusesEveryDebit(t *testing.T) {
 // ---- 同一个组件挂在第二个实体上 ----
 
 // walletVault 是只在测试里存在的第二个宿主（比如公会金库）：不是 Player，实体 kind 是测试自己的。
-// 它用的组件就是 Player 那一份：经 Player 的组件号登记的工厂创建（工厂是 wallet.NewComponent），
-// 真实宿主照 README 的“复用方式”另申请自己的组件号、登记同一个工厂。测试工程里没有第二个带货币字段的
+// 它用的组件就是 Player 那一份：经同一个类型号 wallet.CompTypeWallet 登记的工厂创建（工厂是 wallet.NewComponent），
+// 真实宿主照 README 的“复用方式”在实体结构体里加 comp:"wallet.CompTypeWallet" 字段。测试工程里没有第二个带货币字段的
 // 生成 DAO，所以它借一份独立的 PlayerDao 实例当自己的存储；真实宿主在自己的 DAO 里加
-// WalletState / WalletLedger 两个字段。它还实现可选的消费回调，用来验证回调失败时整笔回滚。
+// WalletState / WalletLedger 两个字段。测试在它上面监听扣款事件 event.WalletSpent，用来验证监听失败时整笔回滚。
 type walletVault struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
 	dao       *db.PlayerDao
-	wallet    *playerentity.WalletComponent
+	wallet    *gamewallet.Component
 	spent     []int64
 	spentFail bool
 }
@@ -505,18 +507,25 @@ const walletVaultKind entity.EntityKind = 250
 
 var registerWalletVault sync.Once
 
-func (v *walletVault) Base() *entity.EntityBase                  { return v.EntityBase }
-func (v *walletVault) WalletComp() *playerentity.WalletComponent { return v.wallet }
-func (v *walletVault) WalletState() *db.WalletState             { return v.dao.GetWallet() }
-func (v *walletVault) WalletLedger() *db.WalletLedger           { return v.dao.GetWalletLedger() }
+func (v *walletVault) Base() *entity.EntityBase          { return v.EntityBase }
+func (v *walletVault) WalletComp() *gamewallet.Component { return v.wallet }
+func (v *walletVault) WalletState() *db.WalletState      { return v.dao.GetWallet() }
+func (v *walletVault) WalletLedger() *db.WalletLedger    { return v.dao.GetWalletLedger() }
 
-// WalletSpent 是宿主可选的消费回调：在同一笔事务里、扣款写入之后调用，返回错误时整笔回滚。
-func (v *walletVault) WalletSpent(amount, _ int64) error {
+// OnWalletSpent 是测试宿主上的扣款事件监听（init 里登记到 walletVaultKind）：在同一笔事务里、扣款写入之后执行，
+// 返回错误时整笔回滚。
+func (v *walletVault) OnWalletSpent(ev event.WalletSpent) error {
 	if v.spentFail {
 		return errors.New("vault refuses the spend")
 	}
-	v.spent = append(v.spent, amount)
+	v.spent = append(v.spent, ev.Amount)
 	return nil
+}
+
+func init() {
+	// 测试宿主不是生成的实体，没有生成的事件登记；在这里直接登记它的监听（Publish 第一次执行之前）。
+	entity.RegisterEventListener(walletVaultKind, "WalletSpent", "handler_test.walletVault.OnWalletSpent",
+		func(v *walletVault, ev event.WalletSpent) error { return v.OnWalletSpent(ev) })
 }
 
 func newWalletVault(t *testing.T, unique int64) *walletVault {
@@ -532,14 +541,15 @@ func newWalletVault(t *testing.T, unique int64) *walletVault {
 				}
 				v := &walletVault{ComponentManager: entity.NewComponentManager(), DaoManager: entity.NewDaoManager(), dao: db.NewPlayerDao()}
 				v.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)
+				v.EntityBase.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(walletVaultKind, v, ev) })
 				v.dao.SetId(param.StorageID())
 				v.DaoManager.Set(db.PlayerDaoCollection, v.dao)
-				comp, err := entity.CreateComponent(playerentity.CompTypeWallet, v, param)
+				comp, err := entity.CreateComponent(gamewallet.CompTypeWallet, v, param)
 				if err != nil {
 					return nil, err
 				}
-				v.wallet = comp.(*playerentity.WalletComponent)
-				v.ComponentManager.Set(playerentity.CompTypeWallet, v.wallet)
+				v.wallet = comp.(*gamewallet.Component)
+				v.ComponentManager.Set(gamewallet.CompTypeWallet, v.wallet)
 				if err := v.ComponentManager.InitAll(param, param.IsCreate); err != nil {
 					return nil, err
 				}
@@ -585,7 +595,7 @@ func (f *walletFixture) vaultCall(vault *walletVault, op, key string, delta int6
 	return ret.(int64), nil
 }
 
-// vaultState 在业务 worker 上持金库的锁读余额、回执数与已回调的消费。
+// vaultState 在业务 worker 上持金库的锁读余额、回执数与已监听到的扣款。
 func (f *walletFixture) vaultState(t *testing.T, vault *walletVault) (coins int64, receipts int, spent []int64) {
 	t.Helper()
 	if err := f.engine.RunLocal(context.Background(), func() {
@@ -609,7 +619,7 @@ func (f *walletFixture) expectVault(t *testing.T, vault *walletVault, what strin
 }
 
 // 同一个组件挂在第二个实体上：加减、按业务键去重、不足 / 冲突 / 溢出的拒绝与 Player 上一样，
-// 拒绝时什么都不写；宿主的消费回调只在扣款首次生效时调用。玩家的钱包一直不动。
+// 拒绝时什么都不写；扣款事件只在扣款首次生效时发布。玩家的钱包一直不动。
 func TestWalletSecondHostAddsSpendsAndRefuses(t *testing.T) {
 	vault := newWalletVault(t, 72001)
 	f := newWalletFixture(t, vault)
@@ -641,7 +651,7 @@ func TestWalletSecondHostAddsSpendsAndRefuses(t *testing.T) {
 	f.expectWallet(t, "the player's wallet while the vault changed", 0, 0)
 }
 
-// 第二个宿主上的回滚：提交被拒、宿主的消费回调失败，余额与回执都回到事务之前，同一个业务键可以再用。
+// 第二个宿主上的回滚：提交被拒、扣款事件的监听失败，余额与回执都回到事务之前，同一个业务键可以再用。
 func TestWalletSecondHostRollsBack(t *testing.T) {
 	vault := newWalletVault(t, 72002)
 	f := newWalletFixture(t, vault)
@@ -653,11 +663,11 @@ func TestWalletSecondHostRollsBack(t *testing.T) {
 		t.Fatal("vault Apply under a rejected commit reported success")
 	}
 	f.committer.reject.Store(false)
-	// spent 是测试自己在内存里的记录，不随事务回滚：回调在提交之前执行，被拒的那一次也记了一笔。
+	// spent 是测试自己在内存里的记录，不随事务回滚：监听在提交之前执行，被拒的那一次也记了一笔。
 	f.expectVault(t, vault, "after the rejected commit", 100, 1, []int64{30})
 	vault.spentFail = true
 	if _, err := f.vaultCall(vault, "apply", "k1", -30); err == nil {
-		t.Fatal("vault Apply with a failing spend callback reported success")
+		t.Fatal("vault Apply with a failing spend listener reported success")
 	}
 	vault.spentFail = false
 	f.expectVault(t, vault, "after the failed callback", 100, 1, []int64{30})

@@ -4,20 +4,21 @@ import (
 	"fmt"
 
 	"{{MODULE}}/game/announce"
-	chatctl "{{MODULE}}/game/controllers/chat"
+	"{{MODULE}}/game/controllers"
 	"{{MODULE}}/game/settings"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
 // LoginAnnounceCapability 是登录公告合并器（game/announce.Batcher）发布的能力名；EnterGame 按这个名字取它
-// （game/controllers/player 的 loginAnnounceCapability，同一个字符串，那个包不 import 本包）。
+// （game/controllers/player.go 的 loginAnnounceCapability，同一个字符串，那个包不 import 本包）。
 const LoginAnnounceCapability app.ModName = "{{GAME_SERVICE}}.loginannounce"
 
 // startLoginAnnounce 建登录公告的合并器（每秒至多一条，见 game/announce），发布给 EnterGame，并起它的定时器。
-// 发送走 chat 模块的 AnnounceWorld（世界频道的系统消息）。停机时 Shutdown 调 Close，发出最后那一批。
+// 发送走 chat 模块的 AnnounceWorld（世界频道的系统消息；在线名单是进程级的 gamechat.DefaultPresence，与协议登记建的
+// Controller 共用）。停机时 Shutdown 调 Close，发出最后那一批。
 func startLoginAnnounce(registry *app.Registry) (*announce.Batcher, error) {
-	chat, err := chatctl.FromRegistry(registry)
+	chat, err := controllers.FromRegistry(registry)
 	if err != nil {
 		return nil, fmt.Errorf("login announcements: %w", err)
 	}

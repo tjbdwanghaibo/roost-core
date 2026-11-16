@@ -1,0 +1,345 @@
+package controllers
+
+import (
+	sceneentity "{{MODULE}}/game/entities/scene"
+	stdcontext "context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	player "{{MODULE}}/game/entities/player"
+	handlersender "{{MODULE}}/game/handler/sender"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamelogin "{{MODULE}}/game/modules/login"
+	gamerehome "{{MODULE}}/game/modules/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// EnterGame is the demo's login, called by the enter domain's endpoint
+// (HandleEnterGame in game/controllers/enter.go; the protocol and its domain are the
+// enter module's). It makes sure the authenticated player has a Player Entity.
+// A Nest handler addresses an Entity that exists; a first login has none, so
+// this endpoint goes through the lifecycle instead of a Sender. GetOrCreate is
+// safe to race: two logins of the same new player both end holding the one
+// Entity, and only one of them sees Created.
+//
+// 两条路，由会话决定走哪一条，判断是 enter 模块的（gamelogin.CreateFirst，登记规则的是 login 与 enter 的联动：
+// 用进服票据握手的会话）：
+//
+//   - 缺省（会话令牌握手的会话——机器人与演练脚本的老路）：下面的“加载或创建”，与没有登录模块时相同。
+//   - 先新建（进服票据握手的会话）：这里不代建。没有档、或者有档而没建成，答 enter_need_create，不创建档、
+//     不做首次初始化、不进场景、不跑进入钩子；客户端发 EnterCreate（带名字，enter_create.go）建成之后再发 EnterGame。
+//     “建成了没有”是档里的事实，在玩家的锁内由模块的 handler EnterExisting 判断。
+//
+// 归属、进入前检查、登录预算与接入服务对两条路相同，都在装载之前。
+func (controller *Controller) EnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
+	}
+	// 先校验绑定，再装载实体，因为装载正是被把关的那件事（boundHere）。
+	owners, boundSID, refusal := controller.boundHere(context, "enter_game")
+	if refusal != nil {
+		return &pb.EnterGameResponse{Code: refusal.code, Reason: refusal.reason, OwnerSID: refusal.ownerSID}, nil
+	}
+	claims := context.Session.Principal().Claims
+	// 换服（rehome 模块）的进入前检查，在把玩家接入服务、装载实体之前：他正在换服答 rehome_moving，已经绑定到
+	// 别的服答 rehome_elsewhere（带他现在的服）。握手之后才换走的玩家，会话里的 server_id 仍是本服，上面的静态比较
+	// 拦不住——检查读的是会话里的绑定代数与在途换服、本进程的迁出表（驻留表以 Residency 的名义发布的那一张），
+	// 必要时问 account；换回本服的玩家也在这里撤掉旧的屏障。它是 enter 模块的登记点（game/enter 的 OnEntering，
+	// rehome 与 enter 的联动登记），所以别的功能以后登记的检查同样在这里生效——登录模块与 enter 的联动也登记了一条
+	// （承载服不是本服答 login_elsewhere），它与 boundHere 是同一个比较，所以这个端点走不到它的拒绝；会话激活后的
+	// 告知（EnterStatus）不经这个端点，连错服的会话在那里得到的是 login_elsewhere。
+	if err := gamelogin.RunEntering(context.Context(), controller.registry, gamelogin.Entering{
+		PlayerID: context.PlayerID, Claims: claims,
+	}); err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game: a check before entering failed", "player_id", context.PlayerID, "err", err)
+		}
+		response := &pb.EnterGameResponse{Code: code, Reason: reason}
+		if sid, known := gamerehome.OwnerSID(err); known {
+			response.OwnerSID = sid
+		}
+		return response, nil
+	}
+	// Taking the player into service — waiting out an unload of their
+	// previous copy, then the load — runs on its own budget, a share of this
+	// request's dispatch deadline (player_access.tcp.login_timeout). A cold
+	// load waits for this player's projections to reach the store; if the
+	// store is down that wait does not end on its own, and it must not hold
+	// the connection: the client gets login_timeout
+	// and retries. What is left of the dispatch budget covers the answer and
+	// the placement steps below.
+	//
+	// Running out of budget stops the WAITING, nothing else. A load another
+	// login of the same player is sharing goes on for them; nothing admitted
+	// is undone. EnterGame is safe to retry: GetOrCreate finds the Entity a
+	// timed-out attempt may have created.
+	loginCtx, cancelLogin := controller.loginContext(context.Context())
+	defer cancelLogin()
+	if err := owners.Serve(loginCtx, context.PlayerID, boundSID); err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "serve", err); cutShort {
+			return answer, nil
+		}
+		if errors.Is(err, apperrors.ErrPlayerElsewhere) {
+			slog.Warn("enter_game: player is bound to another server", "player_id", context.PlayerID, "owner_sid", boundSID)
+			code, reason := errcode.ClientError(err)
+			return &pb.EnterGameResponse{Code: code, Reason: reason, OwnerSID: boundSID}, nil
+		} else if sid, moved := gamerehome.OwnerSID(err); moved {
+			// 检查与接入之间他刚被换走（迁出表在建驻留记录的同一把锁下复核）。
+			code, reason := errcode.ClientError(err)
+			return &pb.EnterGameResponse{Code: code, Reason: reason, OwnerSID: sid}, nil
+		} else {
+			slog.Error("enter_game: player not taken into service", "player_id", context.PlayerID, "err", err)
+		}
+		code, reason := errcode.ClientError(err)
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	// “先新建”的会话只装载、不创建：持久层确认没有这名玩家就答 enter_need_create。别的错误（数据库、解码、
+	// 超时、删过档）与另一条路一样原样处理，不当成“没有”。
+	createFirst := gamelogin.CreateFirst(claims)
+	var (
+		subject *player.Player
+		created bool
+		err     error
+	)
+	if createFirst {
+		subject, err = controller.Players().Get(loginCtx, context.PlayerID)
+		if errors.Is(err, player.ErrNotFound) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+			err = gamelogin.ErrNeedCreate
+		}
+	} else {
+		subject, created, err = controller.Players().GetOrCreate(loginCtx, context.PlayerID)
+	}
+	cancelLogin()
+	if err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "load", err); cutShort {
+			return answer, nil
+		}
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	// The World counts the login in its own transaction: a different Entity,
+	// a different lock, a separate Nest call after the Player one completed.
+	// The enter module's first-time initialization (EnterInit), sent on every
+	// login: "done or not" is a fact on the Player (PlayerDao.Enter), so a
+	// Player created by a login that crashed before this point is initialized
+	// by the next one, and a repeated login does nothing. The new player's
+	// grants are written in game/modules/login/enter_first.go.
+	//
+	// “先新建”的会话发的是 EnterExisting：建成了就是一次进入（经新建请求建成之后的第一次进入报 First=true），
+	// 有档而没建成（上次新建到一半）答 enter_need_create，什么都不写。
+	var entered gamelogin.InitResult
+	if createFirst {
+		entered, err = syncsender.NewEnterExistingSender(controller.NestClient()).Sync_EnterExisting(context.Context(), subject.ID())
+	} else {
+		entered, err = syncsender.NewEnterInitSender(controller.NestClient()).Sync_EnterInit(context.Context(), subject.ID())
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game: first-time initialization failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	if entered.First {
+		slog.InfoContext(context.Context(), "enter: first entry confirmed", "player_id", context.PlayerID)
+	}
+	// 世界计数只投递、不等：World 只有一个，计数是 strict（World 锁内等 fsync），同一实体的消息一条接一条，
+	// World 每次 fsync 只记一人（本机约 110 人/秒）。登录若等它，千人登录潮里后来的玩家在 World 队列里等光请求
+	// 预算（3 秒），之后的进场景、进入钩子全部超时（M-15，docs/performance/benchmarks/login-burst-20261115）。
+	// 登录本来就不看计数的结果；投递之后计数在 World 上排队补记（异步消息不带请求的期限），只有投递被拒
+	// （Nest 停机、队列满）时少记这一次并记日志。
+	if err := handlersender.NewRecordEnterSender(controller.NestClient()).Send_RecordEnter(context.Context(), controller.WorldID()); err != nil {
+		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
+	}
+	// 进场景之前看一眼分发期限（维护者 2026-11-15）：期限已经用完时，后面的进场景、进入钩子都会立刻以
+	// context deadline exceeded 失败，若照旧答成功，客户端以为进来了，玩家却不在复制场景里（分区场景里也就动不了）。
+	// 所以答 login_timeout 让客户端重试：EnterGame 可以重试——装载找得到已有的 Player，首次初始化只做一次
+	// （重试的那次报 First=false），钩子约定可重复、本来就“下一次进入再跑”。连接已经关了（ctx 被取消）的同样按
+	// login_timeout 回答，那份回答没有人收。
+	beforePlacement(context.Context())
+	if err := context.Context().Err(); err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "place", err); cutShort {
+			return answer, nil
+		}
+	}
+	// On the map. The position is the player's own state, so it is written in
+	// a transaction like everything else; the scene only answers "where can
+	// this player stand".
+	//
+	// In a partitioned scene (scene.partition) this process is the player's
+	// Base and the map is the cells': there is no local ground to stand on,
+	// and Join enters the player through the cell its snapshot position is in.
+	spawn := sceneentity.WorldSceneConfig().Spawn
+	var at spatial.Point
+	if controller.Partition() == nil {
+		at, err = syncsender.NewEnterSceneSender(controller.NestClient()).MultiSync_EnterScene(context.Context(), subject.ID(), controller.WorldSceneID(), spawn.X, spawn.Y)
+	}
+	if err != nil {
+		slog.Warn("enter_game: player not placed on the map", "player_id", context.PlayerID, "err", err)
+	} else if scene, sceneErr := controller.Scene(); sceneErr != nil {
+		slog.Warn("enter_game: no scene to join", "player_id", context.PlayerID, "err", sceneErr)
+	} else if joinErr := scene.Join(context.Context(), subject, at); joinErr != nil {
+		// Placed on the map but not replicated: the player can play, they
+		// just do not see the others until the next login.
+		slog.Warn("enter_game: player did not join the replicated scene", "player_id", context.PlayerID, "err", joinErr)
+	}
+	// The enter module's hooks (game/enter): what other modules do when a
+	// player enters, each written as that module's glue with the enter module
+	// because both are installed. A failed hook is logged and does not fail the
+	// login. The hooks get the session's claims (Entered.Claims) — the facts
+	// the authenticator recorded from account — beside the first-enter time.
+	//
+	//   - chat (game/modules/chat/chat_enter.go) puts the player in this process's
+	//     online set, so from now on they receive world-channel pushes.
+	//   - mailbox (game/controllers/mailbox_enter.go) is the login half
+	//     of mail.LazyBroadcast: server-wide mail (AudienceBroadcast) sent while
+	//     this player was offline reaches the mailbox now. The mail service
+	//     records the profile and merges every broadcast that is this player's
+	//     exactly once; List and Summary top up from the same profile
+	//     afterwards. The profile is the module's BroadcastProfileOnEnter, read
+	//     from the claims: registered when the role was created
+	//     (RoleCreatedAtClaim), in the scope of the serving server
+	//     (ServerIDClaim — boundSID above, checked by Serve) and, for a role
+	//     whose origin server was merged into this one, of the origin too
+	//     (OriginServerIDClaim). Without LazyBroadcast configured
+	//     (services/mail/collaborators.go Broadcast()) it is a no-op.
+	//     A game with alliance-wide broadcasts adds mail.GuildScope(alliance) in that
+	//     function and pulls again when a membership notice says the player
+	//     joined or left.
+	gamelogin.RunEntered(context.Context(), controller.registry, gamelogin.Entered{
+		PlayerID: context.PlayerID, InitResult: entered, Claims: claims,
+	})
+	// The login announcement stays the demo's own decision: the game says so on
+	// the world channel through the chat module's privileged system path — a
+	// client cannot publish there. 合并成每秒至多一条（维护者 2026-11-15，game/announce）：这里只把玩家交给
+	// 合并器，不等发送；一次登录一条时每条都推给全体在线，千人登录潮是约 50 万次推送（M-15）。
+	if announcer, ok := controller.LoginAnnouncer(); ok {
+		announcer.Entered(context.PlayerID)
+	} else {
+		slog.Debug("enter_game: no login announcer is running; the login is not announced", "player_id", context.PlayerID)
+	}
+	slog.InfoContext(context.Context(), "enter: player entered", "player_id", context.PlayerID, "first", entered.First, "created", created, "server_id", boundSID)
+	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created, First: entered.First}, nil
+}
+
+// beforePlacement 是测试缝：EnterGame 在检查分发期限、进场景之前调它。生产代码里什么都不做；测试
+// （enter_login_export_test.go 的 HoldBeforePlacementForTest）用它让期限恰好在这一步之前用完。
+var beforePlacement = func(stdcontext.Context) {}
+
+// loginContext is the login step's share of the request: the configured
+// login budget when the transport publishes one, otherwise the request's own
+// deadline alone.
+func (controller *Controller) loginContext(parent stdcontext.Context) (stdcontext.Context, stdcontext.CancelFunc) {
+	if budget := controller.LoginTimeout(); budget > 0 {
+		return stdcontext.WithTimeout(parent, budget)
+	}
+	return stdcontext.WithCancel(parent)
+}
+
+// loginCutShort answers a serve or load whose wait was cut short: the login
+// budget ran out, or the connection closed under it (a newer login of the
+// same session replaced it, and the answer goes nowhere). Both are named —
+// login_timeout, retry — rather than reported as a server error, and logged
+// as what they are, not in the error log. Any other failure is not its
+// business.
+func loginCutShort(playerID int64, step string, err error) (*pb.EnterGameResponse, bool) {
+	timeout, cutShort := loginTimeout(playerID, step, err)
+	if !cutShort {
+		return nil, false
+	}
+	code, reason := errcode.ClientError(timeout)
+	return &pb.EnterGameResponse{Code: code, Reason: reason}, true
+}
+
+// loginTimeout turns a serve or load whose wait was cut short into the
+// login_timeout error; any other failure is returned as it is with false.
+// EnterCreate shares it: its serve and load run on the same budget.
+func loginTimeout(playerID int64, step string, err error) (error, bool) {
+	switch {
+	case errors.Is(err, stdcontext.DeadlineExceeded):
+		slog.Warn("login budget exhausted", "step", step, "player_id", playerID, "err", err)
+	case errors.Is(err, stdcontext.Canceled):
+		slog.Info("login abandoned, its connection closed", "step", step, "player_id", playerID, "err", err)
+	default:
+		return err, false
+	}
+	return errcode.Wrap(apperrors.ErrLoginTimeout, err, "player_id", playerID), true
+}
+
+// loginRefusal 是 boundHere 的拒绝：答给客户端的码、原因，以及该连的服（0 表示不知道，客户端重新选角）。
+type loginRefusal struct {
+	code     int32
+	reason   string
+	ownerSID int32
+}
+
+// boundHere 是两个登录端点（EnterGame、EnterCreate）共用的静态归属检查，在任何别的检查、接入服务与装载之前。
+//
+// 玩家建角时由 account 绑定到一个 game sid（Role.ServerID），之后不迁移；原服并入另一服（别名合服）后由承载服服务
+// （Role.ServingServerID）。一个 Player 只能在承载他的 sid 上驻留，同一 sid 只有一个进程（App 单实例锁）。所以
+// “这次登录该不该在这里服务”是一个静态判断：会话 Claims 里认证器从 account 取来的 server_id（承载服）是否等于本进程的 sid。
+//
+//   - 不是本服：按名拒绝（player_elsewhere，带 owner_sid），客户端改连那个服的网关，不要在本服重试。不问驻留表。
+//   - Claims 里没有 server_id：认证器被换掉了、没有记下绑定。fail-closed，同样拒绝（owner_sid=0，客户端重新选角），
+//     并记 Error 日志，因为这是部署 / 代码问题，不是客户端连错了服。
+//   - 驻留表取不到：答内部错误。
+//
+// 握手之后才换走的玩家，会话里的 server_id 仍是本服，这里拦不住；那是进入前检查（rehome 模块）与驻留表的迁出表管的事。
+// 驻留表的 Serve 里还有同一个比较，这里先做是为了让“不是本服”的会话在跑任何检查之前就得到带 owner_sid 的回答。
+func (controller *Controller) boundHere(context *playeraccess.Context, endpoint string) (playerOwners, int32, *loginRefusal) {
+	owners, err := controller.PlayerOwners()
+	if err != nil {
+		slog.Error(endpoint+": ownership unavailable", "player_id", context.PlayerID, "err", err)
+		code, reason := errcode.ClientError(err)
+		return nil, 0, &loginRefusal{code: code, reason: reason}
+	}
+	boundSID, bound := BoundServerID(context.Session)
+	if !bound {
+		slog.Error(endpoint+": the session carries no server_id claim; refusing (the authenticator must record the role's server)", "player_id", context.PlayerID)
+		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", 0))
+		return nil, 0, &loginRefusal{code: code, reason: reason}
+	}
+	if boundSID != owners.SID() {
+		slog.Warn(endpoint+": player is bound to another server", "player_id", context.PlayerID, "owner_sid", boundSID)
+		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", boundSID))
+		return nil, 0, &loginRefusal{code: code, reason: reason, ownerSID: boundSID}
+	}
+	return owners, boundSID, nil
+}
+
+// BoundServerID 读会话里 account 给出的承载服：认证器（登录模块的 game/modules/login，Claims）以
+// svcaccount.ServerIDClaim 为键写进 Principal.Claims 的 Role.ServingServerID。没有合服时
+// 它就是角色建角时绑定的原服；原服并入本服（别名合服）之后，原服的角色在这里读到的是本服，登录照常通过，
+// 比较逻辑不变。原服另在 svcaccount.OriginServerIDClaim，路由与驻留不读它。没有会话、没有这个 claim、
+// 或值不是正整数都回答 false，由调用方 fail-closed。
+//
+// 导出是为了让认证器那一侧的测试（tcp/login_claims_test.go）用登录端点真正使用的读取函数核对认证器写的
+// Principal：认证器的规则留给工程改（game/modules/login），两边对不上时登录会一律 fail-closed。
+func BoundServerID(session gateway.Session) (int32, bool) {
+	if session == nil {
+		return 0, false
+	}
+	raw, ok := session.Principal().Claims[svcaccount.ServerIDClaim]
+	if !ok {
+		return 0, false
+	}
+	sid, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || sid <= 0 {
+		return 0, false
+	}
+	return int32(sid), true
+}

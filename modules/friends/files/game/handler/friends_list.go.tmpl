@@ -1,11 +1,8 @@
 package handler
 
-import (
-	player "{{MODULE}}/game/entities/player"
-	gamefriends "{{MODULE}}/game/components/friends"
-)
+import "{{MODULE}}/game/view"
 
 //roost:nest
-func handlerFriendsList(target player.IFriendsEntity) (gamefriends.FriendsSnapshot, error) {
-	return target.FriendsComp().Snapshot(), nil
+func handlerFriendsList(target view.IFriendsEntity) (view.FriendsSnapshot, error) {
+	return target.Friends().Snapshot(), nil
 }

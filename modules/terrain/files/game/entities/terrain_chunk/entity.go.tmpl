@@ -7,6 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/terrainchunkdata"
 	gamescene "{{MODULE}}/game/modules/scene"
 )
 
@@ -17,11 +18,11 @@ type TerrainChunk struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	data *TerrainChunkDataComponent `comp:"CompTypeTerrainChunkData"`
-	dao  *db.TerrainChunkDao        `dao:"terrain_chunk"`
+	data *terrainchunkdata.Component `comp:"terrainchunkdata.CompTypeTerrainChunkData"`
+	dao  *db.TerrainChunkDao         `dao:"terrain_chunk"`
 }
 
-// PublishSyncDirty 把 DAO 这笔事务改的同步脏位交给订阅主体（组件 TerrainChunkData 的 Owner 方法）。
+// PublishSyncDirty 把 DAO 这笔事务改的同步脏位交给订阅主体（view.TerrainChunkDataHolder 的宿主方法）。
 func (c *TerrainChunk) PublishSyncDirty() {
 	if mask := c.TakeEntitySyncChanges(); mask != 0 {
 		c.MarkSyncDirty(mask)

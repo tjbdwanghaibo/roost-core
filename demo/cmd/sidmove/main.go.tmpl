@@ -6,7 +6,7 @@
 //	go run ./cmd/sidmove wal-drained -dir data/wal/{{GAME_SERVICE}}/1000
 //	    旧进程停机之后：WAL 里每条记录都已投影进 Mongo 并确认（checkpoint 停在最后一条记录）。
 //	    进程还在跑（writer.lock 被持有）、有未确认的尾部、WAL 损坏都以非零码退出。
-//	go run ./cmd/sidmove singleton -redis 127.0.0.1:6379 -key roost:{{PROJECT}}:singleton:{{GAME_SERVICE}}:1000
+//	go run ./cmd/sidmove singleton -etcd 127.0.0.1:2379 -key /{{PROJECT}}/singleton:{{GAME_SERVICE}}:1000
 //	    单实例锁是否仍被持有、被谁持有（hostname|pid|启动时间）；旧进程停完之后应为空。
 //	go run ./cmd/sidmove players -mongo "$URI" -ids 1001,1002 -out before.json
 //	go run ./cmd/sidmove players -mongo "$URI" -ids 1001,1002 -compare before.json
@@ -36,8 +36,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+	etcddriver "github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/sidmerge"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -61,12 +61,12 @@ func main() {
 		result, err = walDrained(ctx, *dir)
 	case "singleton":
 		fs := flag.NewFlagSet("singleton", flag.ExitOnError)
-		addr := fs.String("redis", "127.0.0.1:6379", "the Redis the singleton lock lives in (redis.* in config.game.yaml)")
-		password := fs.String("redis-password", "", "Redis password, if any")
-		database := fs.Int("redis-db", 0, "Redis database index")
+		endpoints := fs.String("etcd", "127.0.0.1:2379", "comma-separated etcd endpoints the singleton lock lives in (etcd.endpoints in config.{{GAME_SERVICE}}.yaml)")
+		username := fs.String("etcd-username", "", "etcd user, if auth is on (needs -etcd-password)")
+		password := fs.String("etcd-password", "", "etcd password, if auth is on")
 		key := fs.String("key", "", "<singleton.key_prefix>:<service>:<sid>")
 		_ = fs.Parse(os.Args[2:])
-		result, err = singletonHolder(ctx, *addr, *password, *database, *key)
+		result, err = singletonHolder(ctx, strings.Split(*endpoints, ","), *username, *password, *key)
 	case "players":
 		fs := flag.NewFlagSet("players", flag.ExitOnError)
 		uri := fs.String("mongo", "mongodb://127.0.0.1:27017/?replicaSet=rs0", "mongo.uri in config.game.yaml")
@@ -116,27 +116,28 @@ type SingletonReport struct {
 	Started  string `json:"started,omitempty"`
 }
 
-func singletonHolder(ctx context.Context, addr, password string, database int, key string) (SingletonReport, error) {
+// 锁键在 etcd（kitetcd.SingletonStore，挂在持有者的租约上）：键在就是有进程持有，持有者崩溃后键随租约在 ttl 内消失。
+func singletonHolder(ctx context.Context, endpoints []string, username, password, key string) (SingletonReport, error) {
 	report := SingletonReport{Key: key}
 	if key == "" {
 		return report, errors.New("-key is required")
 	}
-	cfg := fredis.DefaultConfig(addr)
-	cfg.Password, cfg.DB = password, database
-	assembly, err := redisdriver.Assemble(cfg)
+	cfg := fetcd.DefaultConfig(endpoints)
+	cfg.Username, cfg.Password = username, password
+	client, err := etcddriver.NewClient(cfg)
 	if err != nil {
 		return report, err
 	}
-	defer func() { _ = assembly.Close() }()
-	value, err := assembly.Client.Get(ctx, key)
-	if errors.Is(err, fredis.ErrNil) {
+	defer func() { _ = client.Close() }()
+	kv, err := client.Get(ctx, key)
+	if errors.Is(err, fetcd.ErrKeyNotFound) {
 		return report, nil
 	}
 	if err != nil {
 		return report, err
 	}
 	report.Held = true
-	report.Hostname, report.PID, report.Started = parseHolder(string(value))
+	report.Hostname, report.PID, report.Started = parseHolder(kv.Value)
 	return report, nil
 }
 

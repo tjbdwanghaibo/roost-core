@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -10,8 +10,8 @@ import (
 // 所以不要在这里吞掉错误改走别的分支。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，每日限购按它算业务日。
 //
 //roost:nest rollback=undo durability=strict
-func handlerShopBuy(target player.IShopEntity, request *pb.ShopBuyRequest, nowUnixMilli int64) (*pb.ShopBuyResponse, error) {
-	result, err := target.ShopComp().Buy(request.Key, request.GoodsID, request.Count, nowUnixMilli)
+func handlerShopBuy(target view.IShopEntity, request *pb.ShopBuyRequest, nowUnixMilli int64) (*pb.ShopBuyResponse, error) {
+	result, err := target.Shop().Buy(request.Key, request.GoodsID, request.Count, nowUnixMilli)
 	if err != nil {
 		return nil, err
 	}

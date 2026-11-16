@@ -1,0 +1,21 @@
+package controllers
+
+import (
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleTaskClaim 是领取任务奖励协议的入口；目标取认证会话的玩家，不取请求字段。
+// 任务号是否存在、做完没有、领过没有都在 Nest handler 的锁内判断，这里不预先检查。
+//
+//roost:endpoint nest=TaskClaim
+func (controller *Controller) HandleTaskClaim(ctx *playeraccess.Context, req *pb.TaskClaimRequest) (*pb.TaskClaimResponse, error) {
+	response, err := controller.dispatchTaskClaim(ctx, req)
+	// 只记录已确认的请求结果；带业务键的重放也会返回成功，不把日志当作资产流水。
+	if err == nil && response != nil && response.Code == 0 && ctx != nil && req != nil {
+		slog.InfoContext(ctx.Context(), "task: claim completed", "player_id", ctx.PlayerID, "task_id", response.TaskID, "reward_kind", response.RewardKind, "reward_id", response.RewardID, "reward", response.Reward, "balance", response.Balance)
+	}
+	return response, err
+}

@@ -66,9 +66,9 @@ Controller 已按用户确认接入 player access 的协议生成流程：骨架
 
 ## Controller 如何生成和维护
 
-协议定义写 `handler=player` 后，`go generate ./...` 会创建缺少的 `game/controllers/player/controller.go` 与对应业务方法文件。Controller 持有 Nest Client，但不会自动执行任何 Entity 操作。每个新方法只有参数、返回类型、中文说明和明确的未实现错误，剩下的逻辑由业务编写。
+协议定义写 `handler=player` 后，`go generate ./...` 会写生成的 `game/controllers/controller.go`，并把缺少的业务方法追加到 `game/controllers/player.go`（`game/controllers` 是一个包）。Controller 持有 Nest Client，但不会自动执行任何 Entity 操作。每个新方法只有参数、返回类型、中文说明和明确的未实现错误，剩下的逻辑由业务编写。
 
-生成器先解析同包所有非测试 Go 文件，按 Controller 方法名查重；方法移动到其他文件后也不会补出重复方法。类型和 FromRegistry 已存在时复用，只有一半存在则报错，避免猜测业务依赖。文件名占用但没有所需方法时报错。删除协议不删除业务，修改签名后由开发者调整方法并编译验证。
+生成器先解析同包所有非测试 Go 文件，按 Controller 方法名查重；方法移动到其他文件后也不会补出重复方法。`Controller` 与 `FromRegistry` 只在生成的 `controller.go` 里，业务文件再声明会报错。删除协议不删除业务，修改签名后由开发者调整方法并编译验证。
 
 事务生成在暂存目录内工作，新增骨架作为首次创建的业务文件提交；已存在的骨架不覆盖、不删除，也仍参与业务输入并发修改检查。`--check` 单独把骨架纳入内容快照，能发现缺失，但不将其视作允许覆盖的生成文件。直接调用底层 `protocol` 工具时可显式传 `-controllers`；正式业务推荐使用 `go generate` 的事务入口。
 

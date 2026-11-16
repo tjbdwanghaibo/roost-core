@@ -13,9 +13,10 @@ state:
     dao: nosync
     comment: Naming 是有界的改名意图、目录凭据与上一笔回执；不向客户端同步目录 token。
 component: Naming
+component_package: game/components/naming
 protocols: [NamingRename]
 errcodes: [naming_busy, naming_invalid, naming_required]
 verify:
-  packages: [./game/controllers/naming]
+  packages: [./game/controllers]
   run: ^TestNaming
   pass: 15

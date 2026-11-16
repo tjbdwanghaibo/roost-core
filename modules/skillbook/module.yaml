@@ -7,6 +7,6 @@ runtime:
   start: Start
 protocols: [SkillCatalog]
 verify:
-  packages: [./game/modules/skillbook, ./game/controllers/skillbook]
+  packages: [./game/modules/skillbook, ./game/controllers]
   run: ^TestSkillbook
   pass: 11

@@ -86,8 +86,10 @@ drill_configure() {
 			-e 's#max_bytes: 8589934592#max_bytes: 268435456#' \
 			"${args[@]}" "$f"
 	done
-	# 入口的区服目录（portal.servers）在行中间："1000": 127.0.0.1:7000
-	drill_edit -e "s#\"1000\": 127\.0\.0\.1:7000#\"1000\": 127.0.0.1:$(drill_port 7000)#" configs/service/config.account.yaml
+	# 入口的区服目录（portal.servers）在行中间："1000": 127.0.0.1:7000；只有带 account 服务的工程（demo）有这个文件。
+	if [[ -f configs/service/config.account.yaml ]]; then
+		drill_edit -e "s#\"1000\": 127\.0\.0\.1:7000#\"1000\": 127.0.0.1:$(drill_port 7000)#" configs/service/config.account.yaml
+	fi
 	if grep -nE '(127\.0\.0\.1|0\.0\.0\.0):(7000|8081|90[0-9][0-9]|91[0-9][0-9])$' configs/service/config.*.yaml | grep -v prod.example; then
 		drill_fail "dev ports left unshifted (above)"
 	fi

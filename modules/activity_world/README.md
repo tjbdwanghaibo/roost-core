@@ -11,7 +11,7 @@
     - `Complete(ctx, target int64, token Token) (err error)`：确认某一期的异步初始化或结算已经完成。
     - `target` 是 `ActivityWorld` 的完整实体号（逻辑号加实体种类 `EntityKindActivityWorld`）。`Snapshot`、`Token` 是 `activity` 包同名类型的别名。
   - 服务实现 `Service`（`internal/rpc/activity_world/service.go`）：`CheckRoute`、`Pulse`、`Complete`。每次调用先核对目标种类与 Remote 所有权，再进 Nest。
-  - 组件：`WorldActivityComp()`，类型 `WorldActivityComponent` 是 `activity.Component` 的别名（`game/entities/activity_world/activity_component.go`），窄接口 `IWorldActivityEntity`。在 `ActivityWorld` 的 Nest 事务里用法与 `ActivityComp()` 相同（`Reconcile`、`Host()`、`Rearm()`）。
+  - 组件：`ActivityWorld` 结构体里直接挂 activity 的共用组件（`activity *activity.Component`，`comp:"activity.CompTypeActivity"`，与 Player 同一个类型号），`Activity()` 返回 `view.Activity`。宿主方法 `ActivityBook()` 由生成器交接 `ActivityWorldDao.ActivityWorld`，`ActivityScope()`（"world"）与 `ActivityCreatedAt()` 在 `game/entities/activity_world/activity.go` 手写。handler 参数写 `view.ActivityWorldEntity`，要 `Host()` 时经 `activity.Of(target)`。
   - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerWorldActivityInit`（记下创建时间并首次对账）、`handlerWorldActivityPulse`、`handlerWorldActivityComplete`。
 - **登记点 / 钩子**：本模块不新增登记函数。活动逻辑仍用 `activity.Register` 登记，注意要登记在 **`activity_world` 进程**会加载的代码里；`Hooks` 回调拿到的 `Owner` 是 `*ActivityWorld`。
 - **状态**
@@ -43,7 +43,7 @@
   1. 在 `configs/table/activity_scope.csv` 加一行逻辑号、首次承载的 SID 与开服时间。
   2. 在 `configs/table/activity.csv` 加 `Scope=world` 的定义，`roost generate`。
   3. 在 `activity_world` 进程加载的包里 `activity.Register` 登记逻辑。
-  4. game 侧写自己的端点：校验玩家资格后，用生成的 RPC 客户端调 `Pulse` 取视图；玩家参加时在 `Player` 事务里调 `ActivityComp().Host().JoinShared(快照, now)` 记参与资格。
+  4. game 侧写自己的端点：校验玩家资格后，用生成的 RPC 客户端调 `Pulse` 取视图；玩家参加时在 `Player` 事务里经 `activity.Of(target)` 取回组件后调 `Host().JoinShared(快照, now)` 记参与资格。
 - **需求比它多一点**
   - 全服活动要调排行或邮件：给 `activity_world` 服务配置对应的 `uses`，在 `Hooks.Resume` 里做外部调用。
   - 不要改 `internal/rpc/activity_world/mod.go` 里“先建档、再注册 RPC、最后开扫描”的顺序。

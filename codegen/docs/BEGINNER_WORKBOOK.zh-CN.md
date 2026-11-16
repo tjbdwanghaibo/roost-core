@@ -53,7 +53,7 @@ roost project doctor --workflow first-business
 go test ./...
 ```
 
-`add access player` 会给 game 的 `configs/service/config.game.yaml` 与 prod 示例补上 Nest 带进来的 `nest`、`dataengine`、`mongo`、`nats` 配置段，并打开单实例锁（`singleton.enabled: true`，补 `redis:` 段）：启动 game 之前把这些地址改成自己的 Mongo 副本集、NATS 与 Redis（`deploy/dev/docker-compose.yaml` 带齐三者）。
+`add access player` 会给 game 的 `configs/service/config.game.yaml` 与 prod 示例补上 Nest 带进来的 `nest`、`dataengine`、`mongo`、`nats` 配置段，并打开单实例锁（`singleton.enabled: true`，锁存 etcd，没有 `etcd:` 段时补上）：启动 game 之前把这些地址改成自己的 Mongo 副本集、NATS 与 etcd（`deploy/dev/docker-compose.yaml` 带齐）。
 这些段里决定“与谁共享”的名字按工程名生成（工程 r4：`nats.prefix: r4`、`dataengine.database: r4`、effects 流 `R4_EFFECTS`，与 DAO 的 `db=r4` 同一规则），两个工程共用一套开发用 Mongo / NATS 时不用改名也不会撞库撞流；同一工程的所有服务必须保持一致（规则见 PROJECT_GENERATOR §5）。
 只在 add 命令那一刻追加：手改 `roost.yaml` 加 Mod 后 `roost project sync` 不补配置段，这时 `roost project doctor` 的 `config-sections:game` 以 WARN 列出缺的段和可直接追加到文件末尾的文本；有意删掉的段同样会报，不需要就忽略，或留一个空段（如 `saga: {}`）表示用代码默认值。
 
@@ -81,6 +81,10 @@ ERROR。`--lifecycle Player` 生成的 endpoint 对 `context.PlayerID` 调 `play
 dirty、undo、patch 和 sync；字段已私有化，使用 `GetXxx` 读取。
 
 生成项目内的 workbook 会给出可复制的 RenamePlayer 字段、Component 方法、handler 和 Request 示例。
+handler 收生成的窄接口 `view.IProfileEntity`，经 `target.Profile().<方法>()` 调组件，所以 handler 要调的 Component 方法
+同时列进 `game/view/component_profile.go` 的 `view.Profile` 接口（2026-11-16 起）。协议入口在 `game/controllers/player.go`
+（`game/controllers` 是一个包，每个分组一个文件）。要在别的功能做完某件事时跟着改（升级后送奖励、扣款后计数），
+在组件上写 `//roost:listen` 方法监听 `game/event/` 里的实体事件，见 [tag 手册](TAGS.zh-CN.md#实体事件roostlisten)。
 
 ### 3.1 到点要做的事（限时 Buff、建造完成）
 

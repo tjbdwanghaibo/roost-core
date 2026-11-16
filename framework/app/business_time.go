@@ -18,7 +18,7 @@ import (
 // 前拨，但同一套部署的业务时间不能往回走——活动、邮件、副本截止等业务时间戳都假定它单调，App 在这里
 // 统一兜住，各模块不感知、也不再为“偏移往回调”各写一套系统钟拆分。
 //
-// 做法：部署级的业务时间高水位存在协调存储（单实例锁的 SingletonStore，共享 Redis）的一个不过期键里。
+// 做法：部署级的业务时间高水位存在协调存储（单实例锁的 SingletonStore，生成工程是共享的 etcd）的一个不过期键里。
 // 启动时（单实例锁之后、第一个 Mod Init 之前）本进程业务时间低于“高水位 − 容差”就拒绝启动；
 // 否则推进高水位，之后每 businessTimeAdvanceInterval 推进一次。要回到过去只能清库重建。
 
@@ -119,7 +119,7 @@ func (a *App) startBusinessTimeGuard(serverType ServiceName, lock *singletonLock
 		prefix := strings.TrimSpace(a.settings.Singleton.KeyPrefix)
 		if a.singletonOpener == nil || prefix == "" {
 			return nil, fmt.Errorf("app: %w: %s is %s, but this process has nowhere to keep the deployment's high-water mark; "+
-				"install App.Singleton (kitredis.SingletonStore) in the bootstrap and set singleton.key_prefix "+
+				"install App.Singleton (kitetcd.SingletonStore) in the bootstrap and set singleton.key_prefix "+
 				"(singleton.enabled may stay false), or remove the offset", ErrBusinessTimeGuardMissing, logicOffsetKey, offset)
 		}
 		store, err := a.singletonOpener(a.cfg)

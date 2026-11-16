@@ -18,6 +18,7 @@ state:
     dao: nosync
     comment: ShopLedger 是商店模块的去重窗口（最近若干次成功购买的结果），只落库、不下发。
 component: Shop
+component_package: game/components/shop
 protocols: [ShopBuy, ShopRules]
 errcodes: [shop_key_invalid, shop_key_conflict, shop_count_invalid, shop_goods_invalid, shop_overflow, shop_limit]
 verify:

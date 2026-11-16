@@ -1,6 +1,6 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import "{{MODULE}}/game/view"
 
 //roost:nest
-func handlerPlayerTeam(member player.ITeamEntity) int64 { return member.TeamComp().TeamID() }
+func handlerPlayerTeam(member view.ITeamEntity) int64 { return member.Team().TeamID() }

@@ -4,6 +4,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 	"{{MODULE}}/db"
+	"{{MODULE}}/game/components/activity"
 )
 
 const EntityKindActivityWorld entity.EntityKind = {{ID:entity:ActivityWorld}}
@@ -17,4 +18,6 @@ type ActivityWorld struct {
 	entity.ComponentManager
 	entity.DaoManager
 	dao *db.ActivityWorldDao `dao:"activity_world"`
+	// activity 是 Player、Alliance 共用的活动组件（同一个类型号）；ActivityBook 由生成器交接 ActivityWorldDao.ActivityWorld。
+	activity *activity.Component `comp:"activity.CompTypeActivity"`
 }

@@ -9,6 +9,7 @@ entities: [Team]
 components: [TeamRoster]
 entity: Player
 component: Team
+component_package: game/components/team
 state:
   - field: Team
     type: TeamState
@@ -18,7 +19,7 @@ state:
 protocols: [TeamCreate, TeamInvite, TeamAccept, TeamLeave, TeamDisband, TeamInfo, TeamInvites, TeamInvited]
 errcodes: [team_invalid, team_missing, team_exists, team_not_leader, team_not_invited, team_full, team_invites_full, team_blocked]
 verify:
-  packages: [./game/handler, ./game/controllers/team]
+  packages: [./game/handler, ./game/controllers]
   run: ^TestTeam
   pass: 35
 with:

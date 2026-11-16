@@ -19,6 +19,7 @@ services:
 entities: [Alliance, AllianceMember]
 entity: Player
 component: Alliance
+component_package: game/components/alliance
 components: [AllianceRoster, AllianceGuard]
 state:
   - field: Alliance
@@ -42,14 +43,14 @@ sagas:
 protocols: [FoundAlliance, JoinAlliance, AllianceInfo, LeaveAlliance, DonateAlliance, ClaimAllianceReward, AllianceOpStatus, AllianceNotice, ApplyAlliance, ApproveAllianceApply, RejectAllianceApply, KickAllianceMember, TransferAllianceLeader, AllianceRoster]
 errcodes: [alliance_request_invalid, alliance_name, alliance_missing, alliance_full, alliance_denied, alliance_membership, alliance_application, alliance_leader, alliance_amount, alliance_cooldown, alliance_war, alliance_expired, alliance_reward, alliance_busy, alliance_view_missing, alliance_moved, alliance_pending]
 verify:
-  packages: [./internal/rpc/alliance, ./internal/service/alliance, ./game/handler, ./game/modules/alliance/runtime, ./game/controllers/alliance, ./db]
+  packages: [./internal/rpc/alliance, ./internal/service/alliance, ./game/handler, ./game/modules/alliance/runtime, ./game/controllers, ./db]
   run: ^TestAlliance
   pass: 55
 with:
   enter:
     summary: 进入和重连后对账成员展示与 HomeSID，失败留待下次进入
     verify:
-      packages: [./game/controllers/alliance]
+      packages: [./game/controllers]
       run: ^TestWithAllianceEnter
       pass: 2
   rehome:

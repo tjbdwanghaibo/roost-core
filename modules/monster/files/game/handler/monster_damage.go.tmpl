@@ -8,11 +8,11 @@ import (
 )
 
 //roost:nest rollback=undo durability=async
-func handlerMonsterDamage(target monster.IMonsterEntity, area scene.ISceneEntity, expected monster.Target, expectedLife uint64, amount int64, nowUnixMilli int64) (view.MonsterSnapshot, error) {
+func handlerMonsterDamage(target view.IMonsterActorEntity, area scene.ISceneEntity, expected monster.Target, expectedLife uint64, amount int64, nowUnixMilli int64) (view.MonsterSnapshot, error) {
 	if err := expected.Check(target, area); err != nil {
 		return view.MonsterSnapshot{}, err
 	}
-	c := target.MonsterActorComp()
+	c := target.MonsterActor()
 	if c.Body().Map.SceneID() != area.ID() {
 		return view.MonsterSnapshot{}, fmt.Errorf("monster: different scene")
 	}

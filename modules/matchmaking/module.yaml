@@ -12,6 +12,7 @@ runtime:
   start: Start
 entity: Player
 component: Matchmaking
+component_package: game/components/matchmaking
 state:
   - field: Matchmaking
     type: MatchmakingState
@@ -21,7 +22,7 @@ state:
 protocols: [MatchEnqueue, MatchCancel, MatchStatus, MatchClear]
 errcodes: [matchmaking_invalid, matchmaking_busy, matchmaking_stale, matchmaking_unknown]
 verify:
-  packages: [./game/handler, ./game/modules/matchmaking, ./game/controllers/matchmaking]
+  packages: [./game/handler, ./game/modules/matchmaking, ./game/controllers]
   run: ^TestMatchmaking
   pass: 17
 with:

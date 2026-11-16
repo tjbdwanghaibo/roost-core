@@ -10,7 +10,7 @@ access:
 protocols: [ChatSend, ChatHistory, ChatMessage]
 replaces: [services/chat/collaborators.go]
 verify:
-  packages: [./game/modules/chat, ./game/controllers/chat, ./services/chat]
+  packages: [./game/modules/chat, ./game/controllers, ./services/chat]
   run: ^TestChat
   pass: 10
 with:

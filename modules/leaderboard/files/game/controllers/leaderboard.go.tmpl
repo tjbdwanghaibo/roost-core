@@ -1,0 +1,115 @@
+package controllers
+
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+	gameleaderboard "{{MODULE}}/game/modules/leaderboard"
+	"{{MODULE}}/protocol/pb"
+)
+
+// leaderboard 的端点只读：读榜不改任何 Entity，不经过 Nest；提交分数不对客户端开放，入口是
+// game/modules/leaderboard 的 Submit。
+
+// 启动时先取一次 rank 服务的客户端；取不到就让进程起不来，而不是等第一条请求再失败。
+func init() {
+	requireAtStart("leaderboard", func(controller *Controller) error {
+		_, err := controller.leaderboardRanking()
+		return err
+	})
+}
+
+// leaderboardRanking 取 rank 服务的客户端。客户端不带状态，用到时从 Registry 取；启动检查已经验过它在，
+// 取不到只会是装配错误（roost.yaml 里业务服务没有 uses: [rank]），这一条请求按内部错误回答。
+func (controller *Controller) leaderboardRanking() (svcrank.Rank, error) {
+	ranking, err := gameleaderboard.Client(controller.Registry())
+	if err != nil {
+		return nil, fmt.Errorf("leaderboard controller: %w", err)
+	}
+	return ranking, nil
+}
+
+// HandleLeaderboardTop 读榜头，连同调用者自己的位置：跨进程的类型化调用，不涉及 Entity 锁。
+// 读哪张榜由服务端定（gameleaderboard.CurrentBoard），请求只带条数，条数收进上限之后才交给 rank 服务。
+//
+// 榜头说不了不在这一页上的人的事，而“我在哪”是客户端画榜时真正要问的，所以回包里带上调用者自己的位置：
+// 他就在这一页上时取那一行（同一次读取，榜头与“我”不会互相矛盾）；不在时再向 rank 读一次他的名次，
+// 这两次读可以相差一瞬。没上榜不是错误。第二次读失败时整条请求按失败回答，不回半截数据——
+// 回一个“没上榜”等于把读失败说成事实。
+func (controller *Controller) HandleLeaderboardTop(context *playeraccess.Context, request *pb.LeaderboardTopRequest) (*pb.LeaderboardTopResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("leaderboard_top endpoint: context and request are required")
+	}
+	ranking, err := controller.leaderboardRanking()
+	if err != nil {
+		return leaderboardTopFailure(context.PlayerID, "rank client", err), nil
+	}
+	board := gameleaderboard.CurrentBoard()
+	page, err := ranking.Page(context.Context(), board, 0, gameleaderboard.TopLimit(request.Limit))
+	if err != nil {
+		return leaderboardTopFailure(context.PlayerID, "page", err), nil
+	}
+	response := &pb.LeaderboardTopResponse{Total: page.Total}
+	onPage := false
+	for _, entry := range page.Entries {
+		response.Rows = append(response.Rows, pb.LeaderboardRow{
+			Rank: entry.Rank, PlayerID: entry.Score.OwnerID, Score: entry.Score.Value,
+		})
+		if entry.Score.OwnerID == context.PlayerID && !onPage {
+			onPage = true
+			standing := gameleaderboard.StandingOf(entry, true)
+			response.MyOnBoard, response.MyRank, response.MyScore = standing.OnBoard, standing.Rank, standing.Score
+		}
+	}
+	if onPage {
+		return response, nil
+	}
+	entry, found, err := ranking.Rank(context.Context(), board, context.PlayerID)
+	if err != nil {
+		return leaderboardTopFailure(context.PlayerID, "own standing", err), nil
+	}
+	standing := gameleaderboard.StandingOf(entry, found)
+	response.MyOnBoard, response.MyRank, response.MyScore = standing.OnBoard, standing.Rank, standing.Score
+	return response, nil
+}
+
+// leaderboardTopFailure 把 rank 服务的失败换成回包：带码的原样给客户端，不带码的记日志、回内部错误。
+func leaderboardTopFailure(playerID int64, step string, err error) *pb.LeaderboardTopResponse {
+	code, reason := errcode.ClientError(err)
+	if code == errcode.CodeInternal {
+		slog.Error("leaderboard_top failed", "player_id", playerID, "step", step, "err", err)
+	}
+	return &pb.LeaderboardTopResponse{Code: code, Reason: reason}
+}
+
+// HandleLeaderboardMe 只读调用者自己在榜上的名次与分数。查的是谁取认证会话的玩家，从不取请求字段。
+// 没上榜（从没提交过分数）不是错误：Code 为 0、OnBoard 为 false、Rank 与 Score 为 0。
+// 名次与分数来自 rank 服务的同一次读取，互相不会矛盾。LeaderboardTop 的回包里也带这三个数；
+// 这条协议给不要榜头、只刷新“我在哪”的界面用，少读一页。
+func (controller *Controller) HandleLeaderboardMe(context *playeraccess.Context, request *pb.LeaderboardMeRequest) (*pb.LeaderboardMeResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("leaderboard_me endpoint: context and request are required")
+	}
+	ranking, err := controller.leaderboardRanking()
+	if err != nil {
+		return leaderboardMeFailure(context.PlayerID, err), nil
+	}
+	entry, found, err := ranking.Rank(context.Context(), gameleaderboard.CurrentBoard(), context.PlayerID)
+	if err != nil {
+		return leaderboardMeFailure(context.PlayerID, err), nil
+	}
+	standing := gameleaderboard.StandingOf(entry, found)
+	return &pb.LeaderboardMeResponse{OnBoard: standing.OnBoard, Rank: standing.Rank, Score: standing.Score}, nil
+}
+
+// leaderboardMeFailure 同 leaderboardTopFailure，用于 LeaderboardMe 的回包。
+func leaderboardMeFailure(playerID int64, err error) *pb.LeaderboardMeResponse {
+	code, reason := errcode.ClientError(err)
+	if code == errcode.CodeInternal {
+		slog.Error("leaderboard_me failed", "player_id", playerID, "err", err)
+	}
+	return &pb.LeaderboardMeResponse{Code: code, Reason: reason}
+}

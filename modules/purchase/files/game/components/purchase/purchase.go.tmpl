@@ -10,7 +10,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Owner 是 Purchase 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Purchase}}
+const CompTypePurchase entity.ComponentType = {{ID:component:Purchase}}
+
+// init 登记组件工厂：Player 结构体里 comp:"purchase.CompTypePurchase" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypePurchase, NewComponent)
+}
+
+// Owner 是 Purchase 组件的宿主：整个 Player（发放方式经它取别的组件）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 type Component struct {
@@ -18,7 +26,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/purchase_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

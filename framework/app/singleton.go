@@ -27,7 +27,8 @@ import (
 // 才释放。Nest 由 OnFail 回调统一围栏；需要跨进程接管的模块另用 SingletonLease
 // 在本地入口、提交、出站检查有效窗口，活性查询走 SingletonLiveness。
 //
-// core 只定义后端接口与状态机，不 import Redis 驱动；Redis 实现在 wiring/redis（kitredis.SingletonStore）。
+// core 只定义后端接口与状态机，不 import 存储驱动；生成工程用的实现在 wiring/etcd（kitetcd.SingletonStore，
+// 锁键挂在 etcd 租约上，与服务发现共用一个 etcd 集群）。
 
 // SingletonStore 是单实例锁的后端：两个原子操作，语义与 redis.CompareAndSet / CompareAndDelete 相同。
 // expected 为 nil 表示“键必须不存在”；applied=false 时 current 是键里现在的值（不存在为 nil）；
@@ -39,16 +40,16 @@ import (
 // 实现必须遵守：
 //   - 每个方法都遵守 ctx 的截止时间：到期即返回错误，不能继续阻塞。App 给每次 CAS 一个截到 validUntil
 //     的单次超时，“续期失败时 Lost 不晚于 validUntil 判定”这一时间界依赖它。
-//   - 内部重试（例如 Redis Cluster 下驱动按 MaxRedirects 处理 MOVED / ASK 与网络错误）可以有，但必须受
+//   - 内部重试（例如 etcd 客户端在 KeepAliveOnce、只读请求上的重试）可以有，但必须受
 //     同一个 ctx 限定。重复执行是安全的：续期 CAS(v, v) 幂等；获取 CAS(nil, v) 第一次已落地时重试得到
 //     applied=false、current=v，App 据此认领；按值 CompareAndDelete 只删自己的值。
 //   - 并发安全，而且续期不被 Live 查询拖住：二者可能同时调用，Live 并发占满连接等资源时，CAS 仍要能在
-//     自己的超时内发出（wiring/redis 的实现为此用两个独立客户端）。
+//     自己的超时内发出（wiring/etcd 的实现为此用两个独立客户端）。
 type SingletonStore interface {
 	CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (applied bool, current []byte, err error)
 	CompareAndDelete(ctx context.Context, key string, expected []byte) (applied bool, err error)
 	// Get 只读地返回每个键当前的值（不存在为 nil），顺序与 keys 相同；供 Live 查询使用。
-	// 实现不得依赖单条多键命令（Redis Cluster 下跨槽会 CROSSSLOT）。
+	// 实现不得依赖后端对单条多键命令的支持（例如 Redis Cluster 下跨槽的 MGET 会 CROSSSLOT）。
 	Get(ctx context.Context, keys []string) ([][]byte, error)
 	Close() error
 }
@@ -269,9 +270,9 @@ func (l *singletonLock) snapshot() singletonStatus {
 	return l.status
 }
 
-// casReply 是一次 CAS 调用的结果与时间点。asked 在发出请求之前读取：Redis 的 TTL 从它处理请求
-// 的时刻起算（驱动内部重试时是最后落地那次），不早于 asked，所以以 asked 起算的本地窗口不会晚于
-// 键过期。历史：RR-20261004-14。
+// casReply 是一次 CAS 调用的结果与时间点。asked 在发出请求之前读取：后端的过期从它处理请求
+// 的时刻起算（etcd 租约从 leader 收到 Grant / KeepAlive 时计时；驱动内部重试时是最后落地那次），
+// 不早于 asked，所以以 asked 起算的本地窗口不会晚于键过期。历史：RR-20261004-14。
 type casReply struct {
 	applied bool
 	current []byte
@@ -439,7 +440,7 @@ func (l *singletonLock) renewLoop(ctx context.Context, next time.Time) {
 			return
 		}
 		// 旧窗口结束之后才读到的 Applied 不能复活这个进程。
-		// 即使 Redis 已延长键，也只保留到它自然过期，业务必须停止。
+		// 即使后端已延长键，也只保留到它自然过期，业务必须停止。
 		if l.Check() != nil {
 			return
 		}

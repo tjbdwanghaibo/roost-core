@@ -1,13 +1,16 @@
 package mailbox
 
 import (
-	gameprofile "{{MODULE}}/game/components/profile"
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/modules/mailbox"
-	"{{MODULE}}/game/view"
 )
 
-func init() {
-	gameprofile.OnProfileLevelUp("mailbox", func(host view.PlayerEntity, from, to int32) error {
-		return mailbox.EmitProfileReward(host.UniqueID(), from, to, MailboxProfileReward(from, to))
-	})
+// OnProfileLevelUp 在升级的同一笔事务里按工程规则（MailboxProfileReward）发升级奖励邮件：邮件作为 effect
+// 与等级一起提交，回滚则不发。
+//
+// priority=20 保持改成事件之前的执行顺序：原来的升级钩子按登记名字母序执行（activity、attribute、mailbox、task）。
+//
+//roost:listen priority=20
+func (c *Component) OnProfileLevelUp(ev event.ProfileLevelUp) error {
+	return mailbox.EmitProfileReward(c.owner.UniqueID(), ev.From, ev.To, MailboxProfileReward(ev.From, ev.To))
 }

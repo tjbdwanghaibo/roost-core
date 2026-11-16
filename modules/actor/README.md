@@ -5,12 +5,12 @@
 给 `Player` 提供一个“身体”（`actor.Body`）：它记录玩家在哪个空间的什么坐标、朝向哪里，能沿路径走、能跟随另一个实体、能被定身或沉默。它不知道地图长什么样：所在的空间（场景或房间）由上层代码以 `actor.Environment` 传进来。`monster` 模块的怪物复用同一个 `Body`。
 
 - **客户端协议**（`protocol/def/`）
-  - `ActorMove`（`actor_move.go`）：请求带目标坐标 `X`、`Y`，应答 `{Code, Reason, X, Y}` 带当前坐标。端点 `HandleActorMove`（`game/controllers/actor/actor_move.go`）。客户端只能指定目标，速度是服务端固定值 60（写在 `game/handler/actor_move.go`）。被拒时 `Code` 是下面“错误码”里的业务码，连接保留。
+  - `ActorMove`（`actor_move.go`）：请求带目标坐标 `X`、`Y`，应答 `{Code, Reason, X, Y}` 带当前坐标。端点 `HandleActorMove`（`game/controllers/actor.go`）。客户端只能指定目标，速度是服务端固定值 60（写在 `game/handler/actor_move.go`）。被拒时 `Code` 是下面“错误码”里的业务码，连接保留。
   - `ActorStop`（`actor_stop.go`）：停止移动，应答带当前坐标。端点 `HandleActorStop`。
   - 没有“进入空间”的协议：把玩家放进某个空间是上层（`scene` 模块或工程自己的房间代码）的事。
 - **服务端入口**
-  - 取身体：`target.ActorComp().Body()`（`game/components/actor/actor.go`），窄接口 `IActorEntity`。另有 `ActorComp().SavedPosition()` 读上次存档的空间号、坐标与朝向，`player.MapBasic()`、`player.MoveComponent()` 取底层移动组件。
-  - `ActorComp().MoveRefusal(err)`：把 `Body.Walk` / `Follow` 的正常拒绝换成带业务码的错误（见“错误码”），在同一把实体锁内、紧接着失败的那次调用使用；别的错误原样返回。`handlerActorMove` 用的就是它，工程自己写的移动协议同样调它。
+  - 取身体：`target.Actor().Body()`（组件在 `game/components/actor/actor.go`，类型号 `actor.CompTypeActor` 与工厂登记也在这里），handler 参数写 `view.IActorEntity`。另有 `Actor().SavedPosition()` 读上次存档的空间号、坐标与朝向，`player.MapBasic()`、`player.MoveComponent()` 取底层移动组件（Player 一侧的手写方法在 `game/entities/player/actor.go`）。
+  - `Actor().MoveRefusal(err)`：把 `Body.Walk` / `Follow` 的正常拒绝换成带业务码的错误（见“错误码”），在同一把实体锁内、紧接着失败的那次调用使用；别的错误原样返回。`handlerActorMove` 用的就是它，工程自己写的移动协议同样调它。
   - `Body` 的方法（`game/modules/actor/body.go`，都必须在所属实体的锁内调用）：
     - `Enter(env Environment, at spatial.Point, facing movement.Facing) error`：放进一个空间。重复进入同一个空间保留现有站位；从别的空间切过来时先 `Leave`，同一笔事务。
     - `Leave() error`：离开当前空间并存档位置。
@@ -54,12 +54,12 @@
 - **需求正好是它**：`roost module add actor`。不连带安装别的模块。一般不单独装，而是作为 `scene`、`combat`、`monster` 的依赖被带上。
 - **需求比它多一点**
   - 改移动速度：改 `game/handler/actor_move.go` 里的 `60`。
-  - 自己的房间或副本要放置玩家：在持有 `Player` 锁的 handler 里调 `target.ActorComp().Body().Enter(actor.Environment{ID: 房间号, Space: actor.Nowhere{}}, 坐标, 朝向)`；需要地形校验时填 `Ground` 或 `Surface`，需要独立时间流速时填 `Time`。
+  - 自己的房间或副本要放置玩家：在持有 `Player` 锁的 handler 里调 `target.Actor().Body().Enter(actor.Environment{ID: 房间号, Space: actor.Nowhere{}}, 坐标, 朝向)`；需要地形校验时填 `Ground` 或 `Surface`，需要独立时间流速时填 `Time`。
   - 进入、离开空间或每拍之后要做事：`init` 里调 `OnActor("<功能名>", 工厂)`。
   - 让别的玩家看到某个 `PlayerDao` 字段：`init` 里调 `OnActorSyncFields`（装了 `scene` 时用它提供的 `OnSceneFields`）。
   - `game/modules/actor/body.go` 是 `Player` 与怪物共用的实现，尽量不改；要加行为优先用钩子。
 - **别的模块 / 业务代码要用它**
-  - 服务端驱动移动：`body.Walk(path, speed)` / `body.Follow(target, speed, keep)` / `body.Stop()`，持锁调用，错误返回给 Nest。结果要答给客户端时先过一遍 `target.ActorComp().MoveRefusal(err)`，否则这些拒绝到客户端是内部错误。
+  - 服务端驱动移动：`body.Walk(path, speed)` / `body.Follow(target, speed, keep)` / `body.Stop()`，持锁调用，错误返回给 Nest。结果要答给客户端时先过一遍 `target.Actor().MoveRefusal(err)`，否则这些拒绝到客户端是内部错误。
   - 施加定身、沉默：改 `body.States`（状态号 `actor.Rooted`、`actor.Silenced`）；`combat` 用 buff 绑定派生这两个状态。
   - 读位置：持锁时 `body.Position()`；空间号 `body.Map.SceneID()`。
   - 没有持锁时：`syncsender.NewActorMoveSender(client).Sync_ActorMove(ctx, 完整实体号, &pb.ActorMoveRequest{…})`。

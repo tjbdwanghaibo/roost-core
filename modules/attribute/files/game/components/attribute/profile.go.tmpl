@@ -1,11 +1,13 @@
 package attribute
 
-import (
-	gameprofile "{{MODULE}}/game/components/profile"
-	"{{MODULE}}/game/view"
-)
+import "{{MODULE}}/game/event"
 
-// 升级时重算等级带来的属性（attribute 依赖 profile）：钩子收宿主，经 view 的 Attribute() 找到本组件。
-func init() {
-	gameprofile.OnProfileLevelUp("attribute", func(host view.PlayerEntity, from, to int32) error { return host.Attribute().LevelUp(to - from) })
+// OnProfileLevelUp 在升级的同一笔事务里按升了几级成长属性（attribute 依赖 profile）。
+//
+// priority=30 保持改成事件之前的执行顺序：原来的升级钩子按登记名字母序执行（activity、attribute、mailbox、task），
+// 属性排在活动之后、升级邮件与任务之前（任务按刷新后的属性算进度）。
+//
+//roost:listen priority=30
+func (c *Component) OnProfileLevelUp(ev event.ProfileLevelUp) error {
+	return c.LevelUp(ev.To - ev.From)
 }

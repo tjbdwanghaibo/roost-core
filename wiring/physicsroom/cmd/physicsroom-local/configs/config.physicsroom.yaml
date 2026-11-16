@@ -5,12 +5,13 @@ log:
   file: false
 singleton:
   enabled: true
-  key_prefix: roost-physics-local
-redis:
-  addr: 127.0.0.1:6379
+  key_prefix: /roost-physics-local/singleton
 nats:
   url: nats://127.0.0.1:4222
   prefix: roost-physics-local
+# 只给单实例锁用（kitetcd.SingletonStore）：这个服务不装 etcd Mod，锁与 game / gate 放在同一个 etcd。
+etcd:
+  endpoints: [127.0.0.1:2379]
 physicsroom:
   entity_kind: 240
   entity_category: 1

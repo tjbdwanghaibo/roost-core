@@ -1,0 +1,18 @@
+package player
+
+import (
+	"{{MODULE}}/game/components/attribute"
+	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
+)
+
+// Player 给属性组件的宿主方法（view.AttributeHolder）里生成器不写的一个，加上可选的装备层来源；AttributeBase /
+// AttributeGear / AttributeFinal 由生成器交接 PlayerDao 的同名字段。只在 Player 被 Nest 锁住期间（或装载时）调用。
+
+// AttributeLevel 是档案等级：基础层没有记录时按它派生（转给 profile 组件）。
+func (e *Player) AttributeLevel() int32 { return e.Profile().Level() }
+
+// CollectAttributeGear 是宿主可选的装备层来源（attribute 组件按需做类型判断，不在 view 里）：汇总 OnAttributeGear
+// 登记的来源（game/components/attribute/gear.go）。
+func (e *Player) CollectAttributeGear() (*gameattr.Combat, error) {
+	return attribute.CollectPlayerGear(e)
+}

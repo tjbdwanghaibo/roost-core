@@ -1,0 +1,21 @@
+--- FAIL: TestFaultMatrixScriptNamesEveryFullEnvironmentSuite (0.16s)
+--- FAIL: TestRedisClusterScriptNamesEveryClusterKeyedSuite (0.22s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	12.430s
+--- FAIL: TestModuleCdkeyNoticeInstallAndVerify (22.05s)
+--- FAIL: TestModuleGMScenariosAndMutations (71.92s)
+--- FAIL: TestModuleNamingFriendsInstallVerifyAndMutations (16.79s)
+--- FAIL: TestModuleProfileMailScenariosAndMutations (33.71s)
+--- FAIL: TestModuleTaskEventsPeriodsAndMutations (95.09s)
+--- FAIL: TestModuleTeamGenerated (42.02s)
+--- FAIL: TestRecipesCreateBuildableCompositions (185.72s)
+--- FAIL: TestGeneratedBeginnerAndManifestDocumentationIsComplete (0.00s)
+--- FAIL: TestModuleAddDeclaresTheFrameworkServicesItUses (16.62s)
+--- FAIL: TestModsBroughtInByAddAccessAndAddRPCGetTheirConfigSections (9.17s)
+--- FAIL: TestDoctorNamesTheConfigSectionsAManifestAddedModLacks (5.22s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1908.300s
+--- FAIL: TestFrameworkModsReadConfigOnlyThroughDeclarations (0.02s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/app	15.692s
+FAIL

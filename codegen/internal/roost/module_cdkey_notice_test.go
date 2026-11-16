@@ -21,12 +21,12 @@ func TestModuleCdkeyNoticeInstallAndVerify(t *testing.T) {
 			t.Fatalf("missing module %s", name)
 		}
 	}
-	for _, path := range []string{"game/controllers/cdkey/controller.go", "game/handler/syncsender", "configs/data/cdkey.json", "game/modules/notice/notice.go", "internal/service/game/modules_gen.go"} {
+	for _, path := range []string{"game/controllers/cdkey.go", "game/handler/syncsender", "configs/data/cdkey.json", "game/modules/notice/notice.go", "internal/service/game/modules_gen.go"} {
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			t.Fatalf("missing generated integration %s: %v", path, err)
 		}
 	}
-	controller, err := os.ReadFile(filepath.Join(root, "game/controllers/cdkey/controller.go"))
+	controller, err := os.ReadFile(filepath.Join(root, "game/controllers/cdkey.go"))
 	if err != nil || !strings.Contains(string(controller), "example.com/studio/redemption/game/modules/mailbox") {
 		t.Fatalf("custom module not rendered: %v", err)
 	}
@@ -48,5 +48,21 @@ func TestModuleCdkeyNoticeInstallAndVerify(t *testing.T) {
 	roost("module", "add", "notice", "cdkey")
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeated installation changed the project")
+	}
+	// 再装 gm：notice 的 GM 命令联动（with/gm）要在门禁里跑到，否则它变红也没人发现（合包时出过一次）。
+	roost("module", "add", "gm")
+	report, err = VerifyModules(context.Background(), root, []string{"notice", "gm"}, nil)
+	if err != nil {
+		t.Fatalf("verify with gm: %v %+v", err, report)
+	}
+	counts = map[string]int{}
+	for _, module := range report.Modules {
+		if !module.OK || module.Skipped != 0 {
+			t.Fatalf("module with gm=%+v", module)
+		}
+		counts[module.Name] = module.Passed
+	}
+	if counts["notice+gm"] != 4 {
+		t.Fatalf("scenario counts with gm=%v", counts)
 	}
 }

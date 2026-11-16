@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 )
 
 // handlerShowAlliance 更新 PlayerDao.Alliance.ID 展示副本，权威名单仍归联盟服务。
@@ -9,8 +9,8 @@ import (
 // replaces 非零时仅替换那个联盟，防止晚到的旧退盟通知清掉新联盟。
 //
 //roost:nest rollback=undo durability=strict
-func handlerShowAlliance(target player.IAllianceEntity, allianceID int64, replaces int64) (bool, error) {
-	profile := target.AllianceComp()
+func handlerShowAlliance(target view.IAllianceEntity, allianceID int64, replaces int64) (bool, error) {
+	profile := target.Alliance()
 	current := profile.AllianceID()
 	if current == allianceID || (replaces != 0 && current != replaces) {
 		return false, nil

@@ -339,14 +339,22 @@ func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChang
 			return relErr
 		}
 		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) {
-			// 业务骨架只允许首次复制；已有文件始终归业务所有。
-			if !protocol.IsControllerScaffold(rel, raw) {
+			// 业务骨架只允许首次复制；已有文件始终归业务所有。唯一的例外是协议生成器往
+			// game/controllers/<分组>.go 末尾追加的“未实现”存根（game/controllers 是一个包，2026-11-16 起）：
+			// 暂存里的文件恰好是真实工程里的那份加上追加时才带回，别的改动一律不认。
+			if !strings.HasPrefix(filepath.ToSlash(rel), "game/controllers/") {
 				return nil
 			}
-			if _, err := os.Lstat(filepath.Join(root, rel)); err == nil {
-				return nil
-			} else if !os.IsNotExist(err) {
+			before, err := os.ReadFile(filepath.Join(root, rel))
+			switch {
+			case os.IsNotExist(err):
+				if !protocol.IsControllerScaffold(rel, raw) {
+					return nil
+				}
+			case err != nil:
 				return err
+			case !protocol.IsControllerStubAppend(before, raw):
+				return nil
 			}
 		}
 		paths[filepath.ToSlash(rel)] = true

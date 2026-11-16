@@ -1,6 +1,6 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import "{{MODULE}}/game/view"
 
 // handlerPlayerAlliance reads the alliance the player is shown in (PlayerDao.Alliance.ID)
 // under the Player's lock. It only reads: nothing is changed, so there is
@@ -10,6 +10,6 @@ import player "{{MODULE}}/game/entities/player"
 // roster.
 //
 //roost:nest
-func handlerPlayerAlliance(target player.IAllianceEntity) (int64, error) {
-	return target.AllianceComp().AllianceID(), nil
+func handlerPlayerAlliance(target view.IAllianceEntity) (int64, error) {
+	return target.Alliance().AllianceID(), nil
 }

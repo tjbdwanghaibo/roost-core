@@ -4,14 +4,27 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+
+	"{{MODULE}}/db"
 )
 
-// Activity 是活动组件对 game/ 下其它包公开的方法（实现在 game/modules/activity，语义见那里）；只在宿主被 Nest 锁住期间调用。
+// Activity 是活动组件对 game/ 下其它包公开的方法（实现在 game/components/activity，语义见那里）；只在宿主被 Nest 锁住期间调用。
+// 带 game/components/activity 类型的方法（Host、Views）进不了 view：handler 经 activity.Of 取回组件再用。
 type Activity interface {
 	Reconcile(event string, createdAt int64) error
 	Rearm() error
 	OnDeadline(fire entitytimer.Fire) time.Duration
 }
 
-// ActivityHolder 是“带有活动组件”的小接口：只要活动的钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
-type ActivityHolder interface{ Activity() Activity }
+// ActivityHolder 是“带有活动组件”的小接口：只要活动的钩子与联动收它；实体接口（entity_<实体>.go）嵌入它，
+// Nest handler 收生成的 IActivityEntity。Player、ActivityWorld、Alliance 挂同一个组件。
+type ActivityHolder interface {
+	Activity() Activity
+	// ActivityBook 是宿主 DAO 里的活动状态。DAO 里只有一个 ActivityBook 字段时由生成器写（纯 DAO 交接）。
+	ActivityBook() *db.ActivityBook
+	// ActivityScope 是宿主的活动范围："player"、"world" 或 "alliance"，每种实体手写一个常量。
+	ActivityScope() string
+	// ActivityCreatedAt 是宿主持久的创建时间（Unix 毫秒），created 触发的定义以它为锚点；没有创建事实时返回 0，
+	// 不拿当前时间冒充。每种实体手写。
+	ActivityCreatedAt() int64
+}

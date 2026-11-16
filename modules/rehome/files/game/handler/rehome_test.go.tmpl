@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	rehomecomp "{{MODULE}}/game/components/rehome"
 	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamerehome "{{MODULE}}/game/modules/rehome"
 	apperrors "{{MODULE}}/internal/errors"
@@ -26,8 +25,9 @@ import (
 
 const rehomeTestPlayer int64 = 94311
 
-// 事务内的两个登记点只能在 init 里登记，所以这个测试文件自己登记一条检查与一个到达钩子，
-// 只认这条用例的玩家号，平时什么都不做，由下面的开关打开。
+// 事务内的两个实体事件（event.RehomeApplying、event.RehomeArrived）的监听只能在 init 里登记，所以这个测试文件自己
+// 直接 RegisterEventListener 一条检查与一个到达监听（排在生成的监听后面），只认这条用例的玩家号，平时什么都不做，
+// 由下面的开关打开。
 var (
 	rehomeTestVeto       atomic.Pointer[error]
 	rehomeTestChecked    atomic.Int64
@@ -38,10 +38,11 @@ var (
 )
 
 func init() {
-	rehomecomp.OnRehomeApplying("rehome_test", func(owner view.PlayerEntity, move gamerehome.Move, _ int64) error {
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "RehomeApplying", "handler_test.rehomeTestApplying", func(owner *playerentity.Player, ev event.RehomeApplying) error {
 		if owner.UniqueID() != rehomeTestPlayer {
 			return nil
 		}
+		move := gamerehome.Move{PlayerID: ev.PlayerID, EntityID: ev.EntityID, ID: ev.ID, From: ev.From, To: ev.To, Epoch: ev.Epoch, Operator: ev.Operator}
 		rehomeTestChecked.Add(1)
 		rehomeTestLastMove.Store(&move)
 		if veto := rehomeTestVeto.Load(); veto != nil {
@@ -49,10 +50,11 @@ func init() {
 		}
 		return nil
 	})
-	rehomecomp.OnRehomeArrived("rehome_test", func(owner view.PlayerEntity, arrival gamerehome.Arrival, _ int64) error {
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "RehomeArrived", "handler_test.rehomeTestArrived", func(owner *playerentity.Player, ev event.RehomeArrived) error {
 		if owner.UniqueID() != rehomeTestPlayer {
 			return nil
 		}
+		arrival := gamerehome.Arrival{PlayerID: ev.PlayerID, ID: ev.ID, From: ev.From, To: ev.To, Count: ev.Count}
 		rehomeTestArrived.Add(1)
 		rehomeTestLastArrive.Store(&arrival)
 		if rehomeTestArriveFail.Load() {

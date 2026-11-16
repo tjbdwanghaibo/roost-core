@@ -65,7 +65,7 @@ func TestModuleOwnedEntityInstallIsTransactional(t *testing.T) {
 		t.Fatalf("verify: %v %+v", err, report)
 	}
 	// 模块源码已经归业务所有，重复安装不能覆盖。
-	component := filepath.Join(root, "game/entities/room/room_component.go")
+	component := filepath.Join(root, "game/components/room/room.go")
 	raw, err := os.ReadFile(component)
 	if err != nil {
 		t.Fatal(err)

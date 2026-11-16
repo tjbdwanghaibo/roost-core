@@ -459,7 +459,7 @@ type Session struct {
 // gateway.Principal.Claims 用的键（值是十进制 sid）。
 //
 // 写的一方是认证器（game-demo 的 internal/access/player/tcp/auth.go），读的一方是登录端点
-// （game/controllers/player/enter_game.go 的 BoundServerID），后者据此判断这个玩家是不是由本服承载，
+// （game/controllers/player_enter_game.go 的 BoundServerID），后者据此判断这个玩家是不是由本服承载，
 // 比较逻辑与合服前相同：没有合服时承载服就是原服。两边分属传输包与控制器包，后者不能引用前者，
 // 所以键放在两边本来就依赖的 account 包里：它说的正是 account 返回的那个承载服。
 const ServerIDClaim = "server_id"

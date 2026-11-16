@@ -7,41 +7,59 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	gamelogin "{{MODULE}}/game/modules/login"
-	"{{MODULE}}/game/view"
 
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // 新建那条路的场景（需求：新建与进入分开，角色名的规则在游戏服）。它们与上面的“加载或创建”场景共用同一个
-// Nest fixture；事务内的两个登记点各登记一个本文件的钩子，记下被调用的次数与名字，并能按开关拒绝。
+// Nest fixture；事务内的两个实体事件（event.EnterCreate、event.EnterFirst）各登记一条本文件的监听，记下被调用的次数与名字，
+// 并能按开关拒绝。
 
 var (
-	enterCreateNames  []string // 新建钩子收到的名字，按调用顺序
+	enterCreateNames  []string // 新建事件的监听收到的名字，按调用顺序
 	enterCreateGrants atomic.Int64
 	enterCreateMu     sync.Mutex
-	// errEnterCreateName 是新建钩子拒绝名字 "taken" 时返回的带码错误：证明钩子的码原样到达调用方。
+	// errEnterCreateName 是新建事件的监听拒绝名字 "taken" 时返回的带码错误：证明监听的码原样到达调用方。
 	// 借用模块自己的一个码，场景不另占错误码。
 	errEnterCreateName = apperrors.ErrEnterNameLong
 )
 
+// enterFirstRejects 打开时，本文件的 EnterFirst 监听返回 errEnterFirstRefused（验证首次初始化的监听出错整笔回滚）；
+// enterFirstAt 记下监听最后一次收到的 NowUnixMilli。
+var (
+	enterFirstRejects    atomic.Bool
+	enterFirstAt         atomic.Int64
+	errEnterFirstRefused = errors.New("injected first-enter listener refusal")
+)
+
 func init() {
-	gamelogin.OnCreate("enter-scenarios", func(_ view.PlayerEntity, name string, _ int64) error {
-		if name == "taken" {
-			return errEnterCreateName
-		}
-		enterCreateMu.Lock()
-		enterCreateNames = append(enterCreateNames, name)
-		enterCreateMu.Unlock()
-		return nil
-	})
-	gamelogin.OnFirstEnter("enter-scenarios", func(view.PlayerEntity, int64) error {
-		enterCreateGrants.Add(1)
-		return nil
-	})
+	// 监听平时只由生成代码（game/entities/player/player_event_gen.go）登记；测试在自己的 init 里直接登记，
+	// player 包的 init 先跑，所以它们排在生成的监听后面。
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "EnterCreate", "handler_test.enterCreateScenarios",
+		func(_ *playerentity.Player, ev event.EnterCreate) error {
+			if ev.Name == "taken" {
+				return errEnterCreateName
+			}
+			enterCreateMu.Lock()
+			enterCreateNames = append(enterCreateNames, ev.Name)
+			enterCreateMu.Unlock()
+			return nil
+		})
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "EnterFirst", "handler_test.enterFirstScenarios",
+		func(_ *playerentity.Player, ev event.EnterFirst) error {
+			if enterFirstRejects.Load() {
+				return errEnterFirstRefused
+			}
+			enterFirstAt.Store(ev.NowUnixMilli)
+			enterCreateGrants.Add(1)
+			return nil
+		})
 }
 
 type enterCreateFixture struct {
@@ -60,6 +78,9 @@ func newEnterCreateFixture(t *testing.T) *enterCreateFixture {
 	enterCreateNames = nil
 	enterCreateMu.Unlock()
 	enterCreateGrants.Store(0)
+	enterFirstAt.Store(0)
+	enterFirstRejects.Store(false)
+	t.Cleanup(func() { enterFirstRejects.Store(false) })
 	f := &enterCreateFixture{enterFixture: newEnterFixture(t)}
 	f.creates = sender.NewEnterCreateSender(f.engine)
 	f.existing = sender.NewEnterExistingSender(f.engine)
@@ -100,7 +121,7 @@ func enterCreateSeen() []string {
 	return append([]string(nil), enterCreateNames...)
 }
 
-// 没建成的玩家：先新建的进入被拒（enter_need_create）且什么都没写；新建之后建成，名字到了新建钩子、
+// 没建成的玩家：先新建的进入被拒（enter_need_create）且什么都没写；新建之后建成，名字到了新建事件的监听、
 // 初始发放发了一次；接下来的第一次进入是 First，之后不是，注册时间一直是新建的那一刻。
 func TestEnterCreateBuildsThePlayerAndTheNextEnterIsFirst(t *testing.T) {
 	f := newEnterCreateFixture(t)
@@ -138,7 +159,7 @@ func TestEnterCreateBuildsThePlayerAndTheNextEnterIsFirst(t *testing.T) {
 	}
 }
 
-// 已经建成的玩家再发新建：enter_created，名字钩子与发放都不再执行，记录不变——不论是经新建请求建成的，
+// 已经建成的玩家再发新建：enter_created，新建事件与发放都不再执行，记录不变——不论是经新建请求建成的，
 // 还是在“加载或创建”的进入里建成的。
 func TestEnterCreateOfABuiltPlayerIsRefusedAndChangesNothing(t *testing.T) {
 	f := newEnterCreateFixture(t)
@@ -200,7 +221,7 @@ func TestEnterCreatedPlayerIsFirstOnceOnTheLoadOrCreatePathToo(t *testing.T) {
 	}
 }
 
-// 新建钩子拒绝名字：带着它的码回到调用方，整笔回滚——没建成、没发放；换个名字再建就成了。
+// 新建事件的监听拒绝名字：带着它的码回到调用方，整笔回滚——没建成、没发放；换个名字再建就成了。
 func TestEnterCreateRefusedByTheNameHookWritesNothing(t *testing.T) {
 	f := newEnterCreateFixture(t)
 	err := f.create("taken")
@@ -241,7 +262,7 @@ func TestEnterCreateRejectedCommitRollsBackAndCanBeRetried(t *testing.T) {
 	}
 }
 
-// 同一名玩家的多条连接同时新建：恰好一条建成，其余都是 enter_created；名字钩子执行一次，发放一次。
+// 同一名玩家的多条连接同时新建：恰好一条建成，其余都是 enter_created；新建事件的监听执行一次，发放一次。
 func TestEnterCreateConcurrentRequestsBuildThePlayerOnce(t *testing.T) {
 	f := newEnterCreateFixture(t)
 	const requests = 16
@@ -265,6 +286,63 @@ func TestEnterCreateConcurrentRequestsBuildThePlayerOnce(t *testing.T) {
 		}
 	}
 	if built != 1 || len(enterCreateSeen()) != 1 || enterCreateGrants.Load() != 1 {
-		t.Fatalf("%d requests built the player, name hook ran %d times, %d grants; want 1, 1, 1", built, len(enterCreateSeen()), enterCreateGrants.Load())
+		t.Fatalf("%d requests built the player, create listener ran %d times, %d grants; want 1, 1, 1", built, len(enterCreateSeen()), enterCreateGrants.Load())
+	}
+}
+
+// 首次初始化事件（event.EnterFirst）只发布一次，监听拿到的是这条 Nest 消息冻结的业务时间，也就是记进档里的
+// 首次初始化时间（注册时间）；之后的进入不再发布。新建那条路的同一条约定在下面 RollsBackTheCreate 的末尾核对。
+func TestEnterFirstEventCarriesTheFrozenTime(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	start := f.now.Add(int64(time.Hour / time.Millisecond))
+	if result, err := f.init(); err != nil || !result.First || result.FirstAtUnixMilli != start {
+		t.Fatalf("load-or-create enter: %+v, %v", result, err)
+	}
+	if enterCreateGrants.Load() != 1 || enterFirstAt.Load() != start {
+		t.Fatalf("EnterFirst published %d times at %d, want once at %d", enterCreateGrants.Load(), enterFirstAt.Load(), start)
+	}
+	f.now.Add(int64(time.Minute / time.Millisecond))
+	if result, err := f.init(); err != nil || result.First || enterCreateGrants.Load() != 1 {
+		t.Fatalf("second enter: %+v, %v, %d publications; want not first and no second EnterFirst", result, err, enterCreateGrants.Load())
+	}
+}
+
+// “加载或创建”那条路上 EnterFirst 的监听出错：错误带着监听名回到调用方，首次初始化的标记与时间一起回滚，
+// 玩家仍是没初始化；监听不再拒绝之后下一次进入补上，是 First。
+func TestEnterFirstListenerErrorRollsBackTheInit(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	enterFirstRejects.Store(true)
+	result, err := f.init()
+	enterFirstRejects.Store(false)
+	if !errors.Is(err, errEnterFirstRefused) || result.First {
+		t.Fatalf("init with a refusing EnterFirst listener: %+v, %v; want the listener's error", result, err)
+	}
+	if initialized, firstAt, fresh := f.state(t); initialized || firstAt != 0 || fresh || f.built(t) {
+		t.Fatalf("a refused first enter left initialized=%v firstAt=%d fresh=%v", initialized, firstAt, fresh)
+	}
+	if result, err := f.init(); err != nil || !result.First || enterCreateGrants.Load() != 1 {
+		t.Fatalf("retry after the refusal: %+v, %v, %d grants; want first and one grant", result, err, enterCreateGrants.Load())
+	}
+}
+
+// 新建那条路上 EnterFirst 的监听出错：新建事件已经执行过，也随整笔新建一起回滚——没建成、Fresh 没置位，
+// 先新建的进入照旧被拒；再发一次新建就建成了。
+func TestEnterFirstListenerErrorRollsBackTheCreate(t *testing.T) {
+	f := newEnterCreateFixture(t)
+	enterFirstRejects.Store(true)
+	err := f.create("Alice")
+	enterFirstRejects.Store(false)
+	if !errors.Is(err, errEnterFirstRefused) {
+		t.Fatalf("create with a refusing EnterFirst listener: err = %v, want the listener's error", err)
+	}
+	if initialized, firstAt, fresh := f.state(t); initialized || firstAt != 0 || fresh || f.built(t) {
+		t.Fatalf("a refused create left initialized=%v firstAt=%d fresh=%v", initialized, firstAt, fresh)
+	}
+	if _, err := f.existing.Sync_EnterExisting(context.Background(), f.player.ID()); !errors.Is(err, apperrors.ErrEnterNeedCreate) {
+		t.Fatalf("enter after the refused create: err = %v, want enter_need_create", err)
+	}
+	createdAt := f.now.Add(int64(time.Minute / time.Millisecond))
+	if err := f.create("Alice"); err != nil || !f.built(t) || enterCreateGrants.Load() != 1 || enterFirstAt.Load() != createdAt {
+		t.Fatalf("create again: %v, built=%v, %d grants at %d; want one grant at %d", err, f.built(t), enterCreateGrants.Load(), enterFirstAt.Load(), createdAt)
 	}
 }

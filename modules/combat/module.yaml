@@ -11,6 +11,7 @@ state:
 daos:
   - {field: combatState, type: CombatDAO, tag: combat_state}
 component: Combat
+component_package: game/components/combat
 protocols: [CombatReady, CombatCast, CombatStep, CombatLeave]
 errcodes: [combat_invalid, combat_sequence, combat_conflict, combat_boundary, combat_busy, combat_scene, combat_range, combat_consent, combat_dead, combat_silenced, combat_skill]
 runtime: {package: game/modules/combat, start: Start}
@@ -28,7 +29,7 @@ with:
   scene:
     summary: 只向旁观者开放Combat投影字段
     verify:
-      packages: [./game/controllers/scene]
+      packages: [./game/controllers]
       run: ^TestWithCombatScene
       pass: 2
   equipment:

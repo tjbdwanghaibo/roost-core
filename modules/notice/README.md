@@ -41,7 +41,7 @@ err = publisher.Publish(ctx, "announce", "维护完成", "maintenance-20261112")
 - **运维命令只在装了 gm 模块时才有**：两条命令经 gm 模块的 `Register` 登记，沿用它的必填检查、审计与带码拒绝；没装 gm 时不登记任何运维命令，要发公告只能由工程自己的服务端代码调 `Publish`。安装不会自动打开运维 HTTP 入口，也不会填令牌（见 gm 模块的 README）。
 - **运维命令可以重试**：同一个 `key` 重发不会多存一条历史（见“幂等的范围”），但在线推送可能重复。
 - **停止之后拒绝**：模块停止后 `Publish` 返回 `notice.ErrStopped`（文案 `notice: publisher is stopped`）。
-- **前提**：依赖 `chat`（chat 模块要求业务服务 `uses: [chat]`），取不到 chat 的能力时启动失败。没有别的前提：不要求 ops / admin 命令表。
+- **前提**：依赖 `chat`（chat 模块要求业务服务 `uses: [chat]`），取不到 chat 的能力时启动失败。启动经生成的 `controllers.FromRegistry` 取 chat 的系统发布入口，它要求 Nest 客户端已发布（有 chat 协议的进程里总有）。没有别的前提：不要求 ops / admin 命令表。
 - **已知限制**：[KNOWN-LIMITS“场景模块的边界”](../../docs/maintenance/KNOWN-LIMITS.md)（notice 不默认调度）与“chat 模块的边界”（在线名单每进程一份、不跨进程扇出）。
 
 ## 复用方式

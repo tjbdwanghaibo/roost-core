@@ -1,6 +1,7 @@
 package room
 
 import (
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/view"
 	"fmt"
 	"math"
@@ -12,7 +13,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Owner 是 Room 组件的宿主（Room 的接线见 game/entities/room/room_component.go）：view 的 RoomEntity。
+//roost:component type={{ID:component:Room}}
+const CompTypeRoom entity.ComponentType = {{ID:component:Room}}
+
+// init 登记组件工厂：Room 结构体里 comp:"room.CompTypeRoom" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeRoom, NewComponent)
+}
+
+// Owner 是 Room 组件的宿主：view 的 RoomEntity（组件读写 RoomDao，并在 Room 上发布入房的拦截事件 event.RoomJoining）。
 // 只在实体被 Nest 锁住期间使用。
 type Owner = view.RoomEntity
 
@@ -23,7 +32,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Room 在 game/entities/room/room_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -82,7 +91,8 @@ func (component *Component) Join(playerID int64, connection string) (RoomSnapsho
 	if err := component.checkOpen(); err != nil {
 		return RoomSnapshot{}, err
 	}
-	if err := checkRoomJoining(component.owner, playerID); err != nil {
+	// 入房的拦截事件（matchroom 在这里校验名单）：在 Room 上发布，第一个拒绝原样返回，什么都不写。
+	if err := component.owner.Publish(event.RoomJoining{PlayerID: playerID}); err != nil {
 		return RoomSnapshot{}, err
 	}
 	dao := component.owner.Dao()

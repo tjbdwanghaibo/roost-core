@@ -11,11 +11,11 @@
 
 ```
 TCP (player access)
-  → game/controllers/player/add_item.go      端点（本目录）：错误边界，coded error → 响应里的 Code/Reason
+  → game/controllers/player_add_item.go      端点（本目录）：错误边界，coded error → 响应里的 Code/Reason
   → game/handler/syncsender/…Sync_AddItem     Sender（从 handler 参数与返回值生成）
   → Nest 锁住 Player
   → game/handler/add_item.go                  handlerAddItem（本目录）：int32 的协议数量在这里转成模块的 int64
-  → BagComponent.Add                          bag 模块的共用组件（game/components/bag）：数量为正 → 道具规则 → 单种上限 → 种类数上限 → 只走生成的 mutator
+  → target.Bag().Add（view.Bag）               bag 模块的共用组件（game/components/bag）：数量为正 → 道具规则 → 单种上限 → 种类数上限 → 只走生成的 mutator
       ↳ items.go 的 ItemRule                   bag 模块留给工程的规则文件（game/components/bag/items.go）；缺省读道具表，demo 没有改它
       ↳ configs/generated.ItemByID             生成的表访问器，读的是钉在本次请求上的配置快照
       ↳ internal/errors.ErrBag*                bag 模块的错误码（internal/errors/bag.go），号在安装时从清单的 errcode 号段分配
@@ -25,7 +25,7 @@ TCP (player access)
 
 **背包是 [bag 业务模块](../modules/README.md)，不是 demo 自己的代码**：`-template game-demo` 生成时由 `roost module add bag`
 装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。模块带来共用组件
-`game/components/bag`（`Add` / `Remove` / `Count` / `Has`，Player 上的名字是 `BagComponent`，接线在 `game/entities/player/bag_component.go`）、状态 `PlayerDao.Bag`（嵌套结构体，存储键 `bag`）、道具表
+`game/components/bag`（`Add` / `Remove` / `Count` / `Has`，按组件包写法挂在 Player 上：类型号与工厂登记在组件包里，handler 经 view 的窄接口 `view.IBagEntity` 的访问器 `Bag()` 调用）、状态 `PlayerDao.Bag`（嵌套结构体，存储键 `bag`）、道具表
 （`configs/schema/item.go` 与 `configs/table/item.csv`）、五个错误码、丢弃协议 `BagDiscard` 与服务端发放 handler `BagGrant`，
 以及它自己的 20 条场景（`roost module verify`）。demo 在它之上做的：
 
@@ -33,7 +33,7 @@ TCP (player access)
   （属性系统给穿着的装备算加成），行是 demo 的五种道具。背包规则文件 `game/components/bag/items.go` 是模块的缺省实现：
   表里有这一行道具号就合法，`max_stack` 是单种上限（0 表示不单独限制，按硬上限 999999）。加道具、改上限只改 CSV。
 - **建在背包组件上的事务是 demo 的**：`AddItem`、赠礼的 debit / refund、公会的扣费与发放，
-  都在自己的 Nest handler 里调 `target.BagComp().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`
+  都在自己的 Nest handler 里调 `target.Bag().Add / Remove / Count`（同一个实体、同一笔事务）。`roost add handler --component Bag`
   要求组件文件已经在盘上，而组件在最后的模块步骤才落盘，所以生成步骤里这些 handler 没有骨架步骤，文件直接写出、留在原处
   （骨架本来也会被立刻覆盖）；模块那一步跑生成器时全部 handler 都已经在盘上。邮件附件进背包不在其中：那是 mailbox 模块与
   bag 模块的联动（`game/components/mailbox/mailbox_item.go`，见下文[邮件](#邮件列表与领附件客户端这一半)）。
@@ -51,7 +51,7 @@ TCP (player access)
 
 - **业务代码只碰生成的 mutator**（`bag.SetItemsKey(...)`），不直接写私有字段——dirty 追踪、Nest undo 和持久化
   patch 全靠它。
-- **道具数量先校验再写**：`BagComponent.Add` 先判数量为正、道具在道具表里，再用减法比较单种上限（`count > 上限 - 持有量`，
+- **道具数量先校验再写**：`bag.Component.Add` 先判数量为正、道具在道具表里，再用减法比较单种上限（`count > 上限 - 持有量`，
   加法在数量接近 int64 上限时会溢出成负数、绕过上限），全部通过后才调用 mutator。拒绝时不写任何字段：超过单种上限是
   `bag_stack_full`（不做“能放多少放多少”），不在道具表里是 `bag_item_invalid`，数量不为正是 `bag_count_invalid`，
   种类数到 200 之后的新种类是 `bag_kinds_full`。扣到 0 时删掉这个键，不留数量为 0 的条目。
@@ -86,7 +86,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 
 ## 档案：名字、等级、经验来自 profile 模块
 
-名字、等级、经验用的是 [profile 业务模块](../modules/README.md)（生成时由 `roost module add profile` 装进工程）：`ProfileComponent`、
+名字、等级、经验用的是 [profile 业务模块](../modules/README.md)（生成时由 `roost module add profile` 装进工程）：`profile.Component`、
 状态、改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符）、发经验的规则（每级 100、可连升多级、int64 经验与 int32 等级的范围）、
 只检查不执行的 `CheckAddExp`、服务端发经验的 handler `ProfileAddExp`、给服务端读的名片 handler `ProfileCard` 与它们的场景测试
 （`game/handler/profile_test.go`）都是模块的，demo 不再带自己的档案组件。
@@ -104,12 +104,12 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 
 ## 事件链：升级 → 奖励邮件（事务性 outbox）
 
-经验发放在任何 DAO 写入之前先做只读校验（`handler.checkExpGrant`）：Player 这一半问 profile 模块的 `ProfileComponent.CheckAddExp`（数额不是正数是
+经验发放在任何 DAO 写入之前先做只读校验（`handler.checkExpGrant`）：Player 这一半问 profile 模块的 `profile.Component.CheckAddExp`（数额不是正数是
 `profile_exp_invalid`，int64 经验加法或 int32 等级放不下是 `profile_exp_overflow`），World 这一半问 `StatsComponent.CheckRecordExp`（int64 累计放不下是 demo 的
 `exp_amount`，100004）。任何一方拒绝时 Player、属性、副本领奖账本、World 与升级效果都不写，也没有新的提交记录；`AddExp` / `RecordExp` 自己再查一次只是兜底，不靠写完再由 `rollback=undo` 撤回。`ClaimDungeon` 先判“已领取”（重放照旧返回 Claimed=false），再校验，最后才写账本。等级按平坦曲线用除余计算，不按奖励数量逐级循环（修前 `amount=MaxInt64` 会一直占住业务 worker）。GM `gm.player.add_exp`、`AddExp` 端点、副本结算 `FinishDungeon` 都经这两个 handler，同一道校验。生成工程回归在 `game/handler/add_exp_test.go`。
 
 ```
-AddExp → Nest 锁 World、Player → ProfileComponent.AddExp
+AddExp → Nest 锁 World、Player → profile.Component.AddExp
   ├─ ProfilePrivate / Profile 状态变更
   ├─ attribute 的 OnProfileLevelUp 钩子更新属性
   └─ mailbox 的 OnProfileLevelUp 钩子读取工程奖励规则，冻结一份 ProfileReward
@@ -144,7 +144,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
 
 - **附件是（种类，号，数量）**：线上格式 `{"type":"item","id":1002,"amount":1}`，金币是 `{"type":"coins","amount":100}`
   （`game/modules/mailbox/mailbox.go`）。种类是登记点：金币内置，经 wallet 模块到账；道具（`item`）由 mailbox 与 bag 的联动登记
-  （`game/modules/mailbox/mailbox_item.go` 登记校验，`game/components/mailbox/mailbox_item.go` 登记发放：`BagComp().Add`，与领取账本同一笔事务）。
+  （`game/modules/mailbox/mailbox_item.go` 登记校验，`game/components/mailbox/mailbox_item.go` 登记发放：`Bag().Add`，与领取账本同一笔事务）。
   demo 发的奖励邮件带的都是道具。回包与列表用同样的字段说附件：`AttachmentType` / `AttachmentID` / `Amount`，领取回包另有
   `Held`（到账后这个道具在背包里的数量；金币是余额）。
 - **发件方都走 `gamemailbox.SendTo`**（`game/modules/mailbox/mailbox_send.go`）：给一名玩家发一封信，附件先按领取端的同一个判断校验
@@ -162,7 +162,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
   客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
 - 附件这一版发不了（解不出、种类没登记）时答 `mailbox_attachment`，发放被拒（背包放不下是 bag 模块的 `bag_stack_full` / `bag_kinds_full`）
   时原样答那个码；两种情况都 `CancelClaim` 归还预留，邮件保持未领、不会卡在"held"直到租约到期。
-- **登录时拉全服邮件是进入钩子**：mailbox 与 enter 两个模块的联动（`game/controllers/mailbox/mailbox_enter.go`）在进入游戏时调
+- **登录时拉全服邮件是进入钩子**：mailbox 与 enter 两个模块的联动（`game/controllers/mailbox_enter.go`）在进入游戏时调
   `PullBroadcasts`，demo 的进入流程里不再手写。画像规则是模块的 `BroadcastProfileOnEnter`：demo 的登录端点把会话的 claims
   带给进入钩子（`gamelogin.Entered.Claims`），规则从里面读认证器写下的三个键——注册时间取 account 的角色创建时间
   （`RoleCreatedAtClaim`），范围是承载服（`ServerIDClaim`），别名合服后原服不同的角色另带原服（`OriginServerIDClaim`）。
@@ -199,7 +199,7 @@ PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务�
 
 ## 跨服务：game → chat 聊天
 
-聊天不是 demo 自己的代码：它是 [chat 业务模块](../modules/README.md)，`-template game-demo` 生成时由 `roost module add chat` 装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。demo 在它之上只做一件事：登录时把玩家加进在线名单并发一条公告（`game/controllers/player/enter_game.go`）。
+聊天不是 demo 自己的代码：它是 [chat 业务模块](../modules/README.md)，`-template game-demo` 生成时由 `roost module add chat` 装进来（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`），别的工程装同一个模块得到同一份实现。demo 在它之上只做一件事：登录时把玩家加进在线名单并发一条公告（`game/controllers/player_enter_game.go`）。
 
 chat 服务是通用的：它按频道存带序号的消息、执行这个工程交给它的策略；哪些频道存在、一句话长什么样、谁在线能收到，
 是游戏的事，住在 `game/modules/chat/`（game 进程与 chat 进程都 import 它——这就是两边对 `text` 这个消息类型名达成一致的方式）：
@@ -211,7 +211,7 @@ EnterGame 端点 ─ 登录公告合并器（game/announce，每秒至多一条�
 ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（服务端校验读权限）—— 重连补读路径
 ```
 
-端点在模块自己的 controller 域 `game/controllers/chat/`，协议号在安装时从 `roost.yaml` 的 `ids` 段分配（记在 `modules.chat`）。
+端点在模块自己的文件 `game/controllers/chat.go`（`game/controllers` 是一个包，每个模块一个 `<模块>.go`），协议号在安装时从 `roost.yaml` 的 `ids` 段分配（记在 `modules.chat`）。
 
 - `services/chat/collaborators.go`（模块替换了生成的拒绝桩）：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（没有队伍；
   公会群聊没接，接时成员来源是 alliance 服务的 Mirror 与成员变化通知），system 频道只读；`Bodies()` 注册唯一的 `text` 类型，校验函数与端点共用（端点先校验，免一次总线往返）；
@@ -219,7 +219,7 @@ ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（�
 - **推送是捷径，序号是依据**：每条投递都带 `Seq`，错过推送的客户端用 `ChatHistory(after_seq)` 补读——机器人脚本就是这么写的
   （它自己那句的推送可能先于响应到达而被丢，所以 `wait_push` 外面套了 selector，再用 history 断言）。
 - `Presence` 是**每进程**的在线集合：EnterGame 加入（用过聊天的玩家也算在线），最后一条连接关闭、或推送失败且没有活动会话时移除。
-  连接关闭的订阅由 chat 的 controller 在第一次取推送面时挂上（`game/controllers/chat/chat_push.go`），服务的 `Init` 里没有聊天的接线。
+  连接关闭的订阅由 chat 的 controller 在第一次取推送面时挂上（`game/controllers/chat.go` 的 `chatPusher`），服务的 `Init` 里没有聊天的接线。
   多个 game 进程的部署应改为订阅 chat 的流或走同步总线（syncbus），而不是从内存扇出。
 - 机器人 transport（`loadtest/playertcp/conn.go`）靠帧头的 server-push 标志位识别推送——服务端给推送编的是自己的会话序号，与客户端序号同起点，
   只看序号会把一条世界频道推送当成正在等的响应。
@@ -264,7 +264,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
 - **步骤**（`internal/service/game/gift_saga.go`，四个步骤，**两种形状**，登记在框架的步骤运行时 `kitsaga.Steps` 上：
   收件箱、durable、等待投影、停止与指标都是框架的，demo 只写步骤体与属主核对）：
-  - debit（`GiftDebit`，`BagComponent.Remove`，不够是 `bag_short`）与它的补偿（`GiftRefund`，`BagComponent.Add`）走**原生路径**
+  - debit（`GiftDebit`，`bag.Component.Remove`，不够是 `bag_short`）与它的补偿（`GiftRefund`，`bag.Component.Add`）走**原生路径**
     `Steps.Native`：步骤体把框架的 `saga.NativeStep` 交给 Nest handler，handler 在自己的事务里 `step.Complete(...)`，
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
     提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
@@ -332,7 +332,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 守卫 `AllianceMember` 不同步给 game 进程（`snapshots=none`：它的提交只写守卫文档，没有 Remote 快照、L2 条目与广播）；game
 只镜像 `Alliance`。“玩家在哪个公会”是 `PlayerDao.Alliance.ID`（`persist,sync`，附近玩家头顶也显示）：玩家自己的入会 / 退会 /
 建盟成功后在玩家事务里写（`ShowAlliance`；建盟在 `alliance_op_status` 看到 saga 完成时写），在线通知也更新该副本。
-进入与重连经 enter 联动调用 `game/controllers/alliance.Controller.RefreshMembership`：在 IO 上下文先检查当前绑定，
+进入与重连经 enter 联动调用 `game/controllers`（`alliance.go`）的 `Controller.RefreshMembership`：在 IO 上下文先检查当前绑定，
 再向联盟服务查询 Membership（守卫先按权威名单自愈）。只有确定的实体不存在才清掉展示；超时、网络错误保留原值并记日志，不影响登录成功。
 整个对账共用一秒预算，改展示仍经 Player Nest。模块不依赖 Profile 组件。
 对账还从 Mirror 取得同一入盟批次的 HomeSID，调用 `RefreshHome` 比较 JoinRequestID 和旧 SID 后修正通知地址。
@@ -552,12 +552,12 @@ demo 在模块之上接的线：
 
 - **交出带上只由他所在进程写的实体**（`playerEvictor.DepartPlayer`）：开了地形时，玩家面向客户端的编辑账本 `TerrainEditor`（全局库）与 Player 一起交出、一起撤屏障（`terrainEditorOf`）。不带它时源服内存里留着旧账本，玩家换回来按旧 `LastSeq` 判号、写回旧版本，投影版本冲突致命（`TestTerrainEditLedgerRealMongo` 的换进程子用例，真实 Mongo）。
 - **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
-- **登录**（`game/controllers/player/enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gamelogin.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gamelogin.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
+- **登录**（`game/controllers/player_enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gamelogin.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gamelogin.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
 - **saga 步骤按当前绑定准入**（`gift_saga.go` 与 `game/modules/alliance/runtime`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
 - **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：开着分区场景的服拒绝（SceneActor 还不能交接），非法分区配置也拒绝迁服；坐在本进程某一局对战里的玩家申请时与离开时各拒一次（lockstep 房间在本进程内存里，`battleManager.Seated`）。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。匹配票据不拦：离开中的玩家不再是本进程撮合的候选（`PlayerOwners.Resident` 不认迁出表里的玩家），票据在全服共用的 match 服务里，换走之后由所在服处理或到期。副本不拦：session 服务的 run 与领奖账本都跟着玩家走。地形编辑账本随玩家交出（见下面“交出带上只由他所在进程写的实体”）。名下建筑留在地图上（建筑是地图的实体、不是玩家的档，按地形 DAO 的库范围归属，待维护者决定），全服邮件的服范围不随换服迁移，也待维护者决定。
 - **联盟消费者启动**（`internal/service/game/alliance.go`）：Service.Init 先创建 PlayerOwners，再发布模块 PlayerBinding 适配并启动联盟 runtime。demo 在 manifest 关闭该 runtime 的自动接线，业务逻辑仍全部来自模块。App 先排空 Saga ingress，再关闭业务服务。
 
-用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/modules/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
+用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/modules/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome_test.go`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。
 
 ## 兴趣：距离是一种视野，关系是另一种
 
@@ -615,7 +615,7 @@ demo 在模块之上接的线：
   提交失败只打 Warn，不让结算失败。通关数为 0 时不提交（在别的赛季领过奖的一局重放到本赛季）：没有通关的玩家不上榜。
 - 通关数按赛季分开存：改 `leaderboard_board.go` 的 `CurrentSeason()` 后新榜从 0 开始，不把上一季的数带过去（维护者 2026-10-18 决定按
   赛季，不做终身累计）。端点只取一次赛季号，领奖事务按它计数、`SubmitSeason` 按它提交，所以第 N 季的通关数只会进第 N 季的榜。
-- 回归（`game/controllers/player/finish_dungeon_test.go`）：`TestDungeonClearSubmitsTheSeasonCountAsASnapshot`（无外部依赖，看端点交给
+- 回归（`game/controllers/player_finish_dungeon_test.go`）：`TestDungeonClearSubmitsTheSeasonCountAsASnapshot`（无外部依赖，看端点交给
   rank 的每一次提交：快照、`UpdateMax`、不带 requestID、重放照交、失败不影响结算、0 不交）与
   `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（真实 Redis 上看榜上的数，要 `ROOST_REVIEW_REDIS`）。
 - **活动贡献与排行相反：只在首次付款时贡献**（`result.Claimed`）。排行提交的是事务里通关数的快照，重放重交无害；活动贡献是往
@@ -623,7 +623,7 @@ demo 在模块之上接的线：
   跨过窗口边界后重放，落进新窗口、键不同，会再记一分（一局最多可进 48 个窗口，影响按名次发的活动邮件）。所以驱动贡献的是
   “这次真的付了款”这一事实，与通关数同源；重放不贡献，响应里也不带 `ActivityID`。**代价**（维护者 2026-10-18 按推荐决定）：
   付款之后、贡献之前崩溃或协调器调用失败，这一分永久丢失，重放不补——活动是尽力而为，补报若落到后来的窗口本来也记错了窗口；
-  端点对这种失败打 Warn 日志。回归 `TestAReplayContributesNothingToTheActivity`（`game/controllers/player/finish_dungeon_test.go`，无外部依赖）。
+  端点对这种失败打 Warn 日志。回归 `TestAReplayContributesNothingToTheActivity`（`game/controllers/player_finish_dungeon_test.go`，无外部依赖）。
 - 读榜是模块的 `LeaderboardTop`（消息号安装时分配，见 `roost.yaml` 的 `modules.leaderboard`）：榜头 + 自己的名次
   （`MyOnBoard` / `MyRank` / `MyScore`）。一页是榜头，说不了不在这一页上的人的事——自己在这一页上时取那一行，不在时再读一次。
   只要自己的名次用 `LeaderboardMe`。榜 id 由服务端定，从线上收一个 board id 等于让任何人读到任何榜。
@@ -632,7 +632,7 @@ demo 在模块之上接的线：
 
 技能目录来自 [skillbook 模块](../modules/README.md)，demo 只覆盖规则数据 `game/modules/skills/fireball.json`。模块的 `game/modules/skills/catalog.go` 把目录下的 JSON
 嵌进二进制并用 `gameplay/skill` 严格 `Parse` + `Compile`。生成的服务适配层在业务 `Init` 前编译整份目录——**编不过就不起来**；
-warning 数进日志，编译环境在 `game/modules/skillbook/skillbook_rules.go`。`game/controllers/skillbook` 的 `SkillCatalog` 端点读取启动时发布的同一份目录，
+warning 数进日志，编译环境在 `game/modules/skillbook/skillbook_rules.go`。`game/controllers/skillbook.go` 的 `SkillCatalog` 端点读取启动时发布的同一份目录，
 返回排序后的 id 与 warning 数；消息号安装时分配，见 `roost.yaml` 的 `modules.skillbook.ids`，机器人断言至少一个且 0 warning。
 技能**执行**（Host 读已锁 Entity、确定性 tick、checkpoint / replay）刻意没进 demo，见 `roost help skill`。
 
@@ -808,8 +808,8 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   端点直接走 `PlayerLifecycle.GetOrCreate`，所以这条协议只有 `roost add protocol`，控制器方法手写。
 - **`EnterGame` 的协议与 controller 域来自 enter 业务模块**：`-template game-demo` 生成时装 [enter 模块](../modules/README.md)
   （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
-  场景、已付订单、公会、公告），所以它覆盖模块的三个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter/` 下的两个，
-  后者只把请求交给 `game/controllers/player/enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
+  场景、已付订单、公会、公告），所以它覆盖模块的两个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter.go`，
+  后者的 `HandleEnterGame` 只把请求交给 `game/controllers/player_enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
   `EnterInit`，响应里的 `First` 说明这一次是不是首次。demo 的新玩家初始化写在 `game/modules/login/enter_first.go`（D25，覆盖模块的
   缺省版本）：新玩家落库的位置写成世界场景的出生点，与“建成了”的标记同一笔事务，加载或创建与新建两条路都经过它，只执行一次；
   demo 不发初始道具或金币。
@@ -897,8 +897,8 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 
 ### 进入：demo 的 EnterGame 与 EnterCreate
 
-协议、“先新建”的规则、会话激活后的告知都是模块的；demo 覆盖 enter 域的两个端点（`game/controllers/enter/enter_game.go`、
-`enter_create.go`），把要装载 Player 的两件事交给 player controller（`game/controllers/player/enter_game.go`、`enter_create.go`），
+协议、“先新建”的规则、会话激活后的告知都是模块的；demo 覆盖 enter 模块的 `game/controllers/enter.go`，把两个端点（`HandleEnterGame`、
+`HandleEnterCreate`）要装载 Player 的两件事交给 demo 的玩家端点（`game/controllers/player_enter_game.go`、`player_enter_create.go`），
 因为在这个 demo 里装载 Player 之前有自己的规矩：
 
 1. **归属（`boundHere`）**：会话记的承载服不是本进程的 sid 答 `player_elsewhere` 并带 `owner_sid`，没有记答 `player_elsewhere`（`owner_sid=0`）。
@@ -920,7 +920,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 不认识它的客户端应当忽略。它只是告知，结论以 `EnterGame` / `EnterCreate` 的应答为准。连错服的会话在告知里看到的是登录模块的
 `login_elsewhere`，发 `EnterGame` 得到的是 demo 的 `player_elsewhere`（带 `owner_sid`）——同一件事两个码，见“边界”。
 
-整条链路落在 demo 登录流程上的离线场景是 `game/controllers/player/enter_login_scenario_test.go`：真实的 account（内存存储）、
+整条链路落在 demo 登录流程上的离线场景是 `game/controllers/player_enter_login_scenario_test.go`：真实的 account（内存存储）、
 登录模块的认证器与告知、demo 的 `EnterGame` / `EnterCreate`、真实的 Nest；持久层、驻留表与传输是替身。
 
 ### account 这一侧与 accountctl
@@ -960,6 +960,6 @@ servertime 模块：`ServertimeSync` 拉、进入游戏时推 `ServertimeNow`（
 
 社交队伍现在来自 `team` 模块，普通场景也能使用。先 `TeamCreate`，再 `TeamInvite` / `TeamAccept`；回复成员信息在 `TeamResponse.Info`。默认 8 人、64 个待处理邀请、60 秒邀请期限；规则归生成工程的 Team 业务文件，旧 `scene.partition.team.max_members` / `invite_ttl` 不再使用。
 
-分区场景的队伍面板保留：demo 的 `team_group.go` 通过 `OnTeamChanged` 在同一事务中更新 Player 投影，再由 cellworld 的提交后通知发送；TeamSync 周期重读仍兜底。`scene.partition.team` 只控制 snapshot_every / resync_every。Player 的持久队伍引用统一为 `PlayerDao.Team.TeamID`，不保留旧顶层 TeamID 的兼容读写。无缝场景 drill 已改用新协议，跨 Base 实跑留到 §6。
+分区场景的队伍面板保留：team 组件在同一笔 Player 事务里发布实体事件 `event.TeamChanged`，demo 的 Player 监听它（`game/entities/player/cell_team.go` 的 `OnTeamChanged`）更新 Player 投影，再由 cellworld 的提交后通知发送；TeamSync 周期重读仍兜底。`scene.partition.team` 只控制 snapshot_every / resync_every。Player 的持久队伍引用统一为 `PlayerDao.Team.TeamID`，不保留旧顶层 TeamID 的兼容读写。无缝场景 drill 已改用新协议，跨 Base 实跑留到 §6。
 
 普通场景的旧 duel/ranked → lockstep battle 匹配保留，和新 `matchmaking` → `matchroom` → `turn` 是不同玩法链路；后者在 turn-pvp 配方使用，不把尚未迁移的锁步战斗冒充为已完成。

@@ -9,6 +9,7 @@ state:
   - {field: Actor, type: ActorState, store: actor, dao: 'nopersist,sync', comment: 当前站位只同步；重载后由业务重新放置。}
   - {field: ActorSaved, type: ActorSavedState, store: actor_saved, dao: 'persist,nosync', comment: 离开与周期存档的位置。}
 component: Actor
+component_package: game/components/actor
 protocols: [ActorMove, ActorStop]
 errcodes: [actor_not_placed, actor_rooted, actor_path_too_long]
 runtime: {package: game/modules/actor, start: Start}

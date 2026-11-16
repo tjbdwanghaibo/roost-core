@@ -1,25 +1,24 @@
 package handler
 
 import (
-	gamescenecomp "{{MODULE}}/game/components/scene"
 	"math"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
-	player "{{MODULE}}/game/entities/player"
 	scene "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/event"
+	"{{MODULE}}/game/view"
 )
 
 // handlerSceneInteract 的拒绝都是玩家自己能触发的，返回带业务码的错误、不写任何状态：
 // 序号不对（scene_sequence）、不在这张图（scene_not_here）、没有这个对象（scene_object_unknown）、够不着（scene_object_far）。
-// 登记的交互回调返回的错误原样带出：带码的照样答给客户端，不带码的按内部错误处理。
+// 都通过之后在 Player 上发布 event.SceneInteract，监听返回的错误原样带出：带码的照样答给客户端，不带码的按内部错误处理。
 //
 //roost:nest rollback=undo durability=strict
-func handlerSceneInteract(target player.IActorEntity, area scene.ISceneEntity, sequence uint64, objectID int64) (*pb.SceneInteractResponse, error) {
-	p := target.ActorComp().Owner()
-	state := p.Dao().GetSceneInteraction()
+func handlerSceneInteract(target view.PlayerEntity, area scene.ISceneEntity, sequence uint64, objectID int64) (*pb.SceneInteractResponse, error) {
+	state := target.Dao().GetSceneInteraction()
 	if sequence == 0 {
 		return nil, apperrors.ErrSceneSequence
 	}
@@ -32,7 +31,7 @@ func handlerSceneInteract(target player.IActorEntity, area scene.ISceneEntity, s
 	if state.GetSequence() == math.MaxUint64 || sequence != state.GetSequence()+1 {
 		return nil, apperrors.ErrSceneSequence
 	}
-	body := target.ActorComp().Body()
+	body := target.Actor().Body()
 	if body.Map.SceneID() != area.ID() || area.Scene().Dao().GetClosed() {
 		return nil, apperrors.ErrSceneNotHere
 	}
@@ -43,7 +42,8 @@ func handlerSceneInteract(target player.IActorEntity, area scene.ISceneEntity, s
 	if !spatial.WithinDistance(body.Position(), object.Position, object.Radius) {
 		return nil, apperrors.ErrSceneObjectFar
 	}
-	if err := gamescenecomp.InteractObject(p, object); err != nil {
+	interaction := event.SceneInteract{SceneID: area.ID(), ObjectID: object.ID, X: object.Position.X, Y: object.Position.Y, Radius: object.Radius, Text: object.Text}
+	if err := target.Publish(interaction); err != nil {
 		return nil, err
 	}
 	state.SetSequence(sequence)

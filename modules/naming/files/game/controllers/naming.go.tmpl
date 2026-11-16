@@ -1,0 +1,182 @@
+package controllers
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+
+	profile "{{MODULE}}/game/components/profile"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// namingRenamer 是全服唯一改名的协调器：目录两阶段占名与 Player 上持久改名状态机之间的各步。它不保存可变业务状态，
+// 所有在途事实在 Player；依赖每次从 Registry 取（newNamingRenamer），每个请求新建一个即可，重试也可以用新的。
+type namingRenamer struct {
+	names   directory.Directory
+	profile namingProfile
+}
+
+// namingProfile 是协调器对 Player 的两步事务（Nest handler NamingBegin / NamingStep）；测试在这里注入故障。
+type namingProfile interface {
+	Begin(context.Context, int64, string, string) (view.NamingTicket, error)
+	Step(context.Context, int64, int64, string, int32, string, string) (view.NamingTicket, error)
+}
+
+// namingNestProfile 经生成的 Sender 把两步发进 Nest。
+type namingNestProfile struct {
+	begin *syncsender.NamingBeginSender
+	step  *syncsender.NamingStepSender
+}
+
+func (p namingNestProfile) Begin(ctx context.Context, id int64, op, name string) (view.NamingTicket, error) {
+	return p.begin.Sync_NamingBegin(ctx, id, op, name)
+}
+func (p namingNestProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (view.NamingTicket, error) {
+	return p.step.Sync_NamingStep(ctx, id, seq, op, action, key, token)
+}
+
+// newNamingRenamer 从 Registry 取目录（service.directory）与 Nest 客户端；缺任何一个都返回错误。
+func newNamingRenamer(r *app.Registry) (*namingRenamer, error) {
+	if r == nil {
+		return nil, fmt.Errorf("naming: registry required")
+	}
+	names, ok := app.Lookup[directory.Directory](r, app.ModName("service.directory"))
+	if !ok || names == nil {
+		return nil, fmt.Errorf("naming: directory capability missing")
+	}
+	client, ok := app.Lookup[nest.Client](r, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("naming: nest capability missing")
+	}
+	return &namingRenamer{names: names, profile: namingNestProfile{syncsender.NewNamingBeginSender(client), syncsender.NewNamingStepSender(client)}}, nil
+}
+
+// 启动检查：目录与 Nest 在启动时就要在（照原来 FromRegistry 的检查），缺了进程起不来；请求时 newNamingRenamer 仍每次现取。
+func init() {
+	requireAtStart("naming", func(controller *Controller) error {
+		_, err := newNamingRenamer(controller.Registry())
+		return err
+	})
+}
+
+// init 把协调器登记成 profile 的事务外改名入口：旧的 ProfileRename 协议与首次建档取名都经它走目录。
+func init() {
+	profile.RegisterRenamer(func(ctx context.Context, r *app.Registry, id int64, name string) (string, error) {
+		c, err := newNamingRenamer(r)
+		if err != nil {
+			return "", err
+		}
+		// 旧协议没有请求键，以目标名构成固定键；同目标重发恢复同一笔。新协议允许业务自带键。
+		return c.Rename(ctx, id, fmt.Sprintf("%x", sha256.Sum256([]byte(name))), name)
+	})
+}
+
+// Rename 是正式服务端入口；只允许事务之外调用，会等待目录与 Nest。
+func (c *namingRenamer) Rename(ctx context.Context, playerID int64, operation, name string) (string, error) {
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return "", err
+	}
+	ticket, err := c.profile.Begin(ctx, id, operation, name)
+	if err != nil {
+		return "", err
+	}
+	result, err := c.resume(ctx, id, ticket)
+	if err == nil {
+		// 不记录 Ticket：里面有占名凭据。重试也可能返回完成，用请求键关联同一笔操作。
+		slog.InfoContext(ctx, "naming: rename completed", "player_id", playerID, "request_key", operation, "old_name", strings.TrimPrefix(ticket.OldKey, "player-name/"), "name", result)
+	} else if !errors.Is(err, directory.ErrKeyTaken) && !errors.Is(err, apperrors.ErrNamingBusy) && !errors.Is(err, apperrors.ErrNamingInvalid) {
+		slog.WarnContext(ctx, "naming: rename unresolved", "player_id", playerID, "request_key", operation, "started_phase", ticket.Phase, "code", errcode.CodeOf(err))
+	}
+	return result, err
+}
+
+// resume 不持实体锁，不在 Nest worker 内执行 Redis/RPC。顺序严格为：
+// 持久意图→Reserve→持久claim→Commit目录→持久档案→Release旧名→完成。
+// 任一结果未知都保留意图和占名；绝不在超时或提交失败时 Cancel/Release 新名。
+func (c *namingRenamer) resume(ctx context.Context, id int64, t view.NamingTicket) (string, error) {
+	var err error
+	if t.Phase == 1 {
+		claim, e := c.names.Reserve(ctx, "player-name/"+t.Target, directory.Owner(t.Owner), time.Minute)
+		if e != nil {
+			if errors.Is(e, directory.ErrKeyTaken) {
+				_, abort := c.profile.Step(ctx, id, t.Seq, t.Operation, 4, "", "")
+				if abort != nil {
+					return "", abort
+				}
+			}
+			return "", e
+		}
+		t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 1, claim.Key, claim.Token)
+		if err != nil {
+			return "", err
+		}
+	}
+	if t.Phase == 2 {
+		claim := directory.Claim{Key: t.ClaimKey, Owner: directory.Owner(t.Owner), Token: t.ClaimToken}
+		_, err = c.names.Commit(ctx, claim)
+		if err != nil {
+			// 明确失效的 token 永远不能再提交，撤掉本地凭据以便同 key 重试重新 Reserve。
+			// 未知错误不走这里；不能把可能已永久提交的名字退回临时态。
+			if errors.Is(err, directory.ErrClaimNotFound) || errors.Is(err, directory.ErrClaimStale) {
+				if _, reset := c.profile.Step(ctx, id, t.Seq, t.Operation, 5, t.ClaimKey, t.ClaimToken); reset != nil {
+					return "", reset
+				}
+			}
+			return "", err
+		}
+		t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 2, t.ClaimKey, t.ClaimToken)
+		if err != nil {
+			return "", err
+		}
+	}
+	if t.Phase == 3 {
+		if t.OldKey != "" && t.OldKey != t.ClaimKey {
+			// 旧 Release 可能已成功但回包丢失；名字被下一位占有说明旧 owner 已退出，完成清理即可。
+			// CAS 始终核对旧 owner，不能再去释放新 owner 的名字。
+			if err = c.names.Release(ctx, t.OldKey, directory.Owner(t.OldOwner)); err != nil && !errors.Is(err, directory.ErrOwnerMismatch) {
+				return "", err
+			}
+		}
+		t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 3, "", "")
+		if err != nil {
+			return "", err
+		}
+	}
+	return t.Target, nil
+}
+
+// HandleNamingRename 是命名协议的入口：改的是认证会话的玩家，请求键由客户端带（同一个键重发恢复同一笔）。
+// 目录与 Nest 都在这里等，不在 Nest worker 里；被拒绝时业务码写进回包的 Code / Reason。
+func (controller *Controller) HandleNamingRename(ctx *playeraccess.Context, req *pb.NamingRenameRequest) (*pb.NamingRenameResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("naming: context and request required")
+	}
+	out := &pb.NamingRenameResponse{}
+	renamer, err := newNamingRenamer(controller.Registry())
+	if err == nil {
+		out.Name, err = renamer.Rename(ctx.Context(), ctx.PlayerID, req.RequestKey, req.Name)
+	}
+	if err != nil {
+		out.Code, out.Reason = errcode.ClientError(err)
+		if out.Code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "naming: request failed", "player_id", ctx.PlayerID, "code", out.Code)
+		}
+	}
+	return out, nil
+}

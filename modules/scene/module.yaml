@@ -16,31 +16,31 @@ protocols: [SceneChange, SceneInteract]
 errcodes: [scene_unavailable, scene_full, scene_stale, scene_not_here, scene_object_unknown, scene_object_far, scene_sequence]
 runtime: {package: game/modules/scene/service, start: Start}
 verify:
-  packages: [./game/controllers/scene]
+  packages: [./game/controllers]
   run: ^TestScene
   pass: 28
 with:
   chat:
     summary: 同进程同场景附近即时聊天，无历史和补发
     verify:
-      packages: [./game/controllers/scene]
+      packages: [./game/controllers]
       run: ^TestWithSceneChat
       pass: 5
   profile:
     summary: 公开 Profile，其余私有状态仅本人可见
     verify:
-      packages: [./game/controllers/scene]
+      packages: [./game/controllers]
       run: ^TestWithSceneProfile
       pass: 2
   attribute:
     summary: 公开 AttributeFinal，其余私有状态仅本人可见
     verify:
-      packages: [./game/controllers/scene]
+      packages: [./game/controllers]
       run: ^TestWithSceneAttribute
       pass: 2
   equipment:
     summary: 公开 Equipment，其余私有状态仅本人可见
     verify:
-      packages: [./game/controllers/scene]
+      packages: [./game/controllers]
       run: ^TestWithSceneEquipment
       pass: 2

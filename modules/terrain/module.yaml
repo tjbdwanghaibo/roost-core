@@ -8,19 +8,20 @@ entities: [TerrainChunk, TerrainBuilding]
 components: [TerrainChunkData, TerrainSite]
 entity: Player
 component: Terrain
+component_package: game/components/terrain
 state:
   - {field: TerrainLedger, type: TerrainLedgerState, store: terrain_ledger, dao: 'persist,nosync', comment: 全局连续编辑序号与摘要，保留最后结果，拒绝过期重放。}
 protocols: [TerrainBrush, TerrainBuild, TerrainRemove, TerrainQuery]
 errcodes: [terrain_invalid, terrain_denied, terrain_sequence, terrain_occupied, terrain_site, terrain_full]
 runtime: {package: game/modules/terrain/service, start: Start}
 verify:
-  packages: [./game/controllers/terrain]
+  packages: [./game/controllers]
   run: ^TestTerrain
   pass: 28
 with:
   monster:
     summary: 地形停机先按场景排空怪物，保留其他场景与失败重试资源
     verify:
-      packages: [./game/controllers/terrain]
+      packages: [./game/controllers]
       run: ^TestWithTerrainMonster
       pass: 2

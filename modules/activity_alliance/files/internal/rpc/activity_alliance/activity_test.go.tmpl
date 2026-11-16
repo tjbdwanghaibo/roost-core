@@ -21,7 +21,7 @@ import (
 	generated "{{MODULE}}/configs/generated"
 	host "{{MODULE}}/game/entities/alliance"
 	"{{MODULE}}/game/handler"
-	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/components/activity"
 )
 
 // Nest、生成 DAO/组件、handler 和 Remote 准入是真实接口；Remote 授权及提交是内存替身。
@@ -117,7 +117,7 @@ func newScopeFixture(t *testing.T) *scopeFixture {
 	t.Cleanup(func() { clock.SetSource(nil) })
 	f.client = nest.NewEngine(nest.NestOptionWithGetter(scopeGetter{f.owner}), nest.NestOptionWithRemoteEntityManager(f.remote), nest.NestOptionWithTransactionCommitter(f.commit))
 	if err = f.client.RegisterHandlerWithMeta(scopeAction, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-		c := es[0].(*host.Alliance).AllianceActivityComp()
+		c := es[0].(*host.Alliance).ActivityComp()
 		if err := params[0].(func(activity.Host) error)(c.Host()); err != nil {
 			return nil, err
 		}

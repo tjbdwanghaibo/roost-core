@@ -1,5 +1,7 @@
 package view
 
+import db "{{MODULE}}/db"
+
 // Wallet 是钱包组件对 game/ 下其它包公开的方法（实现在 game/components/wallet，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Wallet interface {
 	Apply(key string, delta int64) (int64, error)
@@ -7,5 +9,12 @@ type Wallet interface {
 	Balance() int64
 }
 
-// WalletHolder 是“带有钱包”的小接口：只要钱包的组件、钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
-type WalletHolder interface{ Wallet() Wallet }
+// WalletHolder 是“带有钱包”的小接口：只要钱包的组件与联动收它；实体接口（entity_<实体>.go）嵌入它，
+// Nest handler 收生成的 IWalletEntity。
+type WalletHolder interface {
+	Wallet() Wallet
+	// WalletState 与 WalletLedger 是宿主方法：返回宿主 DAO 里的余额与去重窗口。DAO 里各只有一个对应字段时
+	// 由生成器写（纯 DAO 交接）。
+	WalletState() *db.WalletState
+	WalletLedger() *db.WalletLedger
+}

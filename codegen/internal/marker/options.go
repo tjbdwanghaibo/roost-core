@@ -38,7 +38,7 @@ type Spec struct {
 // against these; TestEveryMarkerRefusesAMisspeltKey feeds each one a typo
 // through the generator that owns it.
 var (
-	Endpoint  = Spec{Kind: "endpoint", Keys: []string{"nest"}}
+	Endpoint  = Spec{Kind: "endpoint", Keys: []string{"nest", "target"}}
 	Nest      = Spec{Kind: "nest", Keys: []string{"rollback", "durability", "completion", "sync", "target", "targets"}, Flags: []string{"sync"}}
 	Dao       = Spec{Kind: "dao", Keys: []string{"coll", "db", "dbscope", "schema"}, Flags: []string{"nocoll"}}
 	RedisDao  = Spec{Kind: "redisdao", Keys: []string{"mode", "key", "key_type", "prefix", "version", "ttl", "name"}}
@@ -71,10 +71,12 @@ var (
 	// status are optional (webroute checks the required ones itself).
 	Web      = Spec{Kind: "web", Keys: []string{"method", "path", "body", "headers", "compress", "errors", "status"}}
 	Register = Spec{Kind: "register", Keys: []string{"phase", "order"}}
+	// Listen 标在实体或组件的方法上，登记实体事件监听（entity 生成器）；priority 缺省 0，大的先执行。
+	Listen = Spec{Kind: "listen", Keys: []string{"priority"}}
 )
 
 // Specs is every marker kind that takes options.
-var Specs = []Spec{Endpoint, Nest, Dao, RedisDao, Attribute, Proto, Protocol, Msg, View, Table, Object, RPC, Entity, Mirror, Web, Register}
+var Specs = []Spec{Endpoint, Nest, Dao, RedisDao, Attribute, Proto, Protocol, Msg, View, Table, Object, RPC, Entity, Mirror, Web, Register, Listen}
 
 // known lists the vocabulary for error messages: keys as "key=", flags bare.
 func (s Spec) known() string {

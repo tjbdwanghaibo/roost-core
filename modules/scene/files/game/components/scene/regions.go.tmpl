@@ -1,0 +1,64 @@
+package scene
+
+import (
+	"fmt"
+	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+
+	gameactor "{{MODULE}}/game/components/actor"
+	"{{MODULE}}/game/event"
+	"{{MODULE}}/game/modules/actor"
+	gamescene "{{MODULE}}/game/modules/scene"
+	"{{MODULE}}/game/view"
+)
+
+// 区域经 actor 的钩子工厂（扩展提供方，保留登记方式）在进入、离开与每拍之后按位置重算；进出变化在 Player 上发布
+// event.SceneRegion（实体事件，别的模块用 //roost:listen 监听）。
+func init() {
+	gameactor.OnActor("scene.regions", func(owner view.PlayerEntity) actor.Hooks {
+		return actor.Hooks{
+			Enter:     func(body *actor.Body) error { return updateRegions(owner, body, false) },
+			Leave:     func(body *actor.Body) error { return updateRegions(owner, body, true) },
+			AfterTick: func(body *actor.Body, _ heartbeat.Beat) error { return updateRegions(owner, body, false) },
+		}
+	})
+}
+
+// updateRegions 写下当前所在的区域集合，并为每个离开、进入的区域发布一次 event.SceneRegion（先离开后进入）。
+// 监听出错时原样带上区域号返回，Nest 把这一拍的位置、区域列表与监听的写入一起撤回。
+func updateRegions(p view.PlayerEntity, body *actor.Body, leaving bool) error {
+	space, ok := body.Environment().Space.(*gamescene.Space)
+	if !ok {
+		return nil
+	}
+	var next []int64
+	if !leaving {
+		next = space.RegionsAt(body.Position())
+	}
+	slices.Sort(next)
+	state := p.Dao().GetSceneRuntime()
+	var old []int64
+	state.RangeRegions(func(_ int, id int64) bool { old = append(old, id); return true })
+	if slices.Equal(old, next) {
+		return nil
+	}
+	state.SetRegions(next)
+	var events []event.SceneRegion
+	for _, id := range old {
+		if !slices.Contains(next, id) {
+			events = append(events, event.SceneRegion{ID: id})
+		}
+	}
+	for _, id := range next {
+		if !slices.Contains(old, id) {
+			events = append(events, event.SceneRegion{ID: id, Entered: true})
+		}
+	}
+	for _, ev := range events {
+		if err := p.Publish(ev); err != nil {
+			return fmt.Errorf("scene region %d: %w", ev.ID, err)
+		}
+	}
+	return nil
+}

@@ -306,76 +306,31 @@ func (component *WalletComponent) AddGold(amount int64) error {
 	write("game/handler/add_gold.go", `package handler
 
 import (
- player "example.com/planet/game/entities/player"
+ "example.com/planet/game/view"
  messages "example.com/planet/protocol/pb"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerAddGold(target player.IWalletEntity, request *messages.AddGoldRequest, nowUnixMilli int64) (*messages.AddGoldResponse, error) {
+func handlerAddGold(target view.IWalletEntity, request *messages.AddGoldRequest, nowUnixMilli int64) (*messages.AddGoldResponse, error) {
  if request.Amount == -2 { return nil, nil } // 验证无响应不会被边界伪装成成功。
- if err := target.WalletComp().AddGold(request.Amount); err != nil { return nil, err }
- return &messages.AddGoldResponse{Gold: target.WalletComp().Gold()}, nil
+ if err := target.Wallet().AddGold(request.Amount); err != nil { return nil, err }
+ return &messages.AddGoldResponse{Gold: target.Wallet().Gold()}, nil
 }
 `)
+	// handler 经 view.Wallet 调用组件（roost add component 写的 view 接口）：方法也写进 view。
+	edit("game/view/component_wallet.go", "type Wallet interface{}", "type Wallet interface {\n\tAddGold(amount int64) error\n\tGold() int64\n}")
 	edit("game/entities/player/wallet_component.go", "// Add business methods below.", "func (component *WalletComponent) Gold() int64 { return component.owner.Dao().GetGold() }\n\n// Add business methods below.")
 	edit("protocol/def/add_gold.go", "type AddGoldRequest struct{}", "type AddGoldRequest struct {\n\tAmount int64 `pb:\"1\"`\n\tPlayerID int64 `pb:\"2\"`\n}")
 	edit("protocol/def/add_gold.go", "type AddGoldResponse struct {", "type AddGoldResponse struct {\n\tGold int64 `pb:\"3\"`")
 	// 协议生成先放了“未实现”的 controller 占位；add endpoint 接管它，换成 endpoint 生成的 Sender 映射。
 	roost("add", "endpoint", "AddGold", "--handler", "player", "--root", root)
+	// 登录 endpoint 从 Registry 取 lifecycle：首登创建、之后加载玩家实体。它与 AddGold 同在 handler=player 分组，
+	// 接管 game/controllers/player.go 里 EnterGame 的“未实现”占位。
+	roost("add", "endpoint", "EnterGame", "--handler", "player", "--lifecycle", "Player", "--root", root)
 	// 手写授权扩展必须跨 project sync / generate 原样保留，并在真实 TCP 请求中执行。
-	edit("game/controllers/player/add_gold.go", "return controller.dispatchAddGold(ctx, req)", "if req.Amount == -3 { return &pb.AddGoldResponse{Code: 100001, Reason: \"denied\"}, nil }\n return controller.dispatchAddGold(ctx, req)")
-	applicationEndpoint := readProjectFile(t, root, "game/controllers/player/add_gold.go")
+	edit("game/controllers/player.go", "return controller.dispatchAddGold(ctx, req)", "if req.Amount == -3 { return &pb.AddGoldResponse{Code: 100001, Reason: \"denied\"}, nil }\n return controller.dispatchAddGold(ctx, req)")
+	applicationEndpoint := readProjectFile(t, root, "game/controllers/player.go")
 
-	// Controller 归业务：登录 endpoint 要从 Registry 取 lifecycle，这里给它留一份 Registry。
-	write("game/controllers/player/controller.go", `package player
-
-import (
-	"fmt"
-
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
-)
-
-type Controller struct {
-	registry   *app.Registry
-	nestClient corenest.Client
-}
-
-func FromRegistry(registry *app.Registry) (*Controller, error) {
-	if registry == nil {
-		return nil, fmt.Errorf("player controller: app registry is required")
-	}
-	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
-	if !ok || client == nil {
-		return nil, fmt.Errorf("player controller: nest client is unavailable")
-	}
-	return &Controller{registry: registry, nestClient: client}, nil
-}
-
-func (controller *Controller) NestClient() corenest.Client { return controller.nestClient }
-
-func (controller *Controller) Registry() *app.Registry { return controller.registry }
-`)
-	write("game/controllers/player/enter_game.go", `package player
-
-import (
-	playerentity "example.com/planet/game/entities/player"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"example.com/planet/protocol/pb"
-)
-
-// HandleEnterGame 首登创建、之后加载玩家实体。
-func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
-	players, err := playerentity.LifecycleFromRegistry(controller.Registry())
-	if err != nil {
-		return nil, err
-	}
-	if _, _, err := players.GetOrCreate(ctx.Context(), ctx.PlayerID); err != nil {
-		return &pb.EnterGameResponse{Code: 1, Reason: err.Error()}, nil
-	}
-	return &pb.EnterGameResponse{}, nil
-}
-`)
 	write("internal/access/player/tcp/auth.go", selfSyncTestAuthenticator)
 
 	// 打开开关：标记一个字都不改、不写 packer，project sync 直接通过，生成默认 packer。
@@ -386,7 +341,7 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 	}
 	roost("project", "sync", "--skip-deps", "--root", root)
 	roost("generate", "--root", root)
-	if readProjectFile(t, root, "game/controllers/player/add_gold.go") != applicationEndpoint {
+	if readProjectFile(t, root, "game/controllers/player.go") != applicationEndpoint {
 		t.Fatal("generation overwrote application endpoint")
 	}
 	roost("generate", "--check", "--root", root)

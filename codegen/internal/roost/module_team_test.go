@@ -56,9 +56,9 @@ func TestModuleTeamGenerated(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/components/teamroster/teamroster.go", "member < next", "member > next", "./game/handler", "TestTeamLeaderPassesToSmallestMember", "leader handoff=")
 	recipeMutationMustFail(t, root, "game/components/teamroster/teamroster.go", "d.GetRevision() != 0", "d.GetLeader() != 0", "./game/handler", "TestTeamLastLeaveKeepsNonReusableTombstone", "empty team ID reused:")
 	recipeMutationMustFail(t, root, "game/components/team/team.go", "current != 0 && current != id", "false && current != 0 && current != id", "./game/handler", "TestTeamMemberCannotJoinASecondTeam", "joined second team:")
-	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", "owner.Team().TeamID() != 0", "false && owner.Team().TeamID() != 0", "./game/handler", "TestWithTeamRehomeRejectsAPlayerInTeam", "team allowed rehome:")
-	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", `owner.Dao().GetRehome().GetPendingID() != ""`, `false && owner.Dao().GetRehome().GetPendingID() != ""`, "./game/handler", "TestWithTeamRehomeRejectsJoiningDuringMove", "moving player joined:")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome", "./game/handler", "./game/controllers/team")
+	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", "c.TeamID() != 0", "false && c.TeamID() != 0", "./game/handler", "TestWithTeamRehomeRejectsAPlayerInTeam", "team allowed rehome:")
+	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", `c.owner.Dao().GetRehome().GetPendingID() != ""`, `false && c.owner.Dao().GetRehome().GetPendingID() != ""`, "./game/handler", "TestWithTeamRehomeRejectsJoiningDuringMove", "moving player joined:")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome", "./game/handler", "./game/controllers")
 
 }
 
@@ -79,6 +79,6 @@ func TestDemoTeamModuleIntegration(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0644); err != nil {
 		t.Fatal(err)
 	}
-	runGeneratedGo(t, root, "test", "-count=1", "-run", "^TestTeam|^TestWithTeam|^TestCellGroup|^TestRehome|^TestPartition", "./game/handler", "./game/entities/player", "./game/controllers/team", "./game/settings", "./internal/service/game")
+	runGeneratedGo(t, root, "test", "-count=1", "-run", "^TestTeam|^TestWithTeam|^TestCellGroup|^TestRehome|^TestPartition", "./game/handler", "./game/entities/player", "./game/controllers", "./game/settings", "./internal/service/game")
 	runGeneratedGo(t, root, "build", "./...")
 }

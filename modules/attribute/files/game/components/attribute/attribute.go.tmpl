@@ -7,6 +7,7 @@ import (
 	"reflect"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/event"
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
 	apperrors "{{MODULE}}/internal/errors"
 
@@ -14,9 +15,18 @@ import (
 	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 )
 
+//roost:component type={{ID:component:Attribute}}
+const CompTypeAttribute entity.ComponentType = {{ID:component:Attribute}}
+
+// init 登记组件工厂：Player 结构体里 comp:"attribute.CompTypeAttribute" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeAttribute, NewComponent)
+}
+
 // Owner 是属性组件的宿主：任何实体只要在自己的 DAO 里放三层 AttributeValues（基础层持久化，装备层与最终层
-// 不持久、加载后重建），并给出“没有基础记录时按哪个等级派生”，就能挂这个组件（Player 的接线见
-// game/entities/player/attribute_component.go）。组件不认具体实体类型，也不缓存可变 profile：事务事实只在 DAO。
+// 不持久、加载后重建），并给出“没有基础记录时按哪个等级派生”，就能挂这个组件（实体字段标签
+// comp:"attribute.CompTypeAttribute"；这些方法是 view.AttributeHolder 的宿主方法，三层由生成器从 DAO 交接，
+// Player 的 AttributeLevel 手写在 game/entities/player/attribute.go）。组件不认具体实体类型，也不缓存可变 profile：事务事实只在 DAO。
 type Owner interface {
 	entity.IThreadSafeEntity
 	// AttributeBase / AttributeGear / AttributeFinal 返回宿主 DAO 里的三层。
@@ -36,7 +46,7 @@ type gearOwner interface {
 // Gear 是装备层在 Container 里的选择器。
 var Gear = coreattr.Selector{Layer: "gear"}
 
-// Component 是各宿主共用的属性组件。实体包里的 AttributeComponent 是它的类型别名，只为生成接线命名。
+// Component 是各宿主共用的属性组件；别的包经 game/view 的 Attribute / AttributeHolder 用它。
 // 不要在组件里加锁：除 OnInitFinish（实体装载时）外，所有方法都在宿主实体的 Nest 事务里调用。
 type Component struct {
 	entity.ComponentBase
@@ -105,7 +115,7 @@ func (c *Component) Refresh() error {
 }
 func (c *Component) RefreshGear() error { return c.Refresh() }
 
-// LevelUp 在宿主等级已经升高 levels 级之后调用一次（Player 由 profile 登记点调用），不逐级循环；
+// LevelUp 在宿主等级已经升高 levels 级之后调用一次（Player 上由升级事件 event.ProfileLevelUp 的监听调用），不逐级循环；
 // 原有基础层的自定义加成会保留。
 func (c *Component) LevelUp(levels int32) error {
 	if levels <= 0 {
@@ -179,7 +189,7 @@ func (c *Component) refresh(persist bool, base *gameattr.Combat) error {
 	if !reflect.DeepEqual(old, finalValues) {
 		c.owner.AttributeFinal().SetValues(finalValues)
 		if persist {
-			return runAttributeChanged(c.owner)
+			return c.owner.Publish(event.AttributeChanged{})
 		}
 	}
 	return nil

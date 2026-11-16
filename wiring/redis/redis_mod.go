@@ -40,15 +40,15 @@ func NewRedisMod() *RedisMod {
 
 func (m *RedisMod) Name() app.ModName { return mods.ModRedis }
 
-// ClusterConfig 是 redis.cluster_addrs 的声明。Redis Mod、单实例锁的连接与各服务 Mod 的 Cluster hash tag 校验
+// ClusterConfig 是 redis.cluster_addrs 的声明。Redis Mod 与各服务 Mod 的 Cluster hash tag 校验
 // （mods.ValidateClusterKeyPrefix）都按它判断是不是 Cluster，所以单独成一个结构体，服务 Mod 匿名嵌入它共用这份声明。
 // 逗号分隔的字符串与 YAML 列表都接受，每项去掉两端空白。
 type ClusterConfig struct {
 	ClusterAddrs []string `config:"redis.cluster_addrs" help:"Redis Cluster 种子地址（逗号分隔或 YAML 列表）；写了就按 Cluster 连接，redis.addr 不再使用"`
 }
 
-// Config 是 redis.* 的声明（维护者决定），Redis Mod 与单实例锁的 SingletonStore 共用。
-// redis.addr 缺省时 Redis Mod 兜底 localhost:6379，SingletonStore 则报错。
+// Config 是 redis.* 的声明（维护者决定）。redis.addr 缺省时 Redis Mod 兜底 localhost:6379。
+// 单实例锁不用 Redis（2026-11-16 起改存 etcd，见 wiring/etcd 的 SingletonStore）。
 //
 // 地址与凭据可以从环境变量读（R11）：redis.addr / username / password 各有 `_env` 伴随键，规则见 wiring/mods 的 EnvValues
 // （docs/framework/guide/13-wiring.md §2.1）。redis.cluster_addrs 没有 `_env`：服务 Mod 按它判断是否 Cluster、检查 hash tag

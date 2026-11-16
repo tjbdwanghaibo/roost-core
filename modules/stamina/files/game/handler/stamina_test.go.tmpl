@@ -180,7 +180,7 @@ type staminaCallResult struct {
 func (f *staminaFixture) call(op string, n int64, swallow bool) (int64, error) {
 	registerStaminaCallHandler.Do(func() {
 		nest.MustRegisterHandlerWithMeta(staminaCallHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-			component := es[0].(playerentity.IStaminaEntity).StaminaComp()
+			component := es[0].(*playerentity.Player).StaminaComp()
 			now := fctx.NowMilli()
 			var value int64
 			var err error

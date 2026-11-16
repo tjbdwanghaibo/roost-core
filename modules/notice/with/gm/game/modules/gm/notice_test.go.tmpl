@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
@@ -31,6 +32,9 @@ func (chat *gmNoticeChat) PublishSystem(_ context.Context, request svcchat.Syste
 	return svcchat.Message{Channel: request.Channel, Body: request.Body, Origin: svcchat.OriginSystem}, nil
 }
 
+// gmNoticeNest 只占 Nest 客户端的位置：notice 启动经公共 Controller 的 FromRegistry，它要求 Nest 客户端已发布。
+type gmNoticeNest struct{ corenest.Client }
+
 type gmNoticeFixture struct {
 	chat       *gmNoticeChat
 	commands   *admin.Registry
@@ -42,6 +46,9 @@ func newNoticeGM(t *testing.T) *gmNoticeFixture {
 	t.Helper()
 	f := &gmNoticeFixture{chat: &gmNoticeChat{}, logs: captureGMAudit(t)}
 	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(app.ModName("nest"), corenest.Client(gmNoticeNest{})); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.Register(svcchat.CapabilityName, svcchat.Messaging(f.chat)); err != nil {
 		t.Fatal(err)
 	}

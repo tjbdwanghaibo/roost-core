@@ -1,11 +1,12 @@
 package login
 
 import (
-	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/components/activity"
 	"{{MODULE}}/game/view"
 )
 
+// enter 装着时，Player 的活动“创建时间”就是首次初始化的时间（PlayerDao.Enter.FirstAt）；首次建档时激活 created 触发的
+// 活动由活动组件监听 event.EnterFirst 完成（game/components/activity/activity_enter.go）。
 func init() {
 	activity.PlayerCreatedAt = func(owner view.PlayerEntity) int64 { return owner.Dao().GetEnter().GetFirstAt() }
-	OnFirstEnter("activity", func(owner view.PlayerEntity, now int64) error { return owner.Activity().Reconcile("created", now) })
 }

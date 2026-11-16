@@ -13,6 +13,7 @@ state:
     dao: persist,sync
     comment: Bag 是背包模块给玩家本人看的状态（道具号 -> 数量），随同步下发。
 component: Bag
+component_package: game/components/bag
 protocols: [BagDiscard]
 errcodes: [bag_item_invalid, bag_count_invalid, bag_short, bag_stack_full, bag_kinds_full]
 verify:

@@ -18,7 +18,10 @@ type AddOptions struct {
 	// Lifecycle names the Entity whose lifecycle a login endpoint calls
 	// (GetOrCreate) instead of a Nest Sender: roost add endpoint EnterGame
 	// --lifecycle Player.
-	Lifecycle   string
+	Lifecycle string
+	// Target 是 roost add endpoint --target：组件挂在多个实体上时，endpoint 寻址的实体（结构体名或实体包名），
+	// 写进 //roost:endpoint target=。
+	Target      string
 	Mods, Steps []string
 	// Native names which of Steps are native steps (Nest transactions):
 	// roost add saga Gift -steps debit,deliver -native debit. A subset of
@@ -429,7 +432,11 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			return nil, err
 		}
 		path = "game/handler/" + snake + ".go"
-		body = fmt.Sprintf("package handler\n\nimport %s %q\n\n//roost:nest rollback=undo durability=strict\nfunc handler%s(target %s.I%sEntity) error {\n\t// TODO: validate input and call target.%sComp().<BusinessMethod>().\n\treturn nil\n}\n", entityName, m.Project.Module+"/game/entities/"+entityName, pascal, entityName, toPascal(componentName), toPascal(componentName))
+		target, err := componentHandlerTarget(root, m.Project.Module, entityName, componentName)
+		if err != nil {
+			return nil, err
+		}
+		body = fmt.Sprintf("package handler\n\nimport %s\n\n//roost:nest rollback=undo durability=strict\nfunc handler%s(target %s) error {\n\t// TODO: validate input and call %s.\n\treturn nil\n}\n", target.importSpec, pascal, target.paramType, target.call)
 	case "lifecycle":
 		// v1.47.0 起每个实体包由 roost generate 产出 lifecycle_gen.go（core 泛型 wiring/entitylifecycle 的具名入口），
 		// 不再有一次性脚手架。
@@ -449,8 +456,9 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		path = "internal/errors/" + snake + ".go"
 		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")
 	case "module":
-		path = "game/controllers/" + snake + "/controller.go"
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
+		// 整理轮删除（维护者 2026-11-16）：game/controllers 合成一个包之后，分组文件由协议存根与 endpoint 追加时按需新建，
+		// 单独建空分组文件的命令没有用处，又容易和装业务模块的 roost module add 混淆。
+		return nil, fmt.Errorf("roost add module was removed: game/controllers/<group>.go is created when needed by roost add protocol --handler <group> (then roost generate) or roost add endpoint --handler <group>; to install a business module use roost module add %s", snake)
 	default:
 		return nil, fmt.Errorf("unsupported artifact kind %q", o.Kind)
 	}
@@ -563,4 +571,59 @@ func splitWords(value string) []string {
 		parts = append(parts, string(current))
 	}
 	return parts
+}
+
+// handlerComponentTarget 是 Nest handler 骨架锁一个组件时的写法。
+type handlerComponentTarget struct {
+	importSpec string // import 行（不含 import 关键字）
+	paramType  string // target 参数类型
+	component  string // 取组件的表达式（target.Profile() / target.ProfileComp()）
+	call       string // TODO 里的调用说明
+}
+
+// componentHandlerTarget：组件在 game/view 里有 <X>Holder 时（roost add component 生成的组件、模块组件），handler 收
+// 生成的窄接口 view.I<X>Entity，经访问器 <X>() 拿组件，方法要先写进 view.<X>；没有 Holder 时（roost add timer /
+// heartbeat 生成的组件）沿用实体包里的 I<X>Entity 与 <X>Comp()。
+func componentHandlerTarget(root, module, entityName, componentName string) (handlerComponentTarget, error) {
+	component := toPascal(componentName)
+	holder, err := viewDeclaresHolder(root, component)
+	if err != nil {
+		return handlerComponentTarget{}, err
+	}
+	if holder {
+		return handlerComponentTarget{
+			importSpec: fmt.Sprintf("%q", module+"/game/view"),
+			paramType:  "view.I" + component + "Entity",
+			component:  "target." + component + "()",
+			call:       "target." + component + "().<BusinessMethod>() (declare the method in view." + component + " first)",
+		}, nil
+	}
+	return handlerComponentTarget{
+		importSpec: fmt.Sprintf("%s %q", entityName, module+"/game/entities/"+entityName),
+		paramType:  entityName + ".I" + component + "Entity",
+		component:  "target." + component + "Comp()",
+		call:       "target." + component + "Comp().<BusinessMethod>()",
+	}, nil
+}
+
+// viewDeclaresHolder 报告 game/view 里是否声明了 <component>Holder。
+func viewDeclaresHolder(root, component string) (bool, error) {
+	paths, err := filepath.Glob(filepath.Join(root, "game", "view", "*.go"))
+	if err != nil {
+		return false, err
+	}
+	needle := []byte("type " + component + "Holder interface")
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Contains(raw, needle) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

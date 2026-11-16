@@ -299,6 +299,9 @@ func TestDemoEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
 		"game/entities/monster/cell.go.tmpl Monster.SetCellPeriod":             cellworldActor,
 		"game/entities/player/cell_base.go.tmpl Player.SetCellGroup":           cellworldBase,
 		"game/entities/player/cell_base.go.tmpl Player.RecordCellDeathReceipt": cellworldBase,
+		// 分区场景的组投影（cellworld.GroupPlayer）只有 demo 的 Player 有；team 组件发布的 event.TeamChanged 在 Player 上监听，
+		// 交给 Node.SetGroup 写 Base 的那份成员表（原来是 game/handler 里经 OnTeamChanged 登记的钩子）。
+		"game/entities/player/cell_team.go.tmpl Player.OnTeamChanged": "listens to the team module's event.TeamChanged and hands the roster to cellworld's Node.SetGroup, the base side's copy of the team (cellworld.GroupPlayer)",
 	})
 }
 
@@ -433,7 +436,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("request fields do not match the handler parameters:\n%s", request)
 	}
 	// The generated endpoint is what proves the two were wired together.
-	if endpoint := read("game/controllers/player/add_item.go"); !strings.Contains(endpoint, "request.ItemID") || !strings.Contains(endpoint, "request.Count") {
+	if endpoint := read("game/controllers/player_add_item.go"); !strings.Contains(endpoint, "request.ItemID") || !strings.Contains(endpoint, "request.Count") {
 		t.Errorf("endpoint does not pass the request through:\n%s", endpoint)
 	}
 	// 握手的认证器是 login 模块的（demoModuleSteps），demo 不带自己的一份：生成的“一律拒绝”的桩被模块替换，
@@ -468,14 +471,15 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if bag := read("game/components/bag/bag.go"); !strings.Contains(bag, "bag.SetItemsKey(") || !strings.Contains(bag, "ItemRule(itemID)") || strings.Contains(bag, "PublishSyncDirty") {
 		t.Errorf("the bag component is not the bag module's:\n%s", bag)
 	}
-	if wiring := read("game/entities/player/bag_component.go"); !strings.Contains(wiring, "type BagComponent = bag.Component") {
-		t.Errorf("the Player's bag wiring is not the bag module's:\n%s", wiring)
+	// 组件包写法（2026-11-16 起）：类型号与工厂登记在组件包里，实体包里没有 bag 的接线文件。
+	if _, err := os.Stat(filepath.Join(target, "game", "entities", "player", "bag_component.go")); !os.IsNotExist(err) {
+		t.Errorf("game/entities/player/bag_component.go exists (err=%v); the bag component is mounted the component-package way", err)
 	}
 	if rule := read("game/components/bag/items.go"); !strings.Contains(rule, "generated.ItemByID(itemID)") {
 		t.Errorf("the bag's item rule does not read the item table:\n%s", rule)
 	}
 	manifestText := read("roost.yaml")
-	for _, owned := range []string{"    bag:\n", "- PlayerDao.Bag", "- game/entities/player/bag_component.go", "- game/components/bag/bag.go", "- game/components/bag/items.go",
+	for _, owned := range []string{"    bag:\n", "- PlayerDao.Bag", "- game/view/component_bag.go", "- game/components/bag/bag.go", "- game/components/bag/items.go",
 		"- configs/schema/item.go", "- configs/table/item.csv", "- internal/errors/bag.go", "bag_stack_full:", "BagDiscard:"} {
 		if !strings.Contains(manifestText, owned) {
 			t.Errorf("roost.yaml does not record %q under the bag module", owned)
@@ -484,16 +488,16 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if dao := read("db/def/player.go"); !strings.Contains(dao, "Bag BagState `store:\"bag\" dao:\"persist,sync\"`") || strings.Contains(dao, "store:\"items\"") {
 		t.Errorf("PlayerDao does not carry the bag as the module's nested state (or still has the demo's flat Items):\n%s", dao)
 	}
-	if aggregate := read("game/entities/player/entity.go"); !strings.Contains(aggregate, "`comp:\"CompTypeBag\"`") {
+	if aggregate := read("game/entities/player/entity.go"); !strings.Contains(aggregate, "`comp:\"bag.CompTypeBag\"`") {
 		t.Errorf("the Player aggregate does not hold the module's Bag component:\n%s", aggregate)
 	}
 	// demo 的业务调用模块组件；充值与邮件的去重状态分别由 purchase / mailbox 模块维护。
 	for rel, call := range map[string]string{
-		"game/handler/add_item.go":                  "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/gift_debit.go":                "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/gift_refund.go":               "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/alliance_debit.go":            "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/alliance_credit.go":           "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/add_item.go":                  "target.Bag().Add(itemID, int64(count))",
+		"game/handler/gift_debit.go":                "target.Bag().Remove(itemID, int64(count))",
+		"game/handler/gift_refund.go":               "target.Bag().Add(itemID, int64(count))",
+		"game/handler/alliance_debit.go":            "target.Bag().Remove(itemID, int64(count))",
+		"game/handler/alliance_credit.go":           "target.Bag().Add(itemID, int64(count))",
 		"game/components/equipment/equipment.go":    "c.owner.Bag().Remove(itemID, 1)",
 		"game/components/purchase/purchase_item.go": "owner.Bag().Add",
 	} {
@@ -507,7 +511,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// The demo endpoint replaces the generated scaffold with the error
 	// boundary; a handler error that reached the access layer would close the
 	// connection.
-	if endpoint := read("game/controllers/player/add_item.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
+	if endpoint := read("game/controllers/player_add_item.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
 		t.Errorf("endpoint does not translate errors at the boundary:\n%s", endpoint)
 	}
 	// The table exists in all three forms the generator maintains: schema,
@@ -551,20 +555,20 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// 聊天是 chat 模块装进来的（demoModuleSteps），demo 自己不带一份。
 	for _, rel := range []string{"game/modules/chat/chat.go", "protocol/def/chat_send.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
-		"game/controllers/chat/chat_send.go", "game/controllers/chat/chat_history.go", "game/controllers/chat/chat_push.go", "deploy/dev/run.sh",
+		"game/controllers/chat.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "game/rewards/rewards_test.go",
 		"services/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/profile_card.go",
-		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
-		"game/modules/skills/fireball.json", "game/modules/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook/skillbook_catalog.go",
+		"game/controllers/player_enter_dungeon.go", "game/controllers/player_finish_dungeon.go",
+		"game/modules/skills/fireball.json", "game/modules/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook.go",
 		"internal/service/game/gm.go",
 		"saga/gift_item/definition.go", "game/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
-		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player/send_gift.go", "game/controllers/player/gift_status.go",
+		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player_send_gift.go", "game/controllers/player_gift_status.go",
 		"internal/service/game/gift_saga.go", "internal/errors/bag.go", "internal/service/game/bag_sync_test.go",
 		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
-		"game/controllers/player/battle_input.go", "internal/service/game/battle.go",
+		"game/controllers/player_battle_input.go", "internal/service/game/battle.go",
 		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go",
 		"internal/service/game/battle_test.go", "game/handler/claim_harness_test.go",
-		"game/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/alliance/refresh_test.go"} {
+		"game/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/alliance_test.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -580,7 +584,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		}
 	}
 	for _, owned := range []string{"    mailbox:\n", "    wallet:\n", "- PlayerDao.MailboxLedger", "- PlayerDao.Wallet", "MailboxList:", "MailboxClaim:", "WalletSpend:",
-		"mailbox_attachment:", "- game/modules/mailbox/mailbox_send.go", "- game/controllers/mailbox/mailbox_enter.go", "- game/modules/mailbox/mailbox_item.go", "- game/components/mailbox/mailbox_item.go"} {
+		"mailbox_attachment:", "- game/modules/mailbox/mailbox_send.go", "- game/controllers/mailbox_enter.go", "- game/modules/mailbox/mailbox_item.go", "- game/components/mailbox/mailbox_item.go"} {
 		if !strings.Contains(manifestText, owned) {
 			t.Errorf("roost.yaml does not record %q under the mailbox / wallet modules", owned)
 		}
@@ -595,10 +599,10 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// service hands over with the reservation — not by a retention this game
 	// invented against another service's configuration (RR-20260918-05).
 	// All three are the module's files, as the module ships them.
-	if claim := read("game/controllers/mailbox/mailbox_claim.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_MailboxClaimReward(") || !strings.Contains(claim, ".CommitClaim(") || !strings.Contains(claim, "claim.ExpiresAtUnix") {
-		t.Errorf("mailbox_claim does not run the reserve → ledgered grant → commit sequence with the mail's own expiry:\n%s", claim)
+	if claim := read("game/controllers/mailbox.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_MailboxClaimReward(") || !strings.Contains(claim, ".CommitClaim(") || !strings.Contains(claim, "claim.ExpiresAtUnix") {
+		t.Errorf("the mailbox claim endpoint does not run the reserve → ledgered grant → commit sequence with the mail's own expiry:\n%s", claim)
 	}
-	if claim := read("game/handler/mailbox_claim_reward.go"); !strings.Contains(claim, "MailboxComp().Claim(mailID, attachment, expiresAtUnix,") || !strings.Contains(claim, "rollback=undo durability=strict") {
+	if claim := read("game/handler/mailbox_claim_reward.go"); !strings.Contains(claim, "target.Mailbox().Claim(mailID, attachment, expiresAtUnix,") || !strings.Contains(claim, "rollback=undo durability=strict") {
 		t.Errorf("the mail claim handler does not record the mail id in the granting transaction:\n%s", claim)
 	}
 	if component := read("game/components/mailbox/mailbox.go"); !strings.Contains(component, "ledger.SetClaimsKey(mailID, expiresAtUnix)") || !strings.Contains(component, "gamemailbox.LedgerMayForget(recordedExpiry, nowUnix)") {
@@ -627,16 +631,16 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// 进入游戏时拉全服邮件是 mailbox 与 enter 的联动（进入钩子），画像读登录端点带过去的会话 claims；
 	// demo 的进入流程里不再手写 PullBroadcasts，player controller 也不再持有 mail 客户端。
-	if glue := read("game/controllers/mailbox/mailbox_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
+	if glue := read("game/controllers/mailbox_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
 		t.Errorf("the mailbox+enter glue was not written into the demo:\n%s", glue)
 	}
-	if login := read("game/controllers/player/enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "claims := context.Session.Principal().Claims") || !strings.Contains(login, "InitResult: entered, Claims: claims,") {
+	if login := read("game/controllers/player_enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "claims := context.Session.Principal().Claims") || !strings.Contains(login, "InitResult: entered, Claims: claims,") {
 		t.Errorf("the demo's enter flow still pulls server-wide mail by hand, or does not hand the session claims to the enter hooks:\n%s", login)
 	}
-	if controller := read("game/controllers/player/controller.go"); strings.Contains(controller, "svcmail") {
+	if controller := read("game/controllers/player.go"); strings.Contains(controller, "svcmail") {
 		t.Errorf("the player controller still holds the mail client:\n%s", controller)
 	}
-	if auth := read("internal/access/player/tcp/login_claims_test.go"); !strings.Contains(auth, "controllermailbox.BroadcastProfileOnEnter(") {
+	if auth := read("internal/access/player/tcp/login_claims_test.go"); !strings.Contains(auth, "controllers.BroadcastProfileOnEnter(") {
 		t.Errorf("the authenticator's test does not read its claims back through the mailbox enter hook's profile:\n%s", auth)
 	}
 	if robot := read("cmd/loadtest/main.go"); !strings.Contains(robot, "msgid.MsgMailboxList") || !strings.Contains(robot, "msgid.MsgMailboxClaim") || strings.Contains(robot, "ClaimMail") || strings.Contains(robot, "ListMail") {
@@ -676,7 +680,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// The dungeon clear is paid on the authoritative run state, once per run:
 	// judging on the request's own Success flag paid for failed runs, expired
 	// runs and every replay (RR-20260917-08).
-	if endpoint := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(endpoint, "run.State != svcsession.StateSucceeded") || !strings.Contains(endpoint, "MultiSync_ClaimDungeon(") || strings.Contains(endpoint, "if !request.Success {") {
+	if endpoint := read("game/controllers/player_finish_dungeon.go"); !strings.Contains(endpoint, "run.State != svcsession.StateSucceeded") || !strings.Contains(endpoint, "MultiSync_ClaimDungeon(") || strings.Contains(endpoint, "if !request.Success {") {
 		t.Errorf("finish_dungeon still decides the reward from the request instead of the run the service returned")
 	}
 	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "ClaimDungeonRun(runID, resolvedAtUnix, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
@@ -689,7 +693,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "dungeon.ClaimWindowClosed(resolvedAtUnix, nowUnix)") {
 		t.Errorf("the claim handler pays a run without checking whether its reward window is still open")
 	}
-	if endpoint := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(endpoint, "resolvedAt := run.FinishedAtUnix") {
+	if endpoint := read("game/controllers/player_finish_dungeon.go"); !strings.Contains(endpoint, "resolvedAt := run.FinishedAtUnix") {
 		t.Errorf("finish_dungeon anchors the reward window on something other than the run's own resolution time")
 	}
 	if dao := read("db/def/player.go"); !strings.Contains(dao, "DungeonClaims map[string]int64") {
@@ -808,7 +812,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners))") {
 		t.Errorf("the game service does not publish its ownership table as the rehome module's Residency")
 	}
-	if gm := read("game/modules/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, unique, payload.To,") {
+	if gm := read("game/modules/gm/rehome.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.RehomeMove(ctx, unique, payload.To,") {
 		t.Errorf("the game GM lacks gm.player.rehome, or it does not go through the rehome module's server-side entry")
 	}
 	if checks := read("internal/service/game/rehome_checks.go"); !strings.Contains(checks, `gamerehome.OnApplying("game"`) {
@@ -869,13 +873,13 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if mailer := read("game/modules/mailbox/mailbox_profile.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID: envelope.EffectID") || !strings.Contains(mailer, "errors.Is(err, ErrLetterInvalid)") {
 		t.Errorf("module reward mail consumer lost durable/idempotent handling: %s", mailer)
 	}
-	if endpoint := read("game/controllers/player/add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
+	if endpoint := read("game/controllers/player_add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
 		t.Errorf("add_exp endpoint does not translate errors at the boundary:\n%s", endpoint)
 	}
 	// The load test: the controller can create Players, the EnterGame message
 	// is bound, the transport adapter and the scenario ship, and the command
 	// checks every response code so a coded failure fails the run.
-	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "player.LifecycleFromRegistry(") {
+	if controller := read("game/controllers/player.go"); !strings.Contains(controller, "player.LifecycleFromRegistry(") {
 		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
 	}
 	// Alliances live in the alliance service (FEATURE-2026-11-04-alliance-service
@@ -894,7 +898,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if ownership := read("internal/registry/ownership_gen.go"); !strings.Contains(ownership, "alliance.EntityKindAlliance") || !strings.Contains(ownership, "team.EntityKindTeam") {
 		t.Errorf("ownership does not split the alliance kinds and the team between the two services:\n%s", ownership)
 	}
-	if alliance := read("game/controllers/alliance/alliance.go"); !strings.Contains(alliance, "controller.alliances.Join(") || !strings.Contains(alliance, "entity.RemoteReadMonotonic") {
+	if alliance := read("game/controllers/alliance.go"); !strings.Contains(alliance, "alliances.Join(") || !strings.Contains(alliance, "entity.RemoteReadMonotonic") {
 		t.Errorf("alliance endpoints do not go through the alliance RPC and the mirrors:\n%s", alliance)
 	}
 	for _, gone := range []string{"game/entities/guild", "db/def/guild.go", "game/controllers/player/guild_ids.go", "game/handler/join_guild.go"} {
@@ -906,25 +910,27 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if bind := read("internal/access/player/protocols_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
 		t.Errorf("EnterGame is not bound to the enter controller:\n%s", bind)
 	}
-	if enter := read("game/controllers/enter/enter_game.go"); !strings.Contains(enter, "player.EnterGame(context, request)") {
-		t.Errorf("the enter endpoint does not hand over to the demo's own enter flow:\n%s", enter)
+	// game/controllers 是一个包：demo 覆盖 enter 模块的 enter.go，两个登录端点交给 demo 自己的 EnterGame / EnterCreate
+	// （player_enter_game.go、player_enter_create.go）；新建之前同样先核对归属、接入驻留表。
+	enterFile := read("game/controllers/enter.go")
+	if !strings.Contains(enterFile, "return controller.EnterGame(context, request)") {
+		t.Errorf("the enter endpoint does not hand over to the demo's own enter flow:\n%s", enterFile)
 	}
-	// 新建请求（EnterCreate）同样交给 player controller：建档之前先核对归属、接入驻留表；
-	// 会话激活后的告知（enter_status.go）是模块的，demo 不覆盖。
-	if create := read("game/controllers/enter/enter_create.go"); !strings.Contains(create, "player.EnterCreate(context, request)") {
-		t.Errorf("the create endpoint does not hand over to the demo's own flow:\n%s", create)
+	if !strings.Contains(enterFile, "return controller.EnterCreate(context, request)") {
+		t.Errorf("the create endpoint does not hand over to the demo's own flow:\n%s", enterFile)
 	}
-	if create := read("game/controllers/player/enter_create.go"); !strings.Contains(create, "controller.boundHere(context, \"enter_create\")") ||
+	if create := read("game/controllers/player_enter_create.go"); !strings.Contains(create, "controller.boundHere(context, \"enter_create\")") ||
 		!strings.Contains(create, "gamelogin.Create(") || !strings.Contains(create, "owners.Serve(loginCtx, context.PlayerID, boundSID)") {
 		t.Errorf("the demo's EnterCreate does not check the binding, take the player into service and run the module's Create:\n%s", create)
 	}
-	if status := read("game/controllers/enter/enter_status.go"); !strings.Contains(status, "func Announce(") || !strings.Contains(status, "gamelogin.Assess(") {
-		t.Errorf("enter_status.go is not the enter module's notice:\n%s", status)
+	// 会话激活后的告知（Announce）照模块原样留在 enter.go 里。
+	if !strings.Contains(enterFile, "func Announce(") || !strings.Contains(enterFile, "gamelogin.Assess(") {
+		t.Errorf("enter.go lost the enter module's notice:\n%s", enterFile)
 	}
 	if gate := read("internal/service/game/playerowner.go"); !strings.Contains(gate, "messageID == msgid.MsgEnterGame || messageID == msgid.MsgEnterCreate") {
 		t.Errorf("the write gate does not exempt the create request beside the login:\n%s", gate)
 	}
-	flow := read("game/controllers/player/enter_game.go")
+	flow := read("game/controllers/player_enter_game.go")
 	if !strings.Contains(flow, "Sync_EnterInit(") {
 		t.Errorf("the demo's enter flow does not run the enter module's first-time init:\n%s", flow)
 	}
@@ -934,7 +940,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if check < 0 || serve < 0 || check > serve || !strings.Contains(flow, "gamerehome.OwnerSID(err)") {
 		t.Errorf("the demo's enter flow does not run the checks before entering ahead of taking the player into service:\n%s", flow)
 	}
-	if glue := read("game/controllers/rehome/rehome_enter.go"); !strings.Contains(glue, `gamelogin.OnEntering("rehome"`) || !strings.Contains(glue, `gamelogin.OnEntered("rehome"`) {
+	if glue := read("game/controllers/rehome_enter.go"); !strings.Contains(glue, `gamelogin.OnEntering("rehome"`) || !strings.Contains(glue, `gamelogin.OnEntered("rehome"`) {
 		t.Errorf("the rehome+enter glue was not written into the demo:\n%s", glue)
 	}
 	// enter 与 chat 都装着：chat 的联动文件登记了进入钩子，demo 的进入流程执行钩子而不是自己加在线名单。
@@ -960,7 +966,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if bind := read("internal/access/player/protocols_gen.go"); !strings.Contains(bind, "HandleLeaderboardTop") || !strings.Contains(bind, "HandleLeaderboardMe") {
 		t.Errorf("the leaderboard protocols are not bound to the leaderboard controller:\n%s", bind)
 	}
-	if finish := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(finish, "gameleaderboard.SubmitSeason(") || strings.Contains(finish, "svcrank") {
+	if finish := read("game/controllers/player_finish_dungeon.go"); !strings.Contains(finish, "gameleaderboard.SubmitSeason(") || strings.Contains(finish, "svcrank") {
 		t.Errorf("the dungeon settlement does not submit through the leaderboard module:\n%s", finish)
 	}
 	// 档案是 profile 模块装进来的：demo 不带自己的档案组件、PlayerLevel 读 handler 与 name_empty 错误码；模块的组件文件原样
@@ -989,7 +995,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if ledger := read("game/components/dungeonledger/dungeonledger.go"); !strings.Contains(ledger, "func (component *Component) ClaimDungeonRun(") {
 		t.Errorf("the dungeon claim ledger is not in the demo's own file:\n%s", ledger)
 	}
-	if queue := read("game/controllers/player/join_queue.go"); !strings.Contains(queue, "Sync_ProfileCard(") {
+	if queue := read("game/controllers/player_join_queue.go"); !strings.Contains(queue, "Sync_ProfileCard(") {
 		t.Errorf("the ranked queue does not read the level through the profile module's ProfileCard:\n%s", queue)
 	}
 	if robot := read("cmd/loadtest/main.go"); !strings.Contains(robot, "msgid.MsgLeaderboardTop") || strings.Contains(robot, "RankTop") {
@@ -1333,7 +1339,7 @@ func TestNoActivityGroupsFileWithoutTheCoordinator(t *testing.T) {
 // 同时守“与开发配置同源”：每个服务的生产示例与开发配置的键集合一致；Secret 示例里 demo 追加的段与生产示例一致；
 // 前缀取值与开发配置、以及所属服务自己的配置相同；密钥不沿用开发值（生产里是 CHANGE_ME，由运维填）。
 // Secret 与生产示例整体同源由 k8s_contract_test.go 守。
-// App 单实例锁：game 带 dataengine，三份配置都要 singleton.enabled: true、key_prefix 为 roost:<project>:singleton，
+// App 单实例锁：game 带 dataengine，三份配置都要 singleton.enabled: true、key_prefix 为 /<project>/singleton，
 // 取值满足 App 启动校验的三条关系。按玩家的 Redis 表已删除，game_route 段在三份配置里都不能再有。
 
 // configLeaves flattens a YAML document into dotted key -> scalar text.
@@ -1480,7 +1486,7 @@ func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
 			if err := checkDemoGameInitConfig(body); err != nil {
 				t.Errorf("%s: the game refuses it at Init: %v", rel, err)
 			}
-			assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
+			assertSingletonOn(t, rel, leaves, "/planet/singleton")
 			for key := range leaves {
 				if key == "game_route" || strings.HasPrefix(key, "game_route.") {
 					t.Errorf("%s still has %s; the per-player route table and its keyspace were removed with static binding", rel, key)

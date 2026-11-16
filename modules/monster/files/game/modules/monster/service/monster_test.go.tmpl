@@ -23,8 +23,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	monstercontroller "{{MODULE}}/game/controllers/monster"
-	scenecontroller "{{MODULE}}/game/controllers/scene"
+	"{{MODULE}}/game/controllers"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
@@ -167,7 +166,7 @@ func (f *monsterFixture) player() *player.Player {
 	if err := f.sync.OpenSession(entitysync.SessionID(p.UniqueID())); err != nil {
 		f.t.Fatal(err)
 	}
-	c, err := scenecontroller.FromRegistry(f.registry)
+	c, err := controllers.FromRegistry(f.registry)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -188,7 +187,7 @@ func TestMonsterSpawnVisibleAndPBInspect(t *testing.T) {
 	if !slices.Contains(f.area().Space().Interest.Seen(p.UniqueID()), m.ID()) {
 		t.Fatal("monster not visible")
 	}
-	c, err := monstercontroller.FromRegistry(f.registry)
+	c, err := controllers.FromRegistry(f.registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +208,7 @@ func TestMonsterInspectRefusalsCarryBusinessCodes(t *testing.T) {
 	f := newMonsterFixture(t)
 	p := f.player()
 	m := f.spawn(rules.DefaultSpec())
-	c, err := monstercontroller.FromRegistry(f.registry)
+	c, err := controllers.FromRegistry(f.registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +235,7 @@ func TestMonsterInspectRefusalsCarryBusinessCodes(t *testing.T) {
 	// 查看者自己不存在（没进入游戏）仍是框架码，不能被说成“怪没了”。
 	refused("a viewer that never entered", &playeraccess.Context{PlayerID: 4242}, m.ID(), errcode.CodeEntityNotFound)
 	// 查看者离开场景：怪还活着，只是不在同一个场景。
-	scenes, err := scenecontroller.FromRegistry(f.registry)
+	scenes, err := controllers.FromRegistry(f.registry)
 	if err != nil {
 		t.Fatal(err)
 	}

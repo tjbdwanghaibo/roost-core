@@ -15,9 +15,10 @@ state:
     dao: nosync
     comment: Friends 保存有界的双向好友、收到的申请与单向黑名单；仅经本人查询返回。
 component: Friends
+component_package: game/components/friends
 protocols: [FriendsChange, FriendsList]
 errcodes: [friends_invalid, friends_full, friends_blocked, friends_application_missing]
 verify:
-  packages: [./game/handler, ./game/controllers/friends]
+  packages: [./game/handler, ./game/controllers]
   run: ^TestFriends
   pass: 18

@@ -2,6 +2,7 @@ package matchroom
 
 import (
 	"{{MODULE}}/game/components/room"
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/view"
 	"fmt"
 	"slices"
@@ -11,7 +12,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Owner 是 Matchroom 组件的宿主（Room 的接线见 game/entities/room/matchroom_component.go）：view 的 RoomEntity。
+//roost:component type={{ID:component:Matchroom}}
+const CompTypeMatchroom entity.ComponentType = {{ID:component:Matchroom}}
+
+// init 登记组件工厂：Room 结构体里 comp:"matchroom.CompTypeMatchroom" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeMatchroom, NewComponent)
+}
+
+// Owner 是 Matchroom 组件的宿主：view 的 RoomEntity（组件读写 RoomDao.Matchroom）。
 // 只在实体被 Nest 锁住期间使用。
 type Owner = view.RoomEntity
 
@@ -20,7 +29,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Room 在 game/entities/room/matchroom_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -29,14 +38,16 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 	return &Component{owner: owner}, nil
 }
 
-func init() {
-	room.OnRoomJoining("matchroom", func(r Owner, id int64) error {
-		state := r.Dao().GetMatchroom()
-		if state.GetMatchID() != "" && !slices.Contains(matchMembers(r), id) {
-			return apperrors.ErrRoomNotMember
-		}
-		return nil
-	})
+// OnRoomJoining 是入房的拦截事件（在 Room 上、同一笔事务里、占座之前）：匹配房只放名单里的玩家（room_not_member）。
+// 普通房（没有 MatchID）放行。只读。只有这一个监听，不写 priority。
+//
+//roost:listen
+func (c *Component) OnRoomJoining(ev event.RoomJoining) error {
+	state := c.owner.Dao().GetMatchroom()
+	if state.GetMatchID() != "" && !slices.Contains(matchMembers(c.owner), ev.PlayerID) {
+		return apperrors.ErrRoomNotMember
+	}
+	return nil
 }
 func (c *Component) Name() string { return "matchroom" }
 

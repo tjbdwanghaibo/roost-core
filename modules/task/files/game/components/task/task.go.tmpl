@@ -11,7 +11,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
-// Owner 是 Task 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Task}}
+const CompTypeTask entity.ComponentType = {{ID:component:Task}}
+
+// init 登记组件工厂：Player 结构体里 comp:"task.CompTypeTask" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTask, NewComponent)
+}
+
+// Owner 是 Task 组件的宿主：整个 Player（领奖时经它发放各种奖励）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 // Component 是任务的业务逻辑。它不保存事务会改的状态：周期记录在 PlayerDao.Task 里，
@@ -21,7 +29,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/task_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

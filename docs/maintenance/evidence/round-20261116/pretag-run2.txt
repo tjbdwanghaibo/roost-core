@@ -1,0 +1,30 @@
+start 2026-11-17 00:46:59
+HEAD 25949fa925fb593992f808d7a3667d6bc1329949
+pretag: checking go generate ./... leaves the tree unchanged
+pretag: (round run) framework release manifest check skipped; not a release
+pretag: building with GOWORK=off
+pretag: vetting with GOWORK=off
+pretag: checking go.mod / go.sum are tidy
+pretag: testing with GOWORK=off
+pretag: genre vertical slices and offline generator scripts (generated projects, offline default mode)
+pretag:   ok   test-mmorpg-generated (15s)
+pretag:   ok   test-moba-generated (24s)
+pretag:   ok   test-slg-generated (32s)
+pretag:   ok   test-card-rpg-generated (20s)
+pretag:   ok   test-tower-defense-generated (19s)
+pretag:   ok   test-survival-extraction-generated (17s)
+pretag:   ok   test-merge-casual-generated (16s)
+pretag:   ok   test-idle-sim-generated (17s)
+pretag:   ok   test-auto-chess-generated (16s)
+pretag:   ok   test-level-generated (7s)
+pretag:   ok   test-sync-modes-generated (5s)
+pretag:   ok   test-heartbeat-generated (29s)
+pretag:   ok   test-mmorpg-scenes (82s)
+pretag:   ok   test-party-room-generated (24s)
+pretag:   ok   test-turn-pvp-generated (21s)
+pretag:   ok   test-coop-roguelike-generated (13s)
+pretag:   ok   test-social-sim-generated (15s)
+pretag:   ok   test-gate-generated (28s)
+pretag:   FAIL test-modules-generated (143s, log: /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-pretag-genres.573geK/test-modules-generated.log)
+pretag: a genre vertical slice failed (logs: /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-pretag-genres.573geK)
+rc=1 2026-11-17 01:23:26

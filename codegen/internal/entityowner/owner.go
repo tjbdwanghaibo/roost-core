@@ -21,13 +21,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 )
 
-// Owned 是一个声明了归属服务的实体。
+// Owned 是一个带 //roost:entity 标记的实体：Scan 只返回声明了归属服务的，Entities 返回全部（Service 可能为空）。
 type Owned struct {
 	// Entity 是实体结构体名，例如 "Guild"。
 	Entity string
 	// Kind 是实体包里的 EntityKind 常量名（标记的 entityKind=，缺省 EntityKind<Entity>）。
 	Kind string
-	// Service 是 service= 的值。
+	// Service 是 service= 的值；没有声明时为 ""（只出现在 Entities / LocalPreloads 的结果里）。
 	Service string
 	// Remote 表示 remote=managed。
 	Remote bool
@@ -54,7 +54,7 @@ const MaxPreloadOrder = 1000
 // Scan 读 gameDir/entities/*/ 下全部实体标记，返回声明了 service= 的实体，按 Dir、Entity 排序。
 // 这是生成工程放实体的唯一位置（roost add entity、id 检查与 remote 宿主检查读同一处）。
 func Scan(gameDir string) ([]Owned, error) {
-	all, err := scanAll(gameDir)
+	all, err := scanAll(gameDir, false)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func Scan(gameDir string) ([]Owned, error) {
 // LocalPreloads 返回声明了 preload=startup 的本地（非 remote=managed）实体，按 Dir、Entity 排序；Service 是它的
 // service=，没写时为 ""（由哪个服务预加载在工程层按 roost.yaml 决定，见 roost 的 localPreloadServices）。
 func LocalPreloads(gameDir string) ([]Owned, error) {
-	all, err := scanAll(gameDir)
+	all, err := scanAll(gameDir, false)
 	if err != nil {
 		return nil, err
 	}
@@ -83,8 +83,15 @@ func LocalPreloads(gameDir string) ([]Owned, error) {
 	return out, nil
 }
 
-// scanAll 返回声明了 service= 或 preload= 的实体。
-func scanAll(gameDir string) ([]Owned, error) {
+// Entities 返回 gameDir/entities/*/ 下全部带 //roost:entity 标记的实体（Service 为空表示未声明归属），按 Dir、Entity
+// 排序。nest 生成器用它把 view 里的实体接口（view.<E>Entity）与组件窄接口对回实体所在的包，再按包取归属。
+func Entities(gameDir string) ([]Owned, error) {
+	return scanAll(gameDir, true)
+}
+
+// scanAll 返回声明了 service= 或 preload= 的实体；all 为真时也返回没有声明的实体（标记下面找不到结构体的跳过，
+// 不在这里报错：那是 entity 生成器的规则）。
+func scanAll(gameDir string, all bool) ([]Owned, error) {
 	paths, err := filepath.Glob(filepath.Join(gameDir, "entities", "*", "*.go"))
 	if err != nil {
 		return nil, err
@@ -95,7 +102,7 @@ func scanAll(gameDir string) ([]Owned, error) {
 		if strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, "_gen.go") || strings.HasSuffix(name, "_gen_wire.go") {
 			continue
 		}
-		found, err := scanFile(path)
+		found, err := scanFile(path, all)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +117,7 @@ func scanAll(gameDir string) ([]Owned, error) {
 	return out, nil
 }
 
-func scanFile(path string) ([]Owned, error) {
+func scanFile(path string, all bool) ([]Owned, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
@@ -180,24 +187,23 @@ func scanFile(path string) ([]Owned, error) {
 				}
 			}
 			if !declared && !hasPreload {
+				if all {
+					if entityName := structAfter(structs, position.Line); entityName != "" {
+						out = append(out, Owned{Entity: entityName, Kind: kindName(params, entityName), Remote: remote,
+							NoPersist: noPersist, Dir: filepath.Dir(path), Position: where})
+					}
+				}
 				continue
 			}
 			service = strings.TrimSpace(service)
 			if declared && !validServiceName(service) {
 				return nil, fmt.Errorf("%s: //roost:entity service=%q is not a service name (lower snake case, as in roost.yaml services)", where, service)
 			}
-			// 与 entity 生成器同一条附着规则：结构体在标记下面两行以内。
-			entityName := structs[position.Line+1]
-			if entityName == "" {
-				entityName = structs[position.Line+2]
-			}
+			entityName := structAfter(structs, position.Line)
 			if entityName == "" {
 				return nil, fmt.Errorf("%s: //roost:entity marker is not followed by a struct declaration", where)
 			}
-			kind := strings.TrimSpace(params["entityKind"])
-			if kind == "" {
-				kind = "EntityKind" + entityName
-			}
+			kind := kindName(params, entityName)
 			out = append(out, Owned{
 				Entity:    entityName,
 				Kind:      kind,
@@ -212,6 +218,22 @@ func scanFile(path string) ([]Owned, error) {
 		}
 	}
 	return out, nil
+}
+
+// structAfter 是与 entity 生成器同一条附着规则：结构体在标记下面两行以内。
+func structAfter(structs map[int]string, markerLine int) string {
+	if name := structs[markerLine+1]; name != "" {
+		return name
+	}
+	return structs[markerLine+2]
+}
+
+// kindName 是实体包里的 EntityKind 常量名：标记的 entityKind=，缺省 EntityKind<Entity>。
+func kindName(params map[string]string, entityName string) string {
+	if kind := strings.TrimSpace(params["entityKind"]); kind != "" {
+		return kind
+	}
+	return "EntityKind" + entityName
 }
 
 // preloadOrder 读 preload_order=：只能和本地实体上的 preload=startup 一起写，取值 0～MaxPreloadOrder 的整数。

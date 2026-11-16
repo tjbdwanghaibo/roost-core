@@ -1,0 +1,6 @@
+--- FAIL: TestEntityEventListenerFailureRollsBackTheWholeTransaction (0.00s)
+    --- FAIL: TestEntityEventListenerFailureRollsBackTheWholeTransaction/nested_listener_fails_memory (0.00s)
+        entity_event_tx_test.go:85: value after the request = 1111, want 10
+    --- FAIL: TestEntityEventListenerFailureRollsBackTheWholeTransaction/nested_listener_fails_strict (0.00s)
+        entity_event_tx_test.go:85: value after the request = 1111, want 10
+FAIL

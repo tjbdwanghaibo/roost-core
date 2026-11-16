@@ -171,6 +171,8 @@ Component 方法和 Nest handler。
 | --- | --- | --- |
 | game/entities/player/entity.go | 业务 | Entity 聚合、Component/DAO 字段与接口；不要删除生成器添加的 tag |
 | game/entities/player/profile_component.go | 业务 | 在文件末尾添加玩法方法 |
+| game/view/component_profile.go | 业务 | Profile 接口：列出 handler 与别的组件能调的组件方法 |
+| game/view/holder_entities_gen.go | 生成器 | 窄接口 view.IProfileEntity（handler 的参数类型）；禁止手改 |
 | db/def/player.go | 业务 | 声明持久化/同步字段，不写 ID、id、tracker |
 | db/gen_player_dao.go | 生成器 | 使用 GetName()/SetName() 等方法访问；禁止直接访问存储字段 |
 | game/entities/player/player_gen_wire.go | 生成器 | 工厂、装配、getter、Snapshot；禁止手改 |
@@ -210,11 +212,19 @@ Nest 同时需要 roost.yaml 的 nest feature（生成 Sender/handler）和目�
 
     package handler
 
-    import player "{{MODULE}}/game/entities/player"
+    import "{{MODULE}}/game/view"
 
     //roost:nest rollback=undo durability=strict
-    func handlerRenamePlayer(target player.IProfileEntity, name string) error {
-        return target.ProfileComp().Rename(name)
+    func handlerRenamePlayer(target view.IProfileEntity, name string) error {
+        return target.Profile().Rename(name)
+    }
+
+handler 经 game/view 拿组件：Rename 也要写进 game/view/component_profile.go 的 Profile 接口；
+view.IProfileEntity 与实体上的访问器 Profile() 由 roost generate 生成。
+
+    // game/view/component_profile.go
+    type Profile interface {
+        Rename(name string) error
     }
 
 运行 make generate 后，Nest 会生成 Sender、按全局顺序取得 Entity 锁、执行 handler，

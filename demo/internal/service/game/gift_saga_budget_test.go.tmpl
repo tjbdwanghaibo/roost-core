@@ -32,7 +32,7 @@ func stepRetryWindow(step saga.Step) time.Duration {
 // 退款（debit 的补偿）只能在发送方绑定的 sid 上执行。那个 sid 崩溃重启时，新进程要等旧进程的单实例
 // 锁过期（最多 singleton.ttl）、受 singleton.startup_wait 约束，再加上被拉起和 Init 的时间；这段时间里
 // 每一次尝试都只会超时。补偿的重试用尽就是 manual_required，所以退款的重试窗口必须覆盖一次崩溃重启：
-// startup_wait + ttl + senderRestartAllowance（生成的配置里是 30s + 15s + 45s = 90s）。
+// startup_wait + ttl + senderRestartAllowance（生成的配置里是 35s + 15s + 45s = 95s）。
 //
 // 步骤预算是配置（saga.step_defaults，按步骤覆盖 saga.steps.gift_item.debit）：这里用 saga Mod 读配置的
 // 同一个函数得到运行时实际使用的预算，再核对窗口，所以改配置或改默认值都会在这里被检查。

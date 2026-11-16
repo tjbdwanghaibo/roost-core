@@ -1,0 +1,127 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamecdkey "{{MODULE}}/game/modules/cdkey"
+	mailbox "{{MODULE}}/game/modules/mailbox"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// cdkeyDeps 是一次兑换用到的依赖：兑换账本的 Nest Sender、directory 客户端、mail 客户端。都不带状态，
+// 每次兑换从 Controller / Registry 取（检查与错误文本同原来的 FromRegistry）；启动检查已经验过一遍，
+// 取不到只会是装配错误，这次兑换失败。
+type cdkeyDeps struct {
+	ledger    *sender.CdkeySender
+	directory directory.Directory
+	mailer    mailbox.Sender
+}
+
+// 启动时先把兑换的依赖取一遍（检查与错误文本同原来的 FromRegistry）；缺了进程起不来。
+func init() {
+	requireAtStart("cdkey", func(controller *Controller) error {
+		_, err := controller.cdkeyDependencies()
+		return err
+	})
+}
+
+func (controller *Controller) cdkeyDependencies() (cdkeyDeps, error) {
+	registry := controller.Registry()
+	if registry == nil {
+		return cdkeyDeps{}, fmt.Errorf("cdkey: registry is required")
+	}
+	client := controller.NestClient()
+	if client == nil {
+		return cdkeyDeps{}, fmt.Errorf("cdkey: nest client is required")
+	}
+	dir, ok := app.Lookup[directory.Directory](registry, mods.ModDirectory)
+	if !ok || dir == nil {
+		return cdkeyDeps{}, fmt.Errorf("cdkey: directory client is required")
+	}
+	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mailer == nil {
+		return cdkeyDeps{}, fmt.Errorf("cdkey: mail client is required")
+	}
+	return cdkeyDeps{ledger: sender.NewCdkeySender(client), directory: dir, mailer: mailer}, nil
+}
+
+// CdkeyRedeem 是客户端与可信服务端共用的协调入口，只能在实体事务外调用。
+// 严格持久意图 -> directory 永久占用 -> mailbox.SendTo -> 严格持久回执。
+// 任一步结果未知都保留意图、用同一码重试；绝不 Cancel/Release 占用，避免旧请求仍发件时新玩家抢到码。
+// directory 对同一 owner 的重放不是互斥锁；并发重放靠 mail 的同一发送键与玩家回执去重。
+func (controller *Controller) CdkeyRedeem(ctx context.Context, playerID int64, code string) (gamecdkey.Intent, error) {
+	if playerID <= 0 {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
+	}
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return gamecdkey.Intent{}, err
+	}
+	deps, err := controller.cdkeyDependencies()
+	if err != nil {
+		return gamecdkey.Intent{}, err
+	}
+	intent, err := deps.ledger.Sync_CdkeyPrepare(ctx, id, code)
+	if err != nil || intent.MailID != "" {
+		if failure, _ := errcode.ClientError(err); err != nil && failure == errcode.CodeInternal {
+			slog.ErrorContext(ctx, "cdkey: prepare failed", "player_id", playerID, "code", failure)
+		}
+		return intent, err
+	}
+	// 兑换码也是凭证，不记 code、Intent、Claim 或由兑换码派生的请求键。
+	slog.InfoContext(ctx, "cdkey: redemption accepted", "player_id", playerID, "code_bytes", len(code))
+	claim, err := deps.directory.Reserve(ctx, intent.ClaimKey(playerID), directory.Owner(strconv.FormatInt(playerID, 10)), time.Minute)
+	if err != nil {
+		if directory.Code(err) == directory.CodeKeyTaken {
+			return gamecdkey.Intent{}, apperrors.ErrCdkeyTaken
+		}
+		slog.WarnContext(ctx, "cdkey: reserve unresolved", "player_id", playerID, "code", directory.Code(err))
+		return gamecdkey.Intent{}, err
+	}
+	if _, err := deps.directory.Commit(ctx, claim); err != nil {
+		slog.WarnContext(ctx, "cdkey: reservation commit unresolved", "player_id", playerID, "code", directory.Code(err))
+		return gamecdkey.Intent{}, err
+	}
+	envelope, err := mailbox.SendTo(ctx, deps.mailer, mailbox.Letter{To: playerID, Subject: intent.Subject, Body: intent.Body, Attachment: mailbox.Coins(intent.Coins), ExpiresInSeconds: intent.ExpiresInSeconds, RequestID: intent.RequestID(playerID)})
+	if err != nil {
+		slog.WarnContext(ctx, "cdkey: mail send unresolved", "player_id", playerID, "code", errcode.CodeOf(err))
+		return gamecdkey.Intent{}, err
+	}
+	slog.InfoContext(ctx, "cdkey: mail confirmed", "player_id", playerID, "mail_id", envelope.ID, "coins", intent.Coins)
+	result, err := deps.ledger.Sync_CdkeyComplete(ctx, id, intent.Code, envelope.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "cdkey: completion unresolved", "player_id", playerID, "mail_id", envelope.ID, "code", errcode.CodeOf(err))
+	} else {
+		slog.InfoContext(ctx, "cdkey: redemption completed", "player_id", playerID, "mail_id", result.MailID)
+	}
+	return result, err
+}
+
+func (controller *Controller) HandleCdkeyRedeem(ctx *playeraccess.Context, request *pb.CdkeyRedeemRequest) (*pb.CdkeyRedeemResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("cdkey: context and request are required")
+	}
+	result, err := controller.CdkeyRedeem(ctx.Context(), ctx.PlayerID, request.Cdkey)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "cdkey: request failed", "player_id", ctx.PlayerID, "code", code)
+		}
+		return &pb.CdkeyRedeemResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.CdkeyRedeemResponse{MailID: result.MailID}, nil
+}

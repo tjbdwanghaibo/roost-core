@@ -129,13 +129,24 @@
 
 #### 单实例锁的有效窗口（v1.47.0）
 
-- **窗口过期即 fail-stop，不再复活**：开了 singleton 的进程被 SIGSTOP、长 GC、调试器或虚拟机暂停超过 `ttl`（缺省 15s）后恢复，一律停下由编排重启，即使 Redis 的键仍是自己的（原来续期 Applied 就继续持有）。契约见 [guide/01“有效窗口过期后不可复活”](../framework/guide/01-app-lifecycle.md)。
+- **窗口过期即 fail-stop，不再复活**：开了 singleton 的进程被 SIGSTOP、长 GC、调试器或虚拟机暂停超过 `ttl`（缺省 15s）后恢复，一律停下由编排重启，即使后端的键仍是自己的（原来续期 Applied 就继续持有）。契约见 [guide/01“有效窗口过期后不可复活”](../framework/guide/01-app-lifecycle.md)。
+- **etcd 不可用 → 开锁进程 fail-stop**（2026-11-16 锁改存 etcd，维护者接受）：锁与服务发现共用一个 etcd 集群，etcd 连续不可用超过续期窗口（缺省对任意相位约 9～12s，见 [guide/01“单实例锁在后端短暂不可用时”](../framework/guide/01-app-lifecycle.md)）时，所有开着单实例锁的进程停下由编排重启。etcd 因此同时决定路由与存活，**生产要求 etcd 三节点或更多**。另：etcd 换 leader 时全部租约续满一次，旧持有者真死时新进程最坏要等 2 × `ttl` 再多约 1s；生成的 `singleton.startup_wait` 为此是 35s（缺省 2 × `ttl` 没有余量，手写配置不写 startup_wait 时赶上换 leader 可能启动失败、由部署重启兜底）；`singleton.ttl` 必须是整秒（etcd 租约以秒计）；一个工程里开锁或读锁的服务必须用同一组 `etcd.endpoints` 与同一个 `singleton.key_prefix`（doctor `singleton:etcd-consistent`）。
 - **`SingletonLease.Check()` 只看本地时钟**：“检查之后、写入之前”的空档消除不了，跨进程写入的最终防线是存储侧的条件写。`Check()` 判定过期时在调用方的 goroutine 上同步执行 OnFail 回调（含 Nest 围栏），新加的 OnFail 回调不能依赖调用它的 goroutine。
 
 #### 热点单例实体的写吞吐（2026-11-15）
 
 - **strict 热点仍约“每次 fsync 一条”**：经派发器打到同一实体的同步请求，strict 与不声明的 pipelined 仍约每次 fsync 一条（同实体准入链等回复，这是契约代价）；要吞吐的热点写声明 `//roost:nest durability=pipelined completion=async`（2026-11-15 起，`HandlerMeta.AsyncCompletion`；同一实体约 120 → 约 2900 次/秒，回复仍在持久之后）。异步完成不是缺省，handler 要显式声明。game-demo 的 World 登录计数仍只投递（`Send_RecordEnter`）。
 - **nestwal 的 fsync 已移出 writer，平台差异未测**：async 追加不再排在 strict 的 fsync 后面（有 strict 负载时 async 吞吐 +135%）；macOS 上 `F_FULLFSYNC` 进行中同一文件的 write 仍在内核里等（约 190µs），目标 Linux 上未对照测量。证据见 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。
+
+#### 实体事件（2026-11-16）
+
+契约见 [Nest 与实体 §3A](../framework/guide/02-nest-entity.md#3a-实体事件)，方案与迁移清单见 [FEATURE-2026-11-16-tx-event](FEATURE-2026-11-16-tx-event.md)。
+
+- **只在同一实体、锁内、同步**：`Publish` 只在当前 Guard 持有发布事件的实体时执行，监听只在这个实体上、当场执行，修改落在同一笔事务里。不异步、不跨实体、不跨进程、不能运行时订阅或退订：要改别的实体走 Nest 发送（生成的 Sender，多个实体要原子就写多实体 handler），跨进程走 `nest.Emit`。所以事务和实体锁之外的登记点（`game/modules/login` 的 `OnEntering` / `OnEntered` / `OnCreating` / `OnCreatePrepare`、rehome 的 `OnApplying` / `OnLeaving` / `OnArrived`、leaderboard 的 `OnSubmitted`、login 的 `OnSessionActive`）和扩展提供方（`OnActor`、`OnAttributeGear`、`OnSceneFields` 等）不是实体事件，保留原登记方式。
+- **memory 快路径与 `rollback=none` 里不撤销**（维护者 2026-11-16 决定允许在这两种 handler 里发布）：监听返回的错误照常外传给发布方与 Nest，但发布方与前面监听已做的修改不撤销，与这类 handler 本身“不承诺失败恢复”一致。要“监听失败则整笔撤销”就把 handler 声明为可回滚。
+- **没有保存点**：事务只能整笔回滚，监听把内层 `Publish` 的错误吞掉时，内层出错前的修改会留下；拦截类事件的监听改了状态、发布方又把拒绝转成业务回包（不回滚）时同样留下。两条都靠约定（错误原样外传、拦截只读），没有静态检查：doctor 的 `event:publish-error`、`event:cycle`、`event:publish`（方案 §4.5）本轮不做，记为以后的增强（维护者 2026-11-17）。“监听出错整笔回滚”由 core 测试 `TestEntityEventListenerFailureRollsBackTheWholeTransaction`（`framework/nest`，含嵌套发布、memory 与 strict）守住。
+- **循环靠运行时上限兜底**：嵌套深度 8、同一事件在栈上 3 次、一次最外层发布 256 次，超出整笔回滚；生成器的静态环提示只看直接写在监听方法（及同一接收者上被直接调用的方法）里的 `Publish(event.X{...})`，经别的包、接口或间接调用发布的看不到。
+- **登记只在 `init`，首次发布时冻结**：之后再 `RegisterEventListener` 或 `SetEventLimits` 直接 panic；只有 `init`、没被任何代码引用的包不会被链接，里面的登记不执行（scene 的 `game/components/scene` 由场景运行期入口空白引用）。
 
 ### DataEngine、Remote 与 Saga
 
@@ -204,7 +215,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
 #### Remote
 
 - **多写者本地副本**（2026-11-04 修复后的边界，契约见 [REMOTE_ENTITY“多写者：本地副本与权威”](../framework/REMOTE_ENTITY.md#多写者本地副本与权威)）：写准入发现本地实例落后于权威或停在 `Fenced` 时卸载重载，需要 loader 实现 `IRemoteEntityUnloader`（正式 `ManagerAccess` 实现了）；自定义 loader 不支持卸载时照旧报版本冲突 / fenced，直到业务自己重载。事务外独立删档持有实体锁，遇到落后实例按版本冲突拒绝，不在删档中途换实例；先有一次 Nest 写准入（或 `ManagerAccess.Unload`）换掉旧实例再删。回归用两进程共用的 Mongo 权威替身与 Redis 版本锁替身（`write_admission_test.go`），以及 `scripts/test-remote-generated.sh` / `test-remote-matrix.sh` 的现有真实依赖用例。两个真实进程交替写同一共享实体见 `scripts/testdata/remoteflow/shared_writers_test.go` 的 `TestGeneratedRemoteSharedEntityTwoWriterProcesses`（2026-11-14）。
-- **路由 RPC 与 Redis 路由登记的边界**（联盟服务方案 1R，2026-11-04，契约见 [REMOTE_ENTITY“路由登记”](../framework/REMOTE_ENTITY.md#路由登记)、[guide/09“路由 RPC 与改投”](../framework/guide/09-services.md#2a-路由-rpc-与改投)）：① 登记表只增不减：Remote 实体没有空闲卸载，续期量是“已加载的登记 kind 实体数 / 10s”，`AllianceMember` 这类按玩家的实体长时间运行后会一直增长，阶段 5 实测：续期量就是已登记实体数——预加载 1000 / 10000 个联盟后 `route_renew_total{result=renewed}` 每 10s 1000 / 10000 次（每批不超过 1000 个键一次 pipeline），按需加载的守卫每个同样每 10s 一次，长时间运行后的守卫加载量没有测（[benchmarks/alliance-20261104](../performance/benchmarks/alliance-20261104/README.md)）。② Redis 不可用时每次缓存未命中的查找多一次 Mongo 点读：阶段 5 断开 toxiproxy 的 redis 代理实测，空路由缓存的调用方 Redis 正常时 0 次点读，断开时每次 1 次，调用方 p50 14ms → 125ms（多出的是 go-redis 拨号重试）；跨实例两步入会照常完成，恢复后约 5s 由续期“不存在”重新登记。**断开超过单实例锁扛得住的时长时，实例因单实例锁续不上而 fail-stop**（缺省配置下断开开始后 9～12s，取决于断开落在续期节拍的哪个相位，Redis 恢复后驱动还可能再拖约 1s；算法见 [guide/01“单实例锁在后端短暂不可用时”](../framework/guide/01-app-lifecycle.md#单实例锁在后端短暂不可用时)，原来写的“`ttl − guard` 约 10s”不对）（`singleton lock lost; fail-stop`，exit 1）：单实例锁连的是同一个 Redis，所以“只影响路由效率”只对短于这个期限的断开成立，更长的断开由进程管理按同 sid 拉起（App 级“失锁即停”的统一保证，没改）。③ 死掉的 owner 不拉起同 sid 时登记按 TTL 过期，调用方回退读到的仍是它，请求一直是 no responders（“可重试”），直到它被拉起；转不走它的实体（`TransferRemoteOwnership` 要求本地是 owner）。④ 缩容入口 `(*bus.Bus).LeaveRPCQueue` 只支持轻量 RPC：JetStream RPC 的服务级 consumer 是全部实例共享的 durable，按实例退出返回 `ErrRPCQueueLeaveUnsupported`；退出后不能重新加入（重启实例）。⑤ “预加载完成前不接请求”要求路由 RPC 的 owner Mod 把 `remote_entity.preload` 写进 `OptionalDependsOn`，由生成器（方案 2R）声明；1R 只验证了预加载 Mod 的 Start 跑完才返回与依赖声明，阶段 5 已在生成工程的真实进程上验证（`scripts/test-alliance-e2e.sh` 的 `TestAllianceE2EPreloadOrder`：2000 个联盟预加载 2.0s，期间 342 次路由请求全部 no responders，完成后约 30ms 第一次得到答复）。⑥ 预加载的起服时间与内存随“owner 是本 sid 的该 kind 实体数”线性增长：阶段 5 实测 1000 / 2000 / 10000 个演示联盟预加载 1.7 / 2.0 / 13.7s（约 1.4ms 一个，并发 16），预加载完的常驻内存 65 / 71 / 123 MiB；演示联盟只有几个成员，大联盟的文档与内存没有测。
+- **路由 RPC 与 Redis 路由登记的边界**（联盟服务方案 1R，2026-11-04，契约见 [REMOTE_ENTITY“路由登记”](../framework/REMOTE_ENTITY.md#路由登记)、[guide/09“路由 RPC 与改投”](../framework/guide/09-services.md#2a-路由-rpc-与改投)）：① 登记表只增不减：Remote 实体没有空闲卸载，续期量是“已加载的登记 kind 实体数 / 10s”，`AllianceMember` 这类按玩家的实体长时间运行后会一直增长，阶段 5 实测：续期量就是已登记实体数——预加载 1000 / 10000 个联盟后 `route_renew_total{result=renewed}` 每 10s 1000 / 10000 次（每批不超过 1000 个键一次 pipeline），按需加载的守卫每个同样每 10s 一次，长时间运行后的守卫加载量没有测（[benchmarks/alliance-20261104](../performance/benchmarks/alliance-20261104/README.md)）。② Redis 不可用时每次缓存未命中的查找多一次 Mongo 点读：阶段 5 断开 toxiproxy 的 redis 代理实测，空路由缓存的调用方 Redis 正常时 0 次点读，断开时每次 1 次，调用方 p50 14ms → 125ms（多出的是 go-redis 拨号重试）；跨实例两步入会照常完成，恢复后约 5s 由续期“不存在”重新登记。**断开 Redis 不再影响单实例锁**（2026-11-16 起锁改存 etcd，c261b304）：原来写的“断开超过单实例锁扛得住的时长（缺省 9～12s）时实例因续不上锁而 fail-stop、只影响路由效率的说法只对更短的断开成立”只在 Redis 后端时期成立。`TestAllianceE2ERedisOutage` 已按现状简化（e62f2313）：去掉锁参数、短断开上限、恢复后等 `/readyz` singleton 回到 ok 与长断开 fail-stop 段，改为断言断开期间两个实例一直活着；改后的用例**待最终阶段实测**（本轮阶段 7 的 alliance-e2e）。etcd 断开时的 fail-stop 见[单实例锁的有效窗口](#单实例锁的有效窗口v1470)。③ 死掉的 owner 不拉起同 sid 时登记按 TTL 过期，调用方回退读到的仍是它，请求一直是 no responders（“可重试”），直到它被拉起；转不走它的实体（`TransferRemoteOwnership` 要求本地是 owner）。④ 缩容入口 `(*bus.Bus).LeaveRPCQueue` 只支持轻量 RPC：JetStream RPC 的服务级 consumer 是全部实例共享的 durable，按实例退出返回 `ErrRPCQueueLeaveUnsupported`；退出后不能重新加入（重启实例）。⑤ “预加载完成前不接请求”要求路由 RPC 的 owner Mod 把 `remote_entity.preload` 写进 `OptionalDependsOn`，由生成器（方案 2R）声明；1R 只验证了预加载 Mod 的 Start 跑完才返回与依赖声明，阶段 5 已在生成工程的真实进程上验证（`scripts/test-alliance-e2e.sh` 的 `TestAllianceE2EPreloadOrder`：2000 个联盟预加载 2.0s，期间 342 次路由请求全部 no responders，完成后约 30ms 第一次得到答复）。⑥ 预加载的起服时间与内存随“owner 是本 sid 的该 kind 实体数”线性增长：阶段 5 实测 1000 / 2000 / 10000 个演示联盟预加载 1.7 / 2.0 / 13.7s（约 1.4ms 一个，并发 16），预加载完的常驻内存 65 / 71 / 123 MiB；演示联盟只有几个成员，大联盟的文档与内存没有测。
 - **独占实体的只读请求与所有权查询**（2026-11-06 修复后，修复经过见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-06remote-独占实体的只读请求不再取写许可)）：（1）扫描仍是 N 次本地 Nest 事务，所有权列表 `ListOwnedRemoteEntities` 按 `_id` 扫、在 FETCH 里按 owner / kind 过滤，键数约 N + 守卫数；按 DAO 字段只列带标记的联盟仍不可行（Remote 的 DAO 文档在 Mongo 里是不透明的 `data` 字节）。（2）只读请求与写请求同样排在同一实体的写门后、占 `max_concurrent_writes` 名额，写额度被在途写占满时读也答 overloaded。（3）前提（一个实体同一时刻只有一个 owner）由 App 单实例与 fail-stop 保证；被打破时稳定持有的进程在下一次写之前读到的是自己的内存，写在投影元数据 CAS 被拒（WAL 写使进程 fail-stop，memory 写隔离后重载），计 `remote_entity.commit_conflict_total` 并记 ERROR。
 - **NATS 驱动建消费者的重发**（2026-11-04 修复后，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-04联盟服务冒烟里的两条观察)）：重发最多 4 次、每次 2s，连续 4 次都没有回答仍按原样失败；`EnsureStream` 同时建同一个流没有观察到同样的问题，没有加重发。
 - **空认领**（`9a1d9ee4` 修复后，契约见 [REMOTE_ENTITY“路由登记”](../framework/REMOTE_ENTITY.md#路由登记)“空认领”）：① **重启前后答复的码不同**：重启前内存里还有业务 `GetOrCreate` 新建、未提交的空实例，game-demo 的 `Info` 答业务码 100031；重启后答框架的 `entity_not_found`（errcode 2）。两者都是确定的拒绝。 ③ 未采用“回滚时撤销认领”（理由见契约）。② **清理是运维动作、不自动**（D17，2026-11-15 实施，契约见 [REMOTE_ENTITY“删空认领”](../framework/REMOTE_ENTITY.md#路由登记)）：`remote_entity.empty_claims` 只由持有它的 sid 删自己的，owner 已死且不再拉起的 sid 上的空认领删不了（与“转不走它的实体”同一边界）；`remote_entity.empty_claim_total{event="left"}` 不计提交前崩溃留下的，现存数靠命令不带 `delete` 列出；删掉之后同 ID 再建时所有权代际从 1 重新开始（被删那一代下没有任何提交，理由见契约）；删之前内存里的版本 0 空实例保留在内存。
@@ -215,7 +226,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
   - **outbox 发布归属**（2026-11-06 维护者选 A“写者自己先发”之后，仍有的限制）：① 写者崩溃后它留下的提交晚一个宽限期（缺省 30 s）才由别的进程发布（同 sid 重启立即发布；接管者写同一实体时立即代发；还需要别的进程在崩溃后扫描过一次 outbox——扫描由各进程自己的写触发，没有周期轮询，别的进程都不写时等到同 sid 重启或下一次别处的写，2026-11-06 演练时读代码确认，未改），其间订阅方收不到推送（维护者 2026-11-06 确认保持缺省 30 s、作为下限，不与收尾期限一起调小）；② 宽限期按写者写入时刻与代发方本地时钟比较，依赖进程间时钟大致同步（**2026-11-06 已演练**，时钟偏差经 `outboxNow` 注入真实进程的发布归属判定，宽限期按 1/10 缩为 3 s：实际宽限期是“宽限期 − 代发方时钟快出的量”，崩溃接管时延实测与之相符（慢 6 / 3 / 1 s 时 9.0 / 6.0 / 4.0 s，快 1 / 2.5 s 时 2.0 / 0.54 s，快到宽限期以上时下一次扫描即代发）；代发方快到接近宽限期时活着的写者退化为修复前的现象（strict 写超时、写门持有到收尾期限），偏差小于宽限期减去写者发布耗时则没有影响；任何偏差下每笔都只由 Applied 改成 Committed 一次、写者 tracker 都在上界内结束，没有正确性问题。要求各进程 NTP 校时、偏差 1 s 以内并告警，不靠调小宽限期提速；写者之间的偏差还会让 outbox 排序与写入先后不一致，“同实体后继立即代发”认不出前序，前序照常等宽限期、晚于后继发布（被版本比较丢弃），见 [REMOTE_ENTITY“时钟同步要求”](../framework/REMOTE_ENTITY.md#outbox-发布归属)）；③ 写者活着但超过宽限期仍没发布、被别的进程代发时，它的 tracker 没人通知，靠延迟收尾的期限回源结束（最多再等一次 strict 等待的剩余时间或一次收尾重试间隔），不另外回源（维护者未选方案 B）（**2026-11-06 已演练，与上界相符**：两个真实进程，写者到 NATS 的发布确认经 toxiproxy 延迟 3.5 s，宽限期 = 收尾期限 = 3 s、strict 等待 1 s；接管方写入后 3.01～3.02 s 代发、每笔只发布一次，被抢先的 strict 写 1.0 s 答“结果未知”，写门在代发后 0.95 s 释放（上界 1 s），释放后同实体的写 46 ms 确认；宽限期 = 2 × 收尾期限时代发后 0.96 s 释放（上界一次重试间隔）；写者 `finalize_projection_timeout_total` 1 / 2、`remote_entity_write_gate_timeout_total` 1（演练里故意在持门期间写了一次），接管方 `outbox.takeover_total{reason="grace"}` 2。用例 `TestRealOutboxTakeoverOfALiveStalledWriter`，`ROOST_OUTBOX_DRILL=1` 才运行，已加入 `scripts/test-remote-matrix.sh`）；④ “同实体后继立即代发”只在一页（256 条）内判断，跨页时后面的提交可能先发布（维护者 2026-11-06 确认保持页内判断，与发布失败时的同实体顺序语义一致，不做跨页状态）。
   - **顺序只在一个接收实例上成立**：改投、缩容转移、调用方并发发出的请求不在承诺之内（与修前相同）；新旧进程混跑时旧接收端按旧规则串行、旧调用方不带键，不承诺顺序（按未上线规则整体换新）。
   - **RPC 并发上限**：在跑与排队的 RPC 合计受 `bus.Config.RPCMaxPending`（缺省 `nats.worker_num` × 1024）约束，没有单独的“同时在跑”上限；下游压力由 Nest 的准入与队列承担。模块消息（`Bus.Handle`）仍按目标模块串行，handler 阻塞会挡住同一 worker 上的其他模块（没有改，模块消息依赖到达顺序）。
-- **单实例锁的约 1s 盲区**（维护者 2026-11-05 决定保持现状；`TestAllianceE2ERedisOutage` 的定位经过见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-05testalliancee2eredisoutage-偶发失败)）：③ 的约 1s 盲区还在——Redis 已恢复，续期仍可能拿到缓存的拨号错误而失锁；只会让失锁提前（安全一侧），不会让两个进程同时持锁。不换客户端、不调 `PoolSize`，缺省参数下对任意相位按“稳扛约 8s”理解。
+- **单实例锁在后端恢复后的重连延迟（etcd，待最终阶段实测）**：Redis 后端时期有约 1s 盲区——Redis 已恢复，go-redis 的拨号缓存仍可能让续期失败而失锁（只会让失锁提前、安全一侧；维护者 2026-11-05 决定保持现状，`TestAllianceE2ERedisOutage` 的定位经过见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-05testalliancee2eredisoutage-偶发失败)）。2026-11-16 起锁改存 etcd，这个原因不再作用于锁；etcd 客户端在 etcd 恢复后的重连延迟、实际“稳扛多久”**尚未实测**，由[单实例锁：遗留](#单实例锁遗留)的演练 `singleton-etcd-drill.sh` 在最终阶段量。量出来之前按 [guide/01“单实例锁在后端短暂不可用时”](../framework/guide/01-app-lifecycle.md#单实例锁在后端短暂不可用时)的续期窗口理解。
 - **Remote WAL级Rejected处理**（`38b710a2`）：Durability 1/2/3 的正式链路不产生 Remote Rejected，strict / pipelined 的 `Commit` 失败一律带 `ErrRemotePersistenceIndeterminate`；tracker 的 Rejected 收尾只剩 Durability 0 来源。守卫 `TestWALRemoteAuthorityConflictNeverProducesRejected` 只覆盖正式 MongoStore / MongoCommitter 投影链路；自定义投影存储若产生 Rejected，strict / pipelined 仍按结果未知回复、由 finalizer 按 tracker 结论收尾（`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`）。
 
 - **单实例分散 `Join` 的吞吐**（2026-11-05，本机三成员同盘副本集，[基准页](../performance/benchmarks/alliance-join-1000-20261105/README.md)）：约 340～400 次/秒，封顶在 Mongo——每次 `Join` 约 22～25 条 Mongo 命令、约 1.15 个提交的事务。为此调整过的缺省：Nest I/O 池 max(256, 4×短池)、`dataengine.projection.workers` 32、`remote_entity.outbox_publish_workers` 32、Nest 派发队列满答“可重试”、effect outbox 一批认领 / 确认常数次往返、effect 消费者进程内按实体并发（缺省 16，`dataengine.effect_consumer.workers`）。写额度 `remote_entity.max_concurrent_writes` 缺省 128，256 并发下会答“可重试”，额度 512 的三轮既有探针 retryable / unknown 均为 0（`ffe2b98d`，`TestAllianceE2EJoinRetryableSources`）；这不是本轮 M-11 的 effect worker 对照结论。目标 1000 次/秒要主节点约 2.2～2.5 万条命令/秒、约 1200 事务/秒，属部署硬件容量。
@@ -445,14 +456,14 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 #### 组件包与 game/view（v1.47.0）
 
-组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。
+组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。2026-11-16 起组件类型号与工厂登记也挪进组件包（`comp:"<包>.CompType<X>"`，模块清单 `component_package`），同一组件只用一个类型号；Holder 里可列宿主方法，纯 DAO 交接的由生成器实现。
 
 - **签名里的结构体要定义在 view 里**（维护者 2026-11-13：组件对外的方法都应在 view 下）：view 不能反向 import 组件包，所以方法参数 / 结果用到的结构体定义在 `game/view/component_<功能>.go`，名字带功能前缀（`view.ShopResult`、`view.PurchaseGrant`），组件包与功能包留同名别名。搬进 view 的类型只能带用内建、db 与其他 view 类型的方法；要用工程错误码或别的包的方法改成功能包里的函数（如 `purchase.ValidateGrant`）。名字在全部模块与 game-demo 的 view 文件里必须唯一（`TestModuleViewNamesAreUniqueAcrossModules`、`TestDemoViewNamesDoNotCollideWithItsModules` 检查）。
 - **view 是一个包**：import 它就带上所有 view 文件的依赖（db、`game/modules/actor` 及其玩法包、`game/modules/gameplay/attribute`）。`actor.Body` 是带行为的运行时类型、`gameattr.Combat` 由 `roost add attribute` 生成在固定目录，两者没有搬进 view。
 - **冷组件没有 view 访问器**：冷组件的字段可能是 nil，装进接口后不等于 nil，所以生成器不给它生成 `func (e *Player) X() view.X`；跨组件调用冷组件要经实体的具体类型。
 - **view 豁免只剩两类**（`TestModuleViewInterfacesListTheComponentMethods` 的豁免表，2026-11-14）：返回 core 运行时对象的方法（activity `Host`、actor `SavedPosition`、attribute `Container`、combat `Core`），以及参数是对方 `*Component`、要读对方战斗核心的 combat `Cast` / `Step` / `Tick` / `Leave`。
 - **实体包只留接线**：实体包保留框架接口的实现（`cellworld.Actor` / `BasePlayer` 等）、运行时对象、定时器与同步适配、packer、mirror 与 replica；生成的定时器组件的方法只能声明在实体包，回调只把节点交给组件方法（`on…` 回调必须一行）。守卫测试（`TestModuleEntityPackagesHoldOnlyComponentWiring`、`TestDemoEntityPackagesHoldOnlyComponentWiring`）按 `Set…` / `Del…` 调用识别实体方法改状态，换个名字的写入认不出。
-- **handler 的实体参数用实体包的 `I<X>Entity`**：handler 生成器从实体包的 `I<X>Entity` 推断参数，不能直接写 `view.<E>Entity`；要用 view 时让 `I<X>Entity` 嵌入它（friends 的写法）。
+- **handler 的实体参数用 view 的窄接口**（2026-11-16 起）：`roost generate` 给每个 `<X>Holder` 生成 `view.I<X>Entity`，handler 收它（或实体总接口 `view.<E>Entity`）；实体包不再声明 `I<X>Entity`。锁目标仍按“参数类型名带 Entity”推断；归哪个服务按 view 类型解析：`view.<E>Entity` 归实体 E 的服务，`view.I<X>Entity` 按挂这个组件的全部实体解析，归属不同服务时生成失败、要求写 `target=<实体>`（endpoint 同样）。
 
 #### 业务 HTTP 路由与配置检查
 
@@ -486,7 +497,8 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
-- **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player/enter_game.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter/` 的三个文件与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。enter 域的 controller 自己建一个 player controller，一个进程里因此有两个 player controller 实例；它们共享的东西（在线名单、归属、场景）都经 Registry 或进程级对象，往 player controller 上加每实例状态时要记得这一点。
+- **game-demo 自有组件仍是实体包写法**（维护者 2026-11-17 决定本轮不迁）：monster、terrain、world、map、dungeonledger 五个组件的类型号与工厂登记仍在实体包（别名挂载），能编译能跑，但这些组件上不能写 `//roost:listen`（生成器对旧写法挂载的组件上的监听报错）。哪个组件需要监听事件时再把它迁到组件包，做法同模块（`component_package`、view 宿主方法）。
+- **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player_enter_game.go`、`player_enter_create.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
 
 #### game-demo 的玩法范围（D20 第 3 期）
 
@@ -705,7 +717,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 单实例锁：遗留
 
-- **锁改存 etcd（已决定待实施）**：维护者 2026-11-16 定做法 A，在 `wiring/etcd` 实现 `SingletonStore`，生成工程全工程统一用它，锁与服务发现共用同一个 etcd 集群，`framework/app` 不改。暂不实施。同日已定：Redis 版 `SingletonStore` 删除；接受 etcd 不可用时开锁进程 fail-stop（实施时写进框架限制与部署文档）。方案见 [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)。三项的依赖、实施顺序与全量见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
+- **锁改存 etcd（已实施，待最终全量）**：维护者 2026-11-16 定做法 A，已在分支 `feat/round-20261116` 实施：`wiring/etcd` 的 `SingletonStore`（契约见 [impl/13-wiring](../framework/impl/13-wiring.md)），生成工程全工程统一用它，锁与服务发现共用同一个 etcd 集群，`framework/app` 只改注释；Redis 版已删除；doctor 新增 `singleton:etcd-consistent`；etcd 不可用时 fail-stop 已写进上面的框架限制。`wiring/etcd` 的真实 etcd 单测（`-tags integration`）已过。**还没做**：本轮阶段 7 的全量（codegen 包、模块门禁、genre 脚本、pretag）、真实进程演练 `scripts/testdata/singleton-etcd-drill/singleton-etcd-drill.sh`（含 etcd 恢复后的重连延迟实测）、先失败后通过的证据（去掉续锁里“KeepAliveOnce 失败即返回”后 `TestSingletonStoreRenewalWhoseKeepAliveFailedIsNotApplied` 应变红）。方案见 [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)，全量安排见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
 
 ### DataEngine、Remote 与 Saga（遗留）
 
@@ -771,15 +783,7 @@ room 自动断线订阅与重启后在线状态（全部断线、重连上线）
 
 P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 已验（其中 committed 保留 Q4），本机脚本 11 / 11 与当批模块矩阵 594 / 594 是不同统计口径。历史 demo 压测不是模块容量；本轮 M 与 C-Q1 / Q2 尚未提供正式容量结论。见[社交报告](evidence/social-real-20261114/README.md)。
 
-#### 生成工程目录：遗留
-
-- **controllers 合包、组件接口收进 view（已决定待实施）**：维护者 2026-11-16 定的方向：
-  - `game/controllers` 合成一个包，只有一个公共 `controller.go`，每个模块一个文件；
-  - 窄接口返回 view 接口，宿主方法也在 view 里抽成接口，由实体实现；
-  - 组件类型号挪进组件包，activity 只用一个类型号。
-
-  暂不实施。方案见 [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)。三项的依赖、实施顺序与全量见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
-- **组件钩子改为事务内事件（已决定待实施）**：维护者 2026-11-16 定：事件定义集中在 `game/event`；实体底层自带 `Publish`；core 提供“事件名 + 回调”的登记方法，由生成代码调用；实体方法和组件方法都可以用 `//roost:listen` 标记为监听（第二版方案）。暂不实施。方案见 [FEATURE-2026-11-16-tx-event](FEATURE-2026-11-16-tx-event.md)。三项的依赖、实施顺序与全量见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
+<a id="生成工程目录遗留"></a>
 
 ### 框架服务与 game-demo（遗留）
 
@@ -864,6 +868,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-17：2026-11-16 整理轮（controllers 合包、组件包与 view 窄接口、组件钩子改实体事件、单实例锁改存 etcd）阶段 7 收口**：最终全量与真实进程演练（单实例锁 etcd 四步、Gate、alliance-e2e 11 条）通过；全量暴露的 14 个用例与两处脚本问题、etcd 不可达时进程退不出（停机撤销注册改为最多 5s）、friends 合包漏搬的测试与 notice 缺 chat 不再启动失败均已修。框架边界见[实体事件](#实体事件2026-11-16)与[组件包与 game/view](#组件包与-gameviewv1470)；根因、修复提交与先红后绿见[本轮证据](evidence/round-20261116/README.md)。
 - **2026-11-14：维护者答复 D1～D26**：确认类写进一——D2 超额降级放宽即删记录（限制）、D3 不做事务内门控进出场景、D4 `state` 不接同步打包、D5 Lockstep 房间与夹具不迁 `Stepper` / `DriveBuffs`、D6 account 换服方案 §6 第 1～4 项、D9 受理后中止即断线重选角、D10 合服回退 `new_in_target` 保持、D14 Team 归 game 服务、D20 模块号上线前冻结一次；已决定、v1.47.0 之后实施的 D7、D8、D11、D17、D19、D21～D24 留在二。[答复原文](evidence/known-limits-remaining-20261114/decisions.md#维护者答复2026-11-14)
 - **2026-11-14：self_sync 驻留预算拒收的整轮重试放大**（D1 A，`2e1486b4` / `3c48c5f2`）：`ErrRetryLater` 改为只作废没交付到的 subject、下一轮从被拒会话轮转（取代 C29“低 ID 总是先试”）；演练 16 KiB 0 → 171 / 200、64 KiB 31 → 200 / 200 轮提交，剩余代价见[自身视图](#自身视图self_sync与-sync-慢消费者规则)第 4 条。
 - **2026-11-14：坏块与拥有者装不进的块永远等不到确认**（D12 A，`5361b9e6`）：按原始地形包确认，客户端协议与 C# 不变；边界见[跨格编辑直接拒绝与确认来源](#跨格编辑直接拒绝与确认来源)。

@@ -37,7 +37,7 @@ game-demo 的 `cmd/sidmove`（只读，不搬数据、不切路由、不起停�
 # 第 3 步：旧进程停完之后，WAL 是否全部确认（进程还在跑、尾部未确认、WAL 损坏都以非零码退出）
 go run ./cmd/sidmove wal-drained -dir data/wal/game/1000
 # 第 4 步：单实例锁现在被谁持有（不打印锁值里的令牌）
-go run ./cmd/sidmove singleton -redis 127.0.0.1:6379 -key roost:<project>:singleton:game:1000
+go run ./cmd/sidmove singleton -etcd 127.0.0.1:2379 -key /<project>/singleton:game:1000
 # 第 6 步：停旧进程后记一份，新进程写入前比较（Player 所在物理库按 -config 的 dataengine.databases 换算，Player 是 dbscope=sid，再加 _<sid>（-sid 缺省取配置的 sid）；-db 可直接指定完整库名）
 go run ./cmd/sidmove players -mongo "$URI" -config configs/service/config.game.yaml -ids 2001,2002 -out before.json
 go run ./cmd/sidmove players -mongo "$URI" -config configs/service/config.game.yaml -ids 2001,2002 -compare before.json

@@ -1,0 +1,112 @@
+package controllers
+
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleCombatCast 只信认证会话里的source；同意位由双方各自的认证Ready请求写入。
+func (c *Controller) HandleCombatCast(ctx *playeraccess.Context, req *pb.CombatCastRequest) (*pb.CombatCastResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("combat: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	var out *pb.CombatCastResponse
+	if err == nil {
+		var peer int64
+		peer, err = entity.BuildEntityID(req.PeerID, player.EntityKindPlayer)
+		if err == nil {
+			out, err = sender.NewCombatCastSender(c.nestClient).MultiSync_CombatCast(ctx.Context(), id, peer, req)
+		}
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+			slog.ErrorContext(ctx.Context(), "combat: cast failed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "err", err)
+		}
+		return &pb.CombatCastResponse{Code: code, Reason: reason}, nil
+	}
+	return out, nil
+}
+
+// HandleCombatLeave 只信认证会话里的source；同意位由双方各自的认证Ready请求写入。
+func (c *Controller) HandleCombatLeave(ctx *playeraccess.Context, req *pb.CombatLeaveRequest) (*pb.CombatLeaveResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("combat: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	var out *pb.CombatLeaveResponse
+	if err == nil {
+		var peer int64
+		peer, err = entity.BuildEntityID(req.PeerID, player.EntityKindPlayer)
+		if err == nil {
+			out, err = sender.NewCombatLeaveSender(c.nestClient).MultiSync_CombatLeave(ctx.Context(), id, peer, req)
+		}
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+			slog.ErrorContext(ctx.Context(), "combat: leave failed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "err", err)
+		}
+		return &pb.CombatLeaveResponse{Code: code, Reason: reason}, nil
+	}
+	if out != nil && out.Code == 0 {
+		slog.InfoContext(ctx.Context(), "combat: leave confirmed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "peer_id", req.PeerID, "ended", out.Ended)
+	}
+	return out, nil
+}
+
+// HandleCombatReady 只信认证会话里的source；同意位由双方各自的认证Ready请求写入。
+func (c *Controller) HandleCombatReady(ctx *playeraccess.Context, req *pb.CombatReadyRequest) (*pb.CombatReadyResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("combat: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	var out *pb.CombatReadyResponse
+	if err == nil {
+		out, err = sender.NewCombatReadySender(c.nestClient).Sync_CombatReady(ctx.Context(), id, req)
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+			slog.ErrorContext(ctx.Context(), "combat: ready failed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "err", err)
+		}
+		return &pb.CombatReadyResponse{Code: code, Reason: reason}, nil
+	}
+	if out != nil && out.Code == 0 {
+		slog.InfoContext(ctx.Context(), "combat: ready confirmed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "ready", req.Ready)
+	}
+	return out, nil
+}
+
+// HandleCombatStep 只信认证会话里的source；同意位由双方各自的认证Ready请求写入。
+func (c *Controller) HandleCombatStep(ctx *playeraccess.Context, req *pb.CombatStepRequest) (*pb.CombatStepResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("combat: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	var out *pb.CombatStepResponse
+	if err == nil {
+		var peer int64
+		peer, err = entity.BuildEntityID(req.PeerID, player.EntityKindPlayer)
+		if err == nil {
+			out, err = sender.NewCombatStepSender(c.nestClient).MultiSync_CombatStep(ctx.Context(), id, peer, req)
+		}
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal || code == apperrors.ErrCombatBoundary.Code() {
+			slog.ErrorContext(ctx.Context(), "combat: step failed", "player_id", ctx.PlayerID, "sequence", req.Sequence, "err", err)
+		}
+		return &pb.CombatStepResponse{Code: code, Reason: reason}, nil
+	}
+	return out, nil
+}

@@ -17,7 +17,7 @@
 - `IDs() []int64`：本进程全部出生槽位的怪物 ID。
 - `DrainScene(ctx, area)`：scene 关图时回调，清掉这个场景实例的全部怪（含死亡待重生的）。模块启动时已经登记到 scene。
 
-**Nest handler**（`game/handler/monster_*.go`）：`MonsterSpawn`、`MonsterDamage`、`MonsterRemove`（都同时锁 Monster 与 Scene，`rollback=undo durability=async`）、`MonsterInspect`（同时锁查看的 Player 与 Monster，只读）。组件 `MonsterActorComp()` 提供 `Body()`、`Snapshot()`、`Damage(expectedLife, amount, now)`、`Decide(expectedLife)`、`Spawn`、`Retire`、`SpawnPoint()`，只能持锁调用。
+**Nest handler**（`game/handler/monster_*.go`）：`MonsterSpawn`、`MonsterDamage`、`MonsterRemove`（都同时锁 Monster 与 Scene，`rollback=undo durability=async`）、`MonsterInspect`（同时锁查看的 Player 与 Monster，只读）。组件 `MonsterActor()`（`game/components/monsteractor`，类型号 `monsteractor.CompTypeMonsterActor` 与工厂登记也在这里）提供 `Body()`、`Snapshot()`、`Damage(expectedLife, amount, now)`、`Decide(expectedLife)`、`Spawn`、`Retire`、`SpawnPoint()`，只能持锁调用。
 
 **登记点**：模块不提供给别的功能的登记点。它自己登记了 scene 的关图清理（`RegisterDrainer`）与 App 的 ingress（停机时先拒绝新操作）。
 
@@ -61,7 +61,7 @@
   - 不要把跨拍的状态存进 `game/modules/monster/brain.go` 里每拍新建的 AI / actionflow 对象：它们不支持 Nest 回滚，跨拍事实只放 DAO 与 actor 的 `Body`。
 - **别的代码要用它**：
   - 打怪：`manager.Damage(ctx, monsterEntityID, lifeSeq, amount)`，`lifeSeq` 取自先前读到的快照（`MonsterInspect` 的应答或同步下来的 `Vitals.LifeSeq`）。
-  - 在自己的事务里读怪：handler 的目标接口用 `monster.IMonsterEntity`，调 `target.MonsterActorComp().Snapshot()`。
+  - 在自己的事务里读怪：handler 的目标参数写 `view.IMonsterActorEntity`，调 `target.MonsterActor().Snapshot()`。
   - 放怪与收怪：`manager.Spawn(ctx, sceneUniqueID, spec)`、`manager.Destroy(ctx, id)`。
 - **只适合借鉴的情形**：需要持久的世界 Boss、需要跨进程的大世界怪、数量远超 256 的群怪。值得借鉴的是：用 `LifeSeq` 挡住上一条命的迟到命令；重生复用同一个 Entity ID；死亡与重生在“实体 + 场景”一笔事务里；以及 `monster.Target`（`game/entities/monster/target.go`）用本进程内的实例身份挡住“同 ID 被重建之后的迟到操作”。
 

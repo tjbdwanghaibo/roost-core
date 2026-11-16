@@ -1,14 +1,10 @@
 package handler
 
-import (
-	"{{MODULE}}/game/view"
-	player "{{MODULE}}/game/entities/player"
-	team "{{MODULE}}/game/entities/team"
-)
+import "{{MODULE}}/game/view"
 
 // handlerTeamInfo 的 Team 权限由准备阶段取得，业务阶段统一锁住 Team 与 Player。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTeamInfo(target team.ITeamEntity, member player.ITeamEntity) (view.TeamSnapshot, error) {
-	return member.TeamComp().Info(target.TeamEntity())
+func handlerTeamInfo(target view.TeamEntity, member view.ITeamEntity) (view.TeamSnapshot, error) {
+	return member.Team().Info(target)
 }

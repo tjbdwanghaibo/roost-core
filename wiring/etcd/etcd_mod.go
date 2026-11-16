@@ -184,6 +184,11 @@ func (m *EtcdMod) Stop() {
 	}
 }
 
+// etcdDeregisterTimeout 是停机时撤销发现注册最多等的时间。撤销只是尽力而为：没撤掉的租约在 ttl 后自行过期，
+// 键随之消失。etcd 是最后停的 Mod，不加上限时它拿到停机预算剩下的全部时间（几十秒）；etcd 不可达时
+// （单实例锁正是因此 fail-stop）进程会一直等到 etcd 恢复或预算耗尽才退出。
+const etcdDeregisterTimeout = 5 * time.Second
+
 func (m *EtcdMod) StopWithContext(ctx context.Context) error {
 	if m == nil || m.asm == nil {
 		return nil
@@ -191,6 +196,8 @@ func (m *EtcdMod) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx, cancel := context.WithTimeout(ctx, etcdDeregisterTimeout)
+	defer cancel()
 	err := m.asm.Close(ctx)
 	slog.Info("etcd mod: stopped")
 	return err

@@ -77,7 +77,7 @@ type Mail interface {
 `
 
 var typoCases = []typoCase{
-	{kind: "endpoint", file: "route.go", line: 3, typo: "nesst", source: "package player\n\n//roost:endpoint nesst=Grant\nfunc (c *Controller) HandleGrant() {}\n", run: func(t *testing.T, root string) error {
+	{kind: "endpoint", file: "route.go", line: 3, typo: "nesst", source: "package controllers\n\n//roost:endpoint nesst=Grant\nfunc (c *Controller) HandleGrant() {}\n", run: func(t *testing.T, root string) error {
 		raw, err := os.ReadFile(filepath.Join(root, "route.go"))
 		if err != nil {
 			return err
@@ -86,7 +86,8 @@ var typoCases = []typoCase{
 		if _, _, err := roost.NewProject(roost.NewOptions{Name: "planet", Module: "example.com/planet", Out: project, Mods: []string{"configdata"}}); err != nil {
 			return err
 		}
-		dir := filepath.Join(project, "game/controllers/player")
+		// game/controllers 是一个包（2026-11-16 起），手写 endpoint 直接放在这个目录。
+		dir := filepath.Join(project, "game/controllers")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
@@ -131,6 +132,8 @@ type PlayerDao struct {
 		source: "package guild\n\n//roost:mirror entityKind=EntityKindGuild colll=guild\ntype GuildMirror struct {\n\tID int64\n}\n"},
 	{kind: "web", file: "route.go", line: 5, typo: "methd", run: runWeb,
 		source: "package web\n\nimport \"context\"\n\n//roost:web methd=POST path=/x body=json\nfunc Handle(context.Context, *Service, Req) (Resp, error) { return Resp{}, nil }\n"},
+	{kind: "listen", file: "player.go", line: 6, typo: "priorty", run: runEntity,
+		source: "package player\n\n//roost:entity entityKind=EntityKindPlayer\ntype Player struct{ ID int64 }\n\n//roost:listen priorty=1\nfunc (e *Player) OnLevelUp(ev struct{}) error { return nil }\n"},
 	{kind: "register", file: "reg.go", line: 3, typo: "phse", run: runReg,
 		source: "package planet\n\n//roost:register phse=entity\nfunc RegisterX() {}\n"},
 }

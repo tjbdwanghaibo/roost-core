@@ -9,9 +9,9 @@
   - `CombatCast`（`combat_cast.go`）：请求带 `Sequence`、`PeerID`（对手的原始玩家号）、`SkillID`。对对手施放一个技能；双方第一次成功施法时绑定为一场会话。
   - `CombatStep`（`combat_step.go`）：请求带 `Sequence`、`PeerID`。显式把这场战斗推进到服务端当前时刻（结算延迟伤害、让 Buff 到期）。
   - `CombatLeave`（`combat_leave.go`）：请求带 `Sequence`、`PeerID`。投降并结束会话。
-  - 端点在 `game/controllers/combat/`：`HandleCombatReady`、`HandleCombatCast`、`HandleCombatStep`、`HandleCombatLeave`。操作者取自认证会话，时刻由服务端提供。
+  - 端点在 `game/controllers/combat.go`：`HandleCombatReady`、`HandleCombatCast`、`HandleCombatStep`、`HandleCombatLeave`。操作者取自认证会话，时刻由服务端提供。
 - **服务端入口**
-  - 组件方法（`game/components/combat/combat.go`，要求已持有双方的锁）：`CombatComp().Ready(seq, ready)`、`Cast(peer, seq, skillID, now)`、`Step(peer, seq, now)`、`Leave(peer, seq)`、`Tick(peer, epoch, now)`；前四个返回 `CombatResult`，`Tick` 只返回错误。`Core()` 返回框架的战斗组件供持锁的可信业务只读；`Input()` 返回下一拍的外部输入（场景号、坐标、最大生命、攻击）。窄接口 `ICombatEntity`。
+  - 组件方法（`game/components/combat/combat.go`，类型号 `combat.CompTypeCombat` 与工厂登记也在这里；要求已持有双方的锁）：`Combat().Ready(seq, ready)`、`Cast(peer, seq, skillID, now)`、`Step(peer, seq, now)`、`Leave(peer, seq)`、`Tick(peer, epoch, now)`；前四个返回 `CombatResult`，`Tick` 只返回错误。`Core()` 返回框架的战斗组件供持锁的可信业务只读；`Input()` 返回下一拍的外部输入（场景号、坐标、最大生命、攻击）。handler 参数写 `view.ICombatEntity`；`Cast` / `Step` / `Leave` / `Tick` / `Core` 要拿具体组件（对手的框架战斗状态），不在 `view.Combat` 里，经 `combat.Of(target)` 取回组件再调。
   - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerCombatReady`（单实体）、`handlerCombatCast` / `handlerCombatStep` / `handlerCombatLeave`（双实体，生成的 Sender 是 `MultiSync_CombatCast` 等）、`handlerCombatTick`（双实体，仅供本服的后台驱动调用，没有协议）。
   - 运行期入口 `combat.Start(registry)`（`game/modules/combat/runtime.go`），以及 `combat.Queue(owner, peer, epoch)`、`combat.Program(id)`、`combat.Resolver()`、`combat.Environment()`、`combat.FailedDeliveries()`。
   - `combat.NewHost(...)`、`Host`、`Participant`、`Input`（`game/modules/combat/host.go`）：把技能运行时限制在本次事务已锁住的两名参与者之内的宿主。
@@ -36,7 +36,7 @@
   - `combat_silenced`：施法者处于沉默状态（眩晕也会派生沉默），不能施法。
   - `combat_skill`：技能被拒绝（技能号不存在、冷却中、时钟回拨、同一拍内输入变化等）。
 
-**日志**：准备 / 离开确认记 Info；combat_boundary 与未知内部失败记 Error，后台推进同样记录异常；施法、伤害和每拍成功推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/combat/runtime.go`, `game/controllers/combat/combat_cast.go`, `game/controllers/combat/combat_leave.go`, `game/controllers/combat/combat_ready.go`, `game/controllers/combat/combat_step.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：准备 / 离开确认记 Info；combat_boundary 与未知内部失败记 Error，后台推进同样记录异常；施法、伤害和每拍成功推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/combat/runtime.go`, `game/controllers/combat.go`, `game/controllers/combat.go`, `game/controllers/combat.go`, `game/controllers/combat.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 结束规则：死亡状态保留到显式 `CombatLeave` 或场景结束；结束时双方恢复到各自已确认的最大生命、护盾清零，清除控制、冷却与施法状态。双方须重新 Ready 才能再战。恢复和会话清理在同一事务中，提交拒绝时全部回滚；重复 Ready 不能用于会话内回血。新增死亡后结束、拒交后重试两条场景。
 
@@ -80,7 +80,7 @@
 
 ## 验证范围
 
-- `roost module verify combat`：38 个场景（`./game/handler`，`^TestCombat`）；与 `scene` 的联动另有 2 个场景（`./game/controllers/scene`），与 `equipment` 的联动另有 2 个场景（`./game/handler`）。
+- `roost module verify combat`：38 个场景（`./game/handler`，`^TestCombat`）；与 `scene` 的联动另有 2 个场景（`./game/controllers`），与 `equipment` 的联动另有 2 个场景（`./game/handler`）。
 - 场景是离线的：真实生成的 PB、controller、Nest 与技能运行时；提交器是替身（`combatCommitter`，可注入拒绝与阻塞）。
 - 覆盖：双方同意、伤害经两个 `CombatDAO`、原样重试不重复伤害、序号冲突与跳号、冷却随检查点恢复并按服务端时间到期、延迟技能按拍结算、提交被拒后绑定生命冷却回滚、眩晕驱动 `actor` 门控、Buff 到期、沉默拒绝施法、跨空间与超距拒绝、第三人不能加入、时钟回拨、绕过会话改生命或 Buff 被拒、属性变化下一拍生效、离开清理、附加 DAO 的登记与往返、协议使用会话身份并返回业务码、并发重放共用一份回执、未知技能不绑定、检查点损坏时拒绝、心跳队列驱动双实体推进、离开或切换空间取消施法与控制、重新加载后继续延迟技能并恢复 Buff 投影、停止时等待队列中的事务完成。
 - 没有验证：跨服、真实数据库恢复、经 TCP 的客户端链路与长时间运行都没有验证，不能当作生产验收。

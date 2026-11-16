@@ -30,8 +30,9 @@ import (
 )
 
 // 多进程：每个 Cell 是测试二进制自 exec 出来的独立 OS 进程（TestCellProcessChild），而且是一个普通 roost App——
-// app.New(...).Singleton(opener)，singleton.enabled=true，锁在测试自起的私有 redis-server 上（opener 是下面的 lockStore：
-// 与 wiring/redis 的 SingletonStore 同样转到 core 的 redis.CompareAndSet / CompareAndDelete；core 层的包不能 import wiring）：
+// app.New(...).Singleton(opener)，singleton.enabled=true，锁在测试自起的私有 redis-server 上（opener 是下面的 lockStore，
+// 测试专用的替身：生产的 kitetcd.SingletonStore 在 wiring 层，core 层的包不能 import wiring；这里验证的是 App 的锁语义，
+// 与后端是哪种存储无关）：
 // 同 sid 的第二个 Cell 进程拿不到锁、启动失败；失锁 fail-stop（App 的统一保证，cellworld 不自己做）。进程之间经
 // 真实 nats-server 通信。子进程把 Real 取得 / 失去、伤害结算等事件按行写到 stdout（JSON，带 pid 与系统时间），父进程
 // 据此跨进程检查“同一 (实体, epoch) 只有一个进程取得 Real、Real 区间不重叠”。父进程关闭子进程 stdin 即让它退出并打印
@@ -229,7 +230,7 @@ func runChild(raw string) int {
 	return 0
 }
 
-// lockStore 是单实例锁的后端：与 wiring/redis 的 SingletonStore 相同的两个 CAS 原语加逐键 GET。
+// lockStore 是测试专用的单实例锁后端：core 的 redis.CompareAndSet / CompareAndDelete 两个原语加逐键 GET（满足 app.SingletonStore 的契约）。
 type lockStore struct{ client fredis.IRedis }
 
 func newLockStore(addr string) (app.SingletonStore, error) {

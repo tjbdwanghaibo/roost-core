@@ -63,13 +63,13 @@ func handlerClaimDungeon(target player.IDungeonClaimEntity, stats world.IStatsEn
 	if err := checkExpGrant(target, stats, amount); err != nil {
 		return dungeon.ClaimResult{}, err
 	}
-	if balance := target.WalletComp().Balance(); balance > math.MaxInt64-dungeon.ClearCoins {
+	if balance := target.Wallet().Balance(); balance > math.MaxInt64-dungeon.ClearCoins {
 		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrWalletOverflow, nil, "run_id", runID, "balance", balance, "delta", dungeon.ClearCoins)
 	}
 	if !target.DungeonLedgerComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
 		return dungeon.ClaimResult{Clears: target.DungeonLedgerComp().DungeonClears(season)}, nil
 	}
-	gained, err := target.ProfileComp().AddExp(amount)
+	gained, err := target.Profile().AddExp(amount)
 	if err != nil {
 		return dungeon.ClaimResult{}, err
 	}
@@ -78,7 +78,7 @@ func handlerClaimDungeon(target player.IDungeonClaimEntity, stats world.IStatsEn
 		return dungeon.ClaimResult{}, err
 	}
 	// 金币（D26）：wallet 模块的 Add，不带业务键——只发一次由上面的账本保证（见 dungeon.ClearCoins）。
-	if _, err := target.WalletComp().Add(dungeon.ClearCoins); err != nil {
+	if _, err := target.Wallet().Add(dungeon.ClearCoins); err != nil {
 		return dungeon.ClaimResult{}, err
 	}
 	clears := target.DungeonLedgerComp().CountDungeonClear(season)

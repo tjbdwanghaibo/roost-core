@@ -7,7 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/game/modules/alliance"
 	apperrors "{{MODULE}}/internal/errors"
 	alliancedonate "{{MODULE}}/saga/alliance_donate"
@@ -29,9 +29,9 @@ import (
 // same saga.
 //
 //roost:nest rollback=undo durability=strict
-func handlerStartAllianceOp(target player.IBagEntity, op string, state []byte, coins int32, businessKey string) (string, error) {
+func handlerStartAllianceOp(target view.IBagEntity, op string, state []byte, coins int32, businessKey string) (string, error) {
 	if coins > 0 {
-		if have := target.BagComp().Count(alliance.CoinItemID); have < int64(coins) {
+		if have := target.Bag().Count(alliance.CoinItemID); have < int64(coins) {
 			return "", errcode.Wrap(apperrors.ErrBagShort, nil, "item_id", alliance.CoinItemID, "have", have, "want", coins)
 		}
 	}

@@ -11,7 +11,7 @@
     - `Complete(ctx, target int64, token Token) (err error)`：确认某一期的异步初始化或结算已经完成。
     - `target` 是联盟的完整实体号。`Snapshot`、`Token` 是 `activity` 包同名类型的别名。
   - 服务实现 `Service`（`internal/rpc/activity_alliance/service.go`）：`CheckRoute`、`Pulse`、`Complete`，先核对目标种类与 Remote 所有权再进 Nest。
-  - 组件：`AllianceActivityComp()`，类型 `AllianceActivityComponent` 是 `activity.Component` 的别名（`game/entities/alliance/activity_component.go`），窄接口 `IAllianceActivityEntity`。在联盟实体的 Nest 事务里调 `AllianceActivityComp().Reconcile(event, createdAt)`、`Host()`、`Rearm()`。
+  - 组件：安装器按清单的 `component_package: game/components/activity` 把 activity 的共用组件挂到 `Alliance` 上（`activity *activity.Component`，`comp:"activity.CompTypeActivity"`，与 Player 同一个类型号，本模块不另分配号）。在联盟实体的 Nest 事务里调 `Activity().Reconcile(event, createdAt)`、`Activity().Rearm()`；要 `Host()` 时经 `activity.Of(target)`。handler 参数写 `view.AllianceEntity`。宿主方法 `ActivityBook()` 由生成器交接 `AllianceDao.ActivityAlliance`，`ActivityScope()`（"alliance"）与 `ActivityCreatedAt()` 在 `game/entities/alliance/activity.go` 手写。
   - 创建事实：`Alliance.ActivityCreatedAt()`（同一文件）返回联盟的持久建盟时间，单位毫秒（`AllianceDao.CreatedAtUnix` 以秒落库，这里乘 1000）。`Reconcile` / `Pulse` 的 `createdAt` 传 0 时共用组件从它取，所以 `Trigger=created` 的定义不需要调用方带创建时间。没建成或已解散的联盟（没有盟主）返回 0。
   - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerAllianceActivityPulse`、`handlerAllianceActivityComplete`。
 - **登记点 / 钩子**：本模块不新增登记函数。活动逻辑仍用 `activity.Register` 登记，要登记在**联盟服务进程**会加载的代码里；`Hooks` 回调拿到的 `Owner` 是 `*Alliance`，`Eligible` 读的是权威联盟实体的真实状态。
@@ -43,11 +43,11 @@
 - **做一个联盟活动**
   1. 在 `configs/table/activity.csv` 加 `Scope=alliance` 的定义，`roost generate`。
   2. 在联盟服务进程加载的包里 `activity.Register` 登记逻辑。
-  3. 事件触发的活动（联盟建成、升级等）：在产生这个事实的联盟 Nest 事务里调 `AllianceActivityComp().Reconcile("<事件名>", createdAt)`。
-  4. game 侧写自己的端点：校验成员资格后，用生成的 RPC 客户端调 `Pulse` 取视图；玩家参加时在 `Player` 事务里调 `ActivityComp().Host().JoinShared(快照, now)` 记参与资格。
+  3. 事件触发的活动（联盟建成、升级等）：在产生这个事实的联盟 Nest 事务里调 `Activity().Reconcile("<事件名>", createdAt)`。
+  4. game 侧写自己的端点：校验成员资格后，用生成的 RPC 客户端调 `Pulse` 取视图；玩家参加时在 `Player` 事务里经 `activity.Of(target)` 取回组件后调 `Host().JoinShared(快照, now)` 记参与资格。
 - **需求比它多一点**
   - 联盟建成就开的活动：定义用 `Trigger=created`（`DelayMillis` 是建盟后多久开期），不用写代码；恢复扫描会激活它。
-  - 换一个创建事实（例如按“首次满 10 人”的时间）：改 `game/entities/alliance/activity_component.go` 的 `ActivityCreatedAt()`，返回毫秒，没有事实时返回 0。
+  - 换一个创建事实（例如按“首次满 10 人”的时间）：改 `game/entities/alliance/activity.go` 的 `ActivityCreatedAt()`，返回毫秒，没有事实时返回 0。
 - **别的模块 / 业务代码要用它**：取得 `AllianceActivities` 客户端后调 `Pulse(ctx, target, event, createdAt)` / `Complete(ctx, target, token)`；`target` 是联盟的完整实体号（`alliance` 模块的 `AllianceTarget(联盟号)` 可以构造）。
 - **只适合借鉴的情形**：见 `activity_world` 的同名小节；本模块展示的是“给一个已有的 Remote 实体追加活动宿主”需要的最少文件。
 

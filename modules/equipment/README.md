@@ -13,16 +13,16 @@
 
 ### 服务端入口
 
-- 组件 `EquipmentComp()`（`game/components/equipment/equipment.go`），只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
-  - `Equip(itemID int64, level int32) (slot int32, replaced int64, err error)`：内部从背包扣一件新的、把旧的退回背包。可信的服务端代码可以传 1～10000 的等级。槽里已经是同一道具、只是等级不同时不动背包，只改等级并执行变化钩子，`replaced` 为 0。
+- 组件 `Equipment()`（逻辑、类型号 `equipment.CompTypeEquipment` 与工厂登记在 `game/components/equipment/equipment.go`，对外接口在 `game/view/component_equipment.go`，Nest handler 参数写生成的 `view.IEquipmentEntity`），只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
+  - `Equip(itemID int64, level int32) (slot int32, replaced int64, err error)`：内部从背包扣一件新的、把旧的退回背包。可信的服务端代码可以传 1～10000 的等级。槽里已经是同一道具、只是等级不同时不动背包，只改等级并发布穿戴变化事件，`replaced` 为 0。
   - `Unequip(slot int32) (itemID int64, found bool, err error)`：内部把道具退回背包后清槽。
   - `Worn(slot) (itemID, level, ok)` 与 `RangeWorn(fn)`：只读。
 - Nest handler（`game/handler/equipment_equip.go`、`equipment_unequip.go`）：`handlerEquipmentEquip`、`handlerEquipmentUnequip`，都是 `rollback=undo durability=strict`。端点 `HandleEquipmentEquip` / `HandleEquipmentUnequip` 直接分发到它们。
 - 规则函数（`game/modules/equipment/equipment.go`）：`Lookup(itemID) (slot, attack, hp, ok)`、`SlotFor(itemID)`、`ValidSlot(slot)`、`Slots()`，常量 `SlotWeapon`（1）、`SlotArmor`（2）、`MaxSlots`（32）、`MaxLevel`（10000）、`MaxStat`（1e12）。
 
-### 登记点
+### 实体事件
 
-`equipment.OnEquipmentChanged(name, EquipmentChangedHook)`（`game/components/equipment/hooks.go`）：每次穿上或卸下成功修改之后执行，签名 `func(host view.PlayerEntity) error`（要别的组件经 `host.Attribute()` 这类 view 访问器）。它在同一笔 Nest 事务、同一把 Player 锁内，只能改同一个 Player、不能做外部 I/O；返回错误让穿戴、背包与全部钩子的写入一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
+`event.EquipmentChanged{Slot}`（`game/event/equipment.go`）：每次穿上或卸下成功修改之后在 Player 上发布。监听写成组件或实体方法上的 `//roost:listen`（`OnEquipmentChanged(ev event.EquipmentChanged) error`；组件上的监听经自己的宿主取别的组件，例如 attribute 直接调自己的 `RefreshGear`）。监听在同一笔 Nest 事务、同一把 Player 锁内，只能改同一个 Player、不能做外部 I/O；返回错误让穿戴、背包与全部监听的写入一起回滚。
 
 ### 状态
 
@@ -36,7 +36,7 @@
 
 `equipment_item_invalid`（这个道具没有合法的装备规则）、`equipment_level_invalid`（等级不在 1～10000）、`equipment_slot_invalid`（槽号不在 1～32）。背包的拒绝（没有这件道具、退回时放不下）原样透出 bag 的码。
 
-**日志**：穿戴、卸下确认，记录槽位、道具和替换结果。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/equipment/equipment_equip.go`, `game/controllers/equipment/equipment_unequip.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：穿戴、卸下确认，记录槽位、道具和替换结果。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/equipment.go`, `game/controllers/equipment.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -45,10 +45,10 @@
 - **客户端不能指定等级**，协议固定传 1。没有强化、升级的协议。
 - **上限：** 槽号 1～32，每槽一件；等级 1～10000；单项属性每级至多 1e12。
 - **一致性与幂等：**
-  - 穿、卸、背包扣回、钩子的写入在一笔事务里，任何一步失败或提交被拒整体回滚。
+  - 穿、卸、背包扣回、监听的写入在一笔事务里，任何一步失败或提交被拒整体回滚。
   - 换装先扣新道具、再退旧道具，所以背包种类满时可以复用刚腾出的位置。
   - 同一道具同一等级已经穿着时 `Equip` 幂等成功、不扣背包；空槽 `Unequip` 幂等返回 `found=false`。这只是状态幂等，不是请求账本：延迟到达的旧请求可能再次改变穿戴。
-  - 同一槽位上同一道具换一个等级再 `Equip`：穿着的还是这一件，背包不动（不扣、不退，空包也能换），只改等级；变化钩子照常执行，钩子失败时等级保持原值。
+  - 同一槽位上同一道具换一个等级再 `Equip`：穿着的还是这一件，背包不动（不扣、不退，空包也能换），只改等级；穿戴变化事件照常发布，监听失败时等级保持原值。
 - **配置变更：** 从 `equipment_item` 删掉一行之后，这件道具不能再穿，已经穿着的不再提供属性；卸下仍受 bag 的道具表与容量约束，退不回去时整件装备保留。数据迁移由工程负责，模块不自动销毁物品。
 - **前提：** 依赖清单声明的业务模块与 Nest/configdata。单装即代办玩家 TCP 和自身同步（`access: {transport: tcp, self_sync: true}`），可读取穿戴、背包或保底的初始全量及后续变化；不依赖 enter 顺带打开。真正连入仍须实现认证器（或装 login）、启用 player-tcp 配置并创建 Player。已有自建 Sync Manager 的工程按 `--no-self-sync` 的正式接法装配，不能同时创建两个 Manager。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“业务模块目录”一条：game-demo 的属性 / 装备已换成模块。
@@ -59,9 +59,9 @@
 - **需求比它多一点：**
   - 加装备、改槽位与加成：改 `configs/table/equipment_item.csv`，道具本身要先在 bag 的 `item` 表里。
   - 加槽位名字：在 `game/modules/equipment/equipment.go` 加常量（上限 `MaxSlots`）。
-  - 穿卸之后要重算别的东西（战力、外观）：登记 `equipment.OnEquipmentChanged`，不要改 `Equip` / `Unequip` 的顺序。
-  - 做强化：自己写一个 Nest handler 调 `EquipmentComp().Equip(itemID, 新等级)`；对已经穿着的这件只改等级、不动背包。强化的消耗（材料、金币）由这个 handler 在同一笔事务里自己扣。
-- **别的业务代码要读 / 改穿戴：** 在自己的 Nest handler 里（目标实体实现 `player.IEquipmentEntity`）调 `target.EquipmentComp().Worn(slot)`、`RangeWorn(fn)`、`Equip(itemID, level)`、`Unequip(slot)`。调用方不要再自己扣、退背包。
+  - 穿卸之后要重算别的东西（战力、外观）：在自己的组件（或 Player 实体）上写 `//roost:listen` 的 `OnEquipmentChanged(ev event.EquipmentChanged) error`，不要改 `Equip` / `Unequip` 的顺序。
+  - 做强化：自己写一个 Nest handler 调 `Equipment().Equip(itemID, 新等级)`；对已经穿着的这件只改等级、不动背包。强化的消耗（材料、金币）由这个 handler 在同一笔事务里自己扣。
+- **别的业务代码要读 / 改穿戴：** 在自己的 Nest handler 里（目标参数写 `view.IEquipmentEntity`，同一笔里还要用别的组件时写 `view.PlayerEntity`）调 `target.Equipment().Worn(slot)`、`RangeWorn(fn)`、`Equip(itemID, level)`、`Unequip(slot)`。调用方不要再自己扣、退背包。
 - **只适合借鉴的情形：** 每件装备各不相同（随机属性、可交易的唯一实例）时不适合直接用。值得借鉴的是“穿戴事实与背包变化在一笔事务里、先扣后退”的写法。
 
 ## 联动
@@ -74,4 +74,4 @@
 
 ## 验证范围
 
-`roost module verify` 跑 18 条场景（`^TestEquipment`），零跳过；与 attribute 的联动另 8 条（记在 attribute 模块下）。场景是离线的：用正式生成的 Nest、Sender、协议端点加内存替身提交器，覆盖穿上扣一件、替换退回旧件、卸下退回、重复穿不扣、空槽幂等、缺道具与非法道具 / 槽 / 等级拒绝、背包满时卸下回滚、提交失败与钩子失败回滚、并发重复只扣一件、协议返回业务码、同一道具换等级不动背包（空包能换、包里另有一件时不被动用）且照常执行变化钩子。真实存储、真实 TCP、跨机恢复没有覆盖。
+`roost module verify` 跑 18 条场景（`^TestEquipment`），零跳过；与 attribute 的联动另 8 条（记在 attribute 模块下）。场景是离线的：用正式生成的 Nest、Sender、协议端点加内存替身提交器，覆盖穿上扣一件、替换退回旧件、卸下退回、重复穿不扣、空槽幂等、缺道具与非法道具 / 槽 / 等级拒绝、背包满时卸下回滚、提交失败与监听失败回滚、并发重复只扣一件、协议返回业务码、同一道具换等级不动背包（空包能换、包里另有一件时不被动用）且照常发布穿戴变化事件。真实存储、真实 TCP、跨机恢复没有覆盖。

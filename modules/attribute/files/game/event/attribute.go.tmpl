@@ -1,0 +1,6 @@
+package event
+
+// AttributeChanged 在宿主的最终属性确实变化后、同一笔业务事务内发布（attribute 组件的 Refresh / RefreshGear / LevelUp）；
+// 加载时重建临时层、刷新后最终值没变都不发布。监听可以在同一个实体上继续改状态，但不能再刷新属性（会再发布本事件，
+// 由运行时的重入上限挡住）；返回错误时属性与监听的写入一起回滚。
+type AttributeChanged struct{}

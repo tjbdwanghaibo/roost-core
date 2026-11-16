@@ -14,5 +14,10 @@ type TerrainChunkData interface {
 	SetLots(indices []int32, id int64)
 }
 
-// TerrainChunkDataHolder 是“带有 TerrainChunkData 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
-type TerrainChunkDataHolder interface{ TerrainChunkData() TerrainChunkData }
+// TerrainChunkDataHolder 是“带有 TerrainChunkData 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它，Nest handler 收
+// 生成的 ITerrainChunkDataEntity。
+type TerrainChunkDataHolder interface {
+	TerrainChunkData() TerrainChunkData
+	// PublishSyncDirty 是宿主方法：把 DAO 这笔事务改的同步脏位交给订阅主体（实体手写）。
+	PublishSyncDirty()
+}

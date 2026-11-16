@@ -53,7 +53,7 @@ redis:
 | etcd | `etcd.endpoints`（变量值逗号分隔）、`etcd.username`、`etcd.password` | 用户名与口令同时写或都不写 |
 | nats | `nats.url`、`nats.username`、`nats.password`（后两个新增，经 nats.go `UserInfo`） | 用户名与口令同时写或都不写；写了用户名时 `nats.url` 不能再带 userinfo。token / nkey / creds 文件不支持（可以写在 URL 的 userinfo 里） |
 
-取值规则只在 `wiring/mods` 的 `EnvValues` 实现一次，四个 Mod 与走同一规则的运维入口（`wiring/nats.Connect` / `ServerURL`、`wiring/mongo.Connection`、单实例锁的 `wiring/redis.SingletonStore`、`wiring/sidmerge`）共用：
+取值规则只在 `wiring/mods` 的 `EnvValues` 实现一次，四个 Mod 与走同一规则的运维入口（`wiring/nats.Connect` / `ServerURL`、`wiring/mongo.Connection`、单实例锁的 `wiring/etcd.SingletonStore`、`wiring/sidmerge`）共用：
 
 | 情况 | 结果 |
 | --- | --- |

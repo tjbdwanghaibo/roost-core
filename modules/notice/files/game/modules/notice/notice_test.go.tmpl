@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 )
@@ -115,8 +116,14 @@ func (client *noticeMessaging) PublishSystem(_ context.Context, request svcchat.
 	client.requests = append(client.requests, request)
 	return svcchat.Message{Channel: request.Channel, Body: request.Body, Origin: svcchat.OriginSystem}, nil
 }
+// noticeNest 只占 Nest 客户端的位置：公共 Controller 的 FromRegistry 要求它已发布，notice 与 chat 的系统发布都不经 Nest。
+type noticeNest struct{ corenest.Client }
+
 func TestNoticeStartupUsesChatControllerSystemPath(t *testing.T) {
 	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(app.ModName("nest"), corenest.Client(noticeNest{})); err != nil {
+		t.Fatal(err)
+	}
 	messaging := &noticeMessaging{}
 	if err := registry.Register(svcchat.CapabilityName, svcchat.Messaging(messaging)); err != nil {
 		t.Fatal(err)
@@ -147,7 +154,13 @@ func TestNoticeMissingDependenciesFail(t *testing.T) {
 	}
 	registry := app.NewRegistry(viper.New())
 	if _, err := Start(registry); err == nil {
-		t.Fatal("missing chat accepted")
+		t.Fatal("missing nest and chat accepted")
+	}
+	if err := registry.Register(app.ModName("nest"), corenest.Client(noticeNest{})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(registry); err == nil || !strings.Contains(err.Error(), string(svcchat.CapabilityName)) {
+		t.Fatalf("missing chat accepted: %v", err)
 	}
 	if _, err := FromRegistry(registry); err == nil {
 		t.Fatal("unstarted publisher accepted")

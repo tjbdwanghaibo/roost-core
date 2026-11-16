@@ -1,8 +1,8 @@
 package handler
 
-import room "{{MODULE}}/game/entities/room"
+import "{{MODULE}}/game/view"
 
 //roost:nest rollback=undo durability=strict
-func handlerMatchroomOpen(target room.IMatchroomEntity, matchID string, members []int64) error {
-	return target.MatchroomComp().Open(matchID, members)
+func handlerMatchroomOpen(target view.IMatchroomEntity, matchID string, members []int64) error {
+	return target.Matchroom().Open(matchID, members)
 }

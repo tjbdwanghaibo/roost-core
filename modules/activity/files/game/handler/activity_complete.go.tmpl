@@ -3,15 +3,20 @@ package handler
 import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
-	"{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/components/activity"
+	"{{MODULE}}/game/view"
 )
 
 // ActivityComplete 接可靠后台工作的完成事实；调用方须验证业务任务确实成功。
+// 活动组件也挂在 ActivityWorld、Alliance 上（同一个组件），参数写 view.IActivityEntity，target=Player 指明锁的是 Player
+// （归属服务、生成的 Sender 与 endpoint 都按它寻址）。
 //
-//roost:nest rollback=undo durability=strict
-func handlerActivityComplete(target player.IActivityEntity, token activity.Token) error {
-	c := target.ActivityComp()
+//roost:nest rollback=undo durability=strict target=Player
+func handlerActivityComplete(target view.IActivityEntity, token activity.Token) error {
+	c, err := activity.Of(target)
+	if err != nil {
+		return err
+	}
 	if err := c.Host().Complete(token, fctx.NowMilli()); err != nil {
 		return err
 	}

@@ -1,0 +1,13 @@
+package controllers
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleActivityView 是查看活动的协议入口：目标取认证会话的玩家，对账与快照在 Nest handler 的锁内做。
+//
+//roost:endpoint nest=ActivityView
+func (controller *Controller) HandleActivityView(ctx *playeraccess.Context, req *pb.ActivityViewRequest) (*pb.ActivityViewResponse, error) {
+	return controller.dispatchActivityView(ctx, req)
+}

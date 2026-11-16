@@ -14,6 +14,14 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 )
 
+//roost:component type={{ID:component:Actor}}
+const CompTypeActor entity.ComponentType = {{ID:component:Actor}}
+
+// init 登记组件工厂：Player 结构体里 comp:"actor.CompTypeActor" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeActor, NewComponent)
+}
+
 // Owner 是 Actor 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
@@ -23,7 +31,7 @@ type Component struct {
 	body  *actor.Body
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/actor_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

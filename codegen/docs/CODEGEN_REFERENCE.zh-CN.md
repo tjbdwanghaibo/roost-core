@@ -98,7 +98,7 @@ roost project next --workflow player-tcp
 roost project deps
 ```
 
-配置段：服务配置建工程时生成一次、之后归应用；`add mod` / `add saga` / `add access` / `add rpc` 让服务多出 Mod 时追加缺的顶层段，手改 `roost.yaml` 后 `project sync` 不追加。doctor 的 `config-sections:<service>` 只读检查三份配置（dev、prod 示例、k8s Secret 示例）是否缺服务实际注册的 Mod 的段（带 DataEngine 的服务另查 `redis:` / `singleton:` 与 `singleton.enabled: true`），缺了报 WARN 并给出可直接追加的文本；有意删掉的段同样会报，可以忽略，或留空段（如 `saga: {}`）消掉提示。检查项清单见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
+配置段：服务配置建工程时生成一次、之后归应用；`add mod` / `add saga` / `add access` / `add rpc` 让服务多出 Mod 时追加缺的顶层段，手改 `roost.yaml` 后 `project sync` 不追加。doctor 的 `config-sections:<service>` 只读检查三份配置（dev、prod 示例、k8s Secret 示例）是否缺服务实际注册的 Mod 的段（带 DataEngine 的服务另查 `etcd:` / `singleton:` 与 `singleton.enabled: true`），缺了报 WARN 并给出可直接追加的文本；有意删掉的段同样会报，可以忽略，或留空段（如 `saga: {}`）消掉提示。检查项清单见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
 
 sync / deps 的暂存与提交语义（同级临时目录、逐文件原子替换与回滚、并发修改拒绝覆盖、只解析 roost-core 一个模块）见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
 
@@ -140,14 +140,13 @@ go test ./...
 
 ## 3. 业务骨架：roost add
 
-支持 `service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer`。
+支持 `service|mod|access|transport|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer`。
 
 ```bash
 roost add service world -mods etcd,redis,mongo,nats,dataengine,nest
 roost add mod saga -service game
 roost add access player --service game
 roost add transport tcp
-roost add module inventory
 roost add protocol use_item -group game --handler inventory
 roost add entity player
 roost add component inventory --entity player
@@ -190,7 +189,7 @@ roost add rpc guild -service game
 
 | 命令 | 必需参数 | 生成/修改 | 下一步 |
 | --- | --- | --- | --- |
-| `add access player` | 多 Service 时 `--service` | roost.yaml、access Mod（internal/access/player，派发层用 core 的 infra/network/playeraccess）、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
+| `add access player` | 多 Service 时 `--service` | roost.yaml、access Mod（internal/access/player，派发层用 core 的 infra/network/playeraccess）、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 etcd 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
 | `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
 | `add gate [<name>]` | 已有玩家 TCP、托管 account 且玩家服务 uses 它（`roost module add login` 一并做好） | roost.yaml 的 Gate 服务（缺省 gate；mods etcd、nats，uses account）与 `access.player.gate`、玩家服务补 etcd；Gate 服务的 bootstrap（不自动登记的 etcd + `accessplayertcp.NewGateMod()`）、配置（`player_access.gate` 的 namespace / addr / advertise_addr，singleton 打开）、部署模板；玩家服务的 `bootstrap.New()` 走 Game Ingress，配置关嵌入 TCP、加 `player_access.gate`，装了登录模块时写 `login.presence.addr` | `roost project doctor` 的 gate:*；生产示例里填两端的 advertise_addr（`roost help gate`） |
 | （生成）实体 lifecycle | 无 | `game/entities/<entity>/lifecycle_gen.go`（`roost generate`；v1.47.0 起不再有 `add lifecycle`） | 登录/创角边界从 Registry 构造（`<entity>.LifecycleFromRegistry`） |
@@ -212,7 +211,11 @@ endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使
 `--nest-handler`。`add protocol --handler <域>` 之后跑过 `roost generate`，协议生成器会先写一个“未实现”占位
 （`Handle<Protocol>` 只返回 `fmt.Errorf("Handle<Protocol>: not implemented")`）；add endpoint 认出**仍未改动**的占位并在同一次
 提交里替换它。占位被改过（多了语句、换了返回值、加了别的函数）或是别的文件时不覆盖，报错写明“删掉或改名（保留要留的代码）后重跑”。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
-字段；找不到字段会在 add 阶段报错，不生成半成品。**业务时间是服务器决定的值**（新用户试用第四轮登记项 2）：参数名
+字段；找不到字段会在 add 阶段报错，不生成半成品。第一个参数是 `game/view` 的组件窄接口（`view.I<X>Entity`）时，
+endpoint 找挂了组件 X 的实体，用 `context.PlayerID` 拼它的实体 ID；组件挂在多个实体上时要指定是哪一个：
+`roost add endpoint <名> --target <实体>`，写进标记成为 `//roost:endpoint nest=<Handler> target=<实体>`（实体结构体名或
+实体包名，与 `//roost:nest target=` 同一认法）。没写时生成失败并提示写 `target=`；指定的实体没挂这个组件也报错。
+Nest handler 自己写了 `//roost:nest target=<实体>` 且对得上实体时 endpoint 同样采用，两处写成不同实体时报错。**业务时间是服务器决定的值**（新用户试用第四轮登记项 2）：参数名
 `nowUnix` / `nowUnixMilli`（`int64`）不对应 Request 字段，也不在 `Sync_` 的参数里：Nest 生成器的分发包装在 handler
 **执行时**填这条消息冻结的业务时间（`fctx.Now().Unix()` / `fctx.NowMilli()`，真实时间 + `time.logic_offset`；DESIGN-TODO
 D22-1，维护者 2026-10-21 决定），排队、冷加载、重试的耽搁不算进“之前”，handler 里再读 `fctx.Now()` 是同一时刻。
@@ -271,13 +274,13 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 单玩家协议可以直接把 PB 指针作为 handler 的业务参数 / 返回值，不必逐字段拆请求或在 Controller 再复制响应。PB 转交按类型识别；`roost add endpoint` 按本工程 PB import 路径和当前协议类型识别，import 别名不受限制。
 
 ```go
-// game/handler/add_gold.go（player、pb 分别导入本工程的实体和协议包）
+// game/handler/add_gold.go（view、pb 分别导入本工程的 game/view 和协议包）
 //roost:nest rollback=undo durability=strict
-func handlerAddGold(target player.IWalletEntity, request *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
-    if err := target.WalletComp().AddGold(request.Amount); err != nil {
+func handlerAddGold(target view.IWalletEntity, request *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
+    if err := target.Wallet().AddGold(request.Amount); err != nil {
         return nil, err
     }
-    return &pb.AddGoldResponse{Gold: target.WalletComp().Gold()}, nil
+    return &pb.AddGoldResponse{Gold: target.Wallet().Gold()}, nil
 }
 ```
 
@@ -288,7 +291,7 @@ roost add endpoint AddGold --handler player
 roost generate
 ```
 
-组件的 AddGold / Gold 是业务方法，仍由业务实现；DAO setter、提交和 EntitySync 收集方式不变。生成 endpoint 负责：从认证 `context.PlayerID` 构造目标 ID → 调用同步 Sender → 映射错误 → 返回 handler 的 PB 响应。无需自己写转换代码，新增 PB 业务字段也不需要再改这层转交。
+组件的 AddGold / Gold 是业务方法，仍由业务实现，并要列进 `game/view/component_wallet.go` 的 `view.Wallet` 接口（handler 经窄接口 `view.IWalletEntity` 的访问器 `Wallet()` 调用，2026-11-16 起）；DAO setter、提交和 EntitySync 收集方式不变。生成 endpoint 负责：从认证 `context.PlayerID` 构造目标 ID → 调用同步 Sender → 映射错误 → 返回 handler 的 PB 响应。无需自己写转换代码，新增 PB 业务字段也不需要再改这层转交。
 
 边界：
 
@@ -303,12 +306,12 @@ roost generate
 
 ### Controller 手写入口与自动转交分离
 
-新建的标准 Nest endpoint 保持同一个包，不加 manager / interface 层：
+新建的标准 Nest endpoint 保持同一个包（`game/controllers` 是一个包，2026-11-16 起），不加 manager / interface 层：
 
 ```text
-game/controllers/player/
-├── controller.go              # 业务所有：依赖注入
-├── add_gold.go                # 业务所有：接入校验、授权、调用转交
+game/controllers/
+├── controller.go              # 生成器所有：Controller、FromRegistry、推送辅助，每次覆盖
+├── player.go                  # 业务所有：handler=player 分组的接入校验、授权、调用转交（追加在末尾）
 └── add_gold_endpoint_gen.go   # 生成器所有：Nest Sender、响应和错误映射
 ```
 
@@ -322,7 +325,7 @@ func (controller *Controller) HandleAddGold(ctx *playeraccess.Context, req *pb.A
 }
 ```
 
-协议名从 `HandleAddGold` 推导，目录表示 Controller 领域，`nest=AddGold` 是唯一的 handler 对应声明；指定 `--nest-handler` 时写入指定名字。`roost generate`（包括 `--changed`）扫描手写标记，按当前 handler 签名更新 `dispatchAddGold`。手写入口可以改文件名、合并进同包文件，生成器不修改其方法体。
+协议名从 `HandleAddGold` 推导，`--handler` 决定追加到哪个 `<分组>.go`，`nest=AddGold` 是唯一的 handler 对应声明；指定 `--nest-handler` 时写入指定名字，指定 `--target <实体>` 时追加 `target=<实体>`。`roost generate`（包括 `--changed`）扫描手写标记，按当前 handler 签名更新 `dispatchAddGold`。手写入口可以改文件名、合并进同包文件，生成器不修改其方法体。
 
 自动部分负责认证 PlayerID 构造、参数转交、Nest 调用、错误码映射和空响应检查；手写层可在其前后处理业务，但提交后的响应处理失败不代表回滚。Entity 当前状态校验仍须在 Nest handler 锁内完成。不要从这里直接取 Entity local 锁或绕过 Nest 改 DAO。
 

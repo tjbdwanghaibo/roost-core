@@ -9,6 +9,6 @@ type MailboxLedger struct {
 	// Claims 是邮件 id -> 这封邮件自己的过期时刻（Unix 秒，mail 服务随预留交回的 ExpiresAtUnix）。
 	// 值不是“领取时间”：它决定这条记录什么时候可以忘掉——邮件过期后 mail 服务不再给出新预留，
 	// 发放入口也按执行时的业务时间拒绝过期邮件的首次发放，再过一段宽限这条记录才清理
-	// （规则见 game/modules/mailbox.LedgerMayForget，执行在 MailboxComponent.Claim）。
+	// （规则见 game/modules/mailbox.LedgerMayForget，执行在 mailbox.Component.Claim）。
 	Claims map[string]int64 `store:"1"`
 }

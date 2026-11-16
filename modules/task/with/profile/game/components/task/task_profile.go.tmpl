@@ -1,14 +1,18 @@
 package task
 
 import (
-	"{{MODULE}}/game/view"
-	gameprofile "{{MODULE}}/game/components/profile"
+	"{{MODULE}}/game/event"
+
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	gameprofile.OnProfileLevelUp("task", func(host view.PlayerEntity, from, to int32) error {
-		return host.Task().Report("profile.level_up", int64(to-from), fctx.NowMilli())
-	})
+// OnProfileLevelUp 把升级作为 "profile.level_up" 事件推进任务（升了几级记几次），与升级同一笔事务提交；
+// 事件提供方负责去重（一次升级只发布一次）。
+//
+// priority=10 保持改成事件之前的执行顺序：原来的升级钩子按登记名字母序执行（activity、attribute、mailbox、task），
+// 任务排最后，按刷新后的属性与活动状态算进度。
+//
+//roost:listen priority=10
+func (c *Component) OnProfileLevelUp(ev event.ProfileLevelUp) error {
+	return c.Report("profile.level_up", int64(ev.To-ev.From), fctx.NowMilli())
 }

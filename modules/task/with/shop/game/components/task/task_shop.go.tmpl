@@ -1,13 +1,13 @@
 package task
 
-import (
-	"{{MODULE}}/game/view"
-	gameshop "{{MODULE}}/game/components/shop"
-)
+import "{{MODULE}}/game/event"
 
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	gameshop.OnShopBought("task", func(owner view.PlayerEntity, goodsID, count int64, _ gameshop.ShopResult, now int64) error {
-		return owner.Task().Report("shop.bought", count, now)
-	})
+// OnShopBought 把购买第一次生效作为 "shop.bought" 事件推进任务（按购买份数记），与购买同一笔事务提交；
+// 事件提供方负责去重（回执重放不发布）。同一笔购买的扣款另由 OnWalletSpent 记一次 "wallet.spent"。
+//
+// 缺省优先级：改成事件之前 shop 的购买钩子只有 task 一个模块登记，没有别的模块监听需要排序。
+//
+//roost:listen
+func (c *Component) OnShopBought(ev event.ShopBought) error {
+	return c.Report("shop.bought", ev.Count, ev.NowUnixMilli)
 }

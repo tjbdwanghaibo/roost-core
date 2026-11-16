@@ -29,6 +29,10 @@ type IThreadSafeEntity interface {
 
 	// OnDestroy 在实体移除时、全部组件的 OnDestroy 之后调用；具体实体可覆盖以执行清理。
 	OnDestroy(reason EntityDestroyReason)
+
+	// Publish 在本实体上发布实体事件，同步执行登记的监听，第一个错误即返回；当前 Guard 必须持有本实体。
+	// 由 EntityBase 实现，契约见 entity_event.go。
+	Publish(ev any) error
 }
 
 // IThreadSafeEntityBase 是实体身份的最小接口。

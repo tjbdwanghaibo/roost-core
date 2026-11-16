@@ -8,13 +8,13 @@ access:
   transport: tcp
 protocols: [ServertimeSync, ServertimeNow]
 verify:
-  packages: [./game/modules/servertime, ./game/controllers/servertime]
+  packages: [./game/modules/servertime, ./game/controllers]
   run: ^TestServertime
   pass: 12
 with:
   enter:
     summary: 玩家每次进入游戏时把服务器此刻的业务时间推给他（ServertimeNow）；推送不成只记日志，不让登录失败
     verify:
-      packages: [./game/controllers/servertime]
+      packages: [./game/controllers]
       run: ^TestWithServertimeEnter
       pass: 3

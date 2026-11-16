@@ -7,22 +7,23 @@
 本模块只管“一个活动什么时候开、什么时候关、现在处于哪个阶段”，并在阶段切换时调用业务登记的回调。活动的具体玩法、奖励都由业务写在回调里。
 
 - **客户端协议**
-  - `ActivityView`（`protocol/def/activity_view.go`）：查询自己的个人活动。请求没有字段；应答 `Activities` 是 `ActivityState` 列表，每项带 `Definition`、`Generation`、`Cycle`、`Phase`、`Flow`、`FlowVersion`、`Start`、`OpenAt`、`CloseAt`、`Pending`、`Version`。查询时顺带按当前配置对账并推进一次。端点 `HandleActivityView`（`game/controllers/activity/activity_view.go`）。
+  - `ActivityView`（`protocol/def/activity_view.go`）：查询自己的个人活动。请求没有字段；应答 `Activities` 是 `ActivityState` 列表，每项带 `Definition`、`Generation`、`Cycle`、`Phase`、`Flow`、`FlowVersion`、`Start`、`OpenAt`、`CloseAt`、`Pending`、`Version`。查询时顺带按当前配置对账并推进一次。端点 `HandleActivityView`（`game/controllers/activity.go`）。
   - 没有“我已满足条件”之类的上报协议，也没有推送协议。
 - **服务端入口**
-  - 组件（`game/modules/activity/component.go`，在宿主实体的 Nest 事务里调用）：
-    - `ActivityComp().Reconcile(event string, createdAt int64) error`：按当前配置激活符合条件的定义、推进阶段，再更新唤醒期限。
-    - `ActivityComp().Host()`：返回一次调用用的状态机入口 `activity.Host`。
-    - `ActivityComp().Rearm() error`：直接用过 `Host` 改状态之后调用，重新计算唤醒期限。
-  - `activity.Host` 的方法（`game/modules/activity/engine.go`）：`Activate(d, event, factTime, now)`、`Reopen(d, event, factTime, now, nextGeneration)`、`Reconcile(definitions, event, createdAt, now)`、`Advance(now)`、`Complete(token, now)`、`CheckOpen(token, now)`、`MoveFlow(token, next, now)`、`JoinShared(shared, now)`、`Views()`、`NextDeadline(now)`。
+  - 组件（`game/components/activity/component.go`，在宿主实体的 Nest 事务里调用）。类型号 `activity.CompTypeActivity` 与工厂登记也在这里：Player、ActivityWorld、Alliance 三种宿主挂同一个组件、同一个类型号（`comp:"activity.CompTypeActivity"`）。
+    - `Activity().Reconcile(event string, createdAt int64) error`：按当前配置激活符合条件的定义、推进阶段，再更新唤醒期限。
+    - `Activity().Rearm() error`：直接用过 `Host` 改状态之后调用，重新计算唤醒期限。
+    - `activity.Of(target)` 取回组件、再 `.Host()`：返回一次调用用的状态机入口 `activity.Host`。`Host`、`Views` 带本包的类型（`Token`、`Snapshot`），进不了 `game/view`，handler 经 `activity.Of` 用它们。
+  - 宿主方法（`view.ActivityHolder`）：`ActivityBook()` 由生成器交接宿主 DAO 里唯一的 `ActivityBook` 字段；`ActivityScope()`、`ActivityCreatedAt()` 每种实体手写一份（Player 的在 `game/entities/player/activity.go`）。
+  - `activity.Host` 的方法（`game/components/activity/engine.go`）：`Activate(d, event, factTime, now)`、`Reopen(d, event, factTime, now, nextGeneration)`、`Reconcile(definitions, event, createdAt, now)`、`Advance(now)`、`Complete(token, now)`、`CheckOpen(token, now)`、`MoveFlow(token, next, now)`、`JoinShared(shared, now)`、`Views()`、`NextDeadline(now)`。
   - Nest handler（`game/handler/`，都是 `durability=strict`，没有持有 `Player` 锁的服务端代码经生成的 Sender 调用）：
     - `handlerActivityEvent`（`Sync_ActivityEvent(ctx, 完整实体号, event, createdAt)`）：可信业务入口，上报一个事件并返回全部活动快照。
     - `handlerActivityComplete`（`Sync_ActivityComplete(ctx, 完整实体号, token)`）：确认某一期的异步初始化或结算已经完成。
     - `handlerActivityView`：协议背后的事务。
-  - 包级函数（`game/modules/activity/`）：`Definitions(scope)`（读配置表并校验）、`Validate(d)`、`ResumePending(ctx, registry, views, complete)`（锁外继续未完成的异步工作，`resume.go`）、`StartDriver(owned, kind, advance)`（给 Remote 宿主用的恢复扫描，`driver.go`）、`ScanHost` / `ScanCapability(scope)`（恢复扫描的宿主：宿主模块的 manager 发布、RPC Mod 在就绪点把扫描交给它，见 [modules/README](../README.md) 的“后台循环：manager”）、`CoordinatorKey(token)`（映射到框架跨服汇聚服务的窗口键，`coordinator.go`）、`NewComponent`（三种宿主共用的组件工厂）。
+  - 包级函数（`game/components/activity/`）：`Definitions(scope)`（读配置表并校验）、`Validate(d)`、`ResumePending(ctx, registry, views, complete)`（锁外继续未完成的异步工作，`resume.go`）、`StartDriver(owned, kind, advance)`（给 Remote 宿主用的恢复扫描，`driver.go`）、`ScanHost` / `ScanCapability(scope)`（恢复扫描的宿主：宿主模块的 manager 发布、RPC Mod 在就绪点把扫描交给它，见 [modules/README](../README.md) 的“后台循环：manager”）、`CoordinatorKey(token)`（映射到框架跨服汇聚服务的窗口键，`coordinator.go`）、`NewComponent`（三种宿主共用的组件工厂）。
   - 类型：`Token`（一期活动在某阶段某流程版本的完整身份）、`Snapshot`（一期活动的只读快照）、`Context`（回调参数，`Key(action)` 给出稳定的幂等键）、`Flow{Name, Due}`、`Phase` 及常量 `Initializing`、`Warmup`、`Open`、`Settling`、`Ended`。
 - **登记点 / 钩子**
-  - `activity.Register(name string, hooks activity.Hooks)`（`game/modules/activity/types.go`）：把一段活动逻辑登记到配置表 `Logic` 列引用的名字上。只在进程启动时（`init`）登记，重名或空名 panic。`Hooks` 有四个可选回调：
+  - `activity.Register(name string, hooks activity.Hooks)`（`game/components/activity/types.go`）：把一段活动逻辑登记到配置表 `Logic` 列引用的名字上。只在进程启动时（`init`）登记，重名或空名 panic。`Hooks` 有四个可选回调：
     - `Eligible(owner, event) bool`：解锁条件。在宿主实体的事务里调用，读实体的真实状态。
     - `Enter(Context) (pending bool, err error)`：每进入一个阶段调用一次，在宿主实体的事务里。只能改本次已锁住的实体的 DAO 或登记可靠 effect。返回 `pending=true` 只允许在 `Initializing` 与 `Settling` 阶段，表示要等后台工作完成。返回错误则整笔事务回滚。
     - `Flow(Context) (Flow, error)`：自定义流程的期限到了时调用，在事务里，返回下一个流程。
@@ -33,10 +34,10 @@
   - 一个 `Player` 共用一个持久定时器，类型 `ActivityDeadline`（`game/entities/player/activity_timers.go`）。
 - **配置**
   - 配置表：列定义 `configs/schema/activity.go`（`Activity`），数据 `configs/table/activity.csv`（默认只有表头）。各列含义见后文“定义与时间”。
-  - 常量 `MaxDefinitions = 128`、`AdvanceBudget = 32`（`game/modules/activity/types.go`）。
+  - 常量 `MaxDefinitions = 128`、`AdvanceBudget = 32`（`game/components/activity/types.go`）。
 - **错误码**：模块不定义错误码。引擎返回的是包级错误值 `ErrRule`（规则非法）、`ErrStale`（期次或流程已过时）、`ErrClosed`（不在开启阶段）、`ErrDenied`（解锁条件不满足）、`ErrCapacity`（参与资格已满）；经协议端点返回给客户端时是框架的内部错误码。
 
-**日志**：个人活动异步 Complete 确认，记录活动号、代数、期次、阶段和流程版本；没有阶段变化输出的定时推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/activity/resume.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：个人活动异步 Complete 确认，记录活动号、代数、期次、阶段和流程版本；没有阶段变化输出的定时推进不记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/components/activity/resume.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -61,26 +62,26 @@
   4. 有需要等后台完成的初始化或结算时，`Enter` 返回 `pending=true` 并写下要做的事；完成后调 `Sync_ActivityComplete`，或登记 `Resume`。
 - **需求比它多一点**
   - 报名、分组、比赛等子流程：用 `MoveFlow` 与 `Hooks.Flow`，不要扩充阶段枚举。
-  - 事件触发的解锁：定义用 `Trigger=event`，在产生事件的那笔 `Player` 事务里调 `ActivityComp().Reconcile("<事件名>", 0)`。
+  - 事件触发的解锁：定义用 `Trigger=event`，在产生事件的那笔 `Player` 事务里调 `Activity().Reconcile("<事件名>", 0)`。
   - 运营手动重开一个已彻底结束的活动：调 `Host().Reopen`，传旧代际加 1。
-  - `game/modules/activity/engine.go`、`rules.go` 是三种宿主共用的状态机与时间计算，不建议改；玩法都放在登记的 `Hooks` 里。
+  - `game/components/activity/engine.go`、`rules.go` 是三种宿主共用的状态机与时间计算，不建议改；玩法都放在登记的 `Hooks` 里。
 - **别的模块 / 业务代码要用它**
-  - 已持有 `Player` 锁：`target.ActivityComp().Reconcile(event, 0)` 或 `target.ActivityComp().Host().Views()`；用 `Host` 改过状态后调 `Rearm()`。
+  - 已持有 `Player` 锁：`target.Activity().Reconcile(event, 0)`，或 `activity.Of(target)` 取回组件后 `Host().Views()`；用 `Host` 改过状态后调 `Rearm()`。handler 参数写 `view.IActivityEntity`，并在 `//roost:nest` 上写 `target=Player`：活动组件也挂在 ActivityWorld、Alliance 上，不写 `target=` 对应不到唯一的实体（Nest 归属与 endpoint 都按它寻址）。
   - 没有持锁：`syncsender.NewActivityEventSender(client).Sync_ActivityEvent(ctx, 完整实体号, event, createdAt)`。
   - 外部副作用的幂等键：回调里用 `Context.Key("<动作名>")`。
 - **只适合借鉴的情形**：只需要“某个时间段内开放一个入口”且没有结算的简单开关，用不着这个引擎，直接读配置表判断时间即可。值得借鉴的是“激活时冻结规则、`Token` 隔离迟到请求、`pending` 必须显式确认”这三点。
 
 ## 联动
 
-- `activity` + `enter`（`with/enter/`）：首次建档时经 `OnFirstEnter("activity", …)` 在建档事务里以建档时间激活 `created` 触发的活动，并把宿主的创建时间接到 `PlayerDao.Enter` 的首次进入时间；每次进入经 `gamelogin.OnEntered("activity", …)` 在事务外对账一次并 `ResumePending`（`with/enter/game/controllers/activity/activity_enter.go`）：钩子拿到的是会话里的玩家号，先用 `entity.BuildEntityID(玩家号, player.EntityKindPlayer)` 换成完整实体号再发 `Sync_ActivityEvent` / `Sync_ActivityComplete`；钩子失败只记日志，下一次进入再来。
-- `activity` + `profile`（`with/profile/`）：经 `OnProfileLevelUp("activity", …)` 在升级的同一笔事务里上报事件 `profile.level_up`。
-- `activity` + `leaderboard`（`with/leaderboard/game/modules/activity/leaderboard.go`）：`activity.Board(token)` 按“范围、宿主、定义、代际”给出独立的榜，期次作为赛季。
-- `activity` + `mailbox`（`with/mailbox/game/modules/activity/mailbox.go`）：`activity.SendReward(ctx, mailer, token, action, letter)` 以“实例身份 + 动作 + 收件人”生成稳定的发件键，只允许在 `Settling` 阶段的 `Token` 上用，且只能在事务之外调用。
+- `activity` + `enter`（`with/enter/`）：首次建档时活动组件上 `//roost:listen priority=40` 的 `OnEnterFirst` 监听实体事件 `event.EnterFirst`（`with/enter/game/components/activity/activity_enter.go`），在建档事务里以建档时间激活 `created` 触发的活动，并把宿主的创建时间接到 `PlayerDao.Enter` 的首次进入时间；每次进入经 `gamelogin.OnEntered("activity", …)` 在事务外对账一次并 `ResumePending`（`with/enter/game/controllers/activity_enter.go`）：钩子拿到的是会话里的玩家号，先用 `entity.BuildEntityID(玩家号, player.EntityKindPlayer)` 换成完整实体号再发 `Sync_ActivityEvent` / `Sync_ActivityComplete`；钩子失败只记日志，下一次进入再来。
+- `activity` + `profile`（`with/profile/`）：组件上的 `//roost:listen priority=40` 方法 `OnProfileLevelUp` 监听实体事件 `event.ProfileLevelUp`，在升级的同一笔事务里上报事件 `profile.level_up`。
+- `activity` + `leaderboard`（`with/leaderboard/game/components/activity/leaderboard.go`）：`activity.Board(token)` 按“范围、宿主、定义、代际”给出独立的榜，期次作为赛季。
+- `activity` + `mailbox`（`with/mailbox/game/components/activity/mailbox.go`）：`activity.SendReward(ctx, mailer, token, action, letter)` 以“实例身份 + 动作 + 收件人”生成稳定的发件键，只允许在 `Settling` 阶段的 `Token` 上用，且只能在事务之外调用。
 - 以 `requires` 依赖它的模块：`activity_world`、`activity_alliance`。
 
 ## 验证范围
 
-- `roost module verify activity`：21 个场景（`./game/modules/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter` 的联动 2 个场景（`./game/handler` 与 `./game/controllers/activity`），与 `profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
+- `roost module verify activity`：21 个场景（`./game/components/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter` 的联动 2 个场景（`./game/handler` 与 `./game/controllers`），与 `profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO 与实体定时器；提交器是替身。覆盖五阶段与期限、异步初始化与结算、零预热、独立解锁与重复激活、初始化失败回滚、定时器回调出错时保留期限并回滚、循环的有界补期与规则冻结、自定义流程与迟到事件、时钟回拨与显式重开、参与资格不是个人实例、`pending` 经 BSON 往返恢复、并发激活只有一个锚点；规则校验、业务日历不按 24 小时、重叠周期拒绝、跳过空期的有界查找、`Resume` 重试、驱动停止时保留在途工作、汇聚键、相对日历等到业务日界。
 - 与 `enter` 的联动：一个场景直接调建档初始化，验证重连不重置创建锚点；另一个经 `gamelogin.RunEntered` 真正执行登记的进入钩子（正式 Nest、生成的 Sender 与 handler），验证钩子按玩家号定位到 `Player`、对账激活、`Resume` 报告完成后用原 `Token` 确认 `pending`，重连再进入不重复 `Resume`、不改时间线。
 - 离线验收记录见 [证据](../../docs/maintenance/evidence/module-activity-20261112/README.md)。真实档另跑 [scripts/test-activity-real.sh](../../scripts/test-activity-real.sh)：精简正式配方经 account、玩家 TCP `EnterGame`、Nest 与 Mongo/文件 WAL，Player 活动先换服再 SIGKILL、同 WAL 重启；到期前已进入游戏，随后只读 Mongo 观察持久定时器推进到 Ended，最后才发 `ActivityView`。World/Alliance 的权威迁移与恢复扫描在同一档分别核对，见 [2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
@@ -127,7 +128,7 @@
 
 ## 业务接入示例
 
-例如升级到 20 级后解锁个人活动，在工程自己的文件（例如 `game/modules/activity/activity_growth.go`；宿主经 `game/view` 的小接口拿别的组件，不 import 实体包）里登记：
+例如升级到 20 级后解锁个人活动，在工程自己的文件（例如 `game/components/activity/activity_growth.go`；宿主经 `game/view` 的小接口拿别的组件，不 import 实体包）里登记：
 
 ```go
 func init() {

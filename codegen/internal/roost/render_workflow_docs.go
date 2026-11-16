@@ -31,7 +31,7 @@ auth.go 和 Service 文件归业务所有。
 | 持久化/同步字段 | db/def/*.go | roost generate |
 | 玩法方法 | game/entities/*/*_component.go | make test |
 | Nest 业务命令 | game/handler/*.go | roost generate |
-| 协议到 Sender 映射 | game/controllers/*/*.go | make test |
+| 协议到 Sender 映射 | game/controllers/<分组>.go（一个包，Controller 在生成的 controller.go） | make test |
 | 登录票据校验 | internal/access/player/tcp/auth.go | roost config enable player-tcp |
 | Service 生命周期 | internal/service/{{SERVICE}}/service.go | make test |
 
@@ -97,9 +97,12 @@ mutator 同时维护 dirty、undo、持久化 patch 和客户端同步标记。
 把 game/handler/rename_player.go 改为：
 
     //roost:nest rollback=undo durability=strict
-    func handlerRenamePlayer(target player.IProfileEntity, name string) error {
-        return target.ProfileComp().Rename(name)
+    func handlerRenamePlayer(target view.IProfileEntity, name string) error {
+        return target.Profile().Rename(name)
     }
+
+Rename 也写进 game/view/component_profile.go 的 Profile 接口：handler 收 roost generate 生成的窄接口
+view.IProfileEntity，经访问器 Profile() 调用组件。
 
 第一个参数是锁目标；其余参数名必须能与协议 Request 字段对应。业务时间例外：参数名 nowUnix / nowUnixMilli（int64）
 由生成的 Nest 分发包装在 handler 执行时填这条消息冻结的业务时间（fctx.Now），不放进 Request（放进去就是让客户端
@@ -311,9 +314,12 @@ access player 是传输无关的已认证玩家接入层；它生成并发安全
 把 game/handler/rename_player.go 的 handler 改为：
 
     //roost:nest rollback=undo durability=strict
-    func handlerRenamePlayer(target player.IProfileEntity, name string) error {
-        return target.ProfileComp().Rename(name)
+    func handlerRenamePlayer(target view.IProfileEntity, name string) error {
+        return target.Profile().Rename(name)
     }
+
+Rename 也写进 game/view/component_profile.go 的 Profile 接口：handler 收 roost generate 生成的窄接口
+view.IProfileEntity，经访问器 Profile() 调用组件。
 
 业务层不用加锁。生成 Sender 将 PlayerID 转为 Entity 锁目标，Nest 在调用 handler 前完成锁定、
 加载、WAL/回滚上下文装配，退出后提交或回滚。
@@ -347,8 +353,8 @@ game/entities/player/lifecycle_gen.go（roost generate 产出）提供 Lifecycle
 方法是 Get、Create、GetOrCreate、Destroy。登录/创角边界通过 player.LifecycleFromRegistry 获取实例级 Entity runtime；普通玩法请求只走 Sender。不要在 endpoint 中每次 GetOrCreate，
 也不要使用包级全局 EntityManager。
 
-登录边界就是上面的 EnterGame：roost add endpoint EnterGame --handler player --lifecycle Player 生成的
-game/controllers/player/enter_game.go 对 context.PlayerID 调 GetOrCreate。客户端第一条请求先发 EnterGame；
+登录边界就是上面的 EnterGame：roost add endpoint EnterGame --handler player --lifecycle Player 在
+game/controllers/player.go 里写的 HandleEnterGame 对 context.PlayerID 调 GetOrCreate。客户端第一条请求先发 EnterGame；
 从未登录的玩家直接发 RenamePlayer 会收到稳定码 entity_not_found（errcode.CodeEntityNotFound = 2，Nest
 冷加载在 Data Engine 里找不到该 Entity），服务端不按 ERROR 记录，客户端重新 EnterGame 即可。已删档（DAO
 文档只剩墓碑）的玩家这个 ID 不可再用：玩法请求与 EnterGame 都回复 entity_deleted（errcode.CodeEntityDeleted

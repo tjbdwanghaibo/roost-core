@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"fmt"
@@ -23,9 +22,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	db "{{MODULE}}/db"
 	attributecomp "{{MODULE}}/game/components/attribute"
-	gameprofile "{{MODULE}}/game/components/profile"
-	controller "{{MODULE}}/game/controllers/attribute"
+	controller "{{MODULE}}/game/controllers"
 	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
 	apperrors "{{MODULE}}/internal/errors"
@@ -161,19 +160,23 @@ var attributeChangedReject atomic.Bool
 var attributeChangedCalls atomic.Int64
 
 func init() {
-	attributecomp.OnAttributeChanged("zz_attribute_changed_test", func(attributecomp.Owner) error {
-		attributeChangedCalls.Add(1)
-		if attributeChangedReject.Load() {
-			return errors.New("attribute changed hook rejected")
-		}
-		return nil
-	})
-	gameprofile.OnProfileLevelUp("zz_attribute_test", func(_ view.PlayerEntity, _, _ int32) error {
-		if attributeRejectHook.Load() {
-			return errors.New("attribute hook rejected")
-		}
-		return nil
-	})
+	// 测试自己的属性变化监听，只登记在 Player 上（生成的监听在 player 包的 init 里先登记，这里排在它们后面）。
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "AttributeChanged", "handler_test.attributeChangedProbe",
+		func(*playerentity.Player, event.AttributeChanged) error {
+			attributeChangedCalls.Add(1)
+			if attributeChangedReject.Load() {
+				return errors.New("attribute changed hook rejected")
+			}
+			return nil
+		})
+	// 升级事件上测试自己的监听（生成的监听在 player 包的 init 里先登记，这里排在它们后面）：打开时拒绝升级。
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "ProfileLevelUp", "handler_test.attributeRejectLevelUp",
+		func(*playerentity.Player, event.ProfileLevelUp) error {
+			if attributeRejectHook.Load() {
+				return errors.New("attribute hook rejected")
+			}
+			return nil
+		})
 }
 func TestAttributeNewPlayerDerivesWithoutPersisting(t *testing.T) {
 	f := newAttributeFixture(t)
@@ -417,8 +420,8 @@ func TestAttributeReloadRebuildsDerivedLayersWithoutBaseWrite(t *testing.T) {
 // ---- 同一个组件挂在第二个实体上 ----
 
 // attributeTower 是只在测试里存在的第二个宿主（比如一座有等级的防御塔）：不是 Player，没有档案组件，
-// 实体 kind 是测试自己的。它用的组件就是 Player 那一份：经 Player 的组件号登记的工厂创建（工厂是
-// attribute.NewComponent），真实宿主照 README 的“复用方式”另申请自己的组件号、登记同一个工厂。测试工程里
+// 实体 kind 是测试自己的。它用的组件就是 Player 那一份：经同一个类型号 attribute.CompTypeAttribute 登记的工厂创建
+// （工厂是 attribute.NewComponent），真实宿主照 README 的“复用方式”在实体结构体里加 comp:"attribute.CompTypeAttribute" 字段。测试工程里
 // 没有第二个带属性字段的生成 DAO，所以它借一份独立的 PlayerDao 实例当自己的存储；真实宿主在自己的 DAO 里加
 // AttributeBase / AttributeGear / AttributeFinal 三个字段。等级与装备层来源由宿主自己给。
 type attributeTower struct {
@@ -426,7 +429,7 @@ type attributeTower struct {
 	entity.ComponentManager
 	entity.DaoManager
 	dao       *db.PlayerDao
-	attribute *playerentity.AttributeComponent
+	attribute *attributecomp.Component
 	level     int32
 	gear      *gameattr.Combat
 	gearErr   error
@@ -440,12 +443,12 @@ const attributeTowerLevel = 5
 
 var registerAttributeTower sync.Once
 
-func (w *attributeTower) Base() *entity.EntityBase                        { return w.EntityBase }
-func (w *attributeTower) AttributeComp() *playerentity.AttributeComponent { return w.attribute }
-func (w *attributeTower) AttributeBase() *db.AttributeValues              { return w.dao.GetAttributeBase() }
-func (w *attributeTower) AttributeGear() *db.AttributeValues              { return w.dao.GetAttributeGear() }
-func (w *attributeTower) AttributeFinal() *db.AttributeValues             { return w.dao.GetAttributeFinal() }
-func (w *attributeTower) AttributeLevel() int32                           { return w.level }
+func (w *attributeTower) Base() *entity.EntityBase                { return w.EntityBase }
+func (w *attributeTower) AttributeComp() *attributecomp.Component { return w.attribute }
+func (w *attributeTower) AttributeBase() *db.AttributeValues      { return w.dao.GetAttributeBase() }
+func (w *attributeTower) AttributeGear() *db.AttributeValues      { return w.dao.GetAttributeGear() }
+func (w *attributeTower) AttributeFinal() *db.AttributeValues     { return w.dao.GetAttributeFinal() }
+func (w *attributeTower) AttributeLevel() int32                   { return w.level }
 
 // CollectAttributeGear 是宿主可选的装备层来源；返回错误时刷新失败，调用它的事务整笔回滚。
 func (w *attributeTower) CollectAttributeGear() (*gameattr.Combat, error) {
@@ -474,14 +477,16 @@ func newAttributeTower(t *testing.T, unique int64) *attributeTower {
 				}
 				w := &attributeTower{ComponentManager: entity.NewComponentManager(), DaoManager: entity.NewDaoManager(), dao: db.NewPlayerDao(), level: attributeTowerLevel}
 				w.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)
+				// 属性变化时组件在宿主上发布 event.AttributeChanged：测试宿主没有生成的工厂，自己装配事件分发（这种 kind 上没有监听）。
+				w.EntityBase.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(attributeTowerKind, w, ev) })
 				w.dao.SetId(param.StorageID())
 				w.DaoManager.Set(db.PlayerDaoCollection, w.dao)
-				comp, err := entity.CreateComponent(playerentity.CompTypeAttribute, w, param)
+				comp, err := entity.CreateComponent(attributecomp.CompTypeAttribute, w, param)
 				if err != nil {
 					return nil, err
 				}
-				w.attribute = comp.(*playerentity.AttributeComponent)
-				w.ComponentManager.Set(playerentity.CompTypeAttribute, w.attribute)
+				w.attribute = comp.(*attributecomp.Component)
+				w.ComponentManager.Set(attributecomp.CompTypeAttribute, w.attribute)
 				if err := w.ComponentManager.InitAll(param, param.IsCreate); err != nil {
 					return nil, err
 				}

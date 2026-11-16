@@ -1,0 +1,8 @@
+package event
+
+// EquipmentChanged 在 Player 穿上或卸下装备成功修改穿戴之后、同一笔事务内发布（equipment 组件的 Equip / Unequip）：
+// Slot 是变化的槽位。同一件同一等级已穿着的幂等穿戴、空槽卸下不发布。监听可以在同一个 Player 上继续改状态（属性重算），
+// 返回错误时穿戴、背包与监听的写入一起回滚。
+type EquipmentChanged struct {
+	Slot int32
+}

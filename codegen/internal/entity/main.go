@@ -81,6 +81,10 @@ func run(args []string, stdout io.Writer) error {
 	selfSyncFound := false
 	// viewKeep：每个 game/view 目录里本次生成的 entity_*.go；全量扫描结束后删掉别的生成文件。
 	viewKeep := map[string]map[string]bool{}
+	// holderDone：本次已写过 holder_entities_gen.go 的 view 目录。
+	holderDone := map[string]bool{}
+	// plans：每个生成工程（根目录）的实体事件登记计划。
+	plans := map[string]*eventPlan{}
 	for _, dir := range scanDirs {
 		// Parse all .go files in the directory
 		defs, pkg, err := parsePackage(dir)
@@ -162,8 +166,34 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
+		// 实体事件：整个工程算一次登记计划（规则违反在这里整体报出），提示只打印一次。
+		var plan *eventPlan
+		if view.Root != "" && *output == "" {
+			if plan = plans[view.Root]; plan == nil {
+				if plan, err = buildEventPlan(view.Root, view.Module); err != nil {
+					return fmt.Errorf("entity events: %w", err)
+				}
+				plans[view.Root] = plan
+				for _, note := range plan.Notes {
+					fmt.Fprintln(stdout, note)
+				}
+			}
+		}
+		if view.Dir != "" && *output == "" && !holderDone[view.Dir] {
+			holderDone[view.Dir] = true
+			path, changed, err := generateHolderEntities(view, *force)
+			if err != nil {
+				return err
+			}
+			if changed {
+				fmt.Fprintf(stdout, "generated: %s\n", path)
+			}
+		}
 		for i := range entities {
-			holders := applyViewAccessors(&entities[i], view)
+			holders, err := applyViewAccessors(&entities[i], view)
+			if err != nil {
+				return err
+			}
 			if view.Dir == "" || *output != "" {
 				continue
 			}
@@ -171,6 +201,8 @@ func run(args []string, stdout io.Writer) error {
 			if err != nil {
 				return fmt.Errorf("generate view for %s: %w", entities[i].Name, err)
 			}
+			// 实体接口文件生成了：接线末尾写编译期断言，实体漏写宿主方法时在那里编译失败。
+			entities[i].ViewEntity, entities[i].ViewImport = true, view.Import
 			if viewKeep[view.Dir] == nil {
 				viewKeep[view.Dir] = map[string]bool{}
 			}
@@ -193,6 +225,27 @@ func run(args []string, stdout io.Writer) error {
 				fmt.Fprintf(stdout, "generated: %s\n", outFile)
 			} else {
 				fmt.Fprintf(stdout, "unchanged: %s\n", outFile)
+			}
+		}
+		// 实体事件登记：有监听的实体写 <实体>_event_gen.go，其余（含改名、删掉的实体）的旧文件删掉。
+		if plan != nil {
+			keepEvents := map[string]bool{}
+			for _, ent := range entities {
+				listeners := plan.byEntity[eventEntityKey{Dir: dir, Name: ent.Name}]
+				if len(listeners) == 0 {
+					continue
+				}
+				path, changed, err := generateEventFile(dir, pkg, ent, listeners, plan.EventImport, *force)
+				if err != nil {
+					return fmt.Errorf("generate events for %s: %w", ent.Name, err)
+				}
+				keepEvents[filepath.Base(path)] = true
+				if changed {
+					fmt.Fprintf(stdout, "generated: %s\n", path)
+				}
+			}
+			if err := retireEventFiles(dir, keepEvents, stdout); err != nil {
+				return err
 			}
 		}
 		// 只读 DTO（//roost:mirror）：spec、解码与 reader，不参与 RegisterEntity。
@@ -352,7 +405,7 @@ func findEntityDirs(root string) ([]string, error) {
 			}
 			return nil
 		}
-		if entry.Type().IsRegular() && (strings.HasSuffix(entry.Name(), "_gen_wire.go") || strings.HasSuffix(entry.Name(), "_gen_wire_test.go") || strings.HasSuffix(entry.Name(), selfSyncPackerSuffix)) {
+		if entry.Type().IsRegular() && (strings.HasSuffix(entry.Name(), "_gen_wire.go") || strings.HasSuffix(entry.Name(), "_gen_wire_test.go") || strings.HasSuffix(entry.Name(), selfSyncPackerSuffix) || strings.HasSuffix(entry.Name(), eventGenSuffix)) {
 			owned, err := ownsEntityFile(path)
 			if err != nil {
 				return err

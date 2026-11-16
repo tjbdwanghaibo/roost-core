@@ -7,7 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 	"{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/components/activity"
 )
 
 var activityProfileHook sync.Once
@@ -29,7 +29,7 @@ func TestWithActivityProfileUnlockRollsBackWithLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.commit.reject.Store(true)
-	add := func(p *player.Player) error { _, err := p.ProfileComp().AddExp(100); return err }
+	add := func(p *player.Player) error { _, err := p.Profile().AddExp(100); return err }
 	if err := f.call(0, add); err == nil {
 		t.Fatal("rejected level accepted")
 	}

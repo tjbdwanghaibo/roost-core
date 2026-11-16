@@ -1,0 +1,11 @@
+package attribute
+
+import "{{MODULE}}/game/event"
+
+// OnEnterFirst 在新玩家首次初始化的那笔事务里建立基础与最终属性，与 Enter.Initialized 一起提交。
+//
+// priority=10 保持改成事件之前的执行顺序：原来的首次初始化钩子按登记名字母序执行（activity、casual、profile、
+// profile.attribute），属性排在 profile 的初始等级之后，按写好的等级建立。
+//
+//roost:listen priority=10
+func (c *Component) OnEnterFirst(ev event.EnterFirst) error { return c.Refresh() }

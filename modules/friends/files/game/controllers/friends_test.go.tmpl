@@ -1,0 +1,226 @@
+package controllers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	"{{MODULE}}/game/handler"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	player "{{MODULE}}/game/entities/player"
+	gamefriends "{{MODULE}}/game/components/friends"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+type friendsEndpointGetter map[int64]entity.IThreadSafeEntity
+
+// 没有档的玩家按正式 DataEngine 的答法报“权威里不存在”，Nest 据此给稳定的客户端码而不是内部错误。
+func (g friendsEndpointGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if v := g[id]; v != nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("%w: %d", engine.ErrEntityAggregateNotFound, id)
+}
+func (g friendsEndpointGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, e := g.Get(ctx, id, cats[i])
+		if e != nil {
+			return nil, e
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type friendsEndpointCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *friendsEndpointCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected commit rejection")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type friendsOnline map[int64]int
+
+func (s friendsOnline) ActiveSessions(id int64) int { return s[id] }
+func friendsControllerFixture(t *testing.T, online friendsOnline) (*Controller, *nest.NestMgr, []int64, *friendsEndpointCommitter) {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterFriendsChangeNestHandlers()
+	handler.RegisterFriendsOwnNestHandlers()
+	handler.RegisterFriendsListNestHandlers()
+	g := friendsEndpointGetter{}
+	var ids []int64
+	for i := int64(0); i < 2; i++ {
+		id, e := entity.BuildEntityID(97000+i, player.EntityKindPlayer)
+		if e != nil {
+			t.Fatal(e)
+		}
+		p, e := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if e != nil {
+			t.Fatal(e)
+		}
+		g[id] = p
+		ids = append(ids, id)
+	}
+	commit := &friendsEndpointCommitter{}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(commit))
+	if e := engine.Start(); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		if e := engine.Shutdown(context.Background()); e != nil {
+			t.Error(e)
+		}
+	})
+	r := app.NewRegistry(nil)
+	if e := r.Register(app.ModName("nest"), nest.Client(engine)); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Register(PlayerTCPCapability, online); e != nil {
+		t.Fatal(e)
+	}
+	c, e := FromRegistry(r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return c, engine, ids, commit
+}
+
+// 申请、同意是建立关系，要求对方此刻在本进程在线：对方离线时两者都被拒且零写入。
+func TestFriendsEndpointRefusesPeerOutsideThisProcess(t *testing.T) {
+	c, n, ids, commit := friendsControllerFixture(t, friendsOnline{97000: 1})
+	invalid, _ := errcode.ClientError(apperrors.ErrFriendsInvalid)
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsApply})
+	if e != nil || response.Code != invalid {
+		t.Fatalf("response=%+v err=%v", response, e)
+	}
+	s, e := syncsender.NewFriendsListSender(n).Sync_FriendsList(context.Background(), ids[1])
+	if e != nil || len(s.Incoming) != 0 || commit.commits.Load() != 0 {
+		t.Fatalf("remote peer wrote %+v %v", s, e)
+	}
+	friendsEndpointSetup(t, n, ids[1], ids[0], gamefriends.FriendsApply)
+	before := commit.commits.Load()
+	response, e = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsAccept})
+	if e != nil || response.Code != invalid {
+		t.Fatalf("accept while the applicant is offline: response=%+v err=%v", response, e)
+	}
+	if a := friendsEndpointList(t, n, ids[0]); len(a.Peers) != 0 || len(a.Incoming) != 1 || commit.commits.Load() != before {
+		t.Fatalf("refused accept wrote: %+v", a)
+	}
+}
+func TestFriendsEndpointUsesAuthenticatedActorAndListsOwnFacts(t *testing.T) {
+	c, _, _, _ := friendsControllerFixture(t, friendsOnline{97000: 1, 97001: 1})
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsApply})
+	if e != nil || response.Code != 0 {
+		t.Fatalf("response=%+v err=%v", response, e)
+	}
+	list, e := c.HandleFriendsList(&playeraccess.Context{PlayerID: 97001}, &pb.FriendsListRequest{})
+	if e != nil || list.Code != 0 || len(list.Incoming) != 1 || list.Incoming[0] != 97000 {
+		t.Fatalf("list=%+v err=%v", list, e)
+	}
+}
+
+// friendsEndpointSetup 用生成的 Sender 直接摆好关系（等同双方在线时做过的操作），端点场景只验证“对方现在不在线”这一步。
+func friendsEndpointSetup(t *testing.T, n *nest.NestMgr, actor, peer int64, action int32) {
+	t.Helper()
+	if e := syncsender.NewFriendsChangeSender(n).MultiSync_FriendsChange(context.Background(), actor, peer, action); e != nil {
+		t.Fatal(e)
+	}
+}
+func friendsEndpointList(t *testing.T, n *nest.NestMgr, id int64) gamefriends.FriendsSnapshot {
+	t.Helper()
+	s, e := syncsender.NewFriendsListSender(n).Sync_FriendsList(context.Background(), id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return s
+}
+
+// 拒绝申请、取消拉黑只改自己一侧：对方离线也能做。
+func TestFriendsEndpointOwnSideActionsWorkWhilePeerIsOffline(t *testing.T) {
+	c, n, ids, _ := friendsControllerFixture(t, friendsOnline{97000: 1})
+	friendsEndpointSetup(t, n, ids[1], ids[0], gamefriends.FriendsApply)
+	response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsReject})
+	if e != nil || response.Code != 0 {
+		t.Fatalf("reject while the applicant is offline: response=%+v err=%v", response, e)
+	}
+	if s := friendsEndpointList(t, n, ids[0]); len(s.Incoming) != 0 {
+		t.Fatalf("rejected application kept: %+v", s)
+	}
+	friendsEndpointSetup(t, n, ids[0], ids[1], gamefriends.FriendsBlock)
+	response, e = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: gamefriends.FriendsUnblock})
+	if e != nil || response.Code != 0 {
+		t.Fatalf("unblock while the blocked player is offline: response=%+v err=%v", response, e)
+	}
+	if s := friendsEndpointList(t, n, ids[0]); len(s.Blocked) != 0 {
+		t.Fatalf("unblocked player kept: %+v", s)
+	}
+}
+
+// 离线归属不明时不冷加载对方档案；双边关系必须原子修改，不能只清本人名单。
+func TestFriendsEndpointRemoveAndBlockRequirePeerOwnership(t *testing.T) {
+	online := friendsOnline{97000: 1}
+	c, n, ids, commit := friendsControllerFixture(t, online)
+	invalid, _ := errcode.ClientError(apperrors.ErrFriendsInvalid)
+	for _, action := range []int32{gamefriends.FriendsRemove, gamefriends.FriendsBlock} {
+		friendsEndpointSetup(t, n, ids[0], ids[1], gamefriends.FriendsApply)
+		friendsEndpointSetup(t, n, ids[1], ids[0], gamefriends.FriendsAccept)
+		before := commit.commits.Load()
+		response, err := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: action})
+		if err != nil || response.Code != invalid || commit.commits.Load() != before {
+			t.Fatalf("unowned peer changed: action=%d response=%+v commits=%d err=%v", action, response, commit.commits.Load()-before, err)
+		}
+		if a, b := friendsEndpointList(t, n, ids[0]), friendsEndpointList(t, n, ids[1]); len(a.Peers) != 1 || len(b.Peers) != 1 {
+			t.Fatalf("refused operation changed relationship: a=%+v b=%+v", a, b)
+		}
+		online[97001] = 1
+		response, err = c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97001, Action: action})
+		if err != nil || response.Code != 0 {
+			t.Fatalf("owned peer rejected: %+v %v", response, err)
+		}
+		if a, b := friendsEndpointList(t, n, ids[0]), friendsEndpointList(t, n, ids[1]); len(a.Peers) != 0 || len(b.Peers) != 0 {
+			t.Fatalf("one-sided relationship: a=%+v b=%+v", a, b)
+		}
+		delete(online, 97001)
+	}
+}
+
+// 对方离线时的删除、拉黑在装载前拒绝，不为未知玩家建档，操作者自己也不写；
+// 对象是自己答 friends_invalid。
+func TestFriendsEndpointOfflinePeerWithoutRecordIsNotCreated(t *testing.T) {
+	c, n, ids, commit := friendsControllerFixture(t, friendsOnline{97000: 1})
+	for _, action := range []int32{gamefriends.FriendsRemove, gamefriends.FriendsBlock} {
+		response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97009, Action: action})
+		if e != nil || response.Code != errcode.CodeOf(apperrors.ErrFriendsInvalid) {
+			t.Fatalf("action %d on a player without a record: response=%+v err=%v", action, response, e)
+		}
+	}
+	invalid, _ := errcode.ClientError(apperrors.ErrFriendsInvalid)
+	for _, action := range []int32{gamefriends.FriendsRemove, gamefriends.FriendsBlock, gamefriends.FriendsUnblock, gamefriends.FriendsReject} {
+		response, e := c.HandleFriendsChange(&playeraccess.Context{PlayerID: 97000}, &pb.FriendsChangeRequest{PeerID: 97000, Action: action})
+		if e != nil || response.Code != invalid {
+			t.Fatalf("action %d on self: response=%+v err=%v", action, response, e)
+		}
+	}
+	if a := friendsEndpointList(t, n, ids[0]); len(a.Blocked) != 0 || commit.commits.Load() != 0 {
+		t.Fatalf("refused action wrote: %+v", a)
+	}
+}

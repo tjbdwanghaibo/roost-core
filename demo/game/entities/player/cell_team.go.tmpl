@@ -1,0 +1,67 @@
+package player
+
+import (
+	gameteam "{{MODULE}}/game/components/team"
+	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	"{{MODULE}}/game/event"
+	"{{MODULE}}/game/partition"
+	"{{MODULE}}/game/view"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// 社交权威归 team 模块；分区场景只维护组关系投影（Base 缓存的那份成员表），不复制建队 / 入队 / 离队的实现。
+// team 组件在玩家的队伍关系变了（建队、入队、离队、解散）或周期核对（handler TeamSync）刷新时，在同一笔 Player
+// 事务里发布 event.TeamChanged；分区场景的组投影要 Player 的 cell 基础状态（cellworld.GroupPlayer），这只有
+// demo 的 Player 有，所以监听写在 Player 上。
+
+// OnTeamChanged 把变化之后的成员表交给本进程的 Node（Node.SetGroup 写自己的缓存），不是周期核对时再通知
+// 变化前后的成员的 Base（Node.NotifyGroup：离队、被解散的人也要收到）。本进程不跑分区场景时什么都不做。
+//
+//roost:listen
+func (player *Player) OnTeamChanged(ev event.TeamChanged) error {
+	node := partition.Node()
+	if node == nil {
+		return nil
+	}
+	before, after := gameteam.ChangedSnapshots(ev)
+	group := teamGroup(after)
+	if player.Team().TeamID() == after.TeamID && len(teamSeat(group, player.ID())) != 0 {
+		node.SetGroup(player, group)
+	} else {
+		node.SetGroup(player, cellworld.Group{})
+	}
+	if !ev.Refresh {
+		node.NotifyGroup(group, teamGroup(before).Members)
+	}
+	return nil
+}
+
+// teamGroup 把 Team 的成员表换成 Base 缓存的那份（cellworld.Group）：每名成员的 Player、在分区场景里的 SceneActor
+// （ID 跨格不变）与 Base 的 sid。
+func teamGroup(info view.TeamSnapshot) cellworld.Group {
+	g := cellworld.Group{ID: info.TeamID, Ver: uint64(info.Revision)}
+	for _, unique := range info.Members {
+		playerID, err := entity.BuildEntityID(unique, EntityKindPlayer)
+		if err != nil {
+			continue
+		}
+		actorID, err := entity.BuildEntityID(unique, scene_actor.EntityKindSceneActor)
+		if err != nil {
+			continue
+		}
+		g.Members = append(g.Members, cellworld.GroupMember{Player: playerID, Actor: actorID, SID: info.SIDs[unique]})
+	}
+	return g
+}
+
+// teamSeat 是一名玩家在成员表里的那一项（离队、被解散的人：通知也要发到他的 Base）。
+func teamSeat(g cellworld.Group, playerEntity int64) []cellworld.GroupMember {
+	for _, m := range g.Members {
+		if m.Player == playerEntity {
+			return []cellworld.GroupMember{m}
+		}
+	}
+	return nil
+}

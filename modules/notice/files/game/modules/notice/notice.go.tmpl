@@ -10,8 +10,9 @@ import (
 	"sync/atomic"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 
-	chatcontroller "{{MODULE}}/game/controllers/chat"
+	"{{MODULE}}/game/controllers"
 	gamechat "{{MODULE}}/game/modules/chat"
 )
 
@@ -80,9 +81,14 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("notice: registry is required")
 	}
-	chat, err := chatcontroller.FromRegistry(registry)
+	// 公共 Controller 要求 Nest 客户端已发布（有 chat 协议的进程里总有）；chat 服务的客户端它到用时才取，
+	// 所以这里先查一遍，缺 chat 时启动失败，不拖到第一次 Publish。
+	chat, err := controllers.FromRegistry(registry)
 	if err != nil {
 		return nil, err
+	}
+	if messaging, ok := app.Lookup[svcchat.Messaging](registry, svcchat.CapabilityName); !ok || messaging == nil {
+		return nil, fmt.Errorf("notice: chat capability %q not found; list chat under services.<service>.uses in roost.yaml", svcchat.CapabilityName)
 	}
 	return start(registry, chat)
 }

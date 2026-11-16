@@ -1,0 +1,9 @@
+package event
+
+// DungeonClaimed 在 Player 第一次领取一局副本的奖励后、同一笔事务内发布（dungeon 组件的 Claim）：RunID 是那一局副本
+// 实体号，Season 是赛季，NowUnixMilli 是这条 Nest 消息冻结的业务时间。重复领取不发布。监听返回错误时整笔事务回滚
+// （账本、经验、通关数一起退回）。
+type DungeonClaimed struct {
+	RunID, Season int64
+	NowUnixMilli  int64
+}

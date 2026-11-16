@@ -2,14 +2,12 @@ package alliance_member
 
 import (
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/allianceguard"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 const EntityKindAllianceMember entity.EntityKind = {{ID:entity:AllianceMember}}
-
-// IAllianceMemberEntity is the lock-safe business view used by Nest handlers.
-type IAllianceMemberEntity interface{ entity.IThreadSafeEntity }
 
 // AllianceMember is one player's alliance guard, owned by the alliance
 // service: its unique id is the player's. It is not preloaded (one per
@@ -37,6 +35,7 @@ type AllianceMember struct {
 	*entity.RemoteEntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	guard *AllianceGuardComponent `comp:"CompTypeAllianceGuard"`
-	dao   *db.AllianceMemberDao   `dao:"alliance_member"`
+	// guard 是“一人一盟”的守卫（game/components/allianceguard）；Nest handler 收 view.IAllianceGuardEntity，经 AllianceGuard() 用它。
+	guard *allianceguard.Component `comp:"allianceguard.CompTypeAllianceGuard"`
+	dao   *db.AllianceMemberDao    `dao:"alliance_member"`
 }

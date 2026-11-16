@@ -1,0 +1,14 @@
+--- PASS: TestAllianceE2EGamePlayers (73.13s)
+--- PASS: TestAllianceE2EOneAllianceUnderRace (54.25s)
+--- PASS: TestAllianceE2ERedisOutage (21.37s)
+--- PASS: TestAllianceE2ERobotOfflineJoin (5.67s)
+--- PASS: TestAllianceE2ERobotCrossGameJoin (5.59s)
+--- PASS: TestAllianceE2EPreloadOrder (9.08s)
+--- PASS: TestAllianceE2ECrashTakeoverAndScaleIn (88.70s)
+--- PASS: TestAllianceE2ERejectedFoundingAfterRestart (1.92s)
+--- PASS: TestAllianceE2ESocialTeam (5.47s)
+--- PASS: TestAllianceE2ESocialMatchmaking (19.79s)
+--- PASS: TestAllianceE2ESocialRehome (37.66s)
+PASS
+ok  	example.com/planet/e2e	323.634s
+alliance rc=0 02:00:09

@@ -40,7 +40,8 @@ func TestModuleAttributeEquipmentScenariosAndMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	recipeMutationMustFail(t, root, "game/components/profile/profile.go",
-		"if err := runProfileLevelUp(component.owner, from, from+gained); err != nil {", "if err := error(nil); err != nil {",
+		// 换成没有监听的事件类型（升级事件不再送到属性的监听），仍能编译。
+		"component.owner.Publish(event.ProfileLevelUp{From: from, To: from + gained})", "component.owner.Publish([]event.ProfileLevelUp{{From: from, To: from + gained}})",
 		"./game/handler", "TestAttributeLevelUpGrowsBaseAndFinal", "level attributes")
 	recipeMutationMustFail(t, root, "game/components/attribute/attribute.go",
 		"coreattr.AttrValue(base.Attack + gear.Attack)", "coreattr.AttrValue(base.Attack)",
@@ -99,13 +100,14 @@ import(
  "sync/atomic"
  "testing"
  generated "example.com/studio/attributeequipment/configs/generated"
- gameprofile "example.com/studio/attributeequipment/game/components/profile"
- "example.com/studio/attributeequipment/game/view"
+ playerentity "example.com/studio/attributeequipment/game/entities/player"
+ "example.com/studio/attributeequipment/game/event"
  "github.com/tjbdwanghaibo/roost-core/framework/configdata"
+ "github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 var originalHookCalls atomic.Int64
-func init(){gameprofile.OnProfileLevelUp("aaa_original_test",func(host view.PlayerEntity,from,to int32)error{
- if host.Profile().DisplayName()!="original"{return errors.New("named hook ran before original")}
+func init(){entity.RegisterEventListener(playerentity.EntityKindPlayer,"ProfileLevelUp","handler_test.originalHookOrder",func(host *playerentity.Player,ev event.ProfileLevelUp)error{
+ if host.Profile().DisplayName()!="original"{return errors.New("level-up listener ran before original")}
  originalHookCalls.Add(1);return nil
 })}
 func TestGeneratedAttributeEquipmentDefaults(t *testing.T){
@@ -118,9 +120,9 @@ func TestGeneratedAttributeEquipmentDefaults(t *testing.T){
 func TestGeneratedAttributeOriginalHookOrder(t *testing.T){
  originalHookCalls.Store(0);f:=newAttributeFixture(t)
  if _,err:=f.exp(100);err!=nil{t.Fatal(err)}
- if originalHookCalls.Load()!=1{t.Fatal("missing named hook")}
+ if originalHookCalls.Load()!=1{t.Fatal("missing level-up listener")}
  r:=f.get(t);if r.HP!=110{t.Fatalf("growth %+v",r)}
  before:=f.snapshot(t);if _,err:=f.exp(100);err==nil{t.Fatal("original hook failure swallowed")}
- if originalHookCalls.Load()!=1||!reflect.DeepEqual(before,f.snapshot(t)){t.Fatal("original failure continued hooks or changed facts")}
+ if originalHookCalls.Load()!=1||!reflect.DeepEqual(before,f.snapshot(t)){t.Fatal("original failure still published the level-up or changed facts")}
 }
 `

@@ -2,7 +2,7 @@
 
 本轮三项方案的依赖、实施顺序、全量测试与时间预估见[总览](FEATURE-2026-11-16-round-overview.md)。
 
-**状态：方案，未实施。**
+**状态：已实施（分支 `feat/round-20261116`，core a0a4e405 / 16248e14，生成器 596a21b1 / 13161a23，模块 9aaebe7f、c8340c27、09e8feee、bcf8ca44、eaa85d13），待本轮阶段 7 的全量与先失败后通过证据。** 实际改成事件的登记点见 §1.3；§4.5 的 doctor 检查（`event:publish-error`、`event:cycle`、`event:publish`）**未实施**，生成器的静态环提示已有（`roost generate` 输出 `hint: event cycle …`）。现行契约见 [Nest 与实体 §3A](../framework/guide/02-nest-entity.md#3a-实体事件) 与 [tag 手册](../../codegen/docs/TAGS.zh-CN.md#实体事件roostlisten)。
 
 本方案和 [controllers 合包、组件接口收进 view](FEATURE-2026-11-16-controllers-view-layout.md) 属于同一轮整理，两者一起实施。
 
@@ -39,16 +39,37 @@
 
 本方案只借用"实体能发布事件"这个形态，实现重写。
 
-### 1.3 33 个登记点的分类
+### 1.3 33 个登记点的分类（按实施结果改正）
+
+第一版把 Entering、Creating、Applying、Entered、Leaving、Arrived 和 leaderboard 的 Submitted 也算进通知 / 拦截。实施时逐个核对后发现它们都在**事务和实体锁之外**执行（login / enter 的进入前检查与进入后钩子、新建前检查，rehome 的事务外登记点，leaderboard 提交之后），而实体事件只能在 Guard 持有实体时发布，所以这几处**保留原登记方式**。改正后的表：
 
 | 类别 | 登记点 | 处理 |
 |---|---|---|
-| **通知**：事情已经发生，同一实体在同一笔事务里跟着改 | ProfileLevelUp、WalletSpent、ShopBought、StaminaSpent、CheckinClaimed、DungeonClaimed、EquipmentChanged、AttributeChanged、TeamChanged、RehomeArrived / Arrived、Submitted、Entered、FirstEnter、Create、Leaving、Region、SceneInteract | 改为实体事件 |
-| **拦截**：事情发生之前询问，返回错误就拒绝 | Entering、Creating、Applying、RehomeApplying、RoomJoining、TeamJoining、MatchmakingStarting | 改为实体事件，返回错误即拒绝 |
+| **通知**：事情已经发生，同一实体在同一笔事务里跟着改 | ProfileLevelUp、WalletSpent、ShopBought、StaminaSpent、CheckinClaimed、DungeonClaimed、EquipmentChanged、AttributeChanged、TeamChanged、RehomeArrived、FirstEnter、Create、Region、SceneInteract | 改为实体事件（见下面的事件清单） |
+| **拦截**：事情发生之前询问，返回错误就拒绝 | RehomeApplying、RoomJoining、TeamJoining、MatchmakingStarting；另加 naming 原来在 handler 里做的类型断言 | 改为实体事件，返回错误即拒绝 |
+| **事务外登记点**：在实体锁外执行 | Entering、Entered、Creating（`game/modules/login`）、Applying、Leaving、Arrived（`game/modules/rehome`）、Submitted（leaderboard） | 不能发布实体事件，保留原登记方式 |
 | **扩展提供方**：登记工厂、字段表、配置修改器、取值函数 | Actor、ActorSyncFields、SceneFields、CompileEnvironment、AttributeGear、CreatePrepare、LocalChannel | 不是"发生了什么"，保留现有登记方式 |
 | **连接层**：不在实体锁里 | SessionActive | 实体事件只能在实体被锁住时发布，所以保留现状 |
 
-实施时逐个核对这张表。现在所有通知和拦截类钩子改的都是**发布事件的那个实体自己**（例如 Player 自己的任务、属性、活动），这正好落在实体事件的范围内。
+**实际的事件清单**（`game/event/<模块>.go`，按批次提交）：
+
+| 事件 | 类别 | 发布在 | 原登记点 | 提交 |
+|---|---|---|---|---|
+| `ProfileLevelUp` | 通知 | Player（profile 组件 `AddExp`） | `OnProfileLevelUp` | 9aaebe7f |
+| `ProfileRenaming` | 拦截 | Player（profile 改名 handler） | naming 在 handler 里的类型断言 | 9aaebe7f |
+| `EnterFirst` | 通知 | Player（`enter_first.go` 的首次初始化之后） | `OnFirstEnter` | c8340c27 |
+| `EnterCreate` | 通知 | Player（enter 组件新建、发放之前） | `OnCreate` | c8340c27 |
+| `WalletSpent` | 通知 | 扣款的宿主（Player 或别的挂 wallet 的实体） | `OnWalletSpent` / 可选的宿主回调 | 09e8feee |
+| `ShopBought`、`StaminaSpent`、`CheckinClaimed`、`DungeonClaimed`、`EquipmentChanged`、`AttributeChanged` | 通知 | Player | 同名 `On<X>` | 09e8feee |
+| `RehomeApplying` | 拦截 | Player（记换服意图的事务） | `OnRehomeApplying` | bcf8ca44 |
+| `RehomeArrived` | 通知 | Player（到达的事务） | `OnRehomeArrived` | bcf8ca44 |
+| `TeamJoining` | 拦截 | Player（建队 / 入队） | `OnTeamJoining` | bcf8ca44 |
+| `TeamChanged` | 通知 | Player | `OnTeamChanged` | bcf8ca44 |
+| `RoomJoining` | 拦截 | Room（入房、占座之前） | room 的 `join_checks.go` | bcf8ca44 |
+| `MatchmakingStarting` | 拦截 | Player（开始排队之前） | `OnMatchmakingStarting` | bcf8ca44 |
+| `SceneRegion`、`SceneInteract` | 通知 | Player | `OnRegion`、`OnSceneInteract` | eaa85d13 |
+
+所有通知和拦截类事件改的都是**发布事件的那个实体自己**（例如 Player 自己的任务、属性、活动），落在实体事件的范围内。监听的优先级按原来“按登记名字母序”的执行顺序换算（例如 ProfileLevelUp：activity 40、attribute 30、mailbox 20、task 10），迁移前后执行顺序不变。
 
 ## 2. 业务层写什么
 
@@ -143,9 +164,10 @@ e.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(KindPlayer, 
 
 `Publish(ev)` 按以下步骤执行：
 
-1. **检查锁和事务**：两项都满足才往下走，否则返回 `ErrTransactionClosed`。
-   - 当前 goroutine 的 Guard 持有这个实体。entity 包自己就能判断：`CurrentGuardScope()` 加上 Guard 的持锁检查。
-   - 当前在 Nest 事务里。entity 包不能 import nest（nest 已经 import 了 entity），所以由 nest 在自己的 init 里注入：`entity.SetEventTxCheck(func() bool { return CurrentRollbackTx() != nil })`。
+1. **检查锁**：当前 goroutine 的 Guard 必须持有这个实体，否则返回错误。entity 包自己就能判断：`CurrentGuardScope()` 加上 Guard 的持锁检查。
+   - **不要求有可回滚的事务**（维护者 2026-11-16 决定）：memory 快路径和 `rollback=none` 的 handler 里也能发布。
+   - 在这两种 handler 里，监听返回的错误照常往外传，但修改不会撤销。这一点写进文档。
+   - 原来设想由 nest 注入事务检查，现在不需要了。
 2. **压入事件栈，检查上限**：规则见 §3.3。
 3. **查表、执行**：按 `(kind, ev 的类型)` 取出回调列表，按登记顺序依次执行。遇到第一个错误就停下，错误包装成 `"<事件链> listener <listener>: <err>"` 返回，由调用方交给 Nest 回滚。
 4. **弹出事件栈**：用 defer 执行，出错或 panic 时也会弹出。
@@ -189,7 +211,7 @@ e.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(KindPlayer, 
 
 **panic**：事件层不 recover。panic 沿着 Nest 现有的路径处理：`callTransactionHandler` 先回滚事务，再把 panic 继续抛出去。事件栈靠第 4 步的 defer 弹出。
 
-**还需要核实的一点**：Nest 的 memory 快路径（`invokeMemoryHandler`）里有没有 `RollbackTx`。如果没有，§3.2 第 1 步会拒绝在 memory handler 里发布事件。实施时核实，再决定是允许，还是在文档里写明不支持。
+**memory 快路径**：核实结果是快路径里没有 `RollbackTx`。维护者决定允许在这里发布事件，见 §3.2 第 1 步。
 
 **不做的事**：
 - 不做异步；
@@ -235,13 +257,16 @@ func init() {
 - 接收者既不是实体，也不是被某个实体挂载的组件；
 - 同一个接收者对同一个事件有多个监听方法；
 - `priority` 不是整数、超出 -1000～1000，或者写了别的未知选项。
+- 组件包里的组件带监听，但有实体按旧写法挂它（实体包里声明别名 `type XComponent = <包>.Component`，字段挂别名、`comp:"CompTypeX"`）：这次挂载对不上组件包里的接收者，监听会在那个实体上悄悄缺失。报错列出这些挂载，要求改成组件包写法（字段类型 `*<包>.<类型>`、`comp:"<包>.CompTypeX"`，模块清单写 `component_package`），删掉别名与实体包里的类型号常量（整理轮 §3.2 第 4 项，阶段 4 之后由提示改为报错）。
 
 ### 4.4 只提示、不报错的情况
 
-- 组件有监听方法，但当前工程里没有实体挂载这个组件；
+- 组件有监听方法，但当前工程里没有实体挂载这个组件（以旧写法挂载的不算这种情况，见 §4.3）；
 - 事件在 `game/event` 里定义了，但没有任何监听方法（发布时什么也不做，属于正常情况）。
 
 ### 4.5 doctor
+
+**本节三项检查未实施**（2026-11-16 阶段 5 核对：`codegen/internal/roost` 里没有 `event:` 开头的检查）。静态环提示目前只在 `roost generate` 的输出里。
 
 - `event:publish-error`：`Publish` 的返回值被丢弃时警告，见 §3.3。
 - `event:cycle`：把 §3.3 的静态环提示也放进 doctor 的输出。
@@ -274,13 +299,13 @@ func init() {
 ## 7. 验证
 
 - **core 单测**：
-  - 事务外发布被拒绝；
+  - 没持有实体锁时发布被拒绝；
   - 多个回调按登记顺序执行，遇到第一个错误就停下，错误信息带上事件名和监听方；
   - 用真实 Nest 事务验证：监听出错时整笔回滚，包括发布方自己的改动；
   - 内层出错时错误一路传到最外层，并且整笔回滚；外层后面的监听能看到内层链执行完之后的状态；
   - 三道上限各有触发用例，错误信息里带完整事件链；同一事件合法重入两次可以通过，第三次报错；
   - 监听方法 panic 后，事件栈被清空，下一笔事务不受影响；
-  - 不在事务里，或当前 Guard 没持有这个实体时，发布被拒绝；
+  - 当前 Guard 没持有这个实体时，发布被拒绝；memory 快路径里发布可以执行，出错时错误照常外传；
   - 启动后再登记会 panic；
   - 没有监听的事件返回 nil。
 - **生成器单测**：

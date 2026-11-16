@@ -16,17 +16,35 @@ const SyncNamespacePlayer = "player"
 // IPlayerEntity is the lock-safe business view used by Nest handlers.
 type IPlayerEntity interface{ entity.IThreadSafeEntity }
 
-// IPlayerFullEntity is for a handler that needs several components at once —
-// equipping touches the bag, the equipment and the attribute container, and
-// they have to move in one transaction. The Bag component is the bag
-// module's (the shared component in game/components/bag, wired to the Player
-// by bag_component.go; installed by `roost module add bag`, which also appends
-// its field to the Player struct below).
-type IPlayerFullEntity interface {
-	entity.IThreadSafeEntity
-	BagComp() *BagComponent
-	EquipmentComp() *EquipmentComponent
-	AttributeComp() *AttributeComponent
+// PublishSyncDirty 写在 Player 结构体之前：模块安装器按组件包写法往结构体末尾追加字段并补 import 时，
+// 会把紧跟在结构体之后的注释挪进结构体里（安装器的已知问题），所以结构体是本文件最后一个声明。
+//
+// PublishSyncDirty hands whatever the generated DAO recorded as sync-dirty to
+// the subject the scene replicates. Call it at the end of a mutation, not per
+// field: one call is one delta.
+//
+// Two things worth knowing before copying this:
+//
+//   - It takes the client-sync mask, the same one the scene's Nest commit
+//     observer takes (the generated TakeEntitySyncChanges reads
+//     TakeEntitySyncDirty; TerrainChunk / Building do the same). A field
+//     written by code that never calls this — a module's component, the bag —
+//     is consumed by the observer's take, so the next PublishSyncDirty (a step,
+//     a level-up) does not send it again. The server-to-server mask
+//     (TakeSyncDirty) is left alone for a project that also mirrors the Entity.
+//   - Called inside a Nest transaction, the mark joins that transaction's
+//     sync entry (the scene's Nest commit observer tracks the mutation): it
+//     is published when the commit is admitted, merged with the observer's
+//     own mark rather than sent twice, and dropped together with the entry
+//     if the transaction rolls back. Called outside a transaction it marks
+//     the subject at once.
+func (player *Player) PublishSyncDirty() {
+	if player == nil {
+		return
+	}
+	if mask := player.TakeEntitySyncChanges(); mask != 0 {
+		player.MarkSyncDirty(mask)
+	}
 }
 
 // Category is the kind's lock rank; ranks are acquired lowest first. The
@@ -60,32 +78,4 @@ type Player struct {
 	mapComp       *MapComponent           `comp:"CompTypeMap"`
 	dungeonLedger *DungeonLedgerComponent `comp:"CompTypeDungeonLedger"`
 	dao           *db.PlayerDao           `dao:"player"`
-}
-
-// PublishSyncDirty hands whatever the generated DAO recorded as sync-dirty to
-// the subject the scene replicates. Call it at the end of a mutation, not per
-// field: one call is one delta.
-//
-// Two things worth knowing before copying this:
-//
-//   - It takes the client-sync mask, the same one the scene's Nest commit
-//     observer takes (the generated TakeEntitySyncChanges reads
-//     TakeEntitySyncDirty; TerrainChunk / Building do the same). A field
-//     written by code that never calls this — a module's component, the bag —
-//     is consumed by the observer's take, so the next PublishSyncDirty (a step,
-//     a level-up) does not send it again. The server-to-server mask
-//     (TakeSyncDirty) is left alone for a project that also mirrors the Entity.
-//   - Called inside a Nest transaction, the mark joins that transaction's
-//     sync entry (the scene's Nest commit observer tracks the mutation): it
-//     is published when the commit is admitted, merged with the observer's
-//     own mark rather than sent twice, and dropped together with the entry
-//     if the transaction rolls back. Called outside a transaction it marks
-//     the subject at once.
-func (player *Player) PublishSyncDirty() {
-	if player == nil {
-		return
-	}
-	if mask := player.TakeEntitySyncChanges(); mask != 0 {
-		player.MarkSyncDirty(mask)
-	}
 }

@@ -1,0 +1,97 @@
+package controllers
+
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	scenes "{{MODULE}}/game/modules/scene/service"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// sceneRefusal 把一次失败分成两类。带码的错误是业务拒绝（场景已满、目标未开放、FromID 过期、对象太远、序号跳号，
+// 以及登记的回调返回的带码错误）：ok 为 true，端点把码与原因填进应答，连接保留。
+// 不带码的是内部错误（提交被拒、回调失败、结果未知）：ok 为 false，端点把它作为 error 返回——接入层按分发失败
+// 结束这条连接（infra/network/gateway 的 dispatchRequest），客户端重连后用 FromID==ToID 重新对齐。
+func sceneRefusal(err error) (code int32, reason string, ok bool) {
+	code, reason = errcode.ClientError(err)
+	return code, reason, code != errcode.CodeInternal
+}
+
+// access.player 在 Provide 构造控制器；Scene 在 Start 完成开图后才发布 Manager。两个端点都在请求到来时
+// 读取已发布的能力（scenes.FromRegistry），不缓存尚未就绪的结果。
+//
+// HandleSceneChange 的玩家身份只取认证上下文；请求不能带任意 PlayerID。
+// 业务拒绝答在应答的 Code / Reason 里、不返回 error（见 sceneRefusal）；被拒的请求没有改任何状态，日志也不记。
+func (c *Controller) HandleSceneChange(ctx *playeraccess.Context, request *pb.SceneChangeRequest) (*pb.SceneChangeResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("scene: invalid request")
+	}
+	manager, err := scenes.FromRegistry(c.registry)
+	if err != nil {
+		return nil, err
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	var result *pb.SceneChangeResponse
+	ids, target, err := manager.IDs(request.FromID, request.ToID)
+	if err == nil {
+		result, err = sender.NewSceneChangeSender(c.nestClient).MultiGroupSync_SceneChange(ctx.Context(), id, ids, target)
+	}
+	if err != nil {
+		if code, reason, ok := sceneRefusal(err); ok {
+			return &pb.SceneChangeResponse{Code: code, Reason: reason}, nil
+		}
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("scene: change returned no response")
+	}
+	slog.InfoContext(ctx.Context(), "scene: change confirmed", "player_id", ctx.PlayerID, "from_scene", request.FromID, "to_scene", request.ToID)
+	return result, nil
+}
+
+// HandleSceneInteract 与 HandleSceneChange 同一个规矩：业务拒绝答在应答的 Code / Reason 里、连接保留，
+// 只有不带码的内部错误才作为 error 返回（见 sceneRefusal）。
+func (c *Controller) HandleSceneInteract(ctx *playeraccess.Context, request *pb.SceneInteractRequest) (*pb.SceneInteractResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("scene: invalid interaction")
+	}
+	manager, err := scenes.FromRegistry(c.registry)
+	if err != nil {
+		return nil, err
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	var result *pb.SceneInteractResponse
+	if request.SceneID == 0 {
+		// 0 不是场景号；IDs 会把它当成“没有目标”放过去，这里先按“不在那张图”拒绝。
+		err = apperrors.ErrSceneNotHere
+	}
+	var area int64
+	if err == nil {
+		_, area, err = manager.IDs(0, request.SceneID)
+	}
+	if err == nil {
+		result, err = sender.NewSceneInteractSender(c.nestClient).MultiSync_SceneInteract(ctx.Context(), id, area, request.Sequence, request.ObjectID)
+	}
+	if err != nil {
+		if code, reason, ok := sceneRefusal(err); ok {
+			return &pb.SceneInteractResponse{Code: code, Reason: reason}, nil
+		}
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("scene: interaction returned no response")
+	}
+	return result, nil
+}

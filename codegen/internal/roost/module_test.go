@@ -84,8 +84,7 @@ func TestModuleCatalogEmbedsEveryTemplateAndValidates(t *testing.T) {
 // 新增的导出方法不在 view 里也不在这里时报错；豁免表里的方法已经进了 view 或已经不存在时也报错（表不留陈项）。
 func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 	viewMethodExemptions := map[string]map[string]string{
-		"activity":  {"Host": "returns the game/modules/activity Host, which carries the activity runtime"},
-		"actor":     {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
+		"activity":  {"Host": "returns the game/components/activity Host, which carries the activity runtime"},
 		"attribute": {"Container": "exposes the core attribute container to the generated runtime only"},
 		"combat": {
 			"Core": "returns the core combat component (skill runtime), not a view value",
@@ -106,10 +105,6 @@ func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 				t.Fatal(err)
 			}
 			sources = append(sources, matches...)
-		}
-		if len(sources) == 0 {
-			// activity 的共用组件早于 game/components，在功能包 game/modules/activity 里。
-			sources, _ = fs.Glob(modules.Files, module+"/files/game/modules/"+pkg+"/*.go.tmpl")
 		}
 		return sources
 	}, viewMethodExemptions)
@@ -189,11 +184,17 @@ func checkComponentViews(t *testing.T, fsys fs.FS, views []string, sourcesOf fun
 			t.Fatal(err)
 		}
 		src := strings.ReplaceAll(string(raw), "{{MODULE}}", "example.com/m")
-		file, err := parser.ParseFile(token.NewFileSet(), name, placeholder.ReplaceAllString(src, "1"), parser.SkipObjectResolution)
+		file, err := parser.ParseFile(token.NewFileSet(), name, placeholder.ReplaceAllString(src, "1"), parser.ParseComments|parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
 		return file
+	}
+	// //roost:listen 方法是实体事件的监听（生成的 <实体>_event_gen.go 调用），不是组件对外的方法，不进 view。
+	listens := func(fn *ast.FuncDecl) bool {
+		return fn.Doc != nil && slices.ContainsFunc(fn.Doc.List, func(c *ast.Comment) bool {
+			return c.Text == "//roost:listen" || strings.HasPrefix(c.Text, "//roost:listen ")
+		})
 	}
 	used := map[string]map[string]bool{}
 	for _, viewPath := range views {
@@ -239,7 +240,7 @@ func checkComponentViews(t *testing.T, fsys fs.FS, views []string, sourcesOf fun
 			}
 			for _, decl := range parse(source).Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv == nil || !fn.Name.IsExported() || framework[fn.Name.Name] || listed[fn.Name.Name] {
+				if !ok || fn.Recv == nil || !fn.Name.IsExported() || framework[fn.Name.Name] || listed[fn.Name.Name] || listens(fn) {
 					continue
 				}
 				star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
@@ -506,6 +507,148 @@ func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: err = %v, want it to contain %q", name, err, test.want)
 		}
+	}
+}
+
+// game/controllers 是一个包、game/event 是第七个固定层（2026-11-16）：模块往 controllers 只能放 <模块>.go，联动文件只能
+// 是 <模块>_<对方模块>.go，各自可带 _test.go，子目录拒绝；game/event 只能放 game/event/<模块>.go（联动文件不能放），
+// 而且只能 import 标准库和 {{MODULE}}/db。规则在清单加载时执行。
+func TestModuleSpecControllersAndEventLayout(t *testing.T) {
+	ids := "// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"
+	with := func(extra map[string]string) map[string]string {
+		out := map[string]string{"game/modules/x/x.go": "package x\n" + ids}
+		for rel, body := range extra {
+			out[rel] = body
+		}
+		return out
+	}
+	for name, files := range map[string]map[string]string{
+		"controller file":             {"game/controllers/demo.go": "package controllers\n"},
+		"controller test":             {"game/controllers/demo_test.go": "package controllers\n"},
+		"controller integration test": {"game/controllers/demo_integration_test.go": "//go:build integration\n\npackage controllers\n"},
+		"event file":                  {"game/event/demo.go": "package event\n\nimport (\n\t\"time\"\n\n\t\"{{MODULE}}/db\"\n)\n\ntype DemoDone struct{ At time.Time; State db.DemoState }\n"},
+		"event without deps":          {"game/event/demo.go": "package event\n\ntype DemoDone struct{ Level int32 }\n"},
+	} {
+		if _, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML, with(files))); err != nil {
+			t.Errorf("%s: a conforming layout was refused: %v", name, err)
+		}
+	}
+	for name, test := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"controllers subdirectory": {map[string]string{"game/controllers/demo/controller.go": "package demo\n"}, "game/controllers is one package without subdirectories"},
+		"per-protocol file":        {map[string]string{"game/controllers/demo_ping.go": "package controllers\n"}, "a module's file in game/controllers is demo.go"},
+		"another module's name":    {map[string]string{"game/controllers/chat.go": "package controllers\n"}, "a module's file in game/controllers is demo.go"},
+		"event under another name": {map[string]string{"game/event/demo_events.go": "package event\n"}, "game/event/demo.go, one file per module"},
+		"event subdirectory":       {map[string]string{"game/event/demo/demo.go": "package demo\n"}, "game/event/demo.go, one file per module"},
+		"event imports game":       {map[string]string{"game/event/demo.go": "package event\n\nimport \"{{MODULE}}/game/view\"\n\nvar _ view.X\n"}, `imports "{{MODULE}}/game/view"; game/event may only import the standard library and {{MODULE}}/db`},
+		"event imports db subpkg":  {map[string]string{"game/event/demo.go": "package event\n\nimport \"{{MODULE}}/db/def\"\n"}, `imports "{{MODULE}}/db/def"`},
+		"event imports core":       {map[string]string{"game/event/demo.go": "package event\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n"}, `imports "github.com/tjbdwanghaibo/roost-core/framework/entity"`},
+		"event imports cgo":        {map[string]string{"game/event/demo.go": "package event\n\nimport \"C\"\n"}, `imports "C"`},
+	} {
+		_, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML, with(test.files)))
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: err = %v, want it to contain %q", name, err, test.want)
+		}
+	}
+	// 联动文件（with/<对方>/）：controllers 里是 <模块>_<对方>.go 与它的 _test.go；用模块自己的名字、或往 game/event 放都拒绝。
+	for rel, want := range map[string]string{
+		"game/controllers/demo_chat.go":      "",
+		"game/controllers/demo_chat_test.go": "",
+		"game/controllers/demo.go":           "is demo_chat.go",
+		"game/controllers/chat_demo.go":      "is demo_chat.go",
+		"game/controllers/demo_chat/x.go":    "without subdirectories",
+		"game/event/demo.go":                 "with/ glue files cannot define events",
+		"game/components/demo/demo_chat.go":  "",
+	} {
+		err := validateModuleGamePath("demo", "chat", rel)
+		if want == "" && err != nil {
+			t.Errorf("with/chat %s refused: %v", rel, err)
+		}
+		if want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("with/chat %s: err = %v, want %q", rel, err, want)
+		}
+	}
+}
+
+// component_package（2026-11-16）：组件按组件包的写法挂到实体上。包在本模块的 files/ 里时本模块分配类型号；
+// 挂 requires 里另一个模块的组件包时不分配号（同一个组件同一个类型号），也不能用 {{ID:component:...}}；
+// 没人提供这个包时清单加载失败。安装器写字段 `<snake> *<包名>.Component` 与带包名的 comp 标签，补 import。
+func TestModuleComponentPackage(t *testing.T) {
+	own := moduleFixtureFS(moduleFixtureYAML+"component_package: game/components/demo\n", map[string]string{
+		"game/components/demo/demo.go": "package demo\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n",
+	})
+	if _, err := loadModuleCatalogFS(own); err != nil {
+		t.Fatalf("a module shipping its component package: %v", err)
+	}
+	mount := `name: mount
+summary: mounts demo's component on Guild
+requires: [demo]
+needs: {mods: [nest]}
+entity: Guild
+component: Demo
+component_package: game/components/demo
+verify: {packages: [./game/handler], run: ^TestMount, pass: 1}
+`
+	withMount := func(yaml, file string) fstest.MapFS {
+		fsys := moduleFixtureFS(moduleFixtureYAML+"component_package: game/components/demo\n", map[string]string{
+			"game/components/demo/demo.go": "package demo\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n",
+		})
+		fsys["mount/module.yaml"] = &fstest.MapFile{Data: []byte(yaml)}
+		fsys["mount/files/game/modules/mount/mount.go.tmpl"] = &fstest.MapFile{Data: []byte(file)}
+		return fsys
+	}
+	catalog, err := loadModuleCatalogFS(withMount(mount, "package mount\n"))
+	if err != nil {
+		t.Fatalf("mounting a required module's component package: %v", err)
+	}
+	if ids := catalog["mount"].declaredIDs()["component"]; len(ids) != 0 {
+		t.Fatalf("the mounting module declares component ids %v; the type number belongs to demo", ids)
+	}
+	for name, test := range map[string]struct{ yaml, file, want string }{
+		"foreign id":         {mount, "package mount\n// {{ID:component:Demo}}\n", "does not declare it"},
+		"no requires":        {strings.Replace(mount, "requires: [demo]\n", "", 1), "package mount\n", "needs that module in requires"},
+		"nobody ships it":    {strings.Replace(mount, "game/components/demo", "game/components/other", 1), "package mount\n", "neither it nor a module it requires ships that package"},
+		"outside components": {strings.Replace(mount, "game/components/demo", "game/view", 1), "package mount\n", "must be a package under game/components/ or game/modules/"},
+		"no component":       {strings.Replace(mount, "component: Demo\n", "", 1), "package mount\n", "component_package needs component"},
+	} {
+		_, err := loadModuleCatalogFS(withMount(test.yaml, test.file))
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: err = %v, want it to contain %q", name, err, test.want)
+		}
+	}
+
+	source := `package guild
+
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+type Guild struct {
+	*entity.EntityBase
+	entity.DaoManager
+}
+
+// Tick 的说明紧跟在结构体后面，追加字段时必须留在结构体外。
+func (g *Guild) Tick() {}
+`
+	wired, err := wireComponentPackageField([]byte(source), "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"example.com/m/game/components/demo"`, "entity.ComponentManager", "demo *demo.Component `comp:\"demo.CompTypeDemo\"`"} {
+		if !strings.Contains(string(wired), want) {
+			t.Errorf("wired entity lacks %q:\n%s", want, wired)
+		}
+	}
+	if !strings.Contains(string(wired), "}\n\n// Tick 的说明紧跟在结构体后面，追加字段时必须留在结构体外。\nfunc (g *Guild) Tick()") {
+		t.Errorf("the comment after the struct moved:\n%s", wired)
+	}
+	if _, err := wireComponentPackageField(wired, "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo"); err == nil || !strings.Contains(err.Error(), "already contains component Demo") {
+		t.Errorf("wiring twice: err = %v", err)
+	}
+	clash := strings.Replace(source, `import "github.com/tjbdwanghaibo/roost-core/framework/entity"`, "import (\n\t\"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\tdemo \"example.com/m/game/modules/demo\"\n)\n\nvar _ = demo.X", 1)
+	if _, err := wireComponentPackageField([]byte(clash), "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo"); err == nil || !strings.Contains(err.Error(), "the alias already names") {
+		t.Errorf("alias clash: err = %v", err)
 	}
 }
 
@@ -924,6 +1067,37 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	}
 	// 玩家接入先由业务建好：下面的失败要落在模块事务里，而不是被保留的前置命令里。
 	roost("add", "access", "player", "--service", "game")
+	// game 带 DataEngine、开着单实例锁：从建工程起就有锁连接用的 etcd: 段（锁存 etcd，2026-11-16），但没有 etcd Mod。
+	gameConfigFiles := []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"}
+	etcdBlock := func(rel string) string {
+		t.Helper()
+		config := read(rel)
+		var found []string
+		for _, block := range topLevelConfigBlocks(config) {
+			if block.key == "etcd" {
+				found = append(found, block.text)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%s has %d etcd: blocks, want exactly the singleton lock's one:\n%s", rel, len(found), config)
+		}
+		return found[0]
+	}
+	lockEtcd := map[string]string{}
+	for _, rel := range gameConfigFiles {
+		lockEtcd[rel] = etcdBlock(rel)
+	}
+	gameRunsEtcdMod := func() bool {
+		t.Helper()
+		current, err := LoadManifest(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return contains(serviceConfigMods(current, "game"), "etcd")
+	}
+	if gameRunsEtcdMod() {
+		t.Fatal("precondition: game already runs the etcd Mod before any module routes by key")
+	}
 
 	before := moduleProjectDigest(t, root)
 	var plan ModulePlan
@@ -983,9 +1157,13 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	if config := read("configs/service/config.rank.yaml"); !strings.Contains(config, "addr: 127.0.0.1:9101") {
 		t.Fatalf("rank's development ops port is not 9100 + its port block:\n%s", config)
 	}
-	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
-		if config := read(rel); strings.Contains(config, "\netcd:\n") {
-			t.Fatalf("rank does not route by key; %s gained an etcd section:\n%s", rel, config)
+	// rank 不按键路由：不给 game 引入 etcd Mod，锁用的 etcd: 段原样不动（不重复、不改写）。
+	if gameRunsEtcdMod() {
+		t.Fatal("rank does not route by key, yet installing leaderboard gave game the etcd Mod")
+	}
+	for _, rel := range gameConfigFiles {
+		if got := etcdBlock(rel); got != lockEtcd[rel] {
+			t.Fatalf("rank does not route by key, yet installing leaderboard changed the etcd: block of %s:\nbefore:\n%s\nafter:\n%s", rel, lockEtcd[rel], got)
 		}
 	}
 
@@ -1000,10 +1178,11 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	if match := manifest.Services["match"]; match.Framework != "match" || match.PortBlock == nil || *match.PortBlock != 2 || strings.Join(manifest.Services["game"].Uses, ",") != "match,rank" {
 		t.Fatalf("after matchmaking: match %+v, game uses %v", match, manifest.Services["game"].Uses)
 	}
-	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
-		if config := read(rel); !strings.Contains(config, "\netcd:\n") {
-			t.Fatalf("%s has no etcd section for the match client:\n%s", rel, config)
-		}
+	if !gameRunsEtcdMod() {
+		t.Fatal("match routes by affinity key, yet installing matchmaking did not give game the etcd Mod")
+	}
+	for _, rel := range gameConfigFiles {
+		etcdBlock(rel) // 锁与 match 客户端共用这一个 etcd: 段，不重复追加
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
@@ -1098,7 +1277,7 @@ func TestModulesInstallOntoAProjectWithBusinessCodeAndRollBackOnFailure(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(entityFile, []byte("ProfileComponent")) || !bytes.Contains(entityFile, []byte("WalletComponent")) {
+	if !bytes.Contains(entityFile, []byte("ProfileComponent")) || !bytes.Contains(entityFile, []byte(`comp:"wallet.CompTypeWallet"`)) {
 		t.Fatalf("entity lost a component:\n%s", entityFile)
 	}
 	if report, err := VerifyModules(context.Background(), root, []string{"wallet"}, nil); err != nil {

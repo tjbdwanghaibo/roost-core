@@ -17,7 +17,7 @@
 - `SubmitSeason(ctx, registry, season, playerID, total) (Standing, error)`：同上，但周期由调用方指定。给总分按周期分开存的功能用。
 - `Client(registry)`：取 rank 服务的客户端。
 - 辅助：`CurrentBoard()`、`ValidateScore(total)`、`TopLimit(requested)`、`PlayerScore(playerID, total)`、`StandingOf(entry, found)`。
-- 端点 `HandleLeaderboardTop` / `HandleLeaderboardMe` 在 `game/controllers/leaderboard`，直接调 rank 服务，不经过 Nest、不取任何实体锁。
+- 端点 `HandleLeaderboardTop` / `HandleLeaderboardMe` 在 `game/controllers/leaderboard.go`，直接调 rank 服务，不经过 Nest、不取任何实体锁。
 
 ### 登记点
 
@@ -57,7 +57,7 @@
 - **读的一致性：** 每一行的名次与分数来自同一次读取。`LeaderboardTop` 里调用者不在这一页时，“我的位置”是紧接着的第二次读取，与榜头可以相差一瞬；第二次读失败时整条请求按失败回答，不回半截数据。
 - **上限：** 一次至多读 50 行（`MaxTop`；rank 服务自己的页上限是 200），没有翻页协议——只能读榜头。
 - **`OnSubmitted` 是尽力通知：** 失败只记日志，重放会重复触发，不能用它发需要恰好一次的奖励。
-- **前提：** 业务服务 `uses: [rank]`；取不到 rank 的客户端时 `FromRegistry` 返回错误，进程起不来。跨进程调用，受 rank 服务可用性影响。
+- **前提：** 业务服务 `uses: [rank]`；取不到 rank 的客户端时启动检查失败（`game/controllers/leaderboard.go` 的 `requireAtStart`，由生成的协议登记在启动时调用），进程起不来。跨进程调用，受 rank 服务可用性影响。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“leaderboard 的边界”与“模块的规则大多还是 Go 写的业务文件”。
 
 ## 复用方式
@@ -91,6 +91,6 @@
 
 ## 验证范围
 
-`roost module verify` 跑 21 条场景（`^TestLeaderboard`：`game/modules/leaderboard` 12 条、`game/controllers/leaderboard` 9 条）。覆盖缺省榜与规则的数值、分数范围两端、条数的收拢、`Standing` 的判断、提交用快照加 `UpdateMax` 且不带请求号、`SubmitSeason` 进指定周期、坏参数在调 rank 之前被拒、rank 失败返回给调用方、提交后读榜头与自己的名次、榜头带上调用者的位置、从不向 rank 要超过 `MaxTop` 行、没上榜是答案不是错误、重复与过期的快照不动榜、同分先到在前（与玩家号无关，后来追平的排在后面，先到的人重发不后退）、rank 失败作为码到达客户端、没有 rank 能力时 controller 拒绝启动。
+`roost module verify` 跑 21 条场景（`^TestLeaderboard`：`game/modules/leaderboard` 12 条、`game/controllers/leaderboard.go` 9 条）。覆盖缺省榜与规则的数值、分数范围两端、条数的收拢、`Standing` 的判断、提交用快照加 `UpdateMax` 且不带请求号、`SubmitSeason` 进指定周期、坏参数在调 rank 之前被拒、rank 失败返回给调用方、提交后读榜头与自己的名次、榜头带上调用者的位置、从不向 rank 要超过 `MaxTop` 行、没上榜是答案不是错误、重复与过期的快照不动榜、同分先到在前（与玩家号无关，后来追平的排在后面，先到的人重发不后退）、rank 失败作为码到达客户端、没有 rank 能力时 controller 拒绝启动。
 
 场景是离线的。端点的 9 条场景跑在**真实的 rank 服务实现**上：`svcrank.RedisStore`（合并方式、同分保留较早的时间、排序编码、分页与名次都是它的代码），它背后的 Redis 换成测试里的内存存储 `leaderboardMemoryRedis`（有序集合、哈希，以及 `RedisStore` 三段脚本的语义用 Go 重写——不执行 Lua，脚本文本本身的缺陷看不到；认不出的脚本直接报错）；“首次达到”的时间用测试时钟，每次提交走 1 毫秒。所以“只升不降”“同分先到在前”是 rank 服务自己算出来的。外面包一层只记录调用、可注入读失败的 `leaderboardProbeRank`，不改回答；“读到一半这一行被删掉”在内存存储上注入。`game/modules/leaderboard` 的场景仍用只记录调用、回答预先给定结果的替身（`leaderboardRecordingRank`），它们测的是“本模块向 rank 发了什么、对回答（含失败）做了什么”。真实的 Redis 与 Lua 脚本、并发下抢 compare-and-swap、跨进程调用、真实 TCP 都没有经过。game-demo 用的是这个模块，但模块自己没有在真实进程上的专项验证记录。

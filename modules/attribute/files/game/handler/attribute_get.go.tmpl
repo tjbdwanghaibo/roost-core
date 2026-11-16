@@ -2,15 +2,15 @@ package handler
 
 import (
 	"{{MODULE}}/protocol/pb"
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 )
 
 // handlerAttributeGet 只读已派生的最终层；热更后需要业务在事务中显式 Refresh。
 // 只读 handler 声明 durability=memory：不开事务、不取回滚快照、不写 WAL；在这里改持久字段会直接 panic。
 //
 //roost:nest durability=memory
-func handlerAttributeGet(target player.IAttributeEntity, _ *pb.AttributeGetRequest) (*pb.AttributeGetResponse, error) {
-	p, ok := target.AttributeComp().Final()
+func handlerAttributeGet(target view.IAttributeEntity, _ *pb.AttributeGetRequest) (*pb.AttributeGetResponse, error) {
+	p, ok := target.Attribute().Final()
 	if !ok {
 		return &pb.AttributeGetResponse{}, nil
 	}

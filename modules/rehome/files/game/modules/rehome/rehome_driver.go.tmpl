@@ -19,7 +19,7 @@ import (
 
 // Profile 是驱动器对玩家档的三个写入，每个都是 Player 上的一笔 Nest 事务（game/handler 的
 // RehomePrepare / RehomeCancel / RehomeArrive）。写成接口是因为这个包不能 import Nest 的 Sender
-// （Sender 的包 import 各个功能的结果类型）；实现在 game/controllers/rehome。
+// （Sender 的包 import 各个功能的结果类型）；实现在 game/controllers/rehome.go。
 type Profile interface {
 	// Prepare 在一笔事务里核对规则与事务内的检查并记下换服意图。拒绝时什么都没写。按换服 ID 幂等。
 	Prepare(ctx context.Context, move Move) error

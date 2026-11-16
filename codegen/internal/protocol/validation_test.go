@@ -139,7 +139,7 @@ func TestRegistrationRequiresModulePathWhenControllersExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registration with module path = %v", err)
 	}
-	for _, want := range []string{"package player", "type PingController interface", "func RegisterPingPlayerProtocolsWith(", "func RegisterPlayerProtocols(", `pingcontroller "example.com/game/game/controllers/ping"`, `"` + PlayerAccessImport + `"`} {
+	for _, want := range []string{"package player", "type PingController interface", "func RegisterPingPlayerProtocolsWith(", "func RegisterPlayerProtocols(", `controllers "example.com/game/game/controllers"`, "ctl, err := controllers.FromRegistry(registry)", "RegisterPingPlayerProtocolsWith(protocols, ctl)", `"` + PlayerAccessImport + `"`} {
 		if !strings.Contains(string(content), want) {
 			t.Fatalf("registration lacks %q:\n%s", want, content)
 		}

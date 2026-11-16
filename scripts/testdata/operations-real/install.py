@@ -12,7 +12,7 @@ for src in (repo / "scripts/testdata/alliance-e2e").glob("*_test.go.txt"):
 for src in (repo / "scripts/testdata/operations-real").glob("*_test.go.txt"):
     (out / src.name.removesuffix(".txt")).write_text(src.read_text().replace("OPERATIONS_MODULE", "example.com/operations-accept"))
 
-controller = project / "game/controllers/purchase/controller.go"
+controller = project / "game/controllers/purchase.go"
 text = controller.read_text()
 anchor = "\t\tif err := c.queue.Ack(ctx, grant); err != nil {"
 assert text.count(anchor) == 1, "purchase Ack fault anchor drift"

@@ -1,0 +1,9 @@
+package event
+
+// WalletSpent 在宿主的扣款首次生效后、同一笔事务内发布（wallet 组件的 Add：负数的 Add，以及 Apply 第一次生效的
+// 负数）。Amount 是扣掉的正数，NowUnixMilli 是这条 Nest 消息冻结的业务时间。Apply 命中回执的重放与发放都不发布。
+// 监听可以在同一个实体上继续改状态（例如任务进度）；返回错误时整笔事务回滚，余额与回执一起退回。
+type WalletSpent struct {
+	Amount       int64
+	NowUnixMilli int64
+}

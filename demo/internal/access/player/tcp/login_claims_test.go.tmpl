@@ -5,8 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	controllermailbox "{{MODULE}}/game/controllers/mailbox"
-	controllerplayer "{{MODULE}}/game/controllers/player"
+	"{{MODULE}}/game/controllers"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
@@ -75,7 +74,7 @@ func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
 	if principal.PlayerID != 42 {
 		t.Fatalf("principal names player %d, want 42", principal.PlayerID)
 	}
-	sid, bound := controllerplayer.BoundServerID(principalSession{principal: principal})
+	sid, bound := controllers.BoundServerID(principalSession{principal: principal})
 	if !bound || sid != 1300 {
 		t.Fatalf("the login endpoint read (%d, %v) from the authenticator's claims %v, want the role's server 1300", sid, bound, principal.Claims)
 	}
@@ -83,7 +82,7 @@ func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
 	// 模块的联动（进入钩子），登录端点把会话的 claims 原样带给它（gamelogin.Entered.Claims）；这里用它真正使用的
 	// BroadcastProfileOnEnter 去读。档里的首次进入时间故意给一个更晚的值：读到它说明角色建立时间的键没对上。
 	entered := gamelogin.Entered{PlayerID: principal.PlayerID, InitResult: gamelogin.InitResult{FirstAtUnixMilli: 1_700_000_999_000}, Claims: principal.Claims}
-	profile, ok := controllermailbox.BroadcastProfileOnEnter(entered)
+	profile, ok := controllers.BroadcastProfileOnEnter(entered)
 	if !ok || profile.RegisteredAtUnix != 1_700_000_000 || len(profile.Scopes) != 1 || profile.Scopes[0] != svcmail.ServerScope(1300) {
 		t.Fatalf("the mailbox enter hook built the broadcast profile %+v (%v) from %v, want server 1300 registered at 1700000000", profile, ok, principal.Claims)
 	}
@@ -92,7 +91,7 @@ func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
 // 合服之后（原服 1301 并入 1300）：登录端点读到的是承载服 1300，原服记在 OriginServerIDClaim。
 func TestAMergedRolesPrincipalCarriesTheServingServer(t *testing.T) {
 	principal := authenticate(t, sessionAccounts{playerID: 42, token: "ticket", serverID: 1300, originID: 1301})
-	sid, bound := controllerplayer.BoundServerID(principalSession{principal: principal})
+	sid, bound := controllers.BoundServerID(principalSession{principal: principal})
 	if !bound || sid != 1300 {
 		t.Fatalf("the login endpoint read (%d, %v), want the serving server 1300", sid, bound)
 	}
@@ -100,7 +99,7 @@ func TestAMergedRolesPrincipalCarriesTheServingServer(t *testing.T) {
 		t.Fatalf("OriginServerIDClaim = %q, want the origin 1301", origin)
 	}
 	// 全服邮件：承载服的范围之外，合服前发给原服的也属于这个角色。
-	profile, ok := controllermailbox.BroadcastProfileOnEnter(gamelogin.Entered{PlayerID: principal.PlayerID, Claims: principal.Claims})
+	profile, ok := controllers.BroadcastProfileOnEnter(gamelogin.Entered{PlayerID: principal.PlayerID, Claims: principal.Claims})
 	if !ok || profile.RegisteredAtUnix != 1_700_000_000 || len(profile.Scopes) != 2 || profile.Scopes[0] != svcmail.ServerScope(1300) || profile.Scopes[1] != svcmail.ServerScope(1301) {
 		t.Fatalf("broadcast profile of a merged role = %+v (%v), want the scopes of 1300 and 1301", profile, ok)
 	}
@@ -130,7 +129,7 @@ func TestTheAuthenticatorsPrincipalCarriesTheBindEpochAndATransferInFlight(t *te
 		t.Fatalf("TransferClaim %q parses to (%d, %q, %v), want (1301, rehome:42:7, true)", moving.Claims[svcaccount.TransferClaim], to, id, ok)
 	}
 	// 在途时角色仍由源服承载：登录端点读到的还是 1300，建角时间也还在。
-	if sid, bound := controllerplayer.BoundServerID(principalSession{principal: moving}); !bound || sid != 1300 {
+	if sid, bound := controllers.BoundServerID(principalSession{principal: moving}); !bound || sid != 1300 {
 		t.Fatalf("the login endpoint read (%d, %v) for a role in transfer, want the source server 1300", sid, bound)
 	}
 	if moving.Claims[svcaccount.OriginServerIDClaim] != "1300" || moving.Claims[svcaccount.RoleCreatedAtClaim] != "1700000000" {

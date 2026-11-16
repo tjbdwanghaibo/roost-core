@@ -2,6 +2,7 @@ package team
 
 import (
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/teamroster"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -17,13 +18,6 @@ type Team struct {
 	entity.ComponentManager
 	entity.DaoManager
 	dao    *db.TeamDao          `dao:"team"`
-	roster *TeamRosterComponent `comp:"CompTypeTeamRoster"`
+	// roster 是权威成员表规则（game/components/teamroster）；Nest handler 收 view.TeamEntity，经 TeamRoster() 用它。
+	roster *teamroster.Component `comp:"teamroster.CompTypeTeamRoster"`
 }
-
-// ITeamEntity 让生成的 Nest sender 声明 Team ID 与 Remote 访问，不能把实体指针当普通业务参数传入。
-type ITeamEntity interface {
-	entity.IThreadSafeEntity
-	TeamEntity() *Team
-}
-
-func (t *Team) TeamEntity() *Team { return t }

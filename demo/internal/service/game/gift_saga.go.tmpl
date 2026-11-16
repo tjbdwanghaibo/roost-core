@@ -302,8 +302,8 @@ func (steps giftSteps) debit(ctx context.Context, step saga.NativeStep) error {
 //
 // 重试预算：退款只投给发送方绑定的 sid（路由步骤，admitBound 核对），那个 sid 的进程崩溃重启期间，命令留在
 // 它的 durable 上没有人取，每一次尝试都等到 Timeout；补偿的重试用尽就是 manual_required，要人工处理。一次
-// 崩溃重启最长约为 singleton.startup_wait（30s，新进程等旧锁的上限）+ singleton.ttl（15s，旧进程最后
-// 一次续期之后键还活着的时间）+ 被拉起与 Init 的余量（按 45s 留），合计 90s。所以 debit 这一步（它的
+// 崩溃重启最长约为 singleton.startup_wait（35s，新进程等旧锁的上限）+ singleton.ttl（15s，旧进程最后
+// 一次续期之后键还活着的时间）+ 被拉起与 Init 的余量（按 45s 留），合计 95s。所以 debit 这一步（它的
 // 补偿就是退款）在 game 服务的配置里覆盖为 `saga.steps.gift_item.debit.max_attempts: 15`（Timeout 5s、
 // 退避 100ms..5s 取 saga.step_defaults）：至少 15 × 5s + 23.15s（14 次退避各取抖动下界）≈ 98s，至多约
 // 121s，在重启结束之后至少还有一次完整的尝试。步骤预算正反两个方向共用，所以 debit 的正向尝试也是 15 次

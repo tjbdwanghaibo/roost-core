@@ -1,0 +1,21 @@
+package event
+
+// SceneRegion 在 Player 进入或离开场景里的一个静态区域时发布（同一笔 Nest 事务，位置变化的那一拍）：ID 是区域号，
+// Entered 为真是进入、为假是离开。区域由服务端按玩家已验证的位置算出，适合向任务上报可信的进入 / 离开。
+// 一拍里进出多个区域时，先按离开、再按进入，各发布一次。监听返回错误会撤销这一拍的位置、区域列表和监听的写入；
+// 监听里不能发 RPC 或取得别的实体锁。
+type SceneRegion struct {
+	ID      int64
+	Entered bool
+}
+
+// SceneInteract 在 SceneInteract 协议的场景、距离与请求序号都通过之后发布一次（同一笔 Nest 事务，写回执之前）：
+// SceneID 是场景实体号，ObjectID、X、Y、Radius、Text 是被交互的静态对象。监听可以在同一个 Player 上发奖、推进任务；
+// 返回错误时这次交互整笔撤销，带业务码的错误照样答给客户端。
+type SceneInteract struct {
+	SceneID  int64
+	ObjectID int64
+	X, Y     int64
+	Radius   int64
+	Text     string
+}

@@ -1,6 +1,6 @@
 # redis/driver 驱动行为契约
 
-`redis/driver` 是 `fredis.IRedis`（`redis/client.go`）在 go-redis v9.22.0 上的实现，Wiring 的 RedisMod（`wiring/redis/redis_mod.go`）、`SingletonStore` 和 `NewClient` 都用它。框架的约定是：**结果未知时交给调用方处理**。下面几张表写明驱动在哪些情况下会自己重放命令、哪些错误可以安全重试、在哪里替换了 ctx，以及各项默认值。新增 Redis 调用点时先对照这几张表（A2 决定，2026-10-05；[方案与实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
+`redis/driver` 是 `fredis.IRedis`（`redis/client.go`）在 go-redis v9.22.0 上的实现，Wiring 的 RedisMod（`wiring/redis/redis_mod.go`）和 `NewClient` 都用它（单实例锁 2026-11-16 起改存 etcd，不再用 Redis）。框架的约定是：**结果未知时交给调用方处理**。下面几张表写明驱动在哪些情况下会自己重放命令、哪些错误可以安全重试、在哪里替换了 ctx，以及各项默认值。新增 Redis 调用点时先对照这几张表（A2 决定，2026-10-05；[方案与实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
 
 升级 go-redis 时要按源码重新核对本页：`error.go`（`shouldRetry`、`isBadConn`）、`redis.go`（`processWithRetry`、`generalProcessPipeline`）、`osscluster.go`（`process`）、`internal/pool`。
 
@@ -45,7 +45,6 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 | 等待池连接 | PoolTimeout 与调用方 ctx，取先到期的 |
 | 确定没执行时的重发退避 | 调用方的 ctx |
 | Cluster 断连后的拓扑刷新 | `clusterRecoveryHook` 用 `context.Background()` 异步调用 `ReloadState`，不阻塞调用方，原错误原样返回 |
-| `wiring/redis.SingletonStore` | 自建的两个客户端都设 `MaxRetries=-1`，读写都不重发；启动时用 `singletonPingTimeout` 做 Ping |
 
 ## 4. 默认值
 
@@ -68,7 +67,6 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 | `Client.Close` / `Assembly.Close`（单机与 Cluster 相同） | nil（`sync.Once`，只关一次） | 第一次不论成败都已关完全部连接池（go-redis 遇错继续关），错误只报给那一次，再调返回 nil | 一律 `goredis.ErrClosed`（可 `errors.Is`；`IsDefinitelyNotExecuted` 为真）；写命令不重发 | 后到者等第一个做完，返回 nil；第一次的错误只报给第一个 |
 | `IPubSub.Close` | nil（`sync.Once`） | 只在第一次释放，错误只报给那一次；之后 nil | 消息 channel 已关闭 | 后到者等第一个做完，返回 nil |
 | Wiring `RedisMod.StopWithContext` | nil（第一次就交出连接，NC-233） | 第一次报错（错误里写明连接池照样已关），之后 nil | — | 串行：后到者等第一个关完，返回 nil |
-| Wiring 单实例锁 `singletonStore.Close` | nil | 两个客户端都已关；错误只报给第一次，再调返回 nil | `goredis.ErrClosed` | 后到者等第一个做完，返回 nil |
 
 调用方据此：重复 Close 不需要特判；判断“已经关了”用 `errors.Is(err, goredis.ErrClosed)`。**行为变化（RR-20261006-10，v1.23.0 起）**：单机部署重复 Close 不再返回 `ErrClosed`。
 

@@ -1,0 +1,14 @@
+package monster
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+
+	"{{MODULE}}/game/components/monsteractor"
+)
+
+// CreateParams 是 Monster 的创建参数（定义在组件包，Manager 在实体可见之前提供）。
+type CreateParams = monsteractor.CreateParams
+
+// MapBasic / MoveComponent 是场景与移动框架要的实体方法，取自 MonsterActor 组件的 Body。
+func (m *Monster) MapBasic() *movement.MapBasic  { return m.MonsterActor().Body().Map }
+func (m *Monster) MoveComponent() *movement.Move { return m.MonsterActor().Body().Move }

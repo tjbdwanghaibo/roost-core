@@ -4,28 +4,27 @@ import (
 	"slices"
 
 	apperrors "{{MODULE}}/internal/errors"
-	player "{{MODULE}}/game/entities/player"
-	team "{{MODULE}}/game/entities/team"
+	"{{MODULE}}/game/view"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerMatchRelease(target team.ITeamEntity, members []player.IMatchmakingEntity, key string) error {
-	if target.TeamEntity().Dao().GetMatchKey() != key {
+func handlerMatchRelease(target view.TeamEntity, members []view.IMatchmakingEntity, key string) error {
+	if target.Dao().GetMatchKey() != key {
 		return nil
 	}
 	ids := make([]int64, 0, len(members))
 	for _, member := range members {
-		s := member.MatchmakingComp().Snapshot()
+		s := member.Matchmaking().Snapshot()
 		if s.Key != key || !s.Terminal() || s.TeamID != target.ID() {
 			return apperrors.ErrMatchmakingStale
 		}
 		ids = append(ids, entity.GetUniqueIDFromEntityID(member.ID()))
 	}
 	slices.Sort(ids)
-	if !slices.Equal(ids, target.TeamEntity().TeamRoster().Info().Members) {
+	if !slices.Equal(ids, target.TeamRoster().Info().Members) {
 		return apperrors.ErrMatchmakingStale
 	}
-	return target.TeamEntity().TeamRoster().ReleaseMatch(key)
+	return target.TeamRoster().ReleaseMatch(key)
 }

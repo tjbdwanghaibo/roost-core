@@ -166,14 +166,14 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 | 结论 | 条件 | 怎么办 |
 | --- | --- | --- |
 | 直接装 | 模块的能力覆盖这条需求，边界不冲突 | 第 3 步安装 |
-| 装了再扩展 | 模块覆盖大部分，差的那点落在它留给工程的文件或登记点上 | 第 3 步安装，然后按它 README 的“复用方式”改工程文件、登记钩子；不改它别的文件 |
+| 装了再扩展 | 模块覆盖大部分，差的那点落在它留给工程的文件、它发布的实体事件或登记点上 | 第 3 步安装，然后按它 README 的“复用方式”改工程文件、监听它的事件（`//roost:listen`）或登记；不改它别的文件 |
 | 借鉴 | 没有模块覆盖，但有形状接近的模块（同样是“周期性发放”“带上限的资源”“两个玩家之间的关系”……） | 第 4 步手写；写明样板是哪个模块、借鉴的是哪一点 |
 | 手写 | 没有接近的模块，框架有对应的能力 | 第 4 步手写；先读[能力清单](../../../framework/CAPABILITIES.md)“文档”列里的契约，再挑一个结构上最像的模块当样板 |
 | 做不了 | 只有设计 / 原型 / 不支持 | 告诉用户，给出处；不做 |
 
 能力清单末尾的“需求条目 → 能力”速查表、各分组表的“怎么接入”与“状态”列用来判断后两类；有玩法夹具或 game-demo 的参考时照参考的做法，夹具与 demo 不能直接装进别的工程。
 
-不要因为“模块多带了点东西”就改成手写：模块自带的客户端协议用不上时告诉用户它存在，由用户决定去留。也不要因为“差一点”就复制模块的代码另改一份：差的那点应当落在它留给工程的文件或登记点上，落不上再考虑借鉴。
+不要因为“模块多带了点东西”就改成手写：模块自带的客户端协议用不上时告诉用户它存在，由用户决定去留。也不要因为“差一点”就复制模块的代码另改一份：差的那点应当落在它留给工程的文件、它发布的实体事件或登记点上，落不上再考虑借鉴。**新玩法要和已装模块联动时先找现成的事件**：看各模块 `game/event/<模块>.go`（README 的“实体事件”一节），在自己的组件（或 Player）上写 `//roost:listen` 方法；不要改发布方的文件，也不要为联动另写一张登记表。
 
 **最后查限制**（规则 4）。对每条需求连同它的结论，对照三处：候选模块 README 的“能力边界”、能力清单的“明确没有 / 不适合的”、[已知限制](../../../maintenance/KNOWN-LIMITS.md)里相关的条目。下面这些都算冲突：
 
@@ -265,12 +265,12 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
 | 需求 | 模块 | 连带 | 一句话 |
 | --- | --- | --- | --- |
-| 进入游戏、建档、首次发放 | `enter` | — | `EnterGame` 加载或创建 Player、首次初始化；“先新建再进入”的另一条路；进入钩子；打开自身视图 |
+| 进入游戏、建档、首次发放 | `enter` | — | `EnterGame` 加载或创建 Player、首次初始化（实体事件 `event.EnterFirst`）；“先新建再进入”的另一条路；事务外的进入登记点；打开自身视图 |
 | 握手鉴权 | `login` | — | 握手票据交给 account 校验（进服票据、角色会话令牌），开发登录，区服登记工具 |
 | 客户端登录入口、选服 | `portal` | login | 三个 HTTP 端点：登录、区服清单与推荐、换进服票据；挂在托管 account 的进程上 |
 | 服务器时间 | `servertime` | — | 业务时间、当前业务日、下一次每日重置；进入时推送 |
 | 客户端规则下发 | `rules` | enter | 各模块登记的规则快照，进入时统一推送、可补取 |
-| 档案：名字、等级、经验 | `profile` | enter | 改名、发经验、升级钩子；新角色 1 级 |
+| 档案：名字、等级、经验 | `profile` | enter | 改名、发经验、升级事件 `event.ProfileLevelUp`；新角色 1 级 |
 | 全服唯一名字 | `naming` | profile | 两阶段占名、改名状态机、旧名释放 |
 | 货币 | `wallet` | — | 余额、按业务键幂等的加减、消费协议 |
 | 背包、道具 | `bag` | — | 道具表、堆叠上限、发放与丢弃 |
@@ -324,7 +324,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 - 模块自带的客户端协议（如 wallet 的 `WalletSpend`：客户端发起的消费）是样例入口。需求里没有对应的客户端操作时，告诉用户它存在，由用户决定保留还是删掉这条协议与端点。
 - 装完之后模块文件就是业务代码：要改规则直接改（例如 `game/components/checkin/checkin.go` 里的奖励），改完再 `module verify`。改了行为就同步改模块自带的测试，不要删测试。
 
-- **扩展已装的模块**（第 1 步结论是“装了再扩展”的）：只动两类地方——模块留给工程的业务文件（README 的“复用方式”列出，例如商品目录、推荐规则、渠道入口、首次发放），和它的登记点（进入钩子、升级钩子、附件种类、规则登记……）。要在别的功能里用它的数据或动作，调它 README 写的入口（同一个实体上直接调组件方法，例如 `component.owner.Wallet().Add(delta)`）。它别的文件不要改；确实要改规则时改完同步改它自带的测试，再 `module verify`。
+- **扩展已装的模块**（第 1 步结论是“装了再扩展”的）：只动两类地方——模块留给工程的业务文件（README 的“复用方式”列出，例如商品目录、推荐规则、渠道入口、首次发放），它发布的实体事件（升级 `event.ProfileLevelUp`、首次初始化 `event.EnterFirst`、扣款 `event.WalletSpent`……，在自己的组件上写 `//roost:listen` 方法监听）和它的登记点（事务外的进入登记点、附件种类、规则登记……）。要在别的功能里用它的数据或动作，调它 README 写的入口（同一个实体上直接调组件方法，例如 `component.owner.Wallet().Add(delta)`）。它别的文件不要改；确实要改规则时改完同步改它自带的测试，再 `module verify`。
 
 ## 3A. 登录与进入
 
@@ -365,8 +365,9 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 | 多人共用的对象 | `room`、`team` | 独立实体；成员引用与对象同事务；重连代际 |
 | 跨进程、要补偿的流程 | `alliance` | 单写者服务 + Mirror + 路由 Saga |
 | 到点要发生的事 | `turn`、`activity` | 实体的持久定时器；超时推进幂等 |
-| 进入游戏时顺带做的事 | `enter` 的联动（看 `modules/*/with/enter`） | 进入钩子在事务外、可重试；必须成功的放事务内钩子 |
+| 进入游戏时顺带做的事 | `enter` 的联动（看 `modules/*/with/enter`） | 进入登记点 `OnEntered` 在事务外、可重试；必须成功的监听事务内的实体事件 `event.EnterFirst` |
 | 给运维用的操作 | `gm` 的联动（看 `modules/*/with/gm`） | 命令登记、审计，写入仍走正式事务 |
+| 别的功能做完一件事后跟着改（升级后推进任务、扣款后计数） | `task` 的联动（看 `modules/task/with/*`） | 在自己的组件上 `//roost:listen` 监听对方的实体事件，同一笔事务；拦截类事件的监听只读 |
 
 借鉴的是做法，不是复制粘贴它的代码再改名：状态、协议、错误码都是你自己的，文件名带你的功能名。样板模块里与你的需求无关的部分不要带过来。找不到形状接近的模块时，回到第 0A 节的做法逐条对照，并在报告里写明“没有可借鉴的模块”。
 
@@ -400,17 +401,18 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
    - 同步与否按这个顶层字段决定：v1.47.0 起字段默认既落库又同步，`nosync` 只落库（账本、回执、种子这类服务端字段一律写它），`nopersist` 只同步；单写 `persist` 或 `sync` 不会关掉另一项。既有可见状态又有服务端账本就写两个字段、两个结构体。不要在嵌套结构体的字段上写 `dao` 标签。标了 `sync` 还要打开自身视图客户端才收得到，见第 4A 步。
    - 只能加在末尾（同步的字段号按定义顺序排）；不要改已有字段的 `store` 键。
-2. **组件**：`"$ROOST" add component <Feature> --entity Player`，在生成的 `game/entities/player/<feature>_component.go` 里写业务方法。状态只经生成的 setter 改（`component.owner.Dao().GetTask().SetProgress(…)`）；组件不保存事务会改的状态、不加锁。同一个实体上的别的组件（模块的或自己写的）都用 `component.owner.<Other>Comp()` 直接调，在同一把锁、同一笔事务里。要动货币就调同一个实体上的货币组件，同一笔事务。两个入口按“谁来保证只做一次”选：
+2. **组件**：`"$ROOST" add component <Feature> --entity Player`，在生成的 `game/entities/player/<feature>_component.go` 里写业务方法，handler 或别的组件要调的方法同时列进生成的 `game/view/component_<feature>.go` 的 `view.<Feature>` 接口（2026-11-16 起，handler 经 view 调用）。状态只经生成的 setter 改（`component.owner.Dao().GetTask().SetProgress(…)`）；组件不保存事务会改的状态、不加锁。同一个实体上的别的组件（模块的或自己写的）都经 view 访问器 `component.owner.<Other>()` 直接调，在同一把锁、同一笔事务里。要动货币就调同一个实体上的货币组件，同一笔事务。两个入口按“谁来保证只做一次”选：
    - **你的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `component.owner.Wallet().Add(delta)`，不留回执。周期性发放（每日、每局、每个订单）都用这个。
-   - **没有别的事实可判**（客户端带请求号的消费）：`WalletComp().Apply(key, delta)`，同一个 key 在去重窗口内重复调用只生效一次。窗口只留最近 128 次带业务键的加减，是短期防重发，不是永久账本：不要拿按天、按局递增的键去用它。
+   - **要在别的模块做完某件事时跟着改**（升级后解锁、扣款后计数）：在这个组件上写 `//roost:listen` 方法 `On<事件名>(ev event.<事件名>) error`，监听那个模块在 `game/event/` 里的事件，同一笔事务；见第 4D 步第 4 条。
+   - **没有别的事实可判**（客户端带请求号的消费）：`component.owner.Wallet().Apply(key, delta)`，同一个 key 在去重窗口内重复调用只生效一次。窗口只留最近 128 次带业务键的加减，是短期防重发，不是永久账本：不要拿按天、按局递增的键去用它。
 3. **错误码**：`"$ROOST" add errcode <feature>_<reason>`（每个一条，一码一个文件），生成在 `internal/errors/`，把说明文字（生成时是 `TODO`）改掉。模块是一个功能一个文件，两种布局都可以。业务拒绝就从组件 / handler 里返回这些带码的错误，生成的端点会把它转成回包的 `Code` / `Reason`；不用在 controller 里自己拼响应。
 4. **协议**：`"$ROOST" add protocol <Feature><Action> --group game --handler <feature>`，在 `protocol/def/<feature>_<action>.go` 里给 Request / Response 加字段（Response 保留 `Code`、`Reason`）。
 5. **Nest handler**：`"$ROOST" add handler <Feature><Action> --entity Player --component <Feature>`，把 `game/handler/<feature>_<action>.go` 改成收 PB 请求、回 PB 响应：
 
    ```go
    //roost:nest rollback=undo durability=strict
-   func handlerTaskClaim(target player.ITaskEntity, request *pb.TaskClaimRequest, nowUnixMilli int64) (*pb.TaskClaimResponse, error) {
-   	result, err := target.TaskComp().Claim(nowUnixMilli)
+   func handlerTaskClaim(target view.ITaskEntity, request *pb.TaskClaimRequest, nowUnixMilli int64) (*pb.TaskClaimResponse, error) {
+   	result, err := target.Task().Claim(nowUnixMilli)
    	if err != nil {
    		return nil, err
    	}
@@ -419,12 +421,14 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
    ```
 
    - 一个 handler 一个文件，文件名就是 handler 名的蛇形写法（`roost generate` 与 `add endpoint` 按文件名找）。
+   - 目标参数是生成的窄接口 `view.I<Feature>Entity`（`game/view/holder_entities_gen.go`），经访问器 `target.<Feature>()` 调组件；`Claim` 要先列进 `view.Task`。要整个玩家时收 `view.PlayerEntity`。
    - 最后一个参数写 `nowUnixMilli int64` 就能拿到这条消息冻结的业务时间；客户端不传时间。
    - `pb` 是 `<module>/protocol/pb`，要先跑一次 `"$ROOST" generate` 才有。
    - 请求没有字段时也保留 `request` 参数，形状与带字段的一样。
    - 不对客户端开放的写入（登录时的初始化、别的功能触发的发放）也写成 Nest handler，参数用普通类型，不建协议和端点，由服务端代码经生成的 Sender 调用。
-6. **端点**：`"$ROOST" generate`，再 `"$ROOST" add endpoint <Feature><Action> --handler <feature>`，再 `"$ROOST" generate`。得到 `game/controllers/<feature>/` 下的手写入口与生成的转交。玩家身份取认证会话，不取请求字段。
-   - 第一次 `generate` 之后 `game/controllers/<feature>/` 里已经有一个返回 `not implemented` 的入口桩（文件头写着 application-owned）。它没被改过时 `add endpoint` 会把它换成转交入口，不用手写、也不会被拒绝。
+6. **端点**：`"$ROOST" generate`，再 `"$ROOST" add endpoint <Feature><Action> --handler <feature>`，再 `"$ROOST" generate`。得到 `game/controllers/<feature>.go` 里的手写入口 `Handle<Feature><Action>` 与生成的转交 `game/controllers/<feature>_<action>_endpoint_gen.go`。玩家身份取认证会话，不取请求字段。
+   - `game/controllers` 是一个包（2026-11-16 起）：`controller.go` 归生成器，每个功能一个 `<feature>.go`（`--handler` 决定追加到哪个文件），不建子目录。第一次 `generate` 之后 `<feature>.go` 末尾已经追加了一个返回 `not implemented` 的入口桩。它没被改过时 `add endpoint` 会把它换成转交入口，不用手写、也不会被拒绝。
+   - handler 收的是挂在几种实体上的组件的窄接口、而这些实体归属不同服务时，`roost generate` 要求写 `//roost:nest target=<实体>`，endpoint 用 `--target <实体>`。
 7. **场景测试**：照 `game/handler/wallet_test.go` 写 `game/handler/<feature>_test.go`：替身提交器、`nest.NewEngine`、生成的 `syncsender`，覆盖成功、拒绝时零写入、重复请求、提交被拒后回滚。要拨时间用 `clock.SetSource`（`game/handler/checkin_test.go` 有例子）。测试名加功能前缀；只断言自己的事实（同一个 DAO 上有别的功能的字段）。
    - getter 与替身提交器不借用模块测试文件里的类型（那些文件可能被改）；自己写的几个功能之间可以共用一个夹具文件。
    - 拨时间的写法（`clock` 是 `infra/base/clock`）：
@@ -479,9 +483,9 @@ func init() {
 }
 ```
 
-（`gamelogin` 是 `<module>/game/modules/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/modules/login，原 `game/enter` 已并入。）钩子在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在实体包用 `gamelogin.OnFirstEnter` 登记事务内钩子（配方已使用）。
+（`gamelogin` 是 `<module>/game/modules/login`：v1.47.0 起进入的登记点与登录票据校验同在 game/modules/login，原 `game/enter` 已并入。）这个登记点在事务之外执行，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go`，或在自己的组件（或 Player）上写 `//roost:listen` 方法监听事务内的实体事件 `event.EnterFirst`（`OnEnterFirst(ev event.EnterFirst) error`，休闲配方的 `recipe_first_enter.go` 就是这样发 100 金币）。
 
-**enter 有两条路**。会话是用进服票据握手的（第 3A 步的链路，装了 `login` 时）：玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`；建档、名字、首次初始化、“建成了”的标记在同一笔事务里。别的会话：`EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码，初始发放只写一处。要在“新建”这一步加自己的检查或写入，用 enter 的登记点（`OnCreating`、`OnCreatePrepare`、实体包的 `OnCreate`，见它的 README），不要改它的端点。
+**enter 有两条路**。会话是用进服票据握手的（第 3A 步的链路，装了 `login` 时）：玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`；建档、名字、首次初始化、“建成了”的标记在同一笔事务里。别的会话：`EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码，初始发放只写一处。要在“新建”这一步加自己的检查或写入，用 enter 的登记点（事务外的 `OnCreating`、`OnCreatePrepare`）或监听新建事务里的实体事件 `event.EnterCreate`（见它的 README），不要改它的端点。
 
 下面是不装它时的手写做法，也是它内部的做法。
 
@@ -494,57 +498,82 @@ Nest handler 的目标必须是已存在的实体。新玩家没有 Player，所
 "$ROOST" generate
 ```
 
-生成的 `game/controllers/player/enter_game.go` 调 lifecycle 的 `GetOrCreate`，不经过 Nest，是业务文件。
+生成的 `game/controllers/player.go` 里的 `HandleEnterGame` 调 lifecycle 的 `GetOrCreate`，不经过 Nest，是业务文件。
 
 **新玩家的初始发放**（送金币、满体力）不要按“这次是不是新建的”判断：建档后、发放前进程崩了，这个玩家就永远拿不到。做法是：发放写成一个不对客户端开放的 Nest handler，“发过没有”记在自己的状态里（一个只落库的布尔字段），每次进入游戏在 `GetOrCreate` 之后都经生成的 Sender 调一次它，已发过就什么都不做。入口里这段手写串接没有离线测法（场景测试只到 Nest handler），在报告里列为未测。
 
-## 4D. 组件的写法：组件包 + game/view（v1.47.0 起）
+## 4D. 组件的写法：组件包 + game/view + 实体事件（2026-11-16 起）
 
-**每个实体的每个组件都写在自己的包里，不写进实体包**（Player 与别的实体一样，模块自带的实体也一样：dungeon 的 Dungeon 是 `game/components/dungeonrun`，terrain 的 TerrainChunk / TerrainBuilding 是 `terrainchunkdata` / `terrainsite`，scene 的 Scene 成员账本是 `scenemembers`）；实体包只剩实体本体、`_gen` 文件、每个组件一个薄接线文件，以及只属于实体本身的东西（实体号与坐标换算、同步打包器、镜像、实体对框架接口的实现如 `cellworld.Actor` / `movement.MapOwner`、生成的定时器组件与它的登记）。实体上的业务规则也写成组件，不写成实体方法：模块自带实体的组件在 `module.yaml` 的 `components:` 申请组件号，字段写在实体模板里（`modules/team` 的 Team 与 `game/components/teamroster`）。包之间靠 `game/view` 里的接口相连，避免循环引用。样板：只挂在 Player 上的组件看 `modules/profile`、`modules/task`；别的实体看 `modules/alliance`（Alliance 的 `allianceroster`、AllianceMember 的 `allianceguard`）、`modules/room` / `turn` / `matchroom`（同一个 Room 上三个组件）、`modules/team`（Team 的 `teamroster`）；多个实体共用的组件看 `modules/bag`、`modules/wallet`、`modules/attribute`、`modules/activity`（同一个组件挂在 Player、World 与联盟上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
+**每个实体的每个组件都写在自己的包里，不写进实体包**（Player 与别的实体一样，模块自带的实体也一样：dungeon 的 Dungeon 是 `game/components/dungeonrun`，terrain 的 TerrainChunk / TerrainBuilding 是 `terrainchunkdata` / `terrainsite`，scene 的 Scene 成员账本是 `scenemembers`）；组件的类型号、工厂登记也在组件包里，实体包只剩实体本体、`_gen` 文件、组件要实体手写提供的方法（`<模块>.go`，每个模块一个小文件），以及只属于实体本身的东西（实体号与坐标换算、同步打包器、镜像、实体对框架接口的实现如 `cellworld.Actor` / `movement.MapOwner`、生成的定时器组件与它的登记）。实体上的业务规则也写成组件，不写成实体方法；唯一的例外是只对这一种实体生效的事件监听可以写成实体方法（naming 在 Player 上监听 `event.ProfileRenaming`）。包之间靠 `game/view` 里的接口相连，避免循环引用。样板：只挂在 Player 上的组件看 `modules/profile`、`modules/task`；别的实体看 `modules/alliance`（Alliance 的 `allianceroster`、AllianceMember 的 `allianceguard`）、`modules/room` / `turn` / `matchroom`（同一个 Room 上三个组件）、`modules/team`（Team 的 `teamroster`）；多个实体共用的组件看 `modules/bag`、`modules/wallet`、`modules/attribute`、`modules/activity`（同一个组件、同一个类型号挂在 Player、ActivityWorld 与 Alliance 上），框架层的同类做法见 `gameplay/level` 的 `LevelComponent`。
+
+`roost add component <X> --entity <E>` 生成的手写组件仍在实体包里（`game/entities/<实体>/<x>_component.go`，同时写 `game/view/component_<x>.go`）；只挂在一个实体上的小功能可以这样写，要挂到别的实体上时按下面的写法挪进组件包。
 
 **依赖方向**（谁 import 谁）：
 
 ```
+game/event                ← 最底层：只放事件值类型；只依赖标准库与 db
 game/view                 ← 只放接口；只依赖 framework、db、协议类型（以及只有类型的 game/modules/actor、game/modules/gameplay/attribute）
-game/components/<功能>    → game/view（以及它联动的别的组件包）
-game/modules/login、钩子、联动    → game/view、组件包
-game/entities/<实体>      → 组件包、game/modules/login（实体实现 view 的接口）
-game/handler、controllers → 实体包、组件包
+game/components/<功能>    → game/view、game/event（以及它联动的别的组件包）
+game/modules/login、联动  → game/view、game/event、组件包
+game/entities/<实体>      → 组件包、game/view、game/event、game/modules/login（实体实现 view 的接口）
+game/handler、controllers → game/view、组件包（要实体的具体类型或运行期对象时才 import 实体包）
 ```
 
 组件包、`game/modules/login` 与联动永远不 import 实体包；组件包可以 import 别的组件包（同一实体上依赖另一个组件的规则：`turn`、`matchroom` 用 `room` 的席位检查与容量，`team` 用 `teamroster` 的上限）。要实体类型号这类常量时在组件包里按同一个号再声明一次（`{{ID:entity:Team}}`），不为它 import 实体包。
 
-1. **组件包** `game/components/<功能>/<功能>.go`：`Component` 类型、宿主接口 `Owner`、工厂 `NewComponent(value any, *entity.EntityCreateParam)`（把 `value` 断言成 `Owner`，断言失败返回错误）。`Owner` 只列组件用得到的东西：
+1. **组件包** `game/components/<功能>/<功能>.go`：`//roost:component type=<号>` 与 `const CompType<功能> entity.ComponentType = <号>`（模块里写 `{{ID:component:<功能>}}`，同一个组件挂在几种实体上只用这一个号）、`init()` 里的 `entity.RegisterComponentFactory(CompType<功能>, NewComponent)`、`Component` 类型、宿主接口 `Owner`、工厂 `NewComponent(value any, *entity.EntityCreateParam)`（把 `value` 断言成 `Owner`，断言失败返回错误）。实体结构体直接挂 `bag *bag.Component \`comp:"bag.CompTypeBag"\``，模块清单写 `component_package: game/components/<功能>`，安装器替你挂；不要在实体包里再声明 `type BagComponent = bag.Component` 别名（组件带 `//roost:listen` 时这种旧写法生成失败）。`Owner` 只列组件用得到的东西：
 
    ```go
-   // 只挂在 Player 上、要读写玩家 DAO、要用钱包：
+   // 多个实体共用：只要本实体 DAO 里的那份状态，不写死实体类型（宿主方法写在 view 的 Holder 里）
+   type Owner interface {
+       entity.IThreadSafeEntity
+       view.BagHolder // Bag() 访问器 + 宿主方法 BagState() *db.BagState
+   }
+   // 只挂在 Player 上、要用钱包：
    type Owner interface {
        entity.IThreadSafeEntity
        Dao() *db.PlayerDao
        view.WalletHolder
    }
-   // 组件要把整个宿主交给钩子时（升级钩子、签到钩子）：
+   // 组件要访问整个宿主时：
    type Owner = view.PlayerEntity
-   // 多个实体共用：只要本实体 DAO 里的那份状态，不写死实体类型
-   type Owner interface {
-       entity.IThreadSafeEntity
-       <功能>State() *db.<功能>State
-   }
    ```
 
-   宿主能力不同的地方用可选接口区分（例如只有 Player 有持久定时器，就定义 `deadlineOwner`，组件里用类型断言判断），不要在组件里按实体类型写分支。
+   `Owner` 里有 `entity.IThreadSafeEntity`，就带着 `Publish`，组件拿宿主就能发布实体事件（第 4 条）。宿主能力不同的地方用可选接口区分（例如只有 Player 有持久定时器，就定义 `deadlineOwner`，组件里用类型断言判断），不要在组件里按实体类型写分支。
 
-   组件还要实体上的别的方法时，`Owner` 写成嵌入 `view.<实体>Entity` 再加那几个方法：Remote 实体的状态版本 `EntityVersion() int64`（`allianceroster`）、把同步脏位交给订阅主体的 `PublishSyncDirty()`、由实体号算出的坐标（地形块的 `Key()`）、框架要的实体接口（`cellworld.Actor`）。挂在生成的定时器组件上的定时器：定时器组件（`roost add timer` 生成，或 game-demo World 手写的同样一份）是实体的基础设施，它的方法（登记、回调入口）留在实体包，回调入口只有一句——把到期节点交给组件的导出方法（`turn` 的 `OnDeadline`、`activity` 的 `OnDeadline`、demo `activityphase` 的 `OnDue`）；建 / 删定时节点写成实体上的适配方法交给 `Owner`，只建 / 删节点（`ArmTurnDeadline` / `CancelTurnDeadline`、`ArmActivityDeadline` / `CancelActivityDeadline`、`ArmActivityPhase`），期限与节点号的记账写在组件里（`activity` 的 `Rearm`）。
-2. **game/view**：模块（或工程）给每个组件写 `game/view/component_<功能>.go`，里面两样东西——组件对外的接口 `<功能>`（组件包里 `*Component` 的导出方法都列进来，handler、钩子与别的组件经它调用；框架回调 `OnInitFinish` / `OnDestroy` 不列），签名用到的参数 / 结果结构体（以功能名作前缀，如 `ShopResult`、`CdkeyIntent`、`PurchaseGrant`，只含内建类型、db 与别的 view 类型，不引用组件包、功能包或实体包；组件包或功能包里留同名别名，如 `type ShopResult = view.ShopResult`，原来的写法不变；类型上的方法要用工程错误码或别的包时改成功能包里的函数，如 `purchase.ValidateGrant`），以及“带有这个组件”的小接口 `<功能>Holder`（只有访问器 `<功能>() <功能>`）。实体接口 `game/view/entity_<实体>.go` 由 `roost generate` 生成：`<实体>Entity` 嵌入 `entity.IThreadSafeEntity`、实体的 DAO getter 与它挂载的各组件的 `<功能>Holder`；生成器同时在实体上生成访问器 `func (e *Player) <功能>() view.<功能>`。原来的 `<功能>Comp()` 照旧返回具体类型，给 handler 用。组件类型名与 view 里的名字不同时（共用组件在各实体上的组件名不同，如 `AllianceActivity`；或组件名太泛，如地形编辑账本的 `Ledger`），在接线文件里手写访问器 `func (e *Alliance) Activity() view.Activity { return e.AllianceActivityComp() }`，生成器按它把 `ActivityHolder` 嵌进 `view.AllianceEntity`。不能进 view 的只有两种，列在守卫用例的豁免表里并写明原因：返回 core 运行时对象（`combat` 的 `Core`、`activity` 的 `Host`、`actor` 的 `SavedPosition`、`attribute` 的 `Container`）、要同一组件的另一个实例（`combat` 的 `Cast` / `Step` / `Tick` / `Leave` 读对方组件的战斗内核）。别的都进 view：
+   组件还要实体上的别的方法时，`Owner` 写成嵌入 `view.<实体>Entity` 再加那几个方法：Remote 实体的状态版本 `EntityVersion() int64`（`allianceroster`）、把同步脏位交给订阅主体的 `PublishSyncDirty()`、由实体号算出的坐标（地形块的 `Key()`）、框架要的实体接口（`cellworld.Actor`）。挂在生成的定时器组件上的定时器：定时器组件（`roost add timer` 生成，或 game-demo World 手写的同样一份）是实体的基础设施，它的方法（登记、回调入口）留在实体包，回调入口只有一句——把到期节点交给组件的导出方法（`turn` 的 `OnDeadline`、`activity` 的 `OnDeadline`、demo `activityphase` 的 `OnDue`）；建 / 删定时节点写成实体上的宿主方法交给 `Owner`，只建 / 删节点（`ArmTurnDeadline` / `CancelTurnDeadline`、`ArmActivityDeadline` / `CancelActivityDeadline`、`ArmActivityPhase`），期限与节点号的记账写在组件里（`activity` 的 `Rearm`）。
+2. **game/view**：模块（或工程）给每个组件写 `game/view/component_<功能>.go`，里面三样东西——组件对外的接口 `<功能>`（组件包里 `*Component` 的导出方法都列进来，handler、监听与别的组件经它调用；框架回调 `OnInitFinish` / `OnDestroy` 与 `//roost:listen` 方法不列），签名用到的参数 / 结果结构体（以功能名作前缀，如 `ShopResult`、`CdkeyIntent`、`PurchaseGrant`，只含内建类型、db 与别的 view 类型，不引用组件包、功能包或实体包；组件包或功能包里留同名别名，如 `type ShopResult = view.ShopResult`，原来的写法不变；类型上的方法要用工程错误码或别的包时改成功能包里的函数，如 `purchase.ValidateGrant`），以及“带有这个组件”的接口 `<功能>Holder`：访问器 `<功能>() <功能>`，加上组件要实体提供的**宿主方法**（`BagState() *db.BagState`、`ActivityScope() string`、`ArmTurnDeadline(...)`）。`roost generate` 生成：
+   - 实体接口 `game/view/entity_<实体>.go` 的 `<实体>Entity`（嵌入 `entity.IThreadSafeEntity`、实体的 DAO getter 与它挂载的各组件的 `<功能>Holder`），实体上的访问器 `func (e *Player) <功能>() view.<功能>`；
+   - 每个 Holder 一个窄接口 `view.I<功能>Entity{ entity.IThreadSafeEntity; <功能>Holder }`（`game/view/holder_entities_gen.go`），给 Nest handler 当参数类型；
+   - 宿主方法里只交出实体 DAO 某个字段的（`BagState`、`WalletState` / `WalletLedger`、`EnterState`、`AttributeBase/Gear/Final`、各实体的 `ActivityBook`），写在 `<实体>_gen_wire.go`；其余手写在 `game/entities/<实体>/<模块>.go`。实体漏实现时编译期断言 `var _ view.<E>Entity = (*E)(nil)` 报错，上方注释列出要手写的方法。
+
+   `<功能>Comp()` 仍返回具体类型，只给生成的接线与实体包内部用；handler 与组件一律经访问器。要取回具体组件（带组件包类型、进不了 view 的方法）时用组件包自己的 `Of(holder)`（`activity.Of`、`combat.Of`、`matchmaking.Of`）。不能进 view 的只有两种，列在守卫用例的豁免表里并写明原因：返回 core 运行时对象（`combat` 的 `Core`、`activity` 的 `Host`、`attribute` 的 `Container`）、要同一组件的另一个实例（`combat` 的 `Cast` / `Step` / `Tick` / `Leave` 读对方组件的战斗内核）。别的都进 view：
    - 签名里的类型带规则方法时，类型以纯数据进 view，规则改成功能包（或组件包）里的函数，原来的名字留别名：`terrain` 的 `Command` → `view.TerrainCommand`，规则是 `terrain.ValidateCommand` / `CommandDigest` / `CommandBrush` / `CommandFootprint`；demo 的地块 `Lot` → `view.TerrainLot`（`terrainsurface.ValidLot` / `PackLot` / `LotChunks` / `LotNodes` / `LotsOverlap`）、编辑序号窗口 `SeqWindow` → `view.TerrainSeqWindow`（`terrainledger.CheckSeq` / `RecordSeq`）、建筑的 `Placement` / `State` → `view.BuildingPlacement` / `BuildingState`（`buildingsite.PlacementLot` / `StatesEqual`）。只做格式化的 `String()` 可以留在 view 类型上。
    - 参数是功能包的运行期对象时，在 view 里写只含用到的方法的小接口（demo `Map.Teleport` 收 `view.MapGround{ Standable(spatial.Point) bool }`，handler 照旧交场景的 `gamescene.Terrain`），或改成纯数据参数（`terrainchunkdata` 的 `Initialize(sceneID, key, baseRevision, base)` 不再收 `*terrain.World`，handler 先取 `world.Base(key)`）。
    - 要对方实体时收对方的 view 接口（`friends` 的 `Change(peer view.PlayerEntity, ...)`、`team` 的 `Create(target view.TeamEntity, ...)`）。
-3. **跨组件调用写访问器**：`host.Wallet().Add(n)`、`c.owner.Bag().Remove(id, 1)`，不写 `Owner().WalletComp()`。组件、钩子与联动只收用得到的最小接口：只要背包的收 `view.BagHolder`，要整个玩家的才收 `view.PlayerEntity`。
-4. **钩子**：登记表放在发出事件的组件包里（`profile.OnProfileLevelUp`、`checkin.OnCheckinClaimed`），钩子收宿主 `func(host view.PlayerEntity, ...) error`；进入相关的 `OnFirstEnter` / `OnCreate` 与工程的首次发放 `enter_first.go` 在 `game/modules/login`。别的功能的联动文件放在**登记方自己的包**里（task 的签到联动在 `game/components/task/task_checkin.go`），进入钩子的联动放在 `game/modules/login/<功能>_enter.go`。不要在别的包里给组件类型声明方法：改成函数，或改成经 view 接口登记的回调。
-5. **每个实体一个很薄的接线文件** `game/entities/<实体>/<功能>_component.go`：自己的组件号（`//roost:component type=<号>`，每个实体单独申请）、类型别名（`type <功能>Component = <功能>.Component`）、handler 用的窄实体接口 `I<功能>Entity`、`entity.RegisterComponentFactory(<组件号>, <功能>.NewComponent)`、实现 `Owner` 的方法（例如 `func (e *Player) BagState() *db.BagState`）。
+   - 窄接口在 view 里叫 `I<功能>Entity`，实体总接口叫 `<实体>Entity`，所以组件与实体同名（Room 实体与 room 组件）也不会撞名。
+3. **跨组件调用写访问器**：`host.Wallet().Add(n)`、`c.owner.Bag().Remove(id, 1)`，不写 `Owner().WalletComp()`。组件、监听与联动只收用得到的最小接口：只要背包的收 `view.BagHolder`，要整个玩家的才收 `view.PlayerEntity`。handler 收 `view.I<功能>Entity`；组件挂在几种实体上、这些实体归属不同服务时写 `//roost:nest target=<实体>`（endpoint 写 `target=<实体>`），只归一个服务时不用写。
+4. **实体事件，不写钩子登记表**：发出“发生了什么”的组件在 `game/event/<模块>.go` 定义事件（导出结构体，名字就是事件名，只放值），做完那件事后 `c.owner.Publish(event.<X>{...})`，错误原样返回。别的功能的联动写成**监听方自己组件上的方法**：
+
+   ```go
+   // game/components/task/task_checkin.go（task 的 with/checkin 带来）
+   //roost:listen
+   func (c *Component) OnCheckinClaimed(ev event.CheckinClaimed) error {
+   	return c.Report("checkin.claimed", 1, ev.NowUnixMilli)
+   }
+   ```
+
+   - 签名固定：一个 `game/event` 结构体值参数、返回 `error`；方法名约定 `On<事件名>`。`roost generate` 把它登记到挂这个组件的每种实体上（`<实体>_event_gen.go`）。同一个事件有多个监听、顺序有要求时写 `//roost:listen priority=<N>`（大的先，缺省 0）。
+   - 同一实体、同一笔事务、立即执行：监听里只改同一个实体，不做 I/O；要改别的实体走 Nest 发送，跨进程走 `nest.Emit`。
+   - 监听里再 `Publish` 返回的错误必须原样返回（没有保存点，吞掉会留下半截修改）。不想让对方操作因为自己失败时，只吞自己的业务错误。
+   - 拦截类事件（`TeamJoining`、`RoomJoining`、`RehomeApplying`、`MatchmakingStarting`、`ProfileRenaming`）的监听只做检查、返回带码错误表示拒绝，不改状态。
+   - 事务之外的登记点（`gamelogin.OnEntering` / `OnEntered` / `OnCreating` / `OnCreatePrepare`、rehome 的 `OnApplying` / `OnLeaving` / `OnArrived`、`leaderboard.OnSubmitted`）和扩展提供方（`actor.OnActor`、`attribute.OnAttributeGear`、mailbox 的附件种类）不是实体事件，照旧在 `init` 里登记；事务外登记点的联动放在 `game/modules/login/<功能>_enter.go` 这类登记方自己的包里。
+   - 不要在别的包里给组件类型声明方法：改成函数、view 接口上的方法，或监听。
+   - 契约（三道上限、memory 与 `rollback=none` 里错误外传但修改不撤销、init 链接）见 [Nest 与实体 §3A](../../../framework/guide/02-nest-entity.md#3a-实体事件)。
+5. **实体包里手写的宿主方法**：`game/entities/<实体>/<模块>.go`，每个模块一个小文件（安装器按整个文件安装，多个模块不能往同一个文件里写），只放生成器写不了的宿主方法（`ActivityScope()`、转给别的组件的 `AttributeLevel()`、`MapBasic()`）与只对这种实体生效的监听。不再有 `<功能>_component.go` 接线文件、类型别名和实体包里的 `I<功能>Entity`。
 6. **共用组件的状态类型共用，每个实体各存一份**：同一个嵌套结构体放进各自的 DAO，各有自己的 `store` 键，各自落盘、各自回滚。不存在跨实体共享的可变状态，不用进程级变量。
 7. **事务边界不变**：每次调用都在宿主实体自己的 Nest 事务里。两个实体之间搬东西（玩家存进公会仓库）仍走多实体 handler、Remote 或 Saga（第 0A 节），不能因为组件相同就跨实体直接改状态。
-8. **守卫**（`codegen/internal/roost`，模块模板与 game-demo 各一套）：`TestModuleViewInterfacesListTheComponentMethods` / `TestDemoViewInterfacesListTheComponentMethods` 查组件的导出方法都在 view 接口里、view 只引用允许的包、豁免表没有陈项（demo 往模块组件包里加的方法按模块的 view 文件查）；`TestModuleEntityPackagesHoldOnlyComponentWiring` / `TestDemoEntityPackagesHoldOnlyComponentWiring` 查实体包不声明组件结构体与组件方法、定时器回调只交给组件、每个实体嵌入 `entity.ComponentManager`、实体类型自己的方法不调用 `Set…` / `Del…` 改状态（例外只有框架接口的实现与实体自己的运行期对象：demo 的 `cellworld.Actor` / `BasePlayer` 实现、场景时间域，列在用例里写明原因）。
+8. **守卫**（`codegen/internal/roost`，模块模板与 game-demo 各一套）：`TestModuleViewInterfacesListTheComponentMethods` / `TestDemoViewInterfacesListTheComponentMethods` 查组件的导出方法（`//roost:listen` 方法除外）都在 view 接口里、view 只引用允许的包、豁免表没有陈项（demo 往模块组件包里加的方法按模块的 view 文件查）；`TestModuleEntityPackagesHoldOnlyComponentWiring` / `TestDemoEntityPackagesHoldOnlyComponentWiring` 查实体包不声明组件结构体与组件方法、定时器回调只交给组件、每个实体嵌入 `entity.ComponentManager`、实体类型自己的方法不调用 `Set…` / `Del…` 改状态（例外只有框架接口的实现与实体自己的运行期对象：demo 的 `cellworld.Actor` / `BasePlayer` 实现、场景时间域，列在用例里写明原因）。
 9. **测试**：每个宿主至少一条场景；共用组件另加一条证明两个宿主的状态互不影响。组件包里的测试不能 import 实体包（会成环），要实体的测试放在 `game/handler` 或实体包。
 
 已装的模块要挂到第二个实体时，先看它 README 的“复用方式”：写明支持挂到别的实体的，照它的接线说明做；只支持 Player 的，按上面的写法借鉴（第 1 步结论是“借鉴”），不改模块原有的 Player 接线，也不复制模块代码另起一份。
@@ -649,10 +678,13 @@ go test -mod=mod ./...                                            # 其余生成
 ## 目录
 
 - `game/entities/<实体>/`：实体本体、生成文件（`*_gen_wire.go`、`lifecycle_gen.go`）与每个组件一个薄接线文件（组件号、类型别名、注册工厂、实现 Owner）。
-- `game/components/<功能>/<功能>.go`：组件逻辑（经 Owner 宿主接口拿状态），模块之间的联动也放在对应功能的包里。
-- `game/modules/<包>/`：功能包——模块与生成器带来的，以及业务自己手写的玩法包（规则、状态机、匹配等，如 `game/modules/cardrpg`、`game/modules/partyroom`）都放这里（`game/` 下只有上面两层、这一层和下面的 managers / handler / controllers / view）；`game/modules/` 本身不放文件。
+- `game/components/<功能>/<功能>.go`：组件逻辑（经 Owner 宿主接口拿状态）、`//roost:component` 类型号与工厂登记；模块之间的联动（`<功能>_<对方>.go`，含 `//roost:listen` 监听）也放在对应功能的包里。
+- `game/event/<功能>.go`：实体事件定义（第七个固定层，只放值类型，只 import 标准库与 `db`）。
+- `game/view/`：组件接口与 `<功能>Holder`（手写），实体总接口 `<实体>Entity` 与窄接口 `I<功能>Entity`（生成）。
+- `game/entities/<实体>/`：实体本体、生成文件、手写的宿主方法 `<模块>.go`。
+- `game/modules/<包>/`：功能包——模块与生成器带来的，以及业务自己手写的玩法包（规则、状态机、匹配等，如 `game/modules/cardrpg`、`game/modules/partyroom`）都放这里（`game/` 下只有七个固定层 components / controllers / entities / event / handler / managers / view 与这一层）；`game/modules/` 本身不放文件。
 - `game/modules/login/`：登录链（票据校验、进入游戏的登记点、“先新建”、新建时的角色名校验）。
-- `game/managers/managers.go`：进程内 manager 的登记点；`game/handler/`：Nest handler；`game/controllers/<功能>/`：协议入口。
+- `game/managers/managers.go`：进程内 manager 的登记点；`game/handler/`：Nest handler；`game/controllers/`：协议入口，一个包，每个功能一个 `<功能>.go`（联动 `<功能>_<对方>.go`），`controller.go` 归生成器。
 - `services/<托管服务>/`：托管框架服务的手写代码（collaborators、登录渠道、`services/account/portal/` 登录入口）；`internal/` 是生成的框架接线（`internal/access/player/protocols_gen.go` 是协议登记）。
 
 ## 工程约定
@@ -688,7 +720,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 ## 7. 边界
 
-- 模块清单以 `roost module list` 为准；实体和依赖归属见各自清单，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`，工程还没有时安装器在同一次安装里声明并接上（`module plan` 的 `framework_services` 列出）；同名的已经是业务服务时拒绝安装。模块之间只自动接上 `with` 声明的联动；其余要自己写：升级奖励（`OnProfileLevelUp`）、新玩家初始发放（`enter_first.go`）、自定义任务事件（调 `TaskComp().Report`，指定任务仍可 `Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `StaminaComp().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是完整的模块组合，它们的做法可以参考，剩余玩法要手写进工程。
+- 模块清单以 `roost module list` 为准；实体和依赖归属见各自清单，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`，工程还没有时安装器在同一次安装里声明并接上（`module plan` 的 `framework_services` 列出）；同名的已经是业务服务时拒绝安装。模块之间只自动接上 `with` 声明的联动；其余要自己写：升级奖励（监听 `event.ProfileLevelUp`）、新玩家初始发放（`enter_first.go`，或监听 `event.EnterFirst`）、自定义任务事件（调 `Task().Report`，指定任务仍可 `Advance`）、何时上榜（调 `leaderboard.Submit`）、什么操作扣体力（调 `Stamina().Spend`）。装了 shop 要把样例商品目录换成自己的。13 类玩法与 game-demo 的其余业务还不是完整的模块组合，它们的做法可以参考，剩余玩法要手写进工程。
 - 没有卸载；分配过的号与存储键不回收。已装模块不会随 roost-core 升级自动更新。
 - 模块已支持 `runtime` 服务 Init / Shutdown 接线；按实体分配持久定时器类型已由 turn 使用；turn 已提供 game-demo Robot 步骤与真实配方脚本；其余模块不因此自动获得 Robot 或容量验收。
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。

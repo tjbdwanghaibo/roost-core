@@ -170,10 +170,12 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 | `services/<托管服务>/` | 托管框架服务的手写代码：collaborators.go、account 的登录渠道（login_*）、platform 的充值渠道；HTTP 登录入口在 `services/account/portal/`。只有用到的服务才有目录 |
 | `game/managers/` | game 服务的 manager 登记点 `Managers()`（新工程是空列表）；别的业务服务仍是 `internal/service/<name>/managers.go` |
 | `game/modules/<包>/` | 功能包（维护者 2026-11-15 起新生成的工程）：模块自带的包（`game/modules/login`、`game/modules/mailbox`、`game/modules/alliance/runtime`……）与生成器的功能目录（`roost add skill` 的 `game/modules/skills`、`add effect` 的 `game/modules/effects`、`add heartbeat` 的 `game/modules/heartbeat`、`add attribute` 的 `game/modules/gameplay/attribute`）。包名与原来相同；`game/modules/` 只是目录，本身不放文件。`game/` 下只剩下面这几层与 `game/modules/`，模块清单的落点不合这条规则时安装器拒绝加载 |
-| `game/modules/login/` | 登录链：票据校验与认证器（login 模块）、进入游戏的登记点与“先新建”（enter 模块）、进入钩子 `OnFirstEnter` / `OnCreate` 与工程的首次发放 `enter_first.go`、新建时的角色名校验（enter×profile） |
-| `game/components/<功能>/` | 组件逻辑（宿主接口 `Owner`，工厂 `NewComponent`），文件名与包名同名（`bag/bag.go`）；钩子登记表与别的功能的联动也在这里 |
-| `game/view/` | 只放接口：`component_<功能>.go`（组件接口与 `<功能>Holder`，模块带来）、`entity_<实体>.go`（`<实体>Entity`，`roost generate` 生成）。组件包、`game/modules/login` 与联动只依赖它，所以不会反向引用实体包 |
-| `game/entities/<实体>/` | 实体本体、生成文件（`*_gen_wire.go`、`lifecycle_gen.go`，含返回 view 接口的组件访问器）与每个组件的薄接线 |
+| `game/modules/login/` | 登录链：票据校验与认证器（login 模块）、进入游戏的事务外登记点（`OnEntering` / `OnEntered` / `OnCreating` / `OnCreatePrepare`）与“先新建”（enter 模块）、工程的首次发放 `enter_first.go`（发放后在 Player 上发布实体事件 `event.EnterFirst`）、新建时的角色名校验（enter×profile） |
+| `game/components/<功能>/` | 组件逻辑（宿主接口 `Owner`，工厂 `NewComponent`），文件名与包名同名（`bag/bag.go`）；2026-11-16 起 `//roost:component` 类型号、`CompType<X>` 与工厂登记也在这里（模块清单 `component_package`，实体字段写 `comp:"<包>.CompType<X>"`）；别的功能的联动（`<功能>_<对方>.go`，含 `//roost:listen` 监听）也在这里 |
+| `game/event/` | 第七个固定层（2026-11-16 起）：实体事件定义，每个模块一个 `<模块>.go`，只放值类型，只 import 标准库与 `db`（安装器检查）；见 [Nest 与实体 §3A](../../docs/framework/guide/02-nest-entity.md#3a-实体事件) |
+| `game/controllers/` | 一个包（2026-11-16 起）：生成器所有的 `controller.go`（Controller、FromRegistry、推送辅助、按模块懒建状态、启动期依赖检查 `CheckAtStart`）；每个模块一个 `<模块>.go`、联动 `<模块>_<对方>.go`，测试同名加 `_test`；不允许子目录 |
+| `game/view/` | 只放接口：`component_<功能>.go`（组件接口与 `<功能>Holder`，Holder 里除访问器外还可列宿主方法，模块带来）、`entity_<实体>.go`（`<实体>Entity`，`roost generate` 生成）、`holder_entities_gen.go`（每个 Holder 一个窄接口 `I<功能>Entity`，handler 的参数类型，生成）。组件包、`game/modules/login` 与联动只依赖它，所以不会反向引用实体包 |
+| `game/entities/<实体>/` | 实体本体、生成文件（`*_gen_wire.go`：组件访问器与纯 DAO 交接的宿主方法；`<实体>_event_gen.go`：实体事件监听登记；`lifecycle_gen.go`）与手写的宿主方法 `<模块>.go`；组件包写法的组件不再有 `<x>_component.go` 接线文件 |
 | `internal/access/player/` | 玩家接入层：mod_gen.go 与 protocols_gen.go（各功能 controller 接口、注册函数、总入口与推送编码器）；派发层是 core 的 `infra/network/playeraccess` |
 
 ## 4. roost.yaml
@@ -295,7 +297,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `statslog` | — | 运行时、Entity 和 Nest 周期统计 |
 | `configdata` | — | 不可变配置快照加载和热更（与 `config` feature 配合成完整配置管线）；自带运维命令 `configdata.reload` / `configdata.rollback` / `configdata.status`（经 ops `/admin/execute`） |
 | `etcd` | — | 注册发现、watch、选主和本地镜像 |
-| `redis` | — | Redis、pipeline、pub/sub（单实例锁后端 `kitredis.SingletonStore` 与之共用 `redis.*` 配置） |
+| `redis` | — | Redis、pipeline、pub/sub |
 | `mongo` | — | Mongo client、collection、session 和索引策略 |
 | `nats` | — | NATS、JetStream、RPC 和 Bus |
 | `syncbus` | `nats` | NATS 或 JetStream 同步 Bus（运行期缺省前缀 `roost.sync`；生成配置写 `<project>.sync`） |
@@ -428,9 +430,10 @@ Makefile 也提供了对应入口，例如：
     make generate-changed
     make test
 
-`--entity` 会自动完成 Component 工厂注册、窄 Entity 接口、Manager、字段 tag 和 DAO import；
-Entity wire 会生成 Component/DAO getter，
-不需要手工编辑这些接线。玩法方法写在 `<name>_component.go`，持久化/同步字段写在
+`--entity` 会自动完成 Component 工厂注册、Manager、字段 tag、DAO import，并写出
+`game/view/component_<name>.go`（组件接口 `<Name>` 与 `<Name>Holder`）；`roost generate` 生成 view 访问器、
+handler 用的窄接口 `view.I<Name>Entity`（2026-11-16 起不再在实体包里声明 `I<Name>Entity`）与 Component/DAO getter，
+不需要手工编辑这些接线。玩法方法写在 `<name>_component.go`（handler 要调的同时列进 view 接口），持久化/同步字段写在
 `db/def` 并通过生成的 getter/setter 访问。完整流程见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md` 和 `docs/ENTITY_COMPONENT.zh-CN.md`。
 
@@ -658,8 +661,9 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 **配置声明检查**：每个服务配置里的框架段（ops、redis、dataengine、saga、框架服务的 key_prefix…）由 Wiring Mod 自己的配置声明生成——声明里标了 `example` 的键写入配置，键上方的注释来自声明的 `help`；生成的 player TCP 接入层与 RPC 客户端 Mod 也带声明，`add transport tcp` 补的键来自同一份声明。业务服务与 Mod 一样实现 `ConfigSchema()`，用 `app.SchemaOf` + `app.LoadConfig` 读自己的键。doctor 的相关检查：
 
 - `config-schema:<service>`：工程能编译时 `go build` 一次进程，对每个服务运行 `<bin> <service> --print-config-schema` 读回全部声明（含业务声明），检查开发配置、生产示例与 k8s Secret 示例——值不合声明、框架段里没有任何声明的键为 FAIL，别的服务的键为 WARN，只属于业务的段里拼错的键为 FAIL。
-- `config-sections:<service>`（只读，维护者 2026-10-17 决定）：按服务实际注册的 Mod（共享 Mod 加 `effectiveServiceMods`，与生成器同一份计算）找开发配置、生产示例与 k8s Secret 示例（`stringData` 的 `config.yaml`）里缺的顶层配置段——每个 Mod 的起始段、托管框架服务的段；带 DataEngine 的服务还有 `redis:` 与 `singleton:` 段，且 `singleton.enabled` 须为 `true`。缺段为 WARN（不让 doctor 失败），WARN 里给出可直接追加到该文件末尾的文本（生产示例与 Secret 已按生产改写：地址 `CHANGE_ME`、流副本 3；Secret 已缩进四格）。典型来源：在 `add` 命令之外手改 `roost.yaml` 加 Mod 后 `project sync`（sync 不追加配置段，行为不变），或修复前走过 `add access` / `add rpc` 的工程。业务有意删掉的段同样会报——不需要时忽略；想消掉提示又保持代码默认值，留一个空段（例如 `saga: {}`）。“有没有”只看行首的 `<key>:`，段里的值不比较。doctor 没有另外的豁免开关。
+- `config-sections:<service>`（只读，维护者 2026-10-17 决定）：按服务实际注册的 Mod（共享 Mod 加 `effectiveServiceMods`，与生成器同一份计算）找开发配置、生产示例与 k8s Secret 示例（`stringData` 的 `config.yaml`）里缺的顶层配置段——每个 Mod 的起始段、托管框架服务的段；带 DataEngine 的服务还有 `etcd:` 与 `singleton:` 段，且 `singleton.enabled` 须为 `true`。缺段为 WARN（不让 doctor 失败），WARN 里给出可直接追加到该文件末尾的文本（生产示例与 Secret 已按生产改写：地址 `CHANGE_ME`、流副本 3；Secret 已缩进四格）。典型来源：在 `add` 命令之外手改 `roost.yaml` 加 Mod 后 `project sync`（sync 不追加配置段，行为不变），或修复前走过 `add access` / `add rpc` 的工程。业务有意删掉的段同样会报——不需要时忽略；想消掉提示又保持代码默认值，留一个空段（例如 `saga: {}`）。“有没有”只看行首的 `<key>:`，段里的值不比较。doctor 没有另外的豁免开关。
 - `config-across-services`（维护者 2026-10-19 批准）：同一工程各服务之间——声明里带 `shared` 的共享资源名（`nats.prefix`、效果流名与主题前缀及 saga 的 start 效果流、saga 库 / 流 / 主题、Remote 库与 L2 前缀、`etcd.service_prefix`、`singleton.key_prefix`、业务时区 `time.business_timezone` / `time.business_day_start` 等）在开发配置集与生产示例里各自必须一致；开发配置集里带 `listen` 的监听地址（`ops.addr`、`web.addr`、`player_access.tcp.addr`，开关打开时）端口不得冲突，带 `unique` 的 `etcd.advertise_addr` 各服务不同。FAIL 并点名服务、键与取值。与 `roost config check --all` 同一个实现（`checkConfigAcrossServices`），不需要编译工程。
+- `singleton:etcd-consistent`（2026-11-16）：开发配置集与生产示例里，所有打开单实例锁（`singleton.enabled: true`）或为业务时间高水位打开同一存储（`time.logic_offset` 非 0）的服务都写了 `etcd.endpoints` 或 `etcd.endpoints_env`，而且取值相同（地址按集合比较；用 `_env` 的按变量名比较，混用报 FAIL），`singleton.key_prefix` 也相同。Live、Gate 与 cellworldhost 的 IdentityChecker 要读别的进程的锁键，只会去自己配置的 etcd 与前缀下找。不一致为 FAIL，点名服务与取值。
 - `config-check:<service>`：用同一个编译好的进程对每个服务的开发配置运行 `<bin> <service> --check-config --config configs/service/config.<service>.yaml`（与进程启动前同一处检查）：除键的声明外，还有各 Mod 配置结构体的跨键规则与跨 Mod 一致性规则（`app.ModConfigCrossChecker`，例如同进程有 DataEngine 时显式写的 `saga.start_effect_stream` / `start_effect_prefix` 必须等于 `dataengine.effects.stream` / `subject_prefix`）。不通过为 FAIL，详情是进程的报错与可直接复跑的命令。生产示例与 Secret 示例带占位值，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项。
 - `entity-owner`：有实体声明 `service=` 时出现（[§6.w](#6w-实体归属服务roostentity-service)）：`service=` 写错为 FAIL；别的服务的代码构造了归属 kind 的 Sender 为 FAIL，详情写出文件与归属服务。
 - `remote-runtime`：工程里有 `remote=managed` 实体（声明了 `service=` 的除外，它们按 `entity-owner` 检查归属服务）时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
@@ -732,7 +736,7 @@ total + 5s 为 FAIL（未 sync 或手改模板，会被 SIGKILL）；三份配�
 示例配置解析失败或时长非法时 WARN 只指明文件与键，不附 `Set it to` 建议（dev 配置时长非法为 FAIL）；
 OK / WARN 行显示磁盘上部署模板的实际宽限期；配置里 `singleton.enabled: true` 时所需合计另加 3s。
 
-App 单实例锁（[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/APP-SINGLETON-LOCK-2026-10-05.md) §6.3）：项目里有 `redis` Mod 或带 `dataengine` 的服务时，bootstrap 生成 `a.Singleton(kitredis.SingletonStore)`；带 `dataengine` 的服务配置写 `singleton.enabled: true`（`key_prefix: roost:<project>:singleton`、15s / 3s / 5s / 30s），没有 `redis:` 段时只补配置段（开发 compose 随之带 redis），其他服务写同一段的 `enabled: false`；`add mod` / `add saga` / `add access` 之后才带上 dataengine 的服务把未改过的 `enabled: false` 段翻成 `true`（改过的段保持并 WARN）。服务因 `add mod`、`add saga`、`add access`（带入 nest → dataengine / mongo / nats）、`add rpc`（拥有者带入 nats）多出的 Mod，配置段追加进该服务的 dev / prod 示例配置与 k8s Secret 示例，只追加文件里还没有的顶层段、已有的值不动；在这些命令之外手改 roost.yaml 再 `project sync` 不追加，`roost project doctor` 的 `config-sections:<service>` 以 WARN 列出缺的段与要追加的文本（[§13](#13-doctordiff-和升级)），不改文件。启用的服务部署侧的启动等待覆盖 `singleton.startup_wait`：k8s `startupProbe` 为 `startup_wait + 30s`（默认 60s），shell 的 `HEALTH_ATTEMPTS` 默认 `startup_wait + dataengine.startup_timeout` 次（90，其他服务 30；`dataengine.startup_timeout` 缺省 60s，saga 设计第 5 批），compose `start_period` 90s（其他服务 30s）。
+App 单实例锁（[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/APP-SINGLETON-LOCK-2026-10-05.md) §6.3）：项目里有 `etcd` Mod 或带 `dataengine` 的服务时，bootstrap 生成 `a.Singleton(kitetcd.SingletonStore)`（2026-11-16 起锁存 etcd，与服务发现共用一个集群；之前是 `kitredis.SingletonStore`，已删除）；带 `dataengine` 的服务配置写 `singleton.enabled: true`（`key_prefix: /<project>/singleton`、15s / 3s / 5s / 35s，ttl 必须是整秒；startup_wait 2026-11-16 起由 30s 改为 35s，覆盖 etcd 换 leader 时租约续满一次的最坏情况），没有 `etcd:` 段时只补配置段、不加 etcd Mod（开发 compose 随之带 etcd），其他服务写同一段的 `enabled: false`；`add mod` / `add saga` / `add access` 之后才带上 dataengine 的服务把未改过的 `enabled: false` 段翻成 `true`（改过的段保持并 WARN）。服务因 `add mod`、`add saga`、`add access`（带入 nest → dataengine / mongo / nats）、`add rpc`（拥有者带入 nats）多出的 Mod，配置段追加进该服务的 dev / prod 示例配置与 k8s Secret 示例，只追加文件里还没有的顶层段、已有的值不动；在这些命令之外手改 roost.yaml 再 `project sync` 不追加，`roost project doctor` 的 `config-sections:<service>` 以 WARN 列出缺的段与要追加的文本（[§13](#13-doctordiff-和升级)），不改文件。启用的服务部署侧的启动等待覆盖 `singleton.startup_wait`：k8s `startupProbe` 为 `startup_wait + 30s`（65s，向上取整到 33 次探测；其他服务 60s），shell 的 `HEALTH_ATTEMPTS` 默认 `startup_wait + dataengine.startup_timeout` 次（95，其他服务 30；`dataengine.startup_timeout` 缺省 60s，saga 设计第 5 批），compose `start_period` 95s（其他服务 30s）。
 
 新项目还会生成 `.github/workflows/ci.yml`、`dependency-update.yml`、`release.yml`、`deploy-shell.yml`、`deploy-docker.yml`、`deploy-k8s.yml` 和 `security.yml`。普通 CI 使用已经提交的 `go.mod/go.sum`，不会执行 `deps-update` 或 `go get -u`；追踪最新框架由独立依赖升级流水线完成并创建 PR。Release 构建一次不可变二进制包和 OCI 镜像，Shell 使用版本包，Docker 与 Kubernetes 使用同一个镜像 digest。
 

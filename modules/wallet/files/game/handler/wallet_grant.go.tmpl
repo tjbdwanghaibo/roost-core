@@ -1,13 +1,16 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import (
+	"{{MODULE}}/game/components/wallet"
+	"{{MODULE}}/game/view"
+)
 
 // handlerWalletGrant 是服务端发放（奖励、充值到账、GM），不对客户端开放。
 //
 //roost:nest rollback=undo durability=strict
-func handlerWalletGrant(target player.IWalletEntity, key string, amount int64) (int64, error) {
+func handlerWalletGrant(target view.IWalletEntity, key string, amount int64) (int64, error) {
 	if amount <= 0 {
-		return 0, player.ErrWalletAmount()
+		return 0, wallet.ErrAmount()
 	}
-	return target.WalletComp().Apply(key, amount)
+	return target.Wallet().Apply(key, amount)
 }

@@ -17,23 +17,24 @@ state:
     dao: nosync
     comment: MailboxLedger 是邮件模块的领取账本（已到账的邮件 id -> 该邮件的过期时刻），只落库、不下发。
 component: Mailbox
+component_package: game/components/mailbox
 protocols: [MailboxList, MailboxClaim]
 errcodes: [mailbox_invalid, mailbox_attachment]
 verify:
-  packages: [./game/handler, ./game/modules/mailbox, ./game/controllers/mailbox]
+  packages: [./game/handler, ./game/modules/mailbox, ./game/controllers]
   run: ^TestMailbox
   pass: 33
 with:
   enter:
     summary: 玩家进入游戏时把属于他的全服邮件合并进邮箱（PullBroadcasts）；画像缺省取首次进入的时间，会话带着 account 的角色创建时间与区服时改用它们
     verify:
-      packages: [./game/controllers/mailbox]
+      packages: [./game/controllers]
       run: ^TestWithMailboxEnter
       pass: 5
   bag:
-    summary: 道具附件：登记 item 这个附件种类，领取时道具进背包（BagComp().Add），与领取账本同一笔事务
+    summary: 道具附件：登记 item 这个附件种类，领取时道具进背包（Bag().Add），与领取账本同一笔事务
     verify:
-      packages: [./game/modules/mailbox, ./game/handler, ./game/controllers/mailbox]
+      packages: [./game/modules/mailbox, ./game/handler, ./game/controllers]
       run: ^TestWithMailboxBag
       pass: 9
   gm:

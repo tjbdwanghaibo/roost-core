@@ -11,7 +11,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Owner 是 Idle 组件的宿主（Player 的接线见 game/entities/player/idle_component.go）：只列组件用得到的
+//roost:component type={{ID:component:Idle}}
+const CompTypeIdle entity.ComponentType = {{ID:component:Idle}}
+
+// init 登记组件工厂：Player 结构体里 comp:"idle.CompTypeIdle" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeIdle, NewComponent)
+}
+
+// Owner 是 Idle 组件的宿主（模块把它挂在 Player 上：实体字段标签 comp:"idle.CompTypeIdle"）：只列组件用得到的
 // DAO 与别的组件（view 的小接口）。只在实体被 Nest 锁住期间使用。
 type Owner interface {
 	entity.IThreadSafeEntity
@@ -26,7 +34,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/idle_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -35,7 +43,7 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 	return &Component{owner: owner}, nil
 }
 
-func (component *Component) Name() string   { return "idle" }
+func (component *Component) Name() string { return "idle" }
 func (component *Component) Owner() Owner { return component.owner }
 
 // IdleResult 是 view.IdleResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。

@@ -66,7 +66,7 @@ func TestAddGateTurnsEmbeddedTCPIntoAStandaloneGate(t *testing.T) {
 			t.Fatalf("config.game.yaml does not contain %q:\n%s", want, gameConfig)
 		}
 	}
-	for _, want := range []string{"    namespace: gated.access\n", "    addr: 0.0.0.0:7000\n", "    advertise_addr: 127.0.0.1:7000\n", "  enabled: true\n  key_prefix: roost:gated:singleton\n", "etcd:\n"} {
+	for _, want := range []string{"    namespace: gated.access\n", "    addr: 0.0.0.0:7000\n", "    advertise_addr: 127.0.0.1:7000\n", "  enabled: true\n  key_prefix: /gated/singleton\n", "etcd:\n"} {
 		if !strings.Contains(gateConfig, want) {
 			t.Fatalf("config.gate.yaml does not contain %q:\n%s", want, gateConfig)
 		}

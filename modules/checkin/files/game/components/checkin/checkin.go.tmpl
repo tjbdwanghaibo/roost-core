@@ -5,13 +5,22 @@ import (
 	"fmt"
 	"time"
 
+	"{{MODULE}}/game/event"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
-// Owner 是 Checkin 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Checkin}}
+const CompTypeCheckin entity.ComponentType = {{ID:component:Checkin}}
+
+// init 登记组件工厂：Player 结构体里 comp:"checkin.CompTypeCheckin" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeCheckin, NewComponent)
+}
+
+// Owner 是 Checkin 组件的宿主：整个 Player（组件经它发奖，并在它上面发布签到事件）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 // Component 是每日签到的业务逻辑。它不保存事务会改的状态：进度在 PlayerDao.Checkin 里，
@@ -21,7 +30,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/checkin_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -52,8 +61,8 @@ type CheckinResult = view.CheckinResult
 // 同一个业务日第二次领返回 checkin_done，不写任何字段。“领过没有”记在签到自己的进度里（LastDay），
 // 所以发奖用货币组件的 Add、不占货币的去重窗口；进度与余额在同一笔事务里，任何一步被拒绝都一起回滚。
 //
-// 签到成功之后执行别的功能登记的钩子（checkin_hooks.go 的 OnCheckinClaimed），同一笔事务：
-// 钩子返回错误时这一次签到整笔回滚。
+// 签到成功之后在 Player 上发布 event.CheckinClaimed（别的功能用 //roost:listen 监听），同一笔事务：
+// 监听返回错误时这一次签到整笔回滚。
 func (component *Component) Claim(nowUnixMilli int64) (CheckinResult, error) {
 	now := time.UnixMilli(nowUnixMilli)
 	today := int64(clock.BusinessDay(now))
@@ -80,7 +89,7 @@ func (component *Component) Claim(nowUnixMilli int64) (CheckinResult, error) {
 	state.SetStreak(streak)
 	state.SetTotal(state.GetTotal() + 1)
 	result := CheckinResult{Streak: streak, Reward: reward, Balance: balance}
-	if err := runCheckinClaimed(component.owner, result, nowUnixMilli); err != nil {
+	if err := component.owner.Publish(event.CheckinClaimed{Streak: result.Streak, Reward: result.Reward, Balance: result.Balance, NowUnixMilli: nowUnixMilli}); err != nil {
 		return CheckinResult{}, err
 	}
 	return result, nil

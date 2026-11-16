@@ -1,0 +1,17 @@
+[drill 00:01:16] lock key /sgd82a483/singleton:game:1000, ttl 15s, renew 3s; A ops 127.0.0.1:42600, B ops 127.0.0.1:43600
+[drill 00:01:16] lock-a started (pid 7538, dir /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-singleton-drill.gN4pUt/sgd82a483)
+[drill 00:01:18] lock-b started (pid 7551, dir /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-singleton-drill.gN4pUt/b)
+[drill 00:01:27] step 1 PASS: B waits at start-up while A holds the lock
+[drill 00:01:27] A frozen (SIGSTOP)
+[drill 00:01:43] step 2 PASS: B took over 15s after A froze
+[drill 00:01:43] A resumed (SIGCONT)
+[drill 00:01:44] step 3 PASS: A failed stop (exit 1) with the lost-lock log; B still serving
+[drill 00:01:51] etcd stopped
+[drill 00:02:00] B failed stop 9s after etcd stopped (exit 1)
+[drill 00:02:11] etcd restarted on the same data directory
+[drill 00:02:11] lock-c started (pid 7876, dir /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-singleton-drill.gN4pUt/sgd82a483)
+[drill 00:02:30] step 4 PASS: B failed stop while etcd was down; the same sid started again 18s after etcd came back
+[drill 00:02:30] lock-a: 4 ERROR log lines
+[drill 00:02:30] lock-b: 5 ERROR log lines
+[drill 00:02:30] lock-c: 0 ERROR log lines
+[drill 00:02:30] PASS singleton etcd drill

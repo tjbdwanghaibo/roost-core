@@ -2,7 +2,7 @@ package handler
 
 import (
 	"{{MODULE}}/protocol/pb"
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 )
 
 // handlerTaskClaim 领取一个已完成任务在当前周期的奖励：每日任务每个业务日一次、每周任务每个业务周一次、
@@ -10,8 +10,8 @@ import (
 // 发奖与“领过”的事实在同一笔事务里。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTaskClaim(target player.ITaskEntity, request *pb.TaskClaimRequest, nowUnixMilli int64) (*pb.TaskClaimResponse, error) {
-	result, err := target.TaskComp().Claim(request.TaskID, nowUnixMilli)
+func handlerTaskClaim(target view.ITaskEntity, request *pb.TaskClaimRequest, nowUnixMilli int64) (*pb.TaskClaimResponse, error) {
+	result, err := target.Task().Claim(request.TaskID, nowUnixMilli)
 	if err != nil {
 		return nil, err
 	}

@@ -3,7 +3,7 @@ package handler
 import (
 	"time"
 
-	player "example.com/planet/game/entities/player"
+	"example.com/planet/game/view"
 	gift "example.com/planet/saga/gift"
 )
 
@@ -11,8 +11,8 @@ import (
 // saga's start intent in the same WAL record.
 //
 //roost:nest rollback=undo durability=strict
-func handlerStartGift(target player.IWalletEntity, from int64, to int64, amount int64, businessKey string) error {
-	if target.WalletComp().Gold() < amount {
+func handlerStartGift(target view.IWalletEntity, from int64, to int64, amount int64, businessKey string) error {
+	if target.Wallet().Gold() < amount {
 		return nil
 	}
 	state, err := gift.EncodeState(gift.State{From: from, To: to, Amount: amount})

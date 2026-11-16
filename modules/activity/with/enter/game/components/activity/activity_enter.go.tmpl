@@ -1,0 +1,14 @@
+package activity
+
+import "{{MODULE}}/game/event"
+
+// OnEnterFirst 在新玩家首次初始化（建档）的那笔 Player 事务里，以建档时间激活 created 触发的活动，与 Enter.Initialized
+// 一起提交或回滚。只在 Player 上发布，所以只对挂在 Player 上的活动组件生效。
+//
+// priority=40 保持改成事件之前的执行顺序：原来的首次初始化钩子按登记名字母序执行（activity、casual、profile、
+// profile.attribute），这里排第一。
+//
+//roost:listen priority=40
+func (c *Component) OnEnterFirst(ev event.EnterFirst) error {
+	return c.Reconcile("created", ev.NowUnixMilli)
+}

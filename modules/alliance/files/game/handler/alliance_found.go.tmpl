@@ -1,10 +1,9 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"time"
 
-	alliance "{{MODULE}}/game/entities/alliance"
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
@@ -21,8 +20,8 @@ import (
 // notice; no effect is recorded.
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceFound(target alliance.IAllianceRosterEntity, founder alliance_member.IAllianceGuardEntity, requestID string, name string, homeSID int32, openJoin bool, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster, guard := target.AllianceRosterComp(), founder.AllianceGuardComp()
+func handlerAllianceFound(target view.IAllianceRosterEntity, founder view.IAllianceGuardEntity, requestID string, name string, homeSID int32, openJoin bool, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, guard := target.AllianceRoster(), founder.AllianceGuard()
 	founderID := guard.PlayerID()
 	retention := time.Duration(retentionSeconds) * time.Second
 	if _, decided := guard.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
@@ -66,12 +65,12 @@ func handlerAllianceFound(target alliance.IAllianceRosterEntity, founder allianc
 // confirms the guard with a direct ResolveGuard afterwards (a lost one is
 // healed from this roster). The receipt makes a retry a
 // replay; an alliance the guard's deadline settled first (alliance_expired,
-// AllianceRosterComponent.Settle) refuses the late founding the same way. The answer
+// allianceroster.Component.Settle) refuses the late founding the same way. The answer
 // names the founder's membership (Member) for the service's notice.
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceEstablish(target alliance.IAllianceRosterEntity, requestID string, founderID int64, name string, homeSID int32, openJoin bool, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster := target.AllianceRosterComp()
+func handlerAllianceEstablish(target view.IAllianceRosterEntity, requestID string, founderID int64, name string, homeSID int32, openJoin bool, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRoster()
 	var joined alliancerule.MemberChange
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		if err := roster.Found(name, founderID, homeSID, openJoin, requestID, nowUnix); err != nil {

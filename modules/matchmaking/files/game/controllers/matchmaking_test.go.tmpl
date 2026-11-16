@@ -1,0 +1,32 @@
+package controllers
+
+import (
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+func TestMatchmakingEndpointRequiresIdentityAndRequest(t *testing.T) {
+	c := &Controller{}
+	if _, err := c.HandleMatchEnqueue(nil, &pb.MatchEnqueueRequest{}); err == nil {
+		t.Fatal("anonymous queue accepted")
+	}
+	if _, err := c.HandleMatchStatus(&playeraccess.Context{PlayerID: 1}, nil); err == nil {
+		t.Fatal("missing request accepted")
+	}
+	if _, err := FromRegistry(nil); err == nil {
+		t.Fatal("nil registry accepted")
+	}
+}
+
+func TestMatchmakingControllerCanRegisterBeforeModuleStart(t *testing.T) {
+	// Controller 由生成的 FromRegistry 构造（它只要求 Nest 客户端）；这里直接给一个没有 matchmaking Runtime 的 Registry。
+	c := &Controller{registry: app.NewRegistry(viper.New())}
+	response, err := c.HandleMatchStatus(&playeraccess.Context{PlayerID: 1}, &pb.MatchStatusRequest{})
+	if err != nil || response.Code == 0 {
+		t.Fatalf("unstarted runtime did not reject request: %+v %v", response, err)
+	}
+}

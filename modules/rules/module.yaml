@@ -10,6 +10,6 @@ access:
   transport: tcp
 protocols: [RulesGet, RulesNow]
 verify:
-  packages: [./game/components/rules, ./game/handler, ./game/controllers/rules]
+  packages: [./game/components/rules, ./game/handler, ./game/controllers]
   run: ^TestRules
   pass: 10

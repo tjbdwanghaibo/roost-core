@@ -23,30 +23,32 @@
 
 ### 服务端入口
 
-- `game/controllers/enter` 的 `HandleEnterGame`、`HandleEnterCreate`：两个协议的端点。
+- `game/controllers/enter.go` 的 `HandleEnterGame`、`HandleEnterCreate`：两个协议的端点。
 - `game/modules/login/enter.go` 的 `Enter(ctx, registry, entering, load)`：一次进入的骨架，顺序是进入前检查 → `load` → 进入钩子。工程改写进入端点时把自己的加载与初始化包成 `load` 交给它。
 - `game/modules/login/enter_create.go` 的 `EnterSession(ctx, registry, entering, Loads{LoadOrCreate, Existing})`：端点实际调的入口，按 `CreateFirst` 选一种 `load` 再走 `Enter`。
 - `game/modules/login/enter_create.go` 的 `Create(ctx, registry, creating, CreateSteps{Ensure, Commit})`：一次新建的骨架，六步见下面“一致性”。
 - `game/modules/login/enter_create.go` 的 `Assess(ctx, registry, entering, built)`：算出该告诉客户端什么（`Status{Code, Reason, NeedCreate}`），不推送、不断开。
-- `game/controllers/enter/enter_status.go` 的 `Announce(ctx, registry, entering, sessionID)`：调 `Assess`，把结果作为 `EnterStatus` 推给这条会话；进入前检查拒绝时推完等 `StatusCloseDelay`（300 毫秒）再断开这名玩家在本进程的全部会话。
+- `game/controllers/enter.go` 的 `Announce(ctx, registry, entering, sessionID)`：调 `Assess`，把结果作为 `EnterStatus` 推给这条会话；进入前检查拒绝时推完等 `StatusCloseDelay`（300 毫秒）再断开这名玩家在本进程的全部会话。
 - 不经 `Enter` 的工程可以自己调 `RunEntering`、`RunEntered`、`RunCreating`、`RunCreatePrepare`（都在 `game/modules/login`）。
-- Nest handler（`game/handler/enter_*.go`，都不对客户端开放）：`handlerEnterInit`（加载或创建那条路的首次初始化）、`handlerEnterExisting`（只进入已建成的）、`handlerEnterCreate`（新建事务）、`handlerEnterBuilt`（只读，问“建成了没有”）。前三个是 `rollback=undo durability=strict`。
-- 组件 `EnterComp()`（逻辑在 `game/components/enter/enter.go`，Player 的薄接线在 `game/entities/player/enter_component.go`）：`Init(nowUnixMilli)`、`Existing()`、`Create(name, nowUnixMilli)`、`Built()`，只能在持有 Player 锁的 Nest 事务里调。
+- Nest handler（`game/handler/enter_*.go`，都不对客户端开放，参数是生成的 `view.IEnterEntity`）：`handlerEnterInit`（加载或创建那条路的首次初始化）、`handlerEnterExisting`（只进入已建成的）、`handlerEnterCreate`（新建事务）、`handlerEnterBuilt`（只读，问“建成了没有”）。前三个是 `rollback=undo durability=strict`。
+- 组件 `Enter()`（对外接口 `view.Enter` 在 `game/view/component_enter.go`；逻辑、类型号 `enter.CompTypeEnter` 与工厂登记在 `game/components/enter/enter.go`）：`Init(nowUnixMilli)`、`Existing()`、`Create(name, nowUnixMilli)`、`Built()`，只能在持有 Player 锁的 Nest 事务里调。宿主方法 `view.EnterHolder`：`EnterState()` 由生成器交接 `PlayerDao.Enter`，`GrantFirstEnter(nowUnixMilli)` 手写在 `game/entities/player/enter.go`（调 `gamelogin.GrantFirstEnter`）。
 
-### 登记点
+### 登记点与实体事件
 
-全部只在 `init` 里登记；空名、nil、重名直接 panic；执行按名字排序。
+事务之外的登记点全部只在 `init` 里登记；空名、nil、重名直接 panic；执行按名字排序。事务之内的两处是实体事件（`game/event/enter.go`）：别的模块在自己的组件或 Player 的方法上标 `//roost:listen [priority=N]` 监听，`roost generate` 按优先级排好登记顺序（大的先；同优先级实体自己的先，再按组件类型号）。
 
 | 登记点 | 所在文件 | 什么时候被调 | 在不在事务里 | 失败的后果 |
 | --- | --- | --- | --- | --- |
 | `OnEntering(name, Check)` 进入前检查 | `game/modules/login/enter.go` | 加载或创建 Player 之前；`EnterGame`、`EnterCreate`、`Announce` 用的是同一组 | 不在，只读 | 第一个拒绝就停下，端点把它的码答给客户端；不加载、不创建、不跑钩子。拒绝要返回带码错误 |
 | `OnEntered(name, Hook)` 进入钩子 | `game/modules/login/enter.go` | 首次初始化提交之后，每次进入都调 | 不在 | 只记一条 Warn，不让登录失败，下一次进入再调 |
-| `gamelogin.OnFirstEnter(name, FirstEnterHook)` 首次初始化钩子 | `game/modules/login/enter_hooks.go` | 新玩家建成的那一笔事务里（两条路都经过它） | 在，同一把 Player 锁 | 整笔回滚，下次再做；只能改当前玩家的 DAO，不能调服务、发消息 |
-| `firstEnter` | `game/modules/login/enter_first.go` | 同上，排在 `OnFirstEnter` 的钩子之前 | 在 | 同上。这个文件归工程，初始发放写在这里 |
+| 实体事件 `event.EnterFirst{NowUnixMilli}` 首次初始化 | `game/modules/login/enter_first.go` 的 `GrantFirstEnter` 发布 | 新玩家建成的那一笔事务里（两条路都经过它），排在 `firstEnter` 之后 | 在，同一把 Player 锁 | 整笔回滚，下次再做；只能改当前玩家的 DAO，不能调服务、发消息。现在的监听与优先级：activity 40、casual 配方 30（Player 上）、profile 20、attribute 10（沿用改成事件之前按名字字母序的顺序） |
+| `firstEnter` | `game/modules/login/enter_first.go` | 同上，排在 `EnterFirst` 的监听之前 | 在 | 同上。这个文件归工程，初始发放写在这里 |
 | `RequireCreateFirst(name, rule)` | `game/modules/login/enter_create.go` | 每次判断会话走哪条路 | 不在 | 全工程只能登记一条，第二次登记 panic |
 | `OnCreating(name, CreateCheck)` 新建前检查 | `game/modules/login/enter_create.go` | `EnterCreate` 里，进入前检查之后、建档之前 | 不在，只读 | 带码拒绝，什么都没写。名字的格式规则放这里 |
 | `OnCreatePrepare(name, CreateStep)` 新建步骤 | `game/modules/login/enter_create.go` | 空档建好之后、新建事务之前 | 不在 | 这一次新建到此为止，玩家仍是没建成；必须可以重复执行。全服唯一占名放这里 |
-| `gamelogin.OnCreate(name, CreateHook)` 新建钩子 | `game/modules/login/enter_hooks.go` | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里 |
+| 实体事件 `event.EnterCreate{Name, NowUnixMilli}` 新建 | `game/components/enter/enter.go` 的 `Create` 发布 | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里（profile 组件的 `OnEnterCreate`） |
+
+测试里的隔离：这些登记表是进程级的，各模块的 controller 与测试同在 `game/controllers` 一个包，同装的模块在 `init` 里登记的检查与钩子都在同一个测试二进制里（rehome 的进入前检查在没有 Registry 时不放行，会让别的模块的进入场景被拒）。场景测试开头写 `t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("自己的登记名"))`，把五张表（进入前检查、进入钩子、新建前检查、新建步骤、`RequireCreateFirst` 的规则）临时收窄到这几个名字，用例结束时换回；名字没登记过直接 panic。它只给测试用，用它的测试不能 `t.Parallel`。
 
 检查与钩子拿到的 `Entering.Claims` / `Entered.Claims` / `Creating.Claims` 是会话的 claims，可以为 nil，与会话共用同一个 map，约定只读。`Entered` 还带 `First` 与 `FirstAtUnixMilli`（首次初始化提交时的业务时间，之后每次进入都是同一个值，可以当注册时间用）。
 
@@ -66,14 +68,14 @@
 
 删过档的玩家在两条路上都得到框架的 `entity_deleted`；进入前检查与名字规则的拒绝原样透出登记方的码。
 
-**日志**：新建提交、首次进入与每次进入确认，记录玩家、名字或 first；game-demo 的覆盖端点同步处理。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/enter/enter_create.go`, `game/controllers/enter/enter_game.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：新建提交、首次进入与每次进入确认，记录玩家、名字或 first；game-demo 的覆盖端点同步处理。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/enter.go`, `game/controllers/enter.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
 - **不做鉴权。** 握手票据怎么验、玩家号从哪来不归它管。模块安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`，但生成的 `auth.go` 仍是一律拒绝的桩，监听也没有打开（`roost config enable player-tcp` 没有执行），所以单装 enter 时真实客户端连不上。
-- **不管名字规则。** 没有任何功能登记 `OnCreating` / `OnCreate` 时，`EnterCreate` 的名字没人看，可以为空；唯一的限制是 256 字节的请求边界。在 `EnterGame` 里直接建成的玩家没有名字。
+- **不管名字规则。** 没有任何功能登记 `OnCreating`、也没有 `event.EnterCreate` 的监听时，`EnterCreate` 的名字没人看，可以为空；唯一的限制是 256 字节的请求边界。在 `EnterGame` 里直接建成的玩家没有名字。
 - **不决定谁“先新建”。** 没有人调 `RequireCreateFirst` 时永远是加载或创建。
-- **进入钩子不是事务的一部分。** 它在首次初始化提交之后执行，失败只记日志，可能重复（重连、重发登录帧都会再调）。必须成立的事写进 `enter_first.go` 或 `OnFirstEnter`。
+- **进入钩子不是事务的一部分。** 它在首次初始化提交之后执行，失败只记日志，可能重复（重连、重发登录帧都会再调）。必须成立的事写进 `enter_first.go` 或 `event.EnterFirst` 的监听。
 - **`EnterStatus` 只是告知，不是关口。** 推送可能丢、可能过时；判断不了时（检查问不到权威、读档出错）什么都不推。断开时断的是这名玩家在本进程的全部会话（传输没有只断一条会话的入口），慢的连接可能没收到那一帧就被断开。权威判断在 `EnterGame` / `EnterCreate`。`Announce` 要读档，调用方必须在后台执行并自己限量。
 - **一致性与幂等：**
   - 加载或创建：`GetOrCreate` 与首次初始化是两步。建档之后、初始化之前崩溃，下一次进入补上；初始发放与 `Initialized` 在同一笔事务里，恰好生效一次；同一名新玩家并发登录最后是同一个实体。
@@ -90,19 +92,19 @@
 ## 复用方式
 
 - **需求正好是它：** `roost module add enter`。没有依赖；安装时一并打开玩家 TCP 接入与自身视图。要让真实客户端连上，再装 `login`（或自己实现 `auth.go`）并执行 `roost config enable player-tcp`。
-- **新玩家要发初始资源：** 改 `game/modules/login/enter_first.go` 的 `firstEnter`，直接调同一实体上别的组件，例如 `host.Wallet().Add(100)`。用不留回执的入口，“只发一次”由标记保证。模块之间的联动不改这个文件，在自己的文件里登记 `gamelogin.OnFirstEnter("名字", func(owner view.PlayerEntity, nowUnixMilli int64) error {...})`。
+- **新玩家要发初始资源：** 改 `game/modules/login/enter_first.go` 的 `firstEnter`，直接调同一实体上别的组件，例如 `host.Wallet().Add(100)`。用不留回执的入口，“只发一次”由标记保证。模块之间的联动不改这个文件，在自己的组件（或 Player）上写 `//roost:listen [priority=N]` 方法 `OnEnterFirst(ev event.EnterFirst) error`，放在自己模块的 `with/enter/` 里。
 - **别的功能要在玩家进入后顺带做事**（上线登记、拉离线数据、推一帧）：在自己的包的 `init` 里调 `gamelogin.OnEntered("名字", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {...})`。
 - **要在进入之前挡住某些玩家**（封停、维护白名单、不归本服）：`gamelogin.OnEntering("名字", func(ctx context.Context, registry *app.Registry, entering gamelogin.Entering) error {...})`，拒绝时返回 `errcode.Define` 出来的带码错误。
-- **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档用 `gamelogin.OnCreate`。
-- **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers/enter` 的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
+- **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档在自己的组件上监听 `event.EnterCreate`（只改同一个 Player）。
+- **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers`（`enter.go`）的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
 - **不要改的文件：** `game/modules/login/enter.go`、`game/modules/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/components/enter/enter.go` 里标记与发放同一笔事务的写法。
-- **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化（它的新玩家初始化写在自己覆盖的 `game/modules/login/enter_first.go` 里）。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
+- **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter.go` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化（它的新玩家初始化写在自己覆盖的 `game/modules/login/enter_first.go` 里）。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
 
 ## 联动
 
 本模块的 `with/`：
 
-- `with/profile`：`EnterCreate` 的名字按档案模块的 `NormalizeProfileName` 校验（不合规在建档之前被拒）；没装 naming 时在新建事务里写进档案，装了 naming 时经它的唯一命名入口占名。
+- `with/profile`：`EnterCreate` 的名字按档案模块的 `NormalizeProfileName` 校验（不合规在建档之前被拒，`OnCreating`）；没装 naming 时在新建事务里写进档案（profile 组件监听 `event.EnterCreate`，`game/components/profile/enter_profile.go`），装了 naming 时经它的唯一命名入口占名（`OnCreatePrepare`）。
 
 别的模块的 `with/enter`：
 
@@ -113,9 +115,9 @@
 - `servertime`：每次进入把服务器的业务时间推给客户端。
 - `purchase`：进入后有界拉取待发订单。
 - `alliance`：进入和重连后对账成员展示与 HomeSID。
-- `activity`：首次建档记相对锚点；每次进入惰性对账。
-- `profile`：首次建档事务里设初始 1 级。
-- `attribute`：首次建档事务里建立基础与最终属性。
+- `activity`：首次建档记相对锚点（活动组件监听 `event.EnterFirst`，priority 40）；每次进入惰性对账。
+- `profile`：首次建档事务里设初始 1 级（profile 组件监听 `event.EnterFirst`，priority 20）。
+- `attribute`：首次建档事务里建立基础与最终属性（attribute 组件监听 `event.EnterFirst`，priority 10）。
 - `portal`：只有测试，一条从 HTTP 登录到进入游戏的整链路场景。
 
 `rules` 模块不经 `with/`，直接依赖本模块并登记了 `OnEntered("rules", …)`。
@@ -125,6 +127,6 @@
 `roost module verify` 跑 29 条场景（`^TestEnter`，四个包），与 profile 的联动另 3 条（`^TestWithEnterProfile`）。全部是离线的：
 
 - 新建与进入的事务（`game/handler`）用真实的 Nest 加替身提交器（不落盘，可以拒绝提交来验证回滚），覆盖首次初始化、重复进入、提交被拒后补做、新建恰好一次、并发新建、名字钩子拒绝什么都不写。
-- 骨架与登记点（`game/modules/login`、`game/entities/player`）是纯函数级的场景。
-- `EnterStatus`（`game/controllers/enter`）用玩家传输的替身，验证推送内容、拒绝后断开、判断不了时不推。
+- 骨架与事务外的登记点（`game/modules/login`）是纯函数级的场景；两个实体事件的场景（监听拿到冻结的业务时间、`EnterFirst` 的监听出错时两条路都整笔回滚）在 `game/handler`，测试在自己的 `init` 里直接 `entity.RegisterEventListener`。
+- `EnterStatus`（`game/controllers/enter.go`）用玩家传输的替身，验证推送内容、拒绝后断开、判断不了时不推。
 - 模块自己的场景使用离线持久层；`scripts/test-demo-login.sh` 另外生成 casual + naming，通过真实 HTTP / Robot TCP、Redis Directory、Mongo / WAL 验证新建与进入、两服唯一命名、双 Gate、game 重启后首次金币与购买回执不重复。范围与复跑命令见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。

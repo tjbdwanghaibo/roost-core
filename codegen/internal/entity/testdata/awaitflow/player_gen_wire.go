@@ -44,6 +44,8 @@ func NewPlayer(param *entity.EntityCreateParam) (*Player, error) {
 	// EntityBase
 	e.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, true, param.Mutex, param.Kind)
 	e.EntityBase.SetHooks(e.generatedOnClear, e.generatedOnDestroy)
+	// 实体事件：Publish 经这里按 (kind, 事件类型) 找 init 里登记的监听（<实体>_event_gen.go）。
+	e.EntityBase.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(PlayerKind, e, ev) })
 
 	return e, nil
 }

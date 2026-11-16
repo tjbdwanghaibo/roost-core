@@ -23,10 +23,11 @@
 
 **Nest handler**（`game/handler/match_*.go`，由 `Runtime` 经生成的 Sender 调用，不对客户端开放）：`MatchBegin`（单人记意图）、`MatchTeamBegin`（队伍与全部成员同一笔事务记意图并冻结名单）、`MatchUpdate`（全部成员同一笔事务推进阶段）、`MatchClear`、`MatchRelease`（解除队伍名单冻结）、`MatchState`（只读）、`MatchRoomClosed`（只读：这一局的匹配房关了没有）。写入的 handler 都是 `rollback=undo durability=strict`；两个只读 handler 声明 `durability=memory`（不开事务、不取回滚快照、不写 WAL，在里面改持久字段会 panic）——`MatchState` 是客户端轮询每次都走的路。
 
-**登记点**
+**实体事件**
 
-- `matchmaking.OnMatchmakingStarting(name, func(view.PlayerEntity) error)`（`game/components/matchmaking/matchmaking.go`）：开始排队前的检查。在记排队意图的那笔 Player 事务里、对组里每名成员各执行一次；返回错误即拒绝，整组什么都不写。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。
-- 模块自己登记了 team 的 `OnTeamJoining("matchmaking", …)`：排队中（`Phase` 非空）的玩家不能建队或入队。
+- 拦截事件 `event.MatchmakingStarting{Leader, TeamID, Sequence}`（`game/event/matchmaking.go`）：开始排队前的检查。在记排队意图的那笔事务里、对组里每名成员各在他的 Player 上发布一次；监听返回错误即拒绝，整组什么都不写。监听写在组件或 Player 的方法上，标 `//roost:listen`，只做检查、不改状态。现在唯一的监听是 rehome 联动（换服意图未清除时拒绝）。
+- 模块的组件监听 team 的拦截事件 `event.TeamJoining`（`OnTeamJoining`，priority 20）：排队中（`Phase` 非空）的玩家不能建队或入队。
+- handler 参数是生成的 `view.IMatchmakingEntity`（整队的再加 `view.TeamEntity`）；`BeginMatching` / `UpdateMatching` 收组件，handler 经 `matchmaking.Of` / `matchmaking.Group` 取回。组件、类型号 `matchmaking.CompTypeMatchmaking` 与工厂登记都在 `game/components/matchmaking/matchmaking.go`。
 
 这个检查也覆盖 `cancelled` / `expired` / `matched` 尚未 `MatchClear` 的状态，以及查不到历史的未知结果；不能把取消答复当作引用和回执都已清理。组件拆分漏搬这项登记的问题及真实进程红绿证据见 [B-7 报告](../../docs/maintenance/evidence/social-real-20261114/README.md)。
 已安装模块的工程需要把该登记补回自己的 `game/components/matchmaking`；模块是工程所有的业务源码，升级 core 不会自动改写它。
@@ -43,7 +44,7 @@
 - `matchmaking_unknown`：票已经绑定，但 match 服务里查不到它或它的成局记录，需要人工核对。
 - 整队排队还会原样带回 team 模块的码（没有队伍、不是队长）。
 
-**日志**：持久意图受理及阶段变化确认，记录玩家、请求键、阶段、MatchID / RoomID；unknown 记 Warn，内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/matchmaking/controller.go`, `game/modules/matchmaking/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：持久意图受理及阶段变化确认，记录玩家、请求键、阶段、MatchID / RoomID；unknown 记 Warn，内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/matchmaking.go`, `game/modules/matchmaking/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -64,7 +65,7 @@
 - **需求正好是它**：`roost module add matchmaking`，连带装上 `team`、`matchroom`、`room`，并接入托管 match 的客户端与模块的后台循环。客户端先完成 `EnterGame` 再排队。
 - **需求多一点**：
   - 改配对规则（按人数以外的条件分池、一局几支队伍）：改 `game/modules/matchmaking/matcher.go` 的 `Step` / `form` / `eligible` 与 `runtime.go` 的 `queue`。注意 match 服务的 `GroupSize` 在这里数的是队伍数，不是玩家数。
-  - 加“什么时候不许排队”：登记 `matchmaking.OnMatchmakingStarting`。
+  - 加“什么时候不许排队”：在自己的组件上监听 `event.MatchmakingStarting`（只读）。
   - 成局后要做别的事（通知、初始化玩法）：改 `matcher.go` 的 `accept`，在结果写进成员之后做；它可能被重复调用，要按 `MatchID` 幂等。
   - 不要改 `game/components/matchmaking/matchmaking.go` 里 `UpdateMatching` 的阶段转换与 `handler/match_*.go` 的事务边界，恢复逻辑依赖它们。
 - **别的代码要用它**：
@@ -76,11 +77,11 @@
 
 - `matchmaking` + `rehome`（`with/rehome/game/components/matchmaking/matchmaking_rehome.go`）：有匹配状态（`Phase` 非空）时拒绝换服；档里有换服意图时拒绝排队。两条检查都在各自的 Player 事务里。
 - 队伍相关的限制由 `team` + `rehome` 的联动负责，不在这里。
-- 本模块是 `matchroom` 的调用方、`room` 的 `OnRoomJoining` 的间接使用者（经 `matchroom`）。
+- 本模块是 `matchroom` 的调用方、`room` 的 `event.RoomJoining` 的间接使用者（经 `matchroom`）。
 
 ## 验证范围
 
-- `roost module verify matchmaking`：17 条场景（`game/handler` 13 条、`game/modules/matchmaking` 2 条、`game/controllers/matchmaking` 2 条）；与 `rehome` 的联动另有 2 条。
+- `roost module verify matchmaking`：17 条场景（`game/handler` 13 条、`game/modules/matchmaking` 2 条、`game/controllers/matchmaking.go` 2 条）；与 `rehome` 的联动另有 2 条。
 - 场景是离线的：真实的 Nest 引擎与 match 的 `MemoryStore`，Remote / WAL 提交是替身，开房用测试夹具里的单间房；没有经过真实的 Redis、Mongo、NATS 与 TCP。
 - 覆盖：单排与两队成局、取消与 Commit 的两种先后、掉线后补查并重连、重复结果、Enqueue 回包丢失、未绑定意图到期、历史到期不解除屏障、队伍冻结与整组回滚、旧序号、活房不能清、端点可在模块启动前注册、两个只读 handler 的事务声明是 memory 快路径（核对生成的注册代码）。
 - turn-pvp 配方另有一条经 TCP / Robot 的“排队到回合”链路，房号映射用 mongotest；真实依赖的联合验收没有做。

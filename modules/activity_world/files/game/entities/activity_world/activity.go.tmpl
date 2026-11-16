@@ -1,0 +1,10 @@
+package activity_world
+
+// ActivityWorld 给活动组件的宿主方法（view.ActivityHolder）里生成器不写的两个；ActivityBook 由生成器交接
+// ActivityWorldDao.ActivityWorld。
+
+// ActivityScope 是全服活动的范围。
+func (e *ActivityWorld) ActivityScope() string { return "world" }
+
+// ActivityCreatedAt 是区服的持久创建时间（handlerWorldActivityInit 写入）；还没初始化时为 0。
+func (e *ActivityWorld) ActivityCreatedAt() int64 { return e.Dao().GetCreatedAt() }

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"{{MODULE}}/game/modules/equipment"
 )
 
@@ -29,7 +28,7 @@ func (c *equipmentCommitter) Commit(_ context.Context, record dataengine.CommitR
 func newEquippedPlayer(t *testing.T) *Player {
 	t.Helper()
 	subject := newAttributePlayer(t, 7700)
-	if _, err := nest.RunIsolatedTransaction(context.Background(), &equipmentCommitter{}, "seed_equipment", func() (any, error) {
+	if _, err := isolatedLocked(subject, &equipmentCommitter{}, "seed_equipment", func() (any, error) {
 		if _, err := subject.BagComp().Add(ironSwordID, 1); err != nil { return nil, err }
 		return subject.BagComp().Add(steelSword, 1)
 	}); err != nil { t.Fatal(err) }
@@ -48,7 +47,7 @@ func TestAWornPieceReachesThePersistPatch(t *testing.T) {
 	subject := newEquippedPlayer(t)
 	committer := &equipmentCommitter{}
 
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "equip", func() (any, error) {
 		_, _, err := subject.EquipmentComp().Equip(ironSwordID, 1)
 		return nil, err
 	}); err != nil {
@@ -63,7 +62,7 @@ func TestAWornPieceReachesThePersistPatch(t *testing.T) {
 
 	// Now change the piece itself, two levels down.
 	committer.records = nil
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "upgrade", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "upgrade", func() (any, error) {
 		piece, _ := subject.Dao().GetEquipment().GetSlots(equipment.SlotWeapon)
 		piece.SetLevel(2)
 		return nil, nil
@@ -86,7 +85,7 @@ func TestAReplacedPieceStopsReachingStorage(t *testing.T) {
 	committer := &equipmentCommitter{}
 
 	var replaced interface{ SetLevel(int32) }
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "equip", func() (any, error) {
 		_, _, err := subject.EquipmentComp().Equip(ironSwordID, 1)
 		return nil, err
 	}); err != nil {
@@ -95,7 +94,7 @@ func TestAReplacedPieceStopsReachingStorage(t *testing.T) {
 	piece, _ := subject.Dao().GetEquipment().GetSlots(equipment.SlotWeapon)
 	replaced = piece
 
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "swap", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "swap", func() (any, error) {
 		_, previous, err := subject.EquipmentComp().Equip(steelSword, 1)
 		if err != nil {
 			return nil, err
@@ -109,7 +108,7 @@ func TestAReplacedPieceStopsReachingStorage(t *testing.T) {
 	}
 
 	committer.records = nil
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch_detached", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "touch_detached", func() (any, error) {
 		replaced.SetLevel(9)
 		return nil, nil
 	}); err != nil {
@@ -126,7 +125,7 @@ func TestARolledBackSwapRestoresTheOldPieceAndReleasesTheNew(t *testing.T) {
 	subject := newEquippedPlayer(t)
 	committer := &equipmentCommitter{}
 
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "equip", func() (any, error) {
 		_, _, err := subject.EquipmentComp().Equip(ironSwordID, 1)
 		return nil, err
 	}); err != nil {
@@ -136,7 +135,7 @@ func TestARolledBackSwapRestoresTheOldPieceAndReleasesTheNew(t *testing.T) {
 
 	sentinel := errors.New("abort")
 	var discarded interface{ SetLevel(int32) }
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "swap", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "swap", func() (any, error) {
 		if _, _, err := subject.EquipmentComp().Equip(steelSword, 1); err != nil {
 			return nil, err
 		}
@@ -151,7 +150,7 @@ func TestARolledBackSwapRestoresTheOldPieceAndReleasesTheNew(t *testing.T) {
 	}
 
 	committer.records = nil
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch_restored", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "touch_restored", func() (any, error) {
 		original.SetLevel(3)
 		return nil, nil
 	}); err != nil {
@@ -162,7 +161,7 @@ func TestARolledBackSwapRestoresTheOldPieceAndReleasesTheNew(t *testing.T) {
 	}
 
 	committer.records = nil
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch_discarded", func() (any, error) {
+	if _, err := isolatedLocked(subject, committer, "touch_discarded", func() (any, error) {
 		discarded.SetLevel(9)
 		return nil, nil
 	}); err != nil {

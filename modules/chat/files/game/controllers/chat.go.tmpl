@@ -1,0 +1,281 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+	gamechat "{{MODULE}}/game/modules/chat"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+// chat 的依赖不挂在 Controller 上：chat 服务的客户端不带状态，用到时从 Registry 取（chatMessaging）；
+// 本进程的在线名单、缓存的推送面与“连接关闭只订阅一次”是状态，放在 chatState 里（moduleState 懒建，
+// 一个 Controller 上只建一次）。chat 服务的客户端在业务服务 uses: [chat] 时由 ClientMod 发布；玩家传输
+// 可能发布得更晚，推送面在第一次用到时再取。
+
+// chatPushTransport 是端点用到的玩家 TCP Runtime 的一小部分，经 LookupPlayerTransport 按能力名取。
+type chatPushTransport interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	ActiveSessions(playerID int64) int
+}
+
+// chatSessionSource 是同一个 Runtime 的另一面：连接关闭的通知。
+type chatSessionSource interface {
+	OnSessionClosed(func(gateway.TCPSessionClosed)) func()
+}
+
+// chatModuleState 是 chat 在一个 Controller 上的状态。
+type chatModuleState struct {
+	presence  *gamechat.Presence
+	transport atomic.Pointer[chatPushTransport]
+	watch     sync.Once
+}
+
+// chatState 返回这个 Controller 上的 chat 状态，第一次调用时建。
+func (controller *Controller) chatState() *chatModuleState {
+	return moduleState(controller, "chat", func() *chatModuleState {
+		return &chatModuleState{presence: gamechat.DefaultPresence()}
+	})
+}
+
+// 启动时先取一次 chat 服务的客户端；取不到就让进程起不来（玩家传输可能发布得更晚，不在这里取）。
+func init() {
+	requireAtStart("chat", func(controller *Controller) error {
+		_, err := controller.chatMessaging()
+		return err
+	})
+}
+
+// chatMessaging 取 chat 服务的客户端。
+func (controller *Controller) chatMessaging() (svcchat.Messaging, error) {
+	registry := controller.Registry()
+	if registry == nil {
+		return nil, fmt.Errorf("chat controller: app registry is required")
+	}
+	messaging, ok := app.Lookup[svcchat.Messaging](registry, svcchat.CapabilityName)
+	if !ok || messaging == nil {
+		return nil, fmt.Errorf("chat controller: capability %q not found; list chat under services.<service>.uses in roost.yaml", svcchat.CapabilityName)
+	}
+	return messaging, nil
+}
+
+// Presence 是本进程的世界频道在线名单。别的功能（进入游戏）在玩家上线时调 Presence().Add。
+func (controller *Controller) Presence() *gamechat.Presence {
+	if controller == nil {
+		return gamechat.DefaultPresence()
+	}
+	return controller.chatState().presence
+}
+
+// HandleChatSend 经 chat 服务发布一行，再把存好的这一行推给在线玩家：一次跨进程的类型化调用，不涉及 Entity 锁。
+// 发送者是认证会话的玩家，从不取请求字段；连接的会话号加帧序号是幂等键，重发的帧不会存两次。
+// 频道政策在这里先查一遍（省一次往返），chat 进程按同一份规则再查，以它为准。
+func (controller *Controller) HandleChatSend(context *playeraccess.Context, request *pb.ChatSendRequest) (*pb.ChatSendResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("chat_send endpoint: context and request are required")
+	}
+	refuse := func(err error) (*pb.ChatSendResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("chat_send failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.ChatSendResponse{Code: code, Reason: reason}, nil
+	}
+	body := []byte(request.Text)
+	if err := gamechat.ValidateText(body); err != nil {
+		return refuse(fmt.Errorf("%w: %v", svcchat.ErrMessageInvalid, err))
+	}
+	if send := chatLocalChannels[request.Kind]; send != nil {
+		response, err := send(controller, context, request)
+		if err != nil {
+			return refuse(err)
+		}
+		return response, nil
+	}
+	channel, ok := gamechat.ChannelOf(request.Kind, request.Target)
+	if !ok || channel.Kind == svcchat.ChannelSystem {
+		return refuse(fmt.Errorf("%w: kind %q is not one a player may publish to", svcchat.ErrChannelInvalid, request.Kind))
+	}
+	sender := gamechat.PlayerSender(context.PlayerID)
+	if err := gamechat.Allow(sender, channel); err != nil {
+		return refuse(fmt.Errorf("%w: %v", svcchat.ErrNotPermitted, err))
+	}
+	requestID := fmt.Sprintf("chat:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	messaging, err := controller.chatMessaging()
+	if err != nil {
+		return refuse(err)
+	}
+	message, err := messaging.Publish(context.Context(), sender, svcchat.PublishRequest{
+		Channel: channel, Type: gamechat.TypeText, Body: body, RequestID: requestID,
+	})
+	if err != nil {
+		return refuse(err)
+	}
+	// 用过聊天的玩家算在线：没有“进入游戏”把人加进名单时，世界频道的推送也到得了说过话的人。
+	controller.chatState().presence.Add(context.PlayerID)
+	controller.chatDeliver(context.Context(), message)
+	return &pb.ChatSendResponse{Seq: int64(message.Seq)}, nil
+}
+
+// HandleChatHistory 从游标往后翻一个频道。读权限由 chat 服务按 collaborators 的政策检查。
+func (controller *Controller) HandleChatHistory(context *playeraccess.Context, request *pb.ChatHistoryRequest) (*pb.ChatHistoryResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("chat_history endpoint: context and request are required")
+	}
+	refuse := func(err error) (*pb.ChatHistoryResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("chat_history failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.ChatHistoryResponse{Code: code, Reason: reason}, nil
+	}
+	channel, ok := gamechat.ChannelOf(request.Kind, request.Target)
+	if !ok {
+		return refuse(fmt.Errorf("%w: kind %q", svcchat.ErrChannelInvalid, request.Kind))
+	}
+	if request.AfterSeq < 0 {
+		return refuse(fmt.Errorf("%w: after_seq must not be negative", svcchat.ErrRequestInvalid))
+	}
+	messaging, err := controller.chatMessaging()
+	if err != nil {
+		return refuse(err)
+	}
+	page, err := messaging.History(context.Context(), gamechat.PlayerSender(context.PlayerID), svcchat.HistoryQuery{
+		Channel: channel, AfterSeq: uint64(request.AfterSeq), Limit: int(request.Limit),
+	})
+	if err != nil {
+		return refuse(err)
+	}
+	controller.chatState().presence.Add(context.PlayerID)
+	response := &pb.ChatHistoryResponse{NextCursor: int64(page.NextCursor), HasMore: page.HasMore}
+	for _, message := range page.Messages {
+		response.Messages = append(response.Messages, chatToPush(message))
+	}
+	return response, nil
+}
+
+// chatToPush 把 chat 服务的消息换成线上形状；推送与历史都用它，客户端只处理一种。
+func chatToPush(message svcchat.Message) pb.ChatMessagePush {
+	return pb.ChatMessagePush{
+		Kind:     string(message.Channel.Kind),
+		Target:   message.Channel.Target,
+		Seq:      int64(message.Seq),
+		FromID:   message.From.RoleID,
+		FromName: message.From.Name,
+		Text:     string(message.Body),
+		System:   message.Origin == svcchat.OriginSystem,
+	}
+}
+
+// chatPusher 取玩家连接的推送面。第一次取到时顺带订阅连接关闭：玩家最后一条连接关掉就离开在线名单。
+// 只靠“推送失败时移除”不够——安静的世界里没有推送，离线的玩家会一直留在名单里。
+func (controller *Controller) chatPusher() (chatPushTransport, error) {
+	if controller == nil {
+		return nil, fmt.Errorf("chat controller: nil")
+	}
+	state := controller.chatState()
+	if runtime := state.transport.Load(); runtime != nil {
+		return *runtime, nil
+	}
+	runtime, err := LookupPlayerTransport[chatPushTransport](controller.Registry())
+	if err != nil {
+		return nil, fmt.Errorf("chat controller: %w", err)
+	}
+	state.transport.Store(&runtime)
+	state.watch.Do(func() {
+		if source, ok := runtime.(chatSessionSource); ok {
+			chatWatchSessions(source, runtime, state.presence)
+		}
+	})
+	return runtime, nil
+}
+
+// chatWatchSessions 订阅连接关闭：玩家没有别的连接了才移出在线名单（关掉一条连接不等于下线）。
+// 返回退订函数；进程退出时传输先停，订阅随之失效，这里不持有需要释放的资源。
+func chatWatchSessions(source chatSessionSource, sessions chatPushTransport, presence *gamechat.Presence) func() {
+	return source.OnSessionClosed(func(event gateway.TCPSessionClosed) {
+		if sessions != nil && sessions.ActiveSessions(event.PlayerID) > 0 {
+			return
+		}
+		presence.Remove(event.PlayerID)
+		slog.Debug("chat: player left the world channel", "player_id", event.PlayerID)
+	})
+}
+
+// chatDeliver 把存好的消息推给该看到它的在线玩家：世界与系统频道推给在线名单，私聊推给双方。
+// chat 服务里的才是记录，推送只是捷径：没有会话的玩家移出名单，漏掉推送的玩家经 ChatHistory 读回来——
+// 所以每条推送都带 Seq。
+func (controller *Controller) chatDeliver(ctx context.Context, message svcchat.Message) {
+	var recipients []int64
+	switch message.Channel.Kind {
+	case svcchat.ChannelWorld, svcchat.ChannelSystem:
+		recipients = controller.chatState().presence.Snapshot()
+	case svcchat.ChannelPrivate:
+		recipients = []int64{message.From.RoleID, message.Channel.Target}
+	default:
+		return
+	}
+	transport, err := controller.chatPusher()
+	if err != nil {
+		slog.Debug("chat: no transport to deliver through", "err", err)
+		return
+	}
+	push := chatToPush(message)
+	for _, playerID := range recipients {
+		if playerID == 0 {
+			continue
+		}
+		if err := transport.PushPlayer(ctx, playerID, msgid.MsgChatMessage, &push); err != nil {
+			if transport.ActiveSessions(playerID) == 0 {
+				controller.chatState().presence.Remove(playerID)
+			}
+			slog.Debug("chat: push not delivered", "player_id", playerID, "seq", message.Seq, "err", err)
+		}
+	}
+}
+
+// AnnounceWorld 以游戏的名义在世界频道说一句话（例如登录公告），并推给在线玩家。
+// requestID 是幂等键：同一个键重发不会存两次。给别的功能调用，不对客户端开放。
+func (controller *Controller) AnnounceWorld(ctx context.Context, text, requestID string) error {
+	if controller == nil {
+		return fmt.Errorf("chat controller: nil")
+	}
+	messaging, err := controller.chatMessaging()
+	if err != nil {
+		slog.ErrorContext(ctx, "chat: system announcement failed", "request_key", requestID, "err", err)
+		return err
+	}
+	message, err := messaging.PublishSystem(ctx, svcchat.SystemPublishRequest{
+		Channel: gamechat.WorldChannel, Actor: gamechat.SystemActor, Type: gamechat.TypeText,
+		Body: []byte(text), RequestID: requestID,
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "chat: system announcement failed", "request_key", requestID, "err", err)
+		return err
+	}
+	slog.DebugContext(ctx, "chat: system announcement confirmed", "request_key", requestID, "seq", message.Seq)
+	controller.chatDeliver(ctx, message)
+	return nil
+}
+
+// LocalChannel 供可选业务模块登记瞬时频道。统一端点已验证文本；实现必须自行检查角色权限与收件范围。
+// 只在 init 登记，不经 chat 服务存储；Seq=0 表示没有历史游标，不承诺重发去重或可靠送达。
+type LocalChannel func(*Controller, *playeraccess.Context, *pb.ChatSendRequest) (*pb.ChatSendResponse, error)
+
+var chatLocalChannels = map[string]LocalChannel{}
+
+func OnLocalChannel(name string, send LocalChannel) {
+	if name == "" || name == "world" || name == "private" || name == "system" || name == "group" || send == nil || chatLocalChannels[name] != nil {
+		panic("chat: invalid/duplicate local channel")
+	}
+	chatLocalChannels[name] = send
+}

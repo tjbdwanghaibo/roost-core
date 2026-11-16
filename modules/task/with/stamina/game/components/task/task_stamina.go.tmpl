@@ -1,13 +1,12 @@
 package task
 
-import (
-	"{{MODULE}}/game/view"
-	gamestamina "{{MODULE}}/game/components/stamina"
-)
+import "{{MODULE}}/game/event"
 
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	gamestamina.OnStaminaSpent("task", func(owner view.PlayerEntity, amount, now int64) error {
-		return owner.Task().Report("stamina.spent", amount, now)
-	})
+// OnStaminaSpent 把每次成功消耗体力作为 "stamina.spent" 事件推进任务（按实际消耗的点数记），与消耗同一笔事务提交。
+//
+// 缺省优先级：改成事件之前 stamina 的消耗钩子只有 task 一个模块登记，没有别的模块监听需要排序。
+//
+//roost:listen
+func (c *Component) OnStaminaSpent(ev event.StaminaSpent) error {
+	return c.Report("stamina.spent", ev.Amount, ev.NowUnixMilli)
 }

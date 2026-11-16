@@ -1,15 +1,11 @@
 package handler
 
-import (
-
-	gameenter "{{MODULE}}/game/components/enter"
-	player "{{MODULE}}/game/entities/player"
-)
+import "{{MODULE}}/game/view"
 
 // handlerEnterInit 由进入游戏的端点在加载或创建 Player 之后调用，不直接对客户端开放。
 // 结果说明这一次是否执行了首次初始化，并带上首次初始化的时间（做过之后每次都是同一个值）。nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
 //
 //roost:nest rollback=undo durability=strict
-func handlerEnterInit(target player.IEnterEntity, nowUnixMilli int64) (gameenter.InitResult, error) {
-	return target.EnterComp().Init(nowUnixMilli)
+func handlerEnterInit(target view.IEnterEntity, nowUnixMilli int64) (view.EnterInitResult, error) {
+	return target.Enter().Init(nowUnixMilli)
 }

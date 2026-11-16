@@ -1,0 +1,11 @@
+package event
+
+// MatchmakingStarting 是开始排队之前的拦截事件：在记排队意图的那笔事务里、对组里每名成员各在他的 Player 上发布一次
+// （matchmaking 的 BeginMatching，整组成员都已被这笔 Nest 事务锁住），先于任何写入。Leader 是发起人的玩家号，
+// TeamID 是整队排队的队伍实体号（单排为 0），Sequence 是这次请求的序号。监听只看这名成员自己的档（换服意图未清……），
+// 返回错误就拒绝，整组什么都不写。拦截监听只做检查，不改状态。
+type MatchmakingStarting struct {
+	Leader   int64
+	TeamID   int64
+	Sequence int64
+}

@@ -16,9 +16,9 @@ roomID, err := rooms.Open(ctx, matchID, []int64{playerA, playerB}) // 返回房�
 - `Open(ctx, matchID, members) (int64, error)`：`matchID` 是可信的成局身份，`members` 是核实过的玩家唯一号。返回成功时名单与容量已经提交到 Room。失败可以用同样的参数重试。
 - `Binding`：持久映射的一行（`MatchID`、`RoomID`、`SID`、`Members`）。
 
-**Nest handler**（`game/handler/matchroom_open.go`）：`MatchroomOpen(matchID, members)`，`rollback=undo durability=strict`，由 `Open` 经生成的 Sender 调用。组件方法 `MatchroomComp().Open(matchID, members)` 与 `MatchroomComp().Closed(matchID)`（这一局的房关了没有，给可信流程核对用）只能在持有 Room 锁时调用。
+**Nest handler**（`game/handler/matchroom_open.go`）：`MatchroomOpen(matchID, members)`，`rollback=undo durability=strict`，由 `Open` 经生成的 Sender 调用。handler 参数是生成的 `view.IMatchroomEntity`；组件（逻辑、类型号 `matchroom.CompTypeMatchroom` 与工厂登记在 `game/components/matchroom/matchroom.go`）方法 `Matchroom().Open(matchID, members)` 与 `Matchroom().Closed(matchID)`（这一局的房关了没有，给可信流程核对用）只能在持有 Room 锁时调用。
 
-**登记点**：模块自己不提供登记点。它登记了 room 的 `OnRoomJoining("matchroom", …)`（`game/components/matchroom/matchroom.go`）：房间有 MatchID 时，名单之外的玩家入房被拒，答 room 的 `room_not_member`。检查在 Room 的入房事务里。
+**实体事件**：模块自己不发布事件。它的组件监听 room 的拦截事件 `event.RoomJoining`（`game/components/matchroom/matchroom.go` 的 `OnRoomJoining`，`//roost:listen`）：房间有 MatchID 时，名单之外的玩家入房被拒，答 room 的 `room_not_member`。检查在 Room 的入房事务里。
 
 **状态**
 
@@ -51,8 +51,8 @@ roomID, err := rooms.Open(ctx, matchID, []int64{playerA, playerB}) // 返回房�
 - **需求正好是它**：`roost module add matchroom`，连带装上 `room`。要现成的匹配就装 `matchmaking`（它依赖本模块）。
 - **需求多一点**：
   - 自己写匹配、邀请或 GM 开房：拿到可信的成局身份后调 `rooms.Open(ctx, matchID, members)`，把返回的房号发给成员。
-  - 要在入房时加别的限制：登记 room 的 `OnRoomJoining`，不要改 `game/components/matchroom/matchroom.go` 的名单检查。
-  - 房间关了之后才允许做某事（清匹配状态、结算）：在 Room 的 handler 里用 `MatchroomComp().Closed(matchID)`。
+  - 要在入房时加别的限制：在自己的 Room 组件上监听 `event.RoomJoining`，不要改 `game/components/matchroom/matchroom.go` 的名单检查。
+  - 房间关了之后才允许做某事（清匹配状态、结算）：在 Room 的 handler 里用 `Matchroom().Closed(matchID)`。
 - **别的代码要用它**：`matchroom.FromRegistry(registry)` 取 `*Rooms`；`rooms.Open(ctx, matchID, members) (roomID int64, err error)`。
 - **只适合借鉴的情形**：名单会变的房间（中途加人、观战席）、要跨进程迁移的房间。值得借鉴的是“外部身份 → 本地资源号”的持久映射写法：唯一键插入定胜负，取号与初始化分开、各自可重试。
 

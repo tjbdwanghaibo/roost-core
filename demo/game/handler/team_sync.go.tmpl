@@ -2,16 +2,14 @@ package handler
 
 import (
 	"{{MODULE}}/game/view"
-	player "{{MODULE}}/game/entities/player"
-	team "{{MODULE}}/game/entities/team"
 )
 
 // handlerTeamSync 供分区场景周期重读权威；队伍状态与投影仍在同一笔 Team+Player 事务里。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTeamSync(target team.ITeamEntity, member player.ITeamEntity) (view.TeamSnapshot, error) {
-	if member.TeamComp().TeamID() != target.ID() {
-		return target.TeamEntity().TeamRoster().Info(), nil
+func handlerTeamSync(target view.TeamEntity, member view.ITeamEntity) (view.TeamSnapshot, error) {
+	if member.Team().TeamID() != target.ID() {
+		return target.TeamRoster().Info(), nil
 	}
-	return member.TeamComp().Info(target.TeamEntity())
+	return member.Team().Info(target)
 }

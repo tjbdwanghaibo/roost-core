@@ -8,8 +8,8 @@ import (
 
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
-	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/view"
 )
 
 // handlerSceneChange 的 areas 包含当前图与目标图，初次入场只有目标，离场只有当前图。
@@ -19,8 +19,8 @@ import (
 // 不带码的（参与者数目不对、找不到落脚点、进出回调失败）是内部错误。
 //
 //roost:nest rollback=undo durability=async
-func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEntity, toID int64) (*pb.SceneChangeResponse, error) {
-	body := target.ActorComp().Body()
+func handlerSceneChange(target view.IActorEntity, areas []sceneentity.ISceneEntity, toID int64) (*pb.SceneChangeResponse, error) {
+	body := target.Actor().Body()
 	fromID := body.Map.SceneID()
 	var from, to *sceneentity.Scene
 	if len(areas) > 2 {
@@ -39,7 +39,7 @@ func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEn
 	}
 	if toID == fromID {
 		if to != nil {
-			if err := to.SceneMembersComp().Admit(target.ID()); err != nil {
+			if err := to.SceneMembers().Admit(target.ID()); err != nil {
 				return nil, err
 			}
 			nest.AfterCommit(func() { to.Space().Interest.Resubscribe(target.UniqueID()) })
@@ -48,7 +48,7 @@ func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEn
 		return &pb.SceneChangeResponse{SceneID: rawSceneID(to), X: at.X, Y: at.Y}, nil
 	}
 	if to != nil {
-		if err := to.SceneMembersComp().Admit(target.ID()); err != nil {
+		if err := to.SceneMembers().Admit(target.ID()); err != nil {
 			return nil, err
 		}
 	}
@@ -56,13 +56,13 @@ func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEn
 		if err := body.Leave(); err != nil {
 			return nil, err
 		}
-		from.SceneMembersComp().Depart(target.ID())
+		from.SceneMembers().Depart(target.ID())
 	}
 	if to == nil {
 		return &pb.SceneChangeResponse{}, nil
 	}
 	preferred := to.Config().Spawn
-	savedID, saved, facing := target.ActorComp().SavedPosition()
+	savedID, saved, facing := target.Actor().SavedPosition()
 	if savedID == toID {
 		preferred = saved
 	} else {

@@ -1,0 +1,219 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"sync/atomic"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/purchase"
+)
+
+type purchaseGetter map[int64]entity.IThreadSafeEntity
+
+func (g purchaseGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if target := g[id]; target != nil {
+		return target, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g purchaseGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	targets := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		target, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		targets[i] = target
+	}
+	return targets, nil
+}
+
+type purchaseCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *purchaseCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return fmt.Errorf("injected purchase commit failure")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type purchaseFixture struct {
+	engine    *nest.NestMgr
+	target    *player.Player
+	committer *purchaseCommitter
+	sender    *syncsender.PurchaseGrantSender
+}
+
+func newPurchaseFixture(t *testing.T) *purchaseFixture {
+	t.Helper()
+	player.RegisterEntity()
+	handler.RegisterPurchaseGrantNestHandlers()
+	id, err := entity.BuildEntityID(98801, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &purchaseFixture{target: target.(*player.Player), committer: &purchaseCommitter{}}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(purchaseGetter{id: target}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.sender = syncsender.NewPurchaseGrantSender(f.engine)
+	return f
+}
+func purchaseTestGrant(seq uint64) purchase.Grant {
+	return purchase.Grant{Sequence: seq, OrderID: fmt.Sprintf("order-%d", seq), PlayerID: 98801, ProductID: "coins_100", Digest: fmt.Sprintf("digest-%d", seq), Reward: purchase.Reward{Kind: "coins", Count: 100}}
+}
+func (f *purchaseFixture) apply(grant purchase.Grant) (purchase.Receipt, error) {
+	return f.sender.Sync_PurchaseGrant(context.Background(), f.target.ID(), grant)
+}
+func (f *purchaseFixture) facts(t *testing.T) (uint64, int64) {
+	t.Helper()
+	var sequence uint64
+	var coins int64
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.target.GetMutex().Lock()
+		defer f.target.GetMutex().Unlock()
+		sequence = f.target.Dao().GetPurchase().GetApplied()
+		coins = f.target.WalletComp().Balance()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return sequence, coins
+}
+func (f *purchaseFixture) expect(t *testing.T, sequence uint64, coins, commits int64) {
+	t.Helper()
+	gotSeq, gotCoins := f.facts(t)
+	if gotSeq != sequence || gotCoins != coins || f.committer.commits.Load() != commits {
+		t.Fatalf("facts seq=%d coins=%d commits=%d", gotSeq, gotCoins, f.committer.commits.Load())
+	}
+}
+
+type purchaseQueue struct {
+	pending []purchase.Grant
+	acks    int
+	fail    bool
+}
+
+func (q *purchaseQueue) Record(context.Context, svcplatform.Order) (purchase.Grant, error) {
+	panic("not used by collection")
+}
+func (q *purchaseQueue) Pending(context.Context, int64, int) ([]purchase.Grant, error) {
+	return append([]purchase.Grant(nil), q.pending...), nil
+}
+func (q *purchaseQueue) Ack(_ context.Context, g purchase.Grant) error {
+	if q.fail {
+		return fmt.Errorf("injected ack failure")
+	}
+	q.acks++
+	q.pending = q.pending[1:]
+	return nil
+}
+
+type purchasePlatform struct {
+	svcplatform.Platform
+	order svcplatform.Order
+}
+
+func (p *purchasePlatform) Order(context.Context, string) (svcplatform.Order, bool, error) {
+	return p.order, true, nil
+}
+func newPurchaseCollector(t *testing.T) (*purchaseDeps, *purchaseFixture, *purchaseQueue, *purchasePlatform) {
+	t.Helper()
+	f := newPurchaseFixture(t)
+	grant := purchaseTestGrant(1)
+	q := &purchaseQueue{pending: []purchase.Grant{grant}}
+	p := &purchasePlatform{order: svcplatform.Order{OrderID: grant.OrderID, PlayerID: 98801, ProductID: grant.ProductID, PayloadDigest: grant.Digest, State: svcplatform.DeliveryDelivered}}
+	return &purchaseDeps{queue: q, platform: p, sender: f.sender}, f, q, p
+}
+func TestPurchaseCollectionWaitsForInFlightDelivery(t *testing.T) {
+	c, f, q, p := newPurchaseCollector(t)
+	p.order.PendingAttempts = []uint64{1}
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("in-flight delivery accepted")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 || len(q.pending) != 1 {
+		t.Fatal("in-flight order deleted")
+	}
+}
+func TestPurchaseCollectionCommitFailureKeepsQueue(t *testing.T) {
+	c, f, q, _ := newPurchaseCollector(t)
+	f.committer.reject.Store(true)
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("commit failure hidden")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 || len(q.pending) != 1 {
+		t.Fatal("uncommitted order deleted")
+	}
+}
+func TestPurchaseCollectionAckFailureReturnsSameReceiptOnRetry(t *testing.T) {
+	c, f, q, _ := newPurchaseCollector(t)
+	q.fail = true
+	first, err := c.Collect(context.Background(), 98801)
+	if err == nil || len(first) != 1 {
+		t.Fatalf("receipts=%+v err=%v", first, err)
+	}
+	f.expect(t, 1, 100, 1)
+	q.fail = false
+	again, err := c.Collect(context.Background(), 98801)
+	if err != nil || !reflect.DeepEqual(first, again) || q.acks != 1 || len(q.pending) != 0 {
+		t.Fatalf("retry=%+v first=%+v err=%v", again, first, err)
+	}
+	f.expect(t, 1, 100, 1)
+}
+func TestPurchaseCollectionSettledElsewhereDoesNotGrant(t *testing.T) {
+	c, f, q, p := newPurchaseCollector(t)
+	p.order.State = svcplatform.DeliverySettled
+	receipts, err := c.Collect(context.Background(), 98801)
+	if err != nil || len(receipts) != 1 || !receipts[0].Settled || q.acks != 1 {
+		t.Fatalf("receipts=%+v err=%v", receipts, err)
+	}
+	f.expect(t, 1, 0, 1)
+}
+
+func TestPurchaseCollectionWaitsForNonterminalOrder(t *testing.T) {
+	c, f, q, p := newPurchaseCollector(t)
+	p.order.State = svcplatform.DeliveryExhausted
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("nonterminal order was granted")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 {
+		t.Fatal("nonterminal order deleted")
+	}
+}
+
+func TestPurchaseCollectionRejectsWrongOrder(t *testing.T) {
+	c, f, q, p := newPurchaseCollector(t)
+	p.order.OrderID = "another-order"
+	if _, err := c.Collect(context.Background(), 98801); err == nil {
+		t.Fatal("different order was granted")
+	}
+	f.expect(t, 0, 0, 0)
+	if q.acks != 0 {
+		t.Fatal("different order acknowledged")
+	}
+}

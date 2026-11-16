@@ -1,0 +1,71 @@
+package controllers
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+)
+
+// 启动时先取一次实体运行时（Nest 由公共的 FromRegistry 检查）；取不到就让进程起不来。
+func init() {
+	requireAtStart("monster", func(controller *Controller) error {
+		_, err := controller.monsterEntities()
+		return err
+	})
+}
+
+// monsterEntities 取实体运行时，用来确认“缺的是怪还是查看者”。每次请求现取，不挂在 Controller 上。
+func (c *Controller) monsterEntities() (*entity.ManagerAccess, error) {
+	access, ok := app.Lookup[*entity.ManagerAccess](c.Registry(), mods.ModEntityRuntime)
+	if !ok || access == nil {
+		return nil, fmt.Errorf("monster: entity runtime missing")
+	}
+	return access, nil
+}
+
+// HandleMonsterInspect 的拒绝都答在应答的 Code / Reason 里，不返回 error（返回 error 会让接入层断开连接）。
+// 正常拒绝各有业务码：ID 不是怪（monster_invalid）、怪已死亡或不存在（monster_gone）、不在同一个场景（monster_not_here）；
+// 不带码的失败答框架的内部码并记一条 Error。
+func (c *Controller) HandleMonsterInspect(ctx *playeraccess.Context, req *pb.MonsterInspectRequest) (*pb.MonsterInspectResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("monster: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	if err == nil && !entity.MatchEntityID(req.MonsterID, monster.EntityKindMonster) {
+		err = apperrors.ErrMonsterInvalid
+	}
+	var response *pb.MonsterInspectResponse
+	if err == nil {
+		response, err = sender.NewMonsterInspectSender(c.NestClient()).MultiSync_MonsterInspect(ctx.Context(), id, req.MonsterID)
+		// 怪不落库：本进程里没有这个实体就是它不存在（已销毁，或号是编的）。Nest 对“实体不存在”答框架码
+		// entity_not_found，客户端会把它当成“自己还没进入游戏”；确认缺的是怪而不是查看者之后换成 monster_gone。
+		if errors.Is(err, errcode.ErrEntityNotFound) {
+			access, lookupErr := c.monsterEntities()
+			if lookupErr != nil {
+				err = lookupErr
+			} else if access.Manager().Get(req.MonsterID) == nil {
+				err = errcode.Wrap(apperrors.ErrMonsterGone, err)
+			}
+		}
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.ErrorContext(ctx.Context(), "monster: inspect failed", "player_id", ctx.PlayerID, "monster_id", req.MonsterID, "err", err)
+		}
+		return &pb.MonsterInspectResponse{Code: code, Reason: reason}, nil
+	}
+	return response, nil
+}

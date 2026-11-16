@@ -137,7 +137,7 @@ for f in configs/service/config.*.yaml; do
 		-e "s#endpoints: \[127.0.0.1:2379\]#endpoints: [127.0.0.1:$etcd_port]#" \
 		-e 's#max_bytes: 8589934592#max_bytes: 67108864#' \
 		-e 's#^  ttl: 15s#  ttl: 6s#' -e 's#^  renew_interval: 3s#  renew_interval: 1s#' \
-		-e 's#^  guard: 5s#  guard: 2s#' -e 's#^  startup_wait: 30s#  startup_wait: 10s#' "$f"
+		-e 's#^  guard: 5s#  guard: 2s#' -e 's#^  startup_wait: [0-9]*s$#  startup_wait: 10s#' "$f"
 done
 edit_file -E 's#game_sids: \[[0-9, ]*\]#game_sids: [1000, 1001, 1002, 1003, 1004]#' configs/activity_groups.yaml
 grep -q 'game_sids: \[1000, 1001, 1002, 1003, 1004\]' configs/activity_groups.yaml

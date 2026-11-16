@@ -10,17 +10,25 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
+//roost:component type={{ID:component:Bag}}
+const CompTypeBag entity.ComponentType = {{ID:component:Bag}}
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"bag.CompTypeBag"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeBag, NewComponent)
+}
+
 // Owner 是背包组件的宿主：任何实体只要在自己的 DAO 里放一份 BagState，并经这个方法交给组件，
-// 就能挂这个组件（Player 的接线见 game/entities/player/bag_component.go）。组件不认具体实体类型，
-// 也不另存一份会回滚的状态：道具在宿主 DAO 里，经生成的 setter 修改，所以回滚只有 DAO 一处；
-// 不要在这里登记 undo。
+// 就能挂这个组件（view.BagHolder 的 BagState；DAO 里只有一个 BagState 字段时由生成器写，见
+// game/entities/<实体>/<实体>_gen_wire.go）。组件不认具体实体类型，也不另存一份会回滚的状态：
+// 道具在宿主 DAO 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
 type Owner interface {
 	entity.IThreadSafeEntity
 	// BagState 返回宿主 DAO 里的背包（同步给谁由宿主 DAO 字段的 dao 标签决定）。
 	BagState() *db.BagState
 }
 
-// Component 是各宿主共用的背包组件。实体包里的 BagComponent 是它的类型别名，只为生成接线命名。
+// Component 是各宿主共用的背包组件；别的包经 game/view 的 Bag / BagHolder 用它。
 // 不要在组件里加锁：Nest 锁住宿主实体之后才进入业务 handler，所有方法都在那笔事务里调用。
 type Component struct {
 	entity.ComponentBase

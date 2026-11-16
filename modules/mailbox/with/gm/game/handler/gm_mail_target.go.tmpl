@@ -1,8 +1,8 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import "{{MODULE}}/game/view"
 
 // handlerGMMailTarget 仅声明并加载已有收件人，绝不创建不存在的 Player 或在锁内发邮件。
 //
 //roost:nest
-func handlerGMMailTarget(target player.IMailboxEntity) error { return nil }
+func handlerGMMailTarget(target view.IMailboxEntity) error { return nil }

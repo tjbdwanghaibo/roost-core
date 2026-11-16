@@ -17,17 +17,18 @@ state:
     dao: nosync
     comment: Rehome 是换服模块的服务端记录（进行中的换服意图、最近一次到达的换服、上次换服的时间与次数），只落库、不下发。
 component: Rehome
+component_package: game/components/rehome
 protocols: [RehomeApply]
 errcodes: [rehome_refused, rehome_cooldown, rehome_moving, rehome_elsewhere]
 verify:
-  packages: [./game/modules/rehome, ./game/handler, ./game/controllers/rehome, ./game/managers]
+  packages: [./game/modules/rehome, ./game/handler, ./game/controllers, ./game/managers]
   run: ^TestRehome
   pass: 50
 with:
   enter:
     summary: 进入前检查（正在换服答 rehome_moving，绑定在别的服答 rehome_elsewhere；源服重启后在这里把停在半路的换服接着做完）；进入之后做到达（首次进入目标服时生效一次）与意图对账
     verify:
-      packages: [./game/controllers/rehome]
+      packages: [./game/controllers]
       run: ^TestWithRehomeEnter
       pass: 5
   gm:

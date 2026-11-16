@@ -18,6 +18,7 @@ state:
     dao: nosync
     comment: WalletLedger 是货币模块的去重窗口（最近若干次带业务键的加减的结果），只落库、不下发。
 component: Wallet
+component_package: game/components/wallet
 protocols: [WalletSpend]
 errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_overflow]
 verify:

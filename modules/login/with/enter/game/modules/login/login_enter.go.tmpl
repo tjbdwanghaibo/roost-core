@@ -50,7 +50,7 @@ var registerEnterChecksOnce sync.Once
 func EnterTicketSession(claims map[string]string) bool { return claims[EnterTicketClaim] == "1" }
 
 // enterAnnounce 是推 EnterStatus 的入口；写成变量是为了让场景能看到它被叫到时拿的是什么。
-// 它由 enter 模块的 controller 包在 init 里经 RegisterEnterAnnounce 交进来（game/controllers/enter/login_announce.go）：
+// 它由 enter 模块的 controller 包在 init 里经 RegisterEnterAnnounce 交进来（game/controllers/login_enter.go）：
 // 进入的登记点与票据校验同在 game/modules/login，controller 包 import 本包，本包反过来 import 它会成环。
 var enterAnnounce func(ctx context.Context, registry *app.Registry, entering Entering, sessionID string)
 

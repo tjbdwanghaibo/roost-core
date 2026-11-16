@@ -286,7 +286,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		args = append([]string{args[0], "gate"}, args[1:]...)
 	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|gate|module|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|gate|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -306,6 +306,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	protocolName := fs.String("protocol", "", "protocol name for an endpoint")
 	nestHandler := fs.String("nest-handler", "", "Nest handler name for an endpoint")
 	lifecycleEntity := fs.String("lifecycle", "", "Entity whose lifecycle GetOrCreate a login endpoint calls")
+	endpointTarget := fs.String("target", "", "endpoint: the Entity it addresses when the Nest handler takes a component mounted on several entities")
 	id := fs.Int64("id", 0, "explicit numeric ID")
 	withAI := fs.Bool("ai", false, "behavior: also build an AI heartbeat controller and an example strategy")
 	withState := fs.Bool("state", false, "behavior: also scaffold a gameplay/state Catalog")
@@ -318,10 +319,10 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	allowed := map[string][]string{
 		"service": {"root", "mods"}, "mod": {"root", "service"}, "access": {"root", "service"},
-		"transport": {"root", "service"}, "gate": {"root", "service"}, "module": {"root"},
+		"transport": {"root", "service"}, "gate": {"root", "service"},
 		"protocol": {"root", "group", "handler", "id"}, "entity": {"root", "id"},
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
-		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
+		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle", "target"},
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
 		"webroute": {"root", "service"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "routed", "entity", "component"},
 		"effect": {"root", "consumer", "delivery", "order"},
@@ -337,7 +338,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Routed: splitOrderedList(*routed), Consumer: *consumer, Delivery: *delivery, Order: *order, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, AI: *withAI, State: *withState, EntityService: *entityService, ID: *id, Warnings: stderr})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Routed: splitOrderedList(*routed), Consumer: *consumer, Delivery: *delivery, Order: *order, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, Target: *endpointTarget, AI: *withAI, State: *withState, EntityService: *entityService, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}

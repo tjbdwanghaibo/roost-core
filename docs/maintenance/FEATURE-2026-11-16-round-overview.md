@@ -1,6 +1,6 @@
 # 2026-11-16 整理轮总览：单实例锁改存 etcd、controllers 合包与组件接口收进 view、实体事件
 
-状态：**方案已定，未实施。** 本文是这一轮改动的总入口，汇总三份方案：
+状态：**已实施（分支 `feat/round-20261116`，2026-11-16），阶段 7 的全量与演练 2026-11-17 通过。** 现行契约已写进 `docs/framework`（[Nest 与实体 §3A 实体事件](../framework/guide/02-nest-entity.md#3a-实体事件)、[impl/12 生成器](../framework/impl/12-codegen.md)、[tag 手册](../../codegen/docs/TAGS.zh-CN.md)），不兼容变化与旧工程迁移步骤见 CHANGELOG `[Unreleased]`，阶段 7 的全量、演练与修复见[本轮证据](evidence/round-20261116/README.md)。本文是这一轮改动的总入口，汇总三份方案：
 
 - [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)
 - [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)
@@ -77,6 +77,40 @@ controllers 合包 ─────────────── 独立
 | controllers 合包后，各模块的测试辅助函数会不会重名 | layout §6.3 | 测试辅助函数是否统一加模块前缀 |
 | etcd 换 leader 时租约被续满，对启动等待（2×TTL）的影响 | singleton §6.2 | 演练里要不要单独加一个用例 |
 
+### 3.1 核实结论与决定（2026-11-16 晚，维护者已确认）
+
+1. **Nest 参数类型挪到 view**：调度和锁不受影响。参数类型名里带 `Entity` 就会被认作锁目标，运行时做类型断言。
+   - **受影响的是"handler 归哪个服务"的判断**（`codegen/internal/nest/owner.go`）。它按参数类型所在的包查 `service=`，类型挪到 view 后就查不到了。
+   - **决定**：
+     - `view.<E>Entity` 直接对应实体 E；
+     - view 里的组件窄接口，按挂载这个组件的实体来确定归属。这些实体都属于同一个服务时，就用这个服务；属于不同服务时，生成失败，要求写 `target=<实体>`。
+   - **命名**：组件窄接口在 view 里命名为 `I<X>Entity`（例如 `view.IProfileEntity`），避免和实体总接口 `<E>Entity` 重名。room 组件和 Room 实体就是会撞名的一对。
+2. **组件类型号只按组件分配**：可以。
+   - 组件存放在每个实体实例自己的组件表里；工厂表是全局的；类型号不进存档，也不进同步数据。
+   - 唯一的影响：实体内各组件按类型号升序初始化，所以 activity 改号后，同一实体内的组件顺序可能变。模块里没有声明过组件依赖，不影响正确性。
+3. **memory 快路径**：**允许发布事件**（维护者决定）。
+   - `Publish` 只检查当前 Guard 是否持有这个实体，不要求有可回滚的事务。
+   - 在 `rollback=none` 的 handler 里，监听返回的错误照常往外传，但前面已经做的修改不会撤销。这一点写进文档。
+4. **controllers 合包**：测试文件之间没有重名。正式代码只有 §1.2 已知的那 5 个重名。
+   - 有 25 个 controller 文件来自 `with/<对方模块>/`，这些文件只在两个模块都装了时才生成。
+   - **规则**：每个模块一个 `<模块>.go`；联动文件命名为 `<模块>_<对方模块>.go`；测试文件按同样的规则命名。
+5. **etcd 换 leader**：新 leader 会把所有租约续满。这是 etcd 公开的租约行为，本机没有 server 源码可以核对，留到演练里验证。
+   - 最坏情况下，旧锁会多活一个 TTL 再加大约 1 秒，可能让 30 秒的启动等待差一点点。
+   - **决定**：生成的 `startup_wait` 改为 35s，部署模板里的启动探测余量同步放宽。
+
+### 3.2 试点结论与决定（2026-11-16 夜，维护者已确认）
+
+试点 9aaebe7f 涉及 bag、profile、naming、activity、activity_world、activity_alliance。装上这些模块的生成工程能编译，`generate --check` 无差异。合包后全量 catalog 能加载。
+
+1. **endpoint 生成器也认 `target=`**。组件挂在多个实体上时，endpoint 可以收 `view.I<X>Entity` 加 `target=<实体>`。
+2. **activity 组件挪到 `game/components/activity`**。整个包改名，所有引用一起改。
+3. **保留 `activity.Of(holder)`**：从 view 接口取回具体组件。Token 等带方法的类型不挪进 view。
+4. **旧写法组件上的 `//roost:listen`**：阶段 4 把全部模块改成组件包写法之后，生成器把它从提示改成报错。
+5. **泛化的导出方法名加模块前缀**：`Open` 改为 `DungeonOpen`，`Claim` 改为 `DungeonClaim`，`Redeem` 改为 `CdkeyRedeem`。
+6. **模块门禁按前缀挑测试的问题**：在最终全量时核对各模块的场景数，有冲突就改用精确测试名。
+7. **删除 `roost add module`**（包括 Makefile 里的调用、帮助和文档）。alliance-e2e 里"断开 Redis"的用例按锁已不在 Redis 的现状简化。
+8. **启动依赖检查**（72723174，协调者决定，已告知维护者）：在生成的 `RegisterPlayerProtocols` 里，紧跟 `FromRegistry` 之后执行 `CheckAtStart`，执行点与合包前相同；不放进 `FromRegistry` 本身。
+
 ## 4. 实施顺序与时间预估
 
 下面的时间都是 **agent 实际运行的墙钟时间**，不含等维护者答复的时间，同时并行的 agent 不超过 4 个。
@@ -103,7 +137,7 @@ controllers 合包 ─────────────── 独立
 |---|---|---|---|
 | 0 | §3 的五个核实点 | 0.5～1 小时 | — |
 | 1a | 单实例锁：`wiring/etcd` SingletonStore 和单测、生成器、doctor、配置注释、删除 Redis 版 | 1～1.5 小时 | 独立一条线，和下面各阶段并行 |
-| 1b | core 事件：登记表、`Publish`、事件栈和上限、nest 注入，以及单测 | 约 1 小时 | 和 2 并行 |
+| 1b | core 事件：登记表、`Publish`、事件栈和上限、Guard 持锁检查，以及单测；Nest 生成器按 view 类型解析 handler 归属 | 约 1 小时 | 和 2 并行 |
 | 2 | 生成器：<br>• protocol：合包、追加存根<br>• entity：view 窄接口、DAO 交接、带包名的 comp 标签、事件登记、优先级、静态环提示<br>• 安装器和 doctor 规则 | 2.5～3 小时 | protocol 与 entity 分两个 agent |
 | 3 | 试点：bag、profile、activity，新生成工程能编译、`generate --check` 无差异 | 约 0.5 小时 | — |
 | 4 | 批量改约 40 个模块模板。每批只检查生成工程能编译 | 2～2.5 小时 | 3 个 agent 并行 |

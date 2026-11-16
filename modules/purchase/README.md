@@ -12,7 +12,7 @@
 
 **服务端入口**
 
-- `purchase.FromRegistry(registry)`（`game/controllers/purchase/controller.go`）之后 `controller.Collect(ctx, playerID) ([]purchase.Receipt, error)`：服务端替一名玩家补领一批，在 Nest 事务之外调用。
+- `controllers.FromRegistry(registry)` 之后 `controller.PurchaseCollect(ctx, playerID) ([]purchase.Receipt, error)`（`game/controllers/purchase.go`）：服务端替一名玩家补领一批，在 Nest 事务之外调用。
 - handler `PurchaseGrant(grant)`（`game/handler/purchase_grant.go`，`rollback=undo durability=strict`）：把一笔待发记录应用到 Player。参数只能来自待发队列。
 - 待发队列 `purchase.Queue`（`game/modules/purchase/purchase.go`）：`Record(ctx, order)`（platform 一侧，第一次投递时写快照）、`Pending(ctx, playerID, limit)`、`Ack(ctx, grant)`。实现是 `RedisQueue`（`game/modules/purchase/queue.go`）。
 - platform 一侧的协作者（`services/platform/collaborators.go`，安装时替换生成的桩）：`Deliver()` 把订单记进待发队列；`Verify()` 与 `Players()` 一律拒绝（充值不管登录）。
@@ -35,7 +35,7 @@
 
 **错误码**（`internal/errors/purchase.go`）：`purchase_invalid`（待发记录不合法或不是这名玩家的）、`purchase_sequence`（前一笔还没发，不能越过）、`purchase_reward`（奖励种类没有登记）。补领时还会原样带回 platform 的码：订单对不上（600106）、投递还在途或订单未终结（600107）。
 
-**日志**：订单入队和每笔发货确认，记录玩家、订单、序号、奖励、结清状态；发货确认在队列 Ack 前，重试按订单号关联。身份 / 商品不符及入队失败记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/purchase/controller.go`, `game/controllers/purchase/purchase_collect.go`, `services/platform/collaborators.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：订单入队和每笔发货确认，记录玩家、订单、序号、奖励、结清状态；发货确认在队列 Ack 前，重试按订单号关联。身份 / 商品不符及入队失败记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/purchase.go`, `services/platform/collaborators.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -62,19 +62,19 @@
   - 接渠道：实现 `purchase_channels.go` 的 `verifyPaymentCallback`；渠道的 HTTPS 接入与“渠道凭据 → 内部支付 JSON”的转换另写。
   - 商品表：改 `products.go` 的 `LookupProduct`（金额用货币最小单位的整数）。
   - 新的奖励种类（月卡、礼包）：在自己的文件里 `RegisterPurchaseReward("<种类>", …)`，照着 `with/bag` 的 `purchase_item.go` 写。
-  - 不要改 `PurchaseComponent.Apply` 的游标判断、`queue.go` 的四段 Lua，以及 `Collect` 里“先查 platform、Nest 确认后才 Ack”的顺序。
-- **别的代码要用它**：补领 `controller.Collect(ctx, playerID)`；读某名玩家发到第几号，在 Player handler 里 `owner.Dao().GetPurchase().GetApplied()`。
+  - 不要改 `purchase.Component.Apply` 的游标判断、`queue.go` 的四段 Lua，以及 `Collect` 里“先查 platform、Nest 确认后才 Ack”的顺序。
+- **别的代码要用它**：补领 `controller.PurchaseCollect(ctx, playerID)`；读某名玩家发到第几号，在 Player handler 里 `owner.Dao().GetPurchase().GetApplied()`。
 - **只适合借鉴的情形**：别的“外部系统欠玩家东西”的场景（补偿、跨服奖励）。值得借鉴的是“按玩家连续编号的待发队列 + Player 上一个常量大小的游标”，它让重放安全而且不需要在玩家档里存无限增长的订单表。直接复用本模块的队列去发别的东西不合适：序号空间与 platform 的订单绑定。
 
 ## 联动
 
 - `purchase` + `bag`（`with/bag/game/components/purchase/purchase_item.go`）：登记奖励种类 `item`，道具在发货游标的同一笔事务里进背包；背包拒绝（未知道具、放不下）时游标不动。
-- `purchase` + `enter`（`with/enter/game/controllers/purchase/purchase_enter.go`）：登记 enter 的进入之后钩子，每次进入游戏补领一批；失败只由 enter 记日志，不阻断登录，玩家可以再发 `PurchaseCollect`。
+- `purchase` + `enter`（`with/enter/game/controllers/purchase_enter.go`）：登记 enter 的进入之后钩子，每次进入游戏补领一批；失败只由 enter 记日志，不阻断登录，玩家可以再发 `PurchaseCollect`。
 - 别的模块没有 `with/purchase`。
 
 ## 验证范围
 
-- `roost module verify purchase`：21 条场景（`game/handler` 8、`game/modules/purchase` 5、`game/controllers/purchase` 6、`services/platform` 2）；与 `bag` 的联动 4 条，与 `enter` 的联动 2 条。
+- `roost module verify purchase`：21 条场景（`game/handler` 8、`game/modules/purchase` 5、`game/controllers` 6、`services/platform` 2）；与 `bag` 的联动 4 条，与 `enter` 的联动 2 条。
 - 离线：真实的 Nest 引擎加替身提交器，待发队列与 platform 是内存替身。
 - 覆盖：金币发货与游标同提交、重放不写、乱序等待、提交失败后重放、超过 513 笔之后重放旧单仍安全、别人的订单被拒、结清只推进游标、价格不符不入队、目录变化不影响已有快照、队列回答损坏不当回执、补领时等待在途投递与未终结订单、`Ack` 失败后重试得到同一张回执、渠道缺省拒绝。
 - 真实 Redis 上的 Lua 另有 3 条集成用例（构建标签 `integration`，不在 `verify` 的 21 条里），在生成的工程里跑：

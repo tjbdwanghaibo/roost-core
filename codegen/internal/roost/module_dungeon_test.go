@@ -12,7 +12,7 @@ import (
 func TestModuleDungeonInstallAndVerify(t *testing.T) {
 	root, roost, _ := moduleProject(t, "labyrinth")
 	roost("module", "add", "dungeon")
-	if output, err := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-run", "^TestDungeon", "./game/controllers/dungeon"); err != nil {
+	if output, err := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-count=1", "-run", "^TestDungeon", "./game/controllers"); err != nil {
 		t.Fatalf("standalone dungeon: %v\n%s", err, output)
 	}
 	roost("module", "add", "leaderboard")
@@ -25,12 +25,12 @@ func TestModuleDungeonInstallAndVerify(t *testing.T) {
 			t.Fatalf("missing dependency %s", name)
 		}
 	}
-	for _, path := range []string{"db/dungeon_level.go", "game/entities/dungeon/dungeon_gen_wire.go", "game/entities/dungeon/lifecycle_gen.go", "game/controllers/dungeon/controller.go", "game/handler/syncsender/dungeon_nest_gen.go", "protocol/pb/protocol.pb.go"} {
+	for _, path := range []string{"db/dungeon_level.go", "game/entities/dungeon/dungeon_gen_wire.go", "game/entities/dungeon/lifecycle_gen.go", "game/controllers/dungeon.go", "game/handler/syncsender/dungeon_nest_gen.go", "protocol/pb/protocol.pb.go"} {
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			t.Fatalf("missing generated integration %s: %v", path, err)
 		}
 	}
-	source, err := os.ReadFile(filepath.Join(root, "game/controllers/dungeon/controller.go"))
+	source, err := os.ReadFile(filepath.Join(root, "game/controllers/dungeon.go"))
 	if err != nil || !strings.Contains(string(source), "example.com/studio/labyrinth/game/modules/dungeon") {
 		t.Fatalf("custom module not rendered: %v", err)
 	}

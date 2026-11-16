@@ -15,6 +15,7 @@ import (
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/configs/schema"
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/bag"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
@@ -422,7 +423,7 @@ func TestBagHasMatchesWhatRemoveAccepts(t *testing.T) {
 	f := newBagFixture(t)
 	f.mustGrant(t, 1001, 5)
 	f.locked(t, func() {
-		bag := f.player.BagComp()
+		bag := f.player.Bag()
 		if got := bag.Count(1001); got != 5 {
 			t.Errorf("Count(1001) = %d, want 5", got)
 		}
@@ -455,7 +456,7 @@ func TestBagComponentRefusalsWriteNothingWithoutARollback(t *testing.T) {
 	}
 	f.mustGrant(t, 1, bagTestMaxStack-2) // 道具 1 放满
 	f.locked(t, func() {
-		bag := f.player.BagComp()
+		bag := f.player.Bag()
 		state := f.player.Dao().GetBag()
 		refusals := []struct {
 			name   string
@@ -565,7 +566,7 @@ func TestBagItemRemovedFromTheTableCanBeDiscardedButNotGranted(t *testing.T) {
 		t.Fatalf("grant of an item that left the table: err = %v, want bag_item_invalid", err)
 	}
 	f.locked(t, func() {
-		if bag := f.player.BagComp(); bag.Count(1001) != 5 || !bag.Has(1001, 5) {
+		if bag := f.player.Bag(); bag.Count(1001) != 5 || !bag.Has(1001, 5) {
 			t.Errorf("an item that left the table: Count = %d, Has(5) = %v, want 5 and true", bag.Count(1001), bag.Has(1001, 5))
 		}
 	})
@@ -675,15 +676,15 @@ func TestBagStateIsSynced(t *testing.T) {
 // ---- 同一个组件挂在第二个实体上 ----
 
 // bagStash 是只在测试里存在的第二个宿主（比如公会仓库）：不是 Player，实体 kind 是测试自己的。
-// 它用的组件就是 Player 那一份：经 Player 的组件号登记的工厂创建（工厂是 bag.NewComponent），
-// 真实宿主照 README 的“复用方式”另申请自己的组件号、登记同一个工厂。测试工程里没有第二个带背包字段的
+// 它用的组件就是 Player 那一份：经同一个类型号 bag.CompTypeBag 登记的工厂创建（工厂是 bag.NewComponent），
+// 真实宿主照 README 的“复用方式”在实体结构体里加 comp:"bag.CompTypeBag" 字段。测试工程里没有第二个带背包字段的
 // 生成 DAO，所以它借一份独立的 PlayerDao 实例当自己的存储；真实宿主在自己的 DAO 里加一个 BagState 字段。
 type bagStash struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
 	dao *db.PlayerDao
-	bag *playerentity.BagComponent
+	bag *bag.Component
 }
 
 // bagStashKind 是测试宿主的实体 kind，取 kind 段的末尾，避开工程与模块分配的号。
@@ -691,9 +692,9 @@ const bagStashKind entity.EntityKind = 251
 
 var registerBagStash sync.Once
 
-func (s *bagStash) Base() *entity.EntityBase            { return s.EntityBase }
-func (s *bagStash) BagComp() *playerentity.BagComponent { return s.bag }
-func (s *bagStash) BagState() *db.BagState              { return s.dao.GetBag() }
+func (s *bagStash) Base() *entity.EntityBase { return s.EntityBase }
+func (s *bagStash) BagComp() *bag.Component  { return s.bag }
+func (s *bagStash) BagState() *db.BagState   { return s.dao.GetBag() }
 
 func newBagStash(t *testing.T, unique int64) *bagStash {
 	t.Helper()
@@ -710,12 +711,12 @@ func newBagStash(t *testing.T, unique int64) *bagStash {
 				s.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)
 				s.dao.SetId(param.StorageID())
 				s.DaoManager.Set(db.PlayerDaoCollection, s.dao)
-				comp, err := entity.CreateComponent(playerentity.CompTypeBag, s, param)
+				comp, err := entity.CreateComponent(bag.CompTypeBag, s, param)
 				if err != nil {
 					return nil, err
 				}
-				s.bag = comp.(*playerentity.BagComponent)
-				s.ComponentManager.Set(playerentity.CompTypeBag, s.bag)
+				s.bag = comp.(*bag.Component)
+				s.ComponentManager.Set(bag.CompTypeBag, s.bag)
 				if err := s.ComponentManager.InitAll(param, param.IsCreate); err != nil {
 					return nil, err
 				}

@@ -1,8 +1,8 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import "{{MODULE}}/game/view"
 
 //roost:nest rollback=undo durability=strict
-func handlerMatchClear(member player.IMatchmakingEntity, key string) error {
-	return member.MatchmakingComp().Clear(key)
+func handlerMatchClear(member view.IMatchmakingEntity, key string) error {
+	return member.Matchmaking().Clear(key)
 }

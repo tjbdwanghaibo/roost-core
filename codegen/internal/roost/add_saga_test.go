@@ -147,12 +147,12 @@ func TestAddSagaNativeGeneratesStepsHandlersAndSenders(t *testing.T) {
 	}
 
 	debit := readProjectFile(t, root, "game/handler/gift_debit.go")
-	for _, want := range []string{"//roost:nest rollback=undo durability=pipelined", "func handlerGiftDebit(target player.IWalletEntity, step saga.NativeStep) error", "target.WalletComp()", `step.Complete(false, "gift.debit is not implemented")`} {
+	for _, want := range []string{"//roost:nest rollback=undo durability=pipelined", "func handlerGiftDebit(target view.IWalletEntity, step saga.NativeStep) error", "target.Wallet()", `step.Complete(false, "gift.debit is not implemented")`} {
 		if !strings.Contains(debit, want) {
 			t.Errorf("gift_debit.go lacks %q:\n%s", want, debit)
 		}
 	}
-	if compensation := readProjectFile(t, root, "game/handler/gift_credit_compensation.go"); !strings.Contains(compensation, "func handlerGiftCreditCompensation(target player.IWalletEntity, step saga.NativeStep) error") || !strings.Contains(compensation, "manual_required") {
+	if compensation := readProjectFile(t, root, "game/handler/gift_credit_compensation.go"); !strings.Contains(compensation, "func handlerGiftCreditCompensation(target view.IWalletEntity, step saga.NativeStep) error") || !strings.Contains(compensation, "manual_required") {
 		t.Errorf("gift_credit_compensation.go is not the compensation handler skeleton:\n%s", compensation)
 	}
 	// 服务的 Init / Shutdown 归业务：生成器不改写，只在 next 提示里给两行与容量。

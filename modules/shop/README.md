@@ -6,11 +6,11 @@
   - `ShopBuy`（`protocol/def/shop_buy.go`）：请求 `ShopBuyRequest{Key, GoodsID, Count}`，应答 `ShopBuyResponse{Code, Reason, Cost, Balance, ItemID, Gained, Held, Bought}`。用金币买 `Count` 份商品 `GoodsID`；`Key` 是客户端为这一次购买生成的请求键，用来防重发。只能给自己买（目标取认证会话的玩家）。应答是成交那一刻的结果。
   - `ShopRules`（`protocol/def/shop_rules.go`）：只有推送形状 `ShopRulesPush{Goods}`，每项 `ShopGoodsRule{ID, ItemID, ItemCount, Price, Limit, LimitCount}`；不单独发送，作为 rules 模块规则快照里的一项下发。
 - **服务端入口**
-  - 组件 `ShopComponent`（`game/components/shop/shop.go`），经 `IShopEntity` 的 `ShopComp()` 取得：`Buy(key string, goodsID, count, nowUnixMilli int64) (ShopResult, error)`。`ShopResult{Cost, Balance, ItemID, Gained, Held, Bought}` 就是回包与回执里存的内容。
+  - 组件 `shop.Component`（逻辑、类型号 `shop.CompTypeShop` 与工厂登记在 `game/components/shop/shop.go`，对外接口在 `game/view/component_shop.go`），Nest handler 的参数写生成的 `view.IShopEntity`，经 `Shop()` 取得：`Buy(key string, goodsID, count, nowUnixMilli int64) (ShopResult, error)`。`ShopResult{Cost, Balance, ItemID, Gained, Held, Bought}` 就是回包与回执里存的内容。
   - Nest handler `handlerShopBuy`（`game/handler/shop_buy.go`）：协议对应的 handler；生成的 Sender 是 `sender.NewShopBuySender(client).Sync_ShopBuy(ctx, playerEntityID, &pb.ShopBuyRequest{…})`。
   - `shopGoodsByID(goodsID)`（`game/components/shop/goods.go`）：读当前 Nest 请求钉住的配置快照里的一行商品。
-- **登记点**（`game/components/shop/hooks.go`）
-  - `OnShopBought(name, hook)`，`hook` 是 `ShopBoughtHook func(owner view.PlayerEntity, goodsID, count int64, result ShopResult, nowUnixMilli int64) error`。购买第一次生效时执行一次；回执重放与被拒绝的购买不执行。在 Player 锁内、同一笔 Nest 事务里，只改同一个 Player，不做 I/O。只在 `init` 登记；空名、nil、重名 panic。
+- **实体事件**（`game/event/shop.go`）
+  - `event.ShopBought{GoodsID, Count, Cost, Balance, ItemID, Gained, Held, Bought, NowUnixMilli}`：购买第一次生效时在 Player 上发布一次；回执重放与被拒绝的购买不发布。监听写成组件或实体方法上的 `//roost:listen`，在 Player 锁内、同一笔 Nest 事务里执行，只改同一个 Player，不做 I/O；返回错误时整笔购买回滚。
 - **状态**（`db/def/shop.go`）
   - `PlayerDao.Shop`（`ShopState{Day, Daily, Lifetime}`）：限购计数，落库并同步，玩家本人可见。只给有限购的商品记数。
   - `PlayerDao.ShopLedger`（`ShopLedger{Receipts, NextSeq}`）：请求键的去重窗口，只落库、不下发。
@@ -20,7 +20,7 @@
   - 常量 `ShopReceiptWindow = 64`、`ShopKeyMaxLen = 64`（`game/components/shop/shop.go`）。
 - **错误码**（`internal/errors/shop.go`）：`shop_key_invalid`、`shop_key_conflict`（同一个键换了商品或份数）、`shop_count_invalid`、`shop_goods_invalid`（不在目录里、已下架或目录行不合法）、`shop_overflow`（总价或道具总数超出 int64）、`shop_limit`（超过限购）。钱不够、背包放不下原样透出 `wallet_short` 与背包模块的 `bag_stack_full`、`bag_kinds_full`、`bag_item_invalid`。
 
-**日志**：购买确认，记录请求键、商品、份数、花费、奖励和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/shop/shop_buy.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：购买确认，记录请求键、商品、份数、花费、奖励和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/shop.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -28,7 +28,7 @@
 - **样例目录装上就在卖**：缺省三行商品是样例，上线前必须换成自己的。
 - **限额**：请求键 1～64 字节，只收 ASCII 字母、数字与 `-` `_` `:`；去重窗口保留这名玩家最近 64 次成功购买；限购计数表的大小不超过目录里有限购的商品数。
 - **幂等的范围**：同一个键在窗口内重发，在任何校验与写入之前就认出来，原样返回第一次的结果（连每日清零都不做）。一个键成功之后又成功买了 64 次，它被淘汰，再用它会再扣一次钱、再发一次货（仍受限购约束）。被拒绝的购买不留回执，重发时重新判断。
-- **一致性**：扣钱（`WalletComp().Add`）、发货（`BagComp().Add`）、限购计数、回执在同一笔 Nest 事务里（`rollback=undo durability=strict`）。背包拒绝时钱已经在本笔事务里扣过，靠事务回滚退回——调用方不能吞掉 `Buy` 的错误。提交被拒时回执也没了，重发会重新买一次。
+- **一致性**：扣钱（`Wallet().Add`）、发货（`Bag().Add`）、限购计数、回执在同一笔 Nest 事务里（`rollback=undo durability=strict`）。背包拒绝时钱已经在本笔事务里扣过，靠事务回滚退回——调用方不能吞掉 `Buy` 的错误。提交被拒时回执也没了，重发会重新买一次。
 - **每日限购按业务日惰性清零**：跨天后要等下一次成功购买才清 `Daily`；客户端显示前拿 `ShopState.Day` 与当前业务日（servertime 下发的 `Day`）比对。时钟回拨时不清零（宁可少卖）。
 - **目录变更的后果**：删行、或改变一行的限购类型，会在玩家下一次成功购买时清掉对应的旧计数；复用商品号会串用终身限购计数。要保留计数就用 `Off` 下架。商品号、商品含义与限购类型上线后不要复用或改变。
 - **规则快照不冻结价格**：展示目录与购买是两次请求，中间配置可能热更；以购买应答为准。
@@ -40,15 +40,15 @@
 - **需求正好是它**：`roost module add shop`，连带装上 wallet、bag、rules、enter。普通购买不需要 Saga。
 - **需求多一点**：
   - 换商品、调价、加限购：只改 `configs/table/shop_goods.csv`（列的校验在 `configs/schema/shop_goods.go`），再运行 `roost generate`；运行期按 configdata 热更。新增商品不需要改组件。
-  - 购买成功后顺带做事（任务、成就、首购标记）：在自己的文件里 `init` 登记 `OnShopBought`。
+  - 购买成功后顺带做事（任务、成就、首购标记）：在自己的组件（或 Player 实体）上写 `//roost:listen` 的 `OnShopBought(ev event.ShopBought) error`。
   - 不要改 `game/components/shop/shop.go` 里校验与写入的先后（商店自己的校验都在第一次写入之前），不要改 `ShopState` / `ShopLedger` 的 store 键与错误码码值。
-- **别的功能要用它的数据**：读限购计数直接读 `PlayerDao.Shop`；读商品行用 `shopGoodsByID`（同包）或生成的配置访问器。要在自己的事务里代玩家买一份，嵌入 `player.IShopEntity` 后调 `target.ShopComp().Buy(key, goodsID, count, nowUnixMilli)`，错误原样返回。
+- **别的功能要用它的数据**：读限购计数直接读 `PlayerDao.Shop`；读商品行用 `shopGoodsByID`（同包）或生成的配置访问器。要在自己的事务里代玩家买一份，目标参数写 `view.IShopEntity`（同一笔里还要用别的组件时写 `view.PlayerEntity`）后调 `target.Shop().Buy(key, goodsID, count, nowUnixMilli)`，错误原样返回。
 - **不适合直接用的情形**：多货币 / 以物易物、全服限量、随机刷新的神秘商店、需要永久防重的订单。值得借鉴的是：回执记在自己的账本里而不占货币的去重窗口（能认出“同一个键换了内容”，也存得下发货结果）；用除法与减法做溢出与限购比较；成功购买时顺手清理过期计数（`dropStaleCounts`）让状态有上界。
 
 ## 联动
 
 - `shop/with/rules`：登记名 `shop`，把未下架的商品按商品号升序编码成 `ShopRulesPush` 放进规则快照；读的是当前请求的配置快照。2 条场景。
-- `task/with/shop`：登记 `OnShopBought("task", …)`，购买第一次生效时给任务事件 `shop.bought` 记“购买份数”，与购买同一笔事务；回执重放不计。3 条场景。（同一笔购买的扣款还会经 wallet 的钩子另记一次 `wallet.spent`。）
+- `task/with/shop`：task 组件上 `//roost:listen` 的 `OnShopBought`（实体事件 `event.ShopBought`），购买第一次生效时给任务事件 `shop.bought` 记“购买份数”，与购买同一笔事务；回执重放不计。3 条场景。（同一笔购买的扣款还会经 `event.WalletSpent` 另记一次 `wallet.spent`。）
 
 ## 验证范围
 

@@ -154,14 +154,14 @@ environment_test() {
 	# The package list is pinned to the files on disk by
 	# integration_coverage_test.go: every directory with a
 	# `//go:build integration` test file that keys on ROOST_DATAENGINE_IT,
-	# and nothing else. etcd/driver spawns etcd from PATH and skips loudly
-	# when the binary is absent; mongo/driver spawns its own standalone mongod
-	# (U-0153).
+	# and nothing else. etcd/driver and wiring/etcd (the singleton-lock store)
+	# spawn etcd from PATH and skip loudly when the binary is absent;
+	# mongo/driver spawns its own standalone mongod (U-0153).
 	# Remote 也依赖同一隔离环境；故障套件按包串行，避免同时改动共享服务。
 	(
 		cd "$module_root"
 		GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
-			go test -tags=integration -p 1 ./framework/dataengine/engine ./infra/observe/failurelog ./wiring/dataengine ./wiring/mongo ./wiring/nats ./wiring/syncbus ./framework/sync/syncbus/driver ./wiring/gate ./wiring/selfsync ./wiring/sidmerge ./infra/network/bus ./infra/network/nats/driver ./framework/remoteentity ./gameplay/movement ./gameplay/level ./framework/saga ./infra/storage/redis/... ./infra/storage/versionstore ./infra/network/etcd/driver ./infra/storage/mongo/driver -count=1
+			go test -tags=integration -p 1 ./framework/dataengine/engine ./infra/observe/failurelog ./wiring/dataengine ./wiring/mongo ./wiring/nats ./wiring/syncbus ./framework/sync/syncbus/driver ./wiring/gate ./wiring/selfsync ./wiring/sidmerge ./infra/network/bus ./infra/network/nats/driver ./framework/remoteentity ./gameplay/movement ./gameplay/level ./framework/saga ./infra/storage/redis/... ./infra/storage/versionstore ./infra/network/etcd/driver ./wiring/etcd ./infra/storage/mongo/driver -count=1
 	)
 	# 生成工程里需要真实依赖的功能用例（codegen/internal/entity/testdata 的 dataengine、remoteflow，game-demo 模板与
 	# codegen/internal/roost 写进 game-demo 的用例）：它们只在复制或新生成的工程里运行，go test ./... 看不到；之前只有

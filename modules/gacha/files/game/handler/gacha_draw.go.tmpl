@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
@@ -9,11 +9,11 @@ import (
 // handlerGachaDraw 把任何拒绝交还 Nest，保证十连不会留下前几次已发的奖励或已扣的金币。
 //
 //roost:nest rollback=undo durability=strict
-func handlerGachaDraw(target player.IGachaEntity, request *pb.GachaDrawRequest) (*pb.GachaDrawResponse, error) {
+func handlerGachaDraw(target view.IGachaEntity, request *pb.GachaDrawRequest) (*pb.GachaDrawResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrGachaKeyInvalid
 	}
-	r, err := target.GachaComp().Draw(request.Key, request.PoolID, request.Count)
+	r, err := target.Gacha().Draw(request.Key, request.PoolID, request.Count)
 	if err != nil {
 		return nil, err
 	}

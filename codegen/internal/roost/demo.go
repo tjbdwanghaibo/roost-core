@@ -284,8 +284,8 @@ func enableDemoPlayerTCP(root, gameService string) error {
 // exhausted. The refund only runs on the sid the sender is bound to; while
 // that process restarts every attempt just times out, and an exhausted
 // compensation is manual_required. A restart can take singleton.startup_wait
-// (30s) + singleton.ttl (15s) + the time to be started and run Init (45s
-// allowed): 90s, hence max_attempts 15. A step's budget is shared by both
+// (35s) + singleton.ttl (15s) + the time to be started and run Init (45s
+// allowed): 95s, hence max_attempts 15. A step's budget is shared by both
 // directions, so the debit's forward attempts get the same 15 — harmless: at
 // most one attempt of one operation takes effect, and a debit that never ran
 // took nothing. The relation is pinned by
@@ -315,7 +315,7 @@ func demoGiftRefundBudget(root, gameService string) error {
 		after := marker +
 			indent + "# debit's compensation is the refund, which only runs on the sender's sid: 15\n" +
 			indent + "# attempts (>= 98s with backoff) outlast a crash restart of that sid\n" +
-			indent + "# (startup_wait + ttl + 45s = 90s); see internal/service/" + gameService + "/gift_saga.go.\n" +
+			indent + "# (startup_wait + ttl + 45s = 95s); see internal/service/" + gameService + "/gift_saga.go.\n" +
 			indent + "steps:\n" + indent + "  gift_item:\n" + indent + "    debit:\n" + indent + "      max_attempts: 15\n"
 		if !strings.Contains(string(raw), before) {
 			return fmt.Errorf("%s: expected an empty saga.steps block to replace", path)
@@ -331,7 +331,7 @@ func demoGiftRefundBudget(root, gameService string) error {
 // configs and tells the game process the same payment secret.
 //
 // The game process holding a payment secret is the demo playing the payment
-// provider (game/controllers/player/purchase.go says so at length): a real
+// provider (game/controllers/player_purchase.go says so at length): a real
 // store signs callbacks with a key no game process has. What is not a demo
 // shortcut is where the keys live — the platform Mod refuses an empty
 // session_secret or payment_secret at Init, so a starter config that omits
@@ -488,7 +488,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/login_timeout.go", why: "a login whose claim or cold load outlived its budget is answered by name and retried, not held on the connection"},
 		{write: "game/entities/player/equipment_component_test.go", why: "the nested write path both ways: a change two levels down reaches storage, a piece that came off stops reaching it"},
 		{write: "game/components/mapview/mapview.go", why: "where the player is and how it walks: movement.MapBasic over the DAO, a Behavior whose MoveTo / Follow run on the player's own heartbeat, and the teleport kept as the reference path"},
-		{write: "game/components/mapview/cell_base.go", why: "the partitioned scene's Base side of the Map component: the cell.base beat for the watchdog and the lease, and the battle panel sent when the attributes change"},
+		{write: "game/components/mapview/cell_base.go", why: "the partitioned scene's Base side of the Map component: the cell.base beat for the watchdog and the lease (the battle panel sent when the attributes change is the Player's own listener, game/entities/player/cell_base.go)"},
 		{write: "game/entities/player/map_component.go", why: "wiring only: the component type, its name on Player (Map), the factory registration; the logic is game/components/mapview/mapview.go"},
 		{write: "game/view/component_mapview.go", why: "the Map interface other game packages use and its Holder (view.PlayerEntity embeds it)"},
 		{run: writeDemoActorBody, why: "the same Body implementation as the actor module; the partitioned-world demo only keeps its own adapters"},
@@ -566,32 +566,22 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{run: enableDemoPlayerTCP, why: "a listener that is actually on; doctor's player-tcp workflow passes on the generated project"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddItem", Group: "game", Handler: "player"}, why: "the wire message"},
 		{write: "protocol/def/add_item.go", why: "request fields matching the handler parameters; response with code and count"},
-		{add: &AddOptions{Kind: "endpoint", Name: "AddItem", Handler: "player"}, why: "protocol boundary to Nest sender"},
-		{write: "game/controllers/player/add_item.go", why: "the error boundary: coded errors become the response, not a dropped connection"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddExp", Group: "game", Handler: "player"}, why: "the wire message"},
 		{write: "protocol/def/add_exp.go", why: "request field matching the handler parameter; response with code and levels gained"},
-		{write: "game/controllers/player/add_exp.go", why: "hand-written: add endpoint wires single-entity handlers, AddExp addresses two"},
-		{write: "game/controllers/player/controller.go", why: "the controller also holds the Player lifecycle"},
-		{write: "game/controllers/player/enter_game.go", why: "hand-written endpoint: GetOrCreate the Player, then answer"},
 		{add: &AddOptions{Kind: "protocol", Name: "JoinQueue", Group: "game", Handler: "player"}, why: "the cross-service call: game → match"},
 		{write: "protocol/def/join_queue.go", why: "no Nest handler behind it either: the match service is another process"},
-		{write: "game/controllers/player/join_queue.go", why: "Enqueue through the typed match client, frame sequence as idempotency key"},
 		{add: &AddOptions{Kind: "protocol", Name: "PollMatch", Group: "game", Handler: "player"}, why: "reading the ticket and the match"},
 		{write: "protocol/def/poll_match.go", why: "state, match id, members"},
-		{write: "game/controllers/player/poll_match.go", why: "ownership-checked reads through the match client"},
 		{add: &AddOptions{Kind: "protocol", Name: "WorldStats", Group: "game", Handler: "player"}, why: "the World's counters"},
 		{write: "protocol/def/world_stats.go", why: "two counters"},
-		{write: "game/controllers/player/world_stats.go", why: "a Nest read handler on the World"},
 		{add: &AddOptions{Kind: "protocol", Name: "MatchFound", Group: "game", Handler: "player"}, why: "the server push announcing a match"},
 		{write: "protocol/def/match_found.go", why: "a notify: no request, the bind registers its encoder"},
 		{write: "game/rewards/rewards_test.go", why: "补丁点的三条：没注册时用原函数、替换立刻生效、revert 回到原样；升级奖励是 mailbox 模块发得出去、领取端解得出来的附件"},
 		{write: "game/rewards/rewards.go", why: "what reaching a level is worth, as a mailbox attachment behind a hot-patch point; the attachment encoding, the mailbox endpoints and the claim ledger are the mailbox module's"},
 		{add: &AddOptions{Kind: "protocol", Name: "EnterDungeon", Group: "game", Handler: "player"}, why: "the cross-service call: game → session"},
 		{write: "protocol/def/enter_dungeon.go", why: "a bounded run: id, state, deadline"},
-		{write: "game/controllers/player/enter_dungeon.go", why: "Enter through the typed session client, frame sequence as idempotency key"},
 		{add: &AddOptions{Kind: "protocol", Name: "FinishDungeon", Group: "game", Handler: "player"}, why: "resolving the run"},
 		{write: "protocol/def/finish_dungeon.go", why: "the verdict in, terminal state and the clear's exp out"},
-		{write: "game/controllers/player/finish_dungeon.go", why: "Finish through the session client, then the clear's exp through the AddExp transaction"},
 		{add: &AddOptions{Kind: "handler", Name: "EnterScene", Entity: "Player", Component: "Map"}, why: "placing a player: the scene resolves the point, the player writes it"},
 		{write: "game/handler/enter_scene.go", why: "a remembered position that is no longer usable becomes the nearest free one, not a failed login"},
 		{add: &AddOptions{Kind: "handler", Name: "PlayerPosition", Entity: "Player", Component: "Map"}, why: "a refused move answers with where the player still is; there is no cached copy to read instead"},
@@ -605,10 +595,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/set_scene_time_rate.go", why: "the scene's rate changes in the scene's lock only, continuous, rolled back with the transaction"},
 		{add: &AddOptions{Kind: "protocol", Name: "Move", Group: "game", Handler: "player"}, why: "the movement endpoint"},
 		{write: "protocol/def/move.go", why: "ask for a point, get back the one the server settled on"},
-		{write: "game/controllers/player/move.go", why: "resolve the scene, then the move transaction"},
 		{add: &AddOptions{Kind: "protocol", Name: "MoveTarget", Group: "game", Handler: "player"}, why: "the server-driven movement endpoint: the client sends a goal"},
 		{write: "protocol/def/move_target.go", why: "a point or a player to follow in, the walk's action id and the start position out"},
-		{write: "game/controllers/player/move_target.go", why: "resolve the scene, start the walk, answer with where it starts"},
 		{write: "game/activity/activity.go", why: "what this game means by a timed server-wide event: window ids derived from the clock, what a point is worth, what settlement pays, and the board the game keeps because the coordinator has no enumeration"},
 		{write: "game/modules/effects/activity_phase.go", why: "the timer's effect: a bus call recorded inside the World's lock and made outside it"},
 		{write: "game/entities/world/timer_component.go", why: "the World's timers, hand-written on the framework's entity timer runtime: persisted in WorldDao, rebuilt per call, fired inside the transaction that removes the node, the earliest deadline indexed by the framework's driver (the demo does not use roost add timer); the callbacks are components' methods, reached through the owner"},
@@ -627,8 +615,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/activity_settled.go", why: "an in-process flag starts empty after a deploy and tells a paid player they were not paid"},
 		{add: &AddOptions{Kind: "protocol", Name: "ActivityStanding", Group: "game", Handler: "player"}, why: "where this player stands in the current window"},
 		{write: "protocol/def/activity_standing.go", why: "the coordinator's aggregation and this server's own settlement flag, kept apart"},
-		{write: "game/controllers/player/activity_standing.go", why: "two sources, deliberately not merged: complete is not paid"},
-		{write: "game/controllers/player/enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running; a login without a server_id claim, or bound to another server, is refused as player_elsewhere before anything loads"},
 		{add: &AddOptions{Kind: "entity", Name: "SceneActor"}, why: "a player's part on a partitioned scene's map: the entity the cell's process holds for it, handed over to the next cell's process with it (prototype, scene.partition)"},
 		{add: &AddOptions{Kind: "dao", Name: "SceneActor", Entity: "SceneActor"}, why: "its cell state in a generated DAO: the setters record the undo, so a beat or handler that rolls back restores it (maintainer decision D8 = A)"},
 		{write: "db/def/scene_actor.go", why: "position, velocity, HP, version, role, lease, write-back time, the damage dedup list and the handoff in progress — //roost:dao nocoll, all nopersist,nosync; the nested types the monster's cell state shares"},
@@ -636,18 +622,13 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/partition/partition.go", why: "where this process's cellworld node is installed, and the one mapping between a DAO and the cell / Base state for SceneActor, Monster and Player"},
 		{write: "game/partition/partition_test.go", why: "the mapping is the whole state for both DAOs, a read is a copy, a failed transaction restores it through the generated undo, and the stored snapshot position moves only with a write-back"},
 		{write: "game/entities/monster/cell.go", why: "a partitioned scene's monster is a walker of its cell (D5 = A): the cellworld.Actor over MonsterDao, starting the cell beat; AI, walk, state and buffs are not started"},
-		{write: "game/entities/player/cell_base.go", why: "the player as its partitioned scene's Base (cellworld.BasePlayer): routing state in PlayerDao, the battle panel, starting the cell.base beat, and its copy of its team's roster for the team panel"},
 		{write: "game/entities/player/cell_group_test.go", why: "the team copy on the Player: the team id persists, the version and members do not, a read is a copy, a failed transaction restores it"},
 		{write: "game/settings/partition_test.go", why: "the partition rules refused at load: owners, the band, the Base's leave radius, the wake radius, the idle tier, spawn points and speeds"},
 		{write: "game/settings/partition.go", why: "scene.partition declared once and checked at load: the grid, the owners, the radii the cell protocol needs (R + H <= G, W + H <= G, R covers the Base's leave radius), the idle tier and the per-cell spawn points"},
 		{write: "internal/errors/scene_partition.go", why: "what a partitioned scene refuses (Move, MoveTarget, a root) and what an ordinary one does (MoveIntent, AttackTarget) are coded, not internal"},
 		{write: "protocol/def/move_intent.go", why: "a velocity in, taken out: the cell integrates it and the position comes with the replicated state (D6 = A)"},
-		{write: "game/controllers/player/partition.go", why: "the partitioned scene as an optional capability: its absence is how an endpoint knows the scene is ordinary"},
-		{write: "game/controllers/player/move_intent.go", why: "forward the intent to the owning cell through the Player's transaction; wait on no other process"},
 		{write: "protocol/def/attack_target.go", why: "a target in, the attack's sequence out; the verdict and the HP come later (D7 = A)"},
-		{write: "game/controllers/player/attack_target.go", why: "one fixed-damage attack, applied once by the target's own cell however often it is retried"},
 		{write: "protocol/def/attack_result.go", why: "the verdict pushed to the attacker: applied, duplicate, rejected with why, or unknown; the damage and the target's HP after it"},
-		{write: "game/handler/team_group.go", why: "the roster as the Base's copy (cellworld.Group): each member's Player, SceneActor and Base sid"},
 		{write: "game/handler/team_sync.go", why: "after a restart (the copy's version is 0) and every resync_every, so a lost change notice is caught"},
 		{add: &AddOptions{Kind: "entity", Name: "TerrainChunk", ID: 11}, why: "an edited 64m terrain chunk (editable terrain plan P1): only chunks a player changed have one, overlaying the base pack; its id comes from the chunk's coordinates"},
 		{write: "db/def/terrain_chunk.go", why: "base revision, version, 4096 heights and 4096 materials (both per-index deltas; schema 2: materials became a uint16 list; schema 3: the bounded applied-edit list is gone, store key 5 retired; schema 4: the lots of the buildings standing on the chunk, persisted, never synced), numeric store keys"},
@@ -706,10 +687,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/terrain.go", why: "what a terrain edit refuses is coded: no terrain, a bad brush, another cell's ground, an unavailable chunk, too often, not allowed, a building, a sequence outside the ledger's window; and what a building refuses: a partitioned scene, a bad request, an unknown config, parameters out of their slots, a slope, water, the limit, nothing to remove"},
 		{write: "protocol/def/terrain_edit.go", why: "a brush and the player's edit sequence in (sequence 0 asks for the last one); each chunk's new version, whether the edit had already been applied and the last applied sequence out; the change itself comes on the sync stream"},
 		{write: "protocol/def/building.go", why: "place (config id, parameters, anchor, facing, levelled foundation), remove (anchor) or change parameters (anchor, parameters) with the player's edit sequence in; the building's state, each chunk's version and the last applied sequence out; other players see buildings on the sync stream"},
-		{write: "game/controllers/player/building.go", why: "a placement, removal or parameter change through the terrain map, the refusals to codes (the building's own first, then the terrain's)"},
-		{write: "game/controllers/player/terrain_edit.go", why: "wire integers to a brush without truncating, the terrain's refusals to codes"},
-		{write: "game/controllers/player/terrain_edit_test.go", why: "the endpoint without terrain answers terrain_disabled, refuses wire values outside their fields, maps every refusal to its code, carries the last sequence with terrain_seq"},
-		{write: "game/controllers/player/building_test.go", why: "the building endpoint without terrain answers terrain_disabled, an unknown op answers building_bad, every building refusal maps to its code before the terrain's"},
 		{write: "internal/service/game/terrain_test.go", why: "edits read back after the commit and not after a rollback, the same heights and versions after a restart, a record on another base revision discarded by its cell, a record with a material outside a byte not loaded; brushes: duplicates and reordering apply once, an edit replayed after the window or after a restart is stale and writes nothing, edits that shared a truncated id both apply, refusals write nothing, a rolled-back multi-chunk edit changes neither chunks nor view nor ledger; the restart and the replay again on real Mongo when ROOST_TERRAIN_IT_MONGO_URI is set"},
 		{write: "internal/service/game/terrain_wal_crash_test.go", why: "SIGKILL after a WAL-only acknowledged brush or building placement, then replay into real Mongo and restore chunk contents, versions, building, occupancy and deduplication ledger"},
 		{write: "internal/service/game/terrain_building_test.go", why: "buildings in the ordinary scene: every refusal (overlap, water, slope, kind, map edge, limit) before any write, a levelled foundation across two chunks, once per player and sequence shared with brushes, removal by the owner only, brushes refused under a building, walkers routed around it, concurrent placements never overlapping, the same buildings after a restart, a base pack revision keeping them (foundations re-levelled, misfits kept and counted), a lot without its building reported, refused without EnableBuildings; the building restart again on real Mongo when ROOST_TERRAIN_IT_MONGO_URI is set"},
@@ -723,27 +700,18 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
 		{write: "game/handler/purchase_balance.go", why: "a read-only bag snapshot for the demo purchase response; the module owns durable delivery"},
-		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},
-		{write: "game/controllers/player/finish_dungeon_test.go", why: "a clear counts once on the board, through the real endpoint, the leaderboard module's submit and the rank store on real Redis: a replay after more than the rank ring's 8 later clears, concurrent replays and a refilled failed submit; what the endpoint hands the rank service on every settlement (the season's clear count as a snapshot: max, no request id, on a replay too, never a zero, and a failed submit does not fail the settlement; no external dependency); and a clear contributes to the activity only from the call that paid it: a replay after the 300-second window rolls scores nothing in the new window, and a contribution that failed at payment is not refilled (no external dependency)"},
 		{write: "protocol/def/scene_ready.go", why: "the client says its state decoder is installed; until then its session is held and receives no frames"},
-		{write: "game/controllers/player/scene_ready.go", why: "hand the ready signal to the scene bridge"},
 		{write: "internal/errors/scene_view.go", why: "an LOD level the scene does not configure and a view changed too often are the client's to fix, not internal errors"},
 		{write: "protocol/def/scene_view.go", why: "the client's LOD / view request: a level from the server's table and a radius the server clamps and quantizes"},
-		{write: "game/controllers/player/scene_view.go", why: "hand the request to the scene's interest policy like a move: no queue, no commit gate, rate-limited, answered with the view in force"},
-		{write: "game/controllers/player/scene_view_test.go", why: "the request reaches the scene as asked and the answer carries the view in force; an unknown level, a request too soon and a player not in the scene are client codes, not internal errors"},
 		{add: &AddOptions{Kind: "protocol", Name: "SendGift", Group: "game", Handler: "player"}, why: "the saga start from a client"},
 		{write: "protocol/def/send_gift.go", why: "recipient, item, count in; the saga id out"},
-		{write: "game/controllers/player/send_gift.go", why: "StartGift through the Nest sender; the saga id is sender + session + frame sequence, and this process's sid is the sender's bound sid the steps are routed by"},
-		{write: "game/controllers/player/send_gift_test.go", why: "静态绑定：send_gift 把本进程 sid 作为发送方绑定的 sid 交给 StartGift"},
 		{add: &AddOptions{Kind: "protocol", Name: "BattleInput", Group: "game", Handler: "player"}, why: "one client's contribution to one lockstep frame"},
 		{write: "protocol/def/battle_input.go", why: "input, keyframe hash and catch-up request on one per-frame message"},
-		{write: "game/controllers/player/battle_input.go", why: "hands the message to the battle room's goroutine; no Entity is locked"},
 		{add: &AddOptions{Kind: "protocol", Name: "BattleFrame", Group: "game", Handler: "player"}, why: "the server push carrying one lockstep broadcast packet"},
 		{write: "protocol/def/battle_frame.go", why: "a notify: the packet the room encoded, redundancy included"},
 		{write: "protocol/def/entity_sync.go", why: "the scene's state frames on the wire: one complete frame per push"},
 		{add: &AddOptions{Kind: "protocol", Name: "GiftStatus", Group: "game", Handler: "player"}, why: "how the saga went"},
 		{write: "protocol/def/gift_status.go", why: "the coordinator's status, step and last error"},
-		{write: "game/controllers/player/gift_status.go", why: "Engine.Get through the saga capability; unknown until the start has been consumed"},
 		{run: enableDemoMatchSweep, why: "the match process sweeps the duel queue for expired tickets"},
 		{write: "loadtest/playertcp/conn.go", why: "the robot transport that speaks the generated server's frame"},
 		{write: "loadtest/scenarios/cellworld.yaml", why: "CellWorld robots over real account, TCP, PB and EntitySync"},
@@ -820,24 +788,62 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
 		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "skillbook", "rehome", "attribute", "equipment", "gm", "purchase", "team", "alliance", "login", "portal", "servertime", "cellworld", "room", "turn", "matchroom", "matchmaking"}, why: "login is the login module (the handshake authenticator that hands enter:<ticket> and session:<player_id>:<token> to account, the account collaborators, cmd/accountctl); portal is the HTTP front door on the account process (login, server list, enter ticket); servertime is the server clock a client reads; enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding; gm supplies audited feature commands, while the demo keeps its Player + World experience transaction"},
+		// AddItem 的 handler 收 view.IBagEntity：Nest 生成器按挂载 Bag 的实体找目标，bag 模块装好之后才有，所以
+		// add endpoint 排在模块安装之后。game/controllers 是一个包（2026-11-16 起）：协议生成器把 player 分组缺少的 Handle*
+		// 存根追加到 game/controllers/player.go，add endpoint 把 AddItem 的存根换成入口。demo 的玩家端点接着一起写：player.go
+		// （共用的依赖）覆盖掉存根与 add endpoint 的入口，各端点在 player_<协议>.go；中间不跑生成器，写完之后同一个方法
+		// 不会在两个文件里各有一份（add endpoint 留下的 add_item_endpoint_gen.go 在最后一次生成时退役）。
+		{add: &AddOptions{Kind: "endpoint", Name: "AddItem", Handler: "player"}, why: "protocol boundary to Nest sender"},
+		{write: "game/controllers/player.go", why: "the controller also holds the Player lifecycle"},
+		{write: "game/controllers/player_add_item.go", why: "the error boundary: coded errors become the response, not a dropped connection"},
+		{write: "game/controllers/player_add_exp.go", why: "hand-written: add endpoint wires single-entity handlers, AddExp addresses two"},
+		{write: "game/controllers/player_enter_game.go", why: "hand-written endpoint: GetOrCreate the Player, then answer"},
+		{write: "game/controllers/player_join_queue.go", why: "Enqueue through the typed match client, frame sequence as idempotency key"},
+		{write: "game/controllers/player_poll_match.go", why: "ownership-checked reads through the match client"},
+		{write: "game/controllers/player_world_stats.go", why: "a Nest read handler on the World"},
+		{write: "game/controllers/player_enter_dungeon.go", why: "Enter through the typed session client, frame sequence as idempotency key"},
+		{write: "game/controllers/player_finish_dungeon.go", why: "Finish through the session client, then the clear's exp through the AddExp transaction"},
+		{write: "game/controllers/player_move.go", why: "resolve the scene, then the move transaction"},
+		{write: "game/controllers/player_move_target.go", why: "resolve the scene, start the walk, answer with where it starts"},
+		{write: "game/controllers/player_activity_standing.go", why: "two sources, deliberately not merged: complete is not paid"},
+		{write: "game/controllers/player_enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running; a login without a server_id claim, or bound to another server, is refused as player_elsewhere before anything loads"},
+		{write: "game/controllers/player_partition.go", why: "the partitioned scene as an optional capability: its absence is how an endpoint knows the scene is ordinary"},
+		{write: "game/controllers/player_move_intent.go", why: "forward the intent to the owning cell through the Player's transaction; wait on no other process"},
+		{write: "game/controllers/player_attack_target.go", why: "one fixed-damage attack, applied once by the target's own cell however often it is retried"},
+		{write: "game/controllers/player_building.go", why: "a placement, removal or parameter change through the terrain map, the refusals to codes (the building's own first, then the terrain's)"},
+		{write: "game/controllers/player_terrain_edit.go", why: "wire integers to a brush without truncating, the terrain's refusals to codes"},
+		{write: "game/controllers/player_terrain_edit_test.go", why: "the endpoint without terrain answers terrain_disabled, refuses wire values outside their fields, maps every refusal to its code, carries the last sequence with terrain_seq"},
+		{write: "game/controllers/player_building_test.go", why: "the building endpoint without terrain answers terrain_disabled, an unknown op answers building_bad, every building refusal maps to its code before the terrain's"},
+		{write: "game/controllers/player_purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},
+		{write: "game/controllers/player_finish_dungeon_test.go", why: "a clear counts once on the board, through the real endpoint, the leaderboard module's submit and the rank store on real Redis: a replay after more than the rank ring's 8 later clears, concurrent replays and a refilled failed submit; what the endpoint hands the rank service on every settlement (the season's clear count as a snapshot: max, no request id, on a replay too, never a zero, and a failed submit does not fail the settlement; no external dependency); and a clear contributes to the activity only from the call that paid it: a replay after the 300-second window rolls scores nothing in the new window, and a contribution that failed at payment is not refilled (no external dependency)"},
+		{write: "game/controllers/player_scene_ready.go", why: "hand the ready signal to the scene bridge"},
+		{write: "game/controllers/player_scene_view.go", why: "hand the request to the scene's interest policy like a move: no queue, no commit gate, rate-limited, answered with the view in force"},
+		{write: "game/controllers/player_scene_view_test.go", why: "the request reaches the scene as asked and the answer carries the view in force; an unknown level, a request too soon and a player not in the scene are client codes, not internal errors"},
+		{write: "game/controllers/player_send_gift.go", why: "StartGift through the Nest sender; the saga id is sender + session + frame sequence, and this process's sid is the sender's bound sid the steps are routed by"},
+		{write: "game/controllers/player_send_gift_test.go", why: "静态绑定：send_gift 把本进程 sid 作为发送方绑定的 sid 交给 StartGift"},
+		{write: "game/controllers/player_battle_input.go", why: "hands the message to the battle room's goroutine; no Entity is locked"},
+		{write: "game/controllers/player_gift_status.go", why: "Engine.Get through the saga capability; unknown until the start has been consumed"},
+		{write: "game/controllers/player_enter_create.go", why: "the demo's two record operations behind the enter module's Create: Serve then GetOrCreate on the login budget, and the module's EnterCreate transaction"},
+		{write: "game/controllers/player_enter_login_export_test.go", why: "the test-only constructor the external login scenario builds its player controller with"},
+		{write: "game/controllers/player_enter_login_scenario_test.go", why: "the whole chain landing on the demo's own login: an enter-ticket handshake against the real account service, EnterStatus says create, EnterGame before the create is refused and writes nothing, EnterCreate, the demo's EnterGame, and a reconnect that is not asked to create again; the session-token path still loads or creates"},
 		{write: "game/modules/alliance/rules.go", why: "demo alliance currency is gold item 9001"},
 		{write: "game/modules/purchase/products.go", why: "the purchase module's project-owned catalogue: demo item packs plus the default coin product"},
 		{write: "game/modules/purchase/demo_provider.go", why: "the demo-only provider's channel and deterministic order identity"},
 		{write: "services/platform/purchase_channels.go", why: "the demo accepts only its simulated channel after the framework's mandatory HMAC verification"},
 		{write: "services/platform/demo_purchase_test.go", why: "the demo channel accepts its signed ingress and rejects other channels"},
 		{write: "game/modules/skills/fireball.json", why: "the demo skill definition; catalog startup and endpoint belong to skillbook"},
-		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的五个业务文件（含新玩家初始化 game/modules/login/enter_first.go）。协议多几个字段，
-		// 两个要装载 Player 的端点交给 player controller——EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
-		// 拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter 的联动登记）与 EnterCreate（区服归属、
-		// 登录预算、接入驻留表之后才建档）。会话激活后的告知 enter_status.go 是模块的，不覆盖。
+		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件（协议、game/controllers/enter.go、新玩家初始化
+		// game/modules/login/enter_first.go）。协议多几个字段，两个要装载 Player 的端点交给 demo 的玩家端点——EnterGame
+		// （区服归属、登录预算、进场景、补单、公会、公告；拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter
+		// 的联动登记）与 EnterCreate（区服归属、登录预算、接入驻留表之后才建档）。会话激活后的告知（enter.go 里的
+		// Announce）照模块原样保留。
 		{write: "protocol/def/enter_game.go", why: "the enter module's protocol with the demo's fields: client version in, player id / created / owner sid out; the message id is the one the module was allocated"},
-		{write: "game/controllers/enter/controller.go", why: "the enter domain's controller holds the player controller: the demo's login needs everything that controller has"},
-		{write: "game/controllers/enter/enter_game.go", why: "the endpoint hands the login to the player controller's EnterGame"},
-		{write: "game/controllers/enter/enter_create.go", why: "the create request's endpoint hands over to the player controller's EnterCreate: creating a Player loads it, and the demo loads a Player only where its role is bound, after the ownership table took it into service"},
-		{write: "game/controllers/player/enter_create.go", why: "the demo's two record operations behind the enter module's Create: Serve then GetOrCreate on the login budget, and the module's EnterCreate transaction"},
+		{write: "game/controllers/enter.go", why: "the enter module's controller file with the demo's two login endpoints: HandleEnterGame and HandleEnterCreate hand over to the demo's EnterGame / EnterCreate (player_enter_game.go, player_enter_create.go), because the demo loads a Player only where its role is bound, after the ownership table took it into service; the EnterStatus notice (Announce) is the module's, unchanged"},
 		{write: "game/modules/login/enter_first.go", why: "the demo's new-player initialization in the enter module's first-enter hook (D25): a new player's saved position is the world scene's spawn, written once in the transaction that marks the player initialized, on both the load-or-create and the create path"},
-		{write: "game/controllers/player/enter_login_export_test.go", why: "the test-only constructor the external login scenario builds its player controller with"},
-		{write: "game/controllers/player/enter_login_scenario_test.go", why: "the whole chain landing on the demo's own login: an enter-ticket handshake against the real account service, EnterStatus says create, EnterGame before the create is refused and writes nothing, EnterCreate, the demo's EnterGame, and a reconnect that is not asked to create again; the session-token path still loads or creates"},
+		// 玩家作为分区场景的 Base（cell_base.go、cell_team.go）在 Player 上监听 attribute 与 team 模块的实体事件
+		// event.AttributeChanged、event.TeamChanged：生成器登记监听时要在 game/event 里找到这两个事件，所以排在模块安装之后写。
+		{write: "game/entities/player/cell_base.go", why: "the player as its partitioned scene's Base (cellworld.BasePlayer): routing state in PlayerDao, the battle panel, starting the cell.base beat, and its copy of its team's roster for the team panel"},
+		{write: "game/entities/player/cell_team.go", why: "the team module's event.TeamChanged heard on the Player: the roster as the Base's copy (cellworld.Group: each member's Player, SceneActor and Base sid), written to this process's Node and, unless it is a periodic refresh, announced to the members before and after"},
 		// 排行榜是 leaderboard 模块：读榜的两条协议（LeaderboardTop 带自己的名次、LeaderboardMe）与提交入口
 		// SubmitSeason 都是模块的；demo 只覆盖模块留给工程的业务文件——哪张榜、哪个赛季、分数范围、一屏多长——
 		// 与钉住这些数的测试。副本结算（finish_dungeon）在事务之外调模块的提交，它 import game/modules/leaderboard。
@@ -863,7 +869,7 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 换服是 rehome 模块：申请协议、驱动器、档里的换服记录、与 enter 的联动（进入前检查、到达）都是模块的，
 		// demo 不覆盖它的任何文件。demo 这一侧的接线在自己的文件里：驻留表实现模块的 Residency 并发布
 		// （playerowner.go、service.go），saga 步骤按当前绑定准入（gift_saga.go、game/modules/alliance/runtime），
-		// 登录在装载玩家之前跑进入前检查（game/controllers/player/enter_game.go），GM 命令 gm.player.rehome，
+		// 登录在装载玩家之前跑进入前检查（game/controllers/player_enter_game.go），GM 命令 gm.player.rehome，
 		// 以及 demo 自己的换服前检查（rehome_checks.go）。
 		//
 		// 登录是 login 模块：握手的认证器（internal/access/player/tcp/auth.go 与 game/modules/login）、account 的协作者

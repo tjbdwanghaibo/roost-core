@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"time"
 
-	alliance "{{MODULE}}/game/entities/alliance"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
@@ -16,8 +16,8 @@ import (
 // names the membership it made (Member) for the service's notice.
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceAdmitReserved(target alliance.IAllianceRosterEntity, requestID string, actorID int64, playerID int64, callerSID int32, viaApplication bool, maxMembers int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster := target.AllianceRosterComp()
+func handlerAllianceAdmitReserved(target view.IAllianceRosterEntity, requestID string, actorID int64, playerID int64, callerSID int32, viaApplication bool, maxMembers int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRoster()
 	var joined alliancerule.MemberChange
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		homeSID, err := roster.AdmissionHome(actorID, playerID, callerSID, viaApplication, int(maxMembers))

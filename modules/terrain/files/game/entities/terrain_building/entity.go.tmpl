@@ -7,6 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/terrainsite"
 	gamescene "{{MODULE}}/game/modules/scene"
 )
 
@@ -17,11 +18,11 @@ type TerrainBuilding struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	site *TerrainSiteComponent    `comp:"CompTypeTerrainSite"`
+	site *terrainsite.Component `comp:"terrainsite.CompTypeTerrainSite"`
 	dao  *db.TerrainBuildingDao `dao:"terrain_building"`
 }
 
-// PublishSyncDirty 把 DAO 这笔事务改的同步脏位交给订阅主体（组件 TerrainSite 的 Owner 方法）。
+// PublishSyncDirty 把 DAO 这笔事务改的同步脏位交给订阅主体（view.TerrainSiteHolder 的宿主方法）。
 func (b *TerrainBuilding) PublishSyncDirty() {
 	if mask := b.TakeEntitySyncChanges(); mask != 0 {
 		b.MarkSyncDirty(mask)

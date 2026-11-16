@@ -15,6 +15,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
+	// game/components/scene 没有组件，只在 init 里登记区域钩子（actor 的 OnActor，发布 event.SceneRegion）与附近可见字段
+	// （OnSceneFields）；场景的运行期入口引用它，保证装了 scene 的服务都链接进这些登记。
+	_ "{{MODULE}}/game/components/scene"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	sender "{{MODULE}}/game/handler/syncsender"

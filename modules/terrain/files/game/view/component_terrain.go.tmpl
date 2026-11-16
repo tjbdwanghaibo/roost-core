@@ -12,7 +12,8 @@ type Terrain interface {
 	Sequence() int64
 }
 
-// TerrainHolder 是“带有 Terrain 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+// TerrainHolder 是“带有 Terrain 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它，
+// Nest handler 收生成的 ITerrainEntity。
 type TerrainHolder interface{ Terrain() Terrain }
 
 // TerrainCommand 是一条地形编辑命令（纯数据，只由 controller 规范化；客户端不给块ID、owner或地形数组）：场景、玩家的

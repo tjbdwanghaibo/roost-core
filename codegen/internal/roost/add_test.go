@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 )
 
 func TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne(t *testing.T) {
@@ -120,11 +122,15 @@ func TestModsBroughtInByAddAccessAndAddRPCGetTheirConfigSections(t *testing.T) {
 	}
 	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
 		cfg := read(rel)
-		// 带 DataEngine 的服务每个 sid 一个写者：与 project new 直接选 nest 一样打开单实例锁，并补锁用的 redis: 段。
-		for _, want := range []string{"\nnest:\n", "\ndataengine:\n", "\nmongo:\n", "\nnats:\n", "\nredis:\n"} {
+		// 带 DataEngine 的服务每个 sid 一个写者：与 project new 直接选 nest 一样打开单实例锁，并补锁用的 etcd: 段
+		// （锁存 etcd，2026-11-16 起不再为锁带 redis: 段）。
+		for _, want := range []string{"\nnest:\n", "\ndataengine:\n", "\nmongo:\n", "\nnats:\n", "\netcd:\n"} {
 			if strings.Count(cfg, want) != 1 {
 				t.Errorf("%s has %d %q blocks after add access, want 1:\n%s", rel, strings.Count(cfg, want), want, cfg)
 			}
+		}
+		if strings.Contains(cfg, "\nredis:\n") {
+			t.Errorf("%s gained a redis: block after add access; the singleton lock is on etcd and nothing else here uses Redis:\n%s", rel, cfg)
 		}
 		singletonOn := false
 		for _, block := range topLevelConfigBlocks(cfg) {
@@ -358,7 +364,8 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 		}
 	}
 	generate()
-	path := filepath.Join(root, "game/controllers/player/hello.go")
+	// game/controllers 是一个包：handler=player 的存根在 game/controllers/player.go。
+	path := filepath.Join(root, "game/controllers/player.go")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -386,12 +393,56 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := Generate(root, GenerateOptions{Check: true}); err == nil || !strings.Contains(err.Error(), "hello.go") {
+	if err := Generate(root, GenerateOptions{Check: true}); err == nil || !strings.Contains(err.Error(), "player.go") {
 		t.Fatalf("missing scaffold not detected: %v", err)
 	}
 	generate()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// project sync 的暂存提交：已有的业务文件归业务，暂存里的改动不带回；唯一的例外是协议生成器往
+// game/controllers/<分组>.go 末尾追加的“未实现”存根——不带回的话，生成的协议登记引用的方法在真实工程里不存在。
+// 别的改动（改了业务代码、在别的目录）照旧不带回。
+func TestStagedCommitCarriesControllerStubAppendsOnly(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := "package controllers\n\nimport \"context\"\n\n// chatBackground 是模块自己的代码。\nvar chatBackground = context.Background\n"
+	writeProjectFile(t, root, "game/controllers/chat.go", module)
+	writeProjectFile(t, root, "game/controllers/team.go", module)
+	writeProjectFile(t, root, "game/modules/chat/chat.go", "package chat\n")
+	stage := filepath.Join(t.TempDir(), "stage")
+	if err := copyProject(context.Background(), root, stage); err != nil {
+		t.Fatal(err)
+	}
+	stub := "func (controller *Controller) HandleChatSend(ctx *playeraccess.Context, req *pb.ChatSendRequest) (*pb.ChatSendResponse, error) {\n\treturn nil, fmt.Errorf(\"HandleChatSend: not implemented\")\n}\n"
+	appended, err := protocol.AppendGoDecls([]byte(module), []protocol.GoImport{{Path: "fmt"}, {Name: "playeraccess", Path: protocol.PlayerAccessImport}, {Path: "example.com/planet/protocol/pb"}}, stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, stage, "game/controllers/chat.go", string(appended))
+	writeProjectFile(t, stage, "game/controllers/team.go", strings.Replace(module, "context.Background", "context.TODO", 1))
+	writeProjectFile(t, stage, "game/modules/chat/chat.go", "package chat\n\n// edited\n")
+	changes, err := planStagedProjectCommit(root, stage, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried := map[string]bool{}
+	for _, change := range changes {
+		carried[change.rel] = true
+	}
+	if !carried["game/controllers/chat.go"] {
+		t.Fatalf("the stub append to game/controllers/chat.go was not carried back: %v", changes)
+	}
+	for _, rel := range []string{"game/controllers/team.go", "game/modules/chat/chat.go"} {
+		if carried[rel] {
+			t.Fatalf("an application edit in %s was carried back", rel)
+		}
 	}
 }
 

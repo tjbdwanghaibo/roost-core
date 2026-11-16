@@ -4,7 +4,7 @@ package main
 
 import (
 	syncsender "ACTIVITY_MODULE/game/handler/syncsender"
-	"ACTIVITY_MODULE/game/modules/activity"
+	"ACTIVITY_MODULE/game/components/activity"
 	"ACTIVITY_MODULE/internal/bootstrap"
 	rpcworld "ACTIVITY_MODULE/internal/rpc/activity_world"
 	"context"

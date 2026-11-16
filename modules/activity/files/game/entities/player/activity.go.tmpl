@@ -1,0 +1,17 @@
+package player
+
+import "{{MODULE}}/game/components/activity"
+
+// Player 给活动组件的宿主方法（view.ActivityHolder）里生成器不写的两个；ActivityBook 由生成器交接 PlayerDao.Activity。
+
+// ActivityScope 是 Player 的活动范围。
+func (e *Player) ActivityScope() string { return "player" }
+
+// ActivityCreatedAt 是 Player 的首次建档时间：enter 联动安装时由 activity.PlayerCreatedAt 提供；
+// 没有持久事实时返回 0，不用当前时间冒充。
+func (e *Player) ActivityCreatedAt() int64 {
+	if activity.PlayerCreatedAt == nil {
+		return 0
+	}
+	return activity.PlayerCreatedAt(e)
+}
