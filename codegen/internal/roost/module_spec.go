@@ -55,6 +55,13 @@ type ModuleSpec struct {
 	DAOs []ModuleDAOField `yaml:"daos" json:"daos,omitempty"`
 	// Component 是挂在 Entity 上的组件名（PascalCase）；组件号在安装时分配。
 	Component string `yaml:"component" json:"component,omitempty"`
+	// ComponentPackage 是组件所在的包（工程内路径，例如 game/components/bag）。写了它，组件按组件包的写法挂到 Entity 上
+	// （2026-11-16 起的写法）：字段 `<component 的 snake 名> *<包名>.Component` 带标签 `comp:"<包名>.CompType<Component>"`，
+	// 类型号常量、//roost:component 与 RegisterComponentFactory 都在那个包里，实体包里不再有组件文件。
+	// 包由本模块的 files/ 提供时，类型号由本模块分配（{{ID:component:<Component>}}）；包属于 requires 里的另一个模块时
+	// （activity_alliance 把 activity 的组件挂到 Alliance 上，同一个组件同一个类型号），本模块只挂载、不分配号。
+	// 不写时是旧写法：类型号、组件别名与工厂登记在实体包的 <x>_component.go 里，字段是 *<Component>Component。
+	ComponentPackage string `yaml:"component_package,omitempty" json:"component_package,omitempty"`
 	// Components 为自带实体的其他组件分配类型号，聚合字段由实体模板声明。
 	Components []string `yaml:"components,omitempty" json:"components,omitempty"`
 	// SyncPacker 把模块自带的有限视图打包器接到目标实体；不覆盖已有业务打包器。
@@ -182,6 +189,8 @@ var (
 	moduleStorePattern  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	// moduleIDPlaceholder 匹配模板里的 {{ID:<kind>:<name>}}。
 	moduleIDPlaceholder = regexp.MustCompile(`\{\{ID:([a-z]+):([A-Za-z0-9_]+)\}\}`)
+	// moduleComponentPackagePattern 是 component_package 允许的落点：game/components/<包> 或 game/modules/<包>。
+	moduleComponentPackagePattern = regexp.MustCompile(`^game/(components|modules)/[a-z][a-z0-9_]*$`)
 )
 
 // moduleIDKinds 是模块能申请的 ID 种类；timer 在实体内分配，其他种类对应 roost.yaml 的 ids 段。
@@ -223,6 +232,15 @@ func loadModuleCatalogFS(source fs.FS) (map[string]ModuleSpec, error) {
 		for _, other := range append(append([]string(nil), spec.Requires...), spec.Conflicts...) {
 			if _, ok := catalog[other]; !ok {
 				return nil, fmt.Errorf("module %s names unknown module %q", spec.Name, other)
+			}
+		}
+		if spec.ComponentPackage != "" && !spec.shipsPackage(spec.ComponentPackage) {
+			shipped := false
+			for _, other := range spec.Requires {
+				shipped = shipped || catalog[other].shipsPackage(spec.ComponentPackage)
+			}
+			if !shipped {
+				return nil, fmt.Errorf("module %s mounts component package %s, but neither it nor a module it requires ships that package", spec.Name, spec.ComponentPackage)
 			}
 		}
 		for _, rel := range spec.ownedFiles() {
@@ -350,6 +368,17 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	}
 	if spec.Component != "" && !modulePascalPattern.MatchString(spec.Component) {
 		return fmt.Errorf("component %q must be PascalCase", spec.Component)
+	}
+	if spec.ComponentPackage != "" {
+		if spec.Component == "" {
+			return fmt.Errorf("component_package needs component (the name of the CompType<Component> constant in that package)")
+		}
+		if !moduleComponentPackagePattern.MatchString(spec.ComponentPackage) {
+			return fmt.Errorf("component_package %q must be a package under game/components/ or game/modules/ (for example game/components/bag)", spec.ComponentPackage)
+		}
+		if !spec.shipsPackage(spec.ComponentPackage) && len(spec.Requires) == 0 {
+			return fmt.Errorf("component_package %s is not in files/; mounting another module's component needs that module in requires", spec.ComponentPackage)
+		}
 	}
 	if len(spec.TimerTypes) > 0 {
 		if spec.Component == "" || !modulePascalPattern.MatchString(spec.Entity) {
@@ -555,7 +584,8 @@ func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
 	for _, name := range spec.Entities {
 		declared["entity"][name] = true
 	}
-	if spec.Component != "" {
+	// 挂别的模块的组件包时，类型号属于那个模块，本模块不再分配。
+	if spec.Component != "" && (spec.ComponentPackage == "" || spec.shipsPackage(spec.ComponentPackage)) {
 		declared["component"][spec.Component] = true
 	}
 	for _, name := range spec.Components {
@@ -568,6 +598,17 @@ func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
 		declared["protocol"][name] = true
 	}
 	return declared
+}
+
+// shipsPackage 报告 files/ 里有没有直接放在 pkg 目录下的文件（模块自己提供这个包）。
+func (spec ModuleSpec) shipsPackage(pkg string) bool {
+	for _, rel := range spec.Files {
+		if dir, _, ok := strings.Cut(strings.TrimPrefix(rel, pkg+"/"), "/"); ok || dir == rel {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func moduleEntityDefinitions(name string) []string {

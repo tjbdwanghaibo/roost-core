@@ -189,11 +189,17 @@ func checkComponentViews(t *testing.T, fsys fs.FS, views []string, sourcesOf fun
 			t.Fatal(err)
 		}
 		src := strings.ReplaceAll(string(raw), "{{MODULE}}", "example.com/m")
-		file, err := parser.ParseFile(token.NewFileSet(), name, placeholder.ReplaceAllString(src, "1"), parser.SkipObjectResolution)
+		file, err := parser.ParseFile(token.NewFileSet(), name, placeholder.ReplaceAllString(src, "1"), parser.ParseComments|parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
 		return file
+	}
+	// //roost:listen 方法是实体事件的监听（生成的 <实体>_event_gen.go 调用），不是组件对外的方法，不进 view。
+	listens := func(fn *ast.FuncDecl) bool {
+		return fn.Doc != nil && slices.ContainsFunc(fn.Doc.List, func(c *ast.Comment) bool {
+			return c.Text == "//roost:listen" || strings.HasPrefix(c.Text, "//roost:listen ")
+		})
 	}
 	used := map[string]map[string]bool{}
 	for _, viewPath := range views {
@@ -239,7 +245,7 @@ func checkComponentViews(t *testing.T, fsys fs.FS, views []string, sourcesOf fun
 			}
 			for _, decl := range parse(source).Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv == nil || !fn.Name.IsExported() || framework[fn.Name.Name] || listed[fn.Name.Name] {
+				if !ok || fn.Recv == nil || !fn.Name.IsExported() || framework[fn.Name.Name] || listed[fn.Name.Name] || listens(fn) {
 					continue
 				}
 				star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
@@ -567,6 +573,80 @@ func TestModuleSpecControllersAndEventLayout(t *testing.T) {
 		if want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
 			t.Errorf("with/chat %s: err = %v, want %q", rel, err, want)
 		}
+	}
+}
+
+// component_package（2026-11-16）：组件按组件包的写法挂到实体上。包在本模块的 files/ 里时本模块分配类型号；
+// 挂 requires 里另一个模块的组件包时不分配号（同一个组件同一个类型号），也不能用 {{ID:component:...}}；
+// 没人提供这个包时清单加载失败。安装器写字段 `<snake> *<包名>.Component` 与带包名的 comp 标签，补 import。
+func TestModuleComponentPackage(t *testing.T) {
+	own := moduleFixtureFS(moduleFixtureYAML+"component_package: game/components/demo\n", map[string]string{
+		"game/components/demo/demo.go": "package demo\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n",
+	})
+	if _, err := loadModuleCatalogFS(own); err != nil {
+		t.Fatalf("a module shipping its component package: %v", err)
+	}
+	mount := `name: mount
+summary: mounts demo's component on Guild
+requires: [demo]
+needs: {mods: [nest]}
+entity: Guild
+component: Demo
+component_package: game/components/demo
+verify: {packages: [./game/handler], run: ^TestMount, pass: 1}
+`
+	withMount := func(yaml, file string) fstest.MapFS {
+		fsys := moduleFixtureFS(moduleFixtureYAML+"component_package: game/components/demo\n", map[string]string{
+			"game/components/demo/demo.go": "package demo\n// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n",
+		})
+		fsys["mount/module.yaml"] = &fstest.MapFile{Data: []byte(yaml)}
+		fsys["mount/files/game/modules/mount/mount.go.tmpl"] = &fstest.MapFile{Data: []byte(file)}
+		return fsys
+	}
+	catalog, err := loadModuleCatalogFS(withMount(mount, "package mount\n"))
+	if err != nil {
+		t.Fatalf("mounting a required module's component package: %v", err)
+	}
+	if ids := catalog["mount"].declaredIDs()["component"]; len(ids) != 0 {
+		t.Fatalf("the mounting module declares component ids %v; the type number belongs to demo", ids)
+	}
+	for name, test := range map[string]struct{ yaml, file, want string }{
+		"foreign id":         {mount, "package mount\n// {{ID:component:Demo}}\n", "does not declare it"},
+		"no requires":        {strings.Replace(mount, "requires: [demo]\n", "", 1), "package mount\n", "needs that module in requires"},
+		"nobody ships it":    {strings.Replace(mount, "game/components/demo", "game/components/other", 1), "package mount\n", "neither it nor a module it requires ships that package"},
+		"outside components": {strings.Replace(mount, "game/components/demo", "game/view", 1), "package mount\n", "must be a package under game/components/ or game/modules/"},
+		"no component":       {strings.Replace(mount, "component: Demo\n", "", 1), "package mount\n", "component_package needs component"},
+	} {
+		_, err := loadModuleCatalogFS(withMount(test.yaml, test.file))
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: err = %v, want it to contain %q", name, err, test.want)
+		}
+	}
+
+	source := `package guild
+
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+type Guild struct {
+	*entity.EntityBase
+	entity.DaoManager
+}
+`
+	wired, err := wireComponentPackageField([]byte(source), "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"example.com/m/game/components/demo"`, "entity.ComponentManager", "demo *demo.Component `comp:\"demo.CompTypeDemo\"`"} {
+		if !strings.Contains(string(wired), want) {
+			t.Errorf("wired entity lacks %q:\n%s", want, wired)
+		}
+	}
+	if _, err := wireComponentPackageField(wired, "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo"); err == nil || !strings.Contains(err.Error(), "already contains component Demo") {
+		t.Errorf("wiring twice: err = %v", err)
+	}
+	clash := strings.Replace(source, `import "github.com/tjbdwanghaibo/roost-core/framework/entity"`, "import (\n\t\"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\tdemo \"example.com/m/game/modules/demo\"\n)\n\nvar _ = demo.X", 1)
+	if _, err := wireComponentPackageField([]byte(clash), "entity.go", "Guild", "demo", "Demo", "example.com/m/game/components/demo"); err == nil || !strings.Contains(err.Error(), "the alias already names") {
+		t.Errorf("alias clash: err = %v", err)
 	}
 }
 

@@ -850,7 +850,12 @@ func writeModule(root string, manifest Manifest, service string, item ModulePlan
 		if err != nil {
 			return InstalledModule{}, err
 		}
-		updated, _, err := wireComponentField(raw, entityPath, toPascal(entityName), toSnake(spec.Component), spec.Component)
+		var updated []byte
+		if spec.ComponentPackage != "" {
+			updated, err = wireComponentPackageField(raw, entityPath, toPascal(entityName), toSnake(spec.Component), spec.Component, manifest.Project.Module+"/"+spec.ComponentPackage)
+		} else {
+			updated, _, err = wireComponentField(raw, entityPath, toPascal(entityName), toSnake(spec.Component), spec.Component)
+		}
 		if err != nil {
 			return InstalledModule{}, err
 		}

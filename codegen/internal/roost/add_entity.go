@@ -166,6 +166,44 @@ func wireComponentField(raw []byte, path, entityType, fieldName, componentType s
 	return formatted, file.Name.Name, err
 }
 
+// wireComponentPackageField 按组件包的写法把组件挂到实体上（模块清单的 component_package）：字段
+// `<fieldName> *<包名>.Component`、标签 `comp:"<包名>.CompType<component>"`，并补上组件包的 import（别名取包目录名）。
+// 类型号常量与工厂登记在组件包里，实体包里不再写组件文件。
+func wireComponentPackageField(raw []byte, path, entityType, fieldName, component, importPath string) ([]byte, error) {
+	file, fset, entityAlias, structure, err := parseEntityAggregate(raw, path, entityType)
+	if err != nil {
+		return nil, err
+	}
+	alias := importPath[strings.LastIndex(importPath, "/")+1:]
+	for _, spec := range file.Imports {
+		existing := strings.Trim(spec.Path.Value, `"`)
+		name := existing[strings.LastIndex(existing, "/")+1:]
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if name == alias && existing != importPath {
+			return nil, fmt.Errorf("entity %s: cannot import component package %s as %s, the alias already names %s", entityType, importPath, alias, existing)
+		}
+		if existing == importPath && name != alias {
+			return nil, fmt.Errorf("entity %s imports %s as %s; the component package must keep its own name %s", entityType, importPath, name, alias)
+		}
+	}
+	compType := alias + ".CompType" + component
+	if structHasNamedField(structure, fieldName) || structHasTagValue(structure, "comp", compType) || structHasTagValue(structure, "comp", "CompType"+component) {
+		return nil, fmt.Errorf("entity %s already contains component %s", entityType, component)
+	}
+	if _, err := ensureImport(file, importPath, alias); err != nil {
+		return nil, err
+	}
+	ensureEmbeddedManager(structure, entityAlias, "ComponentManager")
+	structure.Fields.List = append(structure.Fields.List, &ast.Field{
+		Names: []*ast.Ident{ast.NewIdent(fieldName)},
+		Type:  &ast.StarExpr{X: &ast.SelectorExpr{X: ast.NewIdent(alias), Sel: ast.NewIdent("Component")}},
+		Tag:   &ast.BasicLit{Kind: token.STRING, Value: "`comp:\"" + compType + "\"`"},
+	})
+	return formatAST(fset, file)
+}
+
 func wireDAOField(raw []byte, path, entityType, importPath, collection, daoType string) ([]byte, error) {
 	fieldName := collection
 	if strings.EqualFold(strings.TrimSuffix(daoType, "Dao"), entityType) {
