@@ -49,4 +49,20 @@ func TestModuleCdkeyNoticeInstallAndVerify(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeated installation changed the project")
 	}
+	// 再装 gm：notice 的 GM 命令联动（with/gm）要在门禁里跑到，否则它变红也没人发现（合包时出过一次）。
+	roost("module", "add", "gm")
+	report, err = VerifyModules(context.Background(), root, []string{"notice", "gm"}, nil)
+	if err != nil {
+		t.Fatalf("verify with gm: %v %+v", err, report)
+	}
+	counts = map[string]int{}
+	for _, module := range report.Modules {
+		if !module.OK || module.Skipped != 0 {
+			t.Fatalf("module with gm=%+v", module)
+		}
+		counts[module.Name] = module.Passed
+	}
+	if counts["notice+gm"] != 4 {
+		t.Fatalf("scenario counts with gm=%v", counts)
+	}
 }
