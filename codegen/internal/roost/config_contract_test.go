@@ -861,10 +861,14 @@ func TestDoctorNamesTheConfigSectionsAManifestAddedModLacks(t *testing.T) {
 			t.Errorf("the WARN does not name %s:\n%s", rel, item.Detail)
 		}
 	}
-	for _, want := range []string{"nest:", "dataengine:", "mongo:", "nats:", "redis:", "\nmongo:\n  uri: mongodb://127.0.0.1", "\n    mongo:\n", "CHANGE_ME", "singleton.enabled is not true"} {
+	// 单实例锁存 etcd（2026-11-16）：开锁的服务缺的是锁用的 etcd: 段，不再是 redis:。
+	for _, want := range []string{"nest:", "dataengine:", "mongo:", "nats:", "etcd:", "\nmongo:\n  uri: mongodb://127.0.0.1", "\n    mongo:\n", "CHANGE_ME", "singleton.enabled is not true"} {
 		if !strings.Contains(item.Detail, want) {
 			t.Errorf("the WARN lacks %q:\n%s", want, item.Detail)
 		}
+	}
+	if strings.Contains(item.Detail, "redis:") {
+		t.Errorf("the WARN asks for a redis: block; nothing in a nest service needs Redis now that the lock is on etcd:\n%s", item.Detail)
 	}
 	for _, other := range []string{"config-schema:game", "config:game"} {
 		if items[other].Status == StatusFail {

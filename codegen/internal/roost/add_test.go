@@ -122,11 +122,15 @@ func TestModsBroughtInByAddAccessAndAddRPCGetTheirConfigSections(t *testing.T) {
 	}
 	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
 		cfg := read(rel)
-		// 带 DataEngine 的服务每个 sid 一个写者：与 project new 直接选 nest 一样打开单实例锁，并补锁用的 redis: 段。
-		for _, want := range []string{"\nnest:\n", "\ndataengine:\n", "\nmongo:\n", "\nnats:\n", "\nredis:\n"} {
+		// 带 DataEngine 的服务每个 sid 一个写者：与 project new 直接选 nest 一样打开单实例锁，并补锁用的 etcd: 段
+		// （锁存 etcd，2026-11-16 起不再为锁带 redis: 段）。
+		for _, want := range []string{"\nnest:\n", "\ndataengine:\n", "\nmongo:\n", "\nnats:\n", "\netcd:\n"} {
 			if strings.Count(cfg, want) != 1 {
 				t.Errorf("%s has %d %q blocks after add access, want 1:\n%s", rel, strings.Count(cfg, want), want, cfg)
 			}
+		}
+		if strings.Contains(cfg, "\nredis:\n") {
+			t.Errorf("%s gained a redis: block after add access; the singleton lock is on etcd and nothing else here uses Redis:\n%s", rel, cfg)
 		}
 		singletonOn := false
 		for _, block := range topLevelConfigBlocks(cfg) {

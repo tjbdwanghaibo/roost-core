@@ -1067,6 +1067,37 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	}
 	// 玩家接入先由业务建好：下面的失败要落在模块事务里，而不是被保留的前置命令里。
 	roost("add", "access", "player", "--service", "game")
+	// game 带 DataEngine、开着单实例锁：从建工程起就有锁连接用的 etcd: 段（锁存 etcd，2026-11-16），但没有 etcd Mod。
+	gameConfigFiles := []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"}
+	etcdBlock := func(rel string) string {
+		t.Helper()
+		config := read(rel)
+		var found []string
+		for _, block := range topLevelConfigBlocks(config) {
+			if block.key == "etcd" {
+				found = append(found, block.text)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%s has %d etcd: blocks, want exactly the singleton lock's one:\n%s", rel, len(found), config)
+		}
+		return found[0]
+	}
+	lockEtcd := map[string]string{}
+	for _, rel := range gameConfigFiles {
+		lockEtcd[rel] = etcdBlock(rel)
+	}
+	gameRunsEtcdMod := func() bool {
+		t.Helper()
+		current, err := LoadManifest(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return contains(serviceConfigMods(current, "game"), "etcd")
+	}
+	if gameRunsEtcdMod() {
+		t.Fatal("precondition: game already runs the etcd Mod before any module routes by key")
+	}
 
 	before := moduleProjectDigest(t, root)
 	var plan ModulePlan
@@ -1126,9 +1157,13 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	if config := read("configs/service/config.rank.yaml"); !strings.Contains(config, "addr: 127.0.0.1:9101") {
 		t.Fatalf("rank's development ops port is not 9100 + its port block:\n%s", config)
 	}
-	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
-		if config := read(rel); strings.Contains(config, "\netcd:\n") {
-			t.Fatalf("rank does not route by key; %s gained an etcd section:\n%s", rel, config)
+	// rank 不按键路由：不给 game 引入 etcd Mod，锁用的 etcd: 段原样不动（不重复、不改写）。
+	if gameRunsEtcdMod() {
+		t.Fatal("rank does not route by key, yet installing leaderboard gave game the etcd Mod")
+	}
+	for _, rel := range gameConfigFiles {
+		if got := etcdBlock(rel); got != lockEtcd[rel] {
+			t.Fatalf("rank does not route by key, yet installing leaderboard changed the etcd: block of %s:\nbefore:\n%s\nafter:\n%s", rel, lockEtcd[rel], got)
 		}
 	}
 
@@ -1143,10 +1178,11 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 	if match := manifest.Services["match"]; match.Framework != "match" || match.PortBlock == nil || *match.PortBlock != 2 || strings.Join(manifest.Services["game"].Uses, ",") != "match,rank" {
 		t.Fatalf("after matchmaking: match %+v, game uses %v", match, manifest.Services["game"].Uses)
 	}
-	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
-		if config := read(rel); !strings.Contains(config, "\netcd:\n") {
-			t.Fatalf("%s has no etcd section for the match client:\n%s", rel, config)
-		}
+	if !gameRunsEtcdMod() {
+		t.Fatal("match routes by affinity key, yet installing matchmaking did not give game the etcd Mod")
+	}
+	for _, rel := range gameConfigFiles {
+		etcdBlock(rel) // 锁与 match 客户端共用这一个 etcd: 段，不重复追加
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
