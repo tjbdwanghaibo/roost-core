@@ -154,8 +154,4 @@ type BagEntity interface { entity.IThreadSafeEntity; BagHolder }
 
 ## 8. 工作量
 
-约 2～3 天的 agent 工作量。
-
-- 生成器（protocol、entity、nest、installer）约 1 天；
-- 模块模板约 1 天；
-- demo、夹具、文档和全量约半天。
+**以[总览 §4](FEATURE-2026-11-16-round-overview.md#4-实施顺序与时间预估)的 agent 墙钟估算为准。**本节原来按人力天数估算，偏大太多，已作废。
