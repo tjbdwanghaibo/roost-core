@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.51.0] - 2026-11-16
+
 - **新增 `roost add gate`**（2026-11-16）：`roost add gate [<名字>] [--service <玩家服务>]` 一条命令把嵌入玩家 TCP 的工程改成独立 Gate。`roost.yaml` 新增 `access.player.gate`，Gate 是一个普通业务服务（etcd、nats，uses account），跑生成的 `accessplayertcp.NewGateMod()`（读 `player_access.gate.{namespace, addr, advertise_addr}`）；玩家服务的 `bootstrap.New()` 改走 Game Ingress（工程有 `NewAuthenticator` 时用它），配置关掉嵌入 TCP、两边同一命名空间、开单实例锁，装了 login 时 `login.presence.addr` 写成 Gate 地址；部署模板的 7000 端口移到 Gate。同名重跑什么都不改；没有玩家 TCP、没有托管 account、已有别的 Gate、名字冲突时拒绝并说明原因。没声明 Gate 的工程生成结果逐字节不变。
 - **`roost project doctor` 检查 Gate 接法**（2026-11-16）：`gate:ingress`、`gate:player-tcp`、`gate:namespace`、`gate:etcd-singleton`、`gate:client-address`。离线脚本 `scripts/test-gate-generated.sh` 进 pretag；单机真实进程演练 `scripts/testdata/gate-drill/gate-drill.sh`（account + 经 Game Ingress 的 game + Gate，经 Gate 登录、建角、进入一次通过，[证据](docs/maintenance/evidence/gate-command-20261116/README.md)）。
 - **文档**（2026-11-16）：help、codegen README、PROJECT_GENERATOR、CODEGEN_REFERENCE 里误导的 `-services game,gate` 示例换掉（那个参数只会多出一个普通业务服务）；托管服务 collaborators 的路径更正为 `services/<名字>/collaborators.go`。
