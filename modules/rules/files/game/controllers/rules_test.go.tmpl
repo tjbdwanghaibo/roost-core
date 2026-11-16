@@ -168,6 +168,7 @@ func TestRulesPushUsesTheSameSnapshotAndCorrectPlayer(t *testing.T) {
 	}
 }
 func TestRulesEntryAndReconnectEachPushOneSnapshot(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("rules")) // 同装的别的模块的进入钩子不参与
 	f := newRulesFixture(t)
 	for i := 0; i < 2; i++ {
 		failed := gamelogin.RunEntered(context.Background(), f.registry, gamelogin.Entered{PlayerID: 96501})
@@ -186,6 +187,7 @@ func TestRulesEntryAndReconnectEachPushOneSnapshot(t *testing.T) {
 	}
 }
 func TestRulesPushFailureCanBeRecoveredByQuery(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("rules")) // 同装的别的模块的进入钩子不参与
 	f := newRulesFixture(t)
 	refused := errors.New("send queue full")
 	f.transport.fail = refused

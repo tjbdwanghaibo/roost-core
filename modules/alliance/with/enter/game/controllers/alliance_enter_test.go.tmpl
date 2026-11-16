@@ -7,7 +7,10 @@ import (
 	gamelogin "{{MODULE}}/game/modules/login"
 )
 
+// 两条场景都只看 alliance 的进入钩子：同装的别的模块（mailbox、rules、rehome……）在 init 里登记的钩子也在
+// 进入的登记表里，会拿这里的 Registry 做自己的事，所以先把表收窄到 alliance，用例结束时换回。
 func TestWithAllianceEnterRefreshesOnReconnect(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("alliance"))
 	c, r, n := allianceRefreshFixture(t, 0)
 	gamelogin.RunEntered(context.Background(), c.registry, gamelogin.Entered{PlayerID: 10})
 	gamelogin.RunEntered(context.Background(), c.registry, gamelogin.Entered{PlayerID: 10})
@@ -16,6 +19,7 @@ func TestWithAllianceEnterRefreshesOnReconnect(t *testing.T) {
 	}
 }
 func TestWithAllianceEnterFailureKeepsExistingCopy(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("alliance"))
 	c, r, n := allianceRefreshFixture(t, 7)
 	r.err = context.DeadlineExceeded
 	gamelogin.RunEntered(context.Background(), c.registry, gamelogin.Entered{PlayerID: 10})

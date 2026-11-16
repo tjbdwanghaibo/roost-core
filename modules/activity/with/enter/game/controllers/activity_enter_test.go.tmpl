@@ -145,7 +145,9 @@ func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *
 
 	activityEnterResumed.Store(0)
 	entered := gamelogin.Entered{PlayerID: playerID, InitResult: gamelogin.InitResult{FirstAtUnixMilli: now}}
-	// 只看本模块的钩子：同一个测试进程里可能还登记着别的功能的进入钩子，这个 registry 没有它们要的能力。
+	// 只看本模块的钩子：同一个测试进程里还登记着同装的别的功能的进入钩子，这个 registry 没有它们要的能力，
+	// 所以把登记表收窄到 activity，用例结束时换回。
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("activity"))
 	if failed := gamelogin.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
 		t.Fatalf("the activity enter hook failed (failed hooks: %v)", failed)
 	}

@@ -43,6 +43,12 @@ func withRehomeClaims(binding svcaccount.RoleBinding) map[string]string {
 	return claims
 }
 
+// withRehomeEnterOnly 把进入的登记表收窄到 rehome 自己的检查与钩子，用例结束时换回：同装的别的模块在 init 里
+// 登记的检查与钩子也在这张表里，它们会拿这里的 Registry 做自己的事，场景只看 rehome。
+func withRehomeEnterOnly(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("rehome"))
+}
+
 // enter 照进入端点那样走一遍 gamelogin.Enter，load 只计数。
 func (w *rehomeWorld) enter(server *rehomeServer, claims map[string]string, loads *int) error {
 	_, err := gamelogin.Enter(context.Background(), server.registry, gamelogin.Entering{PlayerID: w.playerID, Claims: claims},
@@ -56,6 +62,7 @@ func (w *rehomeWorld) enter(server *rehomeServer, claims map[string]string, load
 // 进入前检查的三种结果，都发生在加载 Player 之前：绑定在本服的放行；正在换服的 rehome_moving；
 // 已经换走的在原来的服上 rehome_elsewhere（带他现在的服），在新服上放行。被拒绝的进入没有加载任何东西。
 func TestWithRehomeEnterChecksBeforeThePlayerIsLoaded(t *testing.T) {
+	withRehomeEnterOnly(t)
 	if svcaccount.ServerIDClaim != "server_id" || svcaccount.BindEpochClaim != "bind_epoch" || svcaccount.TransferClaim != "transfer" {
 		t.Fatal("the account claim keys changed: authenticators already write the old ones")
 	}
@@ -121,6 +128,7 @@ func TestWithRehomeEnterChecksBeforeThePlayerIsLoaded(t *testing.T) {
 // 换服在 account 上在途时（这里由运维在 account 上人工发起，没有人在做）：目标服答 rehome_moving，不接手——
 // 它不是源服。claims 与问 account 两条路结论相同。
 func TestWithRehomeEnterRefusesAMovingPlayerOnTheTargetServer(t *testing.T) {
+	withRehomeEnterOnly(t)
 	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
 	target := w.server(rehomeTargetSID)
 	if _, err := w.accounts.BeginRoleTransfer(context.Background(), w.playerID, svcaccount.TransferRequest{ID: "ops-1", FromSID: 1000, To: 1001}); err != nil {
@@ -146,6 +154,7 @@ func TestWithRehomeEnterRefusesAMovingPlayerOnTheTargetServer(t *testing.T) {
 // 到达恰好一次：换服之后第一次进入目标服时清意图、冷却从这一刻起算、次数加一，事务外的到达钩子执行一次；
 // 再进入多少次都不再执行。
 func TestWithRehomeEnterArrivesOnceOnTheTargetServer(t *testing.T) {
+	withRehomeEnterOnly(t)
 	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
 	source, target := w.server(rehomeSourceSID), w.server(rehomeTargetSID)
 	withRehomeArrived.Store(0)
@@ -180,6 +189,7 @@ func TestWithRehomeEnterArrivesOnceOnTheTargetServer(t *testing.T) {
 // 意图对账：记下意图之后进程崩溃、没来得及向 account 发起。重启后这名玩家再进入源服时，
 // 向 account 确认那个 ID 没有成（并让它从此不能再发起），清掉意图；之后可以正常申请。
 func TestWithRehomeEnterClearsAnIntentWhoseTransferNeverHappened(t *testing.T) {
+	withRehomeEnterOnly(t)
 	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
 	if err := syncsender.NewRehomePrepareSender(w.engine).Sync_RehomePrepare(context.Background(), w.player.ID(), "lost-1", 1000, 1001, false); err != nil {
 		t.Fatal(err)
@@ -226,6 +236,7 @@ func TestWithRehomeEnterClearsAnIntentWhoseTransferNeverHappened(t *testing.T) {
 // 源服在受理之后重启：迁出表没了，account 上换服仍在途。这名玩家再来进入时被拒绝（rehome_moving），
 // 同时源服把这一次换服接着做完——断开会话、交出实体、提交。之后他在源服是 rehome_elsewhere，在目标服到达。
 func TestWithRehomeEnterResumesATransferAfterTheSourceRestarted(t *testing.T) {
+	withRehomeEnterOnly(t)
 	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
 	withRehomeArrived.Store(0)
 	// 重启之前的进程做到了这里：记意图、向 account 发起。

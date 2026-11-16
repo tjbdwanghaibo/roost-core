@@ -15,8 +15,10 @@ import (
 	"{{MODULE}}/protocol/pb"
 )
 
-// 告知的场景：进入前检查与“先新建”的规则登记在 game/enter 的登记表里（进程级，只能在 init 里登记），
-// 所以这里登记一组按玩家号、按 claims 回答的替身。
+// 告知的场景：进入前检查与“先新建”的规则登记在 game/modules/login 的登记表里（进程级，只能在 init 里登记），
+// 所以这里登记一组按玩家号、按 claims 回答的替身。每条场景开头调 enterStatusOnlyScenarios：
+// 同装的别的模块（rehome……）在 init 里登记的进入前检查也在这张表里，它们没有这里的 nil Registry 就会拒绝，
+// 场景要看的是这组替身的结论。
 const (
 	enterStatusElsewherePlayer = 94201 // 进入前检查拒绝：本服不该服务他
 	enterStatusUnknownPlayer   = 94202 // 进入前检查自己出错：判断不了
@@ -37,6 +39,11 @@ func init() {
 		return nil
 	})
 	gamelogin.RequireCreateFirst("enter-status-scenarios", func(claims map[string]string) bool { return claims["handshake"] == "ticket" })
+}
+
+// enterStatusOnlyScenarios 把进入的登记表收窄到上面这组替身，用例结束时换回。
+func enterStatusOnlyScenarios(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("enter-status-scenarios"))
 }
 
 // enterStatusRecorder 是玩家传输的替身：按发生顺序记下推送与断开。
@@ -75,6 +82,7 @@ func enterStatusBuilt(built bool, err error, asked *int) func(context.Context) (
 // 该服务的玩家：把“要不要先新建”推给刚激活的那条会话，不断开。没建成的“先新建”会话是 need_create；
 // 建成了的、以及 EnterGame 会代建的会话都是“直接进入”。
 func TestEnterStatusPushesNeedCreateToTheActivatedSession(t *testing.T) {
+	enterStatusOnlyScenarios(t)
 	asked := 0
 	recorder := &enterStatusRecorder{}
 	enterAnnounce(context.Background(), nil, recorder, gamelogin.Entering{PlayerID: enterStatusPlayer, Claims: enterStatusTicket}, "s-1", enterStatusBuilt(false, nil, &asked), 0)
@@ -102,6 +110,7 @@ func TestEnterStatusPushesNeedCreateToTheActivatedSession(t *testing.T) {
 // 本服不该服务的玩家：推进入前检查的那个码，然后断开他的连接——先推后断，推送失败、期限已到也照样断开；
 // 他的档没有被读过。
 func TestEnterStatusRefusalIsPushedThenThePlayerIsDisconnected(t *testing.T) {
+	enterStatusOnlyScenarios(t)
 	wantCode, wantReason := apperrors.ErrEnterNameLong.Code(), apperrors.ErrEnterNameLong.Error()
 	asked := 0
 	entering := gamelogin.Entering{PlayerID: enterStatusElsewherePlayer, Claims: enterStatusTicket}
@@ -147,6 +156,7 @@ func TestEnterStatusRefusalIsPushedThenThePlayerIsDisconnected(t *testing.T) {
 // 判断不了（进入前检查问不到权威、读档出错）：什么都不推、不断开，客户端从 EnterGame 得到结论。
 // 删过档的玩家是确定的结论：把码告诉他，但不断开——那不是“本服不该服务他”。
 func TestEnterStatusSaysNothingWhenItCannotTell(t *testing.T) {
+	enterStatusOnlyScenarios(t)
 	asked := 0
 	recorder := &enterStatusRecorder{}
 	enterAnnounce(context.Background(), nil, recorder, gamelogin.Entering{PlayerID: enterStatusUnknownPlayer, Claims: enterStatusTicket}, "s-1", enterStatusBuilt(false, nil, &asked), 0)

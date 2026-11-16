@@ -48,6 +48,8 @@
 | `OnCreatePrepare(name, CreateStep)` 新建步骤 | `game/modules/login/enter_create.go` | 空档建好之后、新建事务之前 | 不在 | 这一次新建到此为止，玩家仍是没建成；必须可以重复执行。全服唯一占名放这里 |
 | 实体事件 `event.EnterCreate{Name, NowUnixMilli}` 新建 | `game/components/enter/enter.go` 的 `Create` 发布 | 新建事务里，排在首次初始化之前；只在 `EnterCreate` 那条路执行 | 在 | 整笔新建回滚。名字写进档案放这里（profile 组件的 `OnEnterCreate`） |
 
+测试里的隔离：这些登记表是进程级的，各模块的 controller 与测试同在 `game/controllers` 一个包，同装的模块在 `init` 里登记的检查与钩子都在同一个测试二进制里（rehome 的进入前检查在没有 Registry 时不放行，会让别的模块的进入场景被拒）。场景测试开头写 `t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("自己的登记名"))`，把五张表（进入前检查、进入钩子、新建前检查、新建步骤、`RequireCreateFirst` 的规则）临时收窄到这几个名字，用例结束时换回；名字没登记过直接 panic。它只给测试用，用它的测试不能 `t.Parallel`。
+
 检查与钩子拿到的 `Entering.Claims` / `Entered.Claims` / `Creating.Claims` 是会话的 claims，可以为 nil，与会话共用同一个 map，约定只读。`Entered` 还带 `First` 与 `FirstAtUnixMilli`（首次初始化提交时的业务时间，之后每次进入都是同一个值，可以当注册时间用）。
 
 ### 状态

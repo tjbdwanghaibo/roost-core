@@ -186,3 +186,97 @@ func RunEntered(ctx context.Context, registry *app.Registry, entered Entered) []
 	}
 	return failed
 }
+
+// KeepOnlyRegistrationsForTest 只给测试用，生产代码不要调。它把本包的全部进入登记表——进入前检查（OnEntering）、
+// 进入钩子（OnEntered）、新建前检查（OnCreating）、新建步骤（OnCreatePrepare）与“先新建”的规则（RequireCreateFirst）——
+// 临时收窄到 names 这几个登记名，返回把原表换回来的函数。测试里这样用：
+//
+//	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("servertime"))
+//
+// 为什么要有它：登记表是进程级的，只能在 init 里登记；各模块的 controller 与测试同在 game/controllers 一个包，
+// 同装几个模块时它们在同一个测试二进制里，每个模块 init 登记的检查与钩子都在表里。场景测试只备了自己要的能力
+// （常常传 nil Registry），别的模块的检查会照它自己的规则拒绝这一次进入（rehome 没有 Registry 时不放行，
+// 这是它该有的行为，不能为测试放宽），别的模块的钩子也会拿这份 Registry 去做自己的事。场景要测的是自己的登记，
+// 用这个入口把别人的登记暂时拿掉，而不是让别的模块为测试改行为。
+//
+// 约束：names 里的每个名字至少要在一张表里登记过，否则 panic（拼错名字时场景会静悄悄地少跑一个钩子）；
+// 收窄对整个进程生效，用它的测试不能 t.Parallel，也不能与正在跑进入流程的别的测试并发；
+// 多次调用按 t.Cleanup 的后进先出顺序换回。
+func KeepOnlyRegistrationsForTest(names ...string) (restore func()) {
+	keep := make(map[string]bool, len(names))
+	for _, name := range names {
+		keep[name] = true
+	}
+	found := map[string]bool{}
+	only := func(name string) bool {
+		if keep[name] {
+			found[name] = true
+			return true
+		}
+		return false
+	}
+
+	checksMu.Lock()
+	savedChecks := checks
+	checks = map[string]Check{}
+	for name, check := range savedChecks {
+		if only(name) {
+			checks[name] = check
+		}
+	}
+	checksMu.Unlock()
+
+	hooksMu.Lock()
+	savedHooks := hooks
+	hooks = map[string]Hook{}
+	for name, hook := range savedHooks {
+		if only(name) {
+			hooks[name] = hook
+		}
+	}
+	hooksMu.Unlock()
+
+	createMu.Lock()
+	savedCreateChecks, savedCreateSteps := createChecks, createSteps
+	createChecks, createSteps = map[string]CreateCheck{}, map[string]CreateStep{}
+	for name, check := range savedCreateChecks {
+		if only(name) {
+			createChecks[name] = check
+		}
+	}
+	for name, step := range savedCreateSteps {
+		if only(name) {
+			createSteps[name] = step
+		}
+	}
+	createMu.Unlock()
+
+	createFirstMu.Lock()
+	savedFirstName, savedFirstRule := createFirstName, createFirstRule
+	if savedFirstRule != nil && !only(savedFirstName) {
+		createFirstName, createFirstRule = "", nil
+	}
+	createFirstMu.Unlock()
+
+	restore = func() {
+		checksMu.Lock()
+		checks = savedChecks
+		checksMu.Unlock()
+		hooksMu.Lock()
+		hooks = savedHooks
+		hooksMu.Unlock()
+		createMu.Lock()
+		createChecks, createSteps = savedCreateChecks, savedCreateSteps
+		createMu.Unlock()
+		createFirstMu.Lock()
+		createFirstName, createFirstRule = savedFirstName, savedFirstRule
+		createFirstMu.Unlock()
+	}
+	for _, name := range names {
+		if !found[name] {
+			restore()
+			panic(fmt.Sprintf("enter: KeepOnlyRegistrationsForTest: %q is not registered", name))
+		}
+	}
+	return restore
+}

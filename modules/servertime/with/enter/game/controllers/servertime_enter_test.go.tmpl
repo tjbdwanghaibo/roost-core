@@ -21,9 +21,16 @@ func servertimeEnterFailed(failed []string) bool {
 	return false
 }
 
-// 钩子是经 game/enter 的登记表生效的：一次完整的进入（检查 → 加载 → 钩子）之后，玩家收到恰好一条
+// servertimeEnterOnly 把进入的登记表收窄到本模块的钩子，用例结束时换回：同装的别的模块在 init 里登记的
+// 进入前检查（rehome 没有它要的 Registry 就不放行）与钩子也在这张表里，场景只看 servertime 自己。
+func servertimeEnterOnly(t *testing.T) {
+	t.Cleanup(gamelogin.KeepOnlyRegistrationsForTest("servertime"))
+}
+
+// 钩子是经 game/modules/login 的登记表生效的：一次完整的进入（检查 → 加载 → 钩子）之后，玩家收到恰好一条
 // ServertimeNow，内容是进入那一刻的快照。UTC、05:00 重置，现在是 2026-11-10 04:59:59.999：业务日还是 20261109。
 func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
+	servertimeEnterOnly(t)
 	now := int64(1794286799999)
 	servertimeStage(t, "UTC", "05:00", &now)
 	transport := &servertimePushed{}
@@ -84,6 +91,7 @@ func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
 
 // 传输不可用（这里是没有 Registry）时钟子失败，但进入照样成功：enter 只把失败的钩子名记下来。
 func TestWithServertimeEnterWithoutATransportStillEnters(t *testing.T) {
+	servertimeEnterOnly(t)
 	now := int64(1794299415250)
 	servertimeStage(t, "UTC", "00:00", &now)
 	if err := servertimePushOnEnter(context.Background(), nil, gamelogin.Entered{PlayerID: 95102}); err == nil {
@@ -102,6 +110,7 @@ func TestWithServertimeEnterWithoutATransportStillEnters(t *testing.T) {
 
 // 推送被传输拒绝（玩家的连接刚断、发送队列满）同样只是钩子失败：错误原样报给 enter 去记日志，进入照样成功。
 func TestWithServertimeEnterPushFailureStillEnters(t *testing.T) {
+	servertimeEnterOnly(t)
 	now := int64(1794299415250)
 	servertimeStage(t, "UTC", "00:00", &now)
 	refused := errors.New("no session for this player")
