@@ -14,7 +14,7 @@
 
 ### 服务端入口
 
-- 组件 `GachaComp()`（`game/components/gacha/gacha.go`），两个入口都只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
+- 组件 `Gacha()`（逻辑、类型号 `gacha.CompTypeGacha` 与工厂登记在 `game/components/gacha/gacha.go`，对外接口在 `game/view/component_gacha.go`），两个入口都只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest：
   - `Draw(key string, poolID, count int64) (GachaResult, error)`：扣金币的单抽 / 十连，`GachaDraw` 协议用的就是它。
   - `DrawFree(key string, poolID int64) (GachaResult, error)`：**不扣费的单抽**。掉落、保底、背包检查、回执与 `Draw` 是同一段代码、同一个请求键窗口，只是不调货币组件：`Cost` 为 0，`Balance` 是当时的余额，不触发 wallet 的消费钩子；池的 `Price` 对它不起作用。没有对应的客户端协议：免费的次数规则（每日一次、活动送几次）属于工程，由工程自己的 handler 调它（见“复用方式”）。
   - `GachaResult{Cost, Balance, Items, Misses, Replayed}`。`Replayed` 为真表示这是窗口内同一个请求键的重放：结果取自原回执，这一次什么都没写。
@@ -76,7 +76,7 @@
   - **免费抽**（每日免费转盘、活动送一次）：工程写自己的 Nest handler，在里面调 `DrawFree`，次数记在工程自己的状态里。`Replayed` 为真时原样返回、不再记次数；否则再判次数，超了返回带码错误，Nest 把这次抽卡一起回滚（道具、保底、回执都撤销）：
 
     ```go
-    r, err := target.GachaComp().DrawFree(request.Key, wheelPoolID)
+    r, err := target.Gacha().DrawFree(request.Key, wheelPoolID)
     if err != nil {
         return nil, err
     }
@@ -90,7 +90,7 @@
     ```
 
     请求键用这次免费抽自己的身份（例如“wheel:” 加业务日），客户端重试带同一个键。只许免费、不许付费抽的池：`GachaDraw` 仍能按 `price` 付费抽它，工程要在 `game/controllers/gacha.go` 的端点里拒绝这个池号（或不给客户端这个池号）。
-- **别的业务代码要替玩家抽卡**（活动送十连）：在自己的 Nest handler 里（目标实体实现 `player.IGachaEntity`）调 `target.GachaComp().Draw(key, poolID, count)`，照常扣金币；送免费的单抽调 `DrawFree(key, poolID)`（免费十连调十次、用十个键）。请求键用这件事自己的身份。成功日志由调用方在提交返回后写，`DrawFree` 没有端点替它记。
+- **别的业务代码要替玩家抽卡**（活动送十连）：在自己的 Nest handler 里（目标参数写 `view.IGachaEntity`，同一笔里还要用别的组件时写 `view.PlayerEntity`）调 `target.Gacha().Draw(key, poolID, count)`，照常扣金币；送免费的单抽调 `DrawFree(key, poolID)`（免费十连调十次、用十个键）。请求键用这件事自己的身份。成功日志由调用方在提交返回后写，`DrawFree` 没有端点替它记。
 - **只适合借鉴的情形：** 奖励不是堆叠道具（英雄实例、带随机属性的装备）、需要监管要求的概率公示与可审计随机、付费直购抽卡时不适合直接用。值得借鉴的是“回执固定成功结果、失败不留结果”与“保守的容量预检查”。
 
 ## 联动

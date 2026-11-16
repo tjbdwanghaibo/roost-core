@@ -59,11 +59,11 @@ func (controller *Controller) cdkeyDependencies() (cdkeyDeps, error) {
 	return cdkeyDeps{ledger: sender.NewCdkeySender(client), directory: dir, mailer: mailer}, nil
 }
 
-// Redeem 是客户端与可信服务端共用的协调入口，只能在实体事务外调用。
+// CdkeyRedeem 是客户端与可信服务端共用的协调入口，只能在实体事务外调用。
 // 严格持久意图 -> directory 永久占用 -> mailbox.SendTo -> 严格持久回执。
 // 任一步结果未知都保留意图、用同一码重试；绝不 Cancel/Release 占用，避免旧请求仍发件时新玩家抢到码。
 // directory 对同一 owner 的重放不是互斥锁；并发重放靠 mail 的同一发送键与玩家回执去重。
-func (controller *Controller) Redeem(ctx context.Context, playerID int64, code string) (gamecdkey.Intent, error) {
+func (controller *Controller) CdkeyRedeem(ctx context.Context, playerID int64, code string) (gamecdkey.Intent, error) {
 	if playerID <= 0 {
 		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
 	}
@@ -115,7 +115,7 @@ func (controller *Controller) HandleCdkeyRedeem(ctx *playeraccess.Context, reque
 	if ctx == nil || request == nil {
 		return nil, fmt.Errorf("cdkey: context and request are required")
 	}
-	result, err := controller.Redeem(ctx.Context(), ctx.PlayerID, request.Cdkey)
+	result, err := controller.CdkeyRedeem(ctx.Context(), ctx.PlayerID, request.Cdkey)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {

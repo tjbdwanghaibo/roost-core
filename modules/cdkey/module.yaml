@@ -13,6 +13,7 @@ state:
     dao: nosync
     comment: Cdkey 是兑换意图与回执，至多128条，不淘汰已成功记录。
 component: Cdkey
+component_package: game/components/cdkey
 protocols: [CdkeyRedeem]
 errcodes: [cdkey_invalid, cdkey_full, cdkey_taken]
 verify:

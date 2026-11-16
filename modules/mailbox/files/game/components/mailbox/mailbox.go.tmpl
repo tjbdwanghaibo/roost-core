@@ -20,7 +20,7 @@ func init() {
 	entity.RegisterComponentFactory(CompTypeMailbox, NewComponent)
 }
 
-// Owner 是 Mailbox 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+// Owner 是 Mailbox 组件的宿主：整个 Player（附件发放经它取别的组件，升级邮件的监听经它取玩家号）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 // Component 是邮件附件到账的业务逻辑：每封至多一次，发什么按附件的种类取登记的发放方式。
@@ -31,7 +31,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/mailbox_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

@@ -1,6 +1,6 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import "{{MODULE}}/game/view"
 
 // handlerTaskAdvance 把一个任务在它当前周期里的进度推进 n 次，返回推进后的进度。周期由任务表定：
 // 每日任务按业务日、每周任务按业务周、永久任务不分周期。不对客户端开放：没有协议与端点，
@@ -9,11 +9,11 @@ import player "{{MODULE}}/game/entities/player"
 // 任务未解锁（前置任务还没领奖）答 task_incomplete，任务号不存在答 task_unknown，n 不为正答 task_count_invalid。
 //
 // 已经在这名玩家的 Nest handler 里的功能（签到、消费）不要发这条消息，直接调同一个实体上的
-// TaskComp().Advance：进度与那个功能的写入在同一笔事务里提交或回滚。
+// Task().Advance：进度与那个功能的写入在同一笔事务里提交或回滚。
 //
 // 它不判重，发一次推进一次；消息重发会多记。调用方要防重就自己保证只发一次。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTaskAdvance(target player.ITaskEntity, taskID int64, n int64, nowUnixMilli int64) (int64, error) {
-	return target.TaskComp().Advance(taskID, n, nowUnixMilli)
+func handlerTaskAdvance(target view.ITaskEntity, taskID int64, n int64, nowUnixMilli int64) (int64, error) {
+	return target.Task().Advance(taskID, n, nowUnixMilli)
 }

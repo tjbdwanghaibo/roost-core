@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"{{MODULE}}/game/event"
 	logic "{{MODULE}}/game/modules/dungeon"
 	apperrors "{{MODULE}}/internal/errors"
 
@@ -12,7 +13,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// Owner 是 Dungeon 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Dungeon}}
+const CompTypeDungeon entity.ComponentType = {{ID:component:Dungeon}}
+
+// init 登记组件工厂：Player 结构体里 comp:"dungeon.CompTypeDungeon" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeDungeon, NewComponent)
+}
+
+// Owner 是 Dungeon 组件的宿主：整个 Player（组件经它发经验，并在它上面发布领奖事件）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 type Component struct {
@@ -20,7 +29,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/dungeon_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -37,7 +46,7 @@ func (component *Component) Counts(season int64) logic.ClaimResult {
 	return logic.ClaimResult{Season: season, Clears: clears, TotalClears: state.GetTotalClears()}
 }
 
-// Claim 在同一笔事务里记账、发经验、计数；拒绝与重复不写。只清理窗关闭再过10分钟的旧记录。
+// Claim 在同一笔事务里记账、发经验、计数，最后在 Player 上发布 event.DungeonClaimed；拒绝与重复不写、不发布。只清理窗关闭再过10分钟的旧记录。
 // 数量上限不淘汰有效事实；8个赛季满额后拒绝第9季首次发奖，运营需制定归档规则后显式迁移。
 func (component *Component) Claim(runID, season, amount, resolvedAt, now int64) (logic.ClaimResult, error) {
 	if runID <= 0 || season <= 0 || amount <= 0 {
@@ -84,7 +93,7 @@ func (component *Component) Claim(runID, season, amount, resolvedAt, now int64) 
 	result.Claimed = true
 	result.ExpGranted = amount
 	result.LevelsGained = gained
-	if err := runDungeonClaimed(component.owner, runID, season, fctx.NowMilli()); err != nil {
+	if err := component.owner.Publish(event.DungeonClaimed{RunID: runID, Season: season, NowUnixMilli: fctx.NowMilli()}); err != nil {
 		return logic.ClaimResult{}, err
 	}
 	return result, nil

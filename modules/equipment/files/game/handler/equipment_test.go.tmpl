@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,8 +29,8 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 	controller "{{MODULE}}/game/controllers"
 	playerentity "{{MODULE}}/game/entities/player"
-	gameequipment "{{MODULE}}/game/components/equipment"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/event"
 )
 
 type equipmentGetter map[int64]entity.IThreadSafeEntity
@@ -190,12 +189,14 @@ func (f *equipmentFixture) mustUnequip(t *testing.T, slot int32) *pb.EquipmentUn
 var equipmentRejectHook atomic.Bool
 
 func init() {
-	gameequipment.OnEquipmentChanged("zz_equipment_test", func(view.PlayerEntity) error {
-		if equipmentRejectHook.Load() {
-			return errors.New("equipment hook rejected")
-		}
-		return nil
-	})
+	// 测试自己的穿戴变化监听（生成的监听在 player 包的 init 里先登记，这里排在它们后面）：打开时拒绝穿脱。
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "EquipmentChanged", "handler_test.equipmentReject",
+		func(*playerentity.Player, event.EquipmentChanged) error {
+			if equipmentRejectHook.Load() {
+				return errors.New("equipment hook rejected")
+			}
+			return nil
+		})
 }
 func TestEquipmentEquipConsumesOne(t *testing.T) {
 	f := newEquipmentFixture(t)

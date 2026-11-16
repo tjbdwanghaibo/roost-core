@@ -1,0 +1,12 @@
+package event
+
+// CheckinClaimed 在 Player 今天签到成功后、同一笔事务内发布（checkin 组件的 Claim）：连续 Streak 天，发了 Reward 金币、
+// 余额 Balance；NowUnixMilli 是这条 Nest 消息冻结的业务时间。一个业务日只随成功的签到发布一次，被拒绝的签到
+// （今天签过了）不发布。监听返回错误时这一次签到整笔回滚（奖励、进度与监听的写入一起撤销），玩家之后可以再签；
+// 不想让签到因为自己失败的功能，在监听里把错误吞掉（只吞自己的业务错误，监听里再 Publish 返回的错误必须原样返回）。
+type CheckinClaimed struct {
+	Streak       int32
+	Reward       int64
+	Balance      int64
+	NowUnixMilli int64
+}

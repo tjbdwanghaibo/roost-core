@@ -7,13 +7,22 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/event"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
-// Owner 是 Shop 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Shop}}
+const CompTypeShop entity.ComponentType = {{ID:component:Shop}}
+
+// init 登记组件工厂：Player 结构体里 comp:"shop.CompTypeShop" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeShop, NewComponent)
+}
+
+// Owner 是 Shop 组件的宿主：整个 Player（组件经它扣钱、发货，并在它上面发布购买事件）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 // Component 是商店的业务逻辑。它不保存事务会改的状态：限购计数在 PlayerDao.Shop、
@@ -23,7 +32,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/shop_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -76,7 +85,7 @@ type ShopResult = view.ShopResult
 // 客户端用错了键，答 shop_key_conflict。
 //
 // 去重只在窗口内成立：这个 key 之后又成功买了 ShopReceiptWindow 次，它的回执被淘汰，再用它会当成
-// 一次新的购买。回执记在商店自己的账本里而不占货币的去重窗口（扣钱用 WalletComp().Add）：货币的回执
+// 一次新的购买。回执记在商店自己的账本里而不占货币的去重窗口（扣钱用 Wallet().Add）：货币的回执
 // 只有金额，认不出“同一个键换了商品”，也存不下发货结果；别的消费也不会把购买的键挤出窗口。
 // 被拒绝的购买不留回执，重发时重新判断。
 //
@@ -181,7 +190,11 @@ func (component *Component) Buy(key string, goodsID, count, nowUnixMilli int64) 
 	receipt.SetBought(result.Bought)
 	receipt.SetSeq(seq)
 	ledger.SetReceiptsKey(key, receipt)
-	if err := runShopBought(component.owner, goodsID, count, result, nowUnixMilli); err != nil {
+	if err := component.owner.Publish(event.ShopBought{
+		GoodsID: goodsID, Count: count, Cost: result.Cost, Balance: result.Balance,
+		ItemID: result.ItemID, Gained: result.Gained, Held: result.Held, Bought: result.Bought,
+		NowUnixMilli: nowUnixMilli,
+	}); err != nil {
 		return ShopResult{}, err
 	}
 	return result, nil

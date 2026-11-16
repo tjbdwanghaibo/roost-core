@@ -8,6 +8,7 @@ entities: [Dungeon]
 components: [DungeonRun]
 entity: Player
 component: Dungeon
+component_package: game/components/dungeon
 state:
   - field: Dungeon
     type: PlayerDungeonState

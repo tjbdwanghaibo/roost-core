@@ -15,7 +15,7 @@
 
 - **发件** `mailbox.SendTo(ctx, mailer, Letter)`（`game/modules/mailbox/mailbox_send.go`）：给一名玩家发一封邮件，返回 mail 服务产生的信封。`Letter{To, Subject, Body, Attachment, ExpiresInSeconds, RequestID}`；`RequestID` 是幂等键，必填；`ExpiresInSeconds` 为 0 用 `DefaultExpiresInSeconds`（7 天）。`mailer` 是 mail 服务的客户端（`app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)`）。
 - **附件**（`game/modules/mailbox/mailbox.go`）：`Attachment{Type, ID, Amount}`，线上格式是 JSON，例如 `{"type":"coins","amount":100}`。`Coins(amount)` 构造金币附件；`Encode` / `Decode` / `Validate` 是发件、列表、领取共用的同一个判断。
-- **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo durability=strict`，不对客户端开放）调组件 `MailboxComp().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（`game/components/mailbox/mailbox.go`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
+- **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo durability=strict`，不对客户端开放）调组件 `Mailbox().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（逻辑、类型号 `mailbox.CompTypeMailbox` 与工厂登记在 `game/components/mailbox/mailbox.go`，对外接口在 `game/view/component_mailbox.go`，handler 参数写生成的 `view.IMailboxEntity`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
 - **端点** `HandleMailboxList` / `HandleMailboxClaim` 在 `game/controllers/mailbox.go`。
 - **运行时** `mailbox.Start(registry)`（`game/modules/mailbox/mailbox_runtime.go`，清单 `runtime.start`）：启动联动登记的消费者；只装 mailbox 时没有消费者。
 
@@ -86,14 +86,14 @@
   `errors.Is(err, mailbox.ErrLetterInvalid)` 表示这封信本身发不出去，不要重试；mail 服务的带码拒绝（邮箱已满、标题过长）重试也没用；其余错误用同一个 `RequestID` 重试是安全的。
 - **加一种附件**（例如体力、英雄碎片）：在 `game/modules/mailbox` 下新文件里 `RegisterType("stamina", validate)` 并给一个构造函数；在 `game/entities/player` 下新文件里 `RegisterMailboxGrant("stamina", MailboxGrant{Grant: …, Held: …})`。照 `with/bag` 的两个文件写。附件只有（种类，号，数量）三个字段，不要往 `Attachment` 里加字段。
 - **手拼附件字节的发件方**（不经 `Encode`）要注意：解码不认识的字段会被拒绝；Go 的 JSON 解码对键名大小写不敏感。
-- **不要改的：** `MailboxComponent.Claim` 里判断的顺序（请求合法 → 附件发得了 → 已在账本 → 已过期 → 发放并记账），以及 `ClaimWindowClosed` 与 `LedgerMayForget` 成对的定义——去掉其中一步会放出重复发放。调小 `LedgerPruneGraceSeconds` 到小于进程间时钟差同样会。
+- **不要改的：** `mailbox.Component.Claim` 里判断的顺序（请求合法 → 附件发得了 → 已在账本 → 已过期 → 发放并记账），以及 `ClaimWindowClosed` 与 `LedgerMayForget` 成对的定义——去掉其中一步会放出重复发放。调小 `LedgerPruneGraceSeconds` 到小于进程间时钟差同样会。
 - **只适合借鉴的情形：** 邮件要存在游戏服自己的库里、要一封多附件、要玩家之间互发时，不适合直接用。值得借鉴的是“跨进程三步领取，中间那一步在游戏服的事务里记账本，账本的遗忘以邮件自己的过期时刻为界”。
 
 ## 联动
 
 本模块的 `with/`：
 
-- `with/bag`：登记 `item` 这种附件（`mailbox.Item(itemID, amount)`，线上格式 `{"type":"item","id":1001,"amount":3}`），领取时经 `BagComp().Add` 进背包，与账本同一笔事务；背包拒绝时邮件保持未领。
+- `with/bag`：登记 `item` 这种附件（`mailbox.Item(itemID, amount)`，线上格式 `{"type":"item","id":1001,"amount":3}`），领取时经 `Bag().Add` 进背包，与账本同一笔事务；背包拒绝时邮件保持未领。
 - `with/enter`：玩家进入游戏时把属于他的全服邮件合并进邮箱（mail 服务的 `PullBroadcasts`）。画像规则在工程的 `BroadcastProfileOnEnter`：注册时间缺省取首次进入的时间，会话带着 account 的角色创建时间与承载服 / 原服时改用它们。它是进入钩子，失败只记日志，下一次进入再做。
 - `with/gm`：命令 `gm.mail.send`，单人补偿邮件，要求稳定的 `request_id`。
 - `with/profile`：升级奖励邮件，见下一节。

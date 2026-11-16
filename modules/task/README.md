@@ -7,7 +7,7 @@
 - **客户端协议**（`protocol/def/task_claim.go`）
   - `TaskClaim`：请求 `TaskClaimRequest{TaskID}`，应答 `TaskClaimResponse{Code, Reason, TaskID, Reward, Balance, RewardKind, RewardID}`。领取一个已完成任务的奖励：每日 / 每周任务在周期内一次，永久任务终身一次。`Reward` 是到账数量，`RewardKind` / `RewardID` 说明是哪种资产，`Balance` 是领完之后的金币余额（非金币奖励不改变它）。目标取认证会话的玩家。
   - 没有推进任务的客户端协议，也没有推送：进度经 `PlayerDao.Task` 的自身视图同步下去。
-- **服务端入口**（组件 `TaskComponent`，`game/components/task/task.go`，经 `ITaskEntity` 的 `TaskComp()` 取得）
+- **服务端入口**（组件 `task.Component`：逻辑、类型号 `task.CompTypeTask` 与工厂登记在 `game/components/task/task.go`，对外接口在 `game/view/component_task.go`；Nest handler 的参数写生成的 `view.ITaskEntity`，经 `Task()` 取得）
   - `Report(event string, n, nowUnixMilli int64) error`：按事件推进。所有 `Event` 等于 `event`、并且当时已解锁的任务各加 `n`，封顶在目标；没有匹配的任务时什么都不写。**事务内联动用这个**。
   - `Advance(taskID, n, nowUnixMilli int64) (int64, error)`：直接按任务号推进，返回推进后的进度。任务未解锁答 `task_incomplete`，拒绝前不写。
   - `Claim(taskID, nowUnixMilli int64) (TaskClaimResult, error)`：`TaskClaim` 协议用的那一个，发奖并记下“领过了”。
@@ -17,7 +17,7 @@
     - `handlerTaskReport`（`task_report.go`）：只给服务端用，不在这名玩家事务里的调用方发 `sender.NewTaskReportSender(client).Sync_TaskReport(ctx, playerEntityID, event, n)`。
     - `handlerTaskAdvance`（`task_advance.go`）：同上，按任务号：`sender.NewTaskAdvanceSender(client).Sync_TaskAdvance(ctx, playerEntityID, taskID, n)`。
 - **登记点**
-  - 奖励种类（`game/components/task/rewards.go`）：`RegisterTaskReward(kind string, handler TaskRewardHandler)`，`TaskRewardHandler{Validate, Grant}`。`Validate` 在建任务目录时校验一行奖励是否合法，`Grant` 在领奖的同一笔事务、Player 锁内发放，只改同一个 Player、不做 I/O。只在 `init` 登记；不完整或重名 panic。内置 `coins`（`RewardID` 必须为 0，经 `WalletComp().Add` 发放）；装了 bag 时多一个 `item`（`RewardID` 是道具号）。
+  - 奖励种类（`game/components/task/rewards.go`）：`RegisterTaskReward(kind string, handler TaskRewardHandler)`，`TaskRewardHandler{Validate, Grant}`。`Validate` 在建任务目录时校验一行奖励是否合法，`Grant` 在领奖的同一笔事务、Player 锁内发放，只改同一个 Player、不做 I/O。只在 `init` 登记；不完整或重名 panic。内置 `coins`（`RewardID` 必须为 0，经 `Wallet().Add` 发放）；装了 bag 时多一个 `item`（`RewardID` 是道具号）。
   - 事件没有登记表：事件名就是任务表 `event` 列里的字符串，任何功能调 `Report("自己的事件名", n, now)` 即可。
 - **状态**（`db/def/task.go`）：`PlayerDao.Task`（`TaskState{Day, Progress, Claimed, Weekly, Permanent}`，后两个是 `TaskPeriodState{Day, Progress, Claimed}`），落库并同步，玩家本人可见。`Day` 是每日记录所属的业务日（YYYYMMDD），`Weekly.Day` 是每周记录所属那一周的周一（YYYYMMDD），`Permanent.Day` 恒为 0。
 - **配置**
@@ -60,17 +60,17 @@
   - 让自己的功能驱动任务：在自己的、已经锁住 Player 的 Nest handler 里，事实第一次生效之后调：
 
     ```go
-    if err := target.TaskComp().Report("battle.won", 1, nowUnixMilli); err != nil {
+    if err := target.Task().Report("battle.won", 1, nowUnixMilli); err != nil {
         return err
     }
     ```
 
     然后在任务表里加一行 `event` 为 `battle.won` 的任务。错误必须原样返回给 Nest，不能吞掉后提交半笔业务。
-  - 自己的功能有“首次生效”钩子、又不想直接依赖 task：照 `with/shop` 的写法，在一个单独的文件里 `init` 登记对方的钩子并在里面调 `Report`。
+  - 自己的功能有“首次生效”的实体事件、又不想直接依赖 task：照 `with/shop` 的写法，在 task 的组件包里放一个单独的联动文件，组件上写 `//roost:listen` 的 `On<事件名>(ev event.<事件名>) error`，在里面调 `c.Report`。
   - 加一种奖励资产：`init` 里 `RegisterTaskReward("<种类>", TaskRewardHandler{Validate: …, Grant: …})`，照 `with/bag` 的 `task_bag.go`。
   - 不要改 `game/components/task/task.go` 里周期与解锁的判断、`TaskState` 的 store 键、错误码码值；不要给业务代码留“测试用替换任务表”的开关（场景经真实的配置装载换表）。
 - **别的模块要用它的数据或动作**
-  - 同一个 Player 的事务里：目标接口嵌入 `player.ITaskEntity`，调 `TaskComp().Report(event, n, nowUnixMilli)`。
+  - 同一个 Player 的事务里：目标参数写 `view.ITaskEntity`（同一笔里还要用别的组件时写 `view.PlayerEntity`），调 `Task().Report(event, n, nowUnixMilli)`。
   - 不在这名玩家的事务里（房间结算给每名玩家记一场、GM）：`sender.NewTaskReportSender(client).Sync_TaskReport(ctx, playerEntityID, event, n)`；自己保证只发一次。
   - 读进度：读 `PlayerDao.Task`，并按上面的规则判周期。
 - **不适合直接用的情形**：成就点数与多级成就、需要接取的支线、多条件组合目标、全服进度任务、要求恰好一次的跨服务事件。值得借鉴的是：周期记录用“所属周期戳 + 惰性清零”而不用定时器；任务目录随不可变配置表建一次索引（`taskDefinitions`）并在建索引时判环；“事件提供方负责首次上报，任务方不判重”的职责划分。
@@ -81,22 +81,22 @@ task 自己的 `with/`（八组，都是“另一个模块也装着时才有”�
 
 | 联动 | 做什么 | 事件与次数 | 重放 | 场景 |
 | --- | --- | --- | --- | --- |
-| `with/wallet` | 登记 `OnWalletSpent` | `wallet.spent`，每笔成功扣款 1 次 | `Apply` 命中回执不计；发放不计 | 6 |
-| `with/checkin` | 登记 `OnCheckinClaimed` | `checkin.claimed`，每次成功签到 1 次 | 当日重复签到被拒，不计 | 3 |
-| `with/shop` | 登记 `OnShopBought` | `shop.bought`，购买份数 | 购买回执重放不计；扣款另计一次 `wallet.spent` | 3 |
-| `with/stamina` | 登记 `OnStaminaSpent` | `stamina.spent`，实际消耗点数 | 每次成功 `Spend` 都计 | 3 |
+| `with/wallet` | 组件上 `//roost:listen` 的 `OnWalletSpent`（实体事件 `event.WalletSpent`） | `wallet.spent`，每笔成功扣款 1 次 | `Apply` 命中回执不计；发放不计 | 6 |
+| `with/checkin` | 组件上 `//roost:listen` 的 `OnCheckinClaimed`（实体事件 `event.CheckinClaimed`） | `checkin.claimed`，每次成功签到 1 次 | 当日重复签到被拒，不计 | 3 |
+| `with/shop` | 组件上 `//roost:listen` 的 `OnShopBought`（实体事件 `event.ShopBought`） | `shop.bought`，购买份数 | 购买回执重放不计；扣款另计一次 `wallet.spent` | 3 |
+| `with/stamina` | 组件上 `//roost:listen` 的 `OnStaminaSpent`（实体事件 `event.StaminaSpent`） | `stamina.spent`，实际消耗点数 | 每次成功 `Spend` 都计 | 3 |
 | `with/profile` | 组件上 `//roost:listen priority=10` 的 `OnProfileLevelUp`（实体事件 `event.ProfileLevelUp`） | `profile.level_up`，提升的等级数（`to-from`） | 连升多级按差值 | 2 |
-| `with/dungeon` | 登记 `OnDungeonClaimed` | `dungeon.claimed`，首次副本领奖 1 次 | 已领过的副本不再计 | 2 |
+| `with/dungeon` | 组件上 `//roost:listen` 的 `OnDungeonClaimed`（实体事件 `event.DungeonClaimed`） | `dungeon.claimed`，首次副本领奖 1 次 | 已领过的副本不再计 | 2 |
 | `with/bag` | 登记奖励种类 `item` | 不产生事件；道具奖励与领奖同一笔事务 | 背包满时领奖失败、可重试 | 3 |
-| `with/leaderboard` | 登记 `leaderboard.OnSubmitted` | `leaderboard.submitted`，rank 成功答复 1 次 | **同分重放也计数** | 3 |
+| `with/leaderboard` | 登记 `leaderboard.OnSubmitted`（事务之外，不是实体事件，保留登记方式） | `leaderboard.submitted`，rank 成功答复 1 次 | **同分重放也计数** | 3 |
 
-- 前七组都在同一笔 Player 事务里，提交失败一起回滚。
+- 前七组都在同一笔 Player 事务里，提交失败一起回滚。除 profile 的升级事件有多个监听方（task 用 `priority=10` 排在活动、属性、升级邮件之后）外，其余事件 task 是唯一的模块监听方，用缺省优先级。
 - **排行榜联动不在事务里**：排行提交发生在 Player 事务之外，钩子经独立的 `Sync_TaskReport` 尽力推进；任务推进失败不撤销排行提交，只由 leaderboard 的钩子执行器记一条 Warn。它只适合“提交过榜单”这类允许重复计数的目标，不能用来发恰好一次的结算奖励。任务表里没有未停用的 `leaderboard.submitted` 任务时，钩子直接返回，不发 Nest 请求（缺省表就没有）。
 - 别的模块没有 `with/task` 目录。场景模块的 `OnRegion`（进入 / 离开区域）注释里建议用它向 task 上报，但模块库里没有现成的联动文件。
 
 ## 验证范围
 
-- `roost module verify task`：29 条场景（`^TestTask`，包 `./game/handler` 26 条、`./game/entities/player` 3 条）。覆盖：推进累加与封顶、已完成 / 已领不再写、拒绝零写入、领奖入账、同日二次领取、未完成 / 未知任务、货币拒绝时不领、新一天先清再记、昨天完成今天不能领、提交被拒整体回滚、时钟回拨、业务日随配置、记录有界、同步；事件只推进匹配的任务、周任务只在业务周一换周、周回拨不重开、永久任务跨天与下架后仍记得领过、链要等前置领奖且不复用事件、坏链零写入、周期重置与奖励回滚、ID 上界经得起表反复增删、应答写明资产、未登记的奖励不产生进度；目录可用性与配置装载校验。
+- `roost module verify task`：29 条场景（`^TestTask`，包 `./game/handler` 26 条、`./game/components/task` 3 条）。覆盖：推进累加与封顶、已完成 / 已领不再写、拒绝零写入、领奖入账、同日二次领取、未完成 / 未知任务、货币拒绝时不领、新一天先清再记、昨天完成今天不能领、提交被拒整体回滚、时钟回拨、业务日随配置、记录有界、同步；事件只推进匹配的任务、周任务只在业务周一换周、周回拨不重开、永久任务跨天与下架后仍记得领过、链要等前置领奖且不复用事件、坏链零写入、周期重置与奖励回滚、ID 上界经得起表反复增删、应答写明资产、未登记的奖励不产生进度；目录可用性与配置装载校验。
 - 八组联动共 25 条（见上表）。
 - 全部是离线场景：真实的 Nest 引擎、生成的 DAO / Sender、真实的配置装载；提交器是不落盘的替身，排行榜联动里的 Rank 是替身。没有经过真实 TCP、WAL、Mongo、NATS 或跨进程。
 - 场景装载的是自带的样例任务表，不读工程的 `configs/table/task.csv`；`with/bag`、`with/shop` 的场景还自带用到的那一件道具（1001）与那一件商品（1 号），盖在工程表的同号行上，工程别的表原样带上（同时装着的别的模块的钩子照常读得到）。工程改任务表、道具表、商品表不影响这些场景；工程表本身由 `roost generate` 时的表校验、`TestTaskCatalogEntriesAreUsable`（任务）与 bag 的 `TestBagAcceptsTheItemsOfTheProjectItemTable`（道具）检查。

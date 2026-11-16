@@ -1,0 +1,8 @@
+package event
+
+// StaminaSpent 在 Player 每次成功消耗体力后、同一笔事务内发布（stamina 组件的 Spend）：Amount 是实际扣掉的点数，
+// NowUnixMilli 是这条 Nest 消息冻结的业务时间。Grant 与 Refill 不发布。监听返回错误时整笔事务回滚。
+type StaminaSpent struct {
+	Amount       int64
+	NowUnixMilli int64
+}

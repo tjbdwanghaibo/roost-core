@@ -62,7 +62,7 @@
   - 接渠道：实现 `purchase_channels.go` 的 `verifyPaymentCallback`；渠道的 HTTPS 接入与“渠道凭据 → 内部支付 JSON”的转换另写。
   - 商品表：改 `products.go` 的 `LookupProduct`（金额用货币最小单位的整数）。
   - 新的奖励种类（月卡、礼包）：在自己的文件里 `RegisterPurchaseReward("<种类>", …)`，照着 `with/bag` 的 `purchase_item.go` 写。
-  - 不要改 `PurchaseComponent.Apply` 的游标判断、`queue.go` 的四段 Lua，以及 `Collect` 里“先查 platform、Nest 确认后才 Ack”的顺序。
+  - 不要改 `purchase.Component.Apply` 的游标判断、`queue.go` 的四段 Lua，以及 `Collect` 里“先查 platform、Nest 确认后才 Ack”的顺序。
 - **别的代码要用它**：补领 `controller.PurchaseCollect(ctx, playerID)`；读某名玩家发到第几号，在 Player handler 里 `owner.Dao().GetPurchase().GetApplied()`。
 - **只适合借鉴的情形**：别的“外部系统欠玩家东西”的场景（补偿、跨服奖励）。值得借鉴的是“按玩家连续编号的待发队列 + Player 上一个常量大小的游标”，它让重放安全而且不需要在玩家档里存无限增长的订单表。直接复用本模块的队列去发别的东西不合适：序号空间与 platform 的订单绑定。
 

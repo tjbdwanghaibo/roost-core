@@ -11,7 +11,15 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-// Owner 是 Cdkey 组件的宿主（Player 的接线见 game/entities/player/cdkey_component.go）：只列组件用得到的
+//roost:component type={{ID:component:Cdkey}}
+const CompTypeCdkey entity.ComponentType = {{ID:component:Cdkey}}
+
+// init 登记组件工厂：Player 结构体里 comp:"cdkey.CompTypeCdkey" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeCdkey, NewComponent)
+}
+
+// Owner 是 Cdkey 组件的宿主（模块把它挂在 Player 上：实体字段标签 comp:"cdkey.CompTypeCdkey"）：只列组件用得到的
 // DAO 与别的组件（view 的小接口）。只在实体被 Nest 锁住期间使用。
 type Owner interface {
 	entity.IThreadSafeEntity
@@ -24,7 +32,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/cdkey_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

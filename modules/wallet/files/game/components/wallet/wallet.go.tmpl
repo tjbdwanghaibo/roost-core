@@ -5,14 +5,24 @@ import (
 	"math"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/event"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
+//roost:component type={{ID:component:Wallet}}
+const CompTypeWallet entity.ComponentType = {{ID:component:Wallet}}
+
+// init 登记组件工厂：Player 结构体里 comp:"wallet.CompTypeWallet" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeWallet, NewComponent)
+}
+
 // Owner 是货币组件的宿主：任何实体只要在自己的 DAO 里放一份 WalletState 与一份 WalletLedger，
-// 并经这两个方法交给组件，就能挂这个组件（Player 的接线见 game/entities/player/wallet_component.go）。
+// 并经这两个方法交给组件，就能挂这个组件（实体字段标签 comp:"wallet.CompTypeWallet"；两个方法是 view.WalletHolder 的
+// 宿主方法，DAO 里各只有一个对应字段时由生成器写，见 game/entities/<实体>/<实体>_gen_wire.go）。
 // 组件不认具体实体类型，也不另存一份会回滚的状态：余额与回执都在宿主 DAO 里，经生成的 setter 修改，
 // 所以回滚只有 DAO 一处；不要在这里登记 undo。
 type Owner interface {
@@ -23,13 +33,7 @@ type Owner interface {
 	WalletLedger() *db.WalletLedger
 }
 
-// spentOwner 是宿主可选的消费回调：扣款首次生效时、在同一笔事务里调用，返回错误时调用方必须把错误
-// 交还 Nest，整笔回滚。Player 用它执行 OnWalletSpent 登记的钩子；没有它的宿主扣款时什么都不回调。
-type spentOwner interface {
-	WalletSpent(amount, nowUnixMilli int64) error
-}
-
-// Component 是各宿主共用的货币组件。实体包里的 WalletComponent 是它的类型别名，只为生成接线命名。
+// Component 是各宿主共用的货币组件；别的包经 game/view 的 Wallet / WalletHolder 用它。
 // 不要在组件里加锁：Nest 锁住宿主实体之后才进入业务 handler，所有方法都在那笔事务里调用。
 type Component struct {
 	entity.ComponentBase
@@ -113,7 +117,8 @@ func keyValid(key string) bool {
 // Add 给余额加 delta（负数为扣），不留回执。给自己记着“这一次做过没有”的调用方用：
 // 先在自己的状态里判重，再在同一笔事务里调它。余额不足、溢出时不写任何字段。
 // delta 可以是任何 int64：扣到负数的一律是余额不足（含 math.MinInt64），加过上限的一律是溢出，
-// 调用方不需要自己先收窄范围。扣款成功后调用宿主的消费回调（如果宿主有），回调失败就返回它的错误。
+// 调用方不需要自己先收窄范围。扣款成功后在宿主上发布 event.WalletSpent（监听按生成时排好的顺序执行），
+// 监听返回错误时原样返回：调用方必须把它交还 Nest，余额与监听的写入一起回滚。
 func (component *Component) Add(delta int64) (int64, error) {
 	if delta == 0 {
 		return 0, apperrors.ErrWalletInvalid
@@ -130,8 +135,8 @@ func (component *Component) Add(delta int64) (int64, error) {
 		return 0, apperrors.ErrWalletOverflow
 	}
 	wallet.SetCoins(coins + delta)
-	if spent, ok := component.owner.(spentOwner); ok && delta < 0 {
-		if err := spent.WalletSpent(-delta, fctx.NowMilli()); err != nil {
+	if delta < 0 {
+		if err := component.owner.Publish(event.WalletSpent{Amount: -delta, NowUnixMilli: fctx.NowMilli()}); err != nil {
 			return 0, err
 		}
 	}

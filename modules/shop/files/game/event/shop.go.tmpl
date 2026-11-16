@@ -1,0 +1,14 @@
+package event
+
+// ShopBought 在 Player 的一次购买第一次生效后、同一笔事务内发布（shop 组件的 Buy）：买了 Count 份 GoodsID，
+// 扣了 Cost 金币、余额 Balance，发了 Gained 个 ItemID、持有 Held 个，限购周期内已买 Bought 份（不限购为 0）；
+// NowUnixMilli 是这条 Nest 消息冻结的业务时间。回执重放与被拒绝的购买不发布。
+// 监听返回错误时整笔事务回滚（扣钱、发货、限购计数、回执一起退回）。
+type ShopBought struct {
+	GoodsID, Count int64
+	Cost, Balance  int64
+	ItemID         int64
+	Gained, Held   int64
+	Bought         int64
+	NowUnixMilli   int64
+}

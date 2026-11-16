@@ -72,7 +72,7 @@ func Registered(kind Type) bool {
 }
 
 // Validate 报告这份附件能不能作为奖励发放：种类登记过、数量为正、并且通过这个种类自己的校验。
-// Encode、Decode 与发放入口（MailboxComponent.Claim）用的是同一个判断。
+// Encode、Decode 与发放入口（mailbox.Component.Claim）用的是同一个判断。
 // 没登记的种类一律拒绝——包括别的进程版本认识、而这个进程没装对应功能的种类。
 func Validate(attachment Attachment) error {
 	typesMu.RLock()
@@ -133,7 +133,7 @@ func Decode(raw []byte) (Attachment, error) {
 type ClaimResult = view.MailboxClaimResult
 
 // ClaimWindowClosed 报告：过期时刻为 expiresAtUnix 的邮件，在 nowUnix 是否已经不能首次发放。
-// 它是发放入口（MailboxComponent.Claim）的准入判断，边界与 mail 服务自己的一致
+// 它是发放入口（mailbox.Component.Claim）的准入判断，边界与 mail 服务自己的一致
 // （Envelope.Expired：nowUnix >= 过期时刻），所以“mail 服务不再给出新预留”与“游戏拒绝首次发放”是同一刻。
 //
 // mail 服务已经拒绝过期邮件的预留，游戏为什么还要判一次：过期之前取得的预留可能晚到（Nest 排队、

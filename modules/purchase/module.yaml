@@ -13,6 +13,7 @@ state:
     dao: nosync
     comment: Purchase 的已发货序号与奖励在同一笔事务提交，不保存随订单数增长的本地回执表。
 component: Purchase
+component_package: game/components/purchase
 protocols: [PurchaseCollect]
 errcodes: [purchase_invalid, purchase_sequence, purchase_reward]
 replaces: [services/platform/collaborators.go]

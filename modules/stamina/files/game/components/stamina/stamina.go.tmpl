@@ -5,13 +5,22 @@ import (
 	"fmt"
 	"time"
 
+	"{{MODULE}}/game/event"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
-// Owner 是 Stamina 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Stamina}}
+const CompTypeStamina entity.ComponentType = {{ID:component:Stamina}}
+
+// init 登记组件工厂：Player 结构体里 comp:"stamina.CompTypeStamina" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeStamina, NewComponent)
+}
+
+// Owner 是 Stamina 组件的宿主：整个 Player（组件经它扣金币，并在它上面发布体力消耗事件）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 // Component 是玩家体力的业务逻辑。它不保存事务会改的状态：体力在 PlayerDao.Stamina 里，
@@ -25,7 +34,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/stamina_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -95,7 +104,8 @@ func (component *Component) Current(nowUnixMilli int64) int64 {
 // 时拒绝，不写任何字段；不做“有多少扣多少”。
 //
 // 它不判重：调一次扣一次。调用方在自己的 handler 里先做完自己的检查，再调它，再写自己的状态——
-// 任何一步返回错误，Nest 把整笔事务回滚，体力也退回去。
+// 任何一步返回错误，Nest 把整笔事务回滚，体力也退回去。扣完之后在 Player 上发布 event.StaminaSpent，
+// 监听返回的错误原样返回。
 func (component *Component) Spend(n, nowUnixMilli int64) (int64, error) {
 	if n <= 0 {
 		return 0, apperrors.ErrStaminaInvalid
@@ -107,7 +117,7 @@ func (component *Component) Spend(n, nowUnixMilli int64) (int64, error) {
 		return 0, apperrors.ErrStaminaShort
 	}
 	component.write(rules.Max, value, value-n, settledAt, nowUnixMilli)
-	if err := runStaminaSpent(component.owner, n, nowUnixMilli); err != nil {
+	if err := component.owner.Publish(event.StaminaSpent{Amount: n, NowUnixMilli: nowUnixMilli}); err != nil {
 		return 0, err
 	}
 	return value - n, nil

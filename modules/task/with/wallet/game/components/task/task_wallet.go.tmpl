@@ -1,11 +1,13 @@
 package task
 
-import (
-	"{{MODULE}}/game/view"
-	gamewallet "{{MODULE}}/game/components/wallet"
-)
+import "{{MODULE}}/game/event"
 
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	gamewallet.OnWalletSpent("task", func(owner view.PlayerEntity, _ int64, now int64) error { return owner.Task().Report("wallet.spent", 1, now) })
+// OnWalletSpent 把每一笔首次生效的扣款作为 "wallet.spent" 事件推进任务（每笔记 1 次），与扣款同一笔事务提交；
+// 事件提供方负责去重（Apply 命中回执的重放不发布）。进度按事件里冻结的业务时间归日。
+//
+// 缺省优先级：改成事件之前 wallet 的消费钩子只有 task 一个模块登记，没有别的模块监听需要排序。
+//
+//roost:listen
+func (c *Component) OnWalletSpent(ev event.WalletSpent) error {
+	return c.Report("wallet.spent", 1, ev.NowUnixMilli)
 }

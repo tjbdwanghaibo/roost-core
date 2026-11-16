@@ -13,9 +13,17 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 )
 
+//roost:component type={{ID:component:DungeonRun}}
+const CompTypeDungeonRun entity.ComponentType = {{ID:component:DungeonRun}}
+
+// init 登记组件工厂：Dungeon 结构体里 comp:"dungeonrun.CompTypeDungeonRun" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeDungeonRun, NewComponent)
+}
+
 var program = sync.OnceValues(logic.Program)
 
-// Owner 是 DungeonRun 组件的宿主（Dungeon 的接线见 game/entities/dungeon/run_component.go）：view 的 DungeonEntity，
+// Owner 是 DungeonRun 组件的宿主（挂在 Dungeon 实体上，字段标签 comp:"dungeonrun.CompTypeDungeonRun"）：view 的 DungeonEntity，
 // 组件用到它的两个 DAO（DungeonDao 与关卡状态机的 DungeonLevelDAO）。只在实体被 Nest 锁住期间使用。
 type Owner = view.DungeonEntity
 
@@ -26,7 +34,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Dungeon 在 game/entities/dungeon/run_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

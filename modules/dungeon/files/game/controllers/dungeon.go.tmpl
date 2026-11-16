@@ -23,8 +23,8 @@ func dungeonRunEntityID(uniqueID int64) (int64, error) {
 	return entity.BuildEntityID(uniqueID, runentity.EntityKindDungeon)
 }
 
-// Open 仅限可信服务器，ID来自项目全局分配器且永不复用；获取/创建和幂等初始化可以在回包丢失后续做。
-func (controller *Controller) Open(ctx context.Context, uniqueID, playerID, season int64) (logic.Snapshot, error) {
+// DungeonOpen 仅限可信服务器，ID来自项目全局分配器且永不复用；获取/创建和幂等初始化可以在回包丢失后续做。
+func (controller *Controller) DungeonOpen(ctx context.Context, uniqueID, playerID, season int64) (logic.Snapshot, error) {
 	id, err := dungeonRunEntityID(uniqueID)
 	if err != nil {
 		return logic.Snapshot{}, err
@@ -62,7 +62,7 @@ func (controller *Controller) Defeated(ctx context.Context, uniqueID int64, inst
 // dungeonPublishClaim 由leaderboard联动在启动前登记；仅投影已提交的事实，不参与奖励事务。
 var dungeonPublishClaim func(context.Context, *app.Registry, int64, logic.ClaimResult) error
 
-func (controller *Controller) Claim(ctx context.Context, uniqueID, playerID int64) (logic.ClaimResult, error) {
+func (controller *Controller) DungeonClaim(ctx context.Context, uniqueID, playerID int64) (logic.ClaimResult, error) {
 	runID, err := dungeonRunEntityID(uniqueID)
 	if err != nil {
 		return logic.ClaimResult{}, err
@@ -115,7 +115,7 @@ func (controller *Controller) HandleDungeonClaim(ctx *playeraccess.Context, requ
 	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
 		return nil, fmt.Errorf("dungeon: authenticated context and request required")
 	}
-	result, err := controller.Claim(ctx.Context(), request.RunID, ctx.PlayerID)
+	result, err := controller.DungeonClaim(ctx.Context(), request.RunID, ctx.PlayerID)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {

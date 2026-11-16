@@ -115,7 +115,7 @@ func (f *dungeonFixture) start(t *testing.T) {
 }
 func (f *dungeonFixture) open(t *testing.T, id, season int64) logic.Snapshot {
 	t.Helper()
-	s, err := f.controller.Open(context.Background(), id, dungeonPlayer, season)
+	s, err := f.controller.DungeonOpen(context.Background(), id, dungeonPlayer, season)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func (f *dungeonFixture) clear(t *testing.T, id, season int64) logic.Snapshot {
 	return f.event(t, id, s, 3, "boss")
 }
 func (f *dungeonFixture) claim(id int64) (logic.ClaimResult, error) {
-	return f.controller.Claim(context.Background(), id, dungeonPlayer)
+	return f.controller.DungeonClaim(context.Background(), id, dungeonPlayer)
 }
 func (f *dungeonFixture) view(t *testing.T, id int64) logic.Snapshot {
 	t.Helper()
@@ -281,10 +281,10 @@ func TestDungeonOpenIsIdempotentAndIDCannotChangeOwner(t *testing.T) {
 	if first != second || f.commit.writes.Load() != writes {
 		t.Fatal("open replay wrote state")
 	}
-	if _, err := f.controller.Open(context.Background(), 1001, dungeonPlayer+1, 1); err == nil {
+	if _, err := f.controller.DungeonOpen(context.Background(), 1001, dungeonPlayer+1, 1); err == nil {
 		t.Fatal("owner conflict accepted")
 	}
-	if _, err := f.controller.Open(context.Background(), 1001, dungeonPlayer, 2); err == nil {
+	if _, err := f.controller.DungeonOpen(context.Background(), 1001, dungeonPlayer, 2); err == nil {
 		t.Fatal("season conflict accepted")
 	}
 	f.clear(t, 1002, 1)
@@ -368,7 +368,7 @@ func TestDungeonUnfinishedAndForeignOwnerCannotClaim(t *testing.T) {
 		t.Fatalf("unfinished=%v", err)
 	}
 	f.clear(t, 1002, 1)
-	if _, err := f.controller.Claim(context.Background(), 1002, dungeonPlayer+1); !errors.Is(err, apperrors.ErrDungeonOwner) {
+	if _, err := f.controller.DungeonClaim(context.Background(), 1002, dungeonPlayer+1); !errors.Is(err, apperrors.ErrDungeonOwner) {
 		t.Fatalf("owner=%v", err)
 	}
 	f.assertPlayer(t, 0, 0)
@@ -634,7 +634,7 @@ func TestDungeonNewEnemyOnlyNeedsTheRulesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := filepath.Abs(filepath.Join(dir, "../..", "modules/dungeon/rules.go"))
+	path, err := filepath.Abs(filepath.Join(dir, "..", "modules/dungeon/rules.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,7 +676,7 @@ func TestDungeonMutationsDetectDuplicateAndWindowRegression(t *testing.T) {
 		{"modules/dungeon/rules.go", "return now-resolvedAt > ClaimWindowSeconds", "return now-resolvedAt > ClaimWindowSeconds+1", "TestDungeonClaimWindowUsesFrozenAuthorityAndInclusiveBoundary", "expired claim accepted"},
 	}
 	for _, c := range cases {
-		path, err := filepath.Abs(filepath.Join(dir, "../..", c.path))
+		path, err := filepath.Abs(filepath.Join(dir, "..", c.path))
 		if err != nil {
 			t.Fatal(err)
 		}

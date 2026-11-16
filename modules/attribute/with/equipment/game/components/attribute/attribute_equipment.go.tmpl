@@ -1,14 +1,15 @@
 package attribute
 
 import (
-	gameequipment "{{MODULE}}/game/components/equipment"
+	"{{MODULE}}/game/event"
 	rules "{{MODULE}}/game/modules/equipment"
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
 	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-// 仅安装 attribute 与 equipment 时登记。加载重建与穿脱共用同一规则，不保留组件外可变缓存。
+// 仅安装 attribute 与 equipment 时生成。装备层来源（OnAttributeGear，扩展提供方，保留登记方式）在加载重建与穿脱时
+// 共用同一规则，不保留组件外可变缓存；穿脱后的重算是下面组件上的事件监听。
 func init() {
 	OnAttributeGear("equipment", func(owner view.PlayerEntity) (*gameattr.Combat, error) {
 		p := &gameattr.Combat{}
@@ -32,5 +33,13 @@ func init() {
 		p.Update()
 		return p, nil
 	})
-	gameequipment.OnEquipmentChanged("attribute", func(host view.PlayerEntity) error { return host.Attribute().RefreshGear() })
+}
+
+// OnEquipmentChanged 在穿脱装备的同一笔事务里重算装备层与最终属性；返回错误时穿戴、背包与属性一起回滚。
+//
+// 缺省优先级：改成事件之前 equipment 的变化钩子只有 attribute 一个模块登记，没有别的模块监听需要排序。
+//
+//roost:listen
+func (c *Component) OnEquipmentChanged(ev event.EquipmentChanged) error {
+	return c.RefreshGear()
 }

@@ -1,13 +1,13 @@
 package task
 
-import (
-	"{{MODULE}}/game/view"
-	gamedungeon "{{MODULE}}/game/components/dungeon"
-)
+import "{{MODULE}}/game/event"
 
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	gamedungeon.OnDungeonClaimed("task", func(owner view.PlayerEntity, runID, season, now int64) error {
-		return owner.Task().Report("dungeon.claimed", 1, now)
-	})
+// OnDungeonClaimed 把副本第一次领奖作为 "dungeon.claimed" 事件推进任务（每局记 1 次），与领奖同一笔事务提交；
+// 事件提供方负责去重（重复领取不发布）。
+//
+// 缺省优先级：改成事件之前 dungeon 的领奖钩子只有 task 一个模块登记，没有别的模块监听需要排序。
+//
+//roost:listen
+func (c *Component) OnDungeonClaimed(ev event.DungeonClaimed) error {
+	return c.Report("dungeon.claimed", 1, ev.NowUnixMilli)
 }

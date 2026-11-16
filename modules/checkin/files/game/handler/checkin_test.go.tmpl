@@ -1,17 +1,16 @@
 package handler
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	gamewallet "{{MODULE}}/game/components/wallet"
 	playerentity "{{MODULE}}/game/entities/player"
-	gamecheckin "{{MODULE}}/game/components/checkin"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -26,9 +25,9 @@ const checkinDay = 24 * time.Hour
 
 // 奖励规则的数字只写死在两条用例里（样例规则：连续第 n 天发 10 × min(n, 7) 金币）：
 // TestCheckinFirstClaimPaysTheBaseReward 与 TestCheckinConsecutiveDaysGrowTheStreakAndReward。
-// 工程改了 checkin_component.go 的奖励规则，就按自己的规则改这两条；其余用例只断言签到自己的事实
-// （同日拒绝零写入、断签从第 1 天算、回滚、钩子），拿应答里的 Reward / Balance 比对，不随奖励数额变。
-// 不引用 checkin_component.go 的常量：常量改错了，引用它的断言照样通过。
+// 工程改了 game/components/checkin/checkin.go 的奖励规则，就按自己的规则改这两条；其余用例只断言签到自己的事实
+// （同日拒绝零写入、断签从第 1 天算、回滚、签到事件），拿应答里的 Reward / Balance 比对，不随奖励数额变。
+// 不引用 game/components/checkin/checkin.go 的常量：常量改错了，引用它的断言照样通过。
 
 // 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
 type checkinGetter map[int64]entity.IThreadSafeEntity
@@ -203,7 +202,7 @@ func TestCheckinRejectedCommitRollsBackProgressAndCoins(t *testing.T) {
 // 修前：每次签到占一条货币回执，回执满了不淘汰，第 129 天起签到与消费全部被拒（wallet_ledger_full）。
 func TestCheckinKeepsPayingPastTheWalletReceiptWindow(t *testing.T) {
 	f := newCheckinFixture(t)
-	const days = playerentity.WalletReceiptWindow + 72
+	const days = gamewallet.ReceiptWindow + 72
 	for day := 1; day <= days; day++ {
 		if _, err := f.claim(); err != nil {
 			t.Fatalf("day %d: %v", day, err)
@@ -223,9 +222,9 @@ func TestCheckinKeepsPayingPastTheWalletReceiptWindow(t *testing.T) {
 	}
 }
 
-// checkinProbe 是测试登记的签到钩子。登记表是进程级的、只能登记一次，所以用开关控制它在哪条用例里生效。
+// checkinProbe 是测试在 Player 上登记的签到事件监听。登记只能在 init 里做一次（排在生成的监听后面），
+// 所以用开关控制它在哪条用例里生效。
 var checkinProbe struct {
-	once    sync.Once
 	enabled atomic.Bool
 	fail    atomic.Bool
 	calls   atomic.Int64
@@ -234,33 +233,35 @@ var checkinProbe struct {
 	at      atomic.Int64
 }
 
-func useCheckinProbe(t *testing.T) {
-	t.Helper()
-	checkinProbe.once.Do(func() {
-		gamecheckin.OnCheckinClaimed("zz-checkin-test-probe", func(owner view.PlayerEntity, result gamecheckin.CheckinResult, nowUnixMilli int64) error {
+func init() {
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "CheckinClaimed", "handler_test.checkinProbe",
+		func(owner *playerentity.Player, ev event.CheckinClaimed) error {
 			if !checkinProbe.enabled.Load() {
 				return nil
 			}
 			checkinProbe.calls.Add(1)
-			checkinProbe.streak.Store(result.Streak)
-			checkinProbe.reward.Store(result.Reward)
-			checkinProbe.at.Store(nowUnixMilli)
-			if owner == nil || owner.Dao().GetCheckin().GetStreak() != result.Streak {
-				return errors.New("the hook ran before the check-in was recorded")
+			checkinProbe.streak.Store(ev.Streak)
+			checkinProbe.reward.Store(ev.Reward)
+			checkinProbe.at.Store(ev.NowUnixMilli)
+			if owner == nil || owner.Dao().GetCheckin().GetStreak() != ev.Streak {
+				return errors.New("the listener ran before the check-in was recorded")
 			}
 			if checkinProbe.fail.Load() {
-				return errors.New("injected hook failure")
+				return errors.New("injected listener failure")
 			}
 			return nil
 		})
-	})
+}
+
+func useCheckinProbe(t *testing.T) {
+	t.Helper()
 	checkinProbe.calls.Store(0)
 	checkinProbe.fail.Store(false)
 	checkinProbe.enabled.Store(true)
 	t.Cleanup(func() { checkinProbe.enabled.Store(false) })
 }
 
-// 签到成功执行一次登记的钩子，带着这一次的结果与业务时间；被拒绝的签到不执行。
+// 签到成功发布一次签到事件，监听收到这一次的结果与业务时间；被拒绝的签到不发布。
 func TestCheckinClaimedHookRunsOncePerSuccessfulClaim(t *testing.T) {
 	f := newCheckinFixture(t)
 	useCheckinProbe(t)
@@ -284,7 +285,7 @@ func TestCheckinClaimedHookRunsOncePerSuccessfulClaim(t *testing.T) {
 	}
 }
 
-// 钩子返回错误：这一次签到整笔回滚（奖励与进度都没有），之后钩子好了还能签。
+// 监听返回错误：这一次签到整笔回滚（奖励与进度都没有），之后监听好了还能签。
 func TestCheckinClaimedHookFailureRollsBackTheClaim(t *testing.T) {
 	f := newCheckinFixture(t)
 	useCheckinProbe(t)

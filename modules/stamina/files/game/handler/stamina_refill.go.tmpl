@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -9,8 +9,8 @@ import (
 // 冻结的业务时间，客户端不传时间、也不传价格。规则与拒绝见 StaminaComponent.Refill。
 //
 //roost:nest rollback=undo durability=strict
-func handlerStaminaRefill(target player.IStaminaEntity, request *pb.StaminaRefillRequest, nowUnixMilli int64) (*pb.StaminaRefillResponse, error) {
-	result, err := target.StaminaComp().Refill(nowUnixMilli)
+func handlerStaminaRefill(target view.IStaminaEntity, request *pb.StaminaRefillRequest, nowUnixMilli int64) (*pb.StaminaRefillResponse, error) {
+	result, err := target.Stamina().Refill(nowUnixMilli)
 	if err != nil {
 		return nil, err
 	}

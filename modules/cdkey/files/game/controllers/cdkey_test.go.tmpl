@@ -226,6 +226,7 @@ func newCdkeyFixture(t *testing.T) *cdkeyFixture {
 	f.controller = cdkeyTestController(t, f)
 	return f
 }
+
 // cdkeyTestController 把夹具的 directory 与 mail 按能力名登记进 Registry，Nest 用夹具的引擎；Controller 兑换时取。
 func cdkeyTestController(t *testing.T, f *cdkeyFixture) *Controller {
 	t.Helper()
@@ -238,7 +239,7 @@ func cdkeyTestController(t *testing.T, f *cdkeyFixture) *Controller {
 	return &Controller{registry: registry, nestClient: f.engine}
 }
 func (f *cdkeyFixture) redeem(playerID int64, code string) (gamecdkey.Intent, error) {
-	return f.controller.Redeem(context.Background(), playerID, code)
+	return f.controller.CdkeyRedeem(context.Background(), playerID, code)
 }
 func (f *cdkeyFixture) size(t *testing.T, playerID int64) int {
 	t.Helper()
@@ -319,8 +320,8 @@ func TestCdkeyOnceUsesSharedAuthorityAcrossControllers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := *f.controller // 第二个入口没有共享的本地去重缓存，只共用权威服务。
-	if _, err := other.Redeem(context.Background(), 95102, "ONE-GIFT"); !errors.Is(err, apperrors.ErrCdkeyTaken) {
+	other := cdkeyTestController(t, f) // 第二个入口：另一个 Controller 与 Registry，没有共享的本地状态，只共用权威服务。
+	if _, err := other.CdkeyRedeem(context.Background(), 95102, "ONE-GIFT"); !errors.Is(err, apperrors.ErrCdkeyTaken) {
 		t.Fatalf("global code was redeemed twice: %v", err)
 	}
 	if first.MailID == "" || f.mail.calls.Load() != 1 {
@@ -533,7 +534,7 @@ func TestCdkeyMutationDetectsLostGlobalAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "..", "..", "view", "component_cdkey.go")
+	path := filepath.Join(dir, "..", "view", "component_cdkey.go")
 	path, err = filepath.Abs(path)
 	if err != nil {
 		t.Fatal(err)

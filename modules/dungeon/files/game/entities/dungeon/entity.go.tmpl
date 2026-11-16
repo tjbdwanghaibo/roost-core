@@ -1,8 +1,10 @@
 package dungeon
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/dungeonrun"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 const EntityKindDungeon entity.EntityKind = {{ID:entity:Dungeon}}
@@ -15,9 +17,9 @@ type Dungeon struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	run   *DungeonRunComponent `comp:"CompTypeDungeonRun"`
-	dao   *db.DungeonDao       `dao:"dungeon"`
-	level *db.DungeonLevelDAO  `dao:"level_state"`
+	run   *dungeonrun.Component `comp:"dungeonrun.CompTypeDungeonRun"`
+	dao   *db.DungeonDao        `dao:"dungeon"`
+	level *db.DungeonLevelDAO   `dao:"level_state"`
 }
 
 // IDungeonEntity is the lock-safe business view used by Nest handlers.

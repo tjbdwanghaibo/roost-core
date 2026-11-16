@@ -1,6 +1,9 @@
 package view
 
-import gameattr "{{MODULE}}/game/modules/gameplay/attribute"
+import (
+	db "{{MODULE}}/db"
+	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
+)
 
 // Attribute 是属性组件对 game/ 下其它包公开的方法（实现在 game/components/attribute，语义见那里）；只在宿主被 Nest 锁住期间调用。
 // gameattr 是工程生成的属性运行时（只有类型与计算，不依赖实体或组件包），view 可以引用。
@@ -11,5 +14,15 @@ type Attribute interface {
 	LevelUp(levels int32) error
 }
 
-// AttributeHolder 是“带有属性”的小接口：只要属性的组件、钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
-type AttributeHolder interface{ Attribute() Attribute }
+// AttributeHolder 是“带有属性”的小接口：只要属性的组件与联动收它；实体接口（entity_<实体>.go）嵌入它，
+// Nest handler 收生成的 IAttributeEntity。
+type AttributeHolder interface {
+	Attribute() Attribute
+	// AttributeBase / AttributeGear / AttributeFinal 是宿主方法：返回宿主 DAO 里的三层属性。DAO 里有同名字段时
+	// 由生成器写（纯 DAO 交接）。
+	AttributeBase() *db.AttributeValues
+	AttributeGear() *db.AttributeValues
+	AttributeFinal() *db.AttributeValues
+	// AttributeLevel 是宿主方法：基础层没有记录时按这个等级派生。每种宿主自己写（Player 的在 entities/player/attribute.go）。
+	AttributeLevel() int32
+}

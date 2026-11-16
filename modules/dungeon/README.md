@@ -14,24 +14,24 @@
 ### 服务端入口（`game/controllers/dungeon.go`，经生成的 `controllers.FromRegistry(registry)` 取得 `Controller`）
 
 ```go
-run, err := controller.Open(ctx, uniqueID, playerID, season)            // 开一局；同 ID、同所有者、同赛季的重试只读
+run, err := controller.DungeonOpen(ctx, uniqueID, playerID, season)            // 开一局；同 ID、同所有者、同赛季的重试只读
 run, err = controller.Defeated(ctx, uniqueID, run.Instance, run.Epoch, "battle", 1, "minion")  // 上报一条战斗事实
-result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领奖（DungeonClaim 端点调的就是它）
+result, err := controller.DungeonClaim(ctx, uniqueID, playerID)                 // 领奖（DungeonClaim 端点调的就是它）
 ```
 
 - `Open` 的 `uniqueID` 必须由工程的全局 ID 分配器给出、永不复用；换所有者或赛季答 `dungeon_invalid`。
 - `Defeated(ctx, uniqueID, instance, epoch, source, sequence, enemy)`：`enemy` 只认关卡规则里出现过的敌人种类（`logic.KnownEnemy`，缺省规则是 `"minion"` 与 `"boss"`），别的名字答 `dungeon_invalid`、不写、不占事件序号；每个 `source` 的 `sequence` 单调递增。
 - Nest handler（`game/handler/dungeon.go`、`dungeon_counts.go`，都不直接对客户端开放）：`handlerDungeonOpen`、`handlerDungeonDefeated`、`handlerDungeonView`、`handlerDungeonClaim`（同时锁 `Dungeon` 与 `Player` 两个实体）、`handlerDungeonCounts`（只读 Player 的通关计数，显式声明 `durability=memory`）。
-- 组件 `DungeonComp()`（Player 上，`game/components/dungeon/dungeon.go`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
-- 组件 `DungeonRunComp()`（Dungeon 实体上，`game/components/dungeonrun/dungeonrun.go`，`view.DungeonRun`）：`Open`、`Defeated`、`View`、`Reward`，结果是 `view.DungeonSnapshot`（`logic.Snapshot` 是它的别名）；两份 DAO 的存档校验在组件的 `OnInitFinish`。
+- 组件 `Dungeon()`（Player 上；逻辑、类型号 `dungeon.CompTypeDungeon` 与工厂登记在 `game/components/dungeon/dungeon.go`，对外接口 `view.Dungeon`，handler 参数写生成的 `view.IDungeonEntity`）：`Claim(runID, season, amount, resolvedAt, now)`、`Counts(season)`。
+- 组件 `DungeonRun()`（Dungeon 实体上，`entity.go` 里直接挂 `comp:"dungeonrun.CompTypeDungeonRun"`；逻辑、类型号与工厂登记在 `game/components/dungeonrun/dungeonrun.go`，对外接口 `view.DungeonRun`，handler 参数写生成的 `view.IDungeonRunEntity`）：`Open`、`Defeated`、`View`、`Reward`，结果是 `view.DungeonSnapshot`（`logic.Snapshot` 是它的别名）；两份 DAO 的存档校验在组件的 `OnInitFinish`。
 
 ### 关卡规则（`game/modules/dungeon/rules.go`，归工程）
 
 `Program()` 用框架的 `gameplay/level`（事件、条件、动作、计时器）定义缺省关卡：`waves` 阶段累计击败两只 `minion` → 切到 `boss` 阶段 → `boss` 被击败才产生 `success`。并行的 `deadline` 阶段在开局 30 分钟后把结果定为 `failed`；没有周期任务，超时由下一次查看或下一条事件顺带处理。敌人种类只在这个文件里定义：触发器用 `enemyIs("名字")` 写“被击败的是谁”，写过的名字就是关卡认识的敌人，`KnownEnemy(name)` 从定义里读出来（事件名与字段名是常量 `EventEnemyDefeated`、`FieldEnemy`）。同文件的常量：`ClearExp`（100 经验）、`ClaimWindowSeconds`（4 小时）、`LedgerPruneGraceSeconds`（10 分钟）、`MaxClaims`（128）、`MaxSeasons`（8）。
 
-### 登记点
+### 实体事件
 
-`dungeon.OnDungeonClaimed(name, DungeonClaimedHook)`（`game/components/dungeon/hooks.go`）：副本**首次**领奖成功时执行，重复领取不执行。钩子签名 `func(owner view.PlayerEntity, runID, season, nowUnixMilli int64) error`，在 Player 锁内、领奖的同一笔 Nest 事务里，只能改同一个 Player、不能做 I/O；返回错误让奖励、账本、计数一起回滚。只在 `init` 登记，按名字顺序执行，空名、nil、重名 panic。
+`event.DungeonClaimed{RunID, Season, NowUnixMilli}`（`game/event/dungeon.go`）：副本**首次**领奖成功时在 Player 上发布，重复领取不发布。监听写成组件或实体方法上的 `//roost:listen`（`OnDungeonClaimed(ev event.DungeonClaimed) error`），在 Player 锁内、领奖的同一笔 Nest 事务里执行，只能改同一个 Player、不能做 I/O；返回错误让奖励、账本、计数一起回滚。
 
 ### 状态
 
@@ -61,11 +61,11 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 - **领奖窗口：** 成功后 4 小时内可领（恰好第 4 小时仍可领），以首次可信成功时保存的 `ResolvedAtUnix` 为准，不接受客户端时间。
 - **一致性与幂等：**
   - `Open`、`Defeated`、`DungeonView`、领奖都是 `rollback=undo durability=strict` 的 Nest 事务。同序号同内容的事件重试零写入。
-  - 领奖同时锁 `Dungeon` 与 `Player`：记账本、发经验、加赛季通关数与总通关数、执行 `OnDungeonClaimed` 的钩子在一笔事务里，提交失败整体回滚；重复领取返回当前计数、什么都不写。
+  - 领奖同时锁 `Dungeon` 与 `Player`：记账本、发经验、加赛季通关数与总通关数、发布 `event.DungeonClaimed`（监听的写入）在一笔事务里，提交失败整体回滚；重复领取返回当前计数、什么都不写。
   - 排行榜投影（装了 leaderboard 时）在事务之外，是尽力而为：失败只把 `BoardPending` 置 true 并记一条 Warn，没有后台自动重试。
 - **规则变更：** 冷加载时关卡定义的 hash 对不上会拒绝恢复；修改已经有存档的 `Program()` 要保留旧定义或显式迁移。两份 DAO 缺一半、身份不符的存档不能继续领奖。
 - **前提：** 依赖 profile 模块（发经验）与 nest Mod。两个实体必须由同一个 game 进程持有才能领奖。模块自己不声明玩家接入方式，玩家 TCP 接入由连带装上的 enter（profile 依赖它）代办；`PlayerDao.Dungeon` 不同步。
-- **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“业务模块目录”一条说明 game-demo 自己的副本仍在 demo 里、没有换成这个模块；“模块登记点”“事务内事件”两条说明首次领奖钩子的事务范围。
+- **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“业务模块目录”一条说明 game-demo 自己的副本仍在 demo 里、没有换成这个模块；“模块登记点”“事务内事件”两条说明首次领奖事件的事务范围。
 
 ## 复用方式
 
@@ -73,8 +73,8 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 - **需求比它多一点：**
   - 换关卡流程、时限、奖励数额、窗口与上限：改 `game/modules/dungeon/rules.go`。改了 `Program()` 的定义要考虑已有存档。
   - 加一种敌人：只改 `game/modules/dungeon/rules.go`——在关卡定义里加一条用 `enemyIs("新名字")` 的触发器（它被击败时做什么），`Defeated` 就接受这个名字；`run.go` 不用动。改了定义同样要考虑已有存档。
-  - 首次通关要顺带推进任务、成就：登记 `dungeon.OnDungeonClaimed`，不要改 `game/components/dungeon/dungeon.go` 的判断顺序。
-  - 奖励想发别的东西：在 `DungeonComponent.Claim` 里把 `ProfileComp().AddExp` 换成同一实体上别的组件的入口，保持“先检查、后写、账本同事务”。
+  - 首次通关要顺带推进任务、成就：在自己的组件（或 Player 实体）上写 `//roost:listen` 的 `OnDungeonClaimed(ev event.DungeonClaimed) error`，不要改 `game/components/dungeon/dungeon.go` 的判断顺序。
+  - 奖励想发别的东西：在 `dungeon.Component.Claim` 里把 `Profile().AddExp` 换成同一实体上别的组件的入口，保持“先检查、后写、账本同事务”。
 - **别的业务代码要开局 / 上报战斗结果：** `controllers.FromRegistry(registry)` 取 `Controller`，调 `Open` 与 `Defeated`；每次都要检查错误。读某赛季通关数用 `DungeonCountsSender` 的 `Sync_DungeonCounts(ctx, playerEntityID, season)`。
 - **只适合借鉴的情形：** 多人副本、实时战斗在副本进程内结算、客户端权威的单机关卡都不适合直接用。值得借鉴的是“关卡结果是持久事实，领奖事务只读它，不信请求里的结果”与“有界账本 + 过了窗口再宽限才清理”。
 

@@ -1,13 +1,13 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
 	logic "{{MODULE}}/game/modules/dungeon"
+	"{{MODULE}}/game/view"
 )
 
 // handlerDungeonCounts 只读 Player 的持久通关计数，不改任何状态；与别的只读 handler 一样不带事务选项。
 //
 //roost:nest durability=memory
-func handlerDungeonCounts(target player.IDungeonRewardEntity, season int64) logic.ClaimResult {
-	return target.DungeonComp().Counts(season)
+func handlerDungeonCounts(target view.IDungeonEntity, season int64) logic.ClaimResult {
+	return target.Dungeon().Counts(season)
 }

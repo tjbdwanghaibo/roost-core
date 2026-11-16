@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"sync/atomic"
@@ -9,7 +8,7 @@ import (
 	"time"
 
 	player "{{MODULE}}/game/entities/player"
-	gamewallet "{{MODULE}}/game/components/wallet"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -92,12 +91,14 @@ func TestWithTaskWalletGrantsDoNotCountAsSpending(t *testing.T) {
 var taskWalletRejectHook atomic.Bool
 
 func init() {
-	gamewallet.OnWalletSpent("zz_task_wallet_test", func(view.PlayerEntity, int64, int64) error {
-		if taskWalletRejectHook.Load() {
-			return errors.New("injected wallet hook failure")
-		}
-		return nil
-	})
+	// 测试自己的扣款事件监听（生成的监听在 player 包的 init 里先登记，这里排在 task 的监听后面）：打开时拒绝扣款。
+	entity.RegisterEventListener(player.EntityKindPlayer, "WalletSpent", "handler_test.taskWalletReject",
+		func(*player.Player, event.WalletSpent) error {
+			if taskWalletRejectHook.Load() {
+				return errors.New("injected wallet listener failure")
+			}
+			return nil
+		})
 }
 func TestWithTaskWalletHookFailureRollsBackBusinessAndProgress(t *testing.T) {
 	f := newTaskFixture(t)

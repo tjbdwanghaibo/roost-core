@@ -32,7 +32,7 @@ with:
       run: ^TestWithMailboxEnter
       pass: 5
   bag:
-    summary: 道具附件：登记 item 这个附件种类，领取时道具进背包（BagComp().Add），与领取账本同一笔事务
+    summary: 道具附件：登记 item 这个附件种类，领取时道具进背包（Bag().Add），与领取账本同一笔事务
     verify:
       packages: [./game/modules/mailbox, ./game/handler, ./game/controllers]
       run: ^TestWithMailboxBag

@@ -1,13 +1,13 @@
 package task
 
-import (
-	"{{MODULE}}/game/view"
-	gamecheckin "{{MODULE}}/game/components/checkin"
-)
+import "{{MODULE}}/game/event"
 
-// 首次业务事实与任务进度在同一笔事务里提交；事件提供方负责去重。
-func init() {
-	gamecheckin.OnCheckinClaimed("task", func(owner view.PlayerEntity, _ gamecheckin.CheckinResult, now int64) error {
-		return owner.Task().Report("checkin.claimed", 1, now)
-	})
+// OnCheckinClaimed 把今天签到成功作为 "checkin.claimed" 事件推进任务（每次记 1 次），与签到同一笔事务提交；
+// 事件提供方负责去重（同一业务日只随成功的签到发布一次）。
+//
+// 缺省优先级：改成事件之前 checkin 的签到钩子只有 task 一个模块登记，没有别的模块监听需要排序。
+//
+//roost:listen
+func (c *Component) OnCheckinClaimed(ev event.CheckinClaimed) error {
+	return c.Report("checkin.claimed", 1, ev.NowUnixMilli)
 }

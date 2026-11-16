@@ -9,9 +9,18 @@ import (
 	"{{MODULE}}/db"
 	rules "{{MODULE}}/game/modules/equipment"
 	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/game/event"
 )
 
-// Owner 是 Equipment 组件的宿主：整个 Player（换装钩子要拿到宿主）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Equipment}}
+const CompTypeEquipment entity.ComponentType = {{ID:component:Equipment}}
+
+// init 登记组件工厂：Player 结构体里 comp:"equipment.CompTypeEquipment" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeEquipment, NewComponent)
+}
+
+// Owner 是 Equipment 组件的宿主：整个 Player（组件经它动背包，并在它上面发布穿戴变化事件）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 // Component 只拥有逻辑；背包、穿戴与联动属性全由 DAO setter 纳入同一 Nest 事务。
@@ -20,7 +29,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/equipment_component.go 登记它。
+// NewComponent 是组件工厂；上面的 init 登记。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -29,7 +38,7 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 	return &Component{owner: owner}, nil
 }
 
-func (c *Component) Name() string   { return "equipment" }
+func (c *Component) Name() string { return "equipment" }
 func (c *Component) Owner() Owner { return c.owner }
 func (c *Component) Worn(slot int32) (int64, int32, bool) {
 	p, ok := c.owner.Dao().GetEquipment().GetSlots(slot)
@@ -63,7 +72,7 @@ func (c *Component) Equip(itemID int64, level int32) (slot int32, replaced int64
 		return slot, 0, nil
 	}
 	// 同一件道具只换等级时穿着的还是这一件：背包不动（不扣新的、不退旧的），replaced 为 0；
-	// 下面照常写穿戴事实并执行变化钩子，属性联动据此重算。
+	// 下面照常写穿戴事实并发布穿戴变化事件，属性联动据此重算。
 	if !sameItem {
 		if _, err = c.owner.Bag().Remove(itemID, 1); err != nil {
 			return 0, 0, err
@@ -79,7 +88,7 @@ func (c *Component) Equip(itemID int64, level int32) (slot int32, replaced int64
 	piece.SetItemID(itemID)
 	piece.SetLevel(level)
 	c.owner.Dao().GetEquipment().SetSlotsKey(slot, piece)
-	if err = runEquipmentChanged(c.owner); err != nil {
+	if err = c.owner.Publish(event.EquipmentChanged{Slot: slot}); err != nil {
 		return 0, 0, err
 	}
 	return slot, replaced, nil
@@ -98,7 +107,7 @@ func (c *Component) Unequip(slot int32) (itemID int64, found bool, err error) {
 		return 0, false, err
 	}
 	c.owner.Dao().GetEquipment().DelSlotsKey(slot)
-	if err = runEquipmentChanged(c.owner); err != nil {
+	if err = c.owner.Publish(event.EquipmentChanged{Slot: slot}); err != nil {
 		return 0, false, err
 	}
 	return itemID, true, nil
