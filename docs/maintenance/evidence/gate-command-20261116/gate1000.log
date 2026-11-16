@@ -1,0 +1,54 @@
+{"time":"2026-11-16T11:36:58.424586+08:00","level":"INFO","msg":"starting server","goId":1,"frame":0,"server_time_ms":1794800218424,"name":"gtdcf2d5f","version":"dev commit=unknown built=unknown dirty=unknown","type":"gate","sid":1000,"config":"configs/service/config.gate.yaml","config_includes":null,"business_timezone":"UTC","business_day_start":"00:00"}
+{"time":"2026-11-16T11:36:58.425334+08:00","level":"INFO","msg":"singleton: acquiring","goId":1,"frame":0,"server_time_ms":1794800218425,"key":"roost:gtdcf2d5f:singleton:gate:1000"}
+{"time":"2026-11-16T11:36:58.425446+08:00","level":"INFO","msg":"singleton: acquired","goId":1,"frame":0,"server_time_ms":1794800218425,"key":"roost:gtdcf2d5f:singleton:gate:1000","value":"8b1458d6287770b4|haibowangdeMacBook-Pro.local|84103|1794800218424"}
+{"time":"2026-11-16T11:36:58.425609+08:00","level":"INFO","msg":"business time: high-water mark checked","goId":1,"frame":0,"server_time_ms":1794800218425,"key":"roost:gtdcf2d5f:singleton:business_time","offset":0,"high_water":"2026-11-16T11:36:58.425+08:00"}
+{"time":"2026-11-16T11:36:58.425644+08:00","level":"INFO","msg":"mod init","goId":1,"frame":0,"server_time_ms":1794800218425,"mod":"lock"}
+{"time":"2026-11-16T11:36:58.42567+08:00","level":"INFO","msg":"mod init","goId":1,"frame":0,"server_time_ms":1794800218425,"mod":"ops"}
+{"time":"2026-11-16T11:36:58.42574+08:00","level":"INFO","msg":"mod init","goId":1,"frame":0,"server_time_ms":1794800218425,"mod":"stats_log"}
+{"time":"2026-11-16T11:36:58.425798+08:00","level":"INFO","msg":"mod start","goId":1,"frame":0,"server_time_ms":1794800218425,"mod":"lock"}
+{"time":"2026-11-16T11:36:58.425813+08:00","level":"INFO","msg":"mod start","goId":1,"frame":0,"server_time_ms":1794800218425,"mod":"ops"}
+{"time":"2026-11-16T11:36:58.425873+08:00","level":"INFO","msg":"ops: serving","goId":49,"frame":0,"server_time_ms":1794800218425,"addr":"127.0.0.1:40602","admin_enabled":false,"admin_timeout":10000000000}
+{"time":"2026-11-16T11:36:58.425893+08:00","level":"INFO","msg":"mod start","goId":1,"frame":0,"server_time_ms":1794800218425,"mod":"stats_log"}
+{"time":"2026-11-16T11:36:58.426014+08:00","level":"INFO","msg":"mod init (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218426,"mod":"etcd"}
+{"time":"2026-11-16T11:36:58.426074+08:00","level":"INFO","msg":"mod init (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218426,"mod":"nats"}
+{"time":"2026-11-16T11:36:58.426148+08:00","level":"INFO","msg":"mod init (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218426,"mod":"service.account"}
+{"time":"2026-11-16T11:36:58.426187+08:00","level":"INFO","msg":"mod init (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218426,"mod":"access.gate"}
+{"time":"2026-11-16T11:36:58.426773+08:00","level":"INFO","msg":"nats: connected","goId":78,"frame":0,"server_time_ms":1794800218426,"url":"nats://127.0.0.1:33222"}
+{"time":"2026-11-16T11:36:58.427638+08:00","level":"INFO","msg":"mod start (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218427,"mod":"etcd"}
+{"time":"2026-11-16T11:36:58.4284+08:00","level":"INFO","msg":"etcd mod: started","goId":82,"frame":0,"server_time_ms":1794800218428,"endpoints":["127.0.0.1:41479"]}
+{"time":"2026-11-16T11:36:58.428418+08:00","level":"INFO","msg":"mod start (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218428,"mod":"nats"}
+{"time":"2026-11-16T11:36:58.428464+08:00","level":"INFO","msg":"bus: subscribed","goId":90,"frame":0,"server_time_ms":1794800218428,"subject":"gtdcf2d5f.srv.1000"}
+{"time":"2026-11-16T11:36:58.428481+08:00","level":"INFO","msg":"bus: subscribed","goId":90,"frame":0,"server_time_ms":1794800218428,"subject":"gtdcf2d5f.svc.gate.1000"}
+{"time":"2026-11-16T11:36:58.428501+08:00","level":"INFO","msg":"bus: subscribed","goId":90,"frame":0,"server_time_ms":1794800218428,"subject":"gtdcf2d5f.svc.gate.all"}
+{"time":"2026-11-16T11:36:58.428526+08:00","level":"INFO","msg":"bus: subscribed","goId":90,"frame":0,"server_time_ms":1794800218428,"subject":"gtdcf2d5f.srv.all"}
+{"time":"2026-11-16T11:36:58.428542+08:00","level":"INFO","msg":"nats mod: started","goId":90,"frame":0,"server_time_ms":1794800218428}
+{"time":"2026-11-16T11:36:58.428565+08:00","level":"INFO","msg":"mod start (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218428,"mod":"service.account"}
+{"time":"2026-11-16T11:36:58.428584+08:00","level":"INFO","msg":"mod start (service-specific)","goId":1,"frame":0,"server_time_ms":1794800218428,"mod":"access.gate"}
+{"time":"2026-11-16T11:36:58.428837+08:00","level":"INFO","msg":"player tcp listener started","goId":117,"frame":0,"server_time_ms":1794800218428,"addr":"[::]:38500","max_connections":10000}
+{"time":"2026-11-16T11:36:58.445617+08:00","level":"INFO","msg":"service init","goId":1,"frame":0,"server_time_ms":1794800218445,"service":"gate"}
+{"time":"2026-11-16T11:36:58.445655+08:00","level":"INFO","msg":"etcd Discovery: registered","goId":200,"frame":0,"server_time_ms":1794800218445,"key":"/gtdcf2d5f/services/gate/1000","lease":487974128512448006}
+{"time":"2026-11-16T11:37:02.182894+08:00","level":"INFO","msg":"received signal, shutting down","goId":1,"frame":0,"server_time_ms":1794800222182,"signal":15}
+{"time":"2026-11-16T11:37:02.182978+08:00","level":"INFO","msg":"service shutdown","goId":1,"frame":0,"server_time_ms":1794800222182,"service":"gate"}
+{"time":"2026-11-16T11:37:02.183019+08:00","level":"INFO","msg":"closing inputs","goId":1,"frame":0,"server_time_ms":1794800222183,"count":2}
+{"time":"2026-11-16T11:37:02.184313+08:00","level":"INFO","msg":"inputs closed","goId":1,"frame":0,"server_time_ms":1794800222184,"duration":1292667}
+{"time":"2026-11-16T11:37:02.184354+08:00","level":"INFO","msg":"mod stop (service-specific)","goId":1,"frame":0,"server_time_ms":1794800222184,"mod":"access.gate","budget":10000000000}
+{"time":"2026-11-16T11:37:02.202509+08:00","level":"INFO","msg":"etcd Discovery: deregistered","goId":262,"frame":0,"server_time_ms":1794800222202,"key":"/gtdcf2d5f/services/gate/1000"}
+{"time":"2026-11-16T11:37:02.20255+08:00","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1794800222202,"mod":"access.gate","duration":18195584}
+{"time":"2026-11-16T11:37:02.202577+08:00","level":"INFO","msg":"mod stop (service-specific)","goId":1,"frame":0,"server_time_ms":1794800222202,"mod":"service.account","budget":10993465847}
+{"time":"2026-11-16T11:37:02.202608+08:00","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1794800222202,"mod":"service.account","duration":30875}
+{"time":"2026-11-16T11:37:02.20263+08:00","level":"INFO","msg":"mod stop (service-specific)","goId":1,"frame":0,"server_time_ms":1794800222202,"mod":"nats","budget":16490171666}
+{"time":"2026-11-16T11:37:02.226911+08:00","level":"INFO","msg":"nats: disconnected","goId":79,"frame":0,"server_time_ms":1794800222226,"err":null}
+{"time":"2026-11-16T11:37:02.227045+08:00","level":"INFO","msg":"nats: connection closed","goId":79,"frame":0,"server_time_ms":1794800222227}
+{"time":"2026-11-16T11:37:02.253275+08:00","level":"INFO","msg":"nats mod: stopped","goId":272,"frame":0,"server_time_ms":1794800222253}
+{"time":"2026-11-16T11:37:02.25341+08:00","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1794800222253,"mod":"nats","duration":50771583}
+{"time":"2026-11-16T11:37:02.253486+08:00","level":"INFO","msg":"mod stop (service-specific)","goId":1,"frame":0,"server_time_ms":1794800222253,"mod":"etcd","budget":32929491958}
+{"time":"2026-11-16T11:37:02.253767+08:00","level":"INFO","msg":"etcd mod: stopped","goId":278,"frame":0,"server_time_ms":1794800222253}
+{"time":"2026-11-16T11:37:02.253824+08:00","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1794800222253,"mod":"etcd","duration":337292}
+{"time":"2026-11-16T11:37:02.253868+08:00","level":"INFO","msg":"mod stop","goId":1,"frame":0,"server_time_ms":1794800222253,"mod":"stats_log","budget":10976369361}
+{"time":"2026-11-16T11:37:02.25394+08:00","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1794800222253,"mod":"stats_log","duration":72833}
+{"time":"2026-11-16T11:37:02.253971+08:00","level":"INFO","msg":"mod stop","goId":1,"frame":0,"server_time_ms":1794800222253,"mod":"ops","budget":16464502771}
+{"time":"2026-11-16T11:37:02.254076+08:00","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1794800222254,"mod":"ops","duration":104917}
+{"time":"2026-11-16T11:37:02.254104+08:00","level":"INFO","msg":"mod stop","goId":1,"frame":0,"server_time_ms":1794800222254,"mod":"lock","budget":32928869458}
+{"time":"2026-11-16T11:37:02.254131+08:00","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1794800222254,"mod":"lock","duration":27000}
+{"time":"2026-11-16T11:37:02.254156+08:00","level":"INFO","msg":"server stopped","goId":1,"frame":0,"server_time_ms":1794800222254,"type":"gate"}
+{"time":"2026-11-16T11:37:02.254399+08:00","level":"INFO","msg":"singleton: released","goId":1,"frame":0,"server_time_ms":1794800222254,"key":"roost:gtdcf2d5f:singleton:gate:1000"}

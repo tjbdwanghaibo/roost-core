@@ -67,7 +67,7 @@ roost module verify
 装它时 [login](../login/README.md) 跟着装；account 服务没有 web Mod 时安装器先补上（`roost add mod web -service <托管 account 的服务>`，连同 `web.*` 配置段，开发端口是 8080 + 那个服务的端口块号）；工程还没有 account 时（`-template game` 缺省不托管框架服务）安装器声明它，web 直接写进声明，配置生成时就带 `web.*` 段。零配置就能启动、登录、拿清单、换进服票据，只是没有连接地址。要走通整条链路还要做（`roost module plan / add` 的输出里列着，`todo:` 行）：
 
 1. login 的那几步（[login 的“安装之后还要做的”](../login/README.md#复用方式)）：打开玩家 TCP 监听、写开发令牌、登记区服。
-2. 给区服配地址：在 game 服务的配置里写 `login.presence.addr`（game 定期上报，见“动态目录”），或在托管 account 的服务的配置里写静态的 `portal.servers`。
+2. 给区服配地址：在 game 服务的配置里写 `login.presence.addr`（game 定期上报，见“动态目录”），或在托管 account 的服务的配置里写静态的 `portal.servers`。用 `roost add gate` 改成独立 Gate 的工程，命令已把 `login.presence.addr` 写成 Gate 的地址（Gate 接过原来的客户端端口，已有的 `portal.servers` 不用改）；`roost project doctor` 的 gate:client-address 检查开发配置里这两处都等于 Gate 的 `player_access.gate.advertise_addr`。
 
 **需求比它多一点**
 

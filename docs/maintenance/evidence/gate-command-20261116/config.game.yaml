@@ -1,0 +1,270 @@
+# Generated starter configuration; application-owned after project creation.
+sid: 1000
+log:
+  level: info
+  json: true
+  stdout: true
+  file: true
+  dir: log
+# Business days and daily resets follow this zone and wall-clock time, not the machine's TZ
+# (production: the zone the game's day follows, e.g. Asia/Shanghai); every service of the
+# project writes the same two values.
+time:
+  # 业务时区（IANA 名，例如 Asia/Shanghai）：业务日与每日重置按它划分，不取机器的 TZ / time.Local；存储与协议里的时间仍是绝对时刻
+  business_timezone: UTC
+  # 每日重置时刻（业务时区的墙上时间 HH:MM）：业务日从这一刻开始
+  business_day_start: 00:00
+shutdown:
+  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without
+  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one
+  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only
+  # when the rest cannot cover it. Generated for this service's 17 Mods: 40s declared + 3s x 15
+  # undeclared + 5s for Service.Shutdown + 3s for the singleton release = 93s (the App keeps the
+  # release share back from the Mods while singleton.enabled is true). roost sync updates this
+  # block while it is unedited when the service's Mods change; roost doctor checks an edited one.
+  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose
+  # stop_grace_period, systemd TimeoutStopSec, deploy/dev/run.sh) must be
+  # >= total_timeout + 5s: 98s for this service.
+  total_timeout: 93s
+ops:
+  # 打开 ops 端点（/healthz、/readyz、/metrics、/statsz、/admin）
+  enabled: true
+  # ops 端点监听地址；生产环境绑公网要同时写 ops.allow_public_addr: true
+  addr: 127.0.0.1:40600
+  # 打开 /admin 命令；打开时必须写 ops.admin_token
+  admin_enabled: false
+  # /admin 的令牌；生产禁止 dev-，开发使用 dev- 时须写 ops.allow_dev_token: true
+  admin_token: ""
+  allow_dev_token: false
+stats_log:
+  # 按 interval 把指标快照写进 stats 日志
+  enabled: true
+  # stats 日志目录（相对进程工作目录，部署要给它可写的挂载）
+  dir: log
+  interval: 1m
+config_data:
+  # 配置表目录（相对进程工作目录）
+  dir: configs/data
+etcd:
+  # etcd 地址（逗号分隔或 YAML 列表）
+  endpoints: [127.0.0.1:41479]
+  username: ""
+  password: ""
+  # 服务注册的键前缀，不写取 etcd 包的缺省
+  service_prefix: /gtdcf2d5f/services/
+  # 注册租约秒数，0 取 etcd 包的缺省
+  lease_ttl: 10
+  # 写进服务注册的地址（其他进程据此连接本服务）
+  advertise_addr: 127.0.0.1:40500
+redis:
+  # 单机 Redis 地址
+  addr: 127.0.0.1:35379
+  password: ""
+  db: 0
+  # 连接池大小，0 取驱动默认
+  pool_size: 32
+  # 最少空闲连接，0 取驱动默认
+  min_idle_conns: 4
+mongo:
+  uri: mongodb://127.0.0.1:46117,127.0.0.1:46118,127.0.0.1:46119/?replicaSet=roost-it
+  connect_timeout: 5s
+  transaction_timeout: 30s
+  # 要求副本集（事务需要它）；只在确知用不到事务的单机环境写 false
+  require_replica_set: true
+  max_pool_size: 100
+  min_pool_size: 5
+  max_idle_time: 5m
+nats:
+  url: nats://127.0.0.1:33222
+  # bus 主题前缀。生成配置按工程名填写：同一工程的所有服务必须一致，共用一套 NATS 的不同工程必须不同
+  prefix: gtdcf2d5f
+  worker_num: 8
+  reliable:
+    # 可靠总线（需要 Redis Mod）
+    enabled: false
+syncbus:
+  # 服务间同步总线：nats 或 jetstream（持久投递）
+  transport: jetstream
+  # 主题前缀
+  prefix: gtdcf2d5f.sync
+  storage: file
+  replicas: 1
+  publish_timeout: 3s
+remote_entity:
+  lock_ttl: 15s
+  retry_count: 3
+  retry_delay: 100ms
+  op_timeout: 3s
+  unlock_retry_count: 5
+  unlock_retry_interval: 100ms
+  version_ttl: 24h
+  finalize_retry_interval: 500ms
+  max_write_batch: 64
+  async_finalize_capacity: 4096
+  async_finalize_workers: 16
+  transaction_track_limit: 100000
+  transaction_track_ttl: 10m
+  wrapper_capacity: 65536
+  wrapper_idle_ttl: 5m
+  snapshot_cache_shards: 64
+  snapshot_cache_entries: 10000
+  snapshot_cache_bytes: 268435456
+  snapshot_cache_ttl: 30s
+  # Cached / Monotonic 读交出的快照距最近一次被共享 L2 或权威确认的最长时间，超过先重新确认，
+  # 确认不了就不交出。不配置时等于 snapshot_cache_ttl（这里写成与它相同）；配置了必须为正。
+  cached_max_staleness: 30s
+  snapshot_l2_ttl: 10m
+  # Prefix for the shared L2 snapshot and route keys (remote_entity:snapshot:*, remote_entity:route:*).
+  # Generated projects start with roost:<project> so projects sharing one Redis db do not collide.
+  # Empty keeps the unprefixed keys. Every node of a deployment must use the same value; no hash tags.
+  snapshot_l2_key_prefix: roost:gtdcf2d5f
+  # L2 写删除墓碑后用 WAIT 等几个副本确认、最多等多久，缩小切主时删除短暂复活的窗口。
+  # 0 个副本即关闭；主节点没有副本时自动不等；确认不足只计数并记 Warn，不回滚。超时必须为正且不超过 1s。
+  snapshot_l2_tombstone_wait_replicas: 1
+  snapshot_l2_tombstone_wait_timeout: 50ms
+  snapshot_interest_ttl: 30s
+  snapshot_interest_keys: 10000
+  snapshot_interest_subs: 100000
+  # 每个 consumer 节点在兴趣表里的租约配额，0 取 snapshot_interest_subs / 16，不能超过 snapshot_interest_subs。
+  # 超出配额的 key 没有推送、按需读取（计 interest_rejected_total{reason}）。
+  snapshot_interest_per_consumer: 0
+  marker_cache_ttl: 2s
+  snapshot_load_timeout: 3s
+  snapshot_max_waiters: 4096
+  mongo:
+    database: gtdcf2d5f_remote
+    transaction_ttl: 168h
+  mirror:
+    # 只读服务（wiring/remoteentity.NewRemoteMirrorMod）声明给 App 的停机预算，RemoteEntityMod 不读它。
+    # 生成的 shutdown.total_timeout 与部署宽限期只计入生成器认识的 Mod，手工接入 Mirror Mod 时要一并调大。
+    shutdown_timeout: 5s
+persistence:
+  # 持久化引擎；只支持 dataengine
+  engine: dataengine
+nest:
+  short:
+    workers: 0
+    queue_capacity: 0
+  io:
+    workers: 0
+    queue_capacity: 0
+  long:
+    workers: 0
+    queue_capacity: 0
+  delayed_capacity: 4096
+  max_delay: 24h
+  tick_duration: 50ms
+  request_timeout: 3s
+  # Framework cap for one shared cold entity load; a caller's own deadline does not end it.
+  entity_load_timeout: 30s
+  # Reload of unloaded entities that still have Sync subscribers (0 keeps the framework
+  # default). Worst case before the last queued entity falls back to a remove is about
+  # ceil((queue_capacity+workers)/workers) * T_entity (all attempts plus retry backoff); see docs/framework/guide/04-sync.md.
+  unload_resync:
+    workers: 4
+    attempts: 5
+    queue_capacity: 4096
+  pipelined:
+    # 允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写
+    allowlist: []
+    # 异步完成池的 worker 数（0 取缺省 4）。异步完成给本进程声明 durability=pipelined 的 saga 原生步骤 handler 与声明
+    # completion=async 的 pipelined handler 用，没有这两类 handler 时不建完成池、本项不起作用
+    async_workers: 8
+    # 完成队列容量（0 取缺省 8192）；队列满时该事务降级为在派发 worker 上等 WAL，计 nest.pipelined.async_total{result="degraded"}
+    async_queue_capacity: 4096
+dataengine:
+  # Data Engine 自己的集合（receipts / transactions / outbox）所在的 Mongo 库。生成配置按工程名填写；共用一个 Mongo 的不同工程必须不同
+  database: gtdcf2d5f
+  # DAO 逻辑库（标记里的 db=）→ Mongo 物理库。没写的逻辑库物理名就是逻辑名本身；生成配置把骨架的 main 映射到按工程名派生的库。
+  # 只认代码声明过的逻辑库；物理名不能是系统库，按 sid 分库时加上 _<sid> 不超过 63 字节；两个逻辑库不能映射到同一个物理库。
+  # WAL 里有未投影记录时改映射会拒绝启动：先停写排空 WAL、迁移数据再改（docs/framework/PLAYER-MIGRATION.md）
+  databases: {main: gtdcf2d5f}
+  # 启动排空（把 WAL 里未投影的记录写进 Mongo）的期限，期限内遇到写冲突等错误会退避重试。
+  # 被 kill -9 的进程留下的 Mongo 事务最晚在 1.5 × transactionLifetimeLimitSeconds 才被服务端回收
+  # （部署要求 20s，即最晚 30s），缺省 60s 在此之上留 30s 余量。生成的部署启动等待按它计算：调大时同步调大
+  startup_timeout: 60s
+  # Stop budget declared to the App for draining WAL and projection; granted from
+  # shutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning
+  # only when the rest cannot cover it). The generated shutdown.total_timeout counts it:
+  # raise that too when raising this.
+  shutdown_timeout: 30s
+  transaction_receipt_ttl: 720h
+  receipt_ttl: 720h
+  # dir 不写取 data/wal/<服务>/<sid>（服务即 server_type，相对进程工作目录），每个服务的每个 sid 一个目录；生成的开发配置因此不写 dir。
+  # 显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写
+  wal:
+    segment_bytes: 268435456
+    max_disk_bytes: 8589934592
+    max_unacked_age: 24h
+    queue_capacity: 8192
+    group_commit_interval: 2ms
+  projection:
+    batch_records: 256
+    retry_min: 100ms
+    retry_max: 5s
+    # 未投影 WAL 记录数的硬上限（0 不限）：到上限时新的 Nest 提交在 WAL 准入前被拒。同进程有 saga Mod 且准入开启时必须 > 0 且 ≥ 4 × saga.admission.high_records
+    max_unacked_records: 20000
+  outbox:
+    # effect outbox 发布 worker 数（每个 worker 一批认领、发布、确认）。缺省 8（2026-11-05 由 2 调大，压测后再定：2 个 worker 在本机约 330 次/秒开始积压）
+    workers: 8
+    batch_size: 64
+    lease_duration: 30s
+    poll_interval: 100ms
+    retry_min: 1s
+    retry_max: 1m
+    max_pending: 1000000
+    max_oldest_age: 30m
+  effects:
+    subject_prefix: gtdcf2d5f.effect
+    stream: GTDCF2D5F_EFFECTS
+    max_age: 168h
+    max_bytes: 268435456
+    duplicate_window: 10m
+    replicas: 1
+    # best_effort effect 的进程内发送队列容量：事务持久之后入队、经 NATS（不经 JetStream / outbox）发出一次，
+    # 队列满时丢弃并计 dataengine.effects.best_effort_total{result="dropped"}（至多一次，见 docs/framework/impl/03-dataengine.md“effect 持久性与顺序”）
+    best_effort_queue: 8192
+singleton:
+  # One process per server type + sid: before any Mod starts, the App takes the Redis key
+  # <key_prefix>:<server_type>:<sid> (connecting with this file's redis.* settings), renews it,
+  # stops the process when it is lost, and releases it after every Mod has stopped.
+  # On by default for a service with the Data Engine (one WAL writer per sid). The App refuses
+  # to start unless renew_interval <= guard, 2 x renew_interval <= ttl - guard and
+  # startup_wait >= ttl + 2 x renew_interval. Raising startup_wait: raise the deployment's
+  # start-up allowance with it (k8s startupProbe, compose start_period, HEALTH_ATTEMPTS).
+  enabled: true
+  key_prefix: roost:gtdcf2d5f:singleton
+  ttl: 15s
+  renew_interval: 3s
+  guard: 5s
+  startup_wait: 30s
+
+player_access:
+  gate:
+    # 独立 Gate 与 Game Ingress 之间内部主题的命名空间（roost add gate）：Gate 服务与玩家服务两端必须相同（roost project doctor 检查）；不写取 wiring/gate 缺省 roost.access
+    namespace: gtdcf2d5f.access
+    # 客户端连 Gate 的地址 host:port。Gate 把它登记进发现，玩家服务的 Game Ingress 把它写进自己的发现候选；登录入口给客户端的区服地址（login.presence.addr、portal.servers）应与它相同（roost project doctor 检查开发配置）
+    advertise_addr: 127.0.0.1:38500
+  tcp:
+    heartbeat_enabled: true
+    request_rate: 100
+    request_burst: 200
+    enabled: false
+    addr: 0.0.0.0:38500
+    max_connections: 10000
+    max_connections_per_ip: 128
+    max_handshakes: 1024
+    max_handshake_bytes: 8192
+    max_payload_bytes: 1048576
+    handshake_timeout: 5s
+    idle_timeout: 90s
+    write_timeout: 5s
+    shutdown_timeout: 10s
+    dispatch_timeout: 0s
+    login_timeout: 0s
+    outbound:
+      resident_bytes: 268435456
+# 登录模块的区服入口上报（game/managers/login_presence.go）：给客户端的是 Gate 的地址（roost add gate 写入）
+login:
+  presence:
+    addr: 127.0.0.1:38500

@@ -1,0 +1,138 @@
+// Command gatelogin 经登录入口拿进服票据，连入口给的地址（必须是 Gate），握手、等 EnterStatus、新建、进入。
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"DRILL_MODULE/protocol/msgid"
+	"DRILL_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+func must[T any](value T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func require(ok bool, format string, args ...any) {
+	if !ok {
+		panic(fmt.Errorf(format, args...))
+	}
+}
+
+func post(ctx context.Context, base, path string, body any, result any) {
+	raw := must(json.Marshal(body))
+	req := must(http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(raw)))
+	req.Header.Set("Content-Type", "application/json")
+	response := must(http.DefaultClient.Do(req))
+	defer response.Body.Close()
+	raw = must(io.ReadAll(io.LimitReader(response.Body, 1<<20)))
+	var verdict struct {
+		OK     bool   `json:"ok"`
+		Code   int32  `json:"code"`
+		Reason string `json:"reason"`
+	}
+	require(json.Unmarshal(raw, &verdict) == nil && response.StatusCode == http.StatusOK && verdict.OK, "portal %s: status=%d code=%d reason=%s", path, response.StatusCode, verdict.Code, verdict.Reason)
+	require(json.Unmarshal(raw, result) == nil, "decode portal %s", path)
+}
+
+func main() {
+	portal := flag.String("portal", "", "login entry base URL")
+	identity := flag.String("identity", "", "dev channel open id")
+	token := flag.String("dev-token", "", "login.dev_token of account")
+	want := flag.String("want-addr", "", "the Gate address the entry must hand out")
+	sid := flag.Int("sid", 1000, "game server id")
+	flag.Parse()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	var logged struct {
+		AccountTicket string `json:"account_ticket"`
+	}
+	post(ctx, *portal, "/portal/login", map[string]any{"channel": "dev", "open_id": *identity, "credential": *token}, &logged)
+	// 地址来自 game 的 login.presence 上报（roost add gate 写成 Gate 的地址）：上报是起服后的后台循环，等它出现。
+	var addr string
+	for deadline := time.Now().Add(45 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		var listed struct {
+			Servers []struct {
+				ServerID int    `json:"server_id"`
+				Addr     string `json:"addr"`
+				Status   string `json:"status"`
+			} `json:"servers"`
+		}
+		post(ctx, *portal, "/portal/servers", map[string]any{"account_ticket": logged.AccountTicket}, &listed)
+		for _, server := range listed.Servers {
+			if server.ServerID == *sid {
+				addr = server.Addr
+			}
+		}
+		if addr == *want {
+			break
+		}
+	}
+	require(addr == *want, "server list gives %d at %q, want the Gate %q", *sid, addr, *want)
+	fmt.Printf("{\"event\":\"servers\",\"sid\":%d,\"addr\":%q}\n", *sid, addr)
+	var entered struct {
+		Ticket          string `json:"ticket"`
+		Addr            string `json:"addr"`
+		ServerID        int    `json:"server_id"`
+		ServingServerID int    `json:"serving_server_id"`
+	}
+	post(ctx, *portal, "/portal/enter", map[string]any{"account_ticket": logged.AccountTicket, "server_id": *sid}, &entered)
+	require(entered.Addr == *want && entered.ServingServerID == *sid && len(entered.Ticket) > 6 && entered.Ticket[:6] == "enter:", "enter = addr %q serving %d", entered.Addr, entered.ServingServerID)
+	fmt.Printf("{\"event\":\"enter_ticket\",\"addr\":%q,\"serving\":%d}\n", entered.Addr, entered.ServingServerID)
+
+	conn := must(transport.DialPlayerTCP(ctx, transport.Config{Endpoint: entered.Addr, DialTimeout: 5 * time.Second}))
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	auth := transport.AuthPacket(entered.Ticket)
+	auth.Seq = 1
+	require(conn.WritePackets([]*transport.Packet{auth}) == nil, "write auth")
+	ack := must(conn.ReadPacket())
+	require(ack.MsgID == 0 && ack.Seq == 1 && len(ack.Payload) == 0, "invalid auth ACK id=%d seq=%d", ack.MsgID, ack.Seq)
+	fmt.Println(`{"event":"handshake","via":"gate"}`)
+	frames := 0
+	next := func() *transport.Packet {
+		p := must(conn.ReadPacket())
+		frames++
+		return p
+	}
+	for {
+		p := next()
+		if p.MsgID == msgid.MsgEnterStatus {
+			status := must(pb.UnmarshalEnterStatusPush(p.Payload))
+			require(status.Code == 0 && status.NeedCreate, "EnterStatus = %+v, want need_create for a new account", status)
+			fmt.Println(`{"event":"enter_status","need_create":true}`)
+			break
+		}
+	}
+	seq := uint32(1)
+	call := func(id uint32, raw []byte) []byte {
+		seq++
+		require(conn.WritePackets([]*transport.Packet{{MsgID: id, Seq: seq, Payload: raw}}) == nil, "write %d", id)
+		for {
+			p := next()
+			if p.MsgID == id && p.Seq == seq {
+				return p.Payload
+			}
+			require(p.Seq == 0, "unexpected response id=%d seq=%d", p.MsgID, p.Seq)
+		}
+	}
+	created := must(pb.UnmarshalEnterCreateResponse(call(msgid.MsgEnterCreate, must(pb.MarshalEnterCreateRequest(&pb.EnterCreateRequest{Name: *identity})))))
+	require(created.Code == 0, "EnterCreate = %+v", created)
+	fmt.Printf("{\"event\":\"enter_create\",\"code\":%d}\n", created.Code)
+	game := must(pb.UnmarshalEnterGameResponse(call(msgid.MsgEnterGame, must(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{})))))
+	require(game.Code == 0 && game.First, "EnterGame = %+v, want code 0 first=true", game)
+	fmt.Printf("{\"event\":\"enter_game\",\"first\":%t,\"frames\":%d}\n", game.First, frames)
+	fmt.Println("PASS: portal gave the Gate address; enter: ticket handshake through the Gate; EnterStatus, EnterCreate and EnterGame through Game Ingress")
+}

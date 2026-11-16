@@ -1,0 +1,94 @@
+# Generated starter configuration; application-owned after project creation.
+sid: 1000
+log:
+  level: info
+  json: true
+  stdout: true
+  file: true
+  dir: log
+# Business days and daily resets follow this zone and wall-clock time, not the machine's TZ
+# (production: the zone the game's day follows, e.g. Asia/Shanghai); every service of the
+# project writes the same two values.
+time:
+  # 业务时区（IANA 名，例如 Asia/Shanghai）：业务日与每日重置按它划分，不取机器的 TZ / time.Local；存储与协议里的时间仍是绝对时刻
+  business_timezone: UTC
+  # 每日重置时刻（业务时区的墙上时间 HH:MM）：业务日从这一刻开始
+  business_day_start: 00:00
+shutdown:
+  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without
+  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one
+  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only
+  # when the rest cannot cover it. Generated for this service's 7 Mods: 10s declared + 3s x 6
+  # undeclared + 5s for Service.Shutdown + 3s for the singleton release = 36s (the App keeps the
+  # release share back from the Mods while singleton.enabled is true). roost sync updates this
+  # block while it is unedited when the service's Mods change; roost doctor checks an edited one.
+  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose
+  # stop_grace_period, systemd TimeoutStopSec, deploy/dev/run.sh) must be
+  # >= total_timeout + 5s: 41s for this service.
+  total_timeout: 36s
+ops:
+  # 打开 ops 端点（/healthz、/readyz、/metrics、/statsz、/admin）
+  enabled: true
+  # ops 端点监听地址；生产环境绑公网要同时写 ops.allow_public_addr: true
+  addr: 127.0.0.1:40602
+  # 打开 /admin 命令；打开时必须写 ops.admin_token
+  admin_enabled: false
+  # /admin 的令牌；生产禁止 dev-，开发使用 dev- 时须写 ops.allow_dev_token: true
+  admin_token: ""
+  allow_dev_token: false
+stats_log:
+  # 按 interval 把指标快照写进 stats 日志
+  enabled: true
+  # stats 日志目录（相对进程工作目录，部署要给它可写的挂载）
+  dir: log
+  interval: 1m
+etcd:
+  # etcd 地址（逗号分隔或 YAML 列表）
+  endpoints: [127.0.0.1:41479]
+  username: ""
+  password: ""
+  # 服务注册的键前缀，不写取 etcd 包的缺省
+  service_prefix: /gtdcf2d5f/services/
+  # 注册租约秒数，0 取 etcd 包的缺省
+  lease_ttl: 10
+  # 写进服务注册的地址（其他进程据此连接本服务）
+  advertise_addr: 127.0.0.1:40502
+nats:
+  url: nats://127.0.0.1:33222
+  # bus 主题前缀。生成配置按工程名填写：同一工程的所有服务必须一致，共用一套 NATS 的不同工程必须不同
+  prefix: gtdcf2d5f
+  worker_num: 8
+  reliable:
+    # 可靠总线（需要 Redis Mod）
+    enabled: false
+player_access:
+  gate:
+    # 独立 Gate 与 Game Ingress 之间内部主题的命名空间（roost add gate）：Gate 服务与玩家服务两端必须相同（roost project doctor 检查）；不写取 wiring/gate 缺省 roost.access
+    namespace: gtdcf2d5f.access
+    # Gate 的客户端监听地址（玩家连的 TCP 端口；玩家服务自己不再监听）
+    addr: 0.0.0.0:38500
+    # 客户端连 Gate 的地址 host:port。Gate 把它登记进发现，玩家服务的 Game Ingress 把它写进自己的发现候选；登录入口给客户端的区服地址（login.presence.addr、portal.servers）应与它相同（roost project doctor 检查开发配置）
+    advertise_addr: 127.0.0.1:38500
+redis:
+  # 单机 Redis 地址
+  addr: 127.0.0.1:35379
+  password: ""
+  db: 0
+  # 连接池大小，0 取驱动默认
+  pool_size: 32
+  # 最少空闲连接，0 取驱动默认
+  min_idle_conns: 4
+singleton:
+  # One process per server type + sid: before any Mod starts, the App takes the Redis key
+  # <key_prefix>:<server_type>:<sid> (connecting with this file's redis.* settings), renews it,
+  # stops the process when it is lost, and releases it after every Mod has stopped.
+  # On by default for a service with the Data Engine (one WAL writer per sid). The App refuses
+  # to start unless renew_interval <= guard, 2 x renew_interval <= ttl - guard and
+  # startup_wait >= ttl + 2 x renew_interval. Raising startup_wait: raise the deployment's
+  # start-up allowance with it (k8s startupProbe, compose start_period, HEALTH_ATTEMPTS).
+  enabled: true
+  key_prefix: roost:gtdcf2d5f:singleton
+  ttl: 15s
+  renew_interval: 3s
+  guard: 5s
+  startup_wait: 30s

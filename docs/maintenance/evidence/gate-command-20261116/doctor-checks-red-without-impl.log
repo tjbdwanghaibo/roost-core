@@ -1,0 +1,5 @@
+--- FAIL: TestDoctorPlayerGateChecks (0.00s)
+    gate_test.go:211: gate:ingress on a correct Gate project: {Name: Status: Detail:}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.586s
+FAIL

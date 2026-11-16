@@ -1,0 +1,7 @@
+{"event":"servers","sid":1000,"addr":"127.0.0.1:38500"}
+{"event":"enter_ticket","addr":"127.0.0.1:38500","serving":1000}
+{"event":"handshake","via":"gate"}
+{"event":"enter_status","need_create":true}
+{"event":"enter_create","code":0}
+{"event":"enter_game","first":true,"frames":3}
+PASS: portal gave the Gate address; enter: ticket handshake through the Gate; EnterStatus, EnterCreate and EnterGame through Game Ingress
