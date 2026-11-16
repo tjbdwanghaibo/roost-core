@@ -30,7 +30,11 @@ import (
 //  3. 再按组件初始化顺序：组件类型号升序（与 framework/entity 的 sortedComponentTypes 一致）；
 //  4. 同一接收者按方法名。
 //
-// 组件挂在几种实体上，就在每种实体的生成文件里各登记一次。生成器另外扫描监听方法体（以及同一接收者上被它直接调用的
+// 组件挂在几种实体上，就在每种实体的生成文件里各登记一次。组件包里的组件必须按组件包写法挂（字段类型 *<包>.<类型>、
+// comp:"<包>.CompType<X>"，模块清单写 component_package）：旧写法在实体包里声明别名 type XComponent = <包>.Component
+// 再挂别名，监听对不上这次挂载，生成失败（整理轮 §3.2 第 4 项）；组件确实没有实体挂载时只提示。
+//
+// 生成器另外扫描监听方法体（以及同一接收者上被它直接调用的
 // 方法）里的 Publish(event.X{...})，画出“事件 → 监听 → 再发布的事件”的图，有环时打印提示；运行时的深度与次数上限
 // 才是最终的保证。
 const (
@@ -110,11 +114,16 @@ func buildEventPlan(root, module string) (*eventPlan, error) {
 	entityTypes := map[[2]string]eventEntityKey{} // (包路径, 类型名) → 实体
 	mounts := map[[2]string][]eventMount{}        // (包路径, 组件类型名) → 挂载
 	coldMounts := map[[2]string]bool{}
-	scanDirs := map[string]string{} // 目录 → 包路径
+	aliasMounts := map[[2]string][]aliasMount{} // (包路径, 组件类型名) → 经实体包别名挂它的字段
+	scanDirs := map[string]string{}             // 目录 → 包路径
 	for _, dir := range entityDirs {
 		entities, _, err := parseDir(dir)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", dir, err)
+		}
+		aliases, err := entityTypeAliases(dir)
+		if err != nil {
+			return nil, err
 		}
 		pkgPath := pkgPathOf(dir)
 		scanDirs[dir] = pkgPath
@@ -129,6 +138,17 @@ func buildEventPlan(root, module string) (*eventPlan, error) {
 				}
 				recv := lastTypeSegment(comp.TypeName)
 				id := [2]string{compPkg, recv}
+				if target, isAlias := aliases[recv]; isAlias && comp.TypePkg == "" {
+					// 旧写法：挂的是实体包里的别名，组件真正的包另记一份，那个包里的监听在下面报错；包目录也加进扫描范围
+					// （game/modules 下的组件包不在 game/components 的遍历里）。
+					aliasMounts[target] = append(aliasMounts[target], aliasMount{
+						where:    fmt.Sprintf("%s.%s (alias %s.%s)", ent.Name, comp.FieldName, filepath.Base(dir), recv),
+						compType: lastTypeSegment(comp.CompType),
+					})
+					if targetDir := dirOf(target[0]); targetDir != "" {
+						scanDirs[targetDir] = target[0]
+					}
+				}
 				if other, dup := seen[id]; dup {
 					problems = append(problems, fmt.Sprintf("%s: entity %s mounts component %s.%s twice (fields %s and %s); its listeners would be registered twice",
 						dir, ent.Name, compPkg, recv, other, comp.FieldName))
@@ -187,6 +207,17 @@ func buildEventPlan(root, module string) (*eventPlan, error) {
 				continue
 			}
 			byReceiverEvent[dupKey] = listener.Method + " at " + listener.Pos
+			if old := aliasMounts[id]; len(old) > 0 {
+				// 别名挂载对不上组件包里的接收者：不报错的话，这些实体上的监听会悄悄缺失。
+				where := make([]string, 0, len(old))
+				for _, mount := range old {
+					where = append(where, mount.where)
+				}
+				problems = append(problems, fmt.Sprintf("%s: %s listens to %s, but %s mount%s the component through an alias in the entity package (the old way), so the listener cannot be registered there; "+
+					"mount it the component-package way: field type *%s.%s with comp:\"%s.%s\" (component_package in the module manifest), and delete the alias and its CompType constant from the entity package",
+					listener.Pos, listener.Label(), listener.Event, strings.Join(where, ", "), pluralS(len(old)), listener.Pkg, listener.Recv, listener.Pkg, old[0].compType))
+				continue
+			}
 			if key, ok := entityTypes[id]; ok {
 				plan.byEntity[key] = append(plan.byEntity[key], entityListener{eventListener: listener, Own: true})
 				continue
@@ -233,6 +264,66 @@ func buildEventPlan(root, module string) (*eventPlan, error) {
 	plan.Notes = append(plan.Notes, eventCycleHints(plan.byEntity)...)
 	sort.Strings(plan.Notes)
 	return plan, nil
+}
+
+// aliasMount 是旧写法的一次挂载：实体字段的类型是实体包里指向组件包的别名。
+type aliasMount struct {
+	where    string // "<实体>.<字段> (alias <实体包>.<别名>)"
+	compType string // 实体包里的类型号常量名，例如 CompTypeActivity
+}
+
+// pluralS 让动词随主语单复数：一个挂载用 mounts，多个用 mount。
+func pluralS(n int) string {
+	if n == 1 {
+		return "s"
+	}
+	return ""
+}
+
+// entityTypeAliases 返回实体包里指向别的包的类型别名：别名名 → (包路径, 类型名)。旧写法用它把组件包的组件挂到实体上
+// （type ActivityComponent = activity.Component）。
+func entityTypeAliases(dir string) (map[string][2]string, error) {
+	aliases := map[string][2]string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || isGeneratedWireFile(name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		imports := collectImports(file)
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				ts := spec.(*ast.TypeSpec)
+				if !ts.Assign.IsValid() {
+					continue
+				}
+				selector, ok := ts.Type.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				pkg, ok := selector.X.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if imp, found := imports[pkg.Name]; found {
+					aliases[ts.Name.Name] = [2]string{imp.Path, selector.Sel.Name}
+				}
+			}
+		}
+	}
+	return aliases, nil
 }
 
 // listenerLess 是同一事件里的执行顺序（见文件头）；不同事件之间按事件名排，生成文件稳定。

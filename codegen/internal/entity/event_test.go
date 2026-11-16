@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -144,5 +145,49 @@ func TestListenMarkerErrors(t *testing.T) {
 	writeProjectFile(t, root, "game/entities/player/entity.go", source)
 	if _, err := runEntities(t, root); err == nil || !strings.Contains(err.Error(), "listens on a cold component") {
 		t.Fatalf("listener on a cold component = %v", err)
+	}
+}
+
+// 旧写法挂组件（实体包里 type XComponent = <包>.Component 的别名 + 实体包里的 comp:"CompTypeX"）时，组件包里的监听对不上
+// 任何挂载：Guild 的那一份不登记、Player 也是旧写法时整个监听只剩一条“没有实体挂载”的提示。两种都改成生成失败，
+// 报错说明要改成组件包写法；组件确实没有实体挂载（orphan）仍只提示，见 TestEventListenersAreRegisteredInExecutionOrder。
+func TestListenOnAnAliasMountedComponentIsRefused(t *testing.T) {
+	const alias = "package %s\n\nimport (\n\t\"example.com/g/game/components/activity\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n)\n\n" +
+		"//roost:component type=%d\nconst CompTypeActivity entity.ComponentType = %d\n\ntype ActivityComponent = activity.Component\n"
+	oldStyle := func(t *testing.T, root, pkg, rel string, number int) {
+		t.Helper()
+		writeProjectFile(t, root, "game/entities/"+pkg+"/activity_component.go", fmt.Sprintf(alias, pkg, number, number))
+		source := readProjectFile(t, root, rel)
+		updated := regexp.MustCompile(`activity +\*activity\.Component +`+"`"+`comp:"activity\.CompTypeActivity"`+"`").
+			ReplaceAllString(source, "activity *ActivityComponent `comp:\"CompTypeActivity\"`")
+		if updated == source {
+			t.Fatalf("%s: the activity field was not found:\n%s", rel, source)
+		}
+		writeProjectFile(t, root, rel, updated)
+	}
+	want := func(t *testing.T, err error, entity string) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("generation succeeded; the listener on activity.Component would be missing on " + entity)
+		}
+		for _, fragment := range []string{"activity.Component.OnProfileLevelUp", entity, "comp:\"activity.CompTypeActivity\"", "component_package"} {
+			if !strings.Contains(err.Error(), fragment) {
+				t.Errorf("error lacks %q:\n%v", fragment, err)
+			}
+		}
+	}
+
+	// 只有 Guild 是旧写法：Player 照常登记，Guild 那一份会悄悄缺失。
+	root := copyFixture(t, "viewevent")
+	oldStyle(t, root, "guild", "game/entities/guild/entity.go", 9001)
+	_, err := runEntities(t, root)
+	want(t, err, "Guild")
+
+	// 两个实体都是旧写法：原来只打印“没有实体挂载”的提示。
+	oldStyle(t, root, "player", "game/entities/player/entity.go", 9002)
+	_, err = runEntities(t, root)
+	want(t, err, "Player")
+	if err != nil && strings.Contains(err.Error(), "no entity mounts it") {
+		t.Errorf("an alias-mounted component is reported as unmounted:\n%v", err)
 	}
 }
