@@ -8,12 +8,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-//roost:component type={{ID:component:Attribute}}
-const CompTypeAttribute entity.ComponentType = {{ID:component:Attribute}}
-
 // AttributeComponent 是共用属性组件 attribute.Component 的类型别名，只为 Player 的生成接线命名。
 // 分层与成长全部在 game/components/attribute；这里只把 PlayerDao 的三层、档案等级与装备层来源交给它，
 // 并把档案升级接到 LevelUp。
+// 类型号 attribute.CompTypeAttribute 与工厂登记在组件包里（模块清单的 component_package）；下面的别名与窄接口暂留给现有 handler。
 type AttributeComponent = attribute.Component
 type IAttributeEntity interface {
 	entity.IThreadSafeEntity
@@ -22,10 +20,6 @@ type IAttributeEntity interface {
 
 // Gear 是装备层在 Container 里的选择器，见 attribute.Gear。
 var Gear = attribute.Gear
-
-func init() {
-	entity.RegisterComponentFactory(CompTypeAttribute, attribute.NewComponent)
-}
 
 // 下面的方法实现 attribute.Owner 与可选的装备层来源；只在 Player 被 Nest 锁住期间（或装载时）调用。
 

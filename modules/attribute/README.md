@@ -7,7 +7,7 @@
 - **客户端协议**
   - `AttributeGet`（`protocol/def/attribute_get.go`）：读自己的最终属性。请求没有字段；应答带 `HP`、`Attack`、`Power`。端点是 `game/controllers/attribute.go` 的 `HandleAttributeGet`，目标玩家取自认证会话。
   - 属性变化也随同步下发（见“状态”）。
-- **服务端入口**（逻辑在 `game/components/attribute/attribute.go`，Player 的接线在 `game/entities/player/attribute_component.go`；都要求调用方已持有这名 `Player` 的锁）
+- **服务端入口**（逻辑在 `game/components/attribute/attribute.go`，Player 的宿主方法在 `game/entities/player/attribute_component.go`，类型号 `attribute.CompTypeAttribute` 与工厂登记在组件包里；都要求调用方已持有这名 `Player` 的锁）
   - `AttributeComp().Final() (*gameattr.Combat, bool)`：最终属性的副本；最终层为空时第二个返回值为 `false`。副本可以在释放锁之后继续用于计算。
   - `AttributeComp().Container() *coreattr.Container`：基础、装备（选择器 `attribute.Gear`，Player 包里再导出为 `Gear`）、最终三层的副本；对副本的修改不影响实体。
   - `AttributeComp().Refresh() error`：在 Nest 事务里重算全部三层；玩家还没有持久基础记录时，这一次把缺省基础值写进持久层。`RefreshGear()` 是它的别名，供装备变化时调用。
@@ -21,7 +21,7 @@
   - `(*Combat).LevelUp(levels)`：每级 `HP +10`、`Attack +2`。
 - **登记点 / 钩子**
   - `OnAttributeGear(name string, hook AttributeGearHook)`（`game/components/attribute/gear.go`，Player 经可选的 `CollectAttributeGear()` 把它们交给组件）：登记一个装备层来源。钩子签名 `func(view.PlayerEntity) (*gameattr.Combat, error)`，在 `Refresh` 里、持有 `Player` 锁时调用，只能读同一个 `Player`。多个来源按名字排序后把 `HP`、`Attack` 相加。返回错误会让这次刷新以及所在事务失败。只在 `init` 登记；重名、空名、`nil` 直接 panic。
-  - 本模块自己接在 `profile` 模块的登记点上：`OnProfileLevelUp("attribute", …)`，升级时调 `LevelUp(to - from)`，与经验、等级在同一笔事务里。
+  - 本模块自己监听 `profile` 的实体事件 `event.ProfileLevelUp`：组件上的 `//roost:listen priority=30` 方法 `OnProfileLevelUp`（`game/components/attribute/profile.go`），升级时调 `LevelUp(To - From)`，与经验、等级在同一笔事务里。
 - **状态**（都在 `PlayerDao` 上，类型 `AttributeValues`，`db/def/attribute.go`，内容是“属性号 → 值”的 map，值为 0 的属性不存）
   - `AttributeBase`：`persist,sync`，基础属性，落库并下发给本人。没有记录时按档案等级用 `ForLevel` 派生。
   - `AttributeGear`：`nopersist,nosync`，装备层，不落库也不下发，加载时重算。

@@ -14,6 +14,14 @@ import (
 	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 )
 
+//roost:component type={{ID:component:Attribute}}
+const CompTypeAttribute entity.ComponentType = {{ID:component:Attribute}}
+
+// init 登记组件工厂：Player 结构体里 comp:"attribute.CompTypeAttribute" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeAttribute, NewComponent)
+}
+
 // Owner 是属性组件的宿主：任何实体只要在自己的 DAO 里放三层 AttributeValues（基础层持久化，装备层与最终层
 // 不持久、加载后重建），并给出“没有基础记录时按哪个等级派生”，就能挂这个组件（Player 的接线见
 // game/entities/player/attribute_component.go）。组件不认具体实体类型，也不缓存可变 profile：事务事实只在 DAO。

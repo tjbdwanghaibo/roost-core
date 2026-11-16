@@ -12,6 +12,14 @@ import (
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
+//roost:component type={{ID:component:Mailbox}}
+const CompTypeMailbox entity.ComponentType = {{ID:component:Mailbox}}
+
+// init 登记组件工厂：Player 结构体里 comp:"mailbox.CompTypeMailbox" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeMailbox, NewComponent)
+}
+
 // Owner 是 Mailbox 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 

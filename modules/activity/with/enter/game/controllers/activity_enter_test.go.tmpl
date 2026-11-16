@@ -1,4 +1,4 @@
-package activity
+package controllers
 
 import (
 	"context"
@@ -30,16 +30,16 @@ import (
 )
 
 // 进入钩子场景自带的替身：只认完整实体号的 getter 与总是成功的提交器。
-type enterHookGetter map[int64]entity.IThreadSafeEntity
+type activityEnterGetter map[int64]entity.IThreadSafeEntity
 
-func (g enterHookGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+func (g activityEnterGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
 	if v := g[id]; v != nil {
 		return v, nil
 	}
 	return nil, fmt.Errorf("missing entity %d", id)
 }
 
-func (g enterHookGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+func (g activityEnterGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
 	out := make([]entity.IThreadSafeEntity, len(ids))
 	for i, id := range ids {
 		v, err := g.Get(ctx, id, cats[i])
@@ -51,30 +51,30 @@ func (g enterHookGetter) GetMany(ctx context.Context, ids []int64, cats []entity
 	return out, nil
 }
 
-type enterHookCommitter struct{}
+type activityEnterCommitter struct{}
 
-func (enterHookCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+func (activityEnterCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
-var enterHookResumed atomic.Int32
+var activityEnterResumed atomic.Int32
 
 func init() {
 	// 初始化阶段等后台工作；Resume 报告完成后，进入钩子必须用原 Token 调 Complete。
 	activity.Register("with_enter_resume", activity.Hooks{
 		Enter: func(c activity.Context) (bool, error) { return c.Snapshot.Token.Phase == activity.Initializing, nil },
 		Resume: func(context.Context, *app.Registry, activity.Snapshot) (bool, error) {
-			enterHookResumed.Add(1)
+			activityEnterResumed.Add(1)
 			return true, nil
 		},
 	})
 }
 
 // 只换 activity 这张表；其余表原样带上，装载后把缺省 Store 与运行期配置一起换回。
-func enterHookRows(t *testing.T, rows ...activity.Definition) {
+func activityEnterRows(t *testing.T, rows ...activity.Definition) {
 	t.Helper()
 	previous, config := configdata.DefaultStore(), fctx.RuntimeConfig()
 	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(config) })
 	dir := t.TempDir()
-	entries, err := os.ReadDir("../../../configs/data")
+	entries, err := os.ReadDir("../../configs/data")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func enterHookRows(t *testing.T, rows ...activity.Definition) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" || e.Name() == "_manifest.json" {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join("../../../configs/data", e.Name()))
+		raw, err := os.ReadFile(filepath.Join("../../configs/data", e.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -114,7 +114,7 @@ func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *
 	now := int64(1900000000000)
 	clock.SetSource(func() time.Time { return time.UnixMilli(now) })
 	t.Cleanup(func() { clock.SetSource(nil) })
-	enterHookRows(t, activity.Definition{ID: 1, Version: 1, Scope: "player", Trigger: "fixed", StartMilli: now, WarmupMillis: 1000, OpenMillis: 2000, Repeat: "none", Catchup: "queue", Logic: "with_enter_resume"})
+	activityEnterRows(t, activity.Definition{ID: 1, Version: 1, Scope: "player", Trigger: "fixed", StartMilli: now, WarmupMillis: 1000, OpenMillis: 2000, Repeat: "none", Catchup: "queue", Logic: "with_enter_resume"})
 
 	player.RegisterEntity()
 	handler.RegisterActivityEventNestHandlers()
@@ -128,7 +128,7 @@ func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *
 		t.Fatal(err)
 	}
 	p := value.(*player.Player)
-	engine := nest.NewEngine(nest.NestOptionWithGetter(enterHookGetter{entityID: p}), nest.NestOptionWithTransactionCommitter(enterHookCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(activityEnterGetter{entityID: p}), nest.NestOptionWithTransactionCommitter(activityEnterCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err = engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -143,13 +143,13 @@ func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *
 		t.Fatal(err)
 	}
 
-	enterHookResumed.Store(0)
+	activityEnterResumed.Store(0)
 	entered := gamelogin.Entered{PlayerID: playerID, InitResult: gamelogin.InitResult{FirstAtUnixMilli: now}}
 	// 只看本模块的钩子：同一个测试进程里可能还登记着别的功能的进入钩子，这个 registry 没有它们要的能力。
 	if failed := gamelogin.RunEntered(context.Background(), registry, entered); slices.Contains(failed, "activity") {
 		t.Fatalf("the activity enter hook failed (failed hooks: %v)", failed)
 	}
-	if got := enterHookResumed.Load(); got != 1 {
+	if got := activityEnterResumed.Load(); got != 1 {
 		t.Fatalf("Resume ran %d times, want once", got)
 	}
 	views, err := syncsender.NewActivityEventSender(engine).Sync_ActivityEvent(context.Background(), entityID, "", 0)
@@ -165,7 +165,7 @@ func TestWithActivityEnterHookReconcilesAndResumesPendingForTheEnteredPlayer(t *
 		t.Fatalf("the activity enter hook failed on reconnect (failed hooks: %v)", failed)
 	}
 	views, err = syncsender.NewActivityEventSender(engine).Sync_ActivityEvent(context.Background(), entityID, "", 0)
-	if err != nil || len(views) != 1 || views[0].Start != start || enterHookResumed.Load() != 1 {
-		t.Fatalf("reconnect changed the instance: %+v resumed=%d err=%v", views, enterHookResumed.Load(), err)
+	if err != nil || len(views) != 1 || views[0].Start != start || activityEnterResumed.Load() != 1 {
+		t.Fatalf("reconnect changed the instance: %+v resumed=%d err=%v", views, activityEnterResumed.Load(), err)
 	}
 }

@@ -34,7 +34,7 @@ func newBagGM(t *testing.T) (*gmFixture, *player.Player) {
 func BagGMValue(t *testing.T, f *gmFixture, target *player.Player) int64 {
 	t.Helper()
 	var value int64
-	f.read(t, target, func() { value = target.BagComp().Count(1001) })
+	f.read(t, target, func() { value = target.Bag().Count(1001) })
 	return value
 }
 func TestWithBagGMSuccess(t *testing.T) {

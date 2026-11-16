@@ -9,22 +9,20 @@
 - `NamingRename{RequestKey, Name}` → `NamingRenameResponse{Code, Reason, Name}`（`protocol/def/naming_rename.go`）：改名。同一次操作重发要用同一个 `RequestKey` 与同一个 `Name`。`Code` 为 0 才表示改名与旧名清理都完成。
 - profile 模块的 `ProfileRename{Name}` 被自动接到同一个流程：模块在 `init` 里调 `profile.RegisterRenamer`，旧协议用目标名字的 SHA-256 作请求键。
 
-**服务端入口**（`game/controllers/naming/controller.go`）
+**服务端入口**（`game/controllers/naming.go`）
 
-```go
-c, err := naming.FromRegistry(registry)
-name, err := c.Rename(ctx, playerID, requestKey, name) // 只能在 Nest 事务之外调用，会等待目录与 Nest
-```
+- 协议 `NamingRename` 的入口 `Controller.HandleNamingRename`：请求键由客户端带，同一个键重发恢复同一笔。
+- 协调器 `namingRenamer`（包内私有，依赖每次从 Registry 取）：`newNamingRenamer(registry)` 后 `Rename(ctx, playerID, requestKey, name)`，只能在 Nest 事务之外调用，会等待目录与 Nest。别的包经 `profile.Rename`（本模块在 init 里登记的改名器）调到它。
 
 **Nest handler**（`game/handler/naming_begin.go`、`naming_step.go`，都是 `rollback=undo durability=strict`，由 `Rename` 经生成的 Sender 调用）
 
-- `NamingBegin(operation, name)`：受理一次改名（校验名字与请求键、记下意图），返回 `naming.NamingTicket`。
+- `NamingBegin(operation, name)`：受理一次改名（校验名字与请求键、记下意图），返回 `view.NamingTicket`。
 - `NamingStep(seq, operation, action, key, token)`：推进一步。`action` 1 = 记下目录凭据，2 = 目录已提交、把名字写进档案，3 = 旧名已释放、完成，4 = 占名被明确拒绝、撤掉意图，5 = 凭据被明确判为失效、退回重新占名。
 
 **登记点 / 守卫**
 
 - 模块没有给别的功能的登记点。
-- 它给 `Player` 加了 `CheckProfileRenameRequest()`（`game/components/naming/naming.go`）：profile 的本地改名 handler `ProfileRename` 看到它就拒绝并答 `naming_required`，所以旧的本地 Sender 绕不过目录。
+- 它在 `Player` 上监听 profile 的拦截事件 `event.ProfileRenaming`（`game/entities/player/naming.go` 的 `OnProfileRenaming`，`//roost:listen`）：profile 的本地改名 handler `ProfileRename` 写名字之前发布它，被拒绝并答 `naming_required`，所以旧的本地 Sender 绕不过目录。
 
 **状态**：`PlayerDao.Naming`（`db/def/naming.go` 的 `NamingState`），只落库、不下发。字段：`Seq`（改名代际，只增）、`Operation`（在途或最近一次完成的请求键）、`Target`、`Phase`（0 无在途、1 已受理、2 已记凭据、3 已写档案待清旧名）、`ClaimKey` / `ClaimToken`（目录凭据）、`CurrentKey` / `CurrentOwner`（当前名字在目录里的键与属主）、`OldKey` / `OldOwner`（待释放的旧名）。至多一笔在途加一笔最近的回执。显示名本身仍在 profile 的 `PlayerDao.Profile.Name`。
 
@@ -40,7 +38,7 @@ name, err := c.Rename(ctx, playerID, requestKey, name) // 只能在 Nest 事务�
 - 名字不合规时是 profile 的 `profile_name_empty` / `profile_name_long` / `profile_name_invalid`。
 - 名字被占时是 Directory 的码原样带回（`directory: key is taken`，530101）；凭据失效是 530102 / 530103。
 
-**日志**：改名确认，记录请求键、旧名键中的名称与新名；重放时旧名可能为空。结果未知与内部错误记 Warn/Error，不打印占用票据。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/naming/controller.go`, `game/controllers/naming/naming_rename.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：改名确认，记录请求键、旧名键中的名称与新名；重放时旧名可能为空。结果未知与内部错误记 Warn/Error，不打印占用票据。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/naming.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -63,12 +61,11 @@ name, err := c.Rename(ctx, playerID, requestKey, name) // 只能在 Nest 事务�
 
 - **需求正好是它**：`roost module add naming`，连带装上 `profile` 与 `enter`，代办 Directory Mod 与 Redis 依赖；新工程的配置里会写按工程隔离的目录前缀与 60 秒的预留期。
 - **需求多一点**：
-  - 敏感词、花费、次数：在 `game/controllers/naming/naming_rename.go` 的 `HandleNamingRename` 里、调 `Rename` 之前检查；或者在 `NamingComponent.Begin` 里加只读检查（它在受理的那笔事务里）。扣费要与“名字写进档案”同一笔事务时，加在 `Step` 的动作 2 里。
+  - 敏感词、花费、次数：在 `game/controllers/naming.go` 的 `HandleNamingRename` 里、调 `Rename` 之前检查；或者在 naming 组件（`game/components/naming/naming.go`）的 `Begin` 里加只读检查（它在受理的那笔事务里）。扣费要与“名字写进档案”同一笔事务时，加在 `Step` 的动作 2 里。
   - 不要改 `resume` 的步骤顺序，也不要在超时分支里加撤销或释放。
 - **别的代码要用它**：
-  - 服务端改名：`naming.FromRegistry(registry)` 之后 `Rename(ctx, playerID, requestKey, name)`。
-  - 不想直接依赖本模块：调 profile 的 `profile.Rename(ctx, registry, playerID, name)`（`game/profile`），装了本模块时它转到这里。`enter` + `profile` 的联动就是这样在新建角色时占名的。
-  - 读名字：仍读 profile（`ProfileComp().DisplayName()` 或 handler `ProfileCard`）。
+  - 服务端改名：调 profile 的 `profile.Rename(ctx, registry, playerID, name)`（`game/components/profile/rename.go`），装了本模块时它转到这里的协调器（旧协议的请求键是目标名字的 SHA-256）；要自带请求键时在 `game/controllers` 包里用 `newNamingRenamer(registry)` 与 `Rename(ctx, playerID, requestKey, name)`。`enter` + `profile` 的联动就是这样在新建角色时占名的。
+  - 读名字：仍读 profile（`Profile().DisplayName()` 或 handler `ProfileCard`）。
 - **只适合借鉴的情形**：公会名、队伍名等别的全服唯一名字——状态机挂在 Player 上，不能直接拿来给别的实体用。值得借鉴的是“意图先落库 → 临时占名 → 凭据落库 → 提交 → 写业务字段 → 释放旧值”的顺序，以及属主带代际防止迟到清理误删。
 
 ## 联动
@@ -79,7 +76,7 @@ name, err := c.Rename(ctx, playerID, requestKey, name) // 只能在 Nest 事务�
 
 ## 验证范围
 
-- `roost module verify naming`：15 条场景，都在 `game/controllers/naming`。
+- `roost module verify naming`：15 条场景，都在 `game/controllers`。
 - 离线：Directory 用真实的实现加内存 versionstore，Nest 用真实引擎加替身提交器。
 - 覆盖：唯一性与重放、只释放旧名、目录提交应答丢失、档案提交失败（两个名字都保留待重试）、档案回包丢失、释放失败后恢复、同一玩家不同请求互斥、同一请求并发重试幂等、过期凭据重试、旧 Sender 被拒、旧端点走统一入口、非法输入与被拒的受理不写任何东西、迟到的清理不误删重新取得的名字、等待目录时不占 Nest worker、释放应答丢失且旧名已被别人取得时仍能完成。
 - `scripts/test-demo-login.sh` 的 casual + naming 阶段使用真实 HTTP / Robot TCP、Redis Directory、Mongo / WAL：新建占名、两服同名拒绝、失败后仍需新建、换名释放旧名、完成回执重放、game `SIGKILL` 后重连恢复。见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。

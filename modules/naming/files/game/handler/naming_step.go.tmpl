@@ -1,11 +1,8 @@
 package handler
 
-import (
-	player "{{MODULE}}/game/entities/player"
-	gamenaming "{{MODULE}}/game/components/naming"
-)
+import "{{MODULE}}/game/view"
 
 //roost:nest rollback=undo durability=strict
-func handlerNamingStep(target player.INamingEntity, seq int64, operation string, action int32, key string, token string) (gamenaming.NamingTicket, error) {
-	return target.NamingComp().Step(seq, operation, action, key, token)
+func handlerNamingStep(target view.INamingEntity, seq int64, operation string, action int32, key string, token string) (view.NamingTicket, error) {
+	return target.Naming().Step(seq, operation, action, key, token)
 }

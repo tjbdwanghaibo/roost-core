@@ -3,12 +3,12 @@ package handler
 import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
-	host "{{MODULE}}/game/entities/activity_world"
 	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/view"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerWorldActivityInit(target host.IWorldActivityEntity, createdAt int64) error {
+func handlerWorldActivityInit(target view.ActivityWorldEntity, createdAt int64) error {
 	if createdAt <= 0 || createdAt > fctx.NowMilli() {
 		return activity.ErrRule
 	}
@@ -17,5 +17,5 @@ func handlerWorldActivityInit(target host.IWorldActivityEntity, createdAt int64)
 		return activity.ErrStale
 	}
 	dao.SetCreatedAt(createdAt)
-	return target.WorldActivityComp().Reconcile("", createdAt)
+	return target.Activity().Reconcile("", createdAt)
 }

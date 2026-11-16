@@ -3,13 +3,16 @@ package handler
 import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
-	"{{MODULE}}/game/entities/alliance"
 	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/view"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerAllianceActivityComplete(target alliance.IAllianceActivityEntity, token activity.Token) error {
-	c := target.AllianceActivityComp()
+func handlerAllianceActivityComplete(target view.AllianceEntity, token activity.Token) error {
+	c, err := activity.Of(target)
+	if err != nil {
+		return err
+	}
 	if err := c.Host().Complete(token, fctx.NowMilli()); err != nil {
 		return err
 	}

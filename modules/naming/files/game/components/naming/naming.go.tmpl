@@ -10,7 +10,15 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-// Owner 是 Naming 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Naming}}
+const CompTypeNaming entity.ComponentType = {{ID:component:Naming}}
+
+// init 登记组件工厂：Player 结构体里 comp:"naming.CompTypeNaming" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeNaming, NewComponent)
+}
+
+// Owner 是 Naming 组件的宿主：整个 Player（组件读写 PlayerDao.Naming，并在完成时经 Profile() 写名字）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 type Component struct {
@@ -18,7 +26,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/naming_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -28,7 +36,6 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 }
 
 func (c *Component) Name() string { return "naming" }
-
 
 // NamingTicket 是 view.NamingTicket（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
 type NamingTicket = view.NamingTicket

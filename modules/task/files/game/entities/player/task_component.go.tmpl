@@ -6,10 +6,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-//roost:component type={{ID:component:Task}}
-const CompTypeTask entity.ComponentType = {{ID:component:Task}}
-
 // TaskComponent 是 game/components/task 的组件在 Player 上的名字（生成接线与 handler 用它）；业务在那个包里。
+// 类型号 task.CompTypeTask 与工厂登记在组件包里（模块清单的 component_package）；下面的别名与窄接口暂留给现有 handler。
 type TaskComponent = task.Component
 
 // ITaskEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
@@ -17,8 +15,4 @@ type TaskComponent = task.Component
 type ITaskEntity interface {
 	entity.IThreadSafeEntity
 	TaskComp() *TaskComponent
-}
-
-func init() {
-	entity.RegisterComponentFactory(CompTypeTask, task.NewComponent)
 }

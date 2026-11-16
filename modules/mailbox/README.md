@@ -111,7 +111,7 @@
 
 ## 与 profile 的升级奖励联动
 
-`roost module add mailbox profile` 安装升级钩子（`OnProfileLevelUp("mailbox", …)`）、可靠 effect 的生产与消费、模块启动接线，不用手写服务初始化。奖励规则归工程：`game/components/mailbox/mailbox_profile_rules.go` 中的 `MailboxProfileReward(from, to)`，缺省返回零值——不发奖，也不发 effect。这个函数变量只在启动前设置；热更时在函数内部读线程安全的规则源，不并发改写变量。
+`roost module add mailbox profile` 安装升级事件的监听（组件上 `//roost:listen priority=20` 的 `OnProfileLevelUp`，实体事件 `event.ProfileLevelUp`）、可靠 effect 的生产与消费、模块启动接线，不用手写服务初始化。奖励规则归工程：`game/components/mailbox/mailbox_profile_rules.go` 中的 `MailboxProfileReward(from, to)`，缺省返回零值——不发奖，也不发 effect。这个函数变量只在启动前设置；热更时在函数内部读线程安全的规则源，不并发改写变量。
 
 一次经验发放从 `from` 升到 `to`，**只调用规则一次、生成一封邮件**，奖励覆盖 `from+1…to`。例如每升一级送 10 币，返回 `mailbox.Coins(int64(to-from)*10)`；装了 bag 也可以返回 `mailbox.Item(id, count)`。不要逐级发邮件，不要在规则里做 I/O。非法附件会把错误返回给 Nest，升级、属性成长与奖励 effect 一起回滚。
 

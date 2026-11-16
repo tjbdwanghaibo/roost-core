@@ -10,6 +10,7 @@ state:
   - {field: AttributeGear, type: AttributeValues, store: attribute_gear, dao: 'nopersist,nosync', comment: 装备来源临时层，加载重算。}
   - {field: AttributeFinal, type: AttributeValues, store: attribute_final, dao: 'nopersist,sync', comment: 最终属性视图，加载重算并同步。}
 component: Attribute
+component_package: game/components/attribute
 protocols: [AttributeGet]
 errcodes: [attribute_overflow]
 verify:

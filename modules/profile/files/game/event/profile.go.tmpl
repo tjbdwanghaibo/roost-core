@@ -1,0 +1,14 @@
+package event
+
+// ProfileLevelUp 在 Player 升级成功后、同一笔事务内发布（profile 组件的 AddExp）：等级从 From 升到 To（To > From），
+// 一次发放连升多级也只发布一次。监听可以在同一个 Player 上继续改状态（活动对账、属性成长、任务进度、升级邮件），
+// 返回错误时整笔事务回滚，等级与经验一起退回。
+type ProfileLevelUp struct {
+	From, To int32
+}
+
+// ProfileRenaming 在改名协议（ProfileRename 的 Nest handler）写名字之前发布，是拦截事件：监听返回错误就拒绝这次改名，
+// 什么都不写。监听只做检查，不改状态。装了 naming 时 Player 上的监听拒绝它（名字必须经全服唯一的命名入口）。
+type ProfileRenaming struct {
+	Name string
+}

@@ -1,5 +1,7 @@
 package view
 
+import db "{{MODULE}}/db"
+
 // Bag 是背包组件对 game/ 下其它包公开的方法（实现在 game/components/bag，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Bag interface {
 	Add(itemID, count int64) (int64, error)
@@ -8,5 +10,10 @@ type Bag interface {
 	Has(itemID, count int64) bool
 }
 
-// BagHolder 是“带有背包”的小接口：只要背包的组件、钩子与联动收它；实体接口（entity_<实体>.go）嵌入它。
-type BagHolder interface{ Bag() Bag }
+// BagHolder 是“带有背包”的小接口：只要背包的组件、钩子与联动收它；实体接口（entity_<实体>.go）嵌入它，
+// Nest handler 收生成的 IBagEntity。
+type BagHolder interface {
+	Bag() Bag
+	// BagState 是宿主方法：返回宿主 DAO 里的那份背包。DAO 里只有一个 BagState 字段时由生成器写（纯 DAO 交接）。
+	BagState() *db.BagState
+}

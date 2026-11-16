@@ -16,8 +16,10 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
-	playerentity "{{MODULE}}/game/entities/player"
 	gameprofile "{{MODULE}}/game/components/profile"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/event"
+	"{{MODULE}}/game/view"
 	sender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -368,7 +370,7 @@ func (f *profileFixture) callIgnoringErrors(t *testing.T, name string, amount in
 	t.Helper()
 	registerProfileIgnoreErrorsHandler.Do(func() {
 		nest.MustRegisterHandlerWithMeta(profileIgnoreErrorsHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-			component := es[0].(playerentity.IProfileEntity).ProfileComp()
+			component := es[0].(view.IProfileEntity).Profile()
 			_, renameErr := component.Rename(params[0].(string))
 			_, expErr := component.AddExp(params[1].(int64))
 			if renameErr == nil || expErr == nil {
@@ -543,7 +545,7 @@ func (f *profileFixture) check(t *testing.T, amount int64) error {
 	t.Helper()
 	registerProfileCheckHandler.Do(func() {
 		nest.MustRegisterHandlerWithMeta(profileCheckHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-			return profileCheckAnswer{refusal: es[0].(playerentity.IProfileEntity).ProfileComp().CheckAddExp(params[0].(int64))}, nil
+			return profileCheckAnswer{refusal: es[0].(view.IProfileEntity).Profile().CheckAddExp(params[0].(int64))}, nil
 		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	})
 	answer, err := f.engine.Request(context.Background(), profileCheckHandler, f.player.ID(), nest.NewParams(amount))
@@ -551,6 +553,40 @@ func (f *profileFixture) check(t *testing.T, amount int64) error {
 		t.Fatal(err)
 	}
 	return answer.(profileCheckAnswer).refusal
+}
+
+// profileLevelUpListenerRejects 打开时，测试自己登记的 ProfileLevelUp 监听返回错误。
+var profileLevelUpListenerRejects atomic.Bool
+
+func init() {
+	// 监听平时只由生成代码（game/entities/player/player_event_gen.go）登记；测试在自己的 init 里直接登记一条，
+	// player 包的 init 先跑，所以它排在生成的监听后面。
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "ProfileLevelUp", "handler_test.profileRejectLevelUp",
+		func(_ *playerentity.Player, ev event.ProfileLevelUp) error {
+			if profileLevelUpListenerRejects.Load() {
+				return fmt.Errorf("injected listener refusal %d->%d", ev.From, ev.To)
+			}
+			return nil
+		})
+}
+
+// 升级事件（event.ProfileLevelUp）的监听返回错误时，这一次发放写下的经验和等级都回滚，发经验的请求以监听的错误结束，
+// 错误里带着事件名与出错的监听。别的模块的升级联动（活动、属性、任务、升级邮件）都靠这一条保证与等级同进退。
+func TestProfileLevelUpListenerErrorRollsBackLevelAndExp(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 50, 0)
+	before := f.facts(t)
+	profileLevelUpListenerRejects.Store(true)
+	gained, err := f.addExp(160)
+	profileLevelUpListenerRejects.Store(false)
+	if err == nil || gained != 0 || !strings.Contains(err.Error(), "ProfileLevelUp listener handler_test.profileRejectLevelUp: injected listener refusal 0->2") {
+		t.Fatalf("level-up with a refusing listener: gained=%d err=%v", gained, err)
+	}
+	if after := f.facts(t); after != before {
+		t.Fatalf("the refused level-up left %+v, was %+v", after, before)
+	}
+	// 监听不再拒绝之后照常升级。
+	f.mustAddExp(t, 50, 1)
 }
 
 // CheckAddExp 只检查不执行：回答与 AddExp 相同（同样的数额、同样的业务码），但不写任何字段、不产生提交。
@@ -712,16 +748,19 @@ var profileLocalRenameHandler = nest.NewHandlerName("profileTestLocalRename")
 
 func init() {
 	nest.MustRegisterHandlerWithMeta(profileLocalRenameHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-		return es[0].(*playerentity.Player).ProfileComp().Rename(params[0].(string))
+		return es[0].(*playerentity.Player).Profile().Rename(params[0].(string))
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 }
 
-// 正式旧 Sender 独立安装时仍可改名；组合 naming 时必须执行其拒绝守卫。
+// 正式旧 Sender 独立安装时仍可改名；组合 naming 时必须被它的 ProfileRenaming 监听拒绝。
 func TestProfileFormalRenameHonorsInstalledPolicy(t *testing.T) {
 	f := newProfileFixture(t)
 	response, err := f.renames.Sync_ProfileRename(context.Background(), f.player.ID(), &pb.ProfileRenameRequest{Name: "Formal"})
-	if policy, ok := any(f.player).(interface{ CheckProfileRenameRequest() error }); ok {
-		if !errors.Is(err, policy.CheckProfileRenameRequest()) || f.facts(t).name != "" {
+	// 装了 naming 时 Player 上有拦截事件 ProfileRenaming 的监听（naming 的 Player.OnProfileRenaming），旧协议必须被它拒绝。
+	if policy, ok := any(f.player).(interface {
+		OnProfileRenaming(event.ProfileRenaming) error
+	}); ok {
+		if !errors.Is(err, policy.OnProfileRenaming(event.ProfileRenaming{Name: "Formal"})) || f.facts(t).name != "" {
 			t.Fatalf("guard err=%v", err)
 		}
 		return

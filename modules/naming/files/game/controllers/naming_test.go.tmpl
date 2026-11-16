@@ -1,4 +1,4 @@
-package naming
+package controllers
 
 import (
 	"context"
@@ -14,11 +14,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	profilecontroller "{{MODULE}}/game/controllers/profile"
 	player "{{MODULE}}/game/entities/player"
-	gamenaming "{{MODULE}}/game/components/naming"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/view"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -66,7 +65,7 @@ type namingFaultProfile struct {
 	fired     atomic.Bool
 }
 
-func (p *namingFaultProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (gamenaming.NamingTicket, error) {
+func (p *namingFaultProfile) Step(ctx context.Context, id, seq int64, op string, action int32, key, token string) (view.NamingTicket, error) {
 	if action == p.action && p.fired.CompareAndSwap(false, true) {
 		if p.committer != nil {
 			p.committer.reject.Store(true)
@@ -75,10 +74,10 @@ func (p *namingFaultProfile) Step(ctx context.Context, id, seq int64, op string,
 		}
 		if p.after {
 			if _, err := p.namingProfile.Step(ctx, id, seq, op, action, key, token); err != nil {
-				return gamenaming.NamingTicket{}, err
+				return view.NamingTicket{}, err
 			}
 		}
-		return gamenaming.NamingTicket{}, errors.New("injected step result unknown")
+		return view.NamingTicket{}, errors.New("injected step result unknown")
 	}
 	return p.namingProfile.Step(ctx, id, seq, op, action, key, token)
 }
@@ -122,7 +121,7 @@ type namingFixture struct {
 	players    []*player.Player
 	commit     *namingCommitter
 	names      *namingFaultDirectory
-	controller *Controller
+	renamer    *namingRenamer
 	registry   *app.Registry
 	now        time.Time
 }
@@ -170,14 +169,14 @@ func newNamingFixture(t *testing.T) *namingFixture {
 	if e := f.registry.Register("service.directory", directory.Directory(f.names)); e != nil {
 		t.Fatal(e)
 	}
-	f.controller, e = FromRegistry(f.registry)
+	f.renamer, e = newNamingRenamer(f.registry)
 	if e != nil {
 		t.Fatal(e)
 	}
 	return f
 }
 func (f *namingFixture) rename(i int, op, name string) (string, error) {
-	return f.controller.Rename(context.Background(), int64(99000+i), op, name)
+	return f.renamer.Rename(context.Background(), int64(99000+i), op, name)
 }
 func (f *namingFixture) must(t *testing.T, i int, op, name string) {
 	t.Helper()
@@ -248,7 +247,7 @@ func TestNamingDirectoryCommitUnknownKeepsClaimAndRecovers(t *testing.T) {
 func TestNamingProfileCommitFailureKeepsBothNamesForRetry(t *testing.T) {
 	f := newNamingFixture(t)
 	f.must(t, 0, "one", "Alice")
-	f.controller.profile = &namingFaultProfile{namingProfile: f.controller.profile, action: 2, committer: f.commit}
+	f.renamer.profile = &namingFaultProfile{namingProfile: f.renamer.profile, action: 2, committer: f.commit}
 	if _, e := f.rename(0, "two", "Bob"); e == nil {
 		t.Fatal("missing failure")
 	}
@@ -265,7 +264,7 @@ func TestNamingProfileCommitFailureKeepsBothNamesForRetry(t *testing.T) {
 }
 func TestNamingProfileReplyLostNeverReleasesCurrentName(t *testing.T) {
 	f := newNamingFixture(t)
-	f.controller.profile = &namingFaultProfile{namingProfile: f.controller.profile, action: 2, after: true}
+	f.renamer.profile = &namingFaultProfile{namingProfile: f.renamer.profile, action: 2, after: true}
 	if _, e := f.rename(0, "one", "Alice"); e == nil {
 		t.Fatal("missing unknown result")
 	}
@@ -341,7 +340,7 @@ func TestNamingSameOperationConcurrentRetriesAreIdempotent(t *testing.T) {
 }
 func TestNamingExpiredClaimCanBeRetried(t *testing.T) {
 	f := newNamingFixture(t)
-	f.controller.profile = &namingFaultProfile{namingProfile: f.controller.profile, action: 1, after: true}
+	f.renamer.profile = &namingFaultProfile{namingProfile: f.renamer.profile, action: 1, after: true}
 	if _, e := f.rename(0, "one", "Alice"); e == nil {
 		t.Fatal("missing failure")
 	}
@@ -360,7 +359,7 @@ func TestNamingOldSenderCannotBypassDirectory(t *testing.T) {
 }
 func TestNamingOldControllerUsesCoordinator(t *testing.T) {
 	f := newNamingFixture(t)
-	c, e := profilecontroller.FromRegistry(f.registry)
+	c, e := FromRegistry(f.registry)
 	if e != nil {
 		t.Fatal(e)
 	}

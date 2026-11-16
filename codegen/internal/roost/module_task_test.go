@@ -31,7 +31,7 @@ func TestModuleTaskEventsPeriodsAndMutations(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/components/task/task_wallet.go", "Report(\"wallet.spent\", 1, now)", "Report(\"wallet.spent\", 2, now)", "./game/handler", "TestWithTaskWalletOnlyCountsFreshSpend", "spend facts=")
 	recipeMutationMustFail(t, root, "game/components/task/task_shop.go", "Report(\"shop.bought\", count, now)", "Report(\"shop.bought\", 1, now)", "./game/handler", "TestWithTaskShopReportsBoughtQuantityOnce", "purchase=")
 	recipeMutationMustFail(t, root, "game/components/task/task_stamina.go", "Report(\"stamina.spent\", amount, now)", "Report(\"stamina.spent\", 1, now)", "./game/handler", "TestWithTaskStaminaCountsConsumedPoints", "wrong stamina progress")
-	recipeMutationMustFail(t, root, "game/components/task/task_profile.go", "int64(to-from)", "int64(to-from)+1", "./game/handler", "TestWithTaskProfileCountsLevelsNotCalls", "level=")
+	recipeMutationMustFail(t, root, "game/components/task/task_profile.go", "int64(ev.To-ev.From)", "int64(ev.To-ev.From)+1", "./game/handler", "TestWithTaskProfileCountsLevelsNotCalls", "level=")
 	recipeMutationMustFail(t, root, "game/components/dungeon/dungeon.go", "fctx.NowMilli()", "fctx.NowMilli()/1000", "./game/handler", "TestWithTaskDungeonReplayDoesNotCountAgain", "dungeon=")
 	recipeMutationMustFail(t, root, "game/components/task/task.go", "if day > state.GetDay() {", "if day != state.GetDay() {", "./game/handler", "TestTaskWeeklyRollbackDoesNotReopenClaim", "progress =")
 	recipeMutationMustFail(t, root, "game/components/task/task.go", "if definition.Previous == 0 {", "if true || definition.Previous == 0 {", "./game/handler", "TestTaskChainWaitsForClaimAndDoesNotReuseEvent", "locked=")

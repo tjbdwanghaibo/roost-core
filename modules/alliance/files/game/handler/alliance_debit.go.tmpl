@@ -4,7 +4,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 )
 
 // handlerAllianceDebit is a alliance saga's native step that takes count of itemID
@@ -19,8 +19,8 @@ import (
 // outcome unknown, so the command is redelivered.
 //
 //roost:nest rollback=undo durability=pipelined
-func handlerAllianceDebit(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
-	left, err := target.BagComp().Remove(itemID, int64(count))
+func handlerAllianceDebit(target view.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
+	left, err := target.Bag().Remove(itemID, int64(count))
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {

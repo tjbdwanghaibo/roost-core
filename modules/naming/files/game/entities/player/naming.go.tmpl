@@ -1,0 +1,13 @@
+package player
+
+import (
+	"{{MODULE}}/game/event"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// OnProfileRenaming 拒绝 profile 的本地改名协议（ProfileRename 的 Nest handler 在写名字之前发布 event.ProfileRenaming）：
+// 装了 naming 时名字必须经全服唯一的命名入口（目录两阶段占名），旧的本地 Sender 不能绕过目录。
+// profile 组件的 Rename 仍是可信事务内的写入原语，命名协调器在目录 Commit 成功后经 NamingStep 调它，不发布这个事件。
+//
+//roost:listen
+func (e *Player) OnProfileRenaming(ev event.ProfileRenaming) error { return apperrors.ErrNamingRequired }

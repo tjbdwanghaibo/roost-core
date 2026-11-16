@@ -85,7 +85,7 @@ task 自己的 `with/`（八组，都是“另一个模块也装着时才有”�
 | `with/checkin` | 登记 `OnCheckinClaimed` | `checkin.claimed`，每次成功签到 1 次 | 当日重复签到被拒，不计 | 3 |
 | `with/shop` | 登记 `OnShopBought` | `shop.bought`，购买份数 | 购买回执重放不计；扣款另计一次 `wallet.spent` | 3 |
 | `with/stamina` | 登记 `OnStaminaSpent` | `stamina.spent`，实际消耗点数 | 每次成功 `Spend` 都计 | 3 |
-| `with/profile` | 登记 `OnProfileLevelUp` | `profile.level_up`，提升的等级数（`to-from`） | 连升多级按差值 | 2 |
+| `with/profile` | 组件上 `//roost:listen priority=10` 的 `OnProfileLevelUp`（实体事件 `event.ProfileLevelUp`） | `profile.level_up`，提升的等级数（`to-from`） | 连升多级按差值 | 2 |
 | `with/dungeon` | 登记 `OnDungeonClaimed` | `dungeon.claimed`，首次副本领奖 1 次 | 已领过的副本不再计 | 2 |
 | `with/bag` | 登记奖励种类 `item` | 不产生事件；道具奖励与领奖同一笔事务 | 背包满时领奖失败、可重试 | 3 |
 | `with/leaderboard` | 登记 `leaderboard.OnSubmitted` | `leaderboard.submitted`，rank 成功答复 1 次 | **同分重放也计数** | 3 |

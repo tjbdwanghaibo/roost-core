@@ -11,6 +11,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
+//roost:component type={{ID:component:Task}}
+const CompTypeTask entity.ComponentType = {{ID:component:Task}}
+
+// init 登记组件工厂：Player 结构体里 comp:"task.CompTypeTask" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTask, NewComponent)
+}
+
 // Owner 是 Task 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 

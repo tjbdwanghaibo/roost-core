@@ -13,21 +13,22 @@
 
 - 发经验：handler `ProfileAddExp(amount)`（`game/handler/profile_add_exp.go`，`rollback=undo durability=strict`），事务之外用 `syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, playerEntityID, amount)`，返回这一次升了几级。没有协议与端点，不对客户端开放。
 - 读名片：handler `ProfileCard`（`game/handler/profile_card.go`，只读），用 `syncsender.NewProfileCardSender(client)` 按玩家的 Entity ID 调，返回 `profile.ProfileCard{Name, Level}`。它是值，离开实体锁之后可以继续用。
-- 在自己的 Player handler 里直接用组件（目标接口嵌入 `player.IProfileEntity`）：
-  - `ProfileComp().AddExp(amount) (gained int32, err error)`：发经验，够就升级。
-  - `ProfileComp().CheckAddExp(amount) error`：只检查不执行，回答与 `AddExp` 相同的业务码，不写任何字段。多方写入的事务先用它把每一方问一遍。
-  - `ProfileComp().Rename(name)`：事务内写名字的原语（做名字校验，不查重）。
-  - `ProfileComp().Card()`、`DisplayName()`、`Level()`、`Exp()`：读当前值。
+- 在自己的 Player handler 里直接用组件（目标参数写生成的 `view.IProfileEntity`；同一笔里还要用别的组件时写 `view.PlayerEntity`）：
+  - `Profile().AddExp(amount) (gained int32, err error)`：发经验，够就升级。
+  - `Profile().CheckAddExp(amount) error`：只检查不执行，回答与 `AddExp` 相同的业务码，不写任何字段。多方写入的事务先用它把每一方问一遍。
+  - `Profile().Rename(name)`：事务内写名字的原语（做名字校验，不查重）。
+  - `Profile().Card()`、`DisplayName()`、`Level()`、`Exp()`：读当前值。
+- 组件、类型号 `profile.CompTypeProfile` 与工厂登记都在 `game/components/profile/profile.go`；对外接口在 `game/view/component_profile.go`。实体包里没有 profile 的手写文件。
 - `profile.NormalizeProfileName(name) (string, error)`：只做名字校验并返回去掉首尾空白的名字，不写实体。别的功能要按同一套规则校验名字时用它。
-- 事务之外的改名入口：`profile.Rename(ctx, registry, playerID, name) (name string, handled bool, err error)`（`game/profile/rename.go`）。没有人登记改名器时 `handled` 为 false、什么都没做；装了 `naming` 时转给它。
+- 事务之外的改名入口：`profile.Rename(ctx, registry, playerID, name) (name string, handled bool, err error)`（`game/components/profile/rename.go`）。没有人登记改名器时 `handled` 为 false、什么都没做；装了 `naming` 时转给它。
 
 **登记点 / 钩子**
 
 - 工程钩子 `onLevelUp(from, to)`（`game/components/profile/levelup.go`，**归工程所有**）：升级之后调一次，升级奖励写在这里。
-- 模块钩子 `profile.OnProfileLevelUp(name, func(host view.PlayerEntity, from, to int32) error)`（`game/components/profile/hooks.go`）：别的模块按名字登记，在工程钩子成功之后按名字顺序执行。
-- 两种钩子都在发经验的那笔 Player 事务里：只能改同一个 Player，不能做外部 I/O；任何一个返回错误，经验、等级与全部钩子的写入一起回滚。一次发放连升多级也只调一次，参数是起止等级。
-- `profile.RegisterRenamer(fn)`（`game/profile/rename.go`）：登记事务之外的正式改名入口，全进程只能登记一个（`naming` 用它）。
-- 改名 handler 会看 `Player` 有没有 `CheckProfileRenameRequest() error` 方法，有就先问它（`naming` 用它拒绝本地改名）。
+- 实体事件 `event.ProfileLevelUp{From, To}`（`game/event/profile.go`）：工程钩子成功之后在 Player 上发布（`Publish`）。别的模块在自己的组件或 Player 的方法上标 `//roost:listen [priority=N]` 监听，`roost generate` 按优先级排好登记顺序（大的先；同优先级实体自己的先，再按组件类型号）。现在的监听与优先级：activity 40、attribute 30、mailbox 20、task 10（沿用改成事件之前按名字字母序的顺序）。
+- 两种都在发经验的那笔 Player 事务里：只能改同一个 Player，不能做外部 I/O；任何一个返回错误，经验、等级与全部监听的写入一起回滚。一次发放连升多级也只调一次 / 只发布一次，参数是起止等级。
+- `profile.RegisterRenamer(fn)`（`game/components/profile/rename.go`）：登记事务之外的正式改名入口，全进程只能登记一个（`naming` 用它）。
+- 拦截事件 `event.ProfileRenaming{Name}`：改名 handler 写名字之前在 Player 上发布，监听返回错误就拒绝这次改名、什么都不写（`naming` 在 Player 上监听它，拒绝本地改名）。拦截监听只做检查，不改状态。
 
 **状态**（`db/def/profile.go`，都挂在 `PlayerDao` 上，落库并同步）
 
@@ -38,7 +39,7 @@
 
 **错误码**（`internal/errors/profile.go`）：`profile_name_empty`（去掉首尾空白后为空）、`profile_name_long`（超过 16 个字符）、`profile_name_invalid`（不是合法 UTF-8）、`profile_exp_invalid`（数额不是正数）、`profile_exp_overflow`（经验或等级超出存储范围，或存档里的值已坏）。
 
-**日志**：默认改名确认（新名）；GM 发经验只在升级时记录 levels_gained，升级奖励邮件另记 from/to。接管改名的 naming 记录旧名、新名和请求键。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/profile/profile_rename.go`, `game/modules/gm/profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：默认改名确认（新名）；GM 发经验只在升级时记录 levels_gained，升级奖励邮件另记 from/to。接管改名的 naming 记录旧名、新名和请求键。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/profile.go`, `game/modules/gm/profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -60,12 +61,12 @@
   - 换经验曲线、加等级上限：改 `game/components/profile/profile.go` 的 `planExp`，保持“不按升级数逐级循环”。
   - 改名字规则：改 `NormalizeProfileName`（`naming` 与新建角色的名字检查都经它）。
   - 加档案字段：别人能看的加在 `ProfileState`，只给本人的加在 `ProfilePrivateState`。
-  - 别的模块要在升级时做事：在自己的文件里 `OnProfileLevelUp("<模块名>", …)`，不要改 `game/components/profile/hooks.go`。
+  - 别的模块要在升级时做事：在自己的组件上写 `//roost:listen` 方法 `OnProfileLevelUp(ev event.ProfileLevelUp) error`（放在本模块的 `with/profile/` 里），要排在别的监听前后时写 `priority=`；不要改 profile 的文件。
 - **别的代码要用它**：
   - 发经验（事务之外）：`syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, playerEntityID, amount)`。
-  - 发经验（在自己的 Player handler 里）：先 `target.ProfileComp().CheckAddExp(amount)`，都通过了再 `AddExp(amount)`。
+  - 发经验（在自己的 Player handler 里）：先 `target.Profile().CheckAddExp(amount)`，都通过了再 `AddExp(amount)`。
   - 按玩家号读名字与等级：`syncsender.NewProfileCardSender(client)`。
-  - 在同一个 Player 上读等级：`owner.ProfileComp().Level()`。
+  - 在同一个 Player 上读等级：`owner.Profile().Level()`。
 - **只适合借鉴的情形**：多角色、转职、多条经验线。值得借鉴的是把档案按“别人可见 / 只给本人”拆成两个顶层字段（同步按顶层字段决定给谁），以及 `CheckAddExp` 这种“先全部检查、再全部写”的写法。
 
 ## 联动
@@ -87,7 +88,7 @@
 
 ## 验证范围
 
-- `roost module verify profile`：20 条场景，都在 `game/handler`；与 `enter` 的联动 4 条，与 `gm` 的联动 4 条。
+- `roost module verify profile`：21 条场景，都在 `game/handler`（含“升级事件的监听出错，经验与等级一起回滚”）；与 `enter` 的联动 4 条，与 `gm` 的联动 4 条。
 - 离线：真实的 Nest 引擎与生成的 Sender，提交器是替身（可以注入提交失败）。
 - 覆盖：改名（去空白、16 个字符的边界、空名、超长、非法编码都不写）、发经验（不满一级、恰好一级、连升多级、非正数、溢出、存档已坏）、被拒绝时即使调用方吞掉错误也没有写入、提交被拒后名字 / 等级 / 经验一起回滚、升级钩子出错回滚、`CheckAddExp` 与 `AddExp` 回答一致、名片、两个字段都同步且经验不在别人可见的那一半、装了改名器时端点走正式入口。
 - 没有验证（模块自己的场景）：真实数据库与网络。`ProfileRename` 在 game-demo 的压测机器人里有覆盖：缺省场景的改名三步（去首尾空白后的名字、17 个字符答 `profile_name_long`、本人同步视图里的名字），真实进程上由仓库的 `scripts/test-demo-login.sh` 跑；没有装 naming 的组合。

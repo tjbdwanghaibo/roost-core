@@ -6,7 +6,8 @@ needs:
   features: [entity, dao, nest, config, rpc]
   uses_rpcs: [activity_alliance]
 entity: Alliance
-component: AllianceActivity
+component: Activity
+component_package: game/modules/activity
 state:
   - field: ActivityAlliance
     type: ActivityBook

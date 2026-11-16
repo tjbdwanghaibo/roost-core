@@ -6,7 +6,6 @@ needs:
   features: [entity, dao, nest, config, rpc]
   uses_rpcs: [activity_world]
 entity: ActivityWorld
-component: WorldActivity
 state:
   - field: ActivityWorld
     type: ActivityBook

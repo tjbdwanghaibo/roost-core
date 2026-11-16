@@ -8,21 +8,22 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-
-	"{{MODULE}}/db"
 )
 
-// Owner 是活动组件的宿主。Player、全服和联盟只提供各自的 DAO 与归属，
+//roost:component type={{ID:component:Activity}}
+const CompTypeActivity entity.ComponentType = {{ID:component:Activity}}
+
+// init 登记组件工厂。Player、ActivityWorld、Alliance 三种宿主挂的是同一个组件、同一个类型号
+// （实体结构体里 comp:"activity.CompTypeActivity"）。
+func init() {
+	entity.RegisterComponentFactory(CompTypeActivity, NewComponent)
+}
+
+// Owner 是活动组件的宿主。Player、全服和联盟只提供各自的 DAO、归属与创建时间（view.ActivityHolder 的宿主方法），
 // 组件不依赖具体 Entity 类型，也不另存一份可变活动状态。
 type Owner interface {
 	entity.IThreadSafeEntity
-	ActivityBook() *db.ActivityBook
-	ActivityScope() string
-}
-
-// createdOwner 提供已持久化的创建事实；没有它的宿主由可信业务入口显式传入。
-type createdOwner interface {
-	ActivityCreatedAt() int64
+	view.ActivityHolder
 }
 
 // deadlineOwner 是有持久定时器的宿主（Player 使用 entitytimer）：建 / 删唤醒节点的适配，节点挂在宿主的定时器组件上，
@@ -33,8 +34,7 @@ type deadlineOwner interface {
 	CancelActivityDeadline(id int64)
 }
 
-// Component 是三种宿主共用的组件实现。实体包中的类型别名仅供模块安装器接线，
-// 不复制 Reconcile/Rearm。所有业务方法都在宿主 Entity 的 Nest 事务中调用。
+// Component 是三种宿主共用的组件实现，不复制 Reconcile/Rearm。所有业务方法都在宿主 Entity 的 Nest 事务中调用。
 type Component struct {
 	entity.ComponentBase
 	owner Owner
@@ -51,6 +51,16 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 
 func (c *Component) Name() string { return "activity" }
 
+// Of 返回 holder 上挂的活动组件。handler 收 game/view 的接口（view.IActivityEntity、view.<E>Entity），要用 Host()
+// 这类带本包类型（Token、Snapshot）、进不了 game/view 的方法时经它取回组件。三种宿主挂的都是本包的 Component，
+// 取不到说明实体没挂活动组件（接线错误）。
+func Of(holder view.ActivityHolder) (*Component, error) {
+	if c, ok := holder.Activity().(*Component); ok && c != nil {
+		return c, nil
+	}
+	return nil, fmt.Errorf("activity: %T does not hold the activity component", holder)
+}
+
 // Host 供业务直接调用 Activate/Complete/MoveFlow；修改成功后调用 Rearm。
 func (c *Component) Host() Host {
 	return Host{Owner: c.owner, Scope: c.owner.ActivityScope(), Book: c.owner.ActivityBook()}
@@ -62,9 +72,7 @@ var PlayerCreatedAt func(view.PlayerEntity) int64
 
 func (c *Component) Reconcile(event string, createdAt int64) error {
 	if createdAt == 0 {
-		if owner, ok := c.owner.(createdOwner); ok {
-			createdAt = owner.ActivityCreatedAt()
-		}
+		createdAt = c.owner.ActivityCreatedAt()
 	}
 	host := c.Host()
 	definitions, err := Definitions(host.Scope)

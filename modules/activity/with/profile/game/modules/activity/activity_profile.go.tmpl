@@ -1,13 +1,14 @@
 package activity
 
-import (
-	"{{MODULE}}/game/view"
-	gameprofile "{{MODULE}}/game/components/profile"
-)
+import "{{MODULE}}/game/event"
 
-// 业务登记的 Eligible 在已更新等级的同一 Player 事务里读取真值；不是传一个客户端等级。
-func init() {
-	gameprofile.OnProfileLevelUp("activity", func(host view.PlayerEntity, from, to int32) error {
-		return host.Activity().Reconcile("profile.level_up", 0)
-	})
+// OnProfileLevelUp 在同一笔 Player 事务里按升级后的等级对账活动条件：业务登记的 Eligible 读的是已更新等级的真值，
+// 不是客户端传来的等级。
+//
+// priority=40 保持改成事件之前的执行顺序：原来的升级钩子按登记名字母序执行（activity、attribute、mailbox、task），
+// 这里排第一。
+//
+//roost:listen priority=40
+func (c *Component) OnProfileLevelUp(ev event.ProfileLevelUp) error {
+	return c.Reconcile("profile.level_up", 0)
 }

@@ -1,4 +1,4 @@
-package activity
+package controllers
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // entered.PlayerID 是会话里的玩家号；Nest 的目标是完整实体号，先换算再发，否则定位不到 Player。
 func init() {
 	gamelogin.OnEntered("activity", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
-		c, err := FromRegistry(registry)
+		controller, err := FromRegistry(registry)
 		if err != nil {
 			return err
 		}
@@ -25,12 +25,12 @@ func init() {
 		if err != nil {
 			return err
 		}
-		views, err := syncsender.NewActivityEventSender(c.NestClient()).Sync_ActivityEvent(ctx, target, "", entered.FirstAtUnixMilli)
+		views, err := syncsender.NewActivityEventSender(controller.NestClient()).Sync_ActivityEvent(ctx, target, "", entered.FirstAtUnixMilli)
 		if err != nil {
 			return err
 		}
 		return activity.ResumePending(ctx, registry, views, func(ctx context.Context, token activity.Token) error {
-			return syncsender.NewActivityCompleteSender(c.NestClient()).Sync_ActivityComplete(ctx, target, token)
+			return syncsender.NewActivityCompleteSender(controller.NestClient()).Sync_ActivityComplete(ctx, target, token)
 		})
 	})
 }

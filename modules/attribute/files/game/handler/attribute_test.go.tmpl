@@ -477,12 +477,12 @@ func newAttributeTower(t *testing.T, unique int64) *attributeTower {
 				w.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)
 				w.dao.SetId(param.StorageID())
 				w.DaoManager.Set(db.PlayerDaoCollection, w.dao)
-				comp, err := entity.CreateComponent(playerentity.CompTypeAttribute, w, param)
+				comp, err := entity.CreateComponent(attributecomp.CompTypeAttribute, w, param)
 				if err != nil {
 					return nil, err
 				}
 				w.attribute = comp.(*playerentity.AttributeComponent)
-				w.ComponentManager.Set(playerentity.CompTypeAttribute, w.attribute)
+				w.ComponentManager.Set(attributecomp.CompTypeAttribute, w.attribute)
 				if err := w.ComponentManager.InitAll(param, param.IsCreate); err != nil {
 					return nil, err
 				}

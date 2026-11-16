@@ -1,14 +1,13 @@
 package handler
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"sync/atomic"
 	"testing"
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
-	gameprofile "{{MODULE}}/game/components/profile"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -17,10 +16,12 @@ import (
 var profileEnterLevelUps atomic.Int64
 
 func init() {
-	gameprofile.OnProfileLevelUp("zz_profile_enter_test", func(view.PlayerEntity, int32, int32) error {
-		profileEnterLevelUps.Add(1)
-		return nil
-	})
+	// 数升级事件：测试在 init 里直接登记一条监听（生成的监听在 player 包的 init 里先登记）。
+	entity.RegisterEventListener(player.EntityKindPlayer, "ProfileLevelUp", "handler_test.profileEnterLevelUps",
+		func(*player.Player, event.ProfileLevelUp) error {
+			profileEnterLevelUps.Add(1)
+			return nil
+		})
 }
 
 func profileEnter(t *testing.T, f *profileFixture) error {
@@ -107,8 +108,8 @@ func TestWithProfileEnterReloadKeepsStoredLevel(t *testing.T) {
 	if err := f.engine.RunLocal(context.Background(), func() {
 		p.GetMutex().Lock()
 		defer p.GetMutex().Unlock()
-		level = p.ProfileComp().Level()
-		exp = p.ProfileComp().Exp()
+		level = p.Profile().Level()
+		exp = p.Profile().Exp()
 		initialized = p.Dao().GetEnter().GetInitialized()
 	}); err != nil {
 		t.Fatal(err)

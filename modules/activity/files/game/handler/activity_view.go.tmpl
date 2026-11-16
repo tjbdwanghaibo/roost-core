@@ -1,13 +1,20 @@
 package handler
 
 import (
-	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 
+// ActivityView 是客户端查看自己活动的协议背后的事务：先按当前时间对账，再返回快照。
+// 活动组件也挂在 ActivityWorld、Alliance 上（同一个组件），参数写 view.PlayerEntity 指明锁的是 Player。
+//
 //roost:nest rollback=undo durability=strict
-func handlerActivityView(target player.IActivityEntity, request *pb.ActivityViewRequest) (*pb.ActivityViewResponse, error) {
-	c := target.ActivityComp()
+func handlerActivityView(target view.PlayerEntity, request *pb.ActivityViewRequest) (*pb.ActivityViewResponse, error) {
+	c, err := activity.Of(target)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.Reconcile("", 0); err != nil {
 		return nil, err
 	}

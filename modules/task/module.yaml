@@ -13,6 +13,7 @@ state:
     dao: persist,sync
     comment: Task 是每日、每周、永久任务记录；Day 和 Weekly.Day 分别表示每日与每周进度所属的业务周期。
 component: Task
+component_package: game/components/task
 protocols: [TaskClaim]
 errcodes: [task_unknown, task_incomplete, task_claimed, task_count_invalid]
 verify:

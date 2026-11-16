@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -12,8 +12,8 @@ import (
 // 不要对丢弃做自动重发。
 //
 //roost:nest rollback=undo durability=strict
-func handlerBagDiscard(target player.IBagEntity, request *pb.BagDiscardRequest) (*pb.BagDiscardResponse, error) {
-	left, err := target.BagComp().Remove(request.ItemID, request.Count)
+func handlerBagDiscard(target view.IBagEntity, request *pb.BagDiscardRequest) (*pb.BagDiscardResponse, error) {
+	left, err := target.Bag().Remove(request.ItemID, request.Count)
 	if err != nil {
 		return nil, err
 	}

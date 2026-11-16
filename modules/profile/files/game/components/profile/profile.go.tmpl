@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/view"
 	"fmt"
 	"math"
@@ -13,7 +14,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// Owner 是 Profile 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Profile}}
+const CompTypeProfile entity.ComponentType = {{ID:component:Profile}}
+
+// init 登记组件工厂：Player 结构体里 comp:"profile.CompTypeProfile" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeProfile, NewComponent)
+}
+
+// Owner 是 Profile 组件的宿主：整个 Player（组件经它读写 PlayerDao，并在它上面发布升级事件）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 // Component 是玩家档案（名字、等级、经验）的业务逻辑。它不保存事务会改的状态：
@@ -24,7 +33,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/profile_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -116,9 +125,10 @@ func (component *Component) planExp(amount int64) (exp int64, gained int32, err 
 // AddExp 发放 amount 点经验，够升级就升（一次可以升多级），返回升了几级。
 // 数额不是正数（profile_exp_invalid）、经验或等级超出存储范围（profile_exp_overflow）时不写任何字段。
 //
-// 升了级就调一次 onLevelUp（levelup.go，归工程所有，升级奖励写在那里）。它与经验、等级在
-// 同一笔事务里：它返回错误时这里原样返回，handler 以错误结束，Nest 把已经写下的经验和等级一起撤回。
-// 所以调用方拿到错误后不要吞掉继续提交——那样等级升了、奖励没发。
+// 升了级就先调一次 onLevelUp（levelup.go，归工程所有，升级奖励写在那里），再在 Player 上发布实体事件
+// event.ProfileLevelUp（别的模块用 //roost:listen 监听，例如活动对账、属性成长、任务进度、升级邮件）。
+// 两者都与经验、等级在同一笔事务里：任一个返回错误时这里原样返回，handler 以错误结束，Nest 把已经写下的
+// 经验、等级和监听的写入一起撤回。所以调用方拿到错误后不要吞掉继续提交——那样等级升了、奖励没发。
 //
 // 这个方法不判重：同一次发放调两次就加两次。“这一局、这个任务发过没有”由调用方记在自己的状态里，
 // 先判重再调它，事实与经验在同一笔事务里提交或回滚。
@@ -139,8 +149,8 @@ func (component *Component) AddExp(amount int64) (int32, error) {
 	if err := component.onLevelUp(from, from+gained); err != nil {
 		return 0, err
 	}
-	// 工程钩子先执行，再按登记名执行模块钩子；任一个失败都交给同一笔 Nest 事务回滚。
-	if err := runProfileLevelUp(component.owner, from, from+gained); err != nil {
+	// 工程钩子先执行，再发布升级事件（监听按生成时排好的顺序执行）；任一个失败都交给同一笔 Nest 事务回滚。
+	if err := component.owner.Publish(event.ProfileLevelUp{From: from, To: from + gained}); err != nil {
 		return 0, err
 	}
 	return gained, nil

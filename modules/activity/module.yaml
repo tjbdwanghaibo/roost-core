@@ -5,6 +5,7 @@ needs:
   features: [protocol, entity, dao, nest, config]
 entity: Player
 component: Activity
+component_package: game/modules/activity
 timer_types: [ActivityDeadline]
 state:
   - field: Activity
@@ -21,7 +22,7 @@ with:
   enter:
     summary: 首次建档记录相对锚点；每次进入惰性对账，锁外恢复 pending 工作
     verify:
-      packages: [./game/handler, ./game/controllers/activity]
+      packages: [./game/handler, ./game/controllers]
       run: ^TestWithActivityEnter
       pass: 2
   profile:
