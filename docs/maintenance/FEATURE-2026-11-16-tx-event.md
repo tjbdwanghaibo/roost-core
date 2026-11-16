@@ -143,9 +143,10 @@ e.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(KindPlayer, 
 
 `Publish(ev)` 按以下步骤执行：
 
-1. **检查锁和事务**：两项都满足才往下走，否则返回 `ErrTransactionClosed`。
-   - 当前 goroutine 的 Guard 持有这个实体。entity 包自己就能判断：`CurrentGuardScope()` 加上 Guard 的持锁检查。
-   - 当前在 Nest 事务里。entity 包不能 import nest（nest 已经 import 了 entity），所以由 nest 在自己的 init 里注入：`entity.SetEventTxCheck(func() bool { return CurrentRollbackTx() != nil })`。
+1. **检查锁**：当前 goroutine 的 Guard 必须持有这个实体，否则返回错误。entity 包自己就能判断：`CurrentGuardScope()` 加上 Guard 的持锁检查。
+   - **不要求有可回滚的事务**（维护者 2026-11-16 决定）：memory 快路径和 `rollback=none` 的 handler 里也能发布。
+   - 在这两种 handler 里，监听返回的错误照常往外传，但修改不会撤销。这一点写进文档。
+   - 原来设想由 nest 注入事务检查，现在不需要了。
 2. **压入事件栈，检查上限**：规则见 §3.3。
 3. **查表、执行**：按 `(kind, ev 的类型)` 取出回调列表，按登记顺序依次执行。遇到第一个错误就停下，错误包装成 `"<事件链> listener <listener>: <err>"` 返回，由调用方交给 Nest 回滚。
 4. **弹出事件栈**：用 defer 执行，出错或 panic 时也会弹出。
@@ -189,7 +190,7 @@ e.SetEventDispatch(func(ev any) error { return entity.DispatchEvent(KindPlayer, 
 
 **panic**：事件层不 recover。panic 沿着 Nest 现有的路径处理：`callTransactionHandler` 先回滚事务，再把 panic 继续抛出去。事件栈靠第 4 步的 defer 弹出。
 
-**还需要核实的一点**：Nest 的 memory 快路径（`invokeMemoryHandler`）里有没有 `RollbackTx`。如果没有，§3.2 第 1 步会拒绝在 memory handler 里发布事件。实施时核实，再决定是允许，还是在文档里写明不支持。
+**memory 快路径**：核实结果是快路径里没有 `RollbackTx`。维护者决定允许在这里发布事件，见 §3.2 第 1 步。
 
 **不做的事**：
 - 不做异步；
@@ -274,13 +275,13 @@ func init() {
 ## 7. 验证
 
 - **core 单测**：
-  - 事务外发布被拒绝；
+  - 没持有实体锁时发布被拒绝；
   - 多个回调按登记顺序执行，遇到第一个错误就停下，错误信息带上事件名和监听方；
   - 用真实 Nest 事务验证：监听出错时整笔回滚，包括发布方自己的改动；
   - 内层出错时错误一路传到最外层，并且整笔回滚；外层后面的监听能看到内层链执行完之后的状态；
   - 三道上限各有触发用例，错误信息里带完整事件链；同一事件合法重入两次可以通过，第三次报错；
   - 监听方法 panic 后，事件栈被清空，下一笔事务不受影响；
-  - 不在事务里，或当前 Guard 没持有这个实体时，发布被拒绝；
+  - 当前 Guard 没持有这个实体时，发布被拒绝；memory 快路径里发布可以执行，出错时错误照常外传；
   - 启动后再登记会 panic；
   - 没有监听的事件返回 nil。
 - **生成器单测**：
