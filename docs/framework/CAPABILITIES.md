@@ -120,7 +120,7 @@
 | --- | --- | --- | --- | --- |
 | 玩家协议边界 | 已认证玩家的协议注册表与类型化绑定，与传输无关 | `roost add access player --service <svc>` | 正式。access 名只支持 player | [玩家协议教程](PLAYER-ACCESS.md) |
 | 协议与消息号 | 从 Go 定义生成 Proto、PB、消息号、绑定与 Robot 协议表 | `roost add protocol <name> --group <g> --handler <domain>`；标记 `//roost:protocol`、`//roost:msg` | 正式。支持请求 / 响应、客户端 push、服务端通知 | [命令参考 §7](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#7-protocol-生成器) |
-| 端点（协议 → Nest） | 把协议请求映射到生成的 Nest Sender，手写入口与自动转交分开 | `roost add endpoint <name> --handler <domain>`（可加 `--protocol`、`--nest-handler`、`--lifecycle`）；controller 域 `roost add module <name>` | 正式。玩家身份只取自已认证连接，业务时间不从请求取 | [玩家协议教程 §3](PLAYER-ACCESS.md#3-controller把协议转换成业务调用) |
+| 端点（协议 → Nest） | 把协议请求映射到生成的 Nest Sender，手写入口与自动转交分开 | `roost add endpoint <name> --handler <group>`（可加 `--protocol`、`--nest-handler`、`--lifecycle`）；controller 分组文件 `roost add module <name>` | 正式。玩家身份只取自已认证连接，业务时间不从请求取 | [玩家协议教程 §3](PLAYER-ACCESS.md#3-controller把协议转换成业务调用) |
 | 嵌入 player TCP | Game 进程内的有界 TCP 接入：帧协议、连接上限、防重放、有界出站 | `roost add transport tcp`；实现 `internal/access/player/tcp/auth.go` 后 `roost config enable player-tcp` | 正式。`auth.go` 默认拒绝，生产鉴权要自己实现 | [player TCP](../../codegen/docs/PLAYER_ACCESS_TCP.zh-CN.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#嵌入-tcp-出站) |
 | 独立 Gate | 客户端连 Gate，Gate 经 NATS 转发到 Game；PB、Sync、Lockstep 与广播都经它 | Gate 进程装 `wiring/gate.NewGateMod(options)`，Game 装生成的 `player/tcp.NewIngressMod(options)` | 正式。信任边界是内网加 Gate 的客户端鉴权；多进程 / 跨机矩阵未验收 | [Gate](GATEWAY.md)、[Gate 实现契约](GATEWAY-IMPLEMENTATION.md) |
 | KCP / UDP / QUIC | 生成这三种传输的装配函数 | `roost.yaml` 的 `features` 加 `nettransport-kcp`、`nettransport-udp`、`nettransport-quic` 后 `roost project sync` | 正式（只到装配函数）。玩家接入层只提供 TCP；监听、握手鉴权、Session 绑定由宿主自写 | [项目生成器 §16](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#16-帧同步-transport-预设)、[MOBA 手册](MOBA-INTEGRATION.md) |
@@ -182,7 +182,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | `roost add mod` | 给服务装一个 Wiring Mod，自动补依赖 | `roost add mod <name> -service <svc>` | 正式 | 同上 |
 | `roost add access` | 玩家协议边界 | `roost add access player --service <svc>` | 正式 | 同上 |
 | `roost add transport` | 嵌入 player TCP | `roost add transport tcp` | 正式。要求先有 access player | 同上 |
-| `roost add module` | 一个 controller 域（`game/controllers/<name>/controller.go`） | `roost add module <name>` | 正式。这是 controller 域，不是业务模块；业务模块用 `roost module` | 同上 |
+| `roost add module` | 一个 controller 分组文件（`game/controllers/<name>.go`；`game/controllers` 是一个包，Controller 在生成的 controller.go） | `roost add module <name>` | 正式。这是 controller 分组，不是业务模块；业务模块用 `roost module` | 同上 |
 | `roost add protocol` | 协议定义骨架并分配消息号 | `roost add protocol <name> --group <g> --handler <domain>` | 正式 | 同上 |
 | `roost add entity` | Entity 骨架并分配 kind | `roost add entity <name>` | 正式 | 同上 |
 | `roost add component` | Component 骨架并接入 Entity | `roost add component <name> --entity <owner>` | 正式 | 同上 |

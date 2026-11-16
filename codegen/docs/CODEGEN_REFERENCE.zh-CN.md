@@ -303,12 +303,12 @@ roost generate
 
 ### Controller 手写入口与自动转交分离
 
-新建的标准 Nest endpoint 保持同一个包，不加 manager / interface 层：
+新建的标准 Nest endpoint 保持同一个包（`game/controllers` 是一个包，2026-11-16 起），不加 manager / interface 层：
 
 ```text
-game/controllers/player/
-├── controller.go              # 业务所有：依赖注入
-├── add_gold.go                # 业务所有：接入校验、授权、调用转交
+game/controllers/
+├── controller.go              # 生成器所有：Controller、FromRegistry、推送辅助，每次覆盖
+├── player.go                  # 业务所有：handler=player 分组的接入校验、授权、调用转交（追加在末尾）
 └── add_gold_endpoint_gen.go   # 生成器所有：Nest Sender、响应和错误映射
 ```
 
@@ -322,7 +322,7 @@ func (controller *Controller) HandleAddGold(ctx *playeraccess.Context, req *pb.A
 }
 ```
 
-协议名从 `HandleAddGold` 推导，目录表示 Controller 领域，`nest=AddGold` 是唯一的 handler 对应声明；指定 `--nest-handler` 时写入指定名字。`roost generate`（包括 `--changed`）扫描手写标记，按当前 handler 签名更新 `dispatchAddGold`。手写入口可以改文件名、合并进同包文件，生成器不修改其方法体。
+协议名从 `HandleAddGold` 推导，`--handler` 决定追加到哪个 `<分组>.go`，`nest=AddGold` 是唯一的 handler 对应声明；指定 `--nest-handler` 时写入指定名字。`roost generate`（包括 `--changed`）扫描手写标记，按当前 handler 签名更新 `dispatchAddGold`。手写入口可以改文件名、合并进同包文件，生成器不修改其方法体。
 
 自动部分负责认证 PlayerID 构造、参数转交、Nest 调用、错误码映射和空响应检查；手写层可在其前后处理业务，但提交后的响应处理失败不代表回滚。Entity 当前状态校验仍须在 Nest handler 锁内完成。不要从这里直接取 Entity local 锁或绕过 Nest 改 DAO。
 

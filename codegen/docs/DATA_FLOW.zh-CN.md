@@ -23,7 +23,7 @@
 ```
 玩家 TCP 帧
   → internal/access/player/tcp        解帧、鉴权、按 msg id 分发（生成）
-  → game/controllers/player/*.go      端点：错误边界（业务代码）
+  → game/controllers/*.go             端点：错误边界（业务代码，一个包）
   → game/handler/syncsender/*_gen.go  Sender：类型化的 Nest 客户端（从 handler 签名生成）
   → Nest 锁住实体，按参数顺序          （运行时）
   → game/handler/*.go                 handler：唯一能改实体的地方（业务代码）

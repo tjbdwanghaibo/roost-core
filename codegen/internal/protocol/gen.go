@@ -183,8 +183,9 @@ func generateRobotProtocolGo(defs *Definitions) ([]byte, error) {
 }
 
 // generateProtocolRegistration 产出玩家接入层的协议登记文件（缺省 internal/access/player/protocols_gen.go）：
-// 每个 handler= 功能一个 controller 接口与两条注册函数（按 app.Registry 取 controller、或直接给 controller），
-// 末尾是总入口 RegisterPlayerProtocols（逐个功能注册，再登记推送编码器）。2026-11-13（v1.47.0）之前它们分散在
+// 每个 handler= 分组一个 controller 接口与一条注册函数（Register<分组>PlayerProtocolsWith，直接给 controller），
+// 末尾是总入口 RegisterPlayerProtocols：只构造一次 controllers.FromRegistry（game/controllers 是一个包，
+// 2026-11-16 起），把同一个 Controller 逐个分组注册，再登记推送编码器。2026-11-13（v1.47.0）之前它们分散在
 // game/protocol_handlers/<功能>/ 与 game/protocol_bootstrap/ 两层包里，唯一的调用方是接入层的 mod_gen.go，
 // 所以并成接入层包里的一份文件。没有协议定义时照样产出（空的总入口），接入层的 Mod 总能编译。
 func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte, error) {
@@ -211,10 +212,8 @@ func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte
 	fmt.Fprintln(&b, "\t\"fmt\"")
 	fmt.Fprintln(&b, "\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"")
 	fmt.Fprintf(&b, "\t%q\n", PlayerAccessImport)
-	for _, domain := range domains {
-		fmt.Fprintf(&b, "\t%s %q\n", protocolControllerAlias(domain), defs.ModulePath+"/game/controllers/"+domain)
-	}
 	if len(domains) > 0 {
+		fmt.Fprintf(&b, "\t%s %q\n", ControllersPackage, defs.ModulePath+"/game/"+ControllersPackage)
 		fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PBImportSuffix)
 	}
 	if len(domains) > 0 || len(defs.Pushes) > 0 {
@@ -227,11 +226,10 @@ func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte
 		messages := groups[domain]
 		sort.Slice(messages, func(i, j int) bool { return messages[i].ReqID < messages[j].ReqID })
 		displayName := protocolHandlerDisplayName(domain)
-		controllerAlias := protocolControllerAlias(domain)
 		controllerType := displayName + "Controller"
 		registerName := "Register" + displayName + "PlayerProtocols"
 
-		fmt.Fprintf(&b, "// %s 是 game/controllers/%s 的 Controller 要实现的协议方法（handler=%s）。\n", controllerType, domain, domain)
+		fmt.Fprintf(&b, "// %s 是 game/controllers 的 Controller 为 handler=%s 分组实现的协议方法。\n", controllerType, domain)
 		fmt.Fprintf(&b, "type %s interface {\n", controllerType)
 		for _, msg := range messages {
 			name := msgName(msg)
@@ -241,12 +239,6 @@ func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte
 			}
 			fmt.Fprintf(&b, "\tHandle%s(ctx *playeraccess.Context, req *pb.%s) error\n", name, msg.Req)
 		}
-		fmt.Fprintf(&b, "}\n\n")
-
-		fmt.Fprintf(&b, "func %s(reg *playeraccess.ProtocolRegistry, r *app.Registry) error {\n", registerName)
-		fmt.Fprintf(&b, "\tctl, err := %s.FromRegistry(r)\n", controllerAlias)
-		fmt.Fprintf(&b, "\tif err != nil {\n\t\treturn err\n\t}\n")
-		fmt.Fprintf(&b, "\treturn %sWith(reg, ctl)\n", registerName)
 		fmt.Fprintf(&b, "}\n\n")
 
 		fmt.Fprintf(&b, "func %sWith(reg *playeraccess.ProtocolRegistry, ctl %s) error {\n", registerName, controllerType)
@@ -261,13 +253,18 @@ func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte
 		fmt.Fprintf(&b, "}\n\n")
 	}
 
-	fmt.Fprintln(&b, "// RegisterPlayerProtocols 在接入层 Mod 的 Provide 里调用（Seal 之前）：逐个功能注册协议，再登记推送编码器。")
+	fmt.Fprintln(&b, "// RegisterPlayerProtocols 在接入层 Mod 的 Provide 里调用（Seal 之前）：构造一次 Controller，逐个分组注册协议，")
+	fmt.Fprintln(&b, "// 再登记推送编码器。")
 	fmt.Fprintln(&b, "func RegisterPlayerProtocols(protocols *playeraccess.ProtocolRegistry, registry *app.Registry) error {")
 	fmt.Fprintln(&b, "\tif protocols == nil || registry == nil {")
 	fmt.Fprintln(&b, "\t\treturn fmt.Errorf(\"player protocol registration: protocols and registry are required\")")
 	fmt.Fprintln(&b, "\t}")
+	if len(domains) > 0 {
+		fmt.Fprintf(&b, "\tctl, err := %s.FromRegistry(registry)\n", ControllersPackage)
+		fmt.Fprintln(&b, "\tif err != nil {\n\t\treturn err\n\t}")
+	}
 	for _, domain := range domains {
-		fmt.Fprintf(&b, "\tif err := Register%sPlayerProtocols(protocols, registry); err != nil {\n\t\treturn err\n\t}\n", protocolHandlerDisplayName(domain))
+		fmt.Fprintf(&b, "\tif err := Register%sPlayerProtocolsWith(protocols, ctl); err != nil {\n\t\treturn err\n\t}\n", protocolHandlerDisplayName(domain))
 	}
 	for _, push := range defs.Pushes {
 		fmt.Fprintf(&b, "\tif err := playerbind.Register%sEncoder(protocols); err != nil {\n\t\treturn err\n\t}\n", pushName(push))
@@ -275,10 +272,6 @@ func generateProtocolRegistration(defs *Definitions, packageName string) ([]byte
 	fmt.Fprintln(&b, "\treturn nil")
 	fmt.Fprintln(&b, "}")
 	return formatGo(b.Bytes())
-}
-
-func protocolControllerAlias(domain string) string {
-	return strings.ReplaceAll(domain, "_", "") + "controller"
 }
 
 func protocolHandlerDisplayName(domain string) string {

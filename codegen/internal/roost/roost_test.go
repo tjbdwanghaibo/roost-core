@@ -644,12 +644,12 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		t.Fatalf("generate source-head first business workflow: %v", err)
 	}
 	checks := map[string][]string{
-		"roost.yaml":                                            {"access:", "player:", "service: game", "- nest"},
-		"internal/access/player/mod_gen.go":                     {`"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"`, "if err := RegisterPlayerProtocols(protocols, registry); err != nil", "registry.Register(Name, mod.runtime)"},
-		"internal/access/player/protocols_gen.go":               {"package player", "type PlayerController interface", "func RegisterPlayerPlayerProtocols(", "func RegisterPlayerProtocols("},
-		"game/controllers/player/controller.go":                 {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
-		"game/controllers/player/enter_game.go":                 {"player.LifecycleFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
-		"game/controllers/player/rename_player_endpoint_gen.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
+		"roost.yaml":                                     {"access:", "player:", "service: game", "- nest"},
+		"internal/access/player/mod_gen.go":              {`"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"`, "if err := RegisterPlayerProtocols(protocols, registry); err != nil", "registry.Register(Name, mod.runtime)"},
+		"internal/access/player/protocols_gen.go":        {"package player", "type PlayerController interface", "func RegisterPlayerPlayerProtocolsWith(", "func RegisterPlayerProtocols(", "ctl, err := controllers.FromRegistry(registry)"},
+		"game/controllers/controller.go":                 {"package controllers", "app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
+		"game/controllers/player.go":                     {"package controllers", "player.LifecycleFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
+		"game/controllers/rename_player_endpoint_gen.go": {"package controllers", "Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
 		// lifecycle 的实现（GetOrCreate 不重建删过档的实体、给 entity_deleted 稳定码）在 core 的 wiring/entitylifecycle；
 		// 实体包里只有生成的具名入口。
 		"game/entities/player/lifecycle_gen.go": {"type Lifecycle = entitylifecycle.Lifecycle[*Player]", "func LifecycleFromRegistry(registry *app.Registry) (*Lifecycle, error)", "EntityKindPlayer"},
@@ -675,11 +675,11 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 	// A duplicate endpoint must be rejected before any companion controller is
 	// created. This keeps a failed add operation free of partial artifacts.
-	controllerPath := filepath.Join(root, "game", "controllers", "player", "controller.go")
+	controllerPath := filepath.Join(root, "game", "controllers", "controller.go")
 	if err := os.Remove(controllerPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err == nil || !strings.Contains(err.Error(), "already declares Controller.HandleRenamePlayer") {
 		t.Fatalf("duplicate endpoint error = %v", err)
 	}
 	if _, err := os.Stat(controllerPath); !os.IsNotExist(err) {
@@ -687,9 +687,9 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 }
 
-// add protocol 之后跑过 roost generate，协议生成器为 handler 写了“未实现”占位（HandleXxx 返回 not implemented）。
-// add endpoint 接管仍未改动的占位（新用户第七轮：修前报 `game/controllers/player/rename_player.go already exists`，
-// 不说怎么办）；占位被业务改过就不覆盖，报错写明是协议占位、怎么处置，文件不变。
+// add protocol 之后跑过 roost generate，协议生成器为 handler 写了“未实现”占位（HandleXxx 返回 not implemented），
+// 同一分组的占位都在 game/controllers/<分组>.go 里。add endpoint 就地接管仍未改动的那个占位方法，同文件别的方法不动
+// （新用户第七轮：修前报 already exists，不说怎么办）；占位被业务改过就不覆盖，报错写明怎么处置，文件不变。
 func TestAddEndpointTakesOverTheUntouchedProtocolPlaceholder(t *testing.T) {
 	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
@@ -712,26 +712,26 @@ func TestAddEndpointTakesOverTheUntouchedProtocolPlaceholder(t *testing.T) {
 	if err := Generate(root, GenerateOptions{}); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	placeholder := filepath.Join(root, "game", "controllers", "player", "rename_player.go")
+	placeholder := filepath.Join(root, "game", "controllers", "player.go")
 	raw, err := os.ReadFile(placeholder)
-	if err != nil || !strings.Contains(string(raw), "not implemented") {
-		t.Fatalf("generate did not leave the protocol placeholder (err %v):\n%s", err, raw)
+	if err != nil || !strings.Contains(string(raw), `"HandleRenamePlayer: not implemented"`) || !strings.Contains(string(raw), `"HandlePing: not implemented"`) {
+		t.Fatalf("generate did not leave both protocol placeholders in the group file (err %v):\n%s", err, raw)
 	}
 	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err != nil {
 		t.Fatalf("add endpoint over the untouched protocol placeholder: %v", err)
 	}
 	raw, err = os.ReadFile(placeholder)
-	if err != nil || !strings.Contains(string(raw), "dispatchRenamePlayer") || strings.Contains(string(raw), "not implemented") {
-		t.Fatalf("add endpoint did not replace the placeholder (err %v):\n%s", err, raw)
+	if err != nil || !strings.Contains(string(raw), "dispatchRenamePlayer") || strings.Contains(string(raw), `"HandleRenamePlayer: not implemented"`) || !strings.Contains(string(raw), `"HandlePing: not implemented"`) {
+		t.Fatalf("add endpoint did not replace exactly the RenamePlayer placeholder (err %v):\n%s", err, raw)
 	}
 
 	// 业务改过的占位：拒绝、给处置、不改文件。
-	ping := filepath.Join(root, "game", "controllers", "player", "ping.go")
+	ping := placeholder
 	pingRaw, err := os.ReadFile(ping)
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited := bytes.Replace(pingRaw, []byte("return nil, fmt.Errorf("), []byte("_ = req\n\treturn nil, fmt.Errorf("), 1)
+	edited := bytes.Replace(pingRaw, []byte("return nil, fmt.Errorf(\"HandlePing"), []byte("_ = req\n\treturn nil, fmt.Errorf(\"HandlePing"), 1)
 	if bytes.Equal(edited, pingRaw) {
 		t.Fatalf("ping placeholder changed shape:\n%s", pingRaw)
 	}
@@ -739,7 +739,7 @@ func TestAddEndpointTakesOverTheUntouchedProtocolPlaceholder(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = Add(root, AddOptions{Kind: "endpoint", Name: "Ping", Handler: "player", NestHandler: "RenamePlayer"})
-	if err == nil || !strings.Contains(err.Error(), "game/controllers/player/ping.go already exists") || !strings.Contains(err.Error(), "delete") {
+	if err == nil || !strings.Contains(err.Error(), "game/controllers/player.go already declares Controller.HandlePing") || !strings.Contains(err.Error(), "delete") {
 		t.Fatalf("add endpoint over an edited file = %v; want already exists with what to do", err)
 	}
 	if after, _ := os.ReadFile(ping); !bytes.Equal(after, edited) {
@@ -792,7 +792,7 @@ func TestEndpointScaffoldTakesTheHandlerResultAndAnswersBusinessErrors(t *testin
 	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err != nil {
 		t.Fatalf("add endpoint: %v", err)
 	}
-	path := filepath.Join(root, "game", "controllers", "player", "rename_player.go")
+	path := filepath.Join(root, "game", "controllers", "player.go")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -877,7 +877,7 @@ func TestEndpointLeavesBusinessTimeToTheDispatch(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "UseDoubleCard", Handler: "player"}); err != nil {
 		t.Fatalf("add endpoint with a business-time parameter: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "game", "controllers", "player", "use_double_card_endpoint_gen.go"))
+	raw, err := os.ReadFile(filepath.Join(root, "game", "controllers", "use_double_card_endpoint_gen.go"))
 	if err != nil {
 		t.Fatal(err)
 	}

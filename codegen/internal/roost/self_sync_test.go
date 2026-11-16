@@ -322,60 +322,13 @@ func handlerAddGold(target player.IWalletEntity, request *messages.AddGoldReques
 	edit("protocol/def/add_gold.go", "type AddGoldResponse struct {", "type AddGoldResponse struct {\n\tGold int64 `pb:\"3\"`")
 	// 协议生成先放了“未实现”的 controller 占位；add endpoint 接管它，换成 endpoint 生成的 Sender 映射。
 	roost("add", "endpoint", "AddGold", "--handler", "player", "--root", root)
+	// 登录 endpoint 从 Registry 取 lifecycle：首登创建、之后加载玩家实体。它与 AddGold 同在 handler=player 分组，
+	// 接管 game/controllers/player.go 里 EnterGame 的“未实现”占位。
+	roost("add", "endpoint", "EnterGame", "--handler", "player", "--lifecycle", "Player", "--root", root)
 	// 手写授权扩展必须跨 project sync / generate 原样保留，并在真实 TCP 请求中执行。
-	edit("game/controllers/player/add_gold.go", "return controller.dispatchAddGold(ctx, req)", "if req.Amount == -3 { return &pb.AddGoldResponse{Code: 100001, Reason: \"denied\"}, nil }\n return controller.dispatchAddGold(ctx, req)")
-	applicationEndpoint := readProjectFile(t, root, "game/controllers/player/add_gold.go")
+	edit("game/controllers/player.go", "return controller.dispatchAddGold(ctx, req)", "if req.Amount == -3 { return &pb.AddGoldResponse{Code: 100001, Reason: \"denied\"}, nil }\n return controller.dispatchAddGold(ctx, req)")
+	applicationEndpoint := readProjectFile(t, root, "game/controllers/player.go")
 
-	// Controller 归业务：登录 endpoint 要从 Registry 取 lifecycle，这里给它留一份 Registry。
-	write("game/controllers/player/controller.go", `package player
-
-import (
-	"fmt"
-
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
-)
-
-type Controller struct {
-	registry   *app.Registry
-	nestClient corenest.Client
-}
-
-func FromRegistry(registry *app.Registry) (*Controller, error) {
-	if registry == nil {
-		return nil, fmt.Errorf("player controller: app registry is required")
-	}
-	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
-	if !ok || client == nil {
-		return nil, fmt.Errorf("player controller: nest client is unavailable")
-	}
-	return &Controller{registry: registry, nestClient: client}, nil
-}
-
-func (controller *Controller) NestClient() corenest.Client { return controller.nestClient }
-
-func (controller *Controller) Registry() *app.Registry { return controller.registry }
-`)
-	write("game/controllers/player/enter_game.go", `package player
-
-import (
-	playerentity "example.com/planet/game/entities/player"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"example.com/planet/protocol/pb"
-)
-
-// HandleEnterGame 首登创建、之后加载玩家实体。
-func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
-	players, err := playerentity.LifecycleFromRegistry(controller.Registry())
-	if err != nil {
-		return nil, err
-	}
-	if _, _, err := players.GetOrCreate(ctx.Context(), ctx.PlayerID); err != nil {
-		return &pb.EnterGameResponse{Code: 1, Reason: err.Error()}, nil
-	}
-	return &pb.EnterGameResponse{}, nil
-}
-`)
 	write("internal/access/player/tcp/auth.go", selfSyncTestAuthenticator)
 
 	// 打开开关：标记一个字都不改、不写 packer，project sync 直接通过，生成默认 packer。
@@ -386,7 +339,7 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 	}
 	roost("project", "sync", "--skip-deps", "--root", root)
 	roost("generate", "--root", root)
-	if readProjectFile(t, root, "game/controllers/player/add_gold.go") != applicationEndpoint {
+	if readProjectFile(t, root, "game/controllers/player.go") != applicationEndpoint {
 		t.Fatal("generation overwrote application endpoint")
 	}
 	roost("generate", "--check", "--root", root)

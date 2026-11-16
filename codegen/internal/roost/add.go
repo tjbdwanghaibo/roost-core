@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 )
 
 type AddOptions struct {
@@ -449,8 +451,14 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		path = "internal/errors/" + snake + ".go"
 		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")
 	case "module":
-		path = "game/controllers/" + snake + "/controller.go"
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
+		// 一个 controller 分组的文件。game/controllers 是一个包（2026-11-16 起）：Controller 与 FromRegistry 由协议生成器
+		// 写在 controller.go，分组只是 game/controllers/<分组>.go，handler=<分组> 的协议存根与 endpoint 追加在这里。
+		name, err := protocol.ControllerGroupFile(snake)
+		if err != nil {
+			return nil, err
+		}
+		path = "game/controllers/" + name
+		body = fmt.Sprintf("%s\npackage %s\n\n// 这里写 handler=%s 分组的 Handle* 方法（挂在 controller.go 生成的 Controller 上）。\n", protocol.ControllerScaffoldMarker, protocol.ControllersPackage, snake)
 	default:
 		return nil, fmt.Errorf("unsupported artifact kind %q", o.Kind)
 	}

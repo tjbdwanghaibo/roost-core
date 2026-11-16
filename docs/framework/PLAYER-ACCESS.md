@@ -45,9 +45,9 @@ type EquipmentEquipProtocol interface {
 
 在生成工程执行 `go generate ./...`，生成 PB 类型、编解码、消息号和注册代码。启动接线通过 `RegisterEquipmentProtocols` 注册 Controller，再封存注册表。框架负责解码和回包，Controller 不要再手动写 socket，否则可能重复响应。
 
-启用 player access 后，生成器还会按 `handler=equipment` 在 `game/controllers/equipment` 自动补齐 `Controller`、`FromRegistry` 和缺少的 `HandleXxx`。请求参数是 `*playeraccess.Context` 与对应 PB 请求；有响应的协议返回 `(*pb.XxxResponse, error)`，单向请求只返回 `error`。新方法先返回“not implemented”错误，必须补业务才能提供服务；该错误会进入接入层的错误处理，不是成功响应。
+启用 player access 后，生成器还会写 `game/controllers/controller.go`（`Controller`、`FromRegistry` 与推送辅助，每次生成覆盖），并按 `handler=equipment` 把缺少的 `HandleXxx` 追加到 `game/controllers/equipment.go` 末尾（文件不存在就新建）。`game/controllers` 是一个包，不按分组建子目录。请求参数是 `*playeraccess.Context` 与对应 PB 请求；有响应的协议返回 `(*pb.XxxResponse, error)`，单向请求只返回 `error`。新方法先返回“not implemented”错误，必须补业务才能提供服务；该错误会进入接入层的错误处理，不是成功响应。
 
-这些骨架生成后属于业务代码：重复生成、`--force`、项目同步都不覆盖或删除已有实现。方法可以移动到同包其他 Go 文件；生成器按 Controller 的方法声明查重。已有类型与 `FromRegistry` 必须配套；同名文件占用但缺少对应方法时会明确报冲突。协议删除或签名变更后，业务方法由开发者调整，编译负责校验类型是否仍匹配。`roost generate --check` 会报告缺失的骨架。
+这些骨架生成后属于业务代码：重复生成、`--force`、项目同步都不覆盖或删除已有实现，只在 `<分组>.go` 末尾追加缺少的方法。方法可以移动到同包其他 Go 文件；生成器按 Controller 的方法声明在全包查重。`Controller` 与 `FromRegistry` 只能由生成的 `controller.go` 声明，业务文件再声明会报错。协议删除或签名变更后，业务方法由开发者调整，编译负责校验类型是否仍匹配。`roost generate --check` 会报告缺失的骨架。
 
 此过程不要求先写 Nest handler，也不会自动替你调用 Nest。首次生成的 Controller 提供 `NestClient()`，你可按下一节调用 Sender。已有 `roost add endpoint` 仍适合显式生成连接到 Nest handler 的方法：它生成的方法就是下一节的写法（接住 handler 的返回值，业务错误经 `errcode.ClientError` 变成带 `Code` / `Reason` 的响应、只给 `CodeInternal` 记日志），要求 Response 带 `Code` / `Reason` 字段；已自动生成骨架后，直接编辑该方法即可。首次生成的 Controller 同时提供 `Registry()`；登录边界用 `roost add endpoint EnterGame --handler player --lifecycle Player` 生成，它对 `context.PlayerID` 调 lifecycle `GetOrCreate`，保证之后的 Nest 请求打到的 Entity 已存在——没有这一步时，Nest 冷加载不存在的玩家回复稳定码 `errcode.CodeEntityNotFound`（`entity_not_found`），不是 `CodeInternal`。删过档的玩家（D10：该 ID 不可再用）业务请求与 EnterGame 都回复 `errcode.CodeEntityDeleted`（`entity_deleted`），客户端不要重试或自动重新登录。
 

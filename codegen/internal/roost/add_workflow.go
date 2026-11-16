@@ -38,15 +38,18 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 		return nil, fmt.Errorf("endpoint requires player access")
 	}
 	if !validName(toSnake(options.Handler)) {
-		return nil, fmt.Errorf("endpoint requires --handler <protocol-controller-domain>")
+		return nil, fmt.Errorf("endpoint requires --handler <protocol-controller-group>")
 	}
+	var changes []syncChange
+	var err error
 	if strings.TrimSpace(options.Lifecycle) != "" {
 		if options.NestHandler != "" {
 			return nil, fmt.Errorf("endpoint --lifecycle cannot use --nest-handler")
 		}
-		return addLifecycleEndpoint(root, manifest, options, toSnake(options.Handler))
+		changes, err = planLifecycleEndpoint(root, manifest, options, toSnake(options.Handler))
+	} else {
+		changes, err = planProtocolEndpoint(root, manifest, options, false)
 	}
-	changes, err := planProtocolEndpoint(root, manifest, options, false)
 	if err != nil {
 		return nil, err
 	}
@@ -60,14 +63,99 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	return paths, nil
 }
 
-// planProtocolEndpoint 只规划文件；add 与 generate 共用模板，写入沿用已有事务提交边界。
+// game/controllers 是一个包（2026-11-16 起）：endpoint 的手写入口是 Controller 上的方法，追加到
+// game/controllers/<--handler 分组>.go（不存在就新建）；协议生成器先写了“未实现”占位时，就地替换那个方法。
+// 自动转交的部分在 game/controllers/<协议>_endpoint_gen.go，每次生成覆盖。controller.go 归协议生成器，
+// add endpoint 只在它还不存在时写同一份内容。
+
+// controllersDir 是 game/controllers 包的目录。
+func controllersDir(root string) string {
+	return filepath.Join(root, "game", "controllers")
+}
+
+// endpointExistingMethod 找 handlerName 在 game/controllers 包里的现有声明：没有时返回 nil；是协议生成器留下、仍未
+// 改动的“未实现”占位时返回它，由调用方在同一次提交里替换（syncChange 的 before 保证提交前没人改过这个文件）；
+// 别的声明一律拒绝并写明怎么处置，绝不覆盖业务代码。
+func endpointExistingMethod(root, handlerName string) (*protocol.ControllerMethod, error) {
+	method, err := protocol.FindControllerMethod(controllersDir(root), handlerName)
+	if err != nil || method == nil {
+		return nil, err
+	}
+	if method.Placeholder {
+		return method, nil
+	}
+	return nil, fmt.Errorf("%s already declares Controller.%s, and it is not the untouched placeholder roost generate writes, so add endpoint will not overwrite it; move any code you want to keep, delete the method and run this command again", relativeSlash(root, method.Path), handlerName)
+}
+
+// endpointControllerChange 在 game/controllers/controller.go 还不存在时写生成的那一份（与协议生成器相同）。
+func endpointControllerChange(root string) (*syncChange, error) {
+	path := filepath.Join(controllersDir(root), protocol.ControllerFileName)
+	if _, err := os.Stat(path); err == nil {
+		return nil, nil
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	body, err := protocol.ControllerSource()
+	if err != nil {
+		return nil, err
+	}
+	return &syncChange{rel: relativeSlash(root, path), path: path, body: body}, nil
+}
+
+// endpointMethodChange 把手写入口 decl 写进包里：替换占位 existing，或追加到 <group>.go（不存在就新建）。
+func endpointMethodChange(root, group string, existing *protocol.ControllerMethod, imports []protocol.GoImport, decl string) (syncChange, error) {
+	if existing != nil {
+		body, err := protocol.ReplaceControllerMethod(existing, imports, decl)
+		if err != nil {
+			return syncChange{}, err
+		}
+		return syncChange{rel: relativeSlash(root, existing.Path), path: existing.Path, body: body, before: existing.Source, existed: true}, nil
+	}
+	name, err := protocol.ControllerGroupFile(group)
+	if err != nil {
+		return syncChange{}, err
+	}
+	path := filepath.Join(controllersDir(root), name)
+	before, err := os.ReadFile(path)
+	var body []byte
+	switch {
+	case os.IsNotExist(err):
+		before = nil
+		body, err = protocol.NewControllerGroupFile(imports, decl)
+	case err == nil:
+		body, err = protocol.AppendGoDecls(before, imports, decl)
+	}
+	if err != nil {
+		return syncChange{}, fmt.Errorf("%s: %w", relativeSlash(root, path), err)
+	}
+	return syncChange{rel: relativeSlash(root, path), path: path, body: body, before: before, existed: before != nil}, nil
+}
+
+// renderControllersFile 是一个完整的 game/controllers 源文件：header（可为空）、包子句、imports 与 decl。
+func renderControllersFile(header string, imports []protocol.GoImport, decl string) ([]byte, error) {
+	var b strings.Builder
+	if header != "" {
+		b.WriteString(header + "\n")
+	}
+	b.WriteString("package " + protocol.ControllersPackage + "\n\n")
+	protocol.WriteGoImportBlock(&b, imports)
+	b.WriteString("\n" + decl)
+	formatted, err := format.Source([]byte(b.String()))
+	if err != nil {
+		return nil, fmt.Errorf("format endpoint scaffold: %w\n%s", err, b.String())
+	}
+	return formatted, nil
+}
+
+// planProtocolEndpoint 只规划文件；add 与 generate（refresh）共用模板，写入沿用已有事务提交边界。
+// refresh 时只重算自动转交的 <协议>_endpoint_gen.go，不碰手写入口。
 func planProtocolEndpoint(root string, manifest Manifest, options AddOptions, refresh bool) ([]syncChange, error) {
 	if _, enabled := manifest.Access["player"]; !enabled {
 		return nil, fmt.Errorf("endpoint requires player access; run: roost add access player --service %s", lifecycleService(manifest, options.Service))
 	}
-	domain := toSnake(options.Handler)
-	if !validName(domain) {
-		return nil, fmt.Errorf("endpoint requires --handler <protocol-controller-domain>")
+	group := toSnake(options.Handler)
+	if !refresh && !validName(group) {
+		return nil, fmt.Errorf("endpoint requires --handler <protocol-controller-group>")
 	}
 	protocolName := firstNonEmpty(options.Protocol, options.Name)
 	nestHandler := firstNonEmpty(options.NestHandler, options.Name)
@@ -102,28 +190,15 @@ func planProtocolEndpoint(root string, manifest Manifest, options AddOptions, re
 		return nil, err
 	}
 	arguments, target := signature.arguments, signature.entity
-	controllerDir := filepath.Join(root, "game", "controllers", domain)
-	endpointPath := filepath.Join(controllerDir, protocolSnake+".go")
-	var placeholder []byte
+	var existing *protocol.ControllerMethod
+	var controllerChange *syncChange
 	if !refresh {
-		placeholder, err = endpointPlaceholder(root, endpointPath, "Handle"+protocolType)
-		if err != nil {
+		if existing, err = endpointExistingMethod(root, "Handle"+protocolType); err != nil {
 			return nil, err
 		}
-	}
-	controllerPath := filepath.Join(controllerDir, "controller.go")
-	var controllerChange *syncChange
-	if raw, err := os.ReadFile(controllerPath); os.IsNotExist(err) {
-		body, formatErr := format.Source([]byte(renderNestController(domain)))
-		if formatErr != nil {
-			return nil, formatErr
+		if controllerChange, err = endpointControllerChange(root); err != nil {
+			return nil, err
 		}
-		change := syncChange{rel: relativeSlash(root, controllerPath), path: controllerPath, body: body}
-		controllerChange = &change
-	} else if err != nil {
-		return nil, err
-	} else if !bytes.Contains(raw, []byte("NestClient()")) {
-		return nil, fmt.Errorf("%s is not Nest-injected; create a new controller domain or add NestClient() before generating the endpoint", relativeSlash(root, controllerPath))
 	}
 
 	callArgs := "entityID"
@@ -158,21 +233,17 @@ func planProtocolEndpoint(root string, manifest Manifest, options AddOptions, re
 	}
 	return result, nil`, protocolSnake, protocolType)
 	}
-	body := fmt.Sprintf(`package %s
-
-import (
-	"fmt"
-	"log/slog"
-
-	%s %q
-	playeraccess %q
-	%ssyncsender %q
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	%q
-)
-
-// Handle%s is the protocol boundary. Authentication is already represented by
+	imports := []protocol.GoImport{
+		{Path: "fmt"},
+		{Path: "log/slog"},
+		{Name: target.alias, Path: target.importPath},
+		{Name: "playeraccess", Path: protocol.PlayerAccessImport},
+		{Name: nestSnake + "syncsender", Path: manifest.Project.Module + "/game/handler/syncsender"},
+		{Path: "github.com/tjbdwanghaibo/roost-core/framework/entity"},
+		{Path: "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"},
+		{Path: manifest.Project.Module + protocol.PBImportSuffix},
+	}
+	method := fmt.Sprintf(`// Handle%s is the protocol boundary. Authentication is already represented by
 // context.PlayerID; all Entity access continues through the generated Sender.
 //
 // An error returned from here makes the access layer close the connection,
@@ -201,30 +272,24 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 	}
 %s	%s
 }
-`, domain,
-		target.alias, target.importPath,
-		protocol.PlayerAccessImport,
-		nestSnake, manifest.Project.Module+"/game/handler/syncsender",
-		manifest.Project.Module+protocol.PBImportSuffix,
-		protocolType, protocolType, protocolType, protocolType, protocolSnake,
+`, protocolType, protocolType, protocolType, protocolType, protocolSnake,
 		target.alias, target.kind, protocolSnake,
 		nestSnake, nestType, call,
 		protocolSnake, protocolType,
 		useResults, returnResponse)
-	formatted, err := format.Source([]byte(body))
-	if err != nil {
-		return nil, fmt.Errorf("format endpoint scaffold: %w\n%s", err, body)
-	}
 	changes := make([]syncChange, 0, 3)
 	if controllerChange != nil {
 		changes = append(changes, *controllerChange)
 	}
 	if signature.results == 0 || signature.response {
 		// 可机械转交的部分持续生成；业务入口只创建一次，生成器从不改它的函数体。
-		helper := strings.Replace(string(formatted), "// Handle"+protocolType, "// dispatch"+protocolType, 1)
+		helper := strings.Replace(method, "// Handle"+protocolType, "// dispatch"+protocolType, 1)
 		helper = strings.Replace(helper, "func (controller *Controller) Handle"+protocolType+"(", "func (controller *Controller) dispatch"+protocolType+"(", 1)
-		generatedPath := filepath.Join(controllerDir, protocolSnake+"_endpoint_gen.go")
-		body := []byte(endpointGeneratedHeader + "\n" + helper)
+		body, err := renderControllersFile(endpointGeneratedHeader, imports, helper)
+		if err != nil {
+			return nil, err
+		}
+		generatedPath := filepath.Join(controllersDir(root), protocolSnake+"_endpoint_gen.go")
 		before, readErr := os.ReadFile(generatedPath)
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return nil, readErr
@@ -236,39 +301,42 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 			changes = append(changes, syncChange{rel: relativeSlash(root, generatedPath), path: generatedPath, body: body, before: before, existed: readErr == nil})
 		}
 		if !refresh {
-			wrapper, err := format.Source([]byte(fmt.Sprintf(`package %s
-import (
- playeraccess %q
- %q
-)
-// Handle%s 是手写接入层：可在调用前做校验和授权，不要在此持有 Entity 锁。
+			wrapper := fmt.Sprintf(`// Handle%s 是手写接入层：可在调用前做校验和授权，不要在此持有 Entity 锁。
 // dispatch 已把 handler 返回的业务错误转成回包的 Code / Reason；在这里自己做的校验
 // 拒绝也构造带错误码的响应返回，直接返回 error 会由接入层按分发失败处理。
 //roost:endpoint nest=%s
 func (controller *Controller) Handle%s(ctx *playeraccess.Context, req *pb.%sRequest) (*pb.%sResponse, error) {
- return controller.dispatch%s(ctx, req)
+	return controller.dispatch%s(ctx, req)
 }
-`, domain, protocol.PlayerAccessImport, manifest.Project.Module+protocol.PBImportSuffix,
-				protocolType, nestType, protocolType, protocolType, protocolType, protocolType)))
+`, protocolType, nestType, protocolType, protocolType, protocolType, protocolType)
+			wrapperImports := []protocol.GoImport{{Name: "playeraccess", Path: protocol.PlayerAccessImport}, {Path: manifest.Project.Module + protocol.PBImportSuffix}}
+			change, err := endpointMethodChange(root, group, existing, wrapperImports, wrapper)
 			if err != nil {
 				return nil, err
 			}
-			changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: wrapper, before: placeholder, existed: placeholder != nil})
+			changes = append(changes, change)
 		}
 	} else {
 		if refresh {
 			return nil, fmt.Errorf("endpoint %s: handler must return no business result or *pb.%sResponse; custom result mapping belongs in an application-owned endpoint", protocolType, protocolType)
 		}
-		changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted, before: placeholder, existed: placeholder != nil})
+		if _, err := format.Source([]byte(method)); err != nil {
+			return nil, fmt.Errorf("format endpoint scaffold: %w\n%s", err, method)
+		}
+		change, err := endpointMethodChange(root, group, existing, imports, method)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, change)
 	}
 	return changes, nil
 }
 
-// addLifecycleEndpoint 生成登录边界：endpoint 经 <Entity>FromRegistry 取得实例级 lifecycle，对
+// planLifecycleEndpoint 生成登录边界：endpoint 经 <Entity>FromRegistry 取得实例级 lifecycle，对
 // context.PlayerID 调 GetOrCreate，保证之后的玩法请求打到的 Entity 已存在。它不走 Nest Sender：
 // 首登时 Entity 还不存在，Nest 冷加载只会回 errcode.CodeEntityNotFound（DESIGN-TODO D7）。
 // 业务失败与 Sender 型 endpoint 一样变成 (Code, Reason) 响应，只给 CodeInternal 记日志。
-func addLifecycleEndpoint(root string, manifest Manifest, options AddOptions, domain string) ([]string, error) {
+func planLifecycleEndpoint(root string, manifest Manifest, options AddOptions, group string) ([]syncChange, error) {
 	protocolName := firstNonEmpty(options.Protocol, options.Name)
 	protocolSnake, protocolType := toSnake(protocolName), toPascal(protocolName)
 	if !validName(protocolSnake) {
@@ -281,7 +349,7 @@ func addLifecycleEndpoint(root string, manifest Manifest, options AddOptions, do
 	protocolPath := filepath.Join(root, "protocol", "def", protocolSnake+".go")
 	if _, err := os.Stat(protocolPath); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("protocol %q does not exist; run: roost add protocol %s --group game --handler %s", protocolSnake, protocolType, domain)
+			return nil, fmt.Errorf("protocol %q does not exist; run: roost add protocol %s --group game --handler %s", protocolSnake, protocolType, group)
 		}
 		return nil, err
 	}
@@ -299,41 +367,24 @@ func addLifecycleEndpoint(root string, manifest Manifest, options AddOptions, do
 	if responseFields["code"] != "Code" || responseFields["reason"] != "Reason" {
 		return nil, fmt.Errorf("protocol %sResponse needs Code int32 and Reason string fields to answer business errors (roost add protocol creates them)", protocolType)
 	}
-	controllerDir := filepath.Join(root, "game", "controllers", domain)
-	endpointPath := filepath.Join(controllerDir, protocolSnake+".go")
-	placeholder, err := endpointPlaceholder(root, endpointPath, "Handle"+protocolType)
+	existing, err := endpointExistingMethod(root, "Handle"+protocolType)
 	if err != nil {
 		return nil, err
 	}
-	controllerPath := filepath.Join(controllerDir, "controller.go")
-	var controllerChange *syncChange
-	if raw, err := os.ReadFile(controllerPath); os.IsNotExist(err) {
-		body, formatErr := format.Source([]byte(renderNestController(domain)))
-		if formatErr != nil {
-			return nil, formatErr
-		}
-		change := syncChange{rel: relativeSlash(root, controllerPath), path: controllerPath, body: body}
-		controllerChange = &change
-	} else if err != nil {
+	controllerChange, err := endpointControllerChange(root)
+	if err != nil {
 		return nil, err
-	} else if !bytes.Contains(raw, []byte("Registry() *app.Registry")) {
-		// controller.go 归业务，生成一次后不改写；早于本选项生成的 controller 没有 Registry()。
-		return nil, fmt.Errorf("%s has no Registry() accessor; keep the registry passed to FromRegistry and add `func (controller *Controller) Registry() *app.Registry`, then run this command again", relativeSlash(root, controllerPath))
 	}
 	entityType := toPascal(entitySnake)
-	body := fmt.Sprintf(`package %s
-
-import (
-	"fmt"
-	"log/slog"
-
-	%s %q
-	playeraccess %q
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	%q
-)
-
-// Handle%s is the login boundary. It makes sure the authenticated player has
+	imports := []protocol.GoImport{
+		{Path: "fmt"},
+		{Path: "log/slog"},
+		{Name: entitySnake, Path: manifest.Project.Module + "/game/entities/" + entitySnake},
+		{Name: "playeraccess", Path: protocol.PlayerAccessImport},
+		{Path: "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"},
+		{Path: manifest.Project.Module + protocol.PBImportSuffix},
+	}
+	method := fmt.Sprintf(`// Handle%s is the login boundary. It makes sure the authenticated player has
 // a %s Entity before any gameplay request reaches Nest: a Nest handler
 // addresses an Entity that exists, and a first login has none, so a request
 // sent before this one answers errcode.CodeEntityNotFound. GetOrCreate only
@@ -363,74 +414,21 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 	}
 	return &pb.%sResponse{}, nil
 }
-`, domain,
-		entitySnake, manifest.Project.Module+"/game/entities/"+entitySnake,
-		protocol.PlayerAccessImport,
-		manifest.Project.Module+protocol.PBImportSuffix,
-		protocolType, entityType,
+`, protocolType, entityType,
 		protocolType, protocolType, protocolType, protocolSnake,
 		entitySnake, protocolSnake, protocolType, protocolType)
-	formatted, err := format.Source([]byte(body))
-	if err != nil {
-		return nil, fmt.Errorf("format login endpoint scaffold: %w\n%s", err, body)
+	if _, err := format.Source([]byte(method)); err != nil {
+		return nil, fmt.Errorf("format login endpoint scaffold: %w\n%s", err, method)
 	}
-	changes := make([]syncChange, 0, 2)
+	change, err := endpointMethodChange(root, group, existing, imports, method)
+	if err != nil {
+		return nil, err
+	}
+	changes := []syncChange{change}
 	if controllerChange != nil {
 		changes = append(changes, *controllerChange)
 	}
-	changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted, before: placeholder, existed: placeholder != nil})
-	if err := commitSyncChanges(changes); err != nil {
-		return nil, err
-	}
-	paths := []string{relativeSlash(root, endpointPath)}
-	if controllerChange != nil {
-		paths = append(paths, relativeSlash(root, controllerPath))
-	}
-	return paths, nil
-}
-
-func renderNestController(domain string) string {
-	return fmt.Sprintf(`package %s
-
-import (
-	"fmt"
-
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
-)
-
-type Controller struct {
-	registry   *app.Registry
-	nestClient corenest.Client
-}
-
-func FromRegistry(registry *app.Registry) (*Controller, error) {
-	if registry == nil {
-		return nil, fmt.Errorf("%s controller: app registry is required")
-	}
-	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
-	if !ok || client == nil {
-		return nil, fmt.Errorf("%s controller: nest client is unavailable")
-	}
-	return &Controller{registry: registry, nestClient: client}, nil
-}
-
-func (controller *Controller) NestClient() corenest.Client {
-	if controller == nil {
-		return nil
-	}
-	return controller.nestClient
-}
-
-// Registry is the application registry, for boundaries that are not a Nest
-// call: a login endpoint resolves the Entity lifecycle from it.
-func (controller *Controller) Registry() *app.Registry {
-	if controller == nil {
-		return nil
-	}
-	return controller.registry
-}
-`, domain, domain, domain)
+	return changes, nil
 }
 
 // endpointEntity is the Entity a Nest handler's first parameter names: the
@@ -628,25 +626,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// endpointPlaceholder 决定 add endpoint 能否写 endpointPath。文件不存在返回 nil；是协议生成器留下、仍未改动的
-// “未实现”占位（roost generate 为没有 endpoint 的协议写的 Handle<Protocol>）时返回它的内容，由调用方在同一次
-// 提交里替换（syncChange 的 before 保证提交前没人改过它）；其他内容一律拒绝并写明怎么处置，绝不覆盖业务代码。
-func endpointPlaceholder(root, endpointPath, handlerName string) ([]byte, error) {
-	raw, err := os.ReadFile(endpointPath)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	rel := relativeSlash(root, endpointPath)
-	if protocol.IsUnimplementedControllerScaffold(raw, handlerName) {
-		return raw, nil
-	}
-	if protocol.IsControllerScaffold(rel, raw) {
-		return nil, fmt.Errorf("%s already exists: it is the placeholder roost generate wrote for %s, but it has been edited, so add endpoint will not overwrite it; move any code you want to keep, delete the file and run this command again", rel, handlerName)
-	}
-	return nil, fmt.Errorf("%s already exists and is not the untouched protocol placeholder; delete or rename it (keeping any code you need) and run this command again", rel)
 }

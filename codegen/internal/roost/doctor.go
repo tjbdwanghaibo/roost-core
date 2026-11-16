@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -458,7 +459,7 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 		{"dao", "db/def/*.go", "//roost:dao", "a DAO definition exists", "roost add dao " + names.entity + " --entity " + names.entity},
 		{"nest-handler", "game/handler/*.go", "//roost:nest", "a Nest business handler exists", "roost add handler RenamePlayer --entity " + names.entity + " --component " + names.component + exampleNameNote},
 		{"protocol", "protocol/def/*.go", "handler=", "a protocol is assigned to a controller", "roost add protocol " + names.protocol + " --group " + names.group + " --handler " + names.domain + names.protocolNote},
-		{"endpoint", "game/controllers/*/*.go", "generated Sender", "a protocol endpoint calls a generated Sender", "roost add endpoint " + names.endpoint + " --handler " + names.endpointDomain + names.endpointNote},
+		{"endpoint", "game/controllers/*.go", "generated Sender", "a protocol endpoint calls a generated Sender", "roost add endpoint " + names.endpoint + " --handler " + names.endpointDomain + names.endpointNote},
 		{"lifecycle", "game/entities/*/lifecycle_gen.go", "LifecycleFromRegistry", "an explicit Entity lifecycle boundary exists (generated per entity package)", "roost generate"},
 	}
 	for _, check := range checks {
@@ -579,12 +580,14 @@ func firstBusinessNames(root string, manifest Manifest) (workflowNames, error) {
 	}
 	if len(protocols) > 0 {
 		names.domain = protocolDomain[protocols[0]]
-	} else if controllers, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*")); err != nil {
+	} else if controllers, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*.go")); err != nil {
 		return names, err
 	} else {
+		// game/controllers 是一个包（2026-11-16 起）：分组就是 <分组>.go；生成的 controller.go、endpoint 生成文件与测试不算。
 		for _, path := range controllers {
-			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-				names.domain = filepath.Base(path)
+			base := strings.TrimSuffix(filepath.Base(path), ".go")
+			if base != "controller" && !strings.HasSuffix(base, "_gen") && !strings.HasSuffix(base, "_test") {
+				names.domain = base
 				break
 			}
 		}
@@ -613,17 +616,19 @@ func firstBusinessNames(root string, manifest Manifest) (workflowNames, error) {
 			names.protocol, names.protocolNote = toPascal(base), ""
 		}
 	}
-	// endpoint 提示：第一个与 Nest handler 同名、还没有 controller 文件的协议，沿用它声明的域。
+	// endpoint 提示：第一个与 Nest handler 同名、game/controllers 里还没有实现（没有 Handle<协议> 方法，或只有协议生成器的
+	// “未实现”占位）的协议，沿用它声明的分组。包结构不合规时不给这条提示，由生成器报错说明。
 	for _, snake := range protocols {
 		if !handlers[snake] {
 			continue
 		}
-		domain := protocolDomain[snake]
-		if _, err := os.Stat(filepath.Join(root, "game", "controllers", domain, snake+".go")); os.IsNotExist(err) {
-			names.endpoint, names.endpointDomain, names.endpointNote = toPascal(snake), domain, ""
+		method, err := protocol.FindControllerMethod(filepath.Join(root, "game", "controllers"), "Handle"+toPascal(snake))
+		if err != nil {
 			break
-		} else if err != nil {
-			return names, err
+		}
+		if method == nil || method.Placeholder {
+			names.endpoint, names.endpointDomain, names.endpointNote = toPascal(snake), protocolDomain[snake], ""
+			break
 		}
 	}
 	return names, nil
@@ -836,7 +841,7 @@ func workflowHandlerProtocolMatch(root, name string) (bool, error) {
 // anyLoginEndpoint 报告是否有 controller 文件导入工程的实体包（game/entities/<e>，lifecycle_gen.go 在那里）并调用某个 GetOrCreate：
 // 这就是“登录时保证 Entity 存在”的那一步（roost add endpoint --lifecycle 生成的，或业务手写的）。
 func anyLoginEndpoint(root string, manifest Manifest) (bool, error) {
-	paths, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*", "*.go"))
+	paths, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*.go"))
 	if err != nil {
 		return false, err
 	}
@@ -873,33 +878,37 @@ func anyLoginEndpoint(root string, manifest Manifest) (bool, error) {
 	return false, nil
 }
 
+// anyConnectedEndpoint 报告 game/controllers 里是否有 endpoint 调用了某个生成的 Sender，且那个 Nest handler 与同名协议对得上
+// （workflowHandlerProtocolMatch）。game/controllers 是一个包（2026-11-16 起），endpoint 不再一个协议一个文件，
+// 所以按 New<Handler>Sender 的调用找，不按文件名找。
 func anyConnectedEndpoint(root string) (bool, error) {
-	paths, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*", "*.go"))
+	paths, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*.go"))
 	if err != nil {
 		return false, err
 	}
 	for _, path := range paths {
-		name := strings.TrimSuffix(filepath.Base(path), ".go")
-		if name == "controller" {
-			continue
-		}
-		matched, matchErr := workflowHandlerProtocolMatch(root, name)
-		if matchErr != nil {
-			return false, matchErr
-		}
-		if !matched {
+		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return false, readErr
 		}
-		if bytes.Contains(raw, []byte("New"+toPascal(name)+"Sender")) {
-			return true, nil
+		for _, match := range endpointSenderCall.FindAllSubmatch(raw, -1) {
+			matched, matchErr := workflowHandlerProtocolMatch(root, toSnake(string(match[1])))
+			if matchErr != nil {
+				return false, matchErr
+			}
+			if matched {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
 }
+
+// endpointSenderCall 是 endpoint 构造生成 Sender 的调用：<别名>.New<Handler>Sender(。
+var endpointSenderCall = regexp.MustCompile(`\.New([A-Z][A-Za-z0-9]*)Sender\(`)
 
 func checkPlayerTCPWorkflow(root string, manifest Manifest) ([]CheckItem, error) {
 	items := make([]CheckItem, 0, 5)

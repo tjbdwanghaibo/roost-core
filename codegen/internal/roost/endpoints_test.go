@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-// 可再生成的部分跟随 handler；手写入口移动文件、加授权逻辑后仍保持原样。
+// 可再生成的部分跟随 handler；手写入口移动文件、加授权逻辑后仍保持原样。game/controllers 是一个包：入口追加在
+// <分组>.go，自动转交在 <协议>_endpoint_gen.go，都在 game/controllers 目录本身。
 func TestEndpointRegenerationPreservesApplication(t *testing.T) {
 	root := t.TempDir()
 	manifest := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
@@ -23,13 +24,16 @@ func handlerGrant(target player.IPlayerEntity, amount int64) error { return nil 
 	if _, err := addProtocolEndpoint(root, manifest, AddOptions{Name: "Grant", Handler: "player"}); err != nil {
 		t.Fatal(err)
 	}
-	rel := "game/controllers/player/grant.go"
+	rel := "game/controllers/player.go"
 	wrapper := readProjectFile(t, root, rel)
-	if !strings.Contains(wrapper, "//roost:endpoint nest=Grant") {
+	if !strings.Contains(wrapper, "//roost:endpoint nest=Grant") || !strings.Contains(wrapper, "package controllers") {
 		t.Fatal(wrapper)
 	}
+	if _, err := os.Stat(filepath.Join(root, "game/controllers/controller.go")); err != nil {
+		t.Fatalf("add endpoint did not write the generated controller.go: %v", err)
+	}
 	wrapper = strings.Replace(wrapper, "return controller.dispatchGrant", "// Custom authorization stays here.\n return controller.dispatchGrant", 1)
-	writeProjectFile(t, root, "game/controllers/player/grants.go", wrapper)
+	writeProjectFile(t, root, "game/controllers/grants.go", wrapper)
 	if err := os.Remove(filepath.Join(root, rel)); err != nil {
 		t.Fatal(err)
 	}
@@ -37,12 +41,12 @@ func handlerGrant(target player.IPlayerEntity, amount int64) error { return nil 
 	if err := generateEndpoints(root, manifest, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if got := readProjectFile(t, root, "game/controllers/player/grants.go"); got != wrapper {
+	if got := readProjectFile(t, root, "game/controllers/grants.go"); got != wrapper {
 		t.Fatal("application wrapper changed")
 	}
-	generated := "game/controllers/player/grant_endpoint_gen.go"
+	generated := "game/controllers/grant_endpoint_gen.go"
 	body := readProjectFile(t, root, generated)
-	if !strings.Contains(body, "entityID, request.Count") || strings.Contains(body, "request.Amount") {
+	if !strings.Contains(body, "entityID, request.Count") || strings.Contains(body, "request.Amount") || !strings.Contains(body, "package controllers") {
 		t.Fatal(body)
 	}
 	if err := generateEndpoints(root, manifest, io.Discard); err != nil {
@@ -52,20 +56,20 @@ func handlerGrant(target player.IPlayerEntity, amount int64) error { return nil 
 		t.Fatal("generation drift")
 	}
 	// 不认领同名的业务文件。
-	writeProjectFile(t, root, generated, "package player\n// application-owned\n")
+	writeProjectFile(t, root, generated, "package controllers\n// application-owned\n")
 	if err := generateEndpoints(root, manifest, io.Discard); err == nil || !strings.Contains(err.Error(), "overwrite application") {
 		t.Fatalf("collision: %v", err)
 	}
 	writeProjectFile(t, root, generated, body)
 	// 声明撤销时只删自动部分；手写文件由业务自行决定下一步。
-	writeProjectFile(t, root, "game/controllers/player/grants.go", strings.Replace(wrapper, "//roost:endpoint nest=Grant\n", "", 1))
+	writeProjectFile(t, root, "game/controllers/grants.go", strings.Replace(wrapper, "//roost:endpoint nest=Grant\n", "", 1))
 	if err := generateEndpoints(root, manifest, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, generated)); !os.IsNotExist(err) {
 		t.Fatalf("orphan remains: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "game/controllers/player/grants.go")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "game/controllers/grants.go")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -80,11 +84,24 @@ func TestEndpointMarkerRefusesInvalidDeclarations(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			writeProjectFile(t, root, "game/controllers/player/route.go", "package player\n"+tc.source+"\n")
+			writeProjectFile(t, root, "game/controllers/route.go", "package controllers\n"+tc.source+"\n")
 			err := generateEndpoints(root, Manifest{}, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %s", err, tc.want)
 			}
 		})
+	}
+}
+
+// 旧的按分组分包布局（game/controllers/<分组>/）不再支持：endpoint 生成直接报错并说明怎么迁，不在子目录里续写。
+func TestEndpointGenerationRefusesPerGroupSubdirectories(t *testing.T) {
+	root := t.TempDir()
+	writeProjectFile(t, root, "game/controllers/player/route.go", "package player\n//roost:endpoint nest=Grant\nfunc (c *Controller) HandleGrant() {}\n")
+	err := generateEndpoints(root, Manifest{}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "game/controllers is one package") {
+		t.Fatalf("old layout: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "game/controllers/player/grant_endpoint_gen.go")); !os.IsNotExist(err) {
+		t.Fatalf("an endpoint was generated into the old layout: %v", err)
 	}
 }

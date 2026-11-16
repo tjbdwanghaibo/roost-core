@@ -43,7 +43,7 @@ func TestRunRetiresBindingsButKeepsEmptyRegistration(t *testing.T) {
 	if err := Run(args, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if raw, err := os.ReadFile(registration); err != nil || !strings.Contains(string(raw), "RegisterPingPlayerProtocols(protocols, registry)") {
+	if raw, err := os.ReadFile(registration); err != nil || !strings.Contains(string(raw), "RegisterPingPlayerProtocolsWith(protocols, ctl)") {
 		t.Fatalf("registration lacks the ping domain: %v\n%s", err, raw)
 	}
 	writeProtocolTestFile(t, filepath.Join(def, "game.go"), "package protocoldef\n")

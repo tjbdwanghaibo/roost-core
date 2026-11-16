@@ -509,6 +509,67 @@ func TestModuleSpecValidationNamesWhatIsWrong(t *testing.T) {
 	}
 }
 
+// game/controllers 是一个包、game/event 是第七个固定层（2026-11-16）：模块往 controllers 只能放 <模块>.go，联动文件只能
+// 是 <模块>_<对方模块>.go，各自可带 _test.go，子目录拒绝；game/event 只能放 game/event/<模块>.go（联动文件不能放），
+// 而且只能 import 标准库和 {{MODULE}}/db。规则在清单加载时执行。
+func TestModuleSpecControllersAndEventLayout(t *testing.T) {
+	ids := "// {{ID:component:Demo}} {{ID:errcode:demo_bad}}\n"
+	with := func(extra map[string]string) map[string]string {
+		out := map[string]string{"game/modules/x/x.go": "package x\n" + ids}
+		for rel, body := range extra {
+			out[rel] = body
+		}
+		return out
+	}
+	for name, files := range map[string]map[string]string{
+		"controller file":    {"game/controllers/demo.go": "package controllers\n"},
+		"controller test":    {"game/controllers/demo_test.go": "package controllers\n"},
+		"event file":         {"game/event/demo.go": "package event\n\nimport (\n\t\"time\"\n\n\t\"{{MODULE}}/db\"\n)\n\ntype DemoDone struct{ At time.Time; State db.DemoState }\n"},
+		"event without deps": {"game/event/demo.go": "package event\n\ntype DemoDone struct{ Level int32 }\n"},
+	} {
+		if _, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML, with(files))); err != nil {
+			t.Errorf("%s: a conforming layout was refused: %v", name, err)
+		}
+	}
+	for name, test := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"controllers subdirectory": {map[string]string{"game/controllers/demo/controller.go": "package demo\n"}, "game/controllers is one package without subdirectories"},
+		"per-protocol file":        {map[string]string{"game/controllers/demo_ping.go": "package controllers\n"}, "a module's file in game/controllers is demo.go"},
+		"another module's name":    {map[string]string{"game/controllers/chat.go": "package controllers\n"}, "a module's file in game/controllers is demo.go"},
+		"event under another name": {map[string]string{"game/event/demo_events.go": "package event\n"}, "game/event/demo.go, one file per module"},
+		"event subdirectory":       {map[string]string{"game/event/demo/demo.go": "package demo\n"}, "game/event/demo.go, one file per module"},
+		"event imports game":       {map[string]string{"game/event/demo.go": "package event\n\nimport \"{{MODULE}}/game/view\"\n\nvar _ view.X\n"}, `imports "{{MODULE}}/game/view"; game/event may only import the standard library and {{MODULE}}/db`},
+		"event imports db subpkg":  {map[string]string{"game/event/demo.go": "package event\n\nimport \"{{MODULE}}/db/def\"\n"}, `imports "{{MODULE}}/db/def"`},
+		"event imports core":       {map[string]string{"game/event/demo.go": "package event\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n"}, `imports "github.com/tjbdwanghaibo/roost-core/framework/entity"`},
+		"event imports cgo":        {map[string]string{"game/event/demo.go": "package event\n\nimport \"C\"\n"}, `imports "C"`},
+	} {
+		_, err := loadModuleCatalogFS(moduleFixtureFS(moduleFixtureYAML, with(test.files)))
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: err = %v, want it to contain %q", name, err, test.want)
+		}
+	}
+	// 联动文件（with/<对方>/）：controllers 里是 <模块>_<对方>.go 与它的 _test.go；用模块自己的名字、或往 game/event 放都拒绝。
+	for rel, want := range map[string]string{
+		"game/controllers/demo_chat.go":      "",
+		"game/controllers/demo_chat_test.go": "",
+		"game/controllers/demo.go":           "is demo_chat.go",
+		"game/controllers/chat_demo.go":      "is demo_chat.go",
+		"game/controllers/demo_chat/x.go":    "without subdirectories",
+		"game/event/demo.go":                 "with/ glue files cannot define events",
+		"game/components/demo/demo_chat.go":  "",
+	} {
+		err := validateModuleGamePath("demo", "chat", rel)
+		if want == "" && err != nil {
+			t.Errorf("with/chat %s refused: %v", rel, err)
+		}
+		if want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("with/chat %s: err = %v, want %q", rel, err, want)
+		}
+	}
+}
+
 // withManagerFile 是 files 加上一个 game/managers 下的模板（模块 manager 的落点）。
 func withManagerFile(files map[string]string) map[string]string {
 	out := map[string]string{"game/managers/demo_manager.go": "package managers\n"}
