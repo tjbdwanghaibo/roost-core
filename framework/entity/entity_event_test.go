@@ -15,6 +15,7 @@ const (
 	eventKindReenter EntityKind = 233 // 同一事件重入上限
 	eventKindPerRoot EntityKind = 234 // 一次最外层发布的总次数上限，以及无监听计数
 	eventKindPanic   EntityKind = 235 // 监听 panic 后栈被清空
+	eventKindNested  EntityKind = 236 // 内层监听出错时，错误原样外传不再逐层包装
 )
 
 type evOrder struct{ N int }
@@ -37,6 +38,10 @@ type evBurst struct{ Times int }
 type evTick struct{}
 
 type evBoom struct{}
+
+type evNestOuter struct{}
+type evNestMiddle struct{}
+type evNestInner struct{}
 
 var errEventBoom = errors.New("boom")
 
@@ -119,6 +124,21 @@ func init() {
 		}
 		e.log = append(e.log, "inner")
 		return nil
+	})
+
+	// 嵌套出错：Outer → Middle → Inner，Inner 的监听返回 boom；外两层原样返回内层错误。
+	RegisterEventListener(eventKindNested, "evNestOuter", "nested.outer", func(e *eventTestEntity, ev evNestOuter) error {
+		return e.Publish(evNestMiddle{})
+	})
+	RegisterEventListener(eventKindNested, "evNestMiddle", "nested.middle", func(e *eventTestEntity, ev evNestMiddle) error {
+		if err := e.Publish(evNestInner{}); err != nil {
+			// 监听在内层错误外再加一句说明也照样认得出：不再按事件链包一层。
+			return fmt.Errorf("middle: %w", err)
+		}
+		return nil
+	})
+	RegisterEventListener(eventKindNested, "evNestInner", "nested.inner", func(e *eventTestEntity, ev evNestInner) error {
+		return errEventBoom
 	})
 }
 
@@ -271,6 +291,30 @@ func TestEntityEventPerRootLimitCountsUnheardEvents(t *testing.T) {
 	}
 	if len(e.log) != 255 {
 		t.Fatalf("ticks before the limit = %d, want 255", len(e.log))
+	}
+}
+
+// 嵌套发布出错时，最内层的事件错误已经带着完整事件链和出错的监听；外层原样返回，不再逐层包装。
+func TestEntityEventNestedErrorIsNotRewrapped(t *testing.T) {
+	e := newEventTestEntity(9_100_090, eventKindNested)
+	err := withLockedEntity(t, e, func() error { return e.Publish(evNestOuter{}) })
+	if !errors.Is(err, errEventBoom) {
+		t.Fatalf("got %v, want wrapped errEventBoom", err)
+	}
+	if want := "middle: evNestOuter → evNestMiddle → evNestInner listener nested.inner: boom"; err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+	var eventErr *EventError
+	if !errors.As(err, &eventErr) || eventErr.Listener != "nested.inner" || eventErr.Chain != "evNestOuter → evNestMiddle → evNestInner" {
+		t.Fatalf("errors.As EventError = %+v", eventErr)
+	}
+
+	// 超出上限的错误同样只出现一次，外层不包。
+	d := newEventTestEntity(9_100_091, eventKindDepth)
+	err = withLockedEntity(t, d, func() error { return d.Publish(evD0{}) })
+	want := "entity event: limit exceeded: evD0 → evD1 → evD2 → evD3 → evD4 → evD5 → evD6 → evD7 → evD8: nesting depth exceeds 8"
+	if err == nil || err.Error() != want {
+		t.Fatalf("depth error = %q, want %q", err, want)
 	}
 }
 

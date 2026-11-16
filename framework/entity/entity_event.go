@@ -203,8 +203,27 @@ func (e *EntityBase) popEvent() {
 	}
 }
 
+// EventError 是监听出错时 Publish 返回的错误：Chain 是出错那一刻的完整事件链（"A → B → C"），Listener 是出错的监听，
+// Err 是它返回的错误（Unwrap 得到，errors.Is 照常可用）。
+//
+// 嵌套发布时错误只包一次：内层监听出错，内层 Publish 返回的 EventError 已经带着完整事件链和出错的监听；外层监听把它
+// 原样（或再加一句说明，用 %w）返回时，外层的 DispatchEvent 认出它，不再按外层的事件链再包一层。超出上限的错误
+// （ErrEventLimit）同样已带完整事件链，也原样外传。
+type EventError struct {
+	Chain    string
+	Listener string
+	Err      error
+}
+
+func (e *EventError) Error() string {
+	return e.Chain + " listener " + e.Listener + ": " + e.Err.Error()
+}
+
+func (e *EventError) Unwrap() error { return e.Err }
+
 // DispatchEvent 按 (kind, ev 的动态类型) 取出登记的回调，依次以 owner 执行，第一个错误即停，
-// 错误包装成 "<事件链> listener <listener>: <err>"（用 %w，调用方仍可 errors.Is）。没有监听时返回 nil。
+// 错误包装成 *EventError（"<事件链> listener <listener>: <err>"，调用方仍可 errors.Is）；监听返回的错误里已经有
+// EventError 或 ErrEventLimit（来自内层发布）时原样返回，不再包。没有监听时返回 nil。
 // 只由生成的分发闭包调用（经 EntityBase.Publish），锁检查与事件栈由 Publish 负责。
 func DispatchEvent(kind EntityKind, owner IThreadSafeEntity, ev any) error {
 	freezeEvents()
@@ -215,7 +234,11 @@ func DispatchEvent(kind EntityKind, owner IThreadSafeEntity, ev any) error {
 	listeners := eventListeners[eventKey{kind: kind, typ: typ}]
 	for _, listener := range listeners {
 		if err := listener.fn(owner, ev); err != nil {
-			return fmt.Errorf("%s listener %s: %w", ownerEventChain(owner, typ), listener.name, err)
+			var inner *EventError
+			if errors.As(err, &inner) || errors.Is(err, ErrEventLimit) {
+				return err
+			}
+			return &EventError{Chain: ownerEventChain(owner, typ), Listener: listener.name, Err: err}
 		}
 	}
 	return nil
