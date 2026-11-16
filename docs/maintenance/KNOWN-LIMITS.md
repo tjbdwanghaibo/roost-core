@@ -705,7 +705,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 单实例锁：遗留
 
-- **锁改存 etcd（已决定待实施）**：维护者 2026-11-16 定做法 A，在 `wiring/etcd` 实现 `SingletonStore`，生成工程全工程统一用它，锁与服务发现共用同一个 etcd 集群，`framework/app` 不改。暂不实施。同日已定：Redis 版 `SingletonStore` 删除；接受 etcd 不可用时开锁进程 fail-stop（实施时写进框架限制与部署文档）。方案见 [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)。
+- **锁改存 etcd（已决定待实施）**：维护者 2026-11-16 定做法 A，在 `wiring/etcd` 实现 `SingletonStore`，生成工程全工程统一用它，锁与服务发现共用同一个 etcd 集群，`framework/app` 不改。暂不实施。同日已定：Redis 版 `SingletonStore` 删除；接受 etcd 不可用时开锁进程 fail-stop（实施时写进框架限制与部署文档）。方案见 [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)。三项的依赖、实施顺序与全量见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
 
 ### DataEngine、Remote 与 Saga（遗留）
 
@@ -778,8 +778,8 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
   - 窄接口返回 view 接口，宿主方法也在 view 里抽成接口，由实体实现；
   - 组件类型号挪进组件包，activity 只用一个类型号。
 
-  暂不实施。方案见 [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)。
-- **组件钩子改为事务内事件（已决定待实施）**：维护者 2026-11-16 定：事件定义集中在 `game/event`；实体底层自带 `Publish`；core 提供“事件名 + 回调”的登记方法，由生成代码调用；实体方法和组件方法都可以用 `//roost:listen` 标记为监听（第二版方案）。暂不实施。方案见 [FEATURE-2026-11-16-tx-event](FEATURE-2026-11-16-tx-event.md)。
+  暂不实施。方案见 [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)。三项的依赖、实施顺序与全量见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
+- **组件钩子改为事务内事件（已决定待实施）**：维护者 2026-11-16 定：事件定义集中在 `game/event`；实体底层自带 `Publish`；core 提供“事件名 + 回调”的登记方法，由生成代码调用；实体方法和组件方法都可以用 `//roost:listen` 标记为监听（第二版方案）。暂不实施。方案见 [FEATURE-2026-11-16-tx-event](FEATURE-2026-11-16-tx-event.md)。三项的依赖、实施顺序与全量见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
 
 ### 框架服务与 game-demo（遗留）
 

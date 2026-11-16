@@ -1,5 +1,7 @@
 # 方案：实体事件（framework/entity 自带 Publish，监听由生成器登记）（2026-11-16，第二版）
 
+本轮三项方案的依赖、实施顺序、全量测试与时间预估见[总览](FEATURE-2026-11-16-round-overview.md)。
+
 **状态：方案，未实施。**
 
 本方案和 [controllers 合包、组件接口收进 view](FEATURE-2026-11-16-controllers-view-layout.md) 属于同一轮整理，两者一起实施。
