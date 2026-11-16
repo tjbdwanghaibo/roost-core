@@ -274,13 +274,13 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 单玩家协议可以直接把 PB 指针作为 handler 的业务参数 / 返回值，不必逐字段拆请求或在 Controller 再复制响应。PB 转交按类型识别；`roost add endpoint` 按本工程 PB import 路径和当前协议类型识别，import 别名不受限制。
 
 ```go
-// game/handler/add_gold.go（player、pb 分别导入本工程的实体和协议包）
+// game/handler/add_gold.go（view、pb 分别导入本工程的 game/view 和协议包）
 //roost:nest rollback=undo durability=strict
-func handlerAddGold(target player.IWalletEntity, request *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
-    if err := target.WalletComp().AddGold(request.Amount); err != nil {
+func handlerAddGold(target view.IWalletEntity, request *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
+    if err := target.Wallet().AddGold(request.Amount); err != nil {
         return nil, err
     }
-    return &pb.AddGoldResponse{Gold: target.WalletComp().Gold()}, nil
+    return &pb.AddGoldResponse{Gold: target.Wallet().Gold()}, nil
 }
 ```
 
@@ -291,7 +291,7 @@ roost add endpoint AddGold --handler player
 roost generate
 ```
 
-组件的 AddGold / Gold 是业务方法，仍由业务实现；DAO setter、提交和 EntitySync 收集方式不变。生成 endpoint 负责：从认证 `context.PlayerID` 构造目标 ID → 调用同步 Sender → 映射错误 → 返回 handler 的 PB 响应。无需自己写转换代码，新增 PB 业务字段也不需要再改这层转交。
+组件的 AddGold / Gold 是业务方法，仍由业务实现，并要列进 `game/view/component_wallet.go` 的 `view.Wallet` 接口（handler 经窄接口 `view.IWalletEntity` 的访问器 `Wallet()` 调用，2026-11-16 起）；DAO setter、提交和 EntitySync 收集方式不变。生成 endpoint 负责：从认证 `context.PlayerID` 构造目标 ID → 调用同步 Sender → 映射错误 → 返回 handler 的 PB 响应。无需自己写转换代码，新增 PB 业务字段也不需要再改这层转交。
 
 边界：
 

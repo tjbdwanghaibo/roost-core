@@ -73,6 +73,48 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 
 memory 且没有 effect 的事务不写 WAL：带事务的本地持久修改由 refuseMemoryPersistentWrite 拒绝；不能再使用旧文档的“静默忽略持久修改”描述。Emit 与实体删除会提升所需持久级别。Remote 批次有独立参与者归属，不能把远端 mutation 当普通本地漏写误判。
 
+## 3A. 实体事件
+
+**是什么**（2026-11-16 起，取代各模块手写的 `OnXxx` 钩子登记表；方案与迁移清单见 [FEATURE-2026-11-16-tx-event](../../maintenance/FEATURE-2026-11-16-tx-event.md)）：同一个实体上、同一笔事务里的**同步**通知或拦截。一个组件做完一件事（升级、扣款、签到）后在宿主实体上发布事件，同一实体上别的组件或实体自己的监听当场执行，修改落在同一笔事务里，一起提交、一起回滚。实现在 [entity_event.go](../../../framework/entity/entity_event.go)。
+
+**发布**：`entity.IThreadSafeEntity` 带 `Publish(ev any) error`（`EntityBase` 实现），拿到宿主（view 接口或实体）就能发布：
+
+```go
+if err := c.owner.Publish(event.ProfileLevelUp{From: from, To: to}); err != nil {
+	return err // 必须原样外传，见下文“错误”
+}
+```
+
+- 事件类型是生成工程 `game/event/<模块>.go` 里的导出结构体，结构体名就是事件名；只放值（内建类型、`db` 类型），不放实体引用或指针。`game/event` 是 `game/` 下的第七个固定层，只 import 标准库与 `db`（安装器检查）。
+- 当前 goroutine 的 Guard 必须持有这个实体，否则返回 `entity.ErrEventNotGuarded`；实体工厂没装配分发（生成的工厂调 `SetEventDispatch`）时返回 `entity.ErrEventDispatchMissing`。**不要求可回滚事务**，见下文 memory 一条。
+- 没有监听的事件直接返回 nil（仍计入下文的发布次数上限）。
+
+**监听**：在实体方法或组件方法上标 `//roost:listen [priority=N]`，签名固定为“一个 `game/event` 结构体值参数、返回 `error`”，监听哪个事件由参数类型决定，方法名约定 `On<事件名>`（规则与生成期报错见 [tag 手册“实体事件”](../../../codegen/docs/TAGS.zh-CN.md#实体事件roostlisten)）。`roost generate` 为每个有监听的实体写 `<实体>_event_gen.go`，在 `init` 里按固定顺序调 `entity.RegisterEventListener`：`priority` 大的先（缺省 0，范围 -1000～1000），同优先级实体自己的监听先、再按组件初始化顺序（组件类型号升序）、同一接收者按方法名。core 不知道优先级，只按登记先后执行。组件挂在几种实体上，就在每种实体上各登记一次。
+
+**立即执行、深度优先**：监听里再 `Publish` 时，新事件的全部监听当场执行完才回到外层，外层后面的监听看到的是内层整条链执行完之后的状态。这与原来的钩子相同，迁移前后执行语义不变。
+
+**错误一路外传**：监听按登记顺序执行，第一个错误即停，`Publish` 返回 `*entity.EventError`（`Chain` 是出错那一刻的事件链 `A → B → C`，`Listener` 是出错的监听，`Unwrap` 到监听自己的错误，`errors.Is` 照常可用）；嵌套发布的错误只包一次。监听收到内层 `Publish` 的错误必须原样（或用 `%w`）返回：事务只能整笔回滚、没有保存点，吞掉内层错误会留下内层出错前的修改。发布方同样要把错误交还 Nest。
+
+**拦截类事件的监听只读**：拦截事件（`TeamJoining`、`RoomJoining`、`RehomeApplying`、`MatchmakingStarting`、`ProfileRenaming`）的监听只做检查、返回错误表示拒绝，不改状态——发布方可能把拒绝转成业务回包（返回响应而不是 error），这时事务不回滚，监听若改过状态就留下了。
+
+**三道上限**（挡循环，超出返回 `entity.ErrEventLimit`，错误里带完整事件链，整笔回滚）：嵌套深度 8；同一事件同时在栈上 3 次（允许“升级发奖又升级”这类由数据决定、一定会停的重入）；一次最外层发布内总共 256 次。缺省值是 `entity.DefaultEventMax*`，只能在 `init` 里经 `entity.SetEventLimits` 调整。生成器另把 `Publish(event.X{...})` 画成“事件 → 监听 → 再发布”的图，有环时在 `roost generate` 输出里打印 `hint: event cycle …`；它只看直接写在监听方法里（及同一接收者上被直接调用的方法里）的发布，运行时上限才是最终保证。
+
+**memory 快路径与 `rollback=none`**：维护者 2026-11-16 决定允许在这两种 handler 里发布。监听返回的错误照常外传给发布方与 Nest，但**已做的修改不撤销**（发布方自己的与前面监听的都一样），这与这类 handler 本身“不承诺失败恢复”（[§3](#3-事务与回滚)、[§6 第 6 行](#6-回复错误判别是否可能已提交能否重试)）一致。要“监听失败则整笔撤销”就把 handler 声明为可回滚。
+
+**panic**：事件层不 recover。panic 沿 Nest 现有路径处理（先回滚事务再继续抛出），事件栈由 defer 弹出，不带进下一笔事务。
+
+**登记表冻结**：登记只在 `init` 期；第一次 `Publish` 时冻结，之后再登记或调上限直接 panic。冻结点取首次发布而不是 App 启动，是为了不让 entity 包依赖 app 的生命周期。
+
+**init 链接**：监听登记写在实体包的生成文件里，实体包被链接就生效。手写的 `RegisterEventListener`（测试探针、测试宿主）以及发布事件所依赖的别的 `init` 登记，所在的包必须被链接进二进制：只有 `init`、没有被任何代码引用的包不会执行。scene 模块的 `game/components/scene` 没有组件、原来只靠某个 handler 引用被带进来，改为由场景运行期入口 `game/modules/scene/service` 空白引用，保证区域登记在装了 scene 的服务里都执行（eaa85d13）。测试里的监听同样在测试文件的 `init` 里登记，不能在某个用例已经发布过事件之后再登记。
+
+**与别的通信方式的分工**：
+
+| 要做的事 | 用什么 | 语义 |
+| --- | --- | --- |
+| 同一实体、同一笔事务里让别的组件跟着改，或询问能否继续 | 实体事件 `Publish` | 同步、立即、错误回滚整笔；不异步、不跨实体、不能运行时订阅或退订 |
+| 改另一个实体（同进程或别的进程上的同服实体） | Nest 发送：生成的 Sender（`Send_` / `Sync_` / `MultiSync_`），多个实体要原子就写多实体 handler | 对方实体在自己的锁与事务里执行 |
+| 跨进程、要可靠投递的后续动作 | `nest.Emit`（effect，outbox 或 best-effort） | 随本事务提交后投递，消费方另起事务 |
+
 ## 4. 提交与回复
 
 | 策略 | 正式语义 |

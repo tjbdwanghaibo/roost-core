@@ -73,7 +73,7 @@
 
 ## 联动
 
-- `activity` + `enter`（`with/enter/`）：首次建档时经 `OnFirstEnter("activity", …)` 在建档事务里以建档时间激活 `created` 触发的活动，并把宿主的创建时间接到 `PlayerDao.Enter` 的首次进入时间；每次进入经 `gamelogin.OnEntered("activity", …)` 在事务外对账一次并 `ResumePending`（`with/enter/game/controllers/activity_enter.go`）：钩子拿到的是会话里的玩家号，先用 `entity.BuildEntityID(玩家号, player.EntityKindPlayer)` 换成完整实体号再发 `Sync_ActivityEvent` / `Sync_ActivityComplete`；钩子失败只记日志，下一次进入再来。
+- `activity` + `enter`（`with/enter/`）：首次建档时活动组件上 `//roost:listen priority=40` 的 `OnEnterFirst` 监听实体事件 `event.EnterFirst`（`with/enter/game/components/activity/activity_enter.go`），在建档事务里以建档时间激活 `created` 触发的活动，并把宿主的创建时间接到 `PlayerDao.Enter` 的首次进入时间；每次进入经 `gamelogin.OnEntered("activity", …)` 在事务外对账一次并 `ResumePending`（`with/enter/game/controllers/activity_enter.go`）：钩子拿到的是会话里的玩家号，先用 `entity.BuildEntityID(玩家号, player.EntityKindPlayer)` 换成完整实体号再发 `Sync_ActivityEvent` / `Sync_ActivityComplete`；钩子失败只记日志，下一次进入再来。
 - `activity` + `profile`（`with/profile/`）：组件上的 `//roost:listen priority=40` 方法 `OnProfileLevelUp` 监听实体事件 `event.ProfileLevelUp`，在升级的同一笔事务里上报事件 `profile.level_up`。
 - `activity` + `leaderboard`（`with/leaderboard/game/components/activity/leaderboard.go`）：`activity.Board(token)` 按“范围、宿主、定义、代际”给出独立的榜，期次作为赛季。
 - `activity` + `mailbox`（`with/mailbox/game/components/activity/mailbox.go`）：`activity.SendReward(ctx, mailer, token, action, letter)` 以“实例身份 + 动作 + 收件人”生成稳定的发件键，只允许在 `Settling` 阶段的 `Token` 上用，且只能在事务之外调用。

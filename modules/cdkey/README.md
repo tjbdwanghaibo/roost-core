@@ -45,7 +45,7 @@
 - **需求正好是它**：`roost module add cdkey`。连带安装 `mailbox`（及其依赖 `wallet`），并代办接入 `directory` Mod。上线前把 `configs/table/cdkey.csv` 的两行示例码换掉，改表后 `roost generate`。
 - **需求比它多一点**
   - 加码、改有效期：改 `configs/table/cdkey.csv`。
-  - 奖励改成道具或多种附件：改 `controller.go` 里 `CdkeyRedeem` 组装 `mailbox.Letter` 的那一行（现在是 `mailbox.Coins(intent.Coins)`），并相应扩展 `configs/schema/cdkey.go`、`db/def/cdkey.go` 的 `CdkeyReceipt` 与 `game/modules/cdkey/cdkey.go` 的 `Intent`（奖励必须在 `Prepare` 时冻结进账本）。
+  - 奖励改成道具或多种附件：改 `game/controllers/cdkey.go` 里 `CdkeyRedeem` 组装 `mailbox.Letter` 的那一行（现在是 `mailbox.Coins(intent.Coins)`），并相应扩展 `configs/schema/cdkey.go`、`db/def/cdkey.go` 的 `CdkeyReceipt` 与 `game/modules/cdkey/cdkey.go` 的 `Intent`（奖励必须在 `Prepare` 时冻结进账本）。
   - 加渠道、等级等兑换条件：在 `game/components/cdkey/cdkey.go` 的 `Prepare` 里、写入账本之前加检查。
   - 不要改 `ClaimKey` 与 `RequestID` 的格式：它们是已发行码的永久身份，改了会让旧码被当成新请求。
 - **别的模块 / 业务代码要用它**

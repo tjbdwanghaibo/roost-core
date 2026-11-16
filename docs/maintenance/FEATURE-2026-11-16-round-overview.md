@@ -1,6 +1,6 @@
 # 2026-11-16 整理轮总览：单实例锁改存 etcd、controllers 合包与组件接口收进 view、实体事件
 
-状态：**方案已定，未实施。** 本文是这一轮改动的总入口，汇总三份方案：
+状态：**阶段 0～5 已在分支 `feat/round-20261116` 实施（2026-11-16），待阶段 7 的最终全量与演练。** 现行契约已写进 `docs/framework`（[Nest 与实体 §3A 实体事件](../framework/guide/02-nest-entity.md#3a-实体事件)、[impl/12 生成器](../framework/impl/12-codegen.md)、[tag 手册](../../codegen/docs/TAGS.zh-CN.md)），不兼容变化与旧工程迁移步骤见 CHANGELOG `[Unreleased]`，未完成项见 [KNOWN-LIMITS](KNOWN-LIMITS.md#生成工程目录遗留)。本文是这一轮改动的总入口，汇总三份方案：
 
 - [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)
 - [FEATURE-2026-11-16-controllers-view-layout](FEATURE-2026-11-16-controllers-view-layout.md)

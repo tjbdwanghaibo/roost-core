@@ -2,7 +2,7 @@
 
 本轮三项方案的依赖、实施顺序、全量测试与时间预估见[总览](FEATURE-2026-11-16-round-overview.md)。
 
-**状态：方案，未实施。**
+**状态：已实施（分支 `feat/round-20261116`，core a0a4e405 / 16248e14，生成器 596a21b1 / 13161a23，模块 9aaebe7f、c8340c27、09e8feee、bcf8ca44、eaa85d13），待本轮阶段 7 的全量与先失败后通过证据。** 实际改成事件的登记点见 §1.3；§4.5 的 doctor 检查（`event:publish-error`、`event:cycle`、`event:publish`）**未实施**，生成器的静态环提示已有（`roost generate` 输出 `hint: event cycle …`）。现行契约见 [Nest 与实体 §3A](../framework/guide/02-nest-entity.md#3a-实体事件) 与 [tag 手册](../../codegen/docs/TAGS.zh-CN.md#实体事件roostlisten)。
 
 本方案和 [controllers 合包、组件接口收进 view](FEATURE-2026-11-16-controllers-view-layout.md) 属于同一轮整理，两者一起实施。
 
@@ -39,16 +39,37 @@
 
 本方案只借用"实体能发布事件"这个形态，实现重写。
 
-### 1.3 33 个登记点的分类
+### 1.3 33 个登记点的分类（按实施结果改正）
+
+第一版把 Entering、Creating、Applying、Entered、Leaving、Arrived 和 leaderboard 的 Submitted 也算进通知 / 拦截。实施时逐个核对后发现它们都在**事务和实体锁之外**执行（login / enter 的进入前检查与进入后钩子、新建前检查，rehome 的事务外登记点，leaderboard 提交之后），而实体事件只能在 Guard 持有实体时发布，所以这几处**保留原登记方式**。改正后的表：
 
 | 类别 | 登记点 | 处理 |
 |---|---|---|
-| **通知**：事情已经发生，同一实体在同一笔事务里跟着改 | ProfileLevelUp、WalletSpent、ShopBought、StaminaSpent、CheckinClaimed、DungeonClaimed、EquipmentChanged、AttributeChanged、TeamChanged、RehomeArrived / Arrived、Submitted、Entered、FirstEnter、Create、Leaving、Region、SceneInteract | 改为实体事件 |
-| **拦截**：事情发生之前询问，返回错误就拒绝 | Entering、Creating、Applying、RehomeApplying、RoomJoining、TeamJoining、MatchmakingStarting | 改为实体事件，返回错误即拒绝 |
+| **通知**：事情已经发生，同一实体在同一笔事务里跟着改 | ProfileLevelUp、WalletSpent、ShopBought、StaminaSpent、CheckinClaimed、DungeonClaimed、EquipmentChanged、AttributeChanged、TeamChanged、RehomeArrived、FirstEnter、Create、Region、SceneInteract | 改为实体事件（见下面的事件清单） |
+| **拦截**：事情发生之前询问，返回错误就拒绝 | RehomeApplying、RoomJoining、TeamJoining、MatchmakingStarting；另加 naming 原来在 handler 里做的类型断言 | 改为实体事件，返回错误即拒绝 |
+| **事务外登记点**：在实体锁外执行 | Entering、Entered、Creating（`game/modules/login`）、Applying、Leaving、Arrived（`game/modules/rehome`）、Submitted（leaderboard） | 不能发布实体事件，保留原登记方式 |
 | **扩展提供方**：登记工厂、字段表、配置修改器、取值函数 | Actor、ActorSyncFields、SceneFields、CompileEnvironment、AttributeGear、CreatePrepare、LocalChannel | 不是"发生了什么"，保留现有登记方式 |
 | **连接层**：不在实体锁里 | SessionActive | 实体事件只能在实体被锁住时发布，所以保留现状 |
 
-实施时逐个核对这张表。现在所有通知和拦截类钩子改的都是**发布事件的那个实体自己**（例如 Player 自己的任务、属性、活动），这正好落在实体事件的范围内。
+**实际的事件清单**（`game/event/<模块>.go`，按批次提交）：
+
+| 事件 | 类别 | 发布在 | 原登记点 | 提交 |
+|---|---|---|---|---|
+| `ProfileLevelUp` | 通知 | Player（profile 组件 `AddExp`） | `OnProfileLevelUp` | 9aaebe7f |
+| `ProfileRenaming` | 拦截 | Player（profile 改名 handler） | naming 在 handler 里的类型断言 | 9aaebe7f |
+| `EnterFirst` | 通知 | Player（`enter_first.go` 的首次初始化之后） | `OnFirstEnter` | c8340c27 |
+| `EnterCreate` | 通知 | Player（enter 组件新建、发放之前） | `OnCreate` | c8340c27 |
+| `WalletSpent` | 通知 | 扣款的宿主（Player 或别的挂 wallet 的实体） | `OnWalletSpent` / 可选的宿主回调 | 09e8feee |
+| `ShopBought`、`StaminaSpent`、`CheckinClaimed`、`DungeonClaimed`、`EquipmentChanged`、`AttributeChanged` | 通知 | Player | 同名 `On<X>` | 09e8feee |
+| `RehomeApplying` | 拦截 | Player（记换服意图的事务） | `OnRehomeApplying` | bcf8ca44 |
+| `RehomeArrived` | 通知 | Player（到达的事务） | `OnRehomeArrived` | bcf8ca44 |
+| `TeamJoining` | 拦截 | Player（建队 / 入队） | `OnTeamJoining` | bcf8ca44 |
+| `TeamChanged` | 通知 | Player | `OnTeamChanged` | bcf8ca44 |
+| `RoomJoining` | 拦截 | Room（入房、占座之前） | room 的 `join_checks.go` | bcf8ca44 |
+| `MatchmakingStarting` | 拦截 | Player（开始排队之前） | `OnMatchmakingStarting` | bcf8ca44 |
+| `SceneRegion`、`SceneInteract` | 通知 | Player | `OnRegion`、`OnSceneInteract` | eaa85d13 |
+
+所有通知和拦截类事件改的都是**发布事件的那个实体自己**（例如 Player 自己的任务、属性、活动），落在实体事件的范围内。监听的优先级按原来“按登记名字母序”的执行顺序换算（例如 ProfileLevelUp：activity 40、attribute 30、mailbox 20、task 10），迁移前后执行顺序不变。
 
 ## 2. 业务层写什么
 
@@ -244,6 +265,8 @@ func init() {
 - 事件在 `game/event` 里定义了，但没有任何监听方法（发布时什么也不做，属于正常情况）。
 
 ### 4.5 doctor
+
+**本节三项检查未实施**（2026-11-16 阶段 5 核对：`codegen/internal/roost` 里没有 `event:` 开头的检查）。静态环提示目前只在 `roost generate` 的输出里。
 
 - `event:publish-error`：`Publish` 的返回值被丢弃时警告，见 §3.3。
 - `event:cycle`：把 §3.3 的静态环提示也放进 doctor 的输出。

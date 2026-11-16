@@ -81,6 +81,10 @@ ERROR。`--lifecycle Player` 生成的 endpoint 对 `context.PlayerID` 调 `play
 dirty、undo、patch 和 sync；字段已私有化，使用 `GetXxx` 读取。
 
 生成项目内的 workbook 会给出可复制的 RenamePlayer 字段、Component 方法、handler 和 Request 示例。
+handler 收生成的窄接口 `view.IProfileEntity`，经 `target.Profile().<方法>()` 调组件，所以 handler 要调的 Component 方法
+同时列进 `game/view/component_profile.go` 的 `view.Profile` 接口（2026-11-16 起）。协议入口在 `game/controllers/player.go`
+（`game/controllers` 是一个包，每个分组一个文件）。要在别的功能做完某件事时跟着改（升级后送奖励、扣款后计数），
+在组件上写 `//roost:listen` 方法监听 `game/event/` 里的实体事件，见 [tag 手册](TAGS.zh-CN.md#实体事件roostlisten)。
 
 ### 3.1 到点要做的事（限时 Buff、建造完成）
 

@@ -8,7 +8,7 @@
 客户端 PB 请求
   → Gate / Game TCP（连接与认证）
   → playeraccess.ProtocolRegistry（协议校验、解码、请求上下文）
-  → equipment.Controller.HandleEquipmentEquip（业务入口）
+  → controllers.Controller.HandleEquipmentEquip（业务入口，`game/controllers/equipment.go`）
   → syncsender.EquipmentEquipSender（生成的 Nest 调用）
   → handlerEquipmentEquip（Entity 保护下的业务和事务）
   → Controller 返回 PB 响应 → 接入层编码、回包
@@ -73,12 +73,12 @@ func (c *Controller) HandleEquipmentEquip(
 ```go
 //roost:nest rollback=undo durability=strict
 func handlerEquipmentEquip(
-    target player.IEquipmentEntity, request *pb.EquipmentEquipRequest,
+    target view.IEquipmentEntity, request *pb.EquipmentEquipRequest,
 ) (*pb.EquipmentEquipResponse, error) {
     if request == nil {
         return nil, apperrors.ErrEquipmentItemInvalid
     }
-    slot, replaced, err := target.EquipmentComp().Equip(request.ItemID, 1)
+    slot, replaced, err := target.Equipment().Equip(request.ItemID, 1)
     if err != nil {
         return nil, err
     }
@@ -86,7 +86,7 @@ func handlerEquipmentEquip(
 }
 ```
 
-`EquipmentComponent.Equip` 负责扣新物品、换槽、退旧物品；attribute 联动负责同事务重算属性。调用方不能再次扣包。业务不手动取 Entity 锁，错误交还 Nest 统一回滚；strict 等待 WAL 持久化，不表示 Mongo 投影已完成。多实体例子见 [AddExp Controller](../../demo/game/controllers/player/add_exp.go.tmpl) 和 [handler](../../demo/game/handler/add_exp.go.tmpl)。
+装备组件的 `Equip`（handler 经生成的窄接口 `view.IEquipmentEntity` 的访问器 `Equipment()` 调用）负责扣新物品、换槽、退旧物品，之后发布实体事件 `event.EquipmentChanged`，attribute 组件监听它、同事务重算属性。调用方不能再次扣包。业务不手动取 Entity 锁，错误交还 Nest 统一回滚；strict 等待 WAL 持久化，不表示 Mongo 投影已完成。多实体例子见 [AddExp Controller](../../demo/game/controllers/player/add_exp.go.tmpl) 和 [handler](../../demo/game/handler/add_exp.go.tmpl)。
 
 ## 5. Agent 能否发送响应
 

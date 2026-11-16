@@ -23,6 +23,7 @@
 6a. 不持久的种类（`noPersist`，或一个 DAO 都没有）没有权威存储，不在内存就是不存在：`ManagerAccess` 不把它交给加载器（`kindHasNoAuthority`，判定与 DataEngine Repository 拒绝加载的条件逐字相同），`Get` / `GetMany` 答 nil、`IsLoaded` 答 true（准入不转 I/O 阶段），业务阶段（`LoadedEntitiesOnly`）也是 nil 而不是 `ErrColdLoadInLogic`。Nest 派发对 nil 目标的处理不变：单目标与多目标的首个目标回复 `EntityNotFoundError()`（满足 `ErrEntityNotFound`，带与第 6 条相同的 `errcode.ErrEntityNotFound` 码），其余位置把 nil 交给 handler；生成的分发包装对 nil 目标同样回复 `EntityNotFoundError()`（不当成 `ErrEntityTypeMismatch`）。持久种类与未登记 builder 的 kind 照旧交给加载器。维护者 2026-11-03 决定（无缝大世界 E1 = B）；回归：`TestManagerAccessAnswersAbsentNonPersistentKindsWithoutTheLoader`（manager_access_test.go）、`TestAbsentNonPersistentTargetIsAnsweredWithoutTheLoader`（cold_target_test.go）、awaitflow 的 `TestGeneratedDispatchAnswersANilTargetAsNotFound`。
 7. 事务只属于绑定它的请求上下文：`withRollbackTx` 把事务记在当前 `fctx.Context` 上并在 `RollbackTx.boundCtx` 记下这个上下文，`CurrentRollbackTx` 只在同一个上下文里返回它。上下文快照（同步 `Request` 携带 KV、共享加载的 goroutine）会把事务指针复制到别的 goroutine，那里一律视为不在事务内——在 `RunDetachedTransaction` 里发起的同步 `Request`，被调 handler 的 setter、`AfterCommit`、嵌套事务不能登记到调用方的事务上（调用方超时后提交或回滚都会丢掉被调方的提交后动作，并发改调用方事务也是数据竞争）。包级 `AfterCommit` 返回 true 只表示回调已交给一个尚未结束的事务：没有当前事务、或当前事务已提交 / 回滚 / abandon 时返回 false，调用方按 `if !nest.AfterCommit(fn) { fn() }` 立即执行（已结束的事务不包含调用方此刻的修改，立即执行与事务外调用一致）；方法 `(*RollbackTx).AfterCommit` 对已结束的事务忽略登记。AfterAdmission 回调里不要给同一事务登记 AfterCommit：strict / async / memory 的 `commit` 先置已提交再执行 AfterAdmission 回调（登记被忽略），pipelined 在置已提交之前执行（登记有效）；现有调用方（`dataengine/engine` 删除收尾）不这样用。回归：`TestAfterCommitRefusesAClosedTransaction`、`TestSyncRequestDoesNotHandTheCallersTransactionToTheCallee`（transaction_test.go）。
 8. 提交条件（`SubjectSyncState.SyncCommitCondition`，锁外的兴趣事实队列据此决定应用还是丢弃）对被拒绝的提交只能给出“未就绪”或“丢弃”：被拒绝的门在 `ready` 里算已放行（不再阻塞后续提交），本提交自己被拒绝却要丢弃事实，所以必须**先判就绪、后判丢弃**——拒绝 / 回滚标记只会由假变真，后读的丢弃判断为假时先读的就绪不可能来自本提交的拒绝。反过来读会在 `Reject` / `RejectEntities` 落下的那一刻把被拒绝的 Remote 移动报成就绪、应用进 AOI。回归：`TestCommitConditionNeverReportsARejectedCommitReady`（subject_sync_test.go）；政策层表现为 `TestPureRemoteRejectDiscardsItsInterestFacts/async` 偶发 `rejected Remote move was applied`。
+9. 实体事件只在发布它的实体上、当前 Guard 持有该实体时同步分发（`guardedByCurrentScope` 与 `EntityGuard.holding` 同一判据），不要求可回滚事务；登记表在第一次 `Publish` 时冻结、之后只读不加锁；事件栈放在 `EntityBase`，只在持锁期间读写，defer 弹栈、不 recover，最外层返回时清空；监听错误包成 `*EventError` 一次，已是 `EventError` / `ErrEventLimit` 的原样外传。改这些要同时改 [guide/02 §3A](../guide/02-nest-entity.md#3a-实体事件) 与生成器的登记顺序（`codegen/internal/entity/event.go`）。回归：`entity_event_test.go`。
 
 ## 2A. 事务实现走读
 
@@ -92,7 +93,7 @@ Guard 作用域（`entity.guardScopes`）与当前派发消息（`nest.currentNe
 
 ### entity
 
-28 个实现文件、16 个测试文件。
+33 个实现文件、19 个测试文件（下表只列定位常用的文件）。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -101,6 +102,7 @@ Guard 作用域（`entity.guardScopes`）与当前派发消息（`nest.currentNe
 | [component_base.go](../../../framework/entity/component_base.go) | `ComponentBase` |
 | [entity.go](../../../framework/entity/entity.go) | `IThreadSafeEntity`、`IThreadSafeEntityBase`、`Getter`、`LoadedChecker`、`AggregateLoader`、`IDirty`、`DaoInterface`、`DatabaseScope`、`DatabaseScopedDao`、`PersistedDaoLoader`、`Guardable`、`EntityCreateParam` |
 | [entity_base.go](../../../framework/entity/entity_base.go) | `EntityBase`、`ComponentInterfaceBase`、`ComponentManager`、`ComponentFactory`、`DaoManager` |
+| [entity_event.go](../../../framework/entity/entity_event.go) | 实体事件（2026-11-16）：`EntityBase.Publish`、`RegisterEventListener`、`SetEventDispatch`、`DispatchEvent`、`SetEventLimits`、`EventError`、`ErrEventNotGuarded` / `ErrEventDispatchMissing` / `ErrEventLimit`；契约见 [guide/02 §3A](../guide/02-nest-entity.md#3a-实体事件) |
 | [entity_factory.go](../../../framework/entity/entity_factory.go) | `EntityBuilderFunc`、`DaoBuilderFunc`、`EntityBuilderParam` |
 | [entity_group.go](../../../framework/entity/entity_group.go) | `EntityGroupTransitionState` |
 | [entity_guard.go](../../../framework/entity/entity_guard.go) | `EntityGuard`、`GuardScope` |
@@ -220,6 +222,7 @@ Guard 作用域（`entity.guardScopes`）与当前派发消息（`nest.currentNe
 
 - [entity_base_test.go](../../../framework/entity/entity_base_test.go)：`TestTouchUnTouch`、`TestUnTouchPanicsOnReferenceUnderflow`、`TestTouchAfterRemoved`、`TestClearCompletesAfterCleanupHookPanic`、`TestConcurrentTouch`；其余 17 项见文件
 - [entity_contract_test.go](../../../framework/entity/entity_contract_test.go)：`TestGuardLocksNewInstanceWithDifferentMutex`、`TestGuardTreatsInstanceSharingTheHeldMutexAsHeld`、`TestGuardLockOrderCheckUsesInstance`、`TestGuardReleaseEntityKeepsSupersededLockAccounted`、`TestGuardUncomparableCustomMutexValueDoesNotPanic`；其余 5 项见文件
+- [entity_event_test.go](../../../framework/entity/entity_event_test.go)：`TestEntityEventPublishRequiresGuard`、`TestEntityEventListenersRunInOrderAndStopAtFirstError`、`TestEntityEventDepthLimit`、`TestEntityEventSameEventReentry`、`TestEntityEventPerRootLimitCountsUnheardEvents`、`TestEntityEventNestedErrorIsNotRewrapped`、`TestEntityEventPanicClearsStack`；其余 4 项见文件。用真实 Nest 事务验证“监听出错整笔回滚”的是模块场景（profile 的升级事件、enter 的首次初始化），不在本包
 - [entity_factory_test.go](../../../framework/entity/entity_factory_test.go)：`TestNewEntity_Create`、`TestEntityManagerCreateUsesInstanceDependencies`、`TestEntityManagerCreateInScopeLocksBeforePublication`、`TestEntityManagerCreateByUniqueIDGetsItsOwnLock`（只给唯一号新建的实体用自己 ID 的锁）、`TestInitEntitySyncInstallsContentState`、`TestBuildEntity_RemoteManagedRequiresRemoteInterface`、`TestBuildEntityBindsTheDAOAggregateForPersistentEntities`、`TestEntityManagerCreateOutsideATransactionGoesThroughTheCreateAdmitter`（持久实体绑定聚合、事务外新建经准入门，[DataEngine 实现篇 §2 第 12 条](03-dataengine.md#2-必须保持的契约)）；其余 3 项见文件
 - [entity_group_test.go](../../../framework/entity/entity_group_test.go)：`TestEntityGroupBaseDefaultsAndMutation`、`TestEntityGroupManagerIndexTracksAddUpdateRemove`、`TestEntityGroupManagerLifecycleEdges`
 - [entity_manager_test.go](../../../framework/entity/entity_manager_test.go)：`TestEntityManager_AddGet`、`TestEntityManager_GetWithCategory`、`TestEntityManager_DuplicatePanics`、`TestEntityManager_Remove`、`TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval`、`TestEntityManagerWithLockedRunsUnderTheEntityLockOnlyForTheManagedInstance`；其余 15 项见文件

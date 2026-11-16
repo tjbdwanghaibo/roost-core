@@ -29,10 +29,11 @@
 | `//roost:dao` | DAO 定义 struct；生成事务化读写、持久与同步代码 | `coll`、`db`、`dbscope`、`schema`；或独立 flag `nocoll` |
 | `//roost:redisdao` | Redis DAO 定义 struct；生成 Redis 访问包装 | 必需 `key`、`prefix`；可选 `mode`、`key_type`、`version`、`ttl`、`name` |
 | `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service` |
-| `//roost:component type=N` | 组件声明；供 ID 空间检查 | `type` 为组件类型号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
+| `//roost:component type=N` | 组件声明；供 ID 空间检查。组件包写法（2026-11-16 起模块统一用它）写在 `game/components/<包>/` 里，实体包的写法（`roost add component`）写在实体包里 | `type` 为组件类型号，按组件分配：同一个组件挂在几种实体上都用同一个号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
+| `//roost:listen` | 实体方法或组件方法；标成实体事件的监听，生成 `<实体>_event_gen.go` 的登记（见[实体事件](#实体事件roostlisten)） | 可选 `priority=<整数>`（-1000～1000，缺省 0，大的先执行） |
 | `//roost:mirror` | 手写只读 DTO；生成读取器 | `entityKind`、`coll`，对应拥有者 kind 与 DAO 集合 |
 | `//roost:endpoint` | 手写 `Controller.Handle<Protocol>` 方法；持续生成同包 dispatch 转交 | 必需 `nest=<Nest handler>`；可选 `target=<实体>`（handler 收的组件挂在多个实体上时指定寻址哪个实体，`roost add endpoint --target`）；协议名由方法名推导 |
-| `//roost:nest` | 业务 handler 函数；生成分发包装、Sender | `target` 或 `targets`、`rollback`、`durability`、`sync` |
+| `//roost:nest` | 业务 handler 函数；生成分发包装、Sender | `target` 或 `targets`（参数是挂在几种实体上的组件窄接口 `view.I<X>Entity` 且这些实体归属不同服务时必须写 `target=<实体>`）、`rollback`、`durability`、`sync` |
 | `//roost:proto` | 协议定义文件；指定 PB 包 | `package`、`go_package` |
 | `//roost:protocol` | 协议接口 | `group`、`handler`；`controller` / `domain` 是 handler 的替代拼写，推荐只写 `handler` |
 | `//roost:msg` | 协议接口方法 | `id`、`name`、`tags`、`handler`（也识别 `controller` / `domain`） |
@@ -163,12 +164,45 @@ type Player struct {
 | `service` | 归属服务：只有这个服务写这个 kind（见下段）。不写时保持原行为，任何带 Nest 的服务都能写 |
 | `preload=startup` | 起服预加载：归属服务起服时加载持久 owner 是本 sid 的这个 kind 的全部实体并登记路由。只能写在 `remote=managed` 且声明了 `service=` 的实体上；不写就按需冷加载 |
 | `snapshots=none` | 不写、不发布 Remote 快照（缺省 `published`）：提交只写 DAO 文档，没有 `_remote_entity_snapshots` 文档、L2 条目与兴趣广播。只能写在 `remote=managed` 上；指向它的 `//roost:mirror` 在生成期被拒，运行期读它的 Mirror / RemoteViewRef 报 `entity.ErrRemoteSnapshotsDisabled`。owner 冷加载、接管、迁移、缩容都读 DAO 集合与所有权记录，不受影响；只给没有任何读方的 kind 用（game-demo 的联盟守卫 `AllianceMember`） |
-| `comp:"CompTypeProfile"` | 组件类型号表达式；可加 `,cold` 声明按需初始化 |
+| `comp:"CompTypeProfile"` / `comp:"bag.CompTypeBag"` | 组件类型号表达式：不带包名是实体包里的组件，带包名是组件包写法（字段类型 `*bag.Component`，类型号与工厂登记在组件包里，见下段）；可加 `,cold` 声明按需初始化 |
 | `dao:"players"` | DAO 装配名称；可加 `,cold` 声明按需初始化，不是 DAO 定义字段的能力选项 |
 
 `service=<name>` 只在实体标记上声明一次（不在 `roost.yaml` 再写一份）。取值必须是 `roost.yaml` 声明的业务服务、带 Nest；`remote=managed` 时还要有 `remote_entity`，否则 `roost generate` 报出实体与服务名。声明之后：锁住这个 kind 的 `//roost:nest` handler 只在归属服务的 Nest 引擎上注册（生成 `Register<File>NestHandlersOn(mgr)`，由 `internal/registry/ownership_gen.go` 的 `NewOwnedNestHandlersMod` 在归属服务的 Provide 里注册），别的服务发过去得到“handler 未注册”；`remote=managed` 的归属 kind 进 `ForeignKinds(service)`，每个装 `remote_entity` 的服务的 RemoteEntityMod 带 `WithForeignKinds(registry.ForeignKinds("<service>")...)`，别的服务的进程认领与写许可前被拒（`entity.ErrRemoteKindNotOwned`）；本地 kind 的 `service=` 只影响 handler 注册；doctor 的 `entity-owner` 检查别的服务构造了它的 Sender 或用了它实体包的 lifecycle（`LifecycleFromRegistry` / `NewLifecycle`，v1.47.0 起由 generate 生成）。一个 handler 锁住两个不同服务的 kind、同一源文件里 handler 归属不一致、方法 handler 或原生步骤 handler 锁住归属 kind、同一实体包里两个实体声明不同服务，都在生成期拒绝。改了 `service=` 先 `roost project sync` 再 `roost generate`（bootstrap 与生成物不一致时 generate 拒绝并给出这条命令）。
 
 归属服务拥有的 `remote=managed` kind 在实体加载后登记 Redis 路由（`registry.RouteKinds("<service>")`），它们之中写了 `preload=startup` 的起服预加载（`registry.PreloadKinds("<service>")`）；两份列表都在 `ownership_gen.go`，与 `ForeignKinds` 同一次扫描（联盟服务方案 §2.7）。路由是方法级策略：标了 `//roost:rpc route` 的方法要求它所在 rpc 的拥有者托管这类 kind，不标 route 的 rpc 不受影响（见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md)）。
+
+### 组件包写法与 view 窄接口（2026-11-16 起）
+
+模块的组件统一写在 `game/components/<包>/`：`//roost:component type=N`、`CompType<X>` 常量和 `entity.RegisterComponentFactory` 都在组件包里，实体结构体直接挂 `bag *bag.Component \`comp:"bag.CompTypeBag"\``，不再在实体包里声明 `type BagComponent = bag.Component` 别名与 `I<X>Entity`。模块清单（`module.yaml`）用 `component_package: game/components/<包>` 告诉安装器按这种写法挂字段；同一个组件挂在几种实体上只用一个类型号（activity 挂在 Player、ActivityWorld、Alliance 上）。
+
+`game/view` 里组件的 `<X>Holder` 接口：方法名等于 `<X>`、返回 view 类型的是访问器，其余是**宿主方法**（组件要求实体提供的东西，如 `BagState() *db.BagState`、`ActivityScope() string`）。`roost generate`：
+
+- 给每个 `<X>Holder` 生成窄接口 `view.I<X>Entity{ entity.IThreadSafeEntity; <X>Holder }`（`game/view/holder_entities_gen.go`），给 Nest handler、endpoint 当参数类型；实体总接口仍是 `view.<E>Entity`。窄接口名与手写的 view 类型重名时生成失败。
+- 宿主方法只是交出实体 DAO 里的一个字段时，在 `<实体>_gen_wire.go` 里写出实现（同类型字段先认同名，结构体再认“组件名 + 字段名”，再按类型找唯一字段；基础类型只认完全同名）；有歧义或找不到时留给手写，写在 `game/entities/<实体>/<模块>.go`。接线末尾生成 `var _ view.<E>Entity = (*E)(nil)`，漏实现在编译期报出，上方注释列出要手写的方法。
+- `<X>Comp()` 仍返回字段的具体类型，只给生成的接线与实体包内部用；handler、组件与联动经 view 访问器 `target.<X>()` 调用。要取回具体组件（带组件包类型、进不了 view 的方法）时用组件包自己的 `Of(holder)`（`activity.Of`、`combat.Of`、`matchmaking.Of`）。
+
+Nest handler 收 `view.<E>Entity` 时归属就是实体 E 的服务；收 `view.I<X>Entity` 时按挂载这个组件的全部实体确定归属：都在同一个服务就用它，不同服务时生成失败，要求写 `//roost:nest target=<实体>`。endpoint 同理：`//roost:endpoint nest=<H> target=<实体>`（`roost add endpoint --target`）；handler 自己的 `target=` 对得上实体时 endpoint 沿用，两处写成不同实体时报错。
+
+### 实体事件：`//roost:listen`
+
+```go
+// game/event/profile.go（profile 模块带来）
+type ProfileLevelUp struct{ From, To int32 }
+
+// game/components/task/task_profile.go（task 与 profile 都装了时由 task/with/profile 带来）
+//roost:listen priority=10
+func (c *Component) OnProfileLevelUp(ev event.ProfileLevelUp) error {
+    return c.Report("profile.level_up", int64(ev.To-ev.From), fctx.NowMilli())
+}
+```
+
+- **能标在哪**：实体类型的方法、实体包里组件的方法、实体挂载的组件包（从 `comp:"<包>.CompTypeX"` 解析出的包）里组件的方法。组件挂在几种实体上，每种实体的 `<实体>_event_gen.go` 各登记一次。
+- **签名**：只有一个参数，类型是 `game/event` 里的结构体（按值），返回 `error`。监听哪个事件由参数类型决定；方法名约定 `On<事件名>`。同一接收者对同一事件只能有一个监听。
+- **`priority=N`**：整数，-1000～1000，缺省 0，大的先执行；同优先级时实体自己的监听先，再按组件初始化顺序（类型号升序），同一接收者按方法名。顺序在生成时排好，生成文件里每条登记旁注 `// priority=N`。
+- **生成期报错**：签名不对、标在普通函数上、接收者既不是实体也不是被挂载的组件、同一接收者对同一事件多个监听、`priority` 不是整数或越界、未知选项；组件包里的组件带监听而有实体按旧写法（实体包别名 + `comp:"CompTypeX"`）挂它（13161a23 起报错，列出这些挂载）。
+- **只提示**：组件有监听但工程里没有实体挂载它；`game/event` 里的事件没有任何监听；`Publish(event.X{...})` 与监听之间构成环（`hint: event cycle …`）。
+- **语义**：同一实体、同一笔事务、同步、立即深度优先；错误必须原样外传；拦截类事件的监听只读；三道运行时上限；memory 与 `rollback=none` 里错误外传但修改不撤销。完整契约见 [Nest 与实体 §3A](../../docs/framework/guide/02-nest-entity.md#3a-实体事件)。
+- **新玩法要联动别的模块时先找现成事件**（`game/event/*.go`），在自己的组件上写监听；不要改发布方的文件，也不要再写一张 `OnXxx` 登记表。
 
 `remote=mirror`、`lifetime=mirror_cache` 不再生成实体。读已有完整 DAO 镜像时用 `//roost:mirror entityKind=... coll=...` DTO；按字段发布视图时用上一节的 `remoteview`。旧 `syncPacker` / `syncTopic` 不应使用，当前对应 `subjectPacker` / `syncNamespace`。
 
@@ -176,15 +210,16 @@ type Player struct {
 
 ```go
 //roost:nest rollback=undo durability=strict
-func handlerRename(player IPlayerEntity, name string) error {
-    // 通过组件调用 DAO setter；进入时目标已加锁。
-    return nil
+func handlerRename(target view.IProfileEntity, name string) error {
+    // 经 view 访问器调组件，组件经 DAO setter 改状态；进入时目标已加锁。
+    _, err := target.Profile().Rename(name)
+    return err
 }
 ```
 
 | 选项 | 缺省 / 合法值 | 意义 |
 | --- | --- | --- |
-| `target` / `targets` | 自动推断；显式可写单个 / 逗号分隔目标 | 声明调度、锁定的实体参数；推断识别类型名含 Entity 的参数及其切片 |
+| `target` / `targets` | 自动推断；显式可写单个 / 逗号分隔目标 | 声明调度、锁定的实体参数；推断识别类型名含 Entity 的参数及其切片。参数是 view 类型时 `target=<实体名>` 还决定 handler 归哪个服务（见上一节） |
 | `rollback` | 默认 `state`；另有 `undo` | 全状态回滚或 setter 逆操作回滚 |
 | `durability` | 默认 `async`；`memory`、`async`、`strict`、`pipelined` | 内存、WAL 准入、严格持久确认、流水线持久确认 |
 | `sync` | 默认不启用 | 生成同步 Sender；不决定数据同步频率 |
