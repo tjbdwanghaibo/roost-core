@@ -1,0 +1,105 @@
+=== RUN   TestReviewGeneratedGateServiceNames
+=== RUN   TestReviewGeneratedGateServiceNames/gate_game
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO player tcp listener started addr=127.0.0.1:45875 max_connections=10000
+    review_gate_names_test.go:158: actual services=gate/game, singleton checks=[gate:11=true game:22=true game:22=true gate:11=true]
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames/edge_game
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO player tcp listener started addr=127.0.0.1:33177 max_connections=10000
+    review_gate_names_test.go:158: actual services=edge/game, singleton checks=[gate:11=false]
+    review_gate_names_test.go:160: accepted service names cannot complete handshake: ACK=<nil> err=EOF
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames/gate_world
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO player tcp listener started addr=127.0.0.1:37215 max_connections=10000
+    review_gate_names_test.go:158: actual services=gate/world, singleton checks=[gate:11=true game:22=false]
+    review_gate_names_test.go:160: accepted service names cannot complete handshake: ACK=<nil> err=EOF
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+--- FAIL: TestReviewGeneratedGateServiceNames (0.20s)
+    --- PASS: TestReviewGeneratedGateServiceNames/gate_game (0.08s)
+    --- FAIL: TestReviewGeneratedGateServiceNames/edge_game (0.09s)
+    --- FAIL: TestReviewGeneratedGateServiceNames/gate_world (0.04s)
+=== RUN   TestReviewGeneratedGateServiceNames
+=== RUN   TestReviewGeneratedGateServiceNames/gate_game
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO player tcp listener started addr=127.0.0.1:46159 max_connections=10000
+    review_gate_names_test.go:158: actual services=gate/game, singleton checks=[gate:11=true game:22=true game:22=true gate:11=true]
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames/edge_game
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO player tcp listener started addr=127.0.0.1:45575 max_connections=10000
+    review_gate_names_test.go:158: actual services=edge/game, singleton checks=[gate:11=false]
+    review_gate_names_test.go:160: accepted service names cannot complete handshake: ACK=<nil> err=EOF
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames/gate_world
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO player tcp listener started addr=127.0.0.1:46869 max_connections=10000
+    review_gate_names_test.go:158: actual services=gate/world, singleton checks=[gate:11=true game:22=false]
+    review_gate_names_test.go:160: accepted service names cannot complete handshake: ACK=<nil> err=EOF
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+--- FAIL: TestReviewGeneratedGateServiceNames (0.31s)
+    --- PASS: TestReviewGeneratedGateServiceNames/gate_game (0.16s)
+    --- FAIL: TestReviewGeneratedGateServiceNames/edge_game (0.08s)
+    --- FAIL: TestReviewGeneratedGateServiceNames/gate_world (0.07s)
+=== RUN   TestReviewGeneratedGateServiceNames
+=== RUN   TestReviewGeneratedGateServiceNames/gate_game
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:52 INFO player tcp listener started addr=127.0.0.1:35731 max_connections=10000
+    review_gate_names_test.go:158: actual services=gate/game, singleton checks=[gate:11=true game:22=true game:22=true gate:11=true]
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+2026/11/16 10:03:52 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:52 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames/edge_game
+2026/11/16 10:03:52 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:53 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:53 INFO player tcp listener started addr=127.0.0.1:35221 max_connections=10000
+    review_gate_names_test.go:158: actual services=edge/game, singleton checks=[gate:11=false]
+    review_gate_names_test.go:160: accepted service names cannot complete handshake: ACK=<nil> err=EOF
+2026/11/16 10:03:53 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:53 INFO nats: connection closed
+2026/11/16 10:03:53 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:53 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames/gate_world
+2026/11/16 10:03:53 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:53 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/16 10:03:53 INFO player tcp listener started addr=127.0.0.1:44603 max_connections=10000
+    review_gate_names_test.go:158: actual services=gate/world, singleton checks=[gate:11=true game:22=false]
+    review_gate_names_test.go:160: accepted service names cannot complete handshake: ACK=<nil> err=EOF
+2026/11/16 10:03:53 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:53 INFO nats: connection closed
+2026/11/16 10:03:53 INFO nats: disconnected err=<nil>
+2026/11/16 10:03:53 INFO nats: connection closed
+--- FAIL: TestReviewGeneratedGateServiceNames (0.24s)
+    --- PASS: TestReviewGeneratedGateServiceNames/gate_game (0.10s)
+    --- FAIL: TestReviewGeneratedGateServiceNames/edge_game (0.09s)
+    --- FAIL: TestReviewGeneratedGateServiceNames/gate_world (0.05s)
+FAIL
+FAIL	example.com/gated/internal/access/player/tcp	0.764s
+FAIL

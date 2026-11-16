@@ -1,0 +1,29 @@
+package app
+
+import (
+	"context"
+	"testing"
+)
+
+// Characterize the real singleton checker used by the gateway. The network
+// probe uses a replacement authority; this independently checks its role-key
+// behavior against app's implementation, using the existing fake Redis store.
+func TestReviewGateSingletonServiceNames(t *testing.T) {
+	for _, tc := range []struct{ service, role string }{{"gate", "gate"}, {"edge", "gate"}, {"game", "game"}, {"world", "game"}} {
+		t.Run(tc.service, func(t *testing.T) {
+			store := newFakeSingletonStore(newFakeClock())
+			key := singletonKey("review", tc.service, 11)
+			store.set(key, "current000000001|host|42|123", 0)
+			checker := singletonLiveness{store: store, prefix: "review"}
+			actual, err := checker.Matches(context.Background(), tc.service, 11, "current000000001")
+			if err != nil || !actual {
+				t.Fatalf("actual held service: %v %v", actual, err)
+			}
+			fixed, err := checker.Matches(context.Background(), tc.role, 11, "current000000001")
+			if err != nil || fixed != (tc.service == tc.role) {
+				t.Fatalf("protocol role lookup: %v %v", fixed, err)
+			}
+			t.Logf("held=%s actual_name_matches=%t protocol_role=%s protocol_role_matches=%t", key, actual, tc.role, fixed)
+		})
+	}
+}

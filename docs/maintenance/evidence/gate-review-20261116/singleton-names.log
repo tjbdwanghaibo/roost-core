@@ -1,0 +1,44 @@
+=== RUN   TestReviewGateSingletonServiceNames
+=== RUN   TestReviewGateSingletonServiceNames/gate
+    review_gate_names_test.go:26: held=review:gate:11 actual_name_matches=true protocol_role=gate protocol_role_matches=true
+=== RUN   TestReviewGateSingletonServiceNames/edge
+    review_gate_names_test.go:26: held=review:edge:11 actual_name_matches=true protocol_role=gate protocol_role_matches=false
+=== RUN   TestReviewGateSingletonServiceNames/game
+    review_gate_names_test.go:26: held=review:game:11 actual_name_matches=true protocol_role=game protocol_role_matches=true
+=== RUN   TestReviewGateSingletonServiceNames/world
+    review_gate_names_test.go:26: held=review:world:11 actual_name_matches=true protocol_role=game protocol_role_matches=false
+--- PASS: TestReviewGateSingletonServiceNames (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/gate (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/edge (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/game (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/world (0.00s)
+=== RUN   TestReviewGateSingletonServiceNames
+=== RUN   TestReviewGateSingletonServiceNames/gate
+    review_gate_names_test.go:26: held=review:gate:11 actual_name_matches=true protocol_role=gate protocol_role_matches=true
+=== RUN   TestReviewGateSingletonServiceNames/edge
+    review_gate_names_test.go:26: held=review:edge:11 actual_name_matches=true protocol_role=gate protocol_role_matches=false
+=== RUN   TestReviewGateSingletonServiceNames/game
+    review_gate_names_test.go:26: held=review:game:11 actual_name_matches=true protocol_role=game protocol_role_matches=true
+=== RUN   TestReviewGateSingletonServiceNames/world
+    review_gate_names_test.go:26: held=review:world:11 actual_name_matches=true protocol_role=game protocol_role_matches=false
+--- PASS: TestReviewGateSingletonServiceNames (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/gate (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/edge (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/game (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/world (0.00s)
+=== RUN   TestReviewGateSingletonServiceNames
+=== RUN   TestReviewGateSingletonServiceNames/gate
+    review_gate_names_test.go:26: held=review:gate:11 actual_name_matches=true protocol_role=gate protocol_role_matches=true
+=== RUN   TestReviewGateSingletonServiceNames/edge
+    review_gate_names_test.go:26: held=review:edge:11 actual_name_matches=true protocol_role=gate protocol_role_matches=false
+=== RUN   TestReviewGateSingletonServiceNames/game
+    review_gate_names_test.go:26: held=review:game:11 actual_name_matches=true protocol_role=game protocol_role_matches=true
+=== RUN   TestReviewGateSingletonServiceNames/world
+    review_gate_names_test.go:26: held=review:world:11 actual_name_matches=true protocol_role=game protocol_role_matches=false
+--- PASS: TestReviewGateSingletonServiceNames (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/gate (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/edge (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/game (0.00s)
+    --- PASS: TestReviewGateSingletonServiceNames/world (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/app	1.027s

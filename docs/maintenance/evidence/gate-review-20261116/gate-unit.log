@@ -1,0 +1,54 @@
+=== RUN   TestAddGateTurnsEmbeddedTCPIntoAStandaloneGate
+=== PAUSE TestAddGateTurnsEmbeddedTCPIntoAStandaloneGate
+=== RUN   TestAddGateRefusesWithoutAccount
+=== PAUSE TestAddGateRefusesWithoutAccount
+=== RUN   TestPlayerGateManifestRules
+=== RUN   TestPlayerGateManifestRules/unknown_service
+=== RUN   TestPlayerGateManifestRules/gate_is_the_player_service
+=== RUN   TestPlayerGateManifestRules/gate_hosts_a_framework_service
+=== RUN   TestPlayerGateManifestRules/no_tcp
+=== RUN   TestPlayerGateManifestRules/gate_without_etcd
+=== RUN   TestPlayerGateManifestRules/gate_runs_nest
+=== RUN   TestPlayerGateManifestRules/gate_without_account
+=== RUN   TestPlayerGateManifestRules/player_without_etcd
+=== RUN   TestPlayerGateManifestRules/no_account_hosted
+--- PASS: TestPlayerGateManifestRules (0.00s)
+    --- PASS: TestPlayerGateManifestRules/unknown_service (0.00s)
+    --- PASS: TestPlayerGateManifestRules/gate_is_the_player_service (0.00s)
+    --- PASS: TestPlayerGateManifestRules/gate_hosts_a_framework_service (0.00s)
+    --- PASS: TestPlayerGateManifestRules/no_tcp (0.00s)
+    --- PASS: TestPlayerGateManifestRules/gate_without_etcd (0.00s)
+    --- PASS: TestPlayerGateManifestRules/gate_runs_nest (0.00s)
+    --- PASS: TestPlayerGateManifestRules/gate_without_account (0.00s)
+    --- PASS: TestPlayerGateManifestRules/player_without_etcd (0.00s)
+    --- PASS: TestPlayerGateManifestRules/no_account_hosted (0.00s)
+=== RUN   TestDoctorPlayerGateChecks
+=== RUN   TestDoctorPlayerGateChecks/gate:ingress/does_not_run_game_behind_Game_Ingress
+=== RUN   TestDoctorPlayerGateChecks/gate:player-tcp/player_access.tcp.enabled_is_true
+=== RUN   TestDoctorPlayerGateChecks/gate:namespace/gate_has_"other.access",_game_has_"gt.access"
+=== RUN   TestDoctorPlayerGateChecks/gate:namespace/game_has_"roost.access"
+=== RUN   TestDoctorPlayerGateChecks/gate:etcd-singleton/game:_singleton.enabled:_true
+=== RUN   TestDoctorPlayerGateChecks/gate:etcd-singleton/gate:_etcd.endpoints
+=== RUN   TestDoctorPlayerGateChecks/gate:etcd-singleton/the_same_etcd.service_prefix
+=== RUN   TestDoctorPlayerGateChecks/gate:client-address/login.presence.addr_127.0.0.1:7999
+=== RUN   TestDoctorPlayerGateChecks/gate:client-address/player_access.gate.advertise_addr_127.0.0.1:7998
+=== RUN   TestDoctorPlayerGateChecks/gate:client-address/portal.servers.1000_127.0.0.1:7001
+=== RUN   TestDoctorPlayerGateChecks/gate:client-address/advertise_addr_is_empty
+--- PASS: TestDoctorPlayerGateChecks (0.04s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:ingress/does_not_run_game_behind_Game_Ingress (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:player-tcp/player_access.tcp.enabled_is_true (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:namespace/gate_has_"other.access",_game_has_"gt.access" (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:namespace/game_has_"roost.access" (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:etcd-singleton/game:_singleton.enabled:_true (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:etcd-singleton/gate:_etcd.endpoints (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:etcd-singleton/the_same_etcd.service_prefix (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:client-address/login.presence.addr_127.0.0.1:7999 (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:client-address/player_access.gate.advertise_addr_127.0.0.1:7998 (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:client-address/portal.servers.1000_127.0.0.1:7001 (0.00s)
+    --- PASS: TestDoctorPlayerGateChecks/gate:client-address/advertise_addr_is_empty (0.00s)
+=== CONT  TestAddGateTurnsEmbeddedTCPIntoAStandaloneGate
+=== CONT  TestAddGateRefusesWithoutAccount
+--- PASS: TestAddGateRefusesWithoutAccount (1.61s)
+--- PASS: TestAddGateTurnsEmbeddedTCPIntoAStandaloneGate (6.06s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	7.124s

@@ -1,0 +1,171 @@
+package tcp
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/service/account"
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+type reviewAccounts struct{ account.Accounts }
+
+func (reviewAccounts) ValidateSession(context.Context, int64, string) (account.Role, error) {
+	return account.Role{PlayerID: 123, ServerID: 22, ServingServerID: 22}, nil
+}
+
+// Same role-key lookup contract as app.singletonLiveness.Matches: an App holds
+// <prefix>:<actual service name>:<sid>, not a transport role alias.
+type reviewIdentities struct {
+	mu      sync.Mutex
+	held    map[string]gateway.ProcessIdentity
+	queries []string
+}
+
+func (a *reviewIdentities) Matches(_ context.Context, role string, sid int32, token string) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	got := gateway.ProcessIdentity{ServerID: sid, Incarnation: token}
+	ok := a.held[role] == got
+	a.queries = append(a.queries, fmt.Sprintf("%s:%d=%t", role, sid, ok))
+	return ok, nil
+}
+
+type reviewDiscovery struct {
+	etcd.IDiscovery
+	mu    sync.Mutex
+	infos map[string]*etcd.ServiceInfo
+}
+
+func (d *reviewDiscovery) Register(_ context.Context, info *etcd.ServiceInfo) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.infos[info.ServiceType] = info
+	return nil
+}
+func (d *reviewDiscovery) Discover(_ context.Context, role string) ([]*etcd.ServiceInfo, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if v := d.infos[role]; v != nil {
+		return []*etcd.ServiceInfo{v}, nil
+	}
+	return nil, nil
+}
+func (*reviewDiscovery) Deregister(context.Context) error { return nil }
+
+func TestReviewGeneratedGateServiceNames(t *testing.T) {
+	url := os.Getenv("REVIEW_NATS_URL")
+	if url == "" {
+		t.Fatal("REVIEW_NATS_URL is required; no silent skip")
+	}
+	for _, names := range []struct{ gate, game string }{{"gate", "game"}, {"edge", "game"}, {"gate", "world"}} {
+		t.Run(names.gate+"_"+names.game, func(t *testing.T) {
+			gid := gateway.ProcessIdentity{ServerID: 11, Incarnation: "gate000000000001"}
+			gameID := gateway.ProcessIdentity{ServerID: 22, Incarnation: "game000000000001"}
+			authority := &reviewIdentities{held: map[string]gateway.ProcessIdentity{names.gate: gid, names.game: gameID}}
+			discovery := &reviewDiscovery{infos: map[string]*etcd.ServiceInfo{}}
+			namespace := fmt.Sprintf("review.gate.n%d", time.Now().UnixNano())
+			registry := func(service string, id gateway.ProcessIdentity) *app.Registry {
+				raw, err := driver.NewClient(fnats.DefaultConfig(url), driver.ClientOptions{ReconnectBufferBytes: -1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(raw.Close)
+				r := app.NewRegistry(viper.New())
+				if err = r.RegisterBatch(
+					app.Capability{Name: app.ModSingletonIncarnation, Value: app.SingletonIncarnation{Key: "review:" + service + fmt.Sprintf(":%d", id.ServerID), Sid: id.ServerID, Token: id.Incarnation}},
+					app.Capability{Name: app.ModSingletonIdentityChecker, Value: app.SingletonIdentityChecker(authority)},
+					app.Capability{Name: mods.ModNatsRaw, Value: fnats.RawClient(raw)},
+					app.Capability{Name: mods.ModEtcdDiscov, Value: etcd.IDiscovery(discovery)},
+					app.Capability{Name: account.CapabilityName, Value: account.Accounts(reviewAccounts{})},
+				); err != nil {
+					t.Fatal(err)
+				}
+				return r
+			}
+			gameRegistry := registry(names.game, gameID)
+			options := gatewiring.DefaultOptions()
+			options.Config.Namespace = namespace
+			options.RegisterDiscovery = true
+			options.Ready = func() bool { return true }
+			game := gatewiring.NewGameIngressMod(func(_ context.Context, _ gateway.Session, id, seq uint32, _ wire.PayloadKind, payload []byte) (any, error) {
+				return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: payload}, nil
+			}, nil, options)
+			if err := game.Init(viper.New()); err != nil {
+				t.Fatal(err)
+			}
+			if err := game.Provide(gameRegistry); err != nil {
+				t.Fatal(err)
+			}
+			if err := game.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := game.StopWithContext(ctx); err != nil {
+					t.Error(err)
+				}
+			})
+			gateRegistry := registry(names.gate, gid)
+			config := viper.New()
+			config.Set("player_access.gate.namespace", namespace)
+			config.Set("player_access.gate.addr", "127.0.0.1:0")
+			config.Set("player_access.gate.advertise_addr", "127.0.0.1:7000")
+			gate := NewGateMod() // actual generated Gate wrapper, not a test replacement
+			if err := gate.Init(config); err != nil {
+				t.Fatal(err)
+			}
+			if err := gate.Provide(gateRegistry); err != nil {
+				t.Fatal(err)
+			}
+			if err := gate.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := gate.StopWithContext(ctx); err != nil {
+					t.Error(err)
+				}
+			})
+			conn, err := net.DialTimeout("tcp", gate.Addr(), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+			if err = wire.Write(conn, []*wire.Packet{{MsgID: 0, Seq: 1, Payload: []byte("session:123:verified")}}, 8192); err != nil {
+				t.Fatal(err)
+			}
+			ack, err := wire.Read(conn, 8192)
+			authority.mu.Lock()
+			queries := append([]string(nil), authority.queries...)
+			authority.mu.Unlock()
+			t.Logf("actual services=%s/%s, singleton checks=%v", names.gate, names.game, queries)
+			if err != nil || ack.MsgID != 0 || ack.Seq != 1 {
+				t.Fatalf("accepted service names cannot complete handshake: ACK=%v err=%v", ack, err)
+			}
+			if err = wire.Write(conn, []*wire.Packet{{MsgID: 101, Seq: 2, Payload: []byte("echo")}}, 8192); err != nil {
+				t.Fatal(err)
+			}
+			reply, err := wire.Read(conn, 8192)
+			if err != nil || string(reply.Payload) != "echo" {
+				t.Fatalf("forward: %+v %v", reply, err)
+			}
+		})
+	}
+}
