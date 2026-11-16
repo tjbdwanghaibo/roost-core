@@ -1,0 +1,8 @@
+# ./gameplay/cellworldhost
+stat /workspace/review-v147/gameplay/cellworldhost: directory not found
+FAIL	./gameplay/cellworldhost [setup failed]
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	119.243s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	5.380s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	4.182s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/remoteentity	1.284s
+FAIL

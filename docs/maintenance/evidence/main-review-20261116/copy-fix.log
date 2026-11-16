@@ -1,0 +1,14 @@
+=== RUN   TestCopyHandedOffEntityLostCommitReplyListsWhatMayHaveBeenWritten
+2026/11/16 03:23:33 INFO dataengine: copied a handed-off entity to another server's database entity=1011569 from=3 to=4 documents=1 overwrite=true
+2026/11/16 03:23:33 INFO dataengine: dropped a copy of a handed-off entity entity=1011569 sid=4 documents=1 dropped=1
+--- PASS: TestCopyHandedOffEntityLostCommitReplyListsWhatMayHaveBeenWritten (0.00s)
+=== RUN   TestCopyHandedOffEntityLostCommitReplyListsWhatMayHaveBeenWritten
+2026/11/16 03:23:33 INFO dataengine: copied a handed-off entity to another server's database entity=1011569 from=3 to=4 documents=1 overwrite=true
+2026/11/16 03:23:33 INFO dataengine: dropped a copy of a handed-off entity entity=1011569 sid=4 documents=1 dropped=1
+--- PASS: TestCopyHandedOffEntityLostCommitReplyListsWhatMayHaveBeenWritten (0.00s)
+=== RUN   TestCopyHandedOffEntityLostCommitReplyListsWhatMayHaveBeenWritten
+2026/11/16 03:23:33 INFO dataengine: copied a handed-off entity to another server's database entity=1011569 from=3 to=4 documents=1 overwrite=true
+2026/11/16 03:23:33 INFO dataengine: dropped a copy of a handed-off entity entity=1011569 sid=4 documents=1 dropped=1
+--- PASS: TestCopyHandedOffEntityLostCommitReplyListsWhatMayHaveBeenWritten (0.01s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.042s

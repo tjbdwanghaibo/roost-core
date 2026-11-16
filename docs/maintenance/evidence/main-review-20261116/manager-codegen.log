@@ -1,0 +1,16 @@
+=== RUN   TestValidateRejectsManagerModInSharedMods
+--- PASS: TestValidateRejectsManagerModInSharedMods (0.00s)
+=== RUN   TestDefaultManifestIncludesManagerModAndValidates
+--- PASS: TestDefaultManifestIncludesManagerModAndValidates (0.00s)
+=== RUN   TestBootstrapWiresManagerModPerService
+--- PASS: TestBootstrapWiresManagerModPerService (0.00s)
+=== RUN   TestServiceManagersHookMatchesServicePackageClause
+--- PASS: TestServiceManagersHookMatchesServicePackageClause (0.00s)
+=== RUN   TestGameServiceManagersLiveInGameManagers
+--- PASS: TestGameServiceManagersLiveInGameManagers (0.05s)
+=== RUN   TestModuleManagersAreAppendedToTheManagerList
+--- PASS: TestModuleManagersAreAppendedToTheManagerList (0.00s)
+=== RUN   TestServiceManagersAreQualifiedAndImported
+--- PASS: TestServiceManagersAreQualifiedAndImported (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1.073s

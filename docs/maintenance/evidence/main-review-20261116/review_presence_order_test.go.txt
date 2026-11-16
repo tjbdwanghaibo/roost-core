@@ -1,0 +1,142 @@
+package room
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	roomlogic "example.com/mainaudit/game/modules/room"
+	"example.com/mainaudit/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// Hold only the successful reply: the real Nest handler and commit have finished.
+// This models a descheduled endpoint goroutine, without changing room logic.
+type reviewDelayedReply struct {
+	nest.Client
+	name    string
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (c *reviewDelayedReply) Request(ctx context.Context, name nest.HandlerName, id int64, params nest.Params, opts ...nest.SendOpt) (any, error) {
+	result, err := c.Client.Request(ctx, name, id, params, opts...)
+	if name.String() == c.name && err == nil {
+		close(c.reached)
+		<-c.release
+	}
+	return result, err
+}
+
+func TestReviewRoomPresencePostCommitOrder(t *testing.T) {
+	for _, operation := range []string{"join_then_reconnect", "leave_then_rejoin"} {
+		for _, delayed := range []bool{false, true} {
+			label := operation + "/ordered_control"
+			if delayed {
+				label = operation + "/delayed_reply"
+			}
+			t.Run(label, func(t *testing.T) {
+				f := newRoomEndpointFixture(t)
+				conns := &roomConns{active: map[roomConnKey]bool{}}
+				presence, err := roomlogic.NewPresence(f.controller.NestClient(), conns, time.Hour)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = f.registry.Register(roomlogic.PresenceCapability, presence); err != nil {
+					t.Fatal(err)
+				}
+				presence.Start()
+				t.Cleanup(func() { _ = presence.Close(context.Background()) })
+				const roomID int64 = 81901
+				if err = roomlogic.Open(context.Background(), f.registry, roomID, 3); err != nil {
+					t.Fatal(err)
+				}
+				conns.open(101, "old")
+				conns.open(102, "viewer")
+				for _, who := range []struct {
+					id   int64
+					conn string
+				}{{101, "old"}, {102, "viewer"}} {
+					r, e := f.controller.HandleRoomJoin(roomContext(who.id, who.conn), &pb.RoomJoinRequest{RoomID: roomID})
+					if e != nil || r.Code != 0 {
+						t.Fatalf("join: %+v %v", r, e)
+					}
+				}
+				name := "handlerRoomJoin"
+				if operation == "leave_then_rejoin" {
+					name = "handlerRoomLeave"
+				}
+				gate := &reviewDelayedReply{Client: f.controller.NestClient(), name: name, reached: make(chan struct{}), release: make(chan struct{})}
+				older := &Controller{registry: f.registry, nestClient: gate}
+				done := make(chan error, 1)
+				go func() {
+					if operation == "leave_then_rejoin" {
+						r, e := older.HandleRoomLeave(roomContext(101, "old"), &pb.RoomLeaveRequest{RoomID: roomID, Epoch: 1})
+						if e == nil && r.Code != 0 {
+							e = nest.ErrInvalidMessage
+						}
+						done <- e
+					} else {
+						r, e := older.HandleRoomJoin(roomContext(101, "old"), &pb.RoomJoinRequest{RoomID: roomID})
+						if e == nil && r.Code != 0 {
+							e = nest.ErrInvalidMessage
+						}
+						done <- e
+					}
+				}()
+				select {
+				case <-gate.reached:
+				case <-time.After(2 * time.Second):
+					t.Fatal("old operation did not commit")
+				}
+				if !delayed {
+					close(gate.release)
+					if e := <-done; e != nil {
+						t.Fatal(e)
+					}
+				}
+				conns.open(101, "new")
+				if operation == "leave_then_rejoin" {
+					r, e := f.controller.HandleRoomJoin(roomContext(101, "new"), &pb.RoomJoinRequest{RoomID: roomID})
+					if e != nil || r.Code != 0 {
+						t.Fatalf("rejoin: %+v %v", r, e)
+					}
+				} else {
+					r, e := f.controller.HandleRoomReconnect(roomContext(101, "new"), &pb.RoomReconnectRequest{RoomID: roomID, Epoch: 1})
+					if e != nil || r.Code != 0 {
+						t.Fatalf("reconnect: %+v %v", r, e)
+					}
+				}
+				if delayed {
+					close(gate.release)
+					if e := <-done; e != nil {
+						t.Fatal(e)
+					}
+				}
+				conns.close(101, "old")
+				conns.close(101, "new")
+				deadline := time.Now().Add(500 * time.Millisecond)
+				for {
+					presence.Sweep()
+					r, e := f.controller.HandleRoomView(roomContext(102, "viewer"), &pb.RoomViewRequest{RoomID: roomID})
+					if e != nil || r.Code != 0 {
+						t.Fatalf("view: %+v %v", r, e)
+					}
+					online := false
+					for _, s := range r.Info.Seats {
+						if s.PlayerID == 101 {
+							online = s.Connected
+						}
+					}
+					if !online {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("both player connections closed, but seat stays Connected=true after Sweep; tracked=%d (viewer only)", presence.Tracked())
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			})
+		}
+	}
+}

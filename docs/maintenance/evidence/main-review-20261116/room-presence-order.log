@@ -1,0 +1,93 @@
+=== RUN   TestReviewRoomPresencePostCommitOrder
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/16 03:23:10 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=101
+    review_presence_order_test.go:135: both player connections closed, but seat stays Connected=true after Sweep; tracked=1 (viewer only)
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: leave completed player_id=101 room_id=81901
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/16 03:23:10 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:10 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/16 03:23:10 INFO room: leave completed player_id=101 room_id=81901
+    review_presence_order_test.go:135: both player connections closed, but seat stays Connected=true after Sweep; tracked=1 (viewer only)
+--- FAIL: TestReviewRoomPresencePostCommitOrder (1.07s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control (0.01s)
+    --- FAIL: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply (0.51s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control (0.02s)
+    --- FAIL: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply (0.52s)
+=== RUN   TestReviewRoomPresencePostCommitOrder
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/16 03:23:11 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=101
+    review_presence_order_test.go:135: both player connections closed, but seat stays Connected=true after Sweep; tracked=1 (viewer only)
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: leave completed player_id=101 room_id=81901
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/16 03:23:11 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:11 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/16 03:23:11 INFO room: leave completed player_id=101 room_id=81901
+    review_presence_order_test.go:135: both player connections closed, but seat stays Connected=true after Sweep; tracked=1 (viewer only)
+--- FAIL: TestReviewRoomPresencePostCommitOrder (1.11s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control (0.03s)
+    --- FAIL: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply (0.53s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control (0.02s)
+    --- FAIL: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply (0.53s)
+=== RUN   TestReviewRoomPresencePostCommitOrder
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control
+2026/11/16 03:23:12 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:12 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:12 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:12 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/16 03:23:12 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply
+2026/11/16 03:23:12 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:12 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:12 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/16 03:23:12 INFO room: join completed player_id=101 room_id=81901 host_id=101
+    review_presence_order_test.go:135: both player connections closed, but seat stays Connected=true after Sweep; tracked=1 (viewer only)
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control
+2026/11/16 03:23:12 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:12 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:12 INFO room: leave completed player_id=101 room_id=81901
+2026/11/16 03:23:13 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/16 03:23:13 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply
+2026/11/16 03:23:13 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/16 03:23:13 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/16 03:23:13 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/16 03:23:13 INFO room: leave completed player_id=101 room_id=81901
+    review_presence_order_test.go:135: both player connections closed, but seat stays Connected=true after Sweep; tracked=1 (viewer only)
+--- FAIL: TestReviewRoomPresencePostCommitOrder (1.07s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control (0.02s)
+    --- FAIL: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply (0.52s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control (0.02s)
+    --- FAIL: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply (0.51s)
+FAIL
+FAIL	example.com/mainaudit/game/controllers/room	3.264s
+FAIL

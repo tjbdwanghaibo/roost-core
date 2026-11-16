@@ -1,0 +1,102 @@
+{
+  "modules": [
+    {
+      "name": "activity",
+      "want": 21,
+      "passed": 21,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity_alliance",
+      "want": 7,
+      "passed": 7,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity_world",
+      "want": 6,
+      "passed": 6,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "alliance",
+      "want": 55,
+      "passed": 55,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "alliance+rehome",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "bag",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "cellworld",
+      "want": 9,
+      "passed": 9,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login",
+      "want": 37,
+      "passed": 37,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 50,
+      "passed": 50,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "room",
+      "want": 29,
+      "passed": 25,
+      "skipped": 0,
+      "ok": false,
+      "detail": "=== RUN   TestRoomStoredStateRetainsConnectionFence\n--- PASS: TestRoomStoredStateRetainsConnectionFence (0.01s)\n=== RUN   TestRoomGenerationExhaustionRejectsWithoutWrapping\n--- PASS: TestRoomGenerationExhaustionRejectsWithoutWrapping (0.00s)\n=== RUN   TestRoomRejectedCloseRestoresAllSeatsAndHost\n--- PASS: TestRoomRejectedCloseRestoresAllSeatsAndHost (0.01s)\n=== RUN   TestRoomOnlineStateIsNotCarriedAcrossAReload\n--- PASS: TestRoomOnlineStateIsNotCarriedAcrossAReload (0.01s)\n=== RUN   TestRoomRejectedCommitsRestoreOnlineState\n--- PASS: TestRoomRejectedCommitsRestoreOnlineState (0.01s)\nPASS\nok  \texample.com/mainaudit/game/handler\t1.172s\nFAIL\texample.com/mainaudit/game/controllers/room [build failed]\n=== RUN   TestRoomPresenceDisconnectsEveryRoomOfAClosedConnection\n--- PASS: TestRoomPresenceDisconnectsEveryRoomOfAClosedConnection (0.10s)\n=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp\n2026/11/16 03:27:37 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err=\"room store unavailable\"\n--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)\n=== RUN   TestRoomPresenceStopsWithClose\n--- PASS: TestRoomPresenceStopsWithClose (0.05s)\nPASS\nok  \texample.com/mainaudit/game/modules/room\t1.268s\n=== RUN   TestRoomPresenceRunsUnderTheManager\n2026/11/16 03:27:36 INFO manager start name=room.presence\n2026/11/16 03:27:36 INFO manager started name=room.presence elapsed=127.56µs\n2026/11/16 03:27:36 INFO manager stop name=room.presence\n--- PASS: TestRoomPresenceRunsUnderTheManager (0.00s)\nPASS\nok  \texample.com/mainaudit/game/managers\t1.017s\nFAIL"
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": false,
+      "detail": "# example.com/mainaudit/game/controllers/room\n# [example.com/mainaudit/game/controllers/room]\nvet: game/controllers/room/review_presence_cancel_test.go:23:67: undefined: dataengine.TransactionCommitter\nexit status 1"
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": false
+}

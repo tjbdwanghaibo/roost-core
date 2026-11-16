@@ -1,0 +1,39 @@
+=== RUN   TestReviewRoomPresenceCanceledWait
+=== RUN   TestReviewRoomPresenceCanceledWait/successful_wait_control
+2026/11/16 03:28:16 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/16 03:28:16 INFO room: join completed player_id=101 room_id=81902 host_id=102
+2026/11/16 03:28:16 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+=== RUN   TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds
+2026/11/16 03:28:16 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/16 03:28:16 ERROR room join failed room_id=81902 player_id=101 err="nest: sync canceled\ncontext canceled"
+    review_presence_cancel_test.go:148: Join committed after canceled wait, but no Presence registration: closed connection stays online; tracked=1
+--- FAIL: TestReviewRoomPresenceCanceledWait (0.53s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/successful_wait_control (0.01s)
+    --- FAIL: TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds (0.51s)
+=== RUN   TestReviewRoomPresenceCanceledWait
+=== RUN   TestReviewRoomPresenceCanceledWait/successful_wait_control
+2026/11/16 03:28:16 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/16 03:28:16 INFO room: join completed player_id=101 room_id=81902 host_id=102
+2026/11/16 03:28:16 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+=== RUN   TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds
+2026/11/16 03:28:16 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/16 03:28:16 ERROR room join failed room_id=81902 player_id=101 err="nest: sync canceled\ncontext canceled"
+    review_presence_cancel_test.go:148: Join committed after canceled wait, but no Presence registration: closed connection stays online; tracked=1
+--- FAIL: TestReviewRoomPresenceCanceledWait (0.52s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/successful_wait_control (0.01s)
+    --- FAIL: TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds (0.51s)
+=== RUN   TestReviewRoomPresenceCanceledWait
+=== RUN   TestReviewRoomPresenceCanceledWait/successful_wait_control
+2026/11/16 03:28:17 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/16 03:28:17 INFO room: join completed player_id=101 room_id=81902 host_id=102
+2026/11/16 03:28:17 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+=== RUN   TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds
+2026/11/16 03:28:17 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/16 03:28:17 ERROR room join failed room_id=81902 player_id=101 err="nest: sync canceled\ncontext canceled"
+    review_presence_cancel_test.go:148: Join committed after canceled wait, but no Presence registration: closed connection stays online; tracked=1
+--- FAIL: TestReviewRoomPresenceCanceledWait (0.52s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/successful_wait_control (0.01s)
+    --- FAIL: TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds (0.51s)
+FAIL
+FAIL	example.com/mainaudit/game/controllers/room	1.593s
+FAIL

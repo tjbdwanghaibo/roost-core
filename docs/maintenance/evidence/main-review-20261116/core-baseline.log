@@ -1,0 +1,7 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nestwal	4.419s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	7.882s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	6.665s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	33.105s
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.128s
+ok  	github.com/tjbdwanghaibo/roost-core/service/chat	1.787s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/manager	1.054s

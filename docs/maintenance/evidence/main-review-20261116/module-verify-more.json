@@ -1,0 +1,100 @@
+{
+  "modules": [
+    {
+      "name": "activity",
+      "want": 21,
+      "passed": 21,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity_alliance",
+      "want": 7,
+      "passed": 7,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity_world",
+      "want": 6,
+      "passed": 6,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "alliance",
+      "want": 55,
+      "passed": 55,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "alliance+rehome",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "bag",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "cellworld",
+      "want": 9,
+      "passed": 9,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login",
+      "want": 37,
+      "passed": 37,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal",
+      "want": 12,
+      "passed": 12,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 50,
+      "passed": 50,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "room",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}

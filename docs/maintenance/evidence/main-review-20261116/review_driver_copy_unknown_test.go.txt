@@ -1,0 +1,64 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+)
+
+// This adapter models the documented Mongo transaction result: all target
+// documents committed, but the commit reply was lost. No real Mongo is started.
+type reviewUnknownCopy struct {
+	delegate      Documents
+	unknown       bool
+	targetPresent bool
+	copies, drops int
+}
+
+func (d *reviewUnknownCopy) Copy(ctx context.Context, id int64, to int32, overwrite bool) (Copied, error) {
+	d.copies++
+	copied, err := d.delegate.Copy(ctx, id, to, overwrite)
+	if err != nil {
+		return copied, err
+	}
+	d.targetPresent = true
+	if d.unknown && d.copies == 1 {
+		return Copied{}, errors.Join(fmongo.ErrCommitResultUnknown, context.DeadlineExceeded)
+	}
+	return copied, nil
+}
+func (d *reviewUnknownCopy) Drop(ctx context.Context, copied Copied, sid int32) error {
+	d.drops++
+	if err := d.delegate.Drop(ctx, copied, sid); err != nil {
+		return err
+	}
+	if sid == rehomeTarget {
+		d.targetPresent = false
+	}
+	return nil
+}
+func TestReviewCopyCommittedButReplyLost(t *testing.T) {
+	for _, unknown := range []bool{false, true} {
+		name := "control"
+		if unknown {
+			name = "lost_commit_reply"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newRehomeFixture(t)
+			documents := &reviewUnknownCopy{delegate: f.documents, unknown: unknown}
+			f.driver.documents = documents
+			if _, err := f.apply(); err != nil {
+				t.Fatal(err)
+			}
+			f.runBackground()
+			sid := f.directory.binding.ServingServerID
+			_, tracked := f.residency.Where(rehomePlayer)
+			t.Logf("owner=%d source_tracked=%t target_copy=%t copy_calls=%d drop_calls=%d", sid, tracked, documents.targetPresent, documents.copies, documents.drops)
+			if sid == rehomeSelf && !tracked && documents.targetPresent {
+				t.Fatal("aborted and released the source without reconciling the possibly committed target copy")
+			}
+		})
+	}
+}
