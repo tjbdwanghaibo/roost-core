@@ -5,7 +5,7 @@
 每名玩家每个业务日可以签到一次，奖励是金币，连续签到的天数越多奖励越高。“业务日”指按部署配置的业务时区与每日重置时刻划分的一天（框架的 `clock.BusinessDay`，缺省 UTC 零点）。
 
 - **客户端协议**
-  - `CheckinClaim`（`protocol/def/checkin_claim.go`）：领今天的签到奖励。请求没有字段；应答带 `Streak`（连续天数）、`Reward`（本次金币）、`Balance`（发放后的余额）。端点是 `game/controllers/checkin/checkin_claim.go` 的 `HandleCheckinClaim`，目标玩家取自认证会话。
+  - `CheckinClaim`（`protocol/def/checkin_claim.go`）：领今天的签到奖励。请求没有字段；应答带 `Streak`（连续天数）、`Reward`（本次金币）、`Balance`（发放后的余额）。端点是 `game/controllers/checkin.go` 的 `HandleCheckinClaim`，目标玩家取自认证会话。
   - 没有“查询签到进度”的协议：进度随同步下发给本人（见“状态”）。
 - **服务端入口**
   - `CheckinComp().Claim(nowUnixMilli int64) (CheckinResult, error)`（`game/components/checkin/checkin.go`）：要求调用方已持有这名 `Player` 的锁。`CheckinResult` 带 `Streak`、`Reward`、`Balance`。
@@ -24,7 +24,7 @@
 - **错误码**（`internal/errors/checkin.go`）
   - `checkin_done`：这个业务日已经签过。
 
-**日志**：签到确认，记录连续天数、奖励和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/checkin/checkin_claim.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：签到确认，记录连续天数、奖励和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/checkin.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 

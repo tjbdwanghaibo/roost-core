@@ -5,9 +5,9 @@
 玩家输入一个兑换码，服务端核对后给他发一封带金币附件的邮件。码分两种：`player`（每名玩家可兑一次）与 `once`（全服只有第一个人能兑）。
 
 - **客户端协议**
-  - `CdkeyRedeem`（`protocol/def/cdkey_redeem.go`）：请求带 `Cdkey`（码），成功应答带 `MailID`（发出的邮件号）。玩家再用 `mailbox` 模块的列表与领取入口领附件；奖励不直接进钱包。端点是 `game/controllers/cdkey/controller.go` 的 `HandleCdkeyRedeem`。
+  - `CdkeyRedeem`（`protocol/def/cdkey_redeem.go`）：请求带 `Cdkey`（码），成功应答带 `MailID`（发出的邮件号）。玩家再用 `mailbox` 模块的列表与领取入口领附件；奖励不直接进钱包。端点是 `game/controllers/cdkey.go` 的 `HandleCdkeyRedeem`。
 - **服务端入口**
-  - `Controller.Redeem(ctx, playerID int64, code string) (gamecdkey.Intent, error)`（`game/controllers/cdkey/controller.go`）：客户端与可信服务端共用的协调入口，`playerID` 是原始玩家号。只能在实体事务之外调用（它要做跨进程调用）。经 `cdkey.FromRegistry(registry)` 取得 `Controller`。
+  - `Controller.Redeem(ctx, playerID int64, code string) (gamecdkey.Intent, error)`（`game/controllers/cdkey.go`）：客户端与可信服务端共用的协调入口，`playerID` 是原始玩家号。只能在实体事务之外调用（它要做跨进程调用）。经生成的 `controllers.FromRegistry(registry)` 取得 `Controller`。
   - Nest handler `handlerCdkeyPrepare`、`handlerCdkeyComplete`（`game/handler/cdkey.go`，都是 `durability=strict`）：只操作玩家账本，不发 RPC。一般不直接调用，由 `Redeem` 驱动。
   - 组件方法 `CdkeyComp().Prepare(raw string, nowUnixMilli int64)`、`CdkeyComp().Complete(code, mailID string)`（`game/components/cdkey/cdkey.go`），窄接口 `ICdkeyEntity`。
   - `game/modules/cdkey/cdkey.go`：`Normalize(code)`（去两侧空白、转大写、校验字符）、`Intent`（一次兑换的冻结内容）及其方法 `ClaimKey(playerID)`（directory 占用键）、`RequestID(playerID)`（发件幂等键）。
@@ -23,7 +23,7 @@
   - `cdkey_full`：玩家的兑换记录已满 128 条。
   - `cdkey_taken`：全服码已被别人占用。
 
-**日志**：受理、发件、完成确认；未知结果与基础设施异常记 Warn/Error。只记录兑换码长度，不记录兑换码及其派生请求键。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/cdkey/controller.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：受理、发件、完成确认；未知结果与基础设施异常记 Warn/Error。只记录兑换码长度，不记录兑换码及其派生请求键。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/cdkey.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -49,7 +49,7 @@
   - 加渠道、等级等兑换条件：在 `game/components/cdkey/cdkey.go` 的 `Prepare` 里、写入账本之前加检查。
   - 不要改 `ClaimKey` 与 `RequestID` 的格式：它们是已发行码的永久身份，改了会让旧码被当成新请求。
 - **别的模块 / 业务代码要用它**
-  - 代玩家兑换（GM、活动）：`controller, _ := cdkey.FromRegistry(registry)`，然后 `controller.Redeem(ctx, playerID, code)`；必须在实体事务之外调用。
+  - 代玩家兑换（GM、活动）：`controller, _ := controllers.FromRegistry(registry)`，然后 `controller.Redeem(ctx, playerID, code)`；必须在实体事务之外调用。
   - 查玩家兑过哪些码：在持有 `Player` 锁的 handler 里读 `owner.Dao().GetCdkey()`。
 - **只适合借鉴的情形**：需要海量一次性随机码（每个码一条记录）时，不适合放进配置表与 128 条的玩家账本，要另做码库；值得借鉴的是“先在玩家档里持久记下意图并冻结奖励，再做外部占用与发件，最后记回执；所有外部步骤用永不变化的键”这套顺序。
 
@@ -59,7 +59,7 @@
 
 ## 验证范围
 
-- `roost module verify cdkey`：12 个场景（`./game/controllers/cdkey`，`^TestCdkey`）。
+- `roost module verify cdkey`：12 个场景（`./game/controllers`，`^TestCdkey`）。
 - 场景是离线的：正式生成的 PB、controller、Sender 与 Nest；directory 与 mail 用框架的真实业务实现加内存存储；提交器是替身（可注入拒绝）。
 - 覆盖：每人一次的码给每名玩家各发一封、全服一次的码跨 controller 只有一人成功、已完成的重放零写入且不发 RPC、受理被拒时不留占用与邮件、directory 应答丢失后仍是同一个占用者、发件应答丢失后按冻结奖励恢复、确认被拒后重放同一封邮件、非法码与恰好到期零写入、账本满额不淘汰回执、并发重放只产生一封邮件，以及一条变异检查（把全服键错误地加上玩家号时跨玩家场景会失败）。
 - 没有验证：真实的 NATS、Redis、Mongo、WAL、TCP 链路与跨进程重启。用例内通过重建 `Player` 并恢复持久数据来模拟重启，不等同真实数据库重启。

@@ -1,0 +1,16 @@
+package controllers
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:endpoint nest=ActorMove
+func (controller *Controller) HandleActorMove(ctx *playeraccess.Context, req *pb.ActorMoveRequest) (*pb.ActorMoveResponse, error) {
+	return controller.dispatchActorMove(ctx, req)
+}
+
+//roost:endpoint nest=ActorStop
+func (controller *Controller) HandleActorStop(ctx *playeraccess.Context, req *pb.ActorStopRequest) (*pb.ActorStopResponse, error) {
+	return controller.dispatchActorStop(ctx, req)
+}

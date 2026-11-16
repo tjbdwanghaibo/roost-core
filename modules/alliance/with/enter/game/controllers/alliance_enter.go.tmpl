@@ -1,0 +1,17 @@
+package controllers
+
+import (
+	"context"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	gamelogin "{{MODULE}}/game/modules/login"
+)
+
+func init() { gamelogin.OnEntered("alliance", allianceRefreshOnEnter) }
+func allianceRefreshOnEnter(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		return err
+	}
+	return controller.RefreshMembership(ctx, entered.PlayerID)
+}

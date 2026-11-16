@@ -7,6 +7,6 @@ needs:
   uses: [rank]
 protocols: [LeaderboardTop, LeaderboardMe]
 verify:
-  packages: [./game/modules/leaderboard, ./game/controllers/leaderboard]
+  packages: [./game/modules/leaderboard, ./game/controllers]
   run: ^TestLeaderboard
   pass: 21

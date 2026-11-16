@@ -53,7 +53,7 @@ type EquipmentEquipProtocol interface {
 
 ## 3. Controller：把协议转换成业务调用
 
-equipment 模块的 [Controller](../../modules/equipment/files/game/controllers/equipment/equipment_equip.go.tmpl) 只声明正式端点：
+equipment 模块的 [Controller](../../modules/equipment/files/game/controllers/equipment.go.tmpl) 只声明正式端点：
 
 ```go
 //roost:endpoint nest=EquipmentEquip

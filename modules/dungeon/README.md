@@ -11,7 +11,7 @@
 
 两条协议的玩家身份都取自已认证的会话。**没有让客户端提交战斗事件或胜利的协议。**
 
-### 服务端入口（`game/controllers/dungeon/controller.go`，经 `FromRegistry(registry)` 取得 `Controller`）
+### 服务端入口（`game/controllers/dungeon.go`，经生成的 `controllers.FromRegistry(registry)` 取得 `Controller`）
 
 ```go
 run, err := controller.Open(ctx, uniqueID, playerID, season)            // 开一局；同 ID、同所有者、同赛季的重试只读
@@ -46,7 +46,7 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
 
 `dungeon_invalid`（参数无效或同 ID 内容冲突）、`dungeon_owner`（不是这局的所有者）、`dungeon_unfinished`（还没成功通关）、`dungeon_window`（领奖窗口已关闭）、`dungeon_full`（领奖账本或赛季计数到上限）。事件串局、旧序号、内容冲突由 `gameplay/level` 自己的错误拒绝；经验溢出透出 profile 的码。
 
-**日志**：开局、领奖确认记 Info；可信战斗事件返回终局记 Debug（接口没有玩家号）；记录局、实例 / 代数、经验、赛季。端点内部错误补 Error。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/dungeon/controller.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：开局、领奖确认记 Info；可信战斗事件返回终局记 Debug（接口没有玩家号）；记录局、实例 / 代数、经验、赛季。端点内部错误补 Error。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/dungeon.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -75,14 +75,14 @@ result, err := controller.Claim(ctx, uniqueID, playerID)                 // 领�
   - 加一种敌人：只改 `game/modules/dungeon/rules.go`——在关卡定义里加一条用 `enemyIs("新名字")` 的触发器（它被击败时做什么），`Defeated` 就接受这个名字；`run.go` 不用动。改了定义同样要考虑已有存档。
   - 首次通关要顺带推进任务、成就：登记 `dungeon.OnDungeonClaimed`，不要改 `game/components/dungeon/dungeon.go` 的判断顺序。
   - 奖励想发别的东西：在 `DungeonComponent.Claim` 里把 `ProfileComp().AddExp` 换成同一实体上别的组件的入口，保持“先检查、后写、账本同事务”。
-- **别的业务代码要开局 / 上报战斗结果：** `dungeon.FromRegistry(registry)` 取 `Controller`，调 `Open` 与 `Defeated`；每次都要检查错误。读某赛季通关数用 `DungeonCountsSender` 的 `Sync_DungeonCounts(ctx, playerEntityID, season)`。
+- **别的业务代码要开局 / 上报战斗结果：** `controllers.FromRegistry(registry)` 取 `Controller`，调 `Open` 与 `Defeated`；每次都要检查错误。读某赛季通关数用 `DungeonCountsSender` 的 `Sync_DungeonCounts(ctx, playerEntityID, season)`。
 - **只适合借鉴的情形：** 多人副本、实时战斗在副本进程内结算、客户端权威的单机关卡都不适合直接用。值得借鉴的是“关卡结果是持久事实，领奖事务只读它，不信请求里的结果”与“有界账本 + 过了窗口再宽限才清理”。
 
 ## 联动
 
 本模块的 `with/`：
 
-- `with/leaderboard`（`game/controllers/dungeon/dungeon_leaderboard.go`）：领奖提交之后，把这名玩家该赛季的通关数用 `leaderboard.SubmitSeason` 投影到排行榜（只升不降）。失败返回 `BoardPending`；同一次领取可以重试，窗口之外用 `controller.RefreshLeaderboard(ctx, playerID, season)` 从 Player 的持久计数恢复。排行榜用的是 leaderboard 缺省的那张榜，工程同时给它接别的积分来源时要自己统一规则。
+- `with/leaderboard`（`game/controllers/dungeon.go`）：领奖提交之后，把这名玩家该赛季的通关数用 `leaderboard.SubmitSeason` 投影到排行榜（只升不降）。失败返回 `BoardPending`；同一次领取可以重试，窗口之外用 `controller.RefreshLeaderboard(ctx, playerID, season)` 从 Player 的持久计数恢复。排行榜用的是 leaderboard 缺省的那张榜，工程同时给它接别的积分来源时要自己统一规则。
 
 别的模块的 `with/dungeon`：
 

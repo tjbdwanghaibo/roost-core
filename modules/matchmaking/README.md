@@ -43,7 +43,7 @@
 - `matchmaking_unknown`：票已经绑定，但 match 服务里查不到它或它的成局记录，需要人工核对。
 - 整队排队还会原样带回 team 模块的码（没有队伍、不是队长）。
 
-**日志**：持久意图受理及阶段变化确认，记录玩家、请求键、阶段、MatchID / RoomID；unknown 记 Warn，内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/matchmaking/controller.go`, `game/modules/matchmaking/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：持久意图受理及阶段变化确认，记录玩家、请求键、阶段、MatchID / RoomID；unknown 记 Warn，内部错误补 player_id。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/matchmaking.go`, `game/modules/matchmaking/runtime.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -80,7 +80,7 @@
 
 ## 验证范围
 
-- `roost module verify matchmaking`：17 条场景（`game/handler` 13 条、`game/modules/matchmaking` 2 条、`game/controllers/matchmaking` 2 条）；与 `rehome` 的联动另有 2 条。
+- `roost module verify matchmaking`：17 条场景（`game/handler` 13 条、`game/modules/matchmaking` 2 条、`game/controllers/matchmaking.go` 2 条）；与 `rehome` 的联动另有 2 条。
 - 场景是离线的：真实的 Nest 引擎与 match 的 `MemoryStore`，Remote / WAL 提交是替身，开房用测试夹具里的单间房；没有经过真实的 Redis、Mongo、NATS 与 TCP。
 - 覆盖：单排与两队成局、取消与 Commit 的两种先后、掉线后补查并重连、重复结果、Enqueue 回包丢失、未绑定意图到期、历史到期不解除屏障、队伍冻结与整组回滚、旧序号、活房不能清、端点可在模块启动前注册、两个只读 handler 的事务声明是 memory 快路径（核对生成的注册代码）。
 - turn-pvp 配方另有一条经 TCP / Robot 的“排队到回合”链路，房号映射用 mongotest；真实依赖的联合验收没有做。

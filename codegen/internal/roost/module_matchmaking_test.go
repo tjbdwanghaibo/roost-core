@@ -25,5 +25,5 @@ func TestModuleMatchmakingGenerated(t *testing.T) {
 		t.Fatal("repeat install changed project")
 	}
 
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestMatchmaking|^TestMatchroom|^TestTeam|^TestWithMatchmakingRehome", "./game/handler", "./game/modules/matchmaking", "./game/controllers/matchmaking")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestMatchmaking|^TestMatchroom|^TestTeam|^TestWithMatchmakingRehome", "./game/handler", "./game/modules/matchmaking", "./game/controllers")
 }

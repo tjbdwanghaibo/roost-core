@@ -18,6 +18,6 @@ component: Friends
 protocols: [FriendsChange, FriendsList]
 errcodes: [friends_invalid, friends_full, friends_blocked, friends_application_missing]
 verify:
-  packages: [./game/handler, ./game/controllers/friends]
+  packages: [./game/handler, ./game/controllers]
   run: ^TestFriends
   pass: 18

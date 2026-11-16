@@ -17,7 +17,7 @@
 
 - 组件 `IdleComp()`（`game/components/idle/idle.go`）：`Claim(sequence, nowUnixMilli int64) (IdleResult, error)`，只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest。`IdleResult{Reward, Balance, SettledAt, Sequence, Capped}`。
 - 结算函数 `idleAccrue(last, now, rules)`（同文件）：不逐秒循环，按整周期数一次算出。
-- Nest handler `handlerIdleClaim`（`game/handler/idle_claim.go`，`rollback=undo durability=strict`），`nowUnixMilli` 由 Nest 填这条消息冻结的业务时间；端点 `HandleIdleClaim`（`game/controllers/idle/idle_claim.go`）直接分发到它。
+- Nest handler `handlerIdleClaim`（`game/handler/idle_claim.go`，`rollback=undo durability=strict`），`nowUnixMilli` 由 Nest 填这条消息冻结的业务时间；端点 `HandleIdleClaim`（`game/controllers/idle.go`）直接分发到它。
 
 ### 登记点
 
@@ -36,7 +36,7 @@
 
 `idle_sequence`（序号不是下一个：更旧、跳号、非正数，或序号已耗尽）、`idle_clock_back`（业务时钟早于上次结算时刻）、`idle_rules`（规则或业务时间不合法）。金币余额溢出原样透出 wallet 的码。
 
-**日志**：领取确认，记录序号、奖励、余额和封顶；时钟回拨拒绝记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/idle/idle_claim.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：领取确认，记录序号、奖励、余额和封顶；时钟回拨拒绝记 Warn。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/idle.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 

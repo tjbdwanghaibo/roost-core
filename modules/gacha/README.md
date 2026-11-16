@@ -18,7 +18,7 @@
   - `Draw(key string, poolID, count int64) (GachaResult, error)`：扣金币的单抽 / 十连，`GachaDraw` 协议用的就是它。
   - `DrawFree(key string, poolID int64) (GachaResult, error)`：**不扣费的单抽**。掉落、保底、背包检查、回执与 `Draw` 是同一段代码、同一个请求键窗口，只是不调货币组件：`Cost` 为 0，`Balance` 是当时的余额，不触发 wallet 的消费钩子；池的 `Price` 对它不起作用。没有对应的客户端协议：免费的次数规则（每日一次、活动送几次）属于工程，由工程自己的 handler 调它（见“复用方式”）。
   - `GachaResult{Cost, Balance, Items, Misses, Replayed}`。`Replayed` 为真表示这是窗口内同一个请求键的重放：结果取自原回执，这一次什么都没写。
-- Nest handler `handlerGachaDraw`（`game/handler/gacha_draw.go`，`rollback=undo durability=strict`）；端点 `HandleGachaDraw`（`game/controllers/gacha/gacha_draw.go`）直接分发到它。
+- Nest handler `handlerGachaDraw`（`game/handler/gacha_draw.go`，`rollback=undo durability=strict`）；端点 `HandleGachaDraw`（`game/controllers/gacha.go`）直接分发到它。
 - 规则函数在 `game/components/gacha/rules.go`：`gachaRules(poolID)` 在一条请求里读一次配置快照并校验，`gachaPick(drops, roll)` 把一个均匀整数映射到权重区间。
 
 ### 登记点
@@ -40,7 +40,7 @@
 
 `gacha_key_invalid`、`gacha_key_conflict`（同一个键换了池或次数）、`gacha_count_invalid`（次数不是 1 或 10）、`gacha_pool_invalid`（池不存在、已关闭或配置不合法）、`gacha_overflow`（价格乘次数溢出，或回执序号耗尽）、`gacha_pool_limit`（这名玩家记着保底的池已到上限）。金币不足、背包放不下原样透出 wallet 与 bag 的码。
 
-**日志**：抽卡确认，记录请求键、池、次数、花费、结果和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/gacha/gacha_draw.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：抽卡确认，记录请求键、池、次数、花费、结果和余额。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/gacha.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -89,7 +89,7 @@
     }
     ```
 
-    请求键用这次免费抽自己的身份（例如“wheel:” 加业务日），客户端重试带同一个键。只许免费、不许付费抽的池：`GachaDraw` 仍能按 `price` 付费抽它，工程要在 `game/controllers/gacha/gacha_draw.go` 的端点里拒绝这个池号（或不给客户端这个池号）。
+    请求键用这次免费抽自己的身份（例如“wheel:” 加业务日），客户端重试带同一个键。只许免费、不许付费抽的池：`GachaDraw` 仍能按 `price` 付费抽它，工程要在 `game/controllers/gacha.go` 的端点里拒绝这个池号（或不给客户端这个池号）。
 - **别的业务代码要替玩家抽卡**（活动送十连）：在自己的 Nest handler 里（目标实体实现 `player.IGachaEntity`）调 `target.GachaComp().Draw(key, poolID, count)`，照常扣金币；送免费的单抽调 `DrawFree(key, poolID)`（免费十连调十次、用十个键）。请求键用这件事自己的身份。成功日志由调用方在提交返回后写，`DrawFree` 没有端点替它记。
 - **只适合借鉴的情形：** 奖励不是堆叠道具（英雄实例、带随机属性的装备）、需要监管要求的概率公示与可审计随机、付费直购抽卡时不适合直接用。值得借鉴的是“回执固定成功结果、失败不留结果”与“保守的容量预检查”。
 

@@ -5,7 +5,7 @@
 给 `Player` 提供一个“身体”（`actor.Body`）：它记录玩家在哪个空间的什么坐标、朝向哪里，能沿路径走、能跟随另一个实体、能被定身或沉默。它不知道地图长什么样：所在的空间（场景或房间）由上层代码以 `actor.Environment` 传进来。`monster` 模块的怪物复用同一个 `Body`。
 
 - **客户端协议**（`protocol/def/`）
-  - `ActorMove`（`actor_move.go`）：请求带目标坐标 `X`、`Y`，应答 `{Code, Reason, X, Y}` 带当前坐标。端点 `HandleActorMove`（`game/controllers/actor/actor_move.go`）。客户端只能指定目标，速度是服务端固定值 60（写在 `game/handler/actor_move.go`）。被拒时 `Code` 是下面“错误码”里的业务码，连接保留。
+  - `ActorMove`（`actor_move.go`）：请求带目标坐标 `X`、`Y`，应答 `{Code, Reason, X, Y}` 带当前坐标。端点 `HandleActorMove`（`game/controllers/actor.go`）。客户端只能指定目标，速度是服务端固定值 60（写在 `game/handler/actor_move.go`）。被拒时 `Code` 是下面“错误码”里的业务码，连接保留。
   - `ActorStop`（`actor_stop.go`）：停止移动，应答带当前坐标。端点 `HandleActorStop`。
   - 没有“进入空间”的协议：把玩家放进某个空间是上层（`scene` 模块或工程自己的房间代码）的事。
 - **服务端入口**

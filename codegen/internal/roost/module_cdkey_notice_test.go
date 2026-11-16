@@ -21,12 +21,12 @@ func TestModuleCdkeyNoticeInstallAndVerify(t *testing.T) {
 			t.Fatalf("missing module %s", name)
 		}
 	}
-	for _, path := range []string{"game/controllers/cdkey/controller.go", "game/handler/syncsender", "configs/data/cdkey.json", "game/modules/notice/notice.go", "internal/service/game/modules_gen.go"} {
+	for _, path := range []string{"game/controllers/cdkey.go", "game/handler/syncsender", "configs/data/cdkey.json", "game/modules/notice/notice.go", "internal/service/game/modules_gen.go"} {
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			t.Fatalf("missing generated integration %s: %v", path, err)
 		}
 	}
-	controller, err := os.ReadFile(filepath.Join(root, "game/controllers/cdkey/controller.go"))
+	controller, err := os.ReadFile(filepath.Join(root, "game/controllers/cdkey.go"))
 	if err != nil || !strings.Contains(string(controller), "example.com/studio/redemption/game/modules/mailbox") {
 		t.Fatalf("custom module not rendered: %v", err)
 	}

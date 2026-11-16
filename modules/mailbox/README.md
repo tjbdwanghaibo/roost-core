@@ -16,10 +16,10 @@
 - **发件** `mailbox.SendTo(ctx, mailer, Letter)`（`game/modules/mailbox/mailbox_send.go`）：给一名玩家发一封邮件，返回 mail 服务产生的信封。`Letter{To, Subject, Body, Attachment, ExpiresInSeconds, RequestID}`；`RequestID` 是幂等键，必填；`ExpiresInSeconds` 为 0 用 `DefaultExpiresInSeconds`（7 天）。`mailer` 是 mail 服务的客户端（`app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)`）。
 - **附件**（`game/modules/mailbox/mailbox.go`）：`Attachment{Type, ID, Amount}`，线上格式是 JSON，例如 `{"type":"coins","amount":100}`。`Coins(amount)` 构造金币附件；`Encode` / `Decode` / `Validate` 是发件、列表、领取共用的同一个判断。
 - **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo durability=strict`，不对客户端开放）调组件 `MailboxComp().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（`game/components/mailbox/mailbox.go`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
-- **端点** `HandleMailboxList` / `HandleMailboxClaim` 在 `game/controllers/mailbox`。
+- **端点** `HandleMailboxList` / `HandleMailboxClaim` 在 `game/controllers/mailbox.go`。
 - **运行时** `mailbox.Start(registry)`（`game/modules/mailbox/mailbox_runtime.go`，清单 `runtime.start`）：启动联动登记的消费者；只装 mailbox 时没有消费者。
 
-### 领取的三步（`game/controllers/mailbox/mailbox_claim.go`）
+### 领取的三步（`game/controllers/mailbox.go`）
 
 | 步 | 调用 | 做什么 |
 | --- | --- | --- |
@@ -50,7 +50,7 @@
 
 邮件不存在、已过期、已领取、正被占用由 mail 服务答它自己的码；余额溢出、背包放不下原样透出 wallet、bag 的码。
 
-**日志**：附件领取与 SendTo 发件确认；profile 联动记录升级区间、邮件号和 effect_id。发件只记收件人和确认邮件号，不把重放请求里的附件当成首次发件事实，也不记录可能承载兑换凭据的 RequestID。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/mailbox/mailbox_claim.go`, `game/modules/mailbox/mailbox_send.go`, `game/modules/mailbox/mailbox_profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：附件领取与 SendTo 发件确认；profile 联动记录升级区间、邮件号和 effect_id。发件只记收件人和确认邮件号，不把重放请求里的附件当成首次发件事实，也不记录可能承载兑换凭据的 RequestID。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/mailbox.go`, `game/modules/mailbox/mailbox_send.go`, `game/modules/mailbox/mailbox_profile.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -67,7 +67,7 @@
 - **账本有界但没有独立的清扫：** 每次首次发放时顺手清掉“邮件过期后再过 600 秒”的记录。已过期且不在账本里的邮件一律拒绝首次发放（按发放执行时 Nest 冻结的业务时间判断）。game 进程之间业务时钟差超过 600 秒时，已遗忘的邮件可能被晚到的重放再发一次。
 - **列表不取实体锁：** 满背包时道具邮件仍显示可领。
 - **新旧进程混跑：** 旧进程把新种类当未知附件拒绝并归还预留，玩家可能看到同一封邮件时而可领、时而不可领。
-- **前提：** 依赖 wallet；需要 nest 与 dataengine 两个 Mod，业务服务 `uses: [mail]`。取不到 mail 的客户端时 `FromRegistry` 返回错误。领取跨两个进程（game 与 mail）。
+- **前提：** 依赖 wallet；需要 nest 与 dataengine 两个 Mod，业务服务 `uses: [mail]`。取不到 mail 的客户端时端点按内部错误回答（`controllers.FromRegistry` 由生成器写，启动时不检查 mail）。领取跨两个进程（game 与 mail）。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“mailbox 的边界”、“进入钩子不是事务的一部分”（全服邮件的画像规则）、“模块的规则大多还是 Go 写的业务文件”。
 
 ## 复用方式
@@ -105,9 +105,9 @@
 
 ## 验证范围
 
-`roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/modules/mailbox` 10 条、`game/controllers/mailbox` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
+`roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/modules/mailbox` 10 条、`game/controllers/mailbox.go` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
 
-场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。Nest 调用因等结果超时返回错误而事务其实已提交的那条路径有端点场景（`TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce`：这一次答错误码并归还预留，重试在账本上认出这封邮件、不发第二笔、补上确认）。真实依赖另有一档（不在 `roost module verify` 里）：`game/controllers/mailbox/mailbox_real_integration_test.go`（显式 `-tags integration`，`ROOST_MAILBOX_IT_NATS_URL` / `ROOST_MAILBOX_IT_REDIS_ADDR` 必填），端点经 `wiring/mail.ClientMod` 的 BusClient 在真实 NATS 上调 `wiring/mail.Mod`（Redis 存储）挂出的 mail 服务，core 与 jetstream 两种 RPC 传输各一遍：正常领取；预留的答复超时（服务方已预留）后重试，租约内答“领取在途”、租约到期后领到；确认的答复超时（服务方已确认）照常答成功、再领答已领取；mail 服务停机时领取失败、按同一个 Redis 键前缀重启后领到；jetstream 下服务实例执行预留后连接断开，broker 把请求重投给另一个实例。每一步核对附件恰好到账一次。由 `scripts/test-demo-generated.sh` 在生成的 game-demo 里运行。Nest 仍是替身提交器，Redis Cluster、跨机与容量没有跑。
+场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。Nest 调用因等结果超时返回错误而事务其实已提交的那条路径有端点场景（`TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce`：这一次答错误码并归还预留，重试在账本上认出这封邮件、不发第二笔、补上确认）。真实依赖另有一档（不在 `roost module verify` 里）：`game/controllers/mailbox_integration_test.go`（显式 `-tags integration`，`ROOST_MAILBOX_IT_NATS_URL` / `ROOST_MAILBOX_IT_REDIS_ADDR` 必填），端点经 `wiring/mail.ClientMod` 的 BusClient 在真实 NATS 上调 `wiring/mail.Mod`（Redis 存储）挂出的 mail 服务，core 与 jetstream 两种 RPC 传输各一遍：正常领取；预留的答复超时（服务方已预留）后重试，租约内答“领取在途”、租约到期后领到；确认的答复超时（服务方已确认）照常答成功、再领答已领取；mail 服务停机时领取失败、按同一个 Redis 键前缀重启后领到；jetstream 下服务实例执行预留后连接断开，broker 把请求重投给另一个实例。每一步核对附件恰好到账一次。由 `scripts/test-demo-generated.sh` 在生成的 game-demo 里运行。Nest 仍是替身提交器，Redis Cluster、跨机与容量没有跑。
 
 ## 与 profile 的升级奖励联动
 

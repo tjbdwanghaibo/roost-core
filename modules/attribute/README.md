@@ -5,7 +5,7 @@
 给 `Player` 提供一组战斗属性（组件在共用包 `game/components/attribute`，宿主接口 `attribute.Owner`，同一个组件也能挂到别的实体上，见“复用方式”）：生命 `HP`、攻击 `Attack` 与由公式推导的战力 `Power`。属性分三层：基础层（随等级成长，落库）、装备层（由别的模块提供来源，加载时重算）、最终层（基础加装备，再推导 `Power`）。
 
 - **客户端协议**
-  - `AttributeGet`（`protocol/def/attribute_get.go`）：读自己的最终属性。请求没有字段；应答带 `HP`、`Attack`、`Power`。端点是 `game/controllers/attribute/attribute_get.go` 的 `HandleAttributeGet`，目标玩家取自认证会话。
+  - `AttributeGet`（`protocol/def/attribute_get.go`）：读自己的最终属性。请求没有字段；应答带 `HP`、`Attack`、`Power`。端点是 `game/controllers/attribute.go` 的 `HandleAttributeGet`，目标玩家取自认证会话。
   - 属性变化也随同步下发（见“状态”）。
 - **服务端入口**（逻辑在 `game/components/attribute/attribute.go`，Player 的接线在 `game/entities/player/attribute_component.go`；都要求调用方已持有这名 `Player` 的锁）
   - `AttributeComp().Final() (*gameattr.Combat, bool)`：最终属性的副本；最终层为空时第二个返回值为 `false`。副本可以在释放锁之后继续用于计算。

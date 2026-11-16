@@ -17,13 +17,13 @@ state:
 protocols: [DungeonView, DungeonClaim]
 errcodes: [dungeon_invalid, dungeon_owner, dungeon_unfinished, dungeon_window, dungeon_full]
 verify:
-  packages: [./game/controllers/dungeon]
+  packages: [./game/controllers]
   run: ^TestDungeon
   pass: 21
 with:
   leaderboard:
     summary: 副本通关数在领奖提交后按赛季UpdateMax投影，失败回报BoardPending，重复领取或RefreshLeaderboard恢复
     verify:
-      packages: [./game/controllers/dungeon]
+      packages: [./game/controllers]
       run: ^TestWithDungeonLeaderboard
       pass: 3

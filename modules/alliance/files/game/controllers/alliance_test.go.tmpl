@@ -1,0 +1,613 @@
+package controllers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	alliance "{{MODULE}}/game/entities/alliance"
+	allianceentity "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	player "{{MODULE}}/game/entities/player"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/alliancerule"
+	apperrors "{{MODULE}}/internal/errors"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+)
+
+// allianceStub is the alliance service as the game endpoints see it: the
+// generated client's interface. Methods a test does not set panic (the nil
+// embedded interface), so an endpoint that calls something unexpected fails.
+type allianceStub struct {
+	rpcalliance.Alliance
+	join            func(requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error)
+	leave           func(requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error)
+	membership      func(target int64) (rpcalliance.GuardReply, error)
+	joinCalls       int
+	membershipCalls int
+	// manage answers Apply and the four leader calls; managed records each one.
+	manage  func(call allianceManagedCall) (rpcalliance.Reply, error)
+	managed []allianceManagedCall
+}
+
+// allianceManagedCall is one Apply / Approve / Reject / Kick / Transfer as the
+// service received it. subject is 0 for Apply.
+type allianceManagedCall struct {
+	method    string
+	requestID string
+	callerID  int64
+	callerSID int32
+	target    int64
+	subject   int64
+}
+
+func (s *allianceStub) managedBy(call allianceManagedCall) (rpcalliance.Reply, error) {
+	s.managed = append(s.managed, call)
+	return s.manage(call)
+}
+
+func (s *allianceStub) Apply(_ context.Context, requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error) {
+	return s.managedBy(allianceManagedCall{"Apply", requestID, callerID, callerSID, target, 0})
+}
+
+func (s *allianceStub) Approve(_ context.Context, requestID string, callerID int64, callerSID int32, target int64, applicantID int64) (rpcalliance.Reply, error) {
+	return s.managedBy(allianceManagedCall{"Approve", requestID, callerID, callerSID, target, applicantID})
+}
+
+func (s *allianceStub) Reject(_ context.Context, requestID string, callerID int64, callerSID int32, target int64, applicantID int64) (rpcalliance.Reply, error) {
+	return s.managedBy(allianceManagedCall{"Reject", requestID, callerID, callerSID, target, applicantID})
+}
+
+func (s *allianceStub) Kick(_ context.Context, requestID string, callerID int64, callerSID int32, target int64, memberID int64) (rpcalliance.Reply, error) {
+	return s.managedBy(allianceManagedCall{"Kick", requestID, callerID, callerSID, target, memberID})
+}
+
+func (s *allianceStub) Transfer(_ context.Context, requestID string, callerID int64, callerSID int32, target int64, newLeaderID int64) (rpcalliance.Reply, error) {
+	return s.managedBy(allianceManagedCall{"Transfer", requestID, callerID, callerSID, target, newLeaderID})
+}
+
+func (s *allianceStub) Membership(ctx context.Context, target int64) (rpcalliance.GuardReply, error) {
+	s.membershipCalls++
+	if _, bounded := ctx.Deadline(); !bounded {
+		return rpcalliance.GuardReply{}, errors.New("the login's lookup must be bounded")
+	}
+	return s.membership(target)
+}
+
+func (s *allianceStub) Join(_ context.Context, requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error) {
+	s.joinCalls++
+	return s.join(requestID, callerID, callerSID, target)
+}
+
+func (s *allianceStub) Leave(_ context.Context, requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error) {
+	return s.leave(requestID, callerID, callerSID, target)
+}
+
+// allianceMirrorStub serves fixed snapshots: entity id -> (payload, version).
+type allianceMirrorStub map[int64]struct {
+	payload any
+	version uint64
+}
+
+func (m allianceMirrorStub) ReadSnapshot(_ context.Context, read entity.RemoteSnapshotRead) (entity.RemoteSnapshotEnvelope, bool, error) {
+	entry, ok := m[read.Key.EntityID]
+	if !ok {
+		return entity.RemoteSnapshotEnvelope{}, false, nil
+	}
+	if read.After.StateVersion > entry.version {
+		return entity.RemoteSnapshotEnvelope{}, false, fmt.Errorf("stale: %d < %d", entry.version, read.After.StateVersion)
+	}
+	raw, err := bson.Marshal(entry.payload)
+	if err != nil {
+		return entity.RemoteSnapshotEnvelope{}, false, err
+	}
+	schema := entity.RemoteSnapshotSchema(read.Key.Kind, read.Key.Scope)
+	return entity.RemoteSnapshotEnvelope{
+		Key: read.Key, StateVersion: entry.version, MarkerEpoch: 1, RouteEpoch: 1, Schema: schema, Codec: 1,
+		Payload: entity.CopyFrozenRemoteSnapshotPayload(raw),
+	}, true, nil
+}
+
+// allianceController is a controller whose alliance dependencies are stubs: the
+// alliance RPC, the alliance mirror over a snapshot table, Nest recording
+// calls and answering PlayerAlliance with shown (the player's copy).
+func allianceController(t *testing.T, alliances rpcalliance.Alliance, snapshots allianceMirrorStub, shown int64) (*Controller, *allianceRecordingNest) {
+	t.Helper()
+	playerentity.RegisterEntity()
+	alliance.RegisterEntity()
+	if _, err := alliance.NewAllianceMirrorReader(snapshots); err != nil {
+		t.Fatal(err)
+	}
+	nest := &allianceRecordingNest{answers: map[string]any{"handlerPlayerAlliance": shown}}
+	// sid 1300 在 endpointRegistry 的配置里；联盟 RPC 与 Mirror 的快照源按能力名登记，端点用到时取。
+	registry := allianceEndpointRegistry(t)
+	for name, value := range map[app.ModName]any{rpcalliance.CapabilityName: alliances, mods.ModRemoteMirror: entity.RemoteSnapshotReadOnly(snapshots)} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	controller := &Controller{registry: registry, nestClient: nest}
+	return controller, nest
+}
+
+func allianceContext(seq uint32) *playeraccess.Context {
+	return &playeraccess.Context{BaseCtx: context.Background(), Session: allianceBoundTo(1300), PlayerID: allianceStuckPlayerID, MsgID: msgid.MsgJoinAlliance, Seq: seq}
+}
+
+// A name that is invalid on its face is refused (alliance_name) before any
+// coin moves or the service is asked: no Nest call, no mirror read, no RPC.
+func TestAllianceFoundAllianceRefusesAnInvalidNameBeforeAnythingMoves(t *testing.T) {
+	controller, nest := allianceController(t, &allianceStub{}, nil, 0)
+	for _, name := range []string{"", "   ", "\t\n", "alliance\x00name", "alliance\u0085name", "bad\xffbytes"} {
+		response, err := controller.HandleFoundAlliance(allianceContext(1), &pb.FoundAllianceRequest{Name: name})
+		if err != nil || response == nil || response.Code != apperrors.ErrAllianceName.Code() || nest.handler != "" {
+			t.Fatalf("name %q: response=%+v err=%v nest=%q", name, response, err, nest.handler)
+		}
+	}
+}
+
+// Founding is a saga, started from the player's transaction with the fee as
+// the coins it checks; a player shown in a alliance (their own copy) is refused
+// first.
+func TestAllianceFoundAllianceStartsTheSagaWithTheFee(t *testing.T) {
+	controller, nest := allianceController(t, &allianceStub{}, allianceMirrorStub{}, 0)
+	response, err := controller.HandleFoundAlliance(allianceContext(2), &pb.FoundAllianceRequest{Name: "valid"})
+	if err != nil || response.Code != 0 || response.SagaKey == "" {
+		t.Fatalf("found_alliance = %+v, %v", response, err)
+	}
+	if nest.handler != "handlerStartAllianceOp" || len(nest.params) < 3 || nest.params[0] != "found" || nest.params[2] != int32(100) {
+		t.Fatalf("found_alliance called %q with %v, want handlerStartAllianceOp(found, state, 100, key)", nest.handler, nest.params)
+	}
+
+	controller, nest = allianceController(t, &allianceStub{}, allianceMirrorStub{}, 7)
+	response, err = controller.HandleFoundAlliance(allianceContext(3), &pb.FoundAllianceRequest{Name: "valid"})
+	if err != nil || response.Code != apperrors.ErrAllianceMembership.Code() || slices.Contains(nest.calls, "handlerStartAllianceOp") {
+		t.Fatalf("found_alliance by a member = %+v, %v (nest %v)", response, err, nest.calls)
+	}
+}
+
+// Joining is one RPC to the service, with the frame's request id and this
+// process's sid; the service's four answers reach the client as codes, and a
+// success shows the alliance on the player.
+func TestAllianceJoinAllianceGoesThroughTheAllianceRPC(t *testing.T) {
+	alliance.RegisterEntity()
+	target, _ := rpcalliance.AllianceTarget(7)
+	for _, tc := range []struct {
+		name string
+		err  error
+		code int32
+	}{
+		{"joined", nil, 0},
+		{"full", apperrors.ErrAllianceFull, apperrors.ErrAllianceFull.Code()},
+		{"nobody founded it", servicerpc.EntityNotFound(target), apperrors.ErrAllianceViewMissing.Code()},
+		{"no instance ready", fmt.Errorf("call: %w", fnats.ErrNoResponders), apperrors.ErrAllianceBusy.Code()},
+		{"being moved", servicerpc.Redirect(3001, errors.New("fenced")), apperrors.ErrAllianceMoved.Code()},
+		{"no answer in time", fmt.Errorf("call: %w", context.DeadlineExceeded), apperrors.ErrAlliancePending.Code()},
+	} {
+
+		var gotRequest string
+		var gotSID int32
+		stub := &allianceStub{join: func(requestID string, callerID int64, callerSID int32, got int64) (rpcalliance.Reply, error) {
+			if callerID != allianceStuckPlayerID || got != target {
+				t.Errorf("Join(caller %d, target %d), want (%d, %d)", callerID, got, allianceStuckPlayerID, target)
+			}
+			gotRequest, gotSID = requestID, callerSID
+			view := alliancerule.View{AllianceID: 7, Name: "seven", LeaderID: 1, Members: []alliancerule.MemberView{{PlayerID: 1}, {PlayerID: allianceStuckPlayerID}}, Version: 5}
+			return rpcalliance.Reply{Alliance: view, ServedBySID: 3001}, tc.err
+		}}
+		controller, nest := allianceController(t, stub, nil, 0)
+		response, err := controller.HandleJoinAlliance(allianceContext(9), &pb.JoinAllianceRequest{AllianceID: 7})
+		if err != nil || response.Code != tc.code {
+			t.Fatalf("join_alliance = %+v, %v; want code %d", response, err, tc.code)
+		}
+		if gotRequest == "" || gotSID != 1300 {
+			t.Fatalf("Join request id %q from sid %d, want a request id from sid 1300", gotRequest, gotSID)
+		}
+		if tc.err != nil {
+			if nest.handler != "" {
+				t.Fatalf("a refused join changed the display: %q", nest.handler)
+			}
+			return
+		}
+		if response.AllianceID != 7 || response.Members != 2 || response.ServedBySID != 3001 || response.Version != 5 {
+			t.Fatalf("join answer = %+v", response)
+		}
+		if nest.handler != "handlerShowAlliance" || nest.params[0] != int64(7) {
+			t.Fatalf("display after a join: %q %v", nest.handler, nest.params)
+		}
+	}
+}
+
+// Reading a alliance reads its mirror: the player's own is the one their copy
+// names; MinVersion makes the read refuse a state older than the write.
+func TestAllianceInfoReadsTheMirrors(t *testing.T) {
+	alliance.RegisterEntity()
+	allianceID, _ := rpcalliance.AllianceTarget(7)
+	snapshots := allianceMirrorStub{
+		allianceID: {payload: bson.M{"name": "seven", "leader_id": int64(1), "funds": int64(40), "members": bson.M{"1": bson.M{"role": int32(2)}, "4242": bson.M{"role": int32(1)}}}, version: 6},
+	}
+	controller, _ := allianceController(t, &allianceStub{}, snapshots, 7)
+	response, err := controller.HandleAllianceInfo(allianceContext(4), &pb.AllianceInfoRequest{})
+	if err != nil || response.Code != 0 || response.AllianceID != 7 || response.Name != "seven" || response.Members != 2 || response.Funds != 40 || response.Version != 6 {
+		t.Fatalf("alliance_info (mine) = %+v, %v", response, err)
+	}
+	if response, _ := controller.HandleAllianceInfo(allianceContext(5), &pb.AllianceInfoRequest{AllianceID: 7, MinVersion: 9}); response.Code != apperrors.ErrAllianceBusy.Code() {
+		t.Fatalf("alliance_info older than the write = %+v, want alliance_busy", response)
+	}
+	if response, _ := controller.HandleAllianceInfo(allianceContext(6), &pb.AllianceInfoRequest{AllianceID: 8}); response.Code != apperrors.ErrAllianceViewMissing.Code() {
+		t.Fatalf("alliance_info of a alliance nobody founded = %+v, want alliance_missing", response)
+	}
+}
+
+// Applying is one RPC to the alliance named in the request, with the frame's
+// request id, the session's player and this process's sid. It is not a
+// membership: the player's own copy is left alone, whatever the answer. An
+// id that names no alliance is refused before the service is asked.
+func TestAllianceApplyGoesThroughTheAllianceRPCAndLeavesTheDisplayAlone(t *testing.T) {
+	alliance.RegisterEntity()
+	target, _ := rpcalliance.AllianceTarget(7)
+	waiting := alliancerule.View{AllianceID: 7, Name: "seven", LeaderID: 1, Members: []alliancerule.MemberView{{PlayerID: 1, Role: alliancerule.RoleLeader}}, Applicants: []int64{allianceStuckPlayerID}, Version: 3}
+	stub := &allianceStub{manage: func(allianceManagedCall) (rpcalliance.Reply, error) {
+		return rpcalliance.Reply{Alliance: waiting, ServedBySID: 3001}, nil
+	}}
+	controller, nest := allianceController(t, stub, nil, 0)
+	response, err := controller.HandleApplyAlliance(allianceContext(11), &pb.ApplyAllianceRequest{AllianceID: 7})
+	if err != nil || response.Code != 0 || response.AllianceID != 7 || response.Members != 1 || response.ServedBySID != 3001 || response.Version != 3 {
+		t.Fatalf("apply_alliance = %+v, %v", response, err)
+	}
+	if len(stub.managed) != 1 {
+		t.Fatalf("the service received %+v, want one Apply", stub.managed)
+	}
+	if call := stub.managed[0]; call.method != "Apply" || call.callerID != allianceStuckPlayerID || call.callerSID != 1300 || call.target != target || !strings.Contains(call.requestID, "apply") {
+		t.Fatalf("Apply as the service received it: %+v", call)
+	}
+	if nest.handler != "" {
+		t.Fatalf("an application changed the player's copy: %q", nest.handler)
+	}
+
+	stub.manage = func(allianceManagedCall) (rpcalliance.Reply, error) {
+		return rpcalliance.Reply{}, apperrors.ErrAllianceApplication
+	}
+	response, err = controller.HandleApplyAlliance(allianceContext(12), &pb.ApplyAllianceRequest{AllianceID: 7})
+	if err != nil || response.Code != apperrors.ErrAllianceApplication.Code() || nest.handler != "" {
+		t.Fatalf("a second application = %+v, %v (nest %q); want alliance_application", response, err, nest.handler)
+	}
+	response, err = controller.HandleApplyAlliance(allianceContext(13), &pb.ApplyAllianceRequest{})
+	if err != nil || response.Code != apperrors.ErrAllianceViewMissing.Code() || len(stub.managed) != 2 {
+		t.Fatalf("an application naming no alliance = %+v, %v after %d calls; want alliance_view_missing and no RPC", response, err, len(stub.managed))
+	}
+}
+
+// Approving, rejecting, kicking and transferring are each one RPC on the
+// alliance the caller is shown in, about the player the request names. The
+// endpoint decides nothing about roles: it forwards, and the service's
+// refusal — here the caller is not the leader — reaches the client as its
+// code. A caller shown in no alliance, or a request naming nobody, is refused
+// before the service is asked.
+func TestAllianceLeaderEndpointsOnlyForwardToTheService(t *testing.T) {
+	alliance.RegisterEntity()
+	target, _ := rpcalliance.AllianceTarget(7)
+	after := alliancerule.View{AllianceID: 7, Name: "seven", LeaderID: allianceStuckPlayerID, Members: []alliancerule.MemberView{{PlayerID: 55}, {PlayerID: allianceStuckPlayerID}}, Version: 9}
+	stub := &allianceStub{manage: func(allianceManagedCall) (rpcalliance.Reply, error) {
+		return rpcalliance.Reply{Alliance: after, ServedBySID: 3001}, nil
+	}}
+	controller, nest := allianceController(t, stub, nil, 7)
+	endpoints := []struct {
+		method, op string
+		call       func(seq uint32, subject int64) (*pb.AllianceResponse, error)
+	}{
+		{"Approve", "approve", func(seq uint32, subject int64) (*pb.AllianceResponse, error) {
+			return controller.HandleApproveAllianceApply(allianceContext(seq), &pb.ApproveAllianceApplyRequest{PlayerID: subject})
+		}},
+		{"Reject", "reject", func(seq uint32, subject int64) (*pb.AllianceResponse, error) {
+			return controller.HandleRejectAllianceApply(allianceContext(seq), &pb.RejectAllianceApplyRequest{PlayerID: subject})
+		}},
+		{"Kick", "kick", func(seq uint32, subject int64) (*pb.AllianceResponse, error) {
+			return controller.HandleKickAllianceMember(allianceContext(seq), &pb.KickAllianceMemberRequest{PlayerID: subject})
+		}},
+		{"Transfer", "transfer", func(seq uint32, subject int64) (*pb.AllianceResponse, error) {
+			return controller.HandleTransferAllianceLeader(allianceContext(seq), &pb.TransferAllianceLeaderRequest{PlayerID: subject})
+		}},
+	}
+	for i, endpoint := range endpoints {
+		stub.manage = func(allianceManagedCall) (rpcalliance.Reply, error) {
+			return rpcalliance.Reply{Alliance: after, ServedBySID: 3001}, nil
+		}
+		response, err := endpoint.call(uint32(20+i), 55)
+		if err != nil || response.Code != 0 || response.AllianceID != 7 || response.LeaderID != allianceStuckPlayerID || response.Members != 2 || response.ServedBySID != 3001 || response.Version != 9 {
+			t.Fatalf("%s = %+v, %v", endpoint.method, response, err)
+		}
+		call := stub.managed[len(stub.managed)-1]
+		if call.method != endpoint.method || call.callerID != allianceStuckPlayerID || call.callerSID != 1300 || call.target != target || call.subject != 55 || !strings.Contains(call.requestID, endpoint.op) {
+			t.Fatalf("%s as the service received it: %+v", endpoint.method, call)
+		}
+		// The service's refusal is the answer.
+		stub.manage = func(allianceManagedCall) (rpcalliance.Reply, error) {
+			return rpcalliance.Reply{}, apperrors.ErrAllianceDenied
+		}
+		response, err = endpoint.call(uint32(30+i), 55)
+		if err != nil || response.Code != apperrors.ErrAllianceDenied.Code() {
+			t.Fatalf("%s refused by the service = %+v, %v; want alliance_denied", endpoint.method, response, err)
+		}
+		// Nobody named: refused here.
+		sent := len(stub.managed)
+		response, err = endpoint.call(uint32(40+i), 0)
+		if err != nil || response.Code != apperrors.ErrAllianceMissing.Code() || len(stub.managed) != sent {
+			t.Fatalf("%s naming nobody = %+v, %v; want alliance_missing and no RPC", endpoint.method, response, err)
+		}
+	}
+	if slices.Contains(nest.calls, "handlerShowAlliance") {
+		t.Fatalf("a leader's write changed the caller's own copy: %v", nest.calls)
+	}
+
+	stub.managed = nil
+	controller, _ = allianceController(t, stub, nil, 0)
+	for i, endpoint := range endpoints {
+		response, err := endpoint.call(uint32(50+i), 55)
+		if err != nil || response.Code != apperrors.ErrAllianceViewMissing.Code() || len(stub.managed) != 0 {
+			t.Fatalf("%s by a player shown in no alliance = %+v, %v after %d calls; want alliance_view_missing and no RPC", endpoint.method, response, err, len(stub.managed))
+		}
+	}
+}
+
+// The roster is a mirror read: the members for anyone who can read the
+// alliance, the waiting applicants only for its leader.
+func TestAllianceRosterShowsApplicantsOnlyToTheLeader(t *testing.T) {
+	alliance.RegisterEntity()
+	led, _ := rpcalliance.AllianceTarget(7)
+	other, _ := rpcalliance.AllianceTarget(8)
+	members := bson.M{"1": bson.M{"role": int32(1), "contribution": int64(30)}, "4242": bson.M{"role": int32(2)}}
+	snapshots := allianceMirrorStub{
+		led:   {payload: bson.M{"name": "seven", "leader_id": int64(allianceStuckPlayerID), "open_join": false, "members": members, "applications": bson.M{"77": bson.M{}, "66": bson.M{}}}, version: 6},
+		other: {payload: bson.M{"name": "eight", "leader_id": int64(1), "open_join": true, "members": bson.M{"1": bson.M{"role": int32(2)}}, "applications": bson.M{"77": bson.M{}}}, version: 2},
+	}
+	controller, _ := allianceController(t, &allianceStub{}, snapshots, 7)
+	mine, err := controller.HandleAllianceRoster(allianceContext(60), &pb.AllianceRosterRequest{})
+	if err != nil || mine.Code != 0 || mine.AllianceID != 7 || mine.LeaderID != allianceStuckPlayerID || mine.OpenJoin || mine.Version != 6 {
+		t.Fatalf("alliance_roster (mine) = %+v, %v", mine, err)
+	}
+	if len(mine.Members) != 2 || mine.Members[0].PlayerID != 1 || mine.Members[0].Role != alliancerule.RoleMember || mine.Members[0].Contribution != 30 ||
+		mine.Members[1].PlayerID != allianceStuckPlayerID || mine.Members[1].Role != alliancerule.RoleLeader {
+		t.Fatalf("members = %+v, want player 1 (member, 30) then the leader", mine.Members)
+	}
+	if !slices.Equal(mine.Applicants, []int64{66, 77}) {
+		t.Fatalf("the leader sees applicants %v, want [66 77]", mine.Applicants)
+	}
+	theirs, err := controller.HandleAllianceRoster(allianceContext(61), &pb.AllianceRosterRequest{AllianceID: 8})
+	if err != nil || theirs.Code != 0 || theirs.LeaderID != 1 || !theirs.OpenJoin || len(theirs.Members) != 1 {
+		t.Fatalf("alliance_roster of another alliance = %+v, %v", theirs, err)
+	}
+	if len(theirs.Applicants) != 0 {
+		t.Fatalf("a player who does not lead the alliance was shown its applicants: %v", theirs.Applicants)
+	}
+	if missing, _ := controller.HandleAllianceRoster(allianceContext(62), &pb.AllianceRosterRequest{AllianceID: 9}); missing.Code != apperrors.ErrAllianceViewMissing.Code() || len(missing.Members) != 0 {
+		t.Fatalf("alliance_roster of an alliance nobody founded = %+v, want alliance_view_missing", missing)
+	}
+	if stale, _ := controller.HandleAllianceRoster(allianceContext(63), &pb.AllianceRosterRequest{AllianceID: 7, MinVersion: 9}); stale.Code != apperrors.ErrAllianceBusy.Code() {
+		t.Fatalf("alliance_roster older than the write = %+v, want alliance_busy", stale)
+	}
+}
+
+// Leaving is one RPC on the alliance the player is shown in; a success clears
+// their own copy of that alliance. The last member being the leader is the
+// service's rule: the endpoint forwards the same way, and what comes back —
+// an alliance with nobody in it — is the answer. A leader who still has
+// members is refused by the service (alliance_leader) and keeps the copy.
+func TestAllianceLeaveClearsTheDisplayOnlyWhenTheServiceAgrees(t *testing.T) {
+	alliance.RegisterEntity()
+	target, _ := rpcalliance.AllianceTarget(7)
+	var got int64
+	stub := &allianceStub{leave: func(_ string, callerID int64, callerSID int32, at int64) (rpcalliance.Reply, error) {
+		if callerID != allianceStuckPlayerID || callerSID != 1300 {
+			t.Errorf("Leave(caller %d, sid %d)", callerID, callerSID)
+		}
+		got = at
+		return rpcalliance.Reply{Alliance: alliancerule.View{AllianceID: 7, Name: "seven", Version: 12}, ServedBySID: 3001}, nil
+	}}
+	controller, nest := allianceController(t, stub, nil, 7)
+	response, err := controller.HandleLeaveAlliance(allianceContext(70), &pb.LeaveAllianceRequest{})
+	if err != nil || response.Code != 0 || response.AllianceID != 7 || response.LeaderID != 0 || response.Members != 0 || response.Version != 12 {
+		t.Fatalf("leave_alliance by the last member = %+v, %v; want the disbanded alliance", response, err)
+	}
+	if got != target || nest.handler != "handlerShowAlliance" || nest.params[0] != int64(0) || nest.params[1] != int64(7) {
+		t.Fatalf("Leave on %d, then display %q %v; want alliance 7 cleared from the player's copy", got, nest.handler, nest.params)
+	}
+
+	stub.leave = func(string, int64, int32, int64) (rpcalliance.Reply, error) {
+		return rpcalliance.Reply{}, apperrors.ErrAllianceLeader
+	}
+	controller, nest = allianceController(t, stub, nil, 7)
+	response, err = controller.HandleLeaveAlliance(allianceContext(71), &pb.LeaveAllianceRequest{})
+	if err != nil || response.Code != apperrors.ErrAllianceLeader.Code() || slices.Contains(nest.calls, "handlerShowAlliance") {
+		t.Fatalf("leave_alliance by a leader with members = %+v, %v (nest %v); want alliance_leader and the copy kept", response, err, nest.calls)
+	}
+}
+
+const allianceStuckPlayerID = 4242
+
+// Endpoints run outside Nest. The recording client checks which formal transaction they submit.
+type allianceRecordingNest struct {
+	nest.Client
+	handler string
+	params  nest.Params
+	calls   []string
+	answers map[string]any
+}
+
+func (n *allianceRecordingNest) Request(_ context.Context, name nest.HandlerName, _ int64, params nest.Params, _ ...nest.SendOpt) (any, error) {
+	n.handler, n.params = name.String(), params
+	n.calls = append(n.calls, n.handler)
+	if answer, ok := n.answers[n.handler]; ok {
+		return answer, nil
+	}
+	if n.handler == "handlerShowAlliance" {
+		return true, nil
+	}
+	return "alliance-saga", nil
+}
+
+type allianceEndpointSession struct{}
+
+func (allianceEndpointSession) Principal() gateway.Principal {
+	return gateway.Principal{PlayerID: 4242, SessionID: "test-session"}
+}
+func (allianceEndpointSession) Reply(context.Context, any) error { return nil }
+func (allianceEndpointSession) Close(error) error                { return nil }
+func allianceBoundTo(int32) allianceEndpointSession              { return allianceEndpointSession{} }
+
+type allianceEndpointAccount struct{ svcaccount.Accounts }
+
+func (allianceEndpointAccount) RoleBinding(context.Context, int64) (svcaccount.RoleBinding, error) {
+	return svcaccount.RoleBinding{PlayerID: 4242, ServingServerID: 1300}, nil
+}
+func allianceEndpointRegistry(t *testing.T) *app.Registry {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("sid", 1300)
+	r := app.NewRegistry(cfg)
+	if err := r.Register(svcaccount.CapabilityName, allianceEndpointAccount{}); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+type allianceRefreshNest struct {
+	nest.Client
+	shown  int64
+	writes int
+}
+
+func (n *allianceRefreshNest) Request(_ context.Context, name nest.HandlerName, _ int64, params nest.Params, _ ...nest.SendOpt) (any, error) {
+	switch name.String() {
+	case "handlerPlayerAlliance":
+		return n.shown, nil
+	case "handlerShowAlliance":
+		next, old := params[0].(int64), params[1].(int64)
+		if old != 0 && n.shown != old || n.shown == next {
+			return false, nil
+		}
+		n.shown = next
+		n.writes++
+		return true, nil
+	}
+	return nil, fmt.Errorf("unexpected handler %s", name.String())
+}
+
+type allianceRefreshRPC struct {
+	rpcalliance.Alliance
+	membership alliancerule.MemberState
+	err        error
+	reads      int
+	repairs    []allianceHomeCall
+}
+type allianceHomeCall struct {
+	playerID  int64
+	join      string
+	old, next int32
+}
+
+func (r *allianceRefreshRPC) Membership(ctx context.Context, _ int64) (rpcalliance.GuardReply, error) {
+	if _, bounded := ctx.Deadline(); !bounded {
+		return rpcalliance.GuardReply{}, errors.New("unbounded lookup")
+	}
+	r.reads++
+	return rpcalliance.GuardReply{State: r.membership}, r.err
+}
+func (r *allianceRefreshRPC) RefreshHome(_ context.Context, _ int64, playerID int64, join string, old, next int32) (rpcalliance.HomeReply, error) {
+	r.repairs = append(r.repairs, allianceHomeCall{playerID, join, old, next})
+	return rpcalliance.HomeReply{Changed: true, HomeSID: next}, nil
+}
+
+type allianceRefreshSnapshot struct{ value allianceentity.AllianceMirror }
+
+func (s allianceRefreshSnapshot) ReadSnapshot(_ context.Context, read entity.RemoteSnapshotRead) (entity.RemoteSnapshotEnvelope, bool, error) {
+	raw, err := bson.Marshal(s.value)
+	if err != nil {
+		return entity.RemoteSnapshotEnvelope{}, false, err
+	}
+	return entity.RemoteSnapshotEnvelope{Key: read.Key, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: entity.RemoteSnapshotSchema(read.Key.Kind, read.Key.Scope), Codec: 1, Payload: entity.CopyFrozenRemoteSnapshotPayload(raw)}, true, nil
+}
+
+type allianceRefreshAccount struct{ svcaccount.Accounts }
+
+func (allianceRefreshAccount) RoleBinding(_ context.Context, id int64) (svcaccount.RoleBinding, error) {
+	return svcaccount.RoleBinding{PlayerID: id, ServingServerID: 1001}, nil
+}
+func allianceRefreshFixture(t *testing.T, shown int64) (*Controller, *allianceRefreshRPC, *allianceRefreshNest) {
+	t.Helper()
+	player.RegisterEntity()
+	alliance_member.RegisterEntity()
+	allianceentity.RegisterEntity()
+	cfg := viper.New()
+	cfg.Set("sid", 1001)
+	registry := app.NewRegistry(cfg)
+	n := &allianceRefreshNest{shown: shown}
+	rpc := &allianceRefreshRPC{membership: alliancerule.MemberState{AllianceID: 7, JoinRequestID: "join-7"}}
+	source := allianceRefreshSnapshot{value: allianceentity.AllianceMirror{LeaderID: 10, Members: map[int64]allianceentity.AllianceMirrorSeat{10: {HomeSID: 1000, JoinRequestID: "join-7"}}}}
+	for name, value := range map[app.ModName]any{mods.ModNest: n, mods.ModRemoteMirror: source, rpcalliance.CapabilityName: rpc, svcaccount.CapabilityName: allianceRefreshAccount{}} {
+		if err := registry.Register(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return controller, rpc, n
+}
+func TestAllianceRefreshRepairsDisplayAndHome(t *testing.T) {
+	c, r, n := allianceRefreshFixture(t, 0)
+	if err := c.RefreshMembership(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n.shown != 7 || n.writes != 1 || len(r.repairs) != 1 || r.repairs[0] != (allianceHomeCall{10, "join-7", 1000, 1001}) {
+		t.Fatalf("shown=%d writes=%d repair=%+v", n.shown, n.writes, r.repairs)
+	}
+}
+func TestAllianceRefreshClearsMissingGuard(t *testing.T) {
+	c, r, n := allianceRefreshFixture(t, 7)
+	r.err = errcode.ErrEntityNotFound
+	if err := c.RefreshMembership(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n.shown != 0 || n.writes != 1 || len(r.repairs) != 0 {
+		t.Fatal("missing guard not cleared")
+	}
+}
+func TestAllianceRefreshKeepsDisplayOnUnknownFailure(t *testing.T) {
+	c, r, n := allianceRefreshFixture(t, 7)
+	r.err = context.DeadlineExceeded
+	if err := c.RefreshMembership(context.Background(), 10); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if n.shown != 7 || n.writes != 0 || len(r.repairs) != 0 {
+		t.Fatal("unknown result changed display")
+	}
+}
+func TestAllianceRefreshRejectsStaleMirrorGeneration(t *testing.T) {
+	c, r, n := allianceRefreshFixture(t, 7)
+	r.membership.JoinRequestID = "join-new"
+	if err := c.RefreshMembership(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n.writes != 0 || len(r.repairs) != 0 {
+		t.Fatal("stale mirror used to repair another membership")
+	}
+}

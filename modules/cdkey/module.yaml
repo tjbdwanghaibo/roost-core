@@ -16,6 +16,6 @@ component: Cdkey
 protocols: [CdkeyRedeem]
 errcodes: [cdkey_invalid, cdkey_full, cdkey_taken]
 verify:
-  packages: [./game/controllers/cdkey]
+  packages: [./game/controllers]
   run: ^TestCdkey
   pass: 12

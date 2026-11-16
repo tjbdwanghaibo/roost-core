@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"errors"
 	"fmt"
@@ -23,9 +22,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	db "{{MODULE}}/db"
 	attributecomp "{{MODULE}}/game/components/attribute"
-	gameprofile "{{MODULE}}/game/components/profile"
-	controller "{{MODULE}}/game/controllers/attribute"
+	controller "{{MODULE}}/game/controllers"
 	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
 	apperrors "{{MODULE}}/internal/errors"
@@ -168,12 +167,14 @@ func init() {
 		}
 		return nil
 	})
-	gameprofile.OnProfileLevelUp("zz_attribute_test", func(_ view.PlayerEntity, _, _ int32) error {
-		if attributeRejectHook.Load() {
-			return errors.New("attribute hook rejected")
-		}
-		return nil
-	})
+	// 升级事件上测试自己的监听（生成的监听在 player 包的 init 里先登记，这里排在它们后面）：打开时拒绝升级。
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "ProfileLevelUp", "handler_test.attributeRejectLevelUp",
+		func(*playerentity.Player, event.ProfileLevelUp) error {
+			if attributeRejectHook.Load() {
+				return errors.New("attribute hook rejected")
+			}
+			return nil
+		})
 }
 func TestAttributeNewPlayerDerivesWithoutPersisting(t *testing.T) {
 	f := newAttributeFixture(t)

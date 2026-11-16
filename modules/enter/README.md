@@ -23,12 +23,12 @@
 
 ### 服务端入口
 
-- `game/controllers/enter` 的 `HandleEnterGame`、`HandleEnterCreate`：两个协议的端点。
+- `game/controllers/enter.go` 的 `HandleEnterGame`、`HandleEnterCreate`：两个协议的端点。
 - `game/modules/login/enter.go` 的 `Enter(ctx, registry, entering, load)`：一次进入的骨架，顺序是进入前检查 → `load` → 进入钩子。工程改写进入端点时把自己的加载与初始化包成 `load` 交给它。
 - `game/modules/login/enter_create.go` 的 `EnterSession(ctx, registry, entering, Loads{LoadOrCreate, Existing})`：端点实际调的入口，按 `CreateFirst` 选一种 `load` 再走 `Enter`。
 - `game/modules/login/enter_create.go` 的 `Create(ctx, registry, creating, CreateSteps{Ensure, Commit})`：一次新建的骨架，六步见下面“一致性”。
 - `game/modules/login/enter_create.go` 的 `Assess(ctx, registry, entering, built)`：算出该告诉客户端什么（`Status{Code, Reason, NeedCreate}`），不推送、不断开。
-- `game/controllers/enter/enter_status.go` 的 `Announce(ctx, registry, entering, sessionID)`：调 `Assess`，把结果作为 `EnterStatus` 推给这条会话；进入前检查拒绝时推完等 `StatusCloseDelay`（300 毫秒）再断开这名玩家在本进程的全部会话。
+- `game/controllers/enter.go` 的 `Announce(ctx, registry, entering, sessionID)`：调 `Assess`，把结果作为 `EnterStatus` 推给这条会话；进入前检查拒绝时推完等 `StatusCloseDelay`（300 毫秒）再断开这名玩家在本进程的全部会话。
 - 不经 `Enter` 的工程可以自己调 `RunEntering`、`RunEntered`、`RunCreating`、`RunCreatePrepare`（都在 `game/modules/login`）。
 - Nest handler（`game/handler/enter_*.go`，都不对客户端开放）：`handlerEnterInit`（加载或创建那条路的首次初始化）、`handlerEnterExisting`（只进入已建成的）、`handlerEnterCreate`（新建事务）、`handlerEnterBuilt`（只读，问“建成了没有”）。前三个是 `rollback=undo durability=strict`。
 - 组件 `EnterComp()`（逻辑在 `game/components/enter/enter.go`，Player 的薄接线在 `game/entities/player/enter_component.go`）：`Init(nowUnixMilli)`、`Existing()`、`Create(name, nowUnixMilli)`、`Built()`，只能在持有 Player 锁的 Nest 事务里调。
@@ -66,7 +66,7 @@
 
 删过档的玩家在两条路上都得到框架的 `entity_deleted`；进入前检查与名字规则的拒绝原样透出登记方的码。
 
-**日志**：新建提交、首次进入与每次进入确认，记录玩家、名字或 first；game-demo 的覆盖端点同步处理。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/enter/enter_create.go`, `game/controllers/enter/enter_game.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
+**日志**：新建提交、首次进入与每次进入确认，记录玩家、名字或 first；game-demo 的覆盖端点同步处理。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/enter.go`, `game/controllers/enter.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
 ## 能力边界
 
@@ -94,9 +94,9 @@
 - **别的功能要在玩家进入后顺带做事**（上线登记、拉离线数据、推一帧）：在自己的包的 `init` 里调 `gamelogin.OnEntered("名字", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {...})`。
 - **要在进入之前挡住某些玩家**（封停、维护白名单、不归本服）：`gamelogin.OnEntering("名字", func(ctx context.Context, registry *app.Registry, entering gamelogin.Entering) error {...})`，拒绝时返回 `errcode.Define` 出来的带码错误。
 - **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档用 `gamelogin.OnCreate`。
-- **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers/enter` 的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
+- **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers`（`enter.go`）的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
 - **不要改的文件：** `game/modules/login/enter.go`、`game/modules/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/components/enter/enter.go` 里标记与发放同一笔事务的写法。
-- **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化（它的新玩家初始化写在自己覆盖的 `game/modules/login/enter_first.go` 里）。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
+- **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter.go` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化（它的新玩家初始化写在自己覆盖的 `game/modules/login/enter_first.go` 里）。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
 
 ## 联动
 
@@ -126,5 +126,5 @@
 
 - 新建与进入的事务（`game/handler`）用真实的 Nest 加替身提交器（不落盘，可以拒绝提交来验证回滚），覆盖首次初始化、重复进入、提交被拒后补做、新建恰好一次、并发新建、名字钩子拒绝什么都不写。
 - 骨架与登记点（`game/modules/login`、`game/entities/player`）是纯函数级的场景。
-- `EnterStatus`（`game/controllers/enter`）用玩家传输的替身，验证推送内容、拒绝后断开、判断不了时不推。
+- `EnterStatus`（`game/controllers/enter.go`）用玩家传输的替身，验证推送内容、拒绝后断开、判断不了时不推。
 - 模块自己的场景使用离线持久层；`scripts/test-demo-login.sh` 另外生成 casual + naming，通过真实 HTTP / Robot TCP、Redis Directory、Mongo / WAL 验证新建与进入、两服唯一命名、双 Gate、game 重启后首次金币与购买回执不重复。范围与复跑命令见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
