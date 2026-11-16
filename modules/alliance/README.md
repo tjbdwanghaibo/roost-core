@@ -30,7 +30,7 @@
     - 联盟服务实例之间用的：`Establish`、`ReserveGuard`、`ResolveGuard`、`ClearGuard`、`AcknowledgeWar`、`Settle`；game 进程不需要调。
     - 目标号构造：`AllianceTarget(allianceID)`、`GuardTarget(playerID)`（`internal/rpc/alliance/service.go`）。
   - game 侧 `Controller`（`game/controllers/alliance.go`，经生成的 `controllers.FromRegistry` 取得）：除十三个 `Handle…` 端点外，公开方法 `RefreshMembership(ctx, playerID) error`在进入或重连后对账玩家的展示副本与通知地址。
-  - `Player` 组件（`game/components/alliance/alliance.go`）：`AllianceComp().AllianceID()`、`SetAlliance(id)`，窄接口 `IAllianceEntity`。
+  - `Player` 组件（`game/components/alliance/alliance.go`，类型号 `alliance.CompTypeAlliance` 与工厂登记也在那里）：`Alliance().AllianceID()`、`SetAlliance(id)`，handler 收生成的 `view.IAllianceEntity`。`Alliance` 实体直接挂 `allianceroster.CompTypeAllianceRoster`、`AllianceMember` 直接挂 `allianceguard.CompTypeAllianceGuard`（类型号与工厂登记都在各自组件包），联盟服务的 handler 收 `view.IAllianceRosterEntity` / `view.IAllianceGuardEntity`，经 `AllianceRoster()` / `AllianceGuard()` 取得。
   - game 侧 Nest handler（`game/handler/`）：`handlerPlayerAlliance`（读展示副本）、`handlerShowAlliance`（改展示副本，`replaces` 非零时只替换指定的旧联盟）、`handlerStartAllianceOp`（在 `Player` 事务里启动 Saga）、`handlerAllianceDebit` / `handlerAllianceCredit`（Saga 的背包扣除与放入步骤）。
   - `game/modules/alliance` 包：`Answer(err)`（把 RPC 错误映射成客户端码）、`Binding(ctx, registry, playerID, sid)`（查玩家当前归属的 game 实例）、`BusinessKey` / `RequestID`（幂等键格式）、`State` 及 `Encode` / `Decode`（Saga 载荷）、常量 `Deadline`（Saga 期限 10 分钟）。
   - `game/modules/alliance/runtime` 包：运行期入口 `Start(registry)`（启动 Saga 步骤消费者与成员通知处理），`AdmitPlayerStep`（Saga 原生步骤进 Nest 之前的归属准入，可供自定义消费者复用）。
@@ -91,7 +91,7 @@
   - 自有玩家驻留表：实现 `PlayerBinding` 并发布 `PlayerBindingCapability`。
   - 不建议改：`internal/rpc/alliance/` 下的守卫预约与对账（`guard.go`、`membership.go`）、请求回执（`alliancerule.Execute`）、所有权迁移（`transfer.go`）。
 - **别的模块 / 业务代码要用它**
-  - 读玩家在哪个联盟（仅作展示或预检）：持有 `Player` 锁时 `target.AllianceComp().AllianceID()`；没有持锁时 `syncsender.NewPlayerAllianceSender(client).Sync_PlayerAlliance(ctx, 完整实体号)`。
+  - 读玩家在哪个联盟（仅作展示或预检）：持有 `Player` 锁时 `target.Alliance().AllianceID()`；没有持锁时 `syncsender.NewPlayerAllianceSender(client).Sync_PlayerAlliance(ctx, 完整实体号)`。
   - 要权威答案（例如发联盟奖励前核对成员资格）：取得 `rpcalliance.Alliance` 客户端，调 `Membership(ctx, GuardTarget(playerID))` 或 `Info(ctx, AllianceTarget(allianceID))`。
   - 读联盟展示信息：照 `Controller` 的 `allianceMirror` 用镜像读。
   - 自定义进入流程：在进入成功后调 `controller.RefreshMembership(ctx, playerID)`。

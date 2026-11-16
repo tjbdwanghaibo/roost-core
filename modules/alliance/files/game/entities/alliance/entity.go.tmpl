@@ -2,14 +2,12 @@ package alliance
 
 import (
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/allianceroster"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 const EntityKindAlliance entity.EntityKind = {{ID:entity:Alliance}}
-
-// IAllianceEntity is the lock-safe business view used by Nest handlers.
-type IAllianceEntity interface{ entity.IThreadSafeEntity }
 
 // Alliance is one alliance, owned by the alliance service.
 //
@@ -41,6 +39,7 @@ type Alliance struct {
 	*entity.RemoteEntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	roster *AllianceRosterComponent `comp:"CompTypeAllianceRoster"`
-	dao    *db.AllianceDao          `dao:"alliance"`
+	// roster 是联盟规则（game/components/allianceroster）；Nest handler 收 view.IAllianceRosterEntity，经 AllianceRoster() 用它。
+	roster *allianceroster.Component `comp:"allianceroster.CompTypeAllianceRoster"`
+	dao    *db.AllianceDao           `dao:"alliance"`
 }

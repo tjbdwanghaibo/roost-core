@@ -10,7 +10,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
   - `TurnView`：请求 `TurnViewRequest{RoomID, Epoch}`。读当前状态。
   - `TurnInfo` 里：`Status` 取 0 等待开局、1 进行中、2 已结束；`ActorID` 是当前行动者；`Deadline` 是服务器业务时间的绝对期限（Unix 毫秒）；`Timeouts` 是累计超时次数；`Sequence` 是**请求者**最后成功的命令号；`Players` 是开局的固定名单。
   - 操作人与连接身份都取自认证上下文；`Epoch` 是玩家在 room 里拿到的房间代际。没有推送协议。
-- **服务端入口**（组件 `TurnComponent`，业务在 `game/components/turn/turn.go`，Room 上的接线是 `game/entities/room/turn_component.go`，经 `ITurnEntity` 的 `TurnComp()` 或 `view.RoomEntity` 的 `Turn()` 取得；所有方法只在 Nest 持有 Room 锁时调用）
+- **服务端入口**（组件、类型号 `turn.CompTypeTurn` 与工厂登记在 `game/components/turn/turn.go`，对外接口 `view.Turn`；handler 收生成的 `view.ITurnEntity`，经 `Turn()` 取得；宿主方法 `view.TurnHolder` 的 `ArmTurnDeadline` / `CancelTurnDeadline` 手写在 `game/entities/room/turn_timers.go`；所有方法只在 Nest 持有 Room 锁时调用）
   - `Start(playerID, epoch, connection, turnMillis, maxTurns) (TurnSnapshot, error)`
   - `CheckEnd(playerID, epoch, connection, round, sequence) (replay bool, err error)`：只检查、不推进。`replay` 为真表示这是最后一条成功命令的重发，**不能再执行游戏动作**。
   - `End(playerID, epoch, connection, round, sequence) (TurnSnapshot, error)`：内部先 `CheckEnd`，再记回执、换定时器、推进一回合。
@@ -28,7 +28,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 
 ## 能力边界
 
-- **不做的事**：没有任何默认玩法——伤害、出牌、移动、奖励、胜负都不提供；没有自动广播（轮到谁要靠客户端查 `TurnView` 或工程自己推）；没有同时行动、抢答、多阶段回合；断线不踢人、不代打（断线由 room 自动标记，行动要求本人在线：`RoomComp().Connected`）；一个房间只开一场，结束后不能在同一个房间号上重开。
+- **不做的事**：没有任何默认玩法——伤害、出牌、移动、奖励、胜负都不提供；没有自动广播（轮到谁要靠客户端查 `TurnView` 或工程自己推）；没有同时行动、抢答、多阶段回合；断线不踢人、不代打（断线由 room 自动标记，行动要求本人在线：`Room().Connected`）；一个房间只开一场，结束后不能在同一个房间号上重开。
 - **`MaxTurns` 数的是总回合**：各玩家依次行动一次算一回合，不是“一圈”。两人、`MaxTurns=2` 时各行动一次就结束。
 - **名单是固定的**：开局至少两名在座成员，名单按房间座位排序后不再变。中途加入的人可以 `TurnView`，但不进入本场名单；离开的参与者在后续推进时被跳过；同一个人重新加入仍在名单里。
 - **重放的范围**：每名玩家只记最后一条成功命令的 `(Sequence, LastRound)`。完全相同的最后一条重发返回**当前**快照、不再推进；更早的命令、跳号、同序号配不同回合都拒绝。重放仍然校验当前的成员资格与连接身份，旧连接即使带着正确的序号也不行。模块只为“无额外载荷的结束回合”判重——加了动作内容之后，回执要由业务自己绑定动作内容或摘要。
@@ -44,7 +44,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
 - **需求多一点——接上游戏动作**：自己加一条协议与一个 Room 的 Nest handler，在同一笔事务里按这个顺序写：
 
   ```go
-  replayed, err := target.TurnComp().CheckEnd(playerID, epoch, connection, round, sequence)
+  replayed, err := target.Turn().CheckEnd(playerID, epoch, connection, round, sequence)
   if err != nil {
       return err
   }
@@ -52,7 +52,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
       return nil // 已经成功过的游戏动作不能再执行
   }
   // 校验并修改本场游戏的 DAO；失败直接返回，随事务回滚。
-  _, err = target.TurnComp().End(playerID, epoch, connection, round, sequence)
+  _, err = target.Turn().End(playerID, epoch, connection, round, sequence)
   return err
   ```
 
@@ -61,13 +61,13 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
   - 收窄回合时长与回合数：改 `game/components/turn/turn.go` 里 `Start` 的范围判断。
   - 超时要做别的事（扣分、托管）：改 `game/components/turn/turn.go` 的 `OnDeadline`，仍在同一笔事务里。
   - 不要改：`TurnDeadline` 的类型号（它与持久节点是数据契约，由安装器分配并记在 `roost.yaml` 的 `timers.room.types`）、`TurnState` 的 store 键、`onDeadline` 里“节点号与期限都对得上才处理”的校验。
-- **别的模块 / 业务代码要用它**：在 Room 的 handler 里嵌入 `room.ITurnEntity`，用 `TurnComp().View(…)` 读快照；事务外用 `syncsender.NewTurnViewSender(client).Sync_TurnView(ctx, roomEntityID, playerID, epoch, connection)`。
+- **别的模块 / 业务代码要用它**：在 Room 的 handler 里参数写 `view.ITurnEntity`（同时要别的组件时写 `view.RoomEntity`），用 `Turn().View(…)` 读快照；事务外用 `syncsender.NewTurnViewSender(client).Sync_TurnView(ctx, roomEntityID, playerID, epoch, connection)`。
 - **不适合直接用的情形**：实时或帧同步玩法、所有人同时提交的回合（如自走棋的准备阶段）、名单会变的回合制、需要观战推送的对局。值得借鉴的是：“每人一个连续命令号 + 最后一条可重放”的回执；用“节点号 + 期限”双重校验让旧的定时器投递不会消费新回合；先 `CheckEnd` 再改玩法、最后 `End` 的三段式。
 
 ## 联动
 
 - turn 自己没有 `with/` 目录，别的模块也没有 `with/turn`。
-- 对 room 的使用（依赖）：成员与连接校验经 `RoomComp()`，定时器用 Room 上的实体定时器组件。
+- 对 room 的使用（依赖）：成员与连接校验经 `Room()`，定时器用 Room 上的实体定时器组件。
 - 配方 `turn-pvp`（`modules/recipes/`）把 turn 与 enter、profile、room、leaderboard、matchmaking、login、portal、servertime 组合成双人回合对战；配方没有替业务假设胜负规则。
 
 ## 验证范围

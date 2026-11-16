@@ -1,10 +1,10 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"fmt"
 	"time"
 
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
@@ -20,8 +20,8 @@ import (
 // records nothing, so the service can heal it first.
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardReserve(target alliance_member.IAllianceGuardEntity, requestID string, allianceID int64, deadlineUnix int64, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
-	guard := target.AllianceGuardComp()
+func handlerGuardReserve(target view.IAllianceGuardEntity, requestID string, allianceID int64, deadlineUnix int64, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
+	guard := target.AllianceGuard()
 	if _, decided := guard.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
 		return alliancerule.GuardAnswer{Held: true, State: guard.State(guard.CurrentVersion())}, nil
 	}
@@ -44,8 +44,8 @@ func handlerGuardReserve(target alliance_member.IAllianceGuardEntity, requestID 
 // once the guard no longer holds the reservation.)
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardResolve(target alliance_member.IAllianceGuardEntity, requestID string, allianceID int64, joined bool) (alliancerule.GuardAnswer, error) {
-	guard := target.AllianceGuardComp()
+func handlerGuardResolve(target view.IAllianceGuardEntity, requestID string, allianceID int64, joined bool) (alliancerule.GuardAnswer, error) {
+	guard := target.AllianceGuard()
 	changed := guard.Resolve(requestID, allianceID, joined)
 	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
 }
@@ -55,8 +55,8 @@ func handlerGuardResolve(target alliance_member.IAllianceGuardEntity, requestID 
 // after healing found the alliance holds no seat under joinRequestID).
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardClear(target alliance_member.IAllianceGuardEntity, allianceID int64, joinRequestID string, nowUnix int64) (alliancerule.GuardAnswer, error) {
-	guard := target.AllianceGuardComp()
+func handlerGuardClear(target view.IAllianceGuardEntity, allianceID int64, joinRequestID string, nowUnix int64) (alliancerule.GuardAnswer, error) {
+	guard := target.AllianceGuard()
 	changed := guard.Clear(allianceID, joinRequestID, nowUnix)
 	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
 }
@@ -64,16 +64,16 @@ func handlerGuardClear(target alliance_member.IAllianceGuardEntity, allianceID i
 // handlerGuardInfo reads the player's guard.
 //
 //roost:nest durability=memory
-func handlerGuardInfo(target alliance_member.IAllianceGuardEntity) (alliancerule.MemberState, error) {
-	guard := target.AllianceGuardComp()
+func handlerGuardInfo(target view.IAllianceGuardEntity) (alliancerule.MemberState, error) {
+	guard := target.AllianceGuard()
 	return guard.State(guard.CurrentVersion()), nil
 }
 
 // handlerGuardReceipt reads one request's receipt on the guard (Found, Reserve).
 //
 //roost:nest durability=memory
-func handlerGuardReceipt(target alliance_member.IAllianceGuardEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
-	receipt, found := target.AllianceGuardComp().Receipt(requestID)
+func handlerGuardReceipt(target view.IAllianceGuardEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
+	receipt, found := target.AllianceGuard().Receipt(requestID)
 	return alliancerule.ReceiptAnswer{Found: found, Receipt: receipt}, nil
 }
 
@@ -88,11 +88,11 @@ func handlerGuardReceipt(target alliance_member.IAllianceGuardEntity, requestID 
 // answer's Subject is the alliance the reward was claimed in.
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardClaimReward(target alliance_member.IAllianceGuardEntity, requestID string, periodSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
+func handlerGuardClaimReward(target view.IAllianceGuardEntity, requestID string, periodSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
 	if periodSeconds <= 0 {
 		return alliancerule.GuardAnswer{}, fmt.Errorf("alliance reward: period must be positive, got %ds", periodSeconds)
 	}
-	guard := target.AllianceGuardComp()
+	guard := target.AllianceGuard()
 	period := nowUnix/periodSeconds + 1
 	outcome, err := guard.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		return guard.ClaimReward(requestID, period)
@@ -108,8 +108,8 @@ func handlerGuardClaimReward(target alliance_member.IAllianceGuardEntity, reques
 // changes nothing.
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardReleaseReward(target alliance_member.IAllianceGuardEntity, claimRequestID string) (alliancerule.GuardAnswer, error) {
-	guard := target.AllianceGuardComp()
+func handlerGuardReleaseReward(target view.IAllianceGuardEntity, claimRequestID string) (alliancerule.GuardAnswer, error) {
+	guard := target.AllianceGuard()
 	changed := guard.ReleaseReward(claimRequestID)
 	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
 }

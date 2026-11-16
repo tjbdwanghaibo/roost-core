@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
-	alliance "{{MODULE}}/game/entities/alliance"
 	"{{MODULE}}/game/modules/alliancerule"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -12,8 +12,8 @@ import (
 // Players read the alliance through its mirror instead (AllianceMirror).
 //
 //roost:nest durability=memory
-func handlerAllianceInfo(target alliance.IAllianceRosterEntity) (alliancerule.View, error) {
-	roster := target.AllianceRosterComp()
+func handlerAllianceInfo(target view.IAllianceRosterEntity) (alliancerule.View, error) {
+	roster := target.AllianceRoster()
 	if !roster.Founded() {
 		return alliancerule.View{}, errcode.Wrap(apperrors.ErrAllianceMissing, nil, "alliance_id", roster.AllianceID())
 	}
@@ -23,7 +23,7 @@ func handlerAllianceInfo(target alliance.IAllianceRosterEntity) (alliancerule.Vi
 // handlerAllianceReceipt reads one request's receipt (Result).
 //
 //roost:nest durability=memory
-func handlerAllianceReceipt(target alliance.IAllianceRosterEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
-	receipt, found := target.AllianceRosterComp().Receipt(requestID)
+func handlerAllianceReceipt(target view.IAllianceRosterEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
+	receipt, found := target.AllianceRoster().Receipt(requestID)
 	return alliancerule.ReceiptAnswer{Found: found, Receipt: receipt}, nil
 }

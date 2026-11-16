@@ -1,10 +1,9 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"time"
 
-	alliance "{{MODULE}}/game/entities/alliance"
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
@@ -25,8 +24,8 @@ import (
 // server a best-effort notice of it after the write answered.
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceAdmit(target alliance.IAllianceRosterEntity, member alliance_member.IAllianceGuardEntity, requestID string, actorID int64, callerSID int32, viaApplication bool, deferHeld bool, maxMembers int32, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster, guard := target.AllianceRosterComp(), member.AllianceGuardComp()
+func handlerAllianceAdmit(target view.IAllianceRosterEntity, member view.IAllianceGuardEntity, requestID string, actorID int64, callerSID int32, viaApplication bool, deferHeld bool, maxMembers int32, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, guard := target.AllianceRoster(), member.AllianceGuard()
 	playerID := guard.PlayerID()
 	if _, decided := roster.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
 		return alliancerule.Answer{GuardHeld: true, Guard: guard.State(guard.CurrentVersion())}, nil

@@ -1,51 +1,24 @@
 package team
 
 import (
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/view"
-	"sort"
-	"sync"
-
 )
 
-// TeamChange 交给工程的组关系投影。通知必须由 Guard 的提交后入口发送，回调本身不得 I/O。
-// Refresh 只刷新当前玩家，避免周期核对时向全队重发通知。Before 用于给离队/解散成员发清理通知。
-type TeamChange struct {
-	Before, After view.TeamSnapshot
-	Refresh       bool
-}
-
-var teamChanged = struct {
-	sync.RWMutex
-	hooks map[string]func(view.PlayerEntity, TeamChange) error
-}{hooks: map[string]func(view.PlayerEntity, TeamChange) error{}}
-
-func OnTeamChanged(name string, hook func(view.PlayerEntity, TeamChange) error) {
-	if name == "" || hook == nil {
-		panic("team: invalid changed hook")
-	}
-	teamChanged.Lock()
-	defer teamChanged.Unlock()
-	if teamChanged.hooks[name] != nil {
-		panic("team: duplicate changed hook " + name)
-	}
-	teamChanged.hooks[name] = hook
-}
+// changed 在 Player 上发布 event.TeamChanged，交给工程的组关系投影（只改同一个 Player、不做 I/O；通知由 Guard 的
+// 提交后入口发送）。refresh 只刷新当前玩家，避免周期核对时向全队重发通知；before 用于给离队 / 解散的成员发清理通知。
+// 监听返回的错误原样返回，整笔事务回滚。
 func (c *Component) changed(before, after view.TeamSnapshot, refresh bool) error {
-	teamChanged.RLock()
-	names := make([]string, 0, len(teamChanged.hooks))
-	for n := range teamChanged.hooks {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	hooks := make([]func(view.PlayerEntity, TeamChange) error, 0, len(names))
-	for _, n := range names {
-		hooks = append(hooks, teamChanged.hooks[n])
-	}
-	teamChanged.RUnlock()
-	for _, hook := range hooks {
-		if err := hook(c.owner, TeamChange{Before: before, After: after, Refresh: refresh}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.owner.Publish(event.TeamChanged{
+		TeamID: after.TeamID, Leader: after.Leader, Revision: after.Revision, Members: after.Members, SIDs: after.SIDs,
+		BeforeTeamID: before.TeamID, BeforeLeader: before.Leader, BeforeRevision: before.Revision, BeforeMembers: before.Members, BeforeSIDs: before.SIDs,
+		Refresh: refresh,
+	})
+}
+
+// ChangedSnapshots 把 event.TeamChanged 还原成变化前后两份 view.TeamSnapshot，给要按快照处理的监听用。
+func ChangedSnapshots(ev event.TeamChanged) (before, after view.TeamSnapshot) {
+	before = view.TeamSnapshot{TeamID: ev.BeforeTeamID, Leader: ev.BeforeLeader, Revision: ev.BeforeRevision, Members: ev.BeforeMembers, SIDs: ev.BeforeSIDs}
+	after = view.TeamSnapshot{TeamID: ev.TeamID, Leader: ev.Leader, Revision: ev.Revision, Members: ev.Members, SIDs: ev.SIDs}
+	return before, after
 }

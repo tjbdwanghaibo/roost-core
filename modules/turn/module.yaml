@@ -6,6 +6,7 @@ needs:
   features: [protocol, entity, dao, errcode, nest]
 entity: Room
 component: Turn
+component_package: game/components/turn
 timer_types: [TurnDeadline]
 state:
   - field: Turn

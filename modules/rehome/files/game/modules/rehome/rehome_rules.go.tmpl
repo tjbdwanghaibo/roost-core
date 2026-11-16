@@ -3,15 +3,15 @@ package rehome
 import "time"
 
 // 这个文件归工程所有，是换服的规则入口：玩家自己申请换服时，能去哪些服、多久能换一次。
-// RehomeComponent.Prepare 在记下换服意图的那笔事务里调用它们；服务端发起的换服（Request.Operator，GM / 运维）
+// rehome 组件的 Prepare 在记下换服意图的那笔事务里调用它们；服务端发起的换服（Request.Operator，GM / 运维）
 // 不受它们约束。
 //
 // 规则之外还有三道关，不在这里、也绕不过去：目标服必须是另一个服；别的功能登记的换服前检查
-// （rehome_hooks.go 的 OnApplying、实体包的 OnRehomeApplying）；以及 account 自己的条件——
+// （rehome_hooks.go 的 OnApplying、实体事件 event.RehomeApplying 的监听）；以及 account 自己的条件——
 // 目标服存在、对外开放（open）、没有并入别的服，账号在目标服还没有角色。
 //
-// 费用：缺省不收，模块也不依赖货币。要收就登记两个事务内的钩子（实体包）——在换服前检查里核对付得起
-// （只读，付不起就返回错误拒绝），在到达后的钩子里扣（换成了才扣，与到达同一笔事务、恰好一次）。
+// 费用：缺省不收，模块也不依赖货币。要收就写两个事务内的实体事件监听——在 event.RehomeApplying 里核对付得起
+// （只读，付不起就返回错误拒绝），在 event.RehomeArrived 里扣（换成了才扣，与到达同一笔事务、恰好一次）。
 // 不要在换服前检查里扣：申请之后换服仍可能被拒绝或中止，那一笔扣款没有地方退。
 
 // TargetAllowed 回答：绑定在 from 服的玩家能不能申请换到 to 服。缺省任何别的服都可以（它存不存在、

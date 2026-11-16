@@ -8,6 +8,7 @@ access:
 entities: [Room]
 entity: Room
 component: Room
+component_package: game/components/room
 managers: [NewRoomPresence]
 protocols: [RoomJoin, RoomReconnect, RoomLeave, RoomView, RoomClose]
 errcodes: [room_invalid, room_unopened, room_closed, room_full, room_not_member, room_stale_epoch, room_not_host]

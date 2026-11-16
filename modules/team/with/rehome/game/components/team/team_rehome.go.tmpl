@@ -1,23 +1,30 @@
 package team
 
 import (
-	rehomecomp "{{MODULE}}/game/components/rehome"
-	gamerehome "{{MODULE}}/game/modules/rehome"
-	"{{MODULE}}/game/view"
+	"{{MODULE}}/game/event"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-func init() {
-	rehomecomp.OnRehomeApplying("team", func(owner view.PlayerEntity, _ gamerehome.Move, _ int64) error {
-		if owner.Team().TeamID() != 0 {
-			return apperrors.ErrTeamBlocked
-		}
-		return nil
-	})
-	OnTeamJoining("rehome", func(owner view.PlayerEntity) error {
-		if owner.Dao().GetRehome().GetPendingID() != "" {
-			return apperrors.ErrTeamBlocked
-		}
-		return nil
-	})
+// OnRehomeApplying 是换服前检查（拦截事件，与记换服意图同一笔 Player 事务）：在队伍中不能换服（team_blocked）。只读。
+//
+// priority=10 保持改成事件之前的执行顺序：原来的事务内换服前检查按登记名字母序执行（matchmaking、team），这里排后。
+//
+//roost:listen priority=10
+func (c *Component) OnRehomeApplying(ev event.RehomeApplying) error {
+	if c.TeamID() != 0 {
+		return apperrors.ErrTeamBlocked
+	}
+	return nil
+}
+
+// OnTeamJoining 是建队、入队的准入（拦截事件，在 Player 上）：换服意图未清除前不能建队或入队（team_blocked）。只读。
+//
+// priority=10 保持改成事件之前的执行顺序：原来的入队检查按登记名字母序执行（matchmaking、rehome），这里排后。
+//
+//roost:listen priority=10
+func (c *Component) OnTeamJoining(ev event.TeamJoining) error {
+	if c.owner.Dao().GetRehome().GetPendingID() != "" {
+		return apperrors.ErrTeamBlocked
+	}
+	return nil
 }

@@ -13,15 +13,16 @@ func (component *{{TIMER_COMPONENT}}Component) registerTurnTimers(handlers *enti
 	handlers.Register(TurnDeadline, component.onTurnDeadline)
 }
 func (component *{{TIMER_COMPONENT}}Component) onTurnDeadline(fire entitytimer.Fire) time.Duration {
-	return component.Owner().TurnComp().OnDeadline(fire)
+	return component.Owner().Turn().OnDeadline(fire)
 }
 
-// ArmTurnDeadline 是 turn 组件（game/components/turn）回合期限的定时节点适配：节点挂在 Room 的定时组件上。
+// ArmTurnDeadline 是 view.TurnHolder 的宿主方法：turn 组件（game/components/turn）回合期限的定时节点适配，
+// 节点挂在 Room 的定时组件上。
 func (r *Room) ArmTurnDeadline(at time.Time) int64 {
 	return r.{{TIMER_COMPONENT}}Comp().New{{TIMER_COMPONENT}}At(at, TurnDeadline, 0, 0, nil)
 }
 
-// CancelTurnDeadline 删掉回合期限节点 id（ArmTurnDeadline 建的）。
+// CancelTurnDeadline 是 view.TurnHolder 的宿主方法：删掉回合期限节点 id（ArmTurnDeadline 建的）。
 func (r *Room) CancelTurnDeadline(id int64) {
 	r.{{TIMER_COMPONENT}}Comp().Remove{{TIMER_COMPONENT}}(id)
 }

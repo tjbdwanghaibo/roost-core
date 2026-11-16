@@ -1,0 +1,37 @@
+package event
+
+// RehomeApplying 是换服前检查在事务之内的一半，拦截事件：在记下换服意图的那笔 Player 事务里发布（rehome 组件的
+// Prepare；同一个换服 ID 再来、驱动器在离开之前复核时也再发布一次）。监听只看这名玩家自己的档能不能换（在队伍里、
+// 在排队、等级不够、付不起费用……），返回错误就拒绝这次申请，整笔事务回滚、什么都没写；返回带业务码的错误时客户端
+// 拿到那个码，否则是 rehome_refused。
+//
+// 拦截监听只做检查，不改状态：申请通过之后换服仍可能被 account 拒绝或中途中止，那时只有意图会被清掉，
+// 这里改过的东西不会还原。要随换服改这名玩家的状态（扣费、重置位置），监听 RehomeArrived。
+//
+// 字段与 view.RehomeMove 相同（PlayerID 是玩家号，EntityID 是 Player 的完整实体号，ID 是换服 ID，From 是本服，
+// To 是目标服，Epoch 是发起时 account 上的绑定代数，Operator 为 true 表示服务端发起），再加这条 Nest 消息冻结的业务时间。
+type RehomeApplying struct {
+	PlayerID     int64
+	EntityID     int64
+	ID           string
+	From         int32
+	To           int32
+	Epoch        uint64
+	Operator     bool
+	NowUnixMilli int64
+}
+
+// RehomeArrived 是到达后在事务之内的一半：这名玩家换服之后第一次在目标服进入游戏时，在“到达过了”的标记的同一笔
+// Player 事务里发布（rehome 组件的 Arrive），所以恰好一次。监听做必须跟着换服发生的事（扣换服费、把位置重置到出生点、
+// 清掉只在原服有意义的状态），只改同一个 Player。返回错误会让这一次到达整笔回滚，下一次进入重做——监听一直失败，
+// 这名玩家就一直没有到达（冷却不起算、别的监听也不生效），但不影响他进入游戏；不想拖住别人的功能自己把错误吞掉。
+//
+// 字段与 view.RehomeArrival 相同（ID 是换服 ID，From 是源服，To 是目标服，Count 是算上这一次换过几次服），再加业务时间。
+type RehomeArrived struct {
+	PlayerID     int64
+	ID           string
+	From         int32
+	To           int32
+	Count        int32
+	NowUnixMilli int64
+}

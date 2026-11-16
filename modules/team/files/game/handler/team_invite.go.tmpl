@@ -1,14 +1,10 @@
 package handler
 
-import (
-	"{{MODULE}}/game/view"
-	player "{{MODULE}}/game/entities/player"
-	team "{{MODULE}}/game/entities/team"
-)
+import "{{MODULE}}/game/view"
 
 // handlerTeamInvite 的 Team 权限由准备阶段取得，业务阶段统一锁住 Team 与 Player。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTeamInvite(target team.ITeamEntity, member player.ITeamEntity, invitee int64, nowUnixMilli int64) (view.TeamInvitation, error) {
-	return member.TeamComp().Invite(target.TeamEntity(), invitee, nowUnixMilli)
+func handlerTeamInvite(target view.TeamEntity, member view.ITeamEntity, invitee int64, nowUnixMilli int64) (view.TeamInvitation, error) {
+	return member.Team().Invite(target, invitee, nowUnixMilli)
 }

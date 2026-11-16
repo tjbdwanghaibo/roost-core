@@ -17,7 +17,15 @@ const MaxMembers = 8
 const MaxInvites = 64
 const InviteMillis int64 = 60000
 
-// Owner 是 TeamRoster 组件的宿主：view 的 TeamEntity（Team 的接线见 game/entities/team/roster_component.go）。
+//roost:component type={{ID:component:TeamRoster}}
+const CompTypeTeamRoster entity.ComponentType = {{ID:component:TeamRoster}}
+
+// init 登记组件工厂：Team 结构体里 comp:"teamroster.CompTypeTeamRoster" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTeamRoster, NewComponent)
+}
+
+// Owner 是 TeamRoster 组件的宿主：view 的 TeamEntity（Team 实体在 game/entities/team/entity.go 直接挂这个组件）。
 // 只在 Team 被 Nest 锁住期间使用。
 type Owner = view.TeamEntity
 
@@ -28,7 +36,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Team 在 game/entities/team/roster_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

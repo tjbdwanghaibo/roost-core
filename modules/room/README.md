@@ -25,9 +25,9 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 - `room.EntityID(roomID) (int64, error)`：把房间唯一号换成 Room 的完整 Entity ID。
 - `room.ConnectionKey(session) (string, error)`：从服务端 Session 的 `ConnectionID()` 取连接标识。
 
-**Nest handler**（`game/handler/room_*.go`，写入的都是 `rollback=undo durability=strict`；`RoomDisconnect` 只改不落库的在线标记，没有持久事实要提交）：`RoomOpen`、`RoomJoin`、`RoomView`、`RoomReconnect`、`RoomDisconnect`、`RoomLeave`、`RoomClose`。事务之外用生成的 `syncsender`（例如 `syncsender.NewRoomJoinSender(client).Sync_RoomJoin(ctx, id, playerID, connection)`）；`RoomComp()` 的方法（`Open`、`Join`、`Reconnect`、`Disconnect`、`Leave`、`Close`、`View`，以及 `Connected(playerID)`：这个席位现在在不在线）只能在持有 Room 锁的事务里调用。
+**Nest handler**（`game/handler/room_*.go`，写入的都是 `rollback=undo durability=strict`；`RoomDisconnect` 只改不落库的在线标记，没有持久事实要提交）：`RoomOpen`、`RoomJoin`、`RoomView`、`RoomReconnect`、`RoomDisconnect`、`RoomLeave`、`RoomClose`。事务之外用生成的 `syncsender`（例如 `syncsender.NewRoomJoinSender(client).Sync_RoomJoin(ctx, id, playerID, connection)`）；handler 参数是生成的 `view.IRoomEntity`，组件 `Room()`（对外接口 `view.Room`；逻辑、类型号 `room.CompTypeRoom` 与工厂登记在 `game/components/room/room.go`）的方法（`Open`、`Join`、`Reconnect`、`Disconnect`、`Leave`、`Close`、`View`，以及 `Connected(playerID)`：这个席位现在在不在线）只能在持有 Room 锁的事务里调用。
 
-**登记点**：`room.OnRoomJoining(name, func(room.Owner, playerID int64) error)`（`game/components/room/join_checks.go`，`room.Owner` 即 `view.RoomEntity`）。在 `Join` 的事务里、检查房间已开之后、占座之前执行；返回错误即拒绝入房。不能做 I/O。只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行。`matchroom` 用它校验名单。
+**实体事件**：拦截事件 `event.RoomJoining{PlayerID}`（`game/event/room.go`），在 Room 上发布：`Join` 的事务里、检查房间已开之后、占座之前；监听返回错误即拒绝入房，什么都不写。监听写在挂在 Room 上的组件（或 Room 实体）的方法上，标 `//roost:listen [priority=N]`；只做检查、不改状态、不做 I/O。`matchroom` 的组件监听它校验名单（唯一的监听）。
 
 **状态**：模块自带实体 `Room`（`game/entities/room/entity.go`，类别是 World）与 `RoomDao`（`db/def/room.go`，集合 `room`）：`Capacity`、`Closed`、`HostID`、`EpochSeed`、`Seats`（玩家号 → `RoomSeat{Slot, Epoch, Connection}`）落库；`Online`（玩家号 → 在线的连接）不落库。不同步；成员经 `RoomView` 读 PB 快照（`Connected` 由 `Online` 算出）。连接标识不出现在任何对外的快照里。断线订阅的登记表只在进程内存里。
 
@@ -40,7 +40,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 ## 能力边界
 
 - **不做的事**：不做匹配与邀请码；没有全服房间目录；不约束“一名玩家只能在一间房里”；不广播、不装 EntitySync 订阅（成员变化、上下线要别人知道，由玩法在提交成功之后自己推——维护者 D24 定为延后）；不踢人、不设掉线保留时长、不做重启后的房间清理；不分配房号。
-- **客户端不能开房**：开房只有服务端入口。缺省准入是“任何已认证的玩家都能加入任何已开、未满的房”，要限制就登记 `OnRoomJoining`。
+- **客户端不能开房**：开房只有服务端入口。缺省准入是“任何已认证的玩家都能加入任何已开、未满的房”，要限制就监听 `event.RoomJoining`。
 - **上限**：容量 1 到 64；连接标识至多 128 字节；一间房只有一个房主。`EpochSeed` 只增不减，到 `MaxInt64` 之后拒绝再分配。
 - **一致性**：开房与每一次席位变更都是 Room 上的一笔严格事务，提交失败时座位、房主与代际一起回滚，不提前确认。同一个代际的并发重连至多一条成功。已关闭的房号永不再开。
 - **`Connected` 的含义**：本进程里认下的那条连接还没断。断线由订阅自动处理，延迟是接入层发布关闭事件的延迟；事件丢了时以补扫为界（至多 30 秒）。重启之后全部是断线，直到成员重连——在那之前玩法看到的是“全员断线”，不是“上一个进程最后的样子”。运维刷新 / 卸载再装载一间房（同一进程）同样清空在线状态，还连着的成员要换一条新连接 `RoomReconnect`（同一条连接的重放重连被拒）。
@@ -53,18 +53,18 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 - **需求正好是它**：`roost module add room`。安装器分配实体号、组件号、消息号与错误码，实体包的 `lifecycle_gen.go` 由 roost generate 产出，补玩家 TCP 骨架。没有依赖。
 - **需求多一点**：
-  - 入房条件（邀请码、名单、等级）：登记 `OnRoomJoining`。
+  - 入房条件（邀请码、名单、等级）：在 Room 上的组件里监听 `event.RoomJoining`（只读）。
   - 房内玩法状态：给 `Room` 加自己的组件与状态（像 `matchroom`、`turn` 那样声明 `entity: Room`），在自己的 handler 里与席位一起提交。
-  - 断线之后怎么办（保留时长、踢人、超时托管）：断线标记已经自动有了；踢人与超时用自己的定时器加 `RoomLeave` 的服务端等价逻辑，读 `RoomComp().Connected(playerID)` 判断。
+  - 断线之后怎么办（保留时长、踢人、超时托管）：断线标记已经自动有了；踢人与超时用自己的定时器加 `RoomLeave` 的服务端等价逻辑，读 `Room().Connected(playerID)` 判断。
   - 上下线要通知其他成员：在自己的玩法里推（房间不广播）。
   - 房号：自己写分配器，或者装 `matchroom` 用它的 `_room_id_sequence`。
   - 不要改 `game/components/room/room.go` 里代际与连接的 CAS 检查。
-- **别的代码要用它**：开房 `room.Open(ctx, registry, uniqueID, capacity)`；读成员快照用 `syncsender.NewRoomViewSender(client).Sync_RoomView(ctx, id, playerID, connection)`（要那名成员当前的连接标识）；在自己的 Room handler 里直接用 `target.RoomComp()`。
+- **别的代码要用它**：开房 `room.Open(ctx, registry, uniqueID, capacity)`；读成员快照用 `syncsender.NewRoomViewSender(client).Sync_RoomView(ctx, id, playerID, connection)`（要那名成员当前的连接标识）；在自己的 Room handler 里参数写 `view.IRoomEntity`，直接用 `target.Room()`。
 - **只适合借鉴的情形**：大规模场景（用 scene 与视野模块）、需要观战或不占座旁观、需要跨进程迁移的房间。值得借鉴的是“席位代际 + 连接标识”的重连 CAS，以及断线事件带代际、迟到的旧事件伤不到新连接。
 
 ## 联动
 
-本模块没有 `with/` 联动。依赖它的模块：`matchroom`（登记 `OnRoomJoining` 做名单准入）、`turn`（回合玩法挂在 Room 上）、`matchmaking`（经 `matchroom` 开房，清匹配结果前核对房间已关）。
+本模块没有 `with/` 联动。依赖它的模块：`matchroom`（监听 `event.RoomJoining` 做名单准入）、`turn`（回合玩法挂在 Room 上）、`matchmaking`（经 `matchroom` 开房，清匹配结果前核对房间已关）。
 
 ## 验证范围
 

@@ -6,6 +6,7 @@ needs:
   features: [entity, dao, nest]
 entity: Room
 component: Matchroom
+component_package: game/components/matchroom
 state:
   - field: Matchroom
     type: MatchroomState

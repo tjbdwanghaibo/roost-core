@@ -1,0 +1,31 @@
+package event
+
+// TeamJoining 是建队、入队之前的拦截事件：在 Player 上发布（team 组件的 Create / Accept，Team 与 Player 都已被这笔
+// Nest 事务锁住），先于任何写入。TeamID 是要建 / 要入的队伍的完整实体号。监听只看这名玩家自己的档（在排队、
+// 换服意图未清……），返回错误就拒绝，整笔事务什么都没写。拦截监听只做检查，不改状态，也不做 I/O。
+type TeamJoining struct {
+	TeamID int64
+}
+
+// TeamChanged 在玩家的队伍关系变了（建队、入队、离队、解散）或周期核对刷新时，在同一笔 Player 事务里发布
+// （team 组件），交给工程维护组关系投影。监听只改同一个 Player、不做 I/O；对外通知必须由 Guard 的提交后入口发送。
+// 返回错误时整笔事务回滚（队伍与玩家引用一起退回）。
+//
+// 字段是 view.TeamSnapshot 的值拷贝（事件只放值）：TeamID / Leader / Revision / Members / SIDs 是变化之后的队伍，
+// Before* 是变化之前的（离队、被解散的成员靠它收清理通知）。Refresh 为 true 表示只刷新当前玩家（周期核对），
+// 不要向全队重发通知。
+type TeamChanged struct {
+	TeamID   int64
+	Leader   int64
+	Revision int64
+	Members  []int64
+	SIDs     map[int64]int32
+
+	BeforeTeamID   int64
+	BeforeLeader   int64
+	BeforeRevision int64
+	BeforeMembers  []int64
+	BeforeSIDs     map[int64]int32
+
+	Refresh bool
+}

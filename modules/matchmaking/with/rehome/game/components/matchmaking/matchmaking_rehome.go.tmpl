@@ -1,23 +1,30 @@
 package matchmaking
 
 import (
-	rehomecomp "{{MODULE}}/game/components/rehome"
-	gamerehome "{{MODULE}}/game/modules/rehome"
-	"{{MODULE}}/game/view"
+	"{{MODULE}}/game/event"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-func init() {
-	rehomecomp.OnRehomeApplying("matchmaking", func(p view.PlayerEntity, _ gamerehome.Move, _ int64) error {
-		if p.Dao().GetMatchmaking().GetPhase() != "" {
-			return apperrors.ErrMatchmakingBusy
-		}
-		return nil
-	})
-	OnMatchmakingStarting("rehome", func(p view.PlayerEntity) error {
-		if p.Dao().GetRehome().GetPendingID() != "" {
-			return apperrors.ErrMatchmakingBusy
-		}
-		return nil
-	})
+// OnRehomeApplying 是换服前检查（拦截事件，与记换服意图同一笔 Player 事务）：有匹配意图（含未知结果）时不能换服
+// （matchmaking_busy）。只读。
+//
+// priority=20 保持改成事件之前的执行顺序：原来的事务内换服前检查按登记名字母序执行（matchmaking、team），这里排前。
+//
+//roost:listen priority=20
+func (c *Component) OnRehomeApplying(ev event.RehomeApplying) error {
+	if c.owner.Dao().GetMatchmaking().GetPhase() != "" {
+		return apperrors.ErrMatchmakingBusy
+	}
+	return nil
+}
+
+// OnMatchmakingStarting 是开始排队之前的拦截事件的监听：换服意图未清除前不能排队（matchmaking_busy）。只读。
+// 只有这一个监听，不写 priority。
+//
+//roost:listen
+func (c *Component) OnMatchmakingStarting(ev event.MatchmakingStarting) error {
+	if c.owner.Dao().GetRehome().GetPendingID() != "" {
+		return apperrors.ErrMatchmakingBusy
+	}
+	return nil
 }

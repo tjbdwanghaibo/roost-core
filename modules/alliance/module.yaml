@@ -19,6 +19,7 @@ services:
 entities: [Alliance, AllianceMember]
 entity: Player
 component: Alliance
+component_package: game/components/alliance
 components: [AllianceRoster, AllianceGuard]
 state:
   - field: Alliance

@@ -9,7 +9,7 @@
 //     玩家一开始换服，本进程对他的进入、对他的后台步骤就都答“换服中”，不等 account。
 //   - 玩家档里的 PlayerDao.Rehome 只是业务事实（冷却、到达只做一次），不当栅栏用。
 //
-// 一次换服的顺序见 Driver；别的功能要在换服的某一步顺带做事，用 rehome_hooks.go 里的三个登记点；
+// 一次换服的顺序见 Driver；别的功能要在换服的某一步顺带做事，用 rehome_hooks.go 里的三个登记点（事务之内的两半是 game/event/rehome.go 的实体事件）；
 // 可去的服与冷却写在 rehome_rules.go（归工程所有）；后台步骤（saga 准入……）问“这名玩家现在归哪个服”
 // 用 Binding。
 //

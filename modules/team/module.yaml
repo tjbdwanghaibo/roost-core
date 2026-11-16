@@ -9,6 +9,7 @@ entities: [Team]
 components: [TeamRoster]
 entity: Player
 component: Team
+component_package: game/components/team
 state:
   - field: Team
     type: TeamState

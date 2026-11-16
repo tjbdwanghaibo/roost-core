@@ -27,15 +27,15 @@
 - `rehome.AdmitMessage(registry, playerID, messageID) error`（`game/modules/rehome/rehome_residency.go`）：给有自己的写闸门的工程在闸门里调，迁出表里的玩家一律拒绝。
 - `rehome.ExemptFromGate(messageID)`：登记一条不受写闸门约束的消息（它自己会查迁出表并给客户端带码的回答）。只在 `init` 里调。
 - `rehome.OwnerSID(err) (sid int32, ok bool)`：从 `rehome_elsewhere` 的拒绝里取出玩家现在的服。`rehome.SelfSID(registry)`：本进程的 sid。
-- Nest handler（`game/handler/rehome_*.go`，都是 `rollback=undo durability=strict`，由驱动器调用，不对客户端开放）：`RehomePrepare`（核对规则与事务内检查、记意图）、`RehomeCancel`（按换服 ID 清意图）、`RehomeArrive`（到达）。组件 `RehomeComp()` 另有只读的 `LastAt()`、`Count()`。
+- Nest handler（`game/handler/rehome_*.go`，都是 `rollback=undo durability=strict`，由驱动器调用，不对客户端开放）：`RehomePrepare`（核对规则与事务内检查、记意图）、`RehomeCancel`（按换服 ID 清意图）、`RehomeArrive`（到达）。参数是生成的 `view.IRehomeEntity`。组件 `Rehome()`（对外接口 `view.Rehome`；逻辑、类型号 `rehome.CompTypeRehome` 与工厂登记在 `game/components/rehome/rehome.go`，实体包里没有 rehome 的手写文件）另有只读的 `LastAt()`、`Count()`。
 
-**登记点**（三个时机；有的分事务内与事务外两半，一个功能两半都需要时两处都登记。都只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行）
+**登记点与实体事件**（三个时机；有的分事务内与事务外两半，一个功能两半都需要时两处都写。事务之外的三个登记点在实体锁之外执行，只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行；事务之内的两半是 Player 上的实体事件（`game/event/rehome.go`，rehome 组件发布），别的模块在自己的组件或 Player 的方法上标 `//roost:listen [priority=N]` 监听，`roost generate` 按优先级排好顺序）
 
-| 时机 | 事务之外（`game/modules/rehome/rehome_hooks.go`） | 事务之内（`game/components/rehome/hooks.go`） |
+| 时机 | 事务之外（`game/modules/rehome/rehome_hooks.go`） | 事务之内（实体事件，`game/event/rehome.go`） |
 | --- | --- | --- |
-| 换服前检查 | `rehome.OnApplying(name, func(ctx, registry, move) error)`：记意图、向 account 发起之前执行。可以问别的服务或进程内状态。返回错误即拒绝，什么都没写 | `rehomecomp.OnRehomeApplying(name, func(owner view.PlayerEntity, move, nowUnixMilli) error)`：与记意图同一笔 Player 事务。只看这名玩家自己的档。当成只读来写 |
+| 换服前检查 | `rehome.OnApplying(name, func(ctx, registry, move) error)`：记意图、向 account 发起之前执行。可以问别的服务或进程内状态。返回错误即拒绝，什么都没写 | 拦截事件 `event.RehomeApplying{PlayerID, EntityID, ID, From, To, Epoch, Operator, NowUnixMilli}`：与记意图同一笔 Player 事务。只看这名玩家自己的档，只做检查、不改状态。现在的监听：matchmaking 20、team 10（沿用改成事件之前按名字字母序的顺序） |
 | 离开时 | `rehome.OnLeaving(name, func(ctx, registry, move) error)`：已受理、玩家已经安静下来（会话已断、先前的请求都执行完、新请求进不来）、实体还没交出。在这里向别的服务问关于他的权威事实，或把他从进程内的东西里拿出来。返回错误即中止这一次换服。可能被重复调用 | 无 |
-| 到达后 | `rehome.OnArrived(name, func(ctx, registry, arrival) error)`：到达的事务提交之后、在进入游戏的请求里执行。**不是恰好一次**：失败只记日志、不重试 | `rehomecomp.OnRehomeArrived(name, func(owner view.PlayerEntity, arrival, nowUnixMilli) error)`：与“到达过了”的标记同一笔事务，**恰好一次**。返回错误则这次到达整笔回滚，下一次进入重做 |
+| 到达后 | `rehome.OnArrived(name, func(ctx, registry, arrival) error)`：到达的事务提交之后、在进入游戏的请求里执行。**不是恰好一次**：失败只记日志、不重试 | 实体事件 `event.RehomeArrived{PlayerID, ID, From, To, Count, NowUnixMilli}`：与“到达过了”的标记同一笔事务，**恰好一次**。监听返回错误则这次到达整笔回滚，下一次进入重做。模块里还没有监听 |
 
 事务内的换服前检查会执行两次：申请时一次，交出实体之前复核一次。
 
@@ -110,17 +110,17 @@
 - **需求正好是它**：`roost module add rehome`。它不依赖别的模块；清单要求业务服务 `uses: [account]`、有玩家 TCP 接入。几乎总是要同时装 `enter`（两个都装着时自动接上进入前检查与到达）；要 GM 命令再装 `gm`。
 - **需求比它多一点**（改留给工程的文件、登记钩子）：
   - 可去的服、冷却：改 `game/modules/rehome/rehome_rules.go` 的 `TargetAllowed` 与 `Cooldown`。至少要保证 `to` 与 `from` 把玩家的逻辑库映射到同一个 Mongo、同一个前缀（见“搬档的前提”）。
-  - 换服费：在自己的文件里登记 `rehomecomp.OnRehomeApplying`（只读核对付得起）与 `rehomecomp.OnRehomeArrived`（扣费，与到达同一笔事务）。不要在换服前检查里扣。
-  - 某种状态下不许换服（在队伍里、在排队、等级不够）：只看玩家自己的档的，登记 `rehomecomp.OnRehomeApplying`；要问别的服务或进程内状态的，登记 `rehome.OnApplying`，并在 `rehome.OnLeaving` 里再问一次。
+  - 换服费：在自己的组件上监听 `event.RehomeApplying`（只读核对付得起）与 `event.RehomeArrived`（扣费，与到达同一笔事务）。不要在换服前检查里扣。
+  - 某种状态下不许换服（在队伍里、在排队、等级不够）：只看玩家自己的档的，监听 `event.RehomeApplying`；要问别的服务或进程内状态的，登记 `rehome.OnApplying`，并在 `rehome.OnLeaving` 里再问一次。
   - 离开前清理（离开场景、取消排队、退订）：登记 `rehome.OnLeaving`。做的事要么“留在本服也无妨”，要么自己能重做。
-  - 到达后重置（位置回出生点、清只在原服有意义的状态）：登记 `rehomecomp.OnRehomeArrived`。
+  - 到达后重置（位置回出生点、清只在原服有意义的状态）：监听 `event.RehomeArrived`。
   - 有自己的驻留表或写闸门：发布 `game.rehome.residency`，或在自己的闸门里调 `rehome.AdmitMessage`。
   - 自己改写了进入端点：加载 Player 之前调 `RehomeDriverFromRegistry(registry)` 的 `Admit`，进入成功之后调 `Arrive`；用 enter 模块的登记点时直接调它的 `RunEntering` / `RunEntered`。
-  - 不要改的文件：`rehome_driver.go`（步骤顺序与结论判定）、`rehome_directory.go` 的 `judge` / `classify`、`rehome_residency.go`、`rehome_admit.go`、`rehome_binding.go`，以及 `RehomeComponent` 的 `Prepare` / `Arrive` / `Cancel`。
+  - 不要改的文件：`rehome_driver.go`（步骤顺序与结论判定）、`rehome_directory.go` 的 `judge` / `classify`、`rehome_residency.go`、`rehome_admit.go`、`rehome_binding.go`，以及 rehome 组件（`game/components/rehome/rehome.go`）的 `Prepare` / `Arrive` / `Cancel`。
 - **别的模块 / 业务代码要用它**：
   - 后台步骤执行前问归属：`sid, moving, err := rehome.Binding(ctx, registry, playerID)`。
   - 服务端发起换服：`controller.RehomeMove(ctx, playerID, to, note)`。
-  - 在同一个 Player 上读换服历史：`owner.RehomeComp().LastAt()`、`Count()`；判断“有没有换服意图”：`owner.Dao().GetRehome().GetPendingID() != ""`。
+  - 在同一个 Player 上读换服历史：`owner.Rehome().LastAt()`、`Count()`；判断“有没有换服意图”：`owner.Dao().GetRehome().GetPendingID() != ""`。
   - 让自己的某条消息在换服期间仍能得到带码的回答：`rehome.ExemptFromGate(msgid)`。
 - **不适合直接用、只适合借鉴的情形**：
   - 各服用不同的 Mongo（跨集群搬数据）：缺省的搬档不适用，要实现自己的 `Documents`（跨集群复制没有事务，幂等与中止要自己处理）。

@@ -1,17 +1,17 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"time"
 
-	alliance "{{MODULE}}/game/entities/alliance"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
 // handlerAllianceDonate adds a member's donation to the alliance's funds.
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceDonate(target alliance.IAllianceRosterEntity, requestID string, actorID int64, amount int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster := target.AllianceRosterComp()
+func handlerAllianceDonate(target view.IAllianceRosterEntity, requestID string, actorID int64, amount int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		return actorID, roster.Donate(actorID, amount)
 	})

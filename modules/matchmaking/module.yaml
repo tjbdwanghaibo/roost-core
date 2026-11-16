@@ -12,6 +12,7 @@ runtime:
   start: Start
 entity: Player
 component: Matchmaking
+component_package: game/components/matchmaking
 state:
   - field: Matchmaking
     type: MatchmakingState

@@ -15,13 +15,13 @@
   - `TeamInvited`：邀请提交后，向本进程在线的被邀请人推送 `{TeamID, Inviter, ExpireAtUnixMilli}`，先记有界收件记录；推送失败不撤销权威邀请。
   - 操作人与所在服的 sid 都来自认证会话和本服务配置，客户端不能指定。
 - **服务端入口**
-  - 组件 `TeamComponent`（`game/components/team/team.go`，经 `ITeamEntity` 的 `TeamComp()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
-  - Team 实体（`game/entities/team/entity.go`）上的成员表组件 TeamRoster（`game/components/teamroster/teamroster.go`，经 `TeamRosterComp()` 或 `view.TeamEntity` 的 `TeamRoster()` 取得）：`Info() view.TeamSnapshot`（`{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
-  - Nest handler（`game/handler/`）：`handlerPlayerTeam`（只读本人的队伍号：`sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`）、`handlerTeamCreate`、`handlerTeamInvite`、`handlerTeamAccept`、`handlerTeamLeave`、`handlerTeamInfo`（后五个都是 `[Team, Player]` 两个实体的事务，`rollback=undo durability=strict`，例如 `sender.NewTeamCreateSender(client).MultiSync_TeamCreate(ctx, teamEntityID, playerEntityID, sid)`）。
+  - Player 上的 Team 组件（逻辑、类型号 `team.CompTypeTeam` 与工厂登记在 `game/components/team/team.go`，对外接口 `view.Team`；handler 收生成的 `view.ITeamEntity`，经 `Team()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
+  - Team 实体（`game/entities/team/entity.go`，直接挂 `teamroster.CompTypeTeamRoster`）上的成员表组件 TeamRoster（`game/components/teamroster/teamroster.go`，类型号与工厂登记也在那里；handler 收 `view.TeamEntity`，经 `TeamRoster()` 取得）：`Info() view.TeamSnapshot`（`{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
+  - Nest handler（`game/handler/`，参数是 `view.TeamEntity` 与 `view.ITeamEntity`）：`handlerPlayerTeam`（只读本人的队伍号：`sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`）、`handlerTeamCreate`、`handlerTeamInvite`、`handlerTeamAccept`、`handlerTeamLeave`、`handlerTeamInfo`（后五个都是 `[Team, Player]` 两个实体的事务，`rollback=undo durability=strict`，例如 `sender.NewTeamCreateSender(client).MultiSync_TeamCreate(ctx, teamEntityID, playerEntityID, sid)`）。
   - Controller（`game/controllers/team.go`）：七个 `HandleTeam…` 端点；建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
-- **登记点**（都在 `game/entities/player/`，只在 `init` 登记，空名、nil、重名 panic，按名字排序执行）
-  - `OnTeamJoining(name, check func(view.PlayerEntity) error)`（`game/components/team/team.go`）：建队与入队的事务内准入检查。返回错误就拒绝这次入队。回调不能做 I/O。
-  - `OnTeamChanged(name, hook func(view.PlayerEntity, TeamChange) error)`（`game/components/team/changed.go`）：队伍关系变化时调用，`TeamChange{Before, After, Refresh}`；`Refresh` 为真表示只是当前玩家核对了一次（`TeamInfo` 等），不是名单变了。在同一笔事务里，回调出错整笔回滚；回调里不能做 I/O，要发通知得用提交后的机制。
+- **实体事件**（`game/event/team.go`，在 Player 上发布；别的模块在自己的组件或 Player 的方法上标 `//roost:listen [priority=N]` 监听，`roost generate` 按优先级排好顺序）
+  - 拦截事件 `event.TeamJoining{TeamID}`（`game/components/team/team.go` 的 `checkJoin`）：建队与入队的事务内准入检查，先于任何写入。监听返回错误就拒绝这次入队；只做检查、不改状态、不做 I/O。现在的监听：matchmaking 20、team 的 rehome 联动 10（沿用改成事件之前按名字字母序的顺序）。
+  - `event.TeamChanged`（`game/components/team/changed.go`）：队伍关系变化时发布，字段是变化前后两份 `view.TeamSnapshot` 的值拷贝（`TeamID/Leader/Revision/Members/SIDs` 与 `Before…`，`team.ChangedSnapshots(ev)` 还原成两份快照）和 `Refresh`；`Refresh` 为真表示只是当前玩家核对了一次（`TeamInfo` 等），不是名单变了。在同一笔事务里，监听出错整笔回滚；监听里不能做 I/O，要发通知得用提交后的机制。
 - **状态**（`db/def/team.go`）
   - `TeamDao`（集合 `team`，主库）：`Leader`、`Members`（玩家号 → 所在服 sid）、`Invites`（玩家号 → 过期时刻）、`MatchKey`、`Revision`。只落库。
   - `PlayerDao.Team`（`TeamState{TeamID, Invited}`）：只落库、不同步。客户端查自己的队伍用 `TeamInfo`，查邀请用 `TeamInvites`；`Invited` 只用于发现，不是接受邀请的权威。
@@ -48,21 +48,21 @@
 - **需求正好是它**：`roost module add team`。新工程通常先装 enter（要鉴权再装 login），通过 `EnterGame` 建好 Player 后再请求这些端点。流程：`TeamCreate` → 队长 `TeamInvite` → 被邀请方接收 `TeamInvited` 或查询 `TeamInvites` → `TeamAccept`；其他成员操作前先 `TeamInfo`。
 - **需求多一点**
   - 改人数、邀请数、邀请时长：改 `game/components/teamroster/teamroster.go` 顶部的三个常量。
-  - 加入队条件（等级、冷却、正在副本里不能入队）：`init` 里登记 `OnTeamJoining`。
-  - 名单变了要更新别的东西（队友视野分组、缓存）：`init` 里登记 `OnTeamChanged`；通知用提交后的机制发，不在回调里做 I/O。
+  - 加入队条件（等级、冷却、正在副本里不能入队）：在自己的组件上监听 `event.TeamJoining`（只读）。
+  - 名单变了要更新别的东西（队友视野分组、缓存）：在自己的组件或 Player 上监听 `event.TeamChanged`；通知用提交后的机制发，不在监听里做 I/O。
   - 加踢人 / 转让队长：照 `game/components/teamroster/teamroster.go` 里 `Leave` 的写法加方法（记得推进 `Revision`、检查 `MatchKey`），再加协议与 `[Team, Player]` 的 handler。被踢的人的引用同样只能惰性清除。
   - 不要改 `TeamDao` 的 store 键与集合名、`EntityCategoryRemote` 的实体类别（它保证锁序先于 Player）、建队时“先取号建空实体、再进事务”的次序。
 - **别的模块 / 业务代码要用它**
   - 读某名玩家的队伍号（事务外）：`id, err := sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`。
-  - 在自己的事务里要整队名单：handler 的目标里声明 `team.ITeamEntity`，调 `target.TeamEntity().TeamRoster().Info()`，名单与各成员的 sid 都在返回的 `view.TeamSnapshot` 里。
+  - 在自己的事务里要整队名单：handler 的目标参数写 `view.TeamEntity`，调 `target.TeamRoster().Info()`，名单与各成员的 sid 都在返回的 `view.TeamSnapshot` 里。
   - 要在一段时间内冻结名单（排队、进副本）：同一笔事务里调 `HoldMatch(key)`，结束后用同一个 `key` 调 `ReleaseMatch(key)`；冻结期间邀请、入队、离队、解散都答 `team_blocked`。
 - **不适合直接用的情形**：只在单个进程内存在、不需要落库的临时小队（那用 room 更轻）；上百人的团队或公会（用 alliance）；需要实时名单推送的队伍界面（要自己加通知）。值得借鉴的是“共享权威只有一份成员表，玩家只存引用，引用惰性核对”的做法，以及用准入钩子让两个模块互相挡住对方（见 rehome 联动）。
 
 ## 联动
 
-- `team/with/rehome`：两个方向的事务内检查——在队伍里时拒绝换服（`OnRehomeApplying("team", …)` 答 `team_blocked`），换服意图未清除时拒绝建队与入队（`OnTeamJoining("rehome", …)`）。2 条场景。
-- matchmaking（依赖 team，不是 `with/`）：在 `[Team, []Player]` 事务里用 `HoldMatch` 冻结名单、保存每名成员的排队意图，确定终态后用同一个键 `ReleaseMatch`；另外登记了 `OnTeamJoining("matchmaking", …)`。
-- 别的模块没有 `with/team` 目录。game-demo 用 `OnTeamChanged` 更新分区场景的队伍视野缓存（那段代码在 demo，不在模块里）。
+- `team/with/rehome`：两个方向的事务内检查——在队伍里时拒绝换服（team 组件监听 `event.RehomeApplying`，priority 10，答 `team_blocked`），换服意图未清除时拒绝建队与入队（team 组件监听 `event.TeamJoining`，priority 10）。2 条场景。
+- matchmaking（依赖 team，不是 `with/`）：在 `[Team, []Player]` 事务里用 `HoldMatch` 冻结名单、保存每名成员的排队意图，确定终态后用同一个键 `ReleaseMatch`；另外 matchmaking 组件监听 `event.TeamJoining`（priority 20）：排队中的玩家不能建队或入队。
+- 别的模块没有 `with/team` 目录。game-demo 用 `event.TeamChanged` 更新分区场景的队伍视野缓存（那段代码在 demo，不在模块里）。
 
 ## 验证范围
 

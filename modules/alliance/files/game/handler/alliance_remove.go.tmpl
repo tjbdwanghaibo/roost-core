@@ -1,10 +1,9 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"time"
 
-	alliance "{{MODULE}}/game/entities/alliance"
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
@@ -14,8 +13,8 @@ import (
 // the service's notice.
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceRemove(target alliance.IAllianceRosterEntity, member alliance_member.IAllianceGuardEntity, requestID string, actorID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster, guard := target.AllianceRosterComp(), member.AllianceGuardComp()
+func handlerAllianceRemove(target view.IAllianceRosterEntity, member view.IAllianceGuardEntity, requestID string, actorID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, guard := target.AllianceRoster(), member.AllianceGuard()
 	targetID := guard.PlayerID()
 	var left alliancerule.MemberChange
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
@@ -40,8 +39,8 @@ func handlerAllianceRemove(target alliance.IAllianceRosterEntity, member allianc
 // does not (the first delivery already tried, and healing covers a loss).
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceRemoveDetached(target alliance.IAllianceRosterEntity, requestID string, actorID int64, targetID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster := target.AllianceRosterComp()
+func handlerAllianceRemoveDetached(target view.IAllianceRosterEntity, requestID string, actorID int64, targetID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRoster()
 	var ended string
 	var left alliancerule.MemberChange
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {

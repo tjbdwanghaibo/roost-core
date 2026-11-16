@@ -1,12 +1,11 @@
 package team
 
 import (
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/view"
 	"cmp"
 	"fmt"
 	"slices"
-	"sort"
-	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
@@ -18,7 +17,16 @@ import (
 // teamKind 是 Team 实体的实体种类（与 game/entities/team.EntityKindTeam 同一个号）：组件包不依赖实体包。
 const teamKind entity.EntityKind = {{ID:entity:Team}}
 
-// Owner 是 Team 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Team}}
+const CompTypeTeam entity.ComponentType = {{ID:component:Team}}
+
+// init 登记组件工厂：Player 结构体里 comp:"team.CompTypeTeam" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTeam, NewComponent)
+}
+
+// Owner 是 Team 组件的宿主：整个 Player（组件读写 PlayerDao.Team，并在它上面发布 TeamJoining / TeamChanged）。
+// 只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 type Component struct {
@@ -26,7 +34,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/team_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -38,44 +46,13 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 func (c *Component) Name() string  { return "team" }
 func (c *Component) TeamID() int64 { return c.owner.Dao().GetTeam().GetTeamID() }
 
-// OnTeamJoining 登记事务内准入检查；只在初始化时注册，回调不得 I/O。rehome 等模块在这里挡住新入队。
-var teamChecks = struct {
-	sync.RWMutex
-	hooks map[string]func(view.PlayerEntity) error
-}{hooks: map[string]func(view.PlayerEntity) error{}}
-
-func OnTeamJoining(name string, check func(view.PlayerEntity) error) {
-	if name == "" || check == nil {
-		panic("team: joining check needs name and function")
-	}
-	teamChecks.Lock()
-	defer teamChecks.Unlock()
-	if teamChecks.hooks[name] != nil {
-		panic("team: duplicate joining check " + name)
-	}
-	teamChecks.hooks[name] = check
-}
+// checkJoin 是建队、入队的准入：已在别的队伍里拒绝（team_exists），再在 Player 上发布拦截事件 event.TeamJoining
+// （rehome、matchmaking 等在这里挡住新入队），第一个拒绝原样返回。先于任何写入。
 func (c *Component) checkJoin(id int64) error {
 	if current := c.TeamID(); current != 0 && current != id {
 		return apperrors.ErrTeamExists
 	}
-	teamChecks.RLock()
-	names := make([]string, 0, len(teamChecks.hooks))
-	for name := range teamChecks.hooks {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	checks := make([]func(view.PlayerEntity) error, 0, len(names))
-	for _, name := range names {
-		checks = append(checks, teamChecks.hooks[name])
-	}
-	teamChecks.RUnlock()
-	for _, check := range checks {
-		if err := check(c.owner); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.owner.Publish(event.TeamJoining{TeamID: id})
 }
 
 // Create / Accept 同时修改 Team 与 Player，调用者必须声明两者；提交失败由 DAO 一起回滚。

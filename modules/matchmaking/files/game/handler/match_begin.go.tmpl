@@ -1,14 +1,18 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
-
 	gamematchmaking "{{MODULE}}/game/components/matchmaking"
+	"{{MODULE}}/game/view"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerMatchBegin(member player.IMatchmakingEntity, sequence int64, sid int32) (gamematchmaking.MatchSnapshot, error) {
-	return gamematchmaking.BeginMatching([]*player.MatchmakingComponent{member.MatchmakingComp()}, entity.GetUniqueIDFromEntityID(member.ID()), sequence, 0, sid, clock.UnixMilli())
+func handlerMatchBegin(member view.IMatchmakingEntity, sequence int64, sid int32) (gamematchmaking.MatchSnapshot, error) {
+	component, err := gamematchmaking.Of(member)
+	if err != nil {
+		return gamematchmaking.MatchSnapshot{}, err
+	}
+	return gamematchmaking.BeginMatching([]*gamematchmaking.Component{component}, entity.GetUniqueIDFromEntityID(member.ID()), sequence, 0, sid, clock.UnixMilli())
 }

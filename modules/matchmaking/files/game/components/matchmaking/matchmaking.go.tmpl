@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
-	"sync"
-	teamcomp "{{MODULE}}/game/components/team"
+
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/view"
 
 	apperrors "{{MODULE}}/internal/errors"
@@ -14,7 +13,16 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Owner 是 Matchmaking 组件的宿主：整个 Player（组件运行钩子时要把宿主交给钩子）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Matchmaking}}
+const CompTypeMatchmaking entity.ComponentType = {{ID:component:Matchmaking}}
+
+// init 登记组件工厂：Player 结构体里 comp:"matchmaking.CompTypeMatchmaking" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeMatchmaking, NewComponent)
+}
+
+// Owner 是 Matchmaking 组件的宿主：整个 Player（组件读写 PlayerDao.Matchmaking、读 Team 引用，并在它上面发布
+// MatchmakingStarting）。只在实体被 Nest 锁住期间使用。
 type Owner = view.PlayerEntity
 
 type Component struct {
@@ -22,18 +30,20 @@ type Component struct {
 	owner Owner
 }
 
-func init() {
-	// 单排也必须挡住建队 / 接受邀请；检查与 Team、Player 修改处于同一笔事务。
-	// 匹配终态未 Clear 前仍保留屏障，不能凭客户端丢回包或进程重启解除。
-	teamcomp.OnTeamJoining("matchmaking", func(p view.PlayerEntity) error {
-		if p.Dao().GetMatchmaking().GetPhase() != "" {
-			return apperrors.ErrMatchmakingBusy
-		}
-		return nil
-	})
+// OnTeamJoining 是建队、入队的准入（拦截事件，与 Team、Player 的修改同一笔事务）：单排也必须挡住建队 / 接受邀请；
+// 匹配终态未 Clear 前仍保留屏障，不能凭客户端丢回包或进程重启解除。只读。
+//
+// priority=20 保持改成事件之前的执行顺序：原来的入队检查按登记名字母序执行（matchmaking、rehome），这里排前。
+//
+//roost:listen priority=20
+func (c *Component) OnTeamJoining(ev event.TeamJoining) error {
+	if c.owner.Dao().GetMatchmaking().GetPhase() != "" {
+		return apperrors.ErrMatchmakingBusy
+	}
+	return nil
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/matchmaking_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -64,41 +74,26 @@ func (c *Component) Snapshot() MatchSnapshot {
 	return s
 }
 
-// OnMatchmakingStarting 的真实消费者为 rehome：检查和意图写入必须在同一 Player 事务里。
-var matchmakingChecks = struct {
-	sync.RWMutex
-	hooks map[string]func(view.PlayerEntity) error
-}{hooks: map[string]func(view.PlayerEntity) error{}}
-
-func OnMatchmakingStarting(name string, check func(view.PlayerEntity) error) {
-	if name == "" || check == nil {
-		panic("matchmaking: invalid check")
+// Of 返回 holder 上挂的匹配组件。handler 收 game/view 的接口（view.IMatchmakingEntity），BeginMatching / UpdateMatching
+// 要整组的组件时经它（或 Group）取回；取不到说明实体没挂匹配组件（接线错误）。
+func Of(holder view.MatchmakingHolder) (*Component, error) {
+	if c, ok := holder.Matchmaking().(*Component); ok && c != nil {
+		return c, nil
 	}
-	matchmakingChecks.Lock()
-	defer matchmakingChecks.Unlock()
-	if matchmakingChecks.hooks[name] != nil {
-		panic("matchmaking: duplicate check " + name)
-	}
-	matchmakingChecks.hooks[name] = check
+	return nil, fmt.Errorf("matchmaking: %T does not hold the matchmaking component", holder)
 }
-func (c *Component) checkStart() error {
-	matchmakingChecks.RLock()
-	names := make([]string, 0, len(matchmakingChecks.hooks))
-	for n := range matchmakingChecks.hooks {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	checks := make([]func(view.PlayerEntity) error, 0, len(names))
-	for _, n := range names {
-		checks = append(checks, matchmakingChecks.hooks[n])
-	}
-	matchmakingChecks.RUnlock()
-	for _, check := range checks {
-		if err := check(c.owner); err != nil {
-			return err
+
+// Group 把 Nest 交来的一组玩家换成组件（BeginMatching / UpdateMatching 收组件），顺序不变。
+func Group[T view.MatchmakingHolder](members []T) ([]*Component, error) {
+	out := make([]*Component, len(members))
+	for i, member := range members {
+		c, err := Of(member)
+		if err != nil {
+			return nil, err
 		}
+		out[i] = c
 	}
-	return nil
+	return out, nil
 }
 
 // BeginMatching 由 solo 或 Team+Players handler 调用；请求者必须在声明的组中，重复请求不重新申请外部票。
@@ -136,7 +131,8 @@ func BeginMatching(group []*Component, leader, sequence, teamID int64, sid int32
 		if d.GetPhase() != "" || d.GetSequence() == math.MaxInt64 || c.owner.Team().TeamID() != teamID {
 			return MatchSnapshot{}, apperrors.ErrMatchmakingBusy
 		}
-		if err := c.checkStart(); err != nil {
+		// 开始排队之前的拦截事件（rehome 在这里挡住换服意图未清的成员），在这名成员的 Player 上发布。
+		if err := c.owner.Publish(event.MatchmakingStarting{Leader: leader, TeamID: teamID, Sequence: sequence}); err != nil {
 			return MatchSnapshot{}, err
 		}
 	}

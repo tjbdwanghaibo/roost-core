@@ -1,17 +1,17 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	"time"
 
-	alliance "{{MODULE}}/game/entities/alliance"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
 // handlerAllianceApply records a player's application to join.
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceApply(target alliance.IAllianceRosterEntity, requestID string, playerID int64, homeSID int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
-	roster := target.AllianceRosterComp()
+func handlerAllianceApply(target view.IAllianceRosterEntity, requestID string, playerID int64, homeSID int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		return playerID, roster.Apply(playerID, homeSID, nowUnix)
 	})
@@ -21,7 +21,7 @@ func handlerAllianceApply(target alliance.IAllianceRosterEntity, requestID strin
 // answer is a write's reply: the outcome and the alliance as it stands after
 // the write (at the version the write produced; a replay reports the
 // version its receipt recorded).
-func answer(roster *alliance.AllianceRosterComponent, outcome alliancerule.Outcome, err error) (alliancerule.Answer, error) {
+func answer(roster view.AllianceRoster, outcome alliancerule.Outcome, err error) (alliancerule.Answer, error) {
 	if err != nil {
 		return alliancerule.Answer{}, err
 	}

@@ -20,15 +20,20 @@ const (
 	TurnFinished
 )
 
-// Owner 是 Turn 组件的宿主（Room 的接线见 game/entities/room/turn_component.go）：view 的 RoomEntity。
-// 只在实体被 Nest 锁住期间使用。回合期限的定时节点挂在 Room 的定时组件上（生成代码，在实体包里），
-// 由实体包的 ArmTurnDeadline / CancelTurnDeadline 适配，与回合事实同一笔事务提交。
+//roost:component type={{ID:component:Turn}}
+const CompTypeTurn entity.ComponentType = {{ID:component:Turn}}
+
+// init 登记组件工厂：Room 结构体里 comp:"turn.CompTypeTurn" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTurn, NewComponent)
+}
+
+// Owner 是 Turn 组件的宿主：view 的 RoomEntity（组件读写 RoomDao），加上 view.TurnHolder 的宿主方法
+// ArmTurnDeadline / CancelTurnDeadline——回合期限的定时节点挂在 Room 的定时组件上（生成代码，在实体包里），
+// 由实体包的 game/entities/room/turn_timers.go 手写适配，与回合事实同一笔事务提交。只在实体被 Nest 锁住期间使用。
 type Owner interface {
 	view.RoomEntity
-	// ArmTurnDeadline 在 at 建一个 TurnDeadline 节点，返回节点 ID（0 表示没建成）。
-	ArmTurnDeadline(at time.Time) int64
-	// CancelTurnDeadline 删掉节点 id；节点已不在时什么也不做。
-	CancelTurnDeadline(id int64)
+	view.TurnHolder
 }
 
 // Component 只处理回合次序，不替游戏定义攻击、伤害或胜负。业务 handler 可以先修改
@@ -39,7 +44,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Room 在 game/entities/room/turn_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

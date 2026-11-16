@@ -22,7 +22,7 @@ import (
 
 	apperrors "{{MODULE}}/internal/errors"
 	player "{{MODULE}}/game/entities/player"
-	gameteam "{{MODULE}}/game/components/team"
+	"{{MODULE}}/game/event"
 	sender "{{MODULE}}/game/handler/syncsender"
 	team "{{MODULE}}/game/entities/team"
 )
@@ -596,18 +596,22 @@ func TestTeamOutsiderCannotReadOrChangeRoster(t *testing.T) {
 	f.unchanged(t, before)
 }
 
-var teamHookOnce sync.Once
 var teamHookReject atomic.Bool
 
-func TestTeamProjectionHookFailureRollsBackBothEntities(t *testing.T) {
-	teamHookOnce.Do(func() {
-		gameteam.OnTeamChanged("test-rejection", func(_ view.PlayerEntity, _ gameteam.TeamChange) error {
+func init() {
+	// 监听平时只由生成代码（game/entities/player/player_event_gen.go）登记；测试在自己的 init 里直接登记一条
+	// event.TeamChanged 的监听（事件第一次发布之后不能再登记），平时放行，由开关打开拒绝。
+	entity.RegisterEventListener(player.EntityKindPlayer, "TeamChanged", "handler_test.teamProjectionRejects",
+		func(*player.Player, event.TeamChanged) error {
 			if teamHookReject.Load() {
 				return errors.New("projection hook rejected")
 			}
 			return nil
 		})
-	})
+}
+
+// 组关系投影（event.TeamChanged 的监听）出错：入队整笔回滚，Team 与 Player 两边都不变。
+func TestTeamProjectionHookFailureRollsBackBothEntities(t *testing.T) {
 	f := newTeamFixture(t)
 	f.create(t, 101)
 	f.invite(t, 101, 102)

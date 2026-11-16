@@ -1,0 +1,8 @@
+package event
+
+// RoomJoining 是入房之前的拦截事件：在 Room 上发布（room 组件的 Join，房间被这笔 Nest 事务锁住），在核对房间已开
+// 之后、占座之前。PlayerID 是要入房的玩家号。监听只看这个房间自己的档（matchroom 校验名单），返回错误就拒绝入房，
+// 什么都不写。拦截监听只做检查，不改状态，也不做 I/O。
+type RoomJoining struct {
+	PlayerID int64
+}

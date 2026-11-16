@@ -1,11 +1,15 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
 	gamematchmaking "{{MODULE}}/game/components/matchmaking"
+	"{{MODULE}}/game/view"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerMatchUpdate(members []player.IMatchmakingEntity, change gamematchmaking.MatchUpdate) (gamematchmaking.MatchSnapshot, error) {
-	return gamematchmaking.UpdateMatching(player.MatchmakingComps(members), change)
+func handlerMatchUpdate(members []view.IMatchmakingEntity, change gamematchmaking.MatchUpdate) (gamematchmaking.MatchSnapshot, error) {
+	group, err := gamematchmaking.Group(members)
+	if err != nil {
+		return gamematchmaking.MatchSnapshot{}, err
+	}
+	return gamematchmaking.UpdateMatching(group, change)
 }

@@ -1,7 +1,7 @@
 package handler
 
 import (
-	alliance "{{MODULE}}/game/entities/alliance"
+	"{{MODULE}}/game/view"
 	"{{MODULE}}/game/modules/alliancerule"
 )
 
@@ -9,8 +9,8 @@ import (
 // 这里不访问 account；调用方在 IO 上下文确认归属后才发 RPC。
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceHome(target alliance.IAllianceRosterEntity, playerID int64, joinRequestID string, expectedSID int32, nextSID int32) (alliancerule.HomeUpdate, error) {
-	seat, found := target.AllianceRosterComp().Seat(playerID)
+func handlerAllianceHome(target view.IAllianceRosterEntity, playerID int64, joinRequestID string, expectedSID int32, nextSID int32) (alliancerule.HomeUpdate, error) {
+	seat, found := target.AllianceRoster().Seat(playerID)
 	if !found {
 		return alliancerule.HomeUpdate{}, nil
 	}

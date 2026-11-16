@@ -4,17 +4,16 @@ import (
 	"slices"
 
 	apperrors "{{MODULE}}/internal/errors"
-	player "{{MODULE}}/game/entities/player"
 	gamematchmaking "{{MODULE}}/game/components/matchmaking"
-	team "{{MODULE}}/game/entities/team"
+	"{{MODULE}}/game/view"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
 //roost:nest rollback=undo durability=strict
-func handlerMatchTeamBegin(target team.ITeamEntity, members []player.IMatchmakingEntity, leader, sequence int64, sid int32) (gamematchmaking.MatchSnapshot, error) {
-	t := target.TeamEntity()
+func handlerMatchTeamBegin(target view.TeamEntity, members []view.IMatchmakingEntity, leader, sequence int64, sid int32) (gamematchmaking.MatchSnapshot, error) {
+	t := target
 	info := t.TeamRoster().Info()
 	ids := make([]int64, 0, len(members))
 	for _, m := range members {
@@ -29,7 +28,11 @@ func handlerMatchTeamBegin(target team.ITeamEntity, members []player.IMatchmakin
 			return gamematchmaking.MatchSnapshot{}, apperrors.ErrMatchmakingInvalid
 		}
 	}
-	s, err := gamematchmaking.BeginMatching(player.MatchmakingComps(members), leader, sequence, t.ID(), sid, clock.UnixMilli())
+	group, err := gamematchmaking.Group(members)
+	if err != nil {
+		return gamematchmaking.MatchSnapshot{}, err
+	}
+	s, err := gamematchmaking.BeginMatching(group, leader, sequence, t.ID(), sid, clock.UnixMilli())
 	if err != nil {
 		return gamematchmaking.MatchSnapshot{}, err
 	}

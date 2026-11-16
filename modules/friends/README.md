@@ -26,8 +26,8 @@
 - `syncsender.NewFriendsChangeSender(nestClient).MultiSync_FriendsChange(ctx, actorEntityID, peerEntityID, action)`：多实体 Nest 调用，参数是两个完整的 Player EntityID，六种动作都接受。调用者必须自己确认两名玩家的档都归本进程写。
 - `syncsender.NewFriendsOwnSender(nestClient).Sync_FriendsOwn(ctx, actorEntityID, peerEntityID, action)`：只锁操作者一人的单实体调用，只接受 `FriendsUnblock` 与 `FriendsReject`（别的动作答 `friends_invalid`）；对方的档不参与。
 - `syncsender.NewFriendsListSender(nestClient).Sync_FriendsList(ctx, entityID)`：返回 `friends.FriendsSnapshot{Peers, Incoming, Blocked}`（排序后的值拷贝）。
-- 组件 `FriendsComp()`：`Change(peer *FriendsComponent, action int32) error` 只能在同时锁住双方的事务里调；`ChangeOwnSide(peerEntityID int64, action int32) error` 只改本人的名单（取消拉黑、拒绝申请），只需要本人的锁；`Snapshot()` 只能在本人的实体锁内读。
-- Nest handler（`game/handler/friends_change.go`、`friends_own.go`、`friends_list.go`）：`handlerFriendsChange`（两个 Player，`rollback=undo durability=strict`）、`handlerFriendsOwn`（一个 Player，同样的事务选项）、`handlerFriendsList`（只读）。
+- 组件 `Friends()`（对外接口 `view.Friends`；逻辑、类型号 `friends.CompTypeFriends` 与工厂登记在 `game/components/friends/friends.go`）：`Change(peer view.PlayerEntity, action int32) error` 只能在同时锁住双方的事务里调；`ChangeOwnSide(peerEntityID int64, action int32) error` 只改本人的名单（取消拉黑、拒绝申请），只需要本人的锁；`Snapshot()` 只能在本人的实体锁内读。
+- Nest handler（`game/handler/friends_change.go`、`friends_own.go`、`friends_list.go`，参数是 `view.IFriendsEntity`，对方是 `view.PlayerEntity`）：`handlerFriendsChange`（两个 Player，`rollback=undo durability=strict`）、`handlerFriendsOwn`（一个 Player，同样的事务选项）、`handlerFriendsList`（只读）。
 - 端点 `HandleFriendsChange` / `HandleFriendsList` 在 `game/controllers/friends.go`。
 
 ### 登记点
@@ -67,7 +67,7 @@
   - 名单里要带名字、等级：`FriendsList` 只给玩家号，客户端按玩家号另取；或者在端点里对每个玩家号查自己的展示数据再拼进应答。
   - 关系变化要通知对方：在 `HandleFriendsChange` 事务成功之后自己推送（模块没有推送协议）。
   - 允许离线双边动作：把 `game/controllers/friends.go` 的 `friendsChange` 里那段会话检查换成自己的归属证明（例如按 account 的绑定确认对方归本服）；`Change` 本身不关心对方在不在线。不要直接删掉检查——它是唯一拦着“往别的进程的玩家档里写”的东西。
-- **别的业务代码要判断两人是不是好友：** 在锁住其中一名玩家的 Nest handler 里读 `target.FriendsComp().Snapshot()`，或者直接调 `Sync_FriendsList`。要以服务端身份改关系：调 `MultiSync_FriendsChange`（只改一侧的两种动作可以调 `Sync_FriendsOwn`），并自己保证两人的档都归本进程写。
+- **别的业务代码要判断两人是不是好友：** 在锁住其中一名玩家的 Nest handler 里读 `target.Friends().Snapshot()`，或者直接调 `Sync_FriendsList`。要以服务端身份改关系：调 `MultiSync_FriendsChange`（只改一侧的两种动作可以调 `Sync_FriendsOwn`），并自己保证两人的档都归本进程写。
 - **只适合借鉴的情形：** 跨服好友、对离线玩家也能发申请、好友数很大的社交系统不适合直接用——这些需要独立的关系服务或异步的申请队列。值得借鉴的是“双方名单在一笔两实体事务里写，先检查全部容量与权限、再写两边”。
 
 ## 联动

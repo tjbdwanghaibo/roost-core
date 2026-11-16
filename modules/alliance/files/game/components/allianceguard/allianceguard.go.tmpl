@@ -13,7 +13,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// Owner 是 AllianceGuard 组件的宿主（AllianceMember 的接线见 game/entities/alliance_member/guard_component.go）：view 的 AllianceMemberEntity。
+//roost:component type={{ID:component:AllianceGuard}}
+const CompTypeAllianceGuard entity.ComponentType = {{ID:component:AllianceGuard}}
+
+// init 登记组件工厂：AllianceMember 结构体里 comp:"allianceguard.CompTypeAllianceGuard" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeAllianceGuard, NewComponent)
+}
+
+// Owner 是 AllianceGuard 组件的宿主（AllianceMember 在 game/entities/alliance_member/entity.go 直接挂这个组件）：view 的 AllianceMemberEntity。
 // 只在实体被 Nest 锁住期间使用。EntityVersion 是 Remote 实体的状态版本（回执与视图按它记版本）。
 type Owner interface {
 	view.AllianceMemberEntity
@@ -57,7 +65,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；AllianceMember 在 game/entities/alliance_member/guard_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

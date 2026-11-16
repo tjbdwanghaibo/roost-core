@@ -14,8 +14,15 @@ type Turn interface {
 	OnDeadline(fire entitytimer.Fire) time.Duration
 }
 
-// TurnHolder 是“带有 Turn 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
-type TurnHolder interface{ Turn() Turn }
+// TurnHolder 是“带有 Turn 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它，Nest handler 收生成的 ITurnEntity。
+type TurnHolder interface {
+	Turn() Turn
+	// ArmTurnDeadline 是宿主方法：在 at 建一个 TurnDeadline 定时节点，返回节点 ID（0 表示没建成）。
+	// Room 上手写在 game/entities/room/turn_timers.go（节点挂在 Room 的定时组件上）。
+	ArmTurnDeadline(at time.Time) int64
+	// CancelTurnDeadline 是宿主方法：删掉节点 id；节点已不在时什么也不做。
+	CancelTurnDeadline(id int64)
+}
 
 type TurnSnapshot struct {
 	Status     int32
