@@ -98,6 +98,19 @@ controllers 合包 ─────────────── 独立
    - 最坏情况下，旧锁会多活一个 TTL 再加大约 1 秒，可能让 30 秒的启动等待差一点点。
    - **决定**：生成的 `startup_wait` 改为 35s，部署模板里的启动探测余量同步放宽。
 
+### 3.2 试点结论与决定（2026-11-16 夜，维护者已确认）
+
+试点 9aaebe7f 涉及 bag、profile、naming、activity、activity_world、activity_alliance。装上这些模块的生成工程能编译，`generate --check` 无差异。合包后全量 catalog 能加载。
+
+1. **endpoint 生成器也认 `target=`**。组件挂在多个实体上时，endpoint 可以收 `view.I<X>Entity` 加 `target=<实体>`。
+2. **activity 组件挪到 `game/components/activity`**。整个包改名，所有引用一起改。
+3. **保留 `activity.Of(holder)`**：从 view 接口取回具体组件。Token 等带方法的类型不挪进 view。
+4. **旧写法组件上的 `//roost:listen`**：阶段 4 把全部模块改成组件包写法之后，生成器把它从提示改成报错。
+5. **泛化的导出方法名加模块前缀**：`Open` 改为 `DungeonOpen`，`Claim` 改为 `DungeonClaim`，`Redeem` 改为 `CdkeyRedeem`。
+6. **模块门禁按前缀挑测试的问题**：在最终全量时核对各模块的场景数，有冲突就改用精确测试名。
+7. **删除 `roost add module`**（包括 Makefile 里的调用、帮助和文档）。alliance-e2e 里"断开 Redis"的用例按锁已不在 Redis 的现状简化。
+8. **启动依赖检查**（72723174，协调者决定，已告知维护者）：在生成的 `RegisterPlayerProtocols` 里，紧跟 `FromRegistry` 之后执行 `CheckAtStart`，执行点与合包前相同；不放进 `FromRegistry` 本身。
+
 ## 4. 实施顺序与时间预估
 
 下面的时间都是 **agent 实际运行的墙钟时间**，不含等维护者答复的时间，同时并行的 agent 不超过 4 个。
