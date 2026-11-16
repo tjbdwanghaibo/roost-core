@@ -19,7 +19,8 @@ for anchor, stage in [
     ("\n\tquiescing, cancel := context.WithTimeout(ctx, departBudget)", "accepted"),
     ("\n\trechecking, cancel := context.WithTimeout(ctx, callBudget)", "quiesced"),
     ("\n\tdeparting, cancel := context.WithTimeout(ctx, departBudget)", "leaving"),
-    ("\n\tcopying, cancel := context.WithTimeout(ctx, departBudget)", "handed-off"),
+    # RV-20261114-01（3a062e64）之后复制挪进 copyDocuments 的重试循环，交出后的停点放在主流程调用它之前。
+    ("\n\tcopied, err := d.copyDocuments(ctx, move)", "handed-off"),
     ("\n\td.finishCopied(ctx, move, verdict, binding, Aborted, &copied)", "committed"),
 ]:
     text = replace_once(text, anchor, f'\n\trehomeDrillPoint("{stage}", move)'+anchor)
