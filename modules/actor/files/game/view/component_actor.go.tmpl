@@ -1,13 +1,21 @@
 package view
 
-import "{{MODULE}}/game/modules/actor"
+import (
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+
+	"{{MODULE}}/game/modules/actor"
+)
 
 // game/modules/actor 只有角色身体与钩子的类型（不引用实体与组件包），view 可以引用。
 // Actor 是 Actor 组件对 game/ 下其它包公开的方法（实现在 game/components/actor，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Actor interface {
 	Body() *actor.Body
 	MoveRefusal(err error) error
+	// SavedPosition 是离开空间或周期存档时记下的场景号、位置与朝向（场景切换时决定落脚点）。
+	SavedPosition() (int64, spatial.Point, movement.Facing)
 }
 
-// ActorHolder 是“带有 Actor 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它。
+// ActorHolder 是“带有 Actor 组件”的小接口：只要这个组件的组件包、钩子与联动收它；实体接口（entity_<实体>.go，生成）嵌入它，
+// Nest handler 收生成的 IActorEntity。
 type ActorHolder interface{ Actor() Actor }

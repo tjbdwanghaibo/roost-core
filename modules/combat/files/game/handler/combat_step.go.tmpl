@@ -3,7 +3,8 @@ package handler
 import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
-	player "{{MODULE}}/game/entities/player"
+	combat "{{MODULE}}/game/components/combat"
+	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
@@ -11,11 +12,19 @@ import (
 // handlerCombatStep 声明参与者后才接触Host；失败返回Nest，两个CombatDAO与PlayerDAO一起回滚。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCombatStep(source, peer player.ICombatEntity, request *pb.CombatStepRequest) (*pb.CombatStepResponse, error) {
+func handlerCombatStep(source, peer view.ICombatEntity, request *pb.CombatStepRequest) (*pb.CombatStepResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrCombatInvalid
 	}
-	r, err := source.CombatComp().Step(peer.CombatComp(), request.Sequence, fctx.Now())
+	c, err := combat.Of(source)
+	if err != nil {
+		return nil, err
+	}
+	other, err := combat.Of(peer)
+	if err != nil {
+		return nil, err
+	}
+	r, err := c.Step(other, request.Sequence, fctx.Now())
 	if err != nil {
 		return nil, err
 	}

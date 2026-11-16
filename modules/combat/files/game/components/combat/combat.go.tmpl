@@ -27,8 +27,15 @@ const CombatRuntimeMaxBytes = 512 << 10
 
 var CombatClock = skill.TickClock{Length: 50 * time.Millisecond}
 
-// Owner 是 Combat 组件的宿主（Player 的接线见 game/entities/player/combat_component.go）：只列组件用得到的
-// DAO 与别的组件（view 的小接口）。只在实体被 Nest 锁住期间使用。
+//roost:component type={{ID:component:Combat}}
+const CompTypeCombat entity.ComponentType = {{ID:component:Combat}}
+
+// init 登记组件工厂：Player 结构体里 comp:"combat.CompTypeCombat" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeCombat, NewComponent)
+}
+
+// Owner 是 Combat 组件的宿主：只列组件用得到的 DAO 与别的组件（view 的小接口）。只在实体被 Nest 锁住期间使用。
 type Owner interface {
 	entity.IThreadSafeEntity
 	Dao() *db.PlayerDao
@@ -45,7 +52,7 @@ type Component struct {
 	beat  *heartbeat.Reg
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/combat_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -55,6 +62,15 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 }
 
 func (c *Component) Name() string { return "combat" }
+
+// Of 返回 holder 上挂的战斗组件。handler 收 game/view 的接口（view.ICombatEntity），Cast / Step / Tick / Leave 要拿对手的
+// 具体组件（读对方的框架战斗状态），这几个方法不进 game/view，经它取回组件再用。取不到说明实体没挂战斗组件（接线错误）。
+func Of(holder view.CombatHolder) (*Component, error) {
+	if c, ok := holder.Combat().(*Component); ok && c != nil {
+		return c, nil
+	}
+	return nil, fmt.Errorf("combat: %T does not hold the combat component", holder)
+}
 
 func (c *Component) Owner() Owner { return c.owner }
 

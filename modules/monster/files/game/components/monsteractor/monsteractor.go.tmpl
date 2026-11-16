@@ -20,7 +20,15 @@ type CreateParams struct {
 	Sense   func(spatial.Point, int64) []rules.Candidate
 	Respawn func(int64)
 }
-// Owner 是 MonsterActor 组件的宿主（Monster 的接线见 game/entities/monster/monster_actor_component.go）：view 的 MonsterEntity。
+//roost:component type={{ID:component:MonsterActor}}
+const CompTypeMonsterActor entity.ComponentType = {{ID:component:MonsterActor}}
+
+// init 登记组件工厂：Monster 结构体里 comp:"monsteractor.CompTypeMonsterActor" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeMonsterActor, NewComponent)
+}
+
+// Owner 是 MonsterActor 组件的宿主：view 的 MonsterEntity。
 // 只在实体被 Nest 锁住期间使用。
 type Owner = view.MonsterEntity
 
@@ -32,7 +40,7 @@ type Component struct {
 	respawn *heartbeat.Reg
 }
 
-// NewComponent 是组件工厂；Monster 在 game/entities/monster/monster_actor_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

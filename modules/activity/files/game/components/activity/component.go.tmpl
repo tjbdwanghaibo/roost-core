@@ -67,7 +67,7 @@ func (c *Component) Host() Host {
 }
 
 // PlayerCreatedAt 由别的功能（装了 enter 时是 game/modules/login/activity_enter.go）在 init 里设置：Player 的创建时间锚点。
-// 没设置时 Player 的 ActivityCreatedAt 返回 0（按首次活动时间算）。经 view 收宿主，game/modules/activity 不引用实体包。
+// 没设置时 Player 的 ActivityCreatedAt 返回 0（按首次活动时间算）。经 view 收宿主，game/components/activity 不引用实体包。
 var PlayerCreatedAt func(view.PlayerEntity) int64
 
 func (c *Component) Reconcile(event string, createdAt int64) error {

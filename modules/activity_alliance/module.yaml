@@ -7,7 +7,7 @@ needs:
   uses_rpcs: [activity_alliance]
 entity: Alliance
 component: Activity
-component_package: game/modules/activity
+component_package: game/components/activity
 state:
   - field: ActivityAlliance
     type: ActivityBook

@@ -13,12 +13,17 @@ import (
 	"{{MODULE}}/game/view"
 )
 
-// Owner 是 TerrainChunkData 组件的宿主（TerrainChunk 的接线见 game/entities/terrain_chunk/data_component.go）：view 的
-// TerrainChunkEntity，加上把 DAO 的同步脏位交给订阅主体（PublishSyncDirty，实体一侧）。只在实体被 Nest 锁住期间使用。
-type Owner interface {
-	view.TerrainChunkEntity
-	PublishSyncDirty()
+//roost:component type={{ID:component:TerrainChunkData}}
+const CompTypeTerrainChunkData entity.ComponentType = {{ID:component:TerrainChunkData}}
+
+// init 登记组件工厂：TerrainChunk 结构体里 comp:"terrainchunkdata.CompTypeTerrainChunkData" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTerrainChunkData, NewComponent)
 }
+
+// Owner 是 TerrainChunkData 组件的宿主：view 的 TerrainChunkEntity。把 DAO 的同步脏位交给订阅主体的 PublishSyncDirty 是
+// view.TerrainChunkDataHolder 的宿主方法（实体一侧手写，game/entities/terrain_chunk/entity.go）。只在实体被 Nest 锁住期间使用。
+type Owner = view.TerrainChunkEntity
 
 // Component 是一块持久地形。方法只在本实体的 Nest 锁内调用。
 type Component struct {
@@ -26,7 +31,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；TerrainChunk 在 game/entities/terrain_chunk/data_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

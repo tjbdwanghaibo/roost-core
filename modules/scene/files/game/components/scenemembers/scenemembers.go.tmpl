@@ -13,16 +13,18 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-// Owner 是 SceneMembers 组件的宿主（Scene 的接线见 game/entities/scene/members_component.go）：view 的 SceneEntity，加上
-// 场景运行期对象的适配（实体一侧）：容量 Capacity、成员实体是否还在内存 MemberLoaded、从 AOI 空间忘掉一个成员
-// ForgetMember、关闭 AOI 空间 CloseSpace。只在实体被 Nest 锁住期间使用。
-type Owner interface {
-	view.SceneEntity
-	Capacity() int
-	MemberLoaded(id int64) bool
-	ForgetMember(id int64)
-	CloseSpace()
+//roost:component type={{ID:component:SceneMembers}}
+const CompTypeSceneMembers entity.ComponentType = {{ID:component:SceneMembers}}
+
+// init 登记组件工厂：Scene 结构体里 comp:"scenemembers.CompTypeSceneMembers" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeSceneMembers, NewComponent)
 }
+
+// Owner 是 SceneMembers 组件的宿主：view 的 SceneEntity。场景运行期对象的适配（容量 Capacity、成员实体是否还在内存
+// MemberLoaded、从 AOI 空间忘掉一个成员 ForgetMember、关闭 AOI 空间 CloseSpace）是 view.SceneMembersHolder 的宿主方法，
+// Scene 在 game/entities/scene/scene.go 手写。只在实体被 Nest 锁住期间使用。
+type Owner = view.SceneEntity
 
 // Component 是一张场景的成员账本。方法只在本场景的 Nest 锁内调用，Admit / Depart 要与相关 actor 同时持锁。
 type Component struct {
@@ -30,7 +32,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Scene 在 game/entities/scene/members_component.go 登记它。
+// NewComponent 是组件工厂（上面的 init 登记）。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

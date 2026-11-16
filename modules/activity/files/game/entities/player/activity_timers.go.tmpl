@@ -12,12 +12,12 @@ func (c *{{TIMER_COMPONENT}}Component) registerActivityTimers(handlers *entityti
 	handlers.Register(ActivityDeadline, c.onActivityDeadline)
 }
 
-// onActivityDeadline 把到期的活动唤醒节点交给活动组件（game/modules/activity 的 OnDeadline）。
+// onActivityDeadline 把到期的活动唤醒节点交给活动组件（game/components/activity 的 OnDeadline）。
 func (c *{{TIMER_COMPONENT}}Component) onActivityDeadline(fire entitytimer.Fire) time.Duration {
 	return c.Owner().Activity().OnDeadline(fire)
 }
 
-// ArmActivityDeadline / CancelActivityDeadline 是活动组件（game/modules/activity）唤醒节点的适配：节点挂在 Player 的定时器组件上，
+// ArmActivityDeadline / CancelActivityDeadline 是活动组件（game/components/activity）唤醒节点的适配：节点挂在 Player 的定时器组件上，
 // 期限与节点号的记账在组件里。
 func (p *Player) ArmActivityDeadline(at time.Time) int64 {
 	return p.{{TIMER_COMPONENT}}Comp().New{{TIMER_COMPONENT}}At(at, ActivityDeadline, 0, 0, nil)

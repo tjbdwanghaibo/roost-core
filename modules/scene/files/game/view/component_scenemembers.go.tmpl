@@ -8,5 +8,17 @@ type SceneMembers interface {
 	BeginClosing() []int64
 }
 
-// SceneMembersHolder 是“带有 SceneMembers 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
-type SceneMembersHolder interface{ SceneMembers() SceneMembers }
+// SceneMembersHolder 是“带有 SceneMembers 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它，Nest handler 收生成的
+// ISceneMembersEntity。除了访问器，其余是宿主方法：场景的运行期对象（地图配置、AOI 空间、成员实体查找）属于实体本身，
+// 组件经它们用到，Scene 在 game/entities/scene/scene.go 手写。
+type SceneMembersHolder interface {
+	SceneMembers() SceneMembers
+	// Capacity 是这张图的人数上限（地图配置）。
+	Capacity() int
+	// MemberLoaded 报告成员实体 id 是否还在内存里。
+	MemberLoaded(id int64) bool
+	// ForgetMember 让 AOI 空间忘掉成员 id。
+	ForgetMember(id int64)
+	// CloseSpace 关闭 AOI 空间。
+	CloseSpace()
+}

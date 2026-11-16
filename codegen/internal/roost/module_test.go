@@ -84,8 +84,7 @@ func TestModuleCatalogEmbedsEveryTemplateAndValidates(t *testing.T) {
 // 新增的导出方法不在 view 里也不在这里时报错；豁免表里的方法已经进了 view 或已经不存在时也报错（表不留陈项）。
 func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 	viewMethodExemptions := map[string]map[string]string{
-		"activity":  {"Host": "returns the game/modules/activity Host, which carries the activity runtime"},
-		"actor":     {"SavedPosition": "returns core spatial / movement types; not needed outside handlers yet"},
+		"activity":  {"Host": "returns the game/components/activity Host, which carries the activity runtime"},
 		"attribute": {"Container": "exposes the core attribute container to the generated runtime only"},
 		"combat": {
 			"Core": "returns the core combat component (skill runtime), not a view value",
@@ -106,10 +105,6 @@ func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {
 				t.Fatal(err)
 			}
 			sources = append(sources, matches...)
-		}
-		if len(sources) == 0 {
-			// activity 的共用组件早于 game/components，在功能包 game/modules/activity 里。
-			sources, _ = fs.Glob(modules.Files, module+"/files/game/modules/"+pkg+"/*.go.tmpl")
 		}
 		return sources
 	}, viewMethodExemptions)

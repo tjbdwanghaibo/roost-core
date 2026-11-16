@@ -8,6 +8,7 @@ entities: [TerrainChunk, TerrainBuilding]
 components: [TerrainChunkData, TerrainSite]
 entity: Player
 component: Terrain
+component_package: game/components/terrain
 state:
   - {field: TerrainLedger, type: TerrainLedgerState, store: terrain_ledger, dao: 'persist,nosync', comment: 全局连续编辑序号与摘要，保留最后结果，拒绝过期重放。}
 protocols: [TerrainBrush, TerrainBuild, TerrainRemove, TerrainQuery]

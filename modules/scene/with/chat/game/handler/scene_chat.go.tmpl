@@ -3,7 +3,7 @@ package handler
 import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	gamescene "{{MODULE}}/game/modules/scene"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -13,8 +13,8 @@ import (
 // 发送者不在任何场景里是正常拒绝，返回 scene 模块的业务码 scene_not_here（联动不另外申请号）。
 //
 //roost:nest rollback=undo durability=async
-func handlerSceneChat(target player.IActorEntity) (*gamescene.ChatAudience, error) {
-	body := target.ActorComp().Body()
+func handlerSceneChat(target view.IActorEntity) (*gamescene.ChatAudience, error) {
+	body := target.Actor().Body()
 	space, ok := body.Environment().Space.(*gamescene.Space)
 	if !body.Map.InScene() || !ok {
 		return nil, apperrors.ErrSceneNotHere

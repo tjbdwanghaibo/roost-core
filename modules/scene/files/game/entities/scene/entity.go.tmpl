@@ -8,6 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 
 	"{{MODULE}}/db"
+	"{{MODULE}}/game/components/scenemembers"
 	"{{MODULE}}/game/modules/actor"
 	gamescene "{{MODULE}}/game/modules/scene"
 )
@@ -19,8 +20,8 @@ type Scene struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	members *SceneMembersComponent `comp:"CompTypeSceneMembers"`
-	dao     *db.SceneDao           `dao:"scene"`
+	members *scenemembers.Component `comp:"scenemembers.CompTypeSceneMembers"`
+	dao     *db.SceneDao            `dao:"scene"`
 	config gamescene.Config
 	space  *gamescene.Space
 	domain *timedomain.Domain
@@ -35,6 +36,8 @@ type CreateParams struct {
 	Loaded     func(int64) entity.IThreadSafeEntity
 }
 
+// ISceneEntity 是要用场景运行期对象（AOI 空间、地图配置、时间域、actor 接线）的 handler 收的参数：这些对象属于实体本身，
+// 不在任何组件的 view 接口里。只用成员账本的 handler 收 view.ISceneMembersEntity。
 type ISceneEntity interface {
 	entity.IThreadSafeEntity
 	Scene() *Scene

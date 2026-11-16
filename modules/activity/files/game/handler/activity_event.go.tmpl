@@ -1,16 +1,17 @@
 package handler
 
 import (
-	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/components/activity"
 	"{{MODULE}}/game/view"
 )
 
 // ActivityEvent 只给可信业务入口使用；客户端只有 ActivityView，不提供任意事件上报。
 // 已持有 Player 的 handler 应直接调 Activity().Reconcile，与触发事实同事务。
-// 活动组件也挂在 ActivityWorld、Alliance 上（同一个组件），参数写 view.PlayerEntity 指明锁的是 Player。
+// 活动组件也挂在 ActivityWorld、Alliance 上（同一个组件），参数写 view.IActivityEntity，target=Player 指明锁的是 Player
+// （归属服务、生成的 Sender 与 endpoint 都按它寻址）。
 //
-//roost:nest rollback=undo durability=strict
-func handlerActivityEvent(target view.PlayerEntity, event string, createdAt int64) ([]activity.Snapshot, error) {
+//roost:nest rollback=undo durability=strict target=Player
+func handlerActivityEvent(target view.IActivityEntity, event string, createdAt int64) ([]activity.Snapshot, error) {
 	c, err := activity.Of(target)
 	if err != nil {
 		return nil, err

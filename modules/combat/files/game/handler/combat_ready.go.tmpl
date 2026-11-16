@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
@@ -9,11 +9,11 @@ import (
 // handlerCombatReady 声明参与者后才接触Host；失败返回Nest，两个CombatDAO与PlayerDAO一起回滚。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCombatReady(source player.ICombatEntity, request *pb.CombatReadyRequest) (*pb.CombatReadyResponse, error) {
+func handlerCombatReady(source view.ICombatEntity, request *pb.CombatReadyRequest) (*pb.CombatReadyResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrCombatInvalid
 	}
-	r, err := source.CombatComp().Ready(request.Sequence, request.Ready)
+	r, err := source.Combat().Ready(request.Sequence, request.Ready)
 	if err != nil {
 		return nil, err
 	}

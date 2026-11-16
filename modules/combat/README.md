@@ -11,7 +11,7 @@
   - `CombatLeave`（`combat_leave.go`）：请求带 `Sequence`、`PeerID`。投降并结束会话。
   - 端点在 `game/controllers/combat.go`：`HandleCombatReady`、`HandleCombatCast`、`HandleCombatStep`、`HandleCombatLeave`。操作者取自认证会话，时刻由服务端提供。
 - **服务端入口**
-  - 组件方法（`game/components/combat/combat.go`，要求已持有双方的锁）：`CombatComp().Ready(seq, ready)`、`Cast(peer, seq, skillID, now)`、`Step(peer, seq, now)`、`Leave(peer, seq)`、`Tick(peer, epoch, now)`；前四个返回 `CombatResult`，`Tick` 只返回错误。`Core()` 返回框架的战斗组件供持锁的可信业务只读；`Input()` 返回下一拍的外部输入（场景号、坐标、最大生命、攻击）。窄接口 `ICombatEntity`。
+  - 组件方法（`game/components/combat/combat.go`，类型号 `combat.CompTypeCombat` 与工厂登记也在这里；要求已持有双方的锁）：`Combat().Ready(seq, ready)`、`Cast(peer, seq, skillID, now)`、`Step(peer, seq, now)`、`Leave(peer, seq)`、`Tick(peer, epoch, now)`；前四个返回 `CombatResult`，`Tick` 只返回错误。`Core()` 返回框架的战斗组件供持锁的可信业务只读；`Input()` 返回下一拍的外部输入（场景号、坐标、最大生命、攻击）。handler 参数写 `view.ICombatEntity`；`Cast` / `Step` / `Leave` / `Tick` / `Core` 要拿具体组件（对手的框架战斗状态），不在 `view.Combat` 里，经 `combat.Of(target)` 取回组件再调。
   - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerCombatReady`（单实体）、`handlerCombatCast` / `handlerCombatStep` / `handlerCombatLeave`（双实体，生成的 Sender 是 `MultiSync_CombatCast` 等）、`handlerCombatTick`（双实体，仅供本服的后台驱动调用，没有协议）。
   - 运行期入口 `combat.Start(registry)`（`game/modules/combat/runtime.go`），以及 `combat.Queue(owner, peer, epoch)`、`combat.Program(id)`、`combat.Resolver()`、`combat.Environment()`、`combat.FailedDeliveries()`。
   - `combat.NewHost(...)`、`Host`、`Participant`、`Input`（`game/modules/combat/host.go`）：把技能运行时限制在本次事务已锁住的两名参与者之内的宿主。

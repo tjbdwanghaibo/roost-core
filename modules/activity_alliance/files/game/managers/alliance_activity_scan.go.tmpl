@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"{{MODULE}}/game/modules/activity"
+	"{{MODULE}}/game/components/activity"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
@@ -15,7 +15,7 @@ import (
 // 它跑在 alliance 服务进程里：安装 activity_alliance 时，安装器在 internal/service/alliance/managers.go 的 Managers() 列表里加了一行
 // gamemanagers.NewAllianceActivityScan()，并给 alliance 服务装上 manager Mod。
 //
-// 它管的是联盟活动宿主（Alliance）的恢复扫描（game/modules/activity 的 Driver：每秒一页 128 个、8 个并行、每次调用 5 秒）：
+// 它管的是联盟活动宿主（Alliance）的恢复扫描（game/components/activity 的 Driver：每秒一页 128 个、8 个并行、每次调用 5 秒）：
 //
 //   - Start：建一个 activity.ScanHost，以 activity.ScanCapability("alliance") 发布。扫描什么时候能开始只有 RPC Mod 知道
 //     （先建档、再注册 RPC，最后开扫描），所以由 internal/rpc/activity_alliance 的 Mod 在那一刻按能力名取它、把扫描交给它；

@@ -21,9 +21,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"{{MODULE}}/db"
 	gameactor "{{MODULE}}/game/components/actor"
-	scenecomp "{{MODULE}}/game/components/scene"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/modules/actor"
@@ -465,17 +465,18 @@ var sceneRegionReject atomic.Bool
 var sceneRegionCoded atomic.Bool
 
 func init() {
-	scenecomp.OnRegion("scene_test", func(_ view.PlayerEntity, event gamescene.RegionEvent) error {
-		if event.ID == 33 && sceneRegionCoded.Load() {
+	// 监听平时只由生成代码（game/entities/player/player_event_gen.go）登记；测试在自己的 init 里直接登记。
+	entity.RegisterEventListener(player.EntityKindPlayer, "SceneRegion", "controllers_test.sceneRegion", func(_ *player.Player, ev event.SceneRegion) error {
+		if ev.ID == 33 && sceneRegionCoded.Load() {
 			return apperrors.ErrSceneObjectFar
 		}
-		if event.ID == 33 && sceneRegionReject.Load() {
+		if ev.ID == 33 && sceneRegionReject.Load() {
 			return errors.New("reject region")
 		}
 		return nil
 	})
-	scenecomp.OnSceneInteract("scene_test", func(p view.PlayerEntity, object gamescene.Object) error {
-		if object.ID == 71 {
+	entity.RegisterEventListener(player.EntityKindPlayer, "SceneInteract", "controllers_test.sceneInteract", func(p *player.Player, ev event.SceneInteract) error {
+		if ev.ObjectID == 71 {
 			s := p.Dao().GetActorSaved()
 			s.SetFacing(s.GetFacing() + 1)
 		}

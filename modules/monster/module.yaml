@@ -7,6 +7,7 @@ needs:
 entity: Monster
 entities: [Monster]
 component: MonsterActor
+component_package: game/components/monsteractor
 protocols: [MonsterInspect]
 errcodes: [monster_invalid, monster_gone, monster_not_here]
 runtime: {package: game/modules/monster/service, start: Start}
