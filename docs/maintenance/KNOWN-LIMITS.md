@@ -361,12 +361,23 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 #### 玩家接入方式（2026-11-16）
 
-- **玩家协议只有 TCP**：嵌入在业务服务里（缺省），或经独立 Gate。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（`wiring/web`）拿不到请求头、不做鉴权、缺省只绑回环地址，只用于管理面、内部调用或鉴权代理之后；登录入口（portal）的 HTTP 端点只负责登录、选服、换票。玩家走 HTTP / WebSocket 业务协议不支持。
+- **玩家协议是 RS v2 帧，走 TCP 或 WebSocket**：嵌入在业务服务里（缺省），或经独立 Gate。WebSocket（2026-11-17 起，未发版）只是接入层：每条二进制消息装一个 RS v2 帧，握手、票据、路由与 TCP 相同，边界见下一节[WebSocket 接入](#websocket-接入2026-11-17)。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（`wiring/web`）拿不到请求头、不做鉴权、缺省只绑回环地址，只用于管理面、内部调用或鉴权代理之后；登录入口（portal）的 HTTP 端点只负责登录、选服、换票，大厅 lobby 的 HTTP 只负责建房与加入。玩家走 HTTP / REST 业务协议、或在 WebSocket 上走 RS 帧以外的格式不支持。
 - **独立 Gate 没有跨机验证**：只做过单机真实进程演练（account、经 Game Ingress 的 game、Gate 各一个进程，真实 NATS / Redis / Mongo / etcd；`scripts/test-demo-login.sh` 的 casual + naming 阶段另有双 Gate 与重启重连），没有跨机、跨机房的验收；属于外部环境验收。`roost add gate` 生成的接线只在单机、单个 Gate 进程、一次登录上做过真实进程演练（`scripts/testdata/gate-drill/gate-drill.sh`，[证据](evidence/gate-command-20261116/README.md)；缺省名与自定义 Gate 名 / 玩家服务名四组，[证据](evidence/gate-identity-20261117/README.md)）；多个 Gate、game / Gate 崩溃重启只由 game-demo 手写接线的脚本覆盖。
 - **`roost add gate` 的 Gate 是固定参数**（2026-11-16）：配置里只开放地址（`player_access.gate.addr` / `advertise_addr`）与命名空间；TCP 与内部上限（两侧报文 512 KiB、连接数、超时）取 `gatewiring.DefaultOptions()`，两侧 Ready 恒真（与嵌入 TCP 相同：Mod Start 起就接收，业务没有另外的准入条件）。要改这些按 [GATEWAY §2](../framework/GATEWAY.md#2-正式接入方式) 手写接线。
 - **生成的 Gate 只认 account 票据**：Gate 用 `wiring/gate.AccountAuthenticator`（`enter:` 与 `session:` 两种票据）；`auth.go` 认别的票据的工程不能直接在前面放生成的 Gate。
 - **doctor 的 `gate:client-address` 只查开发配置**：生产示例里的地址保持 `CHANGE_ME`，由运维填写。
-- **接入方式怎么选**写在 roost-genre 的 compose §1A：短连接（按请求交互）与开房间类用嵌入 TCP，长连接（长期在线、持续推送）缺省加独立 Gate。
+- **接入方式怎么选**写在 roost-genre 的 compose §1A：短连接（按请求交互）与开房间类用嵌入 TCP，长连接（长期在线、持续推送）缺省加独立 Gate；房主做 host 的开房间联机用 lobby + relay（compose §1B）。
+
+#### WebSocket 接入（2026-11-17）
+
+Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/websocket`），契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，方案 [FEATURE-2026-11-16-lobby-relay §4.7.1](FEATURE-2026-11-16-lobby-relay.md)，[证据](evidence/lobby-relay-ws-20261117/README.md)。
+
+- **Origin 白名单为空时同源页面也拒绝**：不带 `Origin` 的请求（原生客户端、工具）总是放行；带 `Origin` 的必须匹配 `allowed_origins`（relay 是 `ws_allowed_origins`）。白名单为空时拒绝所有带 Origin 的请求，**同源页面也拒绝**（选择理由：失败即关闭；游戏页面通常与接入地址不同域，前置负载均衡还可能改写 Host，按 Host 判同源靠不住）。要让浏览器连上来，必须写白名单。
+- **七层负载均衡后面所有连接按同一个 IP 计数**：连接的对端地址是负载均衡的地址，`max_connections_per_ip` 把经它来的全部 WebSocket 连接算作一个 IP；进程不读 `X-Forwarded-For`。部署时按负载均衡的数量调大这个上限。
+- **TLS 由前置负载均衡终结**（wss）：进程里不配证书。
+- **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。
+- **单条消息上限有 1 字节余量**：库按流读，越过上限后的下一次读才失败，超出部分最多先读出 1 个字节，之后连接以 1009 关闭。上限之内的帧照常处理。
+- **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 不发布玩家 TCP 7000 的问题见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
 
 ### 生成器、配置与模块
 
@@ -485,7 +496,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **turn 的边界**：固定开局名单，每位玩家成功命令连续编号、最后一条可重放；期限迟到只推进一次，离线实体下次加载补触发；成员减少 / 房间关闭在下一次推进结束；没有自动广播、胜负 / 伤害规则或跨机接管。
 - **enter 的边界**：建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`，但不做鉴权（`auth.go` 缺省拒绝，也不执行 `roost config enable player-tcp`），独立安装要业务接入鉴权并开启监听。“先新建、再进入”（`EnterCreate` / `EnterStatus` / `enter_need_create`）只对登记为“先新建”的会话生效（login 联动登记的是进服票据握手的会话），其余会话与没装 login 的工程照旧由 `EnterGame` 加载或创建。新建先建空档再提交：名字被 naming 拒绝或提交失败时空档留着、下次接着用，不合规的名字在建档前被拒；已建成的再发 `EnterCreate` 答 `enter_created`、不改；在 `EnterGame` 里直接建成的玩家没有名字，用改名协议。`PlayerDao.Enter.Fresh`（store 键 3）只落库。
 - **login 的边界**：握手认进服票据 `enter:<票据>` 与角色会话令牌，成败只由 account 决定；新号第一次握手就在 account 里建出账号 ↔ 玩家号映射（握手后没在游戏服新建就离开的，映射与号已占）。游戏服的结论在会话激活后以 `EnterStatus` 推送，只是告知（在 login manager 的后台执行、同时至多 256 条、超出丢弃；停机时取消在途告知并在期限内等它们返回，`Managers()` 里没有 `NewLoginNotices()` 时告知全部丢弃、记一条 Error；带码拒绝后 300 ms 按玩家断开，慢连接可能收不到那一帧），权威判断在 `EnterGame` / `EnterCreate`。生成器不生成 Gate 进程；独立 Gate 下 account 的 `EnterServer` 每次握手执行两次，别的服的票据在 Gate 上直接断开、收不到 `login_elsewhere`。票据都不能单张吊销；封号对进服票据与账号票据立即生效，对已签发的会话令牌至多滞后一个 `session_ttl`。开发令牌可冒充任何账号，生产靠环境键加 `dev-` 前缀拒绝（没写 `env: prod` 的预发环境照样可冒充）；doctor 的 `collaborators:account` 变 OK 不代表渠道验签已接。玩家号计数器在 Redis，被清或换前缀不搬数据会重号。已有 `cmd/accountctl` 或自己实现 account collaborators 的工程装不了 login（`replaces` 全有或全无）。没装 rehome 时换服在途的角色不被源服拒绝；login 与 rehome 的进入前检查先后靠名字排序。
-- **portal 的边界**：入口挂在托管 account 服务的进程上（`runtime.framework: account`；手写 bootstrap 要加 `kitmodulehost.NewMod`），三个端点：登录 → 凭票清单与推荐 → 换进服票据；不持有密钥，不建角不选角。没有限流、没有防撞库，`/portal/login` 每次都问渠道；凭据与票据明文放在请求体里，web Mod 不终止 TLS，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr`。账号票据与进服票据不落库、不能单张吊销，有效期内可重复使用。区服地址缺省来自静态配置 `portal.servers`（模块自己读，`--check-config` 查不到写错的值）；清单开销随区服数线性增长（account 读 1 + N 条记录、每服一次角色查询、顺序执行、无缓存），任何一个服的记录对不上（560113）或合服别名两跳，整个请求失败；清单里的 `role` 指 account 映射。新号被送到非 open 的服时拿得到票据、握手才被拒。account 新增的总线接口要求 account 先于 manifest 升级。
+- **portal 的边界**：入口挂在托管 account 服务的进程上（`runtime.framework: account`；手写 bootstrap 要加 `kitmodulehost.NewMod`），四个端点：登录 → 凭票清单与推荐 → 换进服票据，以及换游戏账号 token 的 `POST /portal/game-token`（2026-11-17 起，未发版）；不持有密钥，不建角不选角。没有限流、没有防撞库，`/portal/login` 每次都问渠道；凭据与票据明文放在请求体里，web Mod 不终止 TLS，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr`。账号票据、进服票据与游戏账号 token（gt1）不落库、不能单张吊销，有效期内可重复使用（封号对 gt1 当场生效）。登录带了 account 不认识的 `game` 时整个登录失败。区服地址缺省来自静态配置 `portal.servers`、服务地址来自 `portal.services`（模块自己读，`--check-config` 查不到写错的值）；清单开销随区服数线性增长（account 读 1 + N 条记录、每服一次角色查询、顺序执行、无缓存），任何一个服的记录对不上（560113）或合服别名两跳，整个请求失败；清单里的 `role` 指 account 映射。新号被送到非 open 的服时拿得到票据、握手才被拒。account 新增的总线接口要求 account 先于 manifest 升级。
 - **配方的验收口径**：casual / turn-pvp 使用 login、portal、servertime，开发配置自带本机令牌与业务服地址，生产与 Secret 示例不带。缺省场景的持久提交为替身；2026-11-14 [登录真实档](evidence/v147-login-20261114.md)另验 casual 购买回执与 self_sync 内容、真实 naming、双 account / game / Gate 和重启重连；[turn-pvp 真实档](evidence/turn-real-20261114/README.md)另验 account → 匹配 → Room / Turn、Gate → NATS → Ingress 与 SIGKILL 恢复。两套证据只覆盖各自列出的组合，不涵盖生产渠道、跨机或容量。
 - **验证范围**（2026-11-14）：新认证器下的真实进程已跑通机器人总线登录、`-login portal`、`alliance_offline_join`，以及 alliance-e2e、seamless 两个演练；MMORPG 跨 sid 专项不在本轮 P6 或十三玩法默认 / REAL 的验证范围内。`scripts/test-demo-login.sh`（含独立 Gate）与 `scripts/test-demo-merge.sh`（合服中的角色、已并入服老角色经入口三步再握手）可重复跑；仓库里的用例是离线场景（持久层、驻留表、传输为替身）与 `TestPortalRobotAfterTheHandshake`。其中内存替身用例和真实进程演练是两层证据，不能互相替代。
 - **servertime 的边界**：客户端的业务时间是估计（网络时延加走速差），重置前后几秒以服务器应答为准；重置之后在线客户端会集中来问一次，服务端不限流；与 checkin 等模块按同一个 `clock.BusinessDay` 表达式对齐，不调对方的 handler 比对。 真实登录档观察到 12 次推送都先于 EnterGame 应答；这是该次运行的观察，不把 best-effort 推送改写为强顺序保证。
@@ -522,6 +533,19 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - 端口来自 `roost.yaml` 的 `services.<name>.port_block`，块号上限 99，超过 100 个服务的工程要改端口段规则（[PROJECT_GENERATOR §5](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#5-wiring-mod-自动装配)）。
 - `shared` 只表达“全部服务相同”，有意让不同服务用不同效果流 / saga 库的拆法会被报不一致，没有豁免开关。
 
+#### 配置表导出给客户端（2026-11-17）
+
+`client_export.config` 与 tablegen 的按端分组、`layout=kv`、`index`、`#` 注释行（未发版），方案 [FEATURE-2026-11-17-client-config-export](FEATURE-2026-11-17-client-config-export.md)，说明见 [CODEGEN_REFERENCE §2.2](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)，证据 [tablegen 组](evidence/client-config-export-tablegen-20261117/README.md)、[导出组](evidence/client-config-export-20261117/README.md)。
+
+- **具名类型不支持**：客户端导出只支持内建标量、指向标量的指针、切片与 `map[string]T`。具名类型（如 `type Kind int32`）、结构体、`time.Duration`、`[]byte` 的字段导出时报错，要改成 parser（客户端拿原文字符串）或 `side:"s"`。生成器只看 Go 类型表达式、不知道具名类型的底层类型；`index` 同样只支持内建 string / 整数 / bool 字段，具名类型、浮点、指针、带 parser 的字段上写 index 生成时拒绝。
+- **带 parser 的字段在客户端是 string**（方案第 7 节）：导出的 JSON 与 C# 里是 CSV 原文字符串，由游戏自己解析。
+- **浮点的规范形式 Go 与 C# 不同**：unique / enum 比较浮点值时 C# 用 `"R"` 格式、Go 用 `'g'`，极大 / 极小值的指数写法不同（如 `1E+21` 与 `1e+21`）。只影响浮点列上的 unique / enum 报错文字与极端值的比较。
+- **横排表转换报错的行号是去掉注释后的序号**：横排表（`//roost:table`、横排 `//roost:object`）生成的运行时 `Convert<Type>CSV` 忽略 `#` 行，报错里的 `row=` 是去掉注释行后的记录序号，有注释行时与文件行号不同；生成步骤与 kv 表的转换报文件行号。
+- **只给客户端的字段在服务端结构体里是零值**（决定 1）：不另生成一份服务端结构体，服务端代码读这些字段得到零值。
+- **数据版本不做运行时核对**（决定 4）：`manifest.json` 的 `data_version` 与 C# 的 `ConfigTables.DataVersion` 只供查看或上报；登录不核对，SDK 不比较，热更也不提示过期。
+- **同步覆盖手改过的已同步文件**：与协议同步相同，上次同步写过、之后在客户端被手改的文件照样覆盖并提示；拒绝覆盖的只有“不是上次同步写的同名文件”和被手改的服务端导出目录。
+- **生成器版本写在 manifest 里**：与协议导出一样，换了生成器版本 `roost generate --check` 会报 `shared/config/manifest.json` 过期，重新生成并提交即可。
+
 ### 框架服务与 game-demo
 
 - **匹配队列状态**（维护者 2026-10-19 方案 A）：一个分区的全部状态整体读写；结束满 `match.retention`（缺省 10 分钟）的票、比赛与排队请求记录在下一次写入或 Sweep 时移除，重放与读历史只在保留期内有效（超期 Commit 重放报 `ErrTicketMissing`，不会成第二局）。状态上限 = 等待票（≤ `MaxQueueLength`）+ 保留期内的成局量；大队列按 `Partition` 分键是推荐用法，跨分区成局用 `CommitAcross`（键带 hash tag，一个逻辑队列的全部分区在 Redis Cluster 的同一节点）。规模建议见 [guide/09-services §4](../framework/guide/09-services.md#4-关键业务边界)。2026-10-20 夜间容量测量（一次性夹具，本机 loopback 私有 Redis，[夜间补测](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md) §11）：每个分区的状态按“每秒成局人数 × 已过时间”增长（每名已成局玩家约 510 B），单次操作耗时随状态线性上升；4 分区各每秒成局 10 人、保留期 10 分钟时第 8 分钟（每分区约 2.6 MB）CAS 冲突比例到 0.94、请求超时，同一 Redis 上无关命令的 PING P99 到 0.6s——这一档**不可持续**，持续上限约为每分区“每秒成局人数 × 保留期”≤ 约 4500 人（状态约 2.3 MB），超过时调小 `match.retention` 或加分区（2026-10-21 维护者批准写进 [guide/09-services §4](../framework/guide/09-services.md#4-关键业务边界) 规模建议，注明单样本、非目标负载）；Redis 被拖慢会影响同实例的其他服务。`CommitAcross` 与相邻分区匹配器抢同一批票时冲突约 49%（夹具有意的高竞争形态）。私有 3 主 3 从 Cluster 上两次杀掉该逻辑队列槽位的主节点：只有约 1～2 秒的连接错误，多键脚本没有部分生效，590 场比赛核对全部一致。（Cluster、跨机与异步复制见[框架服务与 game-demo：未测部分](#框架服务与-game-demo未测部分)）
@@ -538,6 +562,27 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
 - **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player_enter_game.go`、`player_enter_create.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
+
+#### 大厅 lobby 与转发 relay（2026-11-17）
+
+房主的客户端做 host 的开房间联机（未发版）：方案 [FEATURE-2026-11-16-lobby-relay](FEATURE-2026-11-16-lobby-relay.md)（§6 是维护者的 12 条决定），契约 [LOBBY](../framework/LOBBY.md)、[RELAY](../framework/RELAY.md)，用法见 roost-genre compose §1B。没做到位的部分见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
+
+- **relay 只转发**（§6 第 4、5 条）：只读帧头，不解析载荷，不做帧同步、状态校验、反作弊与断线托管；玩法逻辑跑在房主的客户端上，快照的内容、版本与合法性由游戏负责。换 host 不保证玩法状态连续：主动转交最完整；断线时最多丢“最后一份快照之后”的变化。
+- **relay 进程崩溃时房间丢失**：房间（连接、座位、快照、本地被踢记录）只在一个实例的内存里，没有跨实例接管，也不落盘。进程重启后关房记录也没了：还没过期的 host 令牌能在新进程上重建同一个房间号（lobby 验权仍要求是目录里的房主、房间没关）。
+- **lobby 不可用时新连接与重连都进不来**（方案 §4.3，失败即关闭）：relay 每条连接都向 lobby 验权，超时或不可用答 `Closed{lobby_unavailable}`；已连上的不受影响。
+- **房主心跳要求约每 0.6s 一帧**：房主连接的空闲阈值 `relay.host_idle_timeout` 缺省 2s（成员仍是 30s），超过即当断线、进宽限期。三份 SDK 的房主与候选每 600ms 没发过帧就补一个 Ping；自己写客户端时要遵守。
+- **Welcome 不带 epoch**：连上后还没见过换 host 时，SDK 的 `Role.Epoch` 是 0，不一定是房间的真实 epoch；只影响查询，`HostReady` 用 `YouAreHost` 带来的 epoch。
+- **被踢的人收到两种答复**：同一个 relay 上被踢的人再连收到 `Closed{kicked}`（relay 本地记录，房间存续期间有效）；relay 重启后本地记录没了，由 lobby 的被踢名单挡住，收到 `Closed{lobby_rejected}`；再 join 答 403 `kicked`。SDK 两种都停止重连，客户端都按“不能再进”处理。
+- **开局后掉线不回的人占着位子**（§6 第 12 条）：已开始的房间里，连上过 relay 的成员掉线后席位一直保留（他回来回原座），直到他主动离开、被踢或关房；不回来的人要房主踢掉（relay 能踢有座位但不在线的槽位）才空出来。
+- **快照压缩用 deflate，可替换，同一房间必须用同一种**：SDK 缺省用各语言自带的原始 deflate（不加第三方依赖；方案原写 LZ4 / zstd），留 `Compressor` / `IRelayCompressor` 接口换实现。SDK 对快照与交接数据透明压缩、在 `YouAreHost` 里透明解压，所以房间里每个客户端必须用同一种。解压上限 16 MiB 是常量。
+- **快照 seq 跨房主递增**：relay 要求 seq 在房间内递增（跨房主也一样），`YouAreHost` 带 relay 存着的最新 seq；SDK 取 `max(本地, YouAreHost 的 seq, epoch<<32) + 1`。自己写客户端时至少从 `YouAreHost` 的 seq 往上接，否则 `Rejected{stale_seq}`。
+- **选 relay 有延迟**：lobby 按 etcd 里的房间数选实例，这个数由 relay 定时更新；几个 lobby 实例同时建房，可能都选中同一个 relay。
+- **一个 `lobby.subject` 对应一份房间目录**：共用 relay 的几个 lobby 服务必须共用 `key_prefix` 与 `subject`。过期房间在 `game/mode` 索引里的项只在列表时清理。
+- **relay 的座位表只增不减**（被踢的除外）：一个房间里进出过的不同账号越多表越大，规模由 lobby 的席位与令牌人数限住。
+- **语音走 TCP / WebSocket**：丢一个包会卡住后面的包；需要时以后加 UDP 通道。
+- **relay 的每个实例要能被客户端直连**（`advertise_addr` 各不相同）：生成的 k8s 模板只给 ClusterIP Service 加端口，对外暴露（每实例 LoadBalancer / NodePort / hostPort）按部署环境配。k8s Secret 的数据键就是环境变量名，改 `token_key_env` 后 Deployment 跟着改，已经 apply 的 Secret 要自己改键名。
+- **account 的配置与工具**：`account.games` / `account.services` 的条目至少要写一个键，空条目（`party: {}`）加载器看不见、会被静默忽略，所以 `token_ttl` 定为必填。`cmd/accountctl` 不读 `account.services`：`upsert-server -service` 的名字只查写法，由运维保证它是配置里的 game 服务（写错时那个服务的区服清单里没有它，用 `show-server` 核对）。
+- **不带 game 的工程里 account 协作者是桩**：`-template lobby` 生成的 `services/account/collaborators.go` 缺省全部拒绝（与任何托管 account 的工程相同），doctor 的 `collaborators:account` 报 FAIL，直到工程自己实现；登录模块（login / portal）要求有 game 服务，装不上。生成器组验收时把登录模块的四个 account 文件拷进来模拟实现（[证据](evidence/lobby-relay-gen-20261117/README.md)）。
 
 #### game-demo 的玩法范围（D20 第 3 期）
 
@@ -688,6 +733,16 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 
 - **没有实现的传输**：TLS / WS / UDP / KCP 适配没有实现。已实跑的是 macOS ARM64 的 Editor、Mono / IL2CPP Player、50～10000 可见集解码与 TCP 延迟 / 分片 / 故障（[客户端报告](../performance/CLIENT-20261101.md)）。
 
+#### 开房间 SDK（2026-11-17）
+
+Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（未发版），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
+
+- **Go 与 C# 只连 TCP，TS 只连 WebSocket**：C# 的 `Roost.Client.Relay` 与 `Roost.Client` 是两个包，没有 WebSocket。
+- **Web 房主在后台标签页靠 Worker 撑住只是缓解**：浏览器不保证 Worker 计时器不被限流，手机后台页随时被冻结，冻结后走 relay 的断线换 host。
+- **内置浏览器面板测不了真实后台**：Claude 桌面应用内置浏览器面板里，后台标签页的 `document.visibilityState` 始终是 `visible`，所以在那里“切到后台”只能用演示页的“模拟隐藏”按钮触发；后台限流对 Worker 计时器的影响没有实测。
+- **“我在前台”没有专门的控制帧**（relay 不转发不认识的控制帧）：`WebHost` 让出房主时按房主声明的候选顺序取第一个在线成员，候选顺序由游戏维护（例如成员经游戏通道报前台状态）。
+- **Go 的定时快照回调与其他回调并发**：`SnapshotState` 在心跳 goroutine 上调用，并发安全由游戏保证；C# 在 `Pump` 里调用。
+
 ### 验收与运维
 
 - **Windows**：非框架保证平台，只保证编译与 CLI 兼容（维护者 2026-10-14）。CI `windows-compatibility` 只跑 build、vet、`go test -run '^$'` 和 roost CLI 生成工程冒烟；完整 `go test` 的既有失败来自平台差异（打开中的文件不能改名 / 删除：nestwal 损坏记录检查、日志轮转、statslog；checkout 的 CRLF 使 gofmt 门禁与 kitconfig schema 比对失真；run 38500440362 的 6 个失败）。本机结果不改变 macOS / Linux 支持范围，跨平台也成立的缺陷不归入此条。
@@ -833,6 +888,11 @@ room 自动断线订阅与重启后在线状态（全部断线、重连上线）
 
 P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 已验（其中 committed 保留 Q4），本机脚本 11 / 11 与当批模块矩阵 594 / 594 是不同统计口径。历史 demo 压测不是模块容量；本轮 M 与 C-Q1 / Q2 尚未提供正式容量结论。见[社交报告](evidence/social-real-20261114/README.md)。
 
+#### 配置表导出：遗留
+
+- **C# 运行时用例依赖本机 dotnet**：`TestClientConfigCSharpRuntime`（netstandard2.1 编译导出的 C#、`Load` 读回、改 JSON 报表名、规则违反报行与字段）有 dotnet 就跑，没有就 Skip 并写明原因；设了 `ROOST_REQUIRE_DOTNET=1` 时没有 dotnet 就失败（d2db29a8）。没有 .NET SDK 的机器上跑全量或 pretag 时这条是 Skip，不能算覆盖；要保证它跑，带上 `ROOST_REQUIRE_DOTNET=1`。
+- **Unity 里没有跑过**：导出的 C# 只在 .NET 上编译和运行，IL2CPP 裁剪安全是按“不用反射、不用 JsonUtility / UnityEngine”推断的，没有实跑，见[客户端：遗留](#客户端遗留)。
+
 <a id="生成工程目录遗留"></a>
 
 ### 框架服务与 game-demo（遗留）
@@ -855,6 +915,14 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **期限只记录**：account 不自动中止过期的换服，也不拒绝迟到的提交；没有在途换服的列举与清扫（方案三期）。**已决定（D8 A，2026-11-14），v1.47.0 之后实施**，与[向前恢复只由登录触发](#单个玩家换服模块-rehome-与-game-demo-接线)是同一项，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R2）。
 
+#### 大厅 lobby 与转发 relay：遗留
+
+设计边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)。
+
+- **多进程演练没有做**：方案 §5 的 lobby + relay 真实进程演练（kill -9 房主客户端与 relay 进程、两个 relay 实例分布、吞吐基线）没有做。已有的是进程内真实 NATS + etcd + Redis 的集成用例（`wiring/relay` 的 `TestRealRelay*`：转发、报告、leave 命令、etcd 广播、换 host、踢人、验权、开局后回座），以及生成器组 `make dev-run` 起 account、lobby、relay 三个进程的冒烟（全部 ready、lobby 拒绝伪造的 gt1、relay 在 etcd 广播 tcp 与 ws 地址，[证据](evidence/lobby-relay-gen-20261117/README.md)）。跨机、容量未验。
+- **account 新用例没在真实 Redis 上跑**：游戏账号 token 与多服务的新用例只跑了内存存储；`ROOST_REVIEW3_BACKEND=redis` 走真实 Redis 的那一遍这一轮没跑（[证据](evidence/lobby-relay-account-20261117/README.md)）。
+- **生产 compose 不发布玩家 TCP 7000，尚未确认**：生成的生产 compose 原本就不给玩家 TCP 7000 写 `ports`（只有 docker README 的 `docker run -p`）；部署组为了“未声明的工程逐字节不变”没有补，声明了 websocket 的工程里 Gate 的 compose 只发布 7080。是有意的（由外部负载均衡发布）还是遗漏，还要查；查清之前不要把 compose 当成可直接对外的模板（[证据](evidence/lobby-relay-deploy-20261117/README.md) 第 3 条）。
+
 ### 地形与无缝世界（遗留）
 
 #### 地形 / 无缝世界：遗留
@@ -876,6 +944,9 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### 客户端：遗留
 
 - **设备与引擎**：C-U1～U4 包括 Unity / IL2CPP 场景时间与地形、快照 restore、UGC 交互、Windows / Linux / Android / iOS 与 Unreal / Godot 实机，线程、移动前后台、WAN / 跨 Gate 和确定性。已有 macOS ARM64 Editor / Mono / IL2CPP 与 .NET 功能证据不能代表全矩阵。
+- **只在内置浏览器面板里演练过**：Web 端房主（`WebHost` + Worker 规则循环、主动转交、刷新恢复、隐藏让出）在 Claude 桌面应用内置的 Chromium 面板里两个标签页演练通过（[证据](evidence/lobby-relay-browser-20261117/README.md)，第一轮发现的“主动转交后新房主规则不跑”已由 f2532dba 修掉并复测）。“切到后台”是用演示页的“模拟隐藏”按钮触发的；Safari、Firefox、手机浏览器没测，真实后台标签页的计时器限流对 Worker 的影响没实测。TS SDK 的自动化用例仍只在 node 上跑（`ws` 包代替浏览器的 WebSocket，`document`、`sessionStorage` 用假的）。
+- **Unity / IL2CPP 没有实跑**：开房间的 C# SDK `Roost.Client.Relay` 与配置导出的 C# 读取代码只在 .NET 上编译和运行过（netstandard2.1、`TreatWarningsAsErrors`），没有在 Unity Editor、Mono / IL2CPP Player 上跑过。
+- **`./client/relay` 出现过一次 FAIL，尚未确认**：sdk 组开发中有一次 `go test ./client/relay/...` 输出 FAIL，原因被 `tail` 截掉；之后 `-count=8`、单跑 6 次、`-count=20`、`-race -count=3` 都没再出现。当时 relay 组正在改 `service/relay`，可能是半截改动，也可能是偶发，证据不足（[证据](evidence/lobby-relay-sdk-20261117/README.md)）。
 - **同一 SessionID 跨 Gate**：C++ 独立客户端进程经真实 TCP / NATS 已验先 A 后 B 与迟到 Bind 拒绝；Gate / Game 仍同 Go 测试进程。Unity Editor / Player、IL2CPP、Unreal 与真实分机重连未验。C++ protobuf 已用 libprotoc 36.2 跑 8 / 8 CTest，不再列“没有 protoc 未跑”。见[原生验收](evidence/known-limits-remaining-20261114/native-acceptance.md)。
 
 ### 验收与运维（遗留）

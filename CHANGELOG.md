@@ -5,6 +5,80 @@
 ## [Unreleased]
 
 - **生成物要求的最低 core 提到 v1.53.0**（2026-11-17）：生成的 Gate 装配会传 `wiring/gate.Options` 的 `GateService` / `GameService`（RV-20261116-02 修复新增），要 v1.53.0；framework-compat 的 minimum 一栏随之改为 v1.53.0。
+- **开房间联机：大厅 lobby + 转发 relay，房主的客户端做 host（维护者 2026-11-16、11-17，方案 `docs/maintenance/FEATURE-2026-11-16-lobby-relay.md`，§6 是 12 条决定）**：新场景，不需要 game 服务。客户端凭 account 签的游戏账号 token 到 lobby 建房 / 加入，拿到 relay 地址与房间令牌后直连 relay；relay 只读帧头、不解析载荷，玩法逻辑跑在房主的客户端上，服务器不托管房间逻辑。下面按块列出：Gate 的 WebSocket 接入层、account、lobby、relay、生成器、三份客户端 SDK。
+  - **升级与不兼容**：线上未部署，不做旧进程、旧数据兼容。relay 与 lobby **必须一起升级**：新 relay 每条连接都向 lobby 验权，旧 lobby 不答 `verify`，新 relay 会拒绝全部连接（`Closed{lobby_unavailable}`）。lobby 依赖 account 的新总线接口，account 先于 lobby 升级。没声明 lobby、relay、websocket 的工程生成结果不变（配置表的 `#` 注释行除外，见本节最后一条）。
+  - **验证到哪**：Web 端房主在 Claude 桌面应用内置浏览器面板（Chromium）里两个标签页演练通过（建房、加入、主动转交、刷新恢复、隐藏让出），“切到后台”用演示页的模拟按钮触发；Safari、Firefox、手机浏览器没测，Unity Editor / IL2CPP 没跑，lobby + relay 的多进程演练（真实进程、kill -9、两个 relay 实例）没有做。见 KNOWN-LIMITS“大厅 lobby 与转发 relay”与“客户端：遗留”，演练证据 [browser](docs/maintenance/evidence/lobby-relay-browser-20261117/README.md)。
+- **Gate 的 WebSocket 接入层（方案 §4.7.1、§6 第 9 条）**：浏览器可以经 WebSocket 连玩家接入（独立 Gate 与嵌入 TCP 都能开）。契约见 [GATEWAY §6](docs/framework/GATEWAY.md#6-websocket-接入)。
+  - **共用适配器** `infra/network/wsconn`：新依赖 `github.com/coder/websocket v1.8.15`。`wsconn.Listen` / `NewListener` 产出 `net.Listener`，Gate、嵌入 TCP 与 relay 共用。
+  - **用法**：`gateway.TCPConfig.WebSocket{Addr, Path, AllowedOrigins}`，`Addr` 为空不开，`Path` 缺省 `/ws`；手工接线用 `wiring/gate.Options.TCP.WebSocket`。打开后多开一个监听，连接进同一个 accept 循环：握手、票据、连接代号、路由、出站预算、准入上限都与 TCP 相同。
+  - **帧**：客户端每条二进制消息装一个 RS v2 帧，服务端按字节流读；服务端写出的每一帧恰好是一条消息。文本消息以 1003 关闭；超过一个最大帧以 1009 关闭。保活用 RS 心跳，不用 WebSocket ping。TLS（wss）由前置负载均衡终结。
+  - **Origin**：不带 `Origin` 的请求（原生客户端、工具）总是放行；带 `Origin` 的必须匹配 `allowed_origins`，否则 403。**白名单为空时拒绝所有带 Origin 的请求，同源页面也拒绝。**
+  - **与 TCP 的差别**：期限在一次读写进行中到期时关闭整条连接（TCP 只打断这一次）；`Close` 立即关 socket，不做关闭握手。新指标 `player_tcp_websocket_rejected_total{reason}`。
+  - **生成器**：`roost add transport websocket`（要求已有 tcp）在 `access.player.transports` 加 `websocket`；嵌入 TCP 读 `player_access.tcp.websocket.{addr,path,allowed_origins}`，独立 Gate 读 `player_access.gate.websocket.*`。命令不改配置文件，写上 `addr` 才开。
+  - **部署与 doctor**：部署模板按约定的 7080 发布 `player-ws`（k8s 容器与 Service 端口、NetworkPolicy、生产 compose、docker 示例），开 WebSocket 时写 `addr: 0.0.0.0:7080`。`websocket.addr` 参与端口冲突检查；没声明 websocket 的工程写了 websocket 的键，`roost config check` 与 doctor 的 `config-schema` 报失败并给出 `roost add transport websocket`。生成工程的 `docs/ROOST_YAML.zh-CN.md`、`docs/PLAYER_ACCESS_TCP.zh-CN.md` 只在声明了 websocket 时写这一节。
+  - 证据：[ws 组](docs/maintenance/evidence/lobby-relay-ws-20261117/README.md)、[deploy 组](docs/maintenance/evidence/lobby-relay-deploy-20261117/README.md)。
+- **account：游戏账号 token 与多个服务（方案 §4.1）**：
+  - **游戏账号 token** `gt1.<过期秒>.<游戏>.<账号>.<签名>`：与 at1 / et1 同一把会话密钥、独立的域前缀，互相不能冒充。只带游戏，不带区服与角色。
+  - **配置**（map 写法）：`account.games.<游戏>.token_ttl` 列出这套 account 服务的游戏（必填，至多 24h；空条目 `party: {}` 加载器看不到，所以 `token_ttl` 定为必填）；`account.services.<服务>.kind` 列出接受这套账号的服务（`game` / `lobby` / `relay`）。不写 `account.services` 时按单一 game 服务处理，行为不变。
+  - **总线接口**：`IssueGameToken(ctx, accountTicket, game)`、`ValidateGameToken(ctx, token) (GameAccount{AccountID, Game, ExpiresAtUnix}, error)`、`ListServices(ctx)`；调用方用 `GameAccount.RequireGame` 核对自己的游戏。新错误码 `ErrGameInvalid`（560120）。封号对已签出的 gt1 当场生效。
+  - **区服**：区服记录加 `service` 字段，没写时归唯一的 game 服务；所有 game 服务共用一个号段；`MaxServers` 256 → 1024（portal 的 `MaxEntries` 跟着）；合服只在同一个 game 服务里。
+  - **portal 模块**（只对新安装的工程）：新增 `POST /portal/game-token`（请求体 `{account_ticket, game}`，答 `{ok, game, game_token, expires_at}`）；登录可选参数 `game`，答复多带一张 gt1；`/portal/servers` 可选 `service` 筛选，答复多 `services`（地址来自新配置 `portal.services`），每个服多 `service`。portal 场景 12 → 15。
+  - **accountctl**（login 模块，只对新安装的工程）：`upsert-server -service <game 服务>`。记录已带服务名而这次没写 `-service` 时报错并点名。
+  - 证据：[account 组](docs/maintenance/evidence/lobby-relay-account-20261117/README.md)。
+- **大厅服 lobby（新框架服务 `service/lobby`、`wiring/lobby`，方案 §4.2、§4.3）**：HTTP + JSON，无状态、可以多开。契约见 [LOBBY](docs/framework/LOBBY.md)。
+  - **接口**：`POST /rooms`、`GET /rooms?game=&mode=`、`POST /rooms/{id}/join|leave|state`，返回 `{room, relay_addr, token, expires_at}`；请求带 `Authorization: Bearer gt1…`，可选 `transport`（tcp / ws）决定给哪个 relay 地址。错误名：`unauthorized`、`game_not_served`、`room_not_found`、`bad_request`、`room_full`、`wrong_password`、`not_host`、`room_started`、`no_relay`、`kicked`。
+  - **鉴权**：经 account 的 `ValidateGameToken` + `RequireGame`；lobby 不持有账号密钥。只服务 `lobby.games` 里的游戏（每个游戏写 `max_members`），房间按游戏隔开。
+  - **房间目录**：Redis，带 TTL（`lobby.room_ttl`），由 relay 的报告续期，按 `game/mode` 建索引；密码存哈希；只有房主能改状态；已开始的房间新人进不来。
+  - **选 relay**：从 etcd 广播的实例里选房间数最少、有对应接入（tcp / ws）的。
+  - **与 relay 的契约**（NATS）：收 `<subject>.events`（房间心跳、成员进出、换 host），发 `<subject>.relay.<实例>`（leave 命令），答 `<subject>.verify`（relay 的每条连接都来问）。`host_changed` 只认更大的 epoch；签出的令牌角色按当前房主填。
+  - **被踢记在 lobby**（§6 第 11 条）：relay 报 `member_left{kicked}` 后，账号进房间记录的被踢名单（随记录过期），之后 join 答 403 `kicked`，验权也拒绝。
+  - **开局后掉线的席位**（§6 第 12 条）：房间已开始时，连上过 relay 的成员掉线后席位一直保留，直到他主动离开（lobby leave 或 relay 的 Leave 控制帧）、被踢或房间关闭；他再 join 回到原座（不受“已开始”与人数限制，签新令牌）。没开局的房间沿用原规则（掉线且过了预留期就让出）；开局时还没连上的人仍按预留期让出。房间记录的成员多一个字段 `connected`（不兼容旧记录）。lobby 认 relay 报告 `member_left` 的原因 `left`。
+  - **relay 令牌** `service/relay/token`：`rt1.<过期秒>.<实例>.<房间号>.<账号>.<host|member>.<最大人数>.<签名>`，HMAC-SHA256；lobby 签、relay 本地验签；密钥从 `token_key_env` 指的环境变量读（不足 16 字节起不来），lobby 与 relay 指向同一个变量。
+  - CORS 可配置（`lobby.cors_origins`）。
+  - 证据：[lobby 组](docs/maintenance/evidence/lobby-relay-lobby-20261117/README.md)、[seat 组](docs/maintenance/evidence/lobby-relay-seat-20261117/README.md)。
+- **转发服 relay（新框架服务 `service/relay`、`wiring/relay`，方案 §4.4、§4.6）**：只读帧头，不解析载荷。契约见 [RELAY](docs/framework/RELAY.md)。
+  - **帧**：与 Gate 同一个 16 字节包头。`client/wire` 把 flags bits3..4 定为 relay 通道（01 游戏 / 10 房间 / 11 控制），relay 帧上 seq 是槽位（上行写目标、下行是发送者）。Gate 的编解码不变、仍拒绝通道位，`client/spec/packets.json` 不变；新增 `client/spec/relay-packets.json`。
+  - **两种通道**：游戏通道里成员的帧只到房主，房主的帧按目标给某个成员或全体；房间通道（聊天、表情、语音）按目标直达，单独限额，可以禁言。
+  - **控制帧**：成员进出通知房主，房主踢人、禁言；有座位但不在线的槽位也能踢（记被踢、删座位、报 `member_left{kicked}`，房主收到 `MemberLeft{kicked}` 作为确认）。
+  - **限额**：单帧、每秒帧数、发送队列（满了只断开这一条慢连接，不阻塞别人）、空闲与令牌首帧超时、空房超时；缺省值见 RELAY §4。槽位在房间存续期间属于账号：重连拿回原槽位，新账号取下一个没用过的。
+  - **换 host**：房主主动转交（`Transfer`，带交接数据）或离开（Leave 控制帧、lobby 的 leave）时立即换；房主断线（房主连接单独的空闲阈值 `host_idle_timeout` 缺省 2s，即约每 0.6s 要有一帧）进宽限期 `host_grace`（缺省 5s），期间同一账号回来仍是房主（`HostResumed`）；期满按房主声明的候选顺序（`Successors`）、兜底最小槽位选人，新房主在 `host_ready_timeout`（缺省 10s）内回 `HostReady` 才生效，超时或断开换下一个，都失败关房。迁移期间成员发给房主的游戏帧丢弃，并收到一次 `HostChanging`。没有在线成员时房主断开即关房。新控制帧 64～69、80～84（`relay-packets.json` 只追加）。
+  - **快照**：只认当前房主；seq 在房间内递增（跨房主也一样）；同一房主两份之间不少于 `snapshot_min_interval`（1s）；`snapshot_max_bytes`（256 KiB）以内收下，超过但不到两倍回 `Rejected{too_big}`、连接保留，超过两倍断开；只存最新一份，换 host 时连同 seq 与年龄交给新房主。`YouAreHost` 不管来源是交接数据还是快照，都带 relay 存着的最新 seq（dd78962f）。
+  - **每条连接向 lobby 验权**（§6 第 11 条）：本地验签 → 本地预检（房间不在且不是 host 令牌、关过的房间号、本地记着被踢）→ NATS request `<subject>.verify`。lobby 拒绝 `Closed{lobby_rejected}`（15）；出错、`admit_timeout`（缺省 2s）内没答、没有 lobby 订阅 `Closed{lobby_unavailable}`（16），失败即关闭，已连上的不受影响。被踢的人在同一个 relay 上再连收到 `Closed{kicked}`（本地记录在房间存续期间有效），relay 重启后由 lobby 挡住（`lobby_rejected`）。
+  - **与 lobby / etcd**：经 NATS 报告房间（`<subject>.events`，带递增 `seq`、在线名单、最近一个已就绪的房主与 epoch），收 lobby 的 leave 命令；经 etcd 广播实例地址、`ws_addr` 与房间数，停机时撤销。
+  - **WebSocket**：`relay.ws_listen` / `ws_path`（缺省 `/relay`）/ `ws_advertise_addr` / `ws_allowed_origins`，与 TCP 进同一批房间。空闲与令牌首帧超时改用每条连接一个计时器（WebSocket 的读期限到期会直接关掉连接，来不及发 `Closed`）。
+  - **新配置键**：`relay.host_idle_timeout`、`host_grace`、`host_ready_timeout`、`snapshot_min_interval`、`snapshot_max_bytes`、`admit_timeout` 与上面四个 `ws_*`。
+  - 证据：[relay 组](docs/maintenance/evidence/lobby-relay-relay-20261117/README.md)、[host 组](docs/maintenance/evidence/lobby-relay-host-20261117/README.md)、[seat 组](docs/maintenance/evidence/lobby-relay-seat-20261117/README.md)（踢离线座位）。
+- **生成器：lobby 与 relay（方案 §4.5）**：
+  - **框架服务目录**：`frameworkCatalog` 加 `lobby`、`relay`，标为直接面向客户端（不在总线上应答）：业务服务不能 `uses` 它们，模块的 `runtime.framework` 不能指向它们；`-framework all` 仍是总线上的九个。`roost help services` 改为“九个 + lobby、relay”，新增 `roost help lobby`。
+  - **命令**：`roost add lobby [<名字>]`、`roost add relay [<名字>]` 声明托管服务；工程没有托管 account 时一并声明。之后补上 account 的配置：`account.services`（每个 lobby、relay、玩家服务）与 `account.games`（lobby.games 里的游戏，`token_ttl: 2h`），新条目按名字排进已有条目之间。同名同种再加一次什么都不改；名字被业务服务占了时拒绝。
+  - **不带 game 的工程**：`roost project new <名字> -template lobby` 只托管 account、lobby、relay。
+  - **生成的配置**：端口按端口块派生（lobby 8080+N、relay 7100+N、relay WebSocket 7200+N，`ws_allowed_origins` 写 `localhost:*`）；`relay.instance` 不写，按 `<server_type>-<sid>` 取；`lobby.games` 写一个以工程名命名的游戏（`max_members: 8`）；两边的 `token_key_env` 都是 `ROOST_RELAY_TOKEN_KEY`，subject 与 registry 前缀两边相同；`make dev-run` 在变量没设时给开发密钥。`kitconfig_gen.go` 由 `configschemagen` 重新生成。
+  - **部署模板**：k8s（容器与 Service 端口、NetworkPolicy）与生产 compose（`ports`）发布 lobby 的 HTTP 端口、relay 的 TCP 与 WebSocket 端口。relay 令牌密钥注入 lobby 与 relay：k8s 引用新的 Secret `<app>-relay-token`（`deploy/k8s/base/secret.relay-token.example.yaml`，只生成一次），compose 用环境变量（`env.example` 加一行），shell 的 `install.sh` 要求安装者环境里有它（不足 16 字节拒绝）并写进 release 的 `relay-token.env`。变量名取配置里 `token_key_env` 的实际值，改名后 `roost project sync` 跟着改。
+  - **doctor**（只在托管了 lobby 或 relay 时出现）：`lobby-relay:account-services`（列全且 kind 对得上）、`lobby-relay:token-key-env`（全部 lobby、relay 指向同一个非空变量）、`lobby-relay:advertise-addr`（relay 生产示例不是回环地址）、`lobby-relay:account-games`（`lobby.games` 都在 `account.games` 里）。`relay.listen`、`relay.ws_listen`、`lobby.listen` 带 `listen` 标签，参与端口冲突检查（55a9fd02）。
+  - 生成工程的 `docs/SERVICES.zh-CN.md` 加“大厅 lobby 与转发 relay”一节。
+  - 证据：[gen 组](docs/maintenance/evidence/lobby-relay-gen-20261117/README.md)、[deploy 组](docs/maintenance/evidence/lobby-relay-deploy-20261117/README.md)。
+- **开房间的三份客户端 SDK（方案 §4.5、§4.6、§4.7.5）**：Go [`client/relay`](client/relay/README.md)（TCP）、C# [`Roost.Client.Relay`](client/dotnet/Roost.Client.Relay/README.md)（TCP，netstandard2.1，无第三方依赖）、TS [`client/ts`](client/ts/README.md)（`@roost/relay-client`，浏览器 WebSocket，运行时无依赖）。共同说明见 [client/README“开房间 SDK”](client/README.md#开房间-sdklobby--relay)。
+  - **lobby**：建房、列房、加入、离开、改状态，错误名映射成各语言的错误类型（Go `*LobbyError` + `errors.Is`，C# `LobbyException.Code`，TS `LobbyError.code`，含 `kicked`）。
+  - **relay**：首帧令牌、游戏 / 房间通道、成员上下线、踢人禁言；三份对 `client/spec/relay-packets.json` 逐字节一致。心跳成员每 10s、房主与候选每 600ms，Pong 测 RTT。自动重连缺省关闭；打开后断线先经 lobby join 拿新令牌再连 relay，遇 `lobby_rejected` / `kicked` 停，遇 `lobby_unavailable` 退避再试。
+  - **换 host**：强类型回调 `OnYouAreHost` / `OnYouAreMember` / `OnHostChanging` / `OnHostChanged` / `OnHostResumed` / `OnRejected`（TS 为小写开头）；房主 `Transfer`、`SetSuccessors`、`Snapshot`，新房主 `HostReady`（可选自动回）；SDK 记当前角色（槽位、房主 / 候选、房主槽位、epoch）。快照 seq 取 `max(本地, YouAreHost 的 seq, epoch<<32) + 1`；设了状态回调时当房主每 3s 推一次、最小间隔 1s。快照与交接数据缺省用原始 deflate 压缩（Go `compress/flate`、C# `DeflateStream`、浏览器 `CompressionStream('deflate-raw')`，三方互通），可以换实现，**同一房间的客户端必须用同一种**；解压上限 16 MiB。`Leave` 先在 relay 上发 Leave，再经 lobby 离开。收帧上限放大到装得下 `YouAreHost`。
+  - **Web 端房主辅助**（TS）：规则写成纯 TS 模块 `HostRules`，`WebHost` 接到 `RelayClient` 上；`serveRules` / `WorkerRunner` 在 Worker 里跑规则循环（不用 Worker 时 `LocalRunner`）；`FixedStepLoop` 按经过时间补帧、有上限；页面隐藏满 `hiddenHandoffMs`（缺省 5s，手机推荐 0）把房主转交给候选里第一个在线成员；`HostSessionStore` 把快照存进 `sessionStorage`，刷新后宽限期内回来仍是房主并恢复状态。最小演示页在 `client/ts/demo`（带“模拟隐藏 / 模拟回到前台”调试按钮）。`WebHost` 走 `RelayClient` 的内部监听（不导出的 Symbol，在业务回调之前调用），业务在同一个 client 上注册 `onXxx` 不会顶掉它；`WebHost.handOff(target?)` 可指定转交目标（f2532dba：修前浏览器演练里主动转交后新房主的规则不跑、快照不推不存）。
+  - **测试对端**：`client/relay/peer_test.go` 在测试进程里起真实的 `service/relay` 与 `service/lobby`（Redis 房间目录），C# 与 TS 的用例把它当对端进程；`POST <lobby_url>/harness/admission {"mode":"ok|reject|down"}` 注入验权故障。
+  - 证据：[sdk 组](docs/maintenance/evidence/lobby-relay-sdk-20261117/README.md)、[sdkhost 组](docs/maintenance/evidence/lobby-relay-sdkhost-20261117/README.md)、[web 组](docs/maintenance/evidence/lobby-relay-web-20261117/README.md)、[浏览器演练](docs/maintenance/evidence/lobby-relay-browser-20261117/README.md)（内置浏览器面板通过，切到后台用模拟按钮；Safari、Firefox、手机浏览器与 Unity Editor / IL2CPP 没测）。
+- **配置表导出给客户端（维护者 2026-11-17，方案 `docs/maintenance/FEATURE-2026-11-17-client-config-export.md`）**：服务端工程是配置的唯一源头，一次 `roost generate` 同时产出服务端的 JSON 与 Go 绑定、客户端的 JSON 与 C# 读取代码。说明见 [CODEGEN_REFERENCE §2.2](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig) 与 §9.2。
+  - **按端分组**：`//roost:table` / `//roost:object` 标记加 `side=c|s`（整张表只给一端），字段 tag 加 `side:"c"|"s"`，不写表示两端都要。服务端的 `configs/data`、`_manifest.json`、Go 绑定只含服务端投影：`side=c` 的表不登记，只给客户端的字段不进 JSON；**只给客户端的字段在服务端的 schema 结构体里仍在，值是零值**。生成时打印 `tablegen: server side omitted N tables / M fields (client only)`。主键不能带 side、`ref` 必须指向同一端的表、一端的字段全被排除时报错，两端每次生成都核对。
+  - **竖排键值表 `layout=kv`**：`//roost:object` 的选项。CSV 三列 `key,value,note`，一行一个字段，生成的 JSON 与普通 object 相同，`note` 写进生成代码的注释；未知 / 重复 key、必填缺行报文件、行与 key。`roost generate` 的 config-go 步骤为此带 `-csv configs/table`。
+  - **index**：字段 tag `index:"true"` 或 `index:"<名字>"`，服务端生成非唯一的 `<Type>By<Index>(v) []<Type>Cfg`，客户端生成 `By<Index>(value)`。只支持内建 string / 整数 / bool 字段。
+  - **`#` 注释行**：CSV 里 `#` 开头的行在生成步骤与运行时 `Convert<Type>CSV` 里都忽略。**不兼容**：已有工程重新生成后 `configs/generated/gen_table_config.go` 每张横排表多一行 `reader.Comment = '#'`，升级需重新生成并提交；横排表转换报错的 `row=` 是去掉注释行后的记录序号（kv 表报文件行号）。
+  - **`client_export.config`**：`roost.yaml` 里 `dir`（缺省 `shared/config`，不能放在 `configs/`、`game/` 等服务端源码目录下，不能与协议导出目录相同或互相包含）、`tables`（可选，缺省全部带客户端字段的表；被导出表 `ref` 到的表也必须导出）、`csharp.namespace`（缺省 `Roost.Config`）。要 config feature，不要 protoc。**只要配置、不要协议时写 `client_export.protocol: false`**（d2db29a8）；不写（或写 `true`）协议照常导出，已有工程加上 `config` 不会让协议导出停下。`protocol: false` 与 `dir` / `languages` / `csharp` 同时出现，或没有 `config`，读 `roost.yaml` 时报错。
+  - **导出目录**：`data/<表>.json`（只含客户端字段，普通表 `{"rows":[...]}`，object / kv 单个对象）、`csharp/ConfigTables.cs`（入口）、`csharp/ConfigJson.cs`（运行部分）、每张表一个 `csharp/ConfigTables.<类型>.cs`、`manifest.json`（`kind: roost-config-export`，core / 生成器版本，数据版本，每张表的 schema / 数据哈希与行数，每个导出文件的哈希）。只给服务端的字段与表不出现在导出目录里。同样的输入逐字节相同。
+  - **C# 读取**：netstandard2.1 纯 C#，自带 JSON 解析器，不用 `JsonUtility`、UnityEngine 与反射（IL2CPP 裁剪安全）。`ConfigTables.Load(Func<string,string> readText)` 返回一个实例，没有静态可变状态；加载时先核对每个数据文件的哈希（CRLF 统一成 LF），再查 `required` / `unique` / `min` / `enum` / `ref`，违反时抛 `ConfigLoadException`，写明表、行、主键与字段。支持内建标量、指向标量的指针、切片与 `map[string]T`；带 parser 的字段在客户端是 CSV 原文字符串；具名类型、结构体、`time.Duration` 生成时报错，提示改成 parser 或 `side:"s"`。
+  - **数据版本号**：导出的全部表按表名排序，`表名 + 数据哈希` 合起来取 sha256，显示前 12 位。记在 `manifest.json` 的 `data_version` 与 C# 常量 `ConfigTables.DataVersion`；`roost generate`、doctor、`client sync` 都打印。**只记录、可查看，登录时不核对**，SDK 不比较。
+  - **C# 运行用例**：`TestClientConfigCSharpRuntime` 有 dotnet 就跑，没有就 Skip；设 `ROOST_REQUIRE_DOTNET=1` 时没有 dotnet 就失败（d2db29a8）。
+  - **检查**：`roost generate --check` 覆盖导出目录；doctor 新增 `config-export:fresh`（不重新生成，核对导出文件哈希、每张表的 schema / 数据哈希与数据版本；只改只给服务端的列不算过期）。
+  - **`roost client sync`**：新增 `--config-code-to <目录>` / `--config-data-to <目录>`（必须一起给，可以与 `--to` 一起用，`--to` 改为可选）。`csharp/` 进代码目录、`data/` 进数据目录，服务端清单另存为代码目录的 `config-manifest.json`；报告数据版本旧 → 新、表增删、字段增删与改类型、行数变化。规则与协议同步相同：先核对哈希，上次写过、这次没有的删掉，不是上次同步写的同名文件拒绝覆盖，不生成 `.meta`。
+  - 没声明 `client_export.config` 的工程，除上面的 `#` 注释行外生成结果不变。
+  - 证据：[tablegen 组](docs/maintenance/evidence/client-config-export-tablegen-20261117/README.md)、[导出组](docs/maintenance/evidence/client-config-export-20261117/README.md)。
+- **roost-genre compose**（2026-11-17）：新增第 1B 步“开房间联机（lobby + relay，房主做 host）”（什么时候用、`-template lobby` / `roost add lobby|relay`、玩法逻辑必须跑在客户端、房间通道与游戏通道、换 host 与快照里放什么、Web 端用 `WebHost`、SDK 怎么选）与第 4F 步“配置表”（数值默认写进 `configs/table`、需求拆分时列出两端共用的表与只给服务端的字段写进 DEMO 边界表、已有工程的迁移步骤）；第 0C 步把“小人数房主做主机”指向 1B；第 1A 步与第 7 步的玩家接入改为 TCP 与 WebSocket；portal 一行改成四个端点。
 
 ## [v1.53.0] - 2026-11-17
 
