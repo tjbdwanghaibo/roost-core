@@ -21,6 +21,12 @@ import (
 // loginCtlAccount 给出一个空的 account：一个区服都没登记。
 func loginCtlAccount(t *testing.T) *svcaccount.Service {
 	t.Helper()
+	return loginCtlAccountOn(t, versionstore.NewMemoryStore[int32, svcaccount.GameServer](), nil)
+}
+
+// loginCtlAccountOn 是在给定的区服存储上、按 account.services（services，可以为空）配置的 account。
+func loginCtlAccountOn(t *testing.T, servers versionstore.Store[int32, svcaccount.GameServer], services []svcaccount.ServiceSpec) *svcaccount.Service {
+	t.Helper()
 	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +34,7 @@ func loginCtlAccount(t *testing.T) *svcaccount.Service {
 	service, err := svcaccount.New(svcaccount.Config{
 		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
 		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
-		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Servers:  servers,
 		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
 		Names:    names,
 		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
@@ -37,6 +43,7 @@ func loginCtlAccount(t *testing.T) *svcaccount.Service {
 		Allocator:     svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) { return 100_001, nil }),
 		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
 		SessionSecret: "accountctl-test",
+		Services:      services,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -299,5 +306,48 @@ func TestLoginAccountctlReadsTheConnectionFlagsTheDevScriptPasses(t *testing.T) 
 		if _, _, err := parseConnection(args); err == nil || !strings.Contains(err.Error(), "usage: accountctl") {
 			t.Fatalf("accountctl %s: err = %v, want a flag error with the usage", strings.Join(args, " "), err)
 		}
+	}
+}
+
+// upsert-server -service 写区服归属的 game 服务（account.services 有几个 game 服务时必须写）：写进记录、show-server 看得到；
+// 不是 game 服务的名字被 account 拒绝。accountctl 不读 account.services，-service 经 recordService 交给 openService。
+// 记录写了服务名之后不带 -service 再改它，accountctl（没有配置 account.services 的那一个）点名该带的 -service。
+func TestLoginAccountctlWritesTheServerService(t *testing.T) {
+	servers := versionstore.NewMemoryStore[int32, svcaccount.GameServer]()
+	service := loginCtlAccountOn(t, servers, []svcaccount.ServiceSpec{
+		{Name: "brawl", Kind: svcaccount.ServiceKindGame}, {Name: "party", Kind: svcaccount.ServiceKindGame}, {Name: "lobby", Kind: svcaccount.ServiceKindLobby},
+	})
+	if _, _, err := loginCtlRun(t, service, "upsert-server", "-sid", "2000"); err == nil || !strings.Contains(err.Error(), "name the server's service") {
+		t.Fatalf("upsert-server without -service among two game services: %v, want account's refusal", err)
+	}
+	written, _, err := loginCtlRun(t, service, "upsert-server", "-sid", "2000", "-service", "party")
+	if err != nil || written.Service != "party" {
+		t.Fatalf("upsert-server -service party = %+v, %v; want the record to belong to party", written, err)
+	}
+	if shown, _, err := loginCtlRun(t, service, "show-server", "-sid", "2000"); err != nil || shown.Service != "party" {
+		t.Fatalf("show-server = %+v, %v; want service party", shown, err)
+	}
+	if _, _, err := loginCtlRun(t, service, "upsert-server", "-sid", "2001", "-service", "lobby"); err == nil || !strings.Contains(err.Error(), "is not a game service") {
+		t.Fatalf("upsert-server -service lobby: %v, want a refusal (the lobby has no servers)", err)
+	}
+
+	if got := recordService([]string{"upsert-server", "-sid", "2000", "-service", "party"}); got != "party" {
+		t.Fatalf("recordService of upsert-server -service party = %q", got)
+	}
+	for _, command := range [][]string{{"show-server", "-sid", "2000"}, {"upsert-server", "-sid", "2000"}, {"upsert-server", "-bad"}, nil} {
+		if got := recordService(command); got != "" {
+			t.Fatalf("recordService(%q) = %q, want none", command, got)
+		}
+	}
+
+	// accountctl 不读 account.services：没带 -service 时它的 account 没有配置服务，改一个已写了服务名的记录被拒，错误点名 -service。
+	unconfigured := loginCtlAccountOn(t, servers, nil)
+	if _, printed, err := loginCtlRun(t, unconfigured, "upsert-server", "-sid", "2000", "-status", "maintenance"); err == nil || !strings.Contains(err.Error(), `belongs to service "party"; pass -service party`) || printed != "" {
+		t.Fatalf("upsert-server of a party server without -service: %v (printed %q), want the refusal to name -service party", err, printed)
+	}
+	// 带上 -service（openService 把它当作唯一的 game 服务交给 account）就改得了，服务名保持。
+	withService := loginCtlAccountOn(t, servers, []svcaccount.ServiceSpec{{Name: "party", Kind: svcaccount.ServiceKindGame}})
+	if again, _, err := loginCtlRun(t, withService, "upsert-server", "-sid", "2000", "-status", "maintenance", "-service", "party"); err != nil || again.Service != "party" || again.Status != svcaccount.ServerMaintenance {
+		t.Fatalf("upsert-server -service party -status maintenance = %+v, %v", again, err)
 	}
 }

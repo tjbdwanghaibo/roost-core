@@ -99,6 +99,9 @@ type Manifest struct {
 	// rendering into an existing project. The deployment grace periods never
 	// go below it. Not part of roost.yaml.
 	configuredShutdown map[string]time.Duration
+	// relayTokenKeyEnv 是工程配置里 lobby / relay 的 token_key_env（withRelayTokenKeyEnv 读出）：部署模板按它注入 relay
+	// 令牌密钥。不是 roost.yaml 的一部分。
+	relayTokenKeyEnv string
 
 	// servicePackages is the Go package name each internal/service/<name>/
 	// directory already uses, filled by withServicePackages when rendering

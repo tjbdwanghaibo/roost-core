@@ -141,9 +141,11 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 **配置**：`TCPConfig.WebSocket{Addr, Path, AllowedOrigins}`，`Addr` 为空不开；`Path` 缺省 `/ws`；`AllowedOrigins` 是逗号分隔的字符串（`TCPConfig` 要保持可比较，生成工程的测试用 `!=` 比较整份配置）。`ValidateTCPConfig` 只在 `Addr` 非空时按键检查 `websocket.addr / path / allowed_origins`。TLS 由前置负载均衡终结（wss），这一期不在进程里配证书。
 
 - 生成工程：`roost add transport websocket`（要求已有 tcp）在 roost.yaml 的 `access.player.transports` 加上 `websocket`，生成的嵌入 TCP Mod 多读 `player_access.tcp.websocket.{addr,path,allowed_origins}`、独立 Gate 多读 `player_access.gate.websocket.{addr,path,allowed_origins}`，原样透传进 `TCPConfig.WebSocket`；Game Ingress 不监听。命令不改配置文件：写上 `addr` 才开。不声明 websocket 的工程生成结果与之前逐字节相同（[证据](../maintenance/evidence/lobby-relay-ws-20261117/README.md)）。
+  - 部署模板（2026-11-17，[证据](../maintenance/evidence/lobby-relay-deploy-20261117/README.md)）按约定的 7080 发布玩家 WebSocket 端口：Gate（声明了 Gate 时）或嵌入 TCP 所在服务的 k8s 容器与 Service 端口 `player-ws`、NetworkPolicy 只放行带 `player-access` 标签的命名空间、生产 compose 的 `ports`、docker 示例的 `-p`。生成器仍不写 `addr`：开 WebSocket 时写 `0.0.0.0:7080`，换端口时同步改部署模板。
+  - doctor：`websocket.addr` 带 `listen` 标签（嵌入 TCP 跟着 `player_access.tcp.enabled`，Gate 总是），参与同一台机器上的端口冲突检查（`config-across-services`）；没写地址（空串）的监听键不参与。没有声明 websocket 的工程写了 `player_access.{tcp,gate}.websocket.*`，`roost config check` 与 doctor 的 `config-schema` 报失败并给出 `roost add transport websocket`。生成工程的 `docs/ROOST_YAML.zh-CN.md` 与 `docs/PLAYER_ACCESS_TCP.zh-CN.md`（“WebSocket 接入”一节）只在声明了 websocket 时写这些。
 - 手工接线：`wiring/gate.Options.TCP.WebSocket`。
 
-**部署注意**：前置七层负载均衡时，连接的对端地址是负载均衡的地址，`max_connections_per_ip` 按它计数（全部 WebSocket 连接算一个 IP），要按负载均衡的数量调大；进程不读 `X-Forwarded-For`。生成的部署模板（k8s、docker）没有发布 WebSocket 端口，doctor 也不检查 `websocket.addr` 的端口冲突，开 WebSocket 时手工补上。
+**部署注意**：前置七层负载均衡时，连接的对端地址是负载均衡的地址，`max_connections_per_ip` 按它计数（全部 WebSocket 连接算一个 IP），要按负载均衡的数量调大；进程不读 `X-Forwarded-For`。生成的部署模板按 7080 发布 WebSocket 端口（见上），负载均衡与 TLS 终结按自己的环境配置。
 
 **回归**（[tcp_transport_test.go](../../infra/network/gateway/tcp_transport_test.go)、[wsconn_test.go](../../infra/network/wsconn/wsconn_test.go)）：TCP 握手与收发的关键用例改成表驱动，同一组在 TCP 与 WebSocket 上各跑一遍——鉴权首包与连接代号信封（`TestTCPAuthEnvelopeCarries…`）、请求 / 应答与分发预算（`TestADispatchThatOutlivesItsBudget…`、`TestAuthenticatedClockProbe`）、服务器推送与慢连接被出站预算断开（`TestAConnectionThatCannotTakeAPushIsClosed…`、`TestAStalledConnectionDoesNotHoldPushes…`）、一帧拆成多条消息 / 多帧合在一条消息（`TestFramesSplitAcrossWritesOrMergedIntoOneAreRead`）、空闲超时（`TestHeartbeatKeepsAuthenticatedPushConnectionAlive`）；另有 Origin 被拒、超大消息被拒、一帧一条消息、会话 Close 打断阻塞写、调用方期限在写到一半时到期即断开。浏览器端到端验证放到 Web 端演练里一起做，本节只在 Go 客户端（coder/websocket 的 `Dial`）上验证。
 

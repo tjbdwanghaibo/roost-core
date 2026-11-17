@@ -1177,7 +1177,7 @@ func diffManifest(root string, m Manifest, includeManifest bool, stdout io.Write
 	if err != nil {
 		return fmt.Errorf("preview shutdown.total_timeout refresh: %w", err)
 	}
-	plan, err := renderProject(m.withConfiguredShutdown(shutdownStage).withServicePackages(root).withEntityOwners(root))
+	plan, err := renderProject(m.withConfiguredShutdown(shutdownStage).withRelayTokenKeyEnv(root).withServicePackages(root).withEntityOwners(root))
 	if err != nil {
 		return err
 	}

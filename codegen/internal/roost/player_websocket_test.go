@@ -1,8 +1,12 @@
 package roost
 
 import (
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
 // access.player.transports 含 websocket 时，生成的嵌入 TCP Mod（configFromViper）与独立 Gate Mod 把
@@ -65,5 +69,169 @@ func TestPlayerWebSocketTransportPassesItsKeysThrough(t *testing.T) {
 	onlyWebSocket.Access["player"] = access
 	if err := onlyWebSocket.Validate(); err == nil || !strings.Contains(err.Error(), "websocket needs tcp") {
 		t.Fatalf("websocket without tcp: %v, want a refusal", err)
+	}
+}
+
+// webSocketManifest 是 gateManifestNamed 加上 websocket 传输；embedded 为 true 时去掉 Gate（嵌入 TCP 的玩家服务）。
+func webSocketManifest(embedded bool) Manifest {
+	m := gateManifestNamed("gate", "game")
+	access := m.Access["player"]
+	access.Transports = []string{"tcp", "websocket"}
+	if embedded {
+		access.Gate = ""
+		delete(m.Services, "gate")
+	}
+	m.Access["player"] = access
+	return m
+}
+
+// 部署模板：声明了 websocket 时，监听玩家连接的那个服务（Gate，或嵌入 TCP 的玩家服务）发布约定的 7080（k8s 的
+// player-ws 容器与 Service 端口、NetworkPolicy、生产 compose、docker 示例）；ROOST_YAML 与 PLAYER_ACCESS_TCP 文档写明
+// websocket。没有声明的工程一个字都没有。
+func TestPlayerWebSocketPortIsDeployed(t *testing.T) {
+	port := strconv.Itoa(playerWebSocketPort)
+	for _, tc := range []struct {
+		name     string
+		m        Manifest
+		listener string
+	}{{"gate", webSocketManifest(false), "gate"}, {"embedded", webSocketManifest(true), "game"}} {
+		files := renderProductionDeployment(tc.m)
+		workload := files["deploy/k8s/base/"+tc.listener+".yaml"]
+		for _, want := range []string{
+			"            - name: player-ws\n              containerPort: " + port + "\n              protocol: TCP\n",
+			"    - {name: player-ws, port: " + port + ", targetPort: player-ws, protocol: TCP}\n",
+		} {
+			if !strings.Contains(workload, want) {
+				t.Errorf("%s: %s.yaml lacks %q:\n%s", tc.name, tc.listener, want, workload)
+			}
+		}
+		for path, body := range files {
+			if path != "deploy/k8s/base/"+tc.listener+".yaml" && strings.HasPrefix(path, "deploy/k8s/base/") && strings.Contains(body, "player-ws") {
+				t.Errorf("%s: %s publishes player-ws too", tc.name, path)
+			}
+		}
+		if policy := files["deploy/k8s/base/network-policy.yaml"]; !strings.Contains(policy, "        - {protocol: TCP, port: 7000}\n        - {protocol: TCP, port: "+port+"}\n") {
+			t.Errorf("%s: network-policy.yaml does not open 7000 and %s to the player-access namespaces:\n%s", tc.name, port, policy)
+		}
+		if compose := renderProductionCompose(tc.m); !strings.Contains(compose, "  "+tc.listener+":\n") || !strings.Contains(compose, "    ports:\n      - \""+port+":"+port+"\"\n") || strings.Count(compose, "    ports:\n") != 1 {
+			t.Errorf("%s: docker-compose.prod.yaml:\n%s", tc.name, compose)
+		}
+		if readme := files["deploy/docker/README.md"]; !strings.Contains(readme, "      -p 7000:7000 \\\n      -p "+port+":"+port+" \\\n") || !strings.Contains(readme, playerWebSocketAddrKey(tc.m)+": 0.0.0.0:"+port) {
+			t.Errorf("%s: deploy/docker/README.md:\n%s", tc.name, readme)
+		}
+		if guide := renderManifestGuide(tc.m); !strings.Contains(guide, "支持 tcp 与 websocket") {
+			t.Errorf("%s: ROOST_YAML does not say websocket is supported", tc.name)
+		}
+		if guide := renderPlayerWebSocketGuide(tc.m); !strings.Contains(guide, playerWebSocketAddrKey(tc.m)+": 0.0.0.0:"+port) {
+			t.Errorf("%s: the WebSocket guide does not name %s:\n%s", tc.name, playerWebSocketAddrKey(tc.m), guide)
+		}
+	}
+	plain := gateManifestNamed("gate", "game")
+	for path, body := range renderProductionDeployment(plain) {
+		if strings.Contains(body, "player-ws") || strings.Contains(body, port) {
+			t.Errorf("%s of a project without websocket mentions the WebSocket port", path)
+		}
+	}
+	if guide := renderManifestGuide(plain); strings.Contains(guide, "websocket") || !strings.Contains(guide, "当前\n支持 tcp。") {
+		t.Error("ROOST_YAML of a project without websocket changed")
+	}
+}
+
+// listenDocument 是 listenAddrProblems 的一份配置（直接给键值，不读文件）。
+func listenDocument(t *testing.T, m Manifest, service string, values map[string]any) serviceConfigDocument {
+	t.Helper()
+	schema, err := serviceConfigSchema(m, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serviceConfigDocument{service: service, rel: "config." + service + ".yaml", schema: schema, source: configschema.NewMapSource(values)}
+}
+
+// WebSocket 地址参与同一台机器上的端口冲突检查：Gate 的 websocket.addr 总是算、嵌入 TCP 的跟着 player_access.tcp.enabled；
+// 没写地址（空串）的不参与——relay.ws_listen 这类“不写就不开”的监听键也是这样。
+func TestWebSocketAddressesTakePartInThePortCheck(t *testing.T) {
+	all := allFrameworkConfigSchema()
+	gate := webSocketManifest(false)
+	opsOn7080 := map[string]any{"ops": map[string]any{"enabled": true, "addr": "127.0.0.1:" + strconv.Itoa(playerWebSocketPort)}}
+	gateWith := func(ws map[string]any) map[string]any {
+		return map[string]any{"player_access": map[string]any{"gate": map[string]any{"addr": "0.0.0.0:7000", "websocket": ws}}}
+	}
+	problems := listenAddrProblems([]serviceConfigDocument{
+		listenDocument(t, gate, "gate", gateWith(map[string]any{"addr": "0.0.0.0:" + strconv.Itoa(playerWebSocketPort)})),
+		listenDocument(t, gate, "game", opsOn7080),
+	}, all)
+	if len(problems) != 1 || !strings.Contains(problems[0], "player_access.gate.websocket.addr") || !strings.Contains(problems[0], "ops.addr") {
+		t.Errorf("the Gate's WebSocket port against another service's ops port: %q, want one collision naming both keys", problems)
+	}
+	for label, ws := range map[string]map[string]any{"not written": {}, "empty": {"addr": ""}} {
+		if problems := listenAddrProblems([]serviceConfigDocument{
+			listenDocument(t, gate, "gate", gateWith(ws)), listenDocument(t, gate, "game", opsOn7080),
+		}, all); len(problems) != 0 {
+			t.Errorf("Gate WebSocket address %s: %q, want no problem (it does not listen)", label, problems)
+		}
+	}
+
+	embedded := webSocketManifest(true)
+	tcpWith := func(enabled bool) map[string]any {
+		return map[string]any{"player_access": map[string]any{"tcp": map[string]any{"enabled": enabled, "addr": "0.0.0.0:7000", "websocket": map[string]any{"addr": ":7000"}}}}
+	}
+	if problems := listenAddrProblems([]serviceConfigDocument{listenDocument(t, embedded, "game", tcpWith(true))}, all); len(problems) != 1 || !strings.Contains(problems[0], "player_access.tcp.websocket.addr") {
+		t.Errorf("embedded TCP and its WebSocket on one port: %q, want a collision", problems)
+	}
+	if problems := listenAddrProblems([]serviceConfigDocument{listenDocument(t, embedded, "game", tcpWith(false))}, all); len(problems) != 0 {
+		t.Errorf("player_access.tcp.enabled false: %q, want no listener checked", problems)
+	}
+
+	// 声明上“不写就不开”的监听键（relay.ws_listen 的写法：listen 总是、没有缺省值）：没写时不参与，写了照常比较。
+	optional := configschema.Schema{Keys: []configschema.Key{{Name: "relay.ws_listen", Kind: configschema.KindString, Listen: "always"}}}
+	relayDoc := func(values map[string]any) serviceConfigDocument {
+		return serviceConfigDocument{service: "relay", rel: "config.relay.yaml", schema: optional, source: configschema.NewMapSource(values)}
+	}
+	if problems := listenAddrProblems([]serviceConfigDocument{relayDoc(map[string]any{}), listenDocument(t, gate, "game", opsOn7080)}, all); len(problems) != 0 {
+		t.Errorf("relay.ws_listen not written: %q, want no problem", problems)
+	}
+	if problems := listenAddrProblems([]serviceConfigDocument{
+		relayDoc(map[string]any{"relay": map[string]any{"ws_listen": "0.0.0.0:" + strconv.Itoa(playerWebSocketPort)}}), listenDocument(t, gate, "game", opsOn7080),
+	}, all); len(problems) != 1 {
+		t.Errorf("relay.ws_listen on the ops port: %q, want a collision", problems)
+	}
+}
+
+// 没有声明 websocket 的工程写了 websocket 的键：roost config check 与 doctor 的 config-schema 都报失败并给出命令；
+// 声明了 websocket 的工程照常（键有读取方）。
+func TestWebSocketKeysWithoutTheTransportAreRefused(t *testing.T) {
+	const keys = "player_access:\n  tcp:\n    websocket:\n      addr: 0.0.0.0:7080\n"
+	plain := gateManifestNamed("gate", "game")
+	access := plain.Access["player"]
+	access.Gate = ""
+	plain.Access["player"] = access
+	delete(plain.Services, "gate")
+	bad, err := checkConfigFileText([]byte(keys), false, plain, "game", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(bad, "\n"), "player_access.tcp.websocket.addr is a WebSocket key, but roost.yaml access.player.transports has no websocket") {
+		t.Errorf("config check of a project without websocket: %q, want the WebSocket refusal", bad)
+	}
+	bad, err = checkConfigFileText([]byte(keys), false, webSocketManifest(true), "game", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(bad, "\n"), "is a WebSocket key") {
+		t.Errorf("config check of a project with websocket: %q, want the keys accepted", bad)
+	}
+
+	root, m := newLobbyProject(t)
+	const rel = "configs/service/config.lobby.yaml"
+	original := readProjectFile(t, root, rel)
+	writeProjectFile(t, root, rel, original+keys)
+	var item CheckItem
+	for _, found := range checkConfigDeclarations(root, m, nil) {
+		if found.Name == "config-schema:lobby" {
+			item = found
+		}
+	}
+	if item.Status != StatusFail || !strings.Contains(item.Detail, filepath.ToSlash(rel)+": config: player_access.tcp.websocket.addr is a WebSocket key") || !strings.Contains(item.Detail, "roost add transport websocket") {
+		t.Errorf("doctor config-schema:lobby = %s %s; want FAIL naming the WebSocket key and the command", item.Status, item.Detail)
 	}
 }

@@ -448,6 +448,8 @@ func renderProductionCompose(m Manifest) string {
 		b.WriteString("    image: ${ROOST_IMAGE:?ROOST_IMAGE must be an immutable digest}\n")
 		fmt.Fprintf(&b, "    container_name: %s-%s\n", m.Project.Name, service)
 		fmt.Fprintf(&b, "    command: [%q, \"--sid=%d\", \"--config=/etc/roost/config.yaml\"]\n", service, sid)
+		// lobby / relay 的 relay 令牌密钥与客户端端口（lobby、relay、玩家 WebSocket）；没有它们的服务什么也不加。
+		b.WriteString(composeClientSettings(m, service))
 		b.WriteString("    restart: unless-stopped\n    read_only: true\n    init: true\n    user: \"65532:65532\"\n    cap_drop: [ALL]\n    security_opt: [no-new-privileges:true]\n")
 		// 挂载选项之间是逗号，必须整项加引号。之前写成不带引号的
 		// flow 序列 [/tmp:rw,noexec,nosuid,size=64m]，YAML 按逗号拆成 4 项，

@@ -158,14 +158,243 @@ func directServiceConfigSection(m Manifest, service string) string {
 	return schema.StarterYAML(vars)
 }
 
-// devRunRelayTokenKey 是 deploy/dev/run.sh 给托管 lobby / relay 的工程加的一段：变量没设时用开发密钥。
+// devRunRelayTokenKey 是 deploy/dev/run.sh 给托管 lobby / relay、或声明了 websocket 的工程加的一段：客户端端口的说明
+// （本机进程直接监听，不需要映射），以及 relay 令牌密钥变量没设时用的开发密钥。
 func devRunRelayTokenKey(m Manifest) string {
+	var b strings.Builder
+	if ports := projectClientPortNotes(m); len(ports) > 0 {
+		b.WriteString("# Client ports besides player TCP (each process listens on them directly): " + strings.Join(ports, ", ") + ".\n\n")
+	}
+	if hostsLobbyOrRelay(m) {
+		env := m.relayTokenKeyEnvName()
+		b.WriteString("# lobby / relay: the relay token HMAC key is read from this variable (lobby.token_key_env and\n" +
+			"# relay.token_key_env name it); a fixed development key when it is unset. Production sets its own.\n" +
+			env + "=\"${" + env + ":-" + devRelayTokenKey + "}\"\nexport " + env + "\n\n")
+	}
+	return b.String()
+}
+
+// ---- 部署模板：客户端端口与 relay 令牌密钥 ----
+
+// playerWebSocketPort 是部署模板为玩家 WebSocket 发布的端口（声明了 websocket 时，Gate 或嵌入 TCP 所在的那个服务）。
+// 生成器不写 player_access.{tcp,gate}.websocket.addr：写上地址才开（GATEWAY.md §6 “WebSocket 接入”）。部署模板按这个
+// 约定的端口发布，开 WebSocket 时把 addr 写成 0.0.0.0:7080；换端口时同步改部署模板。7080 不在任何端口块里（port_blocks.go）。
+const playerWebSocketPort = 7080
+
+// relayTokenEnvFile 是 shell 部署（install.sh）给托管 lobby / relay 的实例写的环境文件，在 release 目录里、只有 root 可读，
+// systemd unit 用 EnvironmentFile 读它。
+const relayTokenEnvFile = "relay-token.env"
+
+// clientPort 是部署模板要发布的一个客户端端口：k8s 的容器端口与 Service 端口（Name ≤ 15 个字符）、compose 的 ports、
+// NetworkPolicy 放行的端口。
+type clientPort struct {
+	Name string
+	Port int
+	Note string // 给人看的说明（run.sh、README）
+}
+
+// serviceClientPorts 是 service 的进程直接面向客户端的端口里，玩家 TCP（7000，原有的 player-tcp）之外的那些：lobby 的 HTTP、
+// relay 的 TCP 与 WebSocket、声明了 websocket 时玩家接入的 WebSocket。端口与生成配置同一处派生（端口块，directServiceConfigSection），
+// 开发配置与生产示例相同。没有 websocket、lobby、relay 的工程这里为空，部署模板与之前逐字节相同。
+func serviceClientPorts(m Manifest, service string) []clientPort {
+	var ports []clientPort
+	switch strings.TrimSpace(m.Services[service].Framework) {
+	case "lobby":
+		ports = append(ports, clientPort{Name: "lobby-http", Port: portsOf(m, service).Web, Note: "lobby.listen (HTTP)"})
+	case "relay":
+		tcp, ws := relayPorts(m, service)
+		ports = append(ports, clientPort{Name: "relay-tcp", Port: tcp, Note: "relay.listen (TCP)"}, clientPort{Name: "relay-ws", Port: ws, Note: "relay.ws_listen (WebSocket)"})
+	}
+	if playerWebSocketEnabled(m) && servicePlayerListener(m, service) {
+		ports = append(ports, clientPort{Name: "player-ws", Port: playerWebSocketPort, Note: playerWebSocketAddrKey(m) + " (WebSocket, when written)"})
+	}
+	return ports
+}
+
+// playerWebSocketAddrKey 是玩家 WebSocket 监听地址的键：独立 Gate 读 player_access.gate.websocket.addr，嵌入 TCP 读
+// player_access.tcp.websocket.addr。
+func playerWebSocketAddrKey(m Manifest) string {
+	if playerGateService(m) != "" {
+		return "player_access.gate.websocket.addr"
+	}
+	return "player_access.tcp.websocket.addr"
+}
+
+// projectClientPortNotes 是全部服务的 serviceClientPorts，写成 “<服务> <端口> <说明>”，按服务名。
+func projectClientPortNotes(m Manifest) []string {
+	var notes []string
+	for _, service := range sortedServiceNames(m) {
+		for _, port := range serviceClientPorts(m, service) {
+			notes = append(notes, fmt.Sprintf("%s %d %s", service, port.Port, port.Note))
+		}
+	}
+	return notes
+}
+
+// relayTokenKeyEnvName 是 lobby / relay 读 relay 令牌密钥的环境变量名：工程配置里 token_key_env 的实际值
+// （withRelayTokenKeyEnv 读出），读不到时是生成配置写的 ROOST_RELAY_TOKEN_KEY。部署模板（k8s 的 Secret 引用、
+// compose 与 shell 的环境变量、run.sh 的开发密钥）都按它注入；各服务写的不同时 doctor 的 lobby-relay:token-key-env 报 FAIL。
+func (m Manifest) relayTokenKeyEnvName() string {
+	if m.relayTokenKeyEnv != "" {
+		return m.relayTokenKeyEnv
+	}
+	return relayTokenKeyEnv
+}
+
+// withRelayTokenKeyEnv 返回带着工程配置里 token_key_env 实际值的 m（按服务名，先 lobby 后 relay，每个服务先开发配置后
+// 生产示例，取第一个非空的）。正在新建、还没有配置的服务读不到，取已有那一侧的值——与 alignTokenKeyEnv 随后写进
+// 新配置的值相同，所以 add lobby / relay 当次渲染的部署模板已经对。
+func (m Manifest) withRelayTokenKeyEnv(root string) Manifest {
+	m.relayTokenKeyEnv = ""
+	for _, kind := range []string{"lobby", "relay"} {
+		for _, service := range servicesHosting(m, kind) {
+			for _, rel := range serviceConfigRels(service) {
+				cfg, found, err := loadServiceConfig(root, rel)
+				if err != nil || !found {
+					continue
+				}
+				if env := strings.TrimSpace(cfg.GetString(kind + ".token_key_env")); env != "" {
+					m.relayTokenKeyEnv = env
+					return m
+				}
+			}
+		}
+	}
+	return m
+}
+
+// kubernetesRelayTokenSecret 是 k8s 里放 relay 令牌密钥的 Secret 名（lobby 与 relay 共用一份）。
+func kubernetesRelayTokenSecret(m Manifest) string { return m.Project.Name + "-relay-token" }
+
+// renderKubernetesRelayTokenSecretExample 是 deploy/k8s/base/secret.relay-token.example.yaml（托管 lobby 或 relay 的工程）：
+// lobby 签发与 relay 校验 relay 令牌用同一把密钥，两边的 Deployment 都用 secretKeyRef 引用它。只生成一次，复制成 .local.yaml 再填。
+func renderKubernetesRelayTokenSecretExample(m Manifest) string {
+	env := m.relayTokenKeyEnvName()
+	return fmt.Sprintf(`# Copy to secret.relay-token.local.yaml, replace CHANGE_ME with at least 16 random bytes, then apply it separately.
+# The lobby signs relay tokens and the relay checks them with this one key: both read it from %s
+# (lobby.token_key_env / relay.token_key_env), which their Deployments take from this Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: %s
+  namespace: roost
+type: Opaque
+stringData:
+  %s: CHANGE_ME
+`, env, kubernetesRelayTokenSecret(m), env)
+}
+
+// kubernetesRelayTokenEnv 是 lobby / relay 容器 env 里引用上面 Secret 的一项；别的服务为空。
+func kubernetesRelayTokenEnv(m Manifest, service string) string {
+	switch strings.TrimSpace(m.Services[service].Framework) {
+	case "lobby", "relay":
+	default:
+		return ""
+	}
+	env := m.relayTokenKeyEnvName()
+	return fmt.Sprintf("            - name: %s\n              valueFrom:\n                secretKeyRef: {name: %s, key: %s}\n", env, kubernetesRelayTokenSecret(m), env)
+}
+
+// composeClientSettings 是生产 compose 里 lobby / relay 的环境变量与客户端端口（serviceClientPorts）；别的服务为空。
+func composeClientSettings(m Manifest, service string) string {
+	var b strings.Builder
+	switch strings.TrimSpace(m.Services[service].Framework) {
+	case "lobby", "relay":
+		env := m.relayTokenKeyEnvName()
+		fmt.Fprintf(&b, "    environment:\n      %s: ${%s:?%s (the relay token key, at least 16 bytes) is required}\n", env, env, env)
+	}
+	if ports := serviceClientPorts(m, service); len(ports) > 0 {
+		b.WriteString("    ports:\n")
+		for _, port := range ports {
+			fmt.Fprintf(&b, "      - \"%d:%d\"\n", port.Port, port.Port)
+		}
+	}
+	return b.String()
+}
+
+// dockerEnvRelayTokenKey 是 deploy/docker/env.example 里 relay 令牌密钥的一行（托管 lobby 或 relay 的工程）。
+func dockerEnvRelayTokenKey(m Manifest) string {
 	if !hostsLobbyOrRelay(m) {
 		return ""
 	}
-	return "# lobby / relay: the relay token HMAC key is read from this variable (lobby.token_key_env and\n" +
-		"# relay.token_key_env name it); a fixed development key when it is unset. Production sets its own.\n" +
-		relayTokenKeyEnv + "=\"${" + relayTokenKeyEnv + ":-" + devRelayTokenKey + "}\"\nexport " + relayTokenKeyEnv + "\n\n"
+	return "# lobby / relay: the relay token key (lobby.token_key_env / relay.token_key_env), at least 16 random bytes.\n" +
+		m.relayTokenKeyEnvName() + "=CHANGE_ME\n"
+}
+
+// shellRelayTokenServices 是托管 lobby 或 relay 的服务名，写成 install.sh 的 case 分支。
+func shellRelayTokenServices(m Manifest) string {
+	return strings.Join(append(servicesHosting(m, "lobby"), servicesHosting(m, "relay")...), "|")
+}
+
+// shellRelayTokenGuard 是 install.sh 在动任何东西之前的检查：托管 lobby / relay 的服务要从安装者的环境里拿到 relay 令牌密钥。
+func shellRelayTokenGuard(m Manifest) string {
+	if !hostsLobbyOrRelay(m) {
+		return ""
+	}
+	env := m.relayTokenKeyEnvName()
+	return `# lobby / relay read the relay token key from $` + env + ` (lobby.token_key_env / relay.token_key_env).
+# install.sh takes it from its own environment and keeps it in the release (` + relayTokenEnvFile + `, root only);
+# the unit reads it with EnvironmentFile.
+case "$SERVICE" in
+  ` + shellRelayTokenServices(m) + `)
+    RELAY_TOKEN_KEY=${` + env + `:-}
+    if [ "${#RELAY_TOKEN_KEY}" -lt 16 ]; then
+      printf 'set ` + env + ` (the relay token key, at least 16 bytes) to install %s\n' "$SERVICE" >&2
+      exit 2
+    fi
+    ;;
+esac
+`
+}
+
+// shellRelayTokenInstall 把密钥写进 release 的环境文件（只有 root 可读：systemd 以 root 读 EnvironmentFile）。
+func shellRelayTokenInstall(m Manifest) string {
+	if !hostsLobbyOrRelay(m) {
+		return ""
+	}
+	return `case "$SERVICE" in
+  ` + shellRelayTokenServices(m) + `)
+    (umask 077 && printf '%s=%s\n' ` + m.relayTokenKeyEnvName() + ` "$RELAY_TOKEN_KEY" > "$RELEASE_ROOT/` + relayTokenEnvFile + `")
+    ;;
+esac
+`
+}
+
+// shellRelayTokenUnit 是 unit 里读环境文件的一行（前缀 - 表示没有这个文件时忽略：别的服务没有它）。
+func shellRelayTokenUnit(m Manifest) string {
+	if !hostsLobbyOrRelay(m) {
+		return ""
+	}
+	return "EnvironmentFile=-$APP_ROOT/current/" + relayTokenEnvFile + "\n"
+}
+
+// clientPortsDeployNote 是部署说明（k8s / docker / shell 的 README）里客户端端口与 relay 令牌密钥的一段；没有时为空。
+func clientPortsDeployNote(m Manifest, target string) string {
+	notes := projectClientPortNotes(m)
+	if len(notes) == 0 && !hostsLobbyOrRelay(m) {
+		return ""
+	}
+	var parts []string
+	if len(notes) > 0 {
+		text := "客户端端口（玩家 TCP 之外）：" + strings.Join(notes, "；") + "。端口来自生成配置（lobby / relay 按端口块派生）"
+		if playerWebSocketEnabled(m) {
+			text += fmt.Sprintf("；玩家 WebSocket 按约定的 %d 发布，配置里写上 %s: 0.0.0.0:%d 才开", playerWebSocketPort, playerWebSocketAddrKey(m), playerWebSocketPort)
+		}
+		text += "，改配置里的端口时同步改这里的端口映射、负载均衡与防火墙。relay 的每个实例要能被客户端按它自己的 advertise_addr / ws_advertise_addr 直接连到。"
+		parts = append(parts, text)
+	}
+	if hostsLobbyOrRelay(m) {
+		env := m.relayTokenKeyEnvName()
+		switch target {
+		case "k8s":
+			parts = append(parts, fmt.Sprintf("lobby 与 relay 从环境变量 %s 读 relay 令牌密钥：复制 secret.relay-token.example.yaml 为 secret.relay-token.local.yaml，填至少 16 字节的随机值后单独 apply（Secret %s，两边的 Deployment 用 secretKeyRef 引用）。", env, kubernetesRelayTokenSecret(m)))
+		case "docker":
+			parts = append(parts, fmt.Sprintf("lobby 与 relay 从环境变量 %s 读 relay 令牌密钥：在 .env.production 里设置（至少 16 字节），compose 没有它时拒绝启动。", env))
+		case "shell":
+			parts = append(parts, fmt.Sprintf("lobby 与 relay 从环境变量 %s 读 relay 令牌密钥：执行 install.sh 时在环境里带上它（至少 16 字节，不足时安装器拒绝），安装器写进 release 的 %s（只有 root 可读），unit 用 EnvironmentFile 读。", env, relayTokenEnvFile))
+		}
+	}
+	return strings.Join(parts, "\n\n") + "\n"
 }
 
 // directServicesGuide 是 docs/SERVICES.zh-CN.md 里 lobby / relay 的说明（工程托管了它们时才有）。
@@ -179,9 +408,11 @@ func directServicesGuide(m Manifest) string {
 	b.WriteString("account 登录拿账号票据 → 换游戏账号 token（portal 的 `POST /portal/game-token`）→ lobby 建房 / 加入，拿 relay 地址与令牌 → 连 relay。\n\n")
 	b.WriteString("- lobby 进程装 account 的 ClientMod，经 `ValidateGameToken` 认游戏账号 token；lobby.games 的每个游戏在 account 配置的 account.games 里都要有。\n")
 	b.WriteString("- account 配置的 account.services 列出本工程的 lobby、relay 与玩家服务（kind 分别是 lobby、relay、game），`roost project doctor` 的 lobby-relay:account-services 检查。\n")
-	fmt.Fprintf(&b, "- relay 令牌的 HMAC 密钥放在环境变量 %s（lobby.token_key_env 与 relay.token_key_env 必须是同一个变量，doctor 检查；值至少 16 字节）。`make dev-run` 在它没设时用开发密钥，部署时自己设置。\n", relayTokenKeyEnv)
+	fmt.Fprintf(&b, "- relay 令牌的 HMAC 密钥放在环境变量 %s（lobby.token_key_env 与 relay.token_key_env 必须是同一个变量，doctor 检查；值至少 16 字节）。`make dev-run` 在它没设时用开发密钥，部署时自己设置。\n", m.relayTokenKeyEnvName())
 	b.WriteString("- relay.advertise_addr 是客户端连 relay 的地址，经 etcd 广播给 lobby；生产配置不能是回环地址（doctor 检查）。\n")
-	b.WriteString("- 接口与契约见 roost-core 的 docs/framework/LOBBY.md 与 docs/framework/RELAY.md。部署模板不发布 lobby / relay 的客户端端口，按自己的负载均衡配置。\n\n")
+	b.WriteString("- lobby.games 的每个游戏在 account.games 里都要有（doctor 的 lobby-relay:account-games 检查），否则 lobby 对这个游戏的每个请求都答 401。\n")
+	fmt.Fprintf(&b, "- 部署模板发布 lobby 的 HTTP 端口、relay 的 TCP 与 WebSocket 端口（k8s 的容器与 Service 端口、NetworkPolicy 只放行带 player-access 标签的命名空间，生产 compose 的 ports），并把 relay 令牌密钥注入 lobby 与 relay：k8s 用 Secret %s（secret.relay-token.example.yaml）的 secretKeyRef，compose 与 shell 用环境变量 %s。负载均衡、TLS（wss）按自己的环境配置。\n", kubernetesRelayTokenSecret(m), m.relayTokenKeyEnvName())
+	b.WriteString("- 接口与契约见 roost-core 的 docs/framework/LOBBY.md 与 docs/framework/RELAY.md。\n\n")
 	return b.String()
 }
 
@@ -366,6 +597,8 @@ type yamlMapEntry struct {
 
 // ensureYAMLMapEntries 保证顶层 section 下的 map child 里有每个 entry（按 Key；已有的不动），缺哪一层补哪一层，
 // 保留原文其余部分与注释。section、child 必须是块风格的 map（flow 风格报错，交给使用者手改）。
+// 新条目按名字排进已有条目之间（插在第一个名字比它大的条目前面，没有就接在最后一个条目后面）：生成时整段按名字排序写出
+// （entries 由调用方排好），之后补的条目也落在同样的位置，不会插到已有条目前面打乱顺序。
 func ensureYAMLMapEntries(text, section, child, comment string, entries []yamlMapEntry) (string, error) {
 	if len(entries) == 0 {
 		return text, nil
@@ -424,7 +657,53 @@ func ensureYAMLMapEntries(text, section, child, comment string, entries []yamlMa
 	if len(childNode.Content) > 0 {
 		entryIndent = strings.Repeat(" ", childNode.Content[0].Column-1)
 	}
-	return insertYAMLLines(text, childKey.Line, render(entryIndent, missing))
+	// 每个新条目插在哪一行之后（原文的行号）：第一个名字比它大的已有条目之前（连同那个条目上方的注释），
+	// 否则最后一个条目的最后一行之后；空 map 时紧接 child 那一行。同一位置的几个条目保持 entries 的顺序。
+	after := map[int][]yamlMapEntry{}
+	var lines []int
+	for _, entry := range missing {
+		line := childKey.Line
+		if len(childNode.Content) > 0 {
+			line = yamlLastLine(childNode)
+		}
+		for index := 0; index+1 < len(childNode.Content); index += 2 {
+			key := childNode.Content[index]
+			if key.Value > entry.Key {
+				line = key.Line - 1 - yamlCommentLines(key.HeadComment)
+				break
+			}
+		}
+		if _, seen := after[line]; !seen {
+			lines = append(lines, line)
+		}
+		after[line] = append(after[line], entry)
+	}
+	// 从下往上插，前面的行号不受后面插入的影响。
+	sort.Sort(sort.Reverse(sort.IntSlice(lines)))
+	for _, line := range lines {
+		var err error
+		if text, err = insertYAMLLines(text, line, render(entryIndent, after[line])); err != nil {
+			return "", err
+		}
+	}
+	return text, nil
+}
+
+// yamlLastLine 是 node 子树里最后一个节点所在的行（块风格的 map 条目里，它就是这个条目的最后一行）。
+func yamlLastLine(node *yaml.Node) int {
+	last := node.Line
+	for _, child := range node.Content {
+		last = max(last, yamlLastLine(child))
+	}
+	return last
+}
+
+// yamlCommentLines 是一段头注释占的行数（yaml.v3 的 HeadComment 去掉了结尾换行；注释与键之间的空行不算）。
+func yamlCommentLines(comment string) int {
+	if comment == "" {
+		return 0
+	}
+	return strings.Count(comment, "\n") + 1
 }
 
 func sortedMapKeys[V any](values map[string]V) []string {
@@ -473,11 +752,69 @@ func isLoopbackHost(addr string) bool {
 //   - lobby-relay:token-key-env：全部 lobby、relay 服务的开发配置与生产示例里 token_key_env 非空且是同一个变量
 //     （lobby 签的 relay 令牌 relay 要用同一把密钥验）。
 //   - lobby-relay:advertise-addr：每个 relay 的生产示例里 relay.advertise_addr 不是回环地址（客户端经 lobby 拿到它去连）。
+//   - lobby-relay:account-games：每个 lobby 的 lobby.games 里的游戏都在 account.games 里（开发配置对开发配置、生产示例对
+//     生产示例）。漏了的游戏 account 不签发也不认它的游戏账号 token，lobby 对这个游戏的每个请求都答 401。
 func checkLobbyRelay(root string, m Manifest) []CheckItem {
 	if !hostsLobbyOrRelay(m) {
 		return nil
 	}
-	return []CheckItem{checkLobbyRelayAccountServices(root, m), checkLobbyRelayTokenKeyEnv(root, m), checkLobbyRelayAdvertise(root, m)}
+	return []CheckItem{checkLobbyRelayAccountServices(root, m), checkLobbyRelayTokenKeyEnv(root, m), checkLobbyRelayAdvertise(root, m), checkLobbyRelayAccountGames(root, m)}
+}
+
+func checkLobbyRelayAccountGames(root string, m Manifest) CheckItem {
+	const name = "lobby-relay:account-games"
+	lobbies := servicesHosting(m, "lobby")
+	if len(lobbies) == 0 {
+		return CheckItem{Name: name, Status: StatusOK, Detail: "no lobby service"}
+	}
+	account := hostedServiceOf(m, "account")
+	if account == "" {
+		return CheckItem{Name: name, Status: StatusFail, Detail: "the lobby takes game account tokens from the account service, but this project hosts no account service: roost add lobby declares it"}
+	}
+	var problems, checked []string
+	for i, accountRel := range serviceConfigRels(account) {
+		accountCfg, accountFound, err := loadServiceConfig(root, accountRel)
+		if err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		for _, lobby := range lobbies {
+			lobbyRel := serviceConfigRels(lobby)[i]
+			lobbyCfg, found, err := loadServiceConfig(root, lobbyRel)
+			if err != nil {
+				problems = append(problems, err.Error())
+				continue
+			}
+			if !found {
+				continue
+			}
+			games := sortedMapKeys(lobbyCfg.GetStringMap("lobby.games"))
+			if len(games) == 0 {
+				continue // lobby.games 必填，空着由 config-schema 与 lobby 的 Init 报
+			}
+			if !accountFound {
+				problems = append(problems, fmt.Sprintf("%s serves %s but %s does not exist", lobbyRel, strings.Join(games, ", "), accountRel))
+				continue
+			}
+			served := accountCfg.GetStringMap("account.games")
+			var missing []string
+			for _, game := range games {
+				if _, ok := served[game]; !ok {
+					missing = append(missing, game)
+				}
+			}
+			if len(missing) > 0 {
+				problems = append(problems, fmt.Sprintf("%s lobby.games has %s, which %s account.games does not list (account would neither issue nor accept game account tokens for it, so the lobby answers 401)",
+					lobbyRel, strings.Join(missing, ", "), accountRel))
+				continue
+			}
+			checked = append(checked, lobbyRel)
+		}
+	}
+	if len(problems) > 0 {
+		return CheckItem{Name: name, Status: StatusFail, Detail: strings.Join(problems, "; ") + "; add each game under account.games.<game>.token_ttl (roost add lobby writes them)"}
+	}
+	return CheckItem{Name: name, Status: StatusOK, Detail: "every lobby.games game is in account.games (" + strings.Join(checked, ", ") + ")"}
 }
 
 // loadServiceConfig 读一个服务的配置文件（rel 相对工程根）；文件不存在时 found=false。

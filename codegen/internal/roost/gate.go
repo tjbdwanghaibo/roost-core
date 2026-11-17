@@ -59,7 +59,7 @@ func playerGateDeclarationType(m Manifest) reflect.Type {
 	if !playerWebSocketEnabled(m) {
 		return reflect.TypeOf(playerGateDeclaration{})
 	}
-	return withWebSocketSection(reflect.TypeOf(playerGateDeclaration{}), "Gate")
+	return withWebSocketSection(reflect.TypeOf(playerGateDeclaration{}), "Gate", "always")
 }
 
 // playerGateSchemaFor 是 m 生成的 Gate Mod 读的全部键。

@@ -20,7 +20,7 @@ import (
 //   - 共享资源名：资源名（shared tag）相同的键在全部服务里必须取同一个值。取值按进程读到的算：写了取写的，
 //     没写取声明的缺省值，再没有就按 follows 取另一个键的值（例如 saga.start_effect_stream 不写取
 //     dataengine.effects.stream），都没有就是空串。按写法比较（只去掉首尾空白）。
-//   - 监听地址：listen tag 的开关键为 true 的键是这个服务真正监听的地址。开发配置集（configs/service/config.<service>.yaml）
+//   - 监听地址：listen tag 的开关键为 true、且取值非空的键是这个服务真正监听的地址（空串表示不开，例如 WebSocket 地址）。开发配置集（configs/service/config.<service>.yaml）
 //     的服务在同一台机器上一起运行（deploy/dev/run.sh），端口相同且主机重叠（相同，或任一方是 0.0.0.0 / :: / 空）
 //     即冲突；同一服务里的两个监听地址同样不能冲突。端口 0 由系统分配，不比较。生产示例每个服务一个容器，不比较端口。
 //   - 同一主机上各不相同的值：unique tag 组名相同的键，开发配置集里各服务的取值必须两两不同（例如 etcd.advertise_addr，
@@ -244,6 +244,11 @@ func listenAddrProblems(docs []serviceConfigDocument, all configschema.Schema) [
 				continue
 			}
 			addr, _ := doc.effectiveValue(key, all)
+			if addr == "" {
+				// 没写、也没有缺省值（或写成空串）：这个监听不开。WebSocket 地址（player_access.*.websocket.addr、
+				// relay.ws_listen）就是这样表示“不开”的；有缺省值的监听地址不会走到这里。
+				continue
+			}
 			host, port, err := net.SplitHostPort(addr)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("%s: %s %q is not host:port: %v", doc.rel, key.Name, addr, err))

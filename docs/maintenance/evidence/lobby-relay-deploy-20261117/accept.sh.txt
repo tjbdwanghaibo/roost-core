@@ -1,0 +1,46 @@
+#!/bin/sh
+# 验收：两个工程用 deploy 组的生成器（roost-new，主检出的树）生成；build、generate --check、doctor、accountctl 单测。
+set -u
+S=$SCRATCH/b1117-lr-deploy
+R=$S/roost-new; CORE=$S/wt-new; export GOWORK=off
+rm -rf $S/acc && mkdir -p $S/acc && cd $S/acc
+check() {
+  echo "== go build ./..."; go build ./... && echo ok
+  echo "== go vet ./..."; go vet ./... && echo ok
+  echo "== roost generate --check"; $R generate --check 2>&1 | tail -1
+  echo "== roost project doctor (non-OK lines)"; $R project doctor > doctor.txt 2>&1; echo "doctor exit $?"; grep -v '^OK' doctor.txt | grep -v '^[0-9]\{4\}/' ; echo "OK lines: $(grep -c '^OK' doctor.txt)"; grep -E 'lobby-relay|config-across|config-schema' doctor.txt | cut -c1-200
+}
+echo "### 1. roost project new party -template lobby（不带 game）"
+$R project new party -module example.com/party -out party -template lobby --skip-deps > /dev/null 2>&1 || echo NEW-FAILED
+cd party; go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE; go mod tidy >/dev/null 2>&1
+# 模拟工程实现 account 的协作者（与 gen 组验收相同：登录模块的开发登录写法）
+cp $CORE/modules/login/files/services/account/collaborators.go.tmpl services/account/collaborators.go
+cp $CORE/modules/login/files/services/account/login_dev.go.tmpl services/account/login_dev.go
+cp $CORE/modules/login/files/services/account/login_player_id.go.tmpl services/account/login_player_id.go
+cp $CORE/modules/login/files/services/account/login_channels.go.tmpl services/account/login_channels.go
+check
+echo "-- 部署模板摘录"
+grep -n 'lobby-http\|relay-tcp\|relay-ws\|secretKeyRef' deploy/k8s/base/lobby.yaml deploy/k8s/base/relay.yaml
+grep -n 'port:' deploy/k8s/base/network-policy.yaml
+grep -n -A3 'environment:\|ports:' deploy/docker/docker-compose.prod.yaml
+grep -n 'RELAY' deploy/docker/env.example deploy/shell/install.sh deploy/dev/run.sh | cut -c1-160
+ls deploy/k8s/base/secret.relay-token.example.yaml
+cd ..
+echo
+echo "### 2. -template game; module add login portal; add transport websocket; add lobby; add relay; add gate"
+$R project new arena -module example.com/arena -out arena -template game --skip-deps > /dev/null 2>&1 || echo NEW-FAILED
+cd arena; go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE; go mod tidy >/dev/null 2>&1
+$R module add login portal > module-add.log 2>&1; echo "module add exit $?"
+for step in "transport websocket" lobby relay gate; do $R add $step > add.log 2>&1; echo "add $step exit $?"; done
+echo "services: $(sed -n '/^services:/,/^access:/p' roost.yaml | grep -E '^    [a-z]' | tr -d ' ' | tr '\n' ' ')"
+echo "transports: $(sed -n '/^access:/,/^features:/p' roost.yaml | tr -d ' \n')"
+check
+echo "== go test ./cmd/accountctl/"; go test -count=1 ./cmd/accountctl/ 2>&1 | tail -3
+echo "-- account.services 顺序（开发配置）"; sed -n '/^  services:/,/^  [a-z_]*:$/p' configs/service/config.account.yaml | head -8
+echo "-- 部署模板摘录"
+grep -n 'player-ws\|player-tcp' deploy/k8s/base/*.yaml | grep -v secret
+grep -n 'port:' deploy/k8s/base/network-policy.yaml
+grep -n -B1 -A4 'ports:' deploy/docker/docker-compose.prod.yaml
+grep -n '7080' deploy/docker/README.md | cut -c1-200
+grep -n 'websocket' docs/ROOST_YAML.zh-CN.md | cut -c1-160
+grep -n 'WebSocket 接入' docs/PLAYER_ACCESS_TCP.zh-CN.md

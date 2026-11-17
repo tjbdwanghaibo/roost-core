@@ -1,0 +1,135 @@
+### 1. roost project new party -template lobby（不带 game）
+== go build ./...
+ok
+== go vet ./...
+ok
+== roost generate --check
+generated files are up to date
+== roost project doctor (non-OK lines)
+doctor exit 0
+OK lines: 45
+OK    config-schema:account 3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:lobby  3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:relay  3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-across-services shared resource names agree; development listeners and per-service addresses do not collide (development configs: 3 service(s); production examples: 3 service(s)); port bl
+OK    lobby-relay:account-services config.account lists lobby, relay
+OK    lobby-relay:token-key-env every lobby and relay reads the relay token key from ROOST_RELAY_TOKEN_KEY
+OK    lobby-relay:advertise-addr relay.advertise_addr is not loopback in configs/service/config.relay.prod.example.yaml
+OK    lobby-relay:account-games every lobby.games game is in account.games (configs/service/config.lobby.yaml, configs/service/config.lobby.prod.example.yaml)
+-- 部署模板摘录
+deploy/k8s/base/lobby.yaml:48:                secretKeyRef: {name: party-relay-token, key: ROOST_RELAY_TOKEN_KEY}
+deploy/k8s/base/lobby.yaml:53:            - name: lobby-http
+deploy/k8s/base/lobby.yaml:104:    - {name: lobby-http, port: 8081, targetPort: lobby-http, protocol: TCP}
+deploy/k8s/base/relay.yaml:48:                secretKeyRef: {name: party-relay-token, key: ROOST_RELAY_TOKEN_KEY}
+deploy/k8s/base/relay.yaml:53:            - name: relay-tcp
+deploy/k8s/base/relay.yaml:56:            - name: relay-ws
+deploy/k8s/base/relay.yaml:107:    - {name: relay-tcp, port: 7102, targetPort: relay-tcp, protocol: TCP}
+deploy/k8s/base/relay.yaml:108:    - {name: relay-ws, port: 7202, targetPort: relay-ws, protocol: TCP}
+21:        - {protocol: TCP, port: 9100}
+27:        - {protocol: TCP, port: 8081}
+28:        - {protocol: TCP, port: 7102}
+29:        - {protocol: TCP, port: 7202}
+37:    environment:
+38-      ROOST_RELAY_TOKEN_KEY: ${ROOST_RELAY_TOKEN_KEY:?ROOST_RELAY_TOKEN_KEY (the relay token key, at least 16 bytes) is required}
+39:    ports:
+40-      - "8081:8081"
+41-    restart: unless-stopped
+42-    read_only: true
+--
+71:    environment:
+72-      ROOST_RELAY_TOKEN_KEY: ${ROOST_RELAY_TOKEN_KEY:?ROOST_RELAY_TOKEN_KEY (the relay token key, at least 16 bytes) is required}
+73:    ports:
+74-      - "7102:7102"
+75-      - "7202:7202"
+76-    restart: unless-stopped
+deploy/docker/env.example:5:ROOST_RELAY_TOKEN_KEY=CHANGE_ME
+deploy/shell/install.sh:27:# lobby / relay read the relay token key from $ROOST_RELAY_TOKEN_KEY (lobby.token_key_env / relay.token_key_env).
+deploy/shell/install.sh:32:    RELAY_TOKEN_KEY=${ROOST_RELAY_TOKEN_KEY:-}
+deploy/shell/install.sh:33:    if [ "${#RELAY_TOKEN_KEY}" -lt 16 ]; then
+deploy/shell/install.sh:34:      printf 'set ROOST_RELAY_TOKEN_KEY (the relay token key, at least 16 bytes) to install %s\n' "$SERVICE" >&2
+deploy/shell/install.sh:87:    (umask 077 && printf '%s=%s\n' ROOST_RELAY_TOKEN_KEY "$RELAY_TOKEN_KEY" > "$RELEASE_ROOT/relay-token.env")
+deploy/dev/run.sh:21:ROOST_RELAY_TOKEN_KEY="${ROOST_RELAY_TOKEN_KEY:-dev-relay-token-key-change-me}"
+deploy/dev/run.sh:22:export ROOST_RELAY_TOKEN_KEY
+deploy/k8s/base/secret.relay-token.example.yaml
+
+### 2. -template game; module add login portal; add transport websocket; add lobby; add relay; add gate
+module add exit 0
+add transport websocket exit 0
+add lobby exit 0
+add relay exit 0
+add gate exit 0
+services: account: game: gate: lobby: relay: 
+transports: access:player:service:gametransports:-tcp-websocketgate:gatefeatures:
+== go build ./...
+ok
+== go vet ./...
+ok
+== roost generate --check
+generated files are up to date
+== roost project doctor (non-OK lines)
+doctor exit 0
+OK lines: 60
+OK    config-schema:account 3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:game   3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:gate   3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:lobby  3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:relay  3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-across-services shared resource names agree; development listeners and per-service addresses do not collide (development configs: 5 service(s); production examples: 5 service(s)); port bl
+OK    lobby-relay:account-services config.account lists game, lobby, relay
+OK    lobby-relay:token-key-env every lobby and relay reads the relay token key from ROOST_RELAY_TOKEN_KEY
+OK    lobby-relay:advertise-addr relay.advertise_addr is not loopback in configs/service/config.relay.prod.example.yaml
+OK    lobby-relay:account-games every lobby.games game is in account.games (configs/service/config.lobby.yaml, configs/service/config.lobby.prod.example.yaml)
+== go test ./cmd/accountctl/
+ok  	example.com/arena/cmd/accountctl	0.239s
+-- account.services 顺序（开发配置）
+  services:
+    game:
+      kind: game
+    lobby:
+      kind: lobby
+    relay:
+      kind: relay
+  # Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）
+-- 部署模板摘录
+deploy/k8s/base/gate.yaml:50:            - name: player-tcp
+deploy/k8s/base/gate.yaml:53:            - name: player-ws
+deploy/k8s/base/gate.yaml:106:    - {name: player-tcp, port: 7000, targetPort: player-tcp, protocol: TCP}
+deploy/k8s/base/gate.yaml:107:    - {name: player-ws, port: 7080, targetPort: player-ws, protocol: TCP}
+21:        - {protocol: TCP, port: 9100}
+27:        - {protocol: TCP, port: 7000}
+28:        - {protocol: TCP, port: 7080}
+29:        - {protocol: TCP, port: 8082}
+30:        - {protocol: TCP, port: 7103}
+31:        - {protocol: TCP, port: 7203}
+69-    command: ["gate", "--sid=1002", "--config=/etc/roost/config.yaml"]
+70:    ports:
+71-      - "7080:7080"
+72-    restart: unless-stopped
+73-    read_only: true
+74-    init: true
+--
+103-      ROOST_RELAY_TOKEN_KEY: ${ROOST_RELAY_TOKEN_KEY:?ROOST_RELAY_TOKEN_KEY (the relay token key, at least 16 bytes) is required}
+104:    ports:
+105-      - "8082:8082"
+106-    restart: unless-stopped
+107-    read_only: true
+108-    init: true
+--
+137-      ROOST_RELAY_TOKEN_KEY: ${ROOST_RELAY_TOKEN_KEY:?ROOST_RELAY_TOKEN_KEY (the relay token key, at least 16 bytes) is required}
+138:    ports:
+139-      - "7103:7103"
+140-      - "7203:7203"
+141-    restart: unless-stopped
+142-    read_only: true
+11:      -p 7080:7080 \
+35:客户端端口（玩家 TCP 之外）：gate 7080 player_access.gate.websocket.addr (WebSocket, when written)；lobby 8082 lobby.listen (HTTP)；relay 7103 relay.listen (TCP)；relay 7203 relay.ws
+154:支持 tcp 与 websocket（websocket 是玩家 TCP 会话的第二个监听，要求先有 tcp：roost add transport websocket；
+155:嵌入 TCP 读 player_access.tcp.websocket.*，独立 Gate 读 player_access.gate.websocket.*，写上 addr 才开，
+125:## WebSocket 接入
+## accountctl 变异（在生成工程渲染好的副本上，go test ./cmd/accountctl/）
+A1 -service 不写进记录 RED []
+A2 没带 -service 时不点名 RED ['--- FAIL: TestLoginAccountctlWritesTheServerService (0.00s)']
+A3 recordService 不认 upsert-server RED ['--- FAIL: TestLoginAccountctlWritesTheServerService (0.00s)']
+restored: ok  	example.com/arena/cmd/accountctl	0.252s
+A1' -service 不写进记录（A1 上一行是编译失败、不算，改成截成空串） RED ['--- FAIL: TestLoginAccountctlWritesTheServerService (0.00s)']
+restored: ok  	example.com/arena/cmd/accountctl	0.245s

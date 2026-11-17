@@ -1,0 +1,21 @@
+# HEAD 89c42f67 的生成器（base）与 HEAD + deploy 组改动的生成器（new），--skip-deps，diff -r 整个目录
+files (base):     1708
+== plain
+IDENTICAL
+== game
+IDENTICAL
+== gameall
+IDENTICAL
+== demo
+Files $SCRATCH/b1117-lr-deploy/cmp/base/demo/cmd/accountctl/main.go and $SCRATCH/b1117-lr-deploy/cmp/new/demo/cmd/accountctl/main.go differ
+Files $SCRATCH/b1117-lr-deploy/cmp/base/demo/cmd/accountctl/main_test.go and $SCRATCH/b1117-lr-deploy/cmp/new/demo/cmd/accountctl/main_test.go differ
+Files $SCRATCH/b1117-lr-deploy/cmp/base/demo/roost.yaml and $SCRATCH/b1117-lr-deploy/cmp/new/demo/roost.yaml differ
+
+== demo 的差异只在 accountctl（任务第 4 项）与 roost.yaml 里 login 模块的摘要：
+IDENTICAL apart from cmd/accountctl/main.go, main_test.go, roost.yaml
+479c479
+<         digest: 7e8155c1557abf19
+---
+>         digest: f57cc6ec21535d88
+differs: ./cmd/accountctl/main.go
+differs: ./cmd/accountctl/main_test.go

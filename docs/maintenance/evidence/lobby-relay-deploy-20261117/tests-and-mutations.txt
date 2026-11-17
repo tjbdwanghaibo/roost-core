@@ -1,0 +1,41 @@
+## 新增与改动的用例
+--- PASS: TestLobbyTemplateHostsAccountLobbyAndRelayWithoutGame (0.43s)
+--- PASS: TestAddLobbyAndRelayToAGameProject (2.02s)
+--- PASS: TestLobbyAndRelayAreNotBusServices (0.00s)
+--- PASS: TestDoctorLobbyRelayAccountServices (0.41s)
+--- PASS: TestDoctorLobbyRelayTokenKeyEnv (0.42s)
+--- PASS: TestDoctorLobbyRelayAdvertiseAddr (0.41s)
+--- PASS: TestIsLoopbackHost (0.00s)
+--- PASS: TestProjectsWithoutLobbyOrRelayHaveNoLobbyRelayChecks (0.00s)
+--- PASS: TestDoctorLobbyRelayAccountGames (0.41s)
+--- PASS: TestAddLobbyRelayKeepsAccountServicesInNameOrder (2.06s)
+--- PASS: TestEnsureYAMLMapEntriesInsertsInNameOrder (0.00s)
+--- PASS: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (0.92s)
+--- PASS: TestPlayerWebSocketTransportPassesItsKeysThrough (0.00s)
+--- PASS: TestPlayerWebSocketPortIsDeployed (0.00s)
+--- PASS: TestWebSocketAddressesTakePartInThePortCheck (0.00s)
+--- PASS: TestWebSocketKeysWithoutTheTransportAreRefused (0.41s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	8.579s
+## 相关的已有用例（k8s / compose / shell / dev-run / config 契约 / help / gate / endpoints / 生成契约）
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	169.387s
+## vet
+vet-ok
+## 变异
+M1 account-games 不比较游戏: RED ['--- FAIL: TestDoctorLobbyRelayAccountGames (0.43s)']
+M2 account-games 不进 doctor: RED ['--- FAIL: TestDoctorLobbyRelayAccountGames (0.50s)']
+M3 websocket.addr 不带 listen 标签: RED ['--- FAIL: TestWebSocketAddressesTakePartInThePortCheck (0.00s)']
+M4 空地址照样比较: RED ['--- FAIL: TestWebSocketAddressesTakePartInThePortCheck (0.00s)']
+M5 没声明 websocket 的键不单独报: RED ['--- FAIL: TestWebSocketKeysWithoutTheTransportAreRefused (0.46s)']
+M6 新条目不按名字排: RED ['--- FAIL: TestAddLobbyRelayKeepsAccountServicesInNameOrder (3.36s)', '--- FAIL: TestEnsureYAMLMapEntriesInsertsInNameOrder (0.00s)']
+M7 k8s 不发布客户端容器端口: RED ['--- FAIL: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (1.76s)', '--- FAIL: TestPlayerWebSocketPortIsDeployed (0.00s)']
+M8 k8s 不注入令牌密钥: RED ['--- FAIL: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (2.20s)']
+M9 compose 不加环境变量与端口: RED ['--- FAIL: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (1.85s)', '--- FAIL: TestPlayerWebSocketPortIsDeployed (0.00s)']
+M10 NetworkPolicy 不放行客户端端口: RED ['--- FAIL: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (1.07s)', '--- FAIL: TestPlayerWebSocketPortIsDeployed (0.00s)']
+M11 unit 不读环境文件: RED ['--- FAIL: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (1.62s)']
+M12 变量名不取配置的实际值: RED ['--- FAIL: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (1.82s)']
+M13 不发布玩家 WebSocket 端口: RED ['--- FAIL: TestPlayerWebSocketPortIsDeployed (0.00s)']
+M14 ROOST_YAML 不改写: RED ['--- FAIL: TestPlayerWebSocketPortIsDeployed (0.00s)']
+M15 install.sh 不检查密钥: RED ['--- FAIL: TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey (1.98s)']
+restored: GREEN
+mutate exit 0

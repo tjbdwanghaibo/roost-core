@@ -77,11 +77,29 @@ func playerTCPSchema() configschema.Schema { return playerTCPSchemaOnce() }
 // playerWebSocketDeclaration 是 access.player.transports 含 websocket 时玩家接入另外读的键（GATEWAY.md
 // “WebSocket 接入”）：嵌入 TCP 在 player_access.tcp.websocket 下，独立 Gate 在 player_access.gate.websocket 下。
 // 生成器只把它们透传进 gateway.TCPConfig.WebSocket，规则（地址、路径、来源写法）由 gateway.ValidateTCPConfig 检查。
-// 没有 websocket 传输时声明、生成代码与配置都与之前逐字节相同。addr 不标 listen：空串表示不开，端口冲突检查看不懂它。
+// 没有 websocket 传输时声明、生成代码与配置都与之前逐字节相同。addr 的 listen 标签按所在的段加（withWebSocketSection）：
+// 嵌入 TCP 跟着 player_access.tcp.enabled，Gate 总是；空串表示不开，端口冲突检查不比较没写的地址（listenAddrProblems）。
 type playerWebSocketDeclaration struct {
 	Addr           string `config:"addr" help:"WebSocket 监听地址 host:port；空串不开。浏览器经它连接，每条二进制消息装一个 RS v2 帧，握手、票据、限额与 TCP 相同；TLS 由前置负载均衡终结（wss）"`
 	Path           string `config:"path" help:"接受 WebSocket 升级的 HTTP 路径（精确匹配）；不写取 /ws"`
 	AllowedOrigins string `config:"allowed_origins" help:"允许的浏览器页面来源，逗号分隔（game.example.com、https://*.cdn.example.com）；为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行"`
+}
+
+// renderPlayerWebSocketGuide 是声明了 websocket 传输时接在 docs/PLAYER_ACCESS_TCP.zh-CN.md 后面的一节。
+func renderPlayerWebSocketGuide(m Manifest) string {
+	key := playerWebSocketAddrKey(m)
+	section := strings.TrimSuffix(key, ".addr")
+	return fmt.Sprintf(`
+## WebSocket 接入
+
+本工程声明了 websocket 传输（roost.yaml 的 access.player.transports）：浏览器经 WebSocket 连同一套玩家会话，每条二进制消息装一个 RS v2 帧，握手、票据、连接代号、路由、出站预算与 TCP 完全相同（roost-core 的 docs/framework/GATEWAY.md §6）。
+
+- 配置在 %[1]s.{addr,path,allowed_origins}。生成器不写这些键：%[2]s 写上地址才开，path 不写取 /ws；allowed_origins 是逗号分隔的允许来源，为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行。
+- 部署模板按约定的 %[3]d 发布这个端口（k8s 的 player-ws 容器与 Service 端口、生产 compose 的 ports、docker 示例的 -p）：开 WebSocket 时写 %[2]s: 0.0.0.0:%[3]d，换端口时同步改部署模板、负载均衡与防火墙。
+- TLS（wss）由前置负载均衡终结；七层负载均衡后 max_connections_per_ip 按负载均衡的地址计数，要调大。
+- 同一台机器上一起运行的服务，%[2]s 参与 doctor 的端口冲突检查（config-across-services）；没写地址时不参与。
+- 没有声明 websocket 的工程写了 websocket 的键，roost config check 与 doctor 报失败：没有任何进程读它们。
+`, section, key, playerWebSocketPort)
 }
 
 // playerWebSocketEnabled 报告 roost.yaml 的 access.player.transports 是否含 websocket。
@@ -92,7 +110,9 @@ func playerWebSocketEnabled(m Manifest) bool {
 
 // withWebSocketSection 返回 declaration 的一个无名副本：名为 section 的嵌套结构末尾多一个
 // `WebSocket ... config:"websocket"` 字段。无名类型渲染进生成代码时是内联的结构体字面量，与原声明的写法一致。
-func withWebSocketSection(declaration reflect.Type, section string) reflect.Type {
+// listen 是 websocket.addr 的 listen 标签（与同一段 TCP 地址的相同：嵌入 TCP 是 player_access.tcp.enabled，Gate 是 always），
+// 让 WebSocket 地址参与同一台机器上的端口冲突检查。
+func withWebSocketSection(declaration reflect.Type, section, listen string) reflect.Type {
 	fields := make([]reflect.StructField, declaration.NumField())
 	for i := range fields {
 		fields[i] = declaration.Field(i)
@@ -107,6 +127,9 @@ func withWebSocketSection(declaration reflect.Type, section string) reflect.Type
 		flat := make([]reflect.StructField, webSocket.NumField())
 		for j := range flat {
 			flat[j] = webSocket.Field(j)
+			if flat[j].Name == "Addr" {
+				flat[j].Tag = reflect.StructTag(strings.Replace(string(flat[j].Tag), `config:"addr"`, `config:"addr" listen:"`+listen+`"`, 1))
+			}
 		}
 		fields[i].Type = reflect.StructOf(append(inner, reflect.StructField{
 			Name: "WebSocket", Type: reflect.StructOf(flat), Tag: `config:"websocket"`,
@@ -120,7 +143,7 @@ func playerTCPDeclarationType(m Manifest) reflect.Type {
 	if !playerWebSocketEnabled(m) {
 		return reflect.TypeOf(playerTCPDeclaration{})
 	}
-	return withWebSocketSection(reflect.TypeOf(playerTCPDeclaration{}), "TCP")
+	return withWebSocketSection(reflect.TypeOf(playerTCPDeclaration{}), "TCP", "player_access.tcp.enabled")
 }
 
 // playerTCPSchemaFor 是 m 生成的嵌入 TCP Mod 读的全部键（doctor 的 config-schema 按它检查）。

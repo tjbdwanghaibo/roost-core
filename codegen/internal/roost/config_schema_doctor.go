@@ -280,6 +280,8 @@ func checkConfigDeclarations(root string, m Manifest, process serviceSchemaSourc
 				continue
 			}
 			checked = append(checked, file.rel)
+			webSocket, rest := webSocketKeysWithoutTransport(m, unread)
+			bad, unread = append(bad, webSocket...), rest
 			for _, problem := range bad {
 				failures = append(failures, file.rel+": "+layers.Describe(problem))
 			}
@@ -420,16 +422,36 @@ func checkConfigFileText(raw []byte, production bool, m Manifest, service string
 		return nil, err
 	}
 	all := allFrameworkConfigSchema()
-	bad, _, err := checkServiceConfigText(raw, false, production, schema, configschema.Schema{}, all)
+	bad, unread, err := checkServiceConfigText(raw, false, production, schema, configschema.Schema{}, all)
+	webSocket, _ := webSocketKeysWithoutTransport(m, unread)
 	if err != nil || len(bad) == 0 || process == nil {
-		return bad, err
+		return append(bad, webSocket...), err
 	}
 	declared, err := process(service)
 	if err != nil {
-		return append(bad, "the service's own declarations were not read, so keys it declares may be reported above: "+err.Error()), nil
+		return append(append(bad, webSocket...), "the service's own declarations were not read, so keys it declares may be reported above: "+err.Error()), nil
 	}
-	bad, _, err = checkServiceConfigText(raw, false, production, schema, businessDeclarations(declared, schema), all)
-	return bad, err
+	bad, unread, err = checkServiceConfigText(raw, false, production, schema, businessDeclarations(declared, schema), all)
+	webSocket, _ = webSocketKeysWithoutTransport(m, unread)
+	return append(bad, webSocket...), err
+}
+
+// webSocketKeysWithoutTransport 从“框架有声明、本服务没有读取方”的键里挑出 WebSocket 的键（player_access.tcp.websocket.*、
+// player_access.gate.websocket.*），条件是工程没有声明 websocket 传输：这些键只有 roost add transport websocket 之后
+// 生成的嵌入 TCP / Gate 才读，没声明时写了也不会开 WebSocket 监听。通用的“没有读取方”提示说的是“别的服务的键”，
+// 在这里会误导，所以单独报失败并给出命令（roost config check 与 doctor 的 config-schema 共用）。rest 是其余的键。
+func webSocketKeysWithoutTransport(m Manifest, unread []string) (failures, rest []string) {
+	if playerWebSocketEnabled(m) {
+		return nil, unread
+	}
+	for _, key := range unread {
+		if strings.HasPrefix(key, "player_access.tcp.websocket.") || strings.HasPrefix(key, "player_access.gate.websocket.") {
+			failures = append(failures, fmt.Sprintf("config: %s is a WebSocket key, but roost.yaml access.player.transports has no websocket, so nothing reads it and no WebSocket listener opens: run roost add transport websocket, or delete the key", key))
+			continue
+		}
+		rest = append(rest, key)
+	}
+	return failures, rest
 }
 
 // checkServiceConfigText 检查一份配置：bad 是失败项（值不合框架或业务声明、框架段或业务段里没有声明的键），unread 是

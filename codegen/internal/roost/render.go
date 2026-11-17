@@ -42,12 +42,15 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("README.md", renderProjectReadme(m), false)
 	add("docs/QUICKSTART.zh-CN.md", renderBeginnerQuickstart(m), true)
 	add("docs/BEGINNER_WORKBOOK.zh-CN.md", renderBeginnerWorkbook(m), true)
-	add("docs/ROOST_YAML.zh-CN.md", renderManifestGuide(), true)
+	add("docs/ROOST_YAML.zh-CN.md", renderManifestGuide(m), true)
 	add("docs/ENTITY_COMPONENT.zh-CN.md", renderEntityComponentGuide(m), true)
 	add("docs/FIRST_BUSINESS.zh-CN.md", renderFirstBusinessGuide(m), true)
 	add("docs/ENTITY_LIFECYCLE.zh-CN.md", renderEntityLifecycleGuide(m), true)
 	add("docs/PROTOCOL_TO_NEST.zh-CN.md", renderProtocolNestGuide(), true)
 	playerTCPGuide := renderPlayerTCPGuide()
+	if playerWebSocketEnabled(m) {
+		playerTCPGuide += renderPlayerWebSocketGuide(m)
+	}
 	if selfSyncEnabled(m) {
 		playerTCPGuide += renderSelfSyncGuide()
 	}

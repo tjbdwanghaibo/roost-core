@@ -216,7 +216,7 @@ func generateModuleServices(root string, m Manifest) error {
 		return nil
 	}
 	// 与 project sync 使用同一份服务派生信息，不能重写 bootstrap 时丢掉实体 owner / 路由接线。
-	m = m.withConfiguredShutdown(root).withServicePackages(root).withEntityOwners(root)
+	m = m.withConfiguredShutdown(root).withRelayTokenKeyEnv(root).withServicePackages(root).withEntityOwners(root)
 	for _, name := range services {
 		body, err := renderModuleService(m, name)
 		if err != nil {

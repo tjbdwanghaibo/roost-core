@@ -20,7 +20,7 @@ func renderProductionDeployment(m Manifest) map[string]string {
 		"deploy/shell/README.md":                            renderShellReadme(m),
 		"deploy/docker/README.md":                           renderDockerReadme(m),
 		"deploy/docker/docker-compose.prod.yaml":            renderProductionCompose(m),
-		"deploy/docker/env.example":                         renderDockerEnvExample(),
+		"deploy/docker/env.example":                         renderDockerEnvExample(m),
 		"deploy/docker/deploy.sh":                           renderDockerDeployScript(m),
 		"deploy/docker/rollback.sh":                         renderDockerRollbackScript(m),
 		"deploy/k8s/base/namespace.yaml":                    renderKubernetesNamespace(),
@@ -39,6 +39,10 @@ func renderProductionDeployment(m Manifest) map[string]string {
 		files["deploy/k8s/base/"+service+"-pdb.yaml"] = renderKubernetesPDB(m, service)
 		files["deploy/k8s/base/secret."+service+".example.yaml"] = renderKubernetesSecretExample(m, service)
 		resources = append(resources, service+".yaml", service+"-pdb.yaml")
+	}
+	// lobby 与 relay 共用的 relay 令牌密钥（只生成一次，同其他 Secret 示例一样不进 kustomization）。
+	if hostsLobbyOrRelay(m) {
+		files["deploy/k8s/base/secret.relay-token.example.yaml"] = renderKubernetesRelayTokenSecretExample(m)
 	}
 	// The base lives in its own directory. kustomize (v5.7+, shipped with
 	// kubectl 1.34+) refuses a base that is an ANCESTOR of the overlay
@@ -115,7 +119,7 @@ case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version: %s\n' "$VERSIO
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 BINARY=${BINARY:-"$ROOT/dist/{{APP}}"}
 [ -x "$BINARY" ] || { printf 'binary not found; run: sh deploy/shell/build.sh\n' >&2; exit 2; }
-{{CONFIG_DATA_GUARD}}
+{{CONFIG_DATA_GUARD}}{{RELAY_TOKEN_GUARD}}
 INSTANCE={{APP}}-$SERVICE-$SID
 APP_ROOT=${APP_ROOT:-/opt/roost/$INSTANCE}
 STATE_ROOT=${STATE_ROOT:-/var/lib/roost/$INSTANCE}
@@ -134,7 +138,7 @@ install -d -m 0755 "$APP_ROOT/releases" "$RELEASE_ROOT"
 install -d -o "$RUN_USER" -g "$RUN_USER" -m 0750 "$STATE_ROOT/wal" "$LOG_ROOT"
 install -m 0755 "$BINARY" "$RELEASE_ROOT/{{APP}}"
 install -m 0640 -o root -g "$RUN_USER" "$CONFIG_SOURCE" "$RELEASE_ROOT/config.yaml"
-{{CONFIG_DATA_INSTALL}}{{STATS_LOG_LINK}}(cd "$RELEASE_ROOT" && sha256sum {{APP}} config.yaml > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
+{{CONFIG_DATA_INSTALL}}{{STATS_LOG_LINK}}{{RELAY_TOKEN_INSTALL}}(cd "$RELEASE_ROOT" && sha256sum {{APP}} config.yaml > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
 
 # TimeoutStopSec: max(the service's generated shutdown.total_timeout, the total
 # its configs set) + 5s. Run roost project sync after raising total_timeout.
@@ -153,7 +157,7 @@ Type=simple
 User=$RUN_USER
 Group=$RUN_USER
 WorkingDirectory=$APP_ROOT/current
-ExecStart=$APP_ROOT/current/{{APP}} $SERVICE --sid $SID --config $APP_ROOT/current/config.yaml
+{{RELAY_TOKEN_UNIT}}ExecStart=$APP_ROOT/current/{{APP}} $SERVICE --sid $SID --config $APP_ROOT/current/config.yaml
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=$STOP_TIMEOUT
@@ -231,6 +235,9 @@ exit 1
 	guard, copyData = guard+groupsGuard, copyData+copyGroups
 	value = strings.ReplaceAll(value, "{{CONFIG_DATA_GUARD}}", guard)
 	value = strings.ReplaceAll(value, "{{CONFIG_DATA_INSTALL}}", copyData)
+	value = strings.ReplaceAll(value, "{{RELAY_TOKEN_GUARD}}", shellRelayTokenGuard(m))
+	value = strings.ReplaceAll(value, "{{RELAY_TOKEN_INSTALL}}", shellRelayTokenInstall(m))
+	value = strings.ReplaceAll(value, "{{RELAY_TOKEN_UNIT}}", shellRelayTokenUnit(m))
 	var stopTimeouts strings.Builder
 	for _, service := range services {
 		fmt.Fprintf(&stopTimeouts, "  %s) STOP_TIMEOUT=%s ;;\n", service, seconds(serviceShutdownPlan(m, service).grace))
@@ -518,6 +525,9 @@ copytruncate 在复制与截断之间追加的记录会丢，至多一条（默�
 		budgets = append(budgets, service+" "+seconds(serviceShutdownPlan(m, service).grace))
 	}
 	value = strings.ReplaceAll(value, "{{STOP_BUDGETS}}", strings.Join(budgets, "、"))
+	if note := clientPortsDeployNote(m, "shell"); note != "" {
+		value += "\n" + note
+	}
 	var attempts []string
 	for _, service := range sortedServiceNames(m) {
 		attempts = append(attempts, fmt.Sprintf("%s %d", service, int64(startupAllowance(m, service)/time.Second)))
@@ -536,6 +546,10 @@ func renderDockerReadme(m Manifest) string {
 		}
 		playerPort = "      -p 7000:7000 \\\n"
 		playerNote = "Player TCP 已声明，因此示例同时发布 7000；若生产配置修改 player_access.tcp.addr，端口映射、LB 和防火墙必须同步修改。"
+	}
+	// lobby / relay / 玩家 WebSocket 的端口（serviceClientPorts）；生产 compose 给每个服务发布自己的那些。
+	for _, port := range serviceClientPorts(m, service) {
+		playerPort += fmt.Sprintf("      -p %d:%d \\\n", port.Port, port.Port)
 	}
 	return replaceDeployTokens(fmt.Sprintf(`# Docker 部署
 
@@ -577,7 +591,7 @@ Docker Desktop 这类把卷放在虚拟机里的环境宿主机够不到挂载�
 deploy.sh 要求 digest，使用容器内 /app/healthprobe 等待所有实例 readiness，并记录 current/previous image。生产 workflow 使用受保护 Environment 和带 roost-docker 标签的 self-hosted runner。
 
 make compose-check 除了 docker compose config --quiet（只校验语法）还跑 deploy/docker/compose_check_test.go：读 docker compose config --format json 解析后的结果，核对每个 Service 的 read_only / user / cap_drop / security_opt、tmpfs 恰好一条绝对路径挂载、stop_grace_period、healthcheck 与 config bind / 命名卷（"语法合法、语义错"的 tmpfs 在这里红）。这个测试只在设置 `+composeCheckEnv+` 时执行（CI 的 generated-and-deployment 作业设置它），平时 go test ./... 跳过它。
-`, service, playerPort, service, playerNote, paragraph(configDataImageNote(m))), m)
+`, service, playerPort, service, playerNote, paragraph(configDataImageNote(m))+paragraph(strings.TrimSuffix(clientPortsDeployNote(m, "docker"), "\n"))), m)
 }
 
 // composeCheckEnv is the switch that turns the generated compose shape test
@@ -814,11 +828,11 @@ exit 1
 `, m)
 }
 
-func renderDockerEnvExample() string {
+func renderDockerEnvExample(m Manifest) string {
 	return `# Copy to .env.production on the deployment host. Do not commit it.
 # This directory contains one config.<service>.yaml for every generated service.
 ROOST_CONFIG_ROOT=/etc/roost
-`
+` + dockerEnvRelayTokenKey(m)
 }
 
 func renderDockerRollbackScript(m Manifest) string {
@@ -908,15 +922,27 @@ automountServiceAccountToken: false
 }
 
 func renderKubernetesNetworkPolicy(m Manifest) string {
-	playerIngress := ""
+	// 客户端端口（玩家 TCP 7000，以及 lobby、relay、玩家 WebSocket 的端口）只对带 player-access 标签的命名空间开放。
+	var ports []int
 	if playerTCPEnabled(m) {
+		ports = append(ports, 7000)
+	}
+	for _, service := range sortedServiceNames(m) {
+		for _, port := range serviceClientPorts(m, service) {
+			ports = append(ports, port.Port)
+		}
+	}
+	playerIngress := ""
+	if len(ports) > 0 {
 		playerIngress = `    - from:
         - namespaceSelector:
             matchLabels:
               roost.tjbdwanghaibo.io/player-access: "true"
       ports:
-        - {protocol: TCP, port: 7000}
 `
+		for _, port := range ports {
+			playerIngress += fmt.Sprintf("        - {protocol: TCP, port: %d}\n", port)
+		}
 	}
 	return replaceDeployTokens(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -978,9 +1004,14 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	fmt.Fprintf(&head, "      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: %d\n", int64(serviceShutdownPlan(m, service).grace/time.Second))
 	head.WriteString("      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
 	fmt.Fprintf(&head, "          image: ghcr.io/CHANGE_ME/%s:v1.0.0\n          imagePullPolicy: IfNotPresent\n          args: [%q, \"--sid=$(ROOST_SID)\", \"--config=/etc/roost/config.yaml\"]\n", m.Project.Name, service)
-	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n")
+	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n")
+	head.WriteString(kubernetesRelayTokenEnv(m, service))
+	head.WriteString("          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n")
 	if servicePlayerListener(m, service) {
 		head.WriteString("            - name: player-tcp\n              containerPort: 7000\n              protocol: TCP\n")
+	}
+	for _, port := range serviceClientPorts(m, service) {
+		fmt.Fprintf(&head, "            - name: %s\n              containerPort: %d\n              protocol: TCP\n", port.Name, port.Port)
 	}
 	// /healthz is the shared ops Mod's unconditional answer, up once the singleton lock is taken
 	// (before the Data Engine replays), so the startup probe covers singleton.startup_wait + 30s.
@@ -1021,6 +1052,9 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	head.WriteString("  ports:\n    - {name: ops, port: 9100, targetPort: ops, protocol: TCP}\n")
 	if servicePlayerListener(m, service) {
 		head.WriteString("    - {name: player-tcp, port: 7000, targetPort: player-tcp, protocol: TCP}\n")
+	}
+	for _, port := range serviceClientPorts(m, service) {
+		fmt.Fprintf(&head, "    - {name: %s, port: %d, targetPort: %s, protocol: TCP}\n", port.Name, port.Port, port.Name)
 	}
 	return head.String()
 }
@@ -1208,8 +1242,8 @@ func renderKubernetesReadme(m Manifest) string {
 - 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
 - /healthz 仅表示进程存活，流量切换必须使用 /readyz；每个 Service 的 shutdown.total_timeout 按它实际注册的 Mod 生成（声明预算之和 + 3s × 未声明 Mod 数 + 5s；启用 singleton 再加 3s 释放预算），terminationGracePeriodSeconds 为 max(它, 配置里实际的 total_timeout) + 5s（见上方列表）；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算宽限期与 systemd TimeoutStopSec；dataengine.shutdown_timeout 与 player_access.tcp.shutdown_timeout 不参与生成（按 30s / 10s 计），调大它们须同时手动调大 total_timeout 再 sync（roost doctor 检查模板宽限期不低于配置 total + 5s）。
-%s%s- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
-`, services.String(), m.Project.Name, m.Project.Name, m.Project.Name, bullet(configDataImageNote(m)), bullet(statsLogKubernetesNote(m)))
+%s%s%s- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
+`, services.String(), m.Project.Name, m.Project.Name, m.Project.Name, bullet(configDataImageNote(m)), bullet(statsLogKubernetesNote(m)), bullet(strings.TrimSuffix(strings.ReplaceAll(clientPortsDeployNote(m, "k8s"), "\n\n", "\n- "), "\n")))
 }
 
 // statsLogKubernetesNote says where the stats file goes in the pod;

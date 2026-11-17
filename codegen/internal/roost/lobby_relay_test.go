@@ -319,3 +319,172 @@ func TestProjectsWithoutLobbyOrRelayHaveNoLobbyRelayChecks(t *testing.T) {
 		t.Error("a project without lobby or relay gets the relay token key / guide text")
 	}
 }
+
+// doctor 的 lobby-relay:account-games：lobby.games 的游戏不在 account.games 里（开发配置、生产示例各自对照）报 FAIL；
+// 生成的配置是 OK。
+func TestDoctorLobbyRelayAccountGames(t *testing.T) {
+	root, m := newLobbyProject(t)
+	if item := lobbyRelayItem(t, root, m, "lobby-relay:account-games"); item.Status != StatusOK {
+		t.Fatalf("generated configs: %s %s", item.Status, item.Detail)
+	}
+	for _, tc := range []struct{ name, rel, from, to, want string }{
+		{"account dev config lost the game", "configs/service/config.account.yaml", "  games:\n    party:\n      token_ttl: 2h\n", "  games:\n    other:\n      token_ttl: 2h\n",
+			"configs/service/config.lobby.yaml lobby.games has party, which configs/service/config.account.yaml account.games does not list"},
+		{"account production example lost the game", "configs/service/config.account.prod.example.yaml", "  games:\n    party:\n      token_ttl: 2h\n", "  games:\n    other:\n      token_ttl: 2h\n",
+			"configs/service/config.lobby.prod.example.yaml lobby.games has party, which configs/service/config.account.prod.example.yaml account.games does not list"},
+		{"lobby serves a second game", "configs/service/config.lobby.yaml", "  games:\n    party:\n", "  games:\n    brawl:\n      max_members: 4\n    party:\n",
+			"lobby.games has brawl, which configs/service/config.account.yaml account.games does not list"},
+	} {
+		original := readProjectFile(t, root, tc.rel)
+		edited := strings.Replace(original, tc.from, tc.to, 1)
+		if edited == original {
+			t.Fatalf("%s: edit did not apply:\n%s", tc.name, original)
+		}
+		writeProjectFile(t, root, tc.rel, edited)
+		item := lobbyRelayItem(t, root, m, "lobby-relay:account-games")
+		if item.Status != StatusFail || !strings.Contains(item.Detail, tc.want) {
+			t.Errorf("%s: %s %s; want FAIL naming %q", tc.name, item.Status, item.Detail, tc.want)
+		}
+		writeProjectFile(t, root, tc.rel, original)
+	}
+	if item := lobbyRelayItem(t, root, m, "lobby-relay:account-games"); item.Status != StatusOK {
+		t.Errorf("restored configs: %s %s", item.Status, item.Detail)
+	}
+}
+
+// roost add 补 account.services 时新条目按名字排进已有条目之间，不插到最前面：先加 relay 再加 lobby，
+// 结果仍是 game、lobby、relay。
+func TestAddLobbyRelayKeepsAccountServicesInNameOrder(t *testing.T) {
+	_, root, err := NewProject(NewOptions{Name: "arena", Module: "example.com/arena", Out: filepath.Join(t.TempDir(), "arena"), Template: "game", Frameworks: []string{"account"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Access = map[string]AccessSpec{"player": {Service: "game"}}
+	raw, err := m.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ManifestName), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"relay", "lobby"} {
+		if _, err := Add(root, AddOptions{Kind: kind, Warnings: io.Discard}); err != nil {
+			t.Fatalf("add %s: %v", kind, err)
+		}
+	}
+	const want = "  services:\n    game:\n      kind: game\n    lobby:\n      kind: lobby\n    relay:\n      kind: relay\n"
+	for _, rel := range serviceConfigRels("account") {
+		if body := readProjectFile(t, root, rel); !strings.Contains(body, want) {
+			t.Errorf("%s: account.services is not game, lobby, relay in that order:\n%s", rel, body)
+		}
+	}
+}
+
+// ensureYAMLMapEntries：新条目落在名字顺序的位置（最前、中间带头注释的条目之前、最后），已有条目与注释原样。
+func TestEnsureYAMLMapEntriesInsertsInNameOrder(t *testing.T) {
+	text := "account:\n  services:\n    bravo:\n      kind: game\n    # delta 的说明\n    delta:\n      kind: lobby\n  key_prefix: x\n"
+	got, err := ensureYAMLMapEntries(text, "account", "services", "# c", []yamlMapEntry{
+		{Key: "alpha", Lines: []string{"kind: relay"}}, {Key: "charlie", Lines: []string{"kind: relay"}}, {Key: "echo", Lines: []string{"kind: relay"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "account:\n  services:\n    alpha:\n      kind: relay\n    bravo:\n      kind: game\n    charlie:\n      kind: relay\n    # delta 的说明\n    delta:\n      kind: lobby\n    echo:\n      kind: relay\n  key_prefix: x\n"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// 部署模板：托管 lobby / relay 的工程发布它们的客户端端口（k8s 容器与 Service 端口、NetworkPolicy、生产 compose），
+// 把 relay 令牌密钥注入 lobby 与 relay（k8s 引用 Secret、compose 与 shell 用环境变量），变量名取配置里 token_key_env 的
+// 实际值（改了之后 sync 跟着改）。没有 lobby / relay 的服务不受影响。
+func TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey(t *testing.T) {
+	root, m := newLobbyProject(t)
+	lobbyPort := portsOf(m, "lobby").Web
+	relayTCP, relayWS := relayPorts(m, "relay")
+	check := func(env string) {
+		t.Helper()
+		lobby := readProjectFile(t, root, "deploy/k8s/base/lobby.yaml")
+		relay := readProjectFile(t, root, "deploy/k8s/base/relay.yaml")
+		account := readProjectFile(t, root, "deploy/k8s/base/account.yaml")
+		secretRef := "            - name: " + env + "\n              valueFrom:\n                secretKeyRef: {name: party-relay-token, key: " + env + "}\n"
+		for _, tc := range []struct{ file, body, want string }{
+			{"lobby.yaml", lobby, secretRef},
+			{"lobby.yaml", lobby, "            - name: lobby-http\n              containerPort: " + strconv.Itoa(lobbyPort) + "\n              protocol: TCP\n"},
+			{"lobby.yaml", lobby, "    - {name: lobby-http, port: " + strconv.Itoa(lobbyPort) + ", targetPort: lobby-http, protocol: TCP}\n"},
+			{"relay.yaml", relay, secretRef},
+			{"relay.yaml", relay, "            - name: relay-tcp\n              containerPort: " + strconv.Itoa(relayTCP) + "\n"},
+			{"relay.yaml", relay, "            - name: relay-ws\n              containerPort: " + strconv.Itoa(relayWS) + "\n"},
+			{"relay.yaml", relay, "    - {name: relay-ws, port: " + strconv.Itoa(relayWS) + ", targetPort: relay-ws, protocol: TCP}\n"},
+		} {
+			if !strings.Contains(tc.body, tc.want) {
+				t.Errorf("%s lacks %q:\n%s", tc.file, tc.want, tc.body)
+			}
+		}
+		if strings.Contains(account, "secretKeyRef") || strings.Contains(account, "lobby-http") {
+			t.Errorf("account.yaml got the lobby / relay settings:\n%s", account)
+		}
+		policy := readProjectFile(t, root, "deploy/k8s/base/network-policy.yaml")
+		for _, port := range []int{lobbyPort, relayTCP, relayWS} {
+			if !strings.Contains(policy, "roost.tjbdwanghaibo.io/player-access: \"true\"") || !strings.Contains(policy, "        - {protocol: TCP, port: "+strconv.Itoa(port)+"}\n") {
+				t.Errorf("network-policy.yaml does not open %d to the player-access namespaces:\n%s", port, policy)
+			}
+		}
+		// Secret 示例只在创建时写一次（同其他 Secret 示例，归应用），改名之后不再重写。
+		if secret := readProjectFile(t, root, "deploy/k8s/base/secret.relay-token.example.yaml"); !strings.Contains(secret, "  name: party-relay-token\n") || !strings.Contains(secret, "  "+relayTokenKeyEnv+": CHANGE_ME\n") {
+			t.Errorf("secret.relay-token.example.yaml:\n%s", secret)
+		}
+		compose := readProjectFile(t, root, "deploy/docker/docker-compose.prod.yaml")
+		for _, want := range []string{
+			"  lobby:\n", "    environment:\n      " + env + ": ${" + env + ":?",
+			"    ports:\n      - \"" + strconv.Itoa(lobbyPort) + ":" + strconv.Itoa(lobbyPort) + "\"\n",
+			"    ports:\n      - \"" + strconv.Itoa(relayTCP) + ":" + strconv.Itoa(relayTCP) + "\"\n      - \"" + strconv.Itoa(relayWS) + ":" + strconv.Itoa(relayWS) + "\"\n",
+		} {
+			if !strings.Contains(compose, want) {
+				t.Errorf("docker-compose.prod.yaml lacks %q:\n%s", want, compose)
+			}
+		}
+		if strings.Count(compose, "    environment:\n") != 2 {
+			t.Errorf("want the token key in the lobby and the relay only:\n%s", compose)
+		}
+		if example := readProjectFile(t, root, "deploy/docker/env.example"); !strings.Contains(example, "\n"+env+"=CHANGE_ME\n") {
+			t.Errorf("env.example:\n%s", example)
+		}
+		install := readProjectFile(t, root, "deploy/shell/install.sh")
+		for _, want := range []string{
+			"case \"$SERVICE\" in\n  lobby|relay)\n    RELAY_TOKEN_KEY=${" + env + ":-}\n",
+			"printf '%s=%s\\n' " + env + " \"$RELAY_TOKEN_KEY\" > \"$RELEASE_ROOT/relay-token.env\"",
+			"WorkingDirectory=$APP_ROOT/current\nEnvironmentFile=-$APP_ROOT/current/relay-token.env\nExecStart=",
+		} {
+			if !strings.Contains(install, want) {
+				t.Errorf("install.sh lacks %q", want)
+			}
+		}
+		if run := readProjectFile(t, root, "deploy/dev/run.sh"); !strings.Contains(run, env+"=\"${"+env+":-") || !strings.Contains(run, "relay "+strconv.Itoa(relayWS)+" relay.ws_listen (WebSocket)") {
+			t.Errorf("deploy/dev/run.sh does not name %s / the client ports", env)
+		}
+	}
+	check(relayTokenKeyEnv)
+
+	// 改了 token_key_env（全部 lobby、relay 配置），sync 之后部署模板跟着用新的变量名。
+	for _, service := range []string{"lobby", "relay"} {
+		for _, rel := range serviceConfigRels(service) {
+			body := readProjectFile(t, root, rel)
+			edited := strings.Replace(body, "  token_key_env: "+relayTokenKeyEnv+"\n", "  token_key_env: PARTY_RELAY_KEY\n", 1)
+			if edited == body {
+				t.Fatalf("%s: edit did not apply", rel)
+			}
+			writeProjectFile(t, root, rel, edited)
+		}
+	}
+	syncProject(t, root)
+	compose := readProjectFile(t, root, "deploy/docker/docker-compose.prod.yaml")
+	if strings.Contains(compose, relayTokenKeyEnv) {
+		t.Fatalf("after renaming token_key_env the compose still injects %s:\n%s", relayTokenKeyEnv, compose)
+	}
+	check("PARTY_RELAY_KEY")
+}

@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+# deploy 组变异：每条替换一处关键代码，跑对应用例，要求变红；之后恢复原文件并确认变绿。
+import subprocess, sys, os
+CORE = "$SCRATCH/b1117-lr-deploy/wt-new"
+R = CORE + "/codegen/internal/roost/"
+MUTATIONS = [
+ ("M1 account-games 不比较游戏", R+"lobby_relay.go", "if _, ok := served[game]; !ok {", "if _, ok := served[game]; ok && false {", "TestDoctorLobbyRelayAccountGames"),
+ ("M2 account-games 不进 doctor", R+"lobby_relay.go", ", checkLobbyRelayAdvertise(root, m), checkLobbyRelayAccountGames(root, m)}", ", checkLobbyRelayAdvertise(root, m)}", "TestDoctorLobbyRelayAccountGames"),
+ ("M3 websocket.addr 不带 listen 标签", R+"player_tcp_config.go", "`config:\"addr\" listen:\"`+listen+`\"`", "`config:\"addr\"`", "TestWebSocketAddressesTakePartInThePortCheck"),
+ ("M4 空地址照样比较", R+"config_across_services.go", "relay.ws_listen）就是这样表示“不开”的；有缺省值的监听地址不会走到这里。\n\t\t\t\tcontinue", "relay.ws_listen）就是这样表示“不开”的；有缺省值的监听地址不会走到这里。\n\t\t\t\t_ = 0", "TestWebSocketAddressesTakePartInThePortCheck"),
+ ("M5 没声明 websocket 的键不单独报", R+"config_schema_doctor.go", "\tif playerWebSocketEnabled(m) {\n\t\treturn nil, unread", "\tif true {\n\t\treturn nil, unread", "TestWebSocketKeysWithoutTheTransportAreRefused"),
+ ("M6 新条目不按名字排", R+"lobby_relay.go", "if key.Value > entry.Key {", "if false && key.Value > entry.Key {", "TestEnsureYAMLMapEntriesInsertsInNameOrder|TestAddLobbyRelayKeepsAccountServicesInNameOrder"),
+ ("M7 k8s 不发布客户端容器端口", R+"render_deploy.go", "\t\tfmt.Fprintf(&head, \"            - name: %s\\n              containerPort: %d\\n              protocol: TCP\\n\", port.Name, port.Port)", "\t\t_ = port", "TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey|TestPlayerWebSocketPortIsDeployed"),
+ ("M8 k8s 不注入令牌密钥", R+"render_deploy.go", "\thead.WriteString(kubernetesRelayTokenEnv(m, service))", "\t_ = kubernetesRelayTokenEnv", "TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey"),
+ ("M9 compose 不加环境变量与端口", R+"render_cicd.go", "\t\tb.WriteString(composeClientSettings(m, service))", "\t\t_ = composeClientSettings", "TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey|TestPlayerWebSocketPortIsDeployed"),
+ ("M10 NetworkPolicy 不放行客户端端口", R+"render_deploy.go", "\t\t\tports = append(ports, port.Port)", "\t\t\t_ = port", "TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey|TestPlayerWebSocketPortIsDeployed"),
+ ("M11 unit 不读环境文件", R+"lobby_relay.go", "\treturn \"EnvironmentFile=-$APP_ROOT/current/\" + relayTokenEnvFile + \"\\n\"", "\treturn \"\"", "TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey"),
+ ("M12 变量名不取配置的实际值", R+"lobby_relay.go", "\t\t\t\t\tm.relayTokenKeyEnv = env\n", "\t\t\t\t\t_ = env\n", "TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey"),
+ ("M13 不发布玩家 WebSocket 端口", R+"lobby_relay.go", "\tif playerWebSocketEnabled(m) && servicePlayerListener(m, service) {", "\tif false && servicePlayerListener(m, service) {", "TestPlayerWebSocketPortIsDeployed"),
+ ("M14 ROOST_YAML 不改写", R+"render_docs.go", "\tif !playerWebSocketEnabled(m) {\n\t\treturn guide", "\tif true {\n\t\treturn guide", "TestPlayerWebSocketPortIsDeployed"),
+ ("M15 install.sh 不检查密钥", R+"lobby_relay.go", "    RELAY_TOKEN_KEY=${` + env + `:-}\n", "    RELAY_TOKEN_KEY=x\n", "TestLobbyRelayDeploymentPublishesClientPortsAndTheTokenKey"),
+]
+def run(pattern):
+    r = subprocess.run(["go", "test", "-count=1", "-run", "^(" + pattern + ")$", "./codegen/internal/roost/"], cwd=CORE, env=dict(os.environ, GOWORK="off"), capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+ok = True
+for name, path, old, new, pattern in MUTATIONS:
+    src = open(path).read()
+    if src.count(old) != 1:
+        print(f"{name}: anchor found {src.count(old)} times; SKIPPED-BROKEN"); ok = False; continue
+    open(path, "w").write(src.replace(old, new))
+    try:
+        code, out = run(pattern)
+    finally:
+        open(path, "w").write(src)
+    fails = [l.strip() for l in out.splitlines() if l.startswith("--- FAIL")]
+    print(f"{name}: {'RED' if code != 0 else 'GREEN(!)'} {fails}")
+    if code == 0: ok = False
+code, out = run("|".join(sorted({m[4] for m in MUTATIONS})))
+print("restored:", "GREEN" if code == 0 else "RED\n" + out[-2000:])
+sys.exit(0 if ok and code == 0 else 1)
