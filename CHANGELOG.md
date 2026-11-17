@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+- **修复：remoteentity——请求一个内存与权威里都不存在的 Remote 实体时，写准入不再先认领它**（2026-11-18，facebook 实施中发现，维护者定查清并修框架）：Nest 请求（含只读请求）声明一个没有所有权记录、在本进程内存与权威里都不存在的 Remote 实体时，先确认存在再认领；不存在就照旧答 `entity_not_found`、不留空认领。修前一次只读请求就会把它独占认领给本进程，别的进程之后认领不了、切不了共享，且没有时限（facebook 收件箱在真实依赖下踩到）。`remote_entity.empty_claim_total{left}` 不再计这种情形。新用例 `TestRequestOnAnEntityThatDoesNotExistClaimsNothing` 修前红，两个变异红；去掉 facebook 读守卫后 `TestAllianceE2ESocialTeamInvite` 修前红、修后绿。[证据](docs/maintenance/evidence/nest-readonly-claim-20261118/README.md)
+- **C# 开房间 SDK 支持 Unity WebGL（维护者 2026-11-18 定 A1）**：
+  - `RelayClientOptions.PumpDriven`（缺省 false，其他平台不变）打开时不用线程池与计时器：读循环在主线程上起，所有等待回到调用者的上下文；
+    心跳、读超时、连接超时、重连退避由 `Pump` 按时钟检查。
+  - `LobbyClient` 的 HTTP 抽成 `ILobbyHttp`：缺省 `HttpClientLobbyHttp`，WebGL 用 `UnityWebRequest` 实现，参考
+    `unity-webgl-smoke/Assets/RelaySmoke/UnityWebRequestLobbyHttp.cs`，替换原来的 `UnityWebRequestHandler`。新构造函数
+    `LobbyClient(url, token, ILobbyHttp, pumpDriven)`；`PumpDriven` 的 `RelayClient` 要求 lobby 也是 `pumpDriven`。
+  - `RelayCodec.ReadAsync(IRelayTransport, …)` 多一个可选参数 `continueOnCapturedContext`。
+  - 实测：Unity 6000.7.0b7 WebGL 构建在浏览器里建房、加入、收发、停 45s / 60s、离开，两次通过；同一构建关掉开关仍卡在第一个 lobby 请求。
+    .NET 新增单线程用例组：关开关红、开开关绿，变异 6 处红。
+  - 不 `Pump` 时：成员超过 relay `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）被断开，恢复 `Pump` 后按 `ReconnectAttempts` 重连。
+  - 测试对端新增 `ROOST_RELAYPEER_IDLE_MS`。
+  - [证据](docs/maintenance/evidence/sdk-webgl-a1-20261118/README.md)
+- **开房间 SDK 的高层离开多返回“房间已不在”标志（维护者 2026-11-18）**：签名改动，未上线不兼容。
+  - Go `Client.Leave` 返回 `(LeaveResult, error)`；
+  - C# `LeaveAsync` 返回 `RelayLeaveResult`；
+  - TS `leave()` / `WebHost.leave()` 返回 `{ roomGone }`。
+
+  lobby 答 `room_not_found` 时 `RoomGone` 为 true，正常离开为 false。
+- **Go 开房间 SDK 的 deflate 复用压缩器与解压器**（`sync.Pool` + `Reset`）：
+  - 压出的字节不变；
+  - 1KiB 快照压缩每次分配 1.08 MB → 836 B、68 µs → 5.9 µs；24 个子项 B/op 几何平均 −92%。
+
+  C# / TS 没有同类大分配，不改。
 - **Robot 逐步计时**：YAML 场景的每个顶层步骤自动计时（名字为两位序号加子树摘要，如 `30 retry(wait 250ms,alliance_op_status)`），代码搭的场景用 `scenario.Step(name, node)`。`RunSnapshot` / loadtest JSON 新增 `steps`：每步样本数、ok / failed、mean / p50 / p95 / max、`wait_mean_ms`（场景 wait 节点睡掉的时间）、`retry_attempts_avg / max`。`Runner.StepReport()` 可直接读取。`scripts/perf/demo-robot.sh` 的 `summary.json` 增加 `steps_by_mean_ms`。见 [Robot 报告解释](docs/framework/ROBOT.md#按运行的请求与流量)。
 - **测试：account 契约用例在 Redis Cluster 上的 10 条 `CROSSSLOT`**（2026-11-18，C6 B 实施时发现）：`createRoleService` 夹具在 Cluster 上前缀没带 hash tag（产品侧 Mod 本来就要求带），R2 只改了另一个夹具；改成同一写法后整包在 Cluster 上通过。[证据](docs/maintenance/evidence/c6-credential-version-20261118/README.md)
 - **改密码自动吊销游戏账号 token（交接 C6 第 1 点，维护者 2026-11-18 选 B；账号记录多一个字段，未上线不兼容）**：`svcaccount.Verified` 多 `CredentialVersion`（不透明字符串，至多 128 字节，空 = 渠道不提供，行为不变），账号记录多 `CredentialVersion`。`Login` 在写账号记录的同一次比较后写入里比较：存过且不同就把 `GameTokenGeneration` 加一（与 `RevokeGameTokens` 同一个计数），此前签发的 gt2 全部失效、之后签发的可用；第一次见到只记录，相同或空不动；被封的账号登录照样被拒，但版本变化照样落库。并发登录不会多加或丢加（同一个新版本只加一次，两个不同新版本加两次）。account_auth 模板的开发登录支持 `<dev_token>#<密码版本>` 演示，`verifyChannel` 注释写明接法；场景 6 → 7（只对新安装的模块）。手动的 `RevokeGameTokens` / `accountctl revoke-game-tokens` 仍在，用于当场吊销。证据 `docs/maintenance/evidence/c6-credential-version-20261118/`。 [证据](docs/maintenance/evidence/c6-credential-version-20261118/README.md)
