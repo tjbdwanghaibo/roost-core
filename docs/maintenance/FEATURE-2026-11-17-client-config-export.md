@@ -1,6 +1,6 @@
 # 配置表导出给客户端（client_export.config）：需求与维护者决定
 
-**状态**：**已定，实施中**（维护者 2026-11-17：data_version 先不做，两端各自处理；其余都按推荐）。实施完后，结论写进现行文档（`codegen/docs`、`docs/framework`、skill），本文留作来源。
+**状态**：**已定，实施中**（维护者 2026-11-17：登录时不核对数据版本，但数据版本号要记在服务端仓库的导出目录里、有地方能看到；其余都按推荐）。实施完后，结论写进现行文档（`codegen/docs`、`docs/framework`、skill），本文留作来源。
 
 ## 1. 背景
 
@@ -49,7 +49,11 @@
    - 生成代码自带一个小的 JSON 解析器，按字段强类型读取。不依赖 `JsonUtility`，不调用 UnityEngine，也不用反射，所以 IL2CPP 裁剪是安全的，不需要 `link.xml`。
    - JSON 形状照需求定：普通表是 `{"rows":[...]}`，键值表和 object 是单个对象。想用 `JsonUtility` 的游戏也能直接读。
    - 计算哈希前先把 CRLF 统一成 LF，防止 Windows 上 git 自动转换换行后对不上。
-4. **data_version 先不做**：进入游戏的回应里不带配置版本，SDK 不加比较方法，热更也不提示“客户端数据已过期”。两端各自处理各自的数据。
+4. **数据版本号：记录，但登录时不核对**（维护者 2026-11-17 两次答复）：
+   - `data_version` = 导出给客户端的全部表的数据哈希（按 LF）按表名排序后合起来再取 sha256，显示时用前 12 位十六进制。用内容哈希，不用递增数字：生成过程没有状态，同样的输入得到同样的版本号，保持逐字节可重复。
+   - **记在哪里**：服务端仓库的导出目录 `shared/config/manifest.json`（提交进仓库）；生成的 C# 里有常量 `ConfigTables.DataVersion`，客户端可以显示或上报。
+   - **在哪里看**：`roost generate` 和 doctor 的 `config-export:fresh` 打印当前版本号；`roost client sync` 打印“旧版本 → 新版本”，并存进同步记录。
+   - **不做**：进入游戏的回应里不带版本号，SDK 不做比较，热更也不提示“客户端数据已过期”。两端的数据各自处理。
 5. **index**：`//roost:table` 的字段加 `index` 选项，写法参照 cfggen：`index:"true"` 或 `index:"<名字>"`。服务端和客户端都生成二级查询。
 6. **CSV**：
    - 支持 `#` 开头的注释行，读取时忽略；
@@ -86,7 +90,7 @@ client_export:
 | --- | --- |
 | `data/<表>.json` | 只含客户端字段。普通表是 `{"rows":[...]}`，键值表和 object 是单个对象。字段名用 schema 里的 JSON 原名 |
 | `csharp/ConfigTables.cs`（必要时再拆成几个文件） | 每张表：一个 `[Serializable]` 行类型（public 字段，名字与 JSON 键一致），一个表类型（`Get(key)`、`TryGet`、`All`，以及按 index 生成的二级查询）。每个 object 或键值表：一个单例类型。另有一个读取入口 |
-| `manifest.json` | `kind: roost-config-export`、schema、core 和生成器的版本、每张表的 schema 哈希、数据哈希（按 LF）和行数、每个导出文件的哈希 |
+| `manifest.json` | `kind: roost-config-export`、schema、core 和生成器的版本、`data_version`（决定 4）、每张表的 schema 哈希、数据哈希（按 LF）和行数、每个导出文件的哈希 |
 
 C# 读取入口：
 - `ConfigTables Load(Func<string, string> readText)`：读文件的方式交给调用方，可以用 Resources、Addressables 或 StreamingAssets。只用 netstandard2.1 的纯 C#。
@@ -125,7 +129,7 @@ C# 读取入口：
 
 - 不做 Excel 数据源；需要的话走 Luban 加 `RegisterExternalTables`。
 - 不做运行时下发配置，也不做客户端热更配置。
-- 不做配置版本的运行时核对（data_version，维护者 2026-11-17 定的“先不处理”）。
+- 登录时不核对数据版本，也不做运行时比较（维护者 2026-11-17）；版本号只记录、可查看，见决定 4。
 - 不生成 Unity 专用代码（ScriptableObject、Addressables 接线）。
 - 自定义解析器的字段在客户端只能拿到原始字符串，由游戏自己解析。这一点写进限制。
 
