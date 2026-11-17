@@ -95,6 +95,7 @@ var (
 	ErrGameNotServed        = errors.New("lobby: game_not_served")       // 403 游戏不在 lobby.games 里
 	ErrNotHost              = errors.New("lobby: not_host")              // 403 只有房主能做
 	ErrWrongPassword        = errors.New("lobby: wrong_password")        // 403 密码不对
+	ErrKicked               = errors.New("lobby: kicked")                // 403 被房主踢出过这个房间（lobby 的被踢名单）
 	ErrRoomNotFound         = errors.New("lobby: room_not_found")        // 404 房间不存在、已过期、已关闭
 	ErrRoomFull             = errors.New("lobby: room_full")             // 409 满员
 	ErrRoomStarted          = errors.New("lobby: room_started")          // 409 已开始
@@ -106,7 +107,7 @@ var (
 
 var lobbyErrors = map[string]error{
 	"bad_request": ErrBadRequest, "unauthorized": ErrUnauthorized, "game_not_served": ErrGameNotServed,
-	"not_host": ErrNotHost, "wrong_password": ErrWrongPassword, "room_not_found": ErrRoomNotFound,
+	"not_host": ErrNotHost, "wrong_password": ErrWrongPassword, "kicked": ErrKicked, "room_not_found": ErrRoomNotFound,
 	"room_full": ErrRoomFull, "room_started": ErrRoomStarted, "transport_unavailable": ErrTransportUnavailable,
 	"too_large": ErrTooLarge, "no_relay": ErrNoRelay, "unavailable": ErrUnavailable,
 }

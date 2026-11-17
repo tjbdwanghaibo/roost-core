@@ -54,6 +54,15 @@ type player struct {
 	reconnected  chan relay.Welcome
 	custom       chan relay.Frame
 	conns        chan net.Conn // 拨出的 TCP 连接，用来模拟断网
+	ticket       relay.Ticket  // 最近一次 join 拿到的票据（测旧令牌）
+
+	// 换 host 的通知。
+	youAreHost   chan relay.YouAreHost
+	youAreMember chan uint64
+	hostChanging chan uint64
+	hostChanged  chan relay.HostEvent
+	hostResumed  chan relay.HostEvent
+	rejected     chan relay.Rejected
 }
 
 func newPlayer(t *testing.T, peer *testPeer, account string, opts relay.Options) *player {
@@ -61,7 +70,9 @@ func newPlayer(t *testing.T, peer *testPeer, account string, opts relay.Options)
 	p := &player{t: t, account: account, joins: &atomic.Int32{},
 		game: make(chan relay.Frame, 64), room: make(chan relay.Frame, 64), joined: make(chan relay.Member, 64),
 		left: make(chan relay.Member, 64), muted: make(chan bool, 64), disconnected: make(chan relay.Disconnect, 64),
-		reconnected: make(chan relay.Welcome, 64), custom: make(chan relay.Frame, 64), conns: make(chan net.Conn, 64)}
+		reconnected: make(chan relay.Welcome, 64), custom: make(chan relay.Frame, 64), conns: make(chan net.Conn, 64),
+		youAreHost: make(chan relay.YouAreHost, 64), youAreMember: make(chan uint64, 64), hostChanging: make(chan uint64, 64),
+		hostChanged: make(chan relay.HostEvent, 64), hostResumed: make(chan relay.HostEvent, 64), rejected: make(chan relay.Rejected, 64)}
 	httpClient := &http.Client{Transport: countJoins{p.joins, http.DefaultTransport}}
 	p.lobby = relay.NewLobby(peer.LobbyURL, relay.StaticGameToken(peer.IssueGameToken(account, game)), httpClient)
 	opts.Game = game
@@ -80,6 +91,12 @@ func newPlayer(t *testing.T, peer *testPeer, account string, opts relay.Options)
 	p.client.OnMuted(func(on bool) { p.muted <- on })
 	p.client.OnDisconnected(func(d relay.Disconnect) { p.disconnected <- d })
 	p.client.OnReconnected(func(w relay.Welcome) { p.reconnected <- w })
+	p.client.OnYouAreHost(func(e relay.YouAreHost) { p.youAreHost <- e })
+	p.client.OnYouAreMember(func(epoch uint64) { p.youAreMember <- epoch })
+	p.client.OnHostChanging(func(epoch uint64) { p.hostChanging <- epoch })
+	p.client.OnHostChanged(func(e relay.HostEvent) { p.hostChanged <- e })
+	p.client.OnHostResumed(func(e relay.HostEvent) { p.hostResumed <- e })
+	p.client.OnRejected(func(r relay.Rejected) { p.rejected <- r })
 	t.Cleanup(func() {
 		_ = p.client.Close()
 		select {
@@ -120,7 +137,22 @@ func (p *player) join(roomID, password string) relay.Welcome {
 	if err != nil {
 		p.t.Fatalf("%s join: %v", p.account, err)
 	}
+	p.ticket = ticket
 	return p.connect(ticket)
+}
+
+// lastConn 返回最近一次拨出的 TCP 连接（重连会拨新的）。
+func (p *player) lastConn() net.Conn {
+	p.t.Helper()
+	conn := recv(p.t, p.conns, p.account+" tcp connection")
+	for {
+		select {
+		case newer := <-p.conns:
+			conn = newer
+		default:
+			return conn
+		}
+	}
 }
 
 func recv[T any](t *testing.T, ch <-chan T, what string) T {
@@ -255,17 +287,30 @@ func TestRoomLifecycleAgainstRealRelayAndLobby(t *testing.T) {
 	if m := recv(t, host.left, "kicked member left"); m.Slot != 3 || m.Account != "member-2" || m.Reason != wire.RelayReasonKicked {
 		t.Fatalf("left %+v", m)
 	}
-	// 被踢的账号重新加入：lobby 照常签令牌，relay 拒绝（Closed{kicked}）。
-	if _, err := m2.client.Rejoin(context.Background()); !isClosed(err, wire.RelayReasonKicked) {
+	// 被踢记在 lobby（relay 报告 member_left{kicked}）：被踢的账号重新加入，lobby 的 join 答 403 kicked。
+	waitFor(t, "lobby records the kick", func() bool {
+		_, err := m2.lobby.JoinRoom(context.Background(), ticket.Room.ID, relay.JoinRoomRequest{Game: game, Password: "pw"})
+		return errors.Is(err, relay.ErrKicked)
+	})
+	var lobbyErr *relay.LobbyError
+	if _, err := m2.client.Rejoin(context.Background()); !errors.Is(err, relay.ErrKicked) || !errors.As(err, &lobbyErr) || lobbyErr.Status != 403 {
 		t.Fatalf("kicked member rejoin: %v", err)
 	}
+	// 拿还没过期的旧令牌直接连 relay：relay 本地记着被踢，Closed{kicked}，不再问 lobby。
+	if _, err := relay.NewClient(nil, relay.Options{Game: game}).Connect(context.Background(), m2.ticket); !isClosed(err, wire.RelayReasonKicked) {
+		t.Fatalf("kicked member with its old token: %v", err)
+	}
 
-	// 经 lobby 离开：席位让出，relay 断开这个账号（Closed{left}），房主收到 MemberLeft{left}。
+	// 离开：先在 relay 上发 Leave（Closed{left}），再经 lobby 让出席位；房主收到 MemberLeft{left}。
 	if err := m1.client.Leave(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if m := recv(t, host.left, "member left via lobby"); m.Slot != 2 || m.Reason != wire.RelayReasonLeft {
+	if m := recv(t, host.left, "member left"); m.Slot != 2 || m.Reason != wire.RelayReasonLeft {
 		t.Fatalf("left %+v", m)
+	}
+	// 席位让出后拿还没过期的旧令牌连 relay：令牌验签通过，lobby 验权不让进（不占席位），Closed{lobby_rejected}。
+	if _, err := relay.NewClient(nil, relay.Options{Game: game}).Connect(context.Background(), m1.ticket); !isClosed(err, wire.RelayReasonLobbyRejected) {
+		t.Fatalf("left member with its old token: %v", err)
 	}
 
 	if _, err := m2.lobby.SetRoomState(context.Background(), ticket.Room.ID, relay.SetRoomStateRequest{Game: game, State: relay.StateStarted}); !errors.Is(err, relay.ErrNotHost) {
@@ -281,9 +326,10 @@ func TestRoomLifecycleAgainstRealRelayAndLobby(t *testing.T) {
 }
 
 // 断线重连：连接自己断掉（模拟断网，relay 没发 Closed）时，Client 重新调 lobby 的 join 要令牌、再连 relay，
-// 之后游戏通道照常往返。房主断开时房间关闭（这一批），成员收到 Closed{room_closed}，即使开着自动重连也不重连。
+// 之后游戏通道照常往返。房主断开后宽限期满，唯一的成员被选为候选；它不回 HostReady，超时后收到 YouAreMember，
+// 没有别的候选就关房：成员收到 Closed{room_closed}，即使开着自动重连也不重连。
 func TestReconnectAsksTheLobbyForAFreshToken(t *testing.T) {
-	peer := startPeer(t, relaysvc.Config{})
+	peer := startPeer(t, relaysvc.Config{HostGrace: 200 * time.Millisecond, HostReadyTimeout: 300 * time.Millisecond})
 	host := newPlayer(t, peer, "host-r", relay.Options{})
 	ticket, err := host.lobby.CreateRoom(context.Background(), relay.CreateRoomRequest{Game: game, Mode: "coop"})
 	if err != nil {
@@ -325,9 +371,15 @@ func TestReconnectAsksTheLobbyForAFreshToken(t *testing.T) {
 	}
 	mustFrame(t, recv(t, member.game, "host frame after reconnect"), wire.RelayGame, 1, 2, "welcome back")
 
-	// 房主断开：这一批关房；成员收到 room_closed，不重连。
+	// 房主断开：宽限期满选中成员当候选；成员不回 HostReady，超时后 YouAreMember，然后关房，不重连。
 	if err := host.client.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if offer := recv(t, member.youAreHost, "you are host"); offer.Epoch != 1 || offer.Source != relay.StateNone || !member.client.Role().Candidate {
+		t.Fatalf("offer %+v role %+v", offer, member.client.Role())
+	}
+	if epoch := recv(t, member.youAreMember, "candidate timed out"); epoch != 1 || member.client.Role().Candidate {
+		t.Fatalf("you are member %d role %+v", epoch, member.client.Role())
 	}
 	if d := recv(t, member.disconnected, "room closed"); d.Reason != wire.RelayReasonRoomClosed || d.Reconnecting {
 		t.Fatalf("room closed disconnect %+v", d)

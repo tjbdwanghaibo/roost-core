@@ -1,0 +1,70 @@
+## C1 快照 seq 接续：YouAreHost 不再把 seq 接到 max(本地, relay 存的, epoch<<32)
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - client.snapshotSeq = Math.Max(client.snapshotSeq, Math.Max(offer.SnapshotSeq, SeqFloor(offer.Epoch)));
+  + 
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Check failed: C# SDK sends relay_snapshot like Go (5253021800000053000000000000000a0000000000000001abcd vs 5253021800000053000000000000000a0000000000000007abcd)
+
+## C2 角色更新：HostChanged 不再把自己记成房主
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - isHost = frame.Slot == client.role.Slot;
+  + isHost = false;
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Check failed: fake relay made the client host: slot 3, host False, candidate False, host slot 3, epoch 0
+
+## C3 房主心跳间隔：房主也按成员的 PingInterval（10s）发
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - interval = role.IsHost || candidate ? options.HostPingInterval.Ticks : options.PingInterval.Ticks;
+  + interval = options.PingInterval.Ticks;
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Timed out waiting for two automatic snapshots
+
+## C4 交接数据解析：YouAreHost 的状态字节不经 Compressor 解压
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - try { offer = offer.WithState(client.options.Compressor.Decompress(offer.State, RelayCompressors.MaxStateBytes), null); }
+  + try { offer = offer.WithState(offer.State, null); }
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Check failed: handoff offer
+
+## C5 lobby_rejected 后停止重连：把 lobby_rejected 当成可重试
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - || closed.Reason == RelayReason.LobbyUnavailable
+  + || closed.Reason == RelayReason.LobbyUnavailable || closed.Reason == RelayReason.LobbyRejected
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Check failed: stopped on lobby_rejected: Disconnected (reconnecting False): relay: reconnect gave up after 50 attempts.
+
+## C6 lobby_unavailable 按退避重试：不再重试
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - || closed.Reason == RelayReason.LobbyUnavailable
+  + 
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Timed out waiting for several attempts while the lobby is down
+
+## C7 踢人记在 lobby：错误名 kicked 不映射到 LobbyErrorCode.Kicked
+变异：client/dotnet/Roost.Client.Relay/LobbyClient.cs
+  - ["kicked"] = LobbyErrorCode.Kicked,
+  + 
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Timed out waiting for lobby records the kick
+
+## C8 定时快照：候选（未就绪）也按房主推
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - if (role.IsHost && options.SnapshotState != null && !autoQueued)
+  + if ((role.IsHost || candidate) && options.SnapshotState != null && !autoQueued)
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Check failed: candidate does not push before HostReady
+## C3 房主心跳间隔：房主也按成员的 PingInterval（10s）发（只跑房主心跳用例）
+变异：client/dotnet/Roost.Client.Relay/RelayClient.cs
+  - interval = role.IsHost || candidate ? options.HostPingInterval.Ticks : options.PingInterval.Ticks;
+  + interval = options.PingInterval.Ticks;
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; cd client/dotnet && ROOST_RELAY_TESTS_ONLY='host heartbeat' dotnet run --project Roost.Client.Relay.Tests -- /Users/whb/roost/roost-core
+结果：RED（exit 1）
+FAILED: System.Exception: Check failed: no host change for 5.5s

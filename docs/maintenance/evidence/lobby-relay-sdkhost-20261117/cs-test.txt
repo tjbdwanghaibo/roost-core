@@ -1,0 +1,20 @@
+# HEAD 302b3fb6 + 本组未提交改动；2026-11-17 16:55:51
+$ (cd client/dotnet && dotnet run --project Roost.Client.Relay.Tests -- <root>)
+golden: ok
+unknown control op: ok
+compressors: ok
+host frames against a fake relay: ok
+peer: lobby http://127.0.0.1:50842, relay 127.0.0.1:50840, room directory redis
+lobby errors: ok
+room lifecycle: ok
+reconnect: ok
+host transfer: ok
+host loss → snapshot to the declared successor: ok
+host resumed within the grace period: ok
+host leave uses the successor order: ok
+snapshot pacing and rejections: ok
+automatic snapshots: ok
+host heartbeat under host_idle_timeout: ok
+reconnect vs lobby_unavailable / lobby_rejected: ok
+started room: reconnect, rejoin, kick an offline seat: ok
+all 345 checks passed

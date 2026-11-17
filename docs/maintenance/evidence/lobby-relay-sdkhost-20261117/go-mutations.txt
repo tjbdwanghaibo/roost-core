@@ -1,0 +1,90 @@
+## G1 快照 seq 接续：YouAreHost 不再把 seq 接到 max(本地, relay 存的, epoch<<32)
+变异：client/relay/host.go
+  - c.host.snapSeq = max(c.host.snapSeq, offer.SnapshotSeq, seqFloor(offer.Epoch))
+  + 
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'SnapshotSeqContinues|TestTransferHands' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestSnapshotSeqContinuesAcrossHosts (0.00s)
+--- FAIL: TestTransferHandsTheHandoffToTheNewHost (0.01s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.541s
+
+## G2 角色更新：HostChanged 不再把自己记成房主
+变异：client/relay/host.go
+  - c.role.HostSlot, c.role.Host = f.Slot, f.Slot == c.role.Slot
+  + c.role.HostSlot, c.role.Host = f.Slot, false
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestTransferHands|TestSDKHostFrames|TestHostLoss' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestSDKHostFramesMatchRelayGolden (0.00s)
+--- FAIL: TestTransferHandsTheHandoffToTheNewHost (0.01s)
+--- FAIL: TestHostLossHandsTheSnapshotToTheDeclaredSuccessor (0.31s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.827s
+
+## G3 房主心跳间隔：房主也按成员的 PingInterval（10s）发
+变异：client/relay/host.go
+  - return c.opts.HostPingInterval
+  + return c.opts.PingInterval
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestHostHeartbeat' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestHostHeartbeatKeepsTheHostAliveUnderTheHostIdleTimeout (5.51s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	6.034s
+
+## G4 交接数据解析：YouAreHost 的状态字节不经 Compressor 解压
+变异：client/relay/host.go
+  - event.State, event.StateErr = c.opts.Compressor.Decompress(offer.State, MaxStateBytes)
+  + event.State = offer.State
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestTransferHands|TestHostLoss' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestTransferHandsTheHandoffToTheNewHost (0.01s)
+--- FAIL: TestHostLossHandsTheSnapshotToTheDeclaredSuccessor (0.31s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.829s
+
+## G5 lobby_rejected 后停止重连：把 lobby_rejected 当成可重试
+变异：client/relay/client.go
+  - case wire.RelayReasonTokenRejected, wire.RelayReasonLobbyUnavailable:
+  + case wire.RelayReasonTokenRejected, wire.RelayReasonLobbyUnavailable, wire.RelayReasonLobbyRejected:
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestReconnectRetries' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestReconnectRetriesWhenTheLobbyIsDownAndStopsWhenItRejects (2.24s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	2.761s
+
+## G6 lobby_unavailable 按退避重试：不再重试
+变异：client/relay/client.go
+  - case wire.RelayReasonTokenRejected, wire.RelayReasonLobbyUnavailable:
+  + case wire.RelayReasonTokenRejected:
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestReconnectRetries' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestReconnectRetriesWhenTheLobbyIsDownAndStopsWhenItRejects (5.02s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	5.532s
+
+## G7 踢人记在 lobby：lobby 错误名 kicked 不映射到 ErrKicked
+变异：client/relay/lobby.go
+  - "kicked": ErrKicked,
+  + 
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestRoomLifecycle|Started' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestRoomLifecycleAgainstRealRelayAndLobby (5.04s)
+--- FAIL: TestReconnectAfterTheRoomStartedAndKickingAnOfflineSeat (5.09s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	10.622s
+
+## G8 AutoHostReady：回调返回后不自动回 HostReady
+变异：client/relay/host.go
+  - if c.opts.AutoHostReady {
+			_ = c.HostReady(offer.Epoch)
+  + if false {
+			_ = c.HostReady(offer.Epoch)
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestHostLoss' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestHostLossHandsTheSnapshotToTheDeclaredSuccessor (5.31s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	5.827s
+
+## G9 第一次（用例弱）：GREEN——候选的计数与房主共用、在 Leave 返回之后才读，候选在 Leave 返回前就推了，被算进基线。
+改成候选单独计数、HostReady 之后才应推之后重跑：
+
+## G9 定时快照：候选（未就绪）也按房主推
+变异：client/relay/host.go
+  - if !c.role.Host || c.opts.SnapshotState == nil {
+  + if !(c.role.Host || c.host.candidate) || c.opts.SnapshotState == nil {
+命令：source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1; go test -count=1 -run 'TestAutoSnapshot' ./client/relay/
+结果：RED（exit 1）
+--- FAIL: TestAutoSnapshotIsPushedWhileHost (0.51s)
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	1.245s

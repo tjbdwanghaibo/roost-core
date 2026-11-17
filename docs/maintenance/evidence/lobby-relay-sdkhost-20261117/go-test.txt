@@ -1,0 +1,22 @@
+# HEAD 302b3fb6 + 本组未提交改动；2026-11-17 16:51:29
+$ GOWORK=off go test -race -count=1 -v ./client/relay/
+--- PASS: TestSDKFramesMatchRelayGolden (0.00s)
+--- PASS: TestUnknownControlOpIsDroppedOrHandedToOnControl (0.00s)
+--- PASS: TestSDKHostFramesMatchRelayGolden (0.00s)
+--- PASS: TestSnapshotSeqContinuesAcrossHosts (0.00s)
+--- PASS: TestCompressors (0.00s)
+--- PASS: TestRoomLifecycleAgainstRealRelayAndLobby (0.04s)
+--- PASS: TestReconnectAsksTheLobbyForAFreshToken (0.53s)
+--- PASS: TestHeartbeatKeepsTheConnectionAlive (1.42s)
+--- PASS: TestLobbyErrorsMapToSentinels (0.00s)
+--- PASS: TestTransferHandsTheHandoffToTheNewHost (0.01s)
+--- PASS: TestHostLossHandsTheSnapshotToTheDeclaredSuccessor (0.31s)
+--- PASS: TestHostLeaveUsesTheSuccessorOrder (0.02s)
+--- PASS: TestHostResumesWithinTheGracePeriod (0.03s)
+--- PASS: TestSnapshotPacingAndRejections (0.02s)
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.54s)
+--- PASS: TestHostHeartbeatKeepsTheHostAliveUnderTheHostIdleTimeout (5.51s)
+--- PASS: TestReconnectRetriesWhenTheLobbyIsDownAndStopsWhenItRejects (0.18s)
+--- PASS: TestReconnectAfterTheRoomStartedAndKickingAnOfflineSeat (0.10s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	10.046s

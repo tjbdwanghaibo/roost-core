@@ -14,7 +14,12 @@
 //	client.SendGame(relay.All, 101, payload)               // 房主：发给全体成员；成员：只到房主
 //
 // 心跳：每 PingInterval 发一个 RelayOpPing（relay 的空闲超时缺省 30s，客户端缺省 10s 一次），relay 原样回 Pong，
-// 据此测 RTT；ReadTimeout 内一帧都没收到就当断线。断线后重连要重新向 lobby 要令牌：Rejoin 调 lobby 的 join
+// 据此测 RTT；ReadTimeout 内一帧都没收到就当断线。当房主（含候选）时改按 HostPingInterval（缺省 600ms）发：relay 的
+// host_idle_timeout 缺省 2s，没帧就当房主断线。
+//
+// 换 host（host.go）：relay 发来的 YouAreHost / YouAreMember / HostChanging / HostChanged / HostResumed / Rejected
+// 解成结构交给 OnYouAreHost 等回调，SDK 按它们记当前角色（Role）；房主可以 Transfer、SetSuccessors、Snapshot，
+// 新房主回 HostReady。当房主时可以让 SDK 定时推快照（Options.SnapshotState）。断线后重连要重新向 lobby 要令牌：Rejoin 调 lobby 的 join
 // （对已在房间里的人幂等）再连 relay；Options.Reconnect 打开时 Client 自己按退避重试。
 //
 // 并发：Client 的方法可以从任意 goroutine 调用。回调都在这条连接的读 goroutine 上依次执行，回调里可以 Send、Kick、
@@ -101,8 +106,8 @@ func (e *ClosedError) Error() string { return "relay: closed by relay: " + e.Rea
 // 每次尝试都先向 lobby 要新令牌（join 幂等），再连 relay；两次尝试之间按指数退避，从 MinBackoff 翻倍到 MaxBackoff。
 //
 // 只有连接自己断掉（读写出错、超时，没收到 Closed）或 relay 以 idle_timeout 断开时才重连；被踢、房间关闭、
-// 被顶号、经 lobby 离开、relay 停机等原因不重连。尝试中 lobby 答 4xx（房间没了、被拒）或 relay 答终止性的 Closed
-// 时立即停止。
+// 被顶号、经 lobby 离开、relay 停机等原因不重连。尝试中 lobby 答 4xx（房间没了、被拒、被踢）或 relay 答终止性的
+// Closed（含 lobby_rejected）时立即停止；relay 答 lobby_unavailable（向 lobby 验权失败）时按退避再试。
 type ReconnectPolicy struct {
 	MaxAttempts int
 	MinBackoff  time.Duration
@@ -126,9 +131,31 @@ type Options struct {
 	// WriteTimeout 是一次写 socket 的期限，缺省 10s；写不出去就断开。
 	WriteTimeout time.Duration
 	// MaxPayloadBytes 是收帧的载荷上限，缺省 wire.DefaultMaxPayload（1 MiB）；要不小于 relay 的 max_payload_bytes。
+	// 实际的收帧上限还要装得下 YouAreHost（见 SnapshotMaxBytes），取两者的大值。
 	MaxPayloadBytes int
 	// Reconnect 是自动重连，缺省关闭。
 	Reconnect ReconnectPolicy
+
+	// 换 host（方案 §4.6，见 host.go）。
+
+	// HostPingInterval 是当房主（含候选）时的心跳间隔，缺省 600ms：要短于 relay.host_idle_timeout（缺省 2s）的三分之一，
+	// 否则房主没有别的帧要发时会被 relay 当成断线。
+	HostPingInterval time.Duration
+	// AutoHostReady 为 true 时，OnYouAreHost 的回调返回后 SDK 自动回 HostReady；缺省 false：游戏准备好后自己调 HostReady。
+	AutoHostReady bool
+	// SnapshotState 返回当房主时定时推送的状态字节（压缩前，返回 nil 时这一轮不推）；nil 时不定时推，游戏可以随时调 Snapshot。
+	// 在心跳 goroutine 上调用，与其他回调并发：游戏自己保证读状态的并发安全。
+	SnapshotState func() []byte
+	// SnapshotInterval 是定时推送的间隔，缺省 3s（方案 §4.6.3）。
+	SnapshotInterval time.Duration
+	// SnapshotMinInterval 是两份快照之间的最小间隔，缺省 1s（relay.snapshot_min_interval 的缺省）；更密的 Snapshot 不发。
+	SnapshotMinInterval time.Duration
+	// SnapshotMaxBytes 是快照与交接数据压缩后的上限，缺省 256 KiB（relay.snapshot_max_bytes 的缺省，要与 relay 一致）；
+	// 收帧上限至少是它加 16 KiB（YouAreHost 的成员名单），装得下带满快照的 YouAreHost。
+	SnapshotMaxBytes int
+	// Compressor 压缩快照与交接数据（发出前压缩，YouAreHost 交来时解压）；nil 用 Deflate，NoCompression 不压缩。
+	// 房间里每个客户端要用同一种。
+	Compressor Compressor
 }
 
 func (o Options) withDefaults() Options {
@@ -146,8 +173,17 @@ func (o Options) withDefaults() Options {
 	setDur(&o.WriteTimeout, 10*time.Second)
 	setDur(&o.Reconnect.MinBackoff, 500*time.Millisecond)
 	setDur(&o.Reconnect.MaxBackoff, 5*time.Second)
+	setDur(&o.HostPingInterval, 600*time.Millisecond)
+	setDur(&o.SnapshotInterval, 3*time.Second)
+	setDur(&o.SnapshotMinInterval, time.Second)
 	if o.MaxPayloadBytes <= 0 {
 		o.MaxPayloadBytes = wire.DefaultMaxPayload
+	}
+	if o.SnapshotMaxBytes <= 0 {
+		o.SnapshotMaxBytes = 256 << 10
+	}
+	if o.Compressor == nil {
+		o.Compressor = Deflate
 	}
 	if o.ReadTimeout <= o.PingInterval {
 		o.ReadTimeout = 3 * o.PingInterval
@@ -163,8 +199,11 @@ type handlers struct {
 	disconnected             func(Disconnect)
 	reconnected              func(Welcome)
 	control                  map[uint32]func(Frame)
-	// 换 host 的回调位置（尚未接线，见 OnYouAreHost）。
-	youAreHost, hostChanging, hostChanged, hostResumed func(Frame)
+	// 换 host（host.go）。
+	youAreHost                 func(YouAreHost)
+	youAreMember, hostChanging func(epoch uint64)
+	hostChanged, hostResumed   func(HostEvent)
+	rejected                   func(Rejected)
 }
 
 // session 是一条已进房的 relay 连接。
@@ -174,13 +213,15 @@ type session struct {
 	welcome Welcome
 	writeMu sync.Mutex
 	stop    chan struct{} // 连接结束时关闭，停掉心跳
+	wake    chan struct{} // 角色变了：叫醒心跳 goroutine 按新角色重算间隔（容量 1）
 }
 
 // Client 是一个玩家在一个房间里的 relay 连接（含断线重连）。用 NewClient 建，Close 之后不能再用。
 type Client struct {
-	lobby *Lobby
-	opts  Options
-	base  time.Time // Ping 载荷的时间基准（单调时钟）
+	lobby      *Lobby
+	opts       Options
+	frameLimit int       // 收发帧的载荷上限：MaxPayloadBytes 与装得下 YouAreHost 的大小取大值
+	base       time.Time // Ping 载荷的时间基准（单调时钟）
 
 	ctx    context.Context // Close 时取消：打断重连的退避与 lobby 调用
 	cancel context.CancelFunc
@@ -190,7 +231,8 @@ type Client struct {
 	running bool // 有连接，或正在重连
 	roomID  string
 	current *session
-	role    Welcome
+	role    Welcome   // 当前角色：Welcome 给出，换 host 的控制帧更新（host.go）
+	host    hostState // epoch、候选、快照 seq 与时刻
 	rtt     time.Duration
 	done    chan struct{}
 	h       handlers
@@ -201,8 +243,9 @@ func NewClient(lobby *Lobby, opts Options) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	close(done)
-	return &Client{lobby: lobby, opts: opts.withDefaults(), base: time.Now(), ctx: ctx, cancel: cancel, done: done,
-		h: handlers{control: map[uint32]func(Frame){}}}
+	opts = opts.withDefaults()
+	return &Client{lobby: lobby, opts: opts, frameLimit: max(opts.MaxPayloadBytes, opts.SnapshotMaxBytes+8+youAreHostOverhead),
+		base: time.Now(), ctx: ctx, cancel: cancel, done: done, h: handlers{control: map[uint32]func(Frame){}}}
 }
 
 // OnGame 注册游戏通道的回调：房主收到成员的帧（Slot 是成员槽位），成员收到房主的帧（Slot 是房主槽位）。
@@ -227,22 +270,6 @@ func (c *Client) OnDisconnected(fn func(Disconnect)) {
 
 // OnReconnected 注册自动重连成功的回调，参数是新连接的身份（成员重连后槽位可能变了）。
 func (c *Client) OnReconnected(fn func(Welcome)) { c.mu.Lock(); c.h.reconnected = fn; c.mu.Unlock() }
-
-// 换 host 的回调位置（方案 §4.6）。操作码在 64～127，由 host 组定编码表并追加进 client/spec/relay-packets.json；
-// 这一批还没有接线：relay 发来这些操作码时按“不认识的操作码”丢弃（注册了 OnControl 的照样交给它）。接线时在
-// controlHandlers 里加对应操作码、把载荷解成结构，再调用这些回调（参数会从原始帧换成解好的结构）。
-
-// OnYouAreHost 注册“自己成了新房主”（you_are_host）的回调。尚未接线。
-func (c *Client) OnYouAreHost(fn func(Frame)) { c.mu.Lock(); c.h.youAreHost = fn; c.mu.Unlock() }
-
-// OnHostChanging 注册“换 host 开始、暂停发给房主的游戏帧”（host_changing）的回调。尚未接线。
-func (c *Client) OnHostChanging(fn func(Frame)) { c.mu.Lock(); c.h.hostChanging = fn; c.mu.Unlock() }
-
-// OnHostChanged 注册“换 host 完成”（host_changed）的回调。尚未接线。
-func (c *Client) OnHostChanged(fn func(Frame)) { c.mu.Lock(); c.h.hostChanged = fn; c.mu.Unlock() }
-
-// OnHostResumed 注册“房主在宽限期内回来了”（host_resumed）的回调。尚未接线。
-func (c *Client) OnHostResumed(fn func(Frame)) { c.mu.Lock(); c.h.hostResumed = fn; c.mu.Unlock() }
 
 // OnControl 注册某个控制帧操作码的回调，是控制帧的扩展口：relay 发来的这个操作码的每一帧都交给它
 // （内置处理过的操作码先做内置处理，例如 MemberJoined 先解码再调 OnMemberJoined，然后再调这里）。
@@ -316,7 +343,8 @@ func (c *Client) start(roomID string, sess *session) error {
 		_ = sess.netConn.Close()
 		return ErrClosed
 	}
-	c.roomID, c.current, c.role = roomID, sess, sess.welcome
+	c.roomID, c.current = roomID, sess
+	c.setWelcomeLocked(sess.welcome)
 	done := make(chan struct{})
 	c.done = done
 	c.mu.Unlock()
@@ -334,8 +362,19 @@ func (c *Client) Done() <-chan struct{} {
 // Welcome 返回当前连接的身份；没有连接时是最后一次连接的身份。
 func (c *Client) Welcome() Welcome { c.mu.Lock(); defer c.mu.Unlock(); return c.role }
 
-// IsHost 报告自己是不是房主（以 relay 的 Welcome 为准）。
+// IsHost 报告自己是不是已就绪的房主（以 relay 的 Welcome 与换 host 的控制帧为准，见 Role）。
 func (c *Client) IsHost() bool { return c.Welcome().Host }
+
+// setWelcomeLocked 按一条 Welcome 记角色：不再是候选（候选被顶号时 relay 会在 Welcome 之后重发 YouAreHost）；
+// 当上房主（建房，或宽限期内回来）时重新算快照的最小间隔。epoch 保留（Welcome 不带）。
+func (c *Client) setWelcomeLocked(w Welcome) {
+	wasHost := c.role.Host
+	c.role = w
+	c.host.candidate = false
+	if w.Host && !wasHost {
+		c.becomeHostLocked()
+	}
+}
 
 // RoomID 是 Connect 时的房间号。
 func (c *Client) RoomID() string { c.mu.Lock(); defer c.mu.Unlock(); return c.roomID }
@@ -361,11 +400,13 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// Leave 经 lobby 离开房间（让出席位；房主离开由 relay 走换 host），然后 Close。返回 lobby 的错误。
+// Leave 离开房间，然后 Close：先在 relay 连接上发 RelayOpLeave（房主离开时 relay 不等宽限期，立即用存着的快照换 host；
+// 不经 lobby 也能离开），再经 lobby 离开（让出席位）。返回 lobby 的错误；没有连接时只经 lobby 离开。
 func (c *Client) Leave(ctx context.Context) error {
 	c.mu.Lock()
 	room := c.roomID
 	c.mu.Unlock()
+	_ = c.SendControl(wire.RelayOpLeave, 0, nil) // relay 回 Closed{left} 后断开
 	var err error
 	if c.lobby != nil && room != "" {
 		_, err = c.lobby.LeaveRoom(ctx, room, c.opts.Game)
@@ -405,8 +446,8 @@ func (c *Client) Mute(slot uint32, on bool) error {
 	return c.SendControl(wire.RelayOpMute, slot, []byte{flag})
 }
 
-// SendControl 发一个控制帧。踢人、禁言、心跳有专门的方法；它是控制帧的扩展口，换 host 的控制帧
-// （host_ready、transfer、successors、snapshot 等，操作码 64～127）下一批经它发出。
+// SendControl 发一个控制帧。踢人、禁言、心跳、换 host（HostReady、Transfer、SetSuccessors、Snapshot、Leave）
+// 有专门的方法；它是控制帧的扩展口。
 func (c *Client) SendControl(op, slot uint32, payload []byte) error {
 	return c.Send(Frame{Channel: wire.RelayControl, Slot: slot, MsgID: op, Payload: payload})
 }
@@ -414,7 +455,7 @@ func (c *Client) SendControl(op, slot uint32, payload []byte) error {
 // Send 发一帧。数据帧带上 Flags 的游戏位，控制帧只带通道位。没有连接时返回 ErrNotConnected；
 // 写失败时断开连接（之后按 Disconnect 通知）并返回错误。
 func (c *Client) Send(f Frame) error {
-	data, err := encodeFrame(f, c.opts.MaxPayloadBytes)
+	data, err := encodeFrame(f, c.frameLimit)
 	if err != nil {
 		return err
 	}
@@ -497,7 +538,7 @@ func (c *Client) handshake(netConn net.Conn, relayToken string) (*session, error
 		return nil, fmt.Errorf("relay: send token: %w", err)
 	}
 	reader := bufio.NewReader(netConn)
-	p, err := wire.ReadRelay(reader, c.opts.MaxPayloadBytes)
+	p, err := wire.ReadRelay(reader, c.frameLimit)
 	if err != nil {
 		return nil, fmt.Errorf("relay: read welcome: %w", err)
 	}
@@ -511,7 +552,7 @@ func (c *Client) handshake(netConn net.Conn, relayToken string) (*session, error
 	if err != nil {
 		return nil, err
 	}
-	return &session{netConn: netConn, reader: reader, stop: make(chan struct{}),
+	return &session{netConn: netConn, reader: reader, stop: make(chan struct{}), wake: make(chan struct{}, 1),
 		welcome: Welcome{Slot: p.Seq, Host: welcome.Host, HostSlot: welcome.HostSlot}}, nil
 }
 
@@ -539,7 +580,8 @@ func (c *Client) run(sess *session, done chan struct{}) {
 			if c.closed {
 				err = ErrClosed
 			} else {
-				c.current, c.role = next, next.welcome
+				c.current = next
+				c.setWelcomeLocked(next.welcome)
 			}
 			c.mu.Unlock()
 			if err != nil {
@@ -576,7 +618,7 @@ func (c *Client) serve(sess *session) (wire.RelayReason, error) {
 	defer sess.netConn.Close()
 	for {
 		_ = sess.netConn.SetReadDeadline(time.Now().Add(c.opts.ReadTimeout))
-		p, err := wire.ReadRelay(sess.reader, c.opts.MaxPayloadBytes)
+		p, err := wire.ReadRelay(sess.reader, c.frameLimit)
 		if err != nil {
 			if errors.Is(err, wire.ErrInvalidPacket) || errors.Is(err, wire.ErrPacketTooBig) {
 				return wire.RelayReasonProtocol, err
@@ -589,20 +631,40 @@ func (c *Client) serve(sess *session) (wire.RelayReason, error) {
 	}
 }
 
-// heartbeat 每 PingInterval 发一个 Ping，载荷是发出时刻（相对 base 的单调纳秒，8 字节大端），Pong 原样带回。
+// heartbeat 按当前角色的间隔发 Ping（成员 PingInterval，房主与候选 HostPingInterval），载荷是发出时刻（相对 base 的
+// 单调纳秒，8 字节大端），Pong 原样带回；当房主且设了 SnapshotState 时也在这里定时推快照。角色变了（roleChanged）
+// 立即按新角色重算，不等旧的间隔走完。
 func (c *Client) heartbeat(sess *session) {
-	ticker := time.NewTicker(c.opts.PingInterval)
-	defer ticker.Stop()
+	lastPing := time.Now()
+	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 	for {
+		interval := c.pingInterval()
+		next := lastPing.Add(interval)
+		snapDue, autoSnap := c.snapshotDue()
+		if autoSnap && snapDue.Before(next) {
+			next = snapDue
+		}
+		timer.Reset(time.Until(next))
 		select {
 		case <-sess.stop:
 			return
-		case <-ticker.C:
-			payload := binary.BigEndian.AppendUint64(nil, uint64(time.Since(c.base)))
-			data, err := encodeFrame(Frame{Channel: wire.RelayControl, MsgID: wire.RelayOpPing, Payload: payload}, c.opts.MaxPayloadBytes)
-			if err != nil || c.write(sess, data) != nil {
-				return
-			}
+		case <-sess.wake:
+			continue
+		case <-timer.C:
+		}
+		now := time.Now()
+		if autoSnap && !now.Before(snapDue) {
+			c.autoSnapshot()
+		}
+		if now.Sub(lastPing) < interval {
+			continue
+		}
+		lastPing = now
+		payload := binary.BigEndian.AppendUint64(nil, uint64(now.Sub(c.base)))
+		data, err := encodeFrame(Frame{Channel: wire.RelayControl, MsgID: wire.RelayOpPing, Payload: payload}, c.frameLimit)
+		if err != nil || c.write(sess, data) != nil {
+			return
 		}
 	}
 }
@@ -639,9 +701,7 @@ func (c *Client) dispatch(p *wire.Packet) (wire.RelayReason, error) {
 }
 
 // controlHandlers 是 relay 发来的控制帧的内置处理：操作码 → 解码并调对应回调。返回非 RelayReasonNone 结束连接。
-//
-// 扩展点：换 host 的控制帧（wire 的 64～127：you_are_host、host_changing、host_changed、host_resumed、transfer、
-// successors、snapshot）下一批在这张表里加一项、在 handlers 里加对应的回调；不在表里的操作码只交给 OnControl。
+// 换 host 的 64～69 在 host.go 的 hostControlHandlers 里，init 时并进来；不在表里的操作码只交给 OnControl。
 var controlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.RelayReason, error){
 	wire.RelayOpWelcome: func(c *Client, _ handlers, f Frame) (wire.RelayReason, error) {
 		welcome, err := wire.DecodeRelayWelcome(f.Payload)
@@ -649,8 +709,9 @@ var controlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.Rela
 			return wire.RelayReasonProtocol, err
 		}
 		c.mu.Lock()
-		c.role = Welcome{Slot: f.Slot, Host: welcome.Host, HostSlot: welcome.HostSlot}
+		c.setWelcomeLocked(Welcome{Slot: f.Slot, Host: welcome.Host, HostSlot: welcome.HostSlot})
 		c.mu.Unlock()
+		c.roleChanged()
 		return wire.RelayReasonNone, nil
 	},
 	wire.RelayOpMemberJoined: func(_ *Client, h handlers, f Frame) (wire.RelayReason, error) {
@@ -756,7 +817,8 @@ func (c *Client) rejoin(ctx context.Context) (*session, error) {
 }
 
 // retryableError 报告一次重连尝试的失败值不值得再试：lobby 的 5xx、网络错误值得；lobby 的 4xx（房间没了、
-// 被拒、满员）与 relay 的终止性 Closed 不值得。令牌被拒也再试一次：每次尝试都拿新令牌。
+// 被拒、被踢、满员）与 relay 的终止性 Closed 不值得。令牌被拒也再试一次：每次尝试都拿新令牌。relay 向 lobby 验权：
+// lobby 不让进（lobby_rejected）不再试；lobby 暂时不可用（lobby_unavailable）按退避再试。
 func retryableError(err error) bool {
 	var lobbyErr *LobbyError
 	if errors.As(err, &lobbyErr) {
@@ -764,7 +826,11 @@ func retryableError(err error) bool {
 	}
 	var closedErr *ClosedError
 	if errors.As(err, &closedErr) {
-		return retryableReason(closedErr.Reason) || closedErr.Reason == wire.RelayReasonTokenRejected
+		switch closedErr.Reason {
+		case wire.RelayReasonTokenRejected, wire.RelayReasonLobbyUnavailable:
+			return true
+		}
+		return retryableReason(closedErr.Reason)
 	}
 	return true
 }

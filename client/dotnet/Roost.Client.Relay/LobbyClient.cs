@@ -99,6 +99,8 @@ namespace Roost.Client.Relay
         Unknown,
         BadRequest, Unauthorized, GameNotServed, NotHost, WrongPassword, RoomNotFound, RoomFull, RoomStarted,
         TransportUnavailable, TooLarge, NoRelay, Unavailable,
+        /// <summary>403：被房主踢出过这个房间（lobby 的被踢名单）。</summary>
+        Kicked,
     }
 
     /// <summary>lobby 答的非 200。</summary>
@@ -112,6 +114,7 @@ namespace Roost.Client.Relay
             ["room_full"] = LobbyErrorCode.RoomFull, ["room_started"] = LobbyErrorCode.RoomStarted,
             ["transport_unavailable"] = LobbyErrorCode.TransportUnavailable, ["too_large"] = LobbyErrorCode.TooLarge,
             ["no_relay"] = LobbyErrorCode.NoRelay, ["unavailable"] = LobbyErrorCode.Unavailable,
+            ["kicked"] = LobbyErrorCode.Kicked,
         };
 
         /// <summary>HTTP 状态码。</summary>

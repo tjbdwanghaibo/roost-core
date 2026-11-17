@@ -9,7 +9,9 @@ package relay_test
 //     {"lobby_url":"http://127.0.0.1:...","relay_tcp":"127.0.0.1:...","relay_ws":"ws://127.0.0.1:.../relay","backend":"redis","game":"party"}
 //
 //     ROOST_RELAYPEER_WS=0 时不开 WebSocket 监听（C# 只连 TCP）。测试拿 POST <lobby_url>/harness/game-token {"account":"a"}
-//     换一张测试 gt1，再按 lobby 的正式接口建房、加入。
+//     换一张测试 gt1，再按 lobby 的正式接口建房、加入。POST <lobby_url>/harness/admission {"mode":"ok|reject|down"}
+//     切换 relay 向 lobby 验权的结果（缺省 ok：照 lobby 的真实答复；reject：一律拒绝，relay 发 Closed{lobby_rejected}；
+//     down：一律不可用，relay 发 Closed{lobby_unavailable}），用来测自动重连遇到这两种拒绝时停还是退避重试。
 //
 // 放在 _test.go 里：SDK 本身不依赖 Redis 与服务端包；对端要链接 Redis 驱动（infra/storage/redis/driver），按
 // TestCoreContractsDoNotLinkDrivers 的约定，非装配层的代码里只有测试可以链接驱动。
@@ -18,7 +20,8 @@ package relay_test
 //   - account 的 ValidateGameToken 换成本对端签的测试 token（POST /harness/game-token）：lobby 本来就经
 //     lobby.GameTokenValidator 这个最小接口校验，替身只替账号体系，不替 lobby 的鉴权逻辑；
 //   - relay → lobby 的 NATS 报告换成进程内按序投递（同样经 lobby.HandleRelayEventData 的 JSON 解码）；
-//     lobby → relay 的 leave 命令换成直接调 relay.Server.Leave；
+//     lobby → relay 的 leave 命令换成直接调 relay.Server.Leave；relay 每条连接向 lobby 的验权（NATS request）换成
+//     直接调 lobby.HandleRelayVerifyData，答复按 wiring/relay 的 natsAdmission 同样的规则解释；
 //   - etcd 的 relay 广播换成固定的一条（本对端的 relay，房间数取实时值）。
 //
 // 房间目录用真实 Redis（ROOST_REDIS_TEST_ADDR，再取 ROOST_DATAENGINE_IT_REDIS_ADDR，即 ~/.roost-it 的 env.sh）；
@@ -41,7 +44,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/wsconn"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
@@ -119,8 +121,9 @@ type testPeer struct {
 	http    *http.Server
 	closers []func(context.Context) error
 
-	mu     sync.Mutex
-	tokens map[string]identity
+	mu        sync.Mutex
+	tokens    map[string]identity
+	admission string // 验权的故障注入："" / "ok" 照 lobby 答复，"reject" 一律拒绝，"down" 一律不可用
 }
 
 type identity struct{ account, game string }
@@ -164,7 +167,7 @@ func startTestPeer(cfg peerConfig) (_ *testPeer, err error) {
 		if err == nil {
 			reports <- data
 		}
-	}))
+	}), relaysvc.AdmissionFunc(p.admit))
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +205,7 @@ func startTestPeer(cfg peerConfig) (_ *testPeer, err error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /harness/game-token", p.serveGameToken)
+	mux.HandleFunc("POST /harness/admission", p.serveAdmission)
 	mux.Handle("/", p.lobby.Handler([]string{"*"}))
 	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -284,6 +288,65 @@ func (p *testPeer) serveGameToken(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"token": p.IssueGameToken(req.Account, req.Game)})
 }
 
+// admit 是 relay 向 lobby 的验权（relay.Admission）：生产经 NATS request 发到 lobby 的 VerifySubject，这里直接调
+// lobby.HandleRelayVerifyData（同样经 JSON）。答复的解释与 wiring/relay 的 natsAdmission 相同：ok 放行；unavailable
+// 或空原因按不可用；其余原因是拒绝（relay.ErrAdmissionDenied）。SetAdmission 可以注入拒绝或不可用。
+func (p *testPeer) admit(ctx context.Context, request relaysvc.AdmitRequest) error {
+	p.mu.Lock()
+	mode := p.admission
+	p.mu.Unlock()
+	switch mode {
+	case "reject":
+		return fmt.Errorf("%w: injected by the test peer", relaysvc.ErrAdmissionDenied)
+	case "down":
+		return errors.New("relaypeer: lobby verification injected as unavailable")
+	}
+	data, err := json.Marshal(lobby.RelayVerifyRequest{Room: request.Room, Account: request.Account, Relay: request.Relay, Create: request.Create})
+	if err != nil {
+		return err
+	}
+	var reply lobby.RelayVerifyReply
+	if err := json.Unmarshal(p.lobby.HandleRelayVerifyData(ctx, data), &reply); err != nil {
+		return err
+	}
+	switch {
+	case reply.OK:
+		return nil
+	case reply.Reason == lobby.VerifyUnavailable || reply.Reason == "":
+		return fmt.Errorf("relaypeer: the lobby could not verify the connection (%q)", reply.Reason)
+	}
+	return fmt.Errorf("%w: %s", relaysvc.ErrAdmissionDenied, reply.Reason)
+}
+
+// SetAdmission 切换验权的结果："ok"（照 lobby 的真实答复）、"reject"、"down"。
+func (p *testPeer) SetAdmission(mode string) error {
+	switch mode {
+	case "", "ok", "reject", "down":
+	default:
+		return fmt.Errorf("relaypeer: admission mode %q is not ok, reject or down", mode)
+	}
+	p.mu.Lock()
+	p.admission = mode
+	p.mu.Unlock()
+	return nil
+}
+
+// serveAdmission 是 POST /harness/admission {"mode":"ok|reject|down"}。
+func (p *testPeer) serveAdmission(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		http.Error(w, "mode required", http.StatusBadRequest)
+		return
+	}
+	if err := p.SetAdmission(req.Mode); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // peerRelays 是固定的 relay 目录：只有本对端的 relay。
 type peerRelays struct{ p *testPeer }
 
@@ -306,13 +369,14 @@ func (c peerCommands) Publish(_ string, data []byte) error {
 }
 
 // serveWebSocket 照 wiring/relay 的做法给 relay 开 WebSocket 监听：共用接入层 wsconn 包出的 net.Listener 交给
-// relay.Server.Serve，单条消息上限是一个满帧，路径 /relay。不带 Origin 的原生客户端（node 的 ws）总是放行。
+// relay.Server.Serve，单条消息上限是 relay 能收的最大帧（快照与转交帧可以大于 max_payload_bytes，见
+// Config.MaxFrameBytes），路径 /relay。不带 Origin 的原生客户端（node 的 ws）总是放行。
 func (p *testPeer) serveWebSocket() (string, error) {
 	cfg := p.relay.Config()
 	listener, err := wsconn.Listen("127.0.0.1:0", wsconn.Config{
 		Path:             "/relay",
 		AllowedOrigins:   []string{"*"},
-		MaxMessageBytes:  int64(cfg.MaxPayloadBytes + wire.HeaderSize),
+		MaxMessageBytes:  int64(cfg.MaxFrameBytes()),
 		HandshakeTimeout: 5 * time.Second,
 	})
 	if err != nil {

@@ -355,8 +355,10 @@ dirtyMeshes.Clear();
 
 - **lobby**：建房、列房、加入、离开、改状态，请求带 `Authorization: Bearer gt1…`，可选 `transport`（tcp / ws）；lobby 的错误名映射成各语言自己的错误类型（Go `*LobbyError` + `errors.Is(err, relay.ErrRoomFull)`，C# `LobbyException.Code`，TS `LobbyError.code`）。
 - **relay 帧**：直接是 RS v2 帧，通道在 flags bits3..4、seq 是槽位（上行目标，0 = 全体；下行发送者），编码与 [relay-packets.json](spec/relay-packets.json) 逐字节相同（Go 用 `client/wire`，C# / TS 各自实现并用这份金样核对）。连接后首帧发令牌，等 Welcome；收发游戏通道与房间通道；房主收成员上下线，房主可以踢人、禁言。
-- **心跳与断线**：缺省每 10s 一个 Ping（relay 的 `idle_timeout` 缺省 30s），Pong 测 RTT；30s 一帧都没收到就当断线。断线后重连先调 lobby 的 join（对已在房间里的人幂等）拿新令牌，再连 relay；自动重连缺省关闭，打开后只在连接自己断掉或 relay 判 `idle_timeout` 时重连，被踢、房间关闭、被顶号、经 lobby 离开、relay 停机都不重连。
-- **扩展点**：不认识的控制帧操作码丢弃，不断开；`OnControl(op, …)` 给任意操作码注册回调；`OnYouAreHost` / `OnHostChanging` / `OnHostChanged` / `OnHostResumed` 是换 host 的回调位置（操作码 64～127 由 host 组定稿后接线，这一批不触发）；发控制帧用 `SendControl`。
+- **心跳与断线**：成员缺省每 10s 一个 Ping（relay 的 `idle_timeout` 缺省 30s），房主与候选缺省每 600ms 一个（relay 的 `host_idle_timeout` 缺省 2s），Pong 测 RTT；30s 一帧都没收到就当断线。断线后重连先调 lobby 的 join（对已在房间里的人幂等，开局后掉线也能回原座）拿新令牌，再连 relay；自动重连缺省关闭，打开后只在连接自己断掉或 relay 判 `idle_timeout` 时重连，被踢、房间关闭、被顶号、经 lobby 离开、relay 停机都不重连；尝试中 relay 答 `lobby_rejected` 就停，答 `lobby_unavailable` 按退避再试。
+- **被踢**：记在 lobby，被踢的账号再 join 答 403 `kicked`；拿没过期的旧令牌直连 relay 收到 `Closed{kicked}`。房主能踢已离线的座位（收到这个槽位的第二条 `MemberLeft{kicked}`）。
+- **换 host**（[RELAY §2.3、§4A](../docs/framework/RELAY.md)）：`OnYouAreHost`（成员名单、交接数据或快照，状态字节已解压）→ 游戏接手后 `HostReady(epoch)`（可选自动回）；`OnHostChanging`（发给房主的帧被丢，SDK 不重发，游戏决定）、`OnHostChanged`、`OnHostResumed`、`OnYouAreMember`、`OnRejected`；房主 `Transfer`、`SetSuccessors`、`Snapshot`（seq 由 SDK 递增，新房主从 `YouAreHost` 的 seq 往上接、且不低于 `epoch<<32`），设了状态回调时当房主每 3s 自动推一次、最小间隔 1s；`Leave` 先在 relay 上发 Leave 再经 lobby 离开；SDK 记当前角色（`Role`：槽位、房主 / 候选、房主槽位、epoch）。快照与交接数据缺省用 RFC 1951 原始 deflate 压缩（Go `compress/flate`、C# `DeflateStream`，可换成 LZ4 / zstd），房间里每个客户端要用同一种；收帧上限放大到 `snapshot_max_bytes + 16 KiB` 以上。
+- **扩展点**：不认识的控制帧操作码丢弃，不断开；`OnControl(op, …)` 给任意操作码注册回调；发控制帧用 `SendControl`。
 
 验证（Redis 用 `~/.roost-it`：先 `source ~/.roost-it/roost-dataengine-it/env.sh`，没有时对端用内存房间目录）：
 
@@ -366,7 +368,7 @@ dotnet run --project client/dotnet/Roost.Client.Relay.Tests      # 跑完 dotnet
 (cd client/ts && npm ci && npm test)
 ```
 
-C# 与 TS 的用例把 `client/relay` 的测试二进制（`go test -c`，`ROOST_RELAYPEER_SERVE=1`）当对端进程：进程里是真实的 `service/relay` 与 `service/lobby`，只把 account、NATS、etcd 换成进程内的等价物（见 `client/relay/peer_test.go`）。
+C# 与 TS 的用例把 `client/relay` 的测试二进制（`go test -c`，`ROOST_RELAYPEER_SERVE=1`）当对端进程：进程里是真实的 `service/relay` 与 `service/lobby`，只把 account、NATS、etcd 换成进程内的等价物（relay 向 lobby 的验权直接调 lobby；见 `client/relay/peer_test.go`）。`POST <lobby_url>/harness/admission {"mode":"ok|reject|down"}` 切换验权结果，用来测重连遇到 `lobby_rejected` / `lobby_unavailable`。
 
 ## Unity接入与其他引擎
 

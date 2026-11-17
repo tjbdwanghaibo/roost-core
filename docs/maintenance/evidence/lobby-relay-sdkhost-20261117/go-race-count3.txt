@@ -1,0 +1,4 @@
+$ GOWORK=off go test -race -count=3 ./client/relay/
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	27.485s
+$ GOWORK=off go vet ./client/relay/
+vet ok
