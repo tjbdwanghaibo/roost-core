@@ -33,7 +33,7 @@ import (
 //
 // 吊销（交接 C6，维护者 2026-11-17 选“代数”）：不能单张吊销，只能让一个账号在此之前签发的全部失效。
 // 校验本来就要重读账号（为了封号），比较代数不多一次读。代数是账号记录上的一个计数（Account.GameTokenGeneration），
-// 只增不减；谁让它加一见 RevokeGameTokens。吊销只拦以后的大厅调用（建房、加入、重连都要再校验一次），
+// 只增不减；谁让它加一见 RevokeGameTokens（运维、当场吊销）与 Login（凭证版本变了）。吊销只拦以后的大厅调用（建房、加入、重连都要再校验一次），
 // 不把人从已经连上的 relay 房间里断开。
 const (
 	gameTokenVersion = "gt2"
@@ -182,11 +182,12 @@ func (s *Service) ValidateGameToken(ctx context.Context, token string) (GameAcco
 // RevokeGameTokens 吊销 accountID 在此之前签发的全部游戏账号 token：把账号上的代数加一并落库，返回新的代数。
 // 之后签发的 token 带新代数，照常可用；账号的封号状态、账号票据、进服票据都不受影响。
 //
-// 谁调它（维护者 2026-11-17）：
-//   - 运维：accountctl 的 revoke-game-tokens 命令（login 模块的 cmd/accountctl）。
-//   - 凭证变更：账号的登录凭证改了（改密码、换绑渠道身份、怀疑 token 泄露）时调它。account 本身没有改密码的路径
-//     ——身份由渠道确认（Verifier），密码在渠道那一侧——所以由凭证变更发生的那一方（渠道服务、工程自己的账号中心）
-//     经总线调这个接口。
+// 谁让代数加一：
+//   - 运维：accountctl 的 revoke-game-tokens 命令（login 模块的 cmd/accountctl），调这个方法（维护者 2026-11-17）。
+//   - 改密码（维护者 2026-11-18 选 B）：account 本身没有改密码的路径——身份由渠道确认（Verifier），密码在渠道那一侧。
+//     渠道在 Verified.CredentialVersion 里返回凭证版本，Login 发现它与账号上存的不同就在同一次落库里加一
+//     （service.go 的 withCredentialVersion），不经这个方法。它在“改密之后的下一次登录”生效。
+//   - 要当场吊销（报告 token 泄露、换绑、改密之后玩家还没再登录）：渠道服务、工程自己的账号中心经总线调这个方法。
 //
 // 账号不存在答 ErrAccountMissing。被封的账号照样可以吊销（封号本来就让它的 token 全部失效，解封之后旧 token
 // 也不会复活）。存储结果未知（versionstore.ErrOutcomeUnknown）原样返回：调用方可以直接重试，重试可能让代数

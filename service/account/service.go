@@ -223,21 +223,26 @@ func (s *Service) Login(ctx context.Context, identity Identity) (Account, error)
 	now := s.cfg.Now()
 
 	var result Account
+	// banned 由 mutate 每次调用重新设置：Update 冲突时会重读、重跑 mutate，只有最后一次的判断算数。
+	var banned bool
 	_, _, err = s.cfg.Accounts.Update(ctx, accountID, func(current Account, found bool) (Account, bool, error) {
+		banned = false
 		if found && !sameVerifiedIdentity(current, verified) {
 			return current, false, fmt.Errorf("%w: stored account identity does not match verified identity", ErrIdentityInvalid)
 		}
 		if found && current.Banned {
 			// A banned account still resolves, so an operator can see it, but
 			// login does not succeed.
-			result = current
-			s.report.Refused("login", "banned")
-			return current, false, fmt.Errorf("%w: account is banned", ErrIdentityDenied)
+			banned = true
+			// 被封也照样记下凭证变化：封号期间改了密码，解封之后旧 token 不能复活。别的什么都不写。
+			next, changed := withCredentialVersion(current, verified.CredentialVersion)
+			return next, changed, nil
 		}
 		next := current
 		if !found {
 			next = Account{ID: accountID, Channel: verified.Channel, OpenID: verified.OpenID, CreatedAtUnix: now.Unix()}
 		}
+		next, _ = withCredentialVersion(next, verified.CredentialVersion)
 		next.LastLoginAtUnix = now.Unix()
 		result = next
 		return next, true, nil
@@ -245,8 +250,33 @@ func (s *Service) Login(ctx context.Context, identity Identity) (Account, error)
 	if err != nil {
 		return Account{}, err
 	}
+	if banned {
+		s.report.Refused("login", "banned")
+		return Account{}, fmt.Errorf("%w: account is banned", ErrIdentityDenied)
+	}
 	s.report.Accepted("login")
 	return result, nil
+}
+
+// withCredentialVersion 把渠道这次给的凭证版本记到账号上（交接 C6 第 1 点，维护者 2026-11-18 选 B），
+// 返回新记录与它是否变了：
+//
+//   - 渠道没给（空）：不动，已存的版本不抹掉。
+//   - 账号上还没存过：只记录，不加一（第一次见到，无从比较）。
+//   - 与存的相同：不动。
+//   - 与存的不同：游戏账号 token 的代数加一（与 RevokeGameTokens 是同一个计数、同一次落库），换成新版本。
+//
+// 它在 Login 的 Accounts.Update 里调用，读改写在同一次比较后写入里：并发登录各自基于最新提交的记录判断，
+// 同一个新版本只加一次，不同的新版本各加一次，不丢别人的加一。Login 结果未知后重试时，新版本已经存下，不会再加。
+func withCredentialVersion(account Account, version string) (Account, bool) {
+	if version == "" || version == account.CredentialVersion {
+		return account, false
+	}
+	if account.CredentialVersion != "" {
+		account.GameTokenGeneration++
+	}
+	account.CredentialVersion = version
+	return account, true
 }
 
 // CreateRole creates or resumes one pending role with the same name.

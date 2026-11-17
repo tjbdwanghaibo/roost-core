@@ -1,0 +1,14 @@
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.03s)
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+--- PASS: TestABanRefusesGameTokensAtOnce (0.03s)
+--- PASS: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.04s)
+--- PASS: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.02s)
+--- PASS: TestALoginWithANewCredentialVersionRevokesGameTokens (0.04s)
+--- PASS: TestABannedLoginWithANewCredentialVersionStillRevokes (0.02s)
+--- PASS: TestConcurrentLoginsCountCredentialChangesOnce (0.04s)
+--- PASS: TestAnOversizedCredentialVersionIsRefused (0.04s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.663s

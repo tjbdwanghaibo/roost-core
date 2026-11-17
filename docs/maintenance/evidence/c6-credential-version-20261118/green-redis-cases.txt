@@ -1,0 +1,26 @@
+=== RUN   TestGameTokensAreIssuedPerGameAndValidatedByAccount
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.01s)
+=== RUN   TestAGameTokenExpiresOnTheSystemClock
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+=== RUN   TestATamperedGameTokenIsRefused
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+=== RUN   TestOtherTicketsCannotPassAsGameTokens
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+=== RUN   TestAGameTokenOnlyOpensItsOwnGame
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+=== RUN   TestABanRefusesGameTokensAtOnce
+--- PASS: TestABanRefusesGameTokensAtOnce (0.00s)
+=== RUN   TestRevokingGameTokensRefusesTheOnesIssuedBefore
+--- PASS: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.01s)
+=== RUN   TestRevokingGameTokensLeavesBansAndTicketsAlone
+--- PASS: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+=== RUN   TestALoginWithANewCredentialVersionRevokesGameTokens
+--- PASS: TestALoginWithANewCredentialVersionRevokesGameTokens (0.01s)
+=== RUN   TestABannedLoginWithANewCredentialVersionStillRevokes
+--- PASS: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+=== RUN   TestConcurrentLoginsCountCredentialChangesOnce
+--- PASS: TestConcurrentLoginsCountCredentialChangesOnce (0.01s)
+=== RUN   TestAnOversizedCredentialVersionIsRefused
+--- PASS: TestAnOversizedCredentialVersionIsRefused (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.458s

@@ -79,7 +79,7 @@ go run ./cmd/accountctl revoke-game-tokens -account dev:alice   # 这个账号�
 
 它用 account 的存储配置直连 Redis（登记区服不上总线）：`-redis` / `-redis-password` / `-redis-db` / `-redis-cluster` 对应 `config.account.yaml` 的 `redis.*`，`-prefix` 对应 `account.key_prefix`，缺省值就是生成的开发配置里的值。`-status` 取 `open`、`maintenance`、`full`、`closed`，只有 open 的服能建新角色。要加自己的子命令不用改 `main.go`：在 `cmd/accountctl` 里另写一个文件，用 `init` 调 `registerCommand(名字, 用法, 函数)`，函数拿到的是 account 服务本身。
 
-`revoke-game-tokens`（交接 C6，维护者 2026-11-17）调 account 的 `RevokeGameTokens`（总线接口上的同一个方法；这里在同一份存储上直接调）：账号上的 token 代数加一，在此之前签发的游戏账号 token 全部失效，之后签发的照常可用，打印 `{"account_id", "game_token_generation"}`。`-account` 是账号号（“渠道:open_id”，开发登录是 `dev:<open_id>`），不是玩家号。封号、账号票据、进服票据不受影响；已经连上 relay 的房间不断开，只拦以后的大厅调用。不带 game 的工程（`-template lobby`）装不了 login，也就没有 accountctl：那种工程要吊销时经总线调 `RevokeGameTokens`。
+`revoke-game-tokens`（交接 C6，维护者 2026-11-17）调 account 的 `RevokeGameTokens`（总线接口上的同一个方法；这里在同一份存储上直接调）：账号上的 token 代数加一，在此之前签发的游戏账号 token 全部失效，之后签发的照常可用，打印 `{"account_id", "game_token_generation"}`。`-account` 是账号号（“渠道:open_id”，开发登录是 `dev:<open_id>`），不是玩家号。封号、账号票据、进服票据不受影响；已经连上 relay 的房间不断开，只拦以后的大厅调用。改密码不用调它：渠道在登录验证时返回凭证版本（`Verified.CredentialVersion`），版本变了的那次登录自动加一（account_auth README“装完要自己做的”第 4 条，维护者 2026-11-18）；这个命令留给运维当场吊销（报告泄露、改密之后玩家还没再登录）。不带 game 的工程（`-template lobby`）装不了 login，也就没有 accountctl：那种工程要吊销时经总线调 `RevokeGameTokens`。
 
 ### 状态、配置、错误码
 
@@ -163,7 +163,7 @@ go run ./cmd/accountctl revoke-game-tokens -account dev:alice   # 这个账号�
 
 ## 验证范围
 
-`roost module verify` 跑 33 条场景（`^TestLogin`：`game/modules/login` 21 条、`internal/access/player/tcp` 2 条、`cmd/accountctl` 6 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）；account 一侧的 6 条（`services/account`）随 account_auth 计。全部是离线的：
+`roost module verify` 跑 33 条场景（`^TestLogin`：`game/modules/login` 21 条、`internal/access/player/tcp` 2 条、`cmd/accountctl` 6 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）；account 一侧的 7 条（`services/account`）随 account_auth 计。全部是离线的：
 
 - 认证器的场景用真实的 `account.Service` 加内存存储：两种票据的通过与拒绝、过期、伪造、合服后的承载服、换服在途、并发握手只建一个映射、“拒绝”与“判断不了”的区分。
 - 告知的场景验证后台执行、上限（含丢弃计数）、停机后到达的会话不告知（含丢弃计数）与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。

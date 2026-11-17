@@ -1,0 +1,16 @@
+--- FAIL: TestBeforeWriteFailuresRemainRetryable (0.03s)
+--- FAIL: TestNameCommitLostReplyCannotBurnName (0.01s)
+--- FAIL: TestRoleCreateLostReplyCannotLeaveDuplicateNames (0.01s)
+--- FAIL: TestInitialSlotUnknownCannotPermanentlyBlockCreate (0.01s)
+--- FAIL: TestProfileOutputCannotMutateRoleWithoutCAS (0.02s)
+--- FAIL: TestPendingRoleRecoversAcrossServiceRestart (0.01s)
+--- FAIL: TestConcurrentCreationRetriesShareOneDurablePlan (0.01s)
+--- FAIL: TestNameCommittedElsewhereReleasesThePendingSlot (1.80s)
+--- FAIL: TestNameReservedElsewhereKeepsThePendingSlot (2.00s)
+--- FAIL: TestResolvePendingCreationFreesTheSlotAndRecordsTheNote (2.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	6.447s
+FAIL
+        create_role_test.go:513: before-write failure should permit clean retry: CROSSSLOT Keys in request don't hash to the same slot
+        create_role_test.go:513: before-write failure should permit clean retry: CROSSSLOT Keys in request don't hash to the same slot
+        create_role_test.go:513: before-write failure should permit clean retry: CROSSSLOT Keys in request don't hash to the same slot

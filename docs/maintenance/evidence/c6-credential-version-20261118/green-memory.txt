@@ -1,0 +1,10 @@
+=== RUN   TestALoginWithANewCredentialVersionRevokesGameTokens
+--- PASS: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+=== RUN   TestABannedLoginWithANewCredentialVersionStillRevokes
+--- PASS: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+=== RUN   TestConcurrentLoginsCountCredentialChangesOnce
+--- PASS: TestConcurrentLoginsCountCredentialChangesOnce (0.00s)
+=== RUN   TestAnOversizedCredentialVersionIsRefused
+--- PASS: TestAnOversizedCredentialVersionIsRefused (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.601s

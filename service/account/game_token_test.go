@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -381,4 +383,210 @@ func TestRevokingGameTokensLeavesBansAndTicketsAlone(t *testing.T) {
 	if _, found, err := cfg.Accounts.Get(ctx, "store:nobody"); err != nil || found {
 		t.Fatalf("revoking a missing account created it: found %v, %v", found, err)
 	}
+}
+
+// 登录时按凭证版本自动吊销（交接 C6 第 1 点，维护者 2026-11-18 选 B）的场景用的渠道：凭据 "good" 不带版本
+// （渠道不提供，CredentialVersion 为空），"good#<版本>" 带版本。别的凭据拒绝。
+func credentialVersionVerifier(c *Config) {
+	c.Verifier = VerifierFunc(func(_ context.Context, identity Identity) (Verified, error) {
+		secret, version, _ := strings.Cut(identity.Credential, "#")
+		if secret != "good" {
+			return Verified{}, fmt.Errorf("bad credential")
+		}
+		return Verified{Channel: identity.Channel, OpenID: identity.OpenID, CredentialVersion: version}, nil
+	})
+}
+
+func loginWith(t *testing.T, accounts Accounts, openID, credential string) Account {
+	t.Helper()
+	account, err := accounts.Login(context.Background(), Identity{Channel: "store", OpenID: openID, Credential: credential})
+	if err != nil {
+		t.Fatalf("login %s with %q: %v", openID, credential, err)
+	}
+	return account
+}
+
+func storedAccount(t *testing.T, cfg Config, accountID string) Account {
+	t.Helper()
+	record, found, err := cfg.Accounts.Get(context.Background(), accountID)
+	if err != nil || !found {
+		t.Fatalf("read account %s: found %v, %v", accountID, found, err)
+	}
+	return record.Value
+}
+
+// 渠道在 Verified 里返回凭证版本：版本与账号上存的不同（且之前存过）时，登录把游戏账号 token 的代数加一——
+// 之前签发的 gt2 被拒、之后签发的可用；版本不变不加；第一次见到版本只记录不加；渠道不提供版本（空）不加，
+// 也不抹掉已存的版本。本地与经总线相同；代数落在账号记录上，与 RevokeGameTokens 是同一个计数。
+func TestALoginWithANewCredentialVersionRevokesGameTokens(t *testing.T) {
+	s, _, cfg := pendingContractService(t, gameTokenGames, credentialVersionVerifier)
+	ctx := context.Background()
+	for transport, accounts := range enterClients(t, s) {
+		openID := "alice-" + transport
+		// 先不带版本登录（渠道不提供）：建账号，代数 0，没有版本。
+		alice := loginWith(t, accounts, openID, "good")
+		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "" {
+			t.Fatalf("%s: a login without a version stored generation %d, version %q", transport, got.GameTokenGeneration, got.CredentialVersion)
+		}
+		first := mustGameToken(t, s, alice.ID, "party").Token
+		// 第一次见到版本：只记录，不加一，之前的 token 照常可用。
+		loginWith(t, accounts, openID, "good#p1")
+		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
+			t.Fatalf("%s: the first version seen: generation %d, version %q; want 0 and p1", transport, got.GameTokenGeneration, got.CredentialVersion)
+		}
+		if _, err := accounts.ValidateGameToken(ctx, first); err != nil {
+			t.Fatalf("%s: the first version seen revoked a token: %v", transport, err)
+		}
+		// 版本不变：不加。
+		loginWith(t, accounts, openID, "good#p1")
+		// 渠道这次不提供版本：不加，也不抹掉已存的版本。
+		loginWith(t, accounts, openID, "good")
+		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
+			t.Fatalf("%s: the same version / no version: generation %d, version %q; want 0 and p1", transport, got.GameTokenGeneration, got.CredentialVersion)
+		}
+		if _, err := accounts.ValidateGameToken(ctx, first); err != nil {
+			t.Fatalf("%s: the same version / no version revoked a token: %v", transport, err)
+		}
+		// 版本变了（改了密码）：代数加一，之前签发的被拒，之后签发的可用。
+		loginWith(t, accounts, openID, "good#p2")
+		if got, err := accounts.ValidateGameToken(ctx, first); !errors.Is(err, ErrSessionInvalid) || Code(err) != 560111 || got.AccountID != "" {
+			t.Fatalf("%s: a token issued before the credential changed: %+v, %v; want ErrSessionInvalid", transport, got, err)
+		}
+		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" {
+			t.Fatalf("%s: a new credential version: generation %d, version %q; want 1 and p2", transport, got.GameTokenGeneration, got.CredentialVersion)
+		}
+		after := mustGameToken(t, s, alice.ID, "party")
+		if strings.Split(after.Token, ".")[4] != "1" {
+			t.Fatalf("%s: a token issued after the credential changed = %s; want generation 1 in it", transport, after.Token)
+		}
+		if got, err := accounts.ValidateGameToken(ctx, after.Token); err != nil || got.AccountID != alice.ID {
+			t.Fatalf("%s: a token issued after the credential changed: %+v, %v", transport, got, err)
+		}
+		// 新版本再登录（另一台设备、重试）：不再加。
+		loginWith(t, accounts, openID, "good#p2")
+		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 1 {
+			t.Fatalf("%s: logging in again with the new version: generation %d; want 1", transport, got.GameTokenGeneration)
+		}
+		if _, err := accounts.ValidateGameToken(ctx, after.Token); err != nil {
+			t.Fatalf("%s: logging in again with the new version revoked the current token: %v", transport, err)
+		}
+		// 与手动吊销是同一个代数：先手动吊销（2），再换版本（3）。
+		if generation, err := accounts.RevokeGameTokens(ctx, alice.ID); err != nil || generation != 2 {
+			t.Fatalf("%s: RevokeGameTokens = %d, %v; want 2", transport, generation, err)
+		}
+		loginWith(t, accounts, openID, "good#p3")
+		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 3 || got.CredentialVersion != "p3" {
+			t.Fatalf("%s: a new version after a manual revocation: generation %d, version %q; want 3 and p3", transport, got.GameTokenGeneration, got.CredentialVersion)
+		}
+	}
+	// 一开始就带版本登录的新账号：第一次见到，只记录。
+	bob := loginWith(t, s, "bob", "good#b1")
+	if got := storedAccount(t, cfg, bob.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "b1" {
+		t.Fatalf("a new account with a version: generation %d, version %q; want 0 and b1", got.GameTokenGeneration, got.CredentialVersion)
+	}
+	// 被拒的登录（凭据不对）不动版本与代数。
+	if _, err := s.Login(ctx, Identity{Channel: "store", OpenID: "bob", Credential: "bad#b2"}); !errors.Is(err, ErrIdentityDenied) {
+		t.Fatalf("a refused login: %v", err)
+	}
+	if got := storedAccount(t, cfg, bob.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "b1" {
+		t.Fatalf("a refused login changed the account: generation %d, version %q", got.GameTokenGeneration, got.CredentialVersion)
+	}
+}
+
+// 被封的账号用新凭证版本登录：登录照旧被拒（ErrIdentityDenied、不改最后登录时间），但凭证变了这件事记下来——
+// 代数加一、存新版本。否则封号期间改了密码，解封之后改密码之前签发的 token 会复活，直到下一次登录。
+func TestABannedLoginWithANewCredentialVersionStillRevokes(t *testing.T) {
+	s, _, cfg := pendingContractService(t, gameTokenGames, credentialVersionVerifier)
+	ctx := context.Background()
+	alice := loginWith(t, s, "alice", "good#p1")
+	before := mustGameToken(t, s, alice.ID, "party").Token
+	banAccount(t, cfg, alice.ID)
+	lastLogin := storedAccount(t, cfg, alice.ID).LastLoginAtUnix
+	for _, credential := range []string{"good#p1", "good", "good#p2"} {
+		if _, err := s.Login(ctx, Identity{Channel: "store", OpenID: "alice", Credential: credential}); !errors.Is(err, ErrIdentityDenied) {
+			t.Fatalf("a banned login with %q: %v; want ErrIdentityDenied", credential, err)
+		}
+	}
+	if _, _, err := cfg.Accounts.Update(ctx, alice.ID, func(current Account, found bool) (Account, bool, error) {
+		current.Banned = false
+		return current, found, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ValidateGameToken(ctx, before); !errors.Is(err, ErrSessionInvalid) {
+		t.Fatalf("a token from before the credential changed came back after the unban: %v", err)
+	}
+	got := storedAccount(t, cfg, alice.ID)
+	if got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" || got.LastLoginAtUnix != lastLogin {
+		t.Fatalf("after banned logins and the unban: %+v; want generation 1, version p2, last login unchanged", got)
+	}
+}
+
+// 并发登录：代数按“提交时看到的版本变化”加，不多加、不丢（账号记录的 versionstore.Update 是比较后写入、冲突重读）。
+//   - 同一个新版本的 4 次并发登录：只加一（第一个提交的看到变化，其余重读之后版本已经一样）。
+//   - 两个不同新版本的并发登录：加二（后提交的那个重读到的是先提交的版本，仍然不同），存下的版本是后提交的那个。
+//   - 新版本登录与手动吊销并发：加二，两者都不丢。
+func TestConcurrentLoginsCountCredentialChangesOnce(t *testing.T) {
+	s, _, cfg := pendingContractService(t, gameTokenGames, credentialVersionVerifier)
+	ctx := context.Background()
+	concurrently := func(calls ...func() error) {
+		t.Helper()
+		var wg sync.WaitGroup
+		errs := make([]error, len(calls))
+		for i, call := range calls {
+			wg.Add(1)
+			go func() { defer wg.Done(); errs[i] = call() }()
+		}
+		wg.Wait()
+		for _, err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	loginCall := func(openID, credential string) func() error {
+		return func() error {
+			_, err := s.Login(ctx, Identity{Channel: "store", OpenID: openID, Credential: credential})
+			return err
+		}
+	}
+
+	alice := loginWith(t, s, "alice", "good#p1")
+	same := make([]func() error, 4)
+	for i := range same {
+		same[i] = loginCall("alice", "good#p2")
+	}
+	concurrently(same...)
+	if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" {
+		t.Fatalf("%d concurrent logins with one new version: generation %d, version %q; want 1 and p2", len(same), got.GameTokenGeneration, got.CredentialVersion)
+	}
+
+	bob := loginWith(t, s, "bob", "good#p1")
+	concurrently(loginCall("bob", "good#a"), loginCall("bob", "good#b"))
+	if got := storedAccount(t, cfg, bob.ID); got.GameTokenGeneration != 2 || (got.CredentialVersion != "a" && got.CredentialVersion != "b") {
+		t.Fatalf("two concurrent logins with different new versions: generation %d, version %q; want 2 and a or b", got.GameTokenGeneration, got.CredentialVersion)
+	}
+
+	carol := loginWith(t, s, "carol", "good#p1")
+	concurrently(loginCall("carol", "good#p2"), func() error {
+		_, err := s.RevokeGameTokens(ctx, carol.ID)
+		return err
+	})
+	if got := storedAccount(t, cfg, carol.ID); got.GameTokenGeneration != 2 || got.CredentialVersion != "p2" {
+		t.Fatalf("a new-version login racing a manual revocation: generation %d, version %q; want 2 and p2", got.GameTokenGeneration, got.CredentialVersion)
+	}
+}
+
+// 渠道返回的凭证版本超过 MaxCredentialVersionBytes：是渠道实现的错，登录失败（ErrIdentityInvalid），什么也不写。
+func TestAnOversizedCredentialVersionIsRefused(t *testing.T) {
+	s, _, cfg := pendingContractService(t, gameTokenGames, credentialVersionVerifier)
+	alice := loginWith(t, s, "alice", "good#p1")
+	long := strings.Repeat("v", MaxCredentialVersionBytes+1)
+	if _, err := s.Login(context.Background(), Identity{Channel: "store", OpenID: "alice", Credential: "good#" + long}); !errors.Is(err, ErrIdentityInvalid) {
+		t.Fatalf("an oversized credential version: %v; want ErrIdentityInvalid", err)
+	}
+	if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
+		t.Fatalf("an oversized version changed the account: generation %d, version %q", got.GameTokenGeneration, got.CredentialVersion)
+	}
+	loginWith(t, s, "alice", "good#"+long[:MaxCredentialVersionBytes])
 }

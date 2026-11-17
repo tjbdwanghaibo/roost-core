@@ -1,0 +1,98 @@
+## M1 撤掉“版本不同就加一”（account.GameTokenGeneration++） —— memory
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:453: local: a token issued before the credential changed: {AccountID:store:alice-local Game:party ExpiresAtUnix:1700007200}, <nil>; want ErrSessionInvalid
+--- FAIL: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+    game_token_test.go:517: a token from before the credential changed came back after the unban: <nil>
+--- FAIL: TestConcurrentLoginsCountCredentialChangesOnce (0.00s)
+    game_token_test.go:561: 4 concurrent logins with one new version: generation 0, version "p2"; want 1 and p2
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.650s
+FAIL
+
+## M1 撤掉“版本不同就加一”（account.GameTokenGeneration++） —— redis
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:453: local: a token issued before the credential changed: {AccountID:store:alice-local Game:party ExpiresAtUnix:1700007200}, <nil>; want ErrSessionInvalid
+--- FAIL: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+    game_token_test.go:517: a token from before the credential changed came back after the unban: <nil>
+--- FAIL: TestConcurrentLoginsCountCredentialChangesOnce (0.00s)
+    game_token_test.go:561: 4 concurrent logins with one new version: generation 0, version "p2"; want 1 and p2
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.417s
+FAIL
+
+## M2 第一次见到版本也加一（去掉“之前存过”的条件） —— memory
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:435: local: the first version seen: generation 1, version "p1"; want 0 and p1
+--- FAIL: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+    game_token_test.go:521: after banned logins and the unban: {ID:store:alice Channel:store OpenID:alice Banned:false CreatedAtUnix:1700000000 LastLoginAtUnix:1700000000 AdminNote: AdminActionAtUnix:0 GameTokenGeneration:2 CredentialVersion:p2}; want generation 1, version p2, last login unchanged
+--- FAIL: TestConcurrentLoginsCountCredentialChangesOnce (0.00s)
+    game_token_test.go:561: 4 concurrent logins with one new version: generation 2, version "p2"; want 1 and p2
+--- FAIL: TestAnOversizedCredentialVersionIsRefused (0.00s)
+    game_token_test.go:589: an oversized version changed the account: generation 1, version "p1"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.570s
+FAIL
+
+## M2 第一次见到版本也加一（去掉“之前存过”的条件） —— redis
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:435: bus: the first version seen: generation 1, version "p1"; want 0 and p1
+--- FAIL: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+    game_token_test.go:521: after banned logins and the unban: {ID:store:alice Channel:store OpenID:alice Banned:false CreatedAtUnix:1700000000 LastLoginAtUnix:1700000000 AdminNote: AdminActionAtUnix:0 GameTokenGeneration:2 CredentialVersion:p2}; want generation 1, version p2, last login unchanged
+--- FAIL: TestConcurrentLoginsCountCredentialChangesOnce (0.00s)
+    game_token_test.go:561: 4 concurrent logins with one new version: generation 2, version "p2"; want 1 and p2
+--- FAIL: TestAnOversizedCredentialVersionIsRefused (0.00s)
+    game_token_test.go:589: an oversized version changed the account: generation 1, version "p1"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.387s
+FAIL
+
+## M3 被封的登录不记凭证变化（return next, changed → return current, false） —— memory
+--- FAIL: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+    game_token_test.go:517: a token from before the credential changed came back after the unban: <nil>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.552s
+FAIL
+
+## M3 被封的登录不记凭证变化（return next, changed → return current, false） —— redis
+--- FAIL: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+    game_token_test.go:517: a token from before the credential changed came back after the unban: <nil>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.378s
+FAIL
+
+## M4 渠道没给版本时清掉已存的版本（version == "" 不再跳过） —— memory
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:445: local: the same version / no version: generation 1, version ""; want 0 and p1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.564s
+FAIL
+
+## M4 渠道没给版本时清掉已存的版本（version == "" 不再跳过） —— redis
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:445: local: the same version / no version: generation 1, version ""; want 0 and p1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.415s
+FAIL
+
+## M5 正常登录不调 withCredentialVersion —— memory
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:435: local: the first version seen: generation 0, version ""; want 0 and p1
+--- FAIL: TestConcurrentLoginsCountCredentialChangesOnce (0.00s)
+    game_token_test.go:561: 4 concurrent logins with one new version: generation 0, version ""; want 1 and p2
+--- FAIL: TestAnOversizedCredentialVersionIsRefused (0.00s)
+    game_token_test.go:589: an oversized version changed the account: generation 0, version ""
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.551s
+FAIL
+
+## M5 正常登录不调 withCredentialVersion —— redis
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (0.00s)
+    game_token_test.go:435: local: the first version seen: generation 0, version ""; want 0 and p1
+--- FAIL: TestConcurrentLoginsCountCredentialChangesOnce (0.00s)
+    game_token_test.go:561: 4 concurrent logins with one new version: generation 0, version ""; want 1 and p2
+--- FAIL: TestAnOversizedCredentialVersionIsRefused (0.00s)
+    game_token_test.go:589: an oversized version changed the account: generation 0, version ""
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.361s
+FAIL
+

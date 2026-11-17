@@ -16,6 +16,9 @@ import (
 //
 //	Login(Identity{Channel: "dev", OpenID: <随便一个账号名>, Credential: <login.dev_token 的值>})
 //
+// 凭据后面可以接 #<密码版本>（例如 dev-local#2）模拟改密码：版本与上次不同时，account 让这个账号此前的
+// 游戏账号 token 全部失效（见 verifyDev）。
+//
 // 之后与正式渠道完全一样：CreateRole / SelectRole 拿会话令牌，握手出示 session:<player_id>:<token>。
 const DevChannel svcaccount.Channel = "dev"
 
@@ -86,19 +89,38 @@ func (verifier *identityVerifier) Verify(ctx context.Context, identity svcaccoun
 	return verifyChannel(ctx, identity)
 }
 
-// verifyDev：凭据等于配置的开发令牌就确认这个账号名。没有配置令牌时（缺省、生产）一律拒绝。
+// devCredentialVersionSeparator 分开开发凭据里的令牌与“密码版本”：凭据是 <开发令牌> 或 <开发令牌>#<密码版本>。
+const devCredentialVersionSeparator = "#"
+
+// verifyDev：凭据是配置的开发令牌（可以在后面接 #<密码版本>）就确认这个账号名。没有配置令牌时（缺省、生产）一律拒绝。
 // 比较用定长时间的写法，令牌不进日志也不进错误信息。
+//
+// “密码版本”演示渠道怎样交出凭证版本（Verified.CredentialVersion，维护者 2026-11-18）：开发登录没有密码，
+// 用 dev-local#2 这样的凭据模拟“这个账号的密码已经改到第 2 版”。account 在登录时发现版本与上次不同，就让这个
+// 账号此前签发的游戏账号 token（gt2）全部失效；不带 # 的凭据不给版本，account 不动。正式渠道在 verifyChannel
+// （login_channels.go）里照这个做：把渠道回答里的密码版本 / 改密时刻放进 CredentialVersion。
 func (verifier *identityVerifier) verifyDev(identity svcaccount.Identity) (svcaccount.Verified, error) {
 	token := verifier.devToken.Load()
 	if token == nil || *token == "" {
 		return svcaccount.Verified{}, fmt.Errorf("%w: development login is off (login.dev_token is not set in this process's config)", svcaccount.ErrIdentityDenied)
 	}
-	if subtle.ConstantTimeCompare([]byte(identity.Credential), []byte(*token)) != 1 {
+	// 先比令牌那一段（与令牌等长的前缀），再看剩下的：要么什么都没有，要么是 # 加一个不空的版本。
+	// 令牌本身含 # 也没关系，切分点由令牌的长度定，不由 # 定。
+	credential := identity.Credential
+	secret, rest := credential, ""
+	if len(credential) > len(*token) {
+		secret, rest = credential[:len(*token)], credential[len(*token):]
+	}
+	if subtle.ConstantTimeCompare([]byte(secret), []byte(*token)) != 1 {
+		return svcaccount.Verified{}, fmt.Errorf("%w: the development credential does not match", svcaccount.ErrIdentityDenied)
+	}
+	version, versioned := strings.CutPrefix(rest, devCredentialVersionSeparator)
+	if rest != "" && (!versioned || version == "") {
 		return svcaccount.Verified{}, fmt.Errorf("%w: the development credential does not match", svcaccount.ErrIdentityDenied)
 	}
 	openID := strings.TrimSpace(identity.OpenID)
 	if openID == "" {
 		return svcaccount.Verified{}, fmt.Errorf("%w: open id is empty", svcaccount.ErrIdentityInvalid)
 	}
-	return svcaccount.Verified{Channel: DevChannel, OpenID: openID}, nil
+	return svcaccount.Verified{Channel: DevChannel, OpenID: openID, CredentialVersion: version}, nil
 }

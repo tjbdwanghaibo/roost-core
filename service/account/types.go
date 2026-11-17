@@ -252,6 +252,10 @@ type Account struct {
 	// GameTokenGeneration 是这个账号的游戏账号 token 代数（game_token.go）：签发时写进 token，校验时与这里比较，
 	// 不相等的拒绝。RevokeGameTokens 把它加一，在此之前签发的 token 随之全部失效。只增不减；零是从未吊销过。
 	GameTokenGeneration uint64 `json:"game_token_generation,omitempty"`
+	// CredentialVersion 是上一次经渠道确认身份时渠道给的凭证版本（Verified.CredentialVersion，维护者 2026-11-18）。
+	// 空表示渠道从没给过。Login 发现渠道这次给的与它不同（且它不空）时把 GameTokenGeneration 加一，再换成新值；
+	// 渠道这次没给时不动它。
+	CredentialVersion string `json:"credential_version,omitempty"`
 }
 
 // ServerStatus says whether a server accepts new roles.

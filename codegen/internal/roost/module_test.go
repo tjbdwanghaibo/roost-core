@@ -1696,7 +1696,7 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 		}
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
-	if err != nil || len(report.Modules) != 2 || report.Modules[0].Name != "account_auth" || report.Modules[0].Passed != 6 ||
+	if err != nil || len(report.Modules) != 2 || report.Modules[0].Name != "account_auth" || report.Modules[0].Passed != 7 ||
 		report.Modules[1].Name != "login" || report.Modules[1].Passed != 33 {
 		t.Fatalf("verify: %v\n%+v", err, report)
 	}

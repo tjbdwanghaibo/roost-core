@@ -13,4 +13,4 @@ next:
 verify:
   packages: [./services/account]
   run: ^TestLogin
-  pass: 6
+  pass: 7

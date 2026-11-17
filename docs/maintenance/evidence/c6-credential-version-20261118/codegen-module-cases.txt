@@ -1,0 +1,4 @@
+--- PASS: TestModulePortalInstallsOnALobbyProjectWithoutGame (16.92s)
+--- PASS: TestModuleLoginReplacesTheAuthenticatorAndAccountStubs (21.28s)
+--- PASS: TestModulePortalInstallsOnTheHostedAccountService (42.78s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	43.392s

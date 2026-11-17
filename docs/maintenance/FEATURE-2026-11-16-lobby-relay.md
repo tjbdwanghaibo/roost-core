@@ -74,7 +74,7 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
 - **谁用**：lobby。每个 lobby 配置自己服务的游戏列表 `lobby.games`，收到请求时调用 `ValidateGameToken(token, 请求里的 game)`；拿别的游戏的 token 来，当场拒绝。lobby 不持有密钥，也不自己验签。
 - **多个游戏共用一套账号**：账号是全局的，同一个人在各个游戏里是同一个账号号；封号仍是全局的（按游戏封号以后需要再加，不在本期）。token 里带了游戏名，大厅和 relay 的房间都按游戏隔开。
 - **为什么不直接用 at1**：at1 不带游戏，一个游戏的客户端拿它可以去另一个游戏的大厅。gt2 把游戏写进签名，lobby 只认自己的游戏；寿命也可以按游戏单独配置。
-- **吊销（交接 C6，维护者 2026-11-17 选“代数”，已实施）**：账号记录多一个 token 代数（`Account.GameTokenGeneration`，只增不减），签发时写进 token 的“代数”段（签名覆盖它；格式因此从 `gt1.<过期秒>.<游戏>.<账号>.<签名>` 改成六段的 `gt2`，与 at1 四段、et1 五段、角色会话令牌两段都不同，旧 gt1 不再认），`ValidateGameToken` 把它与重读到的账号比较（校验本来就为封号重读账号，不多一次读），不等答 `ErrSessionInvalid`。`RevokeGameTokens(ctx, accountID)`（总线接口）把代数加一并落库：在此之前签发的全部失效，之后签发的照常可用；封号行为不变。触发：运维用 `accountctl revoke-game-tokens -account <账号号>`；改密码自动加一——account 没有改密码 / 改凭证的路径（身份由渠道确认，`Verifier`），由凭证变更发生的那一方经总线调 `RevokeGameTokens`（是否要 account 自己提供凭证变更入口，待维护者定）。不做：单张吊销、吊销时把人从正在进行的房间断开、portal 登出接口。
+- **吊销（交接 C6，维护者 2026-11-17 选“代数”，已实施）**：账号记录多一个 token 代数（`Account.GameTokenGeneration`，只增不减），签发时写进 token 的“代数”段（签名覆盖它；格式因此从 `gt1.<过期秒>.<游戏>.<账号>.<签名>` 改成六段的 `gt2`，与 at1 四段、et1 五段、角色会话令牌两段都不同，旧 gt1 不再认），`ValidateGameToken` 把它与重读到的账号比较（校验本来就为封号重读账号，不多一次读），不等答 `ErrSessionInvalid`。`RevokeGameTokens(ctx, accountID)`（总线接口）把代数加一并落库：在此之前签发的全部失效，之后签发的照常可用；封号行为不变。触发：运维用 `accountctl revoke-game-tokens -account <账号号>`；改密码自动加一——account 没有改密码 / 改凭证的路径（身份由渠道确认，`Verifier`）；维护者 2026-11-18 选 B：渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本，`Login` 发现它与账号记录上存的（`Account.CredentialVersion`）不同就在同一次落库里把代数加一，第一次见到只记录、渠道不提供不动；手动的 `RevokeGameTokens` 仍在，用于当场吊销。不做：单张吊销、吊销时把人从正在进行的房间断开、portal 登出接口。
 
 #### 4.1.2 多个服务
 

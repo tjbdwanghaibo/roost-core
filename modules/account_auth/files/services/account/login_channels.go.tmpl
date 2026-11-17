@@ -25,6 +25,12 @@ import (
 //   - 返回渠道确认的身份（Verified.OpenID 取渠道回答里的用户标识），不是客户端提交的 identity.OpenID：
 //     否则拿自己的凭据配上别人的 open id 就能登进别人的账号。
 //
+// 渠道能告诉你“这个玩家的凭证现在是第几版”（密码版本号、最后改密时刻、换绑次数）时，把它放进
+// Verified.CredentialVersion：account 在登录时发现它与上次不同，就让这个账号此前签发的游戏账号 token（gt2）
+// 全部失效，改密码之后不用另外调 RevokeGameTokens。它只在凭证真的变了时才能变（每次登录都不同的会话 token、
+// 随机数会让每次登录都吊销一次），不要放密码本身；渠道不提供就留空，行为与没有这一项时相同。开发登录的
+// verifyDev（login_dev.go）是一个写法。
+//
 // 渠道的密钥、地址这类配置写成带 config 标签的结构体，用 app.LoadConfig 读（照 login_dev.go 的
 // devLoginConfig；需要 Registry 时照 identityVerifier 的 BindRegistry），不要直接读环境变量或 viper。
 func verifyChannel(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {

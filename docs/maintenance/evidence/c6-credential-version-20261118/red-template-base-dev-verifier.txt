@@ -1,0 +1,12 @@
+--- FAIL: TestModulePortalInstallsOnALobbyProjectWithoutGame (12.13s)
+        --- PASS: TestLoginDevTokenLogsInAndGetsASession (0.00s)
+        --- PASS: TestLoginDevTokenIsRefusedWhenWrongOrOff (0.00s)
+        --- PASS: TestLoginDevTokenIsRefusedByAProductionConfig (0.00s)
+            login_test.go:299: login with "dev-local#1": account: identity was denied by the channel: account: identity was denied by the channel: the development credential does not match
+        --- FAIL: TestLoginDevCredentialVersionRevokesGameTokens (0.00s)
+        --- PASS: TestLoginOtherChannelsAreRefusedUntilTheProjectWiresThem (0.00s)
+        --- PASS: TestLoginPlayerIDsComeFromOneCounterUnderTheAccountPrefix (0.00s)
+        --- PASS: TestLoginPlayerIDCounterFailsClosed (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	12.739s
+FAIL

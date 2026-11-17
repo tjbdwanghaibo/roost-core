@@ -80,7 +80,7 @@ lobby 不持有 account 的密钥，也不自己验签。
 - 返回的 `GameAccount` 经 `RequireGame(请求的 game)` 核对游戏。
 - `wiring/lobby.AccountTokens` 负责转换结果：`session_invalid`、`identity_denied`、`account_missing`、`game_invalid` 都答 401；其他错误（account 不可达）答 503。
 - `service/lobby.GameTokenValidator` 是 lobby 里的最小接口；单测用替身，也可以由 `lobby.NewMod(validator)` 注入。
-- **吊销**（交接 C6，维护者 2026-11-17）：token 是 `gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，account 校验时把代数与账号记录上的当前值比较（校验本来就要重读账号看封号，不多一次读）。account 的 `RevokeGameTokens(账号)` 把代数加一：在此之前签发的 token 一律答 `session_invalid`（401），之后签发的照常可用。触发的入口是运维的 `accountctl revoke-game-tokens -account <账号号>`（login 模块的命令）与账号凭证变更的那一方经总线调用。lobby 只拿校验结果，接口不变；吊销只拦以后的大厅调用（建房、列房、加入、离开、改状态），已经发出的 relay 令牌与已经连上的 relay 连接不受影响，不能单张吊销。封号的行为不变（被封答 `identity_denied`）。
+- **吊销**（交接 C6，维护者 2026-11-17）：token 是 `gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，account 校验时把代数与账号记录上的当前值比较（校验本来就要重读账号看封号，不多一次读）。account 的 `RevokeGameTokens(账号)` 把代数加一：在此之前签发的 token 一律答 `session_invalid`（401），之后签发的照常可用。触发的入口是运维的 `accountctl revoke-game-tokens -account <账号号>`（login 模块的命令）、需要当场吊销的一方经总线调用，以及改密码之后的下一次登录：渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本，account 登录时发现它与账号上存的不同就自动加一（维护者 2026-11-18）。lobby 只拿校验结果，接口不变；吊销只拦以后的大厅调用（建房、列房、加入、离开、改状态），已经发出的 relay 令牌与已经连上的 relay 连接不受影响，不能单张吊销。封号的行为不变（被封答 `identity_denied`）。
 
 ### 3.1 客户端怎样拿到 gt2
 

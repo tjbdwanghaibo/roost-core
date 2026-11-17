@@ -1,0 +1,13 @@
+redis: 2026/11/18 03:38:18 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:1: connect: connection refused
+redis: 2026/11/18 03:38:18 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:1: connect: connection refused
+--- FAIL: TestALoginWithANewCredentialVersionRevokesGameTokens (2.63s)
+    game_token_test.go:422: dial tcp 127.0.0.1:1: connect: connection refused
+--- FAIL: TestABannedLoginWithANewCredentialVersionStillRevokes (2.59s)
+    game_token_test.go:499: dial tcp 127.0.0.1:1: connect: connection refused
+--- FAIL: TestConcurrentLoginsCountCredentialChangesOnce (2.61s)
+    game_token_test.go:530: dial tcp 127.0.0.1:1: connect: connection refused
+--- FAIL: TestAnOversizedCredentialVersionIsRefused (2.65s)
+    game_token_test.go:582: dial tcp 127.0.0.1:1: connect: connection refused
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	11.054s
+FAIL

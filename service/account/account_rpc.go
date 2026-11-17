@@ -40,6 +40,9 @@ type Accounts interface {
 	// Login verifies a channel identity and returns the account it maps to,
 	// creating it on first sight. The channel is asked; the account id is
 	// never read from the request.
+	//
+	// 渠道在 Verified.CredentialVersion 里给了凭证版本、且与账号上存的不同（之前存过）时，这次登录把游戏账号
+	// token 的代数加一（与 RevokeGameTokens 同一个计数，维护者 2026-11-18）；被封的账号登录照样被拒，版本变化照样记下。
 	Login(ctx context.Context, identity Identity) (account Account, err error)
 
 	// CreateRole starts or resumes one durable role plan for an account/server.
@@ -133,7 +136,7 @@ type Accounts interface {
 
 	// RevokeGameTokens 吊销 accountID 在此之前签发的全部游戏账号 token（账号上的代数加一并落库），返回新的代数；
 	// 之后签发的照常可用，封号状态与别的票据不受影响。账号不存在 ErrAccountMissing。调用方是运维（accountctl）与
-	// 账号凭证变更的那一方（改密码、换绑）；可信调用方提供 accountID，信任模型同 SelectRole。在总线上：它只会让
+	// 需要当场吊销的那一方（报告泄露、换绑；改密码由登录时的凭证版本自动加一，见 Login）；可信调用方提供 accountID，信任模型同 SelectRole。在总线上：它只会让
 	// token 失效，不会放进任何人。
 	RevokeGameTokens(ctx context.Context, accountID string) (generation uint64, err error)
 

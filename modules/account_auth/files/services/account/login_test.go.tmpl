@@ -105,6 +105,7 @@ func loginAccounts(t *testing.T, registry *app.Registry) *svcaccount.Service {
 		Allocator:     allocator,
 		NameRules:     NameRules(),
 		SessionSecret: "login-test-secret",
+		Games:         []svcaccount.GameSpec{{Name: "party"}},
 		Now:           now,
 		SystemNow:     now,
 	})
@@ -184,7 +185,9 @@ func TestLoginDevTokenIsRefusedWhenWrongOrOff(t *testing.T) {
 	if err := loginBind(t, on, loginRegistry(t, nil, "login.dev_token", "dev-local")); err != nil {
 		t.Fatal(err)
 	}
-	for _, credential := range []string{"", "dev-", "dev-loca", "dev-local ", " dev-local", "DEV-LOCAL", "dev-local2", "alice"} {
+	// 带密码版本的写法（<令牌>#<版本>）也只认令牌本身：令牌那一段不对、# 后面是空的，都拒绝。
+	for _, credential := range []string{"", "dev-", "dev-loca", "dev-local ", " dev-local", "DEV-LOCAL", "dev-local2", "alice",
+		"dev-local#", "dev-loca#1", "dev-local2#1", "#1", "dev-local 1"} {
 		denied("credential "+credential, on, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: credential})
 	}
 	if verified, err := on.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "dev-local"}); err != nil || verified.OpenID != "alice" || verified.Channel != "dev" {
@@ -258,6 +261,60 @@ func TestLoginDevTokenIsRefusedByAProductionConfig(t *testing.T) {
 	if err := loginBind(t, Verifier(), loginRegistry(t, nil, "env", "dev", "login.dev_token", "dev-local")); err != nil {
 		t.Fatalf("a development config with a development token: %v", err)
 	}
+}
+
+// 改密码自动吊销（维护者 2026-11-18）：开发凭据后面接 #<密码版本> 模拟渠道交出的凭证版本。第一次带版本只记录；
+// 版本不变、不带版本都不动；版本变了，这个账号此前签发的游戏账号 token 被拒，之后签发的可用。账号上的代数与
+// 手动吊销（RevokeGameTokens、accountctl revoke-game-tokens）是同一个。
+func TestLoginDevCredentialVersionRevokesGameTokens(t *testing.T) {
+	accounts := loginAccounts(t, loginRegistry(t, &loginCounterRedis{}, "account.key_prefix", "roost:test:account", "login.dev_token", "dev-local"))
+	ctx := context.Background()
+	login := func(credential string) svcaccount.Account {
+		t.Helper()
+		account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: credential})
+		if err != nil {
+			t.Fatalf("login with %q: %v", credential, err)
+		}
+		return account
+	}
+	gameToken := func(accountID string) string {
+		t.Helper()
+		ticket, err := accounts.IssueAccountTicket(ctx, accountID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := accounts.IssueGameToken(ctx, ticket.Ticket, "party")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token.Token
+	}
+	valid := func(what, token string) {
+		t.Helper()
+		if got, err := accounts.ValidateGameToken(ctx, token); err != nil || got.AccountID != "dev:alice" {
+			t.Fatalf("%s: %+v, %v; want the token to validate", what, got, err)
+		}
+	}
+
+	alice := login("dev-local#1")
+	if alice.CredentialVersion != "1" || alice.GameTokenGeneration != 0 {
+		t.Fatalf("the first login with a version: %+v; want version 1 recorded, generation 0", alice)
+	}
+	before := gameToken(alice.ID)
+	login("dev-local#1")
+	login("dev-local")
+	valid("the same version, then no version", before)
+
+	if changed := login("dev-local#2"); changed.CredentialVersion != "2" || changed.GameTokenGeneration != 1 {
+		t.Fatalf("a login after the password changed: %+v; want version 2, generation 1", changed)
+	}
+	if got, err := accounts.ValidateGameToken(ctx, before); !errors.Is(err, svcaccount.ErrSessionInvalid) || got.AccountID != "" {
+		t.Fatalf("a game token from before the password changed: %+v, %v; want session_invalid", got, err)
+	}
+	after := gameToken(alice.ID)
+	valid("a game token from after the password changed", after)
+	login("dev-local#2")
+	valid("logging in again with the same password version", after)
 }
 
 // 除开发渠道之外，缺省一个渠道都没接：全部拒绝，拿着开发令牌换个渠道名也不行。

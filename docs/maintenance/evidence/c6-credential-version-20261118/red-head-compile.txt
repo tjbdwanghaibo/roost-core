@@ -1,0 +1,14 @@
+# github.com/tjbdwanghaibo/roost-core/service/account [github.com/tjbdwanghaibo/roost-core/service/account.test]
+service/account/game_token_test.go:396:71: unknown field CredentialVersion in struct literal of type Verified
+service/account/game_token_test.go:428:82: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:429:119: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:434:82: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:435:125: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:444:82: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:445:132: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:452:82: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:453:127: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:478:82: got.CredentialVersion undefined (type Account has no field or method CredentialVersion)
+service/account/game_token_test.go:478:82: too many errors
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account [build failed]
+FAIL
