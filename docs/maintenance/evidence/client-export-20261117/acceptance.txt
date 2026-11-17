@@ -1,0 +1,101 @@
+
+### 环境
+roost: roost-codegen development
+protoc(PATH): libprotoc 36.2  protoc(31.1): libprotoc 31.1  dotnet: 10.0.302
+
+### 1. 新建工程、装模块、手写协议
+roost.yaml 末尾：
+            - protocol/def/wallet_spend.go
+client_export:
+    dir: shared/protocol
+    languages: [csharp]
+
+### 2. protoc 版本不对时报错（PATH 上是 36.2）
+rc=1
+2026/11/17 10:54:45 client_export needs protoc 31.1 to match Google.Protobuf 3.31.1 locked by the Roost C# SDK, but /opt/homebrew/bin/protoc (from PATH) reports "libprotoc 36.2"; install protoc 31.1 from https://github.com/protocolbuffers/protobuf/releases/tag/v31.1 (protoc-31.1-<os>-<arch>.zip), then point client_export.csharp.protoc or the ROOST_PROTOC environment variable at its bin/protoc, or put it first on PATH
+导出目录未写出（在任何生成器之前失败）
+
+### 3. roost generate（ROOST_PROTOC=protoc 31.1）
+rc=0
+go build ./... ok
+导出目录：
+238404 ./csharp/DaoSync.cs
+7801 ./csharp/DaoSyncApply.cs
+3796 ./csharp/ErrorCodes.cs
+760 ./csharp/MessageIds.cs
+101455 ./csharp/Protocol.cs
+4284 ./manifest.json
+3271 ./proto/dao_sync.proto
+1264 ./proto/protocol.proto
+
+### 4. 两次生成逐字节相同（--force 重写一次，再比）
+rc=0
+导出目录逐字节相同
+git status（整个工程）：0 个文件有变化
+generated files are up to date
+
+### 5. manifest 的消息号、错误码与 msgid_gen.go、internal/errors 一致
+messages: 12 entries, 7 ids match msgid_gen.go exactly
+error_codes: 12 entries match internal/errors exactly
+MessageIds.cs has every id
+
+### 6. doctor 的 client-export:fresh
+OK    client-export:fresh  shared/protocol matches protocol/def, DAO sync fields and 12 errcode(s)
+
+### 7. 只改 protocol/def、不重新生成：generate --check 与 doctor 都报过期
+ protocol/def/hello_ping.go | 1 +
+ 1 file changed, 1 insertion(+)
+generate --check rc=1
+2026/11/17 10:55:01 generated files are stale: protocol/pb/protocol.pb.go, protocol/proto/protocol.proto, shared/protocol/csharp/Protocol.cs, shared/protocol/manifest.json, shared/protocol/proto/protocol.proto
+doctor rc=1
+FAIL  client-export:fresh  shared/protocol is stale: protocol/def changed since the export was generated; run roost generate and commit shared/protocol
+
+### 8. C#：导出的 csharp/ + Roost.Client + Roost.Client.Codecs（Google.Protobuf 3.31.1），netstandard2.1
+dotnet build rc=0
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:00.58
+工程：/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/cs/Export.csproj（Nullable enable、TreatWarningsAsErrors、LangVersion 8）
+
+### 9. roost client sync
+synced /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol -> /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc-client/Assets/Protocol
+files: 5 added, 0 updated, 0 removed, 0 unchanged
+  added DaoSync.cs
+  added DaoSyncApply.cs
+  added ErrorCodes.cs
+  added MessageIds.cs
+  added Protocol.cs
+first sync: core v1.52.0, generator development, protoc 31.1 / Google.Protobuf 3.31.1; 12 message id(s), 12 errcode(s)
+generate rc=0
+synced /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol -> /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc-client/Assets/Protocol
+files: 0 added, 3 updated, 0 removed, 2 unchanged
+  updated ErrorCodes.cs
+  updated MessageIds.cs
+  updated Protocol.cs
+message ids added (2):
+  request HelloWave = 10006 (HelloWaveRequest)
+  response HelloWave = 10006 (HelloWaveResponse)
+errcodes added (1):
+  hello_too_many = 100100 "wave at most 3 times per call"
+errcodes changed (1):
+  wallet_short: 100003 "not enough coins" -> 100003 "not enough coins left"
+DaoSync.cs
+DaoSyncApply.cs
+ErrorCodes.cs
+MessageIds.cs
+Protocol.cs
+manifest.json
+
+### 10. 配 csharp.namespace: Game.Protocol 再生成、再编译
+generate rc=0
+   2 namespace Game.Protocol
+   1 namespace Game.Protocol {
+   2 namespace Game.Protocol.DaoSync {
+   1 option csharp_namespace = "Game.Protocol";
+   1 option csharp_namespace = "Game.Protocol.DaoSync";
+dotnet build rc=0
+    0 个警告
+    0 个错误
+done

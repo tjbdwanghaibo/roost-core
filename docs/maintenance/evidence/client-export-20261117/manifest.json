@@ -1,0 +1,165 @@
+{
+  "kind": "roost-client-export",
+  "schema": 1,
+  "core": "v1.52.0",
+  "generator": "development",
+  "languages": [
+    "csharp"
+  ],
+  "protoc": "31.1",
+  "google_protobuf": "3.31.1",
+  "csharp_namespaces": {
+    "protocol": "Roost.Protocol",
+    "dao_sync": "Roost.Dao.Sync",
+    "ids": "Roost.Generated"
+  },
+  "sources": {
+    "protocol_def": "sha256:ce69be07e43d0580a4f8a46288f5c50097dab41abef5d92ab22829c110086798",
+    "dao_sync": "sha256:5aa87b7ac501031842574c14008000e8a3313207c88d91431a95dca167330e18"
+  },
+  "files": {
+    "csharp/DaoSync.cs": "sha256:2a9f3e83728ff6acfb3bb02dbebee58a7d9fdbfe01535706c18f9a84db8b043f",
+    "csharp/DaoSyncApply.cs": "sha256:b36429bd3c6fd085d7c33aa53d4166a9bef99bd331b20d9dcc5161f62e1d7a6c",
+    "csharp/ErrorCodes.cs": "sha256:1c7cf728480f32df525f04b8b77da1d037b011edda074c5a48c32197308dbf59",
+    "csharp/MessageIds.cs": "sha256:a5dbd2641ac2f4579680250fb5b6835be6003180f32ec19c8461aac8598061be",
+    "csharp/Protocol.cs": "sha256:b670f6d73f5db469deab6dd345f26ac81f2a7454dd3cabc2d17d583e4aea9e0c",
+    "proto/dao_sync.proto": "sha256:5aa87b7ac501031842574c14008000e8a3313207c88d91431a95dca167330e18",
+    "proto/protocol.proto": "sha256:4879d6966c82ab0a051b62caeb79d3222f9238b75bb3f7529f49d87efbace12d"
+  },
+  "messages": [
+    {
+      "name": "WalletSpend",
+      "direction": "request",
+      "id": 10000,
+      "type": "WalletSpendRequest"
+    },
+    {
+      "name": "WalletSpend",
+      "direction": "response",
+      "id": 10000,
+      "type": "WalletSpendResponse"
+    },
+    {
+      "name": "BagDiscard",
+      "direction": "request",
+      "id": 10001,
+      "type": "BagDiscardRequest"
+    },
+    {
+      "name": "BagDiscard",
+      "direction": "response",
+      "id": 10001,
+      "type": "BagDiscardResponse"
+    },
+    {
+      "name": "EnterCreate",
+      "direction": "request",
+      "id": 10002,
+      "type": "EnterCreateRequest"
+    },
+    {
+      "name": "EnterCreate",
+      "direction": "response",
+      "id": 10002,
+      "type": "EnterCreateResponse"
+    },
+    {
+      "name": "EnterGame",
+      "direction": "request",
+      "id": 10003,
+      "type": "EnterGameRequest"
+    },
+    {
+      "name": "EnterGame",
+      "direction": "response",
+      "id": 10003,
+      "type": "EnterGameResponse"
+    },
+    {
+      "name": "EnterStatus",
+      "direction": "push",
+      "id": 10004,
+      "type": "EnterStatusPush"
+    },
+    {
+      "name": "HelloPing",
+      "direction": "request",
+      "id": 10005,
+      "type": "HelloPingRequest"
+    },
+    {
+      "name": "HelloPing",
+      "direction": "response",
+      "id": 10005,
+      "type": "HelloPingResponse"
+    },
+    {
+      "name": "SelfSync",
+      "direction": "push",
+      "id": 19999,
+      "type": "SelfSyncPush"
+    }
+  ],
+  "error_codes": [
+    {
+      "code": 100000,
+      "name": "wallet_conflict",
+      "message": "the key was used with another amount"
+    },
+    {
+      "code": 100001,
+      "name": "wallet_invalid",
+      "message": "invalid key (1..64 ASCII letters, digits, '-', '_', ':') or amount (zero, or not positive where a positive amount is required)"
+    },
+    {
+      "code": 100002,
+      "name": "wallet_overflow",
+      "message": "balance overflow"
+    },
+    {
+      "code": 100003,
+      "name": "wallet_short",
+      "message": "not enough coins"
+    },
+    {
+      "code": 100004,
+      "name": "bag_count_invalid",
+      "message": "item count must be positive"
+    },
+    {
+      "code": 100005,
+      "name": "bag_item_invalid",
+      "message": "unknown item"
+    },
+    {
+      "code": 100006,
+      "name": "bag_kinds_full",
+      "message": "bag has no room for another kind of item"
+    },
+    {
+      "code": 100007,
+      "name": "bag_short",
+      "message": "not enough items"
+    },
+    {
+      "code": 100008,
+      "name": "bag_stack_full",
+      "message": "item stack is full"
+    },
+    {
+      "code": 100009,
+      "name": "enter_created",
+      "message": "the player is already created; enter the game"
+    },
+    {
+      "code": 100010,
+      "name": "enter_name_long",
+      "message": "the name in the create request is too long"
+    },
+    {
+      "code": 100011,
+      "name": "enter_need_create",
+      "message": "the player is not created on this server yet; create it first"
+    }
+  ]
+}

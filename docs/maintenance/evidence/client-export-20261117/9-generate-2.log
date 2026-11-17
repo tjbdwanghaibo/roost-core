@@ -1,0 +1,46 @@
+==> module-service
+==> dao
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_databases.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_player_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_wallet_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_wallet_ledger_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_wallet_receipt_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_bag_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_enter_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/protocol/proto/protocol.proto
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/protocol/pb/protocol.pb.go
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/protocol/msgid/msgid_gen.go
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/protocol/protocol_manifest.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/protocol/player_bind/bind_gen.go
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/loadtest/protocol/registry_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/game/controllers/controller.go
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/game/controllers/hello.go
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/game/entities/player/player_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/game/entities/player/player_sync_packer_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/game/entities/player/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/game/entities/world/world_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> config-template
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/configs/table_template/item.csv
+==> config-data
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/configs/data/item.json
+==> config-go
+table go: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/configs/generated/gen_table_config.go
+==> endpoint
+==> registry
+==> client-export
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/proto/protocol.proto
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/proto/dao_sync.proto
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/csharp/Protocol.cs
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/csharp/DaoSync.cs
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/csharp/DaoSyncApply.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/csharp/MessageIds.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/csharp/ErrorCodes.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/shared/protocol/manifest.json

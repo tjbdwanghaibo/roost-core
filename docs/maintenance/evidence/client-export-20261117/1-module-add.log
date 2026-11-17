@@ -1,0 +1,79 @@
+service: game
+prerequisite (did run): roost add access player --service game
+prerequisite (did run): roost add transport tcp
+prerequisite (did run): enable access.player.self_sync after module declarations; sync in the same installation transaction
+module wallet: installed
+  state:     PlayerDao.Wallet (persist,sync)
+  state:     PlayerDao.WalletLedger (nosync)
+  component: Player.Wallet
+  id:        component Wallet = 2000
+  id:        errcode wallet_conflict = 100000
+  id:        errcode wallet_invalid = 100001
+  id:        errcode wallet_overflow = 100002
+  id:        errcode wallet_short = 100003
+  id:        protocol WalletSpend = 10000
+  file:      db/def/wallet.go
+  file:      game/components/wallet/wallet.go
+  file:      game/controllers/wallet.go
+  file:      game/event/wallet.go
+  file:      game/handler/wallet_grant.go
+  file:      game/handler/wallet_spend.go
+  file:      game/handler/wallet_test.go
+  file:      game/view/component_wallet.go
+  file:      internal/errors/wallet.go
+  file:      protocol/def/wallet_spend.go
+module bag: installed
+  state:     PlayerDao.Bag (persist,sync)
+  component: Player.Bag
+  id:        component Bag = 2001
+  id:        errcode bag_count_invalid = 100004
+  id:        errcode bag_item_invalid = 100005
+  id:        errcode bag_kinds_full = 100006
+  id:        errcode bag_short = 100007
+  id:        errcode bag_stack_full = 100008
+  id:        protocol BagDiscard = 10001
+  file:      configs/schema/item.go
+  file:      configs/table/item.csv
+  file:      db/def/bag.go
+  file:      game/components/bag/bag.go
+  file:      game/components/bag/items.go
+  file:      game/controllers/bag.go
+  file:      game/handler/bag_discard.go
+  file:      game/handler/bag_grant.go
+  file:      game/handler/bag_test.go
+  file:      game/view/component_bag.go
+  file:      internal/errors/bag.go
+  file:      protocol/def/bag_discard.go
+module enter: installed
+  state:     PlayerDao.Enter (nosync)
+  component: Player.Enter
+  id:        component Enter = 2002
+  id:        errcode enter_created = 100009
+  id:        errcode enter_name_long = 100010
+  id:        errcode enter_need_create = 100011
+  id:        protocol EnterCreate = 10002
+  id:        protocol EnterGame = 10003
+  id:        protocol EnterStatus = 10004
+  file:      db/def/enter.go
+  file:      game/components/enter/enter.go
+  file:      game/controllers/enter.go
+  file:      game/controllers/enter_test.go
+  file:      game/entities/player/enter.go
+  file:      game/event/enter.go
+  file:      game/handler/enter_built.go
+  file:      game/handler/enter_create.go
+  file:      game/handler/enter_create_test.go
+  file:      game/handler/enter_existing.go
+  file:      game/handler/enter_init.go
+  file:      game/handler/enter_test.go
+  file:      game/modules/login/enter.go
+  file:      game/modules/login/enter_create.go
+  file:      game/modules/login/enter_create_test.go
+  file:      game/modules/login/enter_first.go
+  file:      game/modules/login/enter_test.go
+  file:      game/view/component_enter.go
+  file:      internal/errors/enter.go
+  file:      protocol/def/enter_create.go
+  file:      protocol/def/enter_game.go
+  file:      protocol/def/enter_status.go
+next: roost module verify

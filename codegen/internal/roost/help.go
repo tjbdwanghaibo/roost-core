@@ -122,7 +122,7 @@ roost framework verify --expected-release v1.16.0`,
 		Name: "generate", Aliases: []string{"gen"},
 		Summary:       "按依赖顺序运行项目启用的全部生成器",
 		Usage:         `roost generate [--changed] [--dry-run] [--check] [--force] [--root dir]`,
-		Configuration: `执行顺序为 DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。普通生成在同级临时项目完成全部生成器和 GOWORK=off go mod tidy，全部成功后才以可回滚批次提交生成物与 go.mod/go.sum；不会主动升级框架，也不会因后置生成器失败留下前置生成物。--check 在临时副本生成并检查差异；--changed 根据原项目 git 变更缩小范围。`,
+		Configuration: `执行顺序为 DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。普通生成在同级临时项目完成全部生成器和 GOWORK=off go mod tidy，全部成功后才以可回滚批次提交生成物与 go.mod/go.sum；不会主动升级框架，也不会因后置生成器失败留下前置生成物。--check 在临时副本生成并检查差异；--changed 根据原项目 git 变更缩小范围。roost.yaml 声明了 client_export 时最后再整份写出前后端公共协议目录（见 roost help client），--check 同样覆盖它。`,
 		Example: `roost generate --dry-run
 roost generate
 roost generate --check`,
@@ -344,6 +344,24 @@ type GameProtocol interface {
     //roost:msg id=10001
     Ping(PingRequest) PingResponse
 }`,
+	},
+	{
+		Name: "client", Aliases: []string{"client-sync", "client-export", "client_export", "unity"},
+		Summary: "前后端公共协议目录（client_export）与客户端同步",
+		Usage: `roost generate                      # 声明了 client_export 时整份写出导出目录
+roost generate --check              # 导出目录过期时失败
+roost project doctor                # client-export:fresh
+roost client sync --from <服务端工程> --to <客户端目录> [--dry-run]`,
+		Configuration: `roost.yaml 的 client_export 不默认开启；没声明的工程生成结果不变。dir 相对工程根，缺省 shared/protocol，产物提交进仓库；languages 目前只有 csharp（不写时只导出 proto 副本与 manifest.json）；csharp.namespace 可选：缺省协议在 Roost.Protocol、DAO 同步在 Roost.Dao.Sync、消息号与错误码在 Roost.Generated，写了则协议、消息号、错误码都在 <namespace>，DAO 同步在 <namespace>.DaoSync。导出目录：proto/protocol.proto、proto/dao_sync.proto、csharp/Protocol.cs 与 DaoSync.cs（protoc 生成）、csharp/DaoSyncApply.cs、MessageIds.cs、ErrorCodes.cs（Go 生成）、manifest.json（core / 生成器 / protoc / Google.Protobuf 版本，protocol/def 与同步字段的哈希，每个导出文件的哈希，消息号与错误码清单）。csharp 要求 protoc 与 C# SDK 锁定的 Google.Protobuf 同版本（现为 3.31.1，对应 protoc 31.1）：依次找 client_export.csharp.protoc（相对路径按工程根）、环境变量 ROOST_PROTOC、PATH，版本不对时 generate 报错并给出安装方法；生成器不下载 protoc。doctor 的 client-export:fresh 不跑 protoc，只核对导出文件哈希、protocol/def 与同步字段的哈希和错误码。client sync 先核对服务端导出目录的哈希，把 csharp/ 平铺拷进客户端目录并另存 manifest.json，对比上次的 manifest 报告新增 / 变化 / 删除的消息号与错误码；上次同步写过、这次没有的文件删除；目录里不是上次同步写的同名文件拒绝覆盖；不生成 Unity 的 .meta。Unity 缺省走托管路线（GameClient + RoostClientDriver），直接编译导出的 csharp/；原生 RoostNativeDriver 是可选路线，见 client/unity/README.md。`,
+		Example: `client_export:
+  dir: shared/protocol
+  languages: [csharp]
+  csharp:
+    namespace: Game.Protocol   # 可选
+    protoc: tools/protoc-31.1/bin/protoc   # 可选
+
+ROOST_PROTOC=$HOME/tools/protoc-31.1/bin/protoc roost generate
+roost client sync --from ../server --to ../client/Assets/Scripts/Protocol`,
 	},
 	{
 		Name: "cfggen", Aliases: []string{"configgen", "config-data"},

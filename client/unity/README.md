@@ -1,5 +1,15 @@
 # Unity 客户端接入
 
+## 两条接入路线
+
+**缺省走托管路线**（维护者 2026-11-17）：`GameClient` + `RoostClientDriver`。网络、心跳、重连与 EntitySync 都在 C#（`Roost.Client`）里；业务把服务端导出目录（`roost.yaml` 的 `client_export`，见[客户端手册“前后端公共协议目录”](../README.md#前后端公共协议目录client_export)）的 `csharp/` 用 `roost client sync` 同步进 Unity 工程直接编译，再引用 `Roost.Client`、`Roost.Client.Codecs` 与 Google.Protobuf 3.31.1。业务工程不需要原生插件，也不需要 C++ 构建环境。在持续存在的 GameObject 上加 `RoostClientDriver`，`Attach(client)` 后它每帧在主线程 `Pump`、销毁时 `Dispose`；连接用 `client.Connection.ConnectAsync`，用法见[客户端手册“标准业务入口”](../README.md#标准业务入口)。
+
+**原生路线是可选的**：`RoostNativeDriver` + `NativeGameClient`，网络内核来自 `client/cpp`。适合要原生网络内核（例如网络线程与 Unity 主线程隔离、移动端原生 socket 行为），或要与 C++ 客户端行为一致的项目；代价是要按平台构建并导入原生插件（下文“构建可导入包”），插件、绑定和 DLL 必须一起更新。业务 PB 与 EntitySync 在两条路线上都复用 `Roost.Client` 与同一份导出的 C#。
+
+同一连接只选一条路线，不要两个 Driver 同时消费。下文“构建可导入包”“业务接线”是原生路线的步骤。
+
+## 原生路线
+
 正式网络内核来自 `client/cpp`，Unity 主线程通过 `RoostNativeDriver` 消费事件；业务 PB 和 EntitySync 复用 `Roost.Client` 与项目生成的 DAO codec。不会启动第二条 C# TCP 连接。网络 ABI 为 2，插件、绑定和 DLL 必须一起更新。
 
 ## 构建可导入包
@@ -23,7 +33,7 @@ python3 scripts/client/build-unity.py --target macos --output /tmp/roost-unity-s
 4. 收到业务请求失败/超时按业务幂等规则处理；超时可能已经执行，重连不自动重发。重连票据 provider 只读取异步准备好的新票据，不能阻塞主线程。首次连接失败由业务处理。
 5. Driver 禁用或进入后台时停止重连并断开；重新启用/回到前台发出 `ResumeRequested`，由业务重新取票登录。不会重用旧会话自动恢复。销毁/主动退出调用 `Detach`，先释放依赖 game 的 Lockstep 对象。禁止在后台或禁用状态 Attach。
 
-业务 PB 的 `.proto` 是服务端协议源，客户端用 protoc 生成 C# 并引入匹配的 Google.Protobuf。SDK 不反射猜测业务路由。DAO 生成/回调语义和 C# API 见 [客户端手册](../README.md) 与 [native 手册](../cpp/README.md)。
+业务 PB 的 `.proto` 是服务端协议源；C# 用服务端导出目录里 protoc 31.1 生成的那份（与 Google.Protobuf 3.31.1 同版本），客户端不再自己跑 protoc。SDK 不反射猜测业务路由。DAO 生成/回调语义和 C# API 见 [客户端手册](../README.md) 与 [native 手册](../cpp/README.md)。
 
 ## 完整可运行验收场景
 

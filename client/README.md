@@ -14,7 +14,7 @@ client.ProbeClock(sample => clock.Observe(sample), error => Console.WriteLine(er
 client.Entities.Trace = new ClientTrace(1024);
 ```
 
-新业务推荐 `GameClient`，已有低层消费者可以继续使用 `TcpSession`。前者复用同一 RS 编解码和 TCP 会话，没有另起网络协议。
+新业务推荐 `GameClient`，已有低层消费者可以继续使用 `TcpSession`。前者复用同一 RS 编解码和 TCP 会话，没有另起网络协议。Unity 的缺省接入也是托管路线：`GameClient` + `RoostClientDriver`，直接编译服务端导出目录的 `csharp/`（见下文“前后端公共协议目录”），不需要 C++ 构建环境；原生 `RoostNativeDriver` 是可选路线，见 [Unity 手册](unity/README.md)。
 
 - `Connection`：票据鉴权、默认 15 秒心跳、请求预算、断线状态；自动重连默认关闭，由业务通过 `ConnectionOptions.AutoReconnect` 启用。有界指数退避、每次重新取票、每次成功/失败都有 `ReconnectResult`，不会自动重发业务请求。
 - C# `MaxPendingRequests` 限制普通请求、通知及显式校时探测；监控心跳另有最多一个内部槽位，业务不能借用。心跳仍共享发送锁与线上序列，发送阻塞或真正无应答受 `HeartbeatTimeout` 限制。
@@ -138,7 +138,27 @@ Go封包实现是`client/wire`，robot TCP/WebSocket与正式生成的player TCP
 
 PB仍走`PushPlayer` / `PushSession`及生成ProtocolRegistry encoder。Sync使用显式`PushSyncPlayer(ctx, playerID, msgID, frameBytes)`或`PushSyncSession`，不走PB encoder。demo的`sceneLane`已改成raw Sync；`EntitySyncPush`结构暂留作协议编号/生成schema产物，正式scene路径不再序列化它。业务自己的PB推送不自动变成Sync。
 
-可选C#消息编号由同一Go定义生成，路径显式指定，现有默认产物不变。在业务工程根目录执行（将`<core-version>`换成选定版本）：
+### 前后端公共协议目录（client_export）
+
+客户端（Unity）与服务端是两个仓库时，客户端不引用服务端路径，而是同步服务端导出的C#。服务端在`roost.yaml`声明（不默认开启；没声明的工程生成结果不变）：
+
+```yaml
+client_export:
+  dir: shared/protocol        # 相对工程根，缺省 shared/protocol，产物提交进仓库
+  languages: [csharp]
+  csharp:
+    namespace: Game.Protocol  # 可选
+```
+
+之后每次`roost generate`都整份写出这个目录：`proto/protocol.proto`、`proto/dao_sync.proto`，`csharp/Protocol.cs`与`csharp/DaoSync.cs`（protoc生成），`csharp/DaoSyncApply.cs`、`csharp/MessageIds.cs`、`csharp/ErrorCodes.cs`（Go生成，不依赖protoc），以及`manifest.json`（core / 生成器 / protoc / Google.Protobuf版本，`protocol/def`与同步字段的哈希，每个导出文件的哈希，消息号与错误码清单）。同样的输入输出逐字节相同。`roost generate --check`覆盖这个目录，`roost project doctor`的`client-export:fresh`在不跑protoc的情况下核对它是否落后于`protocol/def`、同步字段与错误码。
+
+- **protoc版本**：导出C#时要求`protoc --version`与`Roost.Client.Codecs`锁定的Google.Protobuf同版本（3.31.1对应protoc 31.1），版本不对或找不到时`roost generate`报错并写明需要的版本与下载地址。查找顺序：`client_export.csharp.protoc`（相对路径按工程根）、环境变量`ROOST_PROTOC`、PATH。生成器不下载protoc。
+- **命名空间**：缺省协议在`Roost.Protocol`、DAO同步在`Roost.Dao.Sync`、消息号与错误码在`Roost.Generated`（与`-csharp`相同）；配了`csharp.namespace`时协议、消息号、错误码都在`<namespace>`，DAO同步在`<namespace>.DaoSync`。
+- **错误码**：`ErrorCodes.cs`列工程里全部`errcode.Define`（名字转PascalCase常量，说明写在summary里），另有按码查名字与说明的`ErrorCodes.Name(code)` / `ErrorCodes.Message(code)`。框架段（1–999）的码不在其中。
+- **同步到客户端仓库**：`roost client sync --from <服务端工程> --to <客户端目录>`先核对服务端导出目录的哈希，再把`csharp/`平铺拷进客户端目录、另存一份`manifest.json`，对比上次同步的manifest报告新增、变化与删除的消息号和错误码；上次同步写过、这次没有的文件删掉，目录里不是上次同步写的同名文件拒绝覆盖。`--dry-run`只报告。不生成Unity的`.meta`（Unity导入时自己生成）。
+- **编译**：导出的`csharp/`放进netstandard2.1工程，与`Roost.Client`、`Roost.Client.Codecs`（Google.Protobuf 3.31.1）一起编译。
+
+不用导出目录时仍可单独生成消息号（路径显式指定，现有默认产物不变；将`<core-version>`换成选定版本）：
 
 ```sh
 go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@<core-version> \
@@ -146,7 +166,7 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@<core-version> \
 protoc -I ./protocol/proto --csharp_out=./client/generated ./protocol/proto/protocol.proto
 ```
 
-`-csharp`输出`Roost.Generated.MessageIds`，请求、应答编号与Go绑定一致（当前同ID），推送另列。PB C#类型由这份proto及Google.Protobuf运行库生成，protoc/runtime版本需在业务工程锁定；本库自身不依赖Google.Protobuf。生成器拒绝覆盖手写C#文件（包括`-force`），空定义仅退役带生成标记的文件。普通`roost generate`没有自动增加C#输出；业务构建需把上述导出命令加入自己的流程。
+`-csharp`输出`Roost.Generated.MessageIds`，请求、应答编号与Go绑定一致（当前同ID），推送另列。PB C#类型由这份proto及Google.Protobuf运行库生成，protoc须与Google.Protobuf同版本；本库自身不依赖Google.Protobuf。生成器拒绝覆盖手写C#文件（包括`-force`），空定义仅退役带生成标记的文件。这条路径没有版本与哈希核对，新工程用上面的导出目录。
 
 ## C# TCP使用
 

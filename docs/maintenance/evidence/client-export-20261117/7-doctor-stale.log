@@ -1,0 +1,33 @@
+OK    manifest             roost.yaml
+OK    go                   available
+OK    git                  available
+OK    dependencies:go-mod-verify go mod verify passed
+OK    compile:go-list      all packages loaded with -mod=readonly
+OK    compile:go-test      all packages and tests compiled
+OK    config:game          /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-client-export/acc/configs/service/config.game.yaml
+OK    config-schema:game   3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-check:game    configs/service/config.game.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-sections:game 3 file(s) have a block for every mod of game
+OK    config-across-services shared resource names agree; development listeners and per-service addresses do not collide (development configs: 1 service(s); production examples: 1 service(s)); port blocks: game=0 (ops 9100, advertise 9000)
+OK    singleton:etcd-consistent singleton lock services agree on etcd.endpoints and singleton.key_prefix (development configs: 1 service(s) with the lock; production examples: 1 service(s) with the lock)
+OK    config-reads         33 package(s) read config only through declarations
+OK    shutdown:game        total_timeout 87s, grace period 92s
+OK    time:logic_offset    one offset per deployment: dev 0s, prod example 0s, k8s secret example 0s
+OK    ids                  no conflicts
+OK    cicd:.github/workflows/ci.yml present
+OK    cicd:.github/workflows/dependency-update.yml present
+OK    cicd:.github/workflows/release.yml present
+OK    cicd:.github/workflows/deploy-shell.yml present
+OK    cicd:.github/workflows/deploy-docker.yml present
+OK    cicd:.github/workflows/deploy-k8s.yml present
+OK    cicd:deploy/shell/rollback.sh present
+OK    cicd:deploy/docker/docker-compose.prod.yaml present
+OK    cicd:deploy/k8s/overlays/staging/kustomization.yaml present
+OK    cicd:deploy/k8s/overlays/production/kustomization.yaml present
+OK    cicd:reproducible    ordinary CI uses committed go.mod/go.sum
+FAIL  client-export:fresh  shared/protocol is stale: protocol/def changed since the export was generated; run roost generate and commit shared/protocol
+OK    self-sync            player Entity syncs through NewPlayerSyncPacker (generated in game/entities/player/player_sync_packer_gen.go); push id in protocol/def/self_sync.go
+FAIL  generated            generated files are stale: protocol/pb/protocol.pb.go, protocol/proto/protocol.proto, shared/protocol/csharp/Protocol.cs, shared/protocol/manifest.json, shared/protocol/proto/protocol.proto
+OK    project-templates    up to date
+2026/11/17 10:55:07 client-export:fresh: shared/protocol is stale: protocol/def changed since the export was generated; run roost generate and commit shared/protocol
+generated: generated files are stale: protocol/pb/protocol.pb.go, protocol/proto/protocol.proto, shared/protocol/csharp/Protocol.cs, shared/protocol/manifest.json, shared/protocol/proto/protocol.proto

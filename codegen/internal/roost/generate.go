@@ -87,7 +87,7 @@ func forceArg(args []string, force bool) []string {
 }
 
 func generatorsFor(m Manifest, force bool) []generator {
-	return []generator{
+	generators := []generator{
 		{Name: "module-service", Always: true, Run: func(root string, w io.Writer) error { return generateModuleServices(root, m) }},
 		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(root string, w io.Writer) error {
 			return dao.Run(forceArg([]string{"-def", under(root, dao.DefaultDefDir), "-out", under(root, dao.DefaultOutDir)}, force), w)
@@ -190,6 +190,14 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return registry.Run(root, m.Project.Module, w)
 		}},
 	}
+	// 前后端公共协议目录：只有声明了 client_export 的工程才有这一步（没声明的生成结果逐字节不变）。放在最后，
+	// 读本轮刚生成的 protocol.proto、dao_sync.proto 与 dao_sync_apply.cs。
+	if m.ClientExport != nil {
+		generators = append(generators, generator{Name: "client-export", Always: true, Run: func(root string, w io.Writer) error {
+			return generateClientExport(root, m, w)
+		}})
+	}
+	return generators
 }
 
 // Generate runs the generators in place (or, with Check, in a throwaway copy).
@@ -379,7 +387,7 @@ func snapshotProjectInputs(root string, manifest Manifest) (map[string][sha256.S
 		if readErr != nil {
 			return readErr
 		}
-		if hasGeneratedHeader(path, raw) || isGeneratedData(path) || protocol.IsGeneratedArtifact(rel, raw) {
+		if hasGeneratedHeader(path, raw) || isGeneratedData(path) || protocol.IsGeneratedArtifact(rel, raw) || manifest.ClientExport.owns(rel) {
 			return nil
 		}
 		out[rel] = sha256.Sum256(raw)
@@ -471,6 +479,12 @@ func runGenerators(ctx context.Context, root string, manifest Manifest, generato
 	if err := checkEntityOwnersBeforeGenerate(root, manifest); err != nil {
 		return err
 	}
+	// client_export 要 C# 时先核对 protoc，版本不对不跑任何生成器（而不是全跑完才在最后一步失败）。
+	if manifest.ClientExport.csharp() && !options.DryRun {
+		if _, err := manifest.ClientExport.resolveProtoc(); err != nil {
+			return err
+		}
+	}
 	for _, gen := range generators {
 		if !gen.Always && !hasFeature(manifest, gen.Feature) {
 			continue
@@ -500,7 +514,7 @@ func checkGenerated(ctx context.Context, root string, manifest Manifest, stdout 
 	if err := copyProject(ctx, root, tmp); err != nil {
 		return err
 	}
-	before, err := snapshotGenerated(tmp)
+	before, err := snapshotGeneratedFor(tmp, manifest)
 	if err != nil {
 		return err
 	}
@@ -509,7 +523,7 @@ func checkGenerated(ctx context.Context, root string, manifest Manifest, stdout 
 	if err := runGenerators(ctx, tmp, manifest, generatorsFor(manifest, false), GenerateOptions{Stdout: io.Discard}); err != nil {
 		return inProjectPaths(err, tmp, root)
 	}
-	after, err := snapshotGenerated(tmp)
+	after, err := snapshotGeneratedFor(tmp, manifest)
 	if err != nil {
 		return err
 	}
@@ -584,6 +598,12 @@ func skippedProjectDirectory(rel string) bool {
 }
 
 func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {
+	return snapshotGeneratedFor(root, Manifest{})
+}
+
+// snapshotGeneratedFor 另外认领 manifest 声明的导出目录（client_export）里归生成器所有的文件：protoc 的 C# 与
+// manifest.json 没有统一的生成头，靠路径认领。
+func snapshotGeneratedFor(root string, manifest Manifest) (map[string][sha256.Size]byte, error) {
 	out := map[string][sha256.Size]byte{}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -600,7 +620,7 @@ func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {
 		if err != nil {
 			return err
 		}
-		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) && !protocol.IsControllerScaffold(rel, bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))) {
+		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) && !protocol.IsControllerScaffold(rel, bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))) && !manifest.ClientExport.owns(rel) {
 			return nil
 		}
 		// Newlines are not content: a CRLF checkout of an LF-generated file is

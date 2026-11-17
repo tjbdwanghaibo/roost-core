@@ -89,6 +89,9 @@ type Manifest struct {
 	// Modules 是已安装的业务模块（roost module add），键为模块名：每个模块在本工程里拥有的文件、
 	// 主 DAO 字段与分配到的号。由安装器写入；手工改它不会改动工程里的文件。
 	Modules map[string]InstalledModule `yaml:"modules,omitempty"`
+	// ClientExport 是前后端公共协议目录（client_export）：声明了它，roost generate 把客户端要的协议产物整份写进
+	// 导出目录（见 client_export.go）；不声明时生成结果不变。
+	ClientExport *ClientExportSpec `yaml:"client_export,omitempty"`
 
 	// configuredShutdown is each service's longest shutdown.total_timeout
 	// found in the project's configs, filled by withConfiguredShutdown when
@@ -302,6 +305,11 @@ func LoadManifest(root string) (Manifest, error) {
 	if err := manifest.requirePortBlocks(); err != nil {
 		return Manifest{}, err
 	}
+	if manifest.ClientExport != nil {
+		if abs, err := filepath.Abs(root); err == nil {
+			manifest.ClientExport.projectRoot = abs
+		}
+	}
 	return manifest, nil
 }
 
@@ -389,6 +397,9 @@ func (m Manifest) Validate() error {
 		joined = errors.Join(joined, err)
 	}
 	if err := m.validatePlayerGate(); err != nil {
+		joined = errors.Join(joined, err)
+	}
+	if err := m.ClientExport.validate(); err != nil {
 		joined = errors.Join(joined, err)
 	}
 	for name, access := range m.Access {

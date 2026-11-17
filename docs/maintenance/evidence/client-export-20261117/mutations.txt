@@ -1,0 +1,55 @@
+## M1 --check 不认领导出目录（snapshotGeneratedFor 去掉 owns）
+文件：codegen/internal/roost/generate.go（替换 1 处）
+命令：GOWORK=off go test -count=1 -run 'TestGenerateClientExport$' ./codegen/internal/roost/
+结果：RED（抓到）
+    client_export_test.go:281: generate --check after protocol/def edit = generated files are stale: protocol/pb/protocol.pb.go, protocol/proto/protocol.proto, want export files stale
+
+## M2 不核对 protoc 版本
+文件：codegen/internal/roost/client_export.go（替换 1 处）
+命令：GOWORK=off go test -count=1 -run 'TestClientExportProtocVersion$' ./codegen/internal/roost/
+结果：RED（抓到）
+    client_export_test.go:349: wrong protoc version: <nil>
+
+## M3 暂存提交不认领导出目录（planStagedProjectCommit 两处去掉 owns）
+文件：codegen/internal/roost/project.go（替换 2 处）
+命令：GOWORK=off go test -count=1 -run 'TestClientExportTransactionalCommitAndRetirement$' ./codegen/internal/roost/
+结果：RED（抓到）
+    client_export_test.go:396: open /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestClientExportTransactionalCommitAndRetirement1233611217/002/planet/shared/protocol/manifest.json: no such file or directory
+
+## M4 doctor 不比 protocol/def 的哈希
+文件：codegen/internal/roost/client_export.go（替换 1 处）
+命令：GOWORK=off go test -count=1 -run 'TestGenerateClientExport$' ./codegen/internal/roost/
+结果：RED（抓到）
+    client_export_test.go:284: doctor after protocol/def edit: {Name:client-export:fresh Status:ok Detail:shared/protocol matches protocol/def, DAO sync fields and 2 errcode(s)}
+
+## M5 client sync 不删上次写过、这次没有的文件
+文件：codegen/internal/roost/client_sync.go（替换 1 处）
+命令：GOWORK=off go test -count=1 -run 'TestClientSync$' ./codegen/internal/roost/
+结果：RED（抓到）
+    client_export_test.go:472: sync report missing "removed DaoSync.cs":
+    client_export_test.go:472: sync report missing "removed DaoSyncApply.cs":
+    client_export_test.go:477: DaoSync.cs still in the client after the server dropped it: <nil>
+
+## M6 没声明 client_export 也加 client-export 生成器
+文件：codegen/internal/roost/generate.go（替换 1 处）
+命令：GOWORK=off go test -count=1 -run 'TestUndeclaredClientExportChangesNothing$' ./codegen/internal/roost/
+结果：RED（抓到）
+    client_export_test.go:92: client-export generator runs without client_export
+
+## M7 导出清单丢掉应答
+文件：codegen/internal/protocol/client_export.go（替换 1 处）
+命令：GOWORK=off go test -count=1 -run 'TestExportClientIDsMatchesCSharpOutput$' ./codegen/internal/protocol/
+结果：RED（抓到）
+    client_export_test.go:40: messages = [push Notice PingResponse request Ping PingRequest]
+
+## M8 ErrorCodes.cs 说明不做 XML 转义
+文件：codegen/internal/errcode/csharp.go（替换 1 处）
+命令：GOWORK=off go test -count=1 -run 'TestGenerateCSharp$' ./codegen/internal/errcode/
+结果：RED（抓到）
+    csharp_test.go:28: ErrorCodes.cs missing "/// <summary>a \"quoted\" \\ &lt;tag&gt; &amp; line break</summary>\n        public const int _9lives = 100001;":
+
+## 还原后
+结果：全部通过
+    ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	8.121s
+    ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol	1.599s
+    ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	0.466s

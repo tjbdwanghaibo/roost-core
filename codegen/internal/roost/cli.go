@@ -70,6 +70,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return nil
 	case "framework":
 		return runFramework(args[1:], stdout, stderr)
+	case "client":
+		return runClient(args[1:], stdout, stderr)
 	case "help-make":
 		printMakeHelp(stdout)
 		return nil

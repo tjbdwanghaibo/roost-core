@@ -1,0 +1,7 @@
+没有声明 client_export 的工程：新旧生成器各走一遍，对比整棵树
+旧：git archive HEAD（002ceca6）构建；新：同一棵树 + 本次改动构建（都从干净树构建，不含同检出里别的 agent 未提交的改动）
+步骤：same-tree.sh <roost> same-old / same-new（project new -template game → module add wallet bag enter → add protocol HelloPing → generate → project sync → generate --check）
+命令：diff -r -x .git same-old same-new
+结果：rc=0，差异行数 0
+文件数：旧 195，新 195
+两边 generate --check：generated files are up to date / generated files are up to date

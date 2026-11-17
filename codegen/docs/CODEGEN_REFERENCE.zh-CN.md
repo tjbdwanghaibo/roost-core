@@ -114,7 +114,7 @@ roost project upgrade -core vX.Y.Z                      # 提高 Core 下限（�
 
 ## 2. 统一生成流水线：roost generate
 
-默认顺序为 DAO → Errcode → Protocol → Entity → Nest → Attribute → Config（template → data → go）→ WebRoute → ServiceRPC，避免后一个生成器读取旧产物；每一步只在 `roost.yaml` 启用了对应 feature 时运行。
+默认顺序为 DAO → Errcode → Protocol → Entity → Nest → Attribute → Config（template → data → go）→ WebRoute → ServiceRPC，避免后一个生成器读取旧产物；每一步只在 `roost.yaml` 启用了对应 feature 时运行。声明了 `client_export` 的工程最后再写前后端公共协议目录（[§2.1](#21-前后端公共协议目录client_export)）。
 普通生成在同级临时项目内完成全部生成器与 `GOWORK=off go mod tidy`，补齐新生成 import 的依赖与
 checksum；只有全部成功才以可回滚批次提交生成物和 `go.mod/go.sum`。后置生成器、tidy 或提交失败
 不会留下半生成工程；它不执行 `go get -u`，不会借机升级框架。
@@ -126,6 +126,41 @@ roost generate --dry-run        # 打印计划，不写文件
 roost generate --check          # 在临时副本生成并检查仓库是否最新
 roost generate --force          # 强制重写生成物
 ```
+
+### 2.1 前后端公共协议目录（client_export）
+
+客户端与服务端是两个仓库时，服务端在 `roost.yaml` 声明导出目录（维护者 2026-11-17；不默认开启，没声明的工程生成结果逐字节不变）：
+
+```yaml
+client_export:
+  dir: shared/protocol          # 可选，缺省 shared/protocol；相对工程根，产物提交进仓库
+  languages: [csharp]           # 目前只有 csharp；不写时只导出 proto 副本与 manifest.json
+  csharp:
+    namespace: Game.Protocol    # 可选
+    protoc: tools/protoc/bin/protoc   # 可选；相对路径按工程根
+```
+
+`roost generate` 在全部生成器之后整份写出导出目录（同样的输入，输出逐字节相同）：
+
+| 文件 | 来源 |
+| --- | --- |
+| `proto/protocol.proto` | `protocol/proto/protocol.proto` 的副本；配了 namespace 时多一行 `option csharp_namespace` |
+| `proto/dao_sync.proto` | `db/dao_sync.proto` 的副本（同上，namespace 为 `<namespace>.DaoSync`）；没有同步字段时不写 |
+| `csharp/Protocol.cs`、`csharp/DaoSync.cs` | protoc `--csharp_out`，输入是上面两份副本 |
+| `csharp/DaoSyncApply.cs` | `db/dao_sync_apply.cs`（配了 namespace 时换掉命名空间行） |
+| `csharp/MessageIds.cs` | 与 `codegen/cmd/protocol -csharp` 同一个生成函数 |
+| `csharp/ErrorCodes.cs` | 工程里全部 `errcode.Define`：PascalCase 常量、`Name(code)`、`Message(code)` |
+| `manifest.json` | 见下 |
+
+目录里归生成器所有的只有上表这些文件名：本轮不产出的（例如去掉 `csharp` 后的 `.cs`）删掉，别的文件不动。目录不能在 `protocol/`、`db/`、`game/` 等服务端源码目录下，也不能用 `bin`、`dist`、`log`、`.roost-*` 这些生成时跳过的名字。
+
+`manifest.json`：`kind: roost-client-export`、`schema: 1`；`core`（go.mod 里 require 的 roost-core）、`generator`（与 `roost version` 相同）、`protoc` 与 `google_protobuf`；`csharp_namespaces`；`sources.protocol_def`（`protocol/def` 下全部 `.go`，路径与内容一起算 sha256）与 `sources.dao_sync`（同步字段：`db/def` 生成的 `dao_sync.proto` 的 sha256）；`files`（每个导出文件按 LF 算的 sha256）；`messages`（名字、方向 request / response / push、号、proto 消息名，按号排序）与 `error_codes`（码、名字、说明，按码排序）。生成器版本写在清单里，换了生成器版本，`--check` 会因 `manifest.json` 变化报过期，重新生成即可。
+
+- **C# 与 protoc 版本**：维护者决定固定 protoc 版本、由生成器核对，不在生成器里实现 C# 输出，也不自动下载。导出 C# 时要求 `protoc --version` 与 C# SDK（`client/dotnet/Roost.Client.Codecs`）锁定的 Google.Protobuf 同版本：Google.Protobuf 3.31.1 对应 protoc 31.1（生成器里的副本由 `TestSDKGoogleProtobufVersionMatchesCodecs` 核对与 csproj 一致）。查找顺序 `client_export.csharp.protoc`、环境变量 `ROOST_PROTOC`、PATH；版本不对或找不到时在运行任何生成器之前报错，写明需要的版本与下载地址。`MessageIds.cs`、`ErrorCodes.cs`、`DaoSyncApply.cs` 由 Go 生成，不依赖 protoc。
+- **命名空间**：缺省沿用 proto package：协议 `Roost.Protocol`、DAO 同步 `Roost.Dao.Sync`；消息号与错误码沿用 `-csharp` 的 `Roost.Generated`。配了 `csharp.namespace` 时协议、消息号、错误码都在 `<namespace>`，DAO 同步在 `<namespace>.DaoSync`。
+- **检查**：`roost generate --check` 覆盖导出目录（要 protoc）。`roost project doctor` 的 `client-export:fresh`（声明了 `client_export` 才有）不跑 protoc：核对每个导出文件的哈希与 `manifest.json` 一致、`protocol/def` 与同步字段的哈希一致（工程开了 dao 时把 `db/def` 生成到临时目录取同步 schema，不读可能过期的 `db/dao_sync.proto`）、重新扫出的错误码一致，`languages` 与 `roost.yaml` 一致；任何一项不符为 FAIL，提示重新生成并提交。
+- **同步到客户端**：`roost client sync --from <服务端工程> --to <客户端目录> [--dry-run]`。先核对服务端导出目录的哈希（手改或拷了一半拒绝），把 `csharp/` 下的文件平铺拷进客户端目录，另存服务端的 `manifest.json`；对比上次同步留下的 `manifest.json`，打印版本变化与新增、变化、删除的消息号（按方向 + 名字对比）和错误码（按名字对比）。上次同步写过、这次没有的文件删掉；目录里同名但不是上次同步写的文件拒绝覆盖；上次同步写过、之后被手改的文件照样覆盖并提示。不生成 Unity 的 `.meta`。
+- **接入**：Unity 缺省走托管路线（`GameClient` + `RoostClientDriver`），直接编译导出的 `csharp/`，见 [Unity 手册](../../client/unity/README.md)。
 
 CI 推荐：
 

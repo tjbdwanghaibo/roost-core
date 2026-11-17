@@ -40,8 +40,13 @@ func validateCSharpOutput(path string) error {
 
 // generateCSharpIDs 从同一份Definitions生成客户端路由编号；PB类型仍由对应proto生成。
 func generateCSharpIDs(defs *Definitions) ([]byte, error) {
+	return generateCSharpIDsIn(defs, DefaultCSharpIDsNamespace)
+}
+
+// generateCSharpIDsIn 是 generateCSharpIDs 换了命名空间：roost.yaml 的 client_export.csharp.namespace 用它。
+func generateCSharpIDsIn(defs *Definitions, namespace string) ([]byte, error) {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "%s\nnamespace Roost.Generated\n{\n    public static class MessageIds\n    {\n", protocolGeneratedHeader)
+	fmt.Fprintf(&b, "%s\nnamespace %s\n{\n    public static class MessageIds\n    {\n", protocolGeneratedHeader, namespace)
 	for _, message := range defs.Messages {
 		fmt.Fprintf(&b, "        public const uint Request%s = %d;\n", msgName(message), message.ReqID)
 		if message.Resp != "" {
