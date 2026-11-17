@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.53.0] - 2026-11-17
+
 - **`roost module verify` 两项行为修正**（维护者 2026-11-17，R9 §9.5；只对新安装的模块）：
   - **模块场景先装工程的配置表**：`roost module add` 会在每个放了模块测试文件（包括联动测试文件）的包里写一份公共夹具 `roost_config_data_test.go`。
     - 夹具的 `init` 按 game 进程正式启动的方式装载工程的 `configs/data`。
