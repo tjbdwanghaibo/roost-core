@@ -890,6 +890,7 @@ func generateGo(metas []Meta, outDir string, pkg string, force bool, stdout io.W
 		"indexed":       indexedFields,
 		"indexKey":      indexKeyExpr,
 		"goType":        qualifiedType,
+		"pointerElem":   pointerElem,
 		"indexAccessor": indexAccessor,
 		"sheet":         func(meta Meta) []Field { return meta.sheetFields() },
 		"hasKV":         hasKV,
@@ -1085,6 +1086,7 @@ func convert{{.TypeName}}Records(records [][]string, lines []int) ([]{{.Alias}}.
 		}
 		var item {{.Alias}}.{{.TypeName}}
 {{- range .Fields}}
+{{- $ptr := pointerElem $m .}}
 		if idx, ok := col[{{quote .CSV}}]; ok && idx < len(record) {
 			raw := strings.TrimSpace(record[idx])
 			if raw != "" {
@@ -1092,8 +1094,11 @@ func convert{{.TypeName}}Records(records [][]string, lines []int) ([]{{.Alias}}.
 				if err != nil {
 					return nil, fmt.Errorf("row=%d field={{.Name}} value=%q: %w", lines[rowIndex], raw, err)
 				}
-				item.{{.Name}} = v
-			}
+				item.{{.Name}} = {{if $ptr}}&v{{else}}v{{end}}
+			}{{if $ptr}} else {
+				// An empty cell is the zero value, as in the JSON the generate step writes.
+				item.{{.Name}} = new({{$ptr}})
+			}{{end}}
 		}
 {{- end}}
 		out = append(out, item)
@@ -1247,14 +1252,18 @@ func Convert{{.TypeName}}CSV(r io.Reader) ({{.Alias}}.{{.TypeName}}, error) {
 		seen[key] = line
 		switch key {
 {{- range .Fields}}
+{{- $ptr := pointerElem $ .}}
 		case {{quote .CSV}}:
 			if raw != "" {
 				v, err := {{parseExpr $ . "raw"}}
 				if err != nil {
 					return {{$.Alias}}.{{$.TypeName}}{}, fmt.Errorf("line=%d key=%q field={{.Name}} value=%q: %w", line, key, raw, err)
 				}
-				item.{{.Name}} = v
-			}
+				item.{{.Name}} = {{if $ptr}}&v{{else}}v{{end}}
+			}{{if $ptr}} else {
+				// An empty value is the zero value, as in the JSON the generate step writes.
+				item.{{.Name}} = new({{$ptr}})
+			}{{end}}
 {{- end}}
 {{- with omittedCSV .}}
 		case {{.}}:
@@ -1329,6 +1338,20 @@ func parseExpr(meta Meta, field Field, raw string) string {
 	default:
 		return fmt.Sprintf("tablegenParseJSON[%s](%s)", goType, raw)
 	}
+}
+
+// pointerElem 是指向标量的指针字段（*int32、*string、*Rank、*time.Duration，没有 parser）在生成代码里的
+// 元素类型（带导入别名），其它字段为 ""。parseExpr 对这类字段解析出的是元素值，生成的转换函数取地址赋值；
+// 空单元格与生成步骤写出的 JSON 一致（parseCell 写零值，不是 null），是指向零值的指针；没有这一列时是 nil。
+func pointerElem(meta Meta, field Field) string {
+	if field.Parser != "" || !strings.HasPrefix(field.Type, "*") {
+		return ""
+	}
+	elem := strings.TrimPrefix(field.resolvedType(), "*")
+	if _, scalar := builtinScalars[elem]; !scalar && elem != "time.Duration" {
+		return ""
+	}
+	return strings.TrimPrefix(qualifiedType(meta, field.Type), "*")
 }
 
 // resolveRefs checks every ref= declaration against the schema: the target

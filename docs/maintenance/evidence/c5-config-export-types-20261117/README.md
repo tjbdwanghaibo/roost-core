@@ -138,7 +138,7 @@ roost 包选中的 22 个用例全部 PASS（`ok codegen/internal/roost 188.2s`�
 
 ## 发现（不在本项范围，没有改）
 
-- **指针标量字段让生成的服务端 Go 编译不过**：schema 里 `Bonus *int32` 的横排表，生成的 `Convert<Type>CSV` 报 `cannot use v (variable of type int32) as *int32 value in assignment`（本轮用临时用例在当前代码上编译确认；与本轮改动无关，742ccafc 的 `parseExpr` 已是先去掉 `*` 再解析）。客户端导出支持指针（可空类型），服务端 Go 绑定不支持；要么生成取地址的赋值，要么在 tablegen 里拒绝指针字段。需要维护者定。
+- **指针标量字段让生成的服务端 Go 编译不过**：schema 里 `Bonus *int32` 的横排表，生成的 `Convert<Type>CSV` 报 `cannot use v (variable of type int32) as *int32 value in assignment`（本轮用临时用例在当前代码上编译确认；与本轮改动无关，742ccafc 的 `parseExpr` 已是先去掉 `*` 再解析）。客户端导出支持指针（可空类型），服务端 Go 绑定不支持；要么生成取地址的赋值，要么在 tablegen 里拒绝指针字段。——已由协调者定为 A（生成取地址的赋值），实施见下一节“追加：指针标量字段”。
 
 ## 建议写进 CHANGELOG（[Unreleased]）的文字
 
@@ -153,4 +153,56 @@ roost 包选中的 22 个用例全部 PASS（`ok codegen/internal/roost 188.2s`�
 - 删除“横排表转换报错的行号是去掉注释后的序号”（已修）。
 - 删除“浮点的规范形式 Go 与 C# 不同”（已修）；如需保留运行库差异，改为：“C# 的浮点规范写法依赖 `double.ToString("R")` 给出最短往返位数（.NET Core 3.0 起成立），Unity Mono / IL2CPP 上尚未验证。”
 - “具名类型不支持”改为：“**别的包里的具名类型、底层不是内建标量的具名类型不支持**：schema 包里底层是内建标量的具名类型（`type Rank int32`）按底层类型导出与建索引（C# 是底层类型，不生成 enum）；别的包里的（`time.Duration`、`foo.Kind`，生成器只读 schema 包自己的声明）与底层是结构体等的具名类型，导出与 index 报错并说明原因，要改成 parser 或 `side:"s"`。结构体、`[]byte`、键不是 string 的 map 同样不支持。”
-- 新增（遗留，待维护者定）：“指针标量字段（`*int32`）的横排表，生成的服务端 `Convert<Type>CSV` 编译不过（`cannot use v (variable of type int32) as *int32 value`）；客户端导出支持指针。”
+- （原建议新增“指针标量字段编译不过”一条：已按 A 修复，见最后一节，不用加。）
+
+## 追加：指针标量字段（2026-11-17，协调者按推荐 A 定）
+
+决定：生成取地址的赋值，让服务端也支持指针字段，与客户端导出一致。基于 main `e92335a8`（本分支先 `git rebase main`）。
+
+做了什么（`codegen/internal/tablegen/main.go` 生成模板）：
+
+- 新函数 `pointerElem`：指向标量的指针字段（`*int32`、`*string`、`*Rank`、`*time.Duration`，没有 parser）返回元素类型（带导入别名）。横排与 layout=kv 的 `Convert<Type>CSV` 对这类字段写 `item.X = &v`；空单元格写 `item.X = new(T)`。非指针字段的生成文本逐字节不变。
+- **空单元格的语义以现有 JSON / 客户端导出为准**：生成步骤 `parseCell` 对非 required 的空单元格写零值（`zeroValue` 去掉 `*` 后取零值），JSON 里是 `"bonus": 0` 而不是 null；客户端导出同一份 JSON，C# 可空类型读成 `0`。所以运行时转换得到“指向零值的指针”。CSV 没有这一列、kv 表没有这个 key 时 JSON 没有这个键，加载与运行时转换都是 nil。指向复合类型的指针（`*[]int32`）照旧走 `tablegenParseJSON[*[]int32]`，本来就能编译，不变。
+- 文档：`CODEGEN_REFERENCE.zh-CN.md` §2.2（C# 可空类型的空单元格）与 §9.2“指针字段”一段。
+
+先红（正式用例 `codegen/internal/tablegen/main_test.go` `TestPointerScalarFieldsInGeneratedConverter`，修前原文）：
+
+```
+--- FAIL: TestPointerScalarFieldsInGeneratedConverter
+    main_test.go:231: generated converter over pointer fields: exit status 1
+        # example.com/pointer/generated
+        generated/gen_table_config.go:138:18: cannot use v (variable of type int32) as *int32 value in assignment
+        generated/gen_table_config.go:148:18: cannot use v (variable of type string) as *string value in assignment
+        generated/gen_table_config.go:158:17: cannot use v (variable of int32 type schema.Rank) as *schema.Rank value in assignment
+        generated/gen_table_config.go:168:15: cannot use v (variable of type bool) as *bool value in assignment
+        generated/gen_table_config.go:178:17: cannot use v (variable of type float64) as *float64 value in assignment
+        generated/gen_table_config.go:240:16: cannot use v (variable of type int64) as *int64 value in assignment
+        generated/gen_table_config.go:248:18: cannot use v (variable of type string) as *string value in assignment
+        generated/gen_table_config.go:256:17: cannot use v (variable of type uint32) as *uint32 value in assignment
+```
+
+用例内容：横排表 `*int32 / *string / *Rank / *bool / *float64` 与 kv 表 `*int64 / *string / *uint32`；同一份 CSV 经生成的 `Convert<Type>CSV` 与经生成步骤的 JSON + configdata 加载，结果 `reflect.DeepEqual` 相同（横排与 kv 都比）；有值的行取到值；空单元格是指向零值的指针；CSV 没有这一列（`id\n3\n`）、kv 没有 `seed` 这个 key 时是 nil；客户端导出模型的数据里空单元格是 `"bonus": 0,`。
+
+变异：
+
+- 改回直接赋值（`item.X = v`）：编译失败，`cannot use v (variable of type int32) as *int32 value in assignment` 等，变红。
+- 空单元格不赋值（留 nil）：`ConvertItemCSV = [... {ID:2 Bonus:<nil> Alias:<nil> ...}]; loaded from JSON = [... {ID:2 Bonus:0x… ...}]`，与 JSON 加载结果不一致，变红。
+
+验证：
+
+```
+gofmt -l codegen/internal/tablegen                         # 无输出
+GOWORK=off go vet ./codegen/internal/tablegen/              # 通过
+GOWORK=off go test -race -count=1 ./codegen/internal/tablegen/   # ok 6.1s
+cd codegen && ROOST_CORE_DIR=<本检出> GOPROXY=off sh scripts/tablegen-runtime.sh -count=1   # ok
+ROOST_REQUIRE_DOTNET=1 GOWORK=off go test -race -count=1 -timeout 40m \
+  -run 'ClientConfig|ConfigCSharp|TableJSON|TableTemplate|ConfigData|ShopTable|TestGeneratedGameDemoBuildsAndVetsAgainstThisCheckout' ./codegen/internal/roost/
+  ok 191.6s，17 个用例全部 PASS（含 TestClientConfigCSharpRuntime、TestGenerateClientConfigExport、TestModuleVerifyLoadsTheProjectConfigData、
+  TestGeneratedGameDemoBuildsAndVetsAgainstThisCheckout），dotnet 10.0.302，没有 SKIP
+```
+
+建议写进 CHANGELOG（[Unreleased]）：
+
+- **配置表：指针标量字段的运行时转换**：schema 里指向标量的指针字段（`*int32`、`*string`、具名标量的指针等）以前让生成的 `Convert<Type>CSV` 编译不过；现在取地址赋值。空单元格与生成步骤的 JSON 一致，是指向零值的指针（客户端导出同样是 `0`，不是 null）；CSV 没有这一列 / kv 没有这个 key 时是 nil。重新生成 `configs/generated/gen_table_config.go`（没有指针字段的工程生成结果不变）。
+
+建议 KNOWN-LIMITS：上面“建议改 KNOWN-LIMITS 的文字”里新增的“指针标量字段编译不过”一条不用加（已修）。如需记限制，可写：“指针字段的空单元格是指向零值的指针，不是 nil；要表达‘没有值’只能整列不写或 kv 不写这个 key（与客户端导出的 null 语义相同）。”
