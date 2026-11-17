@@ -43,7 +43,7 @@
 ## 能力边界
 
 - **入口只守一件事**：账号只取自 account 校验过的账号票据，绝不取自请求。它不认证任何人（身份由 account 向渠道确认）、不签也不验任何票据、**不建角不选角**、不知道玩家号、不知道角色名（名字是游戏服的数据）。
-- **没有限流，也没有防撞库**。三个端点谁都能调；`/portal/login` 每次都会去问渠道。对外暴露时放在有限流的反向代理后面。
+- **没有限流，也没有防撞库**。四个端点谁都能调；`/portal/login` 每次都会去问渠道。对外暴露时放在有限流的反向代理后面。
 - **明文**。凭据与票据都在请求体里；web Mod 不终止 TLS。生产环境 web Mod 缺省只绑回环地址，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr: true`。生成的生产示例配置里 `web.addr` 是占位值，上线前要改。
 - **上限**：请求体 16 KiB（`MaxRequestBytes`）；`channel` 32 字节、`open_id` 128 字节、`credential` 8 KiB、账号票据 1024 字节、`game` 与 `service` 32 字节（`MaxNameBytes`）；区服至多 1024 个（`MaxEntries`，与 account 的区服上限 `svcaccount.MaxServers` 一致，2026-11-17 由 256 放宽）；目录条目的地址至多 255 字节、标签至多 8 个、每个至多 32 字节；`portal.services` 至多 64 条；account 登记表一次登记的期限至多 600 秒（`svcaccount.MaxPresenceTTLSeconds`），至多 1024 个没过期的服。
 - **清单的开销随区服数增长**：每次 `/portal/servers` 是 1 次清单（account 读 1 + N 条记录）、1 次登记表（account 读一个 Redis 哈希）加每个服 1 次角色查询，顺序执行，没有缓存；`/portal/enter` 也多 1 次登记表。区服很多、请求很密的部署该把 manifest 拆出去并自己加缓存，或者换成分页的清单。

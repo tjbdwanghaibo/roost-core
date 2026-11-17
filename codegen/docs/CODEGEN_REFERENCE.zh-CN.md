@@ -1009,7 +1009,7 @@ JSON 键以显式 `json` 标签为准，省略标签时沿用 Go 字段名（与
 
 ### 9.2 按端分组、竖排键值表、index 与注释行
 
-配置表导出给客户端的 tablegen 部分（维护者 2026-11-17，[需求与决定](../../docs/maintenance/FEATURE-2026-11-17-client-config-export.md) 决定 1、2、5、6）。不用这些写法的工程，生成结果与以前逐字节相同。
+配置表导出给客户端的 tablegen 部分（维护者 2026-11-17，[需求与决定](../../docs/maintenance/FEATURE-2026-11-17-client-config-export.md) 决定 1、2、5、6）。不用这些写法的工程，生成结果与以前相比只多一处：横排表生成的 `Convert<Type>CSV` 每张表多一行 `reader.Comment = '#'`（跳过 `#` 注释行），其余逐字节相同。
 
 ```go
 //roost:table name=monster key=ID
