@@ -573,7 +573,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **房主心跳要求约每 0.6s 一帧**：房主连接的空闲阈值 `relay.host_idle_timeout` 缺省 2s（成员仍是 30s），超过即当断线、进宽限期。三份 SDK 的房主与候选每 600ms 没发过帧就补一个 Ping；自己写客户端时要遵守。
 - **被踢的人收到两种答复**：同一个 relay 上被踢的人再连收到 `Closed{kicked}`（relay 本地记录，房间存续期间有效）；relay 重启后本地记录没了，由 lobby 的被踢名单挡住，收到 `Closed{lobby_rejected}`；再 join 答 403 `kicked`。SDK 两种都停止重连，客户端都按“不能再进”处理。
 - **开局后掉线不回的人占着位子**（§6 第 12 条）：已开始的房间里，连上过 relay 的成员掉线后席位一直保留（他回来回原座），直到他主动离开、被踢或关房；不回来的人要房主踢掉（relay 能踢有座位但不在线的槽位）才空出来。
-- **快照压缩缺省用 deflate，SDK 不带 zstd / LZ4**（2026-11-17，交接 C4 选 A + D）：要用就由游戏自带库实现压缩接口，示例见各 SDK README。状态字节带 1 字节压缩方式标识，内置的不压缩与 deflate 谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上，否则新房主拿到“不认识的压缩方式”错误、按没有状态处理。deflate 与 zstd 在真实状态上的差距没有测过。解压上限 16 MiB 是常量。
+- **快照压缩缺省用 deflate，SDK 不带 zstd / LZ4**（2026-11-17，交接 C4 选 A + D）：要用就由游戏自带库实现压缩接口，示例见各 SDK README。状态字节带 1 字节压缩方式标识，内置的不压缩与 deflate 谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上，否则新房主拿到“不认识的压缩方式”错误、按没有状态处理。deflate 与 zstd 在真实状态上的差距没有测过。解压上限 16 MiB 是常量。 2026-11-18 量了一次 Go 侧：房间状态 JSON 压到约 0.20、定长二进制约 0.33，256KiB 一次压缩 0.8～1.3 ms；每次压缩新建 Writer，固定约 1 MB 分配，小快照也一样（快照最快每秒一次，没改）；C# / TS 没测（[证据](evidence/perf-compressed-20261118/README.md)）。
 - **快照 seq 跨房主递增**：relay 要求 seq 在房间内递增（跨房主也一样），`YouAreHost` 带 relay 存着的最新 seq；SDK 取 `max(本地, YouAreHost 的 seq, epoch<<32) + 1`。自己写客户端时至少从 `YouAreHost` 的 seq 往上接，否则 `Rejected{stale_seq}`。
 - **选 relay 有延迟**：lobby 按 etcd 里的房间数选实例，这个数由 relay 定时更新；几个 lobby 实例同时建房，可能都选中同一个 relay。
 - **一个 `lobby.subject` 对应一份房间目录**：共用 relay 的几个 lobby 服务必须共用 `key_prefix` 与 `subject`。过期房间在 `game/mode` 索引里的项只在列表时清理。
@@ -813,7 +813,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 移动与动作、行为与技能：遗留
 
-- **移动每拍分配**：`BenchmarkMoveBeatAllocations` 的六档正式数字待 M-2。
+- **移动每拍分配**（M-2 已测，2026-11-18）：`BenchmarkMoveBeatAllocations` 六轮稳定，空事务底数 5 次 / 945 B / 约 355 ns，一拍移动 17 次 / 1885 B / 约 808 ns，移动本身每拍 12 次分配、约 940 B；分配来源没拆（没跑 -memprofile），是否要压由维护者定（[证据](evidence/perf-compressed-20261118/README.md)）。
 - **Linux SLG 恢复**：macOS 的默认 / REAL / MOBA ROUTING 已复验；SLG 修后 Linux 复跑仍见 C-L2。
 
 #### 压测工具的心跳驱动：遗留
@@ -896,7 +896,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### game-demo 的移动、怪物与场景时间（D20 第 3 期）
 
-- **机器人负载：100 / 200 人同秒起跑不通过**（2026-10-22 晚，[压测清单 §3 结果](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）：`make dev-smoke`（2 / 2）与 20 人 loadtest 通过；100 / 200 人（单 IP 上限调到 512）connect 全部成功、`object limit exceeded` 0，但成功 24 / 100、30 / 200：gift saga 步骤排队超时、公会目录实体慢派发，200 人时 `enter_game` 写全服 World 实体与上单场景实体在请求期限内没轮到（110 个复制会话没打开）。按现有证据是 demo 场景的共享热点与同秒突发，不判为框架缺陷，**尚未确认**（没有按秒爬坡的对照）。 **2026-11-14 重测**（忙机，负载 5～8，同一部署连跑）：100 人同秒 96 / 100、200 人同秒 72 / 200（`add_exp` 在 World 热点上 `nest: sync timeout`）；爬坡反而更差（200 人 20/s 43、10/s 54，100 人 10/s 73，gift / 联盟 saga 停在“仍未知 / 等待”），推断是前一轮 saga 积压被下一轮继承，**尚未确认**。要在空闲机器上每轮用新环境（mirror-local clean/up 并重新部署）重跑。证据在本轮 scratchpad 的 122/。
+- **机器人负载：100 / 200 人同秒起跑不通过**（2026-10-22 晚，[压测清单 §3 结果](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）：`make dev-smoke`（2 / 2）与 20 人 loadtest 通过；100 / 200 人（单 IP 上限调到 512）connect 全部成功、`object limit exceeded` 0，但成功 24 / 100、30 / 200：gift saga 步骤排队超时、公会目录实体慢派发，200 人时 `enter_game` 写全服 World 实体与上单场景实体在请求期限内没轮到（110 个复制会话没打开）。按现有证据是 demo 场景的共享热点与同秒突发，不判为框架缺陷，**尚未确认**（没有按秒爬坡的对照）。 **2026-11-14 重测**（忙机，负载 5～8，同一部署连跑）：100 人同秒 96 / 100、200 人同秒 72 / 200（`add_exp` 在 World 热点上 `nest: sync timeout`）；爬坡反而更差（200 人 20/s 43、10/s 54，100 人 10/s 73，gift / 联盟 saga 停在“仍未知 / 等待”），推断是前一轮 saga 积压被下一轮继承，**尚未确认**。要在空闲机器上每轮用新环境（mirror-local clean/up 并重新部署）重跑。证据在本轮 scratchpad 的 122/。 **2026-11-18 复跑**（v1.54.0 发版前压缩测量，负载 3～6，每档全新环境）：100 人同秒 **100 / 100**，零超时、日志零 saga 卡住，但整场景 p95 24.8s 超过 16s 门槛（请求层最慢的 AddExp p95 2.3s，推断场景耗时主要在等 saga 和轮询，尚未确认）；200 人同秒 80 / 200，AddExp 的 `nest: sync timeout` 108 次，与 11-14 的形态相同。爬坡四档与空闲机复跑仍没做。`demo-robot.sh` 默认的私有依赖偏移 37000 会把 Mongo 端口放进 macOS 的临时端口段（49152 以上），撞上别的进程的出站连接时起不来；在本机要用不大于 21746 的偏移（这轮用 20000）（[证据](evidence/perf-compressed-20261118/README.md)）。
 
 #### 框架服务与 game-demo：未测部分
 

@@ -1,0 +1,221 @@
+{
+  "exit_code": 1,
+  "unit": "whole demo scenarios; count and scenario latency are not message TPS or request latency",
+  "state": "failed",
+  "stop_reason": "threshold",
+  "final_error": "threshold violated: error_rate = 0.6 > max 0 (200 samples); p95 = 21.735838236s > max 16s (80 samples)",
+  "final_error_matches": [],
+  "count": 200,
+  "stats": {
+    "scheduled": 200,
+    "dropped_capacity": 0,
+    "dropped_schedule": 0,
+    "launch_failed": 0,
+    "peak_online": 200,
+    "started": 200,
+    "online": 0,
+    "success": 80,
+    "failure": 120,
+    "canceled": 0,
+    "failure_rate": 0.6
+  },
+  "quantiles_ms": {
+    "p50": 18902.512111,
+    "p90": 21421.024222,
+    "p95": 21735.838236,
+    "p99": 21971.948746
+  },
+  "thresholds": [
+    {
+      "metric": "error_rate",
+      "max": 0,
+      "actual": 0.6,
+      "violated": true,
+      "samples": 200
+    },
+    {
+      "metric": "drop_rate",
+      "max": 0,
+      "actual": 0,
+      "violated": false,
+      "samples": 200
+    },
+    {
+      "metric": "p95",
+      "max": 16,
+      "actual": 21.735838236,
+      "violated": true,
+      "samples": 80
+    }
+  ],
+  "logged_occurrences": {
+    "gift_saga_still": 0,
+    "alliance_saga_still": 0,
+    "saga_unknown_or_waiting": 0,
+    "nest_sync_timeout": 108,
+    "world_stats_sync_timeout": 0,
+    "world_record_enter_sync_timeout": 0,
+    "player_world_add_exp_sync_timeout": 108
+  },
+  "startup_saga_replay": [
+    {
+      "file": "logs/game.log",
+      "line": 67,
+      "partition": 0,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 68,
+      "partition": 1,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 69,
+      "partition": 2,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 70,
+      "partition": 3,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 71,
+      "partition": 4,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 72,
+      "partition": 5,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 73,
+      "partition": 6,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 74,
+      "partition": 7,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 75,
+      "partition": 8,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 76,
+      "partition": 9,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 77,
+      "partition": 10,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 78,
+      "partition": 11,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 79,
+      "partition": 12,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 80,
+      "partition": 13,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 81,
+      "partition": 14,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    },
+    {
+      "file": "logs/game.log",
+      "line": 82,
+      "partition": 15,
+      "sagas": 0,
+      "messages": 0,
+      "pending_inputs": 0,
+      "last_event": 0
+    }
+  ],
+  "log_files_scanned": [
+    "robot.log",
+    "logs/account.log",
+    "logs/activity.log",
+    "logs/alliance.log",
+    "logs/chat.log",
+    "logs/game.log",
+    "logs/global.log",
+    "logs/mail.log",
+    "logs/match.log",
+    "logs/platform.log",
+    "logs/rank.log",
+    "logs/session.log"
+  ],
+  "observation_limit": "Robot JSON supplies aggregate stats and a run-level final error, not individual robot error details. Retry nodes do not log every intermediate Saga status. Logged counts are occurrences, not total polls, outstanding Sagas, or unique affected robots. WorldStats and RecordEnter address World; AddExp locks Player and World together, so its timeout does not isolate which lock caused delay. Other nest timeouts are not attributed to World without source/context evidence."
+}

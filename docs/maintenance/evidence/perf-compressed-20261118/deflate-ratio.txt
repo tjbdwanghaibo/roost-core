@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/client/relay
+cpu: Apple M5
+BenchmarkSnapshotCompression/json/1KiB/compress-10         	      20	    120317 ns/op	   8.51 MB/s	         0.2803 ratio	 1076928 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/compress-10        	      20	    184429 ns/op	  88.84 MB/s	         0.2044 ratio	 1083830 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/compress-10        	      20	    406415 ns/op	 161.25 MB/s	         0.1989 ratio	 1108400 B/op	      21 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/compress-10       	      20	   1072006 ns/op	 244.54 MB/s	         0.1998 ratio	 1206710 B/op	      23 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/compress-10       	      20	     62092 ns/op	  16.49 MB/s	         0.4170 ratio	 1076656 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/compress-10      	      20	    134062 ns/op	 122.21 MB/s	         0.3495 ratio	 1092021 B/op	      20 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/compress-10      	      20	    373012 ns/op	 175.69 MB/s	         0.3370 ratio	 1141168 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/compress-10     	      20	   1447262 ns/op	 181.13 MB/s	         0.3338 ratio	 1337781 B/op	      24 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/compress-10       	      20	     47471 ns/op	  21.57 MB/s	         1.007 ratio	 1077104 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/compress-10      	      20	     45358 ns/op	 361.21 MB/s	         1.000 ratio	 1094384 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/compress-10      	      20	     66504 ns/op	 985.44 MB/s	         1.000 ratio	 1149958 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/compress-10     	      20	    100560 ns/op	2606.83 MB/s	         1.000 ratio	 1592064 B/op	      18 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	0.375s
