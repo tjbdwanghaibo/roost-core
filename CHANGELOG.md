@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **生成器：生产 compose 发布 ops，只绑本机**（维护者 2026-11-17）：每个服务的容器里 ops 都是 9100，`docker-compose.prod.yaml` 现在给每个服务发布 `"127.0.0.1:<9100+端口块>:9100"`（与开发环境同一个号，各服务不撞）：管理端口不对公网，宿主机上的采集器能抓 `/metrics`、`/readyz`，与 k8s 只放行监控命名空间同一口径。之前 compose 不发布 ops，从容器外抓不到指标。所有工程的 compose 都多这一行（每个服务都有 `ports:`）；已有工程 `roost project sync` 后生效。新用例 `TestProductionComposePublishesOpsOnLoopback`（修前红，宿主机端口两两不同）。
 - **模块清单可以声明配置（R5，D19 B，维护者 2026-11-14 已定）**：`module.yaml` 新增 `config: {package, type, use}`，指向模块包里带 `config` tag 的结构体（与 Mod 配置声明同一写法）；安装器从模块源码读出键，把起步 YAML 写进宿主服务的开发、生产示例与 k8s secret 示例配置，生成的 bootstrap 把声明交给 `wiring/modulehost`（托管服务上是模块入口的 Mod，业务服务上另加一个只带配置的 Mod），`--check-config`、`roost config check`、`--print-config(-schema)`、doctor 都看得见，结构体的 `ValidateConfig` 走 App 的跨 Mod 检查，启动时装载一次、经 `Value[T]` 读。迁成配置（缺省值与原常量相同）：`profile.exp_per_level`；`stamina.{max,hard_cap,regen_interval,refill_daily_limit,refill_price_step}`；`leaderboard.{board_id,season,min_score,max_score,default_top,max_top}`（原 `leaderboard_board.go`）；`mailbox.ledger_prune_grace`（原 600 秒常量，缺省 10m、下限 2m、整秒）；`portal.servers`（只声明）。demo 的 clears 榜改写配置。`wiring/modulehost` 新增 `ConfigOf`、`Value[T]`，`Module.Start` 可为空。
   - **行为变化**：装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s；模块配置写错时 `roost config check` 退出 3（由进程判断，`--keys-only` 不认模块键）。
   - **升级**：只对新生成 / 新安装的工程生效，已有工程不迁移（线上未部署）；模块模板变了，digest 随之变化。

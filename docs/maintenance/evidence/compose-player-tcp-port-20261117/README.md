@@ -114,3 +114,7 @@
 ## 修复（2026-11-17，协调者）
 
 维护者要求修。按上面“修法”第 1、2 条实施：`composeClientSettings` 在 `playerTCPEnabled(m) && servicePlayerListener(m, service)` 时先写 `"7000:7000"`；绑定写法与 lobby、relay、7080 一致（全部地址）。新用例 `TestProductionComposePublishesPlayerTCPOnTheListener` 修前在 Gate、嵌入两种工程上都红（监听服务没有 7000），修后绿；`TestPlayerWebSocketPortIsDeployed` 的 compose 断言改成同一段 `ports` 里 7000 与 7080 都在。生成的 docker README 那句改成“示例与生产 compose 都发布 7000”。`GOWORK=off go test -race -run 'Compose|WebSocket|PlayerTCP|Deploy|Docker|LobbyRelay|Relay|Lobby' ./codegen/internal/roost/` 与 `go vet` 通过。没有用真实镜像经 docker 再起一次（尚未确认）；ops 9100 没动，仍是尚未确认。
+
+## 追加：ops 9100（维护者 2026-11-17 定“可以加”）
+
+容器里 ops 都是 9100，全部写 `9100:9100` 会在宿主机上互撞，所以宿主机端口用端口块的 ops 端口（`portsOf(m, service).Ops`，9100+块号），只绑 `127.0.0.1`。新用例 `TestProductionComposePublishesOpsOnLoopback` 修前三个服务都红、修后绿；A2 的“没有玩家接入不写 ports”断言改为“不发布 7000”，websocket 用例的 `ports:` 段计数改为 7080 只出现一次。`-run 'Shutdown|Compose|WebSocket|Deploy|Docker|PlayerTCP|LobbyRelay'` 通过。

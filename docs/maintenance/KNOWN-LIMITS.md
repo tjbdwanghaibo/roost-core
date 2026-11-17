@@ -377,7 +377,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **TLS 由前置负载均衡终结**（wss）：进程里不配证书。
 - **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。
 - **单条消息上限有 1 字节余量**：库按流读，越过上限后的下一次读才失败，超出部分最多先读出 1 个字节，之后连接以 1009 关闭。上限之内的帧照常处理。
-- **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 在同一段 `ports` 里发布玩家 TCP 7000 与 7080（2026-11-17 起，之前漏了 7000）。生产 compose 不发布 ops 9100（docker run 示例发布），是否有意尚未确认。
+- **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 在同一段 `ports` 里发布玩家 TCP 7000 与 7080（2026-11-17 起，之前漏了 7000）。生产 compose 的 ops 发布在宿主机 `127.0.0.1:<9100+端口块>`（2026-11-17 起，只对本机，见 CHANGELOG）。
 
 ### 生成器、配置与模块
 

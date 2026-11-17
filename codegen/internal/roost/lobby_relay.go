@@ -308,12 +308,13 @@ func composeClientSettings(m Manifest, service string) string {
 		// 玩家 TCP 7000（交接 A2，2026-11-17）：与 k8s 的 player-tcp、docker run 示例的 -p 7000:7000 同一个服务。
 		ports = append([]clientPort{{Name: "player-tcp", Port: 7000}}, ports...)
 	}
-	if len(ports) > 0 {
-		b.WriteString("    ports:\n")
-		for _, port := range ports {
-			fmt.Fprintf(&b, "      - \"%d:%d\"\n", port.Port, port.Port)
-		}
+	b.WriteString("    ports:\n")
+	for _, port := range ports {
+		fmt.Fprintf(&b, "      - \"%d:%d\"\n", port.Port, port.Port)
 	}
+	// ops（维护者 2026-11-17）：容器里都是 9100，宿主机用端口块的 ops 端口（各服务不撞），只绑 127.0.0.1——不对公网，
+	// 宿主机上的采集器能抓 /metrics、/readyz（与 k8s 只放行监控命名空间同一口径）。
+	fmt.Fprintf(&b, "      - \"127.0.0.1:%d:9100\"\n", portsOf(m, service).Ops)
 	return b.String()
 }
 

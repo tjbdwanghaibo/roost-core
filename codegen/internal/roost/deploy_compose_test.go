@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -500,7 +501,27 @@ func TestProductionComposePublishesPlayerTCPOnTheListener(t *testing.T) {
 	}
 	none := gateManifestNamed("gate", "game")
 	delete(none.Access, "player")
-	if compose := renderProductionCompose(none); strings.Contains(compose, "ports:") {
-		t.Errorf("no player access: docker-compose.prod.yaml publishes ports:\n%s", compose)
+	if compose := renderProductionCompose(none); strings.Contains(compose, "7000") {
+		t.Errorf("no player access: docker-compose.prod.yaml publishes 7000:\n%s", compose)
+	}
+}
+
+// 维护者 2026-11-17：生产 compose 发布 ops。每个服务的容器里 ops 都是 9100，宿主机端口用端口块的 ops 端口（9100+块号，
+// 与开发环境同一个号，各服务不撞），只绑 127.0.0.1：管理端口不对公网开放，宿主机上的采集器能抓 /metrics、/readyz
+// （与 k8s 只放行监控命名空间同一口径）。
+func TestProductionComposePublishesOpsOnLoopback(t *testing.T) {
+	m := gateManifestNamed("gate", "game")
+	compose := renderProductionCompose(m)
+	seen := map[int]string{}
+	for service := range m.Services {
+		block := composeServiceBlock(compose, service)
+		ops := portsOf(m, service).Ops
+		if !strings.Contains(block, "      - \"127.0.0.1:"+strconv.Itoa(ops)+":9100\"\n") {
+			t.Errorf("%s does not publish ops %d on loopback:\n%s", service, ops, block)
+		}
+		if other, dup := seen[ops]; dup {
+			t.Errorf("%s and %s publish the same host ops port %d", service, other, ops)
+		}
+		seen[ops] = service
 	}
 }
