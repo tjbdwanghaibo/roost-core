@@ -863,11 +863,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 业务模块（roost module）
 
-- **CellWorld 业务适配进模块（D21 后半）**：
-  - 13 类玩法已于 2026-11-17 改成模块组合（R9），见一“13 类玩法是模块组合”与三。
-  - 还留在 demo 的：CellWorld 的分区装配，Player / Monster / SceneActor 的 Cell 适配，mapview 的 Cell / Base，队伍视图，地形分区与转发。
-  - 维护者 2026-11-17 定“这一波先不处理”，以后再排。
-  - MMORPG 夹具里的队伍、场景、怪物、战斗、副本到那时一起定。R9 2B 写下的提示见 [r9-2b 证据](evidence/r9-2b-20261117/README.md)。
+- **CellWorld 业务适配进模块（D21 后半）：第一块已做（2026-11-17），其余按推荐留在 demo**：SceneActor 实体、分区状态映射、格心跳登记、Node 安装点、Player 的恢复快照 / 死亡回执进了 cellworld 模块（[证据](evidence/cellworld-module-d21-20261117/README.md)）。按证据里的推荐暂留 demo（维护者可改）：Player 的 Base 标量字段与面板 / 队伍副本（Q1 推荐 A：字段由工程按模块 README 的字段表声明；改成模块状态要同时改客户端 / drill / loadtest 的同步解码）、队伍视图 `with/team`（Q2 随 Q1）、mirror 编码与攻击结论推送、奖励规则、`scene.partition` 配置（Q3 推荐以后单独改成 `cellworld.*`）、分区地形转发（Q4 先定 demo 地形与 terrain 模块是否合一）。MMORPG 夹具的队伍、场景、怪物、战斗、副本不随 CellWorld 走，留作各模块的扩展项。
 - **登录外部边界**：双 account / game / Gate、真实 naming 与重启重连、casual 购买 / self_sync 已验；完整 naming 故障阶段、生产渠道、Redis 故障、跨机与长稳未验。跨机入口见 C-X4；时间推送仍为 best-effort。
 - **社交容量与归属**：两 game 共享 Team + toxiproxy、排队 SIGKILL / 重试与排队禁止建队 / 入队已验；邀请的跨 game 自动投递没有实现，容量未验。Team 归 game 服务已由维护者确认（D14），见[CellWorld 固定分区](#cellworld-固定分区v1470)“无缝世界原型的产品简化”。
 
