@@ -1,0 +1,4 @@
+[drill 13:26:43] acct: 0 ERROR log lines
+[drill 13:26:43] game1000: 0 ERROR log lines
+[drill 13:26:43] gate1000: 0 ERROR log lines
+[drill 13:26:43] PASS gate drill

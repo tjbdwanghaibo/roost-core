@@ -1,0 +1,29 @@
+pretag: checking go generate ./... leaves the tree unchanged
+pretag: (batch run) framework release manifest check skipped; not a release
+pretag: building with GOWORK=off
+pretag: vetting with GOWORK=off
+pretag: checking go.mod / go.sum are tidy
+pretag: testing with GOWORK=off
+pretag: genre vertical slices and offline generator scripts (generated projects, offline default mode)
+pretag:   ok   test-moba-generated (42s)
+pretag:   ok   test-slg-generated (49s)
+pretag:   ok   test-mmorpg-generated (58s)
+pretag:   ok   test-mmorpg-scenes (85s)
+pretag:   ok   test-tower-defense-generated (48s)
+pretag:   ok   test-survival-extraction-generated (52s)
+pretag:   ok   test-card-rpg-generated (80s)
+pretag:   ok   test-merge-casual-generated (52s)
+pretag:   ok   test-idle-sim-generated (47s)
+pretag:   ok   test-level-generated (8s)
+pretag:   ok   test-sync-modes-generated (5s)
+pretag:   ok   test-heartbeat-generated (36s)
+pretag:   ok   test-auto-chess-generated (51s)
+pretag:   ok   test-party-room-generated (49s)
+pretag:   ok   test-coop-roguelike-generated (37s)
+pretag:   ok   test-social-sim-generated (35s)
+pretag:   ok   test-turn-pvp-generated (52s)
+pretag:   ok   test-gate-generated (53s)
+pretag:   ok   test-modules-generated (1233s)
+pretag: genre vertical slices passed in 1427s
+pretag: C# client SDK golden and self tests
+pretag: github.com/tjbdwanghaibo/roost-core@v1.53.0 is ready to tag

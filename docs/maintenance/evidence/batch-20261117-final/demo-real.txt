@@ -1,0 +1,35 @@
+--- PASS: TestAllianceStopFoundingSendsNewAlliancesToTheOtherInstances (0.04s)
+ok  	example.com/planet/internal/service/alliance	1.739s
+--- PASS: TestPurchaseRedisBoundedDrainAndReplay (0.02s)
+--- PASS: TestPurchaseRedisConcurrentCallbackUsesOneSequence (0.00s)
+--- PASS: TestPurchaseRedisRefusedWriteDoesNotAllocate (0.00s)
+ok  	example.com/planet/game/modules/purchase	1.645s
+--- PASS: TestMailboxRealDependenciesClaimOverNATSAndRedis (12.13s)
+    --- PASS: TestMailboxRealDependenciesClaimOverNATSAndRedis/core (4.92s)
+    --- PASS: TestMailboxRealDependenciesClaimOverNATSAndRedis/jetstream (7.21s)
+ok  	example.com/planet/game/controllers	13.878s
+--- PASS: TestActivityBoardKeepsTheLatestCumulativeScore (0.01s)
+ok  	example.com/planet/internal/service/game	1.790s
+--- PASS: TestDungeonClearsBoardCountsEachRunOnceRealRedis (0.02s)
+ok  	example.com/planet/game/controllers	1.718s
+--- PASS: TestPlayerMigrationRealMongo (0.36s)
+ok  	example.com/planet/db/migrations	1.935s
+--- PASS: TestBuildingRestartRealMongo (1.07s)
+--- PASS: TestTerrainRestartRealMongo (0.99s)
+--- PASS: TestTerrainEditLedgerRealMongo (1.29s)
+--- PASS: TestTerrainMapOwnershipRealMongo (1.60s)
+    --- PASS: TestTerrainMapOwnershipRealMongo/the_map_keeps_its_ledger_and_buildings_when_the_player_changes_servers (0.95s)
+    --- PASS: TestTerrainMapOwnershipRealMongo/a_partitioned_map_keeps_its_documents_in_the_shared_database (0.61s)
+ok  	example.com/planet/internal/service/game	6.484s
+--- PASS: TestTerrainWALCrashRealMongo (1.62s)
+    --- PASS: TestTerrainWALCrashRealMongo/brush (0.85s)
+    --- PASS: TestTerrainWALCrashRealMongo/building (0.77s)
+ok  	example.com/planet/internal/service/game	3.158s
+        --- PASS: TestGeneratedGateProjectionCapabilities (0.00s)
+        --- PASS: TestGeneratedGateNestDAOAndWAL (0.57s)
+        --- PASS: TestGeneratedGateTransportSelection (0.00s)
+--- PASS: TestGateGeneratedBusinessConsumer (51.08s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	51.734s
+        --- PASS: TestSagaNativeStepsAndEffectRealDependencies (4.76s)
+--- PASS: TestGeneratedSagaNativeStepsAndEffectConsumer (20.55s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	20.962s

@@ -1,0 +1,14 @@
+pretag: checking go generate ./... leaves the tree unchanged
+pretag: (batch run) framework release manifest check skipped; not a release
+pretag: building with GOWORK=off
+pretag: vetting with GOWORK=off
+pretag: checking go.mod / go.sum are tidy
+pretag: testing with GOWORK=off
+pretag: go test ./... failed (full output: /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/tmp.2DJMBR2ynA)
+pretag: checking go.mod / go.sum are tidy
+pretag: testing with GOWORK=off
+--- FAIL: TestTrackedGoFilesAreGofmtClean (1.45s)
+--- FAIL: TestGeneratedProjectRealDependencyTestsHaveAnEntry (0.27s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	18.427s
+FAIL

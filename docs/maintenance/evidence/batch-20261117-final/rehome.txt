@@ -1,0 +1,8 @@
+[drill 13:24:03] PASS accepted: target binding, bag=11, wallet=93, source refused
+[drill 13:24:21] PASS quiesced: target binding, bag=11, wallet=93, source refused
+[drill 13:24:39] PASS leaving: target binding, bag=11, wallet=93, source refused
+[drill 13:25:00] PASS handed-off: target binding, bag=11, wallet=93, source refused
+[drill 13:25:20] PASS committed: target binding, bag=11, wallet=93, source refused
+[drill 13:25:38] PASS dropped: target binding, bag=11, wallet=93, source refused
+[drill 13:25:56] PASS checkpoint: target binding, bag=11, wallet=93, source refused
+[drill 13:25:58] PASS demo rehome drill; Q4 committed-window copy remains explicitly documented
