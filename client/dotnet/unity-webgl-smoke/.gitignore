@@ -1,0 +1,15 @@
+# 工程要先用 prepare.sh 拷到仓库外再打开；万一在这里打开，Unity 生成的东西不进仓库。
+/Library/
+/Temp/
+/Logs/
+/UserSettings/
+/Build/
+/obj/
+*.csproj
+*.sln
+*.meta
+/Assets/Plugins/*.dll
+/Assets/RelaySmoke.unity
+/ProjectSettings/*
+!/ProjectSettings/ProjectVersion.txt
+/Packages/packages-lock.json

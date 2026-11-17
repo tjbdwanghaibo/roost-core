@@ -348,7 +348,7 @@ dirtyMeshes.Clear();
 | SDK | 位置 | 接入 relay | 通知线程 |
 |---|---|---|---|
 | Go | [client/relay](relay/README.md) | TCP | 连接的读 goroutine 上依次调用 |
-| C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP | `Pump` 的调用线程（Unity 主线程） |
+| C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP 或 WebSocket（`RelayClientOptions.Transport`；传输是公开接口 `IRelayTransport`，自带 TCP 与 `ClientWebSocket` 两种）。**Unity WebGL 上跑不起来**：SDK 的调度依赖线程池，见下 | `Pump` 的调用线程（Unity 主线程） |
 | TS | [ts](ts/README.md)（浏览器；node 测试用 `ws` 包） | WebSocket，每条二进制消息一帧，收的时候按字节流解 | 事件循环 |
 
 三份共同的做法：
@@ -360,6 +360,8 @@ dirtyMeshes.Clear();
 - **换 host**（[RELAY §2.3、§4A](../docs/framework/RELAY.md)）：`OnYouAreHost`（成员名单、交接数据或快照，状态字节已解压）→ 游戏接手后 `HostReady(epoch)`（可选自动回）；`OnHostChanging`（发给房主的帧被丢，SDK 不重发，游戏决定）、`OnHostChanged`、`OnHostResumed`、`OnYouAreMember`、`OnRejected`；房主 `Transfer`、`SetSuccessors`、`Snapshot`（seq 由 SDK 递增，新房主从 `YouAreHost` 的 seq 往上接、且不低于 `epoch<<32`），设了状态回调时当房主每 3s 自动推一次、最小间隔 1s；`Leave` 先在 relay 上发 Leave 再经 lobby 离开；SDK 记当前角色（`Role`：槽位、房主 / 候选、房主槽位、epoch；epoch 进房时从 Welcome 取，之后随换 host 更新）。快照与交接数据缺省用 RFC 1951 原始 deflate 压缩（Go `compress/flate`、C# `DeflateStream`、TS `deflate-raw`），线上是 `[压缩方式 1B][压缩后的字节]`（0 不压缩、1 deflate 谁都解得开，2～255 归游戏自带的压缩方式，不认识时新房主拿到明确的“不认识的压缩方式”错误）；SDK 不带 zstd / LZ4，要用就自带库实现压缩接口，房间里每个客户端都配上（各 SDK README 有示例）；收帧上限放大到 `snapshot_max_bytes + 16 KiB` 以上。
 - **前台上报**：成员 `SetForeground(bool)` 发 `Presence`，relay 只转给当前房主（`OnMemberPresence`）；SDK 收到 `HostChanged`、每次连上后自动重发。TS 的 `WebHost` 按页面可见性自动上报，房主在游戏没显式声明候选顺序时自动把前台成员排在前面；Go / C# 不自动排，由游戏决定。
 - **扩展点**：不认识的控制帧操作码丢弃，不断开；`OnControl(op, …)` 给任意操作码注册回调；发控制帧用 `SendControl`。
+- **WebSocket**（TS 只用它，C# 可选，Go 不支持）：发送一帧一条二进制消息；接收按字节流拼帧，不假设一条消息一帧。向 lobby 要哪种传输由选项决定，重连沿用同一种。
+- **C# 与 Unity WebGL**（交接 C1，2026-11-17 实测）：WebGL 上没有套接字，要用浏览器 WebSocket 实现 `IRelayTransport`（参考写法 [unity-webgl-smoke](dotnet/unity-webgl-smoke/README.md)，SDK 不带）。这一层在浏览器里实测可用，但 SDK 本身跑不起来：WebGL 上 `Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行与线程池都不运行，而 SDK 的读循环、心跳、连接超时、重连退避与 `LobbyClient` 都靠它们。要支持 WebGL 得改 SDK 的调度（由 `Pump` 驱动），是否做待维护者定，见 [证据](../docs/maintenance/evidence/c1-csharp-websocket-20261117/README.md)。Unity 编辑器（Mono）上 TCP 与 WebSocket 都实测可用（WebSocket 偶发在心跳整 10 秒点断开，原因在 relay 的 WebSocket 写期限，见证据）；桌面播放器没有跑。
 
 验证（Redis 用 `~/.roost-it`：先 `source ~/.roost-it/roost-dataengine-it/env.sh`，没有时对端用内存房间目录）：
 

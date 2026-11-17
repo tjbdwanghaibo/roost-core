@@ -1,6 +1,6 @@
 # Roost.Client.Relay：开房间场景的 C# SDK
 
-lobby 的 HTTP 调用（`LobbyClient`）与 relay 的 TCP 连接（`RelayClient`）。`netstandard2.1`、可空引用、警告即错误；与 `Roost.Client` 一样不带第三方依赖（lobby 的 JSON 用内置的最小读写）。三份 SDK 的共同说明见 [client/README](../../README.md#开房间-sdklobby--relay)。
+lobby 的 HTTP 调用（`LobbyClient`）与 relay 的 TCP / WebSocket 连接（`RelayClient`）。`netstandard2.1`、可空引用、警告即错误；与 `Roost.Client` 一样不带第三方依赖（lobby 的 JSON 用内置的最小读写）。三份 SDK 的共同说明见 [client/README](../../README.md#开房间-sdklobby--relay)。
 
 ```csharp
 var lobby = new LobbyClient("https://lobby.example.com", gt2);
@@ -65,7 +65,18 @@ client.OnMemberPresence(p => { });               // 房主：成员的前台状�
   ```
 
   要不要换：deflate 与 zstd 在真实状态上的耗时与大小差距没有测过，先量自己的状态再决定。
-- **只连 TCP**：ticket 的地址是 `ws://` 时 `ConnectAsync` 抛 `ArgumentException`。
+- **传输：TCP 或 WebSocket**（交接 C1，维护者 2026-11-17 定的选项 A）。连接抽成公开接口 `IRelayTransport`（`ConnectAsync`、`Send` 一整帧、`ReceiveAsync` 收字节、`Dispose` 关闭；约定见接口注释）。`RelayClientOptions.Transport`（缺省 `Tcp`）决定向 lobby 要哪种地址，断线重连沿用同一种；`ConnectAsync` 的票据要用同一个 `Transport` 向 lobby 要（`CreateRoomRequest` / `JoinRoomRequest` 的 `Transport`），地址对不上时抛 `ArgumentException`。SDK 自带两种实现：`TcpRelayTransport`（缺省）与 `WebSocketRelayTransport`（`System.Net.WebSockets.ClientWebSocket`，给编辑器与非 WebGL 平台；不加依赖）。发送一帧一条二进制消息（`ClientWebSocket` 只能一个一个发，`Send` 先进队列、由一个发送任务按序发出，单条超过 `WriteTimeout` 或积压超过 `WebSocketRelayTransport.MaxPendingBytes`（16 MiB）就断开）；接收按字节流拼帧，不假设一条消息一帧（与 TS 相同；relay 一侧也是字节流，几帧拼在一条消息里它照样读）。`TransportFactory` 可以换成自己的实现（每次连接、重连各新建一个）。
+
+  ```csharp
+  var ticket = await lobby.CreateRoomAsync(new CreateRoomRequest { Game = "party", Mode = "duel", Transport = RelayTransport.Ws });
+  var client = new RelayClient(lobby, new RelayClientOptions { Game = "party", Transport = RelayTransport.Ws });
+  await client.ConnectAsync(ticket);               // 经 ws:// / wss:// 连 relay；重连也向 lobby 要 ws
+  ```
+- **Unity WebGL**：浏览器里没有套接字，`ClientWebSocket`、`TcpClient` 和 `HttpClient` 自带的网络都用不了（Unity 文档所述的平台限制；本仓只实测了下面的替代写法）。SDK 不带桥接代码（维护者定）；游戏自己实现两样东西，参考写法在 [unity-webgl-smoke](../unity-webgl-smoke/README.md)（一个最小的 Unity 工程，可以直接拿来改）：
+  1. 浏览器 WebSocket 的 `IRelayTransport`：`Assets/Plugins/WebGL/RoostRelayWebSocket.jslib`（JS 一侧，收到的二进制消息排成字节队列，C# 每帧轮询，不从 JS 回调 C#）+ `Assets/RelaySmoke/BrowserRelayTransport.cs`（C# 一侧）。用法：`new RelayClientOptions { Game = "party", Transport = RelayTransport.Ws, TransportFactory = () => new BrowserRelayTransport() }`，每帧在主线程先 `BrowserRelayTransport.PollAll()` 再 `client.Pump()`。
+  2. lobby 的 HTTP：`new LobbyClient(url, gt1, new HttpClient(new UnityWebRequestHandler()) { Timeout = Timeout.InfiniteTimeSpan })`，`Assets/RelaySmoke/UnityWebRequestHandler.cs` 把请求投到主线程用 `UnityWebRequest` 发。
+
+  **现在 WebGL 上跑不起来**（2026-11-17 在 Unity 6000.7.0b7 的 WebGL 构建里实测）：上面两样桥接在浏览器里能用，但 SDK 的读循环与心跳任务经 `Task.Run` 起，等待用 `ConfigureAwait(false)`、`SemaphoreSlim.WaitAsync(超时)`、`Task.Delay` 与 `CancelAfter`，`LobbyClient` 也用 `ConfigureAwait(false)`；这些在 WebGL 上都不运行（线程池与计时器不跑，`ConfigureAwait(false)` 之后的续行排进线程池），第一个 lobby 请求就停住。要支持 WebGL 得把 SDK 改成由 `Pump` 驱动，是否做待维护者定。详见 [unity-webgl-smoke](../unity-webgl-smoke/README.md#实测结果) 与 [证据](../../../docs/maintenance/evidence/c1-csharp-websocket-20261117/README.md)。Unity 编辑器（Mono）上 TCP 与 WebSocket 都实测可用（WebSocket 偶发在心跳整 10 秒点断开，原因在 relay 的 WebSocket 写期限，见证据）；桌面播放器没有跑。
 
 ## 测试
 
@@ -75,4 +86,4 @@ dotnet run --project client/dotnet/Roost.Client.Relay.Tests
 dotnet build-server shutdown
 ```
 
-先核对 [relay-packets.json](../../spec/relay-packets.json) 金样与拒绝规则、用本地 TcpListener 扮 relay 核对不认识的操作码与换 host 的 13 条（经 SDK 的公开方法发、经分发路径收），再 `go test -c ./client/relay` 并以 `ROOST_RELAYPEER_SERVE=1 ROOST_RELAYPEER_WS=0` 起对端（真实 relay 与 lobby），跑 lobby 错误、建房 / 加入 / 游戏通道往返 / 房间通道直达 / 禁言 / 踢人 / 离开 / 改状态、断线重连，以及换 host（转交、断线后候选拿快照、宽限期内回来、候选顺序、快照节奏、定时快照、房主心跳、重连遇到 lobby 拒绝或不可用、开局后重连与踢离线座位）。`ROOST_RELAY_TESTS_ONLY=<名字片段>` 只跑名字含它的真实对端用例。需要本机 Go 工具链。没有在 Unity Editor / IL2CPP 上运行过。
+先核对 [relay-packets.json](../../spec/relay-packets.json) 金样与拒绝规则、用假的消息型连接（经 `TransportFactory`）核对收的一侧按字节流拼帧（两帧一条消息、一帧拆两条、包头被切开）与发的一侧一条消息一帧、用本地 TcpListener 扮 relay 核对不认识的操作码与换 host 的 13 条（经 SDK 的公开方法发、经分发路径收），再 `go test -c ./client/relay` 并以 `ROOST_RELAYPEER_SERVE=1` 起对端（真实 relay 与 lobby；先起一个 `ROOST_RELAYPEER_WS=0` 的核对 lobby 对 ws 答 `no_relay`），对 TCP 与 WebSocket 各起一个对端、各跑一遍全部用例（WebSocket 一轮另加“向 lobby 要 ws 再连上”和“令牌与 Ping 拼在一条消息里 relay 照样读”）：lobby 错误、建房 / 加入 / 游戏通道往返 / 房间通道直达 / 禁言 / 踢人 / 离开 / 改状态、断线重连，以及换 host（转交、断线后候选拿快照、宽限期内回来、候选顺序、快照节奏、定时快照、房主心跳、重连遇到 lobby 拒绝或不可用、开局后重连与踢离线座位）。`ROOST_RELAY_TESTS_ONLY=<名字片段>` 只跑名字含它的真实对端用例（名字形如 `[ws] room lifecycle`）。需要本机 Go 工具链。Unity 上的运行见 [unity-webgl-smoke](../unity-webgl-smoke/README.md)。
