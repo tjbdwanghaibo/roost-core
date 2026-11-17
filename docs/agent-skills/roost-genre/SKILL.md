@@ -93,7 +93,7 @@ go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$CORE"
 
 要点：
 - `-template game` 只有 game 一个业务服务，带 Player 与 World 两个实体，缺省不托管任何框架服务；`roost module add` 装的模块用到哪个托管服务（account / chat / mail / match / rank……）就在那次安装里声明哪个。要一开始就托管，加 `-framework rank,chat` 或 `-framework all`（九个全部：account / activity / chat / global / mail / match / platform / rank / session）（`roost help project`）。各纵切夹具不经生成的访问器调用托管服务（用到的服务包在测试里直接构造），所以不需要 `-framework`。
-- 三个 helper 代替仓库脚本里的 python 片段：DAO 字段与实体注解是**业务文件**，只改它们（`dao_add` 每项第四个词是 dao 标签，缺省 `nosync`：v1.47.0 起 DAO 字段默认既落库又同步，只写 `persist` 也会发给客户端，所以 helper 缺省写 `nosync` 让账本、回执、种子这类字段只落库，要给客户端看的字段显式写 `persist,sync` 或 `nopersist,sync`；派对房间的 `Board` 写 `nopersist,sync`、`Coins` 写 `persist,sync`）；组件、访问器、Sender 由 `roost generate` 生成，不手改生成文件（SLG-INTEGRATION §3.1 第 3～4 步）。
+- 三个 helper 代替仓库脚本里的 python 片段：DAO 字段与实体注解是**业务文件**，只改它们（`dao_add` 每项第四个词是 dao 标签，缺省 `nosync`：v1.47.0 起 DAO 字段默认既落库又同步，只写 `persist` 也会发给客户端，所以 helper 缺省写 `nosync` 让账本、回执、种子这类字段只落库，要给客户端看的字段显式写 `persist,sync` 或 `nopersist,sync`；派对房间的 `Board` 写 `nopersist,sync`；金币是 wallet 模块的状态，不再手写字段）；组件、访问器、Sender 由 `roost generate` 生成，不手改生成文件（SLG-INTEGRATION §3.1 第 3～4 步）。
 - 用 `-practice` 原名（如 `MOD=example.com/slg-practice`）时 `fix_mod` 是空操作；自定 module 名必须做。只替换 import 路径，夹具里 `"moba-practice"` 这类普通字符串不动。
 
 ### 3.3 按玩法 add / 填字段 / 拷夹具
