@@ -10,6 +10,7 @@ type Room interface {
 	Join(playerID int64, connection string) (RoomSnapshot, error)
 	Reconnect(playerID int64, expectedEpoch uint64, connection string) (RoomSnapshot, error)
 	Member(playerID int64, epoch uint64) (*db.RoomSeat, error)
+	Authorize(playerID int64, epoch uint64, connection string) (*db.RoomSeat, error)
 	Connected(playerID int64) bool
 	Disconnect(playerID int64, epoch uint64) bool
 	Leave(playerID int64, epoch uint64, connection string) error

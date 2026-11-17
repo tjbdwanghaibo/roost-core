@@ -58,9 +58,15 @@ func handlerTowerInit(m ITowerRoomEntity, ids [tower.Seats]int64, r tower.Rules,
 	return saveTower(m, s)
 }
 
-// towerMember 是塔防命令的身份围栏，全部交给 room：epoch 必须是这名成员当前的席位代际，请求必须来自席位认下的
-// 那条连接（connection 由接入层从服务端 Session 取，room.ConnectionKey）。旧代际、旧连接一律 room_stale_epoch。
-func towerMember(m ITowerRoomEntity, playerID int64, epoch uint64, connection string) error {
+// towerMember 是塔防命令的身份围栏，全部交给 room：新命令经 room 的 Authorize（代际、连接、在线一并核对）。
+// 已有回执的重放与查回执（replay=true）是塔防自己的一支：不要求在线——重启后全员断线时，原连接、原代际的重试
+// 仍得原回执——所以只核对 Member 的代际与席位认下的那条连接（connection 由接入层从服务端 Session 取，
+// room.ConnectionKey）。旧代际、旧连接、新命令时断线一律 room_stale_epoch。
+func towerMember(m ITowerRoomEntity, playerID int64, epoch uint64, connection string, replay bool) error {
+	if !replay {
+		_, e := m.Room().Authorize(playerID, epoch, connection)
+		return e
+	}
 	seat, e := m.Room().Member(playerID, epoch)
 	if e != nil {
 		return e
@@ -73,11 +79,14 @@ func towerMember(m ITowerRoomEntity, playerID int64, epoch uint64, connection st
 
 //roost:nest rollback=undo durability=strict
 func handlerTowerCommand(m ITowerRoomEntity, playerID int64, connection string, c tower.Command, nowUnixMilli int64) (tower.Receipt, error) {
-	if e := towerMember(m, playerID, c.Epoch, connection); e != nil {
-		return tower.Receipt{}, e
-	}
 	s, e := tower.Decode(m.Dao().GetTowerState())
 	if e != nil {
+		return tower.Receipt{}, e
+	}
+	// Seq 落在本席已有回执之内就是重放（内容是否一致由 Apply 核对），其余是新命令。
+	i := s.Index(playerID)
+	replay := i >= 0 && c.Seq > 0 && c.Seq <= uint64(len(s.Seats[i].Receipts))
+	if e := towerMember(m, playerID, c.Epoch, connection, replay); e != nil {
 		return tower.Receipt{}, e
 	}
 	r, changed, e := s.Apply(playerID, c, m.Room().Connected(playerID), nowUnixMilli)
@@ -110,7 +119,7 @@ func handlerTowerView(m ITowerRoomEntity, playerID int64, connection string) (to
 //
 //roost:nest rollback=undo durability=strict
 func handlerTowerReceipt(m ITowerRoomEntity, playerID int64, connection string, epoch, seq uint64) (tower.Receipt, error) {
-	if e := towerMember(m, playerID, epoch, connection); e != nil {
+	if e := towerMember(m, playerID, epoch, connection, true); e != nil {
 		return tower.Receipt{}, e
 	}
 	s, e := tower.Decode(m.Dao().GetTowerState())

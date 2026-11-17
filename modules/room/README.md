@@ -27,13 +27,15 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 **Nest handler**（`game/handler/room_*.go`，写入的都是 `rollback=undo durability=strict`；`RoomDisconnect` 只改不落库的在线标记，没有持久事实要提交）：`RoomOpen`、`RoomJoin`、`RoomView`、`RoomReconnect`、`RoomDisconnect`、`RoomLeave`、`RoomClose`。事务之外用生成的 `syncsender`（例如 `syncsender.NewRoomJoinSender(client).Sync_RoomJoin(ctx, id, playerID, connection)`）；handler 参数是生成的 `view.IRoomEntity`，组件 `Room()`（对外接口 `view.Room`；逻辑、类型号 `room.CompTypeRoom` 与工厂登记在 `game/components/room/room.go`）的方法（`Open`、`Join`、`Reconnect`、`Disconnect`、`Leave`、`Close`、`View`，以及 `Connected(playerID)`：这个席位现在在不在线）只能在持有 Room 锁的事务里调用。
 
+**同一 Room 上玩法命令的身份围栏**：`Room().Authorize(playerID, epoch, connection) (*db.RoomSeat, error)`——`epoch` 是这名成员当前的席位代际、`connection` 是席位认下的那条连接（`room.ConnectionKey`），并且这条连接现在在线，三样都对才返回席位。房间未开 / 已关、不在座透出 `Member` 的错误（`room_unopened` / `room_closed` / `room_not_member`）；代际过期、连接不对或格式不合法、席位断线（包括重启后还没 `RoomReconnect`）一律 `room_stale_epoch`，客户端先 `RoomReconnect` 换上新代际。只读，被拒不改任何东西。turn 的 `Start` / `End` / `CheckEnd` / `View` 用它；房间类玩法（塔防、撤离、自走棋、合作）的新命令也用它。`Member(playerID, epoch)` 只核对代际、不看连接与在线：玩法里“已有回执的重放、查回执不要求在线”（重启后全员断线时原连接、原代际的重试仍得原回执）的那一支，用 `Member` 再自己核对 `seat.GetConnection() == connection`，不用 `Authorize`（塔防的 `towerMember` 就这样分两支）。
+
 **实体事件**：拦截事件 `event.RoomJoining{PlayerID}`（`game/event/room.go`），在 Room 上发布：`Join` 的事务里、检查房间已开之后、占座之前；监听返回错误即拒绝入房，什么都不写。监听写在挂在 Room 上的组件（或 Room 实体）的方法上，标 `//roost:listen [priority=N]`；只做检查、不改状态、不做 I/O。`matchroom` 的组件监听它校验名单（唯一的监听）。
 
 **状态**：模块自带实体 `Room`（`game/entities/room/entity.go`，类别是 World）与 `RoomDao`（`db/def/room.go`，集合 `room`）：`Capacity`、`Closed`、`HostID`、`EpochSeed`、`Seats`（玩家号 → `RoomSeat{Slot, Epoch, Connection}`）落库；`Online`（玩家号 → 在线的连接）不落库。不同步；成员经 `RoomView` 读 PB 快照（`Connected` 由 `Online` 算出）。连接标识不出现在任何对外的快照里。断线订阅的登记表只在进程内存里。
 
 **配置**：无。容量上限是代码常量 `MaxSeats = 64`（`game/components/room/room.go`），补扫间隔是 `SweepInterval = 30s`（`game/modules/room/room_presence.go`）。
 
-**错误码**（`internal/errors/room.go`）：`room_invalid`（参数或操作不合法）、`room_unopened`（还没初始化）、`room_closed`、`room_full`、`room_not_member`、`room_stale_epoch`（代际或连接对不上）、`room_not_host`。
+**错误码**（`internal/errors/room.go`）：`room_invalid`（参数或操作不合法）、`room_unopened`（还没初始化）、`room_closed`、`room_full`、`room_not_member`、`room_stale_epoch`（代际或连接对不上；`Authorize` 下也包括席位断线）、`room_not_host`。
 
 **日志**：玩家加入、离开、重连、关闭、断线确认记 Info；服务端开房记 Debug。加入返回房主；离开不返回新房主，不为日志追加查询。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/room.go`, `game/modules/room/room.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
@@ -68,9 +70,9 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 ## 验证范围
 
-- `roost module verify room`：33 条场景（`game/handler` 21 条、`game/controllers` 7 条、`game/modules/room` 4 条、`game/managers` 1 条）。
+- `roost module verify room`：34 条场景（`game/handler` 22 条、`game/controllers` 7 条、`game/modules/room` 4 条、`game/managers` 1 条）。
 - 离线：真实的 Nest 引擎、生成的 Sender、正式的 ManagerAccess 与 lifecycle，提交器是替身（可以注入提交失败）；没有 Mongo、Redis 与真实网络。
-- 覆盖：容量、幂等、座位复用、房主交接、关闭终态、CAS 竞争、旧连接的请求与关闭事件、PB 编解码、成员权限、BSON 往返恢复、代际上限，以及 Join / Reconnect / Leave / Close 提交失败后的完整回滚；加载失败不会建出空实体。
+- 覆盖：容量、幂等、座位复用、房主交接、关闭终态、CAS 竞争、旧连接的请求与关闭事件、PB 编解码、成员权限、`Authorize` 的代际 / 连接 / 在线围栏（房间未开、不在座、零代际、别人的代际或连接、空连接、换连接之后新旧交叉、断线、重启后原连接、关房；被拒不改状态，`TestRoomAuthorizeChecksGenerationConnectionAndPresence`）、BSON 往返恢复、代际上限，以及 Join / Reconnect / Leave / Close 提交失败后的完整回滚；加载失败不会建出空实体。
 - 断线订阅与重启（D24）：经真实控制器、生成的 Sender 与 Nest——连接关了席位自动断线（座位与房主不变）、Join 提交之前就关了的连接登记时补上、丢掉的关闭事件由补扫补上、离开之后不再登记（`TestRoomClosedConnectionMarksTheSeatOffline`，接入层是替身）；登记随提交（RV-20261116-01，三条）——旧 Join 的回包迟到不覆盖新 Reconnect 的登记、旧 Leave 的回包迟到不撤同玩家新 Join 的登记、同步等待被取消而 Join 照样提交时照样登记（`TestRoomPresence*`，提交器替身可在提交里停住）；`Presence` 自身——一条连接坐在多间房各断一次、撤掉的不再断、失败重试与三次放弃、停了退订、提交后回调乱序时代际单调与墓碑过期（`game/modules/room`）；manager 起停与缺能力时拒绝启动（`game/managers`）；从持久字节重新装载之后全部断线、成员换连接重连才在线、旧连接的重放被拒，离开 / 重连被拒提交时在线标记一起回滚（`game/handler`）。没有经真实 TCP / Gate 的断线与真实进程 kill -9 重启。
 - 安装器另测实体号避让、已有文件冲突、生成失败回滚、重复安装与业务文件保留。
 - 真实联合验收（2026-11-14）：`ROOST_TURN_PVP_REAL=1 bash scripts/test-turn-pvp-generated.sh` 的正式配方经真实 account / match、独立 Gate / NATS / Game Ingress、Mongo / 文件 WAL 验证名单入房、重连代际、关闭，以及 SIGKILL 后冷加载与顺序回合恢复。模块原 22 条计数不变；[证据和边界](../../docs/maintenance/evidence/turn-real-20261114/README.md)。

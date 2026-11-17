@@ -187,13 +187,15 @@ func claim(ctx context.Context, client nest.Client, playerID, roomID int64) (int
 
 变异证明（把模块调用去掉或改错，对应场景变红，恢复后变绿）记在 [R9 批 0 证据](../maintenance/evidence/r9-batch0-20261117/README.md)。
 
+同日稍后，room 补了公开入口 `Room().Authorize`（代际 + 连接 + 在线），塔防的新命令改经它：断线席位的新命令由 room 拒绝（`room_stale_epoch`，原来是 `Apply` 里的规则错误），`ReadyDisconnectAndOldConnection` 的断言（被拒且状态、定时器不变）不变；重放与查回执仍是塔防自己那一支（第 5 节）。[证据](../maintenance/evidence/room-authorize-20261117/README.md)。
+
 ### 4. 配置为什么要按值捕获
 
 `OpenCatalog` 用 `configdata.MustRegisterObject` 登记 `tower_rules`（`tower.json`），`Validate` 失败整次加载 / 重载被拒，旧快照继续服务（[业务表发布](guide/07-config.md#3-业务表发布)）。成局入口捕获 `catalog.Current()` 再 `CaptureRules` 得到 `Rules` 值交给 `Sync_TowerInit`；整份 `Rules` 写进房间状态，之后的建造费用、波数、怪物血量、步长都用开局那一代，热更只影响新房间。公网请求**不携带** Rules。
 
 ### 5. 命令身份、共享金币与阻路校验
 
-`Sync_TowerCommand(room, player, connection, command)`（`now` 由分发包装填）：handler 先经 room 的 `Room().Member(player, Epoch)` 核对代际、再核对 `connection` 是这一席认下的那条连接，旧代际、旧连接一律 `room_stale_epoch`，旧连接的输入不会落到新会话上。之后每席的命令序号从 1 单调递增，相同序号与逐字段相同的命令重放返回原回执（不再扣费、不再建塔，断线的席位也可以重放）；换内容或跳序被拒；新命令要求这一席在线（`Room().Connected`）且 Round（当前波次）相符。收到未知结果时按序号重发同一命令或用 `Sync_TowerReceipt` 查回执，不要为“再试一次”分配新序号，否则会再建一座塔。
+`Sync_TowerCommand(room, player, connection, command)`（`now` 由分发包装填）：handler 的身份围栏 `towerMember` 分两支：新命令经 room 的 `Room().Authorize(player, Epoch, connection)`——代际是这一席当前的、`connection` 是这一席认下的那条连接、这条连接现在在线，三样一并核对；已有回执的重放（`Seq` 落在本席已有回执之内）与 `TowerReceipt` 查回执是塔防自己的一支，只核对 `Room().Member(player, Epoch)` 的代际与连接、**不要求在线**（重启后全员断线时，原连接、原代际的重试仍得原回执；`Authorize` 要求在线，所以这一支不用它）。旧代际、旧连接、新命令时断线一律 `room_stale_epoch`，旧连接的输入不会落到新会话上。之后每席的命令序号从 1 单调递增，相同序号与逐字段相同的命令重放返回原回执（不再扣费、不再建塔，断线的席位也可以重放）；换内容或跳序被拒；新命令还要 Round（当前波次）相符。收到未知结果时按序号重发同一命令或用 `Sync_TowerReceipt` 查回执，不要为“再试一次”分配新序号，否则会再建一座塔。
 
 建塔、升级、出售都在房间状态的局部副本上计算：校验地格、所有者、期望等级和共享金币，建塔后重算 BFS，入口到基地不可达就整体拒绝；成功才写回 DAO、替换定时器并追加回执。不能先扣款再异步算路线。战斗阶段禁止建造 / 出售，路线不会在怪物行进中变化。
 
@@ -238,7 +240,7 @@ sequenceDiagram
 
 - **锁目标没被识别**：Nest 生成器在不写 `target` / `targets` 时，把类型名含 `Entity` 的参数推断为锁目标；本夹具的锁接口叫 `ITowerRoomEntity` / `ITowerPlayerEntity`。名字不含 `Entity` 又没写 `target(s)` 时，`roost generate` 报 `//roost:nest found no entity parameter` 并点名 handler（[Nest 生成器](../../codegen/docs/NEST_RUNTIME.zh-CN.md)）。
 - **多实体锁档**：领奖同时锁 Player 与 Room。分类的取值就是锁序等级（`framework/entity/category_order.go`），Room 是多名玩家争用的场景对象，room 模块把它放在 `EntityCategoryWorld`，总比 Player 先取锁，锁序固定。
-- **改了 room 模块的文件之后**：塔防在 `db/def/room.go` 里追加字段、在 Room 实体上加监听与定时器；room 自带的 33 条场景（`roost module verify room`）照跑，监听对普通房放行就是为了不改它们的语义。不要改 `game/components/room/room.go` 里代际与连接的 CAS 检查（room README）。
+- **改了 room 模块的文件之后**：塔防在 `db/def/room.go` 里追加字段、在 Room 实体上加监听与定时器；room 自带的 34 条场景（`roost module verify room`）照跑，监听对普通房放行就是为了不改它们的语义。不要改 `game/components/room/room.go` 里代际与连接的 CAS 检查（room README）。
 - **连接标识**：命令、视图、回执都带连接标识，必须由接入层从服务端 Session 取（`room.ConnectionKey`），不能从客户端 PB 里取，也不能用玩家号或账号 SessionID 代替。
 - **handler 里不发同步 Nest 请求**：已知参与者一次传给多实体 Sender；handler 内的同步请求被框架拒绝（`ErrSyncInHandler`）。
 - **期限之后的命令**：期限已到但 Tick 还没提交时，新命令被拒；等定时器提交后读新视图再发，不要靠重复请求越过期限。
@@ -255,7 +257,7 @@ sequenceDiagram
 bash scripts/test-tower-defense-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 11 条顶层 race 场景（3.4：4 条规则 + 6 条 Nest + 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再经 `genre-common/modules.sh verify` 跑 `roost module verify --json`：已装的 room 33、wallet 17、enter 29 条模块场景，每个模块通过数等于本检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip（结果留在输出目录的 `module-verify.json`）；成功删除临时工程，失败或 `ROOST_TOWER_DEFENSE_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 11 条顶层 race 场景（3.4：4 条规则 + 6 条 Nest + 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再经 `genre-common/modules.sh verify` 跑 `roost module verify --json`：已装的 room 34、wallet 17、enter 29 条模块场景，每个模块通过数等于本检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip（结果留在输出目录的 `module-verify.json`）；成功删除临时工程，失败或 `ROOST_TOWER_DEFENSE_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
 
 业务 Robot 用例 `TestTowerDefenseRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 

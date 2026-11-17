@@ -1,0 +1,49 @@
+# 塔防工程（test-tower-defense-generated.sh 生成、保留）复制一份，再 roost module plan turn --json / roost module add turn
+## 装 turn 之前
+roost.yaml timers.room: component=timer id=2003 service=game dao=RoomDao（没有 types：塔防的 TimerTowerPhase 是手写常量，不在 types 里）
+game/entities/room/timer_handlers.go:12:const TimerTowerPhase int32 = 1
+## roost module plan turn --json
+room installed timer ids = None timer plan = None
+turn install timer ids = {'TurnDeadline': 2} timer plan = {'entity': 'room', 'spec': {'Component': 'timer', 'ID': 2003, 'Service': 'game', 'Dao': 'RoomDao', 'Types': {'TurnDeadline': 2}}, 'create': False}
+## roost module add turn 之后
+51:timers:
+52-    room:
+53-        component: timer
+54-        id: 2003
+55-        service: game
+56-        dao: RoomDao
+57-        types:
+58-            TurnDeadline: 2
+game/entities/room/timer_handlers.go:12:const TimerTowerPhase int32 = 1
+game/entities/room/timer_handlers.go:15:	h.Register(TimerTowerPhase, func(f entitytimer.Fire) time.Duration {
+game/entities/room/timer_handlers.go:42:	c.registerTurnTimers(h)
+game/entities/room/turn_timers.go:9:const TurnDeadline int32 = 2
+game/entities/room/turn_timers.go:13:	handlers.Register(TurnDeadline, component.onTurnDeadline)
+## roost module verify
+ok   module enter: 29 passed (want 29), 0 skipped
+ok   module room: 34 passed (want 34), 0 skipped
+ok   module turn: 25 passed (want 25), 0 skipped
+ok   module wallet: 17 passed (want 17), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+## go test ^TestTowerDefense|^TestTurn|^TestRoom（同一 Room 上塔防定时器 1 号与 TurnDeadline 2 号并存）
+FAIL	example.com/tower-defense-practice/game/handler	0.640s
+ok  	example.com/tower-defense-practice/game/modules/towerdefense	0.253s
+FAIL
+
+# 上面那次合跑的失败拆开看（tower_defense_recovery_test.go 是 REAL 用例，缺省档没有 WAL 目录必然失败，下面排除）
+$ go test -run ^TestTurn ./game/handler
+ok  	example.com/tower-defense-practice/game/handler	0.593s
+$ go test -run 塔防缺省 10 条 ./game/handler
+ok  	example.com/tower-defense-practice/game/handler	0.362s
+$ go test -run ^TestTowerDefenseDefeat|^TestTurnExactDeadline -v ./game/handler   # 同一进程先跑塔防再跑 turn
+--- PASS: TestTowerDefenseDefeatNoRewardAndViewCopy (0.01s)
+    turn_test.go:299: timeout: {Status:1 Round:1 ActorID:101 Deadline:1900000001000 MaxTurns:8 TurnMillis:1000 Timeouts:0 Sequence:0 Players:[101 102]}
+--- FAIL: TestTurnExactDeadlineRejectsCommandUntilTick (0.00s)
+FAIL
+FAIL	example.com/tower-defense-practice/game/handler	0.315s
+FAIL
+原因：塔防 gameplay_test 的夹具调 room.TimerDriver.SetClock(塔防测试时钟)（全局驱动，SetClock(nil) 是空操作，无法撤销），
+之后同进程里 turn 的定时器按塔防那只时钟算期限 / 触发时刻。只是测试夹具的全局状态串扰，与类型号无关；module verify 按模块分 -run，不受影响。

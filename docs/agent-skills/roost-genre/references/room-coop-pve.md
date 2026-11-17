@@ -93,13 +93,13 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestTowerDefense' ./game/m
 bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" room wallet enter
 ```
 
-期望：`TestTowerDefense` 11 条 PASS、0 skip；`modules.sh verify` 打印 `room 33/33`、`wallet 17/17`、`enter 29/29`（每个模块通过数 == 检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip，并带 build / vet / `id check` / `generate --check`）。
+期望：`TestTowerDefense` 11 条 PASS、0 skip；`modules.sh verify` 打印 `room 34/34`、`wallet 17/17`、`enter 29/29`（每个模块通过数 == 检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip，并带 build / vet / `id check` / `generate --check`）。
 
 ## 4. demo 的最小玩法范围
 
 | 变体 | 夹具里的玩法（数值是样例） | 场景要点 |
 | --- | --- | --- |
-| 塔防（11 = 4 规则 + 6 Nest + 1 Robot；另有模块自带 room 33 / wallet 17 / enter 29） | 5×5 地图与阻路 BFS、共享金币建 / 升 / 卖塔、准备与托管、三波战斗、基地胜负、团队奖励（手写）；席位 / 重连（room）、金币（wallet）、建档（enter） | 并发抢格、阻路回滚、room 断线与旧代际 / 旧连接被拒、名单外入座被拒、undo 恢复金币 / 路线 / 定时器、团队奖励经 wallet 原子（TD §3.4；旧断言 → 新断言见 TD §3.5） |
+| 塔防（11 = 4 规则 + 6 Nest + 1 Robot；另有模块自带 room 34 / wallet 17 / enter 29） | 5×5 地图与阻路 BFS、共享金币建 / 升 / 卖塔、准备与托管、三波战斗、基地胜负、团队奖励（手写）；席位 / 重连（room）、金币（wallet）、建档（enter） | 并发抢格、阻路回滚、room 断线与旧代际 / 旧连接被拒、名单外入座被拒、undo 恢复金币 / 路线 / 定时器、团队奖励经 wallet 原子（TD §3.4；旧断言 → 新断言见 TD §3.5） |
 | 生存撤离（13 = 4 + 8 + 1 Robot） | 付费入场、共享采集、制作预扣、环境伤害、死亡掉落、撤离读条、永久兑付 | 入场原子幂等、资源点竞争、并发拾取、物资守恒、过期不能重进（SE §3.4） |
 | 自走棋（13 = 12 + 1 Robot） | 八席共享卡池与商店、经济与升级、合星、准备 / 战斗阶段、确定性战斗、淘汰排名、断线接管、按排名领奖 | 卡池守恒、并发买卡、准备竞争只冻结一场、期限后输入被拒、账本满保留原回执（AC §3.4） |
 
@@ -118,7 +118,7 @@ bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$
 
 - 每张卡 / 每个塔一个实体：买卡变成跨实体事务，锁序和死锁要自己处理；推荐一局一锁（AC §8）。
 - 房间实体忘了改 World 锁档：领奖同时锁 Player 与房间时锁序不固定（TD §8；塔防用 room 的 `Room`，已是 World）。
-- 塔防的名单监听对普通房（`TowerState` 为空）要放行：room 模块自带的 33 条场景用的就是普通房，`module verify` 会失败（TD §8）。
+- 塔防的名单监听对普通房（`TowerState` 为空）要放行：room 模块自带的 34 条场景用的就是普通房，`module verify` 会失败（TD §8）。
 - 塔防的连接标识从客户端 PB 里取或用玩家号代替：旧连接就能操作新席位；必须 `room.ConnectionKey(session)`（TD §8）。
 - 锁接口名不含 `Entity`：`generate` 报 `found no entity parameter`（TD / SE / AC §8～§9）。
 - 先扣款再异步算路线：建塔要在局部副本上算完 BFS，入口到基地不可达就整体拒绝（TD §5）。

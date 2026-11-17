@@ -1,0 +1,20 @@
+$ roost module verify room ; roost module verify turn ; roost module verify   # 新工程 module add turn（连带 room）
+--- roost module verify room
+ok   module room: 34 passed (want 34), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+--- roost module verify turn
+ok   module turn: 25 passed (want 25), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+--- roost module verify 
+ok   module room: 34 passed (want 34), 0 skipped
+ok   module turn: 25 passed (want 25), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check

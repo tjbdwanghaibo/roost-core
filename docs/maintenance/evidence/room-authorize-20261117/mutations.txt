@@ -1,0 +1,51 @@
+# 变异：在生成工程里改 game/components/room/room.go 的 Authorize 判断行（第 212 行），跑 room 新场景与 turn 全部场景；每次跑完还原（diff 确认）。
+# 原行：	if !ValidConnection(connection) || seat.GetConnection() != connection || !component.Connected(playerID) {
+# 命令：GOWORK=off go test -count=1 -run '^TestRoomAuthorize|^TestTurn' ./game/handler ./game/controllers
+
+=== mutation M1-no-online: 	if !ValidConnection(connection) || seat.GetConnection() != connection {
+--- FAIL: TestRoomAuthorizeChecksGenerationConnectionAndPresence (0.00s)
+    room_test.go:669: offline seat authorized: <nil>
+--- FAIL: TestTurnReloadKeepsSequenceAndFiresOverdueOnce (0.00s)
+    turn_test.go:494: end from a connection of the previous process: <nil>, want room_stale_epoch
+FAIL
+FAIL	example.com/rt/game/handler	0.660s
+ok  	example.com/rt/game/controllers	1.228s
+FAIL
+=== mutation M2-no-connection: 	if !ValidConnection(connection) || !component.Connected(playerID) {
+--- FAIL: TestRoomAuthorizeChecksGenerationConnectionAndPresence (0.00s)
+    room_test.go:647: another member's connection: <nil>, want room_stale_epoch: room connection generation changed
+FAIL
+FAIL	example.com/rt/game/handler	0.577s
+--- FAIL: TestTurnEndpointRejectsMissingIdentityAndOldConnection (0.00s)
+    turn_test.go:151: identity: &{Code:0 Reason: Info:0xfc4a7c2e3c0} <nil>
+FAIL
+FAIL	example.com/rt/game/controllers	1.102s
+FAIL
+=== mutation M3-member-only: 	if false {
+--- FAIL: TestRoomAuthorizeChecksGenerationConnectionAndPresence (0.00s)
+    room_test.go:647: another member's connection: <nil>, want room_stale_epoch: room connection generation changed
+--- FAIL: TestTurnReloadKeepsSequenceAndFiresOverdueOnce (0.00s)
+    turn_test.go:494: end from a connection of the previous process: <nil>, want room_stale_epoch
+FAIL
+FAIL	example.com/rt/game/handler	0.604s
+--- FAIL: TestTurnEndpointRejectsMissingIdentityAndOldConnection (0.00s)
+    turn_test.go:151: identity: &{Code:0 Reason: Info:0x2365a3338540} <nil>
+FAIL
+FAIL	example.com/rt/game/controllers	1.068s
+FAIL
+
+# 塔防夹具 towerMember（生成工程 game/handler/tower_defense.go）
+=== T1 重放 / 查回执也要求在线（if !replay -> if true）
+缺省档：11 条 TestTowerDefense 全部 PASS（缺省档没有“断线后重放”的场景，抓不到）
+REAL 档（source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_TOWER_DEFENSE_REAL=1 ... -run ^TestTowerDefenseRealCrashRecovery$）：
+    tower_defense_recovery_test.go:407: retry changed purchase or phase room_stale_epoch: room connection generation changed
+--- FAIL: TestTowerDefenseRealCrashRecovery (0.81s)
+FAIL
+FAIL	example.com/tower-defense-practice/game/handler	1.463s
+FAIL
+（本次变异留下的两个临时库 roost_tower_defense_it_mutT1_19798{,_0} 已用 mongosh dropDatabase 删除）
+
+=== T2 新命令不经 Authorize（if !replay -> if false）
+缺省档：ok（抓不到）。原因：玩法自己的 Apply(…, Room().Connected(playerID), …) 仍拒绝断线席位的新命令（规则错误），
+旧代际 / 旧连接由 Member + 连接那一支拒绝；新命令改经 Authorize 只把断线的拒绝提前到 room、错误码变成 room_stale_epoch。
+Authorize 本身由 room 新场景与 turn 场景把守（上面 M1～M3）。

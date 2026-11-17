@@ -2,7 +2,6 @@ package turn
 
 import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
-	"{{MODULE}}/game/components/room"
 	"{{MODULE}}/game/view"
 	"fmt"
 	"math"
@@ -58,21 +57,10 @@ type TurnSnapshot = view.TurnSnapshot
 
 func (component *Component) Name() string { return "turn" }
 
-func (component *Component) authorize(playerID int64, epoch uint64, connection string) error {
-	seat, err := component.owner.Room().Member(playerID, epoch)
-	if err != nil {
-		return err
-	}
-	if !room.ValidConnection(connection) || !component.owner.Room().Connected(playerID) || seat.GetConnection() != connection {
-		return apperrors.ErrRoomStaleEpoch
-	}
-	return nil
-}
-
 // Start 只允许当前房主开局，至少两名在座成员。相同规则重试返回当前状态，不重置序号、期限或名单。
 // 每回合 1 秒～1 小时、总计 1～10000 回合；上层可以收窄，不允许客户端改服务端时间。
 func (component *Component) Start(playerID int64, epoch uint64, connection string, turnMillis, maxTurns int64) (TurnSnapshot, error) {
-	if err := component.authorize(playerID, epoch, connection); err != nil {
+	if _, err := component.owner.Room().Authorize(playerID, epoch, connection); err != nil {
 		return TurnSnapshot{}, err
 	}
 	dao := component.owner.Dao()
@@ -138,7 +126,7 @@ func (component *Component) End(playerID int64, epoch uint64, connection string,
 // CheckEnd 必须与实际玩法修改和 End 同处一笔 Nest 事务。replay=true 时不能再执行游戏动作。
 // 先校验可信连接与成员资格，再检查回执：旧连接即使带上正确序号也不能重放。
 func (component *Component) CheckEnd(playerID int64, epoch uint64, connection string, round, sequence int64) (replay bool, err error) {
-	if err = component.authorize(playerID, epoch, connection); err != nil {
+	if _, err = component.owner.Room().Authorize(playerID, epoch, connection); err != nil {
 		return false, err
 	}
 	if round <= 0 || sequence <= 0 {
@@ -176,7 +164,7 @@ func (component *Component) CheckEnd(playerID int64, epoch uint64, connection st
 }
 
 func (component *Component) View(playerID int64, epoch uint64, connection string) (TurnSnapshot, error) {
-	if err := component.authorize(playerID, epoch, connection); err != nil {
+	if _, err := component.owner.Room().Authorize(playerID, epoch, connection); err != nil {
 		return TurnSnapshot{}, err
 	}
 	return component.snapshot(playerID), nil

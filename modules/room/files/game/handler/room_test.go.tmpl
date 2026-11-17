@@ -603,3 +603,99 @@ func TestRoomRejectedCommitsRestoreOnlineState(t *testing.T) {
 		t.Fatalf("reconnect after the rejection: %+v %v", got, err)
 	}
 }
+
+// Authorize 是同一 Room 上玩法命令的身份围栏（turn 与房间类玩法共用）：代际、连接、在线三样都对才放行，
+// 房间未开 / 已关、不在座透出 Member 的错误，其余一律 room_stale_epoch；它只读，被拒不改任何东西。
+// 重启后全部席位断线：原连接、原代际也不放行，换连接 Reconnect 之后才放行。
+func TestRoomAuthorizeChecksGenerationConnectionAndPresence(t *testing.T) {
+	authorize := func(f *roomFixture, playerID int64, epoch uint64, connection string) (seat uint64, slot int32, err error) {
+		t.Helper()
+		f.locked(t, func() {
+			got, e := f.value.Room().Authorize(playerID, epoch, connection)
+			if e == nil {
+				seat, slot = got.GetEpoch(), got.GetSlot()
+			}
+			err = e
+		})
+		return seat, slot, err
+	}
+	unopened := newRoomFixture(t, 0)
+	if _, _, err := authorize(unopened, 101, 1, "connection-101"); !errors.Is(err, apperrors.ErrRoomUnopened) {
+		t.Fatalf("unopened room: %v", err)
+	}
+	f := newRoomFixture(t, 3)
+	f.join(t, 101)
+	f.join(t, 102)
+	if epoch, slot, err := authorize(f, 102, 2, "connection-102"); err != nil || epoch != 2 || slot != 2 {
+		t.Fatalf("current member: epoch=%d slot=%d %v", epoch, slot, err)
+	}
+	before := f.document(t)
+	for _, c := range []struct {
+		name       string
+		playerID   int64
+		epoch      uint64
+		connection string
+		want       error
+	}{
+		{"not seated", 103, 1, "connection-103", apperrors.ErrRoomNotMember},
+		{"zero epoch", 101, 0, "connection-101", apperrors.ErrRoomStaleEpoch},
+		{"another member's epoch", 101, 2, "connection-101", apperrors.ErrRoomStaleEpoch},
+		{"another member's connection", 101, 1, "connection-102", apperrors.ErrRoomStaleEpoch},
+		{"empty connection", 101, 1, "", apperrors.ErrRoomStaleEpoch},
+	} {
+		if _, _, err := authorize(f, c.playerID, c.epoch, c.connection); !errors.Is(err, c.want) {
+			t.Fatalf("%s: %v, want %v", c.name, err, c.want)
+		}
+	}
+	f.unchanged(t, before)
+	// 换连接拿到新代际之后：旧连接带新代际、新连接带旧代际都不放行。
+	if _, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := authorize(f, 101, 3, "connection-101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("old connection with the new epoch: %v", err)
+	}
+	if _, _, err := authorize(f, 101, 1, "new-connection"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("new connection with the old epoch: %v", err)
+	}
+	if epoch, _, err := authorize(f, 101, 3, "new-connection"); err != nil || epoch != 3 {
+		t.Fatalf("reconnected member: %d %v", epoch, err)
+	}
+	// 断线：席位、代际、连接都还在，但不在线就不放行；Member 仍认这一席（查回执一类的分支用它）。
+	if changed, err := f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 102, 2); err != nil || !changed {
+		t.Fatalf("disconnect: %v %v", changed, err)
+	}
+	if _, _, err := authorize(f, 102, 2, "connection-102"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("offline seat authorized: %v", err)
+	}
+	f.locked(t, func() {
+		if _, err := f.value.Room().Member(102, 2); err != nil {
+			t.Errorf("Member must still accept the offline seat: %v", err)
+		}
+	})
+	// 重启：从持久字节装载后全部断线，原连接、原代际不放行；换连接重连之后放行。
+	raw := f.document(t)
+	restored := newRoomFixture(t, 0)
+	var decodeErr error
+	restored.locked(t, func() { decodeErr = restored.value.Dao().Unmarshal(raw) })
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if _, _, err := authorize(restored, 101, 3, "new-connection"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("previous process's connection authorized after the reload: %v", err)
+	}
+	back, err := restored.reconnects.Sync_RoomReconnect(context.Background(), restored.id, 101, 3, "after-reload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if epoch, _, err := authorize(restored, 101, back.Epoch, "after-reload"); err != nil || epoch != back.Epoch {
+		t.Fatalf("reconnected after the reload: %d %v", epoch, err)
+	}
+	// 关房之后谁都不放行。
+	if err := restored.closes.Sync_RoomClose(context.Background(), restored.id, 101, back.Epoch, "after-reload"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := authorize(restored, 101, back.Epoch, "after-reload"); !errors.Is(err, apperrors.ErrRoomClosed) {
+		t.Fatalf("closed room: %v", err)
+	}
+}

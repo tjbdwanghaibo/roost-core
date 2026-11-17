@@ -199,6 +199,22 @@ func (component *Component) Member(playerID int64, epoch uint64) (*db.RoomSeat, 
 	return seat, nil
 }
 
+// Authorize 是挂在同一 Room 上的玩法命令的身份围栏：epoch 是这名成员当前的席位代际（Member），connection 是席位
+// 认下的那条连接（接入层从服务端 Session 取，ConnectionKey），并且这条连接现在在线（Connected）。房间未开、已关闭、
+// 不在座透出 Member 的错误；代际过期、连接不对或格式不合法、席位断线（包括重启后尚未 Reconnect）一律
+// room_stale_epoch——客户端要先 RoomReconnect 换上新代际。只读，不改任何状态。
+// 玩法里“已有回执的重放、查回执不要求在线”的分支不用它，改用 Member 加连接核对（见 README）。
+func (component *Component) Authorize(playerID int64, epoch uint64, connection string) (*db.RoomSeat, error) {
+	seat, err := component.Member(playerID, epoch)
+	if err != nil {
+		return nil, err
+	}
+	if !ValidConnection(connection) || seat.GetConnection() != connection || !component.Connected(playerID) {
+		return nil, apperrors.ErrRoomStaleEpoch
+	}
+	return seat, nil
+}
+
 // Disconnect 是服务端断线回调入口。接入层在成功 Join/Reconnect 后捕获该 Epoch；
 // 旧连接迟到的关闭事件返回 false，不影响新连接，也不踢出座位或转移房主。
 func (component *Component) Disconnect(playerID int64, epoch uint64) bool {

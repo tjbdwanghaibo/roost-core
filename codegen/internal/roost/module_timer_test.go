@@ -52,7 +52,7 @@ func TestModuleTimerInstallAndFailureAreTransactional(t *testing.T) {
 		t.Fatalf("callback missing or duplicated: %s", raw)
 	}
 	report, err := VerifyModules(context.Background(), root, []string{"room", "turn"}, nil)
-	if err != nil || len(report.Modules) != 2 || report.Modules[0].Passed != 33 || report.Modules[1].Passed != 25 {
+	if err != nil || len(report.Modules) != 2 || report.Modules[0].Passed != 34 || report.Modules[1].Passed != 25 {
 		t.Fatalf("verify: %v %+v", err, report)
 	}
 	before = moduleProjectDigest(t, root)
@@ -100,7 +100,7 @@ func TestModuleTimerReusesCustomTimerAndAvoidsManualTypes(t *testing.T) {
 	}
 	roost("module", "add", "turn")
 	report, err := VerifyModules(context.Background(), root, []string{"room", "turn"}, nil)
-	if err != nil || len(report.Modules) != 2 || report.Modules[0].Passed != 33 || report.Modules[1].Passed != 25 {
+	if err != nil || len(report.Modules) != 2 || report.Modules[0].Passed != 34 || report.Modules[1].Passed != 25 {
 		t.Fatalf("custom timer verification: %v %+v", err, report)
 	}
 }

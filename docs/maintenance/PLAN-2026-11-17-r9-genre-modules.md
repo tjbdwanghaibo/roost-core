@@ -311,7 +311,7 @@ genre-common 只服务 11～13 类（回合 PvP、合作、经营）。
   ```
 
 - **开局**：开房与名单同一笔事务——玩法的 Init handler 在 Room 上调 `m.Room().Open(<容量>)` 再写玩法状态；同号重试只核对名单；已有人入座的普通房拒绝改造。生产里成局服务先经生成的 lifecycle `GetOrCreate`（与 `room.Open` 相同）再发 Init。之后玩家经 room 的 `RoomJoin` 入座。
-- **名单准入**：在 Room 实体上写 `event.RoomJoining` 监听（`game/entities/room/<玩法>.go`，`//roost:listen`），玩法房只放名单里的人、返回 `apperrors.ErrRoomNotMember`；**玩法状态为空的普通房放行**，否则 room 自带的 33 条场景会挂。
+- **名单准入**：在 Room 实体上写 `event.RoomJoining` 监听（`game/entities/room/<玩法>.go`，`//roost:listen`），玩法房只放名单里的人、返回 `apperrors.ErrRoomNotMember`；**玩法状态为空的普通房放行**，否则 room 自带的 34 条场景会挂。
 - **身份围栏**：每条玩法命令、回执查询都带 `connection`（接入层从服务端 Session 取：`roomlogic.ConnectionKey(session)`），handler 先 `m.Room().Member(playerID, epoch)`，再核对 `seat.GetConnection() == connection`（否则 `ErrRoomStaleEpoch`）；新命令再要求 `m.Room().Connected(playerID)`，已有回执的重放不要求在线（重启后全员断线时重试仍得原回执）。视图用 `m.Room().View(playerID, connection)` 做成员检查并拿本人代际，各席 `Connected` 取 `m.Room().Connected`。
 - **定时器**：`roost add timer --entity Room`，用夹具的 `timer_handlers.go.txt` 覆盖生成的示例，类型号常量带玩法名（`TimerTowerPhase = 1`）。
 - **注册**：room 与 Room 定时器的 handler 是按引擎实例注册的（`RegisterRoomJoinNestHandlersOn` 等，`service=game`）；离线 fixture 在 `engine.Start()` 前逐个 `register(engine)`；玩法自己的 handler 参数是手写接口，仍是全局 `Register<文件>NestHandlers()`。

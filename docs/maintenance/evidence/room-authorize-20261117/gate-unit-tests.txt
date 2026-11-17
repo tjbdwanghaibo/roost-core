@@ -1,0 +1,2 @@
+$ GOWORK=off go test -count=1 -timeout 30m -run '^(TestModuleOwnedEntity|TestModuleTimer|TestModuleMatchroomGenerated|TestModuleMatchmakingGenerated)' ./codegen/internal/roost
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	126.038s
